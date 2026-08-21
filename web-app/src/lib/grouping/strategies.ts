@@ -1,4 +1,5 @@
 import { Session, SessionStatus } from "@/gen/session/v1/types_pb";
+import { isSessionStale } from "../session-staleness";
 
 /**
  * Grouping strategy options for organizing sessions.
@@ -14,6 +15,7 @@ export enum GroupingStrategy {
   SessionType = "session_type",
   Project = "project",
   Workflow = "workflow",
+  Stale = "stale",
   None = "none",
 }
 
@@ -27,6 +29,7 @@ export const GroupingStrategyLabels: Partial<Record<GroupingStrategy, string>> =
   [GroupingStrategy.SessionType]: "Session Type",
   [GroupingStrategy.Project]: "Project",
   [GroupingStrategy.Workflow]: "Workflow",
+  [GroupingStrategy.Stale]: "Stale",
   [GroupingStrategy.None]: "None (Flat List)",
 };
 
@@ -64,6 +67,8 @@ export interface GroupedSessions {
 export interface GroupSessionsOptions {
   /** Map from workflow UUID to workflow name, used by GroupingStrategy.Workflow */
   workflowIdToName?: Map<string, string>;
+  /** Idle-time threshold (minutes) used by GroupingStrategy.Stale; defaults to 30 */
+  thresholdMinutes?: number;
 }
 
 export function groupSessions(
@@ -149,6 +154,13 @@ export function groupSessions(
         }
         break;
 
+      case GroupingStrategy.Stale:
+        // Single-membership: "Stale" only for ACTIVE sessions past the idle threshold;
+        // everything else (including non-ACTIVE sessions) falls into "Not Stale" rather
+        // than a misleading "Active" bucket.
+        groupKeys = [isSessionStale(session, options?.thresholdMinutes ?? 30) ? "Stale" : "Not Stale"];
+        break;
+
       default:
         // Fallback for unknown strategies
         groupKeys = ["Uncategorized"];
@@ -216,6 +228,7 @@ function getStatusDisplayName(status: number): string {
     case SessionStatus.CREATING:       return "Creating"; // 6
     case SessionStatus.STOPPED:        return "Stopped";  // 7
     case SessionStatus.HIBERNATED:     return "Hibernated"; // 8
+    case SessionStatus.CRASHED:        return "Crashed";  // 10
     default:                           return "Unknown";
   }
 }

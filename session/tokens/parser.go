@@ -9,6 +9,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/tstapler/stapler-squad/session/scanbuf"
 )
 
 const (
@@ -70,7 +72,9 @@ func (p *Parser) ParseFile(filePath string) (*ParseResult, error) {
 // Suitable for tests that pass in strings via strings.NewReader.
 func (p *Parser) ParseReader(r io.Reader) (*ParseResult, error) {
 	scanner := bufio.NewScanner(r)
-	scanner.Buffer(make([]byte, maxScannerTokenSize), maxScannerTokenSize)
+	bufPtr := scanbuf.Get()
+	defer scanbuf.Put(bufPtr)
+	scanner.Buffer(*bufPtr, maxScannerTokenSize)
 
 	result := &ParseResult{
 		ToolUsage: make(map[string]ToolTokenStats),

@@ -247,12 +247,38 @@ service SessionService {
   // GetSessionDefaults returns the full session defaults configuration (global, profiles, directory rules).
   rpc GetSessionDefaults(GetSessionDefaultsRequest) returns (GetSessionDefaultsResponse) {}
 
+  // GetLauncherPresets returns the hand-authored launcher presets from
+  // ~/.stapler-squad/launcher-presets.json, freshly read and validated on every call.
+  rpc GetLauncherPresets(GetLauncherPresetsRequest) returns (GetLauncherPresetsResponse) {}
+
   // ResolveDefaults merges all default layers for a given working directory and optional profile.
   // Returns the resolved values plus source metadata for per-field badges in the UI.
   rpc ResolveDefaults(ResolveDefaultsRequest) returns (ResolveDefaultsResponse) {}
 
+  // PreviewDestinationPath computes where a session's checkout/worktree would land,
+  // without performing any git or filesystem mutation. Used by the Omnibar to show a
+  // live destination hint before the user submits session creation.
+  rpc PreviewDestinationPath(PreviewDestinationPathRequest) returns (PreviewDestinationPathResponse) {}
+
   // UpdateGlobalDefaults replaces the global default fields.
   rpc UpdateGlobalDefaults(UpdateGlobalDefaultsRequest) returns (UpdateGlobalDefaultsResponse) {}
+
+  // GetSlackConfig returns the current Slack notification configuration.
+  // Secret fields (webhook URL, signing secret) are never returned in
+  // plaintext or ciphertext — only booleans reporting whether each is
+  // configured.
+  rpc GetSlackConfig(GetSlackConfigRequest) returns (GetSlackConfigResponse) {}
+
+  // UpdateSlackConfig updates the Slack notification configuration. Empty
+  // string on webhook_url/signing_secret means "leave unchanged"; the
+  // corresponding clear_webhook_url/clear_signing_secret bool means
+  // "explicitly remove this secret".
+  rpc UpdateSlackConfig(UpdateSlackConfigRequest) returns (UpdateSlackConfigResponse) {}
+
+  // TestSlackWebhook sends a canned test message to the given webhook URL
+  // (or, if webhook_url is empty, the currently-saved one) and reports
+  // whether the send succeeded, synchronously.
+  rpc TestSlackWebhook(TestSlackWebhookRequest) returns (TestSlackWebhookResponse) {}
 
   // UpsertProfile creates or updates a named profile.
   rpc UpsertProfile(UpsertProfileRequest) returns (UpsertProfileResponse) {}
@@ -265,6 +291,17 @@ service SessionService {
 
   // DeleteDirectoryRule removes a directory rule by path.
   rpc DeleteDirectoryRule(DeleteDirectoryRuleRequest) returns (DeleteDirectoryRuleResponse) {}
+
+  // Callback Config RPCs (webhook-triggers Phase 5, FR7)
+
+  // GetCallbackConfig returns whether each of the three outbound-callback URLs is
+  // configured. The URLs themselves are never returned (see CallbackConfigProto).
+  rpc GetCallbackConfig(GetCallbackConfigRequest) returns (GetCallbackConfigResponse) {}
+
+  // UpdateCallbackConfig sets one or more outbound-callback URLs. Each provided URL is
+  // SSRF-validated (ValidateCallbackURL) before being persisted; an unset field leaves
+  // that URL unchanged.
+  rpc UpdateCallbackConfig(UpdateCallbackConfigRequest) returns (UpdateCallbackConfigResponse) {}
 
   // ListWorktrees returns the git worktrees for a given repository path.
   // Used by the Omnibar to populate the "Use Existing Worktree" dropdown.
@@ -279,6 +316,11 @@ service SessionService {
 
   // One-shot PR creation (S3)
   rpc RunOneShot(RunOneShotRequest) returns (RunOneShotResponse) {}
+
+  // Mechanical (non-agentic) PR creation, replacing the RunOneShot-driven
+  // dashboard button (S5).
+  rpc DraftPullRequest(DraftPullRequestRequest) returns (DraftPullRequestResponse) {}
+  rpc CreatePullRequest(CreatePullRequestRequest) returns (CreatePullRequestResponse) {}
 
   // Project CRUD (S4)
   rpc CreateProject(CreateProjectRequest) returns (CreateProjectResponse) {}
@@ -328,6 +370,10 @@ service SessionService {
   // GetEscapeAnalyticsSummary returns aggregate escape sequence statistics for a session.
   rpc GetEscapeAnalyticsSummary(GetEscapeAnalyticsSummaryRequest) returns (GetEscapeAnalyticsSummaryResponse) {}
 
+  // GetEscapeAnalyticsGlobalSummary returns aggregate escape sequence statistics
+  // across all sessions, plus a per-session breakdown to spot outliers.
+  rpc GetEscapeAnalyticsGlobalSummary(GetEscapeAnalyticsGlobalSummaryRequest) returns (GetEscapeAnalyticsGlobalSummaryResponse) {}
+
   // HibernateSession checkpoints the session state, kills the AI process, and
   // transitions the session to Hibernated status.
   rpc HibernateSession(HibernateSessionRequest) returns (HibernateSessionResponse) {}
@@ -335,6 +381,12 @@ service SessionService {
   // ResumeHibernatedSession re-launches the AI process for a Hibernated session,
   // transitioning it back to Active status.
   rpc ResumeHibernatedSession(ResumeHibernatedSessionRequest) returns (ResumeHibernatedSessionResponse) {}
+
+  // ResumeCrashedSession re-launches the AI process for a Crashed session
+  // (dead tmux pane detected by SessionHealthChecker), transitioning it back
+  // to Active status. Threads --resume automatically when a conversation UUID
+  // is known.
+  rpc ResumeCrashedSession(ResumeCrashedSessionRequest) returns (ResumeCrashedSessionResponse) {}
 
   // ============================================================================
   // Custom Shell RPCs
@@ -374,6 +426,12 @@ service SessionService {
 
   // RunWorkflow immediately fires a workflow (outside of cron schedule).
   rpc RunWorkflow(RunWorkflowRequest) returns (RunWorkflowResponse) {}
+
+  // ListTriggerFireEvents returns the trigger-fire audit trail (fired/no-match/
+  // rejected) for a workflow, newest first. Query-only — shipped in Phase 1 ahead of
+  // the Phase 7 TriggersPanel UI so existing cron-workflow users can observe
+  // fired_failed rejections from the Epic 1.3 admission-gate fix (pre-mortem P1 #3).
+  rpc ListTriggerFireEvents(ListTriggerFireEventsRequest) returns (ListTriggerFireEventsResponse) {}
 
   // GetDetectionEvents returns recent status-detection events for a session.
   // Intended for debugging — surfaces which patterns matched (or didn't) per detection cycle.
@@ -570,6 +628,26 @@ message CreateSessionRequest {
   // alias_name, when non-empty, resolves session defaults via the named alias preset.
   // Path and profile are resolved from the alias config; path from req is used as override if non-empty.
   string alias_name = 27;
+
+  // triggered_by_chain_depth is the pipeline-chain hop count (webhook-triggers Epic 6.3):
+  // set by ChainFirer/Scheduler.FireTriggerChained when this session is a chained fire from
+  // a completed BacklogItem's next_workflow_id, one greater than the completing item's own
+  // TriggeredByChainDepth. 0 for every non-chained session (the default). Attribution only —
+  // not read back by CreateSession itself.
+  int32 triggered_by_chain_depth = 28;
+
+  // auto_approve injects a per-agent CLI flag that skips permission/approval
+  // prompts entirely (e.g. --dangerously-skip-permissions for Claude Code).
+  // Independent of auto_yes — see auto_yes's own comment for the distinction.
+  // Defaults to false; never implicitly set true. Rejected server-side if the
+  // resolved program isn't a supported agent (see AutoApproveSupported).
+  bool auto_approve = 29;
+
+  // extra_args are additional positional argv elements appended verbatim (each independently
+  // shell-quoted, never whitespace-split) after any defaults-resolved cli_flags. Populated by
+  // a selected launcher preset's argv[1:]; safe for elements containing spaces or shell
+  // metacharacters (e.g. a remote-exec fragment like "cd ~/repo && exec claude").
+  repeated string extra_args = 30;
 }
 
 message CreateSessionResponse {
@@ -614,6 +692,16 @@ message UpdateSessionRequest {
   // Steering message to inject into an autonomous session mid-run.
   // Sends the text immediately via SendCommandImmediate. Only meaningful when autonomous_mode is true.
   optional string steer_message = 11;
+
+  // Update the session's free-form note. Capped at 10,000 bytes.
+  optional string note = 12;
+
+  // Enable or disable auto-approve (yolo mode) on a session. Injects a
+  // per-agent CLI flag that skips permission/approval prompts entirely.
+  // Independent of autonomous_mode and of auto_yes (create-time only,
+  // not updatable). Toggling this on an Active session restarts it so the
+  // flag takes effect (see SetAutoApprove's doc comment).
+  optional bool auto_approve = 13;
 }
 
 message UpdateSessionResponse {
@@ -857,6 +945,10 @@ message ListClaudeHistoryRequest {
   // When set, returns the page of results after the cursor position.
   // Leave empty to start from the beginning.
   string page_token = 5;
+  // When true, best-effort exclude sessions whose live Instance has
+  // Hidden=true — same semantics as SearchClaudeHistoryRequest's field of
+  // the same name. Default false.
+  optional bool exclude_automation_sessions = 6;
 }
 
 message ListClaudeHistoryResponse {
@@ -933,6 +1025,11 @@ message GetClaudeHistoryMessagesRequest {
   // the tail of a large conversation file without loading the whole file.
   // Mutually exclusive with offset.
   bool tail = 4;
+  // When set, overrides offset: the server centers the returned page on
+  // this message index (offset = max(0, anchor_index - limit/2)),
+  // enabling forward/backward scroll paging without re-running search.
+  // Mutually exclusive with tail.
+  optional int32 anchor_index = 5;
 }
 
 message GetClaudeHistoryMessagesResponse {
@@ -970,6 +1067,16 @@ message SearchClaudeHistoryRequest {
   int32 limit = 6;
   // Number of results to skip for pagination (default: 0).
   int32 offset = 7;
+  // When true, collapse results to one entry per session (highest-scored
+  // hit kept; others counted via more_matches_in_session_count). Default false.
+  optional bool group_by_session = 8;
+  // When true, populate context_window/bookend_first/bookend_last on each
+  // retained result. Default false.
+  optional bool include_context = 9;
+  // When true, best-effort exclude sessions whose live Instance has
+  // Hidden=true. Sessions with no live Instance record are NOT excluded
+  // (signal unavailable, not assumed absent). Default false.
+  optional bool exclude_automation_sessions = 10;
 }
 
 message SearchClaudeHistoryResponse {
@@ -998,6 +1105,18 @@ message SearchResult {
   repeated SearchSnippet snippets = 6;
   // Metadata about the match source.
   SearchResultMetadata metadata = 7;
+  // Count of additional matching messages in this session beyond this hit.
+  // Only meaningful when the request set group_by_session=true.
+  int32 more_matches_in_session_count = 8;
+  // ±5 messages around message_index, read from the raw conversation file.
+  // Populated only when the request set include_context=true.
+  repeated ClaudeMessage context_window = 9;
+  // First 3 messages of the session. Empty when context_window already
+  // spans the full session (see contextWindowAndBookends).
+  repeated ClaudeMessage bookend_first = 10;
+  // Last 3 messages of the session. Empty when context_window already
+  // spans the full session.
+  repeated ClaudeMessage bookend_last = 11;
 }
 
 message SearchSnippet {
@@ -1251,6 +1370,10 @@ message ResolveApprovalRequest {
 
   // Optional reason shown to Claude when denying.
   optional string message = 3;
+
+  // When true, the caller explicitly acknowledges failing CI and re-submits an
+  // already-blocked approval; the server skips the CI-red guard for this request only.
+  bool override_ci_block = 4;
 }
 
 // ResolveApprovalResponse confirms the decision was received.
@@ -1724,6 +1847,11 @@ message SessionDefaultsConfig {
   // Max backlog items that may be in_progress at once. 0 in a request means
   // "use the server default (2)"; the response always echoes the resolved value.
   int32 max_concurrent_backlog_work_items = 11;
+  // Minutes of no meaningful output before a main-list session is flagged stale.
+  // Always the resolved value (never 0) in responses.
+  int32 stale_session_threshold_minutes = 12;
+  // Whether crossing the stale threshold also emits a notification.
+  bool stale_session_notify_enabled = 13;
 }
 
 // GetSessionDefaults
@@ -1732,6 +1860,21 @@ message GetSessionDefaultsRequest {}
 
 message GetSessionDefaultsResponse {
   SessionDefaultsConfig defaults = 1;
+}
+
+// PreviewDestinationPath
+
+message PreviewDestinationPathRequest {
+  string input = 1;         // raw omnibar text (URL/shorthand or local path)
+  string mode = 2;          // "github_url" | "new_worktree" - client already knows which
+  string repo_path = 3;     // new_worktree only: resolved local repo path
+  string session_name = 4;  // new_worktree only: source string for the sanitized dir name
+}
+
+message PreviewDestinationPathResponse {
+  string path = 1;              // exact for github_url; a directory prefix for new_worktree
+  bool is_exact = 2;            // true only for github_url
+  string unresolved_reason = 3; // set (non-error) when input isn't resolvable yet
 }
 
 // ResolveDefaults
@@ -1769,10 +1912,117 @@ message UpdateGlobalDefaultsRequest {
   int32 max_auto_rework_iterations = 8;
   // 0 = use the server default (2). See SessionDefaultsConfig.max_concurrent_backlog_work_items.
   int32 max_concurrent_backlog_work_items = 9;
+  // 0 = use the server default. See SessionDefaultsConfig.stale_session_threshold_minutes.
+  int32 stale_session_threshold_minutes = 10;
+  bool stale_session_notify_enabled = 11;
 }
 
 message UpdateGlobalDefaultsResponse {
   SessionDefaultsConfig defaults = 1;
+}
+
+// ─── Slack Notification Config Messages ─────────────────────────────────────
+//
+// SlackConfigProto reports booleans only for secret fields — the webhook URL
+// and signing secret are never echoed back in plaintext or ciphertext by any
+// RPC, matching CallbackConfigProto's masked-boolean-not-value convention
+// above.
+
+// SlackDeliveryStatus is the notifier's most recent send outcome, surfaced
+// passively on the settings panel so a silently-failing webhook is
+// discoverable without sending a fresh test message.
+message SlackDeliveryStatus {
+  // attempted is false until the first send has ever completed.
+  bool attempted = 1;
+  bool success = 2;
+  // error is the sanitized failure message (never contains the webhook URL).
+  string error = 3;
+  google.protobuf.Timestamp attempted_at = 4;
+}
+
+message SlackConfigProto {
+  bool webhook_configured = 1;
+  bool signing_secret_configured = 2;
+  bool notify_on_queue_item = 3;
+  int32 queue_depth_threshold = 4;
+  bool approval_enabled = 5;
+  string dashboard_base_url = 6;
+  SlackDeliveryStatus last_delivery = 7;
+}
+
+message GetSlackConfigRequest {}
+
+message GetSlackConfigResponse {
+  SlackConfigProto config = 1;
+}
+
+message UpdateSlackConfigRequest {
+  // Empty string means "leave the stored webhook unchanged"; set
+  // clear_webhook_url to explicitly remove it instead.
+  string webhook_url = 1;
+  // Empty string means "leave the stored signing secret unchanged"; set
+  // clear_signing_secret to explicitly remove it instead.
+  string signing_secret = 2;
+  bool notify_on_queue_item = 3;
+  int32 queue_depth_threshold = 4;
+  bool approval_enabled = 5;
+  string dashboard_base_url = 6;
+  // Explicitly clears the stored webhook URL, regardless of webhook_url's
+  // content. Distinct from leaving webhook_url empty (which means
+  // "unchanged") — this is the only way to reach the "cleared" state.
+  bool clear_webhook_url = 7;
+  // Explicitly clears the stored signing secret, regardless of
+  // signing_secret's content. Same "unchanged" vs "cleared" distinction as
+  // clear_webhook_url.
+  bool clear_signing_secret = 8;
+}
+
+message UpdateSlackConfigResponse {
+  SlackConfigProto config = 1;
+}
+
+message TestSlackWebhookRequest {
+  // The webhook URL currently typed in the settings form — tested as-is,
+  // even if not yet saved. Empty string falls back to testing the
+  // already-saved (decrypted) webhook URL.
+  string webhook_url = 1;
+}
+
+message TestSlackWebhookResponse {
+  bool success = 1;
+  // error is Slack's actual response text where available (e.g.
+  // "slack returned 404: no_service"), not a generic failure message.
+  string error = 2;
+}
+
+// Callback Config (webhook-triggers Phase 5, FR7)
+//
+// CallbackConfigProto reports booleans only — the raw URL is never echoed back on any
+// read path, matching the masked-boolean-not-value convention used across this project's
+// other secret-bearing config (see Workflow.webhook_secret_encrypted's doc comment above,
+// which is never round-tripped in plaintext by CreateWorkflow/UpdateWorkflow either).
+
+message CallbackConfigProto {
+  bool on_session_complete_configured = 1;
+  bool on_session_stale_configured = 2;
+  bool on_queue_item_created_configured = 3;
+}
+
+message GetCallbackConfigRequest {}
+
+message GetCallbackConfigResponse {
+  CallbackConfigProto config = 1;
+}
+
+message UpdateCallbackConfigRequest {
+  // Unset means "leave unchanged"; empty string "" means "clear/disable".
+  optional string on_session_complete_url = 1;
+  optional string on_session_stale_url = 2;
+  optional string on_queue_item_created_url = 3;
+}
+
+message UpdateCallbackConfigResponse {
+  CallbackConfigProto config = 1;
 }
 
 // UpsertProfile
@@ -1850,6 +2100,28 @@ message DeleteAliasRequest {
 }
 
 message DeleteAliasResponse {}
+
+// LauncherPresetProto represents one hand-authored launcher preset loaded from
+// ~/.stapler-squad/launcher-presets.json.
+message LauncherPresetProto {
+  string id = 1;
+  string label = 2;
+  repeated string argv = 3;
+  // program is presentation-only (UI label/PATH-check hint); the backend never uses it —
+  // the actual launched program is always argv[0].
+  string program = 4;
+  string default_path = 5;
+}
+
+message GetLauncherPresetsRequest {}
+
+message GetLauncherPresetsResponse {
+  repeated LauncherPresetProto presets = 1;
+  // load_error is non-empty when the presets file exists but failed validation (malformed
+  // JSON, duplicate id, empty argv, unsupported version). presets is empty in that case.
+  // Empty load_error + empty presets means "no file / no presets configured", not an error.
+  string load_error = 2;
+}
 
 message ListWorktreesRequest {
   // Absolute path to the git repository root. Supports ~ expansion.
@@ -1952,6 +2224,45 @@ message RunOneShotResponse {
   int32 exit_code = 3;
   string pr_url = 4;
   bool branch_diverged_from_base = 5;
+}
+
+// ============================================================================
+// S5: Mechanical Pull Request Creation Messages
+// ============================================================================
+
+message DraftPullRequestRequest {
+  string session_id = 1;
+}
+
+message DraftPullRequestResponse {
+  string title = 1;
+  string body = 2;
+  string base_branch = 3;
+  bool has_commits_ahead = 4;
+  // Non-empty when the session already has a PR — the client should show
+  // a "View PR" state instead of the editable create form (AC4).
+  string existing_pr_url = 5;
+  int32 existing_pr_number = 6;
+}
+
+message CreatePullRequestRequest {
+  string session_id = 1;
+  string title = 2;
+  string body = 3;
+  string base_branch = 4;
+}
+
+message CreatePullRequestResponse {
+  string pr_url = 1;
+  int32 pr_number = 2;
+  // True when CreatePR returned a pre-existing PR instead of creating one.
+  bool already_existed = 3;
+  // False when the PR was created on GitHub but the session record failed
+  // to save it — the RPC still returns success (the PR is real); the
+  // client should surface persist_error as a distinct warning, not a
+  // create-failed error (see plan.md's Pattern Decisions).
+  bool persisted = 4;
+  string persist_error = 5;
 }
 
 // ============================================================================
@@ -2137,6 +2448,9 @@ message FeatureFlag {
   bool enabled = 2;
   // Human-readable description of what the feature does.
   string description = 3;
+  // Optional human-readable status line (e.g. why a controller-backed flag is
+  // currently off). Empty when not applicable.
+  string status_detail = 4;
 }
 
 message GetFeatureFlagsRequest {}
@@ -2156,13 +2470,21 @@ message GetHookStatusResponse {
   bool rules_available = 3;
   // True when the ssq-hook-handler is available to install the notification hooks.
   bool notifications_available = 4;
+  // True when the Antigravity CLI rule-enforcement hook (ssq-hooks check --antigravity) is installed.
+  bool agy_rules_installed = 5;
+  // True when the Gemini CLI rule-enforcement hook (ssq-hooks check --gemini) is installed.
+  bool gemini_rules_installed = 6;
 }
 
 message InstallHooksRequest {
-  // Install the PreToolUse rule-enforcement hook.
+  // Install the PreToolUse rule-enforcement hook for Claude Code.
   bool install_rules = 1;
   // Install the Notification/Stop notification hooks.
   bool install_notifications = 2;
+  // Install the PreToolUse rule-enforcement hook for Antigravity CLI (agy).
+  bool install_agy_rules = 3;
+  // Install the BeforeTool rule-enforcement hook for Gemini CLI.
+  bool install_gemini_rules = 4;
 }
 
 message InstallHooksResponse {
@@ -2234,6 +2556,26 @@ message GetEscapeAnalyticsSummaryRequest {
 
 message GetEscapeAnalyticsSummaryResponse {
   repeated EscapeSequenceCount histogram = 1;
+  int64 total_sequences = 2;
+  int64 total_mangled = 3;
+  double mangle_rate = 4;
+}
+
+message GetEscapeAnalyticsGlobalSummaryRequest {
+  optional google.protobuf.Timestamp start_time = 1;
+  optional google.protobuf.Timestamp end_time = 2;
+}
+
+message GetEscapeAnalyticsGlobalSummaryResponse {
+  repeated EscapeSequenceCount histogram = 1;
+  int64 total_sequences = 2;
+  int64 total_mangled = 3;
+  double mangle_rate = 4;
+  repeated SessionEscapeSummary per_session = 5;
+}
+
+message SessionEscapeSummary {
+  string session_id = 1;
   int64 total_sequences = 2;
   int64 total_mangled = 3;
   double mangle_rate = 4;
@@ -2352,6 +2694,15 @@ message ResumeHibernatedSessionResponse {
   Session session = 1;
 }
 
+// ResumeCrashedSession messages
+message ResumeCrashedSessionRequest {
+  string id = 1;
+}
+
+message ResumeCrashedSessionResponse {
+  Session session = 1;
+}
+
 // ValidateRules messages
 message ValidateRulesRequest {
   string yaml_content = 1;
@@ -2433,6 +2784,25 @@ message WorkflowProto {
   optional int32 keep_sessions = 15;
   // Retention: auto-archive completed sessions after this many hours (0 = disabled).
   optional int32 archive_after_hours = 16;
+
+  // Trigger fields (webhook-triggers Phase 1, Epic 1.1). trigger_type discriminates
+  // which activation mechanism fires this row: "cron" | "github_push" | "webhook" |
+  // "manual". Never populated with the webhook secret — that is write-only and never
+  // round-tripped in plaintext by any RPC (see webhook_secret_encrypted's doc comment
+  // on Workflow's storage layer).
+  string trigger_type = 17;
+  string github_repo = 18;
+  string github_branch = 19;
+  string webhook_slug = 20;
+  string event_filter = 21;
+  string label_filter = 22;
+  string prompt_template = 23;
+  // Last time this trigger successfully fired a session. Unset if never fired.
+  optional google.protobuf.Timestamp last_fired_at = 24;
+  // enabled is the generic per-trigger-type "is this trigger active" gate, read by
+  // both webhook handlers and written by TriggersPanel.tsx's toggle — distinct from
+  // cron_enabled, which is the literal cron-schedule flag only.
+  bool enabled = 25;
 }
 
 message CreateWorkflowRequest {
@@ -2451,6 +2821,30 @@ message CreateWorkflowRequest {
   optional int32 keep_sessions = 12;
   // Retention: auto-archive completed sessions after this many hours (0 = disabled).
   optional int32 archive_after_hours = 13;
+
+  // Trigger fields (webhook-triggers Phase 1, Epic 1.1). trigger_type discriminates
+  // which activation mechanism fires this row: "cron" | "github_push" | "webhook" |
+  // "manual" (defaults to "manual", or "cron" when cron_enabled is set and
+  // trigger_type is left unspecified, for backward compatibility with existing
+  // cron-only clients). Populated fields must match the declared trigger_type — e.g.
+  // webhook_slug requires trigger_type="webhook" — or the request is rejected with
+  // CodeInvalidArgument (Task 1.1.1e).
+  string trigger_type = 14;
+  string github_repo = 15;
+  string github_branch = 16;
+  string webhook_slug = 17;
+  string event_filter = 18;
+  string label_filter = 19;
+  string prompt_template = 20;
+  // Write-only plaintext webhook/HMAC shared secret (Phase 7 follow-up to Epic 1.1).
+  // "" means "no secret configured" — the trigger's inbound HMAC verification will
+  // reject every delivery until one is set. Never echoed back by any RPC, matching
+  // WorkflowProto.trigger_type's doc comment on webhook_secret_encrypted above.
+  string webhook_secret = 21;
+  // enabled gates whether this trigger fires (see WorkflowProto.enabled). optional so
+  // an unset request defaults to the schema default (true), matching the create-time
+  // "enabled unless explicitly disabled" convention.
+  optional bool enabled = 22;
 }
 
 message CreateWorkflowResponse {
@@ -2474,6 +2868,32 @@ message UpdateWorkflowRequest {
   optional int32 keep_sessions = 12;
   // Retention: auto-archive completed sessions after this many hours (0 = disabled).
   optional int32 archive_after_hours = 13;
+
+  // Trigger fields (webhook-triggers Phase 1, Epic 1.1) — see CreateWorkflowRequest's
+  // doc comment for the trigger_type-vs-populated-fields validation contract, applied
+  // here against the *effective* (existing-row-merged-with-request) values.
+  optional string trigger_type = 14;
+  optional string github_repo = 15;
+  optional string github_branch = 16;
+  optional string webhook_slug = 17;
+  optional string event_filter = 18;
+  optional string label_filter = 19;
+  optional string prompt_template = 20;
+  // Write-only plaintext webhook/HMAC shared secret. Not `optional` — there is no
+  // "unset" vs "empty" distinction: an empty/omitted value always means "leave the
+  // stored secret unchanged" (never clears it implicitly, matching the "omit means
+  // unchanged" convention UpdateCallbackConfig's masked URLs use for their own
+  // never-cleared-implicitly fields). Only a non-empty value rotates the stored
+  // secret. See CreateWorkflowRequest.webhook_secret's doc comment.
+  string webhook_secret = 21;
+  // enabled gates whether this trigger fires (see WorkflowProto.enabled).
+  optional bool enabled = 22;
+  // Optimistic-concurrency precondition (CAS): when set, the update is rejected with
+  // CodeAborted unless the row's current updated_at exactly matches this value —
+  // mirrors ClaimChainFire's SQL-level CAS (ent_repository_backlog.go). Left unset,
+  // there is no precondition and the write always applies, preserving prior
+  // single-writer callers' behavior during rollout.
+  optional google.protobuf.Timestamp expected_updated_at = 23;
 }
 
 message UpdateWorkflowResponse {
@@ -2522,6 +2942,30 @@ message ListSlashCommandsResponse {
 
 message RunWorkflowResponse {
   string session_id = 1;
+}
+
+// TriggerFireEventProto is the wire representation of a single trigger evaluation
+// attempt (fired/no-match/rejected) — the durable audit trail behind
+// ListTriggerFireEvents (webhook-triggers Epic 1.2).
+message TriggerFireEventProto {
+  string id = 1;
+  string workflow_id = 2;
+  // "fired_success" | "fired_failed" | "no_match" | "rejected"
+  string outcome = 3;
+  string delivery_id = 4;
+  string session_id = 5;
+  string error_message = 6;
+  google.protobuf.Timestamp created_at = 7;
+}
+
+message ListTriggerFireEventsRequest {
+  string workflow_id = 1;
+  // Max events to return, newest first; 0 means server default (100).
+  int32 limit = 2;
+}
+
+message ListTriggerFireEventsResponse {
+  repeated TriggerFireEventProto events = 1;
 }
 
 // DetectionEventProto is the wire representation of a single status-detection event.

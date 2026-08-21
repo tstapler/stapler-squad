@@ -22,6 +22,7 @@ func hasTmux() bool {
 // TestScanByUserOptions_NoSessions verifies that ScanByUserOptions returns
 // an empty slice (not an error) when tmux is unavailable or has no sessions.
 func TestScanByUserOptions_NoSessions(t *testing.T) {
+	t.Parallel()
 	sessions, err := ScanByUserOptions()
 	if err != nil {
 		t.Fatalf("ScanByUserOptions: unexpected error: %v", err)
@@ -34,6 +35,7 @@ func TestScanByUserOptions_NoSessions(t *testing.T) {
 // TestScanByUserOptions_ParsesFields verifies the tab-separated parsing
 // logic using the same field splitting used in ScanByUserOptions.
 func TestScanByUserOptions_ParsesFields(t *testing.T) {
+	t.Parallel()
 	// Simulate the output of `tmux list-sessions -F ...` for two sessions:
 	// one ssq-mux session and one without options.
 	lines := []string{
@@ -102,6 +104,7 @@ func TestScanByUserOptions_ParsesFields(t *testing.T) {
 // five option keys and that they are readable via `tmux show-options`.
 // Skipped when tmux is unavailable.
 func TestWriteReadUserOptions(t *testing.T) {
+	t.Parallel()
 	if !hasTmux() {
 		t.Skip("tmux not available")
 	}
@@ -165,6 +168,7 @@ func TestWriteReadUserOptions(t *testing.T) {
 // correctly registers a session returned by ScanByUserOptions into d.sessions
 // and fires the new-session callback. Skipped when tmux is unavailable.
 func TestScanFromUserOptions_RegistersSession(t *testing.T) {
+	t.Parallel()
 	if !hasTmux() {
 		t.Skip("tmux not available")
 	}

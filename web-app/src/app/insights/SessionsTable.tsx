@@ -27,6 +27,8 @@ import {
   clearButton,
   virtualContainer,
   clickableRow,
+  sortableTh,
+  sortOrderHint,
 } from "./SessionsTable.css";
 import { fmtCost, fmtTokens, fmtPct, shortId } from "./insightsFormatters";
 
@@ -42,10 +44,14 @@ function pathBasename(p: string): string {
 
 const VIRTUOSO_THRESHOLD = 50;
 
+type SortColumn = "input" | "output" | "cache" | "cost";
+
 export function SessionsTable({ sessions, onSessionClick, backlogIndex }: Props) {
   const [showOrphans, setShowOrphans] = useState(true);
   const [searchText, setSearchText] = useState("");
   const [modelFilter, setModelFilter] = useState("");
+  const [sortCol, setSortCol] = useState<SortColumn | null>(null);
+  const [sortAsc, setSortAsc] = useState(false);
 
   const orphanCount = sessions.filter((s) => s.isOrphan).length;
 
@@ -94,12 +100,60 @@ export function SessionsTable({ sessions, onSessionClick, backlogIndex }: Props)
       result = result.filter((s) => !s.isOrphan);
     }
 
+    if (sortCol === null) {
+      // Default (no header clicked yet): unchanged lastMessageAt-desc order.
+      return [...result].sort((a, b) => {
+        const at = a.lastMessageAt ? Number(a.lastMessageAt.seconds) : 0;
+        const bt = b.lastMessageAt ? Number(b.lastMessageAt.seconds) : 0;
+        return bt - at;
+      });
+    }
+
     return [...result].sort((a, b) => {
-      const at = a.lastMessageAt ? Number(a.lastMessageAt.seconds) : 0;
-      const bt = b.lastMessageAt ? Number(b.lastMessageAt.seconds) : 0;
-      return bt - at;
+      if (sortCol === "cost") {
+        // Unpriced sessions always sort last, in both directions — the
+        // early-return happens before the sortAsc flip below.
+        const aUnpriced = a.unpricedModels.length > 0;
+        const bUnpriced = b.unpricedModels.length > 0;
+        if (aUnpriced !== bUnpriced) return aUnpriced ? 1 : -1;
+        const cmp = a.estimatedCostUsd - b.estimatedCostUsd;
+        return sortAsc ? cmp : -cmp;
+      }
+      let cmp = 0;
+      switch (sortCol) {
+        case "input":
+          cmp = Number(a.totalInputTokens - b.totalInputTokens);
+          break;
+        case "output":
+          cmp = Number(a.totalOutputTokens - b.totalOutputTokens);
+          break;
+        case "cache":
+          cmp = a.cacheHitRate - b.cacheHitRate;
+          break;
+      }
+      return sortAsc ? cmp : -cmp;
     });
-  }, [sessions, searchText, modelFilter, showOrphans, fuse]);
+  }, [sessions, searchText, modelFilter, showOrphans, fuse, sortCol, sortAsc]);
+
+  const handleSortClick = useCallback((col: SortColumn) => {
+    // Reads sortCol from closure rather than nesting setSortAsc inside
+    // setSortCol's updater — a state setter called as a side effect of
+    // another setter's functional update breaks under React.StrictMode's
+    // double-invocation of updater functions (the toggle would fire twice
+    // and cancel out). Mirrors app/backlog/page.tsx's independent-calls
+    // precedent for the same sort-toggle shape.
+    if (sortCol === col) {
+      setSortAsc((prevAsc) => !prevAsc);
+    } else {
+      setSortCol(col);
+      setSortAsc(false);
+    }
+  }, [sortCol]);
+
+  const sortIndicator = useCallback(
+    (col: SortColumn) => (sortCol === col ? (sortAsc ? " ↑" : " ↓") : " ↕"),
+    [sortCol, sortAsc]
+  );
 
   const hasActiveFilters = searchText !== "" || modelFilter !== "";
 
@@ -115,15 +169,38 @@ export function SessionsTable({ sessions, onSessionClick, backlogIndex }: Props)
     }
   }, [onSessionClick]);
 
+  const sortableHeaderCell = (col: SortColumn, label: string) => (
+    <th
+      className={thRight}
+      aria-sort={sortCol === col ? (sortAsc ? "ascending" : "descending") : "none"}
+    >
+      <span
+        className={sortableTh}
+        role="button"
+        tabIndex={0}
+        onClick={() => handleSortClick(col)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            handleSortClick(col);
+          }
+        }}
+      >
+        {label}
+        {sortIndicator(col)}
+      </span>
+    </th>
+  );
+
   const headerContent = () => (
     <tr>
       <th className={th}>Session</th>
       <th className={th}>Model</th>
       <th className={th}>Path</th>
-      <th className={thRight}>Input</th>
-      <th className={thRight}>Output</th>
-      <th className={thRight}>Cache</th>
-      <th className={thRight}>Cost</th>
+      {sortableHeaderCell("input", "Input")}
+      {sortableHeaderCell("output", "Output")}
+      {sortableHeaderCell("cache", "Cache")}
+      {sortableHeaderCell("cost", "Cost")}
     </tr>
   );
 
@@ -156,7 +233,9 @@ export function SessionsTable({ sessions, onSessionClick, backlogIndex }: Props)
         <td className={td} title={s.projectPath}>{pathBasename(s.projectPath) || "—"}</td>
         <td className={tdRight}>{fmtTokens(s.totalInputTokens)}</td>
         <td className={tdRight}>{fmtTokens(s.totalOutputTokens)}</td>
-        <td className={tdRight}>{fmtPct(s.cacheHitRate)}</td>
+        <td className={tdRight} title={`${fmtTokens(s.cacheReadTokens)} read, ${fmtTokens(s.cacheCreationTokens)} written`}>
+          {fmtPct(s.cacheHitRate)}
+        </td>
         <td className={tdRight}>
           {fmtCost(s.estimatedCostUsd)}
           {s.unpricedModels.length > 0 && <span className={unpricedBadge}>unpriced</span>}
@@ -169,7 +248,10 @@ export function SessionsTable({ sessions, onSessionClick, backlogIndex }: Props)
     Table: ({ style: s, ...props }: React.ComponentPropsWithRef<"table">) => (
       <table className={table} style={s} {...props} />
     ),
-    TableHead: (props: React.ComponentPropsWithRef<"thead">) => <thead {...props} />,
+    // eslint-disable-next-line react/display-name
+    TableHead: React.forwardRef<HTMLTableSectionElement, React.ComponentPropsWithRef<"thead">>(
+      (props, ref) => <thead ref={ref} {...props} />
+    ),
     // eslint-disable-next-line react/display-name
     TableBody: React.forwardRef<HTMLTableSectionElement, React.ComponentPropsWithRef<"tbody">>(
       (props, ref) => <tbody ref={ref} {...props} />
@@ -178,6 +260,7 @@ export function SessionsTable({ sessions, onSessionClick, backlogIndex }: Props)
       const s = displayed[dataIndex];
       return (
         <tr
+          data-index={dataIndex}
           {...props}
           className={onSessionClick ? clickableRow : undefined}
           onClick={onSessionClick && s ? () => onSessionClick(s) : undefined}
@@ -196,7 +279,12 @@ export function SessionsTable({ sessions, onSessionClick, backlogIndex }: Props)
   return (
     <div className={tableCard}>
       <div className={tableHeader}>
-        <div className={tableTitle}>{titleText}</div>
+        <div className={tableTitle}>
+          {titleText}
+          {sortCol === null && (
+            <span className={sortOrderHint}> — sorted by most recently active</span>
+          )}
+        </div>
         <div className={filterBar}>
           <input
             type="search"

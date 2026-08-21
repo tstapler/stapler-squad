@@ -2,9 +2,11 @@ package git
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"os/exec"
+	"sort"
 	"strings"
 	"time"
 
@@ -30,6 +32,28 @@ func FetchBranch(repoPath, branchName string) error {
 		return fmt.Errorf("failed to fetch branch: %w", err)
 	}
 	return nil
+}
+
+// ResolveOriginBranchSHA fetches mainBranch from origin into repoPath and returns the
+// resulting origin/mainBranch tip commit SHA. Unlike a bare `rev-parse HEAD` against
+// repoPath's own checkout, this always fetches first, so the returned SHA reflects
+// origin's true current tip rather than whatever repoPath happened to have checked
+// out last — the gap that let a new backlog work session's worktree branch from a
+// days-stale local checkout instead of the real main tip (see setupNewWorktree's
+// "branch from current HEAD" comment, and CreateBacklogWorktree's use of this func).
+func ResolveOriginBranchSHA(repoPath, mainBranch string) (string, error) {
+	if err := FetchBranch(repoPath, mainBranch); err != nil {
+		return "", fmt.Errorf("failed to fetch %s: %w", mainBranch, err)
+	}
+	repo, err := git.PlainOpenWithOptions(repoPath, &git.PlainOpenOptions{DetectDotGit: true})
+	if err != nil {
+		return "", fmt.Errorf("failed to open git repo at %s: %w", repoPath, err)
+	}
+	ref, err := repo.Reference(plumbing.NewRemoteReferenceName("origin", mainBranch), true)
+	if err != nil {
+		return "", fmt.Errorf("failed to resolve origin/%s: %w", mainBranch, err)
+	}
+	return ref.Hash().String(), nil
 }
 
 // IsCommitOnMain reports whether sha has actually landed on mainBranch — either the
@@ -234,6 +258,27 @@ type ShippedCommit struct {
 	AuthorName string
 }
 
+// CommitInfo returns the summary line, author and author timestamp for a single
+// resolved commit hash in the repo at repoPath, read via go-git — no subshell
+// (.claude/rules/prefer-go-git-over-subshells.md).
+func CommitInfo(repoPath, sha string) (ShippedCommit, error) {
+	repo, err := git.PlainOpenWithOptions(repoPath, &git.PlainOpenOptions{DetectDotGit: true})
+	if err != nil {
+		return ShippedCommit{}, fmt.Errorf("failed to open git repo at %s: %w", repoPath, err)
+	}
+	c, err := repo.CommitObject(plumbing.NewHash(sha))
+	if err != nil {
+		return ShippedCommit{}, fmt.Errorf("failed to resolve commit %s: %w", sha, err)
+	}
+	summary, _, _ := strings.Cut(c.Message, "\n")
+	return ShippedCommit{
+		SHA:        c.Hash.String(),
+		Summary:    strings.TrimSpace(summary),
+		AuthorAt:   c.Author.When,
+		AuthorName: c.Author.Name,
+	}, nil
+}
+
 // listShippedCommitsCap bounds ListShippedCommits the same way
 // countCommitsNotAncestorOfCap bounds the ahead/behind walk — a UI commit list
 // only ever needs "the last several", not an unbounded history dump.
@@ -315,23 +360,9 @@ func FileStatsBetween(repoPath, baseSHA, headSHA string) ([]FileStat, error) {
 		return nil, nil
 	}
 
-	repo, err := git.PlainOpenWithOptions(repoPath, &git.PlainOpenOptions{DetectDotGit: true})
+	patch, err := diffPatchBetween(repoPath, baseSHA, headSHA)
 	if err != nil {
-		return nil, fmt.Errorf("failed to open git repo at %s: %w", repoPath, err)
-	}
-
-	baseCommit, err := repo.CommitObject(plumbing.NewHash(baseSHA))
-	if err != nil {
-		return nil, fmt.Errorf("failed to resolve commit %s in %s: %w", baseSHA, repoPath, err)
-	}
-	headCommit, err := repo.CommitObject(plumbing.NewHash(headSHA))
-	if err != nil {
-		return nil, fmt.Errorf("failed to resolve commit %s in %s: %w", headSHA, repoPath, err)
-	}
-
-	patch, err := baseCommit.Patch(headCommit)
-	if err != nil {
-		return nil, fmt.Errorf("failed to diff %s..%s in %s: %w", baseSHA, headSHA, repoPath, err)
+		return nil, err
 	}
 
 	var stats []FileStat
@@ -381,6 +412,119 @@ func FileStatsBetween(repoPath, baseSHA, headSHA string) ([]FileStat, error) {
 	}
 
 	return stats, nil
+}
+
+// diffPatchBetween opens repoPath, resolves baseSHA/headSHA, and returns the
+// object.Patch between them — the shared resolve+diff step behind both
+// FileStatsBetween and DiffHashBetween.
+func diffPatchBetween(repoPath, baseSHA, headSHA string) (*object.Patch, error) {
+	repo, err := git.PlainOpenWithOptions(repoPath, &git.PlainOpenOptions{DetectDotGit: true})
+	if err != nil {
+		return nil, fmt.Errorf("failed to open git repo at %s: %w", repoPath, err)
+	}
+
+	baseCommit, err := repo.CommitObject(plumbing.NewHash(baseSHA))
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve commit %s in %s: %w", baseSHA, repoPath, err)
+	}
+	headCommit, err := repo.CommitObject(plumbing.NewHash(headSHA))
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve commit %s in %s: %w", headSHA, repoPath, err)
+	}
+
+	patch, err := baseCommit.Patch(headCommit)
+	if err != nil {
+		return nil, fmt.Errorf("failed to diff %s..%s in %s: %w", baseSHA, headSHA, repoPath, err)
+	}
+	return patch, nil
+}
+
+// DiffHashBetween returns a stable content hash of the diff between baseSHA
+// and headSHA in the repo at repoPath — the actual added/removed line
+// content per file, not just per-file counts (a per-file
+// path+status+addition-count+deletion-count tuple can collide across two
+// genuinely different edits, e.g. two different single-line replacements on
+// the same file both show as one addition and one deletion; hashing the
+// actual line text avoids that false-collision shape). Feeds
+// session.IsFlakyVerdictFlipFlop's DiffHash comparison: the same code
+// reviewed twice must hash identically; any real change to the diff must
+// not. Unlike a hash of the (possibly token-capped) prompt text sent to a
+// reviewer, this is computed from the full, untruncated diff, so two
+// different diffs that happen to share a truncated prefix can never
+// collide here.
+func DiffHashBetween(repoPath, baseSHA, headSHA string) (string, error) {
+	if baseSHA == headSHA {
+		return fmt.Sprintf("%x", sha256.Sum256(nil)), nil
+	}
+
+	patch, err := diffPatchBetween(repoPath, baseSHA, headSHA)
+	if err != nil {
+		return "", err
+	}
+
+	return diffHashFromFilePatches(patch.FilePatches()), nil
+}
+
+// diffHashFromFilePatches is DiffHashBetween's core, split out so a test can
+// drive it with fake fdiff.FilePatch values instead of coaxing a real git
+// repository into producing a specific go-git edge case.
+func diffHashFromFilePatches(filePatches []fdiff.FilePatch) string {
+	type fileDigest struct {
+		path    string
+		content string
+	}
+	digests := make([]fileDigest, 0, len(filePatches))
+	for _, fp := range filePatches {
+		chunks := fp.Chunks()
+		if len(chunks) == 0 {
+			// Binary file (or submodule ref update) — no line-level diff to
+			// report; see FileStatsBetween's doc comment. Also covers symlink
+			// changes: go-git's Files() returns (nil, nil) for non-regular-file
+			// tree entries regardless of add/modify/delete, which would
+			// otherwise panic below on the assumption that at most one side is
+			// nil.
+			continue
+		}
+
+		from, to := fp.Files()
+		path := ""
+		status := ""
+		switch {
+		case from == nil && to == nil:
+			// go-git can return (nil, nil) from Files() even when Chunks() is
+			// non-empty -- observed in production on symlink/gitlink type-change
+			// entries whose textual content still produces chunks. Skip rather
+			// than falling into the single-sided cases below, which assume at
+			// most one side is nil and would dereference the other.
+			continue
+		case from == nil:
+			status, path = "added", to.Path()
+		case to == nil:
+			status, path = "deleted", from.Path()
+		case from.Path() != to.Path():
+			status, path = "renamed:"+from.Path(), to.Path()
+		default:
+			status, path = "modified", to.Path()
+		}
+
+		var b strings.Builder
+		b.WriteString(status)
+		b.WriteByte('\n')
+		for _, chunk := range chunks {
+			fmt.Fprintf(&b, "%d:%s\n", chunk.Type(), chunk.Content())
+		}
+		digests = append(digests, fileDigest{path: path, content: b.String()})
+	}
+	sort.Slice(digests, func(i, j int) bool { return digests[i].path < digests[j].path })
+
+	h := sha256.New()
+	for _, d := range digests {
+		h.Write([]byte(d.path))
+		h.Write([]byte{'\n'})
+		h.Write([]byte(d.content))
+		h.Write([]byte{0})
+	}
+	return fmt.Sprintf("%x", h.Sum(nil))
 }
 
 // CheckoutBranch checks out a branch in an existing repository.

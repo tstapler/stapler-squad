@@ -58,6 +58,17 @@ export function LifecycleDiagram() {
 // ---------------------------------------------------------------------------
 
 export function BacklogEmptyState({ onCreateItem }: BacklogEmptyStateProps) {
+  // ponytail: onCreateItem is typed as () => void, but nothing stops a caller from handing
+  // us a callback that returns a rejected promise (e.g. a future async create-item RPC) —
+  // guard so that isn't an unhandled rejection.
+  const handleCreateClick = () => {
+    Promise.resolve()
+      .then(onCreateItem)
+      .catch((err) => {
+        console.error("[BacklogEmptyState] onCreateItem failed:", err);
+      });
+  };
+
   return (
     <section role="region" aria-label="Backlog — empty" className={styles.wrapper} data-testid="backlog-empty-state">
       <h2 className={styles.headline} data-testid="backlog-empty-headline">Your backlog is empty.</h2>
@@ -68,7 +79,7 @@ export function BacklogEmptyState({ onCreateItem }: BacklogEmptyStateProps) {
       <button
         className={styles.ctaButton}
         autoFocus
-        onClick={onCreateItem}
+        onClick={handleCreateClick}
         data-testid="backlog-empty-cta-button"
       >
         + Create First Item

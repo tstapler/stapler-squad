@@ -8,6 +8,7 @@ import (
 )
 
 func TestNewPolicyEngine(t *testing.T) {
+	t.Parallel()
 	engine := NewPolicyEngine()
 
 	if engine == nil {
@@ -21,6 +22,7 @@ func TestNewPolicyEngine(t *testing.T) {
 }
 
 func TestPolicyEngine_AddPolicy(t *testing.T) {
+	t.Parallel()
 	engine := NewPolicyEngine()
 
 	policy := &ApprovalPolicy{
@@ -46,6 +48,7 @@ func TestPolicyEngine_AddPolicy(t *testing.T) {
 }
 
 func TestPolicyEngine_AddPolicyNoName(t *testing.T) {
+	t.Parallel()
 	engine := NewPolicyEngine()
 
 	policy := &ApprovalPolicy{
@@ -60,6 +63,7 @@ func TestPolicyEngine_AddPolicyNoName(t *testing.T) {
 }
 
 func TestPolicyEngine_AddPolicyInvalidRegex(t *testing.T) {
+	t.Parallel()
 	engine := NewPolicyEngine()
 
 	policy := &ApprovalPolicy{
@@ -82,6 +86,7 @@ func TestPolicyEngine_AddPolicyInvalidRegex(t *testing.T) {
 }
 
 func TestPolicyEngine_RemovePolicy(t *testing.T) {
+	t.Parallel()
 	engine := NewPolicyEngine()
 
 	policy := &ApprovalPolicy{
@@ -102,6 +107,7 @@ func TestPolicyEngine_RemovePolicy(t *testing.T) {
 }
 
 func TestPolicyEngine_GetPolicy(t *testing.T) {
+	t.Parallel()
 	engine := NewPolicyEngine()
 
 	policy := &ApprovalPolicy{
@@ -124,6 +130,7 @@ func TestPolicyEngine_GetPolicy(t *testing.T) {
 }
 
 func TestPolicyEngine_UpdatePolicy(t *testing.T) {
+	t.Parallel()
 	engine := NewPolicyEngine()
 
 	policy := &ApprovalPolicy{
@@ -153,6 +160,7 @@ func TestPolicyEngine_UpdatePolicy(t *testing.T) {
 }
 
 func TestPolicyEngine_EvaluateSimpleMatch(t *testing.T) {
+	t.Parallel()
 	engine := NewPolicyEngine()
 
 	policy := &ApprovalPolicy{
@@ -195,6 +203,7 @@ func TestPolicyEngine_EvaluateSimpleMatch(t *testing.T) {
 }
 
 func TestPolicyEngine_EvaluateNoMatch(t *testing.T) {
+	t.Parallel()
 	engine := NewPolicyEngine()
 
 	policy := &ApprovalPolicy{
@@ -237,6 +246,7 @@ func TestPolicyEngine_EvaluateNoMatch(t *testing.T) {
 }
 
 func TestPolicyEngine_EvaluateDisabledPolicy(t *testing.T) {
+	t.Parallel()
 	engine := NewPolicyEngine()
 
 	policy := &ApprovalPolicy{
@@ -266,6 +276,7 @@ func TestPolicyEngine_EvaluateDisabledPolicy(t *testing.T) {
 }
 
 func TestPolicyEngine_EvaluatePriority(t *testing.T) {
+	t.Parallel()
 	engine := NewPolicyEngine()
 
 	// Lower priority - auto approve
@@ -308,6 +319,7 @@ func TestPolicyEngine_EvaluatePriority(t *testing.T) {
 }
 
 func TestPolicyEngine_RegexCondition(t *testing.T) {
+	t.Parallel()
 	engine := NewPolicyEngine()
 
 	policy := &ApprovalPolicy{
@@ -346,6 +358,7 @@ func TestPolicyEngine_RegexCondition(t *testing.T) {
 }
 
 func TestPolicyEngine_MultipleConditions(t *testing.T) {
+	t.Parallel()
 	engine := NewPolicyEngine()
 
 	policy := &ApprovalPolicy{
@@ -400,6 +413,7 @@ func TestPolicyEngine_MultipleConditions(t *testing.T) {
 }
 
 func TestPolicyEngine_TimeRestriction(t *testing.T) {
+	t.Parallel()
 	engine := NewPolicyEngine()
 
 	now := time.Now()
@@ -436,6 +450,7 @@ func TestPolicyEngine_TimeRestriction(t *testing.T) {
 }
 
 func TestPolicyEngine_TimeRestrictionOutsideHours(t *testing.T) {
+	t.Parallel()
 	engine := NewPolicyEngine()
 
 	now := time.Now()
@@ -472,6 +487,7 @@ func TestPolicyEngine_TimeRestrictionOutsideHours(t *testing.T) {
 }
 
 func TestPolicyEngine_UsageLimit(t *testing.T) {
+	t.Parallel()
 	engine := NewPolicyEngine()
 
 	policy := &ApprovalPolicy{
@@ -514,6 +530,7 @@ func TestPolicyEngine_UsageLimit(t *testing.T) {
 }
 
 func TestPolicyEngine_GetAuditLog(t *testing.T) {
+	t.Parallel()
 	engine := NewPolicyEngine()
 
 	policy := &ApprovalPolicy{
@@ -544,6 +561,7 @@ func TestPolicyEngine_GetAuditLog(t *testing.T) {
 }
 
 func TestPolicyEngine_ClearAuditLog(t *testing.T) {
+	t.Parallel()
 	engine := NewPolicyEngine()
 
 	policy := &ApprovalPolicy{
@@ -572,6 +590,7 @@ func TestPolicyEngine_ClearAuditLog(t *testing.T) {
 }
 
 func TestPolicyEngine_GetStatistics(t *testing.T) {
+	t.Parallel()
 	engine := NewPolicyEngine()
 
 	approvePolicy := &ApprovalPolicy{
@@ -621,6 +640,7 @@ func TestPolicyEngine_GetStatistics(t *testing.T) {
 }
 
 func TestCreateSafeCommandPolicy(t *testing.T) {
+	t.Parallel()
 	policy := CreateSafeCommandPolicy()
 
 	if policy == nil {
@@ -637,6 +657,7 @@ func TestCreateSafeCommandPolicy(t *testing.T) {
 }
 
 func TestCreateNoDestructivePolicy(t *testing.T) {
+	t.Parallel()
 	policy := CreateNoDestructivePolicy()
 
 	if policy == nil {
@@ -653,6 +674,7 @@ func TestCreateNoDestructivePolicy(t *testing.T) {
 }
 
 func TestCreateBusinessHoursPolicy(t *testing.T) {
+	t.Parallel()
 	policy := CreateBusinessHoursPolicy()
 
 	if policy == nil {

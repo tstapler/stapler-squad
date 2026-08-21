@@ -53,6 +53,7 @@ func newRulesServiceWithAI(t *testing.T, aiClient AIClient) *RulesService {
 	require.NoError(t, err)
 	analyticsStore := NewAnalyticsStore(storage)
 	analyticsStore.Start(context.Background())
+	t.Cleanup(analyticsStore.Stop)
 	c := classifier.NewRuleBasedClassifier()
 	return NewRulesService(rulesStore, nil, analyticsStore, c, &DefaultRulePromptBuilder{}, aiClient)
 }
@@ -86,6 +87,7 @@ const fixture2ElementJSON = `[
 // ── T-UNIT-GO-001: Happy path — analytics_gaps returns plural suggestions ────
 
 func TestGenerateSuggestedRule_AnalyticsGaps_ReturnsSuggestions(t *testing.T) {
+	t.Parallel()
 	// T-UNIT-GO-001
 	svc := newRulesServiceWithAI(t, &mockAIClient{response: fixture2ElementJSON})
 
@@ -105,6 +107,7 @@ func TestGenerateSuggestedRule_AnalyticsGaps_ReturnsSuggestions(t *testing.T) {
 // ── T-UNIT-GO-002: Failure mode — unspecified source returns CodeInvalidArgument ─
 
 func TestGenerateSuggestedRule_UnspecifiedSource_ReturnsError(t *testing.T) {
+	t.Parallel()
 	// T-UNIT-GO-002
 	svc := newRulesServiceWithAI(t, &mockAIClient{response: "[]"})
 
@@ -119,6 +122,7 @@ func TestGenerateSuggestedRule_UnspecifiedSource_ReturnsError(t *testing.T) {
 // ── T-UNIT-GO-003: Failure mode — nil AI client returns CodeUnimplemented ────
 
 func TestGenerateSuggestedRule_NilAIClient_ReturnsUnimplemented(t *testing.T) {
+	t.Parallel()
 	// T-UNIT-GO-003
 	storage := createTestStorage(t)
 	rulesStore, err := NewRulesStore(storage)
@@ -138,6 +142,7 @@ func TestGenerateSuggestedRule_NilAIClient_ReturnsUnimplemented(t *testing.T) {
 // ── T-UNIT-GO-004: buildPromptContext includes existing rules and analytics gaps ─
 
 func TestBuildPromptContext_IncludesRulesAndGaps(t *testing.T) {
+	t.Parallel()
 	// T-UNIT-GO-004
 	storage := createTestStorage(t)
 	rulesStore, err := NewRulesStore(storage)
@@ -158,6 +163,7 @@ func TestBuildPromptContext_IncludesRulesAndGaps(t *testing.T) {
 
 	analyticsStore := NewAnalyticsStore(storage)
 	analyticsStore.Start(context.Background())
+	t.Cleanup(analyticsStore.Stop)
 
 	// Insert 3 escalated entries with no rule match.
 	// RiskLevel must be non-empty to pass the DB schema validator.
@@ -200,6 +206,7 @@ func TestBuildPromptContext_IncludesRulesAndGaps(t *testing.T) {
 // ── T-UNIT-GO-007: FR-8 — GenerateSuggestedRule never calls Upsert ───────────
 
 func TestGenerateSuggestedRule_NeverCallsUpsert(t *testing.T) {
+	t.Parallel()
 	// T-UNIT-GO-007
 	storage := createTestStorage(t)
 	baseStore, err := NewRulesStore(storage)
@@ -207,6 +214,7 @@ func TestGenerateSuggestedRule_NeverCallsUpsert(t *testing.T) {
 	spy := &spyRulesStore{RulesStore: baseStore}
 	analyticsStore := NewAnalyticsStore(storage)
 	analyticsStore.Start(context.Background())
+	t.Cleanup(analyticsStore.Stop)
 	c := classifier.NewRuleBasedClassifier()
 
 	svc := &RulesService{
@@ -227,6 +235,7 @@ func TestGenerateSuggestedRule_NeverCallsUpsert(t *testing.T) {
 // ── T-UNIT-GO-010: Handler returns on context cancellation ───────────────────
 
 func TestGenerateSuggestedRule_ReturnsOnCtxCancellation(t *testing.T) {
+	t.Parallel()
 	// T-UNIT-GO-010
 	svc := newRulesServiceWithAI(t, &mockAIClient{blockUntilCtx: true})
 
@@ -246,6 +255,7 @@ func TestGenerateSuggestedRule_ReturnsOnCtxCancellation(t *testing.T) {
 // ── parseSuggestions validation tests ────────────────────────────────────────
 
 func TestParseSuggestions_ValidJSON_ReturnsSuggestions(t *testing.T) {
+	t.Parallel()
 	svc := newRulesServiceWithAI(t, nil)
 	sugs, err := svc.parseSuggestions(fixture2ElementJSON)
 	require.NoError(t, err)
@@ -253,6 +263,7 @@ func TestParseSuggestions_ValidJSON_ReturnsSuggestions(t *testing.T) {
 }
 
 func TestParseSuggestions_InvalidCommandPattern_DropsItem(t *testing.T) {
+	t.Parallel()
 	badJSON := `[{"name":"bad","tool_name":"Bash","command_pattern":"[invalid","decision":"auto_allow","risk_level":"low","reason":"x","priority":100,"confidence":0.5}]`
 	svc := newRulesServiceWithAI(t, nil)
 	sugs, err := svc.parseSuggestions(badJSON)
@@ -261,6 +272,7 @@ func TestParseSuggestions_InvalidCommandPattern_DropsItem(t *testing.T) {
 }
 
 func TestParseSuggestions_ConfidenceClamp(t *testing.T) {
+	t.Parallel()
 	json1 := `[{"name":"x","tool_name":"Bash","command_pattern":"git push","decision":"auto_allow","risk_level":"low","reason":"r","confidence":1.5}]`
 	svc := newRulesServiceWithAI(t, nil)
 	sugs, err := svc.parseSuggestions(json1)
@@ -270,6 +282,7 @@ func TestParseSuggestions_ConfidenceClamp(t *testing.T) {
 }
 
 func TestParseSuggestions_PriorityZero_DefaultsTo100(t *testing.T) {
+	t.Parallel()
 	json1 := `[{"name":"x","tool_name":"Bash","command_pattern":"npm install","decision":"auto_allow","risk_level":"low","reason":"r","priority":0,"confidence":0.5}]`
 	svc := newRulesServiceWithAI(t, nil)
 	sugs, err := svc.parseSuggestions(json1)
@@ -279,6 +292,7 @@ func TestParseSuggestions_PriorityZero_DefaultsTo100(t *testing.T) {
 }
 
 func TestParseSuggestions_CapAt5(t *testing.T) {
+	t.Parallel()
 	// 6-element array should be capped to 5.
 	json6 := `[
 		{"name":"a","tool_name":"Bash","command_pattern":"cmd-a","decision":"auto_allow","risk_level":"low","reason":"r","priority":100,"confidence":0.5},
@@ -295,6 +309,7 @@ func TestParseSuggestions_CapAt5(t *testing.T) {
 }
 
 func TestParseSuggestions_MarkdownFencedJSON_ParsesCorrectly(t *testing.T) {
+	t.Parallel()
 	// T1: Markdown-wrapped JSON (```json ... ```) must be stripped and parsed correctly.
 	fenced := "```json\n" + fixture2ElementJSON + "\n```"
 	svc := newRulesServiceWithAI(t, nil)
@@ -304,6 +319,7 @@ func TestParseSuggestions_MarkdownFencedJSON_ParsesCorrectly(t *testing.T) {
 }
 
 func TestParseSuggestions_NonJSONInput_ReturnsError(t *testing.T) {
+	t.Parallel()
 	// T1: Non-JSON / malformed input must return an error, not panic.
 	svc := newRulesServiceWithAI(t, nil)
 	_, err := svc.parseSuggestions("this is not json at all")
@@ -313,6 +329,7 @@ func TestParseSuggestions_NonJSONInput_ReturnsError(t *testing.T) {
 // ── T-INTEG-001: Full handler pipeline with mock AI ──────────────────────────
 
 func TestGenerateSuggestedRule_Integration_MockAI(t *testing.T) {
+	t.Parallel()
 	// T-INTEG-001
 	svc := newRulesServiceWithAI(t, &mockAIClient{response: fixture2ElementJSON})
 
@@ -334,6 +351,7 @@ func TestGenerateSuggestedRule_Integration_MockAI(t *testing.T) {
 // ── T-UNIT-GO-011: GetProgramAnalytics returns expected response fields ────────
 
 func TestGetProgramAnalytics_ReturnsExpectedFields(t *testing.T) {
+	t.Parallel()
 	// T-UNIT-GO-011
 	svc := newRulesService(t)
 
@@ -355,6 +373,7 @@ func TestGetProgramAnalytics_ReturnsExpectedFields(t *testing.T) {
 }
 
 func TestAttachConflictInfo_SeedRuleAtHigherPriority_ShadowsSuggestion(t *testing.T) {
+	t.Parallel()
 	// T-UNIT-GO (attachConflictInfo): fixture rule at priority 500 overlaps suggestion at 100.
 	storage := createTestStorage(t)
 	rulesStore, err := NewRulesStore(storage)
@@ -423,6 +442,7 @@ func newRulesServiceForCoverage(t *testing.T, specs []RuleSpec) *RulesService {
 const testProg = "mytestcli"
 
 func TestCoveredSubcommands(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name         string
 		specs        []RuleSpec
@@ -592,6 +612,7 @@ func TestCoveredSubcommands(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			svc := newRulesServiceForCoverage(t, tc.specs)
 			got := svc.coveredSubcommands(tc.program, tc.knownSubcmds)
 
@@ -627,6 +648,7 @@ func newSimpleRulesService(t *testing.T) *RulesService {
 	require.NoError(t, err)
 	analyticsStore := NewAnalyticsStore(storage)
 	analyticsStore.Start(context.Background())
+	t.Cleanup(analyticsStore.Stop)
 	c := classifier.NewRuleBasedClassifier()
 	return NewRulesService(rulesStore, nil, analyticsStore, c, nil, nil)
 }
@@ -659,6 +681,7 @@ const validYAML3Rules = `rules:
 // ── UT-BE-01: Valid YAML 3 rules ──────────────────────────────────────────────
 
 func TestValidateRules_ValidYAML_3Rules(t *testing.T) {
+	t.Parallel()
 	svc := newSimpleRulesService(t)
 	resp, err := svc.ValidateRules(context.Background(), connect.NewRequest(&sessionv1.ValidateRulesRequest{
 		YamlContent: validYAML3Rules,
@@ -676,6 +699,7 @@ func TestValidateRules_ValidYAML_3Rules(t *testing.T) {
 // ── UT-BE-02: Payload > 512 KB ────────────────────────────────────────────────
 
 func TestValidateRules_PayloadTooLarge(t *testing.T) {
+	t.Parallel()
 	svc := newSimpleRulesService(t)
 	large := make([]byte, 512*1024+1)
 	for i := range large {
@@ -692,6 +716,7 @@ func TestValidateRules_PayloadTooLarge(t *testing.T) {
 // ── UT-BE-03: Invalid regex per rule, does not short-circuit ──────────────────
 
 func TestValidateRules_InvalidRegex_PerRuleError(t *testing.T) {
+	t.Parallel()
 	svc := newSimpleRulesService(t)
 	yaml := `rules:
 - name: Bad regex rule
@@ -715,6 +740,7 @@ func TestValidateRules_InvalidRegex_PerRuleError(t *testing.T) {
 // ── UT-BE-04: Invalid decision produces explicit error ────────────────────────
 
 func TestValidateRules_InvalidDecision_ExplicitError(t *testing.T) {
+	t.Parallel()
 	svc := newSimpleRulesService(t)
 	yaml := `rules:
 - name: Bad decision
@@ -735,6 +761,7 @@ func TestValidateRules_InvalidDecision_ExplicitError(t *testing.T) {
 // ── UT-BE-05: tool and tool_pattern mutually exclusive ────────────────────────
 
 func TestValidateRules_ToolAndToolPatternMutuallyExclusive(t *testing.T) {
+	t.Parallel()
 	svc := newSimpleRulesService(t)
 	yaml := `rules:
 - name: Conflicting fields
@@ -753,6 +780,7 @@ func TestValidateRules_ToolAndToolPatternMutuallyExclusive(t *testing.T) {
 // ── UT-BE-06: Unrecognized YAML key rejected (KnownFields) ───────────────────
 
 func TestValidateRules_UnknownField_KnownFieldsRejected(t *testing.T) {
+	t.Parallel()
 	svc := newSimpleRulesService(t)
 	yaml := `rules:
 - name: Rule with unknown key
@@ -770,6 +798,7 @@ func TestValidateRules_UnknownField_KnownFieldsRejected(t *testing.T) {
 // ── UT-BE-07: Empty rules list ────────────────────────────────────────────────
 
 func TestValidateRules_EmptyRulesList(t *testing.T) {
+	t.Parallel()
 	svc := newSimpleRulesService(t)
 	resp, err := svc.ValidateRules(context.Background(), connect.NewRequest(&sessionv1.ValidateRulesRequest{
 		YamlContent: "rules: []\n",
@@ -783,6 +812,7 @@ func TestValidateRules_EmptyRulesList(t *testing.T) {
 // ── UT-BE-08/09: Rule count boundary ─────────────────────────────────────────
 
 func TestValidateRules_RuleCount_500_AtLimit(t *testing.T) {
+	t.Parallel()
 	svc := newSimpleRulesService(t)
 	var sb strings.Builder
 	sb.WriteString("rules:\n")
@@ -797,6 +827,7 @@ func TestValidateRules_RuleCount_500_AtLimit(t *testing.T) {
 }
 
 func TestValidateRules_RuleCount_501_OverLimit(t *testing.T) {
+	t.Parallel()
 	svc := newSimpleRulesService(t)
 	var sb strings.Builder
 	sb.WriteString("rules:\n")
@@ -814,6 +845,7 @@ func TestValidateRules_RuleCount_501_OverLimit(t *testing.T) {
 // ── UT-BE-10: Missing name field ──────────────────────────────────────────────
 
 func TestValidateRules_MissingNameField(t *testing.T) {
+	t.Parallel()
 	svc := newSimpleRulesService(t)
 	yaml := `rules:
 - tool: Bash
@@ -830,6 +862,7 @@ func TestValidateRules_MissingNameField(t *testing.T) {
 // ── UT-BE-11: All three regex fields invalid returns all errors ───────────────
 
 func TestValidateRules_AllThreeRegexFieldsInvalid(t *testing.T) {
+	t.Parallel()
 	svc := newSimpleRulesService(t)
 	yaml := `rules:
 - name: Triple bad regex
@@ -849,6 +882,7 @@ func TestValidateRules_AllThreeRegexFieldsInvalid(t *testing.T) {
 // ── UT-BE-12: Default priority ────────────────────────────────────────────────
 
 func TestValidateRules_DefaultPriority(t *testing.T) {
+	t.Parallel()
 	svc := newSimpleRulesService(t)
 	yaml := `rules:
 - name: No priority
@@ -870,6 +904,7 @@ func TestValidateRules_DefaultPriority(t *testing.T) {
 // ── UT-BE-13: Default enabled ─────────────────────────────────────────────────
 
 func TestValidateRules_DefaultEnabled(t *testing.T) {
+	t.Parallel()
 	svc := newSimpleRulesService(t)
 	yaml := `rules:
 - name: No enabled field
@@ -891,6 +926,7 @@ func TestValidateRules_DefaultEnabled(t *testing.T) {
 // ── UT-BE-14: ExportRules excludes seed and claude-settings ──────────────────
 
 func TestExportRules_ExcludesSeedAndClaudeSettingsRules(t *testing.T) {
+	t.Parallel()
 	svc := newSimpleRulesService(t)
 	// Insert non-user rules directly via storage (bypassing Upsert guard) so we
 	// can prove that ExportRules filters them out.
@@ -934,6 +970,7 @@ func TestExportRules_ExcludesSeedAndClaudeSettingsRules(t *testing.T) {
 // ── UT-BE-15: ExportRules with filter ────────────────────────────────────────
 
 func TestExportRules_FilterByRuleIDs(t *testing.T) {
+	t.Parallel()
 	svc := newSimpleRulesService(t)
 	for i := 0; i < 3; i++ {
 		_, err := svc.rulesStore.Upsert(RuleSpec{
@@ -959,6 +996,7 @@ func TestExportRules_FilterByRuleIDs(t *testing.T) {
 // ── UT-BE-16: ExportRules empty store produces "rules: []\n" ─────────────────
 
 func TestExportRules_EmptyStore_ProducesEmptyRulesKey(t *testing.T) {
+	t.Parallel()
 	svc := newSimpleRulesService(t)
 	resp, err := svc.ExportRules(context.Background(), connect.NewRequest(&sessionv1.ExportRulesRequest{}))
 	require.NoError(t, err)
@@ -969,6 +1007,7 @@ func TestExportRules_EmptyStore_ProducesEmptyRulesKey(t *testing.T) {
 // ── UT-BE-17: ExportRules omits optional fields with zero values ──────────────
 
 func TestExportRules_OptionalFieldsOmitted(t *testing.T) {
+	t.Parallel()
 	svc := newSimpleRulesService(t)
 	_, err := svc.rulesStore.Upsert(RuleSpec{
 		ID:       "user-minimal",
@@ -990,6 +1029,7 @@ func TestExportRules_OptionalFieldsOmitted(t *testing.T) {
 // ── UT-BE-18: ExportRules -- enabled=true omitted, enabled=false present ──────
 
 func TestExportRules_EnabledDefaultOmitted(t *testing.T) {
+	t.Parallel()
 	svc := newSimpleRulesService(t)
 	// enabled=true
 	_, err := svc.rulesStore.Upsert(RuleSpec{
@@ -1031,6 +1071,7 @@ func TestExportRules_EnabledDefaultOmitted(t *testing.T) {
 // ── UT-BE-19: Export roundtrip ────────────────────────────────────────────────
 
 func TestExportRules_Roundtrip(t *testing.T) {
+	t.Parallel()
 	svc := newSimpleRulesService(t)
 	originals := []RuleSpec{
 		{ID: "user-r1", Name: "Rule Alpha", ToolName: "Bash", Decision: "auto_allow", Enabled: true, Source: "user", Priority: 10},
@@ -1072,9 +1113,94 @@ func TestExportRules_Roundtrip(t *testing.T) {
 	assert.Equal(t, `^git log`, r3.Rule.CommandPattern)
 }
 
+// TestMinSessionIdleMinutes_SurvivesRoundTrip is a dedicated regression test for
+// MinSessionIdleMinutes because it crosses several independent hand-written conversion
+// hops (ApprovalRuleProto -> RuleSpec -> ent-backed storage -> RuleSpec ->
+// classifier.Rule, and RuleSpec -> ApprovalRuleProto again via ListApprovalRules) with
+// no compile-time completeness check tying them together — a missed hop compiles fine
+// but silently drops the field. Mirrors the storage-backed setup used by
+// TestExportRules_Roundtrip, but additionally re-opens the RulesStore against the same
+// underlying ent storage to prove the value survived an actual DB round trip rather
+// than only the in-memory cache, inspects the rebuilt classifier's rules to prove the
+// RuleSpec -> classifier.Rule hop also preserved it, and calls ListApprovalRules to
+// prove the read-path proto conversion preserved it too (this is also what the
+// docs/registry/features/backend/approval/list-rules.json entry cites as covering
+// ListApprovalRules).
+func TestMinSessionIdleMinutes_SurvivesRoundTrip(t *testing.T) {
+	t.Parallel()
+	const ruleID = "user-idle-test"
+	const wantIdleMinutes = int32(60)
+
+	svc := newSimpleRulesService(t)
+
+	// Hop 1: ApprovalRuleProto -> RuleSpec -> ent storage (UpsertApprovalRule),
+	// then ent-persisted RuleSpec -> ApprovalRuleProto in the response.
+	upsertResp, err := svc.UpsertApprovalRule(context.Background(), connect.NewRequest(&sessionv1.UpsertApprovalRuleRequest{
+		Rule: &sessionv1.ApprovalRuleProto{
+			Id:                    ruleID,
+			Name:                  "Idle gate regression test",
+			ToolName:              "Bash",
+			Decision:              sessionv1.AutoDecision_AUTO_DECISION_ALLOW,
+			Enabled:               true,
+			Priority:              10,
+			MinSessionIdleMinutes: wantIdleMinutes,
+		},
+	}))
+	require.NoError(t, err)
+	assert.Equal(t, wantIdleMinutes, upsertResp.Msg.Rule.MinSessionIdleMinutes,
+		"MinSessionIdleMinutes should survive proto->RuleSpec->ent->RuleSpec->proto in the upsert response")
+
+	// Hop 2: re-open a fresh RulesStore against the same ent storage to force a
+	// read from the DB row (session.ApprovalRuleData) rather than the in-memory
+	// cache, proving the ent read/write hop in session/ent_repository.go didn't
+	// drop the field.
+	reloaded, err := NewRulesStore(svc.rulesStore.storage)
+	require.NoError(t, err)
+	var persisted *RuleSpec
+	for _, r := range reloaded.All() {
+		if r.ID == ruleID {
+			rc := r
+			persisted = &rc
+		}
+	}
+	require.NotNil(t, persisted, "rule should be persisted in ent-backed storage")
+	assert.Equal(t, wantIdleMinutes, persisted.MinSessionIdleMinutes,
+		"MinSessionIdleMinutes should survive the ApprovalRuleData<->ent round trip")
+
+	// Hop 3: RuleSpec -> classifier.Rule, exercised by rebuildClassifier (called
+	// internally by UpsertApprovalRule via specsToRules).
+	var classifierRule *classifier.Rule
+	for _, r := range svc.classifier.Rules() {
+		if r.ID == ruleID {
+			rc := r
+			classifierRule = &rc
+		}
+	}
+	require.NotNil(t, classifierRule, "rule should be present in the rebuilt classifier")
+	assert.Equal(t, wantIdleMinutes, classifierRule.MinSessionIdleMinutes,
+		"MinSessionIdleMinutes should survive the RuleSpec->classifier.Rule conversion")
+
+	// Hop 4: RuleSpec -> ApprovalRuleProto via the ListApprovalRules RPC, proving the
+	// read-path conversion (specToProto, called from the list handler rather than the
+	// upsert response) also preserves the field.
+	listResp, err := svc.ListApprovalRules(context.Background(), connect.NewRequest(&sessionv1.ListApprovalRulesRequest{}))
+	require.NoError(t, err)
+	var listedRule *sessionv1.ApprovalRuleProto
+	for _, r := range listResp.Msg.Rules {
+		if r.Id == ruleID {
+			listedRule = r
+			break
+		}
+	}
+	require.NotNil(t, listedRule, "rule should be present in ListApprovalRules response")
+	assert.Equal(t, wantIdleMinutes, listedRule.MinSessionIdleMinutes,
+		"MinSessionIdleMinutes should survive the RuleSpec->proto conversion in ListApprovalRules")
+}
+
 // ── UT-BE-20: BulkUpsert 20 new rules ────────────────────────────────────────
 
 func TestBulkUpsertRules_InsertNew_20Rules(t *testing.T) {
+	t.Parallel()
 	svc := newSimpleRulesService(t)
 	rules := make([]*sessionv1.ApprovalRuleProto, 20)
 	for i := range rules {
@@ -1100,6 +1226,7 @@ func TestBulkUpsertRules_InsertNew_20Rules(t *testing.T) {
 // ── UT-BE-21: BulkUpsert skip duplicates ─────────────────────────────────────
 
 func TestBulkUpsertRules_SkipDuplicates(t *testing.T) {
+	t.Parallel()
 	svc := newSimpleRulesService(t)
 	// Pre-insert 2 rules.
 	for i := 0; i < 2; i++ {
@@ -1138,6 +1265,7 @@ func TestBulkUpsertRules_SkipDuplicates(t *testing.T) {
 // ── UT-BE-22: BulkUpsert overwrite duplicates ────────────────────────────────
 
 func TestBulkUpsertRules_OverwriteDuplicates(t *testing.T) {
+	t.Parallel()
 	svc := newSimpleRulesService(t)
 	// Pre-insert 2 rules.
 	for i := 0; i < 2; i++ {
@@ -1176,6 +1304,7 @@ func TestBulkUpsertRules_OverwriteDuplicates(t *testing.T) {
 // ── UT-BE-23: rebuildClassifier called exactly once ───────────────────────────
 
 func TestBulkUpsertRules_RebuildClassifierCalledOnce(t *testing.T) {
+	t.Parallel()
 	// We verify this by checking that all 10 rules are visible through allRuleSpecs
 	// after a single BulkUpsertRules call (implying classifier rebuilt correctly).
 	svc := newSimpleRulesService(t)
@@ -1209,6 +1338,7 @@ func TestBulkUpsertRules_RebuildClassifierCalledOnce(t *testing.T) {
 // ── UT-BE-24: Client-supplied IDs/source discarded ────────────────────────────
 
 func TestBulkUpsertRules_ClientIDsDiscarded(t *testing.T) {
+	t.Parallel()
 	svc := newSimpleRulesService(t)
 	rules := []*sessionv1.ApprovalRuleProto{
 		{
@@ -1238,6 +1368,7 @@ func TestBulkUpsertRules_ClientIDsDiscarded(t *testing.T) {
 // ── UT-BE-25: YAML bomb alias expansion guard ─────────────────────────────────
 
 func TestValidateRules_YAMLBombAliasExpansion(t *testing.T) {
+	t.Parallel()
 	// This YAML tries to create many rules via anchors/aliases.
 	// The 500-rule cap should fire before per-rule validation.
 	svc := newSimpleRulesService(t)
@@ -1257,6 +1388,7 @@ func TestValidateRules_YAMLBombAliasExpansion(t *testing.T) {
 // ── IT-BE-01: Export then validate roundtrip ──────────────────────────────────
 
 func TestIntegration_ExportThenValidate_Roundtrip(t *testing.T) {
+	t.Parallel()
 	svc := newSimpleRulesService(t)
 	specs := []RuleSpec{
 		{ID: "user-it-1", Name: "IT Rule Alpha", ToolName: "Bash", Decision: "auto_allow", Enabled: true, Source: "user", Priority: 10, Programs: []string{"git"}},
@@ -1282,6 +1414,7 @@ func TestIntegration_ExportThenValidate_Roundtrip(t *testing.T) {
 // ── IT-BE-02: BulkUpsert then export ─────────────────────────────────────────
 
 func TestIntegration_BulkUpsert_ThenExport(t *testing.T) {
+	t.Parallel()
 	svc := newSimpleRulesService(t)
 	rules := make([]*sessionv1.ApprovalRuleProto, 5)
 	for i := range rules {
@@ -1309,6 +1442,7 @@ func TestIntegration_BulkUpsert_ThenExport(t *testing.T) {
 // ── IT-BE-03: Validate and apply 20 rules ────────────────────────────────────
 
 func TestIntegration_ValidateAndApply_20Rules(t *testing.T) {
+	t.Parallel()
 	svc := newSimpleRulesService(t)
 	var sb strings.Builder
 	sb.WriteString("rules:\n")
@@ -1342,6 +1476,7 @@ func TestIntegration_ValidateAndApply_20Rules(t *testing.T) {
 // ── IT-BE-04: Single classifier rebuild ──────────────────────────────────────
 
 func TestIntegration_BulkUpsert_SingleClassifierRebuild(t *testing.T) {
+	t.Parallel()
 	// Same as UT-BE-23 but confirms via export that all 20 rules are present.
 	svc := newSimpleRulesService(t)
 	rules := make([]*sessionv1.ApprovalRuleProto, 20)
@@ -1395,6 +1530,7 @@ func FuzzValidateRules_NoPanic(f *testing.F) {
 // ── ConfigFileRulesRepository stub contract tests ─────────────────────────────
 
 func TestGetConfigFileRules_should_returnCodeUnimplemented_when_configStoreIsNil(t *testing.T) {
+	t.Parallel()
 	svc := newSimpleRulesService(t) // configStore == nil
 	_, err := svc.GetConfigFileRules(context.Background(), connect.NewRequest(&sessionv1.GetConfigFileRulesRequest{}))
 	require.Error(t, err)
@@ -1402,6 +1538,7 @@ func TestGetConfigFileRules_should_returnCodeUnimplemented_when_configStoreIsNil
 }
 
 func TestSaveRulesToConfigFile_should_returnCodeUnimplemented_when_configStoreIsNil(t *testing.T) {
+	t.Parallel()
 	svc := newSimpleRulesService(t) // configStore == nil
 	_, err := svc.SaveRulesToConfigFile(context.Background(), connect.NewRequest(&sessionv1.SaveRulesToConfigFileRequest{}))
 	require.Error(t, err)

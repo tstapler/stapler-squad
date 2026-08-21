@@ -1,0 +1,73 @@
+package services
+
+import (
+	"context"
+	"testing"
+	"time"
+
+	"connectrpc.com/connect"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/session"
+)
+
+// TestArchiveSession_SetsStatusStopped is a regression test for the bug where
+// ArchiveSession set ArchivedAt but left Status at whatever it was before
+// archiving (e.g. Active), leaving the two out of sync. The retention sweep (and
+// anything else gated on Status) depends on an archived session also being Stopped.
+func TestArchiveSession_SetsStatusStopped(t *testing.T) {
+	t.Parallel()
+	fix := setupForkTestFixture(t)
+	defer fix.cleanup()
+
+	addPausedSession(t, fix, "archive-me")
+
+	req := connect.NewRequest(&sessionv1.ArchiveSessionRequest{SessionId: "archive-me"})
+	resp, err := fix.svc.ArchiveSession(context.Background(), req)
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+
+	inst := fix.poller.FindInstance("archive-me")
+	require.NotNil(t, inst, "expected instance still resolvable by title after archiving")
+
+	snap := inst.Snapshot()
+	assert.NotNil(t, snap.ArchivedAt, "expected ArchivedAt to be set")
+	assert.Equal(t, session.Stopped, snap.Status, "expected Status to transition to Stopped when archiving")
+}
+
+// TestArchiveSessionByUUID_SetsStatusStopped covers the CAS variant used by
+// callers (e.g. backlog lifecycle) that archive unconditionally by UUID.
+func TestArchiveSessionByUUID_SetsStatusStopped(t *testing.T) {
+	t.Parallel()
+	fix := setupForkTestFixture(t)
+	defer fix.cleanup()
+
+	inst := &session.Instance{
+		Title:     "archive-by-uuid",
+		UUID:      "test-uuid-1",
+		Path:      "/tmp/test",
+		Status:    session.Paused,
+		Program:   "claude",
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	}
+	require.NoError(t, fix.storage.AddInstance(inst))
+	loaded, err := fix.storage.LoadInstances()
+	require.NoError(t, err)
+	var liveInst *session.Instance
+	for _, li := range loaded {
+		if li.Title == "archive-by-uuid" {
+			liveInst = li
+		}
+	}
+	require.NotNil(t, liveInst)
+	addInstanceToPoller(fix.poller, liveInst)
+
+	err = fix.svc.ArchiveSessionByUUID(context.Background(), "test-uuid-1")
+	require.NoError(t, err)
+
+	snap := liveInst.Snapshot()
+	assert.NotNil(t, snap.ArchivedAt, "expected ArchivedAt to be set")
+	assert.Equal(t, session.Stopped, snap.Status, "expected Status to transition to Stopped when archiving by UUID")
+}

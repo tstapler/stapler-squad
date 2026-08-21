@@ -7,11 +7,13 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/artifacts"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/ent/sessiongoal"
+	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/tokens"
 )
 
@@ -28,6 +30,7 @@ type InstanceData struct {
 	CreatedAt     time.Time `json:"created_at"`
 	UpdatedAt     time.Time `json:"updated_at"`
 	AutoYes       bool      `json:"auto_yes"`
+	AutoApprove   bool      `json:"auto_approve"`
 	Prompt        string    `json:"prompt"`
 	InitialPrompt string    `json:"initial_prompt,omitempty"`
 
@@ -38,6 +41,7 @@ type InstanceData struct {
 
 	// New fields for session organization and grouping
 	Category   string   `json:"category,omitempty"`
+	Note       string   `json:"note,omitempty"`
 	IsExpanded bool     `json:"is_expanded,omitempty"`
 	Tags       []string `json:"tags,omitempty"` // Multi-valued tags for flexible organization
 
@@ -132,6 +136,10 @@ type InstanceData struct {
 	// Empty when session has never been paused.
 	PauseReason string `json:"pause_reason,omitempty"`
 
+	// ExitReason records why this session's pane crashed (Status == Crashed).
+	// Empty otherwise. Set by SessionHealthChecker (session/health.go).
+	ExitReason string `json:"exit_reason,omitempty"`
+
 	// WorkflowID is the UUID of the Workflow that spawned this session.
 	// Empty for manually-created sessions.
 	WorkflowID string `json:"workflow_id,omitempty"`
@@ -209,6 +217,7 @@ type InstanceStore interface {
 	AddInstance(*Instance) error
 	DeleteInstance(title string) error
 	UpdateInstanceLastUserResponse(title string, t time.Time) error
+	UpdateInstanceMetadata(currentTitle string, newTitle, category, note, workingDir *string) error
 }
 
 // Compile-time assertion: *Storage must satisfy InstanceStore.
@@ -251,6 +260,34 @@ func (s *Storage) SetItemChangePublisher(p ItemChangePublisher) {
 	if er, ok := s.repo.(*EntRepository); ok {
 		er.SetItemChangePublisher(p)
 	}
+}
+
+// SetCallbackDispatcher forwards to the concrete *EntRepository's
+// SetCallbackDispatcher, mirroring SetItemChangePublisher above — same reasoning:
+// server/dependencies.go only has a *Storage value in scope. When the repository
+// is not ent-backed, the dispatcher is simply never wired (no panic).
+func (s *Storage) SetCallbackDispatcher(d CallbackDispatcher) {
+	if er, ok := s.repo.(*EntRepository); ok {
+		er.SetCallbackDispatcher(d)
+	}
+}
+
+// WireChainFirer constructs a ChainFirer bound to the underlying
+// *EntRepository (so its ListItemSessions/UpdateBacklogItem calls share the
+// exact same callbackDispatcher/itemChangePublisher wiring as every other
+// backlog mutation) and wires it as that repository's own chain-fire
+// dispatcher (EntRepository.SetChainFirer — the happy-path caller from
+// TransitionBacklogItemStatus, webhook-triggers Phase 6). Returns nil when
+// the repository is not ent-backed, mirroring GetEntClient's nil-on-mismatch
+// behavior — callers should skip TriggerChainReconciler wiring in that case.
+func (s *Storage) WireChainFirer(workflows WorkflowRepository, fireEvents TriggerFireEventRepository, firer TriggerFirer, cfg *config.Config) *ChainFirer {
+	er, ok := s.repo.(*EntRepository)
+	if !ok {
+		return nil
+	}
+	cf := NewChainFirer(er, workflows, fireEvents, firer, cfg)
+	er.SetChainFirer(cf)
+	return cf
 }
 
 // SaveInstances upserts each started instance into the repository.
@@ -379,7 +416,16 @@ func (s *Storage) LoadInstances() ([]*Instance, error) {
 // Instance objects. This avoids the side effect of FromInstanceData() calling Start()
 // (which spawns PTY processes). Use for read-only existence and title checks.
 func (s *Storage) ListInstanceData() ([]InstanceData, error) {
-	return s.repo.List(context.Background())
+	return s.repo.ListWithOptions(context.Background(), LoadMinimal)
+}
+
+// ListInstanceDataWithWorktree returns raw InstanceData with the Worktree edge eager-loaded.
+// Use this instead of ListInstanceData whenever a read-only pass needs Worktree.WorktreePath/
+// RepoPath/BranchName/BaseCommitSHA (e.g. to stat the worktree or check dirty status) — plain
+// ListInstanceData uses LoadMinimal, which never populates Worktree, so any such field will
+// silently read as its zero value under that call.
+func (s *Storage) ListInstanceDataWithWorktree() ([]InstanceData, error) {
+	return s.repo.ListWithOptions(context.Background(), LoadOptions{LoadWorktree: true})
 }
 
 // GetStableID mirrors Instance.GetStableID for InstanceData: returns UUID when set,
@@ -483,6 +529,16 @@ func (s *Storage) AddInstance(instance *Instance) error {
 // UpdateInstance updates an existing instance in storage.
 func (s *Storage) UpdateInstance(instance *Instance) error {
 	return s.repo.Update(context.Background(), instance.ToInstanceData())
+}
+
+// UpdateInstanceMetadata persists a narrow set of session metadata fields (title rename,
+// category, note, working dir) via a single UPDATE, avoiding the full-row rewrite (and
+// worktree/diffstats/tags/claude_session churn) that SaveInstances performs for every
+// started session. currentTitle must be the title from before any rename already applied
+// in-memory by the caller — see EntRepository.UpdateSessionMetadata for why. A nil field
+// pointer leaves that field untouched.
+func (s *Storage) UpdateInstanceMetadata(currentTitle string, newTitle, category, note, workingDir *string) error {
+	return s.repo.UpdateSessionMetadata(context.Background(), currentTitle, newTitle, category, note, workingDir)
 }
 
 // DeleteAllInstances removes all stored instances.
@@ -717,6 +773,21 @@ func (s *Storage) ListBacklogItemSummaries(ctx context.Context, filter BacklogIt
 	return s.repo.ListBacklogItemSummaries(ctx, filter)
 }
 
+// AddBacklogItemDependency records a blocker/blocked dependency edge.
+func (s *Storage) AddBacklogItemDependency(ctx context.Context, edge BacklogItemDependencyEdge) error {
+	return s.repo.AddBacklogItemDependency(ctx, edge)
+}
+
+// UnresolvedBlockerItemIDs returns the subset of itemIDs blocked by an unresolved dependency.
+func (s *Storage) UnresolvedBlockerItemIDs(ctx context.Context, itemIDs []string) (map[string]bool, error) {
+	return s.repo.UnresolvedBlockerItemIDs(ctx, itemIDs)
+}
+
+// UnresolvedBlockerIDs returns the specific blocker item IDs still unresolved for a single item.
+func (s *Storage) UnresolvedBlockerIDs(ctx context.Context, itemID string) ([]string, error) {
+	return s.repo.UnresolvedBlockerIDs(ctx, itemID)
+}
+
 // UpdateBacklogItem modifies an existing backlog item.
 func (s *Storage) UpdateBacklogItem(ctx context.Context, id string, update BacklogItemUpdate, precondition *BacklogItemPrecondition) (*BacklogItemData, error) {
 	return s.repo.UpdateBacklogItem(ctx, id, update, precondition)
@@ -725,6 +796,11 @@ func (s *Storage) UpdateBacklogItem(ctx context.Context, id string, update Backl
 // ArchiveBacklogItem sets the archived_at timestamp.
 func (s *Storage) ArchiveBacklogItem(ctx context.Context, id string) (*BacklogItemData, error) {
 	return s.repo.ArchiveBacklogItem(ctx, id)
+}
+
+// UnarchiveBacklogItem clears archived_at and restores the item to "idea".
+func (s *Storage) UnarchiveBacklogItem(ctx context.Context, id string) (*BacklogItemData, error) {
+	return s.repo.UnarchiveBacklogItem(ctx, id)
 }
 
 // DeleteBacklogItem permanently removes an item and all its child records.
@@ -739,11 +815,34 @@ func (s *Storage) TransitionBacklogItemStatus(ctx context.Context, id string, to
 
 // SetBacklogItemPRAndTransition is the shared primary-write path for
 // recording a PR that genuinely exists on GitHub against a backlog item and
-// moving it review -> pr_pending. Used by both the agent-initiated
-// report_pr_created MCP tool (server/mcp/tools_backlog.go, Epic 3.1) and the
-// reconciliation backstop detector (BacklogLifecycleListener.
-// reconcileOrphanedAgentPRs, Epic 3.2) — see "PR Metadata Capture Fix",
-// project_plans/backlog-agent-communication/implementation/plan.md.
+// moving it review -> pr_pending, or — when observed is already pr_pending —
+// correcting an already-recorded PR to a different one (a reassignment, e.g.
+// the tracked branch was polluted and the real PR was opened from a clean
+// one instead). Used by both the agent-initiated report_pr_created MCP tool
+// (server/mcp/tools_backlog.go, Epic 3.1), the reconciliation backstop
+// detector (BacklogLifecycleListener.reconcileOrphanedAgentPRs, Epic 3.2),
+// and the manual-override RPC (server/services/backlog_service_lifecycle.go)
+// — see "PR Metadata Capture Fix", project_plans/backlog-agent-communication/implementation/plan.md.
+//
+// observed must be the caller's own, already-fetched snapshot of the item —
+// this function never re-fetches it. That's load-bearing, not an
+// optimization: the CAS precondition below pins to observed.Status and
+// observed.UpdatedAt exactly as the caller read them. A prior version of
+// this function did its own internal GetBacklogItem call and derived the
+// precondition from THAT fresh read; under a real race, that internal read
+// could land after a concurrent winner's write had already committed, so it
+// would see the winner's (already valid) post-write state and re-derive a
+// precondition that ALSO matched — letting a second, policy-unvalidated call
+// silently succeed as an accidental "reassignment" the caller never actually
+// decided to allow (its override_reason/merged-PR/author checks all ran
+// against the caller's original, now-stale read). Pinning to the caller's
+// own observed snapshot closes that: any state change since the caller's
+// read — including a second call winning first — is guaranteed to fail this
+// call's CAS, rather than being silently reinterpreted.
+//
+// Only observed.Status == "review" or "pr_pending" is accepted; anything
+// else is rejected outright (ErrPreconditionFailed) rather than attempted
+// against an arbitrary starting status.
 //
 // Unlike AppendProgressNote's best-effort discipline, a failure persisting
 // the PR fields or performing the transition is returned to the caller, not
@@ -751,30 +850,87 @@ func (s *Storage) TransitionBacklogItemStatus(ctx context.Context, id string, to
 // failure (a write whose result was never checked against the invariant it
 // protects), and this is the primitive that must not repeat it.
 //
-// Idempotent: if the item is already pr_pending with this exact prNumber,
+// Idempotent: if observed is already pr_pending with this exact prNumber,
 // this is a no-op success — a retried report_pr_created call (network blip)
 // or the reconciliation backstop re-scanning an item it already fixed on a
 // prior tick must not error.
-func (s *Storage) SetBacklogItemPRAndTransition(ctx context.Context, itemID, prURL string, prNumber int, summary string) error {
-	item, err := s.GetBacklogItem(ctx, itemID)
-	if err != nil {
-		return fmt.Errorf("load item: %w", err)
-	}
-	if item.Status == string(BacklogStatusPRPending) && item.PrNumber == prNumber && prNumber > 0 {
+//
+// guard is required whenever observed is already pr_pending (a
+// reassignment): the caller must supply a PRReassignmentGuard attesting it
+// already verified override_reason, the currently-tracked PR's merged
+// state, and the new PR's author — nil (or a guard failing any of those
+// checks) is rejected outright with ErrPRReassignmentNotAllowed. This
+// function does not itself call GitHub — that verification stays in the
+// caller (server/mcp/tools_backlog.go's reportPRCreated is the only caller
+// today with that machinery) — but centralizing the *requirement* here
+// means every caller of this shared primitive gets the same guarantee: a
+// caller with no way to produce a valid guard (e.g. the manual-override RPC
+// in server/services/backlog_service_lifecycle.go, which by design never
+// calls GitHub — see its own doc comment) simply cannot reassign, rather
+// than silently succeeding because the check only lived in one handler.
+// guard is ignored (may be nil) when observed.Status is review — a
+// first-time recording never needs one.
+func (s *Storage) SetBacklogItemPRAndTransition(ctx context.Context, observed *BacklogItemData, prURL string, prNumber int, summary string, guard *PRReassignmentGuard) error {
+	if observed.Status == string(BacklogStatusPRPending) && observed.PrNumber == prNumber && prNumber > 0 {
 		return nil // already recorded — idempotent no-op
 	}
-
-	prURLCopy, prNumCopy := prURL, prNumber
-	if _, err := s.UpdateBacklogItem(ctx, itemID, BacklogItemUpdate{
-		PrURL:    &prURLCopy,
-		PrNumber: &prNumCopy,
-	}, nil); err != nil {
-		return fmt.Errorf("persist PR fields: %w", err)
+	if observed.Status != string(BacklogStatusReview) && observed.Status != string(BacklogStatusPRPending) {
+		return fmt.Errorf("%w: expected status %q or %q, got %q", ErrPreconditionFailed, BacklogStatusReview, BacklogStatusPRPending, observed.Status)
+	}
+	isReassignment := observed.Status == string(BacklogStatusPRPending)
+	if isReassignment {
+		switch {
+		case guard == nil:
+			return fmt.Errorf("%w: item already has PR #%d tracked (status pr_pending) — this caller did not supply a PRReassignmentGuard", ErrPRReassignmentNotAllowed, observed.PrNumber)
+		case guard.OverrideReason == "":
+			return fmt.Errorf("%w: override_reason is required to reassign PR #%d to a different PR", ErrPRReassignmentNotAllowed, observed.PrNumber)
+		case guard.CurrentPRMerged:
+			return fmt.Errorf("%w: currently tracked PR #%d is already merged — its association cannot be changed", ErrPRReassignmentNotAllowed, observed.PrNumber)
+		case !guard.NewPRAuthorVerified:
+			return fmt.Errorf("%w: the new PR's author must be verified to match the caller's identity before reassigning PR #%d", ErrPRReassignmentNotAllowed, observed.PrNumber)
+		}
 	}
 
-	precondition := &BacklogItemPrecondition{ExpectedStatus: string(BacklogStatusReview), Note: summary}
-	if _, err := s.TransitionBacklogItemStatus(ctx, itemID, BacklogStatusPRPending, precondition, TriggeredBySystem); err != nil {
-		return fmt.Errorf("transition to pr_pending: %w", err)
+	// The status transition (review -> pr_pending, or pr_pending ->
+	// pr_pending on reassignment) and the PrURL/PrNumber field write must
+	// land as a single atomic UPDATE, not two separate calls — even with the
+	// transition ordered first (closing the original lost-update race: two
+	// racing callers with different PR numbers both unconditionally passing
+	// a field-write precondition before either transitioned), two separate
+	// calls still leave a narrower gap between them where a concurrent
+	// reader can observe status=pr_pending with PrNumber==0. That exact
+	// shape is what the pr_pending_no_pr / BUG-040 stuck detector
+	// (reconcilePRPendingWithoutPRItems, session/backlog_lifecycle.go)
+	// exists to flag as a HIGH-priority, non-auto-recoverable alert — and
+	// its resolution condition is anchored on the item leaving pr_pending
+	// entirely, so a reconcile tick landing in that window could raise a
+	// spurious alert that stays open for days. TransitionBacklogItemStatusWithPRFields
+	// folds both writes into one UPDATE ... WHERE statement guarded by the
+	// same CAS precondition, so they always commit together — no reader can
+	// ever observe one without the other.
+	er, ok := s.repo.(*EntRepository)
+	if !ok {
+		return fmt.Errorf("SetBacklogItemPRAndTransition requires an *EntRepository backend, got %T", s.repo)
+	}
+
+	// AC6: distinguish a first-time recording from a correction in the audit
+	// trail — otherwise a pr_pending -> pr_pending event reads as a no-op in
+	// BacklogStatusEvent history, and the reconciler/manual-override callers
+	// share this same status-event write path.
+	noteLabel := "PR recorded"
+	progressNoteStatus := "pr_created"
+	if isReassignment {
+		noteLabel = "PR reassigned"
+		progressNoteStatus = "pr_corrected"
+	}
+	expectedUpdatedAt := observed.UpdatedAt
+	precondition := &BacklogItemPrecondition{
+		ExpectedStatus:    observed.Status,
+		ExpectedUpdatedAt: &expectedUpdatedAt,
+		Note:              fmt.Sprintf("[%s] %s", noteLabel, summary),
+	}
+	if _, err := er.TransitionBacklogItemStatusWithPRFields(ctx, observed.ID, BacklogStatusPRPending, prURL, prNumber, precondition, TriggeredBySystem); err != nil {
+		return fmt.Errorf("transition to pr_pending with PR fields: %w", err)
 	}
 
 	// Best-effort from here: the primary contract (PR fields persisted, item
@@ -782,14 +938,25 @@ func (s *Storage) SetBacklogItemPRAndTransition(ctx context.Context, itemID, prU
 	// history or resolving a stale stuck row must not roll that back or be
 	// reported as this call's own failure — mirrors report_progress's
 	// primary-write/secondary-enrichment split (AppendProgressNote there).
-	if appendErr := s.AppendProgressNote(ctx, itemID, -1, summary, "pr_created"); appendErr != nil {
-		log.WarningLog.Printf("[Storage] SetBacklogItemPRAndTransition: failed to append summary note item=%s: %v", itemID, appendErr)
+	if appendErr := s.AppendProgressNote(ctx, observed.ID, -1, summary, progressNoteStatus); appendErr != nil {
+		log.WarningLog.Printf("[Storage] SetBacklogItemPRAndTransition: failed to append summary note item=%s: %v", observed.ID, appendErr)
 	}
-	if _, resolveErr := s.ResolveStuck(ctx, itemID, domain.StuckReasonPushFailed); resolveErr != nil {
-		log.WarningLog.Printf("[Storage] SetBacklogItemPRAndTransition: failed to resolve push_failed row item=%s: %v", itemID, resolveErr)
+	if _, resolveErr := s.ResolveStuck(ctx, observed.ID, domain.StuckReasonPushFailed); resolveErr != nil {
+		log.WarningLog.Printf("[Storage] SetBacklogItemPRAndTransition: failed to resolve push_failed row item=%s: %v", observed.ID, resolveErr)
 	}
-	if _, resolveErr := s.ResolveStuck(ctx, itemID, domain.StuckReasonAbandonedReview); resolveErr != nil {
-		log.WarningLog.Printf("[Storage] SetBacklogItemPRAndTransition: failed to resolve abandoned_review row item=%s: %v", itemID, resolveErr)
+	if _, resolveErr := s.ResolveStuck(ctx, observed.ID, domain.StuckReasonAbandonedReview); resolveErr != nil {
+		log.WarningLog.Printf("[Storage] SetBacklogItemPRAndTransition: failed to resolve abandoned_review row item=%s: %v", observed.ID, resolveErr)
+	}
+
+	// AC7: reassigning to a new PR must not leave the old PR's
+	// feedback-dedup watermark in place — a stale watermark could suppress a
+	// genuinely new review comment on the new PR if a comment happened to
+	// land after the old watermark's timestamp. Best-effort, same discipline
+	// as the resolves above.
+	if isReassignment {
+		if _, clearErr := s.UpdateBacklogItem(ctx, observed.ID, BacklogItemUpdate{ClearPrFeedbackAddressedAt: true}, nil); clearErr != nil {
+			log.WarningLog.Printf("[Storage] SetBacklogItemPRAndTransition: failed to clear pr_feedback_addressed_at item=%s: %v", observed.ID, clearErr)
+		}
 	}
 
 	return nil
@@ -889,6 +1056,24 @@ func (s *Storage) DeleteItemSource(ctx context.Context, id string) error {
 	return s.repo.DeleteItemSource(ctx, id)
 }
 
+// GetItemSourceByID retrieves a single item source's domain data by UUID
+// string. Used by the GitHub forward-sync EventBus subscriber (see
+// server/services/backlog_github_forward_sync.go) to look up a backlog item's
+// source (ForwardSyncEnabled, ForwardSyncCloseLabel, PluginID, Config) without
+// needing an *EntRepository handle of its own.
+func (s *Storage) GetItemSourceByID(ctx context.Context, id string) (*ItemSourceData, error) {
+	er, ok := s.repo.(*EntRepository)
+	if !ok {
+		return nil, ErrNotFound
+	}
+	src, err := er.GetItemSourceByID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	data := itemSourceToData(src)
+	return &data, nil
+}
+
 // ListSourceSyncEvents returns sync history events for an item source, most
 // recent first. Direct EntRepository delegation, like GetItemSession below.
 func (s *Storage) ListSourceSyncEvents(ctx context.Context, sourceID string) ([]SourceSyncEventData, bool, error) {
@@ -907,6 +1092,17 @@ func (s *Storage) CreateSourceSyncEvent(ctx context.Context, sourceID, cursorAft
 		return ErrNotFound
 	}
 	return er.CreateSourceSyncEvent(ctx, sourceID, cursorAfter, created, updated, skipped, errored, errMsg, startedAt, finishedAt)
+}
+
+// RecordSourceSyncFailure records a forward-sync failure (e.g. CloseIssue
+// erroring) as a queryable sync-history row. Direct EntRepository delegation,
+// like CreateSourceSyncEvent above.
+func (s *Storage) RecordSourceSyncFailure(ctx context.Context, sourceID, message string) error {
+	er, ok := s.repo.(*EntRepository)
+	if !ok {
+		return ErrNotFound
+	}
+	return er.RecordSourceSyncFailure(ctx, sourceID, message)
 }
 
 // --- ItemSession (direct EntRepository delegation) ---
@@ -977,7 +1173,19 @@ func (s *Storage) UpdateItemSessionStarted(ctx context.Context, id string, start
 	return er.UpdateItemSessionStarted(ctx, id, startedAt)
 }
 
-// UpdateItemSessionGitActivity records the latest commit SHA and related fields on an ItemSession.
+// SetItemSessionBaseCommit records the pre-work base commit SHA on an ItemSession.
+// See the EntRepository method for why this is separate from git activity.
+func (s *Storage) SetItemSessionBaseCommit(ctx context.Context, id, sha string) error {
+	er, ok := s.repo.(*EntRepository)
+	if !ok {
+		return fmt.Errorf("item session updates not supported by this storage backend")
+	}
+	return er.SetItemSessionBaseCommit(ctx, id, sha)
+}
+
+// UpdateItemSessionGitActivity records the session's current tip commit and
+// related fields on an ItemSession. For the spawn-time baseline, use
+// SetItemSessionBaseCommit.
 func (s *Storage) UpdateItemSessionGitActivity(ctx context.Context, id string, sha, msg string, commitAt time.Time, commitCount int) error {
 	er, ok := s.repo.(*EntRepository)
 	if !ok {
@@ -993,6 +1201,27 @@ func (s *Storage) UpdateItemSessionEnded(ctx context.Context, id string, endedAt
 		return fmt.Errorf("item session updates not supported by this storage backend")
 	}
 	return er.UpdateItemSessionEnded(ctx, id, endedAt)
+}
+
+// UpdateItemSessionEndedWithReason records the end time for an ItemSession alongside
+// classifyHeadlessCallError's bucket (or "" for a successful end).
+func (s *Storage) UpdateItemSessionEndedWithReason(ctx context.Context, id string, endedAt time.Time, reason string) error {
+	er, ok := s.repo.(*EntRepository)
+	if !ok {
+		return fmt.Errorf("item session updates not supported by this storage backend")
+	}
+	return er.UpdateItemSessionEndedWithReason(ctx, id, endedAt, reason)
+}
+
+// UpdateItemSessionFailureCapture records the absolute path to a durable raw-output
+// capture file for a headless triage/review call that errored or produced
+// unparseable output. See EntRepository.UpdateItemSessionFailureCapture.
+func (s *Storage) UpdateItemSessionFailureCapture(ctx context.Context, id string, path string) error {
+	er, ok := s.repo.(*EntRepository)
+	if !ok {
+		return fmt.Errorf("item session updates not supported by this storage backend")
+	}
+	return er.UpdateItemSessionFailureCapture(ctx, id, path)
 }
 
 // GetItemSessionBySessionAndItem looks up an ItemSession by both sessionUUID and backlog item ID.
@@ -1045,6 +1274,37 @@ func (s *Storage) SaveReviewVerdict(ctx context.Context, itemSessionID string, v
 	return er.SaveReviewVerdict(ctx, itemSessionID, verdict)
 }
 
+// ComputeCurrentDiffHash resolves itemID's most recent completed work
+// session's base..head commit range (via
+// GetRepoPathAndLatestCompletedWorkSessionCommits — two bounded, no-edge
+// queries, not GetBacklogItem/ListItemSessions' unbounded eager-loaded
+// fetch) and returns a content hash of that diff (git.DiffHashBetween), for
+// stamping onto a review verdict's DiffHash at save time — see
+// stuck_decisions.go's IsFlakyVerdictFlipFlop, which the hash feeds.
+//
+// Best-effort: any resolution failure (item/session lookup, missing SHAs, a
+// git error) returns "" rather than propagating an error, matching this
+// codebase's "best-effort, never blocks the write it's attached to"
+// convention (see e.g. SaveReviewVerdict's publish-hook comments) — a
+// missing DiffHash just means IsFlakyVerdictFlipFlop treats that verdict as
+// unknown, never as a false match.
+func (s *Storage) ComputeCurrentDiffHash(ctx context.Context, itemID string) string {
+	er, ok := s.repo.(*EntRepository)
+	if !ok {
+		return ""
+	}
+	repoPath, baseSHA, headSHA, err := er.GetRepoPathAndLatestCompletedWorkSessionCommits(ctx, itemID)
+	if err != nil || repoPath == "" || baseSHA == "" || headSHA == "" {
+		return ""
+	}
+	hash, err := git.DiffHashBetween(repoPath, baseSHA, headSHA)
+	if err != nil {
+		log.WarningLog.Printf("[ComputeCurrentDiffHash] item=%s base=%s head=%s: %v", itemID, baseSHA, headSHA, err)
+		return ""
+	}
+	return hash
+}
+
 // UpdateAcCriterionStatus updates a single acceptance criterion's status by index.
 func (s *Storage) UpdateAcCriterionStatus(ctx context.Context, itemID string, criterionIndex int, status string, note string) error {
 	er, ok := s.repo.(*EntRepository)
@@ -1072,6 +1332,26 @@ func (s *Storage) ListProgressNotesForItem(ctx context.Context, itemID string) (
 		return nil, ErrNotFound
 	}
 	return er.ListProgressNotesForItem(ctx, itemID)
+}
+
+// AppendActivityNote records a single post_backlog_update call as an immutable,
+// append-only history entry — the ungated sibling to AppendProgressNote (ADR-001).
+func (s *Storage) AppendActivityNote(ctx context.Context, itemID, authorSessionUUID, authorSessionTitle, message string) error {
+	er, ok := s.repo.(*EntRepository)
+	if !ok {
+		return fmt.Errorf("activity note history not supported by this storage backend")
+	}
+	return er.AppendActivityNote(ctx, itemID, authorSessionUUID, authorSessionTitle, message)
+}
+
+// ListActivityNotesForItem returns the full append-only activity-note history for
+// a backlog item, ordered by created_at ascending.
+func (s *Storage) ListActivityNotesForItem(ctx context.Context, itemID string) ([]ActivityNoteData, error) {
+	er, ok := s.repo.(*EntRepository)
+	if !ok {
+		return nil, ErrNotFound
+	}
+	return er.ListActivityNotesForItem(ctx, itemID)
 }
 
 // CreateItemSession creates a new ItemSession linked to a BacklogItem.

@@ -35,6 +35,7 @@ func newIsolatedDefaultsService(t *testing.T) *DefaultsService {
 // This excludes: the helper's own return statement, comment lines, and string
 // literals inside this function that happen to contain the text.
 func TestNewDefaultsServiceCalledOnlyViaHelper(t *testing.T) {
+	t.Parallel()
 	data, err := os.ReadFile("defaults_service_test.go")
 	require.NoError(t, err)
 
@@ -190,6 +191,127 @@ func TestUpdateGlobalDefaults_should_UpdateBacklogServiceLiveConfig_When_SharedC
 
 	assert.Equal(t, 5, cfg.MaxConcurrentBacklogWorkItemsOrDefault(),
 		"BacklogService's own live config instance must observe the raised cap immediately, with no restart or reload")
+}
+
+// TestGetSessionDefaults_ResolvesStaleSessionDefaults verifies that on a fresh
+// config with no stale_session key at all, GetSessionDefaults still returns the
+// resolved (never-zero) server defaults: 30 minute threshold, notifications on.
+func TestGetSessionDefaults_ResolvesStaleSessionDefaults(t *testing.T) {
+	svc := newIsolatedDefaultsService(t)
+
+	resp, err := svc.GetSessionDefaults(context.Background(), connect.NewRequest(&sessionv1.GetSessionDefaultsRequest{}))
+	require.NoError(t, err)
+	require.NotNil(t, resp.Msg.Defaults)
+	assert.Equal(t, int32(30), resp.Msg.Defaults.StaleSessionThresholdMinutes)
+	assert.True(t, resp.Msg.Defaults.StaleSessionNotifyEnabled)
+}
+
+// TestUpdateGlobalDefaults_ZeroStaleSessionThreshold_UsesServerDefault verifies the
+// "0 means use the server default" convention (matching max_auto_rework_iterations
+// and max_concurrent_backlog_work_items): sending 0 leaves the persisted config.json
+// without an explicit override, and the response echoes the resolved default (30).
+//
+// The "ResetsAfterExplicitOverride" sub-case covers the bug this convention previously
+// violated: cfg.StaleSession.ThresholdMinutes was only assigned when
+// req.Msg.StaleSessionThresholdMinutes > 0, so once a user set an explicit override
+// (e.g. 45), sending 0 to reset it back to "use default" was silently ignored and 45
+// persisted forever. The fix makes the assignment unconditional, exactly matching the
+// sibling MaxAutoReworkIterations/MaxConcurrentBacklogWorkItems fields two lines above,
+// relying on ThresholdMinutesOrDefault() to resolve a stored 0 back to 30 at read time.
+func TestUpdateGlobalDefaults_ZeroStaleSessionThreshold_UsesServerDefault(t *testing.T) {
+	t.Run("StartsUnset", func(t *testing.T) {
+		svc := newIsolatedDefaultsService(t)
+
+		resp, err := svc.UpdateGlobalDefaults(context.Background(), connect.NewRequest(&sessionv1.UpdateGlobalDefaultsRequest{
+			StaleSessionThresholdMinutes: 0,
+			StaleSessionNotifyEnabled:    true,
+		}))
+		require.NoError(t, err)
+		require.NotNil(t, resp.Msg.Defaults)
+		assert.Equal(t, int32(30), resp.Msg.Defaults.StaleSessionThresholdMinutes)
+
+		configDir, err := config.GetConfigDir()
+		require.NoError(t, err)
+		data, err := os.ReadFile(filepath.Join(configDir, config.ConfigFileName))
+		require.NoError(t, err)
+
+		var raw map[string]json.RawMessage
+		require.NoError(t, json.Unmarshal(data, &raw))
+		if staleSessionRaw, ok := raw["stale_session"]; ok {
+			var staleSession map[string]json.RawMessage
+			require.NoError(t, json.Unmarshal(staleSessionRaw, &staleSession))
+			if thresholdRaw, ok := staleSession["threshold_minutes"]; ok {
+				assert.Equal(t, "0", string(thresholdRaw), "threshold_minutes must stay unset/0, not the resolved default")
+			}
+		}
+	})
+
+	t.Run("ResetsAfterExplicitOverride", func(t *testing.T) {
+		svc := newIsolatedDefaultsService(t)
+
+		// First set an explicit override away from the default.
+		overrideResp, err := svc.UpdateGlobalDefaults(context.Background(), connect.NewRequest(&sessionv1.UpdateGlobalDefaultsRequest{
+			StaleSessionThresholdMinutes: 45,
+			StaleSessionNotifyEnabled:    true,
+		}))
+		require.NoError(t, err)
+		require.NotNil(t, overrideResp.Msg.Defaults)
+		assert.Equal(t, int32(45), overrideResp.Msg.Defaults.StaleSessionThresholdMinutes)
+
+		configDir, err := config.GetConfigDir()
+		require.NoError(t, err)
+		configPath := filepath.Join(configDir, config.ConfigFileName)
+
+		data, err := os.ReadFile(configPath)
+		require.NoError(t, err)
+		var persistedAfterOverride config.Config
+		require.NoError(t, json.Unmarshal(data, &persistedAfterOverride))
+		require.Equal(t, 45, persistedAfterOverride.StaleSession.ThresholdMinutes, "override must persist before the reset")
+
+		// Now send 0 to reset back to "use server default" — this must not be a no-op.
+		resetResp, err := svc.UpdateGlobalDefaults(context.Background(), connect.NewRequest(&sessionv1.UpdateGlobalDefaultsRequest{
+			StaleSessionThresholdMinutes: 0,
+			StaleSessionNotifyEnabled:    true,
+		}))
+		require.NoError(t, err)
+		require.NotNil(t, resetResp.Msg.Defaults)
+		assert.Equal(t, int32(30), resetResp.Msg.Defaults.StaleSessionThresholdMinutes, "response must echo the resolved default, not the stale 45 override")
+
+		data, err = os.ReadFile(configPath)
+		require.NoError(t, err)
+		var persistedAfterReset config.Config
+		require.NoError(t, json.Unmarshal(data, &persistedAfterReset))
+		assert.Equal(t, 0, persistedAfterReset.StaleSession.ThresholdMinutes, "persisted threshold_minutes must be reset to 0, not left at 45")
+	})
+}
+
+// TestUpdateGlobalDefaults_PersistsExplicitStaleSessionOverride is a real file-I/O
+// integration test (matching this file's existing pattern, e.g.
+// TestUpdateGlobalDefaults_should_UpdateBacklogServiceLiveConfig_When_SharedConfigWired):
+// an explicit override must be persisted to the actual config.json on disk and echoed
+// back resolved in the RPC response.
+func TestUpdateGlobalDefaults_PersistsExplicitStaleSessionOverride(t *testing.T) {
+	svc := newIsolatedDefaultsService(t)
+
+	resp, err := svc.UpdateGlobalDefaults(context.Background(), connect.NewRequest(&sessionv1.UpdateGlobalDefaultsRequest{
+		StaleSessionThresholdMinutes: 45,
+		StaleSessionNotifyEnabled:    false,
+	}))
+	require.NoError(t, err)
+	require.NotNil(t, resp.Msg.Defaults)
+	assert.Equal(t, int32(45), resp.Msg.Defaults.StaleSessionThresholdMinutes)
+	assert.False(t, resp.Msg.Defaults.StaleSessionNotifyEnabled)
+
+	configDir, err := config.GetConfigDir()
+	require.NoError(t, err)
+	data, err := os.ReadFile(filepath.Join(configDir, config.ConfigFileName))
+	require.NoError(t, err)
+
+	var persisted config.Config
+	require.NoError(t, json.Unmarshal(data, &persisted))
+	assert.Equal(t, 45, persisted.StaleSession.ThresholdMinutes)
+	require.NotNil(t, persisted.StaleSession.NotifyEnabled)
+	assert.False(t, *persisted.StaleSession.NotifyEnabled)
 }
 
 // TestUpsertProfile_EmptyName verifies that UpsertProfile with an empty profile name

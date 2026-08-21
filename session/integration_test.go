@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -13,18 +14,28 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/tmux"
 	"github.com/tstapler/stapler-squad/testutil/tmuxreap"
 
+	"github.com/go-git/go-git/v5"
+	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/stretchr/testify/require"
+	"github.com/zalando/go-keyring"
 )
 
 // TestMain runs before all tests to set up the test environment
 func TestMain(m *testing.M) {
 	log.InitializeForTests(log.ERROR, log.ERROR)
 	defer log.Close()
+
+	// Switch go-keyring to its in-memory mock provider so backlog_plugin_github*
+	// tests (which call github.GetKeychainTokenForHost through Fetch/FetchAll/
+	// CloseIssue/PostIssueComment) never touch the real OS keychain. Without
+	// this, a machine with real GitHub accounts already connected (e.g. via
+	// Settings > GitHub Accounts) returns a real token instead of "", making
+	// those tests fail non-deterministically depending on local machine state.
+	keyring.MockInit()
 
 	tmuxreap.ReapLeakedTestServers()
 	tmuxreap.StartTestServerWatchdog(os.Getpid())
@@ -134,38 +145,51 @@ func waitForContent(t *testing.T, getter func() (string, error), expectedText st
 // TestSessionRecoveryScenarios tests the real-world session recovery scenarios
 // that happen when tmux sessions are killed and need to be restored
 func TestSessionRecoveryScenarios(t *testing.T) {
+	t.Parallel()
 	if testing.Short() {
 		t.Skip("skipping integration tests that start real tmux sessions")
 	}
 	// Create a temporary git repository for testing
 	tempRepo := setupTestRepository(t)
-	defer os.RemoveAll(tempRepo)
+	// t.Cleanup, not defer: subtests below are t.Parallel() and spawn real
+	// tmux sessions against tempRepo, so a plain defer here would remove it
+	// while they're still running — observed hanging a full test binary for
+	// minutes rather than failing cleanly (git/tmux blocking on I/O against
+	// a repo path that vanished mid-operation).
+	t.Cleanup(func() { os.RemoveAll(tempRepo) })
 
 	t.Run("SessionRestoredInCorrectWorktreeAfterKill", func(t *testing.T) {
+		t.Parallel()
 		testSessionRestoredInCorrectWorktree(t)
 	})
 
 	t.Run("MultipleSessionsRestoreIndependently", func(t *testing.T) {
+		t.Parallel()
 		testMultipleSessionsRestoreIndependently(t)
 	})
 
 	t.Run("SessionRecoveryWithExistingChanges", func(t *testing.T) {
+		t.Parallel()
 		testSessionRecoveryWithExistingChanges(t)
 	})
 
 	t.Run("FailsLoudlyWhenWorktreePathMissing", func(t *testing.T) {
+		t.Parallel()
 		testFailsLoudlyWhenWorktreePathMissing(t)
 	})
 
 	t.Run("ExistingSessionResumption", func(t *testing.T) {
+		t.Parallel()
 		testExistingSessionResumption(t, tempRepo)
 	})
 
 	t.Run("ExistingWorktreeResumption", func(t *testing.T) {
+		t.Parallel()
 		testExistingWorktreeResumption(t, tempRepo)
 	})
 
 	t.Run("FullResumptionScenario", func(t *testing.T) {
+		t.Parallel()
 		testFullResumptionScenario(t, tempRepo)
 	})
 }
@@ -182,7 +206,7 @@ func testSessionRestoredInCorrectWorktree(t *testing.T) {
 		Path:             tempRepo,
 		Program:          "bash -c 'pwd; read'",
 		SessionType:      SessionTypeNewWorktree,
-		TmuxServerSocket: "test_" + strings.ReplaceAll(t.Name(), "/", "_"),
+		TmuxServerSocket: uniqueTestTmuxSocket(t, ""),
 	})
 	require.NoError(t, err)
 	defer func() {
@@ -268,7 +292,7 @@ func testMultipleSessionsRestoreIndependently(t *testing.T) {
 		Path:             tempRepo,
 		Program:          "bash -c 'pwd && sleep 30'",
 		SessionType:      SessionTypeNewWorktree,
-		TmuxServerSocket: "test_" + strings.ReplaceAll(t.Name(), "/", "_") + "_1",
+		TmuxServerSocket: uniqueTestTmuxSocket(t, "1"),
 	})
 	require.NoError(t, err)
 	defer func() {
@@ -282,7 +306,7 @@ func testMultipleSessionsRestoreIndependently(t *testing.T) {
 		Path:             tempRepo,
 		Program:          "bash -c 'pwd && sleep 30'",
 		SessionType:      SessionTypeNewWorktree,
-		TmuxServerSocket: "test_" + strings.ReplaceAll(t.Name(), "/", "_") + "_2",
+		TmuxServerSocket: uniqueTestTmuxSocket(t, "2"),
 	})
 	require.NoError(t, err)
 	defer func() {
@@ -308,9 +332,16 @@ func testMultipleSessionsRestoreIndependently(t *testing.T) {
 		}
 	}()
 
-	// Get worktree paths
+	// Get worktree paths. Both instances used SessionTypeNewWorktree above, so a
+	// nil worktree here would itself be the bug under test — fail loudly instead
+	// of the nil-pointer panic this exact unguarded pattern produced elsewhere
+	// (see BenchmarkSessionRestorePerformance's fix, a directory-mode session
+	// with no worktree at all).
 	worktree1, _ := instance1.GetGitWorktree()
 	worktree2, _ := instance2.GetGitWorktree()
+	if worktree1 == nil || worktree2 == nil {
+		t.Fatalf("expected both instances to have a git worktree (SessionTypeNewWorktree): worktree1=%v worktree2=%v", worktree1, worktree2)
+	}
 	path1 := worktree1.GetWorktreePath()
 	path2 := worktree2.GetWorktreePath()
 
@@ -384,7 +415,7 @@ func testSessionRecoveryWithExistingChanges(t *testing.T) {
 		Path:             tempRepo,
 		Program:          "bash -c 'pwd && sleep 30'",
 		SessionType:      SessionTypeNewWorktree,
-		TmuxServerSocket: "test_" + strings.ReplaceAll(t.Name(), "/", "_"),
+		TmuxServerSocket: uniqueTestTmuxSocket(t, ""),
 	})
 	require.NoError(t, err)
 	defer func() {
@@ -401,8 +432,13 @@ func testSessionRecoveryWithExistingChanges(t *testing.T) {
 		}
 	}()
 
-	// Get worktree and create some changes
+	// Get worktree and create some changes. SessionTypeNewWorktree above means a
+	// nil worktree here would itself be the bug under test — fail loudly instead
+	// of an unguarded nil-pointer dereference.
 	gitWorktree, _ := instance.GetGitWorktree()
+	if gitWorktree == nil {
+		t.Fatal("expected instance to have a git worktree (SessionTypeNewWorktree)")
+	}
 	worktreePath := gitWorktree.GetWorktreePath()
 
 	// Create a file with changes
@@ -462,41 +498,71 @@ func testFailsLoudlyWhenWorktreePathMissing(t *testing.T) {
 		"expected error to match tmux.ErrWorkDirMissing, got: %v", err)
 }
 
+// uniqueTestTmuxSocket returns a tmux server socket name that is unique per
+// invocation, not just per test name. t.Name() alone is deterministic and
+// identical across repeated invocations of the same test (e.g. -count=N, or
+// separate closely-spaced `go test` runs), so a leftover tmux server from a
+// prior invocation reusing that same socket path collides with the new
+// invocation's session creation, producing tmux's "duplicate session" error.
+// Mixing in os.Getpid() and time.Now().UnixNano() guarantees a fresh socket
+// every time. See session/tmux/session_recovery_test.go for the precedent.
+//
+// The socket path (/private/tmp/tmux-<uid>/<name>) is a Unix domain socket
+// path subject to the OS's sun_path length limit (~104 bytes on macOS), so
+// t.Name() is hashed rather than embedded verbatim — a deeply nested subtest
+// name plus pid/timestamp/suffix can otherwise exceed that limit and fail
+// with tmux's "(File name too long)" error instead of connecting.
+func uniqueTestTmuxSocket(t *testing.T, suffix string) string {
+	t.Helper()
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(t.Name()))
+	name := fmt.Sprintf("ssq_%08x_%d_%d", h.Sum32(), os.Getpid(), time.Now().UnixNano())
+	if suffix != "" {
+		name += "_" + suffix
+	}
+	return name
+}
+
 // setupTestRepository creates a temporary git repository for testing
+//
+// Uses go-git directly rather than shelling out — see
+// .claude/rules/prefer-go-git-over-subshells.md.
 func setupTestRepository(t *testing.T) string {
-	tempDir := t.TempDir()
-
-	// Initialize git repo
-	cmd := safeexec.CommandContext(context.Background(), "git", "init")
-	cmd.Dir = tempDir
-	err := cmd.Run()
+	t.Helper()
+	dir, err := setupTestRepositoryCommon(t.TempDir(), "# Test Repository")
 	require.NoError(t, err)
+	return dir
+}
 
-	// Configure git
-	configCmd := safeexec.CommandContext(context.Background(), "git", "config", "user.email", "test@example.com")
-	configCmd.Dir = tempDir
-	_ = configCmd.Run()
+// setupTestRepositoryCommon is the shared go-git init/add/commit logic behind
+// setupTestRepository and setupTestRepositoryBench — *testing.T and
+// *testing.B report failures differently (require.NoError vs b.Fatal), so
+// each caller wraps this with its own error handling instead of taking a
+// testing.TB.
+func setupTestRepositoryCommon(dir, readmeContents string) (string, error) {
+	repo, err := git.PlainInit(dir, false)
+	if err != nil {
+		return "", err
+	}
 
-	configCmd2 := safeexec.CommandContext(context.Background(), "git", "config", "user.name", "Test User")
-	configCmd2.Dir = tempDir
-	_ = configCmd2.Run()
+	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte(readmeContents), 0644); err != nil {
+		return "", err
+	}
 
-	// Create initial commit
-	readmeFile := filepath.Join(tempDir, "README.md")
-	err = os.WriteFile(readmeFile, []byte("# Test Repository"), 0644)
-	require.NoError(t, err)
+	wt, err := repo.Worktree()
+	if err != nil {
+		return "", err
+	}
+	if _, err := wt.Add("."); err != nil {
+		return "", err
+	}
+	if _, err := wt.Commit("Initial commit", &git.CommitOptions{
+		Author: &object.Signature{Name: "Test User", Email: "test@example.com", When: time.Now()},
+	}); err != nil {
+		return "", err
+	}
 
-	addCmd := safeexec.CommandContext(context.Background(), "git", "add", ".")
-	addCmd.Dir = tempDir
-	err = addCmd.Run()
-	require.NoError(t, err)
-
-	commitCmd := safeexec.CommandContext(context.Background(), "git", "commit", "-m", "Initial commit")
-	commitCmd.Dir = tempDir
-	err = commitCmd.Run()
-	require.NoError(t, err)
-
-	return tempDir
+	return dir, nil
 }
 
 // testExistingSessionResumption tests that when a tmux session already exists,
@@ -522,7 +588,7 @@ func testExistingSessionResumption(t *testing.T, tempRepo string) {
 		Title:            sessionName,
 		Path:             tempRepo,
 		Program:          "bash -c 'echo resumed && sleep 30'",
-		TmuxServerSocket: "test_" + strings.ReplaceAll(t.Name(), "/", "_"),
+		TmuxServerSocket: uniqueTestTmuxSocket(t, ""),
 	})
 	require.NoError(t, err)
 	defer func() {
@@ -566,7 +632,7 @@ func testExistingWorktreeResumption(t *testing.T, tempRepo string) {
 		Path:             tempRepo,
 		Program:          "bash -c 'echo first && sleep 30'",
 		SessionType:      SessionTypeNewWorktree,
-		TmuxServerSocket: "test_" + strings.ReplaceAll(t.Name(), "/", "_") + "_1",
+		TmuxServerSocket: uniqueTestTmuxSocket(t, "1"),
 	})
 	require.NoError(t, err)
 	defer func() {
@@ -597,7 +663,7 @@ func testExistingWorktreeResumption(t *testing.T, tempRepo string) {
 		Path:             tempRepo,
 		Program:          "bash -c 'echo second && sleep 30'",
 		SessionType:      SessionTypeNewWorktree,
-		TmuxServerSocket: "test_" + strings.ReplaceAll(t.Name(), "/", "_") + "_2",
+		TmuxServerSocket: uniqueTestTmuxSocket(t, "2"),
 	})
 	require.NoError(t, err)
 	defer func() {
@@ -674,7 +740,7 @@ func testFullResumptionScenario(t *testing.T, tempRepo string) {
 		Path:             tempRepo,
 		Program:          "bash -c 'echo initial session && sleep 30'",
 		SessionType:      SessionTypeNewWorktree,
-		TmuxServerSocket: "test_" + strings.ReplaceAll(t.Name(), "/", "_") + "_1",
+		TmuxServerSocket: uniqueTestTmuxSocket(t, "1"),
 	})
 	require.NoError(t, err)
 	defer func() {
@@ -707,7 +773,7 @@ func testFullResumptionScenario(t *testing.T, tempRepo string) {
 		Path:             tempRepo,     // Same path
 		Program:          "bash -c 'echo resumed session && sleep 30'",
 		SessionType:      SessionTypeNewWorktree,
-		TmuxServerSocket: "test_" + strings.ReplaceAll(t.Name(), "/", "_") + "_2",
+		TmuxServerSocket: uniqueTestTmuxSocket(t, "2"),
 	})
 	require.NoError(t, err)
 	defer func() {
@@ -797,9 +863,13 @@ func BenchmarkSessionRestorePerformance(b *testing.B) {
 			b.Fatal(err)
 		}
 
-		// Simulate kill and restore
-		gitWorktree, _ := instance.GetGitWorktree()
-		worktreePath := gitWorktree.GetWorktreePath()
+		// Simulate kill and restore. This is a directory session (no git
+		// worktree), so gitManager.GetWorktreePath() returns "" — fall back
+		// to tempRepo like the production resume path does (instance.go).
+		worktreePath := instance.gitManager.GetWorktreePath()
+		if worktreePath == "" {
+			worktreePath = tempRepo
+		}
 
 		// Kill the original session
 		_ = instance.Kill()
@@ -817,31 +887,12 @@ func BenchmarkSessionRestorePerformance(b *testing.B) {
 	}
 }
 
+// Uses go-git directly rather than shelling out — see
+// .claude/rules/prefer-go-git-over-subshells.md.
 func setupTestRepositoryBench(b *testing.B) string {
-	tempDir := b.TempDir()
-
-	cmd := safeexec.CommandContext(context.Background(), "git", "init")
-	cmd.Dir = tempDir
-	_ = cmd.Run()
-
-	configCmd := safeexec.CommandContext(context.Background(), "git", "config", "user.email", "test@example.com")
-	configCmd.Dir = tempDir
-	_ = configCmd.Run()
-
-	configCmd2 := safeexec.CommandContext(context.Background(), "git", "config", "user.name", "Test User")
-	configCmd2.Dir = tempDir
-	_ = configCmd2.Run()
-
-	readmeFile := filepath.Join(tempDir, "README.md")
-	_ = os.WriteFile(readmeFile, []byte("# Benchmark Repository"), 0644)
-
-	addCmd := safeexec.CommandContext(context.Background(), "git", "add", ".")
-	addCmd.Dir = tempDir
-	_ = addCmd.Run()
-
-	commitCmd := safeexec.CommandContext(context.Background(), "git", "commit", "-m", "Initial commit")
-	commitCmd.Dir = tempDir
-	_ = commitCmd.Run()
-
-	return tempDir
+	dir, err := setupTestRepositoryCommon(b.TempDir(), "# Benchmark Repository")
+	if err != nil {
+		b.Fatal(err)
+	}
+	return dir
 }

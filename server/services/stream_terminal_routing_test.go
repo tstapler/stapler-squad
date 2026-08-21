@@ -19,7 +19,9 @@ func newRoutingTestService(t *testing.T) *SessionService {
 	storage := createTestStorage(t)
 	bus := events.NewEventBus(16)
 	t.Cleanup(bus.Close)
-	return NewSessionService(storage, bus)
+	svc := NewSessionService(storage, bus)
+	t.Cleanup(func() { svc.Shutdown() })
+	return svc
 }
 
 // TestStreamTerminalRouting_WebSocketPathTakesPrecedenceOverGeneralHandler
@@ -38,6 +40,7 @@ func newRoutingTestService(t *testing.T) *SessionService {
 // request to the StreamTerminal path is served exclusively by the WebSocket
 // handler, and the general ConnectRPC handler's ServeHTTP is never invoked.
 func TestStreamTerminalRouting_WebSocketPathTakesPrecedenceOverGeneralHandler(t *testing.T) {
+	t.Parallel()
 	svc := newRoutingTestService(t)
 	wsHandler := NewConnectRPCWebSocketHandler(svc, nil, nil)
 
@@ -80,6 +83,7 @@ func TestStreamTerminalRouting_WebSocketPathTakesPrecedenceOverGeneralHandler(t 
 // the StreamTerminal path and doesn't accidentally swallow other RPCs under
 // the same service subtree.
 func TestStreamTerminalRouting_OtherRPCsStillReachGeneralHandler(t *testing.T) {
+	t.Parallel()
 	svc := newRoutingTestService(t)
 	wsHandler := NewConnectRPCWebSocketHandler(svc, nil, nil)
 

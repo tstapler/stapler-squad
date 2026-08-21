@@ -29,6 +29,13 @@ export const pausedOverlayIcon = style({
   color: vars.color.warningText,
 });
 
+/** Icon color for the crashed-session overlay — reuses pausedOverlay's layout
+ *  (position/flex/background), just swaps the icon to the error palette. */
+export const crashedOverlayIcon = style({
+  fontSize: vars.fontSize.xl,
+  color: vars.color.errorText,
+});
+
 export const pausedOverlayTitle = style({
   fontSize: vars.fontSize.lg,
   fontWeight: vars.fontWeight.semibold,

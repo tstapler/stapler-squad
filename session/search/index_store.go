@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"sync"
 	"time"
+
+	"github.com/tstapler/stapler-squad/config"
 )
 
 // IndexStore handles persistence of the search index to disk.
@@ -27,8 +29,11 @@ type IndexVersion struct {
 }
 
 const (
-	// CurrentIndexVersion is the schema version for the index format
-	CurrentIndexVersion = 1
+	// CurrentIndexVersion is the schema version for the index format.
+	// Bumped to 2: PostingsList.Positions moved from [][]int32 to a flat
+	// []int32 + PosOffsets (see PerfFix-2), which changes the on-disk gob
+	// shape — old-format indexes must be rejected rather than mis-decoded.
+	CurrentIndexVersion = 2
 
 	// Index file names
 	invertedIndexFile = "inverted_index.gob"
@@ -37,8 +42,22 @@ const (
 	syncMetadataFile  = "sync_metadata.json"
 )
 
-// NewIndexStore creates a new IndexStore that persists to ~/.claude/search_index/
+// NewIndexStore creates a new IndexStore that persists to ~/.claude/search_index/.
+// Under go test (config.IsTestMode), it persists under config.GetConfigDir()'s
+// test-isolated directory instead: every test in a package otherwise shares this
+// real, unbounded, developer-lifetime index (observed at 50MB+ / tens of
+// thousands of documents on an active dev machine), and gob-decoding it on every
+// NewIndexStore call is what made -race test runs blow CI's timeout budget —
+// unrelated to whatever the test itself exercises.
 func NewIndexStore() (*IndexStore, error) {
+	if config.IsTestMode() {
+		testDir, err := config.GetConfigDir()
+		if err != nil {
+			return nil, fmt.Errorf("failed to get test config directory: %w", err)
+		}
+		return NewIndexStoreWithDir(filepath.Join(testDir, "search_index"))
+	}
+
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get home directory: %w", err)
@@ -103,14 +122,20 @@ func (s *IndexStore) Load() (*InvertedIndex, *DocumentStore, error) {
 		return nil, nil, fmt.Errorf("failed to load version: %w", err)
 	}
 	if version.Version != CurrentIndexVersion {
-		return nil, nil, fmt.Errorf("incompatible index version: got %d, want %d",
-			version.Version, CurrentIndexVersion)
+		return nil, nil, &IndexVersionMismatchError{
+			Got:  version.Version,
+			Want: CurrentIndexVersion,
+			Path: s.indexDir,
+		}
 	}
 
 	// Load inverted index
 	var index InvertedIndex
 	if err := s.loadGob(invertedIndexFile, &index); err != nil {
 		return nil, nil, fmt.Errorf("failed to load inverted index: %w", err)
+	}
+	if err := validateCSRInvariants(&index); err != nil {
+		return nil, nil, err
 	}
 
 	// Load document store
@@ -156,6 +181,57 @@ func (s *IndexStore) Delete() error {
 // GetIndexDir returns the directory where index files are stored.
 func (s *IndexStore) GetIndexDir() string {
 	return s.indexDir
+}
+
+// IndexVersionMismatchError indicates a persisted index was written by a
+// different schema version than this binary expects (see CurrentIndexVersion)
+// and was rejected rather than mis-decoded. Callers can errors.As for this
+// type to log the specific old/new versions and path rather than a generic
+// load-failure message.
+type IndexVersionMismatchError struct {
+	Got, Want int
+	Path      string
+}
+
+func (e *IndexVersionMismatchError) Error() string {
+	return fmt.Sprintf("incompatible index version: got %d, want %d (path: %s)", e.Got, e.Want, e.Path)
+}
+
+// validateCSRInvariants checks that every PostingsList in idx satisfies the
+// CSR layout invariants documented on PostingsList: len(PosOffsets) ==
+// len(DocIDs)+1, PosOffsets monotonically non-decreasing, PosOffsets[0] == 0,
+// and the final offset equal to len(Positions). A corrupted or hand-crafted
+// on-disk index can violate these without gob decoding failing outright —
+// PositionsAt would then panic on an out-of-range slice the first time it's
+// called. Validating eagerly here makes that a clean Load() error instead.
+func validateCSRInvariants(idx *InvertedIndex) error {
+	for term, pl := range idx.Index {
+		if pl == nil {
+			return fmt.Errorf("corrupt index: nil postings list for term %q", term)
+		}
+		if len(pl.PosOffsets) != len(pl.DocIDs)+1 {
+			return fmt.Errorf("corrupt index: invalid CSR offsets for term %q: len(PosOffsets)=%d, want len(DocIDs)+1=%d",
+				term, len(pl.PosOffsets), len(pl.DocIDs)+1)
+		}
+		for i := 1; i < len(pl.PosOffsets); i++ {
+			if pl.PosOffsets[i] < pl.PosOffsets[i-1] {
+				return fmt.Errorf("corrupt index: invalid CSR offsets for term %q: PosOffsets not monotonically non-decreasing at index %d (%d < %d)",
+					term, i, pl.PosOffsets[i], pl.PosOffsets[i-1])
+			}
+		}
+		if len(pl.PosOffsets) == 0 {
+			continue
+		}
+		if pl.PosOffsets[0] != 0 {
+			return fmt.Errorf("corrupt index: invalid CSR offsets for term %q: PosOffsets[0]=%d, want 0",
+				term, pl.PosOffsets[0])
+		}
+		if last := pl.PosOffsets[len(pl.PosOffsets)-1]; int(last) != len(pl.Positions) {
+			return fmt.Errorf("corrupt index: invalid CSR offsets for term %q: final offset=%d, want len(Positions)=%d",
+				term, last, len(pl.Positions))
+		}
+	}
+	return nil
 }
 
 // saveGob writes a struct to a gob file using atomic write pattern.

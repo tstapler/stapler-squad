@@ -9,6 +9,25 @@ type NotificationPrefs struct {
 	PushEnabled bool `json:"push_enabled"`
 }
 
+// CallbackConfig holds the global singleton outbound-callback URLs fired by
+// server/services.CallbackDispatcher on the three lifecycle events FR7
+// covers. Never echoed back in plaintext by any RPC (see
+// sessionv1.CallbackConfigProto, which reports booleans only) — same
+// masked-boolean-not-value shape as the (unimplemented)
+// project_plans/slack-review-notifications design, applied fresh here since
+// that project has no shipped code to reuse.
+type CallbackConfig struct {
+	// OnSessionCompleteURL receives a POST when a backlog item transitions to
+	// BacklogStatusDone. Empty string means disabled.
+	OnSessionCompleteURL string `json:"on_session_complete_url,omitempty"`
+	// OnSessionStaleURL receives a POST the first time a work session is
+	// detected stale (StuckReasonStaleWork). Empty string means disabled.
+	OnSessionStaleURL string `json:"on_session_stale_url,omitempty"`
+	// OnQueueItemCreatedURL receives a POST when an item is added to the
+	// review queue. Empty string means disabled.
+	OnQueueItemCreatedURL string `json:"on_queue_item_created_url,omitempty"`
+}
+
 // HibernationConfig holds configuration for the session hibernation feature.
 type HibernationConfig struct {
 	// Enabled controls whether hibernation is active. Default: true.
@@ -27,6 +46,112 @@ type HibernationConfig struct {
 	RetentionDays int `json:"retention_days"`
 }
 
+// SlackConfig holds configuration for the Slack review-queue notification
+// feature (Phase 1: notify-only; Phase 2: interactive approval buttons).
+//
+// WebhookURLEncrypted and SigningSecretEncrypted store ciphertext only, per
+// ADR-001 (project_plans/slack-review-notifications/decisions/ADR-001-slack-secret-storage-encryption.md):
+// both values are encrypted at rest with Config.GetOrCreateEncryptionKey() +
+// session.EncryptToken/DecryptToken, the same primitive already used for
+// backlog ItemSource tokens. The config package cannot decrypt them itself
+// (it would need to import session, which already imports config); decryption
+// happens in server/services, which imports both.
+type SlackConfig struct {
+	// WebhookURLEncrypted is the AES-256-GCM-encrypted Slack Incoming Webhook
+	// URL, or empty if not configured. Never store or log the plaintext value.
+	WebhookURLEncrypted string `json:"webhook_url_encrypted,omitempty"`
+	// SigningSecretEncrypted is the AES-256-GCM-encrypted Slack app signing
+	// secret (Phase 2, used to verify interactive-button callbacks), or empty
+	// if not configured. Never store or log the plaintext value.
+	SigningSecretEncrypted string `json:"signing_secret_encrypted,omitempty"`
+	// NotifyOnQueueItem controls whether a Slack message is sent when an item
+	// enters the review queue. Default: false (opt-in).
+	NotifyOnQueueItem bool `json:"notify_on_queue_item,omitempty"`
+	// QueueDepthThreshold is the review-queue depth at which a digest
+	// notification is sent (edge-triggered: one digest per burst). 0 disables
+	// depth-based notifications.
+	QueueDepthThreshold int `json:"queue_depth_threshold,omitempty"`
+	// ApprovalEnabled controls whether outbound Slack messages include
+	// interactive allow/deny buttons (Phase 2) and whether the interactive
+	// callback route is registered. Default: false.
+	ApprovalEnabled bool `json:"approval_enabled,omitempty"`
+	// DashboardBaseURL is the base URL used to build "view in dashboard" links
+	// in Slack messages. Empty string means links are omitted.
+	DashboardBaseURL string `json:"dashboard_base_url,omitempty"`
+}
+
+// defaultSessionRetentionDays is used by RetentionDaysOrDefault whenever
+// RetentionDays is unset (zero), including for configs saved before this field
+// existed.
+const defaultSessionRetentionDays = 14
+
+// defaultStaleSessionThresholdMinutes is used by ThresholdMinutesOrDefault
+// whenever ThresholdMinutes is unset (zero or negative), including for
+// configs saved before this field existed.
+const defaultStaleSessionThresholdMinutes = 30
+
+// SessionRetentionConfig holds configuration for the automatic session-retention
+// cleanup sweep, which deletes archived sessions past a retention window once they
+// pass safety checks (clean worktree, no open PR).
+type SessionRetentionConfig struct {
+	// Enabled controls whether the retention sweep runs. A pointer so a config
+	// saved before this field existed (nil) can be distinguished from an explicit
+	// `false` — nil defaults to enabled, matching AutoSpawnReadyItems's pattern.
+	Enabled *bool `json:"enabled,omitempty"`
+	// RetentionDays is how many days after a session is archived before the sweep
+	// is eligible to delete it (still subject to safety checks). Default: 14.
+	RetentionDays int `json:"retention_days,omitempty"`
+}
+
+// EnabledOrDefault returns whether the sweep is enabled, defaulting to true when unset.
+func (c SessionRetentionConfig) EnabledOrDefault() bool {
+	if c.Enabled == nil {
+		return true
+	}
+	return *c.Enabled
+}
+
+// RetentionDaysOrDefault returns RetentionDays, falling back to
+// defaultSessionRetentionDays when unset (<=0).
+func (c SessionRetentionConfig) RetentionDaysOrDefault() int {
+	if c.RetentionDays <= 0 {
+		return defaultSessionRetentionDays
+	}
+	return c.RetentionDays
+}
+
+// StaleSessionConfig holds configuration for stale-session detection: how long a
+// session may go without activity before it's flagged stale, and whether that
+// triggers a notification.
+type StaleSessionConfig struct {
+	// ThresholdMinutes is how many minutes of inactivity before a session is
+	// considered stale. Default: 30.
+	ThresholdMinutes int `json:"threshold_minutes,omitempty"`
+	// NotifyEnabled controls whether a notification is sent when a session goes
+	// stale. A pointer so a config saved before this field existed (nil) can be
+	// distinguished from an explicit `false` — nil defaults to enabled, matching
+	// SessionRetentionConfig.Enabled's pattern.
+	NotifyEnabled *bool `json:"notify_enabled,omitempty"`
+}
+
+// ThresholdMinutesOrDefault returns ThresholdMinutes, falling back to
+// defaultStaleSessionThresholdMinutes when unset (<=0).
+func (c StaleSessionConfig) ThresholdMinutesOrDefault() int {
+	if c.ThresholdMinutes <= 0 {
+		return defaultStaleSessionThresholdMinutes
+	}
+	return c.ThresholdMinutes
+}
+
+// NotifyEnabledOrDefault returns whether stale-session notifications are
+// enabled, defaulting to true when unset.
+func (c StaleSessionConfig) NotifyEnabledOrDefault() bool {
+	if c.NotifyEnabled == nil {
+		return true
+	}
+	return *c.NotifyEnabled
+}
+
 // TmuxExecGateConfig bounds how many tmux subprocesses may run concurrently
 // against one tmux server, across every process on the machine (the main
 // daemon and every --mcp process) — tmux's server is single-threaded, so
@@ -35,11 +160,23 @@ type TmuxExecGateConfig struct {
 	// Slots is the number of concurrent tmux subprocess execution slots.
 	// Zero or unset means "use the default" — see SlotsOrDefault. Default: 8.
 	Slots int `json:"slots"`
+
+	// ResyncFastLaneSlots is the number of concurrent tmux subprocess execution
+	// slots reserved for terminal-resync traffic when the
+	// "terminal:resync-exec-gate-fast-lane" feature flag is on, so resync calls
+	// don't contend with other tmux exec traffic for the shared Slots pool.
+	// Zero or unset means "use the default" — see ResyncFastLaneSlotsOrDefault.
+	// Default: 4.
+	ResyncFastLaneSlots int `json:"resyncFastLaneSlots"`
 }
 
 // defaultTmuxExecGateSlots is used whenever Slots is unset (zero), including
 // for configs saved before this field existed.
 const defaultTmuxExecGateSlots = 8
+
+// defaultResyncFastLaneSlots is used whenever ResyncFastLaneSlots is unset
+// (zero), including for configs saved before this field existed.
+const defaultResyncFastLaneSlots = 4
 
 // SlotsOrDefault returns Slots, falling back to defaultTmuxExecGateSlots when
 // unset (covers both a fresh zero-value struct and a config.json saved before
@@ -49,6 +186,17 @@ func (c TmuxExecGateConfig) SlotsOrDefault() int {
 		return defaultTmuxExecGateSlots
 	}
 	return c.Slots
+}
+
+// ResyncFastLaneSlotsOrDefault returns ResyncFastLaneSlots, falling back to
+// defaultResyncFastLaneSlots when unset (covers both a fresh zero-value
+// struct and a config.json saved before this field existed, which unmarshals
+// the same way).
+func (c TmuxExecGateConfig) ResyncFastLaneSlotsOrDefault() int {
+	if c.ResyncFastLaneSlots <= 0 {
+		return defaultResyncFastLaneSlots
+	}
+	return c.ResyncFastLaneSlots
 }
 
 // BrowserPassthroughCDPConfig holds tunable parameters for the Chrome DevTools
@@ -269,6 +417,71 @@ type CapacityConfig struct {
 	PollIntervalSeconds int `json:"poll_interval_seconds,omitempty"`
 	// ProviderPriority lists fallback providers in order of preference.
 	ProviderPriority []ProviderPriority `json:"provider_priority,omitempty"`
+}
+
+// QuotaConfig holds configuration for the account-wide Claude Code session-quota
+// gate that pauses/resumes backlog automation (see BacklogController) based on
+// an inferred quota-headroom signal, plus a foreground-session dispatch throttle.
+type QuotaConfig struct {
+	// Enabled gates the entire feature. When false, the gate is a no-op and
+	// BacklogController's toggle behaves exactly as it does today. Default: false.
+	Enabled bool `json:"enabled,omitempty"`
+	// PauseBelowHeadroomPct is the soft/proactive threshold: backlog is paused
+	// once estimated headroom drops below this percentage. Default: 20.0.
+	PauseBelowHeadroomPct float64 `json:"pause_below_headroom_pct,omitempty"`
+	// ResumeMarginPct is added to PauseBelowHeadroomPct to form the resume
+	// threshold, avoiding flapping right at the pause line. Default: 15.0.
+	ResumeMarginPct float64 `json:"resume_margin_pct,omitempty"`
+	// ConsecutiveTicksToPause is how many consecutive below-threshold reconcile
+	// ticks are required before the soft signal pauses backlog. Default: 2.
+	ConsecutiveTicksToPause int `json:"consecutive_ticks_to_pause,omitempty"`
+	// ConsecutiveTicksToResume is how many consecutive above-threshold reconcile
+	// ticks are required before the soft signal resumes backlog. Default: 3.
+	ConsecutiveTicksToResume int `json:"consecutive_ticks_to_resume,omitempty"`
+	// AssumedWindowTokenBudget is the operator-supplied assumed token budget for
+	// the trailing 5h window. Anthropic publishes no real budget, so this must be
+	// calibrated manually; 0 (the default) disables the soft/percentage signal
+	// entirely, leaving only the hard/reactive rate-limit override active.
+	AssumedWindowTokenBudget int64 `json:"assumed_window_token_budget,omitempty"`
+	// RateLimitWindowMinutes is how long a detected rate-limit event keeps the
+	// hard/reactive override active. Default: 30.
+	RateLimitWindowMinutes int `json:"rate_limit_window_minutes,omitempty"`
+	// ManualOverrideGraceMinutes is how long after a detected manual override the
+	// notification cooldown is bypassed for the next auto-transition. Default: 10.
+	ManualOverrideGraceMinutes int `json:"manual_override_grace_minutes,omitempty"`
+	// ForegroundThrottleDelaySeconds is how long the foreground-session dispatch
+	// throttle stays active after the most recently observed foreground activity.
+	// Default: 300.
+	ForegroundThrottleDelaySeconds int `json:"foreground_throttle_delay_seconds,omitempty"`
+}
+
+// QuotaConfigOrDefault returns a QuotaConfig with standard defaults applied to zero fields.
+func (c QuotaConfig) QuotaConfigOrDefault() QuotaConfig {
+	out := c
+	// Enabled intentionally stays false by default — this feature ships opt-in.
+	if out.PauseBelowHeadroomPct <= 0 {
+		out.PauseBelowHeadroomPct = 20.0
+	}
+	if out.ResumeMarginPct <= 0 {
+		out.ResumeMarginPct = 15.0
+	}
+	if out.ConsecutiveTicksToPause <= 0 {
+		out.ConsecutiveTicksToPause = 2
+	}
+	if out.ConsecutiveTicksToResume <= 0 {
+		out.ConsecutiveTicksToResume = 3
+	}
+	// AssumedWindowTokenBudget intentionally stays 0 by default — no safe guess exists.
+	if out.RateLimitWindowMinutes <= 0 {
+		out.RateLimitWindowMinutes = 30
+	}
+	if out.ManualOverrideGraceMinutes <= 0 {
+		out.ManualOverrideGraceMinutes = 10
+	}
+	if out.ForegroundThrottleDelaySeconds <= 0 {
+		out.ForegroundThrottleDelaySeconds = 300
+	}
+	return out
 }
 
 // CapacityConfigOrDefault returns a CapacityConfig with standard defaults applied to zero fields.

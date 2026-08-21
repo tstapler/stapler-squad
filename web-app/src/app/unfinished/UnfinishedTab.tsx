@@ -2,6 +2,7 @@
 
 import { useState, useCallback, useEffect, useMemo } from "react";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import { createClient } from "@connectrpc/connect";
 import { createConnectTransport } from "@connectrpc/connect-web";
 import { UnfinishedWorktree } from "@/gen/session/v1/types_pb";
@@ -30,6 +31,10 @@ export function UnfinishedTab() {
   const { worktrees, lastScanTime, isScanning, triggerScan } = useUnfinishedWork();
   const [filter, setFilter] = useState<FilterType>("all");
   const [secondsAgo, setSecondsAgo] = useState(0);
+  const searchParams = useSearchParams();
+  // routes.unfinishedItem(itemId) deep link — pre-expands/filters the
+  // matching Stuck Backlog Items card (see StuckItemsSection's focusItemId).
+  const focusItemId = searchParams.get("item") ?? undefined;
 
   const transport = useMemo(
     () =>
@@ -152,7 +157,7 @@ export function UnfinishedTab() {
       {/* Stuck Backlog Items — sits directly below the filter-chip row and
           above the In Progress section, per design/ux.md Surface 2: it's
           the first thing that answers "what needs me". */}
-      <StuckItemsSection />
+      <StuckItemsSection focusItemId={focusItemId} />
 
       {/* In Progress: active worktrees + open PRs */}
       <section className={styles.group} aria-label="In Progress">

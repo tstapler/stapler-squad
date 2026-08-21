@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/tstapler/stapler-squad/log"
 )
@@ -48,14 +49,48 @@ var hookEventName = map[HookName]string{
 // SetHookBaseURLFn during real server wiring (server.go's wireDepsIntoServer) with a closure
 // that reads the server's real listen address lazily — e.g. via srv.GetAddr() — so hook URLs
 // are never snapshotted before the server has bound its real port (PORT=0 support).
-var hookBaseURLFn = func() string { return "http://localhost:8543" }
+//
+// hookBaseURLFnMu guards concurrent read/write of the closure from a test goroutine (setter)
+// and every other parallel test in this package that resolves hook URLs (reader) — required
+// under -race since the t.Parallel() rollout made this package's tests run concurrently.
+// Modeled on backlog_service_triage.go's testTriageCompleteHook.
+var (
+	hookBaseURLFnMu sync.Mutex
+	hookBaseURLFn   = func() string { return "http://localhost:8543" }
+)
 
 // SetHookBaseURLFn overrides the base URL function used when building hook endpoint URLs via
 // hookEndpoints. Call once during server wiring; passing nil is a no-op.
 func SetHookBaseURLFn(fn func() string) {
-	if fn != nil {
-		hookBaseURLFn = fn
+	if fn == nil {
+		return
 	}
+	hookBaseURLFnMu.Lock()
+	defer hookBaseURLFnMu.Unlock()
+	hookBaseURLFn = fn
+}
+
+// getHookBaseURLFn returns the currently-configured base URL closure.
+func getHookBaseURLFn() func() string {
+	hookBaseURLFnMu.Lock()
+	defer hookBaseURLFnMu.Unlock()
+	return hookBaseURLFn
+}
+
+// hookCommandReferencesURL reports whether curlCmd is the hook command built for url (see the
+// curl command template in InjectHooksConfig/InjectHookConfig, which always wraps the URL in
+// single quotes: `-X POST '<url>' -H ...`). Matching on the quoted form, not a bare
+// strings.Contains(command, url), is required because some hook URLs are string prefixes of
+// others -- e.g. HookPostToolLogging's ".../api/hooks/post-tool-use" is a strict prefix of
+// HookGitDriftCheck's ".../api/hooks/post-tool-use-drift-check". A bare substring check treats
+// the shorter URL as "already present" whenever the longer one's command exists, which (via
+// Go's randomized map iteration order over the `wanted` set in InjectHooksConfig) intermittently
+// dropped one of the two PostToolUse hooks entirely and made RemoveHooksConfig delete the
+// survivor's group too -- the root cause of the flaky
+// TestRemoveHooksConfig_should_StripOnlyTheNamedHook_When_MultipleHooksPresent failure. The
+// quote characters bound the match so a strict-prefix URL can never falsely match a longer one.
+func hookCommandReferencesURL(curlCmd, url string) bool {
+	return strings.Contains(curlCmd, "'"+url+"'")
 }
 
 // hookEndpoints builds the HookName -> URL map fresh from baseURLFn() on every call (never
@@ -122,7 +157,7 @@ func InjectHooksConfig(rootDir, sessionTitle string, hooks []HookName) error {
 
 	// Resolved once per InjectHooksConfig call (i.e. per-session, at hook-injection time), not
 	// cached at package-construction time, so it reflects the server's current base URL.
-	endpoints := hookEndpoints(hookBaseURLFn)
+	endpoints := hookEndpoints(getHookBaseURLFn())
 
 	for hookName := range wanted {
 		eventKey := hookEventName[hookName]
@@ -139,7 +174,7 @@ func InjectHooksConfig(rootDir, sessionTitle string, hooks []HookName) error {
 				alreadyPresent := false
 				for _, g := range groups {
 					for _, h := range g.Hooks {
-						if h.Type == "command" && strings.Contains(h.Command, url) {
+						if h.Type == "command" && hookCommandReferencesURL(h.Command, url) {
 							alreadyPresent = true
 							break
 						}
@@ -230,7 +265,7 @@ func RemoveHooksConfig(rootDir string, hooks []HookName) error {
 		return fmt.Errorf("unmarshal hooks map: %w", err)
 	}
 
-	endpoints := hookEndpoints(hookBaseURLFn)
+	endpoints := hookEndpoints(getHookBaseURLFn())
 	changed := false
 
 	for _, hookName := range hooks {
@@ -252,7 +287,7 @@ func RemoveHooksConfig(rootDir string, hooks []HookName) error {
 		for _, g := range groups {
 			keptHooks := make([]hookEntry, 0, len(g.Hooks))
 			for _, h := range g.Hooks {
-				if h.Type == "command" && strings.Contains(h.Command, url) {
+				if h.Type == "command" && hookCommandReferencesURL(h.Command, url) {
 					changed = true
 					continue
 				}

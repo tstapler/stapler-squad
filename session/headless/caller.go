@@ -16,7 +16,14 @@ import (
 
 // CallOptions configures an individual pool call with overrides.
 type CallOptions struct {
-	// WorkDir sets the subprocess working directory (for git operations).
+	// WorkDir sets the subprocess working directory (for git operations). Callers
+	// MUST validate this is an absolute, existing directory before passing it here —
+	// os/exec.Cmd.Dir has a well-documented quirk where a non-existent Dir makes the
+	// resulting fork/exec error name the EXECUTABLE path, not the directory (e.g.
+	// "fork/exec /home/user/.local/bin/claude: no such file or directory"), which
+	// looks exactly like the binary is missing even though the real problem is a bad
+	// working directory. See BUG-062 (server/services/backlog_service_triage.go's
+	// TriggerTriage) for a live incident this caused and the validation added there.
 	WorkDir string
 	// Model overrides the pool's DefaultModel for this call only.
 	Model string
@@ -279,7 +286,7 @@ func (p *Pool) call(ctx context.Context, key FeatureKey, systemPrompt, userPromp
 			p.rotateSession(key)
 		}
 		close(ch)
-		return ch, fmt.Errorf("headless runner start: %w", err)
+		return ch, fmt.Errorf("headless runner start: %w: %w", ErrSubprocessStart, err)
 	}
 
 	go func() {
@@ -335,6 +342,17 @@ func (p *Pool) call(ctx context.Context, key FeatureKey, systemPrompt, userPromp
 			if readErr != nil && !errors.Is(readErr, io.EOF) {
 				if tripBreaker := p.recordError(key); tripBreaker {
 					p.rotateSession(key)
+				}
+				// A subprocess killed mid-write (e.g. OOM-killed) can still have
+				// left real, useful output in data before the read failed. Send it
+				// as a Text chunk before the terminal Err, mirroring the JSON
+				// parse-failure branch below — otherwise CallBlocking's raw return
+				// is "" and captureHeadlessFailure has nothing to persist for
+				// diagnosis.
+				if text := strings.TrimSpace(string(data)); text != "" {
+					if !send(StreamChunk{Text: text}) {
+						return
+					}
 				}
 				send(StreamChunk{Err: readErr, Done: true})
 				return

@@ -36,12 +36,23 @@ var (
 
 const ghAuthTTL = 5 * time.Minute
 
+// PR state strings. These are the single source of truth for the three PR
+// lifecycle states surfaced by PRInfo.State — GetPRByNumber and any other
+// consumer of PRInfo.State should compare against these constants rather
+// than hardcoding "open"/"closed"/"merged" string literals.
+const (
+	PRStateOpen   = "open"
+	PRStateClosed = "closed"
+	PRStateMerged = "merged"
+)
+
 // PRInfo contains metadata about a GitHub pull request
 type PRInfo struct {
 	Number       int       `json:"number"`
 	Title        string    `json:"title"`
 	Body         string    `json:"body"`
 	HeadRef      string    `json:"headRefName"`
+	HeadSHA      string    `json:"headRefOid"`
 	BaseRef      string    `json:"baseRefName"`
 	State        string    `json:"state"`
 	Author       string    `json:"author"`
@@ -80,6 +91,7 @@ type ghPRResponse struct {
 	Title        string `json:"title"`
 	Body         string `json:"body"`
 	HeadRefName  string `json:"headRefName"`
+	HeadRefOid   string `json:"headRefOid"`
 	BaseRefName  string `json:"baseRefName"`
 	State        string `json:"state"`
 	URL          string `json:"url"`
@@ -162,16 +174,17 @@ func CheckGHAuth() error {
 			return authErr, nil
 		}
 		defer resp.Body.Close()
-		_, _ = io.Copy(io.Discard, resp.Body)
 
 		var authErr error
-		switch resp.StatusCode {
-		case http.StatusOK:
-			// authenticated — no error
-		case http.StatusUnauthorized, http.StatusForbidden:
-			authErr = fmt.Errorf("GitHub is not authenticated (HTTP %d). Set GITHUB_TOKEN or run 'gh auth login'", resp.StatusCode)
-		default:
-			authErr = fmt.Errorf("GitHub auth check: unexpected status %d", resp.StatusCode)
+		if resp.StatusCode == http.StatusOK {
+			_, _ = io.Copy(io.Discard, resp.Body)
+		} else {
+			// classifyGHResponse distinguishes real auth failures (401, or a
+			// 403 with no rate-limit signal) from rate limiting (403 with
+			// Retry-After or X-RateLimit-Remaining: 0, or 429) — a plain
+			// "not authenticated, run gh auth login" message on a rate-limited
+			// response is misleading and sends users to fix the wrong thing.
+			authErr = classifyGHResponse(resp, "", false)
 		}
 
 		ghAuthState.Store(authResult{err: authErr, expiry: time.Now().Add(ghAuthTTL)})
@@ -192,7 +205,8 @@ func CheckGHAuth() error {
 
 // GetCurrentUserLogin returns the GitHub login of the authenticated user via
 // GET /user. Returns an empty string (not an error) when unauthenticated so
-// callers can degrade gracefully.
+// callers can degrade gracefully. Returns a non-nil error when the request
+// is rate limited instead — that isn't the same as being unauthenticated.
 func GetCurrentUserLogin(ctx context.Context) (string, error) {
 	req, err := newGHRequest(ctx, "user")
 	if err != nil {
@@ -203,7 +217,8 @@ func GetCurrentUserLogin(ctx context.Context) (string, error) {
 
 // GetCurrentUserLoginWithToken fetches the GitHub login for an explicit token
 // on host ("" means github.com).
-// Returns ("", nil) when the token is invalid or unauthenticated.
+// Returns ("", nil) when the token is invalid or unauthenticated, and a
+// non-nil error when the request is rate limited instead.
 func GetCurrentUserLoginWithToken(ctx context.Context, host, token string) (string, error) {
 	req, err := newGHRequestForHostWithToken(ctx, host, "user", token)
 	if err != nil {
@@ -220,6 +235,12 @@ func fetchLoginFromRequest(req *http.Request) (string, error) {
 	defer resp.Body.Close()
 
 	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+		// A rate-limited 403 isn't "unauthenticated" — surface it as an error
+		// so callers don't silently treat rate limiting as a missing/invalid
+		// token and degrade as if no one is logged in.
+		if isGHRateLimited(resp) {
+			return "", classifyGHResponse(resp, "", false)
+		}
 		_, _ = io.Copy(io.Discard, resp.Body)
 		return "", nil
 	}
@@ -252,7 +273,7 @@ func GetPRInfoCtx(ctx context.Context, owner, repo string, prNumber int) (*PRInf
 	repoRef := fmt.Sprintf("%s/%s", owner, repo)
 	prRef := strconv.Itoa(prNumber)
 
-	fields := "number,title,body,headRefName,baseRefName,state,url,createdAt,updatedAt,isDraft,mergeable,additions,deletions,changedFiles,author,labels,reviews,reviewDecision,statusCheckRollup"
+	fields := "number,title,body,headRefName,headRefOid,baseRefName,state,url,createdAt,updatedAt,isDraft,mergeable,additions,deletions,changedFiles,author,labels,reviews,reviewDecision,statusCheckRollup"
 	cmd := safeexec.CommandContext(ctx, "gh", "pr", "view", prRef, "--repo", repoRef, "--json", fields)
 	output, err := cmd.Output()
 	if err != nil {
@@ -283,6 +304,7 @@ func GetPRInfoCtx(ctx context.Context, owner, repo string, prNumber int) (*PRInf
 		Title:                 resp.Title,
 		Body:                  resp.Body,
 		HeadRef:               resp.HeadRefName,
+		HeadSHA:               resp.HeadRefOid,
 		BaseRef:               resp.BaseRefName,
 		State:                 strings.ToLower(resp.State),
 		Author:                resp.Author.Login,
@@ -391,14 +413,8 @@ func GetPRForBranch(ctx context.Context, owner, repo, branch string) (*PRInfo, e
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode == http.StatusUnauthorized {
-		return nil, fmt.Errorf("GitHub API: unauthorized (401) – run 'gh auth login'")
-	}
-	if resp.StatusCode == http.StatusForbidden {
-		return nil, fmt.Errorf("GitHub API: forbidden (403) – check token permissions")
-	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("GitHub API returned status %d for PR list", resp.StatusCode)
+		return nil, classifyGHResponse(resp, "", false)
 	}
 
 	body, err := io.ReadAll(resp.Body)
@@ -425,6 +441,94 @@ func GetPRForBranch(ctx context.Context, owner, repo, branch string) (*PRInfo, e
 	})
 
 	return GetPRInfoCtx(ctx, owner, repo, prs[0].Number)
+}
+
+// GetPRByNumber fetches a single pull request by its number using the GitHub
+// REST API directly (no gh subprocess). Unlike GetPRForBranch, which looks a
+// PR up by head branch name and can therefore match the wrong PR when a
+// branch is reused or renamed, GetPRByNumber looks a PR up by its immutable
+// number — the root-cause fix for branch-name-keyed lookups matching stale
+// or unrelated PRs.
+//
+// Returns ErrNoPR when no pull request exists for the given number (HTTP
+// 404). Before returning success, the response's base.repo.full_name is
+// compared against the requested owner/repo; a mismatch returns a non-nil,
+// non-ErrNoPR error rather than trusting the response body blindly.
+func GetPRByNumber(ctx context.Context, owner, repo string, prNumber int) (*PRInfo, error) {
+	apiPath := fmt.Sprintf("repos/%s/%s/pulls/%d",
+		url.PathEscape(owner), url.PathEscape(repo), prNumber)
+
+	req, err := newGHRequest(ctx, apiPath)
+	if err != nil {
+		return nil, fmt.Errorf("build PR request: %w", err)
+	}
+
+	resp, err := ghHTTPClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("PR request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusNotFound {
+		_, _ = io.Copy(io.Discard, resp.Body)
+		return nil, ErrNoPR
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, classifyGHResponse(resp, "", false)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read PR response: %w", err)
+	}
+
+	// Distinct local response struct for this REST endpoint's shape — note
+	// the author field here is user.login, NOT author.login (the shape used
+	// by ghPRResponse for the gh pr view --json subprocess path above).
+	var prResp struct {
+		Number  int    `json:"number"`
+		HTMLURL string `json:"html_url"`
+		State   string `json:"state"`
+		Merged  bool   `json:"merged"`
+		Head    struct {
+			Ref string `json:"ref"`
+		} `json:"head"`
+		Base struct {
+			Ref  string `json:"ref"`
+			Repo struct {
+				FullName string `json:"full_name"`
+			} `json:"repo"`
+		} `json:"base"`
+		User struct {
+			Login string `json:"login"`
+		} `json:"user"`
+	}
+	if err := json.Unmarshal(body, &prResp); err != nil {
+		return nil, fmt.Errorf("parse PR response: %w", err)
+	}
+
+	wantFullName := owner + "/" + repo
+	if prResp.Base.Repo.FullName != wantFullName {
+		return nil, fmt.Errorf("PR #%d base.repo.full_name %q does not match requested repo %q",
+			prNumber, prResp.Base.Repo.FullName, wantFullName)
+	}
+
+	state := PRStateOpen
+	switch {
+	case prResp.Merged:
+		state = PRStateMerged
+	case prResp.State == PRStateClosed:
+		state = PRStateClosed
+	}
+
+	return &PRInfo{
+		Number:  prResp.Number,
+		HeadRef: prResp.Head.Ref,
+		BaseRef: prResp.Base.Ref,
+		State:   state,
+		Author:  prResp.User.Login,
+		HTMLURL: prResp.HTMLURL,
+	}, nil
 }
 
 // IsForkRepo reports whether the given repo is a fork of another repository.

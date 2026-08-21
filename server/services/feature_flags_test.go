@@ -49,7 +49,9 @@ func newFeatureFlagService(t *testing.T) *SessionService {
 	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
 	storage := createTestStorage(t)
 	eventBus := events.NewEventBus(100)
-	return NewSessionService(storage, eventBus)
+	svc := NewSessionService(storage, eventBus)
+	t.Cleanup(func() { svc.Shutdown() })
+	return svc
 }
 
 // --------------------------------------------------------------------------
@@ -76,6 +78,41 @@ func TestGetFeatureFlags_ReturnsKnownFlags(t *testing.T) {
 	assert.NotEmpty(t, backlogFlag.Description, "backlog flag should have a non-empty description")
 }
 
+// GetFeatureFlags_should_ReturnAllSevenResyncFlagsDefaultingFalse_When_RegistryQueried
+// is the test named in project_plans/terminal-resync-reliability/implementation/validation.md's
+// AC7 row: all 7 terminal-resync feature flags must be present in the
+// GetFeatureFlags response and default to disabled (no controller wired, no
+// config.json override).
+func TestGetFeatureFlags_should_ReturnAllSevenResyncFlagsDefaultingFalse_When_RegistryQueried(t *testing.T) {
+	svc := newFeatureFlagService(t)
+
+	resp, err := svc.GetFeatureFlags(context.Background(), connect.NewRequest(&sessionv1.GetFeatureFlagsRequest{}))
+	require.NoError(t, err)
+	require.NotNil(t, resp.Msg)
+
+	wantFlags := []string{
+		"terminal:resync-visibility-scope",
+		"terminal:resync-correlation-id",
+		"terminal:resync-skip-stale-dimension-slowpath",
+		"terminal:resync-exec-gate-fast-lane",
+		"terminal:resync-stagger",
+		"terminal:resync-compression",
+		"terminal:resync-batching",
+	}
+
+	byName := make(map[string]*sessionv1.FeatureFlag, len(resp.Msg.Flags))
+	for _, f := range resp.Msg.Flags {
+		byName[f.Name] = f
+	}
+
+	for _, name := range wantFlags {
+		flag, ok := byName[name]
+		require.Truef(t, ok, "expected %q flag in GetFeatureFlags response", name)
+		assert.Falsef(t, flag.Enabled, "%q should default to disabled", name)
+		assert.NotEmptyf(t, flag.Description, "%q should have a non-empty description", name)
+	}
+}
+
 // TestGetFeatureFlags_ReflectsControllerState verifies that when a FeatureController
 // is wired and reports IsEnabled=true, GetFeatureFlags returns enabled=true for that flag.
 func TestGetFeatureFlags_ReflectsControllerState(t *testing.T) {
@@ -97,6 +134,46 @@ func TestGetFeatureFlags_ReflectsControllerState(t *testing.T) {
 	}
 	require.NotNil(t, backlogFlag, "expected 'backlog' flag in GetFeatureFlags response")
 	assert.True(t, backlogFlag.Enabled, "backlog flag should be enabled when controller reports IsEnabled=true")
+}
+
+// TestGetFeatureFlags_should_PopulateStatusDetailForBacklogOnly_When_QuotaGatePausedByQuota
+// verifies the "backlog" flag's StatusDetail reflects a wired status-detail
+// provider, and every other flag's StatusDetail stays empty.
+func TestGetFeatureFlags_should_PopulateStatusDetailForBacklogOnly_When_QuotaGatePausedByQuota(t *testing.T) {
+	svc := newFeatureFlagService(t)
+	svc.SetStatusDetailProvider("backlog", func() string { return "Paused: session-quota headroom below threshold." })
+
+	resp, err := svc.GetFeatureFlags(context.Background(), connect.NewRequest(&sessionv1.GetFeatureFlagsRequest{}))
+	require.NoError(t, err)
+	require.NotNil(t, resp.Msg)
+
+	for _, f := range resp.Msg.Flags {
+		if f.Name == "backlog" {
+			assert.Equal(t, "Paused: session-quota headroom below threshold.", f.StatusDetail)
+		} else {
+			assert.Empty(t, f.StatusDetail, "flag %q should have empty StatusDetail (no provider wired)", f.Name)
+		}
+	}
+}
+
+// TestGetFeatureFlags_should_ReturnEmptyStatusDetail_When_ProviderReturnsEmptyString
+// verifies a wired-but-healthy provider produces no noise on the response.
+func TestGetFeatureFlags_should_ReturnEmptyStatusDetail_When_ProviderReturnsEmptyString(t *testing.T) {
+	svc := newFeatureFlagService(t)
+	svc.SetStatusDetailProvider("backlog", func() string { return "" })
+
+	resp, err := svc.GetFeatureFlags(context.Background(), connect.NewRequest(&sessionv1.GetFeatureFlagsRequest{}))
+	require.NoError(t, err)
+
+	var backlogFlag *sessionv1.FeatureFlag
+	for _, f := range resp.Msg.Flags {
+		if f.Name == "backlog" {
+			backlogFlag = f
+			break
+		}
+	}
+	require.NotNil(t, backlogFlag)
+	assert.Empty(t, backlogFlag.StatusDetail)
 }
 
 // --------------------------------------------------------------------------

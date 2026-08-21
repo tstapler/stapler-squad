@@ -116,6 +116,8 @@ func (rs *RulesService) UpsertApprovalRule(
 		RequiredFlagPrefixes:  r.RequiredFlagPrefixes,
 		PythonModes:           r.PythonModes,
 		SafePythonImportsOnly: r.SafePythonImportsOnly,
+		RequireCIPassing:      r.RequireCiPassing,
+		MinSessionIdleMinutes: r.MinSessionIdleMinutes,
 	}
 	if r.CreatedAt != nil {
 		spec.CreatedAt = r.CreatedAt.AsTime()
@@ -468,6 +470,8 @@ func specToProto(spec RuleSpec) *sessionv1.ApprovalRuleProto {
 		RequiredFlagPrefixes:  spec.RequiredFlagPrefixes,
 		PythonModes:           spec.PythonModes,
 		SafePythonImportsOnly: spec.SafePythonImportsOnly,
+		RequireCiPassing:      spec.RequireCIPassing,
+		MinSessionIdleMinutes: spec.MinSessionIdleMinutes,
 	}
 	if !spec.CreatedAt.IsZero() {
 		p.CreatedAt = timestamppb.New(spec.CreatedAt)
@@ -477,17 +481,19 @@ func specToProto(spec RuleSpec) *sessionv1.ApprovalRuleProto {
 
 func ruleToSpec(r classifier.Rule) RuleSpec {
 	spec := RuleSpec{
-		ID:           r.ID,
-		Name:         r.Name,
-		ToolName:     r.ToolName,
-		ToolCategory: r.ToolCategory,
-		Decision:     decisionString(r.Decision),
-		RiskLevel:    riskLevelString(r.RiskLevel),
-		Reason:       r.Reason,
-		Alternative:  r.Alternative,
-		Priority:     r.Priority,
-		Enabled:      r.Enabled,
-		Source:       r.Source,
+		ID:                    r.ID,
+		Name:                  r.Name,
+		ToolName:              r.ToolName,
+		ToolCategory:          r.ToolCategory,
+		Decision:              decisionString(r.Decision),
+		RiskLevel:             riskLevelString(r.RiskLevel),
+		Reason:                r.Reason,
+		Alternative:           r.Alternative,
+		Priority:              r.Priority,
+		Enabled:               r.Enabled,
+		Source:                r.Source,
+		RequireCIPassing:      r.RequireCIPassing,
+		MinSessionIdleMinutes: r.MinSessionIdleMinutes,
 	}
 	if r.ToolPattern != nil {
 		spec.ToolPattern = r.ToolPattern.String()
@@ -566,6 +572,14 @@ func summaryToProto(s AnalyticsSummary) *sessionv1.AnalyticsSummaryProto {
 			Category:    s.Category,
 			Count:       int32(s.Count),
 		})
+	}
+	p.EscalationReasonCounts = make(map[string]int32, len(s.EscalationReasonCounts))
+	for k, v := range s.EscalationReasonCounts {
+		p.EscalationReasonCounts[k] = int32(v)
+	}
+	p.RiskLevelCounts = make(map[string]int32, len(s.RiskLevelCounts))
+	for k, v := range s.RiskLevelCounts {
+		p.RiskLevelCounts[k] = int32(v)
 	}
 	if !s.WindowStart.IsZero() {
 		p.WindowStart = timestamppb.New(s.WindowStart)
@@ -1212,6 +1226,8 @@ func ruleProtoToSpec(p *sessionv1.ApprovalRuleProto) RuleSpec {
 		RequiredFlagPrefixes:  p.RequiredFlagPrefixes,
 		PythonModes:           p.PythonModes,
 		SafePythonImportsOnly: p.SafePythonImportsOnly,
+		RequireCIPassing:      p.RequireCiPassing,
+		MinSessionIdleMinutes: p.MinSessionIdleMinutes,
 		Decision:              autoDecisionToString(p.Decision),
 		RiskLevel:             p.RiskLevel,
 		Reason:                p.Reason,

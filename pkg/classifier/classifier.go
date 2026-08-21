@@ -14,6 +14,13 @@ import (
 )
 
 // RiskLevel indicates the severity of a tool use request.
+//
+// WARNING: RiskLevel is persisted as an int column by ApprovalRule.risk_level
+// (session/ent/schema/approvalrule.go) and converted to/from persisted strings elsewhere by
+// riskLevelString/parseRiskLevel (server/services) for ClassificationAnalytics.RiskLevel,
+// PendingApproval.RiskLevel, and PersistedApproval.RiskLevel. New values MUST be appended to
+// the end of this iota block — inserting or reordering values would silently corrupt the
+// int-column data and desync the int↔string mapping for the string-typed surfaces.
 type RiskLevel int
 
 const (
@@ -69,6 +76,15 @@ type ClassificationContext struct {
 	// variables (e.g. BRANCH=main "git checkout $BRANCH" → "git checkout main").
 	// Variables not present in the map are left unexpanded.
 	Env map[string]string
+	// CIStatus is the requesting session's GitHub CI check conclusion:
+	// "success"/"failure"/"pending"/"neutral"/"". "" means no PR or unknown
+	// (including stale data — see ApprovalHandler's staleness guard).
+	CIStatus string
+	// SessionIdleMinutes is the computed idle-minutes value for the session being
+	// classified. 0 (unset) means unknown/unavailable and must never accidentally
+	// satisfy a MinSessionIdleMinutes > 0 condition — see ApprovalHandler's population
+	// logic for how this is populated from a live instance.
+	SessionIdleMinutes int
 }
 
 // Classifier classifies a PermissionRequestPayload to determine the action to take.
@@ -358,10 +374,17 @@ type Rule struct {
 	CommandPattern *regexp.Regexp
 	// FilePattern matches against tool_input["file_path"]. nil means any file path matches.
 	FilePattern *regexp.Regexp
-	Decision    ClassificationDecision
-	RiskLevel   RiskLevel
-	Reason      string
-	Alternative string
+	// RequireCIPassing, when true, only matches if ClassificationContext.CIStatus == "success".
+	// ANDed with all other conditions on this rule.
+	RequireCIPassing bool
+	// MinSessionIdleMinutes matches only if ClassificationContext.SessionIdleMinutes >=
+	// MinSessionIdleMinutes. 0 = condition not applied. ANDed with all other conditions
+	// on this rule.
+	MinSessionIdleMinutes int32
+	Decision              ClassificationDecision
+	RiskLevel             RiskLevel
+	Reason                string
+	Alternative           string
 	// Priority determines rule evaluation order. Higher values are evaluated first.
 	Priority int
 	Enabled  bool
@@ -488,7 +511,7 @@ func (c *RuleBasedClassifier) classifyInternal(payload PermissionRequestPayload,
 						RiskLevel:   RiskMedium,
 						Reason:      fmt.Sprintf("Command program is a shell expansion (%q); cannot determine the actual executable without evaluating the shell. Review the command before approving.", pc.Program),
 						Alternative: "Use the concrete program name directly, or expand the variable in a separate step.",
-						RuleID:      "shell-expansion-program",
+						RuleID:      RuleIDShellExpansionProgram,
 					}
 				}
 
@@ -499,16 +522,16 @@ func (c *RuleBasedClassifier) classifyInternal(payload PermissionRequestPayload,
 		}
 	}
 
-	return c.classifySingle(payload)
+	return c.classifySingle(payload, ctx)
 }
 
 // classifySingle evaluates rules against a single (non-compound) payload.
-func (c *RuleBasedClassifier) classifySingle(payload PermissionRequestPayload) ClassificationResult {
+func (c *RuleBasedClassifier) classifySingle(payload PermissionRequestPayload, ctx ClassificationContext) ClassificationResult {
 	for _, rule := range c.rules {
 		if !rule.Enabled {
 			continue
 		}
-		if c.matchesRule(rule, payload) {
+		if c.matchesRule(rule, payload, ctx) {
 			return ClassificationResult{
 				Decision:    rule.Decision,
 				RiskLevel:   rule.RiskLevel,
@@ -539,7 +562,7 @@ func (c *RuleBasedClassifier) classifyOneSubCmd(sub ParsedCommand, payload Permi
 			RiskLevel:   RiskMedium,
 			Reason:      fmt.Sprintf("Command program is a shell expansion (%q); cannot determine the actual executable without evaluating the shell. Review the command before approving.", sub.Program),
 			Alternative: "Use the concrete program name directly, or expand the variable in a separate step.",
-			RuleID:      "shell-expansion-program",
+			RuleID:      RuleIDShellExpansionProgram,
 		}
 	}
 	if depth < maxRecursionDepth {
@@ -547,7 +570,7 @@ func (c *RuleBasedClassifier) classifyOneSubCmd(sub ParsedCommand, payload Permi
 			return c.classifyInternal(payloadWithCommand(payload, innerCmd), ctx, depth+1)
 		}
 	}
-	return c.classifySingle(payloadWithCommand(payload, sub.Raw))
+	return c.classifySingle(payloadWithCommand(payload, sub.Raw), ctx)
 }
 
 // classifyCompound evaluates each sub-command extracted from a compound Bash command.
@@ -675,8 +698,11 @@ func (c *RuleBasedClassifier) BuildContext(cwd string) ClassificationContext {
 	return ctx
 }
 
+// ciConclusionSuccess is the GitHub CI check conclusion value RequireCIPassing matches on.
+const ciConclusionSuccess = "success"
+
 // matchesRule returns true if all non-nil criteria in rule match the payload.
-func (c *RuleBasedClassifier) matchesRule(rule Rule, payload PermissionRequestPayload) bool {
+func (c *RuleBasedClassifier) matchesRule(rule Rule, payload PermissionRequestPayload, ctx ClassificationContext) bool {
 	// Tool name / pattern / category match.
 	if rule.ToolName != "" {
 		if !strings.EqualFold(payload.ToolName, rule.ToolName) {
@@ -720,6 +746,14 @@ func (c *RuleBasedClassifier) matchesRule(rule Rule, payload PermissionRequestPa
 		if !rule.FilePattern.MatchString(filePath) {
 			return false
 		}
+	}
+
+	if rule.RequireCIPassing && ctx.CIStatus != ciConclusionSuccess {
+		return false
+	}
+
+	if rule.MinSessionIdleMinutes > 0 && ctx.SessionIdleMinutes < int(rule.MinSessionIdleMinutes) {
+		return false
 	}
 
 	return true

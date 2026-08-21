@@ -94,32 +94,60 @@ jobs:
 
       - name: Compare against baseline (PR only)
         if: github.event_name == 'pull_request'
+        id: compare
         run: |
           if [ -f benchmarks/go/tier1-baseline.txt ]; then
+            # No -delta-test flag: the pinned benchstat's table-format rewrite
+            # dropped it in favor of an automatic alpha=0.05 significance test
+            # (insignificant deltas are marked "~" in the output already).
             benchstat benchmarks/go/tier1-baseline.txt tier1-bench.txt > benchstat-tier1.txt 2>&1 || true
             echo "## Go Benchmarks (Tier 1)" >> $GITHUB_STEP_SUMMARY
             cat benchstat-tier1.txt >> $GITHUB_STEP_SUMMARY
           else
             echo "No baseline yet — will be established on next push to main." > benchstat-tier1.txt
           fi
+          # A bare `if <cmd>` is exempt from -e/pipefail, so a genuine crash
+          # in the gate script (require() failure, bad benchstat output) must
+          # be distinguished from a real "false" result — otherwise it's
+          # silently written as has_regression=false, exactly the kind of
+          # silently-suppressed comment pre-mortem.md names as this item's
+          # top risk.
+          if ! RESULT=$(node -e "console.log(require('./tools/ci-gates/benchmark-regression.js').hasGoTier1Regression(require('fs').readFileSync('benchstat-tier1.txt','utf8')))"); then
+            echo "::error::benchmark-regression.js failed to evaluate — failing loudly instead of silently suppressing the PR comment"
+            exit 1
+          fi
+          echo "has_regression=${RESULT}" >> "$GITHUB_OUTPUT"
 
       - name: Post PR comment
         if: github.event_name == 'pull_request'
+        continue-on-error: true # advisory comment; never fail the job if posting is denied
         uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        env:
+          HAS_REGRESSION: ${{ steps.compare.outputs.has_regression }}
         with:
           script: |
-            const fs = require('fs');
-            const output = fs.existsSync('benchstat-tier1.txt')
-              ? fs.readFileSync('benchstat-tier1.txt', 'utf8').trim()
-              : 'No comparison available.';
             const marker = '<!-- benchmark-go-tier1 -->';
-            const body = `${marker}\n## Go Benchmarks (Tier 1)\n\`\`\`\n${output}\n\`\`\``;
             const { data: comments } = await github.rest.issues.listComments({
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: context.issue.number,
             });
             const existing = comments.find(c => c.body.includes(marker));
+            if (process.env.HAS_REGRESSION !== 'true') {
+              if (existing) {
+                await github.rest.issues.deleteComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  comment_id: existing.id,
+                });
+              }
+              return;
+            }
+            const fs = require('fs');
+            const output = fs.existsSync('benchstat-tier1.txt')
+              ? fs.readFileSync('benchstat-tier1.txt', 'utf8').trim()
+              : 'No comparison available.';
+            const body = `${marker}\n## ⚠️ Go Benchmarks (Tier 1) — Regression Detected\n\`\`\`\n${output}\n\`\`\`\n\n> This comment clears automatically once the regression is resolved.`;
             if (existing) {
               await github.rest.issues.updateComment({
                 owner: context.repo.owner,
@@ -231,6 +259,18 @@ jobs:
       - name: Generate protobuf code
         run: buf generate proto
 
+      # Same pattern as .github/actions/prepare/action.yml's "Cache Next.js
+      # build cache" step — see its comment for why the key includes both the
+      # lockfile and src hash, with restore-keys fallbacks.
+      - name: Cache Next.js build cache
+        uses: actions/cache@v4
+        with:
+          path: web-app/.next/cache
+          key: nextjs-bundle-${{ runner.os }}-${{ hashFiles('web-app/pnpm-lock.yaml') }}-${{ hashFiles('web-app/src/**') }}
+          restore-keys: |
+            nextjs-bundle-${{ runner.os }}-${{ hashFiles('web-app/pnpm-lock.yaml') }}-
+            nextjs-bundle-${{ runner.os }}-
+
       - name: Build Next.js app
         run: cd web-app && pnpm run build
 
@@ -246,7 +286,7 @@ jobs:
   frontend-throughput:
     name: Frontend Terminal Throughput
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     needs: frontend-bundle
     permissions:
       contents: read
@@ -279,8 +319,35 @@ jobs:
       - name: Generate protobuf code
         run: buf generate proto
 
+      # Same pattern as .github/actions/prepare/action.yml's "Cache Next.js
+      # build cache" step — see its comment for why the key includes both the
+      # lockfile and src hash, with restore-keys fallbacks.
+      - name: Cache Next.js build cache
+        uses: actions/cache@v4
+        with:
+          path: web-app/.next/cache
+          key: nextjs-throughput-${{ runner.os }}-${{ hashFiles('web-app/pnpm-lock.yaml') }}-${{ hashFiles('web-app/src/**') }}
+          restore-keys: |
+            nextjs-throughput-${{ runner.os }}-${{ hashFiles('web-app/pnpm-lock.yaml') }}-
+            nextjs-throughput-${{ runner.os }}-
+
       - name: Install Playwright browsers
-        run: cd web-app && npx playwright install --with-deps chromium
+        # apt-get update (invoked internally by --with-deps) has stalled for
+        # ~29 minutes against Ubuntu archive mirrors before now — a transient
+        # CI network flake unrelated to this repo. Bound each attempt so a
+        # stall fails fast and retries against a fresh mirror connection
+        # instead of eating the whole job timeout.
+        run: |
+          cd web-app
+          for attempt in 1 2 3; do
+            if timeout 8m npx playwright install --with-deps chromium; then
+              exit 0
+            fi
+            echo "Playwright install attempt $attempt failed or timed out; retrying..."
+            sleep 10
+          done
+          echo "Playwright install failed after 3 attempts" >&2
+          exit 1
 
       - name: Build Next.js app
         run: cd web-app && pnpm run build
@@ -309,43 +376,67 @@ jobs:
 
       - name: Compare against baseline (PR only)
         if: github.event_name == 'pull_request'
+        id: compare
         run: |
           if [ -f benchmarks/frontend/throughput-baseline.json ]; then
             node -e "
+              const gate = require('./tools/ci-gates/benchmark-regression.js');
               const baseline = JSON.parse(require('fs').readFileSync('benchmarks/frontend/throughput-baseline.json', 'utf8'));
               const current  = JSON.parse(require('fs').readFileSync('web-app/benchmark-results.json', 'utf8'));
+              const pctNums = [];
               const rows = current.map(c => {
                 const b = baseline.find(e => e.name === c.name);
                 if (!b) return c.name + ': no baseline';
-                const pct = ((c.value - b.value) / b.value * 100).toFixed(1);
-                const sign = pct >= 0 ? '+' : '';
+                const pctNum = (c.value - b.value) / b.value * 100;
+                pctNums.push(pctNum);
+                const pct = pctNum.toFixed(1);
+                const sign = pctNum >= 0 ? '+' : '';
                 const arrow = c.value >= b.value ? '▲' : '▼';
                 return c.name + ': ' + (c.value/1024).toFixed(0) + ' KB/s ' + arrow + ' ' + sign + pct + '% (baseline: ' + (b.value/1024).toFixed(0) + ' KB/s)';
               });
               require('fs').writeFileSync('throughput-comparison.txt', rows.join('\n'));
+              require('fs').appendFileSync(process.env.GITHUB_OUTPUT, 'has_regression=' + gate.hasThroughputRegression(pctNums) + '\n');
               console.log(rows.join('\n'));
             "
+            echo "## Frontend Terminal Throughput" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            cat throughput-comparison.txt >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
           else
             echo "No baseline yet — will be established on next push to main." > throughput-comparison.txt
+            echo "has_regression=false" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Post PR comment
         if: github.event_name == 'pull_request'
+        continue-on-error: true # advisory comment; never fail the job if posting is denied
         uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        env:
+          HAS_REGRESSION: ${{ steps.compare.outputs.has_regression }}
         with:
           script: |
-            const fs = require('fs');
-            const output = fs.existsSync('throughput-comparison.txt')
-              ? fs.readFileSync('throughput-comparison.txt', 'utf8').trim()
-              : 'No comparison available.';
             const marker = '<!-- benchmark-frontend-throughput -->';
-            const body = `${marker}\n## Frontend Terminal Throughput\n\`\`\`\n${output}\n\`\`\``;
             const { data: comments } = await github.rest.issues.listComments({
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: context.issue.number,
             });
             const existing = comments.find(c => c.body.includes(marker));
+            if (process.env.HAS_REGRESSION !== 'true') {
+              if (existing) {
+                await github.rest.issues.deleteComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  comment_id: existing.id,
+                });
+              }
+              return;
+            }
+            const fs = require('fs');
+            const output = fs.existsSync('throughput-comparison.txt')
+              ? fs.readFileSync('throughput-comparison.txt', 'utf8').trim()
+              : 'No comparison available.';
+            const body = `${marker}\n## ⚠️ Frontend Terminal Throughput — Regression Detected\n\`\`\`\n${output}\n\`\`\`\n\n> This comment clears automatically once the regression is resolved.`;
             if (existing) {
               await github.rest.issues.updateComment({
                 owner: context.repo.owner,
@@ -414,6 +505,18 @@ jobs:
       - name: Generate protobuf code
         run: buf generate proto
 
+      # Same pattern as .github/actions/prepare/action.yml's "Cache Next.js
+      # build cache" step — see its comment for why the key includes both the
+      # lockfile and src hash, with restore-keys fallbacks.
+      - name: Cache Next.js build cache
+        uses: actions/cache@v4
+        with:
+          path: web-app/.next/cache
+          key: nextjs-lighthouse-${{ runner.os }}-${{ hashFiles('web-app/pnpm-lock.yaml') }}-${{ hashFiles('web-app/src/**') }}
+          restore-keys: |
+            nextjs-lighthouse-${{ runner.os }}-${{ hashFiles('web-app/pnpm-lock.yaml') }}-
+            nextjs-lighthouse-${{ runner.os }}-
+
       - name: Build Next.js app
         run: cd web-app && pnpm run build
 
@@ -438,7 +541,7 @@ jobs:
   e2e-latency:
     name: E2E RPC Latency
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 40
     needs: frontend-bundle
     permissions:
       contents: read
@@ -480,6 +583,18 @@ jobs:
       - name: Generate ent ORM code
         run: go run -mod=mod entgo.io/ent/cmd/ent generate --feature sql/upsert ./session/ent/schema
 
+      # Same pattern as .github/actions/prepare/action.yml's "Cache Next.js
+      # build cache" step — see its comment for why the key includes both the
+      # lockfile and src hash, with restore-keys fallbacks.
+      - name: Cache Next.js build cache
+        uses: actions/cache@v4
+        with:
+          path: web-app/.next/cache
+          key: nextjs-e2e-latency-${{ runner.os }}-${{ hashFiles('web-app/pnpm-lock.yaml') }}-${{ hashFiles('web-app/src/**') }}
+          restore-keys: |
+            nextjs-e2e-latency-${{ runner.os }}-${{ hashFiles('web-app/pnpm-lock.yaml') }}-
+            nextjs-e2e-latency-${{ runner.os }}-
+
       - name: Build Next.js app
         run: pnpm run build
         working-directory: web-app
@@ -488,7 +603,22 @@ jobs:
         run: cp -r web-app/out server/web/dist
 
       - name: Install Playwright browsers
-        run: cd web-app && npx playwright install --with-deps chromium
+        # apt-get update (invoked internally by --with-deps) has stalled for
+        # ~29 minutes against Ubuntu archive mirrors before now — a transient
+        # CI network flake unrelated to this repo. Bound each attempt so a
+        # stall fails fast and retries against a fresh mirror connection
+        # instead of eating the whole job timeout.
+        run: |
+          cd web-app
+          for attempt in 1 2 3; do
+            if timeout 8m npx playwright install --with-deps chromium; then
+              exit 0
+            fi
+            echo "Playwright install attempt $attempt failed or timed out; retrying..."
+            sleep 10
+          done
+          echo "Playwright install failed after 3 attempts" >&2
+          exit 1
 
       - name: Build Go binary
         run: go build -o stapler-squad .
@@ -523,43 +653,67 @@ jobs:
 
       - name: Compare against baseline (PR only)
         if: github.event_name == 'pull_request'
+        id: compare
         run: |
           if [ -f benchmarks/e2e/latency-baseline.json ]; then
             node -e "
+              const gate = require('./tools/ci-gates/benchmark-regression.js');
               const baseline = JSON.parse(require('fs').readFileSync('benchmarks/e2e/latency-baseline.json', 'utf8'));
               const current  = JSON.parse(require('fs').readFileSync('web-app/e2e-latency-results.json', 'utf8'));
+              const pctNums = [];
               const rows = current.map(c => {
                 const b = baseline.find(e => e.name === c.name);
                 if (!b) return c.name + ': no baseline';
-                const pct = ((c.value - b.value) / b.value * 100).toFixed(1);
-                const sign = pct >= 0 ? '+' : '';
+                const pctNum = (c.value - b.value) / b.value * 100;
+                pctNums.push(pctNum);
+                const pct = pctNum.toFixed(1);
+                const sign = pctNum >= 0 ? '+' : '';
                 const arrow = c.value <= b.value ? '▼ faster' : '▲ slower';
                 return c.name + ': ' + c.value.toFixed(0) + 'ms (' + arrow + ' ' + sign + pct + '%; baseline: ' + b.value.toFixed(0) + 'ms)';
               });
               require('fs').writeFileSync('latency-comparison.txt', rows.join('\n'));
+              require('fs').appendFileSync(process.env.GITHUB_OUTPUT, 'has_regression=' + gate.hasLatencyRegression(pctNums) + '\n');
               console.log(rows.join('\n'));
             "
+            echo "## E2E RPC Latency" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            cat latency-comparison.txt >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
           else
             echo "No baseline yet — will be established on next push to main." > latency-comparison.txt
+            echo "has_regression=false" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Post PR comment
         if: github.event_name == 'pull_request'
+        continue-on-error: true # advisory comment; never fail the job if posting is denied
         uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        env:
+          HAS_REGRESSION: ${{ steps.compare.outputs.has_regression }}
         with:
           script: |
-            const fs = require('fs');
-            const output = fs.existsSync('latency-comparison.txt')
-              ? fs.readFileSync('latency-comparison.txt', 'utf8').trim()
-              : 'No comparison available.';
             const marker = '<!-- benchmark-e2e-latency -->';
-            const body = `${marker}\n## E2E RPC Latency\n\`\`\`\n${output}\n\`\`\``;
             const { data: comments } = await github.rest.issues.listComments({
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: context.issue.number,
             });
             const existing = comments.find(c => c.body.includes(marker));
+            if (process.env.HAS_REGRESSION !== 'true') {
+              if (existing) {
+                await github.rest.issues.deleteComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  comment_id: existing.id,
+                });
+              }
+              return;
+            }
+            const fs = require('fs');
+            const output = fs.existsSync('latency-comparison.txt')
+              ? fs.readFileSync('latency-comparison.txt', 'utf8').trim()
+              : 'No comparison available.';
+            const body = `${marker}\n## ⚠️ E2E RPC Latency — Regression Detected\n\`\`\`\n${output}\n\`\`\`\n\n> This comment clears automatically once the regression is resolved.`;
             if (existing) {
               await github.rest.issues.updateComment({
                 owner: context.repo.owner,

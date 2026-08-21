@@ -20,22 +20,31 @@ function makeItem(overrides: Partial<BacklogItem> = {}): BacklogItem {
     notes: "",
     statusEvents: [],
     progressNotes: [],
+    activityNotes: [],
     totalEstimatedCostUsd: 0,
     ...overrides,
   };
 }
 
 describe("DescriptionSection", () => {
-  it("DescriptionSection_should_DefaultCollapsed_When_AnyItemRenders", () => {
-    render(<DescriptionSection item={makeItem()} />);
+  it("DescriptionSection_should_RenderCollapsed_When_defaultExpandedFalse", () => {
+    render(<DescriptionSection item={makeItem()} defaultExpanded={false} />);
 
     const header = screen.getByTestId("collapsible-header-description");
     expect(header).toHaveAttribute("aria-expanded", "false");
     expect(screen.queryByTestId("backlog-description-rendered")).not.toBeInTheDocument();
   });
 
+  it("DescriptionSection_should_RenderExpanded_When_defaultExpandedTrue", () => {
+    render(<DescriptionSection item={makeItem({ description: "**bold**" })} defaultExpanded={true} />);
+
+    const header = screen.getByTestId("collapsible-header-description");
+    expect(header).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByTestId("backlog-description-rendered")).toBeInTheDocument();
+  });
+
   it("reveals the markdown description once expanded", () => {
-    render(<DescriptionSection item={makeItem({ description: "**bold**" })} />);
+    render(<DescriptionSection item={makeItem({ description: "**bold**" })} defaultExpanded={false} />);
 
     fireEvent.click(screen.getByTestId("collapsible-header-description"));
 
@@ -43,7 +52,7 @@ describe("DescriptionSection", () => {
   });
 
   it("shows an empty-state message when there is no description", () => {
-    render(<DescriptionSection item={makeItem({ description: "" })} />);
+    render(<DescriptionSection item={makeItem({ description: "" })} defaultExpanded={false} />);
 
     fireEvent.click(screen.getByTestId("collapsible-header-description"));
 

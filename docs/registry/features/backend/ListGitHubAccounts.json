@@ -5,7 +5,9 @@
   "method": "ListGitHubAccounts",
   "protoFile": "proto/session/v1/github_user.proto",
   "markerFound": false,
-  "tested": false,
-  "testIds": [],
-  "lastModified": "2026-07-01T15:24:42.915744805-07:00"
+  "tested": true,
+  "testIds": [
+    "TestListGitHubAccounts_AccountOnUnconfiguredEnterpriseHost_IncludesHostInEnterpriseHosts"
+  ],
+  "lastModified": "2026-08-05T00:00:00-07:00"
 }

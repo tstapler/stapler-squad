@@ -90,10 +90,12 @@ type InstanceSnapshot struct {
 	Height           int
 	Width            int
 	AutoYes          bool
+	AutoApprove      bool
 	IsExpanded       bool
 	Prompt           string
 	InitialPrompt    string
 	Category         string
+	Note             string
 	SessionType      SessionType
 	TmuxPrefix       string
 	TmuxServerSocket string
@@ -121,6 +123,7 @@ type InstanceSnapshot struct {
 	PermissionMode      string
 	RateLimitAutoResume *bool // copy of pointee — see buildSnapshot
 	PauseReason         string
+	ExitReason          string
 	WorkflowID          string
 	EnvVars             map[string]string // defensive deep copy — see buildSnapshot
 	CLIFlags            string
@@ -156,10 +159,12 @@ func buildSnapshot(i *Instance) *InstanceSnapshot {
 		Height:           i.Height,
 		Width:            i.Width,
 		AutoYes:          i.AutoYes,
+		AutoApprove:      i.AutoApprove,
 		IsExpanded:       i.IsExpanded,
 		Prompt:           i.Prompt,
 		InitialPrompt:    i.InitialPrompt,
 		Category:         i.Category,
+		Note:             i.Note,
 		SessionType:      i.SessionType,
 		TmuxPrefix:       i.TmuxPrefix,
 		TmuxServerSocket: i.TmuxServerSocket,
@@ -201,6 +206,7 @@ func buildSnapshot(i *Instance) *InstanceSnapshot {
 		AllowedTools:       i.AllowedTools,
 		PermissionMode:     i.PermissionMode,
 		PauseReason:        i.PauseReason,
+		ExitReason:         i.ExitReason,
 		WorkflowID:         i.WorkflowID,
 		CLIFlags:           i.CLIFlags,
 		ReviewState:        i.ReviewState,

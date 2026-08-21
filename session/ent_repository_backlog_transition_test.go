@@ -5,6 +5,7 @@ import (
 	"errors"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -25,6 +26,7 @@ import (
 // UpdateOneID().Save() — a read-then-write gap wide enough for exactly this
 // staleness to slip through unnoticed.
 func TestTransitionBacklogItemStatus_should_rejectStaleReopen_When_ItemAlreadyShippedSinceReview(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := createTestEntRepository(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -76,6 +78,7 @@ func TestTransitionBacklogItemStatus_should_rejectStaleReopen_When_ItemAlreadySh
 // that neither writer's precondition actually authorized (the "bounce
 // through terminal and back" shape of the live incident).
 func TestTransitionBacklogItemStatus_should_letExactlyOneWinnerThrough_When_TwoWritersRaceConcurrently(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := createTestEntRepository(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -125,4 +128,44 @@ func TestTransitionBacklogItemStatus_should_letExactlyOneWinnerThrough_When_TwoW
 	require.NoError(t, err)
 	assert.Contains(t, []string{string(BacklogStatusDone), string(BacklogStatusInProgress)}, final.Status,
 		"final status must be exactly one writer's intended toStatus, not a third bounced state")
+}
+
+// TestBacklogItem_UpdatedAt_should_BeStoredInUTC_When_CreatedOrTransitioned is
+// the regression test for a real bug found live via this repo's manual-
+// override e2e test (backlog-manual-override.spec.ts): mattn/go-sqlite3
+// binds a time.Time CAS-comparison value by formatting it as TEXT in the
+// value's own Location (sqlite3.go's statementBind: `case time.Time: b :=
+// []byte(v.Format(SQLiteTimestampFormats[0]))`), so a stored Local-zoned
+// updated_at (schema previously used the bare time.Now default, which
+// returns Local) can never byte-match a `WHERE updated_at = ?` comparison
+// built from a protobuf Timestamp — timestamppb.Timestamp.AsTime() always
+// returns UTC — even for the exact same instant (time.Now().Equal(time.Now().UTC())
+// is true, but their RFC3339Nano-formatted strings differ, e.g.
+// "...-07:00" vs "...Z"). Every RPC caller supplying expected_updated_at
+// (TransitionBacklogItemStatusRequest, used by the manual-override UI) would
+// see this CAS check fail unconditionally, regardless of correctness. Fixed
+// by normalizing BacklogItem.updated_at's schema Default/UpdateDefault to
+// time.Now().UTC().
+func TestBacklogItem_UpdatedAt_should_BeStoredInUTC_When_CreatedOrTransitioned(t *testing.T) {
+	t.Parallel()
+	repo, cleanup := createTestEntRepository(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	item, err := repo.CreateBacklogItem(ctx, BacklogItemData{
+		Title:  "utc timestamp regression item",
+		Status: string(BacklogStatusReview),
+	})
+	require.NoError(t, err)
+	assert.Equal(t, time.UTC, item.UpdatedAt.Location(), "a freshly created item's updated_at must be stored in UTC")
+
+	// The exact scenario that broke: a caller builds a CAS precondition from
+	// a protobuf-Timestamp round trip (always UTC, e.g. timestamppb.New(t).AsTime()).
+	utcPrecondition := item.UpdatedAt.UTC()
+	updated, err := repo.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusInProgress, &BacklogItemPrecondition{
+		ExpectedStatus:    string(BacklogStatusReview),
+		ExpectedUpdatedAt: &utcPrecondition,
+	}, TriggeredByUser)
+	require.NoError(t, err, "a UTC-derived expected_updated_at must match the stored value's CAS check")
+	assert.Equal(t, time.UTC, updated.UpdatedAt.Location(), "updated_at must remain UTC after a transition")
 }

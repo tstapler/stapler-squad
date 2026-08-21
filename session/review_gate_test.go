@@ -1,12 +1,10 @@
 package session
 
 import (
-	"bytes"
 	"context"
 	"database/sql"
 	"errors"
 	"fmt"
-	stdlog "log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -15,19 +13,19 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	_ "github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
-	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/git"
+	_ "modernc.org/sqlite" // Pure Go SQLite driver
 )
 
 // TestReviewGateRunner_SkipReviewGate verifies that Run returns immediately
 // without consulting the session creator or calling onPass when
 // item.SkipReviewGate is true.
 func TestReviewGateRunner_SkipReviewGate(t *testing.T) {
+	t.Parallel()
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 
@@ -61,6 +59,7 @@ func TestReviewGateRunner_SkipReviewGate(t *testing.T) {
 // builds the review prompt, calls SpawnReviewSession, and persists an ItemSession
 // linking the review role to the real Instance UUID returned by the spawner.
 func TestReviewGateRunner_SpawnsReviewSession_Success(t *testing.T) {
+	t.Parallel()
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -125,6 +124,7 @@ func TestReviewGateRunner_SpawnsReviewSession_Success(t *testing.T) {
 // SpawnReviewSession is that mode's rendered ReviewPromptTemplate — not the
 // hardcoded BuildReviewPrompt content.
 func TestReviewGateRunner_RoutesPromptThroughPipelineEngine_When_ItemHasCustomPipelineMode(t *testing.T) {
+	t.Parallel()
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -184,6 +184,7 @@ func TestReviewGateRunner_RoutesPromptThroughPipelineEngine_When_ItemHasCustomPi
 // TestReviewGateRunner_SpawnerError_LogsAndReturns verifies that a SpawnReviewSession
 // error is logged and Run returns cleanly without persisting a review ItemSession.
 func TestReviewGateRunner_SpawnerError_LogsAndReturns(t *testing.T) {
+	t.Parallel()
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -230,6 +231,7 @@ func TestReviewGateRunner_SpawnerError_LogsAndReturns(t *testing.T) {
 // TestReviewGateRunner_NilSessionCreator_LogsAndReturns verifies that Run logs and
 // returns cleanly (does not panic) when no review mechanism is configured at all.
 func TestReviewGateRunner_NilSessionCreator_LogsAndReturns(t *testing.T) {
+	t.Parallel()
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -278,6 +280,7 @@ func TestReviewGateRunner_NilSessionCreator_LogsAndReturns(t *testing.T) {
 // in the diff, so the reviewer's only window into that evidence is this
 // threaded-through text.
 func TestReviewGateRunner_ThreadsVerificationNotesIntoPrompt(t *testing.T) {
+	t.Parallel()
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 
@@ -333,6 +336,7 @@ func TestReviewGateRunner_ThreadsVerificationNotesIntoPrompt(t *testing.T) {
 // item.AcceptanceCriteria with one, and asserts the note text reaches the prompt
 // passed to SpawnReviewSession.
 func TestReviewGateRunner_MergesLiveCriterionNoteIntoStalePromptWhenSnapshotPredatesIt(t *testing.T) {
+	t.Parallel()
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 
@@ -408,6 +412,15 @@ func runGitOrFail(t *testing.T, dir string, args ...string) {
 	require.NoErrorf(t, err, "git %v failed: %s", args, out)
 }
 
+func runGitOutputOrFail(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	cmd := safeexec.CommandContext(context.Background(), "git", args...)
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	require.NoErrorf(t, err, "git %v failed: %s", args, out)
+	return string(out)
+}
+
 // forceEmptyBranchNameViaRawSQL forces the branch_name column of the worktrees row
 // for sessionName to ” via a raw SQL UPDATE against storage's own on-disk SQLite
 // file, bypassing the ent Worktree schema's Go-level NotEmpty() validator (which
@@ -422,7 +435,7 @@ func forceEmptyBranchNameViaRawSQL(t *testing.T, storage *Storage, sessionName s
 	er, ok := storage.repo.(*EntRepository)
 	require.True(t, ok, "forceEmptyBranchNameViaRawSQL requires an EntRepository-backed Storage")
 
-	db, err := sql.Open("sqlite3", er.dbPath)
+	db, err := sql.Open("sqlite", er.dbPath)
 	require.NoError(t, err)
 	defer db.Close()
 
@@ -463,6 +476,11 @@ func newNonEmptyDiffGitRepo(t *testing.T) string {
 // and still feeds the auto-reopen/cap machinery so persistent failures eventually reach
 // notifyReworkCapHit instead of looping silently.
 func TestReviewGateRunner_DiffComputationFailure_BlocksReviewInsteadOfFalseUnverifiable(t *testing.T) {
+	t.Parallel()
+	// RecoverBaseCommitSHA fails here and hits review_gate.go's WarningLog.Printf
+	// directly; redirect it so this write serializes against every other test's
+	// concurrent swapWarningLog redirection instead of landing in one of their buffers.
+	_ = swapWarningLog(t)
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -564,6 +582,7 @@ func TestReviewGateRunner_DiffComputationFailure_BlocksReviewInsteadOfFalseUnver
 // for the dedicated regression test of that skip condition) and the failure must fall
 // straight through to the same block-and-notify path as the worktree-present case.
 func TestReviewGateRunner_NoWorktreeRecorded_DiffComputationFailure_BlocksReview(t *testing.T) {
+	t.Parallel()
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -632,6 +651,96 @@ func TestReviewGateRunner_NoWorktreeRecorded_DiffComputationFailure_BlocksReview
 	}
 }
 
+// TestReviewGateRunner_EmptyCommittedDiff_BlocksReviewInsteadOfFalsePass is the
+// regression test for the "no real work happened" class of false-verification bug:
+// unlike the diff-computation-failure tests above, this reproduces a session whose
+// diff computes successfully — no git error at all — but is empty because
+// BaseCommitSha and the repo's current HEAD are the same commit (e.g. a work
+// session that ended without ever committing, then got swept into review by
+// ReconcileStuckItems purely because its sessions had all ended). Before this fix,
+// Run had no check for this case at all: it would proceed to spawn a real review
+// session with nothing to review, risking a false PASS/UNVERIFIABLE verdict that
+// marks the item done despite zero shipped work — the same failure shape as
+// BUG-047/BUG-065 in the sibling reconciliation paths (backlog_lifecycle.go,
+// backlog_lifecycle_pr.go). The fix blocks with a distinct FAIL verdict and still
+// feeds the auto-reopen machinery, exactly like the diff-error blocks it sits next
+// to.
+func TestReviewGateRunner_EmptyCommittedDiff_BlocksReviewInsteadOfFalsePass(t *testing.T) {
+	t.Parallel()
+	// Empty committed diff hits review_gate.go's WarningLog.Printf directly; redirect
+	// it so this write serializes against every other test's concurrent
+	// swapWarningLog redirection instead of landing in one of their buffers.
+	_ = swapWarningLog(t)
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	repoDir := t.TempDir()
+	runGitOrFail(t, repoDir, "init", "-b", "main")
+	runGitOrFail(t, repoDir, "config", "user.email", "test@example.com")
+	runGitOrFail(t, repoDir, "config", "user.name", "Test")
+	require.NoError(t, os.WriteFile(repoDir+"/file.txt", []byte("hello\n"), 0o644))
+	runGitOrFail(t, repoDir, "add", "file.txt")
+	runGitOrFail(t, repoDir, "commit", "-m", "initial commit")
+	headSHA := strings.TrimSpace(runGitOutputOrFail(t, repoDir, "rev-parse", "HEAD"))
+
+	itemData := BacklogItemData{
+		Title:              "Empty committed diff test",
+		AcceptanceCriteria: `[]`,
+		Priority:           1,
+		Status:             string(BacklogStatusInProgress),
+		RepoPath:           repoDir,
+	}
+	createdItemData, err := storage.CreateBacklogItem(ctx, itemData)
+	require.NoError(t, err)
+
+	workSessionUUID := uuid.New().String()
+	workIS, err := storage.CreateItemSession(ctx, ItemSessionData{
+		ItemID:      createdItemData.ID,
+		SessionUUID: workSessionUUID,
+		SessionRole: SessionRoleWork,
+	})
+	require.NoError(t, err)
+	// No SaveInstances call, so GetWorktreeDataBySessionUUID finds nothing and Run
+	// takes the no-worktree branch, diffing BaseCommitSha against repoPath's HEAD —
+	// which are the same commit, so the diff is genuinely empty with no error.
+	workIS.BaseCommitSha = headSHA
+
+	item := &BacklogItemData{ID: createdItemData.ID, RepoPath: repoDir}
+
+	spawner := &mockReviewGateSpawner{}
+	getSessionCreator := func() ReviewGateSpawner { return spawner }
+
+	reopener := newFakeAutoReopenSpawner()
+	getAutoReopener := func() AutoReopenSpawner { return reopener }
+
+	notifier := &fakeNotifier{}
+	getNotifier := func() Notifier { return notifier }
+
+	runner := NewReviewGateRunner(storage, getAutoReopener, getNotifier, getSessionCreator, nil)
+
+	var onPassCalled atomic.Bool
+	runner.Run(ctx, item, workIS, func(ctx context.Context, item *BacklogItemData, is ItemSessionSummary) {
+		onPassCalled.Store(true)
+	})
+
+	assert.Equal(t, 0, spawner.getCallCount(), "session creator must not be consulted when the committed diff is empty")
+	assert.False(t, onPassCalled.Load(), "onPass must not fire for a blocked review")
+
+	outcome, err := storage.GetMostRecentReviewVerdictForItem(ctx, item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, ReviewVerdictFail, outcome, "an empty committed diff must block with FAIL, not proceed to a real review that could false-PASS")
+
+	assert.Contains(t, notifier.titles(), "Review blocked — no changes to review")
+
+	select {
+	case gotItemID := <-reopener.called:
+		assert.Equal(t, item.ID, gotItemID, "auto-reopen must still be invoked so the item returns to in_progress for real rework")
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for AutoReopenAfterFailedReview to be called")
+	}
+}
+
 // TestReviewGateRunner_DiffComputationFailure_AutoRepairsFromDivergentBranch is the
 // positive counterpart to the blocking test above: it reproduces the exact live-data
 // shape of backlog item ae1e2070-db02-4ad7-8580-633ef9904f31 — a real feature branch
@@ -643,6 +752,7 @@ func TestReviewGateRunner_NoWorktreeRecorded_DiffComputationFailure_BlocksReview
 // review now always spawns a real session rather than computing a verdict inline,
 // "proceeds" means SpawnReviewSession is called with the recovered diff in its prompt.
 func TestReviewGateRunner_DiffComputationFailure_AutoRepairsFromDivergentBranch(t *testing.T) {
+	t.Parallel()
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -731,6 +841,11 @@ func TestReviewGateRunner_DiffComputationFailure_AutoRepairsFromDivergentBranch(
 // RecoverBaseCommitSHA's merge-base lookup trivially succeeds and returns HEAD itself
 // — and diffing HEAD against HEAD is empty by construction.
 func TestReviewGateRunner_DiffComputationFailure_RecoveredButEmptyDiff_StillBlocks(t *testing.T) {
+	t.Parallel()
+	// The recovered-but-empty diff path hits review_gate.go's WarningLog.Printf
+	// directly; redirect it so this write serializes against every other test's
+	// concurrent swapWarningLog redirection instead of landing in one of their buffers.
+	_ = swapWarningLog(t)
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -820,6 +935,7 @@ func TestReviewGateRunner_DiffComputationFailure_RecoveredButEmptyDiff_StillBloc
 // asserts never appears). The review must still fall straight through to the
 // block-and-notify path.
 func TestReviewGateRunner_NoBranchName_DiffComputationFailure_SkipsRepairAndBlocksImmediately(t *testing.T) {
+	t.Parallel()
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -883,12 +999,8 @@ func TestReviewGateRunner_NoBranchName_DiffComputationFailure_SkipsRepairAndBloc
 
 	runner := NewReviewGateRunner(storage, getAutoReopener, getNotifier, getSessionCreator, nil)
 
-	var buf bytes.Buffer
-	redirectInfoLog(t, &buf)
-	var warnBuf bytes.Buffer
-	origWarning := log.WarningLog
-	log.WarningLog = stdlog.New(&warnBuf, "WARNING: ", 0)
-	t.Cleanup(func() { log.WarningLog = origWarning })
+	redirectInfoLog(t)
+	warnBuf := swapWarningLog(t)
 
 	var onPassCalled atomic.Bool
 	runner.Run(ctx, item, workIS, func(ctx context.Context, item *BacklogItemData, is ItemSessionSummary) {
@@ -943,6 +1055,11 @@ func commitOnRepo(t *testing.T, dir string, n int, prefix string) {
 // message naming the conflicted file — never silently letting an inflated/misleading
 // diff reach the reviewer.
 func TestReviewGateRunner_BranchDrift_BlocksReviewWithConflictDetails_When_AutoSyncConflicts(t *testing.T) {
+	t.Parallel()
+	// The unresolvable branch-drift conflict hits review_gate.go's WarningLog.Printf
+	// directly; redirect it so this write serializes against every other test's
+	// concurrent swapWarningLog redirection instead of landing in one of their buffers.
+	_ = swapWarningLog(t)
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -1041,6 +1158,7 @@ func TestReviewGateRunner_BranchDrift_BlocksReviewWithConflictDetails_When_AutoS
 // normally — the branch-sync precondition must never block a review that could have
 // just been fixed transparently.
 func TestReviewGateRunner_BranchDrift_SyncsAutomaticallyAndProceeds_When_NoConflict(t *testing.T) {
+	t.Parallel()
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()

@@ -61,7 +61,8 @@ type mutateCreateRequest struct {
 }
 
 type mutateCreateResponse struct {
-	ItemID string `json:"itemId"`
+	ItemID   string `json:"itemId"`
+	PublicID string `json:"publicId,omitempty"`
 }
 
 // handleCreate creates a backlog item directly at an arbitrary status,
@@ -125,8 +126,13 @@ func (h *BacklogDebugMutateHandler) handleCreate(w http.ResponseWriter, r *http.
 		return
 	}
 
+	resp := mutateCreateResponse{ItemID: item.ID}
+	if publicID, ok := item.PublicID(); ok {
+		resp.PublicID = publicID.String()
+	}
+
 	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(mutateCreateResponse{ItemID: item.ID}); err != nil {
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
 		log.Error("backlog debug mutate: encode response failed", "err", err)
 	}
 }

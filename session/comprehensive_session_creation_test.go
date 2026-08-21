@@ -248,6 +248,7 @@ func (m *mockPtyFactory) Close() {
 // ComprehensiveSessionCreationSuite provides exhaustive testing of session creation
 // without requiring the full TUI application to run
 func TestComprehensiveSessionCreation(t *testing.T) {
+	t.Parallel()
 	if testing.Short() {
 		t.Skip("skipping integration test that starts real tmux sessions")
 	}

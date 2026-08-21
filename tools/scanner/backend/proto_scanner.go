@@ -96,11 +96,12 @@ var methodToID = map[string]string{
 	"GetTerminalSnapshot": "session:get-terminal-snapshot",
 	"ListBranches":        "session:list-branches",
 	// Profile and defaults RPCs
-	"UpsertProfile":        "profile:upsert",
-	"DeleteProfile":        "profile:delete",
-	"GetSessionDefaults":   "defaults:get",
-	"UpdateGlobalDefaults": "defaults:update-global",
-	"ResolveDefaults":      "defaults:resolve",
+	"UpsertProfile":          "profile:upsert",
+	"DeleteProfile":          "profile:delete",
+	"GetSessionDefaults":     "defaults:get",
+	"UpdateGlobalDefaults":   "defaults:update-global",
+	"ResolveDefaults":        "defaults:resolve",
+	"PreviewDestinationPath": "session:preview-destination-path",
 	// Alias RPCs
 	"UpsertAlias": "alias:upsert",
 	"DeleteAlias": "alias:delete",
@@ -133,16 +134,19 @@ var methodToID = map[string]string{
 	"ClearConversationState": "session:clear-conversation-state",
 	// Backlog RPCs (BacklogService in backlog.proto)
 	"CreateBacklogItem":           "backlog:create-item",
+	"CreateBacklogItemFromChat":   "backlog:create-item-from-chat",
 	"GetBacklogItem":              "backlog:get-item",
 	"ListBacklogItems":            "backlog:list-items",
 	"UpdateBacklogItem":           "backlog:update-item",
 	"ArchiveBacklogItem":          "backlog:archive-item",
+	"UnarchiveBacklogItem":        "backlog:unarchive-item",
 	"TransitionBacklogItemStatus": "backlog:transition-status",
 	"SpawnSessionFromItem":        "backlog:spawn-session",
 	"AttachSessionToItem":         "backlog:attach-session",
 	"TriggerTriage":               "backlog:trigger-triage",
 	"CancelTriage":                "backlog:cancel-triage",
 	"ApprovePlan":                 "backlog:approve-plan",
+	"RejectPlan":                  "backlog:reject-plan",
 	"SuggestNextItem":             "backlog:suggest-next",
 	"OverrideVerdict":             "backlog:override-verdict",
 	"TriggerReReview":             "backlog:trigger-re-review",
@@ -153,6 +157,7 @@ var methodToID = map[string]string{
 	"UpdateItemSource":            "backlog:update-source",
 	"DeleteItemSource":            "backlog:delete-source",
 	"GetSyncHistory":              "backlog:get-sync-history",
+	"PreviewBackwardSyncImpact":   "backlog:preview-backward-sync-impact",
 	"GetBacklogItemDiff":          "backlog:get-item-diff",
 	"GetBacklogItemCost":          "backlog:get-item-cost",
 	"GetBacklogItemShipStatus":    "backlog:get-item-ship-status",
@@ -168,6 +173,7 @@ var methodToID = map[string]string{
 	"DeletePipelineMode":          "backlog:delete-pipeline-mode",
 	"GetPipelineMode":             "backlog:get-pipeline-mode",
 	"ListPipelineModes":           "backlog:list-pipeline-modes",
+	"AddBacklogItemDependency":    "backlog:add-item-dependency",
 	// GitHub issue import RPCs (BacklogService) - mapped to the method name
 	// itself, not a kebab-case backlog:* id: origin/main already has
 	// committed registry files under docs/registry/features/backend/{method
@@ -183,11 +189,14 @@ var methodToID = map[string]string{
 	"SearchGitHubRepos": "SearchGitHubRepos",
 	"ListGitHubIssues":  "ListGitHubIssues",
 	"ImportGitHubIssue": "ImportGitHubIssue",
+	// Launcher presets RPCs
+	"GetLauncherPresets": "launcher_presets:get",
 	// Session lifecycle RPCs
 	"ArchiveSession":          "session:archive",
 	"UnarchiveSession":        "session:unarchive",
 	"HibernateSession":        "session:hibernate",
 	"ResumeHibernatedSession": "session:resume-hibernated",
+	"ResumeCrashedSession":    "session:resume-crashed",
 	"WriteToSession":          "session:write",
 	// Shell RPCs
 	"SpawnShell":   "shell:spawn",
@@ -203,15 +212,21 @@ var methodToID = map[string]string{
 	"ListWorkflows":  "workflow:list",
 	"UpdateWorkflow": "workflow:update",
 	"RunWorkflow":    "workflow:run",
+	// Trigger fire audit trail RPC (webhook-triggers Epic 1.2, Task 1.2.1d)
+	"ListTriggerFireEvents": "workflow:list-trigger-fire-events",
+	// Outbound callback config RPCs (webhook-triggers Phase 5, FR7)
+	"GetCallbackConfig":    "callback-config:get",
+	"UpdateCallbackConfig": "callback-config:update",
 	// Approval rules RPCs
 	"BulkUpsertRules":       "approval:bulk-upsert-rules",
 	"ExportRules":           "approval:export-rules",
 	"GenerateSuggestedRule": "approval:generate-suggested-rule",
 	"ValidateRules":         "approval:validate-rules",
 	// Analytics RPCs
-	"GetEscapeAnalyticsSummary": "analytics:get-escape-summary",
-	"GetProgramAnalytics":       "analytics:get-program",
-	"QueryEscapeAnalytics":      "analytics:query-escape",
+	"GetEscapeAnalyticsSummary":       "analytics:get-escape-summary",
+	"GetEscapeAnalyticsGlobalSummary": "analytics:get-escape-global-summary",
+	"GetProgramAnalytics":             "analytics:get-program",
+	"QueryEscapeAnalytics":            "analytics:query-escape",
 	// Feature flags RPCs
 	"GetFeatureFlags":   "feature-flag:get",
 	"UpdateFeatureFlag": "feature-flag:update",
@@ -223,6 +238,8 @@ var methodToID = map[string]string{
 	"WatchUserPRs":              "github-user:watch-prs",
 	"GetGitHubAuthState":        "github-user:get-auth-state",
 	"AddGitHubAccountWithToken": "github-user:add-account-with-token",
+	"ListGitHubCLIHosts":        "github-user:list-cli-hosts",
+	"AddGitHubAccountFromCLI":   "github-user:add-account-from-cli",
 	// Provider limits RPCs
 	"GetProviderLimits": "session:get-provider-limits",
 	// Config file rules RPCs (stub implementations in RulesService)
@@ -232,6 +249,18 @@ var methodToID = map[string]string{
 	"DeleteBacklogItem": "backlog:delete-item",
 	// Backlog real-time streaming RPC (backlog-event-driven-updates Epic 1.1/3.1)
 	"WatchBacklogItems": "backlog:watch",
+	// Import external session RPCs (ImportService in import.proto)
+	"PreviewImportExternalSession": "import:preview",
+	"CommitImportExternalSession":  "import:commit",
+	"ConfirmKillExternalSession":   "import:confirm_kill",
+	"CancelPendingKill":            "import:cancel_pending_kill",
+	// Slack notification config RPCs
+	"GetSlackConfig":    "slack-config:get",
+	"UpdateSlackConfig": "slack-config:update",
+	"TestSlackWebhook":  "slack-config:test-webhook",
+	// PR creation RPCs
+	"DraftPullRequest":  "session:draft-pull-request",
+	"CreatePullRequest": "session:create-pull-request",
 }
 
 // rpcPattern matches lines like:   rpc MethodName(  (indented or not)

@@ -31,6 +31,14 @@ func TestBacklogHandlers_FeatureDisabled(t *testing.T) {
 		require.Equal(t, ErrFeatureDisabled, m["error"].(map[string]interface{})["code"])
 	})
 
+	t.Run("list_backlog_items", func(t *testing.T) {
+		result, err := h.listBacklogItems(ctx, req)
+		require.NoError(t, err)
+		m := parseResult(t, result)
+		require.False(t, m["success"].(bool))
+		require.Equal(t, ErrFeatureDisabled, m["error"].(map[string]interface{})["code"])
+	})
+
 	t.Run("report_progress", func(t *testing.T) {
 		result, err := h.reportProgress(ctx, req)
 		require.NoError(t, err)
@@ -140,7 +148,7 @@ func TestNewCore_GatesBacklogAndGoalToolRegistration(t *testing.T) {
 	}
 
 	t.Run("disabled at boot", func(t *testing.T) {
-		s := NewCore(store, nil, sbMgr, storage, nil, nil, func() bool { return false })
+		s := NewCore(store, nil, sbMgr, storage, nil, nil, func() bool { return false }, nil, nil)
 		tools := s.ListTools()
 		for _, name := range backlogToolNames {
 			_, present := tools[name]
@@ -149,7 +157,7 @@ func TestNewCore_GatesBacklogAndGoalToolRegistration(t *testing.T) {
 	})
 
 	t.Run("enabled at boot", func(t *testing.T) {
-		s := NewCore(store, nil, sbMgr, storage, nil, nil, func() bool { return true })
+		s := NewCore(store, nil, sbMgr, storage, nil, nil, func() bool { return true }, nil, nil)
 		tools := s.ListTools()
 		for _, name := range backlogToolNames {
 			_, present := tools[name]
@@ -158,7 +166,7 @@ func TestNewCore_GatesBacklogAndGoalToolRegistration(t *testing.T) {
 	})
 
 	t.Run("nil check defaults to enabled", func(t *testing.T) {
-		s := NewCore(store, nil, sbMgr, storage, nil, nil, nil)
+		s := NewCore(store, nil, sbMgr, storage, nil, nil, nil, nil, nil)
 		tools := s.ListTools()
 		_, present := tools["get_backlog_item"]
 		require.True(t, present, "nil backlogEnabled must default to always-enabled for callers that don't wire the flag")
