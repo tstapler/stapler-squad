@@ -357,7 +357,8 @@ external, unimplemented project and is not scheduled by this plan.
 - Interim upsert to `GENERATING` (mirrors lines 329-344, using `HandoffSummary.Create()...OnConflictColumns(handoffsummary.FieldSessionID).Update(...)`).
 - Call `session.NewClaudeSessionHistoryFromClaudeDir()` (`session/history.go:69`), then `.GetMessagesFromConversationFile(sourceSessionID, 0)` (0 = all messages, `session/history.go:571-581`) to get the real transcript content. On error, upsert an `ERROR` row (stage `"transcript"`) and return.
 - `window := buildTranscriptWindow(messages)`; `window.Middle = applySummaryBudget(window.Middle, newSummaryBudget(config.LoadConfig().HandoffSummary))`.
-- `summaryText, err := headless.GenerateHandoffSummary(ctx, g.pool, sourceSessionTitle, window)`. On error, upsert `ERROR` (stage `"generation"`) and return.
+- **[Adversarial-review Blocker #1 fix]** Wrap the summarization call in a deadline: `const handoffSummaryTimeout = 60 * time.Second` (identical shape to `llmNarrativeTimeout`, `session/session_summary_service.go:31`); `genCtx, cancel := context.WithTimeout(ctx, handoffSummaryTimeout); defer cancel()`.
+- `summaryText, err := headless.GenerateHandoffSummary(genCtx, g.pool, sourceSessionTitle, window)`. On error (including `context.DeadlineExceeded`), upsert `ERROR` (stage `"generation"`) and return — this also bounds how long the `tryAcquire` guard (and one of the 5 shared `headless.PoolConfig.MaxConcurrentSessions` slots) can be held.
 - Extract `activeTask` from `summaryText` (substring after the `"## Active Task"` heading, best-effort — empty string if the heading is missing, never an error).
 - Final upsert to `READY` with `SummaryText`, `ActiveTask`, `MiddleMessagesSummarized: len(window.Middle)`, `GeneratedAt: time.Now()`.
 - Files: `session/handoff_summary_service.go`
@@ -420,6 +421,7 @@ external, unimplemented project and is not scheduled by this plan.
 
 ##### Task 2.2.1a: Implement `HandoffSummaryService` (~5 min)
 - New file `server/services/handoff_summary_service.go`, structurally mirroring `server/services/session_summary_service.go:1-90`'s `GetSessionSummary`/`RegenerateSessionSummary` shape: `type HandoffSummaryService struct { generator *session.HandoffSummaryGenerator }`, `NewHandoffSummaryService`, `GetHandoffSummary` (query + `toHandoffSummaryProto`), `TriggerHandoffSummary` (check `config.LoadConfig().HandoffSummary.Enabled` first; if disabled, return `connect.CodeFailedPrecondition`; else `go s.generator.GenerateAndPersist(context.Background(), req.Msg.SessionId, sessionTitle)` — **confirmed**: `RegenerateSessionSummary` uses exactly this pattern, `context.Background()` not the request `ctx`, with the comment "Critical: detached goroutine with context.Background(), never the [request context]" at `server/services/session_summary_service.go:153,157` — mirror it verbatim, do not pass `ctx`).
+- **[Adversarial-review Blocker #3 fix]** `GetHandoffSummary` reconciles a stale `GENERATING` row before returning it, mirroring `SessionSummaryGenerator`'s `staleGenerationTimeout` (5 min, `session/session_summary_service.go`'s equivalent constant/check): if `row.Status == "generating"` and `time.Since(row.GenerationStartedAt) > staleGenerationTimeout`, flip it to `ERROR` (stage `"stale"`, message `"generation did not complete (server restart or hung call)"`) via the same upsert path before mapping to proto — this also gives Story 3.2.1/3.3.1's new `ERROR`-state UI (below) something concrete to render for a row orphaned by a mid-generation server restart, not just a live pool failure.
 - Add `+api: GetHandoffSummary` / `+api: TriggerHandoffSummary` markers per `.claude/rules/feature-registry.md`.
 - Files: `server/services/handoff_summary_service.go`
 
@@ -520,13 +522,20 @@ external, unimplemented project and is not scheduled by this plan.
 **Files**: `web-app/src/components/sessions/RestartWithSummaryButton.tsx` (new), `RestartWithSummaryButton.css.ts` (new), `RestartWithSummaryButton.test.tsx` (new)
 
 ##### Task 3.2.1a: Implement the button component (~5 min)
-- New file, three-state render (idle → generating → ready-to-restart), using `useHandoffSummary(sessionId)` and `useSessionService().createSession`.
+- New file, **four**-state render (idle → generating → ready-to-restart → **error**, revised from three-state per adversarial-review Blocker #2), using `useHandoffSummary(sessionId)` and `useSessionService().createSession`.
+- Error state: `data.status === "error"` renders `data.errorMessage` (or a generic fallback if empty) plus a "Try again" action that re-calls `trigger()` — the same entry point as the idle state, not a dead end.
 - vanilla-extract styling per `.claude/rules/css-architecture.md` — no `.module.css`, no hardcoded colors, tokens from `theme.css.ts`.
+- **[Architecture-review Blocker fix]** `createSession(...)`'s call-site object literal must include `restartFromSessionId: sessionId` — see the corresponding `useSessionService.ts` fix in Task 3.2.1c below; without that hook-level change this component's call is silently dropped before it reaches the RPC.
 - Files: `web-app/src/components/sessions/RestartWithSummaryButton.tsx`, `RestartWithSummaryButton.css.ts`
 
 ##### Task 3.2.1b: Tests (~5 min)
-- `RestartWithSummaryButton_should_TriggerGeneration_When_ClickedWithNoSummary`, `..._should_CreateSessionWithSummaryAsPrompt_When_ClickedWhileReady`, `..._should_RenderNothing_When_FeatureDisabled`.
+- `RestartWithSummaryButton_should_TriggerGeneration_When_ClickedWithNoSummary`, `..._should_CreateSessionWithSummaryAsPrompt_When_ClickedWhileReady`, `..._should_RenderNothing_When_FeatureDisabled`, `..._should_RenderErrorStateWithRetry_When_StatusError` (new, closes Blocker #2).
 - Files: `web-app/src/components/sessions/RestartWithSummaryButton.test.tsx`
+
+##### Task 3.2.1c: Thread `restartFromSessionId` through `useSessionService.createSession` (~3 min, closes architecture-review Blocker)
+- `web-app/src/lib/hooks/useSessionService.ts`'s `createSession` (lines 256-281) builds an explicit allowlisted object literal for the wire call rather than spreading its argument — any field not named there is silently dropped before reaching ConnectRPC. Add `restartFromSessionId: request.restartFromSessionId` to that literal (per `.claude/docs/session-creation-registry.md` touchpoint 7).
+- Test: assert on the *mocked RPC client's* call args (not just the hook wrapper's), so a regression that re-drops the field fails — a test that only checks the hook was *called* with the right argument would pass even if the hook discards it internally.
+- Files: `web-app/src/lib/hooks/useSessionService.ts`, `web-app/src/lib/hooks/useSessionService.test.ts`
 
 ---
 
@@ -545,6 +554,8 @@ external, unimplemented project and is not scheduled by this plan.
   - *Given* a `READY` row, *When* the section renders, *Then* the container has `role="list"` and the single row has `role="listitem"`, and the row's icon carries `aria-hidden="true"` with a visible text label alongside it (per `research/ux.md` §3).
 - Embeds `RestartWithSummaryButton` on the row itself when `status === READY`.
   - *Given* a `READY` row, *When* the section renders, *Then* the row includes the "Start new session from this summary" action (Epic 3.2), not a separate detached button elsewhere on the page.
+- Renders the row's `ERROR` state with a retry action, not silently as if no row existed (closes adversarial-review Blocker #2).
+  - *Given* a row with `status === "error"`, *When* the section renders, *Then* it shows the error message text and a "Try again" action (delegating to `RestartWithSummaryButton`'s own error-state retry, Task 3.2.1a) rather than falling through to the no-row empty state.
 
 **Files**: `web-app/src/components/sessions/HandoffSummarySection.tsx` (new), `.css.ts` (new), `.test.tsx` (new), `web-app/src/components/sessions/SessionDetailView.tsx`
 
