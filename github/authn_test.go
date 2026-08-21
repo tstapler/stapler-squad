@@ -24,20 +24,29 @@ func noTokenEnv(t *testing.T) {
 	resetGHTokenCache()
 }
 
-func failOnRequest(t *testing.T) *httptest.Server {
-	t.Helper()
-	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		t.Fatalf("unexpected HTTP request sent with no token configured: %s", r.URL)
+// failOnRequest returns a server that records whether it was hit, plus its
+// URL. The caller must assert on *reached from the test goroutine after the
+// call under test returns — the httptest handler runs on its own goroutine,
+// where testing.T's FailNow (used by Fatalf) is not supported.
+func failOnRequest() (*httptest.Server, *bool) {
+	reached := false
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		reached = true
+		w.WriteHeader(http.StatusOK)
 	}))
+	return ts, &reached
 }
 
 func TestGetPRForBranchConditional_NoToken_FailsFast(t *testing.T) {
 	noTokenEnv(t)
-	ts := failOnRequest(t)
+	ts, reached := failOnRequest()
 	defer ts.Close()
 	defer resetGhBaseURL(ts)()
 
 	_, _, changed, err := GetPRForBranchConditional(context.Background(), "owner", "repo", "branch", "")
+	if *reached {
+		t.Fatal("unexpected HTTP request sent with no token configured")
+	}
 	if !errors.Is(err, ErrNotAuthenticated) {
 		t.Fatalf("err = %v, want ErrNotAuthenticated", err)
 	}
@@ -48,11 +57,14 @@ func TestGetPRForBranchConditional_NoToken_FailsFast(t *testing.T) {
 
 func TestGetPRInfoConditional_NoToken_FailsFast(t *testing.T) {
 	noTokenEnv(t)
-	ts := failOnRequest(t)
+	ts, reached := failOnRequest()
 	defer ts.Close()
 	defer resetGhBaseURL(ts)()
 
 	_, changed, err := GetPRInfoConditional(context.Background(), "owner", "repo", 1, NewETagCache())
+	if *reached {
+		t.Fatal("unexpected HTTP request sent with no token configured")
+	}
 	if !errors.Is(err, ErrNotAuthenticated) {
 		t.Fatalf("err = %v, want ErrNotAuthenticated", err)
 	}

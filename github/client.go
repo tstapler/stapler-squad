@@ -817,6 +817,9 @@ func GeneratePRPrompt(pr *PRInfo, includeDescription bool) string {
 // GetPRForBranchConditional is GetPRForBranch with ETag conditional request support.
 // Pass the previously returned newEtag (empty string for first call).
 // Returns (nil, etag, false, nil) on 304 Not Modified — caller should treat as unchanged.
+// Every error path also returns changed=false, including ErrNotAuthenticated
+// when no token is configured — callers must check err before treating
+// changed=false as "unchanged, no error."
 func GetPRForBranchConditional(ctx context.Context, owner, repo, branch, etag string) (info *PRInfo, newEtag string, changed bool, err error) {
 	if getGHToken(ctx) == "" {
 		return nil, etag, false, ErrNotAuthenticated
