@@ -28,6 +28,13 @@ type subscriber struct {
 	mu        sync.Mutex
 	closed    bool
 	slowSince time.Time // zero value means "not currently observed as slow"
+
+	// resizeMu guards hasVoted/lastVote — this subscriber's last ResizeVote
+	// (Story 1.3.1). Kept separate from mu (the send-path lock) so a
+	// negotiation pass never contends with Broadcast's delivery path.
+	resizeMu sync.Mutex
+	hasVoted bool
+	lastVote TerminalSize
 }
 
 // newSubscriber allocates a subscriber with a bufferSize-deep outbound queue.
@@ -139,4 +146,25 @@ func (s *subscriber) close() {
 		_ = s.transport.Close()
 		close(s.outbound)
 	})
+}
+
+// recordResizeVote stores size as this subscriber's most recent ResizeVote
+// (Task 1.3.1b). Callers are responsible for the SubscriberCapability.CanResize
+// gate — recordResizeVote itself has no opinion on capability.
+func (s *subscriber) recordResizeVote(size TerminalSize) {
+	s.resizeMu.Lock()
+	defer s.resizeMu.Unlock()
+	s.hasVoted = true
+	s.lastVote = size
+}
+
+// currentResizeVote returns this subscriber's last recorded ResizeVote and
+// whether it has ever voted. A subscriber that has never called
+// RequestResize reports voted=false — negotiation treats that as "no
+// constraint from this subscriber" rather than defaulting it to a hardcoded
+// size (GoTTY-bug avoidance, Task 1.3.1e).
+func (s *subscriber) currentResizeVote() (size TerminalSize, voted bool) {
+	s.resizeMu.Lock()
+	defer s.resizeMu.Unlock()
+	return s.lastVote, s.hasVoted
 }

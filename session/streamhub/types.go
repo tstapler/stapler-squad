@@ -1,6 +1,10 @@
 package streamhub
 
-import "github.com/google/uuid"
+import (
+	"fmt"
+
+	"github.com/google/uuid"
+)
 
 // SubscriberID uniquely identifies one attached Subscriber. It is a newtype
 // over string so a raw string can't be passed where a SubscriberID is
@@ -64,3 +68,30 @@ const (
 	// resize/quiescence/capture for all of a session's subscribers.
 	PathHubOwned
 )
+
+// TerminalSize is a validated {cols, rows} pane-dimension pair — the single
+// shared representation used by RequestResize, ResizeVote, and
+// NegotiatedSize instead of three independently-inlined shapes (or a bare
+// (cols, rows int) pair a caller could silently transpose). Construct only
+// via NewTerminalSize; the zero value is never returned by it and is not a
+// valid size (per primitive-obsession-checklist.md and type-driven-design).
+type TerminalSize struct {
+	cols int
+	rows int
+}
+
+// NewTerminalSize validates that cols and rows are both positive and
+// returns the resulting TerminalSize, or a non-nil error and the zero
+// TerminalSize if either dimension is non-positive.
+func NewTerminalSize(cols, rows int) (TerminalSize, error) {
+	if cols <= 0 || rows <= 0 {
+		return TerminalSize{}, fmt.Errorf("streamhub: invalid terminal size %dx%d: cols and rows must both be positive", cols, rows)
+	}
+	return TerminalSize{cols: cols, rows: rows}, nil
+}
+
+// Cols returns the terminal's column count.
+func (t TerminalSize) Cols() int { return t.cols }
+
+// Rows returns the terminal's row count.
+func (t TerminalSize) Rows() int { return t.rows }

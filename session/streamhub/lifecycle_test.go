@@ -2,6 +2,7 @@ package streamhub_test
 
 import (
 	"errors"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -11,14 +12,32 @@ import (
 	"github.com/tstapler/stapler-squad/session/streamhub"
 )
 
-// fakeSessionController is a minimal SessionController-shaped test double
-// scoped to what Story 1.2.2's teardown path needs (StopControlMode). The
-// full SessionController interface belongs to Epic 1.3 (Story 1.3.2a); this
-// double satisfies whatever narrower shape StreamHub currently depends on
-// structurally, with no import of package session.
+// fakeSessionController is a call-counting SessionController test double,
+// with no import of package session. Story 1.2.2's tests only exercise
+// StopControlMode; Story 1.3.2's tests (hub_test.go) exercise the full
+// resize/quiescence/capture surface via the same type.
 type fakeSessionController struct {
 	stopCalls atomic.Int32
 	stopErr   error
+
+	setWindowSizeCalls atomic.Int32
+	setWindowSizeErr   error
+
+	resizePTYCalls atomic.Int32
+
+	captureCalls   atomic.Int32
+	captureContent string
+	captureErr     error
+
+	mu         sync.Mutex
+	lastResize [2]int // cols, rows of the most recent SetWindowSize call
+	resizeLog  [][2]int
+	updates    chan []byte
+	subscribed bool
+}
+
+func newFakeSessionController() *fakeSessionController {
+	return &fakeSessionController{updates: make(chan []byte, 16)}
 }
 
 func (f *fakeSessionController) StopControlMode() error {
@@ -26,10 +45,67 @@ func (f *fakeSessionController) StopControlMode() error {
 	return f.stopErr
 }
 
+func (f *fakeSessionController) SetWindowSize(cols, rows int) error {
+	f.setWindowSizeCalls.Add(1)
+	f.mu.Lock()
+	f.lastResize = [2]int{cols, rows}
+	f.resizeLog = append(f.resizeLog, [2]int{cols, rows})
+	f.mu.Unlock()
+	return f.setWindowSizeErr
+}
+
+func (f *fakeSessionController) ResizePTY(_, _ int) error {
+	f.resizePTYCalls.Add(1)
+	return nil
+}
+
+func (f *fakeSessionController) CapturePaneContent() (string, error) {
+	f.captureCalls.Add(1)
+	return f.captureContent, f.captureErr
+}
+
+// SubscribeControlModeUpdates returns the fake's single shared updates
+// channel. Only one live subscription is modeled — sufficient for
+// StreamHub's own usage (subscribe/unsubscribe scoped to a single
+// in-flight resize at a time).
+func (f *fakeSessionController) SubscribeControlModeUpdates() (string, <-chan []byte) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.subscribed = true
+	return "fake-subscriber", f.updates
+}
+
+// UnsubscribeControlModeUpdates closes the updates channel so a range loop
+// reading from it (or a blocked waitForQuiescence select) can exit without
+// leaking, mirroring the real *session.Instance contract.
+func (f *fakeSessionController) UnsubscribeControlModeUpdates(_ string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.subscribed {
+		f.subscribed = false
+		close(f.updates)
+		f.updates = make(chan []byte, 16)
+	}
+}
+
+// resizeCallCount reports how many times SetWindowSize was called with
+// exactly (cols, rows).
+func (f *fakeSessionController) resizeCallCount(cols, rows int) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	count := 0
+	for _, r := range f.resizeLog {
+		if r == [2]int{cols, rows} {
+			count++
+		}
+	}
+	return count
+}
+
 func TestStreamHub_should_ScheduleTeardownAfterGracePeriod_When_LastSubscriberDetaches(t *testing.T) {
 	defer goleak.VerifyNone(t)
 
-	controller := &fakeSessionController{}
+	controller := newFakeSessionController()
 	hub := streamhub.NewStreamHub("test-session", controller, streamhub.WithTeardownGrace(30*time.Millisecond))
 
 	id := hub.AttachSubscriber(newMemoryTransport(), streamhub.SubscriberCapability{})
@@ -57,7 +133,7 @@ func TestStreamHub_should_ScheduleTeardownAfterGracePeriod_When_LastSubscriberDe
 func TestStreamHub_should_CancelPendingTeardown_When_SubscriberReattachesDuringGracePeriod(t *testing.T) {
 	defer goleak.VerifyNone(t)
 
-	controller := &fakeSessionController{}
+	controller := newFakeSessionController()
 	hub := streamhub.NewStreamHub("test-session", controller, streamhub.WithTeardownGrace(150*time.Millisecond))
 
 	firstID := hub.AttachSubscriber(newMemoryTransport(), streamhub.SubscriberCapability{})
@@ -92,7 +168,7 @@ func TestStreamHub_should_CancelPendingTeardown_When_SubscriberReattachesDuringG
 func TestStreamHub_should_CallStopControlModeExactlyOnce_When_ForceTeardownIsCalled(t *testing.T) {
 	defer goleak.VerifyNone(t)
 
-	controller := &fakeSessionController{}
+	controller := newFakeSessionController()
 	hub := streamhub.NewStreamHub("test-session", controller, streamhub.WithTeardownGrace(time.Hour))
 
 	hub.AttachSubscriber(newMemoryTransport(), streamhub.SubscriberCapability{})
@@ -123,7 +199,8 @@ func TestStreamHub_should_ReturnStopControlModeError_When_ForceTeardownControlle
 	defer goleak.VerifyNone(t)
 
 	wantErr := errors.New("stop failed")
-	controller := &fakeSessionController{stopErr: wantErr}
+	controller := newFakeSessionController()
+	controller.stopErr = wantErr
 	hub := streamhub.NewStreamHub("test-session", controller, streamhub.WithTeardownGrace(time.Hour))
 
 	hub.AttachSubscriber(newMemoryTransport(), streamhub.SubscriberCapability{})

@@ -33,19 +33,6 @@ const (
 	DefaultHubTeardownGrace = 5 * time.Second
 )
 
-// sessionStopper is a minimal placeholder scoped to exactly what Epic 1.2's
-// teardown path needs from the underlying tmux session. The full
-// SessionController interface (SetWindowSize/ResizePTY/CapturePaneContent/
-// StopControlMode/Subscribe-UnsubscribeControlModeUpdates) is defined in
-// Epic 1.3 (Story 1.3.2a, plan.md's SessionController glossary entry);
-// StreamHub is expected to depend on that interface once it lands, in place
-// of this placeholder. Kept unexported and single-method now so Epic 1.2
-// doesn't invent a speculative, over-broad interface ahead of its consumer
-// (interface-pollution-checklist.md smell #1).
-type sessionStopper interface {
-	StopControlMode() error
-}
-
 // HubOption configures a StreamHub at construction time. Tests use these to
 // shrink buffer sizes and grace periods so lifecycle/eviction assertions run
 // in milliseconds instead of seconds; production callers can rely on the
@@ -70,37 +57,65 @@ func WithTeardownGrace(d time.Duration) HubOption {
 	return func(h *StreamHub) { h.teardownGrace = d }
 }
 
+// WithQuiescenceTimeout overrides the hard deadline a resize's
+// quiescence-wait gives up at (default: 500ms, matching the pre-hub
+// per-connection behavior). Tests use this to shrink the deadline so
+// timeout-path assertions run in milliseconds.
+func WithQuiescenceTimeout(d time.Duration) HubOption {
+	return func(h *StreamHub) { h.quiescenceTimeout = d }
+}
+
+// WithQuiescenceQuietPeriod overrides how long a resize's quiescence-wait
+// must see no update before declaring the reflow settled (default: 200ms).
+func WithQuiescenceQuietPeriod(d time.Duration) HubOption {
+	return func(h *StreamHub) { h.quiescenceQuietPeriod = d }
+}
+
 // StreamHub is the single-owner runtime object for one tmux session's output
 // stream: it fans output out to every attached subscriber over a
-// Transport-agnostic interface. Epic 1.2 implements the subscriber registry,
-// fan-out, and lifecycle/teardown; resize/quiescence/capture ownership
-// (Epic 1.3) builds on top of this type.
+// Transport-agnostic interface, and is the sole caller of that session's
+// resize/quiescence/capture-pane surface (Epic 1.3) via SessionController.
+// Epic 1.2 implements the subscriber registry, fan-out, and
+// lifecycle/teardown that this builds on.
 type StreamHub struct {
 	sessionName string
-	controller  sessionStopper
+	controller  SessionController
 
-	subscriberBufferSize int
-	slowSubscriberGrace  time.Duration
-	teardownGrace        time.Duration
+	subscriberBufferSize  int
+	slowSubscriberGrace   time.Duration
+	teardownGrace         time.Duration
+	quiescenceTimeout     time.Duration
+	quiescenceQuietPeriod time.Duration
 
 	mu            sync.Mutex
 	state         HubLifecycleState
 	subscribers   map[SubscriberID]*subscriber
 	teardownTimer *time.Timer
+
+	// resizeMu guards negotiatedSize/resizing — kept separate from mu (the
+	// subscriber-registry lock) so a slow SessionController call (a real
+	// tmux ioctl/capture-pane) never blocks AttachSubscriber/
+	// DetachSubscriber/Broadcast on unrelated subscribers.
+	resizeMu       sync.Mutex
+	negotiatedSize TerminalSize
+	resizing       bool
 }
 
 // NewStreamHub constructs a StreamHub for one tmux session, starting in
-// HubStarting state with zero subscribers. controller is used only by
-// ForceTeardown; it may be nil in tests that never exercise teardown.
-func NewStreamHub(sessionName string, controller sessionStopper, opts ...HubOption) *StreamHub {
+// HubStarting state with zero subscribers. controller is used by
+// ForceTeardown and the resize/quiescence/capture pipeline; it may be nil in
+// tests that never exercise either.
+func NewStreamHub(sessionName string, controller SessionController, opts ...HubOption) *StreamHub {
 	h := &StreamHub{
-		sessionName:          sessionName,
-		controller:           controller,
-		subscriberBufferSize: defaultSubscriberBufferSize,
-		slowSubscriberGrace:  defaultSlowSubscriberGrace,
-		teardownGrace:        DefaultHubTeardownGrace,
-		state:                HubStarting,
-		subscribers:          make(map[SubscriberID]*subscriber),
+		sessionName:           sessionName,
+		controller:            controller,
+		subscriberBufferSize:  defaultSubscriberBufferSize,
+		slowSubscriberGrace:   defaultSlowSubscriberGrace,
+		teardownGrace:         DefaultHubTeardownGrace,
+		quiescenceTimeout:     defaultQuiescenceTimeout,
+		quiescenceQuietPeriod: defaultQuiescenceQuietPeriod,
+		state:                 HubStarting,
+		subscribers:           make(map[SubscriberID]*subscriber),
 	}
 	for _, opt := range opts {
 		opt(h)
@@ -309,4 +324,95 @@ func (h *StreamHub) ForceTeardown() error {
 	}
 	log.Info("streamhub torn down", "session", h.sessionName)
 	return nil
+}
+
+// streamEndedSentinel is broadcast to every subscriber when the hub's
+// SessionController surfaces an error it cannot recover from inline (a
+// SetWindowSize/ResizePTY/CapturePaneContent failure) — the same signal
+// class as HubCrashed/TmuxProcessDied (research/architecture.md's
+// EventStorming table), so a subscriber can tell "the stream ended for a
+// real reason" apart from a mere disconnect.
+var streamEndedSentinel = []byte("\x00STREAM_ENDED\x00")
+
+// OnRawOutput is StreamHub's gate for raw tmux output once a caller (the
+// production wiring that connects a StreamHub to its tmux session, outside
+// Epic 1.3's scope) drives it with SessionController.SubscribeControlModeUpdates
+// frames. It always counts the arrival toward quiescence via the resizing
+// flag's readers, but suppresses broadcasting the frame itself while a
+// resize is in progress (Task 1.3.2d) — mirroring
+// server/services/connectrpc_websocket.go's existing resizeSettling-gated
+// forwarding loop, which also drops rather than replays suppressed frames,
+// relying on the post-quiescence capture-pane snapshot (applyNegotiatedSize)
+// to bring every subscriber back in sync instead.
+func (h *StreamHub) OnRawOutput(data []byte) {
+	h.resizeMu.Lock()
+	resizing := h.resizing
+	h.resizeMu.Unlock()
+	if resizing {
+		return
+	}
+	h.Broadcast(data)
+}
+
+// applyNegotiatedSize is the hub's single call site for
+// SessionController.SetWindowSize (Task 1.3.2c) — the only place any
+// negotiated resize is actually applied to the underlying tmux session,
+// regardless of how many subscriber votes triggered the change. It runs the
+// full resize -> quiescence-wait -> capture -> broadcast pipeline exactly
+// once per call: raw output arriving mid-pipeline is suppressed via the
+// resizing flag (OnRawOutput, Task 1.3.2d), and once quiescence is reached
+// the hub captures the pane exactly once and broadcasts the result to every
+// attached subscriber (Task 1.3.2e), not just the one whose vote triggered
+// the resize.
+func (h *StreamHub) applyNegotiatedSize(size TerminalSize) {
+	if h.controller == nil {
+		return
+	}
+
+	h.resizeMu.Lock()
+	h.resizing = true
+	h.resizeMu.Unlock()
+	defer func() {
+		h.resizeMu.Lock()
+		h.resizing = false
+		h.resizeMu.Unlock()
+	}()
+
+	if err := h.controller.SetWindowSize(size.cols, size.rows); err != nil {
+		log.Error("streamhub: SetWindowSize failed", "session", h.sessionName, "cols", size.cols, "rows", size.rows, "error", err)
+		h.handleControllerError(err)
+		return
+	}
+
+	subID, updates := h.controller.SubscribeControlModeUpdates()
+	waitForQuiescence(updates, h.quiescenceTimeout, h.quiescenceQuietPeriod, h.sessionName)
+	h.controller.UnsubscribeControlModeUpdates(subID)
+
+	content, err := h.controller.CapturePaneContent()
+	if err != nil {
+		log.Error("streamhub: CapturePaneContent failed after resize", "session", h.sessionName, "error", err)
+		h.handleControllerError(err)
+		return
+	}
+
+	h.Broadcast([]byte(content))
+}
+
+// handleControllerError is reached when SetWindowSize or CapturePaneContent
+// errors while the hub is otherwise alive (Task 1.3.2g): every attached
+// subscriber receives the same stream-ended sentinel used for
+// HubCrashed/TmuxProcessDied, and the hub tears itself down so no pending
+// ResizeVote/NegotiatedSize is left referencing a controller that can no
+// longer act on it. Epic 1.3 does not implement session *restart* — that
+// machinery (recreating a SessionController, re-attaching subscribers to a
+// fresh instance) belongs to Epic 1.4's failure-mode suite and HubRegistry
+// work. Until it lands, "attempt a restart, or clean teardown if restart is
+// not possible" (Story 1.3.2's AC) always resolves to the teardown branch,
+// which is the correct behavior today, not a partial implementation left
+// unfinished.
+func (h *StreamHub) handleControllerError(err error) {
+	log.Error("streamhub: SessionController call failed, ending stream",
+		"session", h.sessionName, "error", err)
+	h.Broadcast(streamEndedSentinel)
+	_ = h.ForceTeardown()
 }
