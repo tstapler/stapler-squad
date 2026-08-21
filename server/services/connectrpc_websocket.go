@@ -27,6 +27,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/protocol"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/scrollback"
+	"github.com/tstapler/stapler-squad/session/streamhub"
 	"github.com/tstapler/stapler-squad/session/tmux"
 	"google.golang.org/protobuf/proto"
 )
@@ -264,6 +265,71 @@ func (h *ConnectRPCWebSocketHandler) recordControlModeStreamStart(sessionID, tmu
 			return cur, xsync.CancelOp
 		})
 	}
+}
+
+// hubRegistry is the process-wide registry handing out the one
+// *streamhub.StreamHub per tmux session name (Task 2.2.2b), generalizing
+// activeControlModeStreams's existing xsync.Map shape per plan.md's
+// HubRegistry glossary entry. Story 3.1.1 will widen this into the full
+// sticky per-session StreamPath resolver (StreamOwnershipLock-guarded); today
+// it is a plain get-or-create, safe under concurrent callers because
+// xsync.Map.LoadOrCompute runs valueFn at most once per key.
+type hubRegistry struct {
+	hubs *xsync.Map[string, *streamhub.StreamHub]
+}
+
+// HubRegistry is the single process-wide hub registry for the PathHubOwned
+// branch (env-var-gated, default off — see useStreamHub). Not yet wired to
+// StreamOwnershipLock (Epic 3.1) or hub-registry-consolidation observability
+// (Epic 3.2); those land in later epics of this plan.
+var HubRegistry = &hubRegistry{hubs: xsync.NewMap[string, *streamhub.StreamHub]()}
+
+// GetOrCreate returns the StreamHub for sessionName, creating it — and
+// starting its raw-output pump exactly once — if this is the first caller
+// for that name. controller is only consulted on that first (winning) call;
+// later callers for the same sessionName get the existing hub regardless of
+// what controller they pass.
+func (r *hubRegistry) GetOrCreate(sessionName string, controller streamhub.SessionController) *streamhub.StreamHub {
+	hub, _ := r.hubs.LoadOrCompute(sessionName, func() (*streamhub.StreamHub, bool) {
+		hub := streamhub.NewStreamHub(sessionName, controller)
+		go pumpControlModeOutputIntoHub(hub, controller, sessionName)
+		return hub, false
+	})
+	return hub
+}
+
+// pumpControlModeOutputIntoHub is the single production feed from a
+// session's raw control-mode output into its StreamHub (Task 2.2.2b's
+// minimal wiring for a working PathHubOwned path): it runs exactly once per
+// hub, since GetOrCreate only invokes it from the winning LoadOrCompute call,
+// so N attached subscribers never each run their own duplicate subscription
+// (the exact per-connection duplication this project's hub replaces). It
+// exits when the underlying subscription channel closes (session exited).
+//
+// Known gap (left for Epic 3.2's registry-consolidation/observability
+// scope): nothing here calls UnsubscribeControlModeUpdates on hub teardown,
+// and a hub recreated after teardown starts a fresh pump rather than
+// resuming an old one. Acceptable for this epic's dark-launch-flagged,
+// default-off scope; not acceptable to leave unaddressed once the flag
+// defaults on.
+func pumpControlModeOutputIntoHub(hub *streamhub.StreamHub, controller streamhub.SessionController, sessionName string) {
+	_, updates := controller.SubscribeControlModeUpdates()
+	for data := range updates {
+		hub.OnRawOutput(data)
+	}
+	log.Info("streamhub raw-output pump exiting", "session", sessionName)
+}
+
+// useStreamHub is a placeholder StreamPath resolver (Task 2.2.2a): a simple,
+// per-connection env var read. Epic 3.1 (Story 3.1.1/3.1.2) replaces this
+// with streamhub.AcquireOwnershipLock's sticky, once-per-session resolution —
+// see plan.md's Risk Control section on why a per-connection re-read is
+// unsafe long-term (a flag flip mid-session could let two owners race the
+// same tmux session). Until Epic 3.1 lands, this only matters while the flag
+// defaults to "false" (unset today), so that race window is not reachable in
+// production.
+func useStreamHub() bool {
+	return os.Getenv("STAPLER_SQUAD_USE_STREAM_HUB") == "true"
 }
 
 // waitForQuiescence waits until no updates arrive for quietFor duration, or timeout elapses.
@@ -600,6 +666,13 @@ func (h *ConnectRPCWebSocketHandler) streamTerminal(stream *connectWebSocketStre
 	// Set STAPLER_SQUAD_USE_CONTROL_MODE=false to disable and use capture-pane polling
 	useControlMode := os.Getenv("STAPLER_SQUAD_USE_CONTROL_MODE")
 	if (useControlMode == "" || useControlMode == "true") && instance.Snapshot().IsManaged {
+		// StreamPath branch (Task 2.2.2a): PathLegacyPerConnection is
+		// unchanged below — this only adds a new branch ahead of it, gated
+		// behind STAPLER_SQUAD_USE_STREAM_HUB (default off, unset today).
+		if useStreamHub() {
+			log.Info("[WebSocket] routing managed session to hub-owned streaming", "session", sessionID)
+			return h.streamViaHub(stream, instance)
+		}
 		log.Info("[WebSocket] routing managed session to control mode streaming", "session", sessionID)
 		return h.streamViaControlMode(stream, instance)
 	}
@@ -1175,6 +1248,156 @@ func (h *ConnectRPCWebSocketHandler) streamViaControlMode(stream *connectWebSock
 	case err := <-errChan:
 		return err
 	case <-doneChan:
+		return nil
+	}
+}
+
+// streamViaHub is streamViaControlMode's PathHubOwned counterpart (Epic 2.2,
+// Story 2.2.2): instead of this connection running its own
+// resize/quiescence/capture pipeline, it attaches a WebSocketTransport to the
+// tmux session's single *streamhub.StreamHub (via HubRegistry's get-or-create)
+// and lets the hub own resize negotiation and output fan-out.
+//
+// Scope note: this wires the hub path to real production traffic for the
+// first time, but does not yet reproduce every refinement
+// streamViaControlMode has accumulated (e.g. the ±1 resize nudge, the
+// snapshot dirty-tracking cache, escape-sequence analytics). Those remain
+// exclusive to the legacy path pending later phases of this plan; this
+// function's job is a correct, working PathHubOwned path behind a
+// default-off flag, not full feature parity yet.
+func (h *ConnectRPCWebSocketHandler) streamViaHub(stream *connectWebSocketStream, instance *session.Instance) error {
+	snap := instance.Snapshot()
+	sessionID := snap.Title
+	tmuxPrefix := snap.TmuxPrefix
+	if tmuxPrefix == "" {
+		tmuxPrefix = "staplersquad_"
+	}
+	tmuxSessionName := tmux.NewSessionName(snap.Title, tmuxPrefix).String()
+
+	log.Info("[streamViaHub] starting", "session", sessionID, "tmux", tmuxSessionName)
+
+	instance.MarkViewed()
+
+	var handshakeData sessionv1.TerminalData
+	if err := proto.Unmarshal(stream.requestMsg, &handshakeData); err != nil {
+		return fmt.Errorf("failed to parse handshake: %w", err)
+	}
+	currentPaneReq := handshakeData.GetCurrentPaneRequest()
+	if currentPaneReq == nil {
+		return fmt.Errorf("handshake missing CurrentPaneRequest - client may need update")
+	}
+
+	tmuxSession := instance.GetTmuxSession()
+	if tmuxSession != nil && !tmuxSession.DoesSessionExistNoCache() {
+		log.Info("[streamViaHub] session not in tmux, restoring before control mode", "session", sessionID)
+		workDir := instance.GetWorkingDirectory()
+		if restoreErr := tmuxSession.RestoreWithWorkDir(workDir); restoreErr != nil {
+			if errors.Is(restoreErr, tmux.ErrWorkDirMissing) {
+				instance.SetCreationProgress(fmt.Sprintf("Session failed: %s", restoreErr.Error()))
+				instance.ForceStatus(session.Stopped)
+			}
+			return fmt.Errorf("tmux session missing and restore failed: %w", restoreErr)
+		}
+	}
+
+	// StartControlMode is refcounted (session/tmux/control_mode.go), so each
+	// concurrent connection to the same session incrementing/decrementing it
+	// is safe and mirrors streamViaControlMode's own per-connection call.
+	if err := instance.StartControlMode(); err != nil {
+		return fmt.Errorf("failed to start control mode: %w", err)
+	}
+	defer func() {
+		if err := instance.StopControlMode(); err != nil {
+			log.Warn("[streamViaHub] StopControlMode error", "err", err)
+		}
+	}()
+
+	hub := HubRegistry.GetOrCreate(tmuxSessionName, instance)
+
+	transport := NewWebSocketTransport(stream)
+	subscriberID := hub.AttachSubscriber(transport, streamhub.SubscriberCapability{
+		CanResize: true,
+		CanWrite:  instance.Permissions.CanSendCommand,
+	})
+	transport.BindSubscriber(hub, subscriberID)
+	defer hub.DetachSubscriber(subscriberID)
+
+	log.Info("[streamViaHub] attached subscriber", "subscriber_id", string(subscriberID), "session", sessionID, "tmux", tmuxSessionName)
+
+	if currentPaneReq.TargetCols != nil && currentPaneReq.TargetRows != nil {
+		if size, sizeErr := streamhub.NewTerminalSize(int(*currentPaneReq.TargetCols), int(*currentPaneReq.TargetRows)); sizeErr != nil {
+			log.Warn("[streamViaHub] invalid handshake dimensions", "err", sizeErr)
+		} else {
+			hub.RequestResize(subscriberID, size)
+		}
+	} else {
+		log.Warn("[streamViaHub] handshake missing dimensions, layout may be incorrect")
+	}
+
+	// Send an immediate initial snapshot so the client isn't left blank while
+	// attached — StreamHub's own attach-time CatchUpSnapshot behavior (Story
+	// 1.2.1's AC) is exercised by earlier epics' tests but this handler does
+	// not yet depend on it, since AttachSubscriber above does not (today)
+	// push one. Capturing directly here keeps this connection's initial
+	// paint correct regardless of that wiring's future state.
+	if content, err := instance.CapturePaneContent(); err == nil && content != "" {
+		fullContent := withCursorSync(ansiSnapshotPrefix+prepareSnapshotContent(content), instance)
+		initMsg := &sessionv1.TerminalData{
+			SessionId: sessionID,
+			Data: &sessionv1.TerminalData_Output{
+				Output: &sessionv1.TerminalOutput{Data: []byte(fullContent)},
+			},
+		}
+		if b, merr := proto.Marshal(initMsg); merr != nil {
+			log.Error("[streamViaHub] failed to marshal initial content", "err", merr)
+		} else if wsErr := stream.WriteMessage(websocket.BinaryMessage, protocol.CreateEnvelope(0, b)); wsErr != nil {
+			return fmt.Errorf("failed to send initial content: %w", wsErr)
+		}
+	}
+
+	doneChan := make(chan struct{})
+	errChan := make(chan error, 1)
+	var resizeSettling atomic.Bool
+
+	// runInputReadLoop blocks this goroutine until the WebSocket read errors
+	// or an EndStream flag arrives — there is no separate output-forwarding
+	// goroutine to race here (unlike streamViaControlMode) because the hub's
+	// own per-subscriber writer goroutine (session/streamhub/subscriber.go)
+	// already owns delivering output to this connection via transport.Send.
+	runInputReadLoop(stream, doneChan, errChan, sessionID, func(data []byte) {
+		if !instance.Permissions.CanSendCommand {
+			log.Warn("[streamViaHub] send permission denied", "session", sessionID)
+			return
+		}
+		instance.UpdateTerminalTimestamps(string(data), true)
+		instance.MarkUserResponded()
+
+		sendCtx, sendCancel := context.WithTimeout(context.Background(), 2*time.Second)
+		sendErr := instance.SendInputViaControlMode(sendCtx, data)
+		sendCancel()
+		if sendErr != nil {
+			log.Warn("[streamViaHub] CM input failed, retrying via subprocess", "session", tmuxSessionName, "err", sendErr)
+			if fbErr := sendInputToTmux(snap.TmuxServerSocket, tmuxSessionName, data); fbErr != nil {
+				log.Error("[streamViaHub] subprocess fallback also failed", "session", tmuxSessionName, "err", fbErr)
+			}
+		}
+	}, func(cols, rows int) {
+		size, sizeErr := streamhub.NewTerminalSize(cols, rows)
+		if sizeErr != nil {
+			log.Warn("[streamViaHub] invalid resize request", "cols", cols, "rows", rows, "err", sizeErr)
+			return
+		}
+		hub.RequestResize(subscriberID, size)
+	}, func(startLine, endLine string) (string, error) {
+		return instance.GetScrollbackHistory(startLine, endLine)
+	}, func(req *sessionv1.CurrentPaneRequest) (*sessionv1.TerminalOutput, error) {
+		return handleCurrentPaneRequest(sessionID, instance, req, currentResyncOptions())
+	}, &resizeSettling)
+
+	select {
+	case err := <-errChan:
+		return err
+	default:
 		return nil
 	}
 }

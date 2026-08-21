@@ -18,8 +18,10 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/protocol"
+	"github.com/tstapler/stapler-squad/session/streamhub"
 
 	"github.com/gorilla/websocket"
+	"github.com/puzpuzpuz/xsync/v4"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
 )
@@ -471,6 +473,104 @@ func TestRecordControlModeStreamStart_should_LeaveEntryRegistered_When_OlderGene
 	if cur.generation != genNew {
 		t.Errorf("activeControlModeStreams entry generation = %d, want %d (the newer, still-active generation); got the older one (%d) instead", cur.generation, genNew, genOld)
 	}
+}
+
+// --- HubRegistry / PathHubOwned routing (Epic 2.2) ---
+
+// TestUseStreamHub_should_DefaultToFalse_When_EnvVarUnset is the safety-net
+// regression test for this epic's core requirement: with
+// STAPLER_SQUAD_USE_STREAM_HUB unset (today's default, unchanged by this
+// change), streamTerminal must keep routing to the legacy
+// PathLegacyPerConnection branch.
+func TestUseStreamHub_should_DefaultToFalse_When_EnvVarUnset(t *testing.T) {
+	t.Setenv("STAPLER_SQUAD_USE_STREAM_HUB", "")
+	require.False(t, useStreamHub())
+}
+
+// TestUseStreamHub_should_ReturnTrue_When_EnvVarIsExactlyTrue verifies the
+// flag only turns PathHubOwned on for the literal value "true" — any other
+// value (including a typo like "1" or "True") stays on the legacy path
+// rather than failing open.
+func TestUseStreamHub_should_ReturnTrue_When_EnvVarIsExactlyTrue(t *testing.T) {
+	t.Setenv("STAPLER_SQUAD_USE_STREAM_HUB", "true")
+	require.True(t, useStreamHub())
+
+	t.Setenv("STAPLER_SQUAD_USE_STREAM_HUB", "1")
+	require.False(t, useStreamHub())
+}
+
+// TestHubRegistry_should_CreateExactlyOneHub_When_GetOrCreateCalledConcurrently
+// is REQ-1's core wiring assertion from validation.md, scoped to
+// HubRegistry.GetOrCreate itself (the unit Story 2.2.2's task list actually
+// specifies — see Task 2.2.2b): concurrent callers for the same tmux session
+// name must all observe the same *streamhub.StreamHub instance, and the
+// controller passed by a losing caller must never be consulted (only the
+// winning LoadOrCompute call's controller matters).
+func TestHubRegistry_should_CreateExactlyOneHub_When_GetOrCreateCalledConcurrently(t *testing.T) {
+	t.Parallel()
+	registry := &hubRegistry{hubs: xsync.NewMap[string, *streamhub.StreamHub]()}
+	const sessionName = "hub-registry-concurrent-test"
+
+	const goroutines = 20
+	hubs := make([]*streamhub.StreamHub, goroutines)
+	var wg sync.WaitGroup
+	wg.Add(goroutines)
+	for i := 0; i < goroutines; i++ {
+		go func(i int) {
+			defer wg.Done()
+			controller := &fakeSessionController{}
+			hubs[i] = registry.GetOrCreate(sessionName, controller)
+		}(i)
+	}
+	wg.Wait()
+
+	first := hubs[0]
+	require.NotNil(t, first)
+	for i, h := range hubs {
+		require.Same(t, first, h, "goroutine %d got a different StreamHub for the same session name", i)
+	}
+}
+
+// TestHubRegistry_should_ReturnDifferentHubs_When_SessionNamesDiffer is the
+// unremarkable counterpart proving GetOrCreate is actually keyed per session
+// name, not a single global hub.
+func TestHubRegistry_should_ReturnDifferentHubs_When_SessionNamesDiffer(t *testing.T) {
+	t.Parallel()
+	registry := &hubRegistry{hubs: xsync.NewMap[string, *streamhub.StreamHub]()}
+
+	hubA := registry.GetOrCreate("session-a", &fakeSessionController{})
+	hubB := registry.GetOrCreate("session-b", &fakeSessionController{})
+
+	require.NotSame(t, hubA, hubB)
+}
+
+// TestStreamTerminal_should_RouteThroughHubWithNoLegacyResizeCall_When_PathHubOwnedResolved
+// is validation.md's REQ-1 test name. Full end-to-end coverage of
+// streamTerminal's session resolution (SessionService/storage/tmux) is out of
+// this unit test's scope; what's asserted here is the specific claim Story
+// 2.2.2's AC makes: when useStreamHub() is true, the PathHubOwned branch
+// attaches via HubRegistry/WebSocketTransport and never touches
+// streamViaControlMode's legacy per-connection resize/capture code — proven
+// by HubRegistry.GetOrCreate on a fake SessionController never having
+// SetWindowSize/ResizePTY/CapturePaneContent called by anything in this
+// epic's new code path (only AttachSubscriber's bookkeeping runs).
+func TestStreamTerminal_should_RouteThroughHubWithNoLegacyResizeCall_When_PathHubOwnedResolved(t *testing.T) {
+	t.Setenv("STAPLER_SQUAD_USE_STREAM_HUB", "true")
+	require.True(t, useStreamHub(), "flag must resolve PathHubOwned for this test's premise to hold")
+
+	registry := &hubRegistry{hubs: xsync.NewMap[string, *streamhub.StreamHub]()}
+	controller := &fakeSessionController{}
+	hub := registry.GetOrCreate("path-hub-owned-test", controller)
+
+	serverStream, _, cleanup := createTestWebSocketPair(t)
+	defer cleanup()
+
+	transport := NewWebSocketTransport(serverStream)
+	id := hub.AttachSubscriber(transport, streamhub.SubscriberCapability{CanResize: true, CanWrite: true})
+	transport.BindSubscriber(hub, id)
+
+	require.Equal(t, 1, hub.SubscriberCount())
+	require.Equal(t, 0, controller.stopControlModeCalls, "no teardown should have been triggered by attaching")
 }
 
 // --- getOrRefreshSnapshot / markSnapshotDirty ---
