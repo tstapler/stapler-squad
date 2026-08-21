@@ -57,6 +57,7 @@ interface SubmitSuccess {
   prNumber: number;
   alreadyExisted: boolean;
   persisted: boolean;
+  persistError: string;
 }
 
 const GENERIC_DRAFT_ERROR = "Couldn't load PR draft — try again.";
@@ -167,6 +168,7 @@ export function CreatePullRequestModal({
         prNumber: response.prNumber,
         alreadyExisted: response.alreadyExisted,
         persisted: response.persisted,
+        persistError: response.persistError,
       });
     } catch (err) {
       // AC6/criterion #4: surface the backend error verbatim, never wrapped.
@@ -228,8 +230,8 @@ export function CreatePullRequestModal({
             </a>
             {!success.persisted && (
               <p role="alert" className={warningMessage} data-testid="create-pr-persist-warning">
-                {"⚠"} PR created but couldn&apos;t be saved to the session — refresh to
-                check.
+                {"⚠"} PR created but couldn&apos;t be saved to the session:{" "}
+                {success.persistError || "refresh to check."}
               </p>
             )}
             <div className={dialogActions}>
