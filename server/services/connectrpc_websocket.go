@@ -341,6 +341,26 @@ func pumpControlModeOutputIntoHub(hub *streamhub.StreamHub, controller streamhub
 	_, updates := controller.SubscribeControlModeUpdates()
 	for data := range updates {
 		hub.OnRawOutput(data)
+
+		// Drain every frame immediately available on updates into the same
+		// hub-owned batch window, then flush opportunistically — mirroring
+		// the legacy per-connection coalesce loop's `select {...; default:
+		// break coalesce}` pattern (~line 964-976 below) so a burst that
+		// happens to drain the channel doesn't always pay BatchWindow's full
+		// MaxBatchWindow ceiling latency before subscribers see it.
+	drain:
+		for {
+			select {
+			case more, ok := <-updates:
+				if !ok {
+					break drain
+				}
+				hub.OnRawOutput(more)
+			default:
+				break drain
+			}
+		}
+		hub.TryFlush()
 	}
 	log.Info("streamhub raw-output pump exiting", "session", sessionName)
 }

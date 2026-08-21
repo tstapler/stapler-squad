@@ -736,6 +736,70 @@ func TestHubRegistry_should_CallSubscribeControlModeUpdatesExactlyOnce_When_Mult
 		"the hub must subscribe to the underlying TmuxSession's control-mode output exactly once, regardless of how many Subscribers are attached to the hub itself")
 }
 
+// pumpTestController is a minimal streamhub.SessionController test double
+// that lets a test control exactly what pumpControlModeOutputIntoHub reads,
+// unlike fakeSessionController's SubscribeControlModeUpdates (which always
+// returns an already-closed channel and so can never deliver a burst).
+type pumpTestController struct {
+	updates chan []byte
+}
+
+func (c *pumpTestController) SetWindowSize(int, int) error         { return nil }
+func (c *pumpTestController) ResizePTY(int, int) error             { return nil }
+func (c *pumpTestController) CapturePaneContent() (string, error)  { return "", nil }
+func (c *pumpTestController) StopControlMode() error               { return nil }
+func (c *pumpTestController) UnsubscribeControlModeUpdates(string) {}
+func (c *pumpTestController) SubscribeControlModeUpdates() (string, <-chan []byte) {
+	return "pump-test-sub", c.updates
+}
+
+// TestPumpControlModeOutputIntoHub_should_FlushOpportunistically_When_ChannelMomentarilyDrained
+// is the regression test for the architecture gap this fix closes: before it,
+// pumpControlModeOutputIntoHub's `for data := range updates { hub.OnRawOutput(data) }`
+// loop never called BatchWindow.TryFlush, so every hub-owned burst always paid
+// the full MaxBatchWindow (20ms default) ceiling latency, unlike the legacy
+// per-connection coalesce loop's `select {...; default: break coalesce}`
+// early-flush behavior it is meant to mirror. This test sets the hub's batch
+// ceiling to a duration (2s) far longer than any reasonable flush latency, so
+// a frame reaching the subscriber quickly can only be explained by the pump's
+// drain-then-TryFlush step firing — not by the ceiling timer, which would
+// still be more than a second away from expiring.
+func TestPumpControlModeOutputIntoHub_should_FlushOpportunistically_When_ChannelMomentarilyDrained(t *testing.T) {
+	t.Parallel()
+
+	const ceiling = 2 * time.Second
+	controller := &pumpTestController{updates: make(chan []byte, 4)}
+	hub := streamhub.NewStreamHub("pump-early-flush-"+t.Name(), controller, streamhub.WithBatchMaxWindow(ceiling))
+
+	transport := streamhub.NewMemoryTransport()
+	hub.AttachSubscriber(transport, streamhub.SubscriberCapability{})
+
+	// Buffer every chunk of the burst before the pump goroutine ever reads
+	// from the channel, so the drain loop's non-blocking `default` branch is
+	// guaranteed to fire on an already-populated-then-momentarily-empty
+	// channel, exactly like the legacy coalesce loop's scenario.
+	controller.updates <- []byte("frame-1;")
+	controller.updates <- []byte("frame-2;")
+	controller.updates <- []byte("frame-3;")
+
+	start := time.Now()
+	go pumpControlModeOutputIntoHub(hub, controller, "pump-early-flush-"+t.Name())
+	t.Cleanup(func() { close(controller.updates) })
+
+	require.Eventually(t, func() bool {
+		for _, frame := range transport.ReceivedFrames() {
+			if bytes.Contains(frame, []byte("frame-3;")) {
+				return true
+			}
+		}
+		return false
+	}, 500*time.Millisecond, 5*time.Millisecond, "expected the burst to be flushed to the subscriber well before it did")
+
+	elapsed := time.Since(start)
+	require.Less(t, elapsed, ceiling/2,
+		"burst was flushed in %s — should have been well under half the %s ceiling if TryFlush fired opportunistically instead of waiting on the timer", elapsed, ceiling)
+}
+
 // TestStreamTerminal_should_RouteThroughHubWithNoLegacyResizeCall_When_PathHubOwnedResolved
 // is validation.md's REQ-1 test name. Full end-to-end coverage of
 // streamTerminal's session resolution (SessionService/storage/tmux) is out of

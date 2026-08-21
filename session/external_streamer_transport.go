@@ -85,11 +85,7 @@ var muxAttachedHubs sync.Map // map[*streamhub.StreamHub]struct{}
 // hub is a no-op, so the same ExternalStreamer is never registered on hub
 // more than once no matter how many browser connections share it.
 func AttachMuxTransportToHub(hub *streamhub.StreamHub, streamer *ExternalStreamer) {
-	if _, alreadyAttached := muxAttachedHubs.LoadOrStore(hub, struct{}{}); alreadyAttached {
-		return
-	}
-	hub.AttachSubscriber(NewMuxTransport(streamer), streamhub.SubscriberCapability{
-		CanResize: false,
-		CanWrite:  false,
+	attachOnceToHub(hub, &muxAttachedHubs, func() streamhub.Transport {
+		return NewMuxTransport(streamer)
 	})
 }

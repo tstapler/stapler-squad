@@ -134,11 +134,7 @@ var tmuxStreamerTransportAttachedHubs sync.Map // map[*streamhub.StreamHub]struc
 // this function does not itself guard against that; it is only responsible
 // for hub-attachment idempotency.
 func AttachExternalTmuxStreamerTransportToHub(hub *streamhub.StreamHub, streamer *ExternalTmuxStreamer) {
-	if _, alreadyAttached := tmuxStreamerTransportAttachedHubs.LoadOrStore(hub, struct{}{}); alreadyAttached {
-		return
-	}
-	hub.AttachSubscriber(NewExternalTmuxStreamerTransport(streamer), streamhub.SubscriberCapability{
-		CanResize: false,
-		CanWrite:  false,
+	attachOnceToHub(hub, &tmuxStreamerTransportAttachedHubs, func() streamhub.Transport {
+		return NewExternalTmuxStreamerTransport(streamer)
 	})
 }
