@@ -263,17 +263,8 @@ func checkPoolStartAllowed(t *testing.T) {
 // on some systems that require a git repo for project-context features.
 func initGitRepo(t *testing.T, dir string) {
 	t.Helper()
-	for _, args := range [][]string{
-		{"init", dir},
-		{"-C", dir, "config", "user.email", "test@example.com"},
-		{"-C", dir, "config", "user.name", "Test"},
-	} {
-		cmd := exec.Command("git", args...)
-		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Skipf("git %v failed: %v (%s) — cannot run real Claude triage test", args, err, out)
-		}
-	}
-	// A minimal README so the working tree is non-empty.
+	initGitRepoForTest(t, dir)
+	// A minimal, uncommitted README so the working tree is non-empty.
 	if err := os.WriteFile(dir+"/README.md", []byte("# Test Repo\n"), 0o644); err != nil {
 		t.Skipf("write README: %v", err)
 	}

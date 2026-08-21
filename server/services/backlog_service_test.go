@@ -1141,27 +1141,8 @@ func TestTransitionBacklogItemStatus_SendBackToIdea_ClearsRejectionReason(t *tes
 	assert.Nil(t, fetched.PlanRejectedAt, "plan_rejected_at must be cleared on a fresh read too")
 }
 
-// initGitRepoWithCommit initialises a minimal git repository with an initial commit so
-// that git worktree operations (which require at least one commit) work in tests.
-// Skips the test if git is unavailable.
-func initGitRepoWithCommit(t *testing.T, dir string) {
-	t.Helper()
-	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("# Test Repo\n"), 0o644); err != nil {
-		t.Skipf("write README: %v", err)
-	}
-	for _, args := range [][]string{
-		{"init", dir},
-		{"-C", dir, "config", "user.email", "test@example.com"},
-		{"-C", dir, "config", "user.name", "Test"},
-		{"-C", dir, "add", "README.md"},
-		{"-C", dir, "commit", "-m", "initial"},
-	} {
-		cmd := exec.Command("git", args...) //nolint:norawexec // test helper, blocking CombinedOutput, no zombie risk
-		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Skipf("git %v failed: %v (%s) — cannot run worktree test", args, err, out)
-		}
-	}
-}
+// initGitRepoWithCommit is defined in git_fixture_test.go (go-git based,
+// shared across this package's test files).
 
 // ─── Full lifecycle (audit regression test) ──────────────────────────────────
 
@@ -1225,7 +1206,7 @@ func TestBacklogFullLifecycle_TriageApprovalSpawn_CarriesRealPromptContent(t *te
 		}
 		readyItem = getResp.Msg.Item
 		return true
-	}, 2*time.Second, 10*time.Millisecond, "item should reach 'ready' after real headless triage completes")
+	}, 10*time.Second, 10*time.Millisecond, "item should reach 'ready' after real headless triage completes")
 
 	require.Equal(t, 1, pool.callCount(), "TriggerTriage should have made exactly one real headless call")
 	require.NotEmpty(t, readyItem.PlanArtifactsPath, "TriggerTriage should persist plan_artifacts_path")

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"connectrpc.com/connect"
+	"github.com/go-git/go-git/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/config"
@@ -98,25 +99,8 @@ func TestApplyTriageResultToUpdate_should_OnlySetValidPriorityAndCategory(t *tes
 
 func intPtr(v int) *int { return &v }
 
-// initGitRepoForTest initialises a minimal git repository in dir. A smaller,
-// dependency-free duplicate of backlog_triage_harness_test.go's initGitRepo,
-// which lives behind the "harness" build tag and isn't linked into normal
-// `go test` runs.
-func initGitRepoForTest(t *testing.T, dir string) {
-	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	for _, args := range [][]string{
-		{"init", dir},
-		{"-C", dir, "config", "user.email", "test@example.com"},
-		{"-C", dir, "config", "user.name", "Test"},
-	} {
-		cmd := safeexec.CommandContext(ctx, "git", args...)
-		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("git %v failed: %v (%s)", args, err, out)
-		}
-	}
-}
+// initGitRepoForTest is defined in git_fixture_test.go (go-git based, shared
+// across this package's test files).
 
 // TestResolveSessionPath_should_ErrorNotFallBackToRepoPath_When_GitManagedWorktreeCreationFails
 // guards BUG-057: a worktree-creation failure on a repo that IS git-managed
@@ -3941,14 +3925,12 @@ func TestTriggerReReview_should_BlockOnBranchDriftInsteadOfMisleadingFailVerdict
 
 	// Main diverges on the same line AND drifts well past the default threshold — the
 	// exact shape that made 693c2700's diff unreviewable.
-	require.NoError(t, os.WriteFile(filepath.Join(origin, "README.md"), []byte("# Main Edit\n"), 0o644))
-	runGitTestCmd(t, origin, "add", "README.md")
-	runGitTestCmd(t, origin, "commit", "-m", "main: unrelated edit")
+	originRepo, err := git.PlainOpen(origin)
+	require.NoError(t, err)
+	commitFileForTest(t, originRepo, origin, "README.md", "# Main Edit\n", "main: unrelated edit")
 	for i := 0; i < 55; i++ {
 		fname := fmt.Sprintf("upstream-%d.txt", i)
-		require.NoError(t, os.WriteFile(filepath.Join(origin, fname), []byte("content\n"), 0o644))
-		runGitTestCmd(t, origin, "add", fname)
-		runGitTestCmd(t, origin, "commit", "-m", fmt.Sprintf("upstream commit %d", i))
+		commitFileForTest(t, originRepo, origin, fname, "content\n", fmt.Sprintf("upstream commit %d", i))
 	}
 
 	attachPRFixWorkSession(t, storage, repo, &session.BacklogItemData{ID: itemID},

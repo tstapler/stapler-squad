@@ -44,7 +44,7 @@ make build && make test     # Build (generates protos) then test
 make quick-check            # Build + test + lint (fast validation)
 make ci                     # Full CI pipeline (definitive pre-push check)
 
-go test ./server/services   # Specific packages (requires make build first)
+go test ./server/services -timeout=20m   # Specific packages (requires make build first)
 go test ./ui -run TestFoo   # Specific test
 make test-coverage
 
