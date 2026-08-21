@@ -78,7 +78,7 @@ type fakePoolCall struct {
 	hasDeadline    bool
 }
 
-func (f *fakeHeadlessPool) CallBlocking(ctx context.Context, key headless.FeatureKey, systemPrompt, userPrompt string, opts headless.CallOptions) (string, float64, error) {
+func (f *fakeHeadlessPool) CallBlocking(ctx context.Context, key headless.FeatureKey, systemPrompt, userPrompt string, opts headless.CallOptions, sink headless.CostSink) (string, error) {
 	f.mu.Lock()
 	callIndex := len(f.calls)
 	deadline, hasDeadline := ctx.Deadline()
@@ -105,13 +105,14 @@ func (f *fakeHeadlessPool) CallBlocking(ctx context.Context, key headless.Featur
 		select {
 		case <-timer.C:
 		case <-ctx.Done():
-			return "", 0, ctx.Err()
+			return "", ctx.Err()
 		}
 	}
 	if onCall != nil {
 		onCall(opts.WorkDir)
 	}
-	return resp, f.cost, f.err
+	sink(f.cost)
+	return resp, f.err
 }
 
 func (f *fakeHeadlessPool) callCount() int {

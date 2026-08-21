@@ -3022,8 +3022,9 @@ func TestReportPRCreated_should_RejectReassignment_When_AuthorMismatch(t *testin
 // temp dir).
 type fakeTriageHeadlessPool struct{}
 
-func (f *fakeTriageHeadlessPool) CallBlocking(ctx context.Context, key headless.FeatureKey, systemPrompt, userPrompt string, opts headless.CallOptions) (string, float64, error) {
-	return `{"title":"t","summary":"s","suggestions":[]}`, 0, nil
+func (f *fakeTriageHeadlessPool) CallBlocking(ctx context.Context, key headless.FeatureKey, systemPrompt, userPrompt string, opts headless.CallOptions, sink headless.CostSink) (string, error) {
+	sink(0)
+	return `{"title":"t","summary":"s","suggestions":[]}`, nil
 }
 
 // TestCreateBacklogItem_should_TriggerTriage_When_BacklogSvcWiredAndRepoPathSet
