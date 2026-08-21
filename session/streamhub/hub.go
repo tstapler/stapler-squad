@@ -3,6 +3,7 @@ package streamhub
 import (
 	"errors"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/tstapler/stapler-squad/log"
@@ -99,6 +100,15 @@ type StreamHub struct {
 	resizeMu       sync.Mutex
 	negotiatedSize TerminalSize
 	resizing       bool
+
+	// slowSubscriberDropsTotal counts slow-subscriber evictions (never
+	// individual dropped frames — Story 1.4.2's AC is explicit that this must
+	// increment once per eviction, not once per dropped frame). This is a
+	// minimal internal counter standing in for the
+	// streamhub_slow_subscriber_drops_total metric named in plan.md's
+	// Observability Plan; wiring it to real Atlas/OTel metrics is Epic 3.2's
+	// scope ("Registry consolidation & observability"), not this epic's.
+	slowSubscriberDropsTotal atomic.Int64
 }
 
 // NewStreamHub constructs a StreamHub for one tmux session, starting in
@@ -246,11 +256,21 @@ func (h *StreamHub) deliver(sub *subscriber, data []byte, grace time.Duration) {
 
 	time.AfterFunc(grace, func() {
 		if sub.isStillFull() {
+			h.slowSubscriberDropsTotal.Add(1)
 			h.removeSubscriber(sub.id, errSlowSubscriberEvicted)
 			return
 		}
 		sub.clearSlow()
 	})
+}
+
+// SlowSubscriberDropsTotal returns the number of times a subscriber has been
+// evicted for staying slow past its grace period — incremented exactly once
+// per eviction, never once per dropped frame. See the field doc comment on
+// StreamHub for scoping notes (Epic 3.2 owns wiring this to a real metrics
+// backend).
+func (h *StreamHub) SlowSubscriberDropsTotal() int64 {
+	return h.slowSubscriberDropsTotal.Load()
 }
 
 // cancelPendingTeardownLocked stops any in-flight teardown timer. Callers
