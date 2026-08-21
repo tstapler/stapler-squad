@@ -258,6 +258,9 @@ var methodToID = map[string]string{
 	"GetSlackConfig":    "slack-config:get",
 	"UpdateSlackConfig": "slack-config:update",
 	"TestSlackWebhook":  "slack-config:test-webhook",
+	// PR creation RPCs
+	"DraftPullRequest":  "session:draft-pull-request",
+	"CreatePullRequest": "session:create-pull-request",
 }
 
 // rpcPattern matches lines like:   rpc MethodName(  (indented or not)
