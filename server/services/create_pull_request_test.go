@@ -52,6 +52,27 @@ func newDraftPRTestRepo(t *testing.T) string {
 	return dir
 }
 
+// newDraftPRTestRepoWithOrigin creates a temp git repo like newDraftPRTestRepo, but
+// additionally wires up a local (no-network) "origin" remote with
+// refs/remotes/origin/HEAD pointed at "main" — the BLOCKER regression fixture.
+// newDraftPRTestRepo deliberately has NO origin remote, which is exactly why
+// GoGitVCSReader.ResolveDefaultBranch's remote-qualified "origin/main" return value
+// (taken only when refs/remotes/origin/HEAD resolves) was never exercised by any
+// existing test.
+func newDraftPRTestRepoWithOrigin(t *testing.T) string {
+	t.Helper()
+	originDir := t.TempDir()
+	runGit(t, originDir, "init", "-q", "--bare", "-b", "main")
+
+	dir := newDraftPRTestRepo(t)
+	runGit(t, dir, "remote", "add", "origin", originDir)
+	runGit(t, dir, "push", "-q", "-u", "origin", "main")
+	// "git remote set-head origin main" (non -a) writes refs/remotes/origin/HEAD
+	// purely from the local arg given — no network round-trip to the remote.
+	runGit(t, dir, "remote", "set-head", "origin", "main")
+	return dir
+}
+
 // runGitOutput runs a git command in dir and returns its combined output, failing the
 // test on error. Used where the test needs to inspect output (runGit, defined in
 // path_completion_service_test.go, discards it).
@@ -131,6 +152,38 @@ func TestDraftPullRequest_should_PrefillTitleBodyBaseBranch_When_SessionHasCommi
 	assert.True(t, resp.Msg.HasCommitsAhead)
 	assert.Empty(t, resp.Msg.ExistingPrUrl)
 	assert.Zero(t, resp.Msg.ExistingPrNumber)
+}
+
+// TestDraftPullRequest_should_StripRemotePrefix_When_OriginHEADResolvesToRemoteQualifiedRef
+// is the regression guard for the BLOCKER bug: for a normally-cloned repo (has an
+// origin remote — the overwhelming common case), GoGitVCSReader.ResolveDefaultBranch
+// takes the refs/remotes/origin/HEAD path and returns the remote-qualified short ref
+// name "origin/main", not the bare branch name "main". `gh pr create --base` rejects
+// a remote-qualified value ("Base ref must be a branch"), so DraftPullRequest must
+// strip the leading "origin/" before it becomes BaseBranch — verified here against a
+// real (local, no-network) origin remote rather than the no-origin fixture every other
+// test in this file uses.
+func TestDraftPullRequest_should_StripRemotePrefix_When_OriginHEADResolvesToRemoteQualifiedRef(t *testing.T) {
+	t.Parallel()
+	dir := newDraftPRTestRepoWithOrigin(t)
+	runGit(t, dir, "checkout", "-q", "-b", "feature/strip-remote-prefix")
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "feature.go"), []byte("package main\n"), 0o644))
+	runGit(t, dir, "add", ".")
+	runGit(t, dir, "commit", "-q", "-m", "Add a change")
+
+	wt := git.NewGitWorktreeFromStorage(dir, dir, "sess-strip-prefix", "feature/strip-remote-prefix", "")
+	inst := &session.Instance{Title: "Strip remote prefix session"}
+	inst.SetGitWorktree(wt)
+
+	svc := NewPRCreationService(nil, nil, nil, nil, findInstanceFunc("sess-strip-prefix", inst))
+
+	resp, err := svc.DraftPullRequest(context.Background(), connect.NewRequest(&sessionv1.DraftPullRequestRequest{
+		SessionId: "sess-strip-prefix",
+	}))
+	require.NoError(t, err)
+
+	assert.Equal(t, "main", resp.Msg.BaseBranch,
+		"BaseBranch must be the bare branch name, not the remote-qualified \"origin/main\" gh pr create --base rejects")
 }
 
 func TestDraftPullRequest_should_ReturnExistingPR_When_SessionAlreadyHasOne(t *testing.T) {
@@ -272,6 +325,36 @@ func TestDraftPullRequest_should_UseFallbackBody_When_DiffIsEmpty(t *testing.T) 
 	assert.Empty(t, runner.Calls, "the headless pool must not be called when the diff is empty")
 }
 
+// TestDraftPullRequest_should_UseFallbackBody_When_DraftPRDescriptionErrors is the
+// regression guard for a previously-untested branch: when headless.DraftPRDescription
+// itself returns an error (as opposed to a nil pool or an empty diff, which the two
+// tests above already cover), DraftPullRequest must log a warning and fall back to
+// fallbackPRBody rather than surfacing the error as an RPC failure.
+func TestDraftPullRequest_should_UseFallbackBody_When_DraftPRDescriptionErrors(t *testing.T) {
+	t.Parallel()
+	dir := newDraftPRTestRepo(t)
+	runGit(t, dir, "checkout", "-q", "-b", "feature/draft-error")
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "change.txt"), []byte("data"), 0o644))
+	runGit(t, dir, "add", ".")
+	runGit(t, dir, "commit", "-q", "-m", "a real commit")
+
+	wt := git.NewGitWorktreeFromStorage(dir, dir, "sess-draft-error", "feature/draft-error", "")
+	inst := &session.Instance{Title: "Draft error session"}
+	inst.SetGitWorktree(wt)
+
+	runner := headless.NewFakeRunner()
+	runner.SetErrors(errors.New("headless: pool exhausted"))
+	pool := headless.NewPoolWithRunner(headless.PoolConfig{}, runner)
+
+	svc := NewPRCreationService(nil, nil, pool, nil, findInstanceFunc("sess-draft-error", inst))
+
+	resp, err := svc.DraftPullRequest(context.Background(), connect.NewRequest(&sessionv1.DraftPullRequestRequest{
+		SessionId: "sess-draft-error",
+	}))
+	require.NoError(t, err, "a DraftPRDescription failure must fall back, not surface as an RPC error")
+	assert.Equal(t, fallbackPRBody, resp.Msg.Body)
+}
+
 // --------------------------------------------------------------------------
 // CreatePullRequest
 // --------------------------------------------------------------------------
@@ -299,6 +382,18 @@ type fakePRGitExecutor struct {
 	pushErr   error  // git push fails with this error
 	createOut string // gh pr create's stdout (defaults to a canned PR URL if empty)
 	createErr error  // gh pr create fails with this error
+
+	// blockFirstCallStarted, when non-nil, is closed the first time
+	// CombinedOutput is invoked (signaling a test-driving goroutine that the
+	// first git/gh subprocess of the pipeline has started), after which that
+	// same call blocks until blockFirstCallProceed is closed. This lets a test
+	// pause the winning goroutine's pipeline mid-flight so a second, real,
+	// concurrently-launched goroutine has an actual window to race
+	// CreatePullRequest's LoadOrStore in-flight guard, rather than only proving
+	// the guard's error path against a pre-populated map entry.
+	blockFirstCallStarted chan struct{}
+	blockFirstCallProceed chan struct{}
+	firstCallBlockOnce    sync.Once
 }
 
 func (e *fakePRGitExecutor) Run(_ *exec.Cmd) error              { return nil }
@@ -308,6 +403,13 @@ func (e *fakePRGitExecutor) CombinedOutput(cmd *exec.Cmd) ([]byte, error) {
 	e.mu.Lock()
 	e.calls = append(e.calls, strings.Join(cmd.Args, " "))
 	e.mu.Unlock()
+
+	if e.blockFirstCallStarted != nil {
+		e.firstCallBlockOnce.Do(func() {
+			close(e.blockFirstCallStarted)
+			<-e.blockFirstCallProceed
+		})
+	}
 
 	args := cmd.Args
 	if len(args) == 0 {
@@ -638,6 +740,69 @@ func TestCreatePullRequest_should_RejectConcurrentCall_When_AlreadyInFlight(t *t
 	require.Error(t, err)
 	assert.Equal(t, connect.CodeAlreadyExists, connectErrCode(t, err))
 	assert.False(t, mock.calledWith("push"), "a second concurrent call must be rejected before touching git at all")
+}
+
+// TestCreatePullRequest_should_RejectConcurrentCall_When_RacingRealGoroutines is the
+// real-concurrency companion to TestCreatePullRequest_should_RejectConcurrentCall_When_AlreadyInFlight
+// above. That test only proves the "already in flight" error path is taken when the
+// in-flight map is pre-populated by the test itself — it never actually races two
+// CreatePullRequest calls against each other, so it can't prove prCreationInFlight's
+// LoadOrStore guard is atomic under real concurrency. Here, two goroutines call
+// CreatePullRequest for the same session at (as close to) the same time; the mock
+// executor blocks the first goroutine's first git subprocess call until the second
+// goroutine has actually called in and been rejected, closing the race window a
+// sequential test can't exercise.
+func TestCreatePullRequest_should_RejectConcurrentCall_When_RacingRealGoroutines(t *testing.T) {
+	t.Parallel()
+	mock := &fakePRGitExecutor{
+		blockFirstCallStarted: make(chan struct{}),
+		blockFirstCallProceed: make(chan struct{}),
+	}
+	wt := newFakePRWorktree("sess-real-race", "feature/real-race", mock)
+	inst := &session.Instance{Title: "Real race session", UUID: uuid.New().String()}
+	inst.SetGitWorktree(wt)
+
+	svc := NewPRCreationService(&fakePRInstanceStore{}, events.NewEventBus(1), nil, nil, findInstanceFunc("sess-real-race", inst))
+
+	type result struct {
+		resp *connect.Response[sessionv1.CreatePullRequestResponse]
+		err  error
+	}
+	firstResultCh := make(chan result, 1)
+	go func() {
+		resp, err := svc.CreatePullRequest(context.Background(), connect.NewRequest(&sessionv1.CreatePullRequestRequest{
+			SessionId: "sess-real-race",
+			Title:     "Some title",
+		}))
+		firstResultCh <- result{resp, err}
+	}()
+
+	// Wait for the first goroutine to have passed the in-flight guard and
+	// entered its git pipeline (blocked there), so the second call below is
+	// guaranteed to observe a live in-flight entry rather than racing to be
+	// first itself.
+	select {
+	case <-mock.blockFirstCallStarted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for the first goroutine to enter its git pipeline")
+	}
+
+	_, secondErr := svc.CreatePullRequest(context.Background(), connect.NewRequest(&sessionv1.CreatePullRequestRequest{
+		SessionId: "sess-real-race",
+		Title:     "Some title",
+	}))
+	require.Error(t, secondErr, "a real concurrent second call must be rejected while the first is still in flight")
+	assert.Equal(t, connect.CodeAlreadyExists, connectErrCode(t, secondErr))
+
+	close(mock.blockFirstCallProceed)
+
+	select {
+	case firstResult := <-firstResultCh:
+		require.NoError(t, firstResult.err, "the first (winning) goroutine must succeed")
+		assert.NotEmpty(t, firstResult.resp.Msg.PrUrl)
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for the first goroutine to finish")
+	}
 }
 
 func TestCreatePullRequest_should_ReturnInternalError_When_PRNumberIsZero(t *testing.T) {

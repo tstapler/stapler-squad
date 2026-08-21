@@ -91,7 +91,7 @@ type prPendingChecker interface {
 type prCreator interface {
 	CommitChanges(commitMessage string) error
 	PushBranch() error
-	CreatePR(title, body, baseBranch string) (prURL string, prNumber int, err error)
+	CreatePR(opts git.PRCreateOptions) (prURL string, prNumber int, err error)
 	EnablePRAutoMerge(prNumber int) error
 	RequestCopilotReview(prNumber int) error
 	HasCommitsAheadOfMain(mainBranch string) (bool, error)
@@ -581,7 +581,7 @@ func (l *BacklogLifecycleListener) pushAndCreatePR(ctx context.Context, item *Ba
 			}
 		}
 		var prErr error
-		prURL, prNumber, prErr = g.CreatePR(prTitle, prBody, "")
+		prURL, prNumber, prErr = g.CreatePR(git.PRCreateOptions{Title: prTitle, Body: prBody})
 		if prErr != nil {
 			l.stayInReviewAndNotify(ctx, item.ID, item.Title, "PR creation failed", prErr)
 			return

@@ -337,13 +337,26 @@ func (g *GitWorktree) PushBranch() error {
 	return nil
 }
 
+// PRCreateOptions bundles CreatePR's arguments. Title, Body, and BaseBranch are
+// all plain strings with no compiler-enforced distinction between them, so a
+// transposed call (e.g. body and baseBranch swapped) would previously compile
+// silently wrong — the exact smell .claude/rules/primitive-obsession-checklist.md
+// exists to catch. A named field wins that transposition back at every call site.
+type PRCreateOptions struct {
+	// Title defaults to the branch name (with hyphens replaced by spaces) if empty.
+	Title string
+	Body  string
+	// BaseBranch, if non-empty, is passed to `gh pr create --base`; if empty,
+	// gh's own default-branch resolution is used (preserves pre-existing
+	// behavior for every caller that doesn't care which branch it targets).
+	BaseBranch string
+}
+
 // CreatePR creates a GitHub pull request for the current branch and returns the
-// PR URL and number. Title defaults to the branch name if empty. baseBranch, if
-// non-empty, is passed to `gh pr create --base`; if empty, gh's own
-// default-branch resolution is used (preserves pre-existing behavior for every
-// caller that doesn't care which branch it targets).
-// If a PR already exists for the branch it is returned without creating a new one.
-func (g *GitWorktree) CreatePR(title, body, baseBranch string) (prURL string, prNumber int, err error) {
+// PR URL and number. If a PR already exists for the branch it is returned
+// without creating a new one.
+func (g *GitWorktree) CreatePR(opts PRCreateOptions) (prURL string, prNumber int, err error) {
+	title, body, baseBranch := opts.Title, opts.Body, opts.BaseBranch
 	if err := checkGHCLI(); err != nil {
 		return "", 0, err
 	}

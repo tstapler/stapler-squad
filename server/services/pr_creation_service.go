@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	"connectrpc.com/connect"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
@@ -15,6 +16,16 @@ import (
 	"github.com/tstapler/stapler-squad/session/headless"
 	"github.com/tstapler/stapler-squad/session/unfinished"
 )
+
+// draftPRDescriptionTimeout bounds the synchronous LLM call inside
+// DraftPullRequest. server/server.go sets WriteTimeout: 0 for the whole server
+// (streaming connections are long-lived), so nothing else stops a stalled
+// headless pool from hanging this RPC forever. 30s matches the "May take
+// 5-30 seconds" duration documented for the analogous GenerateSuggestedRule
+// RPC (proto/session/v1/session.proto) — that RPC's own 60s figure is the
+// client-side AbortController deadline, not a server-side bound, so it isn't
+// the right number to reuse here.
+const draftPRDescriptionTimeout = 30 * time.Second
 
 // PRCreationService handles the DraftPullRequest/CreatePullRequest RPCs. It was
 // extracted from SessionService (Post-Review Revision #3) to match the codebase's
@@ -27,6 +38,14 @@ type PRCreationService struct {
 	backlogLifecycleListener *session.BacklogLifecycleListener
 	findInstance             func(string) *session.Instance
 	prCreationInFlight       sync.Map
+
+	// vcsReader is a single shared *unfinished.GoGitVCSReader instance reused
+	// across every DraftPullRequest call, so its repo/diff/ahead-behind caches
+	// (session/unfinished/gogit_vcs_reader.go) actually have something to hit —
+	// mirroring session/unfinished/scanner.go's NewScannerWithReader, the only
+	// other production caller, which likewise constructs one instance and
+	// reuses it rather than allocating a throwaway reader per call.
+	vcsReader *unfinished.GoGitVCSReader
 }
 
 // NewPRCreationService constructs a PRCreationService. findInstance is a narrow
@@ -46,6 +65,7 @@ func NewPRCreationService(
 		headlessPool:             headlessPool,
 		backlogLifecycleListener: backlogLifecycleListener,
 		findInstance:             findInstance,
+		vcsReader:                &unfinished.GoGitVCSReader{},
 	}
 }
 
@@ -113,11 +133,13 @@ func sessionGoalText(inst *session.Instance) string {
 // title/body for the user to review before CreatePullRequest (Epic 1.4) actually
 // pushes/creates anything.
 //
-// This method makes zero git-mutating calls (no CommitChanges, no PushBranch) —
-// Post-Review Revision #2's read-only fix. Its diff preview is computed via the same
+// This method makes no commit/push side effects (no CommitChanges, no PushBranch) —
+// Post-Review Revision #2's read-only fix. Note wt.Diff() does run `git add -N .` to
+// stage untracked files for diffing (session/git/diff.go), which touches the index
+// but not file content or history. Its diff preview is computed via the same
 // working-tree-inclusive path GitWorktree.Diff() already uses for the session card's
-// diff viewer (session/git/diff.go), not a committed-only diff, so the drafted
-// title/body always describes what the user is actually looking at.
+// diff viewer, not a committed-only diff, so the drafted title/body always describes
+// what the user is actually looking at.
 func (s *PRCreationService) DraftPullRequest(
 	ctx context.Context,
 	req *connect.Request[sessionv1.DraftPullRequestRequest],
@@ -136,7 +158,16 @@ func (s *PRCreationService) DraftPullRequest(
 		}), nil
 	}
 
-	baseBranch := (&unfinished.GoGitVCSReader{}).ResolveDefaultBranch(wt.GetRepoPath())
+	baseBranch := s.vcsReader.ResolveDefaultBranch(wt.GetRepoPath())
+	// ResolveDefaultBranch returns a remote-qualified short ref name (e.g.
+	// "origin/main") whenever refs/remotes/origin/HEAD resolves, and only
+	// returns a bare branch name when there's no origin remote at all. `gh pr
+	// create --base` rejects a remote-qualified value ("Base ref must be a
+	// branch"), so strip a single leading "<remote>/" component before this
+	// becomes the response's (and eventually CreatePullRequest's) BaseBranch.
+	if _, short, ok := strings.Cut(baseBranch, "/"); ok {
+		baseBranch = short
+	}
 
 	// HasCommitsAheadOfMain fails open (returns true on error) by contract — ignore
 	// the error and trust the bool, matching pushAndCreatePR's existing usage
@@ -156,7 +187,9 @@ func (s *PRCreationService) DraftPullRequest(
 		// Post-Review Revision #1: guard on s.headlessPool being non-nil first,
 		// mirroring RunOneShot's existing guard — never panic on a nil pool.
 		if s.headlessPool != nil {
-			draftedBody, draftErr := headless.DraftPRDescription(ctx, s.headlessPool, inst.Title, sessionGoalText(inst), diff, wt.GetBranchName())
+			draftCtx, draftCancel := context.WithTimeout(ctx, draftPRDescriptionTimeout)
+			draftedBody, draftErr := headless.DraftPRDescription(draftCtx, s.headlessPool, inst.Title, sessionGoalText(inst), diff, wt.GetBranchName())
+			draftCancel()
 			if draftErr != nil {
 				log.Warn("DraftPullRequest: DraftPRDescription failed, using fallback body", "session", req.Msg.SessionId, "err", draftErr)
 			} else {
@@ -231,7 +264,11 @@ func (s *PRCreationService) CreatePullRequest(
 		prNumber = snap.GitHub.GitHubPRNumber
 		alreadyExisted = true
 	} else {
-		prURL, prNumber, err = wt.CreatePR(req.Msg.Title, req.Msg.Body, req.Msg.BaseBranch)
+		prURL, prNumber, err = wt.CreatePR(git.PRCreateOptions{
+			Title:      req.Msg.Title,
+			Body:       req.Msg.Body,
+			BaseBranch: req.Msg.BaseBranch,
+		})
 		if err != nil {
 			return nil, connect.NewError(connect.CodeUnavailable, err)
 		}

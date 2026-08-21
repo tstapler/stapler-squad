@@ -658,7 +658,7 @@ func TestGitWorktree_CreatePR_PassesBaseBranch_When_NonEmpty(t *testing.T) {
 		"/fake/repo", "/fake/worktree", "test-session", "feature/rate-limit-toggle", "", mock,
 	)
 
-	_, _, err := g.CreatePR("Add rate limit toggle", "Adds a per-user rate limit toggle.", "release/1.2")
+	_, _, err := g.CreatePR(PRCreateOptions{Title: "Add rate limit toggle", Body: "Adds a per-user rate limit toggle.", BaseBranch: "release/1.2"})
 	if err != nil {
 		t.Fatalf("CreatePR() error = %v", err)
 	}
@@ -689,7 +689,7 @@ func TestGitWorktree_CreatePR_OmitsBaseFlag_When_Empty(t *testing.T) {
 		"/fake/repo", "/fake/worktree", "test-session", "feature/rate-limit-toggle", "", mock,
 	)
 
-	_, _, err := g.CreatePR("Add rate limit toggle", "Adds a per-user rate limit toggle.", "")
+	_, _, err := g.CreatePR(PRCreateOptions{Title: "Add rate limit toggle", Body: "Adds a per-user rate limit toggle."})
 	if err != nil {
 		t.Fatalf("CreatePR() error = %v", err)
 	}

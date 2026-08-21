@@ -2298,7 +2298,7 @@ func (f *fakePRCreator) PushBranch() error {
 	f.pushCalled = true
 	return f.pushErr
 }
-func (f *fakePRCreator) CreatePR(title, body, baseBranch string) (string, int, error) {
+func (f *fakePRCreator) CreatePR(opts git.PRCreateOptions) (string, int, error) {
 	f.createCalled = true
 	return f.createURL, f.createNumber, f.createErr
 }
@@ -2513,8 +2513,8 @@ type dbClosingPRCreator struct {
 	repo *EntRepository
 }
 
-func (f *dbClosingPRCreator) CreatePR(title, body, baseBranch string) (string, int, error) {
-	url, num, err := f.fakePRCreator.CreatePR(title, body, baseBranch)
+func (f *dbClosingPRCreator) CreatePR(opts git.PRCreateOptions) (string, int, error) {
+	url, num, err := f.fakePRCreator.CreatePR(opts)
 	f.repo.Close()
 	return url, num, err
 }
