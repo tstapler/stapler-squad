@@ -41,6 +41,25 @@ This is a known-fragile area: `git log --oneline -- session/tmux/tmux_test.go` s
 
   **Before/after wall-clock, per ADR-001's precedent of not absorbing `-p 1`'s cost silently.** "Before" = the pre-fix `TMUX_BIN=$(pwd)/bin/tmux go test -short -timeout=20m ./...` single unscoped invocation (reconstructed manually against the current worktree, since the Makefile's own recipe had already been rewritten on this branch — see `/tmp/before-test.log`, 2026-08-20): `10:17.55 total` wall-clock (`239.06s user 220.48s system 74% cpu`), and it reproduced the flake class directly — `TestDestroy_should_CaptureDiffStatsBeforeCleanupWorktree_When_UpdateDiffStatsRunsFirst`, `TestBuildLaunchCommand_LargePromptSurvivesRealTmuxNewSession`, plus a third sibling in the same package/root cause (`TestDestroy_should_SkipDiffStatsCapture_When_NoLifecycleListenerRegistered`) and `session/tmux`'s two long-recurring flakes named in `.claude/rules/fix-flaky-tests-dont-defer.md` (`TestKillOrphanedControlModeClients`, `TestEnsureServerRunning_NoOp`) — plus BUG-083's and BUG-084's out-of-scope failures in `server/services` and the root package. "After" = the fixed two-invocation `-p 1`-scoped recipe: first invocation (`session`, `session/mux`, `session/tmux` under `-p 1`) `142.753s` (`/tmp/make-test-4.log`, 2026-08-20); the second (unscoped, everything else) is unaffected by this change and runs in parallel as before. Net: the `-p 1` scoping adds serialization only within the three tmux-heavy packages, and the wall-clock cost of that serialization (142.753s to run what previously ran as part of a 617.55s unscoped whole) is a small fraction of total suite time, not a suite-wide `-p 1` tax — consistent with ADR-001's rejection of repo-wide `-p 1`.
 
+## Verification: 10 consecutive post-fix `make test` runs (2026-08-20/21)
+
+Per this bug's own convention of citing concrete evidence rather than a prose claim of "it's fixed," ran `make test` 10 times in a row after the `-p 1` scoping fix landed. In every run, `session`, `session/mux`, `session/tmux`, and `testutil` — the four packages carrying this fix — reported `ok`, and none of the four originally-named flaky tests (`TestDestroy_should_CaptureDiffStatsBeforeCleanupWorktree_When_UpdateDiffStatsRunsFirst`, `TestBuildLaunchCommand_LargePromptSurvivesRealTmuxNewSession`, `TestListStaplerSquadSessions_UsesIsolatedSocket`, `TestListStaplerSquadSessionsWithInfo_UsesIsolatedSocket`) appeared in any `FAIL` line:
+
+| Run | session | session/mux | session/tmux | testutil | Other failures in same run (all pre-existing, out-of-scope, filed separately) |
+|---|---|---|---|---|---|
+| 1 | ok 142.753s | ok (cached) | ok (cached) | ok (cached) | none |
+| 2 | ok 120.597s | ok 3.456s | ok (cached) | ok (cached) | none |
+| 3 | ok 337.270s | ok 15.180s | ok (cached) | ok (cached) | none |
+| 4 | ok 106.258s (quick-check) | ok 14.658s | ok (cached) | ok (cached) | none |
+| 5 | ok 102.331s (quick-check) | ok 8.213s | ok (cached) | ok (cached) | `TestWatchBacklogItems_should_deliverRaceWindowEventExactlyOnceAsSnapshot_When_PublishedBetweenSubscribeAndEventsSince` (server/services, BUG-083 class) |
+| 6 | ok 462.521s (quick-check, uncached rerun) | ok (cached) | ok (cached) | ok (cached) | `TestListWorktrees_EmptyPath` (server/services, BUG-083) |
+| 7 | ok 178.836s | ok (cached) | ok (cached) | ok (cached) | none |
+| 8 | ok (cached) | ok (cached) | ok (cached) | ok (cached) | `TestWatchBacklogItems_should_deliverRaceWindowEventExactlyOnceAsSnapshot_When_PublishedBetweenSubscribeAndEventsSince` (server/services, BUG-083 class) — `make test` exit 2 came solely from this unrelated failure |
+| 9 | ok (cached) | ok (cached) | ok (cached) | ok (cached) | none — exit 0 |
+| 10 | ok (cached) | ok (cached) | ok (cached) | ok (cached) | none — exit 0 |
+
+Runs 4-6 are `make quick-check` invocations (build+test+lint), so they also directly confirm `make quick-check` passes with this fix in place — run 6's tail output: `✅ Registry validation passed. Divergence: 0.49%` / `✅ Quick validation complete`, i.e. the full build+test+lint+registry pipeline completed successfully, not just the test phase in isolation.
+
 ## Resolution
 
 Fixed on `main` by `dccee742a` ("fix(tests): fix flaky/failing tests across executor, tmux, gogitstore, and git packages", 2026-08-04) — root cause was several `session/tmux` test files hardcoding the literal `"tmux"` binary in `exec.Command`/`safeexec.CommandContext` calls, resolving to whatever `tmux` is on `$PATH` instead of the test-pinned `TMUX_BIN` (`bin/tmux`) the package's own `Binary()` helper resolves to — causing protocol/version mismatches when both connect to the same socket, plus widened retry logic in `tmux.go` for transient contention under heavy system load. Verified after merging that commit into `stapler-squad-fix-idle-reviewer-wedge`: full `go test $(go list ./...)`, including `session/tmux`, passed clean with no `-run`/isolation workaround needed.
