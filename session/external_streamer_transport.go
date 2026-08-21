@@ -1,6 +1,11 @@
 package session
 
-import "sync/atomic"
+import (
+	"sync"
+	"sync/atomic"
+
+	"github.com/tstapler/stapler-squad/session/streamhub"
+)
 
 // MuxTransport adapts an *ExternalStreamer to the streamhub.Transport
 // interface (Epic 4.1, ADR-004), formalizing ssq-mux as an output-only
@@ -59,4 +64,32 @@ func (t *MuxTransport) Close() error {
 	}
 	t.streamer.RemoveConsumer(t.consumerKey)
 	return nil
+}
+
+// muxAttachedHubs records which *streamhub.StreamHub instances already have a
+// MuxTransport attached, so AttachMuxTransportToHub is idempotent per hub: N
+// browser connections attaching to the same PathHubOwned session's hub must
+// not each register the same session's ExternalStreamer as a second, third,
+// ... MuxTransport subscriber. Keyed by hub pointer rather than session name
+// because the hub itself (not its name) is the unit AttachSubscriber is
+// idempotent against.
+var muxAttachedHubs sync.Map // map[*streamhub.StreamHub]struct{}
+
+// AttachMuxTransportToHub attaches streamer to hub as an output-only
+// MuxTransport subscriber — SubscriberCapability{CanResize: false, CanWrite:
+// false}, per ADR-004 (Story 4.1.2): ssq-mux's own resize-authority race in
+// session/mux/multiplexer.go is left completely untouched, so this
+// subscriber must never be able to influence hub.NegotiatedSize or send
+// input through the hub. Safe to call once per browser connection attaching
+// to hub: the first call performs the attach, every later call for the same
+// hub is a no-op, so the same ExternalStreamer is never registered on hub
+// more than once no matter how many browser connections share it.
+func AttachMuxTransportToHub(hub *streamhub.StreamHub, streamer *ExternalStreamer) {
+	if _, alreadyAttached := muxAttachedHubs.LoadOrStore(hub, struct{}{}); alreadyAttached {
+		return
+	}
+	hub.AttachSubscriber(NewMuxTransport(streamer), streamhub.SubscriberCapability{
+		CanResize: false,
+		CanWrite:  false,
+	})
 }
