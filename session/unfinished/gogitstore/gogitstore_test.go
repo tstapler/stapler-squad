@@ -112,14 +112,26 @@ func gitRunErr(logf func(format string, args ...any), dir string, args ...string
 // subprocess without paying gitCommandTimeout's real 30s bound — the test
 // only needs *some* finite timeout to fire, not that specific value, since
 // that value is test-helper scaffolding for fixture-building, not shipped
-// production config.
+// production config. It runs with context.Background() as its parent — use
+// gitRunErrCtx directly when an outer deadline (e.g. fixtureBuildTimeout)
+// must also bound this call.
 func gitRunErrWithTimeout(logf func(format string, args ...any), dir string, timeout time.Duration, args ...string) error {
+	return gitRunErrCtx(context.Background(), logf, dir, timeout, args...)
+}
+
+// gitRunErrCtx is gitRunErrWithTimeout with an explicit parent context. Each
+// attempt's context.WithTimeout(parent, timeout) is a CHILD of parent, so it
+// fires at whichever is earlier: this call's own timeout, or parent's
+// existing deadline (e.g. the whole-attempt fixtureBuildTimeout wrapping a
+// whole buildPackedFixtureOnce call in goldenFixtureDir) — a per-call retry
+// here can never blow past an outer deadline it was called under.
+func gitRunErrCtx(parent context.Context, logf func(format string, args ...any), dir string, timeout time.Duration, args ...string) error {
 	const maxAttempts = 5
 	var lastErr error
 	var lastOut []byte
 	var lastTimedOut bool
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
-		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		ctx, cancel := context.WithTimeout(parent, timeout)
 		cmd := safeexec.CommandContextPG(ctx, "git", args...)
 		cmd.Dir = dir
 		cmd.Env = append(os.Environ(),
@@ -281,6 +293,22 @@ func TestGitRunErr_WedgedSubprocess_FailsFastInsteadOfHangingForever(t *testing.
 // resource-contention window caused the original partial failure.
 const buildPackedFixtureAttempts = 3
 
+// fixtureBuildTimeout bounds a SINGLE buildPackedFixtureOnce attempt as a
+// whole, independent of and tighter than the sum of that attempt's
+// individual per-git-call timeouts (gitCommandTimeout: 30s per plumbing
+// call, 90s for gc, itself retried up to 5x by gitRunErrCtx for retryable
+// commands). Without this, a repeatedly-timing-out `gc` call alone could
+// consume up to 5*90s=450s inside ONE buildPackedFixtureOnce call before
+// buildPackedFixtureAttempts's outer whole-fixture-rebuild loop even gets a
+// chance to start over from a clean directory — 3 such wedged attempts would
+// blow well past go test's 10-minute default timeout (see this task's
+// backlog item: TestRegistry_Prune_should_neverEvict_When_RefCountNonzero
+// hit exactly this as a 10-minute hang). fixtureBuildTimeout is passed as
+// the parent context to every gitRunErrCtx call inside one
+// buildPackedFixtureOnce attempt, so a child call's own per-call timeout can
+// never let that one attempt run longer than this bound in total.
+const fixtureBuildTimeout = 3 * time.Minute
+
 // --- golden fixture cache --------------------------------------------------
 //
 // Nearly every test in this package calls buildPackedFixture, and until this
@@ -352,6 +380,7 @@ func goldenFixtureDir(t testing.TB, numCommits int) string {
 	entry.once.Do(func() {
 		dir := filepath.Join(goldenFixtureRoot(), "n"+strconv.Itoa(numCommits))
 		var lastErr error
+		var anyTimedOut bool
 		for attempt := 1; attempt <= buildPackedFixtureAttempts; attempt++ {
 			if attempt > 1 {
 				t.Logf("goldenFixtureDir(%d): rebuilding golden fixture from scratch (attempt %d/%d) after: %v", numCommits, attempt, buildPackedFixtureAttempts, lastErr)
@@ -360,14 +389,29 @@ func goldenFixtureDir(t testing.TB, numCommits int) string {
 					return
 				}
 			}
-			if err := buildPackedFixtureOnce(t, dir, numCommits); err != nil {
+			// Each attempt gets its own fresh fixtureBuildTimeout budget: a
+			// whole-attempt bound, independent of and tighter than the sum of
+			// this attempt's individual git-call timeouts — see
+			// fixtureBuildTimeout's doc comment for why that outer bound is
+			// necessary even though every individual git call is already
+			// bounded on its own.
+			ctx, cancel := context.WithTimeout(context.Background(), fixtureBuildTimeout)
+			err := buildPackedFixtureOnce(ctx, t, dir, numCommits)
+			timedOut := ctx.Err() == context.DeadlineExceeded
+			cancel()
+			if err != nil {
 				lastErr = err
+				anyTimedOut = timedOut
 				continue
 			}
 			entry.dir = dir
 			return
 		}
-		entry.err = fmt.Errorf("goldenFixtureDir(%d): failed after %d full rebuild attempts: %w", numCommits, buildPackedFixtureAttempts, lastErr)
+		if anyTimedOut {
+			entry.err = fmt.Errorf("goldenFixtureDir(%d): failed after %d full rebuild attempts, last attempt exceeded the %s whole-attempt timeout: %w", numCommits, buildPackedFixtureAttempts, fixtureBuildTimeout, lastErr)
+		} else {
+			entry.err = fmt.Errorf("goldenFixtureDir(%d): failed after %d full rebuild attempts: %w", numCommits, buildPackedFixtureAttempts, lastErr)
+		}
 	})
 	if entry.err != nil {
 		t.Fatalf("goldenFixtureDir(%d): %v", numCommits, entry.err)
@@ -670,18 +714,21 @@ func TestRemoveAllWithRetry_RemovesRealDirectory(t *testing.T) {
 // than retrying any individual git command in place — see
 // buildPackedFixtureAttempts's doc comment for why that distinction
 // matters here specifically.
-func buildPackedFixtureOnce(t testing.TB, dir string, numCommits int) error {
+func buildPackedFixtureOnce(ctx context.Context, t testing.TB, dir string, numCommits int) error {
 	t.Helper()
+	gitRun := func(args ...string) error {
+		return gitRunErrCtx(ctx, t.Logf, dir, gitCommandTimeout(args), args...)
+	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("mkdir %s: %w", dir, err)
 	}
-	if err := gitRunErr(t.Logf, dir, "init", "-q", "-b", "main"); err != nil {
+	if err := gitRun("init", "-q", "-b", "main"); err != nil {
 		return err
 	}
-	if err := gitRunErr(t.Logf, dir, "config", "user.name", "test"); err != nil {
+	if err := gitRun("config", "user.name", "test"); err != nil {
 		return err
 	}
-	if err := gitRunErr(t.Logf, dir, "config", "user.email", "test@test.local"); err != nil {
+	if err := gitRun("config", "user.email", "test@test.local"); err != nil {
 		return err
 	}
 	// gc.auto=0 disables git's OWN automatic housekeeping — several plumbing
@@ -707,7 +754,7 @@ func buildPackedFixtureOnce(t testing.TB, dir string, numCommits int) error {
 	// here every command exits 0, so nothing above would ever detect or
 	// retry it. Setting gc.auto=0 makes this function's own gc call the
 	// ONLY packing operation ever run against this fixture repo.
-	if err := gitRunErr(t.Logf, dir, "config", "gc.auto", "0"); err != nil {
+	if err := gitRun("config", "gc.auto", "0"); err != nil {
 		return err
 	}
 	// gc.auto=0 (above) only closes off `git gc --auto`'s own trigger path.
@@ -724,7 +771,7 @@ func buildPackedFixtureOnce(t testing.TB, dir string, numCommits int) error {
 	// surface, not the one #190 closed. Disabling maintenance.auto here too
 	// removes that entire mechanism as a source of a same-repo concurrent
 	// writer, regardless of which specific task it would have run.
-	if err := gitRunErr(t.Logf, dir, "config", "maintenance.auto", "false"); err != nil {
+	if err := gitRun("config", "maintenance.auto", "false"); err != nil {
 		return err
 	}
 
@@ -779,7 +826,14 @@ func buildPackedFixtureOnce(t testing.TB, dir string, numCommits int) error {
 	// concurrently), which is the proximate trigger for gc failing
 	// partway through in the first place (see gitRunErr's doc comment).
 	// Fewer threads means a slower but less failure-prone repack.
-	if err := gitRunErr(t.Logf, dir, "-c", "pack.threads=1", "gc", "-q", "--aggressive"); err != nil {
+	// -c gc.autoDetach=false belt-and-suspenders this EXPLICIT gc call
+	// itself: gc.auto=0/maintenance.auto=false (above) stop other commands
+	// from ever *triggering* an auto-gc, but if some future change
+	// re-introduces a trigger this repo doesn't yet account for, forcing
+	// this call to run in the foreground (rather than gc.autoDetach's
+	// default background fork) means it can't itself race a concurrent
+	// detached gc the way the comment above describes.
+	if err := gitRun("-c", "pack.threads=1", "-c", "gc.autoDetach=false", "gc", "-q", "--aggressive"); err != nil {
 		return err
 	}
 
