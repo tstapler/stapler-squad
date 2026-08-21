@@ -294,6 +294,11 @@ func TestServer_should_KeepSingleOriginAllowlist_When_ExtraOriginsEnvVarUnset(t 
 //	kill %1 %2 %3
 func TestServer_should_WriteRealPortIntoSessionHooksAndMCPURL_When_StartedWithPortZeroThenSessionCreated(t *testing.T) {
 	installFakeClaudeBinary(t)
+	// See STAPLER_SQUAD_TEST_DIR comment on TestSessionService_CreateThenImmediateDelete_NoDataRace
+	// below: without a per-test SQLite file, this test contends on the shared PID-scoped store
+	// with every other concurrently-running test in this package during a full-suite run, which
+	// can push the 60s hook-write poll in waitForPermissionRequestHookCommand past its budget.
+	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
 
 	deps, err := BuildDependencies()
 	if err != nil {
@@ -397,6 +402,7 @@ func TestServer_should_WriteRealPortIntoSessionHooksAndMCPURL_When_StartedWithPo
 //	kill %1 %2 %3
 func TestServer_should_WriteUnchangedHookURL_When_StartedOnExplicitPort(t *testing.T) {
 	installFakeClaudeBinary(t)
+	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
 
 	deps, err := BuildDependencies()
 	if err != nil {
@@ -456,8 +462,17 @@ func TestServer_should_WriteUnchangedHookURL_When_StartedOnExplicitPort(t *testi
 // The deterministic proof that the fix is correct is
 // TestGetPTY_ClosePTYAndAttachCmd_ConcurrentAccessIsSerialized in session/tmux/tmux_test.go,
 // which forces the interleave directly instead of relying on timing.
+//
+// STAPLER_SQUAD_TEST_DIR gives this test its own SQLite file instead of the shared
+// per-process one config.IsTestMode() falls back to (keyed only by PID, not by test):
+// without it, every -count=N outer repetition in the "PTY-triple race regression" CI
+// step re-triggers the exact same busy_timeout flake the paragraph above says was
+// already fixed once -- N independently-constructed BuildDependencies() clients (one
+// per repetition, none of them closed) contend for one shared database file, which
+// under -race's slowdown can exceed the 5s busy_timeout ("database is locked").
 func TestSessionService_CreateThenImmediateDelete_NoDataRace(t *testing.T) {
 	installFakeClaudeBinary(t)
+	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
 	deps, err := BuildDependencies()
 	if err != nil {
 		t.Fatalf("BuildDependencies: %v", err)
