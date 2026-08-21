@@ -263,19 +263,11 @@ type backlogHandlers struct {
 	reviewTrigger ReviewTrigger                 // optional; nil means review gate waits for the next reconcile tick
 	liveCheck     func(sessionUUID string) bool // optional; nil means treat every EndedAt==nil ItemSession row as live (today's behavior); backs link_session_to_item's exclusivity check
 
-	// backlogSvc backs createBacklogItem/importGitHubIssue's post-create
-	// auto-triage trigger (BUG-061: these two MCP tools used to call
-	// h.storage.CreateBacklogItem directly and skip triage entirely, unlike
-	// the RPC handlers of the same name — see BacklogService.MaybeTriggerTriage's
-	// doc comment), and link_session_to_item's underlying AttachSessionToItem
-	// call. Held as the concrete type (not a narrower interface) to match this
-	// package's existing pattern for *services.SessionService (svc field on
-	// workflowHandlers/rulesHandlers/lifecycleHandlers) — a single-purpose
-	// interface here would have exactly one implementation and no near-term
-	// second one. Optional; nil means auto-triage is skipped (item created
-	// exactly as before that fix) and link_session_to_item returns
-	// ErrUnavailable (e.g. the stdio fallback transport, see ADR-001) instead
-	// of panicking.
+	// backlogSvc backs createBacklogItem/importGitHubIssue's post-create auto-triage
+	// trigger (BUG-061; see BacklogService.MaybeTriggerTriage) and link_session_to_item's
+	// AttachSessionToItem call. Concrete type per this package's existing convention
+	// (see interface-pollution-checklist.md). Optional; nil skips auto-triage and makes
+	// link_session_to_item return ErrUnavailable (stdio fallback, see ADR-001).
 	backlogSvc *services.BacklogService
 
 	// verifyPRMatchesBranch backs report_pr_created's GitHub cross-check.
@@ -976,12 +968,9 @@ func (h *backlogHandlers) reportProgress(ctx context.Context, req mcpgo.CallTool
 
 // --- link_session_to_item / get_linked_item ---
 
-// activeWorkSessionOwner returns the session UUID of a different work-role ItemSession on the
-// given item that is still genuinely live, if one exists. A row with EndedAt == nil is only
-// treated as a conflict if liveCheck is nil (no liveness primitive wired — preserves
-// pre-feature behavior) or liveCheck reports that session alive; a row whose owning session
-// liveCheck reports dead is treated as stale, not a conflict, so a session resuming
-// crashed/interrupted work is not blocked by a zombie row.
+// activeWorkSessionOwner returns the UUID of another live work-role ItemSession on the item,
+// if any. A row with EndedAt == nil only conflicts if liveCheck is nil or reports it alive —
+// a liveness-dead owner is stale, not a conflict, so resuming crashed work isn't blocked.
 func activeWorkSessionOwner(sessions []session.ItemSessionSummary, callerUUID string, liveCheck func(sessionUUID string) bool) (string, bool) {
 	for _, s := range sessions {
 		if s.Role != session.SessionRoleWork || s.EndedAt != nil || s.SessionUUID == callerUUID {
@@ -1033,17 +1022,15 @@ func (h *backlogHandlers) linkSessionToItem(ctx context.Context, req mcpgo.CallT
 	}
 
 	// Exclusivity precheck: reject if a different, still-live work session already holds the item.
+	// Check-then-act, no lock/transaction — two concurrent first-link calls on the same item can
+	// both pass this and both attach. Accepted, documented gap (rare in practice); see plan.md.
 	itemSessions, listErr := h.storage.ListItemSessions(ctx, itemID)
 	if listErr != nil && !errors.Is(listErr, session.ErrNotFound) {
 		return errResult(ErrInternalError, fmt.Sprintf("list item sessions: %v", listErr), ""), nil
 	}
 	if owner, conflict := activeWorkSessionOwner(itemSessions, callerUUID, h.liveCheck); conflict {
-		// Deliberately does not name the owning session's UUID in the response: a
-		// session UUID doubles as this MCP layer's only bearer credential
-		// (callerSessionUUID is self-attested from a request header with no further
-		// auth check), so returning another session's UUID here would let any
-		// caller learn it just by triggering a conflict and then use it to
-		// impersonate that session on every other backlog tool.
+		// Omits the owning session's UUID from the response: it doubles as this MCP
+		// layer's bearer credential, so leaking it here would let a caller impersonate it.
 		log.InfoLog.Printf("[mcp:link_session_to_item] session=%s item=%s conflict owner=%s", callerUUID, itemID, owner)
 		return errResult(ErrConflict,
 			fmt.Sprintf("item %s already has a live work session", itemID),

@@ -185,6 +185,73 @@ func TestLinkSessionToItem_should_CreateItemSession_When_ConflictingRowOwnerIsLi
 	assert.Equal(t, ErrConflict, m2["error"].(map[string]interface{})["code"].(string))
 }
 
+// TestLinkSessionToItem_should_CreateItemSession_When_OtherRoleIsReviewNotWork verifies
+// activeWorkSessionOwner's role filter: a live review-role session on the item must not
+// block a work-role relink — only a Role==SessionRoleWork row can conflict.
+func TestLinkSessionToItem_should_CreateItemSession_When_OtherRoleIsReviewNotWork(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	item := createTestItem(t, storage, string(session.BacklogStatusInProgress))
+	_, err := storage.CreateItemSession(context.Background(), session.ItemSessionData{
+		ItemID: item.ID, SessionUUID: uuid.New().String(), SessionRole: "review",
+	})
+	require.NoError(t, err)
+
+	callerUUID := uuid.New().String()
+	ctx := WithSessionUUID(context.Background(), callerUUID)
+	backlogSvc := newTestLinkBacklogSvc(t, storage)
+	handler := &backlogHandlers{storage: storage, backlogSvc: backlogSvc}
+
+	result, err := handler.linkSessionToItem(ctx, makeToolReq(map[string]interface{}{"item_id": item.ID}))
+	require.NoError(t, err)
+	m := parseResult(t, result)
+	require.True(t, m["success"].(bool), "a live review-role session must not block a work-role relink")
+}
+
+// TestLinkSessionToItem_should_CreateItemSession_When_OtherRowAlreadyEnded verifies
+// activeWorkSessionOwner's EndedAt filter: a work-role row whose session already ended
+// normally must not block a relink.
+func TestLinkSessionToItem_should_CreateItemSession_When_OtherRowAlreadyEnded(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	item := createTestItem(t, storage, string(session.BacklogStatusInProgress))
+	endedIS, err := storage.CreateItemSession(context.Background(), session.ItemSessionData{
+		ItemID: item.ID, SessionUUID: uuid.New().String(), SessionRole: session.SessionRoleWork,
+	})
+	require.NoError(t, err)
+	require.NoError(t, storage.UpdateItemSessionEnded(context.Background(), endedIS.ID, time.Now()))
+
+	callerUUID := uuid.New().String()
+	ctx := WithSessionUUID(context.Background(), callerUUID)
+	backlogSvc := newTestLinkBacklogSvc(t, storage)
+	handler := &backlogHandlers{storage: storage, backlogSvc: backlogSvc}
+
+	result, err := handler.linkSessionToItem(ctx, makeToolReq(map[string]interface{}{"item_id": item.ID}))
+	require.NoError(t, err)
+	m := parseResult(t, result)
+	require.True(t, m["success"].(bool), "a normally-ended prior work session must not block a relink")
+}
+
+// TestLinkSessionToItem_should_ReportRegeneratedAndStatus_When_CallerIsLiveInstance verifies
+// slash_commands_regenerated flips to true and item_status is populated when the caller's
+// UUID matches a live instance with a resolvable path (sessionHasWritableInstance's true
+// branch) — every other test in this file leaves store nil, which trivially short-circuits
+// this to false and never exercises it.
+func TestLinkSessionToItem_should_ReportRegeneratedAndStatus_When_CallerIsLiveInstance(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	item := createTestItem(t, storage, string(session.BacklogStatusInProgress))
+	callerUUID := uuid.New().String()
+	ctx := WithSessionUUID(context.Background(), callerUUID)
+	backlogSvc := newTestLinkBacklogSvc(t, storage)
+	store := &stubStore{instances: []*session.Instance{{UUID: callerUUID, Path: t.TempDir(), Title: "caller-instance"}}}
+	handler := &backlogHandlers{storage: storage, backlogSvc: backlogSvc, store: store}
+
+	result, err := handler.linkSessionToItem(ctx, makeToolReq(map[string]interface{}{"item_id": item.ID}))
+	require.NoError(t, err)
+	m := parseResult(t, result)
+	require.True(t, m["success"].(bool))
+	assert.True(t, m["slash_commands_regenerated"].(bool), "a live instance with a resolvable path must report slash_commands_regenerated=true")
+	assert.Equal(t, string(session.BacklogStatusInProgress), m["item_status"].(string))
+}
+
 func TestLinkSessionToItem_should_ReturnItemNotFound_When_ItemIdDoesNotExist(t *testing.T) {
 	storage := newTestBacklogStorage(t)
 	backlogSvc := newTestLinkBacklogSvc(t, storage)

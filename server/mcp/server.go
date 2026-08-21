@@ -25,19 +25,24 @@ import (
 // (matches pre-flag behavior, used by tests). When set, it gates registration
 // at startup (belt-and-suspenders) and is threaded into each backlog/goal
 // handler so a live flag flip takes effect without restarting the MCP server.
-// autoReopener is optional — when nil, submit_review_verdict skips its eager
-// review->in_progress transition on FAIL/PARTIAL/UNVERIFIABLE verdicts and
-// falls back to the pre-existing session-exit/sweep paths.
-// backlogSvc is optional — when nil, create_backlog_item/import_github_issue
-// skip the post-create auto-triage trigger (BUG-061) and create the item
-// exactly as before that fix (see BacklogService.MaybeTriggerTriage), and
-// link_session_to_item/get_linked_item's underlying attach call is
-// unavailable (e.g. the stdio fallback transport, see ADR-001) —
-// linkSessionToItem returns ErrUnavailable instead of panicking.
-// liveCheck is optional — when nil, the exclusivity check in
-// link_session_to_item falls back to treating every EndedAt==nil ItemSession
-// row as live (pre-feature behavior).
-func NewCore(store session.InstanceStore, svc *services.SessionService, sbMgr *scrollback.ScrollbackManager, storage *session.Storage, eventBus *events.EventBus, prCache *githubpkg.UserPRCache, backlogEnabled func() bool, autoReopener session.AutoReopenSpawner, backlogSvc *services.BacklogService, liveCheck func(sessionUUID string) bool) *mcpserver.MCPServer {
+// autoReopener is optional — nil skips submit_review_verdict's eager review->in_progress
+// transition, falling back to the pre-existing session-exit/sweep paths.
+// backlogSvc is optional — nil skips auto-triage (BUG-061) and makes link_session_to_item
+// return ErrUnavailable instead of panicking (e.g. the stdio fallback transport, ADR-001).
+// liveCheck is optional — nil treats every EndedAt==nil ItemSession row as live in
+// link_session_to_item's exclusivity check (pre-feature behavior).
+func NewCore(
+	store session.InstanceStore,
+	svc *services.SessionService,
+	sbMgr *scrollback.ScrollbackManager,
+	storage *session.Storage,
+	eventBus *events.EventBus,
+	prCache *githubpkg.UserPRCache,
+	backlogEnabled func() bool,
+	autoReopener session.AutoReopenSpawner,
+	backlogSvc *services.BacklogService,
+	liveCheck func(sessionUUID string) bool,
+) *mcpserver.MCPServer {
 	s := mcpserver.NewMCPServer(
 		"stapler-squad",
 		"1.0.0",
@@ -86,9 +91,20 @@ func NewCore(store session.InstanceStore, svc *services.SessionService, sbMgr *s
 // prCache is optional — pass nil to disable GitHub PR tools.
 // backlogEnabled is optional — see NewCore.
 // autoReopener/backlogSvc/liveCheck are optional — see NewCore.
-func NewHTTPHandler(store session.InstanceStore, svc *services.SessionService, sbMgr *scrollback.ScrollbackManager, storage *session.Storage, eventBus *events.EventBus, prCache *githubpkg.UserPRCache, backlogEnabled func() bool, autoReopener session.AutoReopenSpawner, backlogSvc *services.BacklogService, liveCheck func(sessionUUID string) bool) *mcpserver.StreamableHTTPServer {
+func NewHTTPHandler(
+	store session.InstanceStore,
+	svc *services.SessionService,
+	sbMgr *scrollback.ScrollbackManager,
+	storage *session.Storage,
+	eventBus *events.EventBus,
+	prCache *githubpkg.UserPRCache,
+	backlogEnabled func() bool,
+	autoReopener session.AutoReopenSpawner,
+	backlogSvc *services.BacklogService,
+	liveCheck func(sessionUUID string) bool,
+) *mcpserver.StreamableHTTPServer {
 	core := NewCore(store, svc, sbMgr, storage, eventBus, prCache, backlogEnabled, autoReopener, backlogSvc, liveCheck)
-	log.InfoLog.Printf("[mcp] link_session_to_item backlogSvc wired: %v", backlogSvc != nil)
+	log.InfoLog.Printf("[mcp] link_session_to_item wired: backlogSvc=%v liveCheck=%v", backlogSvc != nil, liveCheck != nil)
 	// Stateless mode: accept any session ID rather than tracking them in memory.
 	// This allows Claude Code sessions to survive server restarts without needing
 	// to re-initialize the MCP connection (which would require restarting the agent).
@@ -103,16 +119,22 @@ func NewHTTPHandler(store session.InstanceStore, svc *services.SessionService, s
 // eventBus is optional — pass nil to disable triage-complete notifications on stdio path.
 // prCache is optional — pass nil to disable GitHub PR tools.
 // backlogEnabled is optional — see NewCore.
-// autoReopener is optional — see NewCore. The stdio fallback path
-// (buildMCPDeps in main.go) only builds Phase 1 (CoreDeps) dependencies,
-// which has no *services.BacklogService, so callers on that path pass nil
-// and submit_review_verdict's eager transition is skipped there — the
-// session-exit/sweep paths still apply.
-// backlogSvc/liveCheck are optional — see NewCore. Same Phase-1-only caveat
-// as autoReopener above: the stdio fallback path has no *services.BacklogService
-// to pass, so create_backlog_item/import_github_issue skip auto-triage and
-// link_session_to_item degrades to UNAVAILABLE there.
-func RunServer(ctx context.Context, store session.InstanceStore, svc *services.SessionService, sbMgr *scrollback.ScrollbackManager, storage *session.Storage, eventBus *events.EventBus, prCache *githubpkg.UserPRCache, backlogEnabled func() bool, autoReopener session.AutoReopenSpawner, backlogSvc *services.BacklogService, liveCheck func(sessionUUID string) bool) error {
+// autoReopener/backlogSvc/liveCheck are optional — see NewCore. The stdio fallback path
+// (buildMCPDeps in main.go) only builds Phase 1 (CoreDeps) dependencies, so callers on
+// that path pass nil for all three and get NewCore's documented nil-behavior for each.
+func RunServer(
+	ctx context.Context,
+	store session.InstanceStore,
+	svc *services.SessionService,
+	sbMgr *scrollback.ScrollbackManager,
+	storage *session.Storage,
+	eventBus *events.EventBus,
+	prCache *githubpkg.UserPRCache,
+	backlogEnabled func() bool,
+	autoReopener session.AutoReopenSpawner,
+	backlogSvc *services.BacklogService,
+	liveCheck func(sessionUUID string) bool,
+) error {
 	log.Info("mcp server starting on stdio transport")
 
 	// Inject session UUID from environment into the root context so that

@@ -87,12 +87,10 @@ func WriteSlashCommands(engine PipelineEngine, item *BacklogItemData, worktreePa
 // review.md, ship.md, help.md, which every item has regardless of AC count.
 var staleCommandFileRe = regexp.MustCompile(`^(done|fail)-\d+\.md$`)
 
-// pruneStaleSlashCommandFiles removes done-N.md/fail-N.md files in cmdDir that are not
-// present in the newly generated file set — e.g. left over from a previous item with more
-// acceptance criteria than the one just linked. Only touches done-*.md/fail-*.md; status.md,
-// review.md, ship.md, help.md are always present in newFiles for every item and never stale
-// by count. Best-effort: logs and continues past a single file's removal failure rather than
-// failing the whole write (matches WriteSlashCommands' own not-atomic contract).
+// pruneStaleSlashCommandFiles removes done-N.md/fail-N.md files in cmdDir not present in
+// newFiles (leftover from a prior item with more acceptance criteria). Never touches the
+// fixed status/review/ship/help.md set. Best-effort — logs and continues past a single
+// removal failure rather than failing the whole write.
 func pruneStaleSlashCommandFiles(cmdDir string, newFiles map[string]string) {
 	entries, err := os.ReadDir(cmdDir)
 	if err != nil {
