@@ -489,7 +489,11 @@ func TestListWorktrees_TimesOutOnHungGitCommand(t *testing.T) {
 
 	require.Error(t, err)
 	assert.Equal(t, connect.CodeDeadlineExceeded, connect.CodeOf(err))
-	assert.Less(t, elapsed, 10*time.Second, "ListWorktrees should time out near pathCompletionTimeout, not hang")
+	// BUG-077: listWorktreesTimeout was raised from 5s to 20s to tolerate host
+	// CPU contention (a genuinely-stuck subprocess doesn't resolve in
+	// single-digit seconds anyway), so the bound here tracks that constant
+	// plus headroom rather than a fixed pre-fix value.
+	assert.Less(t, elapsed, listWorktreesTimeout+5*time.Second, "ListWorktrees should time out near listWorktreesTimeout, not hang")
 }
 
 // Unit tests for helper functions.
