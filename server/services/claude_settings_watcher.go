@@ -43,6 +43,15 @@ type ClaudeSettingsWatcher struct {
 	// watching is per-directory, not per-file — see Start). Set once in Start before the
 	// run goroutine starts; read-only afterward, so no separate lock is needed.
 	watchedFilenames map[string]bool
+
+	// pendingDirs maps a parent directory (added to the watcher as a fallback) to the set
+	// of settings-dir basenames (always ".claude") we're waiting to see Create'd inside it —
+	// populated in Start for any settingsPaths() directory that did not exist yet (fsw.Add
+	// failed). Only run() reads/mutates it after Start hands off, so no separate lock is
+	// needed — same single-goroutine-owns-it invariant as watchedFilenames. Without this, a
+	// project enabling rules for the first time (creating .claude/ after the server started)
+	// would never be picked up until the next restart.
+	pendingDirs map[string]map[string]bool
 }
 
 // NewClaudeSettingsWatcher creates a watcher for projectDir's claude-settings paths (see
@@ -179,6 +188,7 @@ func (w *ClaudeSettingsWatcher) Start(ctx context.Context) {
 	// in the watched directory, not just our files, so run() filters by watchedFilenames.
 	watchedDirs := make(map[string]bool)
 	w.watchedFilenames = make(map[string]bool)
+	w.pendingDirs = make(map[string]map[string]bool)
 	for _, p := range settingsPaths(w.projectDir) {
 		dir := filepath.Dir(p.path)
 		w.watchedFilenames[filepath.Base(p.path)] = true
@@ -187,6 +197,21 @@ func (w *ClaudeSettingsWatcher) Start(ctx context.Context) {
 		}
 		if err := fsw.Add(dir); err != nil {
 			log.Debug("[ClaudeSettingsWatcher] could not watch settings dir (may not exist yet)", "dir", dir, "err", err)
+			// Fall back to watching dir's parent (home or the project root) so we notice
+			// if/when dir is created later — e.g. a project enabling rules for the first
+			// time. Without this, the missing dir is skipped permanently until restart.
+			parent := filepath.Dir(dir)
+			if !watchedDirs[parent] {
+				if perr := fsw.Add(parent); perr != nil {
+					log.Debug("[ClaudeSettingsWatcher] could not watch parent of missing settings dir either, giving up on it", "parent", parent, "err", perr)
+					continue
+				}
+				watchedDirs[parent] = true
+			}
+			if w.pendingDirs[parent] == nil {
+				w.pendingDirs[parent] = make(map[string]bool)
+			}
+			w.pendingDirs[parent][filepath.Base(dir)] = true
 			continue
 		}
 		watchedDirs[dir] = true
@@ -215,17 +240,25 @@ func (w *ClaudeSettingsWatcher) run(ctx context.Context) {
 			if !ok {
 				return
 			}
+			if w.handlePendingDirCreate(event) {
+				// The dir may already contain a settings file (e.g. checking out a
+				// branch that already commits .claude/settings.json) — reload
+				// defensively rather than waiting for a separate write event.
+				timer = armDebounceTimer(timer)
+				timerC = timer.C
+				continue
+			}
 			if !w.watchedFilenames[filepath.Base(event.Name)] {
 				continue
 			}
-			if event.Op&(fsnotify.Write|fsnotify.Create|fsnotify.Rename) == 0 {
+			// fsnotify.Remove is included so a deleted settings file reaches
+			// reloadLocked's ErrSettingsNotFound branch and revokes its rules — without
+			// it, previously-approved auto-allow rules from a deleted settings file
+			// would stay active indefinitely.
+			if event.Op&(fsnotify.Write|fsnotify.Create|fsnotify.Rename|fsnotify.Remove) == 0 {
 				continue
 			}
-			if timer == nil {
-				timer = time.NewTimer(claudeSettingsWatchDebounce)
-			} else {
-				timer.Reset(claudeSettingsWatchDebounce)
-			}
+			timer = armDebounceTimer(timer)
 			timerC = timer.C
 		case <-timerC:
 			timerC = nil
@@ -237,6 +270,48 @@ func (w *ClaudeSettingsWatcher) run(ctx context.Context) {
 			log.Warn("[ClaudeSettingsWatcher] fsnotify error", "err", err)
 		}
 	}
+}
+
+// armDebounceTimer (re)starts the shared debounce timer, creating it on first use.
+// Factored out because both the ordinary settings-file event path and
+// handlePendingDirCreate's defensive reload need to arm the same timer.
+func armDebounceTimer(timer *time.Timer) *time.Timer {
+	if timer == nil {
+		return time.NewTimer(claudeSettingsWatchDebounce)
+	}
+	timer.Reset(claudeSettingsWatchDebounce)
+	return timer
+}
+
+// handlePendingDirCreate checks whether event is a Create event for a settings directory
+// this watcher is waiting on (see pendingDirs) inside one of its watched parent
+// directories. If so, it adds the newly-created directory to the fsnotify watcher — so
+// future writes inside it are picked up — clears it from pendingDirs, and reports true.
+// A no-op (returns false) for any other event, including Create events unrelated to a
+// pending dir.
+func (w *ClaudeSettingsWatcher) handlePendingDirCreate(event fsnotify.Event) bool {
+	if event.Op&fsnotify.Create == 0 {
+		return false
+	}
+	parent := filepath.Dir(event.Name)
+	children := w.pendingDirs[parent]
+	if children == nil {
+		return false
+	}
+	base := filepath.Base(event.Name)
+	if !children[base] {
+		return false
+	}
+	if err := w.watcher.Add(event.Name); err != nil {
+		log.Debug("[ClaudeSettingsWatcher] pending settings dir appeared but could not be watched", "dir", event.Name, "err", err)
+		return false
+	}
+	delete(children, base)
+	if len(children) == 0 {
+		delete(w.pendingDirs, parent)
+	}
+	log.Info("[ClaudeSettingsWatcher] settings dir created, now watching for settings files", "dir", event.Name)
+	return true
 }
 
 // Stopped returns a channel that is closed when the watcher goroutine has exited (or

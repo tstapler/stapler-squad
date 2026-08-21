@@ -390,3 +390,85 @@ func TestClaudeSettingsWatcher_Start_IgnoresUnrelatedFileInWatchedDirectory(t *t
 	time.Sleep(400 * time.Millisecond)
 	assert.Equal(t, 1, spy.count(), "a write to an unrelated file in the same directory must not trigger a reload")
 }
+
+// TestClaudeSettingsWatcher_Start_DetectsFileDeletion_RevokesRulesWithoutRestart is the
+// end-to-end regression test for the reviewed defect: run()'s fsnotify op-mask filtered out
+// fsnotify.Remove, so a bare `rm ~/.claude/settings.json` never reached reloadLocked's
+// ErrSettingsNotFound/revoke branch — previously-approved auto-allow rules from the deleted
+// file stayed active until the next restart. TestClaudeSettingsWatcher_Reload_FileDeleted_
+// RevokesRules already covers reloadLocked's revoke logic directly; this test proves the
+// fsnotify event actually reaches it.
+func TestClaudeSettingsWatcher_Start_DetectsFileDeletion_RevokesRulesWithoutRestart(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	settingsPath := filepath.Join(home, ".claude", "settings.json")
+	writeSettingsFile(t, settingsPath, `{"permissions":{"allow":["Bash(git *)"]}}`)
+
+	spy := &reloadSpy{}
+	w := NewClaudeSettingsWatcher("", spy.callback())
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	w.Start(ctx)
+	require.Equal(t, 1, spy.count(), "priming reload")
+	require.Equal(t, 1, spy.last().ruleCount)
+
+	require.NoError(t, os.Remove(settingsPath))
+
+	assert.Eventually(t, func() bool {
+		return spy.count() == 2 && spy.last().ruleCount == 0
+	}, time.Second, 10*time.Millisecond, "deleting the settings file must revoke its rules without a restart")
+
+	cancel()
+	select {
+	case <-w.Stopped():
+	case <-time.After(time.Second):
+		t.Fatal("watcher goroutine did not exit after context cancellation")
+	}
+}
+
+// TestClaudeSettingsWatcher_Start_ProjectDirCreatedAfterStart_PicksUpSettingsFile is the
+// regression test for the reviewed defect: Start()'s fsw.Add(dir) failure for a
+// not-yet-existing .claude/ directory was logged and permanently skipped, with no way to
+// notice the directory being created later (e.g. a project enabling rules for the first
+// time) short of restarting the server.
+func TestClaudeSettingsWatcher_Start_ProjectDirCreatedAfterStart_PicksUpSettingsFile(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	projectDir := t.TempDir()
+	// No .claude dir under projectDir yet — Start() must fall back to watching projectDir
+	// itself rather than giving up on the project settings path permanently.
+
+	spy := &reloadSpy{}
+	w := NewClaudeSettingsWatcher(projectDir, spy.callback())
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	w.Start(ctx)
+	require.Equal(t, 1, spy.count(), "priming reload")
+	require.Equal(t, 0, spy.last().ruleCount, "no settings exist anywhere yet")
+
+	require.NoError(t, os.MkdirAll(filepath.Join(projectDir, ".claude"), 0755))
+
+	// The dir's own Create event should be noticed via the projectDir fallback watch and
+	// trigger a defensive reload (harmless no-op here, since the dir is still empty) — wait
+	// for that before writing the file, so the write lands after the dir is actually being
+	// watched rather than racing fsw.Add.
+	assert.Eventually(t, func() bool {
+		return spy.count() >= 2
+	}, time.Second, 10*time.Millisecond, "watcher should react to the newly created .claude dir")
+
+	writeSettingsFile(t, filepath.Join(projectDir, ".claude", "settings.json"),
+		`{"permissions":{"allow":["Bash(git *)"]}}`)
+
+	assert.Eventually(t, func() bool {
+		return spy.last().ruleCount == 1
+	}, time.Second, 10*time.Millisecond, "a .claude dir created after Start() must still be watched for settings files")
+
+	cancel()
+	select {
+	case <-w.Stopped():
+	case <-time.After(time.Second):
+		t.Fatal("watcher goroutine did not exit after context cancellation")
+	}
+}
