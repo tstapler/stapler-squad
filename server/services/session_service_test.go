@@ -15,6 +15,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/pkg/classifier"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/detection"
@@ -2675,4 +2676,133 @@ func TestSessionService_Shutdown_StopsAnalyticsFlushGoroutine(t *testing.T) {
 	require.NotPanics(t, func() {
 		store.Record(AnalyticsEntry{SessionID: "sess-1", ToolName: "Bash"})
 	}, "Record() after Shutdown() must stay a silent no-op, not panic")
+}
+
+// TestLoadClaudeSettingsRulesAtStartup_MergesRulesIntoClassifier is the Story 2.1.1
+// root-cause regression test: LoadClaudeSettingsRules had zero call sites before this
+// project, so ~/.claude/settings.json permissions.allow entries never took effect as
+// stapler-squad auto-approval rules. Exercises the extracted
+// loadClaudeSettingsRulesAtStartup helper directly rather than going through
+// NewSessionService, which skips this under config.IsTestMode() precisely so the rest of
+// this repo's test suite doesn't depend on the developer's real ~/.claude/settings.json —
+// see loadClaudeSettingsRulesAtStartup's call site in NewSessionServiceWithSearchEngine.
+func TestLoadClaudeSettingsRulesAtStartup_MergesRulesIntoClassifier(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	writeSettingsFile(t, filepath.Join(home, ".claude", "settings.json"),
+		`{"permissions":{"allow":["Bash(git log*)"]}}`)
+
+	classifierObj := classifier.NewRuleBasedClassifier()
+	loadClaudeSettingsRulesAtStartup(classifierObj, "", events.NewEventBus(100))
+
+	toolName := ""
+	found := false
+	for _, r := range classifierObj.Rules() {
+		if r.Source == "claude-settings" {
+			found = true
+			toolName = r.ToolName
+		}
+	}
+	require.True(t, found, "claude-settings rule from ~/.claude/settings.json must be present at startup")
+	assert.Equal(t, "Bash", toolName)
+}
+
+// TestNewSessionService_ClaudeSettingsWatcherWiredAndReachable is the Story 4.3.1
+// lifecycle-wiring regression test: GetClaudeSettingsWatcher must return a non-nil watcher
+// after NewSessionService, so wireDepsIntoServer has something to Start with the server's
+// lifecycle context.
+func TestNewSessionService_ClaudeSettingsWatcherWiredAndReachable(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	storage := createTestStorage(t)
+	eventBus := events.NewEventBus(100)
+	svc := NewSessionService(storage, eventBus)
+	t.Cleanup(func() { svc.Shutdown() })
+
+	assert.NotNil(t, svc.GetClaudeSettingsWatcher())
+}
+
+// TestLoadClaudeSettingsRulesAtStartup_CwdEqualsHome_NoDuplicateClaudeSettingsRules is the
+// Blocker 2 end-to-end regression test: the live deployed systemd unit runs with
+// WorkingDirectory=$HOME (see scripts/install-service.sh), so the server's own cwd equals
+// home. Without the settingsPaths dedup fix, the classifier would load the same file's rules
+// twice (once tagged "global", once tagged "project"). Exercises
+// loadClaudeSettingsRulesAtStartup directly — see the sibling
+// TestLoadClaudeSettingsRulesAtStartup_MergesRulesIntoClassifier's doc comment for why.
+func TestLoadClaudeSettingsRulesAtStartup_CwdEqualsHome_NoDuplicateClaudeSettingsRules(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	writeSettingsFile(t, filepath.Join(home, ".claude", "settings.json"),
+		`{"permissions":{"allow":["Bash(git *)"]}}`)
+
+	classifierObj := classifier.NewRuleBasedClassifier()
+	loadClaudeSettingsRulesAtStartup(classifierObj, home, events.NewEventBus(100)) // cwd == home, mirrors the live deployed config
+
+	type key struct {
+		pattern  string
+		priority int
+	}
+	seen := make(map[key]int)
+	for _, r := range classifierObj.Rules() {
+		if r.Source != "claude-settings" {
+			continue
+		}
+		pattern := ""
+		if r.CommandPattern != nil {
+			pattern = r.CommandPattern.String()
+		}
+		seen[key{pattern: pattern, priority: r.Priority}]++
+	}
+	require.NotEmpty(t, seen)
+	for k, count := range seen {
+		assert.Equal(t, 1, count, "claude-settings rule %+v must not be duplicated when cwd == home", k)
+	}
+}
+
+// TestClaudeSettingsWatcher_StartsWiredCallback_InitialPrimingReloadPublishesNoNotification
+// is the end-to-end regression test for the reviewed defect against the ACTUAL callback
+// wired up in NewSessionServiceWithSearchEngine (not just the isolated watcher unit test):
+// Start()'s initial priming reload must never publish a "Claude Settings Reloaded"
+// EventNotification, whether or not any claude-settings rules are configured. Covers both
+// halves the reviewer flagged: a spurious "0 claude-settings rule(s) reloaded" toast on
+// every restart with no rules configured, and a redundant duplicate of the startup
+// activation notification when rules do exist.
+func TestClaudeSettingsWatcher_StartsWiredCallback_InitialPrimingReloadPublishesNoNotification(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		withRules bool
+	}{
+		{name: "zero rules configured", withRules: false},
+		{name: "rules configured", withRules: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("HOME", home)
+			if tc.withRules {
+				writeSettingsFile(t, filepath.Join(home, ".claude", "settings.json"),
+					`{"permissions":{"allow":["Bash(git log*)"]}}`)
+			}
+
+			storage := createTestStorage(t)
+			eventBus := events.NewEventBus(100)
+			svc := NewSessionService(storage, eventBus)
+			t.Cleanup(func() { svc.Shutdown() })
+
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			eventCh, _ := eventBus.Subscribe(ctx)
+
+			watcher := svc.GetClaudeSettingsWatcher()
+			require.NotNil(t, watcher)
+			watcher.Start(ctx) // exercises the exact NewSessionServiceWithSearchEngine-wired callback
+
+			select {
+			case ev := <-eventCh:
+				t.Fatalf("Start's initial priming reload must not publish a notification, got: %+v", ev)
+			case <-time.After(200 * time.Millisecond):
+				// No notification observed within the window — expected.
+			}
+		})
+	}
 }

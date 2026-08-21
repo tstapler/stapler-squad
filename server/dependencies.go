@@ -50,6 +50,12 @@ type ServerDependencies struct {
 	HistoryLinker           *session.HistoryLinker
 	ErrorRegistry           *services.ErrorRegistry
 
+	// ClaudeSettingsWatcher watches ~/.claude/settings.json (and project-level
+	// equivalents) for edits and hot-reloads their derived auto-approval rules. Started
+	// from wireDepsIntoServer with the server's lifecycle context so it stops cleanly
+	// on shutdown.
+	ClaudeSettingsWatcher *services.ClaudeSettingsWatcher
+
 	// SlackNotifier is the single shared Slack notifier instance, wired into
 	// both ReactiveQueueMgr (review-queue items) and ApprovalHandler (pending
 	// approvals) so GetDeliveryStatus reflects sends from both trigger points.
@@ -133,6 +139,7 @@ func (rt *RuntimeDeps) ToServerDeps() *ServerDependencies {
 		ExternalApprovalMonitor: rt.ExternalApprovalMonitor,
 		HistoryLinker:           rt.HistoryLinker,
 		ErrorRegistry:           rt.ErrorRegistry,
+		ClaudeSettingsWatcher:   rt.ClaudeSettingsWatcher,
 		SlackNotifier:           rt.SlackNotifier,
 		UnfinishedScanner:       rt.UnfinishedScanner,
 		UnfinishedStateStore:    rt.UnfinishedStateStore,
@@ -405,6 +412,10 @@ type RuntimeDeps struct {
 	PRStatusPoller          *session.PRStatusPoller
 	HistoryLinker           *session.HistoryLinker
 	ErrorRegistry           *services.ErrorRegistry
+
+	// ClaudeSettingsWatcher (see the identically-named field on ServerDependencies for
+	// its full doc comment).
+	ClaudeSettingsWatcher *services.ClaudeSettingsWatcher
 
 	// SlackNotifier is the single shared Slack notifier instance (see the
 	// identically-named field on ServerDependencies for its full doc comment).
@@ -1461,6 +1472,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		PRStatusPoller:          svc.PRStatusPoller,
 		HistoryLinker:           historyLinker,
 		ErrorRegistry:           svc.ErrorRegistry,
+		ClaudeSettingsWatcher:   sessionService.GetClaudeSettingsWatcher(),
 		SlackNotifier:           slackNotifier,
 		UnfinishedScanner:       unfinishedScanner,
 		UnfinishedStateStore:    unfinishedStateStore,
