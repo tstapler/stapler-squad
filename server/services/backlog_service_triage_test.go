@@ -256,18 +256,8 @@ func TestTriageResultTitle_should_MatchSanitizedTitle_When_PersistedAndReReadFor
 	}
 }
 
-// initGitRepoForTest initialises a minimal git repository in dir. A smaller,
-// dependency-free duplicate of backlog_triage_harness_test.go's initGitRepo,
-// which lives behind the "harness" build tag and isn't linked into normal
-// `go test` runs. Uses go-git directly rather than shelling out — see
-// .claude/rules/prefer-go-git-over-subshells.md. No commit is made here, so
-// no user identity config is needed.
-func initGitRepoForTest(t *testing.T, dir string) {
-	t.Helper()
-	if _, err := git.PlainInit(dir, false); err != nil {
-		t.Fatalf("git init: %v", err)
-	}
-}
+// initGitRepoForTest is defined in git_fixture_test.go (go-git based, shared
+// across this package's test files).
 
 // TestResolveSessionPath_should_ErrorNotFallBackToRepoPath_When_GitManagedWorktreeCreationFails
 // guards BUG-057: a worktree-creation failure on a repo that IS git-managed
@@ -4159,14 +4149,12 @@ func TestTriggerReReview_should_BlockOnBranchDriftInsteadOfMisleadingFailVerdict
 
 	// Main diverges on the same line AND drifts well past the default threshold — the
 	// exact shape that made 693c2700's diff unreviewable.
-	require.NoError(t, os.WriteFile(filepath.Join(origin, "README.md"), []byte("# Main Edit\n"), 0o644))
-	runGitTestCmd(t, origin, "add", "README.md")
-	runGitTestCmd(t, origin, "commit", "-m", "main: unrelated edit")
+	originRepo, err := git.PlainOpen(origin)
+	require.NoError(t, err)
+	commitFileForTest(t, originRepo, origin, "README.md", "# Main Edit\n", "main: unrelated edit")
 	for i := 0; i < 55; i++ {
 		fname := fmt.Sprintf("upstream-%d.txt", i)
-		require.NoError(t, os.WriteFile(filepath.Join(origin, fname), []byte("content\n"), 0o644))
-		runGitTestCmd(t, origin, "add", fname)
-		runGitTestCmd(t, origin, "commit", "-m", fmt.Sprintf("upstream commit %d", i))
+		commitFileForTest(t, originRepo, origin, fname, "content\n", fmt.Sprintf("upstream commit %d", i))
 	}
 
 	attachPRFixWorkSession(t, storage, repo, &session.BacklogItemData{ID: itemID},
