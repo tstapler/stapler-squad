@@ -1069,3 +1069,214 @@ func TestRegisterBacklogTools_RequestReview_DescribesAlreadyImplementedCitationR
 	assert.Contains(t, content, "already implemented",
 		"request_review tool description must call out unsupported \"already implemented\" claims as weak evidence")
 }
+
+// --- Link error consistency (ITEM_NOT_FOUND vs PERMISSION_DENIED) ---
+//
+// See project_plans/backlog-link-error-consistency/. Before this fix, every
+// mutating tool collapsed "item doesn't exist" and "item exists but this
+// session has no link to it" into the same PERMISSION_DENIED, while
+// get_backlog_item correctly distinguished the two via ITEM_NOT_FOUND.
+
+type linkConsistencyCase struct {
+	name   string
+	role   string // role the ItemSession is created with, when a link is created
+	invoke func(h *backlogHandlers, ctx context.Context, itemID string) (*mcpgo.CallToolResult, error)
+}
+
+var linkConsistencyMutatingTools = []linkConsistencyCase{
+	{"report_progress", session.SessionRoleWork, func(h *backlogHandlers, ctx context.Context, itemID string) (*mcpgo.CallToolResult, error) {
+		return h.reportProgress(ctx, makeToolReq(map[string]interface{}{"item_id": itemID, "criteria_index": float64(0), "status": "pass"}))
+	}},
+	{"request_review", session.SessionRoleWork, func(h *backlogHandlers, ctx context.Context, itemID string) (*mcpgo.CallToolResult, error) {
+		return h.requestReview(ctx, makeToolReq(map[string]interface{}{"item_id": itemID, "message": "done"}))
+	}},
+	{"submit_review_verdict", session.SessionRoleReview, func(h *backlogHandlers, ctx context.Context, itemID string) (*mcpgo.CallToolResult, error) {
+		return h.submitReviewVerdict(ctx, makeToolReq(map[string]interface{}{
+			"item_id": itemID, "summary": "s",
+			"verdicts": []interface{}{map[string]interface{}{"criterion_index": float64(0), "outcome": "PASS", "evidence": "e"}},
+		}))
+	}},
+	{"report_pr_created", session.SessionRoleWork, func(h *backlogHandlers, ctx context.Context, itemID string) (*mcpgo.CallToolResult, error) {
+		return h.reportPRCreated(ctx, makeToolReq(map[string]interface{}{
+			"item_id": itemID, "pr_url": "https://github.com/tstapler/stapler-squad/pull/1", "pr_number": float64(1), "summary": "s",
+		}))
+	}},
+	{"submit_triage_result", session.SessionRoleTriage, func(h *backlogHandlers, ctx context.Context, itemID string) (*mcpgo.CallToolResult, error) {
+		return h.submitTriageResult(ctx, makeToolReq(map[string]interface{}{"item_id": itemID, "summary": "s"}))
+	}},
+}
+
+// TestBacklogTools_LinkErrorConsistency_should_ReturnPermissionDenied_When_ItemExistsButNoLink
+// verifies AC3(a): when the backlog item exists but the calling session has no
+// ItemSession link row, every mutating tool returns PERMISSION_DENIED with a
+// self-diagnosable message (AC2) naming both the session UUID/item ID and all
+// 5 mutating tools, not just the one that was called.
+func TestBacklogTools_LinkErrorConsistency_should_ReturnPermissionDenied_When_ItemExistsButNoLink(t *testing.T) {
+	for _, tc := range linkConsistencyMutatingTools {
+		t.Run(tc.name, func(t *testing.T) {
+			storage := newTestBacklogStorage(t)
+			item, err := storage.CreateBacklogItem(context.Background(), session.BacklogItemData{
+				Title:              "Link consistency test item",
+				AcceptanceCriteria: `[{"index":0,"text":"Criterion","status":"pending"}]`,
+				Priority:           1,
+				Status:             string(session.BacklogStatusInProgress),
+			})
+			require.NoError(t, err)
+
+			sessionUUID := uuid.New().String()
+			handler := &backlogHandlers{storage: storage}
+			ctx := WithSessionUUID(context.Background(), sessionUUID)
+
+			result, err := tc.invoke(handler, ctx, item.ID)
+			require.NoError(t, err)
+			m := parseResult(t, result)
+			require.False(t, m["success"].(bool))
+
+			errObj, ok := m["error"].(map[string]interface{})
+			require.True(t, ok)
+			assert.Equal(t, ErrPermissionDenied, errObj["code"].(string))
+
+			message, _ := errObj["message"].(string)
+			assert.Contains(t, message, sessionUUID)
+			assert.Contains(t, message, item.ID)
+
+			remediation, _ := errObj["remediation"].(string)
+			for _, toolName := range []string{"report_progress", "request_review", "submit_review_verdict", "report_pr_created", "submit_triage_result"} {
+				assert.Contains(t, remediation, toolName)
+			}
+		})
+	}
+}
+
+// TestBacklogTools_LinkErrorConsistency_should_ReturnItemNotFound_When_ItemDoesNotExist
+// verifies AC3(b): when the backlog item itself does not exist, get_backlog_item
+// and every mutating tool return ITEM_NOT_FOUND — never PERMISSION_DENIED —
+// regardless of the calling session's link state.
+func TestBacklogTools_LinkErrorConsistency_should_ReturnItemNotFound_When_ItemDoesNotExist(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	itemID := uuid.New().String() // never created
+	sessionUUID := uuid.New().String()
+	handler := &backlogHandlers{storage: storage}
+	ctx := WithSessionUUID(context.Background(), sessionUUID)
+
+	assertItemNotFound := func(t *testing.T, result *mcpgo.CallToolResult, err error) {
+		t.Helper()
+		require.NoError(t, err)
+		m := parseResult(t, result)
+		require.False(t, m["success"].(bool))
+		errObj, ok := m["error"].(map[string]interface{})
+		require.True(t, ok)
+		assert.Equal(t, ErrItemNotFound, errObj["code"].(string))
+		remediation, _ := errObj["remediation"].(string)
+		assert.NotEmpty(t, remediation)
+		assert.Contains(t, strings.ToLower(remediation), "not exist")
+		assert.Contains(t, strings.ToLower(remediation), "do not retry")
+	}
+
+	t.Run("get_backlog_item", func(t *testing.T) {
+		result, err := handler.getBacklogItem(ctx, makeToolReq(map[string]interface{}{"item_id": itemID}))
+		assertItemNotFound(t, result, err)
+	})
+
+	for _, tc := range linkConsistencyMutatingTools {
+		t.Run(tc.name, func(t *testing.T) {
+			result, err := tc.invoke(handler, ctx, itemID)
+			assertItemNotFound(t, result, err)
+		})
+	}
+}
+
+// TestSubmitReviewVerdict_should_ReturnPermissionDenied_When_CallerRoleNotReview
+// verifies the pre-existing role-mismatch PERMISSION_DENIED branch is intact
+// after routing submitReviewVerdict's link check through resolveItemLink — no
+// prior test in this file covered this branch (adversarial-review.md Concern 1).
+func TestSubmitReviewVerdict_should_ReturnPermissionDenied_When_CallerRoleNotReview(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	item, err := storage.CreateBacklogItem(context.Background(), session.BacklogItemData{
+		Title:              "Wrong role item",
+		AcceptanceCriteria: `[{"index":0,"text":"Criterion","status":"pending"}]`,
+		Priority:           1,
+		Status:             string(session.BacklogStatusReview),
+	})
+	require.NoError(t, err)
+
+	sessionUUID := uuid.New().String()
+	_, err = storage.CreateItemSession(context.Background(), session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: sessionUUID,
+		SessionRole: session.SessionRoleWork, // wrong role
+	})
+	require.NoError(t, err)
+
+	handler := &backlogHandlers{storage: storage}
+	ctx := WithSessionUUID(context.Background(), sessionUUID)
+
+	result, err := handler.submitReviewVerdict(ctx, makeToolReq(map[string]interface{}{
+		"item_id": item.ID, "summary": "s",
+		"verdicts": []interface{}{map[string]interface{}{"criterion_index": float64(0), "outcome": "PASS", "evidence": "e"}},
+	}))
+	require.NoError(t, err)
+	m := parseResult(t, result)
+	require.False(t, m["success"].(bool))
+	errObj, ok := m["error"].(map[string]interface{})
+	require.True(t, ok)
+	assert.Equal(t, ErrPermissionDenied, errObj["code"].(string))
+	assert.Contains(t, errObj["message"].(string), "only 'review' role may submit verdicts")
+}
+
+// TestSubmitTriageResult_should_ReturnPermissionDenied_When_CallerRoleNotTriage
+// mirrors TestSubmitReviewVerdict_should_ReturnPermissionDenied_When_CallerRoleNotReview
+// for submitTriageResult's role check.
+func TestSubmitTriageResult_should_ReturnPermissionDenied_When_CallerRoleNotTriage(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	item, err := storage.CreateBacklogItem(context.Background(), session.BacklogItemData{
+		Title:              "Wrong role item",
+		AcceptanceCriteria: `[{"index":0,"text":"Criterion","status":"pending"}]`,
+		Priority:           1,
+		Status:             string(session.BacklogStatusInProgress),
+	})
+	require.NoError(t, err)
+
+	sessionUUID := uuid.New().String()
+	_, err = storage.CreateItemSession(context.Background(), session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: sessionUUID,
+		SessionRole: session.SessionRoleWork, // wrong role
+	})
+	require.NoError(t, err)
+
+	handler := &backlogHandlers{storage: storage}
+	ctx := WithSessionUUID(context.Background(), sessionUUID)
+
+	result, err := handler.submitTriageResult(ctx, makeToolReq(map[string]interface{}{"item_id": item.ID, "summary": "s"}))
+	require.NoError(t, err)
+	m := parseResult(t, result)
+	require.False(t, m["success"].(bool))
+	errObj, ok := m["error"].(map[string]interface{})
+	require.True(t, ok)
+	assert.Equal(t, ErrPermissionDenied, errObj["code"].(string))
+	assert.Contains(t, errObj["message"].(string), "only 'triage' role may submit triage results")
+}
+
+// TestBacklogHandlers_should_HaveNoRemainingRawLinkCheck_When_SourceIsScanned is a
+// structural guard (pre-mortem.md Failure #1, adversarial-review.md Concern 2):
+// asserts the pre-fix raw "errors.Is(linkErr, session.ErrNotFound) -> unconditional
+// PERMISSION_DENIED" pattern is gone from every call site, so a future 6th mutating
+// tool (or a silently-skipped story) that reintroduces it is caught even if nobody
+// remembers to add it to linkConsistencyMutatingTools above.
+func TestBacklogHandlers_should_HaveNoRemainingRawLinkCheck_When_SourceIsScanned(t *testing.T) {
+	data, err := os.ReadFile("tools_backlog.go")
+	require.NoError(t, err, "read tools_backlog.go")
+	content := string(data)
+
+	const staleMessage = "this session is not linked to the specified backlog item"
+	assert.Equal(t, 0, strings.Count(content, staleMessage),
+		"the old undisambiguated PERMISSION_DENIED message must not appear anywhere — every call site must route through resolveItemLink")
+
+	assert.Equal(t, 1, strings.Count(content, "func (h *backlogHandlers) resolveItemLink("),
+		"resolveItemLink must be defined exactly once")
+
+	callSiteCount := strings.Count(content, "h.resolveItemLink(ctx, callerUUID, itemID)")
+	assert.Equal(t, 5, callSiteCount,
+		"expected exactly 5 mutating handlers (report_progress, request_review, submit_review_verdict, report_pr_created, submit_triage_result) to call resolveItemLink")
+}
