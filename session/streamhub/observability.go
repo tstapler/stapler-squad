@@ -18,17 +18,32 @@ import (
 // its own custom counters/gauges — as opposed to the per-RPC tracing
 // otelconnect.NewInterceptor already provides in server/server.go, which
 // covers ConnectRPC method spans/latency, not hub-internal metrics like
-// these. Two of the six metrics (streamhub_active_hubs,
-// streamhub_overlap_invariant_violations_total) are also backed by plain
-// atomics so callers/tests can read the current value directly, mirroring
-// StreamHub.slowSubscriberDropsTotal's existing pattern (Task 1.4.2) rather
-// than requiring an OTel test SDK/manual metric reader — matching this
-// repo's existing bar for this kind of test
+// these. All six metrics are also backed by plain atomics (or, for
+// streamhub_slow_subscriber_drops_total, StreamHub.slowSubscriberDropsTotal's
+// existing per-hub field, Task 1.4.2) so callers/tests can read the current
+// value directly rather than requiring an OTel test SDK/manual metric reader
+// — matching this repo's existing bar for this kind of test
 // (session/unfinished/metrics_test.go's TestRegisterMetrics_NoError is a
 // smoke check that registration doesn't error, not a metricdata assertion).
+// The three added here (subscribersPerHubLast, resizeNegotiationsTotal,
+// batchFlushFramesCoalescedLast) round out that coverage — a
+// spec-compliance sweep found only streamhub_active_hubs and
+// streamhub_overlap_invariant_violations_total had this parallel accessor,
+// even though all six instruments were already registered and wired at
+// their call sites.
 var (
 	activeHubsCount                 atomic.Int64
 	overlapInvariantViolationsCount atomic.Int64
+
+	// subscribersPerHubLast and batchFlushFramesCoalescedLast track the most
+	// recently recorded histogram observation, not a running total — these
+	// two metrics are per-event measurements (fan-out width on one
+	// AttachSubscriber call, frames folded into one batch flush), so "most
+	// recent value" is the meaningful testable signal, mirroring what the
+	// histogram itself last observed.
+	subscribersPerHubLast         atomic.Int64
+	resizeNegotiationsTotal       atomic.Int64
+	batchFlushFramesCoalescedLast atomic.Int64
 )
 
 var (
@@ -115,22 +130,42 @@ func decActiveHubs() { activeHubsCount.Add(-1) }
 func ActiveHubs() int64 { return activeHubsCount.Load() }
 
 func recordSubscribersPerHub(count int) {
+	subscribersPerHubLast.Store(int64(count))
 	if subscribersPerHubHist != nil {
 		subscribersPerHubHist.Record(context.Background(), int64(count))
 	}
 }
 
+// SubscribersPerHub returns the subscriber count observed on the most recent
+// AttachSubscriber call across every hub in this process — the same value
+// streamhub_subscribers_per_hub's histogram most recently recorded.
+func SubscribersPerHub() int64 { return subscribersPerHubLast.Load() }
+
 func recordResizeNegotiation(changed bool) {
+	resizeNegotiationsTotal.Add(1)
 	if resizeNegotiationsCounter != nil {
 		resizeNegotiationsCounter.Add(context.Background(), 1, metric.WithAttributes(attribute.Bool("changed", changed)))
 	}
 }
 
+// ResizeNegotiationsTotal returns the process-wide count of resize
+// negotiations recorded so far (every RequestResize call from a
+// CanResize-eligible subscriber, regardless of whether it actually changed
+// the negotiated size) — the same total streamhub_resize_negotiations_total
+// accumulates.
+func ResizeNegotiationsTotal() int64 { return resizeNegotiationsTotal.Load() }
+
 func recordBatchFlushFramesCoalesced(frames int) {
+	batchFlushFramesCoalescedLast.Store(int64(frames))
 	if batchFlushFramesHist != nil {
 		batchFlushFramesHist.Record(context.Background(), int64(frames))
 	}
 }
+
+// BatchFlushFramesCoalesced returns the frames-coalesced count from the most
+// recent batch flush across every hub in this process — the same value
+// streamhub_batch_flush_frames_coalesced's histogram most recently recorded.
+func BatchFlushFramesCoalesced() int64 { return batchFlushFramesCoalescedLast.Load() }
 
 func recordSlowSubscriberDrop() {
 	if slowSubscriberDropsCounter != nil {

@@ -178,3 +178,68 @@ func TestActiveHubs_should_IncrementOnCreateAndDecrementOnTeardown(t *testing.T)
 		t.Fatalf("expected ActiveHubs() to return to %d after ForceTeardown, got %d", before, got)
 	}
 }
+
+// TestStreamHubMetrics_should_RecordSubscribersPerHub_When_SubscribersAttach
+// backs the streamhub_subscribers_per_hub histogram: each AttachSubscriber
+// call records the post-attach subscriber count, and SubscribersPerHub()
+// exposes the most recently recorded value — the same testable-accessor bar
+// TestActiveHubs_/TestOverlapInvariant_ above already set for their own
+// metrics.
+func TestStreamHubMetrics_should_RecordSubscribersPerHub_When_SubscribersAttach(t *testing.T) {
+	hub := streamhub.NewStreamHub("subscribers-per-hub-metric-test", nil, streamhub.WithTeardownGrace(time.Hour))
+	defer func() { _ = hub.ForceTeardown() }()
+
+	hub.AttachSubscriber(streamhub.NewMemoryTransport(), streamhub.SubscriberCapability{})
+	if got := streamhub.SubscribersPerHub(); got != 1 {
+		t.Fatalf("expected SubscribersPerHub() == 1 after the first attach, got %d", got)
+	}
+
+	hub.AttachSubscriber(streamhub.NewMemoryTransport(), streamhub.SubscriberCapability{})
+	if got := streamhub.SubscribersPerHub(); got != 2 {
+		t.Fatalf("expected SubscribersPerHub() == 2 after the second attach, got %d", got)
+	}
+}
+
+// TestStreamHubMetrics_should_IncrementResizeNegotiationsTotal_When_ResizeRequested
+// backs the streamhub_resize_negotiations_total counter. Asserted as a delta,
+// like TestActiveHubs_ and TestOverlapInvariant_ above, since it is
+// process-wide and shared with every other test in this package that calls
+// RequestResize.
+func TestStreamHubMetrics_should_IncrementResizeNegotiationsTotal_When_ResizeRequested(t *testing.T) {
+	before := streamhub.ResizeNegotiationsTotal()
+
+	hub := streamhub.NewStreamHub("resize-negotiations-metric-test", nil, streamhub.WithTeardownGrace(time.Hour))
+	defer func() { _ = hub.ForceTeardown() }()
+
+	id := hub.AttachSubscriber(streamhub.NewMemoryTransport(), streamhub.SubscriberCapability{CanResize: true})
+	hub.RequestResize(id, mustSize(t, 80, 24))
+
+	if got := streamhub.ResizeNegotiationsTotal(); got != before+1 {
+		t.Fatalf("expected ResizeNegotiationsTotal() to increment by 1 after RequestResize, got %d -> %d", before, got)
+	}
+}
+
+// TestStreamHubMetrics_should_RecordBatchFlushFramesCoalesced_When_BatchFlushes
+// backs the streamhub_batch_flush_frames_coalesced histogram: onBatchFlush
+// records FramesCoalesced on every flush, and BatchFlushFramesCoalesced()
+// exposes the most recently recorded value.
+func TestStreamHubMetrics_should_RecordBatchFlushFramesCoalesced_When_BatchFlushes(t *testing.T) {
+	hub := streamhub.NewStreamHub("batch-flush-metric-test", nil,
+		streamhub.WithTeardownGrace(time.Hour),
+		streamhub.WithBatchMaxWindow(5*time.Millisecond))
+	defer func() { _ = hub.ForceTeardown() }()
+
+	mt := streamhub.NewMemoryTransport()
+	hub.AttachSubscriber(mt, streamhub.SubscriberCapability{})
+
+	hub.OnRawOutput([]byte("hello"))
+	hub.OnRawOutput([]byte("world"))
+
+	if !waitFor(t, time.Second, func() bool { return len(mt.ReceivedFrames()) == 1 }) {
+		t.Fatalf("expected exactly one flushed frame, got %d", len(mt.ReceivedFrames()))
+	}
+
+	if got := streamhub.BatchFlushFramesCoalesced(); got != 2 {
+		t.Fatalf("expected BatchFlushFramesCoalesced() == 2 after two OnRawOutput calls coalesce into one flush, got %d", got)
+	}
+}
