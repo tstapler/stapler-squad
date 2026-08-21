@@ -256,18 +256,8 @@ func TestTriageResultTitle_should_MatchSanitizedTitle_When_PersistedAndReReadFor
 	}
 }
 
-// initGitRepoForTest initialises a minimal git repository in dir. A smaller,
-// dependency-free duplicate of backlog_triage_harness_test.go's initGitRepo,
-// which lives behind the "harness" build tag and isn't linked into normal
-// `go test` runs. Uses go-git directly rather than shelling out — see
-// .claude/rules/prefer-go-git-over-subshells.md. No commit is made here, so
-// no user identity config is needed.
-func initGitRepoForTest(t *testing.T, dir string) {
-	t.Helper()
-	if _, err := git.PlainInit(dir, false); err != nil {
-		t.Fatalf("git init: %v", err)
-	}
-}
+// initGitRepoForTest is defined in git_fixture_test.go (go-git based, shared
+// across this package's test files).
 
 // TestResolveSessionPath_should_ErrorNotFallBackToRepoPath_When_GitManagedWorktreeCreationFails
 // guards BUG-057: a worktree-creation failure on a repo that IS git-managed
@@ -3446,15 +3436,15 @@ func TestTriggerTriage_NeverPublishesUntaggedNotification_OnHeadlessPoolFailureO
 	// keep succeeding is not constructible with this package's existing test
 	// fixtures. BacklogService.storage is a concrete *session.Storage, not an
 	// interface — it cannot be swapped for a test double. *session.Storage's
-	// ItemSession-specific methods (CreateItemSession, ListItemSessions,
-	// UpdateItemSessionTriageResult, UpdateItemSessionEnded — session/storage.go
-	// ~L953-1104) each hard type-assert their internal repo field to
-	// *session.EntRepository and fail closed otherwise (`er, ok :=
-	// s.repo.(*EntRepository); if !ok { return ... }`). Wrapping that repo in a
-	// decorator that overrides only UpdateBacklogItem (which is instead a plain
-	// passthrough to the session.Repository interface, session/storage.go:721-723)
-	// would make the decorator's dynamic type no longer *EntRepository, breaking
-	// every ItemSession call this same goroutine depends on — including the one
+	// internal repo field is itself a concrete *session.EntRepository (no
+	// interface indirection), so every ItemSession-specific method
+	// (CreateItemSession, ListItemSessions, UpdateItemSessionTriageResult,
+	// UpdateItemSessionEnded — session/storage.go ~L953-1104) always calls
+	// straight through to it. Wrapping that repo in a decorator that overrides
+	// only UpdateBacklogItem would require *session.Storage.repo to accept
+	// something other than *session.EntRepository, which it does not — and
+	// even if it did, such a decorator would need to forward every other
+	// method this same goroutine depends on — including the one
 	// this test needs to detect completion (UpdateItemSessionEnded). The only
 	// other lever — closing the real ent DB connection between TriggerTriage
 	// returning and its goroutine's persistence step running — races the
@@ -4159,14 +4149,12 @@ func TestTriggerReReview_should_BlockOnBranchDriftInsteadOfMisleadingFailVerdict
 
 	// Main diverges on the same line AND drifts well past the default threshold — the
 	// exact shape that made 693c2700's diff unreviewable.
-	require.NoError(t, os.WriteFile(filepath.Join(origin, "README.md"), []byte("# Main Edit\n"), 0o644))
-	runGitTestCmd(t, origin, "add", "README.md")
-	runGitTestCmd(t, origin, "commit", "-m", "main: unrelated edit")
+	originRepo, err := git.PlainOpen(origin)
+	require.NoError(t, err)
+	commitFileForTest(t, originRepo, origin, "README.md", "# Main Edit\n", "main: unrelated edit")
 	for i := 0; i < 55; i++ {
 		fname := fmt.Sprintf("upstream-%d.txt", i)
-		require.NoError(t, os.WriteFile(filepath.Join(origin, fname), []byte("content\n"), 0o644))
-		runGitTestCmd(t, origin, "add", fname)
-		runGitTestCmd(t, origin, "commit", "-m", fmt.Sprintf("upstream commit %d", i))
+		commitFileForTest(t, originRepo, origin, fname, "content\n", fmt.Sprintf("upstream commit %d", i))
 	}
 
 	attachPRFixWorkSession(t, storage, repo, &session.BacklogItemData{ID: itemID},

@@ -170,6 +170,10 @@ type ReviewItem struct {
 	DiffStats    *git.DiffStats `json:"diff_stats"`    // Git diff statistics (nullable)
 	LastActivity time.Time      `json:"last_activity"` // Last meaningful output time (used for sorting and display)
 
+	// HasCommitsAhead mirrors Instance.GetHasCommitsAhead() — used to pre-emptively
+	// disable the review queue's "Create PR" trigger (AC6 of session-pr-creation).
+	HasCommitsAhead bool `json:"has_commits_ahead"`
+
 	// IdleState is the active-work state at the time this item was last evaluated.
 	// Used as a fallback for WorkingState when ClaudeStatus is Unknown.
 	IdleState detection.IdleState `json:"idle_state,omitempty"`
