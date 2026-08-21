@@ -25,6 +25,13 @@ jest.mock("@/lib/hooks/useFocusTrap", () => ({
   useFocusTrap: () => undefined,
 }));
 
+jest.mock("@/lib/contexts/SessionServiceContext", () => ({
+  useSessionServiceContext: () => ({
+    draftPullRequest: jest.fn(),
+    createPullRequest: jest.fn(),
+  }),
+}));
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
