@@ -29,6 +29,17 @@ type WebSocketTransport struct {
 	// well-behaved transport can unblock a stalled Send). sync.Once.Do would
 	// deadlock on that reentrant call; CompareAndSwap just no-ops it.
 	closed atomic.Bool
+
+	// suppressNextSend dedupes StreamHub.AttachSubscriber's attach-time
+	// CatchUpSnapshot (session/streamhub/hub.go) against this handler's own,
+	// separate initial-snapshot send in streamViaHub
+	// (server/services/connectrpc_websocket.go): the browser path needs its
+	// snapshot ANSI-sanitized (prepareSnapshotContent), cursor-synced
+	// (withCursorSync), and proto-enveloped (protocol.CreateEnvelope) —
+	// transformations StreamHub has no notion of and cannot replicate with
+	// its raw []byte(content) send. See SuppressNextSend's doc comment for
+	// why suppressing exactly one Send call is safe.
+	suppressNextSend atomic.Bool
 }
 
 // NewWebSocketTransport wraps stream as a streamhub.Transport. The caller
@@ -50,9 +61,27 @@ func (t *WebSocketTransport) BindSubscriber(hub *streamhub.StreamHub, id streamh
 	t.bound = true
 }
 
+// SuppressNextSend marks the next Send call as a no-op, without writing to
+// the WebSocket connection or returning an error. streamViaHub
+// (server/services/connectrpc_websocket.go) calls this before
+// AttachSubscriber, so the exact one Send call StreamHub.AttachSubscriber's
+// synchronous CatchUpSnapshot makes (session/streamhub/hub.go) — guaranteed
+// to be this transport's very first Send, since it happens before the
+// subscriber's writer goroutine ever starts — is suppressed. The handler
+// then sends its own ANSI-prepared, proto-enveloped initial snapshot right
+// after, which the browser client actually depends on. Every subsequent
+// Send (real broadcast traffic) behaves normally.
+func (t *WebSocketTransport) SuppressNextSend() {
+	t.suppressNextSend.Store(true)
+}
+
 // Send implements streamhub.Transport by writing data as a binary WebSocket
-// message via the stream's existing write-mutex-guarded WriteMessage.
+// message via the stream's existing write-mutex-guarded WriteMessage. The
+// first call after SuppressNextSend is a no-op; see its doc comment.
 func (t *WebSocketTransport) Send(data []byte) error {
+	if t.suppressNextSend.CompareAndSwap(true, false) {
+		return nil
+	}
 	return t.stream.WriteMessage(websocket.BinaryMessage, data)
 }
 

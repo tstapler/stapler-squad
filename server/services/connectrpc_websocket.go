@@ -1456,6 +1456,16 @@ func (h *ConnectRPCWebSocketHandler) streamViaHub(stream *connectWebSocketStream
 	}
 
 	transport := NewWebSocketTransport(stream)
+	// StreamHub.AttachSubscriber now sends a CatchUpSnapshot to every
+	// Transport within the same call (Story 1.2.1's AC). Suppress that one
+	// send for the browser path specifically: it is a raw, unprepared
+	// []byte(content) write that this transport's Send would forward
+	// verbatim to the WebSocket, whereas the browser client needs the
+	// ANSI-sanitized, cursor-synced, proto-enveloped version this handler
+	// sends explicitly just below (fullContent/initMsg) — StreamHub has no
+	// notion of that framing. See WebSocketTransport.SuppressNextSend's doc
+	// comment for why suppressing exactly one Send call here is safe.
+	transport.SuppressNextSend()
 	subscriberID := hub.AttachSubscriber(transport, streamhub.SubscriberCapability{
 		CanResize: true,
 		CanWrite:  instance.Permissions.CanSendCommand,
@@ -1476,11 +1486,14 @@ func (h *ConnectRPCWebSocketHandler) streamViaHub(stream *connectWebSocketStream
 	}
 
 	// Send an immediate initial snapshot so the client isn't left blank while
-	// attached — StreamHub's own attach-time CatchUpSnapshot behavior (Story
-	// 1.2.1's AC) is exercised by earlier epics' tests but this handler does
-	// not yet depend on it, since AttachSubscriber above does not (today)
-	// push one. Capturing directly here keeps this connection's initial
-	// paint correct regardless of that wiring's future state.
+	// attached. StreamHub.AttachSubscriber above now also sends a
+	// CatchUpSnapshot within its own call (Story 1.2.1's AC) — that send was
+	// suppressed for this transport (transport.SuppressNextSend() above)
+	// specifically because it can't replicate the ANSI-sanitization,
+	// cursor-sync, and proto-envelope framing this handler applies here,
+	// which the browser client depends on. Capturing directly here keeps
+	// this connection's initial paint correct; every other Transport (e.g.
+	// MuxTransport) now relies on the hub's own send instead.
 	if content, err := instance.CapturePaneContent(); err == nil && content != "" {
 		fullContent := withCursorSync(ansiSnapshotPrefix+prepareSnapshotContent(content), instance)
 		initMsg := &sessionv1.TerminalData{

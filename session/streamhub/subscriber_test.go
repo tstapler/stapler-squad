@@ -237,6 +237,80 @@ func TestStreamHub_should_EvictSubscriberExactlyOnce_When_TransportSendReturnsEr
 	_ = failingID
 }
 
+// TestAttachSubscriber_should_SendCatchUpSnapshot_When_SubscriberJoinsActiveHub
+// is REQ-10's regression test (validation.md): Story 1.2.1's AC requires a
+// newly-attached subscriber to receive a CatchUpSnapshot within the
+// AttachSubscriber call itself. Before this fix, only the browser WebSocket
+// path got one, via an ad-hoc workaround in connectrpc_websocket.go — every
+// other Transport (e.g. MuxTransport) saw a blank pane until the next
+// broadcast or resize. Uses the exported streamhub.MemoryTransport (rather
+// than this file's local memoryTransport double) so the assertion below
+// reads directly off ReceivedFrames(), the same accessor
+// TestMemoryTransport_should_AttachToHubAndReceiveBroadcastFrame already
+// establishes as this package's convention for asserting delivered content.
+func TestAttachSubscriber_should_SendCatchUpSnapshot_When_SubscriberJoinsActiveHub(t *testing.T) {
+	defer goleak.VerifyNone(t)
+
+	controller := newFakeSessionController()
+	controller.captureContent = "existing pane content"
+	hub := streamhub.NewStreamHub("test-session", controller, streamhub.WithTeardownGrace(time.Hour))
+
+	// The first subscriber makes the hub active. At this point the hub has
+	// no cached snapshot yet (no resize/quiescence cycle has ever completed),
+	// so its own attach-time CatchUpSnapshot falls back to a direct
+	// CapturePaneContent call — which also populates the cache the second
+	// subscriber below reuses, per this project's root-cause concern about
+	// redundant capture-pane calls.
+	first := streamhub.NewMemoryTransport()
+	firstID := hub.AttachSubscriber(first, streamhub.SubscriberCapability{CanResize: true})
+
+	// A second subscriber attaching to the now-active hub must also receive
+	// a CatchUpSnapshot within this same AttachSubscriber call.
+	second := streamhub.NewMemoryTransport()
+	secondID := hub.AttachSubscriber(second, streamhub.SubscriberCapability{CanResize: true})
+
+	frames := second.ReceivedFrames()
+	if len(frames) != 1 {
+		t.Fatalf("expected exactly 1 CatchUpSnapshot frame delivered within AttachSubscriber, got %d", len(frames))
+	}
+	if got, want := string(frames[0]), "existing pane content"; got != want {
+		t.Fatalf("expected the CatchUpSnapshot frame to contain %q, got %q", want, got)
+	}
+	// The cache reuse means the second attach must not have triggered
+	// another real capture-pane call.
+	if got := controller.captureCalls.Load(); got != 1 {
+		t.Fatalf("expected exactly 1 CapturePaneContent call (cached for the second attach), got %d", got)
+	}
+
+	hub.DetachSubscriber(firstID)
+	hub.DetachSubscriber(secondID)
+}
+
+// TestAttachSubscriber_should_NotFailOrSend_When_NoSnapshotIsAvailableYet
+// covers Story 1.2.1's graceful-degradation case: the very first subscriber
+// of a brand-new hub, before any pane content has ever been captured. A
+// CapturePaneContent error here must not be fatal to AttachSubscriber — it
+// is logged and the CatchUpSnapshot is simply skipped.
+func TestAttachSubscriber_should_NotFailOrSend_When_NoSnapshotIsAvailableYet(t *testing.T) {
+	defer goleak.VerifyNone(t)
+
+	controller := newFakeSessionController()
+	controller.captureErr = errors.New("no pane captured yet")
+	hub := streamhub.NewStreamHub("test-session", controller, streamhub.WithTeardownGrace(time.Hour))
+
+	transport := streamhub.NewMemoryTransport()
+	id := hub.AttachSubscriber(transport, streamhub.SubscriberCapability{CanResize: true})
+
+	if got := len(transport.ReceivedFrames()); got != 0 {
+		t.Fatalf("expected no CatchUpSnapshot frame when no snapshot is available, got %d frames", got)
+	}
+	if got := hub.SubscriberCount(); got != 1 {
+		t.Fatalf("expected AttachSubscriber to still succeed despite the capture error, SubscriberCount() == %d", got)
+	}
+
+	hub.DetachSubscriber(id)
+}
+
 func TestAttachSubscriber_should_ReturnDistinctIDs_When_CalledMultipleTimes(t *testing.T) {
 	defer goleak.VerifyNone(t)
 

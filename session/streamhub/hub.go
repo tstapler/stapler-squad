@@ -124,6 +124,21 @@ type StreamHub struct {
 	// Observability Plan; wiring it to real Atlas/OTel metrics is Epic 3.2's
 	// scope ("Registry consolidation & observability"), not this epic's.
 	slowSubscriberDropsTotal atomic.Int64
+
+	// snapshotMu guards lastSnapshot — kept separate from mu (the
+	// subscriber-registry lock) for the same reason resizeMu is separate:
+	// AttachSubscriber reads it, and applyNegotiatedSize writes it, and
+	// neither should contend with unrelated subscriber-registry operations.
+	snapshotMu sync.Mutex
+
+	// lastSnapshot is the most recent pane content captured by
+	// applyNegotiatedSize's post-quiescence CapturePaneContent call, if any.
+	// AttachSubscriber's CatchUpSnapshot (Story 1.2.1's AC) prefers this
+	// cached value over issuing a fresh CapturePaneContent call, per this
+	// project's root-cause concern about redundant capture-pane calls
+	// (research/pitfalls.md) — nil until the first successful resize
+	// quiescence cycle completes.
+	lastSnapshot []byte
 }
 
 // NewStreamHub constructs a StreamHub for one tmux session, starting in
@@ -207,6 +222,16 @@ func (h *StreamHub) AttachSubscriber(transport Transport, capability SubscriberC
 	count := len(h.subscribers)
 	h.mu.Unlock()
 
+	// Story 1.2.1's AC: a newly-attached subscriber receives a CatchUpSnapshot
+	// within this same call, not just the browser WebSocket path via its own
+	// ad-hoc workaround (server/services/connectrpc_websocket.go) — every
+	// Transport (MuxTransport, any future one) now gets the current pane
+	// immediately instead of a blank pane until the next broadcast/resize.
+	// This runs before startWriter so it is guaranteed to be the very first
+	// Send call this transport ever receives, with no writer goroutine yet
+	// running to race it.
+	h.sendCatchUpSnapshot(sub)
+
 	sub.startWriter(h.handleSubscriberSendError)
 
 	log.Info("streamhub subscriber attached",
@@ -215,6 +240,70 @@ func (h *StreamHub) AttachSubscriber(transport Transport, capability SubscriberC
 		"can_resize", capability.CanResize, "can_write", capability.CanWrite)
 	recordSubscribersPerHub(count)
 	return id
+}
+
+// sendCatchUpSnapshot delivers the hub's current pane content directly to a
+// newly-attached subscriber's Transport.Send (Story 1.2.1's AC), bypassing
+// the subscriber's outbound queue/writer goroutine entirely — it runs before
+// startWriter is ever called for sub, so there is no writer yet to race.
+//
+// A missing snapshot (h.controller is nil, as in most unit tests; or
+// CapturePaneContent errors, most commonly because this is the very first
+// subscriber of a brand-new hub and nothing has ever been captured yet) is
+// graceful degradation, not a failure of AttachSubscriber: it is logged and
+// skipped rather than treated as fatal.
+func (h *StreamHub) sendCatchUpSnapshot(sub *subscriber) {
+	content, ok := h.currentSnapshot()
+	if !ok {
+		return
+	}
+	if err := sub.transport.Send(content); err != nil {
+		log.Warn("streamhub: CatchUpSnapshot send failed for newly-attached subscriber",
+			"session", h.sessionName, "subscriber_id", string(sub.id), "error", err)
+	}
+}
+
+// currentSnapshot returns the hub's best-known current pane content: the
+// cached result of the most recent successful post-quiescence
+// CapturePaneContent call (applyNegotiatedSize) if one exists, or a fresh
+// SessionController capture otherwise — never both, so an attach never pays
+// for a redundant capture-pane call when a recent one is already known-good
+// (this project's own root-cause concern about redundant captures,
+// research/pitfalls.md). A successful on-demand capture is itself cached, so
+// only the first subscriber of a hub that has never resized ever triggers a
+// real capture-pane call; every later attach before the next resize reuses
+// it.
+//
+// ok is false when no snapshot is available at all: h.controller is nil
+// (tests that never exercise the controller surface), CapturePaneContent
+// errors, or it succeeds with empty content (nothing has ever been rendered
+// to this pane yet).
+func (h *StreamHub) currentSnapshot() (content []byte, ok bool) {
+	h.snapshotMu.Lock()
+	cached := h.lastSnapshot
+	h.snapshotMu.Unlock()
+	if cached != nil {
+		return cached, true
+	}
+
+	if h.controller == nil {
+		return nil, false
+	}
+	captured, err := h.controller.CapturePaneContent()
+	if err != nil {
+		log.Info("streamhub: no CatchUpSnapshot available for newly-attached subscriber",
+			"session", h.sessionName, "error", err)
+		return nil, false
+	}
+	if captured == "" {
+		return nil, false
+	}
+
+	capturedBytes := []byte(captured)
+	h.snapshotMu.Lock()
+	h.lastSnapshot = capturedBytes
+	h.snapshotMu.Unlock()
+	return capturedBytes, true
 }
 
 // DetachSubscriber removes the subscriber and stops its writer goroutine
@@ -463,6 +552,10 @@ func (h *StreamHub) applyNegotiatedSize(size TerminalSize) {
 		h.handleControllerError(err)
 		return
 	}
+
+	h.snapshotMu.Lock()
+	h.lastSnapshot = []byte(content)
+	h.snapshotMu.Unlock()
 
 	// The post-resize CatchUpSnapshot bypasses the BatchWindow entirely
 	// (Story 2.1.2, research/pitfalls.md §2c/§2d): it must never wait behind

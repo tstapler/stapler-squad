@@ -47,15 +47,24 @@ func TestWaitForQuiescence_should_LogHubScopedWarn_When_QuiescenceTimesOutAfter5
 			case <-stopFeed:
 				return
 			case <-ticker.C:
+				// The send must happen while still holding controller.mu, not
+				// after re-reading ch/subscribed and releasing the lock: this
+				// is the exact same lock UnsubscribeControlModeUpdates holds
+				// while it closes and reassigns f.updates
+				// (lifecycle_test.go), so releasing it before sending leaves a
+				// window where this goroutine's non-blocking send on the
+				// captured channel value races a concurrent close of that
+				// same channel — a genuine data race under -race regardless
+				// of the select-default, since nothing then orders the send
+				// against the close.
 				controller.mu.Lock()
-				ch, subscribed := controller.updates, controller.subscribed
-				controller.mu.Unlock()
-				if subscribed {
+				if controller.subscribed {
 					select {
-					case ch <- []byte("x"):
+					case controller.updates <- []byte("x"):
 					default:
 					}
 				}
+				controller.mu.Unlock()
 			}
 		}
 	}()

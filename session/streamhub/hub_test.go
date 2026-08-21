@@ -55,7 +55,6 @@ func TestStreamHub_should_SuppressBroadcast_When_ResizeIsInProgress(t *testing.T
 	defer goleak.VerifyNone(t)
 
 	controller := newFakeSessionController()
-	controller.captureContent = "post-resize-snapshot"
 	hub := streamhub.NewStreamHub("test-session", controller,
 		streamhub.WithTeardownGrace(time.Hour),
 		streamhub.WithQuiescenceTimeout(200*time.Millisecond),
@@ -64,6 +63,12 @@ func TestStreamHub_should_SuppressBroadcast_When_ResizeIsInProgress(t *testing.T
 
 	transport := newMemoryTransport()
 	id := hub.AttachSubscriber(transport, streamhub.SubscriberCapability{CanResize: true})
+
+	// Set only after attach, so AttachSubscriber's own attach-time
+	// CatchUpSnapshot (which ran above against the fake's zero-value ""
+	// content and was therefore a no-op) doesn't pre-empt this test's
+	// suppression assertion below.
+	controller.captureContent = "post-resize-snapshot"
 
 	resizeDone := make(chan struct{})
 	go func() {
@@ -102,7 +107,6 @@ func TestStreamHub_should_BroadcastSingleCapturedSnapshotToAllSubscribers_When_Q
 	defer goleak.VerifyNone(t)
 
 	controller := newFakeSessionController()
-	controller.captureContent = "shared-snapshot"
 	hub := streamhub.NewStreamHub("test-session", controller,
 		streamhub.WithTeardownGrace(time.Hour),
 		streamhub.WithQuiescenceTimeout(30*time.Millisecond),
@@ -117,6 +121,17 @@ func TestStreamHub_should_BroadcastSingleCapturedSnapshotToAllSubscribers_When_Q
 	idC := hub.AttachSubscriber(transportC, streamhub.SubscriberCapability{CanResize: false})
 	_ = idC
 
+	// Each attach above already made its own attach-time CatchUpSnapshot
+	// attempt against the fake's zero-value "" content — a real
+	// CapturePaneContent call each, even though the empty result meant no
+	// frame was delivered and nothing was cached. Baseline against that so
+	// the assertion below stays scoped to this test's actual target: the
+	// resize/quiescence pipeline itself captures exactly once and shares
+	// that one capture across every subscriber (Task 1.3.2e), regardless of
+	// how many subscriber attaches preceded it.
+	captureCallsBeforeResize := controller.captureCalls.Load()
+	controller.captureContent = "shared-snapshot"
+
 	// Resize is triggered by B's vote; A and C never voted at all (C can't).
 	hub.RequestResize(idB, mustSize(t, 90, 28))
 
@@ -126,8 +141,8 @@ func TestStreamHub_should_BroadcastSingleCapturedSnapshotToAllSubscribers_When_Q
 		t.Fatalf("expected both A and C to receive the shared snapshot, got A=%d C=%d",
 			transportA.receivedCount(), transportC.receivedCount())
 	}
-	if got := controller.captureCalls.Load(); got != 1 {
-		t.Fatalf("expected exactly one CapturePaneContent call, got %d", got)
+	if got := controller.captureCalls.Load() - captureCallsBeforeResize; got != 1 {
+		t.Fatalf("expected exactly one CapturePaneContent call for the resize, got %d", got)
 	}
 
 	if err := hub.ForceTeardown(); err != nil {
@@ -148,6 +163,13 @@ func TestStreamHub_should_BroadcastStreamEndedSentinelAndTearDown_When_SetWindow
 	id1 := hub.AttachSubscriber(transport1, streamhub.SubscriberCapability{CanResize: true})
 	hub.AttachSubscriber(transport2, streamhub.SubscriberCapability{CanResize: true})
 
+	// Each attach above may have already made its own attach-time
+	// CatchUpSnapshot attempt (a no-op against the fake's zero-value ""
+	// content) — baseline against that so the assertion below is scoped to
+	// "the failed resize path itself never calls CapturePaneContent", not
+	// "CapturePaneContent is never called at all".
+	captureCallsBeforeResize := controller.captureCalls.Load()
+
 	hub.RequestResize(id1, mustSize(t, 100, 30))
 
 	if !waitFor(t, time.Second, func() bool {
@@ -159,8 +181,8 @@ func TestStreamHub_should_BroadcastStreamEndedSentinelAndTearDown_When_SetWindow
 	if !waitFor(t, time.Second, func() bool { return hub.State() == streamhub.HubTornDown }) {
 		t.Fatalf("expected hub to tear down after a SetWindowSize error, got %v", hub.State())
 	}
-	if got := controller.captureCalls.Load(); got != 0 {
-		t.Fatalf("expected CapturePaneContent never called after a SetWindowSize error, got %d calls", got)
+	if got := controller.captureCalls.Load(); got != captureCallsBeforeResize {
+		t.Fatalf("expected CapturePaneContent never called as part of the failed resize path, got %d additional calls", got-captureCallsBeforeResize)
 	}
 }
 
