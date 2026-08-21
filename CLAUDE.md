@@ -134,6 +134,8 @@ Releases are not automatic — release-please opens a "Release PR"; merge when r
 
 **`gh pr merge` always needs `--repo owner/repo`** — this repo's worktrees make `gh` misresolve `main` otherwise. See `.claude/docs/gh-pr-merge-repo-flag.md`.
 
+**PRs in this repo default to ready for review, not draft.** This overrides the global "Draft PRs by default" instruction specifically for `tstapler/stapler-squad` — open with `gh pr create` (no `--draft`) unless the user asks for a draft.
+
 ## Adding New Features
 
 ### New Web UI Features

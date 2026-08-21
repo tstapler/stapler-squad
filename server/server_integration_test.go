@@ -488,9 +488,22 @@ func TestSessionService_CreateThenImmediateDelete_NoDataRace(t *testing.T) {
 		t.Fatalf("CreateSession: %v", err)
 	}
 
+	// Captured before DeleteSession purely so we can wait for teardown to finish
+	// below -- this does not delay the delete itself, so it doesn't touch the
+	// Create/Delete interleave this test exists to race.
+	inst := deps.SessionService.FindLiveInstance(resp.Msg.Session.Id)
+
 	if _, err := deps.SessionService.DeleteSession(context.Background(), connect.NewRequest(&sessionv1.DeleteSessionRequest{Id: resp.Msg.Session.Id})); err != nil {
 		t.Fatalf("DeleteSession: %v", err)
 	}
+
+	// DeleteSession tears down tmux/git resources in an unawaited goroutine (see
+	// waitForTmuxTeardown's doc comment) -- without waiting here, that goroutine
+	// can still be writing into this test's t.TempDir() (e.g. the tmux-exec-gate
+	// lock directory) when TempDir's own cleanup runs RemoveAll on it, producing
+	// an intermittent "directory not empty" failure. This wait happens after the
+	// race has already occurred, so it doesn't defeat the repro above.
+	waitForTmuxTeardown(t, inst, 5*time.Second)
 }
 
 // waitForResolvedAddr polls srv.GetAddr() until it reports a real, non-zero bound address
