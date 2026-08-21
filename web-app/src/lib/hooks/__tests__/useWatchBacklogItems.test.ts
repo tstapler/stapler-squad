@@ -832,6 +832,11 @@ describe("useWatchBacklogItems", () => {
       await flush();
     });
 
+    // Neither event below sets updatedAt (both fall back to timestampMs's
+    // 0-default, matching this file's other event fixtures) — that's the
+    // same-timestamp case the coalesce backstop must handle, since a real
+    // same-millisecond resync is exactly as timestampMs-equal as two omitted
+    // ones.
     await act(async () => {
       stream.emit(
         makeEvent(

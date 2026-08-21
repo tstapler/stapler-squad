@@ -85,10 +85,27 @@ test.describe("backlog manual override", () => {
     );
   });
 
-  // Regression for the empty Force-status dropdown bug: ListBacklogItems
-  // previously omitted allowedTransitions, so an item first loaded off the
-  // list view (rather than a direct GetBacklogItem fetch) showed no options.
-  test("Force-status dropdown lists an idea item's allowed transitions", async ({ page, request }) => {
+  // Regression for the empty Force-status dropdown bug: ListBacklogItems'
+  // summary DTO previously omitted allowedTransitions entirely (unlike
+  // GetBacklogItem, which was never affected). Asserting directly on the
+  // ListBacklogItems response pins the actual DTO this bug lived in — the
+  // item detail panel's own GetBacklogItem fetch on mount would mask a
+  // regression here, since that RPC always returns allowedTransitions.
+  test("ListBacklogItems response carries allowedTransitions for an idea item", async ({ request }) => {
+    const title = `e2e manual override idea-status ${Date.now()}`;
+    await createBacklogItemDirect(request, { title, status: "idea" });
+
+    const listRes = await request.post(`${BASE_URL}/api/session.v1.BacklogService/ListBacklogItems`, {
+      headers: { "Content-Type": "application/json" },
+      data: {},
+    });
+    const body = (await listRes.json()) as { items?: Array<{ title?: string; allowedTransitions?: string[] }> };
+    const item = (body.items ?? []).find((i) => i.title === title);
+    expect(item).toBeDefined();
+    expect(item?.allowedTransitions).toEqual(expect.arrayContaining(["archived", "ready", "refining"]));
+  });
+
+  test("operator can force-archive an idea item via the manual override dropdown", async ({ page, request }) => {
     const title = `e2e manual override idea-status ${Date.now()}`;
     await createBacklogItemDirect(request, { title, status: "idea" });
 
