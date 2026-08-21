@@ -59,12 +59,22 @@ const backlogItemsSlice = createSlice({
         // still arrive with a newer updatedAt and populated (even if empty-by-intent)
         // data from a call site that *did* eager-load, so this only masks the
         // known-bad partial-load case, not real removals.
-        const nextItem =
+        // Same backstop for allowedTransitions: a DTO that omits it (or any
+        // future sparse-payload regression) must never blank out a value the
+        // store already had for this item — allowedTransitions is a pure
+        // function of status, so it's never legitimately empty for a real item.
+        const coalescedFields: Partial<BacklogItem> = {};
+        if (existing && (existing.itemSessions?.length ?? 0) > 0 && (incoming.itemSessions?.length ?? 0) === 0) {
+          coalescedFields.itemSessions = existing.itemSessions;
+        }
+        if (
           existing &&
-          (existing.itemSessions?.length ?? 0) > 0 &&
-          (incoming.itemSessions?.length ?? 0) === 0
-            ? { ...incoming, itemSessions: existing.itemSessions }
-            : incoming;
+          (existing.allowedTransitions?.length ?? 0) > 0 &&
+          (incoming.allowedTransitions?.length ?? 0) === 0
+        ) {
+          coalescedFields.allowedTransitions = existing.allowedTransitions;
+        }
+        const nextItem = Object.keys(coalescedFields).length > 0 ? { ...incoming, ...coalescedFields } : incoming;
         state.items[incoming.id] = nextItem;
         if (!isSnapshot) {
           state.liveVersion[incoming.id] = (state.liveVersion[incoming.id] ?? 0) + 1;

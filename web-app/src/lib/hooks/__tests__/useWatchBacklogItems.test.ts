@@ -815,4 +815,62 @@ describe("useWatchBacklogItems", () => {
     expect(item1?.gateVerdict).toBe("FAIL");
     expect(item1?.gateVerdictSummary).toBe("inline verdict wins");
   });
+
+  // Regression for the empty Force-status dropdown bug: ListBacklogItems'
+  // summary DTO previously omitted allowedTransitions entirely, and the 30s
+  // fallback poll (refresh(), always isSnapshot: true) resyncs via the same
+  // upsertItem path as a live event. Without backlogItemsSlice's coalesce
+  // backstop, a same-updatedAt poll response would silently blank a value
+  // already in the store — this asserts it doesn't.
+  it("does not clobber allowedTransitions with an empty array from a same-timestamp fallback poll", async () => {
+    jest.useFakeTimers();
+    const stream = makeControllableStream();
+    mockWatchBacklogItems.mockReturnValueOnce(stream.stream);
+    mockWatchBacklogItems.mockReturnValue(makeHangingStream());
+
+    const store = makeStore();
+    const { result } = renderHook(() => useWatchBacklogItems(), { wrapper: makeWrapper(store) });
+
+    await act(async () => {
+      await flush();
+    });
+
+    await act(async () => {
+      stream.emit(
+        makeEvent(
+          "itemUpdated",
+          {
+            item: { id: "item-1", status: "idea", allowedTransitions: ["archived", "ready", "refining"] } as any,
+            itemId: "item-1",
+            updatedFields: [],
+            isSnapshot: false,
+          },
+          1n
+        )
+      );
+      await flush();
+    });
+    expect(result.current.items.find((i) => i.id === "item-1")?.allowedTransitions).toEqual([
+      "archived",
+      "ready",
+      "refining",
+    ]);
+
+    // A fallback-poll resync returns the item with an empty allowedTransitions
+    // (the pre-fix ListBacklogItems DTO shape) — must not blank the value the
+    // store already has.
+    mockListBacklogItems.mockResolvedValueOnce({
+      items: [{ id: "item-1", status: "idea", allowedTransitions: [] } as any],
+    });
+    await act(async () => {
+      jest.advanceTimersByTime(30_000);
+      await flush();
+    });
+
+    expect(result.current.items.find((i) => i.id === "item-1")?.allowedTransitions).toEqual([
+      "archived",
+      "ready",
+      "refining",
+    ]);
+  });
 });

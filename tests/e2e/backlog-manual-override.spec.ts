@@ -85,6 +85,34 @@ test.describe("backlog manual override", () => {
     );
   });
 
+  // Regression for the empty Force-status dropdown bug: ListBacklogItems
+  // previously omitted allowedTransitions, so an item first loaded off the
+  // list view (rather than a direct GetBacklogItem fetch) showed no options.
+  test("Force-status dropdown lists an idea item's allowed transitions", async ({ page, request }) => {
+    const title = `e2e manual override idea-status ${Date.now()}`;
+    await createBacklogItemDirect(request, { title, status: "idea" });
+
+    const backlogPage = new BacklogPage(page);
+    await backlogPage.goto();
+    await backlogPage.waitForItemCards();
+
+    const detailPage = new BacklogItemDetailPage(page);
+    await detailPage.openItemByTitle(title);
+
+    await detailPage.expandSection("manual-override");
+
+    const select = page.getByTestId("manual-override-status-select");
+    await expect(select.locator("option")).toHaveText(["Select a status…", "archived", "ready", "refining"]);
+
+    await select.selectOption("archived");
+    await page
+      .getByTestId("manual-override-reason-textarea")
+      .fill("duplicate of an existing item — archiving via manual override");
+    await page.getByTestId("manual-override-status-submit").click();
+
+    await expect(page.getByTestId("stage-tracker")).toHaveAttribute("aria-label", "Lifecycle stage: Archived");
+  });
+
   test("operator can link an existing PR to an item stuck in review with no live session", async ({
     page,
     request,
