@@ -12,7 +12,9 @@ import (
 	"github.com/tstapler/stapler-squad/pkg/classifier"
 )
 
-// ClaudePermissions mirrors the "permissions" key in ~/.claude/settings.json.
+// ClaudePermissions mirrors the "permissions" key in ~/.claude/settings.json. Both Allow and
+// Deny are converted into classifier.Rules (see claudeAllowsToRules/claudeDeniesToRules) and
+// enforced by the live classifier — Deny is not merely parsed and displayed.
 type ClaudePermissions struct {
 	Allow []string `json:"allow"` // tool patterns, e.g. "Bash(git log*)"
 	Deny  []string `json:"deny,omitempty"`
@@ -136,8 +138,14 @@ func LoadClaudeSettingsRulesDetailed(projectDir string) []ClaudeSettingsPathResu
 		}
 		var rules []classifier.Rule
 		if perms != nil && len(perms.Allow) > 0 {
-			rules = claudeAllowsToRules(perms.Allow, p.priority, p.label)
-			log.Info("[ClaudeSettings] loaded allow rules", "count", len(rules), "path", p.path)
+			allowRules := claudeAllowsToRules(perms.Allow, p.priority, p.label)
+			rules = append(rules, allowRules...)
+			log.Info("[ClaudeSettings] loaded allow rules", "count", len(allowRules), "path", p.path)
+		}
+		if perms != nil && len(perms.Deny) > 0 {
+			denyRules := claudeDeniesToRules(perms.Deny, p.priority, p.label)
+			rules = append(rules, denyRules...)
+			log.Info("[ClaudeSettings] loaded deny rules", "count", len(denyRules), "path", p.path)
 		}
 		results = append(results, ClaudeSettingsPathResult{Path: p.path, Priority: p.priority, Label: p.label, Rules: rules})
 	}
@@ -158,24 +166,54 @@ func LoadClaudeSettingsRules(projectDir string) []classifier.Rule {
 	return allRules
 }
 
+// claudeSettingsDenyPriorityOffset lifts claude-settings Deny rules close to the seed rule
+// engine's hard-critical AutoDeny tier (see pkg/classifier/classifier.go's SeedRules doc
+// comment: "1000 — AutoDeny (critical, must fire before any allow)") without colliding with
+// it. A Deny entry must outrank every claude-settings Allow rule (Priority 150-180, see
+// settingsPaths) and every non-critical seed tier below it — Escalate-before-allow (500) and
+// AutoAllow-before-escalate (510-525) — so a user's explicit deny actually blocks a command
+// their own (or another) settings file separately allows. It must NOT outrank the seed's own
+// hard-critical AutoDeny rules (rm -rf /, .env writes, force-push, etc. — all pinned at
+// exactly 1000): those exist regardless of user configuration, and a settings.json deny
+// entry should never be able to weaken them. 750 puts every label's deny rule (900-930)
+// safely inside the (525, 1000) gap.
+const claudeSettingsDenyPriorityOffset = 750
+
 // claudeAllowsToRules converts Claude's allow patterns to AutoAllow rules.
 //
-// Claude allow patterns have the form:
-//   - "Bash"           -- allow any Bash invocation
-//   - "Bash(git log*)" -- allow Bash where command starts with "git log"
-//   - "Read"           -- allow any Read invocation
+// Claude allow/deny patterns have the form:
+//   - "Bash"           -- match any Bash invocation
+//   - "Bash(git log*)" -- match Bash where command starts with "git log"
+//   - "Read"           -- match any Read invocation
 //
 // Glob wildcards (*) are converted to regex (.*).
 func claudeAllowsToRules(allows []string, basePriority int, label string) []classifier.Rule {
+	return claudePatternsToRules(allows, basePriority, label, "claude-settings",
+		classifier.AutoAllow, classifier.RiskLow, "allow", "Allowed")
+}
+
+// claudeDeniesToRules converts Claude's deny patterns (permissions.deny in settings.json)
+// to AutoDeny rules, so a deny entry actually blocks matching tool calls instead of being
+// parsed and silently ignored (see ClaudePermissions.Deny's doc comment). Same pattern
+// syntax as claudeAllowsToRules; see claudeSettingsDenyPriorityOffset for why these rules
+// get a different, higher priority than the allow rules from the same file.
+func claudeDeniesToRules(denies []string, basePriority int, label string) []classifier.Rule {
+	return claudePatternsToRules(denies, basePriority+claudeSettingsDenyPriorityOffset, label, "claude-settings-deny",
+		classifier.AutoDeny, classifier.RiskHigh, "deny", "Denied")
+}
+
+// claudePatternsToRules is the shared pattern-parsing implementation behind
+// claudeAllowsToRules and claudeDeniesToRules.
+func claudePatternsToRules(patterns []string, priority int, label, idPrefix string, decision classifier.ClassificationDecision, riskLevel classifier.RiskLevel, verb, verbPast string) []classifier.Rule {
 	var rules []classifier.Rule
-	for i, pattern := range allows {
+	for i, pattern := range patterns {
 		rule := classifier.Rule{
-			ID:        fmt.Sprintf("claude-settings-%s-%d", label, i),
-			Name:      fmt.Sprintf("Claude settings allow: %s", pattern),
-			Decision:  classifier.AutoAllow,
-			RiskLevel: classifier.RiskLow,
-			Reason:    fmt.Sprintf("Allowed by Claude settings (%s): %s", label, pattern),
-			Priority:  basePriority,
+			ID:        fmt.Sprintf("%s-%s-%d", idPrefix, label, i),
+			Name:      fmt.Sprintf("Claude settings %s: %s", verb, pattern),
+			Decision:  decision,
+			RiskLevel: riskLevel,
+			Reason:    fmt.Sprintf("%s by Claude settings (%s): %s", verbPast, label, pattern),
+			Priority:  priority,
 			Enabled:   true,
 			Source:    string(classifier.SourceClaudeSettings),
 		}

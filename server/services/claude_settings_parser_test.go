@@ -8,6 +8,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/tstapler/stapler-squad/pkg/classifier"
 )
 
 func writeSettingsFile(t *testing.T, path, content string) {
@@ -34,6 +36,40 @@ func TestLoadClaudeSettingsRulesDetailed_AllPathsValid_ReturnsPerPathRules(t *te
 	assert.NoError(t, global.Err)
 	require.Len(t, global.Rules, 1)
 	assert.Equal(t, "Bash", global.Rules[0].ToolName)
+}
+
+// TestLoadClaudeSettingsRulesDetailed_DenyEntries_ProducesAutoDenyRules is a regression test
+// found in review: permissions.deny was parsed into ClaudePermissions but LoadClaudeSettings-
+// RulesDetailed only ever converted Allow into rules, silently dropping every deny entry.
+func TestLoadClaudeSettingsRulesDetailed_DenyEntries_ProducesAutoDenyRules(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	writeSettingsFile(t, filepath.Join(home, ".claude", "settings.json"),
+		`{"permissions":{"allow":["Bash(git push*)"],"deny":["Bash(git push --force*)"]}}`)
+
+	results := LoadClaudeSettingsRulesDetailed("")
+
+	var global *ClaudeSettingsPathResult
+	for i := range results {
+		if results[i].Label == "global" {
+			global = &results[i]
+		}
+	}
+	require.NotNil(t, global)
+	assert.NoError(t, global.Err)
+	require.Len(t, global.Rules, 2, "both the allow and deny entries must produce a rule")
+
+	var sawAllow, sawDeny bool
+	for _, r := range global.Rules {
+		switch r.Decision {
+		case classifier.AutoAllow:
+			sawAllow = true
+		case classifier.AutoDeny:
+			sawDeny = true
+		}
+	}
+	assert.True(t, sawAllow, "the allow entry must still produce an AutoAllow rule")
+	assert.True(t, sawDeny, "the deny entry must produce an AutoDeny rule")
 }
 
 func TestLoadClaudeSettingsRulesDetailed_AllPathsMissingOrUnreadable_ReturnsEmptyResultsNoError(t *testing.T) {
@@ -194,4 +230,42 @@ func TestClaudeAllowsToRules_NoWildcardPattern_RejectsAppendedCommand(t *testing
 
 	assert.True(t, rules[0].CommandPattern.MatchString("git status"))
 	assert.False(t, rules[0].CommandPattern.MatchString("git status && rm -rf ~"))
+}
+
+// TestClaudeDeniesToRules_ProducesAutoDenyRule_WithHigherPriorityThanAllow is a regression
+// test found in review: permissions.deny was parsed but never converted into classifier
+// rules, so a deny entry in settings.json had zero enforcement effect even though the "Reload
+// rules" UI surfaced settings.json as an enforced rule source. This proves Deny entries now
+// produce AutoDeny rules whose priority sits above claudeAllowsToRules' Allow priority band
+// (150-180, see settingsPaths) — see claudeSettingsDenyPriorityOffset's doc comment for why.
+func TestClaudeDeniesToRules_ProducesAutoDenyRule_WithHigherPriorityThanAllow(t *testing.T) {
+	allowRules := claudeAllowsToRules([]string{"Bash(git push*)"}, 150, "global")
+	denyRules := claudeDeniesToRules([]string{"Bash(git push --force*)"}, 150, "global")
+
+	require.Len(t, allowRules, 1)
+	require.Len(t, denyRules, 1)
+	assert.Equal(t, classifier.AutoDeny, denyRules[0].Decision)
+	assert.Greater(t, denyRules[0].Priority, allowRules[0].Priority,
+		"a claude-settings deny rule must outrank an allow rule from the same file so it actually takes precedence")
+	assert.NotEqual(t, allowRules[0].ID, denyRules[0].ID, "allow and deny rules from the same pattern index must not collide on ID")
+}
+
+// TestClaudeDeniesToRules_ClassifierPrecedence_DenyBeatsConflictingAllow is the end-to-end
+// version: builds a real classifier with both an allow and an overlapping deny rule (as
+// LoadClaudeSettingsRulesDetailed would from a single settings.json with both permissions
+// keys set) and confirms the deny actually wins the classification, not just that its
+// Priority field is numerically higher.
+func TestClaudeDeniesToRules_ClassifierPrecedence_DenyBeatsConflictingAllow(t *testing.T) {
+	allowRules := claudeAllowsToRules([]string{"Bash(git push*)"}, 150, "global")
+	denyRules := claudeDeniesToRules([]string{"Bash(git push --force*)"}, 150, "global")
+
+	c := classifier.NewRuleBasedClassifier()
+	c.ReplaceRules(append(allowRules, denyRules...))
+
+	result := c.Classify(
+		classifier.PermissionRequestPayload{ToolName: "Bash", ToolInput: map[string]interface{}{"command": "git push --force origin main"}},
+		classifier.ClassificationContext{},
+	)
+
+	assert.Equal(t, classifier.AutoDeny, result.Decision, "the deny entry for the more specific pattern must override the broader allow entry")
 }
