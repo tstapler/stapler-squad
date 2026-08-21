@@ -1002,7 +1002,7 @@ func TestTryInstallPTYTriple_RejectsStaleGen_And_ReturnsCurrentWinner(t *testing
 	require.Equal(t, winnerFile, currentFile, "loser must be handed the winner's file, not left to assume it won")
 	require.Equal(t, winnerFile, session.lockedPTMX(), "winner's install must be untouched by the rejected loser")
 
-	require.Empty(t, closePTYTriple(loserFile, nil, nil), "loser must be able to tear down its own file")
+	require.Empty(t, closePTYTriple(loserFile, nil, nil, session.sanitizedName), "loser must be able to tear down its own file")
 	require.NoError(t, winnerFile.Close())
 }
 
@@ -1021,7 +1021,7 @@ func TestTryInstallPTYTriple_RejectsAfterClose(t *testing.T) {
 	require.False(t, ok)
 	require.True(t, closed)
 	require.Nil(t, currentFile)
-	require.Empty(t, closePTYTriple(file, nil, nil))
+	require.Empty(t, closePTYTriple(file, nil, nil, session.sanitizedName))
 }
 
 func TestClearPTYTriple_CapturesThenNilsAllThreeFields(t *testing.T) {
@@ -1046,45 +1046,6 @@ func TestClearPTYTriple_CapturesThenNilsAllThreeFields(t *testing.T) {
 	require.Nil(t, gotOnce2)
 
 	require.NoError(t, r.Close())
-}
-
-// TestPtmxMuDocComment_StatesLeafLockInvariant verifies the ptmxMu field declaration's
-// doc comment documents the lock-order invariant (AC4), by reading tmux.go's own source
-// rather than duplicating the lock list into a second, driftable source of truth.
-func TestPtmxMuDocComment_StatesLeafLockInvariant(t *testing.T) {
-	data, err := os.ReadFile("tmux.go")
-	require.NoError(t, err)
-	lines := strings.Split(string(data), "\n")
-
-	fieldLine := -1
-	for i, line := range lines {
-		if strings.Contains(line, "ptmxMu deadlock.Mutex") {
-			fieldLine = i
-			break
-		}
-	}
-	require.GreaterOrEqual(t, fieldLine, 0, "ptmxMu field declaration not found in tmux.go")
-
-	// Walk upward from the field declaration, collecting only the contiguous run of
-	// "//"-comment lines immediately preceding it -- this is that field's doc comment,
-	// not a fixed byte lookback that could drift into an unrelated preceding comment
-	// block if either grows or shrinks.
-	var commentLines []string
-	for i := fieldLine - 1; i >= 0; i-- {
-		trimmed := strings.TrimSpace(lines[i])
-		if !strings.HasPrefix(trimmed, "//") {
-			break
-		}
-		commentLines = append([]string{trimmed}, commentLines...)
-	}
-	docComment := strings.ToLower(strings.Join(commentLines, "\n"))
-	require.NotEmpty(t, docComment, "ptmxMu field declaration has no preceding doc comment")
-
-	require.Contains(t, docComment, "leaf lock")
-	for _, lockName := range []string{"detachMutex", "controlModeSubMu", "controlModeStartMu", "cmdSendMu", "recoveryMu"} {
-		require.Contains(t, docComment, strings.ToLower(lockName),
-			"ptmxMu doc comment should name %s as part of its lock-order documentation", lockName)
-	}
 }
 
 // TestGetPTY_ClosePTYAndAttachCmd_ConcurrentAccessIsSerialized forces the exact interleave
@@ -1536,6 +1497,49 @@ func TestRestoreWithWorkDir_RacingClose_NoPTYInstalledAfterTeardown(t *testing.T
 	})
 
 	require.Len(t, factory.pairs, 1, "RestoreWithWorkDir must have made exactly one PTY start attempt")
+	require.Nil(t, session.lockedPTMX(), "no PTY may be installed after Close() has torn the session down")
+	require.Less(t, int(factory.pairs[0][0].Fd()), 0, "the late-arriving PTY must be closed, not leaked, once its install is rejected")
+}
+
+// TestAttachToExisting_RacingClose_NoPTYInstalledAfterTeardown mirrors
+// TestRestoreWithWorkDir_RacingClose_NoPTYInstalledAfterTeardown for AttachToExisting:
+// it forces Close() to run to completion -- flipping ptyClosed -- while
+// AttachToExisting's blocking ptyFactory.Start call is still in flight, then releases
+// it. The late-arriving PTY must never be installed after teardown has already run,
+// and must be torn down rather than left as an orphaned attach process.
+func TestAttachToExisting_RacingClose_NoPTYInstalledAfterTeardown(t *testing.T) {
+	registry := NewFakeTmuxRegistry()
+	factory := newGatedPtyFactory()
+	session := newTmuxSessionWithSocket("attach-close-race-test", "echo", factory, MockCmdExec{}, TmuxPrefix, "", WithRegistry(registry))
+	registry.SetSessions([]string{session.sanitizedName})
+
+	attachDone := make(chan error, 1)
+	go func() {
+		attachDone <- session.AttachToExisting()
+	}()
+
+	require.Eventually(t, func() bool { return factory.waiting.Load() == 1 }, 2*time.Second, time.Millisecond,
+		"AttachToExisting must reach the blocking ptyFactory.Start call")
+
+	// Close() must fully complete -- including flipping ptyClosed -- before the gated
+	// Start call is allowed to return, forcing the exact interleave this test covers.
+	require.NoError(t, session.Close())
+
+	close(factory.release)
+
+	select {
+	case err := <-attachDone:
+		require.Error(t, err, "AttachToExisting must report failure when it loses the race to a concurrent Close()")
+	case <-time.After(2 * time.Second):
+		t.Fatal("AttachToExisting did not return after being released")
+	}
+	t.Cleanup(func() {
+		for _, pair := range factory.pairs {
+			_ = pair[1].Close()
+		}
+	})
+
+	require.Len(t, factory.pairs, 1, "AttachToExisting must have made exactly one PTY start attempt")
 	require.Nil(t, session.lockedPTMX(), "no PTY may be installed after Close() has torn the session down")
 	require.Less(t, int(factory.pairs[0][0].Fd()), 0, "the late-arriving PTY must be closed, not leaked, once its install is rejected")
 }

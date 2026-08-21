@@ -12,6 +12,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/detection"
 	"github.com/tstapler/stapler-squad/testutil"
 )
 
@@ -1370,4 +1371,23 @@ func TestOnItemAdded_PublishesNotification_When_SessionHidden_AndReasonIsErrorSt
 			}
 		})
 	}
+}
+
+// TestOnControllerStatusChange_NilCtx_DoesNotPanic covers the nil-ctx guard in
+// baseContext() (review_queue_manager.go): a ClaudeController's status-change goroutine
+// can call OnControllerStatusChange before Start() has ever run, when rqm.ctx is still
+// nil. The spawned goroutine used to dereference rqm.ctx.Done() directly, which panics
+// on a nil context.Context interface value; it now goes through baseContext().
+func TestOnControllerStatusChange_NilCtx_DoesNotPanic(t *testing.T) {
+	mgr, poller, _ := newReactiveQueueTestSetup(t)
+
+	inst := &session.Instance{Title: "unstarted-session", UUID: "cccccccc-1111-2222-3333-ffffffffffff"}
+	poller.SetInstances([]*session.Instance{inst})
+
+	mgr.OnControllerStatusChange(inst, detection.DetectedStatus(0))
+
+	// OnControllerStatusChange spawns a goroutine that dereferences rqm.baseContext();
+	// give it a chance to run so a regression (an unrecovered panic in that goroutine)
+	// crashes this test run instead of racing past undetected.
+	time.Sleep(50 * time.Millisecond)
 }
