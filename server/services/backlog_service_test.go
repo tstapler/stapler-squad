@@ -880,6 +880,40 @@ func TestBacklogItemToProto_should_IncludeAuditTrail_When_StatusEventsAndProgres
 	assert.True(t, p.ActivityNotes[0].CreatedAt.AsTime().Equal(activityCreatedAt))
 }
 
+// ─── backlogItemSummaryToProto ─────────────────────────────────────────────────
+
+// TestBacklogItemSummaryToProto_should_SetAllowedTransitions_When_ItemHasAnyStatus
+// is the regression test for the empty Force-status dropdown bug: ListBacklogItems
+// (backed by backlogItemSummaryToProto) previously omitted AllowedTransitions
+// entirely, unlike GetBacklogItem (backed by backlogItemToProto). AllowedTransitions
+// is a pure function of status, so summary and full protos must always agree.
+func TestBacklogItemSummaryToProto_should_SetAllowedTransitions_When_ItemHasAnyStatus(t *testing.T) {
+	statuses := []session.BacklogStatus{
+		session.BacklogStatusIdea,
+		session.BacklogStatusRefining,
+		session.BacklogStatusReady,
+		session.BacklogStatusQueued,
+		session.BacklogStatusInProgress,
+		session.BacklogStatusReview,
+		session.BacklogStatusPRPending,
+		session.BacklogStatusDone,
+		session.BacklogStatusArchived,
+	}
+
+	for _, status := range statuses {
+		t.Run(string(status), func(t *testing.T) {
+			summary := &session.BacklogItemSummary{ID: "item-1", Status: status}
+			summaryProto := backlogItemSummaryToProto(summary, nil)
+
+			full := &session.BacklogItemData{ID: "item-1", Status: string(status)}
+			fullProto := backlogItemToProto(full, nil)
+
+			assert.Equal(t, fullProto.AllowedTransitions, summaryProto.AllowedTransitions)
+			assert.NotEmpty(t, summaryProto.AllowedTransitions, "status %q should have outbound transitions", status)
+		})
+	}
+}
+
 // ─── ApprovePlan ──────────────────────────────────────────────────────────────
 
 // UT-032a: ApprovePlan when plan_artifacts_path is empty → CodeFailedPrecondition
