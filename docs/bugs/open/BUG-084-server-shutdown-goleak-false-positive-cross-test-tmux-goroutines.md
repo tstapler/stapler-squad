@@ -1,4 +1,4 @@
-# BUG-083: `TestServer_Shutdown_JoinsBackgroundTickers` fails only in the full `server` package suite — goleak catches another test's still-teardown-in-flight tmux/PTY goroutines [SEVERITY: Low]
+# BUG-084: `TestServer_Shutdown_JoinsBackgroundTickers` fails only in the full `server` package suite — goleak catches another test's still-teardown-in-flight tmux/PTY goroutines [SEVERITY: Low]
 
 **Status**: 🐛 Open
 **Discovered**: 2026-08-21, while verifying `make test` for the `session.Repository`/`session.PipelineModeRepository` interface-pollution cleanup (`session/repository.go`, `session/storage.go`).
