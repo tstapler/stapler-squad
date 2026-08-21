@@ -117,8 +117,8 @@ type atomicLogger struct {
 	ptr atomic.Pointer[log.Logger]
 }
 
-func (a *atomicLogger) Load() *log.Logger    { return a.ptr.Load() }
-func (a *atomicLogger) Store(l *log.Logger)  { a.ptr.Store(l) }
+func (a *atomicLogger) Load() *log.Logger              { return a.ptr.Load() }
+func (a *atomicLogger) Store(l *log.Logger)            { a.ptr.Store(l) }
 func (a *atomicLogger) Swap(l *log.Logger) *log.Logger { return a.ptr.Swap(l) }
 
 //nolint:gochecknoglobals
