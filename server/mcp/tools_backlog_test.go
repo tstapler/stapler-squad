@@ -6119,35 +6119,39 @@ func TestGetBacklogItem_should_NotUseVerdictFormatStrings_When_NoVerdictExists(t
 
 type linkConsistencyCase struct {
 	name   string
-	role   string // role the ItemSession is created with, when a link is created
 	invoke func(h *backlogHandlers, ctx context.Context, itemID string) (*mcpgo.CallToolResult, error)
 }
 
+// linkConsistencyMutatingTools covers link-check disambiguation only (item-missing
+// vs. item-exists-no-link) — it deliberately does not encode a "correct role" per
+// tool, since 2 of the 7 (report_progress, request_review) have no role check at
+// all. Role-mismatch coverage lives in the standalone Test*_should_ReturnPermissionDenied_When_CallerRoleNot*
+// tests below, one per handler that actually has a role branch.
 var linkConsistencyMutatingTools = []linkConsistencyCase{
-	{"report_progress", session.SessionRoleWork, func(h *backlogHandlers, ctx context.Context, itemID string) (*mcpgo.CallToolResult, error) {
+	{"report_progress", func(h *backlogHandlers, ctx context.Context, itemID string) (*mcpgo.CallToolResult, error) {
 		return h.reportProgress(ctx, makeToolReq(map[string]interface{}{"item_id": itemID, "criteria_index": float64(0), "status": "pass"}))
 	}},
-	{"request_review", session.SessionRoleWork, func(h *backlogHandlers, ctx context.Context, itemID string) (*mcpgo.CallToolResult, error) {
+	{"request_review", func(h *backlogHandlers, ctx context.Context, itemID string) (*mcpgo.CallToolResult, error) {
 		return h.requestReview(ctx, makeToolReq(map[string]interface{}{"item_id": itemID, "message": "done"}))
 	}},
-	{"submit_review_verdict", session.SessionRoleReview, func(h *backlogHandlers, ctx context.Context, itemID string) (*mcpgo.CallToolResult, error) {
+	{"submit_review_verdict", func(h *backlogHandlers, ctx context.Context, itemID string) (*mcpgo.CallToolResult, error) {
 		return h.submitReviewVerdict(ctx, makeToolReq(map[string]interface{}{
 			"item_id": itemID, "summary": "s",
 			"verdicts": []interface{}{map[string]interface{}{"criterion_index": float64(0), "outcome": "PASS", "evidence": "e"}},
 		}))
 	}},
-	{"report_pr_created", session.SessionRoleWork, func(h *backlogHandlers, ctx context.Context, itemID string) (*mcpgo.CallToolResult, error) {
+	{"report_pr_created", func(h *backlogHandlers, ctx context.Context, itemID string) (*mcpgo.CallToolResult, error) {
 		return h.reportPRCreated(ctx, makeToolReq(map[string]interface{}{
 			"item_id": itemID, "pr_url": "https://github.com/tstapler/stapler-squad/pull/1", "pr_number": float64(1), "summary": "s",
 		}))
 	}},
-	{"submit_triage_result", session.SessionRoleTriage, func(h *backlogHandlers, ctx context.Context, itemID string) (*mcpgo.CallToolResult, error) {
+	{"submit_triage_result", func(h *backlogHandlers, ctx context.Context, itemID string) (*mcpgo.CallToolResult, error) {
 		return h.submitTriageResult(ctx, makeToolReq(map[string]interface{}{"item_id": itemID, "summary": "s"}))
 	}},
-	{"report_blocked", session.SessionRoleWork, func(h *backlogHandlers, ctx context.Context, itemID string) (*mcpgo.CallToolResult, error) {
+	{"report_blocked", func(h *backlogHandlers, ctx context.Context, itemID string) (*mcpgo.CallToolResult, error) {
 		return h.reportBlocked(ctx, makeToolReq(map[string]interface{}{"item_id": itemID, "rationale": "blocked on external dependency"}))
 	}},
-	{"report_duplicate", session.SessionRoleWork, func(h *backlogHandlers, ctx context.Context, itemID string) (*mcpgo.CallToolResult, error) {
+	{"report_duplicate", func(h *backlogHandlers, ctx context.Context, itemID string) (*mcpgo.CallToolResult, error) {
 		return h.reportDuplicate(ctx, makeToolReq(map[string]interface{}{
 			"item_id": itemID, "duplicate_ref": "https://github.com/tstapler/stapler-squad/pull/1", "reason": "dup",
 		}))
@@ -6307,6 +6311,41 @@ func TestSubmitTriageResult_should_ReturnPermissionDenied_When_CallerRoleNotTria
 	require.True(t, ok)
 	assert.Equal(t, ErrPermissionDenied, errObj["code"].(string))
 	assert.Contains(t, errObj["message"].(string), "only 'triage' role may submit triage results")
+}
+
+// TestReportBlocked_should_ReturnPermissionDenied_When_CallerRoleNotWork mirrors
+// TestSubmitTriageResult_should_ReturnPermissionDenied_When_CallerRoleNotTriage for
+// reportBlocked's role check — prior to this test, reportBlocked had zero role-mismatch
+// coverage anywhere in this file (confirmed by testing-quality review of this PR).
+func TestReportBlocked_should_ReturnPermissionDenied_When_CallerRoleNotWork(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	item, err := storage.CreateBacklogItem(context.Background(), session.BacklogItemData{
+		Title:              "Wrong role item",
+		AcceptanceCriteria: `[{"index":0,"text":"Criterion","status":"pending"}]`,
+		Priority:           1,
+		Status:             string(session.BacklogStatusInProgress),
+	})
+	require.NoError(t, err)
+
+	sessionUUID := uuid.New().String()
+	_, err = storage.CreateItemSession(context.Background(), session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: sessionUUID,
+		SessionRole: session.SessionRoleReview, // wrong role
+	})
+	require.NoError(t, err)
+
+	handler := &backlogHandlers{storage: storage}
+	ctx := WithSessionUUID(context.Background(), sessionUUID)
+
+	result, err := handler.reportBlocked(ctx, makeToolReq(map[string]interface{}{"item_id": item.ID, "rationale": "blocked on external dependency"}))
+	require.NoError(t, err)
+	m := parseResult(t, result)
+	require.False(t, m["success"].(bool))
+	errObj, ok := m["error"].(map[string]interface{})
+	require.True(t, ok)
+	assert.Equal(t, ErrPermissionDenied, errObj["code"].(string))
+	assert.Contains(t, errObj["message"].(string), "only 'work' role may report a blocked item")
 }
 
 // TestBacklogHandlers_should_HaveNoRemainingRawLinkCheck_When_SourceIsScanned is a

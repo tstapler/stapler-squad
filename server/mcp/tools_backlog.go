@@ -120,6 +120,13 @@ const (
 	ErrEventStreamUnavailable = "EVENT_STREAM_UNAVAILABLE"
 )
 
+// itemNotFoundRemediation is the shared ITEM_NOT_FOUND remediation text for
+// getBacklogItem's own existence check and resolveItemLink's fallback
+// existence check — kept as one constant so the two call sites can't drift.
+const itemNotFoundRemediation = "This item id does not exist — do not retry any backlog MCP tool call against it. " +
+	"If you were given this item id at session start, report it in your final summary; it may have been " +
+	"deleted or archived out from under this session."
+
 // featureDisabledResult returns a FEATURE_DISABLED error result if enabledCheck
 // is set and currently reports false. A nil enabledCheck means always-enabled
 // (used by tests that construct handlers directly without wiring the flag).
@@ -344,10 +351,7 @@ func (h *backlogHandlers) getBacklogItem(ctx context.Context, req mcpgo.CallTool
 	item, err := h.storage.GetBacklogItem(ctx, itemID)
 	if err != nil {
 		if errors.Is(err, session.ErrNotFound) {
-			return errResult(ErrItemNotFound, fmt.Sprintf("backlog item %q not found", itemID),
-				"This item id does not exist — do not retry any backlog MCP tool call against it. If you were given "+
-					"this item id at session start, report it in your final summary; it may have been deleted or "+
-					"archived out from under this session."), nil
+			return errResult(ErrItemNotFound, fmt.Sprintf("backlog item %q not found", itemID), itemNotFoundRemediation), nil
 		}
 		return errResult(ErrInternalError, fmt.Sprintf("get backlog item: %v", err), ""), nil
 	}
@@ -522,10 +526,7 @@ func (h *backlogHandlers) resolveItemLink(ctx context.Context, callerUUID, itemI
 	if _, itemErr := h.storage.GetBacklogItem(ctx, itemID); itemErr != nil {
 		if errors.Is(itemErr, session.ErrNotFound) {
 			return session.ItemSessionSummary{}, errResult(ErrItemNotFound,
-				fmt.Sprintf("backlog item %q not found", itemID),
-				"This item id does not exist — do not retry any backlog MCP tool call against it. If you were given "+
-					"this item id at session start, report it in your final summary; it may have been deleted or "+
-					"archived out from under this session.")
+				fmt.Sprintf("backlog item %q not found", itemID), itemNotFoundRemediation)
 		}
 		return session.ItemSessionSummary{}, errResult(ErrInternalError, fmt.Sprintf("get backlog item: %v", itemErr), "")
 	}
