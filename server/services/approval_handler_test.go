@@ -30,13 +30,13 @@ import (
 // must reflect whatever baseURLFn() returns at *their* point of use -- never a
 // value snapshotted once at ApprovalHandler construction time.
 func TestApprovalHandler_should_UseBaseURLFnValueAtCallTime_When_ThreeUsageSitesInvoked(t *testing.T) {
-	t.Parallel()
-	// hookApprovalURL() delegates to hook_injector.go's shared hookBaseURLFn (set via
-	// SetHookBaseURLFn) -- the same mechanism InjectHooksConfig uses -- rather than a
-	// separate ApprovalHandler-owned mechanism. Save/restore it so this test's
-	// deliberately-unstable stub base URL doesn't leak into other tests in this
-	// package that call hookApprovalURL()/InjectHookConfig and expect the stable
-	// default.
+	// Deliberately no t.Parallel(): this test mutates the process-global hookBaseURLFn
+	// (via SetHookBaseURLFn) to a value that changes on every call. A sibling t.Parallel()
+	// test that calls InjectHooksConfig/InjectHookConfig concurrently would observe that
+	// instability and its own idempotency assumptions would break, since t.Cleanup's
+	// restore only protects tests that run AFTER this one finishes, not ones running
+	// alongside it. Confirmed via `go test -run TestInjectHooksIdempotent` passing alone
+	// but failing when run together with this test.
 	original := getHookBaseURLFn()
 	t.Cleanup(func() { SetHookBaseURLFn(original) })
 

@@ -809,7 +809,7 @@ const (
 // InjectHookConfig below reflect whatever base URL is current at their point of use rather
 // than a value baked in at server- or package-construction time.
 func hookApprovalURL() string {
-	return hookEndpoints(hookBaseURLFn)[HookPermissionApproval]
+	return hookEndpoints(getHookBaseURLFn())[HookPermissionApproval]
 }
 
 // InjectHookConfig writes (or merges) the stapler-squad PermissionRequest HTTP hook
@@ -892,71 +892,15 @@ func InjectHookConfig(rootDir, sessionTitle string) error {
 // verbatim) and whether entry's hook was already present (in which case out
 // is nil and the caller should skip writing anything).
 func mergeHookEntryIntoSettings(existingData []byte, entry hookEntry, alreadyPresentFn func(command string) bool) (out []byte, alreadyPresent bool, err error) {
-	raw := map[string]json.RawMessage{}
-	if len(existingData) > 0 {
-		if err := json.Unmarshal(existingData, &raw); err != nil {
-			// Malformed JSON — attempt targeted repair before falling back to a fresh config.
-			log.Warn("[mergeHookEntryIntoSettings] invalid JSON, attempting repair", "err", err)
-			repaired, repairErr := repairSettingsJSON(existingData)
-			if repairErr == nil {
-				log.Info("[mergeHookEntryIntoSettings] repaired settings file")
-				_ = json.Unmarshal(repaired, &raw) // best-effort; raw may still be partial
-			} else {
-				log.Warn("[mergeHookEntryIntoSettings] could not repair settings, resetting to minimal config", "err", repairErr)
-				raw = map[string]json.RawMessage{}
-			}
-		}
+	raw := parseSettingsWithRepair(existingData, "mergeHookEntryIntoSettings")
+
+	existingGroups := permissionRequestGroupsFromSettings(raw)
+	if hookAlreadyPresentInGroups(existingGroups, alreadyPresentFn) {
+		return nil, true, nil
 	}
 
-	// Check whether our command-type hook is already present.
-	if hooksRaw, ok := raw["hooks"]; ok {
-		var hooks map[string]json.RawMessage
-		if err := json.Unmarshal(hooksRaw, &hooks); err == nil {
-			if prRaw, ok := hooks["PermissionRequest"]; ok {
-				var groups []hookMatcherGroup
-				if err := json.Unmarshal(prRaw, &groups); err == nil {
-					for _, g := range groups {
-						for _, h := range g.Hooks {
-							if h.Type == "command" && alreadyPresentFn(h.Command) {
-								return nil, true, nil
-							}
-						}
-					}
-				}
-			}
-		}
-	}
+	prGroups := mergePermissionRequestGroups(existingGroups, entry)
 
-	// Merge: prepend our group to PermissionRequest hooks.
-	// Also remove any old http-type entries pointing to our URL (migration from old format).
-	group := hookMatcherGroup{Hooks: []hookEntry{entry}}
-	var prGroups []hookMatcherGroup
-	if hooksRaw, ok := raw["hooks"]; ok {
-		var hooks map[string]json.RawMessage
-		if err := json.Unmarshal(hooksRaw, &hooks); err == nil {
-			if prRaw, ok := hooks["PermissionRequest"]; ok {
-				var existingGroups []hookMatcherGroup
-				if err := json.Unmarshal(prRaw, &existingGroups); err == nil {
-					for _, g := range existingGroups {
-						// Strip out any old http-type hooks pointing to our URL.
-						filtered := g.Hooks[:0]
-						for _, h := range g.Hooks {
-							if h.URL != hookApprovalURL() {
-								filtered = append(filtered, h)
-							}
-						}
-						if len(filtered) > 0 {
-							g.Hooks = filtered
-							prGroups = append(prGroups, g)
-						}
-					}
-				}
-			}
-		}
-	}
-	prGroups = append([]hookMatcherGroup{group}, prGroups...)
-
-	// Rebuild hooks object.
 	hooksMap := map[string]json.RawMessage{}
 	if hooksRaw, ok := raw["hooks"]; ok {
 		_ = json.Unmarshal(hooksRaw, &hooksMap)
@@ -978,6 +922,86 @@ func mergeHookEntryIntoSettings(existingData []byte, entry hookEntry, alreadyPre
 		return nil, false, fmt.Errorf("marshal settings: %w", err)
 	}
 	return out, false, nil
+}
+
+// parseSettingsWithRepair unmarshals existingData as a settings.local.json top-level map,
+// attempting repairSettingsJSON's targeted fix for common corruption before falling back to a
+// fresh, empty config. logPrefix names the caller in the resulting log lines (mirrors
+// InjectHooksConfig's own identical repair step in hook_injector.go's
+// readExistingHooksSettings -- kept as two call sites, not a shared helper, since one operates
+// on a file path and the other on already-read bytes from a remote host).
+func parseSettingsWithRepair(existingData []byte, logPrefix string) map[string]json.RawMessage {
+	raw := map[string]json.RawMessage{}
+	if len(existingData) == 0 {
+		return raw
+	}
+	if err := json.Unmarshal(existingData, &raw); err != nil {
+		log.Warn("["+logPrefix+"] invalid JSON, attempting repair", "err", err)
+		repaired, repairErr := repairSettingsJSON(existingData)
+		if repairErr != nil {
+			log.Warn("["+logPrefix+"] could not repair settings, resetting to minimal config", "err", repairErr)
+			return map[string]json.RawMessage{}
+		}
+		log.Info("[" + logPrefix + "] repaired settings file")
+		_ = json.Unmarshal(repaired, &raw) // best-effort; raw may still be partial
+	}
+	return raw
+}
+
+// permissionRequestGroupsFromSettings extracts raw's "hooks" -> "PermissionRequest"
+// hookMatcherGroup list, returning nil (not an error) if either level is absent or malformed --
+// every caller already treats "no existing entries" and "couldn't parse existing entries"
+// identically.
+func permissionRequestGroupsFromSettings(raw map[string]json.RawMessage) []hookMatcherGroup {
+	hooksRaw, ok := raw["hooks"]
+	if !ok {
+		return nil
+	}
+	var hooks map[string]json.RawMessage
+	if err := json.Unmarshal(hooksRaw, &hooks); err != nil {
+		return nil
+	}
+	prRaw, ok := hooks["PermissionRequest"]
+	if !ok {
+		return nil
+	}
+	var groups []hookMatcherGroup
+	_ = json.Unmarshal(prRaw, &groups)
+	return groups
+}
+
+// hookAlreadyPresentInGroups reports whether any command-type hook in groups matches
+// alreadyPresentFn.
+func hookAlreadyPresentInGroups(groups []hookMatcherGroup, alreadyPresentFn func(command string) bool) bool {
+	for _, g := range groups {
+		for _, h := range g.Hooks {
+			if h.Type == "command" && alreadyPresentFn(h.Command) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// mergePermissionRequestGroups prepends a group containing entry ahead of existingGroups, while
+// migrating away old http-type entries that point at our own URL (hookApprovalURL()) -- a group
+// left with zero hooks after that filtering is dropped entirely rather than kept empty.
+func mergePermissionRequestGroups(existingGroups []hookMatcherGroup, entry hookEntry) []hookMatcherGroup {
+	group := hookMatcherGroup{Hooks: []hookEntry{entry}}
+	var kept []hookMatcherGroup
+	for _, g := range existingGroups {
+		filtered := g.Hooks[:0]
+		for _, h := range g.Hooks {
+			if h.URL != hookApprovalURL() {
+				filtered = append(filtered, h)
+			}
+		}
+		if len(filtered) > 0 {
+			g.Hooks = filtered
+			kept = append(kept, g)
+		}
+	}
+	return append([]hookMatcherGroup{group}, kept...)
 }
 
 // InjectHookConfigRemote is InjectHookConfig's remote-host counterpart

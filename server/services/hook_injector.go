@@ -268,38 +268,11 @@ func InjectHooksConfig(rootDir, sessionTitle string, hooks []HookName, opts ...I
 	claudeDir := filepath.Join(rootDir, ".claude")
 	settingsPath := filepath.Join(claudeDir, "settings.local.json")
 
-	// Build the set of hooks to inject (permission_approval always included).
-	wanted := map[HookName]struct{}{HookPermissionApproval: {}}
-	for _, h := range hooks {
-		if _, ok := hookEventName[h]; ok {
-			wanted[h] = struct{}{}
-		} else {
-			log.Warn("[InjectHooksConfig] unknown hook name, skipping", "name", h)
-		}
-	}
+	wanted := wantedHookSet(hooks)
 
-	// Read existing settings.
-	raw := map[string]json.RawMessage{}
-	data, err := os.ReadFile(settingsPath)
-	if err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("read %s: %w", settingsPath, err)
-	}
-	if len(data) > 0 {
-		if err := json.Unmarshal(data, &raw); err != nil {
-			log.Warn("[InjectHooksConfig] settings file has invalid JSON, attempting repair", "path", settingsPath, "err", err)
-			repaired, repairErr := repairSettingsJSON(data)
-			if repairErr == nil {
-				_ = json.Unmarshal(repaired, &raw)
-			} else {
-				raw = map[string]json.RawMessage{}
-			}
-		}
-	}
-
-	// Parse existing hooks map.
-	hooksMap := map[string]json.RawMessage{}
-	if hooksRaw, ok := raw["hooks"]; ok {
-		_ = json.Unmarshal(hooksRaw, &hooksMap)
+	raw, hooksMap, err := readExistingHooksSettings(settingsPath)
+	if err != nil {
+		return err
 	}
 
 	// Resolved once per InjectHooksConfig call (i.e. per-session, at hook-injection time), not
@@ -314,58 +287,17 @@ func InjectHooksConfig(rootDir, sessionTitle string, hooks []HookName, opts ...I
 		// routes at the relay's socket -- see WithRemoteHookTarget's doc comment for why
 		// every other hook type keeps the HTTP command even when cfg.remote is set.
 		remoteTargeted := cfg.remote != nil && hookName == HookPermissionApproval
-		var curlCmd string
-		if remoteTargeted {
-			curlCmd = remoteApprovalHookCommand(*cfg.remote)
-		} else {
-			curlCmd = fmt.Sprintf(
-				"curl -s --max-time %d -X POST '%s' -H 'Content-Type: application/json' -H 'X-CS-Session-ID: %s' -d @-",
-				hookTimeout, url, sessionTitle,
-			)
+		curlCmd := buildHookCommand(remoteTargeted, cfg, url, sessionTitle)
+
+		if hookAlreadyPresent(hooksMap[eventKey], remoteTargeted, cfg.remote, url) {
+			continue
 		}
 
-		// Check if this hook command is already present.
-		if existing, ok := hooksMap[eventKey]; ok {
-			var groups []hookMatcherGroup
-			if err := json.Unmarshal(existing, &groups); err == nil {
-				alreadyPresent := false
-				for _, g := range groups {
-					for _, h := range g.Hooks {
-						matches := h.Type == "command"
-						if matches && remoteTargeted {
-							matches = hookCommandTargetsSocket(h.Command, cfg.remote.SocketPath)
-						} else if matches {
-							matches = hookCommandReferencesURL(h.Command, url)
-						}
-						if matches {
-							alreadyPresent = true
-							break
-						}
-					}
-					if alreadyPresent {
-						break
-					}
-				}
-				if alreadyPresent {
-					continue
-				}
-			}
-		}
-
-		// Prepend our entry.
-		entry := hookEntry{Type: "command", Command: curlCmd, Timeout: hookTimeout}
-		group := hookMatcherGroup{Hooks: []hookEntry{entry}}
-
-		var existing []hookMatcherGroup
-		if raw, ok := hooksMap[eventKey]; ok {
-			_ = json.Unmarshal(raw, &existing)
-		}
-		merged := append([]hookMatcherGroup{group}, existing...)
-		mergedJSON, err := json.Marshal(merged)
+		merged, err := prependHookEntry(hooksMap[eventKey], curlCmd)
 		if err != nil {
 			return fmt.Errorf("marshal hooks for %s: %w", eventKey, err)
 		}
-		hooksMap[eventKey] = json.RawMessage(mergedJSON)
+		hooksMap[eventKey] = merged
 	}
 
 	hooksJSON, err := json.Marshal(hooksMap)
@@ -375,6 +307,109 @@ func InjectHooksConfig(rootDir, sessionTitle string, hooks []HookName, opts ...I
 	raw["hooks"] = json.RawMessage(hooksJSON)
 
 	return writeSettingsAtomic(settingsPath, claudeDir, raw)
+}
+
+// wantedHookSet builds the set of hooks to inject from hooks, always including
+// HookPermissionApproval, and logging (not erroring) any name InjectHooksConfig's caller
+// passed that hookEventName doesn't recognize.
+func wantedHookSet(hooks []HookName) map[HookName]struct{} {
+	wanted := map[HookName]struct{}{HookPermissionApproval: {}}
+	for _, h := range hooks {
+		if _, ok := hookEventName[h]; ok {
+			wanted[h] = struct{}{}
+		} else {
+			log.Warn("[InjectHooksConfig] unknown hook name, skipping", "name", h)
+		}
+	}
+	return wanted
+}
+
+// readExistingHooksSettings reads settingsPath (a missing file is not an error -- InjectHooksConfig
+// creates it), repairing common JSON corruption (see repairSettingsJSON) before giving up and
+// starting fresh, and returns both the full top-level settings map and its parsed "hooks" sub-map.
+func readExistingHooksSettings(settingsPath string) (raw map[string]json.RawMessage, hooksMap map[string]json.RawMessage, err error) {
+	raw = map[string]json.RawMessage{}
+	data, readErr := os.ReadFile(settingsPath)
+	if readErr != nil && !os.IsNotExist(readErr) {
+		return nil, nil, fmt.Errorf("read %s: %w", settingsPath, readErr)
+	}
+	if len(data) > 0 {
+		if unmarshalErr := json.Unmarshal(data, &raw); unmarshalErr != nil {
+			log.Warn("[InjectHooksConfig] settings file has invalid JSON, attempting repair", "path", settingsPath, "err", unmarshalErr)
+			if repaired, repairErr := repairSettingsJSON(data); repairErr == nil {
+				_ = json.Unmarshal(repaired, &raw)
+			} else {
+				raw = map[string]json.RawMessage{}
+			}
+		}
+	}
+
+	hooksMap = map[string]json.RawMessage{}
+	if hooksRaw, ok := raw["hooks"]; ok {
+		_ = json.Unmarshal(hooksRaw, &hooksMap)
+	}
+	return raw, hooksMap, nil
+}
+
+// buildHookCommand returns the shell command InjectHooksConfig writes for one hook event --
+// either remoteApprovalHookCommand's socat pipeline (remoteTargeted) or the local curl command,
+// unchanged from pre-Phase-5 behavior for every non-remote-targeted call.
+func buildHookCommand(remoteTargeted bool, cfg injectHookOptions, url, sessionTitle string) string {
+	if remoteTargeted {
+		return remoteApprovalHookCommand(*cfg.remote)
+	}
+	return fmt.Sprintf(
+		"curl -s --max-time %d -X POST '%s' -H 'Content-Type: application/json' -H 'X-CS-Session-ID: %s' -d @-",
+		hookTimeout, url, sessionTitle,
+	)
+}
+
+// hookAlreadyPresent reports whether existingRaw (one event's current hookMatcherGroup list, or
+// nil if the event has no entries yet) already contains a command hook targeting url (or, for a
+// remote-targeted hook, remote.SocketPath).
+func hookAlreadyPresent(existingRaw json.RawMessage, remoteTargeted bool, remote *RemoteHookTarget, url string) bool {
+	if existingRaw == nil {
+		return false
+	}
+	var groups []hookMatcherGroup
+	if err := json.Unmarshal(existingRaw, &groups); err != nil {
+		return false
+	}
+	for _, g := range groups {
+		for _, h := range g.Hooks {
+			if h.Type != "command" {
+				continue
+			}
+			if remoteTargeted {
+				if hookCommandTargetsSocket(h.Command, remote.SocketPath) {
+					return true
+				}
+				continue
+			}
+			if hookCommandReferencesURL(h.Command, url) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// prependHookEntry adds a new command-hook entry (running curlCmd) as the first group ahead of
+// existingRaw's groups (if any), returning the re-marshaled hookMatcherGroup list.
+func prependHookEntry(existingRaw json.RawMessage, curlCmd string) (json.RawMessage, error) {
+	entry := hookEntry{Type: "command", Command: curlCmd, Timeout: hookTimeout}
+	group := hookMatcherGroup{Hooks: []hookEntry{entry}}
+
+	var existing []hookMatcherGroup
+	if existingRaw != nil {
+		_ = json.Unmarshal(existingRaw, &existing)
+	}
+	merged := append([]hookMatcherGroup{group}, existing...)
+	mergedJSON, err := json.Marshal(merged)
+	if err != nil {
+		return nil, err
+	}
+	return json.RawMessage(mergedJSON), nil
 }
 
 // RemoveHooksConfig strips any previously-injected entries for the given hooks from
