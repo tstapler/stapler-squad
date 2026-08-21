@@ -902,6 +902,20 @@ func (s *SessionService) Shutdown() {
 	s.deleteCleanupWG.Wait()
 }
 
+// waitForPendingCleanup blocks until every DeleteSession call made so far has
+// finished its background tmux/instance cleanup (see trackCleanup). Unlike
+// Shutdown, it doesn't stop accepting new cleanup work, so it's safe to call
+// mid-test. Tests that set HOME/config dirs to a t.TempDir() and then delete a
+// session must call this before returning: t.Cleanup runs LIFO, so the
+// TempDir's RemoveAll (registered after the service, inside the test body)
+// would otherwise race DeleteSession's async Destroy() for files under HOME
+// (e.g. the tmux exec-gate directory) that only Shutdown's Wait would
+// otherwise catch, and Shutdown itself only runs after TempDir cleanup in
+// that ordering.
+func (s *SessionService) waitForPendingCleanup() {
+	s.deleteCleanupWG.Wait()
+}
+
 // SetErrorRegistry wires the ErrorRegistry so the service can expose ListErrors and
 // AcknowledgeError RPCs.  Must be called before the first RPC request.
 func (s *SessionService) SetErrorRegistry(r *ErrorRegistry) {
