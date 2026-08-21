@@ -1,4 +1,4 @@
-# BUG-083: TestSessionDriver_DialogGaveUp_FallsThroughToInactivityEscalation stalls in continue trap [SEVERITY: Medium]
+# BUG-085: TestSessionDriver_DialogGaveUp_FallsThroughToInactivityEscalation stalls in continue trap [SEVERITY: Medium]
 
 **Status**: 🐛 Open
 **Discovered**: 2026-08-21
