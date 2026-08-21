@@ -164,7 +164,11 @@ describe("ConnectionCountIndicator", () => {
     expect(queryByTestId("connection-count-indicator")).toHaveAttribute("aria-label", "3 connections active");
   });
 
-  it("unmounts once a settled flap resolves back down to 1", () => {
+  it("announces a departure message before unmounting once a settled flap resolves back down to 1", () => {
+    // design/ux.md interaction-flow Step 5: the live region must update its
+    // text (a mutation assistive tech reliably announces) before the node is
+    // removed — removing the whole node in one commit is not reliably
+    // announced by most screen readers.
     const { rerender, queryByTestId } = render(<ConnectionCountIndicator count={2} />);
     expect(queryByTestId("connection-count-indicator")).toBeInTheDocument();
 
@@ -173,6 +177,54 @@ describe("ConnectionCountIndicator", () => {
       jest.advanceTimersByTime(600);
     });
 
+    // Settled count has dropped to 1, but the indicator is still present,
+    // now showing the departure announcement rather than being gone.
+    const departing = queryByTestId("connection-count-indicator");
+    expect(departing).toBeInTheDocument();
+    expect(departing).toHaveAttribute("role", "status");
+    expect(departing).toHaveAttribute("aria-live", "polite");
+    expect(departing).toHaveTextContent("1 connection active");
+  });
+
+  it("unmounts after the departure announcement has been held long enough to be read", () => {
+    const { rerender, queryByTestId } = render(<ConnectionCountIndicator count={2} />);
+    expect(queryByTestId("connection-count-indicator")).toBeInTheDocument();
+
+    rerender(<ConnectionCountIndicator count={1} />);
+    act(() => {
+      jest.advanceTimersByTime(600); // settle to 1, departure message appears
+    });
+    expect(queryByTestId("connection-count-indicator")).toBeInTheDocument();
+
+    act(() => {
+      jest.advanceTimersByTime(1100); // past the departure hold window
+    });
+
     expect(queryByTestId("connection-count-indicator")).not.toBeInTheDocument();
+  });
+
+  it("does not show a departure message on initial mount at count <= 1", () => {
+    render(<ConnectionCountIndicator count={1} />);
+    expect(screen.queryByTestId("connection-count-indicator")).not.toBeInTheDocument();
+  });
+
+  it("cancels an in-flight departure announcement if the count rises back above 1", () => {
+    const { rerender, queryByTestId } = render(<ConnectionCountIndicator count={2} />);
+    rerender(<ConnectionCountIndicator count={1} />);
+    act(() => {
+      jest.advanceTimersByTime(600); // settle to 1, departure message appears
+    });
+    expect(queryByTestId("connection-count-indicator")).toHaveTextContent("1 connection active");
+
+    // A new connection arrives before the departure hold elapses.
+    rerender(<ConnectionCountIndicator count={2} />);
+    act(() => {
+      jest.advanceTimersByTime(600);
+    });
+
+    expect(queryByTestId("connection-count-indicator")).toHaveAttribute(
+      "aria-label",
+      "2 connections active"
+    );
   });
 });

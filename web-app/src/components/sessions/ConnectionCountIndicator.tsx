@@ -29,6 +29,13 @@ export interface ConnectionCountIndicatorProps {
 // episode-coalescing precedent (research/ux.md §3).
 const COALESCE_MS = 500;
 
+// design/ux.md's interaction-flow Step 5: the departure ("2 -> 1") must be
+// announced, not just silently unmounted — most screen readers only reliably
+// announce content *mutations within a still-present* live region, not the
+// disappearance of the whole node in the same commit. Hold the departure
+// text in the DOM for one announcement cycle before actually unmounting.
+const DEPARTURE_HOLD_MS = 1000;
+
 function formatCount(count: number): string {
   return `${count} connection${count === 1 ? "" : "s"} active`;
 }
@@ -46,11 +53,22 @@ function formatCount(count: number): string {
  * announcement semantics for free — a live region's initial-page-load
  * content is not narrated by assistive tech, only content that mutates
  * after the region already exists (Story 4.2.2 AC1).
+ *
+ * The reverse transition (settled count drops back to <= 1) does NOT unmount
+ * immediately: design/ux.md's interaction-flow Step 5 requires an equivalent
+ * departure signal ("must not go silent without any signal"), and most
+ * screen readers only reliably announce content mutations within a
+ * still-present live region, not a node's removal in the same commit. So the
+ * departure updates this region's text first, holds it for
+ * `DEPARTURE_HOLD_MS`, then unmounts.
  */
 export function ConnectionCountIndicator({ count, sizeMismatch }: ConnectionCountIndicatorProps) {
   const [expanded, setExpanded] = useState(false);
   const [settledCount, setSettledCount] = useState(count);
+  const [departureLabel, setDepartureLabel] = useState<string | null>(null);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const departureTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const prevSettledRef = useRef(settledCount);
 
   useEffect(() => {
     if (timerRef.current) {
@@ -63,6 +81,59 @@ export function ConnectionCountIndicator({ count, sizeMismatch }: ConnectionCoun
       }
     };
   }, [count]);
+
+  // Detect the settled-count transition back down to <= 1 and hold a
+  // departure announcement in the same live region before unmounting
+  // (design/ux.md Step 5).
+  useEffect(() => {
+    const prev = prevSettledRef.current;
+    prevSettledRef.current = settledCount;
+
+    const isVisible = settledCount !== undefined && settledCount > 1;
+    if (isVisible) {
+      // Back to (or still at) a real multi-connection count — cancel any
+      // in-flight departure hold so the normal indicator takes over.
+      if (departureTimerRef.current) {
+        clearTimeout(departureTimerRef.current);
+        departureTimerRef.current = null;
+      }
+      setDepartureLabel(null);
+      return;
+    }
+
+    const wasVisible = prev !== undefined && prev > 1;
+    if (wasVisible) {
+      setDepartureLabel(formatCount(1));
+      departureTimerRef.current = setTimeout(() => {
+        setDepartureLabel(null);
+        departureTimerRef.current = null;
+      }, DEPARTURE_HOLD_MS);
+    }
+  }, [settledCount]);
+
+  useEffect(() => {
+    return () => {
+      if (departureTimerRef.current) {
+        clearTimeout(departureTimerRef.current);
+      }
+    };
+  }, []);
+
+  if (departureLabel !== null) {
+    // Minimal departure render: same live region, no icon/tooltip — just the
+    // text mutation a screen reader can pick up before the node disappears.
+    return (
+      <span
+        className={styles.badge}
+        role="status"
+        aria-live="polite"
+        aria-label={departureLabel}
+        data-testid="connection-count-indicator"
+      >
+        {departureLabel}
+      </span>
+    );
+  }
 
   if (settledCount === undefined || settledCount <= 1) {
     return null;
