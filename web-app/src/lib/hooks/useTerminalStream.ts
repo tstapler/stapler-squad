@@ -479,6 +479,20 @@ export function useTerminalStream({
               const err = new Error(msg.data.value.message);
               setError(err);
               onError?.(err);
+              // design/ux.md Surface 2 — HUB_START_FAILED means the hub-owned
+              // path failed to start AND its server-side legacy fallback also
+              // failed (server/services/connectrpc_websocket.go's streamViaHub),
+              // so this connection has no working path at all. Reconnecting
+              // would hit the same failure, so skip the usual 5-attempt
+              // backoff-exhaustion path and surface TerminalOutput.tsx's
+              // existing hardFailedBanner immediately — the same treatment
+              // already given to non-retriable ws-close-codes below.
+              if (msg.data.value.code === "HUB_START_FAILED") {
+                shouldReconnectRef.current = false;
+                isHardFailedRef.current = true;
+                setIsHardFailed(true);
+                console.warn(`[reconnect] stream=terminal trigger=hub-start-failed, giving up`);
+              }
             }
           }
         } catch (err) {

@@ -300,14 +300,24 @@ var HubRegistry = &hubRegistry{hubs: xsync.NewMap[string, *streamhub.StreamHub](
 // fall back to joining the legacy path explicitly rather than silently
 // operating as a second, independent owner.
 func (r *hubRegistry) GetOrCreate(sessionName string, controller streamhub.SessionController) (*streamhub.StreamHub, error) {
-	if _, err := streamhub.AcquireOwnershipLock(sessionName).ResolveExpecting(true, streamhub.PathHubOwned); err != nil {
+	// Story 3.1.2: AcquireAndResolveExpecting holds the ownership lock's
+	// mutex for the full duration of the LoadOrCompute below, not just the
+	// resolve step — the same real critical section Instance.StartControlMode
+	// now enters (session/instance_tmux.go). That's what makes this call
+	// genuinely block on (rather than race) a concurrent StartControlMode
+	// call for the same session name, per the AC in plan.md's Story 3.1.2.
+	var hub *streamhub.StreamHub
+	if err := streamhub.AcquireOwnershipLock(sessionName).AcquireAndResolveExpecting(true, streamhub.PathHubOwned, func() error {
+		h, _ := r.hubs.LoadOrCompute(sessionName, func() (*streamhub.StreamHub, bool) {
+			newHub := streamhub.NewStreamHub(sessionName, controller)
+			go pumpControlModeOutputIntoHub(newHub, controller, sessionName)
+			return newHub, false
+		})
+		hub = h
+		return nil
+	}); err != nil {
 		return nil, err
 	}
-	hub, _ := r.hubs.LoadOrCompute(sessionName, func() (*streamhub.StreamHub, bool) {
-		hub := streamhub.NewStreamHub(sessionName, controller)
-		go pumpControlModeOutputIntoHub(hub, controller, sessionName)
-		return hub, false
-	})
 
 	// OverlapInvariant (Epic 3.2): xsync.Map.LoadOrCompute guarantees the
 	// constructor above runs at most once per key, so exactly one *StreamHub
@@ -1400,6 +1410,14 @@ func sendConnectionCountUpdates(stream *connectWebSocketStream, hub *streamhub.S
 	}
 }
 
+// HubStartFailedErrorCode is the TerminalError.Code sent to the client when
+// the hub-owned streaming path fails to start AND its legacy fallback also
+// fails, leaving the connection with no working stream at all (design/ux.md
+// Surface 2). useTerminalStream.ts checks for this exact code to skip its
+// normal backoff-exhaustion path and surface TerminalOutput.tsx's existing
+// hardFailedBanner immediately, since retrying will hit the same failure.
+const HubStartFailedErrorCode = "HUB_START_FAILED"
+
 // streamViaHub is streamViaControlMode's PathHubOwned counterpart (Epic 2.2,
 // Story 2.2.2): instead of this connection running its own
 // resize/quiescence/capture pipeline, it attaches a WebSocketTransport to the
@@ -1472,7 +1490,36 @@ func (h *ConnectRPCWebSocketHandler) streamViaHub(stream *connectWebSocketStream
 	if err != nil {
 		log.Info("[streamViaHub] ownership resolved to legacy path concurrently, joining it instead of creating a competing hub",
 			"session", sessionID, "tmux", tmuxSessionName, "err", err)
-		return h.streamViaControlMode(stream, instance)
+		if fallbackErr := h.streamViaControlMode(stream, instance); fallbackErr != nil {
+			// design/ux.md Surface 2: only signal a hub-start failure to the
+			// client when the hub-owned path AND its legacy fallback both
+			// failed — i.e. this connection has no working stream at all.
+			// The far more common case above (GetOrCreate loses the
+			// ownership race, falls back, and the fallback succeeds) must
+			// stay silent: sending an error frame there would be a false
+			// alarm on a connection the user experiences as working fine
+			// (research/ux.md §4b: don't announce a non-event). Best-effort,
+			// mirroring session_service.go's existing "send error back to
+			// client" TerminalData_Error convention (its WRITE_ERROR/
+			// RESIZE_ERROR call sites) — the caller's returned fallbackErr
+			// still closes the stream via sendEndStreamError regardless.
+			errMsg := &sessionv1.TerminalData{
+				SessionId: sessionID,
+				Data: &sessionv1.TerminalData_Error{
+					Error: &sessionv1.TerminalError{
+						Message: fmt.Sprintf("hub start failed (%v) and legacy fallback also failed: %v", err, fallbackErr),
+						Code:    HubStartFailedErrorCode,
+					},
+				},
+			}
+			if b, marshalErr := proto.Marshal(errMsg); marshalErr != nil {
+				log.Error("[streamViaHub] failed to marshal hub-start-failed error", "session", sessionID, "err", marshalErr)
+			} else if wsErr := stream.WriteMessage(websocket.BinaryMessage, protocol.CreateEnvelope(0, b)); wsErr != nil {
+				log.Warn("[streamViaHub] failed to send hub-start-failed error", "session", sessionID, "err", wsErr)
+			}
+			return fallbackErr
+		}
+		return nil
 	}
 
 	transport := NewWebSocketTransport(stream)

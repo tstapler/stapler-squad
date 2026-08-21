@@ -14,6 +14,7 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/streamhub"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
@@ -718,9 +719,57 @@ func (i *Instance) GetTmuxSession() *tmux.TmuxSession {
 // These methods satisfy the services.SessionStreamer interface without exposing
 // the concrete *tmux.TmuxSession type to the server layer.
 
-// StartControlMode starts the control mode stream on the underlying tmux session.
+// StartControlMode starts the control mode stream on the underlying tmux
+// session.
+//
+// Story 3.1.2 (correctness gap fix): this is the actual point where
+// control-mode ownership is acquired, so every caller — today's two RPC
+// handler entry points (streamViaControlMode, streamViaHub) plus any future
+// direct caller — is protected, not just the ones that remember to call
+// streamhub.AcquireOwnershipLock themselves first. Before this fix, the
+// ownership lock was only acquired from server/services/connectrpc_websocket.go,
+// so a caller reaching StartControlMode by any other path bypassed mutual
+// exclusion entirely. StartControlMode does not assert a specific expected
+// StreamPath the way the RPC handlers' own ResolveExpecting calls do — it is
+// legitimately called unconditionally by both the legacy and hub-owned
+// paths (the underlying subprocess start is refcounted either way, see
+// streamViaHub's comment at its own StartControlMode call site) — but it
+// still runs inside AcquireOwnershipLock's real critical section
+// (AcquireAndResolve), so a concurrent HubRegistry.GetOrCreate for the same
+// session genuinely blocks on it rather than racing to resolve first.
 func (i *Instance) StartControlMode() error {
-	return i.pm().StartControlMode()
+	name := i.GetTmuxSessionName()
+	if name == "" {
+		// No tmux session identity yet (uninitialized instance, or a
+		// non-tmux backend such as NativeProcessManager on Windows) — there
+		// is no session name to key an ownership lock on, and every such
+		// instance sharing the same "" key would otherwise be serialized
+		// against each other for no reason. Fall back to the pre-3.1.2
+		// unconditional call.
+		return i.pm().StartControlMode()
+	}
+	return streamhub.AcquireOwnershipLock(name).AcquireAndResolve(effectiveStreamHubFlag(), func(streamhub.StreamPath) error {
+		return i.pm().StartControlMode()
+	})
+}
+
+// effectiveStreamHubFlag mirrors server/services' useStreamHub(): the same
+// STAPLER_SQUAD_USE_STREAM_HUB env var + config.ResolveGlobalStreamHubDefault
+// gate, duplicated here rather than imported (server/services must not be
+// imported by package session — the reverse of the one-way dependency this
+// project relies on) so this package's own ownership-lock choke point in
+// StartControlMode observes the identical effective flag value. Both call
+// sites route through config.ResolveGlobalStreamHubDefault, the single
+// source of truth for the gating decision itself, so they cannot diverge in
+// what "true" requires — only this thin env-var-read wrapper is repeated.
+func effectiveStreamHubFlag() bool {
+	requested := os.Getenv("STAPLER_SQUAD_USE_STREAM_HUB") == "true"
+	effective, err := config.ResolveGlobalStreamHubDefault(config.LoadConfig(), requested)
+	if err != nil {
+		log.Error("streamhub: refusing to enable global default", "error", err)
+		return false
+	}
+	return effective
 }
 
 // StopControlMode stops the control mode stream.

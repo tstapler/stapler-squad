@@ -1,4 +1,6 @@
 // @feature connection-count-indicator
+import * as fs from 'fs';
+import * as path from 'path';
 import { test, expect } from '@playwright/test';
 import { SessionsPage } from './pages/SessionsPage';
 import { SessionDetailPage } from './pages/SessionDetailPage';
@@ -34,6 +36,58 @@ import { SessionDetailPage } from './pages/SessionDetailPage';
 const BASE_URL = process.env.TEST_SERVER_URL || 'http://localhost:8544';
 const HUB_PATH_ENABLED = process.env.STAPLER_SQUAD_USE_STREAM_HUB === 'true';
 const ONBOARDED_KEY = 'stapler-squad:onboarded';
+const TEST_DIR = process.env.TEST_SERVER_TESTDIR;
+
+/**
+ * Even with STAPLER_SQUAD_USE_STREAM_HUB=true, config.ResolveGlobalStreamHubDefault
+ * (server/services/connectrpc_websocket.go's useStreamHub) refuses to let the
+ * *global* default resolve to true until config.json's
+ * rollback_rehearsal_completed_at is set (Story 3.3.2's mechanical
+ * rollback-rehearsal gate, pre-mortem P1 #4) — a fresh e2e config never has
+ * this set, so without seeding it every session on this server silently
+ * stays on PathLegacyPerConnection (connection_count never populated) no
+ * matter the env var. Seed it directly onto the shared test server's
+ * isolated config.json, the same direct-disk-seeding pattern
+ * launcher-presets.spec.ts uses for launcher-presets.json — config.LoadConfig
+ * re-reads this file fresh on every call (no caching), so writing it just
+ * before creating a session is sufficient, no server restart needed.
+ */
+function configPath(): string {
+  if (!TEST_DIR) {
+    throw new Error('TEST_SERVER_TESTDIR is not set — global-setup.ts must export it');
+  }
+  return path.join(TEST_DIR, 'config.json');
+}
+
+function readConfig(): Record<string, unknown> {
+  const p = configPath();
+  if (!fs.existsSync(p)) return {};
+  try {
+    return JSON.parse(fs.readFileSync(p, 'utf-8'));
+  } catch {
+    return {};
+  }
+}
+
+let originalConfigRaw: string | null = null;
+
+function seedRollbackRehearsalCompleted() {
+  const p = configPath();
+  originalConfigRaw = fs.existsSync(p) ? fs.readFileSync(p, 'utf-8') : null;
+  const cfg = readConfig();
+  cfg.rollback_rehearsal_completed_at = new Date().toISOString();
+  fs.writeFileSync(p, JSON.stringify(cfg));
+}
+
+function restoreConfig() {
+  const p = configPath();
+  if (originalConfigRaw !== null) {
+    fs.writeFileSync(p, originalConfigRaw);
+  } else {
+    fs.rmSync(p, { force: true });
+  }
+  originalConfigRaw = null;
+}
 
 async function dismissOnboarding(page: import('@playwright/test').Page) {
   // useOnboarding.ts's 800ms timer otherwise pops a full-viewport onboarding
@@ -56,6 +110,13 @@ test.describe('connection count indicator (multi-connection)', () => {
         'populated on the PathHubOwned stream path. Re-run with ' +
         'STAPLER_SQUAD_USE_STREAM_HUB=true to exercise this spec.',
     );
+    if (!HUB_PATH_ENABLED) return;
+    seedRollbackRehearsalCompleted();
+  });
+
+  test.afterEach(() => {
+    if (!HUB_PATH_ENABLED) return;
+    restoreConfig();
   });
 
   test('indicator appears when a second tab attaches, and is accessible per design/ux.md UX-AC-2/4/6/8', async ({

@@ -197,6 +197,10 @@ function makeOutputMsg(data?: Uint8Array) {
   };
 }
 
+function makeErrorMsg(message: string, code?: string) {
+  return { data: { case: 'error', value: { message, code } } };
+}
+
 function makeScrollbackResponseMsg(chunks: Uint8Array[]) {
   return {
     data: {
@@ -604,6 +608,40 @@ describe('useTerminalStream — auto-reconnect (NEXT_PUBLIC_RECONNECT_V2)', () =
     await act(async () => { jest.advanceTimersByTime(35000); });
 
     // No reconnect should have been scheduled
+    expect(callCount).toBe(callCountSnapshot);
+  });
+
+  it('connect_should_setIsHardFailedImmediately_When_errorMessageHasHubStartFailedCode', async () => {
+    // design/ux.md Surface 2: a HUB_START_FAILED error frame means the
+    // hub-owned path AND its legacy fallback both failed server-side —
+    // retrying hits the same failure, so this must skip the normal
+    // backoff-exhaustion path (which needs several failed reconnect
+    // attempts) and set isHardFailed on the very first error frame.
+    let callCount = 0;
+    const streams: ReturnType<typeof makePushStream<object>>[] = [];
+    mockStreamTerminal.mockImplementation(() => {
+      callCount++;
+      const s = makePushStream<object>();
+      streams.push(s);
+      return s.iterable;
+    });
+
+    const { result } = renderHook(() => useTerminalStream(RECONNECT_OPTIONS));
+
+    await act(async () => { result.current.connect(); });
+    await waitFor(() => expect(streams.length).toBe(1));
+
+    // First message is the hub-start-failure error — no prior successful
+    // connection, no prior reconnect attempts.
+    await act(async () => { streams[0].push(makeErrorMsg('hub start failed and legacy fallback also failed', 'HUB_START_FAILED')); });
+
+    await waitFor(() => expect(result.current.isHardFailed).toBe(true));
+
+    const callCountSnapshot = callCount;
+    await act(async () => { jest.advanceTimersByTime(35000); });
+
+    // No reconnect attempt should follow — shouldReconnectRef was never
+    // exhausted via backoff, it was set false immediately.
     expect(callCount).toBe(callCountSnapshot);
   });
 
