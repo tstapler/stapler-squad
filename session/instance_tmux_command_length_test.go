@@ -33,6 +33,7 @@ import (
 //     produces for the same oversized prompt is accepted by tmux, and the
 //     spawned process receives the full, untruncated prompt content.
 func TestBuildLaunchCommand_LargePromptSurvivesRealTmuxNewSession(t *testing.T) {
+	t.Parallel()
 	checkTmuxAvailable(t)
 
 	// Two distinct sockets, not one shared between steps 1 and 2: tmux's

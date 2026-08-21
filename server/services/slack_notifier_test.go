@@ -102,12 +102,14 @@ func assertNoRequestReceived(t *testing.T, ch chan capturedSlackRequest) {
 // --- Story 1.2.1: constructor + postToSlack ---
 
 func TestNewSlackNotifier_SetsFiveSecondTimeout(t *testing.T) {
+	t.Parallel()
 	n := NewSlackNotifier()
 	require.NotNil(t, n.httpClient)
 	assert.Equal(t, 5*time.Second, n.httpClient.Timeout)
 }
 
 func TestPostToSlack_SanitizesTransportError_NeverLeaksWebhookURL(t *testing.T) {
+	t.Parallel()
 	n := NewSlackNotifier()
 	const unreachableURL = "http://127.0.0.1:1/services/T0/B0/SECRET"
 
@@ -125,6 +127,7 @@ func TestPostToSlack_SanitizesTransportError_NeverLeaksWebhookURL(t *testing.T) 
 }
 
 func TestPostToSlack_SendsWellFormedRequest_ToHTTPTestServer(t *testing.T) {
+	t.Parallel()
 	srv, ch := startCapturingSlackServer(t)
 
 	n := NewSlackNotifier()
@@ -152,6 +155,7 @@ func TestPostToSlack_SendsWellFormedRequest_ToHTTPTestServer(t *testing.T) {
 }
 
 func TestPostToSlack_Treats429IdenticallyToOtherNon2xxFailures(t *testing.T) {
+	t.Parallel()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Retry-After", "1")
 		w.WriteHeader(http.StatusTooManyRequests)
@@ -175,6 +179,7 @@ func TestPostToSlack_Treats429IdenticallyToOtherNon2xxFailures(t *testing.T) {
 // particular) only ever saw a bare status code, never Slack's own short
 // plain-text error token (e.g. "no_service", "channel_not_found").
 func TestPostToSlack_IncludesResponseBodyText_OnNon2xx(t *testing.T) {
+	t.Parallel()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
 		_, _ = w.Write([]byte("no_service"))
@@ -192,6 +197,7 @@ func TestPostToSlack_IncludesResponseBodyText_OnNon2xx(t *testing.T) {
 // case (a non-2xx response with no body, e.g. a plain 404 from an unrelated
 // server) still produces a clean status-only message, not a trailing ": ".
 func TestPostToSlack_OmitsBodySuffix_When_ResponseBodyEmpty(t *testing.T) {
+	t.Parallel()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
 	}))
@@ -206,6 +212,7 @@ func TestPostToSlack_OmitsBodySuffix_When_ResponseBodyEmpty(t *testing.T) {
 // --- Story 1.2.2: NotifyReviewQueueItem / NotifyApprovalPending ---
 
 func TestNotifyReviewQueueItem_TruncatesOversizedDiff(t *testing.T) {
+	t.Parallel()
 	srv, ch := startCapturingSlackServer(t)
 	cfg := slackConfigWithWebhook(t, srv.URL)
 	n := NewSlackNotifier()
@@ -235,6 +242,7 @@ func TestNotifyReviewQueueItem_TruncatesOversizedDiff(t *testing.T) {
 }
 
 func TestNotifyReviewQueueItem_NoOps_When_WebhookNotConfigured(t *testing.T) {
+	t.Parallel()
 	cfg := slackConfigWithoutWebhook(t)
 	n := NewSlackNotifier()
 
@@ -248,6 +256,7 @@ func TestNotifyReviewQueueItem_NoOps_When_WebhookNotConfigured(t *testing.T) {
 }
 
 func TestNotifyReviewQueueItem_PostsExpectedBlockKitPayload_ToHTTPTestServer(t *testing.T) {
+	t.Parallel()
 	srv, ch := startCapturingSlackServer(t)
 	cfg := slackConfigWithWebhook(t, srv.URL)
 	n := NewSlackNotifier()
@@ -273,6 +282,7 @@ func TestNotifyReviewQueueItem_PostsExpectedBlockKitPayload_ToHTTPTestServer(t *
 }
 
 func TestNotifyApprovalPending_BuildsCorrectDashboardLink(t *testing.T) {
+	t.Parallel()
 	srv, ch := startCapturingSlackServer(t)
 	cfg := slackConfigWithWebhook(t, srv.URL)
 	n := NewSlackNotifier()
@@ -296,6 +306,7 @@ func TestNotifyApprovalPending_BuildsCorrectDashboardLink(t *testing.T) {
 }
 
 func TestNotifyApprovalPending_NoOps_When_WebhookNotConfigured(t *testing.T) {
+	t.Parallel()
 	cfg := slackConfigWithoutWebhook(t)
 	n := NewSlackNotifier()
 
@@ -309,6 +320,7 @@ func TestNotifyApprovalPending_NoOps_When_WebhookNotConfigured(t *testing.T) {
 }
 
 func TestNotifyApprovalPending_PostsExpectedPayload_ToHTTPTestServer(t *testing.T) {
+	t.Parallel()
 	srv, ch := startCapturingSlackServer(t)
 	cfg := slackConfigWithWebhook(t, srv.URL)
 	n := NewSlackNotifier()
@@ -347,7 +359,9 @@ func TestNotifyApprovalPending_PostsExpectedPayload_ToHTTPTestServer(t *testing.
 // text ("<url|View <name>>") rather than a generic "click here" or a bare
 // URL with nothing surrounding it.
 func TestNotifyReviewQueueItem_And_NotifyApprovalPending_UseDescriptiveLinkText_NotClickHere(t *testing.T) {
+	t.Parallel()
 	t.Run("NotifyReviewQueueItem", func(t *testing.T) {
+		t.Parallel()
 		srv, ch := startCapturingSlackServer(t)
 		cfg := slackConfigWithWebhook(t, srv.URL)
 		n := NewSlackNotifier()
@@ -379,6 +393,7 @@ func TestNotifyReviewQueueItem_And_NotifyApprovalPending_UseDescriptiveLinkText_
 	})
 
 	t.Run("NotifyApprovalPending", func(t *testing.T) {
+		t.Parallel()
 		srv, ch := startCapturingSlackServer(t)
 		cfg := slackConfigWithWebhook(t, srv.URL)
 		n := NewSlackNotifier()
@@ -409,6 +424,7 @@ func TestNotifyReviewQueueItem_And_NotifyApprovalPending_UseDescriptiveLinkText_
 // --- Story 2.1.4: conditional outbound actions block (Phase 2) ---
 
 func TestNotifyApprovalPending_IncludesActionsBlock_When_ApprovalEnabled(t *testing.T) {
+	t.Parallel()
 	srv, ch := startCapturingSlackServer(t)
 	cfg := slackConfigWithWebhook(t, srv.URL)
 	cfg.Slack.ApprovalEnabled = true
@@ -436,6 +452,7 @@ func TestNotifyApprovalPending_IncludesActionsBlock_When_ApprovalEnabled(t *test
 }
 
 func TestNotifyApprovalPending_OmitsActionsBlock_When_ApprovalDisabled(t *testing.T) {
+	t.Parallel()
 	srv, ch := startCapturingSlackServer(t)
 	cfg := slackConfigWithWebhook(t, srv.URL)
 	cfg.Slack.ApprovalEnabled = false
@@ -456,6 +473,7 @@ func TestNotifyApprovalPending_OmitsActionsBlock_When_ApprovalDisabled(t *testin
 // --- Story 1.2.3: non-blocking dispatch ---
 
 func TestSlackNotifier_SendFailure_DoesNotBlockCaller(t *testing.T) {
+	t.Parallel()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		time.Sleep(10 * time.Second)
 		w.WriteHeader(http.StatusOK)
@@ -501,6 +519,7 @@ func (h *signalingLogHandler) Handle(ctx context.Context, r slog.Record) error {
 }
 
 func TestSlackNotifier_RecoversFromPanic_And_LogsError(t *testing.T) {
+	t.Parallel()
 	var buf bytes.Buffer
 	sigCh := make(chan struct{}, 1)
 	prev := slog.Default()
@@ -527,6 +546,7 @@ func TestSlackNotifier_RecoversFromPanic_And_LogsError(t *testing.T) {
 // --- Story 1.2.4: queue-depth threshold latch ---
 
 func TestMaybeNotifyQueueDepthThreshold_FiresOncePerCrossing(t *testing.T) {
+	t.Parallel()
 	srv, ch := startCapturingSlackServer(t)
 	cfg := slackConfigWithWebhook(t, srv.URL)
 	n := NewSlackNotifier()
@@ -552,6 +572,7 @@ func TestMaybeNotifyQueueDepthThreshold_FiresOncePerCrossing(t *testing.T) {
 }
 
 func TestMaybeNotifyQueueDepthThreshold_ReturnsFalse_When_ThresholdIsZeroOrNegative(t *testing.T) {
+	t.Parallel()
 	cfg := slackConfigWithoutWebhook(t)
 	n := NewSlackNotifier()
 
@@ -560,6 +581,7 @@ func TestMaybeNotifyQueueDepthThreshold_ReturnsFalse_When_ThresholdIsZeroOrNegat
 }
 
 func TestMaybeNotifyQueueDepthThreshold_FiresExactlyOnce_UnderConcurrentCrossing(t *testing.T) {
+	t.Parallel()
 	srv, ch := startCapturingSlackServer(t)
 	cfg := slackConfigWithWebhook(t, srv.URL)
 	n := NewSlackNotifier()
@@ -587,6 +609,7 @@ func TestMaybeNotifyQueueDepthThreshold_FiresExactlyOnce_UnderConcurrentCrossing
 // --- Story 1.2.5: delivery status accessor ---
 
 func TestGetDeliveryStatus_ReturnsSnapshot_AfterFailedSend(t *testing.T) {
+	t.Parallel()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
 	}))
@@ -605,6 +628,7 @@ func TestGetDeliveryStatus_ReturnsSnapshot_AfterFailedSend(t *testing.T) {
 }
 
 func TestGetDeliveryStatus_NoDataRace_UnderConcurrentAccess(t *testing.T) {
+	t.Parallel()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -640,6 +664,7 @@ func TestGetDeliveryStatus_NoDataRace_UnderConcurrentAccess(t *testing.T) {
 // --- Security: never log the webhook URL ---
 
 func TestSlackNotifier_NeverLogsWebhookURL(t *testing.T) {
+	t.Parallel()
 	buf := captureLogs(t)
 
 	const secretPath = "/services/TSECRET/BSECRET/XSECRET"
@@ -658,6 +683,7 @@ func TestSlackNotifier_NeverLogsWebhookURL(t *testing.T) {
 }
 
 func TestSlackNotifier_NeverLogsWebhookURL_OnTransportError(t *testing.T) {
+	t.Parallel()
 	buf := captureLogs(t)
 
 	// Bind a listener then close it immediately: the port is very likely to
@@ -687,7 +713,9 @@ func TestSlackNotifier_NeverLogsWebhookURL_OnTransportError(t *testing.T) {
 // ordering: "&" must be escaped FIRST so the "&lt;"/"&gt;" entities produced
 // by escaping "<"/">" are never themselves re-escaped into "&amp;lt;"/"&amp;gt;".
 func TestEscapeSlackMrkdwn_EscapesAmpersandLessThanGreaterThan_InCorrectOrder(t *testing.T) {
+	t.Parallel()
 	t.Run("plain text unchanged", func(t *testing.T) {
+		t.Parallel()
 		assert.Equal(t, "fix-login-bug", escapeSlackMrkdwn("fix-login-bug"))
 	})
 
@@ -703,6 +731,7 @@ func TestEscapeSlackMrkdwn_EscapesAmpersandLessThanGreaterThan_InCorrectOrder(t 
 	})
 
 	t.Run("channel-mention injection attempt neutralized to literal text", func(t *testing.T) {
+		t.Parallel()
 		got := escapeSlackMrkdwn("please review <!channel> now")
 		assert.Equal(t, "please review &lt;!channel&gt; now", got)
 		// The literal "<!channel>" directive sequence must not survive escaping —
@@ -717,6 +746,7 @@ func TestEscapeSlackMrkdwn_EscapesAmpersandLessThanGreaterThan_InCorrectOrder(t 
 // must render as literal escaped text in the outbound payload, never as an
 // unescaped "<...>" span Slack would interpret as a real directive.
 func TestNotifyReviewQueueItem_EscapesInjectedSlackDirective_InSessionName(t *testing.T) {
+	t.Parallel()
 	srv, ch := startCapturingSlackServer(t)
 	cfg := slackConfigWithWebhook(t, srv.URL)
 	n := NewSlackNotifier()
@@ -762,6 +792,7 @@ func TestNotifyReviewQueueItem_EscapesInjectedSlackDirective_InSessionName(t *te
 // command detail both shaped like Slack directive/entity injection attempts
 // must render as literal escaped text.
 func TestNotifyApprovalPending_EscapesInjectedSlackDirective_InSessionNameAndDetail(t *testing.T) {
+	t.Parallel()
 	srv, ch := startCapturingSlackServer(t)
 	cfg := slackConfigWithWebhook(t, srv.URL)
 	n := NewSlackNotifier()
@@ -820,6 +851,7 @@ func TestResolveSlackWebhookURL_EnvOverride_TakesPrecedenceOverDecryptedValue(t 
 }
 
 func TestResolveSlackWebhookURL_DecryptsStoredCiphertext_WhenNoOverride(t *testing.T) {
+	t.Parallel()
 	cfg := slackConfigWithWebhook(t, "https://hooks.slack.com/services/T0/B0/DECRYPTED")
 
 	got, err := resolveSlackWebhookURL(cfg)
@@ -828,6 +860,7 @@ func TestResolveSlackWebhookURL_DecryptsStoredCiphertext_WhenNoOverride(t *testi
 }
 
 func TestResolveSlackWebhookURL_ReturnsEmptyString_When_NeitherOverrideNorCiphertextSet(t *testing.T) {
+	t.Parallel()
 	cfg := slackConfigWithoutWebhook(t)
 
 	got, err := resolveSlackWebhookURL(cfg)

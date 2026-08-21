@@ -18,6 +18,7 @@ import (
 // time.Now default would have produced), then verifies the backfill both
 // normalizes the Location to UTC AND preserves the exact same instant.
 func TestRunBacklogItemUpdatedAtUTCBackfill_should_NormalizePreExistingLocalRows_When_Called(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := createTestEntRepository(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -48,6 +49,7 @@ func TestRunBacklogItemUpdatedAtUTCBackfill_should_NormalizePreExistingLocalRows
 // backfill run just normalized, and freshly-created rows under the fixed
 // schema default) are left untouched.
 func TestRunBacklogItemUpdatedAtUTCBackfill_should_BeIdempotent_When_RunTwice(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := createTestEntRepository(t)
 	defer cleanup()
 	ctx := context.Background()

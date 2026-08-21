@@ -16,6 +16,7 @@ import (
 
 // TestMultiplexer_BroadcastToClients verifies that PTY output is sent to ALL connected clients.
 func TestMultiplexer_BroadcastToClients(t *testing.T) {
+	t.Parallel()
 	m := &Multiplexer{
 		clients: make(map[net.Conn]struct{}),
 	}
@@ -43,7 +44,12 @@ func TestMultiplexer_BroadcastToClients(t *testing.T) {
 	// Read from both client sides in goroutines before broadcasting.
 	var wg sync.WaitGroup
 	readMsg := func(conn net.Conn) ([]byte, error) {
-		conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+		// 10s is a hang safety net, not a correctness check: net.Pipe() delivers
+		// synchronously, so a healthy broadcast returns almost instantly. A 2s
+		// deadline flaked under `go test -race -count=20 ./session/...` (heavy
+		// CPU contention from the whole package suite) even though this test
+		// passes reliably in isolation.
+		conn.SetReadDeadline(time.Now().Add(10 * time.Second))
 		decoded, err := DecodeMessage(conn)
 		if err != nil {
 			return nil, err
@@ -138,6 +144,7 @@ func newTestMultiplexer(t *testing.T) (*Multiplexer, context.CancelFunc) {
 // TestMultiplexer_StartSessionMonitor_ChannelBased verifies that when a
 // PaneExitSubscriber is configured, firing pane exit triggers Shutdown.
 func TestMultiplexer_StartSessionMonitor_ChannelBased(t *testing.T) {
+	t.Parallel()
 	m, cancel := newTestMultiplexer(t)
 	t.Cleanup(cancel)
 
@@ -172,6 +179,7 @@ func TestMultiplexer_StartSessionMonitor_ChannelBased(t *testing.T) {
 // TestMultiplexer_StartSessionMonitor_FallbackWhenNilSubscriber verifies that
 // when paneExitSub is nil the polling goroutine is started (wg incremented).
 func TestMultiplexer_StartSessionMonitor_FallbackWhenNilSubscriber(t *testing.T) {
+	t.Parallel()
 	m, cancel := newTestMultiplexer(t)
 	defer cancel()
 
@@ -202,6 +210,7 @@ func TestMultiplexer_StartSessionMonitor_FallbackWhenNilSubscriber(t *testing.T)
 // multiplexer context before pane exit causes the monitor goroutine to exit
 // cleanly with no goroutine leak.
 func TestMultiplexer_StartSessionMonitor_ContextCancel(t *testing.T) {
+	t.Parallel()
 	m, cancel := newTestMultiplexer(t)
 
 	fake := newFakePaneExitSubscriber()
@@ -230,6 +239,7 @@ func TestMultiplexer_StartSessionMonitor_ContextCancel(t *testing.T) {
 //   - PTY output → broadcast to all clients (read-only fan-out)
 //   - Client input → written to PTY only (isolated write-path)
 func TestMultiplexer_InputIsolation(t *testing.T) {
+	t.Parallel()
 	m := &Multiplexer{
 		clients: make(map[net.Conn]struct{}),
 	}

@@ -763,9 +763,7 @@ func (l *BacklogLifecycleListener) onSessionExited(sessionUUID string) {
 	// The item is leaving in_progress — any open stale_work row is stale by
 	// definition now. Resolve immediately rather than waiting for the
 	// self-heal sweep's next tick (Task 2.1.5a).
-	if er, ok := l.storage.repo.(*EntRepository); ok {
-		l.resolveStuckLogged(ctx, er, item.ID, domain.StuckReasonStaleWork, "onSessionExited")
-	}
+	l.resolveStuckLogged(ctx, l.storage.repo, item.ID, domain.StuckReasonStaleWork, "onSessionExited")
 
 	log.InfoLog.Printf("[BacklogLifecycle] item %s transitioned to %s (session %s exited)", item.ID, toStatus, sessionUUID)
 
@@ -817,10 +815,7 @@ func (l *BacklogLifecycleListener) onSessionExited(sessionUUID string) {
 // after startup surfaces it via its own notified_at IS NULL + 30-min gate —
 // a one-tick delay, not a startup API burst.
 func (l *BacklogLifecycleListener) BackfillStuckStates(ctx context.Context) {
-	er, ok := l.storage.repo.(*EntRepository)
-	if !ok {
-		return
-	}
+	er := l.storage.repo
 
 	seeded := 0
 
@@ -924,10 +919,7 @@ func (l *BacklogLifecycleListener) ReconcileStuck(ctx context.Context) {
 	if !l.enabled.Load() {
 		return
 	}
-	er, ok := l.storage.repo.(*EntRepository)
-	if !ok {
-		return
-	}
+	er := l.storage.repo
 	n, err := er.ReconcileStuckItems(ctx)
 	if err != nil {
 		log.ErrorLog.Printf("[BacklogLifecycle] ReconcileStuckItems error: %v", err)
@@ -1461,8 +1453,10 @@ func (l *BacklogLifecycleListener) resolveLatestWorkCommit(ctx context.Context, 
 	}
 	if wt.WorktreePath != "" {
 		if info, statErr := os.Stat(wt.WorktreePath); statErr == nil && info.IsDir() {
-			if branch, branchErr := git.GetCurrentBranchName(wt.WorktreePath); branchErr == nil && (wt.BranchName == "" || branch == wt.BranchName) {
-				if sha, headErr := GetGitHeadSHA(wt.WorktreePath); headErr == nil && sha != "" {
+			branch, branchErr := git.GetCurrentBranchName(wt.WorktreePath)
+			if branchErr == nil && (wt.BranchName == "" || branch == wt.BranchName) {
+				sha, headErr := GetGitHeadSHA(wt.WorktreePath)
+				if headErr == nil && sha != "" {
 					return sha
 				}
 			} else if branchErr == nil {

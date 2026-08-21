@@ -17,6 +17,7 @@ func (s *stubStorage) ListSessionRecords() []SessionRecord {
 }
 
 func TestAssociator_WhenExactConversationIDMatch_ExpectSessionIDReturned(t *testing.T) {
+	t.Parallel()
 	storage := &stubStorage{
 		records: []SessionRecord{
 			{SessionID: "sess-123", ConversationID: "abc-123", Path: "/some/path"},
@@ -31,6 +32,7 @@ func TestAssociator_WhenExactConversationIDMatch_ExpectSessionIDReturned(t *test
 }
 
 func TestAssociator_WhenPathPrefixMatch_ExpectSessionIDReturned(t *testing.T) {
+	t.Parallel()
 	storage := &stubStorage{
 		records: []SessionRecord{
 			{SessionID: "sess-456", Path: "/home/user/projects/myapp"},
@@ -45,6 +47,7 @@ func TestAssociator_WhenPathPrefixMatch_ExpectSessionIDReturned(t *testing.T) {
 }
 
 func TestAssociator_WhenNoMatch_ExpectOrphan(t *testing.T) {
+	t.Parallel()
 	storage := &stubStorage{records: []SessionRecord{}}
 	a := NewAssociator(storage)
 	result := &ParseResult{SessionUUID: "no-match"}
@@ -55,6 +58,7 @@ func TestAssociator_WhenNoMatch_ExpectOrphan(t *testing.T) {
 }
 
 func TestAssociator_WhenTimestampProximityMatch_ExpectSessionIDReturned(t *testing.T) {
+	t.Parallel()
 	now := time.Now()
 	storage := &stubStorage{
 		records: []SessionRecord{
@@ -87,6 +91,7 @@ func (s *countingStorage) ListSessionRecords() []SessionRecord {
 // ListSessionRecords() -> Storage.ListInstanceData() full-repository query.
 // Snapshot + AssociateWithSnapshot must resolve N results from one query.
 func TestAssociator_WhenAssociatingManyResultsViaSnapshot_ExpectStorageQueriedOnce(t *testing.T) {
+	t.Parallel()
 	storage := &countingStorage{
 		records: []SessionRecord{
 			{SessionID: "sess-1", ConversationID: "conv-1"},

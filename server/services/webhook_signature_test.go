@@ -18,6 +18,7 @@ func sign(secret string, body []byte) string {
 }
 
 func TestVerifyGitHubSignature_should_ReturnTrue_When_SignatureIsValid(t *testing.T) {
+	t.Parallel()
 	secret := "s3cr3t"
 	body := []byte(`{"repository":{"full_name":"tstapler/stapler-squad"}}`)
 	header := sign(secret, body)
@@ -26,6 +27,7 @@ func TestVerifyGitHubSignature_should_ReturnTrue_When_SignatureIsValid(t *testin
 }
 
 func TestVerifyGitHubSignature_should_ReturnFalse_When_SecretIsWrong(t *testing.T) {
+	t.Parallel()
 	body := []byte(`{"repository":{"full_name":"tstapler/stapler-squad"}}`)
 	header := sign("s3cr3t", body)
 
@@ -33,6 +35,7 @@ func TestVerifyGitHubSignature_should_ReturnFalse_When_SecretIsWrong(t *testing.
 }
 
 func TestVerifyGitHubSignature_should_ReturnFalse_When_BodyDoesNotHashToHeader(t *testing.T) {
+	t.Parallel()
 	secret := "s3cr3t"
 	body := []byte(`{"repository":{"full_name":"tstapler/stapler-squad"}}`)
 
@@ -40,6 +43,7 @@ func TestVerifyGitHubSignature_should_ReturnFalse_When_BodyDoesNotHashToHeader(t
 }
 
 func TestVerifyGitHubSignature_should_ReturnFalse_When_PrefixIsMissing(t *testing.T) {
+	t.Parallel()
 	secret := "s3cr3t"
 	body := []byte(`{"a":1}`)
 	// Compute the correct digest but omit the "sha256=" prefix GitHub always sends.
@@ -51,14 +55,17 @@ func TestVerifyGitHubSignature_should_ReturnFalse_When_PrefixIsMissing(t *testin
 }
 
 func TestVerifyGitHubSignature_should_ReturnFalse_When_HeaderIsMalformedHex(t *testing.T) {
+	t.Parallel()
 	assert.False(t, VerifyGitHubSignature("s3cr3t", []byte("body"), "sha256=not-hex!!"))
 }
 
 func TestVerifyGitHubSignature_should_ReturnFalse_When_HeaderIsEmpty(t *testing.T) {
+	t.Parallel()
 	assert.False(t, VerifyGitHubSignature("s3cr3t", []byte("body"), ""))
 }
 
 func TestVerifyGitHubSignature_should_ReturnFalse_When_SecretIsEmpty(t *testing.T) {
+	t.Parallel()
 	body := []byte("body")
 	header := sign("s3cr3t", body)
 	assert.False(t, VerifyGitHubSignature("", body, header))
@@ -69,6 +76,7 @@ func TestVerifyGitHubSignature_should_ReturnFalse_When_SecretIsEmpty(t *testing.
 // the secret+empty-body genuinely hashes to the supplied header, verification succeeds
 // exactly like any other body.
 func TestVerifyGitHubSignature_should_ReturnTrue_When_BodyIsEmptyAndSignatureGenuinelyMatches(t *testing.T) {
+	t.Parallel()
 	secret := "s3cr3t"
 	body := []byte{}
 	header := sign(secret, body)
@@ -77,12 +85,14 @@ func TestVerifyGitHubSignature_should_ReturnTrue_When_BodyIsEmptyAndSignatureGen
 }
 
 func TestVerifyGitHubSignature_should_ReturnFalse_When_BodyIsEmptyAndHeaderIsWrong(t *testing.T) {
+	t.Parallel()
 	assert.False(t, VerifyGitHubSignature("s3cr3t", []byte{}, "sha256=deadbeef"))
 }
 
 // VerifyWebhookSecret shares its implementation with VerifyGitHubSignature but is
 // exercised independently since it's the generic `webhook` trigger type's entry point.
 func TestVerifyWebhookSecret_should_ReturnTrue_When_SignatureIsValid(t *testing.T) {
+	t.Parallel()
 	secret := "generic-secret"
 	body := []byte(`{"event":"issue_created"}`)
 	header := sign(secret, body)
@@ -91,6 +101,7 @@ func TestVerifyWebhookSecret_should_ReturnTrue_When_SignatureIsValid(t *testing.
 }
 
 func TestVerifyWebhookSecret_should_ReturnFalse_When_SignatureIsInvalid(t *testing.T) {
+	t.Parallel()
 	body := []byte(`{"event":"issue_created"}`)
 	assert.False(t, VerifyWebhookSecret("generic-secret", body, "sha256=deadbeef"))
 }

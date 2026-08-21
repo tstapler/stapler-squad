@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 
 	appconfig "github.com/tstapler/stapler-squad/config"
+	"github.com/tstapler/stapler-squad/internal/syncutil"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/hibernation"
 )
@@ -155,7 +156,7 @@ func resumeFromHibernationLocked(s *instanceState, _ context.Context) {
 // the "session working directory missing" hibernation-resume errors this
 // guards against).
 func JoinHibernation(i *Instance) {
-	if !waitGroupWithTimeout(&i.hibernateWG, stopJoinTimeout) {
+	if !syncutil.WaitWithTimeout(&i.hibernateWG, stopJoinTimeout) {
 		log.Warn("JoinHibernation: hibernate/resume goroutine did not exit within timeout; it may still be running",
 			"session", i.Title, "timeout", stopJoinTimeout)
 	}

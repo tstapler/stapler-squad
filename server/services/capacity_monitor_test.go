@@ -64,6 +64,7 @@ func (m *mockLimitsClient) ModelContextWindow(model string) int {
 }
 
 func TestCapacityMonitor_PollAndEvaluate(t *testing.T) {
+	t.Parallel()
 	eventBus := events.NewEventBus(10)
 	poller := &mockInstancePoller{
 		instances: []*session.Instance{
@@ -157,6 +158,7 @@ func TestCapacityMonitor_PollAndEvaluate(t *testing.T) {
 }
 
 func TestCapacityMonitor_AutoTransition(t *testing.T) {
+	t.Parallel()
 	eventBus := events.NewEventBus(10)
 	poller := &mockInstancePoller{
 		instances: []*session.Instance{
@@ -222,6 +224,7 @@ func TestCapacityMonitor_AutoTransition(t *testing.T) {
 }
 
 func TestCapacityMonitor_RateLimitWarning(t *testing.T) {
+	t.Parallel()
 	eventBus := events.NewEventBus(10)
 	poller := &mockInstancePoller{
 		instances: []*session.Instance{

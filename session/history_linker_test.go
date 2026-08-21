@@ -27,6 +27,7 @@ func makeTestInstance(title string) *Instance {
 }
 
 func TestHistoryLinker_SetHistoryInfo_UpdatesInstance(t *testing.T) {
+	t.Parallel()
 	homeDir, err := os.UserHomeDir()
 	require.NoError(t, err)
 
@@ -52,6 +53,7 @@ func TestHistoryLinker_SetHistoryInfo_UpdatesInstance(t *testing.T) {
 // TestHistoryLinker_AlreadyLinked_NoUpdate verifies that correlateSession with
 // force=false skips sessions that already have a conversation UUID linked.
 func TestHistoryLinker_AlreadyLinked_NoUpdate(t *testing.T) {
+	t.Parallel()
 	tempHome := t.TempDir()
 	inspector := &mockProcessInspector{files: []string{}}
 	detector := NewHistoryFileDetectorWithHomeDir(inspector, tempHome)
@@ -83,6 +85,7 @@ func TestHistoryLinker_AlreadyLinked_NoUpdate(t *testing.T) {
 //
 // This test FAILS against pre-fix code that had `if inst.HasClaudeSession() { return }`.
 func TestHistoryLinker_CorrelateSession_Force_UpdatesUUIDAfterClear(t *testing.T) {
+	t.Parallel()
 	tempHome := t.TempDir()
 	inspector := &mockProcessInspector{files: []string{}}
 	detector := NewHistoryFileDetectorWithHomeDir(inspector, tempHome)
@@ -117,6 +120,7 @@ func TestHistoryLinker_CorrelateSession_Force_UpdatesUUIDAfterClear(t *testing.T
 }
 
 func TestHistoryLinker_NoJSONLOpen_NoUpdate(t *testing.T) {
+	t.Parallel()
 	inspector := &mockProcessInspector{files: []string{}}
 	detector := NewHistoryFileDetector(inspector)
 
@@ -129,6 +133,7 @@ func TestHistoryLinker_NoJSONLOpen_NoUpdate(t *testing.T) {
 }
 
 func TestHistoryLinker_SetInstances(t *testing.T) {
+	t.Parallel()
 	inspector := &mockProcessInspector{files: []string{}}
 	detector := NewHistoryFileDetector(inspector)
 	linker := NewHistoryLinker(detector, nil)
@@ -146,6 +151,7 @@ func TestHistoryLinker_SetInstances(t *testing.T) {
 }
 
 func TestHistoryLinker_RemoveInstance(t *testing.T) {
+	t.Parallel()
 	inspector := &mockProcessInspector{files: []string{}}
 	detector := NewHistoryFileDetector(inspector)
 	linker := NewHistoryLinker(detector, nil)
@@ -170,6 +176,7 @@ func TestHistoryLinker_RemoveInstance(t *testing.T) {
 // the same instance twice must not leave duplicate entries, or
 // correlateSession runs twice per poll tick for that session.
 func TestHistoryLinker_AddInstance_DedupesSameID(t *testing.T) {
+	t.Parallel()
 	inspector := &mockProcessInspector{files: []string{}}
 	detector := NewHistoryFileDetector(inspector)
 	linker := NewHistoryLinker(detector, nil)
@@ -186,6 +193,7 @@ func TestHistoryLinker_AddInstance_DedupesSameID(t *testing.T) {
 }
 
 func TestHistoryLinker_StartAndStop(t *testing.T) {
+	t.Parallel()
 	inspector := &mockProcessInspector{files: []string{}}
 	detector := NewHistoryFileDetector(inspector)
 	linker := NewHistoryLinker(detector, nil)
@@ -201,6 +209,7 @@ func TestHistoryLinker_StartAndStop(t *testing.T) {
 // TestNewHistoryLinkerFromRealInspector_ReturnsNonNil is a smoke test that verifies
 // the production constructor builds without panicking and returns a usable linker.
 func TestNewHistoryLinkerFromRealInspector_ReturnsNonNil(t *testing.T) {
+	t.Parallel()
 	linker := NewHistoryLinkerFromRealInspector()
 
 	require.NotNil(t, linker, "constructor should return a non-nil HistoryLinker")
@@ -211,6 +220,7 @@ func TestNewHistoryLinkerFromRealInspector_ReturnsNonNil(t *testing.T) {
 // TestHistoryLinker_Instances_SnapshotIncludesAddedSessions verifies that Instances()
 // returns a consistent snapshot that reflects AddInstance calls.
 func TestHistoryLinker_Instances_SnapshotIncludesAddedSessions(t *testing.T) {
+	t.Parallel()
 	inspector := &mockProcessInspector{files: []string{}}
 	detector := NewHistoryFileDetector(inspector)
 	linker := NewHistoryLinker(detector, nil)
@@ -231,6 +241,7 @@ func TestHistoryLinker_Instances_SnapshotIncludesAddedSessions(t *testing.T) {
 // TestHistoryLinker_Instances_SnapshotIsIndependent verifies that mutating the returned
 // snapshot does not affect the linker's internal state.
 func TestHistoryLinker_Instances_SnapshotIsIndependent(t *testing.T) {
+	t.Parallel()
 	inspector := &mockProcessInspector{files: []string{}}
 	detector := NewHistoryFileDetector(inspector)
 	linker := NewHistoryLinker(detector, nil)
@@ -252,6 +263,7 @@ func TestHistoryLinker_Instances_SnapshotIsIndependent(t *testing.T) {
 //
 // This test FAILS against pre-fix code that calls DetectByPath(inst.Path).
 func TestHistoryLinker_CorrelateSession_UsesWorktreePath_NotBasePath(t *testing.T) {
+	t.Parallel()
 	tempHome := t.TempDir()
 	inspector := &mockProcessInspector{files: []string{}} // no open files → always falls through to DetectByPath
 	detector := NewHistoryFileDetectorWithHomeDir(inspector, tempHome)
@@ -300,6 +312,7 @@ func TestHistoryLinker_CorrelateSession_UsesWorktreePath_NotBasePath(t *testing.
 // same directory, creating newer JSONL files. The HistoryLinker must NOT replace
 // originalUUID with a newer session's UUID when correlating the paused session.
 func TestHistoryLinker_CorrelateSession_PausedSession_PreservesUUID(t *testing.T) {
+	t.Parallel()
 	tempHome := t.TempDir()
 	inspector := &mockProcessInspector{files: []string{}} // no open files — session is dead
 	detector := NewHistoryFileDetectorWithHomeDir(inspector, tempHome)
@@ -340,6 +353,7 @@ func TestHistoryLinker_CorrelateSession_PausedSession_PreservesUUID(t *testing.T
 // TestHistoryLinker_CorrelateSession_HibernatedSession_PreservesUUID is the same
 // regression test for Hibernated sessions (checkpoint written, tmux killed).
 func TestHistoryLinker_CorrelateSession_HibernatedSession_PreservesUUID(t *testing.T) {
+	t.Parallel()
 	tempHome := t.TempDir()
 	inspector := &mockProcessInspector{files: []string{}}
 	detector := NewHistoryFileDetectorWithHomeDir(inspector, tempHome)
@@ -375,6 +389,7 @@ func TestHistoryLinker_CorrelateSession_HibernatedSession_PreservesUUID(t *testi
 // overwrite by the path-based fallback. Stopped sessions cannot be resumed, but
 // the guard should be semantically complete.
 func TestHistoryLinker_CorrelateSession_StoppedSession_PreservesUUID(t *testing.T) {
+	t.Parallel()
 	tempHome := t.TempDir()
 	inspector := &mockProcessInspector{files: []string{}}
 	detector := NewHistoryFileDetectorWithHomeDir(inspector, tempHome)
@@ -408,6 +423,7 @@ func TestHistoryLinker_CorrelateSession_StoppedSession_PreservesUUID(t *testing.
 // TestHistoryLinker_CorrelateSession_FallsBackToBasePath_WhenNoWorktree verifies
 // that DetectByPath uses inst.Path when there is no worktree (the non-worktree case).
 func TestHistoryLinker_CorrelateSession_FallsBackToBasePath_WhenNoWorktree(t *testing.T) {
+	t.Parallel()
 	tempHome := t.TempDir()
 	inspector := &mockProcessInspector{files: []string{}}
 	detector := NewHistoryFileDetectorWithHomeDir(inspector, tempHome)

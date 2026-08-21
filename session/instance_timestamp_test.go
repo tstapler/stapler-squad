@@ -10,6 +10,7 @@ import (
 
 // TestInstance_UpdateTerminalTimestamps verifies that terminal timestamps are updated correctly
 func TestInstance_UpdateTerminalTimestamps(t *testing.T) {
+	t.Parallel()
 	opts := InstanceOptions{
 		Title:   "test-session",
 		Path:    "/tmp/test",
@@ -97,6 +98,7 @@ func TestInstance_UpdateTerminalTimestamps(t *testing.T) {
 
 // TestInstance_GetTimeSinceMethods verifies the time-since helper methods
 func TestInstance_GetTimeSinceMethods(t *testing.T) {
+	t.Parallel()
 	opts := InstanceOptions{
 		Title:   "test-session-2",
 		Path:    "/tmp/test2",
@@ -144,6 +146,7 @@ func TestInstance_GetTimeSinceMethods(t *testing.T) {
 
 // TestInstance_PreviewUpdatesTimestamps verifies that Preview() updates timestamps
 func TestInstance_PreviewUpdatesTimestamps(t *testing.T) {
+	t.Parallel()
 	opts := InstanceOptions{
 		Title:   "test-preview",
 		Path:    "/tmp/testpreview",
@@ -185,6 +188,7 @@ func TestInstance_PreviewUpdatesTimestamps(t *testing.T) {
 // this test actually exercises the actor's serialization, matching how every
 // production instance is wired (session.Registry.Register/Acquire).
 func TestInstance_TimestampConcurrency(t *testing.T) {
+	t.Parallel()
 	opts := InstanceOptions{
 		Title:   "test-concurrent",
 		Path:    "/tmp/testconcurrent",

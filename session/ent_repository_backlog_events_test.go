@@ -2,9 +2,6 @@ package session_test
 
 import (
 	"context"
-	"fmt"
-	"os"
-	"path/filepath"
 	"testing"
 	"time"
 
@@ -25,25 +22,15 @@ import (
 // cycle not allowed in test" build error. See Epic 2.1's implementation notes
 // for the exact error this avoids.
 
-// newTestEntRepositoryForEvents creates a temporary ent-backed *session.EntRepository,
-// mirroring session package's own unexported createTestEntRepository test helper
-// (session/ent_repository_test.go), which is not reachable from this external
-// test package.
+// newTestEntRepositoryForEvents creates an in-memory ent-backed
+// *session.EntRepository via session.NewTestEntRepository, the exported
+// cross-package helper (session/testing.go) added specifically so this
+// external test package no longer needs its own copy of the on-disk
+// construction logic.
 func newTestEntRepositoryForEvents(t *testing.T) (*session.EntRepository, func()) {
 	t.Helper()
-	tmpDir := t.TempDir()
-	dbPath := filepath.Join(tmpDir, fmt.Sprintf("test-%d.db", time.Now().UnixNano()))
-
-	repo, err := session.NewEntRepository(session.WithDatabasePath(dbPath))
-	require.NoError(t, err)
-
-	cleanup := func() {
-		repo.Close()
-		os.Remove(dbPath)
-		os.Remove(dbPath + "-wal")
-		os.Remove(dbPath + "-shm")
-	}
-	return repo, cleanup
+	repo := session.NewTestEntRepository(t)
+	return repo, func() {}
 }
 
 // panickingItemChangePublisher is a test double for Task 2.1.1d: its
@@ -64,6 +51,7 @@ func (panickingItemChangePublisher) PublishItemChanged(item *session.BacklogItem
 // a subscriber receives a BacklogItemChanged event with the correct old/new status
 // after a successful CAS transition (Task 2.1.1b, R4 happy path).
 func TestTransitionBacklogItemStatus_should_publishOldAndNewStatus_When_CASSucceeds(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := newTestEntRepositoryForEvents(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -102,6 +90,7 @@ func TestTransitionBacklogItemStatus_should_publishOldAndNewStatus_When_CASSucce
 // reaches the subscriber — the precondition-failed path must never publish
 // (Task 2.1.1c, R4 error path).
 func TestTransitionBacklogItemStatus_should_notPublish_When_CASAffectsZeroRows(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := newTestEntRepositoryForEvents(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -144,6 +133,7 @@ func TestTransitionBacklogItemStatus_should_notPublish_When_CASAffectsZeroRows(t
 // against a raw ItemChangePublisher implementation that has no recover() of
 // its own).
 func TestTransitionBacklogItemStatus_should_returnSuccessAndPersistRow_When_ItemChangePublisherPanics(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := newTestEntRepositoryForEvents(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -173,6 +163,7 @@ func TestTransitionBacklogItemStatus_should_returnSuccessAndPersistRow_When_Item
 // updates only the Title field and asserts the published event's
 // UpdatedFields contains exactly "title" (Task 2.2.1b, R5 happy path).
 func TestUpdateBacklogItem_should_publishChangedFieldNames_When_TitleIsUpdated(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := newTestEntRepositoryForEvents(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -210,6 +201,7 @@ func TestUpdateBacklogItem_should_publishChangedFieldNames_When_TitleIsUpdated(t
 // UpdatedFields list (if an event is published at all) must be empty
 // (Task 2.2.1a, R5 error/edge path).
 func TestUpdateBacklogItem_should_notPublishMisleadingFieldList_When_NoParamsAreSet(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := newTestEntRepositoryForEvents(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -244,6 +236,7 @@ func TestUpdateBacklogItem_should_notPublishMisleadingFieldList_When_NoParamsAre
 // "planText" example — there is no PlanText field on BacklogItemUpdate in this
 // codebase, so Notes stands in as the third real field.
 func TestUpdateBacklogItem_should_deliverEventThroughRealBus_When_MultipleFieldsChange(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := newTestEntRepositoryForEvents(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -287,6 +280,7 @@ func TestUpdateBacklogItem_should_deliverEventThroughRealBus_When_MultipleFields
 // archives a done item and asserts the published event carries a non-nil
 // ArchivedAt timestamp (Task 2.2.2a/c, R6 happy path).
 func TestArchiveBacklogItem_should_publishArchivedAtTimestamp_When_DoneItemIsArchived(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := newTestEntRepositoryForEvents(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -321,6 +315,7 @@ func TestArchiveBacklogItem_should_publishArchivedAtTimestamp_When_DoneItemIsArc
 // reaches the publish call, mirroring TestDeleteBacklogItem's not-found case
 // (backlog item "Archiving a backlog item is irreversible", criterion 3).
 func TestUnarchiveBacklogItem_should_returnNotFound_When_ItemIDDoesNotExist(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := newTestEntRepositoryForEvents(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -349,6 +344,7 @@ func TestUnarchiveBacklogItem_should_returnNotFound_When_ItemIDDoesNotExist(t *t
 // (not the lightweight ChangeItemArchived shape) is published so live list
 // views update without a manual refresh (criteria 2 and 5).
 func TestUnarchiveBacklogItem_should_restoreToIdeaAndPublishTransition_When_ItemIsArchived(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := newTestEntRepositoryForEvents(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -391,6 +387,7 @@ func TestUnarchiveBacklogItem_should_restoreToIdeaAndPublishTransition_When_Item
 // matching UnarchiveSession's precedent (server/services/session_service.go)
 // rather than erroring or no-op'ing (criterion 3).
 func TestUnarchiveBacklogItem_should_unconditionallyFlipToIdea_When_ItemIsNotArchived(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := newTestEntRepositoryForEvents(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -427,6 +424,7 @@ func TestUnarchiveBacklogItem_should_unconditionallyFlipToIdea_When_ItemIsNotArc
 // delete against a nonexistent item id returns its existing not-found error
 // and never reaches the publish call (Task 2.2.2b, R6 error path).
 func TestDeleteBacklogItem_should_notPublish_When_ItemIDDoesNotExist(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := newTestEntRepositoryForEvents(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -455,6 +453,7 @@ func TestDeleteBacklogItem_should_notPublish_When_ItemIDDoesNotExist(t *testing.
 // handler will route this to a BacklogItemRemovedEvent (a delete signal), not
 // an upsert (Task 2.2.2c, R6 integration).
 func TestDeleteBacklogItem_should_publishRemovedNotUpdated_When_ExistingItemIsDeleted(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := newTestEntRepositoryForEvents(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -502,6 +501,7 @@ func TestDeleteBacklogItem_should_publishRemovedNotUpdated_When_ExistingItemIsDe
 // one that created the session/verdict — must still carry that session (with
 // its verdict inline) in Item.ItemSessions.
 func TestTransitionBacklogItemStatus_should_embedNonEmptyItemSessions_When_ItemHasReviewVerdict(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := newTestEntRepositoryForEvents(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -575,6 +575,7 @@ func TestTransitionBacklogItemStatus_should_embedNonEmptyItemSessions_When_ItemH
 // field. Asserts a subscriber now receives a ChangeItemUpdated event carrying the
 // updated acceptance criteria JSON after a criterion's status changes.
 func TestUpdateAcCriterionStatus_should_publishItemUpdatedEvent_When_CriterionStatusChanges(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := newTestEntRepositoryForEvents(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -626,6 +627,7 @@ func TestUpdateAcCriterionStatus_should_publishItemUpdatedEvent_When_CriterionSt
 // TransitionBacklogItemStatus and were unaffected). This asserts the fix: a subscriber
 // receives a BacklogItemStatusChangedEvent (in_progress -> review) after the sweep.
 func TestReconcileStuckItems_should_publishStatusChangedEvent_When_ItemTransitionsToReview(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := newTestEntRepositoryForEvents(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -682,6 +684,7 @@ func TestReconcileStuckItems_should_publishStatusChangedEvent_When_ItemTransitio
 // bypasses. Asserts a subscriber now receives a ChangeItemUpdated event after
 // the started_at write.
 func TestUpdateItemSessionStarted_should_publishItemUpdatedEvent_When_StartedAtIsSet(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := newTestEntRepositoryForEvents(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -730,6 +733,7 @@ func TestUpdateItemSessionStarted_should_publishItemUpdatedEvent_When_StartedAtI
 // is the same-shaped regression test for UpdateItemSessionGitActivity, which
 // recorded commit sha/message/count with zero publish call.
 func TestUpdateItemSessionGitActivity_should_publishItemUpdatedEvent_When_CommitIsRecorded(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := newTestEntRepositoryForEvents(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -776,6 +780,7 @@ func TestUpdateItemSessionGitActivity_should_publishItemUpdatedEvent_When_Commit
 // is the same-shaped regression test for UpdateItemSessionFileTouch, which
 // recorded the last-file-touch timestamp with zero publish call.
 func TestUpdateItemSessionFileTouch_should_publishItemUpdatedEvent_When_FileTouchIsRecorded(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := newTestEntRepositoryForEvents(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -822,6 +827,7 @@ func TestUpdateItemSessionFileTouch_should_publishItemUpdatedEvent_When_FileTouc
 // is the same-shaped regression test for UpdateItemSessionVerificationNotes,
 // which saved request_review's verification evidence with zero publish call.
 func TestUpdateItemSessionVerificationNotes_should_publishItemUpdatedEvent_When_NotesAreSaved(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := newTestEntRepositoryForEvents(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -870,6 +876,7 @@ func TestUpdateItemSessionVerificationNotes_should_publishItemUpdatedEvent_When_
 // saw a pr_pending item become visible to FindPRPendingItems' polling loop
 // until their next full poll/refresh.
 func TestBackfillMissingPRNumbers_should_publishItemUpdatedEvent_When_PrNumberIsBackfilled(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := newTestEntRepositoryForEvents(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -914,5 +921,86 @@ func TestBackfillMissingPRNumbers_should_publishItemUpdatedEvent_When_PrNumberIs
 		assert.Equal(t, 148, ev.BacklogItemPayload.Item.PrNumber)
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for BacklogItemChanged event from BackfillMissingPRNumbers")
+	}
+}
+
+// TestAppendActivityNote_should_PublishActivityNoteAddedEvent_When_Called
+// (Epic 8.2, Task 8.2.1b) lives in this file (package session_test), not
+// session/ent_repository_backlog_test.go as plan.md's Story 8.2.1 literally
+// names — a real ItemChangePublisher assertion needs the
+// server/services.BacklogItemEventPublisher adapter, which imports session,
+// so it can only be exercised from this external test package (see this
+// file's own header comment for the import-cycle reasoning). Mirrors
+// TestUpdateAcCriterionStatus_should_publishItemUpdatedEvent_When_CriterionStatusChanges's
+// shape above.
+func TestAppendActivityNote_should_PublishActivityNoteAddedEvent_When_Called(t *testing.T) {
+	t.Parallel()
+	repo, cleanup := newTestEntRepositoryForEvents(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	bus := pkgevents.NewEventBus(10)
+	repo.SetItemChangePublisher(&services.BacklogItemEventPublisher{Bus: bus})
+
+	sub, subID := bus.Subscribe(ctx)
+	defer bus.Unsubscribe(subID)
+
+	item, err := repo.CreateBacklogItem(ctx, session.BacklogItemData{
+		Title:  "item for activity-note publish test",
+		Status: string(session.BacklogStatusInProgress),
+	})
+	require.NoError(t, err)
+
+	require.NoError(t, repo.AppendActivityNote(ctx, item.ID, "session-uuid-1", "worker-1", "note from a session"))
+
+	select {
+	case ev := <-sub:
+		require.Equal(t, pkgevents.EventBacklogItemChanged, ev.Type)
+		require.NotNil(t, ev.BacklogItemPayload)
+		assert.Equal(t, pkgevents.BacklogChangeActivityNoteAdded, ev.BacklogItemPayload.Kind)
+		require.NotNil(t, ev.BacklogItemPayload.ActivityNote)
+		assert.Equal(t, "note from a session", ev.BacklogItemPayload.ActivityNote.Message)
+		assert.Equal(t, "session-uuid-1", ev.BacklogItemPayload.ActivityNote.AuthorSessionUUID)
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for BacklogItemChanged event from AppendActivityNote")
+	}
+}
+
+// TestAppendActivityNote_should_PopulateStatusAndRepoPathOnPublishedSnapshot_When_Called
+// (Epic 8.2, Task 8.2.1c) is Blocker 2's regression test: without the
+// Select(Status, RepoPath).Only(ctx) read AppendActivityNote does before
+// publishing, backlogItemMatchesFilters
+// (server/services/backlog_service_events.go) would silently drop this event
+// for any WatchBacklogItems caller with a non-empty status_filter/
+// category_filter. Same file-placement reasoning as the test above.
+func TestAppendActivityNote_should_PopulateStatusAndRepoPathOnPublishedSnapshot_When_Called(t *testing.T) {
+	t.Parallel()
+	repo, cleanup := newTestEntRepositoryForEvents(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	bus := pkgevents.NewEventBus(10)
+	repo.SetItemChangePublisher(&services.BacklogItemEventPublisher{Bus: bus})
+
+	sub, subID := bus.Subscribe(ctx)
+	defer bus.Unsubscribe(subID)
+
+	item, err := repo.CreateBacklogItem(ctx, session.BacklogItemData{
+		Title:    "item with known status and repo path",
+		Status:   string(session.BacklogStatusReview),
+		RepoPath: "/repo/known-path",
+	})
+	require.NoError(t, err)
+
+	require.NoError(t, repo.AppendActivityNote(ctx, item.ID, "", "", "a note"))
+
+	select {
+	case ev := <-sub:
+		require.NotNil(t, ev.BacklogItemPayload)
+		require.NotNil(t, ev.BacklogItemPayload.Item, "the published snapshot must carry a non-nil Item so backlogItemMatchesFilters doesn't unconditionally reject it")
+		assert.Equal(t, string(session.BacklogStatusReview), ev.BacklogItemPayload.Item.Status, "Status must be populated on the snapshot, not left zero-value")
+		assert.Equal(t, "/repo/known-path", ev.BacklogItemPayload.Item.RepoPath, "RepoPath must be populated on the snapshot, not left zero-value")
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for BacklogItemChanged event from AppendActivityNote")
 	}
 }

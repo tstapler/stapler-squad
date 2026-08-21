@@ -26,6 +26,7 @@ import (
 // pipeline_mode entirely (req.Msg.PipelineMode == nil) must never clobber the
 // item's existing stored mode back to "".
 func TestUpdateBacklogItem_should_PreserveExistingPipelineMode_When_FieldOmittedFromRequest(t *testing.T) {
+	t.Parallel()
 	svc := newBacklogService(t)
 
 	quick := "quick"
@@ -52,6 +53,7 @@ func TestUpdateBacklogItem_should_PreserveExistingPipelineMode_When_FieldOmitted
 // (req.Msg.PipelineMode != nil && *req.Msg.PipelineMode == "") is a real reset
 // request, distinct from "omitted", and must be honored.
 func TestUpdateBacklogItem_should_ResetPipelineModeToEmptyString_When_FieldExplicitlySetToEmptyString(t *testing.T) {
+	t.Parallel()
 	svc := newBacklogService(t)
 
 	quick := "quick"
@@ -75,6 +77,7 @@ func TestUpdateBacklogItem_should_ResetPipelineModeToEmptyString_When_FieldExpli
 // CreateBacklogItem persists a non-default pipeline_mode supplied on the request
 // (Story 1.4.4).
 func TestCreateBacklogItem_should_SetPipelineModeFromRequest_When_FieldPresent(t *testing.T) {
+	t.Parallel()
 	svc := newBacklogService(t)
 
 	quick := "quick"
@@ -155,6 +158,7 @@ func TestCreateBacklogItem_should_RespectExplicitPipelineMode_When_FlagEnabledBu
 // default-behavior guard: an item created without an explicit category must
 // come back uncategorized ("").
 func TestCreateBacklogItem_should_DefaultCategoryToEmpty_When_FieldOmitted(t *testing.T) {
+	t.Parallel()
 	svc := newBacklogService(t)
 
 	resp, err := svc.CreateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
@@ -168,6 +172,7 @@ func TestCreateBacklogItem_should_DefaultCategoryToEmpty_When_FieldOmitted(t *te
 // TestCreateBacklogItem_should_PersistCategory_When_FieldSet is the round-trip
 // case for an explicitly-set, valid category.
 func TestCreateBacklogItem_should_PersistCategory_When_FieldSet(t *testing.T) {
+	t.Parallel()
 	svc := newBacklogService(t)
 
 	bugfix := "bugfix"
@@ -185,6 +190,7 @@ func TestCreateBacklogItem_should_PersistCategory_When_FieldSet(t *testing.T) {
 // (plus empty) with CodeInvalidArgument, mirroring how other enum-shaped
 // fields are validated in this service.
 func TestCreateBacklogItem_should_RejectInvalidCategory_When_UnknownValueProvided(t *testing.T) {
+	t.Parallel()
 	svc := newBacklogService(t)
 
 	bogus := "not-a-real-category"
@@ -201,6 +207,7 @@ func TestCreateBacklogItem_should_RejectInvalidCategory_When_UnknownValueProvide
 // category entirely (req.Msg.Category == nil) must never clobber the item's
 // existing stored category back to "".
 func TestUpdateBacklogItem_should_LeaveCategoryUntouched_When_FieldOmitted(t *testing.T) {
+	t.Parallel()
 	svc := newBacklogService(t)
 
 	bugfix := "bugfix"
@@ -225,6 +232,7 @@ func TestUpdateBacklogItem_should_LeaveCategoryUntouched_When_FieldOmitted(t *te
 // TestUpdateBacklogItem_should_UpdateCategory_When_FieldSet proves the other
 // half of presence-gating: an explicitly-present category value is honored.
 func TestUpdateBacklogItem_should_UpdateCategory_When_FieldSet(t *testing.T) {
+	t.Parallel()
 	svc := newBacklogService(t)
 
 	created, err := svc.CreateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
@@ -245,6 +253,7 @@ func TestUpdateBacklogItem_should_UpdateCategory_When_FieldSet(t *testing.T) {
 // TestUpdateBacklogItem_should_RejectInvalidCategory_When_UnknownValueProvided
 // mirrors the create-side validation guard for the update path.
 func TestUpdateBacklogItem_should_RejectInvalidCategory_When_UnknownValueProvided(t *testing.T) {
+	t.Parallel()
 	svc := newBacklogService(t)
 
 	created, err := svc.CreateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
@@ -267,6 +276,7 @@ func TestUpdateBacklogItem_should_RejectInvalidCategory_When_UnknownValueProvide
 // default-behavior guard for the opt-in AutoCreatePR policy — an item created
 // without the flag must not have it silently enabled.
 func TestCreateBacklogItem_should_DefaultAutoCreatePrToFalse_When_FieldOmitted(t *testing.T) {
+	t.Parallel()
 	svc := newBacklogService(t)
 
 	resp, err := svc.CreateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
@@ -281,6 +291,7 @@ func TestCreateBacklogItem_should_DefaultAutoCreatePrToFalse_When_FieldOmitted(t
 // UpdateBacklogItem round-trips it (unconditional-bool-wrap pattern, same as
 // SkipReviewGate/SkipPlanning/AutoSpawnSession).
 func TestCreateBacklogItem_should_PersistAutoCreatePr_When_FieldSetTrue(t *testing.T) {
+	t.Parallel()
 	svc := newBacklogService(t)
 
 	created, err := svc.CreateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
@@ -435,8 +446,10 @@ func TestTransitionBacklogItemStatus_should_BlockDone_When_PrPendingWithConflict
 // to (e.g. by supplying override_reason) — not connect.CodeInvalidArgument, which
 // would incorrectly signal a malformed request.
 func TestTransitionBacklogItemStatus_should_ReturnFailedPrecondition_When_ReviewToReadyBlockedByPassVerdict(t *testing.T) {
+	t.Parallel()
 	for _, from := range []session.BacklogStatus{session.BacklogStatusReview, session.BacklogStatusPRPending} {
 		t.Run(string(from), func(t *testing.T) {
+			t.Parallel()
 			svc := newBacklogService(t)
 			storage := svc.storage
 
@@ -473,6 +486,7 @@ func TestTransitionBacklogItemStatus_should_ReturnFailedPrecondition_When_Review
 // TestTransitionBacklogItemStatus_should_ReturnFailedPrecondition_When_ReviewToReadyBlockedByPassVerdict.
 // AC2 (RPC-layer): the same transition succeeds once override_reason is supplied.
 func TestTransitionBacklogItemStatus_should_Allow_When_ReviewToReadyHasOverrideReason(t *testing.T) {
+	t.Parallel()
 	svc := newBacklogService(t)
 	storage := svc.storage
 
@@ -588,6 +602,7 @@ func TestTransitionBacklogItemStatus_should_BlockDone_When_LastCommitShaIsStaleB
 // "done" must now archive every work-role session for the item via the injected
 // SessionStopper (mirrors cleanupItemWorktrees, which already runs at this call site).
 func TestTransitionBacklogItemStatus_should_ArchiveWorkSessions_When_ItemReachesDone(t *testing.T) {
+	t.Parallel()
 	storage := createTestStorage(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	stopper := &mockSessionStopper{liveUUIDs: map[string]bool{}}
@@ -620,6 +635,7 @@ func TestTransitionBacklogItemStatus_should_ArchiveWorkSessions_When_ItemReaches
 // TestTransitionBacklogItemStatus_should_ArchiveWorkSessions_When_ItemArchived mirrors
 // the done case above for the "archived" terminal status.
 func TestTransitionBacklogItemStatus_should_ArchiveWorkSessions_When_ItemArchived(t *testing.T) {
+	t.Parallel()
 	storage := createTestStorage(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	stopper := &mockSessionStopper{liveUUIDs: map[string]bool{}}
@@ -652,6 +668,7 @@ func TestTransitionBacklogItemStatus_should_ArchiveWorkSessions_When_ItemArchive
 // guards against over-eager archival: a non-terminal transition (e.g. ready->in_progress)
 // must not touch any work session.
 func TestTransitionBacklogItemStatus_should_NotArchiveWorkSessions_When_TransitionIsNotTerminal(t *testing.T) {
+	t.Parallel()
 	storage := createTestStorage(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	stopper := &mockSessionStopper{liveUUIDs: map[string]bool{}}
@@ -697,6 +714,7 @@ func TestTransitionBacklogItemStatus_should_NotArchiveWorkSessions_When_Transiti
 // still auto-transition straight to done on a PASS manual review, matching the
 // pre-existing behavior this guard must not regress.
 func TestSubmitManualReview_PassNoUnshippedCode_TransitionsToDone(t *testing.T) {
+	t.Parallel()
 	svc := newBacklogService(t)
 
 	created, err := svc.CreateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
@@ -787,6 +805,7 @@ func TestSubmitManualReview_PassWithUnshippedCode_StaysInReviewForShipPR(t *test
 // TestUpdateBacklogItem_should_RejectPrFields_When_OnlyOneOfPairSet is the
 // presence-gating guard: pr_url/pr_number must be set together or not at all.
 func TestUpdateBacklogItem_should_RejectPrFields_When_OnlyOneOfPairSet(t *testing.T) {
+	t.Parallel()
 	svc := newBacklogService(t)
 
 	created, err := svc.CreateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
@@ -814,6 +833,7 @@ func TestUpdateBacklogItem_should_RejectPrFields_When_OnlyOneOfPairSet(t *testin
 // TestUpdateBacklogItem_should_RejectPrUrl_When_NotRecognizableGitHubPRURL covers
 // a malformed/non-PR URL — rejected before any storage write.
 func TestUpdateBacklogItem_should_RejectPrUrl_When_NotRecognizableGitHubPRURL(t *testing.T) {
+	t.Parallel()
 	svc := newBacklogService(t)
 
 	created, err := svc.CreateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
@@ -835,6 +855,7 @@ func TestUpdateBacklogItem_should_RejectPrUrl_When_NotRecognizableGitHubPRURL(t 
 // TestUpdateBacklogItem_should_RejectPrNumber_When_MismatchedAgainstUrl covers a
 // typo'd pr_number that disagrees with the PR number embedded in pr_url.
 func TestUpdateBacklogItem_should_RejectPrNumber_When_MismatchedAgainstUrl(t *testing.T) {
+	t.Parallel()
 	svc := newBacklogService(t)
 
 	created, err := svc.CreateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
@@ -858,6 +879,7 @@ func TestUpdateBacklogItem_should_RejectPrNumber_When_MismatchedAgainstUrl(t *te
 // stuck in review, with no live linked session — the item moves to
 // pr_pending and a success notification fires (criterion 8).
 func TestUpdateBacklogItem_should_AssociatePrAndTransitionToPrPending_When_ItemInReview(t *testing.T) {
+	t.Parallel()
 	storage := createTestStorage(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	bus := events.NewEventBus(10)
@@ -898,6 +920,7 @@ func TestUpdateBacklogItem_should_AssociatePrAndTransitionToPrPending_When_ItemI
 // item outside "review" must fail clearly, not with a generic CAS error, and
 // must not corrupt state.
 func TestUpdateBacklogItem_should_RejectPrAssociation_When_ItemNotInReview(t *testing.T) {
+	t.Parallel()
 	storage := createTestStorage(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 
@@ -930,6 +953,7 @@ func TestUpdateBacklogItem_should_RejectPrAssociation_When_ItemNotInReview(t *te
 // verifies a manual override (override_reason set) leaves a visible audit
 // trail — a progress note and a notification — rather than a silent write.
 func TestTransitionBacklogItemStatus_should_AppendNoteAndNotify_When_OverrideReasonSet(t *testing.T) {
+	t.Parallel()
 	storage := createTestStorage(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	bus := events.NewEventBus(10)
@@ -970,6 +994,7 @@ func TestTransitionBacklogItemStatus_should_AppendNoteAndNotify_When_OverrideRea
 // negative case: a routine (non-override) automated transition must not gain
 // new notification noise — only manual overrides do.
 func TestTransitionBacklogItemStatus_should_NotNotify_When_NoOverrideReasonSet(t *testing.T) {
+	t.Parallel()
 	storage := createTestStorage(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	bus := events.NewEventBus(10)
@@ -1007,6 +1032,7 @@ func TestTransitionBacklogItemStatus_should_NotNotify_When_NoOverrideReasonSet(t
 // transition on the same item must not silently clobber it — the loser gets a
 // clean CAS failure.
 func TestTransitionBacklogItemStatus_should_FailCASForLoser_When_ConcurrentOverrideRaces(t *testing.T) {
+	t.Parallel()
 	storage := createTestStorage(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 
@@ -1107,6 +1133,7 @@ func TestTransitionBacklogItemStatus_should_FailCASForLoser_When_ConcurrentOverr
 // built from the wrong field, or an off-by-one in from/to status, would fail
 // even a single straight-line call.
 func TestOverrideVerdict_should_TransitionSuccessfully_When_CalledOnce(t *testing.T) {
+	t.Parallel()
 	storage := createTestStorage(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 
@@ -1144,6 +1171,7 @@ func TestOverrideVerdict_should_TransitionSuccessfully_When_CalledOnce(t *testin
 // the RPC-level success path: given two real items and no cycle, the handler
 // must persist the dependency and return the reloaded (blocked) item.
 func TestAddBacklogItemDependency_should_PersistEdge_When_ItemsExistAndNoCycle(t *testing.T) {
+	t.Parallel()
 	svc := newBacklogService(t)
 
 	blocker, err := svc.CreateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
@@ -1168,6 +1196,7 @@ func TestAddBacklogItemDependency_should_PersistEdge_When_ItemsExistAndNoCycle(t
 // covers the handler's translation of session.ErrDependencyCycle (self-edges
 // included) into connect.CodeInvalidArgument.
 func TestAddBacklogItemDependency_should_ReturnInvalidArgument_When_SelfDependency(t *testing.T) {
+	t.Parallel()
 	svc := newBacklogService(t)
 
 	item, err := svc.CreateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
@@ -1187,6 +1216,7 @@ func TestAddBacklogItemDependency_should_ReturnInvalidArgument_When_SelfDependen
 // covers the handler's translation of a would-close-a-cycle error (distinct
 // from the self-dependency case above) into connect.CodeInvalidArgument.
 func TestAddBacklogItemDependency_should_ReturnInvalidArgument_When_EdgeWouldCloseCycle(t *testing.T) {
+	t.Parallel()
 	svc := newBacklogService(t)
 
 	a, err := svc.CreateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.CreateBacklogItemRequest{Title: "a"}))
@@ -1213,6 +1243,7 @@ func TestAddBacklogItemDependency_should_ReturnInvalidArgument_When_EdgeWouldClo
 // covers the handler's translation of session.ErrNotFound into
 // connect.CodeNotFound for a blocker id that does not exist.
 func TestAddBacklogItemDependency_should_ReturnNotFound_When_BlockerItemMissing(t *testing.T) {
+	t.Parallel()
 	svc := newBacklogService(t)
 
 	blocked, err := svc.CreateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
@@ -1231,6 +1262,7 @@ func TestAddBacklogItemDependency_should_ReturnNotFound_When_BlockerItemMissing(
 // TestAddBacklogItemDependency_should_ReturnUnavailable_When_StorageNotWired
 // covers the handler's storage-nil guard.
 func TestAddBacklogItemDependency_should_ReturnUnavailable_When_StorageNotWired(t *testing.T) {
+	t.Parallel()
 	svc := newBacklogServiceNilStorage()
 
 	_, err := svc.AddBacklogItemDependency(t.Context(), connect.NewRequest(&sessionv1.AddBacklogItemDependencyRequest{

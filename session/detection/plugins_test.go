@@ -18,6 +18,7 @@ import (
 )
 
 func Test_parsePluginFile(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name    string
 		data    string
@@ -135,6 +136,7 @@ id =
 }
 
 func Test_statusField(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		status string
 		get    func(*dtypes.StatusPatterns) *[]dtypes.StatusPattern
@@ -178,6 +180,7 @@ func Test_statusField(t *testing.T) {
 }
 
 func Test_toStatusPatterns(t *testing.T) {
+	t.Parallel()
 	t.Run("toStatusPatterns_should_preserveDeclarationOrder_When_multiplePatternsShareACategory", func(t *testing.T) {
 		pf := &pluginFile{
 			ID:          "my-agent",
@@ -239,6 +242,7 @@ func findErrByField(errs []PluginLoadError, field string) (PluginLoadError, bool
 }
 
 func Test_validatePluginFile(t *testing.T) {
+	t.Parallel()
 	t.Run("validatePluginFile_should_returnFieldId_When_idIsMissing", func(t *testing.T) {
 		pf := &pluginFile{
 			BinaryNames: []string{"my-agent"},
@@ -461,6 +465,7 @@ status = "processing"
 }
 
 func Test_LoadPluginDir(t *testing.T) {
+	t.Parallel()
 	t.Run("LoadPluginDir_should_returnDetectorAndSkipInvalid_When_directoryHasValidAndInvalidFiles", func(t *testing.T) {
 		dir := t.TempDir()
 		writePluginFile(t, dir, "my-agent.toml", validPluginTOML("my-agent", []string{"my-agent"}))

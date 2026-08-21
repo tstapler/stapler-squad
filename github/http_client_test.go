@@ -177,14 +177,29 @@ func TestGetGHToken_SingleflightCollapsesParallelCacheMissCallers(t *testing.T) 
 	}
 }
 
+// resetRateLimiterForTest swaps in a fresh DefaultRateLimiter for the
+// duration of t, restoring the original on cleanup. Any test that drives a
+// request through ghHTTPClient and can trigger a rate-limit-setting response
+// (403 with Retry-After, 403 with X-RateLimit-Remaining: 0, or 429) must call
+// this — DefaultRateLimiter is a package-level global (github/rate_limit.go)
+// shared by every test in this binary, and since rateLimitTransport.RoundTrip
+// now fails fast when it's already limited, one test's rate-limit fixture
+// otherwise poisons every test that runs after it in the same process (found
+// via TestGetCommit's "403 with Retry-After" subtest failing TestGetPR's
+// unrelated "200 success" subtest). This is a thin in-package alias for the
+// exported ResetRateLimiterForTest (testing.go), which consumer packages
+// (e.g. session's GitHub backlog plugin tests) call directly.
+func resetRateLimiterForTest(t *testing.T) {
+	t.Helper()
+	ResetRateLimiterForTest(t)
+}
+
 // TestGhHTTPClient_UpdatesDefaultRateLimiter verifies ghHTTPClient's Transport
 // (rateLimitTransport) feeds every response through DefaultRateLimiter.Update,
 // so IsLimited() reflects real rate-limit state instead of always returning
 // false (github/rate_limit.go's Update had zero callers before this wiring).
 func TestGhHTTPClient_UpdatesDefaultRateLimiter(t *testing.T) {
-	orig := DefaultRateLimiter
-	DefaultRateLimiter = &RateLimiter{}
-	t.Cleanup(func() { DefaultRateLimiter = orig })
+	resetRateLimiterForTest(t)
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Retry-After", "5")
@@ -209,5 +224,39 @@ func TestGhHTTPClient_UpdatesDefaultRateLimiter(t *testing.T) {
 	}
 	if until.Before(time.Now()) {
 		t.Errorf("IsLimited() resume time %v is not in the future", until)
+	}
+}
+
+// TestRateLimitTransport_SkipsRequestWhenAlreadyLimited verifies the
+// fail-fast gate added to rateLimitTransport.RoundTrip: once
+// DefaultRateLimiter knows we're rate limited (from any prior response, on
+// any request), a subsequent request must not reach the network at all —
+// it should get an immediate error instead of another guaranteed 403/429.
+// Without this gate, every caller retry (e.g. report_duplicate's GitHub
+// verification, manually re-invoked by an agent after seeing a 403) just
+// re-drew an identical failure instead of a fast, actionable one.
+func TestRateLimitTransport_SkipsRequestWhenAlreadyLimited(t *testing.T) {
+	resetRateLimiterForTest(t)
+
+	reached := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		reached = true
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	DefaultRateLimiter.setLimitedUntil(time.Now().Add(time.Minute))
+
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, server.URL, nil)
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+
+	_, err = ghHTTPClient.Do(req)
+	if err == nil {
+		t.Fatal("ghHTTPClient.Do() error = nil, want a rate-limited short-circuit error")
+	}
+	if reached {
+		t.Error("request reached the server despite DefaultRateLimiter already being limited")
 	}
 }

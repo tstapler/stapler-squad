@@ -14,6 +14,7 @@ import (
 )
 
 func TestHistoryFileWatcher_FiresOnJSONLCreate(t *testing.T) {
+	t.Parallel()
 	tmpDir := t.TempDir()
 
 	var mu sync.Mutex
@@ -49,6 +50,7 @@ func TestHistoryFileWatcher_FiresOnJSONLCreate(t *testing.T) {
 }
 
 func TestHistoryFileWatcher_DoesNotFireOnNonJSONL(t *testing.T) {
+	t.Parallel()
 	tmpDir := t.TempDir()
 
 	var mu sync.Mutex
@@ -84,6 +86,7 @@ func TestHistoryFileWatcher_DoesNotFireOnNonJSONL(t *testing.T) {
 }
 
 func TestHistoryFileWatcher_FiresOnRename(t *testing.T) {
+	t.Parallel()
 	tmpDir := t.TempDir()
 
 	var mu sync.Mutex
@@ -119,6 +122,7 @@ func TestHistoryFileWatcher_FiresOnRename(t *testing.T) {
 }
 
 func TestHistoryFileWatcher_DirectoryNotExist_NoError(t *testing.T) {
+	t.Parallel()
 	nonExistentDir := filepath.Join(t.TempDir(), "does-not-exist")
 
 	watcher := NewHistoryFileWatcher(nonExistentDir, func(filePath string) {})
@@ -132,6 +136,7 @@ func TestHistoryFileWatcher_DirectoryNotExist_NoError(t *testing.T) {
 }
 
 func TestHistoryFileWatcher_ContextCancellationStopsWatcher(t *testing.T) {
+	t.Parallel()
 	tmpDir := t.TempDir()
 
 	callbackCount := 0
@@ -171,6 +176,7 @@ func TestHistoryFileWatcher_ContextCancellationStopsWatcher(t *testing.T) {
 }
 
 func TestHistoryFileWatcher_FiresOnJSONLInSubdirCreatedAfterStart(t *testing.T) {
+	t.Parallel()
 	tmpDir := t.TempDir()
 
 	var mu sync.Mutex
@@ -208,6 +214,7 @@ func TestHistoryFileWatcher_FiresOnJSONLInSubdirCreatedAfterStart(t *testing.T) 
 }
 
 func TestHistoryFileWatcher_FiltersAgentJSONL(t *testing.T) {
+	t.Parallel()
 	tmpDir := t.TempDir()
 
 	var mu sync.Mutex

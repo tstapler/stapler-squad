@@ -25,12 +25,15 @@ import (
 // it to STUCK_REASON_UNSPECIFIED, while all six known domain.StuckReason
 // constants map to their matching proto enum value.
 func TestToProtoStuckReason_should_mapToUnspecified_When_UnknownString(t *testing.T) {
+	t.Parallel()
 	t.Run("unknown reason maps to unspecified", func(t *testing.T) {
+		t.Parallel()
 		got := toProtoStuckReason(domain.StuckReason("banana"))
 		assert.Equal(t, sessionv1.StuckReason_STUCK_REASON_UNSPECIFIED, got)
 	})
 
 	t.Run("empty reason maps to unspecified", func(t *testing.T) {
+		t.Parallel()
 		got := toProtoStuckReason(domain.StuckReason(""))
 		assert.Equal(t, sessionv1.StuckReason_STUCK_REASON_UNSPECIFIED, got)
 	})
@@ -53,6 +56,7 @@ func TestToProtoStuckReason_should_mapToUnspecified_When_UnknownString(t *testin
 	}
 	for _, c := range cases {
 		t.Run(string(c.reason), func(t *testing.T) {
+			t.Parallel()
 			assert.Equal(t, c.want, toProtoStuckReason(c.reason))
 			// Round-trip: the inverse mapping must recover the same domain reason.
 			assert.Equal(t, c.reason, fromProtoStuckReason(c.want))
@@ -65,6 +69,7 @@ func TestToProtoStuckReason_should_mapToUnspecified_When_UnknownString(t *testin
 // Epic 1.1) maps to its dedicated proto enum value rather than falling
 // through to STUCK_REASON_UNSPECIFIED.
 func TestToProtoStuckReason_should_ReturnMultipleReasons_When_DomainStuckReasonMultipleReasons(t *testing.T) {
+	t.Parallel()
 	got := toProtoStuckReason(domain.StuckReasonMultipleReasons)
 	assert.Equal(t, sessionv1.StuckReason_STUCK_REASON_MULTIPLE_REASONS, got)
 }
@@ -73,6 +78,7 @@ func TestToProtoStuckReason_should_ReturnMultipleReasons_When_DomainStuckReasonM
 // verifies the inverse mapping for the new synthetic aggregate reason
 // (backlog-bounce-escalation, Epic 1.1) recovers the correct domain constant.
 func TestFromProtoStuckReason_should_ReturnBounceCapExhausted_When_ProtoBounceCapExhausted(t *testing.T) {
+	t.Parallel()
 	got := fromProtoStuckReason(sessionv1.StuckReason_STUCK_REASON_BOUNCE_CAP_EXHAUSTED)
 	assert.Equal(t, domain.StuckReasonBounceCapExhausted, got)
 }
@@ -105,6 +111,7 @@ func seedOpenStuckRow(t *testing.T, storage *session.Storage, itemID string, rea
 // parent item) to a StuckBacklogItem with the correct reason enum, PR
 // context, and duration.
 func TestListStuckBacklogItems_should_returnMappedItems_When_OpenRowsExist(t *testing.T) {
+	t.Parallel()
 	storage := createTestStorage(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	ctx := t.Context()
@@ -149,6 +156,7 @@ func TestListStuckBacklogItems_should_returnMappedItems_When_OpenRowsExist(t *te
 // (StuckItemDetail.tsx) has real data to check instead of trusting `reason`
 // alone (research/pitfalls.md #1).
 func TestListStuckBacklogItems_should_PopulatePlanArtifactsPath(t *testing.T) {
+	t.Parallel()
 	storage := createTestStorage(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	ctx := t.Context()
@@ -189,6 +197,7 @@ func TestListStuckBacklogItems_should_PopulatePlanArtifactsPath(t *testing.T) {
 // verifies SnoozeStuckItem sets snoozed_until on the matching open row and
 // that the next ListStuckBacklogItems call omits it.
 func TestSnoozeStuckItem_should_setSnoozedUntilAndOmitFromList_When_Called(t *testing.T) {
+	t.Parallel()
 	storage := createTestStorage(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	ctx := t.Context()
@@ -223,6 +232,7 @@ func TestSnoozeStuckItem_should_setSnoozedUntilAndOmitFromList_When_Called(t *te
 // TestSnoozeStuckItem_should_rejectInvalidArguments_When_ReasonOrItemMissing
 // covers the handler's input validation guards.
 func TestSnoozeStuckItem_should_rejectInvalidArguments_When_ReasonOrItemMissing(t *testing.T) {
+	t.Parallel()
 	storage := createTestStorage(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	ctx := t.Context()
@@ -247,6 +257,7 @@ func TestSnoozeStuckItem_should_rejectInvalidArguments_When_ReasonOrItemMissing(
 // verifies the RPC handler resets remediation_attempts/next_remediation_at on
 // the matching open row and the reset is visible via ListStuckBacklogItems.
 func TestResetStuckRemediation_should_clearCountersAndSurfaceInList_When_RowIsOpen(t *testing.T) {
+	t.Parallel()
 	storage := createTestStorage(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	ctx := t.Context()
@@ -279,6 +290,7 @@ func TestResetStuckRemediation_should_clearCountersAndSurfaceInList_When_RowIsOp
 // TestResetStuckRemediation_should_rejectInvalidArguments_When_ReasonOrItemMissing
 // mirrors SnoozeStuckItem's input validation test.
 func TestResetStuckRemediation_should_rejectInvalidArguments_When_ReasonOrItemMissing(t *testing.T) {
+	t.Parallel()
 	storage := createTestStorage(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	ctx := t.Context()
@@ -302,6 +314,7 @@ func TestResetStuckRemediation_should_rejectInvalidArguments_When_ReasonOrItemMi
 // only_parked_explicitly_set — a parked row is reset, a mid-backoff
 // (not-yet-parked) row is left alone.
 func TestBulkResetStuckRemediation_should_defaultToOnlyParked_When_FlagNotExplicitlySet(t *testing.T) {
+	t.Parallel()
 	storage := createTestStorage(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	ctx := t.Context()
@@ -339,6 +352,7 @@ func TestBulkResetStuckRemediation_should_defaultToOnlyParked_When_FlagNotExplic
 // verifies only_parked_explicitly_set=true with only_parked=false performs a
 // full reset regardless of attempt count.
 func TestBulkResetStuckRemediation_should_resetEveryOpenRow_When_OnlyParkedExplicitlyFalse(t *testing.T) {
+	t.Parallel()
 	storage := createTestStorage(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	ctx := t.Context()
@@ -361,6 +375,7 @@ func TestBulkResetStuckRemediation_should_resetEveryOpenRow_When_OnlyParkedExpli
 // TestTriggerRemediationNow_should_reject_When_NoOpenStuckRow verifies the
 // operator "Retry now" RPC fails clearly when there is nothing to remediate.
 func TestTriggerRemediationNow_should_reject_When_NoOpenStuckRow(t *testing.T) {
+	t.Parallel()
 	storage := createTestStorage(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	ctx := t.Context()
@@ -380,6 +395,7 @@ func TestTriggerRemediationNow_should_reject_When_NoOpenStuckRow(t *testing.T) {
 // parked row (remediation_attempts at cap) is not silently un-parked by a
 // manual trigger — the operator must call ResetStuckRemediation first.
 func TestTriggerRemediationNow_should_reject_When_AlreadyParked(t *testing.T) {
+	t.Parallel()
 	storage := createTestStorage(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	ctx := t.Context()
@@ -407,6 +423,7 @@ func TestTriggerRemediationNow_should_reject_When_AlreadyParked(t *testing.T) {
 // a Phase B reason (no wired remediation action yet) is rejected with
 // Unimplemented rather than silently doing nothing.
 func TestTriggerRemediationNow_should_reject_When_ReasonHasNoPhaseAAction(t *testing.T) {
+	t.Parallel()
 	storage := createTestStorage(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	ctx := t.Context()
@@ -429,6 +446,7 @@ func TestTriggerRemediationNow_should_reject_When_ReasonHasNoPhaseAAction(t *tes
 // legitimate, error-free outcome) and the attempt is recorded exactly like a
 // normal dispatcher-triggered one.
 func TestTriggerRemediationNow_should_succeedAndConsumeAnAttempt_When_ActionRuns(t *testing.T) {
+	t.Parallel()
 	storage := createTestStorage(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	ctx := t.Context()
@@ -521,6 +539,7 @@ var reasonsWithoutAutomatedRemediation = map[domain.StuckReason]bool{
 // switches there use iota types with intentional defaults — this test is the
 // narrowly-scoped substitute for this one specific reason/action contract.
 func TestRemediationActionByReason_should_beDecidedForEveryStuckReason_When_NewReasonIsAdded(t *testing.T) {
+	t.Parallel()
 	svc := NewBacklogService(nil, nil, nil, nil, nil, nil)
 	for _, reason := range domain.AllStuckReasons {
 		wired := svc.remediationActionByReason(reason) != nil

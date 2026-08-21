@@ -101,8 +101,36 @@ func joinWithinDir(baseDir, name string) (string, error) {
 	return joined, nil
 }
 
-// checkGHCLI checks if GitHub CLI is installed and configured
-func checkGHCLI() error {
+// CanonicalizeWorktreePath resolves path to its symlink-free (realpath'd) form,
+// matching what `git worktree list --porcelain` reports and what
+// getWorktreeDirectory already produces for freshly-created worktree parents.
+// On macOS /var (and /tmp) is itself a symlink to /private/var, so two code
+// paths that construct the "same" worktree path differently — one via
+// filepath.Join on an unresolved parent, the other by reading git's
+// already-resolved output — end up as different strings for the identical
+// directory (see TestBacklogFullLifecycle_SDDTriageWorktreeIsReusedBySpawnedWorkSession).
+// EvalSymlinks requires the path to exist, which doesn't hold for the
+// pre-creation/rehydration cases this is also used in; falling back to
+// filepath.Clean on ANY error (not just ENOENT) keeps this a pure, non-failing
+// normalizer, matching the established pattern in session/history_detector.go,
+// session/import_correlate.go, and session/unfinished/gogitstore/open.go.
+func CanonicalizeWorktreePath(path string) string {
+	if path == "" {
+		return path
+	}
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return filepath.Clean(path)
+	}
+	return resolved
+}
+
+// checkGHCLI checks if GitHub CLI is installed and configured. The auth
+// check runs through g.cmdExec (the same injectable executor every other gh
+// call on GitWorktree uses) rather than shelling out directly, so tests that
+// already inject a fake executor for gh pr create/list don't also need a
+// real, authenticated `gh` binary on PATH just to get past this guard.
+func (g *GitWorktree) checkGHCLI() error {
 	// Check if gh is installed
 	if _, err := exec.LookPath("gh"); err != nil {
 		return fmt.Errorf("GitHub CLI (gh) is not installed. Please install it first")
@@ -112,7 +140,13 @@ func checkGHCLI() error {
 	authCtx, authCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer authCancel()
 	cmd := safeexec.CommandContext(authCtx, "gh", "auth", "status")
-	if err := cmd.Run(); err != nil {
+	var err error
+	if g.cmdExec != nil {
+		_, err = g.cmdExec.CombinedOutput(cmd)
+	} else {
+		err = cmd.Run()
+	}
+	if err != nil {
 		return fmt.Errorf("GitHub CLI is not configured. Please run 'gh auth login' first")
 	}
 

@@ -52,6 +52,7 @@ import { useAppDispatch, useAppSelector } from "@/lib/store";
 import {
   upsertItem,
   removeItem,
+  appendActivityNote,
   selectAllBacklogItems,
   selectBacklogItemsLiveVersionMap,
 } from "@/lib/store/backlogItemsSlice";
@@ -315,6 +316,14 @@ export function useWatchBacklogItems(
         case "itemRemoved":
           dispatch(removeItem(event.event.value.itemId));
           break;
+        case "activityNoteAdded": {
+          // ADR-002: a dedicated single-entry event — never a full item
+          // snapshot — so it dispatches the targeted appendActivityNote
+          // reducer, never upsertItem.
+          const { itemId, note } = event.event.value;
+          if (note) dispatch(appendActivityNote({ itemId, note }));
+          break;
+        }
         case "snapshotComplete":
           // Synthetic, content-free marker (see backlog_service_events.go's
           // watchBacklogItems) sent when the initial snapshot/replay phase

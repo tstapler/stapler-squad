@@ -23,10 +23,17 @@ type ZombieInfo struct {
 // ScanZombies returns zombie processes (state "Z") that are direct children of
 // the current process. Only direct children can be reaped via Wait4(-1, WNOHANG),
 // so reporting system-wide zombies would produce un-reapable noise.
-func ScanZombies() ([]ZombieInfo, error) {
+//
+// The `ps` subprocess is bounded to 10s, derived from ctx so that canceling ctx
+// (e.g. StartZombieWatcher's caller signaling shutdown) aborts an in-flight `ps`
+// call immediately instead of leaving the caller's select loop blocked inside
+// ScanZombies for up to the full 10s even after shutdown was requested — this
+// was the root cause of an intermittent goroutine-leak-looking failure in
+// TestStartZombieWatcher_GoroutineFullyExits_When_WaitGroupIsJoined under load.
+func ScanZombies(ctx context.Context) ([]ZombieInfo, error) {
 	ourPID := os.Getpid()
 	// -axo: all processes, custom columns; state Z = zombie
-	psCtx, psCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	psCtx, psCancel := context.WithTimeout(ctx, 10*time.Second)
 	defer psCancel()
 	psCmd := safeexec.CommandContext(psCtx, "ps", "-axo", "pid,ppid,stat,comm")
 	out, err := psCmd.Output()
@@ -68,14 +75,6 @@ func ScanZombies() ([]ZombieInfo, error) {
 	return zombies, scanner.Err()
 }
 
-// scanZombiesFn is the seam StartZombieWatcher calls through instead of
-// ScanZombies directly, so tests can substitute a fake that doesn't fork a
-// real "ps" subprocess. ScanZombies's real latency is unbounded under system
-// load (a real OS process fork/exec/wait), which makes any fixed wall-clock
-// assertion around it inherently flaky; production callers always get the
-// real ScanZombies via this default.
-var scanZombiesFn = ScanZombies
-
 // StartZombieWatcher starts a background goroutine that periodically scans for zombie
 // processes and records them via RecordZombieProcess when found. ctx controls its lifetime.
 // interval is how often to scan (recommended: 30s).
@@ -85,11 +84,10 @@ var scanZombiesFn = ScanZombies
 // appear after the baseline (i.e. growth over time) are recorded and counted toward the
 // alert threshold. This prevents a burst of spurious critical alerts on service restart
 // when a stable set of zombie children already exists.
-// wg.Add(1) is called before the goroutine starts, and the goroutine calls wg.Done() on exit
-// so callers can join it (e.g. server.Server.Shutdown()) via a bounded wg.Wait(). Closes the
-// signal-vs-join gap noted alongside StartForkPressureLogger (fork_metrics.go) and
-// PTYDiscovery.Stop() (session/pty_discovery.go); tracked as backlog item
-// 81e82fee-9528-4dc9-a513-1040b4dee2ec.
+//
+// wg is joined by server.Server.Shutdown() (backlog item
+// 81e82fee-9528-4dc9-a513-1040b4dee2ec) — see the note on StartForkPressureLogger
+// in fork_metrics.go for the shutdown-join rationale.
 func StartZombieWatcher(ctx context.Context, interval time.Duration, warnFn func(string, ...any), wg *sync.WaitGroup) {
 	wg.Add(1)
 	go func() {
@@ -107,18 +105,18 @@ func StartZombieWatcher(ctx context.Context, interval time.Duration, warnFn func
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				firstScan = watchZombieTick(warnFn, reported, firstScan)
+				firstScan = scanZombieTick(ctx, warnFn, reported, firstScan)
 			}
 		}
 	}()
 }
 
-// watchZombieTick performs one scan/reap/report/evict cycle for
-// StartZombieWatcher's ticker loop, and returns the updated firstScan value.
-// Split out from StartZombieWatcher to keep the ticker goroutine's cognitive
-// complexity under the repo's gocognit gate.
-func watchZombieTick(warnFn func(string, ...any), reported map[int]bool, firstScan bool) bool {
-	zombies, err := scanZombiesFn()
+// scanZombieTick runs one StartZombieWatcher scan cycle: it scans for zombies,
+// immediately reaps any found, records newly-seen ones (baseline entries during
+// firstScan are logged but not counted toward the alert threshold), and evicts
+// stale PIDs from reported. It returns the next value for firstScan.
+func scanZombieTick(ctx context.Context, warnFn func(string, ...any), reported map[int]bool, firstScan bool) bool {
+	zombies, err := ScanZombies(ctx)
 	if err != nil {
 		// ps failure is non-fatal
 		return firstScan
@@ -129,7 +127,7 @@ func watchZombieTick(warnFn func(string, ...any), reported map[int]bool, firstSc
 
 	if len(zombies) > 0 {
 		// Immediately reap rather than waiting for the 60s background tick.
-		// Doing this before recording ensure we've at least tried to clean
+		// Doing this before recording ensures we've at least tried to clean
 		// up before the fork pressure monitor evaluates the alert state.
 		if n := reapZombieChildren(); n > 0 {
 			warnFn("[zombie-reaper] reaped %d zombie child(ren) on detection", n)

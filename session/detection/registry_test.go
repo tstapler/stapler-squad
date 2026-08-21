@@ -8,6 +8,7 @@ import (
 )
 
 func TestDetectorRegistry_should_returnDetector_When_registeredByName(t *testing.T) {
+	t.Parallel()
 	r := NewDetectorRegistry()
 	// Use a minimal anonymous detector
 	r.Register(&stubBinaryDetector{name: "testbinary"})
@@ -21,6 +22,7 @@ func TestDetectorRegistry_should_returnDetector_When_registeredByName(t *testing
 }
 
 func TestDetectorRegistry_should_returnFalse_When_binaryNotRegistered(t *testing.T) {
+	t.Parallel()
 	r := NewDetectorRegistry()
 	_, ok := r.Lookup("nonexistent")
 	if ok {
@@ -29,6 +31,7 @@ func TestDetectorRegistry_should_returnFalse_When_binaryNotRegistered(t *testing
 }
 
 func TestDetectorRegistry_should_panic_When_duplicateNameRegistered(t *testing.T) {
+	t.Parallel()
 	defer func() {
 		if r := recover(); r == nil {
 			t.Fatal("expected panic on duplicate registration, got none")
@@ -40,6 +43,7 @@ func TestDetectorRegistry_should_panic_When_duplicateNameRegistered(t *testing.T
 }
 
 func TestDetectorRegistry_Len_should_reflectRegisteredCount(t *testing.T) {
+	t.Parallel()
 	r := NewDetectorRegistry()
 	if r.Len() != 0 {
 		t.Fatalf("empty registry Len() = %d, want 0", r.Len())
@@ -52,6 +56,7 @@ func TestDetectorRegistry_Len_should_reflectRegisteredCount(t *testing.T) {
 }
 
 func TestDefaultRegistry_should_have5Entries(t *testing.T) {
+	t.Parallel()
 	r := DefaultRegistry()
 	const want = 5
 	if r.Len() != want {
@@ -86,6 +91,7 @@ func (f *fakeDetector) Patterns() StatusPatterns      { return f.patterns }
 func (f *fakeDetector) FilterContent(c string) string { return c }
 
 func TestDetectorRegistry_should_replaceEntry_When_upsertCalledWithExistingName(t *testing.T) {
+	t.Parallel()
 	r := NewDetectorRegistry()
 	r.Register(binaries.NewClaudeDetector())
 
@@ -105,6 +111,7 @@ func TestDetectorRegistry_should_replaceEntry_When_upsertCalledWithExistingName(
 }
 
 func TestMergedRegistry_should_overrideBuiltinAndNotGrow_When_pluginNameMatchesBuiltin(t *testing.T) {
+	t.Parallel()
 	builtins := DefaultRegistry()
 	override := &fakeDetector{
 		name: "claude",
@@ -128,6 +135,7 @@ func TestMergedRegistry_should_overrideBuiltinAndNotGrow_When_pluginNameMatchesB
 }
 
 func TestMergedRegistry_should_addEntry_When_pluginNameIsNew(t *testing.T) {
+	t.Parallel()
 	builtins := DefaultRegistry()
 	fresh := &fakeDetector{name: "my-agent"}
 
@@ -142,6 +150,7 @@ func TestMergedRegistry_should_addEntry_When_pluginNameIsNew(t *testing.T) {
 }
 
 func TestMergedRegistry_should_notMutateInputRegistry_When_pluginOverridesBuiltin(t *testing.T) {
+	t.Parallel()
 	builtins := DefaultRegistry()
 	override := &fakeDetector{name: "claude"}
 

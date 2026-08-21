@@ -45,6 +45,7 @@ func (m *mockPTYReader) Clear() {
 
 // TestIdleDetector_PatternMatching tests pattern-based idle detection.
 func TestIdleDetector_PatternMatching(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name     string
 		output   string
@@ -113,6 +114,7 @@ func TestIdleDetector_PatternMatching(t *testing.T) {
 // TestIdleDetector_PatternMatching_FromContent verifies pattern matching via the production
 // path (DetectStateFromContent / DetectFromLines), which is what the review-queue poller calls.
 func TestIdleDetector_PatternMatching_FromContent(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name     string
 		content  string
@@ -161,7 +163,7 @@ func TestIdleDetector_PatternMatching_FromContent(t *testing.T) {
 				DebounceDelay: 0, // no debounce in these unit tests
 				BufferSize:    4096,
 			}
-			detector := NewIdleDetectorWithConfig("test", buffer, cfg)
+			detector, _ := newDetectorWithFakeClock("test", buffer, cfg)
 			got := detector.DetectStateFromContent(tt.content)
 			if got != tt.expected {
 				t.Errorf("%s: DetectStateFromContent(%q) = %v, want %v", tt.name, tt.content, got, tt.expected)
@@ -172,6 +174,7 @@ func TestIdleDetector_PatternMatching_FromContent(t *testing.T) {
 
 // TestIdleDetector_StateTransitions tests state transitions with debouncing.
 func TestIdleDetector_StateTransitions(t *testing.T) {
+	t.Parallel()
 	buffer := &mockPTYReader{}
 
 	config := IdleDetectorConfig{
@@ -209,6 +212,7 @@ func TestIdleDetector_StateTransitions(t *testing.T) {
 
 // TestIdleDetector_TimeoutDetection tests idle timeout detection.
 func TestIdleDetector_TimeoutDetection(t *testing.T) {
+	t.Parallel()
 	buffer := &mockPTYReader{}
 
 	config := IdleDetectorConfig{
@@ -238,6 +242,7 @@ func TestIdleDetector_TimeoutDetection(t *testing.T) {
 
 // TestIdleDetector_ActivityTracking tests that activity is tracked correctly.
 func TestIdleDetector_ActivityTracking(t *testing.T) {
+	t.Parallel()
 	buffer := &mockPTYReader{}
 
 	config := IdleDetectorConfig{
@@ -271,6 +276,7 @@ func TestIdleDetector_ActivityTracking(t *testing.T) {
 
 // TestIdleDetector_GetIdleDuration tests idle duration calculation.
 func TestIdleDetector_GetIdleDuration(t *testing.T) {
+	t.Parallel()
 	buffer := &mockPTYReader{}
 
 	config := IdleDetectorConfig{
@@ -302,6 +308,7 @@ func TestIdleDetector_GetIdleDuration(t *testing.T) {
 
 // TestIdleDetector_IsIdle tests the simple IsIdle check.
 func TestIdleDetector_IsIdle(t *testing.T) {
+	t.Parallel()
 	buffer := &mockPTYReader{}
 
 	config := IdleDetectorConfig{
@@ -332,6 +339,7 @@ func TestIdleDetector_IsIdle(t *testing.T) {
 
 // TestIdleDetector_IsActive tests the IsActive check.
 func TestIdleDetector_IsActive(t *testing.T) {
+	t.Parallel()
 	buffer := &mockPTYReader{}
 
 	config := IdleDetectorConfig{
@@ -362,6 +370,7 @@ func TestIdleDetector_IsActive(t *testing.T) {
 
 // TestIdleDetector_Reset tests state reset functionality.
 func TestIdleDetector_Reset(t *testing.T) {
+	t.Parallel()
 	buffer := &mockPTYReader{}
 
 	config := IdleDetectorConfig{
@@ -386,6 +395,7 @@ func TestIdleDetector_Reset(t *testing.T) {
 
 // TestIdleDetector_GetStateInfo tests comprehensive state info retrieval.
 func TestIdleDetector_GetStateInfo(t *testing.T) {
+	t.Parallel()
 	buffer := &mockPTYReader{}
 
 	config := IdleDetectorConfig{
@@ -393,7 +403,7 @@ func TestIdleDetector_GetStateInfo(t *testing.T) {
 		DebounceDelay: 10 * time.Millisecond,
 		BufferSize:    4096,
 	}
-	detector := NewIdleDetectorWithConfig("test-session", buffer, config)
+	detector, _ := newDetectorWithFakeClock("test-session", buffer, config)
 
 	buffer.Write([]byte("— INSERT —"))
 	detector.DetectState()
@@ -415,6 +425,7 @@ func TestIdleDetector_GetStateInfo(t *testing.T) {
 
 // TestIdleDetector_ConfigUpdate tests configuration updates.
 func TestIdleDetector_ConfigUpdate(t *testing.T) {
+	t.Parallel()
 	buffer := &mockPTYReader{}
 
 	config := IdleDetectorConfig{
@@ -456,6 +467,7 @@ func TestIdleDetector_ConfigUpdate(t *testing.T) {
 
 // TestIdleDetector_InitializeFromTimestamp tests timestamp restoration with a frozen clock.
 func TestIdleDetector_InitializeFromTimestamp(t *testing.T) {
+	t.Parallel()
 	// Use a fake clock frozen at a specific point so boundary tests are deterministic.
 	buffer := &mockPTYReader{}
 	cfg := IdleDetectorConfig{IdleThreshold: time.Second, DebounceDelay: 0, BufferSize: 4096}
@@ -538,6 +550,7 @@ func TestIdleDetector_InitializeFromTimestamp(t *testing.T) {
 
 // TestIdleDetector_TimeoutAfterRestoration verifies timeout detection with restored timestamps.
 func TestIdleDetector_TimeoutAfterRestoration(t *testing.T) {
+	t.Parallel()
 	buffer := &mockPTYReader{}
 
 	// Simulate session that was idle 10 minutes ago, server restarts
@@ -570,6 +583,7 @@ func TestIdleDetector_TimeoutAfterRestoration(t *testing.T) {
 
 // TestIdleDetector_NoTimeoutForRecentRestoration verifies no false timeout for recent activity.
 func TestIdleDetector_NoTimeoutForRecentRestoration(t *testing.T) {
+	t.Parallel()
 	buffer := &mockPTYReader{}
 
 	// Simulate session that was active 2 seconds ago, server restarts
@@ -596,6 +610,7 @@ func TestIdleDetector_NoTimeoutForRecentRestoration(t *testing.T) {
 
 // TestIdleDetector_InitializeFromTimestamp_Idempotent tests multiple initialization calls.
 func TestIdleDetector_InitializeFromTimestamp_Idempotent(t *testing.T) {
+	t.Parallel()
 	buffer := &mockPTYReader{}
 	detector := NewIdleDetector("test", buffer)
 
@@ -621,6 +636,7 @@ func TestIdleDetector_InitializeFromTimestamp_Idempotent(t *testing.T) {
 
 // TestIdleDetector_RecordActivity tests the event-driven activity recording.
 func TestIdleDetector_RecordActivity(t *testing.T) {
+	t.Parallel()
 	buffer := &mockPTYReader{}
 	detector, advance := newDetectorWithFakeClock("test", buffer, DefaultIdleDetectorConfig())
 
@@ -646,6 +662,7 @@ func TestIdleDetector_RecordActivity(t *testing.T) {
 
 // TestIdleDetector_InitializeFromTimestamp_ThreadSafety tests concurrent initialization.
 func TestIdleDetector_InitializeFromTimestamp_ThreadSafety(t *testing.T) {
+	t.Parallel()
 	buffer := &mockPTYReader{}
 	detector := NewIdleDetector("test", buffer)
 
@@ -675,6 +692,7 @@ func TestIdleDetector_InitializeFromTimestamp_ThreadSafety(t *testing.T) {
 }
 
 func TestNewIdleDetectorWithDetector_should_acceptInjectedDetector(t *testing.T) {
+	t.Parallel()
 	sd := NewStatusDetector()
 	sd.SetSessionID("test-session")
 	pa := &mockPTYReader{data: []byte("? for shortcuts")}
@@ -685,6 +703,7 @@ func TestNewIdleDetectorWithDetector_should_acceptInjectedDetector(t *testing.T)
 }
 
 func TestNewIdleDetectorWithDetector_should_useInjected_When_nonNil(t *testing.T) {
+	t.Parallel()
 	sd := NewStatusDetector()
 	sd.SetSessionID("test-session")
 	pa := &mockPTYReader{data: []byte("? for shortcuts")}
@@ -698,6 +717,7 @@ func TestNewIdleDetectorWithDetector_should_useInjected_When_nonNil(t *testing.T
 }
 
 func TestNewIdleDetectorWithDetector_should_createOwn_When_nilInjected(t *testing.T) {
+	t.Parallel()
 	pa := &mockPTYReader{data: []byte("? for shortcuts")}
 	id := NewIdleDetectorWithDetector("test", pa, DefaultIdleDetectorConfig(), nil)
 	state := id.DetectState()

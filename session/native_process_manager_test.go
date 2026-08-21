@@ -35,6 +35,7 @@ var _ ProcessManager = (*NativeProcessManager)(nil)
 
 // TestNativeProcessManager_ImplementsProcessManager documents the compile-time check.
 func TestNativeProcessManager_ImplementsProcessManager(t *testing.T) {
+	t.Parallel()
 	// This test exists to document that the compile-time check above is intentional.
 	// If NativeProcessManager were missing any ProcessManager method, this file
 	// would not compile.
@@ -43,6 +44,7 @@ func TestNativeProcessManager_ImplementsProcessManager(t *testing.T) {
 
 // T-UNIT-10: GetSessionIdentifier returns the stable session name from construction.
 func TestNativeProcessManager_GetSessionIdentifier_IsStable(t *testing.T) {
+	t.Parallel()
 	mgr := NewNativeProcessManager(ProcessManagerOptions{
 		SessionName: "my-stable-session",
 		Program:     "bash",
@@ -54,6 +56,7 @@ func TestNativeProcessManager_GetSessionIdentifier_IsStable(t *testing.T) {
 
 // T-UNIT-7: Start() allocates a PTY — ptm field is non-nil after Start().
 func TestNativeProcessManager_StartAllocatesPTY(t *testing.T) {
+	t.Parallel()
 	if testing.Short() {
 		t.Skip("requires PTY allocation")
 	}
@@ -77,6 +80,7 @@ func TestNativeProcessManager_StartAllocatesPTY(t *testing.T) {
 
 // T-UNIT-9: Close() stops the restart loop — goroutine count returns to baseline.
 func TestNativeProcessManager_CloseStopsRestartLoop(t *testing.T) {
+	t.Parallel()
 	if testing.Short() {
 		t.Skip("goroutine measurement; takes ~500ms")
 	}
@@ -105,6 +109,7 @@ func TestNativeProcessManager_CloseStopsRestartLoop(t *testing.T) {
 // T-UNIT-8: NativeProcessManager restarts after the supervised process is killed.
 // Primary demonstration of crash-restart behavior (requirement R3).
 func TestNativeProcessManagerRestartsAfterKill(t *testing.T) {
+	t.Parallel()
 	if testing.Short() {
 		t.Skip("requires process supervision; takes ~2s")
 	}
@@ -144,6 +149,7 @@ func TestNativeProcessManagerRestartsAfterKill(t *testing.T) {
 
 // T-INTEGRATION-1: Native session IsAlive() after Start().
 func TestNativeProcessManager_IsAliveAfterStart(t *testing.T) {
+	t.Parallel()
 	if testing.Short() {
 		t.Skip("integration: requires PTY")
 	}
@@ -168,6 +174,7 @@ func TestNativeProcessManager_IsAliveAfterStart(t *testing.T) {
 
 // T-UNIT-12: Start() after Close() resets the stop signal and produces a live process.
 func TestNativeProcessManager_StartAfterClose_Restarts(t *testing.T) {
+	t.Parallel()
 	if testing.Short() {
 		t.Skip("requires PTY allocation")
 	}
@@ -191,6 +198,7 @@ func TestNativeProcessManager_StartAfterClose_Restarts(t *testing.T) {
 
 // T-UNIT-13: GetCurrentWorkingDirectory returns the directory passed to Start().
 func TestNativeProcessManager_GetCurrentWorkingDirectory_ReturnsStartDir(t *testing.T) {
+	t.Parallel()
 	if testing.Short() {
 		t.Skip("requires PTY allocation")
 	}
@@ -211,6 +219,7 @@ func TestNativeProcessManager_GetCurrentWorkingDirectory_ReturnsStartDir(t *test
 
 // T-UNIT-14: SubscribeToControlModeUpdates receives PTY output via fanOut.
 func TestNativeProcessManager_FanOut_DeliversPTYOutput(t *testing.T) {
+	t.Parallel()
 	if testing.Short() {
 		t.Skip("requires PTY allocation")
 	}
@@ -248,6 +257,7 @@ func TestNativeProcessManager_FanOut_DeliversPTYOutput(t *testing.T) {
 
 // T-UNIT-11: Factory routes "native" → *NativeProcessManager.
 func TestNewProcessManager_ReturnsNativeProcessManager_WhenFlagIsNative(t *testing.T) {
+	t.Parallel()
 	RegisterBackendProvider(BackendNative)
 	defer RegisterBackendProvider(BackendTmux) // restore default for other tests
 

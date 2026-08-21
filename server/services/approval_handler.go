@@ -807,7 +807,7 @@ const (
 // InjectHookConfig below reflect whatever base URL is current at their point of use rather
 // than a value baked in at server- or package-construction time.
 func hookApprovalURL() string {
-	return hookEndpoints(hookBaseURLFn)[HookPermissionApproval]
+	return hookEndpoints(getHookBaseURLFn())[HookPermissionApproval]
 }
 
 // InjectHookConfig writes (or merges) the stapler-squad PermissionRequest HTTP hook
