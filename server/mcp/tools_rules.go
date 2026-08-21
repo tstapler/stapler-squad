@@ -59,6 +59,13 @@ func registerRulesTools(s *mcpserver.MCPServer, h *rulesHandlers) {
 		),
 		h.deleteApprovalRule,
 	)
+
+	s.AddTool(
+		mcpgo.NewTool("reload_claude_settings_rules",
+			mcpgo.WithDescription("Re-parse ~/.claude/settings.json (and project-level equivalents) and hot-swap the resulting rules into the live classifier, without a server restart."),
+		),
+		h.reloadClaudeSettingsRules,
+	)
 }
 
 // ApprovalRuleResult is the wire representation of an approval rule returned by MCP tools.
@@ -220,4 +227,22 @@ func (h *rulesHandlers) deleteApprovalRule(ctx context.Context, req mcpgo.CallTo
 		return workflowServiceErrResult(err)
 	}
 	return okResult(MCPResult{Success: resp.Msg.GetSuccess()}), nil
+}
+
+type ReloadClaudeSettingsRulesResult struct {
+	MCPResult
+	RuleCount int32  `json:"rule_count"`
+	Message   string `json:"message"`
+}
+
+func (h *rulesHandlers) reloadClaudeSettingsRules(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+	resp, err := h.svc.ReloadClaudeSettingsRules(ctx, connect.NewRequest(&sessionv1.ReloadClaudeSettingsRulesRequest{}))
+	if err != nil {
+		return workflowServiceErrResult(err)
+	}
+	return okResult(ReloadClaudeSettingsRulesResult{
+		MCPResult: MCPResult{Success: resp.Msg.GetSuccess()},
+		RuleCount: resp.Msg.GetRuleCount(),
+		Message:   resp.Msg.GetMessage(),
+	}), nil
 }

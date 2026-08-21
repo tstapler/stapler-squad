@@ -216,19 +216,39 @@ existing `EscalationReason`/`EscalationCategory` fields (`approval_handler.go:42
   (`server/services/approval_store.go:21-46`), with a doc comment mirroring the existing
   `EscalationReason`/`EscalationCategory` comment ("set once at creation ... `""` for
   approvals created before this field existed / not computed"). Files: `approval_store.go`.
-- **Task 1.1.2** — Set `RiskLevel: riskLevelString(escalation.RiskLevel)` in the
-  `PendingApproval{}` literal at `approval_handler.go:427-440`. Audit and update the 3 known
-  hand-rolled `PendingApproval{...}` test fixtures (`server/services/approval_service_test.go`,
-  `server/services/session_service_test.go`, `session/approval_automation_test.go`) — any
-  fixture a new severity-sensitive test reuses must explicitly set `RiskLevel`, not rely on
-  the Go zero value. Files: `approval_handler.go` + the 3 test files above.
-- **Task 1.1.3** — Add a regression test asserting production wiring always calls
-  `approvalHandler.SetClassifier(...)` (per `server/server.go:485`) before the handler serves
-  traffic, closing the loop on the one confirmed zero-value-`escalation` edge case
-  (`h.classifier == nil`). Add a one-line comment at the `h.classifier == nil` guard
-  (`approval_handler.go` ~line 307) documenting that this path yields `RiskLevel == ""` (not
-  `"low"`) by construction once Task 1.1.2 lands. Files: `server/server_test.go` (or the
-  existing wiring test file — verify exact location first), `approval_handler.go`.
+- **Task 1.1.2 (corrected post-validate — see pre-mortem.md Failure #1)** —
+  `riskLevelString()` (`analytics_store.go:574-587`) has **no branch that returns `""`**: its
+  `switch` covers all 4 enum values plus a `default: return "medium"`, and `escalation`
+  (`approval_handler.go:256`) is a zero-valued `classifier.ClassificationResult` when
+  `h.classifier == nil` — whose zero-value `RiskLevel` is `RiskLow` (`iota=0`), which
+  `riskLevelString` explicitly maps to `"low"`. Naively calling
+  `riskLevelString(escalation.RiskLevel)` unconditionally would therefore silently render an
+  unclassified/degraded approval as genuinely-computed **Low**, defeating ADR-001's fail-safe
+  design. Fix: introduce a `classified bool` local alongside `escalation` at
+  `approval_handler.go:256`, set `true` in both the domain-age synthetic branch (~line 277-289)
+  and the `h.classifier != nil` branch (~line 307-380) at the same point `escalation` is
+  assigned, left `false` otherwise. At the `createApproval:` label, compute
+  `riskLevel := ""; if classified { riskLevel = riskLevelString(escalation.RiskLevel) }` and
+  set `RiskLevel: riskLevel` in the `PendingApproval{}` literal (`approval_handler.go:427-440`).
+  Audit and update the 2 real hand-rolled `PendingApproval{...}` test fixtures
+  (`server/services/approval_service_test.go`, `server/services/session_service_test.go`) —
+  any fixture a new severity-sensitive test reuses must explicitly set `RiskLevel`, not rely
+  on the Go zero value. **Note**: `session/approval_automation_test.go` does NOT belong on
+  this list — it constructs the unrelated, identically-named `session.PendingApproval`
+  (`session/approval_automation.go:33`), part of a dead-code `ApprovalAutomation` subsystem
+  with zero callers of `NewApprovalAutomation` outside its own file (confirmed via
+  `grep -rln "ApprovalAutomation"`); do not touch it. Before relying on any hardcoded fixture
+  list, re-verify with `grep -rn "PendingApproval{" --include="*_test.go" server/services/`
+  scoped to the correct package. Files: `approval_handler.go`, `approval_store.go` + the 2
+  test files above.
+- **Task 1.1.3** — Add a unit test asserting that when `escalation` is never assigned (the
+  `h.classifier == nil` edge case, currently unreachable in production per
+  `server/server.go:485`'s wiring but silent if a future refactor reintroduces it), the
+  resulting `PendingApproval.RiskLevel == ""` — proving the `classified`-flag fix in Task
+  1.1.2 actually produces the fail-safe sentinel, not `"low"`. Add a regression test asserting
+  production wiring always calls `approvalHandler.SetClassifier(...)` before the handler
+  serves traffic. Files: `server/server_test.go` (or the existing wiring test file — verify
+  exact location first), `approval_handler_test.go`.
 
 #### Story 1.2 — Severity survives a server restart
 
@@ -296,7 +316,10 @@ in its JSON)
   (`proto/session/v1/types.proto:1034-1061`). Files: `types.proto`.
 - **Task 2.1.2** — Set `RiskLevel: a.RiskLevel` on the `PendingApprovalProto{}` literal in
   `ApprovalService.ListPendingApprovals` (`server/services/approval_service.go:174-185`).
-  Files: `approval_service.go`.
+  **(added post-triad — Engineering lens flagged AC2 as untested)**: add/extend a test in
+  `approval_service_test.go` asserting `resp.Msg.Approvals[i].RiskLevel` is set on a
+  `ListPendingApprovals` response, pairing this task with a test the way Story 2.2 already
+  pairs 2.2.1 with 2.2.2. Files: `approval_service.go`, `approval_service_test.go`.
 - **Task 2.1.3** — Run `make proto-gen && make proto-lint && make proto-build`; commit the
   regenerated `session/gen/session/v1/*.pb.go` and `web-app/src/gen/session/v1/*_pb.ts`
   together with the `.proto` source edit and the Go handler change in the same commit (per
@@ -322,7 +345,15 @@ distinguishes "key absent" from "key present but empty" as its "not recorded" si
   the enrichment block in `session/review_queue_poller.go` (~lines 840-860), directly beside
   the existing `EscalationReason`/`EscalationCategory` copies; extend the existing
   `log.Debug("enriched approval item with hook metadata", ...)` call to include the
-  `risk_level` field (Observability Plan). Files: `review_queue_poller.go`.
+  `risk_level` field (Observability Plan). **(added post-triad — closes
+  `docs/bugs/open/review-queue-gaps.md` GAP-004 as part of this feature, since an unfixed
+  GAP-004 directly undermines this feature's purpose)**: `review_queue_service.go:121`
+  currently selects the *first* pending approval when a session has multiple concurrent
+  approvals, which may not be the highest-risk one — before enrichment, change that selection
+  to pick the highest `RiskLevel` among the session's pending approvals (ties broken by
+  oldest/most-urgent, per GAP-004's own suggested fix), so `item.Metadata["risk_level"]`
+  reflects the most dangerous concurrent request, not an arbitrary one. Files:
+  `review_queue_poller.go`, `review_queue_service.go`.
 - **Task 2.2.2** — Add/extend a poller test asserting `item.Metadata["risk_level"]` is set
   when the stub provider returns a non-empty `RiskLevel`, and absent when it returns `""`.
   Files: `session/review_queue_poller_test.go`.
@@ -340,11 +371,16 @@ distinguishes "key absent" from "key present but empty" as its "not recorded" si
 **When** a client calls `GetApprovalAnalytics(window_days=7)`
 **Then** `AnalyticsSummaryProto.risk_level_counts == {"critical":5,"high":10,"medium":15,"low":10}`.
 
-- **Task 3.1.1** — Add `riskLevelCounts := make(map[string]int)` local next to
-  `escalationReasonCounts` in `ComputeSummary` (`server/services/analytics_store.go:321-458`,
-  ~line 345); increment `riskLevelCounts[e.RiskLevel]++` unconditionally inside the existing
-  `for _, e := range entries` loop (every `AnalyticsEntry` already carries a non-empty
-  `RiskLevel` string, unlike escalation reason which is conditional); assign
+- **Task 3.1.1 (corrected post-validate — see pre-mortem.md Failure #5)** — Add
+  `riskLevelCounts := make(map[string]int)` local next to `escalationReasonCounts` in
+  `ComputeSummary` (`server/services/analytics_store.go:321-458`, ~line 345); increment
+  `riskLevelCounts[e.RiskLevel]++` **scoped to escalations only**
+  (`if e.Decision == "escalate" { riskLevelCounts[e.RiskLevel]++ }`, matching the sibling
+  `escalationReasonCounts`'s existing conditional at `analytics_store.go:419`) — NOT
+  unconditionally over the full auto-allow/auto-deny/escalate traffic mix, which would give
+  this breakdown a different denominator than the adjacent "Escalation Reasons" section it
+  renders beside in `ApprovalAnalyticsPanel` and mislead readers comparing the two tables.
+  Assign
   `summary.RiskLevelCounts = riskLevelCounts` next to `summary.EscalationReasonCounts =
   escalationReasonCounts` (~line 455). Add `RiskLevelCounts map[string]int
   \`json:"risk_level_counts"\`` to the `AnalyticsSummary` struct
@@ -511,7 +547,10 @@ sorts as if High (fail-safe), never last.
   `riskLevel.ts` so it's shared with Epic 6's comparator, avoiding a second definition). Files:
   `ApprovalDrawer.tsx`, `riskLevel.ts`.
 - **Task 5.2.2** — Update `ApprovalDrawer.test.tsx` for the new sort order with the exact B→C→A
-  fixture above. Files: `ApprovalDrawer.test.tsx`.
+  fixture above, **plus (corrected post-validate) an explicit `riskLevel: ""` fixture**
+  asserting `riskLevelRank("")` sorts adjacent to/above High, never last — the same guarantee
+  Task 6.2.1 now tests for `ReviewQueuePanel`, both exercising `riskLevelRank` directly rather
+  than only `SeverityBadge`'s render-time unknown state. Files: `ApprovalDrawer.test.tsx`.
 
 #### Story 5.3 — Verify `ApprovalPanel.tsx`
 
@@ -576,8 +615,12 @@ it, and the already-rendered 3-item order does **not** change — sort is comput
   (`ReviewQueuePanel.tsx:242-244`) from `"default"` to `"severity"`. Add the severity
   comparator case to the existing sort `switch` (~line 375): descending by
   `riskLevelRank(item.metadata["risk_level"] ?? "")` (shared helper from Task 5.2.1), with the
-  existing `created_at`/age ordering as the tiebreaker for equal ranks. Files:
-  `ReviewQueuePanel.tsx`.
+  existing `created_at`/age ordering as the tiebreaker for equal ranks. **(corrected
+  post-validate — see adversarial-review.md Blocker "Zero test coverage for fail-safe sort")**
+  add a unit test with an explicit `riskLevel: ""` fixture asserting `riskLevelRank("")` sorts
+  adjacent to/above High and never last, directly exercising `riskLevelRank` (not just
+  `SeverityBadge`'s render-time unknown state, which is a different function). Files:
+  `ReviewQueuePanel.tsx`, `ReviewQueuePanel.test.tsx`.
 - **Task 6.2.2** — Move the sort computation so it runs once at `reviewingIdsSnapshot`
   capture/refresh time (the `useEffect` at `ReviewQueuePanel.tsx:283-296`) rather than inside
   the `allFilteredItems` `useMemo` (`:372-391`) that recomputes on every render — store the
@@ -594,13 +637,17 @@ it, and the already-rendered 3-item order does **not** change — sort is comput
 filter" empty-state copy/behavior (`ReviewQueuePanel.tsx:1221-1235`) applies unchanged when a
 combination of filters yields zero results.
 
-- **Task 6.3.1** — Add `severityFilter: Set<string>` state (mirroring `priorityFilter`/
-  `reasonFilter` at `ReviewQueuePanel.tsx:232-233`), add `"severity"` to `FILTER_URL_KEYS`
-  (`:124`), add the filter predicate to `allFilteredItems` (~line 341-345, alongside the
-  existing `priorityFilter`/`reasonFilter` filters), and add filter-chip UI with per-level
-  counts (mirroring the `priorityFilter` button block at `:1051-1062`) composed into the
-  existing `hasActiveFilter`/`clearAllFilters` pipeline (`:654`, `:681-694`). Files:
-  `ReviewQueuePanel.tsx`.
+- **Task 6.3.1 (corrected post-validate — see consistency-check NITPICK)** — Add
+  `severityFilter: Set<string>` state (mirroring `priorityFilter`/`reasonFilter` at
+  `ReviewQueuePanel.tsx:232-233`), add `"severity"` to `FILTER_URL_KEYS` (`:124`), add the
+  filter predicate to `allFilteredItems` (~line 341-345, alongside the existing
+  `priorityFilter`/`reasonFilter` filters), and add filter-chip UI with per-level counts
+  (mirroring the `priorityFilter` button block at `:1051-1062`) composed into the existing
+  `hasActiveFilter`/`clearAllFilters` pipeline (`:654`, `:681-694`). The chip set must include
+  a 5th **"Not recorded"** chip (value `""`) alongside the 4 `RiskLevel` chips, per
+  `design/ux.md` Surface 3's wireframe (`ux.md:131-132`) and edge case (`ux.md:177`) — items
+  with no `metadata["risk_level"]` key filter under this chip, not omitted from the filter UI
+  entirely. Files: `ReviewQueuePanel.tsx`.
 - **Task 6.3.2** — Tests: severity filter narrows the visible list correctly; combined with
   Story 6.2's severity sort; empty-state renders via the existing shared copy when the filter
   yields zero results. Files: `ReviewQueuePanel.test.tsx`.
@@ -665,3 +712,36 @@ is severity-first, and the severity filter narrows the list.
 - **Task 8.3.1** — `ADR-001-risk-level-vocabulary-and-fail-safe-representation.md` already
   written in `project_plans/review-queue-severity/decisions/` as part of this planning pass —
   no further action; referenced here for completeness of the task hierarchy.
+
+## Implementation Deviations
+
+**Task 6.2.2 (snapshot-order-freeze) was not implemented as specified.** The plan calls for
+moving severity sort computation to `reviewingIdsSnapshot` capture/refresh time (a dedicated
+frozen-order mechanism, plus a stability test simulating a poll that changes underlying data
+but not snapshot membership), to prevent visible reordering of already-rendered rows while a
+user is mid-review.
+
+**What shipped instead**: severity sort runs inside the same live `allFilteredItems` `useMemo`
+as every other `SortField` (priority/age/diffSize/name — none of which have a freeze
+mechanism either), with an inline comment at the `case "severity":` branch
+(`ReviewQueuePanel.tsx`) explaining why.
+
+**Reasoning**: `reviewingIdsSnapshot` already freezes *membership* — a session not in the
+snapshot can't appear in `items` regardless of sort field, so a genuinely new item can never
+appear mid-review without an explicit "N new items added" banner click. The remaining risk
+Task 6.2.2 was written to cover is an *already-visible* item's sort key changing under it. For
+every other `SortField` that's a live risk (priority/age/diffSize genuinely mutate over a
+session's lifetime) — but `PendingApproval.RiskLevel` is captured once at approval creation
+and never re-derived (`server/services/approval_store.go`, same contract as
+`EscalationReason`/`EscalationCategory`), so an already-visible item's `risk_level` cannot
+change while the user is reviewing it. The scenario the freeze exists to prevent has no live
+trigger for this specific field.
+
+**Why this is a deviation worth recording, not silently accepting**: an independent
+architecture review (sdd:6-verify Layer 2) flagged this as a CONCERN — a plan requirement and
+its regression test were dropped based on a judgment call that, while independently assessed
+as "plausible," was made unilaterally during implementation rather than reviewed before
+Epic 6 shipped. This section is that review, made explicit rather than left as only a code
+comment. If a future risk-level *re-derivation* path is ever added (e.g. re-classifying a
+stale approval against updated rules), this reasoning breaks and Task 6.2.2's freeze
+mechanism should be revisited for real.

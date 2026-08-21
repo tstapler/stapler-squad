@@ -50,6 +50,17 @@ type ServerDependencies struct {
 	HistoryLinker           *session.HistoryLinker
 	ErrorRegistry           *services.ErrorRegistry
 
+	// ClaudeSettingsWatcher watches ~/.claude/settings.json (and project-level
+	// equivalents) for edits and hot-reloads their derived auto-approval rules. Started
+	// from wireDepsIntoServer with the server's lifecycle context so it stops cleanly
+	// on shutdown.
+	ClaudeSettingsWatcher *services.ClaudeSettingsWatcher
+
+	// SlackNotifier is the single shared Slack notifier instance, wired into
+	// both ReactiveQueueMgr (review-queue items) and ApprovalHandler (pending
+	// approvals) so GetDeliveryStatus reflects sends from both trigger points.
+	SlackNotifier *services.SlackNotifier
+
 	// Unfinished work scanning.
 	UnfinishedScanner     *unfinished.Scanner
 	UnfinishedStateStore  *unfinished.StateStore
@@ -64,7 +75,10 @@ type ServerDependencies struct {
 	InsightsService *services.InsightsService
 
 	BacklogService *services.BacklogService
-	SyncLoop       *session.SyncLoop
+	// QuotaGate owns the account-wide session-quota pause/resume decision for
+	// backlog automation (see BacklogService/BacklogEnabledCheck above).
+	QuotaGate *services.QuotaGate
+	SyncLoop  *session.SyncLoop
 
 	// BacklogEnabledCheck reports the live runtime state of the "backlog" feature
 	// flag. See RuntimeDeps.BacklogEnabledCheck.
@@ -90,6 +104,11 @@ type ServerDependencies struct {
 
 	// WorkflowScheduler manages cron-based workflow execution.
 	WorkflowScheduler *workflows.Scheduler
+
+	// TriggerFireEventRepo persists the trigger-fire audit trail (webhook-triggers
+	// Epic 1.2), shared by Scheduler, WorkflowService, and the inbound webhook
+	// handlers (Epic 2.2/2.3). Nil when storage is not ent-backed.
+	TriggerFireEventRepo session.TriggerFireEventRepository
 
 	// Registry is the live-handle map for all running sessions.
 	Registry *session.Registry
@@ -120,6 +139,8 @@ func (rt *RuntimeDeps) ToServerDeps() *ServerDependencies {
 		ExternalApprovalMonitor: rt.ExternalApprovalMonitor,
 		HistoryLinker:           rt.HistoryLinker,
 		ErrorRegistry:           rt.ErrorRegistry,
+		ClaudeSettingsWatcher:   rt.ClaudeSettingsWatcher,
+		SlackNotifier:           rt.SlackNotifier,
 		UnfinishedScanner:       rt.UnfinishedScanner,
 		UnfinishedStateStore:    rt.UnfinishedStateStore,
 		UnfinishedWorkService:   rt.UnfinishedWorkService,
@@ -128,6 +149,7 @@ func (rt *RuntimeDeps) ToServerDeps() *ServerDependencies {
 		GitHubUserService:       rt.GitHubUserService,
 		InsightsService:         rt.InsightsService,
 		BacklogService:          rt.BacklogService,
+		QuotaGate:               rt.QuotaGate,
 		SyncLoop:                rt.SyncLoop,
 		BacklogEnabledCheck:     rt.BacklogEnabledCheck,
 		AnalyticsEntClient:      rt.AnalyticsEntClient,
@@ -136,6 +158,7 @@ func (rt *RuntimeDeps) ToServerDeps() *ServerDependencies {
 		HeadlessPool:            rt.HeadlessPool,
 		WorkflowRepo:            rt.WorkflowRepo,
 		WorkflowScheduler:       rt.WorkflowScheduler,
+		TriggerFireEventRepo:    rt.TriggerFireEventRepo,
 		Registry:                rt.Registry,
 		SessionSummaryGenerator: rt.SessionSummaryGenerator,
 	}
@@ -238,7 +261,7 @@ func syncOrphanedApprovalsToQueue(
 			item.Branch = inst.Branch
 			item.Path = inst.Path
 			item.WorkingDir = inst.WorkingDir
-			item.Status = inst.Status.String()
+			item.Status = inst.GetLifecycleStatus().String()
 			item.Tags = inst.Tags
 			item.Category = inst.Category
 			item.DiffStats = inst.GetDiffStats()
@@ -390,6 +413,14 @@ type RuntimeDeps struct {
 	HistoryLinker           *session.HistoryLinker
 	ErrorRegistry           *services.ErrorRegistry
 
+	// ClaudeSettingsWatcher (see the identically-named field on ServerDependencies for
+	// its full doc comment).
+	ClaudeSettingsWatcher *services.ClaudeSettingsWatcher
+
+	// SlackNotifier is the single shared Slack notifier instance (see the
+	// identically-named field on ServerDependencies for its full doc comment).
+	SlackNotifier *services.SlackNotifier
+
 	// Unfinished work scanning.
 	UnfinishedScanner     *unfinished.Scanner
 	UnfinishedStateStore  *unfinished.StateStore
@@ -404,8 +435,11 @@ type RuntimeDeps struct {
 	InsightsService *services.InsightsService
 
 	BacklogService *services.BacklogService
-	SyncLoop       *session.SyncLoop
-	Config         *config.Config // Used for encryption of sensitive data
+	// QuotaGate owns the account-wide session-quota pause/resume decision for
+	// backlog automation (see BacklogService/BacklogEnabledCheck above).
+	QuotaGate *services.QuotaGate
+	SyncLoop  *session.SyncLoop
+	Config    *config.Config // Used for encryption of sensitive data
 
 	// BacklogEnabledCheck reports the live runtime state of the "backlog" feature
 	// flag (backlogCtrl.IsEnabled). Threaded into the MCP server so backlog/goal
@@ -429,6 +463,11 @@ type RuntimeDeps struct {
 
 	// WorkflowScheduler manages cron-based workflow execution.
 	WorkflowScheduler *workflows.Scheduler
+
+	// TriggerFireEventRepo persists the trigger-fire audit trail (webhook-triggers
+	// Epic 1.2), shared by Scheduler, WorkflowService, and the inbound webhook
+	// handlers (Epic 2.2/2.3). Nil when storage is not ent-backed.
+	TriggerFireEventRepo session.TriggerFireEventRepository
 
 	// Registry is the live-handle map for all running sessions.
 	Registry *session.Registry
@@ -492,6 +531,20 @@ func (a *reviewQueueLookupAdapter) ReviewQueueResolvedCount(ctx context.Context,
 // ordering, DoesSessionExist() may trigger recoverFromServerFailure, which starts
 // a fresh server that considers all sessions non-existent and cold-restores them.
 // cfg may be nil; when non-nil, is used for token encryption in backlog sources.
+
+// recoverAndLog runs fn with its own panic recovery, logging under label if it
+// panics. Used by the 60s reconcile ticker so a panic in one tick's work
+// (e.g. QuotaGate.Reconcile) never prevents a sibling call in the same tick,
+// or any future tick, from running.
+func recoverAndLog(label string, fn func()) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Error(label+" recovered from panic", "recover", r)
+		}
+	}()
+	fn()
+}
+
 func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Config) (*RuntimeDeps, error) {
 	if svc == nil {
 		return nil, fmt.Errorf("BuildRuntimeDeps: ServiceDeps is nil (Phase 2 not completed)")
@@ -692,7 +745,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		// RecoverFromStopped resets the status to Ready (bypassing the terminal-state
 		// guard) so Start(false) can hot-attach to the existing tmux session.
 		for _, inst := range instances {
-			if inst.Status == session.Stopped && inst.TmuxSessionExists() {
+			if inst.GetLifecycleStatus() == session.Stopped && inst.TmuxSessionExists() {
 				log.Info("Reconcile: session is Stopped in DB but tmux is alive — restoring", "session", inst.Title)
 				inst.RecoverFromStopped()
 				if err := inst.Start(false); err != nil {
@@ -760,7 +813,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		for _, inst := range instances {
 			started := inst.Started()
 			paused := inst.Paused()
-			if started && !paused && inst.Status != session.Stopped {
+			if started && !paused && inst.GetLifecycleStatus() != session.Stopped {
 				if inst.GetController() == nil {
 					if err := inst.StartController(); err != nil {
 						log.Warn("failed to start controller", "session", inst.Title, "err", err)
@@ -781,7 +834,8 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 			if inst.InitialPrompt == "" {
 				continue
 			}
-			if inst.Status == session.Paused || inst.Status == session.Stopped || inst.Status == session.Hibernated {
+			status := inst.GetLifecycleStatus()
+			if status == session.Paused || status == session.Stopped || status == session.Hibernated {
 				continue
 			}
 			session.StartSessionDriver(inst, inst.GetEffectiveRootDir())
@@ -803,6 +857,33 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	// race window like SetHeadlessPool's had.
 	reactiveQueueMgr.SetOneShotRunner(sessionService)
 	log.Info("ReactiveQueueManager initialized")
+
+	// SlackNotifier (Epic 1.3, Story 1.3.1): a single shared instance, always
+	// constructed and wired — self-gating per-call when unconfigured (see
+	// slack_notifier.go's Notify*/MaybeNotify* no-op-when-unconfigured design),
+	// so no conditional construction is needed here.
+	slackNotifier := services.NewSlackNotifier()
+	reactiveQueueMgr.SetSlackNotifier(slackNotifier)
+
+	// CallbackDispatcher (webhook-triggers Phase 5, FR7-FR9): a single shared
+	// instance fires on_session_complete/on_session_stale/on_queue_item_created.
+	// Reads cfg.Callbacks and the webhook_triggers feature flag live on every
+	// Dispatch call, so a CallbackConfigService.UpdateCallbackConfig save takes
+	// effect immediately without a restart — same live-cfg-pointer shape as
+	// SetSharedBacklogConfig below. Wired to both the EntRepository (via
+	// Storage's forwarding setter, for on_session_complete/on_session_stale) and
+	// ReactiveQueueManager (for on_queue_item_created).
+	callbackDispatcher := services.NewCallbackDispatcher(cfg)
+	storage.SetCallbackDispatcher(callbackDispatcher)
+	reactiveQueueMgr.SetCallbackDispatcher(callbackDispatcher)
+	// Share callbackDispatcher's live *config.Config instance (and its guarding
+	// mutex) with CallbackConfigService so a Settings save of a callback URL
+	// takes effect on the very next Dispatch call instead of requiring a
+	// process restart (sdd:6-verify finding, mirrors PR #199 review F1's
+	// SetSharedBacklogConfig pattern) — see
+	// CallbackConfigService.SetSharedCallbackConfig's doc comment.
+	sessionService.SetSharedCallbackConfig(cfg, callbackDispatcher.ConfigMu())
+	log.Info("CallbackDispatcher initialized")
 
 	// Step 8.5: HistoryLinker — detects Claude JSONL files and links conversation
 	// UUIDs to sessions so cold restore can use --resume on restart.
@@ -883,7 +964,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 			item.Branch = inst.Branch
 			item.Path = inst.Path
 			item.WorkingDir = inst.WorkingDir
-			item.Status = inst.Status.String()
+			item.Status = inst.GetLifecycleStatus().String()
 			item.Tags = inst.Tags
 			item.Category = inst.Category
 			item.DiffStats = inst.GetDiffStats()
@@ -932,8 +1013,10 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 
 			// WorktreePRPoller enriches worktrees-without-sessions with GitHub PR data.
 			// The scannerSource adapter bridges session/unfinished → session without a cycle.
+			// Shares svc.PRStatusPoller's ETagCache instead of constructing its own — per
+			// ADR-022, a separate cache would double API call volume for repos both pollers hit.
 			worktreePRPoller = session.NewWorktreePRPoller(
-				githubpkg.NewETagCache(),
+				svc.PRStatusPoller.ETagCache(),
 				svc.PRStatusPoller,
 			)
 			worktreePRPoller.SetSource(&scannerSource{s: unfinishedScanner})
@@ -951,6 +1034,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		annotateUserPRCache(userPRCache, svc.PRStatusPoller, unfinishedScanner)
 	})
 	githubUserSvc := services.NewGitHubUserService(userPRCache, cfg.GetGitHubEnterpriseHosts())
+	sessionService.SetUserPRCache(userPRCache)
 
 	// Open the dedicated analytics database (non-fatal: fall back gracefully on failure).
 	var analyticsClient *ent.Client
@@ -968,33 +1052,52 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 
 	// One-time startup backfill: seed durable BacklogStuckState rows (with
 	// notified_at pre-set) for items that are already stuck, so the first
-	// genuine reconcile tick below does not re-notify for conditions already
-	// known before this restart. Must run before the ticker starts. Gated on
-	// the backlog feature flag directly (backlogCtrl isn't constructed until
-	// after the ticker below) — seeding rows a disabled ticker will never
-	// maintain would leave stale, un-reconciled rows behind.
+	// genuine reconcile tick does not re-notify for conditions already known
+	// before this restart. Must run before the ticker starts (constructed
+	// further below, after BacklogController/QuotaGate). Gated on the backlog
+	// feature flag directly (backlogCtrl isn't constructed yet at this point)
+	// — seeding rows a disabled ticker will never maintain would leave stale,
+	// un-reconciled rows behind.
 	if cfg.GetFeatureFlag("backlog") {
 		backlogLifecycleListener.BackfillStuckStates(context.Background())
 	}
 
-	// 60 s reconcile ticker: safety net for abnormal exits where EventExited cannot fire.
-	// This goroutine is the only fallback for review-gate respawn, stale-item detection,
-	// and PR-pending polling (merge/CI/conflict) — a panic here must not kill it silently.
-	go func() {
-		ticker := time.NewTicker(60 * time.Second)
-		defer ticker.Stop()
-		ctx := context.Background()
-		for range ticker.C {
-			func() {
-				defer func() {
-					if r := recover(); r != nil {
-						log.Error("backlog reconcile ticker recovered from panic", "recover", r)
-					}
-				}()
-				backlogLifecycleListener.ReconcileStuck(ctx)
-			}()
+	// Construct and start TokenStore early — before BacklogController/QuotaGate
+	// below — so QuotaGate's very first Reconcile (synchronous, at boot) can
+	// read real, restart-durable token-usage data instead of skipping the soft
+	// signal entirely for up to 60s. Only tokenStore/historyDir/homeDir are
+	// hoisted here; InsightsService construction, backlogSvc.SetTokenStore, and
+	// the ArtifactExtractor wiring stay at their original later position
+	// (below), now reading these already-constructed outer-scope variables.
+	homeDir, homeDirErr := os.UserHomeDir()
+	var tokenStore *tokens.TokenStore
+	var historyDir string
+	if homeDirErr == nil {
+		historyDir = filepath.Join(homeDir, ".claude", "projects")
+		if config.IsIsolatedInstance() {
+			// An isolated test/demo instance (go test binary, named instance,
+			// or STAPLER_SQUAD_TEST_DIR harness) must not walk the real,
+			// unbounded ~/.claude/projects tree below via TokenStore.Start /
+			// ArtifactExtractor.Start — on a dev machine with a long Claude
+			// Code history this is thousands of real JSONL files, some large,
+			// which overflows TokenStore's bounded parse queue and made the
+			// walk+parse take 100s-1500s+ in CI, well past any reasonable
+			// test timeout. Same hazard class as IsIsolatedInstance's other
+			// documented case (shared tmux socket); here the isolated
+			// resource is the config dir, so point historyDir there instead
+			// — the directory starts empty, so TokenStore/ArtifactExtractor
+			// stay fully functional (against test fixtures) without ever
+			// touching real session data.
+			if configDir, cfgErr := config.GetConfigDir(); cfgErr == nil {
+				historyDir = filepath.Join(configDir, "claude-projects")
+			}
 		}
-	}()
+		tokenStore = tokens.NewTokenStore(historyDir)
+		historyLinker.RegisterFileCallback(tokenStore.OnHistoryFileChanged)
+		tokenStore.Start(context.Background())
+	} else {
+		log.Warn("could not determine home dir for InsightsService token store", "err", homeDirErr)
+	}
 
 	// Build the BacklogController and initialize its enabled state from config.
 	syncRegistry := session.NewDefaultRegistry()
@@ -1012,6 +1115,48 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	} else {
 		log.Info("backlog feature disabled (toggle via Settings → Features)")
 	}
+
+	// Construct the account-wide quota gate and reconcile it once, synchronously,
+	// right after the boot-time Enable() decision above — so if quota state is
+	// already bad, backlog is disabled again within the same boot sequence
+	// rather than trusting the persisted flag for up to 60s until the first
+	// ticker fire. Reads config.json fresh on every call (see cfgFn) so edits
+	// take effect without a restart.
+	var tokenStoreReader tokens.TokenStoreReader
+	if tokenStore != nil {
+		tokenStoreReader = tokenStore
+	}
+	quotaGate := services.NewQuotaGate(
+		// config.LoadConfig() re-reads config.json from disk on every call
+		// (same pattern as feature_flag_service.go's GetFeatureFlags) — cfg
+		// here is the boot-time snapshot passed into BuildRuntimeDeps and is
+		// never refreshed, so closing over cfg.Quota directly would freeze
+		// every Quota field at boot, contradicting this closure's whole
+		// purpose ("no restart needed" for config.json edits).
+		func() config.QuotaConfig { return config.LoadConfig().Quota.QuotaConfigOrDefault() },
+		tokenStoreReader,
+		sessionService,
+		backlogCtrl,
+		eventBus,
+	)
+	sessionService.SetQuotaGate(quotaGate)
+	quotaGate.Reconcile(context.Background())
+
+	// 60 s reconcile ticker: safety net for abnormal exits where EventExited cannot fire.
+	// This goroutine is the only fallback for review-gate respawn, stale-item detection,
+	// and PR-pending polling (merge/CI/conflict) — a panic here must not kill it silently.
+	// Also drives QuotaGate.Reconcile on the same cadence, independently
+	// panic-recovered (via recoverAndLog) so a bug in one never blocks the
+	// other from running this tick or any future tick.
+	go func() {
+		ticker := time.NewTicker(60 * time.Second)
+		defer ticker.Stop()
+		ctx := context.Background()
+		for range ticker.C {
+			recoverAndLog("backlog reconcile ticker", func() { backlogLifecycleListener.ReconcileStuck(ctx) })
+			recoverAndLog("quota gate reconcile ticker", func() { quotaGate.Reconcile(ctx) })
+		}
+	}()
 
 	backlogSvc := services.NewBacklogService(storage, sessionService, cfg, workflowEngine, pipelineEngine, pipelineModeRepo)
 	backlogSvc.SetEventBus(eventBus)
@@ -1035,7 +1180,13 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	backlogSvc.SetSyncKeyFunc(keyFunc)
 	// Refuse manual syncs while the backlog feature is toggled off, matching
 	// the periodic SyncLoop's behavior.
-	backlogSvc.SetSyncFeatureEnabledCheck(backlogCtrl.IsEnabled)
+	// Composed rather than a second gate: quota-critical (heavy — Disable(),
+	// pausedByQuota) stays distinct from "a human is actively working" (light
+	// — just skip this tick's dispatch), enforced through the one existing
+	// consulted checker.
+	backlogSvc.SetSyncFeatureEnabledCheck(func() bool {
+		return backlogCtrl.IsEnabled() && !quotaGate.ShouldThrottleForeground()
+	})
 	backlogLifecycleListener.SetAutoReopener(backlogSvc)
 	backlogLifecycleListener.SetPRFixSpawner(backlogSvc)
 	backlogLifecycleListener.SetReviewRespawner(backlogSvc)
@@ -1128,6 +1279,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	// can show history for backlog sessions that passed a tmux UUID as the session ID.
 	sessionService.SetResolveConversationUUID(storage.GetClaudeConversationUUIDBySessionUUID)
 	sessionService.SetFeatureController("backlog", backlogCtrl)
+	sessionService.SetStatusDetailProvider("backlog", quotaGate.StatusDetail)
 
 	// Check VNC dependencies once at startup so the server knows whether browser
 	// passthrough is available on this host. Non-fatal: Missing deps log a warning.
@@ -1146,11 +1298,14 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		log.Info("CDP browser streaming available", "chrome", cdpDeps.ChromePath)
 	}
 
-	// Initialize TokenStore and InsightsService for token usage analytics.
+	// Initialize InsightsService for token usage analytics. tokenStore/historyDir
+	// were already constructed and started earlier (see the QuotaGate wiring
+	// above) so QuotaGate's boot-time Reconcile could read real data — this
+	// block only builds the InsightsService/ArtifactExtractor machinery that
+	// depends on them, plus backlogSvc/sessionSummaryGenerator, all of which
+	// need backlogSvc (constructed after that early wiring).
 	var insightsSvc *services.InsightsService
-	if homeDir, homeDirErr := os.UserHomeDir(); homeDirErr == nil {
-		historyDir := filepath.Join(homeDir, ".claude", "projects")
-		tokenStore := tokens.NewTokenStore(historyDir)
+	if tokenStore != nil {
 		pricing := tokens.DefaultPricingTable()
 		if configDir, cfgErr := config.GetConfigDir(); cfgErr == nil {
 			overridePath := filepath.Join(configDir, "pricing_overrides.json")
@@ -1166,8 +1321,6 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 			log.Warn("pricing table is stale (an entry's EffectiveDate is 30+ days old)", "loadedAt", pricing.LoadedAt)
 		}
 		associator := tokens.NewAssociator(storage)
-		historyLinker.RegisterFileCallback(tokenStore.OnHistoryFileChanged)
-		tokenStore.Start(context.Background())
 		insightsSvc = services.NewInsightsService(tokenStore, pricing, associator)
 		sessionService.SetTokenStoreReader(tokenStore)
 		backlogSvc.SetTokenStore(tokenStore, pricing)
@@ -1219,9 +1372,9 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		artifactExtractor.SeedOffsets(session.InstanceInfoSlice(historyLinker.Instances()))
 		artifactExtractor.Start(context.Background(), historyDir)
 		log.Info("ArtifactExtractor initialized", "historyDir", historyDir)
-	} else {
-		log.Warn("could not determine home dir for InsightsService token store", "err", homeDirErr)
 	}
+	// else: home dir resolution already failed and was logged earlier, where
+	// tokenStore/historyDir are constructed (see the QuotaGate wiring above).
 
 	// Initialize WorkflowRepository using the ent client from storage.
 	// Nil-safe: when the storage is not ent-backed (e.g. tests), WorkflowRepo is nil.
@@ -1236,12 +1389,62 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	// Initialize WorkflowScheduler and WorkflowService with deferred injection.
 	// Order: SessionService → WorkflowScheduler → WorkflowService → SessionService.SetWorkflowService
 	var workflowScheduler *workflows.Scheduler
+	// triggerFireEventRepo is hoisted out of the block below (rather than declared
+	// inline) so it's available to RuntimeDeps for the inbound webhook handlers
+	// (webhook-triggers Epic 2.2/2.3), which are wired later in server.go independently
+	// of the Scheduler/WorkflowService construction above.
+	var triggerFireEventRepo session.TriggerFireEventRepository
 	if workflowRepo != nil {
 		workflowScheduler = workflows.NewScheduler(workflowRepo, sessionService, eventBus)
+		// Model-family overrides (e.g. bumping "sonnet"'s "latest" to a new release)
+		// live in an optional JSON file so they take effect without a redeploy —
+		// same shape as the pricing_overrides.json wiring above.
+		if configDir, cfgErr := config.GetConfigDir(); cfgErr == nil {
+			overridePath := filepath.Join(configDir, "model_family_overrides.json")
+			if families, loadErr := workflows.LoadModelFamilyOverride(overridePath); loadErr == nil {
+				workflowScheduler.SetModelFamilies(families)
+			} else if !os.IsNotExist(loadErr) {
+				log.Warn("failed to load model family override, using defaults", "path", overridePath, "err", loadErr)
+			}
+		} else {
+			log.Warn("failed to resolve config dir, skipping model family override, using defaults", "err", cfgErr)
+		}
 		workflowSvc := services.NewWorkflowService(workflowRepo, workflowScheduler, storage)
 		sessionService.SetWorkflowService(workflowSvc)
 		sessionService.SetWorkflowRepository(workflowRepo)
+		// Close the WIP-gate bypass (webhook-triggers Epic 1.3): every trigger-fired
+		// session must pass the same admission check BacklogService's own spawn path
+		// enforces. backlogSvc is constructed earlier in this function (see
+		// services.NewBacklogService above).
+		workflowScheduler.SetAdmissionGate(backlogSvc)
+		// Per-Workflow rate limit (webhook-triggers Epic 2.4.2) — shared across cron/
+		// manual fires (FireNow) and the inbound webhook handlers (github_push/generic),
+		// both of which route through the shared Scheduler.FireTrigger (FireNow is a
+		// thin wrapper around it — see server/workflows/scheduler.go).
+		workflowScheduler.SetRateLimiter(services.NewTriggerRateLimiter())
+		if entClient := storage.GetEntClient(); entClient != nil {
+			fireEventRepo := session.NewEntTriggerFireEventRepository(entClient)
+			workflowScheduler.SetTriggerFireEventRepo(fireEventRepo)
+			workflowSvc.SetTriggerFireEventRepo(fireEventRepo)
+			triggerFireEventRepo = fireEventRepo
+		}
 		log.Info("WorkflowService and WorkflowScheduler initialized")
+
+		// ChainFirer + TriggerChainReconciler (webhook-triggers Phase 6, Epic 6.2/
+		// 6.3): pipeline chaining needs the same three collaborators as the
+		// Scheduler itself (workflowRepo to resolve NextWorkflowID,
+		// triggerFireEventRepo for the audit trail, workflowScheduler.
+		// FireTriggerChained as the actual fire path), so it can only be wired
+		// once all three exist above. Wired to both EntRepository (the happy-path
+		// dispatcher, called from TransitionBacklogItemStatus right after a
+		// "done" transition commits — AC9) and BacklogLifecycleListener (the
+		// restart-recovery reconciler, running on the existing 60s tick).
+		if triggerFireEventRepo != nil {
+			if chainFirer := storage.WireChainFirer(workflowRepo, triggerFireEventRepo, workflowScheduler, cfg); chainFirer != nil {
+				backlogLifecycleListener.SetChainReconciler(session.NewTriggerChainReconciler(chainFirer))
+				log.Info("ChainFirer and TriggerChainReconciler initialized")
+			}
+		}
 	} else {
 		log.Warn("WorkflowScheduler disabled: no workflow repository available")
 	}
@@ -1269,6 +1472,8 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		PRStatusPoller:          svc.PRStatusPoller,
 		HistoryLinker:           historyLinker,
 		ErrorRegistry:           svc.ErrorRegistry,
+		ClaudeSettingsWatcher:   sessionService.GetClaudeSettingsWatcher(),
+		SlackNotifier:           slackNotifier,
 		UnfinishedScanner:       unfinishedScanner,
 		UnfinishedStateStore:    unfinishedStateStore,
 		UnfinishedWorkService:   unfinishedWorkSvc,
@@ -1277,6 +1482,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		GitHubUserService:       githubUserSvc,
 		InsightsService:         insightsSvc,
 		BacklogService:          backlogSvc,
+		QuotaGate:               quotaGate,
 		SyncLoop:                nil, // managed by BacklogController
 		BacklogEnabledCheck:     backlogCtrl.IsEnabled,
 		Config:                  cfg,
@@ -1285,6 +1491,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		CDPDeps:                 cdpDeps,
 		WorkflowRepo:            workflowRepo,
 		WorkflowScheduler:       workflowScheduler,
+		TriggerFireEventRepo:    triggerFireEventRepo,
 		Registry:                svc.Registry,
 		SessionSummaryGenerator: sessionSummaryGenerator,
 	}, nil

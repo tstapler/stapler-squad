@@ -7,6 +7,8 @@ import { Tooltip } from "../ui/Tooltip";
 import { SessionActionsOverflow, SessionActionsOverflowHandle } from "./SessionActionsOverflow";
 import { SubStatusChip } from "./SubStatusChip";
 import { GitHubBadge } from "@/components/shared/GitHubBadge";
+import { isSessionStale } from "@/lib/session-staleness";
+import { staleBadge } from "./SessionCard.css";
 import {
   row,
   rowPaused,
@@ -28,12 +30,14 @@ import {
   memoryBadgeWarning,
   memoryBadgeHigh,
   diffBadge,
+  noteIndicator,
   branchCell,
   rowMemoryPressure,
   checkboxCell,
   checkboxButton,
 } from "./SessionRow.css";
 import { ColumnKey, DEFAULT_VISIBLE_COLUMNS, buildRowGridTemplate } from "./session-columns";
+import { truncateGoal } from "@/lib/utils/string";
 
 interface SessionRowProps {
   session: Session;
@@ -46,9 +50,9 @@ interface SessionRowProps {
   onNewWorkspace?: () => void;
   onRestart?: (sessionId: string) => Promise<boolean | void>;
   onCreateCheckpoint?: (sessionId: string, label: string) => Promise<boolean>;
-  onRunOneShot?: (sessionId: string) => Promise<void>;
   onSetRateLimitEnabled?: (sessionId: string, enabled: boolean) => void;
   onToggleAutonomousMode?: (sessionId: string, enabled: boolean) => void;
+  onToggleAutoApprove?: (sessionId: string, enabled: boolean) => void;
   onSteerAutonomousSession?: (sessionId: string, message: string) => void;
   onClearConversationState?: (sessionId: string) => Promise<boolean>;
   onUpdateTags?: (sessionId: string, tags: string[]) => void;
@@ -56,6 +60,11 @@ interface SessionRowProps {
   onResumeFromHibernation?: () => void;
   /** When true, hides the Needs Approval SubStatusChip during optimistic clear */
   suppressApprovalSubStatus?: boolean;
+  // Minutes of inactivity after which an ACTIVE session is flagged "Stale" (see
+  // lib/session-staleness.ts's isSessionStale). Optional/defaulted so existing call
+  // sites and tests that don't thread it through keep compiling; SessionList passes
+  // the resolved value from useStaleSessionConfig().
+  staleThresholdMinutes?: number;
   /** Which optional columns to render. Defaults to DEFAULT_VISIBLE_COLUMNS. */
   visibleColumns?: ColumnKey[];
   /** When true, the checkbox column is interactive and visible on hover/select mode. */
@@ -86,6 +95,8 @@ function getStatusDotValue(status: SessionStatus): string {
       return "needs-approval";
     case SessionStatus.HIBERNATED:
       return "hibernated";
+    case SessionStatus.CRASHED:
+      return "crashed";
     default:
       return "idle";
   }
@@ -99,6 +110,7 @@ const STATUS_DOT_LABELS: Record<string, string> = {
   "loading": "Loading",
   "needs-approval": "Needs Approval",
   "hibernated": "Hibernated",
+  "crashed": "Crashed",
 };
 
 function getStatusDotLabel(dotValue: string): string {
@@ -144,10 +156,11 @@ function SessionRowInner({
   session, onClick,
   onPause, onResume, onDelete,
   onClone, onOpenInNewPane, onNewWorkspace,
-  onRestart, onCreateCheckpoint, onRunOneShot,
-  onSetRateLimitEnabled, onToggleAutonomousMode, onSteerAutonomousSession, onClearConversationState, onUpdateTags,
+  onRestart, onCreateCheckpoint,
+  onSetRateLimitEnabled, onToggleAutonomousMode, onToggleAutoApprove, onSteerAutonomousSession, onClearConversationState, onUpdateTags,
   onHibernate, onResumeFromHibernation,
   suppressApprovalSubStatus = false,
+  staleThresholdMinutes = 30,
   visibleColumns = DEFAULT_VISIBLE_COLUMNS,
   selectMode = false,
   isSelected = false,
@@ -169,6 +182,9 @@ function SessionRowInner({
   // Show branch separately if the branch column is visible; otherwise fold into displayName.
   const showBranchCol = visibleColumns.includes("branch");
   const displayName = showBranchCol ? session.title : (session.branch || session.title);
+
+  const trimmedNote = session.note?.trim();
+  const noteTooltip = trimmedNote ? truncateGoal(trimmedNote, 120) : undefined;
 
   const memMB = Number(session.memoryRssMb ?? 0n);
   const memorySeverityClass =
@@ -255,8 +271,17 @@ function SessionRowInner({
             session.subStatus !== SubStatus.READY &&
             session.subStatus !== SubStatus.IDLE &&
             !(suppressApprovalSubStatus && (session.subStatus === SubStatus.NEEDS_APPROVAL || session.subStatus === SubStatus.INPUT_REQUIRED)) && (
-              <SubStatusChip subStatus={session.subStatus} />
+              <SubStatusChip subStatus={session.subStatus} subagentCount={session.subagentCount} />
             )}
+          {isSessionStale(session, staleThresholdMinutes) && (
+            <span
+              role="img"
+              aria-label={`Stale — no output for over ${staleThresholdMinutes} minutes`}
+              className={staleBadge}
+            >
+              🟠 Stale
+            </span>
+          )}
           <GitHubBadge
             prNumber={session.githubPrNumber}
             prUrl={session.githubPrUrl}
@@ -271,6 +296,18 @@ function SessionRowInner({
             checkConclusion={session.githubCheckConclusion}
             compact={true}
           />
+          {noteTooltip && (
+            <Tooltip label={noteTooltip}>
+              <span
+                className={noteIndicator}
+                role="img"
+                aria-label="Has a note"
+                data-testid="badge-has-note"
+              >
+                📝
+              </span>
+            </Tooltip>
+          )}
         </span>
       </span>
 
@@ -396,9 +433,9 @@ function SessionRowInner({
           onNewWorkspace={onNewWorkspace}
           onRestart={onRestart}
           onCreateCheckpoint={onCreateCheckpoint}
-          onRunOneShot={onRunOneShot}
           onSetRateLimitEnabled={onSetRateLimitEnabled}
           onToggleAutonomousMode={onToggleAutonomousMode}
+          onToggleAutoApprove={onToggleAutoApprove}
           onSteerAutonomousSession={onSteerAutonomousSession}
           onClearConversationState={onClearConversationState}
           onUpdateTags={onUpdateTags}

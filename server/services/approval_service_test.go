@@ -27,6 +27,7 @@ import (
 // sync bug: ResolveApproval must publish an EventApprovalResponse to the event bus so
 // all connected clients (including Device B) learn about the resolution in real-time.
 func TestResolveApproval_PublishesEventBusEvent(t *testing.T) {
+	t.Parallel()
 	store := NewApprovalStore("")
 	bus := events.NewEventBus(10)
 	svc := NewApprovalService(store)
@@ -58,6 +59,7 @@ func TestResolveApproval_PublishesEventBusEvent(t *testing.T) {
 // TestResolveApproval_NoEventWhenApprovalNotFound ensures no event is published if the
 // approval ID is unknown (error path).
 func TestResolveApproval_NoEventWhenApprovalNotFound(t *testing.T) {
+	t.Parallel()
 	bus := events.NewEventBus(10)
 	svc := NewApprovalService(NewApprovalStore(""))
 	svc.SetEventBus(bus)
@@ -102,6 +104,7 @@ func newRulesService(t *testing.T) *RulesService {
 // ─── ListPendingApprovals ────────────────────────────────────────────────────
 
 func TestListPendingApprovals_EmptyInitially(t *testing.T) {
+	t.Parallel()
 	svc := newApprovalService()
 	resp, err := svc.ListPendingApprovals(t.Context(), connect.NewRequest(&sessionv1.ListPendingApprovalsRequest{}))
 	require.NoError(t, err)
@@ -109,6 +112,7 @@ func TestListPendingApprovals_EmptyInitially(t *testing.T) {
 }
 
 func TestListPendingApprovals_ReturnsAllPending(t *testing.T) {
+	t.Parallel()
 	store := NewApprovalStore("")
 	svc := NewApprovalService(store)
 
@@ -124,6 +128,7 @@ func TestListPendingApprovals_ReturnsAllPending(t *testing.T) {
 }
 
 func TestListPendingApprovals_FilterBySessionID(t *testing.T) {
+	t.Parallel()
 	store := NewApprovalStore("")
 	svc := NewApprovalService(store)
 
@@ -141,9 +146,44 @@ func TestListPendingApprovals_FilterBySessionID(t *testing.T) {
 	assert.Equal(t, "a1", resp.Msg.Approvals[0].Id)
 }
 
+// TestListPendingApprovals_should_IncludeRiskLevelInProto_When_ApprovalHasClassifiedRisk
+// covers plan.md Task 2.1.2: PendingApproval.RiskLevel must be set on the wire proto.
+func TestListPendingApprovals_should_IncludeRiskLevelInProto_When_ApprovalHasClassifiedRisk(t *testing.T) {
+	t.Parallel()
+	store := NewApprovalStore("")
+	svc := NewApprovalService(store)
+
+	a := newTestPendingApproval("a-risk", "session-A", "Bash")
+	a.RiskLevel = "critical"
+	require.NoError(t, store.Create(a))
+
+	resp, err := svc.ListPendingApprovals(t.Context(), connect.NewRequest(&sessionv1.ListPendingApprovalsRequest{}))
+	require.NoError(t, err)
+	require.Len(t, resp.Msg.Approvals, 1)
+	assert.Equal(t, "critical", resp.Msg.Approvals[0].RiskLevel)
+}
+
+// TestListPendingApprovals_should_ReturnEmptyRiskLevel_When_ApprovalPredatesFeature covers
+// the legacy/not-recorded case: a PendingApproval with RiskLevel == "" (Go zero value, as a
+// pre-feature approval would have) must serialize as "", never fall back to "low".
+func TestListPendingApprovals_should_ReturnEmptyRiskLevel_When_ApprovalPredatesFeature(t *testing.T) {
+	t.Parallel()
+	store := NewApprovalStore("")
+	svc := NewApprovalService(store)
+
+	a := newTestPendingApproval("a-legacy", "session-A", "Bash")
+	require.NoError(t, store.Create(a))
+
+	resp, err := svc.ListPendingApprovals(t.Context(), connect.NewRequest(&sessionv1.ListPendingApprovalsRequest{}))
+	require.NoError(t, err)
+	require.Len(t, resp.Msg.Approvals, 1)
+	assert.Equal(t, "", resp.Msg.Approvals[0].RiskLevel)
+}
+
 // ─── ListApprovalRules ───────────────────────────────────────────────────────
 
 func TestListApprovalRules_ReturnsSeedRules(t *testing.T) {
+	t.Parallel()
 	svc := newRulesService(t)
 	resp, err := svc.ListApprovalRules(t.Context(), connect.NewRequest(&sessionv1.ListApprovalRulesRequest{}))
 	require.NoError(t, err)
@@ -152,6 +192,7 @@ func TestListApprovalRules_ReturnsSeedRules(t *testing.T) {
 }
 
 func TestListApprovalRules_SourceFilter(t *testing.T) {
+	t.Parallel()
 	svc := newRulesService(t)
 
 	// Add a user rule first.
@@ -181,6 +222,7 @@ func TestListApprovalRules_SourceFilter(t *testing.T) {
 // ─── UpsertApprovalRule ──────────────────────────────────────────────────────
 
 func TestUpsertApprovalRule_Success(t *testing.T) {
+	t.Parallel()
 	svc := newRulesService(t)
 	resp, err := svc.UpsertApprovalRule(t.Context(), connect.NewRequest(&sessionv1.UpsertApprovalRuleRequest{
 		Rule: &sessionv1.ApprovalRuleProto{
@@ -198,6 +240,7 @@ func TestUpsertApprovalRule_Success(t *testing.T) {
 }
 
 func TestUpsertApprovalRule_UpdateExisting(t *testing.T) {
+	t.Parallel()
 	svc := newRulesService(t)
 
 	// Create first.
@@ -230,6 +273,7 @@ func TestUpsertApprovalRule_UpdateExisting(t *testing.T) {
 }
 
 func TestUpsertApprovalRule_NilRule(t *testing.T) {
+	t.Parallel()
 	svc := newRulesService(t)
 	_, err := svc.UpsertApprovalRule(t.Context(), connect.NewRequest(&sessionv1.UpsertApprovalRuleRequest{
 		Rule: nil,
@@ -241,6 +285,7 @@ func TestUpsertApprovalRule_NilRule(t *testing.T) {
 }
 
 func TestUpsertApprovalRule_EmptyID(t *testing.T) {
+	t.Parallel()
 	svc := newRulesService(t)
 	_, err := svc.UpsertApprovalRule(t.Context(), connect.NewRequest(&sessionv1.UpsertApprovalRuleRequest{
 		Rule: &sessionv1.ApprovalRuleProto{
@@ -257,6 +302,7 @@ func TestUpsertApprovalRule_EmptyID(t *testing.T) {
 // ─── DeleteApprovalRule ──────────────────────────────────────────────────────
 
 func TestDeleteApprovalRule_Success(t *testing.T) {
+	t.Parallel()
 	svc := newRulesService(t)
 
 	// Create a rule to delete.
@@ -280,6 +326,7 @@ func TestDeleteApprovalRule_Success(t *testing.T) {
 }
 
 func TestDeleteApprovalRule_EmptyID(t *testing.T) {
+	t.Parallel()
 	svc := newRulesService(t)
 	_, err := svc.DeleteApprovalRule(t.Context(), connect.NewRequest(&sessionv1.DeleteApprovalRuleRequest{
 		Id: "",
@@ -291,6 +338,7 @@ func TestDeleteApprovalRule_EmptyID(t *testing.T) {
 }
 
 func TestDeleteApprovalRule_NotFound(t *testing.T) {
+	t.Parallel()
 	svc := newRulesService(t)
 	_, err := svc.DeleteApprovalRule(t.Context(), connect.NewRequest(&sessionv1.DeleteApprovalRuleRequest{
 		Id: "does-not-exist",
@@ -304,6 +352,7 @@ func TestDeleteApprovalRule_NotFound(t *testing.T) {
 // ─── GetApprovalAnalytics ────────────────────────────────────────────────────
 
 func TestGetApprovalAnalytics_ReturnsEmptySummaryWhenNoData(t *testing.T) {
+	t.Parallel()
 	svc := newRulesService(t)
 	resp, err := svc.GetApprovalAnalytics(t.Context(), connect.NewRequest(&sessionv1.GetApprovalAnalyticsRequest{}))
 	require.NoError(t, err)
@@ -313,6 +362,7 @@ func TestGetApprovalAnalytics_ReturnsEmptySummaryWhenNoData(t *testing.T) {
 }
 
 func TestGetApprovalAnalytics_CustomWindowDays(t *testing.T) {
+	t.Parallel()
 	svc := newRulesService(t)
 	days := int32(14)
 	resp, err := svc.GetApprovalAnalytics(t.Context(), connect.NewRequest(&sessionv1.GetApprovalAnalyticsRequest{
@@ -333,6 +383,7 @@ func TestGetApprovalAnalytics_CustomWindowDays(t *testing.T) {
 // RPC response's EscalationReasonCounts survives the full ComputeSummary -> summaryToProto
 // chain -- not just the pure ComputeSummary unit test in isolation.
 func TestGetApprovalAnalytics_IncludesEscalationReasonCounts(t *testing.T) {
+	t.Parallel()
 	storage := createTestStorage(t)
 	rulesStore, err := NewRulesStore(storage)
 	require.NoError(t, err)
@@ -371,6 +422,15 @@ func TestGetApprovalAnalytics_IncludesEscalationReasonCounts(t *testing.T) {
 		"unclassifiable": 1,
 		"explicit-rule":  1,
 	}, resp.Msg.Summary.EscalationReasonCounts)
+
+	// AC5 (plan.md Task 3.1.2/3.1.3): risk_level_counts must survive the same
+	// ComputeSummary -> summaryToProto chain, scoped identically to EscalationReasonCounts
+	// (the auto_allow s7 entry, RiskLevel "low", must not appear).
+	assert.Equal(t, map[string]int32{
+		"medium":   4,
+		"high":     1,
+		"critical": 1,
+	}, resp.Msg.Summary.RiskLevelCounts)
 }
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
@@ -405,6 +465,7 @@ func (s *spyNotificationStore) MarkRead(ids []string) (int, error) {
 // TestResolveApproval_MarksNotificationRead verifies that ResolveApproval calls
 // MarkRead after SetMetadata so the notification badge auto-clears on resolution.
 func TestResolveApproval_MarksNotificationRead(t *testing.T) {
+	t.Parallel()
 	store := NewApprovalStore("")
 	spy := &spyNotificationStore{}
 	svc := NewApprovalService(store)
@@ -613,6 +674,7 @@ func TestResolveApproval_OverrideCiBlock_NoOp_WhenBlockWouldNotHaveFired(t *test
 // the PendingApproval -> PersistedApproval -> disk -> PendingApproval -> ApprovalMetadata
 // chain were missed, this test fails with an empty string, not a compile error.
 func TestApprovalStore_LoadFromDisk_PreservesEscalationReason(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "pending_approvals.json")
 
@@ -644,6 +706,46 @@ func TestApprovalStore_LoadFromDisk_PreservesEscalationReason(t *testing.T) {
 	assert.True(t, metas[0].Orphaned, "approvals loaded from disk after a restart must be marked Orphaned")
 }
 
+// TestApprovalStore_should_PreserveRiskLevelAcrossPersistAndReload_When_ApprovalIsOrphaned
+// covers plan.md Task 1.2.2(a): a PendingApproval created with a classified RiskLevel must
+// survive a persist-then-reload (simulated server restart) round trip intact.
+func TestApprovalStore_should_PreserveRiskLevelAcrossPersistAndReload_When_ApprovalIsOrphaned(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "pending_approvals.json")
+
+	store := NewApprovalStore(path)
+	a := newTestPendingApproval("appr-risk-1", "session-risk", "Bash")
+	a.RiskLevel = "high"
+	require.NoError(t, store.Create(a))
+
+	// Simulate a server restart: a fresh ApprovalStore constructed against the same file.
+	reloaded := NewApprovalStore(path)
+	metas := reloaded.GetApprovalMetadataBySession("session-risk")
+	require.Len(t, metas, 1)
+	assert.Equal(t, "high", metas[0].RiskLevel)
+	assert.True(t, metas[0].Orphaned)
+}
+
+// TestApprovalStore_should_LoadEmptyRiskLevel_When_LegacyJSONHasNoRiskLevelKey covers
+// pre-mortem.md Failure #1's persistence half: a pending_approvals.json written by a
+// pre-feature binary (no "risk_level" key at all) must deserialize to RiskLevel == "" --
+// the "not recorded" sentinel -- never fall back to "low".
+func TestApprovalStore_should_LoadEmptyRiskLevel_When_LegacyJSONHasNoRiskLevelKey(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "pending_approvals.json")
+
+	// Deliberately hand-written JSON with no risk_level key, mirroring a pre-feature file.
+	legacyJSON := `[{"id":"appr-legacy-1","session_id":"session-legacy","tool_name":"Bash","cwd":"/tmp","created_at":"2026-01-01T00:00:00Z","expires_at":"2026-01-01T00:05:00Z","orphaned":false}]`
+	require.NoError(t, os.WriteFile(path, []byte(legacyJSON), 0600))
+
+	store := NewApprovalStore(path)
+	metas := store.GetApprovalMetadataBySession("session-legacy")
+	require.Len(t, metas, 1)
+	assert.Equal(t, "", metas[0].RiskLevel, "legacy JSON with no risk_level key must load as not-recorded, not \"low\"")
+}
+
 // TestApprovalStore_Create_ConcurrentEscalations_NoDataRace is the pre-mortem P2
 // concurrency regression guard (plan.md Task 5.1.1d). N goroutines call store.Create
 // concurrently, each with a distinct EscalationReason/EscalationCategory pair, and all N
@@ -652,6 +754,7 @@ func TestApprovalStore_LoadFromDisk_PreservesEscalationReason(t *testing.T) {
 // test's job is confirming the two new string fields don't introduce a copy/aliasing bug
 // under concurrent load, not benchmarking throughput. Must be run with `go test -race`.
 func TestApprovalStore_Create_ConcurrentEscalations_NoDataRace(t *testing.T) {
+	t.Parallel()
 	store := NewApprovalStore("")
 	const n = 20
 

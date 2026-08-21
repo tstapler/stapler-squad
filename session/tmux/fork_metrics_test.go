@@ -1,11 +1,15 @@
 package tmux
 
 import (
+	"context"
 	"runtime"
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
+
+	"go.uber.org/goleak"
 )
 
 // resetForkMonitor clears the forkMonitor state between tests to prevent bleed-over.
@@ -313,35 +317,43 @@ func TestCheckPressure_BaselineNotUpdated_WhenSuppressed(t *testing.T) {
 	var count atomic.Int64
 	registerCountingAlert(&count)
 
-	t0 := time.Now()
+	synctest.Test(t, func(t *testing.T) {
+		t0 := time.Now()
 
-	// Inject 12 zombies — first alert fires, baseline recorded as 12.
-	injectZombies(12, t0)
-	checkPressure(t0)
-	waitAlertCount(t, &count, 1, 500*time.Millisecond)
+		// Inject 12 zombies — first alert fires, baseline recorded as 12.
+		injectZombies(12, t0)
+		checkPressure(t0)
+		// checkPressure fires alerts in a goroutine spawned inside this bubble;
+		// synctest.Wait() blocks until it (and any other bubble goroutine) is
+		// idle or exited, so the count is settled deterministically.
+		synctest.Wait()
+		if got := count.Load(); got != 1 {
+			t.Fatalf("alert count = %d; want 1 after first alert", got)
+		}
 
-	// Advance 30 s; add 12 more zombies at t1 (same total in window: 12, not strictly greater).
-	t1 := t0.Add(30 * time.Second)
-	injectZombies(12, t1)
+		// Advance 30 s; add 12 more zombies at t1 (same total in window: 12, not strictly greater).
+		t1 := t0.Add(30 * time.Second)
+		injectZombies(12, t1)
 
-	// At t1 the window is [t1-30s, t1] = [t0, t1]. Events at t0 are on the boundary.
-	// The stable-count suppression path should leave baseline unchanged.
-	beforeZ := forkMonitor.lastAlertZombieCount
-	checkPressure(t1)
-	time.Sleep(50 * time.Millisecond) // allow any goroutine to run
+		// At t1 the window is [t1-30s, t1] = [t0, t1]. Events at t0 are on the boundary.
+		// The stable-count suppression path should leave baseline unchanged.
+		beforeZ := forkMonitor.lastAlertZombieCount
+		checkPressure(t1)
+		synctest.Wait()
 
-	forkMonitor.alertMu.Lock()
-	afterZ := forkMonitor.lastAlertZombieCount
-	forkMonitor.alertMu.Unlock()
+		forkMonitor.alertMu.Lock()
+		afterZ := forkMonitor.lastAlertZombieCount
+		forkMonitor.alertMu.Unlock()
 
-	// Alert count must still be 1 (suppressed).
-	if got := count.Load(); got != 1 {
-		t.Errorf("alert count = %d; want 1 (stable count must be suppressed)", got)
-	}
-	// Baseline must not have changed during a suppressed call.
-	if afterZ != beforeZ {
-		t.Errorf("baseline was updated during a suppressed call: before=%d after=%d", beforeZ, afterZ)
-	}
+		// Alert count must still be 1 (suppressed).
+		if got := count.Load(); got != 1 {
+			t.Errorf("alert count = %d; want 1 (stable count must be suppressed)", got)
+		}
+		// Baseline must not have changed during a suppressed call.
+		if afterZ != beforeZ {
+			t.Errorf("baseline was updated during a suppressed call: before=%d after=%d", beforeZ, afterZ)
+		}
+	})
 }
 
 // TestCheckPressure_BaselineResetOnClear verifies that transitioning to OK resets
@@ -388,22 +400,26 @@ func TestCheckPressure_NoAlertOnClear(t *testing.T) {
 	var count atomic.Int64
 	registerCountingAlert(&count)
 
-	t0 := time.Now()
+	synctest.Test(t, func(t *testing.T) {
+		t0 := time.Now()
 
-	// Trigger an alert.
-	injectZombies(12, t0)
-	checkPressure(t0)
-	waitAlertCount(t, &count, 1, 500*time.Millisecond)
+		// Trigger an alert.
+		injectZombies(12, t0)
+		checkPressure(t0)
+		synctest.Wait()
+		if got := count.Load(); got != 1 {
+			t.Fatalf("alert count = %d; want 1 after first alert", got)
+		}
 
-	// Advance 35 s so events expire → level returns to OK.
-	t1 := t0.Add(35 * time.Second)
-	checkPressure(t1)
+		// Advance 35 s so events expire → level returns to OK.
+		t1 := t0.Add(35 * time.Second)
+		checkPressure(t1)
+		synctest.Wait()
 
-	time.Sleep(50 * time.Millisecond) // allow any goroutine to run
-
-	if got := count.Load(); got != 1 {
-		t.Errorf("alert count = %d; want 1 (clear must not fire alert callbacks)", got)
-	}
+		if got := count.Load(); got != 1 {
+			t.Errorf("alert count = %d; want 1 (clear must not fire alert callbacks)", got)
+		}
+	})
 }
 
 // TestCheckPressure_ApprovalsUnaffected documents the architectural invariant that
@@ -484,4 +500,74 @@ func TestCheckPressure_RingBufferWrap(t *testing.T) {
 		t.Errorf("ZombiesInWindow = %d; want %d after ring wrap (capacity %d)",
 			stats.ZombiesInWindow, ringCapacity, ringCapacity)
 	}
+}
+
+// TestStartForkPressureLogger_GoroutineFullyExits_When_WaitGroupIsJoined proves
+// StartForkPressureLogger's goroutine has actually returned by the time wg.Wait()
+// unblocks — not just that ctx was canceled (backlog item
+// 81e82fee-9528-4dc9-a513-1040b4dee2ec, AC0). A short ticker interval combined
+// with an atomic counter in logFn lets us detect any tick that fires after the
+// join, which would mean the goroutine outlived the join.
+func TestStartForkPressureLogger_GoroutineFullyExits_When_WaitGroupIsJoined(t *testing.T) {
+	resetForkMonitor(t)
+
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		var wg sync.WaitGroup
+		var tickCount atomic.Int64
+
+		// Record a spawn so the logger has something to log every tick.
+		recordSpawn(time.Now())
+
+		StartForkPressureLogger(ctx, time.Millisecond, func(string, ...any) {
+			tickCount.Add(1)
+		}, &wg)
+
+		// Let a few ticks fire before signaling shutdown. Bubble time advances
+		// deterministically here instead of racing the real clock.
+		for tickCount.Load() < 2 {
+			time.Sleep(time.Millisecond)
+		}
+
+		cancel()
+
+		// wg.Wait() durably blocks until the logger goroutine exits; if it never
+		// did, synctest's deadlock detection fails the test instead of hanging.
+		wg.Wait()
+
+		countAtJoin := tickCount.Load()
+		// If the goroutine were still running post-join, it would keep incrementing
+		// tickCount on its 1ms ticker. Advancing bubble time several ticks' worth
+		// and confirming no further increments proves it actually exited, not just
+		// that ctx.Done() fired.
+		time.Sleep(20 * time.Millisecond)
+		if got := tickCount.Load(); got != countAtJoin {
+			t.Fatalf("tickCount kept increasing after wg join (from %d to %d) — goroutine did not fully exit", countAtJoin, got)
+		}
+	})
+}
+
+// TestStartForkPressureLogger_JoinsOnCtxCancel pins the regression this fix
+// addresses: StartForkPressureLogger used to be signaled via ctx cancellation
+// but never joined, so a caller had no way to know the goroutine had actually
+// exited. A short interval drives multiple ticks, and goleak.VerifyNone after
+// wg.Wait() confirms no goroutine survives cancellation.
+func TestStartForkPressureLogger_JoinsOnCtxCancel(t *testing.T) {
+	baseline := goleak.IgnoreCurrent()
+
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		var wg sync.WaitGroup
+		StartForkPressureLogger(ctx, time.Millisecond, func(string, ...any) {}, &wg)
+
+		time.Sleep(20 * time.Millisecond) // let several ticks fire
+		cancel()
+
+		// wg.Wait() durably blocks until the logger goroutine exits; synctest's
+		// deadlock detection fails the test if it never does, instead of a
+		// real-time.After race.
+		wg.Wait()
+	})
+
+	goleak.VerifyNone(t, baseline)
 }

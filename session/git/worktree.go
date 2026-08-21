@@ -3,11 +3,13 @@ package git
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"time"
 
+	"github.com/go-git/go-git/v5"
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/executor"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
@@ -15,13 +17,30 @@ import (
 	"golang.org/x/sync/singleflight"
 )
 
+// getWorktreeDirectory returns the base directory fresh worktree paths are computed
+// under. It must return a symlink-resolved path: git itself resolves symlinks when it
+// records a worktree's path in .git/worktrees/<id>/gitdir, so findExistingWorktreeForBranch
+// (which reads that path back via `git worktree list`) sees the resolved form. If this
+// function returned an unresolved path (e.g. macOS's /tmp -> /private/tmp, or any
+// symlinked/NFS-automounted config dir), a freshly-computed path and the same worktree's
+// git-reported path would differ as strings despite naming the identical directory --
+// exactly the mismatch that broke worktree-reuse identity checks (see
+// TestBacklogFullLifecycle_SDDTriageWorktreeIsReusedBySpawnedWorkSession).
 func getWorktreeDirectory() (string, error) {
 	configDir, err := config.GetConfigDir()
 	if err != nil {
 		return "", err
 	}
 
-	return filepath.Join(configDir, "worktrees"), nil
+	dir := filepath.Join(configDir, "worktrees")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", fmt.Errorf("failed to create worktree base directory %s: %w", dir, err)
+	}
+	resolved, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		return "", fmt.Errorf("failed to resolve worktree base directory %s: %w", dir, err)
+	}
+	return resolved, nil
 }
 
 // IsDirtyCacheTTL is the duration for which a dirty (has changes) result is considered fresh.
@@ -99,7 +118,10 @@ func NewGitWorktreeFromCommitSHA(repoPath, sessionName, branchName, commitSHA st
 	}
 
 	sanitizedName := sanitizeBranchName(sessionName)
-	worktreePath := filepath.Join(worktreeDir, sanitizedName)
+	worktreePath, err := joinWithinDir(worktreeDir, sanitizedName)
+	if err != nil {
+		return nil, "", err
+	}
 	worktreePath = worktreePath + "_" + fmt.Sprintf("%x", time.Now().UnixNano())
 
 	return &GitWorktree{
@@ -126,6 +148,20 @@ func NewGitWorktreeFromStorageWithExecutor(repoPath string, worktreePath string,
 
 	if cmdExec == nil {
 		cmdExec = executor.MakeExecutor()
+	}
+
+	// Rehydrated worktreePath values may predate this normalization (persisted
+	// before CanonicalizeWorktreePath existed) or may already be canonical — either
+	// way, normalize on read so in-memory comparisons stay consistent without a data
+	// migration. Best-effort and non-fatal: if the directory no longer exists on
+	// disk (deleted worktree, stale storage entry), skip normalization rather than
+	// let EvalSymlinks's ENOENT propagate — CanonicalizeWorktreePath itself already
+	// falls back to filepath.Clean on error, but we gate on os.Stat first so we
+	// don't even attempt symlink resolution against a path known to be gone.
+	if worktreePath != "" {
+		if _, statErr := os.Stat(worktreePath); statErr == nil {
+			worktreePath = CanonicalizeWorktreePath(worktreePath)
+		}
 	}
 
 	return &GitWorktree{
@@ -188,6 +224,10 @@ func NewGitWorktreeWithBranchAndExecutor(repoPath string, sessionName string, cu
 	// First check if the branch is already checked out in an existing worktree
 	existingWorktreePath, found := findExistingWorktreeForBranch(repoPath, branchName)
 	if found {
+		// git realpath's the path it reports in 'worktree list' output, so
+		// canonicalize before storing to keep this consistent with the
+		// already-resolved paths getWorktreeDirectory hands to fresh creates.
+		existingWorktreePath = CanonicalizeWorktreePath(existingWorktreePath)
 		log.Info("found existing worktree for branch, reusing it", "branch", branchName, "path", existingWorktreePath)
 		return &GitWorktree{
 			repoPath:     repoPath,
@@ -200,7 +240,10 @@ func NewGitWorktreeWithBranchAndExecutor(repoPath string, sessionName string, cu
 
 	// No existing worktree found, create a new one with timestamp suffix
 	sanitizedName := sanitizeBranchName(sessionName)
-	worktreePath := filepath.Join(worktreeDir, sanitizedName)
+	worktreePath, err := joinWithinDir(worktreeDir, sanitizedName)
+	if err != nil {
+		return nil, "", err
+	}
 	worktreePath = worktreePath + "_" + fmt.Sprintf("%x", time.Now().UnixNano())
 
 	return &GitWorktree{
@@ -210,6 +253,57 @@ func NewGitWorktreeWithBranchAndExecutor(repoPath string, sessionName string, cu
 		worktreePath: worktreePath,
 		cmdExec:      cmdExec,
 	}, branchName, nil
+}
+
+// PreviewWorktreePath returns the directory PREFIX a new worktree would be created
+// under - the same filepath.Join(worktreeDir, sanitizeBranchName(sessionName)) that
+// NewGitWorktreeWithBranchAndExecutor computes, WITHOUT the "_<random-suffix>" it
+// appends at actual creation time (that suffix can't be predicted ahead of the call).
+// Performs no git subprocess calls (deliberately skips the existing-worktree-for-branch
+// lookup, which shells out to "git worktree list") and, unlike findGitRepoRoot, never
+// mutates the filesystem: it only walks up from repoPath looking for an existing git
+// repo. A preview is called on every Omnibar keystroke, so it must be a pure read - it
+// must not create directories, run `git init`, or create commits the way
+// findGitRepoRoot's create-if-missing fallback does for the real creation path.
+func PreviewWorktreePath(repoPath, sessionName string) (string, error) {
+	absPath, err := filepath.Abs(repoPath)
+	if err != nil {
+		absPath = repoPath
+	}
+
+	if _, err := findExistingGitRepoRootReadOnly(absPath); err != nil {
+		return "", err
+	}
+
+	worktreeDir, err := getWorktreeDirectory()
+	if err != nil {
+		return "", err
+	}
+
+	sanitizedName := sanitizeBranchName(sessionName)
+	return joinWithinDir(worktreeDir, sanitizedName)
+}
+
+// findExistingGitRepoRootReadOnly walks up from path looking for an existing git
+// repository, without creating or modifying anything on disk. Unlike findGitRepoRoot,
+// it errors on a missing directory and does not require the repo to have any commits.
+func findExistingGitRepoRootReadOnly(path string) (string, error) {
+	if _, err := os.Stat(path); err != nil {
+		return "", fmt.Errorf("path does not exist: %s", path)
+	}
+
+	currentPath := path
+	for {
+		if _, err := git.PlainOpen(currentPath); err == nil {
+			return currentPath, nil
+		}
+
+		parent := filepath.Dir(currentPath)
+		if parent == currentPath {
+			return "", fmt.Errorf("failed to find Git repository root from path: %s", path)
+		}
+		currentPath = parent
+	}
 }
 
 // GetWorktreePath returns the path to the worktree
@@ -253,6 +347,12 @@ func NewGitWorktreeFromExistingWithExecutor(existingWorktreePath string, session
 	if !IsGitRepo(existingWorktreePath) {
 		return nil, fmt.Errorf("path '%s' is not a valid git repository or worktree", existingWorktreePath)
 	}
+
+	// Callers may hand in a raw, not-yet-canonicalized path (e.g. rehydrated from
+	// storage written before this normalization existed); canonicalize it here so
+	// worktreePath comparisons stay consistent with the resolved paths produced by
+	// fresh-create and git-list-based reuse paths elsewhere in this package.
+	existingWorktreePath = CanonicalizeWorktreePath(existingWorktreePath)
 
 	// Find the repository root from the worktree path
 	repoPath, err := findMainRepoPathForWorktree(existingWorktreePath)

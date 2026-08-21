@@ -52,6 +52,42 @@ export async function createBacklogItemDirect(
   return body.itemId;
 }
 
+/**
+ * Like createBacklogItemDirect, but also returns the item's publicId
+ * (BacklogItemID, e.g. "bl_01J...") minted at creation time (Story 1.1 AC,
+ * session/ent_repository_backlog.go's CreateBacklogItem) -- needed by tests
+ * that assert against the UI's displayed/copied ID, which prefers publicId
+ * over the raw UUID (Story 2.3, web-app/src/components/backlog/BacklogItemDetail.tsx).
+ */
+export async function createBacklogItemDirectWithPublicId(
+  request: APIRequestContext,
+  opts: {
+    title: string;
+    description?: string;
+    status?: string;
+    priority?: number;
+    repoPath?: string;
+    acCriteria?: string[];
+  }
+): Promise<{ itemId: string; publicId: string }> {
+  const resp = await request.post(`${BASE_URL}/api/debug/backlog/mutate-create`, {
+    headers: { "Content-Type": "application/json" },
+    data: {
+      title: opts.title,
+      description: opts.description ?? "",
+      status: opts.status ?? "idea",
+      priority: opts.priority ?? 3,
+      repoPath: opts.repoPath ?? "",
+      acCriteria: opts.acCriteria ?? [],
+    },
+  });
+  if (!resp.ok()) {
+    throw new Error(`createBacklogItemDirectWithPublicId failed (${resp.status()}): ${await resp.text().catch(() => "")}`);
+  }
+  const body = (await resp.json()) as { itemId: string; publicId: string };
+  return { itemId: body.itemId, publicId: body.publicId };
+}
+
 export async function transitionBacklogItemDirect(
   request: APIRequestContext,
   itemId: string,

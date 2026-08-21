@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/pkg/classifier"
@@ -80,6 +81,8 @@ type ApprovalHandler struct {
 	autonomousChecker   func(string) bool           // optional: returns true if sessionID is an autonomous session
 	pollInterval        time.Duration               // PRStatusPoller's configured interval; used to bound CI-status staleness. Zero value (bypassing NewApprovalHandler) makes every CI status read as stale — always construct via NewApprovalHandler.
 	liveFinder          LiveInstanceFinder          // optional: resolves live in-memory Instance for CI status (not persisted — see PRStatusPoller)
+	slackNotifier       *SlackNotifier              // optional: notifies a configured Slack webhook about new pending approvals; concrete type (no interface) since both live in this package
+	dashboardBaseURLFn  func() string               // optional: lazily-read fallback for the Slack dashboard-link base URL, used only when cfg.Slack.DashboardBaseURL is unset. Mirrors ReactiveQueueManager.dashboardBaseURLFn exactly (server.go wires the same hookBaseURLFn into both).
 }
 
 // NewApprovalHandler creates a new ApprovalHandler.
@@ -172,6 +175,33 @@ func (h *ApprovalHandler) SetHeadlessPool(pool headlessPoolApprover) {
 	h.headlessPool = pool
 }
 
+// SetSlackNotifier injects the Slack notifier used to notify a configured
+// webhook about new pending approvals (see broadcastApprovalNotification).
+// nil-safe: when never called, h.slackNotifier stays nil and Slack
+// notification is silently skipped — matching every other optional Set*
+// dependency in this file.
+func (h *ApprovalHandler) SetSlackNotifier(n *SlackNotifier) {
+	h.slackNotifier = n
+}
+
+// SetDashboardBaseURLFn wires the lazily-read dashboard-base-URL fallback
+// (see dashboardBaseURLFn's doc comment) used when building Slack "view in
+// dashboard" links for approval-pending notifications. nil-safe: when never
+// called, broadcastApprovalNotification falls back to whatever
+// cfg.Slack.DashboardBaseURL is (possibly empty, omitting the link).
+func (h *ApprovalHandler) SetDashboardBaseURLFn(fn func() string) {
+	h.dashboardBaseURLFn = fn
+}
+
+// SlackNotifierForTest returns the wired SlackNotifier instance. Exported
+// only so cross-package wiring regression tests (server package) can assert
+// pointer identity against the other consumers (ReactiveQueueManager,
+// SessionService) without restructuring production code — not intended for
+// any non-test caller.
+func (h *ApprovalHandler) SlackNotifierForTest() *SlackNotifier {
+	return h.slackNotifier
+}
+
 // SetAutonomousChecker injects a function that returns true when the given session ID is an
 // autonomous session. Injected from server.go to avoid a construction-time circular dependency.
 func (h *ApprovalHandler) SetAutonomousChecker(fn func(string) bool) {
@@ -255,6 +285,13 @@ func (h *ApprovalHandler) HandlePermissionRequest(w http.ResponseWriter, r *http
 	// set below.
 	var escalation classifier.ClassificationResult
 
+	// classified is true only when escalation was genuinely assigned below (domain-age or a
+	// real classifier result). RiskLevel must never be read from escalation unless classified
+	// is true — escalation's zero value (classifier.RiskLow) is indistinguishable from a real
+	// Low risk, and reading it unconditionally would silently mislabel an unclassified/degraded
+	// request (e.g. h.classifier == nil) as safe. See pre-mortem.md Failure #1.
+	var classified bool
+
 	// Domain age check: if a Bash command is contacting a newly-registered domain,
 	// escalate immediately regardless of other rules.
 	if h.domainChecker != nil {
@@ -286,6 +323,7 @@ func (h *ApprovalHandler) HandlePermissionRequest(w http.ResponseWriter, r *http
 					}
 					// Fall through to manual review queue (do NOT return here).
 					escalation = domainEscalation
+					classified = true
 					goto createApproval
 				}
 			}
@@ -323,6 +361,11 @@ func (h *ApprovalHandler) HandlePermissionRequest(w http.ResponseWriter, r *http
 						classCtx.CIStatus = ""
 					}
 				}
+				// Independent of PR/CI state — populate whenever a live instance is
+				// found so MinSessionIdleMinutes rules can evaluate. Left at the Go
+				// zero value (0) when no live instance is found (fail-closed contract,
+				// see ClassificationContext.SessionIdleMinutes's doc comment).
+				classCtx.SessionIdleMinutes = int(inst.GetTimeSinceLastMeaningfulOutput().Minutes())
 			}
 		}
 		result := h.classifier.Classify(payload, classCtx)
@@ -363,6 +406,7 @@ func (h *ApprovalHandler) HandlePermissionRequest(w http.ResponseWriter, r *http
 			return
 		case classifier.Escalate:
 			escalation = result
+			classified = true
 			// Fall through to manual review queue (createApproval label below).
 		default:
 			// Unrecognized classifier.ClassificationDecision (e.g. a future 4th value). Fail safe
@@ -378,6 +422,7 @@ func (h *ApprovalHandler) HandlePermissionRequest(w http.ResponseWriter, r *http
 			// assignment (not after) so escalation is never observably set without it.
 			result.RuleID = classifier.RuleIDUnexpectedDecision
 			escalation = result
+			classified = true
 		}
 	}
 
@@ -424,6 +469,10 @@ Reply with APPROVE: <reason> if safe, or DENY: <reason> if risky.`
 
 	// Create a pending approval record
 	approvalID := uuid.New().String()
+	riskLevel := ""
+	if classified {
+		riskLevel = riskLevelString(escalation.RiskLevel)
+	}
 	approval := &PendingApproval{
 		ID:                 approvalID,
 		SessionID:          sessionID,
@@ -435,6 +484,7 @@ Reply with APPROVE: <reason> if safe, or DENY: <reason> if risky.`
 		CreatedAt:          time.Now(),
 		EscalationReason:   truncateEscalationReason(classifier.EscalationReasonText(escalation)),
 		EscalationCategory: string(classifier.CategorizeEscalationRuleID(escalation.RuleID)),
+		RiskLevel:          riskLevel,
 		// Use the configured timeout (default 4 minutes), strictly less than the 5-minute hook timeout.
 		ExpiresAt: time.Now().Add(h.approvalTimeout()),
 	}
@@ -535,6 +585,19 @@ func (h *ApprovalHandler) broadcastApprovalNotification(sessionID string, approv
 		metadata,
 	)
 	h.eventBus.Publish(event)
+
+	// Slack notification (Epic 1.3, Story 1.3.2): nil-guarded, matching every
+	// other optional Set* dependency in this file. NotifyApprovalPending
+	// performs its own dispatchAsync wrapping internally (Story 1.2.3's
+	// ownership model) — no separate goroutine needed at this call site.
+	if h.slackNotifier != nil {
+		cfg := config.LoadConfig()
+		dashboardURL := cfg.Slack.DashboardBaseURL
+		if dashboardURL == "" && h.dashboardBaseURLFn != nil {
+			dashboardURL = h.dashboardBaseURLFn()
+		}
+		h.slackNotifier.NotifyApprovalPending(context.Background(), cfg, approval, h.resolveSessionName(sessionID), dashboardURL)
+	}
 }
 
 // maxNotificationMessageLen is the maximum number of runes to include in a
@@ -744,7 +807,7 @@ const (
 // InjectHookConfig below reflect whatever base URL is current at their point of use rather
 // than a value baked in at server- or package-construction time.
 func hookApprovalURL() string {
-	return hookEndpoints(hookBaseURLFn)[HookPermissionApproval]
+	return hookEndpoints(getHookBaseURLFn())[HookPermissionApproval]
 }
 
 // InjectHookConfig writes (or merges) the stapler-squad PermissionRequest HTTP hook

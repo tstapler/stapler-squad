@@ -9,6 +9,7 @@ import type { WorktreeEntry } from "@/gen/session/v1/session_pb";
 import type { OmnibarFormState } from "./Omnibar";
 import { useAvailablePrograms } from "@/lib/hooks/useAvailablePrograms";
 import { getConnectTransport } from "@/lib/api/transport";
+import { isAutoApproveSupported } from "@/lib/sessions/autoApprove";
 import {
   body, field, label as labelClass, fieldInput, hint, select as selectClass,
   checkbox as checkboxClass, collapsible, collapsibleHeader, collapsibleTitle, collapsibleIcon, expanded,
@@ -22,6 +23,9 @@ import { RepoPathInput } from "@/components/ui/RepoPathInput";
 import { SlashCommandDropdown } from "@/components/ui/SlashCommandDropdown";
 import { useSlashCommands } from "@/lib/hooks/useSlashCommands";
 import { useSlashCommandSuggestions } from "@/lib/hooks/useSlashCommandSuggestions";
+import type { LauncherPresetEntry } from "@/lib/hooks/useLauncherPresets";
+import { OmnibarPresetList } from "./OmnibarPresetList";
+import * as presetListStyles from "./OmnibarPresetList.css";
 
 // ─── Session Type Radio Group ────────────────────────────────────────────────
 
@@ -64,11 +68,17 @@ export const SESSION_TYPES = [
 export const AUTONOMOUS_MODE_HINT =
   "Hand off a well-defined task and walk away — e.g. a small bug fix or chore. An LLM reviewer approves risky tool calls instead of you; you'll be notified when it's done. To stop it, delete or hibernate the session.";
 
+
 type SessionTypeValue = (typeof SESSION_TYPES)[number]["value"];
 
 const PRIMARY_TYPES = SESSION_TYPES.slice(0, 2).concat([SESSION_TYPES[3]]); // new_worktree, directory, one_off
 const ADVANCED_TYPES = [SESSION_TYPES[2], SESSION_TYPES[4]]; // existing_worktree, new_project
 const ADVANCED_VALUES = new Set<string>(ADVANCED_TYPES.map((t) => t.value));
+
+// Stable identity for callers that omit launcherPresets — a fresh `[]` literal as a default
+// parameter value would get a new identity every render, retriggering the auto-open effect's
+// dependency array unnecessarily.
+const EMPTY_PRESETS: LauncherPresetEntry[] = [];
 
 // Radio options for the "Open as" sub-selector inside New Project mode.
 const NEW_PROJECT_OPEN_AS = [
@@ -137,6 +147,20 @@ export interface OmnibarCreationPanelProps {
   pathDoesNotExist?: boolean;
   /** Name prefix from alias detection (e.g. "ssq-"). Used to hint that the user should type a label after it. */
   namePrefix?: string;
+  /** Live preview of the destination checkout path (github_url or new_worktree mode). */
+  destinationPreviewPath?: string | null;
+  /** True when destinationPreviewPath is the exact clone destination (github_url mode only). */
+  destinationPreviewIsExact?: boolean;
+  /** True while the destination path preview request is in flight. */
+  isDestinationPreviewLoading?: boolean;
+  /** Called when the user selects a launcher preset from the Presets section. */
+  onPresetSelect?: (preset: LauncherPresetEntry) => void;
+  /** Launcher presets — fetched once by OmnibarContext (shared with PresetDetector), passed
+   * down rather than fetched again here so a refetch (e.g. on Omnibar open) reaches both
+   * consumers from the same state. */
+  launcherPresets?: LauncherPresetEntry[];
+  launcherPresetsLoading?: boolean;
+  launcherPresetsLoadError?: string | null;
 }
 
 // Helper: file → base64 string (strips data URL prefix).
@@ -168,13 +192,29 @@ export function OmnibarCreationPanel({
   onAttachedImagesChange,
   pathDoesNotExist,
   namePrefix = "",
+  destinationPreviewPath = null,
+  destinationPreviewIsExact = false,
+  isDestinationPreviewLoading = false,
+  onPresetSelect,
+  launcherPresets: presets = EMPTY_PRESETS,
+  launcherPresetsLoading: presetsLoading = false,
+  launcherPresetsLoadError: presetsLoadError = null,
 }: OmnibarCreationPanelProps) {
   const {
-    sessionName, branch, program, category, autoYes,
+    sessionName, branch, program, category, autoYes, autoApprove,
     useTitleAsBranch, sessionType, existingWorktree, workingDir,
     parentDir, projectName, newProjectSessionType, createIfMissing, firstPrompt,
     autonomousMode,
   } = formState;
+
+  // If the program changes to an unsupported agent after auto-approve was checked
+  // (e.g. user picks "claude", checks the box, then switches to "codex"), force it back
+  // off rather than silently submitting a checked-but-disabled checkbox's stale true value.
+  useEffect(() => {
+    if (autoApprove && !isAutoApproveSupported(program)) {
+      setFormField("autoApprove", false);
+    }
+  }, [program, autoApprove, setFormField]);
 
   // Slash command autocomplete for the firstPrompt textarea.
   const firstPromptRef = useRef<HTMLTextAreaElement | null>(null);
@@ -248,6 +288,23 @@ export function OmnibarCreationPanel({
   }, [sessionType]);
 
   const availablePrograms = useAvailablePrograms();
+  // Default-expanded once there's something to show — either a loaded preset or a config
+  // error. An error must never sit hidden behind a collapsed section: AC requires a malformed
+  // config to "fail loudly", and a load_error with zero presets (the RPC's own contract) would
+  // otherwise default to collapsed under the empty-state branch below, silently hiding it. A
+  // truly empty, error-free state is the only case that stays collapsed (design/ux.md §5.1.1).
+  // Auto-opens only once: a ref (not an ongoing effect) so a later background refetch can't
+  // re-force the section open after the user has manually collapsed it.
+  const shouldAutoOpenPresets = presets.length > 0 || Boolean(presetsLoadError);
+  const [presetsOpen, setPresetsOpen] = useState(() => shouldAutoOpenPresets);
+  const hasAutoOpenedPresets = useRef(shouldAutoOpenPresets);
+  useEffect(() => {
+    if (!hasAutoOpenedPresets.current && shouldAutoOpenPresets) {
+      hasAutoOpenedPresets.current = true;
+      setPresetsOpen(true);
+    }
+  }, [shouldAutoOpenPresets]);
+  const isProgramRecognized = !program || availablePrograms.some((p) => p.value === program);
 
   // ─── File attachment state ────────────────────────────────────────────────
   const [attachedFiles, setAttachedFiles] = useState<AttachedFile[]>([]);
@@ -451,6 +508,14 @@ export function OmnibarCreationPanel({
           )}
         </div>
 
+        {/* GitHub URL destination preview — exact clone destination, shown before the
+            mode selector since it applies regardless of which session type is chosen. */}
+        {destinationPreviewIsExact && destinationPreviewPath && (
+          <div className={hint} style={{ marginTop: 0 }}>
+            Will check out to: <code>{destinationPreviewPath}</code>
+          </div>
+        )}
+
         {/* Session Type — ARIA radio group (ADR-003: arrow keys cycle) */}
         <div className={field}>
           <SessionTypeRadioGroup
@@ -620,6 +685,11 @@ export function OmnibarCreationPanel({
                   ? `Branch name will be: ${sessionName || "(enter session name)"}`
                   : "Branch to create for the new worktree"}
               </span>
+              {!isDestinationPreviewLoading && destinationPreviewPath && !destinationPreviewIsExact && (
+                <span className={hint}>
+                  Will be created under: <code>{destinationPreviewPath}_&lt;unique-id&gt;</code>
+                </span>
+              )}
             </div>
           </>
         )}
@@ -759,6 +829,30 @@ export function OmnibarCreationPanel({
           )}
         </div>
 
+        {/* Presets — hand-edited, shareable launch shortcuts from launcher-presets.json.
+            Placed above Advanced Options so it's visible without an extra click. */}
+        <div className={collapsible}>
+          <div
+            className={collapsibleHeader}
+            onClick={() => setPresetsOpen((v) => !v)}
+            aria-expanded={presetsOpen}
+            data-testid="preset-section-header"
+          >
+            <span className={collapsibleTitle}>Presets</span>
+            <span className={`${collapsibleIcon} ${presetsOpen ? expanded : ""}`}>▼</span>
+          </div>
+          <div className={[styles.advancedSection, presetsOpen ? styles.advancedSectionOpen : ""].filter(Boolean).join(" ")}>
+            <div className={collapsibleContent}>
+              <OmnibarPresetList
+                presets={presets}
+                loading={presetsLoading}
+                loadError={presetsLoadError}
+                onSelect={(preset) => onPresetSelect?.(preset)}
+              />
+            </div>
+          </div>
+        </div>
+
         {/* Advanced Options */}
         <div className={collapsible}>
           <div className={collapsibleHeader} onClick={onToggleAdvanced}>
@@ -782,6 +876,11 @@ export function OmnibarCreationPanel({
                     <option key={p.value} value={p.value}>{p.label}</option>
                   ))}
                 </select>
+                {!isProgramRecognized && (
+                  <span className={presetListStyles.programWarning} data-testid="preset-program-warning">
+                    &quot;{program}&quot; not found in PATH — check it&apos;s installed
+                  </span>
+                )}
               </div>
 
               {/* Category */}
@@ -799,15 +898,35 @@ export function OmnibarCreationPanel({
                 />
               </div>
 
-              {/* Auto-Yes */}
+              {/* Auto-Yes: TapEnter keystroke fallback + --permission-mode bypassPermissions.
+                  Distinct mechanism from Auto-Approve below (auto_approve field) -- label
+                  deliberately avoids the word "approve" so the two aren't misread as the
+                  same setting; see session/instance.go's AutoApprove doc comment. */}
               <label className={checkboxClass}>
                 <input
                   type="checkbox"
                   checked={autoYes}
                   onChange={(e) => setFormField("autoYes", e.target.checked)}
                 />
-                <span>Auto-approve prompts (experimental)</span>
+                <span>Auto-accept prompts (Enter-key fallback, experimental)</span>
               </label>
+
+              {/* Auto-Approve (yolo mode) -- independent of Auto-Yes above; injects a
+                  per-agent CLI flag that skips permission/approval prompts entirely. */}
+              <label className={checkboxClass}>
+                <input
+                  type="checkbox"
+                  checked={autoApprove}
+                  disabled={!isAutoApproveSupported(program)}
+                  onChange={(e) => setFormField("autoApprove", e.target.checked)}
+                />
+                <span>⚡ Auto-approve (skip permission prompts)</span>
+              </label>
+              <span className={hint}>
+                {isAutoApproveSupported(program)
+                  ? "Skips ALL permission/approval prompts for this agent. Risk of unintended file changes — use only in disposable/sandboxed workspaces."
+                  : `Not supported for "${program || "this agent"}" yet.`}
+              </span>
             </div>
           </div>
         </div>
@@ -823,6 +942,7 @@ export function OmnibarCreationPanel({
         </button>
         <button
           type="button"
+          data-testid="omnibar-create-session-button"
           className={`${buttonClass} ${buttonPrimary}`}
           onClick={onSubmit}
           disabled={!canSubmit || isSubmitting}

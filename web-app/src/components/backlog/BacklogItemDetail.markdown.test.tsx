@@ -94,6 +94,7 @@ const baseItem: BacklogItem = {
   statusEvents: [],
   totalEstimatedCostUsd: 0,
   progressNotes: [],
+  activityNotes: [],
   autoSpawnSession: false,
   autoCreatePR: false,
 };

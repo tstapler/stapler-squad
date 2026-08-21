@@ -26,10 +26,14 @@ import (
 
 	git "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
+	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 )
 
 // initRepoInternal mirrors initRepo from vcsreader_test.go for white-box tests.
+//
+// Uses go-git directly rather than shelling out — see
+// .claude/rules/prefer-go-git-over-subshells.md.
 func initRepoInternal(t *testing.T) string {
 	t.Helper()
 	raw := t.TempDir()
@@ -37,26 +41,27 @@ func initRepoInternal(t *testing.T) string {
 	if err != nil {
 		t.Fatalf("EvalSymlinks: %v", err)
 	}
-	run := func(args ...string) {
-		t.Helper()
-		cmd := safeexec.CommandContext(context.Background(), "git", args...)
-		cmd.Dir = dir
-		cmd.Env = append(os.Environ(),
-			"GIT_AUTHOR_NAME=Test", "GIT_AUTHOR_EMAIL=test@test.com",
-			"GIT_COMMITTER_NAME=Test", "GIT_COMMITTER_EMAIL=test@test.com",
-		)
-		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("git %v: %v\n%s", args, err, out)
-		}
+	repo, err := git.PlainInitWithOptions(dir, &git.PlainInitOptions{
+		InitOptions: git.InitOptions{DefaultBranch: plumbing.NewBranchReferenceName("main")},
+	})
+	if err != nil {
+		t.Fatalf("PlainInitWithOptions: %v", err)
 	}
-	run("init", "-b", "main")
-	run("config", "user.email", "test@test.com")
-	run("config", "user.name", "Test")
 	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("hello\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	run("add", ".")
-	run("commit", "-m", "initial commit")
+	wt, err := repo.Worktree()
+	if err != nil {
+		t.Fatalf("Worktree: %v", err)
+	}
+	if _, err := wt.Add("."); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	if _, err := wt.Commit("initial commit", &git.CommitOptions{
+		Author: &object.Signature{Name: "Test", Email: "test@test.com", When: time.Now()},
+	}); err != nil {
+		t.Fatalf("Commit: %v", err)
+	}
 	return dir
 }
 
@@ -370,6 +375,57 @@ func TestGoGitVCSReader_HasUncommitted_CacheHitReturnsCachedValue(t *testing.T) 
 	}
 	if cached != !got {
 		t.Errorf("warm call: got %v, want %v (cache was not used)", cached, !got)
+	}
+}
+
+// TestGoGitVCSReader_AheadBehind_ReusesResultOnExpiredTTLWhenHashesUnchanged
+// verifies the PerfFix-3 optimization: when a cached aheadBehindEntry's TTL
+// has expired but HEAD/base hashes still match the current ones (neither ref
+// moved), AheadBehind must reuse the cached ahead/behind counts rather than
+// re-running findMergeBase + countCommitsTo.
+//
+// Detection strategy: after a cold call establishes the real (ahead, behind),
+// the cache entry is overwritten with sentinel counts that don't match
+// reality, an expired expiry, and the SAME headHash/baseHash. If AheadBehind
+// recomputed instead of reusing, it would return the real counts, not the
+// sentinels — so observing the sentinels proves reuse.
+func TestGoGitVCSReader_AheadBehind_ReusesResultOnExpiredTTLWhenHashesUnchanged(t *testing.T) {
+	dir := initRepoInternal(t)
+	gitRunInternal(t, dir, "checkout", "-b", "feature")
+	if err := os.WriteFile(filepath.Join(dir, "feature.txt"), []byte("feature\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	gitRunInternal(t, dir, "add", "feature.txt")
+	gitRunInternal(t, dir, "commit", "-m", "diverge from main")
+
+	r := &GoGitVCSReader{}
+	ahead, behind, err := r.AheadBehind(dir, "main")
+	if err != nil {
+		t.Fatalf("cold call: %v", err)
+	}
+	if ahead == 0 && behind == 0 {
+		t.Fatal("test setup did not diverge HEAD from base — real (ahead, behind) is (0, 0)")
+	}
+
+	cacheKey := dir + "\x00" + "main"
+	v, ok := r.aheadBehindCache.Load(cacheKey)
+	if !ok {
+		t.Fatal("cold call did not populate aheadBehindCache")
+	}
+	entry := v.(aheadBehindEntry)
+	const sentinelAhead, sentinelBehind = 999, 888
+	entry.ahead = sentinelAhead
+	entry.behind = sentinelBehind
+	entry.expiry = time.Now().Add(-time.Second) // force TTL-expired path
+	r.aheadBehindCache.Store(cacheKey, entry)
+
+	gotAhead, gotBehind, err := r.AheadBehind(dir, "main")
+	if err != nil {
+		t.Fatalf("warm call: %v", err)
+	}
+	if gotAhead != sentinelAhead || gotBehind != sentinelBehind {
+		t.Errorf("AheadBehind() = (%d, %d), want cached sentinels (%d, %d) — expired-but-unchanged-hash entry was not reused",
+			gotAhead, gotBehind, sentinelAhead, sentinelBehind)
 	}
 }
 
@@ -788,6 +844,57 @@ func TestReachableSet_CapsAtLimit(t *testing.T) {
 	}
 	if len(set) != 3 {
 		t.Errorf("len(set) = %d, want 3 (capped by maxReachableSetCommits; history has 6 commits)", len(set))
+	}
+}
+
+// TestCountCommitsTo_StopsAtBoundOnDeeplyDivergedBranch verifies countCommitsTo
+// stops walking once mergeBaseBFSLimit commits have been visited, rather than
+// decoding every commit back to the branch's root (the same class of bound
+// findMergeBase already applies).
+func TestCountCommitsTo_StopsAtBoundOnDeeplyDivergedBranch(t *testing.T) {
+	repo := initRepoInternal(t) // 1 commit already (the initial/stop commit)
+
+	for i := range 5 {
+		name := filepath.Join(repo, fmt.Sprintf("file%d.txt", i))
+		if err := os.WriteFile(name, []byte("x"), 0644); err != nil {
+			t.Fatal(err)
+		}
+		gitRunInternal(t, repo, "add", ".")
+		gitRunInternal(t, repo, "commit", "-m", fmt.Sprintf("commit %d", i))
+	}
+	// Total history: 6 commits (1 stop commit + 5 more reachable from HEAD).
+
+	gitRepo, err := git.PlainOpen(repo)
+	if err != nil {
+		t.Fatalf("PlainOpen: %v", err)
+	}
+	head, err := gitRepo.Head()
+	if err != nil {
+		t.Fatalf("Head: %v", err)
+	}
+	logIter, err := gitRepo.Log(&git.LogOptions{From: head.Hash()})
+	if err != nil {
+		t.Fatalf("Log: %v", err)
+	}
+	var commits []plumbing.Hash
+	if err := logIter.ForEach(func(c *object.Commit) error {
+		commits = append(commits, c.Hash)
+		return nil
+	}); err != nil {
+		t.Fatalf("ForEach: %v", err)
+	}
+	stop := commits[len(commits)-1] // the initial commit, oldest in history
+
+	origLimit := mergeBaseBFSLimit
+	mergeBaseBFSLimit = 3
+	defer func() { mergeBaseBFSLimit = origLimit }()
+
+	n, err := countCommitsTo(gitRepo, head.Hash(), stop)
+	if err != nil {
+		t.Fatalf("countCommitsTo: %v", err)
+	}
+	if n != 3 {
+		t.Errorf("countCommitsTo = %d, want 3 (capped by mergeBaseBFSLimit; 5 commits separate head from stop)", n)
 	}
 }
 

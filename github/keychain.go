@@ -12,40 +12,35 @@ const keychainTokenKey = "github-token"       // legacy single-account key (gith
 const keychainAccountsKey = "github-accounts" // JSON list of accounts; see AccountRef
 const keychainAccountPrefix = "github-token:" // per-account key prefix
 
-// keychainMu serializes every call into the underlying keyring package.
-// go-keyring's own backends (the test-only mockProvider, and the real OS
-// backends behind it — macOS Keychain, Secret Service over D-Bus) are not
-// guaranteed thread-safe, and this package has two independent, concurrently
-// -triggerable callers: RPC handlers (e.g. AddGitHubAccountWithToken) and
-// UserPRCache's background refresh loop (loop -> fetch -> resolveAllLogins ->
-// collectAllTokens). Guarding every keyring.Get/Set/Delete call here — the
-// one place all call sites already funnel through — fixes the race
-// regardless of whether a given backend happens to be safe on its own.
-//
-// A plain Mutex (not RWMutex) is used because keychain access is not a hot
-// path: reads happen once per UserPRCache poll interval (default tens of
-// seconds) plus occasional RPC calls, so read-read concurrency has no
-// measurable benefit here and isn't worth the extra RWMutex complexity.
+// keychainMu guards every call into the keyring package. go-keyring's
+// mockProvider (github.com/zalando/go-keyring@v0.2.8/keyring_mock.go) backs
+// ALL keys with a single unsynchronized mockStore map[string]map[string]string
+// — Get/Set/Delete for two different keys still read/write that same shared
+// map with no internal locking, so a per-key lock does not prevent a race
+// there; only serializing all access does. Verified directly: switching to a
+// per-(service,key) lock registry made `go test -race ./github/...` fail
+// TestSetKeychainTokenForAccount_NoRace_When_ConcurrentWithListAndGetAllTokens
+// and TestDeleteKeychainTokenForAccount_NoRace_When_ConcurrentWithReads with a
+// genuine data race inside mockProvider (2026-08-14). Live mutex profiling
+// separately showed this lock's ~37% of total mutex delay sits almost
+// entirely inside keyring.Get's OS Keychain round-trip rather than lock-
+// acquisition overhead, so narrowing scope wouldn't reduce delay anyway — the
+// slow work itself must run serialized because the dependency it calls into
+// isn't safe to call concurrently across keys.
 var keychainMu sync.Mutex
 
-// keyringGet wraps keyring.Get with keychainMu so it never races with a
-// concurrent keyringSet/keyringDelete call.
 func keyringGet(service, key string) (string, error) {
 	keychainMu.Lock()
 	defer keychainMu.Unlock()
 	return keyring.Get(service, key)
 }
 
-// keyringSet wraps keyring.Set with keychainMu so it never races with a
-// concurrent keyringGet/keyringDelete call.
 func keyringSet(service, key, value string) error {
 	keychainMu.Lock()
 	defer keychainMu.Unlock()
 	return keyring.Set(service, key, value)
 }
 
-// keyringDelete wraps keyring.Delete with keychainMu so it never races with a
-// concurrent keyringGet/keyringSet call.
 func keyringDelete(service, key string) error {
 	keychainMu.Lock()
 	defer keychainMu.Unlock()
@@ -69,10 +64,18 @@ func accountKey(ref AccountRef) string {
 	return keychainAccountPrefix + NormalizeHost(ref.Host) + ":" + ref.Username
 }
 
-// GetKeychainToken returns any stored GitHub token (first account, or the
-// legacy single-account slot). Kept for backward-compatibility with the
-// single-token auth flow.
+// GetKeychainToken returns a token for the default single-token auth flow
+// (getGHToken/newGHRequest), which always targets api.github.com. It must
+// therefore prefer a github.com account's token over any other configured
+// host: returning an enterprise account's token here sends valid credentials
+// to the wrong API and GitHub correctly rejects them as 401 Bad credentials,
+// regardless of account order in ListKeychainAccounts. Falls back to the
+// first account of any host, then the legacy single-account slot, only when
+// no github.com account is configured.
 func GetKeychainToken() string {
+	if tok := GetKeychainTokenForHost(defaultHost); tok != "" {
+		return tok
+	}
 	for _, ref := range ListKeychainAccounts() {
 		if tok := GetKeychainTokenForAccount(ref.Host, ref.Username); tok != "" {
 			return tok

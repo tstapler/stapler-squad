@@ -1,7 +1,9 @@
 "use client";
+// +feature: approval-rules-risk-column
 
 import { useEffect, useMemo, useState } from "react";
 import { useApprovalRules } from "@/lib/hooks/useApprovalRules";
+import { useNotifications } from "@/lib/contexts/NotificationContext";
 import { useApprovalAnalytics } from "@/lib/hooks/useApprovalAnalytics";
 import { useGenerateRule } from "@/lib/hooks/useGenerateRule";
 import { useExportRules } from "@/lib/hooks/useExportRules";
@@ -16,6 +18,7 @@ import { RuleTemplate } from "@/lib/ruleTemplates";
 import { RuleBuilderForm } from "@/components/rules/RuleBuilderForm";
 import { TemplateLibrary } from "@/components/rules/TemplateLibrary";
 import { MatchDescription } from "@/components/rules/MatchDescription";
+import { SeverityBadge } from "./SeverityBadge";
 import {
   panel, header, titleRow, title, subtitle, refreshButton,
   analyticsBar, analyticsTotal, analyticsRate, rateAllow, rateManual, analyticsTopTool,
@@ -79,7 +82,9 @@ interface ApprovalRulesPanelProps {
  * create, edit, toggle, and delete custom rules via the structured rule builder.
  */
 export function ApprovalRulesPanel({ prefill }: ApprovalRulesPanelProps) {
-  const { rules, loading, error, upsertRule, deleteRule, refresh } = useApprovalRules();
+  const { rules, loading, error, upsertRule, deleteRule, refresh, reloadClaudeSettingsRules } = useApprovalRules();
+  const { showActionToast } = useNotifications();
+  const [reloadingClaudeSettings, setReloadingClaudeSettings] = useState(false);
   const { summary, loading: analyticsLoading } = useApprovalAnalytics({ windowDays: 7 });
   const { exportRules, loading: exporting, error: exportError } = useExportRules();
 
@@ -269,6 +274,24 @@ export function ApprovalRulesPanel({ prefill }: ApprovalRulesPanelProps) {
     }
   };
 
+  const handleReloadClaudeSettings = async () => {
+    if (reloadingClaudeSettings) return; // guards against a rapid double-click firing two RPCs
+    setReloadingClaudeSettings(true);
+    try {
+      const resp = await reloadClaudeSettingsRules();
+      showActionToast(
+        resp.message || (resp.success ? `Reloaded ${resp.ruleCount} claude-settings rule(s).` : "Failed to reload Claude settings rules — previous rules still active."),
+        resp.success ? "success" : "error",
+        "claude-settings-reload"
+      );
+    } catch (e) {
+      console.error("Failed to reload claude-settings rules:", e);
+      showActionToast("Could not reach the server to reload rules. Try again.", "error", "claude-settings-reload");
+    } finally {
+      setReloadingClaudeSettings(false);
+    }
+  };
+
   // ── Epic 3: handle suggestion cards ──────────────────────────────────────
 
   const [dismissedIndices, setDismissedIndices] = useState<Set<number>>(new Set());
@@ -455,6 +478,19 @@ export function ApprovalRulesPanel({ prefill }: ApprovalRulesPanelProps) {
           Stored in ~/.config/stapler-squad/shared_rules.yaml
         </div>
       )}
+      {/* ── Claude settings reload hint (shown when viewing claude-settings tab) ── */}
+      {sourceFilter === "claude-settings" && (
+        <div className={configFileHint}>
+          Loaded from ~/.claude/settings.json{" "}
+          <button
+            className={retryButton}
+            onClick={handleReloadClaudeSettings}
+            disabled={reloadingClaudeSettings}
+          >
+            {reloadingClaudeSettings ? "Reloading…" : "Reload rules"}
+          </button>
+        </div>
+      )}
 
       {/* ── Error ── */}
       {error && (
@@ -512,6 +548,7 @@ export function ApprovalRulesPanel({ prefill }: ApprovalRulesPanelProps) {
                 <th className={`${th} ${thSortable}`} onClick={() => handleSort("decision")}>
                   Decision{sortIcon("decision")}
                 </th>
+                <th className={th}>Risk</th>
                 <th className={th}>Source</th>
                 <th
                   className={`${th} ${thSortable}`}
@@ -546,6 +583,9 @@ export function ApprovalRulesPanel({ prefill }: ApprovalRulesPanelProps) {
                     <span className={`${decisionBadge} ${decisionClass(rule.decision)}`}>
                       {decisionLabel(rule.decision)}
                     </span>
+                  </td>
+                  <td className={td}>
+                    <SeverityBadge riskLevel={rule.riskLevel} compact />
                   </td>
                   <td className={td}>
                     <span

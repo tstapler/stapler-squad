@@ -9,6 +9,9 @@ import (
 	"testing"
 	"time"
 
+	gogit "github.com/go-git/go-git/v5"
+	"github.com/go-git/go-git/v5/plumbing"
+	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/session/git"
 )
@@ -16,32 +19,56 @@ import (
 // setupTestGitRepo creates a temporary git repository with an initial commit and a
 // configured test identity, mirroring session/git/worktree_creation_test.go's
 // setupTestRepo helper (duplicated here rather than imported since that one lives in
-// package git and is unexported).
+// package git and is unexported). Uses go-git directly rather than shelling out — see
+// .claude/rules/prefer-go-git-over-subshells.md.
 func setupTestGitRepo(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
 
-	run := func(args ...string) {
-		t.Helper()
-		cmd := safeexec.CommandContext(context.Background(), "git", args...)
-		cmd.Dir = dir
-		out, err := cmd.CombinedOutput()
-		if err != nil {
-			t.Fatalf("git %s failed: %s: %v", strings.Join(args, " "), out, err)
-		}
+	repo, err := gogit.PlainInitWithOptions(dir, &gogit.PlainInitOptions{
+		InitOptions: gogit.InitOptions{DefaultBranch: plumbing.NewBranchReferenceName("main")},
+	})
+	if err != nil {
+		t.Fatalf("git init failed: %v", err)
 	}
-
-	run("init")
-	run("config", "user.email", "test@example.com")
-	run("config", "user.name", "Test User")
 	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("# Test\n"), 0o644); err != nil {
 		t.Fatalf("failed to write README.md: %v", err)
 	}
-	run("add", ".")
-	run("commit", "-m", "Initial commit")
-	run("branch", "-M", "main")
+	wt, err := repo.Worktree()
+	if err != nil {
+		t.Fatalf("worktree failed: %v", err)
+	}
+	if _, err := wt.Add("README.md"); err != nil {
+		t.Fatalf("git add failed: %v", err)
+	}
+	if _, err := wt.Commit("Initial commit", &gogit.CommitOptions{
+		Author: &object.Signature{Name: "Test User", Email: "test@example.com", When: time.Now()},
+	}); err != nil {
+		t.Fatalf("git commit failed: %v", err)
+	}
 
 	return dir
+}
+
+// setupLinkedWorktree builds a real linked worktree (git worktree add topology)
+// on top of an existing main repo — the topology where --git-dir and
+// --git-common-dir resolve to different directories, which a plain setupTestGitRepo
+// fixture cannot exercise.
+func setupLinkedWorktree(t *testing.T, repoPath, sessionName string) string {
+	t.Helper()
+	worktree, _, err := git.NewGitWorktree(repoPath, sessionName)
+	if err != nil {
+		t.Fatalf("git.NewGitWorktree failed: %v", err)
+	}
+	if err := worktree.Setup(); err != nil {
+		t.Fatalf("worktree.Setup failed: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := worktree.Cleanup(); err != nil {
+			t.Logf("worktree.Cleanup failed (non-fatal): %v", err)
+		}
+	})
+	return worktree.GetWorktreePath()
 }
 
 // gitLsFiles returns the list of paths currently tracked in the git index at dir.
@@ -83,8 +110,10 @@ func makeTestBacklogItemWithID(id, title, acJSON string) *BacklogItemData {
 }
 
 // TestWriteSlashCommands_CreatesCorrectFileCount verifies that 2 AC criteria produce
-// status.md + done-0.md + fail-0.md + done-1.md + fail-1.md + review.md + ship.md + help.md = 8 files.
+// status.md + done-0.md + fail-0.md + done-1.md + fail-1.md + review.md + ship.md +
+// help.md + block.md + duplicate.md = 10 files.
 func TestWriteSlashCommands_CreatesCorrectFileCount(t *testing.T) {
+	t.Parallel()
 	worktree := t.TempDir()
 	ac := `[{"index":0,"text":"First criterion","status":"pending"},{"index":1,"text":"Second criterion","status":"pending"}]`
 	item := makeTestBacklogItemWithID("test-item-id-1", "My Feature", ac)
@@ -108,6 +137,8 @@ func TestWriteSlashCommands_CreatesCorrectFileCount(t *testing.T) {
 		"review.md",
 		"ship.md",
 		"help.md",
+		"block.md",
+		"duplicate.md",
 	}
 	if len(entries) != len(wantFiles) {
 		names := make([]string, len(entries))
@@ -127,6 +158,7 @@ func TestWriteSlashCommands_CreatesCorrectFileCount(t *testing.T) {
 
 // TestWriteSlashCommands_DoneFileContainsItemUUID verifies done-0.md contains the item UUID.
 func TestWriteSlashCommands_DoneFileContainsItemUUID(t *testing.T) {
+	t.Parallel()
 	worktree := t.TempDir()
 	itemID := "550e8400-e29b-41d4-a716-446655440000"
 	ac := `[{"index":0,"text":"Do something","status":"pending"},{"index":1,"text":"Do more","status":"pending"}]`
@@ -154,13 +186,58 @@ func TestWriteSlashCommands_DoneFileContainsItemUUID(t *testing.T) {
 	}
 }
 
+// TestWriteSlashCommands_BlockAndDuplicateFilesContainItemIDAndGatingLanguage
+// verifies block.md and duplicate.md (written via buildBlockAndDuplicateCommands)
+// substitute the item's UUID and each explain the work-role-session gating and
+// the SkipReviewGate exception, so an agent reading either file understands why
+// a call might be rejected before it tries.
+func TestWriteSlashCommands_BlockAndDuplicateFilesContainItemIDAndGatingLanguage(t *testing.T) {
+	t.Parallel()
+	worktree := t.TempDir()
+	itemID := "550e8400-e29b-41d4-a716-446655440002"
+	ac := `[{"index":0,"text":"Do something","status":"pending"}]`
+	item := makeTestBacklogItemWithID(itemID, "Feature", ac)
+
+	if err := WriteSlashCommands(nil, item, worktree); err != nil {
+		t.Fatalf("WriteSlashCommands returned error: %v", err)
+	}
+
+	blockPath := filepath.Join(worktree, backlogCommandsDir, "block.md")
+	blockData, err := os.ReadFile(blockPath)
+	if err != nil {
+		t.Fatalf("failed to read block.md: %v", err)
+	}
+	blockContent := string(blockData)
+	blockMustContain := []string{itemID, "report_blocked", "work-role session"}
+	for _, want := range blockMustContain {
+		if !strings.Contains(blockContent, want) {
+			t.Errorf("expected block.md to contain %q\nContent:\n%s", want, blockContent)
+		}
+	}
+
+	duplicatePath := filepath.Join(worktree, backlogCommandsDir, "duplicate.md")
+	duplicateData, err := os.ReadFile(duplicatePath)
+	if err != nil {
+		t.Fatalf("failed to read duplicate.md: %v", err)
+	}
+	duplicateContent := string(duplicateData)
+	duplicateMustContain := []string{itemID, "report_duplicate", "work-role session", "skip the review gate"}
+	for _, want := range duplicateMustContain {
+		if !strings.Contains(duplicateContent, want) {
+			t.Errorf("expected duplicate.md to contain %q\nContent:\n%s", want, duplicateContent)
+		}
+	}
+}
+
 // TestWriteSlashCommands_ReviewFileInstructsShipOnPassAndAfterAttemptCap verifies
 // review.md tells the agent to run /backlog/ship both immediately on a PASS
-// verdict and as a bounded escape hatch after MaxSameSessionReviewAttempts
-// review cycles without one — closing the gap where review.md previously said
-// "PASS → you're done" and "Keep looping until PASS" with no mention of
-// /backlog/ship at all (see de6d7878-9d6e-4081-acfa-02ff545c87b4, 2026-07-20).
+// verdict and as a bounded escape hatch once the server-tracked attempt count
+// (MaxSameSessionReviewAttempts) reports the cap is hit — closing the gap where
+// review.md previously said "PASS → you're done" and "Keep looping until PASS"
+// with no mention of /backlog/ship at all (see
+// de6d7878-9d6e-4081-acfa-02ff545c87b4, 2026-07-20).
 func TestWriteSlashCommands_ReviewFileInstructsShipOnPassAndAfterAttemptCap(t *testing.T) {
+	t.Parallel()
 	worktree := t.TempDir()
 	itemID := "550e8400-e29b-41d4-a716-446655440001"
 	ac := `[{"index":0,"text":"Do something","status":"pending"}]`
@@ -179,7 +256,7 @@ func TestWriteSlashCommands_ReviewFileInstructsShipOnPassAndAfterAttemptCap(t *t
 
 	mustContain := []string{
 		"/backlog/ship",
-		fmt.Sprintf("%d review cycles", MaxSameSessionReviewAttempts),
+		fmt.Sprintf("%d allowed in this session", MaxSameSessionReviewAttempts),
 	}
 	for _, want := range mustContain {
 		if !strings.Contains(content, want) {
@@ -196,6 +273,7 @@ func TestWriteSlashCommands_ReviewFileInstructsShipOnPassAndAfterAttemptCap(t *t
 // TestWriteBacklogContextFile_WritesFileWithExpectedContent verifies the context file
 // contains BuildSessionInitialPrompt output and the fallback instructions block.
 func TestWriteBacklogContextFile_WritesFileWithExpectedContent(t *testing.T) {
+	t.Parallel()
 	worktree := t.TempDir()
 	ac := `[{"index":0,"text":"Implement handler","status":"pending"}]`
 	item := &BacklogItemData{
@@ -239,6 +317,7 @@ func TestWriteBacklogContextFile_WritesFileWithExpectedContent(t *testing.T) {
 // prompt gets — this is the exact consistency this PR's fix moved into
 // BuildSessionInitialPrompt so both channels render identically by construction.
 func TestWriteBacklogContextFile_IncludesPlanArtifactsPath(t *testing.T) {
+	t.Parallel()
 	worktree := t.TempDir()
 	ac := `[{"index":0,"text":"Implement handler","status":"pending"}]`
 	item := &BacklogItemData{
@@ -270,6 +349,7 @@ func TestWriteBacklogContextFile_IncludesPlanArtifactsPath(t *testing.T) {
 // priorSessions slice is actually threaded through to the rendered content — the
 // prior signature-only update (always passing nil) never exercised this contract.
 func TestWriteBacklogContextFile_IncludesPriorSessions(t *testing.T) {
+	t.Parallel()
 	worktree := t.TempDir()
 	ac := `[{"index":0,"text":"Implement handler","status":"pending"}]`
 	item := &BacklogItemData{
@@ -310,6 +390,7 @@ func TestWriteBacklogContextFile_IncludesPriorSessions(t *testing.T) {
 
 // TestCleanupSlashCommands_NoErrorWhenAbsent verifies cleanup doesn't error on missing dir.
 func TestCleanupSlashCommands_NoErrorWhenAbsent(t *testing.T) {
+	t.Parallel()
 	worktree := t.TempDir()
 	if err := CleanupSlashCommands(worktree); err != nil {
 		t.Errorf("CleanupSlashCommands should not error when dir absent, got: %v", err)
@@ -318,6 +399,7 @@ func TestCleanupSlashCommands_NoErrorWhenAbsent(t *testing.T) {
 
 // TestCleanupBacklogContextFile_NoErrorWhenAbsent verifies cleanup doesn't error on missing file.
 func TestCleanupBacklogContextFile_NoErrorWhenAbsent(t *testing.T) {
+	t.Parallel()
 	worktree := t.TempDir()
 	if err := CleanupBacklogContextFile(worktree); err != nil {
 		t.Errorf("CleanupBacklogContextFile should not error when file absent, got: %v", err)
@@ -334,6 +416,7 @@ func TestCleanupBacklogContextFile_NoErrorWhenAbsent(t *testing.T) {
 // approach only prevents NEW files from being staged — it does nothing once a file is
 // already tracked.
 func TestWriteBacklogContextFile_UntracksPreviouslyCommittedContextFile(t *testing.T) {
+	t.Parallel()
 	repo := setupTestGitRepo(t)
 
 	// Simulate the historical pollution: .backlog-context.md gets committed to the branch.
@@ -387,6 +470,7 @@ func TestWriteBacklogContextFile_UntracksPreviouslyCommittedContextFile(t *testi
 // self-heal for .claude/commands/backlog/ — the other half of the "chore(backlog):
 // untrack backlog context/command files" incident history.
 func TestWriteSlashCommands_UntracksPreviouslyCommittedSlashCommandFiles(t *testing.T) {
+	t.Parallel()
 	repo := setupTestGitRepo(t)
 
 	cmdDir := filepath.Join(repo, backlogCommandsDir)
@@ -442,6 +526,7 @@ func TestWriteSlashCommands_UntracksPreviouslyCommittedSlashCommandFiles(t *test
 // tmp-file-then-rename), so a later spawn can never see content mixed from an earlier
 // item or session.
 func TestWriteBacklogContextFile_NoStaleContentLeaksAcrossRespawn(t *testing.T) {
+	t.Parallel()
 	worktree := t.TempDir()
 
 	firstAC := `[{"index":0,"text":"First item criterion","status":"pending"}]`
@@ -482,6 +567,7 @@ func TestWriteBacklogContextFile_NoStaleContentLeaksAcrossRespawn(t *testing.T) 
 // have no git backing at all — mirroring addWorktreeExcludes' existing best-effort
 // handling of the same case.
 func TestUntrackTrackedScaffolding_NoErrorOnNonGitDirectory(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	removed, err := git.UntrackScaffolding(dir, git.ScaffoldingExcludePatterns)
 	if err != nil {
@@ -496,6 +582,7 @@ func TestUntrackTrackedScaffolding_NoErrorOnNonGitDirectory(t *testing.T) {
 // only touches paths matching git.ScaffoldingExcludePatterns and leaves everything else in
 // the index untouched.
 func TestUntrackTrackedScaffolding_LeavesUnrelatedTrackedFilesAlone(t *testing.T) {
+	t.Parallel()
 	repo := setupTestGitRepo(t)
 
 	before := gitLsFiles(t, repo)
@@ -514,5 +601,112 @@ func TestUntrackTrackedScaffolding_LeavesUnrelatedTrackedFilesAlone(t *testing.T
 	after := gitLsFiles(t, repo)
 	if !containsPath(after, "README.md") {
 		t.Errorf("README.md was unexpectedly untracked")
+	}
+}
+
+// TestAddWorktreeExcludes_LinkedWorktree_ExcludesScaffoldingFiles is the regression test
+// for the bug this item fixes: addWorktreeExcludes must write to the git-COMMON info/exclude
+// (shared by every worktree), not the worktree-private admin dir's info/exclude (which
+// `git status` never reads). A plain setupTestGitRepo fixture can't detect this bug class —
+// --git-dir and --git-common-dir resolve identically there. This test only fails against the
+// pre-fix code (--git-dir); see the accompanying commit message for the RED/GREEN record.
+func TestAddWorktreeExcludes_LinkedWorktree_ExcludesScaffoldingFiles(t *testing.T) {
+	t.Parallel()
+	repoPath := setupTestGitRepo(t)
+	worktreePath := setupLinkedWorktree(t, repoPath, "excludes-regression")
+
+	if err := os.WriteFile(filepath.Join(worktreePath, ".backlog-context.md"), []byte("scaffolding"), 0o644); err != nil {
+		t.Fatalf("failed to write .backlog-context.md: %v", err)
+	}
+
+	addWorktreeExcludes(worktreePath)
+
+	dirty, err := IsWorktreeDirty(context.Background(), worktreePath)
+	if err != nil {
+		t.Fatalf("IsWorktreeDirty returned error: %v", err)
+	}
+	if dirty {
+		t.Errorf("expected worktree to be clean after addWorktreeExcludes, but IsWorktreeDirty returned true — " +
+			"the exclude pattern likely landed in the worktree-private admin dir instead of the shared git-common-dir")
+	}
+}
+
+// TestAddWorktreeExcludes_PlainRepo_GitCommonDirEqualsGitDir pins the mechanism by which
+// the --git-common-dir fix is a no-op for plain (non-worktree) repos: both flags must
+// resolve to the same directory there.
+func TestAddWorktreeExcludes_PlainRepo_GitCommonDirEqualsGitDir(t *testing.T) {
+	t.Parallel()
+	repoPath := setupTestGitRepo(t)
+
+	// Both sides must go through git's own --path-format=absolute resolution.
+	// t.TempDir() on macOS returns a path through the /var -> /private/var
+	// symlink; git's absolute-path formatting resolves it but a manual
+	// filepath.Join of the unresolved repoPath onto a relative --git-dir does
+	// not, producing a false mismatch unrelated to --git-dir vs
+	// --git-common-dir semantics.
+	gitDir := runGitRevParse(t, repoPath, "--path-format=absolute", "--git-dir")
+	commonDir := runGitRevParse(t, repoPath, "--path-format=absolute", "--git-common-dir")
+
+	if !filepath.IsAbs(gitDir) {
+		gitDir = filepath.Join(repoPath, gitDir)
+	}
+
+	// Resolve symlinks on both sides: t.TempDir() on macOS returns a path under
+	// /var/folders/..., which is itself a symlink to /private/var/.... git's
+	// --path-format=absolute resolves through that symlink, but joining the
+	// (unresolved) repoPath onto the relative --git-dir output does not, so the
+	// two would otherwise mismatch on symlink resolution alone rather than on
+	// any real --git-common-dir behavior difference.
+	resolvedGitDir, err := filepath.EvalSymlinks(gitDir)
+	if err != nil {
+		t.Fatalf("failed to resolve symlinks for git-dir %s: %v", gitDir, err)
+	}
+	resolvedCommonDir, err := filepath.EvalSymlinks(commonDir)
+	if err != nil {
+		t.Fatalf("failed to resolve symlinks for git-common-dir %s: %v", commonDir, err)
+	}
+	if resolvedGitDir != resolvedCommonDir {
+		t.Errorf("expected --git-dir (%s) and --git-common-dir (%s) to resolve identically for a plain repo", resolvedGitDir, resolvedCommonDir)
+	}
+}
+
+func runGitRevParse(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	cmd := safeexec.CommandContext(context.Background(), "git", append([]string{"rev-parse"}, args...)...)
+	cmd.Dir = dir
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("git rev-parse %v failed: %v", args, err)
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// TestGetWorktreeDirtyPaths_EmptyForScaffoldingOnlyLinkedWorktree proves Epic 1.2's
+// exclude-path fix and GetWorktreeDirtyPaths compose correctly end-to-end: a linked
+// worktree containing only scaffolding files must never be reported dirty.
+func TestGetWorktreeDirtyPaths_EmptyForScaffoldingOnlyLinkedWorktree(t *testing.T) {
+	t.Parallel()
+	repoPath := setupTestGitRepo(t)
+	worktreePath := setupLinkedWorktree(t, repoPath, "scaffolding-only")
+
+	addWorktreeExcludes(worktreePath)
+
+	if err := os.WriteFile(filepath.Join(worktreePath, ".backlog-context.md"), []byte("scaffolding"), 0o644); err != nil {
+		t.Fatalf("failed to write .backlog-context.md: %v", err)
+	}
+	cmdDir := filepath.Join(worktreePath, ".claude", "commands", "backlog")
+	if err := os.MkdirAll(cmdDir, 0o755); err != nil {
+		t.Fatalf("failed to create .claude/commands/backlog: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(cmdDir, "status.md"), []byte("status"), 0o644); err != nil {
+		t.Fatalf("failed to write status.md: %v", err)
+	}
+
+	paths, err := GetWorktreeDirtyPaths(worktreePath)
+	if err != nil {
+		t.Fatalf("GetWorktreeDirtyPaths returned error: %v", err)
+	}
+	if len(paths) != 0 {
+		t.Errorf("expected no dirty paths for a scaffolding-only worktree, got %v", paths)
 	}
 }

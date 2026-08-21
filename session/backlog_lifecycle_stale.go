@@ -142,6 +142,17 @@ func (l *BacklogLifecycleListener) reconcileStaleWorkSessions(ctx context.Contex
 		if _, notifyErr := er.MarkStuckNotified(ctx, item.ID, domain.StuckReasonStaleWork); notifyErr != nil {
 			log.WarningLog.Printf("[BacklogLifecycle] reconcileStaleWorkSessions MarkStuckNotified item=%s: %v", item.ID, notifyErr)
 		}
+		// AC4-shaped on_session_stale callback (webhook-triggers Phase 5): fired
+		// exactly once per crossing, reusing MarkStuckNotified's own dedup above
+		// (this branch is only reached on the first sighting — row.NotifiedAt was
+		// nil) rather than adding a second, separate "have we fired" flag.
+		er.dispatchCallback("session_stale", map[string]any{
+			"event":       "session_stale",
+			"item_id":     item.ID,
+			"title":       item.Title,
+			"session_id":  active.SessionUUID,
+			"occurred_at": time.Now(),
+		})
 	}
 
 	// Poll-shaped resolve (else-branch, pre-mortem F2): an in_progress item
@@ -198,6 +209,51 @@ func (l *BacklogLifecycleListener) reconcileReworkBlockedStaleResolution(ctx con
 		if resolveErr := resolver.ResolveReworkBlockedStaleIfRecovered(ctx, row.ItemID); resolveErr != nil {
 			log.WarningLog.Printf("[BacklogLifecycle] reconcileReworkBlockedStaleResolution ResolveReworkBlockedStaleIfRecovered item=%s: %v", row.ItemID, resolveErr)
 		}
+	}
+}
+
+// reconcileBlockedByDependencyResolution is the resolve-only counterpart to
+// notifyBlockedByDependency (server/services/backlog_service_triage.go),
+// which marks StuckReasonBlockedByDependency but only runs from inside
+// DequeueNextQueuedItems's claim-error path — an item that's already been
+// skipped once this sweep won't be re-examined until the next sweep, and if
+// nothing else ever queues past it, the stuck row would otherwise sit open
+// forever even after every blocker reaches done/archived (AC2). Mirrors
+// reconcileReworkBlockedStaleResolution's shape (FindOpenStuckStates ->
+// filter-by-reason -> re-check -> resolveStuckLogged), but re-checks the
+// blocking condition directly via UnresolvedBlockerItemIDs rather than
+// delegating to an external resolver, since dependency resolution is pure
+// storage state with no session liveness to consult. Best-effort:
+// query failures are logged, never returned — one item's failure must not
+// skip the rest.
+func (l *BacklogLifecycleListener) reconcileBlockedByDependencyResolution(ctx context.Context, er *EntRepository) {
+	open, openErr := er.FindOpenStuckStates(ctx)
+	if openErr != nil {
+		log.WarningLog.Printf("[BacklogLifecycle] reconcileBlockedByDependencyResolution FindOpenStuckStates error: %v", openErr)
+		return
+	}
+
+	itemIDs := make([]string, 0, len(open))
+	for _, row := range open {
+		if row.Reason == domain.StuckReasonBlockedByDependency {
+			itemIDs = append(itemIDs, row.ItemID)
+		}
+	}
+	if len(itemIDs) == 0 {
+		return
+	}
+
+	stillBlocked, err := er.UnresolvedBlockerItemIDs(ctx, itemIDs)
+	if err != nil {
+		log.WarningLog.Printf("[BacklogLifecycle] reconcileBlockedByDependencyResolution UnresolvedBlockerItemIDs error: %v", err)
+		return
+	}
+
+	for _, itemID := range itemIDs {
+		if stillBlocked[itemID] {
+			continue
+		}
+		l.resolveStuckLogged(ctx, er, itemID, domain.StuckReasonBlockedByDependency, "reconcileBlockedByDependencyResolution")
 	}
 }
 

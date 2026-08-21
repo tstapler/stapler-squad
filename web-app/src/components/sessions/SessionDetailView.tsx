@@ -1,4 +1,5 @@
 "use client";
+// +feature: session-trigger-attribution-badge
 
 import React, { useState, useEffect, useCallback, useRef } from "react";
 import { useShortcut } from "@/lib/shortcuts/useShortcut";
@@ -25,11 +26,14 @@ import { ResumeSessionModal } from "./ResumeSessionModal";
 import { TagEditor } from "./TagEditor";
 import { BacklogItemPanel } from "@/components/backlog/BacklogItemPanel";
 import { GoalPanel } from "./GoalPanel";
+import { NotePanel } from "./NotePanel";
 import { WorkspacePeersPanel } from "./WorkspacePeersPanel";
 import { useShells } from "@/lib/hooks/useShells";
 import { useNotifications } from "@/lib/contexts/NotificationContext";
 import { ShellTabLabel } from "./ShellTab";
 import { NewShellDialog } from "./NewShellDialog";
+import { useWorkflows } from "@/lib/hooks/useWorkflows";
+import { attributionBadge } from "./TriggersPanel.css";
 import * as styles from "./SessionDetail.css";
 import {
   diffAdded,
@@ -38,10 +42,237 @@ import {
   pausedOverlayTitle,
   pausedOverlayReason,
   pausedOverlayButton,
+  crashedOverlayIcon,
 } from "./SessionDetailView.css";
 import { tabDisabled } from "./SessionDetail.css";
 import { formatPauseReason } from "@/lib/sessions/formatPauseReason";
 import type { SessionDetailTab } from "./SessionDetail";
+import { useFeatureFlag } from "@/lib/contexts/FeatureFlagsContext";
+
+// Epic 6.1 (terminal:resync-stagger), Task 6.1.1.1/6.1.1.5 — stagger queue
+// spreading simultaneous multi-instance visibility/focus resyncs (e.g. a
+// pooled tmux session with several `TerminalOutput` instances all becoming
+// visible within the same tick) across a small jitter window instead of
+// firing every `CurrentPaneRequest` in the same event-loop turn.
+//
+// Deliberately scoped *per-SessionDetailView instance*, not cross-session —
+// resolved engineering-triad decision (plan.md Task 6.1.1.5): (1) the
+// primary reported failure mode is single-session multi-instance resync,
+// which this queue fixes; (2) a cross-session synchronized burst is a
+// narrower/rarer case requiring multiple sessions open, sharing a tmux
+// socket, AND becoming visible at the same tab-focus instant; (3) a
+// cross-session coordinator would need a materially different architecture
+// (global mutable scheduling state instead of a component-local queue).
+// See `staggerCoordinator_should_NotCoordinateAcrossMultipleSessionDetailViews_When_TwoSessionsBecomeVisibleSimultaneously`
+// in the test file for a passing regression test documenting this known gap
+// — it should be filed as its own tracked backlog follow-up, not silently
+// left undocumented.
+//
+// Interface Pollution checklist #4 (forwarding-only wrapper): kept as a
+// plain class co-located here rather than split into its own file, since
+// its only consumer is this component.
+const RESYNC_STAGGER_JITTER_MAX_MS = 300;
+
+interface StaggerEntry {
+  instanceId: string;
+  fire: () => void;
+  timer: ReturnType<typeof setTimeout>;
+}
+
+export class ResyncStaggerQueue {
+  private entries = new Map<string, StaggerEntry>();
+
+  /**
+   * Epic 5.2 (`terminal:resync-batching`, default off — go/no-go
+   * deliberately deferred, see the doc comment above `schedule()`'s batching
+   * branch below). When true, entries scheduled without `preempt` share one
+   * timer per coalescing window instead of each getting its own independent
+   * jittered timer, so simultaneously-queued resyncs fire together in one
+   * synchronous batch rather than spread across the jitter window. Defaults
+   * to false so `terminal:resync-stagger`-only callers (batching flag off)
+   * are byte-for-byte unaffected — see
+   * `staggerCoordinator_should_SendNSeparateRequests_When_BatchingFlagOff`.
+   */
+  constructor(private batchingEnabled: boolean = false) {}
+
+  /**
+   * Reconfigures batching on a live queue instead of requiring a fresh
+   * instance. `terminal:resync-batching` is a `useFeatureFlag` value (see
+   * `FeatureFlagsContext.tsx`), which can flip while a `SessionDetailView` is
+   * already mounted (e.g. toggled from `/settings/features` without a
+   * remount) — `useResyncStaggerQueue` used to bake `batchingEnabled` into
+   * the constructor only, so a live toggle was silently ignored for the rest
+   * of that view's lifetime. `schedule()`/`scheduleBatched()` read
+   * `this.batchingEnabled` fresh on every call, so flipping this field takes
+   * effect on the next `schedule()` call — it never touches entries already
+   * queued under the old mode, so nothing in flight is dropped or
+   * duplicated. */
+  setBatchingEnabled(batchingEnabled: boolean): void {
+    this.batchingEnabled = batchingEnabled;
+  }
+
+  /** Enqueues `fire` with a random 0-300ms jitter delay, unless `preempt` is
+   * set — in which case it fires immediately (Task 6.1.1.3: "newly-focused
+   * preempts queued"), without clearing other already-queued entries. */
+  schedule(instanceId: string, fire: () => void, opts: { preempt: boolean }): void {
+    this.clear(instanceId);
+    if (opts.preempt) {
+      fire();
+      return;
+    }
+    if (this.batchingEnabled) {
+      this.scheduleBatched(instanceId, fire);
+      return;
+    }
+    const delay = Math.random() * RESYNC_STAGGER_JITTER_MAX_MS;
+    const timer = setTimeout(() => {
+      this.entries.delete(instanceId);
+      fire();
+    }, delay);
+    this.entries.set(instanceId, { instanceId, fire, timer });
+    // Task 7.1.1.1 (Epic 7.1 observability) — this.entries.size right after
+    // insertion is the current burst size: how many resync requests are
+    // queued together (across every instance sharing this per-view queue) at
+    // the moment a new one joins. Logged on every enqueue rather than only
+    // once per burst so the size is visible mid-burst, not just at its start.
+    console.debug(`[resync-stagger] burst size=${this.entries.size} instanceId=${instanceId}`);
+  }
+
+  /**
+   * Task 5.2.1.3 — client-side half of the `terminal:resync-batching` go/no-go
+   * (ADR-006; requirements.md Unresolved Question #1). All non-preempt
+   * entries scheduled while a coalescing window is open share that window's
+   * single timer, so they fire together in one synchronous pass instead of
+   * being spread across independent per-instance jitter delays — the
+   * "coalesce same-tick resync requests" behavior Story 5.2.1 asks for.
+   *
+   * Known limitation, intentionally left for a follow-up: `fire` here is
+   * still the same opaque `() => void` used by the non-batching path, and
+   * each instance's `fire` independently constructs and sends its own
+   * `CurrentPaneRequest` deep inside `useTerminalFlowControl`/
+   * `useTerminalStream` (outside Epic 5.2's file scope, which is limited to
+   * this stagger coordinator plus the proto/server-side dispatch in
+   * `connectrpc_websocket.go`). So today this coalesces *when* sibling
+   * resyncs fire, not yet *how many wire messages* go out — turning a batch
+   * into one actual `BatchedCurrentPaneRequest` send requires those hooks to
+   * expose a non-side-effecting "build the request, don't send it" path that
+   * this queue can collect into a single batched send. That wiring, and the
+   * decision to default this flag on, are both deferred pending Epic 5.1's
+   * compression benchmark numbers, per ADR-006 and requirements.md's
+   * Unresolved Question #1 — not resolved by this story.
+   */
+  private scheduleBatched(instanceId: string, fire: () => void): void {
+    if (this.batchTimer === null) {
+      this.batchTimer = setTimeout(() => {
+        const fires = Array.from(this.batchEntries.values());
+        this.batchEntries.clear();
+        this.batchTimer = null;
+        for (const pending of fires) {
+          this.entries.delete(pending.instanceId);
+          pending.fire();
+        }
+      }, Math.random() * RESYNC_STAGGER_JITTER_MAX_MS);
+    }
+    const entry: StaggerEntry = { instanceId, fire, timer: this.batchTimer };
+    this.entries.set(instanceId, entry);
+    this.batchEntries.set(instanceId, entry);
+    // Task 7.1.1.1 (Epic 7.1 observability) — batching-path counterpart to the
+    // non-batching log in schedule() above: this.batchEntries.size is the
+    // burst that will actually fire together in one synchronous pass once the
+    // shared coalescing timer elapses.
+    console.debug(`[resync-stagger] burst size=${this.batchEntries.size} instanceId=${instanceId} batched=true`);
+  }
+
+  private batchTimer: ReturnType<typeof setTimeout> | null = null;
+  private batchEntries = new Map<string, StaggerEntry>();
+
+  /** Cancels a single instance's pending entry, if any (e.g. re-scheduling,
+   * or that instance unmounting while still queued). A batched entry's timer
+   * is shared with its whole coalescing window, so it's only cleared once
+   * every sibling in that window has also been removed — clearing one
+   * instance's entry must never cancel its still-pending siblings' fire. */
+  clear(instanceId: string): void {
+    const existing = this.entries.get(instanceId);
+    if (!existing) return;
+    this.entries.delete(instanceId);
+    const wasBatched = this.batchEntries.delete(instanceId);
+    if (wasBatched) {
+      // Only cancel the shared timer once every sibling sharing it has also
+      // been cleared — otherwise the remaining siblings would never fire.
+      if (this.batchEntries.size === 0) {
+        clearTimeout(existing.timer);
+        this.batchTimer = null;
+      }
+    } else {
+      clearTimeout(existing.timer);
+    }
+  }
+
+  /** Task 6.1.1.6 — cancels every pending entry, e.g. on SessionDetailView
+   * unmount, so no stagger callback fires after the component is gone. */
+  clearAll(): void {
+    for (const entry of this.entries.values()) {
+      clearTimeout(entry.timer);
+    }
+    this.entries.clear();
+    this.batchEntries.clear();
+    this.batchTimer = null;
+  }
+}
+
+/**
+ * Task 6.1.1.1/6.1.1.2 — builds a per-instance `scheduleResync` callback
+ * factory, gated by the `terminal:resync-stagger` flag. Flag off returns
+ * `undefined` for every instance, so `TerminalOutput`/`useVisibilityResync`
+ * see no `scheduleResync` at all and fall back to their pre-Epic-6.1
+ * synchronous-fire behavior (AC7 flag-off parity).
+ *
+ * `batchingEnabled` (Task 5.2.1.3, `terminal:resync-batching`, default off)
+ * additionally coalesces same-tick entries onto one shared timer instead of
+ * independent per-instance jitter timers — see `ResyncStaggerQueue`'s
+ * constructor and `scheduleBatched` doc comments for exactly what this does
+ * and does not yet cover, and `staggerCoordinator_should_SendNSeparateRequests_When_BatchingFlagOff`
+ * for the flag-off parity this must never regress (AC6b).
+ */
+export function useResyncStaggerQueue(
+  enabled: boolean,
+  batchingEnabled: boolean = false,
+): (instanceId: string) => ((fire: () => void, opts: { preempt: boolean }) => void) | undefined {
+  const queueRef = useRef<ResyncStaggerQueue | null>(null);
+  if (enabled && !queueRef.current) {
+    queueRef.current = new ResyncStaggerQueue(batchingEnabled);
+  }
+
+  // `batchingEnabled` comes from `useFeatureFlag("terminal:resync-batching")`,
+  // which can change while this component stays mounted (e.g. toggled live
+  // from /settings/features) — the lazy construction above only reads it
+  // once, at first-enable time. Keep the live queue's batching mode in sync
+  // on every render where the flag value has changed, instead of silently
+  // running with whatever `batchingEnabled` happened to be at construction.
+  useEffect(() => {
+    queueRef.current?.setBatchingEnabled(batchingEnabled);
+  }, [batchingEnabled]);
+
+  // Task 6.1.1.6 — clear every pending stagger timeout on unmount (and when
+  // the flag flips off), so no queued resync fires after the component
+  // holding the queue is gone.
+  useEffect(() => {
+    return () => {
+      queueRef.current?.clearAll();
+    };
+  }, []);
+
+  return useCallback(
+    (instanceId: string) => {
+      if (!enabled || !queueRef.current) return undefined;
+      const queue = queueRef.current;
+      return (fire: () => void, opts: { preempt: boolean }) => {
+        queue.schedule(instanceId, fire, opts);
+      };
+    },
+    [enabled],
+  );
+}
 
 // Dynamically import TerminalOutput with SSR disabled (xterm.js requires browser environment)
 const TerminalOutput = dynamic(
@@ -140,6 +371,27 @@ export function SessionDetailView({
   // activeTabId is either a static SessionDetailTab or a shell tab id "shell:<shellId>"
   const [activeTabId, setActiveTabId] = useState<string>(initialTab);
 
+  // Epic 6.1 (terminal:resync-stagger), Task 6.1.1.1/6.1.1.2 — per-view
+  // stagger queue for this SessionDetailView's pooled TerminalOutput
+  // instances. See ResyncStaggerQueue above for why this is scoped
+  // per-instance rather than cross-session.
+  const resyncStaggerEnabled = useFeatureFlag("terminal:resync-stagger");
+  const resyncBatchingEnabled = useFeatureFlag("terminal:resync-batching");
+  const getScheduleResync = useResyncStaggerQueue(resyncStaggerEnabled, resyncBatchingEnabled);
+
+  // Reason text for a disabled tab, surfaced on tap since touch devices have no
+  // hover to reveal the `title` attribute. Cleared after a few seconds or on next tap.
+  const [disabledTabHint, setDisabledTabHint] = useState<string | null>(null);
+  const disabledTabHintTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const showDisabledTabHint = (reason: string) => {
+    if (disabledTabHintTimeoutRef.current) clearTimeout(disabledTabHintTimeoutRef.current);
+    setDisabledTabHint(reason);
+    disabledTabHintTimeoutRef.current = setTimeout(() => setDisabledTabHint(null), 3000);
+  };
+  useEffect(() => () => {
+    if (disabledTabHintTimeoutRef.current) clearTimeout(disabledTabHintTimeoutRef.current);
+  }, []);
+
   // Sync active tab when the pane's controlled tab changes (e.g. PaneHeader tab click)
   useEffect(() => {
     setActiveTabId(initialTab);
@@ -148,6 +400,17 @@ export function SessionDetailView({
 
   // Backward-compat alias for code that still references activeTab
   const activeTab = activeTabId as SessionDetailTab;
+
+  // Trigger attribution (webhook-triggers Epic 7.4, AC6): resolve session.workflowId
+  // to its Workflow row so we can show "Triggered by: {slug} ({trigger_type})" for
+  // automated (non-"manual") trigger-created sessions, distinguishing them from a
+  // plain @slug manually-invoked Workflow session.
+  const { workflows: attributionWorkflows } = useWorkflows();
+  const triggerWorkflow = session.workflowId
+    ? attributionWorkflows.find((w) => w.id === session.workflowId)
+    : undefined;
+  const isAutomatedTrigger = !!triggerWorkflow &&
+    ["cron", "github_push", "webhook"].includes(triggerWorkflow.triggerType);
 
   // Shell tabs
   const { shells, spawnShell, stopShell, restartShell, deleteShell, updateShellStatus } = useShells(session.id);
@@ -198,6 +461,12 @@ export function SessionDetailView({
     setFilesSelectedPath(null);
   }, [session.id]);
   const [showWorkspaceSwitchModal, setShowWorkspaceSwitchModal] = useState(false);
+  // The action sheet's own opener buttons unmount when the sheet closes, so
+  // any modal launched from the sheet restores focus to the persistent
+  // "More actions" button instead of the transient sheet item.
+  const moreActionsButtonRef = useRef<HTMLButtonElement | null>(null);
+  const workspaceSwitchTriggerRef = useRef<HTMLElement | null>(null);
+  const tagEditorTriggerRef = useRef<HTMLElement | null>(null);
   const availablePrograms = useAvailablePrograms();
   const [isEditingProgram, setIsEditingProgram] = useState(false);
   const [programValue, setProgramValue] = useState(session.program || "");
@@ -211,6 +480,7 @@ export function SessionDetailView({
   const [actionSheetOpen, setActionSheetOpen] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [showResumeModal, setShowResumeModal] = useState(false);
+  const resumeTriggerRef = useRef<HTMLElement | null>(null);
   // Rename state
   const [showRenameModal, setShowRenameModal] = useState(false);
   const [renameValue, setRenameValue] = useState(session.title);
@@ -412,14 +682,24 @@ export function SessionDetailView({
   };
 
   // Action sheet handlers
-  const handlePauseResume = async () => {
+  const handlePauseResume = async (triggerEl: HTMLElement) => {
     if (session.status === SessionStatus.PAUSED) {
+      // The action sheet's own opener buttons unmount when the sheet closes, so
+      // fall back to the persistent "More actions" button in that case (see
+      // tagEditorTriggerRef/workspaceSwitchTriggerRef below for the same pattern).
+      resumeTriggerRef.current = actionSheetOpen
+        ? moreActionsButtonRef.current
+        : triggerEl;
       setActionSheetOpen(false);
       setShowResumeModal(true);
     } else {
       await actions.pause();
       setActionSheetOpen(false);
     }
+  };
+
+  const handleResumeFromCrash = async () => {
+    await actions.resumeFromCrash();
   };
 
   const handleDeleteClick = () => {
@@ -535,7 +815,10 @@ export function SessionDetailView({
           {session.instanceType !== InstanceType.EXTERNAL && (
             <button
               className={styles.switchWorkspaceButton}
-              onClick={() => setShowWorkspaceSwitchModal(true)}
+              onClick={(event) => {
+                workspaceSwitchTriggerRef.current = event.currentTarget;
+                setShowWorkspaceSwitchModal(true);
+              }}
               aria-label="Switch workspace"
               title="Switch branch, bookmark, or worktree"
             >
@@ -544,6 +827,7 @@ export function SessionDetailView({
           )}
           {/* More actions — opens action sheet */}
           <button
+            ref={moreActionsButtonRef}
             className={styles.moreActionsButton}
             onClick={() => setActionSheetOpen(true)}
             aria-label="Session actions"
@@ -562,6 +846,7 @@ export function SessionDetailView({
         </ActionBar>
       </div>}
 
+      <div className={styles.tabsWrapper}>
       <div
         className={`${styles.tabs} ${isFullscreen ? styles.fullscreenMobileTabs : ""}`}
         role="tablist"
@@ -571,17 +856,26 @@ export function SessionDetailView({
             e.preventDefault();
             const nextIndex = (currentIndex + 1) % tabs.length;
             handleTabChange(tabs[nextIndex].id);
-            (e.currentTarget.querySelectorAll('[role="tab"]')[nextIndex] as HTMLElement)?.focus();
+            const el = e.currentTarget.querySelectorAll('[role="tab"]')[nextIndex] as HTMLElement | undefined;
+            el?.focus();
+            el?.scrollIntoView({ block: "nearest", inline: "nearest" });
           } else if (e.key === "ArrowLeft") {
             e.preventDefault();
             const prevIndex = (currentIndex - 1 + tabs.length) % tabs.length;
             handleTabChange(tabs[prevIndex].id);
-            (e.currentTarget.querySelectorAll('[role="tab"]')[prevIndex] as HTMLElement)?.focus();
+            const el = e.currentTarget.querySelectorAll('[role="tab"]')[prevIndex] as HTMLElement | undefined;
+            el?.focus();
+            el?.scrollIntoView({ block: "nearest", inline: "nearest" });
           }
         }}
       >
         {tabs.map((tab) => {
           const Icon = tab.icon;
+          const disabledReason = tab.disabled && tab.id === "browser"
+            ? "Browser passthrough requires Linux with Xvfb, x11vnc, and xdotool"
+            : tab.disabled && tab.id === "summary"
+              ? "Summary is generated after the session ends."
+              : undefined;
           return (
             <button
               key={tab.id}
@@ -589,15 +883,17 @@ export function SessionDetailView({
               role="tab"
               aria-selected={activeTab === tab.id}
               aria-disabled={tab.disabled}
+              aria-label={disabledReason ? `${tab.label}: ${disabledReason}` : undefined}
               className={`${styles.tab} ${activeTab === tab.id ? styles.active : ""} ${tab.disabled ? tabDisabled : ""}`}
-              onClick={() => { if (!tab.disabled) handleTabChange(tab.id); }}
-              title={
-                tab.disabled && tab.id === "browser"
-                  ? "Browser passthrough requires Linux with Xvfb, x11vnc, and xdotool"
-                  : tab.disabled && tab.id === "summary"
-                    ? "Summary is generated after the session ends."
-                    : undefined
-              }
+              onClick={() => {
+                if (tab.disabled) {
+                  // title (hover) is unreachable on touch — surface the reason on tap instead.
+                  if (disabledReason) showDisabledTabHint(disabledReason);
+                  return;
+                }
+                handleTabChange(tab.id);
+              }}
+              title={disabledReason}
             >
               <span className={styles.tabIcon}><Icon size={16} /></span>
               <span className={styles.tabLabel}>{tab.label}</span>
@@ -642,6 +938,19 @@ export function SessionDetailView({
           +
         </button>
       </div>
+      <div className={styles.tabsFade} data-testid="tab-scroll-fade" aria-hidden="true" />
+      {disabledTabHint && (
+        <div
+          className={styles.disabledTabHint}
+          data-testid="disabled-tab-hint"
+          role="status"
+          aria-live="polite"
+          onClick={() => setDisabledTabHint(null)}
+        >
+          {disabledTabHint}
+        </div>
+      )}
+      </div>
 
       <div className={`${styles.content} ${isFullscreen ? styles.fullscreenContent : ""}`}>
         {/* Terminal tab: kept mounted but hidden via display:none to preserve xterm.js instances */}
@@ -681,6 +990,7 @@ export function SessionDetailView({
                       isExternal={true}
                       tmuxSessionName={session.externalMetadata?.tmuxSessionName}
                       isVisible={poolPath === session.externalMetadata?.muxSocketPath}
+                      scheduleResync={getScheduleResync(poolPath)}
                     />
                   </div>
                 ))}
@@ -700,6 +1010,7 @@ export function SessionDetailView({
                       sessionId={poolId}
                       baseUrl={getApiBaseUrl()}
                       isVisible={poolId === session.id}
+                      scheduleResync={getScheduleResync(poolId)}
                     />
                   </div>
                 ))}
@@ -723,7 +1034,36 @@ export function SessionDetailView({
                       className={pausedOverlayButton}
                       onClick={(e) => {
                         e.stopPropagation();
-                        handlePauseResume();
+                        handlePauseResume(e.currentTarget);
+                      }}
+                      aria-label="Resume this session"
+                    >
+                      ▶ Resume Session
+                    </button>
+                  </div>
+                )}
+                {/* Crashed overlay: the tmux pane exited abnormally (remain-on-exit
+                    dead pane) and was detected by SessionHealthChecker. Distinct
+                    from the paused overlay above — same layout, error palette. */}
+                {session.status === SessionStatus.CRASHED && (
+                  <div
+                    className={pausedOverlay}
+                    role="status"
+                    aria-live="polite"
+                    aria-label="Session has crashed"
+                  >
+                    <span className={crashedOverlayIcon} aria-hidden="true">⚠️</span>
+                    <p className={pausedOverlayTitle}>This session has crashed</p>
+                    {session.exitReason && (
+                      <p className={pausedOverlayReason}>
+                        {session.exitReason}
+                      </p>
+                    )}
+                    <button
+                      className={pausedOverlayButton}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleResumeFromCrash();
                       }}
                       aria-label="Resume this session"
                     >
@@ -779,6 +1119,7 @@ export function SessionDetailView({
                 baseUrl={getApiBaseUrl()}
                 shellId={shellId}
                 isVisible={activeTabId === shellKey}
+                scheduleResync={getScheduleResync(shellKey)}
                 onShellStatusChange={(status, exitCode) => {
                   updateShellStatus(shellId, status, exitCode);
                 }}
@@ -818,16 +1159,20 @@ export function SessionDetailView({
             />
           </div>
         )}
-        {activeTab === "files" && (
-          <div className={styles.tabContent} role="tabpanel" aria-labelledby="tab-files">
-            <FilesTab
-              sessionId={session.id}
-              baseUrl={getApiBaseUrl()}
-              initialSelectedPath={filesSelectedPath}
-              onSelectedPathChange={setFilesSelectedPath}
-            />
-          </div>
-        )}
+        <div
+          className={styles.tabContent}
+          role="tabpanel"
+          aria-labelledby="tab-files"
+          aria-hidden={activeTab !== "files"}
+          data-active={activeTab === "files"}
+        >
+          <FilesTab
+            sessionId={session.id}
+            baseUrl={getApiBaseUrl()}
+            initialSelectedPath={filesSelectedPath}
+            onSelectedPathChange={setFilesSelectedPath}
+          />
+        </div>
         {activeTab === "logs" && (
           <div className={styles.tabContent} role="tabpanel" aria-labelledby="tab-logs">
             <SessionLogsTab sessionId={session.id} />
@@ -1225,6 +1570,19 @@ export function SessionDetailView({
               {/* Workflow metadata */}
               {session.workflowId && (
                 <div className={styles.workflowSection} data-testid="workflow-metadata-section">
+                  {isAutomatedTrigger && triggerWorkflow && (
+                    <div className={styles.infoItem}>
+                      <span className={styles.infoLabel}>Trigger:</span>
+                      <a
+                        className={attributionBadge}
+                        href="/triggers"
+                        data-testid="trigger-attribution-badge"
+                        aria-label={`Triggered by ${triggerWorkflow.slug} (${triggerWorkflow.triggerType}) — view in Triggers`}
+                      >
+                        Triggered by: {triggerWorkflow.slug} ({triggerWorkflow.triggerType})
+                      </a>
+                    </div>
+                  )}
                   <div className={styles.infoItem}>
                     <span className={styles.infoLabel}>Workflow:</span>
                     <span className={styles.infoValue}>
@@ -1247,6 +1605,16 @@ export function SessionDetailView({
             {session.goal?.goalText && (
               <GoalPanel goal={session.goal} />
             )}
+            <NotePanel
+              note={session.note ?? ""}
+              onSave={async (v) => {
+                // actions.update resolves to null (never rejects) on RPC failure — NotePanel's
+                // save-error UI (aria-live assertive message, textarea preserved) only fires on
+                // a rejected promise, so a null result must be converted into a throw here.
+                const result = await actions.update({ note: v });
+                if (!result) throw new Error("Failed to save note");
+              }}
+            />
             {/* Other sessions sharing this workspace — shown when peers exist */}
             <WorkspacePeersPanel session={session} />
           </div>
@@ -1274,6 +1642,7 @@ export function SessionDetailView({
             // The session will be updated via the event bus
             setShowWorkspaceSwitchModal(false);
           }}
+          triggerRef={workspaceSwitchTriggerRef}
         />
       )}
 
@@ -1286,7 +1655,7 @@ export function SessionDetailView({
             {session.instanceType !== InstanceType.EXTERNAL && (
               <button
                 className={styles.actionSheetItem}
-                onClick={handlePauseResume}
+                onClick={(e) => handlePauseResume(e.currentTarget)}
                 data-testid="action-pause"
               >
                 {session.status === SessionStatus.PAUSED ? '▶ Resume' : '⏸ Pause'}
@@ -1301,7 +1670,11 @@ export function SessionDetailView({
             </button>
             <button
               className={styles.actionSheetItem}
-              onClick={() => { setActionSheetOpen(false); setShowTagEditor(true); }}
+              onClick={() => {
+                setActionSheetOpen(false);
+                tagEditorTriggerRef.current = moreActionsButtonRef.current;
+                setShowTagEditor(true);
+              }}
               data-testid="action-edit-tags"
             >
               🏷 Edit Tags
@@ -1319,7 +1692,11 @@ export function SessionDetailView({
             {session.instanceType !== InstanceType.EXTERNAL && (
               <button
                 className={styles.actionSheetItem}
-                onClick={() => { setActionSheetOpen(false); setShowWorkspaceSwitchModal(true); }}
+                onClick={() => {
+                  setActionSheetOpen(false);
+                  workspaceSwitchTriggerRef.current = moreActionsButtonRef.current;
+                  setShowWorkspaceSwitchModal(true);
+                }}
               >
                 ⎇ Switch Workspace
               </button>
@@ -1472,6 +1849,7 @@ export function SessionDetailView({
           sessionTitle={session.title}
           onSave={(tags) => { actions.updateTags(tags); setShowTagEditor(false); }}
           onCancel={() => setShowTagEditor(false)}
+          triggerRef={tagEditorTriggerRef}
         />
       )}
 
@@ -1485,6 +1863,7 @@ export function SessionDetailView({
             setShowResumeModal(false);
           }}
           onCancel={() => setShowResumeModal(false)}
+          triggerRef={resumeTriggerRef}
         />
       )}
     </div>

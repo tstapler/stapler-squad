@@ -10,6 +10,8 @@ import {
   UpdateSessionRequest,
   PromptHistoryEntry,
   RunOneShotResponse,
+  DraftPullRequestResponse,
+  CreatePullRequestResponse,
   SpawnShellRequest,
   RunWorkflowRequestSchema,
   ArchiveSessionRequestSchema,
@@ -21,8 +23,23 @@ import { SessionEvent, NotificationEvent } from "@/gen/session/v1/events_pb";
 import { getApiBaseUrl, createAuthInterceptor } from "@/lib/config";
 import { BackoffState, getWsCloseCode, isRetriableCloseCode } from "@/lib/utils/backoff";
 import { createRpcTimingInterceptor } from "@/lib/telemetry/rpcTiming";
+import { getErrorMessage } from "@/lib/utils/connectError";
 import { useAnalytics } from "@/lib/contexts/AnalyticsContext";
 import { useAppDispatch, useAppSelector } from "@/lib/store";
+// NOTE (backlog #488, 2026-08-17): this file's other `dispatch(setError(...))`
+// sites are deliberately NOT converted to the getErrorMessage() helper
+// (web-app/src/lib/utils/connectError.ts) used everywhere in components/backlog/**.
+// `setError` here writes to the shared sessionsSlice Redux store, consumed by
+// non-backlog surfaces (the general session list/terminal views) — stripping the
+// ConnectRPC `[code]` prefix there is a behavior change with a materially larger
+// blast radius than the local useState catch-block conversions this PR made, and
+// is out of scope for a backlog-toast presentation fix. Tracked as a follow-up,
+// not fixed here.
+//
+// updateSession()'s setError call below is the one exception: BacklogItemDetail.tsx's
+// handleSteerSession reads this exact value back via selectSessionsError() and
+// re-throws it into a backlog action toast, so it IS a backlog-facing surface
+// this PR touches — stripped here to match.
 import {
   setSessions,
   upsertSession,
@@ -93,11 +110,19 @@ interface UseSessionServiceReturn {
   updateSession: (id: string, updates: Partial<UpdateSessionRequest>) => Promise<Session | null>;
   deleteSession: (id: string, force?: boolean) => Promise<boolean>;
   runOneShot: (sessionId: string, prompt: string, timeoutSeconds?: number) => Promise<RunOneShotResponse | null>;
+  draftPullRequest: (sessionId: string) => Promise<DraftPullRequestResponse | null>;
+  createPullRequest: (req: {
+    sessionId: string;
+    title: string;
+    body: string;
+    baseBranch: string;
+  }) => Promise<CreatePullRequestResponse | null>;
   listPromptHistory: (limit?: number) => Promise<PromptHistoryEntry[]>;
   pauseSession: (id: string) => Promise<Session | null>;
   resumeSession: (id: string, updates?: { title?: string; tags?: string[] }) => Promise<Session | null>;
   hibernateSession: (id: string) => Promise<Session | null>;
   resumeHibernatedSession: (id: string) => Promise<Session | null>;
+  resumeCrashedSession: (id: string) => Promise<Session | null>;
   renameSession: (id: string, newTitle: string) => Promise<boolean>;
   restartSession: (id: string) => Promise<boolean>;
   clearConversationState: (id: string) => Promise<boolean>;
@@ -270,6 +295,7 @@ export function useSessionService(
             category: request.category,
             prompt: request.prompt,
             autoYes: request.autoYes,
+            autoApprove: request.autoApprove ?? false,
             existingWorktree: request.existingWorktree,
             sessionType: request.sessionType,
             createIfMissing: request.createIfMissing ?? false,
@@ -278,6 +304,7 @@ export function useSessionService(
             permissionMode: request.permissionMode ?? "",
             aliasName: request.aliasName ?? "",
             cliFlags: request.cliFlags ?? "",
+            extraArgs: request.extraArgs ?? [],
           },
           { timeoutMs: CREATE_SESSION_TIMEOUT_MS }
         );
@@ -312,12 +339,14 @@ export function useSessionService(
           id,
           status: updates.status,
           category: updates.category,
+          note: updates.note,
           title: updates.title,
           program: updates.program,
           tags: updates.tags ?? [],
           workingDir: updates.workingDir,
           rateLimitEnabled: updates.rateLimitEnabled,
           autonomousMode: updates.autonomousMode,
+          autoApprove: updates.autoApprove,
           steerMessage: updates.steerMessage,
         });
 
@@ -329,7 +358,7 @@ export function useSessionService(
         return response.session ?? null;
       } catch (err) {
         console.error("[useSessionService] updateSession failed:", err);
-        dispatch(setError(err instanceof Error ? err.message : "Failed to update session"));
+        dispatch(setError(getErrorMessage(err, "Failed to update session")));
         return null;
       }
     },
@@ -418,6 +447,25 @@ export function useSessionService(
     [dispatch]
   );
 
+  // Resume a crashed session (Crashed → Active). Server-side resume of a dead
+  // tmux pane detected by SessionHealthChecker — threads --resume automatically
+  // when a conversation UUID is known, no manual copy/paste required.
+  const resumeCrashedSession = useCallback(
+    async (id: string): Promise<Session | null> => {
+      if (!clientRef.current) return null;
+      dispatch(setError(null));
+      try {
+        const response = await clientRef.current.resumeCrashedSession({ id });
+        if (response.session) dispatch(upsertSession(response.session));
+        return response.session ?? null;
+      } catch (err) {
+        console.error("[useSessionService] resumeCrashedSession failed:", err);
+        dispatch(setError(err instanceof Error ? err.message : "Failed to resume crashed session"));
+        return null;
+      }
+    },
+    [dispatch]
+  );
 
   // Rename session
   const renameSession = useCallback(
@@ -575,6 +623,47 @@ export function useSessionService(
         return response;
       } catch (err) {
         dispatch(setError(err instanceof Error ? err.message : "Failed to run one-shot"));
+        return null;
+      }
+    },
+    [dispatch]
+  );
+
+  // Fetch the pre-filled draft (title/body/base branch) for a session's PR (AC4)
+  const draftPullRequest = useCallback(
+    async (sessionId: string): Promise<DraftPullRequestResponse | null> => {
+      if (!clientRef.current) return null;
+
+      dispatch(setError(null));
+
+      try {
+        const response = await clientRef.current.draftPullRequest({ sessionId });
+        return response;
+      } catch (err) {
+        dispatch(setError(err instanceof Error ? err.message : "Failed to draft pull request"));
+        return null;
+      }
+    },
+    [dispatch]
+  );
+
+  // Create the pull request for a session (AC3/AC7)
+  const createPullRequest = useCallback(
+    async (req: { sessionId: string; title: string; body: string; baseBranch: string }): Promise<CreatePullRequestResponse | null> => {
+      if (!clientRef.current) return null;
+
+      dispatch(setError(null));
+
+      try {
+        const response = await clientRef.current.createPullRequest({
+          sessionId: req.sessionId,
+          title: req.title,
+          body: req.body,
+          baseBranch: req.baseBranch,
+        });
+        return response;
+      } catch (err) {
+        dispatch(setError(err instanceof Error ? err.message : "Failed to create pull request"));
         return null;
       }
     },
@@ -1094,6 +1183,7 @@ export function useSessionService(
     resumeSession,
     hibernateSession,
     resumeHibernatedSession,
+    resumeCrashedSession,
     renameSession,
     restartSession,
     clearConversationState,
@@ -1102,6 +1192,8 @@ export function useSessionService(
     listCheckpoints,
     forkSession,
     runOneShot,
+    draftPullRequest,
+    createPullRequest,
     listPromptHistory,
     watchSessions,
     stopWatching,

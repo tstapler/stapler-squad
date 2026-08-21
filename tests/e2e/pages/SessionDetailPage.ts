@@ -46,6 +46,20 @@ export class SessionDetailPage {
     return this.page.getByTestId(/connection-indicator|live-indicator/);
   }
 
+  // ---------------------------------------------------------------------
+  // Connection-count indicator — Epic 4.2, Story 4.2.2
+  // (ConnectionCountIndicator.tsx, rendered by TerminalOutput.tsx only when
+  // connectionCount > 1). See connection-count-indicator.spec.ts.
+  // ---------------------------------------------------------------------
+
+  getConnectionCountIndicator(): Locator {
+    return this.page.getByTestId("connection-count-indicator");
+  }
+
+  getConnectionCountTooltip(): Locator {
+    return this.page.getByTestId("connection-count-tooltip");
+  }
+
   getCIStatusBadge(): Locator {
     return this.page.getByTestId("ci-status-badge");
   }
@@ -100,5 +114,33 @@ export class SessionDetailPage {
    * to announce phase transitions and the copy result. */
   getSummaryLiveRegion(): Locator {
     return this.page.getByRole("status");
+  }
+
+  // ---------------------------------------------------------------------
+  // Notes panel — Info tab, NotePanel.tsx. See session-notes.spec.ts.
+  // ---------------------------------------------------------------------
+
+  getInfoTab(): Locator {
+    return this.page.getByRole("tab", { name: "Info" });
+  }
+
+  getNotePanel(): Locator {
+    return this.page.getByTestId("session-note-panel");
+  }
+
+  getNoteAddButton(): Locator {
+    return this.page.getByRole("button", { name: "Add note" });
+  }
+
+  getNoteTextarea(): Locator {
+    return this.page.getByTestId("session-note-textarea");
+  }
+
+  getNoteSaveButton(): Locator {
+    return this.page.getByTestId("session-note-save-button");
+  }
+
+  getNoteRenderedBody(): Locator {
+    return this.page.getByTestId("session-note-rendered");
   }
 }

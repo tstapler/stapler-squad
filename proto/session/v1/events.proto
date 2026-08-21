@@ -81,6 +81,12 @@ message TerminalData {
 
     // Shell status update event (server → client); shell_id identifies the shell.
     ShellStatusUpdate shell_status_update = 18;
+
+    // Coalesced CurrentPaneRequests bound for the same connection (client →
+    // server), Epic 5.2 / Story 5.2.1. Flag-gated behind terminal:resync-batching
+    // (default off) — see BatchedCurrentPaneRequest's doc comment for the
+    // unresolved default-on decision this message deliberately does not make.
+    BatchedCurrentPaneRequest batched_current_pane_request = 19;
   }
 
   // Fields 8, 12, 13, 14, 15 (delta, state, diff, input_echo, ssp_negotiation)
@@ -123,6 +129,24 @@ message ResizeQuiescence {
 // TerminalOutput contains data from the terminal (server to client)
 message TerminalOutput {
   bytes data = 1; // Raw terminal output bytes (ANSI escape codes, etc)
+
+  // Echoes the resync_id of the CurrentPaneRequest that triggered this output,
+  // when applicable. Lets the client correlate a resync reply to the specific
+  // request it made (e.g. to clear pending-resync state) rather than assuming
+  // the most recent request is always the one being answered. Empty when this
+  // output is not a resync reply.
+  string resync_id = 2;
+
+  // Number of transports currently attached to this session's StreamHub
+  // (Epic 4.2, Story 4.2.1). Only ever populated for PathHubOwned sessions —
+  // proto3 `optional` presence lets the frontend distinguish "not reported"
+  // (PathLegacyPerConnection, flag off) from a real count, since fabricating
+  // a number from PathLegacyPerConnection's activeControlModeStreams
+  // generation counter would show a misleading value (it isn't a live
+  // subscriber count). May arrive on a side-channel message carrying no
+  // `data` (an otherwise-empty TerminalOutput) when the server has a count
+  // update but no new terminal bytes to send.
+  optional int32 connection_count = 4;
 }
 
 // TerminalInput contains user input for the terminal (client to server)
@@ -211,6 +235,34 @@ message CurrentPaneRequest {
   // and has been removed. Reserved to prevent accidental reuse.
   reserved 5;
   reserved "streaming_mode";
+
+  // Client-generated correlation ID for this resync request. Echoed back on
+  // the resulting TerminalOutput.resync_id so the client can match a reply to
+  // the specific request that triggered it.
+  string resync_id = 6;
+
+  // True when the client believes its current terminal dimensions may be
+  // stale (e.g. after a tab was backgrounded and resized without a resize
+  // event reaching the server). Signals the server to skip fast-path
+  // optimizations that assume dimensions are already in sync.
+  bool stale_dimensions = 7;
+}
+
+// BatchedCurrentPaneRequest coalesces multiple CurrentPaneRequests bound for
+// the same connection into a single round trip (Epic 5.2 / Story 5.2.1,
+// terminal-resync-reliability). Each sub-request keeps its own resync_id and
+// gets its own individually-tagged TerminalOutput reply — batching the
+// transport does not change per-request correlation semantics.
+//
+// Flag-gated behind terminal:resync-batching (default off; see
+// feature_flag_service.go). Whether to flip that flag on by default is an
+// open go/no-go decision NOT resolved by this message or its handling code —
+// it is deferred pending Epic 5.1's compression benchmark numbers (see
+// requirements.md's Unresolved Question #1 in
+// project_plans/terminal-resync-reliability/). Do not treat the existence of
+// this type as an implicit decision to enable batching broadly.
+message BatchedCurrentPaneRequest {
+  repeated CurrentPaneRequest requests = 1;
 }
 
 // CurrentPaneResponse contains the current visible tmux pane content

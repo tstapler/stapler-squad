@@ -1,0 +1,15 @@
+{
+  "id": "callback-config:get",
+  "type": "backend",
+  "service": "SessionService",
+  "method": "GetCallbackConfig",
+  "protoFile": "proto/session/v1/session.proto",
+  "markerFound": true,
+  "handlerFile": "server/services/session_service.go",
+  "tested": true,
+  "testIds": [
+    "TestUpdateCallbackConfig_RejectsSSRFTarget",
+    "TestUpdateCallbackConfig_PersistsValidURL_MaskedOnRead"
+  ],
+  "lastModified": "2026-08-06T22:39:19.053409246-07:00"
+}

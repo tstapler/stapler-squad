@@ -14,6 +14,14 @@ on:
 permissions:
   pull-requests: write
 
+# Guards the delete-on-clean comment mutation against out-of-order runs. This
+# cancels the whole run (video recording included), not just the comment
+# step — safe here because a superseded PR run's videos are stale too, same
+# reasoning ux-analysis.yml uses for its single-job workflow.
+concurrency:
+  group: e2e-video-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
 # Feature specs recorded — excludes:
 #   terminal-flickering.spec.ts  (benchmarks/stress tests)
 #   accessibility.spec.ts        (handled by ux-analysis workflow)
@@ -82,6 +90,8 @@ jobs:
 
       - name: Generate protos and build web UI
         uses: ./.github/actions/prepare
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build binary
         run: go build -o stapler-squad .
@@ -243,9 +253,18 @@ jobs:
     if: always() && github.event_name == 'pull_request' && needs.detect-feature-changes.outputs.record_features == 'true'
     steps:
       - name: Post PR comment with artifact links
-        uses: actions/github-script@v7
+        continue-on-error: true # advisory comment; never fail the job if posting is denied
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
         with:
           script: |
+            // Inlined rather than require('./tools/ci-gates/video-anomaly.js'):
+            // this job has no checkout (pull-requests: write, and adding one
+            // just to require() a PR-branch-controlled file would mean
+            // executing fork-controlled JS inside a privileged step for a
+            // one-line check — see tools/ci-gates/video-anomaly.js, which
+            // stays the tested source of truth for this exact logic; keep
+            // both in sync if the definition ever changes.
+            const videoAnomaly = (artifacts) => artifacts.length === 0;
             const marker = '<!-- e2e-videos -->';
             const pr = context.issue.number;
             const runUrl = `https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
@@ -275,34 +294,47 @@ jobs:
               return parts.join(' · ');
             });
 
-            let lines;
-            if (videoArtifacts.length === 0) {
-              lines = [
-                '## ⚠️ E2E Video Recording',
-                '',
-                'No video artifacts were produced. Check the workflow run for details.',
-                '',
-                `[View workflow run](${runUrl})`,
-              ];
-            } else {
-              lines = [
-                '## 🎬 E2E Feature Demos',
-                '',
-                `**${videoArtifacts.length} shard(s)** recorded feature flows for this PR.`,
-                '',
+            // The normal (non-anomaly) case no longer gets a PR comment, but
+            // the demo-preview/recording links it used to carry are still
+            // written here so they aren't lost — just moved from "always a
+            // comment" to "always in the step summary" (Observability Plan).
+            require('fs').appendFileSync(
+              process.env.GITHUB_STEP_SUMMARY,
+              [
+                '## E2E Video Recording',
+                `${videoArtifacts.length} shard(s) produced video artifacts.`,
                 ...shardLinks,
                 '',
-                '_Demo preview opens directly in browser (single-file HTML). Raw WebM recordings in ZIP. Expires after 30 days._',
-              ];
-            }
+              ].join('\n'),
+            );
 
-            const body = [marker, ...lines].join('\n');
             const { data: comments } = await github.rest.issues.listComments({
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: pr,
             });
             const existing = comments.find(c => c.body.includes(marker));
+
+            if (!videoAnomaly(videoArtifacts)) {
+              if (existing) {
+                await github.rest.issues.deleteComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  comment_id: existing.id,
+                });
+              }
+              return;
+            }
+
+            const lines = [
+              '## ⚠️ E2E Video Recording',
+              '',
+              'No video artifacts were produced. Check the workflow run for details.',
+              '',
+              `[View workflow run](${runUrl})`,
+            ];
+
+            const body = [marker, ...lines].join('\n');
             if (existing) {
               await github.rest.issues.updateComment({
                 owner: context.repo.owner,

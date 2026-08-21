@@ -13,6 +13,7 @@ import (
 
 // TestRollbackMigration_Success tests successful rollback
 func TestRollbackMigration_Success(t *testing.T) {
+	t.Parallel()
 	tmpDir := t.TempDir()
 
 	// Create backup and a stub database file (simulating any DB file on disk)
@@ -43,6 +44,7 @@ func TestRollbackMigration_Success(t *testing.T) {
 
 // TestRollbackMigration_NonExistentBackup tests rollback with missing backup
 func TestRollbackMigration_NonExistentBackup(t *testing.T) {
+	t.Parallel()
 	tmpDir := t.TempDir()
 
 	backupPath := filepath.Join(tmpDir, "nonexistent-backup.json")
@@ -99,6 +101,7 @@ func TestMigrateJSONToEnt_Success(t *testing.T) {
 
 // TestMigrateJSONToEnt_EmptyJSON tests migration with empty JSON
 func TestMigrateJSONToEnt_EmptyJSON(t *testing.T) {
+	t.Parallel()
 	tmpDir := t.TempDir()
 
 	jsonPath := filepath.Join(tmpDir, "empty.json")
@@ -119,6 +122,7 @@ func TestMigrateJSONToEnt_EmptyJSON(t *testing.T) {
 
 // TestMigrateJSONToEnt_DryRun tests dry run mode
 func TestMigrateJSONToEnt_DryRun(t *testing.T) {
+	t.Parallel()
 	tmpDir := t.TempDir()
 
 	jsonPath := filepath.Join(tmpDir, "sessions.json")
@@ -192,6 +196,7 @@ func TestMigrateJSONToEnt_ForceOverwrite(t *testing.T) {
 
 // TestValidateEntMigration_Success tests successful Ent migration validation
 func TestValidateEntMigration_Success(t *testing.T) {
+	t.Parallel()
 	tmpDir := t.TempDir()
 
 	jsonPath := filepath.Join(tmpDir, "sessions.json")

@@ -6,7 +6,11 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/go-git/go-git/v5"
+	"github.com/go-git/go-git/v5/plumbing"
+	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
@@ -14,28 +18,28 @@ import (
 
 // setupTestRepo creates a temporary git repository with an initial commit and configured
 // user identity. It returns the repo directory path and a cleanup function.
+//
+// Uses go-git directly rather than shelling out — see
+// .claude/rules/prefer-go-git-over-subshells.md.
 func setupTestRepo(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
 
-	run := func(args ...string) {
-		t.Helper()
-		cmd := safeexec.CommandContext(context.Background(), "git", args...)
-		cmd.Dir = dir
-		out, err := cmd.CombinedOutput()
-		require.NoError(t, err, "git %s failed: %s", strings.Join(args, " "), out)
-	}
-
-	run("init")
-	run("config", "user.email", "test@example.com")
-	run("config", "user.name", "Test User")
+	repo, err := git.PlainInitWithOptions(dir, &git.PlainInitOptions{
+		InitOptions: git.InitOptions{DefaultBranch: plumbing.NewBranchReferenceName("main")},
+	})
+	require.NoError(t, err)
 
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "README.md"), []byte("# Test"), 0644))
-	run("add", ".")
-	run("commit", "-m", "Initial commit")
 
-	// Rename default branch to "main" (git default can vary)
-	run("branch", "-M", "main")
+	wt, err := repo.Worktree()
+	require.NoError(t, err)
+	_, err = wt.Add(".")
+	require.NoError(t, err)
+	_, err = wt.Commit("Initial commit", &git.CommitOptions{
+		Author: &object.Signature{Name: "Test User", Email: "test@example.com", When: time.Now()},
+	})
+	require.NoError(t, err)
 
 	return dir
 }
@@ -266,6 +270,42 @@ func TestNewGitWorktreeFromStorage_EmptyPaths_ReturnsNil(t *testing.T) {
 	assert.Nil(t, wt, "NewGitWorktreeFromStorage with empty paths must return nil")
 }
 
+// TestNewGitWorktreeFromStorage_CanonicalizesRawPathOnRead verifies AC4: a worktreePath
+// value persisted before CanonicalizeWorktreePath existed (a raw, symlink-unresolved
+// spelling) must come back canonicalized on rehydration -- without any data migration
+// script -- so in-memory comparisons against freshly-computed (already-canonical) paths
+// don't spuriously mismatch after a storage round-trip.
+func TestNewGitWorktreeFromStorage_CanonicalizesRawPathOnRead(t *testing.T) {
+	real := t.TempDir()
+	rawAlias := filepath.Join(t.TempDir(), "raw-alias-worktree-dir")
+	if err := os.Symlink(real, rawAlias); err != nil {
+		t.Skipf("symlinks not supported on this platform: %v", err)
+	}
+
+	resolvedReal, err := filepath.EvalSymlinks(real)
+	require.NoError(t, err)
+
+	restored := NewGitWorktreeFromStorage("/some/repo", rawAlias, "session", "branch", "deadbeef")
+	require.NotNil(t, restored)
+
+	assert.Equal(t, resolvedReal, restored.GetWorktreePath(),
+		"rehydration must canonicalize a raw persisted worktreePath, not return it as-is")
+}
+
+// TestNewGitWorktreeFromStorage_MissingDirectory_NonFatal verifies AC5: rehydrating a
+// worktree whose directory no longer exists on disk (deleted worktree, stale storage
+// entry) must not error, panic, or block on EvalSymlinks -- normalization is skipped and
+// the original path is returned unchanged.
+func TestNewGitWorktreeFromStorage_MissingDirectory_NonFatal(t *testing.T) {
+	deletedPath := filepath.Join(t.TempDir(), "no-longer-on-disk")
+
+	restored := NewGitWorktreeFromStorage("/some/repo", deletedPath, "session", "branch", "deadbeef")
+	require.NotNil(t, restored, "rehydration of a deleted worktree's storage entry must not fail")
+
+	assert.Equal(t, deletedPath, restored.GetWorktreePath(),
+		"a since-deleted worktree path must be returned unchanged, not blocked by a failed canonicalization attempt")
+}
+
 // TestNewGitWorktreeFromExisting_DetectsBranchAndBase verifies that
 // NewGitWorktreeFromExisting can detect the branch name and HEAD commit from an already
 // existing worktree directory.
@@ -316,6 +356,35 @@ func TestNewGitWorktreeFromExisting_DetectsBranchAndBase(t *testing.T) {
 	out, catErr := catFileCmd.Output()
 	require.NoErrorf(t, catErr, "base commit SHA %q must resolve to a real object", reopened.GetBaseCommitSHA())
 	assert.Equal(t, "commit", strings.TrimSpace(string(out)))
+}
+
+// TestNewGitWorktreeWithBranch_FreshPathMatchesGitRediscoveredPath verifies AC1: a
+// worktree path computed fresh via joinWithinDir(worktreeDir, sanitizedName) at creation
+// time, and the same directory rediscovered later via `git worktree list --porcelain`
+// (the "already checked out elsewhere" fallback in findExistingWorktreeForBranch), must
+// be byte-identical strings -- not merely equal after a test-side filepath.EvalSymlinks
+// normalization. On macOS this is only true because getWorktreeDirectory() resolves
+// symlinks on the base dir up front (see its doc comment) and the rediscovery path
+// canonicalizes git's porcelain output the same way before returning it.
+func TestNewGitWorktreeWithBranch_FreshPathMatchesGitRediscoveredPath(t *testing.T) {
+	repoDir := setupTestRepo(t)
+	const branch = "backlog/ac1-fresh-vs-rediscovered"
+
+	wt1, _, err := NewGitWorktreeWithBranch(repoDir, "ac1-item", branch)
+	require.NoError(t, err)
+	require.NoError(t, wt1.Setup())
+	freshPath := wt1.GetWorktreePath()
+	defer func() { _ = wt1.Cleanup() }()
+
+	// Rediscover the same worktree the way a second, independent construction would:
+	// findExistingWorktreeForBranch parses `git worktree list --porcelain`, which
+	// reports git's own realpath'd view of the directory.
+	rediscoveredPath, found := findExistingWorktreeForBranch(repoDir, branch)
+	require.True(t, found, "git must report the worktree just created via Setup()")
+	rediscoveredPath = CanonicalizeWorktreePath(rediscoveredPath)
+
+	assert.Equal(t, freshPath, rediscoveredPath,
+		"freshly-computed worktree path and git-rediscovered path must be byte-identical, not just equal-after-normalization")
 }
 
 // TestWorktreeSetup_BranchNameSet verifies that GetBranchName() returns the expected

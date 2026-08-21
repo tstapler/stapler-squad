@@ -13,12 +13,14 @@ import (
 
 // TestSessionCreationDoesNotHang tests that session creation completes within reasonable time
 func TestSessionCreationDoesNotHang(t *testing.T) {
+	t.Parallel()
 	if testing.Short() {
 		t.Skip("skipping integration test that starts real tmux sessions")
 	}
 	tempDir := t.TempDir()
 
 	t.Run("DirectorySessionCreation", func(t *testing.T) {
+		t.Parallel()
 		// Create a simple directory session with a command that stays alive
 		// Using sleep to keep the session alive long enough for tmux to register it
 		instance, cleanup, err := NewInstanceWithCleanup(InstanceOptions{
@@ -57,6 +59,7 @@ func TestSessionCreationDoesNotHang(t *testing.T) {
 	})
 
 	t.Run("ClaudeSessionCreation", func(t *testing.T) {
+		t.Parallel()
 		// Test with Claude program (but use a simple command instead of actual claude)
 		instance, cleanup, err := NewInstanceWithCleanup(InstanceOptions{
 			Title:            "test-claude-session",
@@ -95,6 +98,7 @@ func TestSessionCreationDoesNotHang(t *testing.T) {
 
 // TestSessionCreationWithRealPrograms tests session creation with actual programs if available
 func TestSessionCreationWithRealPrograms(t *testing.T) {
+	t.Parallel()
 	if testing.Short() {
 		t.Skip("skipping integration test that starts real tmux sessions")
 	}
@@ -126,6 +130,7 @@ func TestSessionCreationWithRealPrograms(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			if tc.skipTest() {
 				t.Skipf("Skipping %s test - program not available", tc.name)
 				return
@@ -168,6 +173,7 @@ func TestSessionCreationWithRealPrograms(t *testing.T) {
 
 // TestSessionCreationWithWorktree tests session creation with git worktrees
 func TestSessionCreationWithWorktree(t *testing.T) {
+	t.Parallel()
 	if testing.Short() {
 		t.Skip("skipping integration test that starts real tmux sessions")
 	}

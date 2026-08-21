@@ -43,6 +43,24 @@ const bounceLookback = 24 * time.Hour
 // as an independent constant since this package cannot import server/services.
 const bounceMainBranch = "main"
 
+// multiReasonThreshold is the minimum count of simultaneously open
+// *non-escalation* stuck reasons on one item before it is escalated to
+// domain.StuckReasonMultipleReasons. Fixed per plan.md's Pattern Decisions
+// table (requirements.md's own live-data-informed default: "≥2 would have
+// caught both" of this project's motivating live cases) — not a tunable
+// scoring rubric.
+const multiReasonThreshold = 2
+
+// multiReasonNotifyDwell is how long domain.StuckReasonMultipleReasons' row
+// must have been open (FirstDetectedAt) before its notification fires, so a
+// single-tick threshold crossing doesn't notify immediately — the same
+// one-reconcile-tick-width debounce shape as prReadyThreshold/
+// abandonedReviewGrace, sized to the reconcile ticker's period. Independent
+// constant, NOT read from server/dependencies.go's ticker constant: the
+// session package cannot import server, matching bounceMainBranch's existing
+// precedent for duplicating a cross-package constant.
+const multiReasonNotifyDwell = 60 * time.Second
+
 // stuckPRReady reports whether a pr_ready_unmerged condition first observed
 // at firstDetected has held long enough (> prReadyThreshold) as of now to be
 // notification-worthy. Exact-threshold and under-threshold both return false
@@ -70,6 +88,23 @@ func staleWork(lastProgress, now time.Time) bool {
 // non-converging "bouncing" cycle (>= bounceThreshold and !hasPass).
 func isBouncing(cycleCount int, hasPass bool) bool {
 	return cycleCount >= bounceThreshold && !hasPass
+}
+
+// isMultiReasonEscalated reports whether openNonEscalationCount — the number
+// of simultaneously open, non-escalation stuck reasons on one item — meets or
+// exceeds multiReasonThreshold, i.e. the item should carry an open
+// domain.StuckReasonMultipleReasons row.
+func isMultiReasonEscalated(openNonEscalationCount int) bool {
+	return openNonEscalationCount >= multiReasonThreshold
+}
+
+// multiReasonEscalationNotifyReady reports whether a
+// domain.StuckReasonMultipleReasons row first observed at firstDetected has
+// held long enough (>= multiReasonNotifyDwell) as of now to be
+// notification-worthy — mirrors stuckPRReady/abandonedReview's "don't notify
+// on the very tick that created the row" shape.
+func multiReasonEscalationNotifyReady(firstDetected, now time.Time) bool {
+	return now.Sub(firstDetected) >= multiReasonNotifyDwell
 }
 
 // IsRepeatedFailure reports whether the two most recent review verdicts (most
@@ -127,6 +162,119 @@ func IsRepeatedNoVerdictFailure(hadVerdict []bool) bool {
 		}
 	}
 	return true
+}
+
+// IsFlakyVerdictFlipFlop reports whether the two most recent review verdicts
+// (most recent first, as returned by Storage.GetRecentReviewVerdictSummaries)
+// share the same non-empty DiffHash but landed on a different OverallOutcome
+// — i.e. the identical reviewed diff got two different answers, the
+// signature of a flaky/non-deterministic review rather than a real fix or
+// regression (the code under review never changed between attempts). An
+// empty DiffHash is "unknown, not computed" and is never treated as a match
+// — two unknowns are not evidence of anything. False on fewer than 2
+// verdicts, and false when the outcomes agree (that repeated-same-outcome
+// shape is IsRepeatedFailure's job, not this one).
+//
+// Known false-positive source (documented, not filtered — see
+// validation.md): a manual OverrideBy="user" verdict interleaved with an
+// automated one can look identical to a flip-flop but is actually a human
+// correction, not model variance. OverrideBy isn't part of
+// []ReviewVerdictSummary today, so it can't be excluded here.
+func IsFlakyVerdictFlipFlop(recent []ReviewVerdictSummary) bool {
+	if len(recent) < 2 {
+		return false
+	}
+	latest, prior := recent[0], recent[1]
+	if latest.DiffHash == "" || prior.DiffHash == "" {
+		return false
+	}
+	if latest.DiffHash != prior.DiffHash {
+		return false
+	}
+	return latest.OverallOutcome != prior.OverallOutcome
+}
+
+// TestOnlyReworkMinAttempts is how many consecutive rework attempts (most
+// recent first) must have touched test-only files before
+// IsTestOnlyReworkCycle trips. An unvalidated starting guess — no
+// calibration corpus exists yet beyond the n≈3 items (ccbfe7a6, e271db3d,
+// 92d679fd) that motivated this item; see validation.md. Exported: callers
+// that build the []string attempt list to pass in (e.g.
+// recentWorkSessionFileLists in server/services/backlog_service_triage.go)
+// must request at least this many attempts, and must reference this
+// constant rather than duplicating the literal — a hardcoded copy at the
+// call site would silently go stale if this threshold is ever retuned.
+const TestOnlyReworkMinAttempts = 2
+
+// testFileSuffixes are the file-path suffixes IsTestOnlyReworkCycle treats as
+// a test/spec file. Deliberately a fixed suffix list, not a regex/glob DSL —
+// see plan.md's explicit scope guard against introducing a rules DSL for
+// this predicate.
+var testFileSuffixes = []string{
+	"_test.go",
+	".test.ts",
+	".test.tsx",
+	".spec.ts",
+	".spec.tsx",
+}
+
+// isTestFile reports whether path ends in one of testFileSuffixes.
+func isTestFile(path string) bool {
+	for _, suffix := range testFileSuffixes {
+		if strings.HasSuffix(path, suffix) {
+			return true
+		}
+	}
+	return false
+}
+
+// IsTestOnlyReworkCycle reports whether every file touched across the last
+// TestOnlyReworkMinAttempts rework attempts (most recent first — one
+// []string of changed file paths per attempt) is a test/spec file. A
+// legitimate fix touches production code somewhere; a run of test-only
+// diffs is suggestive of chasing a non-deterministic failure by editing the
+// test rather than the underlying code. False on fewer than
+// TestOnlyReworkMinAttempts attempts, on any attempt with no file data at
+// all (no signal, don't guess), or on any attempt touching a non-test file.
+//
+// Known false-positive source (documented, not filtered — purely
+// informational, never gates the reopen decision, so this rate is accepted
+// rather than suppressed here; see validation.md): a legitimate
+// test-coverage-improvement item also produces test-only rework cycles by
+// design.
+func IsTestOnlyReworkCycle(fileListsByAttempt [][]string) bool {
+	if len(fileListsByAttempt) < TestOnlyReworkMinAttempts {
+		return false
+	}
+	for _, files := range fileListsByAttempt[:TestOnlyReworkMinAttempts] {
+		if len(files) == 0 {
+			return false
+		}
+		for _, f := range files {
+			if !isTestFile(f) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// MostRecentCompletedWorkSession returns the most recent completed
+// (EndedAt != nil) work-role ItemSession from sessions, or nil if none
+// exists. sessions must be ordered oldest-first, as Storage.ListItemSessions
+// returns. Exported: called from server/services at review-verdict-save time
+// to resolve which work session's diff a given verdict is reviewing (feeds
+// the DiffHash computation IsFlakyVerdictFlipFlop consumes), and by the
+// stuck-item reconciler to build IsTestOnlyReworkCycle's per-attempt file
+// lists. Only considers completed sessions — reading a still-in-progress
+// session's commit range risks racing an in-flight write (see validation.md).
+func MostRecentCompletedWorkSession(sessions []ItemSessionSummary) *ItemSessionSummary {
+	for i := len(sessions) - 1; i >= 0; i-- {
+		if sessions[i].Role == SessionRoleWork && sessions[i].EndedAt != nil {
+			return &sessions[i]
+		}
+	}
+	return nil
 }
 
 // prReadyToMergeSolo is the solo-operator PR readiness predicate (ADR-001

@@ -221,8 +221,54 @@ func (r *ReviewGateRunner) Run(
 			}
 		}
 	}
+	// Captured before uncommittedWarning is prepended below, so this reflects only
+	// the actual committed diff rather than the warning banner text.
+	committedDiffEmpty := worktreeDiffErr == nil && strings.TrimSpace(diff) == ""
+
 	if uncommittedWarning != "" {
 		diff = uncommittedWarning + diff
+	}
+
+	// An empty committed diff is indistinguishable from "no real work happened" — the
+	// same failure shape as the worktreeDiffErr case below, but for a diff that
+	// computed successfully rather than one that errored. Without this check, a
+	// no-op session (crashed before committing, or promoted to review by
+	// ReconcileStuckItems purely because its work sessions ended, with zero commits)
+	// would reach a real review session with nothing to review, risking a false
+	// PASS/UNVERIFIABLE verdict that marks the item done despite no work having
+	// shipped — see BUG-047/BUG-065 in backlog_lifecycle.go and
+	// backlog_lifecycle_pr.go for the same class of bug in sibling reconciliation
+	// paths. Blocking here, with the same FAIL-verdict + auto-reopen handling used
+	// for every other guardrail in this function, routes a no-work item back
+	// through AutoReopenAfterFailedReview to in_progress instead of letting it
+	// silently pass review.
+	if committedDiffEmpty {
+		summary := "Review blocked: no committed changes were found for this session. " +
+			"There is nothing to review — the work session ended without shipping any commits."
+		emptyDiffIS, createErr := recordTerminalReviewVerdict(r.storage, item.ID, is.AcSnapshot, "empty-diff-"+uuid.New().String(), ReviewVerdictFail, summary)
+		if createErr != nil {
+			log.ErrorLog.Printf("[BacklogLifecycle] spawnReviewGate CreateItemSessionWithVerdict (empty diff) item=%s: %v", item.ID, createErr)
+			return
+		}
+		log.WarningLog.Printf("[BacklogLifecycle] spawnReviewGate empty diff for item %s — FAIL verdict recorded (session %s)", item.ID, emptyDiffIS.ID)
+		if r.getNotifier != nil {
+			if n := r.getNotifier(); n != nil {
+				n.Notify(item.ID,
+					"Review blocked — no changes to review",
+					fmt.Sprintf("%s — the work session ended without any committed changes.", item.Title),
+					7, // sessionv1.NotificationType_NOTIFICATION_TYPE_ERROR
+					3, // sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_HIGH
+				)
+			}
+		}
+		if reopener := r.getAutoReopener(); reopener != nil {
+			go func() {
+				if err := reopener.AutoReopenAfterFailedReview(ctx, item.ID); err != nil {
+					log.ErrorLog.Printf("[BacklogLifecycle] spawnReviewGate AutoReopenAfterFailedReview (empty diff) item=%s: %v", item.ID, err)
+				}
+			}()
+		}
+		return
 	}
 
 	// A worktree/base-commit was recorded for this session but the diff could not be

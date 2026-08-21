@@ -15,6 +15,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	githubpkg "github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
@@ -280,6 +281,33 @@ func (s *BacklogService) ConfigMu() *sync.RWMutex {
 	return &s.cfgMu
 }
 
+// EnterpriseHosts returns the statically-configured GitHub Enterprise
+// hostnames (normalized, github.com excluded), for callers that need to
+// recognize GHE PR/issue URLs — e.g. server/mcp/tools_backlog.go's
+// reportPRCreated and importGitHubIssue, which otherwise fall back to
+// session.ParseGitHubURL's github.com-only matching and silently fail to
+// recognize any GHE host. Mirrors SessionService.enterpriseHosts, minus that
+// method's additional union with cached-account hosts (BacklogService has no
+// UserPRCache dependency) — extend this if/when that's needed here too.
+// Read under cfgMu's read lock for the same reason as
+// maxConcurrentBacklogWorkItems below.
+func (s *BacklogService) EnterpriseHosts() []string {
+	s.cfgMu.RLock()
+	defer s.cfgMu.RUnlock()
+	configuredHosts := s.cfg.GetGitHubEnterpriseHosts()
+	hosts := make([]string, 0, len(configuredHosts))
+	seen := make(map[string]bool, len(configuredHosts))
+	for _, h := range configuredHosts {
+		host := githubpkg.NormalizeHost(h.Host)
+		if host == "" || githubpkg.IsGitHubCom(host) || seen[host] {
+			continue
+		}
+		seen[host] = true
+		hosts = append(hosts, host)
+	}
+	return hosts
+}
+
 // maxConcurrentBacklogWorkItems reads cfg.MaxConcurrentBacklogWorkItemsOrDefault()
 // under cfgMu's read lock so a concurrent DefaultsService.UpdateGlobalDefaults
 // write (propagated via SetSharedBacklogConfig) is always observed by the next
@@ -304,6 +332,20 @@ func (s *BacklogService) autoSpawnReadyItemsEnabled() bool {
 	s.cfgMu.RLock()
 	defer s.cfgMu.RUnlock()
 	return s.cfg.AutoSpawnReadyItemsOrDefault()
+}
+
+// Admit reports whether a new trigger-fired session may be created right now, per the
+// same MaxConcurrentBacklogWorkItems WIP cap SpawnSessionFromItem's own gate enforces
+// (backlog_service_triage.go). Implements server/workflows.AdmissionGate — wired into
+// Scheduler at construction (server/dependencies.go) so Scheduler.FireNow/FireTrigger
+// can no longer bypass this cap (webhook-triggers Epic 1.3, closing the collateral
+// debt the 2026-07-12 OOM incident's WIP limit was meant to prevent everywhere).
+func (s *BacklogService) Admit(ctx context.Context) (bool, error) {
+	liveCount, err := s.countLiveBacklogWorkSessions(ctx)
+	if err != nil {
+		return false, fmt.Errorf("count live work sessions: %w", err)
+	}
+	return liveCount < s.maxConcurrentBacklogWorkItems(), nil
 }
 
 // SetEventBus wires in the event bus used to publish operator-facing notifications.
@@ -343,6 +385,24 @@ func NewBacklogService(storage *session.Storage, creator SessionCreator, cfg *co
 // SetHeadlessPool wires the headless pool for autonomous triage calls.
 func (s *BacklogService) SetHeadlessPool(pool headless.PoolClient) {
 	s.headlessPool = pool
+}
+
+// claimantHostID returns the stable per-host/per-instance identifier for the
+// process performing a backlog claim or attach, for cross-host provenance on
+// ItemSession rows. It is distinct from STAPLER_SQUAD_INSTANCE (a config
+// namespace, not an identity) and from session/contexts.go's cloud InstanceID
+// (cloud-only, not populated for local/dev). Returns "" on any failure so a
+// claim/attach never fails just because host-identity persistence did.
+func (s *BacklogService) claimantHostID() string {
+	if s.cfg == nil {
+		return ""
+	}
+	id, err := s.cfg.GetOrCreateClaimantHostID()
+	if err != nil {
+		log.WarningLog.Printf("[claimantHostID] failed to resolve claimant host id: %v", err)
+		return ""
+	}
+	return id
 }
 
 // SetScrollbackManager wires in the scrollback manager used to write a searchable
@@ -487,6 +547,9 @@ func itemSessionToProto(is session.ItemSessionSummary, costFor func(tmuxUUID str
 		CreatedAt:                timestamppb.New(is.CreatedAt),
 		PipelineModeSnapshot:     is.PipelineModeSnapshot,
 		PipelineModeSnapshotHash: is.PipelineModeSnapshotHash,
+		EndReason:                is.EndReason,
+		FailureCapturePath:       is.FailureCapturePath,
+		ClaimantHostId:           is.ClaimantHostID,
 	}
 	if is.StartedAt != nil {
 		p.StartedAt = timestamppb.New(*is.StartedAt)
@@ -589,18 +652,20 @@ type triageResultJSON struct {
 // Used by ListBacklogItems to avoid over-hydrating description/plan fields.
 func backlogItemSummaryToProto(item *session.BacklogItemSummary, costFor func(tmuxUUID string) float64) *sessionv1.BacklogItem {
 	p := &sessionv1.BacklogItem{
-		Id:         item.ID,
-		Title:      item.Title,
-		Priority:   int32(item.Priority),
-		Status:     string(item.Status),
-		RepoPath:   item.RepoPath,
-		Notes:      item.Notes,
-		ExternalId: item.ExternalID,
-		Labels:     item.Labels,
-		PrUrl:      item.PrURL,
-		PrNumber:   int32(item.PrNumber),
-		CreatedAt:  timestamppb.New(item.CreatedAt),
-		UpdatedAt:  timestamppb.New(item.UpdatedAt),
+		Id:                 item.ID,
+		PublicId:           item.PublicIDRaw,
+		Title:              item.Title,
+		Priority:           int32(item.Priority),
+		Status:             string(item.Status),
+		RepoPath:           item.RepoPath,
+		Notes:              item.Notes,
+		ExternalId:         item.ExternalID,
+		Labels:             item.Labels,
+		PrUrl:              item.PrURL,
+		PrNumber:           int32(item.PrNumber),
+		CreatedAt:          timestamppb.New(item.CreatedAt),
+		UpdatedAt:          timestamppb.New(item.UpdatedAt),
+		AllowedTransitions: allowedTransitionStrings(item.Status),
 	}
 	if item.ExternalURL != "" {
 		p.ExternalUrl = &item.ExternalURL
@@ -658,35 +723,40 @@ func allowedTransitionStrings(from session.BacklogStatus) []string {
 // backlogItemToProto maps a BacklogItemData to the proto BacklogItem message.
 func backlogItemToProto(item *session.BacklogItemData, costFor func(tmuxUUID string) float64) *sessionv1.BacklogItem {
 	p := &sessionv1.BacklogItem{
-		Id:                 item.ID,
-		Title:              item.Title,
-		Description:        item.Description,
-		Priority:           int32(item.Priority),
-		Status:             item.Status,
-		RepoPath:           item.RepoPath,
-		SkipReviewGate:     item.SkipReviewGate,
-		SkipPlanning:       item.SkipPlanning,
-		AutoSpawnSession:   item.AutoSpawnSession,
-		AutoCreatePr:       item.AutoCreatePR,
-		PipelineMode:       &item.PipelineMode,
-		Category:           &item.Category,
-		PlanApproved:       item.PlanApproved,
-		PlanArtifactsPath:  item.PlanArtifactsPath,
-		Notes:              item.Notes,
-		ExternalId:         item.ExternalID,
-		Labels:             item.Labels,
-		SourceId:           item.SourceID,
-		PrUrl:              item.PrURL,
-		PrNumber:           int32(item.PrNumber),
-		CreatedAt:          timestamppb.New(item.CreatedAt),
-		UpdatedAt:          timestamppb.New(item.UpdatedAt),
-		AllowedTransitions: allowedTransitionStrings(session.BacklogStatus(item.Status)),
+		Id:                  item.ID,
+		Title:               item.Title,
+		Description:         item.Description,
+		Priority:            int32(item.Priority),
+		Status:              item.Status,
+		RepoPath:            item.RepoPath,
+		SkipReviewGate:      item.SkipReviewGate,
+		SkipPlanning:        item.SkipPlanning,
+		AutoSpawnSession:    item.AutoSpawnSession,
+		AutoCreatePr:        item.AutoCreatePR,
+		PipelineMode:        &item.PipelineMode,
+		Category:            &item.Category,
+		PlanApproved:        item.PlanApproved,
+		PlanArtifactsPath:   item.PlanArtifactsPath,
+		PlanRejectionReason: item.PlanRejectionReason,
+		Notes:               item.Notes,
+		ExternalId:          item.ExternalID,
+		Labels:              item.Labels,
+		SourceId:            item.SourceID,
+		PrUrl:               item.PrURL,
+		PrNumber:            int32(item.PrNumber),
+		CreatedAt:           timestamppb.New(item.CreatedAt),
+		UpdatedAt:           timestamppb.New(item.UpdatedAt),
+		AllowedTransitions:  allowedTransitionStrings(session.BacklogStatus(item.Status)),
+		PublicId:            item.PublicIDRaw,
 	}
 	if item.ExternalURL != "" {
 		p.ExternalUrl = &item.ExternalURL
 	}
 	if item.PlanApprovedAt != nil {
 		p.PlanApprovedAt = timestamppb.New(*item.PlanApprovedAt)
+	}
+	if item.PlanRejectedAt != nil {
+		p.PlanRejectedAt = timestamppb.New(*item.PlanRejectedAt)
 	}
 	if item.ArchivedAt != nil {
 		p.ArchivedAt = timestamppb.New(*item.ArchivedAt)
@@ -755,6 +825,16 @@ func backlogItemToProto(item *session.BacklogItemData, costFor func(tmuxUUID str
 			}
 		}
 		p.ProgressNotes = protoNotes
+	}
+
+	// Populate activity notes (the ungated post_backlog_update log) when they
+	// were eagerly loaded.
+	if len(item.ActivityNotes) > 0 {
+		protoActivityNotes := make([]*sessionv1.BacklogActivityNote, len(item.ActivityNotes))
+		for i := range item.ActivityNotes {
+			protoActivityNotes[i] = activityNoteDataToProto(&item.ActivityNotes[i])
+		}
+		p.ActivityNotes = protoActivityNotes
 	}
 
 	return p

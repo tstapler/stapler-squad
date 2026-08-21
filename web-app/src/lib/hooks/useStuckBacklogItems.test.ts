@@ -5,7 +5,7 @@
  * blanking the last-known list, and refetch()/snooze().
  */
 import { renderHook, act, waitFor } from "@testing-library/react";
-import { useStuckBacklogItems } from "./useStuckBacklogItems";
+import { useStuckBacklogItems, StuckBacklogItemsProvider } from "./useStuckBacklogItems";
 import { StuckReason } from "@/gen/session/v1/backlog_pb";
 
 const mockListStuckBacklogItems = jest.fn();
@@ -178,5 +178,49 @@ describe("useStuckBacklogItems", () => {
     expect(mockTriggerRemediationNow).toHaveBeenCalledWith(
       expect.objectContaining({ itemId: "a", reason: StuckReason.BOUNCING })
     );
+  });
+});
+
+describe("StuckBacklogItemsProvider", () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it("shares a single poll across multiple consumers instead of each polling independently", async () => {
+    mockListStuckBacklogItems.mockResolvedValue({ items: [makeItem("a")] });
+
+    const { result } = renderHook(
+      () => ({ a: useStuckBacklogItems(), b: useStuckBacklogItems() }),
+      { wrapper: StuckBacklogItemsProvider }
+    );
+
+    await waitFor(() => expect(result.current.a.items).toHaveLength(1));
+    expect(result.current.b.items).toHaveLength(1);
+    expect(mockListStuckBacklogItems).toHaveBeenCalledTimes(1);
+  });
+
+  it("propagates a refetch from one consumer to every other consumer without waiting for the poll interval", async () => {
+    mockListStuckBacklogItems.mockResolvedValueOnce({ items: [] });
+    const { result } = renderHook(
+      () => ({ a: useStuckBacklogItems(), b: useStuckBacklogItems() }),
+      { wrapper: StuckBacklogItemsProvider }
+    );
+    await waitFor(() => expect(result.current.a.lastFetched).not.toBeNull());
+
+    mockListStuckBacklogItems.mockResolvedValueOnce({ items: [makeItem("a")] });
+    await act(async () => {
+      await result.current.a.refetch();
+    });
+
+    expect(result.current.b.items).toHaveLength(1);
+  });
+
+  it("falls back to an independent standalone poll per instance when there is no provider ancestor", async () => {
+    mockListStuckBacklogItems.mockResolvedValue({ items: [makeItem("a")] });
+
+    renderHook(() => useStuckBacklogItems());
+    renderHook(() => useStuckBacklogItems());
+
+    await waitFor(() => expect(mockListStuckBacklogItems).toHaveBeenCalledTimes(2));
   });
 });

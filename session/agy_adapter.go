@@ -12,7 +12,8 @@ import (
 	"strings"
 	"time"
 
-	_ "github.com/mattn/go-sqlite3"
+	"github.com/tstapler/stapler-squad/internal/sqlitedsn"
+	_ "modernc.org/sqlite" // Pure Go SQLite driver
 )
 
 type AgyAdapter struct{}
@@ -27,7 +28,10 @@ func (a *AgyAdapter) Name() string {
 
 func (a *AgyAdapter) CanHandle(program string) bool {
 	p := strings.ToLower(program)
-	return strings.Contains(p, "agy") || strings.Contains(p, "antigravity") || strings.Contains(p, "gemini")
+	// "gemini" is intentionally excluded: it names the standalone Gemini CLI, whose
+	// history format differs from Antigravity's own ~/.gemini/antigravity-cli/... storage
+	// that this adapter reads and writes.
+	return strings.Contains(p, "agy") || strings.Contains(p, "antigravity")
 }
 
 type rawAgyStep struct {
@@ -287,7 +291,7 @@ func (a *AgyAdapter) Export(ctx context.Context, turns []CanonicalTurn, inst *In
 		return err
 	}
 
-	db, err := sql.Open("sqlite3", dbPath)
+	db, err := sql.Open("sqlite", sqlitedsn.New(dbPath).Build())
 	if err != nil {
 		return err
 	}

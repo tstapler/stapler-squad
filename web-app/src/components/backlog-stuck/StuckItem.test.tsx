@@ -370,4 +370,59 @@ describe("StuckItem", () => {
       expect(screen.getByTestId("stuck-item-retry-now")).toBeDisabled();
     });
   });
+
+  describe("StuckItem_should_scrollIntoView_When_FocusItemIdMatchesAndExpanded", () => {
+    const originalScrollIntoView = Element.prototype.scrollIntoView;
+    let scrollIntoView: jest.Mock;
+
+    beforeEach(() => {
+      scrollIntoView = jest.fn();
+      Element.prototype.scrollIntoView = scrollIntoView;
+    });
+
+    afterEach(() => {
+      Element.prototype.scrollIntoView = originalScrollIntoView;
+    });
+
+    it("scrolls the card into view when focusItemId matches and the card is expanded", () => {
+      render(
+        <StuckItem
+          item={makeItem()}
+          isExpanded={true}
+          onToggleExpand={jest.fn()}
+          focusItemId="f9fcef32-c27e-434d-b23f-c873c18afa92"
+        />
+      );
+      expect(scrollIntoView).toHaveBeenCalledWith({ block: "center" });
+    });
+
+    it("does not scroll when focusItemId does not match this card's itemId", () => {
+      render(
+        <StuckItem
+          item={makeItem()}
+          isExpanded={true}
+          onToggleExpand={jest.fn()}
+          focusItemId="some-other-item-id"
+        />
+      );
+      expect(scrollIntoView).not.toHaveBeenCalled();
+    });
+
+    it("does not scroll when focusItemId matches but the card is not expanded", () => {
+      render(
+        <StuckItem
+          item={makeItem()}
+          isExpanded={false}
+          onToggleExpand={jest.fn()}
+          focusItemId="f9fcef32-c27e-434d-b23f-c873c18afa92"
+        />
+      );
+      expect(scrollIntoView).not.toHaveBeenCalled();
+    });
+
+    it("does not scroll when focusItemId is not provided", () => {
+      render(<StuckItem item={makeItem()} isExpanded={true} onToggleExpand={jest.fn()} />);
+      expect(scrollIntoView).not.toHaveBeenCalled();
+    });
+  });
 });

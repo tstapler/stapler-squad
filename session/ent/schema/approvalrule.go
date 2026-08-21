@@ -79,6 +79,9 @@ func (ApprovalRule) Fields() []ent.Field {
 			Default(false),
 		field.Bool("require_ci_passing").
 			Default(false),
+		field.Int32("min_session_idle_minutes").
+			Optional().
+			Default(0),
 	}
 }
 

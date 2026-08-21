@@ -7,6 +7,7 @@ import { NotificationProvider } from "@/lib/contexts/NotificationContext";
 import { OmnibarProvider } from "@/lib/contexts/OmnibarContext";
 import { ReviewQueueProvider } from "@/lib/contexts/ReviewQueueContext";
 import { ApprovalsProvider } from "@/lib/contexts/ApprovalsContext";
+import { StuckBacklogItemsProvider } from "@/lib/hooks/useStuckBacklogItems";
 import { GlobalSessionServiceProvider } from "@/lib/contexts/SessionServiceContext";
 import { SystemMemoryProvider } from "@/lib/contexts/SystemMemoryContext";
 import { NavigationProvider } from "@/lib/contexts/NavigationContext";
@@ -44,7 +45,9 @@ export function Providers({ children }: { children: React.ReactNode }) {
                   <OnboardingProvider>
                     <ReviewQueueProvider>
                       <ApprovalsProvider>
-                        {children}
+                        <StuckBacklogItemsProvider>
+                          {children}
+                        </StuckBacklogItemsProvider>
                       </ApprovalsProvider>
                     </ReviewQueueProvider>
                   </OnboardingProvider>

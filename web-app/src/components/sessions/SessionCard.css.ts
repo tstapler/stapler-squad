@@ -226,6 +226,14 @@ export const statusUnknown = style({
   color: vars.statusBadge.idleFg,
 });
 
+/** Distinct style for CRASHED sessions — reuses the error palette (not the
+ *  pulsing NEEDS_APPROVAL animation, since a crash isn't an active prompt). */
+export const statusCrashed = style({
+  background: vars.color.errorBg,
+  color: vars.color.errorText,
+  border: `1px solid ${vars.color.error}`,
+});
+
 export const category = style({
   display: "inline-block",
   padding: `${vars.space["1"]} ${vars.space["2"]}`,
@@ -829,6 +837,63 @@ export const workflowBadge = style({
   overflow: "hidden",
   textOverflow: "ellipsis",
   maxWidth: "120px",
+});
+
+export const autoApproveBadge = style({
+  display: "inline-flex",
+  alignItems: "center",
+  gap: vars.space["1"],
+  padding: `${vars.space["1"]} ${vars.space["2"]}`,
+  background: vars.color.warningBg,
+  color: vars.color.warningText,
+  borderRadius: vars.radii.full,
+  fontSize: vars.fontSize.xs,
+  fontWeight: 600,
+  border: `1px solid ${vars.color.warning}`,
+  cursor: "pointer",
+});
+
+export const autoApprovePendingBadge = style({
+  display: "inline-flex",
+  alignItems: "center",
+  gap: vars.space["1"],
+  padding: `${vars.space["1"]} ${vars.space["2"]}`,
+  borderRadius: vars.radii.sm,
+  background: vars.color.accentBg,
+  color: vars.color.textSecondary,
+  border: `1px solid ${vars.color.borderColor}`,
+  fontSize: vars.fontSize.xs,
+  fontWeight: 500,
+});
+
+export const noteBadge = style({
+  display: "inline-flex",
+  alignItems: "center",
+  gap: vars.space["1"],
+  padding: `${vars.space["1"]} ${vars.space["2"]}`,
+  borderRadius: vars.radii.sm,
+  background: vars.color.accentBg,
+  color: vars.color.textSecondary,
+  border: `1px solid ${vars.color.borderColor}`,
+  fontSize: vars.fontSize.xs,
+  fontWeight: vars.fontWeight.medium,
+  whiteSpace: "nowrap",
+});
+
+// Reuses the same warning tokens as backlog-stuck/stuckReason.css.ts's chipStaleWork
+// — both flag "no recent activity" states, so they share one visual language.
+export const staleBadge = style({
+  display: "inline-flex",
+  alignItems: "center",
+  gap: vars.space["1"],
+  padding: `${vars.space["1"]} ${vars.space["2"]}`,
+  borderRadius: vars.radii.sm,
+  background: vars.color.warningBg,
+  color: vars.color.warningText,
+  border: `1px solid ${vars.color.warning}`,
+  fontSize: vars.fontSize.xs,
+  fontWeight: 600,
+  whiteSpace: "nowrap",
 });
 
 /** Goal row compact display — session list card */

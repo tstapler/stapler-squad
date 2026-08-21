@@ -141,10 +141,17 @@ sdd:6-verify pass before review, rather than a single flat work session.
 // buildDefaultSlashCommandSet's done-N.md/fail-N.md exactly, so the same
 // report_progress contract the platform's status machinery depends on is
 // unchanged for sdd-mode items.
-const sddDoneCommandTemplate = `Call report_progress with item_id={{item_id}}, criteria_index={{criteria_index}}, status=pass
+const sddDoneCommandTemplate = `Call report_progress with item_id={{item_id}}, criteria_index={{criteria_index}}, status=pass.
+Include the optional note parameter with a 1-2 sentence description of what you verified (e.g.
+"ran the new unit test, it passes" or "manually tested via curl against the new endpoint") - it is
+appended to this item's permanent audit trail and is what a reviewer reads to judge whether this
+criterion is genuinely done, not just marked done.
 `
 
-const sddFailCommandTemplate = `Call report_progress with item_id={{item_id}}, criteria_index={{criteria_index}}, status=fail
+const sddFailCommandTemplate = `Call report_progress with item_id={{item_id}}, criteria_index={{criteria_index}}, status=fail.
+Include the optional note parameter with a 1-2 sentence explanation of specifically what is blocking
+this criterion - it is appended to this item's permanent audit trail and is what a reviewer or the
+next session reads to understand why this criterion isn't done yet.
 `
 
 // sddReviewCommandTemplate adds an sdd:6-verify pass ahead of the same
@@ -160,9 +167,9 @@ reports PASS, or you have deliberately accepted and documented any remaining CON
 Once sdd:6-verify is clean, call request_review with item_id={{item_id}} and a 2-3
 sentence summary of what was built, including the sdd:6-verify verdict.
 
-Do NOT end your session after this. Wait a bit, then call get_backlog_item (or run
-/backlog/status) again - the verdict appears under Latest Review Verdict once the
-reviewer submits it.
+Do NOT end your session after this. Call wait_for_backlog_event(item_id, event_type="verdict_recorded")
+instead of polling - it blocks until the verdict lands (or times out) and returns the
+outcome directly, or returns immediately if a verdict is already recorded.
 
 PASS leads to running /backlog/ship now to open the pull request yourself - it drives
 /github:pr-ship through local CI, code review, remote CI, and merge-conflict resolution.
@@ -170,9 +177,10 @@ Do not stop here, shipping the PR is part of this task, not a separate step some
 does.
 
 FAIL or PARTIAL means fixing the noted gaps in this same session and running
-/backlog/review again. Keep count of how many times you have run /backlog/review in THIS
-session - nothing tracks it for you. After %d review cycles without a PASS, stop looping:
-run /backlog/ship anyway to open a PR so a human can pick up the review directly, rather
+/backlog/review again. Its request_review call reports which attempt you're on out of %d
+allowed in THIS session - the count is tracked server-side, so trust what it reports rather
+than counting your own calls. Once it says you've hit the cap, stop looping: run
+/backlog/ship anyway to open a PR so a human can pick up the review directly, rather
 than retrying /backlog/review again.
 `, MaxSameSessionReviewAttempts)
 
@@ -217,6 +225,8 @@ const sddHelpCommandTemplate = `# Available Backlog Commands (sdd pipeline mode)
 criteria (see /backlog/status for the numbered list of valid N values)
 - /backlog/review - Run sdd:6-verify, then submit for review with a summary
 - /backlog/ship - Create a PR with /github:pr-ship and submit for review
+- /backlog/block - Report that you're stuck and hand this item back (not for bugs you can fix yourself)
+- /backlog/duplicate - Report this item is already covered by an existing PR, issue, or commit
 
 This item runs the sdd pipeline mode: use sdd:2-research, sdd:3-plan, and sdd:4-validate
 to plan your work before implementing, and sdd:6-verify before requesting review.
@@ -384,7 +394,8 @@ criteria from /backlog/status and record completed criteria in your commit messa
 NEVER end your session without calling /backlog/review - this is how the task is closed
 properly. After /backlog/review, stay in this session, wait, then run /backlog/status
 again to check for a verdict. PASS leads to running /backlog/ship yourself right away.
-FAIL or PARTIAL means fixing the noted gaps and running /backlog/review again, up to %d
-times in this session before running /backlog/ship anyway so a human can pick up the
-review directly.
+FAIL or PARTIAL means fixing the noted gaps and running /backlog/review again - its
+request_review call reports which attempt you're on out of %d allowed in this session
+(tracked server-side, not something you need to count yourself) - before running
+/backlog/ship anyway so a human can pick up the review directly.
 `, MaxSameSessionReviewAttempts)

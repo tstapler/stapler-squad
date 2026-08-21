@@ -65,6 +65,10 @@ type ApprovalMetadata struct {
 	// ApprovalStore.GetApprovalMetadataBySession.
 	EscalationReason   string
 	EscalationCategory string
+
+	// RiskLevel is the classifier-assigned risk level ("low"/"medium"/"high"/"critical"),
+	// copied from PendingApproval.RiskLevel. "" means not recorded — never treated as "low".
+	RiskLevel string
 }
 
 // ApprovalMetadataProvider provides approval metadata for enriching review queue items.
@@ -73,6 +77,45 @@ type ApprovalMetadataProvider interface {
 	// GetApprovalMetadataBySession returns approval metadata for the given session ID.
 	// Returns nil if no approvals exist for the session.
 	GetApprovalMetadataBySession(sessionID string) []ApprovalMetadata
+}
+
+// riskLevelRankTable orders RiskLevel strings by severity, highest first. Unrecorded ("")
+// ranks alongside "high" — fail-safe, since an unclassified request must never be treated as
+// safe. Never read this map directly — use riskLevelRank(), which falls back to the
+// unrecorded rank for any key (including a future/unrecognized RiskLevel string) absent from
+// this table, so an unknown value never silently ranks *below* "low" (the Go zero value for
+// a missing map key). Mirrors web-app/src/lib/sessions/riskLevel.ts's riskLevelRank().
+var riskLevelRankTable = map[string]int{
+	"critical": 4,
+	"high":     3,
+	"":         3,
+	"medium":   2,
+	"low":      1,
+}
+
+// riskLevelRank returns level's fail-safe rank, falling back to the unrecorded ("") rank for
+// any value not in riskLevelRankTable — see that table's doc comment for why.
+func riskLevelRank(level string) int {
+	if rank, ok := riskLevelRankTable[level]; ok {
+		return rank
+	}
+	return riskLevelRankTable[""]
+}
+
+// highestRiskApproval returns the most dangerous of a session's concurrent pending approvals
+// (GAP-004, docs/bugs/open/review-queue-gaps.md) so the review queue surfaces the item most
+// in need of attention rather than an arbitrary one. Ties keep the earliest (first-inserted)
+// approval, since approvals is already in creation order.
+//
+// Panics if approvals is empty — the only call site guards with len(approvals) > 0 first.
+func highestRiskApproval(approvals []ApprovalMetadata) ApprovalMetadata {
+	best := approvals[0]
+	for _, a := range approvals[1:] {
+		if riskLevelRank(a.RiskLevel) > riskLevelRank(best.RiskLevel) {
+			best = a
+		}
+	}
+	return best
 }
 
 // ReviewQueuePoller automatically monitors sessions and adds them to the review queue
@@ -439,14 +482,34 @@ func (rqp *ReviewQueuePoller) reconcileSessions() {
 				continue
 			}
 
-			switch inst.Status {
+			// Status(inst.GetStatus()) reads the lock-free published snapshot
+			// (Instance.snapshot, an atomic.Pointer[InstanceSnapshot]) instead of
+			// inst.Status directly. This switch runs on the poller's own goroutine,
+			// not the actor's, so a raw field read here races with
+			// transitionToLocked's write under -race. GetStatus() is the correct,
+			// zero-lock way to read status from outside an in-flight actor command --
+			// it's only unsafe to call *inside* one (see the s.inst.mu.RLock() reads
+			// below). Tracked flake: https://github.com/tstapler/stapler-squad/issues/271
+			switch Status(inst.GetStatus()) {
 			case Active:
 				// Active but tmux session gone — mark Stopped.
 				if !liveSessions[sessionName] {
 					log.Warn("reconcileSessions: managed session not found in live sessions, transitioning to Stopped", "session", inst.Title, "tmux", sessionName, "socket", serverSocket)
 					ctx2s, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 					_ = inst.sendCtx(ctx2s, func(s *instanceState) {
-						if s.inst.Status == Active {
+						// Can't use GetStatus()/Snapshot() here: this closure runs
+						// *inside* an in-flight actor command, and the published
+						// snapshot is only republished by runActor after the command
+						// returns (session/actor.go) -- Snapshot() would read the stale
+						// pre-command value. Fall back to the same i.mu.RLock()-guarded
+						// direct read transitionToLocked uses for its own status read
+						// (session/instance_state.go), which defends against legacy
+						// setters writing i.Status directly under i.mu from other
+						// goroutines while this actor command runs.
+						s.inst.mu.RLock()
+						status := s.inst.Status
+						s.inst.mu.RUnlock()
+						if status == Active {
 							if err := transitionToLocked(s, context.Background(), Stopped); err != nil {
 								log.Warn("reconcileSessions: transition to Stopped failed, using loadStatus", "session", inst.Title, "err", err)
 								s.inst.loadStatus(Stopped)
@@ -463,7 +526,10 @@ func (rqp *ReviewQueuePoller) reconcileSessions() {
 					log.Info("reconcileSessions: stopped session found alive, reviving to Active", "session", inst.Title, "tmux", sessionName, "socket", serverSocket)
 					ctx2s, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 					_ = inst.sendCtx(ctx2s, func(s *instanceState) {
-						if s.inst.Status == Stopped {
+						s.inst.mu.RLock()
+						status := s.inst.Status
+						s.inst.mu.RUnlock()
+						if status == Stopped {
 							if err := transitionToLocked(s, context.Background(), Active); err != nil {
 								log.Warn("reconcileSessions: revival to Active failed", "session", inst.Title, "err", err)
 							}
@@ -487,7 +553,10 @@ func (rqp *ReviewQueuePoller) reconcileSessions() {
 					log.Warn("reconcileSessions: hibernated session found alive in tmux, resuming to Active", "session", inst.Title, "tmux", sessionName, "socket", serverSocket)
 					ctx2s, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 					_ = inst.sendCtx(ctx2s, func(s *instanceState) {
-						if s.inst.Status == Hibernated {
+						s.inst.mu.RLock()
+						status := s.inst.Status
+						s.inst.mu.RUnlock()
+						if status == Hibernated {
 							if err := transitionToLocked(s, context.Background(), Active); err != nil {
 								log.Warn("reconcileSessions: resume from hibernation failed", "session", inst.Title, "err", err)
 							}
@@ -495,6 +564,26 @@ func (rqp *ReviewQueuePoller) reconcileSessions() {
 					})
 					cancel()
 					inst.fireLifecycleEvent(EventStarted, "reconcile-session-hibernated-but-alive")
+				}
+			case Crashed:
+				// Crashed sessions intentionally have no tmux session (MarkCrashed
+				// kills it before setting this status, session/instance_crash.go) --
+				// that's the expected steady state until an explicit resume. But if
+				// one is found alive anyway, bring the instance back in sync rather
+				// than leaving it stuck showing the Crashed banner over a live pane,
+				// mirroring the Hibernated case just above.
+				if liveSessions[sessionName] {
+					log.Warn("reconcileSessions: crashed session found alive in tmux, reviving to Active", "session", inst.Title, "tmux", sessionName, "socket", serverSocket)
+					ctx2s, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+					_ = inst.sendCtx(ctx2s, func(s *instanceState) {
+						if s.inst.Status == Crashed {
+							if err := transitionToLocked(s, context.Background(), Active); err != nil {
+								log.Warn("reconcileSessions: revival from crashed failed", "session", inst.Title, "err", err)
+							}
+						}
+					})
+					cancel()
+					inst.fireLifecycleEvent(EventStarted, "reconcile-session-crashed-but-alive")
 				}
 			}
 		}
@@ -644,8 +733,13 @@ func (p *pollerContentProvider) GetContent(inst *Instance, statusInfo InstanceSt
 func (rqp *ReviewQueuePoller) shouldSkipSession(inst *Instance) bool {
 	// Lock-free snapshot read for Hidden, Status, and ArchivedAt; Started() reads
 	// inst.started (set once during construction, not in the snapshot).
+	// Crashed is skipped alongside Stopped/Paused: SessionHealthChecker already
+	// killed its tmux session before setting this status (see MarkCrashed,
+	// session/instance_crash.go), so there is no live pane content to check, and
+	// the session already surfaces to the user via its own distinct status/banner
+	// rather than a review-queue attention reason.
 	snap := inst.Snapshot()
-	return snap.Hidden || snap.Status == Stopped || snap.Status == Paused || snap.ArchivedAt != nil || !inst.Started()
+	return snap.Hidden || snap.Status == Stopped || snap.Status == Paused || snap.Status == Crashed || snap.ArchivedAt != nil || !inst.Started()
 }
 
 // checkSession checks a single session and adds/removes from queue as needed.
@@ -803,15 +897,16 @@ func (rqp *ReviewQueuePoller) checkSession(inst *Instance, paneActivity map[stri
 			DetectedAt:  detectedAt,
 			Context:     context,
 			// Populate session details for rich display
-			Program:      snap.Program,
-			Branch:       snap.Branch,
-			Path:         snap.Path,
-			WorkingDir:   snap.WorkingDir,
-			Status:       snap.Status.String(),
-			Tags:         snap.Tags,
-			Category:     snap.Category,
-			DiffStats:    inst.GetDiffStats(),
-			LastActivity: lastActivity,
+			Program:         snap.Program,
+			Branch:          snap.Branch,
+			Path:            snap.Path,
+			WorkingDir:      snap.WorkingDir,
+			Status:          snap.Status.String(),
+			Tags:            snap.Tags,
+			Category:        snap.Category,
+			DiffStats:       inst.GetDiffStats(),
+			LastActivity:    lastActivity,
+			HasCommitsAhead: inst.GetHasCommitsAhead(),
 			// Populate idle state and raw detected status for WorkingState mapping.
 			IdleState:    statusInfo.IdleState.State,
 			ClaudeStatus: claudeStatus,
@@ -833,7 +928,7 @@ func (rqp *ReviewQueuePoller) checkSession(inst *Instance, paneActivity map[stri
 				approvals = provider.GetApprovalMetadataBySession(snap.Title)
 			}
 			if len(approvals) > 0 {
-				a := approvals[0] // Use the most recent/first approval
+				a := highestRiskApproval(approvals) // GAP-004: surface the most dangerous concurrent approval, not just the first
 				if item.Metadata == nil {
 					item.Metadata = make(map[string]string)
 				}
@@ -857,7 +952,10 @@ func (rqp *ReviewQueuePoller) checkSession(inst *Instance, paneActivity map[stri
 				if a.EscalationCategory != "" {
 					item.Metadata["escalation_reason_category"] = a.EscalationCategory
 				}
-				log.Debug("enriched approval item with hook metadata", "session", snap.Title, "tool", a.ToolName, "approval_id", a.ApprovalID, "escalation_category", item.Metadata["escalation_reason_category"])
+				if a.RiskLevel != "" {
+					item.Metadata["risk_level"] = a.RiskLevel
+				}
+				log.Debug("enriched approval item with hook metadata", "session", snap.Title, "tool", a.ToolName, "approval_id", a.ApprovalID, "escalation_category", item.Metadata["escalation_reason_category"], "risk_level", item.Metadata["risk_level"])
 			}
 		}
 

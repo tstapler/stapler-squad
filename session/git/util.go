@@ -17,10 +17,19 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/object"
 )
 
+// isTraversalPathSegment reports whether s is "." or ".." — mirrors
+// session.isTraversalSegment (session/repo_path.go), which can't be imported
+// here without a package cycle (session imports git).
+func isTraversalPathSegment(s string) bool {
+	return s == "." || s == ".."
+}
+
 // sanitizeBranchName transforms an arbitrary string into a Git branch name friendly string.
 // Note: Git branch names have several rules, so this function uses a simple approach
 // by allowing only a safe subset of characters.
 func sanitizeBranchName(s string) string {
+	original := s
+
 	// Convert to lower-case
 	s = strings.ToLower(s)
 
@@ -39,11 +48,89 @@ func sanitizeBranchName(s string) string {
 	// Trim leading and trailing dashes or slashes to avoid issues
 	s = strings.Trim(s, "-/")
 
-	return s
+	// Strip "." and ".." path segments so a crafted name like "../../etc" can't
+	// escape the directory it's later joined into
+	// (filepath.Join(worktreeDir, sanitizedName) at the worktree-creation call
+	// sites in worktree.go). Only exact segment matches are dropped — "..hidden",
+	// "user..name", and "v1.2.3" are literal names, not traversal, and survive
+	// untouched.
+	segments := strings.Split(s, "/")
+	kept := make([]string, 0, len(segments))
+	for _, seg := range segments {
+		if seg == "" || isTraversalPathSegment(seg) {
+			continue
+		}
+		kept = append(kept, seg)
+	}
+	cleaned := strings.Join(kept, "/")
+
+	// If the input was non-empty but every segment was traversal/empty, fall
+	// back to a safe non-empty name — otherwise filepath.Join(worktreeDir, "")
+	// collapses to worktreeDir itself, and a downstream os.RemoveAll on the
+	// resulting "worktree" path (session/git/worktree_ops.go) would delete the
+	// entire worktrees base directory. Compare against the ORIGINAL input, not
+	// the post-trim/post-strip `s` — inputs like "/", "---", or "!!!" trim down
+	// to "" before this point even though they were non-empty, and checking `s`
+	// here would miss them, letting them fall through as "" unflagged. An
+	// originally-empty input still yields "" here, preserving pre-existing
+	// behavior for that case.
+	if cleaned == "" && original != "" {
+		return "session"
+	}
+
+	return cleaned
 }
 
-// checkGHCLI checks if GitHub CLI is installed and configured
-func checkGHCLI() error {
+// joinWithinDir joins name onto baseDir and verifies the result is still a
+// descendant of baseDir, returning an error instead of the escaped path if
+// not. sanitizeBranchName already strips "." and ".." segments, so this
+// should never trigger in practice — it exists as defense-in-depth against a
+// future regression in the sanitizer at the actual filepath.Join call sites
+// (worktree-creation and the PreviewWorktreePath RPC preview).
+func joinWithinDir(baseDir, name string) (string, error) {
+	joined := filepath.Join(baseDir, name)
+
+	rel, err := filepath.Rel(baseDir, joined)
+	if err != nil {
+		return "", fmt.Errorf("failed to compute relative path from %q to %q: %w", baseDir, joined, err)
+	}
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("sanitized name %q escapes base directory %q", name, baseDir)
+	}
+
+	return joined, nil
+}
+
+// CanonicalizeWorktreePath resolves path to its symlink-free (realpath'd) form,
+// matching what `git worktree list --porcelain` reports and what
+// getWorktreeDirectory already produces for freshly-created worktree parents.
+// On macOS /var (and /tmp) is itself a symlink to /private/var, so two code
+// paths that construct the "same" worktree path differently — one via
+// filepath.Join on an unresolved parent, the other by reading git's
+// already-resolved output — end up as different strings for the identical
+// directory (see TestBacklogFullLifecycle_SDDTriageWorktreeIsReusedBySpawnedWorkSession).
+// EvalSymlinks requires the path to exist, which doesn't hold for the
+// pre-creation/rehydration cases this is also used in; falling back to
+// filepath.Clean on ANY error (not just ENOENT) keeps this a pure, non-failing
+// normalizer, matching the established pattern in session/history_detector.go,
+// session/import_correlate.go, and session/unfinished/gogitstore/open.go.
+func CanonicalizeWorktreePath(path string) string {
+	if path == "" {
+		return path
+	}
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return filepath.Clean(path)
+	}
+	return resolved
+}
+
+// checkGHCLI checks if GitHub CLI is installed and configured. The auth
+// check runs through g.cmdExec (the same injectable executor every other gh
+// call on GitWorktree uses) rather than shelling out directly, so tests that
+// already inject a fake executor for gh pr create/list don't also need a
+// real, authenticated `gh` binary on PATH just to get past this guard.
+func (g *GitWorktree) checkGHCLI() error {
 	// Check if gh is installed
 	if _, err := exec.LookPath("gh"); err != nil {
 		return fmt.Errorf("GitHub CLI (gh) is not installed. Please install it first")
@@ -53,7 +140,13 @@ func checkGHCLI() error {
 	authCtx, authCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer authCancel()
 	cmd := safeexec.CommandContext(authCtx, "gh", "auth", "status")
-	if err := cmd.Run(); err != nil {
+	var err error
+	if g.cmdExec != nil {
+		_, err = g.cmdExec.CombinedOutput(cmd)
+	} else {
+		err = cmd.Run()
+	}
+	if err != nil {
 		return fmt.Errorf("GitHub CLI is not configured. Please run 'gh auth login' first")
 	}
 
@@ -76,30 +169,23 @@ func IsGitRepo(path string) bool {
 	}
 }
 
+// findGitRepoRoot walks up from path looking for an existing git repository and
+// returns its root. It requires path to already exist: it must NOT fabricate a repo
+// when the path is missing. An earlier version silently ran os.MkdirAll + git.PlainInit
+// + createInitialCommit for a missing path, which was intended for genuine
+// new-project bootstrapping but was unconditionally shared by every caller —
+// including CreateBacklogWorktree's worktree constructors, which require repoPath to
+// already be a real, previously-cloned repository. When that path went transiently
+// missing (observed live: deleted mid-repair while the backlog automation loop kept
+// retrying), the fallback masked the real "repo is missing" error by fabricating a
+// disconnected repo with a single placeholder commit, which downstream worktree
+// creation then treated as real — producing broken sessions instead of a clear
+// failure. Genuine new-project initialization has its own dedicated function,
+// InitializeProjectDirectory (used by SessionTypeNewProject), which never routes
+// through here — so no caller needs findGitRepoRoot to create anything from scratch.
 func findGitRepoRoot(path string) (string, error) {
-	// First check if the directory exists
 	if _, err := os.Stat(path); os.IsNotExist(err) {
-		// Directory doesn't exist - create it and initialize git
-		log.Info("directory does not exist, creating and initializing git repository", "path", path)
-
-		if err := os.MkdirAll(path, 0755); err != nil {
-			return "", fmt.Errorf("failed to create directory '%s': %w", path, err)
-		}
-
-		// Initialize git repository
-		repo, err := git.PlainInit(path, false)
-		if err != nil {
-			return "", fmt.Errorf("failed to initialize git repository at '%s': %w", path, err)
-		}
-
-		// Create initial commit (required for worktrees)
-		// Git worktrees require at least one commit to exist
-		if err := createInitialCommit(repo, path); err != nil {
-			return "", fmt.Errorf("failed to create initial commit at '%s': %w", path, err)
-		}
-
-		log.Info("successfully created and initialized git repository with initial commit", "path", path)
-		return path, nil
+		return "", fmt.Errorf("repository path does not exist: %s (expected an existing git repository; use InitializeProjectDirectory to bootstrap a new one)", path)
 	}
 
 	// Directory exists - find the git repo root

@@ -10,6 +10,7 @@ import { CircleDot } from "lucide-react";
 import type { BacklogItem, BacklogItemStatus } from "@/lib/hooks/useBacklogService";
 import type { StuckBacklogItem } from "@/gen/session/v1/backlog_pb";
 import { getStatusLabel } from "@/lib/backlog/status";
+import { getPrimaryCardAction } from "@/lib/backlog/itemActions";
 import { BlockerChip } from "./BlockerChip";
 import { TriageLoadingIndicator } from "./TriageLoadingIndicator";
 import * as styles from "./BacklogItemCard.css";
@@ -40,48 +41,34 @@ interface BacklogItemCardProps {
   stuckItem?: StuckBacklogItem;
 }
 
-interface ActionSpec {
-  label: string;
-  action: string;
-  disabled?: boolean;
-  isDone?: boolean;
-}
-
-function getActionSpec(item: BacklogItem): ActionSpec {
-  switch (item.status) {
-    case "idea":
-      return {
-        label: "Mark Ready",
-        action: "mark_ready",
-        disabled: item.acCriteria.length === 0,
-      };
-    case "refining":
-      return { label: "Refining…", action: "refining", isDone: true };
-    case "ready":
-      return { label: "Trigger Triage", action: "trigger_triage", disabled: !item.repoPath };
-    case "in_progress":
-      return {
-        label: "View Session",
-        action: "view_session",
-        disabled: item.linkedSessions.length === 0,
-      };
-    case "review":
-      return { label: "View Review", action: "view_review" };
-    case "done":
-      return { label: "Done ✓", action: "done", isDone: true };
-    case "archived":
-      return { label: "Archived", action: "archived", isDone: true };
-    default:
-      return { label: item.status, action: item.status, isDone: true };
-  }
-}
-
 function AcSummary({ item }: { item: BacklogItem }) {
   if (item.acCriteria.length === 0) return null;
   const done = item.acCriteria.filter((c) => c.status === "done").length;
   return (
     <span className={styles.acSummary} aria-label={`${done} of ${item.acCriteria.length} criteria done`}>
       {done}/{item.acCriteria.length} done
+    </span>
+  );
+}
+
+const VERDICT_BADGE_CONFIG: Partial<Record<NonNullable<BacklogItem["gateVerdict"]>, { label: string; className: string }>> = {
+  PASS: { label: "✓ PASS", className: styles.verdictBadgePass },
+  PARTIAL: { label: "◑ PARTIAL", className: styles.verdictBadgePartial },
+  FAIL: { label: "✗ FAIL", className: styles.verdictBadgeFail },
+  UNVERIFIABLE: { label: "? UNVERIFIABLE", className: styles.verdictBadgeUnverifiable },
+};
+
+// Last review result, at a glance — most useful on in_progress cards, where a
+// FAIL/PARTIAL verdict that triggered rework is otherwise invisible until the
+// item is opened (PENDING is left unbadged: it just means a review is running,
+// not a signal worth a card badge).
+function VerdictBadge({ item }: { item: BacklogItem }) {
+  if (!item.gateVerdict) return null;
+  const config = VERDICT_BADGE_CONFIG[item.gateVerdict];
+  if (!config) return null;
+  return (
+    <span className={config.className} title="Last review result">
+      {config.label}
     </span>
   );
 }
@@ -107,9 +94,16 @@ export const BacklogItemCard = memo(function BacklogItemCard({
   forceJustChanged = false,
   stuckItem,
 }: BacklogItemCardProps) {
-  const actionSpec = getActionSpec(item);
+  const actionSpec = getPrimaryCardAction(item);
   const isTriageRunning = item.triageStatus === "running";
   const isActionPending = pendingAction === actionSpec.action;
+  // Transient disable reasons (spinner + "Running…"/"Triage in progress") are
+  // already explained via the button label/TriageLoadingIndicator — never
+  // surface the underlying domain condition's reason on top of those, even
+  // if it's also unmet.
+  const disabledReason =
+    isTriageRunning || pendingAction !== null ? undefined : actionSpec.disabled ? actionSpec.disabledReason : undefined;
+  const disabledReasonId = `${item.id}-disabled-reason`;
 
   // `item.liveVersion` only advances for a genuine live (non-snapshot)
   // BacklogItemEvent (see useWatchBacklogItems.ts / backlogItemsSlice.ts) —
@@ -193,7 +187,10 @@ export const BacklogItemCard = memo(function BacklogItemCard({
       )}
 
       <div className={styles.cardFooter}>
-        <AcSummary item={item} />
+        <span className={styles.footerLeft}>
+          <AcSummary item={item} />
+          <VerdictBadge item={item} />
+        </span>
         {item.externalUrl && item.externalId && (
           <a
             href={item.externalUrl}
@@ -210,8 +207,10 @@ export const BacklogItemCard = memo(function BacklogItemCard({
         )}
         <button
           className={`${styles.actionButton} ${actionSpec.isDone ? styles.actionButtonDone : ""}`}
-          disabled={actionSpec.disabled || isTriageRunning || pendingAction !== null}
+          disabled={actionSpec.disabled || actionSpec.isDone || isTriageRunning || pendingAction !== null}
           aria-label={isActionPending ? "Running…" : isTriageRunning ? "Triage in progress" : actionSpec.label}
+          aria-describedby={disabledReason ? disabledReasonId : undefined}
+          title={disabledReason}
           data-action-button="true"
           data-testid={`backlog-action-${actionSpec.action}`}
           onClick={(e) => {
@@ -232,6 +231,11 @@ export const BacklogItemCard = memo(function BacklogItemCard({
         </button>
         {stuckItem && <BlockerChip variant="compact" item={stuckItem} />}
       </div>
+      {disabledReason && (
+        <span id={disabledReasonId} className={styles.disabledReason} data-testid="backlog-action-disabled-reason">
+          {disabledReason}
+        </span>
+      )}
     </div>
   );
 });

@@ -146,11 +146,50 @@ export const cardFooter = style({
   gap: vars.space["2"],
 });
 
+export const footerLeft = style({
+  display: "flex",
+  alignItems: "center",
+  gap: vars.space["2"],
+  minWidth: 0,
+});
+
 export const acSummary = style({
   fontSize: vars.fontSize.xs,
   color: vars.color.textMuted,
   fontFamily: vars.font.mono,
 });
+
+const verdictBadgeBase = style({
+  display: "inline-flex",
+  alignItems: "center",
+  borderRadius: vars.radii.sm,
+  padding: `0 ${vars.space["1"]}`,
+  fontSize: vars.fontSize.xs,
+  fontWeight: vars.fontWeight.bold,
+  fontFamily: vars.font.mono,
+  height: "20px",
+  border: "1px solid transparent",
+});
+
+export const verdictBadgePass = style([
+  verdictBadgeBase,
+  { color: vars.color.success, background: vars.color.successBg, borderColor: vars.color.success },
+]);
+
+export const verdictBadgePartial = style([
+  verdictBadgeBase,
+  { color: vars.color.warning, background: vars.color.warningBg, borderColor: vars.color.warning },
+]);
+
+export const verdictBadgeFail = style([
+  verdictBadgeBase,
+  { color: vars.color.errorText, background: vars.color.errorBg, borderColor: vars.color.error },
+]);
+
+export const verdictBadgeUnverifiable = style([
+  verdictBadgeBase,
+  { color: vars.color.textMuted, background: vars.color.cardBackground, borderColor: vars.color.borderMuted },
+]);
 
 export const actionButton = style({
   display: "inline-flex",
@@ -173,6 +212,11 @@ export const actionButton = style({
     opacity: 0.4,
     cursor: "not-allowed",
   },
+});
+
+export const disabledReason = style({
+  fontSize: vars.fontSize.xs,
+  color: vars.color.textMuted,
 });
 
 export const actionButtonDone = style({
