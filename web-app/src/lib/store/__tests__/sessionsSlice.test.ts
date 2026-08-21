@@ -69,6 +69,76 @@ describe("sessionsSlice", () => {
     });
   });
 
+  describe("setSessions — reference stability (prevents WatchSessions/poll re-render storm)", () => {
+    // Regression: setSessions previously called sessionsAdapter.setAll() unconditionally,
+    // replacing every entity's object reference on every WatchSessions stream event even
+    // when the underlying data hadn't changed. That defeats the React.memo guard on
+    // SessionRowWrapper (web-app/src/components/sessions/SessionList.tsx), forcing a full
+    // list re-render on every stream tick. upsertSession already guards against this via
+    // an updatedAt comparison; setSessions needs the same guard.
+
+    it("preserves the existing entity reference for a session whose updatedAt is unchanged", () => {
+      const store = makeStore();
+      const ts = { seconds: 1000n, nanos: 0 };
+      const s1 = create(SessionSchema, { id: "s1", title: "Original", updatedAt: ts });
+      store.dispatch(setSessions([s1]));
+      const before = selectSessionById(store.getState() as any, "s1");
+
+      // A subsequent snapshot re-delivers the same data as a fresh proto object
+      // (different reference, identical content/updatedAt) — as WatchSessions does.
+      const s1Redelivered = create(SessionSchema, { id: "s1", title: "Original", updatedAt: ts });
+      store.dispatch(setSessions([s1Redelivered]));
+
+      const after = selectSessionById(store.getState() as any, "s1");
+      expect(after).toBe(before);
+    });
+
+    it("replaces the entity reference for a session whose updatedAt has changed", () => {
+      const store = makeStore();
+      const s1 = create(SessionSchema, { id: "s1", title: "Old", updatedAt: { seconds: 1000n, nanos: 0 } });
+      store.dispatch(setSessions([s1]));
+      const before = selectSessionById(store.getState() as any, "s1");
+
+      const s1Updated = create(SessionSchema, { id: "s1", title: "New", updatedAt: { seconds: 1001n, nanos: 0 } });
+      store.dispatch(setSessions([s1Updated]));
+
+      const after = selectSessionById(store.getState() as any, "s1");
+      expect(after).not.toBe(before);
+      expect(after!.title).toBe("New");
+    });
+
+    it("leaves unchanged sessions untouched while updating only the changed one in the same call", () => {
+      const store = makeStore();
+      const ts = { seconds: 1000n, nanos: 0 };
+      const s1 = create(SessionSchema, { id: "s1", title: "Unchanged", updatedAt: ts });
+      const s2 = create(SessionSchema, { id: "s2", title: "Old", updatedAt: ts });
+      store.dispatch(setSessions([s1, s2]));
+      const s1Before = selectSessionById(store.getState() as any, "s1");
+
+      const s1Redelivered = create(SessionSchema, { id: "s1", title: "Unchanged", updatedAt: ts });
+      const s2Updated = create(SessionSchema, { id: "s2", title: "New", updatedAt: { seconds: 1001n, nanos: 0 } });
+      store.dispatch(setSessions([s1Redelivered, s2Updated]));
+
+      expect(selectSessionById(store.getState() as any, "s1")).toBe(s1Before);
+      expect(selectSessionById(store.getState() as any, "s2")!.title).toBe("New");
+    });
+
+    it("inserts a brand-new session id normally alongside unchanged ones", () => {
+      const store = makeStore();
+      const ts = { seconds: 1000n, nanos: 0 };
+      const s1 = create(SessionSchema, { id: "s1", title: "Unchanged", updatedAt: ts });
+      store.dispatch(setSessions([s1]));
+
+      const s1Redelivered = create(SessionSchema, { id: "s1", title: "Unchanged", updatedAt: ts });
+      const s2New = create(SessionSchema, { id: "s2", title: "Brand new", updatedAt: ts });
+      store.dispatch(setSessions([s1Redelivered, s2New]));
+
+      const state = store.getState() as any;
+      expect(selectSessionsTotal(state)).toBe(2);
+      expect(selectSessionById(state, "s2")!.title).toBe("Brand new");
+    });
+  });
+
   describe("upsertSession", () => {
     it("inserts a new session when id is not present", () => {
       const store = makeStore();

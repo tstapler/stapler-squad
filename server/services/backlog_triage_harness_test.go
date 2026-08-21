@@ -79,12 +79,14 @@ func pollUntilReady(t *testing.T, client sessionv1connect.BacklogServiceClient, 
 // TestTriageHarness exercises the backlog triage feature end-to-end via the
 // ConnectRPC HTTP layer. Each sub-test covers a distinct portion of the flow.
 func TestTriageHarness(t *testing.T) {
+	t.Parallel()
 
 	// ──────────────────────────────────────────────────────────────────────────
 	// Gate: server must reject TriggerTriage when item has no repoPath.
 	// This validates the backend precondition that mirrors the UI disabled state.
 	// ──────────────────────────────────────────────────────────────────────────
 	t.Run("Gate", func(t *testing.T) {
+		t.Parallel()
 		client, _ := setupTriageHarness(t, &fakeHeadlessPool{response: validTriageJSON()})
 
 		createResp, err := client.CreateBacklogItem(context.Background(),
@@ -112,6 +114,7 @@ func TestTriageHarness(t *testing.T) {
 	// TriggerAndPoll: happy path — trigger triage and poll until item is ready.
 	// ──────────────────────────────────────────────────────────────────────────
 	t.Run("TriggerAndPoll", func(t *testing.T) {
+		t.Parallel()
 		pool := &fakeHeadlessPool{response: validTriageJSON()}
 		client, _ := setupTriageHarness(t, pool)
 
@@ -153,6 +156,7 @@ func TestTriageHarness(t *testing.T) {
 	// the brace-scan fix in ParseHeadlessTriageResult.
 	// ──────────────────────────────────────────────────────────────────────────
 	t.Run("ParserRobust", func(t *testing.T) {
+		t.Parallel()
 		pool := &fakeHeadlessPool{response: preambleTriageJSON()}
 		client, _ := setupTriageHarness(t, pool)
 
@@ -188,6 +192,7 @@ func TestTriageHarness(t *testing.T) {
 	// succeeds. Mirrors the exact user journey that was broken before the fix.
 	// ──────────────────────────────────────────────────────────────────────────
 	t.Run("FullFlow", func(t *testing.T) {
+		t.Parallel()
 		pool := &fakeHeadlessPool{response: validTriageJSON()}
 		client, _ := setupTriageHarness(t, pool)
 
@@ -260,7 +265,9 @@ func checkPoolStartAllowed(t *testing.T) {
 
 // initGitRepo initialises a minimal git repository in dir so claude has a valid
 // WorkDir with version control context. Without this, claude may exit immediately
-// on some systems that require a git repo for project-context features.
+// on some systems that require a git repo for project-context features. Uses
+// go-git directly rather than shelling out — see
+// .claude/rules/prefer-go-git-over-subshells.md.
 func initGitRepo(t *testing.T, dir string) {
 	t.Helper()
 	initGitRepoForTest(t, dir)
@@ -317,6 +324,7 @@ func (p *fastTriagePool) CallBlocking(
 //
 //	go test -v -tags=harness -run TestTriageHarness_RealClaude ./server/services/ -timeout 5m
 func TestTriageHarness_RealClaude(t *testing.T) {
+	t.Parallel()
 	// Skip if the process sandbox blocks Setsid — headless pool will fail immediately.
 	checkPoolStartAllowed(t)
 

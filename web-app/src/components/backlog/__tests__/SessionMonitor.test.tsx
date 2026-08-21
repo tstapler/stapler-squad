@@ -77,6 +77,26 @@ describe("SessionMonitor", () => {
     expect(screen.queryByText("No conversation history yet…")).toBeNull();
   });
 
+  it("SessionMonitor_should_stripCodePrefix_When_getConversationMessagesRejectsWithConnectError", async () => {
+    getTerminalSnapshot.mockResolvedValue("");
+    getConversationMessages.mockRejectedValue(
+      new ConnectError("history entry not found", Code.NotFound)
+    );
+
+    render(<SessionMonitor sessionId="s1" isRunning={true} />);
+
+    fireEvent.click(screen.getByRole("button", { name: /history/i }));
+
+    await waitFor(() =>
+      expect(screen.getByTestId("session-monitor-conversation-error")).toBeInTheDocument()
+    );
+    // Must render ConnectError.rawMessage, not the "[code] message"-formatted
+    // .message — asserting against a real ConnectError (not a plain Error) is
+    // what actually exercises the getErrorMessage() prefix-stripping behavior.
+    expect(screen.getByText(/history entry not found/)).toBeInTheDocument();
+    expect(screen.queryByText(/\[not_found\]/i)).toBeNull();
+  });
+
   it("SessionMonitor_should_renderGenuineEmptyState_When_fetchesSucceedWithNoData", async () => {
     getTerminalSnapshot.mockResolvedValue("");
     getConversationMessages.mockResolvedValue([]);

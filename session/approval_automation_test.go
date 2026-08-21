@@ -9,6 +9,7 @@ import (
 )
 
 func TestNewApprovalAutomation(t *testing.T) {
+	t.Parallel()
 	instance := &Instance{Title: "test-session"}
 	controller, _ := NewClaudeController(instance)
 
@@ -28,6 +29,7 @@ func TestNewApprovalAutomation(t *testing.T) {
 }
 
 func TestApprovalAutomation_GetDetector(t *testing.T) {
+	t.Parallel()
 	instance := &Instance{Title: "test-session"}
 	controller, _ := NewClaudeController(instance)
 	automation := NewApprovalAutomation("test-session", controller)
@@ -39,6 +41,7 @@ func TestApprovalAutomation_GetDetector(t *testing.T) {
 }
 
 func TestApprovalAutomation_GetPolicyEngine(t *testing.T) {
+	t.Parallel()
 	instance := &Instance{Title: "test-session"}
 	controller, _ := NewClaudeController(instance)
 	automation := NewApprovalAutomation("test-session", controller)
@@ -50,6 +53,7 @@ func TestApprovalAutomation_GetPolicyEngine(t *testing.T) {
 }
 
 func TestApprovalAutomation_GetPendingApprovals(t *testing.T) {
+	t.Parallel()
 	instance := &Instance{Title: "test-session"}
 	controller, _ := NewClaudeController(instance)
 	automation := NewApprovalAutomation("test-session", controller)
@@ -61,6 +65,7 @@ func TestApprovalAutomation_GetPendingApprovals(t *testing.T) {
 }
 
 func TestApprovalAutomation_Subscribe(t *testing.T) {
+	t.Parallel()
 	instance := &Instance{Title: "test-session"}
 	controller, _ := NewClaudeController(instance)
 	automation := NewApprovalAutomation("test-session", controller)
@@ -74,6 +79,7 @@ func TestApprovalAutomation_Subscribe(t *testing.T) {
 }
 
 func TestApprovalAutomation_Unsubscribe(t *testing.T) {
+	t.Parallel()
 	instance := &Instance{Title: "test-session"}
 	controller, _ := NewClaudeController(instance)
 	automation := NewApprovalAutomation("test-session", controller)
@@ -89,6 +95,7 @@ func TestApprovalAutomation_Unsubscribe(t *testing.T) {
 }
 
 func TestApprovalAutomation_EmitEvent(t *testing.T) {
+	t.Parallel()
 	instance := &Instance{Title: "test-session"}
 	controller, _ := NewClaudeController(instance)
 	automation := NewApprovalAutomation("test-session", controller)
@@ -116,6 +123,7 @@ func TestApprovalAutomation_EmitEvent(t *testing.T) {
 }
 
 func TestApprovalAutomation_RespondToApprovalNotFound(t *testing.T) {
+	t.Parallel()
 	instance := &Instance{Title: "test-session"}
 	controller, _ := NewClaudeController(instance)
 	automation := NewApprovalAutomation("test-session", controller)
@@ -128,6 +136,7 @@ func TestApprovalAutomation_RespondToApprovalNotFound(t *testing.T) {
 }
 
 func TestApprovalAutomation_HandlePromptUser(t *testing.T) {
+	t.Parallel()
 	instance := &Instance{Title: "test-session"}
 	controller, _ := NewClaudeController(instance)
 	automation := NewApprovalAutomation("test-session", controller)
@@ -155,6 +164,7 @@ func TestApprovalAutomation_HandlePromptUser(t *testing.T) {
 }
 
 func TestApprovalAutomation_RespondToApprovalApprove(t *testing.T) {
+	t.Parallel()
 	instance := &Instance{Title: "test-session"}
 	controller, _ := NewClaudeController(instance)
 	automation := NewApprovalAutomation("test-session", controller)
@@ -186,6 +196,7 @@ func TestApprovalAutomation_RespondToApprovalApprove(t *testing.T) {
 }
 
 func TestApprovalAutomation_RespondToApprovalReject(t *testing.T) {
+	t.Parallel()
 	instance := &Instance{Title: "test-session"}
 	controller, _ := NewClaudeController(instance)
 	automation := NewApprovalAutomation("test-session", controller)
@@ -214,6 +225,7 @@ func TestApprovalAutomation_RespondToApprovalReject(t *testing.T) {
 }
 
 func TestApprovalAutomation_HandleAutoApprove(t *testing.T) {
+	t.Parallel()
 	instance := &Instance{Title: "test-session"}
 	controller, _ := NewClaudeController(instance)
 	automation := NewApprovalAutomation("test-session", controller)
@@ -250,6 +262,7 @@ func TestApprovalAutomation_HandleAutoApprove(t *testing.T) {
 }
 
 func TestApprovalAutomation_HandleAutoReject(t *testing.T) {
+	t.Parallel()
 	instance := &Instance{Title: "test-session"}
 	controller, _ := NewClaudeController(instance)
 	automation := NewApprovalAutomation("test-session", controller)
@@ -283,6 +296,7 @@ func TestApprovalAutomation_HandleAutoReject(t *testing.T) {
 }
 
 func TestApprovalAutomation_CanExecute(t *testing.T) {
+	t.Parallel()
 	instance := &Instance{Title: "test-session"}
 	controller, _ := NewClaudeController(instance)
 	automation := NewApprovalAutomation("test-session", controller)
@@ -305,6 +319,7 @@ func TestApprovalAutomation_CanExecute(t *testing.T) {
 }
 
 func TestApprovalAutomation_CheckExpiredApprovals(t *testing.T) {
+	t.Parallel()
 	instance := &Instance{Title: "test-session"}
 	controller, _ := NewClaudeController(instance)
 	automation := NewApprovalAutomation("test-session", controller)
@@ -348,6 +363,7 @@ func TestApprovalAutomation_CheckExpiredApprovals(t *testing.T) {
 }
 
 func TestApprovalAutomation_MaxQueueSize(t *testing.T) {
+	t.Parallel()
 	instance := &Instance{Title: "test-session"}
 	controller, _ := NewClaudeController(instance)
 	automation := NewApprovalAutomation("test-session", controller)
@@ -380,6 +396,7 @@ func TestApprovalAutomation_MaxQueueSize(t *testing.T) {
 }
 
 func TestDefaultApprovalAutomationOptions(t *testing.T) {
+	t.Parallel()
 	options := DefaultApprovalAutomationOptions()
 
 	if !options.AutoExecute {
@@ -404,6 +421,7 @@ func TestDefaultApprovalAutomationOptions(t *testing.T) {
 }
 
 func TestPendingApproval_Fields(t *testing.T) {
+	t.Parallel()
 	request := &detection.ApprovalRequest{
 		ID:   "test-request",
 		Type: detection.ApprovalCommand,
@@ -435,6 +453,7 @@ func TestPendingApproval_Fields(t *testing.T) {
 }
 
 func TestApprovalEvent_Fields(t *testing.T) {
+	t.Parallel()
 	event := ApprovalEvent{
 		Type:      EventDetected,
 		Timestamp: time.Now(),

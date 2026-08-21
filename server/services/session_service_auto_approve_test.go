@@ -17,6 +17,7 @@ import (
 // real-storage level, not just the ent_repository unit level: enable auto_approve on a
 // Stopped session, then reload from storage exactly like a server restart would.
 func TestUpdateSession_AutoApprove_StoppedSession_PersistsAcrossReload(t *testing.T) {
+	t.Parallel()
 	fix := setupForkTestFixture(t)
 	t.Cleanup(fix.cleanup)
 
@@ -57,6 +58,7 @@ func TestUpdateSession_AutoApprove_StoppedSession_PersistsAcrossReload(t *testin
 // CreateSession-path guard: the post-creation toggle must not let an RPC caller bypass
 // the client-side checkbox gate on an unsupported agent.
 func TestUpdateSession_should_RejectAutoApprove_When_ProgramUnsupported(t *testing.T) {
+	t.Parallel()
 	fix := setupForkTestFixture(t)
 	t.Cleanup(fix.cleanup)
 

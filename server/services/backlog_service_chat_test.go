@@ -12,6 +12,7 @@ import (
 )
 
 func TestDeriveChatItemTitle(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name    string
 		message string
@@ -24,6 +25,7 @@ func TestDeriveChatItemTitle(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			assert.Equal(t, tt.want, deriveChatItemTitle(tt.message))
 		})
 	}
@@ -36,6 +38,7 @@ func TestDeriveChatItemTitle(t *testing.T) {
 // and description both come from the raw message, not a separate creation
 // path with its own field-mapping logic.
 func TestCreateBacklogItemFromChat_should_CreateItemViaCreateBacklogItem_When_NoExistingItemId(t *testing.T) {
+	t.Parallel()
 	svc := newBacklogService(t)
 
 	resp, err := svc.CreateBacklogItemFromChat(t.Context(), connect.NewRequest(&sessionv1.CreateBacklogItemFromChatRequest{
@@ -53,6 +56,7 @@ func TestCreateBacklogItemFromChat_should_CreateItemViaCreateBacklogItem_When_No
 // or whitespace-only chat message must never reach CreateBacklogItem/
 // TriggerTriage.
 func TestCreateBacklogItemFromChat_should_RejectEmptyMessage_When_MessageIsWhitespaceOnly(t *testing.T) {
+	t.Parallel()
 	svc := newBacklogService(t)
 
 	_, err := svc.CreateBacklogItemFromChat(t.Context(), connect.NewRequest(&sessionv1.CreateBacklogItemFromChatRequest{
@@ -66,6 +70,7 @@ func TestCreateBacklogItemFromChat_should_RejectEmptyMessage_When_MessageIsWhite
 // verifies a refinement turn (existing_item_id set) delegates to TriggerTriage
 // with feedback = message, per AC1/AC2 — not a parallel refinement path.
 func TestCreateBacklogItemFromChat_should_DelegateToTriggerTriageWithFeedback_When_ExistingItemIdSet(t *testing.T) {
+	t.Parallel()
 	storage := createTestStorage(t)
 	pool := &fakeHeadlessPool{response: validTriageJSON()}
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
@@ -110,6 +115,7 @@ func TestCreateBacklogItemFromChat_should_DelegateToTriggerTriageWithFeedback_Wh
 // the structured refine-feedback form uses — clarifying questions should be
 // surfaced one at a time in a live conversation rather than as a batch dump.
 func TestCreateBacklogItemFromChat_should_UseChatModeRetriagePrompt_When_RefiningExistingItem(t *testing.T) {
+	t.Parallel()
 	storage := createTestStorage(t)
 	pool := &fakeHeadlessPool{response: validTriageJSON()}
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
@@ -146,6 +152,7 @@ func TestCreateBacklogItemFromChat_should_UseChatModeRetriagePrompt_When_Refinin
 // is the edge-case guard from validation.md: TriggerTriage's existing status
 // guard must not be bypassed by the chat front door.
 func TestCreateBacklogItemFromChat_should_RejectRefinement_When_ItemNotInIdeaOrReadyStatus(t *testing.T) {
+	t.Parallel()
 	storage := createTestStorage(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 

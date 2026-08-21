@@ -10,6 +10,7 @@ import (
 )
 
 func TestFromInstanceDataWithMissingWorktree(t *testing.T) {
+	t.Parallel()
 	// Create a temporary directory to simulate a worktree path
 	tempDir, err := os.MkdirTemp("", "stapler-squad-test-*")
 	if err != nil {
@@ -108,6 +109,7 @@ func checkInstanceStatus(t *testing.T, instance *Instance, worktreePath string, 
 }
 
 func TestStatusEnumValues(t *testing.T) {
+	t.Parallel()
 	// Test that all status values match the new 5-state model:
 	// Creating=0, Active=1, Paused=2, Stopped=3, Hibernated=4
 	tests := []struct {
@@ -141,6 +143,7 @@ func TestStatusEnumValues(t *testing.T) {
 }
 
 func TestTildeExpansionInNewInstance(t *testing.T) {
+	t.Parallel()
 	// Get home directory for comparison
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
@@ -175,6 +178,7 @@ func TestTildeExpansionInNewInstance(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			instance, err := NewInstance(InstanceOptions{
 				Title:   "Test Session",
 				Path:    tt.inputPath,
@@ -208,6 +212,7 @@ func TestTildeExpansionInNewInstance(t *testing.T) {
 }
 
 func TestMigrationOfCorruptedPaths(t *testing.T) {
+	t.Parallel()
 	// Get home directory for comparison
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
@@ -242,6 +247,7 @@ func TestMigrationOfCorruptedPaths(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			// Create instance data with potentially corrupted path
 			data := InstanceData{
 				Title:   "Test Session",
@@ -281,6 +287,7 @@ func TestMigrationOfCorruptedPaths(t *testing.T) {
 }
 
 func TestNewInstance_PopulatesEnvVars_WhenPassedInOptions(t *testing.T) {
+	t.Parallel()
 	opts := InstanceOptions{
 		Title:       "test",
 		Path:        t.TempDir(),
@@ -297,6 +304,7 @@ func TestNewInstance_PopulatesEnvVars_WhenPassedInOptions(t *testing.T) {
 }
 
 func TestNewInstance_PopulatesCLIFlags_WhenPassedInOptions(t *testing.T) {
+	t.Parallel()
 	opts := InstanceOptions{
 		Title:       "test",
 		Path:        t.TempDir(),
@@ -313,6 +321,7 @@ func TestNewInstance_PopulatesCLIFlags_WhenPassedInOptions(t *testing.T) {
 }
 
 func TestNewInstance_should_PreserveExtraArgsExactly_When_OptionsIncludeExtraArgs(t *testing.T) {
+	t.Parallel()
 	opts := InstanceOptions{
 		Title:       "test",
 		Path:        t.TempDir(),
@@ -335,6 +344,7 @@ func TestNewInstance_should_PreserveExtraArgsExactly_When_OptionsIncludeExtraArg
 }
 
 func TestNewInstance_should_LeaveExtraArgsNil_When_OptionsOmitExtraArgs(t *testing.T) {
+	t.Parallel()
 	opts := InstanceOptions{
 		Title:       "test",
 		Path:        t.TempDir(),
@@ -359,6 +369,7 @@ func TestNewInstance_should_LeaveExtraArgsNil_When_OptionsOmitExtraArgs(t *testi
 // hasLifecycleListeners in instance_controller.go) — this test verifies the
 // ordering that still applies for instances that DO have a listener.
 func TestDestroy_should_CaptureDiffStatsBeforeCleanupWorktree_When_UpdateDiffStatsRunsFirst(t *testing.T) {
+	t.Parallel()
 	repoDir := setupTestRepository(t)
 
 	wt, _, err := git.NewGitWorktree(repoDir, "diff-capture-test")
@@ -405,6 +416,7 @@ func TestDestroy_should_CaptureDiffStatsBeforeCleanupWorktree_When_UpdateDiffSta
 // SessionSummaryGenerator was never wired) must not pay for the git-diff
 // subprocess on every Destroy() — nothing would consume the result anyway.
 func TestDestroy_should_SkipDiffStatsCapture_When_NoLifecycleListenerRegistered(t *testing.T) {
+	t.Parallel()
 	repoDir := setupTestRepository(t)
 
 	wt, _, err := git.NewGitWorktree(repoDir, "diff-skip-test")
@@ -442,6 +454,7 @@ func TestDestroy_should_SkipDiffStatsCapture_When_NoLifecycleListenerRegistered(
 // GetDiffStats() correctly returns an empty snapshot rather than an error — an
 // accurate "this session never did anything," not a missed capture.
 func TestDestroy_should_FireEventStoppedWithEmptyDiff_When_InstanceNeverStarted(t *testing.T) {
+	t.Parallel()
 	inst := &Instance{Title: "never-started-test", UUID: "sess-never-started"}
 
 	var gotEvent LifecycleEvent
@@ -472,6 +485,7 @@ func TestDestroy_should_FireEventStoppedWithEmptyDiff_When_InstanceNeverStarted(
 // checklist): Instance.Note set via SetNote must survive ToInstanceData() ->
 // FromInstanceData() unchanged.
 func TestInstance_Note_RoundTripsThroughSerialization(t *testing.T) {
+	t.Parallel()
 	inst := &Instance{
 		Title:     "note-round-trip-test",
 		UUID:      "sess-note-round-trip",
@@ -510,6 +524,7 @@ func TestInstance_Note_RoundTripsThroughSerialization(t *testing.T) {
 // always uses deferStart=true) comes back with Started()==true, so Step 6
 // skips it.
 func TestFromInstanceData_CrashedSession_StaysStartedTrue_NoAutoResume(t *testing.T) {
+	t.Parallel()
 	data := InstanceData{
 		Title:      "crashed-restore-test",
 		Path:       "/tmp/crashed-restore-test",
@@ -541,6 +556,7 @@ func TestFromInstanceData_CrashedSession_StaysStartedTrue_NoAutoResume(t *testin
 // restart (LoadInstances always calls fromInstanceData). Fixed alongside wiring
 // AutoApprove through the same literal -- this pins both fields survive the round trip.
 func TestFromInstanceData_RestoresAutoYesAndAutoApprove(t *testing.T) {
+	t.Parallel()
 	data := InstanceData{
 		Title:       "auto-yes-approve-restore-test",
 		Path:        "/tmp/auto-yes-approve-restore-test",

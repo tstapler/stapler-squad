@@ -43,6 +43,7 @@ func countJSONLLines(t *testing.T, path string) int {
 }
 
 func TestForkClaudeConversation_SubsetCopied(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	srcPath := filepath.Join(dir, "conv.jsonl")
 	dstDir := filepath.Join(dir, "fork")
@@ -59,6 +60,7 @@ func TestForkClaudeConversation_SubsetCopied(t *testing.T) {
 }
 
 func TestForkClaudeConversation_ZeroLineCount_EmptyFile(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	srcPath := filepath.Join(dir, "conv.jsonl")
 	dstDir := filepath.Join(dir, "fork")
@@ -75,6 +77,7 @@ func TestForkClaudeConversation_ZeroLineCount_EmptyFile(t *testing.T) {
 }
 
 func TestForkClaudeConversation_LineCountExceedsMax_AllCopied(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	srcPath := filepath.Join(dir, "conv.jsonl")
 	dstDir := filepath.Join(dir, "fork")
@@ -89,6 +92,7 @@ func TestForkClaudeConversation_LineCountExceedsMax_AllCopied(t *testing.T) {
 }
 
 func TestForkClaudeConversation_MissingSrc_ReturnsError(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	dstDir := filepath.Join(dir, "fork")
 
@@ -98,6 +102,7 @@ func TestForkClaudeConversation_MissingSrc_ReturnsError(t *testing.T) {
 }
 
 func TestForkClaudeConversation_OutputFilenameMatchesUUID(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	srcPath := filepath.Join(dir, "conv.jsonl")
 	dstDir := filepath.Join(dir, "fork")
@@ -113,6 +118,7 @@ func TestForkClaudeConversation_OutputFilenameMatchesUUID(t *testing.T) {
 }
 
 func TestForkClaudeConversation_ReturnsDifferentUUIDs(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	srcPath := filepath.Join(dir, "conv.jsonl")
 	dstDir := filepath.Join(dir, "fork")

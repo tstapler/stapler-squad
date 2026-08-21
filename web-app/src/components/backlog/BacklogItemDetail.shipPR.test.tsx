@@ -132,6 +132,7 @@ function makeReviewItem(overrides: Partial<BacklogItem> = {}): BacklogItem {
     updatedAt: "2026-07-12T14:02:00Z",
     statusEvents: [],
     progressNotes: [],
+    activityNotes: [],
     totalEstimatedCostUsd: 0,
     gateVerdict: "PASS",
     gateVerdictSummary: "All criteria verified",

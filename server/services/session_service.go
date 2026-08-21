@@ -111,6 +111,11 @@ type SessionService struct {
 	// approvalStore holds pending Claude Code hook approval requests.
 	approvalStore *ApprovalStore
 
+	// deleteSessionCleanupTimeout bounds DeleteSession's cleanup-timeout warning;
+	// see defaultDeleteSessionCleanupTimeout's doc comment. Overridable via
+	// SetDeleteSessionCleanupTimeout for tests.
+	deleteSessionCleanupTimeout time.Duration
+
 	// databaseSvc handles workspace/database switcher RPCs.
 	databaseSvc *DatabaseService
 
@@ -136,6 +141,9 @@ type SessionService struct {
 
 	// defaultsSvc handles session defaults configuration RPCs.
 	defaultsSvc *DefaultsService
+
+	// slackConfigSvc handles GetSlackConfig/UpdateSlackConfig/TestSlackWebhook RPCs.
+	slackConfigSvc *SlackConfigService
 
 	// callbackConfigSvc handles GetCallbackConfig/UpdateCallbackConfig RPCs
 	// (webhook-triggers Phase 5, FR7).
@@ -281,14 +289,33 @@ func (s *SessionService) trackCleanup(fn func()) {
 
 // deleteSessionCleanupTimeout bounds how long DeleteSession's background
 // liveInst.Destroy() cleanup (tmux kill, git diff stats, and worktree
-// filesystem cleanup) is awaited before Shutdown/deleteCleanupWG.Wait() gives
-// up on it. Destroy() takes no context and cannot be forcibly cancelled, so a
-// timed-out cleanup keeps running in its own goroutine (untracked by the
-// WaitGroup) after this deadline — only the *wait* is bounded, not the
-// underlying work (see BUG-072 for threading a real context.Context through
-// the cleanup chain so the timeout can cancel the work itself). Matches
+// filesystem cleanup) runs before a warning is logged that it's taking
+// longer than expected. Destroy() takes no context and cannot be forcibly
+// cancelled (see BUG-072 for threading a real context.Context through the
+// cleanup chain so this could cancel the work itself), so this only bounds
+// *when a warning fires* — deleteCleanupWG.Done() (and thus
+// Shutdown/deleteCleanupWG.Wait()) still waits for Destroy() to actually
+// finish regardless of this timeout. That matters for tests: an early Done()
+// at this timeout would let Destroy() (and the SessionDriver goroutine it
+// stops) outlive Shutdown() and the test that called it, free to interfere
+// with whatever state (e.g. a later -count iteration's t.Setenv-scoped
+// STAPLER_SQUAD_TEST_DIR) reuses the process next. Matches
 // KillTmuxSessionByTitle's 5s cap on the same kill-session subprocess.
-const deleteSessionCleanupTimeout = 5 * time.Second
+//
+// defaultDeleteSessionCleanupTimeout is the production default; SessionService
+// stores its own copy in deleteSessionCleanupTimeout so tests can shrink it via
+// SetDeleteSessionCleanupTimeout instead of waiting out the real 5 seconds to
+// exercise the timeout-warning branch below (mirrors
+// BacklogService.triageCleanupTimeout / SetTriageCleanupTimeout).
+const defaultDeleteSessionCleanupTimeout = 5 * time.Second
+
+// SetDeleteSessionCleanupTimeout overrides the default timeout for DeleteSession's
+// cleanup-timeout warning branch. Test-only seam — see
+// defaultDeleteSessionCleanupTimeout's doc comment for why this needs to be
+// overridable rather than a fixed const.
+func (s *SessionService) SetDeleteSessionCleanupTimeout(d time.Duration) {
+	s.deleteSessionCleanupTimeout = d
+}
 
 // destroyWithTimeout runs destroy() (normally inst.Destroy) and waits up to
 // timeout for it to finish. If it doesn't finish in time, this returns a
@@ -310,6 +337,35 @@ func destroyWithTimeout(destroy func() error, timeout time.Duration) error {
 		return err
 	case <-time.After(timeout):
 		return fmt.Errorf("timed out after %s waiting for session cleanup to finish (still running in background)", timeout)
+	}
+}
+
+// waitForDestroyLoggingSlowCleanup runs destroy() (normally liveInst.Destroy) in a
+// goroutine and waits for it to finish. Unlike destroyWithTimeout, it never abandons
+// the goroutine: if destroy() takes longer than timeout, onSlow is invoked (to log a
+// warning) but this function keeps waiting for the real result instead of returning
+// early. That matters because the caller (DeleteSession) only signals
+// deleteCleanupWG.Done() after this returns — an early return at the timeout would let
+// destroy() outlive Shutdown()/the caller and interfere with whatever reuses that state
+// next (e.g. the next -count iteration's t.Setenv-scoped STAPLER_SQUAD_TEST_DIR); see
+// defaultDeleteSessionCleanupTimeout's doc comment.
+//
+// destroy is a func() error (rather than a *session.Instance) for the same testability
+// reason as destroyWithTimeout: onSlow lets a test observe the timeout firing without
+// needing a real Instance whose Destroy() can be made to hang on demand.
+func waitForDestroyLoggingSlowCleanup(destroy func() error, timeout time.Duration, onSlow func()) error {
+	done := make(chan error, 1)
+	go func() {
+		done <- destroy()
+	}()
+	select {
+	case err := <-done:
+		return err
+	case <-time.After(timeout):
+		if onSlow != nil {
+			onSlow()
+		}
+		return <-done
 	}
 }
 
@@ -384,7 +440,20 @@ func newDefaultSearchEngine() *search.SearchEngine {
 	}
 	searchEngine := search.NewSearchEngineWithPersistence(indexStore)
 	if loadErr := searchEngine.LoadIndex(); loadErr != nil {
-		log.Warn("failed to load persisted search index", "err", loadErr)
+		var versionErr *search.IndexVersionMismatchError
+		if errors.As(loadErr, &versionErr) {
+			// The on-disk index predates a schema change (see CurrentIndexVersion)
+			// and was rejected rather than mis-decoded. This self-heals: the next
+			// search request finds syncMetadata unset and triggers a full rebuild
+			// (SearchEngine.IncrementalSync -> buildIndexLocked) from live session
+			// history, so results are only empty until that first search — not
+			// until new session activity occurs.
+			log.Warn("search index format changed; discarding incompatible on-disk index",
+				"old_version", versionErr.Got, "new_version", versionErr.Want, "path", versionErr.Path,
+				"impact", "search results empty until next search request triggers an automatic full reindex")
+		} else {
+			log.Warn("failed to load persisted search index", "err", loadErr)
+		}
 	} else if meta := searchEngine.GetSyncMetadata(); meta != nil {
 		log.Info("loaded persisted search index", "sessions", meta.TotalSessions, "documents", meta.TotalDocuments)
 	}
@@ -485,32 +554,34 @@ func NewSessionServiceWithSearchEngine(storage session.InstanceStore, eventBus *
 	workspaceSvc := NewWorkspaceService(concStorage, eventBus)
 
 	svc := &SessionService{
-		storage:            storage,
-		concStorage:        concStorage,
-		eventBus:           eventBus,
-		reviewQueueSvc:     reviewQueueSvc,
-		searchSvc:          NewSearchService(searchEngine, search.NewSnippetGenerator(), 5*time.Minute),
-		githubSvc:          NewGitHubService(concStorage),
-		workspaceSvc:       workspaceSvc,
-		configSvc:          NewConfigService(),
-		notificationSvc:    notificationSvc,
-		approvalSvc:        approvalSvc,
-		utilitySvc:         utilitySvc,
-		rulesSvc:           rulesSvc,
-		approvalStore:      approvalStore,
-		databaseSvc:        NewDatabaseService(),
-		fileSvc:            NewFileService(workspaceSvc),
-		pathCompletionSvc:  NewPathCompletionService(),
-		slashCommandSvc:    NewSlashCommandService(),
-		defaultsSvc:        NewDefaultsService(),
-		callbackConfigSvc:  NewCallbackConfigService(),
-		launcherPresetsSvc: NewLauncherPresetsService(),
-		projectSvc:         NewProjectService(concStorage),
-		checkpointSvc:      NewCheckpointService(storage, eventBus),
-		featureFlagSvc:     NewFeatureFlagService(),
-		terminalSvc:        NewTerminalService(),
-		promptStore:        newPromptStore(),
-		capacityMonitor:    capacityMonitor,
+		storage:                     storage,
+		concStorage:                 concStorage,
+		eventBus:                    eventBus,
+		reviewQueueSvc:              reviewQueueSvc,
+		searchSvc:                   NewSearchService(searchEngine, search.NewSnippetGenerator(), 5*time.Minute),
+		githubSvc:                   NewGitHubService(concStorage),
+		workspaceSvc:                workspaceSvc,
+		configSvc:                   NewConfigService(),
+		notificationSvc:             notificationSvc,
+		approvalSvc:                 approvalSvc,
+		utilitySvc:                  utilitySvc,
+		rulesSvc:                    rulesSvc,
+		approvalStore:               approvalStore,
+		databaseSvc:                 NewDatabaseService(),
+		fileSvc:                     NewFileService(workspaceSvc),
+		pathCompletionSvc:           NewPathCompletionService(),
+		slashCommandSvc:             NewSlashCommandService(),
+		defaultsSvc:                 NewDefaultsService(),
+		slackConfigSvc:              NewSlackConfigService(NewSlackNotifier()),
+		callbackConfigSvc:           NewCallbackConfigService(),
+		launcherPresetsSvc:          NewLauncherPresetsService(),
+		projectSvc:                  NewProjectService(concStorage),
+		checkpointSvc:               NewCheckpointService(storage, eventBus),
+		featureFlagSvc:              NewFeatureFlagService(),
+		terminalSvc:                 NewTerminalService(),
+		promptStore:                 newPromptStore(),
+		capacityMonitor:             capacityMonitor,
+		deleteSessionCleanupTimeout: defaultDeleteSessionCleanupTimeout,
 	}
 	capacityMonitor.sessionSwitcher = svc
 	capacityMonitor.poller = svc
@@ -1250,6 +1321,26 @@ func (s *SessionService) SetConfigService(svc *ConfigService) {
 	s.configSvc = svc
 }
 
+// SetSlackNotifier rewires slackConfigSvc onto the given SlackNotifier
+// instance — intended for server/dependencies.go to call with the SAME
+// *services.SlackNotifier wired into ReactiveQueueManager/ApprovalHandler,
+// so GetSlackConfig's last_delivery reflects real production sends from
+// those trigger points, not only sends made via TestSlackWebhook. Optional:
+// if never called, slackConfigSvc keeps the private SlackNotifier instance
+// NewSessionService constructed for it.
+func (s *SessionService) SetSlackNotifier(n *SlackNotifier) {
+	s.slackConfigSvc = NewSlackConfigService(n)
+}
+
+// SlackNotifierForTest returns the SlackNotifier instance currently wired
+// into slackConfigSvc. Exported only so cross-package wiring regression
+// tests (server package) can assert pointer identity against the other
+// consumers (ReactiveQueueManager, ApprovalHandler) without restructuring
+// production code — not intended for any non-test caller.
+func (s *SessionService) SlackNotifierForTest() *SlackNotifier {
+	return s.slackConfigSvc.slackNotifier
+}
+
 // SetFeatureController wires a runtime controller for the named feature flag.
 // Delegates to FeatureFlagService which owns the controller registry.
 func (s *SessionService) SetFeatureController(name string, c FeatureController) {
@@ -1759,7 +1850,13 @@ func (s *SessionService) CreateSession(
 	creatingProto := adapters.InstanceToProto(instance, s.workflowNames())
 
 	// Perform the actual initialization asynchronously so the RPC returns within milliseconds.
-	go func() {
+	// Tracked via trackCleanup (not a bare `go func()`) so Shutdown blocks until this
+	// goroutine finishes — otherwise it can outlive the test that spawned it and touch a
+	// later test's tempdirs/STAPLER_SQUAD_TEST_DIR/tmux-exec-gate directory after that
+	// later test's t.Cleanup has already torn them down, producing "sql: database is
+	// closed" errors and the cross-iteration "directory not empty" flake in
+	// TestCreateSession_should_ComposeProfileCLIFlagsBeforePresetExtraArgs_When_BothPresent.
+	s.trackCleanup(func() {
 		// Wire callbacks before starting so rate-limit and status-change events fire.
 		s.wireCallbacks(instance)
 
@@ -1825,7 +1922,7 @@ func (s *SessionService) CreateSession(
 		_ = s.storage.SaveInstances([]*session.Instance{instance})
 		s.eventBus.Publish(events.NewSessionUpdatedEvent(instance, []string{"status", "creation_progress"}))
 		log.Info("[CreateSession] async start complete", "session", instanceTitle)
-	}()
+	})
 
 	return connect.NewResponse(&sessionv1.CreateSessionResponse{
 		Session: creatingProto,
@@ -2488,7 +2585,10 @@ func (s *SessionService) DeleteSession(
 	// of letting them outlive the process/test — see deleteCleanupWG's doc comment.
 	if liveInst != nil {
 		s.trackCleanup(func() {
-			if err := destroyWithTimeout(liveInst.Destroy, deleteSessionCleanupTimeout); err != nil {
+			err := waitForDestroyLoggingSlowCleanup(liveInst.Destroy, s.deleteSessionCleanupTimeout, func() {
+				log.Warn("session cleanup still running in background after timeout", "session", req.Msg.Id, "timeout", s.deleteSessionCleanupTimeout)
+			})
+			if err != nil {
 				log.Warn("failed to cleanup session resources", "session", req.Msg.Id, "err", err)
 			}
 		})
@@ -3815,6 +3915,21 @@ func (s *SessionService) ResolveDefaults(ctx context.Context, req *connect.Reque
 // UpdateGlobalDefaults replaces the global default fields.
 func (s *SessionService) UpdateGlobalDefaults(ctx context.Context, req *connect.Request[sessionv1.UpdateGlobalDefaultsRequest]) (*connect.Response[sessionv1.UpdateGlobalDefaultsResponse], error) {
 	return s.defaultsSvc.UpdateGlobalDefaults(ctx, req)
+}
+
+// GetSlackConfig returns the current Slack notification configuration.
+func (s *SessionService) GetSlackConfig(ctx context.Context, req *connect.Request[sessionv1.GetSlackConfigRequest]) (*connect.Response[sessionv1.GetSlackConfigResponse], error) {
+	return s.slackConfigSvc.GetSlackConfig(ctx, req)
+}
+
+// UpdateSlackConfig updates the Slack notification configuration.
+func (s *SessionService) UpdateSlackConfig(ctx context.Context, req *connect.Request[sessionv1.UpdateSlackConfigRequest]) (*connect.Response[sessionv1.UpdateSlackConfigResponse], error) {
+	return s.slackConfigSvc.UpdateSlackConfig(ctx, req)
+}
+
+// TestSlackWebhook sends a synchronous test message and reports the outcome.
+func (s *SessionService) TestSlackWebhook(ctx context.Context, req *connect.Request[sessionv1.TestSlackWebhookRequest]) (*connect.Response[sessionv1.TestSlackWebhookResponse], error) {
+	return s.slackConfigSvc.TestSlackWebhook(ctx, req)
 }
 
 // SetOnGlobalDefaultsUpdated wires in the callback invoked after every

@@ -2,6 +2,7 @@ package headless
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -28,6 +29,7 @@ func newTestPool(cfg PoolConfig, runner *FakeRunner) *Pool {
 // TestPool_CallBlocking_FirstCall_CapturesSessionID verifies that the first call
 // uses the JSON path and stores the session_id.
 func TestPool_CallBlocking_FirstCall_CapturesSessionID(t *testing.T) {
+	t.Parallel()
 	runner := NewFakeRunner(firstCallJSON("abc", "hello"))
 	pool := newTestPool(PoolConfig{MaxCallsPerSession: 25}, runner)
 
@@ -45,6 +47,7 @@ func TestPool_CallBlocking_FirstCall_CapturesSessionID(t *testing.T) {
 
 // TestPool_FirstCall_ArgsContainOutputFormatJSON verifies the first-call args.
 func TestPool_FirstCall_ArgsContainOutputFormatJSON(t *testing.T) {
+	t.Parallel()
 	runner := NewFakeRunner(firstCallJSON("s1", "result"))
 	pool := newTestPool(PoolConfig{}, runner)
 
@@ -62,6 +65,7 @@ func TestPool_FirstCall_ArgsContainOutputFormatJSON(t *testing.T) {
 
 // TestPool_ResumedCall_ArgsContainResumeAndExclude verifies resumed-call args.
 func TestPool_ResumedCall_ArgsContainResumeAndExclude(t *testing.T) {
+	t.Parallel()
 	runner := NewFakeRunner(
 		firstCallJSON("sess-xyz", "first result"),
 		"second result\n",
@@ -83,6 +87,7 @@ func TestPool_ResumedCall_ArgsContainResumeAndExclude(t *testing.T) {
 
 // TestPool_FirstCall_ModelFlagIncluded_WhenNonEmpty verifies model flag injection.
 func TestPool_FirstCall_ModelFlagIncluded_WhenNonEmpty(t *testing.T) {
+	t.Parallel()
 	runner := NewFakeRunner(firstCallJSON("s1", "ok"))
 	pool := newTestPool(PoolConfig{DefaultModel: "claude-opus-4"}, runner)
 
@@ -96,6 +101,7 @@ func TestPool_FirstCall_ModelFlagIncluded_WhenNonEmpty(t *testing.T) {
 
 // TestPool_ParsesSessionIDFromFirstCallJSON verifies session_id capture.
 func TestPool_ParsesSessionIDFromFirstCallJSON(t *testing.T) {
+	t.Parallel()
 	runner := NewFakeRunner(firstCallJSON("abc", "hello"))
 	pool := newTestPool(PoolConfig{}, runner)
 
@@ -112,6 +118,7 @@ func TestPool_ParsesSessionIDFromFirstCallJSON(t *testing.T) {
 // TestPool_Call_ContextCancel_ClosesChannel verifies that a pre-cancelled context
 // either returns an error immediately or closes the channel without hanging.
 func TestPool_Call_ContextCancel_ClosesChannel(t *testing.T) {
+	t.Parallel()
 	runner := NewFakeRunner(firstCallJSON("s1", "result"))
 	pool := newTestPool(PoolConfig{}, runner)
 
@@ -148,6 +155,7 @@ func TestPool_Call_ContextCancel_ClosesChannel(t *testing.T) {
 // producing zero output, then failed downstream with a confusing "no JSON
 // object found" parse error instead of a clear cancellation error.
 func TestPool_CallBlocking_ContextTimeout_ReturnsError_NotEmptySuccess(t *testing.T) {
+	t.Parallel()
 	runner := &blockingRunner{}
 	pool := NewPoolWithRunner(PoolConfig{}, runner)
 
@@ -176,6 +184,7 @@ func writeSleepForeverFakeClaudeScript(t *testing.T, scriptDir string) string {
 // TriggerTriage uses in production — with a real subprocess that hangs and
 // gets killed by ctx's timeout.
 func TestPool_CallBlocking_WorkDirPath_ContextTimeout_ReturnsError_NotEmptySuccess(t *testing.T) {
+	t.Parallel()
 	scriptDir := t.TempDir()
 	scriptPath := writeSleepForeverFakeClaudeScript(t, scriptDir)
 	workDir := t.TempDir()
@@ -194,6 +203,7 @@ func TestPool_CallBlocking_WorkDirPath_ContextTimeout_ReturnsError_NotEmptySucce
 
 // TestPool_RotatesSession_AfterMaxCalls verifies session ID changes after MaxCallsPerSession.
 func TestPool_RotatesSession_AfterMaxCalls(t *testing.T) {
+	t.Parallel()
 	// MaxCallsPerSession=2: after 2 calls the 3rd call should be a new session.
 	runner := NewFakeRunner(
 		firstCallJSON("session-A", "result1"),
@@ -214,6 +224,7 @@ func TestPool_RotatesSession_AfterMaxCalls(t *testing.T) {
 
 // TestPool_RotatesSession_AfterConsecutiveErrors verifies circuit breaker.
 func TestPool_RotatesSession_AfterConsecutiveErrors(t *testing.T) {
+	t.Parallel()
 	runner2 := &FakeRunner{
 		responses: []string{firstCallJSON("sess1", "ok"), "", "", "", firstCallJSON("sess2", "after-reset")},
 		errors:    []error{nil, fmt.Errorf("err1"), fmt.Errorf("err2"), fmt.Errorf("err3"), nil},
@@ -239,6 +250,7 @@ func TestPool_RotatesSession_AfterConsecutiveErrors(t *testing.T) {
 
 // TestPool_CallBlocking_ReturnsCollectedText verifies text concatenation.
 func TestPool_CallBlocking_ReturnsCollectedText(t *testing.T) {
+	t.Parallel()
 	runner := NewFakeRunner(firstCallJSON("s1", "hello world"))
 	pool := newTestPool(PoolConfig{}, runner)
 
@@ -249,6 +261,7 @@ func TestPool_CallBlocking_ReturnsCollectedText(t *testing.T) {
 
 // TestPool_Call_MultiLineOutput_StreamsInOrder verifies line-by-line streaming.
 func TestPool_Call_MultiLineOutput_StreamsInOrder(t *testing.T) {
+	t.Parallel()
 	runner := NewFakeRunner(
 		firstCallJSON("sess1", "first"),
 		"line1\nline2\nline3\n",
@@ -274,19 +287,76 @@ func TestPool_Call_MultiLineOutput_StreamsInOrder(t *testing.T) {
 	assert.Equal(t, []string{"line1", "line2", "line3"}, lines)
 }
 
-// TestPool_CallBlocking_PropagatesSubprocessError verifies error propagation.
+// TestPool_CallBlocking_PropagatesSubprocessError verifies error propagation,
+// and that a runner-start failure (os.Pipe()/cmd.Start() failing — e.g. under fd
+// exhaustion or ENOMEM) is wrapped in ErrSubprocessStart so
+// classifyHeadlessCallError (server/services/backlog_service_triage.go) can
+// bucket it as "subprocess_start_error" instead of an undiagnosable "other".
 func TestPool_CallBlocking_PropagatesSubprocessError(t *testing.T) {
+	t.Parallel()
+	startErr := errors.New("start failed")
 	runner := &FakeRunner{
-		errors: []error{fmt.Errorf("start failed")},
+		errors: []error{startErr},
 	}
 	pool := newTestPool(PoolConfig{}, runner)
 
 	_, _, err := pool.CallBlocking(context.Background(), "f1", "sys", "prompt", CallOptions{})
-	assert.Error(t, err)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrSubprocessStart, "runner-start failures must be classifiable, not swallowed into a generic error")
+	assert.ErrorIs(t, err, startErr, "the underlying OS-level error must remain inspectable")
+}
+
+// partialErrReadCloser simulates a subprocess killed mid-write (e.g. OOM-killed):
+// it returns real, useful data on the first Read, then a non-EOF error on the next.
+type partialErrReadCloser struct {
+	data []byte
+	err  error
+	sent bool
+}
+
+func (r *partialErrReadCloser) Read(p []byte) (int, error) {
+	if !r.sent {
+		r.sent = true
+		n := copy(p, r.data)
+		return n, nil
+	}
+	return 0, r.err
+}
+
+func (r *partialErrReadCloser) Close() error { return nil }
+
+// partialErrRunner always returns a partialErrReadCloser from Run.
+type partialErrRunner struct {
+	data []byte
+	err  error
+}
+
+func (r *partialErrRunner) Run(_ context.Context, _ []string, _ io.Reader) (io.ReadCloser, func() error, error) {
+	return &partialErrReadCloser{data: r.data, err: r.err}, func() error { return nil }, nil
+}
+
+// TestPool_CallBlocking_ReadError_ReturnsPartialDataAsRaw_When_SubprocessKilledMidWrite
+// covers the fix mirroring the JSON-parse-failure branch's existing behavior:
+// when the subprocess is killed mid-write, any real output already read before
+// the pipe read failed must be delivered as a Text chunk before the terminal Err
+// chunk. Before the fix, that partial data was discarded, so CallBlocking's raw
+// return was always "" for this failure mode and captureHeadlessFailure
+// (server/services/backlog_service_triage.go) had nothing to persist for
+// diagnosis even though real output existed.
+func TestPool_CallBlocking_ReadError_ReturnsPartialDataAsRaw_When_SubprocessKilledMidWrite(t *testing.T) {
+	wantErr := errors.New("read |0: input/output error")
+	runner := &partialErrRunner{data: []byte("partial output before kill"), err: wantErr}
+	pool := NewPoolWithRunner(PoolConfig{}, runner)
+
+	raw, _, err := pool.CallBlocking(context.Background(), "f1", "sys", "prompt", CallOptions{})
+	require.Error(t, err)
+	assert.ErrorIs(t, err, wantErr)
+	assert.Equal(t, "partial output before kill", raw)
 }
 
 // TestPool_DifferentKeys_RunInParallel verifies parallel execution on different keys.
 func TestPool_DifferentKeys_RunInParallel(t *testing.T) {
+	t.Parallel()
 	runner := &FakeRunner{
 		responses: []string{
 			firstCallJSON("s1", "result1"),
@@ -318,6 +388,7 @@ func TestPool_DifferentKeys_RunInParallel(t *testing.T) {
 
 // TestPool_SameKey_ConcurrentCalls_Serialized verifies concurrent access doesn't panic.
 func TestPool_SameKey_ConcurrentCalls_Serialized(t *testing.T) {
+	t.Parallel()
 	responses := make([]string, 10)
 	responses[0] = firstCallJSON("s1", "r1")
 	for i := 1; i < 10; i++ {
@@ -340,6 +411,7 @@ func TestPool_SameKey_ConcurrentCalls_Serialized(t *testing.T) {
 
 // TestPool_ConcurrencySemaphore_LimitsToMax verifies semaphore limits concurrency.
 func TestPool_ConcurrencySemaphore_LimitsToMax(t *testing.T) {
+	t.Parallel()
 	const maxConcurrent = 2
 	var activeCount atomic.Int32
 	var peakCount atomic.Int32
@@ -460,6 +532,7 @@ func TestNewPoolWithRunner_DoesNotCallLookPath(t *testing.T) {
 
 // TestPool_ZeroCallsPerSession_UsesDefault25 verifies default application.
 func TestPool_ZeroCallsPerSession_UsesDefault25(t *testing.T) {
+	t.Parallel()
 	runner := NewFakeRunner()
 	pool := NewPoolWithRunner(PoolConfig{MaxCallsPerSession: 0}, runner)
 	assert.Equal(t, defaultMaxCalls, pool.cfg.MaxCallsPerSession)
@@ -467,6 +540,7 @@ func TestPool_ZeroCallsPerSession_UsesDefault25(t *testing.T) {
 
 // TestPool_DefaultPool_SetAndGet_ThreadSafe verifies concurrent DefaultPool access.
 func TestPool_DefaultPool_SetAndGet_ThreadSafe(t *testing.T) {
+	t.Parallel()
 	original := DefaultPool()
 	defer SetDefaultPool(original)
 
@@ -494,6 +568,7 @@ func TestPool_DefaultPool_SetAndGet_ThreadSafe(t *testing.T) {
 
 // TestFakeRunner_InspectsArgs_ReturnsJSONForFirstCall verifies FakeRunner JSON path.
 func TestFakeRunner_InspectsArgs_ReturnsJSONForFirstCall(t *testing.T) {
+	t.Parallel()
 	runner := NewFakeRunner(firstCallJSON("s1", "ok"))
 	pool := newTestPool(PoolConfig{}, runner)
 
@@ -504,6 +579,7 @@ func TestFakeRunner_InspectsArgs_ReturnsJSONForFirstCall(t *testing.T) {
 
 // TestPool_FirstCall_IsError_ReturnsErrorChunk verifies LLM-level error handling.
 func TestPool_FirstCall_IsError_ReturnsErrorChunk(t *testing.T) {
+	t.Parallel()
 	errorJSON := `{"session_id":"","result":"model refused to respond","is_error":true,"cost_usd":0}`
 	runner := NewFakeRunner(errorJSON)
 	pool := newTestPool(PoolConfig{}, runner)
@@ -525,6 +601,7 @@ func TestPool_FirstCall_IsError_ReturnsErrorChunk(t *testing.T) {
 
 // TestPool_FirstCall_CostUSD_ForwardedOnDoneChunk verifies cost_usd propagation.
 func TestPool_FirstCall_CostUSD_ForwardedOnDoneChunk(t *testing.T) {
+	t.Parallel()
 	costJSON := `{"session_id":"s1","result":"ok","is_error":false,"cost_usd":0.0042}`
 	runner := NewFakeRunner(costJSON)
 	pool := newTestPool(PoolConfig{}, runner)
@@ -544,6 +621,7 @@ func TestPool_FirstCall_CostUSD_ForwardedOnDoneChunk(t *testing.T) {
 // TestPool_CallWithOptions_WorkDir_FakeRunner_ReturnsError verifies that WorkDir
 // with a non-ProcessRunner returns an error immediately (not silent fallback).
 func TestPool_CallWithOptions_WorkDir_FakeRunner_ReturnsError(t *testing.T) {
+	t.Parallel()
 	runner := NewFakeRunner(firstCallJSON("s1", "ok"))
 	pool := NewPoolWithRunner(PoolConfig{}, runner)
 
@@ -557,6 +635,7 @@ func TestPool_CallWithOptions_WorkDir_FakeRunner_ReturnsError(t *testing.T) {
 // TestPool_CtxCancel_DuringFirstCall_DoesNotHang verifies that a context cancelled
 // while io.ReadAll is in progress causes the call to return promptly.
 func TestPool_CtxCancel_DuringFirstCall_DoesNotHang(t *testing.T) {
+	t.Parallel()
 	// Use a blocking reader that never completes — the cancel should unblock it.
 	runner := &blockingRunner{}
 	pool := NewPoolWithRunner(PoolConfig{}, runner)
@@ -608,6 +687,7 @@ func (r *blockingRunner) Run(ctx context.Context, _ []string, _ io.Reader) (io.R
 // context cancellation while blocked on the concurrency semaphore does not
 // permanently inflate callCount (decrementCallCount is called on the cancel path).
 func TestPool_CtxCancel_DuringSemaphoreWait_DecrementsCallCount(t *testing.T) {
+	t.Parallel()
 	runner := NewFakeRunner()
 	// MaxConcurrentSessions=1 so a single manually-occupied slot blocks the next Call.
 	pool := newTestPool(PoolConfig{MaxConcurrentSessions: 1, MaxCallsPerSession: 100}, runner)
@@ -639,6 +719,7 @@ func TestPool_CtxCancel_DuringSemaphoreWait_DecrementsCallCount(t *testing.T) {
 
 // TestFakeRunner_InspectsArgs_ReturnsPlainForResumedCall verifies resumed-call plain text.
 func TestFakeRunner_InspectsArgs_ReturnsPlainForResumedCall(t *testing.T) {
+	t.Parallel()
 	runner := NewFakeRunner(
 		firstCallJSON("sess1", "first"),
 		"plain text response\n",
@@ -658,6 +739,7 @@ func TestFakeRunner_InspectsArgs_ReturnsPlainForResumedCall(t *testing.T) {
 // first-call JSON response is captured, the returned text matches the JSON
 // result, and cost_usd is forwarded even though earlier callers ignored it.
 func TestPool_CallBlocking_ZeroValueOptions_MatchesLegacyCallBlockingBehavior(t *testing.T) {
+	t.Parallel()
 	runner := NewFakeRunner(firstCallJSON("zero-value-session", "hello"))
 	pool := newTestPool(PoolConfig{MaxCallsPerSession: 25}, runner)
 
@@ -685,6 +767,7 @@ func TestPool_CallBlocking_ZeroValueOptions_MatchesLegacyCallBlockingBehavior(t 
 // exercising the same code path CallBlockingWithOptions used before
 // consolidation.
 func TestPool_CallBlocking_WithWorkDir_ReturnsCostAndUsesWorkDir(t *testing.T) {
+	t.Parallel()
 	scriptDir := t.TempDir()
 	scriptPath := filepath.Join(scriptDir, "fake-claude.sh")
 	script := "#!/bin/sh\necho \"{\\\"session_id\\\":\\\"wd1\\\",\\\"result\\\":\\\"$(pwd)\\\",\\\"cost_usd\\\":0.0077}\"\n"

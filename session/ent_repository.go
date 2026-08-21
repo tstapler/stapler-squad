@@ -7,8 +7,10 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
+	"github.com/tstapler/stapler-squad/internal/sqlitedsn"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/ent/approvalrule"
 	"github.com/tstapler/stapler-squad/session/ent/classificationanalytics"
@@ -24,8 +26,18 @@ import (
 
 	"entgo.io/ent/dialect"
 	entsql "entgo.io/ent/dialect/sql"
-	_ "github.com/mattn/go-sqlite3" // SQLite driver
+	_ "modernc.org/sqlite" // Pure Go SQLite driver
 )
+
+// EntSchemaCreateMu serializes calls to (*ent.Client).Schema.Create across the
+// whole process, including from other packages that migrate their own
+// *ent.Client against this same generated ent package (e.g.
+// server/analytics.OpenAnalyticsDB). entgo.io/ent/dialect/sql/schema.(*Atlas)
+// has internal package-level state that data-races when multiple goroutines
+// run schema migration concurrently (e.g. `go test -parallel` spinning up
+// many independent repositories/clients at once) — each instance's SQLite
+// connection is isolated, but Atlas itself is not safe for concurrent use.
+var EntSchemaCreateMu sync.Mutex
 
 // EntRepository implements the Repository interface using Ent ORM as the storage backend.
 // It provides type-safe database operations with automatic schema migrations.
@@ -84,6 +96,13 @@ func NewEntRepository(opts ...RepositoryOption) (*EntRepository, error) {
 		expandedPath = filepath.Join(homeDir, expandedPath[2:])
 	}
 
+	// Persist the resolved path back onto repo.dbPath (nothing above this
+	// point reads the field again — every remaining use in this function
+	// already switched to the local expandedPath) so later code, notably
+	// BackfillBacklogItemPublicIDs's flock lock-file derivation, sees the
+	// real absolute path rather than an unexpanded "~/..." one.
+	repo.dbPath = expandedPath
+
 	// Create parent directory if it doesn't exist, unless expandedPath is a
 	// "file:" URI DSN (e.g. a shared-cache in-memory database used by tests)
 	// rather than a real filesystem path.
@@ -97,11 +116,44 @@ func NewEntRepository(opts ...RepositoryOption) (*EntRepository, error) {
 	// better concurrency; it's skipped for URI-style DSNs (e.g. shared-cache
 	// in-memory databases), which don't support WAL and already carry their
 	// own query string that a second "?" would corrupt.
-	dbPath := expandedPath + "?_journal_mode=WAL&_timeout=5000&_fk=1"
-	if strings.Contains(expandedPath, "?") {
-		dbPath = expandedPath + "&_timeout=5000&_fk=1"
-	}
-	db, err := sql.Open("sqlite3", dbPath)
+	//
+	// _texttotime is required because ent's generated UPDATE...RETURNING
+	// statements produce result columns with an empty SQLite decltype (unlike
+	// plain SELECTs, which report DATETIME and auto-convert without this
+	// flag) — modernc.org/sqlite only upgrades those empty-decltype TEXT
+	// values to time.Time when this DSN param is set, otherwise Scan fails
+	// with "unsupported Scan...storing driver.Value type string into type
+	// *time.Time".
+	//
+	// _time_format=sqlite is required alongside it: without it, the driver
+	// writes time.Time values using Go's time.Time.String() (e.g. "2006-01-02
+	// 15:04:05.999999999 -0700 MST"), which its own read-side parser
+	// (parseTimeFormats in modernc.org/sqlite) never matches — the offset is
+	// space-separated with a zone abbreviation, not the colon-separated
+	// "-07:00" the parser expects. That mismatch makes every read fall back
+	// to the raw string, hitting the same Scan error above even when
+	// _texttotime successfully triggers a parse attempt. _time_format=sqlite
+	// makes the driver write with parseTimeFormats[0], the exact layout its
+	// own reader tries first.
+	//
+	// _timezone=UTC is required on top of both: without it, a parsed time.Time
+	// carries a distinct, driver-synthesized zero-offset *time.Location (empty
+	// name, its own internal zone/tx tables) rather than the time.UTC package
+	// singleton. The instant is correct either way, but assert.Equal(t,
+	// time.UTC, x.Location()) — used throughout this package's tests, e.g.
+	// TestBacklogItem_UpdatedAt_should_BeStoredInUTC_When_CreatedOrTransitioned
+	// — does a deep struct comparison and fails on that Location identity
+	// mismatch. Setting _timezone=UTC makes every read run through the
+	// driver's applyTimezone(t) -> t.In(time.UTC), which sets the Location to
+	// the exact singleton (time.LoadLocation("UTC") — what _timezone resolves
+	// through — special-cases "UTC" to return that singleton directly).
+	dbPath := sqlitedsn.New(expandedPath).
+		WithWAL().
+		WithBusyTimeout(5000 * time.Millisecond).
+		WithForeignKeysShort().
+		WithEntTimeCompat().
+		Build()
+	db, err := sql.Open("sqlite", dbPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open database: %w", err)
 	}
@@ -113,12 +165,25 @@ func NewEntRepository(opts ...RepositoryOption) (*EntRepository, error) {
 	db.SetMaxIdleConns(1)
 	db.SetConnMaxLifetime(time.Hour)
 
+	// Must be read BEFORE client.Schema.Create() below, which is what adds the
+	// enabled column this signal depends on being absent — see
+	// workflow_enabled_field_migration.go's doc comment for why this exact
+	// signal (not a value-based heuristic) is required.
+	workflowEnabledColumnAlreadyExisted := workflowEnabledColumnPreexisted(db)
+
 	// Create Ent client with the existing database connection
 	drv := entsql.OpenDB(dialect.SQLite, db)
 	client := ent.NewClient(ent.Driver(drv))
 
-	// Run automatic schema migration
-	if err := client.Schema.Create(context.Background()); err != nil {
+	// Run automatic schema migration. entSchemaCreateMu serializes this call
+	// process-wide: even though each caller opens its own isolated SQLite
+	// connection, entgo.io/ent/dialect/sql/schema.(*Atlas) has internal
+	// package-level state that races under `go test -parallel` when many
+	// NewEntRepository calls run schema creation concurrently.
+	EntSchemaCreateMu.Lock()
+	err = client.Schema.Create(context.Background())
+	EntSchemaCreateMu.Unlock()
+	if err != nil {
 		client.Close()
 		return nil, fmt.Errorf("failed to create schema: %w", err)
 	}
@@ -146,6 +211,23 @@ func NewEntRepository(opts ...RepositoryOption) (*EntRepository, error) {
 		return nil, fmt.Errorf("failed to backfill backlog item updated_at to UTC: %w", err)
 	}
 
+	// Same fix, same reason, for Workflow.updated_at — see
+	// workflow_updated_at_utc_migration.go. UpdateWorkflowRequest.expected_updated_at
+	// (webhook-triggers verify follow-ups AC9) is the same protobuf-Timestamp-derived
+	// CAS precondition class as TransitionBacklogItemStatusRequest's.
+	if err := runWorkflowUpdatedAtUTCBackfill(context.Background(), repo); err != nil {
+		client.Close()
+		return nil, fmt.Errorf("failed to backfill workflow updated_at to UTC: %w", err)
+	}
+
+	// One-time-per-database correction for rows that predate the enabled field
+	// — see workflow_enabled_field_migration.go's doc comment for why this
+	// must be gated on workflowEnabledColumnAlreadyExisted rather than run
+	// unconditionally on every startup like its sibling backfills above.
+	if !workflowEnabledColumnAlreadyExisted {
+		runWorkflowEnabledFieldBackfill(context.Background(), repo)
+	}
+
 	// Populate github_pr_url for pre-existing sessions that have a known PR
 	// number/owner/repo but were created before CreateSession started
 	// building the URL itself (idempotent) — see
@@ -153,6 +235,18 @@ func NewEntRepository(opts ...RepositoryOption) (*EntRepository, error) {
 	if err := runGitHubPRURLBackfill(context.Background(), repo); err != nil {
 		client.Close()
 		return nil, fmt.Errorf("failed to backfill github pr url: %w", err)
+	}
+
+	// Assign a public_id to every pre-existing BacklogItem row that predates
+	// this feature (idempotent) — see BackfillBacklogItemPublicIDs in
+	// storage_backlog.go. Unlike the backfills above, this one is
+	// flock-guarded: it mints a fresh random BacklogItemID per row rather
+	// than deterministically recomputing the same value, so an unguarded
+	// race between two processes could assign two different ids to the same
+	// row.
+	if err := repo.BackfillBacklogItemPublicIDs(context.Background()); err != nil {
+		client.Close()
+		return nil, fmt.Errorf("failed to backfill backlog item public id: %w", err)
 	}
 
 	return repo, nil

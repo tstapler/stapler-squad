@@ -16,14 +16,11 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-// createTestAnalyticsClient opens an in-process SQLite database and runs migrations.
-// The database file is in t.TempDir() and is cleaned up automatically.
+// createTestAnalyticsClient opens an in-memory SQLite database and runs migrations.
+// The database is cleaned up automatically via t.Cleanup.
 func createTestAnalyticsClient(t *testing.T) *ent.Client {
 	t.Helper()
-	testDir := t.TempDir()
-	repo, err := session.NewEntRepository(session.WithDatabasePath(testDir + "/analytics.db"))
-	require.NoError(t, err, "createTestAnalyticsClient: failed to open database")
-	t.Cleanup(func() { repo.Close() })
+	repo := session.NewTestEntRepository(t)
 	return repo.GetEntClient()
 }
 
@@ -72,6 +69,7 @@ func insertEscapeEventAt(t *testing.T, client *ent.Client, sessionID, stage, seq
 // ---------------------------------------------------------------------------
 
 func TestQueryEscapeAnalytics_FiltersBySessionID(t *testing.T) {
+	t.Parallel()
 	svc, client := createTestServiceWithAnalytics(t)
 
 	const wantSession = "session-A"
@@ -93,6 +91,7 @@ func TestQueryEscapeAnalytics_FiltersBySessionID(t *testing.T) {
 }
 
 func TestQueryEscapeAnalytics_MangledOnlyFilter(t *testing.T) {
+	t.Parallel()
 	svc, client := createTestServiceWithAnalytics(t)
 
 	const sid = "session-mangle"
@@ -113,6 +112,7 @@ func TestQueryEscapeAnalytics_MangledOnlyFilter(t *testing.T) {
 }
 
 func TestQueryEscapeAnalytics_RequiresSessionID(t *testing.T) {
+	t.Parallel()
 	svc, _ := createTestServiceWithAnalytics(t)
 
 	req := connect.NewRequest(&sessionv1.QueryEscapeAnalyticsRequest{})
@@ -124,6 +124,7 @@ func TestQueryEscapeAnalytics_RequiresSessionID(t *testing.T) {
 }
 
 func TestQueryEscapeAnalytics_NoClientReturnsUnavailable(t *testing.T) {
+	t.Parallel()
 	storage := createTestStorage(t)
 	svc := NewSessionService(storage, events.NewEventBus(100))
 	t.Cleanup(func() { svc.Shutdown() })
@@ -142,6 +143,7 @@ func TestQueryEscapeAnalytics_NoClientReturnsUnavailable(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestGetEscapeAnalyticsSummary_ReturnsHistogram(t *testing.T) {
+	t.Parallel()
 	svc, client := createTestServiceWithAnalytics(t)
 
 	const sid = "session-hist"
@@ -174,6 +176,7 @@ func TestGetEscapeAnalyticsSummary_ReturnsHistogram(t *testing.T) {
 }
 
 func TestGetEscapeAnalyticsSummary_EmptySession(t *testing.T) {
+	t.Parallel()
 	svc, _ := createTestServiceWithAnalytics(t)
 
 	req := connect.NewRequest(&sessionv1.GetEscapeAnalyticsSummaryRequest{
@@ -188,6 +191,7 @@ func TestGetEscapeAnalyticsSummary_EmptySession(t *testing.T) {
 }
 
 func TestGetEscapeAnalyticsSummary_RequiresSessionID(t *testing.T) {
+	t.Parallel()
 	svc, _ := createTestServiceWithAnalytics(t)
 
 	req := connect.NewRequest(&sessionv1.GetEscapeAnalyticsSummaryRequest{})
@@ -203,6 +207,7 @@ func TestGetEscapeAnalyticsSummary_RequiresSessionID(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestGetEscapeAnalyticsGlobalSummary_should_ReturnUnavailable_When_AnalyticsClientNil(t *testing.T) {
+	t.Parallel()
 	storage := createTestStorage(t)
 	svc := NewSessionService(storage, events.NewEventBus(100))
 	t.Cleanup(func() { svc.Shutdown() })
@@ -217,6 +222,7 @@ func TestGetEscapeAnalyticsGlobalSummary_should_ReturnUnavailable_When_Analytics
 }
 
 func TestGetEscapeAnalyticsGlobalSummary_should_AggregateAcrossSessions_When_MultipleSessionsHaveEvents(t *testing.T) {
+	t.Parallel()
 	svc, client := createTestServiceWithAnalytics(t)
 
 	const sessionA = "global-session-A"
@@ -270,6 +276,7 @@ func TestGetEscapeAnalyticsGlobalSummary_should_AggregateAcrossSessions_When_Mul
 }
 
 func TestGetEscapeAnalyticsGlobalSummary_should_ExcludeEventsOutsideBoundary_When_TimeRangeSet(t *testing.T) {
+	t.Parallel()
 	svc, client := createTestServiceWithAnalytics(t)
 
 	const sid = "global-session-boundary"
@@ -297,6 +304,7 @@ func TestGetEscapeAnalyticsGlobalSummary_should_ExcludeEventsOutsideBoundary_Whe
 }
 
 func TestGetEscapeAnalyticsGlobalSummary_should_ReturnZeroRate_When_NoEventsMatch(t *testing.T) {
+	t.Parallel()
 	svc, _ := createTestServiceWithAnalytics(t)
 
 	req := connect.NewRequest(&sessionv1.GetEscapeAnalyticsGlobalSummaryRequest{})
@@ -311,6 +319,7 @@ func TestGetEscapeAnalyticsGlobalSummary_should_ReturnZeroRate_When_NoEventsMatc
 }
 
 func TestGetEscapeAnalyticsGlobalSummary_should_ReturnExactMangledCount_When_FixtureHasMixedTrueFalseMangled(t *testing.T) {
+	t.Parallel()
 	svc, client := createTestServiceWithAnalytics(t)
 
 	const sid = "global-session-mixed-mangle"
@@ -339,10 +348,12 @@ func TestGetEscapeAnalyticsGlobalSummary_should_ReturnExactMangledCount_When_Fix
 }
 
 func TestEscapeMangleRate_should_ComputeRatio_When_TotalSequencesPositive(t *testing.T) {
+	t.Parallel()
 	assert.InDelta(t, 0.4, escapeMangleRate(5, 2), 1e-9)
 	assert.Equal(t, 1.0, escapeMangleRate(3, 3))
 }
 
 func TestEscapeMangleRate_should_ReturnZero_When_TotalSequencesIsZero(t *testing.T) {
+	t.Parallel()
 	assert.Equal(t, 0.0, escapeMangleRate(0, 0))
 }

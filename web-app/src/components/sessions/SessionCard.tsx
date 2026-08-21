@@ -224,6 +224,7 @@ function SessionCardInner({
   const keyboardCommitRef = useRef(false);
   const cardRef = useRef<HTMLDivElement>(null);
   const snapshotToggleRef = useRef<HTMLButtonElement>(null);
+  const tagEditorTriggerRef = useRef<HTMLElement | null>(null);
   const [isSnapshotOpen, setIsSnapshotOpen] = useState(false);
 
   // Only fetch snapshot for active sessions (creating/paused/loading sessions have stale output).
@@ -403,6 +404,7 @@ function SessionCardInner({
 
   const handleEditTags = (e: React.MouseEvent) => {
     e.stopPropagation();
+    tagEditorTriggerRef.current = e.currentTarget as HTMLElement;
     setIsTagEditorOpen(true);
   };
 
@@ -466,6 +468,7 @@ function SessionCardInner({
           tags={session.tags || []}
           onSave={(newTags) => { onUpdateTags(session.id, newTags); setIsTagEditorOpen(false); }}
           onCancel={() => setIsTagEditorOpen(false)}
+          triggerRef={tagEditorTriggerRef}
           sessionTitle={session.title}
         />
       )}

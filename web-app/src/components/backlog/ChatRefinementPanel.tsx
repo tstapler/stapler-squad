@@ -1,6 +1,7 @@
 // +feature: backlog:chat-refinement-panel
 
 import { useState, useCallback } from "react";
+import { getErrorMessage } from "@/lib/utils/connectError";
 import * as styles from "./ChatRefinementPanel.css";
 
 export interface ChatTurn {
@@ -55,7 +56,7 @@ export function ChatRefinementPanel({ clarifyingQuestions, onSend }: ChatRefinem
         },
       ]);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to send message");
+      setError(getErrorMessage(err, "Failed to send message"));
     } finally {
       setSending(false);
     }

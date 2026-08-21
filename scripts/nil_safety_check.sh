@@ -52,7 +52,7 @@ echo "" | tee -a "$RESULTS_FILE"
 echo -e "${RED}🚨 CRITICAL: Channel operations without nil checks${NC}" | tee -a "$RESULTS_FILE"
 echo "Looking for channel operations (close, send, receive) without nil checks..." | tee -a "$RESULTS_FILE"
 
-find . -name "*.go" -not -path "./vendor/*" -not -path "./.git/*" | xargs grep -n "close(" | grep -v "if.*!= nil" | head -10 | tee -a "$RESULTS_FILE"
+find . -name "*.go" -not -path "./vendor/*" -not -path "./.git/*" -print0 | xargs -0 grep -n "close(" | grep -v "if.*!= nil" | head -10 | tee -a "$RESULTS_FILE"
 
 echo "" | tee -a "$RESULTS_FILE"
 
@@ -60,7 +60,7 @@ echo "" | tee -a "$RESULTS_FILE"
 echo -e "${YELLOW}⚠️  HIGH RISK: Potential concurrent access issues${NC}" | tee -a "$RESULTS_FILE" 
 echo "Looking for goroutines accessing shared state..." | tee -a "$RESULTS_FILE"
 
-find . -name "*.go" -not -path "./vendor/*" -not -path "./.git/*" | xargs grep -n -A 3 -B 1 "go func\|goroutine" | grep -E "(\.|\->)" | head -10 | tee -a "$RESULTS_FILE"
+find . -name "*.go" -not -path "./vendor/*" -not -path "./.git/*" -print0 | xargs -0 grep -n -A 3 -B 1 "go func\|goroutine" | grep -E "(\.|\->)" | head -10 | tee -a "$RESULTS_FILE"
 
 echo "" | tee -a "$RESULTS_FILE"
 
@@ -68,7 +68,7 @@ echo "" | tee -a "$RESULTS_FILE"
 echo -e "${YELLOW}⚠️  MEDIUM RISK: Error handling with potential nil states${NC}" | tee -a "$RESULTS_FILE"
 echo "Looking for error returns that might leave objects partially initialized..." | tee -a "$RESULTS_FILE"
 
-find . -name "*.go" -not -path "./vendor/*" -not -path "./.git/*" | xargs grep -n -A 2 "if err != nil" | grep "return.*nil" | head -10 | tee -a "$RESULTS_FILE"
+find . -name "*.go" -not -path "./vendor/*" -not -path "./.git/*" -print0 | xargs -0 grep -n -A 2 "if err != nil" | grep "return.*nil" | head -10 | tee -a "$RESULTS_FILE"
 
 echo "" | tee -a "$RESULTS_FILE"
 
@@ -76,7 +76,7 @@ echo "" | tee -a "$RESULTS_FILE"
 echo -e "${GREEN}✅ GOOD PATTERNS: Existing nil safety practices${NC}" | tee -a "$RESULTS_FILE"
 echo "Documenting good nil checking patterns found in codebase..." | tee -a "$RESULTS_FILE"
 
-find . -name "*.go" -not -path "./vendor/*" -not -path "./.git/*" | xargs grep -n "if.*!= nil" | head -10 | tee -a "$RESULTS_FILE"
+find . -name "*.go" -not -path "./vendor/*" -not -path "./.git/*" -print0 | xargs -0 grep -n "if.*!= nil" | head -10 | tee -a "$RESULTS_FILE"
 
 echo "" | tee -a "$RESULTS_FILE"
 

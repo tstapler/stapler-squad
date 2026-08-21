@@ -22,11 +22,30 @@ func testGitSignature() *object.Signature {
 
 // initGitRepoForTest creates a new git repository at dir using go-git,
 // replacing subprocess-based `git init` fixture setup.
+//
+// It also sets a local (repo-scoped, not --global) user.name/user.email via
+// go-git's config API. go-git commits always supply their own per-commit
+// CommitOptions.Author/Committer and don't need this, but several tests reuse
+// this repo (or a clone of it, e.g. setupPRFixSyncRepo's originDir) for
+// further commits made via the plain git CLI (runGitTestCmd), which reads
+// identity from git config rather than any argument. That works on a dev
+// machine with a global identity configured, but CI runners have none and
+// fail with "Author identity unknown" — setting it here once, locally, fixes
+// every downstream CLI commit against this repo.
 func initGitRepoForTest(t *testing.T, dir string) *git.Repository {
 	t.Helper()
 	repo, err := git.PlainInit(dir, false)
 	if err != nil {
 		t.Fatalf("git init %s failed: %v", dir, err)
+	}
+	cfg, err := repo.Config()
+	if err != nil {
+		t.Fatalf("git config %s failed: %v", dir, err)
+	}
+	cfg.User.Name = "Test"
+	cfg.User.Email = "test@example.com"
+	if err := repo.SetConfig(cfg); err != nil {
+		t.Fatalf("git set config %s failed: %v", dir, err)
 	}
 	return repo
 }

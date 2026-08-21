@@ -11,6 +11,7 @@ import (
 )
 
 func TestEntryIDStability(t *testing.T) {
+	t.Parallel()
 	text := "build the auth service"
 	id1 := entryID(text)
 	id2 := entryID(text)
@@ -23,12 +24,14 @@ func TestEntryIDStability(t *testing.T) {
 }
 
 func TestEntryIDDifferentTexts(t *testing.T) {
+	t.Parallel()
 	if entryID("a") == entryID("b") {
 		t.Fatal("different texts must produce different IDs")
 	}
 }
 
 func TestRingBufferEviction(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	store := NewPromptStore(filepath.Join(dir, "prompts.json"))
 
@@ -87,6 +90,7 @@ func TestRingBufferEviction(t *testing.T) {
 }
 
 func TestRecordUsageUpsert(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	store := NewPromptStore(filepath.Join(dir, "prompts.json"))
 
@@ -119,6 +123,7 @@ func TestRecordUsageUpsert(t *testing.T) {
 }
 
 func TestSaveLoadRoundtrip(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "prompts.json")
 	store := NewPromptStore(path)
@@ -138,6 +143,7 @@ func TestSaveLoadRoundtrip(t *testing.T) {
 }
 
 func TestLoadMissingFile(t *testing.T) {
+	t.Parallel()
 	store := NewPromptStore(filepath.Join(t.TempDir(), "nonexistent.json"))
 	entries, err := store.Load()
 	if err != nil {
@@ -152,6 +158,7 @@ func TestLoadMissingFile(t *testing.T) {
 }
 
 func TestAtomicWrite(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "prompts.json")
 	store := NewPromptStore(path)

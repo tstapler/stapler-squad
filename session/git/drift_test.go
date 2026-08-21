@@ -27,6 +27,7 @@ func commitOnOrigin(t *testing.T, origin string, n int) {
 // no-drift baseline: a freshly branched worktree with nothing new on main reports
 // zero commits behind.
 func TestBehindOriginMain_should_ReportZero_When_BranchIsCurrent(t *testing.T) {
+	t.Parallel()
 	origin := setupTestRepo(t)
 	work := cloneTestRepo(t, origin)
 	runGit(t, work, "checkout", "-b", "feature")
@@ -41,6 +42,7 @@ func TestBehindOriginMain_should_ReportZero_When_BranchIsCurrent(t *testing.T) {
 // landed on origin after the worktree's clone, without requiring any prior fetch by
 // the caller.
 func TestBehindOriginMain_should_CountFreshlyPushedUpstreamCommits_When_BranchNeverFetched(t *testing.T) {
+	t.Parallel()
 	origin := setupTestRepo(t)
 	work := cloneTestRepo(t, origin)
 	runGit(t, work, "checkout", "-b", "feature")
@@ -55,6 +57,7 @@ func TestBehindOriginMain_should_CountFreshlyPushedUpstreamCommits_When_BranchNe
 // TestBehindOriginMain_should_ReturnError_When_OriginUnreachable verifies a fetch
 // failure surfaces as an error rather than silently reporting zero drift.
 func TestBehindOriginMain_should_ReturnError_When_OriginUnreachable(t *testing.T) {
+	t.Parallel()
 	origin := setupTestRepo(t)
 	work := cloneTestRepo(t, origin)
 	runGit(t, work, "checkout", "-b", "feature")
@@ -68,6 +71,7 @@ func TestBehindOriginMain_should_ReturnError_When_OriginUnreachable(t *testing.T
 // verifies the common case: a branch behind main but not past the threshold is left
 // alone entirely (no merge attempted).
 func TestEnsureBranchSyncedWithMain_should_ReturnOkWithoutSyncing_When_UnderThreshold(t *testing.T) {
+	t.Parallel()
 	origin := setupTestRepo(t)
 	work := cloneTestRepo(t, origin)
 	runGit(t, work, "checkout", "-b", "feature")
@@ -87,6 +91,7 @@ func TestEnsureBranchSyncedWithMain_should_ReturnOkWithoutSyncing_When_UnderThre
 // merges cleanly, is resynced and pushed automatically so review proceeds on an
 // up-to-date branch instead of an inflated diff.
 func TestEnsureBranchSyncedWithMain_should_SyncAndReturnOk_When_DriftedButMergeable(t *testing.T) {
+	t.Parallel()
 	origin := setupTestRepo(t)
 	work := cloneTestRepo(t, origin)
 	runGit(t, work, "checkout", "-b", "feature")
@@ -118,6 +123,7 @@ func TestEnsureBranchSyncedWithMain_should_SyncAndReturnOk_When_DriftedButMergea
 // the caller must not be told "ok" and sent on to review an inflated diff — it must
 // be told exactly why, and handed the conflicted file list.
 func TestEnsureBranchSyncedWithMain_should_BlockWithConflictDetails_When_DriftedAndConflicting(t *testing.T) {
+	t.Parallel()
 	origin := setupTestRepo(t)
 	work := cloneTestRepo(t, origin)
 	runGit(t, work, "checkout", "-b", "feature")
@@ -151,6 +157,7 @@ func TestEnsureBranchSyncedWithMain_should_BlockWithConflictDetails_When_Drifted
 // nil-worktree guard (directory-mode sessions, or a worktree row that's been cleaned
 // up) fails open rather than erroring.
 func TestEnsureBranchSyncedWithMain_should_ReturnOk_When_WorktreePathEmpty(t *testing.T) {
+	t.Parallel()
 	ok, summary := EnsureBranchSyncedWithMain("", "feature", "main", 50)
 	assert.True(t, ok)
 	assert.Empty(t, summary)
@@ -161,6 +168,7 @@ func TestEnsureBranchSyncedWithMain_should_ReturnOk_When_WorktreePathEmpty(t *te
 // unreachable origin), EnsureBranchSyncedWithMain must not block review on a broken
 // detector.
 func TestEnsureBranchSyncedWithMain_should_ReturnOk_When_DriftDetectionFails(t *testing.T) {
+	t.Parallel()
 	origin := setupTestRepo(t)
 	work := cloneTestRepo(t, origin)
 	runGit(t, work, "checkout", "-b", "feature")

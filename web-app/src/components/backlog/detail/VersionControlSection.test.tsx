@@ -55,6 +55,7 @@ function makeItem(overrides: Partial<BacklogItem> = {}): BacklogItem {
     notes: "",
     statusEvents: [],
     progressNotes: [],
+    activityNotes: [],
     totalEstimatedCostUsd: 0,
     ...overrides,
   };

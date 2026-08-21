@@ -1,8 +1,8 @@
 === done-0.md ===
-Call report_progress with item_id=char-fixture-1, criteria_index=0, status=pass
+Call report_progress with item_id=char-fixture-1, criteria_index=0, status=pass. Include the optional note parameter with a 1-2 sentence description of what you verified (e.g. "ran the new unit test, it passes" or "manually tested via curl against the new endpoint") — it is appended to this item's permanent audit trail and is what a reviewer reads to judge whether this criterion is genuinely done, not just marked done.
 
 === fail-0.md ===
-Call report_progress with item_id=char-fixture-1, criteria_index=0, status=fail
+Call report_progress with item_id=char-fixture-1, criteria_index=0, status=fail. Include the optional note parameter with a 1-2 sentence explanation of specifically what is blocking this criterion — it is appended to this item's permanent audit trail and is what a reviewer or the next session reads to understand why this criterion isn't done yet.
 
 === help.md ===
 # Available Backlog Commands
@@ -12,6 +12,8 @@ Call report_progress with item_id=char-fixture-1, criteria_index=0, status=fail
 - `/backlog/fail-0` — Mark criterion 0 as failed
 - `/backlog/review` — Submit for review with a summary
 - `/backlog/ship` — Create a PR with /github:pr-ship and submit for review
+- `/backlog/block` — Report that you're stuck and hand this item back (not for bugs you can fix yourself)
+- `/backlog/duplicate` — Report this item is already covered by an existing PR, issue, or commit
 
 === review.md ===
 Call request_review with item_id=char-fixture-1 and a 2-3 sentence summary of what was built.
@@ -20,7 +22,7 @@ Do NOT end your session after this. Call wait_for_backlog_event(item_id, event_t
 
 PASS → run /backlog/ship now to open the pull request yourself (it drives /github:pr-ship through local CI, code review, remote CI, and merge-conflict resolution) — do not stop here; shipping the PR is part of this task, not a separate step someone else does.
 
-FAIL/PARTIAL → fix the noted gaps in this same session and run /backlog/review again. Keep count of how many times you've run /backlog/review in THIS session (count your own calls in this conversation — nothing tracks it for you). After 3 review cycles without a PASS, STOP looping: run /backlog/ship anyway to open a PR so a human can pick up the review directly, rather than retrying /backlog/review again.
+FAIL/PARTIAL → fix the noted gaps in this same session and run /backlog/review again. Its request_review call reports which attempt number you're on out of 3 allowed in this session — the count is tracked server-side, so trust what it reports rather than counting your own calls. Once it says you've hit the cap, STOP looping: run /backlog/ship anyway to open a PR so a human can pick up the review directly, rather than retrying /backlog/review again.
 
 === ship.md ===
 You are ready to ship your work as a pull request — either because /backlog/review just returned PASS, or because review has looped without reaching a PASS and it's time to hand the work to a human instead of retrying indefinitely.

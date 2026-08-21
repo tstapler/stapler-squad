@@ -10,6 +10,7 @@ import (
 )
 
 func TestCorrelateCandidate_ReturnsResolvedPIDExact_When_DetectFindsOneMatchByPID(t *testing.T) {
+	t.Parallel()
 	tmpHome := t.TempDir()
 	uuid := "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
 	projectDir := "-Users-alice-myproject"
@@ -35,6 +36,7 @@ func TestCorrelateCandidate_ReturnsResolvedPIDExact_When_DetectFindsOneMatchByPI
 }
 
 func TestCorrelateCandidate_ReturnsAmbiguous_When_PathDetectionFindsTwoCandidates(t *testing.T) {
+	t.Parallel()
 	tmpHome := t.TempDir()
 	projectPath := "/Users/alice/ambiguousproject"
 	projectDir := ClaudeProjectDirName(projectPath)
@@ -66,6 +68,7 @@ func TestCorrelateCandidate_ReturnsAmbiguous_When_PathDetectionFindsTwoCandidate
 }
 
 func TestCorrelateCandidate_ReturnsNotFound_When_NeitherPIDNorPathMatch(t *testing.T) {
+	t.Parallel()
 	tmpHome := t.TempDir()
 	inspector := &mockProcessInspector{files: nil}
 	detector := NewHistoryFileDetectorWithHomeDir(inspector, tmpHome)
