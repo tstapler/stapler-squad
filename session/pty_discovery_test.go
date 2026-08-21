@@ -388,20 +388,13 @@ func TestPTYDiscovery_StartStop(t *testing.T) {
 	}
 }
 
-// blockingSessionLister is a tmux.SessionLister test double that lets a test
-// synchronize with the exact moment monitorLoop's Refresh() call reaches
-// ListSessions(): on its first call it signals enteredCh, proving the caller
-// is actively inside Refresh() (holding PTYDiscovery.mu), then blocks until
-// releaseCh is closed. This gives TestPTYDiscovery_Stop_JoinsMonitorLoop a
-// deterministic window to call Stop() against a monitorLoop that is provably
-// still in-flight, instead of guessing at timing with a fixed sleep.
-//
-// enteredOnce guards close(enteredCh): with a 1ms DiscoveryInterval, the
-// ticker can fire (and race monitorLoop's select against stopCh) before Stop
-// unblocks the first call, driving a second call into ListSessions — without
-// the guard that second call would double-close enteredCh and panic. Once
-// releaseCh is closed, later calls to <-b.releaseCh return immediately, so
-// only the enteredCh signal needs guarding.
+// blockingSessionLister is a tmux.SessionLister test double that signals
+// enteredCh on its first call (proving monitorLoop is inside Refresh(),
+// holding PTYDiscovery.mu) then blocks until releaseCh is closed, giving
+// TestPTYDiscovery_Stop_JoinsMonitorLoop a deterministic window to call
+// Stop() against an in-flight monitorLoop instead of guessing with a sleep.
+// enteredOnce defensively guards against a second ListSessions() call
+// double-closing enteredCh.
 type blockingSessionLister struct {
 	enteredOnce sync.Once
 	enteredCh   chan struct{}
@@ -449,13 +442,24 @@ func TestPTYDiscovery_Stop_JoinsMonitorLoop(t *testing.T) {
 		enteredCh: make(chan struct{}),
 		releaseCh: make(chan struct{}),
 	}
+	// Ensures releaseCh is closed even if a t.Fatal below exits via
+	// runtime.Goexit before reaching the close() later in this function —
+	// otherwise monitorLoop stays blocked in ListSessions() forever and
+	// goleak.VerifyNone never runs to catch the leak.
+	var releaseOnce sync.Once
+	t.Cleanup(func() { releaseOnce.Do(func() { close(lister.releaseCh) }) })
+
 	pd := NewPTYDiscoveryWithConfig(PTYDiscoveryConfig{DiscoveryInterval: time.Millisecond}, WithSessionLister(lister))
 	pd.Start()
 
 	// Block until monitorLoop's initial Refresh() call reaches
 	// ListSessions() — from this point on, monitorLoop is guaranteed to be
 	// actively executing Refresh() (holding pd.mu).
-	<-lister.enteredCh
+	select {
+	case <-lister.enteredCh:
+	case <-time.After(5 * time.Second):
+		t.Fatal("monitorLoop never reached ListSessions()")
+	}
 
 	stopReturned := make(chan struct{})
 	go func() {
@@ -473,7 +477,7 @@ func TestPTYDiscovery_Stop_JoinsMonitorLoop(t *testing.T) {
 	case <-time.After(50 * time.Millisecond):
 	}
 
-	close(lister.releaseCh)
+	releaseOnce.Do(func() { close(lister.releaseCh) })
 
 	select {
 	case <-stopReturned:

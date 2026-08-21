@@ -1224,15 +1224,8 @@ func TestSessionDriver_DialogGaveUp_FallsThroughToInactivityEscalation(t *testin
 		// reached via its timedOut fallback once driverReadyTimeout (30s)
 		// elapses.
 		//
-		// synctest.Wait only fast-forwards the clock past the *current*
-		// generation of durably-blocked timers — once every goroutine is
-		// blocked (the driver parked on its poll ticker) it returns
-		// immediately rather than continuing to advance time indefinitely.
-		// The initial-prompt send is gated on driverReadyTimeout (30s)
-		// elapsing, so the test goroutine must itself durably block (via
-		// time.Sleep) past that deadline to let the ticker actually fire
-		// enough times; only then does Wait clean up any trailing
-		// non-timer-gated work.
+		// synctest.Wait won't advance the clock past driverReadyTimeout on its
+		// own, so sleep past it first to let the poll ticker actually fire.
 		time.Sleep(driverReadyTimeout + 5*time.Second)
 		synctest.Wait()
 
