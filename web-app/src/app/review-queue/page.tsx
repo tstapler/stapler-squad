@@ -63,7 +63,7 @@ function ReviewQueueContent() {
   const sessionTriggerRef = useRef<HTMLElement | null>(null);
 
   // Use the global session service context — avoids a competing WebSocket stream
-  const { sessions, runOneShot } = useSessionServiceContext();
+  const { sessions } = useSessionServiceContext();
 
   // Backlog items whose plan is awaiting the user's approval — surfaced here so "things
   // needing you" aren't scattered across the board/stuck-items page too.
@@ -71,16 +71,6 @@ function ReviewQueueContent() {
   const planReviewItems = useMemo(
     () => backlogItems.filter((item) => getAvailableActions(item).actions.has("approve_plan")),
     [backlogItems]
-  );
-
-  // S3-3: Adapter from RunOneShotResponse to the shape ReviewQueuePanel expects
-  const handleRunOneShot = useCallback(
-    async (sessionId: string, prompt: string) => {
-      const response = await runOneShot(sessionId, prompt, 0);
-      if (!response) return null;
-      return { prUrl: response.prUrl || undefined, error: response.error || undefined };
-    },
-    [runOneShot]
   );
 
   // Acknowledge function for dismissing sessions from the modal.
@@ -350,7 +340,6 @@ function ReviewQueueContent() {
           onSessionClick={handleSessionClick}
           onItemsChange={handleItemsChange}
           onAcknowledged={handleAcknowledged}
-          onRunOneShot={handleRunOneShot}
           autoAdvance={autoAdvance}
           onAutoAdvanceChange={(val) => {
             setAutoAdvance(val);

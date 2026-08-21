@@ -66,7 +66,6 @@ jest.mock("@/components/sessions/ReviewQueuePanel", () => ({
   ReviewQueuePanel: (props: {
     onItemsChange?: (items: ReviewItem[]) => void;
     onAcknowledged?: (id: string) => void;
-    onRunOneShot?: unknown;
     onSessionClick?: (sessionId: string) => void;
   }) => {
     capturedOnItemsChange = props.onItemsChange;

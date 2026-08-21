@@ -158,6 +158,9 @@ type SessionService struct {
 	// checkpointSvc handles CreateCheckpoint/ListCheckpoints/ClearConversationState RPCs.
 	checkpointSvc *CheckpointService
 
+	// prCreationSvc handles DraftPullRequest/CreatePullRequest RPCs.
+	prCreationSvc *PRCreationService
+
 	// featureFlagSvc handles GetFeatureFlags/UpdateFeatureFlag RPCs.
 	featureFlagSvc *FeatureFlagService
 
@@ -604,6 +607,14 @@ func NewSessionServiceWithSearchEngine(storage session.InstanceStore, eventBus *
 	// loadInstancesWithWiring so ClearConversationState gets properly-wired instances.
 	svc.checkpointSvc.SetLoadInstancesFn(svc.loadInstancesWithWiring)
 
+	// Construct prCreationSvc with the shared storage/eventBus and a bound
+	// findInstance method value (narrow dependency, not the whole SessionService —
+	// see interface-pollution-checklist.md). headlessPool and
+	// backlogLifecycleListener are wired onto SessionService after construction
+	// (see the Set* wiring doc comment above NewSessionService), so they are nil
+	// here at construction time.
+	svc.prCreationSvc = NewPRCreationService(storage, eventBus, svc.headlessPool, svc.backlogLifecycleListener, svc.findInstance)
+
 	// Wire the autonomous orchestration service with a storage getter closure.
 	autonomousSvc := NewAutonomousOrchestrationService(nil, eventBus)
 	autonomousSvc.SetStorageGetter(func() *session.Storage {
@@ -1046,6 +1057,7 @@ func (s *SessionService) WireInstanceCallbacks(inst *session.LiveInstance) {
 // CreateDirectorySession so that backlog state transitions fire on session exit.
 func (s *SessionService) SetBacklogLifecycleListener(l *session.BacklogLifecycleListener) {
 	s.backlogLifecycleListener = l
+	s.prCreationSvc.SetBacklogLifecycleListener(l)
 }
 
 // GetBacklogLifecycleListener returns the wired BacklogLifecycleListener (nil if
@@ -1212,6 +1224,7 @@ func (s *SessionService) SetHistoryLinker(hl *session.HistoryLinker) {
 func (s *SessionService) SetHeadlessPool(pool *headless.Pool) {
 	s.headlessPool = pool
 	s.autonomousSvc.SetPool(pool)
+	s.prCreationSvc.SetHeadlessPool(pool)
 }
 
 // SetLifecycleContext binds the server's root context to the service.
@@ -3364,6 +3377,18 @@ func (s *SessionService) GetPRInfo(
 	req *connect.Request[sessionv1.GetPRInfoRequest],
 ) (*connect.Response[sessionv1.GetPRInfoResponse], error) {
 	return s.githubSvc.GetPRInfo(ctx, req)
+}
+
+// DraftPullRequest delegates to prCreationSvc. See PRCreationService for the
+// handler implementation.
+func (s *SessionService) DraftPullRequest(ctx context.Context, req *connect.Request[sessionv1.DraftPullRequestRequest]) (*connect.Response[sessionv1.DraftPullRequestResponse], error) {
+	return s.prCreationSvc.DraftPullRequest(ctx, req)
+}
+
+// CreatePullRequest delegates to prCreationSvc. See PRCreationService for the
+// handler implementation.
+func (s *SessionService) CreatePullRequest(ctx context.Context, req *connect.Request[sessionv1.CreatePullRequestRequest]) (*connect.Response[sessionv1.CreatePullRequestResponse], error) {
+	return s.prCreationSvc.CreatePullRequest(ctx, req)
 }
 
 // GetPRComments retrieves all comments on the PR for a session.
