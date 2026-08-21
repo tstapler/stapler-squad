@@ -168,6 +168,14 @@ type TmuxExecGateConfig struct {
 	// Zero or unset means "use the default" — see ResyncFastLaneSlotsOrDefault.
 	// Default: 4.
 	ResyncFastLaneSlots int `json:"resyncFastLaneSlots"`
+
+	// InputFastLaneSlots is the number of concurrent tmux subprocess execution
+	// slots reserved for keystroke input traffic (the legacy per-keystroke
+	// send-keys path used when STAPLER_SQUAD_USE_CONTROL_MODE=false), so a
+	// poller flooding the shared Slots pool with capture-pane calls never
+	// makes user keystrokes queue behind it. Zero or unset means "use the
+	// default" — see InputFastLaneSlotsOrDefault. Default: 4.
+	InputFastLaneSlots int `json:"inputFastLaneSlots"`
 }
 
 // defaultTmuxExecGateSlots is used whenever Slots is unset (zero), including
@@ -177,6 +185,10 @@ const defaultTmuxExecGateSlots = 8
 // defaultResyncFastLaneSlots is used whenever ResyncFastLaneSlots is unset
 // (zero), including for configs saved before this field existed.
 const defaultResyncFastLaneSlots = 4
+
+// defaultInputFastLaneSlots is used whenever InputFastLaneSlots is unset
+// (zero), including for configs saved before this field existed.
+const defaultInputFastLaneSlots = 4
 
 // SlotsOrDefault returns Slots, falling back to defaultTmuxExecGateSlots when
 // unset (covers both a fresh zero-value struct and a config.json saved before
@@ -197,6 +209,17 @@ func (c TmuxExecGateConfig) ResyncFastLaneSlotsOrDefault() int {
 		return defaultResyncFastLaneSlots
 	}
 	return c.ResyncFastLaneSlots
+}
+
+// InputFastLaneSlotsOrDefault returns InputFastLaneSlots, falling back to
+// defaultInputFastLaneSlots when unset (covers both a fresh zero-value
+// struct and a config.json saved before this field existed, which unmarshals
+// the same way).
+func (c TmuxExecGateConfig) InputFastLaneSlotsOrDefault() int {
+	if c.InputFastLaneSlots <= 0 {
+		return defaultInputFastLaneSlots
+	}
+	return c.InputFastLaneSlots
 }
 
 // BrowserPassthroughCDPConfig holds tunable parameters for the Chrome DevTools

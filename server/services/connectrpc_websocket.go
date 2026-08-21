@@ -2973,7 +2973,7 @@ func sendInputToTmux(serverSocket, tmuxSessionName string, data []byte) error {
 
 	gateCtx, gateCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer gateCancel()
-	err := runTmuxGatedErr(gateCtx, serverSocket, func() error {
+	err := runTmuxInputGatedErr(gateCtx, serverSocket, func() error {
 		// Use a fresh context for the command itself, not gateCtx. Gate
 		// acquisition can consume most of gateCtx's budget under contention,
 		// leaving the exec below racing an already-expiring deadline: if
@@ -3019,13 +3019,29 @@ func sendInputToTmuxWithRetry(serverSocket, tmuxSessionName string, data []byte)
 }
 
 // runTmuxGatedErr acquires a tmux exec-gate slot for serverSocket (bounded by
-// ctx), runs fn, then releases the slot. These 3 call sites are the only
-// direct tmux subprocess spawns in this file that don't already route through
-// a gated TmuxSession method (see session/tmux's runGated, which this mirrors).
+// ctx), runs fn, then releases the slot. Used for resize-window/resize-pane
+// calls against external (unmanaged) sessions — see session/tmux's runGated,
+// which this mirrors, for the primary call-site pattern.
 func runTmuxGatedErr(ctx context.Context, serverSocket string, fn func() error) error {
 	release, err := tmux.AcquireExecSlot(ctx, serverSocket)
 	if err != nil {
 		return fmt.Errorf("exec gate: %w", err)
+	}
+	defer release()
+	return fn()
+}
+
+// runTmuxInputGatedErr acquires a tmux input-fast-lane exec-gate slot for
+// serverSocket (bounded by ctx), runs fn, then releases the slot. Used
+// specifically for keystroke input traffic (the legacy per-keystroke
+// send-keys path, sendInputToTmux): it draws from tmux.AcquireInputExecSlot's
+// pool, separate from the shared default pool runTmuxGatedErr uses, so user
+// input never queues behind a background poller's capture-pane calls on the
+// same tmux server.
+func runTmuxInputGatedErr(ctx context.Context, serverSocket string, fn func() error) error {
+	release, err := tmux.AcquireInputExecSlot(ctx, serverSocket)
+	if err != nil {
+		return fmt.Errorf("input exec gate: %w", err)
 	}
 	defer release()
 	return fn()

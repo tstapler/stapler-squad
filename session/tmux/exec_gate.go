@@ -86,6 +86,34 @@ func AcquireResyncExecSlot(ctx context.Context, serverSocket string) (release fu
 	return rel, nil
 }
 
+// inputGateKeySuffix separates the input fast-lane pool's lock directory from
+// the default pool's, for the same serverSocket. gateDir itself is
+// unmodified — this just changes the key passed into it.
+const inputGateKeySuffix = "#input"
+
+// AcquireInputExecSlot blocks until a slot in the input fast-lane pool is
+// free, or ctx is done. It draws from a pool entirely separate from
+// AcquireExecSlot's default pool — keyed on serverSocket+"#input" rather
+// than serverSocket — sized by InputFastLaneSlotsOrDefault() rather than
+// TmuxExecGate.SlotsOrDefault(). This keeps user keystrokes (the legacy
+// per-keystroke send-keys path) from queuing behind a poller's capture-pane
+// traffic on the shared default pool. Saturating one pool never blocks or
+// borrows capacity from the other. release must be called exactly once,
+// after the subprocess this slot guards has fully exited, same contract as
+// AcquireExecSlot.
+func AcquireInputExecSlot(ctx context.Context, serverSocket string) (release func(), err error) {
+	dir, err := gateDir(serverSocket + inputGateKeySuffix)
+	if err != nil {
+		return nil, fmt.Errorf("input exec gate: resolve dir: %w", err)
+	}
+	n := appconfig.LoadConfig().TmuxExecGate.InputFastLaneSlotsOrDefault()
+	rel, _, acquireErr := acquireSlot(ctx, dir, n, true)
+	if acquireErr != nil {
+		return nil, acquireErr
+	}
+	return rel, nil
+}
+
 // TryAcquireExecSlot is the non-blocking variant for periodic background
 // pollers: if no slot is free right now, ok is false so the caller can skip
 // this cycle rather than queue behind interactive traffic.
