@@ -805,3 +805,62 @@ func TestRemoteApprovalRelay_RedeliversAfterDrop(t *testing.T) {
 		t.Errorf("handler call count after retry = %d, want still 1 (redelivery must not re-invoke the handler and re-prompt a human)", got)
 	}
 }
+
+// TestRemoteApprovalRelay_ExpiredBufferedDecisionIsNotRedelivered is the
+// regression test for the review-found gap in the redelivery buffer itself
+// (found independently by two reviewers): without a TTL, a buffered decision
+// stays redeliverable forever, so a genuinely later, byte-identical request
+// (classifier.PermissionRequestPayload carries no nonce/request ID) would
+// silently get the earlier human's stale answer with no prompt. Directly
+// backdates r.pendingAt (same package, unexported field) rather than
+// sleeping pendingRedeliveryTTL in a test.
+func TestRemoteApprovalRelay_ExpiredBufferedDecisionIsNotRedelivered(t *testing.T) {
+	pool := newTestPool(t)
+
+	var handlerCalls int32
+	handler := newFakePermissionRequestHandler()
+	handler.handle = func([]byte, string, *http.Request) []byte {
+		atomic.AddInt32(&handlerCalls, 1)
+		return []byte(`{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"allow"}}}`)
+	}
+
+	relay, err := NewRemoteApprovalRelay(pool, handler, RemoteApprovalRelayTarget{RemoteName: "expiry-remote", BasePath: "/base", StableSessionID: "expiry-session", Title: "Test"})
+	if err != nil {
+		t.Fatalf("NewRemoteApprovalRelay() error: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	relay.Start(ctx)
+	defer relay.Stop()
+
+	token, _ := relay.BearerToken()
+	sameRequest := json.RawMessage(`{"tool_name":"Bash","tool_input":{"command":"git push --force"}}`)
+	payloadBytes, err := json.Marshal(relayedApprovalPayload{Token: token, Request: sameRequest})
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+
+	// First attempt: buffer a decision via a forced write failure.
+	serverSide, clientSide := net.Pipe()
+	go func() { _, _ = clientSide.Write(payloadBytes) }()
+	relay.handleConnection(&writeFailConn{Conn: serverSide, writeErr: errors.New("simulated connection drop")})
+	_ = clientSide.Close()
+	if got := atomic.LoadInt32(&handlerCalls); got != 1 {
+		t.Fatalf("handler call count after first attempt = %d, want 1", got)
+	}
+
+	// Simulate the TTL having elapsed long ago.
+	relay.pendingAt = time.Now().Add(-2 * pendingRedeliveryTTL)
+
+	// A "retry" with the identical request bytes now, after expiry, must be
+	// treated as a genuinely new request -- the handler runs again rather
+	// than silently replaying the stale decision.
+	serverSide2, clientSide2 := net.Pipe()
+	go func() { _, _ = clientSide2.Write(payloadBytes) }()
+	relay.handleConnection(&writeFailConn{Conn: serverSide2, writeErr: errors.New("simulated connection drop")})
+	_ = clientSide2.Close()
+
+	if got := atomic.LoadInt32(&handlerCalls); got != 2 {
+		t.Errorf("handler call count after the expired-buffer retry = %d, want 2 (an expired buffer must not be redelivered -- the request must be re-decided)", got)
+	}
+}

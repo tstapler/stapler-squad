@@ -173,6 +173,24 @@ func (autoAllowClassifier) Classify(classifier.PermissionRequestPayload, classif
 	return classifier.ClassificationResult{Decision: classifier.AutoAllow, RuleID: "test-auto-allow", RuleName: "test auto-allow"}
 }
 
+// delayingClassifier stands in for a human taking real time to decide --
+// review found (verified empirically) that socat's own default half-close
+// wait (0.5s) silently drops the connection and hands the hook an empty,
+// exit-0 response long before any real decision could complete. delay only
+// needs to exceed that old default, not a full human-length wait, to prove
+// the fix (remoteApprovalHookAttemptTimeoutSeconds's -t bound) without
+// making the test itself slow.
+type delayingClassifier struct{ delay time.Duration }
+
+func (d delayingClassifier) BuildContext(cwd string) classifier.ClassificationContext {
+	return classifier.ClassificationContext{Cwd: cwd}
+}
+
+func (d delayingClassifier) Classify(classifier.PermissionRequestPayload, classifier.ClassificationContext) classifier.ClassificationResult {
+	time.Sleep(d.delay)
+	return classifier.ClassificationResult{Decision: classifier.AutoAllow, RuleID: "test-delayed-allow", RuleName: "test delayed allow"}
+}
+
 // remoteRelayWirePayload mirrors session/sshremote's unexported
 // relayedApprovalPayload JSON shape ({"token":...,"request":...}) -- this
 // package can't reference that type directly (unexported, different
@@ -390,5 +408,74 @@ func TestRemoteApprovalHookCommand_RealShellDeliversToRelay(t *testing.T) {
 	}
 	if decoded.HookSpecificOutput.Decision.Behavior != "allow" {
 		t.Errorf("Decision.Behavior = %q, want %q (from autoAllowClassifier)", decoded.HookSpecificOutput.Decision.Behavior, "allow")
+	}
+}
+
+// TestRemoteApprovalHookCommand_SurvivesSlowHumanDecision is the regression
+// test for the review-found timing bug: socat's own default half-close wait
+// (0.5s) silently dropped the connection -- with exit 0 and empty output --
+// long before any real human could decide, and the retry loop couldn't help
+// because socat never signaled failure. delayingClassifier's 2s delay
+// exceeds that old 0.5s default by 4x while staying fast enough for a unit
+// test; it does not attempt the full 4-minute production bound directly
+// (remoteApprovalHookAttemptTimeoutSeconds), only proves the mechanism that
+// bound depends on -- socat's -t flag actually widening the wait -- works.
+func TestRemoteApprovalHookCommand_SurvivesSlowHumanDecision(t *testing.T) {
+	if _, err := exec.LookPath("socat"); err != nil {
+		t.Skip("socat not on PATH -- skipping the real-shell timing proof")
+	}
+
+	srv := startRemoteRelayTestServer(t)
+	pool := tmux.NewSSHClientPool()
+	target := tmux.SSHTarget{Name: "hook-command-timing-remote", Addr: srv.Addr}
+	cfg := remoteRelayTestClientConfig(t, srv.HostKey)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	if _, err := pool.GetOrDial(ctx, target, &cfg); err != nil {
+		t.Fatalf("GetOrDial() error: %v", err)
+	}
+
+	handler := NewApprovalHandler(NewApprovalStore(""), nil, events.NewEventBus(4))
+	handler.SetClassifier(delayingClassifier{delay: 2 * time.Second})
+
+	basePath := t.TempDir()
+	relay, err := sshremote.NewRemoteApprovalRelay(pool, handler, sshremote.RemoteApprovalRelayTarget{
+		RemoteName:      target.Name,
+		BasePath:        basePath,
+		StableSessionID: "hook-command-timing-session",
+		Title:           "Hook Command Timing Test Session",
+	})
+	if err != nil {
+		t.Fatalf("NewRemoteApprovalRelay() error: %v", err)
+	}
+	relay.Start(ctx)
+	defer relay.Stop()
+
+	token, _ := relay.BearerToken()
+	socketPath := sshremote.RemoteApprovalSocketPath(basePath)
+	hookCmd := remoteApprovalHookCommand(RemoteHookTarget{SocketPath: socketPath, BearerToken: token})
+
+	reqJSON, err := json.Marshal(classifier.PermissionRequestPayload{
+		ToolName: "Bash", ToolInput: map[string]interface{}{"command": "echo hi"},
+		Cwd: "/home/agent/work", HookEventName: "PermissionRequest",
+	})
+	if err != nil {
+		t.Fatalf("marshal request payload: %v", err)
+	}
+
+	cmd := safeexec.CommandContext(ctx, "sh", "-c", hookCmd)
+	cmd.Stdin = bytes.NewReader(reqJSON)
+	out, runErr := cmd.CombinedOutput()
+	if runErr != nil {
+		t.Fatalf("real hook command failed: %v (output: %s)", runErr, out)
+	}
+
+	var decoded hookDecisionResponse
+	if err := json.Unmarshal(out, &decoded); err != nil {
+		t.Fatalf("hook command output %s did not decode as hookDecisionResponse (a pre-fix run would produce empty output here, since socat's default -t drops the connection before the 2s delayed decision arrives): %v", out, err)
+	}
+	if decoded.HookSpecificOutput.Decision.Behavior != "allow" {
+		t.Errorf("Decision.Behavior = %q, want %q (from delayingClassifier)", decoded.HookSpecificOutput.Decision.Behavior, "allow")
 	}
 }

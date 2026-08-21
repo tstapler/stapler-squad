@@ -171,92 +171,59 @@ func WithRemoteHookTarget(target RemoteHookTarget) InjectHookOption {
 	}
 }
 
-// remoteApprovalWriteTool is the executable the remote-aware PermissionRequest hook command
-// shells out to in order to write a raw JSON payload directly onto RemoteApprovalRelay's
-// Unix domain socket. Deliberately NOT curl: curl's --unix-socket transport still speaks
-// HTTP framing (a request line and headers) over the socket, but RemoteApprovalRelay.
-// decodePayload (session/sshremote/approval_relay.go) calls json.NewDecoder(conn).Decode
-// directly on the raw connection bytes with no HTTP parsing at all -- an HTTP-framed write
-// would fail to decode as JSON (a request line like "POST / HTTP/1.1" is not valid JSON) and
-// be silently dropped by handleConnection's decode-error branch. socat's `- UNIX-LISTEN:
-// <path>` form writes stdin bytes verbatim to the socket with no protocol framing, matching
-// the relay's actual wire format. This is a new remote-host dependency (socat must be
-// installed there) that no previous hook command required -- flagged here rather than
-// silently assumed; see this file's package doc / RemoteHookTarget's wiring-gap note for the
-// broader context this lands in.
+// remoteApprovalWriteTool is the executable the remote-aware PermissionRequest hook shells out
+// to, writing/reading the raw JSON payload directly on RemoteApprovalRelay's Unix socket with no
+// protocol framing (curl's --unix-socket still speaks HTTP framing, which the relay's raw
+// json.Decoder can't parse). Requires socat installed on the remote host.
 //
-// UNIX-LISTEN, not UNIX-CONNECT (a review-found production bug fixed here, not a stylistic
-// choice): RemoteApprovalRelay.dial (session/sshremote/approval_relay.go) calls
-// client.DialContext(ctx, "unix", socketPath) -- an SSH direct-streamlocal@openssh.com
-// channel-open, which per RFC 4254's extension makes the REMOTE HOST'S sshd itself connect()
-// to socketPath (confirmed against this repo's own real-sshd-mirroring test double,
-// session/sshremote/approval_relay_test.go's directStreamlocalHandler, which does exactly
-// `dialer.Dial("unix", msg.SocketPath)`). A connect() requires an already-bound, listening
-// peer at that path -- with UNIX-CONNECT on THIS side too, neither side ever listens, so
-// sshd's connect() always fails ("No such file or directory"), and no approval request can
-// ever reach the relay. Verified empirically: running the UNIX-CONNECT command against a
-// real RemoteApprovalRelay + real in-process sshd produced exactly that socat error and the
-// handler was never invoked. UNIX-LISTEN,unlink-early makes the hook script itself the
-// listening peer sshd's connect() reaches -- unlink-early removes a stale socket file left
-// behind by an earlier invocation before binding, since the fixed per-session socket path
-// (RemoteApprovalSocketPath) is reused across every approval request in a session's lifetime.
+// UNIX-LISTEN, not UNIX-CONNECT: RemoteApprovalRelay.dial (session/sshremote/approval_relay.go)
+// makes the remote sshd connect() to this socket (direct-streamlocal@openssh.com), so the hook
+// script must be the listening peer. mode=0600 restricts the socket to the session's own user --
+// a plain UNIX-LISTEN would otherwise let any local user on the remote host connect first, read
+// the bearer token, and forge an approval decision (review-found, verified empirically).
+// unlink-early clears a stale socket file from an earlier invocation before binding.
 const remoteApprovalWriteTool = "socat"
 
-// remoteApprovalHookMaxAttempts bounds how many times the generated hook command re-listens
-// and resends the SAME captured request if a prior attempt's socat exits non-zero (the
-// direct-streamlocal channel died mid-exchange -- a network blip, requirements.md AC4's
-// "network blip drops and re-establishes the connection mid-request"). Paired with
-// RemoteApprovalRelay's redelivery buffering (handleConnection in approval_relay.go): a retry
-// resending the identical request bytes lets the relay recognize it as the same logical
-// request and return an already-computed decision immediately, rather than re-prompting a
-// human who already decided once.
+// remoteApprovalHookMaxAttempts bounds how many times the hook re-listens and resends the same
+// captured request after a network blip (requirements.md AC4). Paired with
+// RemoteApprovalRelay.handleConnection's redelivery buffering: a retry resending identical
+// request bytes gets back an already-computed decision instead of re-prompting a human.
 const remoteApprovalHookMaxAttempts = 3
 
-// remoteApprovalHookAttemptTimeoutSeconds bounds a single UNIX-LISTEN attempt: without this,
-// a listen that never gets connected to (e.g. the relay's whole SSH connection, not just this
-// one channel, is down) would hang the hook invocation indefinitely instead of exhausting its
-// retries and returning control to Claude Code's own hook timeout.
-const remoteApprovalHookAttemptTimeoutSeconds = 10
+// remoteApprovalHookAttemptTimeoutSeconds bounds a single UNIX-LISTEN attempt's wait for a
+// response. Must cover a real human decision (ApprovalHandler.approvalTimeout(), 4 minutes by
+// default), not just a connection probe -- socat's own default half-close wait is 0.5s, which
+// review found (verified empirically) silently drops the connection before any human could
+// possibly answer, handing the hook an empty, exit-0 response; the retry loop below then never
+// fires either, since a non-empty check (not exit code) is what decides "done." Both socat's -t
+// and the outer `timeout` wrapper use this bound.
+const remoteApprovalHookAttemptTimeoutSeconds = 270 // 4.5 min: covers the 4-minute default approval wait + margin
 
-// remoteApprovalHookCommand builds the shell command a remote session's PermissionRequest
-// hook runs to deliver its payload to target instead of POSTing to hookBaseURLFn(). It
-// captures Claude Code's raw hook-event JSON (piped to the command's stdin, exactly like the
-// local curl command's `-d @-` reads its POST body from stdin) once into $req via $(cat) --
-// required so it can be resent on a retry without re-reading stdin, which a second `cat` in a
-// later loop iteration would find already exhausted -- then wraps it as the "request" field of
-// relayedApprovalPayload's JSON shape (session/sshremote/approval_relay.go) --
-// {"token":"<token>","request":<stdin>} -- via printf's own %s substitution (not Go's, not
-// shell string interpolation): the captured value is already a complete JSON object emitted
-// by Claude Code itself, so passing it through printf's %s is a safe, non-reinterpreted literal
-// substitution needing no escaping, the same property the original single-shot version got
-// from piping `cat` directly. token is bearerCredential's base64.RawURLEncoding output
-// (session/sshremote/approval_relay.go's newBearerCredential) -- URL-safe base64 (letters,
-// digits, '-', '_' only) -- safe to interpolate into a single-quoted shell string with no
-// additional escaping.
-//
-// Retries up to remoteApprovalHookMaxAttempts times (each bounded by
-// remoteApprovalHookAttemptTimeoutSeconds), one second apart, re-listening (a fresh
-// UNIX-LISTEN,unlink-early each attempt -- the previous attempt's listener is gone once its
-// socat process exits) and resending the SAME captured $req -- see remoteApprovalWriteTool's
-// doc comment for why UNIX-LISTEN rather than UNIX-CONNECT, and RemoteApprovalRelay.
-// handleConnection's redelivery-buffering doc comment (session/sshremote/approval_relay.go)
-// for how the relay recognizes a retried request and avoids re-prompting a human who already
-// decided.
+// remoteApprovalHookCommand builds the shell command a remote session's PermissionRequest hook
+// runs to deliver its payload to target. Captures stdin once into $req via $(cat) (a later
+// retry's `cat` would find stdin already exhausted), embeds it via printf's own %s substitution
+// (not Go's, not shell interpolation -- $req is already complete JSON, safe to pass through
+// literally), and shell-quotes every value that isn't provably safe (posixShellQuoteRemote) --
+// SocketPath is caller-influenced (a session's remote working directory), so it is NOT safe to
+// splice unquoted (review-found shell-injection RCE, verified empirically: a crafted path
+// containing a single quote broke out of the command and ran arbitrary shell). Retries up to
+// remoteApprovalHookMaxAttempts times, one second apart, on empty output (network blip or a
+// timed-out wait, not merely a non-zero exit).
 func remoteApprovalHookCommand(target RemoteHookTarget) string {
+	socatAddr := posixShellQuoteRemote(fmt.Sprintf("UNIX-LISTEN:%s,unlink-early,mode=0600", target.SocketPath))
 	return fmt.Sprintf(
-		`req=$(cat); i=0; while [ $i -lt %d ]; do printf '{"token":"%s","request":%%s}' "$req" | timeout %d %s - 'UNIX-LISTEN:%s,unlink-early' && break; i=$((i+1)); sleep 1; done`,
-		remoteApprovalHookMaxAttempts, target.BearerToken, remoteApprovalHookAttemptTimeoutSeconds, remoteApprovalWriteTool, target.SocketPath,
+		`req=$(cat); i=0; while [ $i -lt %d ]; do out=$(printf '{"token":"%s","request":%%s}' "$req" | timeout %d %s -t %d - %s); [ -n "$out" ] && { printf '%%s' "$out"; break; }; i=$((i+1)); sleep 1; done`,
+		remoteApprovalHookMaxAttempts, target.BearerToken, remoteApprovalHookAttemptTimeoutSeconds+15, remoteApprovalWriteTool, remoteApprovalHookAttemptTimeoutSeconds, socatAddr,
 	)
 }
 
 // hookCommandTargetsSocket reports whether curlCmd is the remote-aware hook command built by
-// remoteApprovalHookCommand for socketPath. Mirrors hookCommandReferencesURL's
-// quote-bounded-match design (see its doc comment for the strict-prefix false-positive bug
-// that pattern fixes): matching on the quoted, comma-bounded `'UNIX-LISTEN:<path>,unlink-early'`
-// form, not a bare strings.Contains(command, socketPath), so one socket path can never falsely
-// match another that happens to be its strict prefix.
+// remoteApprovalHookCommand for socketPath. Matches on the exact quoted address
+// remoteApprovalHookCommand itself produces (via the same posixShellQuoteRemote call), so a
+// socket path that happens to be another's strict prefix can never falsely match (mirrors
+// hookCommandReferencesURL's quote-bounded-match design).
 func hookCommandTargetsSocket(curlCmd, socketPath string) bool {
-	return strings.Contains(curlCmd, "'UNIX-LISTEN:"+socketPath+",unlink-early'")
+	return strings.Contains(curlCmd, posixShellQuoteRemote(fmt.Sprintf("UNIX-LISTEN:%s,unlink-early,mode=0600", socketPath)))
 }
 
 // InjectHooksConfig writes (or merges) hook entries into

@@ -1,6 +1,8 @@
 package services
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -8,6 +10,9 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
+
+	"github.com/tstapler/stapler-squad/executor/safeexec"
 )
 
 // TestInjectHooksConfigAllTypes (U-3.7): InjectHooksConfig injects all five hook types
@@ -712,5 +717,32 @@ func TestRemoveHooksConfig_should_BeIdempotent_When_CalledTwice(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+// TestRemoteApprovalHookCommand_QuotesSocketPathAgainstShellInjection is the
+// regression test for a review-found, empirically-verified RCE: the
+// generated command used to splice target.SocketPath into a single-quoted
+// shell fragment unescaped, so a SocketPath containing a single quote broke
+// out and ran arbitrary shell. SocketPath is derived from a session's remote
+// working directory (RemoteApprovalSocketPath), which since this same
+// change composes with session_type=existing_worktree/directory can be
+// caller-influenced -- not a hardcoded, provably-safe value. This runs the
+// REAL generated command through a real shell with a maliciously-crafted
+// path and asserts the injected command never executes.
+func TestRemoteApprovalHookCommand_QuotesSocketPathAgainstShellInjection(t *testing.T) {
+	marker := filepath.Join(t.TempDir(), "PWNED")
+	maliciousPath := "/home/u/wt'; touch " + marker + "; :'/x.sock"
+
+	cmd := remoteApprovalHookCommand(RemoteHookTarget{SocketPath: maliciousPath, BearerToken: "test-token"})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	shCmd := safeexec.CommandContext(ctx, "sh", "-c", cmd)
+	shCmd.Stdin = bytes.NewReader([]byte(`{}`))
+	_, _ = shCmd.CombinedOutput() // expected to fail (socat can't bind a bogus path) -- only the side effect matters
+
+	if _, err := os.Stat(marker); err == nil {
+		t.Fatalf("shell injection succeeded: marker file %s was created by the malicious SocketPath", marker)
 	}
 }

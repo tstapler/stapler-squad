@@ -72,6 +72,19 @@ const defaultPollInterval = 500 * time.Millisecond
 // Mirrors keystore.go's defaultIdentityTimeout budgeting convention.
 const defaultDialTimeout = 5 * time.Second
 
+// pendingRedeliveryTTL bounds how long a buffered-but-undelivered decision
+// stays redeliverable. Review found (independently, twice) that an unbounded
+// buffer matched on raw request bytes (no nonce in classifier.
+// PermissionRequestPayload) can replay a stale decision onto a genuinely
+// later, byte-identical request -- e.g. the same command re-run minutes
+// later auto-gets the earlier human's answer with no prompt. Sized to the
+// network-reconnect window this buffering exists to bridge (SSHClientPool's
+// own dial timeout is on the order of seconds), not to the much longer
+// human-decision wait a single hook attempt can now take
+// (server/services.remoteApprovalHookAttemptTimeoutSeconds) -- those are
+// deliberately different budgets.
+const pendingRedeliveryTTL = 60 * time.Second
+
 // bearerCredential is the per-session, short-TTL token RemoteApprovalRelay
 // requires in every relayed payload (research/pitfalls.md §4): without
 // this, the direct-streamlocal channel the relay reads from would accept a
@@ -200,24 +213,17 @@ type RemoteApprovalRelay struct {
 	startOnce sync.Once
 	stopOnce  sync.Once
 
-	// pendingRequest/pendingResponse buffer an already-computed decision
-	// that handleConnection failed to deliver back over its connection (the
-	// network drop this AC calls for: the human decided, but the
-	// direct-streamlocal channel died before the response could be written)
-	// -- requirements.md AC4's "network blip drops and re-establishes the
-	// connection mid-request" case. When the hook script's own retry (see
-	// server/services.remoteApprovalHookCommand) resends the SAME request
-	// bytes on a fresh connection, handleConnection recognizes the match and
-	// redelivers pendingResponse immediately instead of calling
-	// r.handler.HandlePermissionRequest a second time -- ApprovalHandler has
-	// no request-level de-dup of its own, so re-invoking it would create a
-	// second pending-approval record and could re-prompt a human who already
-	// decided once. Only ever read/written from within run()'s single
-	// goroutine (handleConnection is only ever called from there, never
-	// concurrently -- the type's own doc comment's "only one approval in
-	// flight at a time" constraint), so no mutex guards these fields.
+	// pendingRequest/pendingResponse/pendingAt buffer an already-computed
+	// decision that handleConnection failed to deliver (AC4's network-blip
+	// case): a retry resending the same request bytes within
+	// pendingRedeliveryTTL gets the buffered decision instead of a second
+	// r.handler.HandlePermissionRequest call, which would re-prompt a human
+	// who already decided (ApprovalHandler has no request-level de-dup).
+	// Only ever touched from run()'s single goroutine, so unguarded by a
+	// mutex -- see handleConnection's doc comment for the TTL's reasoning.
 	pendingRequest  []byte
 	pendingResponse []byte
+	pendingAt       time.Time
 }
 
 // RemoteApprovalRelayOption configures a RemoteApprovalRelay at construction
@@ -555,6 +561,10 @@ func (r *RemoteApprovalRelay) handleConnection(conn net.Conn) {
 		return
 	}
 
+	if r.pendingResponse != nil && time.Since(r.pendingAt) > pendingRedeliveryTTL {
+		r.pendingRequest = nil
+		r.pendingResponse = nil
+	}
 	if r.pendingResponse != nil && bytes.Equal(r.pendingRequest, payload.Request) {
 		if _, err := conn.Write(r.pendingResponse); err != nil {
 			log.Warn("remote approval relay: redelivery of a buffered decision failed, keeping it buffered for the next retry", "remote", r.remoteName, "sessionID", r.stableSessionID, "err", err)
@@ -597,6 +607,7 @@ func (r *RemoteApprovalRelay) handleConnection(conn net.Conn) {
 		log.Warn("remote approval relay: failed to write decision back to remote, buffering for redelivery on retry", "remote", r.remoteName, "sessionID", r.stableSessionID, "err", err)
 		r.pendingRequest = append([]byte(nil), payload.Request...)
 		r.pendingResponse = append([]byte(nil), rec.Body.Bytes()...)
+		r.pendingAt = time.Now()
 	}
 }
 
