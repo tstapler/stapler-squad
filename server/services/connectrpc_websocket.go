@@ -332,6 +332,20 @@ func useStreamHub() bool {
 	return os.Getenv("STAPLER_SQUAD_USE_STREAM_HUB") == "true"
 }
 
+// tmuxSessionNameForStreamPath computes the tmux session name StreamPath
+// resolution keys on for instance, mirroring streamViaHub's own derivation
+// (session title + tmux prefix, default "staplersquad_"). Resolution must
+// use this same name so a session's StreamOwnershipLock lookup here and its
+// hub lookup inside streamViaHub (HubRegistry.GetOrCreate) agree.
+func tmuxSessionNameForStreamPath(instance *session.Instance) string {
+	snap := instance.Snapshot()
+	tmuxPrefix := snap.TmuxPrefix
+	if tmuxPrefix == "" {
+		tmuxPrefix = "staplersquad_"
+	}
+	return tmux.NewSessionName(snap.Title, tmuxPrefix).String()
+}
+
 // waitForQuiescence waits until no updates arrive for quietFor duration, or timeout elapses.
 // Used after resize nudges to detect when the TUI has finished redrawing.
 func waitForQuiescence(updates <-chan struct{}, timeout, quietFor time.Duration) {
@@ -666,10 +680,13 @@ func (h *ConnectRPCWebSocketHandler) streamTerminal(stream *connectWebSocketStre
 	// Set STAPLER_SQUAD_USE_CONTROL_MODE=false to disable and use capture-pane polling
 	useControlMode := os.Getenv("STAPLER_SQUAD_USE_CONTROL_MODE")
 	if (useControlMode == "" || useControlMode == "true") && instance.Snapshot().IsManaged {
-		// StreamPath branch (Task 2.2.2a): PathLegacyPerConnection is
-		// unchanged below — this only adds a new branch ahead of it, gated
-		// behind STAPLER_SQUAD_USE_STREAM_HUB (default off, unset today).
-		if useStreamHub() {
+		// StreamPath branch (Epic 3.1, Story 3.1.1): resolved once per tmux
+		// session via StreamOwnershipLock.Resolve and cached sticky for that
+		// session's lifetime, rather than re-reading useStreamHub() fresh on
+		// every connection (Task 2.2.2a's placeholder) — see ADR-003 for why
+		// a per-connection re-read would let a flag flip mid-rollout split
+		// one session across two owners.
+		if streamhub.AcquireOwnershipLock(tmuxSessionNameForStreamPath(instance)).Resolve(useStreamHub()) == streamhub.PathHubOwned {
 			log.Info("[WebSocket] routing managed session to hub-owned streaming", "session", sessionID)
 			return h.streamViaHub(stream, instance)
 		}

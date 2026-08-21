@@ -2,6 +2,7 @@ package streamhub_test
 
 import (
 	"errors"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -155,30 +156,12 @@ func TestStreamHub_should_EvictSlowSubscriberUnderSustainedBackpressure_And_Incr
 
 // --- Flag-flip mid-session: single-owner resolution race ---
 //
-// StreamOwnershipLock (Epic 3.1, Story 3.1.1) is the production primitive
-// that will make this guarantee hold across package session and
-// session/streamhub. It does not exist yet — Epic 3.1 is a later phase in
-// plan.md's Dependency Visualization. sessionPathResolver below is a
-// minimal, test-scoped stand-in that proves the same single-owner
-// resolve-once guarantee this project's core success metric depends on
-// (OverlapInvariant: no two owners for one tmux session, ever) using only
-// what Epic 1.4 needs — a sync.Once-backed "first caller wins" resolution —
-// without building out Story 3.1.1's full sticky-per-session xsync.Map
-// machinery, which belongs to that later story.
-type sessionPathResolver struct {
-	once     sync.Once
-	resolved streamhub.StreamPath
-}
-
-// resolve returns the StreamPath every caller for this session must agree
-// on: whichever value the first caller to reach the sync.Once passed,
-// regardless of what any later, concurrent caller requests. This is the
-// property that makes a two-owner outcome for one session structurally
-// impossible.
-func (r *sessionPathResolver) resolve(requested streamhub.StreamPath) streamhub.StreamPath {
-	r.once.Do(func() { r.resolved = requested })
-	return r.resolved
-}
+// StreamOwnershipLock (Epic 3.1, Story 3.1.1, session/streamhub/ownership.go)
+// is the production primitive that makes this guarantee hold across package
+// session and session/streamhub. Earlier phases of this plan (Epic 1.4)
+// proved the same single-owner resolve-once guarantee against a test-scoped
+// sync.Once stand-in before StreamOwnershipLock existed; the race test below
+// now exercises the real primitive directly.
 
 // overlapInvariantViolated is the pure predicate behind the OverlapInvariant
 // check named in plan.md's Domain Glossary: more than one distinct owner
@@ -213,7 +196,7 @@ func TestStreamOwnershipLock_should_ResolveToSingleWinner_When_ConcurrentCallers
 	const racers = 8
 
 	for i := 0; i < iterations; i++ {
-		resolver := &sessionPathResolver{}
+		lock := streamhub.AcquireOwnershipLock(fmt.Sprintf("race-test-session-%d", i))
 
 		var wg sync.WaitGroup
 		results := make([]streamhub.StreamPath, racers)
@@ -223,13 +206,10 @@ func TestStreamOwnershipLock_should_ResolveToSingleWinner_When_ConcurrentCallers
 			// (if the resolver were broken) would show up as differing
 			// results rather than being masked by every racer requesting
 			// the same value.
-			requested := streamhub.PathLegacyPerConnection
-			if g%2 == 0 {
-				requested = streamhub.PathHubOwned
-			}
-			go func(idx int, want streamhub.StreamPath) {
+			requested := g%2 == 0 // maps to PathHubOwned via Resolve(true)
+			go func(idx int, flagValue bool) {
 				defer wg.Done()
-				results[idx] = resolver.resolve(want)
+				results[idx] = lock.Resolve(flagValue)
 			}(g, requested)
 		}
 		wg.Wait()
