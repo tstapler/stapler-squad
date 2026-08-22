@@ -137,10 +137,11 @@ func CanonicalizeWorktreePath(path string) string {
 	return resolved
 }
 
-// checkGHCLI checks if GitHub CLI is installed and configured. The auth
-// check runs through g.cmdExec (the same injectable executor every other gh
-// call on GitWorktree uses) rather than shelling out directly, so tests that
-// already inject a fake executor for gh pr create/list don't also need a
+// checkGHCLI checks if GitHub CLI is installed and configured. The auth check
+// runs through g.commandRunner() (the same CommandRunner execution seam every
+// other gh/git call on GitWorktree uses, per ADR-002 -- see worktree.go's
+// runner field doc comment) rather than shelling out directly, so tests that
+// already inject a spy CommandRunner for gh pr create/list don't also need a
 // real, authenticated `gh` binary on PATH just to get past this guard.
 func (g *GitWorktree) checkGHCLI() error {
 	// Check if gh is installed
@@ -151,14 +152,7 @@ func (g *GitWorktree) checkGHCLI() error {
 	// Check if gh is authenticated
 	authCtx, authCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer authCancel()
-	cmd := safeexec.CommandContext(authCtx, "gh", "auth", "status")
-	var err error
-	if g.cmdExec != nil {
-		_, err = g.cmdExec.CombinedOutput(cmd)
-	} else {
-		err = cmd.Run()
-	}
-	if err != nil {
+	if _, err := g.commandRunner().Run(authCtx, g.worktreePath, "gh", "auth", "status"); err != nil {
 		return fmt.Errorf("GitHub CLI is not configured. Please run 'gh auth login' first")
 	}
 
