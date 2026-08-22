@@ -56,7 +56,7 @@ func recordStatusEvent(ctx context.Context, evClient *ent.BacklogStatusEventClie
 		evCreate = evCreate.SetNote(note)
 	}
 	if _, err := evCreate.Save(ctx); err != nil {
-		log.ErrorLog.Printf("[recordStatusEvent] failed to record item=%s %s->%s triggeredBy=%s: %v", itemID, fromStatus, toStatus, triggeredBy, err)
+		log.ErrorLog().Printf("[recordStatusEvent] failed to record item=%s %s->%s triggeredBy=%s: %v", itemID, fromStatus, toStatus, triggeredBy, err)
 	}
 }
 
@@ -1661,7 +1661,7 @@ func (r *EntRepository) publishItemChangedSnapshot(item *BacklogItemData, change
 	}
 	defer func() {
 		if rec := recover(); rec != nil {
-			log.WarningLog.Printf("[EntRepository] itemChangePublisher.PublishItemChanged panicked (recovered): %v", rec)
+			log.WarningLog().Printf("[EntRepository] itemChangePublisher.PublishItemChanged panicked (recovered): %v", rec)
 		}
 	}()
 	r.itemChangePublisher.PublishItemChanged(item, change)
@@ -1690,7 +1690,7 @@ func (r *EntRepository) dispatchCallback(eventType string, payload any) {
 	}
 	defer func() {
 		if rec := recover(); rec != nil {
-			log.WarningLog.Printf("[EntRepository] callbackDispatcher.Dispatch panicked (recovered): %v", rec)
+			log.WarningLog().Printf("[EntRepository] callbackDispatcher.Dispatch panicked (recovered): %v", rec)
 		}
 	}()
 	r.callbackDispatcher.Dispatch(eventType, payload)
@@ -1725,7 +1725,7 @@ func (r *EntRepository) dispatchChainFire(item *BacklogItemData) {
 	}
 	defer func() {
 		if rec := recover(); rec != nil {
-			log.WarningLog.Printf("[EntRepository] chainFirer.Dispatch panicked (recovered): %v", rec)
+			log.WarningLog().Printf("[EntRepository] chainFirer.Dispatch panicked (recovered): %v", rec)
 		}
 	}()
 	r.chainFirer.Dispatch(item)
@@ -1761,7 +1761,7 @@ func (r *EntRepository) attachItemSessionsForPublish(ctx context.Context, data *
 	}
 	sessions, err := r.ListItemSessions(ctx, data.ID)
 	if err != nil {
-		log.WarningLog.Printf("[EntRepository] attachItemSessionsForPublish: failed to load item sessions for item %s: %v", data.ID, err)
+		log.WarningLog().Printf("[EntRepository] attachItemSessionsForPublish: failed to load item sessions for item %s: %v", data.ID, err)
 		return
 	}
 	data.ItemSessions = sessions

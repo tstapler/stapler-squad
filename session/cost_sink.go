@@ -22,7 +22,7 @@ func CostSinkForSessionUUID(storage *Storage, sessionUUID string) headless.CostS
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		if err := storage.AddHeadlessCostBySessionUUID(ctx, sessionUUID, usd); err != nil {
-			log.WarningLog.Printf("[CostSink] failed to persist headless call cost for session %s: %v", sessionUUID, err)
+			log.WarningLog().Printf("[CostSink] failed to persist headless call cost for session %s: %v", sessionUUID, err)
 		}
 	}
 }

@@ -104,7 +104,7 @@ func NewHTTPHandler(
 	liveCheck func(sessionUUID string) bool,
 ) *mcpserver.StreamableHTTPServer {
 	core := NewCore(store, svc, sbMgr, storage, eventBus, prCache, backlogEnabled, autoReopener, backlogSvc, liveCheck)
-	log.InfoLog.Printf("[mcp] link_session_to_item wired: backlogSvc=%v liveCheck=%v", backlogSvc != nil, liveCheck != nil)
+	log.InfoLog().Printf("[mcp] link_session_to_item wired: backlogSvc=%v liveCheck=%v", backlogSvc != nil, liveCheck != nil)
 	// Stateless mode: accept any session ID rather than tracking them in memory.
 	// This allows Claude Code sessions to survive server restarts without needing
 	// to re-initialize the MCP connection (which would require restarting the agent).
@@ -141,7 +141,7 @@ func RunServer(
 	// backlog tools can identify the calling session.
 	if uuid := os.Getenv("STAPLER_SESSION_UUID"); uuid != "" {
 		ctx = WithSessionUUID(ctx, uuid)
-		log.InfoLog.Printf("[mcp] session UUID injected from environment: %s", uuid)
+		log.InfoLog().Printf("[mcp] session UUID injected from environment: %s", uuid)
 	}
 
 	stdio := mcpserver.NewStdioServer(NewCore(store, svc, sbMgr, storage, eventBus, prCache, backlogEnabled, autoReopener, backlogSvc, liveCheck))

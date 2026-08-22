@@ -889,13 +889,13 @@ func (s *Storage) SetBacklogItemPRAndTransition(ctx context.Context, observed *B
 	// reported as this call's own failure — mirrors report_progress's
 	// primary-write/secondary-enrichment split (AppendProgressNote there).
 	if appendErr := s.AppendProgressNote(ctx, observed.ID, -1, summary, progressNoteStatus); appendErr != nil {
-		log.WarningLog.Printf("[Storage] SetBacklogItemPRAndTransition: failed to append summary note item=%s: %v", observed.ID, appendErr)
+		log.WarningLog().Printf("[Storage] SetBacklogItemPRAndTransition: failed to append summary note item=%s: %v", observed.ID, appendErr)
 	}
 	if _, resolveErr := s.ResolveStuck(ctx, observed.ID, domain.StuckReasonPushFailed); resolveErr != nil {
-		log.WarningLog.Printf("[Storage] SetBacklogItemPRAndTransition: failed to resolve push_failed row item=%s: %v", observed.ID, resolveErr)
+		log.WarningLog().Printf("[Storage] SetBacklogItemPRAndTransition: failed to resolve push_failed row item=%s: %v", observed.ID, resolveErr)
 	}
 	if _, resolveErr := s.ResolveStuck(ctx, observed.ID, domain.StuckReasonAbandonedReview); resolveErr != nil {
-		log.WarningLog.Printf("[Storage] SetBacklogItemPRAndTransition: failed to resolve abandoned_review row item=%s: %v", observed.ID, resolveErr)
+		log.WarningLog().Printf("[Storage] SetBacklogItemPRAndTransition: failed to resolve abandoned_review row item=%s: %v", observed.ID, resolveErr)
 	}
 
 	// AC7: reassigning to a new PR must not leave the old PR's
@@ -905,7 +905,7 @@ func (s *Storage) SetBacklogItemPRAndTransition(ctx context.Context, observed *B
 	// as the resolves above.
 	if isReassignment {
 		if _, clearErr := s.UpdateBacklogItem(ctx, observed.ID, BacklogItemUpdate{ClearPrFeedbackAddressedAt: true}, nil); clearErr != nil {
-			log.WarningLog.Printf("[Storage] SetBacklogItemPRAndTransition: failed to clear pr_feedback_addressed_at item=%s: %v", observed.ID, clearErr)
+			log.WarningLog().Printf("[Storage] SetBacklogItemPRAndTransition: failed to clear pr_feedback_addressed_at item=%s: %v", observed.ID, clearErr)
 		}
 	}
 
@@ -1149,7 +1149,7 @@ func (s *Storage) ComputeCurrentDiffHash(ctx context.Context, itemID string) str
 	}
 	hash, err := git.DiffHashBetween(repoPath, baseSHA, headSHA)
 	if err != nil {
-		log.WarningLog.Printf("[ComputeCurrentDiffHash] item=%s base=%s head=%s: %v", itemID, baseSHA, headSHA, err)
+		log.WarningLog().Printf("[ComputeCurrentDiffHash] item=%s base=%s head=%s: %v", itemID, baseSHA, headSHA, err)
 		return ""
 	}
 	return hash

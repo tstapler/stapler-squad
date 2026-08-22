@@ -25,15 +25,30 @@ import (
 	"github.com/tstapler/stapler-squad/session/ent"
 )
 
+// warningLogMu serializes swapWarningLog calls across this package's
+// t.Parallel() tests. SetWarningLogForTest reassigns the shared package-level
+// logger wholesale, so two parallel tests calling it concurrently would each
+// redirect the same global and race over whose buffer is "current" — this
+// mutex, held for the full swap-to-restore window, ensures only one test
+// owns the redirection at a time. Mirrors session/sync_buffer_test.go's
+// swapWarningLog, which mutates the logger in place instead; this package
+// uses SetWarningLogForTest directly since production code here never spawns
+// background goroutines that read log.WarningLog() after the owning test
+// returns.
+var warningLogMu sync.Mutex
+
 // swapWarningLog redirects tslog.WarningLog to a buffer for the duration of
-// the calling test, restoring the original on cleanup. Mirrors the
-// established pattern in session/pipeline_engine_test.go.
+// the calling test, restoring the original on cleanup via the atomic
+// SetWarningLogForTest setter.
 func swapWarningLog(t *testing.T) *bytes.Buffer {
 	t.Helper()
+	warningLogMu.Lock()
 	var buf bytes.Buffer
-	orig := tslog.WarningLog
-	tslog.WarningLog = stdlog.New(&buf, "WARNING: ", 0)
-	t.Cleanup(func() { tslog.WarningLog = orig })
+	orig := tslog.SetWarningLogForTest(stdlog.New(&buf, "WARNING: ", 0))
+	t.Cleanup(func() {
+		tslog.SetWarningLogForTest(orig)
+		warningLogMu.Unlock()
+	})
 	return &buf
 }
 

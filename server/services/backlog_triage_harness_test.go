@@ -343,9 +343,8 @@ func TestTriageHarness_RealClaude(t *testing.T) {
 
 	// Redirect ssqlog.ErrorLog to a buffer so we can surface service errors in t.Log.
 	var errBuf bytes.Buffer
-	origErrorLog := ssqlog.ErrorLog
-	ssqlog.ErrorLog = stdlog.New(&errBuf, "ERROR: ", 0)
-	t.Cleanup(func() { ssqlog.ErrorLog = origErrorLog })
+	origErrorLog := ssqlog.SetErrorLogForTest(stdlog.New(&errBuf, "ERROR: ", 0))
+	t.Cleanup(func() { ssqlog.SetErrorLogForTest(origErrorLog) })
 
 	repoPath := t.TempDir()
 

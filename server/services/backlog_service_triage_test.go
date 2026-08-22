@@ -513,7 +513,7 @@ func TestNotifyReworkCapHit_should_persistRowSurvivingRestart_When_CapHit(t *tes
 // transitioned the item review->in_progress, its SpawnSessionFromItem call then
 // failed, and the scoped rollback to "review" ALSO failed (its precondition no
 // longer matched). Before this fix, that double failure was only
-// log.ErrorLog.Printf'd — the item was left silently stranded in_progress with
+// log.ErrorLog().Printf'd — the item was left silently stranded in_progress with
 // no work session and no operator-visible signal anywhere, invisible to every
 // stuck detector (none of them check "in_progress with zero live sessions").
 // notifySpawnAndRollbackFailed is the fix: a durable StuckReasonSpawnFailed row
@@ -1088,7 +1088,7 @@ func TestAutoReopenForPRFix_ActiveWorkSession_SkipsWithoutStatusChurn(t *testing
 
 // TestAutoReopenForPRFix_ActiveWorkSession_RecordsRespawnBlockedActive is the
 // regression test for the audit-trail gap this fix closes: before it, the
-// skip branch above only log.InfoLog.Printf'd — no durable
+// skip branch above only log.InfoLog().Printf'd — no durable
 // BacklogStuckState row and no operator notification, unlike every other
 // "an automated action was skipped" path in this file (notifyReworkCapHit,
 // notifySpawnAndRollbackFailed). Verifies a StuckReasonRespawnBlockedActive
@@ -1244,7 +1244,7 @@ func TestAutoReopenForPRFix_DeadWorkSession_TombstonesThenReopens(t *testing.T) 
 // TestAutoReopenForPRFix_ActiveWorkSession_RecordsRespawnBlockedActive — the
 // first of the three call sites this fix covers. Before this fix, an
 // in_progress item whose autonomous work session was still active only
-// produced a bare log.InfoLog.Printf'd skip with no durable record and no
+// produced a bare log.InfoLog().Printf'd skip with no durable record and no
 // operator notification.
 func TestAutoRespawnAutonomousWork_ActiveWorkSession_RecordsRespawnBlockedActive(t *testing.T) {
 	t.Parallel()
