@@ -399,7 +399,7 @@ func (s *BacklogService) claimantHostID() string {
 	}
 	id, err := s.cfg.GetOrCreateClaimantHostID()
 	if err != nil {
-		log.WarningLog.Printf("[claimantHostID] failed to resolve claimant host id: %v", err)
+		log.WarningLog().Printf("[claimantHostID] failed to resolve claimant host id: %v", err)
 		return ""
 	}
 	return id
@@ -597,7 +597,7 @@ func itemSessionToProto(is session.ItemSessionSummary, costFor func(tmuxUUID str
 	if is.TriageResult != "" {
 		var tr triageResultJSON
 		if jsonErr := json.Unmarshal([]byte(is.TriageResult), &tr); jsonErr != nil {
-			log.WarningLog.Printf("[itemSessionToProto] invalid triage_result JSON for session %s: %v", is.ID, jsonErr)
+			log.WarningLog().Printf("[itemSessionToProto] invalid triage_result JSON for session %s: %v", is.ID, jsonErr)
 		} else {
 			suggs := make([]*sessionv1.TriageSuggestion, len(tr.Suggestions))
 			for i, sg := range tr.Suggestions {
@@ -875,10 +875,10 @@ func (s *BacklogService) commitAndPushItemWorktrees(ctx context.Context, session
 		g := git.NewGitWorktreeFromStorage(wt.RepoPath, wt.WorktreePath, wt.SessionName, wt.BranchName, wt.BaseCommitSHA)
 		commitMsg := fmt.Sprintf("[claudesquad] save work before done (session %s)", is.SessionUUID)
 		if commitErr := g.CommitChanges(commitMsg); commitErr != nil {
-			log.WarningLog.Printf("[commitAndPushItemWorktrees] commit failed path=%s: %v", wt.WorktreePath, commitErr)
+			log.WarningLog().Printf("[commitAndPushItemWorktrees] commit failed path=%s: %v", wt.WorktreePath, commitErr)
 		}
 		if pushErr := g.PushBranch(); pushErr != nil {
-			log.WarningLog.Printf("[commitAndPushItemWorktrees] push failed path=%s: %v", wt.WorktreePath, pushErr)
+			log.WarningLog().Printf("[commitAndPushItemWorktrees] push failed path=%s: %v", wt.WorktreePath, pushErr)
 		}
 	}
 }
@@ -918,7 +918,7 @@ func (s *BacklogService) cleanupItemWorktreesExcept(ctx context.Context, session
 		}
 		g := git.NewGitWorktreeFromStorage(wt.RepoPath, wt.WorktreePath, wt.SessionName, wt.BranchName, wt.BaseCommitSHA)
 		if cleanErr := g.Cleanup(); cleanErr != nil {
-			log.WarningLog.Printf("[cleanupItemWorktrees] failed to cleanup worktree path=%s: %v", wt.WorktreePath, cleanErr)
+			log.WarningLog().Printf("[cleanupItemWorktrees] failed to cleanup worktree path=%s: %v", wt.WorktreePath, cleanErr)
 			continue
 		}
 		// The worktree directory is gone — stop the unfinished-changes scanner
@@ -958,10 +958,10 @@ func (s *BacklogService) archiveItemWorkSessions(ctx context.Context, sessions [
 			continue
 		}
 		if err := s.sessionStopper.ArchiveSessionByUUID(ctx, is.SessionUUID); err != nil {
-			log.WarningLog.Printf("[archiveItemWorkSessions] failed to archive session=%s: %v", is.SessionUUID, err)
+			log.WarningLog().Printf("[archiveItemWorkSessions] failed to archive session=%s: %v", is.SessionUUID, err)
 		}
 		if err := s.sessionStopper.KillTmuxPaneOnly(ctx, is.SessionUUID); err != nil {
-			log.WarningLog.Printf("[archiveItemWorkSessions] failed to kill tmux pane session=%s: %v", is.SessionUUID, err)
+			log.WarningLog().Printf("[archiveItemWorkSessions] failed to kill tmux pane session=%s: %v", is.SessionUUID, err)
 		}
 	}
 }

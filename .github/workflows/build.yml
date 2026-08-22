@@ -171,11 +171,8 @@ jobs:
         with:
           name: generated-files
 
-      - name: Install tmux build dependencies
-        run: sudo apt-get install -y automake libevent-dev libncurses-dev pkg-config
-
-      - name: Install socat
-        # Required by server/services' real-shell approval-relay tests
+      - name: Install tmux build dependencies + socat
+        # socat is required by server/services' real-shell approval-relay tests
         # (TestRemoteApprovalHookCommand_*) -- these execute the actual
         # generated hook command through a real shell rather than simulating
         # its wire protocol in Go, specifically so a bug in the command
@@ -184,7 +181,7 @@ jobs:
         # running -- see remoteApprovalWriteTool's doc comment
         # (server/services/hook_injector.go) for the production bug this
         # class of test exists to catch.
-        run: sudo apt-get install -y socat
+        run: sudo apt-get install -y automake libevent-dev libncurses-dev pkg-config socat
 
       - name: Cache pinned tmux binary
         uses: actions/cache@v4
@@ -250,21 +247,6 @@ jobs:
             -run 'TestServer_should_WriteUnchangedHookURL_When_StartedOnExplicitPort|TestSessionService_CreateThenImmediateDelete_NoDataRace' \
             -count=20
           TMUX_BIN="$(pwd)/bin/tmux" go test -race -timeout=20m ./session/tmux/... \
-            -run 'TestGetPTY_ClosePTYAndAttachCmd_ConcurrentAccessIsSerialized|TestDetach_ConcurrentWithGetPTY_NoDeadlock|TestDetachSafely_ConcurrentWithGetPTY_NoDeadlock' \
-            -count=20
-
-      # PTY-triple (ptmx/attachCmd/attachCmdWaitOnce) race fix regression gate:
-      # these tests were validated locally at -count=20/-count=50 during development
-      # (see project_plans/tmux-ptmx-race-fix/), but the plain -race run above only
-      # executes each test once per CI run — not enough repetition to reliably catch
-      # a reintroduced race in a timing-sensitive test. Run them amplified here so
-      # CI keeps the same confidence level the fix was originally verified with.
-      - name: PTY-triple race regression (amplified repetitions)
-        run: |
-          TMUX_BIN="$(pwd)/bin/tmux" go test -race ./server/... \
-            -run 'TestServer_should_WriteUnchangedHookURL_When_StartedOnExplicitPort|TestSessionService_CreateThenImmediateDelete_NoDataRace' \
-            -count=20
-          TMUX_BIN="$(pwd)/bin/tmux" go test -race ./session/tmux/... \
             -run 'TestGetPTY_ClosePTYAndAttachCmd_ConcurrentAccessIsSerialized|TestDetach_ConcurrentWithGetPTY_NoDeadlock|TestDetachSafely_ConcurrentWithGetPTY_NoDeadlock' \
             -count=20
 
@@ -405,22 +387,150 @@ jobs:
       # which posts a PR comment via benchstat. Removed dead step that ran
       # BenchmarkNavigation (a non-existent benchmark) for 15 min per PR.
 
-      - name: Integration coverage (advisory)
-        # Same tmux-under-CPU-contention rationale as the "Run tests with coverage" step
-        # above (see its comment) -- this step's `-tags integration` run spawns real tmux
-        # servers under the same contention.
+  # ─────────────────────────────────────────────────────────────────────────────
+  # pty-race-regression: PTY-triple (ptmx/attachCmd/attachCmdWaitOnce) race fix
+  # regression gate, split out of the `test` job so it runs in parallel with the
+  # main coverage run instead of stacking behind it. These tests were validated
+  # locally at -count=20/-count=50 during development (see
+  # project_plans/tmux-ptmx-race-fix/), but a plain -race run only executes each
+  # test once — not enough repetition to reliably catch a reintroduced race in a
+  # timing-sensitive test. Run them amplified here so CI keeps the same
+  # confidence level the fix was originally verified with.
+  # ─────────────────────────────────────────────────────────────────────────────
+  pty-race-regression:
+    name: PTY-triple race regression (amplified repetitions)
+    runs-on: ubuntu-latest
+    needs: prepare
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.0'
+          cache: true
+
+      - name: Download generated files
+        uses: actions/download-artifact@v4
+        with:
+          name: generated-files
+
+      - name: Install tmux build dependencies
+        run: sudo apt-get install -y automake libevent-dev libncurses-dev pkg-config
+
+      - name: Cache pinned tmux binary
+        uses: actions/cache@v4
+        id: tmux-cache
+        with:
+          path: bin/tmux
+          key: tmux-3.4-${{ runner.os }}-v1
+
+      - name: Build pinned tmux 3.4
+        if: steps.tmux-cache.outputs.cache-hit != 'true'
+        run: ./scripts/build-tmux.sh
+
+      - name: Install go-stress
+        run: go install golang.org/x/tools/cmd/stress@v0.47.0
+
+      - name: Compile PTY-triple regression test binaries
+        run: |
+          go test -race -c -o server.test ./server
+          go test -race -c -o tmux.test ./session/tmux
+
+      - name: PTY-triple race regression (parallel amplification via go-stress)
+        # Same tmux-under-CPU-contention rationale as the "test" job's "Run tests
+        # with coverage" step -- repeated runs spawn real tmux servers over and
+        # over, so it needs the same widened create-timeout headroom.
+        #
+        # Replaced serial `go test -count=20` with golang.org/x/tools/cmd/stress
+        # (github.com/dvyukov's original "stress" tool): it runs the compiled
+        # -race test binary in parallel across all CPUs in a loop for a fixed
+        # wall-clock budget, printing pass/fail counts and stopping immediately on
+        # the first failure. Same goal as -count=20 -- enough repetition to
+        # reliably catch a reintroduced race in a timing-sensitive test -- but on
+        # a 4-core runner it packs far more total repetitions into the 90s budget
+        # below than 20 serial reps took, and it fails fast on the first bad run
+        # instead of always waiting for all 20 to finish.
+        #
+        # 90s budget: chosen as headroom above the ~63s a single ./server/...
+        # suite run took after the 2026-08-19 SQLite lock-contention fix (see
+        # project_plans/tmux-ptmx-race-fix/) -- comfortably enough time for
+        # several full parallel passes per binary. `|| [ $? -eq 124 ]` treats
+        # `timeout`'s SIGTERM-at-budget-expiry (exit 124, i.e. "ran clean for the
+        # whole budget") as success; any other nonzero exit is a real failure
+        # from stress and fails the step.
         env:
           STAPLER_SQUAD_TMUX_CREATE_TIMEOUT_SECONDS: "30"
         run: |
-          mkdir -p /tmp/covdata
-          go build -cover -o stapler-squad-cov .
-          GOCOVERDIR=/tmp/covdata STAPLER_SQUAD_INSTANCE=cov-$$ \
-            TMUX_BIN="$(pwd)/bin/tmux" ./stapler-squad-cov &
-          sleep 2
-          TMUX_BIN="$(pwd)/bin/tmux" go test -race -tags integration ./... || true
-          pkill -f stapler-squad-cov || true
-          sleep 1
-          go tool covdata textfmt -i=/tmp/covdata -o integration.out || true
+          TMUX_BIN="$(pwd)/bin/tmux" timeout 90s stress ./server.test \
+            -test.run='TestServer_should_WriteUnchangedHookURL_When_StartedOnExplicitPort|TestSessionService_CreateThenImmediateDelete_NoDataRace' \
+            || [ $? -eq 124 ]
+          TMUX_BIN="$(pwd)/bin/tmux" timeout 90s stress ./tmux.test \
+            -test.run='TestGetPTY_ClosePTYAndAttachCmd_ConcurrentAccessIsSerialized|TestDetach_ConcurrentWithGetPTY_NoDeadlock|TestDetachSafely_ConcurrentWithGetPTY_NoDeadlock' \
+            || [ $? -eq 124 ]
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # integration-coverage: advisory `-tags integration` run, split out of the
+  # `test` job so it runs in parallel with the main coverage run instead of
+  # stacking behind it. Never gates the build (always continue-on-error) — see
+  # server/services' integration test docs for scope.
+  #
+  # Previously built and launched a separate `stapler-squad-cov` binary under
+  # GOCOVERDIR to capture runtime coverage from a live process. Removed
+  # 2026-08-22: none of the 4 `//go:build integration` test files actually talk
+  # to that background process over HTTP -- server/mcp/server_integration_test.go
+  # builds and launches its own binary directly, and the tmux/mcp integration
+  # tests shell out to the real `tmux` CLI, not to a live stapler-squad server.
+  # The background binary was only ever measuring its own idle startup path.
+  # Standard in-process `-coverprofile` (same mechanism the `test` job already
+  # uses) captures everything these tests actually exercise, with no live
+  # process to launch or reap.
+  # ─────────────────────────────────────────────────────────────────────────────
+  integration-coverage:
+    name: Integration coverage (advisory)
+    runs-on: ubuntu-latest
+    needs: prepare
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.0'
+          cache: true
+
+      - name: Download generated files
+        uses: actions/download-artifact@v4
+        with:
+          name: generated-files
+
+      - name: Install tmux build dependencies + socat
+        run: sudo apt-get install -y automake libevent-dev libncurses-dev pkg-config socat
+
+      - name: Cache pinned tmux binary
+        uses: actions/cache@v4
+        id: tmux-cache
+        with:
+          path: bin/tmux
+          key: tmux-3.4-${{ runner.os }}-v1
+
+      - name: Build pinned tmux 3.4
+        if: steps.tmux-cache.outputs.cache-hit != 'true'
+        run: ./scripts/build-tmux.sh
+
+      - name: Integration coverage (advisory)
+        # Same tmux-under-CPU-contention rationale as the "test" job's "Run tests
+        # with coverage" step -- this step's `-tags integration` run spawns real
+        # tmux servers under the same contention.
+        env:
+          STAPLER_SQUAD_TMUX_CREATE_TIMEOUT_SECONDS: "30"
+        run: |
+          TMUX_BIN="$(pwd)/bin/tmux" go test -race -tags integration \
+            -coverprofile=integration.out -covermode=atomic ./... || true
         continue-on-error: true
 
       - name: Upload integration coverage

@@ -147,6 +147,10 @@ var forkMonitor = struct {
 	lastAlertFailureCount int64
 	lastAlertLevel        ForkPressureLevel
 	alertFns              []AlertFunc
+	// alertWG tracks in-flight alert-dispatch goroutines spawned by checkPressure,
+	// so tests can deterministically wait for them to finish (see
+	// waitForPendingAlerts in fork_metrics_test.go) instead of sleeping.
+	alertWG sync.WaitGroup
 }{
 	spawnRing:   newTimestampRing(int(forkPressureWindow/time.Second) * 5),
 	failureRing: newTimestampRing(256),
@@ -298,7 +302,9 @@ func checkPressure(now time.Time) {
 	fns := forkMonitor.alertFns
 	forkMonitor.alertMu.Unlock()
 
+	forkMonitor.alertWG.Add(1)
 	go func() {
+		defer forkMonitor.alertWG.Done()
 		for _, fn := range fns {
 			fn(stats.Level, stats)
 		}

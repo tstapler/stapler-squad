@@ -520,6 +520,9 @@ func (h *signalingLogHandler) Handle(ctx context.Context, r slog.Record) error {
 
 func TestSlackNotifier_RecoversFromPanic_And_LogsError(t *testing.T) {
 	t.Parallel()
+	// slogDefaultMu (declared in autonomous_orchestration_service_test.go) serializes this
+	// swap against every other slog.Default() swap in this package.
+	slogDefaultMu.Lock()
 	var buf bytes.Buffer
 	sigCh := make(chan struct{}, 1)
 	prev := slog.Default()
@@ -527,7 +530,10 @@ func TestSlackNotifier_RecoversFromPanic_And_LogsError(t *testing.T) {
 		Handler: slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}),
 		sigCh:   sigCh,
 	}))
-	t.Cleanup(func() { slog.SetDefault(prev) })
+	t.Cleanup(func() {
+		slog.SetDefault(prev)
+		slogDefaultMu.Unlock()
+	})
 
 	n := NewSlackNotifier()
 	n.dispatchAsync(context.Background(), func(ctx context.Context) {

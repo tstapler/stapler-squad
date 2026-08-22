@@ -566,21 +566,9 @@ test-triage-flow: proto-gen ## Phase 4: full flow — create, gate, set repoPath
 test-triage-real: proto-gen ## Run triage with a REAL Claude session (requires claude in PATH, ~30s)
 	go test -v -tags=harness -run TestTriageHarness_RealClaude ./server/services/ -timeout 5m
 
-coverage-integration: ensure-tools proto-gen ## Build instrumented binary, run integration tests, emit integration.out
-	@mkdir -p /tmp/covdata
-	go build -cover -o stapler-squad-cov .
-	@echo "Starting instrumented binary..."
-	GOCOVERDIR=/tmp/covdata STAPLER_SQUAD_INSTANCE=cov-$$PPID ./stapler-squad-cov &
-	@sleep 2
-	@echo "Running integration tests against instrumented binary..."
-	go test -race -tags integration ./... || true
-	@echo "Stopping instrumented binary..."
-	@pkill -f stapler-squad-cov || true
-	@sleep 1
-	go tool covdata textfmt -i=/tmp/covdata -o integration.out
+coverage-integration: ensure-tools proto-gen ## Run integration tests, emit integration.out
+	go test -race -tags integration -coverprofile=integration.out -covermode=atomic ./...
 	@echo "✅ Integration coverage written to integration.out"
-	@rm -f stapler-squad-cov
-	@rm -rf /tmp/covdata
 
 test-ux-polish: ## Run tests registered in docs/registry/features/ (no server/tmux required)
 	@RUN=$$(python3 -c "import json,glob; ids=[t for p in glob.glob('docs/registry/features/backend/**/*.json',recursive=True) for t in json.load(open(p)).get('testIds',[])]; print('|'.join(sorted(set(ids))))"); \

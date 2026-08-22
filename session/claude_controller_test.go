@@ -751,7 +751,7 @@ func TestClaudeController_Start_TagsEscapeAnalyticsWithStableID(t *testing.T) {
 		t.Fatalf("failed to write test data: %v", err)
 	}
 
-	cfg := wait.FastWaitConfig()
+	cfg := wait.DefaultWaitConfig()
 	cfg.Description = "escape event captured via ClaudeController.Start()"
 	if err := wait.WaitForCondition(func() bool {
 		return len(spy.snapshot()) > 0
@@ -1229,13 +1229,24 @@ func TestClaudeController_StatusChangeListener_NotCalledAfterStop(t *testing.T) 
 		}
 	})
 
-	go cc.runStatusChangeLoop(ctx)
+	loopDone := make(chan struct{})
+	go func() {
+		cc.runStatusChangeLoop(ctx)
+		close(loopDone)
+	}()
 
 	// Cancel the context (simulating Stop()).
 	cancel()
 
-	// Drain the channel to ensure the goroutine has exited.
-	time.Sleep(50 * time.Millisecond)
+	// Wait for the goroutine to actually observe ctx.Done() and return, rather
+	// than sleeping a fixed duration that can be too short under load — a
+	// short sleep here would let the still-running goroutine consume the
+	// post-stop signal below and spuriously fire the listener.
+	select {
+	case <-loopDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("runStatusChangeLoop did not exit within 2s after ctx cancellation")
+	}
 
 	// Send a signal after stop — listener must not be called.
 	select {

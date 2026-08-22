@@ -534,7 +534,7 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		blPath, blHandler := sessionv1connect.NewBacklogServiceHandler(deps.BacklogService, blOpts...)
 		blAPIPath := "/api" + blPath
 		srv.RegisterConnectHandler(blAPIPath, http.StripPrefix("/api", blHandler))
-		log.InfoLog.Printf("Registered BacklogService handler at %s", blAPIPath)
+		log.InfoLog().Printf("Registered BacklogService handler at %s", blAPIPath)
 	}
 
 	// Start UserPRCache and register GitHubUserService handler.

@@ -279,7 +279,7 @@ func (g *SessionSummaryGenerator) GenerateAndPersist(ctx context.Context, sessio
 	// locked by a panic.
 	defer func() {
 		if r := recover(); r != nil {
-			log.WarningLog.Printf("[SessionSummary] GenerateAndPersist panicked (recovered) for session=%s: %v", sessionUUID, r)
+			log.WarningLog().Printf("[SessionSummary] GenerateAndPersist panicked (recovered) for session=%s: %v", sessionUUID, r)
 		}
 	}()
 

@@ -94,13 +94,12 @@ func TestBacklogIntegration_IT002_InProgressToReviewViaSessionExit(t *testing.T)
 	// 2. Create BacklogLifecycleListener backed by real storage
 	listener := NewBacklogLifecycleListener(storage)
 
-	// 3. Call onSessionExited
+	// 3. Call onSessionExited — the status transition and EndedAt bookkeeping
+	// happen synchronously before onSessionExited spawns any goroutine (see
+	// its doc comment), so no wait is needed before reading them back.
 	listener.onSessionExited(sessionUUID)
 
-	// 4. Sleep to allow goroutine to complete
-	time.Sleep(150 * time.Millisecond)
-
-	// 5. Reload item, assert status == "review"
+	// 4. Reload item, assert status == "review"
 	fetchedItem, err := storage.GetBacklogItem(ctx, createdItem.ID)
 	require.NoError(t, err)
 	require.Equal(t, string(BacklogStatusReview), fetchedItem.Status)
@@ -143,10 +142,9 @@ func TestBacklogIntegration_IT003_SkipReviewGateTransitionsToDone(t *testing.T) 
 	createdIS, err := storage.CreateItemSession(ctx, isData)
 	require.NoError(t, err)
 
-	// 3. Create listener and call onSessionExited
+	// 3. Create listener and call onSessionExited — synchronous, see IT-002.
 	listener := NewBacklogLifecycleListener(storage)
 	listener.onSessionExited(sessionUUID)
-	time.Sleep(150 * time.Millisecond)
 
 	// 4. Verify item transitions to done (not review)
 	fetchedItem, err := storage.GetBacklogItem(ctx, createdItem.ID)
@@ -353,10 +351,9 @@ func TestBacklogIntegration_IT006_ReviewSessionExitDoesNotTransition(t *testing.
 	createdIS, err := storage.CreateItemSession(ctx, isData)
 	require.NoError(t, err)
 
-	// 3. Call onSessionExited
+	// 3. Call onSessionExited — synchronous, see IT-002.
 	listener := NewBacklogLifecycleListener(storage)
 	listener.onSessionExited(sessionUUID)
-	time.Sleep(150 * time.Millisecond)
 
 	// 4. Verify item status did NOT change (still "review")
 	fetchedItem, err := storage.GetBacklogItem(ctx, createdItem.ID)

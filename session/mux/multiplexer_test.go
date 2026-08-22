@@ -14,6 +14,20 @@ import (
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
+// readySignalConn wraps a net.Conn and closes ready on the first Read call, immediately
+// before delegating to the real Read — the closest a test can get to observing "this
+// goroutine is about to block in Read" without an OS-level hook into the syscall itself.
+type readySignalConn struct {
+	net.Conn
+	once  sync.Once
+	ready chan<- struct{}
+}
+
+func (c *readySignalConn) Read(p []byte) (int, error) {
+	c.once.Do(func() { close(c.ready) })
+	return c.Conn.Read(p)
+}
+
 // TestMultiplexer_BroadcastToClients verifies that PTY output is sent to ALL connected clients.
 func TestMultiplexer_BroadcastToClients(t *testing.T) {
 	t.Parallel()
@@ -41,28 +55,48 @@ func TestMultiplexer_BroadcastToClients(t *testing.T) {
 	outputData := []byte("pty output to all clients")
 	msg := NewOutputMessage(outputData)
 
-	// Read from both client sides in goroutines before broadcasting.
+	// Read from both client sides in goroutines before broadcasting. broadcastToClients
+	// uses a 100ms write deadline per client (multiplexer.go), and net.Pipe() is fully
+	// synchronous/unbuffered — a write only succeeds once a reader is actively blocked in
+	// Read(). Without a readiness barrier, this test raced goroutine scheduling against
+	// that write deadline: under heavy CPU contention (e.g. `go test -race -count=20
+	// ./session/...`) the reader goroutines could still be starting up when
+	// broadcastToClients ran, so the write timed out and the message was silently dropped,
+	// leaving the reader to block until its own read deadline. Bumping the read deadline
+	// (2s -> 10s) papered over this without fixing it.
+	//
+	// An earlier version of this fix closed readyCh immediately before calling
+	// DecodeMessage(conn), on the theory that this made the reader "confirmed blocked in
+	// Read" before broadcastToClients ran. It didn't: closing readyCh and entering
+	// DecodeMessage's first io.ReadFull are still two separate statements, and under
+	// `-race -count=50` the scheduler can preempt the reader goroutine in that gap and let
+	// the main goroutine call broadcastToClients before the reader ever reaches its Read
+	// call — reproduced directly (one failure in 50 iterations, "client 2 should receive
+	// broadcast", after a 10s read-deadline timeout). Signaling from *inside* readySignalConn's
+	// Read method shrinks the gap to two adjacent statements (the close() and the call into
+	// c.Conn.Read) instead of a function-call/goroutine-scheduling-latency gap — the scheduler
+	// could in principle still preempt between them, but that makes recurrence practically
+	// negligible, not mathematically impossible.
 	var wg sync.WaitGroup
-	readMsg := func(conn net.Conn) ([]byte, error) {
-		// 10s is a hang safety net, not a correctness check: net.Pipe() delivers
-		// synchronously, so a healthy broadcast returns almost instantly. A 2s
-		// deadline flaked under `go test -race -count=20 ./session/...` (heavy
-		// CPU contention from the whole package suite) even though this test
-		// passes reliably in isolation.
+	readMsg := func(conn net.Conn, readyCh chan<- struct{}) ([]byte, error) {
 		conn.SetReadDeadline(time.Now().Add(10 * time.Second))
-		decoded, err := DecodeMessage(conn)
+		decoded, err := DecodeMessage(&readySignalConn{Conn: conn, ready: readyCh})
 		if err != nil {
 			return nil, err
 		}
 		return decoded.Data, nil
 	}
 
+	c1Ready := make(chan struct{})
+	c2Ready := make(chan struct{})
 	var c1Data, c2Data []byte
 	var c1Err, c2Err error
 	wg.Add(2)
-	go func() { defer wg.Done(); c1Data, c1Err = readMsg(c1c) }()
-	go func() { defer wg.Done(); c2Data, c2Err = readMsg(c2c) }()
+	go func() { defer wg.Done(); c1Data, c1Err = readMsg(c1c, c1Ready) }()
+	go func() { defer wg.Done(); c2Data, c2Err = readMsg(c2c, c2Ready) }()
 
+	<-c1Ready
+	<-c2Ready
 	m.broadcastToClients(msg)
 
 	wg.Wait()

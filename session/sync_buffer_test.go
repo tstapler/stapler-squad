@@ -64,7 +64,7 @@ func (b *syncBuffer) Reset() {
 // SetOutput/SetPrefix/SetFlags rather than reassigning the log.WarningLog
 // package variable — other tests in this codebase run in parallel
 // (t.Parallel) and some spawn background goroutines that call
-// log.WarningLog.Printf directly; reassigning the variable itself races with
+// log.WarningLog().Printf directly; reassigning the variable itself races with
 // those concurrent reads even though *log.Logger's own methods are
 // individually concurrency-safe. The returned buffer is a syncBuffer (see
 // doc comment above), not a raw bytes.Buffer, so this test's later
@@ -73,7 +73,7 @@ func swapWarningLog(t *testing.T) *syncBuffer {
 	t.Helper()
 	warningLogMu.Lock()
 	buf := &syncBuffer{}
-	logger := log.WarningLog
+	logger := log.WarningLog()
 	origOutput := logger.Writer()
 	origPrefix := logger.Prefix()
 	origFlags := logger.Flags()

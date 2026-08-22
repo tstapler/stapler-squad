@@ -9,6 +9,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"sync"
 	"testing"
 	"time"
 
@@ -403,14 +404,27 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_DoesNotForceR
 	assert.Empty(t, trigger.calls, "no review session may be spawned off the orchestrator's inferred DONE signal")
 }
 
+// slogDefaultMu serializes every test in this package that swaps the process-global
+// slog.Default() logger. slog.Default() is stored in an unexported atomic pointer, so
+// -race never flags concurrent swaps, but two t.Parallel() tests both redirecting it
+// still race semantically: one test's log lines land in another test's capture buffer.
+// Every swap site in this package (captureLogs, captureInfoLog/captureErrorLog in
+// session_service_client_log_test.go, and the inline swaps in search_service_test.go
+// and slack_notifier_test.go) must hold this lock for the full swap-to-restore window.
+var slogDefaultMu sync.Mutex
+
 // captureLogs swaps the default slog logger for one that writes to a buffer at Debug level,
 // restoring the previous logger via t.Cleanup. Returns the buffer to inspect after the call.
 func captureLogs(t *testing.T) *bytes.Buffer {
 	t.Helper()
+	slogDefaultMu.Lock()
 	var buf bytes.Buffer
 	prev := slog.Default()
 	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
-	t.Cleanup(func() { slog.SetDefault(prev) })
+	t.Cleanup(func() {
+		slog.SetDefault(prev)
+		slogDefaultMu.Unlock()
+	})
 	return &buf
 }
 
