@@ -114,20 +114,22 @@ func TestRealTmuxSessionLifecycle(t *testing.T) {
 		err = server.KillSession(sessions[0])
 		assert.NoError(t, err)
 
-		// Verify session is gone
-		time.Sleep(100 * time.Millisecond)
-		sessions, err = server.ListSessions()
-		require.NoError(t, err)
-
-		// Should have fewer sessions now
-		found := false
-		for _, name := range sessions {
-			if name == sessions[0] {
-				found = true
-				break
+		// Verify session is gone — poll instead of a fixed sleep, since how
+		// long tmux takes to reflect the kill varies under load.
+		killedName := sessions[0]
+		require.Eventually(t, func() bool {
+			var listErr error
+			sessions, listErr = server.ListSessions()
+			if listErr != nil {
+				return false
 			}
-		}
-		assert.False(t, found, "Session should be removed after killing")
+			for _, name := range sessions {
+				if name == killedName {
+					return false
+				}
+			}
+			return true
+		}, 5*time.Second, 20*time.Millisecond, "session %q should be removed after killing", killedName)
 	})
 
 	t.Run("session content capture", func(t *testing.T) {
@@ -247,12 +249,4 @@ func TestRealTmuxSessionCleanup(t *testing.T) {
 
 		// Cleanup (via t.Cleanup() at end of test)
 	})
-	// Cleanup should have run here
-
-	// Verify cleanup worked
-	time.Sleep(100 * time.Millisecond)
-
-	// Try to list sessions on cleaned-up server
-	// This should fail or return empty
-	// Note: We can't easily verify this without creating a new test server
 }
