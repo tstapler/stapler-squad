@@ -3837,6 +3837,14 @@ func TestReportDuplicate_RejectsWhenSessionRoleNotWork(t *testing.T) {
 	assert.Equal(t, ErrPermissionDenied, errObj["code"])
 }
 
+// TestReportDuplicate_RejectsWhenSessionNotLinked covers the claimed-item
+// side of the unlinked-caller split (reportDuplicateUnclaimed): a session
+// with no ItemSession link can flag an *unclaimed* item as a duplicate (see
+// TestReportDuplicate_UnclaimedItem_ArchivesDirectly), but an in_progress
+// item is claimed by someone else's work session, so it must still be
+// refused — just with a status-specific INVALID_ARGUMENT instead of the old
+// blanket PERMISSION_DENIED, since "not linked" is no longer disqualifying
+// on its own.
 func TestReportDuplicate_RejectsWhenSessionNotLinked(t *testing.T) {
 	storage := newTestBacklogStorage(t)
 	ctx := context.Background()
@@ -3863,7 +3871,97 @@ func TestReportDuplicate_RejectsWhenSessionNotLinked(t *testing.T) {
 	m := parseResult(t, result)
 	require.False(t, m["success"].(bool))
 	errObj := m["error"].(map[string]interface{})
-	assert.Equal(t, ErrPermissionDenied, errObj["code"])
+	assert.Equal(t, ErrInvalidArgument, errObj["code"])
+	assert.Contains(t, errObj["message"].(string), "not linked to it")
+}
+
+// TestReportDuplicate_UnclaimedItem_ArchivesDirectly covers
+// reportDuplicateUnclaimed's success path: a session with no ItemSession
+// link on an item nobody has claimed yet (status=ready) archives it directly
+// once duplicate_ref is verified — no review-gate routing, since there is no
+// work/diff for a human to check (see that function's doc comment).
+func TestReportDuplicate_UnclaimedItem_ArchivesDirectly(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	ctx := context.Background()
+
+	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+		Title:  "Unclaimed duplicate",
+		Status: string(session.BacklogStatusReady),
+	})
+	require.NoError(t, err)
+
+	sessionUUID := uuid.New().String()
+	handler := &backlogHandlers{
+		storage:         storage,
+		verifyGitHubRef: func(ctx context.Context, ref *githubpkg.ParsedGitHubRef) error { return nil },
+	}
+	ctxWithUUID := WithSessionUUID(ctx, sessionUUID)
+
+	req := makeToolReq(map[string]interface{}{
+		"item_id":       item.ID,
+		"duplicate_ref": "https://github.com/tstapler/stapler-squad/pull/272",
+		"reason":        "already shipped in #272",
+	})
+
+	result, err := handler.reportDuplicate(ctxWithUUID, req)
+	require.NoError(t, err)
+
+	tc, ok := result.Content[0].(mcpgo.TextContent)
+	require.True(t, ok)
+	assert.Contains(t, tc.Text, "archived directly")
+
+	reloaded, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, string(session.BacklogStatusArchived), reloaded.Status)
+	require.NotNil(t, reloaded.ArchivedAt)
+}
+
+// TestReportDuplicate_UnclaimedItem_RefusesWhenActiveTriageSessionExists covers
+// reportDuplicateUnclaimed's active-session guard: an item at "refining" can
+// carry an active (not yet ended) triage-role ItemSession even though nobody
+// has claimed it as work — archiving out from under that triage session would
+// be the same "yanked out from under whoever's on it" failure ADR-001 exists
+// to prevent for a work session, just for triage instead.
+func TestReportDuplicate_UnclaimedItem_RefusesWhenActiveTriageSessionExists(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	ctx := context.Background()
+
+	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+		Title:  "Being triaged",
+		Status: string(session.BacklogStatusRefining),
+	})
+	require.NoError(t, err)
+
+	triageSessionUUID := uuid.New().String()
+	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: triageSessionUUID,
+		SessionRole: session.SessionRoleTriage,
+	})
+	require.NoError(t, err)
+
+	callerUUID := uuid.New().String()
+	handler := &backlogHandlers{storage: storage, verifyGitHubRef: failOnCallVerifyGitHubRef(t)}
+	ctxWithUUID := WithSessionUUID(ctx, callerUUID)
+
+	req := makeToolReq(map[string]interface{}{
+		"item_id":       item.ID,
+		"duplicate_ref": "https://github.com/tstapler/stapler-squad/pull/272",
+		"reason":        "already shipped in #272",
+	})
+
+	result, err := handler.reportDuplicate(ctxWithUUID, req)
+	require.NoError(t, err)
+
+	m := parseResult(t, result)
+	require.False(t, m["success"].(bool))
+	errObj := m["error"].(map[string]interface{})
+	assert.Equal(t, ErrInvalidArgument, errObj["code"])
+	assert.Contains(t, errObj["message"].(string), "active")
+
+	reloaded, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, string(session.BacklogStatusRefining), reloaded.Status)
 }
 
 func TestReportDuplicate_RejectsWhenSourceStatusNotAllowed(t *testing.T) {
@@ -5152,7 +5250,7 @@ func TestWaitForBacklogEvent_ReturnsImmediatelyWhenItemAlreadyArchived(t *testin
 		Status: string(session.BacklogStatusDone),
 	})
 	require.NoError(t, err)
-	_, err = storage.ArchiveBacklogItem(ctx, item.ID)
+	_, err = storage.ArchiveBacklogItem(ctx, item.ID, nil, session.TriggeredByUser, "")
 	require.NoError(t, err)
 
 	handler := &backlogHandlers{storage: storage, eventBus: events.NewEventBus(32)}
@@ -6552,8 +6650,19 @@ var linkConsistencyMutatingTools = []linkConsistencyCase{
 // ItemSession link row, every mutating tool returns PERMISSION_DENIED with a
 // self-diagnosable message (AC2) naming both the session UUID/item ID and all
 // mutating tools, not just the one that was called.
+//
+// report_duplicate is deliberately excluded: it's the one mutating tool where
+// "not linked" isn't automatically PERMISSION_DENIED — a passerby session may
+// still flag an *unclaimed* item as a duplicate (reportDuplicateUnclaimed).
+// This fixture creates the item at in_progress (claimed), so report_duplicate
+// correctly returns INVALID_ARGUMENT instead — covered by its own
+// TestReportDuplicate_RejectsWhenSessionNotLinked /
+// TestReportDuplicate_UnclaimedItem_ArchivesDirectly.
 func TestBacklogTools_LinkErrorConsistency_should_ReturnPermissionDenied_When_ItemExistsButNoLink(t *testing.T) {
 	for _, tc := range linkConsistencyMutatingTools {
+		if tc.name == "report_duplicate" {
+			continue
+		}
 		t.Run(tc.name, func(t *testing.T) {
 			storage := newTestBacklogStorage(t)
 			item, err := storage.CreateBacklogItem(context.Background(), session.BacklogItemData{
