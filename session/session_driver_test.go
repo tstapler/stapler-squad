@@ -1147,6 +1147,37 @@ func TestAnswerDialogOnce(t *testing.T) {
 // Root cause: the driver's activityRef logic (session_driver.go) always uses
 // the *later* of LastMeaningfulOutput and initialPromptSentAt as the
 // inactivity reference — specifically to avoid false inactivity fires right
+// startSessionDriverForTest replicates StartSessionDriver's goroutine/WaitGroup
+// wiring exactly, but calls runSessionDriverWithPrompt with a pre-seeded
+// retried value instead of runSessionDriver's fresh, always-false one.
+// StartSessionDriver's public API intentionally can't express a pre-seeded
+// retried value (see TestSessionDriver_DialogGaveUp_FallsThroughToInactivityEscalation's
+// doc comment for why) — this test-only, package-private helper exists so
+// callers that need one can still clean up via the real StopSessionDriver,
+// rather than hand-rolling stop/done channels outside the Start/Stop wrapper.
+func startSessionDriverForTest(inst *Instance, allowedPath, initialPrompt string, retried bool) {
+	inst.driverMu.Lock()
+	if inst.driverDestroyed {
+		inst.driverMu.Unlock()
+		return
+	}
+	if !inst.driverRunning.CompareAndSwap(false, true) {
+		inst.driverMu.Unlock()
+		return
+	}
+	stopper := &sessionDriverStopper{stop: make(chan struct{})}
+	inst.driverWG.Add(1)
+	inst.driverStopper.Store(stopper)
+	inst.driverMu.Unlock()
+	var retriedFlag atomic.Bool
+	retriedFlag.Store(retried)
+	go func() {
+		defer inst.driverWG.Done()
+		defer inst.driverRunning.Store(false)
+		runSessionDriverWithPrompt(inst, allowedPath, initialPrompt, &retriedFlag, stopper.stop)
+	}()
+}
+
 // after startup. Once the dialogGaveUp fall-through reaches the
 // initial-prompt-send step (which it does almost immediately, since the
 // fake ProcessManager's failCount is exhausted by the dialog-answer
@@ -1191,14 +1222,13 @@ func TestSessionDriver_DialogGaveUp_FallsThroughToInactivityEscalation(t *testin
 	}
 	inst.started.Store(true)
 
-	// This test pre-seeds retried=true (simulating "already retried once" so
-	// the second-failure path fires directly), a precondition StartSessionDriver
-	// cannot express — its wrapper always allocates a fresh, zero-value
-	// atomic.Bool internally. So this call site stays on the lower-level
-	// runSessionDriverWithPrompt, but with a real closeable stop channel
-	// (rather than a never-closed make(chan struct{})) so the driver loop's
-	// own `case <-stop: return` fires immediately on cleanup instead of
-	// relying on the loop noticing Status=Paused on its next poll tick.
+	// This test needs retried=true pre-seeded (simulating "already retried
+	// once" so the second-failure path fires directly), a precondition
+	// StartSessionDriver cannot express through its public API — its wrapper
+	// always allocates a fresh, zero-value atomic.Bool internally, and
+	// extending its signature to accept one for a single test call site
+	// would leak an implementation detail into production code for no other
+	// caller's benefit.
 	//
 	// Considered and rejected: driving retried=true organically through
 	// StartSessionDriver by forcing one real failure/restart cycle first.
@@ -1211,30 +1241,18 @@ func TestSessionDriver_DialogGaveUp_FallsThroughToInactivityEscalation(t *testin
 	// TestSessionDriver_SecondFailure_MarksNeedsAttention), doubling the
 	// real wall-clock cost and adding a second independent timing-flakiness
 	// surface on top of the driverReadyTimeout margin already documented
-	// below (two recorded near-miss recurrences on this test alone). The
-	// direct-call form isolates the behavior under test and keeps the
-	// existing real-stop-channel + goleak.VerifyNone(t, ...) coverage that
-	// StartSessionDriver/StopSessionDriver would otherwise exist to provide.
+	// below (two recorded near-miss recurrences on this test alone).
+	//
+	// Instead this test uses startSessionDriverForTest (below), a test-only
+	// helper that replicates StartSessionDriver's exact goroutine/WaitGroup
+	// wiring but accepts a pre-seeded retried value — so cleanup goes
+	// through the real StopSessionDriver, identically to every other
+	// SessionDriver test, rather than a bespoke stop/done channel pair.
 	baseline := goleak.IgnoreCurrent()
 	defer goleak.VerifyNone(t, append(knownBackgroundGoroutines, baseline)...)
 
-	var retried atomic.Bool
-	retried.Store(true) // simulate "already retried once" so the second-failure path fires directly
-
-	stop := make(chan struct{})
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		runSessionDriverWithPrompt(inst, "/tmp", driverInitialPrompt, &retried, stop)
-	}()
-	defer func() {
-		close(stop)
-		select {
-		case <-done:
-		case <-time.After(driverStopTimeout + 2*time.Second):
-			t.Fatal("driver goroutine did not exit promptly after stop was closed")
-		}
-	}()
+	startSessionDriverForTest(inst, "/tmp", driverInitialPrompt, true /* retried */)
+	defer StopSessionDriver(inst)
 
 	// maxDialogAnswerAttempts failed dialog-answer sends drive the latch to
 	// dialogGaveUp; the 4th SendKeys call (initial-prompt send, unblocked by
