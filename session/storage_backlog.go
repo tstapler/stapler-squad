@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"regexp"
@@ -487,6 +488,43 @@ func (r *EntRepository) UpdateItemSessionFailureCapture(ctx context.Context, id 
 		return fmt.Errorf("failed to set failure_capture_path on item session %s: %w", id, err)
 	}
 	return nil
+}
+
+// UpdateItemSessionCost adds usd to an ItemSession's estimated_cost_usd. Additive
+// (not a Set) so a session with multiple headless calls attributed to it — e.g.
+// the autonomous fix-loop's per-turn LLM calls — accumulates a real running total
+// instead of each call overwriting the last.
+func (r *EntRepository) UpdateItemSessionCost(ctx context.Context, id string, usd float64) error {
+	parsedID, err := uuid.Parse(id)
+	if err != nil {
+		return fmt.Errorf("invalid id %q: %w", id, err)
+	}
+
+	_, err = r.client.ItemSession.UpdateOneID(parsedID).
+		AddEstimatedCostUsd(usd).
+		Save(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to add estimated_cost_usd on item session %s: %w", id, err)
+	}
+	return nil
+}
+
+// AddHeadlessCostBySessionUUID looks up the most recent ItemSession for sessionUUID
+// and adds usd to its estimated_cost_usd. A no-op (nil error) when usd <= 0 or when
+// sessionUUID has no ItemSession at all — most interactive sessions aren't
+// backlog-linked, and that's an expected, not exceptional, outcome here.
+func (r *EntRepository) AddHeadlessCostBySessionUUID(ctx context.Context, sessionUUID string, usd float64) error {
+	if usd <= 0 {
+		return nil
+	}
+	is, err := r.GetItemSessionBySessionUUID(ctx, sessionUUID)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return nil
+		}
+		return err
+	}
+	return r.UpdateItemSessionCost(ctx, is.ID, usd)
 }
 
 // SetItemSessionBaseCommit records the worktree's pre-work HEAD SHA for the

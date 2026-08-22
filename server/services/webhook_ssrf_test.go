@@ -120,7 +120,13 @@ func TestValidateCallbackURL_RejectsEmptyHost(t *testing.T) {
 // "safe" address from a mixed result set, since a rebinding attacker controls which
 // address the actual dial would reach.
 func TestResolveAndValidateCallbackHost_RejectsMixedSafetyResultSet(t *testing.T) {
-	t.Parallel()
+	// Not t.Parallel(): withFakeResolver swaps the package-level lookupIPAddr var,
+	// which every other test in this file (including t.Parallel() ones exercising
+	// the real resolver) reads. Go runs all non-parallel top-level tests in this
+	// package to completion — restoring the real resolver via t.Cleanup — before
+	// any t.Parallel() test starts, so this ordering is what keeps the swap from
+	// racing a concurrent real-resolver test. See the sibling withFakeResolver
+	// tests below for the same reasoning.
 	withFakeResolver(t, func(ctx context.Context, host string) ([]net.IPAddr, error) {
 		return []net.IPAddr{
 			{IP: net.ParseIP("8.8.8.8")},  // public — would pass alone
@@ -136,7 +142,7 @@ func TestResolveAndValidateCallbackHost_RejectsMixedSafetyResultSet(t *testing.T
 // CallbackDispatcher pins its dial to (AC8) is genuinely the one that was checked, not
 // a placeholder.
 func TestResolveAndValidateCallbackHost_ReturnsTheValidatedIP(t *testing.T) {
-	t.Parallel()
+	// Not t.Parallel() — see TestResolveAndValidateCallbackHost_RejectsMixedSafetyResultSet.
 	withFakeResolver(t, func(ctx context.Context, host string) ([]net.IPAddr, error) {
 		return []net.IPAddr{{IP: net.ParseIP("8.8.8.8")}}, nil
 	})
@@ -155,7 +161,11 @@ func TestResolveAndValidateCallbackHost_ReturnsTheValidatedIP(t *testing.T) {
 // TestCallbackDispatcher_Attempt_DialsThePinnedIP_NotTheURLHost in
 // callback_dispatcher_test.go).
 func TestResolveAndValidateCallbackHost_RejectsWhenSecondLookupWouldDiffer(t *testing.T) {
-	t.Parallel()
+	// Not t.Parallel() — see TestResolveAndValidateCallbackHost_RejectsMixedSafetyResultSet.
+	// Notably, this fake resolver's second response is 169.254.169.254 (the cloud
+	// metadata address) — if this swap ever raced a concurrent real-resolver test,
+	// that test would see exactly "callback host resolves to the cloud metadata
+	// address", which is the failure this ordering fix reproduces and closes.
 	calls := 0
 	withFakeResolver(t, func(ctx context.Context, host string) ([]net.IPAddr, error) {
 		calls++

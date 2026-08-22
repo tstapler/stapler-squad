@@ -32,6 +32,37 @@ func makeEndedItemSession(role string, commitCount int, lastMsg string) ItemSess
 	}
 }
 
+// TestBuildSessionInitialPrompt_should_IncludeItemID_When_Called verifies the normal
+// (non-triage) initial prompt embeds the item's own id, matching the triage-mode prompt
+// builder's existing behavior — so a session whose item_sessions row is later lost still
+// has a reliable, MCP-independent channel to recover its own item_id for
+// link_session_to_item/get_linked_item.
+func TestBuildSessionInitialPrompt_should_IncludeItemID_When_Called(t *testing.T) {
+	ac := `[{"index":0,"text":"Do the thing","status":"pending"}]`
+	item := makeTestBacklogItem("My Feature", "Do the thing", ac, "ready", 1, "")
+
+	output := BuildSessionInitialPrompt(item, nil)
+
+	want := fmt.Sprintf("item_id: %s", item.ID)
+	if !strings.Contains(output, want) {
+		t.Errorf("expected initial prompt to contain %q, got:\n%s", want, output)
+	}
+}
+
+// TestBuildSessionInitialPrompt_should_IncludeItemID_When_ItemFieldsEmpty verifies the
+// item_id line does not depend on other fields (Description, Notes, AcceptanceCriteria)
+// being populated.
+func TestBuildSessionInitialPrompt_should_IncludeItemID_When_ItemFieldsEmpty(t *testing.T) {
+	item := makeTestBacklogItem("", "", `[]`, "ready", 1, "")
+
+	output := BuildSessionInitialPrompt(item, nil)
+
+	want := fmt.Sprintf("item_id: %s", item.ID)
+	if !strings.Contains(output, want) {
+		t.Errorf("expected initial prompt to contain %q even with empty item fields, got:\n%s", want, output)
+	}
+}
+
 // UT-038a: output must contain the task protocol block sentinel strings.
 func TestBuildSessionInitialPrompt_ContainsTaskProtocolBlock(t *testing.T) {
 	t.Parallel()

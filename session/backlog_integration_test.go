@@ -106,7 +106,7 @@ func TestBacklogIntegration_IT002_InProgressToReviewViaSessionExit(t *testing.T)
 	require.Equal(t, string(BacklogStatusReview), fetchedItem.Status)
 
 	// 6. Reload ItemSession, assert ended_at is set
-	repo := storage.repo.(*EntRepository)
+	repo := storage.repo
 	fetchedIS, err := repo.GetItemSession(ctx, createdIS.ID)
 	require.NoError(t, err)
 	require.NotNil(t, fetchedIS.EndedAt, "ItemSession should have EndedAt set")
@@ -154,7 +154,7 @@ func TestBacklogIntegration_IT003_SkipReviewGateTransitionsToDone(t *testing.T) 
 	require.Equal(t, string(BacklogStatusDone), fetchedItem.Status, "should transition to done when SkipReviewGate=true")
 
 	// 5. Verify ItemSession.EndedAt is set
-	repo := storage.repo.(*EntRepository)
+	repo := storage.repo
 	fetchedIS, err := repo.GetItemSession(ctx, createdIS.ID)
 	require.NoError(t, err)
 	require.NotNil(t, fetchedIS.EndedAt)
@@ -364,7 +364,7 @@ func TestBacklogIntegration_IT006_ReviewSessionExitDoesNotTransition(t *testing.
 	require.Equal(t, string(BacklogStatusReview), fetchedItem.Status, "review session exit should not transition item")
 
 	// 5. Verify ItemSession.EndedAt IS set (exit is recorded for all roles)
-	repo := storage.repo.(*EntRepository)
+	repo := storage.repo
 	fetchedIS, err := repo.GetItemSession(ctx, createdIS.ID)
 	require.NoError(t, err)
 	require.NotNil(t, fetchedIS.EndedAt, "review session exit should set EndedAt")
@@ -421,7 +421,7 @@ func TestBacklogIntegration_IT007_MultipleItemSessionsPerItem(t *testing.T) {
 	require.NoError(t, err)
 
 	// 5. Verify all three ItemSessions exist and have their session UUIDs
-	repo := storage.repo.(*EntRepository)
+	repo := storage.repo
 
 	fetchedIS1, err := repo.GetItemSession(ctx, is1.ID)
 	require.NoError(t, err)
@@ -477,7 +477,7 @@ func TestBacklogIntegration_IT008_AcSnapshotCapture(t *testing.T) {
 	require.NoError(t, err)
 
 	// 3. Reload ItemSession, verify AcSnapshot still has the snapshot content
-	repo := storage.repo.(*EntRepository)
+	repo := storage.repo
 	fetchedIS, err := repo.GetItemSession(ctx, createdIS.ID)
 	require.NoError(t, err)
 
@@ -567,7 +567,7 @@ func TestBacklogIntegration_IT010_ItemSessionLastCommitSha(t *testing.T) {
 	require.NoError(t, err)
 
 	// 2. Update LastCommitSha
-	repo := storage.repo.(*EntRepository)
+	repo := storage.repo
 	testSha := "abc123def456"
 
 	parsedUUID, err := uuid.Parse(createdIS.ID)

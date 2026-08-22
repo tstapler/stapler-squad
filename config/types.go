@@ -168,6 +168,14 @@ type TmuxExecGateConfig struct {
 	// Zero or unset means "use the default" — see ResyncFastLaneSlotsOrDefault.
 	// Default: 4.
 	ResyncFastLaneSlots int `json:"resyncFastLaneSlots"`
+
+	// InputFastLaneSlots is the number of concurrent tmux subprocess execution
+	// slots reserved for keystroke input traffic (the legacy per-keystroke
+	// send-keys path used when STAPLER_SQUAD_USE_CONTROL_MODE=false), so a
+	// poller flooding the shared Slots pool with capture-pane calls never
+	// makes user keystrokes queue behind it. Zero or unset means "use the
+	// default" — see InputFastLaneSlotsOrDefault. Default: 4.
+	InputFastLaneSlots int `json:"inputFastLaneSlots"`
 }
 
 // defaultTmuxExecGateSlots is used whenever Slots is unset (zero), including
@@ -177,6 +185,10 @@ const defaultTmuxExecGateSlots = 8
 // defaultResyncFastLaneSlots is used whenever ResyncFastLaneSlots is unset
 // (zero), including for configs saved before this field existed.
 const defaultResyncFastLaneSlots = 4
+
+// defaultInputFastLaneSlots is used whenever InputFastLaneSlots is unset
+// (zero), including for configs saved before this field existed.
+const defaultInputFastLaneSlots = 4
 
 // SlotsOrDefault returns Slots, falling back to defaultTmuxExecGateSlots when
 // unset (covers both a fresh zero-value struct and a config.json saved before
@@ -197,6 +209,17 @@ func (c TmuxExecGateConfig) ResyncFastLaneSlotsOrDefault() int {
 		return defaultResyncFastLaneSlots
 	}
 	return c.ResyncFastLaneSlots
+}
+
+// InputFastLaneSlotsOrDefault returns InputFastLaneSlots, falling back to
+// defaultInputFastLaneSlots when unset (covers both a fresh zero-value
+// struct and a config.json saved before this field existed, which unmarshals
+// the same way).
+func (c TmuxExecGateConfig) InputFastLaneSlotsOrDefault() int {
+	if c.InputFastLaneSlots <= 0 {
+		return defaultInputFastLaneSlots
+	}
+	return c.InputFastLaneSlots
 }
 
 // BrowserPassthroughCDPConfig holds tunable parameters for the Chrome DevTools
@@ -482,6 +505,43 @@ func (c QuotaConfig) QuotaConfigOrDefault() QuotaConfig {
 		out.ForegroundThrottleDelaySeconds = 300
 	}
 	return out
+}
+
+// RemoteConfig registers one SSH-reachable remote host that sessions can be
+// created against (ssh-remote-workspaces feature). It holds only connection
+// coordinates and a pointer to credential material — never the credential
+// material itself. See sshremote.KeyStore (Phase 3.2) for where the actual
+// SSH private key/passphrase bytes live (OS keychain), and
+// Config.RemoteByName for the lookup helper consumed by session creation
+// (Phase 4) and Settings UI validation (Phase 6).
+type RemoteConfig struct {
+	// Name is the unique, user-chosen identifier for this remote (e.g.
+	// "prod-box"), referenced by session-creation flows. Not a hostname and
+	// not required to resolve as one.
+	Name string `json:"name"`
+	// Host is the SSH-reachable hostname or address (e.g. "prod.example.com"
+	// or "10.0.0.5"). Not a full "user@host" string — see User for the
+	// login name — and not a URL (no scheme, no path, no port suffix; use a
+	// standard SSH config Host block for non-default ports).
+	Host string `json:"host"`
+	// User is the SSH login username on the remote host. Not a local
+	// username and not validated against the remote's actual user list at
+	// save time.
+	User string `json:"user"`
+	// BasePath is the absolute filesystem path on the remote host under
+	// which session worktrees/directories are created (e.g.
+	// "/srv/workspaces"). Not a local path and not created automatically by
+	// saving this config — it must already exist (or be creatable) on the
+	// remote.
+	BasePath string `json:"base_path"`
+	// IdentityRef is an opaque, non-secret pointer to the SSH identity
+	// (private key + optional passphrase) that authenticates to this
+	// remote, resolved at connection time via sshremote.KeyStore against the
+	// OS keychain. It is NOT a filesystem path to a key file, NOT the key's
+	// raw bytes, and NOT the passphrase itself — no key material is ever
+	// stored in config.json. An empty value means no identity has been
+	// registered yet for this remote.
+	IdentityRef string `json:"identity_ref"`
 }
 
 // CapacityConfigOrDefault returns a CapacityConfig with standard defaults applied to zero fields.

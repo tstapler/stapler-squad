@@ -388,8 +388,13 @@ func (g *SessionSummaryGenerator) GenerateAndPersist(ctx context.Context, sessio
 			goalText = sessionGoal.Goal
 		}
 		narrCtx, cancel := context.WithTimeout(ctx, llmNarrativeTimeout)
-		text, narrErr := headless.GenerateSessionCompletionNarrative(narrCtx, g.pool, sessionTitle, goalText, diffContent, formatDecisionsSummary(decisions))
+		text, narrCostUSD, narrErr := headless.GenerateSessionCompletionNarrative(narrCtx, g.pool, sessionTitle, goalText, diffContent, formatDecisionsSummary(decisions))
 		cancel()
+		// Folded into the same EstimatedCostUSD the token-usage-log snapshot above
+		// populates: this narrative call is a separate cost channel (a headless pool
+		// call, not part of the interactive session's own JSONL token log) that would
+		// otherwise never be counted anywhere.
+		cost.EstimatedCostUSD += narrCostUSD
 		if narrErr != nil {
 			log.ForSession(sessionUUID).Warn("[SessionSummary] narrative generation failed, using fallback", "err", narrErr)
 			narrative = narrativeFallbackLLMFailure

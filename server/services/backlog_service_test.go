@@ -13,8 +13,6 @@ import (
 	"time"
 
 	"connectrpc.com/connect"
-	"github.com/go-git/go-git/v5"
-	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -80,7 +78,7 @@ type fakePoolCall struct {
 	hasDeadline    bool
 }
 
-func (f *fakeHeadlessPool) CallBlocking(ctx context.Context, key headless.FeatureKey, systemPrompt, userPrompt string, opts headless.CallOptions) (string, float64, error) {
+func (f *fakeHeadlessPool) CallBlocking(ctx context.Context, key headless.FeatureKey, systemPrompt, userPrompt string, opts headless.CallOptions, sink headless.CostSink) (string, error) {
 	f.mu.Lock()
 	callIndex := len(f.calls)
 	deadline, hasDeadline := ctx.Deadline()
@@ -107,13 +105,14 @@ func (f *fakeHeadlessPool) CallBlocking(ctx context.Context, key headless.Featur
 		select {
 		case <-timer.C:
 		case <-ctx.Done():
-			return "", 0, ctx.Err()
+			return "", ctx.Err()
 		}
 	}
 	if onCall != nil {
 		onCall(opts.WorkDir)
 	}
-	return resp, f.cost, f.err
+	sink(f.cost)
+	return resp, f.err
 }
 
 func (f *fakeHeadlessPool) callCount() int {
@@ -882,6 +881,40 @@ func TestBacklogItemToProto_should_IncludeAuditTrail_When_StatusEventsAndProgres
 	assert.True(t, p.ActivityNotes[0].CreatedAt.AsTime().Equal(activityCreatedAt))
 }
 
+// ─── backlogItemSummaryToProto ─────────────────────────────────────────────────
+
+// TestBacklogItemSummaryToProto_should_SetAllowedTransitions_When_ItemHasAnyStatus
+// is the regression test for the empty Force-status dropdown bug: ListBacklogItems
+// (backed by backlogItemSummaryToProto) previously omitted AllowedTransitions
+// entirely, unlike GetBacklogItem (backed by backlogItemToProto). AllowedTransitions
+// is a pure function of status, so summary and full protos must always agree.
+func TestBacklogItemSummaryToProto_should_SetAllowedTransitions_When_ItemHasAnyStatus(t *testing.T) {
+	statuses := []session.BacklogStatus{
+		session.BacklogStatusIdea,
+		session.BacklogStatusRefining,
+		session.BacklogStatusReady,
+		session.BacklogStatusQueued,
+		session.BacklogStatusInProgress,
+		session.BacklogStatusReview,
+		session.BacklogStatusPRPending,
+		session.BacklogStatusDone,
+		session.BacklogStatusArchived,
+	}
+
+	for _, status := range statuses {
+		t.Run(string(status), func(t *testing.T) {
+			summary := &session.BacklogItemSummary{ID: "item-1", Status: status}
+			summaryProto := backlogItemSummaryToProto(summary, nil)
+
+			full := &session.BacklogItemData{ID: "item-1", Status: string(status)}
+			fullProto := backlogItemToProto(full, nil)
+
+			assert.Equal(t, fullProto.AllowedTransitions, summaryProto.AllowedTransitions)
+			assert.NotEmpty(t, summaryProto.AllowedTransitions, "status %q should have outbound transitions", status)
+		})
+	}
+}
+
 // ─── ApprovePlan ──────────────────────────────────────────────────────────────
 
 // UT-032a: ApprovePlan when plan_artifacts_path is empty → CodeFailedPrecondition
@@ -1187,50 +1220,12 @@ func TestTransitionBacklogItemStatus_SendBackToIdea_ClearsRejectionReason(t *tes
 	assert.Nil(t, fetched.PlanRejectedAt, "plan_rejected_at must be cleared on a fresh read too")
 }
 
-// initGitRepoWithCommit initialises a minimal git repository with an initial commit so
-// that git worktree operations (which require at least one commit) work in tests.
-// Uses go-git directly rather than shelling out — see
-// .claude/rules/prefer-go-git-over-subshells.md.
-//
-// Also sets a local (repo-scoped, not --global) user.name/user.email via go-git's
-// config API. The initial commit below always supplies its own go-git CommitOptions
-// Author, so it doesn't need this — but several tests reuse this repo (or a clone of
-// it, e.g. setupPRFixSyncRepo's originDir) for further commits made via the plain git
-// CLI (runGitTestCmd), which reads identity from git config rather than any argument.
-// That works on a dev machine with a global identity configured, but CI runners have
-// none, and fail with "Author identity unknown" — setting it here once, locally, fixes
-// every downstream CLI commit against this repo.
-func initGitRepoWithCommit(t *testing.T, dir string) {
-	t.Helper()
-	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("# Test Repo\n"), 0o644); err != nil {
-		t.Skipf("write README: %v", err)
-	}
-	repo, err := git.PlainInit(dir, false)
-	if err != nil {
-		t.Skipf("git init: %v", err)
-	}
-	cfg, err := repo.Config()
-	if err != nil {
-		t.Skipf("git config: %v", err)
-	}
-	cfg.User.Name = "Test User"
-	cfg.User.Email = "test@example.com"
-	if err := repo.SetConfig(cfg); err != nil {
-		t.Skipf("git set config: %v", err)
-	}
-	wt, err := repo.Worktree()
-	if err != nil {
-		t.Skipf("worktree: %v", err)
-	}
-	if _, err := wt.Add("README.md"); err != nil {
-		t.Skipf("git add: %v", err)
-	}
-	if _, err := wt.Commit("initial", &git.CommitOptions{
-		Author: &object.Signature{Name: "Test", Email: "test@example.com", When: time.Now()},
-	}); err != nil {
-		t.Skipf("git commit: %v", err)
-	}
-}
+// initGitRepoWithCommit is defined in git_fixture_test.go (go-git based,
+// shared across this package's test files). It also sets a local
+// (repo-scoped, not --global) user.name/user.email so any downstream
+// commits made against this repo (or a clone of it) via the plain git CLI
+// (runGitTestCmd) resolve an author identity even on a CI runner with no
+// global git config.
 
 // ─── Full lifecycle (audit regression test) ──────────────────────────────────
 

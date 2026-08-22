@@ -1,10 +1,15 @@
 package git
 
 import (
+	"context"
+	"fmt"
+	"io"
 	"os/exec"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
 // TestPrNumberFromURLRe_ExtractsTrailingNumber is the regression test for
@@ -46,24 +51,6 @@ func TestPrNumberFromURLRe_ExtractsTrailingNumber(t *testing.T) {
 	}
 }
 
-// raceSimulatorExecutor implements executor.Executor for testing the double-checked
-// locking invariant in IsDirtyWithHint.  When CombinedOutput is called it runs
-// raceSetup first (simulating a concurrent goroutine updating the cache), then
-// returns the configured output.
-type raceSimulatorExecutor struct {
-	output    []byte
-	raceSetup func()
-}
-
-func (e *raceSimulatorExecutor) Run(_ *exec.Cmd) error              { return nil }
-func (e *raceSimulatorExecutor) Output(_ *exec.Cmd) ([]byte, error) { return e.output, nil }
-func (e *raceSimulatorExecutor) CombinedOutput(_ *exec.Cmd) ([]byte, error) {
-	if e.raceSetup != nil {
-		e.raceSetup()
-	}
-	return e.output, nil
-}
-
 // TestIsDirtyWithHint_ReturnsLocallyComputedValue_WhenCacheIsWrittenByRacingGoroutine
 // verifies the return-own-observation invariant: IsDirtyWithHint must return the
 // locally-computed value, not a re-read of the cache slot.
@@ -71,20 +58,24 @@ func (e *raceSimulatorExecutor) CombinedOutput(_ *exec.Cmd) ([]byte, error) {
 // With atomic.Value the write is unconditional, so a race can't suppress our Store.
 // The test simulates a racing goroutine that stores false into the cache WHILE our
 // git subprocess is running; our code must still return true (its own observation).
+//
+// Uses a gitSpyCommandRunner (via WithCommandRunner) rather than the
+// executor.Executor-based mock this test used before runGitCommand was migrated
+// onto CommandRunner unconditionally (see ADR-002's addendum) — spy.runFunc plays
+// the same role raceSimulatorExecutor's raceSetup hook used to.
 func TestIsDirtyWithHint_ReturnsLocallyComputedValue_WhenCacheIsWrittenByRacingGoroutine(t *testing.T) {
 	t.Parallel()
-	mock := &raceSimulatorExecutor{
-		output: []byte("M file.txt\n"), // our goroutine sees the worktree as dirty
-	}
-
+	spy := &gitSpyCommandRunner{}
 	g := NewGitWorktreeFromStorageWithExecutor(
-		"/fake/repo", "/fake/worktree", "test-session", "test-branch", "", mock,
+		"/fake/repo", "/fake/worktree", "test-session", "test-branch", "",
+		WithCommandRunner(spy),
 	)
 
-	// The raceSetup closure runs inside CombinedOutput, simulating a concurrent
-	// goroutine that stores dirty=false while our git call is "in flight".
-	mock.raceSetup = func() {
+	// runFunc runs inside Run, simulating a concurrent goroutine that stores
+	// dirty=false while our git call is "in flight".
+	spy.runFunc = func() ([]byte, error) {
 		g.isDirtyCache.Store(dirtyCacheState{dirty: false, time: time.Now()})
+		return []byte("M file.txt\n"), nil // our goroutine sees the worktree as dirty
 	}
 
 	// Start with an invalid cache so IsDirtyWithHint takes the slow (git) path.
@@ -102,43 +93,39 @@ func TestIsDirtyWithHint_ReturnsLocallyComputedValue_WhenCacheIsWrittenByRacingG
 	}
 }
 
-// countingErrExecutor always fails CombinedOutput and counts how many times it was
-// invoked, simulating `git status` against a worktree directory that no longer exists.
-type countingErrExecutor struct {
-	calls int
-}
-
-func (e *countingErrExecutor) Run(_ *exec.Cmd) error              { return nil }
-func (e *countingErrExecutor) Output(_ *exec.Cmd) ([]byte, error) { return nil, nil }
-func (e *countingErrExecutor) CombinedOutput(_ *exec.Cmd) ([]byte, error) {
-	e.calls++
-	return []byte("fatal: cannot change to '/fake/worktree': No such file or directory"), exec.ErrNotFound
-}
-
 // TestIsDirtyWithHint_BacksOffAfterError proves that a failing `git status` (e.g. the
 // worktree directory is missing — the stale-path-after-rework bug) is cached with a
 // backoff TTL rather than re-run on every call: a second call made immediately after a
 // failure must return the same error without spawning another subprocess.
+//
+// Uses a gitSpyCommandRunner (via WithCommandRunner) rather than the
+// executor.Executor-based countingErrExecutor mock this test used before
+// runGitCommand was migrated onto CommandRunner unconditionally (see ADR-002's
+// addendum) — len(spy.runCalls) plays the same role countingErrExecutor.calls used to.
 func TestIsDirtyWithHint_BacksOffAfterError(t *testing.T) {
 	t.Parallel()
-	mock := &countingErrExecutor{}
+	spy := &gitSpyCommandRunner{
+		runOut: []byte("fatal: cannot change to '/fake/worktree': No such file or directory"),
+		runErr: exec.ErrNotFound,
+	}
 	g := NewGitWorktreeFromStorageWithExecutor(
-		"/fake/repo", "/fake/worktree", "test-session", "test-branch", "", mock,
+		"/fake/repo", "/fake/worktree", "test-session", "test-branch", "",
+		WithCommandRunner(spy),
 	)
 	g.isDirtyCache.Store(dirtyCacheState{}) // zero time = cache invalid
 
 	if _, err := g.IsDirtyWithHint(false); err == nil {
 		t.Fatalf("IsDirtyWithHint() error = nil; want an error from the failing git command")
 	}
-	if mock.calls != 1 {
-		t.Fatalf("calls after first (failing) check = %d; want 1", mock.calls)
+	if len(spy.runCalls) != 1 {
+		t.Fatalf("calls after first (failing) check = %d; want 1", len(spy.runCalls))
 	}
 
 	if _, err := g.IsDirtyWithHint(false); err == nil {
 		t.Fatalf("second IsDirtyWithHint() error = nil; want the cached error")
 	}
-	if mock.calls != 1 {
-		t.Errorf("calls after second check within backoff TTL = %d; want still 1 (no new subprocess spawned)", mock.calls)
+	if len(spy.runCalls) != 1 {
+		t.Errorf("calls after second check within backoff TTL = %d; want still 1 (no new subprocess spawned)", len(spy.runCalls))
 	}
 }
 
@@ -621,31 +608,39 @@ func TestParsePRStatusPayload_ReviewerCommentsSectionRendered(t *testing.T) {
 	}
 }
 
-// capturingGHExecutor is a fake executor.Executor for CreatePR tests: it
-// records every command's Args and dispatches a canned response based on the
+// capturingGHRunner is a tmux.CommandRunner spy for CreatePR tests: it
+// records every command's args and dispatches a canned response based on the
 // gh subcommand (`pr list` for findExistingPR's pre-check, `pr create` for
 // the actual creation), so tests can assert on the exact args CreatePR built
-// without touching a real `gh` process.
-type capturingGHExecutor struct {
-	createArgs []string // captured Args of the `gh pr create` invocation
-	createOut  string   // combined output returned for `gh pr create`
+// without touching a real `gh` process. Mirrors gitSpyCommandRunner's shape,
+// but branches on args the way capturingGHExecutor (removed once CreatePR's
+// last executor.Executor-gated branch migrated onto commandRunner()) used to.
+type capturingGHRunner struct {
+	createArgs []string // captured args of the `gh pr create` invocation
+	createOut  string   // output returned for `gh pr create`
 }
 
-func (e *capturingGHExecutor) Run(_ *exec.Cmd) error              { return nil }
-func (e *capturingGHExecutor) Output(_ *exec.Cmd) ([]byte, error) { return nil, nil }
-func (e *capturingGHExecutor) CombinedOutput(cmd *exec.Cmd) ([]byte, error) {
-	if len(cmd.Args) > 1 && cmd.Args[1] == "pr" && len(cmd.Args) > 2 && cmd.Args[2] == "list" {
+func (r *capturingGHRunner) Run(_ context.Context, _ string, name string, args ...string) ([]byte, error) {
+	if name == "gh" && len(args) > 0 && args[0] == "pr" && len(args) > 1 && args[1] == "list" {
 		// findExistingPR's pre-check: report no existing PR so CreatePR
 		// proceeds to `gh pr create`.
 		return nil, exec.ErrNotFound
 	}
-	e.createArgs = append([]string(nil), cmd.Args...)
-	out := e.createOut
+	r.createArgs = append([]string(nil), args...)
+	out := r.createOut
 	if out == "" {
 		out = "https://github.com/tstapler/stapler-squad/pull/172\n"
 	}
 	return []byte(out), nil
 }
+
+func (r *capturingGHRunner) Start(context.Context, string, string, ...string) (io.WriteCloser, io.ReadCloser, func() error, error) {
+	return nil, nil, nil, fmt.Errorf("capturingGHRunner.Start not implemented")
+}
+
+func (r *capturingGHRunner) IsRemote() bool { return false }
+
+var _ tmux.CommandRunner = (*capturingGHRunner)(nil)
 
 // TestGitWorktree_CreatePR_PassesBaseBranch_When_NonEmpty proves Task 1.1.1a:
 // a non-empty baseBranch is forwarded to `gh pr create` as `--base <value>`,
@@ -653,9 +648,10 @@ func (e *capturingGHExecutor) CombinedOutput(cmd *exec.Cmd) ([]byte, error) {
 // UI-only and silently ignored.
 func TestGitWorktree_CreatePR_PassesBaseBranch_When_NonEmpty(t *testing.T) {
 	t.Parallel()
-	mock := &capturingGHExecutor{}
+	mock := &capturingGHRunner{}
 	g := NewGitWorktreeFromStorageWithExecutor(
-		"/fake/repo", "/fake/worktree", "test-session", "feature/rate-limit-toggle", "", mock,
+		"/fake/repo", "/fake/worktree", "test-session", "feature/rate-limit-toggle", "",
+		WithCommandRunner(mock),
 	)
 
 	_, _, err := g.CreatePR(PRCreateOptions{Title: "Add rate limit toggle", Body: "Adds a per-user rate limit toggle.", BaseBranch: "release/1.2"})
@@ -684,9 +680,10 @@ func TestGitWorktree_CreatePR_PassesBaseBranch_When_NonEmpty(t *testing.T) {
 // every pre-existing caller (e.g. the backlog automation path).
 func TestGitWorktree_CreatePR_OmitsBaseFlag_When_Empty(t *testing.T) {
 	t.Parallel()
-	mock := &capturingGHExecutor{}
+	mock := &capturingGHRunner{}
 	g := NewGitWorktreeFromStorageWithExecutor(
-		"/fake/repo", "/fake/worktree", "test-session", "feature/rate-limit-toggle", "", mock,
+		"/fake/repo", "/fake/worktree", "test-session", "feature/rate-limit-toggle", "",
+		WithCommandRunner(mock),
 	)
 
 	_, _, err := g.CreatePR(PRCreateOptions{Title: "Add rate limit toggle", Body: "Adds a per-user rate limit toggle."})
@@ -720,5 +717,121 @@ func TestParsePRStatusPayload_Render_should_ProduceByteIdenticalOutput_When_Gene
 	want := "## PR comments\n@tstapler: Please rebase.\n\n@reviewer2: lgtm\n\n"
 	if !strings.Contains(status.FeedbackText, want) {
 		t.Errorf("FeedbackText missing byte-identical PR comments block; got %q, want substring %q", status.FeedbackText, want)
+	}
+}
+
+// gitSpyRunCall records one tmux.CommandRunner.Run invocation.
+type gitSpyRunCall struct {
+	dir  string
+	name string
+	args []string
+}
+
+// gitSpyCommandRunner is a test tmux.CommandRunner spy: it records every Run
+// call and returns a scripted response. Used to prove a CommandRunner
+// injected via WithCommandRunner is actually consulted by GitWorktree's
+// methods, not merely stored on the struct.
+type gitSpyCommandRunner struct {
+	runCalls []gitSpyRunCall
+	runOut   []byte
+	runErr   error
+	// runFunc, when set, is invoked at the moment each Run call would have
+	// executed the subprocess, in place of returning runOut/runErr directly.
+	// Lets a test inject a side effect exactly when the "subprocess" runs
+	// (e.g. simulating a concurrent goroutine racing the cache, the way
+	// raceSimulatorExecutor's raceSetup hook used to), not just a canned
+	// return value.
+	runFunc func() ([]byte, error)
+}
+
+func (s *gitSpyCommandRunner) Run(_ context.Context, dir, name string, args ...string) ([]byte, error) {
+	s.runCalls = append(s.runCalls, gitSpyRunCall{dir: dir, name: name, args: append([]string(nil), args...)})
+	if s.runFunc != nil {
+		return s.runFunc()
+	}
+	return s.runOut, s.runErr
+}
+
+func (s *gitSpyCommandRunner) Start(context.Context, string, string, ...string) (io.WriteCloser, io.ReadCloser, func() error, error) {
+	return nil, nil, nil, fmt.Errorf("gitSpyCommandRunner.Start not implemented")
+}
+
+func (s *gitSpyCommandRunner) IsRemote() bool { return false }
+
+var _ tmux.CommandRunner = (*gitSpyCommandRunner)(nil)
+
+// TestWithCommandRunner_InjectedRunnerIsActuallyUsed is VIOLATION 1's required
+// regression guard for GitWorktree: constructs one via
+// NewGitWorktreeFromStorageWithExecutor with WithCommandRunner(spy), calls
+// PushBranch() (a call site with no cmdExec dependency at all -- see
+// worktree_git.go), and asserts the spy -- not tmux.LocalRunner -- actually
+// received the "git push -u origin <branch>" call, scoped to the worktree
+// path. Proves injection is wired all the way through to a real call site,
+// not just stored on the struct.
+func TestWithCommandRunner_InjectedRunnerIsActuallyUsed(t *testing.T) {
+	spy := &gitSpyCommandRunner{}
+	g := NewGitWorktreeFromStorageWithExecutor(
+		"/fake/repo", "/fake/worktree", "test-session", "test-branch", "",
+		WithCommandRunner(spy),
+	)
+	if g == nil {
+		t.Fatal("NewGitWorktreeFromStorageWithExecutor returned nil")
+	}
+
+	if err := g.PushBranch(); err != nil {
+		t.Fatalf("PushBranch returned error: %v", err)
+	}
+
+	if len(spy.runCalls) != 1 {
+		t.Fatalf("spy.Run call count = %d, want 1 (PushBranch should route through the injected CommandRunner)", len(spy.runCalls))
+	}
+	call := spy.runCalls[0]
+	wantArgs := []string{"push", "-u", "origin", "test-branch"}
+	if call.dir != "/fake/worktree" || call.name != "git" || len(call.args) != len(wantArgs) {
+		t.Fatalf("spy.Run call = %+v, want {dir: \"/fake/worktree\", name: \"git\", args: %v}", call, wantArgs)
+	}
+	for i, arg := range wantArgs {
+		if call.args[i] != arg {
+			t.Errorf("spy.Run args[%d] = %q, want %q", i, call.args[i], arg)
+		}
+	}
+}
+
+// TestRunGitCommand_UsesInjectedCommandRunner is the positive proof required
+// by the FIX-FIRST re-review: runGitCommand (session/git/worktree_git.go),
+// the sole remaining call site with a g.cmdExec-gated branch before this fix,
+// now routes through g.commandRunner() unconditionally, for real -- not just
+// that IsDirtyWithHint's existing tests above still pass. runGitCommand backs
+// ~25 production call sites (RenameBranch, stageAndCommit,
+// StageAllExceptScaffolding, HasStagedChanges, IsDirtyWithHint, and every
+// worktree_ops.go worktree add/remove/prune/list call), so this is the seam
+// Phase 2's RemoteWorktreeOps depends on actually being live.
+func TestRunGitCommand_UsesInjectedCommandRunner(t *testing.T) {
+	spy := &gitSpyCommandRunner{runOut: []byte("output\n")}
+	g := NewGitWorktreeFromStorageWithExecutor(
+		"/fake/repo", "/fake/worktree", "test-session", "test-branch", "",
+		WithCommandRunner(spy),
+	)
+
+	out, err := g.runGitCommand("/fake/worktree", "status", "--porcelain")
+	if err != nil {
+		t.Fatalf("runGitCommand returned error: %v", err)
+	}
+	if out != "output\n" {
+		t.Errorf("runGitCommand output = %q, want %q", out, "output\n")
+	}
+
+	if len(spy.runCalls) != 1 {
+		t.Fatalf("spy.Run call count = %d, want 1 (runGitCommand should route through the injected CommandRunner unconditionally)", len(spy.runCalls))
+	}
+	call := spy.runCalls[0]
+	wantArgs := []string{"status", "--porcelain"}
+	if call.dir != "/fake/worktree" || call.name != "git" || len(call.args) != len(wantArgs) {
+		t.Fatalf("spy.Run call = %+v, want {dir: \"/fake/worktree\", name: \"git\", args: %v}", call, wantArgs)
+	}
+	for i, arg := range wantArgs {
+		if call.args[i] != arg {
+			t.Errorf("spy.Run args[%d] = %q, want %q", i, call.args[i], arg)
+		}
 	}
 }

@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"github.com/google/uuid"
 	"github.com/tstapler/stapler-squad/log"
@@ -299,6 +300,11 @@ type Config struct {
 	SessionDefaults SessionDefaults `json:"session_defaults,omitempty"`
 	// Notifications holds the user's notification delivery preferences.
 	Notifications NotificationPrefs `json:"notifications,omitempty"`
+	// Remotes is a named list of SSH-reachable remote hosts sessions can be
+	// created against (ssh-remote-workspaces feature). Holds connection
+	// coordinates only — no SSH key material; see RemoteConfig's doc
+	// comment. Looked up by name via RemoteByName.
+	Remotes []RemoteConfig `json:"remotes,omitempty"`
 	// OneOffBaseDir is the base directory where one-off session directories are created.
 	// Default: "~/oneoff". Tilde is expanded at runtime. Created automatically on first use.
 	OneOffBaseDir string `json:"one_off_base_dir,omitempty"`
@@ -414,6 +420,98 @@ type Config struct {
 	// github.com) with their own OAuth App client IDs, enabling device-flow login,
 	// PR polling, and link detection against those hosts. Empty means github.com only.
 	GitHubEnterpriseHosts []GitHubEnterpriseHost `json:"github_enterprise_hosts,omitempty"`
+
+	// StreamHubSessionOverrides forces the terminal-multi-connection-streaming
+	// project's PathHubOwned resolution for specific named tmux sessions,
+	// regardless of the global STAPLER_SQUAD_USE_STREAM_HUB default — the
+	// per-session canary mechanism (Story 3.3.1). Keys are tmux session
+	// names; an absent key means "no override, use the global default".
+	// Consulted via streamhub.SetSessionOverrideLookup, wired at process
+	// startup in server/services so package session/streamhub never imports
+	// package config directly.
+	StreamHubSessionOverrides map[string]bool `json:"stream_hub_session_overrides,omitempty"`
+	// RollbackRehearsalCompletedAt records when Story 3.3.2's rollback
+	// rehearsal (flip STAPLER_SQUAD_USE_STREAM_HUB's per-session override on
+	// for a disposable session, use it briefly, remove the override, confirm
+	// a clean reconnect under the legacy path) was last completed
+	// successfully. nil means "never completed". ResolveGlobalStreamHubDefault
+	// refuses to let the *global* default resolve to true until this is set
+	// (pre-mortem P1 #4's mechanical gate) — the per-session override above
+	// is unaffected by this gate. Set via RecordRollbackRehearsalCompleted.
+	RollbackRehearsalCompletedAt *time.Time `json:"rollback_rehearsal_completed_at,omitempty"`
+}
+
+// ErrRollbackRehearsalNotCompleted is returned by ResolveGlobalStreamHubDefault
+// when the caller requests the global STAPLER_SQUAD_USE_STREAM_HUB default
+// resolve to true but RollbackRehearsalCompletedAt is unset — Story 3.3.2's
+// rollback rehearsal must be executed and recorded first (pre-mortem P1 #4).
+var ErrRollbackRehearsalNotCompleted = errors.New("config: cannot enable the global stream-hub default: rollback rehearsal (RollbackRehearsalCompletedAt) has not been completed — see Story 3.3.2")
+
+// ResolveGlobalStreamHubDefault applies Story 3.3.1/3.3.2's mechanical
+// rollback-rehearsal gate to a raw requested value for the *global*
+// STAPLER_SQUAD_USE_STREAM_HUB default (e.g. read from that environment
+// variable). Requesting false is always permitted — the gate only blocks
+// turning the risky path *on*. Requesting true is refused with
+// ErrRollbackRehearsalNotCompleted, not a silent fallback to false, unless
+// cfg.RollbackRehearsalCompletedAt is a recorded, non-zero timestamp. This
+// gate does not apply to the per-session override path
+// (StreamHubSessionOverrides / streamhub.SetSessionOverrideLookup), which
+// callers resolve independently and which remains available even when this
+// function returns an error.
+func ResolveGlobalStreamHubDefault(cfg *Config, requested bool) (bool, error) {
+	if !requested {
+		return false, nil
+	}
+	if cfg == nil || cfg.RollbackRehearsalCompletedAt == nil || cfg.RollbackRehearsalCompletedAt.IsZero() {
+		return false, ErrRollbackRehearsalNotCompleted
+	}
+	return true, nil
+}
+
+// RecordRollbackRehearsalCompleted persists the current time as
+// RollbackRehearsalCompletedAt and saves the config — Story 3.3.2's Task
+// 3.3.2c, intended to be called exactly once, after manually verifying a
+// rollback rehearsal (flip on via the per-session override, use briefly,
+// remove the override, confirm clean legacy reconnect) passed against a
+// real disposable session. Unblocks ResolveGlobalStreamHubDefault from
+// refusing to enable the global default.
+func (c *Config) RecordRollbackRehearsalCompleted() error {
+	now := time.Now()
+	c.RollbackRehearsalCompletedAt = &now
+	return SaveConfig(c)
+}
+
+// GetStreamHubSessionOverride reports whether sessionName has a per-session
+// StreamHubSessionOverrides entry recorded, and if so, what it forces.
+// Mirrors GetFeatureFlag's nil-safe shape: a nil Config or nil map reports
+// (false, false) — no override.
+func (c *Config) GetStreamHubSessionOverride(sessionName string) (forceHub bool, ok bool) {
+	if c == nil || c.StreamHubSessionOverrides == nil {
+		return false, false
+	}
+	forceHub, ok = c.StreamHubSessionOverrides[sessionName]
+	return forceHub, ok
+}
+
+// SetStreamHubSessionOverride sets or clears sessionName's per-session
+// PathHubOwned override and persists the config to disk — Story 3.3.1's
+// canary mechanism. forceHub follows this file's existing *bool convention
+// for a tri-state field (see AutoSpawnReadyItems): nil removes any override
+// for sessionName (falling back to the global default), a non-nil false
+// explicitly pins the session to the legacy path regardless of the global
+// default, and a non-nil true forces PathHubOwned.
+func (c *Config) SetStreamHubSessionOverride(sessionName string, forceHub *bool) error {
+	if forceHub == nil {
+		if c.StreamHubSessionOverrides != nil {
+			delete(c.StreamHubSessionOverrides, sessionName)
+		}
+		return SaveConfig(c)
+	}
+	if c.StreamHubSessionOverrides == nil {
+		c.StreamHubSessionOverrides = make(map[string]bool)
+	}
+	c.StreamHubSessionOverrides[sessionName] = *forceHub
+	return SaveConfig(c)
 }
 
 // GetGitHubEnterpriseHosts returns the configured GHES hosts, or nil if c is nil.
@@ -422,6 +520,21 @@ func (c *Config) GetGitHubEnterpriseHosts() []GitHubEnterpriseHost {
 		return nil
 	}
 	return c.GitHubEnterpriseHosts
+}
+
+// RemoteByName looks up a configured remote by its exact Name. Returns
+// (nil, false) if c is nil or no remote with that name is registered.
+// Consumed by session creation (Phase 4) and Settings UI validation (Phase 6).
+func (c *Config) RemoteByName(name string) (*RemoteConfig, bool) {
+	if c == nil {
+		return nil, false
+	}
+	for i := range c.Remotes {
+		if c.Remotes[i].Name == name {
+			return &c.Remotes[i], true
+		}
+	}
+	return nil, false
 }
 
 // DefaultConfig returns the default configuration

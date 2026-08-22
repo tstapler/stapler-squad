@@ -652,19 +652,20 @@ type triageResultJSON struct {
 // Used by ListBacklogItems to avoid over-hydrating description/plan fields.
 func backlogItemSummaryToProto(item *session.BacklogItemSummary, costFor func(tmuxUUID string) float64) *sessionv1.BacklogItem {
 	p := &sessionv1.BacklogItem{
-		Id:         item.ID,
-		PublicId:   item.PublicIDRaw,
-		Title:      item.Title,
-		Priority:   int32(item.Priority),
-		Status:     string(item.Status),
-		RepoPath:   item.RepoPath,
-		Notes:      item.Notes,
-		ExternalId: item.ExternalID,
-		Labels:     item.Labels,
-		PrUrl:      item.PrURL,
-		PrNumber:   int32(item.PrNumber),
-		CreatedAt:  timestamppb.New(item.CreatedAt),
-		UpdatedAt:  timestamppb.New(item.UpdatedAt),
+		Id:                 item.ID,
+		PublicId:           item.PublicIDRaw,
+		Title:              item.Title,
+		Priority:           int32(item.Priority),
+		Status:             string(item.Status),
+		RepoPath:           item.RepoPath,
+		Notes:              item.Notes,
+		ExternalId:         item.ExternalID,
+		Labels:             item.Labels,
+		PrUrl:              item.PrURL,
+		PrNumber:           int32(item.PrNumber),
+		CreatedAt:          timestamppb.New(item.CreatedAt),
+		UpdatedAt:          timestamppb.New(item.UpdatedAt),
+		AllowedTransitions: allowedTransitionStrings(item.Status),
 	}
 	if item.ExternalURL != "" {
 		p.ExternalUrl = &item.ExternalURL

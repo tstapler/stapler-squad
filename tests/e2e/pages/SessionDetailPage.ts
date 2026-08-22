@@ -46,6 +46,20 @@ export class SessionDetailPage {
     return this.page.getByTestId(/connection-indicator|live-indicator/);
   }
 
+  // ---------------------------------------------------------------------
+  // Connection-count indicator — Epic 4.2, Story 4.2.2
+  // (ConnectionCountIndicator.tsx, rendered by TerminalOutput.tsx only when
+  // connectionCount > 1). See connection-count-indicator.spec.ts.
+  // ---------------------------------------------------------------------
+
+  getConnectionCountIndicator(): Locator {
+    return this.page.getByTestId("connection-count-indicator");
+  }
+
+  getConnectionCountTooltip(): Locator {
+    return this.page.getByTestId("connection-count-tooltip");
+  }
+
   getCIStatusBadge(): Locator {
     return this.page.getByTestId("ci-status-badge");
   }

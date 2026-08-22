@@ -32,6 +32,26 @@ jest.mock("@/components/providers/ViewportProvider", () => ({
 jest.mock("@/components/sessions/SessionDetail", () => ({
   SessionDetail: () => <div data-testid="session-detail" />,
 }));
+// Every pane state in this file uses viewKind "session-detail", so
+// SessionListPaneBody (which renders SessionList) never actually mounts --
+// but PaneSplitRenderer.tsx still statically imports SessionList at module
+// scope regardless of which branch runs at render time, transitively
+// loading SessionCard -> RemoteConnectionIndicator -> its .css.ts module.
+// That collides with this file's own jest.mock("@/styles/pane/paneSplit.css",
+// ...) override above: Jest's moduleNameMapper maps every .css/.css.ts
+// import to the SAME shared mock file (src/__mocks__/styleMock.js), so a
+// jest.mock() targeting one .css specifier ends up registered against that
+// shared resolved path and silently overrides EVERY other .css import in
+// this test file too -- including RemoteConnectionIndicator.css, whose real
+// `dots` export the mock factory above never defines, crashing this file's
+// entire module load with "Cannot read properties of undefined (reading
+// 'connected')" before a single test could run. Mocking SessionList (never
+// actually exercised by this file's scenarios anyway) stops that import
+// chain from loading at all, mirroring the SessionDetail/PaneHeader stubs
+// already here.
+jest.mock("@/components/sessions/SessionList", () => ({
+  SessionList: () => <div data-testid="session-list" />,
+}));
 jest.mock("@/components/pane/PaneHeader", () => ({
   PaneHeader: () => <div data-testid="pane-header" />,
 }));

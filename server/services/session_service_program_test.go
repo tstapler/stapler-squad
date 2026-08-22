@@ -153,7 +153,16 @@ func TestUpdateSession_ProgramUpdate_StoppedSession_NoRestart(t *testing.T) {
 // program string ("System default") resolves to the configured default program rather
 // than being stored as "" or silently dropped.
 func TestUpdateSession_ProgramUpdate_EmptyString_ResolvesDefault(t *testing.T) {
-	t.Parallel()
+	// Isolate from the shared per-process test config dir (config.GetConfigDirForDir's
+	// IsTestMode() branch keys only on PID, so every test in this binary shares it by
+	// default): this test asserts against config.LoadConfig().DefaultProgram directly,
+	// and without isolation an earlier test in the suite that persists a Config with a
+	// different (or empty) DefaultProgram to that shared dir makes this assertion flaky
+	// depending on run order (BUG-080). Deliberately NOT t.Parallel() (main's version of
+	// this test uses that instead) -- t.Setenv panics if called on a parallel test, and
+	// main's t.Parallel()-only version has no isolation of its own, so combining or
+	// preferring it would reintroduce the exact flake this Setenv call fixes.
+	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
 	fix := setupForkTestFixture(t)
 	t.Cleanup(fix.cleanup)
 

@@ -4,14 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os/exec"
 	"regexp"
 	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
 
-	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/log"
 )
 
@@ -22,22 +20,25 @@ import (
 // parent session package without a cycle.
 var prNumberFromURLRe = regexp.MustCompile(`/pull/(\d+)/?$`)
 
-// runGitCommand executes a git command and returns any error.
-// Uses the executor for circuit breaker support when available.
+// runGitCommand executes a git command scoped to path and returns any error.
+// Routes through g.commandRunner() unconditionally, exactly like every other
+// call site in this file (PushChanges, PushBranch, OpenBranchURL, CreatePR,
+// findExistingPR, GetPRStatus, EnablePRAutoMerge, RequestCopilotReview,
+// ClosePR, IsPRMerged) — see ADR-002's addendum for the history here: this
+// was previously the one call site with a g.cmdExec-gated branch (an
+// executor.Executor test-injection seam, never circuit-breaker-wrapped
+// anywhere in this package, unlike session/tmux's genuinely orthogonal
+// cmdExec), which made it dead code for all ~25 production callers of this
+// method (IsDirtyWithHint, RenameBranch, stageAndCommit,
+// StageAllExceptScaffolding, HasStagedChanges, plus every worktree_ops.go
+// worktree add/remove/prune/list call). IsDirtyWithHint's race/error-
+// injection tests now inject a tmux.CommandRunner spy via WithCommandRunner
+// instead of an executor.Executor mock.
 func (g *GitWorktree) runGitCommand(path string, args ...string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	baseArgs := make([]string, 0, 2+len(args))
-	baseArgs = append(baseArgs, "-C", path)
-	cmd := safeexec.CommandContext(ctx, "git", append(baseArgs, args...)...)
 
-	var output []byte
-	var err error
-	if g.cmdExec != nil {
-		output, err = g.cmdExec.CombinedOutput(cmd)
-	} else {
-		output, err = cmd.CombinedOutput()
-	}
+	output, err := g.commandRunner().Run(ctx, path, "git", args...)
 	if err != nil {
 		return "", fmt.Errorf("git command failed: %s (%w)", output, err)
 	}
@@ -67,15 +68,11 @@ func (g *GitWorktree) PushChanges(commitMessage string, open bool) error {
 	// First push the branch to remote to ensure it exists
 	pushCtx, pushCancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer pushCancel()
-	pushCmd := safeexec.CommandContext(pushCtx, "gh", "repo", "sync", "--source", "-b", g.branchName)
-	pushCmd.Dir = g.worktreePath
-	if err := g.runExec(pushCmd); err != nil {
+	if _, err := g.commandRunner().Run(pushCtx, g.worktreePath, "gh", "repo", "sync", "--source", "-b", g.branchName); err != nil {
 		// If sync fails, try creating the branch on remote first
 		gitPushCtx, gitPushCancel := context.WithTimeout(context.Background(), 60*time.Second)
 		defer gitPushCancel()
-		gitPushCmd := safeexec.CommandContext(gitPushCtx, "git", "push", "-u", "origin", g.branchName)
-		gitPushCmd.Dir = g.worktreePath
-		if pushOutput, pushErr := g.runCombinedOutput(gitPushCmd); pushErr != nil {
+		if pushOutput, pushErr := g.commandRunner().Run(gitPushCtx, g.worktreePath, "git", "push", "-u", "origin", g.branchName); pushErr != nil {
 			log.Error("failed to push branch", "err", pushErr)
 			return fmt.Errorf("failed to push branch: %s (%w)", pushOutput, pushErr)
 		}
@@ -84,9 +81,7 @@ func (g *GitWorktree) PushChanges(commitMessage string, open bool) error {
 	// Now sync with remote
 	syncCtx, syncCancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer syncCancel()
-	syncCmd := safeexec.CommandContext(syncCtx, "gh", "repo", "sync", "-b", g.branchName)
-	syncCmd.Dir = g.worktreePath
-	if output, err := g.runCombinedOutput(syncCmd); err != nil {
+	if output, err := g.commandRunner().Run(syncCtx, g.worktreePath, "gh", "repo", "sync", "-b", g.branchName); err != nil {
 		log.Error("failed to sync changes", "err", err)
 		return fmt.Errorf("failed to sync changes: %s (%w)", output, err)
 	}
@@ -303,43 +298,16 @@ func (g *GitWorktree) OpenBranchURL() error {
 
 	browseCtx, browseCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer browseCancel()
-	cmd := safeexec.CommandContext(browseCtx, "gh", "browse", "--branch", g.branchName)
-	cmd.Dir = g.worktreePath
-	if err := g.runExec(cmd); err != nil {
+	if _, err := g.commandRunner().Run(browseCtx, g.worktreePath, "gh", "browse", "--branch", g.branchName); err != nil {
 		return fmt.Errorf("failed to open branch URL: %w", err)
 	}
 	return nil
 }
 
-// runExec runs a command through the executor (or directly if no executor is set).
-func (g *GitWorktree) runExec(cmd *exec.Cmd) error {
-	if g.cmdExec != nil {
-		return g.cmdExec.Run(cmd)
-	}
-	return cmd.Run()
-}
-
-// runCombinedOutput runs a command through the executor and returns combined output.
-func (g *GitWorktree) runCombinedOutput(cmd *exec.Cmd) ([]byte, error) {
-	if g.cmdExec != nil {
-		return g.cmdExec.CombinedOutput(cmd)
-	}
-	return cmd.CombinedOutput()
-}
-
-// checkGHCLI verifies the GitHub CLI is installed and authenticated, routing
-// the auth-status check through g.cmdExec so tests with a fake executor
-// control the outcome instead of depending on the ambient environment's real
-// gh installation/auth state.
-func (g *GitWorktree) checkGHCLI() error {
-	return checkGHCLIWithExecutor(g.cmdExec)
-}
 func (g *GitWorktree) PushBranch() error {
 	pushCtx, pushCancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer pushCancel()
-	cmd := safeexec.CommandContext(pushCtx, "git", "push", "-u", "origin", g.branchName)
-	cmd.Dir = g.worktreePath
-	if out, err := g.runCombinedOutput(cmd); err != nil {
+	if out, err := g.commandRunner().Run(pushCtx, g.worktreePath, "git", "push", "-u", "origin", g.branchName); err != nil {
 		return fmt.Errorf("failed to push branch: %s (%w)", out, err)
 	}
 	return nil
@@ -385,9 +353,7 @@ func (g *GitWorktree) CreatePR(opts PRCreateOptions) (prURL string, prNumber int
 	if baseBranch != "" {
 		args = append(args, "--base", baseBranch)
 	}
-	cmd := safeexec.CommandContext(ctx, "gh", args...)
-	cmd.Dir = g.worktreePath
-	out, runErr := g.runCombinedOutput(cmd)
+	out, runErr := g.commandRunner().Run(ctx, g.worktreePath, "gh", args...)
 	if runErr != nil {
 		// A race: PR was created between our check and now. Re-check once.
 		if u, n, err2 := g.findExistingPR(); err2 == nil && n > 0 {
@@ -421,9 +387,7 @@ func (g *GitWorktree) CreatePR(opts PRCreateOptions) (prURL string, prNumber int
 		// original gh-view-based lookup as a last resort.
 		numCtx, numCancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer numCancel()
-		numCmd := safeexec.CommandContext(numCtx, "gh", "pr", "view", "--json", "number", "--jq", ".number", "--head", g.branchName)
-		numCmd.Dir = g.worktreePath
-		numOut, numErr := g.runCombinedOutput(numCmd)
+		numOut, numErr := g.commandRunner().Run(numCtx, g.worktreePath, "gh", "pr", "view", "--json", "number", "--jq", ".number", "--head", g.branchName)
 		if numErr == nil {
 			prNumber, _ = strconv.Atoi(strings.TrimSpace(string(numOut)))
 		}
@@ -437,10 +401,8 @@ func (g *GitWorktree) CreatePR(opts PRCreateOptions) (prURL string, prNumber int
 func (g *GitWorktree) findExistingPR() (string, int, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	cmd := safeexec.CommandContext(ctx, "gh", "pr", "list", "--head", g.branchName,
+	out, err := g.commandRunner().Run(ctx, g.worktreePath, "gh", "pr", "list", "--head", g.branchName,
 		"--json", "number,url", "--jq", ".[0] | .number, .url")
-	cmd.Dir = g.worktreePath
-	out, err := g.runCombinedOutput(cmd)
 	if err != nil || strings.TrimSpace(string(out)) == "" {
 		return "", 0, fmt.Errorf("no existing PR")
 	}
@@ -704,10 +666,8 @@ func (g *GitWorktree) GetPRStatus(prNumber int) (*PRStatus, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	cmd := safeexec.CommandContext(ctx, "gh", "pr", "view", strconv.Itoa(prNumber),
+	raw, err := g.commandRunner().Run(ctx, g.worktreePath, "gh", "pr", "view", strconv.Itoa(prNumber),
 		"--json", "statusCheckRollup,reviews,comments,mergeable,mergeStateStatus,state,isDraft")
-	cmd.Dir = g.worktreePath
-	raw, err := g.runCombinedOutput(cmd)
 	if err != nil {
 		return nil, fmt.Errorf("gh pr view failed: %s (%w)", raw, err)
 	}
@@ -866,9 +826,7 @@ func (g *GitWorktree) EnablePRAutoMerge(prNumber int) error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	cmd := safeexec.CommandContext(ctx, "gh", "pr", "merge", strconv.Itoa(prNumber), "--auto", "--squash")
-	cmd.Dir = g.worktreePath
-	out, err := g.runCombinedOutput(cmd)
+	out, err := g.commandRunner().Run(ctx, g.worktreePath, "gh", "pr", "merge", strconv.Itoa(prNumber), "--auto", "--squash")
 	if err != nil {
 		return fmt.Errorf("gh pr merge --auto failed: %s (%w)", out, err)
 	}
@@ -888,9 +846,7 @@ func (g *GitWorktree) RequestCopilotReview(prNumber int) error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	cmd := safeexec.CommandContext(ctx, "gh", "pr", "edit", strconv.Itoa(prNumber), "--add-reviewer", copilotReviewerLogin)
-	cmd.Dir = g.worktreePath
-	out, err := g.runCombinedOutput(cmd)
+	out, err := g.commandRunner().Run(ctx, g.worktreePath, "gh", "pr", "edit", strconv.Itoa(prNumber), "--add-reviewer", copilotReviewerLogin)
 	if err != nil {
 		return fmt.Errorf("gh pr edit --add-reviewer copilot failed: %s (%w)", out, err)
 	}
@@ -907,9 +863,7 @@ func (g *GitWorktree) ClosePR(prNumber int, comment string) error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	cmd := safeexec.CommandContext(ctx, "gh", "pr", "close", strconv.Itoa(prNumber), "--comment", comment)
-	cmd.Dir = g.worktreePath
-	out, err := g.runCombinedOutput(cmd)
+	out, err := g.commandRunner().Run(ctx, g.worktreePath, "gh", "pr", "close", strconv.Itoa(prNumber), "--comment", comment)
 	if err != nil {
 		return fmt.Errorf("gh pr close failed: %s (%w)", out, err)
 	}
@@ -923,13 +877,9 @@ func (g *GitWorktree) IsPRMerged(prNumber int) (bool, error) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	cmd := safeexec.CommandContext(ctx, "gh", "pr", "view", strconv.Itoa(prNumber), "--json", "state", "--jq", ".state")
-	cmd.Dir = g.worktreePath
-	out, err := g.runCombinedOutput(cmd)
+	out, err := g.commandRunner().Run(ctx, g.worktreePath, "gh", "pr", "view", strconv.Itoa(prNumber), "--json", "state", "--jq", ".state")
 	if err != nil {
 		return false, fmt.Errorf("gh pr view failed: %s (%w)", out, err)
 	}
 	return strings.TrimSpace(string(out)) == "MERGED", nil
 }
-
-// runExec runs a command through the executor (or directly if no executor is set).

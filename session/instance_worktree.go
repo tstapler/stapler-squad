@@ -33,11 +33,35 @@ func (i *Instance) RepoName() (string, error) {
 }
 
 // setupFirstTimeWorktree creates or attaches to the git worktree based on session type.
+//
+// A remote ExecutionTarget (ssh-remote-workspaces Phase 4 Epic 4.2) only supports
+// SessionTypeExistingWorktree, SessionTypeDirectory, and SessionTypeNewProject:
+// CreateSession's mode-specific block (server/services/session_service.go) already
+// creates/resolves/git-initializes the remote working path synchronously -- via
+// RemoteWorktreeOps.CreateWorktree for a real worktree, RemoteWorktreeOps.
+// InitializeProjectDirectory for a new project, or trivially for a plain directory
+// -- before this method ever runs, precisely so the git.NewGitWorktreeWithBranch
+// path below (which does local-filesystem repo discovery: findGitRepoRoot,
+// getWorktreeDirectory, findExistingWorktreeForBranch) is never reached against a
+// path that only exists on the remote host. session_type is remapped to
+// SessionTypeExistingWorktree with ExistingWorktree set to the remote path ONLY
+// when the request originated as NewWorktree/ExistingWorktree (a real worktree); a
+// Directory- or NewProject-originated remote session deliberately keeps its
+// original session_type so it falls through to the default/NewProject case below
+// (no worktree persisted) exactly like its local counterpart -- see those cases'
+// own comments for why. Any other combination is rejected up front rather than
+// silently attempting local discovery against a remote path.
 func (i *Instance) setupFirstTimeWorktree() error {
+	if i.executionTarget().IsRemote() && i.SessionType != SessionTypeExistingWorktree &&
+		i.SessionType != SessionTypeDirectory && i.SessionType != SessionTypeNewProject {
+		return fmt.Errorf("remote execution target only supports session_type=existing_worktree, session_type=directory, "+
+			"or session_type=new_project (worktree/path must be pre-resolved by CreateSession's mode-specific block); got %v", i.SessionType)
+	}
+
 	switch i.SessionType {
 	case SessionTypeNewWorktree:
 		log.Info("creating git worktree for instance", "session", i.Title, "path", i.Path)
-		gitWorktree, branchName, err := git.NewGitWorktreeWithBranch(i.Path, i.Title, i.Branch)
+		gitWorktree, branchName, err := git.NewGitWorktreeWithBranch(i.Path, i.Title, i.Branch, git.WithCommandRunner(i.executionTarget().Runner()))
 		if err != nil {
 			return fmt.Errorf("failed to create git worktree: %w", err)
 		}
@@ -50,8 +74,62 @@ func (i *Instance) setupFirstTimeWorktree() error {
 		if i.ExistingWorktree == "" {
 			return fmt.Errorf("existing worktree path required for SessionTypeExistingWorktree")
 		}
+		runner := i.executionTarget().Runner()
+		if i.executionTarget().IsRemote() {
+			// Attach to the already-created remote worktree using the field-setting
+			// constructor -- NOT NewGitWorktreeFromExisting, whose IsGitRepo/
+			// findMainRepoPathForWorktree/getCurrentBranchName discovery reads the
+			// local filesystem and would resolve against this process's own disk,
+			// not the remote host's.
+			//
+			// base_commit_sha must be resolved via a real remote `git rev-parse
+			// HEAD` (not left "") -- the ent schema's Worktree.base_commit_sha
+			// field is NotEmpty (session/ent/schema/worktree.go), so a blank value
+			// fails persistence (Storage.SaveInstances) the first time this
+			// instance is saved, discovered via
+			// TestCreateSession_RemoteTarget_CreatesRemoteWorktreeAndTmuxSession.
+			// Best-effort: mirrors NewGitWorktreeFromCommitSHA's local
+			// counterparts, which likewise tolerate a lookup failure by falling
+			// back to a placeholder rather than failing worktree attachment
+			// entirely over a cosmetic diff-stats field.
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			baseCommitSHA := "unknown"
+			if out, shaErr := runner.Run(ctx, i.ExistingWorktree, "git", "rev-parse", "HEAD"); shaErr == nil {
+				if sha := strings.TrimSpace(string(out)); sha != "" {
+					baseCommitSHA = sha
+				}
+			} else {
+				log.Warn("failed to resolve remote worktree base commit SHA", "session", i.Title, "path", i.ExistingWorktree, "err", shaErr)
+			}
+			// i.Branch is empty for a remote session composed from
+			// SessionTypeDirectory/SessionTypeExistingWorktree (post-review
+			// composability with ADR-001's "remote as an orthogonal flag" --
+			// neither type carries an explicit branch the way NewWorktree
+			// does), and Worktree.branch_name is NotEmpty just like
+			// base_commit_sha above -- same best-effort resolve-from-remote
+			// pattern, so persistence doesn't silently fail
+			// (Storage.SaveInstances) the first time this instance is saved.
+			// "HEAD" (git's own answer for a detached checkout) is treated
+			// the same as a lookup failure -- it's a real string but not a
+			// meaningful branch name to persist or display.
+			if i.Branch == "" {
+				i.Branch = "unknown"
+				if out, brErr := runner.Run(ctx, i.ExistingWorktree, "git", "rev-parse", "--abbrev-ref", "HEAD"); brErr == nil {
+					if br := strings.TrimSpace(string(out)); br != "" && br != "HEAD" {
+						i.Branch = br
+					}
+				} else {
+					log.Warn("failed to resolve remote worktree branch name", "session", i.Title, "path", i.ExistingWorktree, "err", brErr)
+				}
+			}
+			cancel()
+			gitWorktree := git.NewGitWorktreeFromStorage(i.Path, i.ExistingWorktree, i.Title, i.Branch, baseCommitSHA, git.WithCommandRunner(runner))
+			i.gitManager.SetWorktree(gitWorktree)
+			log.Info("attached to remote git worktree", "session", i.Title, "path", i.ExistingWorktree, "branch", i.Branch)
+			break
+		}
 		log.Info("connecting to existing worktree", "session", i.Title, "path", i.ExistingWorktree)
-		gitWorktree, err := git.NewGitWorktreeFromExisting(i.ExistingWorktree, i.Title)
+		gitWorktree, err := git.NewGitWorktreeFromExisting(i.ExistingWorktree, i.Title, git.WithCommandRunner(runner))
 		if err != nil {
 			return fmt.Errorf("failed to connect to existing worktree: %w", err)
 		}
@@ -60,15 +138,30 @@ func (i *Instance) setupFirstTimeWorktree() error {
 		log.Info("connected to existing worktree", "session", i.Title, "branch", i.Branch)
 	case SessionTypeNewProject:
 		log.Info("new project session, initializing git repo", "session", i.Title, "path", i.Path)
-		if err := git.InitializeProjectDirectory(i.Path); err != nil {
-			return fmt.Errorf("new_project initialization failed: %w", err)
+		// A remote instance's project directory was already git-initialized on the
+		// remote host by CreateSession's mode-specific block (git.RemoteWorktreeOps.
+		// InitializeProjectDirectory) -- git.InitializeProjectDirectory below is the
+		// LOCAL-filesystem path (go-git PlainInit against this process's own disk)
+		// and must not run a second time against i.Path, which names a remote host
+		// path in that case.
+		if !i.executionTarget().IsRemote() {
+			if err := git.InitializeProjectDirectory(i.Path); err != nil {
+				return fmt.Errorf("new_project initialization failed: %w", err)
+			}
 		}
 		i.gitManager.SetWorktree(nil)
 		i.Branch = ""
 		log.Info("new project initialized", "path", i.Path)
 	default: // SessionTypeDirectory and unknown types → no worktree
 		log.Info("directory session, no git worktree", "session", i.Title, "path", i.Path)
-		if i.CreateIfMissing {
+		// EnsureDirectorySessionPath does local-filesystem os.Stat/git-init -- correct for
+		// a local Directory session, but i.Path names a REMOTE host path for a remote one,
+		// so running it here would silently create/git-init the wrong directory on this
+		// server's own disk. create_if_missing is not yet supported for remote Directory
+		// sessions (CreateSession's own request-validation layer already skips its
+		// existence check for this combination -- see session_service.go's CreateSession),
+		// so this just no-ops rather than acting on a path it cannot correctly resolve.
+		if i.CreateIfMissing && !i.executionTarget().IsRemote() {
 			if err := EnsureDirectorySessionPath(i.Path); err != nil {
 				return fmt.Errorf("failed to create directory for session: %w", err)
 			}

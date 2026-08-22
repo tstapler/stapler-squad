@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -70,6 +71,8 @@ func WriteSlashCommands(engine PipelineEngine, item *BacklogItemData, worktreePa
 		files[name] = content
 	}
 
+	pruneStaleSlashCommandFiles(cmdDir, files)
+
 	for name, content := range files {
 		if err := writeFile(filepath.Join(cmdDir, name), content); err != nil {
 			return err
@@ -77,6 +80,37 @@ func WriteSlashCommands(engine PipelineEngine, item *BacklogItemData, worktreePa
 	}
 
 	return nil
+}
+
+// staleCommandFileRe matches the per-criterion slash command filenames whose
+// count varies per item — done-N.md/fail-N.md — as opposed to status.md,
+// review.md, ship.md, help.md, which every item has regardless of AC count.
+var staleCommandFileRe = regexp.MustCompile(`^(done|fail)-\d+\.md$`)
+
+// pruneStaleSlashCommandFiles removes done-N.md/fail-N.md files in cmdDir not present in
+// newFiles (leftover from a prior item with more acceptance criteria). Never touches the
+// fixed status/review/ship/help.md set. Best-effort — logs and continues past a single
+// removal failure rather than failing the whole write.
+func pruneStaleSlashCommandFiles(cmdDir string, newFiles map[string]string) {
+	entries, err := os.ReadDir(cmdDir)
+	if err != nil {
+		return // directory just created / unreadable — nothing to prune
+	}
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		if !staleCommandFileRe.MatchString(name) {
+			continue
+		}
+		if _, keep := newFiles[name]; keep {
+			continue
+		}
+		if rmErr := os.Remove(filepath.Join(cmdDir, name)); rmErr != nil {
+			log.WarningLog().Printf("[pruneStaleSlashCommandFiles] failed to remove stale %s: %v", name, rmErr)
+		}
+	}
 }
 
 // buildDefaultSlashCommandSet returns the filename→rendered-content map for

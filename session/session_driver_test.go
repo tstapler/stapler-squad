@@ -1173,7 +1173,20 @@ func TestAnswerDialogOnce(t *testing.T) {
 // the shared `if idle > graceTimeout` path (also covered indirectly by
 // TestSessionDriver_SecondFailure_MarksNeedsAttention's similar shape).
 func TestSessionDriver_DialogGaveUp_FallsThroughToInactivityEscalation(t *testing.T) {
-	t.Parallel()
+	// Not t.Parallel(): this test needs t.Setenv("HOME", ...) below, and
+	// t.Setenv panics if called on (or after) a parallel test.
+	// FindConversationFilePath (called by sendInitialPromptTick when deciding
+	// whether the initial prompt was already delivered) walks $HOME/.claude/projects
+	// on real disk. On a real dev machine that directory holds genuine, large
+	// session history, which can stall this search for real wall-clock seconds
+	// per driver-loop tick — long enough to burn through this test's entire
+	// deadline before sendInitialPromptTick ever reaches its SendKeys call,
+	// producing the exact "SendKeys count never exceeded" failure this test
+	// guards against, for a reason unrelated to the dialogGaveUp fall-through
+	// logic under test. Pointing HOME at an empty temp dir makes the walk
+	// resolve instantly and deterministically to "not found," independent of
+	// whatever real session history exists on the machine running the test.
+	t.Setenv("HOME", t.TempDir())
 	fakePM := &stuckDialogProcessManager{
 		dialogText: trustDialogText,
 		failCount:  maxDialogAnswerAttempts,
@@ -1213,17 +1226,20 @@ func TestSessionDriver_DialogGaveUp_FallsThroughToInactivityEscalation(t *testin
 	// elapses — the deadline below must clear that, not just the dialog
 	// latch's own ~6s give-up window.
 	//
-	// The extra driverReadyTimeout term (doubling the base budget) is
-	// deliberate slack, not just the ~6s dialog-latch window plus a token
-	// second: this goroutine genuinely blocks on the real 30s
-	// driverReadyTimeout wall-clock wait, so under `go test -race -p 1` for
-	// the full suite (thousands of tests, heavy scheduler/CPU contention)
-	// that wait alone can occasionally overrun a razor-thin margin — this
-	// test was seen to pass in 34s of a 37s budget in an isolated run, a
-	// margin that intermittently failed when run alongside the rest of the
-	// package under -race. Widening the margin (not retrying) is the fix,
-	// since the 30s block is inherent to the code path under test.
-	deadline := time.After(2*driverReadyTimeout + driverPollInterval*3 + time.Second)
+	// The extra driverReadyTimeout term is deliberate slack, not just the
+	// ~6s dialog-latch window plus a token second: this goroutine genuinely
+	// blocks on the real 30s driverReadyTimeout wall-clock wait, so under
+	// heavy scheduler/CPU contention (go test -race -p 1 for the full
+	// suite, or session's own t.Parallel() fan-out within a single package)
+	// that wait alone can occasionally overrun a razor-thin margin. Two
+	// documented recurrences of exactly this: an isolated run once passed
+	// in 34s of a 37s (1x) budget and failed under -race package load; a
+	// later run passed in 68.52s against a since-widened 67s (2x) budget
+	// under session's own -p 1 in-package parallel load (see BUG-051's
+	// recurrence log). Each time, widening the margin (not retrying) is the
+	// fix, since the 30s block is inherent to the code path under test —
+	// bumped to 3x here for more headroom against the same contention.
+	deadline := time.After(3*driverReadyTimeout + driverPollInterval*3 + time.Second)
 	for fakePM.sendKeysCount.Load() <= maxDialogAnswerAttempts {
 		select {
 		case <-deadline:
@@ -1234,20 +1250,6 @@ func TestSessionDriver_DialogGaveUp_FallsThroughToInactivityEscalation(t *testin
 	}
 }
 
-// TestStopSessionDriver_ConcurrentWithInFlightPoll_ReturnsBoundedNoGoroutineLeak
-// is the dedicated regression test for the config/session TOCTOU-and-goroutine-
-// lifecycle fix: StopSessionDriver (called from Instance.Destroy()) must return
-// within a bounded time even when it races a driver goroutine that is genuinely
-// alive and blocked in its poll loop, and must leave no goroutine behind.
-//
-// The driver goroutine's main loop (runSessionDriverWithPrompt, session_driver.go)
-// spends nearly all of its life parked at `select { case <-stop: case
-// <-ticker.C: }` — so letting StartSessionDriver run for one scheduler tick
-// before calling StopSessionDriver concurrently is sufficient to catch it there,
-// mirroring the real race between an in-flight poll and a session being
-// destroyed. This does not depend on real tmux: the fake ProcessManager below
-// never matches a dialog or produces terminal content, so the loop always falls
-// straight through to the ticker wait.
 func TestStopSessionDriver_ConcurrentWithInFlightPoll_ReturnsBoundedNoGoroutineLeak(t *testing.T) {
 	// See TestActorNoLeak (actor_test.go) for why this baselines via
 	// goleak.IgnoreCurrent() instead of a bare process-wide goleak.VerifyNone().

@@ -2722,7 +2722,8 @@ func (s *BacklogService) TriggerTriage(
 		}
 
 		callStart := time.Now()
-		raw, _, callErr := s.headlessPool.CallBlocking(triageCtx,
+		var triageCostUSD float64
+		raw, callErr := s.headlessPool.CallBlocking(triageCtx,
 			headless.FeatureKeyTriage,
 			headless.HeadlessTriageSystemPrompt(),
 			triagePrompt,
@@ -2740,6 +2741,7 @@ func (s *BacklogService) TriggerTriage(
 			// without a fresh empirical repro, per ADR-001's own "don't trust
 			// unverified CLI-behavior assumptions" precedent.
 			headless.CallOptions{WorkDir: triageWorkDir},
+			func(usd float64) { triageCostUSD = usd },
 		)
 
 		// cleanupCtx outlives shutdownCtx so DB writes succeed even during graceful
@@ -2751,6 +2753,15 @@ func (s *BacklogService) TriggerTriage(
 		// was a live, 100%-reproducible bug: see the backlog cross-platform audit.
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), s.triageCleanupTimeout)
 		defer cleanupCancel()
+
+		// Persisted unconditionally, before the success/failure branches below: the
+		// LLM call already incurred this cost whether or not it errored or produced
+		// parseable output, so it must not be lost down either failure path.
+		if triageCostUSD > 0 {
+			if costErr := s.storage.UpdateItemSessionCost(cleanupCtx, isID, triageCostUSD); costErr != nil {
+				log.WarningLog().Printf("[TriggerTriage] failed to persist cost item=%s: %v", itemID, costErr)
+			}
+		}
 
 		callElapsed := time.Since(callStart)
 		if callErr != nil {
@@ -3208,8 +3219,10 @@ Do not modify the code. Only write the review verdict.
 		reviewCtx, reviewCancel := context.WithTimeout(ctx, callTimeout)
 		defer reviewCancel()
 
-		reviewResult, callCostUSD, callErr := s.headlessPool.CallBlocking(
+		var callCostUSD float64
+		reviewResult, callErr := s.headlessPool.CallBlocking(
 			reviewCtx, headless.FeatureKeyReview, systemPrompt, headlessPrompt, callOpts,
+			func(usd float64) { callCostUSD = usd },
 		)
 
 		// Explicit, immediate cleanup as soon as the transcript file is no longer
