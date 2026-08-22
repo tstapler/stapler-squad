@@ -3,6 +3,8 @@ package session
 import (
 	"testing"
 	"time"
+
+	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
 // TestHealthCheckResult tests the HealthCheckResult struct
@@ -216,6 +218,79 @@ func TestHealthCheckerRecovery_PaneDeadButSessionAlive_KillsStaleSessionBeforeRe
 	}
 	if mock.startCalls == 0 {
 		t.Error("expected Start() to be retried after killing the stale session")
+	}
+}
+
+// TestHealthCheckerRecovery_BatchMapMiss_DoesNotDoubleCallIsAlive is the
+// regression test for a HIGH-severity bug where paneDeadStatus() was called
+// unconditionally before the checkSingleSession switch. For a session that is
+// not alive AND missing from the batch map (e.g. empty tmux session name, or
+// excluded from a stale/failed batch fetch), that fell through to
+// instance.PaneExitInfo(), which itself calls TmuxAlive() -- a second,
+// redundant IsAlive() subprocess call, since the switch's own
+// `!instance.TmuxAlive()` case immediately calls it again. PaneExitInfo()
+// no-ops (skips the PaneExitStatus() subprocess call) when not alive, so the
+// double-call was hidden in IsAlive() invocations, not PaneExitStatus() ones.
+func TestHealthCheckerRecovery_BatchMapMiss_DoesNotDoubleCallIsAlive(t *testing.T) {
+	t.Parallel()
+	checker := NewSessionHealthChecker(nil)
+
+	mock := &mockTmuxManager{
+		hasSessionReturn: true,
+		isAliveReturn:    false,
+	}
+	inst := &Instance{
+		Title:  "batch-miss-test",
+		Status: Running,
+	}
+	inst.started.Store(true)
+	inst.processManager = NewTmuxBackend(mock)
+
+	// Non-nil, non-empty batch map that does not contain this instance's tmux
+	// session name -- simulates a batch fetch that succeeded for other
+	// sessions but missed this one.
+	batch := map[string]tmux.PaneDeadStatus{
+		"some-other-session": {Dead: true, Code: 1},
+	}
+
+	checker.checkSingleSession(inst, batch)
+
+	if mock.isAliveCalls != 1 {
+		t.Errorf("expected exactly 1 IsAlive() call for a not-alive, batch-miss session, got %d", mock.isAliveCalls)
+	}
+}
+
+// TestHealthCheckerRecovery_BatchMapHit_UsesBatchDataInsteadOfPerInstanceFallback
+// pins that when the batch map has an entry for the instance's tmux session
+// name, paneDeadStatus() uses it directly and never falls back to the
+// subprocess-backed per-instance PaneExitStatus() call.
+func TestHealthCheckerRecovery_BatchMapHit_UsesBatchDataInsteadOfPerInstanceFallback(t *testing.T) {
+	t.Parallel()
+	checker := NewSessionHealthChecker(nil)
+
+	mock := &mockTmuxManager{
+		hasSessionReturn: true,
+		isAliveReturn:    true,
+		tmuxSessionName:  "batch-hit-session",
+	}
+	inst := &Instance{
+		Title:  "batch-hit-test",
+		Status: Running,
+	}
+	inst.started.Store(true)
+	inst.processManager = NewTmuxBackend(mock)
+
+	batch := map[string]tmux.PaneDeadStatus{
+		"batch-hit-session": {Dead: true, Code: 137, Signal: "SIGKILL"},
+	}
+
+	result := checker.checkSingleSession(inst, batch)
+
+	if result.IsHealthy {
+		t.Error("expected IsHealthy=false when batch map reports the pane as dead")
+	}
+	if mock.paneExitStatusCalls != 0 {
+		t.Errorf("expected paneDeadStatus to use the batch entry and never call PaneExitStatus(), got %d calls", mock.paneExitStatusCalls)
 	}
 }
 

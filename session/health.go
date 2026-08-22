@@ -282,18 +282,23 @@ func (h *SessionHealthChecker) checkSingleSession(instance *Instance, paneStatus
 // checkTmuxHealth classifies instance's tmux backend as missing, dead-paned, or
 // healthy, and drives the matching recovery. Only called for started sessions.
 func (h *SessionHealthChecker) checkTmuxHealth(instance *Instance, paneStatus map[string]tmux.PaneDeadStatus, result *HealthCheckResult) {
-	paneDead, paneExitCode, paneExitSignal := paneDeadStatus(instance, paneStatus)
-
-	switch {
-	case !instance.TmuxAlive():
+	if !instance.TmuxAlive() {
 		h.recoverMissingSession(instance, result)
-	case paneDead:
-		h.handleDeadPane(instance, paneExitCode, paneExitSignal, result)
-	default:
+		return
+	}
+
+	// paneDeadStatus is only evaluated here, not before the TmuxAlive() check
+	// above -- a not-alive session missing from the batch map would otherwise
+	// trigger a second, redundant TmuxAlive()/IsAlive() subprocess call on top
+	// of the check above.
+	paneDead, paneExitCode, paneExitSignal := paneDeadStatus(instance, paneStatus)
+	if !paneDead {
 		// Session is healthy - reset any accumulated failure count
 		h.resetFailureCount(instance.Title)
 		result.Actions = append(result.Actions, "Tmux session is healthy")
+		return
 	}
+	h.handleDeadPane(instance, paneExitCode, paneExitSignal, result)
 }
 
 // recordStartFailure records a failed recovery Start() on result, and gives up
