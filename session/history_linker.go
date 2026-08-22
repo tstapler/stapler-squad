@@ -4,10 +4,10 @@ import (
 	"context"
 	"math"
 	"os"
-	"path/filepath"
 	"time"
 
 	"github.com/linkdata/deadlock"
+	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/log"
 )
 
@@ -48,7 +48,8 @@ type HistoryLinker struct {
 }
 
 // NewHistoryLinkerFromRealInspector creates a HistoryLinker backed by the real
-// gopsutil-based process inspector and an fsnotify watcher on ~/.claude/projects/.
+// gopsutil-based process inspector and an fsnotify watcher on ~/.claude/projects/
+// (redirected into the isolated config dir under test isolation).
 // This is the production constructor; use NewHistoryLinker in tests.
 func NewHistoryLinkerFromRealInspector() *HistoryLinker {
 	detector := NewHistoryFileDetectorWithRealInspector()
@@ -62,7 +63,20 @@ func NewHistoryLinkerFromRealInspector() *HistoryLinker {
 			backoffs:  make(map[string]*sessionBackoff),
 		}
 	}
-	watchDir := filepath.Join(homeDir, ".claude", "projects")
+	// Under test isolation this resolves inside the isolated config dir rather
+	// than the operator's real ~/.claude/projects, so booting a real server in
+	// a test doesn't recursively watch that large tree. Same helper (and same
+	// directory) as the TokenStore/ArtifactExtractor side in
+	// server.BuildRuntimeDeps.
+	watchDir, err := config.ResolveClaudeHistoryDir(homeDir, config.IsIsolatedInstance())
+	if err != nil {
+		log.Warn("HistoryLinker: failed to resolve history watch dir, watcher disabled", "err", err)
+		return &HistoryLinker{
+			detector:  detector,
+			instances: make([]*Instance, 0),
+			backoffs:  make(map[string]*sessionBackoff),
+		}
+	}
 
 	// Build the linker first so the watcher callback can close over it.
 	hl := &HistoryLinker{
