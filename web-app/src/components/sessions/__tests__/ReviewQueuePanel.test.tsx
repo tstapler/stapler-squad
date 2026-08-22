@@ -786,6 +786,126 @@ describe("ReviewQueuePanel — combinable filters", () => {
   });
 });
 
+describe("ReviewQueuePanel — exclude filters", () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  function openFilters() {
+    fireEvent.click(screen.getByRole("button", { name: /^Filter/ }));
+  }
+
+  it("cycles a priority pill through neutral -> include -> exclude -> neutral", () => {
+    const urgent = makeReviewItem({ sessionId: "s-urgent", sessionName: "Urgent Item", priority: Priority.URGENT });
+    const low = makeReviewItem({ sessionId: "s-low", sessionName: "Low Item", priority: Priority.LOW });
+    mockUseReviewQueueContext.mockReturnValue(makeContextValue([urgent, low]));
+
+    renderPanel();
+    openFilters();
+
+    const pill = () => screen.getByRole("button", { name: /Urgent \(1\)/ });
+
+    // neutral -> include
+    fireEvent.click(pill());
+    expect(pill()).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByTestId("review-item-s-urgent")).toBeInTheDocument();
+    expect(screen.queryByTestId("review-item-s-low")).not.toBeInTheDocument();
+
+    // include -> exclude
+    fireEvent.click(pill());
+    expect(pill()).toHaveAttribute("aria-pressed", "false");
+    expect(pill()).toHaveTextContent("🚫");
+    expect(screen.queryByTestId("review-item-s-urgent")).not.toBeInTheDocument();
+    expect(screen.getByTestId("review-item-s-low")).toBeInTheDocument();
+
+    // exclude -> neutral
+    fireEvent.click(pill());
+    expect(pill()).toHaveAttribute("aria-pressed", "false");
+    expect(pill()).not.toHaveTextContent("🚫");
+    expect(screen.getByTestId("review-item-s-urgent")).toBeInTheDocument();
+    expect(screen.getByTestId("review-item-s-low")).toBeInTheDocument();
+  });
+
+  it("excludes items by program when a program pill is clicked twice", () => {
+    const claude = makeReviewItem({ sessionId: "s1", sessionName: "First Item", program: "claude" });
+    const aider = makeReviewItem({ sessionId: "s2", sessionName: "Second Item", program: "aider" });
+    mockUseReviewQueueContext.mockReturnValue(makeContextValue([claude, aider]));
+
+    renderPanel();
+    openFilters();
+
+    const pill = screen.getByRole("button", { name: /aider \(1\)/ });
+    fireEvent.click(pill); // include
+    fireEvent.click(pill); // exclude
+
+    expect(screen.getByTestId("review-item-s1")).toBeInTheDocument();
+    expect(screen.queryByTestId("review-item-s2")).not.toBeInTheDocument();
+  });
+
+  it("excludes items by category when a category pill is clicked twice", () => {
+    const bugfix = makeReviewItem({ sessionId: "s1", sessionName: "First Item", category: "bugfix" });
+    const feature = makeReviewItem({ sessionId: "s2", sessionName: "Second Item", category: "feature" });
+    mockUseReviewQueueContext.mockReturnValue(makeContextValue([bugfix, feature]));
+
+    renderPanel();
+    openFilters();
+
+    const pill = screen.getByRole("button", { name: /feature \(1\)/ });
+    fireEvent.click(pill); // include
+    fireEvent.click(pill); // exclude
+
+    expect(screen.getByTestId("review-item-s1")).toBeInTheDocument();
+    expect(screen.queryByTestId("review-item-s2")).not.toBeInTheDocument();
+  });
+
+  it("counts excluded values toward the active filter count and clear-all resets them", () => {
+    const urgent = makeReviewItem({ sessionId: "s1", sessionName: "S1", priority: Priority.URGENT });
+    const low = makeReviewItem({ sessionId: "s2", sessionName: "S2", priority: Priority.LOW });
+    mockUseReviewQueueContext.mockReturnValue(makeContextValue([urgent, low]));
+
+    renderPanel();
+    openFilters();
+
+    const pill = screen.getByRole("button", { name: /Urgent \(1\)/ });
+    fireEvent.click(pill); // include
+    fireEvent.click(pill); // exclude
+
+    expect(screen.queryByTestId("review-item-s1")).not.toBeInTheDocument();
+    expect(screen.getByTestId("review-item-s2")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /clear active filter/i }));
+
+    expect(screen.getByTestId("review-item-s1")).toBeInTheDocument();
+    expect(screen.getByTestId("review-item-s2")).toBeInTheDocument();
+    expect(pill).not.toHaveTextContent("🚫");
+  });
+
+  it("persists an excluded priority to the URL and hydrates it back on mount", () => {
+    const urgent = makeReviewItem({ sessionId: "s1", sessionName: "S1", priority: Priority.URGENT });
+    mockUseReviewQueueContext.mockReturnValue(makeContextValue([urgent]));
+
+    renderPanel();
+    openFilters();
+
+    const pill = screen.getByRole("button", { name: /Urgent \(1\)/ });
+    fireEvent.click(pill); // include
+    fireEvent.click(pill); // exclude
+
+    expect(mockReplace).toHaveBeenCalledWith(
+      expect.stringContaining(`priorityExclude=${Priority.URGENT}`),
+      expect.objectContaining({ scroll: false })
+    );
+
+    mockSearchParams = new URLSearchParams({ priorityExclude: String(Priority.URGENT) });
+    renderPanel();
+    fireEvent.click(screen.getAllByRole("button", { name: /^Filter/ })[1]);
+
+    const rehydrated = screen.getAllByRole("button", { name: /Urgent \(1\)/ })[1];
+    expect(rehydrated).toHaveAttribute("aria-pressed", "false");
+    expect(rehydrated).toHaveTextContent("🚫");
+  });
+});
+
 // ---------------------------------------------------------------------------
 // Severity (review-queue-severity Epic 6)
 // ---------------------------------------------------------------------------

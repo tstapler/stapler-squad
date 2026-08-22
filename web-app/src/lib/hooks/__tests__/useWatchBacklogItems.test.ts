@@ -137,6 +137,14 @@ describe("useWatchBacklogItems", () => {
   });
 
   // R11 error path — Task 4.2.1c
+  //
+  // Explicit timeout: this test drives real (non-fake) async microtask flushes
+  // through five act()/advanceTimersByTime() round trips. Each round trip's
+  // wall-clock cost is dominated by host scheduling, not simulated time — under
+  // full-suite parallel load (all 4 Jest projects + hundreds of test files
+  // contending for CPU) that cost can exceed the default 5000ms real-time
+  // timeout even though the test's actual work completes in well under 1s when
+  // run in isolation. See .claude/rules/fix-flaky-tests-dont-defer.md.
   it("retries with exponential backoff capped at 30s on stream error", async () => {
     jest.useFakeTimers();
     mockWatchBacklogItems.mockImplementation(() => {
@@ -175,7 +183,7 @@ describe("useWatchBacklogItems", () => {
       await flush();
     });
     expect(mockWatchBacklogItems).toHaveBeenCalledTimes(5);
-  });
+  }, 15000);
 
   // R11 integration — Task 4.2.1d
   it("falls back to REST polling after retries exhaust and attempts one reconnect on next successful poll", async () => {

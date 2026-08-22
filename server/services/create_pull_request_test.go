@@ -382,6 +382,7 @@ type fakePRGitExecutor struct {
 	pushErr   error  // git push fails with this error
 	createOut string // gh pr create's stdout (defaults to a canned PR URL if empty)
 	createErr error  // gh pr create fails with this error
+	ghAuthErr error  // gh auth status fails with this error, driving checkGHCLI's "not configured" path
 
 	// blockFirstCallStarted, when non-nil, is closed the first time
 	// CombinedOutput is invoked (signaling a test-driving goroutine that the
@@ -437,6 +438,11 @@ func (e *fakePRGitExecutor) CombinedOutput(cmd *exec.Cmd) ([]byte, error) {
 	case prog == "git" && len(args) > 1 && args[1] == "push":
 		if e.pushErr != nil {
 			return []byte("push failed"), e.pushErr
+		}
+		return nil, nil
+	case prog == "gh" && len(args) > 1 && args[1] == "auth":
+		if e.ghAuthErr != nil {
+			return []byte("not logged in"), e.ghAuthErr
 		}
 		return nil, nil
 	case prog == "gh" && len(args) > 2 && args[2] == "list":
@@ -510,29 +516,6 @@ func (f *fakePRInstanceStore) SaveInstances(instances []*session.Instance) error
 }
 
 var _ session.InstanceStore = (*fakePRInstanceStore)(nil)
-
-// withPathPrepended prepends dir to PATH for the duration of the test. Uses
-// t.Setenv, so the test must not call t.Parallel().
-func withPathPrepended(t *testing.T, dir string) {
-	t.Helper()
-	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
-}
-
-// fakeGHNotAuthenticated installs a fake `gh` binary on PATH (ahead of the
-// real one) that fails `gh auth status`, causing checkGHCLI() — called for
-// real inside GitWorktree.CreatePR, not routed through the fake executor —
-// to return its exact "not configured" message. This is the only piece of
-// CreatePullRequest's pipeline that can't be faked via cmdExec, since
-// checkGHCLI shells out directly rather than through GitWorktree's injectable
-// executor. Must not run in a parallel test (uses t.Setenv).
-func fakeGHNotAuthenticated(t *testing.T) {
-	t.Helper()
-	dir := t.TempDir()
-	script := filepath.Join(dir, "gh")
-	content := "#!/bin/sh\nif [ \"$1\" = \"auth\" ] && [ \"$2\" = \"status\" ]; then\n  echo 'not logged in' >&2\n  exit 1\nfi\nexit 0\n"
-	require.NoError(t, os.WriteFile(script, []byte(content), 0o755))
-	withPathPrepended(t, dir)
-}
 
 func TestCreatePullRequest_should_CallCreatePRDirectly_NotHeadlessPool(t *testing.T) {
 	t.Parallel()
@@ -626,10 +609,8 @@ func TestCreatePullRequest_should_ReturnPersistedFalse_When_SaveInstancesFails(t
 }
 
 func TestCreatePullRequest_should_SurfaceSpecificError_When_GHNotAuthenticated(t *testing.T) {
-	// Not parallel: fakeGHNotAuthenticated uses t.Setenv.
-	fakeGHNotAuthenticated(t)
-
-	mock := &fakePRGitExecutor{}
+	t.Parallel()
+	mock := &fakePRGitExecutor{ghAuthErr: errors.New("not logged in")}
 	wt := newFakePRWorktree("sess-no-auth", "feature/no-auth", mock)
 	inst := &session.Instance{Title: "No auth session", UUID: uuid.New().String()}
 	inst.SetGitWorktree(wt)

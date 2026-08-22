@@ -125,8 +125,13 @@ func CanonicalizeWorktreePath(path string) string {
 	return resolved
 }
 
-// checkGHCLI checks if GitHub CLI is installed and configured
-func checkGHCLI() error {
+// checkGHCLI checks if GitHub CLI is installed and configured. It runs the
+// "gh auth status" probe through g.cmdExec when set, so tests can inject a
+// fast fake instead of hitting the real, network/keychain-dependent gh
+// binary (which measured ~8s locally, dangerously close to the 10s timeout
+// below, and caused intermittent connect.CodeUnavailable flakes under
+// make test-race's added scheduling contention).
+func (g *GitWorktree) checkGHCLI() error {
 	// Check if gh is installed
 	if _, err := exec.LookPath("gh"); err != nil {
 		return fmt.Errorf("GitHub CLI (gh) is not installed. Please install it first")
@@ -136,7 +141,13 @@ func checkGHCLI() error {
 	authCtx, authCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer authCancel()
 	cmd := safeexec.CommandContext(authCtx, "gh", "auth", "status")
-	if err := cmd.Run(); err != nil {
+	var err error
+	if g.cmdExec != nil {
+		_, err = g.cmdExec.CombinedOutput(cmd)
+	} else {
+		err = cmd.Run()
+	}
+	if err != nil {
 		return fmt.Errorf("GitHub CLI is not configured. Please run 'gh auth login' first")
 	}
 

@@ -126,6 +126,16 @@ export const filterButtonActive = style({
   borderColor: vars.color.primary,
 });
 
+// Third state of the include/exclude/neutral cycle — a value the user has explicitly
+// excluded from the queue (e.g. "hide LOW priority"), visually distinct from
+// filterButtonActive (inclusion) via vars.color.error, mirroring
+// filterPillExcludeActive in NotificationPanel.css.ts.
+export const filterButtonExcluded = style({
+  background: vars.color.error,
+  color: "white",
+  borderColor: vars.color.error,
+});
+
 export const items = style({
   flex: 1,
   overflowY: "auto",
@@ -263,21 +273,23 @@ export const detailRow = style({
   gap: vars.space["2"],
   alignItems: "baseline",
   fontSize: "13px",
+  flexWrap: "wrap",
 });
 
 export const detailLabel = style({
   color: vars.color.textSecondary,
   fontWeight: 500,
   minWidth: "80px",
+  flexShrink: 0,
 });
 
 export const detailValue = style({
   color: vars.color.textPrimary,
   fontFamily: "monospace",
-  overflow: "hidden",
-  textOverflow: "ellipsis",
-  whiteSpace: "nowrap",
+  overflowWrap: "break-word",
+  wordBreak: "break-word",
   flex: 1,
+  minWidth: 0,
 });
 
 export const tags = style({
