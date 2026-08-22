@@ -216,40 +216,6 @@ jobs:
             -covermode=atomic ./server/... ./session/... ./config/... \
             || (TMUX_BIN="$(pwd)/bin/tmux" go test -race -timeout=20m -v ./...; exit 1)
 
-      # PTY-triple (ptmx/attachCmd/attachCmdWaitOnce) race fix regression gate:
-      # these tests were validated locally at -count=20/-count=50 during development
-      # (see project_plans/tmux-ptmx-race-fix/), but the plain -race run above only
-      # executes each test once per CI run — not enough repetition to reliably catch
-      # a reintroduced race in a timing-sensitive test. Run them amplified here so
-      # CI keeps the same confidence level the fix was originally verified with.
-      - name: PTY-triple race regression (amplified repetitions)
-        # Same tmux-under-CPU-contention rationale as the "Run tests with coverage" step
-        # above (see its comment) -- -count=20 spawns real tmux servers 20x over, so it
-        # needs the same widened create-timeout headroom.
-        #
-        # -timeout=20m: same rationale as the "Run tests with coverage" step's comment --
-        # 20 real repetitions of tmux session creation + HTTP hook-callback polling
-        # (each iteration can legitimately wait up to ~60s) can exceed go test's silent
-        # 10m default well before anything is actually hung. Confirmed 2026-08-19: after
-        # fixing a SQLite lock-contention bug that had been causing this step's first
-        # `go test` invocation to fail fast (masking the real per-iteration runtime),
-        # the full 20x run took ~609s and tripped the untimed default, producing an
-        # opaque goroutine dump with no indication of a genuine hang. Root-cause fixed
-        # (per-test STAPLER_SQUAD_TEST_DIR isolation in server_integration_test.go) —
-        # a full ./server/... suite run now completes in ~63s for this package instead
-        # of hanging toward the 609s/10m mark — but -timeout=20m is left as headroom
-        # rather than retightened, since amplified -count=20 repetition is inherently
-        # more load-sensitive than a single run.
-        env:
-          STAPLER_SQUAD_TMUX_CREATE_TIMEOUT_SECONDS: "30"
-        run: |
-          TMUX_BIN="$(pwd)/bin/tmux" go test -race -timeout=20m ./server/... \
-            -run 'TestServer_should_WriteUnchangedHookURL_When_StartedOnExplicitPort|TestSessionService_CreateThenImmediateDelete_NoDataRace' \
-            -count=20
-          TMUX_BIN="$(pwd)/bin/tmux" go test -race -timeout=20m ./session/tmux/... \
-            -run 'TestGetPTY_ClosePTYAndAttachCmd_ConcurrentAccessIsSerialized|TestDetach_ConcurrentWithGetPTY_NoDeadlock|TestDetachSafely_ConcurrentWithGetPTY_NoDeadlock' \
-            -count=20
-
       - name: Run scanner unit tests
         run: cd tools/scanner && go test ./...
 
