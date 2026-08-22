@@ -398,7 +398,7 @@ jobs:
         run: ./scripts/build-tmux.sh
 
       - name: Install go-stress
-        run: go install golang.org/x/tools/cmd/stress@latest
+        run: go install golang.org/x/tools/cmd/stress@v0.47.0
 
       - name: Compile PTY-triple regression test binaries
         run: |
