@@ -212,6 +212,23 @@ var allowedSelfResolveSourceStatuses = map[session.BacklogStatus]bool{
 	session.BacklogStatusPRPending:  true,
 }
 
+// unclaimedDuplicateSourceStatuses is the whitelist of statuses
+// report_duplicate accepts from a *passerby* caller — a session with no
+// ItemSession link to the item at all. An item sits in one of these statuses
+// before any work session has claimed it (see session/domain/backlog.go), so
+// there is no assigned work session to have reported the duplicate itself —
+// any other live Stapler Squad session that happens to notice the duplicate
+// (e.g. while triaging or browsing the backlog for its own work) may flag it.
+// Deliberately excludes in_progress/pr_pending/review/done — an item already
+// claimed or resolved must go through the linked-session path in reportDuplicate
+// (or a human), never be yanked out from under whoever's already on it.
+var unclaimedDuplicateSourceStatuses = map[session.BacklogStatus]bool{
+	session.BacklogStatusIdea:     true,
+	session.BacklogStatusRefining: true,
+	session.BacklogStatusReady:    true,
+	session.BacklogStatusQueued:   true,
+}
+
 // reportPRCreatedAllowedSourceStatuses is the whitelist of source statuses
 // report_pr_created may act on. Consulted before any PR verification or
 // storage write so a structurally ineligible status (e.g. ready, idea, done)
@@ -2313,9 +2330,23 @@ func (h *backlogHandlers) reportDuplicate(ctx context.Context, req mcpgo.CallToo
 		return errResult(ErrInvalidArgument, "reason must be <= 1000 characters", ""), nil
 	}
 
-	// Verify session is linked to item (disambiguates ITEM_NOT_FOUND vs PERMISSION_DENIED).
+	// Verify session is linked to item (disambiguates ITEM_NOT_FOUND vs
+	// PERMISSION_DENIED — same shared helper every other mutating tool uses).
+	// Unlike those, report_duplicate does not treat "not linked" as an
+	// automatic rejection: a caller with no link at all may still flag an
+	// *unclaimed* item as a duplicate (reportDuplicateUnclaimed), as long as
+	// the item itself is unclaimed. resolveItemLink already committed to a
+	// PERMISSION_DENIED result for that case, so a direct existence check is
+	// used here — not the ambiguous ErrNotFound from the link lookup itself
+	// — to tell "item exists but this session isn't linked" apart from every
+	// other resolveItemLink failure (ITEM_NOT_FOUND or a real internal
+	// error), both of which must still surface exactly as resolveItemLink
+	// reported them, remediation text included.
 	itemSession, errRes := h.resolveItemLink(ctx, callerUUID, itemID)
 	if errRes != nil {
+		if _, itemErr := h.storage.GetBacklogItem(ctx, itemID); itemErr == nil {
+			return h.reportDuplicateUnclaimed(ctx, callerUUID, itemID, duplicateRef, reason)
+		}
 		return errRes, nil
 	}
 	if itemSession.Role != session.SessionRoleWork {
@@ -2374,32 +2405,10 @@ func (h *backlogHandlers) reportDuplicate(ctx context.Context, req mcpgo.CallToo
 		return errResult(ErrInvalidArgument, valErr.Error(), ""), nil
 	}
 
-	// Parse + type-validate duplicate_ref before any network call (mirrors
-	// report_pr_created's pre-network sanity check).
-	ref, parseErr := githubpkg.ParseGitHubRefWithHosts(duplicateRef, h.enterpriseHosts())
-	if parseErr != nil {
-		return errResult(ErrInvalidArgument, fmt.Sprintf("duplicate_ref is not a recognizable GitHub PR/issue/commit URL: %v", parseErr), ""), nil
-	}
-	if ref.Type != githubpkg.RefTypePR && ref.Type != githubpkg.RefTypeIssue && ref.Type != githubpkg.RefTypeCommit {
-		return errResult(ErrInvalidArgument, fmt.Sprintf("duplicate_ref must be a GitHub PR, issue, or commit URL — got a %s reference", ref.Type), ""), nil
-	}
-
-	// Verify duplicate_ref actually exists on GitHub before any mutation
-	// (FR3). Three-channel split (FR4): no-credentials (non-retryable,
-	// distinct from a generic transient failure — see ADR-002's Negative
-	// consequences and pre-mortem F1), definitively-not-found/access-denied
-	// (non-retryable), or a plain transient error (retryable).
-	if verifyErr := h.verifyRef(ctx, ref); verifyErr != nil {
-		if errors.Is(verifyErr, githubpkg.ErrNotAuthenticated) {
-			return errResult(ErrInternalError, fmt.Sprintf("this session has no configured GitHub credentials (no GITHUB_TOKEN/GH_TOKEN and no connected account) — report_duplicate cannot verify %s. This is not a transient failure: retrying will not help until credentials are configured. Leave the item as-is and note this in your summary for an operator to configure GitHub access for this session.", duplicateRef), ""), nil
-		}
-		if errors.Is(verifyErr, githubpkg.ErrGitHubRefNotFound) {
-			return errResult(ErrInvalidArgument, fmt.Sprintf("%s does not exist on GitHub (404) — double-check the URL. Note: a private/inaccessible repo also returns 404.", duplicateRef), ""), nil
-		}
-		if errors.Is(verifyErr, githubpkg.ErrGitHubAccessDenied) {
-			return errResult(ErrInvalidArgument, fmt.Sprintf("GitHub denied access verifying %s — this session's GitHub credentials may not have access to that repo; retrying will not help unless credentials change.", duplicateRef), ""), nil
-		}
-		return errResult(ErrInternalError, fmt.Sprintf("could not verify %s against GitHub — retry: %v", duplicateRef, verifyErr), ""), nil
+	// Parse + GitHub-verify duplicate_ref before any mutation (FR3/FR4 — see
+	// resolveDuplicateRef, shared with the unclaimed-item path below).
+	if _, errRes := h.resolveDuplicateRef(ctx, duplicateRef); errRes != nil {
+		return errRes, nil
 	}
 
 	// Transition item from its validated source status to review, with a
@@ -2460,6 +2469,121 @@ func (h *backlogHandlers) reportDuplicate(ctx context.Context, req mcpgo.CallToo
 	return mcpgo.NewToolResultText(fmt.Sprintf(
 		"Item %s routed to review as a duplicate of %s. Reviewer notified.",
 		itemID, duplicateRef,
+	)), nil
+}
+
+// resolveDuplicateRef parses and GitHub-verifies a report_duplicate
+// duplicate_ref. Shared by the linked-session path above (routes to review)
+// and reportDuplicateUnclaimed below (archives directly) so both apply the
+// identical evidence bar — a real, existing GitHub PR/issue/commit — before
+// touching the item. Returns a non-nil *mcpgo.CallToolResult (to return
+// verbatim) on any failure.
+func (h *backlogHandlers) resolveDuplicateRef(ctx context.Context, duplicateRef string) (*githubpkg.ParsedGitHubRef, *mcpgo.CallToolResult) {
+	ref, parseErr := githubpkg.ParseGitHubRefWithHosts(duplicateRef, h.enterpriseHosts())
+	if parseErr != nil {
+		return nil, errResult(ErrInvalidArgument, fmt.Sprintf("duplicate_ref is not a recognizable GitHub PR/issue/commit URL: %v", parseErr), "")
+	}
+	if ref.Type != githubpkg.RefTypePR && ref.Type != githubpkg.RefTypeIssue && ref.Type != githubpkg.RefTypeCommit {
+		return nil, errResult(ErrInvalidArgument, fmt.Sprintf("duplicate_ref must be a GitHub PR, issue, or commit URL — got a %s reference", ref.Type), "")
+	}
+
+	// Three-channel split (FR4, ADR-002): no-credentials (non-retryable,
+	// distinct from a generic transient failure), definitively-not-found/
+	// access-denied (non-retryable), or a plain transient error (retryable).
+	if verifyErr := h.verifyRef(ctx, ref); verifyErr != nil {
+		if errors.Is(verifyErr, githubpkg.ErrNotAuthenticated) {
+			return nil, errResult(ErrInternalError, fmt.Sprintf("this session has no configured GitHub credentials (no GITHUB_TOKEN/GH_TOKEN and no connected account) — report_duplicate cannot verify %s. This is not a transient failure: retrying will not help until credentials are configured. Leave the item as-is and note this in your summary for an operator to configure GitHub access for this session.", duplicateRef), "")
+		}
+		if errors.Is(verifyErr, githubpkg.ErrGitHubRefNotFound) {
+			return nil, errResult(ErrInvalidArgument, fmt.Sprintf("%s does not exist on GitHub (404) — double-check the URL. Note: a private/inaccessible repo also returns 404.", duplicateRef), "")
+		}
+		if errors.Is(verifyErr, githubpkg.ErrGitHubAccessDenied) {
+			return nil, errResult(ErrInvalidArgument, fmt.Sprintf("GitHub denied access verifying %s — this session's GitHub credentials may not have access to that repo; retrying will not help unless credentials change.", duplicateRef), "")
+		}
+		return nil, errResult(ErrInternalError, fmt.Sprintf("could not verify %s against GitHub — retry: %v", duplicateRef, verifyErr), "")
+	}
+	return ref, nil
+}
+
+// reportDuplicateUnclaimed handles report_duplicate for a caller with no
+// ItemSession link to itemID — a passerby session (assigned to some other
+// item, or to none) that noticed an unclaimed backlog item duplicates
+// already-shipped work. This has come up more than once: a "ready"/"idea"/
+// "refining"/"queued" item sits with no work session attached until one
+// happens to claim it, so nothing could previously move it — report_duplicate
+// required an ItemSession link that, by definition, doesn't exist yet for an
+// unclaimed item, and no archive tool was exposed over MCP at all.
+//
+// Unlike the linked-session path (which always routes to "review" for a
+// human to confirm — ADR-001: a work session must never unilaterally close
+// out its own work), there is no work in flight here to protect a review of:
+// an unclaimed item has no diff, no commits, nothing for a reviewer to look
+// at. Routing it into the existing review-gate pipeline would actively
+// misfire — that pipeline assumes a claimed work session's worktree/diff
+// exists and FAILs+auto-reopens an "empty diff" review (see
+// session/review_gate.go's committedDiffEmpty guardrail), which would loop
+// this item between review and in_progress forever. The GitHub-ref
+// verification in resolveDuplicateRef is the evidence bar instead, so the
+// item is archived directly. The action is always attributed to
+// TriggeredByAgent with an explicit note recording who/why (visible in the
+// item's status history, same channel ADR-001 already uses for the linked
+// path) — never a silent close.
+func (h *backlogHandlers) reportDuplicateUnclaimed(ctx context.Context, callerUUID, itemID, duplicateRef, reason string) (*mcpgo.CallToolResult, error) {
+	item, getErr := h.getBacklogItemFor(ctx, itemID)
+	if getErr != nil {
+		if errors.Is(getErr, session.ErrNotFound) {
+			return errResult(ErrItemNotFound, fmt.Sprintf("backlog item %q not found", itemID), ""), nil
+		}
+		return errResult(ErrInternalError, fmt.Sprintf("get backlog item: %v", getErr), ""), nil
+	}
+
+	status := session.BacklogStatus(item.Status)
+	if !unclaimedDuplicateSourceStatuses[status] {
+		return errResult(ErrInvalidArgument, fmt.Sprintf(
+			"item is at status %q and this session is not linked to it — report_duplicate can only act on an unclaimed item (idea/refining/ready/queued) it isn't assigned to, or a claimed item (in_progress/pr_pending) it IS assigned to as the work session",
+			item.Status,
+		), ""), nil
+	}
+
+	// A status in unclaimedDuplicateSourceStatuses normally means no session
+	// has claimed the item yet — but idea/refining items can carry an active
+	// (not yet ended) triage-role ItemSession analyzing them, which is real
+	// work in flight even though no "work" session exists. Refuse rather
+	// than archive out from under it; fail closed on a lookup error, same
+	// rationale as the active-reviewer check in the linked-session path
+	// above.
+	itemSessions, lsErr := h.itemSessionsFor(ctx, itemID)
+	if lsErr != nil {
+		return errResult(ErrInternalError, fmt.Sprintf("could not verify no session is active on this item — retry: %v", lsErr), ""), nil
+	}
+	for _, is := range itemSessions {
+		if is.EndedAt == nil {
+			return errResult(ErrInvalidArgument, fmt.Sprintf(
+				"item %s has an active %s session (not yet ended) despite its unclaimed status %q — leave it alone, that session owns it",
+				itemID, is.Role, item.Status,
+			), ""), nil
+		}
+	}
+
+	if _, errRes := h.resolveDuplicateRef(ctx, duplicateRef); errRes != nil {
+		return errRes, nil
+	}
+
+	note := fmt.Sprintf("duplicate of %s: %s — archived by session %s (item was unclaimed, no work in progress)", duplicateRef, reason, callerUUID)
+	precondition := &session.BacklogItemPrecondition{ExpectedStatus: string(status), Note: note}
+	if _, archErr := h.storage.ArchiveBacklogItem(ctx, itemID, precondition, session.TriggeredByAgent, note); archErr != nil {
+		log.InfoLog().Printf("[mcp:report_duplicate] unclaimed archive failed item=%s: %v", itemID, archErr)
+		if errors.Is(archErr, session.ErrPreconditionFailed) {
+			return errResult(ErrInternalError, "item state changed since your last read (another session already claimed or resolved it) — call get_backlog_item to see its current status", ""), nil
+		}
+		return errResult(ErrInternalError, fmt.Sprintf("archive failed: %v", archErr), ""), nil
+	}
+
+	log.InfoLog().Printf("[mcp:report_duplicate] session=%s item=%s duplicate_ref=%s archived (unclaimed passerby report)", callerUUID, itemID, duplicateRef)
+
+	return mcpgo.NewToolResultText(fmt.Sprintf(
+		"Item %s was unclaimed (status %q) — archived directly as a duplicate of %s. No reviewer needed since no work was in progress; this is logged on the item's status history.",
+		itemID, item.Status, duplicateRef,
 	)), nil
 }
 
@@ -2945,11 +3069,11 @@ func registerBacklogTools(s *mcpserver.MCPServer, h *backlogHandlers) {
 
 	s.AddTool(
 		mcpgo.NewTool("report_duplicate",
-			mcpgo.WithDescription("Report that this item's work is a duplicate of an already-existing PR/issue/commit, routing the item to review instead of continuing it. "+
-				"Role: work only. "+
-				"Refuses if the item has SkipReviewGate enabled (use request_review instead), if the item isn't at in_progress or pr_pending, or if duplicate_ref cannot be verified to exist on GitHub — verification happens BEFORE any state change. "+
-				"On success, transitions the item to 'review' status (never done/archived directly) so a human/reviewer confirms the duplicate before closing it out. "+
-				"Calling this again with the same duplicate_ref after it already succeeded is safe (no-op). "+
+			mcpgo.WithDescription("Report that a backlog item duplicates an already-existing PR/issue/commit. Works in two modes depending on whether this session is assigned to the item: "+
+				"(1) If this session is the assigned 'work' session and the item is at in_progress/pr_pending, it routes the item to 'review' status (never done/archived directly) so a human/reviewer confirms the duplicate before closing it out — same as before. "+
+				"(2) If this session is NOT assigned to the item (any role, or no other item at all) and the item is unclaimed (idea/refining/ready/queued — nobody has started work on it), it archives the item directly — any session that notices a stray duplicate while browsing the backlog can flag it, not just one already assigned to it. Skipped for the same reason mode 1 routes to review instead of archiving there: an unclaimed item has no diff/commits for a human to check, so the GitHub-ref verification below is the evidence bar instead. "+
+				"Both modes refuse if duplicate_ref cannot be verified to exist on GitHub — verification happens BEFORE any state change — and mode 1 additionally refuses if the item has SkipReviewGate enabled (use request_review instead) or isn't at in_progress/pr_pending; mode 2 additionally refuses if the item isn't at idea/refining/ready/queued (it may already be claimed, in review, or done — call get_backlog_item to check). "+
+				"Calling mode 1 again with the same duplicate_ref after it already succeeded is safe (no-op); mode 2 is not idempotent since the item no longer exists in an actionable status after the first call. "+
 				"If verifying duplicate_ref against GitHub fails with INTERNAL_ERROR, this is transient — retry the call with the same arguments. "+
 				"If the result says this session has no configured GitHub credentials, that is not transient — do not retry. Leave the item as-is and note the missing-credentials issue in your summary so an operator can configure GitHub access for this session. "+
 				"This only confirms duplicate_ref exists on GitHub — it does not verify relevance to this item's work; that judgment is yours."),

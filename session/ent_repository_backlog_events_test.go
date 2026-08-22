@@ -297,7 +297,7 @@ func TestArchiveBacklogItem_should_publishArchivedAtTimestamp_When_DoneItemIsArc
 	})
 	require.NoError(t, err)
 
-	_, err = repo.ArchiveBacklogItem(ctx, item.ID)
+	_, err = repo.ArchiveBacklogItem(ctx, item.ID, nil, session.TriggeredByUser, "")
 	require.NoError(t, err)
 
 	select {
@@ -358,7 +358,7 @@ func TestUnarchiveBacklogItem_should_restoreToIdeaAndPublishTransition_When_Item
 	})
 	require.NoError(t, err)
 
-	_, err = repo.ArchiveBacklogItem(ctx, item.ID)
+	_, err = repo.ArchiveBacklogItem(ctx, item.ID, nil, session.TriggeredByUser, "")
 	require.NoError(t, err)
 
 	sub, subID := bus.Subscribe(ctx)

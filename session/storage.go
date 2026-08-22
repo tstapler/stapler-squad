@@ -748,9 +748,10 @@ func (s *Storage) UpdateBacklogItem(ctx context.Context, id string, update Backl
 	return s.repo.UpdateBacklogItem(ctx, id, update, precondition)
 }
 
-// ArchiveBacklogItem sets the archived_at timestamp.
-func (s *Storage) ArchiveBacklogItem(ctx context.Context, id string) (*BacklogItemData, error) {
-	return s.repo.ArchiveBacklogItem(ctx, id)
+// ArchiveBacklogItem sets the archived_at timestamp and status. See
+// EntRepository.ArchiveBacklogItem's doc comment for precondition/triggeredBy/note.
+func (s *Storage) ArchiveBacklogItem(ctx context.Context, id string, precondition *BacklogItemPrecondition, triggeredBy, note string) (*BacklogItemData, error) {
+	return s.repo.ArchiveBacklogItem(ctx, id, precondition, triggeredBy, note)
 }
 
 // UnarchiveBacklogItem clears archived_at and restores the item to "idea".

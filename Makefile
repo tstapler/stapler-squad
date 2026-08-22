@@ -538,10 +538,10 @@ test-integration: ensure-tools proto-gen ## Run integration tests (requires real
 	# fork real tmux servers (server/mcp and session/headless don't touch tmux).
 	# Running the full suite's default per-package parallelism let those two
 	# packages' tmux-heavy tests fork/poll real tmux servers concurrently and
-	# compete for scheduler time, which was the root cause of
-	# TestTmuxServerRegistry_PaneExitDetectedDespiteElevatedBackoff intermittently
-	# missing its reconnect-backoff cycle count under `make ci` while always
-	# passing in isolation (see registryPollTimeout's comment in
+	# compete for scheduler time -- root cause of intermittent failures like
+	# TestTmuxServerRegistry_ConcurrentSubscriptions/PaneExitDetectedDespiteElevatedBackoff
+	# missing their timing budgets under `make ci` while always passing in
+	# isolation (see registryPollTimeout's comment in
 	# session/tmux/server_registry_integration_test.go). -p 1 serializes just
 	# these two packages against each other; everything else still runs in
 	# parallel via the second invocation.
@@ -851,7 +851,7 @@ ptmx-field-guard: ## tmux-ptmx-race-fix guard: fail if ptmx/attachCmd/attachCmdW
 	    `# because none of that file's lines ever legitimately touch the PTY triple this guards` \
 	    | grep -vE ':[0-9]+:[[:space:]]*//' \
 	    | grep -v 'allow-direct-ptmx-access' ; then \
-	    echo "❌ ptmx-field-guard: direct PTY-triple field access found outside lockedPTMX/setPTYTriple/clearPTYTriple — route through the ptmxMu helpers (session/tmux/tmux.go)"; \
+	    echo "❌ ptmx-field-guard: direct PTY-triple field access found outside lockedPTMX/ptySnapshot/tryInstallPTYTriple/clearPTYTriple — route through the ptmxMu helpers (session/tmux/tmux.go)"; \
 	    exit 1; \
 	fi
 	@echo "✅ ptmx-field-guard: no direct PTY-triple field access outside the guarded helpers"
