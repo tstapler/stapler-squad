@@ -75,6 +75,8 @@ import {
   viewButton,
   loadMore,
   loadMoreButton,
+  incompleteSearchNotice,
+  incompleteSearchNoticeButton,
   autoHandledSection,
   autoHandledHeader,
   autoHandledHeaderLeft,
@@ -210,6 +212,13 @@ export function NotificationsPage() {
 
   const hasActiveFilter = searchQuery.trim() !== "" || typeFilter !== "all" || hideBacklogItems;
 
+  // The search box and "Hide backlog" toggle only filter over notificationHistory
+  // that's already been paged into memory (see filteredNotifications above) — they
+  // never re-query the server for older, not-yet-loaded history. When more history
+  // remains (historyHasMore) and one of those two filters is active, surface that
+  // instead of silently returning incomplete results.
+  const hasIncompleteSearch = (searchQuery.trim() !== "" || hideBacklogItems) && historyHasMore;
+
   const autoHandledNotifications = useMemo(
     () => notificationHistory.filter((n) => n.notificationType === "auto_approved"),
     [notificationHistory]
@@ -322,6 +331,20 @@ export function NotificationsPage() {
       </div>
 
       <div className={content} data-testid="notifications-content">
+        {hasIncompleteSearch && (
+          <div className={incompleteSearchNotice} data-testid="incomplete-search-notice">
+            <span>Showing results from loaded history only — load more to search older notifications.</span>
+            <button
+              className={incompleteSearchNoticeButton}
+              onClick={loadMoreHistory}
+              disabled={historyLoading}
+              type="button"
+              data-testid="incomplete-search-load-more"
+            >
+              {historyLoading ? "Loading..." : "Load more"}
+            </button>
+          </div>
+        )}
         {historyLoading && notificationHistory.length === 0 ? (
           <div className={empty}>
             <div className={emptyIcon}>⏳</div>

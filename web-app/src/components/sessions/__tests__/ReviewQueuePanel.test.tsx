@@ -904,6 +904,189 @@ describe("ReviewQueuePanel — exclude filters", () => {
     expect(rehydrated).toHaveAttribute("aria-pressed", "false");
     expect(rehydrated).toHaveTextContent("🚫");
   });
+
+  it("cycles a reason pill through neutral -> include -> exclude -> neutral", () => {
+    const errorItem = makeReviewItem({ sessionId: "s-error", sessionName: "Error Item", reason: AttentionReason.ERROR_STATE });
+    const idleItem = makeReviewItem({ sessionId: "s-idle", sessionName: "Idle Item", reason: AttentionReason.IDLE });
+    mockUseReviewQueueContext.mockReturnValue(makeContextValue([errorItem, idleItem]));
+
+    renderPanel();
+    openFilters();
+
+    const pill = () => screen.getByRole("button", { name: /Error \(1\)/ });
+
+    // neutral -> include
+    fireEvent.click(pill());
+    expect(pill()).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByTestId("review-item-s-error")).toBeInTheDocument();
+    expect(screen.queryByTestId("review-item-s-idle")).not.toBeInTheDocument();
+
+    // include -> exclude
+    fireEvent.click(pill());
+    expect(pill()).toHaveAttribute("aria-pressed", "false");
+    expect(pill()).toHaveTextContent("🚫");
+    expect(screen.queryByTestId("review-item-s-error")).not.toBeInTheDocument();
+    expect(screen.getByTestId("review-item-s-idle")).toBeInTheDocument();
+
+    // exclude -> neutral
+    fireEvent.click(pill());
+    expect(pill()).toHaveAttribute("aria-pressed", "false");
+    expect(pill()).not.toHaveTextContent("🚫");
+    expect(screen.getByTestId("review-item-s-error")).toBeInTheDocument();
+    expect(screen.getByTestId("review-item-s-idle")).toBeInTheDocument();
+  });
+
+  it("persists an excluded reason to the URL and hydrates it back on mount", () => {
+    const errorItem = makeReviewItem({ sessionId: "s1", sessionName: "S1", reason: AttentionReason.ERROR_STATE });
+    mockUseReviewQueueContext.mockReturnValue(makeContextValue([errorItem]));
+
+    renderPanel();
+    openFilters();
+
+    const pill = screen.getByRole("button", { name: /Error \(1\)/ });
+    fireEvent.click(pill); // include
+    fireEvent.click(pill); // exclude
+
+    expect(mockReplace).toHaveBeenCalledWith(
+      expect.stringContaining(`reasonExclude=${AttentionReason.ERROR_STATE}`),
+      expect.objectContaining({ scroll: false })
+    );
+
+    mockSearchParams = new URLSearchParams({ reasonExclude: String(AttentionReason.ERROR_STATE) });
+    renderPanel();
+    fireEvent.click(screen.getAllByRole("button", { name: /^Filter/ })[1]);
+
+    const rehydrated = screen.getAllByRole("button", { name: /Error \(1\)/ })[1];
+    expect(rehydrated).toHaveAttribute("aria-pressed", "false");
+    expect(rehydrated).toHaveTextContent("🚫");
+  });
+
+  it("cycles a severity pill through neutral -> include -> exclude -> neutral", () => {
+    const critical = makeReviewItem({
+      sessionId: "s-critical",
+      sessionName: "Critical Item",
+      reason: AttentionReason.APPROVAL_PENDING,
+      metadata: { pending_approval_id: "appr-1", risk_level: "critical" },
+    } as Partial<ReviewItem>);
+    const low = makeReviewItem({
+      sessionId: "s-low",
+      sessionName: "Low Item",
+      reason: AttentionReason.APPROVAL_PENDING,
+      metadata: { pending_approval_id: "appr-2", risk_level: "low" },
+    } as Partial<ReviewItem>);
+    mockUseReviewQueueContext.mockReturnValue(makeContextValue([critical, low]));
+
+    renderPanel();
+    openFilters();
+
+    const pill = () => screen.getByRole("button", { name: /Critical \(1\)/ });
+
+    // neutral -> include
+    fireEvent.click(pill());
+    expect(pill()).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByTestId("review-item-s-critical")).toBeInTheDocument();
+    expect(screen.queryByTestId("review-item-s-low")).not.toBeInTheDocument();
+
+    // include -> exclude
+    fireEvent.click(pill());
+    expect(pill()).toHaveAttribute("aria-pressed", "false");
+    expect(pill()).toHaveTextContent("🚫");
+    expect(screen.queryByTestId("review-item-s-critical")).not.toBeInTheDocument();
+    expect(screen.getByTestId("review-item-s-low")).toBeInTheDocument();
+
+    // exclude -> neutral
+    fireEvent.click(pill());
+    expect(pill()).toHaveAttribute("aria-pressed", "false");
+    expect(pill()).not.toHaveTextContent("🚫");
+    expect(screen.getByTestId("review-item-s-critical")).toBeInTheDocument();
+    expect(screen.getByTestId("review-item-s-low")).toBeInTheDocument();
+  });
+
+  it("persists an excluded severity to the URL and hydrates it back on mount", () => {
+    const critical = makeReviewItem({
+      sessionId: "s1",
+      sessionName: "S1",
+      reason: AttentionReason.APPROVAL_PENDING,
+      metadata: { pending_approval_id: "appr-1", risk_level: "critical" },
+    } as Partial<ReviewItem>);
+    mockUseReviewQueueContext.mockReturnValue(makeContextValue([critical]));
+
+    renderPanel();
+    openFilters();
+
+    const pill = screen.getByRole("button", { name: /Critical \(1\)/ });
+    fireEvent.click(pill); // include
+    fireEvent.click(pill); // exclude
+
+    expect(mockReplace).toHaveBeenCalledWith(
+      expect.stringContaining("severityExclude=critical"),
+      expect.objectContaining({ scroll: false })
+    );
+
+    mockSearchParams = new URLSearchParams({ severityExclude: "critical" });
+    renderPanel();
+    fireEvent.click(screen.getAllByRole("button", { name: /^Filter/ })[1]);
+
+    const rehydrated = screen.getAllByRole("button", { name: /Critical \(1\)/ })[1];
+    expect(rehydrated).toHaveAttribute("aria-pressed", "false");
+    expect(rehydrated).toHaveTextContent("🚫");
+  });
+
+  it("cycles a tag pill through neutral -> include -> exclude -> neutral", () => {
+    const backend = makeReviewItem({ sessionId: "s-backend", sessionName: "Backend Item", tags: ["backend"] });
+    const frontend = makeReviewItem({ sessionId: "s-frontend", sessionName: "Frontend Item", tags: ["frontend"] });
+    mockUseReviewQueueContext.mockReturnValue(makeContextValue([backend, frontend]));
+
+    renderPanel();
+    openFilters();
+
+    const pill = () => screen.getByRole("button", { name: /backend \(1\)/ });
+
+    // neutral -> include
+    fireEvent.click(pill());
+    expect(pill()).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByTestId("review-item-s-backend")).toBeInTheDocument();
+    expect(screen.queryByTestId("review-item-s-frontend")).not.toBeInTheDocument();
+
+    // include -> exclude
+    fireEvent.click(pill());
+    expect(pill()).toHaveAttribute("aria-pressed", "false");
+    expect(pill()).toHaveTextContent("🚫");
+    expect(screen.queryByTestId("review-item-s-backend")).not.toBeInTheDocument();
+    expect(screen.getByTestId("review-item-s-frontend")).toBeInTheDocument();
+
+    // exclude -> neutral
+    fireEvent.click(pill());
+    expect(pill()).toHaveAttribute("aria-pressed", "false");
+    expect(pill()).not.toHaveTextContent("🚫");
+    expect(screen.getByTestId("review-item-s-backend")).toBeInTheDocument();
+    expect(screen.getByTestId("review-item-s-frontend")).toBeInTheDocument();
+  });
+
+  it("persists an excluded tag to the URL and hydrates it back on mount", () => {
+    const backend = makeReviewItem({ sessionId: "s1", sessionName: "S1", tags: ["backend"] });
+    mockUseReviewQueueContext.mockReturnValue(makeContextValue([backend]));
+
+    renderPanel();
+    openFilters();
+
+    const pill = screen.getByRole("button", { name: /backend \(1\)/ });
+    fireEvent.click(pill); // include
+    fireEvent.click(pill); // exclude
+
+    expect(mockReplace).toHaveBeenCalledWith(
+      expect.stringContaining("tagExclude=backend"),
+      expect.objectContaining({ scroll: false })
+    );
+
+    mockSearchParams = new URLSearchParams({ tagExclude: "backend" });
+    renderPanel();
+    fireEvent.click(screen.getAllByRole("button", { name: /^Filter/ })[1]);
+
+    const rehydrated = screen.getAllByRole("button", { name: /backend \(1\)/ })[1];
+    expect(rehydrated).toHaveAttribute("aria-pressed", "false");
+    expect(rehydrated).toHaveTextContent("🚫");
+  });
 });
 
 // ---------------------------------------------------------------------------

@@ -406,6 +406,40 @@ export const loadMoreButton = style({
   },
 });
 
+export const incompleteSearchNotice = style({
+  display: "flex",
+  flexWrap: "wrap",
+  alignItems: "center",
+  gap: "0.5rem",
+  padding: "0.5rem 0.75rem",
+  margin: "0 0 0.5rem",
+  fontSize: "0.8rem",
+  color: vars.color.textSecondary,
+  backgroundColor: "rgba(0, 0, 0, 0.04)",
+  borderLeft: `2px solid ${vars.color.warning}`,
+  borderRadius: "0 4px 4px 0",
+});
+
+export const incompleteSearchNoticeButton = style({
+  padding: "0.2rem 0.6rem",
+  fontSize: "0.75rem",
+  fontWeight: 500,
+  border: `1px solid ${vars.color.borderColor}`,
+  borderRadius: "4px",
+  background: "transparent",
+  color: vars.color.primary,
+  cursor: "pointer",
+  selectors: {
+    "&:hover:not(:disabled)": {
+      borderColor: vars.color.primary,
+    },
+    "&:disabled": {
+      opacity: 0.5,
+      cursor: "not-allowed",
+    },
+  },
+});
+
 export const itemSubtitle = style({
   fontSize: "0.8rem",
   fontWeight: 500,

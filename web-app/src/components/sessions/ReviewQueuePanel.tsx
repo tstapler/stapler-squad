@@ -727,53 +727,52 @@ export function ReviewQueuePanel({
     }
   };
 
-  const handleFilterByPriority = (priority: Priority) => {
-    const next = cycleFilterValue(priorityFilter, priorityExcludeFilter, priority);
-    setPriorityFilter(next.include);
-    setPriorityExcludeFilter(next.exclude);
-    setUrlFilter("priority", joinSet(next.include));
-    setUrlFilter("priorityExclude", joinSet(next.exclude));
-  };
+  // Six filter dimensions (priority/reason/severity/program/category/tag) each need an
+  // identical include/exclude/neutral cycle handler: cycle the value via cycleFilterValue,
+  // write both resulting Sets to state, and persist both to the URL. Factored into one
+  // generic builder — called once per dimension below — instead of six near-identical
+  // hand-written handlers (interface-pollution-checklist.md smell #5 doesn't apply here:
+  // this generic has 6 real call sites, not 1).
+  function makeFilterCycleHandler<T extends string | number>(
+    include: Set<T>,
+    exclude: Set<T>,
+    setInclude: (s: Set<T>) => void,
+    setExclude: (s: Set<T>) => void,
+    includeKey: (typeof FILTER_URL_KEYS)[number],
+    excludeKey: (typeof FILTER_URL_KEYS)[number]
+  ): (value: T) => void {
+    return (value: T) => {
+      const next = cycleFilterValue(include, exclude, value);
+      setInclude(next.include);
+      setExclude(next.exclude);
+      setUrlFilter(includeKey, joinSet(next.include as Set<string> | Set<number>));
+      setUrlFilter(excludeKey, joinSet(next.exclude as Set<string> | Set<number>));
+    };
+  }
 
-  const handleFilterByReason = (reason: AttentionReason) => {
-    const next = cycleFilterValue(reasonFilter, reasonExcludeFilter, reason);
-    setReasonFilter(next.include);
-    setReasonExcludeFilter(next.exclude);
-    setUrlFilter("reason", joinSet(next.include));
-    setUrlFilter("reasonExclude", joinSet(next.exclude));
-  };
+  const handleFilterByPriority = makeFilterCycleHandler(
+    priorityFilter, priorityExcludeFilter, setPriorityFilter, setPriorityExcludeFilter, "priority", "priorityExclude"
+  );
 
-  const handleFilterBySeverity = (severity: string) => {
-    const next = cycleFilterValue(severityFilter, severityExcludeFilter, severity);
-    setSeverityFilter(next.include);
-    setSeverityExcludeFilter(next.exclude);
-    setUrlFilter("severity", joinSet(next.include));
-    setUrlFilter("severityExclude", joinSet(next.exclude));
-  };
+  const handleFilterByReason = makeFilterCycleHandler(
+    reasonFilter, reasonExcludeFilter, setReasonFilter, setReasonExcludeFilter, "reason", "reasonExclude"
+  );
 
-  const handleFilterByProgram = (program: string) => {
-    const next = cycleFilterValue(programFilter, programExcludeFilter, program);
-    setProgramFilter(next.include);
-    setProgramExcludeFilter(next.exclude);
-    setUrlFilter("program", joinSet(next.include));
-    setUrlFilter("programExclude", joinSet(next.exclude));
-  };
+  const handleFilterBySeverity = makeFilterCycleHandler(
+    severityFilter, severityExcludeFilter, setSeverityFilter, setSeverityExcludeFilter, "severity", "severityExclude"
+  );
 
-  const handleFilterByCategory = (category: string) => {
-    const next = cycleFilterValue(categoryFilter, categoryExcludeFilter, category);
-    setCategoryFilter(next.include);
-    setCategoryExcludeFilter(next.exclude);
-    setUrlFilter("category", joinSet(next.include));
-    setUrlFilter("categoryExclude", joinSet(next.exclude));
-  };
+  const handleFilterByProgram = makeFilterCycleHandler(
+    programFilter, programExcludeFilter, setProgramFilter, setProgramExcludeFilter, "program", "programExclude"
+  );
 
-  const handleFilterByTag = (tagValue: string) => {
-    const next = cycleFilterValue(tagFilter, tagExcludeFilter, tagValue);
-    setTagFilter(next.include);
-    setTagExcludeFilter(next.exclude);
-    setUrlFilter("tag", joinSet(next.include));
-    setUrlFilter("tagExclude", joinSet(next.exclude));
-  };
+  const handleFilterByCategory = makeFilterCycleHandler(
+    categoryFilter, categoryExcludeFilter, setCategoryFilter, setCategoryExcludeFilter, "category", "categoryExclude"
+  );
+
+  const handleFilterByTag = makeFilterCycleHandler(
+    tagFilter, tagExcludeFilter, setTagFilter, setTagExcludeFilter, "tag", "tagExclude"
+  );
 
   const handlePrFilterChange = (value: "all" | "has-pr" | "no-pr") => {
     setPrFilter(value);
