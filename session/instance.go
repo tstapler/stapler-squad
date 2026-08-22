@@ -18,6 +18,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/artifacts"
 	"github.com/tstapler/stapler-squad/session/detection"
+	"github.com/tstapler/stapler-squad/session/sshremote"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
@@ -517,6 +518,84 @@ type Instance struct {
 	// Artifacts holds structured artifacts extracted from the session's JSONL history.
 	// Populated asynchronously by ArtifactExtractor. Protected by mu.
 	Artifacts *artifacts.SessionArtifactsBlob
+
+	// ExecutionTarget selects where this session's TmuxSession/GitWorktree
+	// subprocess commands run (session/execution_target.go, ssh-remote-workspaces
+	// Phase 4 Epic 4.2). Set once at construction from InstanceOptions.ExecutionTarget;
+	// nil is treated as LocalTarget{} by the executionTarget() accessor so the many
+	// &Instance{} struct literals across this codebase (tests, legacy construction
+	// sites) that bypass NewInstance are unaffected. Read via executionTarget(), never
+	// this field directly, outside of construction/serialization code.
+	ExecutionTarget ExecutionTarget `json:"-"`
+
+	// remoteApprovalRelay is the per-session *sshremote.RemoteApprovalRelay
+	// (ssh-remote-workspaces Phase 5, session/sshremote) server/services.
+	// SessionService wires up for a remote session's PermissionRequest hook
+	// round trip (see SetRemoteApprovalRelay). nil for every local session,
+	// and nil for a remote session until CreateSession's async setup
+	// finishes -- read/written only via SetRemoteApprovalRelay/
+	// stopRemoteApprovalRelay, never this field directly. Protected by its
+	// own mutex rather than i.mu: it's set once, well after Start() returns,
+	// by a goroutine outside the actor's normal mutation path, and read only
+	// by destroyChain() during teardown -- routing it through the actor's
+	// sendSync machinery for a single conditional Stop() call would be
+	// disproportionate. The concrete *sshremote.RemoteApprovalRelay type is
+	// used directly rather than a package-local Stop()-only interface: no
+	// import cycle exists (session/sshremote no longer imports this package
+	// after Part A), and there is no second implementation on the horizon --
+	// introducing an interface purely for testability here is exactly the
+	// speculative abstraction .claude/rules/interface-pollution-checklist.md
+	// warns against.
+	remoteApprovalRelay   *sshremote.RemoteApprovalRelay
+	remoteApprovalRelayMu deadlock.Mutex
+}
+
+// executionTarget returns i.ExecutionTarget, defaulting to LocalTarget{} when nil.
+// Every read site in this package uses this helper rather than i.ExecutionTarget
+// directly, since &Instance{} struct literals (tests, legacy construction sites)
+// bypass NewInstance's default-assignment below.
+func (i *Instance) executionTarget() ExecutionTarget {
+	if i.ExecutionTarget == nil {
+		return LocalTarget{}
+	}
+	return i.ExecutionTarget
+}
+
+// GetExecutionTarget returns this instance's ExecutionTarget (defaulting to
+// LocalTarget{} when unset), exposed for server/services call sites (a
+// different package, so the unexported executionTarget() accessor isn't
+// reachable there) that need the underlying tmux.CommandRunner or resolved
+// RemoteTarget -- e.g. wiring a RemoteApprovalRelay/InjectHookConfigRemote
+// for a newly created remote session (ssh-remote-workspaces Phase 5).
+// Mirrors IsRemote()'s existing precedent for exposing executionTarget()
+// state across the package boundary without a type switch.
+func (i *Instance) GetExecutionTarget() ExecutionTarget {
+	return i.executionTarget()
+}
+
+// SetRemoteApprovalRelay stores relay so destroyChain() can Stop() it when
+// this instance is torn down. Intended for a remote session only (relay is
+// nil for local sessions); passing nil clears any previously stored relay
+// without stopping it -- callers that need to stop-and-clear call Stop()
+// themselves first (see server/services' error-cleanup path, which stops a
+// relay it failed to finish wiring before ever calling this).
+func (i *Instance) SetRemoteApprovalRelay(relay *sshremote.RemoteApprovalRelay) {
+	i.remoteApprovalRelayMu.Lock()
+	i.remoteApprovalRelay = relay
+	i.remoteApprovalRelayMu.Unlock()
+}
+
+// stopRemoteApprovalRelay stops and clears this instance's remote approval
+// relay (if any), called from destroyChain() during teardown. No-op for
+// every local session (relay is always nil there).
+func (i *Instance) stopRemoteApprovalRelay() {
+	i.remoteApprovalRelayMu.Lock()
+	relay := i.remoteApprovalRelay
+	i.remoteApprovalRelay = nil
+	i.remoteApprovalRelayMu.Unlock()
+	if relay != nil {
+		relay.Stop()
+	}
 }
 
 // SessionType indicates the type of session workflow to use
@@ -650,6 +729,13 @@ type InstanceOptions struct {
 	// ExtraArgs are additional argv elements appended verbatim (never whitespace-split) after
 	// CLIFlags at launch time.
 	ExtraArgs []string
+
+	// ExecutionTarget selects where this session's TmuxSession/GitWorktree subprocess
+	// commands run (ssh-remote-workspaces Phase 4 Epic 4.2). nil (the zero value) means
+	// LocalTarget{} -- every existing caller that doesn't set this field is unaffected.
+	// Set by server/services/session_service.go's CreateSession mode-specific block when
+	// req.Msg.Remote names a configured remote.
+	ExecutionTarget ExecutionTarget
 }
 
 // ResolveSessionPath expands a leading "~" to the current user's home directory
@@ -755,6 +841,10 @@ func NewInstance(opts InstanceOptions) (*Instance, error) {
 		EnvVars:         opts.EnvVars,
 		CLIFlags:        opts.CLIFlags,
 		ExtraArgs:       opts.ExtraArgs,
+		ExecutionTarget: opts.ExecutionTarget,
+	}
+	if instance.ExecutionTarget == nil {
+		instance.ExecutionTarget = LocalTarget{}
 	}
 
 	// Initialize TagManager backed by the Instance.Tags slice
@@ -1106,34 +1196,64 @@ func startLocked(actorState *instanceState, firstTimeSetup bool) error {
 		// shell that reads it back via `$(cat ...)`.
 		i.initTmuxSession()
 		startPath := i.resolveStartPath(basePath)
-		i.startVNCDisplay(context.Background())
-		i.allocateCDPPort()
-		if displayEnv := i.VNCDisplayEnv(); displayEnv != "" {
-			if tb, ok := i.processManager.(*TmuxBackend); ok {
-				if sess := tb.TmuxManager().Session(); sess != nil {
-					sess.ExtraEnv = append(sess.ExtraEnv, displayEnv)
+
+		if i.executionTarget().IsRemote() {
+			// Terminal streaming over SSH (attaching a local PTY to a remote tmux
+			// pane) is out of scope for ssh-remote-workspaces Phase 4 Epic 4.2 (Story
+			// 4.2.1) -- see that epic's doc comment in
+			// project_plans/ssh-remote-workspaces/implementation/plan.md. The remote
+			// tmux session was already created synchronously by CreateSession's
+			// mode-specific block (server/services/session_service.go) via
+			// TmuxSession.EnsureRemoteSession, before this async goroutine ever runs
+			// -- so there is no local PTY to start, and no VNC/CDP display to
+			// allocate (both local-machine concepts with no remote equivalent yet).
+			// i.pm().Start(startPath) would in any case fail: it validates startPath
+			// via a local os.Stat, and startPath here is a path on the remote host.
+			// Re-confirm the remote session is still up (idempotent) instead.
+			tb, ok := i.processManager.(*TmuxBackend)
+			if !ok {
+				setupErr = fmt.Errorf("remote execution target requires a tmux-backed process manager")
+				return setupErr
+			}
+			sess := tb.TmuxManager().Session()
+			if sess == nil {
+				setupErr = fmt.Errorf("remote tmux session was not initialized")
+				return setupErr
+			}
+			if ensureErr := sess.EnsureRemoteSession(context.Background(), startPath); ensureErr != nil {
+				setupErr = fmt.Errorf("remote tmux session unavailable: %w", ensureErr)
+				return setupErr
+			}
+		} else {
+			i.startVNCDisplay(context.Background())
+			i.allocateCDPPort()
+			if displayEnv := i.VNCDisplayEnv(); displayEnv != "" {
+				if tb, ok := i.processManager.(*TmuxBackend); ok {
+					if sess := tb.TmuxManager().Session(); sess != nil {
+						sess.ExtraEnv = append(sess.ExtraEnv, displayEnv)
+					}
 				}
 			}
-		}
-		if cdpEnvs := i.CDPDisplayEnv(); len(cdpEnvs) > 0 {
-			if tb, ok := i.processManager.(*TmuxBackend); ok {
-				if sess := tb.TmuxManager().Session(); sess != nil {
-					sess.ExtraEnv = append(sess.ExtraEnv, cdpEnvs...)
+			if cdpEnvs := i.CDPDisplayEnv(); len(cdpEnvs) > 0 {
+				if tb, ok := i.processManager.(*TmuxBackend); ok {
+					if sess := tb.TmuxManager().Session(); sess != nil {
+						sess.ExtraEnv = append(sess.ExtraEnv, cdpEnvs...)
+					}
 				}
 			}
-		}
-		if err := i.pm().Start(startPath); err != nil {
-			if i.gitManager.HasWorktree() {
-				if cleanupErr := i.gitManager.Cleanup(); cleanupErr != nil {
-					err = fmt.Errorf("%v (cleanup error: %v)", err, cleanupErr)
+			if err := i.pm().Start(startPath); err != nil {
+				if i.gitManager.HasWorktree() {
+					if cleanupErr := i.gitManager.Cleanup(); cleanupErr != nil {
+						err = fmt.Errorf("%v (cleanup error: %v)", err, cleanupErr)
+					}
 				}
+				setupErr = fmt.Errorf("failed to start new session: %w", err)
+				return setupErr
 			}
-			setupErr = fmt.Errorf("failed to start new session: %w", err)
-			return setupErr
-		}
-		_ = i.pm().RestoreWithWorkDir(startPath)
-		if _, ptyErr := i.pm().GetPTY(); ptyErr != nil {
-			log.Error("new session: pty attach failed after retries, controller and sendkeys unavailable", "session", i.Title, "err", ptyErr)
+			_ = i.pm().RestoreWithWorkDir(startPath)
+			if _, ptyErr := i.pm().GetPTY(); ptyErr != nil {
+				log.Error("new session: pty attach failed after retries, controller and sendkeys unavailable", "session", i.Title, "err", ptyErr)
+			}
 		}
 	}
 
@@ -1485,6 +1605,9 @@ func (i *Instance) Destroy() error {
 // teardown sequence. Split out of Destroy() so it can be bounded by
 // destroyChainTimeout without losing track of the goroutine it runs in.
 func (i *Instance) destroyChain() error {
+	// Stop the remote approval relay (if any) -- see SetRemoteApprovalRelay's
+	// doc comment. No-op for local sessions (always nil there).
+	i.stopRemoteApprovalRelay()
 	// Stop VNC before killing tmux (x11vnc must stop before Xvfb).
 	i.stopVNC()
 	// Stop CDP screencast goroutines and clean up wrapper scripts.

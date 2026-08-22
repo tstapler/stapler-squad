@@ -254,10 +254,20 @@ message Session {
   // Only meaningful when detected_status == DETECTED_STATUS_WAITING_FOR_AGENT; 0 otherwise.
   int32 subagent_count = 75;
 
+  // Name of the configured remote (session.v1.RemoteConfigProto.name, see
+  // remote.proto) this session's ExecutionTarget is running on. Empty for a
+  // local session. Derived live from the in-memory session.Instance.
+  // ExecutionTarget at read time (ssh-remote-workspaces Epic 6.2's
+  // SessionCard host badge) -- NOT persisted, so it reverts to empty across
+  // a server restart until the session is next resumed (ExecutionTarget
+  // itself is `json:"-"`, matching every other execution-target-derived
+  // read in this codebase; see session/execution_target.go).
+  string remote_name = 76;
+
   // Cached signal for whether the branch has commits ahead of its base — used to
   // pre-emptively disable the "Create PR" trigger (AC6), refreshed on the same
   // cadence as diff_stats, not computed synchronously per-request.
-  bool has_commits_ahead = 76;
+  bool has_commits_ahead = 77;
 }
 
 // SessionArtifacts holds structured artifacts extracted from the session's

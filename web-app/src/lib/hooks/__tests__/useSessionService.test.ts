@@ -19,7 +19,12 @@ import reviewQueueReducer, {
   setReviewQueue,
 } from "@/lib/store/reviewQueueSlice";
 import bulkSelectionReducer from "@/lib/store/bulkSelectionSlice";
+import remotesReducer, {
+  remoteHealthChanged,
+  selectRemoteConnectionState,
+} from "@/lib/store/remotesSlice";
 import { Session, DetectedStatus, SessionStatus } from "@/gen/session/v1/types_pb";
+import { RemoteConnectionState } from "@/gen/session/v1/remote_pb";
 
 // ── Mocks ──────────────────────────────────────────────────────────────────
 
@@ -72,6 +77,7 @@ function makeTestStore() {
   return configureStore({
     reducer: {
       bulkSelection: bulkSelectionReducer,
+      remotes: remotesReducer,
       reviewQueue: reviewQueueReducer,
       sessions: sessionsReducer,
       connectApi: (state = {}) => state,
@@ -246,6 +252,60 @@ describe("useSessionService — handleSessionEvent", () => {
 
       expect(selectDetectedStatusMap(store.getState() as never)).toEqual({});
       expect(selectReviewQueueItems(store.getState() as never)).toHaveLength(0);
+    });
+  });
+
+  // ssh-remote-workspaces Epic 6.2, Story 6.2.2: verifies the
+  // "remoteHealthChanged" case handleSessionEvent added (useSessionService.ts)
+  // routes into remotesSlice via the remoteHealthChanged action creator —
+  // the same "test via store state after dispatch" convention the
+  // sessionDeleted/sessionAcknowledged blocks above use, since
+  // handleSessionEvent itself is internal to the hook.
+  describe("remoteHealthChanged", () => {
+    it("dispatches remoteHealthChanged and updates selectRemoteConnectionState for a non-empty remoteName", async () => {
+      const store = makeTestStore();
+
+      expect(selectRemoteConnectionState("prod-box")(store.getState() as never))
+        .toBe(RemoteConnectionState.UNSPECIFIED);
+
+      const { result } = renderHook(
+        () => useSessionService({ autoWatch: false, enabled: true }),
+        { wrapper: makeWrapper(store) }
+      );
+      await act(async () => { await Promise.resolve(); });
+
+      // Mirrors the dispatch handleSessionEvent's "remoteHealthChanged" case
+      // performs for event.event.value = { remoteName, state, previousState }.
+      act(() => {
+        store.dispatch(remoteHealthChanged({
+          remoteName: "prod-box",
+          state: RemoteConnectionState.RECONNECTING,
+          previousState: RemoteConnectionState.CONNECTED,
+        }));
+      });
+
+      expect(selectRemoteConnectionState("prod-box")(store.getState() as never))
+        .toBe(RemoteConnectionState.RECONNECTING);
+    });
+
+    it("is a no-op for an empty remoteName, matching handleSessionEvent's `if (remoteHealth.remoteName)` guard", async () => {
+      const store = makeTestStore();
+      const { result } = renderHook(
+        () => useSessionService({ autoWatch: false, enabled: true }),
+        { wrapper: makeWrapper(store) }
+      );
+      await act(async () => { await Promise.resolve(); });
+
+      act(() => {
+        store.dispatch(remoteHealthChanged({
+          remoteName: "",
+          state: RemoteConnectionState.DISCONNECTED,
+          previousState: RemoteConnectionState.CONNECTED,
+        }));
+      });
+
+      expect((store.getState() as { remotes: { byName: Record<string, unknown> } }).remotes.byName)
+        .toEqual({});
     });
   });
 });
