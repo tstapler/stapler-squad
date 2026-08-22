@@ -1199,6 +1199,22 @@ func TestSessionDriver_DialogGaveUp_FallsThroughToInactivityEscalation(t *testin
 	// (rather than a never-closed make(chan struct{})) so the driver loop's
 	// own `case <-stop: return` fires immediately on cleanup instead of
 	// relying on the loop noticing Status=Paused on its next poll tick.
+	//
+	// Considered and rejected: driving retried=true organically through
+	// StartSessionDriver by forcing one real failure/restart cycle first.
+	// handleDriverFailure's first call (retried==false, session_driver.go)
+	// doesn't just flip the flag — it restarts the whole session and spawns
+	// a fresh driver goroutine for the continuation. Routing through that
+	// path here would conflate two independent mechanisms under one test
+	// (the dialogGaveUp fall-through this test exists to prove, and the
+	// separate failure-restart machinery covered by
+	// TestSessionDriver_SecondFailure_MarksNeedsAttention), doubling the
+	// real wall-clock cost and adding a second independent timing-flakiness
+	// surface on top of the driverReadyTimeout margin already documented
+	// below (two recorded near-miss recurrences on this test alone). The
+	// direct-call form isolates the behavior under test and keeps the
+	// existing real-stop-channel + goleak.VerifyNone(t, ...) coverage that
+	// StartSessionDriver/StopSessionDriver would otherwise exist to provide.
 	baseline := goleak.IgnoreCurrent()
 	defer goleak.VerifyNone(t, append(knownBackgroundGoroutines, baseline)...)
 
