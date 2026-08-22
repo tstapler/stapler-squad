@@ -413,25 +413,42 @@ func fromInstanceData(data InstanceData, deferStart bool) (*Instance, error) {
 		// back to Active on the very next LoadInstances() -- SessionHealthChecker's
 		// tick calls LoadInstances() every poll, so this raced the exact fix in
 		// session/health.go that makes freshly-created sessions reach Stopped promptly.
-		paneExited := false
-		if tb, ok := instance.processManager.(*TmuxBackend); ok {
-			if tm := tb.TmuxManager(); tm != nil {
-				_, _, paneExited = tm.PaneExitStatus()
+		//
+		// Skip this probe entirely for archived sessions: ArchivedAt is set only by
+		// archiveItemWorkSessions, which explicitly kills the tmux pane at archive
+		// time (see review_queue_poller.go's shouldSkipSession doc comment) -- there
+		// is no scenario where an archived session's pane is secretly still alive.
+		// Without this skip, every LoadInstances() call (the 15s health-check tick,
+		// most MCP tools, many RPC handlers) paid two uncached tmux subprocess spawns
+		// (PaneExitStatus + IsAlive) per archived session -- on one real deployment
+		// this was 280 archived-but-Stopped sessions out of 282 total Stopped, i.e.
+		// ~560 needless subprocess spawns on every single LoadInstances() call,
+		// which pprof's fork-pressure monitor flagged as a sustained "critical"
+		// spawn/failure rate (subprocess failures/spawns >> the exec-gate's timeout
+		// budget once a couple thousand archived sessions accumulate).
+		if instance.ArchivedAt != nil {
+			instance.started.Store(true)
+		} else {
+			paneExited := false
+			if tb, ok := instance.processManager.(*TmuxBackend); ok {
+				if tm := tb.TmuxManager(); tm != nil {
+					_, _, paneExited = tm.PaneExitStatus()
+				}
 			}
-		}
-		if instance.processManager.IsAlive() && !paneExited {
-			log.Warn("session stored as stopped but tmux is alive, recovering to active", "session", instance.Title)
-			instance.loadStatus(Active)
-			if deferStart {
-				// Leave started=false: the async Step 6 loop will call Start(false)
-				// and hot-attach to this already-live session off the critical path.
-			} else if err := instance.Start(false); err != nil {
-				log.Warn("recovery start failed, keeping stopped", "session", instance.Title, "err", err)
-				instance.loadStatus(Stopped)
+			if instance.processManager.IsAlive() && !paneExited {
+				log.Warn("session stored as stopped but tmux is alive, recovering to active", "session", instance.Title)
+				instance.loadStatus(Active)
+				if deferStart {
+					// Leave started=false: the async Step 6 loop will call Start(false)
+					// and hot-attach to this already-live session off the critical path.
+				} else if err := instance.Start(false); err != nil {
+					log.Warn("recovery start failed, keeping stopped", "session", instance.Title, "err", err)
+					instance.loadStatus(Stopped)
+					instance.started.Store(true)
+				}
+			} else {
 				instance.started.Store(true)
 			}
-		} else {
-			instance.started.Store(true)
 		}
 	} else if instance.Status == Hibernated {
 		// Wire the tmux session object (for IsAlive checks at resume time)

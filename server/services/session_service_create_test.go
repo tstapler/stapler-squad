@@ -164,8 +164,7 @@ func TestCreateSession_EmptyPath_OneOff_PassesPathValidation(t *testing.T) {
 	storage := createTestStorage(t)
 	svc := newCreateTestService(t, storage)
 
-	baseDir := t.TempDir()
-	t.Setenv("HOME", baseDir)
+	withFakeHome(t)
 
 	resp, err := svc.CreateSession(context.Background(), connect.NewRequest(&sessionv1.CreateSessionRequest{
 		Title:       "scratch-session",
@@ -192,8 +191,7 @@ func TestCreateSession_EmptyPath_Autonomous_PassesPathValidation(t *testing.T) {
 	storage := createTestStorage(t)
 	svc := newCreateTestService(t, storage)
 
-	baseDir := t.TempDir()
-	t.Setenv("HOME", baseDir)
+	withFakeHome(t)
 
 	resp, err := svc.CreateSession(context.Background(), connect.NewRequest(&sessionv1.CreateSessionRequest{
 		Title:          "autonomous-session",
@@ -219,8 +217,7 @@ func TestCreateSession_Autonomous_ExplicitPath_DoesNotGenerateScratchDir(t *test
 	storage := createTestStorage(t)
 	svc := newCreateTestService(t, storage)
 
-	baseDir := t.TempDir()
-	t.Setenv("HOME", baseDir)
+	baseDir := withFakeHome(t)
 	explicitPath := t.TempDir()
 	oneOffDir := filepath.Join(baseDir, "oneoff")
 
@@ -282,8 +279,7 @@ func TestCreateSession_OneOff_CreatesDirectoryInBaseDir(t *testing.T) {
 	storage := createTestStorage(t)
 	svc := newCreateTestService(t, storage)
 
-	baseDir := t.TempDir()
-	t.Setenv("HOME", baseDir) // ~/oneoff resolves under here
+	baseDir := withFakeHome(t) // ~/oneoff resolves under here
 
 	expectedBase := filepath.Join(baseDir, "oneoff")
 
@@ -313,8 +309,7 @@ func TestCreateSession_OneOff_TwoCallsCreateTwoDistinctDirectories(t *testing.T)
 	storage := createTestStorage(t)
 	svc := newCreateTestService(t, storage)
 
-	baseDir := t.TempDir()
-	t.Setenv("HOME", baseDir)
+	baseDir := withFakeHome(t)
 	expectedBase := filepath.Join(baseDir, "oneoff")
 
 	for i, title := range []string{"session-a", "session-b"} {
@@ -338,8 +333,7 @@ func TestCreateSession_Autonomous_CreatesDirectoryInBaseDir(t *testing.T) {
 	storage := createTestStorage(t)
 	svc := newCreateTestService(t, storage)
 
-	baseDir := t.TempDir()
-	t.Setenv("HOME", baseDir)
+	baseDir := withFakeHome(t)
 	expectedBase := filepath.Join(baseDir, "oneoff")
 
 	resp, err := svc.CreateSession(context.Background(), connect.NewRequest(&sessionv1.CreateSessionRequest{
@@ -364,21 +358,9 @@ func TestCreateSession_OneOff_BadBaseDir_ReturnsInternalError(t *testing.T) {
 	svc := newCreateTestService(t, storage)
 
 	// Point HOME at a file (not a directory) so ~/oneoff cannot be created.
-	tmpFile, err := os.CreateTemp("", "not-a-dir-*")
-	require.NoError(t, err)
-	t.Cleanup(func() { os.Remove(tmpFile.Name()) })
-	tmpFile.Close()
+	withFakeHomeAsFile(t)
 
-	// Set HOME to the file's directory and give an explicit base that is the file itself.
-	// We do this by setting ONE_OFF_BASE_DIR via config — but since config is loaded
-	// from disk and we can't inject it here, we instead make the HOME trick: point HOME
-	// to a path whose parent does not allow mkdir.
-	//
-	// Simpler: make the base dir a regular file so os.MkdirAll fails.
-	bogusHome := tmpFile.Name() // HOME = a file; ~/oneoff = file + "/oneoff" which can't be created
-	t.Setenv("HOME", bogusHome)
-
-	_, err = svc.CreateSession(context.Background(), connect.NewRequest(&sessionv1.CreateSessionRequest{
+	_, err := svc.CreateSession(context.Background(), connect.NewRequest(&sessionv1.CreateSessionRequest{
 		Title:       "cant-make-dir",
 		SessionType: sessionv1.SessionType_SESSION_TYPE_ONE_OFF,
 	}))

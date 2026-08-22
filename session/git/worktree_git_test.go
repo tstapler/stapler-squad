@@ -608,6 +608,89 @@ func TestParsePRStatusPayload_ReviewerCommentsSectionRendered(t *testing.T) {
 	}
 }
 
+// capturingGHExecutor is a fake executor.Executor for CreatePR tests: it
+// records every command's Args and dispatches a canned response based on the
+// gh subcommand (`pr list` for findExistingPR's pre-check, `pr create` for
+// the actual creation), so tests can assert on the exact args CreatePR built
+// without touching a real `gh` process.
+type capturingGHExecutor struct {
+	createArgs []string // captured Args of the `gh pr create` invocation
+	createOut  string   // combined output returned for `gh pr create`
+}
+
+func (e *capturingGHExecutor) Run(_ *exec.Cmd) error              { return nil }
+func (e *capturingGHExecutor) Output(_ *exec.Cmd) ([]byte, error) { return nil, nil }
+func (e *capturingGHExecutor) CombinedOutput(cmd *exec.Cmd) ([]byte, error) {
+	if len(cmd.Args) > 1 && cmd.Args[1] == "pr" && len(cmd.Args) > 2 && cmd.Args[2] == "list" {
+		// findExistingPR's pre-check: report no existing PR so CreatePR
+		// proceeds to `gh pr create`.
+		return nil, exec.ErrNotFound
+	}
+	e.createArgs = append([]string(nil), cmd.Args...)
+	out := e.createOut
+	if out == "" {
+		out = "https://github.com/tstapler/stapler-squad/pull/172\n"
+	}
+	return []byte(out), nil
+}
+
+// TestGitWorktree_CreatePR_PassesBaseBranch_When_NonEmpty proves Task 1.1.1a:
+// a non-empty baseBranch is forwarded to `gh pr create` as `--base <value>`,
+// closing the AC3 gap where the modal's base-branch field would otherwise be
+// UI-only and silently ignored.
+func TestGitWorktree_CreatePR_PassesBaseBranch_When_NonEmpty(t *testing.T) {
+	t.Parallel()
+	mock := &capturingGHExecutor{}
+	g := NewGitWorktreeFromStorageWithExecutor(
+		"/fake/repo", "/fake/worktree", "test-session", "feature/rate-limit-toggle", "", mock,
+	)
+
+	_, _, err := g.CreatePR(PRCreateOptions{Title: "Add rate limit toggle", Body: "Adds a per-user rate limit toggle.", BaseBranch: "release/1.2"})
+	if err != nil {
+		t.Fatalf("CreatePR() error = %v", err)
+	}
+
+	if mock.createArgs == nil {
+		t.Fatalf("gh pr create was never invoked")
+	}
+	found := false
+	for i, arg := range mock.createArgs {
+		if arg == "--base" && i+1 < len(mock.createArgs) && mock.createArgs[i+1] == "release/1.2" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("gh pr create args = %v; want to contain %q %q", mock.createArgs, "--base", "release/1.2")
+	}
+}
+
+// TestGitWorktree_CreatePR_OmitsBaseFlag_When_Empty is the regression guard
+// for Task 1.1.1c's backward-compat requirement: an empty baseBranch must
+// never append `--base`, preserving gh's own default-branch resolution for
+// every pre-existing caller (e.g. the backlog automation path).
+func TestGitWorktree_CreatePR_OmitsBaseFlag_When_Empty(t *testing.T) {
+	t.Parallel()
+	mock := &capturingGHExecutor{}
+	g := NewGitWorktreeFromStorageWithExecutor(
+		"/fake/repo", "/fake/worktree", "test-session", "feature/rate-limit-toggle", "", mock,
+	)
+
+	_, _, err := g.CreatePR(PRCreateOptions{Title: "Add rate limit toggle", Body: "Adds a per-user rate limit toggle."})
+	if err != nil {
+		t.Fatalf("CreatePR() error = %v", err)
+	}
+
+	if mock.createArgs == nil {
+		t.Fatalf("gh pr create was never invoked")
+	}
+	for _, arg := range mock.createArgs {
+		if arg == "--base" {
+			t.Errorf("gh pr create args = %v; want no %q flag when baseBranch is empty", mock.createArgs, "--base")
+		}
+	}
+}
+
 // TestParsePRStatusPayload_Render_should_ProduceByteIdenticalOutput_When_GeneralCommentsRetyped
 // proves the generalComments []string -> []prFeedbackItem retype alone
 // introduced zero rendering drift: the "## PR comments" block is byte-for-byte

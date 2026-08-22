@@ -16,6 +16,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
@@ -160,6 +161,9 @@ type SessionService struct {
 
 	// checkpointSvc handles CreateCheckpoint/ListCheckpoints/ClearConversationState RPCs.
 	checkpointSvc *CheckpointService
+
+	// prCreationSvc handles DraftPullRequest/CreatePullRequest RPCs.
+	prCreationSvc *PRCreationService
 
 	// featureFlagSvc handles GetFeatureFlags/UpdateFeatureFlag RPCs.
 	featureFlagSvc *FeatureFlagService
@@ -500,6 +504,40 @@ func newDefaultSearchEngine() *search.SearchEngine {
 	return searchEngine
 }
 
+// publishClaudeSettingsNotification is the shared publish call for both claude-settings
+// notification sites (startup activation and watcher reload) — see NewNotificationEvent.
+func publishClaudeSettingsNotification(eventBus *events.EventBus, title, message, origin string) {
+	if eventBus == nil {
+		return
+	}
+	eventBus.Publish(events.NewNotificationEvent(
+		"", "System", uuid.New().String(),
+		int32(sessionv1.NotificationType_NOTIFICATION_TYPE_INFO),
+		int32(sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_LOW),
+		title, message,
+		map[string]string{"type": "claude_settings_reload", "origin": origin},
+	))
+}
+
+// loadClaudeSettingsRulesAtStartup parses ~/.claude/settings.json (and project-level
+// equivalents under cwd) and merges the resulting rules into classifierObj, publishing a
+// one-time notification if any were found. Extracted from NewSessionServiceWithSearchEngine
+// so it can be unit-tested directly without needing config.IsTestMode() to be false.
+func loadClaudeSettingsRulesAtStartup(classifierObj *classifier.RuleBasedClassifier, cwd string, eventBus *events.EventBus) {
+	var claudeSettingsRules []classifier.Rule
+	for _, result := range LoadClaudeSettingsRulesDetailed(cwd) {
+		claudeSettingsRules = append(claudeSettingsRules, result.Rules...)
+	}
+	if len(claudeSettingsRules) == 0 {
+		return
+	}
+	classifierObj.AddRules(claudeSettingsRules)
+	log.Info("[ClaudeSettings] activated claude-settings rules at startup", "rule_count", len(claudeSettingsRules))
+	publishClaudeSettingsNotification(eventBus, "Claude Settings Rules Activated",
+		fmt.Sprintf("%d rule(s) from your Claude settings are now active as stapler-squad auto-approval rules.", len(claudeSettingsRules)),
+		"startup")
+}
+
 // NewSessionServiceWithSearchEngine is the dependency-injection seam for the search engine:
 // pass an explicit *search.SearchEngine (e.g. search.NewSearchEngine() for in-memory)
 // instead of relying on NewSessionService's config.IsTestMode() default. Full migration of
@@ -543,10 +581,33 @@ func NewSessionServiceWithSearchEngine(storage session.InstanceStore, eventBus *
 	analyticsStore := NewAnalyticsStore(concStorage)
 	analyticsStore.Start(context.Background())
 	classifierObj := classifier.NewRuleBasedClassifier()
-	// Merge user rules into the classifier.
+	// Merge user rules into the classifier. Safe to call AddRules directly (bypassing
+	// RulesService.rebuildMu) only because this and the claude-settings load below both run
+	// before ClaudeSettingsWatcher.Start() is ever invoked (that happens later, in
+	// wireDepsIntoServer) and before the server accepts RPCs — do not add a third AddRules
+	// call site here without going through rebuildMu once the watcher may already be running.
 	if userRules := rulesStore.ToRules(); len(userRules) > 0 {
 		classifierObj.AddRules(userRules)
 	}
+
+	// Determine the server process's own working directory for claude-settings
+	// project-level scope. Empty cwd makes LoadClaudeSettingsRulesDetailed skip
+	// project-level paths gracefully. Global-only for v1 — this is always the
+	// server's own cwd, never a per-session git worktree path (see ADR-001).
+	cwd, cwdErr := os.Getwd()
+	if cwdErr != nil {
+		log.Warn("failed to determine working directory for claude-settings project scope", "err", cwdErr)
+		cwd = ""
+	}
+
+	// Loads claude-settings rules (previously dead code — LoadClaudeSettingsRules had zero
+	// call sites). Gated on IsTestMode() so tests don't read the developer's real
+	// ~/.claude/settings.json and become machine-dependent (same guard newDefaultSearchEngine
+	// uses two lines above).
+	if !config.IsTestMode() {
+		loadClaudeSettingsRulesAtStartup(classifierObj, cwd, eventBus)
+	}
+
 	// Wire AI rule generation. NewBestAvailableAIClient selects the highest-priority
 	// available backend: Anthropic HTTP API (if ANTHROPIC_API_KEY is set) → claude CLI
 	// → gemini CLI → opencode CLI. Returns nil when no backend is available.
@@ -563,6 +624,25 @@ func NewSessionServiceWithSearchEngine(storage session.InstanceStore, eventBus *
 		}
 	}
 	rulesSvc := NewRulesService(rulesStore, nil, analyticsStore, classifierObj, promptBuilder, aiClientImpl)
+
+	// Wire the claude-settings file watcher: fsnotify-driven or manually-triggered
+	// (ReloadClaudeSettingsRules RPC) reloads both flow through this one callback, which
+	// hot-swaps the classifier's claude-settings rules and emits a visible reload event.
+	claudeSettingsWatcher := NewClaudeSettingsWatcher(cwd, func(rules []classifier.Rule, origin string, notify bool) {
+		rulesSvc.rebuildClaudeSettingsRules(rules)
+		log.Info("[ClaudeSettingsWatcher] reloaded claude-settings rules", "rule_count", len(rules), "origin", origin)
+		// notify is false for Start()'s initial priming reload — the operator already saw a
+		// startup activation notification if any rules exist, and nothing meaningful
+		// happened for this callback to report otherwise. A zero-rule result is also
+		// never notification-worthy, on any call: "0 rules reloaded" is a no-op from the
+		// operator's perspective whether it's the priming reload or a later real one.
+		if !notify || len(rules) == 0 {
+			return
+		}
+		publishClaudeSettingsNotification(eventBus, "Claude Settings Reloaded",
+			fmt.Sprintf("%d claude-settings rule(s) reloaded (%s).", len(rules), origin), origin)
+	})
+	rulesSvc.SetClaudeSettingsWatcher(claudeSettingsWatcher)
 
 	// Initialize capacity monitor.
 	var capCfg config.CapacityConfig
@@ -644,6 +724,14 @@ func NewSessionServiceWithSearchEngine(storage session.InstanceStore, eventBus *
 	// Wire CheckpointService's instance-load fallback to this service's own
 	// loadInstancesWithWiring so ClearConversationState gets properly-wired instances.
 	svc.checkpointSvc.SetLoadInstancesFn(svc.loadInstancesWithWiring)
+
+	// Construct prCreationSvc with the shared storage/eventBus and a bound
+	// findInstance method value (narrow dependency, not the whole SessionService —
+	// see interface-pollution-checklist.md). headlessPool and
+	// backlogLifecycleListener are wired onto SessionService after construction
+	// (see the Set* wiring doc comment above NewSessionService), so they are nil
+	// here at construction time.
+	svc.prCreationSvc = NewPRCreationService(storage, eventBus, svc.headlessPool, svc.backlogLifecycleListener, svc.findInstance)
 
 	// Wire the autonomous orchestration service with a storage getter closure.
 	autonomousSvc := NewAutonomousOrchestrationService(nil, eventBus)
@@ -953,6 +1041,15 @@ func (s *SessionService) GetAnalyticsStore() *AnalyticsStore {
 	return s.rulesSvc.analyticsStore
 }
 
+// GetClaudeSettingsWatcher returns the claude-settings file watcher for starting/stopping it
+// with the server lifecycle (see wireDepsIntoServer).
+func (s *SessionService) GetClaudeSettingsWatcher() *ClaudeSettingsWatcher {
+	if s.rulesSvc == nil {
+		return nil
+	}
+	return s.rulesSvc.claudeSettingsWatcher
+}
+
 // Shutdown stops background goroutines owned by SessionService (currently the
 // AnalyticsStore flush loop started in NewSessionService). Idempotent — safe
 // to call multiple times (AnalyticsStore.Stop is itself sync.Once-guarded).
@@ -1101,6 +1198,7 @@ func (s *SessionService) WireInstanceCallbacks(inst *session.LiveInstance) {
 // CreateDirectorySession so that backlog state transitions fire on session exit.
 func (s *SessionService) SetBacklogLifecycleListener(l *session.BacklogLifecycleListener) {
 	s.backlogLifecycleListener = l
+	s.prCreationSvc.SetBacklogLifecycleListener(l)
 }
 
 // GetBacklogLifecycleListener returns the wired BacklogLifecycleListener (nil if
@@ -1267,6 +1365,7 @@ func (s *SessionService) SetHistoryLinker(hl *session.HistoryLinker) {
 func (s *SessionService) SetHeadlessPool(pool *headless.Pool) {
 	s.headlessPool = pool
 	s.autonomousSvc.SetPool(pool)
+	s.prCreationSvc.SetHeadlessPool(pool)
 }
 
 // SetLifecycleContext binds the server's root context to the service.
@@ -3948,6 +4047,18 @@ func (s *SessionService) GetPRInfo(
 	return s.githubSvc.GetPRInfo(ctx, req)
 }
 
+// DraftPullRequest delegates to prCreationSvc. See PRCreationService for the
+// handler implementation.
+func (s *SessionService) DraftPullRequest(ctx context.Context, req *connect.Request[sessionv1.DraftPullRequestRequest]) (*connect.Response[sessionv1.DraftPullRequestResponse], error) {
+	return s.prCreationSvc.DraftPullRequest(ctx, req)
+}
+
+// CreatePullRequest delegates to prCreationSvc. See PRCreationService for the
+// handler implementation.
+func (s *SessionService) CreatePullRequest(ctx context.Context, req *connect.Request[sessionv1.CreatePullRequestRequest]) (*connect.Response[sessionv1.CreatePullRequestResponse], error) {
+	return s.prCreationSvc.CreatePullRequest(ctx, req)
+}
+
 // GetPRComments retrieves all comments on the PR for a session.
 func (s *SessionService) GetPRComments(
 	ctx context.Context,
@@ -4235,6 +4346,13 @@ func (s *SessionService) DeleteApprovalRule(
 	req *connect.Request[sessionv1.DeleteApprovalRuleRequest],
 ) (*connect.Response[sessionv1.DeleteApprovalRuleResponse], error) {
 	return s.rulesSvc.DeleteApprovalRule(ctx, req)
+}
+
+func (s *SessionService) ReloadClaudeSettingsRules(
+	ctx context.Context,
+	req *connect.Request[sessionv1.ReloadClaudeSettingsRulesRequest],
+) (*connect.Response[sessionv1.ReloadClaudeSettingsRulesResponse], error) {
+	return s.rulesSvc.ReloadClaudeSettingsRules(ctx, req)
 }
 
 // GetApprovalAnalytics returns aggregated analytics for classification decisions.

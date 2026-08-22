@@ -418,6 +418,28 @@ func (i *Instance) UpdateDiffStats() error {
 	// I/O outside lock: check worktree existence and compute diff
 	stats, needsPause := i.gitManager.ComputeDiffIfReady()
 
+	// Compute "has commits ahead of base" alongside the diff stats, also outside
+	// the lock — AC6 needs this cached on Session so the frontend can disable the
+	// "Create PR" trigger before the user clicks, without a synchronous
+	// DraftPullRequest round trip. Skipped when the worktree needs pausing, same
+	// as diff stats (cleared below in that case).
+	var hasCommits bool
+	if !needsPause {
+		if wt := i.gitManager.GetWorktree(); wt != nil {
+			// bounceMainBranch, not a dynamically-resolved default branch: mirrors
+			// pushAndCreatePR's own HasCommitsAheadOfMain call
+			// (session/backlog_lifecycle_pr.go:564). Resolving the actual default
+			// branch the way DraftPullRequest does
+			// (unfinished.GoGitVCSReader.ResolveDefaultBranch, server/services/pr_creation_service.go:139)
+			// isn't available from this package: session/unfinished imports
+			// pkg/events, which imports session — an import cycle back into this
+			// file (documented in session/worktree_pr_poller.go). Fails open
+			// (HasCommitsAheadOfMain returns true on error by contract) — ignore
+			// the error and trust the bool.
+			hasCommits, _ = wt.HasCommitsAheadOfMain(bounceMainBranch)
+		}
+	}
+
 	// Write lock to update state — keep non-logging work only to minimise hold time.
 	i.mu.Lock()
 	var transitionErr error
@@ -447,6 +469,7 @@ func (i *Instance) UpdateDiffStats() error {
 		return fmt.Errorf("failed to get diff stats: %w", stats.Error)
 	}
 	i.gitManager.SetDiffStats(stats)
+	i.gitManager.SetHasCommitsAhead(hasCommits)
 	i.mu.Unlock()
 	return nil
 }
@@ -456,6 +479,15 @@ func (i *Instance) GetDiffStats() *git.DiffStats {
 	i.mu.RLock()
 	defer i.mu.RUnlock()
 	return i.gitManager.GetDiffStats()
+}
+
+// GetHasCommitsAhead returns the cached signal for whether the session's
+// branch currently has commits ahead of its base branch (see UpdateDiffStats,
+// which refreshes it on the same cadence as diff stats).
+func (i *Instance) GetHasCommitsAhead() bool {
+	i.mu.RLock()
+	defer i.mu.RUnlock()
+	return i.gitManager.GetHasCommitsAhead()
 }
 
 // SetDirBaseSHA sets the base commit SHA used to compute diff stats for

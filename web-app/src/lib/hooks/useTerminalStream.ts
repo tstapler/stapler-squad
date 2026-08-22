@@ -94,6 +94,14 @@ interface TerminalStreamResult {
   requestFullResync: (urgent?: boolean, isVisibilityTriggered?: boolean) => string | undefined;
   markResyncComplete: () => void;
   markPaneResponseReceived: () => void;
+  /**
+   * Number of transports attached to this session's StreamHub (Epic 4.2,
+   * Story 4.2.1). undefined when unavailable — either no message carrying it
+   * has arrived yet, or this is a PathLegacyPerConnection session, which
+   * never reports it (see events.proto's TerminalOutput.connection_count doc
+   * comment for why that value must never be fabricated).
+   */
+  connectionCount: number | undefined;
 }
 
 export function useTerminalStream({
@@ -120,6 +128,10 @@ export function useTerminalStream({
   // Task 4.1.1 — Terminal state machine (R1.4)
   const [terminalState, setTerminalState] = useState<TerminalState>('DISCONNECTED');
   const [isHardFailed, setIsHardFailed] = useState(false);
+  // Epic 4.2, Story 4.2.1 — undefined until a PathHubOwned session's first
+  // connection_count-carrying message arrives; never fabricated for
+  // PathLegacyPerConnection sessions (proto field is absent there).
+  const [connectionCount, setConnectionCount] = useState<number | undefined>(undefined);
 
   const messageQueueRef = useRef<MessageQueue | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
@@ -398,8 +410,21 @@ export function useTerminalStream({
             }
 
             if (msg.data.case === "output") {
+              // Task 4.2.1c (Epic 4.2) — connection_count rides on TerminalOutput,
+              // including on side-channel messages the server sends with no `data`
+              // (server/services/connectrpc_websocket.go's sendConnectionCountUpdates).
+              // Only ever present for PathHubOwned sessions; undefined otherwise —
+              // never fabricated (plan.md Story 4.2.1 AC2).
+              if (msg.data.value.connectionCount !== undefined) {
+                setConnectionCount(msg.data.value.connectionCount);
+              }
+
               // Handle raw output
               const decodedData = msg.data.value.data;
+              if (decodedData.length === 0) {
+                // Connection-count-only side-channel message — nothing to render.
+                continue;
+              }
               const text = textDecoderRef.current.decode(decodedData, { stream: true });
 
               // Record message if recording is active
@@ -485,6 +510,9 @@ export function useTerminalStream({
             isConnectingRef.current = false;
             setIsConnected(false);
             setTerminalState('DISCONNECTED');
+            // A stale count from the just-closed connection must not linger
+            // and imply this session still has extra viewers attached.
+            setConnectionCount(undefined);
             // Reset decoders so stale {stream:true} buffered state from a server-closed
             // connection does not corrupt the next connect() call.
             textDecoderRef.current = new TextDecoder();
@@ -669,5 +697,6 @@ export function useTerminalStream({
     requestFullResync: flowControl.requestFullResync,
     markResyncComplete: flowControl.markResyncComplete,
     markPaneResponseReceived: flowControl.markPaneResponseReceived,
+    connectionCount,
   };
 }

@@ -51,6 +51,10 @@ func (c *ETagCache) set(key string, e etagEntry) {
 //   - changed=true means 200 OK; info contains freshly fetched data.
 //   - Both info and changed may be zero values when an error is returned.
 func GetPRInfoConditional(ctx context.Context, owner, repo string, prNumber int, cache *ETagCache) (*PRInfo, bool, error) {
+	if getGHToken(ctx) == "" {
+		return nil, false, ErrNotAuthenticated
+	}
+
 	key := cache.cacheKey(owner, repo, prNumber)
 
 	entry, hasCached := cache.get(key)

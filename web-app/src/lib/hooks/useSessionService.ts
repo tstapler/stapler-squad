@@ -10,6 +10,8 @@ import {
   UpdateSessionRequest,
   PromptHistoryEntry,
   RunOneShotResponse,
+  DraftPullRequestResponse,
+  CreatePullRequestResponse,
   SpawnShellRequest,
   RunWorkflowRequestSchema,
   ArchiveSessionRequestSchema,
@@ -109,6 +111,13 @@ interface UseSessionServiceReturn {
   updateSession: (id: string, updates: Partial<UpdateSessionRequest>) => Promise<Session | null>;
   deleteSession: (id: string, force?: boolean) => Promise<boolean>;
   runOneShot: (sessionId: string, prompt: string, timeoutSeconds?: number) => Promise<RunOneShotResponse | null>;
+  draftPullRequest: (sessionId: string) => Promise<DraftPullRequestResponse | null>;
+  createPullRequest: (req: {
+    sessionId: string;
+    title: string;
+    body: string;
+    baseBranch: string;
+  }) => Promise<CreatePullRequestResponse | null>;
   listPromptHistory: (limit?: number) => Promise<PromptHistoryEntry[]>;
   pauseSession: (id: string) => Promise<Session | null>;
   resumeSession: (id: string, updates?: { title?: string; tags?: string[] }) => Promise<Session | null>;
@@ -619,6 +628,47 @@ export function useSessionService(
         return response;
       } catch (err) {
         dispatch(setError(err instanceof Error ? err.message : "Failed to run one-shot"));
+        return null;
+      }
+    },
+    [dispatch]
+  );
+
+  // Fetch the pre-filled draft (title/body/base branch) for a session's PR (AC4)
+  const draftPullRequest = useCallback(
+    async (sessionId: string): Promise<DraftPullRequestResponse | null> => {
+      if (!clientRef.current) return null;
+
+      dispatch(setError(null));
+
+      try {
+        const response = await clientRef.current.draftPullRequest({ sessionId });
+        return response;
+      } catch (err) {
+        dispatch(setError(err instanceof Error ? err.message : "Failed to draft pull request"));
+        return null;
+      }
+    },
+    [dispatch]
+  );
+
+  // Create the pull request for a session (AC3/AC7)
+  const createPullRequest = useCallback(
+    async (req: { sessionId: string; title: string; body: string; baseBranch: string }): Promise<CreatePullRequestResponse | null> => {
+      if (!clientRef.current) return null;
+
+      dispatch(setError(null));
+
+      try {
+        const response = await clientRef.current.createPullRequest({
+          sessionId: req.sessionId,
+          title: req.title,
+          body: req.body,
+          baseBranch: req.baseBranch,
+        });
+        return response;
+      } catch (err) {
+        dispatch(setError(err instanceof Error ? err.message : "Failed to create pull request"));
         return null;
       }
     },
@@ -1163,6 +1213,8 @@ export function useSessionService(
     listCheckpoints,
     forkSession,
     runOneShot,
+    draftPullRequest,
+    createPullRequest,
     listPromptHistory,
     watchSessions,
     stopWatching,

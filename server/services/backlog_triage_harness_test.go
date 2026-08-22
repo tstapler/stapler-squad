@@ -34,7 +34,6 @@ import (
 	"time"
 
 	"connectrpc.com/connect"
-	"github.com/go-git/go-git/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
@@ -271,10 +270,8 @@ func checkPoolStartAllowed(t *testing.T) {
 // .claude/rules/prefer-go-git-over-subshells.md.
 func initGitRepo(t *testing.T, dir string) {
 	t.Helper()
-	if _, err := git.PlainInit(dir, false); err != nil {
-		t.Skipf("git init: %v — cannot run real Claude triage test", err)
-	}
-	// A minimal README so the working tree is non-empty.
+	initGitRepoForTest(t, dir)
+	// A minimal, uncommitted README so the working tree is non-empty.
 	if err := os.WriteFile(dir+"/README.md", []byte("# Test Repo\n"), 0o644); err != nil {
 		t.Skipf("write README: %v", err)
 	}

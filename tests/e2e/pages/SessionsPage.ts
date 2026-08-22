@@ -1,4 +1,4 @@
-import { Page, Locator } from '@playwright/test';
+import { Page, Locator, expect } from '@playwright/test';
 
 export class SessionsPage {
   readonly page: Page;
@@ -38,5 +38,39 @@ export class SessionsPage {
 
   getSessionCards(): Locator {
     return this.page.locator('[data-testid="session-card"], [data-testid="session-row"]');
+  }
+
+  /**
+   * Creates a temporary (no-git) plain-shell session via the Omnibar and
+   * waits for the app to navigate to it. A plain "bash" program is used
+   * instead of a real AI CLI so the session is cheap and its lifecycle is
+   * fully controllable from the test — mirrors
+   * session-completion-summary.spec.ts's creation flow.
+   *
+   * Returns the new session's id, parsed out of the resulting
+   * `/?session=<id>` URL, so callers (e.g. connection-count-indicator.spec.ts)
+   * can open that same session from a second browser context/tab.
+   */
+  async createBashSession(namePrefix: string): Promise<string> {
+    await this.newSessionButton.click();
+    await this.page.getByRole('radio', { name: /temporary \(no git\)/i }).click();
+
+    const sessionTitle = `${namePrefix}-${Date.now()}`;
+    await this.page.getByLabel('Session Name').fill(sessionTitle);
+
+    await this.page.getByText('Advanced Options').click();
+    await this.page.getByLabel('Program', { exact: true }).selectOption('bash');
+
+    const createRequest = this.page.waitForRequest(
+      (req) => req.url().includes('CreateSession') && req.method() === 'POST',
+    );
+    await this.createSessionSubmitButton.click();
+    await createRequest;
+
+    await this.page.waitForURL(/[?&]session=/, { timeout: 15000 });
+    const url = new URL(this.page.url());
+    const sessionId = url.searchParams.get('session');
+    expect(sessionId).not.toBeNull();
+    return sessionId!;
   }
 }

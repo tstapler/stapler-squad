@@ -163,7 +163,6 @@ interface SessionCardProps {
   onCreateCheckpoint?: (sessionId: string, label: string) => Promise<boolean>;
   onListCheckpoints?: (sessionId: string) => Promise<CheckpointProto[]>;
   onForkFromCheckpoint?: (sessionId: string, checkpointId: string, newTitle: string) => Promise<Session | null>;
-  onRunOneShot?: (sessionId: string) => Promise<void>;
   onSetRateLimitEnabled?: (sessionId: string, enabled: boolean) => void;
   onToggleAutonomousMode?: (sessionId: string, enabled: boolean) => void;
   onToggleAutoApprove?: (sessionId: string, enabled: boolean) => void;
@@ -200,7 +199,6 @@ function SessionCardInner({
   onCreateCheckpoint,
   onListCheckpoints,
   onForkFromCheckpoint,
-  onRunOneShot,
   onSetRateLimitEnabled,
   onToggleAutonomousMode,
   onToggleAutoApprove,
@@ -1033,7 +1031,6 @@ function SessionCardInner({
           onOpenInNewPane={onOpenInNewPane}
           onNewWorkspace={onNewWorkspace}
           onCreateCheckpoint={onCreateCheckpoint}
-          onRunOneShot={onRunOneShot}
           onSetRateLimitEnabled={onSetRateLimitEnabled}
           onToggleAutonomousMode={onToggleAutonomousMode}
           onToggleAutoApprove={onToggleAutoApprove}

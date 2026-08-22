@@ -213,6 +213,15 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	go deps.HistoryLinker.Start(serverCtx)
 	log.Info("HistoryLinker started")
 
+	// Start ClaudeSettingsWatcher: hot-reloads auto-approval rules derived from
+	// ~/.claude/settings.json (and project-level equivalents) on edit. serverCtx
+	// cancellation on Shutdown() is what stops its goroutine cleanly — no separate
+	// shutdown hook needed.
+	if deps.ClaudeSettingsWatcher != nil {
+		go deps.ClaudeSettingsWatcher.Start(serverCtx)
+		log.Info("ClaudeSettingsWatcher started")
+	}
+
 	// Start UnfinishedWork scanner.
 	if deps.UnfinishedScanner != nil {
 		deps.UnfinishedScanner.Start(serverCtx)
@@ -789,7 +798,15 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	if deps.BacklogService != nil {
 		autoReopener = deps.BacklogService
 	}
-	mcpHTTPHandler := servermcp.NewHTTPHandler(deps.Storage, deps.SessionService, deps.ScrollbackManager, deps.Storage, deps.EventBus, deps.UserPRCache, deps.BacklogEnabledCheck, autoReopener, deps.BacklogService)
+	// Reuses the same liveness primitive wired onto BacklogLifecycleListener
+	// (see newSessionLivenessChecker's doc comment in dependencies.go) so
+	// link_session_to_item's exclusivity check doesn't trust a stale
+	// EndedAt==nil row for a crashed/killed session.
+	var mcpLiveCheck func(sessionUUID string) bool
+	if deps.Registry != nil {
+		mcpLiveCheck = newSessionLivenessChecker(deps.SessionService.FindLiveInstance, deps.Registry)
+	}
+	mcpHTTPHandler := servermcp.NewHTTPHandler(deps.Storage, deps.SessionService, deps.ScrollbackManager, deps.Storage, deps.EventBus, deps.UserPRCache, deps.BacklogEnabledCheck, autoReopener, deps.BacklogService, mcpLiveCheck)
 	// Wrap with middleware that injects session UUID from X-Stapler-Session-UUID header.
 	mcpWithUUID := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if uuid := r.Header.Get("X-Stapler-Session-UUID"); uuid != "" {

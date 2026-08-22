@@ -158,6 +158,17 @@ message TerminalOutput {
   // the most recent request is always the one being answered. Empty when this
   // output is not a resync reply.
   string resync_id = 2;
+
+  // Number of transports currently attached to this session's StreamHub
+  // (Epic 4.2, Story 4.2.1). Only ever populated for PathHubOwned sessions —
+  // proto3 `optional` presence lets the frontend distinguish "not reported"
+  // (PathLegacyPerConnection, flag off) from a real count, since fabricating
+  // a number from PathLegacyPerConnection's activeControlModeStreams
+  // generation counter would show a misleading value (it isn't a live
+  // subscriber count). May arrive on a side-channel message carrying no
+  // `data` (an otherwise-empty TerminalOutput) when the server has a count
+  // update but no new terminal bytes to send.
+  optional int32 connection_count = 4;
 }
 
 // TerminalInput contains user input for the terminal (client to server)

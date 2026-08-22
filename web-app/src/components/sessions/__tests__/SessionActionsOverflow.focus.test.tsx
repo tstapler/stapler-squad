@@ -23,6 +23,16 @@ jest.mock("../SessionActionsOverflow.css", () =>
 jest.mock("../TagEditor.css", () =>
   new Proxy({}, { get: (_target, key) => (typeof key === "string" ? key : "") })
 );
+jest.mock("../CreatePullRequestModal.css", () =>
+  new Proxy({}, { get: (_target, key) => (typeof key === "string" ? key : "") })
+);
+
+jest.mock("@/lib/contexts/SessionServiceContext", () => ({
+  useSessionServiceContext: () => ({
+    draftPullRequest: jest.fn(),
+    createPullRequest: jest.fn(),
+  }),
+}));
 
 function makeSession(overrides: Partial<Record<string, unknown>> = {}): Session {
   return {

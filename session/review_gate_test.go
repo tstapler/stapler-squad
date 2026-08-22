@@ -432,8 +432,7 @@ func runGitOutputOrFail(t *testing.T, dir string, args ...string) string {
 // to exercise the `wt.BranchName != ""` repair-skip guard in ReviewGateRunner.Run.
 func forceEmptyBranchNameViaRawSQL(t *testing.T, storage *Storage, sessionName string) {
 	t.Helper()
-	er, ok := storage.repo.(*EntRepository)
-	require.True(t, ok, "forceEmptyBranchNameViaRawSQL requires an EntRepository-backed Storage")
+	er := storage.repo
 
 	db, err := sql.Open("sqlite", er.dbPath)
 	require.NoError(t, err)

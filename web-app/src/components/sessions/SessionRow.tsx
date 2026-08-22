@@ -59,7 +59,6 @@ interface SessionRowProps {
   onNewWorkspace?: () => void;
   onRestart?: (sessionId: string) => Promise<boolean | void>;
   onCreateCheckpoint?: (sessionId: string, label: string) => Promise<boolean>;
-  onRunOneShot?: (sessionId: string) => Promise<void>;
   onSetRateLimitEnabled?: (sessionId: string, enabled: boolean) => void;
   onToggleAutonomousMode?: (sessionId: string, enabled: boolean) => void;
   onToggleAutoApprove?: (sessionId: string, enabled: boolean) => void;
@@ -177,7 +176,6 @@ function SessionRowInner({
   onNewWorkspace,
   onRestart,
   onCreateCheckpoint,
-  onRunOneShot,
   onSetRateLimitEnabled,
   onToggleAutonomousMode,
   onToggleAutoApprove,
@@ -565,7 +563,6 @@ function SessionRowInner({
           onNewWorkspace={onNewWorkspace}
           onRestart={onRestart}
           onCreateCheckpoint={onCreateCheckpoint}
-          onRunOneShot={onRunOneShot}
           onSetRateLimitEnabled={onSetRateLimitEnabled}
           onToggleAutonomousMode={onToggleAutonomousMode}
           onToggleAutoApprove={onToggleAutoApprove}

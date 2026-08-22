@@ -118,7 +118,17 @@ const (
 	ErrItemNotFound           = "ITEM_NOT_FOUND"
 	ErrFeatureDisabled        = "FEATURE_DISABLED"
 	ErrEventStreamUnavailable = "EVENT_STREAM_UNAVAILABLE"
+	ErrConflict               = "CONFLICT"
+	ErrUnavailable            = "UNAVAILABLE"
+	ErrFailedPrecondition     = "FAILED_PRECONDITION"
 )
+
+// itemNotFoundRemediation is the shared ITEM_NOT_FOUND remediation text for
+// getBacklogItem's own existence check and resolveItemLink's fallback
+// existence check — kept as one constant so the two call sites can't drift.
+const itemNotFoundRemediation = "This item id does not exist — do not retry any backlog MCP tool call against it. " +
+	"If you were given this item id at session start, report it in your final summary; it may have been " +
+	"deleted or archived out from under this session."
 
 // featureDisabledResult returns a FEATURE_DISABLED error result if enabledCheck
 // is set and currently reports false. A nil enabledCheck means always-enabled
@@ -247,23 +257,17 @@ type ReviewTrigger interface {
 type backlogHandlers struct {
 	storage       *session.Storage
 	store         session.InstanceStore
-	eventBus      *events.EventBus         // optional; nil means notifications are disabled
-	reviewStopper ReviewCompletionSignaler // optional; nil means no driver stop on review verdict
-	enabledCheck  func() bool              // optional; nil means always-enabled (tests)
-	reviewTrigger ReviewTrigger            // optional; nil means review gate waits for the next reconcile tick
+	eventBus      *events.EventBus              // optional; nil means notifications are disabled
+	reviewStopper ReviewCompletionSignaler      // optional; nil means no driver stop on review verdict
+	enabledCheck  func() bool                   // optional; nil means always-enabled (tests)
+	reviewTrigger ReviewTrigger                 // optional; nil means review gate waits for the next reconcile tick
+	liveCheck     func(sessionUUID string) bool // optional; nil means treat every EndedAt==nil ItemSession row as live (today's behavior); backs link_session_to_item's exclusivity check
 
-	// backlogSvc backs createBacklogItem/importGitHubIssue's post-create
-	// auto-triage trigger (BUG-061: these two MCP tools used to call
-	// h.storage.CreateBacklogItem directly and skip triage entirely, unlike
-	// the RPC handlers of the same name — see BacklogService.MaybeTriggerTriage's
-	// doc comment). Held as the concrete type (not a narrower interface) to
-	// match this package's existing pattern for *services.SessionService
-	// (svc field on workflowHandlers/rulesHandlers/lifecycleHandlers) — a
-	// single-purpose interface here would have exactly one implementation and
-	// no near-term second one. Optional; nil means auto-triage is skipped and
-	// the item is created exactly as before this fix (matches enabledCheck's
-	// "nil means always-enabled (tests)" convention for other optional deps
-	// on this struct).
+	// backlogSvc backs createBacklogItem/importGitHubIssue's post-create auto-triage
+	// trigger (BUG-061; see BacklogService.MaybeTriggerTriage) and link_session_to_item's
+	// AttachSessionToItem call. Concrete type per this package's existing convention
+	// (see interface-pollution-checklist.md). Optional; nil skips auto-triage and makes
+	// link_session_to_item return ErrUnavailable (stdio fallback, see ADR-001).
 	backlogSvc *services.BacklogService
 
 	// verifyPRMatchesBranch backs report_pr_created's GitHub cross-check.
@@ -344,7 +348,7 @@ func (h *backlogHandlers) getBacklogItem(ctx context.Context, req mcpgo.CallTool
 	item, err := h.storage.GetBacklogItem(ctx, itemID)
 	if err != nil {
 		if errors.Is(err, session.ErrNotFound) {
-			return errResult(ErrItemNotFound, fmt.Sprintf("backlog item %q not found", itemID), ""), nil
+			return errResult(ErrItemNotFound, fmt.Sprintf("backlog item %q not found", itemID), itemNotFoundRemediation), nil
 		}
 		return errResult(ErrInternalError, fmt.Sprintf("get backlog item: %v", err), ""), nil
 	}
@@ -496,6 +500,48 @@ func latestReviewVerdict(ctx context.Context, storage *session.Storage, itemID s
 		}
 	}
 	return latest
+}
+
+// resolveItemLink verifies that callerUUID is linked to itemID, returning the
+// ItemSession on success. On failure it returns a ready-to-return
+// *mcpgo.CallToolResult that distinguishes ITEM_NOT_FOUND (the item itself
+// doesn't exist) from PERMISSION_DENIED (the item exists but this session has
+// no link to it) — GetItemSessionBySessionAndItem's ent join predicate
+// (itemsession.HasBacklogItemWith) returns ErrNotFound for both cases and
+// cannot tell them apart on its own. See
+// project_plans/backlog-link-error-consistency/research/stack.md.
+func (h *backlogHandlers) resolveItemLink(ctx context.Context, callerUUID, itemID string) (session.ItemSessionSummary, *mcpgo.CallToolResult) {
+	itemSession, linkErr := h.storage.GetItemSessionBySessionAndItem(ctx, callerUUID, itemID)
+	if linkErr == nil {
+		return itemSession, nil
+	}
+	if !errors.Is(linkErr, session.ErrNotFound) {
+		return session.ItemSessionSummary{}, errResult(ErrInternalError, fmt.Sprintf("link check failed: %v", linkErr), "")
+	}
+
+	// Disambiguate: does the item itself exist?
+	if _, itemErr := h.storage.GetBacklogItem(ctx, itemID); itemErr != nil {
+		if errors.Is(itemErr, session.ErrNotFound) {
+			return session.ItemSessionSummary{}, errResult(ErrItemNotFound,
+				fmt.Sprintf("backlog item %q not found", itemID), itemNotFoundRemediation)
+		}
+		return session.ItemSessionSummary{}, errResult(ErrInternalError, fmt.Sprintf("get backlog item: %v", itemErr), "")
+	}
+
+	log.InfoLog.Printf("[mcp:resolveItemLink] session=%s not linked to existing item=%s", callerUUID, itemID)
+	// otherToolsWarning lists every other mutating tool this same missing-link would also
+	// reject, so an agent that gives up on link_session_to_item (or hits it repeatedly
+	// without success) knows not to bother retrying any of them either.
+	otherToolsWarning := "If you don't fix this, stop calling ANY backlog MCP tool for this item — " +
+		"report_progress, request_review, submit_review_verdict, report_pr_created, submit_triage_result, " +
+		"report_blocked, report_duplicate will all fail identically for the same reason."
+	remediation := fmt.Sprintf("Call link_session_to_item with item_id=%s to link this session before retrying. %s", itemID, otherToolsWarning)
+	if prior, priorErr := h.storage.GetItemSessionBySessionUUID(ctx, callerUUID); priorErr == nil && prior.BacklogItemID != "" && prior.BacklogItemID != itemID {
+		remediation = fmt.Sprintf("This session is currently linked to a different item (%s). Call link_session_to_item with item_id=%s to relink, or use item_id=%s if that's what you meant. %s", prior.BacklogItemID, itemID, prior.BacklogItemID, otherToolsWarning)
+	}
+	return session.ItemSessionSummary{}, errResult(ErrPermissionDenied,
+		fmt.Sprintf("session %s is not linked to backlog item %s", callerUUID, itemID),
+		remediation)
 }
 
 // --- wait_for_backlog_event ---
@@ -889,13 +935,9 @@ func (h *backlogHandlers) reportProgress(ctx context.Context, req mcpgo.CallTool
 
 	note, _ := args["note"].(string)
 
-	// Verify session is linked to item.
-	_, linkErr := h.storage.GetItemSessionBySessionAndItem(ctx, callerUUID, itemID)
-	if linkErr != nil {
-		if errors.Is(linkErr, session.ErrNotFound) {
-			return errResult(ErrPermissionDenied, "this session is not linked to the specified backlog item", "Only sessions assigned to the item may report progress."), nil
-		}
-		return errResult(ErrInternalError, fmt.Sprintf("link check failed: %v", linkErr), ""), nil
+	// Verify session is linked to item (disambiguates ITEM_NOT_FOUND vs PERMISSION_DENIED).
+	if _, errRes := h.resolveItemLink(ctx, callerUUID, itemID); errRes != nil {
+		return errRes, nil
 	}
 
 	// Map status to AC criterion status values.
@@ -922,6 +964,181 @@ func (h *backlogHandlers) reportProgress(ctx context.Context, req mcpgo.CallTool
 	return mcpgo.NewToolResultText(fmt.Sprintf(
 		"Criterion %d updated to %q on item %s.", criteriaIndex, status, itemID,
 	)), nil
+}
+
+// --- link_session_to_item / get_linked_item ---
+
+// activeWorkSessionOwner returns the UUID of another live work-role ItemSession on the item,
+// if any. A row with EndedAt == nil only conflicts if liveCheck is nil or reports it alive —
+// a liveness-dead owner is stale, not a conflict, so resuming crashed work isn't blocked.
+func activeWorkSessionOwner(sessions []session.ItemSessionSummary, callerUUID string, liveCheck func(sessionUUID string) bool) (string, bool) {
+	for _, s := range sessions {
+		if s.Role != session.SessionRoleWork || s.EndedAt != nil || s.SessionUUID == callerUUID {
+			continue
+		}
+		if liveCheck != nil && !liveCheck(s.SessionUUID) {
+			continue // EndedAt not yet updated (crash/kill), but liveness check confirms it's dead — not a conflict
+		}
+		return s.SessionUUID, true
+	}
+	return "", false
+}
+
+// linkSessionToItem (re)links the calling session to a backlog item, thin-wrapping
+// AttachSessionToItem with an idempotency short-circuit and an exclusivity precheck so
+// two live work sessions can never both hold the same item.
+func (h *backlogHandlers) linkSessionToItem(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+	if r := featureDisabledResult(h.enabledCheck); r != nil {
+		return r, nil
+	}
+	callerUUID, err := callerSessionUUID(ctx)
+	if err != nil {
+		return errResult(ErrPermissionDenied, err.Error(), "Set STAPLER_SESSION_UUID in your environment."), nil
+	}
+	if h.backlogSvc == nil {
+		return errResult(ErrUnavailable, "link_session_to_item is not available over this transport", "Retry once the Stapler Squad HTTP daemon is reachable — this tool requires the HTTP-connected MCP server."), nil
+	}
+
+	args := req.GetArguments()
+	itemID, ok := args["item_id"].(string)
+	if !ok || itemID == "" {
+		return errResult(ErrInvalidArgument, "item_id is required", ""), nil
+	}
+	if err := validateUUID(itemID); err != nil {
+		return errResult(ErrInvalidArgument, err.Error(), ""), nil
+	}
+
+	// Idempotency short-circuit: already linked to this exact item is a no-op success.
+	if existing, linkErr := h.storage.GetItemSessionBySessionAndItem(ctx, callerUUID, itemID); linkErr == nil {
+		return okResult(LinkSessionToItemResult{
+			MCPResult: MCPResult{Success: true},
+			ItemID:    itemID, SessionUUID: callerUUID, ItemSessionID: existing.ID,
+			AlreadyLinked: true, SlashCommandsRegenerated: false, ItemStatus: h.lookupItemStatus(ctx, itemID),
+		}), nil
+	}
+	var previousItemID string
+	if prior, priorErr := h.storage.GetItemSessionBySessionUUID(ctx, callerUUID); priorErr == nil && prior.BacklogItemID != itemID {
+		previousItemID = prior.BacklogItemID
+	}
+
+	// Exclusivity precheck: reject if a different, still-live work session already holds the item.
+	// Check-then-act, no lock/transaction — two concurrent first-link calls on the same item can
+	// both pass this and both attach. Accepted, documented gap (rare in practice); see plan.md.
+	itemSessions, listErr := h.storage.ListItemSessions(ctx, itemID)
+	if listErr != nil && !errors.Is(listErr, session.ErrNotFound) {
+		return errResult(ErrInternalError, fmt.Sprintf("list item sessions: %v", listErr), ""), nil
+	}
+	if owner, conflict := activeWorkSessionOwner(itemSessions, callerUUID, h.liveCheck); conflict {
+		// Omits the owning session's UUID from the response: it doubles as this MCP
+		// layer's bearer credential, so leaking it here would let a caller impersonate it.
+		log.InfoLog.Printf("[mcp:link_session_to_item] session=%s item=%s conflict owner=%s", callerUUID, itemID, owner)
+		return errResult(ErrConflict,
+			fmt.Sprintf("item %s already has a live work session", itemID),
+			"get_linked_item only reports your own session's linkage, not other sessions' — it cannot resolve this. If you believe this is stale (the other session crashed or was force-restarted), wait for the backlog reconciler to clear it, or escalate to a human rather than retrying — this tool has no force-relink override by design."), nil
+	}
+
+	// Determined BEFORE calling the attacher using the exact same condition
+	// AttachSessionToItem's own step 6 uses to decide whether to write slash
+	// commands (inst.UUID == sessionUUID && inst.Path != "") — findSessionTitleByUUID
+	// checks UUID only, which would report true for an instance AttachSessionToItem
+	// wouldn't have written to.
+	slashCommandsRegenerated := sessionHasWritableInstance(h.store, callerUUID)
+	resp, attachErr := h.backlogSvc.AttachSessionToItem(ctx, connect.NewRequest(&sessionv1.AttachSessionToItemRequest{
+		ItemId: itemID, SessionUuid: callerUUID,
+	}))
+	if attachErr != nil {
+		switch connect.CodeOf(attachErr) {
+		case connect.CodeNotFound:
+			return errResult(ErrItemNotFound, attachErr.Error(), ""), nil
+		case connect.CodeFailedPrecondition:
+			return errResult(ErrFailedPrecondition, attachErr.Error(), "The item's status doesn't currently allow attaching a session."), nil
+		case connect.CodeInvalidArgument:
+			return errResult(ErrInvalidArgument, attachErr.Error(), ""), nil
+		default:
+			return errResult(ErrInternalError, fmt.Sprintf("attach session to item: %v", attachErr), ""), nil
+		}
+	}
+	is := resp.Msg.GetItemSession()
+	log.InfoLog.Printf("[mcp:link_session_to_item] session=%s item=%s already_linked=false slash_commands_regenerated=%v", callerUUID, itemID, slashCommandsRegenerated)
+	return okResult(LinkSessionToItemResult{
+		MCPResult: MCPResult{Success: true},
+		ItemID:    itemID, SessionUUID: callerUUID, ItemSessionID: is.GetId(),
+		AlreadyLinked: false, PreviouslyLinkedItemID: previousItemID,
+		SlashCommandsRegenerated: slashCommandsRegenerated, ItemStatus: h.lookupItemStatus(ctx, itemID),
+	}), nil
+}
+
+// lookupItemStatus returns itemID's current status, or "" if the lookup fails.
+func (h *backlogHandlers) lookupItemStatus(ctx context.Context, itemID string) string {
+	item, err := h.storage.GetBacklogItem(ctx, itemID)
+	if err != nil {
+		return ""
+	}
+	return item.Status
+}
+
+// sessionHasWritableInstance reports whether store has a live instance for sessionUUID
+// with a resolvable path, mirroring the exact condition AttachSessionToItem's own step 6
+// uses to decide whether to write slash commands. A nil store or lookup failure reports
+// false rather than panicking or erroring.
+func sessionHasWritableInstance(store session.InstanceStore, sessionUUID string) bool {
+	if store == nil {
+		return false
+	}
+	instances, err := store.ListInstanceData()
+	if err != nil {
+		return false
+	}
+	for _, d := range instances {
+		if d.UUID == sessionUUID && d.Path != "" {
+			return true
+		}
+	}
+	return false
+}
+
+// getLinkedItem is a read-only lookup of which backlog item(s) the calling session is
+// linked to, so an agent can discover its own linkage without SQLite access.
+func (h *backlogHandlers) getLinkedItem(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+	if r := featureDisabledResult(h.enabledCheck); r != nil {
+		return r, nil
+	}
+	callerUUID, err := callerSessionUUID(ctx)
+	if err != nil {
+		return errResult(ErrPermissionDenied, err.Error(), "Set STAPLER_SESSION_UUID in your environment."), nil
+	}
+
+	args := req.GetArguments()
+	itemID, _ := args["item_id"].(string)
+	if itemID != "" {
+		if err := validateUUID(itemID); err != nil {
+			return errResult(ErrInvalidArgument, err.Error(), ""), nil
+		}
+	}
+
+	var is session.ItemSessionSummary
+	var lookupErr error
+	if itemID != "" {
+		is, lookupErr = h.storage.GetItemSessionBySessionAndItem(ctx, callerUUID, itemID)
+	} else {
+		is, lookupErr = h.storage.GetItemSessionBySessionUUID(ctx, callerUUID)
+	}
+	if lookupErr != nil {
+		if errors.Is(lookupErr, session.ErrNotFound) {
+			return okResult(GetLinkedItemResult{MCPResult: MCPResult{Success: true}, Linked: false, ItemID: itemID}), nil
+		}
+		return errResult(ErrInternalError, fmt.Sprintf("lookup item session: %v", lookupErr), ""), nil
+	}
+
+	title, status := "", ""
+	if item, itemErr := h.storage.GetBacklogItem(ctx, is.BacklogItemID); itemErr == nil {
+		title, status = item.Title, item.Status
+	}
+	return okResult(GetLinkedItemResult{
+		MCPResult: MCPResult{Success: true},
+		Linked:    true, ItemID: is.BacklogItemID, ItemTitle: title, ItemStatus: status,
+		Role: is.Role, StartedAt: is.StartedAt,
+	}), nil
 }
 
 // --- request_review ---
@@ -961,13 +1178,10 @@ func (h *backlogHandlers) requestReview(ctx context.Context, req mcpgo.CallToolR
 		return errResult(ErrInvalidArgument, "verification_notes must be <= 4000 characters", ""), nil
 	}
 
-	// Verify session is linked to item.
-	itemSession, linkErr := h.storage.GetItemSessionBySessionAndItem(ctx, callerUUID, itemID)
-	if linkErr != nil {
-		if errors.Is(linkErr, session.ErrNotFound) {
-			return errResult(ErrPermissionDenied, "this session is not linked to the specified backlog item", ""), nil
-		}
-		return errResult(ErrInternalError, fmt.Sprintf("link check failed: %v", linkErr), ""), nil
+	// Verify session is linked to item (disambiguates ITEM_NOT_FOUND vs PERMISSION_DENIED).
+	itemSession, errRes := h.resolveItemLink(ctx, callerUUID, itemID)
+	if errRes != nil {
+		return errRes, nil
 	}
 
 	// Belt-and-suspenders layer 1: reject if the worktree has uncommitted changes.
@@ -1144,12 +1358,10 @@ func (h *backlogHandlers) reportBlocked(ctx context.Context, req mcpgo.CallToolR
 		return errResult(ErrInvalidArgument, "rationale must be <= 2000 characters", ""), nil
 	}
 
-	itemSession, linkErr := h.storage.GetItemSessionBySessionAndItem(ctx, callerUUID, itemID)
-	if linkErr != nil {
-		if errors.Is(linkErr, session.ErrNotFound) {
-			return errResult(ErrPermissionDenied, "this session is not linked to the specified backlog item", ""), nil
-		}
-		return errResult(ErrInternalError, fmt.Sprintf("link check failed: %v", linkErr), ""), nil
+	// Verify session is linked to item (disambiguates ITEM_NOT_FOUND vs PERMISSION_DENIED).
+	itemSession, errRes := h.resolveItemLink(ctx, callerUUID, itemID)
+	if errRes != nil {
+		return errRes, nil
 	}
 	if itemSession.Role != session.SessionRoleWork {
 		return errResult(ErrPermissionDenied, fmt.Sprintf("session role is %q — only 'work' role may report a blocked item", itemSession.Role), ""), nil
@@ -1307,13 +1519,10 @@ func (h *backlogHandlers) submitReviewVerdict(ctx context.Context, req mcpgo.Cal
 		inputs = append(inputs, vi)
 	}
 
-	// Verify session is linked to item with role=review.
-	itemSession, linkErr := h.storage.GetItemSessionBySessionAndItem(ctx, callerUUID, itemID)
-	if linkErr != nil {
-		if errors.Is(linkErr, session.ErrNotFound) {
-			return errResult(ErrPermissionDenied, "this session is not linked to the specified backlog item", ""), nil
-		}
-		return errResult(ErrInternalError, fmt.Sprintf("link check failed: %v", linkErr), ""), nil
+	// Verify session is linked to item (disambiguates ITEM_NOT_FOUND vs PERMISSION_DENIED).
+	itemSession, errRes := h.resolveItemLink(ctx, callerUUID, itemID)
+	if errRes != nil {
+		return errRes, nil
 	}
 	if itemSession.Role != "review" {
 		return errResult(ErrPermissionDenied, fmt.Sprintf("session role is %q — only 'review' role may submit verdicts", itemSession.Role), ""), nil
@@ -1576,13 +1785,10 @@ func (h *backlogHandlers) reportPRCreated(ctx context.Context, req mcpgo.CallToo
 		return errResult(ErrInvalidArgument, "override_reason must be <= 500 characters", ""), nil
 	}
 
-	// Verify session is linked to item with role=work.
-	itemSession, linkErr := h.storage.GetItemSessionBySessionAndItem(ctx, callerUUID, itemID)
-	if linkErr != nil {
-		if errors.Is(linkErr, session.ErrNotFound) {
-			return errResult(ErrPermissionDenied, "this session is not linked to the specified backlog item", ""), nil
-		}
-		return errResult(ErrInternalError, fmt.Sprintf("link check failed: %v", linkErr), ""), nil
+	// Verify session is linked to item (disambiguates ITEM_NOT_FOUND vs PERMISSION_DENIED).
+	itemSession, errRes := h.resolveItemLink(ctx, callerUUID, itemID)
+	if errRes != nil {
+		return errRes, nil
 	}
 	if itemSession.Role != session.SessionRoleWork {
 		return errResult(ErrPermissionDenied, fmt.Sprintf("session role is %q — only 'work' role may report a created PR", itemSession.Role), ""), nil
@@ -2107,13 +2313,10 @@ func (h *backlogHandlers) reportDuplicate(ctx context.Context, req mcpgo.CallToo
 		return errResult(ErrInvalidArgument, "reason must be <= 1000 characters", ""), nil
 	}
 
-	// Verify session is linked to item with role=work.
-	itemSession, linkErr := h.storage.GetItemSessionBySessionAndItem(ctx, callerUUID, itemID)
-	if linkErr != nil {
-		if errors.Is(linkErr, session.ErrNotFound) {
-			return errResult(ErrPermissionDenied, "this session is not linked to the specified backlog item", ""), nil
-		}
-		return errResult(ErrInternalError, fmt.Sprintf("link check failed: %v", linkErr), ""), nil
+	// Verify session is linked to item (disambiguates ITEM_NOT_FOUND vs PERMISSION_DENIED).
+	itemSession, errRes := h.resolveItemLink(ctx, callerUUID, itemID)
+	if errRes != nil {
+		return errRes, nil
 	}
 	if itemSession.Role != session.SessionRoleWork {
 		return errResult(ErrPermissionDenied, fmt.Sprintf("session role is %q — only 'work' role may report a duplicate", itemSession.Role), ""), nil
@@ -2286,13 +2489,10 @@ func (h *backlogHandlers) submitTriageResult(ctx context.Context, req mcpgo.Call
 		return errResult(ErrInvalidArgument, "summary is required", ""), nil
 	}
 
-	// Verify session is linked to item with role=triage.
-	itemSession, linkErr := h.storage.GetItemSessionBySessionAndItem(ctx, callerUUID, itemID)
-	if linkErr != nil {
-		if errors.Is(linkErr, session.ErrNotFound) {
-			return errResult(ErrPermissionDenied, "this session is not linked to the specified backlog item", ""), nil
-		}
-		return errResult(ErrInternalError, fmt.Sprintf("link check failed: %v", linkErr), ""), nil
+	// Verify session is linked to item (disambiguates ITEM_NOT_FOUND vs PERMISSION_DENIED).
+	itemSession, errRes := h.resolveItemLink(ctx, callerUUID, itemID)
+	if errRes != nil {
+		return errRes, nil
 	}
 	if itemSession.Role != "triage" {
 		return errResult(ErrPermissionDenied, fmt.Sprintf("session role is %q — only 'triage' role may submit triage results", itemSession.Role), ""), nil
@@ -2543,6 +2743,27 @@ func registerBacklogTools(s *mcpserver.MCPServer, h *backlogHandlers) {
 			),
 		),
 		h.reportProgress,
+	)
+
+	s.AddTool(
+		mcpgo.NewTool("link_session_to_item",
+			mcpgo.WithDescription("Link (or relink) this session to a backlog item as a work session. Call this if a report_progress/request_review/submit_triage_result call fails with PERMISSION_DENIED. Get the item_id from the task/item description you were given at session start, or from get_linked_item if you have a prior link — do NOT infer it from your git branch name, which does not embed the item id in this repo. Rejects with ITEM_NOT_FOUND if item_id doesn't exist, CONFLICT if another live session already holds the item, and FAILED_PRECONDITION if the item's status doesn't allow attaching (must be idea, ready, or in_progress)."),
+			mcpgo.WithString("item_id",
+				mcpgo.Description("UUID of the backlog item to link this session to"),
+				mcpgo.Required(),
+			),
+		),
+		h.linkSessionToItem,
+	)
+
+	s.AddTool(
+		mcpgo.NewTool("get_linked_item",
+			mcpgo.WithDescription("Check which backlog item this session is currently linked to. Omit item_id to get the most recent link; pass item_id to check linkage to that specific item. Read-only — use this before link_session_to_item to confirm you're not already correctly linked, or to discover what item you're working on without SQLite access."),
+			mcpgo.WithString("item_id",
+				mcpgo.Description("Optional UUID of a specific backlog item to check linkage against. Omit to get the most recent link for this session."),
+			),
+		),
+		h.getLinkedItem,
 	)
 
 	s.AddTool(

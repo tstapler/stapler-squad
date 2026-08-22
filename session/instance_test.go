@@ -446,6 +446,66 @@ func TestDestroy_should_SkipDiffStatsCapture_When_NoLifecycleListenerRegistered(
 	}
 }
 
+// TestInstance_UpdateDiffStats_should_SetHasCommitsAhead_When_BranchHasNewCommits
+// covers AC6's cached-signal path: UpdateDiffStats computes HasCommitsAhead
+// alongside the diff stats (both outside the lock), so GetHasCommitsAhead can
+// answer synchronously afterward. Uses setupTestGitRepo (not setupTestRepository)
+// because it fixes the repo's default branch at "main" — the same bounceMainBranch
+// constant UpdateDiffStats passes to HasCommitsAheadOfMain — so the assertion
+// actually exercises the ahead-count computation rather than HasCommitsAheadOfMain's
+// fail-open default (which would also return true if "main" didn't resolve).
+func TestInstance_UpdateDiffStats_should_SetHasCommitsAhead_When_BranchHasNewCommits(t *testing.T) {
+	t.Parallel()
+	repoDir := setupTestGitRepo(t)
+
+	wt, _, err := git.NewGitWorktree(repoDir, "has-commits-ahead-test")
+	if err != nil {
+		t.Fatalf("NewGitWorktree: %v", err)
+	}
+	if err := wt.Setup(); err != nil {
+		t.Fatalf("wt.Setup(): %v", err)
+	}
+
+	// Add a real commit on the worktree's branch so it's genuinely ahead of main,
+	// not just dirty — HasCommitsAheadOfMain counts commits, not working-tree diffs.
+	if err := os.WriteFile(filepath.Join(wt.GetWorktreePath(), "new-file.txt"), []byte("hello\n"), 0644); err != nil {
+		t.Fatalf("failed to write new file: %v", err)
+	}
+	if err := wt.CommitChanges("Add new-file.txt"); err != nil {
+		t.Fatalf("CommitChanges(): %v", err)
+	}
+
+	inst := &Instance{Title: "has-commits-ahead-test", UUID: "sess-has-commits-ahead", Status: Ready}
+	inst.SetGitWorktree(wt) // also sets started=true
+
+	if err := inst.UpdateDiffStats(); err != nil {
+		t.Fatalf("UpdateDiffStats(): %v", err)
+	}
+
+	if got := inst.GetHasCommitsAhead(); !got {
+		t.Fatalf("expected GetHasCommitsAhead() to be true after committing on top of main, got %v", got)
+	}
+}
+
+// TestInstance_GetHasCommitsAhead_should_ReturnFalse_When_NoWorktree covers a
+// directory session (no git worktree, per Instance.HasGitWorktree/gitManager) —
+// AC6's cached signal has no meaningful "ahead of base" concept there, the same
+// scoping DraftPullRequest already limits itself to worktree-backed instances, so
+// it must stay at its false zero value through a real UpdateDiffStats pass.
+func TestInstance_GetHasCommitsAhead_should_ReturnFalse_When_NoWorktree(t *testing.T) {
+	t.Parallel()
+	inst := &Instance{Title: "dir-session-no-worktree-test", UUID: "sess-dir-no-worktree", Status: Ready, Path: t.TempDir()}
+	inst.started.Store(true)
+
+	if err := inst.UpdateDiffStats(); err != nil {
+		t.Fatalf("UpdateDiffStats(): %v", err)
+	}
+
+	if got := inst.GetHasCommitsAhead(); got {
+		t.Fatalf("expected GetHasCommitsAhead() to remain false for a directory session with no worktree, got %v", got)
+	}
+}
+
 // Destroy_should_FireEventStoppedWithEmptyDiff_When_InstanceNeverStarted verifies
 // Task 1.1.1a's confirmed-correct-behavior note: Destroy() on an instance that never
 // reached a state where a worktree/diff would exist still fires EventStopped
@@ -547,6 +607,41 @@ func TestFromInstanceData_CrashedSession_StaysStartedTrue_NoAutoResume(t *testin
 		t.Fatal("expected Started()=true for a restored Crashed instance -- " +
 			"Started()=false would cause server/dependencies.go's Step 6 startup " +
 			"loop to silently auto-resume this crashed session on next restart")
+	}
+}
+
+// TestFromInstanceData_ArchivedStoppedSession_StaysStopped_NoAliveProbe is a
+// regression guard for the fork-pressure fix: an archived session's tmux pane
+// is already deliberately killed at archive time (archiveItemWorkSessions),
+// so fromInstanceData must not attempt to "recover" it back to Active via the
+// IsAlive()/PaneExitStatus() tmux subprocess probe every restored Stopped
+// session used to pay on every single LoadInstances() call. This pins the
+// observable postcondition (stays Stopped, Started()=true); the underlying
+// subprocess-avoidance isn't directly assertable here since fromInstanceData
+// always wires a real TmuxBackend with no injection point for a fake.
+func TestFromInstanceData_ArchivedStoppedSession_StaysStopped_NoAliveProbe(t *testing.T) {
+	t.Parallel()
+	archivedAt := time.Now()
+	data := InstanceData{
+		Title:      "archived-stopped-restore-test",
+		Path:       "/tmp/archived-stopped-restore-test",
+		Status:     Stopped,
+		Program:    "claude",
+		CreatedAt:  time.Now(),
+		UpdatedAt:  time.Now(),
+		ArchivedAt: &archivedAt,
+	}
+
+	instance, err := fromInstanceData(data, true /* deferStart, matches LoadInstances() */)
+	if err != nil {
+		t.Fatalf("fromInstanceData returned error: %v", err)
+	}
+
+	if instance.Status != Stopped {
+		t.Fatalf("expected Status=Stopped (archived sessions must never be revived to Active), got %v", instance.Status)
+	}
+	if !instance.Started() {
+		t.Fatal("expected Started()=true for a restored archived Stopped instance")
 	}
 }
 

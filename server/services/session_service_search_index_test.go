@@ -31,6 +31,11 @@ import (
 // test-<pid> dir itself is not asserted against, since other NewSessionService
 // dependencies (approval store, capacity config, etc.) legitimately use
 // config.GetConfigDir() for their own unrelated state.
+// This test deliberately does NOT use withFakeHome/homeEnvMu (see
+// home_env_test_helper_test.go) and must never gain t.Parallel(): it is
+// itself a regression test for config.GetConfigDirForDir's IsTestMode()
+// fallback behavior around HOME, not a consumer of that behavior, so it
+// needs full, uncontended control of the raw env var.
 func TestNewSessionService_TestMode_NeverTouchesRealSearchIndex(t *testing.T) {
 	fakeHome := t.TempDir()
 	t.Setenv("HOME", fakeHome)

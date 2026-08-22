@@ -187,7 +187,6 @@ function SessionListPaneBody({ pane, dispatch }: { pane: LeafPane; dispatch: Rea
         onCreateCheckpoint={actions.onCreateCheckpoint}
         onListCheckpoints={actions.onListCheckpoints}
         onForkFromCheckpoint={actions.onForkFromCheckpoint}
-        onRunOneShot={actions.onRunOneShot}
         onSetRateLimitEnabled={actions.onSetRateLimitEnabled}
         onToggleAutonomousMode={actions.onToggleAutonomousMode}
         onToggleAutoApprove={actions.onToggleAutoApprove}

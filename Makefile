@@ -450,13 +450,35 @@ proto-clean: ## Clean generated protocol buffer code
 
 # Testing targets
 test: ensure-tools proto-gen $(BIN_TMUX) ## Run all tests (skips slow integration tests; use test-integration for full suite)
-	TMUX_BIN=$(CURDIR)/$(BIN_TMUX) go test -short -timeout=20m ./...
+	# session, session/mux, and session/tmux fork real tmux subprocesses at high
+	# t.Parallel() fan-out. Running them under the suite's default per-package
+	# parallelism let those tmux-heavy tests compete for scheduler time against
+	# fixed wall-clock budgets (destroyChainTimeout, mux list-session timeouts),
+	# causing intermittent failures under `make test` that never reproduced in
+	# isolation -- same root cause as test-integration's existing -p 1 scoping
+	# below and CI's -race -p 1 coverage step (.github/workflows/build.yml). -p 1
+	# serializes just these three packages against each other; everything else
+	# still runs in parallel via the second invocation.
+	# STAPLER_SQUAD_TMUX_CREATE_TIMEOUT_SECONDS=30 matches CI's existing override
+	# so local runs get the same tmux-create timeout headroom (production
+	# default is 10s -- see session/tmux/tmux.go's sessionCreateTimeoutDefault).
+	# testutil also forks real tmux subprocesses (TestRealTmuxSessionLifecycle) and
+	# hit the same contention under full-suite load -- included in the -p 1 group.
+	STAPLER_SQUAD_TMUX_CREATE_TIMEOUT_SECONDS=30 TMUX_BIN=$(CURDIR)/$(BIN_TMUX) go test -short -timeout=20m -p 1 ./session ./session/mux ./session/tmux ./testutil
+	STAPLER_SQUAD_TMUX_CREATE_TIMEOUT_SECONDS=30 TMUX_BIN=$(CURDIR)/$(BIN_TMUX) go test -short -timeout=20m $$(go list ./... | grep -vE '^github\.com/tstapler/stapler-squad/(session|session/mux|session/tmux|testutil)$$')
 
 test-verbose: ensure-tools proto-gen ## Run tests with verbose output
 	go test -short -v ./...
 
 test-coverage: ensure-tools proto-gen $(BIN_TMUX) ## Run tests with coverage report (HTML)
-	TMUX_BIN=$(CURDIR)/$(BIN_TMUX) go test -short -cover ./... -coverprofile=coverage.out
+	# Same tmux-contention root cause as the test target above -- see its comment.
+	# Split into two invocations and merge the resulting coverage profiles since
+	# go test only writes one -coverprofile per invocation.
+	STAPLER_SQUAD_TMUX_CREATE_TIMEOUT_SECONDS=30 TMUX_BIN=$(CURDIR)/$(BIN_TMUX) go test -short -timeout=20m -p 1 -cover -coverprofile=coverage.tmux.out ./session ./session/mux ./session/tmux ./testutil
+	STAPLER_SQUAD_TMUX_CREATE_TIMEOUT_SECONDS=30 TMUX_BIN=$(CURDIR)/$(BIN_TMUX) go test -short -timeout=20m -cover -coverprofile=coverage.rest.out $$(go list ./... | grep -vE '^github\.com/tstapler/stapler-squad/(session|session/mux|session/tmux|testutil)$$')
+	head -n 1 coverage.tmux.out > coverage.out
+	tail -q -n +2 coverage.tmux.out coverage.rest.out >> coverage.out
+	rm -f coverage.tmux.out coverage.rest.out
 	go tool cover -html=coverage.out -o coverage.html
 	@echo "Coverage report generated: coverage.html"
 
@@ -507,7 +529,9 @@ coverage-refactor: ensure-tools proto-gen ## Show coverage for the 4 files targe
 	@go tool cover -func=coverage.out | grep "^total"
 
 test-race: ensure-tools proto-gen $(BIN_TMUX) ## Run tests with race detector enabled (skips slow integration tests)
-	TMUX_BIN=$(CURDIR)/$(BIN_TMUX) go test -race -short -timeout=20m ./...
+	# Same tmux-contention root cause as the test target above -- see its comment.
+	STAPLER_SQUAD_TMUX_CREATE_TIMEOUT_SECONDS=30 TMUX_BIN=$(CURDIR)/$(BIN_TMUX) go test -race -short -timeout=20m -p 1 ./session ./session/mux ./session/tmux ./testutil
+	STAPLER_SQUAD_TMUX_CREATE_TIMEOUT_SECONDS=30 TMUX_BIN=$(CURDIR)/$(BIN_TMUX) go test -race -short -timeout=20m $$(go list ./... | grep -vE '^github\.com/tstapler/stapler-squad/(session|session/mux|session/tmux|testutil)$$')
 
 test-integration: ensure-tools proto-gen ## Run integration tests (requires real tmux)
 	# ./session and ./session/tmux are the only integration-tagged packages that

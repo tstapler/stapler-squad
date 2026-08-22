@@ -84,7 +84,6 @@ function HomeContent() {
     createCheckpoint,
     listCheckpoints,
     forkSession,
-    runOneShot,
     listSessions,
     updateSession,
     getSession,
@@ -295,10 +294,6 @@ function HomeContent() {
     await updateSession(sessionId, { steerMessage: message });
   }, [updateSession, track]);
 
-  const handleRunOneShot = useCallback(async (sessionId: string): Promise<void> => {
-    await runOneShot(sessionId, "Create a pull request for the changes in this session.", 0);
-  }, [runOneShot]);
-
   const handleResumeRequest = useCallback((session: Session) => {
     resumeTriggerRef.current = document.activeElement as HTMLElement;
     setResumeTarget(session);
@@ -438,7 +433,6 @@ function HomeContent() {
     onCreateCheckpoint: createCheckpoint,
     onListCheckpoints: listCheckpoints,
     onForkFromCheckpoint: forkSession,
-    onRunOneShot: handleRunOneShot,
     onSetRateLimitEnabled: handleSetRateLimitEnabled,
     onToggleAutonomousMode: handleToggleAutonomousMode,
     onToggleAutoApprove: handleToggleAutoApprove,
@@ -449,7 +443,7 @@ function HomeContent() {
     handleSessionClick, handleDeleteSession, pauseSession, handleResumeRequest,
     handleDirectResume, handleCloneSession, handleNewWorkspaceSession, renameSession,
     restartSession, handleUpdateTags, handleNewSession, createCheckpoint,
-    listCheckpoints, forkSession, handleRunOneShot, handleSetRateLimitEnabled,
+    listCheckpoints, forkSession, handleSetRateLimitEnabled,
     handleToggleAutonomousMode, handleToggleAutoApprove, handleSteerAutonomousSession, clearConversationState, listSessions,
   ]);
 

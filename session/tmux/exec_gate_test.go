@@ -41,6 +41,13 @@ func captureDebugLog(t *testing.T) func() string {
 // Returns a unique-per-test serverSocket key so parallel (sub)tests never share
 // a gate directory even under the same STAPLER_SQUAD_TEST_DIR.
 func setupExecGateTestConfig(t *testing.T, defaultSlots, resyncSlots int) (serverSocket string) {
+	return setupExecGateTestConfigWithInput(t, defaultSlots, resyncSlots, 0)
+}
+
+// setupExecGateTestConfigWithInput is setupExecGateTestConfig plus an
+// inputSlots value for the input fast-lane pool (0 = use the built-in
+// default, same convention as the other two slot counts).
+func setupExecGateTestConfigWithInput(t *testing.T, defaultSlots, resyncSlots, inputSlots int) (serverSocket string) {
 	t.Helper()
 	testDir := t.TempDir()
 	t.Setenv("STAPLER_SQUAD_TEST_DIR", testDir)
@@ -49,6 +56,7 @@ func setupExecGateTestConfig(t *testing.T, defaultSlots, resyncSlots int) (serve
 		"tmux_exec_gate": map[string]any{
 			"slots":               defaultSlots,
 			"resyncFastLaneSlots": resyncSlots,
+			"inputFastLaneSlots":  inputSlots,
 		},
 	}
 	data, err := json.Marshal(cfg)
@@ -161,6 +169,67 @@ func TestAcquireResyncExecSlot_should_NotConsumeDefaultPoolCapacity_When_FastLan
 
 	for i, err := range errs {
 		require.NoError(t, err, "default pool acquire %d should succeed despite fast lane pool being fully saturated", i)
+		releases[i]()
+	}
+}
+
+func TestAcquireInputExecSlot_should_AcquireFromSeparatePool_When_DefaultPoolSaturated(t *testing.T) {
+	serverSocket := setupExecGateTestConfigWithInput(t, 1, 1, 1)
+
+	releaseDefault, err := AcquireExecSlot(context.Background(), serverSocket)
+	require.NoError(t, err)
+	defer releaseDefault()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	releaseInput, err := AcquireInputExecSlot(ctx, serverSocket)
+	elapsed := time.Since(start)
+	require.NoError(t, err)
+	defer releaseInput()
+	assert.Less(t, elapsed, 100*time.Millisecond, "input fast lane acquire should not wait behind the saturated default pool")
+}
+
+// TestAcquireInputExecSlot_should_NotConsumeDefaultPoolCapacity_When_InputPoolIsFull is an
+// integration test: it drives both pools concurrently against real flock-backed gate files (no
+// mocking of acquireSlot/flock) to prove the input fast lane pool and default pool are truly
+// independent -- saturating the input pool must have zero effect on default pool capacity. This
+// is the property that keeps a poller's capture-pane traffic on the default pool from ever
+// stalling user keystrokes routed through the input pool, and vice versa.
+func TestAcquireInputExecSlot_should_NotConsumeDefaultPoolCapacity_When_InputPoolIsFull(t *testing.T) {
+	serverSocket := setupExecGateTestConfigWithInput(t, 2, 1, 2)
+
+	var inputReleases []func()
+	for i := 0; i < 2; i++ {
+		release, err := AcquireInputExecSlot(context.Background(), serverSocket)
+		require.NoError(t, err)
+		inputReleases = append(inputReleases, release)
+	}
+	defer func() {
+		for _, release := range inputReleases {
+			release()
+		}
+	}()
+
+	var wg sync.WaitGroup
+	errs := make([]error, 2)
+	releases := make([]func(), 2)
+	wg.Add(2)
+	for i := 0; i < 2; i++ {
+		i := i
+		go func() {
+			defer wg.Done()
+			ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+			defer cancel()
+			release, err := AcquireExecSlot(ctx, serverSocket)
+			errs[i] = err
+			releases[i] = release
+		}()
+	}
+	wg.Wait()
+
+	for i, err := range errs {
+		require.NoError(t, err, "default pool acquire %d should succeed despite input pool being fully saturated", i)
 		releases[i]()
 	}
 }

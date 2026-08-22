@@ -151,6 +151,12 @@ service SessionService {
   // DeleteApprovalRule removes a user-defined auto-approval rule by ID.
   rpc DeleteApprovalRule(DeleteApprovalRuleRequest) returns (DeleteApprovalRuleResponse) {}
 
+  // ReloadClaudeSettingsRules re-parses ~/.claude/settings.json (and project-level
+  // equivalents) and hot-swaps the resulting claude-settings-sourced rules into the live
+  // classifier. Malformed files are skipped; previously loaded rules for that file are
+  // retained.
+  rpc ReloadClaudeSettingsRules(ReloadClaudeSettingsRulesRequest) returns (ReloadClaudeSettingsRulesResponse) {}
+
   // GetApprovalAnalytics returns aggregated analytics for classification decisions.
   rpc GetApprovalAnalytics(GetApprovalAnalyticsRequest) returns (GetApprovalAnalyticsResponse) {}
 
@@ -316,6 +322,11 @@ service SessionService {
 
   // One-shot PR creation (S3)
   rpc RunOneShot(RunOneShotRequest) returns (RunOneShotResponse) {}
+
+  // Mechanical (non-agentic) PR creation, replacing the RunOneShot-driven
+  // dashboard button (S5).
+  rpc DraftPullRequest(DraftPullRequestRequest) returns (DraftPullRequestResponse) {}
+  rpc CreatePullRequest(CreatePullRequestRequest) returns (CreatePullRequestResponse) {}
 
   // Project CRUD (S4)
   rpc CreateProject(CreateProjectRequest) returns (CreateProjectResponse) {}
@@ -1556,6 +1567,14 @@ message DeleteApprovalRuleResponse {
   string message = 2;
 }
 
+message ReloadClaudeSettingsRulesRequest {}
+
+message ReloadClaudeSettingsRulesResponse {
+  bool success = 1;
+  int32 rule_count = 2;
+  string message = 3;
+}
+
 message GetApprovalAnalyticsRequest {
   // Time window in days (default 7, max 90).
   optional int32 window_days = 1;
@@ -2240,6 +2259,45 @@ message RunOneShotResponse {
   int32 exit_code = 3;
   string pr_url = 4;
   bool branch_diverged_from_base = 5;
+}
+
+// ============================================================================
+// S5: Mechanical Pull Request Creation Messages
+// ============================================================================
+
+message DraftPullRequestRequest {
+  string session_id = 1;
+}
+
+message DraftPullRequestResponse {
+  string title = 1;
+  string body = 2;
+  string base_branch = 3;
+  bool has_commits_ahead = 4;
+  // Non-empty when the session already has a PR — the client should show
+  // a "View PR" state instead of the editable create form (AC4).
+  string existing_pr_url = 5;
+  int32 existing_pr_number = 6;
+}
+
+message CreatePullRequestRequest {
+  string session_id = 1;
+  string title = 2;
+  string body = 3;
+  string base_branch = 4;
+}
+
+message CreatePullRequestResponse {
+  string pr_url = 1;
+  int32 pr_number = 2;
+  // True when CreatePR returned a pre-existing PR instead of creating one.
+  bool already_existed = 3;
+  // False when the PR was created on GitHub but the session record failed
+  // to save it — the RPC still returns success (the PR is real); the
+  // client should surface persist_error as a distinct warning, not a
+  // create-failed error (see plan.md's Pattern Decisions).
+  bool persisted = 4;
+  string persist_error = 5;
 }
 
 // ============================================================================
