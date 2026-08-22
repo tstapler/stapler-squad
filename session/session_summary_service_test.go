@@ -26,19 +26,20 @@ type fakePoolClient struct {
 	calls int
 }
 
-func (f *fakePoolClient) CallBlocking(ctx context.Context, _ headless.FeatureKey, _, _ string, _ headless.CallOptions) (string, float64, error) {
+func (f *fakePoolClient) CallBlocking(ctx context.Context, _ headless.FeatureKey, _, _ string, _ headless.CallOptions, sink headless.CostSink) (string, error) {
 	f.calls++
 	if f.panics {
 		panic("fakePoolClient: simulated panic")
 	}
 	if f.block {
 		<-ctx.Done()
-		return "", 0, ctx.Err()
+		return "", ctx.Err()
 	}
+	sink(0)
 	if f.err != nil {
-		return "", 0, f.err
+		return "", f.err
 	}
-	return f.response, 0, nil
+	return f.response, nil
 }
 
 func newTestSessionSummaryGenerator(t *testing.T) (*SessionSummaryGenerator, *ent.Client, *fakePoolClient) {

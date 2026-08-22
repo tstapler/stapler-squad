@@ -2007,7 +2007,11 @@ func (s *SessionService) CreateSession(
 		session.StartSessionDriver(instance, instanceRootDir)
 
 		if instance.AutonomousMode && s.headlessPool != nil {
-			driver := session.NewAutonomousDriver(instance, s.headlessPool, instance.Prompt, 0)
+			costOpt := session.NoopDriverOption
+			if concreteStorage := s.GetStorage(); concreteStorage != nil {
+				costOpt = session.WithCostSink(session.CostSinkForSessionUUID(concreteStorage, instance.UUID))
+			}
+			driver := session.NewAutonomousDriver(instance, s.headlessPool, instance.Prompt, 0, costOpt)
 			driver.RegisterCompletionCallback(s.autonomousSvc.onAutonomousDriverComplete)
 			if driverErr := driver.Start(s.autonomousSvc.driverCtx()); driverErr != nil {
 				log.Warn("[CreateSession] failed to start autonomous driver", "session", instanceTitle, "err", driverErr)
@@ -4352,8 +4356,12 @@ func (s *SessionService) RunOneShot(
 
 	if s.headlessPool != nil {
 		// Use headless pool for improved streaming and session reuse.
+		sink := headless.DiscardCost
+		if concreteStorage := s.GetStorage(); concreteStorage != nil {
+			sink = session.CostSinkForSessionUUID(concreteStorage, inst.UUID)
+		}
 		var callErr error
-		outputStr, _, callErr = s.headlessPool.CallBlocking(runCtx, headless.FeatureKeyCustom, "", req.Msg.Prompt, headless.CallOptions{WorkDir: workDir})
+		outputStr, callErr = s.headlessPool.CallBlocking(runCtx, headless.FeatureKeyCustom, "", req.Msg.Prompt, headless.CallOptions{WorkDir: workDir}, sink)
 		if callErr != nil {
 			errMsg = callErr.Error()
 			exitCode = 1

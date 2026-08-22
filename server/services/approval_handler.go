@@ -60,7 +60,7 @@ type autoApprovalLogger interface {
 
 // headlessPoolApprover is the narrow interface ApprovalHandler needs from the headless pool.
 type headlessPoolApprover interface {
-	CallBlocking(ctx context.Context, key headless.FeatureKey, systemPrompt string, userPrompt string, opts headless.CallOptions) (string, float64, error)
+	CallBlocking(ctx context.Context, key headless.FeatureKey, systemPrompt string, userPrompt string, opts headless.CallOptions, sink headless.CostSink) (string, error)
 }
 
 // ApprovalHandler handles Claude Code HTTP hooks for PermissionRequest events.
@@ -441,12 +441,13 @@ createApproval:
 		const approvalSystemPrompt = `You are a security reviewer for an autonomous coding session.
 Evaluate the requested tool call and decide if it is safe to approve.
 Reply with APPROVE: <reason> if safe, or DENY: <reason> if risky.`
-		resp, _, llmErr := h.headlessPool.CallBlocking(
+		resp, llmErr := h.headlessPool.CallBlocking(
 			r.Context(),
 			headless.FeatureKeyAutonomousApproval,
 			approvalSystemPrompt,
 			query,
 			headless.CallOptions{WorkDir: payload.Cwd},
+			session.CostSinkForSessionUUID(h.storage, sessionID),
 		)
 		if llmErr == nil {
 			resp = strings.TrimSpace(resp)

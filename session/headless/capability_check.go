@@ -129,13 +129,13 @@ func (c *CodebaseReadCapabilitySelfCheck) run(pool PoolClient) bool {
 	checkCtx, cancel := context.WithTimeout(context.Background(), capabilityCheckTimeout)
 	defer cancel()
 
-	result, _, err := pool.CallBlocking(checkCtx, FeatureKeyCustom, "",
+	result, err := pool.CallBlocking(checkCtx, FeatureKeyCustom, "",
 		"Read the file marker.txt in your current working directory and output ONLY its exact contents, nothing else.",
 		CallOptions{
 			WorkDir:        tempDir,
 			AllowedTools:   CodebaseReadAllowedTools,
 			PermissionMode: "bypassPermissions",
-		})
+		}, DiscardCost)
 	if err != nil {
 		log.WarningLog.Printf("[headless] codebase-read capability self-check: CallBlocking failed: %v", err)
 		return false
