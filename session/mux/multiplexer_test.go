@@ -72,9 +72,11 @@ func TestMultiplexer_BroadcastToClients(t *testing.T) {
 	// `-race -count=50` the scheduler can preempt the reader goroutine in that gap and let
 	// the main goroutine call broadcastToClients before the reader ever reaches its Read
 	// call — reproduced directly (one failure in 50 iterations, "client 2 should receive
-	// broadcast", after a 10s read-deadline timeout). Signaling from *inside* readyReader's
-	// Read method — the statement immediately preceding the actual conn.Read call, with no
-	// function-call boundary in between — closes that gap.
+	// broadcast", after a 10s read-deadline timeout). Signaling from *inside* readySignalConn's
+	// Read method shrinks the gap to two adjacent statements (the close() and the call into
+	// c.Conn.Read) instead of a function-call/goroutine-scheduling-latency gap — the scheduler
+	// could in principle still preempt between them, but that makes recurrence practically
+	// negligible, not mathematically impossible.
 	var wg sync.WaitGroup
 	readMsg := func(conn net.Conn, readyCh chan<- struct{}) ([]byte, error) {
 		conn.SetReadDeadline(time.Now().Add(10 * time.Second))

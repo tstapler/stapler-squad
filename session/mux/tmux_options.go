@@ -38,8 +38,7 @@ func WriteSessionUserOptions(sessionName, socketPath, cwd, command string, pid i
 		{tmuxOptStartTime, strconv.FormatInt(startTime, 10)},
 	}
 	for _, opt := range opts {
-		// 10s to match ScanByUserOptions' list-sessions timeout below.
-		setCtx, setCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		setCtx, setCancel := context.WithTimeout(context.Background(), 5*time.Second)
 		args := prependIsolatedSocket([]string{"set-option", "-t", sessionName, opt.key, opt.value})
 		cmd := safeexec.CommandContext(setCtx, tmux.Binary(), args...)
 		out, runErr := cmd.CombinedOutput()
