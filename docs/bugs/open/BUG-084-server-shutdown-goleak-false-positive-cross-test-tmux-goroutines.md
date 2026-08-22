@@ -33,6 +33,10 @@ Confirmed unrelated to the diff in progress: that change only touches `session/r
 
 The first option is the most durable fix — it closes the same class of gap for any other goleak-sensitive test in the package, not just this one pairing.
 
+## Recurrence log
+
+- 2026-08-21, during the `make test` gate for PR #583 (`fix(tmux): eliminate AttachToExisting/RestoreWithWorkDir PTY-triple TOCTOU`): recurred with the identical signature under the second, fully-parallel `make test` invocation — same leaked set (`CommandExecutor.waitForCommandOrDrain`, `PTYConsumer.pollLoop`, `MangleCorrelator.StartEviction`, `RestoreWithWorkDir`'s diagnostic `os/exec.(*Cmd).Wait` goroutine), same `ptmx-race-repro-*` attribution. It was the only failure in the whole run. Confirmed **not** caused by that PR: the PR's diff touches no file under `server/`, and `RestoreWithWorkDir`'s diagnostic `waitOnce`/`cmd.Wait()` goroutine — the one tmux frame in the leak set — is byte-for-byte identical to `origin/main`'s (verified with `git show origin/main:session/tmux/tmux.go`). Passed 5/5 in isolation and passed the `server` package standalone (`go test -short ./server -count=1`, 16.899s) on the same tree, matching this bug's "not reproducible on demand" description. Logged rather than re-excused, per `.claude/rules/fix-flaky-tests-dont-defer.md`; the durable fix is still option 1 above (synchronous teardown for the tmux/PTY-backed session tests).
+
 ## Related Tasks
 
 Found during `make test` verification for the `session.Repository`/`session.PipelineModeRepository` interface-pollution audit task (`.claude/rules/interface-pollution-checklist.md`). Not fixed as part of that task — fixing cross-test goroutine-teardown synchronization in `CommandExecutor`/`ClaudeController`/`ResponseStream` is unrelated to, and substantially larger than, the interface-collapse work that surfaced it.
