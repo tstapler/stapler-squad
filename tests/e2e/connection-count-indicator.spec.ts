@@ -103,6 +103,16 @@ async function dismissOnboarding(page: import('@playwright/test').Page) {
 }
 
 test.describe('connection count indicator (multi-connection)', () => {
+  // Default is 30s (playwright.config.ts). These tests drive two independent
+  // browser contexts through session creation, a terminal-tab connect, and a
+  // multi-step assertion chain each — more sequential UI actions than a
+  // typical spec — so give them more headroom against the same hydration/
+  // slow-CPU action-timeout flake documented on SessionsPage.createBashSession.
+  // 120s covers the worst-case sum of every individual assertion's own
+  // timeout below (several 15s/30s waits back to back) plus setup, rather
+  // than relying on them overlapping favorably.
+  test.describe.configure({ timeout: 120000 });
+
   test.beforeEach(() => {
     test.skip(
       !HUB_PATH_ENABLED,
@@ -157,7 +167,15 @@ test.describe('connection count indicator (multi-connection)', () => {
       // steps (UX-AC-2) — the indicator is near the terminal chrome, no
       // navigation required.
       const indicatorA = detailA.getConnectionCountIndicator();
-      await expect(indicatorA).toBeVisible({ timeout: 15000 });
+      // The server only pushes a fresh connection_count frame on tab A's
+      // side-channel when SubscriberCount() changes (server/services/
+      // connectrpc_websocket.go's sendConnectionCountUpdates), polled once a
+      // second, plus the frontend's own 500ms coalesce debounce
+      // (ConnectionCountIndicator.tsx) — under a slow/contended CPU that
+      // whole round trip (server tick -> WS frame -> browser JS processing
+      // -> React re-render) has been observed taking well past 15s, so this
+      // wait gets extra headroom rather than assuming a healthy machine.
+      await expect(indicatorA).toBeVisible({ timeout: 30000 });
       await expect(indicatorA).toHaveAttribute('role', 'status');
       await expect(indicatorA).toHaveAttribute('aria-live', 'polite');
       await expect(indicatorA).toHaveAttribute('aria-label', '2 connections active');
@@ -215,7 +233,9 @@ test.describe('connection count indicator (multi-connection)', () => {
     await expect(pageB.getByText('Connected')).toBeVisible({ timeout: 15000 });
 
     const indicatorA = detailA.getConnectionCountIndicator();
-    await expect(indicatorA).toHaveAttribute('aria-label', '2 connections active', { timeout: 15000 });
+    // See the sibling test's identical wait for why this gets extra headroom
+    // beyond the mechanism's normal ~1.5s (1s server poll + 500ms debounce).
+    await expect(indicatorA).toHaveAttribute('aria-label', '2 connections active', { timeout: 30000 });
 
     // Close the second tab — hub's SubscriberCount() goes 2 -> 1.
     await contextB.close();

@@ -52,8 +52,17 @@ export class SessionsPage {
    * can open that same session from a second browser context/tab.
    */
   async createBashSession(namePrefix: string): Promise<string> {
-    await this.newSessionButton.click();
-    await this.page.getByRole('radio', { name: /temporary \(no git\)/i }).click();
+    // Explicit, generous timeout (default actionTimeout is 10s): shortly after
+    // first paint this button is still re-rendered once by a client-side nav
+    // hydration pass, which can detach-and-remount the exact DOM node
+    // Playwright resolved a moment earlier ("element was detached from the
+    // DOM, retrying" in the trace). Playwright already retries the click
+    // against the freshly-resolved locator when this happens, so the fix is
+    // budget, not logic — under load (slow CPU, cold JS parse/hydrate) a
+    // single retry cycle can itself take several seconds, and the default
+    // 10s window isn't always enough for the retry to land.
+    await this.newSessionButton.click({ timeout: 20000 });
+    await this.page.getByRole('radio', { name: /temporary \(no git\)/i }).click({ timeout: 15000 });
 
     const sessionTitle = `${namePrefix}-${Date.now()}`;
     await this.page.getByLabel('Session Name').fill(sessionTitle);
