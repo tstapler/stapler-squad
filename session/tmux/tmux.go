@@ -2697,11 +2697,9 @@ func cmCtx() (context.Context, context.CancelFunc) {
 // defaultCapturePaneTimeout bounds the zero-arg CapturePaneContent* wrappers'
 // subprocess execution. runGated/runGatedWith's context.WithTimeout only
 // bounds the exec-gate *wait*, not the tmux subprocess call itself (fn()) --
-// so a caller with no context of its own (context.Background()) previously
-// had no upper bound at all on the capture-pane call, letting a wedged tmux
-// server block the calling goroutine indefinitely. See the goroutine dump in
-// this fix's backlog item: CapturePaneContentContext blocked in
-// os/exec.(*Cmd).Output() via runGatedWith[...].
+// without this, a caller with no context of its own (context.Background())
+// would have no upper bound at all on the capture-pane call, letting a
+// wedged tmux server block the calling goroutine indefinitely.
 const defaultCapturePaneTimeout = 10 * time.Second
 
 // CapturePaneContent captures the content of the tmux pane.
