@@ -53,6 +53,7 @@ import {
   selectConnectionState,
   removeDetectedStatus,
 } from "@/lib/store/sessionsSlice";
+import { remoteHealthChanged } from "@/lib/store/remotesSlice";
 
 // ponytail: stable empty array so non-watching callers (e.g. useSessionActions
 // in each SessionCard) don't subscribe to the full sessions list. Without this,
@@ -301,6 +302,10 @@ export function useSessionService(
             createIfMissing: request.createIfMissing ?? false,
             initialPrompt: request.initialPrompt,
             autonomousMode: request.autonomousMode ?? false,
+            // No default (unlike autonomousMode) -- an omitted remote must stay omitted on
+            // the wire, not coerced to a zero-value RemoteTarget, so local session creation
+            // is byte-identical to pre-change behavior (ADR-001: remote-as-orthogonal-flag).
+            remote: request.remote,
             permissionMode: request.permissionMode ?? "",
             aliasName: request.aliasName ?? "",
             cliFlags: request.cliFlags ?? "",
@@ -892,6 +897,22 @@ export function useSessionService(
         if (sessionId) {
           dispatch(removeDetectedStatus(sessionId));
           dispatch(removeReviewQueueItem(sessionId));
+        }
+        break;
+      }
+      case "remoteHealthChanged": {
+        // ssh-remote-workspaces Epic 6.2: a configured remote's SSH connection
+        // health transitioned (session/sshremote.RemoteHealthProber, pushed
+        // over this same WatchSessions stream -- no separate subscription or
+        // polling). Routed into remotesSlice so RemoteConnectionIndicator can
+        // read it via selectRemoteConnectionState.
+        const remoteHealth = event.event.value;
+        if (remoteHealth.remoteName) {
+          dispatch(remoteHealthChanged({
+            remoteName: remoteHealth.remoteName,
+            state: remoteHealth.state,
+            previousState: remoteHealth.previousState,
+          }));
         }
         break;
       }

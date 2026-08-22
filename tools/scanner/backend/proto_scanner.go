@@ -262,6 +262,31 @@ var methodToID = map[string]string{
 	// PR creation RPCs
 	"DraftPullRequest":  "session:draft-pull-request",
 	"CreatePullRequest": "session:create-pull-request",
+	// Remote (SSH remote workspaces) RPCs (RemoteService in remote.proto).
+	// remote.proto was omitted from registry-generate-backend's explicit proto
+	// enumeration until this mapping was added (ssh-remote-workspaces Phase 6
+	// Epic 6.3, Story 6.3.1) -- these RPCs' // +api: markers in
+	// remote_service.go already used these exact kebab-case ids, so the ids
+	// here must match verbatim or ScanProto's method-name fallback would
+	// produce a second, non-marker-matching id and file.
+	"TestRemoteConnection":   "remote:test-connection",
+	"TrustRemoteHostKey":     "remote:trust-host-key",
+	"GenerateRemoteIdentity": "remote:generate-identity",
+	"ListRemotes":            "remote:list",
+	"CreateRemote":           "remote:create",
+	"DeleteRemote":           "remote:delete",
+	// Headless call RPC (HeadlessService in headless.proto). Found via
+	// TestMethodToIDCompleteness after that test was switched from a hardcoded proto file
+	// list to globbing proto/session/v1/*.proto -- headless.proto was invisible to every
+	// hardcoded proto enumeration in this repo (Makefile's registry-generate-backend,
+	// prune-stale-backend.sh, validate-registry.sh, AND this test's own old list), the same
+	// bug class ssh-remote-workspaces Phase 6 Epic 6.3 found and fixed for remote.proto.
+	// Only the methodToID mapping is added here (this map is what
+	// TestMethodToIDCompleteness checks); wiring headless.proto into the Makefile/
+	// prune-stale-backend.sh/validate-registry.sh's own scan enumerations so it actually
+	// gets a generated per-feature file is a separate, larger followup (a new feature's
+	// registry entries + testIds, not a completeness-test fix) -- out of scope here.
+	"RunHeadlessCall": "headless:run-call",
 }
 
 // rpcPattern matches lines like:   rpc MethodName(  (indented or not)

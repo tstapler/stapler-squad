@@ -100,7 +100,14 @@ func SetSessionOverrideLookup(lookup func(sessionName string) (forceHub bool, ok
 func (l *StreamOwnershipLock) Resolve(flagValue bool) StreamPath {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	return l.resolveLocked(flagValue)
+}
 
+// resolveLocked is Resolve's body, factored out so AcquireAndResolve can run
+// it while already holding l.mu for the duration of a caller-supplied
+// critical section (Story 3.1.2) instead of re-locking. Callers must hold
+// l.mu before calling this.
+func (l *StreamOwnershipLock) resolveLocked(flagValue bool) StreamPath {
 	if !l.resolved {
 		effective := flagValue
 		if lookup := sessionOverrideLookup.Load(); lookup != nil {
@@ -116,6 +123,42 @@ func (l *StreamOwnershipLock) Resolve(flagValue bool) StreamPath {
 		l.resolved = true
 	}
 	return l.path
+}
+
+// AcquireAndResolve holds this lock's mutex for the full duration of fn,
+// resolving flagValue into this session's sticky StreamPath first (identical
+// semantics to Resolve) and passing it to fn before releasing. Unlike
+// Resolve/ResolveExpecting — which only hold the mutex across the cheap
+// resolve-and-cache step, then let the caller act on the result
+// unsynchronized — AcquireAndResolve is Story 3.1.2's actual mutual-exclusion
+// primitive: Instance.StartControlMode and HubRegistry.GetOrCreate both call
+// it (not just Resolve) around their own side effect (starting the
+// control-mode subprocess, or creating the hub), so a concurrent GetOrCreate
+// genuinely blocks on an in-flight StartControlMode for the same session
+// (and vice versa) instead of both racing to resolve first and only checking
+// the outcome afterward. This closes the gap where mutual exclusion held
+// only for callers that remembered to check ownership before proceeding —
+// StartControlMode now enforces it unconditionally for every caller,
+// present or future.
+func (l *StreamOwnershipLock) AcquireAndResolve(flagValue bool, fn func(StreamPath) error) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	path := l.resolveLocked(flagValue)
+	return fn(path)
+}
+
+// AcquireAndResolveExpecting is AcquireAndResolve plus ResolveExpecting's
+// want-path assertion: fn only runs if the resolved path matches want:
+// otherwise AcquireAndResolveExpecting returns ErrOwnershipResolvedToOtherPath
+// without running fn, exactly like ResolveExpecting's error contract, but
+// with the same held-lock guarantee AcquireAndResolve provides.
+func (l *StreamOwnershipLock) AcquireAndResolveExpecting(flagValue bool, want StreamPath, fn func() error) error {
+	return l.AcquireAndResolve(flagValue, func(got StreamPath) error {
+		if got != want {
+			return fmt.Errorf("%w: resolved %v, wanted %v", ErrOwnershipResolvedToOtherPath, got, want)
+		}
+		return fn()
+	})
 }
 
 // ResolveExpecting resolves the lock exactly like Resolve, but additionally

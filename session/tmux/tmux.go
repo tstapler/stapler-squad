@@ -52,6 +52,14 @@ type TmuxSession struct {
 	ptyFactory PtyFactory
 	// cmdExec is used to execute commands in the tmux session.
 	cmdExec executor.Executor
+	// runner is the CommandRunner execution seam for the direct
+	// safeexec.CommandContext call sites in this file that are NOT already
+	// routed through cmdExec (see ADR-002). Defaults to LocalRunner{} via
+	// commandRunner() below when unset (e.g. a struct literal built directly
+	// in a test), so every existing construction path keeps working
+	// unchanged. Phase 2 (SSH remote workspaces) swaps this at construction
+	// time for a remote-backed implementation.
+	runner CommandRunner
 
 	// Initialized by Start or Restore
 	//
@@ -148,7 +156,17 @@ type TmuxSession struct {
 	noCacheSF singleflight.Group //nolint:exhaustruct
 
 	// Control mode streaming infrastructure (replaces pipe-pane + FIFO)
-	controlModeCmd         *exec.Cmd              // tmux -C attach process
+	controlModeCmd *exec.Cmd // tmux -C attach process (LOCAL only -- nil for a remote-backed CM connection; existing tests construct fake *exec.Cmd values directly against this field, so its type/zero-value semantics are unchanged by Epic 4.4)
+	// controlModeRemoteProc holds SSH-channel-backed teardown state for a
+	// remote control-mode connection (StartControlMode's IsRemote() branch,
+	// ssh-remote-workspaces Phase 4, Task 4.4.1c). Exactly one of
+	// controlModeCmd/controlModeRemoteProc is non-nil while control mode is
+	// running; both nil when it is not. Kept as a separate field rather than
+	// retyping controlModeCmd so every pre-existing local-only test that
+	// pokes controlModeCmd directly (control_mode_refcount_test.go,
+	// kill_orphaned_control_mode_clients_test.go) keeps compiling and passing
+	// unmodified.
+	controlModeRemoteProc  *remoteControlModeProc
 	controlModeStdout      io.ReadCloser          // stdout pipe for control mode notifications
 	controlModeStdin       io.WriteCloser         // stdin pipe for control mode commands
 	controlModeDone        chan struct{}          // Signal channel for control mode termination
@@ -334,6 +352,19 @@ func (t *TmuxSession) GetSanitizedName() string {
 	return t.sanitizedName
 }
 
+// commandRunner returns t.runner, defaulting to LocalRunner{} when unset.
+// The public constructors all set runner explicitly (see newTmuxSessionWithSocket
+// and NewTmuxSessionFromExistingWithServerSocket), but this lazy default also
+// covers TmuxSession values built via a direct struct literal (as several
+// existing tests do) so they keep today's local-subprocess behavior without
+// needing to know about this seam.
+func (t *TmuxSession) commandRunner() CommandRunner {
+	if t.runner == nil {
+		return LocalRunner{}
+	}
+	return t.runner
+}
+
 // ResetExitOnce resets the exit callback so it can fire again after a session restart.
 // Also clears intentionalStop so the next StopControlMode() correctly guards the callback.
 // Resets control mode refcount/cmd/exited so a stale dead process left by a prior crash
@@ -345,6 +376,7 @@ func (t *TmuxSession) ResetExitOnce() {
 	t.controlModeSubMu.Lock()
 	t.controlModeRefCount = 0
 	t.controlModeCmd = nil
+	t.controlModeRemoteProc = nil
 	t.controlModeExited = false
 	t.controlModeSubMu.Unlock()
 }
@@ -369,14 +401,14 @@ func ListAllSessions(serverSocket string) (map[string]bool, error) {
 	listCtx, listCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer listCancel()
 	out, err := runGated(listCtx, serverSocket, func() ([]byte, error) {
-		return safeexec.CommandContext(listCtx, Binary(), args...).Output()
+		return (LocalRunner{}).Run(listCtx, "", Binary(), args...)
 	})
 	if err != nil {
-		// Collect stderr for server-down detection
-		combinedOutput := []byte(err.Error())
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			combinedOutput = append(combinedOutput, exitErr.Stderr...)
-		}
+		// Collect output for server-down detection. Run() returns combined
+		// stdout+stderr (unlike the .Output() call this replaced, whose
+		// stderr surfaced separately via err.(*exec.ExitError).Stderr), so
+		// `out` here already carries what that Stderr field used to.
+		combinedOutput := append([]byte(err.Error()), out...)
 		if serverNotRunning(combinedOutput) {
 			return nil, ErrServerDown
 		}
@@ -399,7 +431,7 @@ func checkServerNotRunning(serverSocket string) bool {
 	checkCtx, checkCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer checkCancel()
 	out, err := runGated(checkCtx, serverSocket, func() ([]byte, error) {
-		return safeexec.CommandContext(checkCtx, Binary(), args...).CombinedOutput()
+		return (LocalRunner{}).Run(checkCtx, "", Binary(), args...)
 	})
 	return err != nil && serverNotRunning(out)
 }
@@ -580,7 +612,7 @@ func EnsureServerRunning(serverSocket string) (TmuxServerReady, error) {
 		startCtx, startCancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer startCancel()
 		return runGated(startCtx, serverSocket, func() ([]byte, error) {
-			return safeexec.CommandContext(startCtx, Binary(), args...).CombinedOutput()
+			return (LocalRunner{}).Run(startCtx, "", Binary(), args...)
 		})
 	}
 	// Under heavy concurrent tmux usage, the list-sessions check above can itself
@@ -604,7 +636,7 @@ func EnsureServerRunning(serverSocket string) (TmuxServerReady, error) {
 	remainCtx, remainCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer remainCancel()
 	if out, err := runGated(remainCtx, serverSocket, func() ([]byte, error) {
-		return safeexec.CommandContext(remainCtx, Binary(), remainArgs...).CombinedOutput()
+		return (LocalRunner{}).Run(remainCtx, "", Binary(), remainArgs...)
 	}); err != nil {
 		log.Warn("[tmux] failed to set global remain-on-exit default", "err", err, "output", string(out))
 	}
@@ -626,7 +658,7 @@ func KillOrphanedControlModeClients(serverSocket string) (int, error) {
 	args := prependSocket(serverSocket, []string{"list-clients", "-F", "#{client_pid} #{client_control_mode}"})
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	out, err := safeexec.CommandContext(ctx, Binary(), args...).Output()
+	out, err := (LocalRunner{}).Run(ctx, "", Binary(), args...)
 	if err != nil {
 		// No server running yet, or no clients at all -- nothing to clean up.
 		return 0, nil
@@ -683,7 +715,7 @@ func SetExitEmpty(serverSocket string, enabled bool) error {
 	optCtx, optCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer optCancel()
 	out, err := runGated(optCtx, serverSocket, func() ([]byte, error) {
-		return safeexec.CommandContext(optCtx, Binary(), args...).CombinedOutput()
+		return (LocalRunner{}).Run(optCtx, "", Binary(), args...)
 	})
 	if err != nil {
 		return fmt.Errorf("tmux set-option exit-empty %s failed: %w (output: %s)", value, err, out)
@@ -702,7 +734,8 @@ func CreateKeepaliveSession(serverSocket string) error {
 	hasCtx, hasCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer hasCancel()
 	hasErr := runGatedErr(hasCtx, serverSocket, func() error {
-		return safeexec.CommandContext(hasCtx, Binary(), hasArgs...).Run()
+		_, err := (LocalRunner{}).Run(hasCtx, "", Binary(), hasArgs...)
+		return err
 	})
 	if hasErr == nil {
 		return nil // already exists
@@ -713,7 +746,7 @@ func CreateKeepaliveSession(serverSocket string) error {
 	newCtx, newCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer newCancel()
 	out, err := runGated(newCtx, serverSocket, func() ([]byte, error) {
-		return safeexec.CommandContext(newCtx, Binary(), newArgs...).CombinedOutput()
+		return (LocalRunner{}).Run(newCtx, "", Binary(), newArgs...)
 	})
 	if err != nil {
 		return fmt.Errorf("failed to create keepalive session: %w (output: %s)", err, out)
@@ -752,32 +785,35 @@ func tmuxCircuitBreakerConfig() executor.CircuitBreakerConfig {
 
 // NewTmuxSession creates a new TmuxSession with the given name and program.
 // The executor is wrapped with a CircuitBreakerExecutor for resilience.
-func NewTmuxSession(name string, program string) *TmuxSession {
+// opts is trailing/variadic so existing call sites are unaffected; pass
+// WithCommandRunner to inject a non-default CommandRunner (e.g. a
+// remote-backed one in Phase 2, or a test spy).
+func NewTmuxSession(name string, program string, opts ...TmuxSessionOption) *TmuxSession {
 	baseExec := executor.MakeTimeoutExecutor(5 * time.Second)
 	cbExec := executor.NewCircuitBreakerExecutor(baseExec, tmuxCircuitBreakerConfig())
 	key := "tmux-" + name
 	executor.GetGlobalRegistry().Register(key, cbExec)
-	s := newTmuxSession(name, program, MakePtyFactory(), cbExec, TmuxPrefix)
+	s := newTmuxSession(name, program, MakePtyFactory(), cbExec, TmuxPrefix, opts...)
 	s.registryKey = key
 	return s
 }
 
 // NewTmuxSessionWithPrefix creates a new TmuxSession with a custom prefix for process isolation.
 // The executor is wrapped with a CircuitBreakerExecutor for resilience.
-func NewTmuxSessionWithPrefix(name string, program string, prefix string) *TmuxSession {
+func NewTmuxSessionWithPrefix(name string, program string, prefix string, opts ...TmuxSessionOption) *TmuxSession {
 	baseExec := executor.MakeTimeoutExecutor(5 * time.Second)
 	cbExec := executor.NewCircuitBreakerExecutor(baseExec, tmuxCircuitBreakerConfig())
 	key := "tmux-" + name
 	executor.GetGlobalRegistry().Register(key, cbExec)
-	s := newTmuxSession(name, program, MakePtyFactory(), cbExec, prefix)
+	s := newTmuxSession(name, program, MakePtyFactory(), cbExec, prefix, opts...)
 	s.registryKey = key
 	return s
 }
 
 // NewTmuxSessionWithCleanup creates a new TmuxSession and returns it along with a cleanup function.
 // Usage: session, cleanup := NewTmuxSessionWithCleanup(name, program); defer cleanup()
-func NewTmuxSessionWithCleanup(name string, program string) (*TmuxSession, CleanupFunc) {
-	session := NewTmuxSession(name, program)
+func NewTmuxSessionWithCleanup(name string, program string, opts ...TmuxSessionOption) (*TmuxSession, CleanupFunc) {
+	session := NewTmuxSession(name, program, opts...)
 	cleanup := CleanupFunc(func() error {
 		return session.Close()
 	})
@@ -786,8 +822,8 @@ func NewTmuxSessionWithCleanup(name string, program string) (*TmuxSession, Clean
 
 // NewTmuxSessionWithPrefixAndCleanup creates a new TmuxSession with custom prefix and cleanup function.
 // Usage: session, cleanup := NewTmuxSessionWithPrefixAndCleanup(name, program, prefix); defer cleanup()
-func NewTmuxSessionWithPrefixAndCleanup(name string, program string, prefix string) (*TmuxSession, CleanupFunc) {
-	session := NewTmuxSessionWithPrefix(name, program, prefix)
+func NewTmuxSessionWithPrefixAndCleanup(name string, program string, prefix string, opts ...TmuxSessionOption) (*TmuxSession, CleanupFunc) {
+	session := NewTmuxSessionWithPrefix(name, program, prefix, opts...)
 	cleanup := CleanupFunc(func() error {
 		return session.Close()
 	})
@@ -820,8 +856,8 @@ func NewTmuxSessionWithServerSocket(name string, program string, prefix string, 
 
 // NewTmuxSessionWithServerSocketAndCleanup creates a TmuxSession with server isolation and cleanup.
 // Usage: session, cleanup := NewTmuxSessionWithServerSocketAndCleanup(name, program, prefix, socket); defer cleanup()
-func NewTmuxSessionWithServerSocketAndCleanup(name string, program string, prefix string, serverSocket string) (*TmuxSession, CleanupFunc) {
-	session := NewTmuxSessionWithServerSocket(name, program, prefix, serverSocket)
+func NewTmuxSessionWithServerSocketAndCleanup(name string, program string, prefix string, serverSocket string, opts ...TmuxSessionOption) (*TmuxSession, CleanupFunc) {
+	session := NewTmuxSessionWithServerSocket(name, program, prefix, serverSocket, opts...)
 	cleanup := CleanupFunc(func() error {
 		return session.Close()
 	})
@@ -831,12 +867,15 @@ func NewTmuxSessionWithServerSocketAndCleanup(name string, program string, prefi
 // NewTmuxSessionWithDeps creates a new TmuxSession with provided dependencies for testing.
 // WithRegistry(nil) is passed so DoesSessionExist() uses cmdExec (the mock) instead of the
 // global TmuxServerRegistry, which connects to real tmux and would bypass the mock executor.
-func NewTmuxSessionWithDeps(name string, program string, ptyFactory PtyFactory, cmdExec executor.Executor) *TmuxSession {
-	return newTmuxSessionWithSocket(name, program, ptyFactory, cmdExec, TmuxPrefix, "", WithRegistry(nil))
+// Additional opts (e.g. WithCommandRunner) are applied after WithRegistry(nil), so callers
+// can still override further.
+func NewTmuxSessionWithDeps(name string, program string, ptyFactory PtyFactory, cmdExec executor.Executor, opts ...TmuxSessionOption) *TmuxSession {
+	allOpts := append([]TmuxSessionOption{WithRegistry(nil)}, opts...)
+	return newTmuxSessionWithSocket(name, program, ptyFactory, cmdExec, TmuxPrefix, "", allOpts...)
 }
 
-func newTmuxSession(name string, program string, ptyFactory PtyFactory, cmdExec executor.Executor, prefix string) *TmuxSession {
-	return newTmuxSessionWithSocket(name, program, ptyFactory, cmdExec, prefix, "")
+func newTmuxSession(name string, program string, ptyFactory PtyFactory, cmdExec executor.Executor, prefix string, opts ...TmuxSessionOption) *TmuxSession {
+	return newTmuxSessionWithSocket(name, program, ptyFactory, cmdExec, prefix, "", opts...)
 }
 
 // TmuxSessionOption is a functional option for TmuxSession construction.
@@ -849,6 +888,16 @@ func WithRegistry(r SessionExistenceChecker) TmuxSessionOption {
 	return func(t *TmuxSession) {
 		t.registry = r
 		t.registryExplicit = true
+	}
+}
+
+// WithCommandRunner injects a CommandRunner, overriding the LocalRunner{}
+// default every constructor otherwise applies. Used to swap in a
+// remote-backed CommandRunner (Phase 2 of ssh-remote-workspaces) or a test
+// spy that records/controls what the session's subprocess calls do.
+func WithCommandRunner(r CommandRunner) TmuxSessionOption {
+	return func(t *TmuxSession) {
+		t.runner = r
 	}
 }
 
@@ -865,6 +914,7 @@ func newTmuxSessionWithSocket(name string, program string, ptyFactory PtyFactory
 		serverSocket:     serverSocket,
 		ptyFactory:       ptyFactory,
 		cmdExec:          cmdExec,
+		runner:           LocalRunner{},
 		bannerFilter:     NewBannerFilter(),         // Initialize banner filter for terminal output filtering
 		externalResizeCh: make(chan windowSize, 10), // Buffered channel for resize events
 		existsCacheTTL:   existsCacheDefaultTTL,
@@ -891,15 +941,15 @@ func newTmuxSessionWithSocket(name string, program string, ptyFactory PtyFactory
 // This is used for external sessions discovered via mux socket monitoring that already have tmux sessions.
 //
 // The session must already exist in tmux. Call AttachToExisting() after creation to establish the PTY connection.
-func NewTmuxSessionFromExisting(exactSessionName string) *TmuxSession {
-	return NewTmuxSessionFromExistingWithServerSocket(exactSessionName, "")
+func NewTmuxSessionFromExisting(exactSessionName string, opts ...TmuxSessionOption) *TmuxSession {
+	return NewTmuxSessionFromExistingWithServerSocket(exactSessionName, "", opts...)
 }
 
 // NewTmuxSessionFromExistingWithServerSocket is like NewTmuxSessionFromExisting but targets an
 // isolated tmux server socket (e.g. a shell session's TmuxServerSocket) instead of the default
 // server. serverSocket is resolved through ResolveSocket, so test-mode isolation still applies
 // when the caller passes "".
-func NewTmuxSessionFromExistingWithServerSocket(exactSessionName string, serverSocket string) *TmuxSession {
+func NewTmuxSessionFromExistingWithServerSocket(exactSessionName string, serverSocket string, opts ...TmuxSessionOption) *TmuxSession {
 	baseExec := executor.MakeExecutor()
 	cbExec := executor.NewCircuitBreakerExecutor(baseExec, tmuxCircuitBreakerConfig())
 	key := "tmux-ext-" + exactSessionName
@@ -910,6 +960,7 @@ func NewTmuxSessionFromExistingWithServerSocket(exactSessionName string, serverS
 		serverSocket:     ResolveSocket(serverSocket).String(),
 		ptyFactory:       MakePtyFactory(),
 		cmdExec:          cbExec,
+		runner:           LocalRunner{},
 		registryKey:      key,
 		bannerFilter:     NewBannerFilter(),
 		externalResizeCh: make(chan windowSize, 10),
@@ -917,6 +968,9 @@ func NewTmuxSessionFromExistingWithServerSocket(exactSessionName string, serverS
 	}
 	s.lastKnownCols.Store(defaultAttachCols)
 	s.lastKnownRows.Store(defaultAttachRows)
+	for _, opt := range opts {
+		opt(s)
+	}
 	return s
 }
 
@@ -988,6 +1042,16 @@ func (t *TmuxSession) buildTmuxCommand(args ...string) *exec.Cmd {
 // timeout into the command's context (consumed by t.cmdExec.Run, same as
 // every other tmux invocation in this file) gets the same bounded-hang
 // protection without a second, uninjectable executor.
+//
+// Deliberately NOT migrated to t.commandRunner() (Phase 1's CommandRunner
+// seam, ADR-002): this constructs an *exec.Cmd for t.cmdExec's
+// circuit-breaker Run/Output/CombinedOutput methods to execute later, and
+// for buildAttachCommand's PTY attach -- neither of which CommandRunner.Run
+// (execute now, return bytes) or .Start (piped, no *exec.Cmd handle) can
+// represent. t.cmdExec (executor.Executor) is a pre-existing, orthogonal
+// seam (test-injection/circuit-breaking) with its own default
+// (executor.MakeExecutor/MakeTimeoutExecutor); unifying it with the
+// local/remote-host seam is out of scope for this local-only phase.
 func (t *TmuxSession) buildTmuxCommandContext(ctx context.Context, args ...string) *exec.Cmd {
 	var cmdArgs []string
 
@@ -1014,6 +1078,16 @@ func (t *TmuxSession) buildAttachCommand() *exec.Cmd {
 		cmd.Env = append(os.Environ(), "TERM=xterm-256color")
 	}
 	return cmd
+}
+
+// AttachArgs returns the tmux argv (socket flag + "attach-session -t name")
+// this session's raw-PTY attach uses locally (buildAttachCommand) -- exposed
+// so callers outside this package can build the equivalent remote attach via
+// a RemotePtyFactory (session/tmux/pty.go, ssh-remote-workspaces Task
+// 4.4.1d: server/services/session_service.go's StreamTerminal raw-PTY
+// fallback for a remote session) without reaching into unexported fields.
+func (t *TmuxSession) AttachArgs() []string {
+	return Socket(t.serverSocket).Args("attach-session", "-t", t.sanitizedName)
 }
 
 // Start creates and starts a new tmux session, then attaches to it. Program is the command to run in
@@ -1115,6 +1189,21 @@ func (t *TmuxSession) preconfigureServerBeforeSession() {
 
 // start is the internal implementation for Start and StartWithCleanup
 func (t *TmuxSession) start(workDir string, setupCleanup bool, cleanup *CleanupFunc) error {
+	// This method unconditionally builds and runs a LOCAL *exec.Cmd via
+	// t.cmdExec -- unlike EnsureRemoteSession, it has no CommandRunner-routed
+	// remote path. Refuse loudly for a remote-backed session instead of
+	// silently operating against the wrong host, matching the same
+	// commandRunner().IsRemote() guard SetWindowSize/RefreshClient already
+	// have. This is cheap defense-in-depth, not a fix for the underlying
+	// gap: today the only way this path is reached for a remote session is
+	// the not-yet-implemented resume-after-restart flow (see commit
+	// 808e70eee's "Known gap" note and session/instance.go's resume path) --
+	// EnsureRemoteSession is the correct entry point for starting a fresh
+	// remote session.
+	if t.commandRunner().IsRemote() {
+		return fmt.Errorf("start: no local-subprocess fallback for remote session %q -- use EnsureRemoteSession instead", t.sanitizedName)
+	}
+
 	// Use a no-cache check here to detect stale sessions from previous server runs.
 	// The registry only tracks sessions from the current run, so a session left over
 	// from a crashed/restarted server would not be in the registry and DoesSessionExist()
@@ -1291,6 +1380,142 @@ func (t *TmuxSession) start(workDir string, setupCleanup bool, cleanup *CleanupF
 	// Session is created and ready - let the user handle any program-specific interactions
 	log.Info("tmux session created successfully", "session", t.sanitizedName, "program", programWithHistory)
 	return nil
+}
+
+// ErrEnsureRemoteSessionRequiresRemoteRunner is returned by EnsureRemoteSession
+// when t's CommandRunner is not remote. The local session-creation path
+// (start(), reached via Start/StartWithCleanup) already implements the
+// equivalent existence-check-then-create flow against t.cmdExec/PTY
+// machinery; EnsureRemoteSession exists specifically for the remote case,
+// where the connection itself (not just the command) can drop mid-flight.
+var ErrEnsureRemoteSessionRequiresRemoteRunner = errors.New("EnsureRemoteSession requires a remote CommandRunner")
+
+// EnsureRemoteSession creates the remote tmux session t.sanitizedName over
+// t.commandRunner() if it does not already exist, reusing it if it does.
+// This is Story 2.3.2's existence-check-before-create logic in isolation:
+// unlike start() (the local session-creation path), it does not set up a
+// PTY, control mode, or any of the other local-session machinery -- wiring
+// a remote TmuxSession into a full production session lifecycle is Phase
+// 4's job (project_plans/ssh-remote-workspaces/implementation/plan.md), not
+// this epic's.
+//
+// The failure mode this closes (research/pitfalls.md §1): an SSH channel
+// drop mid-command can be indistinguishable, from the caller's side, from
+// the remote command itself failing -- the remote tmux new-session may have
+// already succeeded even though Run() returned an error. A caller that
+// blindly retries plain "new-session" on that basis would get "duplicate
+// session" at best, or -- if the sanitized name were ever allowed to differ
+// between attempts -- a genuine duplicate at worst.
+//
+// This is NOT closed by "-A" (attach-if-exists) alone, despite that being
+// the obvious-looking fix: "-A" attaches to an already-existing session by
+// re-executing the client against it, which requires a PTY -- and
+// SSHRunner.Run never requests one (no RequestPty call anywhere in
+// ssh_runner.go, by design: Run is the one-shot "get combined output"
+// case, not an interactive attach). Confirmed empirically
+// (TestNewSessionA_AgainstExistingSession_FailsOverNonPTYChannel): "tmux
+// new-session -A -d" against an already-existing session, run over a
+// non-PTY SSH channel, fails with "open terminal failed: not a terminal"
+// (exit status 1) -- it does not silently attach. So "-A" alone still
+// leaves a caller-visible error in the exact race window this function
+// exists to close: has-session reports absent, a concurrent creator (a
+// prior dropped-connection retry, or a genuinely concurrent caller) wins
+// before this call's own new-session -A runs, and that new-session -A then
+// fails against the now-existing session for the PTY reason above.
+//
+// The actual sequence, each command run through wrapRemoteCommand (Story
+// 2.3.1) since t.commandRunner().IsRemote() is required to call this at
+// all:
+//  1. An explicit "has-session" check first (remoteHasSession), so a caller
+//     can distinguish "reused" from "created" without depending on
+//     new-session's exit code, and so the common case (no race) never
+//     issues a doomed-to-fail new-session -A against an existing session.
+//  2. If absent, "new-session -A -d ..." (createRemoteSession). "-A" still
+//     matters here even though it can't silently attach over a non-PTY
+//     channel: without it, a race-losing new-session would fail with
+//     "duplicate session" -- a different, but equally real, tmux-side error
+//     -- so this is not "assume -A works and skip everything else," it's
+//     "keep -A anyway (correct if a PTY caller ever attaches through this
+//     path) and add the recheck this channel actually needs."
+//  3. If step 2 fails, one more remoteHasSession recheck before surfacing
+//     the error: if the session now exists, that failure was the race
+//     above, not a real creation failure, and is treated as success.
+func (t *TmuxSession) EnsureRemoteSession(ctx context.Context, workDir string) error {
+	runner := t.commandRunner()
+	if !runner.IsRemote() {
+		return fmt.Errorf("%w (session %q)", ErrEnsureRemoteSessionRequiresRemoteRunner, t.sanitizedName)
+	}
+
+	if t.remoteHasSession(ctx, runner) {
+		log.Info("remote tmux session already exists, reusing", "session", t.sanitizedName)
+		return nil
+	}
+	log.Info("remote tmux session not found, will create", "session", t.sanitizedName)
+
+	// NOT validateWorkDir: that helper's os.Stat(workDir) checks THIS PROCESS's
+	// local filesystem, which is the right check for the local start() path
+	// (validateWorkDir's other two call sites) but wrong here -- workDir is a
+	// path on the remote host, which this process cannot os.Stat at all. A
+	// remote path that happens to also exist locally (e.g. this package's own
+	// tests, whose "remote" is a co-located test sshd exec'ing against the real
+	// local filesystem) would pass either check, silently masking the bug for
+	// every test written against that pattern; a genuinely different remote
+	// path would always fail validateWorkDir's local stat regardless of whether
+	// it exists on the actual remote host. Checked via the runner instead,
+	// mirroring RemoteWorktreeOps.CreateWorktree's own remote `test -d`
+	// base_path check (session/git/remote_worktree.go).
+	if workDir == "" {
+		return fmt.Errorf("cannot start remote tmux session %s: working directory not set: %w", t.sanitizedName, ErrWorkDirMissing)
+	}
+	existsCtx, existsCancel := context.WithTimeout(ctx, ExistenceCheckTimeout)
+	defer existsCancel()
+	if out, err := runner.Run(existsCtx, "", "test", "-d", workDir); err != nil {
+		return fmt.Errorf("cannot start remote tmux session %s: working directory %q is not accessible on remote host: %w: %s",
+			t.sanitizedName, workDir, ErrWorkDirMissing, strings.TrimSpace(string(out)))
+	}
+
+	return t.createRemoteSession(ctx, runner, workDir)
+}
+
+// createRemoteSession runs "tmux new-session -A -d" for t.sanitizedName
+// over runner (already confirmed remote by the caller). See
+// EnsureRemoteSession's doc comment for why a new-session -A failure
+// triggers one more remoteHasSession recheck before being surfaced as an
+// error, rather than being trusted at face value: over SSHRunner's non-PTY
+// channel, "-A" against an already-existing session fails instead of
+// silently attaching, and that specific failure must not be reported as
+// "session creation failed" when the session in fact exists.
+func (t *TmuxSession) createRemoteSession(ctx context.Context, runner CommandRunner, workDir string) error {
+	newArgs := []string{"new-session", "-A", "-d", "-s", t.sanitizedName, "-c", workDir, t.program}
+	newArgs = Socket(t.serverSocket).Args(newArgs...)
+	newName, newArgs := wrapRemoteCommand(Binary(), newArgs)
+	newCtx, newCancel := context.WithTimeout(ctx, LongRunningCommandTimeout)
+	defer newCancel()
+	out, err := runner.Run(newCtx, "", newName, newArgs...)
+	if err != nil {
+		if t.remoteHasSession(ctx, runner) {
+			log.Info("remote tmux new-session -A failed but session exists (race with a concurrent creator), treating as success",
+				"session", t.sanitizedName, "newSessionErr", err, "newSessionOutput", strings.TrimSpace(string(out)))
+			return nil
+		}
+		return fmt.Errorf("failed to create/attach remote tmux session %s: %w (output: %s)", t.sanitizedName, err, out)
+	}
+
+	log.Info("remote tmux session ensured", "session", t.sanitizedName, "workDir", workDir)
+	return nil
+}
+
+// remoteHasSession runs "tmux has-session" for t.sanitizedName over runner
+// (already confirmed remote by the caller), bounded by
+// ExistenceCheckTimeout nested inside ctx, and reports whether it succeeded
+// (the session exists).
+func (t *TmuxSession) remoteHasSession(ctx context.Context, runner CommandRunner) bool {
+	hasArgs := Socket(t.serverSocket).Args("has-session", "-t", t.sanitizedName)
+	hasName, hasArgs := wrapRemoteCommand(Binary(), hasArgs)
+	hasCtx, hasCancel := context.WithTimeout(ctx, ExistenceCheckTimeout)
+	defer hasCancel()
+	_, err := runner.Run(hasCtx, "", hasName, hasArgs...)
+	return err == nil
 }
 
 // Restore attaches to an existing session and restores the window size
@@ -2128,24 +2353,37 @@ func (t *TmuxSession) SetWindowSize(cols, rows int) error {
 		ctx, cancel := cmCtx()
 		defer cancel()
 		if _, cmErr := t.sendCMCommand(ctx,
-			"resize-window", "-t", t.sanitizedName, "-x", colsStr, "-y", rowsStr); cmErr != nil {
+			"resize-window", "-t", t.sanitizedName, "-x", colsStr, "-y", rowsStr); cmErr == nil {
+			// Store requested dimensions for future PTY attach connections (via attach-session -x/-y).
+			t.lastKnownCols.Store(int32(cols))
+			t.lastKnownRows.Store(int32(rows))
+			return nil
+		} else {
 			log.Debug("SetWindowSize CM path failed, falling back", "session", t.sanitizedName, "err", cmErr)
-			cmd := t.buildTmuxCommand("resize-window", "-t", t.sanitizedName, "-x", colsStr, "-y", rowsStr)
-			if err := runGatedErr(context.Background(), t.serverSocket, func() error {
-				return t.cmdExec.Run(cmd)
-			}); err != nil {
-				log.Error("tmux resize-window failed", "session", t.sanitizedName, "err", err)
-				return fmt.Errorf("failed to resize tmux window: %w", err)
-			}
 		}
-	} else {
-		cmd := t.buildTmuxCommand("resize-window", "-t", t.sanitizedName, "-x", colsStr, "-y", rowsStr)
-		if err := runGatedErr(context.Background(), t.serverSocket, func() error {
-			return t.cmdExec.Run(cmd)
-		}); err != nil {
-			log.Error("tmux resize-window failed", "session", t.sanitizedName, "err", err)
-			return fmt.Errorf("failed to resize tmux window: %w", err)
-		}
+	}
+
+	// Every path below this point goes through t.cmdExec, which is always
+	// local (see buildTmuxCommandContext's doc comment) -- there is no
+	// commandRunner()-routed equivalent of this circuit-breaker-gated
+	// *exec.Cmd path, mirroring RefreshClient's identical guard/doc comment
+	// a few functions below. For a remote session that reaches here (CM
+	// disabled entirely, or its resize-window command itself just failed
+	// above), silently resizing the LOCAL tmux server's window would be a
+	// no-op at best and leave the actual remote tmux pane at the wrong size
+	// with no error surfaced to the caller -- refusing outright is strictly
+	// safer than that silent no-op. The CM path above is the real
+	// remote-appropriate resize mechanism and is always tried first.
+	if t.commandRunner().IsRemote() {
+		return fmt.Errorf("resize-window: control mode unavailable for remote session %q and there is no local-subprocess fallback for a remote host", t.sanitizedName)
+	}
+
+	cmd := t.buildTmuxCommand("resize-window", "-t", t.sanitizedName, "-x", colsStr, "-y", rowsStr)
+	if err := runGatedErr(context.Background(), t.serverSocket, func() error {
+		return t.cmdExec.Run(cmd)
+	}); err != nil {
+		log.Error("tmux resize-window failed", "session", t.sanitizedName, "err", err)
+		return fmt.Errorf("failed to resize tmux window: %w", err)
 	}
 
 	// Store requested dimensions for future PTY attach connections (via attach-session -x/-y).
@@ -2206,14 +2444,31 @@ func (t *TmuxSession) listSessionsRaw(ctx context.Context) ([]byte, error) {
 	// exec-gate slot, not one per caller.
 	return runGated(ctx, t.serverSocket, func() ([]byte, error) {
 		cmdArgs := Socket(t.serverSocket).Args("list-sessions", "-F", "#{session_name}")
+		// This *exec.Cmd feeds t.cmdExec's circuit-breaker Run/CombinedOutput
+		// methods -- the same pre-existing test-injection seam
+		// buildTmuxCommandContext feeds, so it is deliberately left off
+		// t.commandRunner() for the same reason (see that function's doc
+		// comment). The fallback below, which bypasses cmdExec entirely, IS
+		// migrated since it's a direct one-shot execution.
 		cmd := safeexec.CommandContext(ctx, Binary(), cmdArgs...)
 		output, err := t.cmdExec.CombinedOutput(cmd)
 		// If the circuit breaker is open, fall back to direct exec.
 		// "No sessions" (exit 1 when server running but empty) can cause false circuit
 		// breaker trips; the fallback ensures checks always work regardless of breaker state.
 		if errors.Is(err, executor.ErrCircuitOpen) {
-			cmd = safeexec.CommandContext(ctx, Binary(), cmdArgs...)
-			output, err = cmd.CombinedOutput()
+			runner := t.commandRunner()
+			runName, runArgs := Binary(), cmdArgs
+			if runner.IsRemote() {
+				// Unset $TMUX and force a known-good $TERM before this
+				// command reaches a remote tmux server -- see
+				// wrapRemoteCommand's doc comment and
+				// research/pitfalls.md §2. IsRemote() is the single
+				// mechanism gating this, never a type switch on runner
+				// (architecture-review.md Blocker 1). Local commands
+				// (LocalRunner.IsRemote() == false) are unaffected.
+				runName, runArgs = wrapRemoteCommand(runName, runArgs)
+			}
+			output, err = runner.Run(ctx, "", runName, runArgs...)
 		}
 		return output, err
 	})
@@ -2369,6 +2624,27 @@ func (t *TmuxSession) RefreshClient() error {
 		log.Debug("RefreshClient CM path failed, falling back to subprocess", "session", t.sanitizedName)
 	}
 
+	// Methods 1/2 below both go through t.cmdExec, which is always local
+	// (see buildTmuxCommandContext's doc comment) -- there is no
+	// commandRunner()-routed equivalent of the circuit-breaker-gated
+	// *exec.Cmd path t.cmdExec.Run/Output require. For a remote session that
+	// already reached here (i.e. the CM path above either wasn't available
+	// or failed), Method 1 would run "refresh-client" against the LOCAL
+	// tmux server -- a no-op at best -- and Method 2 would compound it by
+	// resolving a LOCAL pane PID and sending kill -WINCH for that PID via
+	// t.commandRunner() (which IS remote), targeting a PID on the wrong
+	// host entirely. Refusing outright is strictly safer than silently
+	// doing either: previously-accepted as a known gap "to resolve when
+	// Phase 4 actually wires RefreshClient into a live remote session" (see
+	// git blame) -- ssh-remote-workspaces Phase 4 Epic 4.4 is that phase;
+	// the CM path above is the actual fix (tmux resize-window/refresh-client
+	// travel over the SSH-backed control-mode connection once
+	// startRemoteControlMode is running), so this refusal is the fallback's
+	// fallback, only reached if CM itself is down.
+	if t.commandRunner().IsRemote() {
+		return fmt.Errorf("refresh-client: control mode unavailable for remote session %q and there is no local-subprocess fallback for a remote host", t.sanitizedName)
+	}
+
 	// Method 1: Use refresh-client command (preferred)
 	cmd := t.buildTmuxCommand("refresh-client", "-t", t.sanitizedName)
 	refreshErr := runGatedErr(context.Background(), t.serverSocket, func() error {
@@ -2389,8 +2665,15 @@ func (t *TmuxSession) RefreshClient() error {
 		panePID := strings.TrimSpace(string(output))
 		winchCtx, winchCancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer winchCancel()
-		killCmd := safeexec.CommandContext(winchCtx, "kill", "-WINCH", panePID)
-		if err := killCmd.Run(); err != nil {
+		// Deliberately NOT wrapped via wrapRemoteCommand: "kill" never reads
+		// $TERM or $TMUX, so the wrapper closes no pitfall here (unlike the
+		// real tmux invocations in listSessionsRaw/EnsureRemoteSession) --
+		// wrapping it would be mechanical over-application of "every
+		// commandRunner() call gets wrapped" rather than "every tmux call
+		// gets wrapped". t.commandRunner() is LocalRunner{} on this path
+		// (the IsRemote() guard above already returned for a remote one),
+		// so this always targets the same host panePID was resolved on.
+		if _, err := t.commandRunner().Run(winchCtx, "", "kill", "-WINCH", panePID); err != nil {
 			return fmt.Errorf("failed to send SIGWINCH: %w", err)
 		}
 	}
@@ -2671,6 +2954,12 @@ func CleanupSessions(cmdExec executor.Executor) error {
 
 // CleanupSessionsOnServer kills all tmux sessions that start with "session-" on a specific server
 // serverSocket: socket name for server isolation, empty string for default server
+//
+// The two safeexec.CommandContext calls below are deliberately left off the
+// CommandRunner seam: both feed the caller-injected cmdExec (executor.Executor)
+// for test-injection/circuit-breaking, the same pre-existing, orthogonal seam
+// documented on buildTmuxCommandContext -- not the local/remote-host seam this
+// phase introduces.
 func CleanupSessionsOnServer(cmdExec executor.Executor, serverSocket string) error {
 	// Resolve once, here -- not per-command below. Without this, an empty
 	// serverSocket always meant the real, shared default tmux socket

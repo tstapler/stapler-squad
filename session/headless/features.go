@@ -229,7 +229,7 @@ func HeadlessTriageSystemPrompt() string { return headlessTriageSystemPrompt }
 // Returns the summary text from the JSON response.
 func SummarizeBacklogItem(ctx context.Context, pool *Pool, title, description string) (string, error) {
 	userPrompt := fmt.Sprintf("Title: %s\n\nDescription: %s", title, description)
-	raw, _, err := pool.CallBlocking(ctx, FeatureKeySummarize, summarizeSystemPrompt, userPrompt, CallOptions{})
+	raw, err := pool.CallBlocking(ctx, FeatureKeySummarize, summarizeSystemPrompt, userPrompt, CallOptions{}, DiscardCost)
 	if err != nil {
 		return "", fmt.Errorf("SummarizeBacklogItem: %w", err)
 	}
@@ -249,7 +249,7 @@ func SummarizeBacklogItem(ctx context.Context, pool *Pool, title, description st
 // Returns a slice of criterion strings.
 func GenerateAcceptanceCriteria(ctx context.Context, pool *Pool, title, description string) ([]string, error) {
 	userPrompt := fmt.Sprintf("Title: %s\n\nDescription: %s", title, description)
-	raw, _, err := pool.CallBlocking(ctx, FeatureKeyAC, acSystemPrompt, userPrompt, CallOptions{})
+	raw, err := pool.CallBlocking(ctx, FeatureKeyAC, acSystemPrompt, userPrompt, CallOptions{}, DiscardCost)
 	if err != nil {
 		return nil, fmt.Errorf("GenerateAcceptanceCriteria: %w", err)
 	}
@@ -277,20 +277,24 @@ func GenerateAcceptanceCriteria(ctx context.Context, pool *Pool, title, descript
 // conversational non-answer (PR #174: "Empty diff — nothing to describe. Do you
 // want me to check the branch/PR directly...") instead of a usable body. Callers
 // should fall back to a boilerplate body on this error, same as any other.
-func DraftPRDescription(ctx context.Context, pool *Pool, itemTitle, itemDescription, diff, branchName string) (string, error) {
+// Returns the drafted body and the USD cost of the call (0 on error) — callers
+// with a session to attribute it to should persist it, e.g. via
+// session.CostSinkForSessionUUID.
+func DraftPRDescription(ctx context.Context, pool *Pool, itemTitle, itemDescription, diff, branchName string) (string, float64, error) {
 	if strings.TrimSpace(diff) == "" {
-		return "", fmt.Errorf("DraftPRDescription: empty diff, nothing to describe")
+		return "", 0, fmt.Errorf("DraftPRDescription: empty diff, nothing to describe")
 	}
 	if len(diff) > maxDiffSizePR {
 		diff = diff[:maxDiffSizePR]
 	}
 	userPrompt := fmt.Sprintf("Backlog item: %s\n\nProblem statement:\n%s\n\nBranch: %s\n\nDiff:\n%s",
 		itemTitle, itemDescription, branchName, diff)
-	raw, _, err := pool.CallBlocking(ctx, FeatureKeyPRDescription, prDescriptionSystemPrompt, userPrompt, CallOptions{})
+	var cost float64
+	raw, err := pool.CallBlocking(ctx, FeatureKeyPRDescription, prDescriptionSystemPrompt, userPrompt, CallOptions{}, func(usd float64) { cost = usd })
 	if err != nil {
-		return "", fmt.Errorf("DraftPRDescription: %w", err)
+		return "", cost, fmt.Errorf("DraftPRDescription: %w", err)
 	}
-	return raw, nil
+	return raw, cost, nil
 }
 
 // SuggestCommitMessage calls the LLM to generate a Conventional Commit message.
@@ -299,7 +303,7 @@ func SuggestCommitMessage(ctx context.Context, pool *Pool, diff string) (string,
 	if len(diff) > maxDiffSizeCommit {
 		diff = diff[:maxDiffSizeCommit]
 	}
-	raw, _, err := pool.CallBlocking(ctx, FeatureKeyCommitMessage, commitMessageSystemPrompt, diff, CallOptions{})
+	raw, err := pool.CallBlocking(ctx, FeatureKeyCommitMessage, commitMessageSystemPrompt, diff, CallOptions{}, DiscardCost)
 	if err != nil {
 		return "", fmt.Errorf("SuggestCommitMessage: %w", err)
 	}
@@ -332,7 +336,9 @@ func sanitizeDiffForNarrative(diff string) string {
 // diff is sanitized (sanitizeDiffForNarrative) and truncated to MaxDiffSizeReview
 // bytes before being sent, mirroring the truncation convention already used by
 // session/backlog_review.go's review-prompt diffs.
-func GenerateSessionCompletionNarrative(ctx context.Context, pool PoolClient, sessionTitle, sessionGoal, diff, decisionsSummary string) (string, error) {
+// Returns the narrative text and the USD cost of the call (0 on error) — the
+// session-summary pipeline folds this into its own EstimatedCostUsd snapshot.
+func GenerateSessionCompletionNarrative(ctx context.Context, pool PoolClient, sessionTitle, sessionGoal, diff, decisionsSummary string) (string, float64, error) {
 	sanitized := sanitizeDiffForNarrative(diff)
 	if len(sanitized) > MaxDiffSizeReview {
 		sanitized = sanitized[:MaxDiffSizeReview]
@@ -345,9 +351,10 @@ func GenerateSessionCompletionNarrative(ctx context.Context, pool PoolClient, se
 	}
 	fmt.Fprintf(&sb, "\nDecisions:\n%s\n\nDiff:\n%s", decisionsSummary, sanitized)
 
-	raw, _, err := pool.CallBlocking(ctx, FeatureKeySessionCompletionSummary, sessionCompletionSummarySystemPrompt, sb.String(), CallOptions{})
+	var cost float64
+	raw, err := pool.CallBlocking(ctx, FeatureKeySessionCompletionSummary, sessionCompletionSummarySystemPrompt, sb.String(), CallOptions{}, func(usd float64) { cost = usd })
 	if err != nil {
-		return "", fmt.Errorf("GenerateSessionCompletionNarrative: %w", err)
+		return "", cost, fmt.Errorf("GenerateSessionCompletionNarrative: %w", err)
 	}
-	return raw, nil
+	return raw, cost, nil
 }

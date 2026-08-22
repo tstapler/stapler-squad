@@ -11,9 +11,9 @@ import (
 
 	"github.com/go-git/go-git/v5"
 	"github.com/tstapler/stapler-squad/config"
-	"github.com/tstapler/stapler-squad/executor"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/tmux"
 	"golang.org/x/sync/singleflight"
 )
 
@@ -82,8 +82,19 @@ type GitWorktree struct {
 	branchName string
 	// Base commit hash for the worktree
 	baseCommitSHA string
-	// cmdExec is used to execute commands for this worktree.
-	cmdExec executor.Executor
+	// runner is the CommandRunner execution seam (session/tmux, reused here
+	// per ADR-002) every git/gh subprocess invocation in this package routes
+	// through unconditionally. Defaults to tmux.LocalRunner{} via
+	// commandRunner() below when unset, so every existing construction path
+	// keeps working unchanged. Phase 2 (SSH remote workspaces) swaps this at
+	// construction time for a remote-backed implementation; tests swap it
+	// via WithCommandRunner for a spy. This package previously also carried
+	// a cmdExec executor.Executor field (a plain, never circuit-breaker-
+	// wrapped test-injection seam predating this one) — removed once
+	// runGitCommand's last cmdExec-gated branch was migrated onto runner,
+	// since nothing else in the package ever read it. See ADR-002's
+	// addendum.
+	runner tmux.CommandRunner
 
 	// ponytail: atomic.Value replaces sync.RWMutex+bool+time — lock-free reads on the fast cache-hit path
 	isDirtyCache atomic.Value // stores dirtyCacheState; zero value = cache invalid
@@ -93,10 +104,27 @@ type GitWorktree struct {
 	isDirtySF singleflight.Group //nolint:exhaustruct
 }
 
+// GitWorktreeOption is a functional option for GitWorktree construction,
+// mirroring session/tmux's TmuxSessionOption. Trailing/variadic on every
+// constructor that builds a *GitWorktree, so existing call sites are
+// unaffected.
+type GitWorktreeOption func(*GitWorktree)
+
+// WithCommandRunner injects a CommandRunner, overriding the
+// tmux.LocalRunner{} default every constructor otherwise applies. Used to
+// swap in a remote-backed CommandRunner (Phase 2 of ssh-remote-workspaces)
+// or a test spy that records/controls what the worktree's git/gh subprocess
+// calls do.
+func WithCommandRunner(r tmux.CommandRunner) GitWorktreeOption {
+	return func(g *GitWorktree) {
+		g.runner = r
+	}
+}
+
 // NewGitWorktreeFromCommitSHA creates a new GitWorktree that will branch from the given
 // commitSHA when Setup() is called, instead of branching from the current HEAD.
 // This is used by ForkFromCheckpoint to recreate the exact git state at checkpoint time.
-func NewGitWorktreeFromCommitSHA(repoPath, sessionName, branchName, commitSHA string) (*GitWorktree, string, error) {
+func NewGitWorktreeFromCommitSHA(repoPath, sessionName, branchName, commitSHA string, opts ...GitWorktreeOption) (*GitWorktree, string, error) {
 	if commitSHA == "" {
 		return nil, "", fmt.Errorf("commitSHA must not be empty")
 	}
@@ -124,30 +152,34 @@ func NewGitWorktreeFromCommitSHA(repoPath, sessionName, branchName, commitSHA st
 	}
 	worktreePath = worktreePath + "_" + fmt.Sprintf("%x", time.Now().UnixNano())
 
-	return &GitWorktree{
+	g := &GitWorktree{
 		repoPath:      resolvedRepoPath,
 		sessionName:   sessionName,
 		branchName:    branchName,
 		worktreePath:  worktreePath,
 		baseCommitSHA: commitSHA,
-		cmdExec:       executor.MakeExecutor(),
-	}, branchName, nil
+		runner:        tmux.LocalRunner{},
+	}
+	for _, opt := range opts {
+		opt(g)
+	}
+	return g, branchName, nil
 }
 
-func NewGitWorktreeFromStorage(repoPath string, worktreePath string, sessionName string, branchName string, baseCommitSHA string) *GitWorktree {
-	return NewGitWorktreeFromStorageWithExecutor(repoPath, worktreePath, sessionName, branchName, baseCommitSHA, nil)
+func NewGitWorktreeFromStorage(repoPath string, worktreePath string, sessionName string, branchName string, baseCommitSHA string, opts ...GitWorktreeOption) *GitWorktree {
+	return NewGitWorktreeFromStorageWithExecutor(repoPath, worktreePath, sessionName, branchName, baseCommitSHA, opts...)
 }
 
-// NewGitWorktreeFromStorageWithExecutor creates a GitWorktree from stored data with an optional executor.
-// If cmdExec is nil, a default executor is used.
-func NewGitWorktreeFromStorageWithExecutor(repoPath string, worktreePath string, sessionName string, branchName string, baseCommitSHA string, cmdExec executor.Executor) *GitWorktree {
+// NewGitWorktreeFromStorageWithExecutor creates a GitWorktree from stored data.
+// The "WithExecutor" name predates CommandRunner (ADR-002): this used to also accept
+// an optional executor.Executor parameter, removed once runGitCommand's last
+// executor.Executor-gated branch was migrated onto CommandRunner and nothing else
+// in the package read it (see ADR-002's addendum) — use WithCommandRunner instead
+// to override how this worktree's subprocesses run.
+func NewGitWorktreeFromStorageWithExecutor(repoPath string, worktreePath string, sessionName string, branchName string, baseCommitSHA string, opts ...GitWorktreeOption) *GitWorktree {
 	// Return nil if the worktree has no actual paths (empty/invalid worktree)
 	if repoPath == "" && worktreePath == "" && branchName == "" {
 		return nil
-	}
-
-	if cmdExec == nil {
-		cmdExec = executor.MakeExecutor()
 	}
 
 	// Rehydrated worktreePath values may predate this normalization (persisted
@@ -164,33 +196,35 @@ func NewGitWorktreeFromStorageWithExecutor(repoPath string, worktreePath string,
 		}
 	}
 
-	return &GitWorktree{
+	g := &GitWorktree{
 		repoPath:      repoPath,
 		worktreePath:  worktreePath,
 		sessionName:   sessionName,
 		branchName:    branchName,
 		baseCommitSHA: baseCommitSHA,
-		cmdExec:       cmdExec,
+		runner:        tmux.LocalRunner{},
 	}
+	for _, opt := range opts {
+		opt(g)
+	}
+	return g
 }
 
 // NewGitWorktree creates a new GitWorktree instance
-func NewGitWorktree(repoPath string, sessionName string) (tree *GitWorktree, branchname string, err error) {
-	return NewGitWorktreeWithBranchAndExecutor(repoPath, sessionName, "", nil)
+func NewGitWorktree(repoPath string, sessionName string, opts ...GitWorktreeOption) (tree *GitWorktree, branchname string, err error) {
+	return NewGitWorktreeWithBranchAndExecutor(repoPath, sessionName, "", opts...)
 }
 
 // NewGitWorktreeWithBranch creates a new GitWorktree instance with an optional custom branch name
-func NewGitWorktreeWithBranch(repoPath string, sessionName string, customBranch string) (tree *GitWorktree, branchname string, err error) {
-	return NewGitWorktreeWithBranchAndExecutor(repoPath, sessionName, customBranch, nil)
+func NewGitWorktreeWithBranch(repoPath string, sessionName string, customBranch string, opts ...GitWorktreeOption) (tree *GitWorktree, branchname string, err error) {
+	return NewGitWorktreeWithBranchAndExecutor(repoPath, sessionName, customBranch, opts...)
 }
 
-// NewGitWorktreeWithBranchAndExecutor creates a new GitWorktree with optional branch name and executor.
-// If cmdExec is nil, a default executor is used.
-func NewGitWorktreeWithBranchAndExecutor(repoPath string, sessionName string, customBranch string, cmdExec executor.Executor) (tree *GitWorktree, branchname string, err error) {
-	if cmdExec == nil {
-		cmdExec = executor.MakeExecutor()
-	}
-
+// NewGitWorktreeWithBranchAndExecutor creates a new GitWorktree with an optional branch name.
+// The "WithExecutor" name predates CommandRunner (ADR-002) — see
+// NewGitWorktreeFromStorageWithExecutor's doc comment; use WithCommandRunner to
+// override how this worktree's subprocesses run.
+func NewGitWorktreeWithBranchAndExecutor(repoPath string, sessionName string, customBranch string, opts ...GitWorktreeOption) (tree *GitWorktree, branchname string, err error) {
 	cfg := config.LoadConfig()
 
 	var branchName string
@@ -229,13 +263,17 @@ func NewGitWorktreeWithBranchAndExecutor(repoPath string, sessionName string, cu
 		// already-resolved paths getWorktreeDirectory hands to fresh creates.
 		existingWorktreePath = CanonicalizeWorktreePath(existingWorktreePath)
 		log.Info("found existing worktree for branch, reusing it", "branch", branchName, "path", existingWorktreePath)
-		return &GitWorktree{
+		g := &GitWorktree{
 			repoPath:     repoPath,
 			sessionName:  sessionName,
 			branchName:   branchName,
 			worktreePath: existingWorktreePath,
-			cmdExec:      cmdExec,
-		}, branchName, nil
+			runner:       tmux.LocalRunner{},
+		}
+		for _, opt := range opts {
+			opt(g)
+		}
+		return g, branchName, nil
 	}
 
 	// No existing worktree found, create a new one with timestamp suffix
@@ -246,13 +284,17 @@ func NewGitWorktreeWithBranchAndExecutor(repoPath string, sessionName string, cu
 	}
 	worktreePath = worktreePath + "_" + fmt.Sprintf("%x", time.Now().UnixNano())
 
-	return &GitWorktree{
+	g := &GitWorktree{
 		repoPath:     repoPath,
 		sessionName:  sessionName,
 		branchName:   branchName,
 		worktreePath: worktreePath,
-		cmdExec:      cmdExec,
-	}, branchName, nil
+		runner:       tmux.LocalRunner{},
+	}
+	for _, opt := range opts {
+		opt(g)
+	}
+	return g, branchName, nil
 }
 
 // PreviewWorktreePath returns the directory PREFIX a new worktree would be created
@@ -311,6 +353,16 @@ func (g *GitWorktree) GetWorktreePath() string {
 	return g.worktreePath
 }
 
+// commandRunner returns g.runner, defaulting to tmux.LocalRunner{} when
+// unset. All constructors set runner explicitly, but this lazy default also
+// covers any GitWorktree built without going through them.
+func (g *GitWorktree) commandRunner() tmux.CommandRunner {
+	if g.runner == nil {
+		return tmux.LocalRunner{}
+	}
+	return g.runner
+}
+
 // GetBranchName returns the name of the branch associated with this worktree
 func (g *GitWorktree) GetBranchName() string {
 	return g.branchName
@@ -333,16 +385,15 @@ func (g *GitWorktree) GetBaseCommitSHA() string {
 
 // NewGitWorktreeFromExisting creates a GitWorktree from an existing worktree path
 // This is used when connecting to worktrees that were created manually or by deleted sessions
-func NewGitWorktreeFromExisting(existingWorktreePath string, sessionName string) (*GitWorktree, error) {
-	return NewGitWorktreeFromExistingWithExecutor(existingWorktreePath, sessionName, nil)
+func NewGitWorktreeFromExisting(existingWorktreePath string, sessionName string, opts ...GitWorktreeOption) (*GitWorktree, error) {
+	return NewGitWorktreeFromExistingWithExecutor(existingWorktreePath, sessionName, opts...)
 }
 
-// NewGitWorktreeFromExistingWithExecutor creates a GitWorktree from an existing worktree path with an optional executor.
-func NewGitWorktreeFromExistingWithExecutor(existingWorktreePath string, sessionName string, cmdExec executor.Executor) (*GitWorktree, error) {
-	if cmdExec == nil {
-		cmdExec = executor.MakeExecutor()
-	}
-
+// NewGitWorktreeFromExistingWithExecutor creates a GitWorktree from an existing worktree path.
+// The "WithExecutor" name predates CommandRunner (ADR-002) — see
+// NewGitWorktreeFromStorageWithExecutor's doc comment; use WithCommandRunner to
+// override how this worktree's subprocesses run.
+func NewGitWorktreeFromExistingWithExecutor(existingWorktreePath string, sessionName string, opts ...GitWorktreeOption) (*GitWorktree, error) {
 	// Ensure the path exists and is a valid git worktree
 	if !IsGitRepo(existingWorktreePath) {
 		return nil, fmt.Errorf("path '%s' is not a valid git repository or worktree", existingWorktreePath)
@@ -374,14 +425,18 @@ func NewGitWorktreeFromExistingWithExecutor(existingWorktreePath string, session
 		baseCommitSHA = ""
 	}
 
-	return &GitWorktree{
+	g := &GitWorktree{
 		repoPath:      repoPath,
 		worktreePath:  existingWorktreePath,
 		sessionName:   sessionName,
 		branchName:    branchName,
 		baseCommitSHA: baseCommitSHA,
-		cmdExec:       cmdExec,
-	}, nil
+		runner:        tmux.LocalRunner{},
+	}
+	for _, opt := range opts {
+		opt(g)
+	}
+	return g, nil
 }
 
 // findExistingWorktreeForBranch checks if the given branch is already checked out in an existing worktree

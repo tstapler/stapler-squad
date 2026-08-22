@@ -106,3 +106,28 @@ picking one is follow-up work. The WIP in `session/state_machine.go` /
 `session/instance_hibernate.go` implementing the `pendingAfterHooks` mechanism
 was **not committed** as part of this session's other fixes because its own
 regression tests fail deterministically under `-race`.
+
+## Recurrence: 2026-08-17
+
+Reproduced again during full-suite verification for an unrelated change (ssh-remote-workspaces
+Epic 6.4, `session/sshremote/health_prober.go` + `server/server.go` wiring — none of this bug's
+implicated files touched):
+
+```
+go test ./session/... ./server/... ./pkg/... -race -count=1 -timeout 300s
+```
+
+`--- FAIL: TestComputeCurrentDiffHash_...` (`session` package, collateral -- a different test
+whose goroutine happened to be attributed the race by `go test -race`'s reporting) plus a `DATA
+RACE` trace matching this bug's Root cause A exactly: `TestTransitionTo_ChainedTransitions.func1()`
+(`state_machine_test.go:305`, the "hibernate and resume" chain's next step) racing
+`(*Instance).loadStatus()` (`instance_state.go:22`) reached via the prior step's still-running
+`resumeFromHibernation` goroutine (`instance_hibernate.go:178`).
+
+Confirms the intermittency this doc already notes: `go test ./session/... -run 'TestTransitionTo'
+-race -count=5` (this doc's own repro command) and `-run 'TestTransitionTo_ChainedTransitions'
+-count=3` both passed cleanly in isolation immediately after the failure -- consistent with
+BUG-077's finding that this class of race "only surfaces when...Instances happen to interleave in
+the full-package `-race` run," not with a narrower `-run` filter. Not fixed here per this task's
+scope (unrelated subsystem); logged per `.claude/rules/fix-flaky-tests-dont-defer.md` rather than
+re-excused silently.

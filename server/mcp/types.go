@@ -57,6 +57,29 @@ type SearchSessionsResult struct {
 	TotalCount int              `json:"total_count"`
 }
 
+// LinkSessionToItemResult is returned by link_session_to_item.
+type LinkSessionToItemResult struct {
+	MCPResult
+	ItemID                   string `json:"item_id"`
+	SessionUUID              string `json:"session_uuid"`
+	ItemSessionID            string `json:"item_session_id"`
+	AlreadyLinked            bool   `json:"already_linked"`
+	PreviouslyLinkedItemID   string `json:"previously_linked_item_id,omitempty"`
+	SlashCommandsRegenerated bool   `json:"slash_commands_regenerated"`
+	ItemStatus               string `json:"item_status"`
+}
+
+// GetLinkedItemResult is returned by get_linked_item.
+type GetLinkedItemResult struct {
+	MCPResult
+	Linked     bool       `json:"linked"`
+	ItemID     string     `json:"item_id,omitempty"`
+	ItemTitle  string     `json:"item_title,omitempty"`
+	ItemStatus string     `json:"item_status,omitempty"`
+	Role       string     `json:"role,omitempty"`
+	StartedAt  *time.Time `json:"started_at,omitempty"`
+}
+
 // Error code constants — machine-readable identifiers for all tool failures.
 const (
 	ErrSessionNotFound       = "SESSION_NOT_FOUND"

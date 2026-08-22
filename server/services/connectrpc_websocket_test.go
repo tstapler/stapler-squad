@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -18,7 +20,9 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/protocol"
+	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/streamhub"
+	"github.com/tstapler/stapler-squad/session/tmux"
 
 	"github.com/gorilla/websocket"
 	"github.com/puzpuzpuz/xsync/v4"
@@ -475,6 +479,53 @@ func TestRecordControlModeStreamStart_should_LeaveEntryRegistered_When_OlderGene
 	}
 }
 
+// TestRecordControlModeStreamStart_should_LogOverlapWarning_When_TwoInvocationsOverlapForSameSession
+// is Story 3.2.1's other open gap named in this project's plan.md: the
+// "420584566" WARN log at recordControlModeStreamStart's overlap-detection
+// branch (connectrpc_websocket.go, "[streamViaControlMode] overlapping
+// control-mode stream detected for tmux session") is exercised by the two
+// TestRecordControlModeStreamStart_* tests above only for its generation
+// counter bookkeeping — neither asserts the WARN log line itself actually
+// fires. This test drives the same two-overlapping-invocations scenario
+// (recordControlModeStreamStart called for a second generation before the
+// first generation's done() has run — the exact sequence streamViaControlMode
+// produces when a reconnect races a still-in-flight prior connection for one
+// tmux session) and asserts the WARN is present, naming both generations, so
+// a future refactor that accidentally silences it is caught by a test
+// instead of only by an operator noticing missing logs during an incident.
+//
+// Not run with t.Parallel(): captureLogs swaps the process-global slog
+// default logger for the duration of the test, which would race against any
+// other t.Parallel() test emitting logs concurrently in this package.
+func TestRecordControlModeStreamStart_should_LogOverlapWarning_When_TwoInvocationsOverlapForSameSession(t *testing.T) {
+	buf := captureLogs(t)
+	h := NewConnectRPCWebSocketHandler(nil, nil, nil)
+	const sessionID = "sess-overlap"
+	const tmuxName = "staplersquad_sess-overlap"
+
+	genOld, doneOld := h.recordControlModeStreamStart(sessionID, tmuxName)
+	defer doneOld()
+
+	// genOld's done() has deliberately not run yet -- this second call is
+	// the overlapping invocation the WARN exists to catch.
+	genNew, doneNew := h.recordControlModeStreamStart(sessionID, tmuxName)
+	defer doneNew()
+
+	logs := buf.String()
+	if !strings.Contains(logs, "overlapping control-mode stream detected") {
+		t.Fatalf("expected the overlap WARN log line, got logs:\n%s", logs)
+	}
+	if !strings.Contains(logs, fmt.Sprintf("prior_generation=%d", genOld)) {
+		t.Errorf("expected the WARN to name the prior generation (%d), got logs:\n%s", genOld, logs)
+	}
+	if !strings.Contains(logs, fmt.Sprintf("new_generation=%d", genNew)) {
+		t.Errorf("expected the WARN to name the new generation (%d), got logs:\n%s", genNew, logs)
+	}
+	if !strings.Contains(logs, "level=WARN") {
+		t.Errorf("expected the log line to be at WARN level, got logs:\n%s", logs)
+	}
+}
+
 // --- HubRegistry / PathHubOwned routing (Epic 2.2) ---
 
 // TestUseStreamHub_should_DefaultToFalse_When_EnvVarUnset is the safety-net
@@ -707,6 +758,158 @@ func TestHubOwnedSession_should_NeverTouchActiveControlModeStreams_When_Multiple
 	require.Equal(t, 2, hub.SubscriberCount(), "hub.SubscriberCount() must be the sole source of truth for PathHubOwned sessions")
 	_, loaded := h.activeControlModeStreams.Load(sessionName)
 	require.False(t, loaded, "hub-owned sessions must never touch activeControlModeStreams (Story 3.2.1)")
+}
+
+// listSessionsFakeExecutor is a minimal executor.Executor whose
+// CombinedOutput (the only method session/tmux's listSessionsRaw calls, per
+// TmuxSession.DoesSessionExist/DoesSessionExistNoCache) answers "does this
+// tmux session exist" deterministically by call count, not by talking to a
+// real tmux server. This is what lets
+// TestStreamViaHub_should_SendHubStartFailedError_... force streamViaHub's
+// own pre-GetOrCreate restore check and streamViaControlMode's later,
+// separate restore check to observe *different* answers from the exact same
+// *tmux.TmuxSession object without any timing race: the two checks are
+// distinguished purely by which call they are, not by when either runs.
+type listSessionsFakeExecutor struct {
+	mu         sync.Mutex
+	calls      int
+	existsName string
+}
+
+// CombinedOutput reports existsName as present on the first call (so
+// streamViaHub's own restore check sees the session as already there and
+// skips straight to HubRegistry.GetOrCreate) and absent on every call after
+// that (so streamViaControlMode's own restore check — and the retry loop
+// inside tmux.RestoreWithWorkDir it then drives — consistently finds no
+// session and genuinely falls through to validateWorkDir's fast failure).
+func (e *listSessionsFakeExecutor) CombinedOutput(_ *exec.Cmd) ([]byte, error) {
+	e.mu.Lock()
+	first := e.calls == 0
+	e.calls++
+	e.mu.Unlock()
+	if first {
+		return []byte(e.existsName + "\n"), nil
+	}
+	return nil, fmt.Errorf("no server running on socket (fake: session absent)")
+}
+
+func (e *listSessionsFakeExecutor) Run(_ *exec.Cmd) error {
+	return fmt.Errorf("listSessionsFakeExecutor: Run is unsupported, only list-sessions (CombinedOutput) is expected on this path")
+}
+
+func (e *listSessionsFakeExecutor) Output(_ *exec.Cmd) ([]byte, error) {
+	return nil, fmt.Errorf("listSessionsFakeExecutor: Output is unsupported, only list-sessions (CombinedOutput) is expected on this path")
+}
+
+// TestStreamViaHub_should_SendHubStartFailedError_When_HubCreationAndLegacyFallbackBothFail
+// is design/ux.md Surface 2's server-side half: when streamViaHub's
+// HubRegistry.GetOrCreate call fails (here, because the session's
+// StreamOwnershipLock is pre-resolved to PathLegacyPerConnection, simulating
+// a concurrent legacy StartControlMode having already won the race) AND its
+// streamViaControlMode fallback also fails (here, because the instance's
+// working directory has been removed, so RestoreWithWorkDir fails fast with
+// tmux.ErrWorkDirMissing instead of spawning a real tmux session), the
+// connection must receive a TerminalData_Error frame with
+// Code: HubStartFailedErrorCode over the WebSocket before streamViaHub
+// returns its error.
+//
+// Root cause of a previous version of this test hanging until the package
+// timeout: streamViaHub (connectrpc_websocket.go) has its OWN "session not
+// in tmux, restore before control mode" pre-check — structurally identical
+// to streamViaControlMode's — that runs *before* HubRegistry.GetOrCreate is
+// ever called. Attaching one real-but-never-started *tmux.TmuxSession (via a
+// missing work dir, so both checks see "doesn't exist") made THAT earlier
+// check fail and return first, so GetOrCreate — and therefore the
+// streamViaControlMode fallback and its HubStartFailedErrorCode frame — was
+// never reached at all; streamViaHub returned its own error without ever
+// writing anything to the client, so the test's readEnvelopeFromClient
+// blocked forever. listSessionsFakeExecutor's call-counted answers fix this
+// by making streamViaHub's own check see "session exists" (skip its restore,
+// proceed to GetOrCreate) while streamViaControlMode's later check
+// genuinely sees "doesn't exist" and fails via ErrWorkDirMissing as intended
+// — deterministic by construction, not by racing tmux subprocess timing.
+func TestStreamViaHub_should_SendHubStartFailedError_When_HubCreationAndLegacyFallbackBothFail(t *testing.T) {
+	// A working directory that is never created, rather than a real temp dir
+	// removed after the fact: os.Stat on it fails immediately, so
+	// tmux.RestoreWithWorkDir's validateWorkDir step returns
+	// tmux.ErrWorkDirMissing instead of proceeding to actually spawn a tmux
+	// session (which a since-deleted-but-once-real path risked doing, if
+	// e.g. symlink resolution made the deletion and the later Stat disagree).
+	dir := filepath.Join(t.TempDir(), "never-created")
+
+	inst, err := session.NewInstance(session.InstanceOptions{
+		Title: "hub-start-failed-" + t.Name(),
+		Path:  dir,
+	})
+	require.NoError(t, err)
+
+	snap := inst.Snapshot()
+	tmuxPrefix := snap.TmuxPrefix
+	if tmuxPrefix == "" {
+		tmuxPrefix = "staplersquad_"
+	}
+	tmuxSessionName := tmux.NewSessionName(snap.Title, tmuxPrefix).String()
+
+	// Force Instance.pm() to lazily initialize as a *TmuxBackend (a bare
+	// *Instance has no processManager until first use), then attach a
+	// *tmux.TmuxSession backed by listSessionsFakeExecutor so GetTmuxSession()
+	// returns non-nil below — otherwise streamViaControlMode's "session
+	// missing, restore" branch never runs at all (a nil GetTmuxSession()
+	// skips straight to a no-op StartControlMode success, per
+	// session/tmux_process_manager.go's StartControlMode returning nil when
+	// no session is set). NewTmuxSessionWithDeps (rather than
+	// NewTmuxSessionWithPrefix) is what makes the fake executor — and thus
+	// the call-counted exists/doesn't-exist answers — take effect; it also
+	// passes WithRegistry(nil) internally so the real push-based
+	// TmuxServerRegistry can never short-circuit DoesSessionExist(NoCache)
+	// ahead of the fake.
+	_ = inst.GetTmuxSessionName()
+	fakeExec := &listSessionsFakeExecutor{existsName: tmuxSessionName}
+	inst.SetTmuxSession(tmux.NewTmuxSessionWithDeps(snap.Title, "true", tmux.MakePtyFactory(), fakeExec))
+
+	// Simulate a concurrent legacy StartControlMode call having already won
+	// this session's ownership race, so streamViaHub's own GetOrCreate call
+	// below fails with ErrOwnershipResolvedToOtherPath.
+	_, err = streamhub.AcquireOwnershipLock(tmuxSessionName).ResolveExpecting(false, streamhub.PathLegacyPerConnection)
+	require.NoError(t, err)
+
+	serverStream, clientConn, cleanup := createTestWebSocketPair(t)
+	defer cleanup()
+
+	handshake := &sessionv1.TerminalData{
+		Data: &sessionv1.TerminalData_CurrentPaneRequest{
+			CurrentPaneRequest: &sessionv1.CurrentPaneRequest{},
+		},
+	}
+	handshakeBytes, err := proto.Marshal(handshake)
+	require.NoError(t, err)
+	serverStream.requestMsg = handshakeBytes
+
+	h := NewConnectRPCWebSocketHandler(nil, nil, nil)
+
+	// Run off the test goroutine with a hard deadline: if either failure
+	// assumption above doesn't hold, streamViaControlMode's fallback can end
+	// up actually starting a working (if degenerate) tmux-backed stream that
+	// blocks forever instead of returning an error — fail loudly and fast
+	// rather than hanging the whole package for the full `go test` timeout.
+	streamErrCh := make(chan error, 1)
+	go func() { streamErrCh <- h.streamViaHub(serverStream, inst) }()
+
+	var streamErr error
+	select {
+	case streamErr = <-streamErrCh:
+	case <-time.After(15 * time.Second):
+		t.Fatal("streamViaHub did not return within 15s — the legacy fallback likely succeeded instead of failing as this test requires")
+	}
+	require.Error(t, streamErr, "streamViaHub must return the legacy fallback's error once both paths fail")
+
+	env := readEnvelopeFromClient(t, clientConn)
+	var terminalData sessionv1.TerminalData
+	require.NoError(t, proto.Unmarshal(env.Data, &terminalData))
+
+	errData := terminalData.GetError()
+	require.NotNil(t, errData, "expected a TerminalData_Error frame when both the hub path and legacy fallback fail")
+	require.Equal(t, HubStartFailedErrorCode, errData.Code)
 }
 
 // TestHubRegistry_should_CallSubscribeControlModeUpdatesExactlyOnce_When_MultipleSubscribersAttach

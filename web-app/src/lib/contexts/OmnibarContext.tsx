@@ -8,6 +8,8 @@ import { useBacklogService } from "@/lib/hooks/useBacklogService";
 import { useWorkflows } from "@/lib/hooks/useWorkflows";
 import { useAuth } from "@/lib/contexts/AuthContext";
 import { SessionType } from "@/gen/session/v1/types_pb";
+import { RemoteTargetSchema } from "@/gen/session/v1/session_pb";
+import { create } from "@bufbuild/protobuf";
 import { getDefaultRegistry } from "@/lib/omnibar/detector";
 import { WorkflowDetector, type WorkflowEntry } from "@/lib/omnibar/detectors/WorkflowDetector";
 import { useAliases } from "@/lib/hooks/useAliases";
@@ -16,6 +18,7 @@ import { useLauncherPresets } from "@/lib/hooks/useLauncherPresets";
 import { PresetDetector } from "@/lib/omnibar/detectors/PresetDetector";
 import { useGitHubEnterpriseHosts } from "@/lib/hooks/useGitHubEnterpriseHosts";
 import { GitHubEnterpriseURLDetector } from "@/lib/omnibar/detectors/GitHubEnterpriseURLDetector";
+import { useConfiguredRemotes } from "@/lib/hooks/useConfiguredRemotes";
 
 const sessionTypeMap: Record<string, SessionType> = {
   directory: SessionType.DIRECTORY,
@@ -118,6 +121,11 @@ export function OmnibarProvider({ children }: OmnibarProviderProps) {
   // OmnibarCreationPanel would fetch redundantly and — worse — this effect's refetch-on-open
   // would never reach it, since each hook call owns disconnected state.
   const { presets: launcherPresets, loading: launcherPresetsLoading, loadError: launcherPresetsLoadError, refetch: refetchLauncherPresets } = useLauncherPresets();
+
+  // Configured remotes for the Omnibar's "Remote host" selector (ADR-001:
+  // remote-as-orthogonal-flag) -- see useConfiguredRemotes' doc comment for why this wiring
+  // was missing until ssh-remote-workspaces Phase 6 Epic 6.3.
+  const { remotes: configuredRemotes } = useConfiguredRemotes();
 
   // Dynamically register/unregister PresetDetector whenever the preset list changes.
   const presetDetectorRef = useRef<PresetDetector | null>(null);
@@ -261,6 +269,10 @@ export function OmnibarProvider({ children }: OmnibarProviderProps) {
         createIfMissing: data.createIfMissing ?? false,
         initialPrompt: data.initialPrompt,
         autonomousMode: data.autonomousMode ?? false,
+        // Remote target composes with sessionType (ADR-001: remote-as-orthogonal-flag) —
+        // omitted entirely (not just an empty remote_name) when no remote is selected, so a
+        // local session's CreateSessionRequest stays byte-identical to pre-change behavior.
+        remote: data.remoteName ? create(RemoteTargetSchema, { remoteName: data.remoteName }) : undefined,
         permissionMode: data.permissionMode ?? "",
         aliasName: data.aliasName ?? "",
         cliFlags: data.extraCliFlags ?? "",
@@ -336,6 +348,7 @@ export function OmnibarProvider({ children }: OmnibarProviderProps) {
         launcherPresets={launcherPresets}
         launcherPresetsLoading={launcherPresetsLoading}
         launcherPresetsLoadError={launcherPresetsLoadError}
+        remotes={configuredRemotes}
       />
     </OmnibarContext.Provider>
   );
