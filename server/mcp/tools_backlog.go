@@ -2572,14 +2572,14 @@ func (h *backlogHandlers) reportDuplicateUnclaimed(ctx context.Context, callerUU
 	note := fmt.Sprintf("duplicate of %s: %s — archived by session %s (item was unclaimed, no work in progress)", duplicateRef, reason, callerUUID)
 	precondition := &session.BacklogItemPrecondition{ExpectedStatus: string(status), Note: note}
 	if _, archErr := h.storage.ArchiveBacklogItem(ctx, itemID, precondition, session.TriggeredByAgent, note); archErr != nil {
-		log.InfoLog.Printf("[mcp:report_duplicate] unclaimed archive failed item=%s: %v", itemID, archErr)
+		log.InfoLog().Printf("[mcp:report_duplicate] unclaimed archive failed item=%s: %v", itemID, archErr)
 		if errors.Is(archErr, session.ErrPreconditionFailed) {
 			return errResult(ErrInternalError, "item state changed since your last read (another session already claimed or resolved it) — call get_backlog_item to see its current status", ""), nil
 		}
 		return errResult(ErrInternalError, fmt.Sprintf("archive failed: %v", archErr), ""), nil
 	}
 
-	log.InfoLog.Printf("[mcp:report_duplicate] session=%s item=%s duplicate_ref=%s archived (unclaimed passerby report)", callerUUID, itemID, duplicateRef)
+	log.InfoLog().Printf("[mcp:report_duplicate] session=%s item=%s duplicate_ref=%s archived (unclaimed passerby report)", callerUUID, itemID, duplicateRef)
 
 	return mcpgo.NewToolResultText(fmt.Sprintf(
 		"Item %s was unclaimed (status %q) — archived directly as a duplicate of %s. No reviewer needed since no work was in progress; this is logged on the item's status history.",
