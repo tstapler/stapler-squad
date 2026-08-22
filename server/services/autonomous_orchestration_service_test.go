@@ -417,7 +417,10 @@ func captureLogs(t *testing.T) *bytes.Buffer {
 // session (the common, expected case — most autonomous sessions are not backlog-linked), the
 // lookup "failure" must log at Debug, not escalate to Warn.
 func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_LogsNotLinkedAtDebug(t *testing.T) {
-	t.Parallel()
+	// Deliberately not t.Parallel(): captureLogs swaps the process-global
+	// slog.Default() logger. A parallel sibling logging during that window
+	// would write into this test's buffer from another goroutine — a real
+	// data race under -race — and could corrupt the assertions below.
 	storage := createTestStorage(t)
 	eventBus := events.NewEventBus(4)
 	svc := NewSessionService(storage, eventBus)
@@ -445,7 +448,8 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_LogsNotLinked
 // must log at Warn so it's diagnosable — previously this took the identical silent path as
 // the expected not-linked case above.
 func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_LogsRealLookupFailureAtWarn(t *testing.T) {
-	t.Parallel()
+	// Deliberately not t.Parallel(): see LogsNotLinkedAtDebug above — captureLogs
+	// swaps the process-global slog.Default() logger.
 	storage := createTestStorage(t)
 	ctx := context.Background()
 	eventBus := events.NewEventBus(4)
@@ -496,7 +500,8 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_LogsRealLooku
 // into the same silent early-return as the expected SessionRoleReview case, leaving the
 // operator with zero signal that anything happened at all.
 func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_UnrecognizedRoleStillNotifies(t *testing.T) {
-	t.Parallel()
+	// Deliberately not t.Parallel(): see LogsNotLinkedAtDebug above — captureLogs
+	// swaps the process-global slog.Default() logger.
 	storage := createTestStorage(t)
 	ctx := context.Background()
 	eventBus := events.NewEventBus(4)

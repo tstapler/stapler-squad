@@ -341,12 +341,17 @@ func (g *GitWorktree) setupNewWorktree() error {
 		// exists": self-heal by falling back to setupFromExistingBranch, the same
 		// reuse path that would already handle a retry of this same call.
 		if strings.Contains(err.Error(), "cannot lock ref") {
+			var exists bool
 			for attempt := 0; attempt < 5; attempt++ {
 				time.Sleep(10 * time.Millisecond)
-				exists, existsErr := branchRefExists(repo, branchRef)
+				var existsErr error
+				exists, existsErr = branchRefExists(repo, branchRef)
 				if existsErr == nil && exists {
 					break
 				}
+			}
+			if !exists {
+				return fmt.Errorf("failed to create worktree from commit %s: %w", headCommit, err)
 			}
 			log.Info("branch ref was lock-contended by a concurrent create race, reusing it for worktree", "branch", g.branchName)
 			return g.setupFromExistingBranch()

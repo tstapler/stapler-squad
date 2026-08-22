@@ -44,13 +44,9 @@ func TestSessionCreationDoesNotHang(t *testing.T) {
 		startCleanup, err := instance.StartWithCleanup(true)
 		elapsed := time.Since(startTime)
 
-		// The session should start well under the previous 30-45 second wait. 5s was
-		// too tight under -race with unbounded package-level parallelism (-p 1
-		// removed): real tmux/subprocess startup is exposed to CPU contention from
-		// other packages' tests, per ADR-001. Widened to 20s to keep headroom while
-		// still catching a genuine regression back to the old multi-second wait.
+		// The session should start well under the previous 30-45 second wait.
 		require.NoError(t, err, "Session creation should succeed")
-		require.Less(t, elapsed, 20*time.Second, "Session creation should complete within 20 seconds, took %v", elapsed)
+		require.Less(t, elapsed, 5*time.Second, "Session creation should complete within 5 seconds, took %v", elapsed)
 
 		defer func() {
 			if err := startCleanup(); err != nil {
@@ -87,10 +83,8 @@ func TestSessionCreationDoesNotHang(t *testing.T) {
 		elapsed := time.Since(startTime)
 
 		// Should complete quickly without waiting for trust prompts
-		// Widened from 5s to 20s: same CPU-contention-under-race exposure as
-		// DirectorySessionCreation above.
 		require.NoError(t, err, "Claude session creation should succeed")
-		require.Less(t, elapsed, 20*time.Second, "Claude session creation should complete within 20 seconds, took %v", elapsed)
+		require.Less(t, elapsed, 5*time.Second, "Claude session creation should complete within 5 seconds, took %v", elapsed)
 
 		defer func() {
 			if err := startCleanup(); err != nil {
@@ -163,10 +157,8 @@ func TestSessionCreationWithRealPrograms(t *testing.T) {
 			startCleanup, err := instance.StartWithCleanup(true)
 			elapsed := time.Since(startTime)
 
-			// Widened from 10s to 30s: same CPU-contention-under-race exposure as
-			// TestSessionCreationDoesNotHang above (ADR-001).
 			require.NoError(t, err, "%s session should start successfully", tc.name)
-			require.Less(t, elapsed, 30*time.Second, "%s session should start within 30 seconds, took %v", tc.name, elapsed)
+			require.Less(t, elapsed, 10*time.Second, "%s session should start within 10 seconds, took %v", tc.name, elapsed)
 
 			defer func() {
 				if err := startCleanup(); err != nil {
@@ -209,11 +201,8 @@ func TestSessionCreationWithWorktree(t *testing.T) {
 	startCleanup, err := instance.StartWithCleanup(true)
 	elapsed := time.Since(startTime)
 
-	// Widened from 10s to 30s: same CPU-contention-under-race exposure as
-	// TestSessionCreationDoesNotHang above (ADR-001) — worktree creation adds a
-	// real git subprocess on top of tmux startup.
 	require.NoError(t, err, "Worktree session should start successfully")
-	require.Less(t, elapsed, 30*time.Second, "Worktree session should start within 30 seconds, took %v", elapsed)
+	require.Less(t, elapsed, 10*time.Second, "Worktree session should start within 10 seconds, took %v", elapsed)
 
 	defer func() {
 		if err := startCleanup(); err != nil {

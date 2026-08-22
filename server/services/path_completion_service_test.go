@@ -489,10 +489,9 @@ func TestListWorktrees_TimesOutOnHungGitCommand(t *testing.T) {
 
 	require.Error(t, err)
 	assert.Equal(t, connect.CodeDeadlineExceeded, connect.CodeOf(err))
-	// Bound tracks listWorktreesTimeout (20s, widened for the same -p 1-removed
-	// CPU-contention exposure as session_creation_test.go's ADR-001 widenings),
-	// plus headroom for context-cancellation/subprocess-teardown overhead.
-	assert.Less(t, elapsed, 25*time.Second, "ListWorktrees should time out near listWorktreesTimeout, not hang")
+	// Bound tracks listWorktreesTimeout (5s) plus headroom for
+	// context-cancellation/subprocess-teardown overhead.
+	assert.Less(t, elapsed, 10*time.Second, "ListWorktrees should time out near listWorktreesTimeout, not hang")
 }
 
 // Unit tests for helper functions.
