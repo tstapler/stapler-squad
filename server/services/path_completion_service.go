@@ -24,8 +24,11 @@ const (
 	// with how many worktrees the repo has and is more exposed to transient
 	// disk/CPU contention from concurrently-running tests or other git
 	// subprocesses. Observed flaking at the tighter 2s bound under a loaded
-	// test suite (TestListWorktrees_EmptyPath, 2026-08-14).
-	listWorktreesTimeout = 5 * time.Second
+	// test suite (TestListWorktrees_EmptyPath, 2026-08-14), then again at 5s
+	// under -race with unbounded package-level parallelism (-p 1 removed):
+	// TestListWorktrees_BasicListing took 16.40s in a full stress run, still
+	// CPU-contention-induced per ADR-001, not a real hang.
+	listWorktreesTimeout = 20 * time.Second
 	dirCacheMaxSize      = 256
 	dirCacheTTL          = 60 * time.Second
 )

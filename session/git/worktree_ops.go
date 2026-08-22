@@ -329,10 +329,28 @@ func (g *GitWorktree) setupNewWorktree() error {
 	if _, err := g.runGitCommand(g.repoPath, "worktree", "add", "-b", g.branchName, g.worktreePath, headCommit); err != nil {
 		// Two concurrent spawns for the same backlog item compute the identical
 		// deterministic branch name (see backlogWorkBranchSlug) and can both pass the
-		// branchRefExists check above before either creates the branch — the loser hits
-		// this exact "already exists" error, leaving a branch with no worktree. Rather
-		// than hard-failing, self-heal by falling back to setupFromExistingBranch, the
-		// same reuse path that would already handle a retry of this same call.
+		// branchRefExists check above before either creates the branch. Depending on
+		// exactly when the loser's git process attempts to write refs/heads/<branch>
+		// relative to the winner's, git surfaces one of two distinct errors for the
+		// identical race: "a branch named '<branch>' already exists" if the winner's
+		// ref write has already landed, or "cannot lock ref '...': Unable to create
+		// '....lock': File exists" if the loser arrives while the winner still holds
+		// the ref lock (which git only holds for the instant it takes to write the
+		// ref file). The lock-contention case is transient by construction, so retry
+		// briefly to let the winner finish, then treat it the same as "already
+		// exists": self-heal by falling back to setupFromExistingBranch, the same
+		// reuse path that would already handle a retry of this same call.
+		if strings.Contains(err.Error(), "cannot lock ref") {
+			for attempt := 0; attempt < 5; attempt++ {
+				time.Sleep(10 * time.Millisecond)
+				exists, existsErr := branchRefExists(repo, branchRef)
+				if existsErr == nil && exists {
+					break
+				}
+			}
+			log.Info("branch ref was lock-contended by a concurrent create race, reusing it for worktree", "branch", g.branchName)
+			return g.setupFromExistingBranch()
+		}
 		if strings.Contains(err.Error(), "already exists") {
 			log.Info("branch already exists (lost a concurrent create race), reusing it for worktree", "branch", g.branchName)
 			return g.setupFromExistingBranch()

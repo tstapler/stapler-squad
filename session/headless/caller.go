@@ -364,8 +364,13 @@ func (p *Pool) call(ctx context.Context, key FeatureKey, systemPrompt, userPromp
 				return
 			}
 
+			// Decode only the leading JSON value rather than json.Unmarshal-ing the
+			// whole buffer: the claude CLI can append a trailing non-JSON line to
+			// stdout after the --output-format json result (e.g. an update notice),
+			// which json.Unmarshal rejects outright as "invalid character ... after
+			// top-level value" even though the JSON result itself is well-formed.
 			var result firstCallJSONResult
-			if jsonErr := json.Unmarshal(data, &result); jsonErr != nil {
+			if jsonErr := json.NewDecoder(strings.NewReader(string(data))).Decode(&result); jsonErr != nil {
 				// Not valid JSON: treat the whole output as plain text.
 				text := strings.TrimSpace(string(data))
 				if text != "" {

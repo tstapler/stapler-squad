@@ -216,13 +216,20 @@ func TestCreateSession_EmptyPath_Autonomous_PassesPathValidation(t *testing.T) {
 // An autonomous request that supplies its own path must use that path as-is, not
 // have it silently replaced by a generated ~/oneoff scratch directory.
 func TestCreateSession_Autonomous_ExplicitPath_DoesNotGenerateScratchDir(t *testing.T) {
-	storage := createTestStorage(t)
-	svc := newCreateTestService(t, storage)
-
+	// baseDir/HOME must be established — and its t.TempDir() cleanup registered —
+	// before the service is constructed. t.Cleanup runs LIFO, and svc.Shutdown()
+	// (registered by newCreateTestService) must await CreateSession's async init
+	// goroutine (trackCleanup, session_service.go) before baseDir's RemoveAll
+	// runs, or the goroutine can still be writing under
+	// baseDir/.stapler-squad/test/test-<pid> when TempDir cleanup fires,
+	// producing a flaky "directory not empty" error.
 	baseDir := t.TempDir()
 	t.Setenv("HOME", baseDir)
 	explicitPath := t.TempDir()
 	oneOffDir := filepath.Join(baseDir, "oneoff")
+
+	storage := createTestStorage(t)
+	svc := newCreateTestService(t, storage)
 
 	resp, err := svc.CreateSession(context.Background(), connect.NewRequest(&sessionv1.CreateSessionRequest{
 		Title:          "autonomous-explicit-path-test",

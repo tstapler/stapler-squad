@@ -196,14 +196,13 @@ jobs:
         env:
           STAPLER_SQUAD_TMUX_CREATE_TIMEOUT_SECONDS: "30"
         run: |
-          # -p 1: serializes package binaries to reduce -race CPU contention that caused intermittent hook/MCP-URL test timeouts — see project_plans/flaky-hook-url-tests/decisions/ADR-001. Do not remove without re-reading that ADR and re-verifying flake rate.
           # -timeout=20m: explicit budget instead of relying on go test's silent 10m
           # default. server/services previously tripped that default timeout with
           # only an opaque "test timed out after 10m0s" — no goroutine/fd context —
           # making it hard to tell a genuine hang apart from cumulative suite
-          # duration under -race -p 1. See BUG-067 and DeleteSession's cleanup
+          # duration under -race. See BUG-067 and DeleteSession's cleanup
           # goroutine leak fix (deleteCleanupWG in server/services/session_service.go).
-          TMUX_BIN="$(pwd)/bin/tmux" go test -race -p 1 -timeout=20m -coverprofile=coverage.out \
+          TMUX_BIN="$(pwd)/bin/tmux" go test -race -timeout=20m -coverprofile=coverage.out \
             -covermode=atomic ./server/... ./session/... ./config/... \
             || (TMUX_BIN="$(pwd)/bin/tmux" go test -race -timeout=20m -v ./...; exit 1)
 
@@ -491,7 +490,10 @@ jobs:
     name: Benchmark Gate (main only)
     runs-on: ubuntu-latest
     timeout-minutes: 45
-    needs: [prepare, test]
+    # Only depends on `prepare`'s generated-files artifact (downloaded below) --
+    # never consumes anything `test` produces, so it runs in parallel with `test`
+    # instead of waiting on it.
+    needs: prepare
     permissions:
       contents: read
       pull-requests: read

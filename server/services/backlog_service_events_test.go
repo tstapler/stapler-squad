@@ -269,10 +269,10 @@ func TestWatchBacklogItems_should_deliverRaceWindowEventExactlyOnceAsSnapshot_Wh
 		IsSnapshot:    false, // as originally published — must not be trusted verbatim by the replay branch
 	})
 
-	setTestAfterSubscribeHook(func() {
+	setTestAfterSubscribeHook(bus, func() {
 		bus.Publish(raceEvent)
 	})
-	t.Cleanup(func() { setTestAfterSubscribeHook(nil) })
+	t.Cleanup(func() { setTestAfterSubscribeHook(bus, nil) })
 
 	sender := &fakeBacklogItemEventSender{}
 	runCtx, cancel := context.WithCancel(ctx)

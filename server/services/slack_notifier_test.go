@@ -519,7 +519,14 @@ func (h *signalingLogHandler) Handle(ctx context.Context, r slog.Record) error {
 }
 
 func TestSlackNotifier_RecoversFromPanic_And_LogsError(t *testing.T) {
-	t.Parallel()
+	// Deliberately not t.Parallel(): this test swaps the process-global
+	// slog.Default() logger for its buffer-backed handler. Any parallel
+	// sibling that logs via the package's log.Warn/log.Error wrappers during
+	// that window writes into the same buf from another goroutine (a real
+	// data race under -race) and can even overwrite the panic-recovery
+	// message this test asserts on. Running serially guarantees no parallel
+	// test is active while the global default is swapped, since Go pauses
+	// already-t.Parallel()'d siblings until all serial tests finish.
 	var buf bytes.Buffer
 	sigCh := make(chan struct{}, 1)
 	prev := slog.Default()

@@ -41,36 +41,51 @@ type backlogItemEventSender interface {
 	Send(*sessionv1.BacklogItemEvent) error
 }
 
-// testAfterSubscribeHook, when non-nil, is invoked immediately after
-// s.eventBus.Subscribe(ctx) below, before the after_seq branch's
-// EventsSince(afterSeq) read. Production code never sets this — it exists
-// solely so Epic 3.2's tests can deterministically land a Publish() call
-// inside the narrow race window between Subscribe() and EventsSince()
+// testAfterSubscribeHook, when set for a given *events.EventBus, is invoked
+// immediately after that bus's Subscribe(ctx) below, before the after_seq
+// branch's EventsSince(afterSeq) read. Production code never sets this — it
+// exists solely so Epic 3.2's tests can deterministically land a Publish()
+// call inside the narrow race window between Subscribe() and EventsSince()
 // described in the forceIsSnapshot call site's comment (pre-mortem P2 #4):
 // without a seam here, reproducing that specific interleaving depends on
 // non-deterministic goroutine scheduling, which cannot be turned into a
 // reliable regression test. See backlog_service_events_test.go's
 // race-window test for the only caller.
 //
-// testAfterSubscribeHookMu guards concurrent read/write of the hook from a
-// test goroutine (setter) and every other parallel test's watchBacklogItems
-// call (reader) — required under -race since the t.Parallel() rollout made
-// this package's WatchBacklogItems tests run concurrently. Modeled on
+// Keyed by *events.EventBus rather than a single package-global func: each
+// test builds its own isolated bus via newTestBacklogServiceWithBus, but
+// watchBacklogItems is exercised by many t.Parallel() tests in this package
+// concurrently. A single global hook fired on every Subscribe() call
+// regardless of which bus it belonged to, so the race-window test's hook
+// could be (and under real scheduling interleavings, was) triggered a
+// second time by an unrelated parallel test's Subscribe() call, publishing
+// the race event into this test's bus twice instead of once and doubling
+// the expected event count. Scoping the hook to the specific bus instance
+// closes that cross-test interference.
+//
+// testAfterSubscribeHookMu guards concurrent read/write of the map from a
+// test goroutine (setter) and every parallel test's watchBacklogItems call
+// (reader) — required under -race since the t.Parallel() rollout made this
+// package's WatchBacklogItems tests run concurrently. Modeled on
 // backlog_service_triage.go's testTriageCompleteHook.
 var (
 	testAfterSubscribeHookMu sync.Mutex
-	testAfterSubscribeHook   func()
+	testAfterSubscribeHooks  = map[*events.EventBus]func(){}
 )
 
-func setTestAfterSubscribeHook(hook func()) {
+func setTestAfterSubscribeHook(bus *events.EventBus, hook func()) {
 	testAfterSubscribeHookMu.Lock()
 	defer testAfterSubscribeHookMu.Unlock()
-	testAfterSubscribeHook = hook
+	if hook == nil {
+		delete(testAfterSubscribeHooks, bus)
+		return
+	}
+	testAfterSubscribeHooks[bus] = hook
 }
 
-func callTestAfterSubscribeHook() {
+func callTestAfterSubscribeHook(bus *events.EventBus) {
 	testAfterSubscribeHookMu.Lock()
-	hook := testAfterSubscribeHook
+	hook := testAfterSubscribeHooks[bus]
 	testAfterSubscribeHookMu.Unlock()
 	if hook != nil {
 		hook()
@@ -108,7 +123,7 @@ func (s *BacklogService) watchBacklogItems(
 	eventCh, subID := s.eventBus.Subscribe(ctx)
 	defer s.eventBus.Unsubscribe(subID)
 
-	callTestAfterSubscribeHook()
+	callTestAfterSubscribeHook(s.eventBus)
 
 	costFor := s.buildCostLookup()
 
