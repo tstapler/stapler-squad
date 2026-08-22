@@ -1,7 +1,6 @@
 package session
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"hash/fnv"
@@ -17,6 +16,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/tmux"
 	"github.com/tstapler/stapler-squad/testutil/tmuxreap"
+	"github.com/tstapler/stapler-squad/testutil/wait"
 
 	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing/object"
@@ -74,45 +74,31 @@ func dumpGoroutines(reason string) {
 	fmt.Fprintf(os.Stderr, "\n=== goroutine dump (%s) ===\n%s\n", reason, buf[:n])
 }
 
-// Test utilities for waiting without static sleeps
+// Test utilities for waiting without static sleeps. Both delegate their polling
+// loop to testutil/wait.WaitForCondition rather than reimplementing a
+// ticker/context-deadline loop, while preserving t.Fatalf-based failure
+// semantics and (for waitForContent) a richer last-content/last-error message.
 
 // waitForCondition polls a condition until it returns true or timeout occurs
 func waitForCondition(t *testing.T, condition func() bool, timeout time.Duration, description string) {
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
-
-	ticker := time.NewTicker(100 * time.Millisecond)
-	defer ticker.Stop()
-
-	// Check immediately first
-	if condition() {
-		return
-	}
-
-	for {
-		select {
-		case <-ctx.Done():
-			t.Fatalf("timeout waiting for %s after %v", description, timeout)
-		case <-ticker.C:
-			if condition() {
-				return
-			}
-		}
+	t.Helper()
+	err := wait.WaitForCondition(condition, wait.WaitConfig{
+		Timeout:      timeout,
+		PollInterval: 100 * time.Millisecond,
+		Description:  description,
+	})
+	if err != nil {
+		t.Fatalf("timeout waiting for %s after %v", description, timeout)
 	}
 }
 
 // waitForContent polls a content getter until it contains expected text
 func waitForContent(t *testing.T, getter func() (string, error), expectedText string, timeout time.Duration, description string) string {
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
-
-	ticker := time.NewTicker(100 * time.Millisecond)
-	defer ticker.Stop()
-
+	t.Helper()
 	var lastContent string
 	var lastErr error
 
-	checkContent := func() bool {
+	condition := func() bool {
 		content, err := getter()
 		if err != nil {
 			lastErr = err
@@ -122,24 +108,18 @@ func waitForContent(t *testing.T, getter func() (string, error), expectedText st
 		return len(content) > 0 && strings.Contains(content, expectedText)
 	}
 
-	// Check immediately first
-	if checkContent() {
-		return lastContent
-	}
-
-	for {
-		select {
-		case <-ctx.Done():
-			if lastErr != nil {
-				t.Fatalf("timeout waiting for %s after %v (last error: %v)", description, timeout, lastErr)
-			}
-			t.Fatalf("timeout waiting for %s after %v (last content: %q)", description, timeout, lastContent)
-		case <-ticker.C:
-			if checkContent() {
-				return lastContent
-			}
+	err := wait.WaitForCondition(condition, wait.WaitConfig{
+		Timeout:      timeout,
+		PollInterval: 100 * time.Millisecond,
+		Description:  description,
+	})
+	if err != nil {
+		if lastErr != nil {
+			t.Fatalf("timeout waiting for %s after %v (last error: %v)", description, timeout, lastErr)
 		}
+		t.Fatalf("timeout waiting for %s after %v (last content: %q)", description, timeout, lastContent)
 	}
+	return lastContent
 }
 
 // TestSessionRecoveryScenarios tests the real-world session recovery scenarios

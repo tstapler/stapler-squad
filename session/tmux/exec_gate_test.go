@@ -230,7 +230,15 @@ func TestExecGate_TryAcquireFailsWhenFull(t *testing.T) {
 	elapsed := time.Since(start)
 	require.NoError(t, err)
 	assert.False(t, ok, "TryAcquire should fail when the gate is fully held")
-	assert.Less(t, elapsed, 50*time.Millisecond, "non-blocking TryAcquire must return immediately")
+	// acquireSlot's non-blocking branch returns immediately after a single
+	// pass over the slots (`if !blocking { return nil, false, nil }`, before
+	// any time.After) -- it structurally cannot enter the backoff/retry loop.
+	// So this bound isn't timing that loop; it only needs to be generous
+	// enough to absorb real flock() syscall + scheduler noise under a loaded
+	// -race run while still catching an actual regression into the blocking
+	// path, which would take at least execGateAcquireBackoffStart (5ms) per
+	// retry and keep growing toward execGateAcquireBackoffMax (100ms).
+	assert.Less(t, elapsed, 500*time.Millisecond, "non-blocking TryAcquire must return immediately, not enter the backoff loop")
 
 	// Release one slot; TryAcquire should now succeed.
 	releases[0]()

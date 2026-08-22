@@ -24,8 +24,11 @@ func TestStartZombieWatcher_GoroutineFullyExits_When_WaitGroupIsJoined(t *testin
 
 	StartZombieWatcher(ctx, time.Millisecond, func(string, ...any) {}, &wg)
 
-	// Give the goroutine a moment to actually start running.
-	time.Sleep(10 * time.Millisecond)
+	// No sleep needed before cancel: wg.Add(1) already ran synchronously
+	// inside StartZombieWatcher before it returned, and closing ctx.Done()
+	// unblocks the goroutine's select as soon as it reaches it, regardless
+	// of whether that happens before or after cancel() runs. wg.Wait()
+	// below is what provides the deterministic join.
 	cancel()
 
 	joined := make(chan struct{})
