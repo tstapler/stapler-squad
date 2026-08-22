@@ -300,6 +300,11 @@ type Config struct {
 	SessionDefaults SessionDefaults `json:"session_defaults,omitempty"`
 	// Notifications holds the user's notification delivery preferences.
 	Notifications NotificationPrefs `json:"notifications,omitempty"`
+	// Remotes is a named list of SSH-reachable remote hosts sessions can be
+	// created against (ssh-remote-workspaces feature). Holds connection
+	// coordinates only — no SSH key material; see RemoteConfig's doc
+	// comment. Looked up by name via RemoteByName.
+	Remotes []RemoteConfig `json:"remotes,omitempty"`
 	// OneOffBaseDir is the base directory where one-off session directories are created.
 	// Default: "~/oneoff". Tilde is expanded at runtime. Created automatically on first use.
 	OneOffBaseDir string `json:"one_off_base_dir,omitempty"`
@@ -515,6 +520,21 @@ func (c *Config) GetGitHubEnterpriseHosts() []GitHubEnterpriseHost {
 		return nil
 	}
 	return c.GitHubEnterpriseHosts
+}
+
+// RemoteByName looks up a configured remote by its exact Name. Returns
+// (nil, false) if c is nil or no remote with that name is registered.
+// Consumed by session creation (Phase 4) and Settings UI validation (Phase 6).
+func (c *Config) RemoteByName(name string) (*RemoteConfig, bool) {
+	if c == nil {
+		return nil, false
+	}
+	for i := range c.Remotes {
+		if c.Remotes[i].Name == name {
+			return &c.Remotes[i], true
+		}
+	}
+	return nil, false
 }
 
 // DefaultConfig returns the default configuration

@@ -3,10 +3,13 @@ package adapters
 import (
 	"testing"
 
+	"golang.org/x/crypto/ssh"
+
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/detection"
 	"github.com/tstapler/stapler-squad/session/detection/ratelimit"
+	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
 func TestRateLimitStateToProto_AllStates(t *testing.T) {
@@ -80,6 +83,37 @@ func TestInstanceToProto_SubagentCount_DefaultZero(t *testing.T) {
 	}
 	if proto.SubagentCount != 0 {
 		t.Errorf("SubagentCount = %d, want 0 for an instance with no status manager", proto.SubagentCount)
+	}
+}
+
+// TestInstanceToProto_RemoteName_EmptyForLocal verifies a plain (LocalTarget)
+// instance's RemoteName proto field stays empty -- a local session's card
+// must never show the Epic 6.2 host badge.
+func TestInstanceToProto_RemoteName_EmptyForLocal(t *testing.T) {
+	inst := &session.Instance{} // ExecutionTarget nil → defaults to LocalTarget{}
+	proto := InstanceToProto(inst, nil)
+	if proto == nil {
+		t.Fatal("expected non-nil proto for non-nil instance")
+	}
+	if proto.RemoteName != "" {
+		t.Errorf("RemoteName = %q, want empty for a local session", proto.RemoteName)
+	}
+}
+
+// TestInstanceToProto_RemoteName_SetForRemote verifies a session.Instance
+// whose ExecutionTarget is a RemoteExecutionTarget surfaces the remote's
+// name on the proto Session -- the data source for the SessionCard host
+// badge (ssh-remote-workspaces Epic 6.2).
+func TestInstanceToProto_RemoteName_SetForRemote(t *testing.T) {
+	runner := tmux.NewSSHRunner(tmux.SSHTarget{Name: "prod-box", Addr: "prod-box.example.com:22"}, ssh.ClientConfig{})
+	target := session.NewRemoteExecutionTarget(session.RemoteTarget{Name: "prod-box"}, runner)
+	inst := &session.Instance{ExecutionTarget: target}
+	proto := InstanceToProto(inst, nil)
+	if proto == nil {
+		t.Fatal("expected non-nil proto for non-nil instance")
+	}
+	if proto.RemoteName != "prod-box" {
+		t.Errorf("RemoteName = %q, want %q", proto.RemoteName, "prod-box")
 	}
 }
 

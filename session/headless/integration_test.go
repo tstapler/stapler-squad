@@ -25,7 +25,7 @@ func TestPool_RealClaude_SimplePrompt(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
 
-	result, _, err := pool.CallBlocking(ctx, FeatureKeyCustom, "", "Say hello in exactly 3 words.", CallOptions{})
+	result, err := pool.CallBlocking(ctx, FeatureKeyCustom, "", "Say hello in exactly 3 words.", CallOptions{}, DiscardCost)
 	require.NoError(t, err)
 	assert.NotEmpty(t, result, "result should be non-empty")
 	t.Logf("claude response: %q", result)
@@ -47,10 +47,10 @@ func TestPool_RealClaude_SessionResumption(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
 
-	_, _, err = realPool.CallBlocking(ctx, "integration-test", "", "Say 'first call'", CallOptions{})
+	_, err = realPool.CallBlocking(ctx, "integration-test", "", "Say 'first call'", CallOptions{}, DiscardCost)
 	require.NoError(t, err, "first call should succeed")
 
-	_, _, err = realPool.CallBlocking(ctx, "integration-test", "", "Say 'second call'", CallOptions{})
+	_, err = realPool.CallBlocking(ctx, "integration-test", "", "Say 'second call'", CallOptions{}, DiscardCost)
 	require.NoError(t, err, "second call should succeed")
 
 	require.Len(t, capturedArgs, 2, "should have captured 2 calls")
@@ -91,7 +91,7 @@ func TestPool_RealClaude_WorkDirOnly_GrantsReadAccess(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
 
-	result, _, err := pool.CallBlocking(ctx, FeatureKeyCustom, "", "Read the file marker.txt in your current working directory and output ONLY its exact contents, nothing else.", CallOptions{WorkDir: tempDir})
+	result, err := pool.CallBlocking(ctx, FeatureKeyCustom, "", "Read the file marker.txt in your current working directory and output ONLY its exact contents, nothing else.", CallOptions{WorkDir: tempDir}, DiscardCost)
 	require.NoError(t, err)
 	require.Contains(t, result, markerValue)
 }
@@ -117,11 +117,11 @@ func TestPool_RealClaude_WorkDirWithToolFlags_GrantsReadAccess(t *testing.T) {
 	// session.PermissionModeBypassPermissions == "bypassPermissions", but the
 	// session package imports session/headless, so importing session here
 	// would create an import cycle; use the literal value instead.
-	result, _, err := pool.CallBlocking(ctx, FeatureKeyCustom, "", "Read the file marker.txt in your current working directory and output ONLY its exact contents, nothing else.", CallOptions{
+	result, err := pool.CallBlocking(ctx, FeatureKeyCustom, "", "Read the file marker.txt in your current working directory and output ONLY its exact contents, nothing else.", CallOptions{
 		WorkDir:        tempDir,
 		AllowedTools:   "Read,Grep,Glob",
 		PermissionMode: "bypassPermissions",
-	})
+	}, DiscardCost)
 	require.NoError(t, err)
 	require.Contains(t, result, markerValue)
 }
@@ -185,12 +185,12 @@ func TestPool_RealClaude_UnlistedBashCommand_BlockedOrAllowed(t *testing.T) {
 			canaryPath, canaryPath,
 		)
 
-		result, _, err := pool.CallBlocking(ctx, FeatureKeyCustom, "", prompt, CallOptions{
+		result, err := pool.CallBlocking(ctx, FeatureKeyCustom, "", prompt, CallOptions{
 			WorkDir:         tempDir,
 			AllowedTools:    testCodebaseReadAllowedToolsWithBash,
 			PermissionMode:  "bypassPermissions",
 			DisallowedTools: testCodebaseReadDisallowedTools,
-		})
+		}, DiscardCost)
 
 		t.Logf("[UnlistedCommand] CallBlocking err: %v", err)
 		t.Logf("[UnlistedCommand] raw result: %q", result)
@@ -215,12 +215,12 @@ func TestPool_RealClaude_UnlistedBashCommand_BlockedOrAllowed(t *testing.T) {
 			canaryPath, canaryPath,
 		)
 
-		result, _, err := pool.CallBlocking(ctx, FeatureKeyCustom, "", prompt, CallOptions{
+		result, err := pool.CallBlocking(ctx, FeatureKeyCustom, "", prompt, CallOptions{
 			WorkDir:         tempDir,
 			AllowedTools:    testCodebaseReadAllowedToolsWithBash,
 			PermissionMode:  "bypassPermissions",
 			DisallowedTools: testCodebaseReadDisallowedTools,
-		})
+		}, DiscardCost)
 
 		t.Logf("[ChainedAfterAllowed] CallBlocking err: %v", err)
 		t.Logf("[ChainedAfterAllowed] raw result: %q", result)

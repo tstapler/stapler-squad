@@ -307,10 +307,11 @@ func (p *fastTriagePool) CallBlocking(
 	key headless.FeatureKey,
 	_, _ string, // discard both production prompts (system and user)
 	opts headless.CallOptions,
-) (string, float64, error) {
+	sink headless.CostSink,
+) (string, error) {
 	// Strip WorkDir — the fast prompt doesn't need git context.
 	opts.WorkDir = ""
-	return p.pool.CallBlocking(ctx, key, fastTriageSystemPrompt, fastTriageUserPrompt, opts)
+	return p.pool.CallBlocking(ctx, key, fastTriageSystemPrompt, fastTriageUserPrompt, opts, sink)
 }
 
 // TestTriageHarness_RealClaude exercises the full triage pipeline against a live Claude

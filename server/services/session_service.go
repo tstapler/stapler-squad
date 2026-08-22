@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -34,10 +35,12 @@ import (
 	"github.com/tstapler/stapler-squad/session/namegen"
 	"github.com/tstapler/stapler-squad/session/prompts"
 	"github.com/tstapler/stapler-squad/session/search"
+	"github.com/tstapler/stapler-squad/session/sshremote"
 	"github.com/tstapler/stapler-squad/session/tmux"
 	"github.com/tstapler/stapler-squad/session/tokens"
 
 	"connectrpc.com/connect"
+	"golang.org/x/crypto/ssh"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -271,6 +274,43 @@ type SessionService struct {
 	// than a per-call-site change across the package's ~90 NewSessionService
 	// test call sites.
 	testTmuxServerSocket string
+
+	// testSSHClientPool, when non-nil, is shared by every tmux.SSHRunner and
+	// sshremote.RemoteApprovalRelay this service constructs for a remote
+	// session, in place of the process-wide tmux.DefaultSSHClientPool().
+	// tmux.SSHClientPool keys pooled *ssh.Client connections by remote NAME
+	// alone, not by dialed address (see SSHTarget's doc comment) -- so tests
+	// across this package that all name their fixture remote "test-remote"
+	// but spin up a fresh in-process sshd on a new ephemeral port each time
+	// would otherwise share ONE process-wide pool entry and intermittently
+	// reuse a stale *ssh.Client left over from a previous test's
+	// already-torn-down server, surfacing as a garbled "ssh: unexpected
+	// packet in response to channel open" failure. Set automatically by
+	// NewSessionServiceWithSearchEngine under config.IsTestMode(), same
+	// service-wide test-hook rationale as testTmuxServerSocket above.
+	testSSHClientPool *tmux.SSHClientPool
+
+	// remoteKeyStore and remoteKnownHosts back CreateSession's remote-target
+	// mode-specific block (ssh-remote-workspaces Phase 4, Epic 4.2): resolving
+	// a remote's stored SSH identity and verifying its host key, mirroring
+	// RemoteService's own fields of the same purpose. nil until SetRemoteDeps
+	// is called (server.go wires the same *sshremote.KnownHostsStore/*sshremote.KeyStore
+	// instances RemoteService uses) -- CreateSession returns CodeFailedPrecondition
+	// for any request naming a remote when either is nil, rather than nil-pointer
+	// panicking.
+	remoteKeyStore   *sshremote.KeyStore
+	remoteKnownHosts *sshremote.KnownHostsStore
+
+	// permissionRequestHandler backs setupRemoteApprovalHooks's per-remote-
+	// session *sshremote.RemoteApprovalRelay construction (ssh-remote-
+	// workspaces Phase 5 correction, ADR-003's addendum): every relay is
+	// wired to drive its requests through this handler, exactly the way the
+	// real local `/api/hooks/permission-request` HTTP endpoint does. nil
+	// until SetPermissionRequestHandler is called (server.go wires the same
+	// *ApprovalHandler registered at that endpoint) -- setupRemoteApprovalHooks
+	// returns an error (non-fatal, logged and swallowed by its caller) rather
+	// than nil-pointer panicking when unset.
+	permissionRequestHandler sshremote.PermissionRequestHandler
 }
 
 // trackCleanup runs fn in a goroutine tracked by deleteCleanupWG so Shutdown
@@ -668,6 +708,7 @@ func NewSessionServiceWithSearchEngine(storage session.InstanceStore, eventBus *
 
 	if config.IsTestMode() {
 		svc.testTmuxServerSocket = fmt.Sprintf("test_server_services_%d_%d", os.Getpid(), atomic.AddUint64(&testTmuxServerSocketCounter, 1))
+		svc.testSSHClientPool = tmux.NewSSHClientPool()
 	}
 
 	// Wire the fast-path live-instance lookup so WorkspaceService read-only RPCs
@@ -803,6 +844,19 @@ func (s *SessionService) GetInstanceStore() session.InstanceStore {
 	return s.storage
 }
 
+// sshClientPool returns the SSHClientPool every remote-session SSHRunner/
+// RemoteApprovalRelay this service constructs must share -- s.testSSHClientPool
+// under test (see its doc comment), otherwise the process-wide production
+// default. Never construct a tmux.SSHRunner or sshremote.RemoteApprovalRelay
+// for a remote session by calling tmux.DefaultSSHClientPool() directly; use
+// this instead so tests stay isolated from each other and from production.
+func (s *SessionService) sshClientPool() *tmux.SSHClientPool {
+	if s.testSSHClientPool != nil {
+		return s.testSSHClientPool
+	}
+	return tmux.DefaultSSHClientPool()
+}
+
 // FindLiveInstance returns the live in-memory instance held by the ReviewQueuePoller,
 // or nil if the poller is not wired or the session is not found. Use this instead of
 // LoadInstances() for read-only and mutation operations that need the live instance
@@ -927,10 +981,25 @@ func stapleSquadTmuxName(title string) string {
 }
 
 // expandTildePath replaces a leading ~ with the user's home directory.
-func expandTildePath(path string) string {
+//
+// remote must be true when this path names a location on a remote host
+// (req.Msg.Remote set) rather than this process's own filesystem. A `~`-prefixed
+// remote path is rejected outright rather than silently expanded against
+// os.UserHomeDir() -- that resolves to THIS server process's local home
+// directory, not the remote host's, so the expanded path previously named
+// nonsense on the wrong machine entirely (e.g. a NewWorktree session's repo
+// path, or a Directory session's remote path) -- found in pre-ship review.
+// The remote host's actual home directory isn't synchronously resolvable here
+// without an extra SSH round trip before the runner is even dialed, so
+// callers targeting a remote host should pass an absolute path instead.
+func expandTildePath(path string, remote bool) (string, error) {
+	isTildePath := path == "~" || strings.HasPrefix(path, "~/")
+	if isTildePath && remote {
+		return "", fmt.Errorf("path %q: ~ is not supported for remote sessions -- use an absolute path on the remote host", path)
+	}
 	if path == "~" {
 		if home, err := os.UserHomeDir(); err == nil {
-			return home
+			return home, nil
 		} else {
 			log.Warn("expandTildePath: failed to resolve home directory", "err", err)
 		}
@@ -941,14 +1010,14 @@ func expandTildePath(path string) string {
 			// Guard against path traversal: reject any result that escapes the home directory.
 			if !strings.HasPrefix(expanded, home+string(filepath.Separator)) && expanded != home {
 				log.Warn("expandTildePath: path traversal rejected", "input", path)
-				return path
+				return path, nil
 			}
-			return expanded
+			return expanded, nil
 		} else {
 			log.Warn("expandTildePath: failed to resolve home directory", "err", err)
 		}
 	}
-	return path
+	return path, nil
 }
 
 // GetApprovalStore returns the approval store for wiring up the HTTP hook handler.
@@ -1369,6 +1438,32 @@ func (s *SessionService) SetReviewQueuePoller(poller *session.ReviewQueuePoller)
 	}
 }
 
+// SetRemoteDeps wires the SSH-identity and host-key-trust stores CreateSession's
+// remote-target mode-specific block needs (ssh-remote-workspaces Phase 4, Epic
+// 4.2). server.go passes the same *sshremote.KeyStore/*sshremote.KnownHostsStore
+// instances used to construct RemoteService, so a remote trusted/given an
+// identity via Settings' TOFU flow is immediately usable by CreateSession with
+// no separate wiring step. Until called, CreateSession rejects any request
+// naming a remote with CodeFailedPrecondition.
+func (s *SessionService) SetRemoteDeps(keyStore *sshremote.KeyStore, knownHosts *sshremote.KnownHostsStore) {
+	s.remoteKeyStore = keyStore
+	s.remoteKnownHosts = knownHosts
+}
+
+// SetPermissionRequestHandler wires the handler every remote session's
+// *sshremote.RemoteApprovalRelay drives its PermissionRequest hook payloads
+// through (ssh-remote-workspaces Phase 5 correction). server.go passes the
+// same *ApprovalHandler registered at the local `/api/hooks/permission-request`
+// HTTP endpoint, mirroring SetRemoteDeps's pattern of injecting a
+// server.go-constructed dependency rather than SessionService owning its
+// own separate instance. Must be called during server startup before any
+// remote session is created; setupRemoteApprovalHooks degrades to a
+// non-fatal logged error (not a panic) if a remote session is created
+// before this is wired.
+func (s *SessionService) SetPermissionRequestHandler(handler sshremote.PermissionRequestHandler) {
+	s.permissionRequestHandler = handler
+}
+
 // SetMemoryCacheReader wires the HibernationSweeper so that ListSessions can
 // populate memory_rss_mb, estimated_savings_mb, and system_memory_pct fields.
 func (s *SessionService) SetMemoryCacheReader(r session.MemoryCacheReader) {
@@ -1681,8 +1776,21 @@ func (s *SessionService) CreateSession(
 	// one-off path and the defaults/alias path further down.
 	cfg := config.LoadConfig()
 
+	// resolveRemoteTarget is resolved here -- ahead of expandTildePath below, and well
+	// ahead of the Directory-mode os.Stat check and the mode-specific block further down
+	// -- because both of those, and tilde-expansion, must behave differently for a
+	// remote-targeted request. It only depends on req.Msg/cfg (both already available),
+	// so resolving it this early is side-effect-free.
+	resolvedRemote, remoteRequested, remoteErr := resolveRemoteTarget(req.Msg, cfg)
+	if remoteErr != nil {
+		return nil, connect.NewError(connect.CodeInvalidArgument, remoteErr)
+	}
+
 	// Resolve GitHub URLs to local paths (GOPATH-style: ~/.stapler-squad/repos/<host>/owner/repo)
-	resolvedPath := expandTildePath(req.Msg.Path)
+	resolvedPath, tildeErr := expandTildePath(req.Msg.Path, remoteRequested)
+	if tildeErr != nil {
+		return nil, connect.NewError(connect.CodeInvalidArgument, tildeErr)
+	}
 	branch := req.Msg.Branch
 	var gitHubRef *session.GitHubRef
 	var clonedRepoPath string
@@ -1764,7 +1872,11 @@ func (s *SessionService) CreateSession(
 			}
 			instanceCLIFlags = resolved.CLIFlags
 			if resolvedPath == "" && resolved.Path != "" {
-				resolvedPath = expandTildePath(resolved.Path)
+				aliasResolvedPath, aliasTildeErr := expandTildePath(resolved.Path, remoteRequested)
+				if aliasTildeErr != nil {
+					return nil, connect.NewError(connect.CodeInvalidArgument, aliasTildeErr)
+				}
+				resolvedPath = aliasResolvedPath
 			}
 			// Read session type directly from the alias config — it is an alias-specific
 			// property, not a cascading default, so it is not part of ResolvedDefaults.
@@ -1824,8 +1936,11 @@ func (s *SessionService) CreateSession(
 	}
 
 	// For Directory mode: if path does not exist and create_if_missing is not set, return
-	// CodeNotFound so the frontend can show a confirmation dialog.
-	if sessionType == session.SessionTypeDirectory {
+	// CodeNotFound so the frontend can show a confirmation dialog. Skipped for a remote
+	// target -- create_if_missing is not yet supported for remote Directory sessions (see
+	// the remote mode-specific block below), and existence is the remote host's to answer,
+	// not this process's local filesystem.
+	if sessionType == session.SessionTypeDirectory && !remoteRequested {
 		if _, err := os.Stat(resolvedPath); os.IsNotExist(err) {
 			if !req.Msg.CreateIfMissing {
 				if req.Msg.ResumeId != "" {
@@ -1856,6 +1971,214 @@ func (s *SessionService) CreateSession(
 			fmt.Errorf("auto_approve is not supported for program %q", program))
 	}
 
+	// Remote-target mode-specific block (ssh-remote-workspaces Phase 4, Epic 4.2,
+	// Task 4.2.1c; extended post-review to compose with more than one
+	// SessionType per ADR-001 "remote as an orthogonal flag" -- every existing
+	// SessionType is meaningful on a remote host too): when req.Msg.Remote
+	// names a saved remote, resolve its stored identity, dial an SSHRunner, and
+	// synchronously bring up the remote worktree/directory + remote tmux
+	// session -- mirroring how the AutonomousMode/OneOff blocks above do
+	// mode-specific work before session.CreateManagedInstance is called, so a
+	// failure here surfaces as a normal RPC error instead of being buried in
+	// the async goroutine below.
+	//
+	// Supported session types: SessionTypeNewWorktree (resolvedPath is an
+	// existing repo already on the remote host, mirroring how a local
+	// SessionTypeNewWorktree session's Path names an existing local repo; a
+	// fresh worktree is created under the remote's configured base_path),
+	// SessionTypeExistingWorktree (req.Msg.ExistingWorktree already names a
+	// worktree path on the remote host -- no creation, just attach),
+	// SessionTypeDirectory (resolvedPath already names a plain directory on
+	// the remote host -- no worktree machinery at all, mirrors local
+	// Directory sessions), and SessionTypeNewProject (resolvedPath is
+	// git-initialized on the remote host via
+	// git.RemoteWorktreeOps.InitializeProjectDirectory, mirroring local
+	// NewProject's git.InitializeProjectDirectory -- pre-ship review found
+	// the CommandRunner-based remote equivalent already existed in
+	// session/git/remote_worktree.go with no production caller yet; this is
+	// that caller). Any other session type combined with a remote target is
+	// rejected up front rather than silently attempting local-filesystem
+	// discovery against a path that only exists on the remote host.
+	//
+	// On success, sessionType/existingWorktreeOverride are remapped to
+	// SessionTypeExistingWorktree pointing at the worktree/directory just
+	// resolved for NewWorktree/ExistingWorktree specifically -- see
+	// setupFirstTimeWorktree's doc comment (session/instance_worktree.go) for
+	// why that's the shape the later async Start() goroutine needs for those
+	// two: it only attaches to the already-created worktree/tmux session, it
+	// never tries to create them again (Setup() is skipped entirely for
+	// SessionTypeExistingWorktree). Directory and NewProject are deliberately
+	// NOT remapped -- both persist no worktree at all (see
+	// instance_worktree.go's setupFirstTimeWorktree default/NewProject
+	// cases), so remapping either to ExistingWorktree would make
+	// setupFirstTimeWorktree persist a synthetic worktree row with a
+	// placeholder "unknown" branch for a path that isn't meaningfully a
+	// worktree -- the exact design smell pre-ship review flagged for
+	// Directory, which NewProject would otherwise reintroduce.
+	var executionTarget session.ExecutionTarget = session.LocalTarget{}
+	existingWorktreeOverride := req.Msg.ExistingWorktree
+	if remoteRequested {
+		switch sessionType {
+		case session.SessionTypeNewWorktree, session.SessionTypeExistingWorktree, session.SessionTypeDirectory, session.SessionTypeNewProject:
+			// supported, handled below
+		default:
+			return nil, connect.NewError(connect.CodeInvalidArgument,
+				fmt.Errorf("remote sessions do not support session_type=%q (supported: new_worktree, existing_worktree, directory, new_project)", sessionType))
+		}
+		if sessionType == session.SessionTypeExistingWorktree && req.Msg.ExistingWorktree == "" {
+			return nil, connect.NewError(connect.CodeInvalidArgument,
+				errors.New("existing_worktree path is required for remote session_type=existing_worktree"))
+		}
+		if sessionType == session.SessionTypeNewProject && resolvedPath == "" {
+			// Local NewProject can leave resolvedPath empty and still resolve one later
+			// via alias config (see the "path is required" exemption above and the
+			// alias-resolution block below) -- but a remote NewProject has no such
+			// alias-driven fallback for WHERE on the remote host to init, so this must
+			// be resolvable synchronously, right here, or rejected with a clear error
+			// rather than remote-initializing an empty/nonsense path.
+			return nil, connect.NewError(connect.CodeInvalidArgument,
+				errors.New("path is required for remote session_type=new_project"))
+		}
+		if s.remoteKeyStore == nil || s.remoteKnownHosts == nil {
+			return nil, connect.NewError(connect.CodeFailedPrecondition,
+				errors.New("remote session support is not configured on this server"))
+		}
+
+		target := tmux.SSHTarget{Name: resolvedRemote.Name, Addr: remoteAddr(resolvedRemote.Host)}
+		clientConfig := ssh.ClientConfig{
+			User:            resolvedRemote.User,
+			Auth:            resolveIdentityAuthMethods(ctx, s.remoteKeyStore, resolvedRemote.IdentityRef),
+			HostKeyCallback: s.remoteKnownHosts.HostKeyCallback(),
+		}
+		runner := tmux.NewSSHRunner(target, clientConfig, tmux.WithSSHClientPool(s.sshClientPool()))
+		if dialErr := runner.Dial(ctx); dialErr != nil {
+			return nil, connect.NewError(connect.CodeUnavailable,
+				fmt.Errorf("failed to connect to remote %q: %w", resolvedRemote.Name, dialErr))
+		}
+
+		// remoteWorkingPath is the remote path the tmux session attaches to.
+		// worktreeOps/remoteWT/createdWorktree are populated only for
+		// SessionTypeNewWorktree, the one case that actually creates
+		// something on the remote host worth rolling back if the tmux
+		// bring-up below fails -- ExistingWorktree/Directory attach to a
+		// path the caller already asserts exists, so there is nothing this
+		// block itself created to clean up.
+		var (
+			remoteWorkingPath string
+			worktreeOps       *git.RemoteWorktreeOps
+			remoteWT          git.RemoteWorktree
+			createdWorktree   bool
+		)
+		switch sessionType {
+		case session.SessionTypeNewWorktree:
+			if branch == "" {
+				branch = cfg.BranchPrefix + git.SanitizeBranchName(req.Msg.Title)
+			}
+			remoteWorkingPath = path.Join(resolvedRemote.BasePath, git.SanitizeBranchName(req.Msg.Title))
+			worktreeOps = git.NewRemoteWorktreeOps(runner)
+			remoteWT = git.RemoteWorktree{RepoPath: resolvedPath, WorktreePath: remoteWorkingPath, Branch: branch}
+
+			// RemoteWorktreeOps.CreateWorktree (Phase 2, session/git/remote_worktree.go)
+			// mirrors the local "attach to an already-existing branch" `git worktree add
+			// <path> <branch>` shape deliberately, with no -b -- so a session that wants
+			// a fresh branch on the remote (the common case, mirroring local
+			// SessionTypeNewWorktree's own branch auto-creation) needs it created first.
+			// Best-effort: "git branch <name>" failing because the branch already exists
+			// is expected and ignored; any other failure (unreachable repo, invalid
+			// resolvedPath) is surfaced immediately rather than deferred to a more
+			// confusing failure from CreateWorktree itself.
+			if out, branchErr := runner.Run(ctx, resolvedPath, "git", "branch", branch); branchErr != nil &&
+				!strings.Contains(string(out), "already exists") {
+				return nil, connect.NewError(connect.CodeInternal,
+					fmt.Errorf("failed to create branch %q on remote %q: %s (%w)",
+						branch, resolvedRemote.Name, strings.TrimSpace(string(out)), branchErr))
+			}
+			if createErr := worktreeOps.CreateWorktree(ctx, remoteWT); createErr != nil {
+				return nil, connect.NewError(connect.CodeInternal,
+					fmt.Errorf("failed to create remote worktree on %q: %w", resolvedRemote.Name, createErr))
+			}
+			createdWorktree = true
+		case session.SessionTypeExistingWorktree:
+			remoteWorkingPath = req.Msg.ExistingWorktree
+		case session.SessionTypeDirectory:
+			remoteWorkingPath = resolvedPath
+		case session.SessionTypeNewProject:
+			remoteWorkingPath = resolvedPath
+			// No createdWorktree/rollback bookkeeping here, matching
+			// InitializeProjectDirectory's own doc comment: unlike CreateWorktree
+			// there is no cheap, safe remote rollback for a partial git-init (that
+			// doc comment is explicit about not wanting an `rm -rf` embedded in a
+			// remote script). A failure after this point can leave a
+			// partially-initialized directory on the remote host for an operator
+			// to inspect or retry against -- an accepted, documented tradeoff, not
+			// an oversight.
+			if initErr := git.NewRemoteWorktreeOps(runner).InitializeProjectDirectory(ctx, remoteWorkingPath); initErr != nil {
+				return nil, connect.NewError(connect.CodeInternal,
+					fmt.Errorf("failed to initialize new project on remote %q: %w", resolvedRemote.Name, initErr))
+			}
+		}
+
+		// Best-effort compensating cleanup if the remote tmux session can't be
+		// brought up after the worktree already exists (Task 4.2.1e,
+		// adversarial-review.md Blocker 3): the worktree creation above already
+		// succeeded, so a failure here must not leave it silently orphaned.
+		// Only applies when createdWorktree -- ExistingWorktree/Directory
+		// never created anything this block owns, so there is nothing to
+		// roll back on tmux failure for those.
+		//
+		// s.testTmuxServerSocket must be applied here exactly as instance.go's
+		// initTmuxSession applies InstanceOptions.TmuxServerSocket (set to the
+		// same value a few lines below) -- otherwise this synchronous check
+		// and the Instance's own later TmuxSession construction resolve to two
+		// DIFFERENT tmux -L server sockets under config.IsTestMode() (each
+		// SessionService gets its own isolated per-instance test socket; the
+		// package-wide test-isolation fallback ResolveSocket("") would use
+		// instead is a different socket entirely), so the session this block
+		// creates would silently be invisible to -- and get recreated a second
+		// time by -- the Instance's own startLocked() shortly after. Confirmed
+		// via TestCreateSession_RemoteTarget_CreatesRemoteWorktreeAndTmuxSession,
+		// which failed before this fix with the two calls targeting
+		// "test-isolated-<pid>" and "test_server_services_<pid>_<n>" respectively.
+		var remoteSession *tmux.TmuxSession
+		if s.testTmuxServerSocket != "" {
+			remoteSession = tmux.NewTmuxSessionWithServerSocket(req.Msg.Title, program, "staplersquad_", s.testTmuxServerSocket, tmux.WithRegistry(nil), tmux.WithCommandRunner(runner))
+		} else {
+			remoteSession = tmux.NewTmuxSessionWithPrefix(req.Msg.Title, program, "staplersquad_", tmux.WithCommandRunner(runner))
+		}
+		if ensureErr := remoteSession.EnsureRemoteSession(ctx, remoteWorkingPath); ensureErr != nil {
+			if !createdWorktree {
+				return nil, connect.NewError(connect.CodeInternal, fmt.Errorf(
+					"failed to start remote tmux session on %q: %w", resolvedRemote.Name, ensureErr))
+			}
+			if cleanupErr := worktreeOps.RemoveWorktree(ctx, remoteWT); cleanupErr != nil {
+				return nil, connect.NewError(connect.CodeInternal, fmt.Errorf(
+					"failed to start remote tmux session on %q (%v); best-effort cleanup of remote worktree %s ALSO failed (%v) -- this path may be orphaned on the remote host and require manual removal",
+					resolvedRemote.Name, ensureErr, remoteWorkingPath, cleanupErr))
+			}
+			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf(
+				"failed to start remote tmux session on %q: %w (remote worktree %s was cleaned up)",
+				resolvedRemote.Name, ensureErr, remoteWorkingPath))
+		}
+
+		executionTarget = session.NewRemoteExecutionTarget(*resolvedRemote, runner)
+		// Only NewWorktree/ExistingWorktree originated in a real git worktree on the
+		// remote host -- remap those to ExistingWorktree so setupFirstTimeWorktree
+		// attaches to remoteWorkingPath instead of re-running worktree creation
+		// (see its doc comment). Directory/NewProject-originated sessions are
+		// deliberately left as-is: forcing either through ExistingWorktree too (as
+		// this used to do unconditionally for Directory) made setupFirstTimeWorktree
+		// persist a synthetic GitWorktree row with a placeholder "unknown" branch
+		// even when the remote path may not be a meaningful git worktree -- found in
+		// pre-ship review. Leaving them alone routes each through
+		// setupFirstTimeWorktree's existing default/NewProject cases
+		// (SetWorktree(nil), no worktree persisted), identical to their local
+		// counterparts, with no ent schema change needed.
+		if sessionType != session.SessionTypeDirectory && sessionType != session.SessionTypeNewProject {
+			sessionType = session.SessionTypeExistingWorktree
+		}
+		existingWorktreeOverride = remoteWorkingPath
+	}
+
 	// Build instance options
 	instanceOpts := session.InstanceOptions{
 		Title:            req.Msg.Title,
@@ -1867,7 +2190,7 @@ func (s *SessionService) CreateSession(
 		AutoApprove:      req.Msg.AutoApprove,
 		Prompt:           req.Msg.Prompt,
 		InitialPrompt:    initialPrompt,
-		ExistingWorktree: req.Msg.ExistingWorktree,
+		ExistingWorktree: existingWorktreeOverride,
 		Category:         req.Msg.Category,
 		SessionType:      sessionType,
 		TmuxPrefix:       "", // Use default from config
@@ -1888,6 +2211,10 @@ func (s *SessionService) CreateSession(
 		// launch time in buildLaunchCommand: CLIFlags-derived tokens first, ExtraArgs last —
 		// an intentional, tested ordering (see TestCreateSession_should_ComposeProfileCLIFlagsBeforePresetExtraArgs_When_BothPresent).
 		ExtraArgs: req.Msg.ExtraArgs,
+		// ExecutionTarget carries the dialed remote runner (ssh-remote-workspaces
+		// Phase 4 Epic 4.2) built by the mode-specific block above, or the
+		// LocalTarget{} default for the overwhelming majority of local sessions.
+		ExecutionTarget: executionTarget,
 	}
 
 	// Add GitHub metadata if this was a GitHub URL
@@ -1978,7 +2305,19 @@ func (s *SessionService) CreateSession(
 
 		// Inject Claude Code HTTP hook config for remote approval from the web UI.
 		// Non-fatal: session is fully functional even without this config.
-		if err := InjectHookConfig(instanceRootDir, instanceTitle); err != nil {
+		//
+		// Remote sessions (ssh-remote-workspaces Phase 5 correction) can't use
+		// InjectHookConfig at all: instanceRootDir is a path that only exists on
+		// the remote host, so os.ReadFile/os.WriteFile there would either fail
+		// outright or -- worse -- silently write to a local path nobody remote
+		// ever reads, exactly the bug this correction fixes (see ADR-003's
+		// addendum). setupRemoteApprovalHooks routes through a
+		// *sshremote.RemoteApprovalRelay + InjectHookConfigRemote instead.
+		if instance.IsRemote() {
+			if err := s.setupRemoteApprovalHooks(instance, instanceRootDir, instanceTitle); err != nil {
+				log.Warn("[CreateSession] failed to set up remote approval relay", "session", instanceTitle, "err", err)
+			}
+		} else if err := InjectHookConfig(instanceRootDir, instanceTitle); err != nil {
 			log.Warn("[CreateSession] failed to inject hook config", "session", instanceTitle, "err", err)
 		}
 
@@ -2007,7 +2346,11 @@ func (s *SessionService) CreateSession(
 		session.StartSessionDriver(instance, instanceRootDir)
 
 		if instance.AutonomousMode && s.headlessPool != nil {
-			driver := session.NewAutonomousDriver(instance, s.headlessPool, instance.Prompt, 0)
+			costOpt := session.NoopDriverOption
+			if concreteStorage := s.GetStorage(); concreteStorage != nil {
+				costOpt = session.WithCostSink(session.CostSinkForSessionUUID(concreteStorage, instance.UUID))
+			}
+			driver := session.NewAutonomousDriver(instance, s.headlessPool, instance.Prompt, 0, costOpt)
 			driver.RegisterCompletionCallback(s.autonomousSvc.onAutonomousDriverComplete)
 			if driverErr := driver.Start(s.autonomousSvc.driverCtx()); driverErr != nil {
 				log.Warn("[CreateSession] failed to start autonomous driver", "session", instanceTitle, "err", driverErr)
@@ -2026,6 +2369,111 @@ func (s *SessionService) CreateSession(
 	return connect.NewResponse(&sessionv1.CreateSessionResponse{
 		Session: creatingProto,
 	}), nil
+}
+
+// setupRemoteApprovalHooks wires a remote session's PermissionRequest hook
+// round trip end to end (ssh-remote-workspaces Phase 5 correction, ADR-003's
+// addendum): constructs and starts a *sshremote.RemoteApprovalRelay for
+// instance, stores it on instance so it gets stopped on teardown (Instance.
+// destroyChain -> stopRemoteApprovalRelay), then injects the socat-based
+// remote hook command via InjectHookConfigRemote using the relay's freshly
+// minted bearer token.
+//
+// Called from CreateSession's async goroutine only when instance.IsRemote();
+// every error here is non-fatal by design -- the caller logs and continues,
+// exactly like the local InjectHookConfig call site it replaces for remote
+// sessions (the session is fully functional without approval-hook config,
+// it just falls back to no hook at all for PermissionRequest events).
+func (s *SessionService) setupRemoteApprovalHooks(instance *session.Instance, rootDir, title string) error {
+	if s.permissionRequestHandler == nil {
+		return errors.New("remote approval relay: no PermissionRequestHandler wired (SetPermissionRequestHandler was never called)")
+	}
+	remoteTarget, ok := instance.GetExecutionTarget().(session.RemoteExecutionTarget)
+	if !ok {
+		return fmt.Errorf("instance.IsRemote() true but ExecutionTarget is %T, not session.RemoteExecutionTarget", instance.GetExecutionTarget())
+	}
+
+	relay, err := sshremote.NewRemoteApprovalRelay(s.sshClientPool(), s.permissionRequestHandler, sshremote.RemoteApprovalRelayTarget{
+		RemoteName:      remoteTarget.Target().Name,
+		BasePath:        rootDir,
+		StableSessionID: instance.GetStableID(),
+		Title:           title,
+	})
+	if err != nil {
+		return fmt.Errorf("construct remote approval relay: %w", err)
+	}
+
+	// Started against context.Background(), not a request-scoped or
+	// server-shutdown-bound context: this relay's lifetime is the session's
+	// lifetime, stopped explicitly via instance.destroyChain() ->
+	// stopRemoteApprovalRelay() when the session itself is torn down, not
+	// when any particular request or the server process happens to be
+	// shutting down (a tmux session is meant to survive a server restart;
+	// this in-memory relay does not survive one today -- reconnecting
+	// existing remote sessions' relays on server restart is a known gap,
+	// out of this change's scope, since CreateSession's async goroutine is
+	// the only call site wired here; see the final report for this
+	// explicitly flagged as a follow-up).
+	relay.Start(context.Background())
+
+	token, _ := relay.BearerToken()
+	hookTarget := RemoteHookTarget{
+		SocketPath:  sshremote.RemoteApprovalSocketPath(rootDir, instance.GetStableID()),
+		BearerToken: token,
+	}
+
+	injectCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := InjectHookConfigRemote(injectCtx, remoteTarget.Runner(), rootDir, instance.GetStableID(), hookTarget); err != nil {
+		relay.Stop()
+		return fmt.Errorf("inject remote hook config: %w", err)
+	}
+
+	instance.SetRemoteApprovalRelay(relay)
+	return nil
+}
+
+// resolveRemoteTarget resolves req.Msg.Remote.RemoteName (if set) against
+// cfg's saved remotes into the plain session.RemoteTarget data (name, host,
+// user, base_path, identity_ref) -- ssh-remote-workspaces Phase 4, Task
+// 4.2.1b. It does not dial anything; that's the mode-specific block in
+// CreateSession below (Task 4.2.1c), which pairs this data with a dialed
+// *tmux.SSHRunner into a single session.RemoteExecutionTarget in one atomic
+// step.
+//
+// Returns (nil, nil) when msg.Remote is unset or names no remote (the
+// ordinary local-session case, the overwhelming majority of requests).
+// Returns a non-nil error, always wrapping an unknown-remote message, when
+// msg.Remote.RemoteName is set but does not match any cfg.RemoteByName entry
+// -- CreateSession maps this to connect.CodeInvalidArgument before any
+// worktree/tmux work begins.
+// resolveRemoteTarget resolves req.Msg.Remote against cfg's configured remotes. ok is false
+// when the request didn't specify a remote at all (not an error); err is non-nil only when a
+// remote WAS requested but its name doesn't match any configured RemoteConfig.
+//
+// Registry note: this is CreateSession's remote-target extension (docs/registry/features/
+// backend/session/create.json's testIds), not a separate registered feature -- a hand-authored
+// "session:create-remote-target" per-feature file was tried and found non-durable: the CreateSession
+// RPC itself is the only real proto-derived feature id, and registry-generate-backend's
+// prune-stale-backend.sh deletes any committed backend file whose id it can't re-derive from
+// the proto+markers scan on every run (silently deleted the hand-authored file the first time
+// `make registry-generate` ran after adding it).
+func resolveRemoteTarget(msg *sessionv1.CreateSessionRequest, cfg *config.Config) (target *session.RemoteTarget, ok bool, err error) {
+	if msg.GetRemote() == nil || msg.GetRemote().GetRemoteName() == "" {
+		return nil, false, nil
+	}
+	remoteName := msg.GetRemote().GetRemoteName()
+	remoteCfg, found := cfg.RemoteByName(remoteName)
+	if !found {
+		return nil, false, fmt.Errorf("no remote configured named %q", remoteName)
+	}
+	return &session.RemoteTarget{
+		Name:        remoteCfg.Name,
+		Host:        remoteCfg.Host,
+		User:        remoteCfg.User,
+		BasePath:    remoteCfg.BasePath,
+		IdentityRef: remoteCfg.IdentityRef,
+	}, true, nil
 }
 
 // resolveSessionType maps a CreateSessionRequest + resolved branch to a session.SessionType.
@@ -2848,6 +3296,16 @@ func (s *SessionService) WatchSessions(
 	}
 }
 
+// fallbackPTYCols/Rows seed a remote raw-PTY session's initial size in
+// StreamTerminal's IsRemote() branch (Task 4.4.1d): unlike
+// streamViaControlMode's CurrentPaneRequest handshake, no client dimensions
+// flow through StreamTerminal's first message, so this is a reasonable
+// starting size until the client's first TerminalData_Resize arrives.
+const (
+	fallbackPTYCols = 80
+	fallbackPTYRows = 24
+)
+
 // StreamTerminal provides bidirectional streaming for terminal I/O.
 // Implements bidirectional streaming where:
 // - Client sends: terminal input and resize events
@@ -2912,31 +3370,57 @@ func (s *SessionService) StreamTerminal(
 		return connect.NewError(connect.CodeFailedPrecondition, fmt.Errorf("session is paused"))
 	}
 
-	// Get PTY for reading terminal output
-	ptyFile, err := instance.GetPTYReader()
-	if err != nil {
-		log.Error("[StreamSession] failed to get PTY reader", "session", instance.Title, "err", err)
-		return connect.NewError(connect.CodeInternal, fmt.Errorf("failed to get PTY reader: %w", err))
-	}
-
-	// Duplicate the PTY fd for this goroutine's exclusive use. ptyFile is
-	// shared with the instance's own internal consumers (response stream,
-	// command executor), so calling SetReadDeadline directly on it would
-	// mutate poll.FD state those other readers depend on. A dup'd fd gets
-	// its own independent *os.File/poll.FD — closing or setting a deadline
-	// on readFile has no effect on ptyFile or its other readers, since the
-	// underlying open file description is only released once every fd
-	// referencing it is closed. dupPTYFile is platform-specific
-	// (dup_fd_unix.go / dup_fd_windows.go) since syscall.Dup isn't available
-	// on Windows.
-	readFile, err := dupPTYFile(ptyFile)
-	if err != nil {
-		return connect.NewError(connect.CodeInternal, err)
-	}
-
-	// Create context for managing goroutines
+	// Create context for managing goroutines. Created here (rather than just
+	// above goroutine 1, as before Task 4.4.1d) so the remote branch below
+	// can pass it to GetPTYSession.
 	streamCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
+
+	// Acquire this handler's terminal data source. IsRemote() is the single
+	// mechanism this branch is gated on (architecture-review.md Blocker 1)
+	// -- never a type switch on ExecutionTarget/Instance fields.
+	//
+	// Local (unchanged from pre-4.4.1d): GetPTYReader() + dupPTYFile.
+	//
+	// Remote (ssh-remote-workspaces Phase 4, Task 4.4.1d): a fresh SSH-backed
+	// PTY attached to the same remote tmux session via GetPTYSession, so this
+	// fallback path streams remote terminal bytes in the same TerminalData
+	// shape a local session produces -- differing only in transport
+	// underneath, per Story 4.4.1's acceptance criteria. fallbackPTYCols/Rows
+	// seed its initial size: unlike streamViaControlMode's handshake, no
+	// client dimensions flow through StreamTerminal's first message, and a
+	// resize arrives moments later via the TerminalData_Resize case below.
+	var readFile *os.File         // set only for a local session; exact pre-4.4.1d behavior
+	var remotePTY tmux.PtySession // set only for a remote session
+	if instance.IsRemote() {
+		remotePTY, err = instance.GetPTYSession(streamCtx, fallbackPTYCols, fallbackPTYRows)
+		if err != nil {
+			log.Error("[StreamSession] failed to get remote PTY session", "session", instance.Title, "err", err)
+			return connect.NewError(connect.CodeInternal, fmt.Errorf("failed to get remote PTY session: %w", err))
+		}
+	} else {
+		// Get PTY for reading terminal output
+		ptyFile, ptyErr := instance.GetPTYReader()
+		if ptyErr != nil {
+			log.Error("[StreamSession] failed to get PTY reader", "session", instance.Title, "err", ptyErr)
+			return connect.NewError(connect.CodeInternal, fmt.Errorf("failed to get PTY reader: %w", ptyErr))
+		}
+
+		// Duplicate the PTY fd for this goroutine's exclusive use. ptyFile is
+		// shared with the instance's own internal consumers (response stream,
+		// command executor), so calling SetReadDeadline directly on it would
+		// mutate poll.FD state those other readers depend on. A dup'd fd gets
+		// its own independent *os.File/poll.FD — closing or setting a deadline
+		// on readFile has no effect on ptyFile or its other readers, since the
+		// underlying open file description is only released once every fd
+		// referencing it is closed. dupPTYFile is platform-specific
+		// (dup_fd_unix.go / dup_fd_windows.go) since syscall.Dup isn't available
+		// on Windows.
+		readFile, err = dupPTYFile(ptyFile)
+		if err != nil {
+			return connect.NewError(connect.CodeInternal, err)
+		}
+	}
 
 	// Channel for errors from goroutines
 	errCh := make(chan error, 2)
@@ -2976,51 +3460,59 @@ func (s *SessionService) StreamTerminal(
 
 	// Goroutine 1: Read from PTY and send deltas to client (terminal output)
 	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		defer readFile.Close() // our own dup'd fd; does not affect ptyFile or its other readers
-		defer func() {
-			if r := recover(); r != nil {
-				errCh <- fmt.Errorf("panic in output goroutine: %v", r)
-			}
-		}()
+	if instance.IsRemote() {
+		// Remote variant (Task 4.4.1d): reads from remotePTY (tmux.PtySession,
+		// an SSH channel) instead of a dup'd local fd. ssh.Session's stdout has
+		// no SetReadDeadline -- an io.Reader over an SSH channel doesn't
+		// implement net.Conn's deadline interface -- so this cannot reuse the
+		// local branch's poll-with-timeout structure below. Instead, a small
+		// watcher goroutine closes remotePTY on streamCtx cancellation, which
+		// unblocks the in-flight Read with an error (the same "no half-close,
+		// Close tears down the whole channel" mechanism sshPtySession.Close()
+		// documents) -- the SSH-idiomatic analog of the local deadline.
+		go func() {
+			defer wg.Done()
+			defer remotePTY.Close()
+			defer func() {
+				if r := recover(); r != nil {
+					errCh <- fmt.Errorf("panic in output goroutine: %v", r)
+				}
+			}()
 
-		buf := make([]byte, 32*1024)
-		for {
-			// Block until unpaused rather than spinning.
-			if ptyPaused {
+			go func() {
+				<-streamCtx.Done()
+				_ = remotePTY.Close()
+			}()
+
+			buf := make([]byte, 32*1024)
+			for {
+				// Block until unpaused rather than spinning.
+				if ptyPaused {
+					select {
+					case <-streamCtx.Done():
+						return
+					case ptyPaused = <-pauseCh:
+						if !ptyPaused {
+							log.Info("[FlowControl] PTY reading RESUMED", "session", initialMsg.SessionId)
+						}
+					}
+					continue
+				}
+
 				select {
 				case <-streamCtx.Done():
 					return
-				case ptyPaused = <-pauseCh:
-					if !ptyPaused {
-						log.Info("[FlowControl] PTY reading RESUMED", "session", initialMsg.SessionId)
+				case paused := <-pauseCh:
+					ptyPaused = paused
+					if paused {
+						log.Info("[FlowControl] PTY reading PAUSED", "session", initialMsg.SessionId)
 					}
+					continue
+				default:
 				}
-				continue
-			}
 
-			select {
-			case <-streamCtx.Done():
-				return
-			case paused := <-pauseCh:
-				ptyPaused = paused
-				if paused {
-					log.Info("[FlowControl] PTY reading PAUSED", "session", initialMsg.SessionId)
-				}
-			default:
-				// A short deadline on our own dup'd fd (see readFile above)
-				// bounds how long Read can block, so this goroutine notices
-				// streamCtx cancellation promptly instead of potentially
-				// blocking until the next real PTY output — which could
-				// arrive well after the handler has returned and Connect has
-				// closed the stream. Safe to set here because readFile is
-				// exclusively ours; it does not touch ptyFile's poll.FD.
-				_ = readFile.SetReadDeadline(time.Now().Add(250 * time.Millisecond))
-				n, readErr := readFile.Read(buf)
+				n, readErr := remotePTY.Read(buf)
 				if n > 0 {
-					// Update terminal activity timestamps with the output content
-					// This ensures LastMeaningfulOutput reflects web UI viewing activity
 					instance.UpdateTerminalTimestamps(string(buf[:n]), true)
 
 					select {
@@ -3044,20 +3536,103 @@ func (s *SessionService) StreamTerminal(
 				}
 
 				if readErr != nil {
-					if netErr, ok := readErr.(interface{ Timeout() bool }); ok && netErr.Timeout() {
-						// Expected: the deadline above elapsed with no data.
-						// Loop back around to re-check streamCtx/pauseCh.
-						continue
+					select {
+					case <-streamCtx.Done():
+						// Expected: streamCtx cancellation closed remotePTY to unblock Read.
+						return
+					default:
 					}
-					// EOF or other read error
 					if readErr.Error() != "EOF" {
-						errCh <- fmt.Errorf("PTY read error: %w", readErr)
+						errCh <- fmt.Errorf("remote PTY read error: %w", readErr)
 					}
 					return
 				}
 			}
-		}
-	}()
+		}()
+	} else {
+		go func() {
+			defer wg.Done()
+			defer readFile.Close() // our own dup'd fd; does not affect ptyFile or its other readers
+			defer func() {
+				if r := recover(); r != nil {
+					errCh <- fmt.Errorf("panic in output goroutine: %v", r)
+				}
+			}()
+
+			buf := make([]byte, 32*1024)
+			for {
+				// Block until unpaused rather than spinning.
+				if ptyPaused {
+					select {
+					case <-streamCtx.Done():
+						return
+					case ptyPaused = <-pauseCh:
+						if !ptyPaused {
+							log.Info("[FlowControl] PTY reading RESUMED", "session", initialMsg.SessionId)
+						}
+					}
+					continue
+				}
+
+				select {
+				case <-streamCtx.Done():
+					return
+				case paused := <-pauseCh:
+					ptyPaused = paused
+					if paused {
+						log.Info("[FlowControl] PTY reading PAUSED", "session", initialMsg.SessionId)
+					}
+				default:
+					// A short deadline on our own dup'd fd (see readFile above)
+					// bounds how long Read can block, so this goroutine notices
+					// streamCtx cancellation promptly instead of potentially
+					// blocking until the next real PTY output — which could
+					// arrive well after the handler has returned and Connect has
+					// closed the stream. Safe to set here because readFile is
+					// exclusively ours; it does not touch ptyFile's poll.FD.
+					_ = readFile.SetReadDeadline(time.Now().Add(250 * time.Millisecond))
+					n, readErr := readFile.Read(buf)
+					if n > 0 {
+						// Update terminal activity timestamps with the output content
+						// This ensures LastMeaningfulOutput reflects web UI viewing activity
+						instance.UpdateTerminalTimestamps(string(buf[:n]), true)
+
+						select {
+						case <-streamCtx.Done():
+							return
+						default:
+						}
+
+						outputMsg := &sessionv1.TerminalData{
+							SessionId: initialMsg.SessionId,
+							Data: &sessionv1.TerminalData_Output{
+								Output: &sessionv1.TerminalOutput{
+									Data: buf[:n],
+								},
+							},
+						}
+						if sendErr := sendLocked(outputMsg); sendErr != nil {
+							errCh <- fmt.Errorf("failed to send output: %w", sendErr)
+							return
+						}
+					}
+
+					if readErr != nil {
+						if netErr, ok := readErr.(interface{ Timeout() bool }); ok && netErr.Timeout() {
+							// Expected: the deadline above elapsed with no data.
+							// Loop back around to re-check streamCtx/pauseCh.
+							continue
+						}
+						// EOF or other read error
+						if readErr.Error() != "EOF" {
+							errCh <- fmt.Errorf("PTY read error: %w", readErr)
+						}
+						return
+					}
+				}
+			}
+		}()
+	}
 
 	// Goroutine 2: Receive from client and forward to PTY (terminal input + resize)
 	wg.Add(1)
@@ -3104,8 +3679,22 @@ func (s *SessionService) StreamTerminal(
 					// This ensures LastMeaningfulOutput reflects user interaction via web UI
 					instance.UpdateTerminalTimestamps(string(data.Input.Data), true)
 
-					// Forward input to PTY
-					if _, writeErr := instance.WriteToPTY(data.Input.Data); writeErr != nil {
+					// Forward input to the terminal data source. remotePTY is
+					// the only live write target for a remote session --
+					// instance.WriteToPTY() routes to TmuxSession.SendKeys(),
+					// which writes to t.lockedPTMX() (the LOCAL raw-attach
+					// PTY, never populated for a remote session), so it must
+					// never be called on this branch (Task 4.4.1d fix: the
+					// pre-fix code called it unconditionally, which returned
+					// "PTY not initialized" for a remote session's very first
+					// keystroke and tore the stream down).
+					var writeErr error
+					if remotePTY != nil {
+						_, writeErr = remotePTY.Write(data.Input.Data)
+					} else {
+						_, writeErr = instance.WriteToPTY(data.Input.Data)
+					}
+					if writeErr != nil {
 						// Send error back to client
 						errorMsg := &sessionv1.TerminalData{
 							SessionId: msg.SessionId,
@@ -3147,6 +3736,17 @@ func (s *SessionService) StreamTerminal(
 						_ = sendLocked(errorMsg) // Best effort
 						// Don't return on resize errors, they're not fatal
 					} else {
+						// instance.ResizePTY resizes the tmux window/pane (remote-transparent
+						// via the tmux CM/subprocess resize-window command); remotePTY.Resize
+						// additionally issues this raw-PTY session's own SSH window-change
+						// request (Task 4.4.1e), since this session is a separate SSH channel
+						// from the one control-mode/tmux commands travel over and has no other
+						// way to learn its PTY dimensions changed.
+						if remotePTY != nil {
+							if err := remotePTY.Resize(cols, rows); err != nil {
+								log.Warn("failed to resize remote PTY session", "cols", cols, "rows", rows, "session", msg.SessionId, "err", err)
+							}
+						}
 						log.Info("resized terminal", "cols", cols, "rows", rows, "session", msg.SessionId)
 					}
 
@@ -4352,8 +4952,12 @@ func (s *SessionService) RunOneShot(
 
 	if s.headlessPool != nil {
 		// Use headless pool for improved streaming and session reuse.
+		sink := headless.DiscardCost
+		if concreteStorage := s.GetStorage(); concreteStorage != nil {
+			sink = session.CostSinkForSessionUUID(concreteStorage, inst.UUID)
+		}
 		var callErr error
-		outputStr, _, callErr = s.headlessPool.CallBlocking(runCtx, headless.FeatureKeyCustom, "", req.Msg.Prompt, headless.CallOptions{WorkDir: workDir})
+		outputStr, callErr = s.headlessPool.CallBlocking(runCtx, headless.FeatureKeyCustom, "", req.Msg.Prompt, headless.CallOptions{WorkDir: workDir}, sink)
 		if callErr != nil {
 			errMsg = callErr.Error()
 			exitCode = 1

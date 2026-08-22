@@ -1086,6 +1086,18 @@ func (s *Storage) UpdateItemSessionFailureCapture(ctx context.Context, id string
 	return s.repo.UpdateItemSessionFailureCapture(ctx, id, path)
 }
 
+// UpdateItemSessionCost adds usd to an ItemSession's estimated_cost_usd. See
+// EntRepository.UpdateItemSessionCost.
+func (s *Storage) UpdateItemSessionCost(ctx context.Context, id string, usd float64) error {
+	return s.repo.UpdateItemSessionCost(ctx, id, usd)
+}
+
+// AddHeadlessCostBySessionUUID adds usd to the estimated_cost_usd of the ItemSession
+// for sessionUUID, if any. See EntRepository.AddHeadlessCostBySessionUUID.
+func (s *Storage) AddHeadlessCostBySessionUUID(ctx context.Context, sessionUUID string, usd float64) error {
+	return s.repo.AddHeadlessCostBySessionUUID(ctx, sessionUUID, usd)
+}
+
 // GetItemSessionBySessionAndItem looks up an ItemSession by both sessionUUID and backlog item ID.
 // Returns ErrNotFound if no matching record exists.
 func (s *Storage) GetItemSessionBySessionAndItem(ctx context.Context, sessionUUID string, itemID string) (ItemSessionSummary, error) {

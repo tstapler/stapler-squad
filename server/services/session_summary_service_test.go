@@ -42,7 +42,7 @@ type fakePoolClient struct {
 	started chan struct{}
 }
 
-func (f *fakePoolClient) CallBlocking(ctx context.Context, _ headless.FeatureKey, _, userPrompt string, _ headless.CallOptions) (string, float64, error) {
+func (f *fakePoolClient) CallBlocking(ctx context.Context, _ headless.FeatureKey, _, userPrompt string, _ headless.CallOptions, sink headless.CostSink) (string, error) {
 	f.mu.Lock()
 	f.calls++
 	f.lastUser = userPrompt
@@ -56,12 +56,13 @@ func (f *fakePoolClient) CallBlocking(ctx context.Context, _ headless.FeatureKey
 	}
 	if f.block {
 		<-ctx.Done()
-		return "", 0, ctx.Err()
+		return "", ctx.Err()
 	}
+	sink(0)
 	if f.err != nil {
-		return "", 0, f.err
+		return "", f.err
 	}
-	return f.response, 0, nil
+	return f.response, nil
 }
 
 func (f *fakePoolClient) callCount() int {
