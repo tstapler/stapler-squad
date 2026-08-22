@@ -98,7 +98,7 @@ func TestHealthCheckerDebounce(t *testing.T) {
 	inst.started.Store(true)
 
 	// First call: count=1, below threshold (2), no recovery attempted.
-	result1 := checker.checkSingleSession(inst)
+	result1 := checker.checkSingleSession(inst, nil)
 	if result1.RecoveryAttempted {
 		t.Error("first failure: expected RecoveryAttempted=false (below threshold)")
 	}
@@ -116,7 +116,7 @@ func TestHealthCheckerDebounce(t *testing.T) {
 
 	// Second call: count reaches failureThreshold (2), recovery attempted.
 	// Start(false) will fail (no real tmux session), but RecoveryAttempted must be true.
-	result2 := checker.checkSingleSession(inst)
+	result2 := checker.checkSingleSession(inst, nil)
 	if !result2.RecoveryAttempted {
 		t.Error("second failure: expected RecoveryAttempted=true (threshold reached)")
 	}
@@ -194,7 +194,7 @@ func TestHealthCheckerRecovery_PaneDeadButSessionAlive_KillsStaleSessionBeforeRe
 	inst.processManager = NewTmuxBackend(mock)
 
 	// First failure: below threshold, no recovery attempted yet.
-	result1 := checker.checkSingleSession(inst)
+	result1 := checker.checkSingleSession(inst, nil)
 	if result1.IsHealthy {
 		t.Error("first failure: expected IsHealthy=false when pane process has exited")
 	}
@@ -207,7 +207,7 @@ func TestHealthCheckerRecovery_PaneDeadButSessionAlive_KillsStaleSessionBeforeRe
 
 	// Second failure: threshold reached, recovery attempted. The stale session
 	// must be torn down (Close()) before Start() is retried.
-	result2 := checker.checkSingleSession(inst)
+	result2 := checker.checkSingleSession(inst, nil)
 	if !result2.RecoveryAttempted {
 		t.Error("second failure: expected RecoveryAttempted=true (threshold reached)")
 	}
@@ -241,8 +241,8 @@ func TestHealthCheckerRecovery_PaneCrashed_MarksCrashedOutsideGracePeriod(t *tes
 	inst.started.Store(true)
 	inst.processManager = NewTmuxBackend(mock)
 
-	checker.checkSingleSession(inst) // first failure: below threshold
-	result := checker.checkSingleSession(inst)
+	checker.checkSingleSession(inst, nil) // first failure: below threshold
+	result := checker.checkSingleSession(inst, nil)
 
 	if !result.RecoveryAttempted {
 		t.Fatal("expected RecoveryAttempted=true (threshold reached)")
@@ -282,8 +282,8 @@ func TestHealthCheckerRecovery_PaneExitedNormally_MarksStoppedNotCrashed(t *test
 	inst.started.Store(true)
 	inst.processManager = NewTmuxBackend(mock)
 
-	checker.checkSingleSession(inst) // first failure: below threshold
-	result := checker.checkSingleSession(inst)
+	checker.checkSingleSession(inst, nil) // first failure: below threshold
+	result := checker.checkSingleSession(inst, nil)
 
 	if !result.RecoveryAttempted {
 		t.Fatal("expected RecoveryAttempted=true (threshold reached)")
@@ -328,8 +328,8 @@ func TestHealthCheckerRecovery_FreshSessionNeverAlive_MarksStoppedImmediatelyDes
 	inst.started.Store(true)
 	inst.processManager = NewTmuxBackend(mock)
 
-	checker.checkSingleSession(inst) // first failure: below threshold
-	result := checker.checkSingleSession(inst)
+	checker.checkSingleSession(inst, nil) // first failure: below threshold
+	result := checker.checkSingleSession(inst, nil)
 
 	if !result.RecoveryAttempted {
 		t.Fatal("expected RecoveryAttempted=true (threshold reached)")
@@ -370,8 +370,8 @@ func TestHealthCheckerRecovery_PreExistingSessionAtRestart_StillRespawnsWithinGr
 	inst.started.Store(true)
 	inst.processManager = NewTmuxBackend(mock)
 
-	checker.checkSingleSession(inst) // first failure: below threshold
-	result := checker.checkSingleSession(inst)
+	checker.checkSingleSession(inst, nil) // first failure: below threshold
+	result := checker.checkSingleSession(inst, nil)
 
 	if !result.RecoveryAttempted {
 		t.Fatal("expected RecoveryAttempted=true (threshold reached)")

@@ -387,6 +387,69 @@ func ListAllSessions(serverSocket string) (map[string]bool, error) {
 	return sessions, nil
 }
 
+// PaneDeadStatus reports whether a pane's wrapped program has exited
+// (remain-on-exit placeholder), and its exit code/signal when it has.
+type PaneDeadStatus struct {
+	Dead   bool
+	Code   int
+	Signal string
+}
+
+// BatchPaneDeadStatus returns pane-dead status for every session on
+// serverSocket in a single tmux invocation, keyed by session name. Intended
+// for bulk health checks (SessionHealthChecker) that would otherwise issue
+// one `display-message` subprocess call per session per tick -- see
+// session/health.go's checkInstances, which groups instances by socket and
+// calls this once per socket per tick instead of once per session.
+// Returns ErrServerDown when the tmux server is not running.
+func BatchPaneDeadStatus(serverSocket string) (map[string]PaneDeadStatus, error) {
+	args := prependSocket(serverSocket, []string{"list-panes", "-a", "-F",
+		"#{session_name}\t#{pane_dead}\t#{pane_dead_status}\t#{pane_dead_signal}"})
+	listCtx, listCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer listCancel()
+	out, err := runGated(listCtx, serverSocket, func() ([]byte, error) {
+		return safeexec.CommandContext(listCtx, Binary(), args...).Output()
+	})
+	if err != nil {
+		combinedOutput := []byte(err.Error())
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			combinedOutput = append(combinedOutput, exitErr.Stderr...)
+		}
+		if serverNotRunning(combinedOutput) {
+			return nil, ErrServerDown
+		}
+		return nil, fmt.Errorf("BatchPaneDeadStatus: %w", err)
+	}
+
+	statuses := make(map[string]PaneDeadStatus)
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		if line == "" {
+			continue
+		}
+		fields := strings.SplitN(line, "\t", 4)
+		if len(fields) != 4 {
+			continue
+		}
+		name := fields[0]
+		dead := fields[1] == "1"
+		// A session's window can have multiple panes; a session counts as
+		// pane-dead if any of its panes are. Once true for a session, later
+		// panes for that session must not overwrite it back to false.
+		if existing, ok := statuses[name]; ok && existing.Dead {
+			continue
+		}
+		status := PaneDeadStatus{Dead: dead}
+		if dead {
+			if code, convErr := strconv.Atoi(strings.TrimSpace(fields[2])); convErr == nil {
+				status.Code = code
+			}
+			status.Signal = strings.TrimSpace(fields[3])
+		}
+		statuses[name] = status
+	}
+	return statuses, nil
+}
+
 // checkServerNotRunning runs tmux list-sessions directly (bypassing any circuit breaker)
 // and returns true if the server is not running.
 func checkServerNotRunning(serverSocket string) bool {
@@ -2797,6 +2860,19 @@ func (t *TmuxSession) GetPanePID() (int32, error) {
 // as early as possible after detecting an exit -- the pane is destroyed the moment
 // anything issues kill-session/respawn-pane against it, and this data goes with it.
 func (t *TmuxSession) ExitStatus() (code int, signal string, ok bool) {
+	if t.cmEnabledForBackground() {
+		ctx, cancel := cmCtx()
+		defer cancel()
+		body, cmErr := t.sendCMCommand(ctx,
+			"display-message", "-p", "-t", t.sanitizedName, "'#{pane_dead_status}\t#{pane_dead_signal}'")
+		if cmErr == nil {
+			if parsedCode, parsedSignal, parsedOK := parseExitStatus(body); parsedOK {
+				return parsedCode, parsedSignal, true
+			}
+		} else {
+			log.Debug("ExitStatus CM path failed, falling back", "session", t.sanitizedName, "err", cmErr)
+		}
+	}
 	cmd := t.buildTmuxCommand("display-message", "-p", "-t", t.sanitizedName,
 		"#{pane_dead_status}\t#{pane_dead_signal}")
 	output, err := runGated(context.Background(), t.serverSocket, func() ([]byte, error) {
@@ -2805,14 +2881,21 @@ func (t *TmuxSession) ExitStatus() (code int, signal string, ok bool) {
 	if err != nil {
 		return 0, "", false
 	}
-	parts := strings.SplitN(strings.TrimRight(string(output), "\n"), "\t", 2)
+	return parseExitStatus(string(output))
+}
+
+// parseExitStatus parses the "<status>\t<signal>" body produced by
+// `display-message -p '#{pane_dead_status}\t#{pane_dead_signal}'`, whether it
+// arrived via a CM command reply or raw subprocess output.
+func parseExitStatus(raw string) (code int, signal string, ok bool) {
+	parts := strings.SplitN(strings.TrimRight(raw, "\n"), "\t", 2)
 	statusStr := strings.TrimSpace(parts[0])
 	if statusStr == "" {
 		// Empty means the pane is still alive (or the format variables aren't
 		// supported by this tmux version).
 		return 0, "", false
 	}
-	code, err = strconv.Atoi(statusStr)
+	code, err := strconv.Atoi(statusStr)
 	if err != nil {
 		return 0, "", false
 	}

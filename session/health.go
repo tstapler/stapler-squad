@@ -106,6 +106,17 @@ func (h *SessionHealthChecker) CheckAllSessions() ([]HealthCheckResult, error) {
 func (h *SessionHealthChecker) checkInstances(instances []*Instance) []HealthCheckResult {
 	downSockets := make(map[string]bool)
 
+	// One tmux.BatchPaneDeadStatus call per distinct socket per tick, instead of
+	// one `display-message` subprocess per session per tick -- this is the fix
+	// for the reported ~15k display-message calls/20min: that volume came from
+	// the per-instance PaneProcessDead()/PaneExitInfo() calls below being
+	// evaluated unconditionally for every active session on every tick,
+	// independent of whether the session has a viewer attached (control mode is
+	// viewer-gated and can't help background sessions -- see
+	// session/tmux/control_mode.go and streamViaHub's StartControlMode/
+	// StopControlMode refcounting).
+	paneStatuses := make(map[string]map[string]tmux.PaneDeadStatus)
+
 	results := make([]HealthCheckResult, 0, len(instances))
 
 	for _, instance := range instances {
@@ -123,7 +134,18 @@ func (h *SessionHealthChecker) checkInstances(instances []*Instance) []HealthChe
 			continue
 		}
 
-		result := h.checkSingleSession(instance)
+		if _, fetched := paneStatuses[socket]; !fetched {
+			statuses, err := tmux.BatchPaneDeadStatus(socket)
+			if err != nil {
+				// Leave this socket's entry as nil -- checkSingleSession falls back
+				// to the per-instance PaneProcessDead()/PaneExitInfo() calls when a
+				// session isn't found in paneStatuses.
+				log.Debug("health check: BatchPaneDeadStatus failed, falling back to per-instance checks", "socket", socket, "err", err)
+			}
+			paneStatuses[socket] = statuses
+		}
+
+		result := h.checkSingleSession(instance, paneStatuses[socket])
 		results = append(results, result)
 
 		// Log any issues found
@@ -168,8 +190,28 @@ func (h *SessionHealthChecker) resetFailureCount(title string) {
 	h.failureCountsMu.Unlock()
 }
 
-// checkSingleSession performs a health check on a single session
-func (h *SessionHealthChecker) checkSingleSession(instance *Instance) HealthCheckResult {
+// paneDeadStatus reports whether instance's pane has exited and its exit
+// code/signal, preferring a pre-fetched batch result (see checkInstances'
+// tmux.BatchPaneDeadStatus call) over the equivalent per-instance
+// PaneProcessDead()/PaneExitInfo() calls, which each cost one `display-message`
+// tmux subprocess. Falls back to those per-instance calls when batch is nil
+// (the batch fetch failed for this socket) or doesn't contain this session's
+// name (e.g. GetTmuxSessionName() is empty for an external/uninitialized
+// session).
+func paneDeadStatus(instance *Instance, batch map[string]tmux.PaneDeadStatus) (dead bool, code int, signal string) {
+	if name := instance.GetTmuxSessionName(); name != "" {
+		if status, ok := batch[name]; ok {
+			return status.Dead, status.Code, status.Signal
+		}
+	}
+	dead, code, signal = instance.PaneExitInfo()
+	return dead, code, signal
+}
+
+// checkSingleSession performs a health check on a single session. paneStatus
+// is the batch-fetched pane-dead status for instance's tmux socket (nil if the
+// batch fetch failed), keyed by session name -- see paneDeadStatus.
+func (h *SessionHealthChecker) checkSingleSession(instance *Instance, paneStatus map[string]tmux.PaneDeadStatus) HealthCheckResult {
 	result := HealthCheckResult{
 		InstanceTitle: instance.Title,
 		IsHealthy:     true,
@@ -228,6 +270,8 @@ func (h *SessionHealthChecker) checkSingleSession(instance *Instance) HealthChec
 
 	// Check if instance thinks it's started but tmux session doesn't exist
 	if instance.Started() {
+		paneDead, paneExitCode, paneExitSignal := paneDeadStatus(instance, paneStatus)
+
 		switch {
 		case !instance.TmuxAlive():
 			result.IsHealthy = false
@@ -265,7 +309,7 @@ func (h *SessionHealthChecker) checkSingleSession(instance *Instance) HealthChec
 				}
 			}
 
-		case instance.PaneProcessDead():
+		case paneDead:
 			// tmux session object is alive, but remain-on-exit has left a dead
 			// "Pane is dead (signal N, ...)" placeholder because the wrapped
 			// program exited (crashed or completed normally). TmuxAlive() alone
@@ -283,7 +327,7 @@ func (h *SessionHealthChecker) checkSingleSession(instance *Instance) HealthChec
 			}
 
 			result.RecoveryAttempted = true
-			_, exitCode, exitSignal := instance.PaneExitInfo()
+			exitCode, exitSignal := paneExitCode, paneExitSignal
 
 			// Only a session that already existed before this checker started could
 			// have been affected by a restart race; one created afterward was never
