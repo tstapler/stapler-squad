@@ -863,7 +863,7 @@ ptmx-field-guard: ## tmux-ptmx-race-fix guard: fail if ptmx/attachCmd/attachCmdW
 	    `# because none of that file's lines ever legitimately touch the PTY triple this guards` \
 	    | grep -vE ':[0-9]+:[[:space:]]*//' \
 	    | grep -v 'allow-direct-ptmx-access' ; then \
-	    echo "❌ ptmx-field-guard: direct PTY-triple field access found outside lockedPTMX/setPTYTriple/clearPTYTriple — route through the ptmxMu helpers (session/tmux/tmux.go)"; \
+	    echo "❌ ptmx-field-guard: direct PTY-triple field access found outside lockedPTMX/ptySnapshot/tryInstallPTYTriple/clearPTYTriple — route through the ptmxMu helpers (session/tmux/tmux.go)"; \
 	    exit 1; \
 	fi
 	@echo "✅ ptmx-field-guard: no direct PTY-triple field access outside the guarded helpers"
