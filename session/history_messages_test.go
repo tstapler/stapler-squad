@@ -1,6 +1,7 @@
 package session
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -411,7 +412,7 @@ func TestGetMessagesFromConversationFile_NotFound(t *testing.T) {
 	t.Parallel()
 	// Use a directory that doesn't exist as the projects dir.
 	// We can't easily inject the path, so test via findConversationFilePath directly.
-	_, err := findConversationFilePath("nonexistent-session-id-xyz")
+	_, err := findConversationFilePath(context.Background(), "nonexistent-session-id-xyz")
 	if err == nil {
 		t.Fatal("expected error for non-existent session")
 	}
