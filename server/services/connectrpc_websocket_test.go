@@ -2601,12 +2601,19 @@ func TestStreamTerminal_should_PopulateConnectionCount_When_SessionIsPathHubOwne
 
 	stop := make(chan struct{})
 	defer close(stop)
-	go sendConnectionCountUpdates(serverStream, hub, "conn-count-test", stop)
 
 	transport1 := NewWebSocketTransport(serverStream)
 	id1 := hub.AttachSubscriber(transport1, streamhub.SubscriberCapability{CanResize: true})
 	transport1.BindSubscriber(hub, id1)
 	defer hub.DetachSubscriber(id1)
+
+	// Attach before spawning the updater, matching streamViaHub's real call order
+	// (AttachSubscriber at line ~1554, sendConnectionCountUpdates at ~1615) — the
+	// updater's immediate send() races hub.SubscriberCount() against whatever the
+	// caller does next, so spawning it before this attach (as this test used to)
+	// let the immediate send observe 0 subscribers instead of 1, intermittently
+	// failing the very next assertion.
+	go sendConnectionCountUpdates(serverStream, hub, "conn-count-test", stop)
 
 	readConnectionCount := func() int32 {
 		t.Helper()
