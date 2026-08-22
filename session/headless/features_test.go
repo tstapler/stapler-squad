@@ -75,7 +75,7 @@ func TestDraftPRDescription_ReturnsText_WhenFakeRunnerResponds(t *testing.T) {
 	runner := NewFakeRunner(resp)
 	pool := NewPoolWithRunner(PoolConfig{}, runner)
 
-	result, err := DraftPRDescription(context.Background(), pool, "Fix flaky test", "The test flaked under CI load.", "diff content", "feat/my-feature")
+	result, _, err := DraftPRDescription(context.Background(), pool, "Fix flaky test", "The test flaked under CI load.", "diff content", "feat/my-feature")
 	require.NoError(t, err)
 	assert.Equal(t, prText, result)
 }
@@ -88,7 +88,7 @@ func TestDraftPRDescription_TruncatesDiff_WhenOver40000Bytes(t *testing.T) {
 	runner := NewFakeRunner(resp)
 	pool := NewPoolWithRunner(PoolConfig{}, runner)
 
-	_, err := DraftPRDescription(context.Background(), pool, "Title", "Description", bigDiff, "branch")
+	_, _, err := DraftPRDescription(context.Background(), pool, "Title", "Description", bigDiff, "branch")
 	require.NoError(t, err)
 
 	// Inspect what was passed to the runner.
@@ -111,7 +111,7 @@ func TestDraftPRDescription_Error_WhenDiffEmpty(t *testing.T) {
 	runner := NewFakeRunner()
 	pool := NewPoolWithRunner(PoolConfig{}, runner)
 
-	_, err := DraftPRDescription(context.Background(), pool, "Title", "Description", "   ", "branch")
+	_, _, err := DraftPRDescription(context.Background(), pool, "Title", "Description", "   ", "branch")
 	assert.Error(t, err)
 	assert.Equal(t, 0, runner.CallCount(), "LLM should never be called for an empty diff")
 }
@@ -161,15 +161,16 @@ type fakePoolClientRecorder struct {
 	user  string
 }
 
-func (f *fakePoolClientRecorder) CallBlocking(_ context.Context, key FeatureKey, systemPrompt, userPrompt string, _ CallOptions) (string, float64, error) {
+func (f *fakePoolClientRecorder) CallBlocking(_ context.Context, key FeatureKey, systemPrompt, userPrompt string, _ CallOptions, sink CostSink) (string, error) {
 	f.calls++
 	f.key = key
 	f.sys = systemPrompt
 	f.user = userPrompt
+	sink(0)
 	if f.err != nil {
-		return "", 0, f.err
+		return "", f.err
 	}
-	return f.response, 0, nil
+	return f.response, nil
 }
 
 // TestGenerateSessionCompletionNarrative_should_ReturnProseAndCallPoolWithFeatureKey_When_TitleGoalDiffAndDecisionsProvided
@@ -179,7 +180,7 @@ func TestGenerateSessionCompletionNarrative_should_ReturnProseAndCallPoolWithFea
 	t.Parallel()
 	fake := &fakePoolClientRecorder{response: "The session fixed the login redirect loop."}
 
-	text, err := GenerateSessionCompletionNarrative(context.Background(), fake, "fix-login-redirect", "Investigate why login redirects loop under SSO", "diff content", "5 auto-approved, 1 manual")
+	text, _, err := GenerateSessionCompletionNarrative(context.Background(), fake, "fix-login-redirect", "Investigate why login redirects loop under SSO", "diff content", "5 auto-approved, 1 manual")
 	require.NoError(t, err)
 	assert.Equal(t, "The session fixed the login redirect loop.", text)
 	assert.Equal(t, 1, fake.calls)
@@ -195,7 +196,7 @@ func TestGenerateSessionCompletionNarrative_should_OmitGoalLine_When_SessionGoal
 	t.Parallel()
 	fake := &fakePoolClientRecorder{response: "The session made some changes."}
 
-	text, err := GenerateSessionCompletionNarrative(context.Background(), fake, "some-session", "", "diff content", "no decisions")
+	text, _, err := GenerateSessionCompletionNarrative(context.Background(), fake, "some-session", "", "diff content", "no decisions")
 	require.NoError(t, err)
 	assert.Equal(t, "The session made some changes.", text)
 	assert.NotContains(t, fake.user, "Session goal:")

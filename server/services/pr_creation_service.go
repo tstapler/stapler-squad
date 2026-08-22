@@ -188,8 +188,11 @@ func (s *PRCreationService) DraftPullRequest(
 		// mirroring RunOneShot's existing guard — never panic on a nil pool.
 		if s.headlessPool != nil {
 			draftCtx, draftCancel := context.WithTimeout(ctx, draftPRDescriptionTimeout)
-			draftedBody, draftErr := headless.DraftPRDescription(draftCtx, s.headlessPool, inst.Title, sessionGoalText(inst), diff, wt.GetBranchName())
+			draftedBody, draftCostUSD, draftErr := headless.DraftPRDescription(draftCtx, s.headlessPool, inst.Title, sessionGoalText(inst), diff, wt.GetBranchName())
 			draftCancel()
+			if concreteStorage, ok := s.storage.(*session.Storage); ok {
+				session.CostSinkForSessionUUID(concreteStorage, inst.UUID)(draftCostUSD)
+			}
 			if draftErr != nil {
 				log.Warn("DraftPullRequest: DraftPRDescription failed, using fallback body", "session", req.Msg.SessionId, "err", draftErr)
 			} else {

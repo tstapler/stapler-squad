@@ -31,8 +31,10 @@ func (p *instantDonePool) CallBlocking(
 	_ headless.FeatureKey,
 	_, _ string,
 	_ headless.CallOptions,
-) (string, float64, error) {
-	return "DONE: test complete", 0, nil
+	sink headless.CostSink,
+) (string, error) {
+	sink(0)
+	return "DONE: test complete", nil
 }
 
 // addPausedAutonomousInstance inserts a paused session with AutonomousMode=true into storage.

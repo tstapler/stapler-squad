@@ -574,10 +574,18 @@ func (l *BacklogLifecycleListener) pushAndCreatePR(ctx context.Context, item *Ba
 			diff, _, diffErr := GetGitDiff(ctx, wt.WorktreePath, wt.BaseCommitSHA)
 			if diffErr != nil {
 				log.WarningLog.Printf("[BacklogLifecycle] pushAndCreatePR GetGitDiff for description item=%s: %v; using fallback body", item.ID, diffErr)
-			} else if drafted, draftErr := headless.DraftPRDescription(ctx, pool, item.Title, item.Description, diff, wt.BranchName); draftErr != nil {
-				log.WarningLog.Printf("[BacklogLifecycle] pushAndCreatePR DraftPRDescription item=%s: %v; using fallback body", item.ID, draftErr)
-			} else if drafted != "" {
-				prBody = drafted
+			} else {
+				drafted, draftCostUSD, draftErr := headless.DraftPRDescription(ctx, pool, item.Title, item.Description, diff, wt.BranchName)
+				if draftCostUSD > 0 {
+					if costErr := l.storage.UpdateItemSessionCost(ctx, is.ID, draftCostUSD); costErr != nil {
+						log.WarningLog.Printf("[BacklogLifecycle] pushAndCreatePR failed to persist PR-description cost item=%s: %v", item.ID, costErr)
+					}
+				}
+				if draftErr != nil {
+					log.WarningLog.Printf("[BacklogLifecycle] pushAndCreatePR DraftPRDescription item=%s: %v; using fallback body", item.ID, draftErr)
+				} else if drafted != "" {
+					prBody = drafted
+				}
 			}
 		}
 		var prErr error
