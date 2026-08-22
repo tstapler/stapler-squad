@@ -280,6 +280,63 @@ func TestGitRunErr_WedgedSubprocess_FailsFastInsteadOfHangingForever(t *testing.
 	}
 }
 
+// TestGitRunErrCtx_PreemptedByShorterParentDeadline proves the exact
+// mechanism fixtureBuildTimeout relies on: gitRunErrCtx derives its
+// per-attempt context via context.WithTimeout(parent, timeout), so a
+// parent whose own deadline is shorter than the per-call timeout must still
+// preempt a wedged subprocess — this is what lets fixtureBuildTimeout bound
+// a whole buildPackedFixtureOnce attempt without needing to wait out its
+// full 3-minute value. It reuses the wedged-fake-git-binary technique from
+// TestGitRunErr_WedgedSubprocess_FailsFastInsteadOfHangingForever rather
+// than actually running fixtureBuildTimeout's real duration, so this stays
+// fast and non-flaky.
+func TestGitRunErrCtx_PreemptedByShorterParentDeadline(t *testing.T) {
+	fakeBinDir := t.TempDir()
+	fakeGitPath := filepath.Join(fakeBinDir, "git")
+	script := "#!/bin/sh\nexec sleep 3600\n"
+	if err := os.WriteFile(fakeGitPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake git binary: %v", err)
+	}
+	origPath := os.Getenv("PATH")
+	t.Setenv("PATH", fakeBinDir+string(os.PathListSeparator)+origPath)
+
+	// parentTimeout is deliberately much shorter than perCallTimeout, mirroring
+	// fixtureBuildTimeout (3m) wrapping a per-call gitCommandTimeout (30s/90s):
+	// the OUTER deadline must be the one that fires.
+	const parentTimeout = 500 * time.Millisecond
+	const perCallTimeout = 2 * time.Second
+	parent, cancel := context.WithTimeout(context.Background(), parentTimeout)
+	defer cancel()
+
+	type result struct {
+		err error
+		dur time.Duration
+	}
+	done := make(chan result, 1)
+	start := time.Now()
+	go func() {
+		err := gitRunErrCtx(parent, t.Logf, t.TempDir(), perCallTimeout, "status")
+		done <- result{err: err, dur: time.Since(start)}
+	}()
+
+	const ceiling = 15 * time.Second
+	select {
+	case r := <-done:
+		if r.err == nil {
+			t.Fatalf("gitRunErrCtx against a wedged subprocess returned nil error (want a timeout error) after %s", r.dur)
+		}
+		if !strings.Contains(r.err.Error(), "timed out") {
+			t.Fatalf("gitRunErrCtx error = %v, want it to mention \"timed out\"", r.err)
+		}
+		if r.dur >= perCallTimeout {
+			t.Fatalf("gitRunErrCtx took %s, want it preempted by parentTimeout (%s) well before perCallTimeout (%s) — the outer deadline fixtureBuildTimeout relies on did not fire first", r.dur, parentTimeout, perCallTimeout)
+		}
+		t.Logf("gitRunErrCtx preempted by the shorter parent deadline in %s: %v", r.dur, r.err)
+	case <-time.After(ceiling):
+		t.Fatalf("gitRunErrCtx did not return within %s — the parent-context deadline that fixtureBuildTimeout depends on is not preempting a wedged subprocess", ceiling)
+	}
+}
+
 // buildPackedFixtureAttempts bounds how many times buildPackedFixture will
 // rebuild the ENTIRE fixture from scratch (wipe dir, replay every commit,
 // re-run gc) after a failure, as opposed to gitRunErr's in-place retry of

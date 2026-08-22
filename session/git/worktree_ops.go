@@ -31,6 +31,33 @@ func branchRefExists(repo *git.Repository, branchRef plumbing.ReferenceName) (bo
 	}
 }
 
+// lockRaceRetryAttempts and lockRaceRetryDelay bound the self-heal retry in
+// retryBranchRefExists — see setupNewWorktree's doc comment for the race it waits out.
+const (
+	lockRaceRetryAttempts = 5
+	lockRaceRetryDelay    = 10 * time.Millisecond
+)
+
+// retryBranchRefExists polls check up to lockRaceRetryAttempts times, sleeping
+// lockRaceRetryDelay between attempts (never before the first, so the common
+// no-contention caller of this — which only runs after a lock error — pays no extra
+// latency), and returns the last observed existence result once check reports the ref
+// exists or attempts are exhausted.
+func retryBranchRefExists(check func() (bool, error)) bool {
+	var exists bool
+	for attempt := 0; attempt < lockRaceRetryAttempts; attempt++ {
+		if attempt > 0 {
+			time.Sleep(lockRaceRetryDelay)
+		}
+		var err error
+		exists, err = check()
+		if err == nil && exists {
+			return true
+		}
+	}
+	return exists
+}
+
 // Setup creates a new worktree for the session. The entire branch-check +
 // add/reuse dispatch is serialized per-repoPath (across goroutines and OS
 // processes) because git worktree add mutates shared .git/worktrees/
@@ -327,29 +354,15 @@ func (g *GitWorktree) setupNewWorktree() error {
 	// Otherwise, we'll inherit uncommitted changes from the previous worktree.
 	// This way, we can start the worktree with a clean slate.
 	if _, err := g.runGitCommand(g.repoPath, "worktree", "add", "-b", g.branchName, g.worktreePath, headCommit); err != nil {
-		// Two concurrent spawns for the same backlog item compute the identical
-		// deterministic branch name (see backlogWorkBranchSlug) and can both pass the
-		// branchRefExists check above before either creates the branch. Depending on
-		// exactly when the loser's git process attempts to write refs/heads/<branch>
-		// relative to the winner's, git surfaces one of two distinct errors for the
-		// identical race: "a branch named '<branch>' already exists" if the winner's
-		// ref write has already landed, or "cannot lock ref '...': Unable to create
-		// '....lock': File exists" if the loser arrives while the winner still holds
-		// the ref lock (which git only holds for the instant it takes to write the
-		// ref file). The lock-contention case is transient by construction, so retry
-		// briefly to let the winner finish, then treat it the same as "already
-		// exists": self-heal by falling back to setupFromExistingBranch, the same
-		// reuse path that would already handle a retry of this same call.
+		// Two concurrent spawns for the same backlog item can both pass the
+		// branchRefExists check above before either creates the branch (see
+		// backlogWorkBranchSlug). "cannot lock ref" is git's transient error for the
+		// loser arriving while the winner still holds the ref lock — retry briefly,
+		// then self-heal via setupFromExistingBranch, same as the "already exists" case.
 		if strings.Contains(err.Error(), "cannot lock ref") {
-			var exists bool
-			for attempt := 0; attempt < 5; attempt++ {
-				time.Sleep(10 * time.Millisecond)
-				var existsErr error
-				exists, existsErr = branchRefExists(repo, branchRef)
-				if existsErr == nil && exists {
-					break
-				}
-			}
+			exists := retryBranchRefExists(func() (bool, error) {
+				return branchRefExists(repo, branchRef)
+			})
 			if !exists {
 				return fmt.Errorf("failed to create worktree from commit %s: %w", headCommit, err)
 			}

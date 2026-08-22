@@ -138,6 +138,32 @@ func requireCleanReturn(t *testing.T, cancel context.CancelFunc, done <-chan err
 	}
 }
 
+// TestTestAfterSubscribeHook_should_NotLeakBetweenEventBusInstances guards the
+// map-keyed-by-bus isolation testAfterSubscribeHooks relies on: a hook set on
+// one EventBus must never fire for a different EventBus, since many of this
+// package's WatchBacklogItems tests run t.Parallel() against their own buses.
+func TestTestAfterSubscribeHook_should_NotLeakBetweenEventBusInstances(t *testing.T) {
+	t.Parallel()
+	busA := events.NewEventBus(10)
+	busB := events.NewEventBus(10)
+
+	var callsOnA, callsOnB int
+	setTestAfterSubscribeHook(busA, func() { callsOnA++ })
+	t.Cleanup(func() { setTestAfterSubscribeHook(busA, nil) })
+	setTestAfterSubscribeHook(busB, func() { callsOnB++ })
+	t.Cleanup(func() { setTestAfterSubscribeHook(busB, nil) })
+
+	callTestAfterSubscribeHook(busA)
+
+	assert.Equal(t, 1, callsOnA, "hook registered on busA must fire when busA's subscribe point runs")
+	assert.Equal(t, 0, callsOnB, "hook registered on busB must not fire from busA's subscribe point")
+
+	callTestAfterSubscribeHook(busB)
+
+	assert.Equal(t, 1, callsOnA, "busB's subscribe point must not re-trigger busA's hook")
+	assert.Equal(t, 1, callsOnB, "hook registered on busB must fire when busB's own subscribe point runs")
+}
+
 // ─── Story 3.2.1: fresh-snapshot branch (Task 3.2.1b) ─────────────────────
 
 func TestWatchBacklogItems_should_sendSnapshotEventsForAllItems_When_AfterSeqIsZero(t *testing.T) {

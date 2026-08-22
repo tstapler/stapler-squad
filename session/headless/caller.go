@@ -2,6 +2,7 @@ package headless
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -370,7 +371,7 @@ func (p *Pool) call(ctx context.Context, key FeatureKey, systemPrompt, userPromp
 			// which json.Unmarshal rejects outright as "invalid character ... after
 			// top-level value" even though the JSON result itself is well-formed.
 			var result firstCallJSONResult
-			if jsonErr := json.NewDecoder(strings.NewReader(string(data))).Decode(&result); jsonErr != nil {
+			if jsonErr := json.NewDecoder(bytes.NewReader(data)).Decode(&result); jsonErr != nil {
 				// Not valid JSON: treat the whole output as plain text.
 				text := strings.TrimSpace(string(data))
 				if text != "" {
