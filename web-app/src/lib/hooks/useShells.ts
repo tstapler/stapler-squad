@@ -6,7 +6,7 @@ import { Shell, ShellStatus } from "@/gen/session/v1/types_pb";
 import { SpawnShellRequest } from "@/gen/session/v1/session_pb";
 import { createClient } from "@connectrpc/connect";
 import { SessionService } from "@/gen/session/v1/session_pb";
-import { createWatchTransport } from "@/lib/transport/watch-ws-transport";
+import { createSessionWatchTransport } from "@/lib/transport/watch-ws-transport";
 import { getApiBaseUrl, createAuthInterceptor } from "@/lib/config";
 import { createRpcTimingInterceptor } from "@/lib/telemetry/rpcTiming";
 import { AnalyticsContext } from "@/lib/contexts/AnalyticsContext";
@@ -58,9 +58,9 @@ export function useShells(sessionId: string): UseShellsReturn {
     const interceptors = analyticsCtx
       ? [authInterceptor, createRpcTimingInterceptor(analyticsCtx)].filter(Boolean)
       : [authInterceptor].filter(Boolean);
-    const transport = createWatchTransport({
+    const transport = createSessionWatchTransport({
       baseUrl: getApiBaseUrl(),
-      interceptors: interceptors as Parameters<typeof createWatchTransport>[0]["interceptors"],
+      interceptors: interceptors as Parameters<typeof createSessionWatchTransport>[0]["interceptors"],
     });
     clientRef.current = createClient(SessionService, transport);
   // eslint-disable-next-line react-hooks/exhaustive-deps
