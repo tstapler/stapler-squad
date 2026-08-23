@@ -106,6 +106,72 @@ func (g *HandoffSummaryGenerator) tryAcquire(sessionUUID string) (release func()
 	}, true
 }
 
+// isInFlight is a non-blocking probe used by ReconcileStaleness to distinguish
+// "still actively generating in this process" from "genuinely stuck (e.g. the
+// process restarted mid-generation)". Mirrors SessionSummaryGenerator.isInFlight
+// exactly.
+func (g *HandoffSummaryGenerator) isInFlight(sessionUUID string) bool {
+	muI, ok := g.inFlight.Load(sessionUUID)
+	if !ok {
+		return false
+	}
+	m := muI.(*sync.Mutex)
+	if m.TryLock() {
+		m.Unlock()
+		return false
+	}
+	return true
+}
+
+// ReconcileStaleness flips a row stuck in GENERATING for longer than
+// staleGenerationTimeout (session_summary_service.go's constant, reused as-is
+// rather than redeclared — both types live in package session) to ERROR,
+// unless this process's in-memory guard is still held for that session (a
+// long-running call, not a genuinely stuck row). Called from the RPC read
+// path (server/services.HandoffSummaryService.GetHandoffSummary,
+// Adversarial-review Blocker #3), not a background sweep — mirrors
+// SessionSummaryGenerator.ReconcileStaleness's TOCTOU-safe predicated update;
+// see that method's doc comment for the race this guards against.
+func (g *HandoffSummaryGenerator) ReconcileStaleness(ctx context.Context, row *ent.HandoffSummary) *ent.HandoffSummary {
+	if row == nil || row.Status != string(HandoffSummaryStatusGenerating) || row.GenerationStartedAt == nil {
+		return row
+	}
+	if time.Since(*row.GenerationStartedAt) <= staleGenerationTimeout {
+		return row
+	}
+	if g.isInFlight(row.SessionID) {
+		return row
+	}
+
+	const staleMessage = "generation did not complete (server restart or hung call)"
+	affected, err := g.entClient.HandoffSummary.Update().
+		Where(
+			handoffsummary.SessionID(row.SessionID),
+			handoffsummary.Status(string(HandoffSummaryStatusGenerating)),
+			handoffsummary.GenerationStartedAtEQ(*row.GenerationStartedAt),
+		).
+		SetStatus(string(HandoffSummaryStatusError)).
+		SetErrorStage("stale").
+		SetErrorMessage(staleMessage).
+		Save(ctx)
+	if err != nil {
+		log.ForSession(row.SessionID).Warn("[HandoffSummary] failed to reconcile stale GENERATING row", "err", err)
+		return row
+	}
+	if affected == 0 {
+		// Someone else (a fresh GenerateAndPersist call, or a concurrent
+		// reconcile) already transitioned this row out of the state we read.
+		// Return the row as originally read, not a freshly-error'd one.
+		log.ForSession(row.SessionID).Info("[HandoffSummary] skipped stale-GENERATING reconcile: row already transitioned")
+		return row
+	}
+
+	row.Status = string(HandoffSummaryStatusError)
+	row.ErrorStage = "stale"
+	row.ErrorMessage = staleMessage
+	return row
+}
+
 // toHandoffMessages converts []ClaudeConversationMessage (session package's
 // transcript message shape) into []headless.HandoffTranscriptMessage
 // (headless.GenerateHandoffSummary's input shape). A small local conversion

@@ -118,6 +118,11 @@ type ServerDependencies struct {
 	// dependencies are wired later via SetNotificationLister/SetTokenStore (see
 	// server.go's RunServer) — see the comment on SetNotificationLister for why.
 	SessionSummaryGenerator *session.SessionSummaryGenerator
+
+	// HandoffSummaryGenerator drives async restart-handoff-summary generation
+	// (Story 2.2.1). Nil when storage is not ent-backed, mirroring
+	// SessionSummaryGenerator.
+	HandoffSummaryGenerator *session.HandoffSummaryGenerator
 }
 
 // ToServerDeps converts RuntimeDeps to the flat ServerDependencies struct consumed
@@ -161,6 +166,7 @@ func (rt *RuntimeDeps) ToServerDeps() *ServerDependencies {
 		TriggerFireEventRepo:    rt.TriggerFireEventRepo,
 		Registry:                rt.Registry,
 		SessionSummaryGenerator: rt.SessionSummaryGenerator,
+		HandoffSummaryGenerator: rt.HandoffSummaryGenerator,
 	}
 }
 
@@ -475,6 +481,10 @@ type RuntimeDeps struct {
 	// SessionSummaryGenerator drives async session-completion-summary generation.
 	// Nil when storage is not ent-backed.
 	SessionSummaryGenerator *session.SessionSummaryGenerator
+
+	// HandoffSummaryGenerator drives async restart-handoff-summary generation
+	// (Story 2.2.1). Nil when storage is not ent-backed.
+	HandoffSummaryGenerator *session.HandoffSummaryGenerator
 }
 
 // reviewQueueLookupAdapter adapts session.Storage's ItemSession/ReviewVerdict
@@ -650,6 +660,18 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		sessionService.SetSessionSummaryGenerator(sessionSummaryGenerator)
 	} else {
 		log.Warn("session summary generation unavailable: storage is not ent-backed")
+	}
+
+	// HandoffSummaryGenerator (Story 2.2.1) — same construction/nil-guard shape
+	// as sessionSummaryGenerator just above. No SetSessionSummaryGenerator-style
+	// wiring onto sessionService needed: unlike SessionSummaryGenerator, nothing
+	// in the live-instance lifecycle dispatches handoff-summary generation —
+	// it's only triggered on demand via HandoffSummaryService's RPC handlers.
+	var handoffSummaryGenerator *session.HandoffSummaryGenerator
+	if entClient := storage.GetEntClient(); entClient != nil {
+		handoffSummaryGenerator = session.NewHandoffSummaryGenerator(entClient, headlessPool)
+	} else {
+		log.Warn("handoff summary generation unavailable: storage is not ent-backed")
 	}
 
 	// Backlog lifecycle listener — always created, enabled state set from config below.
@@ -1484,6 +1506,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		TriggerFireEventRepo:    triggerFireEventRepo,
 		Registry:                svc.Registry,
 		SessionSummaryGenerator: sessionSummaryGenerator,
+		HandoffSummaryGenerator: handoffSummaryGenerator,
 	}, nil
 }
 
