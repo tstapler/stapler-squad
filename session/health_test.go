@@ -335,6 +335,9 @@ func TestHealthCheckerRecovery_PaneCrashed_MarksCrashedOutsideGracePeriod(t *tes
 	if snap.ExitReason == "" {
 		t.Error("expected ExitReason to be populated")
 	}
+	if !result.RecoverySuccess {
+		t.Error("expected RecoverySuccess=true: a successful Crashed transition is not a recovery failure")
+	}
 }
 
 // TestHealthCheckerRecovery_PaneExitedNormally_MarksStoppedNotCrashed pins AC3:
@@ -372,6 +375,9 @@ func TestHealthCheckerRecovery_PaneExitedNormally_MarksStoppedNotCrashed(t *test
 	}
 	if snap.Status == Crashed {
 		t.Error("normal completion must not be marked Crashed")
+	}
+	if !result.RecoverySuccess {
+		t.Error("expected RecoverySuccess=true: a successful Stopped transition is not a recovery failure")
 	}
 }
 
