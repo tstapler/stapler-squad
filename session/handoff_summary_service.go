@@ -1,0 +1,266 @@
+package session
+
+import (
+	"context"
+	"fmt"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/google/uuid"
+
+	"github.com/tstapler/stapler-squad/config"
+	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/ent"
+	"github.com/tstapler/stapler-squad/session/ent/handoffsummary"
+	"github.com/tstapler/stapler-squad/session/headless"
+)
+
+// HandoffSummaryStatus mirrors SessionSummaryStatus's shape (session_summary_service.go)
+// for the handoff-summary row's status column.
+type HandoffSummaryStatus string
+
+const (
+	HandoffSummaryStatusPending    HandoffSummaryStatus = "pending"
+	HandoffSummaryStatusGenerating HandoffSummaryStatus = "generating"
+	HandoffSummaryStatusReady      HandoffSummaryStatus = "ready"
+	HandoffSummaryStatusError      HandoffSummaryStatus = "error"
+)
+
+// handoffSummaryTimeout bounds the GenerateHandoffSummary pool call, identical
+// shape to session_summary_service.go's llmNarrativeTimeout (Story 1.5.1
+// Adversarial-review Blocker #1: the call must have a hard deadline so a
+// blocked pool call cannot hang GenerateAndPersist, and must still resolve the
+// row to ERROR + release the dedup guard on timeout). Declared as a var (not
+// const), matching llmNarrativeTimeout's actual declaration despite the task
+// description's "name the const" wording — llmNarrativeTimeout is a var
+// specifically so tests can temporarily lower it to exercise the timeout path
+// without waiting the full 60s; a real const would force this package's
+// timeout test to block for a full minute.
+var handoffSummaryTimeout = 60 * time.Second
+
+// activeTaskHeading is the literal markdown heading GenerateHandoffSummary's
+// output always ends with (session/headless/features.go's
+// handoffSummarySystemPrompt) — used to best-effort extract the active task
+// text for the ActiveTask column.
+const activeTaskHeading = "## Active Task"
+
+// HandoffSummaryGenerator is the domain-level orchestrator that owns the
+// headless pool, the ent client, and the in-process dedup map for handoff
+// summary generation. GenerateAndPersist mirrors
+// SessionSummaryGenerator.GenerateAndPersist's structure (async dispatch,
+// in-flight dedup, panic recovery, status-transitioning upserts).
+type HandoffSummaryGenerator struct {
+	entClient *ent.Client
+	pool      headless.PoolClient
+
+	// inFlight is a sync.Map[string]*sync.Mutex keyed by session_id, mirroring
+	// SessionSummaryGenerator.inFlight. Collapses concurrent/duplicate triggers
+	// per session.
+	inFlight sync.Map
+}
+
+// NewHandoffSummaryGenerator creates a HandoffSummaryGenerator.
+func NewHandoffSummaryGenerator(entClient *ent.Client, pool headless.PoolClient) *HandoffSummaryGenerator {
+	return &HandoffSummaryGenerator{
+		entClient: entClient,
+		pool:      pool,
+	}
+}
+
+// FindRowBySessionID queries the HandoffSummary row for sessionID directly.
+// Wraps ent's not-found error as ErrNotFound, mirroring
+// SessionSummaryGenerator.FindRowBySessionID.
+func (g *HandoffSummaryGenerator) FindRowBySessionID(ctx context.Context, sessionID string) (*ent.HandoffSummary, error) {
+	row, err := g.entClient.HandoffSummary.Query().Where(handoffsummary.SessionID(sessionID)).Only(ctx)
+	if err != nil {
+		if ent.IsNotFound(err) {
+			return nil, fmt.Errorf("%w: handoff summary for session=%s", ErrNotFound, sessionID)
+		}
+		return nil, err
+	}
+	return row, nil
+}
+
+// tryAcquire attempts to acquire the in-process per-session guard for
+// sessionUUID. Returns (release, true) on success — the caller must call
+// release() exactly once, typically via defer. Returns (nil, false) if a
+// generation is already in flight for this session. Mirrors
+// SessionSummaryGenerator.tryAcquire exactly.
+func (g *HandoffSummaryGenerator) tryAcquire(sessionUUID string) (release func(), ok bool) {
+	muI, _ := g.inFlight.LoadOrStore(sessionUUID, &sync.Mutex{})
+	m := muI.(*sync.Mutex)
+	if !m.TryLock() {
+		return nil, false
+	}
+	return func() {
+		m.Unlock()
+		// Remove the map entry once this generation is done, so a session that
+		// triggers generation once doesn't leave a permanent *sync.Mutex behind
+		// for the process's lifetime. CompareAndDelete only removes it if it's
+		// still the same mutex we acquired — if a concurrent tryAcquire already
+		// raced in a fresh LoadOrStore between our Unlock and this line, that
+		// entry belongs to a different in-flight generation and must be left
+		// alone.
+		g.inFlight.CompareAndDelete(sessionUUID, m)
+	}, true
+}
+
+// toHandoffMessages converts []ClaudeConversationMessage (session package's
+// transcript message shape) into []headless.HandoffTranscriptMessage
+// (headless.GenerateHandoffSummary's input shape). A small local conversion
+// helper, not a shared type, because session/headless cannot import session
+// (session already imports session/headless — see
+// headless.HandoffTranscriptMessage's doc comment).
+func toHandoffMessages(messages []ClaudeConversationMessage) []headless.HandoffTranscriptMessage {
+	out := make([]headless.HandoffTranscriptMessage, len(messages))
+	for i, msg := range messages {
+		out[i] = headless.HandoffTranscriptMessage{
+			Role:    msg.Role,
+			Content: msg.Content,
+		}
+	}
+	return out
+}
+
+// extractActiveTask returns the text following the literal "## Active Task"
+// heading in summaryText, best-effort. Returns "" if the heading is missing —
+// never an error.
+func extractActiveTask(summaryText string) string {
+	idx := strings.Index(summaryText, activeTaskHeading)
+	if idx < 0 {
+		return ""
+	}
+	return strings.TrimSpace(summaryText[idx+len(activeTaskHeading):])
+}
+
+// upsertHandoffSummaryError writes an ERROR row for sessionUUID, preserving
+// sessionTitle and generationStartedAt. Used by every error-return path in
+// GenerateAndPersist so the row never sticks in GENERATING.
+func (g *HandoffSummaryGenerator) upsertHandoffSummaryError(ctx context.Context, sessionUUID, sessionTitle, stage, message string, generationStartedAt time.Time) error {
+	return g.entClient.HandoffSummary.Create().
+		SetID(uuid.New().String()).
+		SetSessionID(sessionUUID).
+		SetSessionTitle(sessionTitle).
+		SetStatus(string(HandoffSummaryStatusError)).
+		SetGenerationStartedAt(generationStartedAt).
+		OnConflictColumns(handoffsummary.FieldSessionID).
+		Update(func(u *ent.HandoffSummaryUpsert) {
+			u.SetStatus(string(HandoffSummaryStatusError))
+			u.SetErrorStage(stage)
+			u.SetErrorMessage(message)
+			u.SetGenerationStartedAt(generationStartedAt)
+		}).
+		Exec(ctx)
+}
+
+// GenerateAndPersist runs the full handoff-summary pipeline: read the source
+// session's transcript, window/budget it, call the LLM to compact the middle
+// portion into a handoff summary, and persist via status-transitioning
+// upserts (PENDING -> GENERATING -> READY, or -> ERROR on failure). Always
+// invoked as a detached goroutine — never call this synchronously.
+func (g *HandoffSummaryGenerator) GenerateAndPersist(ctx context.Context, sourceSessionID, sourceSessionTitle string) {
+	release, ok := g.tryAcquire(sourceSessionID)
+	if !ok {
+		return
+	}
+	defer release()
+
+	// Panic safety, mirrors SessionSummaryGenerator.GenerateAndPersist: this
+	// method always runs as a detached goroutine, so an unrecovered panic here
+	// would crash the entire server process. Go runs deferred functions LIFO,
+	// so this recover (registered second) fires before release() (registered
+	// first) — the guard is never left permanently locked by a panic.
+	defer func() {
+		if r := recover(); r != nil {
+			log.WarningLog().Printf("[HandoffSummary] GenerateAndPersist panicked (recovered) for session=%s: %v", sourceSessionID, r)
+		}
+	}()
+
+	now := time.Now()
+
+	// Interim GENERATING upsert.
+	if err := g.entClient.HandoffSummary.Create().
+		SetID(uuid.New().String()).
+		SetSessionID(sourceSessionID).
+		SetSessionTitle(sourceSessionTitle).
+		SetStatus(string(HandoffSummaryStatusGenerating)).
+		SetGenerationStartedAt(now).
+		OnConflictColumns(handoffsummary.FieldSessionID).
+		Update(func(u *ent.HandoffSummaryUpsert) {
+			u.SetSessionTitle(sourceSessionTitle)
+			u.SetStatus(string(HandoffSummaryStatusGenerating))
+			u.SetGenerationStartedAt(now)
+		}).
+		Exec(ctx); err != nil {
+		log.ForSession(sourceSessionID).Error("[HandoffSummary] failed to write interim GENERATING row", "err", err)
+		return
+	}
+	log.ForSession(sourceSessionID).Info("[HandoffSummary] PENDING -> GENERATING")
+
+	history, err := NewClaudeSessionHistoryFromClaudeDir()
+	if err != nil {
+		if upsertErr := g.upsertHandoffSummaryError(ctx, sourceSessionID, sourceSessionTitle, "transcript", err.Error(), now); upsertErr != nil {
+			log.ForSession(sourceSessionID).Error("[HandoffSummary] failed to persist transcript-stage error row", "err", upsertErr)
+		}
+		log.ForSession(sourceSessionID).Warn("[HandoffSummary] GENERATING -> ERROR (transcript stage)", "err", err)
+		return
+	}
+
+	messages, err := history.GetMessagesFromConversationFile(sourceSessionID, 0)
+	if err != nil {
+		if upsertErr := g.upsertHandoffSummaryError(ctx, sourceSessionID, sourceSessionTitle, "transcript", err.Error(), now); upsertErr != nil {
+			log.ForSession(sourceSessionID).Error("[HandoffSummary] failed to persist transcript-stage error row", "err", upsertErr)
+		}
+		log.ForSession(sourceSessionID).Warn("[HandoffSummary] GENERATING -> ERROR (transcript stage)", "err", err)
+		return
+	}
+
+	window := buildTranscriptWindow(messages)
+	window.Middle = applySummaryBudget(window.Middle, newSummaryBudget(config.LoadConfig().HandoffSummary))
+
+	genCtx, cancel := context.WithTimeout(ctx, handoffSummaryTimeout)
+	summaryText, err := headless.GenerateHandoffSummary(genCtx, g.pool, sourceSessionTitle, toHandoffMessages(window.Head), toHandoffMessages(window.Middle), toHandoffMessages(window.Tail))
+	cancel()
+	if err != nil {
+		if upsertErr := g.upsertHandoffSummaryError(ctx, sourceSessionID, sourceSessionTitle, "generation", err.Error(), now); upsertErr != nil {
+			log.ForSession(sourceSessionID).Error("[HandoffSummary] failed to persist generation-stage error row", "err", upsertErr)
+		}
+		log.ForSession(sourceSessionID).Warn("[HandoffSummary] GENERATING -> ERROR (generation stage)", "err", err)
+		return
+	}
+
+	activeTask := extractActiveTask(summaryText)
+	finalNow := time.Now()
+
+	if err := g.entClient.HandoffSummary.Create().
+		SetID(uuid.New().String()).
+		SetSessionID(sourceSessionID).
+		SetSessionTitle(sourceSessionTitle).
+		SetStatus(string(HandoffSummaryStatusReady)).
+		SetSummaryText(summaryText).
+		SetActiveTask(activeTask).
+		SetMiddleMessagesSummarized(len(window.Middle)).
+		SetGenerationStartedAt(now).
+		SetGeneratedAt(finalNow).
+		OnConflictColumns(handoffsummary.FieldSessionID).
+		UpdateNewValues().
+		Update(func(u *ent.HandoffSummaryUpsert) {
+			// A prior failed generation for this session may have left
+			// error_message/error_stage set — clear them so a successful
+			// (READY) row never carries forward stale error state.
+			u.ClearErrorMessage()
+			u.ClearErrorStage()
+		}).
+		Exec(ctx); err != nil {
+		// LLM cost already spent, row still says GENERATING — attempt a
+		// best-effort fallback write rather than silently leaving it stuck.
+		if fallbackErr := g.upsertHandoffSummaryError(ctx, sourceSessionID, sourceSessionTitle, "persist", err.Error(), now); fallbackErr != nil {
+			log.ForSession(sourceSessionID).Error("[HandoffSummary] failed to persist fallback ERROR row after final write failure", "err", fallbackErr)
+		}
+		log.ForSession(sourceSessionID).Error("[HandoffSummary] GENERATING -> ERROR (persist stage)", "err", err)
+		return
+	}
+
+	log.ForSession(sourceSessionID).Info("[HandoffSummary] GENERATING -> READY")
+}

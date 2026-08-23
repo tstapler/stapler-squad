@@ -111,6 +111,8 @@ type InstanceSnapshot struct {
 	Checkpoints      CheckpointList // defensive deep copy — see buildSnapshot
 	ActiveCheckpoint string
 	ForkedFromID     string
+	// RestartedFromSessionID — see Instance.RestartedFromSessionID's doc comment.
+	RestartedFromSessionID string
 
 	// Misc config
 	OneShot             bool
@@ -194,25 +196,26 @@ func buildSnapshot(i *Instance) *InstanceSnapshot {
 			GitHubPRStatusTerminal: i.GitHubPRStatusTerminal,
 			LastPRStatusCheck:      i.LastPRStatusCheck,
 		},
-		Checkpoints:        append(CheckpointList(nil), i.Checkpoints...),
-		ActiveCheckpoint:   i.ActiveCheckpoint,
-		ForkedFromID:       i.ForkedFromID,
-		OneShot:            i.OneShot,
-		Hidden:             i.Hidden,
-		ProjectID:          i.ProjectID,
-		HistoryFilePath:    i.HistoryFilePath,
-		MCPServerURL:       i.MCPServerURL,
-		AppendSystemPrompt: i.AppendSystemPrompt,
-		AllowedTools:       i.AllowedTools,
-		PermissionMode:     i.PermissionMode,
-		PauseReason:        i.PauseReason,
-		ExitReason:         i.ExitReason,
-		WorkflowID:         i.WorkflowID,
-		CLIFlags:           i.CLIFlags,
-		ReviewState:        i.ReviewState,
-		InstanceType:       i.InstanceType,
-		IsManaged:          i.IsManaged,
-		Artifacts:          i.Artifacts,
+		Checkpoints:            append(CheckpointList(nil), i.Checkpoints...),
+		ActiveCheckpoint:       i.ActiveCheckpoint,
+		ForkedFromID:           i.ForkedFromID,
+		RestartedFromSessionID: i.RestartedFromSessionID,
+		OneShot:                i.OneShot,
+		Hidden:                 i.Hidden,
+		ProjectID:              i.ProjectID,
+		HistoryFilePath:        i.HistoryFilePath,
+		MCPServerURL:           i.MCPServerURL,
+		AppendSystemPrompt:     i.AppendSystemPrompt,
+		AllowedTools:           i.AllowedTools,
+		PermissionMode:         i.PermissionMode,
+		PauseReason:            i.PauseReason,
+		ExitReason:             i.ExitReason,
+		WorkflowID:             i.WorkflowID,
+		CLIFlags:               i.CLIFlags,
+		ReviewState:            i.ReviewState,
+		InstanceType:           i.InstanceType,
+		IsManaged:              i.IsManaged,
+		Artifacts:              i.Artifacts,
 	}
 
 	// Deep copy RateLimitAutoResume *bool

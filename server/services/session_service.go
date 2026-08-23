@@ -1740,6 +1740,12 @@ func (s *SessionService) CreateSession(
 		!req.Msg.AutonomousMode &&
 		req.Msg.AliasName == "" &&
 		req.Msg.SessionType != sessionv1.SessionType_SESSION_TYPE_NEW_PROJECT &&
+		// restart_from_session_id (Story 2.3.1) derives the path from the
+		// source session below when Path is left empty -- see the
+		// restart-source resolution block ahead of "Resolve GitHub URLs to
+		// local paths". An empty Path is only a validation error here when
+		// there's no such source to derive one from.
+		req.Msg.RestartFromSessionId == "" &&
 		req.Msg.Path == "" {
 		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("path is required"))
 	}
@@ -1800,10 +1806,51 @@ func (s *SessionService) CreateSession(
 		return nil, connect.NewError(connect.CodeInvalidArgument, remoteErr)
 	}
 
+	// Restart-from-session lineage (Story 2.3.1): resolve the source session's
+	// path and enforce the still-live guard before any other path resolution
+	// below. FindLiveInstance is tried first (it reflects the actual live,
+	// in-memory session state -- a still-running tmux/process, not just what
+	// was last persisted); a persisted-storage lookup (mirroring
+	// FindInstanceDataByID, reusing the `existing` slice already loaded above
+	// for the title-collision check) is the fallback for a source session
+	// that exists but is not currently live. Only the "found live, not
+	// confirmed" case is rejected outright -- a persisted-but-not-live source
+	// proceeds without requiring confirm_restart_with_live_source, since there
+	// is no live process/worktree it could collide with.
+	var restartSourcePath string
+	if req.Msg.RestartFromSessionId != "" {
+		if liveSrc := s.FindLiveInstance(req.Msg.RestartFromSessionId); liveSrc != nil {
+			if !req.Msg.ConfirmRestartWithLiveSource {
+				return nil, connect.NewError(connect.CodeFailedPrecondition,
+					fmt.Errorf("restart source session %q is still running; stop it first or pass confirm_restart_with_live_source to proceed anyway", req.Msg.RestartFromSessionId))
+			}
+			restartSourcePath = liveSrc.Path
+		} else {
+			var srcData *session.InstanceData
+			for i := range existing {
+				if existing[i].MatchesID(req.Msg.RestartFromSessionId) {
+					srcData = &existing[i]
+					break
+				}
+			}
+			if srcData == nil {
+				return nil, connect.NewError(connect.CodeNotFound,
+					fmt.Errorf("restart source session %q not found", req.Msg.RestartFromSessionId))
+			}
+			restartSourcePath = srcData.Path
+		}
+	}
+
 	// Resolve GitHub URLs to local paths (GOPATH-style: ~/.stapler-squad/repos/<host>/owner/repo)
 	resolvedPath, tildeErr := expandTildePath(req.Msg.Path, remoteRequested)
 	if tildeErr != nil {
 		return nil, connect.NewError(connect.CodeInvalidArgument, tildeErr)
+	}
+	// An explicit req.Msg.Path always wins over the restart-derived path --
+	// only fill in resolvedPath from the source session when the caller left
+	// Path empty.
+	if resolvedPath == "" && restartSourcePath != "" {
+		resolvedPath = restartSourcePath
 	}
 	branch := req.Msg.Branch
 	var gitHubRef *session.GitHubRef
@@ -2229,6 +2276,10 @@ func (s *SessionService) CreateSession(
 		// Phase 4 Epic 4.2) built by the mode-specific block above, or the
 		// LocalTarget{} default for the overwhelming majority of local sessions.
 		ExecutionTarget: executionTarget,
+		// RestartedFromSessionID records lineage for a restart-from-session
+		// request (Story 2.3.1); empty for a normal CreateSession call. The
+		// still-live guard and path derivation already ran above.
+		RestartedFromSessionID: req.Msg.RestartFromSessionId,
 	}
 
 	// Add GitHub metadata if this was a GitHub URL
