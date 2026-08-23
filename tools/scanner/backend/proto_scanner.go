@@ -25,7 +25,7 @@ type BackendFeature struct {
 }
 
 // methodToID maps proto RPC method names to their canonical feature IDs.
-var methodToID = map[string]string{
+var methodToID = map[string]string{ //nolint:gochecknoglobals
 	"CreateSession":             "session:create",
 	"GetSession":                "session:get",
 	"UpdateSession":             "session:update",
@@ -218,6 +218,10 @@ var methodToID = map[string]string{
 	// Outbound callback config RPCs (webhook-triggers Phase 5, FR7)
 	"GetCallbackConfig":    "callback-config:get",
 	"UpdateCallbackConfig": "callback-config:update",
+	// Stream Hub Rollout RPCs (terminal-multi-connection-streaming Story 3.3)
+	"GetStreamHubRolloutStatus":          "stream-hub-rollout:get",
+	"CompleteStreamHubRollbackRehearsal": "stream-hub-rollout:complete-rehearsal",
+	"SetStreamHubSessionOverride":        "stream-hub-rollout:set-session-override",
 	// Approval rules RPCs
 	"BulkUpsertRules":       "approval:bulk-upsert-rules",
 	"ExportRules":           "approval:export-rules",

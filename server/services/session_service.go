@@ -153,6 +153,10 @@ type SessionService struct {
 	// (webhook-triggers Phase 5, FR7).
 	callbackConfigSvc *CallbackConfigService
 
+	// streamHubRolloutSvc handles the stream-hub staged-rollout RPCs
+	// (terminal-multi-connection-streaming Story 3.3).
+	streamHubRolloutSvc *StreamHubRolloutService
+
 	// launcherPresetsSvc handles the GetLauncherPresets RPC.
 	launcherPresetsSvc *LauncherPresetsService
 
@@ -694,6 +698,7 @@ func NewSessionServiceWithSearchEngine(storage session.InstanceStore, eventBus *
 		defaultsSvc:                 NewDefaultsService(),
 		slackConfigSvc:              NewSlackConfigService(NewSlackNotifier()),
 		callbackConfigSvc:           NewCallbackConfigService(),
+		streamHubRolloutSvc:         NewStreamHubRolloutService(),
 		launcherPresetsSvc:          NewLauncherPresetsService(),
 		projectSvc:                  NewProjectService(concStorage),
 		checkpointSvc:               NewCheckpointService(storage, eventBus),
@@ -4662,6 +4667,21 @@ func (s *SessionService) UpdateSlackConfig(ctx context.Context, req *connect.Req
 // TestSlackWebhook sends a synchronous test message and reports the outcome.
 func (s *SessionService) TestSlackWebhook(ctx context.Context, req *connect.Request[sessionv1.TestSlackWebhookRequest]) (*connect.Response[sessionv1.TestSlackWebhookResponse], error) {
 	return s.slackConfigSvc.TestSlackWebhook(ctx, req)
+}
+
+// GetStreamHubRolloutStatus returns the current stream-hub rollout status.
+func (s *SessionService) GetStreamHubRolloutStatus(ctx context.Context, req *connect.Request[sessionv1.GetStreamHubRolloutStatusRequest]) (*connect.Response[sessionv1.StreamHubRolloutStatus], error) {
+	return s.streamHubRolloutSvc.GetStreamHubRolloutStatus(ctx, req)
+}
+
+// CompleteStreamHubRollbackRehearsal records the rollback rehearsal as completed.
+func (s *SessionService) CompleteStreamHubRollbackRehearsal(ctx context.Context, req *connect.Request[sessionv1.CompleteStreamHubRollbackRehearsalRequest]) (*connect.Response[sessionv1.StreamHubRolloutStatus], error) {
+	return s.streamHubRolloutSvc.CompleteStreamHubRollbackRehearsal(ctx, req)
+}
+
+// SetStreamHubSessionOverride sets or clears a per-session stream-hub canary override.
+func (s *SessionService) SetStreamHubSessionOverride(ctx context.Context, req *connect.Request[sessionv1.SetStreamHubSessionOverrideRequest]) (*connect.Response[sessionv1.StreamHubRolloutStatus], error) {
+	return s.streamHubRolloutSvc.SetStreamHubSessionOverride(ctx, req)
 }
 
 // SetOnGlobalDefaultsUpdated wires in the callback invoked after every
