@@ -14,6 +14,14 @@ import * as styles from "./RestartWithSummaryButton.css";
 export interface RestartWithSummaryButtonProps {
   /** The source/current session this button lives on. */
   sessionId: string;
+  /**
+   * Result of the caller's single `useHandoffSummary(sessionId)` call.
+   * HandoffSummarySection mounts up to two instances of this button (empty
+   * state + row) alongside its own poll -- lifting the hook up to that one
+   * shared call avoids running two independent 2s poll loops against the
+   * same session (Finding 2).
+   */
+  handoff: ReturnType<typeof useHandoffSummary>;
 }
 
 type ButtonPhase = "idle" | "generating" | "ready" | "error";
@@ -60,8 +68,8 @@ function restartFailureReason(err: unknown): string {
  * `Code.FailedPrecondition` is treated as the disabled signal (see Story
  * 3.2.1 task notes).
  */
-export function RestartWithSummaryButton({ sessionId }: RestartWithSummaryButtonProps) {
-  const { data, neverResolved, trigger } = useHandoffSummary(sessionId);
+export function RestartWithSummaryButton({ sessionId, handoff }: RestartWithSummaryButtonProps) {
+  const { data, neverResolved, trigger } = handoff;
   const { createSession } = useSessionService();
   const router = useRouter();
 
@@ -70,6 +78,14 @@ export function RestartWithSummaryButton({ sessionId }: RestartWithSummaryButton
   const [triggerErrorMessage, setTriggerErrorMessage] = useState<string | null>(null);
   const [restarting, setRestarting] = useState(false);
   const [restartErrorMessage, setRestartErrorMessage] = useState<string | null>(null);
+  // Finding 1: the still-live-source guard (connect.CodeFailedPrecondition;
+  // see resolveRestartSource in server/services/session_service.go) must be
+  // a real, visible confirmation -- not silently retried -- since two live
+  // CLI processes sharing the same working directory (SESSION_TYPE_DIRECTORY,
+  // no worktree isolation) is a real git-corruption risk. True once the
+  // first attempt is rejected; the user must click "Restart anyway" to
+  // proceed.
+  const [needsLiveSourceConfirm, setNeedsLiveSourceConfirm] = useState(false);
   const [liveMessage, setLiveMessage] = useState("");
   const prevPhaseRef = useRef<ButtonPhase | null>(null);
 
@@ -99,28 +115,55 @@ export function RestartWithSummaryButton({ sessionId }: RestartWithSummaryButton
       restartFromSessionId: sessionId,
     };
     try {
-      let session;
-      try {
-        session = await createSession(baseRequest);
-      } catch (err) {
-        // The source session is normally still open when this button is
-        // clicked -- that's the entire point of the feature (the source is
-        // degrading mid-session) -- so the backend's still-live-source guard
-        // (connect.CodeFailedPrecondition; see CreateSession in
-        // server/services/session_service.go) fires on essentially every
-        // real click. Retry once with the explicit confirmation flag rather
-        // than surfacing a dead-end error: clicking "restart" here already
-        // IS the user's confirmation that the source is live.
-        if (err instanceof ConnectError && err.code === Code.FailedPrecondition) {
-          session = await createSession({ ...baseRequest, confirmRestartWithLiveSource: true });
-        } else {
-          throw err;
-        }
-      }
+      const session = await createSession(baseRequest);
       if (session) {
         router.push(routes.sessionDetail(session.id));
       }
     } catch (err) {
+      // The source session is normally still open when this button is
+      // clicked -- that's the entire point of the feature (the source is
+      // degrading mid-session) -- so the backend's still-live-source guard
+      // (connect.CodeFailedPrecondition; see resolveRestartSource in
+      // server/services/session_service.go) fires on essentially every real
+      // click. This is NOT auto-retried: two live CLI processes sharing the
+      // same working directory can corrupt git state, so proceeding needs a
+      // real, visible confirmation click ("Restart anyway"), not the
+      // original click reinterpreted as consent.
+      if (err instanceof ConnectError && err.code === Code.FailedPrecondition) {
+        setNeedsLiveSourceConfirm(true);
+        setLiveMessage(
+          "The source session is still running. Restarting shares its working directory, which can corrupt git state. Confirmation required.",
+        );
+      } else {
+        const reason = restartFailureReason(err);
+        setRestartErrorMessage(`Couldn't start the new session. ${reason}`);
+        setLiveMessage(`Couldn't start the new session: ${reason}`);
+      }
+    } finally {
+      setRestarting(false);
+    }
+  }, [createSession, data, router, sessionId]);
+
+  // Fires only from the "Restart anyway" button below, i.e. only after the
+  // user has explicitly seen and dismissed the live-source warning -- this
+  // IS the confirmation the still-live-source guard exists to require.
+  const handleConfirmRestart = useCallback(async () => {
+    if (!data) return;
+    setRestarting(true);
+    setRestartErrorMessage(null);
+    setLiveMessage("Starting new session…");
+    try {
+      const session = await createSession({
+        prompt: data.summaryText,
+        restartFromSessionId: sessionId,
+        confirmRestartWithLiveSource: true,
+      });
+      if (session) {
+        setNeedsLiveSourceConfirm(false);
+        router.push(routes.sessionDetail(session.id));
+      }
+    } catch (err) {
+      setNeedsLiveSourceConfirm(false);
       const reason = restartFailureReason(err);
       setRestartErrorMessage(`Couldn't start the new session. ${reason}`);
       setLiveMessage(`Couldn't start the new session: ${reason}`);
@@ -237,6 +280,34 @@ export function RestartWithSummaryButton({ sessionId }: RestartWithSummaryButton
   }
 
   // phase === "ready"
+  if (needsLiveSourceConfirm) {
+    return (
+      <div className={styles.container}>
+        <div className={styles.errorContainer} data-testid="restart-with-summary-live-source-warning">
+          <div className={styles.errorText}>
+            The source session is still running. Restarting shares its working directory —
+            concurrent writes can corrupt git state.
+          </div>
+          <button
+            type="button"
+            className={styles.button}
+            onClick={handleConfirmRestart}
+            disabled={restarting}
+            data-testid="restart-with-summary-confirm-live-source"
+          >
+            {restarting ? "Starting session..." : "Restart anyway"}
+          </button>
+        </div>
+        {restartErrorMessage && (
+          <div className={styles.errorText} data-testid="restart-with-summary-restart-error">
+            {restartErrorMessage}
+          </div>
+        )}
+        {liveRegion}
+      </div>
+    );
+  }
+
   return (
     <div className={styles.container}>
       <button

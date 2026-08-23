@@ -60,19 +60,23 @@ interface HandoffSummaryRowProps {
    * "Feature disabled, but a READY/ERROR row already exists" edge case.
    */
   featureEnabled: boolean;
+  /** This section's single `useHandoffSummary(sessionId)` result, passed
+   * through to RestartWithSummaryButton so it doesn't run a second,
+   * independent poll against the same session (Finding 2). */
+  handoff: ReturnType<typeof useHandoffSummary>;
 }
 
 /**
  * A single point-in-time record row for this session's handoff summary.
- * Embeds RestartWithSummaryButton (when the feature is enabled) -- it
- * already internally derives idle/generating/ready/error phase from its own
- * useHandoffSummary(sessionId) call (a second, independent hook instance
- * polling the same session), so rendering it unconditionally here covers
- * READY (the "start new session" action), GENERATING (disabled button), and
- * ERROR (its own error text + "Try again" retry) without this component
- * branching on status itself for that part.
+ * Embeds RestartWithSummaryButton (when the feature is enabled), fed this
+ * component's own `handoff` result -- it derives idle/generating/ready/error
+ * phase from that shared data rather than polling independently, so
+ * rendering it unconditionally here covers READY (the "start new session"
+ * action), GENERATING (disabled button), and ERROR (its own error text +
+ * "Try again" retry) without this component branching on status itself for
+ * that part.
  */
-function HandoffSummaryRow({ sessionId, summary, featureEnabled }: HandoffSummaryRowProps) {
+function HandoffSummaryRow({ sessionId, summary, featureEnabled, handoff }: HandoffSummaryRowProps) {
   const { label, icon, className } = statusConfig(summary.status);
 
   let timestampText: string;
@@ -107,33 +111,26 @@ function HandoffSummaryRow({ sessionId, summary, featureEnabled }: HandoffSummar
           <pre className={styles.previewText}>{summary.summaryText}</pre>
         </details>
       )}
-      {featureEnabled && <RestartWithSummaryButton sessionId={sessionId} />}
+      {featureEnabled && <RestartWithSummaryButton sessionId={sessionId} handoff={handoff} />}
     </div>
   );
 }
 
 /**
- * Story 3.3.1 -- a capped, collapsible, always-rendered record of this
- * session's handoff-summary state in the Info tab. Structurally modeled on
- * WorkflowHistorySection.tsx's "always render, explicit empty state"
- * convention: `role="list"`/`role="listitem"` (never `role="status"`, since
- * this is a user-reviewed historical record, not a live-announced region),
- * and an explicit empty-state message rather than omitting the section when
- * no HandoffSummary row exists yet.
- *
- * There is currently at most one HandoffSummary row per session (the backend
- * upserts a single row keyed by session_id -- see useHandoffSummary.ts), so
- * this renders a single listitem rather than a capped list with a
- * "show more" control like WorkflowHistorySection's status-event history.
- *
- * Defaults to expanded (unlike WorkflowHistorySection, which defaults
- * collapsed via a caller-supplied prop): this section's single row is small
- * and directly actionable (the restart button lives on it), so there is
- * little cost to always showing it and a real cost to hiding a
- * frequently-used action behind an extra click.
+ * Always-rendered, collapsible record of this session's handoff-summary
+ * state in the Info tab -- `role="list"`/`"listitem"`, never `"status"`,
+ * since this is a reviewed record, not a live announcement, with an
+ * explicit empty state rather than omitting the section. Defaults to
+ * expanded (unlike WorkflowHistorySection): its single row is small and
+ * carries the primary restart action, so there's little cost to showing it.
  */
 export function HandoffSummarySection({ sessionId }: HandoffSummarySectionProps) {
-  const { data } = useHandoffSummary(sessionId);
+  // Single poll instance for this session, shared with every
+  // RestartWithSummaryButton mounted below (Finding 2) -- previously each
+  // button ran its own independent useHandoffSummary(sessionId) call, i.e.
+  // two competing 2s poll loops against the same session.
+  const handoff = useHandoffSummary(sessionId);
+  const { data } = handoff;
 
   // The backend defaults this feature to enabled (HandoffSummaryConfig's
   // EnabledOrDefault()), but useFeatureFlag defaults to `false` while the
@@ -158,11 +155,11 @@ export function HandoffSummarySection({ sessionId }: HandoffSummarySectionProps)
                 exists yet), so this button is the feature's primary entry point --
                 without it here, generation is unreachable through the UI (see
                 design/ux.md's empty-state wireframe). */}
-            <RestartWithSummaryButton sessionId={sessionId} />
+            <RestartWithSummaryButton sessionId={sessionId} handoff={handoff} />
           </>
         ) : (
           <div className={styles.list} role="list" aria-label="Handoff summary">
-            <HandoffSummaryRow sessionId={sessionId} summary={data} featureEnabled={featureEnabled} />
+            <HandoffSummaryRow sessionId={sessionId} summary={data} featureEnabled={featureEnabled} handoff={handoff} />
           </div>
         )}
       </div>

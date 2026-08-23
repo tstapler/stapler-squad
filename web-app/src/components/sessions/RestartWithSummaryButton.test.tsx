@@ -1,6 +1,7 @@
 import React from "react";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { RestartWithSummaryButton } from "./RestartWithSummaryButton";
+import { useHandoffSummary } from "@/lib/hooks/useHandoffSummary";
 import { HandoffSummaryStatus } from "@/gen/session/v1/handoff_summary_pb";
 import type { HandoffSummaryProto } from "@/gen/session/v1/handoff_summary_pb";
 
@@ -8,14 +9,13 @@ import type { HandoffSummaryProto } from "@/gen/session/v1/handoff_summary_pb";
 // Mocks
 // ---------------------------------------------------------------------------
 
+// The component no longer calls useHandoffSummary itself (Finding 2 -- the
+// hook's result is passed in as the `handoff` prop, lifted to the caller so
+// two button instances don't run two independent polls), so this module is
+// no longer mocked -- the real `isGenerating` export is used as-is, and
+// `useHandoffSummary` itself is unused at runtime by the component under
+// test (only referenced at the type level for the prop's shape).
 const mockTrigger = jest.fn();
-const mockUseHandoffSummary = jest.fn();
-
-jest.mock("@/lib/hooks/useHandoffSummary", () => ({
-  // Keep the real isGenerating export -- only the hook itself is mocked.
-  ...jest.requireActual("@/lib/hooks/useHandoffSummary"),
-  useHandoffSummary: (sessionId: string) => mockUseHandoffSummary(sessionId),
-}));
 
 const mockCreateSession = jest.fn();
 jest.mock("@/lib/hooks/useSessionService", () => ({
@@ -58,8 +58,11 @@ function makeSummary(overrides: Partial<HandoffSummaryProto> = {}): HandoffSumma
   } as unknown as HandoffSummaryProto;
 }
 
-function mockHookReturn(overrides: Partial<Record<string, unknown>> = {}) {
-  mockUseHandoffSummary.mockReturnValue({
+/** Builds the `handoff` prop RestartWithSummaryButton now takes directly. */
+function makeHandoff(
+  overrides: Partial<Record<string, unknown>> = {},
+): ReturnType<typeof useHandoffSummary> {
+  return {
     data: null,
     loading: false,
     error: null,
@@ -67,7 +70,7 @@ function mockHookReturn(overrides: Partial<Record<string, unknown>> = {}) {
     trigger: mockTrigger,
     refetch: jest.fn(),
     ...overrides,
-  });
+  } as unknown as ReturnType<typeof useHandoffSummary>;
 }
 
 describe("RestartWithSummaryButton", () => {
@@ -83,9 +86,8 @@ describe("RestartWithSummaryButton", () => {
     mockTrigger.mockImplementation(
       () => new Promise<void>((resolve) => { resolveTrigger = resolve; }),
     );
-    mockHookReturn({ data: null });
 
-    render(<RestartWithSummaryButton sessionId="session-1" />);
+    render(<RestartWithSummaryButton sessionId="session-1" handoff={makeHandoff({ data: null })} />);
 
     const button = screen.getByTestId("restart-with-summary-button");
     expect(button).toHaveTextContent("Generate restart summary");
@@ -108,10 +110,14 @@ describe("RestartWithSummaryButton", () => {
 
   it("RestartWithSummaryButton_should_CreateSessionWithSummaryAsPrompt_When_ClickedWhileReady", async () => {
     const summary = makeSummary({ summaryText: "Session recap text" });
-    mockHookReturn({ data: summary });
     mockCreateSession.mockResolvedValue({ id: "new-session-42" });
 
-    render(<RestartWithSummaryButton sessionId="source-session-1" />);
+    render(
+      <RestartWithSummaryButton
+        sessionId="source-session-1"
+        handoff={makeHandoff({ data: summary })}
+      />,
+    );
 
     const button = screen.getByTestId("restart-with-summary-button");
     expect(button).toHaveTextContent("Start new session from this summary");
@@ -127,33 +133,52 @@ describe("RestartWithSummaryButton", () => {
     await waitFor(() => expect(pushMock).toHaveBeenCalledWith("/?session=new-session-42"));
   });
 
-  it("RestartWithSummaryButton_should_RetryWithConfirmFlag_When_RestartRejectsWithFailedPrecondition", async () => {
-    // Simulates the normal case -- the source session is still live -- where
-    // the backend's CreateSession guard rejects the first attempt with
-    // FailedPrecondition. The button must transparently retry once with
-    // confirmRestartWithLiveSource:true rather than surfacing an error,
-    // since clicking "restart" already IS the user's confirmation.
+  it("RestartWithSummaryButton_should_ShowLiveSourceWarningAndRequireExplicitConfirm_When_RestartRejectsWithFailedPrecondition", async () => {
+    // Finding 1: the still-live-source guard (connect.CodeFailedPrecondition)
+    // must NOT be silently retried -- the first click's rejection has to
+    // surface a real, visible warning, and only a second, distinctly-labeled
+    // "Restart anyway" click may retry with confirmRestartWithLiveSource:true.
     const { ConnectError, Code } = jest.requireMock("@connectrpc/connect") as {
       ConnectError: new (message: string, code: number) => Error;
       Code: { FailedPrecondition: number };
     };
     const summary = makeSummary({ summaryText: "Session recap text" });
-    mockHookReturn({ data: summary });
     mockCreateSession
       .mockRejectedValueOnce(
         new ConnectError("source session is still live", Code.FailedPrecondition),
       )
       .mockResolvedValueOnce({ id: "new-session-42" });
 
-    render(<RestartWithSummaryButton sessionId="source-session-1" />);
+    render(
+      <RestartWithSummaryButton
+        sessionId="source-session-1"
+        handoff={makeHandoff({ data: summary })}
+      />,
+    );
 
     fireEvent.click(screen.getByTestId("restart-with-summary-button"));
 
-    await waitFor(() => expect(mockCreateSession).toHaveBeenCalledTimes(2));
+    // First click alone must not create the second session -- no silent
+    // retry, and no navigation yet.
+    await waitFor(() => expect(mockCreateSession).toHaveBeenCalledTimes(1));
     expect(mockCreateSession).toHaveBeenNthCalledWith(1, {
       prompt: "Session recap text",
       restartFromSessionId: "source-session-1",
     });
+    expect(pushMock).not.toHaveBeenCalled();
+
+    // The warning renders, and the plain "Start new session..." button is
+    // gone -- the only affordance left is the distinctly-labeled confirm.
+    const warning = await screen.findByTestId("restart-with-summary-live-source-warning");
+    expect(warning).toHaveTextContent(/still running/i);
+    expect(screen.queryByTestId("restart-with-summary-button")).not.toBeInTheDocument();
+
+    const confirmButton = screen.getByTestId("restart-with-summary-confirm-live-source");
+    expect(confirmButton).toHaveTextContent("Restart anyway");
+
+    fireEvent.click(confirmButton);
+
+    await waitFor(() => expect(mockCreateSession).toHaveBeenCalledTimes(2));
     expect(mockCreateSession).toHaveBeenNthCalledWith(2, {
       prompt: "Session recap text",
       restartFromSessionId: "source-session-1",
@@ -166,13 +191,18 @@ describe("RestartWithSummaryButton", () => {
 
   it("RestartWithSummaryButton_should_ReturnToReadyAndShowError_When_RestartFailsWithNonRetryableError", async () => {
     // design/ux.md's "no dead ends" acceptance criterion #2: a restart
-    // failure that ISN'T the live-source guard (Finding 2's retry path)
-    // must revert the button to READY, re-clickable, with an inline error.
+    // failure that ISN'T the live-source guard (the FailedPrecondition path
+    // above) must revert the button to READY, re-clickable, with an inline
+    // error.
     const summary = makeSummary({ summaryText: "Session recap text" });
-    mockHookReturn({ data: summary });
     mockCreateSession.mockRejectedValue(new Error("network error"));
 
-    render(<RestartWithSummaryButton sessionId="source-session-1" />);
+    render(
+      <RestartWithSummaryButton
+        sessionId="source-session-1"
+        handoff={makeHandoff({ data: summary })}
+      />,
+    );
 
     const button = screen.getByTestId("restart-with-summary-button");
     fireEvent.click(button);
@@ -188,6 +218,7 @@ describe("RestartWithSummaryButton", () => {
     expect(mockCreateSession).toHaveBeenCalledTimes(1);
     expect(button).not.toBeDisabled();
     expect(button).toHaveTextContent("Start new session from this summary");
+    expect(screen.queryByTestId("restart-with-summary-live-source-warning")).not.toBeInTheDocument();
 
     fireEvent.click(button);
     await waitFor(() => expect(mockCreateSession).toHaveBeenCalledTimes(2));
@@ -202,12 +233,16 @@ describe("RestartWithSummaryButton", () => {
       Code: { NotFound: number };
     };
     const summary = makeSummary({ summaryText: "Session recap text" });
-    mockHookReturn({ data: summary });
     mockCreateSession.mockRejectedValue(
       new ConnectError("session not found", Code.NotFound),
     );
 
-    render(<RestartWithSummaryButton sessionId="source-session-1" />);
+    render(
+      <RestartWithSummaryButton
+        sessionId="source-session-1"
+        handoff={makeHandoff({ data: summary })}
+      />,
+    );
 
     fireEvent.click(screen.getByTestId("restart-with-summary-button"));
 
@@ -226,9 +261,8 @@ describe("RestartWithSummaryButton", () => {
     mockTrigger.mockRejectedValue(
       new ConnectError("handoff summaries disabled", Code.FailedPrecondition),
     );
-    mockHookReturn({ data: null });
 
-    render(<RestartWithSummaryButton sessionId="session-1" />);
+    render(<RestartWithSummaryButton sessionId="session-1" handoff={makeHandoff({ data: null })} />);
 
     const button = screen.getByTestId("restart-with-summary-button");
     fireEvent.click(button);
@@ -244,9 +278,8 @@ describe("RestartWithSummaryButton", () => {
       status: HandoffSummaryStatus.ERROR,
       errorMessage: "LLM request timed out",
     });
-    mockHookReturn({ data: summary });
 
-    render(<RestartWithSummaryButton sessionId="session-1" />);
+    render(<RestartWithSummaryButton sessionId="session-1" handoff={makeHandoff({ data: summary })} />);
 
     expect(screen.getByTestId("restart-with-summary-error")).toHaveTextContent(
       "LLM request timed out",
@@ -268,9 +301,8 @@ describe("RestartWithSummaryButton", () => {
       errorStage: "transcript",
       errorMessage: "conversation file not found for session ID: sess-1",
     });
-    mockHookReturn({ data: summary });
 
-    render(<RestartWithSummaryButton sessionId="session-1" />);
+    render(<RestartWithSummaryButton sessionId="session-1" handoff={makeHandoff({ data: summary })} />);
 
     const primaryText = screen.getByTestId("restart-with-summary-error-message");
     expect(primaryText).toHaveTextContent("Couldn't read this session's conversation history.");
@@ -290,9 +322,8 @@ describe("RestartWithSummaryButton", () => {
       errorStage: "generation",
       errorMessage: "pool call failed: context deadline exceeded",
     });
-    mockHookReturn({ data: summary });
 
-    render(<RestartWithSummaryButton sessionId="session-1" />);
+    render(<RestartWithSummaryButton sessionId="session-1" handoff={makeHandoff({ data: summary })} />);
 
     expect(screen.getByTestId("restart-with-summary-error-message")).toHaveTextContent(
       "Failed while generating the handoff summary.",
@@ -307,9 +338,8 @@ describe("RestartWithSummaryButton", () => {
       errorStage: "some-future-stage",
       errorMessage: "raw internal detail",
     });
-    mockHookReturn({ data: summary });
 
-    render(<RestartWithSummaryButton sessionId="session-1" />);
+    render(<RestartWithSummaryButton sessionId="session-1" handoff={makeHandoff({ data: summary })} />);
 
     expect(screen.getByTestId("restart-with-summary-error-message")).toHaveTextContent(
       "Something went wrong while generating this summary.",

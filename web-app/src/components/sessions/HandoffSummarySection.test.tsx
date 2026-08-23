@@ -5,10 +5,10 @@ import { HandoffSummaryStatus } from "@/gen/session/v1/handoff_summary_pb";
 import type { HandoffSummaryProto } from "@/gen/session/v1/handoff_summary_pb";
 
 // ---------------------------------------------------------------------------
-// Mocks -- mirrors RestartWithSummaryButton.test.tsx's harness, since
-// HandoffSummarySection embeds the real (unmocked) RestartWithSummaryButton,
-// which independently calls the same useHandoffSummary(sessionId) hook.
-// Mocking the hook module here drives both call sites from one fixture.
+// Mocks -- HandoffSummarySection calls useHandoffSummary(sessionId) itself
+// (mocked here) and passes the result down as the `handoff` prop to every
+// embedded (real, unmocked) RestartWithSummaryButton instance, so one
+// fixture drives both.
 // ---------------------------------------------------------------------------
 
 const mockTrigger = jest.fn();
