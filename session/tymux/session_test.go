@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"connectrpc.com/connect"
 	"github.com/stretchr/testify/assert"
@@ -415,4 +416,99 @@ func TestTymuxGRPCSession_Start_OrdinaryRPCError_NotClassifiedAsUnreachable(t *t
 
 func TestClassifyRPCError_NilIsNil(t *testing.T) {
 	assert.NoError(t, classifyRPCError("op", nil))
+}
+
+// --- Story 2.4.2: SetOnExitCallback / ResetExitOnce fire-once semantics ---
+
+// TestSetOnExitCallback_ShouldFireExactlyOnce_WhenRegisteredBeforePaneExits
+// is the happy path (validation.md REQ-2): a callback registered while the
+// pane is still live must fire exactly once when the standing stream later
+// delivers Exited.
+func TestSetOnExitCallback_ShouldFireExactlyOnce_WhenRegisteredBeforePaneExits(t *testing.T) {
+	sess, stream, _ := startedSessionWithStream(t)
+
+	var calls int32
+	reasons := make(chan string, 4)
+	sess.SetOnExitCallback(func(reason string) {
+		atomic.AddInt32(&calls, 1)
+		reasons <- reason
+	})
+
+	code := int32(0)
+	stream.push(&v1.AttachEvent{Payload: &v1.AttachEvent_Exited{Exited: &v1.ExitStatus{Code: &code}}})
+
+	select {
+	case reason := <-reasons:
+		assert.Equal(t, "exited: code=0", reason)
+	case <-time.After(time.Second):
+		t.Fatal("exit callback never fired")
+	}
+
+	// Give any errant second delivery a chance to land before asserting
+	// the count is exactly one (a pane only exits once in practice, but
+	// this is the seam that would catch a fire-more-than-once regression).
+	time.Sleep(20 * time.Millisecond)
+	assert.Equal(t, int32(1), atomic.LoadInt32(&calls), "callback must fire exactly once")
+}
+
+// TestSetOnExitCallback_ShouldFireExactlyOnce_WhenRegisteredAfterPaneAlreadyExited
+// is the check-before-and-after-registration case (validation.md REQ-2,
+// mirroring pane.rs:264-274/wait_exit's shape): a callback registered
+// *after* the standing stream already delivered Exited must still fire
+// exactly once — not zero times, which is what a naive
+// store-only-for-future-events implementation would do.
+func TestSetOnExitCallback_ShouldFireExactlyOnce_WhenRegisteredAfterPaneAlreadyExited(t *testing.T) {
+	sess, stream, _ := startedSessionWithStream(t)
+	concrete := sess.(*tymuxGRPCSession)
+
+	code := int32(7)
+	stream.push(&v1.AttachEvent{Payload: &v1.AttachEvent_Exited{Exited: &v1.ExitStatus{Code: &code}}})
+
+	// Wait for readAttachLoop to actually observe the Exited event before
+	// registering — this is the ordering the test exists to exercise.
+	require.Eventually(t, func() bool {
+		concrete.mu.RLock()
+		defer concrete.mu.RUnlock()
+		return concrete.exited
+	}, time.Second, time.Millisecond, "readAttachLoop never observed the Exited event")
+
+	var calls int32
+	reasons := make(chan string, 4)
+	sess.SetOnExitCallback(func(reason string) {
+		atomic.AddInt32(&calls, 1)
+		reasons <- reason
+	})
+
+	select {
+	case reason := <-reasons:
+		assert.Equal(t, "exited: code=7", reason)
+	case <-time.After(time.Second):
+		t.Fatal("exit callback registered after exit must still fire once, not zero times")
+	}
+
+	time.Sleep(20 * time.Millisecond)
+	assert.Equal(t, int32(1), atomic.LoadInt32(&calls), "callback must fire exactly once")
+}
+
+// TestResetExitOnce_WithoutANewExit_DoesNotFireSpuriously covers plan.md
+// Story 2.4.2's second acceptance criterion: since a pane can only exit
+// once, the assertion ResetExitOnce is checked against is that calling it
+// with no subsequent exit never spuriously invokes the callback again.
+func TestResetExitOnce_WithoutANewExit_DoesNotFireSpuriously(t *testing.T) {
+	sess, stream, _ := startedSessionWithStream(t)
+
+	var calls int32
+	sess.SetOnExitCallback(func(string) { atomic.AddInt32(&calls, 1) })
+
+	code := int32(1)
+	stream.push(&v1.AttachEvent{Payload: &v1.AttachEvent_Exited{Exited: &v1.ExitStatus{Code: &code}}})
+
+	require.Eventually(t, func() bool {
+		return atomic.LoadInt32(&calls) == 1
+	}, time.Second, time.Millisecond, "callback never fired for the original exit")
+
+	sess.ResetExitOnce()
+	time.Sleep(20 * time.Millisecond)
+
+	assert.Equal(t, int32(1), atomic.LoadInt32(&calls), "ResetExitOnce alone (no new exit) must not re-fire the callback")
 }

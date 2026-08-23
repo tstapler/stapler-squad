@@ -82,11 +82,23 @@ type tymuxGRPCSession struct {
 	// subscribers, rather than one Attach call per subscriber.
 	fanout *ClientFanout
 
-	// exitCallback is invoked by readAttachLoop when an Exited event
-	// arrives. Fire-once / registered-after-exit-already-observed
-	// semantics are Epic 2.4's job (Task 2.4.2b); SetOnExitCallback here
-	// just stores and readAttachLoop calls whatever is currently set.
+	// exitCallback is invoked at most once, by whichever of
+	// readAttachLoop's Exited handling (stream.go's deliverExit) or
+	// SetOnExitCallback observes the exit second — the check-before-and-
+	// after-registration race pane.rs:311-322's wait_exit() resolves via
+	// check/notify/check, mirrored here via exited/exitFired instead of
+	// Go's sync.Once (which can't dynamically pick between "the callback
+	// registered so far" and "the callback that shows up later").
 	exitCallback func(string)
+
+	// exited/exitReason record whether/why the standing stream's Exited
+	// event has been observed; exitFired guards the one-shot delivery.
+	// ResetExitOnce (Task 2.4.2a) clears all three so a reused session
+	// object can observe a later exit again, mirroring TmuxSession's
+	// ResetExitOnce (tmux.go:373-382).
+	exited     bool
+	exitReason string
+	exitFired  bool
 }
 
 // NewTymuxGRPCSession constructs a tymuxGRPCSession using the given rpcTransport,
@@ -481,11 +493,26 @@ func (s *tymuxGRPCSession) GetPaneDimensions() (width, height int, err error) {
 	return int(snap.GetCols()), int(snap.GetRows()), nil
 }
 
-func (s *tymuxGRPCSession) SetWindowSize(cols, rows int) error { return ErrNotImplemented }
-func (s *tymuxGRPCSession) SetDetachedSize(w, h int, title string) error {
-	return ErrNotImplemented
+// SetWindowSize sends a Resize on the standing stream (Task 2.4.1a) — no
+// separate RPC, and it succeeds even with no active Attach() caller from
+// stapler-squad's own UI layer, since the standing stream (Epic 2.3) is
+// always open once a session has started.
+func (s *tymuxGRPCSession) SetWindowSize(cols, rows int) error {
+	return s.sendResize(cols, rows)
 }
-func (s *tymuxGRPCSession) RefreshClient() error { return ErrNotImplemented }
+
+// SetDetachedSize sends the same Resize as SetWindowSize (Task 2.4.1a);
+// instanceTitle is accepted for TymuxManager parity but unused — tymux has
+// no server-side per-title tag on the wire (architecture.md §1), unlike
+// TmuxSession's local-only use of it.
+func (s *tymuxGRPCSession) SetDetachedSize(width, height int, instanceTitle string) error {
+	return s.sendResize(width, height)
+}
+
+// RefreshClient is a no-op returning nil (Task 2.4.1b) — no server RPC
+// needed, since tymux's structured PaneSnapshot makes client-side re-render
+// sufficient (architecture.md §1).
+func (s *tymuxGRPCSession) RefreshClient() error { return nil }
 
 // --- Process metadata ---
 
@@ -550,18 +577,43 @@ func (s *tymuxGRPCSession) DetachSafely() error {
 
 // --- Exit notifications ---
 
-// SetOnExitCallback stores fn for readAttachLoop (stream.go) to call when
-// an Exited event arrives. Fire-once / registered-after-exit-already-
-// observed semantics (matching TmuxSession's check-before-and-after-
-// registration guarantee) are Epic 2.4's job (Task 2.4.2b) — this method
-// is deliberately the simple store Epic 2.4 builds that guarantee on top
-// of, not the guarantee itself.
+// SetOnExitCallback stores fn, then — under the same lock — checks whether
+// the pane already exited before this call and, if so and no callback has
+// fired yet, claims the fire-once slot and invokes fn once (Task 2.4.2a).
+// This is the "after" half of the check-before-and-after pattern:
+// deliverExit (stream.go) is the "before" half, run by readAttachLoop when
+// Exited arrives ahead of any registration. Whichever of the two observes
+// exitFired == false first under mu wins the single delivery; the other is
+// a no-op. Mirrors pane.rs:311-322's wait_exit() shape (check, then
+// register/notify, then check again) adapted to Go's synchronous,
+// non-blocking registration API.
 func (s *tymuxGRPCSession) SetOnExitCallback(fn func(string)) {
 	s.mu.Lock()
 	s.exitCallback = fn
+	reason := s.exitReason
+	fire := fn != nil && s.exited && !s.exitFired
+	if fire {
+		s.exitFired = true
+	}
+	s.mu.Unlock()
+	if fire {
+		fn(reason)
+	}
+}
+
+// ResetExitOnce clears the observed-exit state so a later exit (e.g. after
+// this session object is reused for a restarted session) can fire the
+// registered callback again — mirroring TmuxSession.ResetExitOnce
+// (tmux.go:373-382). It does not clear exitCallback itself, matching the
+// tmux backend's ResetExitOnce, which resets its sync.Once but leaves
+// t.onExit in place.
+func (s *tymuxGRPCSession) ResetExitOnce() {
+	s.mu.Lock()
+	s.exited = false
+	s.exitReason = ""
+	s.exitFired = false
 	s.mu.Unlock()
 }
-func (s *tymuxGRPCSession) ResetExitOnce() {}
 
 // compile-time check that *tymuxGRPCSession satisfies TymuxManager.
 var _ TymuxManager = (*tymuxGRPCSession)(nil)

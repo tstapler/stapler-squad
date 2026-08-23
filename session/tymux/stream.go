@@ -85,11 +85,8 @@ func (s *tymuxGRPCSession) readAttachLoop(stream attachStream, done chan struct{
 		case *v1.AttachEvent_Exited:
 			s.mu.Lock()
 			s.liveness = v1.Liveness_LIVENESS_DEAD
-			cb := s.exitCallback
 			s.mu.Unlock()
-			if cb != nil {
-				cb(exitReason(p.Exited))
-			}
+			s.deliverExit(exitReason(p.Exited))
 		case *v1.AttachEvent_OutputGap:
 			// Epic 2.5 implements the shared resync path triggered here.
 		}
@@ -107,6 +104,28 @@ func exitReason(status *v1.ExitStatus) string {
 	return fmt.Sprintf("exited: code=%d", status.GetCode())
 }
 
+// deliverExit is the "before" half of Story 2.4.2's check-before-and-after
+// fire-once pattern: readAttachLoop calls this the moment Exited arrives,
+// which may be well before any SetOnExitCallback registration. It records
+// the exit and, if a callback is already registered and hasn't fired yet,
+// claims the fire-once slot and invokes it. If no callback is registered
+// yet, this only records exited/exitReason — SetOnExitCallback's own
+// check (session.go) is the "after" half that fires it once one shows up.
+func (s *tymuxGRPCSession) deliverExit(reason string) {
+	s.mu.Lock()
+	s.exited = true
+	s.exitReason = reason
+	cb := s.exitCallback
+	fire := cb != nil && !s.exitFired
+	if fire {
+		s.exitFired = true
+	}
+	s.mu.Unlock()
+	if fire {
+		cb(reason)
+	}
+}
+
 // sendOnStream writes req to the standing stream's input side. Every
 // input method (SendKeys/TapEnter/SendPromptWithEnter/
 // SendInputViaControlMode, Story 2.3.3) and SetWindowSize/SetDetachedSize
@@ -122,4 +141,15 @@ func (s *tymuxGRPCSession) sendOnStream(req *v1.AttachRequest) error {
 		return classifyRPCError("Attach.Send", err)
 	}
 	return nil
+}
+
+// sendResize sends a Resize AttachRequest on the standing stream — the one
+// helper SetWindowSize and SetDetachedSize both call (Task 2.4.1a).
+func (s *tymuxGRPCSession) sendResize(cols, rows int) error {
+	return s.sendOnStream(&v1.AttachRequest{
+		Payload: &v1.AttachRequest_Resize{Resize: &v1.Resize{
+			Cols: uint32(cols),
+			Rows: uint32(rows),
+		}},
+	})
 }

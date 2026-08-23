@@ -258,3 +258,49 @@ func TestStandingStream_Attach_BeforeStart_ReturnsError(t *testing.T) {
 	_, err := sess.Attach()
 	assert.Error(t, err)
 }
+
+// --- Story 2.4.1 ---
+
+func TestStandingStream_SetWindowSize_SendsResizeOnStandingStream(t *testing.T) {
+	sess, stream, _ := startedSessionWithStream(t)
+
+	require.NoError(t, sess.SetWindowSize(100, 40))
+
+	sent := stream.sentRequests()
+	require.Len(t, sent, 2) // [0] is the initial PaneId, [1] is our Resize
+	resize := sent[1].GetResize()
+	require.NotNil(t, resize)
+	assert.Equal(t, uint32(100), resize.GetCols())
+	assert.Equal(t, uint32(40), resize.GetRows())
+}
+
+// TestStandingStream_SetDetachedSize_SendsResizeOnStandingStream_EvenWithNoActiveAttachCaller
+// asserts the acceptance criterion from plan.md Story 2.4.1 verbatim: a
+// SetDetachedSize call still succeeds and sends Resize on the always-open
+// standing stream, even though nothing here ever calls sess.Attach() (i.e.
+// no active Attach() caller from stapler-squad's own UI layer) —
+// the standing-stream design makes detached resize possible where tmux's
+// own detached-resize needs a separate mechanism (architecture.md §1 Gap
+// #3).
+func TestStandingStream_SetDetachedSize_SendsResizeOnStandingStream_EvenWithNoActiveAttachCaller(t *testing.T) {
+	sess, stream, _ := startedSessionWithStream(t)
+
+	require.NoError(t, sess.SetDetachedSize(100, 40, "title"))
+
+	sent := stream.sentRequests()
+	require.Len(t, sent, 2)
+	resize := sent[1].GetResize()
+	require.NotNil(t, resize)
+	assert.Equal(t, uint32(100), resize.GetCols())
+	assert.Equal(t, uint32(40), resize.GetRows())
+}
+
+func TestStandingStream_SetWindowSize_BeforeStart_ReturnsError(t *testing.T) {
+	sess := NewTymuxGRPCSession(&fakeTransport{})
+	assert.Error(t, sess.SetWindowSize(80, 24))
+}
+
+func TestRefreshClient_AlwaysReturnsNil(t *testing.T) {
+	sess, _, _ := startedSessionWithStream(t)
+	assert.NoError(t, sess.RefreshClient())
+}
