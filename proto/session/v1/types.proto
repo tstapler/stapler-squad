@@ -268,6 +268,9 @@ message Session {
   // pre-emptively disable the "Create PR" trigger (AC6), refreshed on the same
   // cadence as diff_stats, not computed synchronously per-request.
   bool has_commits_ahead = 77;
+
+  // Empty unless this session was created via Restart-with-Summary.
+  string restarted_from_session_id = 78;
 }
 
 // SessionArtifacts holds structured artifacts extracted from the session's

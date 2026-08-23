@@ -259,3 +259,80 @@ func TestHeadlessTriageSystemPrompt_WarnsAgainstBackgroundStatusPlaceholder(t *t
 	assert.Contains(t, HeadlessTriageSystemPrompt(), "single, non-interactive call")
 	assert.Contains(t, HeadlessTriageSystemPrompt(), "no later turn")
 }
+
+// TestGenerateHandoffSummary_PrependsReferenceOnlyPrefixVerbatim verifies the
+// returned string's first line is exactly referenceOnlyPrefix, reproduced
+// verbatim (not paraphrased), for a non-empty TranscriptWindow and a
+// successful pool call.
+func TestGenerateHandoffSummary_PrependsReferenceOnlyPrefixVerbatim(t *testing.T) {
+	t.Parallel()
+	fake := &fakePoolClientRecorder{response: "The session refactored the auth middleware."}
+	head := []HandoffTranscriptMessage{{Role: "user", Content: "Let's refactor auth"}}
+	middle := []HandoffTranscriptMessage{{Role: "assistant", Content: "Refactored middleware.go"}}
+	tail := []HandoffTranscriptMessage{{Role: "assistant", Content: "Running tests next"}}
+
+	text, err := GenerateHandoffSummary(context.Background(), fake, "auth-refactor", head, middle, tail)
+	require.NoError(t, err)
+
+	firstLine := strings.SplitN(text, "\n", 2)[0]
+	assert.Equal(t, referenceOnlyPrefix, firstLine)
+	assert.Equal(t, 1, fake.calls)
+}
+
+// TestGenerateHandoffSummary_PromptInstructsActiveTaskSection verifies the
+// constructed userPrompt (sent to the LLM, before the pool call returns)
+// contains the literal "## Active Task" instruction, plus separately
+// labeled Head:/Middle (to summarize):/Tail: sections built from the
+// window's three slices.
+func TestGenerateHandoffSummary_PromptInstructsActiveTaskSection(t *testing.T) {
+	t.Parallel()
+	fake := &fakePoolClientRecorder{response: "summary text"}
+	head := []HandoffTranscriptMessage{{Role: "user", Content: "start the task"}}
+	middle := []HandoffTranscriptMessage{{Role: "assistant", Content: "did some middle work"}}
+	tail := []HandoffTranscriptMessage{{Role: "assistant", Content: "about to run tests"}}
+
+	_, err := GenerateHandoffSummary(context.Background(), fake, "some-session", head, middle, tail)
+	require.NoError(t, err)
+
+	assert.Equal(t, FeatureKeyHandoffSummary, fake.key)
+	assert.Contains(t, fake.user, "## Active Task")
+	assert.Contains(t, fake.user, "Head:")
+	assert.Contains(t, fake.user, "Middle (to summarize):")
+	assert.Contains(t, fake.user, "Tail:")
+	assert.Contains(t, fake.user, "start the task")
+	assert.Contains(t, fake.user, "did some middle work")
+	assert.Contains(t, fake.user, "about to run tests")
+}
+
+// TestGenerateHandoffSummary_EmptyMiddlePlaceholderText verifies that a
+// TranscriptWindow with an empty Middle (short conversation) still calls the
+// pool, but the prompt's middle section reads the explicit placeholder
+// rather than an empty block.
+func TestGenerateHandoffSummary_EmptyMiddlePlaceholderText(t *testing.T) {
+	t.Parallel()
+	fake := &fakePoolClientRecorder{response: "summary text"}
+	head := []HandoffTranscriptMessage{{Role: "user", Content: "short chat"}}
+	var middle []HandoffTranscriptMessage
+	tail := []HandoffTranscriptMessage{{Role: "assistant", Content: "done"}}
+
+	_, err := GenerateHandoffSummary(context.Background(), fake, "short-session", head, middle, tail)
+	require.NoError(t, err)
+
+	assert.Equal(t, 1, fake.calls)
+	assert.Contains(t, fake.user, "(nothing to summarize — conversation was short)")
+}
+
+// TestGenerateHandoffSummary_PropagatesPoolClientError_When_CallBlockingFails
+// verifies that a pool.CallBlocking failure is propagated as-is with no
+// partial/garbled text returned.
+func TestGenerateHandoffSummary_PropagatesPoolClientError_When_CallBlockingFails(t *testing.T) {
+	t.Parallel()
+	fake := &fakePoolClientRecorder{err: assert.AnError}
+	head := []HandoffTranscriptMessage{{Role: "user", Content: "start"}}
+	tail := []HandoffTranscriptMessage{{Role: "assistant", Content: "end"}}
+
+	text, err := GenerateHandoffSummary(context.Background(), fake, "failing-session", head, nil, tail)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, assert.AnError)
+	assert.Empty(t, text)
+}

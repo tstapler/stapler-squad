@@ -1307,3 +1307,51 @@ func TestSlackWebhookURLOverride_ReturnsEmptyString_When_EnvVarUnset(t *testing.
 	require.NoError(t, err)
 	assert.Equal(t, "", cfg.SlackWebhookURLOverride())
 }
+
+// ─── HandoffSummaryConfig ───────────────────────────────────────────────────
+
+// TestHandoffSummaryConfigOrDefault_AppliesDefaultToZeroBudget verifies a
+// zero-value HandoffSummaryConfig (nil Enabled, unset budget) resolves to the
+// enabled-by-default, 12000-token-budget state.
+func TestHandoffSummaryConfigOrDefault_AppliesDefaultToZeroBudget(t *testing.T) {
+	cfg := HandoffSummaryConfig{}
+
+	out := cfg.HandoffSummaryConfigOrDefault()
+
+	assert.True(t, out.EnabledOrDefault())
+	assert.Equal(t, 12000, out.MaxMiddleExcerptTokens)
+}
+
+// TestLoadConfig_HandoffSummaryExplicitlyDisabled_StaysDisabled verifies the
+// gotcha this feature is prone to: an explicit "enabled": false in config.json
+// must survive LoadConfigFromPath unchanged, not get silently re-defaulted to
+// enabled.
+func TestLoadConfig_HandoffSummaryExplicitlyDisabled_StaysDisabled(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	content := `{"handoff_summary": {"enabled": false}}`
+	require.NoError(t, os.WriteFile(path, []byte(content), 0600))
+
+	cfg, err := LoadConfigFromPath(path)
+	require.NoError(t, err)
+	assert.False(t, cfg.HandoffSummary.EnabledOrDefault())
+	assert.Equal(t, 12000, cfg.HandoffSummary.MaxMiddleExcerptTokens)
+}
+
+// TestLoadConfig_HandoffSummaryAbsentFromExistingConfig_DefaultsToEnabled
+// covers the actual real-world upgrade path: a config.json that predates this
+// feature (no "handoff_summary" key at all, unlike the empty-file/fresh-config
+// path DefaultConfig() takes) must still resolve to enabled — this is exactly
+// the case a plain `bool` field (indistinguishable zero-value from "absent")
+// would get wrong, which is why Enabled is *bool.
+func TestLoadConfig_HandoffSummaryAbsentFromExistingConfig_DefaultsToEnabled(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	content := `{"some_other_field_from_before_this_feature_existed": true}`
+	require.NoError(t, os.WriteFile(path, []byte(content), 0600))
+
+	cfg, err := LoadConfigFromPath(path)
+	require.NoError(t, err)
+	assert.True(t, cfg.HandoffSummary.EnabledOrDefault())
+	assert.Equal(t, 12000, cfg.HandoffSummary.MaxMiddleExcerptTokens)
+}
