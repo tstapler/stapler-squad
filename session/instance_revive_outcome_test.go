@@ -21,6 +21,30 @@ func (r *reviveOutcomeRecorder) OnLifecycleEvent(event LifecycleEvent, reason st
 	}
 }
 
+// TestReviveOutcomeForColdRestore covers all four ReviveOutcome branches of
+// the pure decision function directly, without the tmux/actor machinery the
+// integration tests below require.
+func TestReviveOutcomeForColdRestore(t *testing.T) {
+	tests := []struct {
+		name                  string
+		hadUUIDBeforeRecovery bool
+		hasClaudeSession      bool
+		everHadHistory        bool
+		want                  ReviveOutcome
+	}{
+		{"already had UUID, no recovery needed", true, true, false, ReviveOutcomeResumeLive},
+		{"no UUID, recovery found one", false, true, false, ReviveOutcomeResumeRecovered},
+		{"no UUID, recovery found nothing, never had history", false, false, false, ReviveOutcomeFreshExpected},
+		{"no UUID, recovery found nothing, had history before", false, false, true, ReviveOutcomeFreshLostHistory},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := reviveOutcomeForColdRestore(tt.hadUUIDBeforeRecovery, tt.hasClaudeSession, tt.everHadHistory)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
 // TestColdRestore_SignalsFreshLostHistory_When_RecoveryFailsButEverHadHistory
 // verifies session-revive-uuid-loss AC3/AC4: when a cold restore's recovery
 // attempt finds nothing (no live pane, no recoverable JSONL) but

@@ -976,6 +976,23 @@ func (i *Instance) reviveOutcomeReason() string {
 	return ""
 }
 
+// reviveOutcomeForColdRestore derives the ColdRestore branch's ReviveOutcome
+// (session-revive-uuid-loss AC3) from its three decision inputs. Pure and
+// side-effect-free so startLocked/start share one definition instead of
+// duplicating the branch logic.
+func reviveOutcomeForColdRestore(hadUUIDBeforeRecovery, hasClaudeSession, everHadHistory bool) ReviveOutcome {
+	if hasClaudeSession {
+		if hadUUIDBeforeRecovery {
+			return ReviveOutcomeResumeLive
+		}
+		return ReviveOutcomeResumeRecovered
+	}
+	if everHadHistory {
+		return ReviveOutcomeFreshLostHistory
+	}
+	return ReviveOutcomeFreshExpected
+}
+
 // startLocked is the actor-safe body of Start(). Called only from within
 // sendSyncErr/send closures. The param is named actorState (not s) to make
 // actor-only ownership visually distinct and prevent future edits from treating
@@ -1034,21 +1051,15 @@ func startLocked(actorState *instanceState, firstTimeSetup bool) error {
 	if !firstTimeSetup {
 		if !i.pm().IsAlive() {
 			startPath := i.resolveStartPath(i.GetEffectiveRootDir())
-			if i.HasClaudeSession() {
+			hasClaudeSession := i.HasClaudeSession()
+			if hasClaudeSession {
 				log.Info("cold restoring with --resume", "session", i.Title, "uuid", i.claudeSession.ConversationUUID, "path", startPath)
-				if hadUUIDBeforeRecovery {
-					i.LastReviveOutcome = ReviveOutcomeResumeLive
-				} else {
-					i.LastReviveOutcome = ReviveOutcomeResumeRecovered
-				}
 			} else {
 				log.Warn("cold start: tmux dead, no conversation UUID, starting fresh", "session", i.Title, "path", startPath)
-				if i.EverHadConversationHistory {
-					i.LastReviveOutcome = ReviveOutcomeFreshLostHistory
-				} else {
-					i.LastReviveOutcome = ReviveOutcomeFreshExpected
-				}
 			}
+			i.claudeSessionMu.Lock()
+			i.LastReviveOutcome = reviveOutcomeForColdRestore(hadUUIDBeforeRecovery, hasClaudeSession, i.EverHadConversationHistory)
+			i.claudeSessionMu.Unlock()
 			i.startVNCDisplay(context.Background())
 			i.allocateCDPPort()
 			if displayEnv := i.VNCDisplayEnv(); displayEnv != "" {
@@ -1253,25 +1264,19 @@ func (i *Instance) start(firstTimeSetup bool, setupCleanup bool, cleanup *tmux.C
 		if !i.pm().IsAlive() {
 			// tmux session is dead (machine reboot, tmux kill-server, etc.)
 			startPath := i.resolveStartPath(i.GetEffectiveRootDir())
-			if i.HasClaudeSession() {
+			hasClaudeSession := i.HasClaudeSession()
+			if hasClaudeSession {
 				// Cold restore: we have a conversation UUID — relaunch with --resume.
 				// initTmuxSession() (called above) already built the program command
 				// with --resume via ClaudeCommandBuilder, so Start() uses it directly.
 				log.Info("cold restoring with --resume", "session", i.Title, "uuid", i.claudeSession.ConversationUUID, "path", startPath)
-				if hadUUIDBeforeRecovery {
-					i.LastReviveOutcome = ReviveOutcomeResumeLive
-				} else {
-					i.LastReviveOutcome = ReviveOutcomeResumeRecovered
-				}
 			} else {
 				// Dead tmux, no UUID — start a fresh session without --resume.
 				log.Warn("cold start: tmux dead, no conversation UUID, starting fresh", "session", i.Title, "path", startPath)
-				if i.EverHadConversationHistory {
-					i.LastReviveOutcome = ReviveOutcomeFreshLostHistory
-				} else {
-					i.LastReviveOutcome = ReviveOutcomeFreshExpected
-				}
 			}
+			i.claudeSessionMu.Lock()
+			i.LastReviveOutcome = reviveOutcomeForColdRestore(hadUUIDBeforeRecovery, hasClaudeSession, i.EverHadConversationHistory)
+			i.claudeSessionMu.Unlock()
 			// Phase 1: Allocate X display before creating the tmux session so DISPLAY
 			// can be injected via ExtraEnv at new-session time.
 			// context.Background() is safe here: the VNC manager creates its own internal
