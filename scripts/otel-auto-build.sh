@@ -142,7 +142,7 @@ run_args=("${verb_prefix[@]}" "${other_flag_args[@]}" "-tags=${merged_tags}" "${
 # go.mod/go.sum as they stood AFTER pass 1's bump, and `otelc cleanup` then
 # "reverts" to that already-bumped state, leaving it dirty. A plain byte
 # backup/restore here doesn't depend on otelc's internal tracking at all.
-# shellcheck disable=SC2329  # invoked indirectly via `trap ... EXIT` below
+# shellcheck disable=SC2329,SC2317  # invoked indirectly via `trap ... EXIT` below
 cleanup() {
   local status=$?
   trap - EXIT INT TERM

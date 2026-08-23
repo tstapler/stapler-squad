@@ -60,7 +60,7 @@ fi
 mod_backup_dir="$(mktemp -d)"
 trap cleanup EXIT INT TERM
 
-# shellcheck disable=SC2329  # invoked indirectly via `trap ... EXIT` above
+# shellcheck disable=SC2329,SC2317  # invoked indirectly via `trap ... EXIT` above
 cleanup() {
   local status=$?
   trap - EXIT INT TERM

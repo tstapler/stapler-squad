@@ -74,7 +74,7 @@ APP_PID=""
 COLLECTOR_CONFIG_FILE=""
 COLLECTOR_STARTED="false"
 
-# shellcheck disable=SC2329  # invoked indirectly via `trap ... EXIT` below
+# shellcheck disable=SC2329,SC2317  # invoked indirectly via `trap ... EXIT` below
 cleanup() {
   local status=$?
   trap - EXIT INT TERM
