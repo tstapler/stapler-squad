@@ -68,24 +68,6 @@ export function getWsCloseCode(err: unknown): number | null {
 }
 
 /**
- * Connect error codes that should NOT trigger a reconnect when they arrive over
- * the native `createConnectTransport` path (see isNonRetriableConnectError doc
- * comment below). Mirrors NON_RETRIABLE_WS_CODES' semantics:
- *   Code.Unauthenticated — equivalent to ws-close-code 4001 (auth failure)
- *   Code.NotFound        — equivalent to ws-close-code 4004 (session not found)
- *
- * Built lazily inside isNonRetriableConnectError (not as a module-level
- * constant) so importing this module never touches the `Code` enum eagerly —
- * several existing tests mock `@connectrpc/connect` with only a subset of its
- * exports (e.g. just `createClient`), and a top-level `Code.Unauthenticated`
- * reference would throw at import time under those mocks even though the
- * mocked test never exercises this branch.
- */
-function nonRetriableConnectCodes(): Set<Code> {
-  return new Set<Code>([Code.Unauthenticated, Code.NotFound]);
-}
-
-/**
  * Returns true if `err` represents a non-retriable failure, across BOTH the
  * WS-bridge transport (createWatchTransport) and the native ConnectRPC
  * transport (createConnectTransport).
@@ -94,15 +76,26 @@ function nonRetriableConnectCodes(): Set<Code> {
  * createConnectTransport never sets that header, so it's checked first and,
  * when absent, falls back to comparing the ConnectError's own `code` against
  * the native transport's equivalent signal for the same underlying
- * server-side conditions (auth failure, session gone).
+ * server-side conditions (auth failure, session gone). Mirrors
+ * NON_RETRIABLE_WS_CODES' semantics:
+ *   Code.Unauthenticated — equivalent to ws-close-code 4001 (auth failure)
+ *   Code.NotFound        — equivalent to ws-close-code 4004 (session not found)
+ *
+ * The `Code.*` comparison is deferred until this function actually runs (not
+ * hoisted into a module-level constant) so importing this module never
+ * touches the `Code` enum eagerly — several existing tests mock
+ * `@connectrpc/connect` with only a subset of its exports (e.g. just
+ * `createClient`), and a top-level `Code.Unauthenticated` reference would
+ * throw at import time under those mocks even though the mocked test never
+ * exercises this branch.
  */
-export function isNonRetriableConnectError(err: unknown): boolean {
+export function isNonRetriableConnectError(err: unknown): err is ConnectError {
   if (!(err instanceof ConnectError)) return false;
   const wsCode = getWsCloseCode(err);
   if (wsCode !== null) {
     return !isRetriableCloseCode(wsCode);
   }
-  return nonRetriableConnectCodes().has(err.code);
+  return err.code === Code.Unauthenticated || err.code === Code.NotFound;
 }
 
 // ---------------------------------------------------------------------------

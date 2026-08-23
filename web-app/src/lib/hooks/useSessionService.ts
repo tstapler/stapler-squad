@@ -1014,7 +1014,7 @@ export function useSessionService(
           // ws-close-code header exists there; see isNonRetriableConnectError).
           if (isNonRetriableConnectError(err)) {
             const wsCode = getWsCloseCode(err);
-            const reason = wsCode !== null ? `close code=${wsCode}` : `connect code=${(err as ConnectError).code}`;
+            const reason = wsCode !== null ? `close code=${wsCode}` : `connect code=${err.code}`;
             console.warn(`[reconnect] stream=watch non-retriable ${reason}, stopping reconnect`);
             shouldReconnectRef.current = false;
             isConnectedRef.current = false;
