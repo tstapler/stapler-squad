@@ -110,6 +110,10 @@ func TestNewSlackNotifier_SetsFiveSecondTimeout(t *testing.T) {
 
 func TestPostToSlack_SanitizesTransportError_NeverLeaksWebhookURL(t *testing.T) {
 	t.Parallel()
+	// captureLogs holds slogDefaultMu for the test's duration: postToSlack's
+	// failure path calls log.Warn against the process-global slog default,
+	// which otherwise races with any other t.Parallel() test capturing it.
+	_ = captureLogs(t)
 	n := NewSlackNotifier()
 	const unreachableURL = "http://127.0.0.1:1/services/T0/B0/SECRET"
 
@@ -156,6 +160,9 @@ func TestPostToSlack_SendsWellFormedRequest_ToHTTPTestServer(t *testing.T) {
 
 func TestPostToSlack_Treats429IdenticallyToOtherNon2xxFailures(t *testing.T) {
 	t.Parallel()
+	// captureLogs holds slogDefaultMu for the test's duration; see the comment
+	// in TestPostToSlack_SanitizesTransportError_NeverLeaksWebhookURL above.
+	_ = captureLogs(t)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Retry-After", "1")
 		w.WriteHeader(http.StatusTooManyRequests)
@@ -180,6 +187,9 @@ func TestPostToSlack_Treats429IdenticallyToOtherNon2xxFailures(t *testing.T) {
 // plain-text error token (e.g. "no_service", "channel_not_found").
 func TestPostToSlack_IncludesResponseBodyText_OnNon2xx(t *testing.T) {
 	t.Parallel()
+	// captureLogs holds slogDefaultMu for the test's duration; see the comment
+	// in TestPostToSlack_SanitizesTransportError_NeverLeaksWebhookURL above.
+	_ = captureLogs(t)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
 		_, _ = w.Write([]byte("no_service"))
@@ -198,6 +208,9 @@ func TestPostToSlack_IncludesResponseBodyText_OnNon2xx(t *testing.T) {
 // server) still produces a clean status-only message, not a trailing ": ".
 func TestPostToSlack_OmitsBodySuffix_When_ResponseBodyEmpty(t *testing.T) {
 	t.Parallel()
+	// captureLogs holds slogDefaultMu for the test's duration; see the comment
+	// in TestPostToSlack_SanitizesTransportError_NeverLeaksWebhookURL above.
+	_ = captureLogs(t)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
 	}))
@@ -616,6 +629,9 @@ func TestMaybeNotifyQueueDepthThreshold_FiresExactlyOnce_UnderConcurrentCrossing
 
 func TestGetDeliveryStatus_ReturnsSnapshot_AfterFailedSend(t *testing.T) {
 	t.Parallel()
+	// captureLogs holds slogDefaultMu for the test's duration; see the comment
+	// in TestPostToSlack_SanitizesTransportError_NeverLeaksWebhookURL above.
+	_ = captureLogs(t)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
 	}))

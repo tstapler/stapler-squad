@@ -1769,7 +1769,7 @@ func (s *SessionService) CreateSession(
 	// file and set resume_id to the new UUID so the normal start path picks it
 	// up with --resume.
 	if req.Msg.ForkSourceId != "" {
-		srcPath, findErr := session.FindConversationFilePath(req.Msg.ForkSourceId)
+		srcPath, findErr := session.FindConversationFilePath(ctx, req.Msg.ForkSourceId)
 		if findErr != nil {
 			return nil, connect.NewError(connect.CodeNotFound,
 				fmt.Errorf("fork source conversation not found: %w", findErr))

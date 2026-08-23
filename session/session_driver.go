@@ -323,7 +323,7 @@ func runSessionDriverWithPrompt(inst *Instance, allowedPath string, initialPromp
 		if startOutput, err := inst.PreviewContext(ctx); err == nil && outputShowsConversationStarted(startOutput) {
 			sentInitial = true
 			initialPromptSentAt = time.Now()
-		} else if _, err := FindConversationFilePath(inst.GetStableID()); err == nil {
+		} else if _, err := FindConversationFilePath(ctx, inst.GetStableID()); err == nil {
 			sentInitial = true
 			initialPromptSentAt = time.Now()
 		}
@@ -379,7 +379,7 @@ func runSessionDriverWithPrompt(inst *Instance, allowedPath string, initialPromp
 
 		// Stopped after sentInitial = potential unexpected exit.
 		if st == Stopped {
-			handleStoppedStatus(inst, allowedPath, initialPrompt, retried, stop, sentInitial, initialPromptSentAt)
+			handleStoppedStatus(ctx, inst, allowedPath, initialPrompt, retried, stop, sentInitial, initialPromptSentAt)
 			return
 		}
 
@@ -434,7 +434,7 @@ func runSessionDriverWithPrompt(inst *Instance, allowedPath string, initialPromp
 // handleStoppedStatus handles the driver loop's `st == Stopped` branch: an
 // unexpected or expected session exit. The caller always returns from the
 // driver loop immediately after calling this — every path here is terminal.
-func handleStoppedStatus(inst *Instance, allowedPath string, initialPrompt string, retried *atomic.Bool, stop <-chan struct{}, sentInitial bool, initialPromptSentAt time.Time) {
+func handleStoppedStatus(ctx context.Context, inst *Instance, allowedPath string, initialPrompt string, retried *atomic.Bool, stop <-chan struct{}, sentInitial bool, initialPromptSentAt time.Time) {
 	if !sentInitial {
 		// Exited before we even sent the first prompt — likely a startup crash.
 		// For one-shot sessions or if we've already retried, just exit.
@@ -449,7 +449,7 @@ func handleStoppedStatus(inst *Instance, allowedPath string, initialPrompt strin
 	}
 	// Stopped after initial prompt was sent.
 	if inst.OneShot {
-		tryExtractClaudeSessionID(inst)
+		tryExtractClaudeSessionID(ctx, inst)
 	}
 	if isOneShot(inst) || retried.Load() {
 		// One-shot sessions: BacklogLifecycleListener handles this; driver exits cleanly.
@@ -475,7 +475,7 @@ func handleStoppedStatus(inst *Instance, allowedPath string, initialPrompt strin
 			"runtime", time.Since(initialPromptSentAt).Round(time.Second),
 		)
 		if inst.OneShot {
-			tryExtractClaudeSessionID(inst)
+			tryExtractClaudeSessionID(ctx, inst)
 		}
 		return
 	}
@@ -555,7 +555,7 @@ func sendInitialPromptTick(ctx context.Context, inst *Instance, initialPrompt st
 		return
 	}
 
-	if _, convErr := FindConversationFilePath(inst.GetStableID()); convErr == nil {
+	if _, convErr := FindConversationFilePath(ctx, inst.GetStableID()); convErr == nil {
 		log.Info("SessionDriver: conversation file exists, skipping initial prompt injection",
 			"session", inst.Title,
 		)
@@ -1113,11 +1113,17 @@ func parseClaudeSessionID(output string) string {
 // tryExtractClaudeSessionID reads the terminal output for a completed OneShot
 // session and stores the extracted Claude session_id on the instance so that
 // future restarts use --resume.
-func tryExtractClaudeSessionID(inst *Instance) {
+//
+// Takes the driver loop's ctx (not inst.Preview()'s implicit
+// context.Background()) so this capture-pane subprocess is cancelled the
+// moment StopSessionDriver/Destroy() fires, instead of blocking the driver
+// goroutine's defer cancel() from ever running — see PreviewContext's doc
+// comment (instance_terminal.go).
+func tryExtractClaudeSessionID(ctx context.Context, inst *Instance) {
 	if !inst.OneShot {
 		return
 	}
-	output, err := inst.Preview()
+	output, err := inst.PreviewContext(ctx)
 	if err != nil || output == "" {
 		return
 	}

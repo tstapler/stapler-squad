@@ -2762,11 +2762,21 @@ func cmCtx() (context.Context, context.CancelFunc) {
 	return context.WithTimeout(context.Background(), 3*time.Second)
 }
 
+// defaultCapturePaneTimeout bounds the zero-arg CapturePaneContent* wrappers'
+// subprocess execution. runGated/runGatedWith's context.WithTimeout only
+// bounds the exec-gate *wait*, not the tmux subprocess call itself (fn()) --
+// without this, a caller with no context of its own (context.Background())
+// would have no upper bound at all on the capture-pane call, letting a
+// wedged tmux server block the calling goroutine indefinitely.
+const defaultCapturePaneTimeout = 10 * time.Second
+
 // CapturePaneContent captures the content of the tmux pane.
 // When STAPLER_SQUAD_CM_COMMANDS=true and control mode is running, the query is sent
 // over the control mode stdin pipe (zero new subprocesses); otherwise falls back to subprocess.
 func (t *TmuxSession) CapturePaneContent() (string, error) {
-	return t.CapturePaneContentContext(context.Background())
+	ctx, cancel := context.WithTimeout(context.Background(), defaultCapturePaneTimeout)
+	defer cancel()
+	return t.CapturePaneContentContext(ctx)
 }
 
 // CapturePaneContentContext is CapturePaneContent with an external context
@@ -2828,9 +2838,11 @@ func (t *TmuxSession) CapturePaneContentContext(ctx context.Context) (string, er
 // isolation the subprocess gate provides, and control mode has no gate to
 // isolate against.
 func (t *TmuxSession) CapturePaneContentPriority() (string, error) {
-	cmd := t.buildTmuxCommand("capture-pane", "-p", "-e", "-J", "-t", t.sanitizedName)
+	ctx, cancel := context.WithTimeout(context.Background(), defaultCapturePaneTimeout)
+	defer cancel()
+	cmd := t.buildTmuxCommandContext(ctx, "capture-pane", "-p", "-e", "-J", "-t", t.sanitizedName)
 	recordSpawn(time.Now())
-	output, err := runGatedFastLane(context.Background(), t.serverSocket, func() ([]byte, error) {
+	output, err := runGatedFastLane(ctx, t.serverSocket, func() ([]byte, error) {
 		return t.cmdExec.Output(cmd)
 	})
 	if err != nil {
@@ -2874,9 +2886,11 @@ func (t *TmuxSession) CapturePaneContentRaw() (string, error) {
 		log.Debug("CapturePaneContentRaw CM path failed, falling back", "session", t.sanitizedName, "err", cmErr)
 	}
 
-	cmd := t.buildTmuxCommand("capture-pane", "-p", "-e", "-t", t.sanitizedName)
+	ctx, cancel := context.WithTimeout(context.Background(), defaultCapturePaneTimeout)
+	defer cancel()
+	cmd := t.buildTmuxCommandContext(ctx, "capture-pane", "-p", "-e", "-t", t.sanitizedName)
 	recordSpawn(time.Now())
-	output, err := runGated(context.Background(), t.serverSocket, func() ([]byte, error) {
+	output, err := runGated(ctx, t.serverSocket, func() ([]byte, error) {
 		return t.cmdExec.Output(cmd)
 	})
 	if err != nil {
@@ -2902,8 +2916,10 @@ func (t *TmuxSession) CapturePaneContentWithOptions(start, end string) (string, 
 		log.Debug("CapturePaneContentWithOptions CM path failed, falling back", "session", t.sanitizedName, "err", cmErr)
 	}
 
-	cmd := t.buildTmuxCommand("capture-pane", "-p", "-e", "-J", "-S", start, "-E", end, "-t", t.sanitizedName)
-	output, err := runGated(context.Background(), t.serverSocket, func() ([]byte, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), defaultCapturePaneTimeout)
+	defer cancel()
+	cmd := t.buildTmuxCommandContext(ctx, "capture-pane", "-p", "-e", "-J", "-S", start, "-E", end, "-t", t.sanitizedName)
+	output, err := runGated(ctx, t.serverSocket, func() ([]byte, error) {
 		return t.cmdExec.Output(cmd)
 	})
 	if err != nil {

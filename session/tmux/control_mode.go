@@ -420,6 +420,15 @@ func (t *TmuxSession) readControlModeOutput() {
 		close(ch)
 		delete(t.controlModeSubscribers, id)
 	}
+	// Unilateral exit (process killed/crashed without StopControlMode being
+	// called) leaves runCMSender blocked forever on doneCh, since only
+	// StopControlMode used to close it -- close it here too so the sender
+	// goroutine doesn't leak. Guarded/nilled the same way StopControlMode
+	// does, since both can race to close this channel.
+	if t.controlModeDone != nil {
+		close(t.controlModeDone)
+		t.controlModeDone = nil
+	}
 	// Reset so that the next StartControlMode() call sees a clean slate.
 	t.controlModeRefCount = 0
 	t.controlModeCmd = nil
