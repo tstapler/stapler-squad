@@ -2,6 +2,8 @@ package server
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -15,6 +17,8 @@ import (
 	"connectrpc.com/connect"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/net/http2"
+
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/testutil/wait"
@@ -60,6 +64,154 @@ func installFakeClaudeBinary(t *testing.T) {
 		t.Fatalf("installFakeClaudeBinary: %v", err)
 	}
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
+// buildRemoteTLSTestFixture generates a self-signed CA plus a leaf certificate
+// (via this file's own generateCA/generateServerCert helpers in tls.go) for
+// hostnames, and returns a server-side *tls.Config alongside the client-side
+// *x509.CertPool that trusts it. Shared by the Task 1.1.1a tests below.
+func buildRemoteTLSTestFixture(t *testing.T, hostnames []string) (*tls.Config, *x509.CertPool) {
+	t.Helper()
+
+	caKey, caCert, _, err := generateCA()
+	require.NoError(t, err)
+
+	certPEM, keyPEM, err := generateServerCert(caKey, caCert, hostnames)
+	require.NoError(t, err)
+
+	cert, err := tls.X509KeyPair(certPEM, keyPEM)
+	require.NoError(t, err)
+
+	pool := x509.NewCertPool()
+	pool.AddCert(caCert)
+
+	return &tls.Config{Certificates: []tls.Certificate{cert}}, pool
+}
+
+// TestServer_should_NegotiateALPNHTTP2_When_StartRemoteServesOverRealTLS is a
+// verification-only test (Task 1.1.1a, Story 1.1.1) confirming PRE-EXISTING
+// stdlib behavior, not newly-built code: Go's net/http package automatically
+// negotiates HTTP/2 via TLS ALPN for any TLS listener whose *http.Server sets
+// neither Protocols nor TLSNextProto (this has been true since Go 1.6 -- see
+// `go doc net/http`'s "Server ... automatically enable[s] HTTP/2 support when
+// using HTTPS"). StartRemote (server.go:1378-1424) sets neither field, so this
+// test exercises that automatic negotiation end-to-end through a real TLS
+// listener rather than merely asserting it from the docs -- it is the
+// evidence behind ADR-001's "zero server code change" claim for Epic 1.1.
+func TestServer_should_NegotiateALPNHTTP2_When_StartRemoteServesOverRealTLS(t *testing.T) {
+	srv, _ := newServerBase("localhost:0")
+	// StartRemote reuses srv's shared mux (via srv.ServeHTTP) but does not
+	// itself register /health -- that registration normally happens in
+	// Start(), which this test does not call, so register it directly.
+	srv.mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"status":"ok"}`)) //nolint:errcheck
+	})
+
+	tlsCfg, caPool := buildRemoteTLSTestFixture(t, []string{"127.0.0.1", "localhost"})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	port := findFreePort(t)
+	remoteAddr := fmt.Sprintf("127.0.0.1:%d", port)
+	require.NoError(t, srv.StartRemote(ctx, remoteAddr, tlsCfg, nil))
+
+	transport := &http2.Transport{
+		TLSClientConfig: &tls.Config{
+			RootCAs:    caPool,
+			ServerName: "127.0.0.1",
+		},
+	}
+	defer transport.CloseIdleConnections()
+	client := &http.Client{Transport: transport}
+
+	url := fmt.Sprintf("https://%s/health", remoteAddr)
+	var resp *http.Response
+	var err error
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		resp, err = client.Get(url) //nolint:noctx
+		if err == nil {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	require.NoError(t, err, "expected StartRemote's TLS listener to become reachable")
+	defer resp.Body.Close()
+
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	assert.Equal(t, 2, resp.ProtoMajor,
+		"expected real ALPN-negotiated HTTP/2 (pre-existing stdlib behavior), got ProtoMajor=%d", resp.ProtoMajor)
+}
+
+// TestServer_should_RejectHTTP2PriorKnowledge_When_StartServesOverPlainHTTP is
+// the companion error-path test (Task 1.1.1a, Story 1.1.1): the plain
+// :8543-style listener (Server.Start, no TLS) must never negotiate cleartext
+// HTTP/2 (h2c). This codebase deliberately never wires
+// Protocols.SetUnencryptedHTTP2 anywhere (see the subtest below) -- no
+// shipping browser implements h2c, so adding it would be dead complexity, not
+// a capability. An h2c "prior knowledge" dial against the plain listener must
+// therefore either fail outright or silently fall back to HTTP/1.1.
+func TestServer_should_RejectHTTP2PriorKnowledge_When_StartServesOverPlainHTTP(t *testing.T) {
+	t.Run("server.go_never_calls_SetUnencryptedHTTP2", func(t *testing.T) {
+		data, err := os.ReadFile("server.go")
+		require.NoError(t, err)
+		assert.Equal(t, 0, strings.Count(string(data), "SetUnencryptedHTTP2"),
+			"server.go must never wire cleartext HTTP/2 (h2c) -- no shipping browser implements it, "+
+				"so this plan rejects h2c as a mechanism rather than merely deferring it")
+	})
+
+	srv, _ := newServerBase("localhost:0")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	errCh := make(chan error, 1)
+	go func() { errCh <- srv.Start(ctx) }()
+	defer func() {
+		cancel()
+		select {
+		case <-errCh:
+		case <-time.After(5 * time.Second):
+			t.Errorf("server did not shut down within 5s")
+		}
+	}()
+
+	var addr string
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		addr = srv.GetAddr()
+		if addr != "" && addr != "localhost:0" {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	require.NotEmpty(t, addr, "expected Start() to resolve a real bound address")
+
+	// h2c "prior knowledge" dial: send the HTTP/2 client preface directly over
+	// a plain (non-TLS) connection, exactly as a client that assumed h2c
+	// support would. AllowHTTP + a DialTLSContext override that returns a
+	// plain net.Conn is the documented way to do this with http2.Transport.
+	transport := &http2.Transport{
+		AllowHTTP: true,
+		DialTLSContext: func(ctx context.Context, network, addr string, _ *tls.Config) (net.Conn, error) {
+			var d net.Dialer
+			return d.DialContext(ctx, network, addr)
+		},
+	}
+	defer transport.CloseIdleConnections()
+	client := &http.Client{Transport: transport, Timeout: 5 * time.Second}
+
+	resp, err := client.Get("http://" + addr + "/health") //nolint:noctx
+	if err != nil {
+		// The connection failed outright -- expected, since this codebase
+		// wires no h2c support anywhere.
+		return
+	}
+	defer resp.Body.Close()
+	assert.Equal(t, 1, resp.ProtoMajor,
+		"expected HTTP/1.1 fallback since h2c is not wired on the plain listener, got ProtoMajor=%d", resp.ProtoMajor)
 }
 
 // Server_should_ServeHealthCheck_When_StartedWithPortZero (REQ-1 test #4).
