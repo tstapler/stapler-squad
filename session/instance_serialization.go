@@ -321,7 +321,10 @@ func fromInstanceData(data InstanceData, deferStart bool) (*Instance, error) {
 	// Initialize the process manager via the factory so selectedBackend is honored.
 	// The underlying session is wired below (for Paused/Stopped/Hibernated) or
 	// by initTmuxSession() when Start() is called (for Active sessions).
-	instance.processManager = NewProcessManager(context.Background(), BackendTmux, ProcessManagerOptions{})
+	// instance.Backend is not currently persisted in InstanceData (out of Epic 2.1's
+	// scope — see plan.md Task 2.1.3c), so restored sessions fall back to the
+	// process-wide default here, same as before this field existed.
+	instance.processManager = NewProcessManager(context.Background(), BackendTmux, ProcessManagerOptions{Backend: instance.Backend})
 
 	// Restore git worktree and diff stats via manager (cannot use struct literal for sub-manager fields).
 	instance.gitManager.SetWorktree(git.NewGitWorktreeFromStorage(

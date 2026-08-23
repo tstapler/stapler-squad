@@ -5,6 +5,7 @@ import (
 	"sync"
 
 	"github.com/tstapler/stapler-squad/session/tmux"
+	"github.com/tstapler/stapler-squad/session/tymux"
 )
 
 var (
@@ -27,10 +28,22 @@ func getSelectedBackend() ProcessManagerBackend {
 	return v
 }
 
-// NewProcessManager returns the ProcessManager implementation selected by the
-// registered backend. Falls back to TmuxBackend for unknown values.
+// NewProcessManager returns the ProcessManager implementation selected by, in order
+// of precedence: opts.Backend (an explicit per-session override), the registered
+// process-wide backend (RegisterBackendProvider), then defaultBackend. Falls back to
+// TmuxBackend for unknown/empty values.
+//
+// opts.Backend was added ahead of the process-wide global specifically so a caller
+// can request BackendTymux for one session without affecting every other concurrent
+// session — passing defaultBackend alone can never win here, since the process-wide
+// global (set at package init to BackendTmux and never empty in production) is always
+// checked first. See plan.md Epic 2.1 Story 2.1.3 for why defaultBackend's precedence
+// position is otherwise unchanged.
 func NewProcessManager(_ context.Context, defaultBackend ProcessManagerBackend, opts ProcessManagerOptions) ProcessManager {
-	backend := getSelectedBackend()
+	backend := opts.Backend
+	if backend == "" {
+		backend = getSelectedBackend()
+	}
 	if backend == "" {
 		backend = defaultBackend
 	}
@@ -43,9 +56,18 @@ func NewProcessManager(_ context.Context, defaultBackend ProcessManagerBackend, 
 		return newTmuxBackendFromOpts(opts)
 	case BackendNative:
 		return NewNativeProcessManager(opts)
+	case BackendTymux:
+		return newTymuxBackendFromOpts(opts)
 	default:
 		return newTmuxBackendFromOpts(opts)
 	}
+}
+
+// newTymuxBackendFromOpts constructs the Epic 2.1.2 TymuxBackend skeleton. Real
+// construction (dialing tymuxd, wiring rpcTransport) lands in Epic 2.2 — for now this
+// always wraps a stub tymuxGRPCSession whose methods return tymux.ErrNotImplemented.
+func newTymuxBackendFromOpts(opts ProcessManagerOptions) *TymuxBackend {
+	return NewTymuxBackend(tymux.NewTymuxGRPCSession(nil))
 }
 
 // newTmuxBackendFromOpts constructs a TmuxProcessManager from ProcessManagerOptions

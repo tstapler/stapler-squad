@@ -87,6 +87,19 @@ jobs:
         with:
           submodules: true
 
+      # go.mod's `replace github.com/tstapler/tymux/clients/go => ../tymux/clients/go`
+      # (Epic 2.1, stapler-squad-integration) is a relative local path — Go's
+      # module-graph resolution fails for ANY package if it doesn't exist on disk, so
+      # this checkout must land before `goreleaser build` (which invokes `go build`)
+      # below. The `check` job above needs no Go toolchain (schema validation only),
+      # so it's deliberately left out.
+      - name: Checkout tymux (sibling, for go.mod replace directive)
+        uses: actions/checkout@v4
+        with:
+          repository: tstapler/tymux
+          ref: main
+          path: ../tymux
+
       - name: Generate protos and build web UI
         uses: ./.github/actions/prepare
 

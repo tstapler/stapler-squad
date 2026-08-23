@@ -20,6 +20,17 @@ jobs:
           lfs: true
           submodules: true
 
+      # go.mod's `replace github.com/tstapler/tymux/clients/go => ../tymux/clients/go`
+      # (Epic 2.1, stapler-squad-integration) is a relative local path — Go's
+      # module-graph resolution fails for ANY package if it doesn't exist on disk, so
+      # this checkout must land before "Build binary" (`go build`) below.
+      - name: Checkout tymux (sibling, for go.mod replace directive)
+        uses: actions/checkout@v4
+        with:
+          repository: tstapler/tymux
+          ref: main
+          path: ../tymux
+
       - name: Set up Go
         uses: actions/setup-go@v4
         with:

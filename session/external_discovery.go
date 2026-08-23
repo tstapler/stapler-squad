@@ -162,7 +162,7 @@ func (e *ExternalSessionDiscovery) handleNewSession(discovered *mux.DiscoveredSe
 	}
 
 	// Initialize the process manager for external instances.
-	instance.processManager = NewProcessManager(context.Background(), BackendTmux, ProcessManagerOptions{})
+	instance.processManager = NewProcessManager(context.Background(), BackendTmux, ProcessManagerOptions{Backend: instance.Backend})
 
 	// UNIFIED ARCHITECTURE: Attach to the existing tmux session so external sessions
 	// use the same streaming/resize infrastructure as regular sessions.

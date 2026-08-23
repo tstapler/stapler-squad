@@ -1,13 +1,24 @@
-package session
+// Package tymux contains the BackendTymux implementation of session.ProcessManager
+// (session/backend_tymux.go), which delegates to a tymuxd instance over gRPC via the
+// generated Connect-Go client in github.com/tstapler/tymux/clients/go.
+package tymux
 
 import (
 	"context"
 	"os"
 )
 
-// ProcessManager abstracts terminal process lifecycle and I/O.
-// Implementations: TmuxBackend (wraps TmuxProcessManager), NativeProcessManager (Phase 2).
-type ProcessManager interface {
+// TymuxManager is the interface satisfied by the concrete tymux gRPC session
+// implementation (tymuxGRPCSession, session.go). It mirrors session.ProcessManager's
+// exact method set so BackendTymux (session/backend_tymux.go) can forward every call
+// one-to-one, the same shape TmuxBackend/TmuxManager use for the tmux backend
+// (session/tmux_backend.go, session/tmux_process_manager.go).
+//
+// Defined as its own interface here (rather than the session package's ProcessManager
+// directly) because session/tymux is imported BY the session package — depending on
+// session.ProcessManager here would create an import cycle. Duplicating the method set
+// also gives tests a seam to substitute a fake TymuxManager without a live tymuxd daemon.
+type TymuxManager interface {
 	// Lifecycle
 	Start(dir string) error
 	RestoreWithWorkDir(workDir string) error
@@ -20,7 +31,7 @@ type ProcessManager interface {
 	// Existence / state
 	HasSession() bool
 
-	// Working directory (via pane or process introspection)
+	// Working directory (via pane introspection)
 	GetCurrentWorkingDirectory() (string, error)
 
 	// Terminal I/O
@@ -65,28 +76,4 @@ type ProcessManager interface {
 	// Exit notifications
 	SetOnExitCallback(fn func(string))
 	ResetExitOnce()
-}
-
-// ProcessManagerBackend identifies the backend implementation.
-type ProcessManagerBackend string
-
-const (
-	BackendTmux   ProcessManagerBackend = "tmux"
-	BackendNative ProcessManagerBackend = "native"
-	BackendTymux  ProcessManagerBackend = "tymux"
-)
-
-// ProcessManagerOptions holds constructor parameters for NewProcessManager.
-type ProcessManagerOptions struct {
-	SessionName  string
-	Prefix       string
-	ServerSocket string
-	Program      string
-	Args         []string
-	// Backend, when non-empty, overrides both the process-wide default
-	// (RegisterBackendProvider) and NewProcessManager's defaultBackend argument for
-	// this one call — an explicit per-session choice always wins. Zero value ("")
-	// means "no per-session override," preserving today's behavior for every caller
-	// that doesn't set it. See NewProcessManager's precedence in backend_factory.go.
-	Backend ProcessManagerBackend
 }

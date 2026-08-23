@@ -62,6 +62,17 @@ jobs:
         with:
           submodules: true
 
+      # go.mod's `replace github.com/tstapler/tymux/clients/go => ../tymux/clients/go`
+      # (Epic 2.1, stapler-squad-integration) is a relative local path — Go's
+      # module-graph resolution fails for ANY package if it doesn't exist on disk, so
+      # this checkout must land before this job's `go test`/`go build` step below.
+      - name: Checkout tymux (sibling, for go.mod replace directive)
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          repository: tstapler/tymux
+          ref: main
+          path: ../tymux
+
       - name: Set up Go
         uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
@@ -193,6 +204,17 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           submodules: true
+
+      # go.mod's `replace github.com/tstapler/tymux/clients/go => ../tymux/clients/go`
+      # (Epic 2.1, stapler-squad-integration) is a relative local path — Go's
+      # module-graph resolution fails for ANY package if it doesn't exist on disk, so
+      # this checkout must land before this job's `go test`/`go build` step below.
+      - name: Checkout tymux (sibling, for go.mod replace directive)
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          repository: tstapler/tymux
+          ref: main
+          path: ../tymux
 
       - name: Set up Go
         uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
@@ -550,6 +572,17 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           submodules: true
+
+      # go.mod's `replace github.com/tstapler/tymux/clients/go => ../tymux/clients/go`
+      # (Epic 2.1, stapler-squad-integration) is a relative local path — Go's
+      # module-graph resolution fails for ANY package if it doesn't exist on disk, so
+      # this checkout must land before this job's `go test`/`go build` step below.
+      - name: Checkout tymux (sibling, for go.mod replace directive)
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          repository: tstapler/tymux
+          ref: main
+          path: ../tymux
 
       - name: Set up Go
         uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5

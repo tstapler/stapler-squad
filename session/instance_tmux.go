@@ -120,7 +120,7 @@ func (i *Instance) pm() ProcessManager {
 	i.pmMu.Lock()
 	defer i.pmMu.Unlock()
 	if i.processManager == nil {
-		i.processManager = NewProcessManager(context.Background(), BackendTmux, ProcessManagerOptions{})
+		i.processManager = NewProcessManager(context.Background(), BackendTmux, ProcessManagerOptions{Backend: i.Backend})
 	}
 	return i.processManager
 }
