@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
+	"time"
 
 	"connectrpc.com/connect"
 	v1 "github.com/tstapler/tymux/clients/go/gen/tymux/v1"
@@ -99,12 +101,86 @@ type tymuxGRPCSession struct {
 	exited     bool
 	exitReason string
 	exitFired  bool
+
+	// closing is set by Close()/DetachSafely() before cancelling the
+	// standing stream's context (Task 2.5.1a) — the signal
+	// readAttachLoop checks when Receive() errors, to distinguish a
+	// deliberate detach/close (no reconnect) from an unexpected drop
+	// (network blip, daemon restart — triggers ReconnectLoop, Story
+	// 2.5.1/2.5.2). atomic.Bool rather than a field under mu because
+	// readAttachLoop's reader goroutine must be able to check it without
+	// risking a lock a Close()-in-progress call might already hold.
+	closing atomic.Bool
+
+	// abortReconnect is closed exactly once, by Close()/DetachSafely()
+	// (Task 2.5.1a), to interrupt any in-progress ReconnectLoop backoff
+	// wait or in-flight reattach dial immediately — without this,
+	// teardownStandingStream's <-done wait could block until an
+	// unrelated retry schedule finished on its own. Created once in
+	// NewTymuxGRPCSession, not per-stream, since it must outlive any
+	// individual stream generation (a backoff wait between attempts has
+	// no live stream to hang cancellation off of) and Close() is
+	// terminal (this object is never reused after Close(), matching
+	// KillSession's own irreversibility).
+	abortReconnect chan struct{}
+
+	// reconnect{MaxAttempts,BaseDelay,MaxDelay} bound ReconnectLoop's
+	// jittered exponential backoff (Task 2.5.2a). Struct fields (not
+	// package consts) so tests can shrink them for fast, deterministic
+	// exercises of the retry path; NewTymuxGRPCSession seeds production
+	// defaults.
+	reconnectMaxAttempts int
+	reconnectBaseDelay   time.Duration
+	reconnectMaxDelay    time.Duration
+
+	// reconnecting/reconnectAttempt/reconnectCause/reconnectSince back
+	// ReconnectState() (Task 2.5.2e) — set at the start of each
+	// ReconnectLoop attempt and cleared once the shared resync path
+	// (Task 2.5.2b) completes after a successful reattach, so a future
+	// UI (ux.md Surface 2) can read "is this session reconnecting right
+	// now, attempt N, since when" without reverse-engineering it from
+	// the aggregate tymux_attach_stream_reconnects_total metric.
+	reconnecting     bool
+	reconnectAttempt int
+	reconnectCause   string
+	reconnectSince   time.Time
+
+	// backendRestarted/backendRestartedAt back Story 2.5.3's distinct
+	// "backend restarted, session state may be lost" state (Task
+	// 2.5.3b): set the moment ReconnectLoop's daemon-restart detection
+	// (Task 2.5.3a) fires and a ReviveSession call is about to run;
+	// cleared by cacheFromSession so a later Start()/RestoreWithWorkDir()
+	// on a reused object doesn't carry a stale flag from a previous
+	// generation. Deliberately not folded into IsAlive()/exited — "still
+	// alive" and "alive, but it's a fresh replacement process, not the
+	// one you started" are different facts a caller needs to tell apart.
+	backendRestarted   bool
+	backendRestartedAt time.Time
 }
+
+// Default ReconnectLoop backoff bounds (Task 2.5.2a) — a jittered
+// exponential schedule from defaultReconnectBaseDelay up to
+// defaultReconnectMaxDelay, giving up after defaultReconnectMaxAttempts
+// (roughly 2.5 minutes worst-case total wait), matching the "backend
+// unavailable" transient-vs-permanent split ux.md §4 calls for rather than
+// retrying forever.
+const (
+	defaultReconnectMaxAttempts = 8
+	defaultReconnectBaseDelay   = 250 * time.Millisecond
+	defaultReconnectMaxDelay    = 15 * time.Second
+)
 
 // NewTymuxGRPCSession constructs a tymuxGRPCSession using the given rpcTransport,
 // returned as a TymuxManager since tymuxGRPCSession itself is unexported.
 func NewTymuxGRPCSession(transport rpcTransport) TymuxManager {
-	return &tymuxGRPCSession{transport: transport, fanout: NewClientFanout()}
+	return &tymuxGRPCSession{
+		transport:            transport,
+		fanout:               NewClientFanout(),
+		abortReconnect:       make(chan struct{}),
+		reconnectMaxAttempts: defaultReconnectMaxAttempts,
+		reconnectBaseDelay:   defaultReconnectBaseDelay,
+		reconnectMaxDelay:    defaultReconnectMaxDelay,
+	}
 }
 
 // --- Lifecycle ---
@@ -177,9 +253,34 @@ func (s *tymuxGRPCSession) cacheFromSession(sess *v1.Session) error {
 	s.cwd = pane.GetCwd()
 	s.liveness = v1.Liveness_LIVENESS_LIVE
 	s.closed = false
+	// Fresh generation: reset Story 2.5.1/2.5.3's per-generation state so
+	// a reused session object (e.g. Start() after an earlier Close(), or
+	// a second RestoreWithWorkDir()) doesn't carry a stale closing flag,
+	// an already-closed abortReconnect channel, or a backend-restarted
+	// flag from a previous generation.
+	s.backendRestarted = false
+	s.backendRestartedAt = time.Time{}
+	s.abortReconnect = make(chan struct{})
 	s.mu.Unlock()
+	s.closing.Store(false)
 
 	return s.openStandingStream(pane.GetId())
+}
+
+// beginClosing is the single place Close()/DetachSafely() (Task 2.5.1a)
+// mark this generation as deliberately ending: it flips closing so
+// readAttachLoop's next Receive() error is treated as "no reconnect,"
+// and closes abortReconnect exactly once (guarded by the closing
+// CompareAndSwap, since Close()/DetachSafely() must tolerate being
+// called more than once) to interrupt any in-progress ReconnectLoop
+// backoff wait or in-flight reattach dial immediately.
+func (s *tymuxGRPCSession) beginClosing() {
+	if s.closing.CompareAndSwap(false, true) {
+		s.mu.RLock()
+		abort := s.abortReconnect
+		s.mu.RUnlock()
+		close(abort)
+	}
 }
 
 // Start creates a real tymux session rooted at dir. dir also becomes the
@@ -254,6 +355,13 @@ func (s *tymuxGRPCSession) Close() error {
 	s.mu.RLock()
 	sessionID := s.sessionID
 	s.mu.RUnlock()
+	// Task 2.5.1a: mark this generation as deliberately ending BEFORE
+	// tearing anything down, so readAttachLoop's Receive() error (caused
+	// by teardownStandingStream's own cancellation below) is recognized
+	// as a deliberate close, not a drop — and so any in-progress
+	// ReconnectLoop backoff/dial is interrupted immediately rather than
+	// leaving teardownStandingStream's <-done wait blocked.
+	s.beginClosing()
 	s.teardownStandingStream()
 	if sessionID == "" {
 		return nil
@@ -571,6 +679,10 @@ func (s *tymuxGRPCSession) DetachSafely() error {
 	if cancel == nil {
 		return errSessionNotStarted
 	}
+	// Task 2.5.1a: same ordering as Close() — mark deliberate before
+	// cancelling, so readAttachLoop treats the resulting stream-end as a
+	// detach, not a drop, and doesn't hand off to ReconnectLoop.
+	s.beginClosing()
 	cancel()
 	return nil
 }
@@ -613,6 +725,39 @@ func (s *tymuxGRPCSession) ResetExitOnce() {
 	s.exitReason = ""
 	s.exitFired = false
 	s.mu.Unlock()
+}
+
+// --- Reconnect state (Epic 2.5) ---
+
+// ReconnectState reports whether ReconnectLoop is currently retrying this
+// session's standing stream, which attempt it's on, and what triggered it
+// ("error" for a transport drop, "output_gap" is never a reconnecting
+// state since OutputGap resyncs in place without reopening Attach — see
+// resync.go). Task 2.5.2e: closes the gap Phase 4's Product/UX triad
+// review found — the aggregate tymux_attach_stream_reconnects_total
+// metric can't answer "is *this* session reconnecting right now," and a
+// future UI implementing ux.md Surface 2 (reconnect indicator) needs a
+// per-session answer to that, not backend archaeology.
+func (s *tymuxGRPCSession) ReconnectState() (reconnecting bool, attempt int, cause string) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.reconnecting, s.reconnectAttempt, s.reconnectCause
+}
+
+// BackendRestarted reports whether tymuxd was detected to have restarted
+// out from under this session's standing stream (Story 2.5.3) — i.e. the
+// currently-live pane is a fresh ReviveSession-spawned replacement
+// process, not the one Start()/RestoreWithWorkDir() originally attached
+// to, and any in-flight work in the original process (if it survived at
+// all as an orphan) is not recovered. Task 2.5.3b: deliberately not
+// folded into IsAlive()/SetOnExitCallback — "still alive" and "alive, but
+// it's not the same process anymore" are different facts a caller needs
+// to tell apart. since is the zero time if no restart has been observed
+// in this generation.
+func (s *tymuxGRPCSession) BackendRestarted() (restarted bool, since time.Time) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.backendRestarted, s.backendRestartedAt
 }
 
 // compile-time check that *tymuxGRPCSession satisfies TymuxManager.

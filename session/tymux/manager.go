@@ -76,4 +76,14 @@ type TymuxManager interface {
 	// Exit notifications
 	SetOnExitCallback(fn func(string))
 	ResetExitOnce()
+
+	// Reconnect state (Task 2.5.2e): exposes ReconnectLoop's live
+	// progress — whether this session's standing stream is currently
+	// reconnecting, which attempt it's on, and what triggered it — so a
+	// future UI (ux.md Surface 2) doesn't have to reverse-engineer it
+	// from the aggregate tymux_attach_stream_reconnects_total metric.
+	// The one deliberate addition beyond ProcessManager's mirrored
+	// method set (requirements.md's constraint keeps ProcessManager
+	// itself untouched); state exposure only, no UI here.
+	ReconnectState() (reconnecting bool, attempt int, cause string)
 }

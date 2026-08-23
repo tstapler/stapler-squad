@@ -2,8 +2,10 @@ package tymux
 
 import (
 	"context"
+	"errors"
 	"io"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -26,6 +28,13 @@ type fakeAttachStream struct {
 	events chan *v1.AttachEvent
 	sendFn func(*v1.AttachRequest) error
 
+	// recvErr, if set, makes every Receive() call return this error
+	// immediately instead of consulting events/ctx — used by Epic 2.5's
+	// reconnect tests to simulate a stream that ends immediately with a
+	// specific RPC error (e.g. connect.CodeFailedPrecondition, Task
+	// 2.5.3a) without a live server.
+	recvErr error
+
 	mu   sync.Mutex
 	sent []*v1.AttachRequest
 }
@@ -45,6 +54,9 @@ func (f *fakeAttachStream) Send(req *v1.AttachRequest) error {
 }
 
 func (f *fakeAttachStream) Receive() (*v1.AttachEvent, error) {
+	if f.recvErr != nil {
+		return nil, f.recvErr
+	}
 	select {
 	case ev, ok := <-f.events:
 		if !ok {
@@ -215,24 +227,33 @@ func TestStandingStream_ExitedEvent_UpdatesLivenessAndFiresRegisteredCallback(t 
 
 // --- Story 2.3.4 ---
 
-func TestStandingStream_Attach_ReturnsChannelClosedWhenStreamEnds(t *testing.T) {
-	sess, stream, _ := startedSessionWithStream(t)
+// TestStandingStream_Attach_ReturnsChannelClosedWhenDeliberatelyDetached
+// replaces the old (pre-Epic-2.5)
+// TestStandingStream_Attach_ReturnsChannelClosedWhenStreamEnds: under
+// Story 2.5.1, ending the stream WITHOUT a preceding Close()/
+// DetachSafely() is a drop that triggers ReconnectLoop, not an immediate
+// "the standing stream ended" signal — see the reconnect-specific tests
+// below. Attach()'s channel only closes immediately for a deliberate
+// detach, exercised here via DetachSafely() itself rather than directly
+// closing the fake stream's events channel.
+func TestStandingStream_Attach_ReturnsChannelClosedWhenDeliberatelyDetached(t *testing.T) {
+	sess, _, _ := startedSessionWithStream(t)
 
 	done, err := sess.Attach()
 	require.NoError(t, err)
 
 	select {
 	case <-done:
-		t.Fatal("Attach's channel closed before the stream ended")
+		t.Fatal("Attach's channel closed before DetachSafely was called")
 	default:
 	}
 
-	close(stream.events) // simulate the server ending the stream (io.EOF)
+	require.NoError(t, sess.DetachSafely())
 
 	select {
 	case <-done:
 	case <-time.After(time.Second):
-		t.Fatal("Attach's channel never closed after the stream ended")
+		t.Fatal("Attach's channel never closed after a deliberate DetachSafely")
 	}
 }
 
@@ -303,4 +324,260 @@ func TestStandingStream_SetWindowSize_BeforeStart_ReturnsError(t *testing.T) {
 func TestRefreshClient_AlwaysReturnsNil(t *testing.T) {
 	sess, _, _ := startedSessionWithStream(t)
 	assert.NoError(t, sess.RefreshClient())
+}
+
+// --- Epic 2.5: reconnect loop and resync ---
+
+// setReconnectBackoff overrides a started session's ReconnectLoop backoff
+// bounds for fast, deterministic tests — the production defaults
+// (session.go's defaultReconnect* consts) would make these tests slow.
+func setReconnectBackoff(sess TymuxManager, base, max time.Duration, maxAttempts int) *tymuxGRPCSession {
+	c := sess.(*tymuxGRPCSession)
+	c.mu.Lock()
+	c.reconnectBaseDelay = base
+	c.reconnectMaxDelay = max
+	c.reconnectMaxAttempts = maxAttempts
+	c.mu.Unlock()
+	return c
+}
+
+// --- Story 2.5.1 ---
+
+func TestReconnectLoop_DoesNotFire_OnDeliberateDetach(t *testing.T) {
+	sess, _, transport := startedSessionWithStream(t)
+
+	require.NoError(t, sess.DetachSafely())
+	time.Sleep(20 * time.Millisecond) // let any (incorrect) reconnect attempt start
+
+	assert.EqualValues(t, 1, transport.attachCalls, "DetachSafely must not trigger ReconnectLoop — no second Attach call")
+}
+
+func TestReconnectLoop_Fires_OnTransportErrorNotPrecededByDetach(t *testing.T) {
+	sess, stream, transport := startedSessionWithStream(t)
+	setReconnectBackoff(sess, time.Millisecond, 5*time.Millisecond, 3)
+
+	transport.attachFn = func(ctx context.Context) attachStream {
+		s := newFakeAttachStream(ctx)
+		s.push(&v1.AttachEvent{Payload: &v1.AttachEvent_Snapshot{
+			Snapshot: &v1.PaneSnapshot{Liveness: v1.Liveness_LIVENESS_LIVE},
+		}})
+		return s
+	}
+
+	close(stream.events) // drop, not preceded by DetachSafely/Close
+
+	require.Eventually(t, func() bool {
+		return atomic.LoadInt32(&transport.attachCalls) >= 2
+	}, time.Second, time.Millisecond, "a non-deliberate stream end must trigger ReconnectLoop (a second Attach call)")
+}
+
+// --- Story 2.5.2 ---
+
+func TestReconnectLoop_TransparentlyReattaches_OnTransientDrop_WithoutClosingAttachChannel(t *testing.T) {
+	sess, stream, transport := startedSessionWithStream(t)
+	setReconnectBackoff(sess, time.Millisecond, 5*time.Millisecond, 4)
+
+	transport.attachFn = func(ctx context.Context) attachStream {
+		s := newFakeAttachStream(ctx)
+		s.push(&v1.AttachEvent{Payload: &v1.AttachEvent_Snapshot{
+			Snapshot: &v1.PaneSnapshot{
+				Liveness: v1.Liveness_LIVENESS_LIVE,
+				Grid:     []*v1.Row{row(cell("R", 0, 0, 0), cell("E", 0, 0, 0), cell("D", 0, 0, 0))},
+			},
+		}})
+		return s
+	}
+
+	done, err := sess.Attach()
+	require.NoError(t, err)
+	_, subCh := sess.SubscribeToControlModeUpdates()
+
+	close(stream.events) // drop
+
+	select {
+	case <-done:
+		t.Fatal("Attach's channel closed on a transient drop that should have reconnected transparently")
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	select {
+	case got := <-subCh:
+		assert.Contains(t, string(got), "RED", "expected the post-reconnect resync redraw")
+	case <-time.After(time.Second):
+		t.Fatal("subscriber never received the post-reconnect resync redraw")
+	}
+
+	reconnecting, _, _ := sess.ReconnectState()
+	assert.False(t, reconnecting, "ReconnectState must clear once the reconnect succeeds")
+}
+
+func TestReconnectLoop_GivesUp_AfterMaxAttempts_ClosesAttachChannel_AndFiresDistinctExitReason(t *testing.T) {
+	sess, stream, transport := startedSessionWithStream(t)
+	setReconnectBackoff(sess, time.Millisecond, 2*time.Millisecond, 2)
+
+	transport.attachFn = func(ctx context.Context) attachStream {
+		s := newFakeAttachStream(ctx)
+		s.sendFn = func(*v1.AttachRequest) error { return errors.New("boom: unreachable") }
+		return s
+	}
+
+	reasons := make(chan string, 1)
+	sess.SetOnExitCallback(func(reason string) { reasons <- reason })
+
+	done, err := sess.Attach()
+	require.NoError(t, err)
+
+	close(stream.events) // drop
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Attach's channel never closed after ReconnectLoop exhausted its attempts")
+	}
+
+	select {
+	case reason := <-reasons:
+		assert.Contains(t, reason, "reconnect failed", "the give-up reason must be distinguishable from an ordinary process exit")
+	case <-time.After(time.Second):
+		t.Fatal("exit callback never fired after ReconnectLoop exhaustion")
+	}
+}
+
+// TestReconnectLoop_NoDuplicateRenderedOutput_AcrossReconnectBoundary is
+// Task 2.5.2d's regression test: force a drop while output is actively
+// streaming, let ReconnectLoop reconnect, and assert ClientFanout's
+// subscribers never receive the same content twice across the reconnect
+// boundary — closing adversarial-review.md's subscribe-then-snapshot
+// Blocker for the client-triggered-reconnect case specifically.
+func TestReconnectLoop_NoDuplicateRenderedOutput_AcrossReconnectBoundary(t *testing.T) {
+	sess, stream, transport := startedSessionWithStream(t)
+	setReconnectBackoff(sess, time.Millisecond, 2*time.Millisecond, 4)
+	_, subCh := sess.SubscribeToControlModeUpdates()
+
+	stream.push(&v1.AttachEvent{Payload: &v1.AttachEvent_Output{Output: []byte("before-drop")}})
+	select {
+	case got := <-subCh:
+		assert.Equal(t, []byte("before-drop"), got)
+	case <-time.After(time.Second):
+		t.Fatal("never received pre-drop output")
+	}
+
+	var second *fakeAttachStream
+	var secondMu sync.Mutex
+	transport.attachFn = func(ctx context.Context) attachStream {
+		s := newFakeAttachStream(ctx)
+		s.push(&v1.AttachEvent{Payload: &v1.AttachEvent_Snapshot{
+			Snapshot: &v1.PaneSnapshot{
+				Liveness: v1.Liveness_LIVENESS_LIVE,
+				Grid:     []*v1.Row{row(cell("R", 0, 0, 0), cell("W", 0, 0, 0))},
+			},
+		}})
+		secondMu.Lock()
+		second = s
+		secondMu.Unlock()
+		return s
+	}
+
+	close(stream.events) // drop mid-stream
+
+	var redraw []byte
+	select {
+	case redraw = <-subCh:
+	case <-time.After(time.Second):
+		t.Fatal("never received the post-reconnect resync redraw")
+	}
+	assert.Contains(t, string(redraw), "RW")
+
+	require.Eventually(t, func() bool {
+		secondMu.Lock()
+		defer secondMu.Unlock()
+		return second != nil
+	}, time.Second, time.Millisecond)
+	secondMu.Lock()
+	second.push(&v1.AttachEvent{Payload: &v1.AttachEvent_Output{Output: []byte("after-reconnect")}})
+	secondMu.Unlock()
+
+	select {
+	case got := <-subCh:
+		assert.Equal(t, []byte("after-reconnect"), got)
+	case <-time.After(time.Second):
+		t.Fatal("never received post-reconnect live output")
+	}
+
+	select {
+	case extra := <-subCh:
+		t.Fatalf("received an unexpected extra broadcast (possible duplicate across the reconnect boundary): %q", extra)
+	case <-time.After(100 * time.Millisecond):
+	}
+}
+
+// --- Story 2.5.3 ---
+
+func TestReconnectLoop_DetectsDaemonRestart_RevivesSession_AndSurfacesDistinctState(t *testing.T) {
+	sess, stream, transport := startedSessionWithStream(t)
+	setReconnectBackoff(sess, time.Millisecond, 2*time.Millisecond, 4)
+
+	var revived int32
+	transport.reviveSessionFn = func(_ context.Context, _ *connect.Request[v1.ReviveSessionRequest]) (*connect.Response[v1.ReviveSessionResponse], error) {
+		atomic.AddInt32(&revived, 1)
+		return connect.NewResponse(&v1.ReviveSessionResponse{}), nil
+	}
+
+	var calls int32
+	transport.attachFn = func(ctx context.Context) attachStream {
+		n := atomic.AddInt32(&calls, 1)
+		s := newFakeAttachStream(ctx)
+		if n == 1 {
+			s.recvErr = connect.NewError(connect.CodeFailedPrecondition, errors.New("pane exited"))
+		} else {
+			s.push(&v1.AttachEvent{Payload: &v1.AttachEvent_Snapshot{
+				Snapshot: &v1.PaneSnapshot{Liveness: v1.Liveness_LIVENESS_LIVE},
+			}})
+		}
+		return s
+	}
+
+	done, err := sess.Attach()
+	require.NoError(t, err)
+
+	close(stream.events) // drop
+
+	select {
+	case <-done:
+		t.Fatal("Attach's channel closed; a daemon-restart reconnect should still succeed transparently")
+	case <-time.After(300 * time.Millisecond):
+	}
+
+	concrete := sess.(*tymuxGRPCSession)
+	require.Eventually(t, func() bool {
+		restarted, _ := concrete.BackendRestarted()
+		return restarted
+	}, time.Second, time.Millisecond, "BackendRestarted should report true after a FailedPrecondition-detected daemon restart")
+
+	assert.EqualValues(t, 1, atomic.LoadInt32(&revived), "ReviveSession must be called exactly once for the daemon-restart case")
+	assert.GreaterOrEqual(t, atomic.LoadInt32(&calls), int32(2), "expected at least 2 Attach dial attempts (dead, then revived)")
+}
+
+func TestReconnectLoop_OrdinaryDrop_DoesNotSetBackendRestarted(t *testing.T) {
+	sess, stream, transport := startedSessionWithStream(t)
+	setReconnectBackoff(sess, time.Millisecond, 2*time.Millisecond, 4)
+
+	transport.attachFn = func(ctx context.Context) attachStream {
+		s := newFakeAttachStream(ctx)
+		s.push(&v1.AttachEvent{Payload: &v1.AttachEvent_Snapshot{
+			Snapshot: &v1.PaneSnapshot{Liveness: v1.Liveness_LIVENESS_LIVE},
+		}})
+		return s
+	}
+
+	close(stream.events) // ordinary transport drop, pane stays live
+
+	require.Eventually(t, func() bool {
+		return atomic.LoadInt32(&transport.attachCalls) >= 2
+	}, time.Second, time.Millisecond)
+	time.Sleep(50 * time.Millisecond)
+
+	concrete := sess.(*tymuxGRPCSession)
+	restarted, _ := concrete.BackendRestarted()
+	assert.False(t, restarted, "an ordinary transport blip must not be surfaced as a daemon restart")
 }
