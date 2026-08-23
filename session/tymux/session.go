@@ -63,12 +63,36 @@ type tymuxGRPCSession struct {
 	// closed is set once Close() has issued KillSession, short-circuiting
 	// IsAlive() without a further RPC against a session we already killed.
 	closed bool
+
+	// stream/cancelAttach/streamDone back the standing Attach stream
+	// (Epic 2.3, Story 2.3.1): opened once in cacheFromSession — the
+	// common tail of Start/RestoreWithWorkDir — and kept alive for the
+	// whole session's lifetime, independent of any one browser tab.
+	// cancelAttach is the context.CancelFunc DetachSafely() invokes for a
+	// full cancellation (not a half-close); streamDone is closed by the
+	// reader goroutine (stream.go's readAttachLoop) when the stream ends
+	// for any reason, and is what Attach() hands back to callers.
+	stream       attachStream
+	cancelAttach context.CancelFunc
+	streamDone   chan struct{}
+
+	// fanout is the local multi-subscriber broadcast (Story 2.3.2) that
+	// SubscribeToControlModeUpdates hands subscriber channels out from —
+	// one upstream standing stream, N independently-paced local
+	// subscribers, rather than one Attach call per subscriber.
+	fanout *ClientFanout
+
+	// exitCallback is invoked by readAttachLoop when an Exited event
+	// arrives. Fire-once / registered-after-exit-already-observed
+	// semantics are Epic 2.4's job (Task 2.4.2b); SetOnExitCallback here
+	// just stores and readAttachLoop calls whatever is currently set.
+	exitCallback func(string)
 }
 
 // NewTymuxGRPCSession constructs a tymuxGRPCSession using the given rpcTransport,
 // returned as a TymuxManager since tymuxGRPCSession itself is unexported.
 func NewTymuxGRPCSession(transport rpcTransport) TymuxManager {
-	return &tymuxGRPCSession{transport: transport}
+	return &tymuxGRPCSession{transport: transport, fanout: NewClientFanout()}
 }
 
 // --- Lifecycle ---
@@ -127,21 +151,23 @@ func paneFromLayout(l *v1.Layout) *v1.Pane {
 	return nil
 }
 
-// cacheFromSession stores sess's id/pane/cwd and marks the session live —
-// the common tail of Start/RestoreWithWorkDir once a *v1.Session is in hand.
+// cacheFromSession stores sess's id/pane/cwd, marks the session live, and
+// opens the standing Attach stream (Story 2.3.1) — the common tail of
+// Start/RestoreWithWorkDir once a *v1.Session is in hand.
 func (s *tymuxGRPCSession) cacheFromSession(sess *v1.Session) error {
 	pane := firstPane(sess)
 	if pane == nil {
 		return fmt.Errorf("tymux: session %q has no pane", sess.GetId())
 	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	s.sessionID = sess.GetId()
 	s.paneID = pane.GetId()
 	s.cwd = pane.GetCwd()
 	s.liveness = v1.Liveness_LIVENESS_LIVE
 	s.closed = false
-	return nil
+	s.mu.Unlock()
+
+	return s.openStandingStream(pane.GetId())
 }
 
 // Start creates a real tymux session rooted at dir. dir also becomes the
@@ -216,6 +242,7 @@ func (s *tymuxGRPCSession) Close() error {
 	s.mu.RLock()
 	sessionID := s.sessionID
 	s.mu.RUnlock()
+	s.teardownStandingStream()
 	if sessionID == "" {
 		return nil
 	}
@@ -297,11 +324,37 @@ func (s *tymuxGRPCSession) GetCurrentWorkingDirectory() (string, error) {
 // comment (Story 2.2.5).
 func (s *tymuxGRPCSession) GetPTY() (*os.File, error) { return nil, ErrNotSupportedOnTymuxBackend }
 
-func (s *tymuxGRPCSession) SendKeys(keys string) (int, error)  { return 0, ErrNotImplemented }
-func (s *tymuxGRPCSession) TapEnter() error                    { return ErrNotImplemented }
-func (s *tymuxGRPCSession) SendPromptWithEnter(p string) error { return ErrNotImplemented }
+// SendKeys, TapEnter, SendPromptWithEnter, and SendInputViaControlMode
+// (Story 2.3.3) all collapse onto one AttachRequest{Input(...)} send over
+// the standing stream — no per-call RPC, per architecture.md §1's noted
+// simplification (flagged there as a parity risk against
+// TmuxProcessManager's two-step SendKeys-then-sleep-then-TapEnter shape,
+// to watch for in Epic 3's validation, not solved here).
+func (s *tymuxGRPCSession) SendKeys(keys string) (int, error) {
+	if err := s.sendOnStream(&v1.AttachRequest{
+		Payload: &v1.AttachRequest_Input{Input: []byte(keys)},
+	}); err != nil {
+		return 0, err
+	}
+	return len(keys), nil
+}
+
+func (s *tymuxGRPCSession) TapEnter() error {
+	return s.sendOnStream(&v1.AttachRequest{
+		Payload: &v1.AttachRequest_Input{Input: []byte{0x0D}},
+	})
+}
+
+func (s *tymuxGRPCSession) SendPromptWithEnter(p string) error {
+	return s.sendOnStream(&v1.AttachRequest{
+		Payload: &v1.AttachRequest_Input{Input: append([]byte(p), 0x0D)},
+	})
+}
+
 func (s *tymuxGRPCSession) SendInputViaControlMode(ctx context.Context, data []byte) error {
-	return ErrNotImplemented
+	return s.sendOnStream(&v1.AttachRequest{
+		Payload: &v1.AttachRequest_Input{Input: data},
+	})
 }
 
 // --- Terminal state ---
@@ -452,20 +505,63 @@ func (s *tymuxGRPCSession) HasMeaningfulContent(content string) bool   { return 
 
 func (s *tymuxGRPCSession) StartControlMode() error { return ErrNotImplemented }
 func (s *tymuxGRPCSession) StopControlMode() error  { return ErrNotImplemented }
+
+// SubscribeToControlModeUpdates/UnsubscribeFromControlModeUpdates (Story
+// 2.3.2) delegate to ClientFanout — every subscriber shares the one
+// standing stream's output rather than opening its own Attach call.
 func (s *tymuxGRPCSession) SubscribeToControlModeUpdates() (string, chan []byte) {
-	return "", nil
+	return s.fanout.Subscribe()
 }
-func (s *tymuxGRPCSession) UnsubscribeFromControlModeUpdates(id string) {}
+func (s *tymuxGRPCSession) UnsubscribeFromControlModeUpdates(id string) {
+	s.fanout.Unsubscribe(id)
+}
 
 // --- Attach ---
 
-func (s *tymuxGRPCSession) Attach() (chan struct{}, error) { return nil, ErrNotImplemented }
-func (s *tymuxGRPCSession) DetachSafely() error            { return ErrNotImplemented }
+// Attach returns the channel that closes when the standing stream ends
+// (Task 2.3.4a), for callers wanting the interactive-TUI-attach "wait
+// until detached/disconnected" concept.
+func (s *tymuxGRPCSession) Attach() (chan struct{}, error) {
+	s.mu.RLock()
+	done := s.streamDone
+	s.mu.RUnlock()
+	if done == nil {
+		return nil, errSessionNotStarted
+	}
+	return done, nil
+}
+
+// DetachSafely fully cancels the standing Attach call's context (Task
+// 2.3.4b) — matching the proto's documented detach contract
+// (tymux.proto:52-58): "Detaching means fully cancelling this call...
+// Half-closing only the send side does not stop the receive side or end
+// the attach." It does not close/reopen the stream itself; a subsequent
+// Start/RestoreWithWorkDir opens a fresh one via cacheFromSession.
+func (s *tymuxGRPCSession) DetachSafely() error {
+	s.mu.RLock()
+	cancel := s.cancelAttach
+	s.mu.RUnlock()
+	if cancel == nil {
+		return errSessionNotStarted
+	}
+	cancel()
+	return nil
+}
 
 // --- Exit notifications ---
 
-func (s *tymuxGRPCSession) SetOnExitCallback(fn func(string)) {}
-func (s *tymuxGRPCSession) ResetExitOnce()                    {}
+// SetOnExitCallback stores fn for readAttachLoop (stream.go) to call when
+// an Exited event arrives. Fire-once / registered-after-exit-already-
+// observed semantics (matching TmuxSession's check-before-and-after-
+// registration guarantee) are Epic 2.4's job (Task 2.4.2b) — this method
+// is deliberately the simple store Epic 2.4 builds that guarantee on top
+// of, not the guarantee itself.
+func (s *tymuxGRPCSession) SetOnExitCallback(fn func(string)) {
+	s.mu.Lock()
+	s.exitCallback = fn
+	s.mu.Unlock()
+}
+func (s *tymuxGRPCSession) ResetExitOnce() {}
 
 // compile-time check that *tymuxGRPCSession satisfies TymuxManager.
 var _ TymuxManager = (*tymuxGRPCSession)(nil)

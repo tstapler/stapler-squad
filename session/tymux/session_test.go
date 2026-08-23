@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 
 	"connectrpc.com/connect"
@@ -26,6 +27,17 @@ type fakeTransport struct {
 	listSessionsFn  func(context.Context, *connect.Request[v1.ListSessionsRequest]) (*connect.Response[v1.ListSessionsResponse], error)
 	reviveSessionFn func(context.Context, *connect.Request[v1.ReviveSessionRequest]) (*connect.Response[v1.ReviveSessionResponse], error)
 	capturePaneFn   func(context.Context, *connect.Request[v1.CapturePaneRequest]) (*connect.Response[v1.PaneSnapshot], error)
+
+	// attachFn lets a test substitute a custom attachStream (e.g. one that
+	// plays back a scripted sequence of AttachEvents); defaults to a
+	// working fakeAttachStream (stream_test.go) so every pre-Epic-2.3 test
+	// above, which never configured this, keeps passing against the
+	// standing stream Start()/RestoreWithWorkDir() now open.
+	attachFn func(context.Context) attachStream
+	// attachCalls counts every Attach() call — Story 2.3.1's acceptance
+	// test asserts exactly one standing stream is opened per session,
+	// never one per SendKeys call.
+	attachCalls int32
 }
 
 func (f *fakeTransport) CreateSession(ctx context.Context, req *connect.Request[v1.CreateSessionRequest]) (*connect.Response[v1.Session], error) {
@@ -63,7 +75,13 @@ func (f *fakeTransport) CapturePane(ctx context.Context, req *connect.Request[v1
 	return f.capturePaneFn(ctx, req)
 }
 
-func (f *fakeTransport) Attach(ctx context.Context) attachStream { return nil }
+func (f *fakeTransport) Attach(ctx context.Context) attachStream {
+	atomic.AddInt32(&f.attachCalls, 1)
+	if f.attachFn != nil {
+		return f.attachFn(ctx)
+	}
+	return newFakeAttachStream(ctx)
+}
 
 var _ rpcTransport = (*fakeTransport)(nil)
 

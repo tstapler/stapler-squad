@@ -63,11 +63,16 @@ func NewProcessManager(_ context.Context, defaultBackend ProcessManagerBackend, 
 	}
 }
 
-// newTymuxBackendFromOpts constructs the Epic 2.1.2 TymuxBackend skeleton. Real
-// construction (dialing tymuxd, wiring rpcTransport) lands in Epic 2.2 — for now this
-// always wraps a stub tymuxGRPCSession whose methods return tymux.ErrNotImplemented.
+// newTymuxBackendFromOpts constructs a TymuxBackend wired to a real, live
+// tymuxd over gRPC (tymux.NewRealTransport) — Epic 2.3's standing Attach
+// stream is the first real live-RPC usage in this implementation, so a
+// stub transport can no longer stand in here the way it did through Epic
+// 2.2 (see tymux.NewRealTransport's doc comment for why that gap existed
+// and closing it landed in this epic rather than 2.1/2.2 as originally
+// expected). The address defaults to tymuxd's documented loopback
+// address, overridable via the TYMUXD_ADDR environment variable.
 func newTymuxBackendFromOpts(opts ProcessManagerOptions) *TymuxBackend {
-	return NewTymuxBackend(tymux.NewTymuxGRPCSession(nil))
+	return NewTymuxBackend(tymux.NewTymuxGRPCSession(tymux.NewRealTransport("")))
 }
 
 // newTmuxBackendFromOpts constructs a TmuxProcessManager from ProcessManagerOptions
