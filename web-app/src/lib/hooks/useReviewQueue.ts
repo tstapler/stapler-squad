@@ -3,7 +3,7 @@
 import { useEffect, useCallback, useRef, useMemo } from "react";
 import type { AsyncResult } from "@/lib/types/asyncResult";
 import { createClient } from "@connectrpc/connect";
-import { createWatchTransport } from "@/lib/transport/watch-ws-transport";
+import { createSessionWatchTransport } from "@/lib/transport/watch-ws-transport";
 import { SessionService } from "@/gen/session/v1/session_pb";
 import { getApiBaseUrl, createAuthInterceptor } from "@/lib/config";
 import {
@@ -131,7 +131,7 @@ export function useReviewQueue(
 
   // Initialize ConnectRPC client — uses HTTP for unary, WebSocket for streaming Watch* RPCs
   useEffect(() => {
-    const transport = createWatchTransport({
+    const transport = createSessionWatchTransport({
       baseUrl,
       interceptors: [createAuthInterceptor()],
     });

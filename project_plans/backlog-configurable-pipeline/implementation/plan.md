@@ -2,7 +2,7 @@
 
 **Feature**: Per-backlog-item, runtime-definable pipeline modes (which slash-commands/prompts drive triage, work, and review) via a new DB-persisted `PipelineMode` table, a `PipelineEngine` seam consulted at the three (four) hot-path call sites, and UI to select/manage/inspect modes.
 **Date**: 2026-07-15
-**Status**: Ready for implementation
+**Status**: Phases 1-3 shipped (`8affe06cc`, `6c77f3a27`, `7e542c27b`); bucket-3 gap confirmed substantially resolved as of 2026-08-21 audit — see `docs/tasks/backlog-feature-improvement.md`.
 **ADRs**: `project_plans/backlog-configurable-pipeline/decisions/ADR-001-pipeline-mode-db-persisted.md`
 
 ---

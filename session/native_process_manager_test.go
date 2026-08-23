@@ -271,9 +271,10 @@ func TestNewProcessManager_ReturnsNativeProcessManager_WhenFlagIsNative(t *testi
 	RegisterBackendProvider(BackendNative)
 	defer RegisterBackendProvider(BackendTmux) // restore default for other tests
 
-	pm := NewProcessManager(context.Background(), BackendNative, ProcessManagerOptions{
+	pm, err := NewProcessManager(context.Background(), BackendNative, ProcessManagerOptions{
 		SessionName: "test-native",
 	})
+	require.NoError(t, err)
 	_, ok := pm.(*NativeProcessManager)
 	assert.True(t, ok, "expected *NativeProcessManager when flag is 'native'")
 }

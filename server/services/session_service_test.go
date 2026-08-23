@@ -2645,6 +2645,99 @@ func TestWireRateLimitCallbacks_StampsItemIDMetadata_When_BacklogLinkedAndNotHid
 	assert.Equal(t, "true", notifs[0].NotificationMetadata[events.MetadataKeySessionScoped])
 }
 
+// TestOnColdRestoreLostHistory_PublishesNotification_UnlessHidden verifies the
+// session-revive-uuid-loss AC3 notification: a non-Hidden instance whose cold
+// restore was forced fresh despite prior conversation history gets a durable
+// WARNING/MEDIUM notification, while a Hidden instance (e.g. a headless
+// review session) never does — mirroring onRateLimitRecovery's Hidden gate.
+func TestOnColdRestoreLostHistory_PublishesNotification_UnlessHidden(t *testing.T) {
+	storage := createTestStorage(t)
+	eventBus := events.NewEventBus(8)
+	svc := NewSessionService(storage, eventBus)
+	t.Cleanup(func() { svc.Shutdown() })
+
+	newInstance := func(title string, hidden bool) *session.Instance {
+		inst := &session.Instance{
+			Title:     title,
+			UUID:      title + "-uuid",
+			Path:      "/tmp/test",
+			Status:    session.Paused,
+			Program:   "claude",
+			Hidden:    hidden,
+			CreatedAt: time.Now(),
+			UpdatedAt: time.Now(),
+		}
+		require.NoError(t, storage.AddInstance(inst))
+		return inst
+	}
+
+	t.Run("not hidden publishes notification", func(t *testing.T) {
+		inst := newInstance("cold-restore-visible", false)
+		subCtx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		ch, _ := eventBus.Subscribe(subCtx)
+
+		svc.onColdRestoreLostHistory(inst)
+
+		notifs := drainNotificationEvents(ch)
+		require.Len(t, notifs, 1, "expected exactly one cold-restore-lost-history notification")
+		assert.Equal(t, int32(8), notifs[0].NotificationType, "must be NotificationType_WARNING")
+		assert.Equal(t, int32(2), notifs[0].NotificationPriority, "must be NotificationPriority_MEDIUM")
+		assert.Contains(t, notifs[0].NotificationTitle, inst.Title)
+	})
+
+	t.Run("hidden suppresses notification", func(t *testing.T) {
+		inst := newInstance("cold-restore-hidden", true)
+		subCtx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		ch, _ := eventBus.Subscribe(subCtx)
+
+		svc.onColdRestoreLostHistory(inst)
+
+		notifs := drainNotificationEvents(ch)
+		assert.Empty(t, notifs, "a Hidden instance must never receive a cold-restore-lost-history notification")
+	})
+}
+
+// TestColdRestoreOutcomeListener_FiltersOnReason verifies
+// coldRestoreOutcomeListener only calls onColdRestoreLostHistory for an
+// EventStarted carrying exactly session.ReasonColdRestoreLostHistory — a
+// normal start (empty reason) or any other event/reason combination must not
+// notify (session-revive-uuid-loss AC3).
+func TestColdRestoreOutcomeListener_FiltersOnReason(t *testing.T) {
+	storage := createTestStorage(t)
+	eventBus := events.NewEventBus(8)
+	svc := NewSessionService(storage, eventBus)
+	t.Cleanup(func() { svc.Shutdown() })
+
+	inst := &session.Instance{
+		Title:     "cold-restore-listener",
+		UUID:      "cold-restore-listener-uuid",
+		Path:      "/tmp/test",
+		Status:    session.Paused,
+		Program:   "claude",
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	}
+	require.NoError(t, storage.AddInstance(inst))
+
+	listener := &coldRestoreOutcomeListener{svc: svc, inst: inst}
+
+	subCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ch, _ := eventBus.Subscribe(subCtx)
+
+	listener.OnLifecycleEvent(session.EventStarted, "")
+	assert.Empty(t, drainNotificationEvents(ch), "a normal start (empty reason) must not notify")
+
+	listener.OnLifecycleEvent(session.EventExited, session.ReasonColdRestoreLostHistory)
+	assert.Empty(t, drainNotificationEvents(ch), "the reason must only be honored on EventStarted")
+
+	listener.OnLifecycleEvent(session.EventStarted, session.ReasonColdRestoreLostHistory)
+	notifs := drainNotificationEvents(ch)
+	require.Len(t, notifs, 1, "EventStarted with the lost-history reason must notify")
+}
+
 // TestSessionService_Shutdown_StopsAnalyticsFlushGoroutine confirms Shutdown() calls
 // through to AnalyticsStore.Stop(), is idempotent, and leaves Record() as a safe no-op
 // afterward. Shutdown() joins the flush goroutine synchronously (AnalyticsStore.Stop

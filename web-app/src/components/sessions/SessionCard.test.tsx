@@ -1,7 +1,7 @@
 import React from "react";
 import { render, screen } from "@testing-library/react";
 import { SessionCard } from "./SessionCard";
-import { SessionStatus } from "@/gen/session/v1/types_pb";
+import { ReviveOutcome, SessionStatus } from "@/gen/session/v1/types_pb";
 import type { Session } from "@/gen/session/v1/types_pb";
 import { staleBadge } from "./SessionCard.css";
 
@@ -109,6 +109,20 @@ describe("SessionCard — note badge", () => {
     const badge = screen.getByTestId("badge-has-note");
     const expected = "N".repeat(119) + "…";
     expect(badge.closest('[data-testid="tooltip-mock"]')).toHaveAttribute("data-label", expected);
+  });
+});
+
+describe("SessionCard — revived context badge", () => {
+  it("SessionCard_should_RenderRevivedContextBadge_When_ReviveOutcomeIsFreshLostHistory", () => {
+    const session = { ...minimalSession, reviveOutcome: ReviveOutcome.FRESH_LOST_HISTORY } as unknown as Session;
+    render(<SessionCard session={session} />);
+    expect(screen.getByTestId("revived-context-badge")).toBeInTheDocument();
+  });
+
+  it("SessionCard_should_NotRenderRevivedContextBadge_When_ReviveOutcomeIsNotFreshLostHistory", () => {
+    const session = { ...minimalSession, reviveOutcome: ReviveOutcome.RESUME_LIVE } as unknown as Session;
+    render(<SessionCard session={session} />);
+    expect(screen.queryByTestId("revived-context-badge")).toBeNull();
   });
 });
 

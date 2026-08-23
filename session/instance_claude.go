@@ -18,6 +18,26 @@ import (
 // conversation ID that no longer exists in Claude's backend.
 const staleResumePattern = "No conversation found with session ID"
 
+// ReviveOutcome records the outcome of the most recent start/cold-restore
+// decision (session-revive-uuid-loss AC3). See Instance.LastReviveOutcome.
+type ReviveOutcome string
+
+const (
+	ReviveOutcomeUnspecified ReviveOutcome = ""
+	// ReviveOutcomeResumeLive means a conversation UUID was already in memory;
+	// no disk-based recovery was needed.
+	ReviveOutcomeResumeLive ReviveOutcome = "resume_live"
+	// ReviveOutcomeResumeRecovered means no UUID was in memory, but
+	// tryExtractConversationUUID's disk-based fallback found one before launch.
+	ReviveOutcomeResumeRecovered ReviveOutcome = "resume_recovered"
+	// ReviveOutcomeFreshExpected means the session started fresh with no prior
+	// conversation history to lose (first-time setup or genuinely no history).
+	ReviveOutcomeFreshExpected ReviveOutcome = "fresh_expected"
+	// ReviveOutcomeFreshLostHistory means the session started fresh even though
+	// EverHadConversationHistory was true — recovery ran and found nothing.
+	ReviveOutcomeFreshLostHistory ReviveOutcome = "fresh_lost_history"
+)
+
 // isStaleResumeExit returns true when the PTY exit tail contains the Claude CLI error
 // that indicates a stale or expired --resume argument.  ANSI escape sequences are
 // stripped before the check so colour output does not prevent matching.
@@ -274,7 +294,9 @@ func (i *Instance) HasClaudeSession() bool {
 
 // ClearConversationState removes the stored Claude conversation UUID and history
 // file path so that the next Resume starts a fresh conversation rather than
-// attempting --resume with a potentially stale or path-mismatched UUID.
+// attempting --resume with a potentially stale or path-mismatched UUID. Also
+// resets EverHadConversationHistory: an intentional "start over" here is not
+// the unexpected loss session-revive-uuid-loss AC3 signals on.
 func (i *Instance) ClearConversationState() {
 	i.claudeSessionMu.Lock()
 	defer i.claudeSessionMu.Unlock()
@@ -290,6 +312,7 @@ func (i *Instance) ClearConversationState() {
 		i.claudeSession.ConversationUUID = ""
 	}
 	i.HistoryFilePath = ""
+	i.EverHadConversationHistory = false
 	i.conversationClearedAt = time.Now()
 	snap := buildSnapshot(i)
 	i.mu.Unlock()
@@ -381,6 +404,7 @@ func (i *Instance) tryExtractConversationUUID() {
 	}
 	i.claudeSession.ConversationUUID = info.ConversationUUID
 	i.HistoryFilePath = info.HistoryFilePath
+	i.EverHadConversationHistory = true
 	snap := buildSnapshot(i)
 	i.mu.Unlock()
 	i.claudeSessionMu.Unlock()
@@ -510,6 +534,9 @@ func (i *Instance) SetHistoryInfo(conversationUUID, historyFilePath string) {
 	}
 	i.claudeSession.ConversationUUID = conversationUUID
 	i.HistoryFilePath = historyFilePath
+	if conversationUUID != "" {
+		i.EverHadConversationHistory = true
+	}
 	snap := buildSnapshot(i)
 	i.mu.Unlock()
 	i.snapshot.Store(snap)

@@ -153,6 +153,10 @@ type SessionService struct {
 	// (webhook-triggers Phase 5, FR7).
 	callbackConfigSvc *CallbackConfigService
 
+	// streamHubRolloutSvc handles the stream-hub staged-rollout RPCs
+	// (terminal-multi-connection-streaming Story 3.3).
+	streamHubRolloutSvc *StreamHubRolloutService
+
 	// launcherPresetsSvc handles the GetLauncherPresets RPC.
 	launcherPresetsSvc *LauncherPresetsService
 
@@ -694,6 +698,7 @@ func NewSessionServiceWithSearchEngine(storage session.InstanceStore, eventBus *
 		defaultsSvc:                 NewDefaultsService(),
 		slackConfigSvc:              NewSlackConfigService(NewSlackNotifier()),
 		callbackConfigSvc:           NewCallbackConfigService(),
+		streamHubRolloutSvc:         NewStreamHubRolloutService(),
 		launcherPresetsSvc:          NewLauncherPresetsService(),
 		projectSvc:                  NewProjectService(concStorage),
 		checkpointSvc:               NewCheckpointService(storage, eventBus),
@@ -1399,6 +1404,7 @@ func (s *SessionService) wireCallbacks(inst *session.Instance) {
 	s.wireClaudeSessionIDCallback(inst)
 	s.wireAutoArchiveCallback(inst)
 	s.wireSessionExitedPublisher(inst)
+	s.wireColdRestoreOutcomeListener(inst)
 	// Register with the HistoryLinker so its poll/fsnotify correlation loop
 	// detects this session's Claude JSONL file and persists claude_session_id.
 	// Without this, only sessions loaded at server boot (server/dependencies.go)
@@ -4664,6 +4670,21 @@ func (s *SessionService) TestSlackWebhook(ctx context.Context, req *connect.Requ
 	return s.slackConfigSvc.TestSlackWebhook(ctx, req)
 }
 
+// GetStreamHubRolloutStatus returns the current stream-hub rollout status.
+func (s *SessionService) GetStreamHubRolloutStatus(ctx context.Context, req *connect.Request[sessionv1.GetStreamHubRolloutStatusRequest]) (*connect.Response[sessionv1.StreamHubRolloutStatus], error) {
+	return s.streamHubRolloutSvc.GetStreamHubRolloutStatus(ctx, req)
+}
+
+// CompleteStreamHubRollbackRehearsal records the rollback rehearsal as completed.
+func (s *SessionService) CompleteStreamHubRollbackRehearsal(ctx context.Context, req *connect.Request[sessionv1.CompleteStreamHubRollbackRehearsalRequest]) (*connect.Response[sessionv1.StreamHubRolloutStatus], error) {
+	return s.streamHubRolloutSvc.CompleteStreamHubRollbackRehearsal(ctx, req)
+}
+
+// SetStreamHubSessionOverride sets or clears a per-session stream-hub canary override.
+func (s *SessionService) SetStreamHubSessionOverride(ctx context.Context, req *connect.Request[sessionv1.SetStreamHubSessionOverrideRequest]) (*connect.Response[sessionv1.StreamHubRolloutStatus], error) {
+	return s.streamHubRolloutSvc.SetStreamHubSessionOverride(ctx, req)
+}
+
 // SetOnGlobalDefaultsUpdated wires in the callback invoked after every
 // successful UpdateGlobalDefaults save (server/dependencies.go uses this to
 // trigger an immediate backlog-queue dequeue sweep when the concurrency limit
@@ -5190,6 +5211,48 @@ func (l *autoArchiveListener) OnLifecycleEvent(event session.LifecycleEvent, _ s
 	if event == session.EventExited {
 		go l.svc.maybeAutoArchive(l.inst)
 	}
+}
+
+// wireColdRestoreOutcomeListener registers a lifecycle listener that notifies
+// the user when a cold restore was forced fresh despite the session having
+// previously captured conversation history (session-revive-uuid-loss AC3).
+func (s *SessionService) wireColdRestoreOutcomeListener(inst *session.Instance) {
+	if inst == nil {
+		return
+	}
+	inst.RegisterLifecycleListener(&coldRestoreOutcomeListener{svc: s, inst: inst})
+}
+
+// coldRestoreOutcomeListener implements session.LifecycleListener to surface
+// session.ReasonColdRestoreLostHistory as a durable, user-visible notification.
+type coldRestoreOutcomeListener struct {
+	svc  *SessionService
+	inst *session.Instance
+}
+
+func (l *coldRestoreOutcomeListener) OnLifecycleEvent(event session.LifecycleEvent, reason string) {
+	if event == session.EventStarted && reason == session.ReasonColdRestoreLostHistory {
+		l.svc.onColdRestoreLostHistory(l.inst)
+	}
+}
+
+// onColdRestoreLostHistory publishes a durable WARNING notification for inst
+// when a cold restore could not recover its previous conversation history.
+// Hidden instances (e.g. headless review sessions) never surface this.
+func (s *SessionService) onColdRestoreLostHistory(inst *session.Instance) {
+	if inst.Hidden {
+		return
+	}
+	linkedItemID := s.rateLimitLinkedItemID(inst)
+	notifID := fmt.Sprintf("cold-restore-lost-history-%s", inst.UUID)
+	s.eventBus.Publish(events.NewNotificationEvent(
+		inst.UUID, inst.Title, notifID,
+		int32(sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING),
+		int32(sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_MEDIUM),
+		fmt.Sprintf("Session %q started fresh — previous conversation could not be resumed", inst.Title),
+		"The session's tmux pane restarted and the previous conversation history could not be found on disk. Earlier context is not available.",
+		events.SessionScopedMetadata(nil, linkedItemID),
+	))
 }
 
 // wireSessionExitedPublisher registers a lifecycle listener that publishes a

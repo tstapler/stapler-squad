@@ -2,7 +2,7 @@
 // Push delivery is handled separately by push-sw.js.
 // Update this file freely; it will not affect push notification delivery.
 
-const CACHE_VERSION = 'v1';
+const CACHE_VERSION = 'v2';
 const CACHE_NAME = `stapler-squad-cache-${CACHE_VERSION}`;
 
 const STATIC_ASSETS = [

@@ -114,6 +114,12 @@ type InstanceData struct {
 	// History file linkage for cold restore
 	HistoryFilePath string `json:"history_file_path,omitempty"`
 
+	// EverHadConversationHistory and LastReviveOutcome persist the
+	// session-revive-uuid-loss AC3 signal across full process restarts, not
+	// just tmux restarts — see Instance.EverHadConversationHistory.
+	EverHadConversationHistory bool   `json:"ever_had_conversation_history,omitempty"`
+	LastReviveOutcome          string `json:"last_revive_outcome,omitempty"`
+
 	// OneShot runs claude in -p mode; session exits after task completes.
 	OneShot bool `json:"one_shot,omitempty"`
 
