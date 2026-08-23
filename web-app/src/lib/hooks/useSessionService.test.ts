@@ -107,11 +107,13 @@ import bulkSelectionReducer from "@/lib/store/bulkSelectionSlice";
 const mockWatchSessions = jest.fn();
 const mockListSessions = jest.fn();
 const mockStopWatching = jest.fn();
+const mockCreateSession = jest.fn();
 
 jest.mock("@connectrpc/connect", () => ({
   createClient: () => ({
     watchSessions: mockWatchSessions,
     listSessions: mockListSessions,
+    createSession: mockCreateSession,
   }),
   ConnectError: class ConnectError extends Error {
     metadata: Headers;
@@ -314,5 +316,57 @@ describe("useSessionService visibility/online handler", () => {
     // Without the feature flag, no listeners should have been registered
     expect(capturedDocHandler).toBeNull();
     expect(capturedWinHandler).toBeNull();
+  });
+});
+
+// ===== createSession remote passthrough (Epic 4.3 Story 4.3.3) =====
+//
+// Verifies the RPC body construction in useSessionService.ts's createSession threads
+// request.remote straight through onto the wire (Task 4.3.3b), and that omitting it
+// (today's local-only behavior) sends no remote field at all -- unlike autonomousMode,
+// which always defaults to a concrete `false`, remote has no default per ADR-001
+// (remote-as-orthogonal-flag): an omitted remote must stay omitted, not coerced to a
+// zero-value RemoteTarget.
+describe("useSessionService createSession remote passthrough", () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockCreateSession.mockResolvedValue({ session: undefined });
+  });
+
+  it("createSession_should_sendRemoteRemoteNameOnTheWire_When_requestRemoteIsSet", async () => {
+    const store = makeTestStore();
+    const { result } = renderHook(
+      () => useSessionService({ autoWatch: false, enabled: true }),
+      { wrapper: makeWrapper(store) }
+    );
+
+    await act(async () => {
+      await result.current.createSession({
+        title: "prod session",
+        path: "/repo",
+        sessionType: undefined,
+        remote: { $typeName: "session.v1.RemoteTarget", remoteName: "prod-box" },
+      });
+    });
+
+    expect(mockCreateSession).toHaveBeenCalledWith(
+      expect.objectContaining({ remote: { $typeName: "session.v1.RemoteTarget", remoteName: "prod-box" } }),
+      expect.anything()
+    );
+  });
+
+  it("createSession_should_omitRemoteEntirely_When_requestRemoteIsUnset", async () => {
+    const store = makeTestStore();
+    const { result } = renderHook(
+      () => useSessionService({ autoWatch: false, enabled: true }),
+      { wrapper: makeWrapper(store) }
+    );
+
+    await act(async () => {
+      await result.current.createSession({ title: "local session", path: "/repo" });
+    });
+
+    const sentRequest = mockCreateSession.mock.calls[0][0];
+    expect(sentRequest.remote).toBeUndefined();
   });
 });

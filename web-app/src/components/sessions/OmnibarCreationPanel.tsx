@@ -23,6 +23,9 @@ import { RepoPathInput } from "@/components/ui/RepoPathInput";
 import { SlashCommandDropdown } from "@/components/ui/SlashCommandDropdown";
 import { useSlashCommands } from "@/lib/hooks/useSlashCommands";
 import { useSlashCommandSuggestions } from "@/lib/hooks/useSlashCommandSuggestions";
+import type { LauncherPresetEntry } from "@/lib/hooks/useLauncherPresets";
+import { OmnibarPresetList } from "./OmnibarPresetList";
+import * as presetListStyles from "./OmnibarPresetList.css";
 
 // ─── Session Type Radio Group ────────────────────────────────────────────────
 
@@ -71,6 +74,30 @@ type SessionTypeValue = (typeof SESSION_TYPES)[number]["value"];
 const PRIMARY_TYPES = SESSION_TYPES.slice(0, 2).concat([SESSION_TYPES[3]]); // new_worktree, directory, one_off
 const ADVANCED_TYPES = [SESSION_TYPES[2], SESSION_TYPES[4]]; // existing_worktree, new_project
 const ADVANCED_VALUES = new Set<string>(ADVANCED_TYPES.map((t) => t.value));
+
+// Stable identity for callers that omit launcherPresets — a fresh `[]` literal as a default
+// parameter value would get a new identity every render, retriggering the auto-open effect's
+// dependency array unnecessarily.
+const EMPTY_PRESETS: LauncherPresetEntry[] = [];
+
+// Stable identity for callers that omit remotes — see EMPTY_PRESETS above for why.
+const EMPTY_REMOTES: RemoteOption[] = [];
+
+/**
+ * A configured remote target, shown in the "Remote host" selector (ADR-001:
+ * remote-as-orthogonal-flag; see project_plans/ssh-remote-workspaces/decisions/ADR-001-
+ * remote-as-orthogonal-flag.md). Deliberately minimal — only what this selector needs to
+ * display an option and identify it by name.
+ *
+ * TODO(Phase 6): this list will be sourced from a `remotesSlice` in Redux, populated by a
+ * `ListRemotes` RPC over the full `RemoteConfig` (proto/session/v1/remote.proto — host, port,
+ * username, etc.), and a Settings UI to manage it. Neither exists yet; until then, callers
+ * pass this list in as a prop (defaulting to empty, which hides the selector entirely).
+ */
+export interface RemoteOption {
+  /** RemoteConfig.Name — the identifier threaded through as RemoteTarget.remoteName. */
+  name: string;
+}
 
 // Radio options for the "Open as" sub-selector inside New Project mode.
 const NEW_PROJECT_OPEN_AS = [
@@ -145,6 +172,17 @@ export interface OmnibarCreationPanelProps {
   destinationPreviewIsExact?: boolean;
   /** True while the destination path preview request is in flight. */
   isDestinationPreviewLoading?: boolean;
+  /** Called when the user selects a launcher preset from the Presets section. */
+  onPresetSelect?: (preset: LauncherPresetEntry) => void;
+  /** Launcher presets — fetched once by OmnibarContext (shared with PresetDetector), passed
+   * down rather than fetched again here so a refetch (e.g. on Omnibar open) reaches both
+   * consumers from the same state. */
+  launcherPresets?: LauncherPresetEntry[];
+  launcherPresetsLoading?: boolean;
+  launcherPresetsLoadError?: string | null;
+  /** Configured remotes for the "Remote host" selector. Renders only when non-empty — see
+   * RemoteOption's doc comment for why this is a prop rather than a Redux-sourced list. */
+  remotes?: RemoteOption[];
 }
 
 // Helper: file → base64 string (strips data URL prefix).
@@ -179,12 +217,17 @@ export function OmnibarCreationPanel({
   destinationPreviewPath = null,
   destinationPreviewIsExact = false,
   isDestinationPreviewLoading = false,
+  onPresetSelect,
+  launcherPresets: presets = EMPTY_PRESETS,
+  launcherPresetsLoading: presetsLoading = false,
+  launcherPresetsLoadError: presetsLoadError = null,
+  remotes = EMPTY_REMOTES,
 }: OmnibarCreationPanelProps) {
   const {
     sessionName, branch, program, category, autoYes, autoApprove,
     useTitleAsBranch, sessionType, existingWorktree, workingDir,
     parentDir, projectName, newProjectSessionType, createIfMissing, firstPrompt,
-    autonomousMode,
+    autonomousMode, remoteName,
   } = formState;
 
   // If the program changes to an unsupported agent after auto-approve was checked
@@ -268,6 +311,23 @@ export function OmnibarCreationPanel({
   }, [sessionType]);
 
   const availablePrograms = useAvailablePrograms();
+  // Default-expanded once there's something to show — either a loaded preset or a config
+  // error. An error must never sit hidden behind a collapsed section: AC requires a malformed
+  // config to "fail loudly", and a load_error with zero presets (the RPC's own contract) would
+  // otherwise default to collapsed under the empty-state branch below, silently hiding it. A
+  // truly empty, error-free state is the only case that stays collapsed (design/ux.md §5.1.1).
+  // Auto-opens only once: a ref (not an ongoing effect) so a later background refetch can't
+  // re-force the section open after the user has manually collapsed it.
+  const shouldAutoOpenPresets = presets.length > 0 || Boolean(presetsLoadError);
+  const [presetsOpen, setPresetsOpen] = useState(() => shouldAutoOpenPresets);
+  const hasAutoOpenedPresets = useRef(shouldAutoOpenPresets);
+  useEffect(() => {
+    if (!hasAutoOpenedPresets.current && shouldAutoOpenPresets) {
+      hasAutoOpenedPresets.current = true;
+      setPresetsOpen(true);
+    }
+  }, [shouldAutoOpenPresets]);
+  const isProgramRecognized = !program || availablePrograms.some((p) => p.value === program);
 
   // ─── File attachment state ────────────────────────────────────────────────
   const [attachedFiles, setAttachedFiles] = useState<AttachedFile[]>([]);
@@ -486,6 +546,35 @@ export function OmnibarCreationPanel({
             onChange={(v) => setFormField("sessionType", v)}
           />
         </div>
+
+        {/* "Remote host" selector — an orthogonal control (ADR-001: remote-as-orthogonal-flag)
+            that composes with whichever SESSION_TYPES value is selected above, not a 6th
+            radio option. Renders only once ≥1 remote is configured (research/ux.md §2:
+            "defaulting to This machine"); absent entirely otherwise, not merely disabled. */}
+        {remotes.length > 0 && (
+          <div className={field} data-testid="remote-selector-field">
+            <label className={labelClass} htmlFor="omnibar-remote">
+              <span className={styles.remoteIcon} aria-hidden="true">🌐</span> Remote host
+            </label>
+            <select
+              id="omnibar-remote"
+              data-testid="remote-selector"
+              className={selectClass}
+              value={remoteName ?? ""}
+              onChange={(e) => setFormField("remoteName", e.target.value || undefined)}
+            >
+              <option value="">This machine</option>
+              {remotes.map((r) => (
+                <option key={r.name} value={r.name}>{r.name}</option>
+              ))}
+            </select>
+            <span className={hint}>
+              {remoteName
+                ? `Runs on "${remoteName}" over SSH.`
+                : "Runs locally by default — pick a configured remote to run this session over SSH instead."}
+            </span>
+          </div>
+        )}
 
         {/* Autonomous mode — an orthogonal flag, not a session type: it composes with
             whichever type is selected above instead of forcing a scratch directory. */}
@@ -792,6 +881,30 @@ export function OmnibarCreationPanel({
           )}
         </div>
 
+        {/* Presets — hand-edited, shareable launch shortcuts from launcher-presets.json.
+            Placed above Advanced Options so it's visible without an extra click. */}
+        <div className={collapsible}>
+          <div
+            className={collapsibleHeader}
+            onClick={() => setPresetsOpen((v) => !v)}
+            aria-expanded={presetsOpen}
+            data-testid="preset-section-header"
+          >
+            <span className={collapsibleTitle}>Presets</span>
+            <span className={`${collapsibleIcon} ${presetsOpen ? expanded : ""}`}>▼</span>
+          </div>
+          <div className={[styles.advancedSection, presetsOpen ? styles.advancedSectionOpen : ""].filter(Boolean).join(" ")}>
+            <div className={collapsibleContent}>
+              <OmnibarPresetList
+                presets={presets}
+                loading={presetsLoading}
+                loadError={presetsLoadError}
+                onSelect={(preset) => onPresetSelect?.(preset)}
+              />
+            </div>
+          </div>
+        </div>
+
         {/* Advanced Options */}
         <div className={collapsible}>
           <div className={collapsibleHeader} onClick={onToggleAdvanced}>
@@ -815,6 +928,11 @@ export function OmnibarCreationPanel({
                     <option key={p.value} value={p.value}>{p.label}</option>
                   ))}
                 </select>
+                {!isProgramRecognized && (
+                  <span className={presetListStyles.programWarning} data-testid="preset-program-warning">
+                    &quot;{program}&quot; not found in PATH — check it&apos;s installed
+                  </span>
+                )}
               </div>
 
               {/* Category */}
@@ -876,7 +994,7 @@ export function OmnibarCreationPanel({
         </button>
         <button
           type="button"
-          data-testid="omnibar-footer-submit"
+          data-testid="omnibar-create-session-button"
           className={`${buttonClass} ${buttonPrimary}`}
           onClick={onSubmit}
           disabled={!canSubmit || isSubmitting}

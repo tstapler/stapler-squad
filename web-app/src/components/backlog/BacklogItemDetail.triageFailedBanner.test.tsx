@@ -136,6 +136,7 @@ function makeFailedTriageItem(status: BacklogItemStatus): BacklogItem {
     updatedAt: "2026-08-03T02:52:54Z",
     statusEvents: [],
     progressNotes: [],
+    activityNotes: [],
     totalEstimatedCostUsd: 0,
     // getBacklogItem returns the already-mapped BacklogItem shape (mapBacklogItem
     // runs inside the real hook, not on this mock's return value) — triageStatus

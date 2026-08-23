@@ -7,6 +7,12 @@ module.exports = {
       testEnvironment: "jest-environment-jsdom",
       roots: ["<rootDir>/src"],
       testMatch: ["**/__tests__/**/*.ts?(x)", "**/?(*.)+(spec|test).ts?(x)"],
+      // Default 5000ms is too tight for this project's full-suite runs: with
+      // ~350 suites sharing jest-worker processes, scheduler contention alone
+      // has intermittently pushed otherwise-fast async tests (e.g.
+      // BacklogItemDetail.loadGuard, SessionDetailView.note-error) over 5s
+      // with no logic bug — each passes in well under 1s run in isolation.
+      testTimeout: 20000,
       moduleNameMapper: {
         // vanilla-extract .css.ts files — return callable proxy
         "\\.css\\.ts$": "<rootDir>/src/__mocks__/styleMock.js",

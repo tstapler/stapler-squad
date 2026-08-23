@@ -9,7 +9,9 @@ import { ProfilesManager } from "@/components/settings/ProfilesManager";
 import { DirectoryRulesManager } from "@/components/settings/DirectoryRulesManager";
 import { AliasesManager } from "@/components/settings/AliasesManager";
 import { PushNotificationSettings } from "@/components/settings/PushNotificationSettings";
+import { SlackNotificationSettings } from "@/components/settings/SlackNotificationSettings";
 import { ThemePicker } from "@/components/settings/ThemePicker";
+import { InputModeSetting } from "@/components/settings/InputModeSetting";
 import { ConfigPageContent } from "@/app/config/ConfigPageContent";
 import { KeyboardShortcutsTab } from "./KeyboardShortcutsTab";
 import { usePageView } from "@/lib/analytics/usePageView";
@@ -89,6 +91,11 @@ function SettingsPageInner() {
                 Pipeline Modes →
               </Link>
             </section>
+            <section className={styles.section}>
+              <Link href={routes.settingsRemotes} className={styles.helpLink} data-testid="settings-remotes-link">
+                Remotes (SSH hosts) →
+              </Link>
+            </section>
             {/* Help subsection */}
             <section className={styles.section}>
               <div className={styles.helpSection}>
@@ -123,7 +130,13 @@ function SettingsPageInner() {
               <ThemePicker />
             </section>
             <section className={styles.section}>
+              <InputModeSetting />
+            </section>
+            <section className={styles.section}>
               <PushNotificationSettings />
+            </section>
+            <section className={styles.section}>
+              <SlackNotificationSettings />
             </section>
           </div>
         </Tabs.Content>

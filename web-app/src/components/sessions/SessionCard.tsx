@@ -1,4 +1,5 @@
 "use client";
+// +feature: remote-host-badge
 
 import { useState, useRef, memo } from "react";
 import { Session, SessionStatus, SubStatus, ReviewItem, InstanceType, RateLimitState, CheckpointProto, DetectedStatus } from "@/gen/session/v1/types_pb";
@@ -14,6 +15,8 @@ import { DetectionEventsPanel } from "./DetectionEventsPanel";
 import { SessionActionsOverflow } from "./SessionActionsOverflow";
 import { formatPauseReason } from "@/lib/sessions/formatPauseReason";
 import { isAutoApproveSupported } from "@/lib/sessions/autoApprove";
+import { getLastActivityTimestamp, isSessionStale } from "@/lib/session-staleness";
+import { RemoteConnectionIndicator } from "./RemoteConnectionIndicator";
 
 // The launch command always starts with the program string it was last launched
 // with (see Instance.buildLaunchCommand, session/instance_tmux.go). If it no longer
@@ -28,6 +31,36 @@ export function hasPendingProgramChange(session: Pick<Session, "status" | "progr
     !!session.launchCommand &&
     !session.launchCommand.startsWith(session.program)
   );
+}
+
+// A secondary info-row value is redundant with the primary title when it is
+// the exact same text (surrounding whitespace aside) — repeating it below the
+// title adds visual noise with no new information. Deliberately NOT
+// case-insensitive (a user who capitalizes a branch/title differently likely
+// meant it) and NOT substring/basename-aware here — callers that need
+// basename comparison (Path/Working Dir/Cloned To) pre-normalize via
+// `basenameOf` before calling this.
+export function isRedundantWithTitle(value: string | undefined | null, title: string): boolean {
+  if (!value) return false;
+  return value.trim() === title.trim();
+}
+
+// Last "/"-separated segment of a trimmed path string. Mirrors the
+// `p.split("/").pop() || p` idiom already used in SessionsTable.tsx,
+// page.tsx, RecentFilesSection.tsx, and useAvailablePrograms.ts (not
+// `path.basename` — no Node `path` polyfill in this "use client" component).
+export function basenameOf(pathValue: string): string {
+  const trimmed = pathValue.trim();
+  return trimmed.split("/").pop() || trimmed;
+}
+
+// Path-shaped info rows (Path, Working Dir, Cloned To) compare the value's
+// basename against the title, unlike Branch/Goal which compare raw text —
+// wrapping that in its own named function keeps the two comparison shapes
+// structurally distinct instead of relying on callers to remember which rows
+// need basenameOf() and which don't.
+function isPathRedundantWithTitle(pathValue: string, title: string): boolean {
+  return isRedundantWithTitle(basenameOf(pathValue), title);
 }
 
 const AUTO_APPROVE_FLAG_LITERALS = ["--dangerously-skip-permissions", "--yes-always"];
@@ -56,6 +89,7 @@ import {
   inlineTitleInput,
   badges,
   externalBadge,
+  hostBadge,
   muxIndicator,
   reviewInfo,
   reviewContext,
@@ -105,6 +139,7 @@ import {
   autoApproveBadge,
   autoApprovePendingBadge,
   noteBadge,
+  staleBadge,
   creationSpinner,
 } from "./SessionCard.css";
 import { truncateGoal } from "@/lib/utils/string";
@@ -128,7 +163,6 @@ interface SessionCardProps {
   onCreateCheckpoint?: (sessionId: string, label: string) => Promise<boolean>;
   onListCheckpoints?: (sessionId: string) => Promise<CheckpointProto[]>;
   onForkFromCheckpoint?: (sessionId: string, checkpointId: string, newTitle: string) => Promise<Session | null>;
-  onRunOneShot?: (sessionId: string) => Promise<void>;
   onSetRateLimitEnabled?: (sessionId: string, enabled: boolean) => void;
   onToggleAutonomousMode?: (sessionId: string, enabled: boolean) => void;
   onToggleAutoApprove?: (sessionId: string, enabled: boolean) => void;
@@ -143,6 +177,11 @@ interface SessionCardProps {
   detectedStatus?: DetectedStatus; // Terminal-detected status from pattern analysis
   detectedContext?: string; // Context string for the detected status
   suppressApprovalSubStatus?: boolean; // When true, hides Needs Approval chip/badge during optimistic clear
+  // Minutes of inactivity after which an ACTIVE session is flagged "Stale" (see
+  // lib/session-staleness.ts's isSessionStale). Optional/defaulted so existing call
+  // sites and tests that don't thread it through keep compiling; SessionList passes
+  // the resolved value from useStaleSessionConfig().
+  staleThresholdMinutes?: number;
 }
 
 function SessionCardInner({
@@ -160,7 +199,6 @@ function SessionCardInner({
   onCreateCheckpoint,
   onListCheckpoints,
   onForkFromCheckpoint,
-  onRunOneShot,
   onSetRateLimitEnabled,
   onToggleAutonomousMode,
   onToggleAutoApprove,
@@ -175,6 +213,7 @@ function SessionCardInner({
   detectedStatus,
   detectedContext,
   suppressApprovalSubStatus = false,
+  staleThresholdMinutes = 30,
 }: SessionCardProps) {
   const sessionActions = useSessionActions(session.id);
   const [isTagEditorOpen, setIsTagEditorOpen] = useState(false);
@@ -186,6 +225,7 @@ function SessionCardInner({
   const keyboardCommitRef = useRef(false);
   const cardRef = useRef<HTMLDivElement>(null);
   const snapshotToggleRef = useRef<HTMLButtonElement>(null);
+  const tagEditorTriggerRef = useRef<HTMLElement | null>(null);
   const [isSnapshotOpen, setIsSnapshotOpen] = useState(false);
 
   // Only fetch snapshot for active sessions (creating/paused/loading sessions have stale output).
@@ -365,6 +405,7 @@ function SessionCardInner({
 
   const handleEditTags = (e: React.MouseEvent) => {
     e.stopPropagation();
+    tagEditorTriggerRef.current = e.currentTarget as HTMLElement;
     setIsTagEditorOpen(true);
   };
 
@@ -428,6 +469,7 @@ function SessionCardInner({
           tags={session.tags || []}
           onSave={(newTags) => { onUpdateTags(session.id, newTags); setIsTagEditorOpen(false); }}
           onCancel={() => setIsTagEditorOpen(false)}
+          triggerRef={tagEditorTriggerRef}
           sessionTitle={session.title}
         />
       )}
@@ -508,6 +550,18 @@ function SessionCardInner({
                 {muxEnabled && <span className={muxIndicator} aria-hidden="true">✓</span>}
               </span>
             )}
+            {session.remoteName && (
+              <span
+                className={hostBadge}
+                role="img"
+                title={`Running on ${session.remoteName}`}
+                aria-label={`Running on ${session.remoteName}`}
+                data-testid="host-badge"
+              >
+                <span aria-hidden="true">🖥️</span> {session.remoteName}
+              </span>
+            )}
+            {session.remoteName && <RemoteConnectionIndicator remoteName={session.remoteName} />}
             <GitHubBadge
               prNumber={session.githubPrNumber}
               prUrl={session.githubPrUrl}
@@ -587,6 +641,15 @@ function SessionCardInner({
               !(suppressApprovalSubStatus && (session.subStatus === SubStatus.NEEDS_APPROVAL || session.subStatus === SubStatus.INPUT_REQUIRED)) && (
                 <SubStatusChip subStatus={session.subStatus} />
               )}
+            {isSessionStale(session, staleThresholdMinutes) && (
+              <span
+                role="img"
+                aria-label={`Stale — no output for over ${staleThresholdMinutes} minutes`}
+                className={`${staleBadge}`}
+              >
+                🟠 Stale
+              </span>
+            )}
             {(() => {
               const mb = Number(session.memoryRssMb ?? 0n);
               if (mb <= 0) return null;
@@ -773,11 +836,7 @@ function SessionCardInner({
         )}
         {/* Last Activity — Tier 1 always-visible in header */}
         {(() => {
-          const moSecs = session.lastMeaningfulOutput?.seconds ?? BigInt(0);
-          const tuSecs = session.lastTerminalUpdate?.seconds ?? BigInt(0);
-          const lastActivity = moSecs === BigInt(0) && tuSecs === BigInt(0)
-            ? undefined
-            : moSecs >= tuSecs ? session.lastMeaningfulOutput : session.lastTerminalUpdate;
+          const lastActivity = getLastActivityTimestamp(session);
           return lastActivity ? (
             <div className={lastActivityRow}>
               <span className={lastActivityLabel}>Active</span>
@@ -799,19 +858,21 @@ function SessionCardInner({
             <span className={label}>Program:</span>
             <span className={value}>{session.program}</span>
           </div>
-          {session.branch && (
+          {session.branch && !isRedundantWithTitle(session.branch, session.title) && (
             <div className={infoRow}>
               <span className={label}>Branch:</span>
               <span className={value}>{session.branch}</span>
             </div>
           )}
-          <div className={infoRow}>
-            <span className={label}>Path:</span>
-            <span className={value} title={session.path}>
-              {session.path}
-            </span>
-          </div>
-          {session.workingDir && (
+          {session.path && !isPathRedundantWithTitle(session.path, session.title) && (
+            <div className={infoRow}>
+              <span className={label}>Path:</span>
+              <span className={value} title={session.path}>
+                {session.path}
+              </span>
+            </div>
+          )}
+          {session.workingDir && !isPathRedundantWithTitle(session.workingDir, session.title) && (
             <div className={infoRow}>
               <span className={label}>Working Dir:</span>
               <span className={value}>{session.workingDir}</span>
@@ -851,7 +912,7 @@ function SessionCardInner({
               </span>
             </div>
           )}
-          {session.clonedRepoPath && (
+          {session.clonedRepoPath && !isPathRedundantWithTitle(session.clonedRepoPath, session.title) && (
             <div className={infoRow}>
               <span className={label}>Cloned To:</span>
               <span className={value} title={session.clonedRepoPath}>
@@ -859,7 +920,7 @@ function SessionCardInner({
               </span>
             </div>
           )}
-          {session.goal?.goalText && (
+          {session.goal?.goalText && !isRedundantWithTitle(session.goal.goalText, session.title) && (
             <div className={infoRow}>
               <span className={label}>Goal</span>
               <span className={value}>
@@ -970,7 +1031,6 @@ function SessionCardInner({
           onOpenInNewPane={onOpenInNewPane}
           onNewWorkspace={onNewWorkspace}
           onCreateCheckpoint={onCreateCheckpoint}
-          onRunOneShot={onRunOneShot}
           onSetRateLimitEnabled={onSetRateLimitEnabled}
           onToggleAutonomousMode={onToggleAutonomousMode}
           onToggleAutoApprove={onToggleAutoApprove}

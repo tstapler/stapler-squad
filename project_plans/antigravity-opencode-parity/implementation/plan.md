@@ -510,13 +510,17 @@ For each (T1–T6):
 
 ---
 
-## E7: Document opencode proxy approach
+## E7: Replace opencode proxy wrapper with a native plugin hook
+
+**SUPERSEDED 2026-08-11 — this epic's original scope (document why the proxy is correct) no longer applies.** The E7.S1 comment below was never actually written (`installOpenCode()` at HEAD still only carries its original one-line comment; no `main_test.go` coverage exists for it either) — that gap is part of why this needed re-examination. `research/features.md`'s R4 addendum found that `@opencode-ai/plugin`'s `Hooks.tool.execute.before` is a real, throw-to-block, pre-execute hook that the original R4 research missed by only reading `@opencode-ai/sdk`'s static config types. E7 is now: replace the proxy with a native plugin hook, implemented via `patchOpenCodeHooks()` in `cmd/ssq-hooks/main.go`, mirroring the existing `patchBeforeToolHook()`/`patchAntigravityHooks()` installer pattern (config/plugin-file writer → fourth `check` adapter → decision writer). See the `docs/adr/` entry for the `Escalate`→binary-channel mapping decision this hook forces, and the backlog item "Implement patchOpenCodeHooks(): replace open-code proxy wrapper with native plugin hook" for the full implementation task breakdown; this plan file is retained for historical context on the original (superseded) E7.S1 comment-only scope below.
+
+**Original (superseded) scope:**
 
 **Context (requirement R4):** Research confirmed opencode v1.4.0 has no PreToolUse hook system — only `file_edited` and `session_completed` hooks, which are not permission gates. The proxy wrapper in `installOpenCode()` is the correct approach. This decision must be documented so future contributors know when to revisit it.
 
 **Affected file:** `cmd/ssq-hooks/main.go`
 
-### E7.S1: Add explanatory comment to installOpenCode()
+### E7.S1: Add explanatory comment to installOpenCode() — SUPERSEDED, not implemented as written
 
 **E7.S1.T1: Add architectural rationale comment above installOpenCode()**
 
@@ -542,6 +546,37 @@ For each (T1–T6):
   func installOpenCode() {
   ```
 - AC: Comment is present; code is unchanged. `go build ./cmd/ssq-hooks/` passes.
+- **Status (2026-08-11 re-verification, see `research/features.md` R4 addendum): this task was
+  never actually done** — no comment exists above `installOpenCode()` in the current codebase
+  (`implementation/validation.md`'s ST-03 corrected accordingly). More importantly, its premise is
+  now known incomplete: this section's "no PreToolUse hook system" claim covers only the static
+  `hook`/`permission` config schema, not OpenCode's separate JS/TS plugin API
+  (`@opencode-ai/plugin`'s `tool.execute.before`), which **is** a real PreToolUse-equivalent
+  (`throw`-to-block, confirmed against the locally installed plugin package and
+  [opencode.ai/docs/plugins/](https://opencode.ai/docs/plugins/)). This section's own "Revisit"
+  line has now triggered — do not write the comment as originally specified (it would assert a
+  false "no PreToolUse hook" premise). **Not implemented — the proxy this comment would have
+  documented is itself being replaced** by the follow-on backlog item "Implement
+  patchOpenCodeHooks(): replace open-code proxy wrapper with native plugin hook."
+
+**Open questions raised here — all resolved by that follow-on item, not re-researched:**
+1. **`AutoEscalate` → OpenCode UI mapping** — resolved: `tool.execute.before` has no tri-state
+   channel (`permission.ask` is confirmed broken, see point 4), so `Escalate` maps to fail-closed
+   deny. Decision and full rationale recorded in `docs/adr/ADR-027-opencode-escalate-fail-closed.md`.
+2. **Subagent (`task`-tool) coverage under `tool.execute.before`** — resolved, live-tested:
+   confirmed fires for both the delegating `task` call and the subagent's own tool calls (under a
+   distinct `sessionID`), refuting issue #5894's original bypass report as a test-methodology
+   artifact, per the repo collaborator's rebuttal. The `batch`-tool blind spot cited in #5894's
+   follow-up was not reproducible against this opencode version's default agent (no distinct batch
+   tool exposed) — recorded as an inconclusive, documented gap, not a solved problem. See
+   `project_plans/opencode-native-hooks/live-verification-notes.md` §4-5 for the full test detail.
+3. **`opencode run` startup failure in this environment** — resolved: fixed 33 broken
+   `~/.config/opencode/agents/*.md` frontmatter files (invalid `tools:` shape, null `description`)
+   blocking `opencode run` entirely; live interception tests then ran successfully against a real
+   session (`live-verification-notes.md`).
+4. **`permission.ask` should not be used as the gating mechanism** — confirmed and used as the
+   basis for point 1 above; see `research/features.md`'s R4 addendum for #7006/#19927.
+   `tool.execute.before` is used instead.
 
 ---
 
@@ -574,7 +609,7 @@ Recommended implementation order for a single developer:
 | R1 | `agy --print "prompt"` is invoked correctly from CLIAIClient | E1, E2 |
 | R2 | `ssq-hooks install agy` patches exactly ONE hooks file | E3 |
 | R3 | `AgyDetector` has Idle and Active patterns; Error/Success have TODO comments | E4 |
-| R4 | `installOpenCode()` comment explains why proxy is correct for v1.4.0 | E7 |
+| R4 | SUPERSEDED: `patchOpenCodeHooks()` installs a native plugin hook (`tool.execute.before`), replacing the proxy wrapper — see R4 addendum in `research/features.md` and E7 above | E7 (revised) |
 | R5 | `OpencodeDetector` has braille spinner Active pattern; Ready/Idle/Success have TODO | E5 |
 | R6 | opencode spec uses `PromptAsArg: true` | E1.S1.T3 |
 | R7 | All new patterns have positive+negative regex tests; installAgy has 3 new path tests | E3, E6 |

@@ -101,7 +101,7 @@ func (sl *SyncLoop) Stop() {
 func (sl *SyncLoop) runAllSources(ctx context.Context) {
 	sources, err := sl.storage.ListItemSources(ctx)
 	if err != nil {
-		log.ErrorLog.Printf("[SyncLoop] ListItemSources error: %v", err)
+		log.ErrorLog().Printf("[SyncLoop] ListItemSources error: %v", err)
 		return
 	}
 
@@ -111,17 +111,13 @@ func (sl *SyncLoop) runAllSources(ctx context.Context) {
 			continue
 		}
 		// We need the raw ent.ItemSource for ent field access; call through the ent repo.
-		er, ok := sl.storage.repo.(*EntRepository)
-		if !ok {
-			continue
-		}
-		entSrc, entErr := er.GetItemSourceByID(ctx, src.ID)
+		entSrc, entErr := sl.storage.repo.GetItemSourceByID(ctx, src.ID)
 		if entErr != nil {
-			log.ErrorLog.Printf("[SyncLoop] GetItemSourceByID(%s) error: %v", src.ID, entErr)
+			log.ErrorLog().Printf("[SyncLoop] GetItemSourceByID(%s) error: %v", src.ID, entErr)
 			continue
 		}
 		if syncErr := sl.SyncOne(ctx, entSrc); syncErr != nil {
-			log.ErrorLog.Printf("[SyncLoop] SyncOne(%s plugin=%s) error: %v", src.ID, src.PluginID, syncErr)
+			log.ErrorLog().Printf("[SyncLoop] SyncOne(%s plugin=%s) error: %v", src.ID, src.PluginID, syncErr)
 		}
 	}
 }
@@ -183,11 +179,7 @@ func (sl *SyncLoop) DecryptConfigToken(raw string) (string, error) {
 // enabled sources, this is for an explicit manual/on-demand trigger where the
 // caller already decided to sync this specific source.
 func (sl *SyncLoop) SyncByID(ctx context.Context, sourceID string) error {
-	er, ok := sl.storage.repo.(*EntRepository)
-	if !ok {
-		return fmt.Errorf("SyncByID: storage backend does not support ent operations")
-	}
-	entSrc, err := er.GetItemSourceByID(ctx, sourceID)
+	entSrc, err := sl.storage.repo.GetItemSourceByID(ctx, sourceID)
 	if err != nil {
 		return fmt.Errorf("SyncByID: %w", err)
 	}
@@ -201,11 +193,7 @@ const maxBackwardSyncPreviewSamples = 5
 // PreviewBackwardSyncImpactByID looks up an ItemSource by ID and previews the
 // impact of enabling backward sync for it — see PreviewBackwardSyncImpact.
 func (sl *SyncLoop) PreviewBackwardSyncImpactByID(ctx context.Context, sourceID string) (itemCount int, sampleTitles []string, possiblyIncomplete bool, err error) {
-	er, ok := sl.storage.repo.(*EntRepository)
-	if !ok {
-		return 0, nil, false, fmt.Errorf("PreviewBackwardSyncImpactByID: storage backend does not support ent operations")
-	}
-	entSrc, err := er.GetItemSourceByID(ctx, sourceID)
+	entSrc, err := sl.storage.repo.GetItemSourceByID(ctx, sourceID)
 	if err != nil {
 		return 0, nil, false, fmt.Errorf("PreviewBackwardSyncImpactByID: %w", err)
 	}
@@ -238,10 +226,7 @@ func (sl *SyncLoop) PreviewBackwardSyncImpactByID(ctx context.Context, sourceID 
 // possiblyIncomplete is true when the underlying fetch hit its page cap,
 // meaning the count/titles returned are a lower bound, not exhaustive.
 func (sl *SyncLoop) PreviewBackwardSyncImpact(ctx context.Context, source *ent.ItemSource) (itemCount int, sampleTitles []string, possiblyIncomplete bool, err error) {
-	er, ok := sl.storage.repo.(*EntRepository)
-	if !ok {
-		return 0, nil, false, fmt.Errorf("PreviewBackwardSyncImpact: storage backend does not support ent operations")
-	}
+	er := sl.storage.repo
 
 	plugin, ok := sl.registry.Get(source.PluginID)
 	if !ok {
@@ -310,10 +295,7 @@ func (sl *SyncLoop) SyncOne(ctx context.Context, source *ent.ItemSource) error {
 
 	start := time.Now()
 
-	er, ok := sl.storage.repo.(*EntRepository)
-	if !ok {
-		return fmt.Errorf("SyncOne: storage backend does not support ent operations")
-	}
+	er := sl.storage.repo
 
 	plugin, ok := sl.registry.Get(source.PluginID)
 	if !ok {
@@ -335,7 +317,7 @@ func (sl *SyncLoop) SyncOne(ctx context.Context, source *ent.ItemSource) error {
 		// vanishing silently — GetSyncHistory would otherwise show nothing for
 		// a sync run that failed outright.
 		if evErr := er.CreateSourceSyncEvent(ctx, source.ID.String(), cursor, 0, 0, 0, 1, fetchErr.Error(), start, time.Now()); evErr != nil {
-			log.ErrorLog.Printf("[SyncLoop] CreateSourceSyncEvent(%s) error: %v", source.ID, evErr)
+			log.ErrorLog().Printf("[SyncLoop] CreateSourceSyncEvent(%s) error: %v", source.ID, evErr)
 		}
 		return fmt.Errorf("fetch: %w", fetchErr)
 	}
@@ -351,7 +333,7 @@ func (sl *SyncLoop) SyncOne(ctx context.Context, source *ent.ItemSource) error {
 		// must never match across sources.
 		existing, lookupErr := er.GetBacklogItemByExternalID(ctx, source.ID.String(), extItem.ExternalID)
 		if lookupErr != nil && !errors.Is(lookupErr, ErrNotFound) {
-			log.ErrorLog.Printf("[SyncLoop] GetBacklogItemByExternalID(%s) error: %v", extItem.ExternalID, lookupErr)
+			log.ErrorLog().Printf("[SyncLoop] GetBacklogItemByExternalID(%s) error: %v", extItem.ExternalID, lookupErr)
 			errored++
 			continue
 		}
@@ -359,7 +341,7 @@ func (sl *SyncLoop) SyncOne(ctx context.Context, source *ent.ItemSource) error {
 		if errors.Is(lookupErr, ErrNotFound) || existing == nil {
 			// New item — create it.
 			if _, createErr := sl.storage.CreateBacklogItem(ctx, data); createErr != nil {
-				log.ErrorLog.Printf("[SyncLoop] CreateBacklogItem external_id=%s error: %v", extItem.ExternalID, createErr)
+				log.ErrorLog().Printf("[SyncLoop] CreateBacklogItem external_id=%s error: %v", extItem.ExternalID, createErr)
 				errored++
 				continue
 			}
@@ -440,7 +422,7 @@ func (sl *SyncLoop) SyncOne(ctx context.Context, source *ent.ItemSource) error {
 			// reprocessing. Skip the loop-prevention/watermark logic entirely
 			// this tick rather than risk either.
 			if extItem.IssueUpdatedAt.IsZero() {
-				log.WarningLog.Printf("[SyncLoop] backward-sync skip item=%s: GitHub issue_updated_at is missing/unparseable (zero time) — skipping loop-prevention/watermark logic this tick", existing.ID)
+				log.WarningLog().Printf("[SyncLoop] backward-sync skip item=%s: GitHub issue_updated_at is missing/unparseable (zero time) — skipping loop-prevention/watermark logic this tick", existing.ID)
 			} else {
 				alreadyReconciled := existing.GithubSyncedIssueUpdatedAt != nil && !extItem.IssueUpdatedAt.After(*existing.GithubSyncedIssueUpdatedAt)
 				if !alreadyReconciled {
@@ -456,18 +438,18 @@ func (sl *SyncLoop) SyncOne(ctx context.Context, source *ent.ItemSource) error {
 						}
 						if GuardedTransitionAllowed(sl.workflowEngine, guardInput, target) {
 							if _, transErr := sl.storage.TransitionBacklogItemStatus(ctx, existing.ID.String(), target, nil, TriggeredByGitHubSync); transErr != nil { //nolint:silenttransition retried next sync tick — advanceWatermark stays false so alreadyReconciled won't suppress reprocessing; errored++ also surfaces via CreateSourceSyncEvent's aggregate count
-								log.WarningLog.Printf("[SyncLoop] backward-sync transition failed item=%s: %v", existing.ID, transErr)
+								log.WarningLog().Printf("[SyncLoop] backward-sync transition failed item=%s: %v", existing.ID, transErr)
 								errored++
 								advanceWatermark = false
 							} else {
 								updated++
 							}
 						} else {
-							log.InfoLog.Printf("[SyncLoop] backward-sync skip item=%s status=%s (no valid target for closed issue)", existing.ID, existing.Status)
+							log.InfoLog().Printf("[SyncLoop] backward-sync skip item=%s status=%s (no valid target for closed issue)", existing.ID, existing.Status)
 							skipped++
 						}
 					} else {
-						log.InfoLog.Printf("[SyncLoop] backward-sync skip item=%s status=%s (mid-flight or terminal, no auto-archive)", existing.ID, existing.Status)
+						log.InfoLog().Printf("[SyncLoop] backward-sync skip item=%s status=%s (mid-flight or terminal, no auto-archive)", existing.ID, existing.Status)
 						skipped++
 						// Nothing changed locally — don't advance the watermark, or a
 						// later manual revert to a pre-work status (with no further
@@ -480,7 +462,7 @@ func (sl *SyncLoop) SyncOne(ctx context.Context, source *ent.ItemSource) error {
 					if advanceWatermark {
 						watermark := extItem.IssueUpdatedAt
 						if _, wmErr := sl.storage.UpdateBacklogItem(ctx, existing.ID.String(), BacklogItemUpdate{GitHubSyncedIssueUpdatedAt: &watermark}, nil); wmErr != nil {
-							log.WarningLog.Printf("[SyncLoop] backward-sync watermark update failed item=%s: %v", existing.ID, wmErr)
+							log.WarningLog().Printf("[SyncLoop] backward-sync watermark update failed item=%s: %v", existing.ID, wmErr)
 						}
 					}
 				}
@@ -491,14 +473,14 @@ func (sl *SyncLoop) SyncOne(ctx context.Context, source *ent.ItemSource) error {
 			// See the zero-time guard comment in the closed-issue block above —
 			// same rationale applies here.
 			if extItem.IssueUpdatedAt.IsZero() {
-				log.WarningLog.Printf("[SyncLoop] backward-sync skip item=%s: GitHub issue_updated_at is missing/unparseable (zero time) — skipping loop-prevention/watermark logic this tick", existing.ID)
+				log.WarningLog().Printf("[SyncLoop] backward-sync skip item=%s: GitHub issue_updated_at is missing/unparseable (zero time) — skipping loop-prevention/watermark logic this tick", existing.ID)
 			} else {
 				alreadyLogged := existing.GithubSyncedIssueUpdatedAt != nil && !extItem.IssueUpdatedAt.After(*existing.GithubSyncedIssueUpdatedAt)
 				if !alreadyLogged {
-					log.InfoLog.Printf("[SyncLoop] GitHub issue reopened; backlog item=%s is %s — reopen manually to re-triage (no automatic action taken)", existing.ID, existing.Status)
+					log.InfoLog().Printf("[SyncLoop] GitHub issue reopened; backlog item=%s is %s — reopen manually to re-triage (no automatic action taken)", existing.ID, existing.Status)
 					watermark := extItem.IssueUpdatedAt
 					if _, wmErr := sl.storage.UpdateBacklogItem(ctx, existing.ID.String(), BacklogItemUpdate{GitHubSyncedIssueUpdatedAt: &watermark}, nil); wmErr != nil {
-						log.WarningLog.Printf("[SyncLoop] backward-sync watermark update failed item=%s: %v", existing.ID, wmErr)
+						log.WarningLog().Printf("[SyncLoop] backward-sync watermark update failed item=%s: %v", existing.ID, wmErr)
 					} else {
 						// This is a real (if content-free) change to the item's
 						// sync state — count it as updated rather than letting it
@@ -523,7 +505,7 @@ func (sl *SyncLoop) SyncOne(ctx context.Context, source *ent.ItemSource) error {
 		}
 
 		if _, updateErr := sl.storage.UpdateBacklogItem(ctx, existing.ID.String(), update, nil); updateErr != nil {
-			log.ErrorLog.Printf("[SyncLoop] UpdateBacklogItem %s error: %v", existing.ID, updateErr)
+			log.ErrorLog().Printf("[SyncLoop] UpdateBacklogItem %s error: %v", existing.ID, updateErr)
 			errored++
 			continue
 		}
@@ -534,10 +516,10 @@ func (sl *SyncLoop) SyncOne(ctx context.Context, source *ent.ItemSource) error {
 	// FinishSourceSync's doc comment for why these must not be separate writes.
 	now := time.Now()
 	if finishErr := er.FinishSourceSync(ctx, source.ID.String(), newCursor, created, updated, skipped, errored, start, now); finishErr != nil {
-		log.ErrorLog.Printf("[SyncLoop] FinishSourceSync(%s) error: %v", source.ID, finishErr)
+		log.ErrorLog().Printf("[SyncLoop] FinishSourceSync(%s) error: %v", source.ID, finishErr)
 	}
 
-	log.InfoLog.Printf("[SyncLoop] source=%s plugin=%s created=%d updated=%d skipped=%d errored=%d",
+	log.InfoLog().Printf("[SyncLoop] source=%s plugin=%s created=%d updated=%d skipped=%d errored=%d",
 		source.ID, source.PluginID, created, updated, skipped, errored)
 	return nil
 }

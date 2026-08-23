@@ -7,12 +7,15 @@ import { createPortal } from "react-dom";
 import { create } from "@bufbuild/protobuf";
 import { useReviewQueueContext } from "@/lib/contexts/ReviewQueueContext";
 import { useApprovalsContext } from "@/lib/contexts/ApprovalsContext";
+import { useSessionServiceContext } from "@/lib/contexts/SessionServiceContext";
 import { useReviewQueueNavigation } from "@/lib/hooks/useReviewQueueNavigation";
 import { useGenerateRule } from "@/lib/hooks/useGenerateRule";
 import { useFilterState } from "@/lib/hooks/useFilterState";
 import { GroupingStrategy, GroupingStrategyLabels, groupSessions } from "@/lib/grouping/strategies";
+import { parseGitHubRef } from "@/lib/github/urlParser";
 import { ReviewQueueBadge } from "./ReviewQueueBadge";
 import { SuggestedRuleCard } from "./SuggestedRuleCard";
+import { CreatePullRequestModal } from "./CreatePullRequestModal";
 import { Priority, AttentionReason, ReviewItem, WorkingState, SuggestionSource, Session, SessionSchema } from "@/gen/session/v1/types_pb";
 import { deriveWorkingState } from "@/lib/utils/deriveWorkingState";
 import type { EscalationCategory } from "@/lib/sessions/escalationCategory";
@@ -74,7 +77,6 @@ import {
   autoAdvanceToggle,
   savedIndicator,
   modalOverlay,
-  modalContent,
   ruleModalContent,
   divergedBadge,
   searchInput,
@@ -92,7 +94,6 @@ interface ReviewQueuePanelProps {
   refreshInterval?: number;
   onItemsChange?: (items: ReviewItem[]) => void; // Callback to expose queue items for navigation
   onAcknowledged?: (sessionId: string) => void; // Notifies parent when a session is acknowledged (for auto-advance)
-  onRunOneShot?: (sessionId: string, prompt: string) => Promise<{ prUrl?: string; error?: string } | null>; // S3-3
   autoAdvance?: boolean;
   onAutoAdvanceChange?: (value: boolean) => void;
 }
@@ -114,12 +115,6 @@ interface ReviewQueuePanelProps {
  * />
  * ```
  */
-// Mirrors autoCreatePRPrompt (server/review_queue_manager.go) and shipPRPrompt
-// (server/services/backlog_service_ship.go) — kept in sync manually; see
-// autoCreatePRPrompt's doc comment for why the format is spelled out
-// explicitly rather than left to the agent's judgment.
-const DEFAULT_PR_PROMPT =
-  "Create a pull request for the changes in this session. Title: use Conventional Commits format (fix:, feat:, etc.). Body: structure as ## Summary (1-3 sentences on why this change was made, tied to the backlog item's problem statement in .backlog-context.md if present), ## What Changed (a short bullet list, not a line-by-line diff restatement), and ## Test plan (a checklist of concrete verification steps such as specific commands or manual checks — not an unqualified claim that tests pass). Keep it concise, no scratch notes.";
 
 type SortField = "default" | "severity" | "priority" | "age" | "diffSize" | "name";
 
@@ -277,14 +272,15 @@ export function ReviewQueuePanel({
   refreshInterval = 5000,
   onItemsChange,
   onAcknowledged,
-  onRunOneShot,
   autoAdvance,
   onAutoAdvanceChange,
 }: ReviewQueuePanelProps) {
-  // S3-3: PR creation modal state
-  const [prModal, setPrModal] = useState<{ sessionId: string; prompt: string } | null>(null);
-  const [prRunning, setPrRunning] = useState(false);
-  const [prResult, setPrResult] = useState<{ prUrl?: string; error?: string } | null>(null);
+  // Epic 2.4: Create PR modal state — holds the sessionId whose modal is open (null = closed),
+  // mirroring SessionActionsOverflow.tsx's isCreatePrOpen/createPrTriggerRef pattern (Epic 2.3)
+  // so both entry points open the identical shared CreatePullRequestModal (ux.md Surface 1 & 2).
+  const [isCreatePrOpen, setIsCreatePrOpen] = useState<string | null>(null);
+  const createPrTriggerRef = useRef<HTMLElement | null>(null);
+  const { draftPullRequest, createPullRequest } = useSessionServiceContext();
 
   // Epic 4: Create Rule modal state
   // activeRuleItemId tracks which item's "Create Rule" modal is currently open.
@@ -530,6 +526,11 @@ export function ReviewQueuePanel({
     }
     return map;
   }, [allItems]);
+
+  // Resolves the ReviewItem behind isCreatePrOpen into the full-enough Session object
+  // CreatePullRequestModal requires — reuses the same reviewItemToSession bridge the
+  // grouping strategies already rely on above, rather than building a second lookup.
+  const activePrSession = isCreatePrOpen ? sessionByItemId.get(isCreatePrOpen) : undefined;
 
   // Reuses groupSessions() (the same grouping engine SessionList uses) by bridging each
   // ReviewItem to a minimal Session — avoids building a parallel grouping implementation.
@@ -993,32 +994,50 @@ export function ReviewQueuePanel({
             ⏭ Skip
           </Button>
         )}
-        {/* S3-3: Create PR button — only for TASK_COMPLETE items without an existing PR URL */}
-        {queueItem.reason === AttentionReason.TASK_COMPLETE &&
-          !queueItem.githubPrUrl &&
-          onRunOneShot && (
+        {/* Epic 2.4: Create PR trigger — same 3-state machine as SessionActionsOverflow.tsx's
+            (ux.md Surface 1 & 2): State A (enabled, opens CreatePullRequestModal), State B
+            (disabled, no commits ahead), State C (existing PR — link, never reopens the modal). */}
+        {queueItem.reason === AttentionReason.TASK_COMPLETE && (() => {
+          const hasCommitsAhead = queueItem.hasCommitsAhead;
+          const prNumber = queueItem.githubPrUrl ? parseGitHubRef(queueItem.githubPrUrl)?.prNumber : undefined;
+          return (
             <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
               {queueItem.branchDivergedFromBase && (
                 <span className={divergedBadge}>
                   ⚠ Diverged from main
                 </span>
               )}
-              <Button
-                intent="primary"
-                size="md"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setPrResult(null);
-                  setPrModal({ sessionId: queueItem.sessionId, prompt: DEFAULT_PR_PROMPT });
-                }}
-                title="Create a pull request for this session"
-                aria-label="Create PR"
-                data-testid={`create-pr-${queueItem.sessionId}`}
-              >
-                🔀 Create PR
-              </Button>
+              {queueItem.githubPrUrl ? (
+                <a
+                  href={queueItem.githubPrUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  onClick={(e) => e.stopPropagation()}
+                  aria-label={prNumber ? `PR #${prNumber}: ${queueItem.sessionName}` : `View PR: ${queueItem.sessionName}`}
+                  data-testid="github-pr-link"
+                >
+                  {prNumber ? `✅ View PR #${prNumber}` : "✅ View PR"}
+                </a>
+              ) : (
+                <Button
+                  intent="primary"
+                  size="md"
+                  disabled={!hasCommitsAhead}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    createPrTriggerRef.current = e.currentTarget;
+                    setIsCreatePrOpen(queueItem.sessionId);
+                  }}
+                  title={hasCommitsAhead ? "Create a pull request for this session" : "No commits ahead of main yet"}
+                  aria-label="Create PR"
+                  data-testid={`create-pr-trigger-${queueItem.sessionId}`}
+                >
+                  🔀 Create PR
+                </Button>
+              )}
             </div>
-          )}
+          );
+        })()}
       </div>
     </div>
   );
@@ -1036,6 +1055,10 @@ export function ReviewQueuePanel({
 
   return (
     <div className={panel} data-testid="review-queue">
+      {/* Signals the initial fetch has resolved, independent of whether the
+          queue ended up empty — tests and other consumers use this to know
+          when it's safe to make assertions about queue contents. */}
+      {!loading && <div data-testid="review-queue-loaded" aria-hidden="true" />}
       {/* Screen reader live region for queue count changes */}
       <div aria-live="polite" aria-atomic="true" className={visuallyHidden}>
         {liveAnnouncement}
@@ -1378,7 +1401,6 @@ export function ReviewQueuePanel({
           )
         ) : (
           <>
-            {!loading && <div data-testid="review-queue-loaded" aria-hidden="true" />}
             {groupedItems ? (
               groupedItems.map((group) => (
                 <div key={group.groupKey} className={groupSection} data-testid={`review-group-${group.groupKey}`}>
@@ -1397,103 +1419,17 @@ export function ReviewQueuePanel({
         )}
       </div>
 
-      {/* S3-3: Create PR confirmation modal */}
-      {prModal && createPortal(
-        <div
-          className={modalOverlay}
-          onClick={() => {
-            if (!prRunning) {
-              setPrModal(null);
-              setPrResult(null);
-            }
-          }}
-        >
-          <div
-            className={modalContent}
-            onClick={(e) => e.stopPropagation()}
-            role="dialog"
-            aria-modal="true"
-            aria-label="Create Pull Request"
-          >
-            <h3 style={{ margin: 0, fontSize: "1.125rem", fontWeight: 600, color: "var(--text-primary)" }}>
-              Create Pull Request
-            </h3>
-            <p style={{ margin: 0, fontSize: "0.875rem", color: "var(--text-secondary)" }}>
-              Review and edit the prompt that will be used to create the PR. This may take up to 30 seconds.
-            </p>
-            <textarea
-              value={prModal.prompt}
-              onChange={(e) => setPrModal((m) => m ? { ...m, prompt: e.target.value } : null)}
-              disabled={prRunning}
-              rows={5}
-              style={{
-                padding: "0.625rem 0.875rem",
-                border: "1px solid var(--modal-border)",
-                borderRadius: "6px",
-                fontSize: "0.875rem",
-                resize: "vertical",
-                background: "var(--input-background)",
-                color: "var(--text-primary)",
-                fontFamily: "inherit",
-              }}
-            />
-            {prRunning && (
-              <p style={{ margin: 0, fontSize: "0.875rem", color: "var(--text-secondary)", fontStyle: "italic" }}>
-                ⏳ Creating PR, this may take up to 30 seconds…
-              </p>
-            )}
-            {prResult?.prUrl && (
-              <p style={{ margin: 0, fontSize: "0.875rem", color: "var(--success)" }}>
-                ✓ PR created:{" "}
-                <a href={prResult.prUrl} target="_blank" rel="noopener noreferrer" style={{ color: "var(--primary)" }}>
-                  {prResult.prUrl}
-                </a>
-              </p>
-            )}
-            {prResult?.error && (
-              <p style={{ margin: 0, fontSize: "0.875rem", color: "var(--error)" }}>
-                ✗ {prResult.error}
-              </p>
-            )}
-            <div style={{ display: "flex", justifyContent: "flex-end", gap: "0.75rem" }}>
-              <Button
-                intent="secondary"
-                size="md"
-                onClick={() => { setPrModal(null); setPrResult(null); }}
-                disabled={prRunning}
-              >
-                {prResult?.prUrl ? "Close" : "Cancel"}
-              </Button>
-              {!prResult?.prUrl && (
-                <Button
-                  intent="primary"
-                  size="md"
-                  disabled={prRunning || !prModal.prompt.trim()}
-                  onClick={async () => {
-                    if (!onRunOneShot) return;
-                    setPrRunning(true);
-                    setPrResult(null);
-                    try {
-                      const result = await onRunOneShot(prModal.sessionId, prModal.prompt);
-                      if (result?.prUrl) {
-                        setPrResult({ prUrl: result.prUrl });
-                      } else {
-                        setPrResult({ error: result?.error || "No PR URL found in output. The command may have failed." });
-                      }
-                    } catch (err) {
-                      setPrResult({ error: err instanceof Error ? err.message : "An unexpected error occurred." });
-                    } finally {
-                      setPrRunning(false);
-                    }
-                  }}
-                >
-                  {prRunning ? "Creating…" : "Run"}
-                </Button>
-              )}
-            </div>
-          </div>
-        </div>,
-        document.body
+      {/* Epic 2.4: shared Create Pull Request modal — same component + behavior as
+          SessionActionsOverflow.tsx's entry point (ux.md Surface 1 & 2, AC7). */}
+      {activePrSession && (
+        <CreatePullRequestModal
+          session={activePrSession}
+          isOpen={!!isCreatePrOpen}
+          onClose={() => setIsCreatePrOpen(null)}
+          draftPullRequest={draftPullRequest}
+          createPullRequest={createPullRequest}
+          triggerRef={createPrTriggerRef}
+        />
       )}
 
       {/* Epic 4: Create Rule modal */}

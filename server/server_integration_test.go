@@ -13,8 +13,11 @@ import (
 	"time"
 
 	"connectrpc.com/connect"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
 // findFreePort asks the OS for an ephemeral port and immediately releases it, so
@@ -278,8 +281,24 @@ func TestServer_should_KeepSingleOriginAllowlist_When_ExtraOriginsEnvVarUnset(t 
 // This exercises the real wireDepsIntoServer wiring end to end: the shared baseURLFn closure
 // threaded into NewApprovalHandler and SetHookBaseURLFn, each re-evaluated lazily against
 // srv.GetAddr() at hook-injection time (never snapshotted before Start() resolves the port).
+//
+// Flake repro: to reproduce Race B (marginal-timeout-under-load, see
+// project_plans/flaky-hook-url-tests/requirements.md and
+// project_plans/ci-hookurl-race-flake/requirements.md) locally with
+// artificial CPU contention approximating CI's 4-vCPU runner under full
+// `-race` load:
+//
+//	yes > /dev/null & yes > /dev/null & yes > /dev/null &
+//	TMUX_BIN="$(pwd)/bin/tmux" go test -race -count=10 \
+//	  -run 'TestServer_should_Write.*(HookURL|MCPURL)' ./server/...
+//	kill %1 %2 %3
 func TestServer_should_WriteRealPortIntoSessionHooksAndMCPURL_When_StartedWithPortZeroThenSessionCreated(t *testing.T) {
 	installFakeClaudeBinary(t)
+	// See STAPLER_SQUAD_TEST_DIR comment on TestSessionService_CreateThenImmediateDelete_NoDataRace
+	// below: without a per-test SQLite file, this test contends on the shared PID-scoped store
+	// with every other concurrently-running test in this package during a full-suite run, which
+	// can push the 60s hook-write poll in waitForPermissionRequestHookCommand past its budget.
+	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
 
 	deps, err := BuildDependencies()
 	if err != nil {
@@ -335,7 +354,7 @@ func TestServer_should_WriteRealPortIntoSessionHooksAndMCPURL_When_StartedWithPo
 	// CreateSession starts the instance and injects hook config asynchronously; wait for both.
 	inst = waitForLiveInstance(t, deps, sessionID, 30*time.Second)
 	settingsPath := filepath.Join(inst.GetEffectiveRootDir(), ".claude", "settings.local.json")
-	hookCmd := waitForPermissionRequestHookCommand(t, settingsPath, 30*time.Second)
+	hookCmd := waitForPermissionRequestHookCommand(t, settingsPath, 60*time.Second)
 
 	if strings.Contains(hookCmd, "localhost:0/") {
 		t.Fatalf("expected the PermissionRequest hook command to never contain the unresolved :0 port, got %q", hookCmd)
@@ -370,8 +389,20 @@ func TestServer_should_WriteRealPortIntoSessionHooksAndMCPURL_When_StartedWithPo
 // URL injected for a new session is still exactly
 // http://localhost:<port>/api/hooks/permission-request -- proving Epic 1.3's lazy
 // baseURLFn switch didn't regress the default/production instance.
+//
+// Flake repro: to reproduce Race B (marginal-timeout-under-load, see
+// project_plans/flaky-hook-url-tests/requirements.md and
+// project_plans/ci-hookurl-race-flake/requirements.md) locally with
+// artificial CPU contention approximating CI's 4-vCPU runner under full
+// `-race` load:
+//
+//	yes > /dev/null & yes > /dev/null & yes > /dev/null &
+//	TMUX_BIN="$(pwd)/bin/tmux" go test -race -count=10 \
+//	  -run 'TestServer_should_Write.*(HookURL|MCPURL)' ./server/...
+//	kill %1 %2 %3
 func TestServer_should_WriteUnchangedHookURL_When_StartedOnExplicitPort(t *testing.T) {
 	installFakeClaudeBinary(t)
+	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
 
 	deps, err := BuildDependencies()
 	if err != nil {
@@ -406,7 +437,7 @@ func TestServer_should_WriteUnchangedHookURL_When_StartedOnExplicitPort(t *testi
 
 	inst = waitForLiveInstance(t, deps, sessionID, 30*time.Second)
 	settingsPath := filepath.Join(inst.GetEffectiveRootDir(), ".claude", "settings.local.json")
-	hookCmd := waitForPermissionRequestHookCommand(t, settingsPath, 30*time.Second)
+	hookCmd := waitForPermissionRequestHookCommand(t, settingsPath, 60*time.Second)
 
 	wantURL := fmt.Sprintf("http://localhost:%d/api/hooks/permission-request", port)
 	if !strings.Contains(hookCmd, wantURL) {
@@ -431,8 +462,17 @@ func TestServer_should_WriteUnchangedHookURL_When_StartedOnExplicitPort(t *testi
 // The deterministic proof that the fix is correct is
 // TestGetPTY_ClosePTYAndAttachCmd_ConcurrentAccessIsSerialized in session/tmux/tmux_test.go,
 // which forces the interleave directly instead of relying on timing.
+//
+// STAPLER_SQUAD_TEST_DIR gives this test its own SQLite file instead of the shared
+// per-process one config.IsTestMode() falls back to (keyed only by PID, not by test):
+// without it, every -count=N outer repetition in the "PTY-triple race regression" CI
+// step re-triggers the exact same busy_timeout flake the paragraph above says was
+// already fixed once -- N independently-constructed BuildDependencies() clients (one
+// per repetition, none of them closed) contend for one shared database file, which
+// under -race's slowdown can exceed the 5s busy_timeout ("database is locked").
 func TestSessionService_CreateThenImmediateDelete_NoDataRace(t *testing.T) {
 	installFakeClaudeBinary(t)
+	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
 	deps, err := BuildDependencies()
 	if err != nil {
 		t.Fatalf("BuildDependencies: %v", err)
@@ -448,41 +488,52 @@ func TestSessionService_CreateThenImmediateDelete_NoDataRace(t *testing.T) {
 		t.Fatalf("CreateSession: %v", err)
 	}
 
+	// Captured before DeleteSession purely so we can wait for teardown to finish
+	// below -- this does not delay the delete itself, so it doesn't touch the
+	// Create/Delete interleave this test exists to race.
+	inst := deps.SessionService.FindLiveInstance(resp.Msg.Session.Id)
+
 	if _, err := deps.SessionService.DeleteSession(context.Background(), connect.NewRequest(&sessionv1.DeleteSessionRequest{Id: resp.Msg.Session.Id})); err != nil {
 		t.Fatalf("DeleteSession: %v", err)
 	}
+
+	// DeleteSession tears down tmux/git resources in an unawaited goroutine (see
+	// waitForTmuxTeardown's doc comment) -- without waiting here, that goroutine
+	// can still be writing into this test's t.TempDir() (e.g. the tmux-exec-gate
+	// lock directory) when TempDir's own cleanup runs RemoveAll on it, producing
+	// an intermittent "directory not empty" failure. This wait happens after the
+	// race has already occurred, so it doesn't defeat the repro above.
+	waitForTmuxTeardown(t, inst, 5*time.Second)
 }
 
 // waitForResolvedAddr polls srv.GetAddr() until it reports a real, non-zero bound address
 // (i.e. no longer the pre-bind "localhost:0" placeholder), failing the test on timeout.
 func waitForResolvedAddr(t *testing.T, srv *Server, timeout time.Duration) string {
 	t.Helper()
-	deadline := time.Now().Add(timeout)
 	var addr string
-	for time.Now().Before(deadline) {
+	ok := assert.Eventually(t, func() bool {
 		addr = srv.GetAddr()
-		if addr != "" && addr != "localhost:0" && !strings.HasSuffix(addr, ":0") {
-			return addr
-		}
-		time.Sleep(10 * time.Millisecond)
+		return addr != "" && addr != "localhost:0" && !strings.HasSuffix(addr, ":0")
+	}, timeout, 10*time.Millisecond)
+	if !ok {
+		t.Fatalf("expected a real, non-zero OS-assigned port to be resolved within %s, got %q", timeout, addr)
 	}
-	t.Fatalf("expected a real, non-zero OS-assigned port to be resolved within %s, got %q", timeout, addr)
-	return ""
+	return addr
 }
 
 // waitForLiveInstance polls SessionService.FindLiveInstance until the session created above
 // is registered in the live poller, failing the test on timeout.
 func waitForLiveInstance(t *testing.T, deps *ServerDependencies, sessionID string, timeout time.Duration) *session.Instance {
 	t.Helper()
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
-		if inst := deps.SessionService.FindLiveInstance(sessionID); inst != nil {
-			return inst
+	var inst *session.Instance
+	require.Eventually(t, func() bool {
+		if got := deps.SessionService.FindLiveInstance(sessionID); got != nil {
+			inst = got
+			return true
 		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	t.Fatalf("expected session %q to appear in the live poller within %s", sessionID, timeout)
-	return nil
+		return false
+	}, timeout, 20*time.Millisecond, "expected session %q to appear in the live poller", sessionID)
+	return inst
 }
 
 // waitForPermissionRequestHookCommand polls settingsPath until CreateSession's asynchronous
@@ -493,45 +544,55 @@ func waitForLiveInstance(t *testing.T, deps *ServerDependencies, sessionID strin
 // happens after instance.Start(true) (real tmux session + process spawn) returns, and on a
 // contended CI runner running the full `-race` suite in parallel that can take much longer
 // than the file write itself. Observed CI flakiness at 30s (this test intermittently timed
-// out waiting on scheduling, not on a real hang) motivated the wider budget.
+// out waiting on scheduling, not on a real hang) motivated the wider budget. See the
+// repro-command comments above the two call sites for a local stress-repro of the
+// load-sensitive failure mode this budget accounts for.
 func waitForPermissionRequestHookCommand(t *testing.T, settingsPath string, timeout time.Duration) string {
 	t.Helper()
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
+	var hookCmd string
+	require.Eventually(t, func() bool {
 		data, err := os.ReadFile(settingsPath)
-		if err == nil {
-			var top map[string]json.RawMessage
-			if jsonErr := json.Unmarshal(data, &top); jsonErr == nil {
-				if hooksRaw, ok := top["hooks"]; ok {
-					var hooks map[string]json.RawMessage
-					if jsonErr := json.Unmarshal(hooksRaw, &hooks); jsonErr == nil {
-						if prRaw, ok := hooks["PermissionRequest"]; ok {
-							type hookEntry struct {
-								Type    string `json:"type"`
-								Command string `json:"command,omitempty"`
-							}
-							type hookMatcherGroup struct {
-								Hooks []hookEntry `json:"hooks"`
-							}
-							var groups []hookMatcherGroup
-							if jsonErr := json.Unmarshal(prRaw, &groups); jsonErr == nil {
-								for _, g := range groups {
-									for _, h := range g.Hooks {
-										if h.Type == "command" && h.Command != "" {
-											return h.Command
-										}
-									}
-								}
-							}
-						}
-					}
+		if err != nil {
+			return false
+		}
+		var top map[string]json.RawMessage
+		if jsonErr := json.Unmarshal(data, &top); jsonErr != nil {
+			return false
+		}
+		hooksRaw, ok := top["hooks"]
+		if !ok {
+			return false
+		}
+		var hooks map[string]json.RawMessage
+		if jsonErr := json.Unmarshal(hooksRaw, &hooks); jsonErr != nil {
+			return false
+		}
+		prRaw, ok := hooks["PermissionRequest"]
+		if !ok {
+			return false
+		}
+		type hookEntry struct {
+			Type    string `json:"type"`
+			Command string `json:"command,omitempty"`
+		}
+		type hookMatcherGroup struct {
+			Hooks []hookEntry `json:"hooks"`
+		}
+		var groups []hookMatcherGroup
+		if jsonErr := json.Unmarshal(prRaw, &groups); jsonErr != nil {
+			return false
+		}
+		for _, g := range groups {
+			for _, h := range g.Hooks {
+				if h.Type == "command" && h.Command != "" {
+					hookCmd = h.Command
+					return true
 				}
 			}
 		}
-		time.Sleep(50 * time.Millisecond)
-	}
-	t.Fatalf("expected %s to contain a PermissionRequest command hook within %s", settingsPath, timeout)
-	return ""
+		return false
+	}, timeout, 50*time.Millisecond, "expected %s to contain a PermissionRequest command hook", settingsPath)
+	return hookCmd
 }
 
 // waitForTmuxTeardown polls inst.TmuxSessionExists() until the underlying tmux
@@ -551,24 +612,32 @@ func waitForPermissionRequestHookCommand(t *testing.T, settingsPath string, time
 // ran in the same process (reproduced locally with `go test -race -count=10`,
 // and confirmed via bisection this predates PR #144's actual changes -- it's a
 // pre-existing gap between DeleteSession's fire-and-forget teardown contract and
-// these tests' assumption that cleanup is synchronous).
+// these tests' assumption that cleanup is synchronous). If
+// TestServer_should_Write*HookURL flakes again after this fix, check whether it's
+// this shared-tmux-socket contention before re-tuning timeouts or CI topology --
+// file a follow-up ticket for that root cause instead of widening a budget further.
 //
 // Deliberately does not fail the test on timeout (t.Logf, not t.Fatalf/t.Errorf):
 // this runs inside t.Cleanup, where the test's own PASS/FAIL verdict is already
 // decided -- a slow-but-eventually-successful teardown shouldn't retroactively
 // fail a test that otherwise passed. It still meaningfully reduces cross-test
 // accumulation by not returning from Cleanup while teardown is still in flight.
+// Uses testutil/wait.WaitForCondition rather than require.Eventually because the
+// latter calls t.FailNow()/t.Errorf() internally on timeout, which would break this
+// helper's deliberate non-fatal contract.
 func waitForTmuxTeardown(t *testing.T, inst *session.Instance, timeout time.Duration) {
 	t.Helper()
 	if inst == nil {
 		return
 	}
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
-		if !inst.TmuxSessionExists() {
-			return
-		}
-		time.Sleep(20 * time.Millisecond)
+	err := wait.WaitForCondition(func() bool {
+		return !inst.TmuxSessionExists()
+	}, wait.WaitConfig{
+		Timeout:      timeout,
+		PollInterval: 20 * time.Millisecond,
+		Description:  fmt.Sprintf("tmux teardown for %q", inst.Title),
+	})
+	if err != nil {
+		t.Logf("tmux session for %q still reported alive %s after DeleteSession; teardown may still be in flight: %v", inst.Title, timeout, err)
 	}
-	t.Logf("tmux session for %q still reported alive %s after DeleteSession; teardown may still be in flight", inst.Title, timeout)
 }

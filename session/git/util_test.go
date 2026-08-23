@@ -1,6 +1,7 @@
 package git
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -9,6 +10,7 @@ import (
 )
 
 func TestSanitizeBranchName(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name     string
 		input    string
@@ -140,6 +142,7 @@ func TestSanitizeBranchName(t *testing.T) {
 // filepath.Join(worktreeDir, sanitizeBranchName(input)) can never escape
 // worktreeDir, for malicious inputs designed to traverse out of it.
 func TestSanitizeBranchName_StaysWithinWorktreeDir(t *testing.T) {
+	t.Parallel()
 	worktreeDir := "/var/lib/stapler-squad/worktrees"
 
 	maliciousInputs := []string{
@@ -174,6 +177,7 @@ func TestSanitizeBranchName_StaysWithinWorktreeDir(t *testing.T) {
 // filepath.Join(worktreeDir, sanitizedName) call site: it must return an error
 // (never a path) for any name that would resolve outside baseDir.
 func TestJoinWithinDir(t *testing.T) {
+	t.Parallel()
 	baseDir := "/var/lib/stapler-squad/worktrees"
 
 	t.Run("normal name stays within baseDir", func(t *testing.T) {
@@ -202,6 +206,52 @@ func TestJoinWithinDir(t *testing.T) {
 	}
 }
 
+// TestCanonicalizeWorktreePath_NonexistentPath verifies AC2: a path that doesn't
+// exist on disk (the pre-`git worktree add` case for a freshly-computed
+// worktreePath) must never error or panic — EvalSymlinks fails with ENOENT here,
+// and the function must fall back to filepath.Clean rather than propagate that.
+func TestCanonicalizeWorktreePath_NonexistentPath(t *testing.T) {
+	t.Parallel()
+	nonexistent := filepath.Join(t.TempDir(), "does-not-exist", "leaf_1234")
+	got := CanonicalizeWorktreePath(nonexistent)
+	want := filepath.Clean(nonexistent)
+	if got != want {
+		t.Errorf("CanonicalizeWorktreePath(%q) = %q, want %q (filepath.Clean fallback)", nonexistent, got, want)
+	}
+}
+
+// TestCanonicalizeWorktreePath_EmptyString verifies the empty-string short-circuit
+// returns the input unchanged rather than resolving cwd (EvalSymlinks("") behavior
+// is platform-dependent and not what any caller here wants).
+func TestCanonicalizeWorktreePath_EmptyString(t *testing.T) {
+	t.Parallel()
+	if got := CanonicalizeWorktreePath(""); got != "" {
+		t.Errorf("CanonicalizeWorktreePath(\"\") = %q, want empty string", got)
+	}
+}
+
+// TestCanonicalizeWorktreePath_ResolvesSymlink verifies the real-path case: a
+// symlinked directory canonicalizes to its resolved target, matching what git
+// itself reports via `git worktree list --porcelain`.
+func TestCanonicalizeWorktreePath_ResolvesSymlink(t *testing.T) {
+	t.Parallel()
+	real := t.TempDir()
+	link := filepath.Join(t.TempDir(), "link-to-real")
+	if err := os.Symlink(real, link); err != nil {
+		t.Skipf("symlinks not supported on this platform: %v", err)
+	}
+
+	resolvedReal, err := filepath.EvalSymlinks(real)
+	if err != nil {
+		t.Fatalf("failed to resolve real dir: %v", err)
+	}
+
+	got := CanonicalizeWorktreePath(link)
+	if got != resolvedReal {
+		t.Errorf("CanonicalizeWorktreePath(%q) = %q, want %q", link, got, resolvedReal)
+	}
+}
+
 // TestPreviewWorktreePath_RejectsTraversal exercises PreviewWorktreePath end-to-end
 // against a real git repository, confirming a malicious sessionName can never
 // produce a path outside the configured worktree directory (AC5).
@@ -214,6 +264,19 @@ func TestPreviewWorktreePath_RejectsTraversal(t *testing.T) {
 	configDir := t.TempDir()
 	t.Setenv("STAPLER_SQUAD_TEST_DIR", configDir)
 	worktreeDir := filepath.Join(configDir, "worktrees")
+	// getWorktreeDirectory() creates this directory and resolves symlinks on it
+	// (see worktree.go) so worktree-reuse identity checks aren't fooled by macOS's
+	// /var/folders -> /private/var/folders symlink. Mirror that here or this
+	// comparison compares an unresolved path against PreviewWorktreePath's
+	// resolved return value and spuriously fails on macOS.
+	if err := os.MkdirAll(worktreeDir, 0o755); err != nil {
+		t.Fatalf("failed to create worktree dir: %v", err)
+	}
+	resolvedWorktreeDir, err := filepath.EvalSymlinks(worktreeDir)
+	if err != nil {
+		t.Fatalf("failed to resolve worktree dir: %v", err)
+	}
+	worktreeDir = resolvedWorktreeDir
 
 	maliciousInputs := []string{
 		"../../../etc",

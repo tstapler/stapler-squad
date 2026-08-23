@@ -55,6 +55,7 @@ func postPermissionRequestWithCommand(t *testing.T, h *ApprovalHandler, sessionI
 // Fires an approval with a command containing a GitHub token and asserts that
 // RecordFromResult was called with the command replaced by [REDACTED: secret detected].
 func TestApprovalHandler_SecretNotPersistedToAnalytics(t *testing.T) {
+	t.Parallel()
 	h, analyticsStore := newTestHandlerWithAnalytics(t)
 
 	secretCmd := `curl -H "Authorization: Bearer ghp_AAAABBBBCCCCDDDDEEEEFFFFGGGGHHHH1234" https://api.example.com`
@@ -102,6 +103,7 @@ func TestApprovalHandler_SecretNotPersistedToAnalytics(t *testing.T) {
 
 // T-INTEG-002: analytics query after approval with secret command contains no secret.
 func TestApprovalHandler_LoadWindow_ContainsNoSecret(t *testing.T) {
+	t.Parallel()
 	h, analyticsStore := newTestHandlerWithAnalytics(t)
 
 	secretCmd := "ANTHROPIC_API_KEY=sk-ant-test123abc curl https://api.anthropic.com"

@@ -105,6 +105,9 @@ func InstanceToProto(inst *session.Instance, workflowNames map[string]string) *s
 		}
 	}
 
+	// Cached "has commits ahead of base" signal (AC6) — see Instance.UpdateDiffStats.
+	protoSession.HasCommitsAhead = inst.GetHasCommitsAhead()
+
 	// Convert Claude session data if available
 	if inst.GetClaudeSession() != nil {
 		cs := inst.GetClaudeSession()
@@ -177,6 +180,12 @@ func InstanceToProto(inst *session.Instance, workflowNames map[string]string) *s
 		protoSession.DetectedContext = statusInfo.StatusContext
 	}
 
+	// SubagentCount (field 75): count of background agents/shells/monitors from the
+	// WaitingForAgent detector. Set unconditionally — InstanceStatusInfo.SubagentCount is
+	// already 0 by construction when the controller is inactive or status isn't
+	// WaitingForAgent, so a guard here would be a no-op.
+	protoSession.SubagentCount = int32(statusInfo.SubagentCount)
+
 	// Hidden flag — system/background sessions excluded from default list/review queue.
 	protoSession.Hidden = snap.Hidden
 
@@ -187,6 +196,14 @@ func InstanceToProto(inst *session.Instance, workflowNames map[string]string) *s
 	}
 	if snap.ArchivedAt != nil {
 		protoSession.ArchivedAt = timestamppb.New(*snap.ArchivedAt)
+	}
+
+	// remote_name (field 76): host badge for a remote session (ssh-remote-workspaces
+	// Epic 6.2). Derived live from ExecutionTarget rather than a persisted field --
+	// see the proto field's doc comment for why (ExecutionTarget is `json:"-"`, not
+	// reconstructed across a restart). Empty (the zero value) for a LocalTarget.
+	if remoteTarget, ok := inst.GetExecutionTarget().(session.RemoteExecutionTarget); ok {
+		protoSession.RemoteName = remoteTarget.Target().Name
 	}
 
 	// Session goal summary — populated when a goal has been set via set_session_goal MCP tool.
@@ -253,6 +270,8 @@ func toProtoSubStatusFromInfo(basicStatus session.Status, rateLimitState int, in
 	switch info.ClaudeStatus {
 	case detection.StatusWaitingForAgent:
 		return sessionv1.SubStatus_SUB_STATUS_WAITING_FOR_AGENT
+	case detection.StatusCompacting:
+		return sessionv1.SubStatus_SUB_STATUS_COMPACTING
 	case detection.StatusProcessing, detection.StatusExecuting:
 		return sessionv1.SubStatus_SUB_STATUS_PROCESSING
 	case detection.StatusNeedsApproval:

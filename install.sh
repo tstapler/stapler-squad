@@ -6,7 +6,7 @@ set -e
 # Resolution order:
 #   1. REPO env var override (e.g. REPO=tstapler/stapler-squad ./install.sh)
 #   2. git remote origin of the current directory (works when run from a clone)
-#   3. Default: TylerStaplerAtFanatics/stapler-squad
+#   3. Default: tstapler/stapler-squad
 detect_repo() {
     if [ -n "${REPO:-}" ]; then
         echo "$REPO"
@@ -27,7 +27,7 @@ detect_repo() {
         fi
     fi
 
-    echo "TylerStaplerAtFanatics/stapler-squad"
+    echo "tstapler/stapler-squad"
 }
 
 GITHUB_REPO=$(detect_repo)
@@ -89,8 +89,7 @@ detect_platform_and_arch() {
 
 get_latest_version() {
     # Get latest version from GitHub API, including prereleases
-    API_RESPONSE=$(curl -sS "https://api.github.com/repos/${GITHUB_REPO}/releases")
-    if [ $? -ne 0 ]; then
+    if ! API_RESPONSE=$(curl -sS "https://api.github.com/repos/${GITHUB_REPO}/releases"); then
         echo "Error: Failed to connect to GitHub API" >&2
         exit 1
     fi
@@ -126,8 +125,8 @@ download_release() {
     echo "Downloading binary from $binary_url"
     DOWNLOAD_OUTPUT=$(curl -sS -L -f -w '%{http_code}' "$binary_url" -o "${tmp_dir}/${archive_name}" 2>&1)
     HTTP_CODE=$?
-    
-    if [ $HTTP_CODE -ne 0 ]; then
+
+    if [ "$HTTP_CODE" -ne 0 ]; then
         echo "Error: Failed to download release asset"
         echo "This could be because:"
         echo "1. The release ${version} doesn't have assets uploaded yet"
@@ -136,6 +135,7 @@ download_release() {
         echo ""
         echo "Expected asset name: ${archive_name}"
         echo "URL attempted: ${binary_url}"
+        echo "curl output: ${DOWNLOAD_OUTPUT}"
         if [ "$version" == "latest" ]; then
             echo ""
             echo "Tip: Try installing a specific version instead of 'latest'"
@@ -204,7 +204,7 @@ extract_and_install() {
     else
         echo "Installed as '$INSTALL_NAME':"
     fi
-    echo "$("$bin_dir/$INSTALL_NAME${extension}" version)"
+    "$bin_dir/$INSTALL_NAME${extension}" version
 }
 
 install_go_if_missing() {
@@ -296,7 +296,7 @@ build_from_source() {
     else
         echo "Installed as '$INSTALL_NAME':"
     fi
-    echo "$("$bin_dir/$INSTALL_NAME" version)"
+    "$bin_dir/$INSTALL_NAME" version
 }
 
 check_command_exists() {

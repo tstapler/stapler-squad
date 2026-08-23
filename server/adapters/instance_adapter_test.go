@@ -3,10 +3,13 @@ package adapters
 import (
 	"testing"
 
+	"golang.org/x/crypto/ssh"
+
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/detection"
 	"github.com/tstapler/stapler-squad/session/detection/ratelimit"
+	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
 func TestRateLimitStateToProto_AllStates(t *testing.T) {
@@ -64,6 +67,53 @@ func TestInstanceToProto_RateLimitEnabled_ExplicitFalse(t *testing.T) {
 	}
 	if proto.RateLimitEnabled {
 		t.Errorf("expected RateLimitEnabled=false when explicitly disabled, got true")
+	}
+}
+
+// TestInstanceToProto_SubagentCount_DefaultZero verifies that a fresh instance with no
+// registered status manager/controller (the common case: Active status but nothing
+// wired up yet) maps to SubagentCount=0 rather than leaving the proto field unset in a
+// way that would panic or read garbage — statusInfo is the zero-value InstanceStatusInfo
+// in that path (see the "set unconditionally" comment on the SubagentCount assignment).
+func TestInstanceToProto_SubagentCount_DefaultZero(t *testing.T) {
+	inst := &session.Instance{}
+	proto := InstanceToProto(inst, nil)
+	if proto == nil {
+		t.Fatal("expected non-nil proto for non-nil instance")
+	}
+	if proto.SubagentCount != 0 {
+		t.Errorf("SubagentCount = %d, want 0 for an instance with no status manager", proto.SubagentCount)
+	}
+}
+
+// TestInstanceToProto_RemoteName_EmptyForLocal verifies a plain (LocalTarget)
+// instance's RemoteName proto field stays empty -- a local session's card
+// must never show the Epic 6.2 host badge.
+func TestInstanceToProto_RemoteName_EmptyForLocal(t *testing.T) {
+	inst := &session.Instance{} // ExecutionTarget nil → defaults to LocalTarget{}
+	proto := InstanceToProto(inst, nil)
+	if proto == nil {
+		t.Fatal("expected non-nil proto for non-nil instance")
+	}
+	if proto.RemoteName != "" {
+		t.Errorf("RemoteName = %q, want empty for a local session", proto.RemoteName)
+	}
+}
+
+// TestInstanceToProto_RemoteName_SetForRemote verifies a session.Instance
+// whose ExecutionTarget is a RemoteExecutionTarget surfaces the remote's
+// name on the proto Session -- the data source for the SessionCard host
+// badge (ssh-remote-workspaces Epic 6.2).
+func TestInstanceToProto_RemoteName_SetForRemote(t *testing.T) {
+	runner := tmux.NewSSHRunner(tmux.SSHTarget{Name: "prod-box", Addr: "prod-box.example.com:22"}, ssh.ClientConfig{})
+	target := session.NewRemoteExecutionTarget(session.RemoteTarget{Name: "prod-box"}, runner)
+	inst := &session.Instance{ExecutionTarget: target}
+	proto := InstanceToProto(inst, nil)
+	if proto == nil {
+		t.Fatal("expected non-nil proto for non-nil instance")
+	}
+	if proto.RemoteName != "prod-box" {
+		t.Errorf("RemoteName = %q, want %q", proto.RemoteName, "prod-box")
 	}
 }
 
@@ -140,6 +190,52 @@ func TestToProtoSubStatus_WaitingForAgent(t *testing.T) {
 	gotActive := toProtoSubStatusFromInfo(session.Active, 0, session.InstanceStatusInfo{IsControllerActive: false})
 	if gotActive != sessionv1.SubStatus_SUB_STATUS_UNSPECIFIED {
 		t.Logf("toProtoSubStatusFromInfo(Active/no-controller) = %v (expected UNSPECIFIED)", gotActive)
+	}
+}
+
+// TestToProtoSubStatus_CoversAllDetectedStatusValues is a mandatory (not optional)
+// table-driven guard, added during Phase 4 pre-mortem repair (P1 #2): it iterates every
+// named detection.DetectedStatus value that has a defined SubStatus mapping and asserts
+// BOTH toProtoSubStatusFromInfo (instance_adapter.go, the live session list/watch RPC
+// path) and subStatusFromItem (review_queue_adapter.go) return a non-UNSPECIFIED value.
+// This is the actual RPC-facing pair — neither is exhaustive-lint-enforced (server/
+// adapters is excluded per .golangci.yml) — so this test is what catches one switch
+// being updated while the other is silently missed, a discrepancy that otherwise looks
+// like a frontend bug (backend detects the status; the browser never shows the chip).
+func TestToProtoSubStatus_CoversAllDetectedStatusValues(t *testing.T) {
+	statuses := []detection.DetectedStatus{
+		detection.StatusReady,
+		detection.StatusProcessing,
+		detection.StatusExecuting,
+		detection.StatusNeedsApproval,
+		detection.StatusInputRequired,
+		detection.StatusError,
+		detection.StatusTestsFailing,
+		detection.StatusIdle,
+		detection.StatusSuccess,
+		detection.StatusWaitingForAgent,
+		detection.StatusCompacting,
+	}
+
+	for _, status := range statuses {
+		t.Run(status.String(), func(t *testing.T) {
+			info := session.InstanceStatusInfo{IsControllerActive: true, ClaudeStatus: status}
+			gotInstance := toProtoSubStatusFromInfo(session.Active, 0, info)
+			if gotInstance == sessionv1.SubStatus_SUB_STATUS_UNSPECIFIED {
+				t.Errorf("toProtoSubStatusFromInfo(%s) = SUB_STATUS_UNSPECIFIED, want a defined mapping", status)
+			}
+
+			item := &session.ReviewItem{ClaudeStatus: status}
+			gotReviewQueue := subStatusFromItem(item)
+			if gotReviewQueue == sessionv1.SubStatus_SUB_STATUS_UNSPECIFIED {
+				t.Errorf("subStatusFromItem(%s) = SUB_STATUS_UNSPECIFIED, want a defined mapping", status)
+			}
+
+			if gotInstance != gotReviewQueue {
+				t.Errorf("toProtoSubStatusFromInfo(%s) = %v but subStatusFromItem(%s) = %v — the two adapters must agree",
+					status, gotInstance, status, gotReviewQueue)
+			}
+		})
 	}
 }
 

@@ -26,6 +26,7 @@ func (s *staticSource) GetWorktrees() []session.WorktreeScanItem {
 }
 
 func TestWorktreePRPoller_GetPRData_NilBeforeData(t *testing.T) {
+	t.Parallel()
 	poller := session.NewWorktreePRPoller(github.NewETagCache(), nil)
 	got := poller.GetPRData("/some/repo", "feature-branch")
 	if got != nil {
@@ -34,6 +35,7 @@ func TestWorktreePRPoller_GetPRData_NilBeforeData(t *testing.T) {
 }
 
 func TestWorktreePRPoller_SetOnUpdated_Atomic(t *testing.T) {
+	t.Parallel()
 	poller := session.NewWorktreePRPoller(github.NewETagCache(), nil)
 	called := make(chan struct{}, 1)
 	poller.SetOnUpdated(func(repoPath, branch string, info *github.PRInfo) {

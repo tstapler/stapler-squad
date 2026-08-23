@@ -7,6 +7,7 @@ import "testing"
 // that would break silently if an instrument name were invalid or an
 // observable gauge were registered with a description/unit OTel rejects.
 func TestRegisterMetrics_NoError(t *testing.T) {
+	t.Parallel()
 	if err := RegisterMetrics(); err != nil {
 		t.Fatalf("RegisterMetrics: %v", err)
 	}

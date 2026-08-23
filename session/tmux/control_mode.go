@@ -39,6 +39,17 @@ var (
 // Enabled by default; set STAPLER_SQUAD_CM_COMMANDS=false to opt out.
 var cmCommandsEnabled atomic.Bool
 
+// controlModeSlowSubscriberGrace bounds how long broadcastControlModeUpdate will block
+// waiting for room in a full subscriber channel before giving up and closing it. A fast
+// typing burst (readline/prompt redraws emit several %output events per keystroke) can
+// momentarily fill the 100-slot buffer while the consumer is mid-write on a coalesced
+// WebSocket frame; that consumer is healthy and about to drain, not stuck. Closing on the
+// very first instantaneously-full send conflated that transient burst with a genuinely
+// dead subscriber, disconnecting the terminal. Waiting up to this grace period lets a
+// bursty-but-healthy consumer catch up; only a subscriber still full after the grace period
+// is treated as stuck.
+const controlModeSlowSubscriberGrace = 250 * time.Millisecond
+
 func init() {
 	cmCommandsEnabled.Store(os.Getenv("STAPLER_SQUAD_CM_COMMANDS") != "false")
 }
@@ -62,14 +73,33 @@ func (t *TmuxSession) StartControlMode() error {
 	defer t.controlModeStartMu.Unlock()
 
 	// Increment refcount if already running — atomic under the same lock that
-	// protects controlModeCmd so no TOCTOU between check and increment.
+	// protects controlModeCmd/controlModeRemoteProc so no TOCTOU between
+	// check and increment.
 	t.controlModeSubMu.Lock()
-	if t.controlModeCmd != nil {
+	if t.controlModeCmd != nil || t.controlModeRemoteProc != nil {
 		t.controlModeRefCount++
 		t.controlModeSubMu.Unlock()
 		return nil // Already running; just bumped the refcount
 	}
 	t.controlModeSubMu.Unlock()
+
+	// Remote branch (ssh-remote-workspaces Phase 4, Task 4.4.1c): tmux
+	// control mode's protocol is plain text over stdin/stdout -- it needs no
+	// PTY, unlike the raw-PTY-attach path (session/tmux/pty.go's
+	// RemotePtyFactory) -- so CommandRunner.Start (already remote-capable,
+	// see its own doc comment: "pending Epic 2.3's remote control-mode
+	// wiring", this is that wiring) is sufficient. This was gated off in
+	// Phase 1 (ADR-002) because the local branch below tracks the spawned
+	// process via TrackChildPID/UntrackChildPID and tears it down via
+	// cmd.Process.Kill()/.Wait() -- OS-process semantics with no SSH analog.
+	// remoteControlModeProc (below) is the local/remote-agnostic replacement
+	// for that teardown surface: wait() maps to CommandRunner.Start's own
+	// wait func, and kill() closes the SSH channel (there is no "signal a
+	// remote PID" over CommandRunner -- closing the channel is the SSH
+	// analog of Process.Kill(), see sshSessionStdout.Close()'s doc comment).
+	if t.commandRunner().IsRemote() {
+		return t.startRemoteControlMode()
+	}
 
 	// Build tmux -C attach command
 	cmd := t.buildTmuxCommand("-C", "attach-session", "-t", t.sanitizedName)
@@ -127,6 +157,74 @@ func (t *TmuxSession) StartControlMode() error {
 	return nil
 }
 
+// remoteControlModeProc is the remote counterpart of the local
+// controlModeCmd (*exec.Cmd): wait blocks until the remote "tmux -C
+// attach-session" process exits (CommandRunner.Start's own wait func); kill
+// force-terminates it when wait doesn't return within StopControlMode's
+// grace period. There is no PID to track/signal over SSH (see
+// CommandRunner's own doc comment on why OS-process semantics are
+// deliberately kept out of that interface), so kill closes the underlying
+// SSH channel instead -- the SSH analog of Process.Kill().
+type remoteControlModeProc struct {
+	wait func() error
+	kill func()
+}
+
+// startRemoteControlMode is StartControlMode's remote branch (Task 4.4.1c):
+// starts "tmux [-L socket] -C attach-session -t name" as a plain (non-PTY)
+// piped remote command via CommandRunner.Start, wires its stdin/stdout into
+// the same controlModeStdin/controlModeStdout fields the local branch uses
+// (both are already interface-typed -- io.WriteCloser/io.ReadCloser -- so
+// runCMSender and readControlModeOutput need no changes at all to work
+// against a remote-backed pipe instead of a local one), and starts the same
+// sender/reader goroutines the local branch starts.
+//
+// Not started here: monitorControlModeErrors. CommandRunner.Start has no
+// stderr pipe (SSH's exec channel doesn't expose a separable stderr stream
+// through this abstraction); monitorControlModeErrors is diagnostic-only
+// (see its doc comment -- it just logs stderr lines at Debug), so skipping
+// it for the remote path loses debug-level visibility only, not correctness.
+func (t *TmuxSession) startRemoteControlMode() error {
+	args := Socket(t.serverSocket).Args("-C", "attach-session", "-t", t.sanitizedName)
+	// wrapRemoteCommand unsets $TMUX and forces a known-good $TERM before
+	// this command reaches the remote tmux server -- see its doc comment
+	// and research/pitfalls.md §2; the same wrapping listSessionsRaw's
+	// remote fallback and EnsureRemoteSession already apply to every other
+	// remote tmux invocation.
+	runName, runArgs := wrapRemoteCommand(Binary(), args)
+
+	stdin, stdout, wait, err := t.commandRunner().Start(context.Background(), "", runName, runArgs...)
+	if err != nil {
+		return fmt.Errorf("failed to start remote control mode for session '%s': %w", t.sanitizedName, err)
+	}
+
+	t.controlModeSubMu.Lock()
+	t.controlModeRemoteProc = &remoteControlModeProc{
+		wait: wait,
+		kill: func() { _ = stdout.Close() },
+	}
+	t.controlModeStdout = stdout
+	t.controlModeStdin = stdin
+	t.controlModeDone = make(chan struct{})
+	t.highPriSendCh = make(chan cmSendReq, 64)
+	t.normPriSendCh = make(chan cmSendReq, 256)
+	t.cmSenderExited = make(chan struct{})
+	if t.controlModeSubscribers == nil {
+		t.controlModeSubscribers = make(map[string]chan []byte)
+	}
+	t.controlModeExited = false
+	t.controlModeRefCount = 1
+	t.controlModeSubMu.Unlock()
+
+	doneCh := t.controlModeDone
+	go t.runCMSender(doneCh, stdin)
+	go t.readControlModeOutput()
+
+	log.Info("successfully started remote control mode", "session", t.sanitizedName)
+
+	return nil
+}
+
 // StopControlMode stops the control mode streaming and cleans up resources.
 // With refcounting, this only actually stops the underlying process when the last
 // caller disconnects. Intermediate callers decrement the refcount and return early.
@@ -150,7 +248,7 @@ func (t *TmuxSession) StopControlMode() error {
 		return nil // Other callers still active; leave the process running.
 	}
 
-	if t.controlModeCmd == nil {
+	if t.controlModeCmd == nil && t.controlModeRemoteProc == nil {
 		return nil // Not running (or already stopped by a prior call).
 	}
 
@@ -195,11 +293,26 @@ func (t *TmuxSession) StopControlMode() error {
 	}
 	t.cmdSendMu.Unlock()
 
-	// Wait for process to exit (with timeout)
-	UntrackChildPID(t.controlModeCmd.Process.Pid)
+	// Wait for process to exit (with timeout). Exactly one of
+	// t.controlModeCmd/t.controlModeRemoteProc is non-nil here (guarded by
+	// the early-return above); wait/kill are resolved to the matching
+	// local (*exec.Cmd) or remote (SSH-channel) implementation.
+	var wait func() error
+	var kill func()
+	if t.controlModeCmd != nil {
+		UntrackChildPID(t.controlModeCmd.Process.Pid)
+		cmd := t.controlModeCmd
+		wait = cmd.Wait
+		kill = func() { _ = cmd.Process.Kill() }
+	} else {
+		proc := t.controlModeRemoteProc
+		wait = proc.wait
+		kill = proc.kill
+	}
+
 	done := make(chan error, 1)
 	go func() {
-		done <- t.controlModeCmd.Wait()
+		done <- wait()
 	}()
 
 	select {
@@ -210,7 +323,7 @@ func (t *TmuxSession) StopControlMode() error {
 	case <-time.After(2 * time.Second):
 		// Timeout after 2 seconds - force kill
 		log.Warn("control mode process did not exit cleanly, killing", "session", t.sanitizedName)
-		_ = t.controlModeCmd.Process.Kill()
+		kill()
 		<-done // Wait for kill to complete
 	}
 
@@ -228,6 +341,7 @@ func (t *TmuxSession) StopControlMode() error {
 		delete(t.controlModeSubscribers, id)
 	}
 	t.controlModeCmd = nil
+	t.controlModeRemoteProc = nil
 	t.controlModeRefCount = 0
 	t.controlModeSubMu.Unlock()
 
@@ -306,9 +420,19 @@ func (t *TmuxSession) readControlModeOutput() {
 		close(ch)
 		delete(t.controlModeSubscribers, id)
 	}
+	// Unilateral exit (process killed/crashed without StopControlMode being
+	// called) leaves runCMSender blocked forever on doneCh, since only
+	// StopControlMode used to close it -- close it here too so the sender
+	// goroutine doesn't leak. Guarded/nilled the same way StopControlMode
+	// does, since both can race to close this channel.
+	if t.controlModeDone != nil {
+		close(t.controlModeDone)
+		t.controlModeDone = nil
+	}
 	// Reset so that the next StartControlMode() call sees a clean slate.
 	t.controlModeRefCount = 0
 	t.controlModeCmd = nil
+	t.controlModeRemoteProc = nil
 	t.controlModeSubMu.Unlock()
 
 	// Scanner-EOF fallback: if the pipe closed without a %exit notification (e.g. the
@@ -474,6 +598,7 @@ func (t *TmuxSession) processControlModeLine(line string) {
 			// Reset so the next StartControlMode() call sees a clean slate.
 			t.controlModeRefCount = 0
 			t.controlModeCmd = nil
+			t.controlModeRemoteProc = nil
 		}
 		t.controlModeSubMu.Unlock()
 
@@ -678,20 +803,40 @@ func (t *TmuxSession) decodeControlModeOutput(encoded []byte) []byte {
 }
 
 // broadcastControlModeUpdate sends terminal output to all subscribed WebSocket clients.
-// RLock is safe: UnsubscribeFromControlModeUpdates holds WLock when closing channels,
-// so RLock and WLock are mutually exclusive — no send-on-closed-channel is possible.
+// Takes the full write lock (not RLock) because a slow subscriber is closed and removed
+// from t.controlModeSubscribers here rather than having its update dropped: dropping any
+// byte of this stream corrupts ANSI/cursor state for terminal consumers, since this is the
+// stream actually rendered in the browser (mirrors NativeProcessManager.fanOut's
+// close-and-remove pattern in session/native_process_manager.go).
+//
+// A channel that's instantaneously full is given a bounded grace period
+// (controlModeSlowSubscriberGrace) to drain before being closed — see that constant's doc
+// comment for why an instant close-on-first-full-send disconnects healthy-but-bursty
+// consumers, not just genuinely stuck ones.
 func (t *TmuxSession) broadcastControlModeUpdate(data []byte) {
-	t.controlModeSubMu.RLock()
-	defer t.controlModeSubMu.RUnlock()
+	t.controlModeSubMu.Lock()
+	defer t.controlModeSubMu.Unlock()
 
 	for subscriberID, ch := range t.controlModeSubscribers {
 		select {
 		case ch <- data:
 			// Successfully sent
+			continue
 		default:
-			// Channel full - subscriber can't keep up
-			// Don't block other subscribers, just log
-			log.Warn("control mode subscriber channel full, dropping update", "subscriber", subscriberID, "session", t.sanitizedName)
+			// Channel momentarily full - fall through to the bounded wait below rather
+			// than concluding the subscriber is stuck on a single snapshot.
+		}
+
+		select {
+		case ch <- data:
+			// Consumer drained in time - a burst, not sustained lag.
+		case <-time.After(controlModeSlowSubscriberGrace):
+			// Still full after the grace period - subscriber genuinely can't keep up.
+			// Close and remove it rather than dropping this chunk, so the consumer sees
+			// end-of-stream instead of a silently corrupted terminal.
+			close(ch)
+			delete(t.controlModeSubscribers, subscriberID)
+			log.Warn("control mode subscriber channel full after grace period, closing subscriber", "subscriber", subscriberID, "session", t.sanitizedName)
 		}
 	}
 }

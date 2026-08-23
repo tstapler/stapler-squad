@@ -13,6 +13,9 @@ import {
   DeleteApprovalRuleRequestSchema,
   BulkUpsertRulesRequestSchema,
   BulkUpsertRulesResponse,
+  ReloadClaudeSettingsRulesRequestSchema,
+  ReloadClaudeSettingsRulesResponse,
+  ReloadClaudeSettingsRulesResponseSchema,
 } from "@/gen/session/v1/session_pb";
 import { create } from "@bufbuild/protobuf";
 import { getConnectTransport } from "@/lib/api/transport";
@@ -29,6 +32,7 @@ interface UseApprovalRulesReturn {
   bulkUpsertRules: (rules: Array<Partial<ApprovalRuleProto> & { id: string }>) => Promise<BulkUpsertRulesResponse>;
   deleteRule: (id: string) => Promise<void>;
   refresh: () => Promise<void>;
+  reloadClaudeSettingsRules: () => Promise<ReloadClaudeSettingsRulesResponse>;
 }
 
 /**
@@ -103,6 +107,7 @@ export function useApprovalRules(
         pythonModes: ruleData.pythonModes ?? [],
         safePythonImportsOnly: ruleData.safePythonImportsOnly ?? false,
         requireCiPassing: ruleData.requireCiPassing ?? false,
+        minSessionIdleMinutes: ruleData.minSessionIdleMinutes ?? 0,
         decision: ruleData.decision ?? AutoDecision.ESCALATE,
         riskLevel: ruleData.riskLevel ?? "",
         reason: ruleData.reason ?? "",
@@ -139,6 +144,7 @@ export function useApprovalRules(
           pythonModes: ruleData.pythonModes ?? [],
           safePythonImportsOnly: ruleData.safePythonImportsOnly ?? false,
           requireCiPassing: ruleData.requireCiPassing ?? false,
+          minSessionIdleMinutes: ruleData.minSessionIdleMinutes ?? 0,
           decision: ruleData.decision ?? AutoDecision.ESCALATE,
           riskLevel: ruleData.riskLevel ?? "",
           reason: ruleData.reason ?? "",
@@ -167,5 +173,15 @@ export function useApprovalRules(
     []
   );
 
-  return { rules, loading, error, upsertRule, bulkUpsertRules, deleteRule, refresh };
+  const reloadClaudeSettingsRules = useCallback(async (): Promise<ReloadClaudeSettingsRulesResponse> => {
+    if (!clientRef.current) {
+      return create(ReloadClaudeSettingsRulesResponseSchema, { success: false, ruleCount: 0, message: "Client not ready" });
+    }
+    const req = create(ReloadClaudeSettingsRulesRequestSchema, {});
+    const resp = await clientRef.current.reloadClaudeSettingsRules(req);
+    await refresh();
+    return resp;
+  }, [refresh]);
+
+  return { rules, loading, error, upsertRule, bulkUpsertRules, deleteRule, refresh, reloadClaudeSettingsRules };
 }

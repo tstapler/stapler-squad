@@ -24,7 +24,7 @@ import type { WorkflowEntry } from "@/lib/omnibar/detectors/WorkflowDetector";
 import type { AliasMetadata } from "@/lib/omnibar/detectors/AliasDetector";
 import { OmnibarResultList, getResultListItemCount, getHighlightedItemId } from "./OmnibarResultList";
 import { OmnibarModeBadge } from "./OmnibarModeBadge";
-import { OmnibarCreationPanel, SESSION_TYPES } from "./OmnibarCreationPanel";
+import { OmnibarCreationPanel, SESSION_TYPES, type RemoteOption } from "./OmnibarCreationPanel";
 import { parseSlashCommand } from "@/lib/omnibar/parseSlashCommand";
 import { parseInputWithSeparator } from "@/lib/omnibar/parseInput";
 import { toSessionSlug } from "@/lib/omnibar/slugify";
@@ -33,18 +33,22 @@ import {
   detectionInfo, detectionBadge, unknown,
   shortcuts, shortcut, shortcutKey, completionError as completionErrorClass,
   pathIndicator, pathIndicatorValid, pathIndicatorInvalid, pathIndicatorLoading,
-  createButton,
+  createButton, error as errorClass,
 } from "./Omnibar.css";
 import { AliasPalette } from "@/components/ui/AliasPalette";
 import { useAliasSuggestions } from "@/lib/hooks/useAliasSuggestions";
 import { useAliases } from "@/lib/hooks/useAliases";
 import { addRecentShellCommand, getRecentShellCommands } from "@/lib/omnibar/recentShellCommands";
+import type { LauncherPresetEntry } from "@/lib/hooks/useLauncherPresets";
+import type { PresetMetadata, PresetNotFoundMetadata } from "@/lib/omnibar/detectors/PresetDetector";
 
 // Stable identity for callers that omit the `workflows` prop. `workflows` is a
 // dependency of the detection debounce effect below — a fresh `[]` literal as
 // the default parameter value would get a new identity every render, which
 // would restart the 150ms debounce on every render for such callers.
 const EMPTY_WORKFLOWS: WorkflowEntry[] = [];
+const EMPTY_PRESETS: LauncherPresetEntry[] = [];
+const EMPTY_REMOTES: RemoteOption[] = [];
 
 interface OmnibarProps {
   isOpen: boolean;
@@ -53,11 +57,24 @@ interface OmnibarProps {
   onNavigateToSession: (sessionId: string) => void;
   onNavigateToSessionInNewPane?: (sessionId: string) => void;
   onRunWorkflow?: (slug: string, arg: string) => Promise<void>;
+  /** Creates a backlog item from a free-text chat message (the "backlog: <message>" trigger). */
+  onCreateBacklogItemFromChat?: (text: string) => Promise<void>;
   initialMode?: "discovery" | "creation";
   initialInput?: string;
   initialTitle?: string;
   /** Available workflows for @slug autocomplete. */
   workflows?: WorkflowEntry[];
+  /** Launcher presets, fetched once by OmnibarContext and shared with the PresetDetector
+   * registration there — passed through so OmnibarPresetList renders the same data the
+   * detector resolves against, rather than each maintaining its own independent fetch. */
+  launcherPresets?: LauncherPresetEntry[];
+  launcherPresetsLoading?: boolean;
+  launcherPresetsLoadError?: string | null;
+  /** Configured remotes for the "Remote host" selector (ADR-001: remote-as-orthogonal-flag).
+   * TODO(Phase 6): OmnibarContext will source this from a `remotesSlice` populated by a
+   * ListRemotes RPC — until then it's an optional prop that defaults to empty (no selector
+   * rendered, today's local-only behavior unchanged). */
+  remotes?: RemoteOption[];
 }
 
 // Consolidated form state
@@ -86,6 +103,14 @@ export interface OmnibarFormState {
   // Auto-approve (yolo mode): injects a per-agent CLI flag that skips permission/approval
   // prompts entirely. Independent of autoYes — see OmnibarCreationPanel's checkbox comment.
   autoApprove: boolean;
+  // extraArgs carries a selected launcher preset's argv[1:] verbatim (never whitespace-split)
+  // through to the extra_args RPC field. Parallel to program, which carries argv[0].
+  extraArgs: string[];
+  // Remote target: an orthogonal flag that composes with whichever sessionType is selected
+  // (any type) rather than a session type of its own — see ADR-001
+  // (remote-as-orthogonal-flag) and OmnibarCreationPanel's "Remote host" selector. Names an
+  // already-configured RemoteConfig by name; undefined means "run locally" (today's default).
+  remoteName?: string;
 }
 
 const INITIAL_FORM_STATE: OmnibarFormState = {
@@ -106,6 +131,9 @@ const INITIAL_FORM_STATE: OmnibarFormState = {
   firstPrompt: "",
   autonomousMode: false,
   autoApprove: false,
+  extraArgs: [],
+  // undefined = local (this machine) — see OmnibarFormState.remoteName's doc comment.
+  remoteName: undefined,
 };
 
 // Consolidated UI state
@@ -147,6 +175,11 @@ export interface OmnibarSessionData {
   permissionMode?: string;
   aliasName?: string;
   extraCliFlags?: string;
+  extraArgs?: string[];
+  // Names an already-configured remote (RemoteConfig.Name) to run this session on over SSH,
+  // per ADR-001 (remote-as-orthogonal-flag). Undefined runs locally — see
+  // OmnibarFormState.remoteName's doc comment.
+  remoteName?: string;
 }
 
 // Validates a project name: no path separators, null bytes, or leading/trailing spaces/dots.
@@ -167,7 +200,7 @@ function protoSessionTypeToFormString(st: SessionType): OmnibarFormState["sessio
   }
 }
 
-export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession, onNavigateToSessionInNewPane, onRunWorkflow, initialMode, initialInput, initialTitle, workflows = EMPTY_WORKFLOWS }: OmnibarProps) {
+export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession, onNavigateToSessionInNewPane, onRunWorkflow, onCreateBacklogItemFromChat, initialMode, initialInput, initialTitle, workflows = EMPTY_WORKFLOWS, launcherPresets = EMPTY_PRESETS, launcherPresetsLoading = false, launcherPresetsLoadError = null, remotes = EMPTY_REMOTES }: OmnibarProps) {
   const router = useRouter();
   const { setTheme } = useTheme();
 
@@ -228,6 +261,27 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
   // Used in detection auto-fill effects
   const setSessionName = useCallback((v: string) => setFormField("sessionName", v), [setFormField]);
   const setBranch = useCallback((v: string) => setFormField("branch", v), [setFormField]);
+
+  // Selected launcher preset (list click or typed preset:<id>), drives the resolution chip.
+  // Deliberately separate from `detection` state — a list click never touches the text input,
+  // so it can't be derived from detection.type the way alias-resolution-chip is.
+  const [selectedPreset, setSelectedPreset] = useState<LauncherPresetEntry | null>(null);
+  const handlePresetSelect = useCallback(
+    (preset: LauncherPresetEntry) => {
+      // Unconditional overwrite (no "only if empty" guard) — a discrete list click/typed
+      // shorthand resolution is a one-shot action, not continuous re-detection on every
+      // keystroke, so the thrashing concern that motivates the alias auto-fill guard doesn't
+      // apply here (see plan.md Pattern Decisions).
+      const [presetProgram, ...extraArgs] = preset.argv;
+      setFormField("program", presetProgram);
+      setFormField("extraArgs", extraArgs);
+      if (preset.defaultPath) {
+        setFormField("workingDir", preset.defaultPath);
+      }
+      setSelectedPreset(preset);
+    },
+    [setFormField]
+  );
   const setDropdownIndex = useCallback((updater: number | ((prev: number) => number)) => {
     setUIState((prev) => ({
       ...prev,
@@ -584,6 +638,13 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
               setSessionName(namePrefix);
               lastSuggestedNameRef.current = namePrefix;
             }
+          } else if (result.type === InputType.Preset) {
+            // Typed preset:<id> shorthand resolves through the same handler as a list click,
+            // so both entry points produce identical form-state effects (single code path).
+            const presetMeta = result.metadata as PresetMetadata | undefined;
+            if (presetMeta?.preset) {
+              handlePresetSelect(presetMeta.preset);
+            }
           }
         } else {
           // This branch also runs when aliases/workflows finish an async refetch
@@ -616,7 +677,17 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
     // alias/workflow lists resolve — otherwise a fast "@alias" typed before the
     // AliasDetector/WorkflowDetector registers permanently mis-detects (e.g. as
     // SessionSearch) with no keystroke left to trigger a re-run.
-  }, [input, dispatchMode, setFormField, setBranch, setDropdownDismissed, setResultHighlightIndex, setSessionName, aliases, workflows]);
+  }, [input, dispatchMode, setFormField, setBranch, setDropdownDismissed, setResultHighlightIndex, setSessionName, aliases, workflows, handlePresetSelect]);
+
+  // Clear a stale submission error whenever the input value itself changes —
+  // keyed on `input` alone (not the detection-debounce effect's deps, which
+  // also include aliases/workflows) so an unrelated async refetch can't wipe
+  // a just-shown error. Covers every setInput() call site (typing, recent
+  // shell command chips, alias/at-command completion, clone session), not
+  // just the <input>'s own onChange.
+  useEffect(() => {
+    setError(null);
+  }, [input]);
 
   // Focus input when opened
   useEffect(() => {
@@ -997,6 +1068,8 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
     // Recognized commands (>theme ..., >go ...) and spawn_shell are always submittable
     if (detection?.type === InputType.Command && detection.confidence === 1.0) return true;
     if (detection?.type === InputType.SpawnShell && detection.confidence === 1.0) return true;
+    // Chat backlog item creation (backlog: <message>) needs no sessionName/path.
+    if (detection?.type === InputType.ChatBacklogItem) return true;
 
     if (!input.trim()) return false;
     if (!sessionName.trim()) return false;
@@ -1030,6 +1103,10 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
   const handleSubmit = useCallback(async () => {
     if (!canSubmit || isSubmitting) return;
 
+    // Computed once and reused across every session-data branch below that carries a
+    // selected preset's extraArgs through to the RPC.
+    const extraArgsForSubmit = formState.extraArgs.length > 0 ? formState.extraArgs : undefined;
+
     // Execute omnibar commands (>theme ..., >go ...) immediately without entering
     // session-creation flow. These are fire-and-forget; no loading state needed.
     if (detection?.type === InputType.Command && detection.confidence === 1.0 && detection.metadata) {
@@ -1040,6 +1117,23 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
         router.push(commandArg);
       }
       onClose();
+      return;
+    }
+
+    // Chat backlog item creation (backlog: <message>) — no session-creation flow, just
+    // hands the free-text message off to the backlog RPC and closes the omnibar.
+    if (detection?.type === InputType.ChatBacklogItem) {
+      const message = detection.parsedValue;
+      setIsSubmitting(true);
+      setError(null);
+      try {
+        await onCreateBacklogItemFromChat?.(message);
+        onClose();
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Failed to create backlog item");
+      } finally {
+        setIsSubmitting(false);
+      }
       return;
     }
 
@@ -1102,6 +1196,7 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
         aliasName: String(aliasName),
         branch: aliasFinalBranch || undefined,
         extraCliFlags: extraFlags !== undefined ? String(extraFlags) : undefined,
+        extraArgs: extraArgsForSubmit,
         sessionType: sessionType as "directory" | "new_worktree" | "existing_worktree" | "one_off",
         workingDir: workingDir.trim() || undefined,
         category: category.trim() || undefined,
@@ -1152,6 +1247,7 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
           sessionType: newProjectSessionType,
           isNewProject: true,
           initialPrompt: firstPromptText,
+          extraArgs: extraArgsForSubmit,
         };
       } else {
         // Autonomous mode composes with sessionType (any type except one_off) rather
@@ -1173,9 +1269,13 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
           workingDir: isOneOff ? undefined : (workingDir.trim() || undefined),
           autonomousMode: isAutonomous ? true : undefined,
           permissionMode: isAutonomous ? "auto" : undefined,
+          // Remote target composes with sessionType exactly like autonomousMode above —
+          // passed through only when set (ADR-001: remote-as-orthogonal-flag).
+          remoteName: formState.remoteName || undefined,
           // Only forward when relevant (non-existent path + opt-in checked).
           createIfMissing: pathDoesNotExist && createIfMissing ? true : undefined,
           initialPrompt: firstPromptText,
+          extraArgs: extraArgsForSubmit,
         };
 
         // Handle GitHub URLs - path will be resolved server-side
@@ -1243,8 +1343,11 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
     onCreateSession,
     onClose,
     onRunWorkflow,
+    onCreateBacklogItemFromChat,
     formState.firstPrompt,
     formState.autonomousMode,
+    formState.extraArgs,
+    formState.remoteName,
     router,
     setTheme,
   ]);
@@ -1405,6 +1508,20 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
             </div>
           );
         })()}
+        {selectedPreset && (
+          <div role="status" aria-live="polite" data-testid="preset-resolution-chip">
+            Preset applied: {selectedPreset.label} ({program}
+            {formState.extraArgs.length > 0 ? ` ${formState.extraArgs.join(" ")}` : ""})
+          </div>
+        )}
+        {detection?.type === InputType.PresetNotFound && (() => {
+          const m = detection.metadata as PresetNotFoundMetadata | undefined;
+          return (
+            <div role="alert" aria-live="assertive" data-testid="preset-not-found">
+              No preset &apos;{m?.typedId}&apos;
+            </div>
+          );
+        })()}
         {detection?.type === InputType.SpawnShell && (() => {
           const { shellDir, shellCommand } = (detection.metadata ?? {}) as {
             shellDir?: string;
@@ -1417,6 +1534,16 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
                 <span>{shellCommand ? `Run "${shellCommand}"` : "Open terminal"}</span>
                 {shellDir ? <span> in {shellDir}</span> : null}
               </div>
+              {error && (
+                <div
+                  className={errorClass}
+                  role="alert"
+                  aria-live="assertive"
+                  data-testid="spawn-shell-error"
+                >
+                  {error}
+                </div>
+              )}
               {!shellCommand && !shellDir && recentCommands.length > 0 && (
                 <div data-testid="spawn-shell-recent-commands">
                   {recentCommands.map((cmd) => (
@@ -1531,6 +1658,11 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
                 ? ((detection.metadata as AliasMetadata | undefined)?.alias?.namePrefix ?? "")
                 : ""
             }
+            onPresetSelect={handlePresetSelect}
+            launcherPresets={launcherPresets}
+            launcherPresetsLoading={launcherPresetsLoading}
+            launcherPresetsLoadError={launcherPresetsLoadError}
+            remotes={remotes}
           />
         )}
 

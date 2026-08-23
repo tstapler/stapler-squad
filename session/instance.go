@@ -18,6 +18,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/artifacts"
 	"github.com/tstapler/stapler-squad/session/detection"
+	"github.com/tstapler/stapler-squad/session/sshremote"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
@@ -109,6 +110,14 @@ type LifecycleListener interface {
 // package cannot import this package (would create an import cycle), so the two 10000s must be
 // kept in sync by comment, not by shared constant.
 const MaxNoteLength = 10000
+
+// MaxSteerMessageLength is the maximum length, in bytes, of a steer_message sent
+// via UpdateSession. No RPC in this server currently enforces a request-size cap
+// (see grep for WithReadMaxBytes across server/ — a known, pre-existing, repo-wide
+// gap), but steer_message is a new/widened free-text entry point that now reaches
+// ordinary work/review sessions, not just autonomous ones, so it gets an explicit
+// cap here rather than waiting on that broader fix. Matches MaxNoteLength's value.
+const MaxSteerMessageLength = 10000
 
 // Instance is a running instance of claude code.
 type Instance struct {
@@ -317,6 +326,10 @@ type Instance struct {
 	EnvVars map[string]string `json:"env_vars,omitempty"`
 	// CLIFlags are additional CLI flags appended to the program launch command.
 	CLIFlags string `json:"cli_flags,omitempty"`
+	// ExtraArgs are additional argv elements appended verbatim (never whitespace-split) after
+	// CLIFlags at launch time. Populated by a selected launcher preset's argv[1:]; see
+	// buildLaunchCommand in instance_tmux.go for the shell-quoting boundary.
+	ExtraArgs []string `json:"extra_args,omitempty"`
 
 	// ArchivedAt is set when the session is archived. Nil means not archived.
 	ArchivedAt *time.Time `json:"archived_at,omitempty"`
@@ -396,6 +409,18 @@ type Instance struct {
 	// commands through the mailbox without holding any other lock.
 	liveInstance atomic.Pointer[LiveInstance]
 
+	// promptFilePath tracks the most recently created temp-file-backed launch
+	// prompt (see promptArg), so Destroy can remove it immediately instead of
+	// relying solely on promptFileCleanupDelay's background timer.
+	promptFilePath atomic.Pointer[string]
+
+	// promptFileCleanupDelayOverride, when non-zero, replaces
+	// defaultPromptFileCleanupDelay for this instance's promptArg calls. It
+	// exists so tests can shrink the cleanup delay without a shared
+	// package-level var, which would race across t.Parallel() tests (each
+	// test gets its own Instance, so there is nothing to synchronize).
+	promptFileCleanupDelayOverride time.Duration
+
 	// mu protects Instance's mutable data fields (Status, started, Tags,
 	// Checkpoints, ReviewState timestamps, GitHub PR fields, Artifacts, etc.).
 	// Use sendSyncErr / send for writes and Snapshot() for reads.
@@ -407,6 +432,49 @@ type Instance struct {
 	// driverRunning tracks whether a SessionDriver goroutine is active for this instance.
 	// Guarded by CompareAndSwap — see StartSessionDriver.
 	driverRunning atomic.Bool
+	// driverStopper carries the stop/done signaling pair for the current
+	// SessionDriver run, if one has ever been started. Set by StartSessionDriver,
+	// read by StopSessionDriver (called from Destroy) to signal and join the
+	// driver goroutine so it cannot outlive Destroy().
+	driverStopper atomic.Pointer[sessionDriverStopper]
+	// driverMu serializes StartSessionDriver/StopSessionDriver access to
+	// driverRunning/driverStopper/driverDestroyed as one atomic unit. Without
+	// it, CreateSession's async initialization goroutine (which calls
+	// instance.Start(true) and StartSessionDriver well after the RPC has
+	// already returned and the instance is discoverable via
+	// FindLiveInstance — see server/services/session_service.go) can call
+	// StartSessionDriver *after* a fast-following DeleteSession's Destroy()
+	// has already run StopSessionDriver and found no stopper yet, orphaning a
+	// driver goroutine that nothing will ever signal to stop.
+	driverMu sync.Mutex
+	// driverDestroyed is set by StopSessionDriver (called from Destroy)
+	// while holding driverMu, and checked by StartSessionDriver under the
+	// same lock: once an instance has been destroyed, no later
+	// StartSessionDriver call may spawn a new driver goroutine for it, no
+	// matter how late that call arrives relative to Destroy().
+	driverDestroyed bool
+	// driverWG tracks the SessionDriver goroutine (runSessionDriver or its
+	// handleDriverFailure-spawned restart) so tests can join it before
+	// t.TempDir() cleanup runs via JoinSessionDriver. StopSessionDriver
+	// (called from Destroy) is the production stop/signal mechanism;
+	// driverWG exists only so tests that don't call Destroy can still wait
+	// for the goroutine to finish before their tempdir is removed.
+	driverWG sync.WaitGroup
+	// hibernateWG tracks the hibernateProcessLocked/resumeFromHibernationLocked
+	// goroutines so tests can join them before t.TempDir() cleanup runs.
+	// See JoinHibernation.
+	hibernateWG sync.WaitGroup
+
+	// destroyed is set by Destroy() so a SessionDriver goroutine that outlives
+	// its own teardown (session_driver.go's loop only self-terminates on a
+	// 25-minute wall-clock deadline or a detected terminal status, both of
+	// which can lag well behind Destroy() returning) notices on its very next
+	// driverPollInterval tick and exits immediately instead of continuing to
+	// call SendKeys/AcquireExecSlot against a torn-down session, as a
+	// defense-in-depth fallback alongside driverStopper's proactive
+	// cancellation. Zero-value safe (false) so the many `&Instance{}`
+	// construction sites that bypass NewInstance need no changes.
+	destroyed atomic.Bool
 
 	// sessionGoal is the cached goal state for this session.
 	// Always use GetSessionGoal/SetSessionGoalCached accessors.
@@ -450,6 +518,84 @@ type Instance struct {
 	// Artifacts holds structured artifacts extracted from the session's JSONL history.
 	// Populated asynchronously by ArtifactExtractor. Protected by mu.
 	Artifacts *artifacts.SessionArtifactsBlob
+
+	// ExecutionTarget selects where this session's TmuxSession/GitWorktree
+	// subprocess commands run (session/execution_target.go, ssh-remote-workspaces
+	// Phase 4 Epic 4.2). Set once at construction from InstanceOptions.ExecutionTarget;
+	// nil is treated as LocalTarget{} by the executionTarget() accessor so the many
+	// &Instance{} struct literals across this codebase (tests, legacy construction
+	// sites) that bypass NewInstance are unaffected. Read via executionTarget(), never
+	// this field directly, outside of construction/serialization code.
+	ExecutionTarget ExecutionTarget `json:"-"`
+
+	// remoteApprovalRelay is the per-session *sshremote.RemoteApprovalRelay
+	// (ssh-remote-workspaces Phase 5, session/sshremote) server/services.
+	// SessionService wires up for a remote session's PermissionRequest hook
+	// round trip (see SetRemoteApprovalRelay). nil for every local session,
+	// and nil for a remote session until CreateSession's async setup
+	// finishes -- read/written only via SetRemoteApprovalRelay/
+	// stopRemoteApprovalRelay, never this field directly. Protected by its
+	// own mutex rather than i.mu: it's set once, well after Start() returns,
+	// by a goroutine outside the actor's normal mutation path, and read only
+	// by destroyChain() during teardown -- routing it through the actor's
+	// sendSync machinery for a single conditional Stop() call would be
+	// disproportionate. The concrete *sshremote.RemoteApprovalRelay type is
+	// used directly rather than a package-local Stop()-only interface: no
+	// import cycle exists (session/sshremote no longer imports this package
+	// after Part A), and there is no second implementation on the horizon --
+	// introducing an interface purely for testability here is exactly the
+	// speculative abstraction .claude/rules/interface-pollution-checklist.md
+	// warns against.
+	remoteApprovalRelay   *sshremote.RemoteApprovalRelay
+	remoteApprovalRelayMu deadlock.Mutex
+}
+
+// executionTarget returns i.ExecutionTarget, defaulting to LocalTarget{} when nil.
+// Every read site in this package uses this helper rather than i.ExecutionTarget
+// directly, since &Instance{} struct literals (tests, legacy construction sites)
+// bypass NewInstance's default-assignment below.
+func (i *Instance) executionTarget() ExecutionTarget {
+	if i.ExecutionTarget == nil {
+		return LocalTarget{}
+	}
+	return i.ExecutionTarget
+}
+
+// GetExecutionTarget returns this instance's ExecutionTarget (defaulting to
+// LocalTarget{} when unset), exposed for server/services call sites (a
+// different package, so the unexported executionTarget() accessor isn't
+// reachable there) that need the underlying tmux.CommandRunner or resolved
+// RemoteTarget -- e.g. wiring a RemoteApprovalRelay/InjectHookConfigRemote
+// for a newly created remote session (ssh-remote-workspaces Phase 5).
+// Mirrors IsRemote()'s existing precedent for exposing executionTarget()
+// state across the package boundary without a type switch.
+func (i *Instance) GetExecutionTarget() ExecutionTarget {
+	return i.executionTarget()
+}
+
+// SetRemoteApprovalRelay stores relay so destroyChain() can Stop() it when
+// this instance is torn down. Intended for a remote session only (relay is
+// nil for local sessions); passing nil clears any previously stored relay
+// without stopping it -- callers that need to stop-and-clear call Stop()
+// themselves first (see server/services' error-cleanup path, which stops a
+// relay it failed to finish wiring before ever calling this).
+func (i *Instance) SetRemoteApprovalRelay(relay *sshremote.RemoteApprovalRelay) {
+	i.remoteApprovalRelayMu.Lock()
+	i.remoteApprovalRelay = relay
+	i.remoteApprovalRelayMu.Unlock()
+}
+
+// stopRemoteApprovalRelay stops and clears this instance's remote approval
+// relay (if any), called from destroyChain() during teardown. No-op for
+// every local session (relay is always nil there).
+func (i *Instance) stopRemoteApprovalRelay() {
+	i.remoteApprovalRelayMu.Lock()
+	relay := i.remoteApprovalRelay
+	i.remoteApprovalRelay = nil
+	i.remoteApprovalRelayMu.Unlock()
+	if relay != nil {
+		relay.Stop()
+	}
 }
 
 // SessionType indicates the type of session workflow to use
@@ -580,6 +726,16 @@ type InstanceOptions struct {
 	EnvVars map[string]string
 	// CLIFlags are additional CLI flags appended to the program launch command.
 	CLIFlags string
+	// ExtraArgs are additional argv elements appended verbatim (never whitespace-split) after
+	// CLIFlags at launch time.
+	ExtraArgs []string
+
+	// ExecutionTarget selects where this session's TmuxSession/GitWorktree subprocess
+	// commands run (ssh-remote-workspaces Phase 4 Epic 4.2). nil (the zero value) means
+	// LocalTarget{} -- every existing caller that doesn't set this field is unaffected.
+	// Set by server/services/session_service.go's CreateSession mode-specific block when
+	// req.Msg.Remote names a configured remote.
+	ExecutionTarget ExecutionTarget
 }
 
 // ResolveSessionPath expands a leading "~" to the current user's home directory
@@ -684,6 +840,11 @@ func NewInstance(opts InstanceOptions) (*Instance, error) {
 		CreateIfMissing: opts.CreateIfMissing,
 		EnvVars:         opts.EnvVars,
 		CLIFlags:        opts.CLIFlags,
+		ExtraArgs:       opts.ExtraArgs,
+		ExecutionTarget: opts.ExecutionTarget,
+	}
+	if instance.ExecutionTarget == nil {
+		instance.ExecutionTarget = LocalTarget{}
 	}
 
 	// Initialize TagManager backed by the Instance.Tags slice
@@ -929,7 +1090,6 @@ func startLocked(actorState *instanceState, firstTimeSetup bool) error {
 	}
 
 	i.recoverConversationBeforeLaunch(firstTimeSetup)
-	i.initTmuxSession()
 
 	i.pm().ResetExitOnce()
 	i.pm().SetOnExitCallback(instanceOnExitCallback(i))
@@ -938,6 +1098,13 @@ func startLocked(actorState *instanceState, firstTimeSetup bool) error {
 		if err := i.setupFirstTimeWorktree(); err != nil {
 			return err
 		}
+	} else {
+		// No unbounded-duration setup (git worktree creation) happens between here
+		// and pm().Start() below for a restart/resume of an already-existing
+		// worktree, so it's safe to build the launch command now. See the
+		// firstTimeSetup branch below, where this call is deliberately deferred
+		// until after setupFirstTimeWorktree()/gitManager.Setup() complete.
+		i.initTmuxSession()
 	}
 
 	var setupErr error
@@ -1021,35 +1188,72 @@ func startLocked(actorState *instanceState, firstTimeSetup bool) error {
 			}
 			basePath = i.gitManager.GetWorktreePath()
 		}
+		// Build the launch command (and, for large prompts, write the temp file
+		// promptArg() arms a cleanup timer on) only now that worktree setup — an
+		// unbounded-duration git operation — has completed. Building it earlier,
+		// before setupFirstTimeWorktree()/gitManager.Setup(), let the timer expire
+		// and delete the prompt file before pm().Start() below ever spawned the
+		// shell that reads it back via `$(cat ...)`.
+		i.initTmuxSession()
 		startPath := i.resolveStartPath(basePath)
-		i.startVNCDisplay(context.Background())
-		i.allocateCDPPort()
-		if displayEnv := i.VNCDisplayEnv(); displayEnv != "" {
-			if tb, ok := i.processManager.(*TmuxBackend); ok {
-				if sess := tb.TmuxManager().Session(); sess != nil {
-					sess.ExtraEnv = append(sess.ExtraEnv, displayEnv)
+
+		if i.executionTarget().IsRemote() {
+			// Terminal streaming over SSH (attaching a local PTY to a remote tmux
+			// pane) is out of scope for ssh-remote-workspaces Phase 4 Epic 4.2 (Story
+			// 4.2.1) -- see that epic's doc comment in
+			// project_plans/ssh-remote-workspaces/implementation/plan.md. The remote
+			// tmux session was already created synchronously by CreateSession's
+			// mode-specific block (server/services/session_service.go) via
+			// TmuxSession.EnsureRemoteSession, before this async goroutine ever runs
+			// -- so there is no local PTY to start, and no VNC/CDP display to
+			// allocate (both local-machine concepts with no remote equivalent yet).
+			// i.pm().Start(startPath) would in any case fail: it validates startPath
+			// via a local os.Stat, and startPath here is a path on the remote host.
+			// Re-confirm the remote session is still up (idempotent) instead.
+			tb, ok := i.processManager.(*TmuxBackend)
+			if !ok {
+				setupErr = fmt.Errorf("remote execution target requires a tmux-backed process manager")
+				return setupErr
+			}
+			sess := tb.TmuxManager().Session()
+			if sess == nil {
+				setupErr = fmt.Errorf("remote tmux session was not initialized")
+				return setupErr
+			}
+			if ensureErr := sess.EnsureRemoteSession(context.Background(), startPath); ensureErr != nil {
+				setupErr = fmt.Errorf("remote tmux session unavailable: %w", ensureErr)
+				return setupErr
+			}
+		} else {
+			i.startVNCDisplay(context.Background())
+			i.allocateCDPPort()
+			if displayEnv := i.VNCDisplayEnv(); displayEnv != "" {
+				if tb, ok := i.processManager.(*TmuxBackend); ok {
+					if sess := tb.TmuxManager().Session(); sess != nil {
+						sess.ExtraEnv = append(sess.ExtraEnv, displayEnv)
+					}
 				}
 			}
-		}
-		if cdpEnvs := i.CDPDisplayEnv(); len(cdpEnvs) > 0 {
-			if tb, ok := i.processManager.(*TmuxBackend); ok {
-				if sess := tb.TmuxManager().Session(); sess != nil {
-					sess.ExtraEnv = append(sess.ExtraEnv, cdpEnvs...)
+			if cdpEnvs := i.CDPDisplayEnv(); len(cdpEnvs) > 0 {
+				if tb, ok := i.processManager.(*TmuxBackend); ok {
+					if sess := tb.TmuxManager().Session(); sess != nil {
+						sess.ExtraEnv = append(sess.ExtraEnv, cdpEnvs...)
+					}
 				}
 			}
-		}
-		if err := i.pm().Start(startPath); err != nil {
-			if i.gitManager.HasWorktree() {
-				if cleanupErr := i.gitManager.Cleanup(); cleanupErr != nil {
-					err = fmt.Errorf("%v (cleanup error: %v)", err, cleanupErr)
+			if err := i.pm().Start(startPath); err != nil {
+				if i.gitManager.HasWorktree() {
+					if cleanupErr := i.gitManager.Cleanup(); cleanupErr != nil {
+						err = fmt.Errorf("%v (cleanup error: %v)", err, cleanupErr)
+					}
 				}
+				setupErr = fmt.Errorf("failed to start new session: %w", err)
+				return setupErr
 			}
-			setupErr = fmt.Errorf("failed to start new session: %w", err)
-			return setupErr
-		}
-		_ = i.pm().RestoreWithWorkDir(startPath)
-		if _, ptyErr := i.pm().GetPTY(); ptyErr != nil {
-			log.Error("new session: pty attach failed after retries, controller and sendkeys unavailable", "session", i.Title, "err", ptyErr)
+			_ = i.pm().RestoreWithWorkDir(startPath)
+			if _, ptyErr := i.pm().GetPTY(); ptyErr != nil {
+				log.Error("new session: pty attach failed after retries, controller and sendkeys unavailable", "session", i.Title, "err", ptyErr)
+			}
 		}
 	}
 
@@ -1113,8 +1317,6 @@ func (i *Instance) start(firstTimeSetup bool, setupCleanup bool, cleanup *tmux.C
 
 	i.recoverConversationBeforeLaunch(firstTimeSetup)
 
-	i.initTmuxSession()
-
 	// Wire the exit callback so control-mode %exit / PTY EOF fires our handler.
 	// ResetExitOnce is called first so repeated start() calls (restarts) allow
 	// the callback to fire again after the sync.Once was exhausted in the prior run.
@@ -1126,6 +1328,13 @@ func (i *Instance) start(firstTimeSetup bool, setupCleanup bool, cleanup *tmux.C
 		if err := i.setupFirstTimeWorktree(); err != nil {
 			return err
 		}
+	} else {
+		// No unbounded-duration setup (git worktree creation) happens between here
+		// and pm().Start() below for a restart/resume of an already-existing
+		// worktree, so it's safe to build the launch command now. See the
+		// firstTimeSetup branch below, where this call is deliberately deferred
+		// until after setupFirstTimeWorktree()/gitManager.Setup() complete.
+		i.initTmuxSession()
 	}
 
 	// Cleanup on error: kill session and invalidate the caller's cleanup handle.
@@ -1237,6 +1446,13 @@ func (i *Instance) start(firstTimeSetup bool, setupCleanup bool, cleanup *tmux.C
 			}
 			basePath = i.gitManager.GetWorktreePath()
 		}
+		// Build the launch command (and, for large prompts, write the temp file
+		// promptArg() arms a cleanup timer on) only now that worktree setup — an
+		// unbounded-duration git operation — has completed. Building it earlier,
+		// before setupFirstTimeWorktree()/gitManager.Setup(), let the timer expire
+		// and delete the prompt file before pm().Start() below ever spawned the
+		// shell that reads it back via `$(cat ...)`.
+		i.initTmuxSession()
 		startPath := i.resolveStartPath(basePath)
 		// Phase 1: Allocate X display before creating the tmux session so DISPLAY
 		// can be injected via ExtraEnv at new-session time. This ensures the agent
@@ -1326,12 +1542,44 @@ func (i *Instance) Kill() error {
 	return i.Destroy()
 }
 
+// destroyChainTimeout bounds Destroy()'s stopVNC/stopCDP/KillSession/
+// CleanupWorktree chain so a hung subsystem (e.g. a wedged x11vnc/CDP
+// process, or a git worktree removal stuck on a locked index) can't block
+// Destroy() indefinitely. KillSession's own tmux subprocess is already
+// independently bounded by killSessionTimeout in session/tmux/tmux.go — this
+// is the equivalent cap on the chain as a whole, matching that same 5s value
+// so no single Destroy() caller (e.g. SessionService.DeleteSession's
+// trackCleanup goroutine) can wait longer than the tmux-kill path already
+// tolerates. The chain keeps running in its goroutine after the timeout
+// fires — this bounds the wait, not the work.
+const destroyChainTimeout = 5 * time.Second
+
 // Destroy completely destroys the instance - both tmux session and worktree.
 // Fires EventStopped unconditionally (even if the instance was never started)
 // so listeners tracking "is this session now gone" — e.g. BacklogLifecycleListener's
 // ItemSession.EndedAt bookkeeping — see every deliberate stop, not just natural exits.
 func (i *Instance) Destroy() error {
+	// Set first, before anything else: a leftover SessionDriver goroutine
+	// (session_driver.go) polls this every driverPollInterval and exits on
+	// seeing it, rather than continuing until its own 25-minute deadline.
+	i.destroyed.Store(true)
+
 	defer i.fireLifecycleEvent(EventStopped, "operator-destroy")
+	defer i.cleanupPromptFile()
+
+	// Stop any running (or not-yet-started) SessionDriver goroutine and mark
+	// this instance destroyed *before* checking i.started: CreateSession's
+	// async initialization goroutine can still be racing to call
+	// instance.Start(true) and StartSessionDriver after this Destroy() call
+	// begins (the instance is discoverable via FindLiveInstance well before
+	// that goroutine finishes — see server/services/session_service.go's
+	// CreateSession trackCleanup goroutine). Calling StopSessionDriver here
+	// unconditionally — even while started is still false — sets
+	// driverDestroyed so a StartSessionDriver call arriving later for this
+	// instance refuses to start a driver goroutine that nothing would ever
+	// be able to stop, so it cannot keep polling Preview() (and thus
+	// re-resolving config via the tmux exec gate) after Destroy() returns.
+	StopSessionDriver(i)
 
 	if !i.started.Load() {
 		// If instance was never started, just return success
@@ -1341,6 +1589,25 @@ func (i *Instance) Destroy() error {
 	// Stop the controller first
 	i.StopController()
 
+	done := make(chan error, 1)
+	go func() {
+		done <- i.destroyChain()
+	}()
+	select {
+	case err := <-done:
+		return err
+	case <-time.After(destroyChainTimeout):
+		return fmt.Errorf("timed out after %s waiting for session %q cleanup chain (stopVNC/stopCDP/KillSession/CleanupWorktree) to finish (still running in background)", destroyChainTimeout, i.Title)
+	}
+}
+
+// destroyChain runs the actual stopVNC/stopCDP/KillSession/CleanupWorktree
+// teardown sequence. Split out of Destroy() so it can be bounded by
+// destroyChainTimeout without losing track of the goroutine it runs in.
+func (i *Instance) destroyChain() error {
+	// Stop the remote approval relay (if any) -- see SetRemoteApprovalRelay's
+	// doc comment. No-op for local sessions (always nil there).
+	i.stopRemoteApprovalRelay()
 	// Stop VNC before killing tmux (x11vnc must stop before Xvfb).
 	i.stopVNC()
 	// Stop CDP screencast goroutines and clean up wrapper scripts.

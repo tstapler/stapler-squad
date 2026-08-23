@@ -784,4 +784,3 @@ func (p *EscapeCodeParser) formatParams(params string) string {
 	}
 	return " (" + params + ")"
 }
-

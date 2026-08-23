@@ -22,6 +22,7 @@ import (
 // gogitstore.SharedObjectStore reference count to zero, making that store
 // eligible for the registry's own Prune.
 func TestPruneRepoCache_ReleasesGogitstoreRef(t *testing.T) {
+	t.Parallel()
 	mainRepo := initRepoInternal(t)
 
 	g := &GoGitVCSReader{}
@@ -91,6 +92,7 @@ func TestPruneRepoCache_LRUTrim_ReleasesGogitstoreRef(t *testing.T) {
 // escape valve) also releases every entry's gogitstore reference, not just
 // pruneRepoCache's gentler path.
 func TestClearCache_ReleasesGogitstoreRef(t *testing.T) {
+	t.Parallel()
 	mainRepo := initRepoInternal(t)
 
 	g := &GoGitVCSReader{}
@@ -122,6 +124,7 @@ func TestClearCache_ReleasesGogitstoreRef(t *testing.T) {
 // instead of exactly 1, and the store would never become evictable even
 // after every returned *cachedRepo is itself later evicted.
 func TestOpenRepoEntry_ConcurrentFirstOpen_DiscardedDuplicatesReleaseRef(t *testing.T) {
+	t.Parallel()
 	mainRepo := initRepoInternal(t)
 
 	g := &GoGitVCSReader{}

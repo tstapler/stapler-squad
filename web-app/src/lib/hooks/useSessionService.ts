@@ -10,6 +10,8 @@ import {
   UpdateSessionRequest,
   PromptHistoryEntry,
   RunOneShotResponse,
+  DraftPullRequestResponse,
+  CreatePullRequestResponse,
   SpawnShellRequest,
   RunWorkflowRequestSchema,
   ArchiveSessionRequestSchema,
@@ -21,8 +23,23 @@ import { SessionEvent, NotificationEvent } from "@/gen/session/v1/events_pb";
 import { getApiBaseUrl, createAuthInterceptor } from "@/lib/config";
 import { BackoffState, getWsCloseCode, isRetriableCloseCode } from "@/lib/utils/backoff";
 import { createRpcTimingInterceptor } from "@/lib/telemetry/rpcTiming";
+import { getErrorMessage } from "@/lib/utils/connectError";
 import { useAnalytics } from "@/lib/contexts/AnalyticsContext";
 import { useAppDispatch, useAppSelector } from "@/lib/store";
+// NOTE (backlog #488, 2026-08-17): this file's other `dispatch(setError(...))`
+// sites are deliberately NOT converted to the getErrorMessage() helper
+// (web-app/src/lib/utils/connectError.ts) used everywhere in components/backlog/**.
+// `setError` here writes to the shared sessionsSlice Redux store, consumed by
+// non-backlog surfaces (the general session list/terminal views) — stripping the
+// ConnectRPC `[code]` prefix there is a behavior change with a materially larger
+// blast radius than the local useState catch-block conversions this PR made, and
+// is out of scope for a backlog-toast presentation fix. Tracked as a follow-up,
+// not fixed here.
+//
+// updateSession()'s setError call below is the one exception: BacklogItemDetail.tsx's
+// handleSteerSession reads this exact value back via selectSessionsError() and
+// re-throws it into a backlog action toast, so it IS a backlog-facing surface
+// this PR touches — stripped here to match.
 import {
   setSessions,
   upsertSession,
@@ -36,6 +53,7 @@ import {
   selectConnectionState,
   removeDetectedStatus,
 } from "@/lib/store/sessionsSlice";
+import { remoteHealthChanged } from "@/lib/store/remotesSlice";
 
 // ponytail: stable empty array so non-watching callers (e.g. useSessionActions
 // in each SessionCard) don't subscribe to the full sessions list. Without this,
@@ -93,6 +111,13 @@ interface UseSessionServiceReturn {
   updateSession: (id: string, updates: Partial<UpdateSessionRequest>) => Promise<Session | null>;
   deleteSession: (id: string, force?: boolean) => Promise<boolean>;
   runOneShot: (sessionId: string, prompt: string, timeoutSeconds?: number) => Promise<RunOneShotResponse | null>;
+  draftPullRequest: (sessionId: string) => Promise<DraftPullRequestResponse | null>;
+  createPullRequest: (req: {
+    sessionId: string;
+    title: string;
+    body: string;
+    baseBranch: string;
+  }) => Promise<CreatePullRequestResponse | null>;
   listPromptHistory: (limit?: number) => Promise<PromptHistoryEntry[]>;
   pauseSession: (id: string) => Promise<Session | null>;
   resumeSession: (id: string, updates?: { title?: string; tags?: string[] }) => Promise<Session | null>;
@@ -277,9 +302,14 @@ export function useSessionService(
             createIfMissing: request.createIfMissing ?? false,
             initialPrompt: request.initialPrompt,
             autonomousMode: request.autonomousMode ?? false,
+            // No default (unlike autonomousMode) -- an omitted remote must stay omitted on
+            // the wire, not coerced to a zero-value RemoteTarget, so local session creation
+            // is byte-identical to pre-change behavior (ADR-001: remote-as-orthogonal-flag).
+            remote: request.remote,
             permissionMode: request.permissionMode ?? "",
             aliasName: request.aliasName ?? "",
             cliFlags: request.cliFlags ?? "",
+            extraArgs: request.extraArgs ?? [],
           },
           { timeoutMs: CREATE_SESSION_TIMEOUT_MS }
         );
@@ -333,7 +363,7 @@ export function useSessionService(
         return response.session ?? null;
       } catch (err) {
         console.error("[useSessionService] updateSession failed:", err);
-        dispatch(setError(err instanceof Error ? err.message : "Failed to update session"));
+        dispatch(setError(getErrorMessage(err, "Failed to update session")));
         return null;
       }
     },
@@ -604,6 +634,47 @@ export function useSessionService(
     [dispatch]
   );
 
+  // Fetch the pre-filled draft (title/body/base branch) for a session's PR (AC4)
+  const draftPullRequest = useCallback(
+    async (sessionId: string): Promise<DraftPullRequestResponse | null> => {
+      if (!clientRef.current) return null;
+
+      dispatch(setError(null));
+
+      try {
+        const response = await clientRef.current.draftPullRequest({ sessionId });
+        return response;
+      } catch (err) {
+        dispatch(setError(err instanceof Error ? err.message : "Failed to draft pull request"));
+        return null;
+      }
+    },
+    [dispatch]
+  );
+
+  // Create the pull request for a session (AC3/AC7)
+  const createPullRequest = useCallback(
+    async (req: { sessionId: string; title: string; body: string; baseBranch: string }): Promise<CreatePullRequestResponse | null> => {
+      if (!clientRef.current) return null;
+
+      dispatch(setError(null));
+
+      try {
+        const response = await clientRef.current.createPullRequest({
+          sessionId: req.sessionId,
+          title: req.title,
+          body: req.body,
+          baseBranch: req.baseBranch,
+        });
+        return response;
+      } catch (err) {
+        dispatch(setError(err instanceof Error ? err.message : "Failed to create pull request"));
+        return null;
+      }
+    },
+    [dispatch]
+  );
+
   // List prompt history entries (S1)
   const listPromptHistory = useCallback(
     async (limit?: number): Promise<PromptHistoryEntry[]> => {
@@ -826,6 +897,22 @@ export function useSessionService(
         if (sessionId) {
           dispatch(removeDetectedStatus(sessionId));
           dispatch(removeReviewQueueItem(sessionId));
+        }
+        break;
+      }
+      case "remoteHealthChanged": {
+        // ssh-remote-workspaces Epic 6.2: a configured remote's SSH connection
+        // health transitioned (session/sshremote.RemoteHealthProber, pushed
+        // over this same WatchSessions stream -- no separate subscription or
+        // polling). Routed into remotesSlice so RemoteConnectionIndicator can
+        // read it via selectRemoteConnectionState.
+        const remoteHealth = event.event.value;
+        if (remoteHealth.remoteName) {
+          dispatch(remoteHealthChanged({
+            remoteName: remoteHealth.remoteName,
+            state: remoteHealth.state,
+            previousState: remoteHealth.previousState,
+          }));
         }
         break;
       }
@@ -1126,6 +1213,8 @@ export function useSessionService(
     listCheckpoints,
     forkSession,
     runOneShot,
+    draftPullRequest,
+    createPullRequest,
     listPromptHistory,
     watchSessions,
     stopWatching,

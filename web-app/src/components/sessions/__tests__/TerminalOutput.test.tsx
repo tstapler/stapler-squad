@@ -12,7 +12,8 @@
  * events without mounting real xterm.js.
  */
 
-import { render, act, fireEvent } from "@testing-library/react";
+import { render, act, fireEvent, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import React from "react";
 
 jest.mock("../XtermTerminal", () => {
@@ -269,5 +270,78 @@ describe("TerminalOutput resize call sites", () => {
     // Exact-arity check: the 2-arg call must not have picked up a 3rd
     // truthy `force` argument.
     expect(streamState.resize.mock.calls[0]).toHaveLength(2);
+  });
+});
+
+// Task 8.3.1.3 — hard-failed banner's Retry control must be reachable via
+// normal tab order (no tabIndex={-1} skip) and activatable with Enter/Space,
+// per design/ux.md §2 Accessibility "Keyboard" bullet.
+describe("TerminalOutput hardFailedBanner Retry keyboard accessibility", () => {
+  beforeEach(() => {
+    jest.useFakeTimers();
+    jest.spyOn(console, "log").mockImplementation(() => {});
+    jest.spyOn(console, "warn").mockImplementation(() => {});
+    jest.spyOn(console, "error").mockImplementation(() => {});
+    mockXtermState.onResize = null;
+    mockXtermState.cols = 80;
+    mockXtermState.rows = 24;
+    mockXtermState.fit.mockClear();
+  });
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+    jest.useRealTimers();
+  });
+
+  it("TerminalOutput_should_ReachRetryViaNormalTabOrderAndActivateOnEnterAndSpace_When_HardFailedBannerShown", async () => {
+    const user = userEvent.setup({ advanceTimers: jest.advanceTimersByTime });
+    const handleManualReconnect = jest.fn();
+
+    // Start connected so hasEverConnectedRef becomes true, then transition to
+    // hard-failed so the hardFailedBanner (and its Retry button) renders.
+    let streamState = makeStreamMock({ isConnected: true });
+    mockUseTerminalStream.mockImplementation(() => streamState);
+    const { rerender } = render(<TerminalOutput sessionId="s1" baseUrl="http://x" />);
+
+    streamState = makeStreamMock({
+      isConnected: false,
+      isHardFailed: true,
+      handleManualReconnect,
+    });
+    mockUseTerminalStream.mockImplementation(() => streamState);
+    act(() => {
+      rerender(<TerminalOutput sessionId="s1" baseUrl="http://x" />);
+    });
+    act(() => {
+      jest.advanceTimersByTime(2100);
+    });
+
+    const button = screen.getByRole("button", { name: /Retry/i });
+
+    // Not explicitly removed from tab order.
+    expect(button).not.toHaveAttribute("tabindex", "-1");
+
+    // Reachable via normal tab order: focus starts at document.body, and
+    // repeatedly tabbing forward must land on the Retry button without
+    // requiring any out-of-band focus() call.
+    let reached = false;
+    for (let i = 0; i < 25; i++) {
+      // eslint-disable-next-line no-await-in-loop
+      await user.tab();
+      if (document.activeElement === button) {
+        reached = true;
+        break;
+      }
+    }
+    expect(reached).toBe(true);
+
+    // Enter activates it (native button semantics).
+    await user.keyboard("{Enter}");
+    expect(handleManualReconnect).toHaveBeenCalledTimes(1);
+
+    // Space activates it too.
+    button.focus();
+    await user.keyboard(" ");
+    expect(handleManualReconnect).toHaveBeenCalledTimes(2);
   });
 });

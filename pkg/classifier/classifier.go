@@ -80,6 +80,11 @@ type ClassificationContext struct {
 	// "success"/"failure"/"pending"/"neutral"/"". "" means no PR or unknown
 	// (including stale data — see ApprovalHandler's staleness guard).
 	CIStatus string
+	// SessionIdleMinutes is the computed idle-minutes value for the session being
+	// classified. 0 (unset) means unknown/unavailable and must never accidentally
+	// satisfy a MinSessionIdleMinutes > 0 condition — see ApprovalHandler's population
+	// logic for how this is populated from a live instance.
+	SessionIdleMinutes int
 }
 
 // Classifier classifies a PermissionRequestPayload to determine the action to take.
@@ -372,16 +377,32 @@ type Rule struct {
 	// RequireCIPassing, when true, only matches if ClassificationContext.CIStatus == "success".
 	// ANDed with all other conditions on this rule.
 	RequireCIPassing bool
-	Decision         ClassificationDecision
-	RiskLevel        RiskLevel
-	Reason           string
-	Alternative      string
+	// MinSessionIdleMinutes matches only if ClassificationContext.SessionIdleMinutes >=
+	// MinSessionIdleMinutes. 0 = condition not applied. ANDed with all other conditions
+	// on this rule.
+	MinSessionIdleMinutes int32
+	Decision              ClassificationDecision
+	RiskLevel             RiskLevel
+	Reason                string
+	Alternative           string
 	// Priority determines rule evaluation order. Higher values are evaluated first.
 	Priority int
 	Enabled  bool
-	// Source tracks how the rule was loaded: "seed", "user", or "claude-settings".
+	// Source tracks how the rule was loaded: SourceSeed, SourceUser, or SourceClaudeSettings.
 	Source string
 }
+
+// RuleSource identifies where a Rule was loaded from. A defined type (not an alias) so a
+// filter helper's signature documents intent, even though existing Rule.Source literals
+// ("user", "seed", ...) remain untyped strings — a repo-wide migration of that field is out
+// of scope for the new call sites this type serves.
+type RuleSource string
+
+const (
+	SourceSeed           RuleSource = "seed"
+	SourceUser           RuleSource = "user"
+	SourceClaudeSettings RuleSource = "claude-settings"
+)
 
 // RuleBasedClassifier evaluates a priority-ordered list of Rules.
 type RuleBasedClassifier struct {
@@ -740,6 +761,10 @@ func (c *RuleBasedClassifier) matchesRule(rule Rule, payload PermissionRequestPa
 	}
 
 	if rule.RequireCIPassing && ctx.CIStatus != ciConclusionSuccess {
+		return false
+	}
+
+	if rule.MinSessionIdleMinutes > 0 && ctx.SessionIdleMinutes < int(rule.MinSessionIdleMinutes) {
 		return false
 	}
 

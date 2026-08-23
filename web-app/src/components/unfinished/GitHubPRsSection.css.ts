@@ -90,6 +90,13 @@ export const prTitle = style({
   color: vars.color.textPrimary,
   textDecoration: "none",
   flexGrow: 1,
+  // minWidth:0 overrides the flex item's default content-based automatic
+  // minimum size; overflowWrap lets long unbreakable tokens (e.g.
+  // "cache_read_input_tokens/cache_creation_input_tokens") wrap instead of
+  // forcing this row (and every ancestor up to UnfinishedTab's .container)
+  // wider than the viewport on mobile.
+  minWidth: 0,
+  overflowWrap: "break-word",
   lineHeight: 1.4,
   ":hover": {
     textDecoration: "underline",

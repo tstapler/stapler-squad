@@ -3,6 +3,7 @@ package session
 import "testing"
 
 func TestGuardedTransitionAllowed(t *testing.T) {
+	t.Parallel()
 	engine := NewDefaultWorkflowEngine()
 
 	tests := []struct {
@@ -44,6 +45,7 @@ func TestGuardedTransitionAllowed(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			got := GuardedTransitionAllowed(engine, tt.item, tt.to)
 			if got != tt.want {
 				t.Errorf("GuardedTransitionAllowed(%+v, %v) = %v, want %v", tt.item, tt.to, got, tt.want)

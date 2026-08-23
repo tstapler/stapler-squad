@@ -2,7 +2,7 @@
   "checks": [
     {
       "name": "go-primitive-obsession",
-      "command": "kibitzer check primitive-obsession {file}",
+      "checker": "primitive-obsession",
       "severity": "advisory",
       "scope": ["**/*.go"],
       "triggers": ["PostToolUse", "batch"],

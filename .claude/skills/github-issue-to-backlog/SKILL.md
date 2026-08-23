@@ -81,7 +81,7 @@ Read the response back (per the repo's evidence-over-claims convention — a wri
 
 To edit an already-imported item in place (e.g. after restyling the body per step 2, or fixing a near-duplicate found in step 1) rather than creating a new one, use `BacklogService.UpdateBacklogItem` the same way — same host/headers, `itemId` + the fields to change. Pass `expectedUpdatedAt` (the item's current `updatedAt` from a prior read) for optimistic-concurrency safety if the item may have been touched concurrently (e.g. an auto-triage session already picked it up).
 
-This only works against an already-running local instance (`localhost:8543` is the live systemd-managed service in stapler-squad — see `.claude/rules/systemd-user-service.md`). Do not start or restart the service just to make this call.
+This only works against an already-running local instance (`localhost:8543` is the live systemd-managed service in stapler-squad — see `.claude/docs/systemd-user-service.md`). Do not start or restart the service just to make this call.
 
 ## Reference
 

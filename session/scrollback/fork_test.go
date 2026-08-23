@@ -64,6 +64,7 @@ func countLines(t *testing.T, path string) int {
 }
 
 func TestForkScrollback_SubsetCopied(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	src := filepath.Join(dir, "scrollback.jsonl")
 	dst := filepath.Join(dir, "fork", "scrollback.jsonl")
@@ -89,6 +90,7 @@ func TestForkScrollback_SubsetCopied(t *testing.T) {
 }
 
 func TestForkScrollback_UpToSeqZero_EmptyFile(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	src := filepath.Join(dir, "scrollback.jsonl")
 	dst := filepath.Join(dir, "fork", "scrollback.jsonl")
@@ -103,6 +105,7 @@ func TestForkScrollback_UpToSeqZero_EmptyFile(t *testing.T) {
 }
 
 func TestForkScrollback_UpToSeqExceedsMax_AllCopied(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	src := filepath.Join(dir, "scrollback.jsonl")
 	dst := filepath.Join(dir, "fork", "scrollback.jsonl")
@@ -115,6 +118,7 @@ func TestForkScrollback_UpToSeqExceedsMax_AllCopied(t *testing.T) {
 }
 
 func TestForkScrollback_MissingSrc_CreatesEmptyDst(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	dst := filepath.Join(dir, "fork", "scrollback.jsonl")
 
@@ -126,6 +130,7 @@ func TestForkScrollback_MissingSrc_CreatesEmptyDst(t *testing.T) {
 }
 
 func TestForkScrollback_GzipSource(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	src := filepath.Join(dir, "scrollback.jsonl.gz")
 	dst := filepath.Join(dir, "fork", "scrollback.jsonl")

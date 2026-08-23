@@ -50,7 +50,7 @@ func resolveStuckOnManualTransition(ctx context.Context, storage *session.Storag
 	}
 	for _, reason := range reasons {
 		if _, err := storage.ResolveStuck(ctx, itemID, reason); err != nil {
-			log.WarningLog.Printf("[TransitionBacklogItemStatus] ResolveStuck(%s) item=%s: %v", reason, itemID, err)
+			log.WarningLog().Printf("[TransitionBacklogItemStatus] ResolveStuck(%s) item=%s: %v", reason, itemID, err)
 		}
 	}
 }
@@ -468,7 +468,7 @@ func (s *BacklogService) ArchiveBacklogItem(
 		s.commitAndPushItemWorktrees(ctx, sessions)
 	}
 
-	archived, err := s.storage.ArchiveBacklogItem(ctx, req.Msg.ItemId)
+	archived, err := s.storage.ArchiveBacklogItem(ctx, req.Msg.ItemId, nil, session.TriggeredByUser, "")
 	if err != nil {
 		if ent.IsNotFound(err) || errors.Is(err, session.ErrNotFound) {
 			return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("backlog item %q not found", req.Msg.ItemId))
@@ -483,6 +483,32 @@ func (s *BacklogService) ArchiveBacklogItem(
 
 	return connect.NewResponse(&sessionv1.ArchiveBacklogItemResponse{
 		Item: backlogItemToProto(archived, s.buildCostLookup()),
+	}), nil
+}
+
+// --- UnarchiveBacklogItem ---
+
+// UnarchiveBacklogItem clears archived_at and restores the item to "idea".
+// It does not attempt to recreate worktrees deleted at archive time.
+// +api: backlog:unarchive-item
+func (s *BacklogService) UnarchiveBacklogItem(
+	ctx context.Context,
+	req *connect.Request[sessionv1.UnarchiveBacklogItemRequest],
+) (*connect.Response[sessionv1.UnarchiveBacklogItemResponse], error) {
+	if s.storage == nil {
+		return nil, connect.NewError(connect.CodeUnavailable, fmt.Errorf("storage not available"))
+	}
+
+	unarchived, err := s.storage.UnarchiveBacklogItem(ctx, req.Msg.ItemId)
+	if err != nil {
+		if ent.IsNotFound(err) || errors.Is(err, session.ErrNotFound) {
+			return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("backlog item %q not found", req.Msg.ItemId))
+		}
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to unarchive backlog item: %w", err))
+	}
+
+	return connect.NewResponse(&sessionv1.UnarchiveBacklogItemResponse{
+		Item: backlogItemToProto(unarchived, s.buildCostLookup()),
 	}), nil
 }
 
@@ -506,6 +532,44 @@ func (s *BacklogService) DeleteBacklogItem(
 	}
 
 	return connect.NewResponse(&sessionv1.DeleteBacklogItemResponse{}), nil
+}
+
+// --- AddBacklogItemDependency ---
+
+// AddBacklogItemDependency marks BlockedItemId as depending on (blocked by)
+// BlockerItemId, so DequeueNextQueuedItems skips it until the blocker
+// resolves (reaches done or archived status, or is deleted).
+// +api: backlog:add-item-dependency
+func (s *BacklogService) AddBacklogItemDependency(
+	ctx context.Context,
+	req *connect.Request[sessionv1.AddBacklogItemDependencyRequest],
+) (*connect.Response[sessionv1.AddBacklogItemDependencyResponse], error) {
+	if s.storage == nil {
+		return nil, connect.NewError(connect.CodeUnavailable, fmt.Errorf("storage not available"))
+	}
+
+	edge := session.BacklogItemDependencyEdge{
+		BlockerID: req.Msg.BlockerItemId,
+		BlockedID: req.Msg.BlockedItemId,
+	}
+	if err := s.storage.AddBacklogItemDependency(ctx, edge); err != nil {
+		if errors.Is(err, session.ErrDependencyCycle) {
+			return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("dependency would create a cycle: %w", err))
+		}
+		if errors.Is(err, session.ErrNotFound) {
+			return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("backlog item not found: %w", err))
+		}
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to add backlog item dependency: %w", err))
+	}
+
+	updated, err := s.storage.GetBacklogItem(ctx, req.Msg.BlockedItemId)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to reload backlog item after adding dependency: %w", err))
+	}
+
+	return connect.NewResponse(&sessionv1.AddBacklogItemDependencyResponse{
+		Item: backlogItemToProto(updated, s.buildCostLookup()),
+	}), nil
 }
 
 // --- TransitionBacklogItemStatus ---
@@ -532,7 +596,7 @@ func (s *BacklogService) DeleteBacklogItem(
 func (s *BacklogService) resolveLatestWorkCommit(ctx context.Context, sessionUUID, repoPath string) string {
 	wt, err := s.storage.GetWorktreeDataBySessionUUID(ctx, sessionUUID)
 	if err != nil {
-		log.WarningLog.Printf("resolveLatestWorkCommit: no worktree data for session %s: %v", sessionUUID, err)
+		log.WarningLog().Printf("resolveLatestWorkCommit: no worktree data for session %s: %v", sessionUUID, err)
 		return ""
 	}
 	if wt.WorktreePath != "" {
@@ -549,7 +613,7 @@ func (s *BacklogService) resolveLatestWorkCommit(ctx context.Context, sessionUUI
 	cmd.Dir = repoPath
 	out, revErr := cmd.Output()
 	if revErr != nil {
-		log.WarningLog.Printf("resolveLatestWorkCommit: rev-parse %s in %s: %v", wt.BranchName, repoPath, revErr)
+		log.WarningLog().Printf("resolveLatestWorkCommit: rev-parse %s in %s: %v", wt.BranchName, repoPath, revErr)
 		return ""
 	}
 	return strings.TrimSpace(string(out))
@@ -573,7 +637,7 @@ func (s *BacklogService) resolveLatestWorkCommit(ctx context.Context, sessionUUI
 func (s *BacklogService) isCodeShippedToMain(ctx context.Context, itemID, repoPath, logPrefix string) bool {
 	itemSessions, err := s.storage.ListItemSessions(ctx, itemID)
 	if err != nil {
-		log.WarningLog.Printf("[%s] isCodeShippedToMain: failed to load item sessions for item %s: %v", logPrefix, itemID, err)
+		log.WarningLog().Printf("[%s] isCodeShippedToMain: failed to load item sessions for item %s: %v", logPrefix, itemID, err)
 		return false
 	}
 	var lastWorkSessionUUID string
@@ -593,7 +657,7 @@ func (s *BacklogService) isCodeShippedToMain(ctx context.Context, itemID, repoPa
 	}
 	onMain, mainErr := git.IsCommitOnMain(repoPath, prFixMainBranch, lastCommitSha)
 	if mainErr != nil {
-		log.WarningLog.Printf("[%s] isCodeShippedToMain: failed to verify commit %s on main for item %s: %v", logPrefix, lastCommitSha, itemID, mainErr)
+		log.WarningLog().Printf("[%s] isCodeShippedToMain: failed to verify commit %s on main for item %s: %v", logPrefix, lastCommitSha, itemID, mainErr)
 		return false
 	}
 	return onMain
@@ -627,10 +691,11 @@ func (s *BacklogService) TransitionBacklogItemStatus(
 	}
 
 	// Load the most recent ReviewVerdict for this item so TransitionGuard can
-	// evaluate the review→done guard (ErrVerdictRequired).
+	// evaluate the review→done guard (ErrVerdictRequired) and the
+	// review/pr_pending→ready guard (ErrVerdictClearRequiredForReady).
 	overallOutcome, verdictErr := s.storage.GetMostRecentReviewVerdictForItem(ctx, req.Msg.ItemId)
 	if verdictErr != nil {
-		log.WarningLog.Printf("[TransitionBacklogItemStatus] failed to load review verdict for item %s: %v", req.Msg.ItemId, verdictErr)
+		log.WarningLog().Printf("[TransitionBacklogItemStatus] failed to load review verdict for item %s: %v", req.Msg.ItemId, verdictErr)
 		// Non-fatal: proceed with empty outcome; TransitionGuard will block review→done if needed.
 	}
 
@@ -646,23 +711,34 @@ func (s *BacklogService) TransitionBacklogItemStatus(
 		hasUnshippedCode = !s.isCodeShippedToMain(ctx, req.Msg.ItemId, item.RepoPath, "TransitionBacklogItemStatus")
 	}
 
+	var hasUnresolvedBlockers bool
+	if to == session.BacklogStatusInProgress {
+		hasUnresolvedBlockers, err = s.hasUnresolvedBlockers(ctx, req.Msg.ItemId)
+		if err != nil {
+			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to check unresolved blockers: %w", err))
+		}
+	}
+
 	// Run transition guard for business rules.
 	guardInput := session.BacklogItemTransitionInput{
-		Status:            from,
-		AcCriteria:        item.AcceptanceCriteria,
-		PlanApproved:      item.PlanApproved,
-		SkipPlanning:      item.SkipPlanning,
-		PlanArtifactsPath: item.PlanArtifactsPath,
-		OverallOutcome:    overallOutcome,
-		OverrideReason:    req.Msg.OverrideReason,
-		HasUnshippedCode:  hasUnshippedCode,
+		Status:                from,
+		AcCriteria:            item.AcceptanceCriteria,
+		PlanApproved:          item.PlanApproved,
+		SkipPlanning:          item.SkipPlanning,
+		PlanArtifactsPath:     item.PlanArtifactsPath,
+		OverallOutcome:        overallOutcome,
+		OverrideReason:        req.Msg.OverrideReason,
+		HasUnshippedCode:      hasUnshippedCode,
+		HasUnresolvedBlockers: hasUnresolvedBlockers,
 	}
 	if guardErr := s.engine.ValidateGates(guardInput, to); guardErr != nil {
 		if errors.Is(guardErr, session.ErrACRequired) ||
 			errors.Is(guardErr, session.ErrPlanRequired) ||
 			errors.Is(guardErr, session.ErrPlanArtifactsRequired) ||
 			errors.Is(guardErr, session.ErrVerdictRequired) ||
-			errors.Is(guardErr, session.ErrCodeNotOnMain) {
+			errors.Is(guardErr, session.ErrCodeNotOnMain) ||
+			errors.Is(guardErr, session.ErrVerdictClearRequiredForReady) ||
+			errors.Is(guardErr, session.ErrUnresolvedBlockers) {
 			return nil, connect.NewError(connect.CodeFailedPrecondition, guardErr)
 		}
 		return nil, connect.NewError(connect.CodeInvalidArgument, guardErr)
@@ -702,7 +778,7 @@ func (s *BacklogService) TransitionBacklogItemStatus(
 	if req.Msg.OverrideReason != "" {
 		note := fmt.Sprintf("Manually overridden by operator: %s -> %s (%s)", from, to, req.Msg.OverrideReason)
 		if noteErr := s.storage.AppendProgressNote(ctx, req.Msg.ItemId, -1, note, string(to)); noteErr != nil {
-			log.WarningLog.Printf("[TransitionBacklogItemStatus] failed to append override progress note for item %s: %v", req.Msg.ItemId, noteErr)
+			log.WarningLog().Printf("[TransitionBacklogItemStatus] failed to append override progress note for item %s: %v", req.Msg.ItemId, noteErr)
 		}
 		s.notifyManualOverride(updated.ID, updated.Title, fmt.Sprintf("status manually overridden %s -> %s: %s", from, to, req.Msg.OverrideReason))
 	}
@@ -724,11 +800,14 @@ func (s *BacklogService) TransitionBacklogItemStatus(
 	if to == session.BacklogStatusIdea || to == session.BacklogStatusRefining {
 		planApproved := false
 		planArtifactsPath := ""
+		rejectionReason := ""
 		if upd, resetErr := s.storage.UpdateBacklogItem(ctx, req.Msg.ItemId, session.BacklogItemUpdate{
-			PlanApproved:      &planApproved,
-			PlanArtifactsPath: &planArtifactsPath,
+			PlanApproved:        &planApproved,
+			PlanArtifactsPath:   &planArtifactsPath,
+			PlanRejectionReason: &rejectionReason,
+			ClearPlanRejectedAt: true,
 		}, nil); resetErr != nil {
-			log.WarningLog.Printf("[TransitionBacklogItemStatus] failed to reset planning state for item %s: %v", req.Msg.ItemId, resetErr)
+			log.WarningLog().Printf("[TransitionBacklogItemStatus] failed to reset planning state for item %s: %v", req.Msg.ItemId, resetErr)
 		} else {
 			updated = upd
 		}
@@ -770,9 +849,12 @@ func (s *BacklogService) ApprovePlan(
 
 	now := time.Now()
 	approved := true
+	clearedReason := ""
 	update := session.BacklogItemUpdate{
-		PlanApproved:   &approved,
-		PlanApprovedAt: &now,
+		PlanApproved:        &approved,
+		PlanApprovedAt:      &now,
+		PlanRejectionReason: &clearedReason,
+		ClearPlanRejectedAt: true,
 	}
 
 	updated, err := s.storage.UpdateBacklogItem(ctx, req.Msg.ItemId, update, nil)
@@ -781,6 +863,69 @@ func (s *BacklogService) ApprovePlan(
 	}
 
 	return connect.NewResponse(&sessionv1.ApprovePlanResponse{
+		Item: backlogItemToProto(updated, s.buildCostLookup()),
+	}), nil
+}
+
+// --- RejectPlan ---
+
+// maxRejectReasonLength caps the free-text rejection reason. No RPC in this
+// server currently enforces a request-size cap (see grep for WithReadMaxBytes
+// across server/ — a known, pre-existing, repo-wide gap), but this is a new
+// mutating write path, so it gets an explicit cap rather than waiting on that
+// broader fix. Matches session.MaxNoteLength/MaxSteerMessageLength's value; a
+// local constant is used here since reject-reason isn't the same domain
+// concept as either of those and doesn't warrant coupling to them.
+const maxRejectReasonLength = 10000
+
+// RejectPlan records a rejection reason for the item's current plan
+// artifacts and clears any existing approval. Does not itself trigger
+// regeneration — see project_plans/plan-approval-ux/decisions/ADR-002.
+// +api: backlog:reject-plan
+func (s *BacklogService) RejectPlan(
+	ctx context.Context,
+	req *connect.Request[sessionv1.RejectPlanRequest],
+) (*connect.Response[sessionv1.RejectPlanResponse], error) {
+	if s.storage == nil {
+		return nil, connect.NewError(connect.CodeUnavailable, fmt.Errorf("storage not available"))
+	}
+
+	reason := strings.TrimSpace(req.Msg.Reason)
+	if reason == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("reason is required"))
+	}
+	if len(reason) > maxRejectReasonLength {
+		return nil, connect.NewError(connect.CodeInvalidArgument,
+			fmt.Errorf("reason exceeds maximum length of %d bytes", maxRejectReasonLength))
+	}
+
+	item, err := s.storage.GetBacklogItem(ctx, req.Msg.ItemId)
+	if err != nil {
+		if ent.IsNotFound(err) {
+			return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("backlog item %q not found", req.Msg.ItemId))
+		}
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to get backlog item: %w", err))
+	}
+
+	if item.PlanArtifactsPath == "" {
+		return nil, connect.NewError(connect.CodeFailedPrecondition,
+			fmt.Errorf("no plan artifacts found — run TriggerTriage first"))
+	}
+
+	now := time.Now()
+	approvalReset := false
+	update := session.BacklogItemUpdate{
+		PlanRejectionReason: &reason,
+		PlanRejectedAt:      &now,
+		PlanApproved:        &approvalReset,
+	}
+
+	updated, err := s.storage.UpdateBacklogItem(ctx, req.Msg.ItemId, update, nil)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to reject plan: %w", err))
+	}
+
+	return connect.NewResponse(&sessionv1.RejectPlanResponse{
 		Item: backlogItemToProto(updated, s.buildCostLookup()),
 	}), nil
 }
@@ -940,6 +1085,7 @@ func (s *BacklogService) OverrideVerdict(
 	if verdictErr := s.storage.SaveReviewVerdict(ctx, is.ID, session.ReviewVerdictData{
 		OverallOutcome: outcome,
 		Summary:        fmt.Sprintf("Manual override: %s", req.Msg.OverrideReason),
+		DiffHash:       s.storage.ComputeCurrentDiffHash(ctx, itemID),
 		OverrideBy:     "user",
 		OverrideReason: req.Msg.OverrideReason,
 		OverrideAt:     &now,
@@ -972,7 +1118,7 @@ func (s *BacklogService) OverrideVerdict(
 		}
 		updated, transErr := s.storage.TransitionBacklogItemStatus(ctx, itemID, toStatus, precondition, session.TriggeredByUser) //nolint:silenttransition the fallback reload a few lines below returns the item's true post-transition state in the RPC response, so the caller sees the failure implicitly rather than a false "success"
 		if transErr != nil {
-			log.ErrorLog.Printf("[OverrideVerdict] failed to transition item %s to %s: %v", itemID, toStatus, transErr)
+			log.ErrorLog().Printf("[OverrideVerdict] failed to transition item %s to %s: %v", itemID, toStatus, transErr)
 		} else {
 			updatedItem = updated
 		}
@@ -1059,6 +1205,7 @@ func (s *BacklogService) SubmitManualReview(
 		OverallOutcome: overall,
 		PerCriterion:   string(perCriterionJSON),
 		Summary:        req.Msg.Summary,
+		DiffHash:       s.storage.ComputeCurrentDiffHash(ctx, req.Msg.ItemId),
 		OverrideBy:     "user",
 		OverrideReason: "manual review",
 		OverrideAt:     &now,
@@ -1067,7 +1214,7 @@ func (s *BacklogService) SubmitManualReview(
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save manual review verdict: %w", createErr))
 	}
 	if endErr := s.storage.UpdateItemSessionEnded(ctx, is.ID, now); endErr != nil { //nolint:silenttransition bookkeeping timestamp only; the PASS/done transition below (which does notify on failure) is what actually gates forward progress here
-		log.WarningLog.Printf("[SubmitManualReview] UpdateItemSessionEnded: %v", endErr)
+		log.WarningLog().Printf("[SubmitManualReview] UpdateItemSessionEnded: %v", endErr)
 	}
 
 	// If PASS, transition item to done (only from review status) — but only once
@@ -1080,11 +1227,11 @@ func (s *BacklogService) SubmitManualReview(
 	if overall == session.ReviewVerdictPass {
 		if item.Status == string(session.BacklogStatusReview) {
 			if !s.isCodeShippedToMain(ctx, req.Msg.ItemId, item.RepoPath, "SubmitManualReview") {
-				log.InfoLog.Printf("[SubmitManualReview] item=%s PASS verdict but code not verified on main — leaving in review for manual transition/override", req.Msg.ItemId)
+				log.InfoLog().Printf("[SubmitManualReview] item=%s PASS verdict but code not verified on main — leaving in review for manual transition/override", req.Msg.ItemId)
 			} else {
 				precondition := &session.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusReview)}
 				if _, transErr := s.storage.TransitionBacklogItemStatus(ctx, req.Msg.ItemId, session.BacklogStatusDone, precondition, session.TriggeredByUser); transErr != nil {
-					log.WarningLog.Printf("[SubmitManualReview] PASS but transition to done failed: %v", transErr)
+					log.WarningLog().Printf("[SubmitManualReview] PASS but transition to done failed: %v", transErr)
 					// Same shape as TriggerReReview's PASS->done path: code is
 					// confirmed shipped to main but the item is left stuck in review.
 					s.notifyTransitionFailed(req.Msg.ItemId, item.Title, "a manual PASS verdict was submitted and code was confirmed shipped to main, but the item's transition to done failed", transErr)
