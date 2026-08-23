@@ -36,12 +36,14 @@ jobs:
       # (Epic 2.1, stapler-squad-integration) is a relative local path — Go's
       # module-graph resolution fails for ANY package if it doesn't exist on disk, so
       # this checkout must land before this job's `go test` step below.
+      # actions/checkout's `path` input is validated to stay under $GITHUB_WORKSPACE
+      # (it refuses to write outside it, even to the runner's own parent "_work"
+      # dir) — so a true sibling checkout can't go through actions/checkout at
+      # all. Plain `git clone` has no such restriction; tstapler/tymux is public
+      # so this needs no auth.
       - name: Checkout tymux (sibling, for go.mod replace directive)
-        uses: actions/checkout@v4
-        with:
-          repository: tstapler/tymux
-          ref: main
-          path: ../tymux
+        shell: bash
+        run: git clone --depth 1 --branch main https://github.com/tstapler/tymux.git ../tymux
 
       - name: Set up Go
         uses: actions/setup-go@v5
