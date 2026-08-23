@@ -302,7 +302,12 @@ func (g *HandoffSummaryGenerator) GenerateAndPersist(ctx context.Context, source
 	// otherwise a single oversized Head/Tail message (e.g. a large pasted
 	// file in the first turn) bypasses the excerpt budget entirely.
 	window.Head = pruneMessages(window.Head)
-	window.Middle = applySummaryBudget(window.Middle, newSummaryBudget(config.LoadConfig().HandoffSummary))
+	// totalTranscriptBytes is computed from the raw, pre-pruning messages
+	// slice (Head+Middle+Tail combined) so the excerpt budget scales with how
+	// much conversation there actually is to compress -- see
+	// newSummaryBudget's doc comment.
+	totalTranscriptBytes := sumContentBytes(messages)
+	window.Middle = applySummaryBudget(window.Middle, newSummaryBudget(config.LoadConfig().HandoffSummary, totalTranscriptBytes))
 	window.Tail = pruneMessages(window.Tail)
 
 	genCtx, cancel := context.WithTimeout(ctx, handoffSummaryTimeout)

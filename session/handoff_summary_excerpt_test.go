@@ -136,10 +136,43 @@ func TestPruneMessages_TruncatesOversizedMessageContent_PreservingMessageCount(t
 	assert.Equal(t, maxExcerptMessageBytes+len("... [truncated]"), len(result[1].Content))
 }
 
-func TestNewSummaryBudget_ComputesBytesFromTokenApproximation(t *testing.T) {
-	cfg := config.HandoffSummaryConfig{MaxMiddleExcerptTokens: 1000}
+// TestNewSummaryBudget_ClampsAtCeilingForVeryLargeTranscript verifies the
+// ceiling behavior required by requirements.md/plan.md: a very long
+// conversation's excerpt budget never exceeds MaxMiddleExcerptTokens*4 bytes,
+// even though the proportional (totalTranscriptBytes/2) term would otherwise
+// be far larger.
+func TestNewSummaryBudget_ClampsAtCeilingForVeryLargeTranscript(t *testing.T) {
+	cfg := config.HandoffSummaryConfig{MaxMiddleExcerptTokens: 1000} // ceiling = 4000 bytes
 
-	budget := newSummaryBudget(cfg)
+	budget := newSummaryBudget(cfg, 1_000_000) // proportional term would be 500,000
 
 	assert.Equal(t, 4000, budget.MiddleExcerptMaxBytes)
+}
+
+// TestNewSummaryBudget_ScalesProportionallyToTranscriptSize verifies the
+// budget is genuinely proportional -- not a flat ceiling -- for transcripts
+// that fall under the ceiling: a short transcript gets a smaller budget than
+// a longer one, and both equal totalTranscriptBytes/2.
+func TestNewSummaryBudget_ScalesProportionallyToTranscriptSize(t *testing.T) {
+	cfg := config.HandoffSummaryConfig{MaxMiddleExcerptTokens: 100000} // ceiling = 400,000 bytes, well above both cases below
+
+	shortBudget := newSummaryBudget(cfg, 2000)
+	longBudget := newSummaryBudget(cfg, 20000)
+
+	assert.Equal(t, 1000, shortBudget.MiddleExcerptMaxBytes)
+	assert.Equal(t, 10000, longBudget.MiddleExcerptMaxBytes)
+	assert.Less(t, shortBudget.MiddleExcerptMaxBytes, longBudget.MiddleExcerptMaxBytes,
+		"a short transcript should get a smaller excerpt budget than a long one")
+}
+
+// TestSumContentBytes_SumsAllMessageContentLengths verifies the helper
+// newSummaryBudget's call site uses to compute totalTranscriptBytes from the
+// raw (pre-pruning, pre-windowing) messages slice.
+func TestSumContentBytes_SumsAllMessageContentLengths(t *testing.T) {
+	messages := []ClaudeConversationMessage{
+		{Role: "user", Content: strings.Repeat("a", 100)},
+		{Role: "assistant", Content: strings.Repeat("b", 250)},
+	}
+
+	assert.Equal(t, 350, sumContentBytes(messages))
 }

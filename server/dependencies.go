@@ -1292,6 +1292,12 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	sessionService.SetResolveConversationUUID(storage.GetClaudeConversationUUIDBySessionUUID)
 	sessionService.SetFeatureController("backlog", backlogCtrl)
 	sessionService.SetStatusDetailProvider("backlog", quotaGate.StatusDetail)
+	// Read-only visibility for the restart-with-handoff-summary feature (see
+	// services.HandoffSummaryFeatureController's doc comment): lets the frontend
+	// discover config.json's handoff_summary.enabled up front via GetFeatureFlags,
+	// instead of only finding out disabled on the first TriggerHandoffSummary
+	// call's Code.FailedPrecondition.
+	sessionService.SetFeatureController("handoff-summary", services.HandoffSummaryFeatureController{})
 
 	// Check VNC dependencies once at startup so the server knows whether browser
 	// passthrough is available on this host. Non-fatal: Missing deps log a warning.
