@@ -419,6 +419,115 @@ func TestClassifyRPCError_NilIsNil(t *testing.T) {
 	assert.NoError(t, classifyRPCError("op", nil))
 }
 
+// --- Phase 6 idiom review, MUST FIX 2: IsAlive must not collapse a
+// transport-level CapturePane failure and a genuinely-confirmed-dead pane
+// into the same "false" answer — see errors.go's ErrTymuxdUnreachable doc
+// comment / research/ux.md:218-224.
+
+func TestTymuxGRPCSession_IsAlive_TransportUnreachable_FallsBackToCachedLiveness(t *testing.T) {
+	dir := t.TempDir()
+	unreachable := connect.NewError(connect.CodeUnavailable, errors.New("dial tcp: connection refused"))
+	var captureCalls int32
+	transport := &fakeTransport{
+		createSessionFn: func(_ context.Context, _ *connect.Request[v1.CreateSessionRequest]) (*connect.Response[v1.Session], error) {
+			return connect.NewResponse(fakeSession("sess-1", "pane-1", dir, v1.Liveness_LIVENESS_LIVE)), nil
+		},
+		capturePaneFn: func(_ context.Context, _ *connect.Request[v1.CapturePaneRequest]) (*connect.Response[v1.PaneSnapshot], error) {
+			atomic.AddInt32(&captureCalls, 1)
+			return nil, unreachable
+		},
+	}
+	sess := NewTymuxGRPCSession(transport)
+	require.NoError(t, sess.Start(dir))
+	t.Cleanup(func() { _ = sess.Close() })
+
+	// cacheFromSession seeded s.liveness = LIVENESS_LIVE; a transport-level
+	// failure on the CapturePane read must fall back to that cached value
+	// (true) rather than collapsing to false, since the daemon never
+	// actually said the pane was dead — it was simply unreachable.
+	alive := sess.IsAlive()
+
+	assert.True(t, alive, "a transport-unreachable CapturePane failure must fall back to cached liveness, not report dead")
+	assert.EqualValues(t, 1, captureCalls)
+}
+
+func TestTymuxGRPCSession_IsAlive_OrdinaryRPCError_FallsBackToCachedLiveness(t *testing.T) {
+	dir := t.TempDir()
+	ordinary := connect.NewError(connect.CodeInternal, errors.New("boom"))
+	transport := &fakeTransport{
+		createSessionFn: func(_ context.Context, _ *connect.Request[v1.CreateSessionRequest]) (*connect.Response[v1.Session], error) {
+			return connect.NewResponse(fakeSession("sess-1", "pane-1", dir, v1.Liveness_LIVENESS_LIVE)), nil
+		},
+		capturePaneFn: func(_ context.Context, _ *connect.Request[v1.CapturePaneRequest]) (*connect.Response[v1.PaneSnapshot], error) {
+			return nil, ordinary
+		},
+	}
+	sess := NewTymuxGRPCSession(transport)
+	require.NoError(t, sess.Start(dir))
+	t.Cleanup(func() { _ = sess.Close() })
+
+	// Even a non-ErrTymuxdUnreachable RPC failure is not the daemon
+	// confirming death — an error response never carries that
+	// confirmation, only a successful one with LIVENESS_DEAD does (see
+	// TestTymuxGRPCSession_IsAlive_GenuineDeadResponse_ReturnsFalse).
+	assert.True(t, sess.IsAlive(), "a non-transport CapturePane error must also fall back to cached liveness, not report dead")
+}
+
+func TestTymuxGRPCSession_IsAlive_GenuineDeadResponse_ReturnsFalse(t *testing.T) {
+	dir := t.TempDir()
+	transport := &fakeTransport{
+		createSessionFn: func(_ context.Context, _ *connect.Request[v1.CreateSessionRequest]) (*connect.Response[v1.Session], error) {
+			return connect.NewResponse(fakeSession("sess-1", "pane-1", dir, v1.Liveness_LIVENESS_LIVE)), nil
+		},
+		capturePaneFn: func(_ context.Context, req *connect.Request[v1.CapturePaneRequest]) (*connect.Response[v1.PaneSnapshot], error) {
+			return connect.NewResponse(&v1.PaneSnapshot{
+				PaneId:   req.Msg.GetPaneId(),
+				Liveness: v1.Liveness_LIVENESS_DEAD,
+			}), nil
+		},
+	}
+	sess := NewTymuxGRPCSession(transport)
+	require.NoError(t, sess.Start(dir))
+	t.Cleanup(func() { _ = sess.Close() })
+
+	// A real, error-free response reporting LIVENESS_DEAD is the one case
+	// that should actually report false.
+	assert.False(t, sess.IsAlive())
+}
+
+// --- Phase 6 idiom review, MUST FIX 1: SendInputViaControlMode's ctx must
+// actually do something — a cancelled/expired context must short-circuit
+// before ever reaching the underlying stream write.
+
+func TestTymuxGRPCSession_SendInputViaControlMode_CancelledContext_ReturnsEarlyWithoutSending(t *testing.T) {
+	// No Start() call: if SendInputViaControlMode ignored ctx and fell
+	// through to sendOnStream as before the fix, it would return
+	// errSessionNotStarted (no standing stream open yet) instead of the
+	// context error — that's how this test distinguishes "checked ctx
+	// first" from "ignored ctx."
+	sess := NewTymuxGRPCSession(&fakeTransport{})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err := sess.SendInputViaControlMode(ctx, []byte("hello"))
+
+	require.Error(t, err)
+	assert.ErrorIs(t, err, context.Canceled)
+	assert.NotErrorIs(t, err, errSessionNotStarted, "a cancelled context must short-circuit before reaching sendOnStream")
+}
+
+func TestTymuxGRPCSession_SendInputViaControlMode_ValidContext_SendsOnStream(t *testing.T) {
+	sess, stream, _ := startedSessionWithStream(t)
+
+	err := sess.SendInputViaControlMode(context.Background(), []byte("hello"))
+
+	require.NoError(t, err)
+	sent := stream.sentRequests()
+	require.NotEmpty(t, sent)
+	last := sent[len(sent)-1]
+	assert.Equal(t, []byte("hello"), last.GetInput())
+}
+
 // --- Story 2.4.2: SetOnExitCallback / ResetExitOnce fire-once semantics ---
 
 // TestSetOnExitCallback_ShouldFireExactlyOnce_WhenRegisteredBeforePaneExits

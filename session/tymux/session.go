@@ -401,17 +401,35 @@ func (s *tymuxGRPCSession) Close() error {
 // answer reflects tymuxd's current state rather than a stale cache — except
 // once Close() has run, which short-circuits to false without a further RPC
 // against a session this process itself just killed.
+//
+// A failed CapturePane RPC is not the daemon confirming the pane is dead —
+// it only means this particular request didn't get an answer, whether
+// because tymuxd is unreachable (ErrTymuxdUnreachable, errors.go) or some
+// other RPC-level failure. Collapsing that to a flat false would make a
+// transient network blip on a genuinely-live session indistinguishable from
+// a real death, exactly the distinction ErrTymuxdUnreachable exists to
+// preserve (see errors.go's doc comment, research/ux.md:218-224). So on any
+// capturePane error, log it and fall back to the last cached liveness
+// rather than reporting dead; only a real (non-error) response saying
+// LIVENESS_DEAD counts as a genuine confirmation.
 func (s *tymuxGRPCSession) IsAlive() bool {
 	s.mu.RLock()
 	paneID := s.paneID
 	closed := s.closed
+	cachedLiveness := s.liveness
+	sessionID := s.sessionID
 	s.mu.RUnlock()
 	if paneID == "" || closed {
 		return false
 	}
 	snap, err := s.capturePane(context.Background(), 0)
 	if err != nil {
-		return false
+		if errors.Is(err, ErrTymuxdUnreachable) {
+			log.Warn("tymux: IsAlive: tymuxd unreachable, falling back to cached liveness", "session_id", sessionID, "err", err)
+		} else {
+			log.Warn("tymux: IsAlive: CapturePane failed, falling back to cached liveness", "session_id", sessionID, "err", err)
+		}
+		return cachedLiveness == v1.Liveness_LIVENESS_LIVE
 	}
 	s.mu.Lock()
 	s.liveness = snap.GetLiveness()
@@ -487,6 +505,13 @@ func (s *tymuxGRPCSession) SendPromptWithEnter(p string) error {
 }
 
 func (s *tymuxGRPCSession) SendInputViaControlMode(ctx context.Context, data []byte) error {
+	// sendOnStream/the standing stream's Send have no context parameter of
+	// their own to cancel against, so honor the caller's cancellation/
+	// timeout here before writing — otherwise ctx is accepted but has zero
+	// effect, silently sending on an already-cancelled/expired context.
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	return s.sendOnStream(&v1.AttachRequest{
 		Payload: &v1.AttachRequest_Input{Input: data},
 	})
