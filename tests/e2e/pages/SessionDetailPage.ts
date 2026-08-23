@@ -60,12 +60,17 @@ export class SessionDetailPage {
     return this.page.getByRole("tab", { name: /terminal/i });
   }
 
-  /** The active tab's `role="tabpanel"` region — SessionDetailView.tsx sets
-   * `aria-labelledby="tab-terminal"` on it, which resolves its accessible
-   * name to the Terminal tab's label ("Terminal"). Click this to focus
-   * xterm's hidden input before sending keystrokes via `page.keyboard`. */
+  /** The interactive xterm.js container within the active Terminal tabpanel
+   * (SessionDetailView.tsx sets `aria-labelledby="tab-terminal"` on the
+   * tabpanel, resolving its accessible name to "Terminal"). Scoped to
+   * `[data-context="terminal"]` (XtermTerminal.tsx) rather than the tabpanel
+   * itself: clicking the tabpanel's outer wrapper lands on padding/toolbar
+   * area outside xterm's canvas and never focuses its hidden
+   * `textarea.xterm-helper-textarea`, so keystrokes sent via `page.keyboard`
+   * after that click go nowhere. Click this locator instead to reliably
+   * focus xterm's input before sending keystrokes. */
   getTerminalPanel(): Locator {
-    return this.page.getByRole("tabpanel", { name: /terminal/i });
+    return this.page.getByRole("tabpanel", { name: /terminal/i }).locator('[data-context="terminal"]');
   }
 
   /** Terminal toolbar toggle — visible once the terminal has attached and
@@ -97,9 +102,13 @@ export class SessionDetailPage {
   }
 
   /** Shared `aria-live="polite"` status region SessionSummaryPanel.tsx uses
-   * to announce phase transitions and the copy result. */
+   * to announce phase transitions and the copy result. Scoped to the summary
+   * panel (`data-testid="session-summary-panel"`) -- an unscoped
+   * `page.getByRole("status")` also matches unrelated `role="status"` regions
+   * elsewhere on the page (the nav's bulk-feedback/empty-state live regions),
+   * causing a strict-mode violation once this locator is actually reached. */
   getSummaryLiveRegion(): Locator {
-    return this.page.getByRole("status");
+    return this.getSummaryPanel().getByRole("status");
   }
 
   // ---------------------------------------------------------------------

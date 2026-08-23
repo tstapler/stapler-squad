@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 )
 
 // allStatuses lists every Status constant in the new 5-state model.
@@ -227,6 +228,24 @@ func TestTransitionTo_ValidTransitions(t *testing.T) {
 				t.Errorf("after transitionTo(%s): Status = %s, want %s", to, inst.Status, to)
 			}
 		})
+	}
+}
+
+// TestTransitionTo_BumpsUpdatedAt verifies a real status transition advances
+// Instance.UpdatedAt. Without this, a status-only transition (e.g. a natural
+// exit) leaves the frontend's WatchSessions client stuck on stale data: the
+// Redux upsertSession reducer (web-app/src/lib/store/sessionsSlice.ts) skips
+// applying an incoming Session update whose UpdatedAt is unchanged from the
+// cached copy, silently dropping the new status.
+func TestTransitionTo_BumpsUpdatedAt(t *testing.T) {
+	ctx := context.Background()
+	before := time.Now().Add(-time.Hour)
+	inst := &Instance{Title: "test", Status: Active, Path: t.TempDir(), UpdatedAt: before}
+	if err := inst.transitionTo(ctx, Stopped); err != nil {
+		t.Fatalf("transitionTo(Stopped): unexpected error %v", err)
+	}
+	if !inst.UpdatedAt.After(before) {
+		t.Errorf("UpdatedAt = %v, want a time after %v (transition must bump it)", inst.UpdatedAt, before)
 	}
 }
 

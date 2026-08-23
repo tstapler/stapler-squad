@@ -41,6 +41,10 @@ func (i *Instance) transitionTo(ctx context.Context, to Status) error {
 		}
 	}
 	i.Status = to
+	// See transitionToLocked's matching comment: without bumping UpdatedAt here,
+	// the frontend's upsertSession no-op-skip guard can silently drop a real
+	// status-only change.
+	i.UpdatedAt = time.Now()
 	// Store before calling After: After hooks may spawn goroutines that race with
 	// a post-After snapshot read of the same fields.
 	// Caller already holds i.mu (see doc comment above), so buildSnapshot's
@@ -90,6 +94,12 @@ func transitionToLocked(s *instanceState, ctx context.Context, to Status) error 
 	i.mu.Lock()
 	from := i.Status
 	i.Status = to
+	// Without this, a status-only transition (e.g. Active->Stopped on a natural
+	// exit) leaves UpdatedAt unchanged, and the frontend's upsertSession reducer
+	// (web-app/src/lib/store/sessionsSlice.ts) treats an incoming Session with an
+	// identical UpdatedAt as a no-op duplicate and silently drops it -- so the
+	// WatchSessions client never sees the new status at all.
+	i.UpdatedAt = time.Now()
 	snap := buildSnapshot(i)
 	i.mu.Unlock()
 	i.snapshot.Store(snap)
