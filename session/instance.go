@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/user"
@@ -20,7 +21,22 @@ import (
 	"github.com/tstapler/stapler-squad/session/detection"
 	"github.com/tstapler/stapler-squad/session/sshremote"
 	"github.com/tstapler/stapler-squad/session/tmux"
+	"github.com/tstapler/stapler-squad/session/tymux"
 )
+
+// logPTYUnavailableIfUnexpected logs an ERROR for a GetPTY() failure after
+// session start/restore — unless the error is
+// tymux.ErrNotSupportedOnTymuxBackend, which every TymuxBackend session
+// returns unconditionally (it has no local PTY at all; all terminal I/O
+// goes over gRPC). Without this check, every single TymuxBackend session
+// start would log a spurious "pty attach failed, unavailable" ERROR, since
+// that outcome is normal and expected for this backend, not a failure.
+func logPTYUnavailableIfUnexpected(msg, sessionTitle string, ptyErr error) {
+	if errors.Is(ptyErr, tymux.ErrNotSupportedOnTymuxBackend) {
+		return
+	}
+	log.Error(msg, "session", sessionTitle, "err", ptyErr)
+}
 
 type Status int
 
@@ -1160,7 +1176,7 @@ func startLocked(actorState *instanceState, firstTimeSetup bool) error {
 			}
 			_ = i.pm().RestoreWithWorkDir(startPath)
 			if _, ptyErr := i.pm().GetPTY(); ptyErr != nil {
-				log.Error("cold-restored session: pty attach failed, controller and sendkeys unavailable", "session", i.Title, "err", ptyErr)
+				logPTYUnavailableIfUnexpected("cold-restored session: pty attach failed, controller and sendkeys unavailable", i.Title, ptyErr)
 			}
 			if i.claudeSession != nil {
 				i.claudeSession.ConversationUUID = ""
@@ -1266,7 +1282,7 @@ func startLocked(actorState *instanceState, firstTimeSetup bool) error {
 			}
 			_ = i.pm().RestoreWithWorkDir(startPath)
 			if _, ptyErr := i.pm().GetPTY(); ptyErr != nil {
-				log.Error("new session: pty attach failed after retries, controller and sendkeys unavailable", "session", i.Title, "err", ptyErr)
+				logPTYUnavailableIfUnexpected("new session: pty attach failed after retries, controller and sendkeys unavailable", i.Title, ptyErr)
 			}
 		}
 	}
@@ -1406,7 +1422,7 @@ func (i *Instance) start(firstTimeSetup bool, setupCleanup bool, cleanup *tmux.C
 			// Attach PTY — same pattern as firstTimeSetup path (lines 867-870).
 			_ = i.pm().RestoreWithWorkDir(startPath)
 			if _, ptyErr := i.pm().GetPTY(); ptyErr != nil {
-				log.Error("cold-restored session: pty attach failed, controller and sendkeys unavailable", "session", i.Title, "err", ptyErr)
+				logPTYUnavailableIfUnexpected("cold-restored session: pty attach failed, controller and sendkeys unavailable", i.Title, ptyErr)
 			}
 			// Clear the stored session ID so HistoryLinker re-detects the actual
 			// UUID from the running process's open files. The --resume flag was
@@ -1507,7 +1523,7 @@ func (i *Instance) start(firstTimeSetup bool, setupCleanup bool, cleanup *tmux.C
 		// Note: RestoreWithWorkDir always returns nil even on PTY failure; check GetPTY() to confirm.
 		_ = i.pm().RestoreWithWorkDir(startPath)
 		if _, ptyErr := i.pm().GetPTY(); ptyErr != nil {
-			log.Error("new session: pty attach failed after retries, controller and sendkeys unavailable", "session", i.Title, "err", ptyErr)
+			logPTYUnavailableIfUnexpected("new session: pty attach failed after retries, controller and sendkeys unavailable", i.Title, ptyErr)
 		}
 	}
 

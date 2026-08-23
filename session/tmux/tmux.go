@@ -1193,11 +1193,13 @@ func (t *TmuxSession) setRemainOnExit() {
 // failed with a clear status, not silently retried against a guessed directory.
 var ErrWorkDirMissing = errors.New("session working directory missing")
 
-// validateWorkDir rejects an empty or nonexistent working directory instead of
+// ValidateWorkDir rejects an empty or nonexistent working directory instead of
 // letting a caller silently fall back to a guessed directory (e.g. os.Getwd(),
 // which for a long-running server process is often $HOME) — see start() and
-// RestoreWithWorkDir()'s recreate path.
-func validateWorkDir(workDir string) error {
+// RestoreWithWorkDir()'s recreate path. Exported so session/tymux can reuse
+// this exact check-shape (and ErrWorkDirMissing) instead of maintaining a
+// second copy — see tymux/session.go's own validateWorkDir wrapper.
+func ValidateWorkDir(workDir string) error {
 	if workDir == "" {
 		return fmt.Errorf("working directory not set: %w", ErrWorkDirMissing)
 	}
@@ -1285,7 +1287,7 @@ func (t *TmuxSession) start(workDir string, setupCleanup bool, cleanup *CleanupF
 		return nil
 	}
 
-	if err := validateWorkDir(workDir); err != nil {
+	if err := ValidateWorkDir(workDir); err != nil {
 		return fmt.Errorf("cannot start tmux session %s: %w", t.sanitizedName, err)
 	}
 
@@ -1625,7 +1627,7 @@ func (t *TmuxSession) RestoreWithWorkDir(workDir string) error {
 			// long-running server process is often $HOME) — a wrong guess silently
 			// reconnects the session to the wrong workspace. Fail loudly instead so
 			// the caller can surface a clear status to the user.
-			if err := validateWorkDir(workDir); err != nil {
+			if err := ValidateWorkDir(workDir); err != nil {
 				return fmt.Errorf("cannot recreate tmux session %s: %w", t.sanitizedName, err)
 			}
 
