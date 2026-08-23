@@ -117,6 +117,25 @@ func TestApplySummaryBudget_DropsOldestMiddleMessagesFirst(t *testing.T) {
 	}
 }
 
+// TestPruneMessages_TruncatesOversizedMessageContent_PreservingMessageCount
+// covers the fix for Head/Tail bypassing the byte cap: pruneMessages must
+// truncate any individual oversized message's content (matching
+// pruneExcerptText's behavior) while never dropping a message -- Head/Tail
+// must stay verbatim in count.
+func TestPruneMessages_TruncatesOversizedMessageContent_PreservingMessageCount(t *testing.T) {
+	messages := []ClaudeConversationMessage{
+		{Role: "user", Content: strings.Repeat("a", 100)},
+		{Role: "assistant", Content: strings.Repeat("b", 20000)},
+	}
+
+	result := pruneMessages(messages)
+
+	require.Len(t, result, 2)
+	assert.Equal(t, messages[0].Content, result[0].Content, "under-cap content must be unchanged")
+	assert.True(t, strings.HasSuffix(result[1].Content, "... [truncated]"))
+	assert.Equal(t, maxExcerptMessageBytes+len("... [truncated]"), len(result[1].Content))
+}
+
 func TestNewSummaryBudget_ComputesBytesFromTokenApproximation(t *testing.T) {
 	cfg := config.HandoffSummaryConfig{MaxMiddleExcerptTokens: 1000}
 

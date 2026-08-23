@@ -1721,6 +1721,41 @@ func (s *SessionService) workspacePeersBlockFor(ctx context.Context, repoPath st
 	return workspacePeersBlockFor(ctx, s.concStorage, repoPath)
 }
 
+// resolveRestartSource resolves req.RestartFromSessionId (Story 2.3.1) to the
+// source session's path, enforcing the still-live guard. FindLiveInstance is
+// tried first (it reflects the actual live, in-memory session state -- a
+// still-running tmux/process, not just what was last persisted); a
+// persisted-storage lookup against existing (mirroring FindInstanceDataByID,
+// reusing the slice CreateSession already loaded for its title-collision
+// check) is the fallback for a source session that exists but is not
+// currently live. Only the "found live, not confirmed" case is rejected
+// outright -- a persisted-but-not-live source proceeds without requiring
+// ConfirmRestartWithLiveSource, since there is no live process/worktree it
+// could collide with. Returns "" with a nil error when RestartFromSessionId
+// is unset. Errors are already-wrapped *connect.Error values, ready to
+// return directly from CreateSession.
+func (s *SessionService) resolveRestartSource(req *sessionv1.CreateSessionRequest, existing []session.InstanceData) (string, error) {
+	if req.RestartFromSessionId == "" {
+		return "", nil
+	}
+
+	if liveSrc := s.FindLiveInstance(req.RestartFromSessionId); liveSrc != nil {
+		if !req.ConfirmRestartWithLiveSource {
+			return "", connect.NewError(connect.CodeFailedPrecondition,
+				fmt.Errorf("restart source session %q is still running; stop it first or pass confirm_restart_with_live_source to proceed anyway", req.RestartFromSessionId))
+		}
+		return liveSrc.Path, nil
+	}
+
+	for i := range existing {
+		if existing[i].MatchesID(req.RestartFromSessionId) {
+			return existing[i].Path, nil
+		}
+	}
+	return "", connect.NewError(connect.CodeNotFound,
+		fmt.Errorf("restart source session %q not found", req.RestartFromSessionId))
+}
+
 // CreateSession initializes a new AI agent session with tmux and git worktree.
 // +api: session:create
 func (s *SessionService) CreateSession(
@@ -1808,37 +1843,11 @@ func (s *SessionService) CreateSession(
 
 	// Restart-from-session lineage (Story 2.3.1): resolve the source session's
 	// path and enforce the still-live guard before any other path resolution
-	// below. FindLiveInstance is tried first (it reflects the actual live,
-	// in-memory session state -- a still-running tmux/process, not just what
-	// was last persisted); a persisted-storage lookup (mirroring
-	// FindInstanceDataByID, reusing the `existing` slice already loaded above
-	// for the title-collision check) is the fallback for a source session
-	// that exists but is not currently live. Only the "found live, not
-	// confirmed" case is rejected outright -- a persisted-but-not-live source
-	// proceeds without requiring confirm_restart_with_live_source, since there
-	// is no live process/worktree it could collide with.
-	var restartSourcePath string
-	if req.Msg.RestartFromSessionId != "" {
-		if liveSrc := s.FindLiveInstance(req.Msg.RestartFromSessionId); liveSrc != nil {
-			if !req.Msg.ConfirmRestartWithLiveSource {
-				return nil, connect.NewError(connect.CodeFailedPrecondition,
-					fmt.Errorf("restart source session %q is still running; stop it first or pass confirm_restart_with_live_source to proceed anyway", req.Msg.RestartFromSessionId))
-			}
-			restartSourcePath = liveSrc.Path
-		} else {
-			var srcData *session.InstanceData
-			for i := range existing {
-				if existing[i].MatchesID(req.Msg.RestartFromSessionId) {
-					srcData = &existing[i]
-					break
-				}
-			}
-			if srcData == nil {
-				return nil, connect.NewError(connect.CodeNotFound,
-					fmt.Errorf("restart source session %q not found", req.Msg.RestartFromSessionId))
-			}
-			restartSourcePath = srcData.Path
-		}
+	// below. See resolveRestartSource's doc comment for the live-vs-persisted
+	// lookup order.
+	restartSourcePath, err := s.resolveRestartSource(req.Msg, existing)
+	if err != nil {
+		return nil, err
 	}
 
 	// Resolve GitHub URLs to local paths (GOPATH-style: ~/.stapler-squad/repos/<host>/owner/repo)

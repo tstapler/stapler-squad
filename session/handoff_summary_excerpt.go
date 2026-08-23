@@ -58,6 +58,20 @@ func pruneExcerptText(content string) string {
 	return content[:maxExcerptMessageBytes] + "... [truncated]"
 }
 
+// pruneMessages returns a copy of messages with each message's Content passed
+// through pruneExcerptText, so no single message can exceed
+// maxExcerptMessageBytes. Unlike applySummaryBudget, this never drops
+// messages -- it only caps each one's content -- so it's the right building
+// block for Head/Tail, which must stay verbatim in count.
+func pruneMessages(messages []ClaudeConversationMessage) []ClaudeConversationMessage {
+	pruned := make([]ClaudeConversationMessage, len(messages))
+	for i, msg := range messages {
+		msg.Content = pruneExcerptText(msg.Content)
+		pruned[i] = msg
+	}
+	return pruned
+}
+
 // SummaryBudget bounds the total size of the middle-transcript excerpt fed
 // to the handoff summarizer.
 type SummaryBudget struct {
@@ -83,11 +97,7 @@ func newSummaryBudget(cfg config.HandoffSummaryConfig) SummaryBudget {
 // budget.MiddleExcerptMaxBytes. It never splits a single message's content,
 // so the retained messages are always a suffix of the original slice.
 func applySummaryBudget(middle []ClaudeConversationMessage, budget SummaryBudget) []ClaudeConversationMessage {
-	pruned := make([]ClaudeConversationMessage, len(middle))
-	for i, msg := range middle {
-		msg.Content = pruneExcerptText(msg.Content)
-		pruned[i] = msg
-	}
+	pruned := pruneMessages(middle)
 
 	total := 0
 	for _, msg := range pruned {

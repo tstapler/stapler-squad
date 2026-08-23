@@ -327,6 +327,135 @@ func TestGenerateAndPersist_TimesOutAndTransitionsToError_When_PoolCallExceedsDe
 	release()
 }
 
+// capturingPoolClient wraps fakePoolClient to additionally record the last
+// user prompt CallBlocking was invoked with, so a test can inspect exactly
+// what GenerateHandoffSummary sent to the LLM (e.g. to confirm an oversized
+// message was truncated before it ever reached the prompt).
+type capturingPoolClient struct {
+	fakePoolClient
+	lastUserPrompt string
+}
+
+func (f *capturingPoolClient) CallBlocking(ctx context.Context, key headless.FeatureKey, system, user string, opts headless.CallOptions, sink headless.CostSink) (string, error) {
+	f.lastUserPrompt = user
+	return f.fakePoolClient.CallBlocking(ctx, key, system, user, opts, sink)
+}
+
+// TestGenerateAndPersist_TruncatesOversizedHeadAndTailMessages covers the fix
+// for Head/Tail messages bypassing the per-message byte cap: an oversized
+// message in either Head or Tail (e.g. a large pasted file in the first
+// turn) must be truncated via pruneMessages before it reaches the prompt
+// sent to the LLM, exactly like Middle already is via applySummaryBudget.
+func TestGenerateAndPersist_TruncatesOversizedHeadAndTailMessages(t *testing.T) {
+	sessionID := "sess-oversized-head-tail"
+	oversizedHead := strings.Repeat("h", 20000)
+	oversizedTail := strings.Repeat("t", 20000)
+	roles := []string{"user", "assistant", "user", "assistant", "user", "assistant", "user", "assistant"}
+	contents := []string{
+		oversizedHead, // Head[0] -- oversized
+		"ack",         // Head[1]
+		"middle 1",
+		"middle 2",
+		"middle 3",
+		"middle 4",
+		"second to last", // Tail[0]
+		oversizedTail,    // Tail[1] -- oversized
+	}
+	writeHandoffConversationFixture(t, sessionID, roles, contents)
+
+	repo, cleanup := createTestEntRepository(t)
+	defer cleanup()
+
+	pool := &capturingPoolClient{fakePoolClient: fakePoolClient{response: "A narrative.\n\n## Active Task\nnext step"}}
+	gen := NewHandoffSummaryGenerator(repo.client, pool)
+
+	gen.GenerateAndPersist(context.Background(), sessionID, "title")
+
+	row := getHandoffRow(t, repo.client, sessionID)
+	if row.Status != string(HandoffSummaryStatusReady) {
+		t.Fatalf("expected READY, got %s", row.Status)
+	}
+
+	if strings.Contains(pool.lastUserPrompt, oversizedHead) {
+		t.Fatal("expected the oversized Head message to be truncated, but it appeared verbatim in the prompt")
+	}
+	if strings.Contains(pool.lastUserPrompt, oversizedTail) {
+		t.Fatal("expected the oversized Tail message to be truncated, but it appeared verbatim in the prompt")
+	}
+	if got := strings.Count(pool.lastUserPrompt, "... [truncated]"); got != 2 {
+		t.Fatalf("expected exactly 2 truncation markers (one for Head, one for Tail), got %d in prompt:\n%s", got, pool.lastUserPrompt)
+	}
+}
+
+// TestHandoffReconcileStaleness_should_NotStompFreshReadyRow_When_ConcurrentGenerationCompletesBetweenCheckAndWrite
+// is the HandoffSummaryGenerator counterpart to SessionSummaryGenerator's
+// identically-shaped
+// TestReconcileStaleness_should_NotStompFreshReadyRow_When_ConcurrentGenerationCompletesBetweenCheckAndWrite
+// (session_summary_service_test.go) -- named with a Handoff prefix since both
+// live in package session and would otherwise collide. It covers the same
+// TOCTOU fix: ReconcileStaleness reads a row snapshot, checks isInFlight,
+// then writes ERROR via a predicated update. If a fresh GenerateAndPersist
+// call completes (writing READY) in the window between the read and the
+// write, the predicated update must no-op (0 rows affected, since
+// generation_started_at no longer matches the stale snapshot) rather than
+// stomping the fresh READY row back to ERROR.
+func TestHandoffReconcileStaleness_should_NotStompFreshReadyRow_When_ConcurrentGenerationCompletesBetweenCheckAndWrite(t *testing.T) {
+	t.Parallel()
+	gen, client, _ := newTestHandoffSummaryGenerator(t)
+	ctx := context.Background()
+	sessionID := "sess-handoff-toctou"
+
+	staleStart := time.Now().Add(-10 * time.Minute)
+	_, err := client.HandoffSummary.Create().
+		SetID(uuid.New().String()).
+		SetSessionID(sessionID).
+		SetSessionTitle("title").
+		SetStatus(string(HandoffSummaryStatusGenerating)).
+		SetGenerationStartedAt(staleStart).
+		Save(ctx)
+	if err != nil {
+		t.Fatalf("failed to seed row: %v", err)
+	}
+	staleRow := getHandoffRow(t, client, sessionID)
+
+	// Simulate a fresh GenerateAndPersist call completing concurrently, in the
+	// window between ReconcileStaleness reading staleRow and its write
+	// landing: the row transitions to READY with a new
+	// generation_started_at.
+	freshNow := time.Now()
+	if _, err := client.HandoffSummary.Update().
+		Where(handoffsummary.SessionID(sessionID)).
+		SetStatus(string(HandoffSummaryStatusReady)).
+		SetGenerationStartedAt(freshNow).
+		SetGeneratedAt(freshNow).
+		SetSummaryText("fresh summary").
+		Save(ctx); err != nil {
+		t.Fatalf("failed to simulate concurrent fresh completion: %v", err)
+	}
+
+	// ReconcileStaleness operates on the stale snapshot, as
+	// GetHandoffSummary's read-then-reconcile path would have read it before
+	// the fresh completion landed.
+	result := gen.ReconcileStaleness(ctx, staleRow)
+
+	// The predicated update must match 0 rows (generation_started_at no
+	// longer equals staleStart) -- a no-op, not an overwrite. The returned
+	// value is the row as originally read, not a freshly-error'd one.
+	if result.Status != string(HandoffSummaryStatusGenerating) {
+		t.Fatalf("expected ReconcileStaleness to return the stale snapshot unchanged, got status=%s", result.Status)
+	}
+
+	// Most importantly: the actual DB row must still be READY -- the fresh
+	// completion must survive, not get stomped back to ERROR.
+	dbRow := getHandoffRow(t, client, sessionID)
+	if dbRow.Status != string(HandoffSummaryStatusReady) {
+		t.Fatalf("expected the fresh READY row to survive ReconcileStaleness, got %s", dbRow.Status)
+	}
+	if dbRow.SummaryText != "fresh summary" {
+		t.Fatalf("expected the fresh summary_text to survive ReconcileStaleness, got %q", dbRow.SummaryText)
+	}
+}
+
 // ---- Simple ent schema smoke tests ----
 
 func TestHandoffSummarySchema_should_DefaultStatusToPending_When_CreatedWithoutExplicitStatus(t *testing.T) {

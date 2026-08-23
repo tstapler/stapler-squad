@@ -220,6 +220,26 @@ func (g *HandoffSummaryGenerator) upsertHandoffSummaryError(ctx context.Context,
 		Exec(ctx)
 }
 
+// failStage upserts an ERROR row for sourceSessionID at the given stage,
+// logging the upsert failure (if any) and then the stage failure itself.
+// Extracted from GenerateAndPersist, which repeated this exact
+// upsert-log-log shape at every error-return path (transcript load,
+// transcript parse, generation, and persist). asError selects Error-level
+// logging for the stage-failure line (used by the persist stage, since LLM
+// cost has already been spent by that point) instead of the default Warn
+// level the other stages use — matching each call site's original log level.
+func (g *HandoffSummaryGenerator) failStage(ctx context.Context, sourceSessionID, sourceSessionTitle, stage string, err error, generationStartedAt time.Time, asError bool) {
+	if upsertErr := g.upsertHandoffSummaryError(ctx, sourceSessionID, sourceSessionTitle, stage, err.Error(), generationStartedAt); upsertErr != nil {
+		log.ForSession(sourceSessionID).Error(fmt.Sprintf("[HandoffSummary] failed to persist %s-stage error row", stage), "err", upsertErr)
+	}
+	msg := fmt.Sprintf("[HandoffSummary] GENERATING -> ERROR (%s stage)", stage)
+	if asError {
+		log.ForSession(sourceSessionID).Error(msg, "err", err)
+	} else {
+		log.ForSession(sourceSessionID).Warn(msg, "err", err)
+	}
+}
+
 // GenerateAndPersist runs the full handoff-summary pipeline: read the source
 // session's transcript, window/budget it, call the LLM to compact the middle
 // portion into a handoff summary, and persist via status-transitioning
@@ -266,33 +286,30 @@ func (g *HandoffSummaryGenerator) GenerateAndPersist(ctx context.Context, source
 
 	history, err := NewClaudeSessionHistoryFromClaudeDir()
 	if err != nil {
-		if upsertErr := g.upsertHandoffSummaryError(ctx, sourceSessionID, sourceSessionTitle, "transcript", err.Error(), now); upsertErr != nil {
-			log.ForSession(sourceSessionID).Error("[HandoffSummary] failed to persist transcript-stage error row", "err", upsertErr)
-		}
-		log.ForSession(sourceSessionID).Warn("[HandoffSummary] GENERATING -> ERROR (transcript stage)", "err", err)
+		g.failStage(ctx, sourceSessionID, sourceSessionTitle, "transcript", err, now, false)
 		return
 	}
 
 	messages, err := history.GetMessagesFromConversationFile(sourceSessionID, 0)
 	if err != nil {
-		if upsertErr := g.upsertHandoffSummaryError(ctx, sourceSessionID, sourceSessionTitle, "transcript", err.Error(), now); upsertErr != nil {
-			log.ForSession(sourceSessionID).Error("[HandoffSummary] failed to persist transcript-stage error row", "err", upsertErr)
-		}
-		log.ForSession(sourceSessionID).Warn("[HandoffSummary] GENERATING -> ERROR (transcript stage)", "err", err)
+		g.failStage(ctx, sourceSessionID, sourceSessionTitle, "transcript", err, now, false)
 		return
 	}
 
 	window := buildTranscriptWindow(messages)
+	// Head/Tail are carried verbatim in message count, but each message's
+	// content still needs the same per-message byte cap Middle gets --
+	// otherwise a single oversized Head/Tail message (e.g. a large pasted
+	// file in the first turn) bypasses the excerpt budget entirely.
+	window.Head = pruneMessages(window.Head)
 	window.Middle = applySummaryBudget(window.Middle, newSummaryBudget(config.LoadConfig().HandoffSummary))
+	window.Tail = pruneMessages(window.Tail)
 
 	genCtx, cancel := context.WithTimeout(ctx, handoffSummaryTimeout)
 	summaryText, err := headless.GenerateHandoffSummary(genCtx, g.pool, sourceSessionTitle, toHandoffMessages(window.Head), toHandoffMessages(window.Middle), toHandoffMessages(window.Tail))
 	cancel()
 	if err != nil {
-		if upsertErr := g.upsertHandoffSummaryError(ctx, sourceSessionID, sourceSessionTitle, "generation", err.Error(), now); upsertErr != nil {
-			log.ForSession(sourceSessionID).Error("[HandoffSummary] failed to persist generation-stage error row", "err", upsertErr)
-		}
-		log.ForSession(sourceSessionID).Warn("[HandoffSummary] GENERATING -> ERROR (generation stage)", "err", err)
+		g.failStage(ctx, sourceSessionID, sourceSessionTitle, "generation", err, now, false)
 		return
 	}
 
@@ -321,10 +338,7 @@ func (g *HandoffSummaryGenerator) GenerateAndPersist(ctx context.Context, source
 		Exec(ctx); err != nil {
 		// LLM cost already spent, row still says GENERATING — attempt a
 		// best-effort fallback write rather than silently leaving it stuck.
-		if fallbackErr := g.upsertHandoffSummaryError(ctx, sourceSessionID, sourceSessionTitle, "persist", err.Error(), now); fallbackErr != nil {
-			log.ForSession(sourceSessionID).Error("[HandoffSummary] failed to persist fallback ERROR row after final write failure", "err", fallbackErr)
-		}
-		log.ForSession(sourceSessionID).Error("[HandoffSummary] GENERATING -> ERROR (persist stage)", "err", err)
+		g.failStage(ctx, sourceSessionID, sourceSessionTitle, "persist", err, now, true)
 		return
 	}
 
