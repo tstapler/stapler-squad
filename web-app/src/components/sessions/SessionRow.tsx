@@ -2,9 +2,10 @@
 
 import { useRef, memo } from "react";
 import { useSessionActions } from "@/lib/hooks/useSessionActions";
-import { Session, SessionStatus, SubStatus } from "@/gen/session/v1/types_pb";
+import { ReviveOutcome, Session, SessionStatus, SubStatus } from "@/gen/session/v1/types_pb";
 import { Tooltip } from "../ui/Tooltip";
 import { SessionActionsOverflow, SessionActionsOverflowHandle } from "./SessionActionsOverflow";
+import { RevivedContextBadge } from "./RevivedContextBadge";
 import { SubStatusChip } from "./SubStatusChip";
 import { GitHubBadge } from "@/components/shared/GitHubBadge";
 import { isSessionStale } from "@/lib/session-staleness";
@@ -224,7 +225,7 @@ function SessionRowInner({
       onContextMenu={handleContextMenu}
       onKeyDown={handleKeyDown}
       tabIndex={0}
-      aria-label={`Session ${session.title}, status: ${getStatusDotLabel(dotStatus)}, program: ${session.program}${session.path ? `, path: ${abbreviatePath(session.path)}` : ""}`}
+      aria-label={`Session ${session.title}, status: ${getStatusDotLabel(dotStatus)}, program: ${session.program}${session.path ? `, path: ${abbreviatePath(session.path)}` : ""}${session.reviveOutcome === ReviveOutcome.FRESH_LOST_HISTORY ? ", context: lost" : ""}`}
     >
       {/* Checkbox cell — always in DOM to keep the reserved grid column occupied */}
       <div
@@ -274,6 +275,7 @@ function SessionRowInner({
             !(suppressApprovalSubStatus && (session.subStatus === SubStatus.NEEDS_APPROVAL || session.subStatus === SubStatus.INPUT_REQUIRED)) && (
               <SubStatusChip subStatus={session.subStatus} subagentCount={session.subagentCount} />
             )}
+          <RevivedContextBadge session={session} />
           {isSessionStale(session, staleThresholdMinutes) && (
             <span
               role="img"

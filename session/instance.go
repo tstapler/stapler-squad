@@ -95,6 +95,12 @@ const (
 	EventStopped
 )
 
+// ReasonColdRestoreLostHistory is passed to fireLifecycleEvent(EventStarted, ...)
+// when a cold restore was forced fresh after recoverConversationBeforeLaunch's
+// recovery attempt found nothing, despite EverHadConversationHistory being true
+// (session-revive-uuid-loss AC3).
+const ReasonColdRestoreLostHistory = "cold-restore-fresh-lost-history"
+
 // LifecycleListener is implemented by any component that wants to receive Instance
 // lifecycle notifications. Implementations must be non-blocking; use a goroutine
 // or channel if the handler needs to do significant work.
@@ -257,6 +263,21 @@ type Instance struct {
 	// HistoryFilePath is the path to the Claude conversation JSONL history file.
 	// Set by HistoryLinker when it correlates this session to an open JSONL file.
 	HistoryFilePath string
+
+	// EverHadConversationHistory is true once a non-empty conversation UUID has
+	// ever been captured for this instance (SetHistoryInfo or a successful
+	// tryExtractConversationUUID recovery). Reset to false only by
+	// ClearConversationState(), so an intentional "start over" isn't mistaken
+	// for lost history. Lets a cold restore distinguish "genuinely first
+	// conversation" from "had one, recovery couldn't find it"
+	// (session-revive-uuid-loss AC3) — set at capture/clear time, never
+	// inferred from HistoryFilePath emptiness. Guarded by claudeSessionMu, same
+	// lock order as HistoryFilePath.
+	EverHadConversationHistory bool
+
+	// LastReviveOutcome records the outcome of the most recent start/cold-restore
+	// decision. Guarded by claudeSessionMu, same lock order as HistoryFilePath.
+	LastReviveOutcome ReviveOutcome
 
 	// MCPServerURL is the URL of the stapler-squad HTTP MCP endpoint.
 	// When set, passed as --mcp-config to claude on session start so no
@@ -943,6 +964,18 @@ func (i *Instance) recoverConversationBeforeLaunch(firstTimeSetup bool) {
 	i.tryExtractConversationUUID()
 }
 
+// reviveOutcomeReason returns the fireLifecycleEvent(EventStarted, ...) reason
+// for this start cycle's LastReviveOutcome — non-empty only for
+// ReviveOutcomeFreshLostHistory, so the notification listener in
+// server/services/session_service.go can filter on the reason string alone
+// (session-revive-uuid-loss AC3).
+func (i *Instance) reviveOutcomeReason() string {
+	if i.LastReviveOutcome == ReviveOutcomeFreshLostHistory {
+		return ReasonColdRestoreLostHistory
+	}
+	return ""
+}
+
 // startLocked is the actor-safe body of Start(). Called only from within
 // sendSyncErr/send closures. The param is named actorState (not s) to make
 // actor-only ownership visually distinct and prevent future edits from treating
@@ -967,6 +1000,10 @@ func startLocked(actorState *instanceState, firstTimeSetup bool) error {
 		return fmt.Errorf("instance title cannot be empty")
 	}
 
+	// Captured before recoverConversationBeforeLaunch so the cold-restore decision
+	// below can distinguish "already had a UUID, no recovery needed" (ResumeLive)
+	// from "recovery just found one" (ResumeRecovered) — session-revive-uuid-loss AC3.
+	hadUUIDBeforeRecovery := i.HasClaudeSession()
 	i.recoverConversationBeforeLaunch(firstTimeSetup)
 
 	i.pm().ResetExitOnce()
@@ -999,8 +1036,18 @@ func startLocked(actorState *instanceState, firstTimeSetup bool) error {
 			startPath := i.resolveStartPath(i.GetEffectiveRootDir())
 			if i.HasClaudeSession() {
 				log.Info("cold restoring with --resume", "session", i.Title, "uuid", i.claudeSession.ConversationUUID, "path", startPath)
+				if hadUUIDBeforeRecovery {
+					i.LastReviveOutcome = ReviveOutcomeResumeLive
+				} else {
+					i.LastReviveOutcome = ReviveOutcomeResumeRecovered
+				}
 			} else {
 				log.Warn("cold start: tmux dead, no conversation UUID, starting fresh", "session", i.Title, "path", startPath)
+				if i.EverHadConversationHistory {
+					i.LastReviveOutcome = ReviveOutcomeFreshLostHistory
+				} else {
+					i.LastReviveOutcome = ReviveOutcomeFreshExpected
+				}
 			}
 			i.startVNCDisplay(context.Background())
 			i.allocateCDPPort()
@@ -1122,7 +1169,7 @@ func startLocked(actorState *instanceState, firstTimeSetup bool) error {
 	snap := buildSnapshot(i)
 	i.mu.Unlock()
 	i.snapshot.Store(snap)
-	i.fireLifecycleEvent(EventStarted, "")
+	i.fireLifecycleEvent(EventStarted, i.reviveOutcomeReason())
 
 	i.startVNCServer(context.Background())
 	i.startCDP(context.Background())
@@ -1163,6 +1210,10 @@ func (i *Instance) start(firstTimeSetup bool, setupCleanup bool, cleanup *tmux.C
 		return fmt.Errorf("instance title cannot be empty")
 	}
 
+	// Captured before recoverConversationBeforeLaunch so the cold-restore decision
+	// below can distinguish "already had a UUID, no recovery needed" (ResumeLive)
+	// from "recovery just found one" (ResumeRecovered) — session-revive-uuid-loss AC3.
+	hadUUIDBeforeRecovery := i.HasClaudeSession()
 	i.recoverConversationBeforeLaunch(firstTimeSetup)
 
 	// Wire the exit callback so control-mode %exit / PTY EOF fires our handler.
@@ -1207,9 +1258,19 @@ func (i *Instance) start(firstTimeSetup bool, setupCleanup bool, cleanup *tmux.C
 				// initTmuxSession() (called above) already built the program command
 				// with --resume via ClaudeCommandBuilder, so Start() uses it directly.
 				log.Info("cold restoring with --resume", "session", i.Title, "uuid", i.claudeSession.ConversationUUID, "path", startPath)
+				if hadUUIDBeforeRecovery {
+					i.LastReviveOutcome = ReviveOutcomeResumeLive
+				} else {
+					i.LastReviveOutcome = ReviveOutcomeResumeRecovered
+				}
 			} else {
 				// Dead tmux, no UUID — start a fresh session without --resume.
 				log.Warn("cold start: tmux dead, no conversation UUID, starting fresh", "session", i.Title, "path", startPath)
+				if i.EverHadConversationHistory {
+					i.LastReviveOutcome = ReviveOutcomeFreshLostHistory
+				} else {
+					i.LastReviveOutcome = ReviveOutcomeFreshExpected
+				}
 			}
 			// Phase 1: Allocate X display before creating the tmux session so DISPLAY
 			// can be injected via ExtraEnv at new-session time.
@@ -1362,7 +1423,7 @@ func (i *Instance) start(firstTimeSetup bool, setupCleanup bool, cleanup *tmux.C
 	i.started.Store(true)
 	i.snapshot.Store(buildSnapshot(i))
 	i.mu.Unlock()
-	i.fireLifecycleEvent(EventStarted, "")
+	i.fireLifecycleEvent(EventStarted, i.reviveOutcomeReason())
 
 	// Phase 2: Start x11vnc and window tracker now that the tmux session is live.
 	// Run unconditionally (not gated on firstTimeSetup) so hot-restores also get VNC.

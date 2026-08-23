@@ -1150,6 +1150,7 @@ func (s *SessionService) wireCallbacks(inst *session.Instance) {
 	s.wireClaudeSessionIDCallback(inst)
 	s.wireAutoArchiveCallback(inst)
 	s.wireSessionExitedPublisher(inst)
+	s.wireColdRestoreOutcomeListener(inst)
 	// Register with the HistoryLinker so its poll/fsnotify correlation loop
 	// detects this session's Claude JSONL file and persists claude_session_id.
 	// Without this, only sessions loaded at server boot (server/dependencies.go)
@@ -4384,6 +4385,48 @@ func (l *autoArchiveListener) OnLifecycleEvent(event session.LifecycleEvent, _ s
 	if event == session.EventExited {
 		go l.svc.maybeAutoArchive(l.inst)
 	}
+}
+
+// wireColdRestoreOutcomeListener registers a lifecycle listener that notifies
+// the user when a cold restore was forced fresh despite the session having
+// previously captured conversation history (session-revive-uuid-loss AC3).
+func (s *SessionService) wireColdRestoreOutcomeListener(inst *session.Instance) {
+	if inst == nil {
+		return
+	}
+	inst.RegisterLifecycleListener(&coldRestoreOutcomeListener{svc: s, inst: inst})
+}
+
+// coldRestoreOutcomeListener implements session.LifecycleListener to surface
+// session.ReasonColdRestoreLostHistory as a durable, user-visible notification.
+type coldRestoreOutcomeListener struct {
+	svc  *SessionService
+	inst *session.Instance
+}
+
+func (l *coldRestoreOutcomeListener) OnLifecycleEvent(event session.LifecycleEvent, reason string) {
+	if event == session.EventStarted && reason == session.ReasonColdRestoreLostHistory {
+		l.svc.onColdRestoreLostHistory(l.inst)
+	}
+}
+
+// onColdRestoreLostHistory publishes a durable WARNING notification for inst
+// when a cold restore could not recover its previous conversation history.
+// Hidden instances (e.g. headless review sessions) never surface this.
+func (s *SessionService) onColdRestoreLostHistory(inst *session.Instance) {
+	if inst.Hidden {
+		return
+	}
+	linkedItemID := s.rateLimitLinkedItemID(inst)
+	notifID := fmt.Sprintf("cold-restore-lost-history-%s", inst.UUID)
+	s.eventBus.Publish(events.NewNotificationEvent(
+		inst.UUID, inst.Title, notifID,
+		int32(8), // NotificationType_WARNING
+		int32(2), // NotificationPriority_MEDIUM
+		fmt.Sprintf("Session %q started fresh — previous conversation could not be resumed", inst.Title),
+		"The session's tmux pane restarted and the previous conversation history could not be found on disk. Earlier context is not available.",
+		events.SessionScopedMetadata(nil, linkedItemID),
+	))
 }
 
 // wireSessionExitedPublisher registers a lifecycle listener that publishes a
