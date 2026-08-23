@@ -4,66 +4,21 @@
 # Composes the Toolexec Injection GOFLAGS (ADR-004) around a caller-supplied
 # `go build`/`go test` argv, then verifies otelc didn't silently mutate
 # go.mod/go.sum during the build itself (Module Mutation Guard, Story 2.1.4 —
-# pitfalls.md #1c).
+# pitfalls.md #1c). Build-time concerns ONLY — this process exits once the
+# child build finishes and never sets any OTEL_* runtime var; see the Run
+# Recipe in .claude/docs/opentelemetry-auto-instrumentation.md for that.
 #
-# Scope — build-time concerns ONLY. This process exits once the child build
-# finishes; it never sets OTEL_ENABLED, OTEL_TRACES_EXPORTER, or
-# OTEL_METRICS_EXPORTER, since a later `stapler-squad-otel` invocation is a
-# separate process that inherits nothing from this one. Runtime suppression
-# is the Run Recipe's job — see .claude/docs/opentelemetry-auto-instrumentation.md.
-#
-# `otelc setup` bootstrap (run every invocation) + `otelc cleanup` trap:
-#   `otelc setup` writes per-checkout scaffolding — `.otelc-build/`,
-#   `otel.instrumentation.go`, `otelc.runtime.go` — required for the toolexec
-#   weave to compile. These are gitignored (see .gitignore) rather than
-#   committed, because `otelc.runtime.go` has no build tag and unconditionally
-#   blank-imports otelc instrumentation packages: its mere presence breaks a
-#   plain `go build .` / `make build` (confirmed empirically), so it must not
-#   linger in the tree after this script exits — leaving it behind would leak
-#   the opt-in build into the default one, which Epic 2.1's isolation goal
-#   forbids.
-#
-#   `otelc setup` also ADDS `require`/`replace` lines to go.mod/go.sum for
-#   otelc's instrumentation modules, and can bump unrelated shared transitive
-#   deps as a side effect of re-resolving the module graph (confirmed: it
-#   bumped github.com/gofrs/flock v0.12.1 -> v0.13.0 and otlptracegrpc
-#   v1.39.0 -> v1.44.0 on first run) — a real instance of the pitfalls.md
-#   #1c failure mode. It is not silent here, though: this script snapshots
-#   go.mod/go.sum before calling `otelc setup` at all and restores that exact
-#   snapshot in the cleanup trap (below), in addition to `otelc cleanup`
-#   removing the generated files above. The restore is done by our own byte
-#   backup/copy, not by relying on `otelc cleanup`'s state-manager revert —
-#   confirmed empirically (2026-08-22) that revert alone is NOT reliable once
-#   `otelc setup` runs more than once per cycle (this script's own two-pass
-#   custom-rule injection, below, does exactly that) — see the cleanup
-#   function's own comment for the mechanism. So a full `build-otel-auto` run
-#   leaves go.mod/go.sum untouched end to end, and the Module Mutation Guard
-#   below — bracketing only the child build, between setup and cleanup — is
-#   checking the actual weave/compile step, the thing Story 2.1.4 asks it to
-#   check, not otelc's own bootstrap/teardown.
-#
-# Custom rule injection (Story 5.1.2, Task 5.1.2c — Spike E, spike-verdicts.md):
-#   otelc has no additive way to merge a repo-local custom rule (e.g. this
-#   repo's own instrumentation/otelc/safeexec/otelc.yaml, hooking
-#   executor/safeexec.CommandContext) into the SAME weave as its built-in
-#   rules (net/http, database/sql, ...) in one `otelc setup` call:
-#     - `--rules`/`OTELC_RULES` REPLACES the entire ruleset with just the
-#       given file (confirmed by reading tool/internal/setup/setup.go's
-#       loadRules: it returns early on either being set, skipping AutoPin
-#       and the embedded-defaults path entirely) — using it here would drop
-#       net/http/database/sql/etc. spans for the whole build.
-#     - The additive path is otel.instrumentation.go (the "tool file"):
-#       `otelc setup`'s Pin step (tool/internal/setup/pin.go) only
-#       auto-discovers built-in rules when NO tool file exists yet
-#       (generatePinnedProjects); if one already exists it takes the
-#       validate-and-keep path instead (updatePinnedProjects), preserving
-#       every import already listed — including a hand-added one, as long as
-#       it resolves to a real package with a valid rule file. Confirmed
-#       empirically (2026-08-22): run `otelc setup` once to get the
-#       auto-discovered default tool file, append our custom package's
-#       blank import, run `otelc setup` again — matched.json then carries
-#       both the defaults AND our hook_command_context rule.
-#   Hence the two-pass setup below instead of a single call.
+# Runs `otelc setup` twice (auto-discover built-in rules, then inject this
+# repo's own custom rule import and re-run) because otelc has no additive way
+# to merge a repo-local rule into the same weave as its built-in rules in one
+# call — `--rules`/`OTELC_RULES` replaces the whole ruleset instead. Restores
+# go.mod/go.sum from its own byte backup (not `otelc cleanup`'s revert, which
+# is unreliable across a two-pass setup) and deletes every generated
+# otelc.runtime.go/otel.instrumentation.go, so a plain `go build ./...` is
+# never affected by this having run. Full investigation trail, exact repro
+# commands, and dated findings:
+# project_plans/go-auto-instrumentation/implementation/spike-verdicts.md
+# (Spike E) and .claude/docs/opentelemetry-auto-instrumentation.md.
 #
 # Usage:
 #   ./scripts/otel-auto-build.sh go build -ldflags "-X main.version=1.2.3" -o stapler-squad-otel .
@@ -72,6 +27,23 @@ set -euo pipefail
 
 CUSTOM_RULE_IMPORT='_ "github.com/tstapler/stapler-squad/instrumentation/otelc/safeexec"'
 TOOL_FILE="otel.instrumentation.go"
+
+# hash_cmd: sha256sum isn't on PATH by default on macOS (shasum -a 256 is,
+# following this repo's uname -s Darwin-detection convention — Makefile:5,9).
+# The Module Mutation Guard below depends on this producing a real hash on
+# both sides, or a missing tool would silently compare two empty strings as
+# equal and false-pass the one check pitfalls.md names as this feature's core
+# safety concern.
+hash_cmd() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$@"
+  elif command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$@"
+  else
+    echo "✗ no sha256sum/shasum on PATH — cannot run the Module Mutation Guard" >&2
+    exit 1
+  fi
+}
 
 if ! command -v otelc >/dev/null 2>&1; then
   echo "✗ otelc not found on PATH." >&2
@@ -87,23 +59,13 @@ if [ "$#" -eq 0 ]; then
   exit 1
 fi
 
-# `otelc setup` (called bare, no args) only generates the per-package
-# runtime/hook-linkage file (otelc.runtime.go equivalent, via
-# generateRuntimePerPackage) for the CURRENT DIRECTORY's package ("."),
-# because tool/internal/setup/setup.go's getBuildPackages() falls back to
-# loading just "." when given an empty args slice. That silently starves
-# every OTHER package of its hook linkage — confirmed empirically
-# (2026-08-22): `go test ./executor/... ./session/git/...` under a bare
-# `otelc setup` fails to LINK with "relocation target ... not defined" for
-# EVERY rule's trampoline (built-in ones included, not just this repo's
-# custom safeexec hook), because those packages' own compiled units never
-# got the linkname-generating runtime file the trampolines need. Forwarding
-# the actual build target args (same ones "$@" itself is about to build)
-# to `otelc setup` fixes it, matching what `otelc go build`/`otelc go test`
-# would do internally (see setup.go's GoBuild/runGoBuild, which always
-# calls Setup with the real command args) — this script can't use that
-# wrapper subcommand directly because it needs to run its own two-pass
-# custom-rule injection between setup and the actual build (see below).
+# `otelc setup` with no args only wires hook linkage for the current
+# directory's package — every other package silently loses its trampoline
+# linkage (LINK failures) unless the real build target args are forwarded to
+# it too, matching what `otelc go build`/`otelc go test` does internally.
+# This script can't use that wrapper subcommand directly: it needs its own
+# two-pass custom-rule injection between setup and the real build (below).
+# See spike-verdicts.md (Spike E) for the full investigation trail.
 if [ "${1:-}" = "go" ]; then
   verb_prefix=("$1" "$2") # "go" "build"/"test"/"install"
   build_target_args=("${@:3}")
@@ -113,44 +75,20 @@ else
 fi
 
 # instrumentation/otelc/safeexec/hook.go is gated behind the `otelcauto`
-# build tag (see that file's doc comment) so a plain `go build ./...` /
-# `make build` / `make lint` never tries to compile it — it imports
-# go.opentelemetry.io/otelc/pkg/hook, which only exists in go.mod during this
-# script's own `otelc setup` window. Confirmed empirically (2026-08-22):
-# without the tag, `go build ./...` failed with "no required module provides
-# package .../pkg/hook" even on a build that never touches this package,
-# because `./...` still tries to compile every directory under the module
-# root. The tag must be active for BOTH `otelc setup` (so pin/rule-matching
-# can resolve the package) and the real build/test step below — merged with
-# any `-tags` the caller already passed (e.g. `make build-otel-auto-embedded`'s
-# `-tags embed_tmux`), not overwritten, since GOFLAGS-level tag injection
-# would lose a caller-supplied `-tags` outright (an explicit CLI `-tags`
-# always wins over one set via GOFLAGS, they don't merge).
+# build tag (see that file's doc comment) so a plain `go build ./...` never
+# tries to compile it. The tag must be active for both `otelc setup` and the
+# real build/test step below, merged with any caller-supplied `-tags` (an
+# explicit CLI `-tags` always wins over one set via GOFLAGS, so they must be
+# merged here rather than just exported).
 #
-# Single classification pass over build_target_args splits it into:
-#   - setup_pkg_args: bare package-pattern positionals only (e.g. ".",
-#     "./executor/safeexec"). This is ALL `otelc setup`'s own CLI accepts —
-#     it parses flags strictly and rejects anything it doesn't recognize
-#     (confirmed empirically, 2026-08-22: `otelc setup -o /tmp/x .` fails
-#     with "flag provided but not defined: -o", and likewise for `-tags`),
-#     unlike `otelc go build`/`otelc go test`, whose command definition sets
-#     SkipFlagParsing (cmd_go.go) precisely so it can pass through arbitrary
-#     `go` flags. Since this script calls `otelc setup` directly (not
-#     `otelc go ...`, so it can run its own two-pass custom-rule injection
-#     between setup and the real build), the merged -tags value is instead
-#     exported via GOFLAGS below rather than passed here — pkgload.LoadPackages's
-#     `packages.Config` leaves `Env` unset, and golang.org/x/tools/go/packages
-#     defaults that to the current process environment, so the `go list`
-#     calls `otelc setup` makes internally still pick up GOFLAGS's -tags even
-#     though `otelc setup`'s own CLI never sees it as an argument.
-#   - other_flag_args: every other flag and its value (e.g. -ldflags "...",
-#     -o path), preserved for the real build/test invocation below.
-# The real invocation is then rebuilt as verb + other_flag_args + our merged
-# -tags + setup_pkg_args, in that order — flags MUST precede package-pattern
-# positionals on a `go build`/`go test` command line, or `go` treats a
-# trailing "-tags=..." as another package pattern instead of a flag
-# ("malformed import path ...: leading dash", confirmed empirically,
-# 2026-08-22, from a first attempt that just appended -tags at the end).
+# The loop below splits build_target_args into bare package-pattern
+# positionals (setup_pkg_args — all `otelc setup`'s strict CLI parser
+# accepts; the merged -tags value goes out via GOFLAGS instead, since
+# `otelc setup`'s internal `go list` calls still pick that up) and every
+# other flag (other_flag_args, preserved for the real build/test call below).
+# Flags MUST precede package positionals on a `go build`/`go test` command
+# line, or `go` misparses a trailing `-tags=...` as an import path. See
+# spike-verdicts.md (Spike E) for the full investigation trail.
 OTELC_AUTO_TAG="otelcauto"
 caller_tags=""
 setup_pkg_args=()
@@ -245,7 +183,11 @@ otelc setup "${setup_pkg_args[@]}"
 if [ -f "$TOOL_FILE" ] && ! grep -qF "$CUSTOM_RULE_IMPORT" "$TOOL_FILE"; then
   echo "▶ injecting custom rule import into $TOOL_FILE (instrumentation/otelc/safeexec)"
   # Insert right before the closing ")" of the import block written by pass 1.
-  sed -i "s#^)\$#\t${CUSTOM_RULE_IMPORT}\n)#" "$TOOL_FILE"
+  # BSD/macOS `sed -i` requires an explicit backup-suffix argument (GNU's
+  # doesn't) — the -i.bak form works on both, so use it unconditionally and
+  # discard the backup.
+  sed -i.bak "s#^)\$#\t${CUSTOM_RULE_IMPORT}\n)#" "$TOOL_FILE"
+  rm -f "$TOOL_FILE.bak"
   echo "▶ otelc setup — pass 2 (merge custom rule into the matched ruleset)"
   otelc setup "${setup_pkg_args[@]}"
 fi
@@ -254,14 +196,14 @@ export GOFLAGS="${GOFLAGS} '-toolexec=otelc toolexec'"
 echo "▶ GOFLAGS=${GOFLAGS}"
 echo "▶ ${run_args[*]}"
 
-mod_sum_before="$(sha256sum go.mod go.sum 2>/dev/null || true)"
+mod_sum_before="$(hash_cmd go.mod go.sum)"
 
 set +e
 "${run_args[@]}"
 build_status=$?
 set -e
 
-mod_sum_after="$(sha256sum go.mod go.sum 2>/dev/null || true)"
+mod_sum_after="$(hash_cmd go.mod go.sum)"
 
 if [ "$mod_sum_before" != "$mod_sum_after" ]; then
   echo "✗ Module Mutation Guard: go.mod/go.sum changed during the build step." >&2

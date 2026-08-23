@@ -61,23 +61,14 @@ func (f *fakeHookContext) SetReturnVal(idx int, val interface{}) { f.returnVals[
 func (f *fakeHookContext) GetFuncName() string                   { return f.funcName }
 func (f *fakeHookContext) GetPackageName() string                { return f.pkgName }
 
-// testRecorder/testRecorderOnce back installRecorder below. The
-// package-level `tracer` (hook.go's `var tracer = otel.Tracer(...)`) is
-// obtained once at package load, and go.opentelemetry.io/otel's global
-// package only rewires an already-obtained Tracer to a new
-// TracerProvider on the FIRST EVER call to otel.SetTracerProvider in the
-// process (see delegateTraceOnce in
-// go.opentelemetry.io/otel/internal/global/state.go) — every later call
-// just swaps an atomic registry that new Tracer() calls would see, but
-// does NOT redirect `tracer`, which stays wired to whichever provider won
-// that first call. Confirmed empirically: calling SetTracerProvider fresh
-// per test made every test after the first silently record onto the
-// first test's recorder instead of its own. So the provider is installed
-// exactly once for the whole test binary, and each test gets isolation
-// via Reset() instead of re-delegating.
-// These tests must NOT call t.Parallel(): testRecorder is shared
-// package-level state reset per-test (via installRecorder's Reset() call
-// below), and concurrent tests resetting/reading it would race.
+// testRecorder/testRecorderOnce back installRecorder below: the
+// package-level `tracer` only picks up a new TracerProvider on the FIRST
+// EVER call to otel.SetTracerProvider in the process (see
+// delegateTraceOnce in go.opentelemetry.io/otel/internal/global/state.go),
+// so the provider is installed exactly once for the whole test binary and
+// each test gets isolation via Reset() instead of re-delegating. These
+// tests must NOT call t.Parallel() — testRecorder is shared package-level
+// state reset per-test, and concurrent resets/reads would race.
 var (
 	testRecorder     *tracetest.SpanRecorder
 	testRecorderOnce sync.Once
@@ -155,17 +146,32 @@ func TestSubprocessHook_should_RecordErrorOnSpan_When_WrappedCommandFails(t *tes
 	assert.True(t, sawExceptionEvent, "expected RecordError to add an exception event")
 }
 
+// TestSubprocessHook_should_EndSpanExactlyOnce_When_CommandCompletesNormally
+// asserts directly on callState.ended (the atomic.Bool guard in
+// AfterCommandContext), not just on the SDK's own Ended() count — the SDK's
+// recordingSpan.End()/RecordError()/SetStatus() are already internally
+// idempotent, so a len(Ended())==1 assertion alone would pass unchanged even
+// with the guard deleted. Asserting on state.ended.Load() ties this test to
+// the guard's own state: without the CompareAndSwap in AfterCommandContext,
+// ended never flips to true and the first assertion below fails.
 func TestSubprocessHook_should_EndSpanExactlyOnce_When_CommandCompletesNormally(t *testing.T) {
 	recorder := installRecorder(t)
 
 	ictx := &fakeHookContext{}
 	BeforeCommandContext(ictx, context.Background(), "echo", "hi")
 
+	state, ok := ictx.GetData().(*callState)
+	require.True(t, ok, "expected BeforeCommandContext to stash a *callState")
+	require.False(t, state.ended.Load(), "ended must be false before AfterCommandContext runs")
+
 	// AfterCommandContext is only ever invoked once by a real otelc weave,
 	// but the double-End guard (callState.ended, an atomic.Bool) exists
 	// precisely to be safe against a second call — exercise that directly.
 	AfterCommandContext(ictx, nil)
+	assert.True(t, state.ended.Load(), "expected the guard's CompareAndSwap to flip ended to true")
+
 	AfterCommandContext(ictx, nil)
+	assert.True(t, state.ended.Load(), "ended must remain true after a second call")
 
 	ended := recorder.Ended()
 	assert.Len(t, ended, 1, "span.End() must not be observed more than once")
