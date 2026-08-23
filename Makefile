@@ -97,6 +97,7 @@ registry-generate-backend: ## Scan proto+markers → write per-feature files und
 	@./$(BACKEND_SCANNER_BIN) proto/session/v1/github_user.proto server/services/ $(BACKEND_FEATURES_DIR)
 	@./$(BACKEND_SCANNER_BIN) proto/session/v1/import.proto server/services/ $(BACKEND_FEATURES_DIR)
 	@./$(BACKEND_SCANNER_BIN) proto/session/v1/session_summary.proto server/services/ $(BACKEND_FEATURES_DIR)
+	@./$(BACKEND_SCANNER_BIN) proto/session/v1/remote.proto server/services/ $(BACKEND_FEATURES_DIR)
 	@# Generation is additive; prune files whose RPC no longer exists so the
 	@# committed set stays in sync with the proto (avoids registry-validation drift).
 	@bash tools/scanner/prune-stale-backend.sh $(BACKEND_FEATURES_DIR)
@@ -495,13 +496,35 @@ proto-clean: ## Clean generated protocol buffer code
 
 # Testing targets
 test: ensure-tools proto-gen $(BIN_TMUX) ## Run all tests (skips slow integration tests; use test-integration for full suite)
-	TMUX_BIN=$(CURDIR)/$(BIN_TMUX) go test -short -timeout=20m ./...
+	# session, session/mux, and session/tmux fork real tmux subprocesses at high
+	# t.Parallel() fan-out. Running them under the suite's default per-package
+	# parallelism let those tmux-heavy tests compete for scheduler time against
+	# fixed wall-clock budgets (destroyChainTimeout, mux list-session timeouts),
+	# causing intermittent failures under `make test` that never reproduced in
+	# isolation -- same root cause as test-integration's existing -p 1 scoping
+	# below and CI's -race -p 1 coverage step (.github/workflows/build.yml). -p 1
+	# serializes just these three packages against each other; everything else
+	# still runs in parallel via the second invocation.
+	# STAPLER_SQUAD_TMUX_CREATE_TIMEOUT_SECONDS=30 matches CI's existing override
+	# so local runs get the same tmux-create timeout headroom (production
+	# default is 10s -- see session/tmux/tmux.go's sessionCreateTimeoutDefault).
+	# testutil also forks real tmux subprocesses (TestRealTmuxSessionLifecycle) and
+	# hit the same contention under full-suite load -- included in the -p 1 group.
+	STAPLER_SQUAD_TMUX_CREATE_TIMEOUT_SECONDS=30 TMUX_BIN=$(CURDIR)/$(BIN_TMUX) go test -short -timeout=20m -p 1 ./session ./session/mux ./session/tmux ./testutil
+	STAPLER_SQUAD_TMUX_CREATE_TIMEOUT_SECONDS=30 TMUX_BIN=$(CURDIR)/$(BIN_TMUX) go test -short -timeout=20m $$(go list ./... | grep -vE '^github\.com/tstapler/stapler-squad/(session|session/mux|session/tmux|testutil)$$')
 
 test-verbose: ensure-tools proto-gen ## Run tests with verbose output
 	go test -short -v ./...
 
 test-coverage: ensure-tools proto-gen $(BIN_TMUX) ## Run tests with coverage report (HTML)
-	TMUX_BIN=$(CURDIR)/$(BIN_TMUX) go test -short -cover ./... -coverprofile=coverage.out
+	# Same tmux-contention root cause as the test target above -- see its comment.
+	# Split into two invocations and merge the resulting coverage profiles since
+	# go test only writes one -coverprofile per invocation.
+	STAPLER_SQUAD_TMUX_CREATE_TIMEOUT_SECONDS=30 TMUX_BIN=$(CURDIR)/$(BIN_TMUX) go test -short -timeout=20m -p 1 -cover -coverprofile=coverage.tmux.out ./session ./session/mux ./session/tmux ./testutil
+	STAPLER_SQUAD_TMUX_CREATE_TIMEOUT_SECONDS=30 TMUX_BIN=$(CURDIR)/$(BIN_TMUX) go test -short -timeout=20m -cover -coverprofile=coverage.rest.out $$(go list ./... | grep -vE '^github\.com/tstapler/stapler-squad/(session|session/mux|session/tmux|testutil)$$')
+	head -n 1 coverage.tmux.out > coverage.out
+	tail -q -n +2 coverage.tmux.out coverage.rest.out >> coverage.out
+	rm -f coverage.tmux.out coverage.rest.out
 	go tool cover -html=coverage.out -o coverage.html
 	@echo "Coverage report generated: coverage.html"
 
@@ -552,17 +575,19 @@ coverage-refactor: ensure-tools proto-gen ## Show coverage for the 4 files targe
 	@go tool cover -func=coverage.out | grep "^total"
 
 test-race: ensure-tools proto-gen $(BIN_TMUX) ## Run tests with race detector enabled (skips slow integration tests)
-	TMUX_BIN=$(CURDIR)/$(BIN_TMUX) go test -race -short -timeout=20m ./...
+	# Same tmux-contention root cause as the test target above -- see its comment.
+	STAPLER_SQUAD_TMUX_CREATE_TIMEOUT_SECONDS=30 TMUX_BIN=$(CURDIR)/$(BIN_TMUX) go test -race -short -timeout=20m -p 1 ./session ./session/mux ./session/tmux ./testutil
+	STAPLER_SQUAD_TMUX_CREATE_TIMEOUT_SECONDS=30 TMUX_BIN=$(CURDIR)/$(BIN_TMUX) go test -race -short -timeout=20m $$(go list ./... | grep -vE '^github\.com/tstapler/stapler-squad/(session|session/mux|session/tmux|testutil)$$')
 
 test-integration: ensure-tools proto-gen ## Run integration tests (requires real tmux)
 	# ./session and ./session/tmux are the only integration-tagged packages that
 	# fork real tmux servers (server/mcp and session/headless don't touch tmux).
 	# Running the full suite's default per-package parallelism let those two
 	# packages' tmux-heavy tests fork/poll real tmux servers concurrently and
-	# compete for scheduler time, which was the root cause of
-	# TestTmuxServerRegistry_PaneExitDetectedDespiteElevatedBackoff intermittently
-	# missing its reconnect-backoff cycle count under `make ci` while always
-	# passing in isolation (see registryPollTimeout's comment in
+	# compete for scheduler time -- root cause of intermittent failures like
+	# TestTmuxServerRegistry_ConcurrentSubscriptions/PaneExitDetectedDespiteElevatedBackoff
+	# missing their timing budgets under `make ci` while always passing in
+	# isolation (see registryPollTimeout's comment in
 	# session/tmux/server_registry_integration_test.go). -p 1 serializes just
 	# these two packages against each other; everything else still runs in
 	# parallel via the second invocation.
@@ -587,21 +612,9 @@ test-triage-flow: proto-gen ## Phase 4: full flow — create, gate, set repoPath
 test-triage-real: proto-gen ## Run triage with a REAL Claude session (requires claude in PATH, ~30s)
 	go test -v -tags=harness -run TestTriageHarness_RealClaude ./server/services/ -timeout 5m
 
-coverage-integration: ensure-tools proto-gen ## Build instrumented binary, run integration tests, emit integration.out
-	@mkdir -p /tmp/covdata
-	go build -cover -o stapler-squad-cov .
-	@echo "Starting instrumented binary..."
-	GOCOVERDIR=/tmp/covdata STAPLER_SQUAD_INSTANCE=cov-$$PPID ./stapler-squad-cov &
-	@sleep 2
-	@echo "Running integration tests against instrumented binary..."
-	go test -race -tags integration ./... || true
-	@echo "Stopping instrumented binary..."
-	@pkill -f stapler-squad-cov || true
-	@sleep 1
-	go tool covdata textfmt -i=/tmp/covdata -o integration.out
+coverage-integration: ensure-tools proto-gen ## Run integration tests, emit integration.out
+	go test -race -tags integration -coverprofile=integration.out -covermode=atomic ./...
 	@echo "✅ Integration coverage written to integration.out"
-	@rm -f stapler-squad-cov
-	@rm -rf /tmp/covdata
 
 test-ux-polish: ## Run tests registered in docs/registry/features/ (no server/tmux required)
 	@RUN=$$(python3 -c "import json,glob; ids=[t for p in glob.glob('docs/registry/features/backend/**/*.json',recursive=True) for t in json.load(open(p)).get('testIds',[])]; print('|'.join(sorted(set(ids))))"); \
@@ -884,7 +897,7 @@ ptmx-field-guard: ## tmux-ptmx-race-fix guard: fail if ptmx/attachCmd/attachCmdW
 	    `# because none of that file's lines ever legitimately touch the PTY triple this guards` \
 	    | grep -vE ':[0-9]+:[[:space:]]*//' \
 	    | grep -v 'allow-direct-ptmx-access' ; then \
-	    echo "❌ ptmx-field-guard: direct PTY-triple field access found outside lockedPTMX/setPTYTriple/clearPTYTriple — route through the ptmxMu helpers (session/tmux/tmux.go)"; \
+	    echo "❌ ptmx-field-guard: direct PTY-triple field access found outside lockedPTMX/ptySnapshot/tryInstallPTYTriple/clearPTYTriple — route through the ptmxMu helpers (session/tmux/tmux.go)"; \
 	    exit 1; \
 	fi
 	@echo "✅ ptmx-field-guard: no direct PTY-triple field access outside the guarded helpers"

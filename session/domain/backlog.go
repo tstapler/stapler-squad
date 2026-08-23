@@ -135,7 +135,7 @@ const (
 	// server/services/backlog_service_triage.go) was skipped because the item
 	// already has an active work or review session, per
 	// findActiveWorkSession/findActiveReviewSession. Before this reason
-	// existed, all three call sites only log.InfoLog.Printf'd the skip —
+	// existed, all three call sites only log.InfoLog().Printf'd the skip —
 	// zero operator-visible signal and no audit record, strictly worse than
 	// spawnSessionAfterGates' own 8b guard (activeWorkSessionBlockedError),
 	// which at least returns a progress-enriched error to its synchronous

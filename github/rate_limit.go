@@ -173,3 +173,14 @@ func (r *RateLimiter) setLimitedUntil(t time.Time) {
 	}
 	r.mu.Unlock()
 }
+
+// Reset clears any recorded rate-limit state. DefaultRateLimiter is a package-level
+// singleton shared by every caller of HTTPClient() (see http_client.go) — a test that
+// deliberately simulates a rate-limit response (e.g. to verify the fail-fast behavior
+// rateLimitTransport.RoundTrip added) leaves it limited for every later test in the same
+// binary otherwise, since RoundTrip's IsLimited() pre-check has no per-test scoping.
+func (r *RateLimiter) Reset() {
+	r.mu.Lock()
+	r.rateLimitedUntil = time.Time{}
+	r.mu.Unlock()
+}

@@ -87,11 +87,11 @@ func (r *ReviewGateRunner) Run(
 
 	// Precondition: repo_path must be set or we have nothing to review.
 	if item.RepoPath == "" {
-		log.ErrorLog.Printf("[BacklogLifecycle] spawnReviewGate item=%s has no repo path set; skipping review gate", item.ID)
+		log.ErrorLog().Printf("[BacklogLifecycle] spawnReviewGate item=%s has no repo path set; skipping review gate", item.ID)
 		return
 	}
 
-	log.InfoLog.Printf("[PipelineEngine] item=%s stage=review mode=%q", item.ID, ResolvedModeLabel(item.PipelineMode))
+	log.InfoLog().Printf("[PipelineEngine] item=%s stage=review mode=%q", item.ID, ResolvedModeLabel(item.PipelineMode))
 
 	// Get the committed diff from the session's dedicated worktree (preferred)
 	// or fall back to the item's repo path (directory-mode / worktree gone).
@@ -115,13 +115,13 @@ func (r *ReviewGateRunner) Run(
 		// even reaches the reviewer, and a real conflict blocks with an explicit,
 		// actionable reason instead of silently producing a misleading diff.
 		if ok, blockedSummary := git.EnsureBranchSyncedWithMain(wt.WorktreePath, wt.BranchName, bounceMainBranch, git.DefaultBranchDriftThreshold); !ok {
-			log.WarningLog.Printf("[BacklogLifecycle] spawnReviewGate branch drift blocked review item=%s branch=%s: %s", item.ID, wt.BranchName, blockedSummary)
+			log.WarningLog().Printf("[BacklogLifecycle] spawnReviewGate branch drift blocked review item=%s branch=%s: %s", item.ID, wt.BranchName, blockedSummary)
 			driftIS, createErr := recordTerminalReviewVerdict(r.storage, item.ID, is.AcSnapshot, "branch-drift-"+uuid.New().String(), ReviewVerdictFail, blockedSummary)
 			if createErr != nil {
-				log.ErrorLog.Printf("[BacklogLifecycle] spawnReviewGate CreateItemSessionWithVerdict (branch drift) item=%s: %v", item.ID, createErr)
+				log.ErrorLog().Printf("[BacklogLifecycle] spawnReviewGate CreateItemSessionWithVerdict (branch drift) item=%s: %v", item.ID, createErr)
 				return
 			}
-			log.InfoLog.Printf("[BacklogLifecycle] spawnReviewGate branch drift blocked for item %s — FAIL verdict recorded (session %s)", item.ID, driftIS.ID)
+			log.InfoLog().Printf("[BacklogLifecycle] spawnReviewGate branch drift blocked for item %s — FAIL verdict recorded (session %s)", item.ID, driftIS.ID)
 			if r.getNotifier != nil {
 				if n := r.getNotifier(); n != nil {
 					n.Notify(item.ID,
@@ -139,7 +139,7 @@ func (r *ReviewGateRunner) Run(
 			if reopener := r.getAutoReopener(); reopener != nil {
 				go func() {
 					if err := reopener.AutoReopenAfterFailedReview(ctx, item.ID); err != nil {
-						log.ErrorLog.Printf("[BacklogLifecycle] spawnReviewGate AutoReopenAfterFailedReview (branch drift) item=%s: %v", item.ID, err)
+						log.ErrorLog().Printf("[BacklogLifecycle] spawnReviewGate AutoReopenAfterFailedReview (branch drift) item=%s: %v", item.ID, err)
 					}
 				}()
 			}
@@ -151,19 +151,19 @@ func (r *ReviewGateRunner) Run(
 		// request_review (layer 1) should have caught this, but flag it here too so the
 		// reviewer prompt is aware and the verdict reflects the incomplete state.
 		if dirty, dirtyErr := IsWorktreeDirty(ctx, wt.WorktreePath); dirtyErr == nil && dirty {
-			log.InfoLog.Printf("[BacklogLifecycle] review gate: item=%s has uncommitted changes in worktree — diff will be incomplete", item.ID)
+			log.InfoLog().Printf("[BacklogLifecycle] review gate: item=%s has uncommitted changes in worktree — diff will be incomplete", item.ID)
 			uncommittedWarning = "[WARNING: worktree has uncommitted changes — the following diff may be incomplete]\n"
 		}
 		var diffErr error
 		diff, truncated, diffErr = GetGitDiff(ctx, wt.WorktreePath, wt.BaseCommitSHA)
 		if diffErr != nil {
-			log.WarningLog.Printf("[BacklogLifecycle] spawnReviewGate GetGitDiff (worktree) item=%s: %v; falling back to repo", item.ID, diffErr)
+			log.WarningLog().Printf("[BacklogLifecycle] spawnReviewGate GetGitDiff (worktree) item=%s: %v; falling back to repo", item.ID, diffErr)
 			// item.RepoPath's own checked-out HEAD is not the work branch's tip, so an
 			// explicit branch ref is required here — implicit HEAD would diff against
 			// whatever the shared main checkout happens to have, not the agent's work.
 			diff, truncated, diffErr = GetGitDiffRef(ctx, item.RepoPath, wt.BaseCommitSHA, wt.BranchName)
 			if diffErr != nil {
-				log.ErrorLog.Printf("[BacklogLifecycle] spawnReviewGate GetGitDiff (repo fallback) item=%s: %v", item.ID, diffErr)
+				log.ErrorLog().Printf("[BacklogLifecycle] spawnReviewGate GetGitDiff (repo fallback) item=%s: %v", item.ID, diffErr)
 				worktreeDiffErr = diffErr
 			}
 		}
@@ -182,7 +182,7 @@ func (r *ReviewGateRunner) Run(
 		}
 		diff, truncated, diffErr = GetGitDiff(ctx, item.RepoPath, diffBase)
 		if diffErr != nil {
-			log.ErrorLog.Printf("[BacklogLifecycle] spawnReviewGate GetGitDiff item=%s: %v", item.ID, diffErr)
+			log.ErrorLog().Printf("[BacklogLifecycle] spawnReviewGate GetGitDiff item=%s: %v", item.ID, diffErr)
 			worktreeDiffErr = diffErr
 		}
 	}
@@ -194,9 +194,9 @@ func (r *ReviewGateRunner) Run(
 	// unconditionally blocking (or worse, silently returning an empty one).
 	if worktreeDiffErr != nil && wt.BranchName != "" {
 		if recoveredSHA, recoverErr := RecoverBaseCommitSHA(ctx, item.RepoPath, wt.BranchName); recoverErr != nil {
-			log.WarningLog.Printf("[BacklogLifecycle] spawnReviewGate RecoverBaseCommitSHA item=%s: %v", item.ID, recoverErr)
+			log.WarningLog().Printf("[BacklogLifecycle] spawnReviewGate RecoverBaseCommitSHA item=%s: %v", item.ID, recoverErr)
 		} else if recoveredDiff, recoveredTruncated, retryErr := GetGitDiffRef(ctx, item.RepoPath, recoveredSHA, wt.BranchName); retryErr != nil {
-			log.WarningLog.Printf("[BacklogLifecycle] spawnReviewGate retry with recovered base %s item=%s: %v", recoveredSHA, item.ID, retryErr)
+			log.WarningLog().Printf("[BacklogLifecycle] spawnReviewGate retry with recovered base %s item=%s: %v", recoveredSHA, item.ID, retryErr)
 		} else if strings.TrimSpace(recoveredDiff) == "" {
 			// A recovered base that produces an empty diff is indistinguishable from
 			// "nothing changed" and just as unsafe to hand the reviewer as the original
@@ -204,9 +204,9 @@ func (r *ReviewGateRunner) Run(
 			// (no divergence from repoPath's checked-out branch). Do not treat this as a
 			// successful repair; fall through to the explicit-block path below instead of
 			// silently manufacturing a misleading empty-but-"valid" diff.
-			log.WarningLog.Printf("[BacklogLifecycle] spawnReviewGate recovered base %s item=%s produced an empty diff — not trusting it, falling through to block", recoveredSHA, item.ID)
+			log.WarningLog().Printf("[BacklogLifecycle] spawnReviewGate recovered base %s item=%s produced an empty diff — not trusting it, falling through to block", recoveredSHA, item.ID)
 		} else {
-			log.InfoLog.Printf("[BacklogLifecycle] spawnReviewGate auto-repaired broken base_commit_sha item=%s recovered=%s (recorded=%s)", item.ID, recoveredSHA, wt.BaseCommitSHA)
+			log.InfoLog().Printf("[BacklogLifecycle] spawnReviewGate auto-repaired broken base_commit_sha item=%s recovered=%s (recorded=%s)", item.ID, recoveredSHA, wt.BaseCommitSHA)
 			diff, truncated = recoveredDiff, recoveredTruncated
 			worktreeDiffErr = nil
 			if r.getNotifier != nil {
@@ -247,10 +247,10 @@ func (r *ReviewGateRunner) Run(
 			"There is nothing to review — the work session ended without shipping any commits."
 		emptyDiffIS, createErr := recordTerminalReviewVerdict(r.storage, item.ID, is.AcSnapshot, "empty-diff-"+uuid.New().String(), ReviewVerdictFail, summary)
 		if createErr != nil {
-			log.ErrorLog.Printf("[BacklogLifecycle] spawnReviewGate CreateItemSessionWithVerdict (empty diff) item=%s: %v", item.ID, createErr)
+			log.ErrorLog().Printf("[BacklogLifecycle] spawnReviewGate CreateItemSessionWithVerdict (empty diff) item=%s: %v", item.ID, createErr)
 			return
 		}
-		log.WarningLog.Printf("[BacklogLifecycle] spawnReviewGate empty diff for item %s — FAIL verdict recorded (session %s)", item.ID, emptyDiffIS.ID)
+		log.WarningLog().Printf("[BacklogLifecycle] spawnReviewGate empty diff for item %s — FAIL verdict recorded (session %s)", item.ID, emptyDiffIS.ID)
 		if r.getNotifier != nil {
 			if n := r.getNotifier(); n != nil {
 				n.Notify(item.ID,
@@ -264,7 +264,7 @@ func (r *ReviewGateRunner) Run(
 		if reopener := r.getAutoReopener(); reopener != nil {
 			go func() {
 				if err := reopener.AutoReopenAfterFailedReview(ctx, item.ID); err != nil {
-					log.ErrorLog.Printf("[BacklogLifecycle] spawnReviewGate AutoReopenAfterFailedReview (empty diff) item=%s: %v", item.ID, err)
+					log.ErrorLog().Printf("[BacklogLifecycle] spawnReviewGate AutoReopenAfterFailedReview (empty diff) item=%s: %v", item.ID, err)
 				}
 			}()
 		}
@@ -289,10 +289,10 @@ func (r *ReviewGateRunner) Run(
 			"The recorded base commit may be missing or corrupted — this needs investigation, not rework.", worktreeDiffErr)
 		diffFailIS, createErr := recordTerminalReviewVerdict(r.storage, item.ID, is.AcSnapshot, "diff-error-"+uuid.New().String(), ReviewVerdictFail, summary)
 		if createErr != nil {
-			log.ErrorLog.Printf("[BacklogLifecycle] spawnReviewGate CreateItemSessionWithVerdict (diff error) item=%s: %v", item.ID, createErr)
+			log.ErrorLog().Printf("[BacklogLifecycle] spawnReviewGate CreateItemSessionWithVerdict (diff error) item=%s: %v", item.ID, createErr)
 			return
 		}
-		log.ErrorLog.Printf("[BacklogLifecycle] spawnReviewGate diff computation failed for item %s — review blocked, FAIL verdict recorded (session %s)", item.ID, diffFailIS.ID)
+		log.ErrorLog().Printf("[BacklogLifecycle] spawnReviewGate diff computation failed for item %s — review blocked, FAIL verdict recorded (session %s)", item.ID, diffFailIS.ID)
 		if r.getNotifier != nil {
 			if n := r.getNotifier(); n != nil {
 				n.Notify(item.ID,
@@ -309,7 +309,7 @@ func (r *ReviewGateRunner) Run(
 		if reopener := r.getAutoReopener(); reopener != nil {
 			go func() {
 				if err := reopener.AutoReopenAfterFailedReview(ctx, item.ID); err != nil {
-					log.ErrorLog.Printf("[BacklogLifecycle] spawnReviewGate AutoReopenAfterFailedReview (diff error) item=%s: %v", item.ID, err)
+					log.ErrorLog().Printf("[BacklogLifecycle] spawnReviewGate AutoReopenAfterFailedReview (diff error) item=%s: %v", item.ID, err)
 				}
 			}()
 		}
@@ -321,16 +321,16 @@ func (r *ReviewGateRunner) Run(
 	// Same as the diff-error block above: this records a synthetic, non-Instance-backed
 	// terminal verdict directly — it's a pre-flight guardrail, not the review call itself.
 	if secErr := RunPreGateSecurityCheck(diff); secErr != nil {
-		log.ErrorLog.Printf("[BacklogLifecycle] spawnReviewGate security check blocked item=%s: %v", item.ID, secErr)
+		log.ErrorLog().Printf("[BacklogLifecycle] spawnReviewGate security check blocked item=%s: %v", item.ID, secErr)
 		// Record a failed review ItemSession with a FAIL verdict so the gate verdict
 		// is visible in the UI and operators can act (override or re-review).
 		summary := fmt.Sprintf("Review blocked by security check: %v. Override required to proceed.", secErr)
 		secIS, secCreateErr := recordTerminalReviewVerdict(r.storage, item.ID, is.AcSnapshot, "review-blocked-"+uuid.New().String(), ReviewVerdictFail, summary)
 		if secCreateErr != nil {
-			log.ErrorLog.Printf("[BacklogLifecycle] spawnReviewGate CreateItemSessionWithVerdict (security block) item=%s: %v", item.ID, secCreateErr)
+			log.ErrorLog().Printf("[BacklogLifecycle] spawnReviewGate CreateItemSessionWithVerdict (security block) item=%s: %v", item.ID, secCreateErr)
 			return
 		}
-		log.InfoLog.Printf("[BacklogLifecycle] spawnReviewGate security check blocked for item %s — FAIL verdict recorded (session %s)", item.ID, secIS.ID)
+		log.InfoLog().Printf("[BacklogLifecycle] spawnReviewGate security check blocked for item %s — FAIL verdict recorded (session %s)", item.ID, secIS.ID)
 		if r.getNotifier != nil {
 			if n := r.getNotifier(); n != nil {
 				n.Notify(item.ID,
@@ -350,7 +350,7 @@ func (r *ReviewGateRunner) Run(
 		if reopener := r.getAutoReopener(); reopener != nil {
 			go func() {
 				if err := reopener.AutoReopenAfterFailedReview(ctx, item.ID); err != nil {
-					log.ErrorLog.Printf("[BacklogLifecycle] spawnReviewGate AutoReopenAfterFailedReview (security block) item=%s: %v", item.ID, err)
+					log.ErrorLog().Printf("[BacklogLifecycle] spawnReviewGate AutoReopenAfterFailedReview (security block) item=%s: %v", item.ID, err)
 				}
 			}()
 		}
@@ -391,13 +391,13 @@ func (r *ReviewGateRunner) Run(
 	// that hasn't opted into a custom PipelineMode.
 	sessionCreator := r.getSessionCreator()
 	if sessionCreator == nil {
-		log.ErrorLog.Printf("[BacklogLifecycle] spawnReviewGate item=%s: no review mechanism configured", item.ID)
+		log.ErrorLog().Printf("[BacklogLifecycle] spawnReviewGate item=%s: no review mechanism configured", item.ID)
 		return
 	}
 
 	reviewInst, spawnErr := sessionCreator.SpawnReviewSession(ctx, item, is.ID, prompt)
 	if spawnErr != nil {
-		log.ErrorLog.Printf("[BacklogLifecycle] spawnReviewGate SpawnReviewSession item=%s: %v", item.ID, spawnErr)
+		log.ErrorLog().Printf("[BacklogLifecycle] spawnReviewGate SpawnReviewSession item=%s: %v", item.ID, spawnErr)
 		return
 	}
 
@@ -408,9 +408,9 @@ func (r *ReviewGateRunner) Run(
 		SessionRole: SessionRoleReview,
 		AcSnapshot:  is.AcSnapshot,
 	}); createErr != nil {
-		log.ErrorLog.Printf("[BacklogLifecycle] spawnReviewGate CreateItemSession item=%s review=%s: %v", item.ID, reviewInst.UUID, createErr)
+		log.ErrorLog().Printf("[BacklogLifecycle] spawnReviewGate CreateItemSession item=%s review=%s: %v", item.ID, reviewInst.UUID, createErr)
 		return
 	}
 
-	log.InfoLog.Printf("[BacklogLifecycle] spawnReviewGate spawned review session %s for item %s", reviewInst.UUID, item.ID)
+	log.InfoLog().Printf("[BacklogLifecycle] spawnReviewGate spawned review session %s for item %s", reviewInst.UUID, item.ID)
 }

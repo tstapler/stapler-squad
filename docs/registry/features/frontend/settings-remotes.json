@@ -1,0 +1,14 @@
+{
+  "id": "settings-remotes",
+  "type": "frontend",
+  "name": "Settings -> Remotes: list configured SSH remotes, add/test/delete",
+  "component": "RemotesPage",
+  "path": "web-app/src/app/settings/remotes/page.tsx",
+  "filePath": "web-app/src/app/settings/remotes/page.tsx",
+  "markerLine": 2,
+  "tested": true,
+  "testIds": [
+    "remote-workspaces > add a remote, test connection, trust the host key, verify Connected status"
+  ],
+  "lastModified": "2026-08-17T00:00:00Z"
+}

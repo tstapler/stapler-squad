@@ -75,6 +75,7 @@ tests/e2e/test-results/
 tests/e2e/node_modules/
 tests/e2e/test-results-dev-mode/
 tests/e2e/fixtures/*-theme.json
+tests/e2e/.bin/
 
 # Scratch benchmark output files (not the committed baselines in benchmarks/go/)
 bench-current.txt

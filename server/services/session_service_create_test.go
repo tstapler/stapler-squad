@@ -11,6 +11,8 @@ import (
 	"connectrpc.com/connect"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/goleak"
+
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
@@ -428,7 +430,13 @@ func TestCreateSession_GitHubURLResolution_BoundedByContext(t *testing.T) {
 //
 // Requires tmux to be installed; skipped automatically otherwise.
 func TestCreateSession_StatusManagerWiredBeforeDriver(t *testing.T) {
-	t.Parallel()
+	// Not t.Parallel(): this test's goleak.IgnoreCurrent()/VerifyNone() baseline
+	// would be polluted by goroutines started/stopped in sibling parallel tests.
+	baseline := goleak.IgnoreCurrent()
+	// Registered first so it runs LAST (t.Cleanup is LIFO) — after
+	// destroyCreatedSession/svc.Shutdown/bus.Close have fully torn everything down.
+	t.Cleanup(func() { goleak.VerifyNone(t, baseline) })
+
 	storage := createTestStorage(t)
 	bus := events.NewEventBus(16)
 	t.Cleanup(bus.Close)
@@ -492,16 +500,42 @@ func newCreateTestService(t *testing.T, storage *session.Storage) *SessionServic
 	t.Cleanup(bus.Close)
 	svc := NewSessionService(storage, bus)
 	t.Cleanup(func() { svc.Shutdown() })
+
+	// Wire a ReviewQueuePoller so FindLiveInstance (used by destroyCreatedSession to
+	// join the driver goroutine) resolves the live instance instead of always nil.
+	statusMgr := session.NewInstanceStatusManager()
+	queue := session.NewReviewQueue()
+	poller := session.NewReviewQueuePoller(queue, statusMgr, nil)
+	svc.SetReviewQueuePoller(poller)
+
 	return svc
 }
 
 // destroyCreatedSession cleans up a session that was successfully created during a test.
 // Errors are soft-logged so cleanup failures don't mask the actual test assertion.
+//
+// It waits for DeleteSession's background Destroy() cleanup (waitForPendingCleanup)
+// before returning: these tests set HOME to a t.TempDir(), and since t.Cleanup runs
+// LIFO, that TempDir's RemoveAll (registered after the service, later in the test
+// body) would otherwise race Destroy() for files under HOME (e.g. the tmux exec-gate
+// directory) — see waitForPendingCleanup's doc comment.
+//
+// It also joins the session's SessionDriver goroutine (session.JoinSessionDriver):
+// Destroy()'s call to StopSessionDriver only bounds its wait to driverStopTimeout and
+// proceeds anyway on timeout, so without this join the driver goroutine can still be
+// polling Preview() — which resolves the tmux exec-gate directory via the process-wide
+// HOME/config dir — after waitForPendingCleanup returns and the test's t.TempDir() is
+// removed, intermittently producing "directory not empty" from RemoveAll.
 func destroyCreatedSession(t *testing.T, svc *SessionService, id string) {
 	t.Helper()
+	inst := svc.FindLiveInstance(id)
 	_, err := svc.DeleteSession(context.Background(), connect.NewRequest(&sessionv1.DeleteSessionRequest{Id: id}))
 	if err != nil {
 		t.Logf("destroyCreatedSession: cleanup for %q failed (non-fatal): %v", id, err)
+	}
+	svc.waitForPendingCleanup()
+	if inst != nil {
+		session.JoinSessionDriver(inst)
 	}
 }
 

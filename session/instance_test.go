@@ -610,6 +610,41 @@ func TestFromInstanceData_CrashedSession_StaysStartedTrue_NoAutoResume(t *testin
 	}
 }
 
+// TestFromInstanceData_ArchivedStoppedSession_StaysStopped_NoAliveProbe is a
+// regression guard for the fork-pressure fix: an archived session's tmux pane
+// is already deliberately killed at archive time (archiveItemWorkSessions),
+// so fromInstanceData must not attempt to "recover" it back to Active via the
+// IsAlive()/PaneExitStatus() tmux subprocess probe every restored Stopped
+// session used to pay on every single LoadInstances() call. This pins the
+// observable postcondition (stays Stopped, Started()=true); the underlying
+// subprocess-avoidance isn't directly assertable here since fromInstanceData
+// always wires a real TmuxBackend with no injection point for a fake.
+func TestFromInstanceData_ArchivedStoppedSession_StaysStopped_NoAliveProbe(t *testing.T) {
+	t.Parallel()
+	archivedAt := time.Now()
+	data := InstanceData{
+		Title:      "archived-stopped-restore-test",
+		Path:       "/tmp/archived-stopped-restore-test",
+		Status:     Stopped,
+		Program:    "claude",
+		CreatedAt:  time.Now(),
+		UpdatedAt:  time.Now(),
+		ArchivedAt: &archivedAt,
+	}
+
+	instance, err := fromInstanceData(data, true /* deferStart, matches LoadInstances() */)
+	if err != nil {
+		t.Fatalf("fromInstanceData returned error: %v", err)
+	}
+
+	if instance.Status != Stopped {
+		t.Fatalf("expected Status=Stopped (archived sessions must never be revived to Active), got %v", instance.Status)
+	}
+	if !instance.Started() {
+		t.Fatal("expected Started()=true for a restored archived Stopped instance")
+	}
+}
+
 // TestFromInstanceData_RestoresAutoYesAndAutoApprove is a regression guard for a bug
 // found while adding AutoApprove: fromInstanceData's Instance{} literal never copied
 // AutoYes from the persisted InstanceData at all, silently losing it on every server

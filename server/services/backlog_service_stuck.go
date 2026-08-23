@@ -340,7 +340,7 @@ func (s *BacklogService) TriggerRemediationNow(
 	}
 
 	if justParked {
-		log.InfoLog.Printf("[BacklogService] TriggerRemediationNow item=%s reason=%s: this was the final attempt before parking", req.Msg.ItemId, reason)
+		log.InfoLog().Printf("[BacklogService] TriggerRemediationNow item=%s reason=%s: this was the final attempt before parking", req.Msg.ItemId, reason)
 	}
 
 	return connect.NewResponse(&sessionv1.TriggerRemediationNowResponse{Triggered: true}), nil

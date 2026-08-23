@@ -748,9 +748,10 @@ func (s *Storage) UpdateBacklogItem(ctx context.Context, id string, update Backl
 	return s.repo.UpdateBacklogItem(ctx, id, update, precondition)
 }
 
-// ArchiveBacklogItem sets the archived_at timestamp.
-func (s *Storage) ArchiveBacklogItem(ctx context.Context, id string) (*BacklogItemData, error) {
-	return s.repo.ArchiveBacklogItem(ctx, id)
+// ArchiveBacklogItem sets the archived_at timestamp and status. See
+// EntRepository.ArchiveBacklogItem's doc comment for precondition/triggeredBy/note.
+func (s *Storage) ArchiveBacklogItem(ctx context.Context, id string, precondition *BacklogItemPrecondition, triggeredBy, note string) (*BacklogItemData, error) {
+	return s.repo.ArchiveBacklogItem(ctx, id, precondition, triggeredBy, note)
 }
 
 // UnarchiveBacklogItem clears archived_at and restores the item to "idea".
@@ -889,13 +890,13 @@ func (s *Storage) SetBacklogItemPRAndTransition(ctx context.Context, observed *B
 	// reported as this call's own failure — mirrors report_progress's
 	// primary-write/secondary-enrichment split (AppendProgressNote there).
 	if appendErr := s.AppendProgressNote(ctx, observed.ID, -1, summary, progressNoteStatus); appendErr != nil {
-		log.WarningLog.Printf("[Storage] SetBacklogItemPRAndTransition: failed to append summary note item=%s: %v", observed.ID, appendErr)
+		log.WarningLog().Printf("[Storage] SetBacklogItemPRAndTransition: failed to append summary note item=%s: %v", observed.ID, appendErr)
 	}
 	if _, resolveErr := s.ResolveStuck(ctx, observed.ID, domain.StuckReasonPushFailed); resolveErr != nil {
-		log.WarningLog.Printf("[Storage] SetBacklogItemPRAndTransition: failed to resolve push_failed row item=%s: %v", observed.ID, resolveErr)
+		log.WarningLog().Printf("[Storage] SetBacklogItemPRAndTransition: failed to resolve push_failed row item=%s: %v", observed.ID, resolveErr)
 	}
 	if _, resolveErr := s.ResolveStuck(ctx, observed.ID, domain.StuckReasonAbandonedReview); resolveErr != nil {
-		log.WarningLog.Printf("[Storage] SetBacklogItemPRAndTransition: failed to resolve abandoned_review row item=%s: %v", observed.ID, resolveErr)
+		log.WarningLog().Printf("[Storage] SetBacklogItemPRAndTransition: failed to resolve abandoned_review row item=%s: %v", observed.ID, resolveErr)
 	}
 
 	// AC7: reassigning to a new PR must not leave the old PR's
@@ -905,7 +906,7 @@ func (s *Storage) SetBacklogItemPRAndTransition(ctx context.Context, observed *B
 	// as the resolves above.
 	if isReassignment {
 		if _, clearErr := s.UpdateBacklogItem(ctx, observed.ID, BacklogItemUpdate{ClearPrFeedbackAddressedAt: true}, nil); clearErr != nil {
-			log.WarningLog.Printf("[Storage] SetBacklogItemPRAndTransition: failed to clear pr_feedback_addressed_at item=%s: %v", observed.ID, clearErr)
+			log.WarningLog().Printf("[Storage] SetBacklogItemPRAndTransition: failed to clear pr_feedback_addressed_at item=%s: %v", observed.ID, clearErr)
 		}
 	}
 
@@ -1086,6 +1087,18 @@ func (s *Storage) UpdateItemSessionFailureCapture(ctx context.Context, id string
 	return s.repo.UpdateItemSessionFailureCapture(ctx, id, path)
 }
 
+// UpdateItemSessionCost adds usd to an ItemSession's estimated_cost_usd. See
+// EntRepository.UpdateItemSessionCost.
+func (s *Storage) UpdateItemSessionCost(ctx context.Context, id string, usd float64) error {
+	return s.repo.UpdateItemSessionCost(ctx, id, usd)
+}
+
+// AddHeadlessCostBySessionUUID adds usd to the estimated_cost_usd of the ItemSession
+// for sessionUUID, if any. See EntRepository.AddHeadlessCostBySessionUUID.
+func (s *Storage) AddHeadlessCostBySessionUUID(ctx context.Context, sessionUUID string, usd float64) error {
+	return s.repo.AddHeadlessCostBySessionUUID(ctx, sessionUUID, usd)
+}
+
 // GetItemSessionBySessionAndItem looks up an ItemSession by both sessionUUID and backlog item ID.
 // Returns ErrNotFound if no matching record exists.
 func (s *Storage) GetItemSessionBySessionAndItem(ctx context.Context, sessionUUID string, itemID string) (ItemSessionSummary, error) {
@@ -1137,7 +1150,7 @@ func (s *Storage) ComputeCurrentDiffHash(ctx context.Context, itemID string) str
 	}
 	hash, err := git.DiffHashBetween(repoPath, baseSHA, headSHA)
 	if err != nil {
-		log.WarningLog.Printf("[ComputeCurrentDiffHash] item=%s base=%s head=%s: %v", itemID, baseSHA, headSHA, err)
+		log.WarningLog().Printf("[ComputeCurrentDiffHash] item=%s base=%s head=%s: %v", itemID, baseSHA, headSHA, err)
 		return ""
 	}
 	return hash

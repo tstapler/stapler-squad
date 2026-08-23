@@ -50,6 +50,12 @@ type ServerDependencies struct {
 	HistoryLinker           *session.HistoryLinker
 	ErrorRegistry           *services.ErrorRegistry
 
+	// ClaudeSettingsWatcher watches ~/.claude/settings.json (and project-level
+	// equivalents) for edits and hot-reloads their derived auto-approval rules. Started
+	// from wireDepsIntoServer with the server's lifecycle context so it stops cleanly
+	// on shutdown.
+	ClaudeSettingsWatcher *services.ClaudeSettingsWatcher
+
 	// SlackNotifier is the single shared Slack notifier instance, wired into
 	// both ReactiveQueueMgr (review-queue items) and ApprovalHandler (pending
 	// approvals) so GetDeliveryStatus reflects sends from both trigger points.
@@ -133,6 +139,7 @@ func (rt *RuntimeDeps) ToServerDeps() *ServerDependencies {
 		ExternalApprovalMonitor: rt.ExternalApprovalMonitor,
 		HistoryLinker:           rt.HistoryLinker,
 		ErrorRegistry:           rt.ErrorRegistry,
+		ClaudeSettingsWatcher:   rt.ClaudeSettingsWatcher,
 		SlackNotifier:           rt.SlackNotifier,
 		UnfinishedScanner:       rt.UnfinishedScanner,
 		UnfinishedStateStore:    rt.UnfinishedStateStore,
@@ -405,6 +412,10 @@ type RuntimeDeps struct {
 	PRStatusPoller          *session.PRStatusPoller
 	HistoryLinker           *session.HistoryLinker
 	ErrorRegistry           *services.ErrorRegistry
+
+	// ClaudeSettingsWatcher (see the identically-named field on ServerDependencies for
+	// its full doc comment).
+	ClaudeSettingsWatcher *services.ClaudeSettingsWatcher
 
 	// SlackNotifier is the single shared Slack notifier instance (see the
 	// identically-named field on ServerDependencies for its full doc comment).
@@ -709,7 +720,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
-				log.ErrorLog.Printf("[startup] panic in background init goroutine: %v", r)
+				log.ErrorLog().Printf("[startup] panic in background init goroutine: %v", r)
 			}
 		}()
 		// Step 6: start tmux sessions for loaded instances (non-fatal failures).
@@ -1062,30 +1073,20 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	var tokenStore *tokens.TokenStore
 	var historyDir string
 	if homeDirErr == nil {
-		historyDir = filepath.Join(homeDir, ".claude", "projects")
-		if config.IsIsolatedInstance() {
-			// An isolated test/demo instance (go test binary, named instance,
-			// or STAPLER_SQUAD_TEST_DIR harness) must not walk the real,
-			// unbounded ~/.claude/projects tree below via TokenStore.Start /
-			// ArtifactExtractor.Start — on a dev machine with a long Claude
-			// Code history this is thousands of real JSONL files, some large,
-			// which overflows TokenStore's bounded parse queue and made the
-			// walk+parse take 100s-1500s+ in CI, well past any reasonable
-			// test timeout. Same hazard class as IsIsolatedInstance's other
-			// documented case (shared tmux socket); here the isolated
-			// resource is the config dir, so point historyDir there instead
-			// — the directory starts empty, so TokenStore/ArtifactExtractor
-			// stay fully functional (against test fixtures) without ever
-			// touching real session data.
-			if configDir, cfgErr := config.GetConfigDir(); cfgErr == nil {
-				historyDir = filepath.Join(configDir, "claude-projects")
-			}
-		}
+		// Under test isolation this resolves inside the isolated config dir
+		// rather than the operator's real ~/.claude/projects, which
+		// TokenStore.Start / ArtifactExtractor.Start would otherwise walk in
+		// full. See config.ResolveClaudeHistoryDir for the full rationale;
+		// session.NewHistoryLinkerFromRealInspector's fsnotify watcher
+		// resolves the same directory through the same helper.
+		historyDir, homeDirErr = config.ResolveClaudeHistoryDir(homeDir, config.IsIsolatedInstance())
+	}
+	if homeDirErr == nil {
 		tokenStore = tokens.NewTokenStore(historyDir)
 		historyLinker.RegisterFileCallback(tokenStore.OnHistoryFileChanged)
 		tokenStore.Start(context.Background())
 	} else {
-		log.Warn("could not determine home dir for InsightsService token store", "err", homeDirErr)
+		log.Warn("could not resolve Claude history dir for InsightsService token store", "err", homeDirErr)
 	}
 
 	// Build the BacklogController and initialize its enabled state from config.
@@ -1461,6 +1462,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		PRStatusPoller:          svc.PRStatusPoller,
 		HistoryLinker:           historyLinker,
 		ErrorRegistry:           svc.ErrorRegistry,
+		ClaudeSettingsWatcher:   sessionService.GetClaudeSettingsWatcher(),
 		SlackNotifier:           slackNotifier,
 		UnfinishedScanner:       unfinishedScanner,
 		UnfinishedStateStore:    unfinishedStateStore,

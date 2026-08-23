@@ -57,7 +57,7 @@ const maxDoneAge = 3 * 24 * time.Hour
 func (l *BacklogLifecycleListener) archiveStaleDoneItems(ctx context.Context) {
 	items, err := l.storage.FindDoneItemsOlderThan(ctx, time.Now().Add(-maxDoneAge))
 	if err != nil {
-		log.WarningLog.Printf("[BacklogLifecycle] archiveStaleDoneItems FindDoneItemsOlderThan error: %v", err)
+		log.WarningLog().Printf("[BacklogLifecycle] archiveStaleDoneItems FindDoneItemsOlderThan error: %v", err)
 		return
 	}
 	if len(items) == 0 {
@@ -67,13 +67,13 @@ func (l *BacklogLifecycleListener) archiveStaleDoneItems(ctx context.Context) {
 	for _, item := range items {
 		precondition := &BacklogItemPrecondition{ExpectedStatus: string(BacklogStatusDone)}
 		if _, transErr := l.storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusArchived, precondition, TriggeredBySystem); transErr != nil { //nolint:silenttransition idempotent by construction (see doc comment above) — item stays "done" and reappears in FindDoneItemsOlderThan's result on the next tick, so a failed archive here is retried, not silently dropped
-			log.WarningLog.Printf("[BacklogLifecycle] archiveStaleDoneItems transition item=%s: %v", item.ID, transErr)
+			log.WarningLog().Printf("[BacklogLifecycle] archiveStaleDoneItems transition item=%s: %v", item.ID, transErr)
 			continue
 		}
 		archived++
 	}
 	if archived > 0 {
-		log.InfoLog.Printf("[BacklogLifecycle] archiveStaleDoneItems: auto-archived %d item(s) done for more than %s", archived, maxDoneAge)
+		log.InfoLog().Printf("[BacklogLifecycle] archiveStaleDoneItems: auto-archived %d item(s) done for more than %s", archived, maxDoneAge)
 	}
 }
 
@@ -98,14 +98,14 @@ func (l *BacklogLifecycleListener) reconcileTerminalItemSessions(ctx context.Con
 		Statuses: []string{string(BacklogStatusDone), string(BacklogStatusArchived)},
 	})
 	if err != nil {
-		log.WarningLog.Printf("[BacklogLifecycle] reconcileTerminalItemSessions ListBacklogItems error: %v", err)
+		log.WarningLog().Printf("[BacklogLifecycle] reconcileTerminalItemSessions ListBacklogItems error: %v", err)
 		return
 	}
 	processed := 0
 	for _, item := range items {
 		sessions, sessErr := l.storage.ListItemSessions(ctx, item.ID)
 		if sessErr != nil {
-			log.WarningLog.Printf("[BacklogLifecycle] reconcileTerminalItemSessions ListItemSessions item=%s: %v", item.ID, sessErr)
+			log.WarningLog().Printf("[BacklogLifecycle] reconcileTerminalItemSessions ListItemSessions item=%s: %v", item.ID, sessErr)
 			continue
 		}
 		for _, is := range sessions {
@@ -113,16 +113,16 @@ func (l *BacklogLifecycleListener) reconcileTerminalItemSessions(ctx context.Con
 				continue
 			}
 			if archErr := archiver.ArchiveSessionByUUID(ctx, is.SessionUUID); archErr != nil {
-				log.WarningLog.Printf("[BacklogLifecycle] reconcileTerminalItemSessions failed to archive session=%s item=%s: %v", is.SessionUUID, item.ID, archErr)
+				log.WarningLog().Printf("[BacklogLifecycle] reconcileTerminalItemSessions failed to archive session=%s item=%s: %v", is.SessionUUID, item.ID, archErr)
 				continue
 			}
 			if killErr := archiver.KillTmuxPaneOnly(ctx, is.SessionUUID); killErr != nil {
-				log.WarningLog.Printf("[BacklogLifecycle] reconcileTerminalItemSessions failed to kill tmux pane session=%s item=%s: %v", is.SessionUUID, item.ID, killErr)
+				log.WarningLog().Printf("[BacklogLifecycle] reconcileTerminalItemSessions failed to kill tmux pane session=%s item=%s: %v", is.SessionUUID, item.ID, killErr)
 			}
 			processed++
 		}
 	}
 	if processed > 0 {
-		log.InfoLog.Printf("[BacklogLifecycle] reconcileTerminalItemSessions: processed %d work/review session(s) across %d terminal item(s)", processed, len(items))
+		log.InfoLog().Printf("[BacklogLifecycle] reconcileTerminalItemSessions: processed %d work/review session(s) across %d terminal item(s)", processed, len(items))
 	}
 }

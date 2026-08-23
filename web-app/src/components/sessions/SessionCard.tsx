@@ -1,4 +1,5 @@
 "use client";
+// +feature: remote-host-badge
 
 import { useState, useRef, memo } from "react";
 import { Session, SessionStatus, SubStatus, ReviewItem, InstanceType, RateLimitState, CheckpointProto, DetectedStatus } from "@/gen/session/v1/types_pb";
@@ -15,6 +16,7 @@ import { SessionActionsOverflow } from "./SessionActionsOverflow";
 import { formatPauseReason } from "@/lib/sessions/formatPauseReason";
 import { isAutoApproveSupported } from "@/lib/sessions/autoApprove";
 import { getLastActivityTimestamp, isSessionStale } from "@/lib/session-staleness";
+import { RemoteConnectionIndicator } from "./RemoteConnectionIndicator";
 
 // The launch command always starts with the program string it was last launched
 // with (see Instance.buildLaunchCommand, session/instance_tmux.go). If it no longer
@@ -87,6 +89,7 @@ import {
   inlineTitleInput,
   badges,
   externalBadge,
+  hostBadge,
   muxIndicator,
   reviewInfo,
   reviewContext,
@@ -547,6 +550,18 @@ function SessionCardInner({
                 {muxEnabled && <span className={muxIndicator} aria-hidden="true">✓</span>}
               </span>
             )}
+            {session.remoteName && (
+              <span
+                className={hostBadge}
+                role="img"
+                title={`Running on ${session.remoteName}`}
+                aria-label={`Running on ${session.remoteName}`}
+                data-testid="host-badge"
+              >
+                <span aria-hidden="true">🖥️</span> {session.remoteName}
+              </span>
+            )}
+            {session.remoteName && <RemoteConnectionIndicator remoteName={session.remoteName} />}
             <GitHubBadge
               prNumber={session.githubPrNumber}
               prUrl={session.githubPrUrl}
