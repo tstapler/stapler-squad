@@ -1193,11 +1193,11 @@ func (t *TmuxSession) setRemainOnExit() {
 // failed with a clear status, not silently retried against a guessed directory.
 var ErrWorkDirMissing = errors.New("session working directory missing")
 
-// validateWorkDir rejects an empty or nonexistent working directory instead of
-// letting a caller silently fall back to a guessed directory (e.g. os.Getwd(),
-// which for a long-running server process is often $HOME) — see start() and
-// RestoreWithWorkDir()'s recreate path.
-func validateWorkDir(workDir string) error {
+// ValidateWorkDir rejects an empty or nonexistent working directory instead
+// of letting a caller silently fall back to a guessed one (e.g. os.Getwd(),
+// often $HOME for a long-running server). Exported for reuse by
+// session/tymux's validateWorkDir wrapper.
+func ValidateWorkDir(workDir string) error {
 	if workDir == "" {
 		return fmt.Errorf("working directory not set: %w", ErrWorkDirMissing)
 	}
@@ -1285,7 +1285,7 @@ func (t *TmuxSession) start(workDir string, setupCleanup bool, cleanup *CleanupF
 		return nil
 	}
 
-	if err := validateWorkDir(workDir); err != nil {
+	if err := ValidateWorkDir(workDir); err != nil {
 		return fmt.Errorf("cannot start tmux session %s: %w", t.sanitizedName, err)
 	}
 
@@ -1515,15 +1515,15 @@ func (t *TmuxSession) EnsureRemoteSession(ctx context.Context, workDir string) e
 	}
 	log.Info("remote tmux session not found, will create", "session", t.sanitizedName)
 
-	// NOT validateWorkDir: that helper's os.Stat(workDir) checks THIS PROCESS's
+	// NOT ValidateWorkDir: that helper's os.Stat(workDir) checks THIS PROCESS's
 	// local filesystem, which is the right check for the local start() path
-	// (validateWorkDir's other two call sites) but wrong here -- workDir is a
+	// (ValidateWorkDir's other two call sites) but wrong here -- workDir is a
 	// path on the remote host, which this process cannot os.Stat at all. A
 	// remote path that happens to also exist locally (e.g. this package's own
 	// tests, whose "remote" is a co-located test sshd exec'ing against the real
 	// local filesystem) would pass either check, silently masking the bug for
 	// every test written against that pattern; a genuinely different remote
-	// path would always fail validateWorkDir's local stat regardless of whether
+	// path would always fail ValidateWorkDir's local stat regardless of whether
 	// it exists on the actual remote host. Checked via the runner instead,
 	// mirroring RemoteWorktreeOps.CreateWorktree's own remote `test -d`
 	// base_path check (session/git/remote_worktree.go).
@@ -1625,7 +1625,7 @@ func (t *TmuxSession) RestoreWithWorkDir(workDir string) error {
 			// long-running server process is often $HOME) — a wrong guess silently
 			// reconnects the session to the wrong workspace. Fail loudly instead so
 			// the caller can surface a clear status to the user.
-			if err := validateWorkDir(workDir); err != nil {
+			if err := ValidateWorkDir(workDir); err != nil {
 				return fmt.Errorf("cannot recreate tmux session %s: %w", t.sanitizedName, err)
 			}
 
