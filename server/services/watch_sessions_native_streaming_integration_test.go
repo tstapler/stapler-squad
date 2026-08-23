@@ -17,15 +17,104 @@ import (
 	"connectrpc.com/connect"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/goleak"
 	"golang.org/x/net/http2"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/gen/proto/go/session/v1/sessionv1connect"
 	"github.com/tstapler/stapler-squad/server"
 	"github.com/tstapler/stapler-squad/server/events"
+	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/scrollback"
 	"github.com/tstapler/stapler-squad/testutil"
 )
+
+// newNarrowServerDeps builds the minimal *server.ServerDependencies graph
+// this test actually needs to exercise WatchSessions over a real
+// *server.Server (SessionService registered on a ConnectRPC mux, wired
+// through wireDepsIntoServer's mandatory non-nil fields), instead of going
+// through server.BuildDependencies(). BuildDependencies spins up ~30
+// unrelated production subsystems -- GitHub PR poller with real credentials,
+// Slack integration, the MCP handler, CapacityMonitor, etc. -- and was
+// verified (go test -race -v) to read the operator's real ~/.claude/settings.json
+// and make real outbound network calls (observed: a GitHub API 403 "primary
+// rate limit exhausted" and a Gemini/Google API 403), making the test
+// non-hermetic and CI-flaky for reasons unrelated to what it actually
+// verifies (native HTTP/2 streaming delivery through StartRemote).
+//
+// Every field set below is either read unconditionally by
+// wireDepsIntoServer (server.go) -- so leaving it nil would panic -- or is
+// itself the SessionService/EventBus this test drives directly. Every field
+// wireDepsIntoServer nil-guards (SlackNotifier, ClaudeSettingsWatcher,
+// UnfinishedScanner/WorktreePRPoller/UnfinishedWorkService, UserPRCache,
+// GitHubUserService, InsightsService, BacklogService, SessionSummaryGenerator,
+// AnalyticsEntClient, HeadlessPool, WorkflowRepo/WorkflowScheduler,
+// TriggerFireEventRepo -- exactly the credentialed/network-touching
+// subsystems named above) is deliberately left nil/zero, matching
+// createTestStorage's sibling helpers in session_service_test.go (used
+// 300+ times in this package) rather than server.BuildDependencies().
+func newNarrowServerDeps(t *testing.T) *server.ServerDependencies {
+	t.Helper()
+
+	repo := session.NewTestEntRepository(t)
+	storage, err := session.NewStorageWithRepository(repo)
+	require.NoError(t, err)
+
+	eventBus := events.NewEventBus(100)
+	sessionService := services.NewSessionService(storage, eventBus)
+	t.Cleanup(sessionService.Shutdown)
+
+	errorRegistry := services.NewErrorRegistry(storage.GetEntClient(), true)
+	sessionService.SetErrorRegistry(errorRegistry)
+
+	statusManager := session.NewInstanceStatusManager()
+	reviewQueue := sessionService.GetReviewQueueInstance()
+	reviewQueuePoller := session.NewReviewQueuePoller(reviewQueue, statusManager, storage)
+	reviewQueuePoller.SetApprovalProvider(session.ApprovalMetadataProvider(sessionService.GetApprovalStore()))
+	sessionService.SetStatusManager(statusManager)
+	sessionService.SetReviewQueuePoller(reviewQueuePoller)
+
+	prStatusPoller := session.NewPRStatusPoller(storage)
+
+	registry := session.NewRegistry(storage, sessionService.WireInstanceCallbacks)
+	sessionService.SetRegistry(registry)
+
+	reactiveQueueMgr := server.NewReactiveQueueManager(reviewQueue, reviewQueuePoller, eventBus, statusManager, storage)
+
+	scrollbackConfig := scrollback.DefaultScrollbackConfig()
+	scrollbackConfig.StoragePath = t.TempDir()
+	scrollbackManager := scrollback.NewScrollbackManager(scrollbackConfig)
+
+	tmuxStreamerManager := session.NewExternalTmuxStreamerManager()
+	externalDiscovery := session.NewExternalSessionDiscovery()
+	externalApprovalMonitor := session.NewExternalApprovalMonitor()
+
+	// Safe under this test's STAPLER_SQUAD_TEST_DIR isolation (see
+	// NewHistoryLinkerFromRealInspector's own doc comment): it resolves its
+	// fsnotify watch root inside the isolated test config dir rather than
+	// the operator's real ~/.claude/projects.
+	historyLinker := session.NewHistoryLinkerFromRealInspector()
+
+	return &server.ServerDependencies{
+		SessionService:          sessionService,
+		Storage:                 storage,
+		EventBus:                eventBus,
+		StatusManager:           statusManager,
+		ReviewQueue:             reviewQueue,
+		ReviewQueuePoller:       reviewQueuePoller,
+		PRStatusPoller:          prStatusPoller,
+		ReactiveQueueMgr:        reactiveQueueMgr,
+		ScrollbackManager:       scrollbackManager,
+		TmuxStreamerManager:     tmuxStreamerManager,
+		ExternalDiscovery:       externalDiscovery,
+		ExternalApprovalMonitor: externalApprovalMonitor,
+		HistoryLinker:           historyLinker,
+		ErrorRegistry:           errorRegistry,
+		Registry:                registry,
+		BacklogEnabledCheck:     func() bool { return false },
+	}
+}
 
 // protoCapturingTransport wraps an http.RoundTripper and records the
 // protocol (e.g. "HTTP/2.0") of the most recent response, so the test can
@@ -71,27 +160,75 @@ func sessionIDFromEvent(ev *sessionv1.SessionEvent) string {
 // request straight to the wrapped Connect handler, see ws_stream_bridge_test.go).
 func TestWatchSessions_should_DeliverMultipleEventsOverNativeHTTP2Stream_When_CalledThroughStartRemoteTLSListener(t *testing.T) {
 	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	// wireDepsIntoServer unconditionally calls SessionService.SetLifecycleContext,
+	// which starts CapacityMonitor's real Anthropic/Gemini QueryLimits polling
+	// (server/services/capacity_monitor.go, session_service.go:1387-1389) --
+	// independent of how ServerDependencies was constructed, so narrowing
+	// deps construction alone doesn't stop it. CapacityMonitor only makes an
+	// outbound HTTP call when CredentialChain.Resolve actually finds a
+	// credential; two of its sources (ClaudeOAuthCredentialSource,
+	// AgyCredentialSource, credentials.go) read os.UserHomeDir() directly,
+	// ignoring STAPLER_SQUAD_TEST_DIR, so on a machine with a real logged-in
+	// Claude Code session (~/.claude/.credentials.json) this test would
+	// otherwise make a real, credentialed API call. Redirecting HOME closes
+	// every credential source -- this is this package's own established
+	// hermeticity pattern (see withFakeHome in home_env_test_helper_test.go,
+	// used by session_service_test.go and others), reimplemented here rather
+	// than reused because that helper is unexported to package services and
+	// this file must stay in the external services_test package (see the
+	// package doc comment above) to avoid an import cycle with server.
+	t.Setenv("HOME", t.TempDir())
 
-	deps, err := server.BuildDependencies()
-	require.NoError(t, err)
+	deps := newNarrowServerDeps(t)
 
 	srv := server.NewServerWithDeps("localhost:0", deps)
 
 	tlsCfg, caPool := testutil.BuildSelfSignedTLSFixture(t, []string{"127.0.0.1", "localhost"})
 
 	srvCtx, srvCancel := context.WithCancel(context.Background())
-	defer srvCancel()
+
+	// StartRemote (server.go:1405-1421) spawns two goroutines -- a ServeTLS
+	// loop and a ctx.Done()-triggered Shutdown waiter -- with no exported
+	// channel/waitgroup a caller can join to confirm they've actually
+	// exited, and changing StartRemote's signature to add one would work
+	// against this PR's "zero server-side code changes" design intent
+	// (project_plans/web-transport-architecture-review/implementation/plan.md).
+	// goleak substitutes for the missing completion signal here: it retries
+	// with backoff until both goroutines are confirmed gone instead of
+	// requiring an explicit join (see session_service_test.go's
+	// TestShutdown_WaitsForDeleteSessionCleanup_* for the identical
+	// IgnoreCurrent()/VerifyNone baseline pattern). Captured before
+	// StartRemote is called, so its two goroutines are not part of the
+	// ignored baseline. Registered before the srvCancel/srv.Shutdown defer
+	// below so it runs last (LIFO) -- after the server (and every
+	// background goroutine wireDepsIntoServer started, tied to srv's own
+	// lifecycle context rather than srvCtx) has actually been torn down.
+	baseline := goleak.IgnoreCurrent()
+	defer goleak.VerifyNone(t, baseline)
+	defer func() {
+		srvCancel()
+		if err := srv.Shutdown(); err != nil {
+			t.Errorf("srv.Shutdown() failed: %v", err)
+		}
+	}()
 
 	port := testutil.FindFreePort(t)
 	remoteAddr := fmt.Sprintf("127.0.0.1:%d", port)
 	require.NoError(t, srv.StartRemote(srvCtx, remoteAddr, tlsCfg, nil))
 
-	rt := &protoCapturingTransport{inner: &http2.Transport{
+	h2Transport := &http2.Transport{
 		TLSClientConfig: &tls.Config{
 			RootCAs:    caPool,
 			ServerName: "127.0.0.1",
 		},
-	}}
+	}
+	// Closes the client's HTTP/2 connection once the stream below is done
+	// (this defer runs after the callCancel/streamDone join further down,
+	// since it's registered earlier in the function and defers run LIFO) --
+	// without it, the client-side read-loop goroutine (golang.org/x/net/http2's
+	// clientConnReadLoop) outlives the test and trips goleak.VerifyNone above.
+	defer h2Transport.CloseIdleConnections()
+	rt := &protoCapturingTransport{inner: h2Transport}
 	httpClient := &http.Client{Transport: rt}
 
 	// The Connect handler is mounted under "/api" (server.go:416-429) --

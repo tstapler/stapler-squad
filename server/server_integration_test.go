@@ -16,6 +16,7 @@ import (
 	"connectrpc.com/connect"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/goleak"
 	"golang.org/x/net/http2"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
@@ -73,6 +74,23 @@ func TestServer_should_NegotiateALPNHTTP2_When_StartRemoteServesOverRealTLS(t *t
 	tlsCfg, caPool := testutil.BuildSelfSignedTLSFixture(t, []string{"127.0.0.1", "localhost"})
 
 	ctx, cancel := context.WithCancel(context.Background())
+
+	// StartRemote (server.go:1405-1421) spawns two goroutines -- a ServeTLS
+	// loop and a ctx.Done()-triggered Shutdown waiter -- with no exported
+	// channel/waitgroup a caller can join to confirm they've actually
+	// exited, and changing StartRemote's signature to add one would work
+	// against this PR's "zero server-side code changes" design intent
+	// (project_plans/web-transport-architecture-review/implementation/plan.md).
+	// goleak substitutes for the missing completion signal here: it retries
+	// with backoff until both goroutines are confirmed gone instead of
+	// requiring an explicit join (see session_service_test.go's
+	// TestShutdown_WaitsForDeleteSessionCleanup_* for the identical
+	// IgnoreCurrent()/VerifyNone baseline pattern). Captured before
+	// StartRemote is called, so its two goroutines are not part of the
+	// ignored baseline. Registered before the cancel() defer below so it
+	// runs last (LIFO) -- after cancel() has had a chance to unwind them.
+	baseline := goleak.IgnoreCurrent()
+	defer goleak.VerifyNone(t, baseline)
 	defer cancel()
 
 	port := testutil.FindFreePort(t)
