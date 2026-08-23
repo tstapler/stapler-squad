@@ -107,7 +107,9 @@ func (i *Instance) ToInstanceData() InstanceData {
 		ActiveCheckpoint: snap.ActiveCheckpoint,
 		ForkedFromID:     snap.ForkedFromID,
 		// History file linkage
-		HistoryFilePath: snap.HistoryFilePath,
+		HistoryFilePath:            snap.HistoryFilePath,
+		EverHadConversationHistory: snap.EverHadConversationHistory,
+		LastReviveOutcome:          string(snap.LastReviveOutcome),
 		// One-shot mode
 		OneShot: snap.OneShot,
 		// Hidden (system/background) flag
@@ -283,7 +285,9 @@ func fromInstanceData(data InstanceData, deferStart bool) (*Instance, error) {
 		ActiveCheckpoint: data.ActiveCheckpoint,
 		ForkedFromID:     data.ForkedFromID,
 		// History file linkage
-		HistoryFilePath: data.HistoryFilePath,
+		HistoryFilePath:            data.HistoryFilePath,
+		EverHadConversationHistory: data.EverHadConversationHistory,
+		LastReviveOutcome:          ReviveOutcome(data.LastReviveOutcome),
 		// One-shot mode
 		OneShot: data.OneShot,
 		// Hidden (system/background) flag
