@@ -94,6 +94,15 @@ describe("HandoffSummarySection", () => {
       screen.getByText("No handoff summary generated for this session.")
     ).toBeInTheDocument();
     expect(screen.queryAllByRole("listitem")).toHaveLength(0);
+
+    // The empty state is the common/default case -- the restart button must
+    // still be reachable here, since it's the feature's only entry point for
+    // generating a first summary (finding 1: it was previously gated behind
+    // `data !== null`, making generation unreachable through the UI).
+    const button = screen.getByTestId("restart-with-summary-button");
+    expect(button).toBeInTheDocument();
+    expect(button).not.toBeDisabled();
+    expect(button).toHaveTextContent("Generate restart summary");
   });
 
   it("HandoffSummarySection_should_UseListRoles_NotStatusRole_When_Rendered", () => {
@@ -103,7 +112,14 @@ describe("HandoffSummarySection", () => {
 
     const list = screen.getByRole("list", { name: /handoff summary/i });
     expect(list).toBeInTheDocument();
-    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+    // The row's own status label/icon must not be wrapped in role="status" --
+    // this section is a user-reviewed historical record (list/listitem), not
+    // a live-announced region. This doesn't rule out RestartWithSummaryButton
+    // having its OWN, separate aria-live region for its click-triggered
+    // action's state transitions (Finding 4) -- a distinct, legitimate
+    // purpose nested inside the row -- so the assertion is scoped to the
+    // status label itself rather than the whole document.
+    expect(screen.getByText("Ready").closest('[role="status"]')).toBeNull();
 
     const items = screen.getAllByRole("listitem");
     expect(items).toHaveLength(1);

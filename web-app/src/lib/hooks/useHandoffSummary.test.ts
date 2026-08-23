@@ -24,6 +24,12 @@ jest.mock("@/lib/api/transport", () => ({
   getConnectTransport: () => ({}),
 }));
 
+// jest.setup.js globally mocks this module (RestartWithSummaryButton /
+// HandoffSummarySection guard, see its comment) so components that embed
+// them don't fire real network calls in unrelated tests. This file tests
+// the real hook implementation, so it must opt back out of that mock.
+jest.unmock("@/lib/hooks/useHandoffSummary");
+
 import { isGenerating, useHandoffSummary } from "@/lib/hooks/useHandoffSummary";
 
 function makeSummary(

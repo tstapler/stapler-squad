@@ -1,12 +1,14 @@
 "use client";
 
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { ConnectError, Code } from "@connectrpc/connect";
 import { useHandoffSummary, isGenerating } from "@/lib/hooks/useHandoffSummary";
 import { HandoffSummaryStatus } from "@/gen/session/v1/handoff_summary_pb";
 import { useSessionService } from "@/lib/hooks/useSessionService";
+import type { CreateSessionRequest } from "@/gen/session/v1/session_pb";
 import { routes } from "@/lib/routes";
+import { srOnly } from "@/components/ui/LiveRegion.css";
 import * as styles from "./RestartWithSummaryButton.css";
 
 export interface RestartWithSummaryButtonProps {
@@ -34,6 +36,8 @@ export function RestartWithSummaryButton({ sessionId }: RestartWithSummaryButton
   const [triggerErrorMessage, setTriggerErrorMessage] = useState<string | null>(null);
   const [restarting, setRestarting] = useState(false);
   const [restartErrorMessage, setRestartErrorMessage] = useState<string | null>(null);
+  const [liveMessage, setLiveMessage] = useState("");
+  const prevPhaseRef = useRef<ButtonPhase | null>(null);
 
   const handleTrigger = useCallback(async () => {
     setTriggering(true);
@@ -55,26 +59,42 @@ export function RestartWithSummaryButton({ sessionId }: RestartWithSummaryButton
     if (!data) return;
     setRestarting(true);
     setRestartErrorMessage(null);
+    setLiveMessage("Starting new session…");
+    const baseRequest: Partial<CreateSessionRequest> = {
+      prompt: data.summaryText,
+      restartFromSessionId: sessionId,
+    };
     try {
-      const session = await createSession({
-        prompt: data.summaryText,
-        restartFromSessionId: sessionId,
-      });
+      let session;
+      try {
+        session = await createSession(baseRequest);
+      } catch (err) {
+        // The source session is normally still open when this button is
+        // clicked -- that's the entire point of the feature (the source is
+        // degrading mid-session) -- so the backend's still-live-source guard
+        // (connect.CodeFailedPrecondition; see CreateSession in
+        // server/services/session_service.go) fires on essentially every
+        // real click. Retry once with the explicit confirmation flag rather
+        // than surfacing a dead-end error: clicking "restart" here already
+        // IS the user's confirmation that the source is live.
+        if (err instanceof ConnectError && err.code === Code.FailedPrecondition) {
+          session = await createSession({ ...baseRequest, confirmRestartWithLiveSource: true });
+        } else {
+          throw err;
+        }
+      }
       if (session) {
         router.push(routes.sessionDetail(session.id));
       }
     } catch (err) {
-      setRestartErrorMessage(
-        err instanceof Error ? err.message : "Failed to start a new session from this summary",
-      );
+      const message =
+        err instanceof Error ? err.message : "Failed to start a new session from this summary";
+      setRestartErrorMessage(message);
+      setLiveMessage(`Couldn't start the new session: ${message}`);
     } finally {
       setRestarting(false);
     }
   }, [createSession, data, router, sessionId]);
-
-  if (featureDisabled) {
-    return null;
-  }
 
   let phase: ButtonPhase;
   if (triggerErrorMessage !== null || (data && data.status === HandoffSummaryStatus.ERROR)) {
@@ -87,29 +107,70 @@ export function RestartWithSummaryButton({ sessionId }: RestartWithSummaryButton
     phase = "idle";
   }
 
+  // Announces phase transitions through the single shared aria-live region
+  // below, mirroring SessionSummaryPanel.tsx's pattern (design/ux.md Surface
+  // 3's Accessibility section): idle->generating and generating->ready/error
+  // are driven off `phase` here; ready->creating and creating->error are
+  // announced imperatively inside handleRestart above, since "creating" is
+  // not one of this button's four render phases.
+  useEffect(() => {
+    if (prevPhaseRef.current === phase) return;
+    prevPhaseRef.current = phase;
+    if (phase === "generating") {
+      setLiveMessage("Generating handoff summary…");
+    } else if (phase === "ready") {
+      setLiveMessage("Handoff summary ready.");
+    } else if (phase === "error") {
+      const message =
+        triggerErrorMessage || data?.errorMessage || "Something went wrong while generating this summary.";
+      setLiveMessage(`Couldn't generate handoff summary: ${message}`);
+    }
+    // triggerErrorMessage/data are read for their current-render value only
+    // within the "error" branch above -- intentionally not dependencies so
+    // this doesn't re-run on every poll tick (mirrors SessionSummaryPanel's
+    // identical phase-transition effect).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [phase]);
+
+  if (featureDisabled) {
+    return null;
+  }
+
+  const liveRegion = (
+    <div role="status" aria-live="polite" aria-atomic="true" className={srOnly}>
+      {liveMessage}
+    </div>
+  );
+
   if (phase === "idle") {
     return (
-      <button
-        type="button"
-        className={styles.button}
-        onClick={handleTrigger}
-        data-testid="restart-with-summary-button"
-      >
-        Generate restart summary
-      </button>
+      <>
+        <button
+          type="button"
+          className={styles.button}
+          onClick={handleTrigger}
+          data-testid="restart-with-summary-button"
+        >
+          Generate restart summary
+        </button>
+        {liveRegion}
+      </>
     );
   }
 
   if (phase === "generating") {
     return (
-      <button
-        type="button"
-        className={styles.button}
-        disabled
-        data-testid="restart-with-summary-button"
-      >
-        Generating summary...
-      </button>
+      <>
+        <button
+          type="button"
+          className={styles.button}
+          disabled
+          data-testid="restart-with-summary-button"
+        >
+          Generating summary...
+        </button>
+        {liveRegion}
+      </>
     );
   }
 
@@ -127,6 +188,7 @@ export function RestartWithSummaryButton({ sessionId }: RestartWithSummaryButton
         >
           Try again
         </button>
+        {liveRegion}
       </div>
     );
   }
@@ -148,6 +210,7 @@ export function RestartWithSummaryButton({ sessionId }: RestartWithSummaryButton
           {restartErrorMessage}
         </div>
       )}
+      {liveRegion}
     </div>
   );
 }

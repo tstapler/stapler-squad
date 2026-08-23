@@ -127,6 +127,69 @@ describe("RestartWithSummaryButton", () => {
     await waitFor(() => expect(pushMock).toHaveBeenCalledWith("/?session=new-session-42"));
   });
 
+  it("RestartWithSummaryButton_should_RetryWithConfirmFlag_When_RestartRejectsWithFailedPrecondition", async () => {
+    // Simulates the normal case -- the source session is still live -- where
+    // the backend's CreateSession guard rejects the first attempt with
+    // FailedPrecondition. The button must transparently retry once with
+    // confirmRestartWithLiveSource:true rather than surfacing an error,
+    // since clicking "restart" already IS the user's confirmation.
+    const { ConnectError, Code } = jest.requireMock("@connectrpc/connect") as {
+      ConnectError: new (message: string, code: number) => Error;
+      Code: { FailedPrecondition: number };
+    };
+    const summary = makeSummary({ summaryText: "Session recap text" });
+    mockHookReturn({ data: summary });
+    mockCreateSession
+      .mockRejectedValueOnce(
+        new ConnectError("source session is still live", Code.FailedPrecondition),
+      )
+      .mockResolvedValueOnce({ id: "new-session-42" });
+
+    render(<RestartWithSummaryButton sessionId="source-session-1" />);
+
+    fireEvent.click(screen.getByTestId("restart-with-summary-button"));
+
+    await waitFor(() => expect(mockCreateSession).toHaveBeenCalledTimes(2));
+    expect(mockCreateSession).toHaveBeenNthCalledWith(1, {
+      prompt: "Session recap text",
+      restartFromSessionId: "source-session-1",
+    });
+    expect(mockCreateSession).toHaveBeenNthCalledWith(2, {
+      prompt: "Session recap text",
+      restartFromSessionId: "source-session-1",
+      confirmRestartWithLiveSource: true,
+    });
+
+    await waitFor(() => expect(pushMock).toHaveBeenCalledWith("/?session=new-session-42"));
+    expect(screen.queryByTestId("restart-with-summary-restart-error")).not.toBeInTheDocument();
+  });
+
+  it("RestartWithSummaryButton_should_ReturnToReadyAndShowError_When_RestartFailsWithNonRetryableError", async () => {
+    // design/ux.md's "no dead ends" acceptance criterion #2: a restart
+    // failure that ISN'T the live-source guard (Finding 2's retry path)
+    // must revert the button to READY, re-clickable, with an inline error.
+    const summary = makeSummary({ summaryText: "Session recap text" });
+    mockHookReturn({ data: summary });
+    mockCreateSession.mockRejectedValue(new Error("network error"));
+
+    render(<RestartWithSummaryButton sessionId="source-session-1" />);
+
+    const button = screen.getByTestId("restart-with-summary-button");
+    fireEvent.click(button);
+
+    await waitFor(() =>
+      expect(screen.getByTestId("restart-with-summary-restart-error")).toHaveTextContent(
+        "network error",
+      ),
+    );
+    expect(mockCreateSession).toHaveBeenCalledTimes(1);
+    expect(button).not.toBeDisabled();
+    expect(button).toHaveTextContent("Start new session from this summary");
+
+    fireEvent.click(button);
+    await waitFor(() => expect(mockCreateSession).toHaveBeenCalledTimes(2));
+  });
+
   it("RestartWithSummaryButton_should_RenderNothing_When_FeatureDisabled", async () => {
     const { ConnectError, Code } = jest.requireMock("@connectrpc/connect") as {
       ConnectError: new (message: string, code: number) => Error;

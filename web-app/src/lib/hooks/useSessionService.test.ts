@@ -407,4 +407,27 @@ describe("useSessionService createSession restartFromSessionId passthrough", () 
       expect.anything()
     );
   });
+
+  it("useSessionService_createSession_should_ForwardConfirmRestartWithLiveSourceToRpcClient_When_Provided", async () => {
+    const store = makeTestStore();
+    const { result } = renderHook(
+      () => useSessionService({ autoWatch: false, enabled: true }),
+      { wrapper: makeWrapper(store) }
+    );
+
+    await act(async () => {
+      await result.current.createSession({
+        title: "restart session",
+        path: "/repo",
+        prompt: "summary text",
+        restartFromSessionId: "source-session-123",
+        confirmRestartWithLiveSource: true,
+      });
+    });
+
+    expect(mockCreateSession).toHaveBeenCalledWith(
+      expect.objectContaining({ confirmRestartWithLiveSource: true }),
+      expect.anything()
+    );
+  });
 });

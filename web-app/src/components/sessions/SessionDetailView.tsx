@@ -45,6 +45,7 @@ import {
   pausedOverlayReason,
   pausedOverlayButton,
   crashedOverlayIcon,
+  restartedFromLink,
 } from "./SessionDetailView.css";
 import { tabDisabled } from "./SessionDetail.css";
 import { formatPauseReason } from "@/lib/sessions/formatPauseReason";
@@ -1219,7 +1220,7 @@ export function SessionDetailView({
                     {restartSourceSession ? (
                       <a
                         href={routes.sessionDetail(restartSourceSession.id)}
-                        style={{ color: 'var(--color-link, #3b82f6)' }}
+                        className={restartedFromLink}
                         data-testid="restarted-from-link"
                       >
                         ↗ {restartSourceSession.title}
