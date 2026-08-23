@@ -19,6 +19,7 @@ import (
 // before this task despite being the exact mechanism ADR-001's "native ConnectRPC
 // client works with zero routing change" claim rests on.
 func TestStreamingWSBridge_should_ForwardToWrappedHandler_When_RequestIsNotWebSocketUpgrade(t *testing.T) {
+	t.Parallel()
 	var invoked bool
 	var gotPath string
 	stub := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -53,6 +54,7 @@ func TestStreamingWSBridge_should_ForwardToWrappedHandler_When_RequestIsNotWebSo
 // inspects real connection state that a fake request/recorder pair can't
 // provide.
 func TestStreamingWSBridge_should_UpgradeToWebSocket_When_RequestIsWebSocketUpgrade(t *testing.T) {
+	t.Parallel()
 	var invoked atomic.Bool
 	stub := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		invoked.Store(true)
