@@ -2438,6 +2438,9 @@ func (s *SessionService) CreateSession(
 		_ = s.storage.SaveInstances([]*session.Instance{instance})
 		s.eventBus.Publish(events.NewSessionUpdatedEvent(instance, []string{"status", "creation_progress"}))
 		log.Info("[CreateSession] async start complete", "session", instanceTitle)
+		if instance.RestartedFromSessionID != "" {
+			log.Info("[HandoffSummary] restart session created", "source_session", instance.RestartedFromSessionID, "new_session", instance.UUID)
+		}
 	})
 
 	return connect.NewResponse(&sessionv1.CreateSessionResponse{
