@@ -103,6 +103,13 @@ func startedSessionWithStream(t *testing.T) (TymuxManager, *fakeAttachStream, *f
 	sess := NewTymuxGRPCSession(transport)
 	require.NoError(t, sess.Start(dir))
 	require.NotNil(t, stream)
+	// Every test built from this helper starts a real readAttachLoop
+	// goroutine (blocked in fakeAttachStream.Receive()'s select until the
+	// stream ends). Without this cleanup it leaks for the rest of the
+	// test binary's lifetime — Close() is idempotent-safe even for tests
+	// that already ended the session themselves (e.g. via DetachSafely
+	// or a simulated stream exhaustion).
+	t.Cleanup(func() { _ = sess.Close() })
 	return sess, stream, transport
 }
 
@@ -556,6 +563,58 @@ func TestReconnectLoop_DetectsDaemonRestart_RevivesSession_AndSurfacesDistinctSt
 
 	assert.EqualValues(t, 1, atomic.LoadInt32(&revived), "ReviveSession must be called exactly once for the daemon-restart case")
 	assert.GreaterOrEqual(t, atomic.LoadInt32(&calls), int32(2), "expected at least 2 Attach dial attempts (dead, then revived)")
+}
+
+// TestReadAttachLoop_CleanExitThenStreamEnd_DoesNotReconnectOrRevive is the
+// BLOCKER regression test (Phase 6 architecture review): tymuxd closes the
+// gRPC stream itself right after sending Exited (crates/tymuxd/src/main.rs),
+// so readAttachLoop's next Receive() call always errors (io.EOF in
+// practice) even though the pane already exited cleanly and deliberately —
+// no Close()/DetachSafely() involved. Before the fix, readAttachLoop only
+// checked s.closing here, so this fell through to ReconnectLoop, whose
+// reattach dial fails with errPaneDead (the pane really is dead — just not
+// because tymuxd restarted), daemonRestarted evaluated true, and
+// ReviveSession spawned a needless replacement process while falsely
+// reporting BackendRestarted() == true. Asserts none of that happens: no
+// second Attach call, ReviveSession never invoked, BackendRestarted stays
+// false, and Attach()'s done channel still closes (a clean exit's stream
+// end is a known, not unexpected, terminus).
+func TestReadAttachLoop_CleanExitThenStreamEnd_DoesNotReconnectOrRevive(t *testing.T) {
+	sess, stream, transport := startedSessionWithStream(t)
+	setReconnectBackoff(sess, time.Millisecond, 2*time.Millisecond, 4)
+
+	var revived int32
+	transport.reviveSessionFn = func(_ context.Context, _ *connect.Request[v1.ReviveSessionRequest]) (*connect.Response[v1.ReviveSessionResponse], error) {
+		atomic.AddInt32(&revived, 1)
+		return connect.NewResponse(&v1.ReviveSessionResponse{}), nil
+	}
+
+	done, err := sess.Attach()
+	require.NoError(t, err)
+
+	code := int32(0)
+	stream.push(&v1.AttachEvent{Payload: &v1.AttachEvent_Exited{Exited: &v1.ExitStatus{Code: &code}}})
+
+	concrete := sess.(*tymuxGRPCSession)
+	require.Eventually(t, func() bool {
+		concrete.mu.RLock()
+		defer concrete.mu.RUnlock()
+		return concrete.exited
+	}, time.Second, time.Millisecond, "Exited event should be observed before the stream ends")
+
+	close(stream.events) // server closes the stream right after Exited (io.EOF)
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("Attach's channel never closed after a clean exit followed by stream end")
+	}
+
+	assert.EqualValues(t, 1, transport.attachCalls, "a clean exit followed by stream end must not trigger ReconnectLoop (no second Attach call)")
+	assert.EqualValues(t, 0, atomic.LoadInt32(&revived), "ReviveSession must never be called after a clean exit")
+
+	restarted, _ := concrete.BackendRestarted()
+	assert.False(t, restarted, "BackendRestarted must stay false after a clean exit — tymuxd never restarted")
 }
 
 func TestReconnectLoop_OrdinaryDrop_DoesNotSetBackendRestarted(t *testing.T) {

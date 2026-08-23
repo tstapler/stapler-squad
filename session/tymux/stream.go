@@ -118,22 +118,36 @@ func (s *tymuxGRPCSession) teardownStandingStream() {
 
 // readAttachLoop is the standing stream's reader goroutine (Task 2.3.1b,
 // restructured by Story 2.5.1/2.5.2). On every AttachEvent it delegates to
-// handleAttachEvent. On a Receive() error it checks s.closing: if a
-// deliberate Close()/DetachSafely() set it first, this is an intentional
-// end — close done and return, unblocking Attach()'s callers and
-// teardownStandingStream's <-done wait. Otherwise it's an unexpected drop
-// (network blip, daemon restart) — ReconnectLoop (Story 2.5.1's
-// acceptance criteria: "any other stream-end triggers ReconnectLoop")
-// either splices in a freshly reattached stream, which this same
-// goroutine resumes reading (so s.streamDone/Attach()'s channel never
-// fires for a transient drop that successfully reconnects — the whole
-// point is transparency), or exhausts its retry budget, in which case it
-// closes done itself and this goroutine returns.
+// handleAttachEvent. On a Receive() error it checks s.closing and
+// s.exited: if a deliberate Close()/DetachSafely() set closing first, or
+// the pane already delivered a clean Exited event (deliverExit already
+// ran via handleAttachEvent's Exited case — tymuxd closes the stream
+// itself right after sending Exited, per crates/tymuxd/src/main.rs, so
+// the very next Receive() is expected to error, typically io.EOF), this
+// is an intentional/known end — close done and return, unblocking
+// Attach()'s callers and teardownStandingStream's <-done wait. Without
+// the exited check, a clean pane exit gets misclassified as a transport
+// drop: ReconnectLoop's reattach dial fails with errPaneDead (the pane
+// really is dead, just not because tymuxd restarted), which
+// daemonRestarted's errors.Is check can't tell apart from an actual
+// daemon restart, so it spawns a needless replacement process via
+// ReviveSession and falsely reports BackendRestarted() == true.
+// Otherwise it's a genuine unexpected drop (network blip, daemon
+// restart) — ReconnectLoop (Story 2.5.1's acceptance criteria: "any
+// other stream-end triggers ReconnectLoop") either splices in a freshly
+// reattached stream, which this same goroutine resumes reading (so
+// s.streamDone/Attach()'s channel never fires for a transient drop that
+// successfully reconnects — the whole point is transparency), or
+// exhausts its retry budget, in which case it closes done itself and
+// this goroutine returns.
 func (s *tymuxGRPCSession) readAttachLoop(paneID string, stream attachStream, done chan struct{}) {
 	for {
 		event, err := stream.Receive()
 		if err != nil {
-			if s.closing.Load() {
+			s.mu.RLock()
+			exited := s.exited
+			s.mu.RUnlock()
+			if s.closing.Load() || exited {
 				close(done)
 				return
 			}
@@ -181,7 +195,9 @@ func (s *tymuxGRPCSession) handleAttachEvent(event *v1.AttachEvent) {
 		recordReconnect("output_gap")
 		count := s.outputGapCount.Add(1)
 		log.Warn("tymux: output_gap received, resyncing via CapturePane", "session_id", s.GetSessionIdentifier(), "count", count)
-		_ = s.resyncViaCapturePane(context.Background())
+		ctx, cancel := s.interruptibleContext()
+		_ = s.resyncViaCapturePane(ctx)
+		cancel()
 	}
 }
 
@@ -329,6 +345,39 @@ func (s *tymuxGRPCSession) dialAttachInterruptible(paneID string) (attachStream,
 	return stream, first, cancel, nil
 }
 
+// interruptibleContext returns a context.Context derived from
+// context.Background() that s.abortReconnect cancels — the same
+// abort-on-close watcher pattern dialAttachInterruptible uses above,
+// factored out for the other reconnect-path RPCs (the OutputGap resync in
+// handleAttachEvent, and ReconnectLoop's reviveAfterRestart/
+// resyncAfterReconnect calls) that previously ran on context.Background()
+// directly. Without this, a slow-but-not-dropped tymuxd could block the
+// reader goroutine (and therefore teardownStandingStream's <-done wait)
+// indefinitely even after a deliberate Close()/DetachSafely() fired.
+// Unlike dialAttachInterruptible — which hands its CancelFunc to the
+// caller for the life of a whole stream — every caller here is a single
+// short-lived RPC, so the returned CancelFunc must be invoked (e.g. via
+// defer) as soon as that RPC returns; it both releases ctx and stops the
+// watcher goroutine so it never outlives the call.
+func (s *tymuxGRPCSession) interruptibleContext() (context.Context, context.CancelFunc) {
+	ctx, cancel := context.WithCancel(context.Background())
+	s.mu.RLock()
+	abort := s.abortReconnect
+	s.mu.RUnlock()
+	stop := make(chan struct{})
+	go func() {
+		select {
+		case <-abort:
+			cancel()
+		case <-stop:
+		}
+	}()
+	return ctx, func() {
+		close(stop)
+		cancel()
+	}
+}
+
 // reconnectBackoffDelay computes Task 2.5.2a's jittered exponential
 // backoff for the given 1-indexed attempt number: base * 2^(attempt-1),
 // capped at max, with up to 50% jitter subtracted so many sessions
@@ -446,7 +495,10 @@ func (s *tymuxGRPCSession) ReconnectLoop(paneID string, cause string) (attachStr
 			s.backendRestarted = true
 			s.backendRestartedAt = time.Now()
 			s.mu.Unlock()
-			if reviveErr := s.reviveAfterRestart(context.Background()); reviveErr != nil {
+			reviveCtx, reviveCancel := s.interruptibleContext()
+			reviveErr := s.reviveAfterRestart(reviveCtx)
+			reviveCancel()
+			if reviveErr != nil {
 				log.Warn("tymux: ReviveSession failed after daemon restart", "session_id", sessionID, "pane_id", paneID, "err", reviveErr)
 				continue
 			}
@@ -456,7 +508,10 @@ func (s *tymuxGRPCSession) ReconnectLoop(paneID string, cause string) (attachStr
 			continue
 		}
 
-		if resyncErr := s.resyncAfterReconnect(context.Background(), first); resyncErr != nil {
+		resyncCtx, resyncCancel := s.interruptibleContext()
+		resyncErr := s.resyncAfterReconnect(resyncCtx, first)
+		resyncCancel()
+		if resyncErr != nil {
 			// Best-effort, matching OutputGap's own "not a fatal
 			// condition" contract — the stream itself is live again and
 			// will keep delivering ordinary Output events regardless.
