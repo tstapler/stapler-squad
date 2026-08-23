@@ -17,6 +17,6 @@ either doesn't solve the original problem or breaks something within the first m
 
 ## P1 Items (address before implementation)
 
-- [ ] Failure #1 — Add a plan.md task (Phase 1 or 3) for a cheap interim degradation-visibility signal (e.g. surfacing `session/tokens` usage % in the Info tab), and/or add an explicit line to `requirements.md`/`plan.md`'s "Closing out original ACs" table stating Phases 1-3 do not close the original "no warning to the operator" criterion on their own.
-- [ ] Failure #2 — Add an acceptance criterion + task under Epic 2.3 (`server/services/session_service.go`'s `CreateSession`) that rejects or confirms-before-proceeding when `restart_from_session_id` points at a still-live instance, given confirmed evidence that DIRECTORY sessions share the literal source path with no worktree isolation and no existing path-collision guard exists anywhere in the codebase.
+- [x] Failure #1 — Resolved 2026-08-23: `plan.md`'s "Closing out the original acceptance criteria" section now states explicitly that Phases 1-3 do not close the "no warning to the operator" criterion on their own, and accepts that gap pending Phase 4 rather than adding a throwaway interim signal (`requirements.md`'s "Known gap accepted for this pass" section mirrors this).
+- [x] Failure #2 — Resolved 2026-08-23: Story 2.3.1 (`plan.md`) now has an explicit still-live-source guard — `CreateSession` returns `connect.CodeFailedPrecondition` when `restart_from_session_id` names a still-live instance, unless `confirm_restart_with_live_source: true` is set (new Task 2.3.1a-2, new proto field, two new tests in `validation.md`).
 
