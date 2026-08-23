@@ -31,6 +31,9 @@ import (
 )
 
 // initRepoInternal mirrors initRepo from vcsreader_test.go for white-box tests.
+//
+// Uses go-git directly rather than shelling out — see
+// .claude/rules/prefer-go-git-over-subshells.md.
 func initRepoInternal(t *testing.T) string {
 	t.Helper()
 	raw := t.TempDir()
@@ -38,26 +41,27 @@ func initRepoInternal(t *testing.T) string {
 	if err != nil {
 		t.Fatalf("EvalSymlinks: %v", err)
 	}
-	run := func(args ...string) {
-		t.Helper()
-		cmd := safeexec.CommandContext(context.Background(), "git", args...)
-		cmd.Dir = dir
-		cmd.Env = append(os.Environ(),
-			"GIT_AUTHOR_NAME=Test", "GIT_AUTHOR_EMAIL=test@test.com",
-			"GIT_COMMITTER_NAME=Test", "GIT_COMMITTER_EMAIL=test@test.com",
-		)
-		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("git %v: %v\n%s", args, err, out)
-		}
+	repo, err := git.PlainInitWithOptions(dir, &git.PlainInitOptions{
+		InitOptions: git.InitOptions{DefaultBranch: plumbing.NewBranchReferenceName("main")},
+	})
+	if err != nil {
+		t.Fatalf("PlainInitWithOptions: %v", err)
 	}
-	run("init", "-b", "main")
-	run("config", "user.email", "test@test.com")
-	run("config", "user.name", "Test")
 	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("hello\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	run("add", ".")
-	run("commit", "-m", "initial commit")
+	wt, err := repo.Worktree()
+	if err != nil {
+		t.Fatalf("Worktree: %v", err)
+	}
+	if _, err := wt.Add("."); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	if _, err := wt.Commit("initial commit", &git.CommitOptions{
+		Author: &object.Signature{Name: "Test", Email: "test@test.com", When: time.Now()},
+	}); err != nil {
+		t.Fatalf("Commit: %v", err)
+	}
 	return dir
 }
 

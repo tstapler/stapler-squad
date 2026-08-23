@@ -388,9 +388,21 @@ type Rule struct {
 	// Priority determines rule evaluation order. Higher values are evaluated first.
 	Priority int
 	Enabled  bool
-	// Source tracks how the rule was loaded: "seed", "user", or "claude-settings".
+	// Source tracks how the rule was loaded: SourceSeed, SourceUser, or SourceClaudeSettings.
 	Source string
 }
+
+// RuleSource identifies where a Rule was loaded from. A defined type (not an alias) so a
+// filter helper's signature documents intent, even though existing Rule.Source literals
+// ("user", "seed", ...) remain untyped strings — a repo-wide migration of that field is out
+// of scope for the new call sites this type serves.
+type RuleSource string
+
+const (
+	SourceSeed           RuleSource = "seed"
+	SourceUser           RuleSource = "user"
+	SourceClaudeSettings RuleSource = "claude-settings"
+)
 
 // RuleBasedClassifier evaluates a priority-ordered list of Rules.
 type RuleBasedClassifier struct {

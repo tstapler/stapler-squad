@@ -73,6 +73,7 @@ type ProcessManagerBackend string
 const (
 	BackendTmux   ProcessManagerBackend = "tmux"
 	BackendNative ProcessManagerBackend = "native"
+	BackendTymux  ProcessManagerBackend = "tymux"
 )
 
 // ProcessManagerOptions holds constructor parameters for NewProcessManager.
@@ -82,4 +83,10 @@ type ProcessManagerOptions struct {
 	ServerSocket string
 	Program      string
 	Args         []string
+	// Backend, when non-empty, overrides both the process-wide default
+	// (RegisterBackendProvider) and NewProcessManager's defaultBackend argument for
+	// this one call — an explicit per-session choice always wins. Zero value ("")
+	// means "no per-session override," preserving today's behavior for every caller
+	// that doesn't set it. See NewProcessManager's precedence in backend_factory.go.
+	Backend ProcessManagerBackend
 }

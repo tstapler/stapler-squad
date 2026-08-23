@@ -5,6 +5,11 @@ import (
 	"log/slog"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/tstapler/stapler-squad/config"
+	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session"
 )
 
 // captureLogWarn temporarily redirects the default slog handler to a text
@@ -90,5 +95,93 @@ func Test_parseExtraOrigins_should_AcceptValidEntry_And_RejectInvalidEntry_When_
 	}
 	if !strings.Contains(buf.String(), "not-a-valid-origin") {
 		t.Fatalf("expected exactly one warning logged naming the offending entry, got log output: %s", buf.String())
+	}
+}
+
+func Test_formatKnownHosts_should_PrintNoKnownHostsMessage_When_GivenEmptySnapshot(t *testing.T) {
+	var buf bytes.Buffer
+
+	formatKnownHosts(&buf, nil)
+
+	got := buf.String()
+	if !strings.Contains(got, "No known hosts") {
+		t.Fatalf("expected a 'no known hosts' message, got: %q", got)
+	}
+}
+
+func Test_formatKnownHosts_should_PrintHostIDAddressesAndLastSeen_When_GivenEntries(t *testing.T) {
+	id, err := session.NewHostID()
+	if err != nil {
+		t.Fatalf("NewHostID() error = %v", err)
+	}
+	lastSeen := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	entries := []session.RegistryEntry{
+		{
+			HostID:            id,
+			AdvertisedAddress: []string{"192.168.1.42:8543", "10.0.0.5:8543"},
+			LastSeenAt:        lastSeen,
+		},
+	}
+
+	var buf bytes.Buffer
+	formatKnownHosts(&buf, entries)
+
+	got := buf.String()
+	for _, want := range []string{id.String(), "192.168.1.42:8543", "10.0.0.5:8543"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("expected output to contain %q, got: %s", want, got)
+		}
+	}
+	if !strings.Contains(got, lastSeen.Local().Format(time.RFC3339)) {
+		t.Errorf("expected output to contain formatted last-seen time, got: %s", got)
+	}
+}
+
+func Test_formatKnownHosts_should_SortEntriesByHostID_When_GivenMultipleEntries(t *testing.T) {
+	idA, err := session.NewHostID()
+	if err != nil {
+		t.Fatalf("NewHostID() error = %v", err)
+	}
+	idB, err := session.NewHostID()
+	if err != nil {
+		t.Fatalf("NewHostID() error = %v", err)
+	}
+	// Ensure a deterministic expected order regardless of generation order.
+	first, second := idA, idB
+	if first.String() > second.String() {
+		first, second = second, first
+	}
+
+	entries := []session.RegistryEntry{
+		{HostID: second, AdvertisedAddress: []string{"host-b:8543"}},
+		{HostID: first, AdvertisedAddress: []string{"host-a:8543"}},
+	}
+
+	var buf bytes.Buffer
+	formatKnownHosts(&buf, entries)
+
+	got := buf.String()
+	idxFirst := strings.Index(got, first.String())
+	idxSecond := strings.Index(got, second.String())
+	if idxFirst == -1 || idxSecond == -1 {
+		t.Fatalf("expected both host IDs present in output, got: %s", got)
+	}
+	if idxFirst > idxSecond {
+		t.Errorf("expected %q to appear before %q in sorted output, got: %s", first.String(), second.String(), got)
+	}
+}
+
+// TestBuildLogConfig_DefaultsToInfoNotDebug guards against a bug where an
+// unset ConsoleLevel zero-values to DEBUG (LogLevel's iota starts at
+// DEBUG=0), which initializeWithConfig's min(FileLevel, ConsoleLevel) seeding
+// then used to override an explicit FileLevel — flooding the log with DEBUG
+// output on every server boot regardless of FileLevel's intended value.
+func TestBuildLogConfig_DefaultsToInfoNotDebug(t *testing.T) {
+	cfg := buildLogConfig(true, &config.Config{}, false)
+	if cfg.FileLevel != log.INFO {
+		t.Errorf("FileLevel = %v, want %v", cfg.FileLevel, log.INFO)
+	}
+	if cfg.ConsoleLevel != log.INFO {
+		t.Errorf("ConsoleLevel = %v, want %v", cfg.ConsoleLevel, log.INFO)
 	}
 }

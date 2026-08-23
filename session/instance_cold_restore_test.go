@@ -59,6 +59,7 @@ func stubClaudeBinary(t *testing.T) string {
 // unit level in claude_command_builder_test.go; this test verifies the lifecycle
 // (dead tmux → HasClaudeSession=true → Running).
 func TestColdRestore_WithUUID(t *testing.T) {
+	t.Parallel()
 	if testing.Short() {
 		t.Skip("skipping integration test that starts real tmux sessions")
 	}
@@ -117,6 +118,7 @@ func TestColdRestore_WithUUID(t *testing.T) {
 // there is no Claude conversation UUID, Start(false) still creates a fresh tmux
 // session and the instance transitions to Running.
 func TestColdRestore_WithoutUUID(t *testing.T) {
+	t.Parallel()
 	if testing.Short() {
 		t.Skip("skipping integration test that starts real tmux sessions")
 	}
@@ -184,6 +186,7 @@ func writeJSONLFixture(t *testing.T, homeDir, projectPath, uuid string, modTime 
 // TestColdRestore_WithoutUUID left uncovered (see requirements.md's "Existing
 // related work").
 func TestColdRestore_WithoutUUID_RecoversFromJSONL(t *testing.T) {
+	t.Parallel()
 	if testing.Short() {
 		t.Skip("skipping integration test that starts real tmux sessions")
 	}
@@ -244,6 +247,7 @@ func TestColdRestore_WithoutUUID_RecoversFromJSONL(t *testing.T) {
 // TestHotRestore_ExistingSession verifies that when the tmux session is already
 // alive, Start(false) attaches to it (hot restore) rather than creating a new one.
 func TestHotRestore_ExistingSession(t *testing.T) {
+	t.Parallel()
 	if testing.Short() {
 		t.Skip("skipping integration test that starts real tmux sessions")
 	}
@@ -318,6 +322,7 @@ func TestHotRestore_ExistingSession(t *testing.T) {
 
 // TestIsStaleResumeExit verifies the detection function used by the auto-recovery path.
 func TestIsStaleResumeExit(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name    string
 		content []byte
@@ -351,6 +356,7 @@ func TestIsStaleResumeExit(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			assert.Equal(t, tt.want, isStaleResumeExit(tt.content))
 		})
 	}
@@ -367,6 +373,7 @@ func TestIsStaleResumeExit(t *testing.T) {
 // fast path is skipped (bare Instance, pm() has no session), so it goes
 // straight to the DetectByPath fallback.
 func TestTryExtractConversationUUID_ClearedAtGuard(t *testing.T) {
+	t.Parallel()
 	const fixtureUUID = "550e8400-e29b-41d4-a716-446655440000"
 
 	tests := []struct {
@@ -385,6 +392,7 @@ func TestTryExtractConversationUUID_ClearedAtGuard(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			tmpDir := t.TempDir()
 			fakeHome := t.TempDir()
 			clearedAt := time.Now()

@@ -48,6 +48,7 @@ func newRefcountTestSession(t *testing.T) *TmuxSession {
 // that already has a running control mode process increments the refcount and returns nil
 // without starting another process.
 func TestRefcount_SecondStartIncrementsCount(t *testing.T) {
+	t.Parallel()
 	sess := newRefcountTestSession(t)
 
 	// Refcount is 1 (set in newRefcountTestSession to simulate a running process).
@@ -75,6 +76,7 @@ func TestRefcount_SecondStartIncrementsCount(t *testing.T) {
 // remaining subscribers (refcount > 1) decrements the refcount but does NOT close
 // controlModeDone or nil controlModeCmd.
 func TestRefcount_StopWithActiveClientsDoesNotKillProcess(t *testing.T) {
+	t.Parallel()
 	sess := newRefcountTestSession(t)
 
 	// Simulate a second client: manually bump refcount to 2.
@@ -110,6 +112,7 @@ func TestRefcount_StopWithActiveClientsDoesNotKillProcess(t *testing.T) {
 // TestRefcount_LastStopActuallyTearsDown verifies that when refcount reaches 0,
 // StopControlMode closes controlModeDone, nils controlModeCmd, and zeroes the refcount.
 func TestRefcount_LastStopActuallyTearsDown(t *testing.T) {
+	t.Parallel()
 	sess := newRefcountTestSession(t)
 	doneCh := sess.controlModeDone
 
@@ -138,6 +141,7 @@ func TestRefcount_LastStopActuallyTearsDown(t *testing.T) {
 // TestRefcount_UnderflowIsSafe verifies that calling StopControlMode when refcount is
 // already 0 does not panic or underflow to a negative number.
 func TestRefcount_UnderflowIsSafe(t *testing.T) {
+	t.Parallel()
 	sess := newRefcountTestSession(t)
 	// Manually set refcount=0 and cmd=nil to exercise the actual underflow guard
 	// (not the early-return path that fires when controlModeCmd is nil).
@@ -164,6 +168,7 @@ func TestRefcount_UnderflowIsSafe(t *testing.T) {
 // calls on a session that already has a running process all return nil and only bump the
 // refcount without forking additional processes.
 func TestRefcount_ConcurrentStartsAreIdempotent(t *testing.T) {
+	t.Parallel()
 	sess := newRefcountTestSession(t)
 	originalCmd := sess.controlModeCmd
 
@@ -202,6 +207,7 @@ func TestRefcount_ConcurrentStartsAreIdempotent(t *testing.T) {
 // TestRefcount_ConcurrentStartStopAtBoundary races a Stop against a Start at the 1→0→1
 // boundary and verifies the refcount never goes negative.
 func TestRefcount_ConcurrentStartStopAtBoundary(t *testing.T) {
+	t.Parallel()
 	sess := newRefcountTestSession(t)
 
 	var wg sync.WaitGroup
@@ -228,6 +234,7 @@ func TestRefcount_ConcurrentStartStopAtBoundary(t *testing.T) {
 // panic when UnsubscribeFromControlModeUpdates closes a channel concurrently.
 // This is a regression test for the RACE #7 (send-on-closed-channel) fix.
 func TestBroadcast_NoSendOnClosedPanic(t *testing.T) {
+	t.Parallel()
 	sess := newRefcountTestSession(t)
 
 	// Subscribe two clients.
@@ -282,6 +289,7 @@ func TestBroadcast_NoSendOnClosedPanic(t *testing.T) {
 // the slow subscriber instead, so the consumer observes end-of-stream rather than silently
 // missing bytes mid-stream.
 func TestBroadcastControlModeUpdate_ClosesSlowSubscriber_When_ChannelFull(t *testing.T) {
+	t.Parallel()
 	sess := newRefcountTestSession(t)
 
 	// Subscribe one client and never drain it, so its buffered channel fills up.
@@ -340,6 +348,7 @@ drain:
 // instantaneously-full send disconnected the terminal for exactly this case. A subscriber that
 // drains within the bounded grace period must NOT be closed.
 func TestBroadcastControlModeUpdate_KeepsBurstySubscriberOpen_When_ConsumerCatchesUpWithinGracePeriod(t *testing.T) {
+	t.Parallel()
 	sess := newRefcountTestSession(t)
 
 	id, ch := sess.SubscribeToControlModeUpdates()

@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
@@ -33,6 +34,38 @@ type RulesService struct {
 	classifier     *classifier.RuleBasedClassifier
 	promptBuilder  RulePromptBuilder // nil = AI generation unavailable
 	aiClient       AIClient          // nil = AI generation unavailable
+
+	// rebuildMu serializes rebuildClassifier and rebuildClaudeSettingsRules — each does a
+	// read-filter-replace against the classifier that must run as one atomic unit relative
+	// to the other, which the classifier's own lock alone doesn't guarantee.
+	rebuildMu sync.Mutex
+
+	// testHook is a test-only synchronization point invoked (via afterRebuildReadHook, while
+	// rebuildMu is already held) right after each rebuild path's classifier read and before
+	// its write. Nil in production. A bug in rebuildMu is a lost-update race, not a data
+	// race — every individual field access is already protected by the classifier's own
+	// lock, so go test -race cannot detect it; only forcing a real pause mid-critical-section
+	// and observing the other path block on rebuildMu proves serialization actually holds.
+	testHook func()
+
+	// claudeSettingsWatcher owns the fsnotify watch + debounce + last-known-good cache for
+	// claude-settings files. Nil until SetClaudeSettingsWatcher is called (or if fsnotify
+	// is unavailable) — ReloadClaudeSettingsRules degrades to CodeUnimplemented in that case.
+	claudeSettingsWatcher *ClaudeSettingsWatcher
+}
+
+// SetClaudeSettingsWatcher wires the watcher constructed alongside this service in
+// NewSessionService. Same same-function setter-injection idiom as SetHistoryLinker/
+// SetHeadlessPool elsewhere in this package.
+func (rs *RulesService) SetClaudeSettingsWatcher(w *ClaudeSettingsWatcher) {
+	rs.claudeSettingsWatcher = w
+}
+
+// afterRebuildReadHook calls testHook if set (see field doc comment); a no-op in production.
+func (rs *RulesService) afterRebuildReadHook() {
+	if rs.testHook != nil {
+		rs.testHook()
+	}
 }
 
 // NewRulesService creates a RulesService.
@@ -154,6 +187,37 @@ func (rs *RulesService) DeleteApprovalRule(
 	return connect.NewResponse(&sessionv1.DeleteApprovalRuleResponse{
 		Success: true,
 		Message: fmt.Sprintf("Rule %s deleted", req.Msg.Id),
+	}), nil
+}
+
+// ReloadClaudeSettingsRules re-parses ~/.claude/settings.json (and project-level
+// equivalents) and hot-swaps the resulting claude-settings rules into the live classifier —
+// the manual-trigger counterpart to the fsnotify-driven auto-reload.
+func (rs *RulesService) ReloadClaudeSettingsRules(
+	ctx context.Context,
+	req *connect.Request[sessionv1.ReloadClaudeSettingsRulesRequest],
+) (*connect.Response[sessionv1.ReloadClaudeSettingsRulesResponse], error) {
+	if rs.claudeSettingsWatcher == nil {
+		return nil, connect.NewError(connect.CodeUnimplemented, fmt.Errorf("claude-settings reload not available"))
+	}
+
+	ruleCount, failedPaths := rs.claudeSettingsWatcher.Reload(ctx)
+	if len(failedPaths) > 0 {
+		msg := fmt.Sprintf("Failed to reload Claude settings rules — previous rules still active (%d path(s) failed to parse: %s).",
+			len(failedPaths), strings.Join(failedPaths, ", "))
+		log.Warn("[RulesService] claude-settings reload had failures", "failed_paths", failedPaths, "rule_count", ruleCount)
+		return connect.NewResponse(&sessionv1.ReloadClaudeSettingsRulesResponse{
+			Success:   false,
+			RuleCount: int32(ruleCount),
+			Message:   msg,
+		}), nil
+	}
+
+	log.Info("[RulesService] reloaded claude-settings rules", "rule_count", ruleCount)
+	return connect.NewResponse(&sessionv1.ReloadClaudeSettingsRulesResponse{
+		Success:   true,
+		RuleCount: int32(ruleCount),
+		Message:   fmt.Sprintf("Reloaded %d claude-settings rule(s).", ruleCount),
 	}), nil
 }
 
@@ -429,18 +493,49 @@ func (rs *RulesService) allRuleSpecs() []RuleSpec {
 	return all
 }
 
-// rebuildClassifier reloads user rules from the store and hot-swaps them in the classifier.
-func (rs *RulesService) rebuildClassifier() {
-	userRules := rs.rulesStore.ToRules()
-	// Keep seed rules and claude-settings rules; replace user rules.
-	existing := rs.classifier.Rules()
-	var nonUser []classifier.Rule
-	for _, r := range existing {
-		if r.Source != "user" {
-			nonUser = append(nonUser, r)
+// filterRulesBySource returns only the rules whose Source is in allowed. A symmetric
+// allow-list (rather than an exclusion-list of the one source being replaced) so a future
+// 4th rule source can't be silently dropped by a rebuild path that doesn't know about it.
+func filterRulesBySource(rules []classifier.Rule, allowed ...classifier.RuleSource) []classifier.Rule {
+	allowedSet := make(map[string]bool, len(allowed))
+	for _, s := range allowed {
+		allowedSet[string(s)] = true
+	}
+	var out []classifier.Rule
+	for _, r := range rules {
+		if allowedSet[r.Source] {
+			out = append(out, r)
 		}
 	}
+	return out
+}
+
+// rebuildClassifier reloads user rules from the store and hot-swaps them in the classifier,
+// keeping seed and claude-settings rules unchanged. Guarded by rebuildMu for its entire body
+// so a concurrent rebuildClaudeSettingsRules call can't interleave its own read-filter-replace
+// sequence with this one and silently drop one side's update.
+func (rs *RulesService) rebuildClassifier() {
+	rs.rebuildMu.Lock()
+	defer rs.rebuildMu.Unlock()
+
+	userRules := rs.rulesStore.ToRules()
+	existing := rs.classifier.Rules()
+	rs.afterRebuildReadHook() // test-only: see field doc comment
+	nonUser := filterRulesBySource(existing, classifier.SourceSeed, classifier.SourceClaudeSettings)
 	rs.classifier.ReplaceRules(append(nonUser, userRules...))
+}
+
+// rebuildClaudeSettingsRules hot-swaps the claude-settings-sourced rules in the classifier,
+// keeping seed and DB-backed user rules unchanged. Guarded by rebuildMu for the same reason
+// as rebuildClassifier — see that method's doc comment.
+func (rs *RulesService) rebuildClaudeSettingsRules(newClaudeRules []classifier.Rule) {
+	rs.rebuildMu.Lock()
+	defer rs.rebuildMu.Unlock()
+
+	existing := rs.classifier.Rules()
+	rs.afterRebuildReadHook() // test-only: see field doc comment
+	kept := filterRulesBySource(existing, classifier.SourceSeed, classifier.SourceUser)
+	rs.classifier.ReplaceRules(append(kept, newClaudeRules...))
 }
 
 // -- Mapping helpers ----------------------------------------------------------

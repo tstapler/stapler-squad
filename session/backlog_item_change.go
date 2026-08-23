@@ -27,6 +27,10 @@ const (
 	// written (UpdateItemSessionTriageResult). Converts to the existing
 	// item_updated wire event, not a new proto message.
 	ChangeTriageProgressUpdated BacklogChangeKind = "triage_progress_updated"
+	// ChangeActivityNoteAdded is emitted by AppendActivityNote (ADR-001's
+	// sibling table) — carries only the new note via ActivityNote, never
+	// OldStatus/NewStatus/etc.
+	ChangeActivityNoteAdded BacklogChangeKind = "activity_note_added"
 )
 
 // BacklogItemChange describes a single backlog item mutation, passed to
@@ -61,6 +65,8 @@ type BacklogItemChange struct {
 	// carries the verdict through the pipeline as first-class data, not via
 	// a client-side join against item_sessions.
 	Verdict *ReviewVerdictData
+	// ActivityNote is populated only when Kind == ChangeActivityNoteAdded.
+	ActivityNote *ActivityNoteData
 }
 
 // ItemChangePublisher publishes a backlog item mutation to interested

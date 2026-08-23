@@ -33,7 +33,7 @@ func (ItemSession) Fields() []ent.Field {
 		field.String("end_reason").
 			Optional().
 			Default("").
-			Comment("Set only alongside ended_at for a headless (triage/review) call: classifyHeadlessCallError's bucket (\"shutdown\", \"timeout\", \"process_error\", \"claude_not_found\", \"other\") or \"\" for a successful end / not yet classified. Lets orphan-recovery sweeps distinguish a call killed by our own graceful shutdown (retry immediately, no penalty) from a call that actually failed on its own merits (apply the normal backoff)."),
+			Comment("Set only alongside ended_at for a headless (triage/review) call: classifyHeadlessCallError's bucket (\"shutdown\", \"timeout\", \"subprocess_start_error\", \"claude_not_found\", \"other\") or \"\" for a successful end / not yet classified. Lets orphan-recovery sweeps distinguish a call killed by our own graceful shutdown (retry immediately, no penalty) from a call that actually failed on its own merits (apply the normal backoff)."),
 		field.String("failure_capture_path").
 			Optional().
 			Default("").

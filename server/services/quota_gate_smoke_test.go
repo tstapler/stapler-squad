@@ -29,6 +29,7 @@ import (
 // ... and toggling inferred headroom below/above threshold measurably
 // pauses/resumes BacklogController.IsEnabled()".
 func TestQuotaGate_EndToEndSmokeTest_ShouldPauseThenResumeBacklog_When_RealRateLimitDetectionFires(t *testing.T) {
+	t.Parallel()
 	storage := createTestStorage(t)
 	eventBus := events.NewEventBus(16)
 	svc := NewSessionService(storage, eventBus)

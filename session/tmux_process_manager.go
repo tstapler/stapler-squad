@@ -198,6 +198,38 @@ func (tm *TmuxProcessManager) CapturePaneContent() (string, error) {
 	return content, nil
 }
 
+// CapturePaneContentContext mirrors CapturePaneContent (including its
+// capturePaneCacheTTL cache) but threads ctx onto the underlying subprocess
+// call on a cache miss, so a caller that cancels ctx can kill an in-flight
+// capture-pane process rather than only abandoning the exec-gate wait. Used
+// by Instance.PreviewContext for the SessionDriver polling path, whose stop
+// channel needs to interrupt a capture already underway — see
+// session/session_driver.go's stop/join mechanism.
+func (tm *TmuxProcessManager) CapturePaneContentContext(ctx context.Context) (string, error) {
+	tm.mu.RLock()
+	if time.Since(tm.captureContentAt) < capturePaneCacheTTL {
+		cached := tm.captureContent
+		tm.mu.RUnlock()
+		return cached, nil
+	}
+	tm.mu.RUnlock()
+
+	s := tm.session.Load()
+	if s == nil {
+		return "", fmt.Errorf("tmux session not initialized")
+	}
+	content, err := s.CapturePaneContentContext(ctx)
+	if err != nil {
+		return "", err
+	}
+
+	tm.mu.Lock()
+	tm.captureContent = content
+	tm.captureContentAt = time.Now()
+	tm.mu.Unlock()
+	return content, nil
+}
+
 // CapturePaneContentPriority mirrors CapturePaneContent but routes the
 // subprocess call through the resync exec-gate fast lane instead of the
 // default pool (Epic 4.2, terminal:resync-exec-gate-fast-lane), and always

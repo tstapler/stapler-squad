@@ -50,8 +50,7 @@ type testConvSession struct {
 // the constructed *session.ClaudeSessionHistory for direct use.
 func seedClaudeHome(t *testing.T, sessions map[string]testConvSession) *session.ClaudeSessionHistory {
 	t.Helper()
-	home := t.TempDir()
-	t.Setenv("HOME", home)
+	home := withFakeHome(t)
 
 	claudeDir := filepath.Join(home, ".claude")
 	require.NoError(t, os.MkdirAll(claudeDir, 0o755))
@@ -104,6 +103,7 @@ func seedClaudeHome(t *testing.T, sessions map[string]testConvSession) *session.
 // --- groupResultsBySession ---------------------------------------------------
 
 func TestGroupResultsBySession_KeepsHighestScoredHitPerSession(t *testing.T) {
+	t.Parallel()
 	results := []*sessionv1.SearchResult{
 		sr("a3f5c8d2", 8.2),
 		sr("b7e1a204", 5.5),
@@ -122,6 +122,7 @@ func TestGroupResultsBySession_KeepsHighestScoredHitPerSession(t *testing.T) {
 }
 
 func TestGroupResultsBySession_LeavesSingleHitSessionsUntouched(t *testing.T) {
+	t.Parallel()
 	results := []*sessionv1.SearchResult{sr("s1", 1.0), sr("s2", 2.0)}
 
 	got := groupResultsBySession(results)
@@ -132,6 +133,7 @@ func TestGroupResultsBySession_LeavesSingleHitSessionsUntouched(t *testing.T) {
 }
 
 func TestGroupResultsBySession_PreservesInputOrderWhenNoGrouping(t *testing.T) {
+	t.Parallel()
 	// groupResultsBySession is only invoked when group_by_session=true; this
 	// test asserts the helper itself is order-preserving and identity-safe
 	// on already-distinct-session input (mirrors what "false" behavior yields
@@ -145,6 +147,7 @@ func TestGroupResultsBySession_PreservesInputOrderWhenNoGrouping(t *testing.T) {
 }
 
 func TestGroupResultsBySession_ReturnsEmptySlice_When_InputEmpty(t *testing.T) {
+	t.Parallel()
 	got := groupResultsBySession(nil)
 	assert.Empty(t, got)
 }
@@ -161,6 +164,7 @@ func makeMessages(n int) []session.ClaudeConversationMessage {
 }
 
 func TestContextWindowAndBookends_ClampsAtSessionBoundaries(t *testing.T) {
+	t.Parallel()
 	messages := makeMessages(20)
 
 	window, first, last := contextWindowAndBookends(messages, 10)
@@ -171,6 +175,7 @@ func TestContextWindowAndBookends_ClampsAtSessionBoundaries(t *testing.T) {
 }
 
 func TestContextWindowAndBookends_SuppressesBookendsWhenWindowCoversFullSession(t *testing.T) {
+	t.Parallel()
 	messages := makeMessages(8)
 
 	window, first, last := contextWindowAndBookends(messages, 4)
@@ -181,6 +186,7 @@ func TestContextWindowAndBookends_SuppressesBookendsWhenWindowCoversFullSession(
 }
 
 func TestContextWindowAndBookends_SuppressesBookendFirstOnlyWhenItWouldDuplicateWindow(t *testing.T) {
+	t.Parallel()
 	// Regression test: a hit near (but not at) the start of a long session
 	// must not repeat messages[0:3] in both context_window and
 	// bookend_first — bookendFirst is suppressed independently of
@@ -195,6 +201,7 @@ func TestContextWindowAndBookends_SuppressesBookendFirstOnlyWhenItWouldDuplicate
 }
 
 func TestContextWindowAndBookends_EmptySessionReturnsNil(t *testing.T) {
+	t.Parallel()
 	window, first, last := contextWindowAndBookends(nil, 0)
 	assert.Nil(t, window)
 	assert.Nil(t, first)
@@ -204,6 +211,7 @@ func TestContextWindowAndBookends_EmptySessionReturnsNil(t *testing.T) {
 // --- filterAutomationSessions / isAutomationSession ---------------------------
 
 func TestFilterAutomationSessions_ExcludesSessionsWithHiddenTrue(t *testing.T) {
+	t.Parallel()
 	results := []*sessionv1.SearchResult{sr("c9d2e611", 1.0)}
 	instances := []*session.Instance{newInstance(t, "c9d2e611", true, "")}
 
@@ -213,6 +221,7 @@ func TestFilterAutomationSessions_ExcludesSessionsWithHiddenTrue(t *testing.T) {
 }
 
 func TestFilterAutomationSessions_KeepsSessionsWithNoLiveInstanceMatch(t *testing.T) {
+	t.Parallel()
 	results := []*sessionv1.SearchResult{sr("d4e3f722", 1.0)}
 
 	got := filterAutomationSessions(results, nil)
@@ -222,6 +231,7 @@ func TestFilterAutomationSessions_KeepsSessionsWithNoLiveInstanceMatch(t *testin
 }
 
 func TestFilterAutomationSessions_KeepsSessionsWithHiddenFalse(t *testing.T) {
+	t.Parallel()
 	results := []*sessionv1.SearchResult{sr("s1", 1.0)}
 	instances := []*session.Instance{newInstance(t, "s1", false, "")}
 
@@ -231,6 +241,7 @@ func TestFilterAutomationSessions_KeepsSessionsWithHiddenFalse(t *testing.T) {
 }
 
 func TestFilterAutomationSessions_KeepsAutonomousModeSessionsThatAreNotHidden(t *testing.T) {
+	t.Parallel()
 	results := []*sessionv1.SearchResult{sr("e5f4a833", 1.0)}
 	inst := newInstance(t, "e5f4a833", false, "")
 	inst.AutonomousMode = true
@@ -244,6 +255,7 @@ func TestFilterAutomationSessions_KeepsAutonomousModeSessionsThatAreNotHidden(t 
 // --- filterHistoryEntriesByAutomation (ListClaudeHistory / browse mode) -------
 
 func TestFilterHistoryEntriesByAutomation_ExcludesEntriesWithHiddenTrue(t *testing.T) {
+	t.Parallel()
 	entries := []session.ClaudeHistoryEntry{{ID: "c9d2e611"}}
 	instances := []*session.Instance{newInstance(t, "c9d2e611", true, "")}
 
@@ -253,6 +265,7 @@ func TestFilterHistoryEntriesByAutomation_ExcludesEntriesWithHiddenTrue(t *testi
 }
 
 func TestFilterHistoryEntriesByAutomation_KeepsEntriesWithNoLiveInstanceMatch(t *testing.T) {
+	t.Parallel()
 	entries := []session.ClaudeHistoryEntry{{ID: "d4e3f722"}}
 
 	got := filterHistoryEntriesByAutomation(entries, nil)
@@ -264,6 +277,7 @@ func TestFilterHistoryEntriesByAutomation_KeepsEntriesWithNoLiveInstanceMatch(t 
 // --- filterByProject / resolvedProject -----------------------------------------
 
 func TestFilterByProject_KeepsOnlyMatchingProject(t *testing.T) {
+	t.Parallel()
 	results := []*sessionv1.SearchResult{
 		{SessionId: "f1a2b3c4", Project: "/repo/stapler-squad"},
 		{SessionId: "a9b8c7d6", Project: "/repo/other-repo"},
@@ -276,6 +290,7 @@ func TestFilterByProject_KeepsOnlyMatchingProject(t *testing.T) {
 }
 
 func TestFilterByProject_NoOpWhenProjectEmpty(t *testing.T) {
+	t.Parallel()
 	results := []*sessionv1.SearchResult{
 		{SessionId: "s1", Project: "/repo/a"},
 		{SessionId: "s2", Project: "/repo/b"},
@@ -287,6 +302,7 @@ func TestFilterByProject_NoOpWhenProjectEmpty(t *testing.T) {
 }
 
 func TestFilterByProject_ResolvesWorktreePathViaLiveInstanceMainRepoPath(t *testing.T) {
+	t.Parallel()
 	results := []*sessionv1.SearchResult{
 		{SessionId: "g2h3i4j5", Project: "/home/tstapler/.stapler-squad/worktrees/stapler-squad-abc123"},
 	}
@@ -300,6 +316,7 @@ func TestFilterByProject_ResolvesWorktreePathViaLiveInstanceMainRepoPath(t *test
 }
 
 func TestFilterByProject_ExcludesWorktreeSessionWithNoLiveInstance(t *testing.T) {
+	t.Parallel()
 	// Known best-effort limitation (adversarial-review.md's "durability gap"
 	// Concern): without a live Instance to resolve MainRepoPath, a worktree
 	// session's raw (worktree) Project string cannot be distinguished from a

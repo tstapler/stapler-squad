@@ -128,11 +128,14 @@ func TestTmuxTestServer_KillSession(t *testing.T) {
 	err = server.KillSession(fullSessionName)
 	assert.NoError(t, err)
 
-	// Verify only one session remains
-	time.Sleep(100 * time.Millisecond) // Brief wait for cleanup
-	sessionsAfter, err := server.ListSessions()
-	require.NoError(t, err)
-	assert.Len(t, sessionsAfter, 1, "Should have exactly 1 session after killing one")
+	// Verify only one session remains — poll instead of a fixed sleep, since
+	// how long tmux takes to reflect the kill in list-sessions varies under load.
+	var sessionsAfter []string
+	require.Eventually(t, func() bool {
+		var listErr error
+		sessionsAfter, listErr = server.ListSessions()
+		return listErr == nil && len(sessionsAfter) == 1
+	}, 5*time.Second, 20*time.Millisecond, "expected exactly 1 session after killing one, got: %v", sessionsAfter)
 }
 
 // TestTmuxTestServer_KillAllSessions validates bulk cleanup
@@ -163,11 +166,13 @@ func TestTmuxTestServer_KillAllSessions(t *testing.T) {
 	err = server.KillAllSessions()
 	assert.NoError(t, err)
 
-	// Verify no sessions remain
-	time.Sleep(100 * time.Millisecond)
-	sessions, err = server.ListSessions()
-	require.NoError(t, err)
-	assert.Empty(t, sessions, "Should have no sessions after KillAllSessions")
+	// Verify no sessions remain — poll instead of a fixed sleep, since cleanup
+	// completion time varies under load.
+	require.Eventually(t, func() bool {
+		var listErr error
+		sessions, listErr = server.ListSessions()
+		return listErr == nil && len(sessions) == 0
+	}, 5*time.Second, 20*time.Millisecond, "expected no sessions after KillAllSessions, got: %v", sessions)
 }
 
 // TestTmuxTestServer_AutomaticCleanup validates t.Cleanup() integration
@@ -198,32 +203,30 @@ func TestTmuxTestServer_AutomaticCleanup(t *testing.T) {
 	})
 	// t.Cleanup() should have run here
 
-	// Verify server and sessions are cleaned up
-	time.Sleep(100 * time.Millisecond)
+	// Verify server and sessions are cleaned up — poll instead of a fixed
+	// sleep, since t.Cleanup()'s teardown (process kill + socket removal) can
+	// take longer than a fixed 100ms under system load.
+	var lastOutput string
+	require.Eventually(t, func() bool {
+		listCtx, listCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer listCancel()
+		cmd := safeexec.CommandContext(listCtx, "tmux", "-L", socketName, "list-sessions")
+		output, err := cmd.CombinedOutput()
+		lastOutput = string(output)
 
-	// Try to list sessions on the now-dead server (should fail)
-	listCtx, listCancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer listCancel()
-	cmd := safeexec.CommandContext(listCtx, "tmux", "-L", socketName, "list-sessions")
-	output, err := cmd.CombinedOutput()
-
-	// Should get an error indicating the server is gone.
-	// "no server running" = tmux server process exited cleanly.
-	// "server exited unexpectedly" = socket present but server process gone.
-	// "error connecting to" = socket file removed (our cleanup deleted it).
-	// All three mean the server is not running.
-	if err != nil {
-		outputStr := string(output)
-		isGone := strings.Contains(outputStr, "no server running") ||
-			strings.Contains(outputStr, "server exited unexpectedly") ||
-			strings.Contains(outputStr, "error connecting to")
-		assert.True(t, isGone,
-			"Server should be gone after cleanup, got: %q", outputStr)
-	} else {
-		// If no error, sessions list should be empty
-		sessions := strings.TrimSpace(string(output))
-		assert.Empty(t, sessions, "No sessions should remain after cleanup")
-	}
+		// Should get an error indicating the server is gone.
+		// "no server running" = tmux server process exited cleanly.
+		// "server exited unexpectedly" = socket present but server process gone.
+		// "error connecting to" = socket file removed (our cleanup deleted it).
+		// All three mean the server is not running.
+		if err != nil {
+			return strings.Contains(lastOutput, "no server running") ||
+				strings.Contains(lastOutput, "server exited unexpectedly") ||
+				strings.Contains(lastOutput, "error connecting to")
+		}
+		// If no error, sessions list should be empty.
+		return strings.TrimSpace(lastOutput) == ""
+	}, 5*time.Second, 20*time.Millisecond, "server should be gone after cleanup, last output: %q", lastOutput)
 }
 
 // TestTmuxTestServer_Isolation validates that multiple test servers don't interfere

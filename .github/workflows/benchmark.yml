@@ -62,6 +62,19 @@ jobs:
         with:
           submodules: true
 
+      # go.mod's `replace github.com/tstapler/tymux/clients/go => ../tymux/clients/go`
+      # (Epic 2.1, stapler-squad-integration) is a relative local path — Go's
+      # module-graph resolution fails for ANY package if it doesn't exist on disk, so
+      # this checkout must land before this job's `go test`/`go build` step below.
+      # actions/checkout's `path` input is validated to stay under $GITHUB_WORKSPACE
+      # (it refuses to write outside it, even to the runner's own parent "_work"
+      # dir) — so a true sibling checkout can't go through actions/checkout at
+      # all. Plain `git clone` has no such restriction; tstapler/tymux is public
+      # so this needs no auth.
+      - name: Checkout tymux (sibling, for go.mod replace directive)
+        shell: bash
+        run: git clone --depth 1 --branch main https://github.com/tstapler/tymux.git ../tymux
+
       - name: Set up Go
         uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
@@ -194,6 +207,19 @@ jobs:
         with:
           submodules: true
 
+      # go.mod's `replace github.com/tstapler/tymux/clients/go => ../tymux/clients/go`
+      # (Epic 2.1, stapler-squad-integration) is a relative local path — Go's
+      # module-graph resolution fails for ANY package if it doesn't exist on disk, so
+      # this checkout must land before this job's `go test`/`go build` step below.
+      # actions/checkout's `path` input is validated to stay under $GITHUB_WORKSPACE
+      # (it refuses to write outside it, even to the runner's own parent "_work"
+      # dir) — so a true sibling checkout can't go through actions/checkout at
+      # all. Plain `git clone` has no such restriction; tstapler/tymux is public
+      # so this needs no auth.
+      - name: Checkout tymux (sibling, for go.mod replace directive)
+        shell: bash
+        run: git clone --depth 1 --branch main https://github.com/tstapler/tymux.git ../tymux
+
       - name: Set up Go
         uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
@@ -259,6 +285,18 @@ jobs:
       - name: Generate protobuf code
         run: buf generate proto
 
+      # Same pattern as .github/actions/prepare/action.yml's "Cache Next.js
+      # build cache" step — see its comment for why the key includes both the
+      # lockfile and src hash, with restore-keys fallbacks.
+      - name: Cache Next.js build cache
+        uses: actions/cache@v4
+        with:
+          path: web-app/.next/cache
+          key: nextjs-bundle-${{ runner.os }}-${{ hashFiles('web-app/pnpm-lock.yaml') }}-${{ hashFiles('web-app/src/**') }}
+          restore-keys: |
+            nextjs-bundle-${{ runner.os }}-${{ hashFiles('web-app/pnpm-lock.yaml') }}-
+            nextjs-bundle-${{ runner.os }}-
+
       - name: Build Next.js app
         run: cd web-app && pnpm run build
 
@@ -274,7 +312,7 @@ jobs:
   frontend-throughput:
     name: Frontend Terminal Throughput
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     needs: frontend-bundle
     permissions:
       contents: read
@@ -307,8 +345,35 @@ jobs:
       - name: Generate protobuf code
         run: buf generate proto
 
+      # Same pattern as .github/actions/prepare/action.yml's "Cache Next.js
+      # build cache" step — see its comment for why the key includes both the
+      # lockfile and src hash, with restore-keys fallbacks.
+      - name: Cache Next.js build cache
+        uses: actions/cache@v4
+        with:
+          path: web-app/.next/cache
+          key: nextjs-throughput-${{ runner.os }}-${{ hashFiles('web-app/pnpm-lock.yaml') }}-${{ hashFiles('web-app/src/**') }}
+          restore-keys: |
+            nextjs-throughput-${{ runner.os }}-${{ hashFiles('web-app/pnpm-lock.yaml') }}-
+            nextjs-throughput-${{ runner.os }}-
+
       - name: Install Playwright browsers
-        run: cd web-app && npx playwright install --with-deps chromium
+        # apt-get update (invoked internally by --with-deps) has stalled for
+        # ~29 minutes against Ubuntu archive mirrors before now — a transient
+        # CI network flake unrelated to this repo. Bound each attempt so a
+        # stall fails fast and retries against a fresh mirror connection
+        # instead of eating the whole job timeout.
+        run: |
+          cd web-app
+          for attempt in 1 2 3; do
+            if timeout 8m npx playwright install --with-deps chromium; then
+              exit 0
+            fi
+            echo "Playwright install attempt $attempt failed or timed out; retrying..."
+            sleep 10
+          done
+          echo "Playwright install failed after 3 attempts" >&2
+          exit 1
 
       - name: Build Next.js app
         run: cd web-app && pnpm run build
@@ -466,6 +531,18 @@ jobs:
       - name: Generate protobuf code
         run: buf generate proto
 
+      # Same pattern as .github/actions/prepare/action.yml's "Cache Next.js
+      # build cache" step — see its comment for why the key includes both the
+      # lockfile and src hash, with restore-keys fallbacks.
+      - name: Cache Next.js build cache
+        uses: actions/cache@v4
+        with:
+          path: web-app/.next/cache
+          key: nextjs-lighthouse-${{ runner.os }}-${{ hashFiles('web-app/pnpm-lock.yaml') }}-${{ hashFiles('web-app/src/**') }}
+          restore-keys: |
+            nextjs-lighthouse-${{ runner.os }}-${{ hashFiles('web-app/pnpm-lock.yaml') }}-
+            nextjs-lighthouse-${{ runner.os }}-
+
       - name: Build Next.js app
         run: cd web-app && pnpm run build
 
@@ -490,7 +567,7 @@ jobs:
   e2e-latency:
     name: E2E RPC Latency
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 40
     needs: frontend-bundle
     permissions:
       contents: read
@@ -499,6 +576,19 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           submodules: true
+
+      # go.mod's `replace github.com/tstapler/tymux/clients/go => ../tymux/clients/go`
+      # (Epic 2.1, stapler-squad-integration) is a relative local path — Go's
+      # module-graph resolution fails for ANY package if it doesn't exist on disk, so
+      # this checkout must land before this job's `go test`/`go build` step below.
+      # actions/checkout's `path` input is validated to stay under $GITHUB_WORKSPACE
+      # (it refuses to write outside it, even to the runner's own parent "_work"
+      # dir) — so a true sibling checkout can't go through actions/checkout at
+      # all. Plain `git clone` has no such restriction; tstapler/tymux is public
+      # so this needs no auth.
+      - name: Checkout tymux (sibling, for go.mod replace directive)
+        shell: bash
+        run: git clone --depth 1 --branch main https://github.com/tstapler/tymux.git ../tymux
 
       - name: Set up Go
         uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
@@ -532,6 +622,18 @@ jobs:
       - name: Generate ent ORM code
         run: go run -mod=mod entgo.io/ent/cmd/ent generate --feature sql/upsert ./session/ent/schema
 
+      # Same pattern as .github/actions/prepare/action.yml's "Cache Next.js
+      # build cache" step — see its comment for why the key includes both the
+      # lockfile and src hash, with restore-keys fallbacks.
+      - name: Cache Next.js build cache
+        uses: actions/cache@v4
+        with:
+          path: web-app/.next/cache
+          key: nextjs-e2e-latency-${{ runner.os }}-${{ hashFiles('web-app/pnpm-lock.yaml') }}-${{ hashFiles('web-app/src/**') }}
+          restore-keys: |
+            nextjs-e2e-latency-${{ runner.os }}-${{ hashFiles('web-app/pnpm-lock.yaml') }}-
+            nextjs-e2e-latency-${{ runner.os }}-
+
       - name: Build Next.js app
         run: pnpm run build
         working-directory: web-app
@@ -540,7 +642,22 @@ jobs:
         run: cp -r web-app/out server/web/dist
 
       - name: Install Playwright browsers
-        run: cd web-app && npx playwright install --with-deps chromium
+        # apt-get update (invoked internally by --with-deps) has stalled for
+        # ~29 minutes against Ubuntu archive mirrors before now — a transient
+        # CI network flake unrelated to this repo. Bound each attempt so a
+        # stall fails fast and retries against a fresh mirror connection
+        # instead of eating the whole job timeout.
+        run: |
+          cd web-app
+          for attempt in 1 2 3; do
+            if timeout 8m npx playwright install --with-deps chromium; then
+              exit 0
+            fi
+            echo "Playwright install attempt $attempt failed or timed out; retrying..."
+            sleep 10
+          done
+          echo "Playwright install failed after 3 attempts" >&2
+          exit 1
 
       - name: Build Go binary
         run: go build -o stapler-squad .

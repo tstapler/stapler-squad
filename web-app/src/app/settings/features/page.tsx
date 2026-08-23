@@ -4,6 +4,7 @@
 import { useFeatureFlags } from "@/lib/contexts/FeatureFlagsContext";
 import { usePageView } from "@/lib/analytics";
 import { vars } from "@/styles/theme.css";
+import { StreamHubRolloutPanel } from "@/components/settings/StreamHubRolloutPanel";
 import {
   container,
   title,
@@ -96,6 +97,8 @@ export default function FeaturesPage() {
           );
         })
       )}
+
+      <StreamHubRolloutPanel />
     </main>
   );
 }

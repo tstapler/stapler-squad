@@ -125,6 +125,7 @@ func buildTestMatcher(tb testing.TB, worktreePath string) gitignore.Matcher {
 }
 
 func TestHasUntrackedFiles_SkipsGitignoredSubtree(t *testing.T) {
+	t.Parallel()
 	dir := newGitignoreBenchRepo(t, 50)
 	matcher := buildTestMatcher(t, dir)
 
@@ -140,6 +141,7 @@ func TestHasUntrackedFiles_SkipsGitignoredSubtree(t *testing.T) {
 }
 
 func TestHasUntrackedFiles_NilMatcherStillSeesIgnoredFiles(t *testing.T) {
+	t.Parallel()
 	dir := newGitignoreBenchRepo(t, 1)
 
 	found, err := hasUntrackedFiles(dir, map[string]struct{}{

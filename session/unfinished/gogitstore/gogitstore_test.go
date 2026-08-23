@@ -102,8 +102,19 @@ func gitRun(t testing.TB, dir string, args ...string) {
 // hit `panic: test timed out after 1m0s` with goroutine 20 blocked in
 // os/exec.(*Cmd).Wait, called from gitRunErr's CombinedOutput.
 func gitRunErr(logf func(format string, args ...any), dir string, args ...string) error {
+	return gitRunErrWithTimeout(logf, dir, gitCommandTimeout(args), args...)
+}
+
+// gitRunErrWithTimeout is gitRunErr with an explicit, caller-supplied
+// per-attempt timeout instead of the gitCommandTimeout(args) default. It
+// exists so TestGitRunErr_WedgedSubprocess_FailsFastInsteadOfHangingForever
+// can prove the context.WithTimeout path actually bounds and kills a wedged
+// subprocess without paying gitCommandTimeout's real 30s bound — the test
+// only needs *some* finite timeout to fire, not that specific value, since
+// that value is test-helper scaffolding for fixture-building, not shipped
+// production config.
+func gitRunErrWithTimeout(logf func(format string, args ...any), dir string, timeout time.Duration, args ...string) error {
 	const maxAttempts = 5
-	timeout := gitCommandTimeout(args)
 	var lastErr error
 	var lastOut []byte
 	var lastTimedOut bool
@@ -195,18 +206,21 @@ func gitCommandIsRetryable(args []string) bool {
 // TestSharedIndex_SecondAndLaterWorktreesCostLessThanFirst.
 //
 // It replaces "git" on PATH with a fake binary that never exits on its own
-// (an unkillable-by-cooperation `sleep`), then calls gitRunErr with a
-// non-retryable subcommand ("status") so exactly one attempt is made. If
-// gitRunErr still bounds the subprocess with a real context.WithTimeout,
-// the call must return an error mentioning the timeout well within
-// gitCommandTimeout's non-gc bound (30s) plus safeexec's WaitDelay
-// (executor/safeexec.DefaultWaitDelay, 2s) and process-teardown overhead —
-// asserted here via a generous 45s wall-clock ceiling enforced with a
-// timer, not by trusting gitRunErr to return promptly on its own. Before
-// the fix, this exact test would have hung for the fake process's full
-// sleep duration (or until the outer `go test` timeout killed the whole
-// run), since context.Background() never fires and the fake process never
-// exits voluntarily.
+// (an unkillable-by-cooperation `sleep`), then calls gitRunErrWithTimeout
+// with a non-retryable subcommand ("status") and a short 2s timeout (not
+// gitCommandTimeout's real 30s non-gc bound — this test only needs to prove
+// the context.WithTimeout path fires and kills the subprocess, not that it
+// fires at exactly 30s, so a short timeout gives the same coverage without
+// the wall-clock cost) so exactly one attempt is made. If gitRunErrWithTimeout
+// still bounds the subprocess with a real context.WithTimeout, the call must
+// return an error mentioning the timeout well within that 2s plus safeexec's
+// WaitDelay (executor/safeexec.DefaultWaitDelay, 2s) and process-teardown
+// overhead — asserted here via a generous 15s wall-clock ceiling enforced
+// with a timer, not by trusting gitRunErrWithTimeout to return promptly on
+// its own. Before the fix, this exact test would have hung for the fake
+// process's full sleep duration (or until the outer `go test` timeout
+// killed the whole run), since context.Background() never fires and the
+// fake process never exits voluntarily.
 func TestGitRunErr_WedgedSubprocess_FailsFastInsteadOfHangingForever(t *testing.T) {
 	fakeBinDir := t.TempDir()
 	fakeGitPath := filepath.Join(fakeBinDir, "git")
@@ -229,12 +243,17 @@ func TestGitRunErr_WedgedSubprocess_FailsFastInsteadOfHangingForever(t *testing.
 	}
 	done := make(chan result, 1)
 	start := time.Now()
+	// A short timeout, not gitCommandTimeout's real 30s: this test only
+	// needs to prove context.WithTimeout fires and kills the subprocess, not
+	// that it fires at exactly 30s. Using the real 30s bound here would cost
+	// this test 30s of wall-clock on every run for no additional coverage.
+	const wedgedTimeout = 2 * time.Second
 	go func() {
-		err := gitRunErr(t.Logf, t.TempDir(), "status")
+		err := gitRunErrWithTimeout(t.Logf, t.TempDir(), wedgedTimeout, "status")
 		done <- result{err: err, dur: time.Since(start)}
 	}()
 
-	const ceiling = 45 * time.Second
+	const ceiling = 15 * time.Second
 	select {
 	case r := <-done:
 		if r.err == nil {
@@ -709,34 +728,45 @@ func buildPackedFixtureOnce(t testing.TB, dir string, numCommits int) error {
 		return err
 	}
 
-	// Every iteration rewrites the SAME 3 filenames (file0.txt..file2.txt),
-	// so only the first iteration ever introduces new (untracked) paths —
-	// from the second iteration on, `git commit -a` stages and commits the
-	// already-tracked modifications in one subprocess instead of a separate
-	// `git add .` + `git commit` pair. This halves the git-subprocess count
-	// of the dominant cost in this function (numCommits can be in the
-	// hundreds across the golden fixtures this builds), with no change to
-	// the resulting object graph: `-a` stages modifications to tracked
-	// files identically to `add .` would for these same paths.
+	// Every iteration rewrites the SAME 3 filenames (file0.txt..file2.txt)
+	// and only their content changes, so this loop never needs the `git`
+	// CLI at all: go-git's Worktree.Add/Commit builds identical commit and
+	// tree objects in-process. This was previously 1-2 `git` subprocess
+	// spawns per commit (up to 2*numCommits, hundreds across the golden
+	// fixtures this builds) and was the dominant cost of this whole
+	// package's tests — a full-suite run timed this single fixture build
+	// at 605s (see git blame / PR discussion for the `go test ./...`
+	// timing that surfaced it). go-git only writes objects/refs; it never
+	// shells out, so it can't trip the gc.auto/maintenance.auto
+	// auto-housekeeping race documented above — that hazard is specific to
+	// the real `git commit` CLI path, which this loop no longer uses. The
+	// repo produced this way is byte-for-byte a normal git repository on
+	// disk, so the explicit `git gc --aggressive` call below (which DOES
+	// need the real binary — go-git's repack support is limited) works
+	// against it unchanged.
+	repo, err := git.PlainOpen(dir)
+	if err != nil {
+		return fmt.Errorf("open fixture repo for in-process commits: %w", err)
+	}
+	wt, err := repo.Worktree()
+	if err != nil {
+		return fmt.Errorf("fixture repo worktree: %w", err)
+	}
+	sig := &object.Signature{Name: "test", Email: "test@test.local", When: time.Unix(1700000000, 0)}
 	for i := 0; i < numCommits; i++ {
 		for f := 0; f < 3; f++ {
-			path := filepath.Join(dir, fmt.Sprintf("file%d.txt", f))
+			relPath := fmt.Sprintf("file%d.txt", f)
 			content := fmt.Sprintf("commit %d file %d\n%s\n", i, f, strconvItoaPadded(i*7+f))
-			if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
-				return fmt.Errorf("write %s: %w", path, err)
+			if err := os.WriteFile(filepath.Join(dir, relPath), []byte(content), 0o644); err != nil {
+				return fmt.Errorf("write %s: %w", relPath, err)
+			}
+			if _, err := wt.Add(relPath); err != nil {
+				return fmt.Errorf("stage %s (commit %d): %w", relPath, i, err)
 			}
 		}
-		if i == 0 {
-			if err := gitRunErr(t.Logf, dir, "add", "."); err != nil {
-				return err
-			}
-			if err := gitRunErr(t.Logf, dir, "commit", "-q", "-m", fmt.Sprintf("commit %d", i)); err != nil {
-				return err
-			}
-			continue
-		}
-		if err := gitRunErr(t.Logf, dir, "commit", "-q", "-a", "-m", fmt.Sprintf("commit %d", i)); err != nil {
-			return err
+		sig.When = sig.When.Add(time.Minute)
+		if _, err := wt.Commit(fmt.Sprintf("commit %d", i), &git.CommitOptions{Author: sig}); err != nil {
+			return fmt.Errorf("commit %d: %w", i, err)
 		}
 	}
 

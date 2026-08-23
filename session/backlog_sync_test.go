@@ -90,6 +90,7 @@ func newTestBackwardSyncSetup(t *testing.T, plugin ItemSourcePlugin, backwardSyn
 }
 
 func TestSyncOne_CreatesNewItemsFromPlugin(t *testing.T) {
+	t.Parallel()
 	plugin := &fakeSyncPlugin{
 		id: "fake",
 		items: []ExternalItem{
@@ -102,7 +103,7 @@ func TestSyncOne_CreatesNewItemsFromPlugin(t *testing.T) {
 	defer cleanup()
 
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 	entSrc, err := er.GetItemSourceByID(ctx, sourceID)
 	require.NoError(t, err)
 
@@ -128,10 +129,11 @@ func TestSyncOne_CreatesNewItemsFromPlugin(t *testing.T) {
 // the limit, while a source at or under the cap reports truncated=false — so the
 // UI can show a "history not fully shown" indicator instead of silently hiding rows.
 func TestListSourceSyncEvents_ReportsTruncatedWhenOverCap(t *testing.T) {
+	t.Parallel()
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	src, err := storage.CreateItemSource(ctx, ItemSourceData{
 		PluginID:    "fake_source",
@@ -155,10 +157,11 @@ func TestListSourceSyncEvents_ReportsTruncatedWhenOverCap(t *testing.T) {
 // edge case where a source with exactly maxSourceSyncEventsHistory rows would be
 // misreported as truncated.
 func TestListSourceSyncEvents_NotTruncatedAtOrUnderCap(t *testing.T) {
+	t.Parallel()
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	src, err := storage.CreateItemSource(ctx, ItemSourceData{
 		PluginID:    "fake_source",
@@ -179,6 +182,7 @@ func TestListSourceSyncEvents_NotTruncatedAtOrUnderCap(t *testing.T) {
 }
 
 func TestSyncOne_LocalWinsSkipsUserModifiedFields(t *testing.T) {
+	t.Parallel()
 	plugin := &fakeSyncPlugin{
 		id: "fake",
 		items: []ExternalItem{
@@ -199,7 +203,7 @@ func TestSyncOne_LocalWinsSkipsUserModifiedFields(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 	createdUUID, err := uuid.Parse(created.ID)
 	require.NoError(t, err)
 	_, err = er.client.BacklogItem.UpdateOneID(createdUUID).
@@ -227,6 +231,7 @@ func TestSyncOne_LocalWinsSkipsUserModifiedFields(t *testing.T) {
 // compare old vs. new values, so a field not present in UserModifiedFields
 // is always re-applied even if the fetched value is unchanged.
 func TestSyncOne_SkipsWhenAllFieldsAreUserModified(t *testing.T) {
+	t.Parallel()
 	plugin := &fakeSyncPlugin{
 		id: "fake",
 		items: []ExternalItem{
@@ -247,7 +252,7 @@ func TestSyncOne_SkipsWhenAllFieldsAreUserModified(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 	createdUUID, err := uuid.Parse(created.ID)
 	require.NoError(t, err)
 	_, err = er.client.BacklogItem.UpdateOneID(createdUUID).
@@ -271,12 +276,13 @@ func TestSyncOne_SkipsWhenAllFieldsAreUserModified(t *testing.T) {
 }
 
 func TestSyncOne_ReturnsErrorForUnregisteredPlugin(t *testing.T) {
+	t.Parallel()
 	plugin := &fakeSyncPlugin{id: "fake"}
 	storage, cleanup, sl, sourceID := newTestSyncSetup(t, plugin)
 	defer cleanup()
 
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 	entSrc, err := er.GetItemSourceByID(ctx, sourceID)
 	require.NoError(t, err)
 	entSrc.PluginID = "does-not-exist"
@@ -286,6 +292,7 @@ func TestSyncOne_ReturnsErrorForUnregisteredPlugin(t *testing.T) {
 }
 
 func TestSyncOne_DecryptsEncryptedConfigTokenBeforeFetch(t *testing.T) {
+	t.Parallel()
 	plugin := &fakeSyncPlugin{id: "fake"}
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
@@ -309,7 +316,7 @@ func TestSyncOne_DecryptsEncryptedConfigTokenBeforeFetch(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 	entSrc, err := er.GetItemSourceByID(ctx, src.ID)
 	require.NoError(t, err)
 	require.NoError(t, sl.SyncOne(ctx, entSrc))
@@ -319,12 +326,13 @@ func TestSyncOne_DecryptsEncryptedConfigTokenBeforeFetch(t *testing.T) {
 }
 
 func TestSyncOne_FetchErrorPropagates(t *testing.T) {
+	t.Parallel()
 	plugin := &fakeSyncPlugin{id: "fake", fetchErr: errors.New("boom")}
 	storage, cleanup, sl, sourceID := newTestSyncSetup(t, plugin)
 	defer cleanup()
 
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 	entSrc, err := er.GetItemSourceByID(ctx, sourceID)
 	require.NoError(t, err)
 
@@ -344,6 +352,7 @@ func TestSyncOne_FetchErrorPropagates(t *testing.T) {
 // numbers are per-repo, not globally unique). Syncing source B must not match
 // against — and overwrite — an item that actually belongs to source A.
 func TestSyncOne_DoesNotCollideAcrossSourcesWithSameExternalID(t *testing.T) {
+	t.Parallel()
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -363,7 +372,7 @@ func TestSyncOne_DoesNotCollideAcrossSourcesWithSameExternalID(t *testing.T) {
 	require.NoError(t, sl.SyncByID(ctx, srcA.ID))
 	require.NoError(t, sl.SyncByID(ctx, srcB.ID))
 
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 	itemA, err := er.GetBacklogItemByExternalID(ctx, srcA.ID, "1")
 	require.NoError(t, err)
 	require.Equal(t, "Repo A Issue 1", itemA.Title)
@@ -386,10 +395,11 @@ func TestSyncOne_DoesNotCollideAcrossSourcesWithSameExternalID(t *testing.T) {
 // collision on numerically-identical external IDs), and external IDs with no
 // local match are simply absent from the returned map rather than erroring.
 func TestGetBacklogItemsByExternalIDs_ScopesToSourceAndIgnoresMissing(t *testing.T) {
+	t.Parallel()
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	srcA, err := storage.CreateItemSource(ctx, ItemSourceData{PluginID: "fake-a", DisplayName: "Repo A", Enabled: true})
 	require.NoError(t, err)
@@ -424,6 +434,7 @@ func TestGetBacklogItemsByExternalIDs_ScopesToSourceAndIgnoresMissing(t *testing
 // external_id lookup and both create it — the per-source lock in SyncOne
 // (syncSourceLocks) must serialize them.
 func TestSyncOne_ConcurrentSyncsOfSameSourceDoNotDuplicateItems(t *testing.T) {
+	t.Parallel()
 	plugin := &fakeSyncPlugin{
 		id:    "fake",
 		items: []ExternalItem{{ExternalID: "ext-1", Title: "Item", Priority: 3}},
@@ -432,7 +443,7 @@ func TestSyncOne_ConcurrentSyncsOfSameSourceDoNotDuplicateItems(t *testing.T) {
 	defer cleanup()
 
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 	entSrc, err := er.GetItemSourceByID(ctx, sourceID)
 	require.NoError(t, err)
 
@@ -465,6 +476,7 @@ func TestSyncOne_ConcurrentSyncsOfSameSourceDoNotDuplicateItems(t *testing.T) {
 }
 
 func TestSyncByID_SyncsEvenWhenSourceDisabled(t *testing.T) {
+	t.Parallel()
 	plugin := &fakeSyncPlugin{
 		id:    "fake",
 		items: []ExternalItem{{ExternalID: "ext-1", Title: "Item"}},
@@ -489,6 +501,7 @@ func TestSyncByID_SyncsEvenWhenSourceDisabled(t *testing.T) {
 }
 
 func TestSyncByID_ReturnsErrNotFoundForMissingSource(t *testing.T) {
+	t.Parallel()
 	plugin := &fakeSyncPlugin{id: "fake"}
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
@@ -506,6 +519,7 @@ func TestSyncByID_ReturnsErrNotFoundForMissingSource(t *testing.T) {
 // must provide (Epic 0.3, Story 0.3.1): order-independent set union, no
 // duplicates when re-adding a field already present.
 func TestMergeUserModifiedFields(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name      string
 		raw       string
@@ -534,6 +548,7 @@ func TestMergeUserModifiedFields(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			merged, err := MergeUserModifiedFields(tt.raw, tt.newFields...)
 			require.NoError(t, err)
 
@@ -555,6 +570,7 @@ func TestMergeUserModifiedFields(t *testing.T) {
 // pre-existing containsField/ContainsModifiedField gate in SyncOne is
 // actually reachable in production now that Epic 0.3 wires up the RPC path.
 func TestSyncOne_UserEditedTitleSurvivesSubsequentBackwardSync(t *testing.T) {
+	t.Parallel()
 	plugin := &fakeSyncPlugin{
 		id: "fake",
 		items: []ExternalItem{
@@ -587,7 +603,7 @@ func TestSyncOne_UserEditedTitleSurvivesSubsequentBackwardSync(t *testing.T) {
 	}, nil)
 	require.NoError(t, err)
 
-	entSrc, err := storage.repo.(*EntRepository).GetItemSourceByID(ctx, sourceID)
+	entSrc, err := storage.repo.GetItemSourceByID(ctx, sourceID)
 	require.NoError(t, err)
 	require.NoError(t, sl.SyncOne(ctx, entSrc))
 
@@ -602,6 +618,7 @@ func TestSyncOne_UserEditedTitleSurvivesSubsequentBackwardSync(t *testing.T) {
 // map to archived; everything else (mid-flight in_progress/review/pr_pending,
 // and the terminal done/archived statuses) has no valid target.
 func TestDetermineBackwardSyncTarget_ReturnsArchivedForPreWorkStatuses_And_NoTargetOtherwise(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		current    BacklogStatus
 		wantTarget BacklogStatus
@@ -620,6 +637,7 @@ func TestDetermineBackwardSyncTarget_ReturnsArchivedForPreWorkStatuses_And_NoTar
 
 	for _, tt := range tests {
 		t.Run(string(tt.current), func(t *testing.T) {
+			t.Parallel()
 			target, ok := determineBackwardSyncTarget(tt.current)
 			require.Equal(t, tt.wantOK, ok)
 			require.Equal(t, tt.wantTarget, target)
@@ -631,6 +649,7 @@ func TestDetermineBackwardSyncTarget_ReturnsArchivedForPreWorkStatuses_And_NoTar
 // a pre-work item whose linked issue is observed closed transitions to
 // archived, triggered via TriggeredByGitHubSync.
 func TestSyncOne_BackwardSync_ClosedIssueArchivesReadyItem(t *testing.T) {
+	t.Parallel()
 	issueUpdatedAt := time.Now()
 	plugin := &fakeSyncPlugin{
 		id: "fake",
@@ -650,7 +669,7 @@ func TestSyncOne_BackwardSync_ClosedIssueArchivesReadyItem(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 	entSrc, err := er.GetItemSourceByID(ctx, sourceID)
 	require.NoError(t, err)
 	require.NoError(t, sl.SyncOne(ctx, entSrc))
@@ -666,6 +685,7 @@ func TestSyncOne_BackwardSync_ClosedIssueArchivesReadyItem(t *testing.T) {
 // mid-flight item's closed issue does not force a transition — archived is
 // not reachable from in_progress under ADR-002's policy.
 func TestSyncOne_BackwardSync_ClosedIssueSkipsInProgressItem(t *testing.T) {
+	t.Parallel()
 	plugin := &fakeSyncPlugin{
 		id: "fake",
 		items: []ExternalItem{
@@ -684,7 +704,7 @@ func TestSyncOne_BackwardSync_ClosedIssueSkipsInProgressItem(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 	entSrc, err := er.GetItemSourceByID(ctx, sourceID)
 	require.NoError(t, err)
 	require.NoError(t, sl.SyncOne(ctx, entSrc))
@@ -714,6 +734,7 @@ func TestSyncOne_BackwardSync_ClosedIssueSkipsInProgressItem(t *testing.T) {
 // tick must still archive it — which only happens if the first tick left the
 // watermark unadvanced.
 func TestSyncOne_BackwardSync_NoValidTargetSkipAllowsLaterReprocessing(t *testing.T) {
+	t.Parallel()
 	issueUpdatedAt := time.Now()
 	plugin := &fakeSyncPlugin{
 		id: "fake",
@@ -733,7 +754,7 @@ func TestSyncOne_BackwardSync_NoValidTargetSkipAllowsLaterReprocessing(t *testin
 	})
 	require.NoError(t, err)
 
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 	entSrc, err := er.GetItemSourceByID(ctx, sourceID)
 	require.NoError(t, err)
 
@@ -762,6 +783,7 @@ func TestSyncOne_BackwardSync_NoValidTargetSkipAllowsLaterReprocessing(t *testin
 // gate: with BackwardSyncEnabled == false, a closed issue never triggers a
 // status transition even for an otherwise-eligible pre-work item.
 func TestSyncOne_BackwardSync_NoOpWhenBackwardSyncDisabled(t *testing.T) {
+	t.Parallel()
 	plugin := &fakeSyncPlugin{
 		id: "fake",
 		items: []ExternalItem{
@@ -780,7 +802,7 @@ func TestSyncOne_BackwardSync_NoOpWhenBackwardSyncDisabled(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 	entSrc, err := er.GetItemSourceByID(ctx, sourceID)
 	require.NoError(t, err)
 	require.NoError(t, sl.SyncOne(ctx, entSrc))
@@ -796,6 +818,7 @@ func TestSyncOne_BackwardSync_NoOpWhenBackwardSyncDisabled(t *testing.T) {
 // the transition into done is the expected, common path — not something
 // backward sync should react to by auto-archiving.
 func TestSyncOne_BackwardSync_DoesNotReArchiveAlreadyDoneItem(t *testing.T) {
+	t.Parallel()
 	plugin := &fakeSyncPlugin{
 		id: "fake",
 		items: []ExternalItem{
@@ -814,7 +837,7 @@ func TestSyncOne_BackwardSync_DoesNotReArchiveAlreadyDoneItem(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 	entSrc, err := er.GetItemSourceByID(ctx, sourceID)
 	require.NoError(t, err)
 	require.NoError(t, sl.SyncOne(ctx, entSrc))
@@ -830,6 +853,7 @@ func TestSyncOne_BackwardSync_DoesNotReArchiveAlreadyDoneItem(t *testing.T) {
 // automatically. The watermark still advances so the reopen isn't re-logged
 // every tick.
 func TestSyncOne_BackwardSync_ReopenedIssueOnArchivedItemLogsNoOp(t *testing.T) {
+	t.Parallel()
 	issueUpdatedAt := time.Now()
 	plugin := &fakeSyncPlugin{
 		id: "fake",
@@ -849,7 +873,7 @@ func TestSyncOne_BackwardSync_ReopenedIssueOnArchivedItemLogsNoOp(t *testing.T) 
 	})
 	require.NoError(t, err)
 
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 	entSrc, err := er.GetItemSourceByID(ctx, sourceID)
 	require.NoError(t, err)
 	require.NoError(t, sl.SyncOne(ctx, entSrc))
@@ -865,6 +889,7 @@ func TestSyncOne_BackwardSync_ReopenedIssueOnArchivedItemLogsNoOp(t *testing.T) 
 // happy path: an item with existing labels picks up the remote's updated
 // label set when BackwardSyncEnabled is on and "labels" isn't user-locked.
 func TestSyncOne_BackwardSync_UpdatesLabelsWhenNotUserLocked(t *testing.T) {
+	t.Parallel()
 	plugin := &fakeSyncPlugin{
 		id: "fake",
 		items: []ExternalItem{
@@ -884,7 +909,7 @@ func TestSyncOne_BackwardSync_UpdatesLabelsWhenNotUserLocked(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 	entSrc, err := er.GetItemSourceByID(ctx, sourceID)
 	require.NoError(t, err)
 	require.NoError(t, sl.SyncOne(ctx, entSrc))
@@ -898,6 +923,7 @@ func TestSyncOne_BackwardSync_UpdatesLabelsWhenNotUserLocked(t *testing.T) {
 // local-wins gate for the "labels" field name, seeded directly since no
 // production UI path sets it today (documented in the Domain Glossary).
 func TestSyncOne_BackwardSync_SkipsLabelsWhenUserLocked(t *testing.T) {
+	t.Parallel()
 	plugin := &fakeSyncPlugin{
 		id: "fake",
 		items: []ExternalItem{
@@ -917,7 +943,7 @@ func TestSyncOne_BackwardSync_SkipsLabelsWhenUserLocked(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 	createdUUID, err := uuid.Parse(created.ID)
 	require.NoError(t, err)
 	_, err = er.client.BacklogItem.UpdateOneID(createdUUID).
@@ -939,6 +965,7 @@ func TestSyncOne_BackwardSync_SkipsLabelsWhenUserLocked(t *testing.T) {
 // 2.3.1a: without the BackwardSyncEnabled gate, Labels would sync
 // unconditionally regardless of the per-source opt-in.
 func TestSyncOne_BackwardSync_SkipsLabelsWhenBackwardSyncDisabled(t *testing.T) {
+	t.Parallel()
 	plugin := &fakeSyncPlugin{
 		id: "fake",
 		items: []ExternalItem{
@@ -958,7 +985,7 @@ func TestSyncOne_BackwardSync_SkipsLabelsWhenBackwardSyncDisabled(t *testing.T) 
 	})
 	require.NoError(t, err)
 
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 	entSrc, err := er.GetItemSourceByID(ctx, sourceID)
 	require.NoError(t, err)
 	require.NoError(t, sl.SyncOne(ctx, entSrc))
@@ -973,6 +1000,7 @@ func TestSyncOne_BackwardSync_SkipsLabelsWhenBackwardSyncDisabled(t *testing.T) 
 // labels gets them backfilled from the remote once (BackwardSyncEnabled on,
 // "labels" not itself locked).
 func TestSyncOne_BackfillsLabelsOnExistingItemWithNoLabels(t *testing.T) {
+	t.Parallel()
 	plugin := &fakeSyncPlugin{
 		id: "fake",
 		items: []ExternalItem{
@@ -994,7 +1022,7 @@ func TestSyncOne_BackfillsLabelsOnExistingItemWithNoLabels(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 	createdUUID, err := uuid.Parse(created.ID)
 	require.NoError(t, err)
 	_, err = er.client.BacklogItem.UpdateOneID(createdUUID).
@@ -1017,6 +1045,7 @@ func TestSyncOne_BackfillsLabelsOnExistingItemWithNoLabels(t *testing.T) {
 // gated by UserModifiedFields — if "labels" is itself locked, it stays locked
 // even though the item has no labels yet.
 func TestSyncOne_BackfillsLabelsRespectsUserModifiedFieldsGate(t *testing.T) {
+	t.Parallel()
 	plugin := &fakeSyncPlugin{
 		id: "fake",
 		items: []ExternalItem{
@@ -1036,7 +1065,7 @@ func TestSyncOne_BackfillsLabelsRespectsUserModifiedFieldsGate(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 	createdUUID, err := uuid.Parse(created.ID)
 	require.NoError(t, err)
 	_, err = er.client.BacklogItem.UpdateOneID(createdUUID).
@@ -1058,6 +1087,7 @@ func TestSyncOne_BackfillsLabelsRespectsUserModifiedFieldsGate(t *testing.T) {
 // both UserModifiedFields and BackwardSyncEnabled — unlike the Labels block,
 // which is gated by both.
 func TestSyncOne_BackfillsExternalURLEvenWhenAllOtherFieldsAreUserModified(t *testing.T) {
+	t.Parallel()
 	plugin := &fakeSyncPlugin{
 		id: "fake",
 		items: []ExternalItem{
@@ -1080,7 +1110,7 @@ func TestSyncOne_BackfillsExternalURLEvenWhenAllOtherFieldsAreUserModified(t *te
 	})
 	require.NoError(t, err)
 
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 	createdUUID, err := uuid.Parse(created.ID)
 	require.NoError(t, err)
 	_, err = er.client.BacklogItem.UpdateOneID(createdUUID).
@@ -1104,6 +1134,7 @@ func TestSyncOne_BackfillsExternalURLEvenWhenAllOtherFieldsAreUserModified(t *te
 // relying on the watermark at all (GitHubSyncedIssueUpdatedAt deliberately
 // left nil).
 func TestSyncOne_BackwardSync_DoneItemClosedIssueIsNoOpEvenWithoutWatermark(t *testing.T) {
+	t.Parallel()
 	plugin := &fakeSyncPlugin{
 		id: "fake",
 		items: []ExternalItem{
@@ -1124,7 +1155,7 @@ func TestSyncOne_BackwardSync_DoneItemClosedIssueIsNoOpEvenWithoutWatermark(t *t
 	require.NoError(t, err)
 	require.Nil(t, created.GitHubSyncedIssueUpdatedAt)
 
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 	entSrc, err := er.GetItemSourceByID(ctx, sourceID)
 	require.NoError(t, err)
 	require.NoError(t, sl.SyncOne(ctx, entSrc))
@@ -1141,6 +1172,7 @@ func TestSyncOne_BackwardSync_DoneItemClosedIssueIsNoOpEvenWithoutWatermark(t *t
 // the SAME (unchanged) IssueUpdatedAt must be treated as already-reconciled
 // and must not push the item back toward archived/done.
 func TestSyncOne_BackwardSync_ManualReopenAfterForwardSyncCloseIsNotReClosed(t *testing.T) {
+	t.Parallel()
 	t1 := time.Now().Add(-1 * time.Hour)
 	plugin := &fakeSyncPlugin{
 		id: "fake",
@@ -1161,7 +1193,7 @@ func TestSyncOne_BackwardSync_ManualReopenAfterForwardSyncCloseIsNotReClosed(t *
 	})
 	require.NoError(t, err)
 
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 	entSrc, err := er.GetItemSourceByID(ctx, sourceID)
 	require.NoError(t, err)
 	require.NoError(t, sl.SyncOne(ctx, entSrc))
@@ -1176,6 +1208,7 @@ func TestSyncOne_BackwardSync_ManualReopenAfterForwardSyncCloseIsNotReClosed(t *
 // past the stored watermark, backward sync evaluates the state fresh again —
 // proving the watermark only suppresses the exact-echo case.
 func TestSyncOne_BackwardSync_GenuinelyNewerExternalCloseIsProcessed(t *testing.T) {
+	t.Parallel()
 	t1 := time.Now().Add(-1 * time.Hour)
 	t2 := time.Now()
 	plugin := &fakeSyncPlugin{
@@ -1197,7 +1230,7 @@ func TestSyncOne_BackwardSync_GenuinelyNewerExternalCloseIsProcessed(t *testing.
 	})
 	require.NoError(t, err)
 
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 	entSrc, err := er.GetItemSourceByID(ctx, sourceID)
 	require.NoError(t, err)
 	require.NoError(t, sl.SyncOne(ctx, entSrc))
@@ -1232,6 +1265,7 @@ func (alwaysDenyWorkflowEngine) AllowedTransitions(from BacklogStatus) []Backlog
 // engine's guard denies it. The item must stay at its original status
 // (never transitioned) and be counted as skipped, not updated or errored.
 func TestSyncOne_BackwardSync_GuardDeniedTransitionIsSkippedNotApplied(t *testing.T) {
+	t.Parallel()
 	issueUpdatedAt := time.Now()
 	plugin := &fakeSyncPlugin{
 		id: "fake",
@@ -1252,7 +1286,7 @@ func TestSyncOne_BackwardSync_GuardDeniedTransitionIsSkippedNotApplied(t *testin
 	})
 	require.NoError(t, err)
 
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 	entSrc, err := er.GetItemSourceByID(ctx, sourceID)
 	require.NoError(t, err)
 	require.NoError(t, sl.SyncOne(ctx, entSrc))
@@ -1279,6 +1313,7 @@ func TestSyncOne_BackwardSync_GuardDeniedTransitionIsSkippedNotApplied(t *testin
 // would short-circuit forever and the closed issue would never be archived,
 // even though the real watermark is a well-defined, older timestamp.
 func TestSyncOne_BackwardSync_ZeroIssueUpdatedAtDoesNotFalselyReconcile(t *testing.T) {
+	t.Parallel()
 	plugin := &fakeSyncPlugin{
 		id: "fake",
 		items: []ExternalItem{
@@ -1301,7 +1336,7 @@ func TestSyncOne_BackwardSync_ZeroIssueUpdatedAtDoesNotFalselyReconcile(t *testi
 	})
 	require.NoError(t, err)
 
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 	entSrc, err := er.GetItemSourceByID(ctx, sourceID)
 	require.NoError(t, err)
 	require.NoError(t, sl.SyncOne(ctx, entSrc))
@@ -1325,6 +1360,7 @@ func TestSyncOne_BackwardSync_ZeroIssueUpdatedAtDoesNotFalselyReconcile(t *testi
 // legitimate updated++ from the field-sync path below, which is a separate,
 // pre-existing concern this fix does not change).
 func TestSyncOne_BackwardSync_ClosedIssueTransitionCountsAsUpdatedOnce(t *testing.T) {
+	t.Parallel()
 	plugin := &fakeSyncPlugin{
 		id: "fake",
 		items: []ExternalItem{
@@ -1343,7 +1379,7 @@ func TestSyncOne_BackwardSync_ClosedIssueTransitionCountsAsUpdatedOnce(t *testin
 	})
 	require.NoError(t, err)
 
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 	createdUUID, err := uuid.Parse(created.ID)
 	require.NoError(t, err)
 	// Also lock labels — otherwise Labels' own unconditional-under-

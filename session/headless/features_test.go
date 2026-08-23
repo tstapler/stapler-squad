@@ -11,6 +11,7 @@ import (
 
 // TestSummarizeBacklogItem_ReturnsText_WhenFakeRunnerResponds verifies summary parsing.
 func TestSummarizeBacklogItem_ReturnsText_WhenFakeRunnerResponds(t *testing.T) {
+	t.Parallel()
 	resp := firstCallJSON("s1", `{"summary":"A summary","tags":["feature"]}`)
 	runner := NewFakeRunner(resp)
 	pool := NewPoolWithRunner(PoolConfig{}, runner)
@@ -22,6 +23,7 @@ func TestSummarizeBacklogItem_ReturnsText_WhenFakeRunnerResponds(t *testing.T) {
 
 // TestSummarizeBacklogItem_Error_WhenPoolFails verifies error propagation.
 func TestSummarizeBacklogItem_Error_WhenPoolFails(t *testing.T) {
+	t.Parallel()
 	runner := &FakeRunner{
 		errors: []error{assert.AnError},
 	}
@@ -33,6 +35,7 @@ func TestSummarizeBacklogItem_Error_WhenPoolFails(t *testing.T) {
 
 // TestGenerateAcceptanceCriteria_ParsesJSONArray verifies AC parsing.
 func TestGenerateAcceptanceCriteria_ParsesJSONArray(t *testing.T) {
+	t.Parallel()
 	resp := firstCallJSON("s1", `["AC1","AC2","AC3"]`)
 	runner := NewFakeRunner(resp)
 	pool := NewPoolWithRunner(PoolConfig{}, runner)
@@ -44,6 +47,7 @@ func TestGenerateAcceptanceCriteria_ParsesJSONArray(t *testing.T) {
 
 // TestGenerateAcceptanceCriteria_Error_WhenJSONInvalid verifies parse error.
 func TestGenerateAcceptanceCriteria_Error_WhenJSONInvalid(t *testing.T) {
+	t.Parallel()
 	resp := firstCallJSON("s1", "not json")
 	runner := NewFakeRunner(resp)
 	pool := NewPoolWithRunner(PoolConfig{}, runner)
@@ -54,6 +58,7 @@ func TestGenerateAcceptanceCriteria_Error_WhenJSONInvalid(t *testing.T) {
 
 // TestGenerateAcceptanceCriteria_EmptyResponse_ReturnsError verifies empty-array error.
 func TestGenerateAcceptanceCriteria_EmptyResponse_ReturnsError(t *testing.T) {
+	t.Parallel()
 	resp := firstCallJSON("s1", "[]")
 	runner := NewFakeRunner(resp)
 	pool := NewPoolWithRunner(PoolConfig{}, runner)
@@ -64,24 +69,26 @@ func TestGenerateAcceptanceCriteria_EmptyResponse_ReturnsError(t *testing.T) {
 
 // TestDraftPRDescription_ReturnsText_WhenFakeRunnerResponds verifies PR description return.
 func TestDraftPRDescription_ReturnsText_WhenFakeRunnerResponds(t *testing.T) {
+	t.Parallel()
 	prText := "## Summary\n- Added feature\n\n## Test plan\n- Unit tests added"
 	resp := firstCallJSON("s1", prText)
 	runner := NewFakeRunner(resp)
 	pool := NewPoolWithRunner(PoolConfig{}, runner)
 
-	result, err := DraftPRDescription(context.Background(), pool, "Fix flaky test", "The test flaked under CI load.", "diff content", "feat/my-feature")
+	result, _, err := DraftPRDescription(context.Background(), pool, "Fix flaky test", "The test flaked under CI load.", "diff content", "feat/my-feature")
 	require.NoError(t, err)
 	assert.Equal(t, prText, result)
 }
 
 // TestDraftPRDescription_TruncatesDiff_WhenOver40000Bytes verifies truncation.
 func TestDraftPRDescription_TruncatesDiff_WhenOver40000Bytes(t *testing.T) {
+	t.Parallel()
 	bigDiff := strings.Repeat("x", 50_000)
 	resp := firstCallJSON("s1", "PR description")
 	runner := NewFakeRunner(resp)
 	pool := NewPoolWithRunner(PoolConfig{}, runner)
 
-	_, err := DraftPRDescription(context.Background(), pool, "Title", "Description", bigDiff, "branch")
+	_, _, err := DraftPRDescription(context.Background(), pool, "Title", "Description", bigDiff, "branch")
 	require.NoError(t, err)
 
 	// Inspect what was passed to the runner.
@@ -100,16 +107,18 @@ func TestDraftPRDescription_TruncatesDiff_WhenOver40000Bytes(t *testing.T) {
 // produced a conversational non-answer instead of a usable PR body, so
 // DraftPRDescription now short-circuits before calling the LLM at all.
 func TestDraftPRDescription_Error_WhenDiffEmpty(t *testing.T) {
+	t.Parallel()
 	runner := NewFakeRunner()
 	pool := NewPoolWithRunner(PoolConfig{}, runner)
 
-	_, err := DraftPRDescription(context.Background(), pool, "Title", "Description", "   ", "branch")
+	_, _, err := DraftPRDescription(context.Background(), pool, "Title", "Description", "   ", "branch")
 	assert.Error(t, err)
 	assert.Equal(t, 0, runner.CallCount(), "LLM should never be called for an empty diff")
 }
 
 // TestSuggestCommitMessage_ReturnsText_WhenFakeRunnerResponds verifies commit message return.
 func TestSuggestCommitMessage_ReturnsText_WhenFakeRunnerResponds(t *testing.T) {
+	t.Parallel()
 	msg := "feat(auth): add OAuth2 login"
 	resp := firstCallJSON("s1", msg)
 	runner := NewFakeRunner(resp)
@@ -122,6 +131,7 @@ func TestSuggestCommitMessage_ReturnsText_WhenFakeRunnerResponds(t *testing.T) {
 
 // TestSuggestCommitMessage_TruncatesDiff_WhenOver20000Bytes verifies truncation.
 func TestSuggestCommitMessage_TruncatesDiff_WhenOver20000Bytes(t *testing.T) {
+	t.Parallel()
 	bigDiff := strings.Repeat("y", 30_000)
 	resp := firstCallJSON("s1", "fix(core): a fix")
 	runner := NewFakeRunner(resp)
@@ -151,24 +161,26 @@ type fakePoolClientRecorder struct {
 	user  string
 }
 
-func (f *fakePoolClientRecorder) CallBlocking(_ context.Context, key FeatureKey, systemPrompt, userPrompt string, _ CallOptions) (string, float64, error) {
+func (f *fakePoolClientRecorder) CallBlocking(_ context.Context, key FeatureKey, systemPrompt, userPrompt string, _ CallOptions, sink CostSink) (string, error) {
 	f.calls++
 	f.key = key
 	f.sys = systemPrompt
 	f.user = userPrompt
+	sink(0)
 	if f.err != nil {
-		return "", 0, f.err
+		return "", f.err
 	}
-	return f.response, 0, nil
+	return f.response, nil
 }
 
 // TestGenerateSessionCompletionNarrative_should_ReturnProseAndCallPoolWithFeatureKey_When_TitleGoalDiffAndDecisionsProvided
 // verifies the happy path: prose is returned and pool.CallBlocking was invoked with
 // FeatureKeySessionCompletionSummary.
 func TestGenerateSessionCompletionNarrative_should_ReturnProseAndCallPoolWithFeatureKey_When_TitleGoalDiffAndDecisionsProvided(t *testing.T) {
+	t.Parallel()
 	fake := &fakePoolClientRecorder{response: "The session fixed the login redirect loop."}
 
-	text, err := GenerateSessionCompletionNarrative(context.Background(), fake, "fix-login-redirect", "Investigate why login redirects loop under SSO", "diff content", "5 auto-approved, 1 manual")
+	text, _, err := GenerateSessionCompletionNarrative(context.Background(), fake, "fix-login-redirect", "Investigate why login redirects loop under SSO", "diff content", "5 auto-approved, 1 manual")
 	require.NoError(t, err)
 	assert.Equal(t, "The session fixed the login redirect loop.", text)
 	assert.Equal(t, 1, fake.calls)
@@ -181,9 +193,10 @@ func TestGenerateSessionCompletionNarrative_should_ReturnProseAndCallPoolWithFea
 // verifies that an empty sessionGoal (never set) is simply omitted from the prompt,
 // not rendered as an empty/placeholder line, and the call still succeeds.
 func TestGenerateSessionCompletionNarrative_should_OmitGoalLine_When_SessionGoalIsEmptyString(t *testing.T) {
+	t.Parallel()
 	fake := &fakePoolClientRecorder{response: "The session made some changes."}
 
-	text, err := GenerateSessionCompletionNarrative(context.Background(), fake, "some-session", "", "diff content", "no decisions")
+	text, _, err := GenerateSessionCompletionNarrative(context.Background(), fake, "some-session", "", "diff content", "no decisions")
 	require.NoError(t, err)
 	assert.Equal(t, "The session made some changes.", text)
 	assert.NotContains(t, fake.user, "Session goal:")
@@ -193,6 +206,7 @@ func TestGenerateSessionCompletionNarrative_should_OmitGoalLine_When_SessionGoal
 // the codebase-access prompt (used on the empty-diff path) is a genuinely different
 // string from the normal no-tool-access prompt, not an accidental alias.
 func TestHeadlessReviewSystemPromptWithCodebaseAccess_DistinctFromNormalPrompt(t *testing.T) {
+	t.Parallel()
 	assert.NotEqual(t, HeadlessReviewSystemPrompt(), HeadlessReviewSystemPromptWithCodebaseAccess())
 }
 
@@ -200,6 +214,7 @@ func TestHeadlessReviewSystemPromptWithCodebaseAccess_DistinctFromNormalPrompt(t
 // falsification framing instructs the model to cite evidence it found itself, not
 // merely restate the work session's claim.
 func TestHeadlessReviewSystemPromptWithCodebaseAccess_RequiresOwnCitation(t *testing.T) {
+	t.Parallel()
 	assert.Contains(t, strings.ToLower(HeadlessReviewSystemPromptWithCodebaseAccess()), "your own")
 }
 
@@ -207,6 +222,7 @@ func TestHeadlessReviewSystemPromptWithCodebaseAccess_RequiresOwnCitation(t *tes
 // prompt requires the model to report which files it actually opened, so the caller
 // can detect and degrade a verdict backed by no real tool use.
 func TestHeadlessReviewSystemPromptWithCodebaseAccess_RequiresToolReadsField(t *testing.T) {
+	t.Parallel()
 	assert.Contains(t, HeadlessReviewSystemPromptWithCodebaseAccess(), "tool_reads")
 }
 
@@ -214,6 +230,7 @@ func TestHeadlessReviewSystemPromptWithCodebaseAccess_RequiresToolReadsField(t *
 // plain (diff != "") review prompt bounds the evidentiary weight of a criterion's
 // self-reported Note: it must not be sufficient by itself for a PASS.
 func TestHeadlessReviewSystemPrompt_NoteOnNonEmptyDiffIsInformationalOnly(t *testing.T) {
+	t.Parallel()
 	prompt := HeadlessReviewSystemPrompt()
 	assert.Contains(t, prompt, "informational")
 	assert.Contains(t, prompt, "Note")
@@ -224,6 +241,7 @@ func TestHeadlessReviewSystemPrompt_NoteOnNonEmptyDiffIsInformationalOnly(t *tes
 // (diff != "") prompt must not leak into the codebase-access (diff == "") prompt,
 // which has its own distinct falsification instructions.
 func TestHeadlessReviewSystemPromptWithCodebaseAccess_UnaffectedByEvidentiaryWeightChange(t *testing.T) {
+	t.Parallel()
 	assert.NotContains(t, HeadlessReviewSystemPromptWithCodebaseAccess(), "informational context only")
 }
 
@@ -237,6 +255,7 @@ func TestHeadlessReviewSystemPromptWithCodebaseAccess_UnaffectedByEvidentiaryWei
 // future edit to this prompt string must not silently drop the guidance with zero
 // test failure.
 func TestHeadlessTriageSystemPrompt_WarnsAgainstBackgroundStatusPlaceholder(t *testing.T) {
+	t.Parallel()
 	assert.Contains(t, HeadlessTriageSystemPrompt(), "single, non-interactive call")
 	assert.Contains(t, HeadlessTriageSystemPrompt(), "no later turn")
 }

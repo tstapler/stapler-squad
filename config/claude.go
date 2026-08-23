@@ -81,6 +81,40 @@ func GetClaudeDir() (string, error) {
 	return filepath.Join(home, ".claude"), nil
 }
 
+// ResolveClaudeHistoryDir returns the directory holding Claude Code's JSONL
+// session-history files, which two independent consumers walk and watch:
+// server's TokenStore/ArtifactExtractor (BuildRuntimeDeps) and session's
+// HistoryLinker fsnotify watcher.
+//
+// In production (isIsolated=false) that is the real ~/.claude/projects. An
+// isolated test/demo instance must not touch it: on a dev machine with a long
+// Claude Code history that tree is thousands of real JSONL files, some large,
+// which overflows the consumers' bounded parse/scan queues and made the
+// walk+parse take 100s-1500s+ in CI, well past any reasonable test timeout.
+// Under isolation this returns (and creates) a per-instance directory inside
+// the isolated config dir instead — it starts empty, so both consumers stay
+// fully functional against test fixtures without ever reading real session
+// data. Same hazard class as IsIsolatedInstance's other documented case (the
+// shared tmux socket); here the isolated resource is the config dir.
+//
+// isIsolated is a parameter rather than an internal IsIsolatedInstance() call
+// so both branches are directly unit-testable — every test exercising this is
+// itself a go test binary, where IsIsolatedInstance() is unconditionally true.
+func ResolveClaudeHistoryDir(homeDir string, isIsolated bool) (string, error) {
+	if !isIsolated {
+		return filepath.Join(homeDir, ".claude", "projects"), nil
+	}
+	configDir, err := GetConfigDir()
+	if err != nil {
+		return "", fmt.Errorf("failed to resolve isolated config dir for Claude history: %w", err)
+	}
+	historyDir := filepath.Join(configDir, "claude-projects")
+	if err := os.MkdirAll(historyDir, 0755); err != nil {
+		return "", fmt.Errorf("failed to create isolated Claude history dir %s: %w", historyDir, err)
+	}
+	return historyDir, nil
+}
+
 // toValidUTF8 ensures the content is valid UTF-8 for protobuf marshaling.
 // Invalid UTF-8 sequences are replaced with the Unicode replacement character.
 func toValidUTF8(content []byte) string {

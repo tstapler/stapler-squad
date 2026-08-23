@@ -38,7 +38,7 @@ func (e *TimeoutExecutor) Run(cmd *exec.Cmd) error {
 	ctxCmd.WaitDelay = 2 * time.Second
 
 	err := ctxCmd.Run()
-	if ctx.Err() != nil {
+	if ctx.Err() != nil && isTimeoutKill(err) {
 		return fmt.Errorf("command timed out after %v: %s", e.timeout, ToString(cmd))
 	}
 	// On Linux, exec-not-found errors may not be wrapped by the caller.
@@ -65,7 +65,7 @@ func (e *TimeoutExecutor) Output(cmd *exec.Cmd) ([]byte, error) {
 	ctxCmd.WaitDelay = 2 * time.Second
 
 	out, err := ctxCmd.Output()
-	if ctx.Err() != nil {
+	if ctx.Err() != nil && isTimeoutKill(err) {
 		return nil, fmt.Errorf("command timed out after %v: %s", e.timeout, ToString(cmd))
 	}
 	return out, err
@@ -87,7 +87,7 @@ func (e *TimeoutExecutor) CombinedOutput(cmd *exec.Cmd) ([]byte, error) {
 	ctxCmd.WaitDelay = 2 * time.Second // force-close pipes 2s after kill
 
 	out, err := ctxCmd.CombinedOutput()
-	if ctx.Err() != nil {
+	if ctx.Err() != nil && isTimeoutKill(err) {
 		return nil, fmt.Errorf("command timed out after %v: %s", e.timeout, ToString(cmd))
 	}
 	return out, err

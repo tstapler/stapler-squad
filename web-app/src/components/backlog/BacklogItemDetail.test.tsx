@@ -104,6 +104,16 @@ jest.mock("@/lib/analytics", () => ({
   useAnalytics: () => ({ track: jest.fn() }),
 }));
 
+// Story 2.3 (backlog-deep-linking): the Copy ID/Copy Link buttons call
+// copyToClipboard, which falls back to document.execCommand("copy") — jsdom
+// doesn't implement either navigator.clipboard.writeText or execCommand, so
+// mock the module directly rather than trying to stand up a working
+// clipboard in jsdom.
+const copyToClipboard = jest.fn().mockResolvedValue(true);
+jest.mock("@/lib/clipboard", () => ({
+  copyToClipboard: (...args: unknown[]) => copyToClipboard(...args),
+}));
+
 const getBacklogItem = jest.fn();
 const listPipelineModes = jest.fn();
 // Hoisted to module scope (unlike the other jest.fn()s below, which are
@@ -212,6 +222,7 @@ beforeEach(() => {
   rejectPlan.mockReset().mockResolvedValue(null);
   archiveBacklogItem.mockClear().mockResolvedValue(undefined);
   unarchiveBacklogItem.mockClear().mockResolvedValue(undefined);
+  copyToClipboard.mockClear().mockResolvedValue(true);
   // Story 3.1.4's per-section expand state (useSectionExpandState) and
   // "Show N more" state (useShowMore) both persist to localStorage keyed
   // by itemId — clear between tests so one test's expand/collapse
@@ -272,6 +283,7 @@ function makeItem(linkedSessions: LinkedSession[]): BacklogItem {
     updatedAt: "2026-07-12T14:02:00Z",
     statusEvents: [],
     progressNotes: [],
+    activityNotes: [],
     totalEstimatedCostUsd: 0,
   };
 }
@@ -1503,5 +1515,74 @@ describe("BacklogItemDetail — Archive action confirm() guard", () => {
     });
 
     expect(archiveBacklogItem).not.toHaveBeenCalled();
+  });
+});
+
+// Story 2.3 (project_plans/backlog-deep-linking/implementation/plan.md):
+// upgrades the existing Copy Link/Copy ID affordances to the new ssq://
+// deep-link format and to prefer the externally-shareable public_id over
+// the internal UUID, per ADR-001.
+describe("BacklogItemDetail — Copy ID/Copy Link (backlog-deep-linking Story 2.3)", () => {
+  async function renderItem(overrides: Partial<BacklogItem> = {}) {
+    getBacklogItem.mockReset().mockResolvedValue({ ...makeItem([]), ...overrides });
+    listPipelineModes.mockReset().mockResolvedValue([]);
+
+    render(<BacklogItemDetail itemId="item-1" />);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+  }
+
+  it("handleCopy_should_BuildSsqUrlWithPublicId_When_CopyLinkClicked", async () => {
+    await renderItem({ id: "item-1", publicId: "bl_01J0000000000000000000" });
+
+    fireEvent.click(screen.getByTestId("copy-item-link-button"));
+
+    await waitFor(() => {
+      expect(copyToClipboard).toHaveBeenCalledWith(
+        `ssq://${window.location.host}/backlog/v1/bl_01J0000000000000000000`
+      );
+    });
+  });
+
+  it("handleCopy_should_FallBackToUUID_When_PublicIdAbsent", async () => {
+    await renderItem({ id: "item-1", publicId: undefined });
+
+    fireEvent.click(screen.getByTestId("copy-item-link-button"));
+
+    await waitFor(() => {
+      expect(copyToClipboard).toHaveBeenCalledWith(`ssq://${window.location.host}/backlog/v1/item-1`);
+    });
+
+    fireEvent.click(screen.getByTestId("copy-item-id-button"));
+    await waitFor(() => {
+      expect(copyToClipboard).toHaveBeenLastCalledWith("item-1");
+    });
+  });
+
+  it("BacklogItemDetail_should_DisplayAndCopyPublicId_When_PublicIdPresent", async () => {
+    await renderItem({ id: "item-1", publicId: "bl_01J0000000000000000000" });
+
+    expect(screen.getByTestId("backlog-item-id")).toHaveTextContent("bl_01J0000000000000000000");
+
+    fireEvent.click(screen.getByTestId("copy-item-id-button"));
+    await waitFor(() => {
+      expect(copyToClipboard).toHaveBeenCalledWith("bl_01J0000000000000000000");
+    });
+  });
+
+  it("BacklogItemDetail_should_AnnounceCopyConfirmation_When_CopyLinkClicked", async () => {
+    await renderItem({ id: "item-1", publicId: "bl_01J0000000000000000000" });
+
+    const copyLinkButton = screen.getByTestId("copy-item-link-button");
+    expect(copyLinkButton).toHaveAttribute("aria-label", "Copy shareable link");
+
+    fireEvent.click(copyLinkButton);
+
+    await waitFor(() => {
+      expect(copyLinkButton).toHaveAttribute("aria-label", "Copied link to clipboard");
+    });
+    expect(screen.getByTestId("copy-status-announcement")).toHaveTextContent("Link copied to clipboard");
   });
 });

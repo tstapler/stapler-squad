@@ -79,6 +79,7 @@ func addArchivedInstanceLive(t *testing.T, fix *forkTestFixture, title string, a
 }
 
 func TestSessionRetentionSweeper_DeletesArchivedSessionPastRetention(t *testing.T) {
+	t.Parallel()
 	fix := setupForkTestFixture(t)
 	defer fix.cleanup()
 
@@ -92,6 +93,7 @@ func TestSessionRetentionSweeper_DeletesArchivedSessionPastRetention(t *testing.
 }
 
 func TestSessionRetentionSweeper_SkipsRecentlyArchivedSession(t *testing.T) {
+	t.Parallel()
 	fix := setupForkTestFixture(t)
 	defer fix.cleanup()
 
@@ -105,6 +107,7 @@ func TestSessionRetentionSweeper_SkipsRecentlyArchivedSession(t *testing.T) {
 }
 
 func TestSessionRetentionSweeper_SkipsOpenPR(t *testing.T) {
+	t.Parallel()
 	fix := setupForkTestFixture(t)
 	defer fix.cleanup()
 
@@ -121,6 +124,7 @@ func TestSessionRetentionSweeper_SkipsOpenPR(t *testing.T) {
 }
 
 func TestSessionRetentionSweeper_SkipsDirtyWorktree(t *testing.T) {
+	t.Parallel()
 	fix := setupForkTestFixture(t)
 	defer fix.cleanup()
 
@@ -145,6 +149,7 @@ func TestSessionRetentionSweeper_SkipsDirtyWorktree(t *testing.T) {
 }
 
 func TestSessionRetentionSweeper_DeletesCleanWorktreeSession(t *testing.T) {
+	t.Parallel()
 	fix := setupForkTestFixture(t)
 	defer fix.cleanup()
 
@@ -172,6 +177,7 @@ func TestSessionRetentionSweeper_DeletesCleanWorktreeSession(t *testing.T) {
 // session can point at the exact directory a newer, still-active round's session is
 // using. The sweep must not delete that worktree out from under the sibling.
 func TestSessionRetentionSweeper_SkipsWorktreeSharedWithSiblingRound(t *testing.T) {
+	t.Parallel()
 	fix := setupForkTestFixture(t)
 	defer fix.cleanup()
 
@@ -246,6 +252,7 @@ func TestSessionRetentionSweeper_SkipsWorktreeSharedWithSiblingRound(t *testing.
 // sweep cycles it actually takes (see the comment on the assert.Eventually call below for
 // why a stronger single-pass guarantee isn't the right thing to assert here).
 func TestSessionRetentionSweeper_ConvergesWhenAllSiblingsBecomeEligible(t *testing.T) {
+	t.Parallel()
 	fix := setupForkTestFixture(t)
 	defer fix.cleanup()
 

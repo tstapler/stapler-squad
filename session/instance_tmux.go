@@ -11,9 +11,11 @@ import (
 	"strings"
 	"time"
 
+	ptyPkg "github.com/creack/pty"
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/streamhub"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
@@ -39,14 +41,15 @@ import (
 // beyond a repeating log line.
 const maxInlinePromptBytes = 4096
 
-// promptFileCleanupDelay is how long promptArg waits before removing a
-// temp-file-backed prompt (see promptArg). The file only needs to survive
-// long enough for the shell tmux spawns to evaluate the `$(cat ...)` command
-// substitution, which happens as part of exec'ing the claude command --
-// effectively immediately after `tmux new-session` returns successfully. The
-// delay is generous purely to tolerate a slow/loaded box; it is not a
-// correctness requirement, so tests may shrink it to avoid a real sleep.
-var promptFileCleanupDelay = 30 * time.Second
+// defaultPromptFileCleanupDelay is how long promptArg waits before removing a
+// temp-file-backed prompt (see promptArg), unless overridden per-instance via
+// promptFileCleanupDelayOverride. The file only needs to survive long enough
+// for the shell tmux spawns to evaluate the `$(cat ...)` command substitution,
+// which happens as part of exec'ing the claude command -- effectively
+// immediately after `tmux new-session` returns successfully. The delay is
+// generous purely to tolerate a slow/loaded box; it is not a correctness
+// requirement, so tests may shrink it (per-instance) to avoid a real sleep.
+const defaultPromptFileCleanupDelay = 30 * time.Second
 
 // programKind is a sealed sum type over the kinds of launchable programs.
 // Holding a claudeProgram is proof that isClaude() returned true — downstream
@@ -113,11 +116,27 @@ func AutoApproveSupported(program string) bool {
 // This mirrors the old embedded-struct behaviour where a zero-value TmuxProcessManager
 // was always valid for method calls (session == nil → IsAlive()/HasSession() return false).
 // Tests that create bare &Instance{} structs rely on this guarantee.
+//
+// pm() itself has no error return (its ~80 call sites across the package all
+// assume a non-nil ProcessManager, matching the zero-value-friendly guarantee
+// above), so an unrecognized i.Backend here — which should never happen in
+// practice; i.Backend is only ever set to a known constant — is logged
+// loudly via log.Error (not silently swallowed) and then recovered by
+// constructing the guaranteed-valid BackendTmux explicitly, preserving the
+// non-nil contract every caller of pm() depends on. Construction paths that
+// DO have an error return (NewInstance, fromInstanceData) propagate
+// NewProcessManager's error directly instead of going through this
+// fallback — see backend_factory.go's ErrUnrecognizedBackend.
 func (i *Instance) pm() ProcessManager {
 	i.pmMu.Lock()
 	defer i.pmMu.Unlock()
 	if i.processManager == nil {
-		i.processManager = NewProcessManager(context.Background(), BackendTmux, ProcessManagerOptions{})
+		mgr, err := NewProcessManager(context.Background(), BackendTmux, ProcessManagerOptions{Backend: i.Backend})
+		if err != nil {
+			log.Error("unrecognized process manager backend; falling back to BackendTmux", "session", i.Title, "backend", i.Backend, "err", err)
+			mgr, _ = NewProcessManager(context.Background(), BackendTmux, ProcessManagerOptions{})
+		}
+		i.processManager = mgr
 	}
 	return i.processManager
 }
@@ -313,19 +332,15 @@ func (i *Instance) promptArg() string {
 		return shellQuote(i.Prompt)
 	}
 	i.promptFilePath.Store(&path)
-	// Captured before spawning: promptFileCleanupDelay is a package var tests
-	// override for the duration of a single call (see
-	// withShortPromptFileCleanupDelay), restoring it via t.Cleanup once the
-	// test returns. Reading the var directly inside the goroutine below would
-	// race that restore — the goroutine can still be asleep, holding a read of
-	// the shared var pending, when t.Cleanup's write lands.
-	//
 	// This timer is a fallback safety net, not the primary cleanup path:
 	// Instance.Destroy() removes the file immediately via cleanupPromptFile.
 	// The timer still exists for cases Destroy never runs (process crash,
 	// or a session that's replaced by a later promptArg call before it is
 	// ever destroyed).
-	delay := promptFileCleanupDelay
+	delay := defaultPromptFileCleanupDelay
+	if i.promptFileCleanupDelayOverride > 0 {
+		delay = i.promptFileCleanupDelayOverride
+	}
 	go func() {
 		time.Sleep(delay)
 		if rmErr := os.Remove(path); rmErr != nil && !os.IsNotExist(rmErr) {
@@ -381,11 +396,18 @@ func (i *Instance) initTmuxSession() {
 		tmuxPrefix = "staplersquad_"
 	}
 
+	// runner threads i.ExecutionTarget through TmuxSession construction (ssh-remote-workspaces
+	// Phase 4, Task 4.2.1d) -- tmux.LocalRunner{} for LocalTarget (the default, identical to
+	// every construction site's pre-Phase-4 behavior) or the dialed *tmux.SSHRunner for a
+	// remote target, so this session's tmux subprocess calls run on the same host the
+	// CreateSession mode-specific block (server/services/session_service.go) already created
+	// the remote tmux session on.
+	runner := i.executionTarget().Runner()
 	var session *tmux.TmuxSession
 	if i.TmuxServerSocket != "" {
-		session = tmux.NewTmuxSessionWithServerSocket(i.Title, enrichedProgram, tmuxPrefix, i.TmuxServerSocket, tmux.WithRegistry(nil))
+		session = tmux.NewTmuxSessionWithServerSocket(i.Title, enrichedProgram, tmuxPrefix, i.TmuxServerSocket, tmux.WithRegistry(nil), tmux.WithCommandRunner(runner))
 	} else {
-		session = tmux.NewTmuxSessionWithPrefix(i.Title, enrichedProgram, tmuxPrefix)
+		session = tmux.NewTmuxSessionWithPrefix(i.Title, enrichedProgram, tmuxPrefix, tmux.WithCommandRunner(runner))
 	}
 	if i.UUID != "" {
 		session.SetExtraEnv([]string{"STAPLER_SESSION_UUID=" + i.UUID})
@@ -576,6 +598,92 @@ func (i *Instance) GetPTYReader() (*os.File, error) {
 	return i.pm().GetPTY()
 }
 
+// IsRemote reports whether this instance's tmux session runs on a remote
+// host (ssh-remote-workspaces Phase 4 Epic 4.2's ExecutionTarget), exposed
+// for server/services call sites (a different package, so the unexported
+// executionTarget() accessor isn't reachable there) that need to branch on
+// remoteness -- e.g. StreamTerminal's raw-PTY fallback (Task 4.4.1d). This
+// is the same single mechanism (IsRemote()) every in-package branch already
+// uses; server/services must never type-switch on ExecutionTarget/Instance
+// fields instead (architecture-review.md Blocker 1).
+func (i *Instance) IsRemote() bool {
+	return i.executionTarget().IsRemote()
+}
+
+// GetPTYSession returns a live, resizable terminal connection for this
+// instance's raw (non-control-mode) PTY-attach path --
+// server/services/session_service.go's StreamTerminal raw-PTY fallback
+// (ssh-remote-workspaces Phase 4, Task 4.4.1d). For a local instance this is
+// exactly GetPTYReader()'s *os.File (which already satisfies
+// tmux.PtySession: *os.File has Read/Write/Close, and localPTYSession below
+// adds Resize via pty.Setsize). For a remote instance (IsRemote()) it opens
+// a fresh SSH-backed PTY attached to the SAME remote tmux session via
+// tmux.SSHPtyFactory (RequestPty + "tmux ... attach-session ..."), so a
+// remote session's raw-PTY consumers see byte-identical behavior to a local
+// one, differing only in transport underneath -- matching Story 4.4.1's
+// acceptance criteria for streamViaControlMode, applied here to this
+// separate raw-PTY code path. cols/rows seed the PTY's initial size (no
+// terminal dimensions flow through StreamTerminal's handshake the way
+// streamViaControlMode's CurrentPaneRequest does, so callers pass their own
+// best-known size; tmux.defaultAttachCols/Rows-equivalent values are a
+// reasonable default when none is known yet).
+func (i *Instance) GetPTYSession(ctx context.Context, cols, rows int) (tmux.PtySession, error) {
+	if !i.executionTarget().IsRemote() {
+		ptyFile, err := i.GetPTYReader()
+		if err != nil {
+			return nil, err
+		}
+		return &localPTYSession{File: ptyFile}, nil
+	}
+
+	remote, ok := i.executionTarget().(RemoteExecutionTarget)
+	if !ok {
+		return nil, fmt.Errorf("session: IsRemote() true but ExecutionTarget is %T, not RemoteExecutionTarget", i.executionTarget())
+	}
+	sshRunner, ok := remote.Runner().(*tmux.SSHRunner)
+	if !ok {
+		return nil, fmt.Errorf("session: remote target's CommandRunner is %T, not *tmux.SSHRunner", remote.Runner())
+	}
+	tmuxSession := i.GetTmuxSession()
+	if tmuxSession == nil {
+		return nil, fmt.Errorf("session: no tmux session to attach to")
+	}
+
+	// Declared as the tmux.RemotePtyFactory interface (not the concrete
+	// *tmux.SSHPtyFactory NewSSHPtyFactory returns) so this call site is
+	// actually written against the interface, matching how PtyFactory
+	// itself is consumed elsewhere in this codebase (TmuxSession's
+	// ptyFactory field is PtyFactory-typed despite Pty{} being its only real
+	// implementation) -- see RemotePtyFactory's doc comment in
+	// session/tmux/pty.go for why the interface exists at all.
+	var factory tmux.RemotePtyFactory = tmux.NewSSHPtyFactory(sshRunner)
+
+	// WrapRemoteCommand applies the same $TMUX-unset/$TERM-forced treatment
+	// startRemoteControlMode applies to the remote "tmux -C attach-session"
+	// -- necessary here too since "tmux attach-session" (no -C) is even more
+	// sensitive to a stale/absent $TERM (it renders the pane directly,
+	// unlike control mode's structured text protocol).
+	runName, runArgs := tmux.WrapRemoteCommand(tmux.Binary(), tmuxSession.AttachArgs())
+	ws := &ptyPkg.Winsize{Rows: uint16(rows), Cols: uint16(cols)}
+	return factory.StartPty(ctx, ws, "", runName, runArgs...)
+}
+
+// localPTYSession adapts *os.File to tmux.PtySession for GetPTYSession's
+// local branch -- *os.File already has Read/Write/Close; Resize is the only
+// method it's missing, implemented via the same pty.Setsize the local
+// control-mode/raw-attach paths already use elsewhere in this codebase
+// (session/tmux/tmux.go's updateWindowSize).
+type localPTYSession struct {
+	*os.File
+}
+
+func (l *localPTYSession) Resize(cols, rows int) error {
+	return ptyPkg.Setsize(l.File, &ptyPkg.Winsize{
+		Rows: uint16(rows),
+		Cols: uint16(cols),
+	})
+}
+
 // WriteToPTY writes data to the PTY, sending input to the terminal session.
 // This is used for forwarding client input to the tmux session.
 func (i *Instance) WriteToPTY(data []byte) (int, error) {
@@ -721,9 +829,57 @@ func (i *Instance) GetTmuxSession() *tmux.TmuxSession {
 // These methods satisfy the services.SessionStreamer interface without exposing
 // the concrete *tmux.TmuxSession type to the server layer.
 
-// StartControlMode starts the control mode stream on the underlying tmux session.
+// StartControlMode starts the control mode stream on the underlying tmux
+// session.
+//
+// Story 3.1.2 (correctness gap fix): this is the actual point where
+// control-mode ownership is acquired, so every caller — today's two RPC
+// handler entry points (streamViaControlMode, streamViaHub) plus any future
+// direct caller — is protected, not just the ones that remember to call
+// streamhub.AcquireOwnershipLock themselves first. Before this fix, the
+// ownership lock was only acquired from server/services/connectrpc_websocket.go,
+// so a caller reaching StartControlMode by any other path bypassed mutual
+// exclusion entirely. StartControlMode does not assert a specific expected
+// StreamPath the way the RPC handlers' own ResolveExpecting calls do — it is
+// legitimately called unconditionally by both the legacy and hub-owned
+// paths (the underlying subprocess start is refcounted either way, see
+// streamViaHub's comment at its own StartControlMode call site) — but it
+// still runs inside AcquireOwnershipLock's real critical section
+// (AcquireAndResolve), so a concurrent HubRegistry.GetOrCreate for the same
+// session genuinely blocks on it rather than racing to resolve first.
 func (i *Instance) StartControlMode() error {
-	return i.pm().StartControlMode()
+	name := i.GetTmuxSessionName()
+	if name == "" {
+		// No tmux session identity yet (uninitialized instance, or a
+		// non-tmux backend such as NativeProcessManager on Windows) — there
+		// is no session name to key an ownership lock on, and every such
+		// instance sharing the same "" key would otherwise be serialized
+		// against each other for no reason. Fall back to the pre-3.1.2
+		// unconditional call.
+		return i.pm().StartControlMode()
+	}
+	return streamhub.AcquireOwnershipLock(name).AcquireAndResolve(effectiveStreamHubFlag(), func(streamhub.StreamPath) error {
+		return i.pm().StartControlMode()
+	})
+}
+
+// effectiveStreamHubFlag mirrors server/services' useStreamHub(): the same
+// STAPLER_SQUAD_USE_STREAM_HUB env var + config.ResolveGlobalStreamHubDefault
+// gate, duplicated here rather than imported (server/services must not be
+// imported by package session — the reverse of the one-way dependency this
+// project relies on) so this package's own ownership-lock choke point in
+// StartControlMode observes the identical effective flag value. Both call
+// sites route through config.ResolveGlobalStreamHubDefault, the single
+// source of truth for the gating decision itself, so they cannot diverge in
+// what "true" requires — only this thin env-var-read wrapper is repeated.
+func effectiveStreamHubFlag() bool {
+	requested := os.Getenv("STAPLER_SQUAD_USE_STREAM_HUB") == "true"
+	effective, err := config.ResolveGlobalStreamHubDefault(config.LoadConfig(), requested)
+	if err != nil {
+		log.Error("streamhub: refusing to enable global default", "error", err)
+		return false
+	}
+	return effective
 }
 
 // StopControlMode stops the control mode stream.

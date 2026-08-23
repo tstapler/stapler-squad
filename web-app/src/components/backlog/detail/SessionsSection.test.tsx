@@ -36,6 +36,7 @@ function makeItem(linkedSessions: LinkedSession[], overrides: Partial<BacklogIte
     notes: "",
     statusEvents: [],
     progressNotes: [],
+    activityNotes: [],
     totalEstimatedCostUsd: 0,
     ...overrides,
   };

@@ -37,6 +37,16 @@ type rateLimitTransport struct {
 }
 
 func (t *rateLimitTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	// Fail fast instead of dispatching: every native GitHub call (GetPR,
+	// GetIssue, GetCommit, etc.) previously fired unconditionally even when
+	// DefaultRateLimiter already knew — from a prior response, possibly made
+	// by an unrelated concurrent session sharing the same token — that the
+	// token was rate limited. A caller retrying (e.g. report_duplicate's
+	// GitHub verification, manually re-invoked by an agent) just re-drew an
+	// identical 403 every time instead of getting an actionable resume time.
+	if limited, until := DefaultRateLimiter.IsLimited(); limited {
+		return nil, fmt.Errorf("github: rate limited until %s, skipping request to avoid another guaranteed failure", until.Format(time.RFC3339))
+	}
 	resp, err := t.next.RoundTrip(req)
 	if resp != nil {
 		DefaultRateLimiter.Update(resp)

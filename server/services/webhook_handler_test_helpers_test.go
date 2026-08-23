@@ -73,9 +73,7 @@ func newWebhookTestInfra(t *testing.T) *webhookTestInfra {
 	// the shared test-mode config dir (mirrors backlog_service_encryption_test.go).
 	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
 
-	entRepo, err := session.NewEntRepository(session.WithDatabasePath(t.TempDir() + "/webhook_test.db"))
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = entRepo.Close() })
+	entRepo := session.NewTestEntRepository(t)
 
 	workflowRepo := session.NewEntWorkflowRepository(entRepo.GetEntClient())
 	fireEvents := session.NewEntTriggerFireEventRepository(entRepo.GetEntClient())
@@ -84,7 +82,7 @@ func newWebhookTestInfra(t *testing.T) *webhookTestInfra {
 	scheduler := workflows.NewScheduler(workflowRepo, sessionSvc, events.NewEventBus(10))
 
 	cfg := &config.Config{FeatureFlags: map[string]bool{"webhook_triggers": true}}
-	_, err = cfg.GetOrCreateEncryptionKey()
+	_, err := cfg.GetOrCreateEncryptionKey()
 	require.NoError(t, err)
 
 	return &webhookTestInfra{

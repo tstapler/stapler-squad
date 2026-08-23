@@ -37,12 +37,16 @@ type ClaudeRunner interface {
 var (
 	// ErrClaudeNotFound is returned when the claude binary is not in PATH.
 	ErrClaudeNotFound = errors.New("claude binary not found in PATH")
-	// ErrLLMError is returned when claude exits with code 1 (LLM-level error).
-	ErrLLMError = errors.New("claude LLM error (exit 1)")
-	// ErrUsageError is returned when claude exits with code 2 (bad usage / bad flags).
-	ErrUsageError = errors.New("claude usage error (exit 2)")
-	// ErrInterrupted is returned when claude exits with code 130 (SIGINT).
-	ErrInterrupted = errors.New("claude interrupted (exit 130)")
+	// ErrSubprocessStart is wrapped around the error returned when ClaudeRunner.Run
+	// itself fails to start the subprocess — os.Pipe() failing under fd exhaustion,
+	// or cmd.Start() failing under ENOMEM/ENOENT/EACCES — as opposed to the
+	// subprocess starting and later exiting non-zero. This happens before any
+	// StreamChunk is ever produced, so CallBlocking's raw return is always "" for
+	// this failure mode (there is nothing to capture). classifyHeadlessCallError
+	// (server/services/backlog_service_triage.go) matches this sentinel so the
+	// failure is bucketed as "subprocess_start_error" in logs instead of falling
+	// through to an undiagnosable "other".
+	ErrSubprocessStart = errors.New("headless subprocess failed to start")
 )
 
 // ProcessRunner implements ClaudeRunner using executor.StartProcess.

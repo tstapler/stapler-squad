@@ -12,6 +12,13 @@ jest.mock("@connectrpc/connect-web", () => ({
   createConnectTransport: jest.fn(() => ({ unary: jest.fn(), stream: jest.fn() })),
 }));
 
+jest.mock("@/lib/contexts/SessionServiceContext", () => ({
+  useSessionServiceContext: () => ({
+    draftPullRequest: jest.fn(),
+    createPullRequest: jest.fn(),
+  }),
+}));
+
 jest.mock("@/lib/hooks/useFocusTrap", () => ({
   useFocusTrap: () => {},
 }));

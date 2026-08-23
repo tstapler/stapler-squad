@@ -35,6 +35,7 @@ func newIsolatedDefaultsService(t *testing.T) *DefaultsService {
 // This excludes: the helper's own return statement, comment lines, and string
 // literals inside this function that happen to contain the text.
 func TestNewDefaultsServiceCalledOnlyViaHelper(t *testing.T) {
+	t.Parallel()
 	data, err := os.ReadFile("defaults_service_test.go")
 	require.NoError(t, err)
 

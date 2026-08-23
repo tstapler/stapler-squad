@@ -11,8 +11,7 @@ import (
 )
 
 func TestGetHookStatus_ReflectsGlobalSettings(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
+	home := withFakeHome(t)
 
 	svc := newCreateTestService(t, createTestStorage(t))
 
@@ -40,8 +39,7 @@ func TestGetHookStatus_ReflectsGlobalSettings(t *testing.T) {
 }
 
 func TestGetHookStatus_ReflectsAgyAndGemini(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
+	withFakeHome(t)
 
 	svc := newCreateTestService(t, createTestStorage(t))
 
@@ -56,8 +54,7 @@ func TestGetHookStatus_ReflectsAgyAndGemini(t *testing.T) {
 }
 
 func TestInstallHooks_MissingBinary_ReportsManualFallback(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
+	home := withFakeHome(t)
 	t.Setenv("PATH", filepath.Join(home, "empty-bin")) // ensure ssq-hooks is not discoverable
 
 	svc := newCreateTestService(t, createTestStorage(t))

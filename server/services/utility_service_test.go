@@ -41,6 +41,7 @@ func strPtr(s string) *string { return &s }
 // and no poller returns an empty log list rather than an error.
 // (The global app log file may or may not exist; both outcomes are valid.)
 func TestGetLogs_NoSessionID_NilPoller(t *testing.T) {
+	t.Parallel()
 	svc := setupUtilityService()
 
 	resp, err := svc.GetLogs(context.Background(), connect.NewRequest(&sessionv1.GetLogsRequest{}))
@@ -65,6 +66,7 @@ func TestGetLogs_NoSessionID_NilPoller(t *testing.T) {
 // return an unexpected error when the poller is nil and a UUID is passed.
 // The log file for that UUID won't exist, so the response is empty.
 func TestGetLogs_WithUUID_NilPoller(t *testing.T) {
+	t.Parallel()
 	svc := setupUtilityService()
 	// No poller wired — UUID is used as-is to look up the log file.
 
@@ -84,6 +86,7 @@ func TestGetLogs_WithUUID_NilPoller(t *testing.T) {
 // The session's log file does not exist on disk, so the response is empty —
 // but the call must succeed (no crash, no error from the resolution logic).
 func TestGetLogs_WithUUID_MatchingInstance(t *testing.T) {
+	t.Parallel()
 	svc, poller := setupUtilityServiceWithPollerFixture()
 
 	const testUUID = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
@@ -112,6 +115,7 @@ func TestGetLogs_WithUUID_MatchingInstance(t *testing.T) {
 // the poller matches the UUID, GetLogs falls back gracefully (uses the UUID
 // as-is for the log file path, returning empty logs rather than an error).
 func TestGetLogs_WithUUID_NoMatchingInstance(t *testing.T) {
+	t.Parallel()
 	svc, _ := setupUtilityServiceWithPollerFixture()
 	// Poller is wired but has no instances.
 
@@ -127,6 +131,7 @@ func TestGetLogs_WithUUID_NoMatchingInstance(t *testing.T) {
 // TestGetLogs_WithTitle_FindsLogByTitle verifies the baseline: passing a Title
 // (legacy behaviour) still works correctly after the UUID migration.
 func TestGetLogs_WithTitle_FindsLogByTitle(t *testing.T) {
+	t.Parallel()
 	svc, poller := setupUtilityServiceWithPollerFixture()
 
 	poller.SetInstances([]*session.Instance{

@@ -79,6 +79,7 @@ func (f *fakeInstanceStore) UpdateInstanceMetadata(currentTitle string, newTitle
 }
 
 func TestCheckPathNotAlreadyManaged_ReturnsErrPathAlreadyManaged_When_ExactPathCollides(t *testing.T) {
+	t.Parallel()
 	store := &fakeInstanceStore{
 		instances: []InstanceData{
 			{Title: "existing", Path: "/tmp/import-collision/repo"},
@@ -93,6 +94,7 @@ func TestCheckPathNotAlreadyManaged_ReturnsErrPathAlreadyManaged_When_ExactPathC
 }
 
 func TestCheckPathNotAlreadyManaged_ReturnsErrPathAlreadyManaged_When_CandidateIsSubdirOfExistingWorktree(t *testing.T) {
+	t.Parallel()
 	store := &fakeInstanceStore{
 		instances: []InstanceData{
 			{
@@ -110,6 +112,7 @@ func TestCheckPathNotAlreadyManaged_ReturnsErrPathAlreadyManaged_When_CandidateI
 }
 
 func TestCheckPathNotAlreadyManaged_ReturnsErrPathAlreadyManaged_When_ExistingWorktreeIsSubdirOfCandidate(t *testing.T) {
+	t.Parallel()
 	store := &fakeInstanceStore{
 		instances: []InstanceData{
 			{
@@ -127,6 +130,7 @@ func TestCheckPathNotAlreadyManaged_ReturnsErrPathAlreadyManaged_When_ExistingWo
 }
 
 func TestCheckPathNotAlreadyManaged_ReturnsNil_When_NoCollision(t *testing.T) {
+	t.Parallel()
 	store := &fakeInstanceStore{
 		instances: []InstanceData{
 			{Title: "existing", Path: "/tmp/import-collision/other-repo"},
@@ -141,6 +145,7 @@ func TestCheckPathNotAlreadyManaged_ReturnsNil_When_NoCollision(t *testing.T) {
 }
 
 func TestCheckPathNotAlreadyManaged_ReturnsNil_When_NoExistingInstances(t *testing.T) {
+	t.Parallel()
 	store := &fakeInstanceStore{instances: nil}
 
 	err := CheckPathNotAlreadyManaged("/tmp/import-collision/repo", store)
@@ -151,6 +156,7 @@ func TestCheckPathNotAlreadyManaged_ReturnsNil_When_NoExistingInstances(t *testi
 }
 
 func TestCheckPathNotAlreadyManaged_ReturnsError_When_RegistryNil(t *testing.T) {
+	t.Parallel()
 	err := CheckPathNotAlreadyManaged("/tmp/import-collision/repo", nil)
 
 	if err == nil {

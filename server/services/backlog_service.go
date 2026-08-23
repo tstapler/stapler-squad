@@ -15,6 +15,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	githubpkg "github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
@@ -280,6 +281,33 @@ func (s *BacklogService) ConfigMu() *sync.RWMutex {
 	return &s.cfgMu
 }
 
+// EnterpriseHosts returns the statically-configured GitHub Enterprise
+// hostnames (normalized, github.com excluded), for callers that need to
+// recognize GHE PR/issue URLs — e.g. server/mcp/tools_backlog.go's
+// reportPRCreated and importGitHubIssue, which otherwise fall back to
+// session.ParseGitHubURL's github.com-only matching and silently fail to
+// recognize any GHE host. Mirrors SessionService.enterpriseHosts, minus that
+// method's additional union with cached-account hosts (BacklogService has no
+// UserPRCache dependency) — extend this if/when that's needed here too.
+// Read under cfgMu's read lock for the same reason as
+// maxConcurrentBacklogWorkItems below.
+func (s *BacklogService) EnterpriseHosts() []string {
+	s.cfgMu.RLock()
+	defer s.cfgMu.RUnlock()
+	configuredHosts := s.cfg.GetGitHubEnterpriseHosts()
+	hosts := make([]string, 0, len(configuredHosts))
+	seen := make(map[string]bool, len(configuredHosts))
+	for _, h := range configuredHosts {
+		host := githubpkg.NormalizeHost(h.Host)
+		if host == "" || githubpkg.IsGitHubCom(host) || seen[host] {
+			continue
+		}
+		seen[host] = true
+		hosts = append(hosts, host)
+	}
+	return hosts
+}
+
 // maxConcurrentBacklogWorkItems reads cfg.MaxConcurrentBacklogWorkItemsOrDefault()
 // under cfgMu's read lock so a concurrent DefaultsService.UpdateGlobalDefaults
 // write (propagated via SetSharedBacklogConfig) is always observed by the next
@@ -371,7 +399,7 @@ func (s *BacklogService) claimantHostID() string {
 	}
 	id, err := s.cfg.GetOrCreateClaimantHostID()
 	if err != nil {
-		log.WarningLog.Printf("[claimantHostID] failed to resolve claimant host id: %v", err)
+		log.WarningLog().Printf("[claimantHostID] failed to resolve claimant host id: %v", err)
 		return ""
 	}
 	return id
@@ -569,7 +597,7 @@ func itemSessionToProto(is session.ItemSessionSummary, costFor func(tmuxUUID str
 	if is.TriageResult != "" {
 		var tr triageResultJSON
 		if jsonErr := json.Unmarshal([]byte(is.TriageResult), &tr); jsonErr != nil {
-			log.WarningLog.Printf("[itemSessionToProto] invalid triage_result JSON for session %s: %v", is.ID, jsonErr)
+			log.WarningLog().Printf("[itemSessionToProto] invalid triage_result JSON for session %s: %v", is.ID, jsonErr)
 		} else {
 			suggs := make([]*sessionv1.TriageSuggestion, len(tr.Suggestions))
 			for i, sg := range tr.Suggestions {
@@ -624,18 +652,20 @@ type triageResultJSON struct {
 // Used by ListBacklogItems to avoid over-hydrating description/plan fields.
 func backlogItemSummaryToProto(item *session.BacklogItemSummary, costFor func(tmuxUUID string) float64) *sessionv1.BacklogItem {
 	p := &sessionv1.BacklogItem{
-		Id:         item.ID,
-		Title:      item.Title,
-		Priority:   int32(item.Priority),
-		Status:     string(item.Status),
-		RepoPath:   item.RepoPath,
-		Notes:      item.Notes,
-		ExternalId: item.ExternalID,
-		Labels:     item.Labels,
-		PrUrl:      item.PrURL,
-		PrNumber:   int32(item.PrNumber),
-		CreatedAt:  timestamppb.New(item.CreatedAt),
-		UpdatedAt:  timestamppb.New(item.UpdatedAt),
+		Id:                 item.ID,
+		PublicId:           item.PublicIDRaw,
+		Title:              item.Title,
+		Priority:           int32(item.Priority),
+		Status:             string(item.Status),
+		RepoPath:           item.RepoPath,
+		Notes:              item.Notes,
+		ExternalId:         item.ExternalID,
+		Labels:             item.Labels,
+		PrUrl:              item.PrURL,
+		PrNumber:           int32(item.PrNumber),
+		CreatedAt:          timestamppb.New(item.CreatedAt),
+		UpdatedAt:          timestamppb.New(item.UpdatedAt),
+		AllowedTransitions: allowedTransitionStrings(item.Status),
 	}
 	if item.ExternalURL != "" {
 		p.ExternalUrl = &item.ExternalURL
@@ -717,6 +747,7 @@ func backlogItemToProto(item *session.BacklogItemData, costFor func(tmuxUUID str
 		CreatedAt:           timestamppb.New(item.CreatedAt),
 		UpdatedAt:           timestamppb.New(item.UpdatedAt),
 		AllowedTransitions:  allowedTransitionStrings(session.BacklogStatus(item.Status)),
+		PublicId:            item.PublicIDRaw,
 	}
 	if item.ExternalURL != "" {
 		p.ExternalUrl = &item.ExternalURL
@@ -796,6 +827,16 @@ func backlogItemToProto(item *session.BacklogItemData, costFor func(tmuxUUID str
 		p.ProgressNotes = protoNotes
 	}
 
+	// Populate activity notes (the ungated post_backlog_update log) when they
+	// were eagerly loaded.
+	if len(item.ActivityNotes) > 0 {
+		protoActivityNotes := make([]*sessionv1.BacklogActivityNote, len(item.ActivityNotes))
+		for i := range item.ActivityNotes {
+			protoActivityNotes[i] = activityNoteDataToProto(&item.ActivityNotes[i])
+		}
+		p.ActivityNotes = protoActivityNotes
+	}
+
 	return p
 }
 
@@ -834,10 +875,10 @@ func (s *BacklogService) commitAndPushItemWorktrees(ctx context.Context, session
 		g := git.NewGitWorktreeFromStorage(wt.RepoPath, wt.WorktreePath, wt.SessionName, wt.BranchName, wt.BaseCommitSHA)
 		commitMsg := fmt.Sprintf("[claudesquad] save work before done (session %s)", is.SessionUUID)
 		if commitErr := g.CommitChanges(commitMsg); commitErr != nil {
-			log.WarningLog.Printf("[commitAndPushItemWorktrees] commit failed path=%s: %v", wt.WorktreePath, commitErr)
+			log.WarningLog().Printf("[commitAndPushItemWorktrees] commit failed path=%s: %v", wt.WorktreePath, commitErr)
 		}
 		if pushErr := g.PushBranch(); pushErr != nil {
-			log.WarningLog.Printf("[commitAndPushItemWorktrees] push failed path=%s: %v", wt.WorktreePath, pushErr)
+			log.WarningLog().Printf("[commitAndPushItemWorktrees] push failed path=%s: %v", wt.WorktreePath, pushErr)
 		}
 	}
 }
@@ -877,7 +918,7 @@ func (s *BacklogService) cleanupItemWorktreesExcept(ctx context.Context, session
 		}
 		g := git.NewGitWorktreeFromStorage(wt.RepoPath, wt.WorktreePath, wt.SessionName, wt.BranchName, wt.BaseCommitSHA)
 		if cleanErr := g.Cleanup(); cleanErr != nil {
-			log.WarningLog.Printf("[cleanupItemWorktrees] failed to cleanup worktree path=%s: %v", wt.WorktreePath, cleanErr)
+			log.WarningLog().Printf("[cleanupItemWorktrees] failed to cleanup worktree path=%s: %v", wt.WorktreePath, cleanErr)
 			continue
 		}
 		// The worktree directory is gone — stop the unfinished-changes scanner
@@ -917,10 +958,10 @@ func (s *BacklogService) archiveItemWorkSessions(ctx context.Context, sessions [
 			continue
 		}
 		if err := s.sessionStopper.ArchiveSessionByUUID(ctx, is.SessionUUID); err != nil {
-			log.WarningLog.Printf("[archiveItemWorkSessions] failed to archive session=%s: %v", is.SessionUUID, err)
+			log.WarningLog().Printf("[archiveItemWorkSessions] failed to archive session=%s: %v", is.SessionUUID, err)
 		}
 		if err := s.sessionStopper.KillTmuxPaneOnly(ctx, is.SessionUUID); err != nil {
-			log.WarningLog.Printf("[archiveItemWorkSessions] failed to kill tmux pane session=%s: %v", is.SessionUUID, err)
+			log.WarningLog().Printf("[archiveItemWorkSessions] failed to kill tmux pane session=%s: %v", is.SessionUUID, err)
 		}
 	}
 }

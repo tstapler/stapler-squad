@@ -103,12 +103,12 @@ func runWorkflowEnabledFieldBackfill(ctx context.Context, er *EntRepository) {
 		if _, saveErr := er.client.Workflow.UpdateOneID(wf.ID).
 			SetEnabled(false).
 			Save(ctx); saveErr != nil {
-			log.WarningLog.Printf("[Migration] workflow enabled backfill: workflow=%s: %v", wf.ID, saveErr)
+			log.WarningLog().Printf("[Migration] workflow enabled backfill: workflow=%s: %v", wf.ID, saveErr)
 			continue
 		}
 		migrated++
 	}
 	if migrated > 0 {
-		log.InfoLog.Printf("[Migration] workflow enabled backfill: corrected %d row(s)", migrated)
+		log.InfoLog().Printf("[Migration] workflow enabled backfill: corrected %d row(s)", migrated)
 	}
 }

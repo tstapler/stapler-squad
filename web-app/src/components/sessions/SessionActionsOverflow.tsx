@@ -7,9 +7,11 @@ import { MoreHorizontal } from "lucide-react";
 import type { Session, CheckpointProto } from "@/gen/session/v1/types_pb";
 import { SessionStatus } from "@/gen/session/v1/types_pb";
 import { TagEditor } from "./TagEditor";
+import { CreatePullRequestModal } from "./CreatePullRequestModal";
 import { useFocusTrap } from "@/lib/hooks/useFocusTrap";
 import { useAvailablePrograms } from "@/lib/hooks/useAvailablePrograms";
 import { isAutoApproveSupported } from "@/lib/sessions/autoApprove";
+import { useSessionServiceContext } from "@/lib/contexts/SessionServiceContext";
 import {
   desktopActions,
   overflowContainer,
@@ -53,7 +55,6 @@ export interface SessionActionsOverflowProps {
   onOpenInNewPane?: () => void;
   onNewWorkspace?: () => void;
   onCreateCheckpoint?: (sessionId: string, label: string) => Promise<boolean>;
-  onRunOneShot?: (sessionId: string) => Promise<void>;
   onSetRateLimitEnabled?: (sessionId: string, enabled: boolean) => void;
   onToggleAutonomousMode?: (sessionId: string, enabled: boolean) => void;
   onToggleAutoApprove?: (sessionId: string, enabled: boolean) => void;
@@ -86,7 +87,6 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
   onOpenInNewPane,
   onNewWorkspace,
   onCreateCheckpoint,
-  onRunOneShot,
   onSetRateLimitEnabled,
   onToggleAutonomousMode,
   onToggleAutoApprove,
@@ -117,8 +117,7 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
   const [isCreatingCheckpoint, setIsCreatingCheckpoint] = useState(false);
   const [checkpointError, setCheckpointError] = useState("");
   const [isTagEditorOpen, setIsTagEditorOpen] = useState(false);
-  const [isRunningOneShot, setIsRunningOneShot] = useState(false);
-  const [oneShotResult, setOneShotResult] = useState<string | null>(null);
+  const [isCreatePrOpen, setIsCreatePrOpen] = useState(false);
   const [isAutonomousConfirmOpen, setIsAutonomousConfirmOpen] = useState(false);
   // Auto-approve toggle restart notice. SetAutoApprove (session/instance_actor_setters.go)
   // restarts an Active session unconditionally in EITHER direction (the flag is baked into
@@ -136,6 +135,7 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
   const [isProgramRestartConfirmOpen, setIsProgramRestartConfirmOpen] = useState(false);
   const [pendingProgramValue, setPendingProgramValue] = useState("");
   const availablePrograms = useAvailablePrograms();
+  const { draftPullRequest, createPullRequest } = useSessionServiceContext();
 
   // Keep the picker's selected value in sync with the session while the dialog is
   // open — otherwise a concurrent server-side change (e.g. the capacity-monitor
@@ -157,6 +157,7 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
   const clearConversationDialogRef = useRef<HTMLDivElement>(null);
   const programPickerDialogRef = useRef<HTMLDivElement>(null);
   const programConfirmDialogRef = useRef<HTMLDivElement>(null);
+  const createPrTriggerRef = useRef<HTMLButtonElement>(null);
 
   // All dialogs/menus spawned from this component return focus to overflowButtonRef
   // ("···") rather than the menu-item button that opened them — menu items unmount
@@ -216,21 +217,6 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
 
   const close = () => setShowOverflow(false);
 
-  const handleRunOneShot = async (e: React.MouseEvent) => {
-    e.stopPropagation();
-    if (!onRunOneShot) return;
-    setIsRunningOneShot(true);
-    setOneShotResult(null);
-    try {
-      await onRunOneShot(session.id);
-      setOneShotResult("done");
-    } catch {
-      setOneShotResult("error");
-    } finally {
-      setIsRunningOneShot(false);
-    }
-  };
-
   const handleRestartConfirm = async (e: React.MouseEvent) => {
     e.stopPropagation();
     setIsRestarting(true);
@@ -285,7 +271,9 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
     (isRunning && onHibernate) ||
     (isHibernated && onResumeFromHibernation)
   );
-  const hasGroup2 = !!(onRunOneShot || onCreateCheckpoint);
+  // Create/View PR item is now always rendered (no longer gated on a
+  // caller-supplied callback prop — see Task 2.3.1a).
+  const hasGroup2 = true;
   const hasGroup3 = !!(onRenameRequest || onChangeProgram || onClone || onOpenInNewPane || onUpdateTags || onNewWorkspace || onWorkspaceSwitchRequest);
   const hasGroup4 = !!(onSetRateLimitEnabled || onToggleAutonomousMode || onToggleAutoApprove);
   const hasGroup5 = !!(onClearConversationState || (onRestart && !isCreating) || onDelete);
@@ -577,6 +565,15 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
         document.body
       )}
 
+      <CreatePullRequestModal
+        session={session}
+        isOpen={isCreatePrOpen}
+        onClose={() => setIsCreatePrOpen(false)}
+        draftPullRequest={draftPullRequest}
+        createPullRequest={createPullRequest}
+        triggerRef={createPrTriggerRef}
+      />
+
       <div className={desktopActions}>
         {showPrimaryAction && (isPaused || isReady) && (
           <button
@@ -671,14 +668,31 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
 
               {/* Group 2: Workflow */}
               {hasGroup1 && hasGroup2 && menuSeparator}
-              {onRunOneShot && (
-                <button role="menuitem" className={overflowMenuItem}
-                  onClick={(e) => { close(); handleRunOneShot(e); }}
-                  disabled={isRunningOneShot}
-                  aria-label={`Create PR for session ${session.title}`}
+              {session.githubPrUrl ? (
+                <a
+                  href={session.githubPrUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  role="menuitem"
+                  className={overflowMenuItem}
+                  aria-label={`PR #${session.githubPrNumber}: ${session.title}`}
+                  data-testid="github-pr-link"
+                  onClick={(e) => { e.stopPropagation(); close(); }}
                 >
-                  <span aria-hidden="true">🚀</span>{" "}
-                  {isRunningOneShot ? "Creating PR…" : oneShotResult === "done" ? "✅ PR Created" : oneShotResult === "error" ? "❌ Retry?" : "Create PR"}
+                  <span aria-hidden="true">✅</span> View PR #{session.githubPrNumber}
+                </a>
+              ) : (
+                <button
+                  ref={createPrTriggerRef}
+                  role="menuitem"
+                  className={overflowMenuItem}
+                  disabled={!session.hasCommitsAhead}
+                  title={session.hasCommitsAhead ? undefined : "No commits ahead of main yet"}
+                  onClick={(e) => { e.stopPropagation(); close(); setIsCreatePrOpen(true); }}
+                  aria-label={`Create PR for session ${session.title}`}
+                  data-testid={`create-pr-trigger-${session.id}`}
+                >
+                  <span aria-hidden="true">🔀</span> Create PR
                 </button>
               )}
               {onCreateCheckpoint && (
