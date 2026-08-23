@@ -356,8 +356,12 @@ describe("useSessionService native-transport reconnect parity (Task 1.3.1d)", ()
     await waitFor(() => expect(result.current.connectionState).toBe("disconnected"));
 
     // Give an (incorrect) reconnect attempt time to fire — attempt-0 backoff
-    // is up to 1000ms (BackoffState(1000, 30_000)); wait comfortably past it.
-    await new Promise((resolve) => setTimeout(resolve, 1200));
+    // is up to 1000ms (BackoffState(1000, 30_000)); advance comfortably past
+    // it with fake timers instead of a real wall-clock wait, matching the
+    // pattern above (handleVisibilityOrOnline_should_debounce...).
+    jest.useFakeTimers({ legacyFakeTimers: true });
+    act(() => { jest.advanceTimersByTime(1200); });
+    jest.useRealTimers();
 
     expect(mockWatchSessions).toHaveBeenCalledTimes(1);
   });
