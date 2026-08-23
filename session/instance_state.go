@@ -28,6 +28,14 @@ func (i *Instance) setStatus(status Status) {
 	i.loadStatus(status)
 }
 
+// touchUpdatedAt bumps UpdatedAt so an operational status change isn't mistaken
+// for a no-op by the frontend's upsertSession reducer (sessionsSlice.ts), which
+// skips an incoming Session whose UpdatedAt matches the cached copy. Must be
+// called with i.mu held.
+func (i *Instance) touchUpdatedAt() {
+	i.UpdatedAt = time.Now()
+}
+
 // transitionTo validates and executes a state transition using the TransitionDef table.
 // Must be called with i.mu held.
 func (i *Instance) transitionTo(ctx context.Context, to Status) error {
@@ -41,10 +49,7 @@ func (i *Instance) transitionTo(ctx context.Context, to Status) error {
 		}
 	}
 	i.Status = to
-	// See transitionToLocked's matching comment: without bumping UpdatedAt here,
-	// the frontend's upsertSession no-op-skip guard can silently drop a real
-	// status-only change.
-	i.UpdatedAt = time.Now()
+	i.touchUpdatedAt()
 	// Store before calling After: After hooks may spawn goroutines that race with
 	// a post-After snapshot read of the same fields.
 	// Caller already holds i.mu (see doc comment above), so buildSnapshot's
@@ -94,12 +99,7 @@ func transitionToLocked(s *instanceState, ctx context.Context, to Status) error 
 	i.mu.Lock()
 	from := i.Status
 	i.Status = to
-	// Without this, a status-only transition (e.g. Active->Stopped on a natural
-	// exit) leaves UpdatedAt unchanged, and the frontend's upsertSession reducer
-	// (web-app/src/lib/store/sessionsSlice.ts) treats an incoming Session with an
-	// identical UpdatedAt as a no-op duplicate and silently drops it -- so the
-	// WatchSessions client never sees the new status at all.
-	i.UpdatedAt = time.Now()
+	i.touchUpdatedAt()
 	snap := buildSnapshot(i)
 	i.mu.Unlock()
 	i.snapshot.Store(snap)
@@ -335,6 +335,7 @@ func (i *Instance) RecoverFromStopped() {
 	defer i.mu.Unlock()
 	if i.Status == Stopped {
 		i.loadStatus(Creating)
+		i.touchUpdatedAt()
 		i.started.Store(false)
 		i.snapshot.Store(buildSnapshot(i))
 	}
@@ -367,6 +368,7 @@ func (i *Instance) ForceStatus(s Status) {
 	_ = i.sendCtx(context.Background(), func(_ *instanceState) {
 		i.mu.Lock()
 		i.loadStatus(s)
+		i.touchUpdatedAt()
 		snap := buildSnapshot(i)
 		i.mu.Unlock()
 		i.snapshot.Store(snap)
