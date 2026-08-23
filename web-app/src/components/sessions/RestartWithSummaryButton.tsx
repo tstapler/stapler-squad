@@ -27,7 +27,7 @@ type ButtonPhase = "idle" | "generating" | "ready" | "error";
  */
 const STAGE_MESSAGES: Record<string, string> = {
   transcript: "Couldn't read this session's conversation history.",
-  generation: "Something went wrong while generating the summary.",
+  generation: "Failed while generating the handoff summary.",
   persist: "Generated the summary but couldn't save it.",
   stale: "Generation didn't complete (the server may have restarted).",
 };
@@ -35,6 +35,21 @@ const STAGE_MESSAGES: Record<string, string> = {
 function friendlyStageMessage(stage: string | undefined): string {
   if (!stage) return "Something went wrong while generating this summary.";
   return STAGE_MESSAGES[stage] ?? "Something went wrong while generating this summary.";
+}
+
+/**
+ * Plain-language reason for a failed `createSession` restart call, per
+ * design/ux.md's "restart-session-creation failure" flow -- a gap the plan
+ * left undesigned. `CodeNotFound` means `restart_from_session_id` pointed at
+ * a source session that no longer exists (e.g. archived/deleted between
+ * generating the summary and clicking restart); anything else collapses to
+ * a generic retry prompt rather than surfacing a raw transport/RPC message.
+ */
+function restartFailureReason(err: unknown): string {
+  if (err instanceof ConnectError && err.code === Code.NotFound) {
+    return "The original session no longer exists.";
+  }
+  return "Something went wrong — try again.";
 }
 
 /**
@@ -106,10 +121,9 @@ export function RestartWithSummaryButton({ sessionId }: RestartWithSummaryButton
         router.push(routes.sessionDetail(session.id));
       }
     } catch (err) {
-      const message =
-        err instanceof Error ? err.message : "Failed to start a new session from this summary";
-      setRestartErrorMessage(message);
-      setLiveMessage(`Couldn't start the new session: ${message}`);
+      const reason = restartFailureReason(err);
+      setRestartErrorMessage(`Couldn't start the new session. ${reason}`);
+      setLiveMessage(`Couldn't start the new session: ${reason}`);
     } finally {
       setRestarting(false);
     }

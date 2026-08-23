@@ -40,9 +40,20 @@ jest.mock("@connectrpc/connect", () => {
   }
   return {
     ConnectError: MockConnectError,
-    Code: { FailedPrecondition: 9 },
+    Code: { FailedPrecondition: 9, NotFound: 5 },
   };
 });
+
+// The feature defaults to enabled server-side, so every existing test in
+// this file (written before the disabled-state fix) expects enabled
+// behavior by default -- individual disabled-state tests below override
+// these per-test.
+const mockUseFeatureFlags = jest.fn();
+const mockUseFeatureFlag = jest.fn();
+jest.mock("@/lib/contexts/FeatureFlagsContext", () => ({
+  useFeatureFlags: () => mockUseFeatureFlags(),
+  useFeatureFlag: (name: string) => mockUseFeatureFlag(name),
+}));
 
 function makeSummary(overrides: Partial<HandoffSummaryProto> = {}): HandoffSummaryProto {
   return {
@@ -83,6 +94,14 @@ afterAll(() => {
 describe("HandoffSummarySection", () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    mockUseFeatureFlags.mockReturnValue({
+      flags: { "handoff-summary": true },
+      flagList: [],
+      isLoading: false,
+      error: null,
+      setFlag: jest.fn(),
+    });
+    mockUseFeatureFlag.mockReturnValue(true);
   });
 
   it("HandoffSummarySection_should_RenderExplicitEmptyState_When_NoRowExists", () => {
@@ -170,5 +189,116 @@ describe("HandoffSummarySection", () => {
 
     fireEvent.click(retryButton);
     await waitFor(() => expect(mockTrigger).toHaveBeenCalledTimes(1));
+  });
+
+  it("HandoffSummarySection_should_RenderReadyRowDetails_When_StatusReady", () => {
+    mockHookReturn({
+      data: makeSummary({
+        status: HandoffSummaryStatus.READY,
+        middleMessagesSummarized: 12,
+        activeTask: "Fix the flaky TestFoo assertion and re-run make test",
+        summaryText: "REFERENCE-ONLY handoff text for the new session.",
+      }),
+    });
+
+    render(<HandoffSummarySection sessionId="session-1" />);
+
+    expect(screen.getByText("12 turns summarized")).toBeInTheDocument();
+    expect(screen.getByText(/^ready \d/)).toBeInTheDocument();
+    expect(
+      screen.getByText("Active task: Fix the flaky TestFoo assertion and re-run make test"),
+    ).toBeInTheDocument();
+
+    const summaryToggle = screen.getByText("Preview full handoff text");
+    const details = summaryToggle.closest("details");
+    expect(details).not.toBeNull();
+    expect(details).not.toHaveAttribute("open");
+    expect(details).toHaveTextContent("REFERENCE-ONLY handoff text for the new session.");
+  });
+
+  it("HandoffSummarySection_should_ShowStartedRelativeTime_When_StatusGenerating", () => {
+    mockHookReturn({
+      data: makeSummary({
+        status: HandoffSummaryStatus.GENERATING,
+        generatedAt: undefined,
+        generationStartedAt: { seconds: BigInt(Math.floor(Date.now() / 1000) - 4), nanos: 0 } as HandoffSummaryProto["generationStartedAt"],
+      }),
+    });
+
+    render(<HandoffSummarySection sessionId="session-1" />);
+
+    expect(screen.getByText(/^started \d+s ago$/)).toBeInTheDocument();
+  });
+
+  it("HandoffSummarySection_should_ShowDisabledText_When_FeatureDisabledAndNoRowExists", () => {
+    mockUseFeatureFlags.mockReturnValue({
+      flags: { "handoff-summary": false },
+      flagList: [],
+      isLoading: false,
+      error: null,
+      setFlag: jest.fn(),
+    });
+    mockUseFeatureFlag.mockReturnValue(false);
+    mockHookReturn({ data: null });
+
+    render(<HandoffSummarySection sessionId="session-1" />);
+
+    expect(
+      screen.getByText("Restart-with-summary is disabled for this workspace."),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText("No handoff summary generated for this session."),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByTestId("restart-with-summary-button")).not.toBeInTheDocument();
+  });
+
+  it("HandoffSummarySection_should_SuppressButtonOnly_When_FeatureDisabledAndRowExists", () => {
+    mockUseFeatureFlags.mockReturnValue({
+      flags: { "handoff-summary": false },
+      flagList: [],
+      isLoading: false,
+      error: null,
+      setFlag: jest.fn(),
+    });
+    mockUseFeatureFlag.mockReturnValue(false);
+    mockHookReturn({
+      data: makeSummary({
+        status: HandoffSummaryStatus.READY,
+        middleMessagesSummarized: 3,
+      }),
+    });
+
+    render(<HandoffSummarySection sessionId="session-1" />);
+
+    // The row's read-only info still renders...
+    expect(screen.getByText("Ready")).toBeInTheDocument();
+    expect(screen.getByText("3 turns summarized")).toBeInTheDocument();
+    // ...but the action button is suppressed.
+    expect(screen.queryByTestId("restart-with-summary-button")).not.toBeInTheDocument();
+  });
+
+  it("HandoffSummarySection_should_BehaveAsEnabled_When_FeatureFlagsStillLoading", () => {
+    // The feature defaults to enabled server-side, but useFeatureFlag
+    // defaults to `false` while still loading -- naively branching on that
+    // would flash a false "disabled" message on every page load.
+    mockUseFeatureFlags.mockReturnValue({
+      flags: {},
+      flagList: [],
+      isLoading: true,
+      error: null,
+      setFlag: jest.fn(),
+    });
+    mockUseFeatureFlag.mockReturnValue(false);
+    mockHookReturn({ data: null });
+
+    render(<HandoffSummarySection sessionId="session-1" />);
+
+    expect(
+      screen.getByText("No handoff summary generated for this session."),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText("Restart-with-summary is disabled for this workspace."),
+    ).not.toBeInTheDocument();
+    expect(screen.getByTestId("restart-with-summary-button")).toBeInTheDocument();
   });
 });

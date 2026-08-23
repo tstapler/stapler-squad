@@ -42,6 +42,10 @@ message HandoffSummaryProto {
   string error_stage   = 8;
 
   google.protobuf.Timestamp generated_at = 9;
+  // generation_started_at is set when the row enters GENERATING and is used
+  // to render "started Ns ago" for an in-flight row -- unset for a row that
+  // has never started generating.
+  google.protobuf.Timestamp generation_started_at = 10;
 }
 
 message GetHandoffSummaryRequest {

@@ -44,7 +44,7 @@ jest.mock("@connectrpc/connect", () => {
   }
   return {
     ConnectError: MockConnectError,
-    Code: { FailedPrecondition: 9 },
+    Code: { FailedPrecondition: 9, NotFound: 5 },
   };
 });
 
@@ -177,9 +177,12 @@ describe("RestartWithSummaryButton", () => {
     const button = screen.getByTestId("restart-with-summary-button");
     fireEvent.click(button);
 
+    // design/ux.md's restart-session-creation-failure flow: the raw
+    // transport message is never shown -- an unrecognized/generic failure
+    // maps to the plain-language fallback reason, verbatim.
     await waitFor(() =>
       expect(screen.getByTestId("restart-with-summary-restart-error")).toHaveTextContent(
-        "network error",
+        "Couldn't start the new session. Something went wrong — try again.",
       ),
     );
     expect(mockCreateSession).toHaveBeenCalledTimes(1);
@@ -188,6 +191,31 @@ describe("RestartWithSummaryButton", () => {
 
     fireEvent.click(button);
     await waitFor(() => expect(mockCreateSession).toHaveBeenCalledTimes(2));
+  });
+
+  it("RestartWithSummaryButton_should_ShowSourceGoneMessage_When_RestartFailsWithNotFound", async () => {
+    // design/ux.md's restart-session-creation-failure flow's CodeNotFound
+    // branch: the source session was archived/deleted between generating
+    // the summary and clicking restart.
+    const { ConnectError, Code } = jest.requireMock("@connectrpc/connect") as {
+      ConnectError: new (message: string, code: number) => Error;
+      Code: { NotFound: number };
+    };
+    const summary = makeSummary({ summaryText: "Session recap text" });
+    mockHookReturn({ data: summary });
+    mockCreateSession.mockRejectedValue(
+      new ConnectError("session not found", Code.NotFound),
+    );
+
+    render(<RestartWithSummaryButton sessionId="source-session-1" />);
+
+    fireEvent.click(screen.getByTestId("restart-with-summary-button"));
+
+    await waitFor(() =>
+      expect(screen.getByTestId("restart-with-summary-restart-error")).toHaveTextContent(
+        "Couldn't start the new session. The original session no longer exists.",
+      ),
+    );
   });
 
   it("RestartWithSummaryButton_should_RenderNothing_When_FeatureDisabled", async () => {
@@ -252,5 +280,39 @@ describe("RestartWithSummaryButton", () => {
     const details = screen.getByText("Details").closest("details");
     expect(details).not.toBeNull();
     expect(details).toHaveTextContent("conversation file not found for session ID: sess-1");
+  });
+
+  // design/ux.md's error table requires this exact string for stage
+  // "generation" -- distinct from the "transcript" stage's message.
+  it("RestartWithSummaryButton_should_ShowPlainLanguageMessage_When_ErrorStageIsGeneration", () => {
+    const summary = makeSummary({
+      status: HandoffSummaryStatus.ERROR,
+      errorStage: "generation",
+      errorMessage: "pool call failed: context deadline exceeded",
+    });
+    mockHookReturn({ data: summary });
+
+    render(<RestartWithSummaryButton sessionId="session-1" />);
+
+    expect(screen.getByTestId("restart-with-summary-error-message")).toHaveTextContent(
+      "Failed while generating the handoff summary.",
+    );
+  });
+
+  // design/ux.md's error table's explicit fallback row: an unrecognized or
+  // future stage string must never surface as the primary text.
+  it("RestartWithSummaryButton_should_ShowGenericFallbackMessage_When_ErrorStageIsUnrecognized", () => {
+    const summary = makeSummary({
+      status: HandoffSummaryStatus.ERROR,
+      errorStage: "some-future-stage",
+      errorMessage: "raw internal detail",
+    });
+    mockHookReturn({ data: summary });
+
+    render(<RestartWithSummaryButton sessionId="session-1" />);
+
+    expect(screen.getByTestId("restart-with-summary-error-message")).toHaveTextContent(
+      "Something went wrong while generating this summary.",
+    );
   });
 });

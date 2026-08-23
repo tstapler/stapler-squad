@@ -148,6 +148,9 @@ func toHandoffSummaryProto(row *ent.HandoffSummary) *sessionv1.HandoffSummaryPro
 	if row.GeneratedAt != nil {
 		p.GeneratedAt = timestamppb.New(*row.GeneratedAt)
 	}
+	if row.GenerationStartedAt != nil {
+		p.GenerationStartedAt = timestamppb.New(*row.GenerationStartedAt)
+	}
 	return p
 }
 

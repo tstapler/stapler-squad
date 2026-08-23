@@ -64,3 +64,33 @@ export const statusError = style({
 export const statusGenerating = style({
   color: vars.color.warning,
 });
+
+export const pill = style({
+  display: "inline-flex",
+  alignItems: "center",
+  padding: `1px ${vars.space["1"]}`,
+  background: vars.color.accentBg,
+  color: vars.color.textSecondary,
+  borderRadius: vars.radii.sm,
+  fontSize: vars.fontSize.xs,
+});
+
+export const activeTask = style({
+  fontSize: vars.fontSize.sm,
+  color: vars.color.textSecondary,
+  margin: 0,
+});
+
+export const previewDetails = style({
+  fontSize: vars.fontSize.sm,
+  color: vars.color.textSecondary,
+});
+
+export const previewText = style({
+  marginTop: vars.space["1"],
+  fontFamily: "monospace",
+  fontSize: vars.fontSize.xs,
+  color: vars.color.textSecondary,
+  whiteSpace: "pre-wrap",
+  wordBreak: "break-word",
+});
