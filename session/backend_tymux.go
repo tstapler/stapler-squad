@@ -3,6 +3,7 @@ package session
 import (
 	"context"
 	"os"
+	"time"
 
 	"github.com/tstapler/stapler-squad/session/tymux"
 )
@@ -113,6 +114,27 @@ func (b *TymuxBackend) DetachSafely() error            { return b.mgr.DetachSafe
 
 func (b *TymuxBackend) SetOnExitCallback(fn func(string)) { b.mgr.SetOnExitCallback(fn) }
 func (b *TymuxBackend) ResetExitOnce()                    { b.mgr.ResetExitOnce() }
+
+// --- Reconnect / restart observability (Task 2.5.2e, Story 2.5.3) ---
+//
+// These two are deliberate additions beyond ProcessManager's mirrored method
+// set (requirements.md's constraint keeps ProcessManager itself untouched),
+// forwarded here so a real caller holding a *TymuxBackend (or the
+// tymux.TymuxManager it wraps) can observe reconnect/restart state, not just
+// a test asserting on the unexported tymuxGRPCSession concrete type.
+
+// ReconnectState reports whether the standing Attach stream is currently
+// reconnecting, which attempt it's on, and what triggered it.
+func (b *TymuxBackend) ReconnectState() (reconnecting bool, attempt int, cause string) {
+	return b.mgr.ReconnectState()
+}
+
+// BackendRestarted reports whether tymuxd was detected to have restarted out
+// from under this session (Story 2.5.3's daemon-restart contract) — the
+// pane's original process is orphaned, not reattached.
+func (b *TymuxBackend) BackendRestarted() (restarted bool, since time.Time) {
+	return b.mgr.BackendRestarted()
+}
 
 // compile-time check that *TymuxBackend satisfies ProcessManager.
 var _ ProcessManager = (*TymuxBackend)(nil)

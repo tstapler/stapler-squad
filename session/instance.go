@@ -865,7 +865,11 @@ func NewInstance(opts InstanceOptions) (*Instance, error) {
 
 	// Initialize the process manager via the factory so selectedBackend is honored.
 	// The session itself is wired later by initTmuxSession() at Start() time.
-	instance.processManager = NewProcessManager(context.Background(), BackendTmux, ProcessManagerOptions{Backend: instance.Backend})
+	pm, err := NewProcessManager(context.Background(), BackendTmux, ProcessManagerOptions{Backend: instance.Backend})
+	if err != nil {
+		return nil, fmt.Errorf("session: construct process manager for instance %q: %w", instance.Title, err)
+	}
+	instance.processManager = pm
 
 	// Initialize shell registry maps.
 	instance.initShellRegistry()

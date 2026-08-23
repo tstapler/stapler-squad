@@ -1,4 +1,4 @@
-// Package tymux contains the BackendTymux implementation of session.ProcessManager
+// Package tymux contains the TymuxBackend implementation of session.ProcessManager
 // (session/backend_tymux.go), which delegates to a tymuxd instance over gRPC via the
 // generated Connect-Go client in github.com/tstapler/tymux/clients/go.
 package tymux
@@ -6,11 +6,12 @@ package tymux
 import (
 	"context"
 	"os"
+	"time"
 )
 
 // TymuxManager is the interface satisfied by the concrete tymux gRPC session
 // implementation (tymuxGRPCSession, session.go). It mirrors session.ProcessManager's
-// exact method set so BackendTymux (session/backend_tymux.go) can forward every call
+// exact method set so TymuxBackend (session/backend_tymux.go) can forward every call
 // one-to-one, the same shape TmuxBackend/TmuxManager use for the tmux backend
 // (session/tmux_backend.go, session/tmux_process_manager.go).
 //
@@ -86,4 +87,13 @@ type TymuxManager interface {
 	// method set (requirements.md's constraint keeps ProcessManager
 	// itself untouched); state exposure only, no UI here.
 	ReconnectState() (reconnecting bool, attempt int, cause string)
+
+	// BackendRestarted reports whether tymuxd was detected to have restarted
+	// out from under this session (Story 2.5.3's daemon-restart contract) —
+	// the pane's original process is orphaned, not reattached, per
+	// Engine::revive_session's always-spawn-fresh behavior on the tymux
+	// side. Exposed on the interface (not just the concrete type) so a real
+	// caller holding only a TymuxManager/ProcessManager reference can
+	// observe this state, not just tests asserting on the unexported type.
+	BackendRestarted() (restarted bool, since time.Time)
 }

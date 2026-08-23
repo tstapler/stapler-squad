@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -511,4 +512,82 @@ func TestResetExitOnce_WithoutANewExit_DoesNotFireSpuriously(t *testing.T) {
 	time.Sleep(20 * time.Millisecond)
 
 	assert.Equal(t, int32(1), atomic.LoadInt32(&calls), "ResetExitOnce alone (no new exit) must not re-fire the callback")
+}
+
+// --- REQ-6 (validation.md): fake-transport-driven unit-level happy path ---
+
+// TestBackendTymux_ShouldRoundTripStartSendKeysCapture_WhenDrivenWithAgentShapedByteSequences
+// is validation.md's REQ-6 happy-path test: a fake-rpcTransport-driven UNIT
+// test (no live tymuxd) exercising the full lifecycle — start, input,
+// capture, clean exit — with content shaped like a real Claude-Code-style
+// agent session (a braille spinner glyph with color/bold attributes typical
+// of a "thinking" indicator, and a full-screen box-drawn redraw typical of
+// an alt-screen toggle), complementing (not replacing)
+// TestTymuxGRPCSession_LiveTymuxd_StartSendKeysCaptureClose's live-daemon
+// integration coverage (integration_test.go), which used a plain echo
+// marker and can't assert on rendered ANSI/SGR content the way this test
+// does via a real ANSI-aware parser (parseSGRSequences, render_test.go).
+func TestBackendTymux_ShouldRoundTripStartSendKeysCapture_WhenDrivenWithAgentShapedByteSequences(t *testing.T) {
+	sess, stream, transport := startedSessionWithStream(t)
+
+	// --- input: send an agent-shaped prompt over the standing stream ---
+	prompt := "explain the reconnect backoff schedule\n"
+	n, err := sess.SendKeys(prompt)
+	require.NoError(t, err)
+	assert.Equal(t, len(prompt), n)
+	sent := stream.sentRequests()
+	require.Len(t, sent, 2) // [0] = pane_id, [1] = this Input
+	assert.Equal(t, []byte(prompt), sent[1].GetInput())
+
+	// --- capture: a Claude-Code-shaped screen — a bold, 256-color braille
+	// spinner glyph ("thinking" indicator) on row 0, and a box-drawn
+	// full-screen redraw (alt-screen-toggle-shaped) border on row 1.
+	transport.capturePaneFn = func(_ context.Context, req *connect.Request[v1.CapturePaneRequest]) (*connect.Response[v1.PaneSnapshot], error) {
+		assert.Equal(t, "pane-1", req.Msg.GetPaneId())
+		return connect.NewResponse(&v1.PaneSnapshot{
+			PaneId:   "pane-1",
+			Liveness: v1.Liveness_LIVENESS_LIVE,
+			Grid: []*v1.Row{
+				row(
+					cell("⠋", packIndexed(6), 0, attrBold),
+					cell(" ", 0, 0, 0),
+					cell("T", 0, 0, 0), cell("h", 0, 0, 0), cell("i", 0, 0, 0),
+					cell("n", 0, 0, 0), cell("k", 0, 0, 0), cell("i", 0, 0, 0),
+					cell("n", 0, 0, 0), cell("g", 0, 0, 0),
+				),
+				row(
+					cell("╭", packRGB(80, 200, 255), 0, attrBold),
+					cell("─", packRGB(80, 200, 255), 0, attrBold),
+					cell("─", packRGB(80, 200, 255), 0, attrBold),
+					cell("╮", packRGB(80, 200, 255), 0, attrBold),
+				),
+			},
+		}), nil
+	}
+
+	out, err := sess.CapturePaneContent()
+	require.NoError(t, err)
+
+	// Real ANSI-aware assertions (not substring-only): the spinner glyph is
+	// preceded by exactly one bold+256-color-indexed SGR escape, and the
+	// box-drawing row is preceded by exactly one bold+truecolor escape.
+	require.True(t, strings.HasPrefix(out, "\x1b[1;38;5;6m⠋"), "got %q", out)
+	assert.Contains(t, out, "Thinking")
+	assert.Contains(t, out, "╭──╮")
+	seqs := parseSGRSequences(t, out)
+	assert.Contains(t, seqs, []int{1, 38, 5, 6}, "expected the bold+256-color spinner SGR sequence")
+	assert.Contains(t, seqs, []int{1, 38, 2, 80, 200, 255}, "expected the bold+truecolor box-drawing SGR sequence")
+
+	// --- clean exit: the standing stream delivers Exited{code: 0} ---
+	reasons := make(chan string, 1)
+	sess.SetOnExitCallback(func(reason string) { reasons <- reason })
+	code := int32(0)
+	stream.push(&v1.AttachEvent{Payload: &v1.AttachEvent_Exited{Exited: &v1.ExitStatus{Code: &code}}})
+
+	select {
+	case reason := <-reasons:
+		assert.Equal(t, "exited: code=0", reason)
+	case <-time.After(time.Second):
+		t.Fatal("exit callback never fired for a clean agent exit")
+	}
 }

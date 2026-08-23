@@ -2,11 +2,22 @@ package session
 
 import (
 	"context"
+	"fmt"
 	"sync"
 
 	"github.com/tstapler/stapler-squad/session/tmux"
 	"github.com/tstapler/stapler-squad/session/tymux"
 )
+
+// ErrUnrecognizedBackend is returned by NewProcessManager when the resolved
+// ProcessManagerBackend value (from opts.Backend, the process-wide global, or
+// defaultBackend) matches none of the known backend constants
+// (BackendTmux/BackendNative/BackendTymux). Story 2.1.3's acceptance
+// criteria (UX-9.2) require this to fail loudly at construction, not
+// silently fall back to BackendTmux and not panic — an unrecognized value is
+// most likely a typo'd constant or corrupted persisted data, and a silent
+// tmux fallback would mask that.
+var ErrUnrecognizedBackend = fmt.Errorf("session: unrecognized ProcessManagerBackend")
 
 var (
 	selectedBackendMu    sync.RWMutex
@@ -31,7 +42,11 @@ func getSelectedBackend() ProcessManagerBackend {
 // NewProcessManager returns the ProcessManager implementation selected by, in order
 // of precedence: opts.Backend (an explicit per-session override), the registered
 // process-wide backend (RegisterBackendProvider), then defaultBackend. Falls back to
-// TmuxBackend for unknown/empty values.
+// TmuxBackend for the empty value (no override anywhere in the chain); an explicit
+// but unrecognized value returns ErrUnrecognizedBackend rather than silently
+// constructing a TmuxBackend (Story 2.1.3 AC / UX-9.2: an illegal backend constant
+// must fail loudly at construction, not silently downgrade to a working-but-wrong
+// backend or panic).
 //
 // opts.Backend was added ahead of the process-wide global specifically so a caller
 // can request BackendTymux for one session without affecting every other concurrent
@@ -39,7 +54,7 @@ func getSelectedBackend() ProcessManagerBackend {
 // global (set at package init to BackendTmux and never empty in production) is always
 // checked first. See plan.md Epic 2.1 Story 2.1.3 for why defaultBackend's precedence
 // position is otherwise unchanged.
-func NewProcessManager(_ context.Context, defaultBackend ProcessManagerBackend, opts ProcessManagerOptions) ProcessManager {
+func NewProcessManager(_ context.Context, defaultBackend ProcessManagerBackend, opts ProcessManagerOptions) (ProcessManager, error) {
 	backend := opts.Backend
 	if backend == "" {
 		backend = getSelectedBackend()
@@ -53,13 +68,13 @@ func NewProcessManager(_ context.Context, defaultBackend ProcessManagerBackend, 
 
 	switch backend {
 	case BackendTmux:
-		return newTmuxBackendFromOpts(opts)
+		return newTmuxBackendFromOpts(opts), nil
 	case BackendNative:
-		return NewNativeProcessManager(opts)
+		return NewNativeProcessManager(opts), nil
 	case BackendTymux:
-		return newTymuxBackendFromOpts(opts)
+		return newTymuxBackendFromOpts(opts), nil
 	default:
-		return newTmuxBackendFromOpts(opts)
+		return nil, fmt.Errorf("%w: %q", ErrUnrecognizedBackend, backend)
 	}
 }
 

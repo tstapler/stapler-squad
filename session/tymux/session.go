@@ -14,6 +14,7 @@ import (
 	"connectrpc.com/connect"
 	v1 "github.com/tstapler/tymux/clients/go/gen/tymux/v1"
 
+	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
@@ -83,6 +84,13 @@ type tymuxGRPCSession struct {
 	// one upstream standing stream, N independently-paced local
 	// subscribers, rather than one Attach call per subscriber.
 	fanout *ClientFanout
+
+	// outputGapCount is a per-session running total of OutputGap events
+	// received on the standing stream (Observability Plan: "output_gap
+	// receipt count"), logged on each occurrence (stream.go's
+	// handleAttachEvent) alongside the process-wide
+	// tymux_attach_stream_reconnects_total{output_gap} metric.
+	outputGapCount atomic.Int64
 
 	// exitCallback is invoked at most once, by whichever of
 	// readAttachLoop's Exited handling (stream.go's deliverExit) or
@@ -161,9 +169,11 @@ type tymuxGRPCSession struct {
 // Default ReconnectLoop backoff bounds (Task 2.5.2a) — a jittered
 // exponential schedule from defaultReconnectBaseDelay up to
 // defaultReconnectMaxDelay, giving up after defaultReconnectMaxAttempts
-// (roughly 2.5 minutes worst-case total wait), matching the "backend
-// unavailable" transient-vs-permanent split ux.md §4 calls for rather than
-// retrying forever.
+// (~45.5s worst-case total wait pre-jitter: attempts 2-8 wait
+// 0.5+1+2+4+8+15+15s, per reconnectBackoffDelay's base*2^(attempt-1)-capped-
+// at-max schedule; jitter only ever shortens each wait), matching the
+// "backend unavailable" transient-vs-permanent split ux.md §4 calls for
+// rather than retrying forever.
 const (
 	defaultReconnectMaxAttempts = 8
 	defaultReconnectBaseDelay   = 250 * time.Millisecond
@@ -264,6 +274,8 @@ func (s *tymuxGRPCSession) cacheFromSession(sess *v1.Session) error {
 	s.mu.Unlock()
 	s.closing.Store(false)
 
+	log.Info("tymux: session ready", "session_id", sess.GetId(), "pane_id", pane.GetId(), "cwd", pane.GetCwd())
+
 	return s.openStandingStream(pane.GetId())
 }
 
@@ -355,6 +367,7 @@ func (s *tymuxGRPCSession) Close() error {
 	s.mu.RLock()
 	sessionID := s.sessionID
 	s.mu.RUnlock()
+	log.Info("tymux: session closing", "session_id", sessionID)
 	// Task 2.5.1a: mark this generation as deliberately ending BEFORE
 	// tearing anything down, so readAttachLoop's Receive() error (caused
 	// by teardownStandingStream's own cancellation below) is recognized
@@ -374,8 +387,10 @@ func (s *tymuxGRPCSession) Close() error {
 	s.liveness = v1.Liveness_LIVENESS_DEAD
 	s.mu.Unlock()
 	if err != nil {
+		log.Warn("tymux: KillSession failed during Close", "session_id", sessionID, "err", err)
 		return classifyRPCError("Close", err)
 	}
+	log.Info("tymux: session closed", "session_id", sessionID)
 	return nil
 }
 
@@ -709,6 +724,7 @@ func (s *tymuxGRPCSession) SetOnExitCallback(fn func(string)) {
 	}
 	s.mu.Unlock()
 	if fire {
+		log.Info("tymux: exit callback fired", "session_id", s.GetSessionIdentifier(), "reason", reason, "registered_after_exit", true)
 		fn(reason)
 	}
 }

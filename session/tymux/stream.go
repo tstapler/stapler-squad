@@ -11,6 +11,8 @@ import (
 
 	"connectrpc.com/connect"
 	v1 "github.com/tstapler/tymux/clients/go/gen/tymux/v1"
+
+	"github.com/tstapler/stapler-squad/log"
 )
 
 // reconnectMetrics backs tymux_attach_stream_reconnects_total (Task
@@ -88,6 +90,8 @@ func (s *tymuxGRPCSession) openStandingStream(paneID string) error {
 	s.cancelAttach = cancel
 	s.streamDone = done
 	s.mu.Unlock()
+
+	log.Info("tymux: standing Attach stream opened", "pane_id", paneID)
 
 	go s.readAttachLoop(paneID, stream, done)
 	return nil
@@ -175,6 +179,8 @@ func (s *tymuxGRPCSession) handleAttachEvent(event *v1.AttachEvent) {
 		s.deliverExit(exitReason(p.Exited))
 	case *v1.AttachEvent_OutputGap:
 		recordReconnect("output_gap")
+		count := s.outputGapCount.Add(1)
+		log.Warn("tymux: output_gap received, resyncing via CapturePane", "session_id", s.GetSessionIdentifier(), "count", count)
 		_ = s.resyncViaCapturePane(context.Background())
 	}
 }
@@ -213,7 +219,10 @@ func (s *tymuxGRPCSession) deliverExit(reason string) {
 	}
 	s.mu.Unlock()
 	if fire {
+		log.Info("tymux: exit callback fired", "session_id", s.GetSessionIdentifier(), "reason", reason, "registered_after_exit", false)
 		cb(reason)
+	} else {
+		log.Debug("tymux: exit observed, no callback fired yet", "session_id", s.GetSessionIdentifier(), "reason", reason, "callback_registered", cb != nil)
 	}
 }
 
@@ -402,6 +411,8 @@ func (s *tymuxGRPCSession) reviveAfterRestart(ctx context.Context) error {
 // (pitfalls.md §5) rather than inventing a second notification path.
 func (s *tymuxGRPCSession) ReconnectLoop(paneID string, cause string) (attachStream, *v1.AttachEvent, bool) {
 	recordReconnect(cause)
+	sessionID := s.GetSessionIdentifier()
+	log.Info("tymux: standing Attach stream reconnect starting", "session_id", sessionID, "pane_id", paneID, "cause", cause)
 
 	s.mu.Lock()
 	maxAttempts := s.reconnectMaxAttempts
@@ -418,6 +429,7 @@ func (s *tymuxGRPCSession) ReconnectLoop(paneID string, cause string) (attachStr
 		s.mu.Lock()
 		s.reconnectAttempt = attempt
 		s.mu.Unlock()
+		log.Info("tymux: standing Attach stream reconnect attempt", "session_id", sessionID, "pane_id", paneID, "cause", cause, "attempt", attempt, "max_attempts", maxAttempts)
 
 		if attempt > 1 && !s.waitBackoff(attempt) {
 			break // interrupted by a deliberate Close()/DetachSafely()
@@ -429,11 +441,13 @@ func (s *tymuxGRPCSession) ReconnectLoop(paneID string, cause string) (attachStr
 		stream, first, cancel, err := s.dialAttachInterruptible(paneID)
 		daemonRestarted := errors.Is(err, errPaneDead)
 		if err != nil && daemonRestarted {
+			log.Warn("tymux: daemon restart detected, reviving session", "session_id", sessionID, "pane_id", paneID)
 			s.mu.Lock()
 			s.backendRestarted = true
 			s.backendRestartedAt = time.Now()
 			s.mu.Unlock()
 			if reviveErr := s.reviveAfterRestart(context.Background()); reviveErr != nil {
+				log.Warn("tymux: ReviveSession failed after daemon restart", "session_id", sessionID, "pane_id", paneID, "err", reviveErr)
 				continue
 			}
 			stream, first, cancel, err = s.dialAttachInterruptible(paneID)
@@ -457,6 +471,7 @@ func (s *tymuxGRPCSession) ReconnectLoop(paneID string, cause string) (attachStr
 		s.reconnectCause = ""
 		s.mu.Unlock()
 
+		log.Info("tymux: standing Attach stream reconnect succeeded", "session_id", sessionID, "pane_id", paneID, "cause", cause, "attempt", attempt)
 		return stream, first, true
 	}
 
@@ -465,9 +480,11 @@ func (s *tymuxGRPCSession) ReconnectLoop(paneID string, cause string) (attachStr
 	s.mu.Unlock()
 
 	if s.closing.Load() {
+		log.Info("tymux: standing Attach stream reconnect abandoned (deliberate close)", "session_id", sessionID, "pane_id", paneID, "cause", cause)
 		return nil, nil, false
 	}
 
+	log.Warn("tymux: standing Attach stream reconnect exhausted, giving up", "session_id", sessionID, "pane_id", paneID, "cause", cause, "max_attempts", maxAttempts)
 	s.deliverExit(fmt.Sprintf("reconnect failed: tymuxd unreachable after %d attempts", maxAttempts))
 	return nil, nil, false
 }
