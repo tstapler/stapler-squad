@@ -43,7 +43,7 @@ require (
 	github.com/spaolacci/murmur3 v1.1.0
 	github.com/spf13/cobra v1.10.1
 	github.com/stretchr/testify v1.11.1
-	github.com/tstapler/tymux/clients/go v0.0.0-00010101000000-000000000000
+	github.com/tstapler/tymux/clients/go v0.1.0
 	github.com/xeipuuv/gojsonschema v1.2.0
 	github.com/zalando/go-keyring v0.2.8
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.67.0
@@ -214,9 +214,3 @@ require (
 	gopkg.in/warnings.v0 v0.1.2 // indirect
 	pluginrpc.com/pluginrpc v0.5.0 // indirect
 )
-
-// tymux's Go client isn't tagged/published yet — consume it from the sibling
-// checkout at ../tymux (both repos are expected to be checked out side by
-// side under the same parent directory; see Epic 2.1's CI sibling-checkout
-// step in .github/workflows/*.yml for how CI satisfies this).
-replace github.com/tstapler/tymux/clients/go => ../tymux/clients/go

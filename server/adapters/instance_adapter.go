@@ -123,6 +123,9 @@ func InstanceToProto(inst *session.Instance, workflowNames map[string]string) *s
 	// History file linkage — path to the Claude JSONL conversation file.
 	protoSession.HistoryFilePath = snap.HistoryFilePath
 
+	// Outcome of the most recent start/cold-restore decision.
+	protoSession.ReviveOutcome = reviveOutcomeToProto(snap.LastReviveOutcome)
+
 	// Creation progress message — only meaningful during Creating state.
 	if inst.IsCreating() {
 		if inst.CreationProgress != "" {
@@ -376,6 +379,22 @@ func sessionTypeToProto(sessionType session.SessionType) sessionv1.SessionType {
 		return sessionv1.SessionType_SESSION_TYPE_EXISTING_WORKTREE
 	default:
 		return sessionv1.SessionType_SESSION_TYPE_UNSPECIFIED
+	}
+}
+
+// reviveOutcomeToProto converts session.ReviveOutcome to the proto ReviveOutcome enum.
+func reviveOutcomeToProto(outcome session.ReviveOutcome) sessionv1.ReviveOutcome {
+	switch outcome {
+	case session.ReviveOutcomeResumeLive:
+		return sessionv1.ReviveOutcome_REVIVE_OUTCOME_RESUME_LIVE
+	case session.ReviveOutcomeResumeRecovered:
+		return sessionv1.ReviveOutcome_REVIVE_OUTCOME_RESUME_RECOVERED
+	case session.ReviveOutcomeFreshExpected:
+		return sessionv1.ReviveOutcome_REVIVE_OUTCOME_FRESH_EXPECTED
+	case session.ReviveOutcomeFreshLostHistory:
+		return sessionv1.ReviveOutcome_REVIVE_OUTCOME_FRESH_LOST_HISTORY
+	default:
+		return sessionv1.ReviveOutcome_REVIVE_OUTCOME_UNSPECIFIED
 	}
 }
 

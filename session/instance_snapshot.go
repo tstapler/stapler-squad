@@ -115,21 +115,23 @@ type InstanceSnapshot struct {
 	RestartedFromSessionID string
 
 	// Misc config
-	OneShot             bool
-	Hidden              bool
-	ProjectID           string
-	HistoryFilePath     string
-	MCPServerURL        string
-	AppendSystemPrompt  string
-	AllowedTools        string
-	PermissionMode      string
-	RateLimitAutoResume *bool // copy of pointee — see buildSnapshot
-	PauseReason         string
-	ExitReason          string
-	WorkflowID          string
-	EnvVars             map[string]string // defensive deep copy — see buildSnapshot
-	CLIFlags            string
-	ArchivedAt          *time.Time // copy of pointee — see buildSnapshot
+	OneShot                    bool
+	Hidden                     bool
+	ProjectID                  string
+	HistoryFilePath            string
+	EverHadConversationHistory bool
+	LastReviveOutcome          ReviveOutcome
+	MCPServerURL               string
+	AppendSystemPrompt         string
+	AllowedTools               string
+	PermissionMode             string
+	RateLimitAutoResume        *bool // copy of pointee — see buildSnapshot
+	PauseReason                string
+	ExitReason                 string
+	WorkflowID                 string
+	EnvVars                    map[string]string // defensive deep copy — see buildSnapshot
+	CLIFlags                   string
+	ArchivedAt                 *time.Time // copy of pointee — see buildSnapshot
 
 	// Review queue / activity state (embedded value — copied by value)
 	ReviewState
@@ -196,26 +198,28 @@ func buildSnapshot(i *Instance) *InstanceSnapshot {
 			GitHubPRStatusTerminal: i.GitHubPRStatusTerminal,
 			LastPRStatusCheck:      i.LastPRStatusCheck,
 		},
-		Checkpoints:            append(CheckpointList(nil), i.Checkpoints...),
-		ActiveCheckpoint:       i.ActiveCheckpoint,
-		ForkedFromID:           i.ForkedFromID,
-		RestartedFromSessionID: i.RestartedFromSessionID,
-		OneShot:                i.OneShot,
-		Hidden:                 i.Hidden,
-		ProjectID:              i.ProjectID,
-		HistoryFilePath:        i.HistoryFilePath,
-		MCPServerURL:           i.MCPServerURL,
-		AppendSystemPrompt:     i.AppendSystemPrompt,
-		AllowedTools:           i.AllowedTools,
-		PermissionMode:         i.PermissionMode,
-		PauseReason:            i.PauseReason,
-		ExitReason:             i.ExitReason,
-		WorkflowID:             i.WorkflowID,
-		CLIFlags:               i.CLIFlags,
-		ReviewState:            i.ReviewState,
-		InstanceType:           i.InstanceType,
-		IsManaged:              i.IsManaged,
-		Artifacts:              i.Artifacts,
+		Checkpoints:                append(CheckpointList(nil), i.Checkpoints...),
+		ActiveCheckpoint:           i.ActiveCheckpoint,
+		ForkedFromID:               i.ForkedFromID,
+		RestartedFromSessionID:     i.RestartedFromSessionID,
+		OneShot:                    i.OneShot,
+		Hidden:                     i.Hidden,
+		ProjectID:                  i.ProjectID,
+		HistoryFilePath:            i.HistoryFilePath,
+		EverHadConversationHistory: i.EverHadConversationHistory,
+		LastReviveOutcome:          i.LastReviveOutcome,
+		MCPServerURL:               i.MCPServerURL,
+		AppendSystemPrompt:         i.AppendSystemPrompt,
+		AllowedTools:               i.AllowedTools,
+		PermissionMode:             i.PermissionMode,
+		PauseReason:                i.PauseReason,
+		ExitReason:                 i.ExitReason,
+		WorkflowID:                 i.WorkflowID,
+		CLIFlags:                   i.CLIFlags,
+		ReviewState:                i.ReviewState,
+		InstanceType:               i.InstanceType,
+		IsManaged:                  i.IsManaged,
+		Artifacts:                  i.Artifacts,
 	}
 
 	// Deep copy RateLimitAutoResume *bool

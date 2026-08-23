@@ -309,6 +309,30 @@ service SessionService {
   // that URL unchanged.
   rpc UpdateCallbackConfig(UpdateCallbackConfigRequest) returns (UpdateCallbackConfigResponse) {}
 
+  // Stream Hub Rollout RPCs (terminal-multi-connection-streaming Story 3.3).
+  // The global STAPLER_SQUAD_USE_STREAM_HUB default is env-var-gated and
+  // requires a process restart to change — none of these RPCs can flip it.
+  // What they control is config.json-backed and takes effect immediately:
+  // the rollback-rehearsal completion gate and per-session canary overrides.
+
+  // GetStreamHubRolloutStatus reports the current rollout status: whether
+  // the global env var is set in this process's environment right now,
+  // whether the rollback rehearsal has been completed, and the current
+  // per-session canary overrides.
+  rpc GetStreamHubRolloutStatus(GetStreamHubRolloutStatusRequest) returns (StreamHubRolloutStatus) {}
+
+  // CompleteStreamHubRollbackRehearsal records that Story 3.3.2's rollback
+  // rehearsal has been performed, unblocking the global
+  // STAPLER_SQUAD_USE_STREAM_HUB default from resolving to true. Intended
+  // to be called only after manually verifying the rehearsal (flip a
+  // per-session override on, use it briefly, remove it, confirm a clean
+  // reconnect under the legacy path) against a real disposable session.
+  rpc CompleteStreamHubRollbackRehearsal(CompleteStreamHubRollbackRehearsalRequest) returns (StreamHubRolloutStatus) {}
+
+  // SetStreamHubSessionOverride sets or clears a per-session canary
+  // override (Story 3.3.1), independent of the rollback rehearsal gate.
+  rpc SetStreamHubSessionOverride(SetStreamHubSessionOverrideRequest) returns (StreamHubRolloutStatus) {}
+
   // ListWorktrees returns the git worktrees for a given repository path.
   // Used by the Omnibar to populate the "Use Existing Worktree" dropdown.
   rpc ListWorktrees(ListWorktreesRequest) returns (ListWorktreesResponse) {}
@@ -2068,6 +2092,34 @@ message UpdateCallbackConfigRequest {
 
 message UpdateCallbackConfigResponse {
   CallbackConfigProto config = 1;
+}
+
+message GetStreamHubRolloutStatusRequest {}
+
+message StreamHubSessionOverrideEntry {
+  string session_name = 1;
+  bool force_hub = 2;
+}
+
+message StreamHubRolloutStatus {
+  // Whether STAPLER_SQUAD_USE_STREAM_HUB=true is set in this process's
+  // environment right now. Purely informational: the global default can
+  // only be changed by setting the env var and restarting the process.
+  bool global_env_var_set = 1;
+  // Unset when the rollback rehearsal has never been completed.
+  google.protobuf.Timestamp rollback_rehearsal_completed_at = 2;
+  repeated StreamHubSessionOverrideEntry session_overrides = 3;
+}
+
+message CompleteStreamHubRollbackRehearsalRequest {}
+
+message SetStreamHubSessionOverrideRequest {
+  string session_name = 1;
+  // Unset clears any existing override for session_name (falls back to the
+  // global default). true pins the session onto the hub-owned path; false
+  // pins it onto the legacy path — either way, regardless of the global
+  // default.
+  optional bool force_hub = 2;
 }
 
 // UpsertProfile

@@ -210,8 +210,8 @@ func TestResolveOriginBranchSHA_ReturnsFetchedTip_When_OriginHasAdvanced(t *test
 
 // TestResolveOriginBranchSHA_ReturnsError_When_FetchFails verifies that an unreachable
 // origin surfaces as an error rather than silently returning a stale or empty SHA —
-// CreateBacklogWorktree relies on this to know when to fall back to the old
-// ambient-HEAD behavior instead of branching from a bogus commit.
+// CreateBacklogWorktree relies on this to know when to fall back to a local branch
+// lookup instead of branching from a bogus commit.
 func TestResolveOriginBranchSHA_ReturnsError_When_FetchFails(t *testing.T) {
 	t.Parallel()
 	origin := setupTestRepo(t)
@@ -221,6 +221,76 @@ func TestResolveOriginBranchSHA_ReturnsError_When_FetchFails(t *testing.T) {
 	sha, err := ResolveOriginBranchSHA(work, "main")
 	require.Error(t, err)
 	assert.Empty(t, sha)
+}
+
+// TestResolveDefaultBranchSHA_FindsNonMainDefaultBranch is the regression test for the
+// hardcoded-"main" bug: a repo whose default branch is "master" (e.g. this repo's own
+// sibling dotfiles project) must still resolve correctly instead of failing every fetch
+// and silently falling through to CreateBacklogWorktree's caller's ambient HEAD.
+func TestResolveDefaultBranchSHA_FindsNonMainDefaultBranch(t *testing.T) {
+	t.Parallel()
+	origin := setupTestRepo(t)
+	runGit(t, origin, "branch", "-m", "main", "master")
+	work := cloneTestRepo(t, origin)
+
+	branch, sha, err := ResolveDefaultBranchSHA(work)
+	require.NoError(t, err)
+	assert.Equal(t, "master", branch)
+	wantSHA := strings.TrimSpace(runGit(t, origin, "rev-parse", "master"))
+	assert.Equal(t, wantSHA, sha)
+}
+
+// TestResolveDefaultBranchSHA_ReturnsError_When_NoCandidateExistsOnOrigin verifies a
+// repo whose default branch isn't any known candidate name surfaces as a loud error
+// rather than a false positive.
+func TestResolveDefaultBranchSHA_ReturnsError_When_NoCandidateExistsOnOrigin(t *testing.T) {
+	t.Parallel()
+	origin := setupTestRepo(t)
+	runGit(t, origin, "branch", "-m", "main", "release")
+	work := cloneTestRepo(t, origin)
+
+	branch, sha, err := ResolveDefaultBranchSHA(work)
+	require.Error(t, err)
+	assert.Empty(t, branch)
+	assert.Empty(t, sha)
+}
+
+// TestResolveDefaultLocalBranchSHA_FindsNonMainDefaultBranchOffline verifies the
+// fully-offline fallback also tries non-"main" candidate names, not just "main".
+func TestResolveDefaultLocalBranchSHA_FindsNonMainDefaultBranchOffline(t *testing.T) {
+	t.Parallel()
+	origin := setupTestRepo(t)
+	runGit(t, origin, "branch", "-m", "main", "master")
+	work := cloneTestRepo(t, origin)
+	runGit(t, work, "remote", "set-url", "origin", filepath.Join(t.TempDir(), "does-not-exist"))
+
+	branch, sha, err := ResolveDefaultLocalBranchSHA(work)
+	require.NoError(t, err)
+	assert.Equal(t, "master", branch)
+	wantSHA := strings.TrimSpace(runGit(t, work, "rev-parse", "master"))
+	assert.Equal(t, wantSHA, sha)
+}
+
+// TestIsUnbornRepo_should_ReturnTrue_When_RepoHasZeroCommits verifies the case
+// CreateBacklogWorktree relies on to know it's safe to fall back to ambient HEAD
+// (nothing to misattribute in a repo with no commits at all).
+func TestIsUnbornRepo_should_ReturnTrue_When_RepoHasZeroCommits(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	runGit(t, dir, "init")
+
+	assert.True(t, IsUnbornRepo(dir))
+}
+
+// TestIsUnbornRepo_should_ReturnFalse_When_RepoHasCommits guards against a repo with
+// real commit history (just no known-name default branch) being mistaken for unborn,
+// which would route it into CreateBacklogWorktree's ambient-HEAD fallback — the exact
+// risk that fallback exists to avoid for a repo with actual history.
+func TestIsUnbornRepo_should_ReturnFalse_When_RepoHasCommits(t *testing.T) {
+	t.Parallel()
+	origin := setupTestRepo(t)
+
+	assert.False(t, IsUnbornRepo(origin))
 }
 
 // TestIsCommitOnMain_should_ReturnTrue_When_CommitIsMainTipLocally verifies the
