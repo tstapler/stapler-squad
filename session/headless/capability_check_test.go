@@ -49,6 +49,7 @@ func countInvocations(t *testing.T, countPath string) int {
 // many goroutines calling Ensure concurrently on the same instance only trigger the
 // underlying marker-file smoke test subprocess once.
 func TestCodebaseReadCapabilitySelfCheck_RunsOnceAcrossConcurrentCallers(t *testing.T) {
+	t.Parallel()
 	scriptDir := t.TempDir()
 	countPath := filepath.Join(scriptDir, "count.txt")
 	scriptPath := writeCapabilityCheckFakeClaudeScript(t, scriptDir, countPath, capabilityCheckMarkerValue)
@@ -80,6 +81,7 @@ func TestCodebaseReadCapabilitySelfCheck_RunsOnceAcrossConcurrentCallers(t *test
 // TestCodebaseReadCapabilitySelfCheck_Success_CachesOK verifies a successful smoke
 // test caches ok=true and does not re-run the subprocess on subsequent Ensure calls.
 func TestCodebaseReadCapabilitySelfCheck_Success_CachesOK(t *testing.T) {
+	t.Parallel()
 	scriptDir := t.TempDir()
 	countPath := filepath.Join(scriptDir, "count.txt")
 	scriptPath := writeCapabilityCheckFakeClaudeScript(t, scriptDir, countPath, capabilityCheckMarkerValue)
@@ -98,6 +100,7 @@ func TestCodebaseReadCapabilitySelfCheck_Success_CachesOK(t *testing.T) {
 // that a smoke test whose result does not contain the marker caches ok=false and
 // subsequent Ensure calls return false without re-running the subprocess.
 func TestCodebaseReadCapabilitySelfCheck_Failure_CachesFailureAndDoesNotRetry(t *testing.T) {
+	t.Parallel()
 	scriptDir := t.TempDir()
 	countPath := filepath.Join(scriptDir, "count.txt")
 	// Script returns a result that does NOT contain the marker — simulates a
@@ -118,6 +121,7 @@ func TestCodebaseReadCapabilitySelfCheck_Failure_CachesFailureAndDoesNotRetry(t 
 // TestCodebaseReadCapabilitySelfCheck_NilPool_ReturnsFalse verifies Ensure degrades
 // gracefully (rather than panicking) when called with a nil pool.
 func TestCodebaseReadCapabilitySelfCheck_NilPool_ReturnsFalse(t *testing.T) {
+	t.Parallel()
 	check := &CodebaseReadCapabilitySelfCheck{}
 	assert.False(t, check.Ensure(context.Background(), nil))
 }
@@ -136,6 +140,7 @@ func TestCodebaseReadCapabilitySelfCheck_NilPool_ReturnsFalse(t *testing.T) {
 // context.DeadlineExceeded; a checkCtx correctly derived from context.Background()
 // comfortably outlives the sleep and the probe succeeds.
 func TestCodebaseReadCapabilitySelfCheck_CallerCtxAlreadyExpired_ProbeStillSucceeds(t *testing.T) {
+	t.Parallel()
 	scriptDir := t.TempDir()
 	countPath := filepath.Join(scriptDir, "count.txt")
 	scriptPath := writeSlowCapabilityCheckFakeClaudeScript(t, scriptDir, countPath, capabilityCheckMarkerValue, 200*time.Millisecond)

@@ -21,7 +21,12 @@ func TestSelectiveLoading(t *testing.T) {
 
 	repo, err := NewEntRepository(WithDatabasePath(dbPath))
 	require.NoError(t, err)
-	defer repo.Close()
+	// t.Cleanup, not defer: subtests below are t.Parallel(), so the parent
+	// function body returns (running any defer immediately) before they
+	// actually execute — a plain defer here would close the DB out from
+	// under them. t.Cleanup runs only after all subtests, including
+	// parallel ones, have finished.
+	t.Cleanup(func() { repo.Close() })
 
 	ctx := context.Background()
 
@@ -66,6 +71,7 @@ func TestSelectiveLoading(t *testing.T) {
 		{"LoadDiffOnly", LoadDiffOnly},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			session, err := repo.GetWithOptions(ctx, "test-session", tc.opts)
 			require.NoError(t, err)
 
@@ -93,6 +99,7 @@ func TestSelectiveLoading(t *testing.T) {
 
 	// Verify Get and List also return correct data
 	t.Run("Get returns full data", func(t *testing.T) {
+		t.Parallel()
 		session, err := repo.Get(ctx, "test-session")
 		require.NoError(t, err)
 		assert.Equal(t, "test-session", session.Title)
@@ -101,6 +108,7 @@ func TestSelectiveLoading(t *testing.T) {
 	})
 
 	t.Run("List returns all sessions", func(t *testing.T) {
+		t.Parallel()
 		sessions, err := repo.List(ctx)
 		require.NoError(t, err)
 		require.Len(t, sessions, 1)
@@ -110,6 +118,7 @@ func TestSelectiveLoading(t *testing.T) {
 
 // TestBuilderMethods verifies the fluent builder methods work correctly
 func TestBuilderMethods(t *testing.T) {
+	t.Parallel()
 	// Start with LoadMinimal and add what we need
 	options := LoadMinimal.WithTags().WithDiffContent()
 

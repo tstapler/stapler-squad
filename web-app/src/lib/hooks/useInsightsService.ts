@@ -227,14 +227,3 @@ export function useSessionTurnTimeline(
 
   return { turns, loading, error };
 }
-
-/** Returns the n sessions by cost, useful for showing "most expensive sessions today". */
-export function useTopSessions(
-  sessions: SessionTokenSummary[],
-  limit = 10
-): SessionTokenSummary[] {
-  return sessions
-    .slice()
-    .sort((a, b) => b.estimatedCostUsd - a.estimatedCostUsd)
-    .slice(0, limit);
-}

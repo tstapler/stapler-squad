@@ -53,6 +53,7 @@ func enqueueChannels(sess *TmuxSession, n int) []chan cmdResult {
 }
 
 func TestCMDispatch_SingleCommand(t *testing.T) {
+	t.Parallel()
 	sess, _ := newDispatchTestSession(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -95,6 +96,7 @@ func TestCMDispatch_SingleCommand(t *testing.T) {
 }
 
 func TestCMDispatch_ResponseParsedFromBeginEnd(t *testing.T) {
+	t.Parallel()
 	sess, _ := newDispatchTestSession(t)
 
 	channels := enqueueChannels(sess, 1)
@@ -118,6 +120,7 @@ func TestCMDispatch_ResponseParsedFromBeginEnd(t *testing.T) {
 // TestCMDispatch_TwoCommandsQueuedInOrder verifies that the FIFO state machine delivers
 // the first response to the first-queued channel and the second to the second-queued channel.
 func TestCMDispatch_TwoCommandsQueuedInOrder(t *testing.T) {
+	t.Parallel()
 	sess, _ := newDispatchTestSession(t)
 
 	// Pre-populate in known order.
@@ -147,6 +150,7 @@ func TestCMDispatch_TwoCommandsQueuedInOrder(t *testing.T) {
 // goroutines by pre-seeding pendingCmds in known order and checking each channel gets
 // the correspondingly ordered response.
 func TestCMDispatch_ConcurrentCommandsArriveFIFO(t *testing.T) {
+	t.Parallel()
 	sess, _ := newDispatchTestSession(t)
 
 	const n = 10
@@ -175,6 +179,7 @@ func TestCMDispatch_ConcurrentCommandsArriveFIFO(t *testing.T) {
 // TestCMDispatch_ConcurrentSendCMCommand verifies that concurrent sendCMCommand callers
 // all receive a non-error response under real goroutine concurrency.
 func TestCMDispatch_ConcurrentSendCMCommand(t *testing.T) {
+	t.Parallel()
 	sess, _ := newDispatchTestSession(t)
 
 	const n = 8
@@ -238,6 +243,7 @@ func TestCMDispatch_ConcurrentSendCMCommand(t *testing.T) {
 }
 
 func TestCMDispatch_ErrorResponsePropagated(t *testing.T) {
+	t.Parallel()
 	sess, _ := newDispatchTestSession(t)
 
 	channels := enqueueChannels(sess, 1)
@@ -256,6 +262,7 @@ func TestCMDispatch_ErrorResponsePropagated(t *testing.T) {
 }
 
 func TestCMDispatch_OutputNotificationDuringCommandDoesNotCorruptQueue(t *testing.T) {
+	t.Parallel()
 	sess, _ := newDispatchTestSession(t)
 
 	// Set up a subscriber to receive broadcast output.
@@ -291,6 +298,7 @@ func TestCMDispatch_OutputNotificationDuringCommandDoesNotCorruptQueue(t *testin
 }
 
 func TestCMDispatch_FallbackWhenControlModeNil(t *testing.T) {
+	t.Parallel()
 	sess := &TmuxSession{
 		sanitizedName:    "test",
 		controlModeStdin: nil,
@@ -306,6 +314,7 @@ func TestCMDispatch_FallbackWhenControlModeNil(t *testing.T) {
 }
 
 func TestCMDispatch_StopDrainsInflightCommands(t *testing.T) {
+	t.Parallel()
 	sess, _ := newDispatchTestSession(t)
 
 	channels := enqueueChannels(sess, 1)
@@ -333,6 +342,7 @@ func TestCMDispatch_StopDrainsInflightCommands(t *testing.T) {
 }
 
 func TestCMDispatch_DoubleBeginResetsState(t *testing.T) {
+	t.Parallel()
 	sess, _ := newDispatchTestSession(t)
 
 	// Pre-populate two channels in known order.
@@ -467,6 +477,7 @@ func (fakeWriteCloser) Close() error                { return nil }
 // in-flight pendingCmds with ErrControlModeStopped without waiting for scanner EOF.
 // This is the fix for the race where capture-pane/resize commands block for 3s.
 func TestCMDispatch_ExitDrainsPendingCmdsImmediately(t *testing.T) {
+	t.Parallel()
 	sess, _ := newDispatchTestSession(t)
 
 	channels := enqueueChannels(sess, 3)
@@ -491,6 +502,7 @@ func TestCMDispatch_ExitDrainsPendingCmdsImmediately(t *testing.T) {
 // set synchronously when %exit is processed, so SubscribeToControlModeUpdates
 // immediately returns a pre-closed channel for late subscribers.
 func TestCMDispatch_ExitSetsControlModeExitedFlag(t *testing.T) {
+	t.Parallel()
 	sess, _ := newDispatchTestSession(t)
 
 	sess.processControlModeLine("%exit")
@@ -520,6 +532,7 @@ func TestCMDispatch_ExitSetsControlModeExitedFlag(t *testing.T) {
 // a 3-second context timeout. This is the race: runCMSender can still be alive when
 // %exit fires, and previously it would append to pendingCmds after the drain had run.
 func TestCMDispatch_ProcessAfterExitReturnsStopped(t *testing.T) {
+	t.Parallel()
 	sess, _ := newDispatchTestSession(t)
 
 	// Simulate %exit having already been processed.
@@ -546,6 +559,7 @@ func TestCMDispatch_ProcessAfterExitReturnsStopped(t *testing.T) {
 // TestCMDispatch_ExitDrainsInFlightCmdResp verifies that an in-flight command
 // (between %begin and %exit) receives ErrControlModeStopped, not a silent hang.
 func TestCMDispatch_ExitDrainsInFlightCmdResp(t *testing.T) {
+	t.Parallel()
 	sess, _ := newDispatchTestSession(t)
 
 	channels := enqueueChannels(sess, 1)

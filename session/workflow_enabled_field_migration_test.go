@@ -13,6 +13,7 @@ import (
 func boolPtr(v bool) *bool { return &v }
 
 func TestWorkflowEnabledColumnPreexisted_should_ReturnFalse_When_TableDoesNotExist(t *testing.T) {
+	t.Parallel()
 	db, err := sql.Open("sqlite3", ":memory:")
 	require.NoError(t, err)
 	defer db.Close()
@@ -21,6 +22,7 @@ func TestWorkflowEnabledColumnPreexisted_should_ReturnFalse_When_TableDoesNotExi
 }
 
 func TestWorkflowEnabledColumnPreexisted_should_ReturnFalse_When_TableExistsWithoutEnabledColumn(t *testing.T) {
+	t.Parallel()
 	db, err := sql.Open("sqlite3", ":memory:")
 	require.NoError(t, err)
 	defer db.Close()
@@ -31,6 +33,7 @@ func TestWorkflowEnabledColumnPreexisted_should_ReturnFalse_When_TableExistsWith
 }
 
 func TestWorkflowEnabledColumnPreexisted_should_ReturnTrue_When_EnabledColumnAlreadyExists(t *testing.T) {
+	t.Parallel()
 	db, err := sql.Open("sqlite3", ":memory:")
 	require.NoError(t, err)
 	defer db.Close()
@@ -46,6 +49,7 @@ func TestWorkflowEnabledColumnPreexisted_should_ReturnTrue_When_EnabledColumnAlr
 // is also the generic enable flag" semantics is corrected to enabled=false; a row with
 // cron_enabled=true is left at enabled=true untouched.
 func TestRunWorkflowEnabledFieldBackfill_should_CorrectLegacyDisabledRowsOnly(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := createTestEntRepository(t)
 	defer cleanup()
 	ctx := context.Background()

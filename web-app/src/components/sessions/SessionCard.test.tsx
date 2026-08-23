@@ -17,6 +17,13 @@ jest.mock("@/lib/contexts/ReviewQueueContext", () => ({
   useReviewQueueContext: () => ({ items: [] }),
 }));
 
+jest.mock("@/lib/contexts/SessionServiceContext", () => ({
+  useSessionServiceContext: () => ({
+    draftPullRequest: jest.fn(),
+    createPullRequest: jest.fn(),
+  }),
+}));
+
 jest.mock("@/lib/store", () => ({
   useAppSelector: jest.fn(() => ({})),
 }));
@@ -102,6 +109,25 @@ describe("SessionCard — note badge", () => {
     const badge = screen.getByTestId("badge-has-note");
     const expected = "N".repeat(119) + "…";
     expect(badge.closest('[data-testid="tooltip-mock"]')).toHaveAttribute("data-label", expected);
+  });
+});
+
+describe("SessionCard — host badge (ssh-remote-workspaces Epic 6.2, Story 6.2.1)", () => {
+  it("SessionCard_should_RenderHostBadge_When_SessionRemoteNameIsSet", () => {
+    const session = { ...minimalSession, remoteName: "prod-box" } as unknown as Session;
+    render(<SessionCard session={session} />);
+
+    const badge = screen.getByTestId("host-badge");
+    expect(badge).toBeInTheDocument();
+    expect(badge).toHaveAttribute("role", "img");
+    expect(badge).toHaveAttribute("aria-label", "Running on prod-box");
+  });
+
+  it("SessionCard_should_NotRenderHostBadge_When_SessionIsLocal", () => {
+    const session = { ...minimalSession, remoteName: "" } as unknown as Session;
+    render(<SessionCard session={session} />);
+
+    expect(screen.queryByTestId("host-badge")).toBeNull();
   });
 });
 

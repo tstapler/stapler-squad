@@ -69,7 +69,6 @@ export function PaneHeader({
               onClone={() => cockpit.onCloneSession(session.id)}
               onNewWorkspace={() => cockpit.onNewWorkspaceSession(session.id)}
               onCreateCheckpoint={(id, label) => cockpit.onCreateCheckpoint(id, label)}
-              onRunOneShot={(id) => cockpit.onRunOneShot(id)}
               onSetRateLimitEnabled={(id, enabled) => cockpit.onSetRateLimitEnabled(id, enabled)}
               onToggleAutonomousMode={(id, enabled) => cockpit.onToggleAutonomousMode(id, enabled)}
               onToggleAutoApprove={(id, enabled) => cockpit.onToggleAutoApprove(id, enabled)}

@@ -98,6 +98,7 @@ var _ tokens.SessionStorage = (*fakeSessionStorage)(nil)
 // --------------------------------------------------------------------------
 
 func TestGetInsightsSummary_EmptyStore_ReturnsEmptyResponse(t *testing.T) {
+	t.Parallel()
 	svc := newInsightsFixture(nil, nil)
 
 	resp, err := svc.GetInsightsSummary(
@@ -116,6 +117,7 @@ func TestGetInsightsSummary_EmptyStore_ReturnsEmptyResponse(t *testing.T) {
 // --------------------------------------------------------------------------
 
 func TestGetInsightsSummary_AggregatesTokensAndCost(t *testing.T) {
+	t.Parallel()
 	now := time.Now().UTC()
 	results := []*tokens.ParseResult{
 		newResult("uuid-1", "claude-sonnet-4", "/home/user/proj", 1000, 500, 200, now),
@@ -141,6 +143,7 @@ func TestGetInsightsSummary_AggregatesTokensAndCost(t *testing.T) {
 // --------------------------------------------------------------------------
 
 func TestGetInsightsSummary_TimeFilter_ExcludesOutOfRange(t *testing.T) {
+	t.Parallel()
 	now := time.Now().UTC()
 	yesterday := now.Add(-24 * time.Hour)
 	nextWeek := now.Add(7 * 24 * time.Hour)
@@ -170,6 +173,7 @@ func TestGetInsightsSummary_TimeFilter_ExcludesOutOfRange(t *testing.T) {
 // --------------------------------------------------------------------------
 
 func TestGetInsightsSummary_ModelFilter_OnlyMatchingFamily(t *testing.T) {
+	t.Parallel()
 	now := time.Now().UTC()
 	results := []*tokens.ParseResult{
 		newResult("uuid-sonnet", "claude-sonnet-4", "/proj", 1000, 500, 0, now),
@@ -196,6 +200,7 @@ func TestGetInsightsSummary_ModelFilter_OnlyMatchingFamily(t *testing.T) {
 // --------------------------------------------------------------------------
 
 func TestGetInsightsSummary_OrphanFilter_ExcludesOrphansWhenNotRequested(t *testing.T) {
+	t.Parallel()
 	now := time.Now().UTC()
 	results := []*tokens.ParseResult{
 		newResult("uuid-matched", "claude-sonnet-4", "/home/user/matched", 1000, 500, 0, now),
@@ -225,6 +230,7 @@ func TestGetInsightsSummary_OrphanFilter_ExcludesOrphansWhenNotRequested(t *test
 // --------------------------------------------------------------------------
 
 func TestGetInsightsSummary_DailyRollup_BucketsPerCalendarDay(t *testing.T) {
+	t.Parallel()
 	loc := time.UTC
 	day1 := time.Date(2026, 5, 10, 12, 0, 0, 0, loc)
 	day2 := time.Date(2026, 5, 11, 12, 0, 0, 0, loc)
@@ -257,6 +263,7 @@ func TestGetInsightsSummary_DailyRollup_BucketsPerCalendarDay(t *testing.T) {
 // --------------------------------------------------------------------------
 
 func TestGetInsightsSummary_ModelBreakdown_AggregatesPerFamily(t *testing.T) {
+	t.Parallel()
 	now := time.Now().UTC()
 	results := []*tokens.ParseResult{
 		newResult("uuid-s1", "claude-sonnet-4", "/proj", 1000, 500, 0, now),
@@ -293,6 +300,7 @@ func TestGetInsightsSummary_ModelBreakdown_AggregatesPerFamily(t *testing.T) {
 // --------------------------------------------------------------------------
 
 func TestListSessionTokens_SortByCostDesc(t *testing.T) {
+	t.Parallel()
 	now := time.Now().UTC()
 	// opus is more expensive than sonnet.
 	results := []*tokens.ParseResult{
@@ -321,6 +329,7 @@ func TestListSessionTokens_SortByCostDesc(t *testing.T) {
 // --------------------------------------------------------------------------
 
 func TestListSessionTokens_Pagination_ReturnsCorrectPage(t *testing.T) {
+	t.Parallel()
 	now := time.Now().UTC()
 	results := make([]*tokens.ParseResult, 5)
 	for i := range results {
@@ -377,6 +386,7 @@ func TestListSessionTokens_Pagination_ReturnsCorrectPage(t *testing.T) {
 // --------------------------------------------------------------------------
 
 func TestGetInsightsSummary_CacheHitRate_ComputedCorrectly(t *testing.T) {
+	t.Parallel()
 	now := time.Now().UTC()
 	// input=800, cacheRead=200  → rate = 200/(800+200) = 0.2
 	results := []*tokens.ParseResult{
@@ -411,6 +421,7 @@ func TestGetInsightsSummary_CacheHitRate_ComputedCorrectly(t *testing.T) {
 // --------------------------------------------------------------------------
 
 func TestGetInsightsSummary_WhenUnpricedModelFamily_ExpectPricingUnavailableFlagged(t *testing.T) {
+	t.Parallel()
 	now := time.Now().UTC()
 	results := []*tokens.ParseResult{
 		newResult("uuid-1", "gpt-99-turbo", "/proj", 1000, 500, 0, now),
@@ -436,6 +447,7 @@ func TestGetInsightsSummary_WhenUnpricedModelFamily_ExpectPricingUnavailableFlag
 // --------------------------------------------------------------------------
 
 func TestGetInsightsSummary_WhenSonnet5ModelUsed_ExpectNonZeroCost(t *testing.T) {
+	t.Parallel()
 	now := time.Now().UTC()
 	results := []*tokens.ParseResult{
 		newResult("uuid-1", "claude-sonnet-5-20250929", "/proj", 1000, 500, 0, now),
@@ -458,6 +470,7 @@ func TestGetInsightsSummary_WhenSonnet5ModelUsed_ExpectNonZeroCost(t *testing.T)
 }
 
 func TestListSessionTokens_WhenUnpricedModelFamily_ExpectUnpricedModelsPopulated(t *testing.T) {
+	t.Parallel()
 	now := time.Now().UTC()
 	results := []*tokens.ParseResult{
 		newResult("uuid-1", "gpt-99-turbo", "/proj", 1000, 500, 0, now),
@@ -483,6 +496,7 @@ func TestListSessionTokens_WhenUnpricedModelFamily_ExpectUnpricedModelsPopulated
 // --------------------------------------------------------------------------
 
 func TestGetInsightsSummary_WhenSyntheticTurnMixedWithRealTurns_ExpectSyntheticNeverSurfacedAsUnpriced(t *testing.T) {
+	t.Parallel()
 	now := time.Now().UTC()
 	results := []*tokens.ParseResult{
 		{
@@ -527,6 +541,7 @@ func TestGetInsightsSummary_WhenSyntheticTurnMixedWithRealTurns_ExpectSyntheticN
 // --------------------------------------------------------------------------
 
 func TestGetInsightsSummary_WhenCalledTwiceWithSameUnpricedFamily_ExpectLoggedOnce(t *testing.T) {
+	t.Parallel()
 	now := time.Now().UTC()
 	results := []*tokens.ParseResult{
 		newResult("uuid-1", "gpt-99-turbo", "/proj", 1000, 500, 0, now),
@@ -592,6 +607,7 @@ func runWatchInsights(ctx context.Context, svc *InsightsService, sender insights
 }
 
 func TestWatchInsights_should_forwardUpdateEvent_When_TokenStoreNotifies(t *testing.T) {
+	t.Parallel()
 	store := tokens.NewTokenStore("")
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
@@ -628,6 +644,7 @@ func TestWatchInsights_should_forwardUpdateEvent_When_TokenStoreNotifies(t *test
 // --------------------------------------------------------------------------
 
 func TestGetSessionTurnTimeline_should_returnTurns_When_ConversationIdMatches(t *testing.T) {
+	t.Parallel()
 	now := time.Now().UTC()
 	results := []*tokens.ParseResult{
 		newResult("uuid-1", "claude-sonnet-4", "/proj", 1000, 500, 200, now),
@@ -647,6 +664,7 @@ func TestGetSessionTurnTimeline_should_returnTurns_When_ConversationIdMatches(t 
 }
 
 func TestGetSessionTurnTimeline_should_returnEmptyTurns_When_ConversationIdUnknown(t *testing.T) {
+	t.Parallel()
 	svc := newInsightsFixture(nil, nil)
 
 	resp, err := svc.GetSessionTurnTimeline(
@@ -658,6 +676,7 @@ func TestGetSessionTurnTimeline_should_returnEmptyTurns_When_ConversationIdUnkno
 }
 
 func TestGetSessionTurnTimeline_should_omitTimestamp_When_TurnTimestampIsZero(t *testing.T) {
+	t.Parallel()
 	results := []*tokens.ParseResult{
 		{
 			SessionUUID: "uuid-zero-ts",
@@ -679,6 +698,7 @@ func TestGetSessionTurnTimeline_should_omitTimestamp_When_TurnTimestampIsZero(t 
 }
 
 func TestGetSessionTurnTimeline_should_returnIndependentToolNamesSlice_When_CalledTwice(t *testing.T) {
+	t.Parallel()
 	results := []*tokens.ParseResult{
 		{
 			SessionUUID: "uuid-tools",
@@ -701,6 +721,7 @@ func TestGetSessionTurnTimeline_should_returnIndependentToolNamesSlice_When_Call
 }
 
 func TestGetSessionTurnTimeline_should_returnTurns_When_backedByRealTokenStore(t *testing.T) {
+	t.Parallel()
 	store := tokens.NewTokenStore("")
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
@@ -728,6 +749,7 @@ func TestGetSessionTurnTimeline_should_returnTurns_When_backedByRealTokenStore(t
 }
 
 func TestWatchInsights_should_unsubscribeAndReturn_When_ContextIsCanceled(t *testing.T) {
+	t.Parallel()
 	store := tokens.NewTokenStore("")
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)

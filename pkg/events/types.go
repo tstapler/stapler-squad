@@ -3,6 +3,7 @@ package events
 import (
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/detection"
+	"github.com/tstapler/stapler-squad/session/sshremote"
 	"time"
 )
 
@@ -28,6 +29,10 @@ const (
 	// (status transition, verdict recorded, session attached, item updated,
 	// archived, removed, or triage progress updated).
 	EventBacklogItemChanged EventType = "backlog_item_changed"
+	// EventRemoteHealthChanged is emitted when a configured remote's SSH
+	// connection health transitions between connected/reconnecting/
+	// disconnected (session/sshremote.RemoteHealthProber, Epic 6.4).
+	EventRemoteHealthChanged EventType = "remote.health_changed"
 )
 
 // BacklogChangeKind identifies which kind of backlog item mutation a
@@ -51,6 +56,11 @@ const (
 	// is written (UpdateItemSessionTriageResult). Converts to the existing
 	// BacklogItemUpdatedEvent oneof variant on the wire, not a new proto message.
 	BacklogChangeTriageProgressUpdated BacklogChangeKind = "triage_progress_updated"
+	// BacklogChangeActivityNoteAdded is emitted when a free-form activity note
+	// is posted (AppendActivityNote, ADR-001's sibling table). Converts to the
+	// dedicated BacklogItemActivityNoteAddedEvent oneof variant, never a full
+	// item snapshot (ADR-002).
+	BacklogChangeActivityNoteAdded BacklogChangeKind = "activity_note_added"
 )
 
 // BacklogItemEventPayload carries the backlog-specific data for an
@@ -83,10 +93,26 @@ type BacklogItemEventPayload struct {
 	// the adapter so the verdict reaches subscribers as first-class payload
 	// data rather than something derived by joining item_sessions.
 	Verdict *session.ReviewVerdictData
+	// ActivityNote mirrors session.BacklogItemChange.ActivityNote one-to-one;
+	// populated only when Kind == BacklogChangeActivityNoteAdded.
+	ActivityNote *session.ActivityNoteData
 	// IsSnapshot is true when this event was generated as part of an
 	// initial-snapshot send (e.g. WatchBacklogItems's first batch) rather
 	// than a live mutation.
 	IsSnapshot bool
+}
+
+// RemoteHealthEventPayload carries the remote-specific data for an
+// EventRemoteHealthChanged event (session/sshremote.RemoteHealthProber,
+// Epic 6.4).
+type RemoteHealthEventPayload struct {
+	// RemoteName is the config.RemoteConfig.Name this health transition
+	// applies to.
+	RemoteName string
+	// State is the remote's connection state as of this event.
+	State sshremote.RemoteConnectionState
+	// PreviousState is the state immediately before this transition.
+	PreviousState sshremote.RemoteConnectionState
 }
 
 // Event represents a session state change event.
@@ -132,6 +158,9 @@ type Event struct {
 	// BacklogItemPayload carries backlog item change data for
 	// EventBacklogItemChanged events. Nil for all other event types.
 	BacklogItemPayload *BacklogItemEventPayload
+	// RemoteHealthPayload carries remote connection-health transition data
+	// for EventRemoteHealthChanged events. Nil for all other event types.
+	RemoteHealthPayload *RemoteHealthEventPayload
 }
 
 // NewSessionCreatedEvent creates an event for session creation.
@@ -220,6 +249,22 @@ func NewBacklogItemChangedEvent(payload *BacklogItemEventPayload) *Event {
 		Type:               EventBacklogItemChanged,
 		Timestamp:          time.Now(),
 		BacklogItemPayload: payload,
+	}
+}
+
+// NewRemoteHealthChangedEvent creates an event for a configured remote's
+// SSH connection health-state transition (session/sshremote.
+// RemoteHealthProber, Epic 6.4). state is the new state; previousState is
+// the state immediately prior to this transition.
+func NewRemoteHealthChangedEvent(remoteName string, state, previousState sshremote.RemoteConnectionState) *Event {
+	return &Event{
+		Type:      EventRemoteHealthChanged,
+		Timestamp: time.Now(),
+		RemoteHealthPayload: &RemoteHealthEventPayload{
+			RemoteName:    remoteName,
+			State:         state,
+			PreviousState: previousState,
+		},
 	}
 }
 

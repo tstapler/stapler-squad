@@ -50,6 +50,7 @@ import type { XtermTerminalHandle, XtermTerminalProps } from "./XtermTerminal";
 import type { ForwardRefExoticComponent, RefAttributes } from "react";
 const XtermTerminal = lazy(() => import("./XtermTerminal").then((m) => ({ default: m.XtermTerminal }))) as ForwardRefExoticComponent<XtermTerminalProps & RefAttributes<XtermTerminalHandle>>;
 import { InputDropBadge } from "./InputDropBadge";
+import { ConnectionCountIndicator } from "./ConnectionCountIndicator";
 import { useDropEpisodeCoalescer } from "./useDropEpisodeCoalescer";
 import { TerminalStreamManager } from "@/lib/terminal/TerminalStreamManager";
 import { getCachedDimensions, saveDimensions, validateCellDimensions } from "@/lib/terminal/TerminalDimensionCache";
@@ -561,7 +562,7 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
     };
   }, [reportDroppedInput]);
 
-  const { isConnected, error, sendInput, resize, connect, disconnect, scrollbackLoaded, requestScrollback, sendFlowControl, startRecording, stopRecording, terminalState, isHardFailed, handleManualReconnect: handleHookReconnect, requestFullResync, markResyncComplete, markPaneResponseReceived } = useTerminalStream({
+  const { isConnected, error, sendInput, resize, connect, disconnect, scrollbackLoaded, requestScrollback, sendFlowControl, startRecording, stopRecording, terminalState, isHardFailed, handleManualReconnect: handleHookReconnect, requestFullResync, markResyncComplete, markPaneResponseReceived, connectionCount } = useTerminalStream({
     baseUrl,
     sessionId: effectiveSessionId,
     shellId,
@@ -1447,6 +1448,21 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
     }
   };
 
+  // Epic 4.2, Story 4.2.2 (Task 4.2.2b) — best-effort resize-mismatch signal
+  // for ConnectionCountIndicator's tooltip. No wire field carries "did this
+  // tab's ResizeVote win the hub's negotiation" (out of this UI-only epic's
+  // scope), so this compares what this tab last asked to resize to
+  // (lastResizeRef, set in handleTerminalResize) against xterm's actual
+  // applied dimensions — if they differ, another connection's vote is
+  // constraining this tab's pane size. Never shown speculatively: both refs
+  // must have resolved values before a mismatch is reported (UX-AC-10).
+  const appliedTerminal = xtermRef.current?.terminal;
+  const hasResizeSizeMismatch = !!(
+    lastResizeRef.current &&
+    appliedTerminal &&
+    (appliedTerminal.cols !== lastResizeRef.current.cols || appliedTerminal.rows !== lastResizeRef.current.rows)
+  );
+
   const secondaryActions = [
     {
       key: 'copy',
@@ -1538,6 +1554,8 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
           {isHardFailed && (
             <span className={styles.errorText}> • Terminal unavailable</span>
           )}
+          {/* Epic 4.2, Story 4.2.2 — renders only when connectionCount > 1 */}
+          <ConnectionCountIndicator count={connectionCount} sizeMismatch={hasResizeSizeMismatch} />
         </div>
         <div className={styles.actions}>
           {/* Toolbar toggle — always visible on mobile; hidden on desktop via CSS */}

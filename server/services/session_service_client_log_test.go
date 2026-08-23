@@ -21,13 +21,17 @@ func newLogClientEventsRequest(entries ...*sessionv1.ClientLogEntry) *connect.Re
 
 // captureInfoLog temporarily redirects the slog default logger to a buffer
 // and returns a function that restores it and returns the captured output.
+// Holds slogDefaultMu (declared in autonomous_orchestration_service_test.go) for the
+// full swap-to-restore window so it can't race other tests' slog.Default() swaps.
 func captureInfoLog() func() string {
+	slogDefaultMu.Lock()
 	var buf bytes.Buffer
 	h := slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})
 	original := slog.Default()
 	slog.SetDefault(slog.New(h))
 	return func() string {
 		slog.SetDefault(original)
+		slogDefaultMu.Unlock()
 		return buf.String()
 	}
 }
@@ -45,6 +49,7 @@ func minimalService() *SessionService {
 
 // UT-B-01
 func TestBrowserLog_ValidSingleEntry(t *testing.T) {
+	t.Parallel()
 	svc := minimalService()
 	req := newLogClientEventsRequest(&sessionv1.ClientLogEntry{
 		Level:   "log",
@@ -61,6 +66,7 @@ func TestBrowserLog_ValidSingleEntry(t *testing.T) {
 
 // UT-B-02
 func TestBrowserLog_ValidBatch(t *testing.T) {
+	t.Parallel()
 	svc := minimalService()
 	entries := make([]*sessionv1.ClientLogEntry, 50)
 	for i := range 50 {
@@ -78,6 +84,7 @@ func TestBrowserLog_ValidBatch(t *testing.T) {
 
 // UT-B-03
 func TestBrowserLog_EmptyEntries(t *testing.T) {
+	t.Parallel()
 	svc := minimalService()
 	req := newLogClientEventsRequest()
 	_, err := svc.LogClientEvents(context.Background(), req)
@@ -88,6 +95,8 @@ func TestBrowserLog_EmptyEntries(t *testing.T) {
 
 // UT-B-09: message with newline is sanitized
 func TestBrowserLog_LogInjection_Newline(t *testing.T) {
+	// Not t.Parallel(): captureInfoLog() mutates the process-global slog.Default()
+	// logger, which races against any other test's concurrent logging calls.
 	restore := captureInfoLog()
 	logClientEntry(&sessionv1.ClientLogEntry{
 		Level:   "log",
@@ -104,6 +113,8 @@ func TestBrowserLog_LogInjection_Newline(t *testing.T) {
 
 // UT-B-10: message with carriage return is sanitized
 func TestBrowserLog_LogInjection_CarriageReturn(t *testing.T) {
+	// Not t.Parallel(): captureInfoLog() mutates the process-global slog.Default()
+	// logger, which races against any other test's concurrent logging calls.
 	restore := captureInfoLog()
 	logClientEntry(&sessionv1.ClientLogEntry{
 		Level:   "log",
@@ -120,6 +131,8 @@ func TestBrowserLog_LogInjection_CarriageReturn(t *testing.T) {
 
 // UT-B-11: message > 200 chars is truncated with ellipsis
 func TestBrowserLog_MessageTruncation(t *testing.T) {
+	// Not t.Parallel(): captureInfoLog() mutates the process-global slog.Default()
+	// logger, which races against any other test's concurrent logging calls.
 	restore := captureInfoLog()
 	msg := strings.Repeat("a", 300)
 	logClientEntry(&sessionv1.ClientLogEntry{
@@ -139,6 +152,8 @@ func TestBrowserLog_MessageTruncation(t *testing.T) {
 
 // UT-B-12: userAgent > 80 chars is truncated
 func TestBrowserLog_UAShortened(t *testing.T) {
+	// Not t.Parallel(): captureInfoLog() mutates the process-global slog.Default()
+	// logger, which races against any other test's concurrent logging calls.
 	restore := captureInfoLog()
 	ua := strings.Repeat("u", 200)
 	logClientEntry(&sessionv1.ClientLogEntry{
@@ -154,6 +169,8 @@ func TestBrowserLog_UAShortened(t *testing.T) {
 
 // UT-B-13: level "error" routes to ErrorLog
 func TestBrowserLog_ErrorLevelRoutesToErrorLog(t *testing.T) {
+	// Not t.Parallel(): captureErrorLog() mutates the process-global slog.Default()
+	// logger, which races against any other test's concurrent logging calls.
 	restore := captureErrorLog()
 	logClientEntry(&sessionv1.ClientLogEntry{
 		Level:   "error",
@@ -170,6 +187,8 @@ func TestBrowserLog_ErrorLevelRoutesToErrorLog(t *testing.T) {
 
 // UT-B-14: level "log" routes to InfoLog
 func TestBrowserLog_OtherLevelRoutesToInfoLog(t *testing.T) {
+	// Not t.Parallel(): captureInfoLog() mutates the process-global slog.Default()
+	// logger, which races against any other test's concurrent logging calls.
 	restore := captureInfoLog()
 	logClientEntry(&sessionv1.ClientLogEntry{
 		Level:   "log",
@@ -183,6 +202,8 @@ func TestBrowserLog_OtherLevelRoutesToInfoLog(t *testing.T) {
 
 // UT-B-15: entry without sessionId/url does not panic
 func TestBrowserLog_MissingOptionalFields(t *testing.T) {
+	// Not t.Parallel(): captureInfoLog() mutates the process-global slog.Default()
+	// logger, which races against any other test's concurrent logging calls.
 	restore := captureInfoLog()
 	defer restore()
 	// Should not panic
@@ -195,6 +216,7 @@ func TestBrowserLog_MissingOptionalFields(t *testing.T) {
 // sanitizeClientLogField unit tests
 
 func TestSanitizeClientLogField_TruncatesLongString(t *testing.T) {
+	t.Parallel()
 	s := strings.Repeat("x", 300)
 	result := sanitizeClientLogField(s, 200)
 	runes := []rune(result)
@@ -208,6 +230,7 @@ func TestSanitizeClientLogField_TruncatesLongString(t *testing.T) {
 }
 
 func TestSanitizeClientLogField_ExactLength(t *testing.T) {
+	t.Parallel()
 	s := strings.Repeat("x", 200)
 	result := sanitizeClientLogField(s, 200)
 	if result != s {
@@ -216,6 +239,7 @@ func TestSanitizeClientLogField_ExactLength(t *testing.T) {
 }
 
 func TestSanitizeClientLogField_EscapesNewlines(t *testing.T) {
+	t.Parallel()
 	result := sanitizeClientLogField("a\nb", 100)
 	if strings.Contains(result, "\n") {
 		t.Errorf("newline not escaped: %q", result)
@@ -223,6 +247,7 @@ func TestSanitizeClientLogField_EscapesNewlines(t *testing.T) {
 }
 
 func TestSanitizeClientLogField_EscapesCarriageReturn(t *testing.T) {
+	t.Parallel()
 	result := sanitizeClientLogField("a\rb", 100)
 	if strings.Contains(result, "\r") {
 		t.Errorf("carriage return not escaped: %q", result)
@@ -230,6 +255,7 @@ func TestSanitizeClientLogField_EscapesCarriageReturn(t *testing.T) {
 }
 
 func TestSanitizeClientLogField_EscapesTabs(t *testing.T) {
+	t.Parallel()
 	result := sanitizeClientLogField("a\tb", 100)
 	if strings.Contains(result, "\t") {
 		t.Errorf("tab not escaped: %q", result)

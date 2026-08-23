@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/executor/safeexec"
+	"github.com/tstapler/stapler-squad/internal/syncutil"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
@@ -376,26 +377,8 @@ func (pd *PTYDiscovery) Stop() {
 	pd.stopOnce.Do(func() {
 		close(pd.stopCh)
 	})
-	if !waitGroupWithTimeout(&pd.monitorWG, stopJoinTimeout) {
+	if !syncutil.WaitWithTimeout(&pd.monitorWG, stopJoinTimeout) {
 		log.Warn("PTYDiscovery.Stop: monitorLoop did not exit within timeout; it may still be running", "timeout", stopJoinTimeout)
-	}
-}
-
-// waitGroupWithTimeout waits for wg to complete, returning true if it did so
-// within timeout and false if the timeout elapsed first. On timeout, this
-// bookkeeping goroutine itself is harmlessly leaked (it will eventually
-// complete and close the now-unread done channel).
-func waitGroupWithTimeout(wg *sync.WaitGroup, timeout time.Duration) bool {
-	done := make(chan struct{})
-	go func() {
-		wg.Wait()
-		close(done)
-	}()
-	select {
-	case <-done:
-		return true
-	case <-time.After(timeout):
-		return false
 	}
 }
 

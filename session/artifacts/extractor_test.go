@@ -6,6 +6,7 @@ import (
 )
 
 func TestExtractFromToolResult_PRURLs(t *testing.T) {
+	t.Parallel()
 	text := "Created PR: https://github.com/owner/repo/pull/42 — ready for review"
 	prURLs, _, _ := ExtractFromToolResult(text)
 	if len(prURLs) != 1 || prURLs[0] != "https://github.com/owner/repo/pull/42" {
@@ -14,6 +15,7 @@ func TestExtractFromToolResult_PRURLs(t *testing.T) {
 }
 
 func TestExtractFromToolResult_CommitSHA(t *testing.T) {
+	t.Parallel()
 	text := "commit abc123def456abc123def456abc123def456abc1\nAuthor: dev"
 	_, commitSHAs, _ := ExtractFromToolResult(text)
 	if len(commitSHAs) != 1 || commitSHAs[0] != "abc123def456abc123def456abc123def456abc1" {
@@ -22,6 +24,7 @@ func TestExtractFromToolResult_CommitSHA(t *testing.T) {
 }
 
 func TestExtractFromToolResult_NoSHAFromNPMHashes(t *testing.T) {
+	t.Parallel()
 	// npm install outputs hex hashes but not preceded by "commit" — should not match.
 	text := "added 42 packages (abc123def456abc123def456abc123def456abc1 is a package hash)"
 	_, commitSHAs, _ := ExtractFromToolResult(text)
@@ -31,6 +34,7 @@ func TestExtractFromToolResult_NoSHAFromNPMHashes(t *testing.T) {
 }
 
 func TestExtractFromToolResult_ExternalURLDedup(t *testing.T) {
+	t.Parallel()
 	text := "see https://example.com/docs and https://example.com/docs again"
 	_, _, urls := ExtractFromToolResult(text)
 	if len(urls) != 1 {
@@ -39,6 +43,7 @@ func TestExtractFromToolResult_ExternalURLDedup(t *testing.T) {
 }
 
 func TestExtractFromToolResult_ExternalURLCap(t *testing.T) {
+	t.Parallel()
 	// Generate 60 unique URLs.
 	// NOTE: ExtractFromToolResult itself does NOT cap — cap50 is applied at merge time
 	// in mergeAndPersist. This test verifies that dedup works correctly here and that
@@ -58,6 +63,7 @@ func TestExtractFromToolResult_ExternalURLCap(t *testing.T) {
 }
 
 func TestExtractFromBashCommand_GHPRCreate(t *testing.T) {
+	t.Parallel()
 	cmd := `gh pr create --title "feat: add search" --body "Search feature"`
 	artifact := ExtractFromBashCommand(cmd)
 	if artifact == nil {
@@ -69,6 +75,7 @@ func TestExtractFromBashCommand_GHPRCreate(t *testing.T) {
 }
 
 func TestExtractFromBashCommand_GHPRMerge(t *testing.T) {
+	t.Parallel()
 	cmd := "gh pr merge 42 --squash --delete-branch --repo owner/repo"
 	artifact := ExtractFromBashCommand(cmd)
 	if artifact == nil {
@@ -80,6 +87,7 @@ func TestExtractFromBashCommand_GHPRMerge(t *testing.T) {
 }
 
 func TestExtractFromBashCommand_GitCommit(t *testing.T) {
+	t.Parallel()
 	cmd := `git commit -m "fix: resolve nil pointer in session driver"`
 	artifact := ExtractFromBashCommand(cmd)
 	if artifact == nil {
@@ -91,6 +99,7 @@ func TestExtractFromBashCommand_GitCommit(t *testing.T) {
 }
 
 func TestExtractFromBashCommand_NoMatch(t *testing.T) {
+	t.Parallel()
 	cmd := "ls -la /tmp"
 	if ExtractFromBashCommand(cmd) != nil {
 		t.Fatal("expected nil for non-matching command")
@@ -102,6 +111,7 @@ func TestExtractFromBashCommand_NoMatch(t *testing.T) {
 // .*? is non-greedy and may stop before crossing --body. If that is the case, this test
 // documents the known limitation as a comment rather than failing.
 func TestExtractFromBashCommand_GHPRCreate_BodyBeforeTitle(t *testing.T) {
+	t.Parallel()
 	cmd := `gh pr create --body "Some body text" --title "feat: another feature"`
 	artifact := ExtractFromBashCommand(cmd)
 	if artifact == nil {

@@ -7,6 +7,7 @@ import (
 )
 
 func TestNewCandidateFromDiscovered_MapsAllFields_When_MuxDiscoveredSessionValid(t *testing.T) {
+	t.Parallel()
 	ds := &mux.DiscoveredSession{
 		SocketPath: "/tmp/ssq-mux-4821.sock",
 		Metadata: &mux.SessionMetadata{
@@ -33,6 +34,7 @@ func TestNewCandidateFromDiscovered_MapsAllFields_When_MuxDiscoveredSessionValid
 }
 
 func TestNewCandidateFromDiscovered_LeavesTmuxSessionEmpty_When_TmuxSessionMissing(t *testing.T) {
+	t.Parallel()
 	ds := &mux.DiscoveredSession{
 		SocketPath: "/tmp/ssq-mux-99.sock",
 		Metadata: &mux.SessionMetadata{

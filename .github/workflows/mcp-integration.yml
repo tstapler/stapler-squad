@@ -32,6 +32,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # go.mod's `replace github.com/tstapler/tymux/clients/go => ../tymux/clients/go`
+      # (Epic 2.1, stapler-squad-integration) is a relative local path — Go's
+      # module-graph resolution fails for ANY package if it doesn't exist on disk, so
+      # this checkout must land before this job's `go test` step below.
+      # actions/checkout's `path` input is validated to stay under $GITHUB_WORKSPACE
+      # (it refuses to write outside it, even to the runner's own parent "_work"
+      # dir) — so a true sibling checkout can't go through actions/checkout at
+      # all. Plain `git clone` has no such restriction; tstapler/tymux is public
+      # so this needs no auth.
+      - name: Checkout tymux (sibling, for go.mod replace directive)
+        shell: bash
+        run: git clone --depth 1 --branch main https://github.com/tstapler/tymux.git ../tymux
+
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
@@ -46,8 +59,19 @@ jobs:
       # The integration test (TestMCPHandshakeSubprocess) spawns a real
       # --mcp subprocess and exercises the full MCP stdio handshake.
       # It calls `go build` internally, so the Go toolchain must be present.
+      #
+      # -timeout=1200s: the pure-Go sqlite migration (modernc.org/sqlite,
+      # see backlog/stapler-squad-fix-cgo-release-sqlite-driver) made
+      # session.NewEntRepository()'s ent schema migration + backfills
+      # measurably more expensive under -race than the old cgo driver
+      # (~2.9s/call under -race vs. ~0.77s without, measured locally via
+      # a standalone repro against this branch). server/services has 308
+      # call sites of the createTestStorage(t) helper that each pay this
+      # cost once, so its test binary alone needs on the order of 15
+      # minutes of headroom under -race; the previous 150s budget was
+      # sized for the old cgo driver and never adjusted for the new one.
       - name: Run MCP integration tests
         run: |
-          go test -tags=integration -timeout=150s -v -race \
+          go test -tags=integration -timeout=1200s -v -race \
             ./server/mcp/... \
             ./server/services/...

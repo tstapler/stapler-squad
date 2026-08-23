@@ -267,6 +267,16 @@ func BuildReviewPrompt(item *BacklogItemData, acSnapshot []AcCriterion, diff str
 	// --- diff ---
 	sb.WriteString("## Git Diff\n")
 	if diff == "" {
+		// Defensive only: ReviewGateRunner.Run (review_gate.go), the sole caller that
+		// reaches this function via reviewPromptFor, already blocks on committedDiffEmpty
+		// before calling reviewPromptFor at all, recording a synthetic FAIL verdict
+		// instead. This branch is not known to be reachable in production — unlike
+		// BuildHeadlessReviewPrompt's diff=="" branch, which the sdd-mode headless
+		// TriggerReReview path (backlog_service_triage.go's reviewPromptFor) does reach
+		// live and which carries ReviewContextExtras for that reason. Kept as a fallback
+		// so this function degrades gracefully if a future caller ever skips that guard,
+		// rather than as a currently-exercised path — do not add ReviewContextExtras
+		// plumbing here without first confirming a real caller needs it.
 		sb.WriteString("(no diff available — no committed code changes were found for this session)\n\n")
 		sb.WriteString("## No-Diff Verification\n")
 		sb.WriteString("This can mean the criteria were already satisfied before this session started, or that no work happened. Check each criterion against the CURRENT codebase yourself using your available tools before verdicting; do not rely on the work session's note or verification evidence alone.\n\n")
@@ -365,8 +375,17 @@ func BuildHeadlessReviewPrompt(item *BacklogItemData, acSnapshot []AcCriterion, 
 	sb.WriteString("## Instructions\n")
 	sb.WriteString("Evaluate every acceptance criterion against the diff above. Also verify the implementation follows the plan (if provided).\n")
 	sb.WriteString("Output ONLY a single JSON object with no surrounding text:\n")
-	sb.WriteString(`{"overall":"PASS","summary":"concise assessment","verdicts":[{"criterion_index":0,"outcome":"PASS","evidence":"direct quote from diff"}]}`)
-	sb.WriteString("\nValid outcome values: PASS, FAIL, PARTIAL, UNVERIFIABLE.\n")
+	if diff == "" {
+		// Must match headless.HeadlessReviewSystemPromptWithCodebaseAccess()'s schema
+		// example exactly: that system prompt requires tool_reads on this path, and
+		// DegradeIfUnverified force-downgrades the verdict to UNVERIFIABLE unless it's
+		// present and every listed path verifies (see verifyToolReadsExist below).
+		sb.WriteString(`{"overall":"PARTIAL","summary":"concise assessment","tool_reads":["auth/login.go","main.go"],"verdicts":[{"criterion_index":0,"outcome":"PASS","evidence":"auth/login.go:9-24 — quoted snippet you read yourself"}]}`)
+		sb.WriteString("\ntool_reads must list every file path you actually read via Read/Grep/Glob — verdicts not backed by a listed path are downgraded to UNVERIFIABLE.\n")
+	} else {
+		sb.WriteString(`{"overall":"PASS","summary":"concise assessment","verdicts":[{"criterion_index":0,"outcome":"PASS","evidence":"direct quote from diff"}]}`)
+	}
+	sb.WriteString("\nValid outcome values: PASS, FAIL, PARTIAL, UNVERIFIABLE. Mark a criterion UNVERIFIABLE rather than guessing if you cannot confirm it from what's in front of you — a missing or incomplete diff is a known limitation of this mode, not a signal the work is wrong.\n")
 
 	return sb.String()
 }
@@ -434,18 +453,38 @@ type headlessVerdictJSON struct {
 	Verdicts  []CriterionVerdict `json:"verdicts"`
 }
 
+// parseHeadlessVerdictJSON finds the last brace-delimited span in text that
+// unmarshals into headlessVerdictJSON with a non-empty overall or verdicts,
+// tolerating prose and stray unrelated braces around/before it — mirroring
+// ParseHeadlessTriageResult's use of extractTopLevelJSONObjects.
+func parseHeadlessVerdictJSON(text string) (headlessVerdictJSON, error) {
+	candidates := extractTopLevelJSONObjects(text)
+	var lastErr error
+	for i := len(candidates) - 1; i >= 0; i-- {
+		var v headlessVerdictJSON
+		if err := json.Unmarshal([]byte(candidates[i]), &v); err != nil {
+			lastErr = err
+			continue
+		}
+		if v.Overall == "" && len(v.Verdicts) == 0 {
+			// Syntactically valid but not a verdict object (e.g. a decoy/example
+			// object quoted earlier in the response) — keep looking.
+			continue
+		}
+		return v, nil
+	}
+	if lastErr == nil {
+		lastErr = fmt.Errorf("no JSON object found")
+	}
+	return headlessVerdictJSON{}, lastErr
+}
+
 // ParseHeadlessVerdictResult extracts verdict data from a headless LLM JSON response.
 // It searches for the outermost JSON object in text, tolerating prose around it.
 // Returns ReviewOutcomeFail overall if parsing fails or no verdicts are present.
 func ParseHeadlessVerdictResult(text string) (overall ReviewOutcome, verdicts []CriterionVerdict, summary string) {
-	start := strings.Index(text, "{")
-	end := strings.LastIndex(text, "}")
-	if start == -1 || end <= start {
-		return ReviewOutcomeFail, nil, "headless review response contained no parseable JSON"
-	}
-
-	var v headlessVerdictJSON
-	if err := json.Unmarshal([]byte(text[start:end+1]), &v); err != nil {
+	v, err := parseHeadlessVerdictJSON(text)
+	if err != nil {
 		return ReviewOutcomeFail, nil, fmt.Sprintf("headless review JSON parse failed: %v", err)
 	}
 
@@ -463,13 +502,8 @@ func ParseHeadlessVerdictResult(text string) (overall ReviewOutcome, verdicts []
 // ParseHeadlessToolReads extracts the tool_reads list from a headless LLM JSON
 // response. Returns nil if the field is absent or the JSON doesn't parse.
 func ParseHeadlessToolReads(text string) []string {
-	start := strings.Index(text, "{")
-	end := strings.LastIndex(text, "}")
-	if start == -1 || end <= start {
-		return nil
-	}
-	var v headlessVerdictJSON
-	if err := json.Unmarshal([]byte(text[start:end+1]), &v); err != nil {
+	v, err := parseHeadlessVerdictJSON(text)
+	if err != nil {
 		return nil
 	}
 	return v.ToolReads
@@ -591,7 +625,7 @@ func recordTerminalReviewVerdict(storage *Storage, itemID string, acSnapshot AcC
 		return ItemSessionSummary{}, err
 	}
 	if updateErr := storage.UpdateItemSessionEnded(cleanupCtx, is.ID, time.Now()); updateErr != nil { //nolint:silenttransition bookkeeping timestamp only; the caller proceeds regardless (returns is, nil below either way), matching the convention of the other review-session-end bookkeeping call sites
-		log.WarningLog.Printf("[headless] recordTerminalReviewVerdict UpdateItemSessionEnded item=%s session=%s: %v", itemID, is.ID, updateErr)
+		log.WarningLog().Printf("[headless] recordTerminalReviewVerdict UpdateItemSessionEnded item=%s session=%s: %v", itemID, is.ID, updateErr)
 	}
 	return is, nil
 }

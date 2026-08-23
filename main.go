@@ -25,13 +25,16 @@ import (
 	"github.com/tstapler/stapler-squad/session/scrollback"
 	"github.com/tstapler/stapler-squad/session/tmux"
 	"github.com/tstapler/stapler-squad/telemetry"
+	"io"
 	"net"
 	"os"
 	"os/signal"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"syscall"
+	"text/tabwriter"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -39,22 +42,25 @@ import (
 )
 
 var (
-	version            = "1.1.2"
-	daemonFlag         bool
-	mcpFlag            bool
-	testModeFlag       bool
-	testDirFlag        string
-	discoveryModeFlag  string
-	discoverExtFlag    bool
-	profileFlag        bool
-	profilePortFlag    int
-	traceFlag          bool
-	listenAddrFlag     string
-	remoteAccessFlag   bool
-	remotePortFlag     int
-	rpIDFlag           string
-	tmuxKeepServerFlag bool
-	rootCmd            = &cobra.Command{
+	version                 = "1.1.2"
+	daemonFlag              bool
+	mcpFlag                 bool
+	testModeFlag            bool
+	testDirFlag             string
+	discoveryModeFlag       string
+	discoverExtFlag         bool
+	profileFlag             bool
+	profilePortFlag         int
+	traceFlag               bool
+	listenAddrFlag          string
+	remoteAccessFlag        bool
+	remotePortFlag          int
+	rpIDFlag                string
+	tmuxKeepServerFlag      bool
+	openURLFlag             string
+	registerLinuxSchemeFlag string
+	listKnownHostsFlag      bool
+	rootCmd                 = &cobra.Command{
 		Use:   "stapler-squad",
 		Short: "Stapler Squad - Manage multiple AI agents like Claude Code, Aider, Codex, and Amp (Web Mode)",
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -63,6 +69,44 @@ var (
 			// session state including Claude session IDs for --resume on next start).
 			ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 			defer stop()
+
+			// --open-url mode: translate an ssq:// deep link to a local web UI URL
+			// and shell out to the OS's default opener, then exit. Never starts the
+			// HTTP server, config loading, or logging — it's a fire-and-forget CLI
+			// helper invoked by the OS as the ssq:// scheme handler (see
+			// project_plans/backlog-deep-linking/implementation/plan.md Epic 4).
+			if openURLFlag != "" {
+				if err := runOpenURL(ctx, openURLFlag); err != nil {
+					fmt.Fprintln(os.Stderr, err)
+					os.Exit(1)
+				}
+				return nil
+			}
+
+			// --register-linux-scheme mode: idempotently register stapler-squad as
+			// the OS handler for the ssq:// URL scheme (Story 4.2). Invoked from
+			// scripts/install-service.sh's Linux install path, not by end users
+			// directly — hidden from --help below.
+			if registerLinuxSchemeFlag != "" {
+				desktopDir := filepath.Join(os.Getenv("HOME"), ".local", "share", "applications")
+				if err := registerLinuxScheme(ctx, desktopDir, registerLinuxSchemeFlag); err != nil {
+					fmt.Fprintln(os.Stderr, err)
+					os.Exit(1)
+				}
+				return nil
+			}
+
+			// --list-known-hosts mode (Observability Plan,
+			// project_plans/backlog-deep-linking/implementation/plan.md): print the
+			// local Workspace Host Registry's contents to stdout, then exit. Lets a
+			// user diagnose "why didn't my link resolve" without reading logs.
+			if listKnownHostsFlag {
+				if err := runListKnownHosts(os.Stdout); err != nil {
+					fmt.Fprintln(os.Stderr, err)
+					os.Exit(1)
+				}
+				return nil
+			}
 
 			// MCP mode: initialize logging to stderr, run MCP server.
 			// Mutually exclusive with HTTP server mode — returns when stdin closes.
@@ -96,12 +140,13 @@ var (
 				// load-time read of the flag (rather than a live BacklogController,
 				// which BuildCoreDeps doesn't construct) is sufficient.
 				backlogEnabled := func() bool { return cfg.GetFeatureFlag("backlog") }
-				// No BacklogService on this stdio fallback path (buildMCPDeps only
-				// builds Phase 1 CoreDeps) — submit_review_verdict's eager
-				// review->in_progress transition is skipped here, and
-				// create_backlog_item/import_github_issue skip auto-triage; see
-				// RunServer's doc comment.
-				return mcpserver.RunServer(ctx, store, svc, sbMgr, storage, nil, nil, backlogEnabled, nil, nil)
+				// No BacklogService/liveness checker on this stdio fallback path
+				// (buildMCPDeps only builds Phase 1 CoreDeps) — submit_review_verdict's
+				// eager review->in_progress transition is skipped here,
+				// create_backlog_item/import_github_issue skip auto-triage, and
+				// link_session_to_item degrades to UNAVAILABLE; see RunServer's doc
+				// comment and ADR-001.
+				return mcpserver.RunServer(ctx, store, svc, sbMgr, storage, nil, nil, backlogEnabled, nil, nil, nil)
 			}
 
 			// Enable test mode if flag is set
@@ -739,10 +784,25 @@ func init() {
 	rootCmd.Flags().BoolVar(&tmuxKeepServerFlag, "tmux-keep-server", true,
 		"Keep tmux server running even when all user sessions close (sets exit-empty off). "+
 			"Use this if the tmux server frequently stops between sessions.")
+	rootCmd.Flags().StringVar(&openURLFlag, "open-url", "",
+		"Translate an ssq:// deep link to a local web UI URL and open it via the OS's default "+
+			"opener (open on macOS, xdg-open on Linux), then exit. Used as the ssq:// scheme handler.")
+	rootCmd.Flags().StringVar(&registerLinuxSchemeFlag, "register-linux-scheme", "",
+		"(Linux only, internal) Idempotently register the given binary path as the OS handler "+
+			"for the ssq:// URL scheme via a .desktop file + xdg-mime, then exit. "+
+			"Invoked by scripts/install-service.sh.")
+	rootCmd.Flags().BoolVar(&listKnownHostsFlag, "list-known-hosts", false,
+		"Print the local Workspace Host Registry's known peer hosts (identity, advertised "+
+			"address(es), last-seen time) to stdout, then exit. Peers only appear here if "+
+			"they're reachable at the network layer (same LAN or VPN/Tailscale-style overlay) "+
+			"— this registry does not perform NAT traversal or cross-network discovery.")
 
 	// Hide the daemonFlag as it's only for internal use
 	err := rootCmd.Flags().MarkHidden("daemon")
 	if err != nil {
+		panic(err)
+	}
+	if err := rootCmd.Flags().MarkHidden("register-linux-scheme"); err != nil {
 		panic(err)
 	}
 
@@ -1149,6 +1209,30 @@ func startRemoteAccess(ctx context.Context, srv *server.Server, localAddr string
 	// Register auth routes on the shared mux (accessible via both servers).
 	serverauth.RegisterRoutes(srv.Mux(), waHandler, sessions, store, setupMgr, inviteMgr, caFile, displayHost, remotePort)
 
+	// Register the gossip-style host advertisement endpoint (ADR-002) on the
+	// same shared mux/remote server -- see host_advertisement.go's doc
+	// comment for why this is the right integration point.
+	hostIdentity, err := session.LoadOrCreateHostIdentity(configDir)
+	if err != nil {
+		log.Warn("failed to load/create host identity, host advertisement disabled", "err", err)
+	} else {
+		hostRegistry, regErr := session.NewHostRegistry(configDir, session.DefaultHostRegistryTTL)
+		if regErr != nil {
+			log.Warn("failed to open host registry, host advertisement disabled", "err", regErr)
+		} else {
+			selfAddresses := make([]string, 0, len(hostnames)+len(lanIPs))
+			for _, hn := range hostnames {
+				selfAddresses = append(selfAddresses, fmt.Sprintf("%s:%d", hn, remotePort))
+			}
+			for _, ip := range lanIPs {
+				selfAddresses = append(selfAddresses, fmt.Sprintf("%s:%d", ip, remotePort))
+			}
+			advertiser := session.NewHostAdvertiser(hostIdentity, hostRegistry, selfAddresses, session.DefaultHostAdvertisementInterval)
+			serverauth.RegisterHostAdvertisementRoute(srv.Mux(), hostIdentity, hostRegistry, advertiser, selfAddresses)
+			go advertiser.Run(ctx)
+		}
+	}
+
 	// Start the remote HTTPS server with auth middleware applied.
 	if err := srv.StartRemote(ctx, remoteAddr, tlsCfg, middleware.Auth(sessions)); err != nil {
 		return fmt.Errorf("start remote server: %w", err)
@@ -1212,7 +1296,15 @@ func buildLogConfig(daemon bool, cfg *config.Config, consoleEnabled bool) *log.L
 		UseSessionLogs: cfg.UseSessionLogs,
 		ConsoleEnabled: consoleEnabled,
 		FileEnabled:    true,
-		FileLevel:      log.DEBUG,
+		// INFO by default — DEBUG floods the log with per-poll-cycle noise
+		// (staleness checks, history-linker correlation, terminal snapshots)
+		// on every boot. Adjustable at runtime without a restart via
+		// POST /api/debug/log-level. Both must be set: initializeWithConfig
+		// seeds the runtime level from min(FileLevel, ConsoleLevel), and an
+		// unset ConsoleLevel zero-values to DEBUG (LogLevel's iota starts at
+		// DEBUG=0), silently overriding FileLevel.
+		FileLevel:    log.INFO,
+		ConsoleLevel: log.INFO,
 	}
 }
 
@@ -1252,4 +1344,46 @@ func buildMCPDeps() (session.InstanceStore, *services.SessionService, *scrollbac
 	sbMgr := scrollback.NewScrollbackManager(sbConfig)
 
 	return core.Storage, core.SessionService, sbMgr, core.Storage, nil
+}
+
+// runListKnownHosts implements --list-known-hosts: open this instance's
+// local Workspace Host Registry (using the same state-dir resolution as
+// startRemoteAccess's session.NewHostRegistry call) and print its current
+// contents to out. Registry-open failures (e.g. a corrupted
+// host_registry.json) are returned as a single-line error, mirroring
+// runOpenURL's error-handling convention, rather than exiting via panic.
+func runListKnownHosts(out io.Writer) error {
+	configDir, err := config.GetConfigDir()
+	if err != nil {
+		return fmt.Errorf("list-known-hosts: failed to resolve config directory: %w", err)
+	}
+	registry, err := session.NewHostRegistry(configDir, session.DefaultHostRegistryTTL)
+	if err != nil {
+		return fmt.Errorf("list-known-hosts: failed to open host registry: %w", err)
+	}
+	formatKnownHosts(out, registry.Snapshot())
+	return nil
+}
+
+// formatKnownHosts renders entries as a human-readable table (host id,
+// advertised address(es), last-seen time) to out, sorted by HostID for
+// deterministic output. Separated from runListKnownHosts so the formatting
+// logic is directly testable without touching disk.
+func formatKnownHosts(out io.Writer, entries []session.RegistryEntry) {
+	if len(entries) == 0 {
+		fmt.Fprintln(out, "No known hosts.")
+		return
+	}
+	sort.Slice(entries, func(i, j int) bool {
+		return entries[i].HostID.String() < entries[j].HostID.String()
+	})
+	w := tabwriter.NewWriter(out, 0, 4, 2, ' ', 0)
+	fmt.Fprintln(w, "HOST ID\tADVERTISED ADDRESS(ES)\tLAST SEEN")
+	for _, entry := range entries {
+		fmt.Fprintf(w, "%s\t%s\t%s\n",
+			entry.HostID.String(),
+			strings.Join(entry.AdvertisedAddress, ", "),
+			entry.LastSeenAt.Local().Format(time.RFC3339))
+	}
+	_ = w.Flush()
 }

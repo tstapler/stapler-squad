@@ -105,6 +105,9 @@ func InstanceToProto(inst *session.Instance, workflowNames map[string]string) *s
 		}
 	}
 
+	// Cached "has commits ahead of base" signal (AC6) — see Instance.UpdateDiffStats.
+	protoSession.HasCommitsAhead = inst.GetHasCommitsAhead()
+
 	// Convert Claude session data if available
 	if inst.GetClaudeSession() != nil {
 		cs := inst.GetClaudeSession()
@@ -193,6 +196,14 @@ func InstanceToProto(inst *session.Instance, workflowNames map[string]string) *s
 	}
 	if snap.ArchivedAt != nil {
 		protoSession.ArchivedAt = timestamppb.New(*snap.ArchivedAt)
+	}
+
+	// remote_name (field 76): host badge for a remote session (ssh-remote-workspaces
+	// Epic 6.2). Derived live from ExecutionTarget rather than a persisted field --
+	// see the proto field's doc comment for why (ExecutionTarget is `json:"-"`, not
+	// reconstructed across a restart). Empty (the zero value) for a LocalTarget.
+	if remoteTarget, ok := inst.GetExecutionTarget().(session.RemoteExecutionTarget); ok {
+		protoSession.RemoteName = remoteTarget.Target().Name
 	}
 
 	// Session goal summary — populated when a goal has been set via set_session_goal MCP tool.

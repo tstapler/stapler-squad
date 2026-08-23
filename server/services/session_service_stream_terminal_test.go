@@ -58,6 +58,7 @@ func newBidiStreamTestServer(t *testing.T) (*SessionService, *httptest.Server) {
 // (always Output, never any other variant) rather than specific echoed
 // content.
 func TestStreamTerminal_SendsRawOutput(t *testing.T) {
+	t.Parallel()
 	svc, srv := newBidiStreamTestServer(t)
 
 	statusMgr := session.NewInstanceStatusManager()
@@ -186,7 +187,9 @@ func TestStreamTerminal_SendsRawOutput(t *testing.T) {
 // TestWaitWithTimeout pins waitWithTimeout's two branches directly, without
 // depending on tmux or the e2e StreamTerminal path above.
 func TestWaitWithTimeout(t *testing.T) {
+	t.Parallel()
 	t.Run("returns true when goroutines finish in time", func(t *testing.T) {
+		t.Parallel()
 		var wg sync.WaitGroup
 		wg.Add(1)
 		go func() { defer wg.Done() }()
@@ -194,6 +197,7 @@ func TestWaitWithTimeout(t *testing.T) {
 	})
 
 	t.Run("returns false when goroutines don't finish in time", func(t *testing.T) {
+		t.Parallel()
 		var wg sync.WaitGroup
 		wg.Add(1) // deliberately never Done()
 		require.False(t, waitWithTimeout(&wg, 10*time.Millisecond))

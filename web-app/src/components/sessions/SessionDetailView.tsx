@@ -952,6 +952,9 @@ export function SessionDetailView({
       )}
       </div>
 
+      {/* Row wrapper so BacklogItemPanel (linked backlog item) stays visible beside
+          whichever tab is active, not just the terminal tab. */}
+      <div style={{ display: "flex", flexDirection: "row", flex: 1, minHeight: 0 }}>
       <div className={`${styles.content} ${isFullscreen ? styles.fullscreenContent : ""}`}>
         {/* Terminal tab: kept mounted but hidden via display:none to preserve xterm.js instances */}
         <div
@@ -959,9 +962,8 @@ export function SessionDetailView({
           role="tabpanel"
           aria-labelledby="tab-terminal"
           aria-hidden={activeTab !== "terminal"}
-          style={{ display: activeTab === "terminal" ? "flex" : "none", flexDirection: "row" }}
+          style={{ display: activeTab === "terminal" ? "flex" : "none" }}
         >
-          {/* Terminal content wrapper with flex: 1 to allow BacklogItemPanel to sit beside it */}
           <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
             {/* ApprovalPanel removed — approvals now handled in the global ApprovalDrawer in Header */}
             {session.instanceType === InstanceType.EXTERNAL && !session.externalMetadata?.muxSocketPath ? (
@@ -1074,14 +1076,6 @@ export function SessionDetailView({
               </div>
             )}
           </div>
-
-          {/* BacklogItemPanel — collapsible right sidebar showing linked backlog item */}
-          {backlogItemId && (
-            <BacklogItemPanel
-              backlogItemId={backlogItemId}
-              sessionId={session.id}
-            />
-          )}
         </div>
         {/* Browser tab: always mounted (not conditionally rendered) so the noVNC RFB
             connection persists across tab switches. Visibility controlled via CSS,
@@ -1629,6 +1623,16 @@ export function SessionDetailView({
             <SessionSummaryPanel sessionId={session.id} />
           </div>
         )}
+      </div>
+
+      {/* BacklogItemPanel — collapsible sidebar showing the linked backlog item;
+          a sibling of `content` (not nested in one tab) so it's visible on every tab. */}
+      {backlogItemId && (
+        <BacklogItemPanel
+          backlogItemId={backlogItemId}
+          sessionId={session.id}
+        />
+      )}
       </div>
 
       {/* Workspace Switch Modal */}

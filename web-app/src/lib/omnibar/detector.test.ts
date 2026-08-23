@@ -233,4 +233,24 @@ describe("Detector", () => {
       expect(consoleErrorSpy).toHaveBeenCalled();
     });
   });
+
+  describe("GitHubEnterpriseURL registration", () => {
+    // Regression test: GitHubEnterpriseURLDetector was previously only
+    // registered from an async useEffect in OmnibarContext, keyed on the
+    // GHES host RPC result. That left a window on every fresh page load
+    // where a GHES PR/branch/repo URL had no matching detector and fell
+    // through to SessionSearchDetector's catch-all, producing a garbled
+    // slugified "session name" instead of being recognized. The detector
+    // must now be present in the registry synchronously, before any host
+    // list has loaded.
+    it("is present synchronously in createDefaultRegistry(), before any host list is set", () => {
+      expect(registry.find("GitHubEnterpriseURL")).toBeDefined();
+    });
+
+    it("finds the same registered instance across find() calls (singleton, not a copy)", () => {
+      const first = registry.find("GitHubEnterpriseURL");
+      const second = registry.find("GitHubEnterpriseURL");
+      expect(first).toBe(second);
+    });
+  });
 });

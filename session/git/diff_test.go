@@ -20,6 +20,7 @@ import (
 // is later copied verbatim into a proto3 string field, which panics/errors at marshal time
 // on invalid UTF-8, so Diff() must sanitize before storing.
 func TestGitWorktreeDiff_SanitizesInvalidUTF8_When_DiffContainsNonUTF8Bytes(t *testing.T) {
+	t.Parallel()
 	repoDir := setupTestRepo(t)
 
 	wt, _, err := NewGitWorktree(repoDir, "test-invalid-utf8-diff")

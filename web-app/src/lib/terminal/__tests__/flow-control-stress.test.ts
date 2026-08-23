@@ -156,7 +156,9 @@ describe('Flow Control Stress Tests', () => {
       let completed = 0;
       let maxWatermark = 0;
 
-      // Write rapidly to build up watermark
+      // Already fire-and-forget (no per-write await), so this doesn't share
+      // the serialize-then-await defect that made the Mixed Content Stress
+      // test above flaky under --maxWorkers=4 contention -- no change needed.
       for (let i = 0; i < writes; i++) {
         const chunk = `Line ${i}: ${'x'.repeat(80)}\n`;
         tracker.write(chunk, () => {
@@ -254,6 +256,7 @@ describe('Flow Control Stress Tests', () => {
 
       const iterations = 5000;
       let completed = 0;
+      const pending: Promise<void>[] = [];
 
       for (let i = 0; i < iterations; i++) {
         let chunk: string;
@@ -271,12 +274,14 @@ describe('Flow Control Stress Tests', () => {
 
         const safeChunk = parser.processChunk(chunk);
         if (safeChunk.length > 0) {
-          await new Promise<void>((resolve) => {
-            tracker.write(safeChunk, () => {
-              completed++;
-              resolve();
-            });
-          });
+          pending.push(
+            new Promise<void>((resolve) => {
+              tracker.write(safeChunk, () => {
+                completed++;
+                resolve();
+              });
+            })
+          );
         }
 
         // Yield occasionally
@@ -285,14 +290,15 @@ describe('Flow Control Stress Tests', () => {
         }
       }
 
+      // Draining concurrently (vs. per-write await) avoids ~5000 sequential
+      // 1ms macrotask round-trips that made this test wall-clock-bound under
+      // --maxWorkers=4 contention.
+      await Promise.all(pending);
+
       expect(completed).toBeGreaterThan(0);
       const metrics = tracker.getMetrics();
       expect(metrics.watermark).toBeLessThan(50000); // Should drain well
-      // 15000ms was too tight, then 30000ms too: this loop performs ~5000
-      // setTimeout-bound macrotask round-trips (plus ~50 extra yield timers),
-      // and under full-suite jest-worker scheduling contention that alone has
-      // been observed to exceed 30s with no logic bug involved.
-    }, 60000);
+    }, 20000); // Generous headroom now that the drain is concurrent, not serial.
   });
 
   describe('Watermark Behavior', () => {

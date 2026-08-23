@@ -12,6 +12,7 @@ import (
 // TestSnapshotNonNilAfterNewInstance verifies that all 4 construction paths populate the snapshot.
 
 func TestSnapshotNonNilAfterNewInstance(t *testing.T) {
+	t.Parallel()
 	inst, err := NewInstance(InstanceOptions{
 		Title:   "snapshot-test-new",
 		Path:    t.TempDir(),
@@ -29,6 +30,7 @@ func TestSnapshotNonNilAfterNewInstance(t *testing.T) {
 }
 
 func TestSnapshotNonNilAfterSessionToInstance(t *testing.T) {
+	t.Parallel()
 	s := &Session{
 		Title:     "session-to-instance",
 		Status:    Creating,
@@ -51,6 +53,7 @@ func TestSnapshotNonNilAfterSessionToInstance(t *testing.T) {
 // --- Story 1.2: Mutator snapshot freshness ---
 
 func TestSnapshotReflectsMarkViewed(t *testing.T) {
+	t.Parallel()
 	inst := minimalInstance(t)
 	before := inst.Snapshot().LastViewed
 	inst.MarkViewed()
@@ -61,6 +64,7 @@ func TestSnapshotReflectsMarkViewed(t *testing.T) {
 }
 
 func TestSnapshotReflectsMarkAcknowledged(t *testing.T) {
+	t.Parallel()
 	inst := minimalInstance(t)
 	before := inst.Snapshot().LastAcknowledged
 	inst.MarkAcknowledged()
@@ -71,6 +75,7 @@ func TestSnapshotReflectsMarkAcknowledged(t *testing.T) {
 }
 
 func TestSnapshotReflectsSetLastMeaningfulOutput(t *testing.T) {
+	t.Parallel()
 	inst := minimalInstance(t)
 	ts := time.Now().Add(time.Hour)
 	inst.SetLastMeaningfulOutput(ts)
@@ -81,6 +86,7 @@ func TestSnapshotReflectsSetLastMeaningfulOutput(t *testing.T) {
 }
 
 func TestSnapshotReflectsForceStatus(t *testing.T) {
+	t.Parallel()
 	inst := minimalInstance(t)
 	inst.ForceStatus(Paused)
 	if inst.Snapshot().Status != Paused {
@@ -89,6 +95,7 @@ func TestSnapshotReflectsForceStatus(t *testing.T) {
 }
 
 func TestSnapshotReflectsSetArchivedAtIfNil(t *testing.T) {
+	t.Parallel()
 	inst := minimalInstance(t)
 	ts := time.Now()
 	inst.SetArchivedAtIfNil(ts)
@@ -102,6 +109,7 @@ func TestSnapshotReflectsSetArchivedAtIfNil(t *testing.T) {
 }
 
 func TestSnapshotReflectsAddTag(t *testing.T) {
+	t.Parallel()
 	inst := minimalInstance(t)
 	if err := inst.AddTag("mytag"); err != nil {
 		t.Fatalf("AddTag: %v", err)
@@ -116,6 +124,7 @@ func TestSnapshotReflectsAddTag(t *testing.T) {
 }
 
 func TestSnapshotReflectsRemoveTag(t *testing.T) {
+	t.Parallel()
 	inst := minimalInstance(t)
 	_ = inst.AddTag("removeme")
 	inst.RemoveTag("removeme")
@@ -127,6 +136,7 @@ func TestSnapshotReflectsRemoveTag(t *testing.T) {
 }
 
 func TestSnapshotReflectsSetGitHubPRNumber(t *testing.T) {
+	t.Parallel()
 	inst := minimalInstance(t)
 	inst.SetGitHubPRNumber(42)
 	if inst.Snapshot().GitHub.GitHubPRNumber != 42 {
@@ -140,6 +150,7 @@ func TestSnapshotReflectsSetGitHubPRNumber(t *testing.T) {
 // actor mailbox when a LiveInstance is running, preventing the data race between the
 // async-creation goroutine and any concurrent buildSnapshot call.
 func TestCreationProgressActorRouted(t *testing.T) {
+	t.Parallel()
 	inst := minimalInstance(t)
 	li := NewLiveInstance(inst)
 	defer li.Stop()
@@ -165,6 +176,7 @@ func TestCreationProgressActorRouted(t *testing.T) {
 // program-switching path noted in the plan (recent git history: "fix(session): program
 // switching now saves correctly for all cases").
 func TestSetProgramActorRouted(t *testing.T) {
+	t.Parallel()
 	inst := minimalInstance(t)
 	li := NewLiveInstance(inst)
 	defer li.Stop()
@@ -182,6 +194,7 @@ func TestSetProgramActorRouted(t *testing.T) {
 // TestSetAutonomousCompleteActorRouted verifies SetAutonomousComplete clears the mode
 // flag and sets the correct outcome through the actor.
 func TestSetAutonomousCompleteActorRouted(t *testing.T) {
+	t.Parallel()
 	inst := minimalInstance(t)
 	li := NewLiveInstance(inst)
 	defer li.Stop()
@@ -205,6 +218,7 @@ func TestSetAutonomousCompleteActorRouted(t *testing.T) {
 }
 
 func TestSnapshotReflectsClearConversationState(t *testing.T) {
+	t.Parallel()
 	inst := minimalInstance(t)
 	inst.HistoryFilePath = "/some/path"
 	inst.snapshot.Store(buildSnapshot(inst)) // prime snapshot with the path
@@ -228,6 +242,7 @@ func TestSnapshotReflectsClearConversationState(t *testing.T) {
 //
 // Run with: RUN_RACE_SURFACE_TEST=1 go test -race ./session/... -run TestSnapshotRaceSurface
 func TestSnapshotRaceSurface(t *testing.T) {
+	t.Parallel()
 	if os.Getenv("RUN_RACE_SURFACE_TEST") == "" {
 		t.Skip("set RUN_RACE_SURFACE_TEST=1 to run race surface test")
 	}

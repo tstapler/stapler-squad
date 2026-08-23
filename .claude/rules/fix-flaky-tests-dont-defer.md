@@ -44,7 +44,6 @@ at `server/services/hook_injector.go:60`) and fixed with a deterministic regress
 - If it's out of scope for the current change, don't just move on — file it as its own bug
   (or route it to `sdd:fix-bug`) so it gets picked up on its own, rather than letting the next
   person re-discover and re-excuse the same flake.
-- Only exception: when fixing it now would meaningfully expand the current change's blast
-  radius (e.g. it requires refactoring shared test infrastructure other in-flight PRs also
-  touch) — say so explicitly and file the follow-up immediately, don't let "later" mean
-  "never."
+- No blast-radius exception. "This would expand the change's scope" is exactly the excuse this
+  rule exists to close off — file the follow-up immediately instead, but do not treat that as
+  license to skip fixing it now if it's actually fixable now.

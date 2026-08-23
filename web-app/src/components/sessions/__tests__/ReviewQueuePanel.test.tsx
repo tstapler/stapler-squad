@@ -1,21 +1,20 @@
 /**
- * Tests for ReviewQueuePanel — feature: review-queue-pr-creation (S3-3)
+ * Tests for ReviewQueuePanel — feature: review-queue-pr-creation
  *                            + feature: rules:create-from-review-queue (Epic 4)
  *
  * Covers:
- *  - "Create PR" button visible for TASK_COMPLETE items without a PR URL
- *  - "Create PR" button hidden when item already has a githubPrUrl
- *  - "Create PR" button hidden when onRunOneShot prop is not provided
- *  - Clicking "Create PR" opens the confirmation modal
- *  - Cancel button closes the modal without calling onRunOneShot
- *  - Confirm button calls onRunOneShot with the session ID and default prompt
+ *  - "Create PR" trigger visible (enabled) for TASK_COMPLETE items with commits ahead
+ *  - "Create PR" trigger disabled when there are no commits ahead (State B)
+ *  - "View PR" link shown instead of the trigger when item already has a githubPrUrl (State C)
+ *  - "Create PR" trigger hidden for non-TASK_COMPLETE items
+ *  - Clicking the trigger opens the shared CreatePullRequestModal (Epic 2.4)
  *  - Empty queue renders "all caught up" empty state
  *  - "Create Rule" button visible for APPROVAL_PENDING items with a command
  *  - Clicking "Create Rule" opens the rule modal with loading state
  */
 
 import React from "react";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { render, screen, fireEvent } from "@testing-library/react";
 import { ReviewQueuePanel, isCreateRuleEligibleCategory } from "../ReviewQueuePanel";
 import { AttentionReason, Priority, SubStatus, SuggestionSource } from "@/gen/session/v1/types_pb";
 import type { ReviewItem } from "@/gen/session/v1/types_pb";
@@ -56,6 +55,38 @@ jest.mock("@/lib/contexts/ApprovalsContext", () => ({
     clearForSession: jest.fn(),
     clearedSessions: new Set(),
   }),
+}));
+
+// Epic 2.4: ReviewQueuePanel now resolves draftPullRequest/createPullRequest straight from
+// SessionServiceContext (mirrors SessionActionsOverflow.tsx's Epic 2.3 wiring).
+const mockDraftPullRequest = jest.fn();
+const mockCreatePullRequest = jest.fn();
+
+jest.mock("@/lib/contexts/SessionServiceContext", () => ({
+  useSessionServiceContext: () => ({
+    draftPullRequest: mockDraftPullRequest,
+    createPullRequest: mockCreatePullRequest,
+  }),
+}));
+
+// CreatePullRequestModal has its own dedicated test suite (CreatePullRequestModal.test.tsx) —
+// stub it here so these tests verify wiring (trigger -> open/close) without duplicating that
+// coverage or dealing with the modal's own async draft-fetch lifecycle.
+jest.mock("../CreatePullRequestModal", () => ({
+  CreatePullRequestModal: ({
+    session,
+    isOpen,
+    onClose,
+  }: {
+    session: { id: string };
+    isOpen: boolean;
+    onClose: () => void;
+  }) =>
+    isOpen ? (
+      <div data-testid="create-pr-modal" data-session-id={session.id}>
+        <button onClick={onClose}>Close</button>
+      </div>
+    ) : null,
 }));
 
 jest.mock("@/lib/hooks/useReviewQueueNavigation", () => ({
@@ -122,8 +153,9 @@ function makeReviewItem(overrides: Partial<ReviewItem> = {}): ReviewItem {
     branch: "",
     category: "",
     tags: [],
-    diffAdded: 0,
-    diffRemoved: 0,
+    diffStats: undefined,
+    // false is the "no commits ahead" (State B) signal the Create PR trigger disables on.
+    hasCommitsAhead: false,
     branchDivergedFromBase: false,
     githubPrUrl: "",
     ...overrides,
@@ -175,111 +207,104 @@ describe("ReviewQueuePanel — empty state", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Create PR button visibility
+// Create PR trigger visibility (three states — ux.md Surface 1 & 2)
 // ---------------------------------------------------------------------------
 
-describe("ReviewQueuePanel — Create PR button", () => {
-  const onRunOneShot = jest.fn().mockResolvedValue({ prUrl: "https://github.com/org/repo/pull/1" });
-
+describe("ReviewQueuePanel — Create PR trigger", () => {
   beforeEach(() => {
     jest.clearAllMocks();
   });
 
-  it("shows Create PR button for TASK_COMPLETE item with no existing PR URL", () => {
+  it("shows an enabled Create PR trigger for a TASK_COMPLETE item with commits ahead (State A)", () => {
     const item = makeReviewItem({
       reason: AttentionReason.TASK_COMPLETE,
       githubPrUrl: "",
+      hasCommitsAhead: true,
     });
     mockUseReviewQueueContext.mockReturnValue(makeContextValue([item]));
 
-    renderPanel({ onRunOneShot });
+    renderPanel();
 
-    expect(screen.getByTestId("create-pr-session-abc")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /create pr/i })).toBeInTheDocument();
+    const trigger = screen.getByTestId("create-pr-trigger-session-abc");
+    expect(trigger).toBeInTheDocument();
+    expect(trigger).not.toBeDisabled();
   });
 
-  it("hides Create PR button when item already has a PR URL", () => {
+  it("shows a disabled Create PR trigger when there are no commits ahead (State B)", () => {
+    const item = makeReviewItem({
+      reason: AttentionReason.TASK_COMPLETE,
+      githubPrUrl: "",
+      diffStats: undefined,
+    });
+    mockUseReviewQueueContext.mockReturnValue(makeContextValue([item]));
+
+    renderPanel();
+
+    const trigger = screen.getByTestId("create-pr-trigger-session-abc");
+    expect(trigger).toBeDisabled();
+    expect(trigger).toHaveAttribute("title", "No commits ahead of main yet");
+  });
+
+  it("shows a View PR link instead of the trigger when item already has a PR URL (State C)", () => {
     const item = makeReviewItem({
       reason: AttentionReason.TASK_COMPLETE,
       githubPrUrl: "https://github.com/org/repo/pull/99",
     });
     mockUseReviewQueueContext.mockReturnValue(makeContextValue([item]));
 
-    renderPanel({ onRunOneShot });
+    renderPanel();
 
-    expect(screen.queryByRole("button", { name: /create pr/i })).not.toBeInTheDocument();
+    expect(screen.queryByTestId("create-pr-trigger-session-abc")).not.toBeInTheDocument();
+    const link = screen.getByTestId("github-pr-link");
+    expect(link).toHaveAttribute("href", "https://github.com/org/repo/pull/99");
+    expect(link).toHaveTextContent("#99");
   });
 
-  it("hides Create PR button when onRunOneShot prop is not provided", () => {
-    const item = makeReviewItem({
-      reason: AttentionReason.TASK_COMPLETE,
-      githubPrUrl: "",
-    });
-    mockUseReviewQueueContext.mockReturnValue(makeContextValue([item]));
-
-    renderPanel(); // no onRunOneShot
-
-    expect(screen.queryByRole("button", { name: /create pr/i })).not.toBeInTheDocument();
-  });
-
-  it("hides Create PR button for non-TASK_COMPLETE items", () => {
+  it("hides the Create PR trigger area for non-TASK_COMPLETE items", () => {
     const item = makeReviewItem({
       reason: AttentionReason.APPROVAL_PENDING,
       githubPrUrl: "",
     });
     mockUseReviewQueueContext.mockReturnValue(makeContextValue([item]));
 
-    renderPanel({ onRunOneShot });
+    renderPanel();
 
-    expect(screen.queryByRole("button", { name: /create pr/i })).not.toBeInTheDocument();
+    expect(screen.queryByTestId("create-pr-trigger-session-abc")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("github-pr-link")).not.toBeInTheDocument();
   });
 });
 
 // ---------------------------------------------------------------------------
-// Create PR modal behaviour
+// Create PR modal wiring — the modal itself is unit-tested in
+// CreatePullRequestModal.test.tsx; these tests only cover trigger -> open/close.
 // ---------------------------------------------------------------------------
 
-describe("ReviewQueuePanel — Create PR modal", () => {
-  const onRunOneShot = jest.fn().mockResolvedValue({ prUrl: "https://github.com/org/repo/pull/42" });
-
+describe("ReviewQueuePanel — Create PR modal wiring", () => {
   beforeEach(() => {
     jest.clearAllMocks();
     const item = makeReviewItem({
       reason: AttentionReason.TASK_COMPLETE,
       githubPrUrl: "",
+      hasCommitsAhead: true,
     });
     mockUseReviewQueueContext.mockReturnValue(makeContextValue([item]));
   });
 
-  it("opens the modal when Create PR is clicked", () => {
-    renderPanel({ onRunOneShot });
-    fireEvent.click(screen.getByRole("button", { name: /create pr/i }));
-    expect(screen.getByRole("button", { name: /cancel/i })).toBeInTheDocument();
+  it("opens the shared CreatePullRequestModal for the clicked session when the trigger is clicked", () => {
+    renderPanel();
+    fireEvent.click(screen.getByTestId("create-pr-trigger-session-abc"));
+
+    const modal = screen.getByTestId("create-pr-modal");
+    expect(modal).toBeInTheDocument();
+    expect(modal).toHaveAttribute("data-session-id", "session-abc");
   });
 
-  it("closes the modal when Cancel is clicked without calling onRunOneShot", () => {
-    renderPanel({ onRunOneShot });
-    fireEvent.click(screen.getByRole("button", { name: /create pr/i }));
-    fireEvent.click(screen.getByRole("button", { name: /cancel/i }));
+  it("closes the modal when the modal's onClose fires", () => {
+    renderPanel();
+    fireEvent.click(screen.getByTestId("create-pr-trigger-session-abc"));
+    fireEvent.click(screen.getByRole("button", { name: /close/i }));
 
-    expect(screen.queryByRole("button", { name: /cancel/i })).not.toBeInTheDocument();
-    expect(onRunOneShot).not.toHaveBeenCalled();
-  });
-
-  it("calls onRunOneShot with session ID when confirmed", async () => {
-    renderPanel({ onRunOneShot });
-    fireEvent.click(screen.getByRole("button", { name: /create pr/i }));
-
-    // Find the confirm button (not the cancel)
-    const confirmBtn = screen.getByRole("button", { name: /^run$/i });
-    fireEvent.click(confirmBtn);
-
-    await waitFor(() => {
-      expect(onRunOneShot).toHaveBeenCalledWith(
-        "session-abc",
-        expect.stringContaining("pull request")
-      );
-    });
+    expect(screen.queryByTestId("create-pr-modal")).not.toBeInTheDocument();
   });
 });
 
@@ -920,7 +945,6 @@ describe("ReviewQueuePanel — group by", () => {
   });
 
   it("keeps action buttons and current-item highlighting intact when items are grouped", () => {
-    const onRunOneShot = jest.fn();
     const first = makeReviewItem({
       sessionId: "s1",
       sessionName: "First Item",
@@ -937,7 +961,7 @@ describe("ReviewQueuePanel — group by", () => {
     });
     mockUseReviewQueueContext.mockReturnValue(makeContextValue([first, second]));
 
-    renderPanel({ onRunOneShot });
+    renderPanel();
     fireEvent.click(screen.getByRole("button", { name: /^Filter/ }));
     fireEvent.change(screen.getByLabelText(/group by/i), { target: { value: "program" } });
 
@@ -945,8 +969,8 @@ describe("ReviewQueuePanel — group by", () => {
     expect(screen.getByTestId("review-group-aider")).toBeInTheDocument();
 
     // Action buttons (Create PR) render correctly for both items despite grouping.
-    expect(screen.getByTestId("create-pr-s1")).toBeInTheDocument();
-    expect(screen.getByTestId("create-pr-s2")).toBeInTheDocument();
+    expect(screen.getByTestId("create-pr-trigger-s1")).toBeInTheDocument();
+    expect(screen.getByTestId("create-pr-trigger-s2")).toBeInTheDocument();
 
     // useReviewQueueNavigation is mocked with currentIndex: 0, which maps to the first
     // item in the (pre-group) flat items array — "s1" here. Its wrapper must still be

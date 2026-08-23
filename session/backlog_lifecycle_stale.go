@@ -66,7 +66,7 @@ func (l *BacklogLifecycleListener) reconcileStaleWorkSessions(ctx context.Contex
 		Statuses: []string{string(BacklogStatusInProgress)},
 	})
 	if err != nil {
-		log.WarningLog.Printf("[BacklogLifecycle] reconcileStaleWorkSessions list error: %v", err)
+		log.WarningLog().Printf("[BacklogLifecycle] reconcileStaleWorkSessions list error: %v", err)
 		return
 	}
 
@@ -75,7 +75,7 @@ func (l *BacklogLifecycleListener) reconcileStaleWorkSessions(ctx context.Contex
 	for _, item := range items {
 		sessions, sessErr := l.storage.ListItemSessions(ctx, item.ID)
 		if sessErr != nil {
-			log.WarningLog.Printf("[BacklogLifecycle] reconcileStaleWorkSessions ListItemSessions item=%s: %v", item.ID, sessErr)
+			log.WarningLog().Printf("[BacklogLifecycle] reconcileStaleWorkSessions ListItemSessions item=%s: %v", item.ID, sessErr)
 			continue
 		}
 		var active *ItemSessionSummary
@@ -100,7 +100,7 @@ func (l *BacklogLifecycleListener) reconcileStaleWorkSessions(ctx context.Contex
 		applied, markErr := er.MarkStuck(ctx, item.ID, domain.StuckReasonStaleWork, BacklogStatusInProgress,
 			fmt.Sprintf("no progress since %s", lastProgress))
 		if markErr != nil {
-			log.WarningLog.Printf("[BacklogLifecycle] reconcileStaleWorkSessions MarkStuck item=%s: %v", item.ID, markErr)
+			log.WarningLog().Printf("[BacklogLifecycle] reconcileStaleWorkSessions MarkStuck item=%s: %v", item.ID, markErr)
 			continue
 		}
 		if !applied {
@@ -111,7 +111,7 @@ func (l *BacklogLifecycleListener) reconcileStaleWorkSessions(ctx context.Contex
 		}
 		rows, findErr := er.FindOpenStuckStates(ctx)
 		if findErr != nil {
-			log.WarningLog.Printf("[BacklogLifecycle] reconcileStaleWorkSessions FindOpenStuckStates item=%s: %v", item.ID, findErr)
+			log.WarningLog().Printf("[BacklogLifecycle] reconcileStaleWorkSessions FindOpenStuckStates item=%s: %v", item.ID, findErr)
 			continue
 		}
 		row, ok := findOpenStuckStateFor(rows, item.ID, domain.StuckReasonStaleWork)
@@ -132,7 +132,7 @@ func (l *BacklogLifecycleListener) reconcileStaleWorkSessions(ctx context.Contex
 			continue
 		}
 
-		log.WarningLog.Printf("[BacklogLifecycle] item %s work session %s stale (no progress since %s)", item.ID, active.SessionUUID, lastProgress)
+		log.WarningLog().Printf("[BacklogLifecycle] item %s work session %s stale (no progress since %s)", item.ID, active.SessionUUID, lastProgress)
 		l.notify(item.ID,
 			"Work session may be stuck",
 			fmt.Sprintf("%s — no progress reported in over %s. It may be hung or working silently.", item.Title, maxWorkSessionStaleness),
@@ -140,7 +140,7 @@ func (l *BacklogLifecycleListener) reconcileStaleWorkSessions(ctx context.Contex
 			2, // sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_MEDIUM
 		)
 		if _, notifyErr := er.MarkStuckNotified(ctx, item.ID, domain.StuckReasonStaleWork); notifyErr != nil {
-			log.WarningLog.Printf("[BacklogLifecycle] reconcileStaleWorkSessions MarkStuckNotified item=%s: %v", item.ID, notifyErr)
+			log.WarningLog().Printf("[BacklogLifecycle] reconcileStaleWorkSessions MarkStuckNotified item=%s: %v", item.ID, notifyErr)
 		}
 		// AC4-shaped on_session_stale callback (webhook-triggers Phase 5): fired
 		// exactly once per crossing, reusing MarkStuckNotified's own dedup above
@@ -161,7 +161,7 @@ func (l *BacklogLifecycleListener) reconcileStaleWorkSessions(ctx context.Contex
 	// status-anchored self-heal sweep.
 	open, openErr := er.FindOpenStuckStates(ctx)
 	if openErr != nil {
-		log.WarningLog.Printf("[BacklogLifecycle] reconcileStaleWorkSessions FindOpenStuckStates(resolve pass) error: %v", openErr)
+		log.WarningLog().Printf("[BacklogLifecycle] reconcileStaleWorkSessions FindOpenStuckStates(resolve pass) error: %v", openErr)
 		return
 	}
 	for _, row := range open {
@@ -199,7 +199,7 @@ func (l *BacklogLifecycleListener) reconcileReworkBlockedStaleResolution(ctx con
 	}
 	open, openErr := er.FindOpenStuckStates(ctx)
 	if openErr != nil {
-		log.WarningLog.Printf("[BacklogLifecycle] reconcileReworkBlockedStaleResolution FindOpenStuckStates error: %v", openErr)
+		log.WarningLog().Printf("[BacklogLifecycle] reconcileReworkBlockedStaleResolution FindOpenStuckStates error: %v", openErr)
 		return
 	}
 	for _, row := range open {
@@ -207,7 +207,7 @@ func (l *BacklogLifecycleListener) reconcileReworkBlockedStaleResolution(ctx con
 			continue
 		}
 		if resolveErr := resolver.ResolveReworkBlockedStaleIfRecovered(ctx, row.ItemID); resolveErr != nil {
-			log.WarningLog.Printf("[BacklogLifecycle] reconcileReworkBlockedStaleResolution ResolveReworkBlockedStaleIfRecovered item=%s: %v", row.ItemID, resolveErr)
+			log.WarningLog().Printf("[BacklogLifecycle] reconcileReworkBlockedStaleResolution ResolveReworkBlockedStaleIfRecovered item=%s: %v", row.ItemID, resolveErr)
 		}
 	}
 }
@@ -229,7 +229,7 @@ func (l *BacklogLifecycleListener) reconcileReworkBlockedStaleResolution(ctx con
 func (l *BacklogLifecycleListener) reconcileBlockedByDependencyResolution(ctx context.Context, er *EntRepository) {
 	open, openErr := er.FindOpenStuckStates(ctx)
 	if openErr != nil {
-		log.WarningLog.Printf("[BacklogLifecycle] reconcileBlockedByDependencyResolution FindOpenStuckStates error: %v", openErr)
+		log.WarningLog().Printf("[BacklogLifecycle] reconcileBlockedByDependencyResolution FindOpenStuckStates error: %v", openErr)
 		return
 	}
 
@@ -245,7 +245,7 @@ func (l *BacklogLifecycleListener) reconcileBlockedByDependencyResolution(ctx co
 
 	stillBlocked, err := er.UnresolvedBlockerItemIDs(ctx, itemIDs)
 	if err != nil {
-		log.WarningLog.Printf("[BacklogLifecycle] reconcileBlockedByDependencyResolution UnresolvedBlockerItemIDs error: %v", err)
+		log.WarningLog().Printf("[BacklogLifecycle] reconcileBlockedByDependencyResolution UnresolvedBlockerItemIDs error: %v", err)
 		return
 	}
 
@@ -287,7 +287,7 @@ func (l *BacklogLifecycleListener) remediateStaleWorkWithBackoffGate(ctx context
 
 	due, justParked, gateErr := l.storage.RemediationDue(ctx, itemID, domain.StuckReasonStaleWork)
 	if gateErr != nil {
-		log.WarningLog.Printf("[BacklogLifecycle] remediateStaleWorkWithBackoffGate RemediationDue item=%s: %v", itemID, gateErr)
+		log.WarningLog().Printf("[BacklogLifecycle] remediateStaleWorkWithBackoffGate RemediationDue item=%s: %v", itemID, gateErr)
 		due = true // fail open — see retryPushFailedWithBackoffGate's identical rationale
 	}
 	if justParked {
@@ -299,13 +299,13 @@ func (l *BacklogLifecycleListener) remediateStaleWorkWithBackoffGate(ctx context
 		)
 	}
 	if !due {
-		log.InfoLog.Printf("[BacklogLifecycle] remediateStaleWorkWithBackoffGate item=%s: stale_work remediation backoff not yet due, skipping", itemID)
+		log.InfoLog().Printf("[BacklogLifecycle] remediateStaleWorkWithBackoffGate item=%s: stale_work remediation backoff not yet due, skipping", itemID)
 		return
 	}
 
 	go func() {
 		if err := remediator.RemediateStaleWorkSession(l.shutdownCtx, itemID); err != nil {
-			log.ErrorLog.Printf("[BacklogLifecycle] remediateStaleWorkWithBackoffGate RemediateStaleWorkSession item=%s: %v", itemID, err)
+			log.ErrorLog().Printf("[BacklogLifecycle] remediateStaleWorkWithBackoffGate RemediateStaleWorkSession item=%s: %v", itemID, err)
 		}
 	}()
 }

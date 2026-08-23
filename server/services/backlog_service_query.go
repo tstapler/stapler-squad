@@ -60,7 +60,7 @@ func (s *BacklogService) GetBacklogItem(
 	// Load item sessions with review verdicts so the detail panel can show gate results.
 	isSessions, isErr := s.storage.ListItemSessions(ctx, req.Msg.ItemId)
 	if isErr != nil {
-		log.ErrorLog.Printf("[GetBacklogItem] failed to load item sessions for %s: %v", req.Msg.ItemId, isErr)
+		log.ErrorLog().Printf("[GetBacklogItem] failed to load item sessions for %s: %v", req.Msg.ItemId, isErr)
 		// Non-fatal: return item without sessions.
 	} else {
 		// Tombstone stale headless-triage sessions (no endedAt, older than maxTriageSessionAge)

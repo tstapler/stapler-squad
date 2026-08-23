@@ -34,6 +34,7 @@ func (f *fakeSessionLister) IsHealthy() bool { return f.healthy }
 var _ tmux.SessionLister = (*fakeSessionLister)(nil)
 
 func TestNewPTYDiscovery(t *testing.T) {
+	t.Parallel()
 	pd := NewPTYDiscovery()
 
 	if pd == nil {
@@ -58,6 +59,7 @@ func TestNewPTYDiscovery(t *testing.T) {
 }
 
 func TestPTYDiscovery_SetSessions(t *testing.T) {
+	t.Parallel()
 	pd := NewPTYDiscovery()
 
 	sessions := []*Instance{
@@ -82,6 +84,7 @@ func TestPTYDiscovery_SetSessions(t *testing.T) {
 }
 
 func TestPTYDiscovery_GetConnections(t *testing.T) {
+	t.Parallel()
 	pd := NewPTYDiscovery()
 
 	// Initially empty
@@ -112,6 +115,7 @@ func TestPTYDiscovery_GetConnections(t *testing.T) {
 }
 
 func TestPTYDiscovery_GetConnectionsByCategory(t *testing.T) {
+	t.Parallel()
 	pd := NewPTYDiscovery()
 
 	// Set up test data
@@ -142,6 +146,7 @@ func TestPTYDiscovery_GetConnectionsByCategory(t *testing.T) {
 }
 
 func TestPTYDiscovery_GetConnection(t *testing.T) {
+	t.Parallel()
 	pd := NewPTYDiscovery()
 
 	pd.mu.Lock()
@@ -168,6 +173,7 @@ func TestPTYDiscovery_GetConnection(t *testing.T) {
 }
 
 func TestPTYStatus_String(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		status PTYStatus
 		want   string
@@ -181,6 +187,7 @@ func TestPTYStatus_String(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.want, func(t *testing.T) {
+			t.Parallel()
 			got := tt.status.String()
 			if got != tt.want {
 				t.Errorf("String() = %q, want %q", got, tt.want)
@@ -190,6 +197,7 @@ func TestPTYStatus_String(t *testing.T) {
 }
 
 func TestPTYCategory_String(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		category PTYCategory
 		want     string
@@ -202,6 +210,7 @@ func TestPTYCategory_String(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.want, func(t *testing.T) {
+			t.Parallel()
 			got := tt.category.String()
 			if got != tt.want {
 				t.Errorf("String() = %q, want %q", got, tt.want)
@@ -211,6 +220,7 @@ func TestPTYCategory_String(t *testing.T) {
 }
 
 func TestPTYConnection_GetStatusIcon(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		status PTYStatus
 		want   string
@@ -224,6 +234,7 @@ func TestPTYConnection_GetStatusIcon(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.status.String(), func(t *testing.T) {
+			t.Parallel()
 			conn := &PTYConnection{Status: tt.status}
 			got := conn.GetStatusIcon()
 			if got != tt.want {
@@ -234,6 +245,7 @@ func TestPTYConnection_GetStatusIcon(t *testing.T) {
 }
 
 func TestPTYConnection_GetStatusColor(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		status PTYStatus
 		want   string
@@ -247,6 +259,7 @@ func TestPTYConnection_GetStatusColor(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.status.String(), func(t *testing.T) {
+			t.Parallel()
 			conn := &PTYConnection{Status: tt.status}
 			got := conn.GetStatusColor()
 			if got != tt.want {
@@ -257,6 +270,7 @@ func TestPTYConnection_GetStatusColor(t *testing.T) {
 }
 
 func TestPTYConnection_GetDisplayName(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name string
 		conn PTYConnection
@@ -276,6 +290,7 @@ func TestPTYConnection_GetDisplayName(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			got := tt.conn.GetDisplayName()
 			if got != tt.want {
 				t.Errorf("GetDisplayName() = %q, want %q", got, tt.want)
@@ -285,6 +300,7 @@ func TestPTYConnection_GetDisplayName(t *testing.T) {
 }
 
 func TestPTYConnection_GetPTYBasename(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		path string
 		want string
@@ -297,6 +313,7 @@ func TestPTYConnection_GetPTYBasename(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.path, func(t *testing.T) {
+			t.Parallel()
 			conn := &PTYConnection{Path: tt.path}
 			got := conn.GetPTYBasename()
 			if got != tt.want {
@@ -307,6 +324,7 @@ func TestPTYConnection_GetPTYBasename(t *testing.T) {
 }
 
 func TestPTYDiscovery_CategorizeConnection(t *testing.T) {
+	t.Parallel()
 	pd := NewPTYDiscovery()
 
 	tests := []struct {
@@ -338,6 +356,7 @@ func TestPTYDiscovery_CategorizeConnection(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			got := pd.categorizeConnection(tt.conn)
 			if got != tt.want {
 				t.Errorf("categorizeConnection() = %v, want %v", got, tt.want)
@@ -347,6 +366,7 @@ func TestPTYDiscovery_CategorizeConnection(t *testing.T) {
 }
 
 func TestPTYDiscovery_StartStop(t *testing.T) {
+	t.Parallel()
 	pd := NewPTYDiscovery()
 
 	// Start monitoring
@@ -368,38 +388,102 @@ func TestPTYDiscovery_StartStop(t *testing.T) {
 	}
 }
 
+// blockingSessionLister is a tmux.SessionLister test double that signals
+// enteredCh on its first call (proving monitorLoop is inside Refresh(),
+// holding PTYDiscovery.mu) then blocks until releaseCh is closed, giving
+// TestPTYDiscovery_Stop_JoinsMonitorLoop a deterministic window to call
+// Stop() against an in-flight monitorLoop instead of guessing with a sleep.
+// enteredOnce defensively guards against a second ListSessions() call
+// double-closing enteredCh.
+type blockingSessionLister struct {
+	enteredOnce sync.Once
+	enteredCh   chan struct{}
+	releaseCh   chan struct{}
+}
+
+func (b *blockingSessionLister) ListSessions() map[string]bool {
+	b.enteredOnce.Do(func() { close(b.enteredCh) })
+	<-b.releaseCh
+	return nil
+}
+
+func (b *blockingSessionLister) IsHealthy() bool { return true }
+
+var _ tmux.SessionLister = (*blockingSessionLister)(nil)
+
 // TestPTYDiscovery_Stop_JoinsMonitorLoop pins the regression this fix
 // addresses: monitorLoop() used to be signaled via close(stopCh) but never
 // joined, so Stop() could return while monitorLoop was still mid-tick and
 // about to touch tmux exec-gate paths derived from STAPLER_SQUAD_TEST_DIR —
 // racing a test's t.TempDir() cleanup (RemoveAll) that runs right after Stop
-// returns. A short refreshRate drives multiple ticks during the test, and
-// goleak.VerifyNone after Stop confirms no monitorLoop goroutine survives it.
+// returns.
+//
+// blockingSessionLister pins monitorLoop's initial Refresh() call mid-flight
+// (inside ListSessions(), holding pd.mu) so the test can assert Stop() does
+// not return while that call is still in progress, and does return once it
+// completes. This is a genuine regression proof: if Stop() were changed back
+// to close(stopCh) without joining monitorWG, it would return almost
+// immediately, well inside the bounded wait below, causing the first select
+// to observe stopReturned instead of the timeout.
+//
+// Not t.Parallel(): same reasoning as session.TestActorNoLeak.
+// goleak.IgnoreCurrent()'s baseline only covers goroutines alive at capture
+// time; a sibling top-level test's own t.Parallel() call spawns a goroutine
+// parked in testing.(*testState).waitParallel, and if that dispatch happens
+// during this test's baseline-to-VerifyNone window, goleak.VerifyNone flags
+// it as an unexpected leak (observed in a full-package run: parked
+// wait-goroutines from unrelated tests elsewhere in this file/package).
+// Running non-parallel prevents the test runner from dispatching any other
+// top-level test while this window is open.
 func TestPTYDiscovery_Stop_JoinsMonitorLoop(t *testing.T) {
 	baseline := goleak.IgnoreCurrent()
 
-	// A healthy fakeSessionLister avoids starting the real process-global
-	// TmuxServerRegistry singleton (and its reconnectLoop goroutine), which
-	// would otherwise register as an unrelated goleak false-positive.
-	lister := &fakeSessionLister{healthy: true}
+	lister := &blockingSessionLister{
+		enteredCh: make(chan struct{}),
+		releaseCh: make(chan struct{}),
+	}
+	// Ensures releaseCh is closed even if a t.Fatal below exits via
+	// runtime.Goexit before reaching the close() later in this function —
+	// otherwise monitorLoop stays blocked in ListSessions() forever and
+	// goleak.VerifyNone never runs to catch the leak.
+	var releaseOnce sync.Once
+	t.Cleanup(func() { releaseOnce.Do(func() { close(lister.releaseCh) }) })
+
 	pd := NewPTYDiscoveryWithConfig(PTYDiscoveryConfig{DiscoveryInterval: time.Millisecond}, WithSessionLister(lister))
 	pd.Start()
-	time.Sleep(20 * time.Millisecond) // let several ticks fire
-	pd.Stop()
 
-	// Deterministic check: Stop() must not return until monitorWG has already
-	// hit zero. Stop() itself only returns after its own internal
-	// waitGroupWithTimeout(&pd.monitorWG, stopJoinTimeout) call unblocks, so by
-	// this point the counter is guaranteed to already be 0 — this call cannot
-	// block in the success case. It's a direct wg.Wait() rather than
-	// waitGroupWithTimeout with a short timeout: a zero/short-duration timeout
-	// races a freshly spawned goroutine against time.After, which can lose
-	// even when the counter is already zero (observed intermittently in local
-	// runs, especially under -race). If a real regression reintroduces the
-	// join gap, this call hangs until the test's own -timeout kills it —
-	// still catches the regression, just via test timeout instead of an
-	// assertion message.
-	pd.monitorWG.Wait()
+	// Block until monitorLoop's initial Refresh() call reaches
+	// ListSessions() — from this point on, monitorLoop is guaranteed to be
+	// actively executing Refresh() (holding pd.mu).
+	select {
+	case <-lister.enteredCh:
+	case <-time.After(5 * time.Second):
+		t.Fatal("monitorLoop never reached ListSessions()")
+	}
+
+	stopReturned := make(chan struct{})
+	go func() {
+		pd.Stop()
+		close(stopReturned)
+	}()
+
+	// Stop() must not return while monitorLoop is still blocked inside
+	// Refresh(). 50ms is a large margin over ordinary goroutine-scheduling
+	// latency (sub-millisecond), so a Stop() that returns within it can only
+	// mean the join was skipped.
+	select {
+	case <-stopReturned:
+		t.Fatal("Stop() returned before monitorLoop finished its in-flight Refresh() call — Stop() must join monitorLoop before returning")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	releaseOnce.Do(func() { close(lister.releaseCh) })
+
+	select {
+	case <-stopReturned:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Stop() did not return after monitorLoop's in-flight Refresh() call was unblocked")
+	}
 
 	// os/exec's internal watchCtx goroutine doesn't synchronize its own exit
 	// with cmd.Wait()/cmd.Output() returning, so it can still be winding down
@@ -408,28 +492,13 @@ func TestPTYDiscovery_Stop_JoinsMonitorLoop(t *testing.T) {
 	goleak.VerifyNone(t, baseline, goleak.IgnoreTopFunction("os/exec.(*Cmd).watchCtx"))
 }
 
-// TestWaitGroupWithTimeout pins waitGroupWithTimeout's two branches directly,
-// mirroring server/services' TestWaitWithTimeout for the same helper shape.
-func TestWaitGroupWithTimeout(t *testing.T) {
-	t.Run("returns true when the group finishes in time", func(t *testing.T) {
-		var wg sync.WaitGroup
-		wg.Add(1)
-		go func() { defer wg.Done() }()
-		if !waitGroupWithTimeout(&wg, time.Second) {
-			t.Error("waitGroupWithTimeout returned false, want true")
-		}
-	})
-
-	t.Run("returns false when the group doesn't finish in time", func(t *testing.T) {
-		var wg sync.WaitGroup
-		wg.Add(1) // deliberately never Done()
-		if waitGroupWithTimeout(&wg, 10*time.Millisecond) {
-			t.Error("waitGroupWithTimeout returned true, want false")
-		}
-	})
-}
+// Coverage of the underlying timeout-bounded join primitive itself
+// (formerly waitGroupWithTimeout, tested here directly) now lives in
+// internal/syncutil/syncutil_test.go, shared with server/server.go instead
+// of duplicated here.
 
 func TestPTYDiscovery_OrganizeByCategory(t *testing.T) {
+	t.Parallel()
 	pd := NewPTYDiscovery()
 
 	pd.mu.Lock()
@@ -458,6 +527,7 @@ func TestPTYDiscovery_OrganizeByCategory(t *testing.T) {
 
 // TestWithSessionLister verifies that the functional option wires the lister field.
 func TestWithSessionLister(t *testing.T) {
+	t.Parallel()
 	lister := &fakeSessionLister{
 		sessions: map[string]bool{"staplersquad_test": true},
 		healthy:  true,
@@ -474,6 +544,7 @@ func TestWithSessionLister(t *testing.T) {
 // process the PTY lookup (getPTYInfoFromTmuxWithSocket) will fail and both sessions will
 // be skipped — but the point is we exercised the lister path without error.
 func TestPTYDiscovery_DiscoverOrphanedPTYs_UsesLister(t *testing.T) {
+	t.Parallel()
 	lister := &fakeSessionLister{
 		sessions: map[string]bool{
 			"staplersquad_foo": true,
@@ -500,6 +571,7 @@ func TestPTYDiscovery_DiscoverOrphanedPTYs_UsesLister(t *testing.T) {
 // when IsHealthy returns false the method falls back to exec (which fails in
 // the test environment and returns an empty slice gracefully).
 func TestPTYDiscovery_DiscoverOrphanedPTYs_FallbackWhenUnhealthy(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name   string
 		lister *fakeSessionLister
@@ -516,6 +588,7 @@ func TestPTYDiscovery_DiscoverOrphanedPTYs_FallbackWhenUnhealthy(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			var opts []PTYDiscoveryOption
 			if tt.lister != nil {
 				opts = append(opts, WithSessionLister(tt.lister))
@@ -622,6 +695,7 @@ func assertInvocationsUseIsolatedSocket(t *testing.T, logPath string, wantSubcom
 // session count, and without the guard, a slow tmux call (server under load)
 // would let ticks pile up as concurrent Refresh() calls instead of backing off.
 func TestPTYDiscovery_SkipsTickWhenPreviousStillRunning(t *testing.T) {
+	t.Parallel()
 	pd := NewPTYDiscovery()
 
 	// Simulate a refresh already in flight (as if a previous tick's Refresh()

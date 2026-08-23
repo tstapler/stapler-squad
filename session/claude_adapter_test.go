@@ -36,6 +36,7 @@ func TestReadCanonicalTurnsFromFile_TolersTrailingPartialLine_When_FileCaughtMid
 }
 
 func TestReadCanonicalTurnsFromFile_ReturnsError_When_FileDoesNotExist(t *testing.T) {
+	t.Parallel()
 	_, err := ReadCanonicalTurnsFromFile("/nonexistent/path/does-not-exist.jsonl")
 	require.Error(t, err)
 }

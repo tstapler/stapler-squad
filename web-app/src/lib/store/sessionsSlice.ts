@@ -37,7 +37,23 @@ const sessionsSlice = createSlice({
   reducers: {
     setSessions(state, action: PayloadAction<Session[]>) {
       const filtered = action.payload.filter(s => !state.deletedIds[s.id]);
-      sessionsAdapter.setAll(state, filtered);
+      // Preserve existing entity references when a session's data is unchanged
+      // (same updatedAt) so React.memo on SessionRowWrapper can skip re-rendering
+      // rows untouched by this snapshot/poll — mirrors the guard in upsertSession.
+      const merged = filtered.map((incoming) => {
+        const existing = state.entities[incoming.id];
+        if (
+          existing &&
+          existing.updatedAt !== undefined &&
+          incoming.updatedAt !== undefined &&
+          existing.updatedAt.seconds === incoming.updatedAt.seconds &&
+          existing.updatedAt.nanos === incoming.updatedAt.nanos
+        ) {
+          return existing;
+        }
+        return incoming;
+      });
+      sessionsAdapter.setAll(state, merged);
     },
     upsertSession(state, action: PayloadAction<Session>) {
       // Don't resurrect a deleted session via an in-flight update event

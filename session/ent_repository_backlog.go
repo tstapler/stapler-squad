@@ -13,6 +13,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/ent"
+	"github.com/tstapler/stapler-squad/session/ent/backlogactivitynote"
 	"github.com/tstapler/stapler-squad/session/ent/backlogitem"
 	"github.com/tstapler/stapler-squad/session/ent/backlogitemdependency"
 	"github.com/tstapler/stapler-squad/session/ent/backlogprogressnote"
@@ -55,7 +56,7 @@ func recordStatusEvent(ctx context.Context, evClient *ent.BacklogStatusEventClie
 		evCreate = evCreate.SetNote(note)
 	}
 	if _, err := evCreate.Save(ctx); err != nil {
-		log.ErrorLog.Printf("[recordStatusEvent] failed to record item=%s %s->%s triggeredBy=%s: %v", itemID, fromStatus, toStatus, triggeredBy, err)
+		log.ErrorLog().Printf("[recordStatusEvent] failed to record item=%s %s->%s triggeredBy=%s: %v", itemID, fromStatus, toStatus, triggeredBy, err)
 	}
 }
 
@@ -160,6 +161,17 @@ func progressNoteToData(n *ent.BacklogProgressNote) ProgressNoteData {
 	}
 }
 
+// activityNoteToData maps an *ent.BacklogActivityNote to an ActivityNoteData DTO.
+func activityNoteToData(n *ent.BacklogActivityNote) ActivityNoteData {
+	return ActivityNoteData{
+		ID:                 n.ID.String(),
+		Message:            n.Message,
+		AuthorSessionUUID:  n.AuthorSessionUUID,
+		AuthorSessionTitle: n.AuthorSessionTitle,
+		CreatedAt:          n.CreatedAt,
+	}
+}
+
 // sourceSyncEventToData maps an *ent.SourceSyncEvent to a SourceSyncEventData DTO.
 func sourceSyncEventToData(e *ent.SourceSyncEvent) SourceSyncEventData {
 	return SourceSyncEventData{
@@ -178,6 +190,7 @@ func sourceSyncEventToData(e *ent.SourceSyncEvent) SourceSyncEventData {
 func backlogItemToData(item *ent.BacklogItem) BacklogItemData {
 	data := BacklogItemData{
 		ID:                           item.ID.String(),
+		PublicIDRaw:                  item.PublicID,
 		Title:                        item.Title,
 		Description:                  item.Description,
 		AcceptanceCriteria:           AcCriteriaJSON(item.AcceptanceCriteria),
@@ -239,6 +252,13 @@ func backlogItemToData(item *ent.BacklogItem) BacklogItemData {
 			data.ProgressNotes[i] = progressNoteToData(n)
 		}
 	}
+	// Propagate eagerly-loaded activity notes when present (see StatusEvents above).
+	if item.Edges.ActivityNotes != nil {
+		data.ActivityNotes = make([]ActivityNoteData, len(item.Edges.ActivityNotes))
+		for i, n := range item.Edges.ActivityNotes {
+			data.ActivityNotes[i] = activityNoteToData(n)
+		}
+	}
 	// Propagate eagerly-loaded item sessions when present. Note: the
 	// ReviewVerdict sub-edge must ALSO have been loaded on each item.Edges.ItemSessions[i]
 	// (e.g. via .WithItemSessions(func(q) { q.WithReviewVerdict() })) for
@@ -290,8 +310,17 @@ func (r *EntRepository) CreateBacklogItem(ctx context.Context, data BacklogItemD
 		status = string(BacklogStatusIdea)
 	}
 
+	// Story 1.1 AC: every newly created backlog item is minted a
+	// BacklogItemID at create time, so only rows that pre-date this feature
+	// ever need Story 1.4's backfill.
+	publicID, err := NewBacklogItemID()
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate backlog item public id: %w", err)
+	}
+
 	c := r.client.BacklogItem.Create().
 		SetTitle(data.Title).
+		SetPublicID(publicID.String()).
 		SetNillableDescription(&data.Description).
 		SetNillableAcceptanceCriteria(nilIfEmptyJSON(data.AcceptanceCriteria)).
 		SetPriority(priority).
@@ -333,9 +362,10 @@ func (r *EntRepository) CreateBacklogItem(ctx context.Context, data BacklogItemD
 	return &result, nil
 }
 
-// GetBacklogItem retrieves a backlog item by UUID string.
+// GetBacklogItem retrieves a backlog item by either its legacy UUID string
+// or its bl_-prefixed public id (see resolveBacklogItemLookup).
 func (r *EntRepository) GetBacklogItem(ctx context.Context, id string) (*BacklogItemData, error) {
-	parsedID, err := uuid.Parse(id)
+	parsedID, err := r.resolveBacklogItemLookup(ctx, id)
 	if err != nil {
 		return nil, fmt.Errorf("%w: invalid id %q: %v", ErrNotFound, id, err)
 	}
@@ -348,6 +378,9 @@ func (r *EntRepository) GetBacklogItem(ctx context.Context, id string) (*Backlog
 		}).
 		WithProgressNotes(func(q *ent.BacklogProgressNoteQuery) {
 			q.Order(ent.Asc(backlogprogressnote.FieldCreatedAt))
+		}).
+		WithActivityNotes(func(q *ent.BacklogActivityNoteQuery) {
+			q.Order(ent.Asc(backlogactivitynote.FieldCreatedAt))
 		}).
 		Only(ctx)
 	if err != nil {
@@ -372,7 +405,7 @@ func (r *EntRepository) GetBacklogItem(ctx context.Context, id string) (*Backlog
 // save. baseSHA/headSHA are both "" (no error) when the item has no
 // completed work session yet.
 func (r *EntRepository) GetRepoPathAndLatestCompletedWorkSessionCommits(ctx context.Context, itemID string) (repoPath, baseSHA, headSHA string, err error) {
-	parsedID, err := uuid.Parse(itemID)
+	parsedID, err := r.resolveBacklogItemLookup(ctx, itemID)
 	if err != nil {
 		return "", "", "", fmt.Errorf("%w: invalid id %q: %v", ErrNotFound, itemID, err)
 	}
@@ -412,11 +445,11 @@ func (r *EntRepository) GetRepoPathAndLatestCompletedWorkSessionCommits(ctx cont
 // edge would create a cycle, including the degenerate self-dependency case
 // (BlockerID == BlockedID).
 func (r *EntRepository) AddBacklogItemDependency(ctx context.Context, edge BacklogItemDependencyEdge) error {
-	blockerID, err := uuid.Parse(edge.BlockerID)
+	blockerID, err := r.resolveBacklogItemLookup(ctx, edge.BlockerID)
 	if err != nil {
 		return fmt.Errorf("%w: invalid blocker id %q: %v", ErrNotFound, edge.BlockerID, err)
 	}
-	blockedID, err := uuid.Parse(edge.BlockedID)
+	blockedID, err := r.resolveBacklogItemLookup(ctx, edge.BlockedID)
 	if err != nil {
 		return fmt.Errorf("%w: invalid blocked id %q: %v", ErrNotFound, edge.BlockedID, err)
 	}
@@ -531,7 +564,7 @@ func (r *EntRepository) UnresolvedBlockerItemIDs(ctx context.Context, itemIDs []
 	parsedByString := make(map[uuid.UUID]string, len(itemIDs))
 	parsedIDs := make([]uuid.UUID, 0, len(itemIDs))
 	for _, id := range itemIDs {
-		parsed, err := uuid.Parse(id)
+		parsed, err := r.resolveBacklogItemLookup(ctx, id)
 		if err != nil {
 			return nil, fmt.Errorf("%w: invalid id %q: %v", ErrNotFound, id, err)
 		}
@@ -561,7 +594,7 @@ func (r *EntRepository) UnresolvedBlockerItemIDs(ctx context.Context, itemIDs []
 // Unlike UnresolvedBlockerItemIDs (batched presence check across many
 // candidates), this returns which specific items are doing the blocking.
 func (r *EntRepository) UnresolvedBlockerIDs(ctx context.Context, itemID string) ([]string, error) {
-	parsed, err := uuid.Parse(itemID)
+	parsed, err := r.resolveBacklogItemLookup(ctx, itemID)
 	if err != nil {
 		return nil, fmt.Errorf("%w: invalid id %q: %v", ErrNotFound, itemID, err)
 	}
@@ -787,6 +820,7 @@ func (r *EntRepository) ListBacklogItemSummaries(ctx context.Context, filter Bac
 	for i, item := range items {
 		summaries[i] = BacklogItemSummary{
 			ID:                 item.ID.String(),
+			PublicIDRaw:        item.PublicID,
 			ExternalID:         item.ExternalID,
 			ExternalURL:        item.ExternalURL,
 			Labels:             item.Labels,
@@ -834,7 +868,7 @@ func (r *EntRepository) ListBacklogItemSummaries(ctx context.Context, filter Bac
 
 // UpdateBacklogItem modifies an existing backlog item with optional precondition check.
 func (r *EntRepository) UpdateBacklogItem(ctx context.Context, id string, update BacklogItemUpdate, precondition *BacklogItemPrecondition) (*BacklogItemData, error) {
-	parsedID, err := uuid.Parse(id)
+	parsedID, err := r.resolveBacklogItemLookup(ctx, id)
 	if err != nil {
 		return nil, fmt.Errorf("%w: invalid id %q: %v", ErrNotFound, id, err)
 	}
@@ -1117,9 +1151,16 @@ func updatedFieldsFromBacklogItemUpdate(update BacklogItemUpdate) []string {
 	return fields
 }
 
-// ArchiveBacklogItem sets the archived_at timestamp on a backlog item.
-func (r *EntRepository) ArchiveBacklogItem(ctx context.Context, id string) (*BacklogItemData, error) {
-	parsedID, err := uuid.Parse(id)
+// ArchiveBacklogItem sets the archived_at timestamp and status on a backlog
+// item. precondition may be nil (no CAS check — used by the pre-existing
+// UI-driven callers, which archive by explicit operator action and never
+// needed one). triggeredBy/note flow into the same BacklogStatusEvent audit
+// trail TransitionBacklogItemStatus writes, so a non-"user" trigger (e.g. an
+// agent auto-archiving a verified duplicate) is attributed correctly instead
+// of always showing as a manual action — see reportDuplicate's unclaimed-item
+// path in server/mcp/tools_backlog.go.
+func (r *EntRepository) ArchiveBacklogItem(ctx context.Context, id string, precondition *BacklogItemPrecondition, triggeredBy, note string) (*BacklogItemData, error) {
+	parsedID, err := r.resolveBacklogItemLookup(ctx, id)
 	if err != nil {
 		return nil, fmt.Errorf("%w: invalid id %q: %v", ErrNotFound, id, err)
 	}
@@ -1132,20 +1173,48 @@ func (r *EntRepository) ArchiveBacklogItem(ctx context.Context, id string) (*Bac
 		return nil, fmt.Errorf("failed to get backlog item %s: %w", id, err)
 	}
 
+	update := r.client.BacklogItem.Update().Where(backlogitem.ID(parsedID))
+	if precondition != nil {
+		if precondition.ExpectedStatus != "" {
+			update = update.Where(backlogitem.StatusEQ(precondition.ExpectedStatus))
+		}
+		if precondition.ExpectedUpdatedAt != nil {
+			update = update.Where(backlogitem.UpdatedAtEQ(*precondition.ExpectedUpdatedAt))
+		}
+	}
+
 	now := time.Now()
-	item, err := r.client.BacklogItem.UpdateOneID(parsedID).
+	affected, err := update.
 		SetArchivedAt(now).
 		SetStatus(string(BacklogStatusArchived)).
 		SetUserModifiedStatusAt(now).
 		Save(ctx)
 	if err != nil {
-		if ent.IsNotFound(err) {
-			return nil, fmt.Errorf("%w: backlog item %s", ErrNotFound, id)
-		}
 		return nil, fmt.Errorf("failed to archive backlog item %s: %w", id, err)
 	}
+	if affected == 0 {
+		// Same race disambiguation as TransitionBacklogItemStatus: re-fetch
+		// against fresh data to report whether the row vanished or the
+		// precondition no longer holds.
+		latest, getErr := r.client.BacklogItem.Get(ctx, parsedID)
+		if getErr != nil {
+			if ent.IsNotFound(getErr) {
+				return nil, fmt.Errorf("%w: backlog item %s", ErrNotFound, id)
+			}
+			return nil, fmt.Errorf("failed to get backlog item %s: %w", id, getErr)
+		}
+		if precondition != nil && precondition.ExpectedStatus != "" && latest.Status != precondition.ExpectedStatus {
+			return nil, fmt.Errorf("%w: expected status %q, got %q", ErrPreconditionFailed, precondition.ExpectedStatus, latest.Status)
+		}
+		return nil, fmt.Errorf("%w: updated_at mismatch", ErrPreconditionFailed)
+	}
 
-	recordStatusEvent(ctx, r.client.BacklogStatusEvent, parsedID, current.Status, string(BacklogStatusArchived), TriggeredByUser, "")
+	item, err := r.client.BacklogItem.Get(ctx, parsedID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to reload backlog item %s after archive: %w", id, err)
+	}
+
+	recordStatusEvent(ctx, r.client.BacklogStatusEvent, parsedID, current.Status, string(BacklogStatusArchived), triggeredBy, note)
 
 	result := backlogItemToData(item)
 
@@ -1166,7 +1235,7 @@ func (r *EntRepository) ArchiveBacklogItem(ctx context.Context, id string) (*Bac
 // unconditional-flip precedent (server/services/session_service.go) rather
 // than erroring or no-op'ing on an already-non-archived item.
 func (r *EntRepository) UnarchiveBacklogItem(ctx context.Context, id string) (*BacklogItemData, error) {
-	parsedID, err := uuid.Parse(id)
+	parsedID, err := r.resolveBacklogItemLookup(ctx, id)
 	if err != nil {
 		return nil, fmt.Errorf("%w: invalid id %q: %v", ErrNotFound, id, err)
 	}
@@ -1211,7 +1280,7 @@ func (r *EntRepository) UnarchiveBacklogItem(ctx context.Context, id string) (*B
 
 // DeleteBacklogItem permanently removes an item and all its child records.
 func (r *EntRepository) DeleteBacklogItem(ctx context.Context, id string) error {
-	parsedID, err := uuid.Parse(id)
+	parsedID, err := r.resolveBacklogItemLookup(ctx, id)
 	if err != nil {
 		return fmt.Errorf("%w: invalid id %q: %v", ErrNotFound, id, err)
 	}
@@ -1300,7 +1369,7 @@ func (r *EntRepository) DeleteBacklogItem(ctx context.Context, id string) error 
 // feature's concurrent-dequeue-claim test found the same race could
 // double-claim a single queued item between two dequeue sweeps (PR #199).
 func (r *EntRepository) TransitionBacklogItemStatus(ctx context.Context, id string, toStatus BacklogStatus, precondition *BacklogItemPrecondition, triggeredBy string) (*BacklogItemData, error) {
-	parsedID, err := uuid.Parse(id)
+	parsedID, err := r.resolveBacklogItemLookup(ctx, id)
 	if err != nil {
 		return nil, fmt.Errorf("%w: invalid id %q: %v", ErrNotFound, id, err)
 	}
@@ -1441,7 +1510,7 @@ func (r *EntRepository) TransitionBacklogItemStatus(ctx context.Context, id stri
 // claim or the row's updated_at moved for any other reason — callers must
 // treat that as "someone else is handling this," not a failure.
 func (r *EntRepository) ClaimChainFire(ctx context.Context, id string, expectedUpdatedAt time.Time) (claimed bool, err error) {
-	parsedID, err := uuid.Parse(id)
+	parsedID, err := r.resolveBacklogItemLookup(ctx, id)
 	if err != nil {
 		return false, fmt.Errorf("%w: invalid id %q: %v", ErrNotFound, id, err)
 	}
@@ -1475,7 +1544,7 @@ func (r *EntRepository) ClaimChainFire(ctx context.Context, id string, expectedU
 // goroutine that just won ClaimChainFire's claim for this item can ever reach
 // this call, so nothing else can be racing this specific revert.
 func (r *EntRepository) RevertChainFireClaim(ctx context.Context, id string) error {
-	parsedID, err := uuid.Parse(id)
+	parsedID, err := r.resolveBacklogItemLookup(ctx, id)
 	if err != nil {
 		return fmt.Errorf("%w: invalid id %q: %v", ErrNotFound, id, err)
 	}
@@ -1514,7 +1583,7 @@ func (r *EntRepository) RevertChainFireClaim(ctx context.Context, id string) err
 // this over, so adding it to the interface would be pure speculation
 // (see .claude/rules/interface-pollution-checklist.md).
 func (r *EntRepository) TransitionBacklogItemStatusWithPRFields(ctx context.Context, id string, toStatus BacklogStatus, prURL string, prNumber int, precondition *BacklogItemPrecondition, triggeredBy string) (*BacklogItemData, error) {
-	parsedID, err := uuid.Parse(id)
+	parsedID, err := r.resolveBacklogItemLookup(ctx, id)
 	if err != nil {
 		return nil, fmt.Errorf("%w: invalid id %q: %v", ErrNotFound, id, err)
 	}
@@ -1613,18 +1682,21 @@ func (r *EntRepository) publishItemChanged(ctx context.Context, item *BacklogIte
 // implementation that doesn't. Task 2.1.1d's regression test proves this
 // holds end-to-end even when a raw, unwrapped test double panics.
 //
-// Publishes item as-is, without eager-loading ItemSessions first. Only
-// DeleteBacklogItem should call this directly: it must build its publish
+// Publishes item as-is, without eager-loading ItemSessions first. Two call
+// sites use this directly: DeleteBacklogItem, which must build its publish
 // snapshot (including ItemSessions) before deleting the item's sessions and
 // the item itself, so re-querying at publish time (as publishItemChanged
-// does) would wrongly observe them as already gone.
+// does) would wrongly observe them as already gone; and AppendActivityNote,
+// whose ChangeActivityNoteAdded event never carries a full item snapshot
+// (ADR-001/ADR-002 — see project_plans/backlog-item-activity-log), so there
+// is nothing extra to eager-load beyond the Status/RepoPath it reads itself.
 func (r *EntRepository) publishItemChangedSnapshot(item *BacklogItemData, change BacklogItemChange) {
 	if r.itemChangePublisher == nil {
 		return
 	}
 	defer func() {
 		if rec := recover(); rec != nil {
-			log.WarningLog.Printf("[EntRepository] itemChangePublisher.PublishItemChanged panicked (recovered): %v", rec)
+			log.WarningLog().Printf("[EntRepository] itemChangePublisher.PublishItemChanged panicked (recovered): %v", rec)
 		}
 	}()
 	r.itemChangePublisher.PublishItemChanged(item, change)
@@ -1653,7 +1725,7 @@ func (r *EntRepository) dispatchCallback(eventType string, payload any) {
 	}
 	defer func() {
 		if rec := recover(); rec != nil {
-			log.WarningLog.Printf("[EntRepository] callbackDispatcher.Dispatch panicked (recovered): %v", rec)
+			log.WarningLog().Printf("[EntRepository] callbackDispatcher.Dispatch panicked (recovered): %v", rec)
 		}
 	}()
 	r.callbackDispatcher.Dispatch(eventType, payload)
@@ -1688,7 +1760,7 @@ func (r *EntRepository) dispatchChainFire(item *BacklogItemData) {
 	}
 	defer func() {
 		if rec := recover(); rec != nil {
-			log.WarningLog.Printf("[EntRepository] chainFirer.Dispatch panicked (recovered): %v", rec)
+			log.WarningLog().Printf("[EntRepository] chainFirer.Dispatch panicked (recovered): %v", rec)
 		}
 	}()
 	r.chainFirer.Dispatch(item)
@@ -1724,7 +1796,7 @@ func (r *EntRepository) attachItemSessionsForPublish(ctx context.Context, data *
 	}
 	sessions, err := r.ListItemSessions(ctx, data.ID)
 	if err != nil {
-		log.WarningLog.Printf("[EntRepository] attachItemSessionsForPublish: failed to load item sessions for item %s: %v", data.ID, err)
+		log.WarningLog().Printf("[EntRepository] attachItemSessionsForPublish: failed to load item sessions for item %s: %v", data.ID, err)
 		return
 	}
 	data.ItemSessions = sessions
@@ -1766,7 +1838,7 @@ func (r *EntRepository) MarkStuck(ctx context.Context, itemID string, reason dom
 	if !reason.IsValid() {
 		return false, fmt.Errorf("invalid stuck reason %q", reason)
 	}
-	parsedID, err := uuid.Parse(itemID)
+	parsedID, err := r.resolveBacklogItemLookup(ctx, itemID)
 	if err != nil {
 		return false, fmt.Errorf("%w: invalid id %q: %v", ErrNotFound, itemID, err)
 	}
@@ -1834,7 +1906,7 @@ func (r *EntRepository) MarkStuck(ctx context.Context, itemID string, reason dom
 // already-resolved or nonexistent (item_id, reason) row is a no-op, not an
 // error, and never overwrites an existing resolved_at.
 func (r *EntRepository) ResolveStuck(ctx context.Context, itemID string, reason domain.StuckReason) (bool, error) {
-	parsedID, err := uuid.Parse(itemID)
+	parsedID, err := r.resolveBacklogItemLookup(ctx, itemID)
 	if err != nil {
 		return false, fmt.Errorf("%w: invalid id %q: %v", ErrNotFound, itemID, err)
 	}
@@ -1858,7 +1930,7 @@ func (r *EntRepository) ResolveStuck(ctx context.Context, itemID string, reason 
 // notification has actually been sent. A no-op (not an error) if the row is
 // already notified or doesn't exist.
 func (r *EntRepository) MarkStuckNotified(ctx context.Context, itemID string, reason domain.StuckReason) (bool, error) {
-	parsedID, err := uuid.Parse(itemID)
+	parsedID, err := r.resolveBacklogItemLookup(ctx, itemID)
 	if err != nil {
 		return false, fmt.Errorf("%w: invalid id %q: %v", ErrNotFound, itemID, err)
 	}
@@ -1885,7 +1957,7 @@ func (r *EntRepository) MarkStuckNotified(ctx context.Context, itemID string, re
 // row on the next FindOpenStuckStates read (its predicate is
 // snoozed_until IS NULL OR snoozed_until < now).
 func (r *EntRepository) SnoozeStuckState(ctx context.Context, itemID string, reason domain.StuckReason, until time.Time) (bool, error) {
-	parsedID, err := uuid.Parse(itemID)
+	parsedID, err := r.resolveBacklogItemLookup(ctx, itemID)
 	if err != nil {
 		return false, fmt.Errorf("%w: invalid id %q: %v", ErrNotFound, itemID, err)
 	}
@@ -1915,7 +1987,7 @@ func (r *EntRepository) SnoozeStuckState(ctx context.Context, itemID string, rea
 // every other stuck-state write in this file — a row that resolved between
 // the gate's read and this write is left alone rather than resurrected.
 func (r *EntRepository) RecordRemediationAttempt(ctx context.Context, itemID string, reason domain.StuckReason, attempts int32, nextAt *time.Time) (bool, error) {
-	parsedID, err := uuid.Parse(itemID)
+	parsedID, err := r.resolveBacklogItemLookup(ctx, itemID)
 	if err != nil {
 		return false, fmt.Errorf("%w: invalid id %q: %v", ErrNotFound, itemID, err)
 	}
@@ -1946,7 +2018,7 @@ func (r *EntRepository) RecordRemediationAttempt(ctx context.Context, itemID str
 // next_remediation_at — a grace pass lets the wrapped remediation action run
 // without spending any of the row's 5-attempt budget.
 func (r *EntRepository) RecordRemediationRestartGrace(ctx context.Context, itemID string, reason domain.StuckReason, bootTime time.Time) (bool, error) {
-	parsedID, err := uuid.Parse(itemID)
+	parsedID, err := r.resolveBacklogItemLookup(ctx, itemID)
 	if err != nil {
 		return false, fmt.Errorf("%w: invalid id %q: %v", ErrNotFound, itemID, err)
 	}
@@ -1973,7 +2045,7 @@ func (r *EntRepository) RecordRemediationRestartGrace(ctx context.Context, itemI
 // state — the same reasoning as MarkStuck's reopen-in-place path. A no-op
 // (false, nil), not an error, when no open row matches (item_id, reason).
 func (r *EntRepository) ResetStuckRemediation(ctx context.Context, itemID string, reason domain.StuckReason) (bool, error) {
-	parsedID, err := uuid.Parse(itemID)
+	parsedID, err := r.resolveBacklogItemLookup(ctx, itemID)
 	if err != nil {
 		return false, fmt.Errorf("%w: invalid id %q: %v", ErrNotFound, itemID, err)
 	}
@@ -2031,7 +2103,7 @@ func (r *EntRepository) BulkResetStuckRemediation(ctx context.Context, reason *d
 // the history is an enrichment for reviewers, not part of report_progress's primary
 // contract of updating the criterion's current status/note.
 func (r *EntRepository) AppendProgressNote(ctx context.Context, itemID string, criterionIndex int, note, status string) error {
-	parsedItemID, err := uuid.Parse(itemID)
+	parsedItemID, err := r.resolveBacklogItemLookup(ctx, itemID)
 	if err != nil {
 		return fmt.Errorf("invalid item id %q: %w", itemID, err)
 	}
@@ -2051,7 +2123,7 @@ func (r *EntRepository) AppendProgressNote(ctx context.Context, itemID string, c
 // ListProgressNotesForItem returns the full append-only history of report_progress
 // calls for a backlog item, ordered by created_at ascending (oldest first).
 func (r *EntRepository) ListProgressNotesForItem(ctx context.Context, itemID string) ([]ProgressNoteData, error) {
-	parsedItemID, err := uuid.Parse(itemID)
+	parsedItemID, err := r.resolveBacklogItemLookup(ctx, itemID)
 	if err != nil {
 		return nil, fmt.Errorf("invalid item id %q: %w", itemID, err)
 	}
@@ -2066,6 +2138,104 @@ func (r *EntRepository) ListProgressNotesForItem(ctx context.Context, itemID str
 	result := make([]ProgressNoteData, len(notes))
 	for i, n := range notes {
 		result[i] = progressNoteToData(n)
+	}
+	return result, nil
+}
+
+// --- Activity note history (ADR-001) ---
+
+// mapAppendActivityNoteCreateError classifies an error returned from
+// AppendActivityNote's BacklogActivityNote.Create().Save(ctx) call. A
+// foreign-key-violation constraint error means itemID was deleted between
+// AppendActivityNote's earlier existence check and this Create() call (a
+// real but non-deterministic-to-test race) and is wrapped as ErrNotFound so
+// callers (post_backlog_update, via Storage.AppendActivityNote) can map it to
+// ErrItemNotFound the same way the earlier, more common not-found path is
+// mapped. Any other error is wrapped as a plain internal error. Extracted as
+// its own function (rather than inlined in AppendActivityNote) specifically
+// so this classification can be unit-tested without reproducing the
+// underlying delete-between-steps race.
+func mapAppendActivityNoteCreateError(err error, itemID string) error {
+	if ent.IsConstraintError(err) {
+		return fmt.Errorf("backlog item %s not found: %w", itemID, ErrNotFound)
+	}
+	return fmt.Errorf("failed to append activity note for item %s: %w", itemID, err)
+}
+
+// AppendActivityNote records a single post_backlog_update call as an
+// immutable, append-only history entry. This is the one activity-note write
+// path invoked by the ungated post_backlog_update tool — any session, with
+// or without STAPLER_SESSION_UUID, whether or not linked to the item, can
+// call it. Unlike AppendProgressNote, this DOES publish an item-changed
+// event: there is no separate criterion-status write alongside it to carry
+// that responsibility, so if AppendActivityNote didn't publish, a live
+// WatchBacklogItems subscriber would never learn a note was posted.
+//
+// Before publishing, this does a cheap, read-only, field-scoped query for
+// the item's Status and RepoPath and populates them on the published
+// snapshot. This exists solely so backlogItemMatchesFilters
+// (server/services/backlog_service_events.go) doesn't silently drop this
+// event for WatchBacklogItems callers with a non-empty status/category
+// filter — see Blocker 2 in implementation/adversarial-review.md. It is a
+// read, not a read-modify-write, so it introduces no new concurrency hazard.
+// publishItemChangedSnapshot (not the publishItemChanged convenience
+// wrapper) is used deliberately: this event's payload never carries a full
+// item snapshot (ADR-002), so there is nothing for attachItemSessionsForPublish
+// to usefully eager-load beyond the two scalar fields already fetched below.
+func (r *EntRepository) AppendActivityNote(ctx context.Context, itemID, authorSessionUUID, authorSessionTitle, message string) error {
+	parsedItemID, err := r.resolveBacklogItemLookup(ctx, itemID)
+	if err != nil {
+		return fmt.Errorf("invalid item id %q: %w", itemID, err)
+	}
+
+	itemFields, err := r.client.BacklogItem.Query().
+		Where(backlogitem.ID(parsedItemID)).
+		Select(backlogitem.FieldStatus, backlogitem.FieldRepoPath).
+		Only(ctx)
+	if err != nil {
+		if ent.IsNotFound(err) {
+			return fmt.Errorf("backlog item %s not found: %w", itemID, ErrNotFound)
+		}
+		return fmt.Errorf("failed to look up backlog item %s: %w", itemID, err)
+	}
+
+	created, err := r.client.BacklogActivityNote.Create().
+		SetItemID(parsedItemID).
+		SetMessage(message).
+		SetAuthorSessionUUID(authorSessionUUID).
+		SetAuthorSessionTitle(authorSessionTitle).
+		Save(ctx)
+	if err != nil {
+		return mapAppendActivityNoteCreateError(err, itemID)
+	}
+
+	note := activityNoteToData(created)
+	r.publishItemChangedSnapshot(&BacklogItemData{
+		ID:       parsedItemID.String(),
+		Status:   itemFields.Status,
+		RepoPath: itemFields.RepoPath,
+	}, BacklogItemChange{Kind: ChangeActivityNoteAdded, ActivityNote: &note})
+	return nil
+}
+
+// ListActivityNotesForItem returns the full append-only activity-note history
+// for a backlog item, ordered by created_at ascending (oldest first).
+func (r *EntRepository) ListActivityNotesForItem(ctx context.Context, itemID string) ([]ActivityNoteData, error) {
+	parsedItemID, err := r.resolveBacklogItemLookup(ctx, itemID)
+	if err != nil {
+		return nil, fmt.Errorf("invalid item id %q: %w", itemID, err)
+	}
+
+	notes, err := r.client.BacklogActivityNote.Query().
+		Where(backlogactivitynote.HasItemWith(backlogitem.ID(parsedItemID))).
+		Order(ent.Asc(backlogactivitynote.FieldCreatedAt)).
+		All(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list activity notes for item %s: %w", itemID, err)
+	}
+	result := make([]ActivityNoteData, len(notes))
+	for i, n := range notes {
+		result[i] = activityNoteToData(n)
 	}
 	return result, nil
 }

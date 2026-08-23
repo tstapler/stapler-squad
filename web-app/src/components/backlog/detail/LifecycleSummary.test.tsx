@@ -34,6 +34,7 @@ function makeItem(overrides: Partial<BacklogItem> = {}): BacklogItem {
     linkedSessions: [],
     statusEvents: [],
     progressNotes: [],
+    activityNotes: [],
     totalEstimatedCostUsd: 0,
     createdAt: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
     ...overrides,

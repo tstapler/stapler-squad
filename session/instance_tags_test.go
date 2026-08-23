@@ -7,6 +7,7 @@ import (
 )
 
 func TestAddTag_ValidTag(t *testing.T) {
+	t.Parallel()
 	inst := &Instance{Title: "test"}
 
 	err := inst.AddTag("frontend")
@@ -21,6 +22,7 @@ func TestAddTag_ValidTag(t *testing.T) {
 }
 
 func TestAddTag_DuplicateTag(t *testing.T) {
+	t.Parallel()
 	inst := &Instance{Title: "test", Tags: []string{"frontend"}}
 
 	err := inst.AddTag("frontend")
@@ -38,6 +40,7 @@ func TestAddTag_DuplicateTag(t *testing.T) {
 }
 
 func TestAddTag_TooLong(t *testing.T) {
+	t.Parallel()
 	inst := &Instance{Title: "test"}
 	longTag := strings.Repeat("a", MaxTagLength+1)
 
@@ -59,6 +62,7 @@ func TestAddTag_TooLong(t *testing.T) {
 }
 
 func TestAddTag_ThenGetTags(t *testing.T) {
+	t.Parallel()
 	inst := &Instance{Title: "test"}
 
 	if err := inst.AddTag("backend"); err != nil {
@@ -85,6 +89,7 @@ func TestAddTag_ThenGetTags(t *testing.T) {
 }
 
 func TestSetTags_Deduplicates(t *testing.T) {
+	t.Parallel()
 	inst := &Instance{Title: "test"}
 
 	err := inst.SetTags([]string{"a", "b", "a", "c", "b"})
@@ -103,6 +108,7 @@ func TestSetTags_Deduplicates(t *testing.T) {
 }
 
 func TestSetTags_ValidatesLength(t *testing.T) {
+	t.Parallel()
 	inst := &Instance{Title: "test"}
 	longTag := strings.Repeat("x", MaxTagLength+1)
 
@@ -118,6 +124,7 @@ func TestSetTags_ValidatesLength(t *testing.T) {
 }
 
 func TestSetTags_ReplacesExisting(t *testing.T) {
+	t.Parallel()
 	inst := &Instance{Title: "test", Tags: []string{"old-tag"}}
 
 	err := inst.SetTags([]string{"new-tag-1", "new-tag-2"})
@@ -135,6 +142,7 @@ func TestSetTags_ReplacesExisting(t *testing.T) {
 }
 
 func TestRemoveTag(t *testing.T) {
+	t.Parallel()
 	inst := &Instance{Title: "test", Tags: []string{"a", "b", "c"}}
 
 	inst.RemoveTag("b")
@@ -149,6 +157,7 @@ func TestRemoveTag(t *testing.T) {
 }
 
 func TestRemoveTag_NotPresent(t *testing.T) {
+	t.Parallel()
 	inst := &Instance{Title: "test", Tags: []string{"a", "b"}}
 
 	inst.RemoveTag("not-here")
@@ -160,6 +169,7 @@ func TestRemoveTag_NotPresent(t *testing.T) {
 }
 
 func TestHasTag(t *testing.T) {
+	t.Parallel()
 	inst := &Instance{Title: "test", Tags: []string{"frontend", "urgent"}}
 
 	if !inst.HasTag("frontend") {
@@ -174,6 +184,7 @@ func TestHasTag(t *testing.T) {
 }
 
 func TestAddTag_MaxLengthBoundary(t *testing.T) {
+	t.Parallel()
 	inst := &Instance{Title: "test"}
 
 	// Exactly MaxTagLength should succeed
@@ -193,6 +204,7 @@ func TestAddTag_MaxLengthBoundary(t *testing.T) {
 }
 
 func TestSetTags_EmptySlice(t *testing.T) {
+	t.Parallel()
 	inst := &Instance{Title: "test", Tags: []string{"old"}}
 
 	err := inst.SetTags([]string{})

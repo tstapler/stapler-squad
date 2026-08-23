@@ -75,9 +75,7 @@ func (f *fakeFireEventRecorder) Create(_ context.Context, input session.TriggerF
 // WorkflowRepository (same pattern as retention_test.go's newTestInfra).
 func newTestScheduler(t *testing.T, sessionSvc SessionServiceInterface) (*Scheduler, session.WorkflowRepository, *session.EntRepository) {
 	t.Helper()
-	entRepo, err := session.NewEntRepository(session.WithDatabasePath(t.TempDir() + "/scheduler_test.db"))
-	require.NoError(t, err)
-	t.Cleanup(func() { entRepo.Close() })
+	entRepo := session.NewTestEntRepository(t)
 
 	wfRepo := session.NewEntWorkflowRepository(entRepo.GetEntClient())
 	sched := NewScheduler(wfRepo, sessionSvc, events.NewEventBus(10))
