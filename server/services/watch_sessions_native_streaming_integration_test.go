@@ -10,6 +10,7 @@ import (
 	"crypto/tls"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -22,6 +23,7 @@ import (
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/gen/proto/go/session/v1/sessionv1connect"
+	gh "github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/server"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/services"
@@ -179,6 +181,39 @@ func TestWatchSessions_should_DeliverMultipleEventsOverNativeHTTP2Stream_When_Ca
 	// package doc comment above) to avoid an import cycle with server.
 	t.Setenv("HOME", t.TempDir())
 
+	// wireDepsIntoServer (invoked synchronously below via NewServerWithDeps)
+	// unconditionally starts PRStatusPoller.Start (server.go, no nil guard --
+	// newNarrowServerDeps therefore can't just omit it), whose pollLoop runs
+	// an immediate checkAllSessions() on its own goroutine before ever
+	// reaching its 60s ticker (session/pr_status_poller.go: "Run an
+	// immediate check so sessions show real status without waiting a full
+	// PollInterval"). That check calls isAuthOK() -> github.CheckGHAuth()
+	// unconditionally -- BEFORE checking whether there are any instances to
+	// poll at all -- which issues a real GET to GhBaseURL+"user" via the
+	// shared, process-wide ghHTTPClient (github/http_client.go). Against the
+	// real api.github.com (which negotiates ALPN HTTP/2), that connection is
+	// picked up by net/http's OWN bundled HTTP/2 client
+	// (net/http.(*http2Transport).newClientConn / readLoop in h2_bundle.go)
+	// -- a completely different code path from this test's explicit
+	// golang.org/x/net/http2 client below -- and it sits pooled (idle) on
+	// ghHTTPClient for up to its default 90s IdleConnTimeout, long past the
+	// 2s goleak window below. This only fires on a cold ghAuthState/
+	// ghAuthGroup cache (both package-level, 5-minute TTL, shared across
+	// every test in the binary), which is exactly why the leak was
+	// intermittent rather than deterministic. Redirecting GhBaseURL to a
+	// local httptest.Server closes this the same way this repo's own
+	// established pattern does (see backlog_github_rpc_test.go's
+	// resetGhBaseURL): the auth check still runs, but against a loopback
+	// HTTP/1.1 connection that ghStub.Close() below force-closes (registered
+	// after the goleak baseline defer, so it runs first per LIFO) instead of
+	// an unbounded real internet dial.
+	ghStub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	prevGhBaseURL := gh.GhBaseURL
+	gh.GhBaseURL = ghStub.URL + "/"
+
 	deps := newNarrowServerDeps(t)
 
 	srv := server.NewServerWithDeps("localhost:0", deps)
@@ -204,7 +239,27 @@ func TestWatchSessions_should_DeliverMultipleEventsOverNativeHTTP2Stream_When_Ca
 	// background goroutine wireDepsIntoServer started, tied to srv's own
 	// lifecycle context rather than srvCtx) has actually been torn down.
 	baseline := goleak.IgnoreCurrent()
-	defer goleak.VerifyNone(t, baseline)
+	// require.Eventually instead of a bare goleak.VerifyNone: the client-side
+	// http2.Transport's clientConnReadLoop goroutine (started in
+	// newClientConn) doesn't exit synchronously when CloseIdleConnections()
+	// returns below -- it needs one more scheduler turn to observe the
+	// closed connection and unwind. goleak.VerifyNone's own single-shot
+	// check occasionally raced this and failed; polling gives it the extra
+	// moment it actually needs without weakening what's being verified.
+	defer func() {
+		require.Eventually(t, func() bool {
+			return goleak.Find(baseline) == nil
+		}, 2*time.Second, 20*time.Millisecond, "background goroutines did not exit within 2s")
+	}()
+	// Force-closes the loopback connection PRStatusPoller's GitHub auth check
+	// (see the GhBaseURL redirect above) may have pooled as idle, and restores
+	// the package-level GhBaseURL var -- registered between the goleak defer
+	// and the srv.Shutdown defer so LIFO runs it after shutdown but before the
+	// goleak check.
+	defer func() {
+		gh.GhBaseURL = prevGhBaseURL
+		ghStub.Close()
+	}()
 	defer func() {
 		srvCancel()
 		if err := srv.Shutdown(); err != nil {
