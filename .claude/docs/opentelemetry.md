@@ -43,3 +43,7 @@ otlp_config:
 | `search.query`, `search.result_count`, `search.duration_ms` | Search metrics |
 | `cache.hit`, `cache.refresh_duration_ms` | Cache performance |
 | `sync.sessions_added`, `sync.sessions_updated` | Index sync metrics |
+
+## Compile-time auto-instrumentation (opt-in)
+
+A separate, opt-in build (`make build-otel-auto` → `stapler-squad-otel`) uses `otelc` compile-time weaving to add spans for surfaces the hand-written instrumentation above doesn't cover (e.g. ent's `database/sql` queries), without any source change. See `.claude/docs/opentelemetry-auto-instrumentation.md` for the install/build/run recipe and the validated operational findings.

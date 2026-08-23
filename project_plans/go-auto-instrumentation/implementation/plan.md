@@ -8,6 +8,7 @@
 - [ADR-002: Gate all build-path work behind four go/no-go spikes](../decisions/ADR-002-spike-first-sequencing.md)
 - [ADR-003: Structural opt-in via a separate binary, not a runtime flag](../decisions/ADR-003-structural-opt-in-separate-binary.md)
 - [ADR-004: `GOFLAGS` toolexec injection instead of a duplicated build recipe](../decisions/ADR-004-goflags-toolexec-injection.md)
+- [ADR-005: Adopt as default once named preconditions hold — not yet, not never](../decisions/ADR-005-default-build-adoption-verdict.md)
 
 ---
 

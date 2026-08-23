@@ -3,6 +3,12 @@
 .claude/settings.local.json
 stapler-squad
 stapler-squad.prev
+stapler-squad-otel
+# otelc setup's per-checkout generated scaffolding (scripts/otel-auto-build.sh
+# removes these on exit, but ignore them too in case of an interrupted run)
+.otelc-build/
+otel.instrumentation.go
+otelc.runtime.go
 claude-squad
 claude-mux
 ssq-hooks
@@ -74,6 +80,7 @@ tests/e2e/fixtures/*-theme.json
 bench-current.txt
 bench-diff.txt
 benchmark_results.txt
+bench-otel-*.txt
 /web-app/out/
 /server/web/dist/
 
