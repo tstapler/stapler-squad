@@ -230,4 +230,27 @@ describe("RestartWithSummaryButton", () => {
     fireEvent.click(retryButton);
     expect(mockTrigger).toHaveBeenCalledTimes(1);
   });
+
+  // design/ux.md UX AC #3: the primary error text must be a plain-language
+  // message mapped from error_stage, never the raw error_message -- the raw
+  // text may still be present, but only inside a collapsed disclosure.
+  it("RestartWithSummaryButton_should_ShowPlainLanguageMessage_When_ErrorStageIsTranscript", () => {
+    const summary = makeSummary({
+      status: HandoffSummaryStatus.ERROR,
+      errorStage: "transcript",
+      errorMessage: "conversation file not found for session ID: sess-1",
+    });
+    mockHookReturn({ data: summary });
+
+    render(<RestartWithSummaryButton sessionId="session-1" />);
+
+    const primaryText = screen.getByTestId("restart-with-summary-error-message");
+    expect(primaryText).toHaveTextContent("Couldn't read this session's conversation history.");
+    expect(primaryText).not.toHaveTextContent("conversation file not found");
+
+    // The raw detail is still present, but only inside a <details> disclosure.
+    const details = screen.getByText("Details").closest("details");
+    expect(details).not.toBeNull();
+    expect(details).toHaveTextContent("conversation file not found for session ID: sess-1");
+  });
 });

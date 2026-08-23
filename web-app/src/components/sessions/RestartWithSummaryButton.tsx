@@ -19,6 +19,25 @@ export interface RestartWithSummaryButtonProps {
 type ButtonPhase = "idle" | "generating" | "ready" | "error";
 
 /**
+ * Maps a backend `HandoffSummary.error_stage` to a plain-language message,
+ * per design/ux.md's UX acceptance criterion #3 ("every error state has a
+ * plain-language message, not a raw stage string"). The raw `errorMessage`
+ * (which can be a technical string like a Go error's `.Error()` text) is
+ * shown separately, behind a disclosure -- never as the primary text.
+ */
+const STAGE_MESSAGES: Record<string, string> = {
+  transcript: "Couldn't read this session's conversation history.",
+  generation: "Something went wrong while generating the summary.",
+  persist: "Generated the summary but couldn't save it.",
+  stale: "Generation didn't complete (the server may have restarted).",
+};
+
+function friendlyStageMessage(stage: string | undefined): string {
+  if (!stage) return "Something went wrong while generating this summary.";
+  return STAGE_MESSAGES[stage] ?? "Something went wrong while generating this summary.";
+}
+
+/**
  * Drives the trigger -> poll -> create-session restart flow for a session's
  * handoff summary. Renders `null` when the backend reports the feature
  * disabled -- there is no dedicated feature-flag read RPC in this plan's
@@ -121,8 +140,7 @@ export function RestartWithSummaryButton({ sessionId }: RestartWithSummaryButton
     } else if (phase === "ready") {
       setLiveMessage("Handoff summary ready.");
     } else if (phase === "error") {
-      const message =
-        triggerErrorMessage || data?.errorMessage || "Something went wrong while generating this summary.";
+      const message = triggerErrorMessage || friendlyStageMessage(data?.errorStage);
       setLiveMessage(`Couldn't generate handoff summary: ${message}`);
     }
     // triggerErrorMessage/data are read for their current-render value only
@@ -175,11 +193,22 @@ export function RestartWithSummaryButton({ sessionId }: RestartWithSummaryButton
   }
 
   if (phase === "error") {
-    const errorMessage =
-      triggerErrorMessage || data?.errorMessage || "Something went wrong while generating this summary.";
+    // triggerErrorMessage is a client-side catch (e.g. a network failure
+    // calling trigger()) with no backend stage, so it's already plain text.
+    // A data-driven ERROR row does have a stage -- map it to a friendly
+    // message and keep the raw errorMessage behind a disclosure, never as
+    // the primary text (design/ux.md UX AC #3).
+    const errorMessage = triggerErrorMessage || friendlyStageMessage(data?.errorStage);
+    const rawDetail = !triggerErrorMessage ? data?.errorMessage : undefined;
     return (
       <div className={styles.errorContainer} data-testid="restart-with-summary-error">
-        <div className={styles.errorText}>{errorMessage}</div>
+        <div className={styles.errorText} data-testid="restart-with-summary-error-message">{errorMessage}</div>
+        {rawDetail && (
+          <details className={styles.errorDetails}>
+            <summary>Details</summary>
+            <div className={styles.errorRawText}>{rawDetail}</div>
+          </details>
+        )}
         <button
           type="button"
           className={styles.button}

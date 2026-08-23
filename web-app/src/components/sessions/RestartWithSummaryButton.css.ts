@@ -39,3 +39,17 @@ export const errorText = style({
   fontSize: vars.fontSize.sm,
   color: vars.color.errorText,
 });
+
+export const errorDetails = style({
+  fontSize: vars.fontSize.sm,
+  color: vars.color.textSecondary,
+});
+
+export const errorRawText = style({
+  marginTop: vars.space["1"],
+  fontFamily: "monospace",
+  fontSize: vars.fontSize.xs,
+  color: vars.color.textSecondary,
+  whiteSpace: "pre-wrap",
+  wordBreak: "break-word",
+});
