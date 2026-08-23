@@ -116,11 +116,27 @@ func AutoApproveSupported(program string) bool {
 // This mirrors the old embedded-struct behaviour where a zero-value TmuxProcessManager
 // was always valid for method calls (session == nil → IsAlive()/HasSession() return false).
 // Tests that create bare &Instance{} structs rely on this guarantee.
+//
+// pm() itself has no error return (its ~80 call sites across the package all
+// assume a non-nil ProcessManager, matching the zero-value-friendly guarantee
+// above), so an unrecognized i.Backend here — which should never happen in
+// practice; i.Backend is only ever set to a known constant — is logged
+// loudly via log.Error (not silently swallowed) and then recovered by
+// constructing the guaranteed-valid BackendTmux explicitly, preserving the
+// non-nil contract every caller of pm() depends on. Construction paths that
+// DO have an error return (NewInstance, fromInstanceData) propagate
+// NewProcessManager's error directly instead of going through this
+// fallback — see backend_factory.go's ErrUnrecognizedBackend.
 func (i *Instance) pm() ProcessManager {
 	i.pmMu.Lock()
 	defer i.pmMu.Unlock()
 	if i.processManager == nil {
-		i.processManager = NewProcessManager(context.Background(), BackendTmux, ProcessManagerOptions{})
+		mgr, err := NewProcessManager(context.Background(), BackendTmux, ProcessManagerOptions{Backend: i.Backend})
+		if err != nil {
+			log.Error("unrecognized process manager backend; falling back to BackendTmux", "session", i.Title, "backend", i.Backend, "err", err)
+			mgr, _ = NewProcessManager(context.Background(), BackendTmux, ProcessManagerOptions{})
+		}
+		i.processManager = mgr
 	}
 	return i.processManager
 }

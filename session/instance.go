@@ -186,6 +186,12 @@ type Instance struct {
 	// If empty, uses the default tmux server. For complete isolation (e.g., testing),
 	// set to a unique value like "test" or "teatest_123" to create separate tmux servers.
 	TmuxServerSocket string
+	// Backend is a per-session ProcessManager backend override (e.g. BackendTymux),
+	// threaded into NewProcessManager's ProcessManagerOptions.Backend at construction.
+	// Empty ("") means "use the process-wide default" — RegisterBackendProvider's
+	// global, or BackendTmux — preserving today's behavior for every session that
+	// doesn't opt in. See ProcessManagerOptions.Backend's doc comment for precedence.
+	Backend ProcessManagerBackend `json:"backend,omitempty"`
 	// Tags are multi-valued labels for flexible session organization
 	// Sessions can have multiple tags and appear in multiple groups simultaneously
 	// Examples: ["frontend", "urgent", "client-work"]
@@ -674,6 +680,9 @@ type InstanceOptions struct {
 	// If empty, uses the default tmux server. For complete isolation (e.g., testing),
 	// set to a unique value like "test" or "teatest_123" to create separate tmux servers.
 	TmuxServerSocket string
+	// Backend mirrors Instance.Backend — see its doc comment. Copied onto the new
+	// Instance in NewInstance before the ProcessManager is constructed.
+	Backend ProcessManagerBackend
 	// GitHub integration fields for PR/URL-based session creation
 	GitHubPRNumber  int    // PR number if created from PR URL
 	GitHubPRURL     string // Full URL to the PR
@@ -810,6 +819,7 @@ func NewInstance(opts InstanceOptions) (*Instance, error) {
 		SessionType:      sessionType,
 		TmuxPrefix:       opts.TmuxPrefix,
 		TmuxServerSocket: opts.TmuxServerSocket,
+		Backend:          opts.Backend,
 		IsExpanded:       true, // Default to expanded for newly created instances
 		InstanceType:     InstanceTypeManaged,
 		IsManaged:        true,
@@ -855,7 +865,11 @@ func NewInstance(opts InstanceOptions) (*Instance, error) {
 
 	// Initialize the process manager via the factory so selectedBackend is honored.
 	// The session itself is wired later by initTmuxSession() at Start() time.
-	instance.processManager = NewProcessManager(context.Background(), BackendTmux, ProcessManagerOptions{})
+	pm, err := NewProcessManager(context.Background(), BackendTmux, ProcessManagerOptions{Backend: instance.Backend})
+	if err != nil {
+		return nil, fmt.Errorf("session: construct process manager for instance %q: %w", instance.Title, err)
+	}
+	instance.processManager = pm
 
 	// Initialize shell registry maps.
 	instance.initShellRegistry()

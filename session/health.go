@@ -383,6 +383,12 @@ func (h *SessionHealthChecker) handleDeadPane(instance *Instance, exitCode int, 
 		if err := instance.MarkExitedNormally(); err != nil {
 			result.Issues = append(result.Issues, fmt.Sprintf("failed to mark session stopped: %v", err))
 		} else {
+			// RecoverySuccess is checked by checkInstances' caller to decide
+			// between logging "successfully recovered" vs. "failed to
+			// recover" -- without this, a normal Stopped transition (which
+			// is the successful outcome here, not a failure) was logged as
+			// an ERROR-level "failed to recover session" on every occurrence.
+			result.RecoverySuccess = true
 			result.Actions = append(result.Actions, "Pane exited normally (exit code 0); session marked Stopped")
 		}
 		return
@@ -395,6 +401,9 @@ func (h *SessionHealthChecker) handleDeadPane(instance *Instance, exitCode int, 
 	if err := instance.MarkCrashed(exitReason); err != nil {
 		result.Issues = append(result.Issues, fmt.Sprintf("failed to mark session crashed: %v", err))
 	} else {
+		// See RecoverySuccess comment above -- a successful Crashed transition
+		// is likewise not a recovery failure.
+		result.RecoverySuccess = true
 		result.Actions = append(result.Actions, fmt.Sprintf("Pane crashed (%s); session marked Crashed, awaiting resume", exitReason))
 	}
 }
