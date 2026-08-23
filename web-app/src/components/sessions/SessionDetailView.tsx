@@ -28,6 +28,7 @@ import { BacklogItemPanel } from "@/components/backlog/BacklogItemPanel";
 import { GoalPanel } from "./GoalPanel";
 import { NotePanel } from "./NotePanel";
 import { WorkspacePeersPanel } from "./WorkspacePeersPanel";
+import { HandoffSummarySection } from "./HandoffSummarySection";
 import { useShells } from "@/lib/hooks/useShells";
 import { useNotifications } from "@/lib/contexts/NotificationContext";
 import { ShellTabLabel } from "./ShellTab";
@@ -1611,6 +1612,9 @@ export function SessionDetailView({
             />
             {/* Other sessions sharing this workspace — shown when peers exist */}
             <WorkspacePeersPanel session={session} />
+            {/* Restart-handoff summary record (Story 3.3.1) — always rendered,
+                explicit empty state when no HandoffSummary row exists yet. */}
+            <HandoffSummarySection sessionId={session.id} />
           </div>
         )}
         {activeTab === "artifacts" && (
