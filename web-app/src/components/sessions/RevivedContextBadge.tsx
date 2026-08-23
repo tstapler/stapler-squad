@@ -7,12 +7,19 @@ interface RevivedContextBadgeProps {
   session: Session;
 }
 
+// hasLostContext is the single source of truth for "this session's last
+// restart lost its conversation history" — shared with SessionRow's aria-label
+// extension so the two surfaces can never drift on the condition.
+export function hasLostContext(session: Session): boolean {
+  return session.reviveOutcome === ReviveOutcome.FRESH_LOST_HISTORY;
+}
+
 // RevivedContextBadge renders only when the session's tmux pane restarted and
 // its previous conversation history could not be recovered from disk
 // (session-revive-uuid-loss AC3) — a durable, at-a-glance signal that survives
 // the toast notification auto-closing.
 export function RevivedContextBadge({ session }: RevivedContextBadgeProps) {
-  if (session.reviveOutcome !== ReviveOutcome.FRESH_LOST_HISTORY) {
+  if (!hasLostContext(session)) {
     return null;
   }
   return (

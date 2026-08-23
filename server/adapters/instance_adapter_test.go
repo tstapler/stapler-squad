@@ -33,6 +33,45 @@ func TestRateLimitStateToProto_AllStates(t *testing.T) {
 	}
 }
 
+func TestReviveOutcomeToProto_AllOutcomes(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    session.ReviveOutcome
+		expected sessionv1.ReviveOutcome
+	}{
+		{"ResumeLive", session.ReviveOutcomeResumeLive, sessionv1.ReviveOutcome_REVIVE_OUTCOME_RESUME_LIVE},
+		{"ResumeRecovered", session.ReviveOutcomeResumeRecovered, sessionv1.ReviveOutcome_REVIVE_OUTCOME_RESUME_RECOVERED},
+		{"FreshExpected", session.ReviveOutcomeFreshExpected, sessionv1.ReviveOutcome_REVIVE_OUTCOME_FRESH_EXPECTED},
+		{"FreshLostHistory", session.ReviveOutcomeFreshLostHistory, sessionv1.ReviveOutcome_REVIVE_OUTCOME_FRESH_LOST_HISTORY},
+		{"Unspecified", session.ReviveOutcomeUnspecified, sessionv1.ReviveOutcome_REVIVE_OUTCOME_UNSPECIFIED},
+		{"Unknown value defaults to Unspecified", session.ReviveOutcome("bogus"), sessionv1.ReviveOutcome_REVIVE_OUTCOME_UNSPECIFIED},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := reviveOutcomeToProto(tc.input)
+			if got != tc.expected {
+				t.Errorf("reviveOutcomeToProto(%v) = %v, want %v", tc.input, got, tc.expected)
+			}
+		})
+	}
+}
+
+// TestInstanceToProto_ReviveOutcome verifies InstanceToProto wires
+// Instance.LastReviveOutcome through to protoSession.ReviveOutcome — the
+// wire-format boundary a swapped reviveOutcomeToProto case would silently
+// corrupt without failing any other test.
+func TestInstanceToProto_ReviveOutcome(t *testing.T) {
+	inst := &session.Instance{LastReviveOutcome: session.ReviveOutcomeFreshLostHistory}
+	proto := InstanceToProto(inst, nil)
+	if proto == nil {
+		t.Fatal("expected non-nil proto for non-nil instance")
+	}
+	if proto.ReviveOutcome != sessionv1.ReviveOutcome_REVIVE_OUTCOME_FRESH_LOST_HISTORY {
+		t.Errorf("expected ReviveOutcome=FRESH_LOST_HISTORY, got %v", proto.ReviveOutcome)
+	}
+}
+
 func TestInstanceToProto_NilReturnsNil(t *testing.T) {
 	result := InstanceToProto(nil, nil)
 	if result != nil {

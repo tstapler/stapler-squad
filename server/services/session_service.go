@@ -4421,8 +4421,8 @@ func (s *SessionService) onColdRestoreLostHistory(inst *session.Instance) {
 	notifID := fmt.Sprintf("cold-restore-lost-history-%s", inst.UUID)
 	s.eventBus.Publish(events.NewNotificationEvent(
 		inst.UUID, inst.Title, notifID,
-		int32(8), // NotificationType_WARNING
-		int32(2), // NotificationPriority_MEDIUM
+		int32(sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING),
+		int32(sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_MEDIUM),
 		fmt.Sprintf("Session %q started fresh — previous conversation could not be resumed", inst.Title),
 		"The session's tmux pane restarted and the previous conversation history could not be found on disk. Earlier context is not available.",
 		events.SessionScopedMetadata(nil, linkedItemID),

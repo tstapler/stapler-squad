@@ -161,3 +161,54 @@ func TestColdRestore_NoSignal_When_GenuinelyNeverHadHistory(t *testing.T) {
 	require.Len(t, recorder.reasons, 1, "expected exactly one EventStarted")
 	assert.Equal(t, "", recorder.reasons[0], "a genuinely fresh start must not carry the lost-history reason")
 }
+
+// TestColdRestore_LastReviveOutcomeClears_When_LaterCycleIsHotRestore is a
+// regression test for a bug caught in code review: LastReviveOutcome was
+// originally written only inside the ColdRestore branch, so a
+// FreshLostHistory value from one cycle survived unchanged into a later
+// HotRestore cycle (tmux still alive, nothing lost) — re-firing the
+// lost-history notification and leaving RevivedContextBadge stuck
+// indefinitely, contradicting ux.md's "reflects only the most recent
+// restart's outcome" requirement. LastReviveOutcome must now be set in every
+// branch (ColdRestore, HotRestore, firstTimeSetup) of every start cycle.
+func TestColdRestore_LastReviveOutcomeClears_When_LaterCycleIsHotRestore(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test that starts real tmux sessions")
+	}
+	checkTmuxAvailable(t)
+
+	title := fmt.Sprintf("test-cold-then-hot-%d", time.Now().UnixNano())
+	inst, cleanup, err := NewInstanceWithCleanup(InstanceOptions{
+		Title:            title,
+		Path:             t.TempDir(),
+		Program:          "sleep 300",
+		SessionType:      SessionTypeDirectory,
+		AutoYes:          false,
+		TmuxPrefix:       fmt.Sprintf("test_coldrestore_%d_", time.Now().UnixNano()),
+		TmuxServerSocket: coldRestoreSocket(t),
+	})
+	require.NoError(t, err)
+	defer func() {
+		if cleanupErr := cleanup(); cleanupErr != nil {
+			t.Logf("cleanup warning: %v", cleanupErr)
+		}
+	}()
+
+	// First cycle: cold restore with lost history — sets LastReviveOutcome to
+	// FreshLostHistory and, as a side effect of pm().Start(), leaves tmux alive.
+	inst.EverHadConversationHistory = true
+	require.NoError(t, inst.Start(false), "cold start with lost history should not error")
+	require.Equal(t, ReviveOutcomeFreshLostHistory, inst.LastReviveOutcome, "sanity: first cycle must record lost history")
+	require.True(t, inst.TmuxAlive(), "sanity: tmux must be alive after the first cycle's pm().Start()")
+
+	recorder := &reviveOutcomeRecorder{}
+	inst.RegisterLifecycleListener(recorder)
+
+	// Second cycle: tmux is still alive, so this takes the HotRestore branch —
+	// nothing was lost this time, and the stale FreshLostHistory value must not survive.
+	require.NoError(t, inst.Start(false), "hot restore should not error")
+
+	assert.Equal(t, ReviveOutcomeResumeLive, inst.LastReviveOutcome, "hot restore must overwrite the stale FreshLostHistory value")
+	require.Len(t, recorder.reasons, 1, "expected exactly one EventStarted for the second cycle")
+	assert.Equal(t, "", recorder.reasons[0], "hot restore must not re-fire the lost-history reason")
+}
