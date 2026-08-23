@@ -196,13 +196,9 @@ func NewTymuxGRPCSession(transport rpcTransport) TymuxManager {
 // --- Lifecycle ---
 
 // validateWorkDir rejects an empty or nonexistent working directory before
-// ever reaching tymuxd. Delegates to session/tmux.ValidateWorkDir rather
-// than maintaining a second copy of the same check-shape (Task 2.2.1a),
-// only adding the "tymux: " prefix so error text still identifies which
-// backend raised it. tmux.ValidateWorkDir already wraps
-// tmux.ErrWorkDirMissing, and that wrapping survives the extra %w layer
-// here, so a caller-side errors.Is(err, tmux.ErrWorkDirMissing) check
-// behaves identically regardless of which backend is in play.
+// reaching tymuxd. Delegates to tmux.ValidateWorkDir and adds a "tymux: "
+// prefix; errors.Is(err, tmux.ErrWorkDirMissing) still works through the
+// extra %w layer.
 func validateWorkDir(workDir string) error {
 	if err := tmux.ValidateWorkDir(workDir); err != nil {
 		return fmt.Errorf("tymux: %w", err)

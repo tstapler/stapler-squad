@@ -24,13 +24,10 @@ import (
 	"github.com/tstapler/stapler-squad/session/tymux"
 )
 
-// logPTYUnavailableIfUnexpected logs an ERROR for a GetPTY() failure after
-// session start/restore — unless the error is
+// logPTYUnavailableIfUnexpected logs a GetPTY() failure as ERROR unless it's
 // tymux.ErrNotSupportedOnTymuxBackend, which every TymuxBackend session
-// returns unconditionally (it has no local PTY at all; all terminal I/O
-// goes over gRPC). Without this check, every single TymuxBackend session
-// start would log a spurious "pty attach failed, unavailable" ERROR, since
-// that outcome is normal and expected for this backend, not a failure.
+// returns as a matter of course (see that error's own doc comment) —
+// logging it there would be spurious noise, not a real failure signal.
 func logPTYUnavailableIfUnexpected(msg, sessionTitle string, ptyErr error) {
 	if errors.Is(ptyErr, tymux.ErrNotSupportedOnTymuxBackend) {
 		return
