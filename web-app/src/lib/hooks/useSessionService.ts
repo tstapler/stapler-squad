@@ -2,7 +2,7 @@
 
 import { useEffect, useCallback, useRef, useMemo, useState } from "react";
 import { createClient, ConnectError, Code } from "@connectrpc/connect";
-import { createWatchTransport } from "@/lib/transport/watch-ws-transport";
+import { createSessionWatchTransport } from "@/lib/transport/watch-ws-transport";
 import { SessionService } from "@/gen/session/v1/session_pb";
 import { Session, SessionStatus, Shell, NotificationPriority } from "@/gen/session/v1/types_pb";
 import {
@@ -21,7 +21,7 @@ import {
 import { create } from "@bufbuild/protobuf";
 import { SessionEvent, NotificationEvent } from "@/gen/session/v1/events_pb";
 import { getApiBaseUrl, createAuthInterceptor } from "@/lib/config";
-import { BackoffState, getWsCloseCode, isRetriableCloseCode } from "@/lib/utils/backoff";
+import { BackoffState, getWsCloseCode, isNonRetriableConnectError } from "@/lib/utils/backoff";
 import { createRpcTimingInterceptor } from "@/lib/telemetry/rpcTiming";
 import { getErrorMessage } from "@/lib/utils/connectError";
 import { useAnalytics } from "@/lib/contexts/AnalyticsContext";
@@ -224,7 +224,7 @@ export function useSessionService(
 
   // Initialize ConnectRPC client — uses HTTP for unary, WebSocket for streaming Watch* RPCs
   useEffect(() => {
-    const transport = createWatchTransport({
+    const transport = createSessionWatchTransport({
       baseUrl,
       interceptors: [createAuthInterceptor(), createRpcTimingInterceptor(analytics)],
     });
@@ -1009,10 +1009,13 @@ export function useSessionService(
             return; // ConnectRPC abort (e.g. AbortController signal)
           }
 
-          // Check for non-retriable WS close codes
-          const wsCode = getWsCloseCode(err);
-          if (wsCode !== null && !isRetriableCloseCode(wsCode)) {
-            console.warn(`[reconnect] stream=watch non-retriable close code=${wsCode}, stopping reconnect`);
+          // Check for non-retriable failures — a WS-bridge close code, or the
+          // equivalent ConnectError code on the native transport (no
+          // ws-close-code header exists there; see isNonRetriableConnectError).
+          if (isNonRetriableConnectError(err)) {
+            const wsCode = getWsCloseCode(err);
+            const reason = wsCode !== null ? `close code=${wsCode}` : `connect code=${(err as ConnectError).code}`;
+            console.warn(`[reconnect] stream=watch non-retriable ${reason}, stopping reconnect`);
             shouldReconnectRef.current = false;
             isConnectedRef.current = false;
             dispatch(setConnectionState("disconnected"));

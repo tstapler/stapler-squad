@@ -129,7 +129,7 @@ jest.mock("@connectrpc/connect", () => ({
 }));
 
 jest.mock("@/lib/transport/watch-ws-transport", () => ({
-  createWatchTransport: jest.fn().mockReturnValue({}),
+  createSessionWatchTransport: jest.fn().mockReturnValue({}),
 }));
 
 jest.mock("@/lib/config", () => ({
@@ -316,6 +316,77 @@ describe("useSessionService visibility/online handler", () => {
     // Without the feature flag, no listeners should have been registered
     expect(capturedDocHandler).toBeNull();
     expect(capturedWinHandler).toBeNull();
+  });
+});
+
+// ===== Reconnect parity across transports (Task 1.3.1d) =====
+//
+// getWsCloseCode/isNonRetriableConnectError previously only recognized
+// non-retriable failures via the `ws-close-code` header that fromWebSocket()
+// sets on the WS-bridge transport (watch-ws-transport.ts:53). A failure
+// delivered over the native createConnectTransport path never carries that
+// header, so getWsCloseCode(err) was always null and the "stop reconnecting"
+// branch in startStream's catch handler never fired for that transport —
+// every native-transport failure, including ones that should stop retrying,
+// fell through to indefinite exponential backoff. This test simulates that
+// exact failure shape and asserts reconnection stops.
+describe("useSessionService native-transport reconnect parity (Task 1.3.1d)", () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockListSessions.mockResolvedValue({ sessions: [], systemMemoryPct: 0 });
+  });
+
+  it("startStream_should_stopReconnecting_When_nativeTransportErrorIsNonRetriable", async () => {
+    // A ConnectError with a non-retriable Connect code and NO ws-close-code
+    // header — the shape createConnectTransport actually throws (unlike
+    // fromWebSocket's ConnectError, which always carries that header).
+    mockWatchSessions.mockImplementation(() => ({
+      [Symbol.asyncIterator]: () => ({
+        next: () => Promise.reject(new ConnectError("unauthenticated", Code.Unauthenticated)),
+      }),
+    }));
+
+    const store = makeTestStore();
+    const { result } = renderHook(
+      () => useSessionService({ autoWatch: true, enabled: true }),
+      { wrapper: makeWrapper(store) }
+    );
+
+    await waitFor(() => expect(mockWatchSessions).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(result.current.connectionState).toBe("disconnected"));
+
+    // Give an (incorrect) reconnect attempt time to fire — attempt-0 backoff
+    // is up to 1000ms (BackoffState(1000, 30_000)); wait comfortably past it.
+    await new Promise((resolve) => setTimeout(resolve, 1200));
+
+    expect(mockWatchSessions).toHaveBeenCalledTimes(1);
+  });
+
+  it("startStream_should_keepReconnecting_When_nativeTransportErrorIsRetriable", async () => {
+    // Control case: a retriable native-transport error (Unavailable) must
+    // still trigger a reconnect attempt, so the fix above doesn't
+    // over-broadly treat every native-transport error as non-retriable.
+    let callCount = 0;
+    mockWatchSessions.mockImplementation(() => ({
+      [Symbol.asyncIterator]: () => ({
+        next: () => {
+          callCount++;
+          if (callCount === 1) {
+            return Promise.reject(new ConnectError("unavailable", Code.Unavailable));
+          }
+          return new Promise<never>(() => {}); // second attempt: hang (no further event)
+        },
+      }),
+    }));
+
+    const store = makeTestStore();
+    renderHook(
+      () => useSessionService({ autoWatch: true, enabled: true }),
+      { wrapper: makeWrapper(store) }
+    );
+
+    await waitFor(() => expect(mockWatchSessions).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(mockWatchSessions).toHaveBeenCalledTimes(2), { timeout: 2000 });
   });
 });
 
