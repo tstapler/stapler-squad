@@ -35,6 +35,7 @@ import { ShellTabLabel } from "./ShellTab";
 import { NewShellDialog } from "./NewShellDialog";
 import { useWorkflows } from "@/lib/hooks/useWorkflows";
 import { attributionBadge } from "./TriggersPanel.css";
+import { routes } from "@/lib/routes";
 import * as styles from "./SessionDetail.css";
 import {
   diffAdded,
@@ -412,6 +413,16 @@ export function SessionDetailView({
     : undefined;
   const isAutomatedTrigger = !!triggerWorkflow &&
     ["cron", "github_push", "webhook"].includes(triggerWorkflow.triggerType);
+
+  // Restart lineage (context-compression, UX acceptance criterion #10): resolve
+  // session.restartedFromSessionId against the live session list so the "Restarted
+  // from:" row can link to the source session by title when it's still around, and
+  // gracefully fall back to a plain, non-clickable "(no longer available)" label when
+  // it's been archived/deleted since the restart — mirrors the trigger-attribution
+  // lookup above.
+  const restartSourceSession = session.restartedFromSessionId
+    ? allSessions.find((s) => s.id === session.restartedFromSessionId)
+    : undefined;
 
   // Shell tabs
   const { shells, spawnShell, stopShell, restartShell, deleteShell, updateShellStatus } = useShells(session.id);
@@ -1196,6 +1207,29 @@ export function SessionDetailView({
                 <div className={styles.infoItem}>
                   <span className={styles.infoLabel}>Instance Type:</span>
                   <span className={styles.infoValue}>External</span>
+                </div>
+              )}
+              {/* Restart lineage (context-compression UX AC#10) — only rendered when this
+                  session was created via "Restart with summary"; gracefully degrades to
+                  plain text (no dead link) when the source session is gone. */}
+              {session.restartedFromSessionId && (
+                <div className={styles.infoItem} data-testid="restarted-from-row">
+                  <span className={styles.infoLabel}>Restarted from:</span>
+                  <span className={styles.infoValue}>
+                    {restartSourceSession ? (
+                      <a
+                        href={routes.sessionDetail(restartSourceSession.id)}
+                        style={{ color: 'var(--color-link, #3b82f6)' }}
+                        data-testid="restarted-from-link"
+                      >
+                        ↗ {restartSourceSession.title}
+                      </a>
+                    ) : (
+                      <span data-testid="restarted-from-unavailable">
+                        {session.restartedFromSessionId} (no longer available)
+                      </span>
+                    )}
+                  </span>
                 </div>
               )}
               {/* Timestamps */}
