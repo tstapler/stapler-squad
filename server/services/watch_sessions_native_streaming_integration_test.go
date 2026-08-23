@@ -7,15 +7,8 @@ package services_test
 
 import (
 	"context"
-	"crypto/ecdsa"
-	"crypto/elliptic"
-	"crypto/rand"
 	"crypto/tls"
-	"crypto/x509"
-	"crypto/x509/pkix"
 	"fmt"
-	"math/big"
-	"net"
 	"net/http"
 	"sync/atomic"
 	"testing"
@@ -31,75 +24,8 @@ import (
 	"github.com/tstapler/stapler-squad/server"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/testutil"
 )
-
-// findFreeTestPort asks the OS for an ephemeral port and immediately releases
-// it -- mirrors server/server_integration_test.go's findFreePort, duplicated
-// locally because that helper is unexported in package server and this file
-// must live in package services_test (see the package doc comment above).
-func findFreeTestPort(t *testing.T) int {
-	t.Helper()
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	require.NoError(t, err)
-	defer ln.Close()
-	return ln.Addr().(*net.TCPAddr).Port
-}
-
-// buildSelfSignedTLSFixture generates a single self-signed leaf certificate
-// (acting as its own trust root) for hostnames, and returns a server-side
-// *tls.Config alongside the client-side *x509.CertPool that trusts it.
-//
-// This deliberately duplicates the shape of server/tls.go's
-// generateCA/generateServerCert (used by the Story 1.1.1 test in
-// server/server_integration_test.go) rather than calling those helpers
-// directly: they are unexported in package server, and this file cannot be
-// package server itself (see the package doc comment above), so cross-package
-// reuse isn't possible without a production code change this task doesn't
-// authorize.
-func buildSelfSignedTLSFixture(t *testing.T, hostnames []string) (*tls.Config, *x509.CertPool) {
-	t.Helper()
-
-	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	require.NoError(t, err)
-
-	var dnsNames []string
-	var ipAddrs []net.IP
-	for _, h := range hostnames {
-		if ip := net.ParseIP(h); ip != nil {
-			ipAddrs = append(ipAddrs, ip)
-		} else {
-			dnsNames = append(dnsNames, h)
-		}
-	}
-
-	serial, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
-	require.NoError(t, err)
-
-	tmpl := &x509.Certificate{
-		SerialNumber:          serial,
-		Subject:               pkix.Name{CommonName: "stapler-squad-native-streaming-test"},
-		NotBefore:             time.Now().Add(-time.Hour),
-		NotAfter:              time.Now().Add(2 * time.Hour),
-		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign,
-		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
-		BasicConstraintsValid: true,
-		IsCA:                  true,
-		DNSNames:              dnsNames,
-		IPAddresses:           ipAddrs,
-	}
-
-	certDER, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
-	require.NoError(t, err)
-
-	cert, err := x509.ParseCertificate(certDER)
-	require.NoError(t, err)
-
-	pool := x509.NewCertPool()
-	pool.AddCert(cert)
-
-	tlsCert := tls.Certificate{Certificate: [][]byte{certDER}, PrivateKey: key}
-	return &tls.Config{Certificates: []tls.Certificate{tlsCert}}, pool
-}
 
 // protoCapturingTransport wraps an http.RoundTripper and records the
 // protocol (e.g. "HTTP/2.0") of the most recent response, so the test can
@@ -151,12 +77,12 @@ func TestWatchSessions_should_DeliverMultipleEventsOverNativeHTTP2Stream_When_Ca
 
 	srv := server.NewServerWithDeps("localhost:0", deps)
 
-	tlsCfg, caPool := buildSelfSignedTLSFixture(t, []string{"127.0.0.1", "localhost"})
+	tlsCfg, caPool := testutil.BuildSelfSignedTLSFixture(t, []string{"127.0.0.1", "localhost"})
 
 	srvCtx, srvCancel := context.WithCancel(context.Background())
 	defer srvCancel()
 
-	port := findFreeTestPort(t)
+	port := testutil.FindFreePort(t)
 	remoteAddr := fmt.Sprintf("127.0.0.1:%d", port)
 	require.NoError(t, srv.StartRemote(srvCtx, remoteAddr, tlsCfg, nil))
 
@@ -175,7 +101,6 @@ func TestWatchSessions_should_DeliverMultipleEventsOverNativeHTTP2Stream_When_Ca
 	client := sessionv1connect.NewSessionServiceClient(httpClient, baseURL)
 
 	callCtx, callCancel := context.WithCancel(context.Background())
-	defer callCancel()
 
 	// connect-go's streaming handler (protocol_connect.go's
 	// connectStreamingHandlerConn.Send) only flushes response headers on the
@@ -191,7 +116,9 @@ func TestWatchSessions_should_DeliverMultipleEventsOverNativeHTTP2Stream_When_Ca
 	}
 	recvCh := make(chan recv, 16)
 	streamErrCh := make(chan error, 1)
+	streamDone := make(chan struct{})
 	go func() {
+		defer close(streamDone)
 		stream, err := client.WatchSessions(callCtx, connect.NewRequest(&sessionv1.WatchSessionsRequest{}))
 		streamErrCh <- err
 		if err != nil {
@@ -201,6 +128,21 @@ func TestWatchSessions_should_DeliverMultipleEventsOverNativeHTTP2Stream_When_Ca
 			recvCh <- recv{ev: stream.Msg()}
 		}
 		recvCh <- recv{err: stream.Err()}
+	}()
+	// Join the stream-read goroutine above before the test returns: callCancel
+	// (deferred, above) only signals it to stop -- without waiting on
+	// streamDone too, the goroutine could still be running (and writing to
+	// recvCh/streamErrCh) after the test function exits, which is a leak
+	// `go test` won't otherwise catch. Mirrors backlog_service_events_test.go's
+	// requireCleanReturn and server_integration_test.go:172-179's join-with-
+	// bounded-timeout pattern.
+	defer func() {
+		callCancel()
+		select {
+		case <-streamDone:
+		case <-time.After(5 * time.Second):
+			t.Error("WatchSessions goroutine did not exit after context cancellation")
+		}
 	}()
 
 	// awaitEvent drains recvCh, ignoring any event whose session ID doesn't
@@ -241,7 +183,9 @@ func TestWatchSessions_should_DeliverMultipleEventsOverNativeHTTP2Stream_When_Ca
 	// which proves the subscription is live before publishing the second
 	// mutation exactly once.
 	publishCtx, stopPublishing := context.WithCancel(context.Background())
+	publishDone := make(chan struct{})
 	go func() {
+		defer close(publishDone)
 		deps.EventBus.Publish(events.NewSessionCreatedEvent(inst1))
 		ticker := time.NewTicker(25 * time.Millisecond)
 		defer ticker.Stop()
@@ -254,6 +198,23 @@ func TestWatchSessions_should_DeliverMultipleEventsOverNativeHTTP2Stream_When_Ca
 			}
 		}
 	}()
+	// joinPublishing waits (with a bounded timeout) for the publish-ticker
+	// goroutine above to actually exit -- stopPublishing alone only signals
+	// it to stop, it doesn't wait, so without this join the goroutine could
+	// still be running after the test returns. Same bounded-timeout join
+	// pattern as the WatchSessions stream-read goroutine above.
+	joinPublishing := func() {
+		t.Helper()
+		select {
+		case <-publishDone:
+		case <-time.After(5 * time.Second):
+			t.Error("publish-ticker goroutine did not exit after stopPublishing")
+		}
+	}
+	defer func() {
+		stopPublishing()
+		joinPublishing()
+	}()
 
 	select {
 	case err := <-streamErrCh:
@@ -264,6 +225,7 @@ func TestWatchSessions_should_DeliverMultipleEventsOverNativeHTTP2Stream_When_Ca
 
 	firstEvent := awaitEvent(inst1.ID, 10*time.Second)
 	stopPublishing()
+	joinPublishing()
 
 	deps.EventBus.Publish(events.NewSessionUpdatedEvent(inst2, []string{"status"}))
 	secondEvent := awaitEvent(inst2.ID, 5*time.Second)

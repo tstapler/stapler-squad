@@ -3,7 +3,6 @@ package server
 import (
 	"context"
 	"crypto/tls"
-	"crypto/x509"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -21,24 +20,9 @@ import (
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/testutil"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
-
-// findFreePort asks the OS for an ephemeral port and immediately releases it, so
-// tests exercising the "explicit, non-zero port" code path (as opposed to ":0")
-// never hardcode a real, recognizable port number -- in particular, never the
-// production stapler-squad port, which risks confusion with (or, if this test
-// pattern is ever copied into code that actually binds, collision with) a real
-// running instance on the developer's machine.
-func findFreePort(t *testing.T) int {
-	t.Helper()
-	ln, err := net.Listen("tcp", "localhost:0")
-	if err != nil {
-		t.Fatalf("findFreePort: %v", err)
-	}
-	defer ln.Close()
-	return ln.Addr().(*net.TCPAddr).Port
-}
 
 // installFakeClaudeBinary puts a fake `claude` executable at the front of PATH
 // for the duration of the test (t.Setenv restores the original PATH on cleanup).
@@ -66,28 +50,6 @@ func installFakeClaudeBinary(t *testing.T) {
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 }
 
-// buildRemoteTLSTestFixture generates a self-signed CA plus a leaf certificate
-// (via this file's own generateCA/generateServerCert helpers in tls.go) for
-// hostnames, and returns a server-side *tls.Config alongside the client-side
-// *x509.CertPool that trusts it. Shared by the Task 1.1.1a tests below.
-func buildRemoteTLSTestFixture(t *testing.T, hostnames []string) (*tls.Config, *x509.CertPool) {
-	t.Helper()
-
-	caKey, caCert, _, err := generateCA()
-	require.NoError(t, err)
-
-	certPEM, keyPEM, err := generateServerCert(caKey, caCert, hostnames)
-	require.NoError(t, err)
-
-	cert, err := tls.X509KeyPair(certPEM, keyPEM)
-	require.NoError(t, err)
-
-	pool := x509.NewCertPool()
-	pool.AddCert(caCert)
-
-	return &tls.Config{Certificates: []tls.Certificate{cert}}, pool
-}
-
 // TestServer_should_NegotiateALPNHTTP2_When_StartRemoteServesOverRealTLS is a
 // verification-only test (Task 1.1.1a, Story 1.1.1) confirming PRE-EXISTING
 // stdlib behavior, not newly-built code: Go's net/http package automatically
@@ -108,12 +70,12 @@ func TestServer_should_NegotiateALPNHTTP2_When_StartRemoteServesOverRealTLS(t *t
 		w.Write([]byte(`{"status":"ok"}`)) //nolint:errcheck
 	})
 
-	tlsCfg, caPool := buildRemoteTLSTestFixture(t, []string{"127.0.0.1", "localhost"})
+	tlsCfg, caPool := testutil.BuildSelfSignedTLSFixture(t, []string{"127.0.0.1", "localhost"})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	port := findFreePort(t)
+	port := testutil.FindFreePort(t)
 	remoteAddr := fmt.Sprintf("127.0.0.1:%d", port)
 	require.NoError(t, srv.StartRemote(ctx, remoteAddr, tlsCfg, nil))
 
@@ -561,7 +523,7 @@ func TestServer_should_WriteUnchangedHookURL_When_StartedOnExplicitPort(t *testi
 		t.Fatalf("BuildDependencies: %v", err)
 	}
 
-	port := findFreePort(t)
+	port := testutil.FindFreePort(t)
 	addr := fmt.Sprintf("localhost:%d", port)
 	srv := NewServerWithDeps(addr, deps)
 	if got := srv.GetAddr(); got != addr {
