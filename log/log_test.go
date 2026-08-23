@@ -3,6 +3,7 @@ package log
 import (
 	"io"
 	"log"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -226,6 +227,24 @@ func NewDummyLogger(w io.Writer, prefix string) *log.Logger {
 // another set concurrently loads and uses it. Before atomicLogger, the
 // equivalent bare package-var reassignment raced with these reads; this test
 // guards against that regression reappearing.
+// TestSetRuntimeLevel_UpdatesSlogLevel guards against the bug this fixes: the
+// slog-based Debug/Info/Warn/Error logger was wired to a hardcoded
+// slog.LevelDebug and never consulted SetRuntimeLevel, so Debug() always
+// emitted regardless of the configured runtime level.
+func TestSetRuntimeLevel_UpdatesSlogLevel(t *testing.T) {
+	t.Cleanup(func() { SetRuntimeLevel(INFO) })
+
+	SetRuntimeLevel(WARNING)
+	if got := slogLevel.Level(); got != slog.LevelWarn {
+		t.Errorf("slogLevel = %v, want %v", got, slog.LevelWarn)
+	}
+
+	SetRuntimeLevel(DEBUG)
+	if got := slogLevel.Level(); got != slog.LevelDebug {
+		t.Errorf("slogLevel = %v, want %v", got, slog.LevelDebug)
+	}
+}
+
 func TestAtomicLoggerConcurrentAccess(t *testing.T) {
 	orig := SetWarningLogForTest(NewDummyLogger(io.Discard, "WARNING: "))
 	defer SetWarningLogForTest(orig)
