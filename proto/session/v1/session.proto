@@ -665,8 +665,11 @@ message CreateSessionRequest {
   // means "run locally," the existing behavior.
   RemoteTarget remote = 31;
 
-  // Optional: source session this restart is seeded from (lineage only — does not
-  // change session-creation behavior).
+  // Optional: source session this restart is seeded from. Derives the resolved
+  // path from that session (relaxing the path-required validation above) and
+  // can reject the request with CodeFailedPrecondition if the source is still
+  // live and confirm_restart_with_live_source is not also set — see
+  // resolveRestartSource in server/services/session_service.go.
   string restart_from_session_id = 32;
 
   // Required to proceed when restart_from_session_id names a still-live source instance.

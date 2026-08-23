@@ -321,6 +321,12 @@ func (g *HandoffSummaryGenerator) GenerateAndPersist(ctx context.Context, source
 	activeTask := extractActiveTask(summaryText)
 	finalNow := time.Now()
 
+	// Field-scoped (NOT UpdateNewValues()) -- see upsertHandoffSummaryError's
+	// interim-upsert precedent and session_summary_service.go's identical
+	// avoidance: UpdateNewValues() re-applies every Default()-bearing column
+	// (currently status, middle_messages_summarized) even when not explicitly
+	// Set() here, so a future Default()-bearing field added to this schema
+	// without also being added to this call site would be silently zeroed.
 	if err := g.entClient.HandoffSummary.Create().
 		SetID(uuid.New().String()).
 		SetSessionID(sourceSessionID).
@@ -332,8 +338,14 @@ func (g *HandoffSummaryGenerator) GenerateAndPersist(ctx context.Context, source
 		SetGenerationStartedAt(now).
 		SetGeneratedAt(finalNow).
 		OnConflictColumns(handoffsummary.FieldSessionID).
-		UpdateNewValues().
 		Update(func(u *ent.HandoffSummaryUpsert) {
+			u.SetSessionTitle(sourceSessionTitle)
+			u.SetStatus(string(HandoffSummaryStatusReady))
+			u.SetSummaryText(summaryText)
+			u.SetActiveTask(activeTask)
+			u.SetMiddleMessagesSummarized(len(window.Middle))
+			u.SetGenerationStartedAt(now)
+			u.SetGeneratedAt(finalNow)
 			// A prior failed generation for this session may have left
 			// error_message/error_stage set — clear them so a successful
 			// (READY) row never carries forward stale error state.

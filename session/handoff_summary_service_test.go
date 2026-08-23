@@ -3,6 +3,7 @@ package session
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/ent/handoffsummary"
+	"github.com/tstapler/stapler-squad/session/ent/hook"
 	"github.com/tstapler/stapler-squad/session/headless"
 )
 
@@ -249,6 +251,68 @@ func TestGenerateAndPersist_PoolFailureTransitionsToError(t *testing.T) {
 	// which still contains the pool error's text verbatim.
 	if !strings.Contains(row.ErrorMessage, poolErr.Error()) {
 		t.Fatalf("expected error_message to contain %q, got %q", poolErr.Error(), row.ErrorMessage)
+	}
+}
+
+// TestGenerateAndPersist_TranscriptFailureTransitionsToError directly covers
+// the transcript-read failure path: $HOME points at a fresh temp dir with no
+// conversation-file fixture written for sourceSessionID, so
+// findConversationFilePath (session/history.go) fails and GenerateAndPersist
+// must land the row in ERROR with error_stage="transcript" rather than
+// leaving it stuck in GENERATING.
+func TestGenerateAndPersist_TranscriptFailureTransitionsToError(t *testing.T) {
+	sessionID := "sess-transcript-failure"
+	t.Setenv("HOME", t.TempDir())
+
+	gen, client, _ := newTestHandoffSummaryGenerator(t)
+
+	gen.GenerateAndPersist(context.Background(), sessionID, "title")
+
+	row := getHandoffRow(t, client, sessionID)
+	if row.Status != string(HandoffSummaryStatusError) {
+		t.Fatalf("expected ERROR, got %s", row.Status)
+	}
+	if row.ErrorStage != "transcript" {
+		t.Fatalf("expected error_stage=transcript, got %q", row.ErrorStage)
+	}
+}
+
+// TestGenerateAndPersist_PersistFailureTransitionsToError covers the
+// highest-consequence failure path flagged by GenerateAndPersist's own
+// "persist" stage comment: the LLM call succeeds (cost already spent) but the
+// final READY write fails. An ent mutation hook forces exactly that write to
+// error (matched by status=="ready", so the interim GENERATING upsert and the
+// upsertHandoffSummaryError fallback write are unaffected) -- the row must
+// still land in ERROR with error_stage="persist" via failStage's best-effort
+// fallback write, not stay stuck in GENERATING.
+func TestGenerateAndPersist_PersistFailureTransitionsToError(t *testing.T) {
+	sessionID := "sess-persist-failure"
+	roles, contents := defaultFixtureMessages()
+	writeHandoffConversationFixture(t, sessionID, roles, contents)
+
+	gen, client, _ := newTestHandoffSummaryGenerator(t)
+
+	persistErr := errors.New("simulated persist failure")
+	client.HandoffSummary.Use(func(next ent.Mutator) ent.Mutator {
+		return hook.HandoffSummaryFunc(func(ctx context.Context, m *ent.HandoffSummaryMutation) (ent.Value, error) {
+			if status, ok := m.Status(); ok && status == string(HandoffSummaryStatusReady) {
+				return nil, persistErr
+			}
+			return next.Mutate(ctx, m)
+		})
+	})
+
+	gen.GenerateAndPersist(context.Background(), sessionID, "title")
+
+	row := getHandoffRow(t, client, sessionID)
+	if row.Status != string(HandoffSummaryStatusError) {
+		t.Fatalf("expected ERROR, got %s", row.Status)
+	}
+	if row.ErrorStage != "persist" {
+		t.Fatalf("expected error_stage=persist, got %q", row.ErrorStage)
+	}
+	if !strings.Contains(row.ErrorMessage, persistErr.Error()) {
+		t.Fatalf("expected error_message to contain %q, got %q", persistErr.Error(), row.ErrorMessage)
 	}
 }
 

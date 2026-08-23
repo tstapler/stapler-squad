@@ -76,7 +76,10 @@ func pruneMessages(messages []ClaudeConversationMessage) []ClaudeConversationMes
 // to the handoff summarizer.
 type SummaryBudget struct {
 	// MiddleExcerptMaxBytes is the maximum total pruned-content byte length
-	// allowed across all middle messages.
+	// allowed across all middle messages -- a rough bytes-per-token
+	// approximation (4 bytes/token) rather than an actual tokenizer count,
+	// since this repo has no tokenizer library and doesn't need one for a
+	// soft excerpt cap like this.
 	MiddleExcerptMaxBytes int
 }
 
@@ -91,31 +94,12 @@ func sumContentBytes(messages []ClaudeConversationMessage) int {
 	return total
 }
 
-// newSummaryBudget derives a SummaryBudget that scales with the size of the
-// transcript being compressed, capped at an absolute ceiling -- Hermes's
-// "scale summary budget proportionally to compressed content, not a fixed
-// token cap... absolute ceiling on summary tokens even for very large
-// context windows" design (requirements.md; echoed by plan.md's SummaryBudget
-// glossary entry: "Proportional to len(Middle) messages, capped at
-// MaxMiddleExcerptTokens"). This resolves that proportionality against raw
-// transcript *bytes* rather than message count: messages vary enormously in
-// size (a one-line ack vs. a pasted file), so byte count is a much closer
-// proxy for "how much compressed content is there" than a message tally --
-// and totalTranscriptBytes already dominates by Middle's contribution, since
-// Head/Tail are fixed at headMessageCount/tailMessageCount messages each.
-//
-// totalTranscriptBytes is the raw (pre-pruning) byte length of Head+Middle+Tail
-// combined -- see sumContentBytes and this function's call site in
-// GenerateAndPersist. MiddleExcerptMaxBytes is a rough bytes-per-token
-// approximation (4 bytes/token) rather than an actual tokenizer count -- this
-// repo has no tokenizer library and doesn't need one for a soft excerpt cap
-// like this.
-//
-// The 1/2 proportion is not independently cited in the design docs; it's
-// chosen so a short conversation's excerpt budget is a meaningful fraction of
-// its own source material -- half of it -- rather than either the full
-// transcript (leaving nothing "compressed" about the excerpt) or a fixed
-// small constant unrelated to how much there actually is to summarize.
+// newSummaryBudget derives a SummaryBudget proportional to the transcript's
+// raw byte size (a closer volume proxy than message count), capped at an
+// absolute ceiling -- mirroring Hermes's "scale proportionally, cap at an
+// absolute ceiling" design (requirements.md; plan.md's SummaryBudget
+// glossary). The 1/2 proportion is a deliberate, uncited choice: a short
+// conversation's excerpt should stay a meaningful fraction of its source.
 func newSummaryBudget(cfg config.HandoffSummaryConfig, totalTranscriptBytes int) SummaryBudget {
 	resolved := cfg.HandoffSummaryConfigOrDefault()
 	ceiling := resolved.MaxMiddleExcerptTokens * 4
