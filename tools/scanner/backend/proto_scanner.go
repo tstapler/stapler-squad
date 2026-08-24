@@ -291,6 +291,11 @@ var methodToID = map[string]string{ //nolint:gochecknoglobals
 	// gets a generated per-feature file is a separate, larger followup (a new feature's
 	// registry entries + testIds, not a completeness-test fix) -- out of scope here.
 	"RunHeadlessCall": "headless:run-call",
+	// Handoff summary RPCs (HandoffSummaryService in handoff_summary.proto). Added to fix
+	// TestMethodToIDCompleteness, which was failing on main independent of any specific PR --
+	// the handoff-summary feature (#612 and its stack) never ran make registry-generate.
+	"GetHandoffSummary":     "handoff-summary:get",
+	"TriggerHandoffSummary": "handoff-summary:trigger",
 }
 
 // rpcPattern matches lines like:   rpc MethodName(  (indented or not)
