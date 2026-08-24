@@ -2,6 +2,7 @@ package unfinished
 
 import (
 	"context"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -344,12 +345,15 @@ func TestScanner_hydrateCacheFromDisk_should_rescan_When_PersistedEntryIsStale(t
 
 // TestScanner_persistCacheToDisk_should_roundTrip_When_ScanCompletes verifies a live
 // worktreeCache entry is snapshotted to the state store and comes back out via
-// LoadScanCache with the same result and scan time.
+// LoadScanCache with the same result and scan time. Uses a real temp dir as the
+// worktree path since persistCacheToDisk now evicts entries for paths that don't
+// exist on disk (see the eviction test below).
 func TestScanner_persistCacheToDisk_should_roundTrip_When_ScanCompletes(t *testing.T) {
 	t.Parallel()
 	store, _ := newTestStateStore(t)
+	wtPath := t.TempDir()
 	reader := &fakeVCSReaderForCacheTest{
-		worktrees: []WorktreeInfo{{Path: "/repo-z/wt", Branch: "main"}},
+		worktrees: []WorktreeInfo{{Path: wtPath, Branch: "main"}},
 	}
 	s := NewScannerWithReader(pkgevents.NewEventBus(10), store, reader)
 	s.SetTickInterval(5 * time.Minute)
@@ -359,7 +363,54 @@ func TestScanner_persistCacheToDisk_should_roundTrip_When_ScanCompletes(t *testi
 
 	loaded := store.LoadScanCache()
 	require.Len(t, loaded, 1)
-	assert.Equal(t, "/repo-z/wt", loaded[0].Result.WorktreePath)
+	assert.Equal(t, wtPath, loaded[0].Result.WorktreePath)
+}
+
+// TestScanner_persistCacheToDisk_should_evictEntry_When_WorktreeGoneFromDisk verifies
+// a cache entry for a worktree that no longer exists on disk is dropped from both
+// cacheStore and the persisted state, rather than accumulating forever across
+// session/worktree churn (nothing else prunes cacheStore on arbitrary removal paths).
+func TestScanner_persistCacheToDisk_should_evictEntry_When_WorktreeGoneFromDisk(t *testing.T) {
+	t.Parallel()
+	store, _ := newTestStateStore(t)
+	s := NewScannerWithReader(pkgevents.NewEventBus(10), store, &fakeVCSReaderForCacheTest{})
+	s.SetTickInterval(5 * time.Minute)
+
+	missingPath := filepath.Join(t.TempDir(), "deleted-worktree")
+	c := s.getOrCreateCache(missingPath)
+	c.Set(ScanResult{WorktreePath: missingPath, Branch: "main"})
+	s.cacheDirty.Store(true)
+
+	s.persistCacheToDisk()
+
+	assert.Empty(t, store.LoadScanCache(), "entry for a nonexistent worktree path should not be persisted")
+	_, stillCached := s.cacheStore.Load(missingPath)
+	assert.False(t, stillCached, "entry for a nonexistent worktree path should be evicted from cacheStore")
+}
+
+// TestScanner_persistCacheToDisk_should_skipWrite_When_NotDirty verifies the
+// periodic persist is a no-op when nothing has changed since the last one --
+// an idle scanner shouldn't re-marshal and rewrite the whole state file forever.
+func TestScanner_persistCacheToDisk_should_skipWrite_When_NotDirty(t *testing.T) {
+	t.Parallel()
+	store, _ := newTestStateStore(t)
+	wtPath := t.TempDir()
+	reader := &fakeVCSReaderForCacheTest{
+		worktrees: []WorktreeInfo{{Path: wtPath, Branch: "main"}},
+	}
+	s := NewScannerWithReader(pkgevents.NewEventBus(10), store, reader)
+	s.SetTickInterval(5 * time.Minute)
+
+	s.scanRepo("/repo-z", false)
+	s.persistCacheToDisk() // first persist: writes and clears the dirty flag
+	require.Len(t, store.LoadScanCache(), 1)
+
+	// Overwrite the persisted state directly to prove a second, no-op persist
+	// really is skipped rather than just writing the same content again.
+	require.NoError(t, store.SaveScanCache(nil))
+	s.persistCacheToDisk()
+
+	assert.Empty(t, store.LoadScanCache(), "a persist with nothing new to write should not re-save the cache")
 }
 
 // ---- Circuit breaker ----------------------------------------------------

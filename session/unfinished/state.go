@@ -40,13 +40,9 @@ type aiCacheEntry struct {
 	GeneratedAt time.Time `json:"generated_at"`
 }
 
-// scanCacheEntry is a persisted snapshot of one worktree's last scan result.
-// It exists purely to prime the in-memory worktreeCache after a process
-// restart, so the first scan tick doesn't have to recompute every worktree
-// from a cold cache. A restored entry is only usable while still within the
-// cache's own TTL (see Scanner.hydrateCacheFromDisk) -- the same staleness
-// bound a live in-memory entry is already held to -- so this can never serve
-// data an in-memory cache wouldn't also have considered fresh.
+// scanCacheEntry is a persisted snapshot of one worktree's last scan result,
+// used only to prime the in-memory worktreeCache after a restart (see
+// Scanner.hydrateCacheFromDisk, which restores an entry only within its TTL).
 type scanCacheEntry struct {
 	Result   ScanResult `json:"result"`
 	ScanTime time.Time  `json:"scan_time"`

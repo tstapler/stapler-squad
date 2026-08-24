@@ -26,9 +26,7 @@ type Reader interface {
 	// SessionsRSSMB returns the total RSS (resident set size) in MB for each
 	// of the given tmux session names, keyed by name. A session that is not
 	// running or whose measurement fails maps to 0 rather than an error, so
-	// one bad session doesn't fail the whole batch. Implementations should
-	// measure every name from a single shared view of the system process
-	// table rather than re-querying it per session -- see GopsutilReader.
+	// one bad session doesn't fail the whole batch.
 	SessionsRSSMB(ctx context.Context, tmuxSessionNames []string) (map[string]int64, error)
 }
 
@@ -124,17 +122,10 @@ const (
 )
 
 // processSnapshot is a single point-in-time view of the system's process
-// table, built with exactly one process.ProcessesWithContext call.
-//
-// gopsutil's Process.Children() has no "list children of PID X" syscall on
-// Darwin (or Linux): it lists every PID on the machine and checks each one's
-// Ppid, per call (see gopsutil's process_darwin.go ChildrenWithContext). The
-// previous sumRSS called .Children() at every node while walking a session's
-// process tree, so summing one session's RSS did up to maxProcessTreeSize
-// full-system-process enumerations. Building the parent->children map once
-// here and sharing one snapshot across every session in a sweep (see
-// GopsutilReader.SessionsRSSMB) reduces that to one enumeration for the
-// entire batch.
+// table, built with one process.ProcessesWithContext call and shared across
+// every session in a sweep -- avoiding gopsutil's Children(), which has no
+// "list children of PID X" syscall and instead re-lists every process on the
+// machine per call (see process_darwin.go's ChildrenWithContext).
 type processSnapshot struct {
 	children map[int32][]int32
 	byPID    map[int32]*process.Process

@@ -186,14 +186,10 @@ func (s *HibernationSweeper) SystemMemoryPct() (float64, error) {
 	return pct, nil
 }
 
-// tickerPhaseOffset delays the start of the recurring ticker (after the
-// immediate first sweep) by half the sweep interval. session/unfinished's
-// Scanner also runs a 5-minute backstop ticker (scanner.go's tickInterval);
-// with no offset, both jobs start near process boot and would tick in
-// lock-step forever, stacking their CPU cost into a single spike every 5
-// minutes instead of spreading it out. Phase-shifting one of them by half a
-// period is enough to keep them apart indefinitely, since both tick at a
-// fixed period from their own start.
+// tickerPhaseOffset delays the recurring ticker's start by half the sweep
+// interval, so this sweeper doesn't tick in lock-step forever with
+// unfinished.Scanner's identical 5-minute backstop ticker and stack their
+// CPU cost into one spike every cycle.
 const tickerPhaseOffset = sweepInterval / 2
 
 // Start runs the periodic sweep loop. Blocks until ctx is cancelled.
@@ -294,12 +290,9 @@ func (s *HibernationSweeper) sweep(ctx context.Context) {
 // the cache. Called from sweep() on every tick — not gated on ResourcePressureThreshold
 // — so that memory_rss_mb in the UI is always populated when memReader is configured.
 //
-// All active sessions are measured in a single SessionsRSSMB batch call
-// rather than one memReader call per session: gopsutil's process-tree walk
-// has no cheap "children of PID X" syscall, so each independent call ended up
-// re-enumerating the entire system process table (see processSnapshot's doc
-// comment in session/memory/reader.go). Batching means the whole sweep pays
-// for that enumeration once, not once per session.
+// All active sessions are measured in a single SessionsRSSMB batch call so
+// the whole sweep pays for one process-table enumeration, not one per
+// session (see processSnapshot in session/memory/reader.go).
 func (s *HibernationSweeper) warmRSSCache(ctx context.Context, instances []*Instance) {
 	if s.memReader == nil {
 		return
