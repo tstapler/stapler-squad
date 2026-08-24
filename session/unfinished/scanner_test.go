@@ -413,6 +413,67 @@ func TestScanner_persistCacheToDisk_should_skipWrite_When_NotDirty(t *testing.T)
 	assert.Empty(t, store.LoadScanCache(), "a persist with nothing new to write should not re-save the cache")
 }
 
+// TestScanner_Start_should_persistPeriodically_When_MaintenanceTickFires
+// verifies SetMaintenanceTickInterval actually drives Start's background
+// persist goroutine, not just the (already-covered) direct persistCacheToDisk
+// call -- the round that introduced this setter never exercised Start()
+// itself, so a broken wire-up (e.g. the goroutine reading the wrong field, or
+// never reaching persistCacheToDisk on tick) would have shipped undetected.
+func TestScanner_Start_should_persistPeriodically_When_MaintenanceTickFires(t *testing.T) {
+	t.Parallel()
+	store, _ := newTestStateStore(t)
+	wtPath := t.TempDir()
+	reader := &fakeVCSReaderForCacheTest{
+		worktrees: []WorktreeInfo{{Path: wtPath, Branch: "main"}},
+	}
+	s := NewScannerWithReader(pkgevents.NewEventBus(10), store, reader)
+	s.SetTickInterval(time.Hour) // keep the coordinator's own tick from interfering
+	s.SetMaintenanceTickInterval(10 * time.Millisecond)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	s.Start(ctx)
+
+	// Dirty the cache directly (bypassing the coordinator) so the only thing
+	// that can persist it is the maintenance tick this test is verifying.
+	s.scanRepo("/repo-tick", false)
+
+	err := wait.WaitForCondition(func() bool {
+		return len(store.LoadScanCache()) == 1
+	}, wait.WaitConfig{Timeout: time.Second, PollInterval: 5 * time.Millisecond, Description: "maintenance tick persist"})
+	require.NoError(t, err, "the maintenance ticker should have persisted the dirty cache entry")
+}
+
+// TestScanner_Start_should_flushOnShutdown_When_ContextCancelled verifies the
+// ctx.Done() branch flushes the scan cache immediately rather than only on
+// the next tick -- with a maintenance interval far longer than the test, the
+// periodic tick can't be what persists the entry, so a passing assertion
+// here can only be explained by the shutdown flush actually running.
+func TestScanner_Start_should_flushOnShutdown_When_ContextCancelled(t *testing.T) {
+	t.Parallel()
+	store, _ := newTestStateStore(t)
+	wtPath := t.TempDir()
+	reader := &fakeVCSReaderForCacheTest{
+		worktrees: []WorktreeInfo{{Path: wtPath, Branch: "main"}},
+	}
+	s := NewScannerWithReader(pkgevents.NewEventBus(10), store, reader)
+	s.SetTickInterval(time.Hour)
+	s.SetMaintenanceTickInterval(time.Hour) // long enough that only the shutdown flush can fire in this test
+
+	ctx, cancel := context.WithCancel(context.Background())
+	s.Start(ctx)
+
+	s.scanRepo("/repo-shutdown", false)
+	require.Empty(t, store.LoadScanCache(), "sanity: nothing persisted yet before shutdown")
+
+	cancel()
+
+	err := wait.WaitForCondition(func() bool {
+		return len(store.LoadScanCache()) == 1
+	}, wait.WaitConfig{Timeout: time.Second, PollInterval: 5 * time.Millisecond, Description: "shutdown flush persist"})
+	require.NoError(t, err, "cancelling ctx should trigger an immediate final persist")
+}
+
 // ---- Circuit breaker ----------------------------------------------------
 
 func TestCircuitBreaker_BackoffAfterThreeTimeouts(t *testing.T) {

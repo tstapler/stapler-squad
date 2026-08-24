@@ -371,6 +371,14 @@ func (s *Scanner) persistCacheToDisk() {
 		return
 	}
 
+	// Clear the flag before reading the cache, not after: a setCache/eviction
+	// that races with the Range below re-arms the flag for the *next* tick,
+	// so a write landing after we've already read its (now stale) value here
+	// is never permanently lost -- only deferred one cycle. Clearing after
+	// Range would instead let that race silently drop the update, since the
+	// flag it set could get wiped by this call's own clear.
+	wasDirty := s.cacheDirty.Swap(false)
+
 	var entries []scanCacheEntry
 	var evicted int
 	s.cacheStore.Range(func(k, v any) bool {
@@ -392,11 +400,11 @@ func (s *Scanner) persistCacheToDisk() {
 		return true
 	})
 	if evicted > 0 {
-		s.cacheDirty.Store(true)
+		wasDirty = true
 		log.Info("unfinished scanner: evicted scan cache entries for missing worktrees", "count", evicted)
 	}
 
-	if !s.cacheDirty.CompareAndSwap(true, false) {
+	if !wasDirty {
 		return
 	}
 	if err := s.stateStore.SaveScanCache(entries); err != nil {
