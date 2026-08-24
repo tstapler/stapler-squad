@@ -23,11 +23,13 @@ jest.mock("../XtermTerminal", () => {
     cols: number;
     rows: number;
     fit: jest.Mock;
+    clear: jest.Mock;
   } = {
     onResize: null,
     cols: 80,
     rows: 24,
     fit: jest.fn(),
+    clear: jest.fn(),
   };
 
   const MockXtermTerminal = ReactLib.forwardRef((props: any, ref: any) => {
@@ -46,7 +48,7 @@ jest.mock("../XtermTerminal", () => {
       },
       write: jest.fn(),
       writeln: jest.fn(),
-      clear: jest.fn(),
+      clear: state.clear,
       focus: jest.fn(),
       fit: () => {
         state.cols = 100;
@@ -133,6 +135,7 @@ const mockXtermState = jest.requireMock("../XtermTerminal").__mockXtermState as 
   cols: number;
   rows: number;
   fit: jest.Mock;
+  clear: jest.Mock;
 };
 
 function makeStreamMock(overrides: Partial<Record<string, any>> = {}) {
@@ -159,6 +162,29 @@ function makeStreamMock(overrides: Partial<Record<string, any>> = {}) {
   };
 }
 
+// Shared by both stale-buffer-overlap regression tests below (jscpd flagged the
+// inlined version as a clone — see reflect-and-fix's Level 0 consolidation gate).
+// Asserts the local buffer was cleared exactly once, strictly before the resize
+// RPC was sent: clearing after doesn't prevent the overlap the fix exists to close.
+function expectClearedBeforeResize(streamState: ReturnType<typeof makeStreamMock>) {
+  expect(mockXtermState.clear).toHaveBeenCalledTimes(1);
+  expect(mockXtermState.clear.mock.invocationCallOrder[0]).toBeLessThan(
+    streamState.resize.mock.invocationCallOrder[0]
+  );
+}
+
+// Also shared by both regression tests (same jscpd flag): transitions the mocked
+// stream to connected and rerenders, returning the new streamState for the caller
+// to assign back to its `let streamState`.
+function connectStream(rerender: (el: React.ReactElement) => void, base: ReturnType<typeof makeStreamMock>) {
+  const next = makeStreamMock({ ...base, isConnected: true });
+  mockUseTerminalStream.mockImplementation(() => next);
+  act(() => {
+    rerender(<TerminalOutput sessionId="s1" baseUrl="http://x" />);
+  });
+  return next;
+}
+
 describe("TerminalOutput resize call sites", () => {
   let streamState: ReturnType<typeof makeStreamMock>;
 
@@ -171,6 +197,7 @@ describe("TerminalOutput resize call sites", () => {
     mockXtermState.cols = 80;
     mockXtermState.rows = 24;
     mockXtermState.fit.mockClear();
+    mockXtermState.clear.mockClear();
     streamState = makeStreamMock();
     mockUseTerminalStream.mockImplementation(() => streamState);
   });
@@ -215,19 +242,31 @@ describe("TerminalOutput resize call sites", () => {
     expect(streamState.resize).toHaveBeenCalledTimes(1);
     expect(streamState.resize).toHaveBeenCalledWith(expect.any(Number), expect.any(Number), true);
     expect(streamState.resize).toHaveBeenCalledWith(80, 24, true);
+
+    // This resync path deliberately does NOT clear the local buffer: it fires on
+    // every reconnect regardless of whether dimensions changed, and would blow
+    // away the "--- reconnected ---" continuity banner written just above it in
+    // TerminalOutput's connection-state effect. See reflect-and-fix (2026-08-23)
+    // for why this path was deliberately excluded from the clear-before-resize fix.
+    expect(mockXtermState.clear).not.toHaveBeenCalled();
   });
 
   // Task 4.2.3, AC4: manual Fit button click passes a literal force:true
   // third argument, using the mocked terminal's actual post-fit cols/rows.
-  it("calls resize with a literal force:true third argument from the manual Fit button handler", () => {
+  //
+  // Also a regression test (reflect-and-fix, 2026-08-23): this was one of two
+  // resize-sending call sites that silently bypassed the "clear the local buffer
+  // before resizing" fix when it was first applied to only the automatic
+  // handleTerminalResize path -- the manual Resize button kept showing the
+  // pre-resize/post-resize overlap bug the fix was supposed to close. Asserting
+  // clear() here (and that it happens strictly before resize()) pins the fix to
+  // this call site so a future refactor can't silently drop it again.
+  it("clears the local buffer before calling resize with a literal force:true third argument from the manual Fit button handler", () => {
     const { rerender, getByRole } = render(<TerminalOutput sessionId="s1" baseUrl="http://x" />);
 
-    streamState = makeStreamMock({ ...streamState, isConnected: true });
-    mockUseTerminalStream.mockImplementation(() => streamState);
-    act(() => {
-      rerender(<TerminalOutput sessionId="s1" baseUrl="http://x" />);
-    });
+    streamState = connectStream(rerender, streamState);
     streamState.resize.mockClear();
+    mockXtermState.clear.mockClear();
 
     // The toolbar (which holds the Resize button) starts collapsed; expand it first.
     const toolbarToggle = getByRole("button", { name: "Toggle toolbar" });
@@ -243,20 +282,21 @@ describe("TerminalOutput resize call sites", () => {
     expect(mockXtermState.fit).toHaveBeenCalledTimes(1);
     expect(streamState.resize).toHaveBeenCalledTimes(1);
     expect(streamState.resize).toHaveBeenCalledWith(100, 30, true);
+    expectClearedBeforeResize(streamState);
   });
 
   // Task 4.2.4, AC4 (negative): the automatic value-changed resize path
   // (handleTerminalResize) must NOT pass a truthy force argument, so it
   // keeps benefiting from useTerminalFlowControl's value-dedup.
-  it("calls resize without a truthy force argument from the automatic handleTerminalResize path", () => {
+  //
+  // Also a regression test (reflect-and-fix, 2026-08-23) for the stale-buffer
+  // overlap bug: see the manual Fit button test above for full context.
+  it("clears the local buffer before calling resize without a truthy force argument from the automatic handleTerminalResize path", () => {
     const { rerender } = render(<TerminalOutput sessionId="s1" baseUrl="http://x" />);
 
-    streamState = makeStreamMock({ ...streamState, isConnected: true });
-    mockUseTerminalStream.mockImplementation(() => streamState);
-    act(() => {
-      rerender(<TerminalOutput sessionId="s1" baseUrl="http://x" />);
-    });
+    streamState = connectStream(rerender, streamState);
     streamState.resize.mockClear();
+    mockXtermState.clear.mockClear();
 
     // Simulate the child terminal reporting a genuinely new size while
     // already connected -- this is the automatic path (line ~327), not the
@@ -267,6 +307,7 @@ describe("TerminalOutput resize call sites", () => {
 
     expect(streamState.resize).toHaveBeenCalledTimes(1);
     expect(streamState.resize).toHaveBeenCalledWith(90, 28);
+    expectClearedBeforeResize(streamState);
     // Exact-arity check: the 2-arg call must not have picked up a 3rd
     // truthy `force` argument.
     expect(streamState.resize.mock.calls[0]).toHaveLength(2);
@@ -286,6 +327,7 @@ describe("TerminalOutput hardFailedBanner Retry keyboard accessibility", () => {
     mockXtermState.cols = 80;
     mockXtermState.rows = 24;
     mockXtermState.fit.mockClear();
+    mockXtermState.clear.mockClear();
   });
 
   afterEach(() => {

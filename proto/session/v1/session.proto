@@ -151,6 +151,12 @@ service SessionService {
   // DeleteApprovalRule removes a user-defined auto-approval rule by ID.
   rpc DeleteApprovalRule(DeleteApprovalRuleRequest) returns (DeleteApprovalRuleResponse) {}
 
+  // ReloadClaudeSettingsRules re-parses ~/.claude/settings.json (and project-level
+  // equivalents) and hot-swaps the resulting claude-settings-sourced rules into the live
+  // classifier. Malformed files are skipped; previously loaded rules for that file are
+  // retained.
+  rpc ReloadClaudeSettingsRules(ReloadClaudeSettingsRulesRequest) returns (ReloadClaudeSettingsRulesResponse) {}
+
   // GetApprovalAnalytics returns aggregated analytics for classification decisions.
   rpc GetApprovalAnalytics(GetApprovalAnalyticsRequest) returns (GetApprovalAnalyticsResponse) {}
 
@@ -303,6 +309,30 @@ service SessionService {
   // that URL unchanged.
   rpc UpdateCallbackConfig(UpdateCallbackConfigRequest) returns (UpdateCallbackConfigResponse) {}
 
+  // Stream Hub Rollout RPCs (terminal-multi-connection-streaming Story 3.3).
+  // The global STAPLER_SQUAD_USE_STREAM_HUB default is env-var-gated and
+  // requires a process restart to change — none of these RPCs can flip it.
+  // What they control is config.json-backed and takes effect immediately:
+  // the rollback-rehearsal completion gate and per-session canary overrides.
+
+  // GetStreamHubRolloutStatus reports the current rollout status: whether
+  // the global env var is set in this process's environment right now,
+  // whether the rollback rehearsal has been completed, and the current
+  // per-session canary overrides.
+  rpc GetStreamHubRolloutStatus(GetStreamHubRolloutStatusRequest) returns (StreamHubRolloutStatus) {}
+
+  // CompleteStreamHubRollbackRehearsal records that Story 3.3.2's rollback
+  // rehearsal has been performed, unblocking the global
+  // STAPLER_SQUAD_USE_STREAM_HUB default from resolving to true. Intended
+  // to be called only after manually verifying the rehearsal (flip a
+  // per-session override on, use it briefly, remove it, confirm a clean
+  // reconnect under the legacy path) against a real disposable session.
+  rpc CompleteStreamHubRollbackRehearsal(CompleteStreamHubRollbackRehearsalRequest) returns (StreamHubRolloutStatus) {}
+
+  // SetStreamHubSessionOverride sets or clears a per-session canary
+  // override (Story 3.3.1), independent of the rollback rehearsal gate.
+  rpc SetStreamHubSessionOverride(SetStreamHubSessionOverrideRequest) returns (StreamHubRolloutStatus) {}
+
   // ListWorktrees returns the git worktrees for a given repository path.
   // Used by the Omnibar to populate the "Use Existing Worktree" dropdown.
   rpc ListWorktrees(ListWorktreesRequest) returns (ListWorktreesResponse) {}
@@ -316,6 +346,11 @@ service SessionService {
 
   // One-shot PR creation (S3)
   rpc RunOneShot(RunOneShotRequest) returns (RunOneShotResponse) {}
+
+  // Mechanical (non-agentic) PR creation, replacing the RunOneShot-driven
+  // dashboard button (S5).
+  rpc DraftPullRequest(DraftPullRequestRequest) returns (DraftPullRequestResponse) {}
+  rpc CreatePullRequest(CreatePullRequestRequest) returns (CreatePullRequestResponse) {}
 
   // Project CRUD (S4)
   rpc CreateProject(CreateProjectRequest) returns (CreateProjectResponse) {}
@@ -643,6 +678,37 @@ message CreateSessionRequest {
   // a selected launcher preset's argv[1:]; safe for elements containing spaces or shell
   // metacharacters (e.g. a remote-exec fragment like "cd ~/repo && exec claude").
   repeated string extra_args = 30;
+
+  // remote, when set, names an already-saved RemoteConfig (see RemoteService,
+  // proto/session/v1/remote.proto) that the session's worktree/tmux setup should run on over
+  // SSH instead of locally. Orthogonal to session_type (ADR-001,
+  // project_plans/ssh-remote-workspaces/decisions/ADR-001-remote-as-orthogonal-flag.md):
+  // every SessionType value is still meaningful on a remote host, so this composes with
+  // session_type rather than requiring a parallel SESSION_TYPE_REMOTE_* enum -- mirroring how
+  // autonomous_mode (field 23) layers onto whichever session_type was chosen. Unset (nil)
+  // means "run locally," the existing behavior.
+  RemoteTarget remote = 31;
+
+  // Optional: source session this restart is seeded from. Derives the resolved
+  // path from that session (relaxing the path-required validation above) and
+  // can reject the request with CodeFailedPrecondition if the source is still
+  // live and confirm_restart_with_live_source is not also set — see
+  // resolveRestartSource in server/services/session_service.go.
+  string restart_from_session_id = 32;
+
+  // Required to proceed when restart_from_session_id names a still-live source instance.
+  bool confirm_restart_with_live_source = 33;
+}
+
+// RemoteTarget names a previously-saved remote (by RemoteConfig.Name) that a
+// CreateSessionRequest's worktree/tmux setup should be created on instead of locally. It
+// references the remote by name rather than carrying host/user/key inline -- those live only
+// in the server-side RemoteConfig, resolved at request-handling time.
+message RemoteTarget {
+  // remote_name is the RemoteConfig.Name of an already-saved remote (see
+  // config.Config.RemoteByName), the same identifier used by
+  // TestRemoteConnectionRequest/TrustRemoteHostKeyRequest in remote.proto.
+  string remote_name = 1;
 }
 
 message CreateSessionResponse {
@@ -1535,6 +1601,14 @@ message DeleteApprovalRuleResponse {
   string message = 2;
 }
 
+message ReloadClaudeSettingsRulesRequest {}
+
+message ReloadClaudeSettingsRulesResponse {
+  bool success = 1;
+  int32 rule_count = 2;
+  string message = 3;
+}
+
 message GetApprovalAnalyticsRequest {
   // Time window in days (default 7, max 90).
   optional int32 window_days = 1;
@@ -2020,6 +2094,34 @@ message UpdateCallbackConfigResponse {
   CallbackConfigProto config = 1;
 }
 
+message GetStreamHubRolloutStatusRequest {}
+
+message StreamHubSessionOverrideEntry {
+  string session_name = 1;
+  bool force_hub = 2;
+}
+
+message StreamHubRolloutStatus {
+  // Whether STAPLER_SQUAD_USE_STREAM_HUB=true is set in this process's
+  // environment right now. Purely informational: the global default can
+  // only be changed by setting the env var and restarting the process.
+  bool global_env_var_set = 1;
+  // Unset when the rollback rehearsal has never been completed.
+  google.protobuf.Timestamp rollback_rehearsal_completed_at = 2;
+  repeated StreamHubSessionOverrideEntry session_overrides = 3;
+}
+
+message CompleteStreamHubRollbackRehearsalRequest {}
+
+message SetStreamHubSessionOverrideRequest {
+  string session_name = 1;
+  // Unset clears any existing override for session_name (falls back to the
+  // global default). true pins the session onto the hub-owned path; false
+  // pins it onto the legacy path — either way, regardless of the global
+  // default.
+  optional bool force_hub = 2;
+}
+
 // UpsertProfile
 
 message UpsertProfileRequest {
@@ -2219,6 +2321,45 @@ message RunOneShotResponse {
   int32 exit_code = 3;
   string pr_url = 4;
   bool branch_diverged_from_base = 5;
+}
+
+// ============================================================================
+// S5: Mechanical Pull Request Creation Messages
+// ============================================================================
+
+message DraftPullRequestRequest {
+  string session_id = 1;
+}
+
+message DraftPullRequestResponse {
+  string title = 1;
+  string body = 2;
+  string base_branch = 3;
+  bool has_commits_ahead = 4;
+  // Non-empty when the session already has a PR — the client should show
+  // a "View PR" state instead of the editable create form (AC4).
+  string existing_pr_url = 5;
+  int32 existing_pr_number = 6;
+}
+
+message CreatePullRequestRequest {
+  string session_id = 1;
+  string title = 2;
+  string body = 3;
+  string base_branch = 4;
+}
+
+message CreatePullRequestResponse {
+  string pr_url = 1;
+  int32 pr_number = 2;
+  // True when CreatePR returned a pre-existing PR instead of creating one.
+  bool already_existed = 3;
+  // False when the PR was created on GitHub but the session record failed
+  // to save it — the RPC still returns success (the PR is real); the
+  // client should surface persist_error as a distinct warning, not a
+  // create-failed error (see plan.md's Pattern Decisions).
+  bool persisted = 4;
+  string persist_error = 5;
 }
 
 // ============================================================================

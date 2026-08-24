@@ -4,6 +4,7 @@ package session
 
 import (
 	"context"
+	"math"
 	"runtime"
 	"strings"
 	"syscall"
@@ -14,6 +15,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
+	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
 // checkPTYAvailable skips the test when the OS does not permit PTY allocation with
@@ -98,12 +100,12 @@ func TestNativeProcessManager_CloseStopsRestartLoop(t *testing.T) {
 	err = mgr.Close()
 	require.NoError(t, err)
 
-	// Give goroutines time to exit.
-	time.Sleep(500 * time.Millisecond)
-
-	// Should be back to baseline (±2 for scheduler variance).
-	assert.InDelta(t, baseline, runtime.NumGoroutine(), 3,
-		"goroutines should return to baseline after Close()")
+	// Wait for goroutines to exit, polling instead of a fixed sleep since exit
+	// time varies under system load.
+	err = wait.WaitForCondition(func() bool {
+		return math.Abs(float64(runtime.NumGoroutine()-baseline)) <= 3
+	}, wait.SlowWaitConfig())
+	require.NoError(t, err, "goroutines should return to baseline after Close()")
 }
 
 // T-UNIT-8: NativeProcessManager restarts after the supervised process is killed.
@@ -132,15 +134,18 @@ func TestNativeProcessManagerRestartsAfterKill(t *testing.T) {
 	err = syscall.Kill(pid1, syscall.SIGKILL)
 	require.NoError(t, err)
 
-	// Wait for restart (supervisor has 500 ms backoff + launch time).
-	time.Sleep(2 * time.Second)
-
-	mgr.mu.Lock()
+	// Wait for restart (supervisor has 500 ms backoff + launch time), polling
+	// instead of a fixed sleep since restart timing varies under system load.
 	pid2 := 0
-	if mgr.cmd != nil && mgr.cmd.Process != nil {
-		pid2 = mgr.cmd.Process.Pid
-	}
-	mgr.mu.Unlock()
+	err = wait.WaitForCondition(func() bool {
+		mgr.mu.Lock()
+		defer mgr.mu.Unlock()
+		if mgr.cmd != nil && mgr.cmd.Process != nil {
+			pid2 = mgr.cmd.Process.Pid
+		}
+		return pid2 != 0 && pid2 != pid1
+	}, wait.SlowWaitConfig())
+	require.NoError(t, err, "process should have restarted with a new PID after kill")
 
 	assert.NotEqual(t, pid1, pid2,
 		"process should have restarted with a new PID after kill")
@@ -188,7 +193,12 @@ func TestNativeProcessManager_StartAfterClose_Restarts(t *testing.T) {
 	require.NoError(t, mgr.Start(dir))
 	require.NoError(t, mgr.Close())
 
-	time.Sleep(100 * time.Millisecond)
+	// Start()'s double-checked-locking guard no-ops if the prior cmd hasn't
+	// been reaped yet (ProcessState == nil, i.e. IsAlive() still true) — wait
+	// for supervise()'s cmd.Wait() to actually observe the SIGTERM'd process
+	// exit instead of sleeping a fixed duration that can be too short under load.
+	require.Eventually(t, func() bool { return !mgr.IsAlive() }, 5*time.Second, 10*time.Millisecond,
+		"process manager never reported exited after Close()")
 
 	require.NoError(t, mgr.Start(dir))
 	defer func() { _ = mgr.Close() }()
@@ -261,9 +271,10 @@ func TestNewProcessManager_ReturnsNativeProcessManager_WhenFlagIsNative(t *testi
 	RegisterBackendProvider(BackendNative)
 	defer RegisterBackendProvider(BackendTmux) // restore default for other tests
 
-	pm := NewProcessManager(context.Background(), BackendNative, ProcessManagerOptions{
+	pm, err := NewProcessManager(context.Background(), BackendNative, ProcessManagerOptions{
 		SessionName: "test-native",
 	})
+	require.NoError(t, err)
 	_, ok := pm.(*NativeProcessManager)
 	assert.True(t, ok, "expected *NativeProcessManager when flag is 'native'")
 }

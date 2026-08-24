@@ -41,7 +41,8 @@ function makeItem(
   status: string,
   updatedAtIso: string,
   sessionIds: string[] = [],
-  activityNoteMessages: string[] = []
+  activityNoteMessages: string[] = [],
+  allowedTransitions: string[] = []
 ): BacklogItem {
   return create(BacklogItemSchema, {
     id,
@@ -49,6 +50,7 @@ function makeItem(
     updatedAt: timestampFromDate(new Date(updatedAtIso)),
     itemSessions: sessionIds.map((sessionUuid) => create(ItemSessionSchema, { sessionUuid })),
     activityNotes: activityNoteMessages.map((message) => create(BacklogActivityNoteSchema, { message })),
+    allowedTransitions,
   });
 }
 
@@ -167,6 +169,41 @@ describe("backlogItemsSlice", () => {
       store.dispatch(upsertItem(makeItem("item-1", "review", "2026-07-21T10:00:05Z", [])));
       const state = store.getState() as any;
       expect(selectBacklogItemById(state, "item-1")?.itemSessions).toEqual([]);
+    });
+  });
+
+  // Regression for the empty Force-status dropdown bug: allowedTransitions is
+  // a pure function of status, so an update that arrives with an empty array
+  // is always a sparse-DTO/resync artifact, never a legitimate value — see
+  // backlogItemsSlice.ts's upsertItem doc comment.
+  describe("upsertItem — allowedTransitions backstop", () => {
+    it("preserves existing allowedTransitions when a newer update arrives with an empty array", () => {
+      const store = makeStore();
+      store.dispatch(
+        upsertItem(makeItem("item-1", "idea", "2026-07-21T10:00:00Z", [], [], ["archived", "ready", "refining"]))
+      );
+      store.dispatch(upsertItem(makeItem("item-1", "idea", "2026-07-21T10:00:05Z", [], [], [])));
+      const state = store.getState() as any;
+      const item = selectBacklogItemById(state, "item-1");
+      expect(item?.allowedTransitions).toEqual(["archived", "ready", "refining"]);
+    });
+
+    it("replaces allowedTransitions when the incoming update carries its own non-empty value", () => {
+      const store = makeStore();
+      store.dispatch(
+        upsertItem(makeItem("item-1", "idea", "2026-07-21T10:00:00Z", [], [], ["archived", "ready", "refining"]))
+      );
+      store.dispatch(upsertItem(makeItem("item-1", "ready", "2026-07-21T10:00:05Z", [], [], ["in_progress"])));
+      const state = store.getState() as any;
+      expect(selectBacklogItemById(state, "item-1")?.allowedTransitions).toEqual(["in_progress"]);
+    });
+
+    it("does not backstop when the store had no prior allowedTransitions to preserve", () => {
+      const store = makeStore();
+      store.dispatch(upsertItem(makeItem("item-1", "idea", "2026-07-21T10:00:00Z", [], [], [])));
+      store.dispatch(upsertItem(makeItem("item-1", "idea", "2026-07-21T10:00:05Z", [], [], [])));
+      const state = store.getState() as any;
+      expect(selectBacklogItemById(state, "item-1")?.allowedTransitions).toEqual([]);
     });
   });
 

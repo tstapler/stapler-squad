@@ -135,6 +135,13 @@ func (i *Instance) previewBlocked() bool {
 // Preview returns the current visible terminal content.
 // Prefers tmux's own capture-pane (authoritative rendered screen) for tmux-backed
 // instances; falls back to the in-memory PTY buffer from ClaudeController otherwise.
+//
+// Its underlying capture-pane subprocess runs with context.Background() and
+// cannot be cancelled. Driver-loop callers (session_driver.go) MUST use
+// PreviewContext(ctx) with the loop's own cancellable ctx instead — an
+// in-flight Preview() call here previously blocked the driver goroutine from
+// ever reaching its `defer cancel()` on stop, leaking the capture-pane
+// subprocess across StopSessionDriver/Destroy().
 func (i *Instance) Preview() (string, error) {
 	if i.previewBlocked() {
 		return "", nil

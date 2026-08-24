@@ -1,7 +1,7 @@
 import React from "react";
 import { render, screen } from "@testing-library/react";
 import { SessionCard } from "./SessionCard";
-import { SessionStatus } from "@/gen/session/v1/types_pb";
+import { ReviveOutcome, SessionStatus } from "@/gen/session/v1/types_pb";
 import type { Session } from "@/gen/session/v1/types_pb";
 import { staleBadge } from "./SessionCard.css";
 
@@ -15,6 +15,13 @@ jest.mock("@connectrpc/connect-web", () => ({
 
 jest.mock("@/lib/contexts/ReviewQueueContext", () => ({
   useReviewQueueContext: () => ({ items: [] }),
+}));
+
+jest.mock("@/lib/contexts/SessionServiceContext", () => ({
+  useSessionServiceContext: () => ({
+    draftPullRequest: jest.fn(),
+    createPullRequest: jest.fn(),
+  }),
 }));
 
 jest.mock("@/lib/store", () => ({
@@ -102,6 +109,39 @@ describe("SessionCard — note badge", () => {
     const badge = screen.getByTestId("badge-has-note");
     const expected = "N".repeat(119) + "…";
     expect(badge.closest('[data-testid="tooltip-mock"]')).toHaveAttribute("data-label", expected);
+  });
+});
+
+describe("SessionCard — revived context badge", () => {
+  it("SessionCard_should_RenderRevivedContextBadge_When_ReviveOutcomeIsFreshLostHistory", () => {
+    const session = { ...minimalSession, reviveOutcome: ReviveOutcome.FRESH_LOST_HISTORY } as unknown as Session;
+    render(<SessionCard session={session} />);
+    expect(screen.getByTestId("revived-context-badge")).toBeInTheDocument();
+  });
+
+  it("SessionCard_should_NotRenderRevivedContextBadge_When_ReviveOutcomeIsNotFreshLostHistory", () => {
+    const session = { ...minimalSession, reviveOutcome: ReviveOutcome.RESUME_LIVE } as unknown as Session;
+    render(<SessionCard session={session} />);
+    expect(screen.queryByTestId("revived-context-badge")).toBeNull();
+  });
+});
+
+describe("SessionCard — host badge (ssh-remote-workspaces Epic 6.2, Story 6.2.1)", () => {
+  it("SessionCard_should_RenderHostBadge_When_SessionRemoteNameIsSet", () => {
+    const session = { ...minimalSession, remoteName: "prod-box" } as unknown as Session;
+    render(<SessionCard session={session} />);
+
+    const badge = screen.getByTestId("host-badge");
+    expect(badge).toBeInTheDocument();
+    expect(badge).toHaveAttribute("role", "img");
+    expect(badge).toHaveAttribute("aria-label", "Running on prod-box");
+  });
+
+  it("SessionCard_should_NotRenderHostBadge_When_SessionIsLocal", () => {
+    const session = { ...minimalSession, remoteName: "" } as unknown as Session;
+    render(<SessionCard session={session} />);
+
+    expect(screen.queryByTestId("host-badge")).toBeNull();
   });
 });
 

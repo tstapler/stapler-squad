@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -15,26 +16,14 @@ import (
 	"connectrpc.com/connect"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/goleak"
+	"golang.org/x/net/http2"
+
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/testutil"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
-
-// findFreePort asks the OS for an ephemeral port and immediately releases it, so
-// tests exercising the "explicit, non-zero port" code path (as opposed to ":0")
-// never hardcode a real, recognizable port number -- in particular, never the
-// production stapler-squad port, which risks confusion with (or, if this test
-// pattern is ever copied into code that actually binds, collision with) a real
-// running instance on the developer's machine.
-func findFreePort(t *testing.T) int {
-	t.Helper()
-	ln, err := net.Listen("tcp", "localhost:0")
-	if err != nil {
-		t.Fatalf("findFreePort: %v", err)
-	}
-	defer ln.Close()
-	return ln.Addr().(*net.TCPAddr).Port
-}
 
 // installFakeClaudeBinary puts a fake `claude` executable at the front of PATH
 // for the duration of the test (t.Setenv restores the original PATH on cleanup).
@@ -60,6 +49,149 @@ func installFakeClaudeBinary(t *testing.T) {
 		t.Fatalf("installFakeClaudeBinary: %v", err)
 	}
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
+// TestServer_should_NegotiateALPNHTTP2_When_StartRemoteServesOverRealTLS is a
+// verification-only test (Task 1.1.1a, Story 1.1.1) confirming PRE-EXISTING
+// stdlib behavior, not newly-built code: Go's net/http package automatically
+// negotiates HTTP/2 via TLS ALPN for any TLS listener whose *http.Server sets
+// neither Protocols nor TLSNextProto (this has been true since Go 1.6 -- see
+// `go doc net/http`'s "Server ... automatically enable[s] HTTP/2 support when
+// using HTTPS"). StartRemote (server.go:1378-1424) sets neither field, so this
+// test exercises that automatic negotiation end-to-end through a real TLS
+// listener rather than merely asserting it from the docs -- it is the
+// evidence behind ADR-001's "zero server code change" claim for Epic 1.1.
+func TestServer_should_NegotiateALPNHTTP2_When_StartRemoteServesOverRealTLS(t *testing.T) {
+	srv, _ := newServerBase("localhost:0")
+	// StartRemote reuses srv's shared mux (via srv.ServeHTTP) but does not
+	// itself register /health -- that registration normally happens in
+	// Start(), which this test does not call, so register it directly.
+	srv.mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"status":"ok"}`)) //nolint:errcheck
+	})
+
+	tlsCfg, caPool := testutil.BuildSelfSignedTLSFixture(t, []string{"127.0.0.1", "localhost"})
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	// StartRemote (server.go:1405-1421) spawns two goroutines -- a ServeTLS
+	// loop and a ctx.Done()-triggered Shutdown waiter -- with no exported
+	// channel/waitgroup a caller can join to confirm they've actually
+	// exited, and changing StartRemote's signature to add one would work
+	// against this PR's "zero server-side code changes" design intent
+	// (project_plans/web-transport-architecture-review/implementation/plan.md).
+	// goleak substitutes for the missing completion signal here: it retries
+	// with backoff until both goroutines are confirmed gone instead of
+	// requiring an explicit join (see session_service_test.go's
+	// TestShutdown_WaitsForDeleteSessionCleanup_* for the identical
+	// IgnoreCurrent()/VerifyNone baseline pattern). Captured before
+	// StartRemote is called, so its two goroutines are not part of the
+	// ignored baseline. Registered before the cancel() defer below so it
+	// runs last (LIFO) -- after cancel() has had a chance to unwind them.
+	baseline := goleak.IgnoreCurrent()
+	defer goleak.VerifyNone(t, baseline)
+	defer cancel()
+
+	port := testutil.FindFreePort(t)
+	remoteAddr := fmt.Sprintf("127.0.0.1:%d", port)
+	require.NoError(t, srv.StartRemote(ctx, remoteAddr, tlsCfg, nil))
+
+	transport := &http2.Transport{
+		TLSClientConfig: &tls.Config{
+			RootCAs:    caPool,
+			ServerName: "127.0.0.1",
+		},
+	}
+	defer transport.CloseIdleConnections()
+	client := &http.Client{Transport: transport}
+
+	url := fmt.Sprintf("https://%s/health", remoteAddr)
+	var resp *http.Response
+	var err error
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		resp, err = client.Get(url) //nolint:noctx
+		if err == nil {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	require.NoError(t, err, "expected StartRemote's TLS listener to become reachable")
+	defer resp.Body.Close()
+
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	assert.Equal(t, 2, resp.ProtoMajor,
+		"expected real ALPN-negotiated HTTP/2 (pre-existing stdlib behavior), got ProtoMajor=%d", resp.ProtoMajor)
+}
+
+// TestServer_should_RejectHTTP2PriorKnowledge_When_StartServesOverPlainHTTP is
+// the companion error-path test (Task 1.1.1a, Story 1.1.1): the plain
+// :8543-style listener (Server.Start, no TLS) must never negotiate cleartext
+// HTTP/2 (h2c). This codebase deliberately never wires
+// Protocols.SetUnencryptedHTTP2 anywhere (see the subtest below) -- no
+// shipping browser implements h2c, so adding it would be dead complexity, not
+// a capability. An h2c "prior knowledge" dial against the plain listener must
+// therefore either fail outright or silently fall back to HTTP/1.1.
+func TestServer_should_RejectHTTP2PriorKnowledge_When_StartServesOverPlainHTTP(t *testing.T) {
+	t.Run("server.go_never_calls_SetUnencryptedHTTP2", func(t *testing.T) {
+		data, err := os.ReadFile("server.go")
+		require.NoError(t, err)
+		assert.Equal(t, 0, strings.Count(string(data), "SetUnencryptedHTTP2"),
+			"server.go must never wire cleartext HTTP/2 (h2c) -- no shipping browser implements it, "+
+				"so this plan rejects h2c as a mechanism rather than merely deferring it")
+	})
+
+	srv, _ := newServerBase("localhost:0")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	errCh := make(chan error, 1)
+	go func() { errCh <- srv.Start(ctx) }()
+	defer func() {
+		cancel()
+		select {
+		case <-errCh:
+		case <-time.After(5 * time.Second):
+			t.Errorf("server did not shut down within 5s")
+		}
+	}()
+
+	var addr string
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		addr = srv.GetAddr()
+		if addr != "" && addr != "localhost:0" {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	require.NotEmpty(t, addr, "expected Start() to resolve a real bound address")
+
+	// h2c "prior knowledge" dial: send the HTTP/2 client preface directly over
+	// a plain (non-TLS) connection, exactly as a client that assumed h2c
+	// support would. AllowHTTP + a DialTLSContext override that returns a
+	// plain net.Conn is the documented way to do this with http2.Transport.
+	transport := &http2.Transport{
+		AllowHTTP: true,
+		DialTLSContext: func(ctx context.Context, network, addr string, _ *tls.Config) (net.Conn, error) {
+			var d net.Dialer
+			return d.DialContext(ctx, network, addr)
+		},
+	}
+	defer transport.CloseIdleConnections()
+	client := &http.Client{Transport: transport, Timeout: 5 * time.Second}
+
+	resp, err := client.Get("http://" + addr + "/health") //nolint:noctx
+	if err != nil {
+		// The connection failed outright -- expected, since this codebase
+		// wires no h2c support anywhere.
+		return
+	}
+	defer resp.Body.Close()
+	assert.Equal(t, 1, resp.ProtoMajor,
+		"expected HTTP/1.1 fallback since h2c is not wired on the plain listener, got ProtoMajor=%d", resp.ProtoMajor)
 }
 
 // Server_should_ServeHealthCheck_When_StartedWithPortZero (REQ-1 test #4).
@@ -409,7 +541,7 @@ func TestServer_should_WriteUnchangedHookURL_When_StartedOnExplicitPort(t *testi
 		t.Fatalf("BuildDependencies: %v", err)
 	}
 
-	port := findFreePort(t)
+	port := testutil.FindFreePort(t)
 	addr := fmt.Sprintf("localhost:%d", port)
 	srv := NewServerWithDeps(addr, deps)
 	if got := srv.GetAddr(); got != addr {
@@ -488,9 +620,22 @@ func TestSessionService_CreateThenImmediateDelete_NoDataRace(t *testing.T) {
 		t.Fatalf("CreateSession: %v", err)
 	}
 
+	// Captured before DeleteSession purely so we can wait for teardown to finish
+	// below -- this does not delay the delete itself, so it doesn't touch the
+	// Create/Delete interleave this test exists to race.
+	inst := deps.SessionService.FindLiveInstance(resp.Msg.Session.Id)
+
 	if _, err := deps.SessionService.DeleteSession(context.Background(), connect.NewRequest(&sessionv1.DeleteSessionRequest{Id: resp.Msg.Session.Id})); err != nil {
 		t.Fatalf("DeleteSession: %v", err)
 	}
+
+	// DeleteSession tears down tmux/git resources in an unawaited goroutine (see
+	// waitForTmuxTeardown's doc comment) -- without waiting here, that goroutine
+	// can still be writing into this test's t.TempDir() (e.g. the tmux-exec-gate
+	// lock directory) when TempDir's own cleanup runs RemoveAll on it, producing
+	// an intermittent "directory not empty" failure. This wait happens after the
+	// race has already occurred, so it doesn't defeat the repro above.
+	waitForTmuxTeardown(t, inst, 5*time.Second)
 }
 
 // waitForResolvedAddr polls srv.GetAddr() until it reports a real, non-zero bound address

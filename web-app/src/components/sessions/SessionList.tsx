@@ -74,7 +74,6 @@ interface SessionListProps {
   onCreateCheckpoint?: (sessionId: string, label: string) => Promise<boolean>;
   onListCheckpoints?: (sessionId: string) => Promise<CheckpointProto[]>;
   onForkFromCheckpoint?: (sessionId: string, checkpointId: string, newTitle: string) => Promise<Session | null>;
-  onRunOneShot?: (sessionId: string) => Promise<void>;
   onSetRateLimitEnabled?: (sessionId: string, enabled: boolean) => void;
   onToggleAutonomousMode?: (sessionId: string, enabled: boolean) => void;
   onToggleAutoApprove?: (sessionId: string, enabled: boolean) => void;
@@ -115,7 +114,6 @@ interface SessionRowHandlers {
   onNewWorkspaceSession?: (id: string) => void;
   onRestartSession?: (id: string) => Promise<boolean | void>;
   onCreateCheckpoint?: (sessionId: string, label: string) => Promise<boolean>;
-  onRunOneShot?: (sessionId: string) => Promise<void>;
   onSetRateLimitEnabled?: (id: string, enabled: boolean) => void;
   onToggleAutonomousMode?: (id: string, enabled: boolean) => void;
   onToggleAutoApprove?: (id: string, enabled: boolean) => void;
@@ -156,7 +154,6 @@ const SessionRowWrapper = React.memo(function SessionRowWrapper({
   onNewWorkspaceSession,
   onRestartSession,
   onCreateCheckpoint,
-  onRunOneShot,
   onSetRateLimitEnabled,
   onToggleAutonomousMode,
   onToggleAutoApprove,
@@ -180,7 +177,6 @@ const SessionRowWrapper = React.memo(function SessionRowWrapper({
       onNewWorkspace={onNewWorkspaceSession ? () => onNewWorkspaceSession(id) : undefined}
       onRestart={onRestartSession}
       onCreateCheckpoint={onCreateCheckpoint}
-      onRunOneShot={onRunOneShot}
       onSetRateLimitEnabled={onSetRateLimitEnabled}
       onToggleAutonomousMode={onToggleAutonomousMode}
       onToggleAutoApprove={onToggleAutoApprove}
@@ -348,7 +344,6 @@ export function SessionList({
   onCreateCheckpoint,
   onListCheckpoints,
   onForkFromCheckpoint,
-  onRunOneShot,
   onSetRateLimitEnabled,
   onToggleAutonomousMode,
   onToggleAutoApprove,
@@ -1417,7 +1412,6 @@ export function SessionList({
                     onNewWorkspaceSession={stableOnNewWorkspaceSession}
                     onRestartSession={onRestartSession}
                     onCreateCheckpoint={onCreateCheckpoint}
-                    onRunOneShot={onRunOneShot}
                     onSetRateLimitEnabled={onSetRateLimitEnabled}
                     onToggleAutonomousMode={onToggleAutonomousMode}
                     onToggleAutoApprove={onToggleAutoApprove}
@@ -1602,7 +1596,6 @@ export function SessionList({
                   onCreateCheckpoint={onCreateCheckpoint}
                   onListCheckpoints={onListCheckpoints}
                   onForkFromCheckpoint={onForkFromCheckpoint}
-                  onRunOneShot={onRunOneShot}
                   onSetRateLimitEnabled={onSetRateLimitEnabled}
                   onToggleAutonomousMode={onToggleAutonomousMode}
                   onToggleAutoApprove={onToggleAutoApprove}

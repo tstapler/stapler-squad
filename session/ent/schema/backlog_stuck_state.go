@@ -58,11 +58,11 @@ func (BacklogStuckState) Fields() []ent.Field {
 			Comment("Human-readable 'why' string, e.g. 'last verdict: FAIL' or 'PR #148 green & mergeable 3d'."),
 		field.Int32("remediation_attempts").
 			Default(0).
-			Comment("Count of automated remediation attempts actually made for this open row (incremented per attempt, not per detection-sweep tick). Reset to 0 by ResetStuckRemediation/BulkResetStuckRemediation, and implicitly by MarkStuck's reopen-in-place path. remediation_attempts >= maxRemediationAttempts (5) with next_remediation_at NULL is how a 'parked' row is represented — no separate boolean."),
+			Comment("Count of automated FAST remediation attempts actually made for this open row (incremented per attempt, not per detection-sweep tick), pinned at maxRemediationAttempts (5) once reached — a cold retry (see next_remediation_at) does not increment past it. Reset to 0 by ResetStuckRemediation/BulkResetStuckRemediation, and implicitly by MarkStuck's reopen-in-place path. remediation_attempts >= maxRemediationAttempts (5) is how a 'parked' row is represented — no separate boolean."),
 		field.Time("next_remediation_at").
 			Optional().
 			Nillable().
-			Comment("When this row becomes eligible for the next automated remediation attempt. NULL while remediation_attempts is 0 means 'eligible immediately'. Set back to NULL once remediation_attempts reaches the cap (parked)."),
+			Comment("When this row becomes eligible for the next automated remediation attempt. NULL while remediation_attempts is 0 means 'eligible immediately'. Once remediation_attempts reaches the cap (parked), this field is repurposed (BUG-083) to hold the next COLD-retry deadline instead of a fast-schedule entry — set to now + a long interval (session.remediationColdRetryInterval, currently 7 days) on the attempt that parks the row, and pushed out by the same interval on every cold retry thereafter, so a parked row is never permanently stuck without an automatic retry path."),
 		field.Time("grace_boot_time").
 			Optional().
 			Nillable().

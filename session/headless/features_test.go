@@ -75,7 +75,7 @@ func TestDraftPRDescription_ReturnsText_WhenFakeRunnerResponds(t *testing.T) {
 	runner := NewFakeRunner(resp)
 	pool := NewPoolWithRunner(PoolConfig{}, runner)
 
-	result, err := DraftPRDescription(context.Background(), pool, "Fix flaky test", "The test flaked under CI load.", "diff content", "feat/my-feature")
+	result, _, err := DraftPRDescription(context.Background(), pool, "Fix flaky test", "The test flaked under CI load.", "diff content", "feat/my-feature")
 	require.NoError(t, err)
 	assert.Equal(t, prText, result)
 }
@@ -88,7 +88,7 @@ func TestDraftPRDescription_TruncatesDiff_WhenOver40000Bytes(t *testing.T) {
 	runner := NewFakeRunner(resp)
 	pool := NewPoolWithRunner(PoolConfig{}, runner)
 
-	_, err := DraftPRDescription(context.Background(), pool, "Title", "Description", bigDiff, "branch")
+	_, _, err := DraftPRDescription(context.Background(), pool, "Title", "Description", bigDiff, "branch")
 	require.NoError(t, err)
 
 	// Inspect what was passed to the runner.
@@ -111,7 +111,7 @@ func TestDraftPRDescription_Error_WhenDiffEmpty(t *testing.T) {
 	runner := NewFakeRunner()
 	pool := NewPoolWithRunner(PoolConfig{}, runner)
 
-	_, err := DraftPRDescription(context.Background(), pool, "Title", "Description", "   ", "branch")
+	_, _, err := DraftPRDescription(context.Background(), pool, "Title", "Description", "   ", "branch")
 	assert.Error(t, err)
 	assert.Equal(t, 0, runner.CallCount(), "LLM should never be called for an empty diff")
 }
@@ -161,15 +161,16 @@ type fakePoolClientRecorder struct {
 	user  string
 }
 
-func (f *fakePoolClientRecorder) CallBlocking(_ context.Context, key FeatureKey, systemPrompt, userPrompt string, _ CallOptions) (string, float64, error) {
+func (f *fakePoolClientRecorder) CallBlocking(_ context.Context, key FeatureKey, systemPrompt, userPrompt string, _ CallOptions, sink CostSink) (string, error) {
 	f.calls++
 	f.key = key
 	f.sys = systemPrompt
 	f.user = userPrompt
+	sink(0)
 	if f.err != nil {
-		return "", 0, f.err
+		return "", f.err
 	}
-	return f.response, 0, nil
+	return f.response, nil
 }
 
 // TestGenerateSessionCompletionNarrative_should_ReturnProseAndCallPoolWithFeatureKey_When_TitleGoalDiffAndDecisionsProvided
@@ -179,7 +180,7 @@ func TestGenerateSessionCompletionNarrative_should_ReturnProseAndCallPoolWithFea
 	t.Parallel()
 	fake := &fakePoolClientRecorder{response: "The session fixed the login redirect loop."}
 
-	text, err := GenerateSessionCompletionNarrative(context.Background(), fake, "fix-login-redirect", "Investigate why login redirects loop under SSO", "diff content", "5 auto-approved, 1 manual")
+	text, _, err := GenerateSessionCompletionNarrative(context.Background(), fake, "fix-login-redirect", "Investigate why login redirects loop under SSO", "diff content", "5 auto-approved, 1 manual")
 	require.NoError(t, err)
 	assert.Equal(t, "The session fixed the login redirect loop.", text)
 	assert.Equal(t, 1, fake.calls)
@@ -195,7 +196,7 @@ func TestGenerateSessionCompletionNarrative_should_OmitGoalLine_When_SessionGoal
 	t.Parallel()
 	fake := &fakePoolClientRecorder{response: "The session made some changes."}
 
-	text, err := GenerateSessionCompletionNarrative(context.Background(), fake, "some-session", "", "diff content", "no decisions")
+	text, _, err := GenerateSessionCompletionNarrative(context.Background(), fake, "some-session", "", "diff content", "no decisions")
 	require.NoError(t, err)
 	assert.Equal(t, "The session made some changes.", text)
 	assert.NotContains(t, fake.user, "Session goal:")
@@ -257,4 +258,81 @@ func TestHeadlessTriageSystemPrompt_WarnsAgainstBackgroundStatusPlaceholder(t *t
 	t.Parallel()
 	assert.Contains(t, HeadlessTriageSystemPrompt(), "single, non-interactive call")
 	assert.Contains(t, HeadlessTriageSystemPrompt(), "no later turn")
+}
+
+// TestGenerateHandoffSummary_PrependsReferenceOnlyPrefixVerbatim verifies the
+// returned string's first line is exactly referenceOnlyPrefix, reproduced
+// verbatim (not paraphrased), for a non-empty TranscriptWindow and a
+// successful pool call.
+func TestGenerateHandoffSummary_PrependsReferenceOnlyPrefixVerbatim(t *testing.T) {
+	t.Parallel()
+	fake := &fakePoolClientRecorder{response: "The session refactored the auth middleware."}
+	head := []HandoffTranscriptMessage{{Role: "user", Content: "Let's refactor auth"}}
+	middle := []HandoffTranscriptMessage{{Role: "assistant", Content: "Refactored middleware.go"}}
+	tail := []HandoffTranscriptMessage{{Role: "assistant", Content: "Running tests next"}}
+
+	text, err := GenerateHandoffSummary(context.Background(), fake, "auth-refactor", head, middle, tail)
+	require.NoError(t, err)
+
+	firstLine := strings.SplitN(text, "\n", 2)[0]
+	assert.Equal(t, referenceOnlyPrefix, firstLine)
+	assert.Equal(t, 1, fake.calls)
+}
+
+// TestGenerateHandoffSummary_PromptInstructsActiveTaskSection verifies the
+// constructed userPrompt (sent to the LLM, before the pool call returns)
+// contains the literal "## Active Task" instruction, plus separately
+// labeled Head:/Middle (to summarize):/Tail: sections built from the
+// window's three slices.
+func TestGenerateHandoffSummary_PromptInstructsActiveTaskSection(t *testing.T) {
+	t.Parallel()
+	fake := &fakePoolClientRecorder{response: "summary text"}
+	head := []HandoffTranscriptMessage{{Role: "user", Content: "start the task"}}
+	middle := []HandoffTranscriptMessage{{Role: "assistant", Content: "did some middle work"}}
+	tail := []HandoffTranscriptMessage{{Role: "assistant", Content: "about to run tests"}}
+
+	_, err := GenerateHandoffSummary(context.Background(), fake, "some-session", head, middle, tail)
+	require.NoError(t, err)
+
+	assert.Equal(t, FeatureKeyHandoffSummary, fake.key)
+	assert.Contains(t, fake.user, "## Active Task")
+	assert.Contains(t, fake.user, "Head:")
+	assert.Contains(t, fake.user, "Middle (to summarize):")
+	assert.Contains(t, fake.user, "Tail:")
+	assert.Contains(t, fake.user, "start the task")
+	assert.Contains(t, fake.user, "did some middle work")
+	assert.Contains(t, fake.user, "about to run tests")
+}
+
+// TestGenerateHandoffSummary_EmptyMiddlePlaceholderText verifies that a
+// TranscriptWindow with an empty Middle (short conversation) still calls the
+// pool, but the prompt's middle section reads the explicit placeholder
+// rather than an empty block.
+func TestGenerateHandoffSummary_EmptyMiddlePlaceholderText(t *testing.T) {
+	t.Parallel()
+	fake := &fakePoolClientRecorder{response: "summary text"}
+	head := []HandoffTranscriptMessage{{Role: "user", Content: "short chat"}}
+	var middle []HandoffTranscriptMessage
+	tail := []HandoffTranscriptMessage{{Role: "assistant", Content: "done"}}
+
+	_, err := GenerateHandoffSummary(context.Background(), fake, "short-session", head, middle, tail)
+	require.NoError(t, err)
+
+	assert.Equal(t, 1, fake.calls)
+	assert.Contains(t, fake.user, "(nothing to summarize — conversation was short)")
+}
+
+// TestGenerateHandoffSummary_PropagatesPoolClientError_When_CallBlockingFails
+// verifies that a pool.CallBlocking failure is propagated as-is with no
+// partial/garbled text returned.
+func TestGenerateHandoffSummary_PropagatesPoolClientError_When_CallBlockingFails(t *testing.T) {
+	t.Parallel()
+	fake := &fakePoolClientRecorder{err: assert.AnError}
+	head := []HandoffTranscriptMessage{{Role: "user", Content: "start"}}
+	tail := []HandoffTranscriptMessage{{Role: "assistant", Content: "end"}}
+
+	text, err := GenerateHandoffSummary(context.Background(), fake, "failing-session", head, nil, tail)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, assert.AnError)
+	assert.Empty(t, text)
 }

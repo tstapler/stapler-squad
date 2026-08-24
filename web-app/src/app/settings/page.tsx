@@ -91,6 +91,11 @@ function SettingsPageInner() {
                 Pipeline Modes →
               </Link>
             </section>
+            <section className={styles.section}>
+              <Link href={routes.settingsRemotes} className={styles.helpLink} data-testid="settings-remotes-link">
+                Remotes (SSH hosts) →
+              </Link>
+            </section>
             {/* Help subsection */}
             <section className={styles.section}>
               <div className={styles.helpSection}>

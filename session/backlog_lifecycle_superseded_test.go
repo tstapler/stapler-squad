@@ -124,7 +124,7 @@ func TestReconcilePRPending_should_NotCloseUnmergedPRAsSuperseded_When_LastCommi
 	spawner := &fakePRFixSpawner{}
 	listener.SetPRFixSpawner(spawner)
 
-	listener.ReconcilePRPending(ctx, storage.repo.(*EntRepository))
+	listener.ReconcilePRPending(ctx, storage.repo)
 
 	assert.False(t, checker.closeCalled,
 		"PR #342 carries real unmerged work; it must never be closed as superseded on the strength of the session's own base commit")
@@ -161,7 +161,7 @@ func TestReconcilePRPending_should_NotCloseUnmergedPRAsSuperseded_When_SessionHe
 	overridePRPendingChecker(t, listener, checker)
 	listener.SetPRFixSpawner(&fakePRFixSpawner{})
 
-	listener.ReconcilePRPending(ctx, storage.repo.(*EntRepository))
+	listener.ReconcilePRPending(ctx, storage.repo)
 
 	assert.False(t, checker.closeCalled,
 		"an unresolvable HEAD must not license closing the PR against the session's base commit")
@@ -204,7 +204,7 @@ func TestReconcilePRPending_should_StillCloseSupersededPR_When_SessionsRealTipIs
 	// as verified rather than failing closed.
 	stubMatchingPRByNumberFinder(listener, branch)
 
-	listener.ReconcilePRPending(ctx, storage.repo.(*EntRepository))
+	listener.ReconcilePRPending(ctx, storage.repo)
 
 	assert.True(t, checker.closeCalled,
 		"a PR whose session's real tip commit is already on main is genuinely superseded and must still be closed")
@@ -293,7 +293,7 @@ func TestReconcilePRPending_should_NotCloseUnmergedPRAsSuperseded_When_BaseCommi
 	// below would pass for the wrong reason even without BUG-065's fix.
 	stubMatchingPRByNumberFinder(listener, branch)
 
-	listener.ReconcilePRPending(ctx, storage.repo.(*EntRepository))
+	listener.ReconcilePRPending(ctx, storage.repo)
 
 	assert.False(t, checker.closeCalled,
 		"an empty BaseCommitSha must not let the session's own spawn-time base slip through as if it were real work")

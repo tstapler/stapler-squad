@@ -2,7 +2,6 @@ package tmux
 
 import (
 	"context"
-	"runtime"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -22,11 +21,13 @@ import (
 func resetForkMonitor(t *testing.T) {
 	t.Helper()
 
-	// Yield to allow any in-flight alert goroutines from the previous test to
-	// complete before zeroing shared state. waitAlertCount ensures the goroutine
-	// has incremented count, but the goroutine itself may not have exited yet.
-	runtime.Gosched()
-	time.Sleep(10 * time.Millisecond)
+	// Wait for any in-flight alert-dispatch goroutine from the previous test to
+	// fully exit before zeroing shared state. forkMonitor.alertWG is Add(1)'d
+	// synchronously in checkPressure before the goroutine is spawned, so by the
+	// time the previous test's last checkPressure call returned, Add already
+	// happened — Wait() here cannot race with it and blocks deterministically
+	// until Done() fires, instead of guessing at a fixed sleep duration.
+	forkMonitor.alertWG.Wait()
 
 	// Zero the atomic counters
 	forkMonitor.totalSpawns.Store(0)
@@ -150,8 +151,11 @@ func TestCheckPressure_StableCount_NoRepeatAlert(t *testing.T) {
 	// 12 > 12 is false → not worsened. Within cooldown → suppress.
 	checkPressure(t1)
 
-	// Allow any goroutine to run.
-	time.Sleep(50 * time.Millisecond)
+	// Suppressed alerts return synchronously without spawning a dispatch
+	// goroutine (see checkPressure), so waiting on alertWG deterministically
+	// drains only the first (worsened-case) alert instead of guessing a
+	// fixed duration for "no second alert fires."
+	forkMonitor.alertWG.Wait()
 
 	if got := count.Load(); got != 1 {
 		t.Errorf("alert count = %d; want 1 (stable count should be suppressed within cooldown)", got)

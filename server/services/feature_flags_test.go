@@ -8,6 +8,7 @@ import (
 	connect "connectrpc.com/connect"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/events"
 )
@@ -174,6 +175,70 @@ func TestGetFeatureFlags_should_ReturnEmptyStatusDetail_When_ProviderReturnsEmpt
 	}
 	require.NotNil(t, backlogFlag)
 	assert.Empty(t, backlogFlag.StatusDetail)
+}
+
+// TestGetFeatureFlags_should_ReflectHandoffSummaryConfigState_When_QueriedEnabledOrDisabled
+// verifies the "handoff-summary" flag added for Finding 2 (backlog review of
+// the restart-with-summary feature) surfaces config.HandoffSummaryConfig's
+// real, config.json-backed EnabledOrDefault() state through the generic
+// GetFeatureFlags registry -- not the separate feature_flags map -- covering
+// both the enabled and explicitly-disabled cases.
+func TestGetFeatureFlags_should_ReflectHandoffSummaryConfigState_When_QueriedEnabledOrDisabled(t *testing.T) {
+	svc := newFeatureFlagService(t)
+	svc.SetFeatureController("handoff-summary", HandoffSummaryFeatureController{})
+
+	findFlag := func(t *testing.T) *sessionv1.FeatureFlag {
+		t.Helper()
+		resp, err := svc.GetFeatureFlags(context.Background(), connect.NewRequest(&sessionv1.GetFeatureFlagsRequest{}))
+		require.NoError(t, err)
+		for _, f := range resp.Msg.Flags {
+			if f.Name == "handoff-summary" {
+				return f
+			}
+		}
+		t.Fatal("expected 'handoff-summary' flag in GetFeatureFlags response")
+		return nil
+	}
+
+	// Default (no config.json override yet): enabled.
+	flag := findFlag(t)
+	assert.True(t, flag.Enabled, "handoff-summary should default to enabled")
+	assert.NotEmpty(t, flag.Description)
+
+	// Explicitly disabled via config.HandoffSummary, not the generic flags map.
+	disabled := false
+	cfg := config.LoadConfig()
+	cfg.HandoffSummary.Enabled = &disabled
+	require.NoError(t, config.SaveConfig(cfg))
+
+	flag = findFlag(t)
+	assert.False(t, flag.Enabled, "handoff-summary should reflect config.HandoffSummary.Enabled=false")
+
+	// Re-enabled.
+	enabled := true
+	cfg = config.LoadConfig()
+	cfg.HandoffSummary.Enabled = &enabled
+	require.NoError(t, config.SaveConfig(cfg))
+
+	flag = findFlag(t)
+	assert.True(t, flag.Enabled, "handoff-summary should reflect config.HandoffSummary.Enabled=true")
+}
+
+// TestHandoffSummaryFeatureController_EnableAndDisable_should_ReturnClearError
+// verifies UpdateFeatureFlag-style toggling of "handoff-summary" is refused
+// with a clear, actionable error rather than silently no-op'ing -- the real
+// toggle lives at config.json's handoff_summary.enabled key, not the generic
+// feature-flags map UpdateFeatureFlag persists to.
+func TestHandoffSummaryFeatureController_EnableAndDisable_should_ReturnClearError(t *testing.T) {
+	ctrl := HandoffSummaryFeatureController{}
+
+	err := ctrl.Enable(context.Background())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "handoff_summary.enabled")
+
+	err = ctrl.Disable()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "handoff_summary.enabled")
 }
 
 // --------------------------------------------------------------------------
