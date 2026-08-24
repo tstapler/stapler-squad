@@ -15,21 +15,19 @@ import (
 	"github.com/go-git/go-git/v5/plumbing"
 )
 
-// worktreeAddRetryAttempts and worktreeAddRetryDelay bound Ground-Truth Re-Query
-// (see ADR-001-ground-truth-requery-over-stderr-matching.md): after a `worktree add`
-// failure, both self-heal layers (setupNewWorktree, setupFromExistingBranch) re-verify
-// actual git state instead of pattern-matching the failure's error text, retrying briefly
-// in case the race winner's own `worktree add`/`worktree list` is still in flight.
+// worktreeAddRetryAttempts and worktreeAddRetryDelay bound Ground-Truth Re-Query (ADR-001):
+// after a `worktree add` failure, both self-heal layers (setupNewWorktree,
+// setupFromExistingBranch) re-verify actual git state instead of pattern-matching the
+// failure's error text, retrying briefly in case the race winner's own `worktree
+// add`/`worktree list` is still in flight.
 //
 // Deliberately NOT copied from headSHARetryAttempts/headSHARetryDelay (util.go:285-288,
 // 3 attempts / 20ms total) — that pair bounds an in-process go-git torn-read against a
 // local file write (microsecond-scale). This retry instead waits out a concurrent `git
-// worktree add` *subprocess*, which per this fix's own root-cause finding
-// (research/pitfalls.md §3) can run up to runGitCommand's 30s timeout under the CI load
-// that produced the original flake. Local stress reproduction (validation.md's "AC-1:
-// Local Reproduction Results") did not capture real contended-completion timing, so this
-// is sized as a materially larger bound than the unrelated precedent — a few seconds with
-// backoff, not tens of milliseconds — rather than reusing 20ms unexamined.
+// worktree add` *subprocess*, which can run up to runGitCommand's 30s timeout under CI
+// load. No local repro captured real contended-completion timing, so this is sized as a
+// materially larger bound than the unrelated precedent — a few seconds with backoff, not
+// tens of milliseconds — rather than reusing 20ms unexamined.
 const (
 	worktreeAddRetryAttempts = 6
 	worktreeAddRetryDelay    = 300 * time.Millisecond
