@@ -56,7 +56,12 @@ jobs:
     name: MCP Integration Tests
     runs-on: ubuntu-latest
     needs: detect-changes
-    if: github.event_name != 'pull_request' || needs.detect-changes.outputs.relevant == 'true'
+    # always() is required, not decorative — see build.yml's `prepare` job for
+    # the full explanation. Without it, this job silently skips on every push
+    # to main/workflow_dispatch (detect-changes is skipped there too, and a
+    # skipped needs: job fails the implicit success() check any if: without
+    # a status function otherwise gets ANDed with).
+    if: always() && (github.event_name != 'pull_request' || needs.detect-changes.outputs.relevant == 'true')
 
     steps:
       - uses: actions/checkout@v4
