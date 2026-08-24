@@ -235,6 +235,133 @@ func TestWorktreeCacheInvalidate(t *testing.T) {
 	assert.False(t, ok, "should be cleared after invalidate")
 }
 
+// TestGetOrCreateCache_UsesTickIntervalAsTTL verifies a new worktreeCache's TTL
+// tracks the scanner's tickInterval rather than a fixed value. fsnotify already
+// invalidates an entry the moment a real .git change lands (see fsnotifyLoop), so a
+// TTL shorter than the backstop tick interval buys nothing -- the coordinator's tick
+// would always find the entry "expired" and redo the full HasUncommitted() walk on
+// every worktree, every tick, whether or not anything actually changed. This was a
+// real regression: the TTL was left at a stale 30s constant after the ticker itself
+// moved to 5 minutes.
+func TestGetOrCreateCache_UsesTickIntervalAsTTL(t *testing.T) {
+	t.Parallel()
+	s := &Scanner{tickInterval: 7 * time.Minute}
+
+	c := s.getOrCreateCache("/tmp/some-worktree")
+
+	assert.Equal(t, 7*time.Minute, c.ttl, "cache TTL should match the scanner's tick interval")
+}
+
+// TestGetOrCreateCache_DoesNotRedoScan_When_WithinTickInterval is an end-to-end
+// version of the TTL fix: a worktree scanned once should not be rescanned by a
+// second scanRepo call that lands well within the tick interval, even though the
+// old hardcoded 30s TTL would have already expired by then.
+func TestGetOrCreateCache_DoesNotRedoScan_When_WithinTickInterval(t *testing.T) {
+	t.Parallel()
+	reader := &fakeVCSReaderForCacheTest{
+		worktrees: []WorktreeInfo{{Path: "/tmp/wt-1", Branch: "main"}},
+	}
+	s := NewScannerWithReader(pkgevents.NewEventBus(10), nil, reader)
+	s.SetTickInterval(5 * time.Minute)
+
+	s.scanRepo("/tmp/repo-1", false)
+	s.scanRepo("/tmp/repo-1", false)
+
+	assert.Equal(t, 1, reader.hasUncommittedCalls, "second scan within the tick interval should hit the cache, not recompute")
+}
+
+// fakeVCSReaderForCacheTest is a minimal VCSReader stub for cache-behavior tests
+// that only need ListWorktrees/HasUncommitted to succeed and be countable.
+type fakeVCSReaderForCacheTest struct {
+	worktrees           []WorktreeInfo
+	hasUncommittedCalls int
+}
+
+func (f *fakeVCSReaderForCacheTest) ListWorktrees(string) ([]WorktreeInfo, error) {
+	return f.worktrees, nil
+}
+func (f *fakeVCSReaderForCacheTest) ResolveDefaultBranch(string) string { return "main" }
+func (f *fakeVCSReaderForCacheTest) HasUncommitted(string) (bool, error) {
+	f.hasUncommittedCalls++
+	return false, nil
+}
+func (f *fakeVCSReaderForCacheTest) AheadBehind(string, string) (int, int, error) { return 0, 0, nil }
+func (f *fakeVCSReaderForCacheTest) CommitMessages(string, string, int) ([]string, error) {
+	return nil, nil
+}
+func (f *fakeVCSReaderForCacheTest) DiffShortstat(string) (DiffStat, error) { return DiffStat{}, nil }
+
+// TestScanner_hydrateCacheFromDisk_should_skipRescan_When_PersistedEntryIsFresh
+// verifies a scan result persisted to the state store before the process
+// restarted primes the in-memory cache, so the very first scan after startup
+// doesn't recompute a worktree whose last scan is still within the TTL.
+func TestScanner_hydrateCacheFromDisk_should_skipRescan_When_PersistedEntryIsFresh(t *testing.T) {
+	t.Parallel()
+	store, _ := newTestStateStore(t)
+	require.NoError(t, store.SaveScanCache([]scanCacheEntry{
+		{
+			Result:   ScanResult{RepoPath: "/repo-x", Branch: "main", WorktreePath: "/repo-x/wt"},
+			ScanTime: time.Now(), // fresh
+		},
+	}))
+
+	reader := &fakeVCSReaderForCacheTest{
+		worktrees: []WorktreeInfo{{Path: "/repo-x/wt", Branch: "main"}},
+	}
+	s := NewScannerWithReader(pkgevents.NewEventBus(10), store, reader)
+	s.SetTickInterval(5 * time.Minute)
+
+	s.hydrateCacheFromDisk()
+	s.scanRepo("/repo-x", false)
+
+	assert.Equal(t, 0, reader.hasUncommittedCalls, "a fresh persisted entry should be used instead of rescanning")
+}
+
+// TestScanner_hydrateCacheFromDisk_should_rescan_When_PersistedEntryIsStale verifies
+// a persisted entry older than the cache TTL is not restored, so a scan following a
+// restart after a long downtime correctly recomputes rather than serving stale data.
+func TestScanner_hydrateCacheFromDisk_should_rescan_When_PersistedEntryIsStale(t *testing.T) {
+	t.Parallel()
+	store, _ := newTestStateStore(t)
+	require.NoError(t, store.SaveScanCache([]scanCacheEntry{
+		{
+			Result:   ScanResult{RepoPath: "/repo-y", Branch: "main", WorktreePath: "/repo-y/wt"},
+			ScanTime: time.Now().Add(-10 * time.Minute), // older than the 5m TTL below
+		},
+	}))
+
+	reader := &fakeVCSReaderForCacheTest{
+		worktrees: []WorktreeInfo{{Path: "/repo-y/wt", Branch: "main"}},
+	}
+	s := NewScannerWithReader(pkgevents.NewEventBus(10), store, reader)
+	s.SetTickInterval(5 * time.Minute)
+
+	s.hydrateCacheFromDisk()
+	s.scanRepo("/repo-y", false)
+
+	assert.Equal(t, 1, reader.hasUncommittedCalls, "a stale persisted entry should not suppress the first live scan")
+}
+
+// TestScanner_persistCacheToDisk_should_roundTrip_When_ScanCompletes verifies a live
+// worktreeCache entry is snapshotted to the state store and comes back out via
+// LoadScanCache with the same result and scan time.
+func TestScanner_persistCacheToDisk_should_roundTrip_When_ScanCompletes(t *testing.T) {
+	t.Parallel()
+	store, _ := newTestStateStore(t)
+	reader := &fakeVCSReaderForCacheTest{
+		worktrees: []WorktreeInfo{{Path: "/repo-z/wt", Branch: "main"}},
+	}
+	s := NewScannerWithReader(pkgevents.NewEventBus(10), store, reader)
+	s.SetTickInterval(5 * time.Minute)
+
+	s.scanRepo("/repo-z", false)
+	s.persistCacheToDisk()
+
+	loaded := store.LoadScanCache()
+	require.Len(t, loaded, 1)
+	assert.Equal(t, "/repo-z/wt", loaded[0].Result.WorktreePath)
+}
+
 // ---- Circuit breaker ----------------------------------------------------
 
 func TestCircuitBreaker_BackoffAfterThreeTimeouts(t *testing.T) {
