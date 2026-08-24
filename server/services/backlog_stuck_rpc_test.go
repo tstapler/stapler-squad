@@ -7,6 +7,7 @@ package services
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
@@ -15,6 +16,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -370,6 +372,163 @@ func TestBulkResetStuckRemediation_should_resetEveryOpenRow_When_OnlyParkedExpli
 	}))
 	require.NoError(t, err)
 	assert.Equal(t, int32(1), resp.Msg.ResetCount)
+}
+
+// TestBulkResetStuckRemediation_should_onlyResetMatchingReason_When_ReasonFilterSet
+// verifies a reason-scoped sweep (AC 2 of the reason-scoped-sweep feature)
+// resets only parked rows matching the requested reason, leaving a different
+// reason's parked row untouched — the whole point of scoping the "recover
+// items parked by a now-fixed bucket" sweep to just that bucket rather than
+// resetting every parked row regardless of cause.
+func TestBulkResetStuckRemediation_should_onlyResetMatchingReason_When_ReasonFilterSet(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+	ctx := t.Context()
+
+	bouncing, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{Title: "bouncing", Status: string(session.BacklogStatusReview)})
+	require.NoError(t, err)
+	seedOpenStuckRow(t, storage, bouncing.ID, domain.StuckReasonBouncing, time.Now(), "bouncing")
+	_, err = storage.RecordRemediationAttempt(ctx, bouncing.ID, domain.StuckReasonBouncing, session.MaxRemediationAttempts, nil)
+	require.NoError(t, err)
+
+	staleWork, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{Title: "stale-work", Status: string(session.BacklogStatusInProgress)})
+	require.NoError(t, err)
+	seedOpenStuckRow(t, storage, staleWork.ID, domain.StuckReasonStaleWork, time.Now(), "stale")
+	_, err = storage.RecordRemediationAttempt(ctx, staleWork.ID, domain.StuckReasonStaleWork, session.MaxRemediationAttempts, nil)
+	require.NoError(t, err)
+
+	resp, err := svc.BulkResetStuckRemediation(ctx, connect.NewRequest(&sessionv1.BulkResetStuckRemediationRequest{
+		Reason: sessionv1.StuckReason_STUCK_REASON_BOUNCING,
+	}))
+	require.NoError(t, err)
+	assert.Equal(t, int32(1), resp.Msg.ResetCount, "only the bouncing row should be reset")
+
+	list, err := svc.ListStuckBacklogItems(ctx, connect.NewRequest(&sessionv1.ListStuckBacklogItemsRequest{}))
+	require.NoError(t, err)
+	require.Len(t, list.Msg.Items, 2)
+	for _, item := range list.Msg.Items {
+		switch item.ItemId {
+		case bouncing.ID:
+			assert.Equal(t, int32(0), item.RemediationAttempts, "reason-matched row must be reset")
+		case staleWork.ID:
+			assert.Equal(t, int32(session.MaxRemediationAttempts), item.RemediationAttempts, "different-reason row must be untouched")
+		default:
+			t.Fatalf("unexpected item %s", item.ItemId)
+		}
+	}
+}
+
+// TestBulkResetStuckRemediation_should_publishNotification_When_RowsReset
+// verifies AC 3 of the reason-scoped-sweep feature: a bulk reset that
+// actually changes rows fires a visible operator notification naming the
+// reason and the reset count, mirroring the existing justParked one-time-notify
+// pattern (session/backlog_lifecycle.go's notify) instead of mutating
+// silently — the exact "notify-once-then-silent" gap this feature exists to
+// close on the *reset* side.
+func TestBulkResetStuckRemediation_should_publishNotification_When_RowsReset(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+	bus := events.NewEventBus(4)
+	svc.SetEventBus(bus)
+	ctx := t.Context()
+
+	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{Title: "bouncing", Status: string(session.BacklogStatusReview)})
+	require.NoError(t, err)
+	seedOpenStuckRow(t, storage, item.ID, domain.StuckReasonBouncing, time.Now(), "bouncing")
+	_, err = storage.RecordRemediationAttempt(ctx, item.ID, domain.StuckReasonBouncing, session.MaxRemediationAttempts, nil)
+	require.NoError(t, err)
+
+	subCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	ch, _ := bus.Subscribe(subCtx)
+
+	resp, err := svc.BulkResetStuckRemediation(ctx, connect.NewRequest(&sessionv1.BulkResetStuckRemediationRequest{
+		Reason: sessionv1.StuckReason_STUCK_REASON_BOUNCING,
+	}))
+	require.NoError(t, err)
+	require.Equal(t, int32(1), resp.Msg.ResetCount)
+
+	select {
+	case ev := <-ch:
+		assert.Equal(t, events.EventNotification, ev.Type)
+		assert.Contains(t, ev.NotificationMessage, string(domain.StuckReasonBouncing))
+		assert.Contains(t, ev.NotificationMessage, "1 parked item")
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected a notification event after a non-empty bulk reset")
+	}
+}
+
+// TestBulkResetStuckRemediation_should_notPublishNotification_When_NothingReset
+// verifies the notification only fires when the sweep actually changed
+// something — a no-op bulk reset (nothing parked) must not still surface a
+// "reset 0 items" notification.
+func TestBulkResetStuckRemediation_should_notPublishNotification_When_NothingReset(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+	bus := events.NewEventBus(4)
+	svc.SetEventBus(bus)
+	ctx := t.Context()
+
+	subCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	ch, _ := bus.Subscribe(subCtx)
+
+	resp, err := svc.BulkResetStuckRemediation(ctx, connect.NewRequest(&sessionv1.BulkResetStuckRemediationRequest{}))
+	require.NoError(t, err)
+	require.Equal(t, int32(0), resp.Msg.ResetCount)
+
+	select {
+	case ev := <-ch:
+		t.Fatalf("expected no notification event for a no-op reset, got %+v", ev)
+	case <-time.After(200 * time.Millisecond):
+		// expected: nothing published
+	}
+}
+
+// TestBulkResetStuckRemediation_should_resolveDeterministically_When_RacingAConcurrentColdRetryWrite
+// covers AC 5 of the reason-scoped-sweep feature: a reason-scoped bulk reset
+// racing a concurrent cold-retry heartbeat write (BUG-083, PR #572) on the
+// SAME row. BulkResetStuckRemediation issues a single atomic SQL
+// UPDATE...WHERE (EntRepository.BulkResetStuckRemediation), so there is no
+// read-modify-write window on the Go side; the only remaining race is which
+// of the two independent UPDATE transactions commits last. This is a documented
+// last-write-wins outcome (see research/pitfalls.md §3), not a silent
+// corruption: the final state must always be one of the two writers' values,
+// never a torn/partial write, and the test asserts that explicitly instead
+// of silently trusting the race detector alone.
+func TestBulkResetStuckRemediation_should_resolveDeterministically_When_RacingAConcurrentColdRetryWrite(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	ctx := t.Context()
+
+	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{Title: "racing item", Status: string(session.BacklogStatusReview)})
+	require.NoError(t, err)
+	seedOpenStuckRow(t, storage, item.ID, domain.StuckReasonBouncing, time.Now(), "bouncing")
+	_, err = storage.RecordRemediationAttempt(ctx, item.ID, domain.StuckReasonBouncing, session.MaxRemediationAttempts, nil)
+	require.NoError(t, err)
+
+	reason := domain.StuckReasonBouncing
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		// Simulates a concurrent cold-retry heartbeat tick re-parking the row.
+		_, _ = storage.RecordRemediationAttempt(ctx, item.ID, domain.StuckReasonBouncing, session.MaxRemediationAttempts, nil)
+	}()
+	go func() {
+		defer wg.Done()
+		_, _ = storage.BulkResetStuckRemediation(ctx, &reason, true)
+	}()
+	wg.Wait()
+
+	rows, err := storage.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	require.Len(t, rows, 1, "row must still exist exactly once — no torn/duplicate write")
+	assert.Contains(t, []int32{0, session.MaxRemediationAttempts}, rows[0].RemediationAttempts,
+		"final state must be exactly one writer's value (last-write-wins), never a partial/corrupt one")
 }
 
 // TestTriggerRemediationNow_should_reject_When_NoOpenStuckRow verifies the

@@ -88,6 +88,14 @@ export const chipActive = style({
   },
 });
 
+export const groupHeadingRow = style({
+  display: "flex",
+  alignItems: "flex-end",
+  justifyContent: "space-between",
+  gap: vars.space["2"],
+  flexWrap: "wrap",
+});
+
 export const groupHeading = style({
   fontSize: vars.fontSize.sm,
   fontWeight: 600,
@@ -95,6 +103,33 @@ export const groupHeading = style({
   margin: `${vars.space["2"]} 0 0 0`,
   paddingBottom: vars.space["1"],
   borderBottom: `1px solid ${vars.color.borderSubtle}`,
+  flex: 1,
+});
+
+// Per-reason-group counterpart to resetParkedBtn (below) — same treatment,
+// scaled down since it sits inline with a group heading rather than the
+// section header.
+export const resetParkedReasonBtn = style({
+  padding: `2px ${vars.space["2"]}`,
+  borderRadius: vars.radii.sm,
+  fontSize: vars.fontSize.xs,
+  cursor: "pointer",
+  border: `1px solid ${vars.color.warning}`,
+  background: "transparent",
+  color: vars.color.warningText,
+  fontWeight: 600,
+  flexShrink: 0,
+  ":hover": {
+    background: vars.color.warningBg,
+  },
+  ":focus-visible": {
+    outline: `2px solid ${vars.color.inputFocusBorder}`,
+    outlineOffset: "1px",
+  },
+  ":disabled": {
+    opacity: 0.6,
+    cursor: "not-allowed",
+  },
 });
 
 export const group = style({

@@ -392,6 +392,89 @@ describe("StuckItemsSection", () => {
     });
   });
 
+  describe("StuckItemsSection_should_offerPerReasonBulkReset_When_AGroupHasParkedItems", () => {
+    it("hides a group's reset-parked button when none of its items have hit the attempt cap", () => {
+      mockUseStuckBacklogItems.mockReturnValue(
+        baseHookReturn({ items: [makeItem({ remediationAttempts: 1 })] })
+      );
+      render(<StuckItemsSection />);
+      expect(
+        screen.queryByTestId(`stuck-group-reset-parked-${StuckReason.PR_READY_UNMERGED}`)
+      ).not.toBeInTheDocument();
+    });
+
+    it("shows a group's reset-parked button with only that group's parked count", () => {
+      mockUseStuckBacklogItems.mockReturnValue(
+        baseHookReturn({
+          items: [
+            makeItem({ remediationAttempts: 5, reason: StuckReason.PR_READY_UNMERGED }),
+            makeItem({
+              itemId: "second",
+              remediationAttempts: 5,
+              reason: StuckReason.STALE_WORK,
+            }),
+            makeItem({
+              itemId: "third",
+              remediationAttempts: 1,
+              reason: StuckReason.STALE_WORK,
+            }),
+          ],
+        })
+      );
+      render(<StuckItemsSection />);
+      expect(
+        screen.getByTestId(`stuck-group-reset-parked-${StuckReason.PR_READY_UNMERGED}`).textContent
+      ).toMatch(/Reset parked \(1\)/);
+      expect(
+        screen.getByTestId(`stuck-group-reset-parked-${StuckReason.STALE_WORK}`).textContent
+      ).toMatch(/Reset parked \(1\)/);
+    });
+
+    it("calls bulkResetParkedRemediation scoped to just that reason and reports the count", async () => {
+      const bulkResetParkedRemediation = jest.fn().mockResolvedValue(2);
+      mockUseStuckBacklogItems.mockReturnValue(
+        baseHookReturn({
+          items: [
+            makeItem({ remediationAttempts: 5, reason: StuckReason.PR_READY_UNMERGED }),
+            makeItem({
+              itemId: "second",
+              remediationAttempts: 5,
+              reason: StuckReason.STALE_WORK,
+            }),
+          ],
+          bulkResetParkedRemediation,
+        })
+      );
+      render(<StuckItemsSection />);
+      fireEvent.click(screen.getByTestId(`stuck-group-reset-parked-${StuckReason.STALE_WORK}`));
+      expect(bulkResetParkedRemediation).toHaveBeenCalledTimes(1);
+      expect(bulkResetParkedRemediation).toHaveBeenCalledWith(StuckReason.STALE_WORK);
+      await screen.findByText(/Reset 2 parked items in/);
+    });
+
+    it("leaves the global 'Reset all parked' button working unchanged alongside per-reason buttons", async () => {
+      const bulkResetParkedRemediation = jest.fn().mockResolvedValue(3);
+      mockUseStuckBacklogItems.mockReturnValue(
+        baseHookReturn({
+          items: [
+            makeItem({ remediationAttempts: 5, reason: StuckReason.PR_READY_UNMERGED }),
+            makeItem({
+              itemId: "second",
+              remediationAttempts: 5,
+              reason: StuckReason.STALE_WORK,
+            }),
+          ],
+          bulkResetParkedRemediation,
+        })
+      );
+      render(<StuckItemsSection />);
+      expect(screen.getByTestId("stuck-items-reset-parked").textContent).toMatch(/Reset all parked \(2\)/);
+      fireEvent.click(screen.getByTestId("stuck-items-reset-parked"));
+      expect(bulkResetParkedRemediation).toHaveBeenCalledWith(undefined);
+      await screen.findByText(/Reset 3 parked items\./);
+    });
+  });
+
   // reworkCapOverride-current-value-display: StuckBacklogItem (this file's
   // makeItem()) doesn't carry reworkCapOverride, so on expand the section
   // fetches the full BacklogItem via getBacklogItem() and threads the result
