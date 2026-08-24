@@ -500,7 +500,7 @@ func TestHandoffReconcileStaleness_should_NotStompFreshReadyRow_When_ConcurrentG
 	// ReconcileStaleness operates on the stale snapshot, as
 	// GetHandoffSummary's read-then-reconcile path would have read it before
 	// the fresh completion landed.
-	result := gen.ReconcileStaleness(ctx, staleRow)
+	result := gen.ReconcileStaleness(ctx, fromEntHandoffSummary(staleRow))
 
 	// The predicated update must match 0 rows (generation_started_at no
 	// longer equals staleStart) -- a no-op, not an overwrite. The returned

@@ -10,7 +10,6 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/gen/proto/go/session/v1/sessionv1connect"
 	"github.com/tstapler/stapler-squad/session"
-	"github.com/tstapler/stapler-squad/session/ent"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -127,10 +126,10 @@ func (s *HandoffSummaryService) TriggerHandoffSummary(
 	return connect.NewResponse(&sessionv1.TriggerHandoffSummaryResponse{Summary: toHandoffSummaryProto(current)}), nil
 }
 
-// toHandoffSummaryProto maps a *ent.HandoffSummary row to its proto
-// representation. Returns nil for a nil row (mirrors
+// toHandoffSummaryProto maps a *session.HandoffSummary domain row to its
+// proto representation. Returns nil for a nil row (mirrors
 // GetHandoffSummaryResponse.Summary's "unset when no row exists" contract).
-func toHandoffSummaryProto(row *ent.HandoffSummary) *sessionv1.HandoffSummaryProto {
+func toHandoffSummaryProto(row *session.HandoffSummary) *sessionv1.HandoffSummaryProto {
 	if row == nil {
 		return nil
 	}

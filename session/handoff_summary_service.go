@@ -68,10 +68,43 @@ func NewHandoffSummaryGenerator(entClient *ent.Client, pool headless.PoolClient)
 	}
 }
 
+// HandoffSummary is the plain (non-ent) domain view of a HandoffSummary row,
+// returned by FindRowBySessionID/ReconcileStaleness so callers outside this
+// package (server/services) never need to import session/ent directly
+// (.golangci.yml's no_ent_in_services rule — "use domain DTOs from session
+// package").
+type HandoffSummary struct {
+	SessionID                string
+	SessionTitle             string
+	Status                   string
+	ActiveTask               string
+	SummaryText              string
+	MiddleMessagesSummarized int
+	ErrorMessage             string
+	ErrorStage               string
+	GeneratedAt              *time.Time
+	GenerationStartedAt      *time.Time
+}
+
+func fromEntHandoffSummary(row *ent.HandoffSummary) *HandoffSummary {
+	return &HandoffSummary{
+		SessionID:                row.SessionID,
+		SessionTitle:             row.SessionTitle,
+		Status:                   row.Status,
+		ActiveTask:               row.ActiveTask,
+		SummaryText:              row.SummaryText,
+		MiddleMessagesSummarized: row.MiddleMessagesSummarized,
+		ErrorMessage:             row.ErrorMessage,
+		ErrorStage:               row.ErrorStage,
+		GeneratedAt:              row.GeneratedAt,
+		GenerationStartedAt:      row.GenerationStartedAt,
+	}
+}
+
 // FindRowBySessionID queries the HandoffSummary row for sessionID directly.
 // Wraps ent's not-found error as ErrNotFound, mirroring
 // SessionSummaryGenerator.FindRowBySessionID.
-func (g *HandoffSummaryGenerator) FindRowBySessionID(ctx context.Context, sessionID string) (*ent.HandoffSummary, error) {
+func (g *HandoffSummaryGenerator) FindRowBySessionID(ctx context.Context, sessionID string) (*HandoffSummary, error) {
 	row, err := g.entClient.HandoffSummary.Query().Where(handoffsummary.SessionID(sessionID)).Only(ctx)
 	if err != nil {
 		if ent.IsNotFound(err) {
@@ -79,7 +112,7 @@ func (g *HandoffSummaryGenerator) FindRowBySessionID(ctx context.Context, sessio
 		}
 		return nil, err
 	}
-	return row, nil
+	return fromEntHandoffSummary(row), nil
 }
 
 // tryAcquire attempts to acquire the in-process per-session guard for
@@ -132,7 +165,7 @@ func (g *HandoffSummaryGenerator) isInFlight(sessionUUID string) bool {
 // Adversarial-review Blocker #3), not a background sweep — mirrors
 // SessionSummaryGenerator.ReconcileStaleness's TOCTOU-safe predicated update;
 // see that method's doc comment for the race this guards against.
-func (g *HandoffSummaryGenerator) ReconcileStaleness(ctx context.Context, row *ent.HandoffSummary) *ent.HandoffSummary {
+func (g *HandoffSummaryGenerator) ReconcileStaleness(ctx context.Context, row *HandoffSummary) *HandoffSummary {
 	if row == nil || row.Status != string(HandoffSummaryStatusGenerating) || row.GenerationStartedAt == nil {
 		return row
 	}
