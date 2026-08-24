@@ -166,6 +166,10 @@ type Scanner struct {
 
 	tickInterval time.Duration // default 5 minutes, overridable in tests
 
+	// maintenanceTickInterval paces Start's repo-cache-prune + scan-cache-persist
+	// goroutine. Default 1 minute, overridable in tests via SetMaintenanceTickInterval.
+	maintenanceTickInterval time.Duration
+
 	// sessionRepos tracks repos discovered via auto-spider (session paths),
 	// keyed by session UUID — not Title — so a later EventSessionDeleted
 	// (which only carries SessionID, the UUID; Session is nil for delete
@@ -222,16 +226,25 @@ func NewScannerWithReader(eventBus *pkgevents.EventBus, stateStore *StateStore, 
 		// this ticker is a backstop for anything fsnotify misses (e.g. a
 		// worktree mtime change with no .git write), so it no longer needs
 		// to run every 30s. Tests override via SetTickInterval.
-		tickInterval: 5 * time.Minute,
+		tickInterval:            5 * time.Minute,
+		maintenanceTickInterval: 1 * time.Minute,
 	}
 	s.autoSpiderEnabled.Store(true)
 	return s
 }
 
-// SetTickInterval overrides the default 30-second scan tick (for tests).
+// SetTickInterval overrides the default 5-minute scan tick (for tests).
 func (s *Scanner) SetTickInterval(d time.Duration) {
 	s.mu.Lock()
 	s.tickInterval = d
+	s.mu.Unlock()
+}
+
+// SetMaintenanceTickInterval overrides the default 1-minute repo-cache-prune
+// and scan-cache-persist tick (for tests).
+func (s *Scanner) SetMaintenanceTickInterval(d time.Duration) {
+	s.mu.Lock()
+	s.maintenanceTickInterval = d
 	s.mu.Unlock()
 }
 
@@ -267,7 +280,10 @@ func (s *Scanner) Start(ctx context.Context) {
 	// works with any VCSReader; the repo-cache pruning below only applies
 	// when the reader is the real GoGitVCSReader.
 	go func() {
-		tick := time.NewTicker(1 * time.Minute)
+		s.mu.RLock()
+		maintenanceInterval := s.maintenanceTickInterval
+		s.mu.RUnlock()
+		tick := time.NewTicker(maintenanceInterval)
 		defer tick.Stop()
 		for {
 			select {
