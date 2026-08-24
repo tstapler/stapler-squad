@@ -97,10 +97,17 @@ type StreamHub struct {
 	quiescenceQuietPeriod time.Duration
 	batchMaxWindow        time.Duration
 
-	mu            sync.Mutex
-	state         HubLifecycleState
-	subscribers   map[SubscriberID]*subscriber
-	teardownTimer *time.Timer
+	mu sync.Mutex
+	// state only transitions to HubTornDown once ForceTeardown's close/
+	// StopControlMode work has actually finished (see its doc comment) —
+	// teardownInFlight is a separate exactly-once claim so a second,
+	// concurrent ForceTeardown call is rejected immediately without
+	// waiting for that work, instead of racing to call StopControlMode
+	// twice.
+	state            HubLifecycleState
+	teardownInFlight bool
+	subscribers      map[SubscriberID]*subscriber
+	teardownTimer    *time.Timer
 
 	// batchWindow is the hub's single opportunistic-with-ceiling
 	// accumulation buffer and timer (Epic 2.1) — OnRawOutput feeds it
@@ -454,19 +461,28 @@ func (h *StreamHub) onTeardownGraceExpired() {
 }
 
 // ForceTeardown tears the hub down unconditionally: every remaining
-// subscriber is closed, the hub transitions to HubTornDown, and
-// SessionController.StopControlMode() is invoked exactly once. It is the
-// single teardown code path reached both by grace-period expiry
+// subscriber is closed, SessionController.StopControlMode() is invoked
+// exactly once, and only then does the hub transition to HubTornDown — that
+// ordering matters because HubTornDown is documented (types.go) as meaning
+// "control mode has been stopped", and a caller polling State() must not be
+// able to observe HubTornDown before StopControlMode has actually returned
+// (see TestStreamHub_should_ScheduleTeardownAfterGracePeriod_When_
+// LastSubscriberDetaches, which caught this under CI's -race CPU
+// contention: State() flipped to HubTornDown while stopCalls was still 0).
+// It is the single teardown code path reached both by grace-period expiry
 // (onTeardownGraceExpired) and by an external trigger such as the
-// flag-flipped-back-to-legacy case Story 3.1.2 wires up. Calling it more than
-// once (including concurrently) is safe — StopControlMode fires only for the
-// caller that wins the HubTornDown transition.
+// flag-flipped-back-to-legacy case Story 3.1.2 wires up. Calling it more
+// than once (including concurrently) is safe — teardownInFlight, not
+// h.state, is what rejects a second, concurrent caller, since h.state can't
+// be used as that guard until the end without reintroducing the premature-
+// observability bug above.
 func (h *StreamHub) ForceTeardown() error {
 	h.mu.Lock()
-	if h.state == HubTornDown {
+	if h.state == HubTornDown || h.teardownInFlight {
 		h.mu.Unlock()
 		return nil
 	}
+	h.teardownInFlight = true
 	h.cancelPendingTeardownLocked()
 	subs := make([]*subscriber, 0, len(h.subscribers))
 	for _, sub := range h.subscribers {
@@ -474,7 +490,6 @@ func (h *StreamHub) ForceTeardown() error {
 	}
 	subscriberCountAtTeardown := len(h.subscribers)
 	h.subscribers = make(map[SubscriberID]*subscriber)
-	h.state = HubTornDown
 	h.mu.Unlock()
 
 	decActiveHubs()
@@ -483,15 +498,27 @@ func (h *StreamHub) ForceTeardown() error {
 		sub.close()
 	}
 
-	if h.controller == nil {
-		log.Info("streamhub torn down", "session", h.sessionName, "subscriber_count", subscriberCountAtTeardown)
-		return nil
+	var stopErr error
+	if h.controller != nil {
+		stopErr = h.controller.StopControlMode()
 	}
 
-	if err := h.controller.StopControlMode(); err != nil {
+	// Only claim HubTornDown if nothing reattached while StopControlMode was
+	// running (AttachSubscriber can reactivate the hub from any state,
+	// including mid-teardown, per its own doc comment) — clobbering a
+	// legitimate concurrent reactivation back to HubTornDown would be a new
+	// bug, not a fix.
+	h.mu.Lock()
+	h.teardownInFlight = false
+	if len(h.subscribers) == 0 {
+		h.state = HubTornDown
+	}
+	h.mu.Unlock()
+
+	if stopErr != nil {
 		log.Warn("streamhub force teardown: StopControlMode failed",
-			"session", h.sessionName, "subscriber_count", subscriberCountAtTeardown, "error", err)
-		return err
+			"session", h.sessionName, "subscriber_count", subscriberCountAtTeardown, "error", stopErr)
+		return stopErr
 	}
 	log.Info("streamhub torn down", "session", h.sessionName, "subscriber_count", subscriberCountAtTeardown)
 	return nil
