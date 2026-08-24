@@ -25,6 +25,17 @@
 #   PROFILE_PORT               Override profiling port (default: 6060)
 #   STAPLER_SQUAD_HEALTH_TIMEOUT  Seconds to wait for /health after (re)start (default: 300)
 #
+# Durable service env vars:
+#   Both install_linux and install_macos below regenerate the unit/plist from
+#   scratch on every run, so anything hand-edited into it (e.g. `launchctl`/
+#   `systemctl` env overrides applied directly to the generated file) is
+#   silently wiped on the next install/redeploy. An operator-set var meant to
+#   persist across redeploys (e.g. STAPLER_SQUAD_USE_STREAM_HUB after
+#   completing the streamhub rollback rehearsal) goes in
+#   ~/.stapler-squad/service.env instead — one KEY=value per line, '#'
+#   comments and blank lines ignored. See service_env_plist_xml/
+#   service_env_systemd_lines below.
+#
 
 set -e
 
@@ -73,6 +84,40 @@ rotate_log_if_large() {
 # session/tmux spawn then fails with "command too long" (exit status 1).
 dedup_path() {
     printf '%s' "$1" | awk -v RS=':' '{ if (!seen[$0]++) { if (out != "") out = out ":" $0; else out = $0 } } END { printf "%s", out }'
+}
+
+# ── Durable extra environment variables ──────────────────────────────────────
+# See the "Durable service env vars" header comment above for why this file
+# exists rather than hand-editing the generated unit/plist directly.
+SERVICE_ENV_FILE="$HOME/.stapler-squad/service.env"
+
+# Prints XML <key>/<string> pairs (one per SERVICE_ENV_FILE line) for splicing
+# into the launchd plist's EnvironmentVariables dict. No-op if the file is
+# absent. Logs each key it applies so a durable override is never silent.
+service_env_plist_xml() {
+    [ -f "$SERVICE_ENV_FILE" ] || return 0
+    while IFS='=' read -r key value; do
+        [ -n "$key" ] || continue
+        case "$key" in \#*) continue ;; esac
+        log_info "Applying durable env var from $SERVICE_ENV_FILE: $key" >&2
+        # Minimal XML-escape (order matters: & first, so it doesn't double-escape
+        # the entities just inserted for < and >).
+        esc_value=$(printf '%s' "$value" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g')
+        printf '\n        <key>%s</key>\n        <string>%s</string>' "$key" "$esc_value"
+    done < "$SERVICE_ENV_FILE"
+}
+
+# Prints systemd Environment="KEY=value" lines (one per SERVICE_ENV_FILE line)
+# for splicing into the [Service] block. No-op if the file is absent. Logs
+# each key it applies so a durable override is never silent.
+service_env_systemd_lines() {
+    [ -f "$SERVICE_ENV_FILE" ] || return 0
+    while IFS='=' read -r key value; do
+        [ -n "$key" ] || continue
+        case "$key" in \#*) continue ;; esac
+        log_info "Applying durable env var from $SERVICE_ENV_FILE: $key" >&2
+        printf 'Environment="%s=%s"\n' "$key" "$value"
+    done < "$SERVICE_ENV_FILE"
 }
 
 # ── OS Detection ──────────────────────────────────────────────────────────────
@@ -203,6 +248,7 @@ StandardOutput=append:$log_dir/service.log
 StandardError=append:$log_dir/service.log
 Environment="HOME=$HOME"
 Environment="PATH=$service_path"
+$(service_env_systemd_lines)
 
 [Install]
 WantedBy=default.target
@@ -454,7 +500,7 @@ install_macos() {
         <key>HOME</key>
         <string>$HOME</string>
         <key>PATH</key>
-        <string>$plist_path</string>
+        <string>$plist_path</string>$(service_env_plist_xml)
     </dict>
 
     <key>StandardOutPath</key>
