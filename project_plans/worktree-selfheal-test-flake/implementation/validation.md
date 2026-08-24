@@ -62,3 +62,54 @@ N/A — pure infrastructure fix, no user-facing surface (no `design/ux.md` for t
   per layer (`TestSetupNewWorktree_SelfHeals_When_ConcurrentSpawnsRaceOnBranchCreate` for layer 1,
   `TestSetup_SerializesConcurrentWorktreeCreation_When_MultipleGoroutinesRaceOnSameRepo` for the
   locked/production path) — both already exist and require no changes.
+
+## AC-1: Local Reproduction Results (pre-fix, 2026-08-24)
+
+**Isolated single-test stress** (Task 2.1.1a's exact command,
+`go test -race -c -o /tmp/worktree_ops.test ./session/git && timeout 90s stress -p $(nproc)
+/tmp/worktree_ops.test -test.run='TestSetupNewWorktree_SelfHeals_When_ConcurrentSpawnsRaceOnBranchCreate'`):
+**did not reproduce** — 1897 runs, 0 failures, clean exit 124 (full 90s budget, 24 concurrent
+workers on this machine's `nproc`).
+
+**Whole-package stress** (adversarial-review's non-blocking recommendation, running the full
+`session/git` package binary instead of a single `-test.run` filter, to better approximate the
+"full-suite CI load" the requirements doc cites as the actual trigger): attempted, but the
+result is **inconclusive**, not a clean pass or a reproduction of the target flake. The stress
+binary was invoked from an unrelated cwd (`/tmp`), and `TestScaffoldingExcludePatterns_MatchGitignore`
+(`session/git/scaffolding_test.go:31`) fails deterministically outside `session/git/`'s own
+working directory (`open ../../.gitignore: no such file or directory` — a relative-path
+dependency on `go test`'s auto-cd into the package directory, unrelated to worktree self-heal).
+This alone drove `stress`'s 100%-failure signal (verified via a single non-`stress` run of the
+same binary, exit 1, exactly one `--- FAIL:`, naming that test). No `--- FAIL` for
+`TestSetupNewWorktree_SelfHeals_When_ConcurrentSpawnsRaceOnBranchCreate` (or any other test)
+appeared in either the single run or the ~410-iteration stress log, and no `panic:`, `FATAL`, or
+`signal:` text appears anywhere in the captured output — i.e. nothing in this run's evidence
+points at the self-heal fallback itself. Per the user's explicit direction mid-session, this was
+not further chased (e.g. by re-running with `cwd` fixed) given the isolated run already
+documents an executed-and-recorded AC-1 attempt either way, and the retry-budget sizing below is
+based on the root-cause hypothesis (`runGitCommand`'s 30s timeout, confirmed independently in
+`research/features.md`) rather than empirical contended-completion timing this attempt didn't
+capture.
+
+**Retry-budget sizing consequence** (pre-mortem Failure #1): since neither repro captured real
+contended `git worktree add` completion timing, `worktreeAddRetryAttempts`/
+`worktreeAddRetryDelay` are sized as a materially larger bound than the unrelated
+`headSHARetryAttempts`/`headSHARetryDelay` precedent (60ms total) — 6 attempts × 300ms delay
+(1.5s total, with the loop able to observe the winner completing well before `runGitCommand`'s
+30s ceiling in the common case) — per plan.md Task 1.1.1a's fallback guidance for this exact
+scenario, rather than left at the unexamined 60ms default.
+
+**Post-fix confirmation (Story 2.1.2, 2026-08-24)**: identical isolated stress command re-run
+against post-fix HEAD (Ground-Truth Re-Query in place) — 1559 runs, 0 failures, clean exit 124
+for the full 90s budget. Since the pre-fix isolated run was already clean, this is a
+consistent-with-fix result, not a direct before/after flip (per the framing this doc's earlier
+note commits to). The six new deterministic regression tests
+(`TestSetupNewWorktree_SelfHeals_When_WorktreeAddFailsWithUnrecognizedError`,
+`TestSetupNewWorktree_SelfHeals_When_BranchCreatedByDelayedRaceWinner`,
+`TestSetupNewWorktree_HardFails_When_WorktreeAddErrorsAndBranchStillDoesNotExist`,
+`TestSetupFromExistingBranch_SelfHeals_When_WorktreeAddFailsWithUnrecognizedError`,
+`TestSetupFromExistingBranch_SelfHeals_When_WorktreeRegisteredByDelayedRaceWinner`,
+`TestSetupFromExistingBranch_HardFails_When_WorktreeAddErrorsAndBranchNotFoundAnywhere`) are the
+mechanism that actually pins the specific failure mode (an unrecognized error string reaching
+either self-heal layer) — the stress harness alone, isolated or not, can only probabilistically
+hit that mode and was never expected to give a hard guarantee either way.
