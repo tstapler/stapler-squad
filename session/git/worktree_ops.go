@@ -366,7 +366,14 @@ func (g *GitWorktree) findLiveWorktreeForBranch() (string, bool) {
 	return "", false
 }
 
-// setupNewWorktree creates a new worktree from HEAD
+// setupNewWorktree creates a new worktree from HEAD.
+//
+// Like setupFromExistingBranch (see its doc comment), setupNewWorktree is only ever
+// reached, in production, through Setup()/SetupLocked(), both of which serialize via
+// WithRepoWorktreeLock — the two-unlocked-goroutines race
+// TestSetupNewWorktree_SelfHeals_When_ConcurrentSpawnsRaceOnBranchCreate constructs cannot
+// occur through any real caller. The self-heal fallback below is still real
+// defense-in-depth: see ADR-001-ground-truth-requery-over-stderr-matching.md.
 func (g *GitWorktree) setupNewWorktree() error {
 	// Ensure worktrees directory exists
 	worktreesDir := filepath.Join(g.repoPath, "worktrees")
