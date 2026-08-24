@@ -1,9 +1,12 @@
 /**
- * webhook-triggers Epic 7.4 — trigger attribution badge on SessionDetailView.
+ * context-compression — "Restarted from:" lineage row on SessionDetailView's Info tab.
  *
- * Covers AC6: a session created by an automated trigger (cron/github_push/webhook)
- * shows a "Triggered by: {slug} ({trigger_type})" badge linking back to /triggers;
- * a session tied to a plain "manual" (@slug) Workflow does not.
+ * Covers UX acceptance criterion #10 (project_plans/context-compression/design/ux.md,
+ * "Lineage is inspectable or gracefully absent, never a broken link"): a session created
+ * via "Restart with summary" renders a `Restarted from:` row only when
+ * `session.restartedFromSessionId` is set — a clickable same-tab link to the source
+ * session's title when it still resolves in the live session list, or plain
+ * non-clickable text with "(no longer available)" when it doesn't.
  */
 import React from "react";
 import { render, screen } from "@testing-library/react";
@@ -11,7 +14,6 @@ import { SessionDetailView } from "../SessionDetailView";
 import { useSessionActions } from "@/lib/hooks/useSessionActions";
 import { SessionStatus, InstanceType, SessionType } from "@/gen/session/v1/types_pb";
 import type { Session } from "@/gen/session/v1/types_pb";
-import type { WorkflowProto } from "@/gen/session/v1/session_pb";
 
 jest.mock("next/dynamic", () => () => {
   return function DynamicStub() {
@@ -32,8 +34,8 @@ jest.mock("../SessionSummaryPanel", () => ({ SessionSummaryPanel: () => null }))
 // HandoffSummarySection (Info tab) embeds RestartWithSummaryButton, which
 // calls useSessionService -> useAnalytics -- unavailable without an
 // AnalyticsContextProvider wrapper, which this file's render tree doesn't
-// set up (it isn't relevant to the trigger-attribution badge, this file's
-// own concern).
+// set up (it isn't relevant to the restart-lineage row, this file's own
+// concern).
 jest.mock("../HandoffSummarySection", () => ({ HandoffSummarySection: () => null }));
 jest.mock("@/components/ui/ActionBar", () => ({
   ActionBar: ({ children, className }: { children: React.ReactNode; className?: string }) => (
@@ -60,11 +62,9 @@ jest.mock("@/lib/hooks/useShells", () => ({
     restartShell: jest.fn(), deleteShell: jest.fn(), updateShellStatus: jest.fn(), refetch: jest.fn(),
   }),
 }));
-
-let mockWorkflows: Partial<WorkflowProto>[] = [];
 jest.mock("@/lib/hooks/useWorkflows", () => ({
   useWorkflows: () => ({
-    workflows: mockWorkflows,
+    workflows: [],
     loading: false,
     error: null,
     createWorkflow: jest.fn(),
@@ -76,11 +76,11 @@ jest.mock("@/lib/hooks/useWorkflows", () => ({
   }),
 }));
 
-const makeSession = (workflowId: string): Session =>
+const makeSession = (overrides: Partial<Session>): Session =>
   ({
-    id: "sess-1",
-    title: "Test Session",
-    status: SessionStatus.STOPPED,
+    id: "sess-new",
+    title: "New Session",
+    status: SessionStatus.RUNNING,
     instanceType: InstanceType.MANAGED,
     sessionType: SessionType.DIRECTORY,
     path: "/tmp/test",
@@ -90,14 +90,21 @@ const makeSession = (workflowId: string): Session =>
     category: "",
     tags: [],
     externalMetadata: undefined,
-    workflowId,
-    workflowName: "Triage tickets",
+    workflowId: "",
+    restartedFromSessionId: "",
+    ...overrides,
   }) as unknown as Session;
 
-function renderView(session: Session) {
+function renderView(session: Session, allSessions: Session[] = []) {
   const actions = {} as ReturnType<typeof useSessionActions>;
   return render(
-    <SessionDetailView session={session} allSessions={[]} actions={actions} onClose={jest.fn()} initialTab="info" />
+    <SessionDetailView
+      session={session}
+      allSessions={allSessions}
+      actions={actions}
+      onClose={jest.fn()}
+      initialTab="info"
+    />
   );
 }
 
@@ -107,33 +114,42 @@ beforeAll(() => {
 afterAll(() => {
   jest.restoreAllMocks();
 });
-beforeEach(() => {
-  mockWorkflows = [];
-});
 
-describe("SessionDetailView — trigger attribution badge (Epic 7.4)", () => {
-  it("shows the attribution badge for a session created by an automated (webhook) trigger", () => {
-    mockWorkflows = [
-      { id: "wf-1", slug: "jira-ticket", triggerType: "webhook" } as WorkflowProto,
-    ];
-    renderView(makeSession("wf-1"));
-
-    const badge = screen.getByTestId("trigger-attribution-badge");
-    expect(badge).toHaveTextContent("Triggered by: jira-ticket (webhook)");
-    expect(badge).toHaveAttribute("href", "/triggers");
+describe("SessionDetailView — restart lineage row (context-compression UX AC#10)", () => {
+  it("does not render the row when the session was not created via restart", () => {
+    renderView(makeSession({ restartedFromSessionId: "" }));
+    expect(screen.queryByTestId("restarted-from-row")).not.toBeInTheDocument();
   });
 
-  it("does not show the attribution badge for a plain manual (@slug) workflow session", () => {
-    mockWorkflows = [
-      { id: "wf-2", slug: "my-workflow", triggerType: "manual" } as WorkflowProto,
-    ];
-    renderView(makeSession("wf-2"));
+  it("renders a clickable same-tab link to the source session's title when it still resolves", () => {
+    const source = makeSession({ id: "sess-source", title: "Fix flaky auth test" });
+    const restarted = makeSession({ id: "sess-new", restartedFromSessionId: "sess-source" });
+    renderView(restarted, [source]);
 
-    expect(screen.queryByTestId("trigger-attribution-badge")).not.toBeInTheDocument();
+    const row = screen.getByTestId("restarted-from-row");
+    expect(row).toHaveTextContent("Restarted from:");
+
+    const link = screen.getByTestId("restarted-from-link");
+    expect(link).toHaveTextContent("Fix flaky auth test");
+    expect(link.tagName).toBe("A");
+    expect(link).toHaveAttribute("href", "/?session=sess-source");
+    expect(link).not.toHaveAttribute("target");
+
+    expect(screen.queryByTestId("restarted-from-unavailable")).not.toBeInTheDocument();
   });
 
-  it("does not show the attribution badge for a session with no workflowId", () => {
-    renderView(makeSession(""));
-    expect(screen.queryByTestId("trigger-attribution-badge")).not.toBeInTheDocument();
+  it("renders plain, non-clickable text when the source session can no longer be resolved", () => {
+    const restarted = makeSession({ id: "sess-new", restartedFromSessionId: "sess-gone" });
+    renderView(restarted, []);
+
+    const row = screen.getByTestId("restarted-from-row");
+    expect(row).toHaveTextContent("Restarted from:");
+
+    const unavailable = screen.getByTestId("restarted-from-unavailable");
+    expect(unavailable).toHaveTextContent("sess-gone (no longer available)");
+    expect(unavailable.tagName).not.toBe("A");
+
+    expect(screen.queryByTestId("restarted-from-link")).not.toBeInTheDocument();
+    expect(screen.queryByRole("link")).not.toBeInTheDocument();
   });
 });

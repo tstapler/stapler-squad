@@ -268,6 +268,13 @@ type Instance struct {
 	Checkpoints      CheckpointList
 	ActiveCheckpoint string
 	ForkedFromID     string
+	// RestartedFromSessionID is the ID of the source session this session was
+	// restarted from (CreateSessionRequest.restart_from_session_id), empty for
+	// normally-created sessions. Distinct from ForkedFromID, which records
+	// checkpoint-based forking -- this lineage comes from Story 2.3.1's
+	// restart-from-session-id flow (CreateSession's restart-source resolution
+	// block in server/services/session_service.go).
+	RestartedFromSessionID string
 
 	// OneShot runs claude in -p mode; the session exits after the task completes.
 	OneShot bool
@@ -723,6 +730,14 @@ type InstanceOptions struct {
 	// When set, the session will start with --resume <id> flag.
 	ResumeId string
 
+	// RestartedFromSessionID is the ID of the source session this instance is
+	// being restarted from (CreateSessionRequest.restart_from_session_id).
+	// Recorded as lineage metadata only -- path derivation and the still-live
+	// guard are resolved by the CreateSession RPC handler before NewInstance
+	// is called; this field just carries the already-validated source ID
+	// through to the constructed Instance.
+	RestartedFromSessionID string
+
 	// OneShot runs claude in -p mode; the session exits after the task completes.
 	OneShot bool
 
@@ -880,6 +895,8 @@ func NewInstance(opts InstanceOptions) (*Instance, error) {
 		CLIFlags:        opts.CLIFlags,
 		ExtraArgs:       opts.ExtraArgs,
 		ExecutionTarget: opts.ExecutionTarget,
+		// Restart-from-session lineage (Story 2.3.1)
+		RestartedFromSessionID: opts.RestartedFromSessionID,
 	}
 	if instance.ExecutionTarget == nil {
 		instance.ExecutionTarget = LocalTarget{}

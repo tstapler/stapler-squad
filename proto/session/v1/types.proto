@@ -271,6 +271,9 @@ message Session {
 
   // Outcome of the most recent start/cold-restore decision. See ReviveOutcome.
   ReviveOutcome revive_outcome = 78;
+
+  // Empty unless this session was created via Restart-with-Summary.
+  string restarted_from_session_id = 79;
 }
 
 // SessionArtifacts holds structured artifacts extracted from the session's

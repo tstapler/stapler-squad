@@ -107,6 +107,15 @@ linters:
             - "!**/server/services/webhook_trigger_common.go"
             - "!**/server/services/github_webhook_handler_test.go"
             - "!**/server/services/generic_webhook_handler_test.go"
+            # handoff_summary_service_test.go legitimately needs raw ent access
+            # to construct precise fixtures (e.g. a stale GENERATING row with a
+            # controlled generation_started_at in the past) that the generator's
+            # public API has no way to set up — same justification already
+            # accepted for session_summary_service_test.go above. The production
+            # file (handoff_summary_service.go) does NOT need this exclusion —
+            # it was fixed to use session.HandoffSummary (a plain domain DTO)
+            # instead of importing session/ent directly.
+            - "!**/server/services/handoff_summary_service_test.go"
           deny:
             - pkg: "github.com/tstapler/stapler-squad/session/ent"
               desc: "server/services must not import session/ent directly; use domain DTOs from session package"

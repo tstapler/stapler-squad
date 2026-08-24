@@ -2249,6 +2249,161 @@ func TestSessionService_CreateSession_DelegatesToCreateManagedInstance_When_Hand
 }
 
 // --------------------------------------------------------------------------
+// CreateSession — restart_from_session_id (Story 2.3.1): path derivation,
+// lineage, and the still-live guard.
+// --------------------------------------------------------------------------
+
+// TestCreateSession_RestartFromSessionId_DerivesPathFromSource verifies that
+// when restart_from_session_id is set and path is left empty, the new
+// session's path is resolved from the (persisted, not live) source session's
+// Path, and the created session records RestartedFromSessionId.
+func TestCreateSession_RestartFromSessionId_DerivesPathFromSource(t *testing.T) {
+	fix := setupForkTestFixture(t)
+	t.Cleanup(fix.cleanup)
+
+	sourcePath := t.TempDir()
+	require.NoError(t, fix.storage.AddInstance(&session.Instance{
+		Title:   "restart-source",
+		Path:    sourcePath,
+		Program: "claude",
+		Status:  session.Paused,
+	}))
+
+	resp, err := fix.svc.CreateSession(context.Background(), connect.NewRequest(&sessionv1.CreateSessionRequest{
+		Title:                "restarted-session",
+		Path:                 "",
+		Program:              "claude",
+		RestartFromSessionId: "restart-source",
+	}))
+	require.NoError(t, err)
+	t.Cleanup(func() { destroyCreatedSession(t, fix.svc, resp.Msg.Session.Id) })
+
+	assert.Equal(t, sourcePath, resp.Msg.Session.Path, "path should be derived from the source session")
+	assert.Equal(t, "restart-source", resp.Msg.Session.RestartedFromSessionId)
+}
+
+// TestCreateSession_RestartFromSessionId_ExplicitPathWins verifies that an
+// explicit request Path always wins over the restart-derived path -- it must
+// never be silently overridden, even though lineage is still recorded.
+func TestCreateSession_RestartFromSessionId_ExplicitPathWins(t *testing.T) {
+	fix := setupForkTestFixture(t)
+	t.Cleanup(fix.cleanup)
+
+	sourcePath := t.TempDir()
+	require.NoError(t, fix.storage.AddInstance(&session.Instance{
+		Title:   "restart-source-explicit",
+		Path:    sourcePath,
+		Program: "claude",
+		Status:  session.Paused,
+	}))
+
+	explicitPath := t.TempDir()
+	require.NotEqual(t, sourcePath, explicitPath)
+
+	resp, err := fix.svc.CreateSession(context.Background(), connect.NewRequest(&sessionv1.CreateSessionRequest{
+		Title:                "restarted-session-explicit-path",
+		Path:                 explicitPath,
+		Program:              "claude",
+		RestartFromSessionId: "restart-source-explicit",
+	}))
+	require.NoError(t, err)
+	t.Cleanup(func() { destroyCreatedSession(t, fix.svc, resp.Msg.Session.Id) })
+
+	assert.Equal(t, explicitPath, resp.Msg.Session.Path, "explicit path must win over the restart-derived path")
+	assert.Equal(t, "restart-source-explicit", resp.Msg.Session.RestartedFromSessionId, "lineage must still be recorded even when path is explicit")
+}
+
+// TestCreateSession_RestartFromSessionId_MissingSourceReturnsNotFound verifies
+// that a restart_from_session_id naming a session that exists neither live nor
+// in storage returns CodeNotFound naming the missing source -- not a silent
+// fallback (e.g. to cwd).
+func TestCreateSession_RestartFromSessionId_MissingSourceReturnsNotFound(t *testing.T) {
+	fix := setupForkTestFixture(t)
+	t.Cleanup(fix.cleanup)
+
+	_, err := fix.svc.CreateSession(context.Background(), connect.NewRequest(&sessionv1.CreateSessionRequest{
+		Title:                "restarted-session-missing-source",
+		Path:                 t.TempDir(),
+		Program:              "claude",
+		RestartFromSessionId: "does-not-exist",
+	}))
+	require.Error(t, err)
+
+	var connectErr *connect.Error
+	require.ErrorAs(t, err, &connectErr)
+	assert.Equal(t, connect.CodeNotFound, connectErr.Code())
+	assert.Contains(t, err.Error(), "does-not-exist")
+}
+
+// TestCreateSession_RestartFromSessionId_RejectsStillLiveSourceWithoutConfirmation
+// verifies the still-live guard: when the source session named by
+// restart_from_session_id is currently live (found via FindLiveInstance) and
+// confirm_restart_with_live_source is not set, CreateSession returns
+// CodeFailedPrecondition and creates nothing.
+func TestCreateSession_RestartFromSessionId_RejectsStillLiveSourceWithoutConfirmation(t *testing.T) {
+	fix := setupForkTestFixture(t)
+	t.Cleanup(fix.cleanup)
+
+	liveSource := &session.Instance{
+		Title:   "restart-source-live",
+		Path:    t.TempDir(),
+		Program: "claude",
+		Status:  session.Active,
+	}
+	addInstanceToPoller(fix.poller, liveSource)
+
+	_, err := fix.svc.CreateSession(context.Background(), connect.NewRequest(&sessionv1.CreateSessionRequest{
+		Title:                "restarted-session-rejected",
+		Path:                 t.TempDir(),
+		Program:              "claude",
+		RestartFromSessionId: "restart-source-live",
+	}))
+	require.Error(t, err)
+
+	var connectErr *connect.Error
+	require.ErrorAs(t, err, &connectErr)
+	assert.Equal(t, connect.CodeFailedPrecondition, connectErr.Code())
+	assert.Contains(t, err.Error(), "restart-source-live")
+
+	data, listErr := fix.storage.ListInstanceData()
+	require.NoError(t, listErr)
+	for _, d := range data {
+		assert.NotEqual(t, "restarted-session-rejected", d.Title, "no session should be created when the still-live guard rejects the request")
+	}
+}
+
+// TestCreateSession_RestartFromSessionId_ProceedsWhenLiveSourceConfirmed
+// verifies that the same still-live source, with
+// confirm_restart_with_live_source: true, lets CreateSession proceed normally
+// -- the explicit confirmation overrides the guard.
+func TestCreateSession_RestartFromSessionId_ProceedsWhenLiveSourceConfirmed(t *testing.T) {
+	fix := setupForkTestFixture(t)
+	t.Cleanup(fix.cleanup)
+
+	sourcePath := t.TempDir()
+	liveSource := &session.Instance{
+		Title:   "restart-source-live-confirmed",
+		Path:    sourcePath,
+		Program: "claude",
+		Status:  session.Active,
+	}
+	addInstanceToPoller(fix.poller, liveSource)
+
+	resp, err := fix.svc.CreateSession(context.Background(), connect.NewRequest(&sessionv1.CreateSessionRequest{
+		Title:                        "restarted-session-confirmed",
+		Path:                         "",
+		Program:                      "claude",
+		RestartFromSessionId:         "restart-source-live-confirmed",
+		ConfirmRestartWithLiveSource: true,
+	}))
+	require.NoError(t, err)
+	t.Cleanup(func() { destroyCreatedSession(t, fix.svc, resp.Msg.Session.Id) })
+
+	assert.Equal(t, sourcePath, resp.Msg.Session.Path, "path should be derived from the confirmed live source")
+	assert.Equal(t, "restart-source-live-confirmed", resp.Msg.Session.RestartedFromSessionId)
+}
+
+// --------------------------------------------------------------------------
 // DeleteSession + CancelSession ordering (F10)
 // --------------------------------------------------------------------------
 

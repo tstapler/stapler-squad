@@ -570,3 +570,37 @@ func (c CapacityConfig) CapacityConfigOrDefault() CapacityConfig {
 	}
 	return out
 }
+
+// HandoffSummaryConfig holds configuration for the restart-with-handoff-summary feature.
+type HandoffSummaryConfig struct {
+	// Enabled toggles the feature. nil defaults to enabled, matching
+	// AutoSpawnReadyItems's pattern — see EnabledOrDefault. A plain `bool` here
+	// would make "explicitly false" indistinguishable from "key absent" (e.g. a
+	// config.json written before this feature existed), silently defaulting
+	// every pre-existing installation to disabled instead of the stated
+	// default of enabled.
+	Enabled *bool `json:"enabled,omitempty"`
+	// MaxMiddleExcerptTokens caps the proportional middle-transcript excerpt fed
+	// to the summarizer. Default: 12000.
+	MaxMiddleExcerptTokens int `json:"max_middle_excerpt_tokens,omitempty"`
+}
+
+// EnabledOrDefault reports whether the restart-with-handoff-summary feature is
+// enabled. Defaults to true (nil, or unset config.json key); pass explicit
+// false to disable.
+func (c HandoffSummaryConfig) EnabledOrDefault() bool {
+	if c.Enabled == nil {
+		return true
+	}
+	return *c.Enabled
+}
+
+// HandoffSummaryConfigOrDefault returns a HandoffSummaryConfig with standard
+// defaults applied to zero fields.
+func (c HandoffSummaryConfig) HandoffSummaryConfigOrDefault() HandoffSummaryConfig {
+	out := c
+	if out.MaxMiddleExcerptTokens <= 0 {
+		out.MaxMiddleExcerptTokens = 12000
+	}
+	return out
+}

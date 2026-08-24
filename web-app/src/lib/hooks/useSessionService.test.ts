@@ -445,3 +445,64 @@ describe("useSessionService createSession remote passthrough", () => {
     expect(sentRequest.remote).toBeUndefined();
   });
 });
+
+// ===== createSession restartFromSessionId passthrough (Story 3.2.1) =====
+//
+// useSessionService.ts's createSession builds an explicit allowlisted object
+// literal for the wire call rather than spreading its Partial<CreateSessionRequest>
+// argument -- any field not named in that literal is silently dropped before
+// reaching ConnectRPC. This asserts on the mocked RPC client's actual call args
+// (not just that the hook wrapper resolved) so a regression that re-drops the
+// field from the literal fails this test even though the hook itself was still
+// invoked correctly.
+describe("useSessionService createSession restartFromSessionId passthrough", () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockCreateSession.mockResolvedValue({ session: undefined });
+  });
+
+  it("useSessionService_createSession_should_ForwardRestartFromSessionIdToRpcClient_When_Provided", async () => {
+    const store = makeTestStore();
+    const { result } = renderHook(
+      () => useSessionService({ autoWatch: false, enabled: true }),
+      { wrapper: makeWrapper(store) }
+    );
+
+    await act(async () => {
+      await result.current.createSession({
+        title: "restart session",
+        path: "/repo",
+        prompt: "summary text",
+        restartFromSessionId: "source-session-123",
+      });
+    });
+
+    expect(mockCreateSession).toHaveBeenCalledWith(
+      expect.objectContaining({ restartFromSessionId: "source-session-123" }),
+      expect.anything()
+    );
+  });
+
+  it("useSessionService_createSession_should_ForwardConfirmRestartWithLiveSourceToRpcClient_When_Provided", async () => {
+    const store = makeTestStore();
+    const { result } = renderHook(
+      () => useSessionService({ autoWatch: false, enabled: true }),
+      { wrapper: makeWrapper(store) }
+    );
+
+    await act(async () => {
+      await result.current.createSession({
+        title: "restart session",
+        path: "/repo",
+        prompt: "summary text",
+        restartFromSessionId: "source-session-123",
+        confirmRestartWithLiveSource: true,
+      });
+    });
+
+    expect(mockCreateSession).toHaveBeenCalledWith(
+      expect.objectContaining({ confirmRestartWithLiveSource: true }),
+      expect.anything()
+    );
+  });
+});

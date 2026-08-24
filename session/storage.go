@@ -110,6 +110,8 @@ type InstanceData struct {
 	Checkpoints      CheckpointList `json:"checkpoints,omitempty"`
 	ActiveCheckpoint string         `json:"active_checkpoint,omitempty"`
 	ForkedFromID     string         `json:"forked_from_id,omitempty"`
+	// RestartedFromSessionID — see Instance.RestartedFromSessionID's doc comment.
+	RestartedFromSessionID string `json:"restarted_from_session_id,omitempty"`
 
 	// History file linkage for cold restore
 	HistoryFilePath string `json:"history_file_path,omitempty"`

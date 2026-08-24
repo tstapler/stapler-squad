@@ -72,6 +72,8 @@ func InstanceToProto(inst *session.Instance, workflowNames map[string]string) *s
 		LastPrStatusCheck:     timestamppb.New(inst.LastPRStatusCheck),
 		WorkspaceKey:          inst.WorkspaceKey(),
 		LaunchCommand:         inst.LaunchCommand,
+		// Restart-from-session lineage (Story 2.3.1)
+		RestartedFromSessionId: snap.RestartedFromSessionID,
 	}
 
 	// Convert artifact data if available

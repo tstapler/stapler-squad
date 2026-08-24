@@ -111,6 +111,8 @@ type InstanceSnapshot struct {
 	Checkpoints      CheckpointList // defensive deep copy — see buildSnapshot
 	ActiveCheckpoint string
 	ForkedFromID     string
+	// RestartedFromSessionID — see Instance.RestartedFromSessionID's doc comment.
+	RestartedFromSessionID string
 
 	// Misc config
 	OneShot                    bool
@@ -199,6 +201,7 @@ func buildSnapshot(i *Instance) *InstanceSnapshot {
 		Checkpoints:                append(CheckpointList(nil), i.Checkpoints...),
 		ActiveCheckpoint:           i.ActiveCheckpoint,
 		ForkedFromID:               i.ForkedFromID,
+		RestartedFromSessionID:     i.RestartedFromSessionID,
 		OneShot:                    i.OneShot,
 		Hidden:                     i.Hidden,
 		ProjectID:                  i.ProjectID,

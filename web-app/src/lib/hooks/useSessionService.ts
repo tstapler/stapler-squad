@@ -310,6 +310,8 @@ export function useSessionService(
             aliasName: request.aliasName ?? "",
             cliFlags: request.cliFlags ?? "",
             extraArgs: request.extraArgs ?? [],
+            restartFromSessionId: request.restartFromSessionId,
+            confirmRestartWithLiveSource: request.confirmRestartWithLiveSource,
           },
           { timeoutMs: CREATE_SESSION_TIMEOUT_MS }
         );
