@@ -10,20 +10,58 @@ on:
       - 'go.mod'
       - 'go.sum'
       - '.github/workflows/mcp-integration.yml'
+  # No paths: filter here (unlike push above) — branch protection requires
+  # this job's "MCP Integration Tests" status check, and a workflow that
+  # never triggers for a given PR never posts ANY status for that check,
+  # leaving GitHub's required-check gate permanently "expected, never
+  # reported" instead of skipped-and-passing — blocking merge forever
+  # regardless of what else passed (see PR #618/#619, and build.yml's
+  # matching detect-changes gate for the "Test" check hitting the same
+  # issue). A job *skipped* via `if:` counts as a passing status for
+  # required checks (documented GitHub Actions behavior), so detect-changes
+  # below moves the same path-relevance check from the trigger into a job
+  # condition instead. push (above) keeps its paths: filter untouched — a
+  # push to main that never triggers this workflow isn't blocked by
+  # anything, since there's no PR being merged for it to gate.
   pull_request:
     branches: [ main ]
-    paths:
-      - 'server/mcp/**'
-      - 'server/services/**'
-      - 'main.go'
-      - 'go.mod'
-      - 'go.sum'
-      - '.github/workflows/mcp-integration.yml'
 
 jobs:
+  # PR-only relevance gate — see the pull_request trigger's comment above.
+  # Mirrors the same path list the old pull_request paths: filter used to have.
+  detect-changes:
+    name: Detect Relevant Changes
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    outputs:
+      relevant: ${{ steps.detect.outputs.relevant }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Detect server/mcp, server/services, or Go module changes
+        id: detect
+        run: |
+          CHANGED=$(git diff --name-only "origin/${{ github.base_ref }}...HEAD")
+          echo "Changed files:"
+          echo "$CHANGED"
+          if echo "$CHANGED" | grep -qE '^server/mcp/|^server/services/|^main\.go$|^go\.(mod|sum)$|^\.github/workflows/mcp-integration\.yml$'; then
+            echo "relevant=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "relevant=false" >> "$GITHUB_OUTPUT"
+          fi
+
   mcp-integration:
     name: MCP Integration Tests
     runs-on: ubuntu-latest
+    needs: detect-changes
+    # always() is required, not decorative — see build.yml's `prepare` job for
+    # the full explanation. Without it, this job silently skips on every push
+    # to main/workflow_dispatch (detect-changes is skipped there too, and a
+    # skipped needs: job fails the implicit success() check any if: without
+    # a status function otherwise gets ANDed with).
+    if: always() && (github.event_name != 'pull_request' || needs.detect-changes.outputs.relevant == 'true')
 
     steps:
       - uses: actions/checkout@v4
