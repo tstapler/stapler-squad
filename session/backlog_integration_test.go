@@ -277,7 +277,7 @@ func TestBacklogIntegration_ArchiveRecordsStatusEvent(t *testing.T) {
 	require.NoError(t, err)
 
 	// Archive a freshly-created item (no prior transitions/events) straight from "idea".
-	_, err = storage.ArchiveBacklogItem(ctx, createdItem.ID)
+	_, err = storage.ArchiveBacklogItem(ctx, createdItem.ID, nil, TriggeredByUser, "")
 	require.NoError(t, err)
 
 	fetchedItem, err := storage.GetBacklogItem(ctx, createdItem.ID)

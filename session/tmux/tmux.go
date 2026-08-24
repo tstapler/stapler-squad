@@ -74,23 +74,28 @@ type TmuxSession struct {
 	// across closePTYAndAttachCmd and the diagnostic goroutine in RestoreWithWorkDir.
 	// Reset to a new *sync.Once each time a new attachCmd is assigned.
 	attachCmdWaitOnce *sync.Once
-	// ptmxMu guards the PTY triple: ptmx, attachCmd, and attachCmdWaitOnce, which must
-	// always be read/written together (all three describe one attach "generation").
-	// Leaf lock: never acquire ptmxMu while already holding controlModeSubMu,
-	// controlModeStartMu, cmdSendMu, or recoveryMu. detachMutex IS held across ptmxMu
-	// critical sections in both Detach() and DetachSafely() (both call
-	// closePTYAndAttachCmd(), and Detach() also calls Restore() -> RestoreWithWorkDir(),
-	// while still holding detachMutex) -- that nesting is fine because the order is
-	// always detachMutex (outer) -> ptmxMu (inner/leaf) and never reversed; ptmxMu's own
-	// critical sections never call back into detachMutex. Cross-package callers reach
-	// GetPTY() via TmuxProcessManager/TmuxBackend/Instance.GetPTYReader() without holding
-	// any Instance-level lock across the call (Instance.pmMu only guards lazy-init of the
-	// process-manager reference, not calls through it) -- and since ptmxMu never calls back
-	// into any Instance-level lock, no reversed-order deadlock is structurally possible
-	// regardless of what the caller holds.
+	// ptmxMu guards the PTY triple (ptmx, attachCmd, attachCmdWaitOnce) plus the
+	// generation/closed fields below that make install races safe. Leaf lock: never
+	// acquire while already holding controlModeSubMu, controlModeStartMu, cmdSendMu, or
+	// recoveryMu; detachMutex is the only lock ever held across it (outer -> inner, never
+	// reversed). Full lock-order proof: ADR-001 (project_plans/tmux-ptmx-race-fix/decisions/ADR-001-deadlock-mutex-for-ptmx-triple.md).
 	ptmxMu deadlock.Mutex
-	// monitor monitors the tmux pane content and sends signals to the UI when it's status changes
-	monitor *statusMonitor
+	// ptyGen is bumped on every PTY triple change (install or clear). AttachToExisting/
+	// RestoreWithWorkDir snapshot it before their blocking Start() call and pass it to
+	// tryInstallPTYTriple, so a concurrent installer or Close() is detected instead of
+	// silently overwritten. Guarded by ptmxMu.
+	ptyGen uint64
+	// ptyClosed is set true by Close() and never reset. Once true, tryInstallPTYTriple
+	// permanently refuses to install a new PTY triple -- a late-arriving
+	// AttachToExisting()/RestoreWithWorkDir() PTY racing a concurrent Close() must be
+	// torn down, not installed after teardown already ran. Guarded by ptmxMu.
+	ptyClosed bool
+	// monitor monitors the tmux pane content and sends signals to the UI when it's status
+	// changes. atomic.Pointer, not a plain field: Start/RestoreWithWorkDir/AttachToExisting
+	// can now run concurrently for the same session (surfaced by
+	// TestAttachToExisting_ConcurrentCalls_ExactlyOnePTYSurvives), so a plain field write
+	// here would itself be a data race even with the PTY triple fixed.
+	monitor atomic.Pointer[statusMonitor]
 	// bannerFilter detects and filters tmux status line banners from terminal output
 	bannerFilter *BannerFilter
 
@@ -1041,24 +1046,34 @@ func (t *TmuxSession) AttachToExisting() error {
 		return fmt.Errorf("tmux session '%s' does not exist", t.sanitizedName)
 	}
 
-	// Create PTY connection via tmux attach-session.
-	// Check-then-act: not atomic with respect to a concurrent AttachToExisting(),
-	// RestoreWithWorkDir(), or Close() call on the same session -- each individual
-	// field access below is memory-safe via ptmxMu, but two concurrent callers can
-	// still both observe nil and both install a PTY. Known limitation, not a data
-	// race (go test -race cannot catch it); tracked separately as backlog item
-	// 0f4b1300-d667-437b-b51f-89d81a668693.
-	if t.lockedPTMX() == nil {
+	// Create PTY connection via tmux attach-session. Check-then-act, made race-free via
+	// a snapshot/blocking-start/compare-and-swap-install sequence: the ptyFactory.Start()
+	// call runs unlocked (it can block), and tryInstallPTYTriple only installs the result
+	// if no other AttachToExisting()/RestoreWithWorkDir() install won the race and Close()
+	// hasn't torn the session down in the meantime.
+	file, gen, closed := t.ptySnapshot()
+	if closed {
+		return fmt.Errorf("tmux session '%s' is closed", t.sanitizedName)
+	}
+	if file == nil {
 		ptmx, cmd, err := t.ptyFactory.Start(t.buildAttachCommand())
 		if err != nil {
 			return fmt.Errorf("failed to attach PTY to session '%s': %w", t.sanitizedName, err)
 		}
-		t.setPTYTriple(ptmx, cmd, new(sync.Once)) // CRITICAL: Save command so we can kill it on cleanup
-		log.Info("successfully attached PTY to existing tmux session", "session", t.sanitizedName, "pid", cmd.Process.Pid)
+		if ok, _, closedNow := t.tryInstallPTYTriple(gen, ptmx, cmd, new(sync.Once)); ok {
+			log.Info("successfully attached PTY to existing tmux session", "session", t.sanitizedName, "pid", cmd.Process.Pid)
+		} else {
+			// Lost the race: another install (or Close()) won. Discard our own PTY/process
+			// instead of leaking them -- the winner's PTY (if any) is already in place.
+			closePTYTriple(ptmx, cmd, nil, t.sanitizedName)
+			if closedNow {
+				return fmt.Errorf("tmux session '%s' was closed while attaching", t.sanitizedName)
+			}
+		}
 	}
 
 	// Set up status monitor
-	t.monitor = newStatusMonitor()
+	t.monitor.Store(newStatusMonitor())
 
 	return nil
 }
@@ -1178,11 +1193,11 @@ func (t *TmuxSession) setRemainOnExit() {
 // failed with a clear status, not silently retried against a guessed directory.
 var ErrWorkDirMissing = errors.New("session working directory missing")
 
-// validateWorkDir rejects an empty or nonexistent working directory instead of
-// letting a caller silently fall back to a guessed directory (e.g. os.Getwd(),
-// which for a long-running server process is often $HOME) — see start() and
-// RestoreWithWorkDir()'s recreate path.
-func validateWorkDir(workDir string) error {
+// ValidateWorkDir rejects an empty or nonexistent working directory instead
+// of letting a caller silently fall back to a guessed one (e.g. os.Getwd(),
+// often $HOME for a long-running server). Exported for reuse by
+// session/tymux's validateWorkDir wrapper.
+func ValidateWorkDir(workDir string) error {
 	if workDir == "" {
 		return fmt.Errorf("working directory not set: %w", ErrWorkDirMissing)
 	}
@@ -1270,7 +1285,7 @@ func (t *TmuxSession) start(workDir string, setupCleanup bool, cleanup *CleanupF
 		return nil
 	}
 
-	if err := validateWorkDir(workDir); err != nil {
+	if err := ValidateWorkDir(workDir); err != nil {
 		return fmt.Errorf("cannot start tmux session %s: %w", t.sanitizedName, err)
 	}
 
@@ -1416,7 +1431,7 @@ func (t *TmuxSession) start(workDir string, setupCleanup bool, cleanup *CleanupF
 	t.setRemainOnExit()
 
 	// Set up monitoring for session status tracking
-	t.monitor = newStatusMonitor()
+	t.monitor.Store(newStatusMonitor())
 
 	// Set up cleanup if requested
 	if setupCleanup && cleanup != nil {
@@ -1500,15 +1515,15 @@ func (t *TmuxSession) EnsureRemoteSession(ctx context.Context, workDir string) e
 	}
 	log.Info("remote tmux session not found, will create", "session", t.sanitizedName)
 
-	// NOT validateWorkDir: that helper's os.Stat(workDir) checks THIS PROCESS's
+	// NOT ValidateWorkDir: that helper's os.Stat(workDir) checks THIS PROCESS's
 	// local filesystem, which is the right check for the local start() path
-	// (validateWorkDir's other two call sites) but wrong here -- workDir is a
+	// (ValidateWorkDir's other two call sites) but wrong here -- workDir is a
 	// path on the remote host, which this process cannot os.Stat at all. A
 	// remote path that happens to also exist locally (e.g. this package's own
 	// tests, whose "remote" is a co-located test sshd exec'ing against the real
 	// local filesystem) would pass either check, silently masking the bug for
 	// every test written against that pattern; a genuinely different remote
-	// path would always fail validateWorkDir's local stat regardless of whether
+	// path would always fail ValidateWorkDir's local stat regardless of whether
 	// it exists on the actual remote host. Checked via the runner instead,
 	// mirroring RemoteWorktreeOps.CreateWorktree's own remote `test -d`
 	// base_path check (session/git/remote_worktree.go).
@@ -1610,7 +1625,7 @@ func (t *TmuxSession) RestoreWithWorkDir(workDir string) error {
 			// long-running server process is often $HOME) — a wrong guess silently
 			// reconnects the session to the wrong workspace. Fail loudly instead so
 			// the caller can surface a clear status to the user.
-			if err := validateWorkDir(workDir); err != nil {
+			if err := ValidateWorkDir(workDir); err != nil {
 				return fmt.Errorf("cannot recreate tmux session %s: %w", t.sanitizedName, err)
 			}
 
@@ -1663,15 +1678,20 @@ func (t *TmuxSession) RestoreWithWorkDir(workDir string) error {
 	// Always close any existing PTY before creating a new one: the old attach-session may have
 	// exited (returning EIO on reads) but left t.ptmx non-nil, which would cause the new
 	// response stream to immediately get EIO. Closing and reopening guarantees a live connection.
-	// Check-then-act: see AttachToExisting's identical comment above (backlog item
-	// 0f4b1300-d667-437b-b51f-89d81a668693) -- not atomic against a concurrent
-	// AttachToExisting()/RestoreWithWorkDir()/Close() call on the same session.
-	if t.lockedPTMX() != nil {
+	// Check-then-act, made race-free the same way as AttachToExisting: snapshot the slot,
+	// run the blocking ptyFactory.StartWithSize() unlocked, then compare-and-swap install --
+	// see tryInstallPTYTriple's doc comment.
+	const ptyMaxRetries = 3
+	var lastPTYErr error
+	file, gen, closed := t.ptySnapshot()
+	if file != nil && !closed {
 		_ = t.closePTYAndAttachCmd()
+		file, gen, closed = t.ptySnapshot()
 	}
-	if t.lockedPTMX() == nil {
-		const ptyMaxRetries = 3
-		var lastPTYErr error
+	switch {
+	case closed:
+		lastPTYErr = fmt.Errorf("tmux session '%s' is closed", t.sanitizedName)
+	case file == nil:
 		for attempt := 0; attempt < ptyMaxRetries; attempt++ {
 			if attempt > 0 {
 				delay := time.Duration(100*(1<<uint(attempt-1))) * time.Millisecond
@@ -1692,7 +1712,18 @@ func (t *TmuxSession) RestoreWithWorkDir(workDir string) error {
 				continue
 			}
 			waitOnce := new(sync.Once)
-			t.setPTYTriple(ptmx, attachCmd, waitOnce) // CRITICAL: track attachCmd so it can be killed on cleanup
+			ok, _, closedNow := t.tryInstallPTYTriple(gen, ptmx, attachCmd, waitOnce)
+			if !ok {
+				// Lost the race: another install (or Close()) won. Discard our own
+				// PTY/process instead of leaking them.
+				closePTYTriple(ptmx, attachCmd, waitOnce, t.sanitizedName)
+				if closedNow {
+					lastPTYErr = fmt.Errorf("tmux session '%s' was closed while attaching", t.sanitizedName)
+				} else {
+					lastPTYErr = nil // another install won; a PTY is already in place
+				}
+				break
+			}
 			log.Info("successfully restored PTY connection for tmux session", "session", t.sanitizedName)
 			// Diagnostic: watch for unexpected early exit of the attach process.
 			// Uses the same sync.Once as closePTYAndAttachCmd so Wait is called exactly once.
@@ -1704,14 +1735,17 @@ func (t *TmuxSession) RestoreWithWorkDir(workDir string) error {
 			lastPTYErr = nil
 			break
 		}
-		if lastPTYErr != nil {
-			// Graceful degradation - session can still be viewed via tmux capture-pane,
-			// but PTY-based operations (resizing, SendKeys, controller) will be unavailable.
-			log.Warn("PTY initialization failed for session after all attempts", "session", t.sanitizedName, "attempts", ptyMaxRetries, "err", lastPTYErr)
-		}
+	default:
+		// file != nil && !closed: a concurrent AttachToExisting/RestoreWithWorkDir already
+		// installed a PTY between our close-then-reread above -- defer to the winner, nothing to do.
+	}
+	if lastPTYErr != nil {
+		// Graceful degradation - session can still be viewed via tmux capture-pane,
+		// but PTY-based operations (resizing, SendKeys, controller) will be unavailable.
+		log.Warn("PTY initialization failed for session after all attempts", "session", t.sanitizedName, "attempts", ptyMaxRetries, "err", lastPTYErr)
 	}
 
-	t.monitor = newStatusMonitor()
+	t.monitor.Store(newStatusMonitor())
 	return nil
 }
 
@@ -1788,8 +1822,14 @@ func (t *TmuxSession) HasUpdated() (updated bool, hasPrompt bool, content string
 	// Only set hasPrompt for claude and aider. Use these strings to check for a prompt.
 	hasPrompt = t.detectPromptInContent(contentWithoutStatusLine)
 
-	if !bytes.Equal(t.monitor.hash(contentWithoutStatusLine), t.monitor.prevOutputHash) {
-		t.monitor.prevOutputHash = t.monitor.hash(contentWithoutStatusLine)
+	mon := t.monitor.Load()
+	if mon == nil {
+		// No monitor installed yet (start()/AttachToExisting()/RestoreWithWorkDir() hasn't
+		// run) -- nothing to compare against.
+		return false, false, ""
+	}
+	if !bytes.Equal(mon.hash(contentWithoutStatusLine), mon.prevOutputHash) {
+		mon.prevOutputHash = mon.hash(contentWithoutStatusLine)
 		return true, hasPrompt, content
 	}
 	return false, hasPrompt, content
@@ -1915,12 +1955,9 @@ func (t *TmuxSession) Attach() (chan struct{}, error) {
 	// The 2nd one returns when you press escape to Detach. It doesn't need to be
 	// in the waitgroup because is the goroutine doing the Detaching; it waits for
 	// all the other ones.
-	// Snapshot once, not re-fetched per-loop like the stdin-forward goroutine below:
-	// io.Copy blocks on one reader for its whole (blocking) call, matching the pre-fix
-	// code's implicit one-time argument evaluation. This intentionally does NOT pick up
-	// a mid-session Restore()/setPTYTriple() swap -- that asymmetry with the write side
-	// is a pre-existing limitation (not introduced by ptmxMu), tracked for a possible
-	// future fix in project_plans/tmux-ptmx-race-fix/implementation/pre-mortem.md finding #5.
+	// Snapshot once (unlike the stdin-forward goroutine below): io.Copy blocks on one
+	// reader for its whole call, so it won't pick up a mid-session Restore() PTY swap --
+	// pre-existing asymmetry with the write side, tracked in pre-mortem.md finding #5.
 	ptmxForCopy := t.lockedPTMX()
 	go func() {
 		defer t.wg.Done()
@@ -2132,44 +2169,54 @@ func (t *TmuxSession) lockedPTMX() *os.File {
 	return t.ptmx // allow-direct-ptmx-access
 }
 
-// setPTYTriple atomically installs a new PTY triple (one attach generation).
-func (t *TmuxSession) setPTYTriple(file *os.File, cmd *exec.Cmd, waitOnce *sync.Once) {
+// ptySnapshot returns the current PTY triple's file, generation, and closed state under
+// ptmxMu. Used by AttachToExisting/RestoreWithWorkDir's check-then-act sequence: the
+// caller inspects file/closed, and -- if it needs to install a new triple -- runs the
+// blocking ptyFactory.Start()/StartWithSize() call unlocked before passing gen to
+// tryInstallPTYTriple to install the result race-free.
+func (t *TmuxSession) ptySnapshot() (file *os.File, gen uint64, closed bool) {
 	t.ptmxMu.Lock()
 	defer t.ptmxMu.Unlock()
-	t.ptmx = file                  // allow-direct-ptmx-access
-	t.attachCmd = cmd              // allow-direct-ptmx-access
-	t.attachCmdWaitOnce = waitOnce // allow-direct-ptmx-access
+	return t.ptmx, t.ptyGen, t.ptyClosed // allow-direct-ptmx-access
 }
 
-// clearPTYTriple atomically captures and clears the PTY triple, returning the
-// captured values so the caller can run blocking cleanup (Close/Kill/Wait) outside
-// the lock. Safe to call even if the triple is already nil (returns nils). Clears
-// all three fields unconditionally -- pre-fix, closePTYAndAttachCmd only nilled
-// attachCmd/attachCmdWaitOnce inside the `attachCmd.Process != nil` branch, so an
-// attachCmd with a nil Process (shouldn't happen via the normal write sites, which
-// only install a triple after ptyFactory.Start/StartWithSize succeeds) would have
-// been left stale. Clearing unconditionally here closes that edge case rather than
-// reproducing it.
+// tryInstallPTYTriple installs a new PTY triple only if ptyGen still matches
+// expectedGen (no other install/clear raced it) and the session isn't closed; it bumps
+// ptyGen on success. On failure the caller must close its own now-orphaned file/cmd via
+// closePTYTriple instead of leaking them.
+func (t *TmuxSession) tryInstallPTYTriple(expectedGen uint64, file *os.File, cmd *exec.Cmd, waitOnce *sync.Once) (ok bool, currentFile *os.File, closed bool) {
+	t.ptmxMu.Lock()
+	defer t.ptmxMu.Unlock()
+	if t.ptyClosed {
+		return false, nil, true
+	}
+	if t.ptyGen != expectedGen {
+		return false, t.ptmx, false // allow-direct-ptmx-access
+	}
+	t.ptmx, t.attachCmd, t.attachCmdWaitOnce = file, cmd, waitOnce // allow-direct-ptmx-access
+	t.ptyGen++
+	return true, file, false
+}
+
+// clearPTYTriple atomically captures and clears the PTY triple (safe on an already-nil
+// triple) so the caller can run blocking cleanup outside the lock. Clears all three
+// fields unconditionally, closing an edge case where a stale attachCmd could survive.
+// Also bumps ptyGen, invalidating any in-flight snapshot taken before this clear.
 func (t *TmuxSession) clearPTYTriple() (file *os.File, cmd *exec.Cmd, waitOnce *sync.Once) {
 	t.ptmxMu.Lock()
 	defer t.ptmxMu.Unlock()
 	file, cmd, waitOnce = t.ptmx, t.attachCmd, t.attachCmdWaitOnce // allow-direct-ptmx-access
 	t.ptmx, t.attachCmd, t.attachCmdWaitOnce = nil, nil, nil       // allow-direct-ptmx-access
+	t.ptyGen++
 	return file, cmd, waitOnce
 }
 
-// closePTYAndAttachCmd closes the PTY file descriptor and kills the attach process.
-// CRITICAL: This must be called whenever closing a PTY to prevent orphaned tmux attach processes.
-// Returns a slice of errors encountered during cleanup (for aggregation in calling functions).
-//
-// Snapshots the PTY triple under ptmxMu then runs blocking cleanup (Close/Kill/Wait) on the
-// locals outside the lock, so ptmxMu is never held across I/O. One accepted side effect: only
-// the first concurrent caller ever receives a non-nil snapshot, so concurrent
-// closePTYAndAttachCmd callers now serialize into one real cleanup plus fast no-ops instead of
-// each racing .Close()/.Kill() independently -- see TestClosePTYAndAttachCmd_OnlyFirstConcurrentCallerPerformsCleanup.
-func (t *TmuxSession) closePTYAndAttachCmd() []error {
+// closePTYTriple closes the PTY file descriptor and kills+reaps the attach process.
+// Extracted so both closePTYAndAttachCmd (the installed triple) and a
+// tryInstallPTYTriple CAS-loser (a triple that was started but never installed into t)
+// share one blocking-cleanup implementation instead of duplicating it.
+func closePTYTriple(file *os.File, cmd *exec.Cmd, waitOnce *sync.Once, sessionName string) []error {
 	var errs []error
-	file, cmd, waitOnce := t.clearPTYTriple()
 
 	// Close PTY file descriptor
 	if file != nil {
@@ -2184,7 +2231,7 @@ func (t *TmuxSession) closePTYAndAttachCmd() []error {
 	// CRITICAL: Kill the tmux attach-session process to prevent PTY leak
 	// Closing the PTY FD does NOT kill the process - it keeps running and consuming PTYs
 	if cmd != nil && cmd.Process != nil {
-		log.Info("killing orphaned tmux attach process", "session", t.sanitizedName, "pid", cmd.Process.Pid)
+		log.Info("killing orphaned tmux attach process", "session", sessionName, "pid", cmd.Process.Pid)
 		if err := cmd.Process.Kill(); err != nil {
 			// Process may already be dead, only log if it's a real error
 			if !strings.Contains(err.Error(), "process already finished") && !strings.Contains(err.Error(), "no such process") {
@@ -2203,8 +2250,29 @@ func (t *TmuxSession) closePTYAndAttachCmd() []error {
 	return errs
 }
 
-// Close terminates the tmux session and cleans up resources
+// closePTYAndAttachCmd closes the PTY and kills+reaps the attach process. CRITICAL:
+// always call this when closing a PTY to avoid orphaned tmux attach processes.
+// Snapshots the triple under ptmxMu then cleans up outside the lock, so only the first
+// concurrent caller does real work; see TestClosePTYAndAttachCmd_OnlyFirstConcurrentCallerPerformsCleanup.
+func (t *TmuxSession) closePTYAndAttachCmd() []error {
+	file, cmd, waitOnce := t.clearPTYTriple()
+	return closePTYTriple(file, cmd, waitOnce, t.sanitizedName)
+}
+
+// Close terminates the tmux session and cleans up resources. Takes detachMutex (the
+// established outer lock over ptmxMu, see ptmxMu's doc comment) for its whole body and
+// permanently flips ptyClosed before running any cleanup, so a concurrent
+// AttachToExisting()/RestoreWithWorkDir() racing this call can never install a PTY after
+// teardown has already started -- tryInstallPTYTriple observes ptyClosed and refuses.
 func (t *TmuxSession) Close() error {
+	t.detachMutex.Lock()
+	defer t.detachMutex.Unlock()
+
+	t.ptmxMu.Lock()
+	t.ptyClosed = true
+	t.ptyGen++
+	t.ptmxMu.Unlock()
+
 	var errs []error
 
 	// Use centralized PTY + attach process cleanup
@@ -2694,11 +2762,21 @@ func cmCtx() (context.Context, context.CancelFunc) {
 	return context.WithTimeout(context.Background(), 3*time.Second)
 }
 
+// defaultCapturePaneTimeout bounds the zero-arg CapturePaneContent* wrappers'
+// subprocess execution. runGated/runGatedWith's context.WithTimeout only
+// bounds the exec-gate *wait*, not the tmux subprocess call itself (fn()) --
+// without this, a caller with no context of its own (context.Background())
+// would have no upper bound at all on the capture-pane call, letting a
+// wedged tmux server block the calling goroutine indefinitely.
+const defaultCapturePaneTimeout = 10 * time.Second
+
 // CapturePaneContent captures the content of the tmux pane.
 // When STAPLER_SQUAD_CM_COMMANDS=true and control mode is running, the query is sent
 // over the control mode stdin pipe (zero new subprocesses); otherwise falls back to subprocess.
 func (t *TmuxSession) CapturePaneContent() (string, error) {
-	return t.CapturePaneContentContext(context.Background())
+	ctx, cancel := context.WithTimeout(context.Background(), defaultCapturePaneTimeout)
+	defer cancel()
+	return t.CapturePaneContentContext(ctx)
 }
 
 // CapturePaneContentContext is CapturePaneContent with an external context
@@ -2760,9 +2838,11 @@ func (t *TmuxSession) CapturePaneContentContext(ctx context.Context) (string, er
 // isolation the subprocess gate provides, and control mode has no gate to
 // isolate against.
 func (t *TmuxSession) CapturePaneContentPriority() (string, error) {
-	cmd := t.buildTmuxCommand("capture-pane", "-p", "-e", "-J", "-t", t.sanitizedName)
+	ctx, cancel := context.WithTimeout(context.Background(), defaultCapturePaneTimeout)
+	defer cancel()
+	cmd := t.buildTmuxCommandContext(ctx, "capture-pane", "-p", "-e", "-J", "-t", t.sanitizedName)
 	recordSpawn(time.Now())
-	output, err := runGatedFastLane(context.Background(), t.serverSocket, func() ([]byte, error) {
+	output, err := runGatedFastLane(ctx, t.serverSocket, func() ([]byte, error) {
 		return t.cmdExec.Output(cmd)
 	})
 	if err != nil {
@@ -2806,9 +2886,11 @@ func (t *TmuxSession) CapturePaneContentRaw() (string, error) {
 		log.Debug("CapturePaneContentRaw CM path failed, falling back", "session", t.sanitizedName, "err", cmErr)
 	}
 
-	cmd := t.buildTmuxCommand("capture-pane", "-p", "-e", "-t", t.sanitizedName)
+	ctx, cancel := context.WithTimeout(context.Background(), defaultCapturePaneTimeout)
+	defer cancel()
+	cmd := t.buildTmuxCommandContext(ctx, "capture-pane", "-p", "-e", "-t", t.sanitizedName)
 	recordSpawn(time.Now())
-	output, err := runGated(context.Background(), t.serverSocket, func() ([]byte, error) {
+	output, err := runGated(ctx, t.serverSocket, func() ([]byte, error) {
 		return t.cmdExec.Output(cmd)
 	})
 	if err != nil {
@@ -2834,8 +2916,10 @@ func (t *TmuxSession) CapturePaneContentWithOptions(start, end string) (string, 
 		log.Debug("CapturePaneContentWithOptions CM path failed, falling back", "session", t.sanitizedName, "err", cmErr)
 	}
 
-	cmd := t.buildTmuxCommand("capture-pane", "-p", "-e", "-J", "-S", start, "-E", end, "-t", t.sanitizedName)
-	output, err := runGated(context.Background(), t.serverSocket, func() ([]byte, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), defaultCapturePaneTimeout)
+	defer cancel()
+	cmd := t.buildTmuxCommandContext(ctx, "capture-pane", "-p", "-e", "-J", "-S", start, "-E", end, "-t", t.sanitizedName)
+	output, err := runGated(ctx, t.serverSocket, func() ([]byte, error) {
 		return t.cmdExec.Output(cmd)
 	})
 	if err != nil {

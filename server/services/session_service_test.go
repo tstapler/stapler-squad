@@ -2249,6 +2249,161 @@ func TestSessionService_CreateSession_DelegatesToCreateManagedInstance_When_Hand
 }
 
 // --------------------------------------------------------------------------
+// CreateSession — restart_from_session_id (Story 2.3.1): path derivation,
+// lineage, and the still-live guard.
+// --------------------------------------------------------------------------
+
+// TestCreateSession_RestartFromSessionId_DerivesPathFromSource verifies that
+// when restart_from_session_id is set and path is left empty, the new
+// session's path is resolved from the (persisted, not live) source session's
+// Path, and the created session records RestartedFromSessionId.
+func TestCreateSession_RestartFromSessionId_DerivesPathFromSource(t *testing.T) {
+	fix := setupForkTestFixture(t)
+	t.Cleanup(fix.cleanup)
+
+	sourcePath := t.TempDir()
+	require.NoError(t, fix.storage.AddInstance(&session.Instance{
+		Title:   "restart-source",
+		Path:    sourcePath,
+		Program: "claude",
+		Status:  session.Paused,
+	}))
+
+	resp, err := fix.svc.CreateSession(context.Background(), connect.NewRequest(&sessionv1.CreateSessionRequest{
+		Title:                "restarted-session",
+		Path:                 "",
+		Program:              "claude",
+		RestartFromSessionId: "restart-source",
+	}))
+	require.NoError(t, err)
+	t.Cleanup(func() { destroyCreatedSession(t, fix.svc, resp.Msg.Session.Id) })
+
+	assert.Equal(t, sourcePath, resp.Msg.Session.Path, "path should be derived from the source session")
+	assert.Equal(t, "restart-source", resp.Msg.Session.RestartedFromSessionId)
+}
+
+// TestCreateSession_RestartFromSessionId_ExplicitPathWins verifies that an
+// explicit request Path always wins over the restart-derived path -- it must
+// never be silently overridden, even though lineage is still recorded.
+func TestCreateSession_RestartFromSessionId_ExplicitPathWins(t *testing.T) {
+	fix := setupForkTestFixture(t)
+	t.Cleanup(fix.cleanup)
+
+	sourcePath := t.TempDir()
+	require.NoError(t, fix.storage.AddInstance(&session.Instance{
+		Title:   "restart-source-explicit",
+		Path:    sourcePath,
+		Program: "claude",
+		Status:  session.Paused,
+	}))
+
+	explicitPath := t.TempDir()
+	require.NotEqual(t, sourcePath, explicitPath)
+
+	resp, err := fix.svc.CreateSession(context.Background(), connect.NewRequest(&sessionv1.CreateSessionRequest{
+		Title:                "restarted-session-explicit-path",
+		Path:                 explicitPath,
+		Program:              "claude",
+		RestartFromSessionId: "restart-source-explicit",
+	}))
+	require.NoError(t, err)
+	t.Cleanup(func() { destroyCreatedSession(t, fix.svc, resp.Msg.Session.Id) })
+
+	assert.Equal(t, explicitPath, resp.Msg.Session.Path, "explicit path must win over the restart-derived path")
+	assert.Equal(t, "restart-source-explicit", resp.Msg.Session.RestartedFromSessionId, "lineage must still be recorded even when path is explicit")
+}
+
+// TestCreateSession_RestartFromSessionId_MissingSourceReturnsNotFound verifies
+// that a restart_from_session_id naming a session that exists neither live nor
+// in storage returns CodeNotFound naming the missing source -- not a silent
+// fallback (e.g. to cwd).
+func TestCreateSession_RestartFromSessionId_MissingSourceReturnsNotFound(t *testing.T) {
+	fix := setupForkTestFixture(t)
+	t.Cleanup(fix.cleanup)
+
+	_, err := fix.svc.CreateSession(context.Background(), connect.NewRequest(&sessionv1.CreateSessionRequest{
+		Title:                "restarted-session-missing-source",
+		Path:                 t.TempDir(),
+		Program:              "claude",
+		RestartFromSessionId: "does-not-exist",
+	}))
+	require.Error(t, err)
+
+	var connectErr *connect.Error
+	require.ErrorAs(t, err, &connectErr)
+	assert.Equal(t, connect.CodeNotFound, connectErr.Code())
+	assert.Contains(t, err.Error(), "does-not-exist")
+}
+
+// TestCreateSession_RestartFromSessionId_RejectsStillLiveSourceWithoutConfirmation
+// verifies the still-live guard: when the source session named by
+// restart_from_session_id is currently live (found via FindLiveInstance) and
+// confirm_restart_with_live_source is not set, CreateSession returns
+// CodeFailedPrecondition and creates nothing.
+func TestCreateSession_RestartFromSessionId_RejectsStillLiveSourceWithoutConfirmation(t *testing.T) {
+	fix := setupForkTestFixture(t)
+	t.Cleanup(fix.cleanup)
+
+	liveSource := &session.Instance{
+		Title:   "restart-source-live",
+		Path:    t.TempDir(),
+		Program: "claude",
+		Status:  session.Active,
+	}
+	addInstanceToPoller(fix.poller, liveSource)
+
+	_, err := fix.svc.CreateSession(context.Background(), connect.NewRequest(&sessionv1.CreateSessionRequest{
+		Title:                "restarted-session-rejected",
+		Path:                 t.TempDir(),
+		Program:              "claude",
+		RestartFromSessionId: "restart-source-live",
+	}))
+	require.Error(t, err)
+
+	var connectErr *connect.Error
+	require.ErrorAs(t, err, &connectErr)
+	assert.Equal(t, connect.CodeFailedPrecondition, connectErr.Code())
+	assert.Contains(t, err.Error(), "restart-source-live")
+
+	data, listErr := fix.storage.ListInstanceData()
+	require.NoError(t, listErr)
+	for _, d := range data {
+		assert.NotEqual(t, "restarted-session-rejected", d.Title, "no session should be created when the still-live guard rejects the request")
+	}
+}
+
+// TestCreateSession_RestartFromSessionId_ProceedsWhenLiveSourceConfirmed
+// verifies that the same still-live source, with
+// confirm_restart_with_live_source: true, lets CreateSession proceed normally
+// -- the explicit confirmation overrides the guard.
+func TestCreateSession_RestartFromSessionId_ProceedsWhenLiveSourceConfirmed(t *testing.T) {
+	fix := setupForkTestFixture(t)
+	t.Cleanup(fix.cleanup)
+
+	sourcePath := t.TempDir()
+	liveSource := &session.Instance{
+		Title:   "restart-source-live-confirmed",
+		Path:    sourcePath,
+		Program: "claude",
+		Status:  session.Active,
+	}
+	addInstanceToPoller(fix.poller, liveSource)
+
+	resp, err := fix.svc.CreateSession(context.Background(), connect.NewRequest(&sessionv1.CreateSessionRequest{
+		Title:                        "restarted-session-confirmed",
+		Path:                         "",
+		Program:                      "claude",
+		RestartFromSessionId:         "restart-source-live-confirmed",
+		ConfirmRestartWithLiveSource: true,
+	}))
+	require.NoError(t, err)
+	t.Cleanup(func() { destroyCreatedSession(t, fix.svc, resp.Msg.Session.Id) })
+
+	assert.Equal(t, sourcePath, resp.Msg.Session.Path, "path should be derived from the confirmed live source")
+	assert.Equal(t, "restart-source-live-confirmed", resp.Msg.Session.RestartedFromSessionId)
+}
+
+// --------------------------------------------------------------------------
 // DeleteSession + CancelSession ordering (F10)
 // --------------------------------------------------------------------------
 
@@ -2643,6 +2798,99 @@ func TestWireRateLimitCallbacks_StampsItemIDMetadata_When_BacklogLinkedAndNotHid
 	require.NotNil(t, notifs[0].NotificationMetadata, "metadata must not be nil so downstream consumers can correlate the notification to its item")
 	assert.Equal(t, item.ID, notifs[0].NotificationMetadata[events.MetadataKeyItemID])
 	assert.Equal(t, "true", notifs[0].NotificationMetadata[events.MetadataKeySessionScoped])
+}
+
+// TestOnColdRestoreLostHistory_PublishesNotification_UnlessHidden verifies the
+// session-revive-uuid-loss AC3 notification: a non-Hidden instance whose cold
+// restore was forced fresh despite prior conversation history gets a durable
+// WARNING/MEDIUM notification, while a Hidden instance (e.g. a headless
+// review session) never does — mirroring onRateLimitRecovery's Hidden gate.
+func TestOnColdRestoreLostHistory_PublishesNotification_UnlessHidden(t *testing.T) {
+	storage := createTestStorage(t)
+	eventBus := events.NewEventBus(8)
+	svc := NewSessionService(storage, eventBus)
+	t.Cleanup(func() { svc.Shutdown() })
+
+	newInstance := func(title string, hidden bool) *session.Instance {
+		inst := &session.Instance{
+			Title:     title,
+			UUID:      title + "-uuid",
+			Path:      "/tmp/test",
+			Status:    session.Paused,
+			Program:   "claude",
+			Hidden:    hidden,
+			CreatedAt: time.Now(),
+			UpdatedAt: time.Now(),
+		}
+		require.NoError(t, storage.AddInstance(inst))
+		return inst
+	}
+
+	t.Run("not hidden publishes notification", func(t *testing.T) {
+		inst := newInstance("cold-restore-visible", false)
+		subCtx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		ch, _ := eventBus.Subscribe(subCtx)
+
+		svc.onColdRestoreLostHistory(inst)
+
+		notifs := drainNotificationEvents(ch)
+		require.Len(t, notifs, 1, "expected exactly one cold-restore-lost-history notification")
+		assert.Equal(t, int32(8), notifs[0].NotificationType, "must be NotificationType_WARNING")
+		assert.Equal(t, int32(2), notifs[0].NotificationPriority, "must be NotificationPriority_MEDIUM")
+		assert.Contains(t, notifs[0].NotificationTitle, inst.Title)
+	})
+
+	t.Run("hidden suppresses notification", func(t *testing.T) {
+		inst := newInstance("cold-restore-hidden", true)
+		subCtx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		ch, _ := eventBus.Subscribe(subCtx)
+
+		svc.onColdRestoreLostHistory(inst)
+
+		notifs := drainNotificationEvents(ch)
+		assert.Empty(t, notifs, "a Hidden instance must never receive a cold-restore-lost-history notification")
+	})
+}
+
+// TestColdRestoreOutcomeListener_FiltersOnReason verifies
+// coldRestoreOutcomeListener only calls onColdRestoreLostHistory for an
+// EventStarted carrying exactly session.ReasonColdRestoreLostHistory — a
+// normal start (empty reason) or any other event/reason combination must not
+// notify (session-revive-uuid-loss AC3).
+func TestColdRestoreOutcomeListener_FiltersOnReason(t *testing.T) {
+	storage := createTestStorage(t)
+	eventBus := events.NewEventBus(8)
+	svc := NewSessionService(storage, eventBus)
+	t.Cleanup(func() { svc.Shutdown() })
+
+	inst := &session.Instance{
+		Title:     "cold-restore-listener",
+		UUID:      "cold-restore-listener-uuid",
+		Path:      "/tmp/test",
+		Status:    session.Paused,
+		Program:   "claude",
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	}
+	require.NoError(t, storage.AddInstance(inst))
+
+	listener := &coldRestoreOutcomeListener{svc: svc, inst: inst}
+
+	subCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ch, _ := eventBus.Subscribe(subCtx)
+
+	listener.OnLifecycleEvent(session.EventStarted, "")
+	assert.Empty(t, drainNotificationEvents(ch), "a normal start (empty reason) must not notify")
+
+	listener.OnLifecycleEvent(session.EventExited, session.ReasonColdRestoreLostHistory)
+	assert.Empty(t, drainNotificationEvents(ch), "the reason must only be honored on EventStarted")
+
+	listener.OnLifecycleEvent(session.EventStarted, session.ReasonColdRestoreLostHistory)
+	notifs := drainNotificationEvents(ch)
+	require.Len(t, notifs, 1, "EventStarted with the lost-history reason must notify")
 }
 
 // TestSessionService_Shutdown_StopsAnalyticsFlushGoroutine confirms Shutdown() calls

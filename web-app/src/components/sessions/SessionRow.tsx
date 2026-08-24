@@ -9,6 +9,7 @@ import {
   SessionActionsOverflow,
   SessionActionsOverflowHandle,
 } from "./SessionActionsOverflow";
+import { hasLostContext, RevivedContextBadge } from "./RevivedContextBadge";
 import { SubStatusChip } from "./SubStatusChip";
 import { GitHubBadge } from "@/components/shared/GitHubBadge";
 import { RemoteConnectionIndicator } from "./RemoteConnectionIndicator";
@@ -264,7 +265,7 @@ function SessionRowInner({
       onContextMenu={handleContextMenu}
       onKeyDown={handleKeyDown}
       tabIndex={0}
-      aria-label={`Session ${session.title}, status: ${getStatusDotLabel(dotStatus)}, program: ${session.program}${session.path ? `, path: ${abbreviatePath(session.path)}` : ""}`}
+      aria-label={`Session ${session.title}, status: ${getStatusDotLabel(dotStatus)}, program: ${session.program}${session.path ? `, path: ${abbreviatePath(session.path)}` : ""}${hasLostContext(session) ? ", context: lost" : ""}`}
     >
       {/* Checkbox cell — always in DOM to keep the reserved grid column occupied */}
       <div
@@ -325,6 +326,7 @@ function SessionRowInner({
                 subagentCount={session.subagentCount}
               />
             )}
+          <RevivedContextBadge session={session} />
           {isSessionStale(session, staleThresholdMinutes) && (
             <span
               role="img"

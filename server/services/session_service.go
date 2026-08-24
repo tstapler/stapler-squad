@@ -153,6 +153,10 @@ type SessionService struct {
 	// (webhook-triggers Phase 5, FR7).
 	callbackConfigSvc *CallbackConfigService
 
+	// streamHubRolloutSvc handles the stream-hub staged-rollout RPCs
+	// (terminal-multi-connection-streaming Story 3.3).
+	streamHubRolloutSvc *StreamHubRolloutService
+
 	// launcherPresetsSvc handles the GetLauncherPresets RPC.
 	launcherPresetsSvc *LauncherPresetsService
 
@@ -694,6 +698,7 @@ func NewSessionServiceWithSearchEngine(storage session.InstanceStore, eventBus *
 		defaultsSvc:                 NewDefaultsService(),
 		slackConfigSvc:              NewSlackConfigService(NewSlackNotifier()),
 		callbackConfigSvc:           NewCallbackConfigService(),
+		streamHubRolloutSvc:         NewStreamHubRolloutService(),
 		launcherPresetsSvc:          NewLauncherPresetsService(),
 		projectSvc:                  NewProjectService(concStorage),
 		checkpointSvc:               NewCheckpointService(storage, eventBus),
@@ -1399,6 +1404,7 @@ func (s *SessionService) wireCallbacks(inst *session.Instance) {
 	s.wireClaudeSessionIDCallback(inst)
 	s.wireAutoArchiveCallback(inst)
 	s.wireSessionExitedPublisher(inst)
+	s.wireColdRestoreOutcomeListener(inst)
 	// Register with the HistoryLinker so its poll/fsnotify correlation loop
 	// detects this session's Claude JSONL file and persists claude_session_id.
 	// Without this, only sessions loaded at server boot (server/dependencies.go)
@@ -1721,6 +1727,41 @@ func (s *SessionService) workspacePeersBlockFor(ctx context.Context, repoPath st
 	return workspacePeersBlockFor(ctx, s.concStorage, repoPath)
 }
 
+// resolveRestartSource resolves req.RestartFromSessionId (Story 2.3.1) to the
+// source session's path, enforcing the still-live guard. FindLiveInstance is
+// tried first (it reflects the actual live, in-memory session state -- a
+// still-running tmux/process, not just what was last persisted); a
+// persisted-storage lookup against existing (mirroring FindInstanceDataByID,
+// reusing the slice CreateSession already loaded for its title-collision
+// check) is the fallback for a source session that exists but is not
+// currently live. Only the "found live, not confirmed" case is rejected
+// outright -- a persisted-but-not-live source proceeds without requiring
+// ConfirmRestartWithLiveSource, since there is no live process/worktree it
+// could collide with. Returns "" with a nil error when RestartFromSessionId
+// is unset. Errors are already-wrapped *connect.Error values, ready to
+// return directly from CreateSession.
+func (s *SessionService) resolveRestartSource(req *sessionv1.CreateSessionRequest, existing []session.InstanceData) (string, error) {
+	if req.RestartFromSessionId == "" {
+		return "", nil
+	}
+
+	if liveSrc := s.FindLiveInstance(req.RestartFromSessionId); liveSrc != nil {
+		if !req.ConfirmRestartWithLiveSource {
+			return "", connect.NewError(connect.CodeFailedPrecondition,
+				fmt.Errorf("restart source session %q is still running; stop it first or pass confirm_restart_with_live_source to proceed anyway", req.RestartFromSessionId))
+		}
+		return liveSrc.Path, nil
+	}
+
+	for i := range existing {
+		if existing[i].MatchesID(req.RestartFromSessionId) {
+			return existing[i].Path, nil
+		}
+	}
+	return "", connect.NewError(connect.CodeNotFound,
+		fmt.Errorf("restart source session %q not found", req.RestartFromSessionId))
+}
+
 // CreateSession initializes a new AI agent session with tmux and git worktree.
 // +api: session:create
 func (s *SessionService) CreateSession(
@@ -1740,6 +1781,12 @@ func (s *SessionService) CreateSession(
 		!req.Msg.AutonomousMode &&
 		req.Msg.AliasName == "" &&
 		req.Msg.SessionType != sessionv1.SessionType_SESSION_TYPE_NEW_PROJECT &&
+		// restart_from_session_id (Story 2.3.1) derives the path from the
+		// source session below when Path is left empty -- see the
+		// restart-source resolution block ahead of "Resolve GitHub URLs to
+		// local paths". An empty Path is only a validation error here when
+		// there's no such source to derive one from.
+		req.Msg.RestartFromSessionId == "" &&
 		req.Msg.Path == "" {
 		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("path is required"))
 	}
@@ -1769,7 +1816,7 @@ func (s *SessionService) CreateSession(
 	// file and set resume_id to the new UUID so the normal start path picks it
 	// up with --resume.
 	if req.Msg.ForkSourceId != "" {
-		srcPath, findErr := session.FindConversationFilePath(req.Msg.ForkSourceId)
+		srcPath, findErr := session.FindConversationFilePath(ctx, req.Msg.ForkSourceId)
 		if findErr != nil {
 			return nil, connect.NewError(connect.CodeNotFound,
 				fmt.Errorf("fork source conversation not found: %w", findErr))
@@ -1800,10 +1847,25 @@ func (s *SessionService) CreateSession(
 		return nil, connect.NewError(connect.CodeInvalidArgument, remoteErr)
 	}
 
+	// Restart-from-session lineage (Story 2.3.1): resolve the source session's
+	// path and enforce the still-live guard before any other path resolution
+	// below. See resolveRestartSource's doc comment for the live-vs-persisted
+	// lookup order.
+	restartSourcePath, err := s.resolveRestartSource(req.Msg, existing)
+	if err != nil {
+		return nil, err
+	}
+
 	// Resolve GitHub URLs to local paths (GOPATH-style: ~/.stapler-squad/repos/<host>/owner/repo)
 	resolvedPath, tildeErr := expandTildePath(req.Msg.Path, remoteRequested)
 	if tildeErr != nil {
 		return nil, connect.NewError(connect.CodeInvalidArgument, tildeErr)
+	}
+	// An explicit req.Msg.Path always wins over the restart-derived path --
+	// only fill in resolvedPath from the source session when the caller left
+	// Path empty.
+	if resolvedPath == "" && restartSourcePath != "" {
+		resolvedPath = restartSourcePath
 	}
 	branch := req.Msg.Branch
 	var gitHubRef *session.GitHubRef
@@ -2229,6 +2291,10 @@ func (s *SessionService) CreateSession(
 		// Phase 4 Epic 4.2) built by the mode-specific block above, or the
 		// LocalTarget{} default for the overwhelming majority of local sessions.
 		ExecutionTarget: executionTarget,
+		// RestartedFromSessionID records lineage for a restart-from-session
+		// request (Story 2.3.1); empty for a normal CreateSession call. The
+		// still-live guard and path derivation already ran above.
+		RestartedFromSessionID: req.Msg.RestartFromSessionId,
 	}
 
 	// Add GitHub metadata if this was a GitHub URL
@@ -2378,6 +2444,9 @@ func (s *SessionService) CreateSession(
 		_ = s.storage.SaveInstances([]*session.Instance{instance})
 		s.eventBus.Publish(events.NewSessionUpdatedEvent(instance, []string{"status", "creation_progress"}))
 		log.Info("[CreateSession] async start complete", "session", instanceTitle)
+		if instance.RestartedFromSessionID != "" {
+			log.Info("[HandoffSummary] restart session created", "source_session", instance.RestartedFromSessionID, "new_session", instance.UUID)
+		}
 	})
 
 	return connect.NewResponse(&sessionv1.CreateSessionResponse{
@@ -4664,6 +4733,21 @@ func (s *SessionService) TestSlackWebhook(ctx context.Context, req *connect.Requ
 	return s.slackConfigSvc.TestSlackWebhook(ctx, req)
 }
 
+// GetStreamHubRolloutStatus returns the current stream-hub rollout status.
+func (s *SessionService) GetStreamHubRolloutStatus(ctx context.Context, req *connect.Request[sessionv1.GetStreamHubRolloutStatusRequest]) (*connect.Response[sessionv1.StreamHubRolloutStatus], error) {
+	return s.streamHubRolloutSvc.GetStreamHubRolloutStatus(ctx, req)
+}
+
+// CompleteStreamHubRollbackRehearsal records the rollback rehearsal as completed.
+func (s *SessionService) CompleteStreamHubRollbackRehearsal(ctx context.Context, req *connect.Request[sessionv1.CompleteStreamHubRollbackRehearsalRequest]) (*connect.Response[sessionv1.StreamHubRolloutStatus], error) {
+	return s.streamHubRolloutSvc.CompleteStreamHubRollbackRehearsal(ctx, req)
+}
+
+// SetStreamHubSessionOverride sets or clears a per-session stream-hub canary override.
+func (s *SessionService) SetStreamHubSessionOverride(ctx context.Context, req *connect.Request[sessionv1.SetStreamHubSessionOverrideRequest]) (*connect.Response[sessionv1.StreamHubRolloutStatus], error) {
+	return s.streamHubRolloutSvc.SetStreamHubSessionOverride(ctx, req)
+}
+
 // SetOnGlobalDefaultsUpdated wires in the callback invoked after every
 // successful UpdateGlobalDefaults save (server/dependencies.go uses this to
 // trigger an immediate backlog-queue dequeue sweep when the concurrency limit
@@ -5190,6 +5274,48 @@ func (l *autoArchiveListener) OnLifecycleEvent(event session.LifecycleEvent, _ s
 	if event == session.EventExited {
 		go l.svc.maybeAutoArchive(l.inst)
 	}
+}
+
+// wireColdRestoreOutcomeListener registers a lifecycle listener that notifies
+// the user when a cold restore was forced fresh despite the session having
+// previously captured conversation history (session-revive-uuid-loss AC3).
+func (s *SessionService) wireColdRestoreOutcomeListener(inst *session.Instance) {
+	if inst == nil {
+		return
+	}
+	inst.RegisterLifecycleListener(&coldRestoreOutcomeListener{svc: s, inst: inst})
+}
+
+// coldRestoreOutcomeListener implements session.LifecycleListener to surface
+// session.ReasonColdRestoreLostHistory as a durable, user-visible notification.
+type coldRestoreOutcomeListener struct {
+	svc  *SessionService
+	inst *session.Instance
+}
+
+func (l *coldRestoreOutcomeListener) OnLifecycleEvent(event session.LifecycleEvent, reason string) {
+	if event == session.EventStarted && reason == session.ReasonColdRestoreLostHistory {
+		l.svc.onColdRestoreLostHistory(l.inst)
+	}
+}
+
+// onColdRestoreLostHistory publishes a durable WARNING notification for inst
+// when a cold restore could not recover its previous conversation history.
+// Hidden instances (e.g. headless review sessions) never surface this.
+func (s *SessionService) onColdRestoreLostHistory(inst *session.Instance) {
+	if inst.Hidden {
+		return
+	}
+	linkedItemID := s.rateLimitLinkedItemID(inst)
+	notifID := fmt.Sprintf("cold-restore-lost-history-%s", inst.UUID)
+	s.eventBus.Publish(events.NewNotificationEvent(
+		inst.UUID, inst.Title, notifID,
+		int32(sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING),
+		int32(sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_MEDIUM),
+		fmt.Sprintf("Session %q started fresh — previous conversation could not be resumed", inst.Title),
+		"The session's tmux pane restarted and the previous conversation history could not be found on disk. Earlier context is not available.",
+		events.SessionScopedMetadata(nil, linkedItemID),
+	))
 }
 
 // wireSessionExitedPublisher registers a lifecycle listener that publishes a

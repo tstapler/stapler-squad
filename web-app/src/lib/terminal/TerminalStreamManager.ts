@@ -34,6 +34,22 @@ const CHUNK_SIZE = 16384;      // 16KB chunks
 const CHUNK_DELAY_MS = 0;      // Yield to event loop between chunks
 
 /**
+ * Mirrors connectrpc_websocket.go's `ansiSnapshotPrefix` (DECSTR + erase-screen +
+ * cursor-home). The server prepends this exact byte sequence to every full-pane
+ * replacement snapshot it sends — the post-resize capture, visibility/focus resync,
+ * and reconnect snapshot all use it — so its presence at the start of a chunk is a
+ * reliable, trigger-independent signal that this chunk replaces the whole screen
+ * rather than appending to it.
+ *
+ * Checked once, here, inside write() — the single funnel every output path (live
+ * streaming, resize snapshots, resync snapshots, and the RESIZING-queue flush in
+ * TerminalOutput.tsx) already goes through — rather than at each call site, so a
+ * future call site can't reintroduce the stale-buffer-overlap bug by forgetting to
+ * check it.
+ */
+export const ANSI_SNAPSHOT_PREFIX = "\x1b[!p\x1b[2J\x1b[H";
+
+/**
  * RedrawThrottler - Coalesces rapid full-screen redraws to max 30 FPS.
  *
  * Claude performs complete screen redraws at 12-25 FPS, causing visible flicker.
@@ -137,6 +153,12 @@ export class TerminalStreamManager {
   private firstOutputReceived: boolean = false;
   private onFirstOutput: (() => void) | null = null;
 
+  // Invoked whenever write() detects a full-pane replacement snapshot (see
+  // ANSI_SNAPSHOT_PREFIX), after this.terminal.clear() has already run — lets the
+  // caller reset state it owns that the manager doesn't (e.g. TerminalOutput.tsx's
+  // scrollback-paging refs).
+  private onFullSnapshot: (() => void) | null = null;
+
   constructor(terminal: ITerminal, sendFlowControl: SendFlowControlFn) {
     this.terminal = terminal;
     this.sendFlowControl = sendFlowControl;
@@ -150,6 +172,11 @@ export class TerminalStreamManager {
   /** Set a callback invoked once on first output received. */
   setOnFirstOutput(cb: () => void): void {
     this.onFirstOutput = cb;
+  }
+
+  /** Set a callback invoked whenever a full-pane replacement snapshot is detected in write(). */
+  setOnFullSnapshot(cb: () => void): void {
+    this.onFullSnapshot = cb;
   }
 
   /** Inject a SerializeAddon for prependScrollbackBatch (serialize-clear-rewrite pattern). */
@@ -231,6 +258,16 @@ export class TerminalStreamManager {
     if (this.isWritingInitialContent) {
       this.pendingLiveWrites.push(output);
       return;
+    }
+
+    // A full-pane replacement snapshot must replace the screen, not append to it —
+    // see ANSI_SNAPSHOT_PREFIX's doc comment. Without this, stale rows from before
+    // the snapshot (reflowed under the terminal's previous wrap state, or content
+    // the user had scrolled past) sit underneath the fresh content instead of being
+    // replaced by it.
+    if (output.startsWith(ANSI_SNAPSHOT_PREFIX)) {
+      this.terminal.clear();
+      this.onFullSnapshot?.();
     }
 
     // Track first output

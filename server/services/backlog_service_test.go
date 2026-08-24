@@ -48,6 +48,8 @@ import (
 func TestMain(m *testing.M) {
 	headless.DefaultCapabilitySelfCheck = headless.NewPassedCapabilitySelfCheckForTesting()
 	restore := envtest.ClearAmbientGitHubTokenEnv()
+	reapLeakedTmuxTestServers()
+	startTmuxTestServerWatchdog()
 	code := m.Run()
 	restore()
 	os.Exit(code)

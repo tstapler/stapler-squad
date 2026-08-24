@@ -70,6 +70,32 @@ gofmt -w .         # Format before committing
 
 Nil safety and static analysis tool reference: `.claude/docs/nil-safety.md`
 
+### Duplication and hotspot checks — required before pushing
+
+`make ready` (superset of `make ci`) now also runs a **new-code-only duplication
+gate**, mirroring the existing gocyclo/gocognit/funlen/revive complexity gate
+(`.golangci.yml`'s settings block, `.github/workflows/lint.yml`):
+
+- **Go — `dupl`** (blocking): enabled via `--new-from-rev=origin/main`, so only
+  duplication introduced by your own diff fails — the repo's large pool of
+  unmeasured pre-existing duplication is never in scope. Run locally with
+  `make ready-complexity-gate` (needs `dupl` from `make install-tools`). Fix
+  what it finds in your diff before pushing — usually an Extract/Move Function
+  refactor (see `quality:reflect-and-fix`'s Level 0 consolidation gate), not a
+  suppression.
+- **web-app — `jscpd`** (advisory only): `make ready-duplication-report-web`,
+  or `pnpm run lint:duplicates` in `web-app/`. jscpd has no git-diff scoping
+  (unlike `--new-from-rev`), so it can't cleanly gate on new-code-only without
+  a bespoke filter — treat its output as a report to skim for anything your
+  diff touches, not a hard pre-push gate. Long-term, cross-file duplicate
+  detection belongs in `kibitzer` (github.com/tstapler/kibitzer), which
+  already has diff-aware infrastructure this repo's ad hoc `dupl`/`jscpd`
+  wiring is a stopgap for — see `tstapler/kibitzer#28`.
+
+For "which files are actually risky to touch" (complexity × git-churn, not
+literal duplication), see the `code-hotspot-analysis` skill and
+`tstapler/kibitzer#15` (not yet implemented in kibitzer).
+
 ### Go Skills — Always Invoke for Go Work
 
 When writing, reviewing, or refactoring Go code, invoke the relevant skill(s):
@@ -251,6 +277,7 @@ Per `local-dev-port-management`'s Sequential Batch Strategy: a fixed block reser
 |---|---|
 | Profiling / lock-up debugging | `.claude/docs/profiling.md` |
 | OpenTelemetry / Datadog setup | `.claude/docs/opentelemetry.md` |
+| Compile-time auto-instrumentation (opt-in `stapler-squad-otel` build) | `.claude/docs/opentelemetry-auto-instrumentation.md` |
 | macOS code signing / TCC | `.claude/docs/codesigning.md` |
 | PTY multiplexing (ssq-mux) | `.claude/docs/pty-multiplexing.md` |
 | State file isolation / multi-instance | `.claude/docs/state-isolation.md` |

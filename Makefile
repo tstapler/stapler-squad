@@ -57,7 +57,7 @@ endif
 		touch $(ASDF_STAMP); \
 	fi
 
-.PHONY: help ports build test benchmark install-tools lint lint-custom actor-lint analyze nil-safety security format fmt-check check-deps clean all proto-gen proto-lint proto-build ent-gen web-build web-dev restart-web restart-web-profile qr demo-video demo-post-process demo-gif benchmark-baseline benchmark-compare benchmark-tier1 profile-goroutines profile-block profile-mutex profile-trace build-mux install-mux install-service install-hooks rollback backup-binary uninstall-service setup-codesign _codesign-binary verify-codesign tcc-reset preview dev-stack coverage-func coverage-gaps coverage-pkg coverage-refactor registry-generate-backend registry-generate-frontend registry-generate registry-diff e2e-report e2e-lighthouse build-tmux build-tmux-embed build-embedded clean-tmux init-submodules test-with-pinned-tmux test-trace test-profile vet-architecture vet-rpc-markers coverage-integration actor-field-guard ptmx-field-guard checklocks
+.PHONY: help ports build test benchmark install-tools lint lint-custom actor-lint analyze nil-safety security format fmt-check check-deps clean all proto-gen proto-lint proto-build ent-gen web-build web-dev restart-web restart-web-profile qr demo-video demo-post-process demo-gif benchmark-baseline benchmark-compare benchmark-tier1 profile-goroutines profile-block profile-mutex profile-trace build-mux install-mux install-service install-hooks rollback backup-binary uninstall-service setup-codesign _codesign-binary verify-codesign tcc-reset preview dev-stack coverage-func coverage-gaps coverage-pkg coverage-refactor registry-generate-backend registry-generate-frontend registry-generate registry-diff e2e-report e2e-lighthouse build-tmux build-tmux-embed build-embedded clean-tmux init-submodules test-with-pinned-tmux test-trace test-profile vet-architecture vet-rpc-markers coverage-integration actor-field-guard ptmx-field-guard checklocks build-otel-auto build-otel-auto-embedded otel-auto-isolation-guard otel-auto-isolation-guard-selftest otel-auto-smoke otel-auto-smoke-suppression otel-auto-test
 
 # Default target
 help: ## Show this help message
@@ -98,6 +98,7 @@ registry-generate-backend: ## Scan proto+markers → write per-feature files und
 	@./$(BACKEND_SCANNER_BIN) proto/session/v1/import.proto server/services/ $(BACKEND_FEATURES_DIR)
 	@./$(BACKEND_SCANNER_BIN) proto/session/v1/session_summary.proto server/services/ $(BACKEND_FEATURES_DIR)
 	@./$(BACKEND_SCANNER_BIN) proto/session/v1/remote.proto server/services/ $(BACKEND_FEATURES_DIR)
+	@./$(BACKEND_SCANNER_BIN) proto/session/v1/handoff_summary.proto server/services/ $(BACKEND_FEATURES_DIR)
 	@# Generation is additive; prune files whose RPC no longer exists so the
 	@# committed set stays in sync with the proto (avoids registry-validation drift).
 	@bash tools/scanner/prune-stale-backend.sh $(BACKEND_FEATURES_DIR)
@@ -285,6 +286,52 @@ else
 	go build -tags embed_tmux -ldflags "$(LDFLAGS)" -o stapler-squad .
 endif
 	@echo "✅ stapler-squad built with embedded tmux"
+
+# build-otel-auto: opt-in, structurally isolated build path (go-auto-instrumentation
+# project, project_plans/go-auto-instrumentation/). Never a prerequisite of build,
+# ci, ready, quick-check, pre-commit, or install-service — see otel-auto-isolation-guard
+# below, which fails ci if that ever changes. -tags embed_tmux is supported here
+# (Spike A passed for -tags; see spike-verdicts.md) via build-otel-auto-embedded.
+# No macOS CGO_LDFLAGS/Info.plist branch yet — deferred, see plan.md Unresolved
+# Question 6.
+build-otel-auto: ensure-tools proto-gen ent-gen server/web/dist ## Build stapler-squad-otel with otelc compile-time auto-instrumentation (opt-in — see project_plans/go-auto-instrumentation)
+	@which otelc >/dev/null 2>&1 || (echo "❌ otelc not found on PATH. Install it from https://github.com/open-telemetry/opentelemetry-go-compile-instrumentation (see project_plans/go-auto-instrumentation/implementation/spike-verdicts.md for the exact install command used in this repo)." && exit 1)
+	./scripts/otel-auto-build.sh go build -ldflags "$(LDFLAGS)" -o stapler-squad-otel .
+	@echo "✅ stapler-squad built with otelc auto-instrumentation → ./stapler-squad-otel"
+
+build-otel-auto-embedded: ensure-tools proto-gen ent-gen server/web/dist build-tmux-embed ## Build stapler-squad-otel with tmux bundled + otelc auto-instrumentation (opt-in)
+	@which otelc >/dev/null 2>&1 || (echo "❌ otelc not found on PATH. Install it from https://github.com/open-telemetry/opentelemetry-go-compile-instrumentation (see project_plans/go-auto-instrumentation/implementation/spike-verdicts.md for the exact install command used in this repo)." && exit 1)
+	./scripts/otel-auto-build.sh go build -tags embed_tmux -ldflags "$(LDFLAGS)" -o stapler-squad-otel .
+	@echo "✅ stapler-squad built with embedded tmux + otelc auto-instrumentation → ./stapler-squad-otel"
+
+otel-auto-isolation-guard: ## Prove build-otel-auto is unreachable from ci/ready/quick-check/pre-commit/install-service (Story 2.1.3)
+	@./scripts/otel-auto-isolation-guard.sh
+
+otel-auto-isolation-guard-selftest: ## Prove the Isolation Guard's own detection logic actually fires (injects a deliberate leak into a temp Makefile copy)
+	@./scripts/otel-auto-isolation-guard.sh --self-test
+
+otel-auto-smoke: ## Verify stapler-squad-otel actually emits a db.system span (Collector Smoke Test; needs a local OTLP collector on :4317)
+	@./scripts/otel-auto-smoke.sh
+
+otel-auto-smoke-suppression: ## Verify stapler-squad-otel emits nothing when OTEL_ENABLED=false (Suppression Smoke Test; needs a local OTLP collector on :4317)
+	@./scripts/otel-auto-smoke.sh --suppression
+
+# otel-auto-test: the only repeatable way to run
+# instrumentation/otelc/safeexec's hook_test.go, since that package is gated
+# behind the otelcauto build tag AND requires the transient `otelc setup`
+# scaffolding hook.go's go.opentelemetry.io/otelc/pkg/hook import depends on
+# (see hook.go's package doc). Mirrors (rather than directly shells out to)
+# otel-auto-build.sh's module-backup/GOFLAGS/cleanup lifecycle via
+# scripts/otel-auto-test.sh — see that script's header comment for why it
+# can't just call otel-auto-build.sh with the test packages directly (a
+# genuine `otelc setup` chicken-and-egg failure when the rule-implementation
+# package itself is a setup target). go.mod/go.sum end up byte-identical to
+# HEAD afterward, same as build-otel-auto. Never a prerequisite of
+# ci/ready/quick-check/pre-commit/install-service — see
+# otel-auto-isolation-guard, which fails ci if that ever changes.
+otel-auto-test: ensure-tools ## Run instrumentation/otelc/safeexec + telemetry tests under the otelcauto build tag (opt-in — see project_plans/go-auto-instrumentation)
+	@./scripts/otel-auto-test.sh
+	@echo "✅ otelc auto-instrumentation hook tests passed"
 
 clean-tmux: ## Remove the built tmux binary and submodule build artifacts
 	@./scripts/build-tmux.sh --clean
@@ -538,10 +585,10 @@ test-integration: ensure-tools proto-gen ## Run integration tests (requires real
 	# fork real tmux servers (server/mcp and session/headless don't touch tmux).
 	# Running the full suite's default per-package parallelism let those two
 	# packages' tmux-heavy tests fork/poll real tmux servers concurrently and
-	# compete for scheduler time, which was the root cause of
-	# TestTmuxServerRegistry_PaneExitDetectedDespiteElevatedBackoff intermittently
-	# missing its reconnect-backoff cycle count under `make ci` while always
-	# passing in isolation (see registryPollTimeout's comment in
+	# compete for scheduler time -- root cause of intermittent failures like
+	# TestTmuxServerRegistry_ConcurrentSubscriptions/PaneExitDetectedDespiteElevatedBackoff
+	# missing their timing budgets under `make ci` while always passing in
+	# isolation (see registryPollTimeout's comment in
 	# session/tmux/server_registry_integration_test.go). -p 1 serializes just
 	# these two packages against each other; everything else still runs in
 	# parallel via the second invocation.
@@ -610,6 +657,7 @@ install-tools: ensure-tools ## Install all development and analysis tools
 	go install golang.org/x/tools/cmd/deadcode@latest
 	go install golang.org/x/perf/cmd/benchstat@latest
 	go install gvisor.dev/gvisor/tools/checklocks/cmd/checklocks@latest
+	go install github.com/mibk/dupl@latest
 	@echo "All tools installed successfully!"
 
 # Code quality and analysis
@@ -795,7 +843,7 @@ dev-setup: install-tools ## Set up development environment
 	@echo "Development environment setup complete!"
 	@echo "Run 'make help' to see available commands"
 
-ci: build $(BIN_TMUX) test test-race vet lint lint-css-tokens test-integration fmt-check registry-generate actor-field-guard ptmx-field-guard ## Full CI pipeline: proto→web→build→tests→lint→fmt→registry
+ci: build $(BIN_TMUX) test test-race vet lint lint-css-tokens test-integration fmt-check registry-generate actor-field-guard ptmx-field-guard otel-auto-isolation-guard ## Full CI pipeline: proto→web→build→tests→lint→fmt→registry
 
 # ready: everything `make ci` runs, plus the CI-only checks that have no local
 # equivalent yet — .github/workflows/lint.yml's complexity gate (gocyclo/
@@ -804,14 +852,14 @@ ci: build $(BIN_TMUX) test test-race vet lint lint-css-tokens test-integration f
 # local equivalent (the external go-test-coverage action, the E2E-coverage PR
 # comment) — those only run in CI. `--new-from-rev=origin/main` requires a
 # reachable origin/main; `git fetch origin main` first if it's stale.
-ready: ci ready-complexity-gate ## Local approximation of every required PR check (make ci + complexity gate + web-app lint/scanner suites)
+ready: ci ready-complexity-gate ready-duplication-report-web ## Local approximation of every required PR check (make ci + complexity/duplication gate + web-app lint/scanner suites)
 	cd web-app && npx next lint
 	cd web-app && pnpm run lint:css && pnpm run lint:css-vars
 	cd tools/scanner && go test ./...
 	cd tools/ci-gates && pnpm install --silent && pnpm test
 	@echo "✅ ready: local approximation of PR checks complete"
 
-ready-complexity-gate: ensure-tools ## New-code-only gocyclo/gocognit/funlen/revive gate, mirroring lint.yml's PR-only complexity check
+ready-complexity-gate: ensure-tools ## New-code-only gocyclo/gocognit/funlen/revive/dupl gate, mirroring lint.yml's PR-only complexity/duplication check
 	@GOBIN=$$(go env GOBIN); \
 	if [ -z "$$GOBIN" ]; then GOBIN=$$(go env GOPATH)/bin; fi; \
 	if ! which golangci-lint >/dev/null 2>&1; then \
@@ -819,7 +867,13 @@ ready-complexity-gate: ensure-tools ## New-code-only gocyclo/gocognit/funlen/rev
 		go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest; \
 	fi; \
 	golangci-lint run --timeout=5m --max-issues-per-linter=0 --max-same-issues=0 \
-		--enable=gocyclo,gocognit,funlen,revive --new-from-rev=origin/main
+		--enable=gocyclo,gocognit,funlen,revive,dupl --new-from-rev=origin/main
+
+# Advisory only — see lint.yml's "jscpd (web-app duplication — advisory)" step for why this
+# doesn't block (no git-diff scoping in jscpd; kibitzer is the intended long-term fix,
+# tstapler/kibitzer#28). Prints findings; never fails the target.
+ready-duplication-report-web: ## Advisory web-app duplication report (jscpd) — never fails
+	@cd web-app && pnpm run lint:duplicates || true
 
 # Quick development workflows
 quick-check: build $(BIN_TMUX) test-coverage test-race lint lint-css-tokens registry-diff ## Quick development validation
@@ -851,7 +905,7 @@ ptmx-field-guard: ## tmux-ptmx-race-fix guard: fail if ptmx/attachCmd/attachCmdW
 	    `# because none of that file's lines ever legitimately touch the PTY triple this guards` \
 	    | grep -vE ':[0-9]+:[[:space:]]*//' \
 	    | grep -v 'allow-direct-ptmx-access' ; then \
-	    echo "❌ ptmx-field-guard: direct PTY-triple field access found outside lockedPTMX/setPTYTriple/clearPTYTriple — route through the ptmxMu helpers (session/tmux/tmux.go)"; \
+	    echo "❌ ptmx-field-guard: direct PTY-triple field access found outside lockedPTMX/ptySnapshot/tryInstallPTYTriple/clearPTYTriple — route through the ptmxMu helpers (session/tmux/tmux.go)"; \
 	    exit 1; \
 	fi
 	@echo "✅ ptmx-field-guard: no direct PTY-triple field access outside the guarded helpers"

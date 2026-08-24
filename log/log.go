@@ -20,14 +20,38 @@ import (
 // Both the file and console streams honour this value via levelFilterWriter.
 var runtimeLevel atomic.Int32 //nolint:gochecknoglobals
 
+// slogLevel mirrors runtimeLevel for the slog-based logger (the Debug/Info/Warn/Error
+// package functions). It exists because slog.HandlerOptions.Level takes a slog.Leveler,
+// not our LogLevel type — SetRuntimeLevel keeps the two in sync so both logging paths
+// (legacy log.New-based DebugLog/InfoLog/etc. and slog) honour the same runtime level.
+var slogLevel slog.LevelVar //nolint:gochecknoglobals
+
 func init() {
 	runtimeLevel.Store(int32(INFO))
+	slogLevel.Set(slog.LevelInfo)
+}
+
+// toSlogLevel maps our LogLevel enum to the closest slog.Level.
+func toSlogLevel(level LogLevel) slog.Level {
+	switch level {
+	case DEBUG:
+		return slog.LevelDebug
+	case INFO:
+		return slog.LevelInfo
+	case WARNING:
+		return slog.LevelWarn
+	case ERROR, FATAL:
+		return slog.LevelError
+	default:
+		return slog.LevelInfo
+	}
 }
 
 // SetRuntimeLevel changes the minimum log level for all output streams immediately.
 // Safe to call from any goroutine. Takes effect on the next log call.
 func SetRuntimeLevel(level LogLevel) {
 	runtimeLevel.Store(int32(level))
+	slogLevel.Set(toSlogLevel(level))
 }
 
 // GetRuntimeLevel returns the current minimum log level.
@@ -927,7 +951,7 @@ func initializeWithConfig(daemon bool, cfg *LogConfig) {
 	// Handler ordering: TraceIDHandler (outermost, captures trace IDs at call time)
 	// → AsyncHandler → JSONHandler (innermost, writes to combinedWriter).
 	// TraceIDHandler is a no-op identity handler until E2-S2 adds the real implementation.
-	jsonHandler := slog.NewJSONHandler(combinedWriter, &slog.HandlerOptions{Level: slog.LevelDebug})
+	jsonHandler := slog.NewJSONHandler(combinedWriter, &slog.HandlerOptions{Level: &slogLevel})
 	asyncHandler := NewAsyncHandler(jsonHandler, defaultAsyncBufSize)
 	asyncHandler.StartDrain()
 	slog.SetDefault(slog.New(NewTraceIDHandler(asyncHandler)))

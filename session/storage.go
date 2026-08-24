@@ -110,9 +110,17 @@ type InstanceData struct {
 	Checkpoints      CheckpointList `json:"checkpoints,omitempty"`
 	ActiveCheckpoint string         `json:"active_checkpoint,omitempty"`
 	ForkedFromID     string         `json:"forked_from_id,omitempty"`
+	// RestartedFromSessionID — see Instance.RestartedFromSessionID's doc comment.
+	RestartedFromSessionID string `json:"restarted_from_session_id,omitempty"`
 
 	// History file linkage for cold restore
 	HistoryFilePath string `json:"history_file_path,omitempty"`
+
+	// EverHadConversationHistory and LastReviveOutcome persist the
+	// session-revive-uuid-loss AC3 signal across full process restarts, not
+	// just tmux restarts — see Instance.EverHadConversationHistory.
+	EverHadConversationHistory bool   `json:"ever_had_conversation_history,omitempty"`
+	LastReviveOutcome          string `json:"last_revive_outcome,omitempty"`
 
 	// OneShot runs claude in -p mode; session exits after task completes.
 	OneShot bool `json:"one_shot,omitempty"`
@@ -748,9 +756,10 @@ func (s *Storage) UpdateBacklogItem(ctx context.Context, id string, update Backl
 	return s.repo.UpdateBacklogItem(ctx, id, update, precondition)
 }
 
-// ArchiveBacklogItem sets the archived_at timestamp.
-func (s *Storage) ArchiveBacklogItem(ctx context.Context, id string) (*BacklogItemData, error) {
-	return s.repo.ArchiveBacklogItem(ctx, id)
+// ArchiveBacklogItem sets the archived_at timestamp and status. See
+// EntRepository.ArchiveBacklogItem's doc comment for precondition/triggeredBy/note.
+func (s *Storage) ArchiveBacklogItem(ctx context.Context, id string, precondition *BacklogItemPrecondition, triggeredBy, note string) (*BacklogItemData, error) {
+	return s.repo.ArchiveBacklogItem(ctx, id, precondition, triggeredBy, note)
 }
 
 // UnarchiveBacklogItem clears archived_at and restores the item to "idea".

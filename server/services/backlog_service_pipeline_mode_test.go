@@ -164,7 +164,15 @@ func TestCreatePipelineMode_should_PersistAndInvalidateCacheSynchronously_When_V
 // success response containing the updated row's data, and log a
 // [PipelineEngine] Warn line naming the failure.
 func TestUpdatePipelineMode_should_ReturnSuccessWithWarnLog_When_CacheInvalidationFailsAfterSuccessfulDBWrite(t *testing.T) {
-	t.Parallel()
+	// Not t.Parallel(): swapWarningLog below redirects the package-level
+	// tslog.WarningLog var, which any other test's Warn call — including
+	// another t.Parallel() test in this same package — would also write to
+	// (or restore out from under) while this one is running. Go runs every
+	// non-parallel top-level test in a package to completion before the
+	// parallel ones start, so this ordering is what keeps the swap from
+	// racing a concurrent Warn call — same fix as
+	// TestResolveAndValidateCallbackHost_RejectsMixedSafetyResultSet's
+	// sibling comment in webhook_ssrf_test.go.
 	storage := createTestStorage(t)
 	realRepo := session.NewEntPipelineModeRepository(storage.GetEntClient())
 	// failAfter=2: call 1 is the engine's construction-time Load (must
@@ -284,7 +292,7 @@ func TestDeletePipelineMode_should_SucceedAndInvalidateCache_When_ModeStillRefer
 // invalidation instead of a test fixture: create mode -> select on item ->
 // delete mode -> trigger triage -> assert default-mode output + Warn log.
 func TestTriggerTriage_should_FallBackToDefaultWithWarnLog_When_ReferencedModeDeletedBeforeTriage(t *testing.T) {
-	t.Parallel()
+	// Not t.Parallel() — see TestUpdatePipelineMode_should_ReturnSuccessWithWarnLog_When_CacheInvalidationFailsAfterSuccessfulDBWrite.
 	svc, _, _ := newPipelineModeTestService(t)
 	ctx := t.Context()
 	pool := &fakeHeadlessPool{response: validTriageJSON()}

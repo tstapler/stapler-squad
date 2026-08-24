@@ -1146,7 +1146,7 @@ func TestClaudeController_StatusChangeListener_FiresOnStatusChange(t *testing.T)
 	})
 
 	// Start the background goroutine.
-	go cc.runStatusChangeLoop(ctx)
+	go cc.runStatusChangeLoop(ctx, make(chan struct{}))
 
 	// Signal an output event.
 	cc.statusCheckCh <- struct{}{}
@@ -1174,7 +1174,7 @@ func TestClaudeController_StatusChangeListener_SuppressedOnNoChange(t *testing.T
 		callCount <- struct{}{}
 	})
 
-	go cc.runStatusChangeLoop(ctx)
+	go cc.runStatusChangeLoop(ctx, make(chan struct{}))
 
 	// Send two signals with the same preview content (same status both times).
 	cc.statusCheckCh <- struct{}{}
@@ -1230,10 +1230,7 @@ func TestClaudeController_StatusChangeListener_NotCalledAfterStop(t *testing.T) 
 	})
 
 	loopDone := make(chan struct{})
-	go func() {
-		cc.runStatusChangeLoop(ctx)
-		close(loopDone)
-	}()
+	go cc.runStatusChangeLoop(ctx, loopDone)
 
 	// Cancel the context (simulating Stop()).
 	cancel()

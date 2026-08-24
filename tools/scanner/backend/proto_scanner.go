@@ -25,7 +25,7 @@ type BackendFeature struct {
 }
 
 // methodToID maps proto RPC method names to their canonical feature IDs.
-var methodToID = map[string]string{
+var methodToID = map[string]string{ //nolint:gochecknoglobals
 	"CreateSession":             "session:create",
 	"GetSession":                "session:get",
 	"UpdateSession":             "session:update",
@@ -218,6 +218,10 @@ var methodToID = map[string]string{
 	// Outbound callback config RPCs (webhook-triggers Phase 5, FR7)
 	"GetCallbackConfig":    "callback-config:get",
 	"UpdateCallbackConfig": "callback-config:update",
+	// Stream Hub Rollout RPCs (terminal-multi-connection-streaming Story 3.3)
+	"GetStreamHubRolloutStatus":          "stream-hub-rollout:get",
+	"CompleteStreamHubRollbackRehearsal": "stream-hub-rollout:complete-rehearsal",
+	"SetStreamHubSessionOverride":        "stream-hub-rollout:set-session-override",
 	// Approval rules RPCs
 	"BulkUpsertRules":       "approval:bulk-upsert-rules",
 	"ExportRules":           "approval:export-rules",
@@ -287,6 +291,14 @@ var methodToID = map[string]string{
 	// gets a generated per-feature file is a separate, larger followup (a new feature's
 	// registry entries + testIds, not a completeness-test fix) -- out of scope here.
 	"RunHeadlessCall": "headless:run-call",
+	// Handoff summary RPCs (HandoffSummaryService in handoff_summary.proto,
+	// added by #612 without a methodToID entry or a registry-generate-backend
+	// Makefile enumeration — the same hardcoded-proto-list bug class as
+	// remote.proto/headless.proto above, caught by TestMethodToIDCompleteness's
+	// glob. Wired fully (map entry + Makefile enumeration) like remote.proto,
+	// not left as a followup like headless.proto, since it was cheap here.
+	"GetHandoffSummary":     "handoff-summary:get",
+	"TriggerHandoffSummary": "handoff-summary:trigger",
 }
 
 // rpcPattern matches lines like:   rpc MethodName(  (indented or not)
