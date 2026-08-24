@@ -124,9 +124,11 @@ export function StuckItemsSection({ focusItemId }: StuckItemsSectionProps = {}) 
   const reworkCapOverridesRef = useRef<Map<string, number | undefined>>(new Map());
   const [bulkResetState, setBulkResetState] = useState<"idle" | "pending" | "error">("idle");
   const [bulkResetMessage, setBulkResetMessage] = useState<string | null>(null);
-  // Which single reason's "Reset parked (N)" button is mid-flight — distinct
-  // from bulkResetState (the global "Reset all parked" button's own pending
-  // flag) so clicking one doesn't visually disable the other.
+  // Which single reason's "Reset parked (N)" button is mid-flight — kept
+  // separate from bulkResetState (the global "Reset all parked" button's own
+  // pending flag) so each button can show its own label/spinner, but both are
+  // combined below into anyResetPending so the two families still can't fire
+  // overlapping resets that would clobber the single shared bulkResetMessage.
   const [resettingReason, setResettingReason] = useState<StuckReason | null>(null);
 
   const prevItemsRef = useRef<StuckBacklogItem[]>([]);
@@ -470,12 +472,21 @@ export function StuckItemsSection({ focusItemId }: StuckItemsSectionProps = {}) 
     return counts;
   }, [items]);
 
+  // True while either the global or a per-reason reset is in flight — gates
+  // both button families so an operator can't fire two overlapping
+  // BulkResetStuckRemediation calls whose resulting toasts would clobber the
+  // single shared bulkResetMessage state.
+  const anyResetPending = bulkResetState === "pending" || resettingReason !== null;
+
   // Shared by both the global "Reset all parked" button and each
   // per-reason-group "Reset parked (N)" button — reason omitted resets
   // across every reason (unchanged existing behavior), reason set scopes
   // the reset (and the resulting message) to just that bucket.
   const handleBulkResetParked = useCallback(
     async (reason?: StuckReason) => {
+      if (anyResetPending) {
+        return;
+      }
       if (reason !== undefined) {
         setResettingReason(reason);
       } else {
@@ -496,7 +507,7 @@ export function StuckItemsSection({ focusItemId }: StuckItemsSectionProps = {}) 
         setResettingReason(null);
       }
     },
-    [bulkResetParkedRemediation]
+    [anyResetPending, bulkResetParkedRemediation]
   );
 
   const chips: { value: FilterValue; label: string; count: number }[] = [
@@ -565,7 +576,7 @@ export function StuckItemsSection({ focusItemId }: StuckItemsSectionProps = {}) 
                     type="button"
                     className={styles.resetParkedReasonBtn}
                     onClick={() => handleBulkResetParked(reason)}
-                    disabled={resettingReason === reason}
+                    disabled={anyResetPending}
                     title={`Clear the automated-retry counters on every ${getStuckReasonLabel(reason)} item that has exhausted its 5 automated attempts, so they get a fresh shot`}
                     data-testid={`stuck-group-reset-parked-${reason}`}
                   >
@@ -624,7 +635,7 @@ export function StuckItemsSection({ focusItemId }: StuckItemsSectionProps = {}) 
             type="button"
             className={styles.resetParkedBtn}
             onClick={() => handleBulkResetParked()}
-            disabled={bulkResetState === "pending"}
+            disabled={anyResetPending}
             title="Clear the automated-retry counters on every item that has exhausted its 5 automated attempts, so they get a fresh shot"
             data-testid="stuck-items-reset-parked"
           >

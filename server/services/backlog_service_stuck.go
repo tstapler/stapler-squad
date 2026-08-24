@@ -265,31 +265,30 @@ func (s *BacklogService) BulkResetStuckRemediation(
 }
 
 // notifyBulkResetParked publishes an operator-facing notification whenever a
-// bulk/reason-scoped parked-remediation reset actually changes rows, naming
-// the reason (or "every reason" when unscoped) and the reset count — mirrors
-// the existing justParked one-time-notify pattern (session/backlog_lifecycle.go's
-// notify) so a sweep is as visible as the original silent parking it undoes.
-// No-op if no event bus is wired. Not tied to a single item_id (a bulk reset
-// can touch many rows), so it's published with an empty sessionID — the
-// notification subscriber's coalescing key becomes ("", type), which also
-// collapses back-to-back bulk resets within its 500ms window rather than
-// storming the feed.
+// bulk/reason-scoped parked-remediation reset actually changes rows, mirroring
+// the justParked one-time-notify pattern. sessionID is a synthetic
+// "bulk-reset:<scope>" key, never "" — see EventBusNotifier.Notify's doc
+// comment for the coalescing-collision bug that reintroduces. metadata["item_id"]
+// mirrors it so eventToRecord's title-clobbering fallback doesn't trigger.
 func (s *BacklogService) notifyBulkResetParked(reasonFilter *domain.StuckReason, resetCount int) {
 	if s.eventBus == nil {
 		return
 	}
 	scope := "every reason"
+	scopeKey := "all"
 	if reasonFilter != nil {
 		scope = string(*reasonFilter)
+		scopeKey = scope
 	}
+	sessionID := "bulk-reset:" + scopeKey
 	s.eventBus.Publish(events.NewNotificationEvent(
-		"", "", uuid.New().String(),
+		sessionID, "", uuid.New().String(),
 		int32(sessionv1.NotificationType_NOTIFICATION_TYPE_INFO),
 		int32(sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_LOW),
 		"Parked items reset",
 		fmt.Sprintf("Reset %d parked item%s (%s) — they'll get automated attempts again.",
 			resetCount, pluralSuffix(resetCount), scope),
-		map[string]string{"reason": scope, "reset_count": fmt.Sprintf("%d", resetCount)},
+		map[string]string{"reason": scope, "reset_count": fmt.Sprintf("%d", resetCount), "item_id": sessionID},
 	))
 }
 

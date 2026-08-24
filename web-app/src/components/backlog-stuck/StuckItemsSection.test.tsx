@@ -1,5 +1,5 @@
 import React from "react";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, act } from "@testing-library/react";
 import { timestampFromDate } from "@bufbuild/protobuf/wkt";
 import { StuckReason, type StuckBacklogItem } from "@/gen/session/v1/backlog_pb";
 
@@ -472,6 +472,44 @@ describe("StuckItemsSection", () => {
       fireEvent.click(screen.getByTestId("stuck-items-reset-parked"));
       expect(bulkResetParkedRemediation).toHaveBeenCalledWith(undefined);
       await screen.findByText(/Reset 3 parked items\./);
+    });
+
+    it("disables the global button and every other per-reason button while one per-reason reset is in flight", async () => {
+      let resolveReset: (n: number) => void = () => {};
+      const bulkResetParkedRemediation = jest.fn(
+        () =>
+          new Promise<number>((res) => {
+            resolveReset = res;
+          })
+      );
+      mockUseStuckBacklogItems.mockReturnValue(
+        baseHookReturn({
+          items: [
+            makeItem({ remediationAttempts: 5, reason: StuckReason.PR_READY_UNMERGED }),
+            makeItem({
+              itemId: "second",
+              remediationAttempts: 5,
+              reason: StuckReason.STALE_WORK,
+            }),
+          ],
+          bulkResetParkedRemediation,
+        })
+      );
+      render(<StuckItemsSection />);
+
+      fireEvent.click(screen.getByTestId(`stuck-group-reset-parked-${StuckReason.STALE_WORK}`));
+
+      expect(screen.getByTestId(`stuck-group-reset-parked-${StuckReason.STALE_WORK}`)).toHaveTextContent(
+        "Resetting…"
+      );
+      expect(screen.getByTestId(`stuck-group-reset-parked-${StuckReason.STALE_WORK}`)).toBeDisabled();
+      expect(screen.getByTestId(`stuck-group-reset-parked-${StuckReason.PR_READY_UNMERGED}`)).toBeDisabled();
+      expect(screen.getByTestId("stuck-items-reset-parked")).toBeDisabled();
+
+      await act(async () => resolveReset(1));
+
+      expect(screen.getByTestId(`stuck-group-reset-parked-${StuckReason.PR_READY_UNMERGED}`)).not.toBeDisabled();
+      expect(screen.getByTestId("stuck-items-reset-parked")).not.toBeDisabled();
     });
   });
 

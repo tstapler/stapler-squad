@@ -106,13 +106,11 @@ export const groupHeading = style({
   flex: 1,
 });
 
-// Per-reason-group counterpart to resetParkedBtn (below) — same treatment,
-// scaled down since it sits inline with a group heading rather than the
-// section header.
-export const resetParkedReasonBtn = style({
-  padding: `2px ${vars.space["2"]}`,
+// Shared warning-outline button treatment for the "Reset parked" affordances
+// — the section-header-level resetParkedBtn (below) and its per-reason-group
+// counterpart resetParkedReasonBtn differ only in padding/fontSize.
+const resetParkedBtnBase = style({
   borderRadius: vars.radii.sm,
-  fontSize: vars.fontSize.xs,
   cursor: "pointer",
   border: `1px solid ${vars.color.warning}`,
   background: "transparent",
@@ -131,6 +129,17 @@ export const resetParkedReasonBtn = style({
     cursor: "not-allowed",
   },
 });
+
+export const resetParkedReasonBtn = style([
+  resetParkedBtnBase,
+  {
+    // minHeight keeps this at/above the WCAG 2.5.5 24px touch-target minimum
+    // despite the smaller padding/fontSize than the section-level resetParkedBtn.
+    padding: `${vars.space["1"]} ${vars.space["2"]}`,
+    fontSize: vars.fontSize.xs,
+    minHeight: "24px",
+  },
+]);
 
 export const group = style({
   display: "flex",
@@ -235,28 +244,13 @@ export const retryBtn = style({
 // Phase A minimal UI requirement) — an admin action, so it's styled to stand
 // apart from the read-only filter chips rather than blending in with them.
 
-export const resetParkedBtn = style({
-  padding: `${vars.space["1"]} ${vars.space["3"]}`,
-  borderRadius: vars.radii.sm,
-  fontSize: vars.fontSize.sm,
-  cursor: "pointer",
-  border: `1px solid ${vars.color.warning}`,
-  background: "transparent",
-  color: vars.color.warningText,
-  fontWeight: 600,
-  flexShrink: 0,
-  ":hover": {
-    background: vars.color.warningBg,
+export const resetParkedBtn = style([
+  resetParkedBtnBase,
+  {
+    padding: `${vars.space["1"]} ${vars.space["3"]}`,
+    fontSize: vars.fontSize.sm,
   },
-  ":focus-visible": {
-    outline: `2px solid ${vars.color.inputFocusBorder}`,
-    outlineOffset: "1px",
-  },
-  ":disabled": {
-    opacity: 0.6,
-    cursor: "not-allowed",
-  },
-});
+]);
 
 export const resetParkedMessage = style({
   fontSize: vars.fontSize.sm,

@@ -7,7 +7,6 @@ package services
 
 import (
 	"context"
-	"sync"
 	"testing"
 	"time"
 
@@ -455,9 +454,74 @@ func TestBulkResetStuckRemediation_should_publishNotification_When_RowsReset(t *
 		assert.Equal(t, events.EventNotification, ev.Type)
 		assert.Contains(t, ev.NotificationMessage, string(domain.StuckReasonBouncing))
 		assert.Contains(t, ev.NotificationMessage, "1 parked item")
+		assert.Equal(t, string(domain.StuckReasonBouncing), ev.NotificationMetadata["reason"])
+		assert.Equal(t, "1", ev.NotificationMetadata["reset_count"])
+		assert.NotEmpty(t, ev.SessionID, "sessionID must not be empty — see notifyBulkResetParked's doc comment for the coalescing-collision bug this avoids")
+		assert.Equal(t, ev.SessionID, ev.NotificationMetadata["item_id"], "item_id must mirror sessionID so eventToRecord doesn't fall back SessionName to the raw synthetic key")
 	case <-time.After(2 * time.Second):
 		t.Fatal("expected a notification event after a non-empty bulk reset")
 	}
+}
+
+// TestBulkResetStuckRemediation_should_useDistinctSessionIDsPerReason_When_NotifyingDifferentScopes
+// covers the notification-history-collision bug an earlier draft of
+// notifyBulkResetParked reintroduced (caught in review): NotificationHistoryStore
+// coalesces unread notifications by (sessionID, notificationType) with no time
+// bound (server/notifications/store.go's findUnreadDuplicate), and
+// EventBusNotifier.Notify's doc comment (server/services/backlog_notifier.go)
+// documents the exact prior incident this class of bug caused — two different
+// items'/scopes' same-type notifications sharing sessionID="" silently
+// clobbered each other in the persisted history. This test proves
+// notifyBulkResetParked's fix: two different-reason resets, and a reason-scoped
+// reset vs. the global (unscoped) reset, always produce distinct SessionIDs, so
+// they can never collapse into the same coalescing bucket
+// (TestCoalescing_DifferentBacklogItemsSurviveWithinWindow in
+// server/notifications/subscriber_test.go covers the general
+// distinct-sessionID-survives-coalescing mechanism this relies on).
+func TestBulkResetStuckRemediation_should_useDistinctSessionIDsPerReason_When_NotifyingDifferentScopes(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+	bus := events.NewEventBus(8)
+	svc.SetEventBus(bus)
+	ctx := t.Context()
+
+	bouncing, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{Title: "bouncing", Status: string(session.BacklogStatusReview)})
+	require.NoError(t, err)
+	seedOpenStuckRow(t, storage, bouncing.ID, domain.StuckReasonBouncing, time.Now(), "bouncing")
+	_, err = storage.RecordRemediationAttempt(ctx, bouncing.ID, domain.StuckReasonBouncing, session.MaxRemediationAttempts, nil)
+	require.NoError(t, err)
+
+	staleWork, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{Title: "stale-work", Status: string(session.BacklogStatusInProgress)})
+	require.NoError(t, err)
+	seedOpenStuckRow(t, storage, staleWork.ID, domain.StuckReasonStaleWork, time.Now(), "stale")
+	_, err = storage.RecordRemediationAttempt(ctx, staleWork.ID, domain.StuckReasonStaleWork, session.MaxRemediationAttempts, nil)
+	require.NoError(t, err)
+
+	subCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	ch, _ := bus.Subscribe(subCtx)
+
+	_, err = svc.BulkResetStuckRemediation(ctx, connect.NewRequest(&sessionv1.BulkResetStuckRemediationRequest{
+		Reason: sessionv1.StuckReason_STUCK_REASON_BOUNCING,
+	}))
+	require.NoError(t, err)
+	_, err = svc.BulkResetStuckRemediation(ctx, connect.NewRequest(&sessionv1.BulkResetStuckRemediationRequest{
+		Reason: sessionv1.StuckReason_STUCK_REASON_STALE_WORK,
+	}))
+	require.NoError(t, err)
+
+	var sessionIDs []string
+	for i := 0; i < 2; i++ {
+		select {
+		case ev := <-ch:
+			sessionIDs = append(sessionIDs, ev.SessionID)
+		case <-time.After(2 * time.Second):
+			t.Fatalf("expected 2 notification events, got %d", i)
+		}
+	}
+	require.Len(t, sessionIDs, 2)
+	assert.NotEqual(t, sessionIDs[0], sessionIDs[1], "two different-reason resets must not share a coalescing sessionID")
 }
 
 // TestBulkResetStuckRemediation_should_notPublishNotification_When_NothingReset
@@ -488,47 +552,72 @@ func TestBulkResetStuckRemediation_should_notPublishNotification_When_NothingRes
 	}
 }
 
-// TestBulkResetStuckRemediation_should_resolveDeterministically_When_RacingAConcurrentColdRetryWrite
+// TestBulkResetStuckRemediation_should_resolveToLastWriterDeterministically_When_RacingAConcurrentColdRetryWrite
 // covers AC 5 of the reason-scoped-sweep feature: a reason-scoped bulk reset
 // racing a concurrent cold-retry heartbeat write (BUG-083, PR #572) on the
-// SAME row. BulkResetStuckRemediation issues a single atomic SQL
-// UPDATE...WHERE (EntRepository.BulkResetStuckRemediation), so there is no
-// read-modify-write window on the Go side; the only remaining race is which
-// of the two independent UPDATE transactions commits last. This is a documented
-// last-write-wins outcome (see research/pitfalls.md §3), not a silent
-// corruption: the final state must always be one of the two writers' values,
-// never a torn/partial write, and the test asserts that explicitly instead
-// of silently trusting the race detector alone.
-func TestBulkResetStuckRemediation_should_resolveDeterministically_When_RacingAConcurrentColdRetryWrite(t *testing.T) {
+// SAME row. This test intentionally does NOT use goroutines: the ent SQLite
+// connection is opened with SetMaxOpenConns(1) (session/ent_repository.go),
+// so database/sql fully serializes both writers' Exec calls regardless of
+// goroutine scheduling — a goroutine-based version of this test cannot
+// exercise real interleaving and would pass identically whether the
+// underlying logic is correct or not (caught in review of an earlier draft).
+// Instead this proves the actual claim directly: both writers issue a
+// single-column literal UPDATE (never read-modify-write), so whichever call
+// runs LAST always wins outright — exercised here in both orders — and the
+// row is never torn/partial. This is the documented last-write-wins outcome
+// (research/pitfalls.md §3), not silent corruption.
+func TestBulkResetStuckRemediation_should_resolveToLastWriterDeterministically_When_RacingAConcurrentColdRetryWrite(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
-	ctx := t.Context()
 
-	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{Title: "racing item", Status: string(session.BacklogStatusReview)})
-	require.NoError(t, err)
-	seedOpenStuckRow(t, storage, item.ID, domain.StuckReasonBouncing, time.Now(), "bouncing")
-	_, err = storage.RecordRemediationAttempt(ctx, item.ID, domain.StuckReasonBouncing, session.MaxRemediationAttempts, nil)
-	require.NoError(t, err)
+	t.Run("cold-retry re-park runs last: re-park wins", func(t *testing.T) {
+		t.Parallel()
+		storage := createTestStorage(t)
+		ctx := t.Context()
+		reason := domain.StuckReasonBouncing
 
-	reason := domain.StuckReasonBouncing
-	var wg sync.WaitGroup
-	wg.Add(2)
-	go func() {
-		defer wg.Done()
-		// Simulates a concurrent cold-retry heartbeat tick re-parking the row.
-		_, _ = storage.RecordRemediationAttempt(ctx, item.ID, domain.StuckReasonBouncing, session.MaxRemediationAttempts, nil)
-	}()
-	go func() {
-		defer wg.Done()
-		_, _ = storage.BulkResetStuckRemediation(ctx, &reason, true)
-	}()
-	wg.Wait()
+		item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{Title: "racing item", Status: string(session.BacklogStatusReview)})
+		require.NoError(t, err)
+		seedOpenStuckRow(t, storage, item.ID, reason, time.Now(), "bouncing")
+		_, err = storage.RecordRemediationAttempt(ctx, item.ID, reason, session.MaxRemediationAttempts, nil)
+		require.NoError(t, err)
 
-	rows, err := storage.FindOpenStuckStates(ctx)
-	require.NoError(t, err)
-	require.Len(t, rows, 1, "row must still exist exactly once — no torn/duplicate write")
-	assert.Contains(t, []int32{0, session.MaxRemediationAttempts}, rows[0].RemediationAttempts,
-		"final state must be exactly one writer's value (last-write-wins), never a partial/corrupt one")
+		_, err = storage.BulkResetStuckRemediation(ctx, &reason, true)
+		require.NoError(t, err)
+		// Simulates a cold-retry heartbeat tick landing right after the sweep.
+		_, err = storage.RecordRemediationAttempt(ctx, item.ID, reason, session.MaxRemediationAttempts, nil)
+		require.NoError(t, err)
+
+		rows, err := storage.FindOpenStuckStates(ctx)
+		require.NoError(t, err)
+		require.Len(t, rows, 1, "row must still exist exactly once — no torn/duplicate write")
+		assert.Equal(t, int32(session.MaxRemediationAttempts), rows[0].RemediationAttempts,
+			"the write that ran last (re-park) must win outright, not be partially applied")
+	})
+
+	t.Run("bulk reset runs last: reset wins", func(t *testing.T) {
+		t.Parallel()
+		storage := createTestStorage(t)
+		ctx := t.Context()
+		reason := domain.StuckReasonBouncing
+
+		item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{Title: "racing item", Status: string(session.BacklogStatusReview)})
+		require.NoError(t, err)
+		seedOpenStuckRow(t, storage, item.ID, reason, time.Now(), "bouncing")
+		_, err = storage.RecordRemediationAttempt(ctx, item.ID, reason, session.MaxRemediationAttempts, nil)
+		require.NoError(t, err)
+
+		// Simulates a cold-retry heartbeat tick landing right before the sweep.
+		_, err = storage.RecordRemediationAttempt(ctx, item.ID, reason, session.MaxRemediationAttempts, nil)
+		require.NoError(t, err)
+		_, err = storage.BulkResetStuckRemediation(ctx, &reason, true)
+		require.NoError(t, err)
+
+		rows, err := storage.FindOpenStuckStates(ctx)
+		require.NoError(t, err)
+		require.Len(t, rows, 1, "row must still exist exactly once — no torn/duplicate write")
+		assert.Equal(t, int32(0), rows[0].RemediationAttempts,
+			"the write that ran last (reset) must win outright, not be partially applied")
+	})
 }
 
 // TestTriggerRemediationNow_should_reject_When_NoOpenStuckRow verifies the
