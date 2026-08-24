@@ -442,7 +442,7 @@ func (e *fakePRGitExecutor) Run(_ context.Context, _ string, name string, args .
 			return nil, e.authErr
 		}
 		return nil, nil
-	case prog == "gh" && len(args) > 1 && args[0] == "pr" && args[1] == "list":		// findExistingPR's pre-check: report no existing PR so CreatePR
+	case prog == "gh" && len(args) > 1 && args[0] == "pr" && args[1] == "list": // findExistingPR's pre-check: report no existing PR so CreatePR
 		// proceeds to `gh pr create`.
 		return nil, exec.ErrNotFound
 	case prog == "gh" && len(args) > 1 && args[0] == "pr" && args[1] == "create":
@@ -614,7 +614,8 @@ func TestCreatePullRequest_should_ReturnPersistedFalse_When_SaveInstancesFails(t
 
 func TestCreatePullRequest_should_SurfaceSpecificError_When_GHNotAuthenticated(t *testing.T) {
 	t.Parallel()
-	mock := &fakePRGitExecutor{authErr: errors.New("not logged in")}	wt := newFakePRWorktree("sess-no-auth", "feature/no-auth", mock)
+	mock := &fakePRGitExecutor{authErr: errors.New("not logged in")}
+	wt := newFakePRWorktree("sess-no-auth", "feature/no-auth", mock)
 	inst := &session.Instance{Title: "No auth session", UUID: uuid.New().String()}
 	inst.SetGitWorktree(wt)
 
