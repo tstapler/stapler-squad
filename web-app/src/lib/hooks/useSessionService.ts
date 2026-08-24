@@ -74,7 +74,7 @@ const CREATE_SESSION_TIMEOUT_MS = 160_000;
 // in-flight slot forever — adversarial-review Blocker 1. A read-only list
 // call is expected to be fast; well above typical latency but far below
 // CREATE_SESSION_TIMEOUT_MS since no backend work (tmux/clone) is involved.
-const LIST_SESSIONS_TIMEOUT_MS = 15_000;
+export const LIST_SESSIONS_TIMEOUT_MS = 15_000;
 
 interface UseSessionServiceOptions {
   baseUrl?: string;
@@ -269,6 +269,13 @@ export function useSessionService(
         dispatch(setError(error.message));
         console.error("Failed to list sessions:", error);
       } finally {
+        // Known limitation (sdd:6-verify follow-up, not fixed here): this
+        // clears as soon as THIS call's own request() settles, even if it
+        // got coalesced behind a still-in-flight rerun whose data hasn't
+        // landed yet — `loading` can briefly read false mid-refresh. A
+        // correct fix needs a site-scoped "is my own work done" signal, not
+        // the coordinator's shared busy state (which also reflects unrelated
+        // background stream reconnects from sites #2/#3/#3b).
         dispatch(setLoading(false));
       }
     },
@@ -965,7 +972,9 @@ export function useSessionService(
             // Handle backwards-jump: do a full resync.
             if (needsFullResyncRef.current) {
               needsFullResyncRef.current = false;
-              void runFullResync(myGeneration);
+              runFullResync(myGeneration).catch((err) => {
+                console.error("[reconnect] full resync failed:", err);
+              });
             }
 
             onReconnectRef.current?.();
@@ -1003,7 +1012,9 @@ export function useSessionService(
             // Handle backwards-jump: do a full resync.
             if (needsFullResyncRef.current) {
               needsFullResyncRef.current = false;
-              void runFullResync(myGeneration);
+              runFullResync(myGeneration).catch((err) => {
+                console.error("[reconnect] full resync failed:", err);
+              });
             }
 
             onReconnectRef.current?.();

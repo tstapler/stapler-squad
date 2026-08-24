@@ -180,7 +180,7 @@ function makeWrapper(store: ReturnType<typeof makeTestStore>) {
 }
 
 // Import hook after all mocks are set up
-import { useSessionService } from "./useSessionService";
+import { useSessionService, LIST_SESSIONS_TIMEOUT_MS } from "./useSessionService";
 
 describe("useSessionService visibility/online handler", () => {
   // These tests verify that the hook registers (or does not register)
@@ -348,6 +348,27 @@ describe("useSessionService RefreshCoordinator integration", () => {
 
   afterEach(() => {
     jest.clearAllMocks();
+  });
+
+  it("listSessions_should_boundEveryFetchWithATimeout_When_calledAtAnyOfThe4CallSites", async () => {
+    // adversarial-review Blocker 1: a hung fetch must not stall the shared
+    // coordinator forever. Guards against a future edit silently dropping
+    // the { timeoutMs } option at any of the 4 wired call sites.
+    const store = makeTestStore();
+    mockListSessions.mockResolvedValue({ sessions: [], systemMemoryPct: 0 });
+
+    const { result } = renderHook(() => useSessionService({ autoWatch: false, enabled: true }), {
+      wrapper: makeWrapper(store),
+    });
+
+    await act(async () => {
+      await result.current.listSessions({});
+    });
+
+    expect(mockListSessions).toHaveBeenLastCalledWith(
+      expect.anything(),
+      expect.objectContaining({ timeoutMs: LIST_SESSIONS_TIMEOUT_MS })
+    );
   });
 
   it("listSessions_should_reflectOnlyTheNewerCallsData_When_anOlderCallsResponseResolvesAfterANewerOnesResponse", async () => {

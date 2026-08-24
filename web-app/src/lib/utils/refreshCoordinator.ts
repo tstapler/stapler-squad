@@ -25,9 +25,11 @@ export interface RequestOptions {
    * Marks this request's fetcher as one that must not be silently dropped
    * (e.g. a stream-reconnect flush gated on `streamGenerationRef`, whose RPC
    * must actually fire — see useSessionService.ts's watch-stream call sites).
-   * A guarded pending fetcher is never overwritten by a later non-guarded
+   * A guarded pending fetcher is never overwritten by a later *non-guarded*
    * request: the later caller's own promise still settles once the guarded
-   * fetch resolves, but its `onResult` is not invoked for it.
+   * fetch resolves, but its `onResult` is not invoked for it. Guarded vs.
+   * guarded is still last-caller-wins — this option only protects a guarded
+   * fetcher from an unguarded one, not from another guarded one.
    */
   guarded?: boolean;
 }
@@ -51,15 +53,7 @@ type CoordinatorState<T> =
 
 export class RefreshCoordinator<T> {
   private state: CoordinatorState<T> = { kind: "idle" };
-  // Per-fetch-start counter (incremented only when a fetch actually begins,
-  // never on a request() call that merely updates `pending`). Kept as a
-  // defensive, independently-documented invariant: the strictly serialized
-  // design above means at most one fetch is ever in flight, so in steady
-  // state this check can never observe a mismatch — a superseded fetcher is
-  // never even invoked (see `pending` overwrite in request()), which is a
-  // strictly stronger guarantee than discarding a stale result after the
-  // fact. Retained as a guard against a future refactor accidentally
-  // breaking that invariant.
+  // Per-fetch-start counter; see the myGeneration check in run() for why.
   private generation = 0;
 
   request(fetcher: Fetcher<T>, onResult: ResultHandler<T>, opts: RequestOptions = {}): Promise<void> {
@@ -91,6 +85,10 @@ export class RefreshCoordinator<T> {
 
     try {
       const result = await fetcher();
+      // Defensive: under the strictly serialized design (at most 1 fetch in
+      // flight, see request()'s pending overwrite) a superseded fetcher is
+      // never even invoked, so this can't currently mismatch — retained as
+      // a guard against a future refactor breaking that invariant.
       if (myGeneration === this.generation) {
         onResult(result);
       }

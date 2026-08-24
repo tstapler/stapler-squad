@@ -4,6 +4,11 @@
  * Covers the `cancelled`-flag guard backported from useEscapeEvents (no setState
  * after the effect re-runs on a session change before the in-flight fetch
  * resolves) and the new `enabled: boolean = true` gating parameter.
+ *
+ * waitFor() calls below use an explicit 5000ms timeout (not the 1000ms
+ * default): confirmed via isolated-vs-full-suite reruns to be a load-induced
+ * flake under full parallel test-suite CPU contention, not a logic bug —
+ * already investigated, no need to re-litigate if it flakes again.
  */
 
 import { renderHook, act, waitFor } from "@testing-library/react";

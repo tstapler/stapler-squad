@@ -124,7 +124,10 @@ describe("RefreshCoordinator", () => {
     await expect(pB).resolves.toBeUndefined();
   });
 
-  it("request_should_rejectAllCoalescedWaiters_When_theCoalescedFetchRejects", async () => {
+  it("request_should_resolveAnEarlierCoalescedWaiter_When_ALaterCallerSupersedesItsFetcherBeforeItRejects", async () => {
+    // A caller whose fetcher gets superseded before it ever runs (pB here)
+    // rides the superseding caller's (pB2's) outcome — including its
+    // success, even though pB's own fetcher would have rejected had it run.
     const coordinator = new RefreshCoordinator<Snapshot>();
     const dA = deferred<Snapshot>();
     const networkError = new Error("network down");
@@ -133,13 +136,11 @@ describe("RefreshCoordinator", () => {
     const pB = coordinator.request(() => Promise.reject(networkError), jest.fn());
     const pB2 = coordinator.request(() => Promise.resolve({ id: "ignored" }), jest.fn());
 
-    // pB2 supersedes pB's fetcher in the pending slot (last-caller-wins), so
-    // assert against the caller whose fetcher actually rejects.
     dA.resolve({ id: "A" });
 
     await pA;
+    await expect(pB).resolves.toBeUndefined();
     await expect(pB2).resolves.toBeUndefined();
-    void pB;
   });
 
   it("request_should_rejectCallersOwnPromise_When_itsOwnFetcherRejectsAndNoCoalescingOccurred", async () => {

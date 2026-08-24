@@ -468,3 +468,23 @@ superseded fetcher's `fetcher()` is never even invoked, so it can't "resolve aft
 Implemented as a 3-caller scenario (A running, B queued, C supersedes B before B's fetcher ever
 runs) instead, which proves the same requirement (a superseded response's `onResult` is never
 invoked) via the guarantee the finalized design actually provides.
+
+## Follow-up (not fixed here): premature `loading:false` under coalescing
+
+Found by `code:review`'s architecture pass during shipping (2026-08-24), not by the original
+plan/adversarial-review: site #1's `finally { dispatch(setLoading(false)) }`
+(`useSessionService.ts`'s `listSessions()`) clears as soon as *that caller's own* `request()`
+settles — not when a coalesced-behind rerun whose data will actually land in Redux next
+finishes. Under the coordinator's deferred-execution model this window is a full RPC
+round-trip (wider than pre-diff, where each concurrent `listSessions()` call fired its own
+already-running RPC). UI-only: Redux `sessions` data is never wrong, only `loading` can read
+`false` for one or more ticks mid-refresh (spinner flicker). Out of scope for this item's
+acceptance criteria (AC3 is about the stuck-`true`-forever failure mode, which is fixed).
+
+The "obvious" fix — gate the clear on a `RefreshCoordinator.isBusy` getter — is wrong: the
+coordinator's `state`/`pending` are shared across all 4 call sites, including the 3
+stream-lifecycle sites that never touch `loading` and fire routinely on WebSocket reconnects;
+gating on global busy-ness would keep `loading` stuck `true` on unrelated background activity.
+A correct fix needs a site-#1-scoped "is my own request (including anything it got coalesced
+into) actually done" signal, not the coordinator's shared busy state. Left as a scoped
+follow-up, documented inline at `useSessionService.ts`'s `listSessions()` `finally` block.
