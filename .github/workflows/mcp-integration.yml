@@ -5,9 +5,7 @@ on:
     branches: [ main ]
     paths:
       - 'server/mcp/**'
-      - 'server/services/mcp_injector.go'
-      - 'server/services/hook_injector.go'
-      - 'server/services/hook_receivers.go'
+      - 'server/services/**'
       - 'main.go'
       - 'go.mod'
       - 'go.sum'
@@ -16,9 +14,7 @@ on:
     branches: [ main ]
     paths:
       - 'server/mcp/**'
-      - 'server/services/mcp_injector.go'
-      - 'server/services/hook_injector.go'
-      - 'server/services/hook_receivers.go'
+      - 'server/services/**'
       - 'main.go'
       - 'go.mod'
       - 'go.sum'
