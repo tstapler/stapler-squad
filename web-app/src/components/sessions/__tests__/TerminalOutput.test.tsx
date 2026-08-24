@@ -162,6 +162,29 @@ function makeStreamMock(overrides: Partial<Record<string, any>> = {}) {
   };
 }
 
+// Shared by both stale-buffer-overlap regression tests below (jscpd flagged the
+// inlined version as a clone — see reflect-and-fix's Level 0 consolidation gate).
+// Asserts the local buffer was cleared exactly once, strictly before the resize
+// RPC was sent: clearing after doesn't prevent the overlap the fix exists to close.
+function expectClearedBeforeResize(streamState: ReturnType<typeof makeStreamMock>) {
+  expect(mockXtermState.clear).toHaveBeenCalledTimes(1);
+  expect(mockXtermState.clear.mock.invocationCallOrder[0]).toBeLessThan(
+    streamState.resize.mock.invocationCallOrder[0]
+  );
+}
+
+// Also shared by both regression tests (same jscpd flag): transitions the mocked
+// stream to connected and rerenders, returning the new streamState for the caller
+// to assign back to its `let streamState`.
+function connectStream(rerender: (el: React.ReactElement) => void, base: ReturnType<typeof makeStreamMock>) {
+  const next = makeStreamMock({ ...base, isConnected: true });
+  mockUseTerminalStream.mockImplementation(() => next);
+  act(() => {
+    rerender(<TerminalOutput sessionId="s1" baseUrl="http://x" />);
+  });
+  return next;
+}
+
 describe("TerminalOutput resize call sites", () => {
   let streamState: ReturnType<typeof makeStreamMock>;
 
@@ -241,11 +264,7 @@ describe("TerminalOutput resize call sites", () => {
   it("clears the local buffer before calling resize with a literal force:true third argument from the manual Fit button handler", () => {
     const { rerender, getByRole } = render(<TerminalOutput sessionId="s1" baseUrl="http://x" />);
 
-    streamState = makeStreamMock({ ...streamState, isConnected: true });
-    mockUseTerminalStream.mockImplementation(() => streamState);
-    act(() => {
-      rerender(<TerminalOutput sessionId="s1" baseUrl="http://x" />);
-    });
+    streamState = connectStream(rerender, streamState);
     streamState.resize.mockClear();
     mockXtermState.clear.mockClear();
 
@@ -263,12 +282,7 @@ describe("TerminalOutput resize call sites", () => {
     expect(mockXtermState.fit).toHaveBeenCalledTimes(1);
     expect(streamState.resize).toHaveBeenCalledTimes(1);
     expect(streamState.resize).toHaveBeenCalledWith(100, 30, true);
-    expect(mockXtermState.clear).toHaveBeenCalledTimes(1);
-    // Order matters: clearing after the resize RPC is sent doesn't prevent the
-    // stale-buffer overlap the fix exists to close.
-    expect(mockXtermState.clear.mock.invocationCallOrder[0]).toBeLessThan(
-      streamState.resize.mock.invocationCallOrder[0]
-    );
+    expectClearedBeforeResize(streamState);
   });
 
   // Task 4.2.4, AC4 (negative): the automatic value-changed resize path
@@ -280,11 +294,7 @@ describe("TerminalOutput resize call sites", () => {
   it("clears the local buffer before calling resize without a truthy force argument from the automatic handleTerminalResize path", () => {
     const { rerender } = render(<TerminalOutput sessionId="s1" baseUrl="http://x" />);
 
-    streamState = makeStreamMock({ ...streamState, isConnected: true });
-    mockUseTerminalStream.mockImplementation(() => streamState);
-    act(() => {
-      rerender(<TerminalOutput sessionId="s1" baseUrl="http://x" />);
-    });
+    streamState = connectStream(rerender, streamState);
     streamState.resize.mockClear();
     mockXtermState.clear.mockClear();
 
@@ -297,10 +307,7 @@ describe("TerminalOutput resize call sites", () => {
 
     expect(streamState.resize).toHaveBeenCalledTimes(1);
     expect(streamState.resize).toHaveBeenCalledWith(90, 28);
-    expect(mockXtermState.clear).toHaveBeenCalledTimes(1);
-    expect(mockXtermState.clear.mock.invocationCallOrder[0]).toBeLessThan(
-      streamState.resize.mock.invocationCallOrder[0]
-    );
+    expectClearedBeforeResize(streamState);
     // Exact-arity check: the 2-arg call must not have picked up a 3rd
     // truthy `force` argument.
     expect(streamState.resize.mock.calls[0]).toHaveLength(2);

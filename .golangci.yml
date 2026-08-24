@@ -49,6 +49,18 @@ linters:
             - max: 1000
               skipComments: true
               skipBlankLines: true
+    # Same rationale/pattern as gocyclo/gocognit/funlen/revive above: dupl flags
+    # copy-pasted Go blocks (the "Duplicated/Divergent Logic" failure mode — see
+    # quality:reflect-and-fix's Level 0 consolidation gate, added 2026-08-24 after
+    # a stapler-squad resize fix shipped at one call site and silently missed two
+    # others). Not in `enable:` above — the repo almost certainly has pre-existing
+    # duplication nothing has measured yet, and enabling it unscoped would fail
+    # `make lint`/`make ci` for everyone immediately. `.github/workflows/lint.yml`'s
+    # complexity gate step also enables dupl via --new-from-rev=origin/main, so only
+    # duplication introduced in a PR's own diff fails CI; `ready-complexity-gate`
+    # mirrors that locally. Threshold is dupl's own default (150 tokens).
+    dupl:
+      threshold: 150
     depguard:
       rules:
         no_server_in_core:
@@ -115,15 +127,15 @@ linters:
       # forbidigo above.
       # ──────────────────────────────────────────────────────────────────────────
       - path: "_test\\.go"
-        linters: [gocyclo, gocognit, funlen, revive]
+        linters: [gocyclo, gocognit, funlen, revive, dupl]
       - path: "^gen/"
-        linters: [gocyclo, gocognit, funlen, revive]
+        linters: [gocyclo, gocognit, funlen, revive, dupl]
       - path: "\\.pb\\.go"
-        linters: [gocyclo, gocognit, funlen, revive]
+        linters: [gocyclo, gocognit, funlen, revive, dupl]
       - path: "\\.connect\\.go"
-        linters: [gocyclo, gocognit, funlen, revive]
+        linters: [gocyclo, gocognit, funlen, revive, dupl]
       - path: "session/ent/"
-        linters: [gocyclo, gocognit, funlen, revive]
+        linters: [gocyclo, gocognit, funlen, revive, dupl]
       # exhaustive enforces DetectedStatus switch coverage in session/detection/ only.
       # All other packages use iota types with intentional default: clauses.
       - path: "^server/"

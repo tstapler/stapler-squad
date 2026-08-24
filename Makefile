@@ -610,6 +610,7 @@ install-tools: ensure-tools ## Install all development and analysis tools
 	go install golang.org/x/tools/cmd/deadcode@latest
 	go install golang.org/x/perf/cmd/benchstat@latest
 	go install gvisor.dev/gvisor/tools/checklocks/cmd/checklocks@latest
+	go install github.com/mibk/dupl@latest
 	@echo "All tools installed successfully!"
 
 # Code quality and analysis
@@ -804,14 +805,14 @@ ci: build $(BIN_TMUX) test test-race vet lint lint-css-tokens test-integration f
 # local equivalent (the external go-test-coverage action, the E2E-coverage PR
 # comment) — those only run in CI. `--new-from-rev=origin/main` requires a
 # reachable origin/main; `git fetch origin main` first if it's stale.
-ready: ci ready-complexity-gate ## Local approximation of every required PR check (make ci + complexity gate + web-app lint/scanner suites)
+ready: ci ready-complexity-gate ready-duplication-report-web ## Local approximation of every required PR check (make ci + complexity/duplication gate + web-app lint/scanner suites)
 	cd web-app && npx next lint
 	cd web-app && pnpm run lint:css && pnpm run lint:css-vars
 	cd tools/scanner && go test ./...
 	cd tools/ci-gates && pnpm install --silent && pnpm test
 	@echo "✅ ready: local approximation of PR checks complete"
 
-ready-complexity-gate: ensure-tools ## New-code-only gocyclo/gocognit/funlen/revive gate, mirroring lint.yml's PR-only complexity check
+ready-complexity-gate: ensure-tools ## New-code-only gocyclo/gocognit/funlen/revive/dupl gate, mirroring lint.yml's PR-only complexity/duplication check
 	@GOBIN=$$(go env GOBIN); \
 	if [ -z "$$GOBIN" ]; then GOBIN=$$(go env GOPATH)/bin; fi; \
 	if ! which golangci-lint >/dev/null 2>&1; then \
@@ -819,7 +820,13 @@ ready-complexity-gate: ensure-tools ## New-code-only gocyclo/gocognit/funlen/rev
 		go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest; \
 	fi; \
 	golangci-lint run --timeout=5m --max-issues-per-linter=0 --max-same-issues=0 \
-		--enable=gocyclo,gocognit,funlen,revive --new-from-rev=origin/main
+		--enable=gocyclo,gocognit,funlen,revive,dupl --new-from-rev=origin/main
+
+# Advisory only — see lint.yml's "jscpd (web-app duplication — advisory)" step for why this
+# doesn't block (no git-diff scoping in jscpd; kibitzer is the intended long-term fix,
+# tstapler/kibitzer#28). Prints findings; never fails the target.
+ready-duplication-report-web: ## Advisory web-app duplication report (jscpd) — never fails
+	@cd web-app && pnpm run lint:duplicates || true
 
 # Quick development workflows
 quick-check: build $(BIN_TMUX) test-coverage test-race lint lint-css-tokens registry-diff ## Quick development validation
