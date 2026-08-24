@@ -13,8 +13,10 @@ import (
 	"fmt"
 
 	"connectrpc.com/connect"
+	"github.com/google/uuid"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -255,8 +257,48 @@ func (s *BacklogService) BulkResetStuckRemediation(
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to bulk reset stuck remediation: %w", err))
 	}
+	if n > 0 {
+		s.notifyBulkResetParked(reasonFilter, n)
+	}
 
 	return connect.NewResponse(&sessionv1.BulkResetStuckRemediationResponse{ResetCount: int32(n)}), nil
+}
+
+// notifyBulkResetParked publishes an operator-facing notification whenever a
+// bulk/reason-scoped parked-remediation reset actually changes rows, mirroring
+// the justParked one-time-notify pattern. sessionID is a synthetic
+// "bulk-reset:<scope>" key, never "" — see EventBusNotifier.Notify's doc
+// comment for the coalescing-collision bug that reintroduces. metadata["item_id"]
+// mirrors it so eventToRecord's title-clobbering fallback doesn't trigger.
+func (s *BacklogService) notifyBulkResetParked(reasonFilter *domain.StuckReason, resetCount int) {
+	if s.eventBus == nil {
+		return
+	}
+	scope := "every reason"
+	scopeKey := "all"
+	if reasonFilter != nil {
+		scope = string(*reasonFilter)
+		scopeKey = scope
+	}
+	sessionID := "bulk-reset:" + scopeKey
+	s.eventBus.Publish(events.NewNotificationEvent(
+		sessionID, "", uuid.New().String(),
+		int32(sessionv1.NotificationType_NOTIFICATION_TYPE_INFO),
+		int32(sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_LOW),
+		"Parked items reset",
+		fmt.Sprintf("Reset %d parked item%s (%s) — they'll get automated attempts again.",
+			resetCount, pluralSuffix(resetCount), scope),
+		map[string]string{"reason": scope, "reset_count": fmt.Sprintf("%d", resetCount), "item_id": sessionID},
+	))
+}
+
+// pluralSuffix returns "s" unless n == 1 — small formatting helper for
+// notifyBulkResetParked's message.
+func pluralSuffix(n int) string {
+	if n == 1 {
+		return ""
+	}
+	return "s"
 }
 
 // remediationActionByReason maps a stuck reason to the BacklogService method

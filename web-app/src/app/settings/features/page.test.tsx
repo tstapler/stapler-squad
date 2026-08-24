@@ -18,6 +18,12 @@ jest.mock("@/lib/contexts/FeatureFlagsContext", () => ({
   useFeatureFlags: jest.fn(),
 }));
 
+// Out of scope for this file (covered by StreamHubRolloutPanel.test.tsx) — stub it out so
+// this suite doesn't also need to mock the RPC client it calls on mount.
+jest.mock("@/components/settings/StreamHubRolloutPanel", () => ({
+  StreamHubRolloutPanel: () => null,
+}));
+
 const mockUseFeatureFlags = useFeatureFlags as jest.MockedFunction<typeof useFeatureFlags>;
 
 function makeFlag(overrides: Partial<FeatureFlagMeta> & Pick<FeatureFlagMeta, "name">): FeatureFlagMeta {

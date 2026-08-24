@@ -11,6 +11,8 @@ import (
 	"connectrpc.com/connect"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/goleak"
+
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
@@ -428,7 +430,13 @@ func TestCreateSession_GitHubURLResolution_BoundedByContext(t *testing.T) {
 //
 // Requires tmux to be installed; skipped automatically otherwise.
 func TestCreateSession_StatusManagerWiredBeforeDriver(t *testing.T) {
-	t.Parallel()
+	// Not t.Parallel(): this test's goleak.IgnoreCurrent()/VerifyNone() baseline
+	// would be polluted by goroutines started/stopped in sibling parallel tests.
+	baseline := goleak.IgnoreCurrent()
+	// Registered first so it runs LAST (t.Cleanup is LIFO) — after
+	// destroyCreatedSession/svc.Shutdown/bus.Close have fully torn everything down.
+	t.Cleanup(func() { goleak.VerifyNone(t, baseline) })
+
 	storage := createTestStorage(t)
 	bus := events.NewEventBus(16)
 	t.Cleanup(bus.Close)

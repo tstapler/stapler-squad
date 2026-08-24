@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tstapler/stapler-squad/config"
+	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
 )
 
@@ -166,5 +168,20 @@ func Test_formatKnownHosts_should_SortEntriesByHostID_When_GivenMultipleEntries(
 	}
 	if idxFirst > idxSecond {
 		t.Errorf("expected %q to appear before %q in sorted output, got: %s", first.String(), second.String(), got)
+	}
+}
+
+// TestBuildLogConfig_DefaultsToInfoNotDebug guards against a bug where an
+// unset ConsoleLevel zero-values to DEBUG (LogLevel's iota starts at
+// DEBUG=0), which initializeWithConfig's min(FileLevel, ConsoleLevel) seeding
+// then used to override an explicit FileLevel — flooding the log with DEBUG
+// output on every server boot regardless of FileLevel's intended value.
+func TestBuildLogConfig_DefaultsToInfoNotDebug(t *testing.T) {
+	cfg := buildLogConfig(true, &config.Config{}, false)
+	if cfg.FileLevel != log.INFO {
+		t.Errorf("FileLevel = %v, want %v", cfg.FileLevel, log.INFO)
+	}
+	if cfg.ConsoleLevel != log.INFO {
+		t.Errorf("ConsoleLevel = %v, want %v", cfg.ConsoleLevel, log.INFO)
 	}
 }

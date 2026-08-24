@@ -27,6 +27,7 @@ import (
 	"encoding/json"
 	"io"
 	"net"
+	"os"
 	"os/exec"
 	"testing"
 	"time"
@@ -159,6 +160,25 @@ func remoteRelayTestClientConfig(t *testing.T, hostKey ssh.PublicKey) ssh.Client
 	}
 }
 
+// shortSocketBasePath is a stand-in for t.TempDir() everywhere a unix
+// approval socket gets bound under the returned directory. t.TempDir()
+// embeds the full calling test's name in the path it generates; for this
+// file's longest test name, that pushes RemoteApprovalSocketPath's result
+// past macOS/BSD's ~104-byte sockaddr_un.sun_path limit and bind(2) fails
+// with EINVAL ("bind: invalid argument") rather than any length-specific
+// error. os.MkdirTemp("", "ssq-appr-") keeps the directory name short and
+// test-name-independent; t.Cleanup removes it the same way t.TempDir()
+// would have.
+func shortSocketBasePath(t *testing.T) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("", "ssq-appr-")
+	if err != nil {
+		t.Fatalf("MkdirTemp: %v", err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	return dir
+}
+
 // autoAllowClassifier is a fake classifier.Classifier that always returns
 // AutoAllow -- "configured to auto-classify predictably for the test" per
 // this feature's design brief, avoiding any need to wait on (or fake) a
@@ -238,7 +258,7 @@ func TestApprovalHandler_SatisfiesRelayHandlerEndToEnd(t *testing.T) {
 	// this line fails to compile.
 	var _ sshremote.PermissionRequestHandler = handler
 
-	basePath := t.TempDir()
+	basePath := shortSocketBasePath(t)
 	relay, err := sshremote.NewRemoteApprovalRelay(pool, handler, sshremote.RemoteApprovalRelayTarget{
 		RemoteName:      target.Name,
 		BasePath:        basePath,
@@ -357,7 +377,7 @@ func TestRemoteApprovalHookCommand_RealShellDeliversToRelay(t *testing.T) {
 	handler := NewApprovalHandler(NewApprovalStore(""), nil, events.NewEventBus(4))
 	handler.SetClassifier(autoAllowClassifier{})
 
-	basePath := t.TempDir()
+	basePath := shortSocketBasePath(t)
 	relay, err := sshremote.NewRemoteApprovalRelay(pool, handler, sshremote.RemoteApprovalRelayTarget{
 		RemoteName:      target.Name,
 		BasePath:        basePath,
@@ -439,7 +459,7 @@ func TestRemoteApprovalHookCommand_SurvivesSlowHumanDecision(t *testing.T) {
 	handler := NewApprovalHandler(NewApprovalStore(""), nil, events.NewEventBus(4))
 	handler.SetClassifier(delayingClassifier{delay: 2 * time.Second})
 
-	basePath := t.TempDir()
+	basePath := shortSocketBasePath(t)
 	relay, err := sshremote.NewRemoteApprovalRelay(pool, handler, sshremote.RemoteApprovalRelayTarget{
 		RemoteName:      target.Name,
 		BasePath:        basePath,

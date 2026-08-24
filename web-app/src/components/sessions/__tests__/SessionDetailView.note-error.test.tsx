@@ -42,6 +42,12 @@ jest.mock("../BrowserTab", () => ({
 jest.mock("../SessionSummaryPanel", () => ({
   SessionSummaryPanel: () => <div data-testid="session-summary-panel-stub" />,
 }));
+// HandoffSummarySection (Info tab) embeds RestartWithSummaryButton, which
+// calls useSessionService -> useAnalytics -- unavailable without an
+// AnalyticsContextProvider wrapper, which this file's render tree doesn't
+// set up (it isn't relevant to note save-error wiring, this file's own
+// concern).
+jest.mock("../HandoffSummarySection", () => ({ HandoffSummarySection: () => null }));
 jest.mock("@/components/ui/ActionBar", () => ({
   ActionBar: ({ children, className }: { children: React.ReactNode; className?: string }) => (
     <div className={className}>{children}</div>

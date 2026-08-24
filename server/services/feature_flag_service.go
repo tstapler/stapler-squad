@@ -28,6 +28,44 @@ const blockApprovalOnCIFailureFlagName = "review:block-approval-on-ci-failure"
 // where it's read.
 const workspacePeersNudgeFlagName = "session:workspace-peers-nudge"
 
+// handoffSummaryFlagName is the generic-registry name for the
+// restart-with-handoff-summary feature, so the frontend can discover
+// HandoffSummaryConfig.Enabled up front (via GetFeatureFlags) instead of only
+// finding out on the first TriggerHandoffSummary call's
+// Code.FailedPrecondition (see HandoffSummaryService.TriggerHandoffSummary's
+// identical EnabledOrDefault() check). Shared with HandoffSummaryFeatureController
+// below so the flag name can't drift between where it's declared and where it's
+// wired.
+const handoffSummaryFlagName = "handoff-summary"
+
+// HandoffSummaryFeatureController is a read-only FeatureController for
+// handoffSummaryFlagName: IsEnabled defers to config.HandoffSummaryConfig's
+// EnabledOrDefault, the same real source of truth
+// HandoffSummaryService.TriggerHandoffSummary already gates on. The generic
+// feature-flags map (config.json's top-level feature_flags key) is
+// deliberately NOT the source of truth here -- config.json's own
+// handoff_summary.enabled key is -- so this flag is exposed for GetFeatureFlags
+// visibility only. Enable/Disable both refuse: this flag's real setting has
+// no in-process runtime toggle for UpdateFeatureFlag to drive, and letting the
+// call silently "succeed" while IsEnabled stays keyed to a different config
+// field would make GetFeatureFlags lie about the effect of an
+// UpdateFeatureFlag call that just apparently succeeded. Exported (unlike
+// this file's other flag machinery) because server/dependencies.go, not this
+// package, is where every other SetFeatureController call is wired.
+type HandoffSummaryFeatureController struct{}
+
+func (HandoffSummaryFeatureController) Enable(context.Context) error {
+	return fmt.Errorf("%q is read-only via this API: set handoff_summary.enabled in config.json directly", handoffSummaryFlagName)
+}
+
+func (HandoffSummaryFeatureController) Disable() error {
+	return fmt.Errorf("%q is read-only via this API: set handoff_summary.enabled in config.json directly", handoffSummaryFlagName)
+}
+
+func (HandoffSummaryFeatureController) IsEnabled() bool {
+	return config.LoadConfig().HandoffSummary.EnabledOrDefault()
+}
+
 // terminalResyncCorrelationIDFlagName is shared between knownFeatureFlags below and
 // handleCurrentPaneRequest's resync_id echo (connectrpc_websocket.go) so the flag name
 // can't drift between where it's declared and where it's read.
@@ -107,6 +145,10 @@ var knownFeatureFlags = []struct {
 	{
 		name:        workspacePeersNudgeFlagName,
 		description: "Auto-inject an 'Other Active Sessions In This Workspace' nudge into every new session's initial prompt. Off by default — use the list_workspace_peers MCP tool on demand instead. Default: off.",
+	},
+	{
+		name:        handoffSummaryFlagName,
+		description: "Restart-with-summary: generate an AI handoff summary and restart into a fresh session. Read-only here -- the real toggle is config.json's handoff_summary.enabled key. Default: on.",
 	},
 	{
 		name:        terminalResyncVisibilityScopeFlagName,

@@ -19,6 +19,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/executor"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
+	"go.uber.org/goleak"
 )
 
 type MockPtyFactory struct {
@@ -1598,6 +1599,86 @@ func TestLockedPTMX_ReflectsNewestGeneration_When_SetPTYTripleSwapsMidLoop(t *te
 	require.NoError(t, r2.Close())
 }
 
+// TestCapturePaneContentContext_RespectsCancellation is the regression guard for the
+// goroutine-leak fix (see defaultCapturePaneTimeout's doc comment): before that fix,
+// CapturePaneContentContext's subprocess call (fn() inside runGated) had no way to be
+// interrupted by the caller's ctx, so a wedged tmux server would block the calling
+// goroutine indefinitely. The mock's OutputFunc simulates a real subprocess by blocking
+// until either the caller-supplied ctx is canceled (mirroring exec.CommandContext killing
+// the real process) or a long fallback timer fires — proving cancellation, not the
+// fallback timer, is what unblocks the call.
+func TestCapturePaneContentContext_RespectsCancellation(t *testing.T) {
+	// Not t.Parallel(): this test's goleak baseline diff would otherwise catch
+	// unrelated parallel sibling tests' (e.g. TestSessionResumption) in-flight
+	// cleanup goroutines mid-Close()/waitForSessionGone() as false-positive leaks.
+	baseline := goleak.IgnoreCurrent()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	fakeCmdExec := MockCmdExec{
+		OutputFunc: func(*exec.Cmd) ([]byte, error) {
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(30 * time.Second):
+				return []byte("should never be reached"), nil
+			}
+		},
+	}
+	session := newTmuxSession("capture-pane-cancel-test", "echo", NewMockPtyFactory(t), fakeCmdExec, TmuxPrefix)
+
+	errCh := make(chan error, 1)
+	go func() {
+		_, err := session.CapturePaneContentContext(ctx)
+		errCh <- err
+	}()
+
+	// Give the call a moment to reach the blocking mock, then cancel.
+	time.Sleep(20 * time.Millisecond)
+	cancel()
+
+	select {
+	case err := <-errCh:
+		require.Error(t, err)
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(5 * time.Second):
+		t.Fatal("CapturePaneContentContext did not return promptly after ctx cancellation")
+	}
+
+	goleak.VerifyNone(t, baseline)
+}
+
+// TestCapturePaneContentContext_RespectsTimeout proves the same mechanism
+// CapturePaneContent()'s defaultCapturePaneTimeout wrapper relies on: a context
+// deadline actually terminates an in-flight capture-pane call rather than letting it
+// hang forever if the underlying command never responds. Uses a short caller-supplied
+// deadline instead of the production 10s constant so the test stays fast; the
+// enforcement mechanism (ctx passed through to the mock's blocking call) is identical.
+func TestCapturePaneContentContext_RespectsTimeout(t *testing.T) {
+	// See TestCapturePaneContentContext_RespectsCancellation for why this isn't t.Parallel().
+	baseline := goleak.IgnoreCurrent()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+
+	fakeCmdExec := MockCmdExec{
+		OutputFunc: func(*exec.Cmd) ([]byte, error) {
+			<-ctx.Done()
+			return nil, ctx.Err()
+		},
+	}
+	session := newTmuxSession("capture-pane-timeout-test", "echo", NewMockPtyFactory(t), fakeCmdExec, TmuxPrefix)
+
+	start := time.Now()
+	_, err := session.CapturePaneContentContext(ctx)
+	elapsed := time.Since(start)
+
+	require.Error(t, err)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	require.Less(t, elapsed, 5*time.Second, "capture-pane call should time out promptly, not hang")
+
+	goleak.VerifyNone(t, baseline)
+}
+
 // gatedPtyFactory blocks every Start/StartWithSize call on a channel until the test
 // releases it, letting the test force multiple goroutines into
 // AttachToExisting's/RestoreWithWorkDir's check-then-act window simultaneously --
@@ -1813,4 +1894,30 @@ func TestClose_CalledTwice_IsIdempotent(t *testing.T) {
 
 	_, _, closed := session.ptySnapshot()
 	require.True(t, closed)
+}
+
+// TestValidateWorkDir covers ValidateWorkDir's three rejection branches — none were
+// tested in either package before this function was exported for session/tymux's reuse
+// (Task 2.2.1a), including the "not a directory" branch, which no test anywhere hit.
+func TestValidateWorkDir(t *testing.T) {
+	regularFile := filepath.Join(t.TempDir(), "not-a-dir")
+	require.NoError(t, os.WriteFile(regularFile, []byte("x"), 0o644))
+
+	tests := []struct {
+		name    string
+		workDir string
+	}{
+		{"empty", ""},
+		{"nonexistent", filepath.Join(t.TempDir(), "does-not-exist")},
+		{"not a directory", regularFile},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateWorkDir(tt.workDir)
+			require.Error(t, err)
+			require.ErrorIs(t, err, ErrWorkDirMissing)
+		})
+	}
+
+	require.NoError(t, ValidateWorkDir(t.TempDir()))
 }

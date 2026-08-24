@@ -122,7 +122,10 @@ func TestStreamHub_should_ScheduleTeardownAfterGracePeriod_When_LastSubscriberDe
 		t.Fatalf("expected StopControlMode not yet called, got %d calls", calls)
 	}
 
-	if !waitFor(t, time.Second, func() bool { return hub.State() == streamhub.HubTornDown }) {
+	// 5s, not 1s: under a full `-race` suite run, CPU contention from other
+	// packages' tests can delay this hub's 30ms teardown timer well past 1s
+	// (observed flake in CI: "expected StopControlMode called exactly once, got 0 calls").
+	if !waitFor(t, 5*time.Second, func() bool { return hub.State() == streamhub.HubTornDown }) {
 		t.Fatalf("expected HubTornDown after grace period elapses, got %v", hub.State())
 	}
 	if calls := controller.stopCalls.Load(); calls != 1 {

@@ -132,7 +132,14 @@ func TestEnsureRemoteSession_RetryAfterConnectionDrop_DoesNotDuplicate(t *testin
 	go func() {
 		firstErrCh <- sess.EnsureRemoteSession(ctx, workDir)
 	}()
-	deadline := time.Now().Add(5 * time.Second)
+	// 20s, not 5s: this spins up a real sshd plus a real tmux subprocess, and
+	// under -race with the full session/tmux package running concurrently
+	// (as in `go test ./session/tmux/... -race`) that setup can take longer
+	// than 5s purely from scheduler/CPU contention, not from any bug --
+	// confirmed by this test passing 3/3 in isolation (`-run` this test
+	// alone) while intermittently missing a 5s deadline under full-package
+	// -race load.
+	deadline := time.Now().Add(20 * time.Second)
 	for remoteSessionCount(t, socket, sess.GetSanitizedName()) == 0 {
 		if time.Now().After(deadline) {
 			t.Fatal("timed out waiting for the first EnsureRemoteSession attempt to create the remote session")

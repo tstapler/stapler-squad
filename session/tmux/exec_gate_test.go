@@ -89,9 +89,16 @@ func TestAcquireResyncExecSlot_should_BlockUntilSlotAvailable_When_FastLanePoolE
 	releaseFirst, err := AcquireResyncExecSlot(context.Background(), serverSocket)
 	require.NoError(t, err)
 
+	// start is captured before the context is created (not after) so elapsed
+	// is measured from the same instant the 100ms deadline starts ticking.
+	// Capturing it after context.WithTimeout left a gap between "deadline
+	// starts" and "start recorded" that scheduler pressure (e.g. this test
+	// running inside `make test-race`'s full-suite -race -p 1 invocation)
+	// could stretch to double-digit milliseconds, making elapsed read short
+	// of the real deadline and flaking this assertion.
+	start := time.Now()
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
-	start := time.Now()
 	_, err = AcquireResyncExecSlot(ctx, serverSocket)
 	elapsed := time.Since(start)
 	require.Error(t, err)
