@@ -178,8 +178,7 @@ func TestManagedProcess_WithEnv_appendsToEnvironment(t *testing.T) {
 	}
 	defer p.Stop() //nolint:errcheck
 
-	data, err := readAllWithStop(t, p.Stdout(), p, testProcessTimeout)
-	if err != nil {
+	data, err := readAllWithStop(t, p.Stdout(), p, testProcessTimeout)	if err != nil {
 		t.Fatalf("ReadAll stdout: %v", err)
 	}
 	_ = p.Wait()
@@ -201,8 +200,7 @@ func TestManagedProcess_Stdout_readsOutput(t *testing.T) {
 	}
 	defer p.Stop() //nolint:errcheck
 
-	data, err := readAllWithStop(t, p.Stdout(), p, testProcessTimeout)
-	if err != nil {
+	data, err := readAllWithStop(t, p.Stdout(), p, testProcessTimeout)	if err != nil {
 		t.Fatalf("ReadAll stdout: %v", err)
 	}
 	_ = p.Wait()
@@ -224,8 +222,7 @@ func TestManagedProcess_Stderr_readsErrors(t *testing.T) {
 	}
 	defer p.Stop() //nolint:errcheck
 
-	data, err := readAllWithStop(t, p.Stderr(), p, testProcessTimeout)
-	if err != nil {
+	data, err := readAllWithStop(t, p.Stderr(), p, testProcessTimeout)	if err != nil {
 		t.Fatalf("ReadAll stderr: %v", err)
 	}
 	_ = p.Wait()
@@ -425,8 +422,7 @@ func TestManagedProcess_ConsumeStdout_returnsNilStdout(t *testing.T) {
 	if p.Stdout() != nil {
 		t.Error("expected Stdout() == nil when WithConsumeStdout is used")
 	}
-	_ = waitWithStop(t, p, testProcessTimeout)
-}
+	_ = waitWithStop(t, p, testProcessTimeout)}
 
 // TestManagedProcess_PID_afterStop verifies PID is still accessible after stop.
 func TestManagedProcess_PID_afterStop(t *testing.T) {

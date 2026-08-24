@@ -100,6 +100,20 @@ if ! ./tools/scanner/backend/cmd/scanner \
   echo "ERROR: backend scanner failed (session_summary.proto)" >&2
   exit 2
 fi
+if ! ./tools/scanner/backend/cmd/scanner \
+      proto/session/v1/remote.proto \
+      server/services/ \
+      "${TEMP_BACKEND}" 2>&1; then
+  echo "ERROR: backend scanner failed (remote.proto)" >&2
+  exit 2
+fi
+if ! ./tools/scanner/backend/cmd/scanner \
+      proto/session/v1/handoff_summary.proto \
+      server/services/ \
+      "${TEMP_BACKEND}" 2>&1; then
+  echo "ERROR: backend scanner failed (handoff_summary.proto)" >&2
+  exit 2
+fi
 
 list_ids() {
   local dir="$1"

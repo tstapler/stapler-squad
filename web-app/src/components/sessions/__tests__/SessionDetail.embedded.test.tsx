@@ -39,6 +39,12 @@ jest.mock("next/dynamic", () => (loader: () => Promise<{ default: React.Componen
 });
 
 jest.mock("../DiffViewer", () => ({ DiffViewer: () => <div data-testid="diff-viewer" /> }));
+// HandoffSummarySection (Info tab) embeds RestartWithSummaryButton, which
+// calls useSessionService -> useAnalytics -- unavailable without an
+// AnalyticsContextProvider wrapper, which this file's render tree doesn't
+// set up (it isn't relevant to embedded-mode/initialTab behavior, this
+// file's own concern).
+jest.mock("../HandoffSummarySection", () => ({ HandoffSummarySection: () => null }));
 jest.mock("../VcsPanel", () => ({ VcsPanel: () => <div data-testid="vcs-panel" /> }));
 jest.mock("../SessionLogsTab", () => ({ SessionLogsTab: () => <div data-testid="logs-tab" /> }));
 jest.mock("../FilesTab", () => ({ FilesTab: () => <div data-testid="files-tab" /> }));

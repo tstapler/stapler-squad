@@ -179,6 +179,21 @@ func (a *AutonomousOrchestrationService) buildTurnCallback(inst *session.Instanc
 	}
 }
 
+// withCostSink builds the DriverOption that accumulates a driver's per-turn LLM
+// cost onto inst's linked ItemSession, if any. Falls back to session.NoopDriverOption
+// when storageGetter isn't wired — same nil-guard shape as onAutonomousDriverComplete's
+// storageGetter lookup above.
+func (a *AutonomousOrchestrationService) withCostSink(inst *session.Instance) session.DriverOption {
+	if a.storageGetter == nil {
+		return session.NoopDriverOption
+	}
+	concreteStorage := a.storageGetter()
+	if concreteStorage == nil {
+		return session.NoopDriverOption
+	}
+	return session.WithCostSink(session.CostSinkForSessionUUID(concreteStorage, inst.UUID))
+}
+
 // StartAutonomousDriverForInstance starts an AutonomousDriver on inst if the pool is available.
 // Satisfies the AutonomousDriverStarter interface (via SessionService delegate).
 func (a *AutonomousOrchestrationService) StartAutonomousDriverForInstance(inst *session.Instance) {
@@ -186,7 +201,7 @@ func (a *AutonomousOrchestrationService) StartAutonomousDriverForInstance(inst *
 		log.Warn("[AutonomousOrchestrationService] StartAutonomousDriverForInstance: pool is nil", "session", inst.Title)
 		return
 	}
-	driver := session.NewAutonomousDriver(inst, a.pool, inst.Prompt, 0)
+	driver := session.NewAutonomousDriver(inst, a.pool, inst.Prompt, 0, a.withCostSink(inst))
 	driver.RegisterCompletionCallback(a.onAutonomousDriverComplete)
 	driver.RegisterTurnCallback(a.buildTurnCallback(inst))
 	if err := driver.Start(a.driverCtx()); err != nil {
@@ -204,7 +219,7 @@ func (a *AutonomousOrchestrationService) StartAutonomousDriverWithTimeout(inst *
 		log.Warn("[AutonomousOrchestrationService] StartAutonomousDriverWithTimeout: pool is nil", "session", inst.Title)
 		return
 	}
-	driver := session.NewAutonomousDriver(inst, a.pool, inst.Prompt, 0, session.WithStartupTimeout(startupTimeout))
+	driver := session.NewAutonomousDriver(inst, a.pool, inst.Prompt, 0, session.WithStartupTimeout(startupTimeout), a.withCostSink(inst))
 	driver.RegisterCompletionCallback(a.onAutonomousDriverComplete)
 	driver.RegisterTurnCallback(a.buildTurnCallback(inst))
 	if err := driver.Start(a.driverCtx()); err != nil {

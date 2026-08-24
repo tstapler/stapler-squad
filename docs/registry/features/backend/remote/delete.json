@@ -1,0 +1,16 @@
+{
+  "id": "remote:delete",
+  "type": "backend",
+  "service": "RemoteService",
+  "method": "DeleteRemote",
+  "protoFile": "proto/session/v1/remote.proto",
+  "markerFound": true,
+  "handlerFile": "server/services/remote_service.go",
+  "tested": true,
+  "testIds": [
+    "TestDeleteRemote_RemovesConfigEntryAndStoredIdentity",
+    "TestDeleteRemote_OrphanedIdentityOnly_SucceedsWithoutTouchingConfig",
+    "TestDeleteRemote_NeitherConfigNorIdentityExists_ReturnsNotFound"
+  ],
+  "lastModified": "2026-08-17T00:00:00Z"
+}

@@ -33,7 +33,7 @@ func TestPool_CallBlocking_FirstCall_CapturesSessionID(t *testing.T) {
 	runner := NewFakeRunner(firstCallJSON("abc", "hello"))
 	pool := newTestPool(PoolConfig{MaxCallsPerSession: 25}, runner)
 
-	result, _, err := pool.CallBlocking(context.Background(), "feat1", "system", "user prompt", CallOptions{})
+	result, err := pool.CallBlocking(context.Background(), "feat1", "system", "user prompt", CallOptions{}, DiscardCost)
 	require.NoError(t, err)
 	assert.Equal(t, "hello", result)
 
@@ -51,7 +51,7 @@ func TestPool_FirstCall_ArgsContainOutputFormatJSON(t *testing.T) {
 	runner := NewFakeRunner(firstCallJSON("s1", "result"))
 	pool := newTestPool(PoolConfig{}, runner)
 
-	_, _, err := pool.CallBlocking(context.Background(), "f1", "sys", "prompt", CallOptions{})
+	_, err := pool.CallBlocking(context.Background(), "f1", "sys", "prompt", CallOptions{}, DiscardCost)
 	require.NoError(t, err)
 
 	args := runner.ArgsForCall(0)
@@ -72,8 +72,8 @@ func TestPool_ResumedCall_ArgsContainResumeAndExclude(t *testing.T) {
 	)
 	pool := newTestPool(PoolConfig{}, runner)
 
-	_, _, _ = pool.CallBlocking(context.Background(), "f1", "sys", "prompt1", CallOptions{})
-	_, _, err := pool.CallBlocking(context.Background(), "f1", "sys", "prompt2", CallOptions{})
+	_, _ = pool.CallBlocking(context.Background(), "f1", "sys", "prompt1", CallOptions{}, DiscardCost)
+	_, err := pool.CallBlocking(context.Background(), "f1", "sys", "prompt2", CallOptions{}, DiscardCost)
 	require.NoError(t, err)
 
 	args := runner.ArgsForCall(1)
@@ -91,7 +91,7 @@ func TestPool_FirstCall_ModelFlagIncluded_WhenNonEmpty(t *testing.T) {
 	runner := NewFakeRunner(firstCallJSON("s1", "ok"))
 	pool := newTestPool(PoolConfig{DefaultModel: "claude-opus-4"}, runner)
 
-	_, _, err := pool.CallBlocking(context.Background(), "f1", "sys", "prompt", CallOptions{})
+	_, err := pool.CallBlocking(context.Background(), "f1", "sys", "prompt", CallOptions{}, DiscardCost)
 	require.NoError(t, err)
 
 	args := runner.ArgsForCall(0)
@@ -105,7 +105,7 @@ func TestPool_ParsesSessionIDFromFirstCallJSON(t *testing.T) {
 	runner := NewFakeRunner(firstCallJSON("abc", "hello"))
 	pool := newTestPool(PoolConfig{}, runner)
 
-	_, _, err := pool.CallBlocking(context.Background(), "f1", "", "prompt", CallOptions{})
+	_, err := pool.CallBlocking(context.Background(), "f1", "", "prompt", CallOptions{}, DiscardCost)
 	require.NoError(t, err)
 
 	pool.mu.Lock()
@@ -162,7 +162,7 @@ func TestPool_CallBlocking_ContextTimeout_ReturnsError_NotEmptySuccess(t *testin
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 
-	result, _, err := pool.CallBlocking(ctx, "f1", "sys", "prompt", CallOptions{})
+	result, err := pool.CallBlocking(ctx, "f1", "sys", "prompt", CallOptions{}, DiscardCost)
 
 	require.Error(t, err, "a call cancelled mid-flight must return an error, not silently succeed with empty output")
 	assert.Empty(t, result)
@@ -195,7 +195,7 @@ func TestPool_CallBlocking_WorkDirPath_ContextTimeout_ReturnsError_NotEmptySucce
 	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
 	defer cancel()
 
-	result, _, err := pool.CallBlocking(ctx, "f1", "sys", "prompt", CallOptions{WorkDir: workDir})
+	result, err := pool.CallBlocking(ctx, "f1", "sys", "prompt", CallOptions{WorkDir: workDir}, DiscardCost)
 
 	require.Error(t, err, "a WorkDir call cancelled mid-flight must return an error, not silently succeed with empty output")
 	assert.Empty(t, result)
@@ -212,9 +212,9 @@ func TestPool_RotatesSession_AfterMaxCalls(t *testing.T) {
 	)
 	pool := newTestPool(PoolConfig{MaxCallsPerSession: 2}, runner)
 
-	_, _, _ = pool.CallBlocking(context.Background(), "f1", "sys", "p1", CallOptions{})
-	_, _, _ = pool.CallBlocking(context.Background(), "f1", "sys", "p2", CallOptions{})
-	_, _, _ = pool.CallBlocking(context.Background(), "f1", "sys", "p3", CallOptions{})
+	_, _ = pool.CallBlocking(context.Background(), "f1", "sys", "p1", CallOptions{}, DiscardCost)
+	_, _ = pool.CallBlocking(context.Background(), "f1", "sys", "p2", CallOptions{}, DiscardCost)
+	_, _ = pool.CallBlocking(context.Background(), "f1", "sys", "p3", CallOptions{}, DiscardCost)
 
 	// Third call args should be a first-call (--output-format json), not a resume.
 	args := runner.ArgsForCall(2)
@@ -231,11 +231,11 @@ func TestPool_RotatesSession_AfterConsecutiveErrors(t *testing.T) {
 	}
 	pool := newTestPool(PoolConfig{}, runner2)
 
-	pool.CallBlocking(context.Background(), "f1", "sys", "p1", CallOptions{}) //nolint:errcheck
-	pool.CallBlocking(context.Background(), "f1", "sys", "p2", CallOptions{}) //nolint:errcheck
-	pool.CallBlocking(context.Background(), "f1", "sys", "p3", CallOptions{}) //nolint:errcheck
-	pool.CallBlocking(context.Background(), "f1", "sys", "p4", CallOptions{}) //nolint:errcheck
-	pool.CallBlocking(context.Background(), "f1", "sys", "p5", CallOptions{}) //nolint:errcheck
+	pool.CallBlocking(context.Background(), "f1", "sys", "p1", CallOptions{}, DiscardCost) //nolint:errcheck
+	pool.CallBlocking(context.Background(), "f1", "sys", "p2", CallOptions{}, DiscardCost) //nolint:errcheck
+	pool.CallBlocking(context.Background(), "f1", "sys", "p3", CallOptions{}, DiscardCost) //nolint:errcheck
+	pool.CallBlocking(context.Background(), "f1", "sys", "p4", CallOptions{}, DiscardCost) //nolint:errcheck
+	pool.CallBlocking(context.Background(), "f1", "sys", "p5", CallOptions{}, DiscardCost) //nolint:errcheck
 
 	// After 3 consecutive errors, a subsequent call should be a fresh session.
 	found := false
@@ -254,7 +254,7 @@ func TestPool_CallBlocking_ReturnsCollectedText(t *testing.T) {
 	runner := NewFakeRunner(firstCallJSON("s1", "hello world"))
 	pool := newTestPool(PoolConfig{}, runner)
 
-	text, _, err := pool.CallBlocking(context.Background(), "f1", "sys", "prompt", CallOptions{})
+	text, err := pool.CallBlocking(context.Background(), "f1", "sys", "prompt", CallOptions{}, DiscardCost)
 	require.NoError(t, err)
 	assert.Equal(t, "hello world", text)
 }
@@ -269,7 +269,7 @@ func TestPool_Call_MultiLineOutput_StreamsInOrder(t *testing.T) {
 	pool := newTestPool(PoolConfig{}, runner)
 
 	// First call to establish session.
-	pool.CallBlocking(context.Background(), "f1", "sys", "p1", CallOptions{}) //nolint:errcheck
+	pool.CallBlocking(context.Background(), "f1", "sys", "p1", CallOptions{}, DiscardCost) //nolint:errcheck
 
 	// Second call (resumed): streams lines.
 	ch, err := pool.Call(context.Background(), "f1", "sys", "p2")
@@ -300,7 +300,7 @@ func TestPool_CallBlocking_PropagatesSubprocessError(t *testing.T) {
 	}
 	pool := newTestPool(PoolConfig{}, runner)
 
-	_, _, err := pool.CallBlocking(context.Background(), "f1", "sys", "prompt", CallOptions{})
+	_, err := pool.CallBlocking(context.Background(), "f1", "sys", "prompt", CallOptions{}, DiscardCost)
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrSubprocessStart, "runner-start failures must be classifiable, not swallowed into a generic error")
 	assert.ErrorIs(t, err, startErr, "the underlying OS-level error must remain inspectable")
@@ -348,7 +348,7 @@ func TestPool_CallBlocking_ReadError_ReturnsPartialDataAsRaw_When_SubprocessKill
 	runner := &partialErrRunner{data: []byte("partial output before kill"), err: wantErr}
 	pool := NewPoolWithRunner(PoolConfig{}, runner)
 
-	raw, _, err := pool.CallBlocking(context.Background(), "f1", "sys", "prompt", CallOptions{})
+	raw, err := pool.CallBlocking(context.Background(), "f1", "sys", "prompt", CallOptions{}, DiscardCost)
 	require.Error(t, err)
 	assert.ErrorIs(t, err, wantErr)
 	assert.Equal(t, "partial output before kill", raw)
@@ -372,11 +372,11 @@ func TestPool_DifferentKeys_RunInParallel(t *testing.T) {
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		r1, _, err1 = pool.CallBlocking(context.Background(), "key1", "sys", "p1", CallOptions{})
+		r1, err1 = pool.CallBlocking(context.Background(), "key1", "sys", "p1", CallOptions{}, DiscardCost)
 	}()
 	go func() {
 		defer wg.Done()
-		r2, _, err2 = pool.CallBlocking(context.Background(), "key2", "sys", "p2", CallOptions{})
+		r2, err2 = pool.CallBlocking(context.Background(), "key2", "sys", "p2", CallOptions{}, DiscardCost)
 	}()
 	wg.Wait()
 
@@ -402,7 +402,7 @@ func TestPool_SameKey_ConcurrentCalls_Serialized(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			pool.CallBlocking(context.Background(), "shared-key", "sys", "prompt", CallOptions{}) //nolint:errcheck
+			pool.CallBlocking(context.Background(), "shared-key", "sys", "prompt", CallOptions{}, DiscardCost) //nolint:errcheck
 		}()
 	}
 	wg.Wait()
@@ -441,7 +441,7 @@ func TestPool_ConcurrencySemaphore_LimitsToMax(t *testing.T) {
 		key := FeatureKey(fmt.Sprintf("key%d", i))
 		go func(k FeatureKey) {
 			defer wg.Done()
-			pool.CallBlocking(context.Background(), k, "sys", "p", CallOptions{}) //nolint:errcheck
+			pool.CallBlocking(context.Background(), k, "sys", "p", CallOptions{}, DiscardCost) //nolint:errcheck
 		}(key)
 	}
 	wg.Wait()
@@ -572,7 +572,7 @@ func TestFakeRunner_InspectsArgs_ReturnsJSONForFirstCall(t *testing.T) {
 	runner := NewFakeRunner(firstCallJSON("s1", "ok"))
 	pool := newTestPool(PoolConfig{}, runner)
 
-	result, _, err := pool.CallBlocking(context.Background(), "f1", "sys", "prompt", CallOptions{})
+	result, err := pool.CallBlocking(context.Background(), "f1", "sys", "prompt", CallOptions{}, DiscardCost)
 	require.NoError(t, err)
 	assert.Equal(t, "ok", result)
 }
@@ -726,8 +726,8 @@ func TestFakeRunner_InspectsArgs_ReturnsPlainForResumedCall(t *testing.T) {
 	)
 	pool := newTestPool(PoolConfig{}, runner)
 
-	pool.CallBlocking(context.Background(), "f1", "sys", "p1", CallOptions{}) //nolint:errcheck
-	result, _, err := pool.CallBlocking(context.Background(), "f1", "sys", "p2", CallOptions{})
+	pool.CallBlocking(context.Background(), "f1", "sys", "p1", CallOptions{}, DiscardCost) //nolint:errcheck
+	result, err := pool.CallBlocking(context.Background(), "f1", "sys", "p2", CallOptions{}, DiscardCost)
 	require.NoError(t, err)
 	assert.Contains(t, result, "plain text response")
 }
@@ -743,7 +743,8 @@ func TestPool_CallBlocking_ZeroValueOptions_MatchesLegacyCallBlockingBehavior(t 
 	runner := NewFakeRunner(firstCallJSON("zero-value-session", "hello"))
 	pool := newTestPool(PoolConfig{MaxCallsPerSession: 25}, runner)
 
-	result, cost, err := pool.CallBlocking(context.Background(), "feat-zero", "system", "user prompt", CallOptions{})
+	var cost float64
+	result, err := pool.CallBlocking(context.Background(), "feat-zero", "system", "user prompt", CallOptions{}, func(usd float64) { cost = usd })
 	require.NoError(t, err)
 	assert.Equal(t, "hello", result)
 	assert.InDelta(t, 0.001, cost, 1e-9, "cost_usd from the JSON result must be forwarded")
@@ -779,7 +780,8 @@ func TestPool_CallBlocking_WithWorkDir_ReturnsCostAndUsesWorkDir(t *testing.T) {
 	runner := NewShellWrappedProcessRunnerForTesting(scriptPath)
 	pool := NewPoolWithRunner(PoolConfig{MaxCallsPerSession: 25, MaxConcurrentSessions: 2}, runner)
 
-	result, cost, err := pool.CallBlocking(context.Background(), "feat-workdir", "sys", "prompt", CallOptions{WorkDir: workDir})
+	var cost float64
+	result, err := pool.CallBlocking(context.Background(), "feat-workdir", "sys", "prompt", CallOptions{WorkDir: workDir}, func(usd float64) { cost = usd })
 	require.NoError(t, err)
 	assert.Equal(t, workDir, result, "subprocess must run with cwd set to opts.WorkDir")
 	assert.InDelta(t, 0.0077, cost, 1e-9, "cost_usd must be returned for WorkDir calls too")

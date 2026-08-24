@@ -97,10 +97,25 @@ type StreamHub struct {
 	quiescenceQuietPeriod time.Duration
 	batchMaxWindow        time.Duration
 
-	mu            sync.Mutex
-	state         HubLifecycleState
-	subscribers   map[SubscriberID]*subscriber
-	teardownTimer *time.Timer
+	mu sync.Mutex
+	// state only transitions to HubTornDown once ForceTeardown's close/
+	// StopControlMode work has actually finished (see its doc comment) —
+	// teardownInFlight is a separate exactly-once claim so a second,
+	// concurrent ForceTeardown call is rejected immediately without
+	// waiting for that work, instead of racing to call StopControlMode
+	// twice.
+	state            HubLifecycleState
+	teardownInFlight bool
+	// reactivatedDuringTeardown is set by AttachSubscriber when it observes
+	// teardownInFlight, so ForceTeardown's final write can tell "genuinely
+	// idle throughout" apart from "attached and detached again mid-
+	// teardown" — len(subscribers)==0 alone can't distinguish those two
+	// cases, and the latter can otherwise silently clobber a legitimate
+	// HubDraining state (and its freshly-armed teardownTimer) that
+	// removeSubscriber re-armed in response to the second detach.
+	reactivatedDuringTeardown bool
+	subscribers               map[SubscriberID]*subscriber
+	teardownTimer             *time.Timer
 
 	// batchWindow is the hub's single opportunistic-with-ceiling
 	// accumulation buffer and timer (Epic 2.1) — OnRawOutput feeds it
@@ -229,6 +244,13 @@ func (h *StreamHub) AttachSubscriber(transport Transport, capability SubscriberC
 	h.mu.Lock()
 	h.subscribers[id] = sub
 	h.cancelPendingTeardownLocked()
+	if h.teardownInFlight {
+		// ForceTeardown is mid-StopControlMode-call for this exact attach —
+		// tell its final state write to skip claiming HubTornDown even if
+		// this subscriber detaches again before that call returns (see
+		// ForceTeardown's doc comment).
+		h.reactivatedDuringTeardown = true
+	}
 	switch h.state {
 	case HubStarting, HubActive, HubDraining, HubTornDown:
 		h.state = HubActive
@@ -454,19 +476,24 @@ func (h *StreamHub) onTeardownGraceExpired() {
 }
 
 // ForceTeardown tears the hub down unconditionally: every remaining
-// subscriber is closed, the hub transitions to HubTornDown, and
-// SessionController.StopControlMode() is invoked exactly once. It is the
-// single teardown code path reached both by grace-period expiry
-// (onTeardownGraceExpired) and by an external trigger such as the
-// flag-flipped-back-to-legacy case Story 3.1.2 wires up. Calling it more than
-// once (including concurrently) is safe — StopControlMode fires only for the
-// caller that wins the HubTornDown transition.
+// subscriber is closed, SessionController.StopControlMode() is invoked
+// exactly once, and only then does the hub transition to HubTornDown —
+// callers polling State() must never observe HubTornDown before
+// StopControlMode has actually returned (see
+// TestStreamHub_should_NotReportHubTornDown_While_StopControlModeInFlight).
+// It is the single teardown code path reached both by grace-period expiry
+// (onTeardownGraceExpired) and an external trigger, e.g. Story 3.1.2's
+// flag-flip-to-legacy case. Safe to call concurrently or more than once:
+// teardownInFlight, not h.state, rejects a second caller, since h.state
+// can't serve as that guard until the transition completes.
 func (h *StreamHub) ForceTeardown() error {
 	h.mu.Lock()
-	if h.state == HubTornDown {
+	if h.state == HubTornDown || h.teardownInFlight {
 		h.mu.Unlock()
 		return nil
 	}
+	h.teardownInFlight = true
+	h.reactivatedDuringTeardown = false
 	h.cancelPendingTeardownLocked()
 	subs := make([]*subscriber, 0, len(h.subscribers))
 	for _, sub := range h.subscribers {
@@ -474,7 +501,12 @@ func (h *StreamHub) ForceTeardown() error {
 	}
 	subscriberCountAtTeardown := len(h.subscribers)
 	h.subscribers = make(map[SubscriberID]*subscriber)
-	h.state = HubTornDown
+	// HubDraining, not left stale at whatever h.state was before this call
+	// (e.g. HubActive) — every real subscriber is already committed to
+	// closing at this point, so leaving HubActive's "at least one
+	// subscriber is attached" invariant (types.go) visibly false for the
+	// entire StopControlMode call below would be its own bug.
+	h.state = HubDraining
 	h.mu.Unlock()
 
 	decActiveHubs()
@@ -483,15 +515,32 @@ func (h *StreamHub) ForceTeardown() error {
 		sub.close()
 	}
 
-	if h.controller == nil {
-		log.Info("streamhub torn down", "session", h.sessionName, "subscriber_count", subscriberCountAtTeardown)
-		return nil
+	var stopErr error
+	if h.controller != nil {
+		stopErr = h.controller.StopControlMode()
 	}
 
-	if err := h.controller.StopControlMode(); err != nil {
+	// Only claim HubTornDown if nothing reattached-then-detached while
+	// StopControlMode was running. len(h.subscribers)==0 alone can't tell
+	// "genuinely idle throughout" apart from "attached and detached again
+	// mid-teardown" (removeSubscriber re-arms a fresh HubDraining +
+	// teardownTimer for that second detach, via scheduleTeardownLocked) —
+	// reactivatedDuringTeardown is the explicit signal that distinguishes
+	// them, so a legitimate re-armed grace period isn't silently clobbered
+	// back to HubTornDown.
+	h.mu.Lock()
+	h.teardownInFlight = false
+	reactivated := h.reactivatedDuringTeardown
+	h.reactivatedDuringTeardown = false
+	if !reactivated && len(h.subscribers) == 0 {
+		h.state = HubTornDown
+	}
+	h.mu.Unlock()
+
+	if stopErr != nil {
 		log.Warn("streamhub force teardown: StopControlMode failed",
-			"session", h.sessionName, "subscriber_count", subscriberCountAtTeardown, "error", err)
-		return err
+			"session", h.sessionName, "subscriber_count", subscriberCountAtTeardown, "error", stopErr)
+		return stopErr
 	}
 	log.Info("streamhub torn down", "session", h.sessionName, "subscriber_count", subscriberCountAtTeardown)
 	return nil

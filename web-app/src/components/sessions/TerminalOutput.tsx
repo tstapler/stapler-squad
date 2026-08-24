@@ -362,6 +362,35 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
   // the surrounding chrome stayed dark.
   const theme = "dark" as const;
 
+  // Paging state for on-demand scrollback loading (Task 2.3.1 / 2.3.2)
+  const isFetchingScrollbackRef = useRef(false);
+  const hasMoreScrollbackRef = useRef(false);
+  const oldestSequenceReceivedRef = useRef(0);
+
+  // Resets scrollback paging so a subsequent scroll-up re-fetches history fresh from
+  // the server (which re-derives it width-agnostically via `tmux capture-pane -J`,
+  // see handleScrollbackRequest in connectrpc_websocket.go) instead of assuming
+  // whatever paging cursor was left over from before the terminal was last cleared.
+  // Registered as TerminalStreamManager's onFullSnapshot callback below — the manager
+  // itself owns detecting a full-pane replacement snapshot and clearing the xterm
+  // buffer for it (ANSI_SNAPSHOT_PREFIX in TerminalStreamManager.ts); this only resets
+  // the paging refs the manager doesn't know about.
+  const resetScrollbackPaging = useCallback(() => {
+    hasMoreScrollbackRef.current = true;
+    oldestSequenceReceivedRef.current = 0;
+    isFetchingScrollbackRef.current = false;
+  }, []);
+
+  // Proactively clears the terminal and resets scrollback paging before a resize RPC
+  // is sent — used only by the resize triggers below (auto-fit and the manual Resize
+  // button), so the screen goes blank immediately rather than showing stale,
+  // differently-wrapped content for the ~100-400ms round trip until the server's
+  // post-resize snapshot arrives and TerminalStreamManager clears it again anyway.
+  const clearBufferBeforeResize = useCallback(() => {
+    xtermRef.current?.clear();
+    resetScrollbackPaging();
+  }, [resetScrollbackPaging]);
+
   // Lazily create or get the TerminalStreamManager
   const getOrCreateStreamManager = useCallback((): TerminalStreamManager | null => {
     if (streamManagerRef.current) return streamManagerRef.current;
@@ -373,6 +402,11 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
       terminal,
       (paused, watermark) => sendFlowControlRef.current?.(paused, watermark)
     );
+
+    // Detect + clear on a full-pane replacement snapshot (ANSI_SNAPSHOT_PREFIX) — the
+    // single spot this is handled; every write() call site (live output, the RESIZING
+    // queue flush) benefits without needing its own check.
+    manager.setOnFullSnapshot(resetScrollbackPaging);
 
     // Inject SerializeAddon so prependScrollbackBatch can serialize the current buffer
     // before clearing it (enables correct history order without losing live content).
@@ -401,14 +435,10 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
 
     streamManagerRef.current = manager;
     return manager;
-  }, [logTerminalMetrics, sessionId, track]);
+  }, [logTerminalMetrics, sessionId, track, resetScrollbackPaging]);
 
   // Ref to track whether the initial scrollback has been written (Task 2.3.2)
   const isInitialScrollbackDoneRef = useRef(false);
-  // Paging state for on-demand scrollback loading (Task 2.3.1 / 2.3.2)
-  const isFetchingScrollbackRef = useRef(false);
-  const hasMoreScrollbackRef = useRef(false);
-  const oldestSequenceReceivedRef = useRef(0);
 
   // Callback to write initial pane content to terminal.
   // Metadata guard removed (R2.7): all scrollback — both initial and historical —
@@ -515,6 +545,9 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
       return;
     }
 
+    // TerminalStreamManager.write() itself detects a full-pane replacement snapshot
+    // (ANSI_SNAPSHOT_PREFIX) and clears the buffer for it — see setOnFullSnapshot in
+    // getOrCreateStreamManager above.
     const manager = getOrCreateStreamManager();
     if (manager) {
       manager.write(output);
@@ -623,6 +656,8 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
       const manager = streamManagerRef.current;
       if (manager) {
         const pending = pendingOutputDuringResizeRef.current.splice(0);
+        // manager.write() itself detects and clears for a full-pane snapshot — see
+        // setOnFullSnapshot in getOrCreateStreamManager above.
         for (const chunk of pending) {
           manager.write(chunk);
         }
@@ -831,8 +866,9 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
     }
 
     console.log(`[TerminalOutput] Sending resize: ${cols}x${rows} (prev: ${lastResize?.cols || 'none'}x${lastResize?.rows || 'none'})`);
+    clearBufferBeforeResize();
     resize(cols, rows);
-  }, [isConnected, resize, connect, error, sessionId]);
+  }, [isConnected, resize, connect, error, sessionId, clearBufferBeforeResize]);
 
   // Monitor connection state changes
   useEffect(() => {
@@ -1442,6 +1478,7 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
         if (isConnected) {
           console.log(`[TerminalOutput] Forcing resize message to backend: ${cols}x${rows}`);
           lastResizeRef.current = { cols, rows };
+          clearBufferBeforeResize();
           resize(cols, rows, true);
         }
       }

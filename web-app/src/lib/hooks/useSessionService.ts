@@ -2,7 +2,7 @@
 
 import { useEffect, useCallback, useRef, useMemo, useState } from "react";
 import { createClient, ConnectError, Code } from "@connectrpc/connect";
-import { createWatchTransport } from "@/lib/transport/watch-ws-transport";
+import { createSessionWatchTransport } from "@/lib/transport/watch-ws-transport";
 import { SessionService } from "@/gen/session/v1/session_pb";
 import { Session, SessionStatus, Shell, NotificationPriority } from "@/gen/session/v1/types_pb";
 import {
@@ -21,7 +21,7 @@ import {
 import { create } from "@bufbuild/protobuf";
 import { SessionEvent, NotificationEvent } from "@/gen/session/v1/events_pb";
 import { getApiBaseUrl, createAuthInterceptor } from "@/lib/config";
-import { BackoffState, getWsCloseCode, isRetriableCloseCode } from "@/lib/utils/backoff";
+import { BackoffState, getWsCloseCode, isNonRetriableConnectError } from "@/lib/utils/backoff";
 import { createRpcTimingInterceptor } from "@/lib/telemetry/rpcTiming";
 import { getErrorMessage } from "@/lib/utils/connectError";
 import { useAnalytics } from "@/lib/contexts/AnalyticsContext";
@@ -53,6 +53,7 @@ import {
   selectConnectionState,
   removeDetectedStatus,
 } from "@/lib/store/sessionsSlice";
+import { remoteHealthChanged } from "@/lib/store/remotesSlice";
 
 // ponytail: stable empty array so non-watching callers (e.g. useSessionActions
 // in each SessionCard) don't subscribe to the full sessions list. Without this,
@@ -223,7 +224,7 @@ export function useSessionService(
 
   // Initialize ConnectRPC client — uses HTTP for unary, WebSocket for streaming Watch* RPCs
   useEffect(() => {
-    const transport = createWatchTransport({
+    const transport = createSessionWatchTransport({
       baseUrl,
       interceptors: [createAuthInterceptor(), createRpcTimingInterceptor(analytics)],
     });
@@ -301,10 +302,16 @@ export function useSessionService(
             createIfMissing: request.createIfMissing ?? false,
             initialPrompt: request.initialPrompt,
             autonomousMode: request.autonomousMode ?? false,
+            // No default (unlike autonomousMode) -- an omitted remote must stay omitted on
+            // the wire, not coerced to a zero-value RemoteTarget, so local session creation
+            // is byte-identical to pre-change behavior (ADR-001: remote-as-orthogonal-flag).
+            remote: request.remote,
             permissionMode: request.permissionMode ?? "",
             aliasName: request.aliasName ?? "",
             cliFlags: request.cliFlags ?? "",
             extraArgs: request.extraArgs ?? [],
+            restartFromSessionId: request.restartFromSessionId,
+            confirmRestartWithLiveSource: request.confirmRestartWithLiveSource,
           },
           { timeoutMs: CREATE_SESSION_TIMEOUT_MS }
         );
@@ -895,6 +902,22 @@ export function useSessionService(
         }
         break;
       }
+      case "remoteHealthChanged": {
+        // ssh-remote-workspaces Epic 6.2: a configured remote's SSH connection
+        // health transitioned (session/sshremote.RemoteHealthProber, pushed
+        // over this same WatchSessions stream -- no separate subscription or
+        // polling). Routed into remotesSlice so RemoteConnectionIndicator can
+        // read it via selectRemoteConnectionState.
+        const remoteHealth = event.event.value;
+        if (remoteHealth.remoteName) {
+          dispatch(remoteHealthChanged({
+            remoteName: remoteHealth.remoteName,
+            state: remoteHealth.state,
+            previousState: remoteHealth.previousState,
+          }));
+        }
+        break;
+      }
     }
   }, [dispatch]);
 
@@ -988,10 +1011,13 @@ export function useSessionService(
             return; // ConnectRPC abort (e.g. AbortController signal)
           }
 
-          // Check for non-retriable WS close codes
-          const wsCode = getWsCloseCode(err);
-          if (wsCode !== null && !isRetriableCloseCode(wsCode)) {
-            console.warn(`[reconnect] stream=watch non-retriable close code=${wsCode}, stopping reconnect`);
+          // Check for non-retriable failures — a WS-bridge close code, or the
+          // equivalent ConnectError code on the native transport (no
+          // ws-close-code header exists there; see isNonRetriableConnectError).
+          if (isNonRetriableConnectError(err)) {
+            const wsCode = getWsCloseCode(err);
+            const reason = wsCode !== null ? `close code=${wsCode}` : `connect code=${err.code}`;
+            console.warn(`[reconnect] stream=watch non-retriable ${reason}, stopping reconnect`);
             shouldReconnectRef.current = false;
             isConnectedRef.current = false;
             dispatch(setConnectionState("disconnected"));

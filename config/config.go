@@ -300,6 +300,11 @@ type Config struct {
 	SessionDefaults SessionDefaults `json:"session_defaults,omitempty"`
 	// Notifications holds the user's notification delivery preferences.
 	Notifications NotificationPrefs `json:"notifications,omitempty"`
+	// Remotes is a named list of SSH-reachable remote hosts sessions can be
+	// created against (ssh-remote-workspaces feature). Holds connection
+	// coordinates only — no SSH key material; see RemoteConfig's doc
+	// comment. Looked up by name via RemoteByName.
+	Remotes []RemoteConfig `json:"remotes,omitempty"`
 	// OneOffBaseDir is the base directory where one-off session directories are created.
 	// Default: "~/oneoff". Tilde is expanded at runtime. Created automatically on first use.
 	OneOffBaseDir string `json:"one_off_base_dir,omitempty"`
@@ -362,6 +367,8 @@ type Config struct {
 	Hibernation HibernationConfig `json:"hibernation,omitempty"`
 	// Capacity holds configuration for the provider capacity monitoring and transition feature.
 	Capacity CapacityConfig `json:"capacity,omitempty"`
+	// HandoffSummary holds configuration for the restart-with-handoff-summary feature.
+	HandoffSummary HandoffSummaryConfig `json:"handoff_summary,omitempty"`
 	// Quota holds configuration for the account-wide session-quota gate that
 	// pauses/resumes backlog automation based on inferred quota headroom.
 	Quota QuotaConfig `json:"quota,omitempty"`
@@ -517,6 +524,21 @@ func (c *Config) GetGitHubEnterpriseHosts() []GitHubEnterpriseHost {
 	return c.GitHubEnterpriseHosts
 }
 
+// RemoteByName looks up a configured remote by its exact Name. Returns
+// (nil, false) if c is nil or no remote with that name is registered.
+// Consumed by session creation (Phase 4) and Settings UI validation (Phase 6).
+func (c *Config) RemoteByName(name string) (*RemoteConfig, bool) {
+	if c == nil {
+		return nil, false
+	}
+	for i := range c.Remotes {
+		if c.Remotes[i].Name == name {
+			return &c.Remotes[i], true
+		}
+	}
+	return nil, false
+}
+
 // DefaultConfig returns the default configuration
 func DefaultConfig() *Config {
 	return defaultConfigWithExecutor(nil)
@@ -591,6 +613,7 @@ func defaultConfigWithExecutor(exec CommandExecutor) *Config {
 		RetentionDays:             30,
 	}
 	cfg.Capacity = CapacityConfig{}.CapacityConfigOrDefault()
+	cfg.HandoffSummary = HandoffSummaryConfig{}.HandoffSummaryConfigOrDefault()
 	cfg.Quota = QuotaConfig{}.QuotaConfigOrDefault()
 	// Initialize SessionDefaults maps so callers never encounter nil maps.
 	// LoadConfigFromPath applies the same guards after JSON decode; DefaultConfig
@@ -1155,6 +1178,7 @@ func LoadConfigFromPath(path string) (*Config, error) {
 	cfg.executor = newTimeoutCommandExecutor(5 * time.Second)
 
 	cfg.Capacity = cfg.Capacity.CapacityConfigOrDefault()
+	cfg.HandoffSummary = cfg.HandoffSummary.HandoffSummaryConfigOrDefault()
 	cfg.Quota = cfg.Quota.QuotaConfigOrDefault()
 
 	// Apply environment variable overrides (never log the value).
@@ -1245,7 +1269,7 @@ func (c *Config) GetOrCreateEncryptionKey() ([]byte, error) {
 			return data, nil
 		}
 		// If existing key is invalid, regenerate
-		log.WarningLog.Printf("[Config] existing encryption key is invalid, regenerating")
+		log.WarningLog().Printf("[Config] existing encryption key is invalid, regenerating")
 	}
 
 	// Generate new 32-byte key
@@ -1258,7 +1282,7 @@ func (c *Config) GetOrCreateEncryptionKey() ([]byte, error) {
 
 	// Persist to disk; non-fatal if it fails
 	if err := SaveConfig(c); err != nil {
-		log.WarningLog.Printf("[Config] failed to persist encryption key: %v", err)
+		log.WarningLog().Printf("[Config] failed to persist encryption key: %v", err)
 	}
 
 	return key, nil
@@ -1279,7 +1303,7 @@ func (c *Config) GetOrCreateClaimantHostID() (string, error) {
 
 	// Persist to disk; non-fatal if it fails
 	if err := SaveConfig(c); err != nil {
-		log.WarningLog.Printf("[Config] failed to persist claimant host id: %v", err)
+		log.WarningLog().Printf("[Config] failed to persist claimant host id: %v", err)
 	}
 
 	return c.ClaimantHostID, nil

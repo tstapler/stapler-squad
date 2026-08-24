@@ -824,6 +824,66 @@ describe("useWatchBacklogItems", () => {
     expect(item1?.gateVerdictSummary).toBe("inline verdict wins");
   });
 
+  // Regression: the 30s fallback poll (refresh()) resyncs via the same
+  // upsertItem path as a live event, so a sparse allowedTransitions in its
+  // response must not blank an already-populated value in the store.
+  it("does not clobber allowedTransitions with an empty array from a same-timestamp fallback poll", async () => {
+    jest.useFakeTimers();
+    const stream = makeControllableStream();
+    mockWatchBacklogItems.mockReturnValueOnce(stream.stream);
+    mockWatchBacklogItems.mockReturnValue(makeHangingStream());
+
+    const store = makeStore();
+    const { result } = renderHook(() => useWatchBacklogItems(), { wrapper: makeWrapper(store) });
+
+    await act(async () => {
+      await flush();
+    });
+
+    // Neither event below sets updatedAt (both fall back to timestampMs's
+    // 0-default, matching this file's other event fixtures) — that's the
+    // same-timestamp case the coalesce backstop must handle, since a real
+    // same-millisecond resync is exactly as timestampMs-equal as two omitted
+    // ones.
+    await act(async () => {
+      stream.emit(
+        makeEvent(
+          "itemUpdated",
+          {
+            item: { id: "item-1", status: "idea", allowedTransitions: ["archived", "ready", "refining"] } as any,
+            itemId: "item-1",
+            updatedFields: [],
+            isSnapshot: false,
+          },
+          1n
+        )
+      );
+      await flush();
+    });
+    expect(result.current.items.find((i) => i.id === "item-1")?.allowedTransitions).toEqual([
+      "archived",
+      "ready",
+      "refining",
+    ]);
+
+    // A fallback-poll resync returns the item with an empty allowedTransitions
+    // (the pre-fix ListBacklogItems DTO shape) — must not blank the value the
+    // store already has.
+    mockListBacklogItems.mockResolvedValueOnce({
+      items: [{ id: "item-1", status: "idea", allowedTransitions: [] } as any],
+    });
+    await act(async () => {
+      jest.advanceTimersByTime(30_000);
+      await flush();
+    });
+
+    expect(result.current.items.find((i) => i.id === "item-1")?.allowedTransitions).toEqual([
+      "archived",
+      "ready",
+      "refining",
+    ]);
+  });
+
   // Story 6.2.2 (backlog-item-activity-log): activityNoteAdded is a dedicated
   // single-entry event (ADR-002) — it must dispatch the targeted
   // appendActivityNote reducer, never a wholesale upsertItem replace.

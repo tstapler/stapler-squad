@@ -77,8 +77,9 @@ var tailBufPool = sync.Pool{
 // controllerLifecycle holds the running context for the controller.
 // Protected by lifecycle; write-locked only during Start/Stop transitions.
 type controllerLifecycle struct {
-	ctx    context.Context
-	cancel context.CancelFunc
+	ctx            context.Context
+	cancel         context.CancelFunc
+	statusLoopDone chan struct{}
 }
 
 // ClaudeController provides a high-level API for controlling Claude instances.
@@ -362,7 +363,8 @@ func (cc *ClaudeController) Start(ctx context.Context) error {
 		// Always start unconditionally: for sessions loaded from the database,
 		// wireStatusChangeCallback is called AFTER Start(), so the listener may be
 		// nil here but will be wired later. runStatusChangeLoop handles nil listeners.
-		go cc.runStatusChangeLoop(innerCtx)
+		statusLoopDone := make(chan struct{})
+		go cc.runStatusChangeLoop(innerCtx, statusLoopDone)
 
 		// Start command executor
 		if err := exec.Start(innerCtx); err != nil {
@@ -377,6 +379,7 @@ func (cc *ClaudeController) Start(ctx context.Context) error {
 
 		l.ctx = innerCtx
 		l.cancel = cancel
+		l.statusLoopDone = statusLoopDone
 	})
 
 	if startErr != nil {
@@ -398,18 +401,24 @@ func (cc *ClaudeController) Stop() error {
 	// Phase 1: grab the cancel function and mark as stopped (brief write lock).
 	cc.started.Store(false)
 	var cancelFn context.CancelFunc
+	var statusLoopDone chan struct{}
 	cc.lifecycle.Write(func(l *controllerLifecycle) {
 		if l.cancel == nil {
 			return
 		}
 		cancelFn = l.cancel
+		statusLoopDone = l.statusLoopDone
 		l.ctx = nil
 		l.cancel = nil
+		l.statusLoopDone = nil
 	})
 	if cancelFn == nil {
 		return fmt.Errorf("controller not started")
 	}
 	cancelFn() // Signal all background goroutines to stop.
+	if statusLoopDone != nil {
+		<-statusLoopDone // Join runStatusChangeLoop before returning.
+	}
 
 	// Phase 2: swap out sub-components atomically. New callers see nil immediately;
 	// in-flight callers already hold local references and finish normally.
@@ -1175,7 +1184,8 @@ func (cc *ClaudeController) GetStatusDetector() detection.TerminalDetector {
 // runStatusChangeLoop waits for output signals on statusCheckCh, checks the current
 // status, and calls registered listeners whenever the status transitions to a new value.
 // Exits when ctx is cancelled (i.e., when Stop() calls cancel()).
-func (cc *ClaudeController) runStatusChangeLoop(ctx context.Context) {
+func (cc *ClaudeController) runStatusChangeLoop(ctx context.Context, done chan struct{}) {
+	defer close(done)
 	for {
 		select {
 		case <-ctx.Done():

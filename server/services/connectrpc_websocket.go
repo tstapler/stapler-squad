@@ -300,14 +300,24 @@ var HubRegistry = &hubRegistry{hubs: xsync.NewMap[string, *streamhub.StreamHub](
 // fall back to joining the legacy path explicitly rather than silently
 // operating as a second, independent owner.
 func (r *hubRegistry) GetOrCreate(sessionName string, controller streamhub.SessionController) (*streamhub.StreamHub, error) {
-	if _, err := streamhub.AcquireOwnershipLock(sessionName).ResolveExpecting(true, streamhub.PathHubOwned); err != nil {
+	// Story 3.1.2: AcquireAndResolveExpecting holds the ownership lock's
+	// mutex for the full duration of the LoadOrCompute below, not just the
+	// resolve step — the same real critical section Instance.StartControlMode
+	// now enters (session/instance_tmux.go). That's what makes this call
+	// genuinely block on (rather than race) a concurrent StartControlMode
+	// call for the same session name, per the AC in plan.md's Story 3.1.2.
+	var hub *streamhub.StreamHub
+	if err := streamhub.AcquireOwnershipLock(sessionName).AcquireAndResolveExpecting(true, streamhub.PathHubOwned, func() error {
+		h, _ := r.hubs.LoadOrCompute(sessionName, func() (*streamhub.StreamHub, bool) {
+			newHub := streamhub.NewStreamHub(sessionName, controller)
+			go pumpControlModeOutputIntoHub(newHub, controller, sessionName)
+			return newHub, false
+		})
+		hub = h
+		return nil
+	}); err != nil {
 		return nil, err
 	}
-	hub, _ := r.hubs.LoadOrCompute(sessionName, func() (*streamhub.StreamHub, bool) {
-		hub := streamhub.NewStreamHub(sessionName, controller)
-		go pumpControlModeOutputIntoHub(hub, controller, sessionName)
-		return hub, false
-	})
 
 	// OverlapInvariant (Epic 3.2): xsync.Map.LoadOrCompute guarantees the
 	// constructor above runs at most once per key, so exactly one *StreamHub
@@ -846,6 +856,24 @@ func (h *ConnectRPCWebSocketHandler) streamViaControlMode(stream *connectWebSock
 	// Without the nudge, tmux resize-window is a no-op when dimensions match and the TUI
 	// never redraws, leaving capture-pane content from a prior mid-session state that
 	// produces garbled output in a fresh xterm.js terminal.
+	//
+	// This nudge already runs unconditionally on every reconnect (handshake),
+	// regardless of whether the browser's reported dimensions actually changed
+	// from last time -- which is exactly the "unconditional resize-on-reconnect"
+	// research/pitfalls.md §1 and Task 4.4.1e call for, and it needs no separate
+	// remote-specific implementation here at the call site: instance.ResizePTY
+	// below calls TmuxSession.SetWindowSize, whose tmux "resize-window" command
+	// travels over the same control-mode stdin (t.sendCMCommand) that Task
+	// 4.4.1c made remote-transparent by wiring StartControlMode's remote branch
+	// through CommandRunner.Start over the SSH channel -- so once a remote
+	// session's control-mode connection is up (session/tmux/control_mode.go's
+	// startRemoteControlMode, which streamViaControlMode itself just started a
+	// few lines above via streamer.StartControlMode()), this same nudge reaches
+	// the remote tmux server on every reconnect exactly as it does locally.
+	// SetWindowSize itself still has an IsRemote()-guarded fallback for when CM
+	// is unavailable (mirroring RefreshClient's identical guard) -- it refuses
+	// rather than silently resizing the wrong (local) tmux server in that case,
+	// so this call site needs no IsRemote() branch of its own either way.
 	// Start control mode streaming early so we can subscribe to output events
 	// for quiescence detection BEFORE the resize nudge.
 	// Use the SessionStreamer interface to decouple this handler from the concrete
@@ -1400,6 +1428,14 @@ func sendConnectionCountUpdates(stream *connectWebSocketStream, hub *streamhub.S
 	}
 }
 
+// HubStartFailedErrorCode is the TerminalError.Code sent to the client when
+// the hub-owned streaming path fails to start AND its legacy fallback also
+// fails, leaving the connection with no working stream at all (design/ux.md
+// Surface 2). useTerminalStream.ts checks for this exact code to skip its
+// normal backoff-exhaustion path and surface TerminalOutput.tsx's existing
+// hardFailedBanner immediately, since retrying will hit the same failure.
+const HubStartFailedErrorCode = "HUB_START_FAILED"
+
 // streamViaHub is streamViaControlMode's PathHubOwned counterpart (Epic 2.2,
 // Story 2.2.2): instead of this connection running its own
 // resize/quiescence/capture pipeline, it attaches a WebSocketTransport to the
@@ -1472,7 +1508,36 @@ func (h *ConnectRPCWebSocketHandler) streamViaHub(stream *connectWebSocketStream
 	if err != nil {
 		log.Info("[streamViaHub] ownership resolved to legacy path concurrently, joining it instead of creating a competing hub",
 			"session", sessionID, "tmux", tmuxSessionName, "err", err)
-		return h.streamViaControlMode(stream, instance)
+		if fallbackErr := h.streamViaControlMode(stream, instance); fallbackErr != nil {
+			// design/ux.md Surface 2: only signal a hub-start failure to the
+			// client when the hub-owned path AND its legacy fallback both
+			// failed — i.e. this connection has no working stream at all.
+			// The far more common case above (GetOrCreate loses the
+			// ownership race, falls back, and the fallback succeeds) must
+			// stay silent: sending an error frame there would be a false
+			// alarm on a connection the user experiences as working fine
+			// (research/ux.md §4b: don't announce a non-event). Best-effort,
+			// mirroring session_service.go's existing "send error back to
+			// client" TerminalData_Error convention (its WRITE_ERROR/
+			// RESIZE_ERROR call sites) — the caller's returned fallbackErr
+			// still closes the stream via sendEndStreamError regardless.
+			errMsg := &sessionv1.TerminalData{
+				SessionId: sessionID,
+				Data: &sessionv1.TerminalData_Error{
+					Error: &sessionv1.TerminalError{
+						Message: fmt.Sprintf("hub start failed (%v) and legacy fallback also failed: %v", err, fallbackErr),
+						Code:    HubStartFailedErrorCode,
+					},
+				},
+			}
+			if b, marshalErr := proto.Marshal(errMsg); marshalErr != nil {
+				log.Error("[streamViaHub] failed to marshal hub-start-failed error", "session", sessionID, "err", marshalErr)
+			} else if wsErr := stream.WriteMessage(websocket.BinaryMessage, protocol.CreateEnvelope(0, b)); wsErr != nil {
+				log.Warn("[streamViaHub] failed to send hub-start-failed error", "session", sessionID, "err", wsErr)
+			}
+			return fallbackErr
+		}
+		return nil
 	}
 
 	transport := NewWebSocketTransport(stream)
@@ -2973,7 +3038,7 @@ func sendInputToTmux(serverSocket, tmuxSessionName string, data []byte) error {
 
 	gateCtx, gateCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer gateCancel()
-	err := runTmuxGatedErr(gateCtx, serverSocket, func() error {
+	err := runTmuxInputGatedErr(gateCtx, serverSocket, func() error {
 		// Use a fresh context for the command itself, not gateCtx. Gate
 		// acquisition can consume most of gateCtx's budget under contention,
 		// leaving the exec below racing an already-expiring deadline: if
@@ -3019,13 +3084,29 @@ func sendInputToTmuxWithRetry(serverSocket, tmuxSessionName string, data []byte)
 }
 
 // runTmuxGatedErr acquires a tmux exec-gate slot for serverSocket (bounded by
-// ctx), runs fn, then releases the slot. These 3 call sites are the only
-// direct tmux subprocess spawns in this file that don't already route through
-// a gated TmuxSession method (see session/tmux's runGated, which this mirrors).
+// ctx), runs fn, then releases the slot. Used for resize-window/resize-pane
+// calls against external (unmanaged) sessions — see session/tmux's runGated,
+// which this mirrors, for the primary call-site pattern.
 func runTmuxGatedErr(ctx context.Context, serverSocket string, fn func() error) error {
 	release, err := tmux.AcquireExecSlot(ctx, serverSocket)
 	if err != nil {
 		return fmt.Errorf("exec gate: %w", err)
+	}
+	defer release()
+	return fn()
+}
+
+// runTmuxInputGatedErr acquires a tmux input-fast-lane exec-gate slot for
+// serverSocket (bounded by ctx), runs fn, then releases the slot. Used
+// specifically for keystroke input traffic (the legacy per-keystroke
+// send-keys path, sendInputToTmux): it draws from tmux.AcquireInputExecSlot's
+// pool, separate from the shared default pool runTmuxGatedErr uses, so user
+// input never queues behind a background poller's capture-pane calls on the
+// same tmux server.
+func runTmuxInputGatedErr(ctx context.Context, serverSocket string, fn func() error) error {
+	release, err := tmux.AcquireInputExecSlot(ctx, serverSocket)
+	if err != nil {
+		return fmt.Errorf("input exec gate: %w", err)
 	}
 	defer release()
 	return fn()

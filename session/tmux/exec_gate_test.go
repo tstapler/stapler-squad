@@ -41,6 +41,13 @@ func captureDebugLog(t *testing.T) func() string {
 // Returns a unique-per-test serverSocket key so parallel (sub)tests never share
 // a gate directory even under the same STAPLER_SQUAD_TEST_DIR.
 func setupExecGateTestConfig(t *testing.T, defaultSlots, resyncSlots int) (serverSocket string) {
+	return setupExecGateTestConfigWithInput(t, defaultSlots, resyncSlots, 0)
+}
+
+// setupExecGateTestConfigWithInput is setupExecGateTestConfig plus an
+// inputSlots value for the input fast-lane pool (0 = use the built-in
+// default, same convention as the other two slot counts).
+func setupExecGateTestConfigWithInput(t *testing.T, defaultSlots, resyncSlots, inputSlots int) (serverSocket string) {
 	t.Helper()
 	testDir := t.TempDir()
 	t.Setenv("STAPLER_SQUAD_TEST_DIR", testDir)
@@ -49,6 +56,7 @@ func setupExecGateTestConfig(t *testing.T, defaultSlots, resyncSlots int) (serve
 		"tmux_exec_gate": map[string]any{
 			"slots":               defaultSlots,
 			"resyncFastLaneSlots": resyncSlots,
+			"inputFastLaneSlots":  inputSlots,
 		},
 	}
 	data, err := json.Marshal(cfg)
@@ -81,9 +89,16 @@ func TestAcquireResyncExecSlot_should_BlockUntilSlotAvailable_When_FastLanePoolE
 	releaseFirst, err := AcquireResyncExecSlot(context.Background(), serverSocket)
 	require.NoError(t, err)
 
+	// start is captured before the context is created (not after) so elapsed
+	// is measured from the same instant the 100ms deadline starts ticking.
+	// Capturing it after context.WithTimeout left a gap between "deadline
+	// starts" and "start recorded" that scheduler pressure (e.g. this test
+	// running inside `make test-race`'s full-suite -race -p 1 invocation)
+	// could stretch to double-digit milliseconds, making elapsed read short
+	// of the real deadline and flaking this assertion.
+	start := time.Now()
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
-	start := time.Now()
 	_, err = AcquireResyncExecSlot(ctx, serverSocket)
 	elapsed := time.Since(start)
 	require.Error(t, err)
@@ -165,6 +180,67 @@ func TestAcquireResyncExecSlot_should_NotConsumeDefaultPoolCapacity_When_FastLan
 	}
 }
 
+func TestAcquireInputExecSlot_should_AcquireFromSeparatePool_When_DefaultPoolSaturated(t *testing.T) {
+	serverSocket := setupExecGateTestConfigWithInput(t, 1, 1, 1)
+
+	releaseDefault, err := AcquireExecSlot(context.Background(), serverSocket)
+	require.NoError(t, err)
+	defer releaseDefault()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	releaseInput, err := AcquireInputExecSlot(ctx, serverSocket)
+	elapsed := time.Since(start)
+	require.NoError(t, err)
+	defer releaseInput()
+	assert.Less(t, elapsed, 100*time.Millisecond, "input fast lane acquire should not wait behind the saturated default pool")
+}
+
+// TestAcquireInputExecSlot_should_NotConsumeDefaultPoolCapacity_When_InputPoolIsFull is an
+// integration test: it drives both pools concurrently against real flock-backed gate files (no
+// mocking of acquireSlot/flock) to prove the input fast lane pool and default pool are truly
+// independent -- saturating the input pool must have zero effect on default pool capacity. This
+// is the property that keeps a poller's capture-pane traffic on the default pool from ever
+// stalling user keystrokes routed through the input pool, and vice versa.
+func TestAcquireInputExecSlot_should_NotConsumeDefaultPoolCapacity_When_InputPoolIsFull(t *testing.T) {
+	serverSocket := setupExecGateTestConfigWithInput(t, 2, 1, 2)
+
+	var inputReleases []func()
+	for i := 0; i < 2; i++ {
+		release, err := AcquireInputExecSlot(context.Background(), serverSocket)
+		require.NoError(t, err)
+		inputReleases = append(inputReleases, release)
+	}
+	defer func() {
+		for _, release := range inputReleases {
+			release()
+		}
+	}()
+
+	var wg sync.WaitGroup
+	errs := make([]error, 2)
+	releases := make([]func(), 2)
+	wg.Add(2)
+	for i := 0; i < 2; i++ {
+		i := i
+		go func() {
+			defer wg.Done()
+			ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+			defer cancel()
+			release, err := AcquireExecSlot(ctx, serverSocket)
+			errs[i] = err
+			releases[i] = release
+		}()
+	}
+	wg.Wait()
+
+	for i, err := range errs {
+		require.NoError(t, err, "default pool acquire %d should succeed despite input pool being fully saturated", i)
+		releases[i]()
+	}
+}
+
 func TestExecGate_BoundsPeakConcurrency(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
@@ -230,7 +306,15 @@ func TestExecGate_TryAcquireFailsWhenFull(t *testing.T) {
 	elapsed := time.Since(start)
 	require.NoError(t, err)
 	assert.False(t, ok, "TryAcquire should fail when the gate is fully held")
-	assert.Less(t, elapsed, 50*time.Millisecond, "non-blocking TryAcquire must return immediately")
+	// acquireSlot's non-blocking branch returns immediately after a single
+	// pass over the slots (`if !blocking { return nil, false, nil }`, before
+	// any time.After) -- it structurally cannot enter the backoff/retry loop.
+	// So this bound isn't timing that loop; it only needs to be generous
+	// enough to absorb real flock() syscall + scheduler noise under a loaded
+	// -race run while still catching an actual regression into the blocking
+	// path, which would take at least execGateAcquireBackoffStart (5ms) per
+	// retry and keep growing toward execGateAcquireBackoffMax (100ms).
+	assert.Less(t, elapsed, 500*time.Millisecond, "non-blocking TryAcquire must return immediately, not enter the backoff loop")
 
 	// Release one slot; TryAcquire should now succeed.
 	releases[0]()
