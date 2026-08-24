@@ -31,10 +31,13 @@ import {
   markAllButton,
   clearButton,
   filterBar,
+  searchRow,
   searchInput,
+  searchClearButton,
   filterPills,
   filterPill,
   filterPillActive,
+  filterPillExcludeActive,
   content,
   empty,
   emptyIcon,
@@ -72,6 +75,8 @@ import {
   viewButton,
   loadMore,
   loadMoreButton,
+  incompleteSearchNotice,
+  incompleteSearchNoticeButton,
   autoHandledSection,
   autoHandledHeader,
   autoHandledHeaderLeft,
@@ -133,6 +138,7 @@ export function NotificationsPage() {
 
   const [searchQuery, setSearchQuery] = useState("");
   const [typeFilter, setTypeFilter] = useState<TypeFilter>("all");
+  const [hideBacklogItems, setHideBacklogItems] = useState(false);
   const [autoHandledOpen, setAutoHandledOpen] = useState(false);
   const [resolvedApprovals, setResolvedApprovals] = useState<Record<string, "allow" | "deny" | "expired">>({});
   const [pendingApprovals, setPendingApprovals] = useState<Record<string, boolean>>({});
@@ -184,17 +190,34 @@ export function NotificationsPage() {
       const allowed = new Set(notificationTypeFilter(typeFilter, items.map((n) => n.notificationType)));
       items = items.filter((n) => allowed.has(n.notificationType));
     }
+    if (hideBacklogItems) {
+      items = items.filter((n) => !n.metadata?.["item_id"]);
+    }
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase();
       items = items.filter(
         (n) =>
           (n.sessionName || "").toLowerCase().includes(q) ||
           (n.message || "").toLowerCase().includes(q) ||
-          (n.title || "").toLowerCase().includes(q)
+          (n.title || "").toLowerCase().includes(q) ||
+          (n.sourceProject || "").toLowerCase().includes(q) ||
+          (n.sourceWorkingDir || "").toLowerCase().includes(q) ||
+          (n.metadata?.["tool_name"] || "").toLowerCase().includes(q) ||
+          (n.metadata?.["tool_input_command"] || "").toLowerCase().includes(q) ||
+          (n.metadata?.["tool_input_file"] || "").toLowerCase().includes(q)
       );
     }
     return items;
-  }, [notificationHistory, typeFilter, searchQuery]);
+  }, [notificationHistory, typeFilter, hideBacklogItems, searchQuery]);
+
+  const hasActiveFilter = searchQuery.trim() !== "" || typeFilter !== "all" || hideBacklogItems;
+
+  // The search box and "Hide backlog" toggle only filter over notificationHistory
+  // that's already been paged into memory (see filteredNotifications above) — they
+  // never re-query the server for older, not-yet-loaded history. When more history
+  // remains (historyHasMore) and one of those two filters is active, surface that
+  // instead of silently returning incomplete results.
+  const hasIncompleteSearch = (searchQuery.trim() !== "" || hideBacklogItems) && historyHasMore;
 
   const autoHandledNotifications = useMemo(
     () => notificationHistory.filter((n) => n.notificationType === "auto_approved"),
@@ -265,14 +288,26 @@ export function NotificationsPage() {
       </div>
 
       <div className={filterBar}>
-        <input
-          className={searchInput}
-          type="search"
-          placeholder="Search notifications…"
-          value={searchQuery}
-          onChange={(e) => setSearchQuery(e.target.value)}
-          aria-label="Search notifications"
-        />
+        <div className={searchRow}>
+          <input
+            className={searchInput}
+            type="search"
+            placeholder="Search notifications…"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            aria-label="Search notifications"
+          />
+          {searchQuery && (
+            <button
+              className={searchClearButton}
+              onClick={() => setSearchQuery("")}
+              aria-label="Clear search"
+              type="button"
+            >
+              ✕
+            </button>
+          )}
+        </div>
         <div className={filterPills} role="group" aria-label="Filter by type">
           {(Object.keys(TYPE_FILTER_LABELS) as TypeFilter[]).map((filter) => (
             <button
@@ -284,10 +319,32 @@ export function NotificationsPage() {
               {TYPE_FILTER_LABELS[filter]}
             </button>
           ))}
+          <button
+            className={`${filterPill} ${hideBacklogItems ? filterPillExcludeActive : ""}`}
+            onClick={() => setHideBacklogItems((v) => !v)}
+            aria-pressed={hideBacklogItems}
+            aria-label="Exclude backlog notifications"
+          >
+            🚫 Hide backlog
+          </button>
         </div>
       </div>
 
       <div className={content} data-testid="notifications-content">
+        {hasIncompleteSearch && (
+          <div className={incompleteSearchNotice} data-testid="incomplete-search-notice">
+            <span>Showing results from loaded history only — load more to search older notifications.</span>
+            <button
+              className={incompleteSearchNoticeButton}
+              onClick={loadMoreHistory}
+              disabled={historyLoading}
+              type="button"
+              data-testid="incomplete-search-load-more"
+            >
+              {historyLoading ? "Loading..." : "Load more"}
+            </button>
+          </div>
+        )}
         {historyLoading && notificationHistory.length === 0 ? (
           <div className={empty}>
             <div className={emptyIcon}>⏳</div>
@@ -295,12 +352,12 @@ export function NotificationsPage() {
           </div>
         ) : filteredNotifications.length === 0 ? (
           <div className={empty}>
-            <div className={emptyIcon}>{searchQuery || typeFilter !== "all" ? "🔍" : "🔔"}</div>
+            <div className={emptyIcon}>{hasActiveFilter ? "🔍" : "🔔"}</div>
             <p className={emptyText}>
-              {searchQuery || typeFilter !== "all" ? "No matching notifications" : "No notifications yet"}
+              {hasActiveFilter ? "No matching notifications" : "No notifications yet"}
             </p>
             <p className={emptySubtext}>
-              {searchQuery || typeFilter !== "all"
+              {hasActiveFilter
                 ? "Try adjusting your search or filter"
                 : "You'll see notifications from your sessions here"}
             </p>
