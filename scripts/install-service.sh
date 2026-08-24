@@ -25,6 +25,17 @@
 #   PROFILE_PORT               Override profiling port (default: 6060)
 #   STAPLER_SQUAD_HEALTH_TIMEOUT  Seconds to wait for /health after (re)start (default: 300)
 #
+# Durable service env vars:
+#   Both install_linux and install_macos below regenerate the unit/plist from
+#   scratch on every run, so anything hand-edited into it (e.g. `launchctl`/
+#   `systemctl` env overrides applied directly to the generated file) is
+#   silently wiped on the next install/redeploy. An operator-set var meant to
+#   persist across redeploys (e.g. STAPLER_SQUAD_USE_STREAM_HUB after
+#   completing the streamhub rollback rehearsal) goes in
+#   ~/.stapler-squad/service.env instead — one KEY=value per line, '#'
+#   comments and blank lines ignored. See service_env_plist_xml/
+#   service_env_systemd_lines below.
+#
 
 set -e
 
@@ -73,6 +84,80 @@ rotate_log_if_large() {
 # session/tmux spawn then fails with "command too long" (exit status 1).
 dedup_path() {
     printf '%s' "$1" | awk -v RS=':' '{ if (!seen[$0]++) { if (out != "") out = out ":" $0; else out = $0 } } END { printf "%s", out }'
+}
+
+# ── Durable extra environment variables ──────────────────────────────────────
+# See the "Durable service env vars" header comment above for why this file
+# exists rather than hand-editing the generated unit/plist directly.
+SERVICE_ENV_FILE="$HOME/.stapler-squad/service.env"
+
+# Reads SERVICE_ENV_FILE and, for each valid KEY=value line, calls
+# `"$1" "$key" "$value"` (the emitter callback each caller below supplies).
+# Shared by service_env_plist_xml/service_env_systemd_lines so the parsing
+# fixes here (line-ending, trailing-line, comment, and key-validation
+# handling) only need to exist once.
+#
+# - `read ... || [ -n "$key" ]` also processes a final line that has no
+#   trailing newline — bash's `read` still populates the variables but
+#   returns non-zero for it, which would otherwise silently drop that line.
+# - `tr -d '\r'` strips a CRLF file's trailing carriage return from value
+#   (key can't contain one and still pass the validation below).
+# - Comment/blank detection runs on the whitespace-trimmed key so an indented
+#   `  # comment` line is skipped like a column-0 one instead of being
+#   spliced in as a bogus key with an empty value.
+# - The key is validated against a strict identifier shape (and rejected
+#   with a warning, not silently dropped) rather than XML/shell-escaped,
+#   because an env var name isn't a place XML metacharacters or embedded
+#   whitespace could ever legitimately belong — validating closes off plist/
+#   unit injection via a crafted key instead of just neutralizing it.
+service_env_read() {
+    emit="$1"
+    [ -f "$SERVICE_ENV_FILE" ] || return 0
+    while IFS='=' read -r key value || [ -n "$key" ]; do
+        key=$(printf '%s' "$key" | tr -d '\r')
+        key="${key#"${key%%[![:space:]]*}"}"
+        key="${key%"${key##*[![:space:]]}"}"
+        [ -n "$key" ] || continue
+        case "$key" in \#*) continue ;; esac
+        if ! printf '%s' "$key" | grep -Eq '^[A-Za-z_][A-Za-z0-9_]*$'; then
+            log_warning "Skipping invalid key in $SERVICE_ENV_FILE: '$key' (must be letters/digits/underscore only)" >&2
+            continue
+        fi
+        value=$(printf '%s' "$value" | tr -d '\r')
+        log_info "Applying durable env var from $SERVICE_ENV_FILE: $key" >&2
+        "$emit" "$key" "$value"
+    done < "$SERVICE_ENV_FILE"
+}
+
+# Emitter for the launchd plist's EnvironmentVariables dict: <key>/<string>
+# pairs, with value XML-escaped (order matters: & first, so it doesn't
+# double-escape the entities just inserted for < and >). key is not
+# escaped — service_env_read already restricts it to [A-Za-z_][A-Za-z0-9_]*.
+_service_env_emit_plist() {
+    esc_value=$(printf '%s' "$2" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g')
+    printf '\n        <key>%s</key>\n        <string>%s</string>' "$1" "$esc_value"
+}
+
+# Emitter for a systemd Environment="KEY=value" line, with value's backslashes
+# and double-quotes escaped per systemd.syntax(7) quoting rules (backslash
+# first, so it doesn't double-escape the one just inserted for the quote).
+_service_env_emit_systemd() {
+    esc_value=$(printf '%s' "$2" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g')
+    printf 'Environment="%s=%s"\n' "$1" "$esc_value"
+}
+
+# Prints XML <key>/<string> pairs (one per SERVICE_ENV_FILE line) for splicing
+# into the launchd plist's EnvironmentVariables dict. No-op if the file is
+# absent. Logs each key it applies so a durable override is never silent.
+service_env_plist_xml() {
+    service_env_read _service_env_emit_plist
+}
+
+# Prints systemd Environment="KEY=value" lines (one per SERVICE_ENV_FILE line)
+# for splicing into the [Service] block. No-op if the file is absent. Logs
+# each key it applies so a durable override is never silent.
+service_env_systemd_lines() {
+    service_env_read _service_env_emit_systemd
 }
 
 # ── OS Detection ──────────────────────────────────────────────────────────────
@@ -203,6 +288,7 @@ StandardOutput=append:$log_dir/service.log
 StandardError=append:$log_dir/service.log
 Environment="HOME=$HOME"
 Environment="PATH=$service_path"
+$(service_env_systemd_lines)
 
 [Install]
 WantedBy=default.target
@@ -454,7 +540,7 @@ install_macos() {
         <key>HOME</key>
         <string>$HOME</string>
         <key>PATH</key>
-        <string>$plist_path</string>
+        <string>$plist_path</string>$(service_env_plist_xml)
     </dict>
 
     <key>StandardOutPath</key>
