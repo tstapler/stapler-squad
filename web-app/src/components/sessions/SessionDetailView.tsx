@@ -28,12 +28,14 @@ import { BacklogItemPanel } from "@/components/backlog/BacklogItemPanel";
 import { GoalPanel } from "./GoalPanel";
 import { NotePanel } from "./NotePanel";
 import { WorkspacePeersPanel } from "./WorkspacePeersPanel";
+import { HandoffSummarySection } from "./HandoffSummarySection";
 import { useShells } from "@/lib/hooks/useShells";
 import { useNotifications } from "@/lib/contexts/NotificationContext";
 import { ShellTabLabel } from "./ShellTab";
 import { NewShellDialog } from "./NewShellDialog";
 import { useWorkflows } from "@/lib/hooks/useWorkflows";
 import { attributionBadge } from "./TriggersPanel.css";
+import { routes } from "@/lib/routes";
 import * as styles from "./SessionDetail.css";
 import {
   diffAdded,
@@ -43,6 +45,7 @@ import {
   pausedOverlayReason,
   pausedOverlayButton,
   crashedOverlayIcon,
+  restartedFromLink,
 } from "./SessionDetailView.css";
 import { tabDisabled } from "./SessionDetail.css";
 import { formatPauseReason } from "@/lib/sessions/formatPauseReason";
@@ -411,6 +414,16 @@ export function SessionDetailView({
     : undefined;
   const isAutomatedTrigger = !!triggerWorkflow &&
     ["cron", "github_push", "webhook"].includes(triggerWorkflow.triggerType);
+
+  // Restart lineage (context-compression, UX acceptance criterion #10): resolve
+  // session.restartedFromSessionId against the live session list so the "Restarted
+  // from:" row can link to the source session by title when it's still around, and
+  // gracefully fall back to a plain, non-clickable "(no longer available)" label when
+  // it's been archived/deleted since the restart — mirrors the trigger-attribution
+  // lookup above.
+  const restartSourceSession = session.restartedFromSessionId
+    ? allSessions.find((s) => s.id === session.restartedFromSessionId)
+    : undefined;
 
   // Shell tabs
   const { shells, spawnShell, stopShell, restartShell, deleteShell, updateShellStatus } = useShells(session.id);
@@ -1197,6 +1210,29 @@ export function SessionDetailView({
                   <span className={styles.infoValue}>External</span>
                 </div>
               )}
+              {/* Restart lineage (context-compression UX AC#10) — only rendered when this
+                  session was created via "Restart with summary"; gracefully degrades to
+                  plain text (no dead link) when the source session is gone. */}
+              {session.restartedFromSessionId && (
+                <div className={styles.infoItem} data-testid="restarted-from-row">
+                  <span className={styles.infoLabel}>Restarted from:</span>
+                  <span className={styles.infoValue}>
+                    {restartSourceSession ? (
+                      <a
+                        href={routes.sessionDetail(restartSourceSession.id)}
+                        className={restartedFromLink}
+                        data-testid="restarted-from-link"
+                      >
+                        ↗ {restartSourceSession.title}
+                      </a>
+                    ) : (
+                      <span data-testid="restarted-from-unavailable">
+                        {session.restartedFromSessionId} (no longer available)
+                      </span>
+                    )}
+                  </span>
+                </div>
+              )}
               {/* Timestamps */}
               <div className={styles.infoItem}>
                 <span className={styles.infoLabel}>Created:</span>
@@ -1611,6 +1647,9 @@ export function SessionDetailView({
             />
             {/* Other sessions sharing this workspace — shown when peers exist */}
             <WorkspacePeersPanel session={session} />
+            {/* Restart-handoff summary record (Story 3.3.1) — always rendered,
+                explicit empty state when no HandoffSummary row exists yet. */}
+            <HandoffSummarySection sessionId={session.id} />
           </div>
         )}
         {activeTab === "artifacts" && (

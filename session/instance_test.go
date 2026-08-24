@@ -1,7 +1,9 @@
 package session
 
 import (
+	"errors"
 	"github.com/tstapler/stapler-squad/session/git"
+	"github.com/tstapler/stapler-squad/session/tymux"
 	"os"
 	"path/filepath"
 	"strings"
@@ -673,5 +675,29 @@ func TestFromInstanceData_RestoresAutoYesAndAutoApprove(t *testing.T) {
 	}
 	if !instance.AutoApprove {
 		t.Error("expected AutoApprove=true restored from InstanceData, got false")
+	}
+}
+
+func TestLogPTYUnavailableIfUnexpected_should_SkipLogging_when_TymuxBackendUnsupported(t *testing.T) {
+	buf := captureLogInfo(t)
+
+	logPTYUnavailableIfUnexpected("cold-restored session: pty attach failed, controller and sendkeys unavailable",
+		"sess-1", tymux.ErrNotSupportedOnTymuxBackend)
+
+	if strings.Contains(buf.String(), "pty attach failed") {
+		t.Fatalf("expected no log output for ErrNotSupportedOnTymuxBackend, got: %s", buf.String())
+	}
+}
+
+func TestLogPTYUnavailableIfUnexpected_should_LogError_when_GenuinePTYFailure(t *testing.T) {
+	buf := captureLogInfo(t)
+	wantErr := errors.New("ptmx: device busy")
+
+	logPTYUnavailableIfUnexpected("new session: pty attach failed after retries, controller and sendkeys unavailable",
+		"sess-2", wantErr)
+
+	got := buf.String()
+	if !strings.Contains(got, "sess-2") || !strings.Contains(got, "device busy") {
+		t.Fatalf("expected ERROR log with session and err, got: %s", got)
 	}
 }

@@ -63,11 +63,20 @@ linters:
       threshold: 150
     depguard:
       rules:
+        # files: globs below deliberately avoid the "**/X/**/*.go" shape (double globstar with
+        # a trailing suffix): golangci-lint v2.12.2's depguard requires the middle `**` to match
+        # at least one path segment, so that shape silently matches zero files whenever a target
+        # file sits directly in X with no subdirectory in between (e.g. every file in the flat
+        # server/services/ directory, or files directly under session/ like session/storage.go).
+        # Confirmed by direct repro: "**/server/services/**/*.go" matched 0 of 8 real
+        # session/ent imports in server/services/; "**/server/services/**" (no /*.go suffix)
+        # matched all 8. Use the bare "**/X/**" form — it still only selects files depguard's
+        # type-checker actually parses (.go files), so dropping /*.go loses no precision.
         no_server_in_core:
           files:
-            - "**/session/**/*.go"
-            - "**/config/**/*.go"
-            - "**/log/**/*.go"
+            - "**/session/**"
+            - "**/config/**"
+            - "**/log/**"
             - "!**/*_test.go"
           deny:
             - pkg: "github.com/tstapler/stapler-squad/server"
@@ -83,18 +92,42 @@ linters:
         no_ent_in_services:
           # activated-after: all server/services exclusions removed (refactor/storage-interface-cleanup P6)
           files:
-            - "**/server/services/**/*.go"
+            - "**/server/services/**"
             # Temporarily excluded — session/ent still imported; removed-in: refactor/storage-interface-cleanup (P6)
             - "!**/server/services/error_registry.go"
             - "!**/server/services/analytics_escape_service.go"
             - "!**/server/services/analytics_escape_service_test.go"
             - "!**/server/services/workflow_service_test.go"
             - "!**/server/services/workflow_service.go"
-            - "!**/server/services/backlog_service.go"
             - "!**/server/services/backlog_service_query.go"
             - "!**/server/services/backlog_service_lifecycle.go"
             - "!**/server/services/backlog_service_triage.go"
             - "!**/server/services/session_service.go"
+            # Newly surfaced (2026-08-23) by fixing the files: glob bug above — this rule was
+            # silently matching 0 files in server/services/ before the fix, so these pre-existing
+            # session/ent imports were never actually checked despite not being on the exclusion
+            # list. Same family as the backlog_service_*.go / session_summary_service.go splits
+            # already grandfathered above; not newly introduced.
+            - "!**/server/services/backlog_service_pipeline_mode.go"
+            - "!**/server/services/backlog_service_ship.go"
+            - "!**/server/services/backlog_service_ship_status.go"
+            - "!**/server/services/session_summary_service_test.go"
+            - "!**/server/services/backlog_service_sync.go"
+            - "!**/server/services/github_webhook_handler.go"
+            - "!**/server/services/session_summary_service.go"
+            - "!**/server/services/backlog_service_pipeline_mode_test.go"
+            - "!**/server/services/webhook_trigger_common.go"
+            - "!**/server/services/github_webhook_handler_test.go"
+            - "!**/server/services/generic_webhook_handler_test.go"
+            # handoff_summary_service_test.go legitimately needs raw ent access
+            # to construct precise fixtures (e.g. a stale GENERATING row with a
+            # controlled generation_started_at in the past) that the generator's
+            # public API has no way to set up — same justification already
+            # accepted for session_summary_service_test.go above. The production
+            # file (handoff_summary_service.go) does NOT need this exclusion —
+            # it was fixed to use session.HandoffSummary (a plain domain DTO)
+            # instead of importing session/ent directly.
+            - "!**/server/services/handoff_summary_service_test.go"
           deny:
             - pkg: "github.com/tstapler/stapler-squad/session/ent"
               desc: "server/services must not import session/ent directly; use domain DTOs from session package"

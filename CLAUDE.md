@@ -277,6 +277,7 @@ Per `local-dev-port-management`'s Sequential Batch Strategy: a fixed block reser
 |---|---|
 | Profiling / lock-up debugging | `.claude/docs/profiling.md` |
 | OpenTelemetry / Datadog setup | `.claude/docs/opentelemetry.md` |
+| Compile-time auto-instrumentation (opt-in `stapler-squad-otel` build) | `.claude/docs/opentelemetry-auto-instrumentation.md` |
 | macOS code signing / TCC | `.claude/docs/codesigning.md` |
 | PTY multiplexing (ssq-mux) | `.claude/docs/pty-multiplexing.md` |
 | State file isolation / multi-instance | `.claude/docs/state-isolation.md` |

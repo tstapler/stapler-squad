@@ -1895,3 +1895,29 @@ func TestClose_CalledTwice_IsIdempotent(t *testing.T) {
 	_, _, closed := session.ptySnapshot()
 	require.True(t, closed)
 }
+
+// TestValidateWorkDir covers ValidateWorkDir's three rejection branches — none were
+// tested in either package before this function was exported for session/tymux's reuse
+// (Task 2.2.1a), including the "not a directory" branch, which no test anywhere hit.
+func TestValidateWorkDir(t *testing.T) {
+	regularFile := filepath.Join(t.TempDir(), "not-a-dir")
+	require.NoError(t, os.WriteFile(regularFile, []byte("x"), 0o644))
+
+	tests := []struct {
+		name    string
+		workDir string
+	}{
+		{"empty", ""},
+		{"nonexistent", filepath.Join(t.TempDir(), "does-not-exist")},
+		{"not a directory", regularFile},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateWorkDir(tt.workDir)
+			require.Error(t, err)
+			require.ErrorIs(t, err, ErrWorkDirMissing)
+		})
+	}
+
+	require.NoError(t, ValidateWorkDir(t.TempDir()))
+}

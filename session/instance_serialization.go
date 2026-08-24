@@ -103,11 +103,14 @@ func (i *Instance) ToInstanceData() InstanceData {
 		// Crew autonomy mode
 		AutonomousMode: snap.Autonomous.AutonomousMode,
 		// Checkpoint metadata
-		Checkpoints:      snap.Checkpoints,
-		ActiveCheckpoint: snap.ActiveCheckpoint,
-		ForkedFromID:     snap.ForkedFromID,
+		Checkpoints:            snap.Checkpoints,
+		ActiveCheckpoint:       snap.ActiveCheckpoint,
+		ForkedFromID:           snap.ForkedFromID,
+		RestartedFromSessionID: snap.RestartedFromSessionID,
 		// History file linkage
-		HistoryFilePath: snap.HistoryFilePath,
+		HistoryFilePath:            snap.HistoryFilePath,
+		EverHadConversationHistory: snap.EverHadConversationHistory,
+		LastReviveOutcome:          string(snap.LastReviveOutcome),
 		// One-shot mode
 		OneShot: snap.OneShot,
 		// Hidden (system/background) flag
@@ -279,11 +282,14 @@ func fromInstanceData(data InstanceData, deferStart bool) (*Instance, error) {
 		// Crew autonomy mode
 		AutonomousMode: data.AutonomousMode,
 		// Checkpoint metadata
-		Checkpoints:      data.Checkpoints,
-		ActiveCheckpoint: data.ActiveCheckpoint,
-		ForkedFromID:     data.ForkedFromID,
+		Checkpoints:            data.Checkpoints,
+		ActiveCheckpoint:       data.ActiveCheckpoint,
+		ForkedFromID:           data.ForkedFromID,
+		RestartedFromSessionID: data.RestartedFromSessionID,
 		// History file linkage
-		HistoryFilePath: data.HistoryFilePath,
+		HistoryFilePath:            data.HistoryFilePath,
+		EverHadConversationHistory: data.EverHadConversationHistory,
+		LastReviveOutcome:          ReviveOutcome(data.LastReviveOutcome),
 		// One-shot mode
 		OneShot: data.OneShot,
 		// Hidden (system/background) flag
