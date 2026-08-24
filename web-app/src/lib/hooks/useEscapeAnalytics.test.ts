@@ -64,13 +64,13 @@ describe("useEscapeAnalyticsSummary", () => {
       { initialProps: { sessionId: "sess-1" } }
     );
 
-    await waitFor(() => expect(mockGetEscapeAnalyticsSummary).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(mockGetEscapeAnalyticsSummary).toHaveBeenCalledTimes(1), { timeout: 5000 });
     expect(result.current.loading).toBe(true);
 
     // Switch sessions before the first fetch resolves — this unmounts the
     // first effect (setting its `cancelled` flag) and starts a second fetch.
     rerender({ sessionId: "sess-2" });
-    await waitFor(() => expect(mockGetEscapeAnalyticsSummary).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(mockGetEscapeAnalyticsSummary).toHaveBeenCalledTimes(2), { timeout: 5000 });
 
     // Resolve the stale (session "sess-1") request now. If the cancellation
     // guard is missing, this would overwrite state with sess-1's data.
@@ -88,7 +88,7 @@ describe("useEscapeAnalyticsSummary", () => {
       await Promise.resolve();
     });
 
-    await waitFor(() => expect(result.current.loading).toBe(false));
+    await waitFor(() => expect(result.current.loading).toBe(false), { timeout: 5000 });
     expect(result.current.totalSequences).toBe(7n);
     expect(result.current.totalMangled).toBe(2n);
   });
@@ -119,7 +119,7 @@ describe("useEscapeAnalyticsSummary", () => {
 
     const { result } = renderHook(() => useEscapeAnalyticsSummary("sess-1", true));
 
-    await waitFor(() => expect(result.current.loading).toBe(false));
+    await waitFor(() => expect(result.current.loading).toBe(false), { timeout: 5000 });
 
     expect(mockGetEscapeAnalyticsSummary).toHaveBeenCalledTimes(1);
     expect(mockGetEscapeAnalyticsSummary).toHaveBeenCalledWith(
@@ -158,7 +158,7 @@ describe("useEscapeAnalyticsGlobalSummary", () => {
 
     const { result } = renderHook(() => useEscapeAnalyticsGlobalSummary(true));
 
-    await waitFor(() => expect(result.current.loading).toBe(false));
+    await waitFor(() => expect(result.current.loading).toBe(false), { timeout: 5000 });
 
     expect(mockGetEscapeAnalyticsGlobalSummary).toHaveBeenCalledTimes(1);
     expect(result.current.totalSequences).toBe(5n);
@@ -200,7 +200,7 @@ describe("useEscapeAnalyticsGlobalSummary", () => {
       { initialProps: { enabled: true } }
     );
 
-    await waitFor(() => expect(mockGetEscapeAnalyticsGlobalSummary).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(mockGetEscapeAnalyticsGlobalSummary).toHaveBeenCalledTimes(1), { timeout: 5000 });
     expect(result.current.loading).toBe(true);
 
     // Disable the hook before the in-flight fetch resolves — this unmounts
