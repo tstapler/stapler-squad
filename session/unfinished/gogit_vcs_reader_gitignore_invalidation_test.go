@@ -159,6 +159,9 @@ func TestGitignoreEntriesChanged(t *testing.T) {
 		{"root gitignore added", map[string]plumbing.Hash{}, map[string]plumbing.Hash{".gitignore": h1}, true},
 		{"root gitignore removed", map[string]plumbing.Hash{".gitignore": h1}, map[string]plumbing.Hash{}, true},
 		{"nested gitignore modified", map[string]plumbing.Hash{"sub/.gitignore": h1}, map[string]plumbing.Hash{"sub/.gitignore": h2}, true},
+		{"nested gitignore added", map[string]plumbing.Hash{}, map[string]plumbing.Hash{"sub/.gitignore": h1}, true},
+		{"nested gitignore removed", map[string]plumbing.Hash{"sub/.gitignore": h1}, map[string]plumbing.Hash{}, true},
+		{"gitignore renamed, same content", map[string]plumbing.Hash{"old/.gitignore": h1}, map[string]plumbing.Hash{"new/.gitignore": h1}, true},
 		{"unrelated file named similarly", map[string]plumbing.Hash{"notgitignore": h1}, map[string]plumbing.Hash{"notgitignore": h2}, false},
 	}
 	for _, tt := range tests {

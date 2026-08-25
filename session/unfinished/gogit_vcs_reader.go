@@ -890,7 +890,9 @@ func resolveHeadTreeHashes(g *GoGitVCSReader, entry *cachedRepo, repo *git.Repos
 // gitignoreEntriesChanged reports whether any ".gitignore" blob (at any
 // directory depth) was added, removed, or modified between old and new
 // head-tree snapshots. Both maps come from resolveHeadTreeHashes's tree walk,
-// so this is an O(gitignore-file-count) map comparison, not a filesystem walk.
+// so this is an O(tracked-file-count) in-memory map comparison, not a
+// filesystem walk — still orders of magnitude cheaper than
+// gitignore.ReadPatterns' recursive I/O.
 func gitignoreEntriesChanged(old, newer map[string]plumbing.Hash) bool {
 	isGitignore := func(name string) bool {
 		return name == ".gitignore" || strings.HasSuffix(name, "/.gitignore")
