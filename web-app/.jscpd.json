@@ -1,0 +1,9 @@
+{
+  "$schema": "https://raw.githubusercontent.com/kucherenko/jscpd/master/apps/jscpd/src/config.schema.json",
+  "minLines": 20,
+  "minTokens": 200,
+  "threshold": 0.1,
+  "ignore": ["**/fonts/**"],
+  "reporters": ["console"],
+  "absolute": false
+}

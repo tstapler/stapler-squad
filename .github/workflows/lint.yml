@@ -149,17 +149,18 @@ jobs:
           skip-cache: false
           only-new-issues: false
 
-      # jscpd (web-app/src duplication) — advisory only for now: unlike golangci-lint's
-      # --new-from-rev, jscpd has no native git-diff scoping, so there's no cheap way to
-      # fail only on duplication a PR actually introduces without either flooding on
-      # unmeasured pre-existing debt or building a bespoke changed-file/JSON-report filter.
-      # Long-term this is better solved by kibitzer (github.com/tstapler/kibitzer), which
-      # already has diff-aware scoping infrastructure and an intra-file duplicate-code
-      # checker (src/duplicate_code.rs) — see tstapler/kibitzer#28 for extending it to
-      # cross-file detection. continue-on-error keeps this from blocking merges.
-      - name: jscpd (web-app duplication — advisory)
+      # jscpd (web-app/src duplication) — blocking (2026-08-24). Config lives in
+      # web-app/.jscpd.json: minLines/minTokens tuned to 20/200 (empirically verified —
+      # every finding at that size across the whole repo was real, actionable duplication,
+      # not boilerplate/token noise), plus a 0.1% --threshold. Unlike golangci-lint's
+      # --new-from-rev, jscpd has no native git-diff scoping, so this is a ratchet against
+      # an absolute threshold rather than new-code-only — the threshold sits just above the
+      # ~0.09% baseline that's irreducible (jest.mock(...) registration calls can't be
+      # extracted into a shared function; babel-jest hoists them per-file), not at zero.
+      # Long-term, true diff-aware cross-file duplicate detection belongs in kibitzer
+      # (github.com/tstapler/kibitzer) — see tstapler/kibitzer#28.
+      - name: jscpd (web-app duplication)
         working-directory: web-app
-        continue-on-error: true
         run: pnpm run lint:duplicates
 
       - name: Import cycle check

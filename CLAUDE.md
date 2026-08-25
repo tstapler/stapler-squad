@@ -72,25 +72,31 @@ Nil safety and static analysis tool reference: `.claude/docs/nil-safety.md`
 
 ### Duplication and hotspot checks — required before pushing
 
-`make ready` (superset of `make ci`) now also runs a **new-code-only duplication
-gate**, mirroring the existing gocyclo/gocognit/funlen/revive complexity gate
-(`.golangci.yml`'s settings block, `.github/workflows/lint.yml`):
+`make ready` (superset of `make ci`) runs two **blocking** duplication gates —
+both fail the build, not just report:
 
-- **Go — `dupl`** (blocking): enabled via `--new-from-rev=origin/main`, so only
-  duplication introduced by your own diff fails — the repo's large pool of
-  unmeasured pre-existing duplication is never in scope. Run locally with
-  `make ready-complexity-gate` (needs `dupl` from `make install-tools`). Fix
-  what it finds in your diff before pushing — usually an Extract/Move Function
-  refactor (see `quality:reflect-and-fix`'s Level 0 consolidation gate), not a
-  suppression.
-- **web-app — `jscpd`** (advisory only): `make ready-duplication-report-web`,
-  or `pnpm run lint:duplicates` in `web-app/`. jscpd has no git-diff scoping
-  (unlike `--new-from-rev`), so it can't cleanly gate on new-code-only without
-  a bespoke filter — treat its output as a report to skim for anything your
-  diff touches, not a hard pre-push gate. Long-term, cross-file duplicate
-  detection belongs in `kibitzer` (github.com/tstapler/kibitzer), which
-  already has diff-aware infrastructure this repo's ad hoc `dupl`/`jscpd`
-  wiring is a stopgap for — see `tstapler/kibitzer#28`.
+- **Go — `dupl`** (`.golangci.yml`'s settings block, `.github/workflows/lint.yml`):
+  new-code-only via `--new-from-rev=origin/main`, mirroring the existing
+  gocyclo/gocognit/funlen/revive complexity gate — only duplication introduced
+  by your own diff fails; the repo's unmeasured pre-existing pool is never in
+  scope. Run locally with `make ready-complexity-gate` (needs `dupl` from
+  `make install-tools`). Fix what it finds in your diff before pushing —
+  usually an Extract/Move Function refactor (see `quality:reflect-and-fix`'s
+  Level 0 consolidation gate), not a suppression.
+- **web-app — `jscpd`** (`web-app/.jscpd.json`; `make ready-duplication-gate-web`
+  or `pnpm run lint:duplicates` in `web-app/`): jscpd has no git-diff scoping
+  like `--new-from-rev`, so this gates on an absolute `threshold` (0.1%) instead
+  of new-code-only — a ratchet against today's cleaned-up baseline (~0.09%,
+  ~215 duplicated lines), not zero-tolerance. `minLines`/`minTokens` are tuned
+  to 20/200: verified empirically (2026-08-24 repo-wide sweep + fix) that at
+  that size every finding was real, actionable duplication — component forks,
+  copy-pasted hooks/effects, shared style/test-fixture blocks — not
+  boilerplate noise, which dominates at jscpd's noisy 5-line/50-token
+  defaults. The ~0.09% baseline that remains is `jest.mock(...)` registration
+  lines that can't be extracted into a shared function (babel-jest hoists them
+  per test file), so it's irreducible, not unfixed debt. Long-term, true
+  diff-aware cross-file duplicate detection belongs in `kibitzer`
+  (github.com/tstapler/kibitzer) — see `tstapler/kibitzer#28`.
 
 For "which files are actually risky to touch" (complexity × git-churn, not
 literal duplication), see the `code-hotspot-analysis` skill and
