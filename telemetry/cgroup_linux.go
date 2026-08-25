@@ -104,6 +104,29 @@ func parseCgroupPSIAvg10(line string) (avg10 float64, ok bool) {
 	return 0, false
 }
 
+// CgroupMemoryUsageRatio returns this process's cgroup memory.current as a
+// fraction of memory.high (e.g. 0.9 = 90% of the soft throttle ceiling) —
+// the same figures registerCgroupMemoryMetrics exports as
+// cgroup_memory_current_bytes/cgroup_memory_high_bytes, exposed directly for
+// in-process consumers (server/services.MemoryPressureNotifier) that need a
+// live reading without querying back through the metrics pipeline. ok is
+// false if memory.high is unset ("max") or either file can't be read.
+func CgroupMemoryUsageRatio() (ratio float64, ok bool) {
+	dir, err := cgroupMemoryDir()
+	if err != nil {
+		return 0, false
+	}
+	current, ok := readCgroupInt64(dir + "/memory.current")
+	if !ok {
+		return 0, false
+	}
+	high, ok := readCgroupInt64(dir + "/memory.high")
+	if !ok || high == 0 {
+		return 0, false
+	}
+	return float64(current) / float64(high), true
+}
+
 func registerCgroupMemoryMetrics() error {
 	dir, err := cgroupMemoryDir()
 	if err != nil {
