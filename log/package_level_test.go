@@ -46,10 +46,10 @@ func TestLookupPackageLevel_WalksUpHierarchy(t *testing.T) {
 		wantLevel slog.Level
 		wantFound bool
 	}{
-		{"session/git", slog.LevelDebug, true},          // exact match wins
-		{"session/git/subpkg", slog.LevelDebug, true},   // walks up to "session/git"
-		{"session/tmux", slog.LevelWarn, true},           // falls back to "session"
-		{"server/services", 0, false},                    // no ancestor configured
+		{"session/git", slog.LevelDebug, true},        // exact match wins
+		{"session/git/subpkg", slog.LevelDebug, true}, // walks up to "session/git"
+		{"session/tmux", slog.LevelWarn, true},        // falls back to "session"
+		{"server/services", 0, false},                 // no ancestor configured
 	}
 	for _, tt := range tests {
 		level, found := lookupPackageLevel(overrides, tt.pkg)

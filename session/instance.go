@@ -462,25 +462,6 @@ type Instance struct {
 	// test gets its own Instance, so there is nothing to synchronize).
 	promptFileCleanupDelayOverride time.Duration
 
-	// loggedMissingWorktree records whether fromInstanceData has already
-	// warned, for this specific Instance object, that its worktree
-	// directory is missing — so a second detection on the same object logs
-	// at Debug instead of Warn. Only ever set from within fromInstanceData
-	// before the instance is shared (see that function's "instance is not
-	// yet shared" comment), so it needs no lock.
-	//
-	// Known limitation vs. the global sync.Map this replaced: LoadInstances()
-	// (session/health.go's ~15s tick) constructs a brand-new, throwaway
-	// Instance from disk on every call (see checkSingleSession's "instance
-	// here is a throwaway copy" comment), so this field cannot dedupe the
-	// Warn across ticks the way the old process-lifetime global map did —
-	// each tick sees loggedMissingWorktree=false again and re-warns. That
-	// tradeoff was accepted deliberately: an unbounded global map keyed by
-	// session title that's never cleaned up on delete is a worse defect
-	// (a real memory leak) than a Warn that repeats every ~15s instead of
-	// firing once.
-	loggedMissingWorktree bool
-
 	// mu protects Instance's mutable data fields (Status, started, Tags,
 	// Checkpoints, ReviewState timestamps, GitHub PR fields, Artifacts, etc.).
 	// Use sendSyncErr / send for writes and Snapshot() for reads.

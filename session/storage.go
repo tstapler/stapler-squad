@@ -518,7 +518,9 @@ func (s *Storage) ListSessionRecords() []tokens.SessionRecord {
 
 // DeleteInstance removes an instance from storage.
 func (s *Storage) DeleteInstance(title string) error {
-	return s.repo.Delete(context.Background(), title)
+	err := s.repo.Delete(context.Background(), title)
+	clearLoggedMissingWorktree(title)
+	return err
 }
 
 // AddInstance adds a new instance to storage.
@@ -566,6 +568,7 @@ func (s *Storage) DeleteAllInstances() error {
 		if err := s.repo.Delete(ctx, data.Title); err != nil {
 			log.Warn("failed to delete instance", "session", data.Title, "err", err)
 		}
+		clearLoggedMissingWorktree(data.Title)
 	}
 	return nil
 }
