@@ -33,7 +33,7 @@ func TestPool_CallBlocking_FirstCall_ToleratesTrailingNonJSONOutput(t *testing.T
 	runner := NewFakeRunner(response)
 	pool := newTestPool(PoolConfig{MaxCallsPerSession: 25}, runner)
 
-	result, _, err := pool.CallBlocking(context.Background(), "feat1", "system", "user prompt", CallOptions{})
+	result, err := pool.CallBlocking(context.Background(), "feat1", "system", "user prompt", CallOptions{}, DiscardCost)
 	require.NoError(t, err)
 	assert.Equal(t, "hello", result)
 }
