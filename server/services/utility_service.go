@@ -141,9 +141,15 @@ func parseLegacyLogLine(line string) (parsedLogLine, bool) {
 // parseLogLine parses one log line in whichever format it's actually
 // written in — JSON first (the current default), falling back to the
 // legacy plain-text format for lines from call sites that still use it.
+// Checks the first non-space byte before attempting a JSON parse so legacy
+// lines (which always start with "[") skip straight to the regex path
+// instead of paying for a doomed json.Unmarshal on every one of them.
 func parseLogLine(line string) (parsedLogLine, bool) {
-	if parsed, ok := parseJSONLogLine(line); ok {
-		return parsed, true
+	trimmed := strings.TrimLeft(line, " \t")
+	if strings.HasPrefix(trimmed, "{") {
+		if parsed, ok := parseJSONLogLine(trimmed); ok {
+			return parsed, true
+		}
 	}
 	return parseLegacyLogLine(line)
 }

@@ -222,6 +222,21 @@ func TestParseLogLine_Legacy_should_StillParse_When_LineIsOldPlainTextFormat(t *
 	assert.Equal(t, "backlog_service.go:42", parsed.Source)
 }
 
+// TestParseLegacyLogLine_should_RejectSlogJSONLine_When_LineIsNotLegacyFormat
+// pins the actual regression this PR fixes: before parseJSONLogLine existed,
+// parseLogs's only parser was logLineRegex, and this exact production-shaped
+// slog JSON line silently failed to match it — meaning nearly every real log
+// line was dropped. Without this test, "parseJSONLogLine succeeds" alone
+// doesn't prove the old code path actually had this defect.
+func TestParseLegacyLogLine_should_RejectSlogJSONLine_When_LineIsNotLegacyFormat(t *testing.T) {
+	t.Parallel()
+	line := `{"time":"2026-08-25T11:25:03.12598-07:00","level":"WARN","msg":"worktree directory missing, marking as paused","path":"/tmp/wt"}`
+
+	_, ok := parseLegacyLogLine(line)
+
+	assert.False(t, ok, "the legacy regex must not match a slog JSON line — this is the exact defect parseJSONLogLine fixes")
+}
+
 // TestParseLogLine_should_RejectGarbage_When_LineMatchesNeitherFormat ensures
 // a line that is neither valid JSON nor the legacy format is skipped, not
 // mis-parsed into a zero-value entry.

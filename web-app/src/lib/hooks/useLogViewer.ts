@@ -70,6 +70,11 @@ export interface LogViewerState {
   refresh: () => void;
 }
 
+interface DisplayLogEntry {
+  display: LogEntry;
+  raw: ProtoLogEntry;
+}
+
 function mapLevel(raw: string): LogLevel {
   const upper = raw.toUpperCase();
   if (upper === "ERROR" || upper === "ERR") return "ERROR";
@@ -99,8 +104,10 @@ export function useLogViewer(
   const timeRangeEndMs = timeRange?.end.getTime();
 
   // --- Core log storage: mutable ref + version counter for O(1) appending ---
-  const logsRef = useRef<LogEntry[]>([]);
-  const rawEntriesRef = useRef<ProtoLogEntry[]>([]);
+  // Each display entry is paired with its raw proto counterpart in one
+  // record, so filtering can never desync the two the way two independently
+  // maintained parallel arrays could.
+  const entriesRef = useRef<DisplayLogEntry[]>([]);
   const [version, setVersion] = useState(0);
   const [serverTotalCount, setServerTotalCount] = useState(0);
   const [lastRefresh, setLastRefresh] = useState<Date | null>(null);
@@ -151,20 +158,22 @@ export function useLogViewer(
         // levels will be applied once filters are set (initial fetch uses no level filter)
       });
       const protoEntries = response.entries ?? [];
-      const entries: LogEntry[] = protoEntries.map((e) => ({
-        id: makeId(),
-        timestamp: e.timestamp
-          ? new Date(Number(e.timestamp.seconds) * 1000).toISOString()
-          : new Date().toISOString(),
-        level: mapLevel(e.level),
-        message: e.message,
-        raw: e.message,
+      const entries: DisplayLogEntry[] = protoEntries.map((e) => ({
+        display: {
+          id: makeId(),
+          timestamp: e.timestamp
+            ? new Date(Number(e.timestamp.seconds) * 1000).toISOString()
+            : new Date().toISOString(),
+          level: mapLevel(e.level),
+          message: e.message,
+          raw: e.message,
+        },
+        raw: e,
       }));
       // Seed knownTotalRef from the initial fetch so live-tail polling knows
       // how many entries the server already had.
       knownTotalRef.current = response.totalCount ?? entries.length;
-      logsRef.current = entries;
-      rawEntriesRef.current = protoEntries;
+      entriesRef.current = entries;
       setServerTotalCount(response.totalCount ?? entries.length);
       setLastRefresh(new Date());
       setVersion((v) => v + 1);
@@ -211,22 +220,24 @@ export function useLogViewer(
 
       // The first `newCount` entries in the newest-first response are the ones
       // we haven't seen yet. Slice them off and reverse so they're oldest-first
-      // for appending at the end of logsRef.current.
+      // for appending at the end of entriesRef.current.
       const freshProtoSlice = (response.entries ?? []).slice(0, newCount).reverse();
-      const newEntries: LogEntry[] = freshProtoSlice.map((e) => ({
-        id: makeId(),
-        timestamp: e.timestamp
-          ? new Date(Number(e.timestamp.seconds) * 1000).toISOString()
-          : new Date().toISOString(),
-        level: mapLevel(e.level),
-        message: e.message,
-        raw: e.message,
+      const newEntries: DisplayLogEntry[] = freshProtoSlice.map((e) => ({
+        display: {
+          id: makeId(),
+          timestamp: e.timestamp
+            ? new Date(Number(e.timestamp.seconds) * 1000).toISOString()
+            : new Date().toISOString(),
+          level: mapLevel(e.level),
+          message: e.message,
+          raw: e.message,
+        },
+        raw: e,
       }));
       if (newEntries.length === 0) return;
 
       knownTotalRef.current = serverTotal;
-      logsRef.current = [...logsRef.current, ...newEntries];
-      rawEntriesRef.current = [...rawEntriesRef.current, ...freshProtoSlice];
+      entriesRef.current = [...entriesRef.current, ...newEntries];
 
       startTransition(() => {
         setVersion((v) => v + 1);
@@ -266,9 +277,8 @@ export function useLogViewer(
     setExpandedRowIndex((prev) => (prev === i ? null : i));
   }, []);
 
-  // --- Derived: filtered logs (and the parallel raw proto entries — the two
-  // refs are always extended in lockstep by the same index, so filtering by
-  // index on the display copy tells us which raw entries survive too) ---
+  // --- Derived: filtered entries (display + raw stay paired since they're
+  // filtered together as one record, not as two independently-indexed arrays) ---
   const matchesFilter = useCallback(
     (e: LogEntry) => {
       if (searchQuery && !e.message.toLowerCase().includes(searchQuery.toLowerCase())) return false;
@@ -278,25 +288,16 @@ export function useLogViewer(
     [searchQuery, levelFilters],
   );
 
-  const filteredLogs = useMemo(() => {
-    // version is the cache key — reading logsRef.current here is intentional
+  const filteredEntries = useMemo(() => {
+    // version is the cache key — reading entriesRef.current here is intentional
     // eslint-disable-next-line @typescript-eslint/no-unused-expressions
     version;
-    return logsRef.current.filter(matchesFilter);
+    return entriesRef.current.filter((e) => matchesFilter(e.display));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [version, matchesFilter]);
 
-  const filteredRawEntries = useMemo(() => {
-    // eslint-disable-next-line @typescript-eslint/no-unused-expressions
-    version;
-    return logsRef.current.reduce<ProtoLogEntry[]>((acc, e, i) => {
-      if (matchesFilter(e) && rawEntriesRef.current[i]) {
-        acc.push(rawEntriesRef.current[i]);
-      }
-      return acc;
-    }, []);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [version, matchesFilter]);
+  const filteredLogs = useMemo(() => filteredEntries.map((e) => e.display), [filteredEntries]);
+  const filteredRawEntries = useMemo(() => filteredEntries.map((e) => e.raw), [filteredEntries]);
 
   const refresh = useCallback(() => {
     void fetchInitialLogs();
@@ -310,7 +311,7 @@ export function useLogViewer(
     levelFilters,
     setLevelFilters,
     matchCount: searchQuery ? filteredLogs.length : 0,
-    totalCount: logsRef.current.length,
+    totalCount: entriesRef.current.length,
     toggleRow,
     expandedRowIndex,
     selectedRowIndex,

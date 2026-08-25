@@ -43,10 +43,9 @@ function PatternText({ pattern }: { pattern: string }) {
 /**
  * PatternsView — Datadog-style "Log Patterns" clustering for the app logs
  * page: groups the currently-loaded entries by normalized message (see
- * lib/logs/logPatterns.ts, which mirrors scripts/log-group.sh's CLI
- * equivalent), most-frequent first. Expanding a row shows the raw matching
- * entries — including whatever the pattern's placeholders normalized away
- * (the actual path, UUID, or count).
+ * lib/logs/logPatterns.ts), most-frequent first. Expanding a row shows the
+ * raw matching entries — including whatever the pattern's placeholders
+ * normalized away (the actual path, UUID, or count).
  */
 export function PatternsView({ entries, maxExamplesPerPattern = 20 }: PatternsViewProps) {
   const { track } = useAnalytics();
