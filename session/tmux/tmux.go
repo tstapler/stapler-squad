@@ -1248,6 +1248,16 @@ func ValidateWorkDir(workDir string) error {
 // all, so the new-session call start() makes right after this returns is
 // guaranteed to fail too, just with a more confusing "error starting tmux
 // session" message instead of surfacing the real cause.
+//
+// Known accepted gap: startServerSucceededDespiteError only checks "is a
+// server running", so if start-server succeeds but a trailing set-option in
+// this chain fails (exit-empty/remain-on-exit are built-in global options on
+// a live server, so this is not expected in practice), the retry treats it
+// as success with no log at all -- silently leaving the session unprotected
+// against the exact fast-exit race this method exists to close. Splitting
+// the chain to detect this precisely was rejected: a separate start-server
+// then set-option invocation reintroduces the race PR #445 fixed (a
+// zero-session server can exit before the second call reaches it).
 func (t *TmuxSession) preconfigureServerBeforeSession() error {
 	preconfigureCmd := t.buildTmuxCommand("start-server", ";", "set-option", "-g", "exit-empty", "off", ";", "set-option", "-g", "remain-on-exit", "on")
 	run := func() ([]byte, error) {
