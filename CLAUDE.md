@@ -307,3 +307,4 @@ Per `local-dev-port-management`'s Sequential Batch Strategy: a fixed block reser
 | macOS restart can leave orphaned processes racing over tmux/session state | `.claude/docs/service-restart-orphan-process.md` |
 | Fix flaky tests when found, don't just re-defer as "known pre-existing" | `.claude/rules/fix-flaky-tests-dont-defer.md` |
 | Slack Phase 2 interactive-approvals public reachability (scoping a tunnel to one path) | `.claude/docs/slack-phase2-public-reachability.md` |
+| GitHub webhook (`/webhooks/github`, incl. PR-fix events) public reachability | `.claude/docs/github-webhook-public-reachability.md` |
