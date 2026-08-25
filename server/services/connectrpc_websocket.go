@@ -184,16 +184,54 @@ type cursorPositioner interface {
 	GetPaneCursorPosition() (x, y int, err error)
 }
 
+// withCursorSyncTimeout bounds how long withCursorSync waits for
+// GetPaneCursorPosition before giving up on the cursor-sync suffix and
+// returning content unchanged. GetPaneCursorPosition has no timeout of its
+// own on its control-mode path (up to 3s, cmCtx) or its subprocess fallback
+// (up to 5s just to acquire an exec-gate slot, execGateAcquireTimeout, then
+// an unbounded subprocess call on top) — under a degraded control-mode
+// connection this can comfortably exceed the frontend's 4s resync stall
+// watchdog (useVisibilityResync.ts), which then force-disconnects and
+// reconnects, which (StartControlMode/StopControlMode refcounting) tears
+// down and restarts control mode — actively feeding the same degradation
+// that made this call slow in the first place. Cursor-sync is cosmetic
+// (a stale cursor position self-corrects on the next successful update);
+// the resync it's attached to is not, so this is a strict trade in favor of
+// the resync always meeting the client's deadline.
+const withCursorSyncTimeout = 300 * time.Millisecond
+
 func withCursorSync(content string, target cursorPositioner) string {
 	if target == nil {
 		return content
 	}
-	x, y, err := target.GetPaneCursorPosition()
-	if err != nil {
+	type cursorResult struct {
+		x, y int
+		err  error
+	}
+	resultCh := make(chan cursorResult, 1)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		x, y, err := target.GetPaneCursorPosition()
+		resultCh <- cursorResult{x, y, err}
+	}()
+	select {
+	case res := <-resultCh:
+		// See streamhub's identically-shaped withCursorSync for why this wait
+		// matters: it guarantees the goroutine has fully exited before this
+		// function returns, not just handed off its result, so a test's
+		// goleak.VerifyNone() immediately afterward never catches it
+		// mid-teardown.
+		<-done
+		if res.err != nil {
+			return content
+		}
+		// CUP is 1-based; tmux cursor coords are 0-based.
+		return content + fmt.Sprintf("\x1b[%d;%dH", res.y+1, res.x+1)
+	case <-time.After(withCursorSyncTimeout):
+		log.Warn("withCursorSync: GetPaneCursorPosition exceeded timeout, skipping cursor sync", "timeout", withCursorSyncTimeout)
 		return content
 	}
-	// CUP is 1-based; tmux cursor coords are 0-based.
-	return content + fmt.Sprintf("\x1b[%d;%dH", y+1, x+1)
 }
 
 // sessionSnapshot caches terminal capture-pane output per session.

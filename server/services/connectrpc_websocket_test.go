@@ -587,6 +587,33 @@ func TestUseStreamHub_should_ReturnFalse_When_RehearsalNotCompleted(t *testing.T
 	require.False(t, useStreamHub(), "expected the global default to stay false without a recorded rollback rehearsal")
 }
 
+// getOrCreateHubForTest wraps hubRegistry.GetOrCreate and registers
+// t.Cleanup to tear down the hub it returns (if any) — the single place
+// this file's tests get automatic hub teardown from, instead of each test
+// remembering its own t.Cleanup(func() { hub.ForceTeardown() }).
+//
+// This exists because pumpControlModeOutputIntoHub now retries
+// SubscribeControlModeUpdates forever until hub.State() reports
+// HubTornDown (2026-08-25 fix — a hub whose control-mode subscription
+// closes must not be permanently starved of live output just because it
+// closed once, the bug that motivated this whole file's changes that day).
+// Before that fix, a test that created a hub and never tore it down was
+// harmless: the pump just exited once and stayed exited. After it, the
+// same test leaves a goroutine resubscribing and logging every 500ms for
+// the rest of the test binary's life — concretely, this raced with an
+// unrelated test's log-capture helper under go test -race. Routing hub
+// creation through this one helper is what makes that mistake structurally
+// hard to make again, rather than relying on every future test remembering
+// the cleanup on its own.
+func getOrCreateHubForTest(t *testing.T, registry *hubRegistry, sessionName string, controller streamhub.SessionController) (*streamhub.StreamHub, error) {
+	t.Helper()
+	hub, err := registry.GetOrCreate(sessionName, controller)
+	if hub != nil {
+		t.Cleanup(func() { _ = hub.ForceTeardown() })
+	}
+	return hub, err
+}
+
 // TestHubRegistry_should_CreateExactlyOneHub_When_GetOrCreateCalledConcurrently
 // is REQ-1's core wiring assertion from validation.md, scoped to
 // HubRegistry.GetOrCreate itself (the unit Story 2.2.2's task list actually
@@ -607,7 +634,7 @@ func TestHubRegistry_should_CreateExactlyOneHub_When_GetOrCreateCalledConcurrent
 		go func(i int) {
 			defer wg.Done()
 			controller := &fakeSessionController{}
-			hub, err := registry.GetOrCreate(sessionName, controller)
+			hub, err := getOrCreateHubForTest(t, registry, sessionName, controller)
 			require.NoError(t, err)
 			hubs[i] = hub
 		}(i)
@@ -628,9 +655,9 @@ func TestHubRegistry_should_ReturnDifferentHubs_When_SessionNamesDiffer(t *testi
 	t.Parallel()
 	registry := &hubRegistry{hubs: xsync.NewMap[string, *streamhub.StreamHub]()}
 
-	hubA, errA := registry.GetOrCreate("session-a", &fakeSessionController{})
+	hubA, errA := getOrCreateHubForTest(t, registry, "session-a", &fakeSessionController{})
 	require.NoError(t, errA)
-	hubB, errB := registry.GetOrCreate("session-b", &fakeSessionController{})
+	hubB, errB := getOrCreateHubForTest(t, registry, "session-b", &fakeSessionController{})
 	require.NoError(t, errB)
 
 	require.NotSame(t, hubA, hubB)
@@ -653,7 +680,7 @@ func TestHubRegistry_should_RefuseToCreateHub_When_OwnershipLockAlreadyResolvedL
 	require.Equal(t, streamhub.PathLegacyPerConnection, resolved)
 
 	registry := &hubRegistry{hubs: xsync.NewMap[string, *streamhub.StreamHub]()}
-	hub, err := registry.GetOrCreate(sessionName, &fakeSessionController{})
+	hub, err := getOrCreateHubForTest(t, registry, sessionName, &fakeSessionController{})
 
 	require.Nil(t, hub, "GetOrCreate must not create a hub once ownership resolved legacy")
 	require.ErrorIs(t, err, streamhub.ErrOwnershipResolvedToOtherPath)
@@ -668,7 +695,7 @@ func TestHubRegistry_should_CreateHub_When_OwnershipLockResolvesHubOwned(t *test
 	sessionName := "hub-registry-hub-owned-" + t.Name()
 
 	registry := &hubRegistry{hubs: xsync.NewMap[string, *streamhub.StreamHub]()}
-	hub, err := registry.GetOrCreate(sessionName, &fakeSessionController{})
+	hub, err := getOrCreateHubForTest(t, registry, sessionName, &fakeSessionController{})
 
 	require.NoError(t, err)
 	require.NotNil(t, hub)
@@ -736,6 +763,21 @@ func TestHubRegistryAndStreamOwnershipLock_should_NeverProduceTwoOwners_When_Rac
 			require.Equal(t, int64(0), hubWins.Load(), "iteration %d: no hub-creation racer should win when ownership resolved PathLegacyPerConnection", i)
 			require.Equal(t, int64(racersPerSide), hubErrs.Load())
 		}
+
+		// Tear down any hub this iteration created before moving to the next
+		// one. pumpControlModeOutputIntoHub now retries SubscribeControlModeUpdates
+		// forever until hub.State() reports HubTornDown (2026-08-25 fix — a
+		// hub whose control-mode subscription closes must not be
+		// permanently starved of live output just because it closed once).
+		// Without this, up to 1000 iterations x racersPerSide's worth of
+		// hubs each leave a pump goroutine resubscribing every 500ms for
+		// the rest of the test binary's life — a real resource leak this
+		// test's fixture pattern (a fresh, never-torn-down hubRegistry per
+		// iteration) never used to trigger, back when the pump just exited
+		// once and stayed exited.
+		if hub, ok := registry.hubs.Load(sessionName); ok {
+			_ = hub.ForceTeardown()
+		}
 	}
 }
 
@@ -753,7 +795,7 @@ func TestHubOwnedSession_should_NeverTouchActiveControlModeStreams_When_Multiple
 	sessionName := "hub-owned-connection-count-" + t.Name()
 
 	registry := &hubRegistry{hubs: xsync.NewMap[string, *streamhub.StreamHub]()}
-	hub, err := registry.GetOrCreate(sessionName, &fakeSessionController{})
+	hub, err := getOrCreateHubForTest(t, registry, sessionName, &fakeSessionController{})
 	require.NoError(t, err)
 
 	hub.AttachSubscriber(streamhub.NewMemoryTransport(), streamhub.SubscriberCapability{})
@@ -929,7 +971,7 @@ func TestHubRegistry_should_CallSubscribeControlModeUpdatesExactlyOnce_When_Mult
 	controller := &fakeSessionController{}
 	registry := &hubRegistry{hubs: xsync.NewMap[string, *streamhub.StreamHub]()}
 
-	hub, err := registry.GetOrCreate(sessionName, controller)
+	hub, err := getOrCreateHubForTest(t, registry, sessionName, controller)
 	require.NoError(t, err)
 
 	for i := 0; i < 5; i++ {
@@ -1106,7 +1148,7 @@ func TestStreamTerminal_should_RouteThroughHubWithNoLegacyResizeCall_When_PathHu
 
 	registry := &hubRegistry{hubs: xsync.NewMap[string, *streamhub.StreamHub]()}
 	controller := &fakeSessionController{}
-	hub, err := registry.GetOrCreate("path-hub-owned-test", controller)
+	hub, err := getOrCreateHubForTest(t, registry, "path-hub-owned-test", controller)
 	require.NoError(t, err)
 
 	serverStream, _, cleanup := createTestWebSocketPair(t)
@@ -2140,6 +2182,58 @@ func TestWithCursorSyncPassesThroughOnErrorOrNilTarget(t *testing.T) {
 	if got := withCursorSync("content", failing); got != "content" {
 		t.Errorf("error target: got %q, want unchanged", got)
 	}
+}
+
+// slowCursorPositioner blocks for longer than withCursorSyncTimeout,
+// simulating a degraded GetPaneCursorPosition — see withCursorSyncTimeout's
+// doc comment for why it has no bound of its own. calledCh, if non-nil, is
+// closed once GetPaneCursorPosition actually returns — lets a test wait for
+// withCursorSync's deliberately-abandoned goroutine to finish before the
+// test itself returns, so it can never bleed into a later test's
+// goleak-style leak check.
+type slowCursorPositioner struct {
+	delay    time.Duration
+	calledCh chan struct{}
+}
+
+func (s slowCursorPositioner) GetPaneCursorPosition() (int, int, error) {
+	time.Sleep(s.delay)
+	if s.calledCh != nil {
+		close(s.calledCh)
+	}
+	return 1, 1, nil
+}
+
+// TestWithCursorSync_should_ReturnWithinTimeout_When_PositionLookupIsSlow is
+// the regression test for the 2026-08-25 latency fix: handleCurrentPaneRequest
+// calls withCursorSync on the client-triggered resync path, which the
+// frontend force-disconnects if it doesn't respond within 4s
+// (useVisibilityResync.ts's stall watchdog) — an unbounded cursor lookup
+// could single-handedly blow that budget and trigger a disconnect+reconnect,
+// which (StartControlMode/StopControlMode refcounting) tears down and
+// restarts control mode.
+func TestWithCursorSync_should_ReturnWithinTimeout_When_PositionLookupIsSlow(t *testing.T) {
+	calledCh := make(chan struct{})
+	// Delay only modestly past the timeout — long enough to prove
+	// withCursorSync doesn't wait for it, short enough that this test's own
+	// cleanup wait below (for the abandoned goroutine) doesn't slow the
+	// suite down.
+	slow := slowCursorPositioner{delay: withCursorSyncTimeout + 50*time.Millisecond, calledCh: calledCh}
+
+	start := time.Now()
+	got := withCursorSync("content", slow)
+	elapsed := time.Since(start)
+
+	if got != "content" {
+		t.Errorf("withCursorSync() = %q, want content left unchanged when the lookup times out", got)
+	}
+	if elapsed >= slow.delay {
+		t.Errorf("withCursorSync() took %s, want it bounded by withCursorSyncTimeout (%s), well under the %s lookup delay", elapsed, withCursorSyncTimeout, slow.delay)
+	}
+
+	// Let the abandoned goroutine actually finish before this test returns —
+	// see the identical comment in streamhub's copy of this test.
+	<-calledCh
 }
 
 // TestAllSnapshotSendsUseCursorSync guards the invariant that every full-screen

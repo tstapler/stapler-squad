@@ -4,6 +4,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 )
 
 // TestPrepareSnapshotContent is the direct unit test for the transform at the
@@ -123,4 +124,62 @@ func TestWithCursorSync_should_LeaveContentUnchanged_When_PositionLookupFails(t 
 	if got != "content" {
 		t.Errorf("withCursorSync() = %q, want content left unchanged on lookup error", got)
 	}
+}
+
+// slowCursorPositioner blocks for longer than withCursorSyncTimeout before
+// returning, simulating a degraded GetPaneCursorPosition (its own control-mode
+// path has no timeout shorter than 3s, and its subprocess fallback has none
+// at all beyond a 5s exec-gate wait — see withCursorSyncTimeout's doc comment).
+// calledCh, if non-nil, is closed once GetPaneCursorPosition actually
+// returns — lets a test wait for withCursorSync's deliberately-abandoned
+// goroutine to finish before the test itself returns, so it can never bleed
+// into a later test's goleak.VerifyNone() check.
+type slowCursorPositioner struct {
+	delay    time.Duration
+	calledCh chan struct{}
+}
+
+func (s slowCursorPositioner) GetPaneCursorPosition() (x, y int, err error) {
+	time.Sleep(s.delay)
+	if s.calledCh != nil {
+		close(s.calledCh)
+	}
+	return 1, 1, nil
+}
+
+// TestWithCursorSync_should_ReturnWithinTimeout_When_PositionLookupIsSlow is
+// the regression test for the 2026-08-25 latency fix: applyNegotiatedSize
+// (hub.go) calls withCursorSync while h.resizing suppresses live output for
+// every subscriber, and connectrpc_websocket.go's handleCurrentPaneRequest
+// calls its own copy on the client-triggered resync path, which the
+// frontend force-disconnects if it doesn't respond within 4s
+// (useVisibilityResync.ts's stall watchdog) — a slow, unbounded cursor
+// lookup could single-handedly blow both budgets. Content must come back
+// unchanged (matching the lookup-error path) rather than carrying a cursor
+// escape for a position that arrived too late to be worth appending.
+func TestWithCursorSync_should_ReturnWithinTimeout_When_PositionLookupIsSlow(t *testing.T) {
+	calledCh := make(chan struct{})
+	// Delay only modestly past the timeout — long enough to prove
+	// withCursorSync doesn't wait for it, short enough that this test's own
+	// cleanup wait below (for the abandoned goroutine) doesn't slow the
+	// suite down.
+	slow := slowCursorPositioner{delay: withCursorSyncTimeout + 50*time.Millisecond, calledCh: calledCh}
+
+	start := time.Now()
+	got := withCursorSync("content", slow)
+	elapsed := time.Since(start)
+
+	if got != "content" {
+		t.Errorf("withCursorSync() = %q, want content left unchanged when the lookup times out", got)
+	}
+	if elapsed >= slow.delay {
+		t.Errorf("withCursorSync() took %s, want it bounded by withCursorSyncTimeout (%s), well under the %s lookup delay", elapsed, withCursorSyncTimeout, slow.delay)
+	}
+
+	// Let the abandoned goroutine actually finish before this test returns —
+	// withCursorSync's timeout branch deliberately doesn't wait for it (that's
+	// the behavior under test), but leaving it running past this test's own
+	// return risks it still being alive when a later test's
+	// goleak.VerifyNone() checks.
+	<-calledCh
 }
