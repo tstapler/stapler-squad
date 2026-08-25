@@ -36,6 +36,7 @@ import {
   filterButtons,
   filterButton,
   filterButtonActive,
+  filterButtonExcluded,
   items as itemsClass,
   item,
   itemClickable,
@@ -119,7 +120,27 @@ interface ReviewQueuePanelProps {
 type SortField = "default" | "severity" | "priority" | "age" | "diffSize" | "name";
 
 // URL query param keys, persisted/restored via useFilterState for shareable/bookmarkable filter state.
-const FILTER_URL_KEYS = ["priority", "reason", "severity", "program", "category", "tag", "pr", "diverged", "q", "sort", "dir", "group"] as const;
+// The `*Exclude` keys hold the exclude side of each dimension's include/exclude/neutral cycle.
+const FILTER_URL_KEYS = [
+  "priority",
+  "priorityExclude",
+  "reason",
+  "reasonExclude",
+  "severity",
+  "severityExclude",
+  "program",
+  "programExclude",
+  "category",
+  "categoryExclude",
+  "tag",
+  "tagExclude",
+  "pr",
+  "diverged",
+  "q",
+  "sort",
+  "dir",
+  "group",
+] as const;
 
 // Grouping strategies that map onto fields ReviewItem actually carries (no project/workflow/session-type data).
 const REVIEW_GROUPING_STRATEGIES = [
@@ -252,6 +273,27 @@ function toggleInSet<T>(set: Set<T>, value: T): Set<T> {
   return next;
 }
 
+// Cycles a single value through neutral -> include -> exclude -> neutral across a paired
+// include/exclude Set for one filter dimension. Each Set stays mutually exclusive for any
+// given value (a value is never in both at once).
+function cycleFilterValue<T>(
+  include: Set<T>,
+  exclude: Set<T>,
+  value: T
+): { include: Set<T>; exclude: Set<T> } {
+  const nextInclude = new Set(include);
+  const nextExclude = new Set(exclude);
+  if (include.has(value)) {
+    nextInclude.delete(value);
+    nextExclude.add(value);
+  } else if (exclude.has(value)) {
+    nextExclude.delete(value);
+  } else {
+    nextInclude.add(value);
+  }
+  return { include: nextInclude, exclude: nextExclude };
+}
+
 // Counts distinct non-empty values of `pick(item)` (string or string[]) across items, sorted by frequency desc.
 function countByField(items: ReviewItem[], pick: (item: ReviewItem) => string | string[]): [string, number][] {
   const counts = new Map<string, number>();
@@ -292,12 +334,20 @@ export function ReviewQueuePanel({
   const { filterState: urlFilters, setFilter: setUrlFilter, clearFilters: clearUrlFilters } = useFilterState(FILTER_URL_KEYS);
 
   // Combinable multi-select filters — each dimension is a Set; empty Set = "no filter applied".
+  // Each also has a paired `*Exclude` Set (neutral -> include -> exclude -> neutral cycle,
+  // see cycleFilterValue) so a value can be explicitly hidden rather than only included.
   const [priorityFilter, setPriorityFilter] = useState<Set<Priority>>(() => parseNumSet(urlFilters.priority) as Set<Priority>);
+  const [priorityExcludeFilter, setPriorityExcludeFilter] = useState<Set<Priority>>(() => parseNumSet(urlFilters.priorityExclude) as Set<Priority>);
   const [reasonFilter, setReasonFilter] = useState<Set<AttentionReason>>(() => parseNumSet(urlFilters.reason) as Set<AttentionReason>);
+  const [reasonExcludeFilter, setReasonExcludeFilter] = useState<Set<AttentionReason>>(() => parseNumSet(urlFilters.reasonExclude) as Set<AttentionReason>);
   const [severityFilter, setSeverityFilter] = useState<Set<string>>(() => parseStrSet(urlFilters.severity));
+  const [severityExcludeFilter, setSeverityExcludeFilter] = useState<Set<string>>(() => parseStrSet(urlFilters.severityExclude));
   const [programFilter, setProgramFilter] = useState<Set<string>>(() => parseStrSet(urlFilters.program));
+  const [programExcludeFilter, setProgramExcludeFilter] = useState<Set<string>>(() => parseStrSet(urlFilters.programExclude));
   const [categoryFilter, setCategoryFilter] = useState<Set<string>>(() => parseStrSet(urlFilters.category));
+  const [categoryExcludeFilter, setCategoryExcludeFilter] = useState<Set<string>>(() => parseStrSet(urlFilters.categoryExclude));
   const [tagFilter, setTagFilter] = useState<Set<string>>(() => parseStrSet(urlFilters.tag));
+  const [tagExcludeFilter, setTagExcludeFilter] = useState<Set<string>>(() => parseStrSet(urlFilters.tagExclude));
   const [prFilter, setPrFilter] = useState<"all" | "has-pr" | "no-pr">(() =>
     urlFilters.pr === "has-pr" || urlFilters.pr === "no-pr" ? urlFilters.pr : "all"
   );
@@ -406,20 +456,38 @@ export function ReviewQueuePanel({
     if (priorityFilter.size > 0) {
       filtered = filtered.filter((item) => priorityFilter.has(item.priority));
     }
+    if (priorityExcludeFilter.size > 0) {
+      filtered = filtered.filter((item) => !priorityExcludeFilter.has(item.priority));
+    }
     if (reasonFilter.size > 0) {
       filtered = filtered.filter((item) => reasonFilter.has(item.reason));
+    }
+    if (reasonExcludeFilter.size > 0) {
+      filtered = filtered.filter((item) => !reasonExcludeFilter.has(item.reason));
     }
     if (severityFilter.size > 0) {
       filtered = filtered.filter((item) => severityFilter.has(severityFilterKey(item.metadata?.["risk_level"])));
     }
+    if (severityExcludeFilter.size > 0) {
+      filtered = filtered.filter((item) => !severityExcludeFilter.has(severityFilterKey(item.metadata?.["risk_level"])));
+    }
     if (programFilter.size > 0) {
       filtered = filtered.filter((item) => programFilter.has(item.program));
+    }
+    if (programExcludeFilter.size > 0) {
+      filtered = filtered.filter((item) => !programExcludeFilter.has(item.program));
     }
     if (categoryFilter.size > 0) {
       filtered = filtered.filter((item) => categoryFilter.has(item.category));
     }
+    if (categoryExcludeFilter.size > 0) {
+      filtered = filtered.filter((item) => !categoryExcludeFilter.has(item.category));
+    }
     if (tagFilter.size > 0) {
       filtered = filtered.filter((item) => item.tags.some((t) => tagFilter.has(t)));
+    }
+    if (tagExcludeFilter.size > 0) {
+      filtered = filtered.filter((item) => !item.tags.some((t) => tagExcludeFilter.has(t)));
     }
     if (prFilter === "has-pr") {
       filtered = filtered.filter((item) => !!item.githubPrUrl);
@@ -470,11 +538,17 @@ export function ReviewQueuePanel({
   }, [
     allItems,
     priorityFilter,
+    priorityExcludeFilter,
     reasonFilter,
+    reasonExcludeFilter,
     severityFilter,
+    severityExcludeFilter,
     programFilter,
+    programExcludeFilter,
     categoryFilter,
+    categoryExcludeFilter,
     tagFilter,
+    tagExcludeFilter,
     prFilter,
     divergedOnly,
     searchText,
@@ -653,41 +727,52 @@ export function ReviewQueuePanel({
     }
   };
 
-  const handleFilterByPriority = (priority: Priority) => {
-    const next = toggleInSet(priorityFilter, priority);
-    setPriorityFilter(next);
-    setUrlFilter("priority", joinSet(next));
-  };
+  // Six filter dimensions (priority/reason/severity/program/category/tag) each need an
+  // identical include/exclude/neutral cycle handler: cycle the value via cycleFilterValue,
+  // write both resulting Sets to state, and persist both to the URL. Factored into one
+  // generic builder — called once per dimension below — instead of six near-identical
+  // hand-written handlers (interface-pollution-checklist.md smell #5 doesn't apply here:
+  // this generic has 6 real call sites, not 1).
+  function makeFilterCycleHandler<T extends string | number>(
+    include: Set<T>,
+    exclude: Set<T>,
+    setInclude: (s: Set<T>) => void,
+    setExclude: (s: Set<T>) => void,
+    includeKey: (typeof FILTER_URL_KEYS)[number],
+    excludeKey: (typeof FILTER_URL_KEYS)[number]
+  ): (value: T) => void {
+    return (value: T) => {
+      const next = cycleFilterValue(include, exclude, value);
+      setInclude(next.include);
+      setExclude(next.exclude);
+      setUrlFilter(includeKey, joinSet(next.include as Set<string> | Set<number>));
+      setUrlFilter(excludeKey, joinSet(next.exclude as Set<string> | Set<number>));
+    };
+  }
 
-  const handleFilterByReason = (reason: AttentionReason) => {
-    const next = toggleInSet(reasonFilter, reason);
-    setReasonFilter(next);
-    setUrlFilter("reason", joinSet(next));
-  };
+  const handleFilterByPriority = makeFilterCycleHandler(
+    priorityFilter, priorityExcludeFilter, setPriorityFilter, setPriorityExcludeFilter, "priority", "priorityExclude"
+  );
 
-  const handleFilterBySeverity = (severity: string) => {
-    const next = toggleInSet(severityFilter, severity);
-    setSeverityFilter(next);
-    setUrlFilter("severity", joinSet(next));
-  };
+  const handleFilterByReason = makeFilterCycleHandler(
+    reasonFilter, reasonExcludeFilter, setReasonFilter, setReasonExcludeFilter, "reason", "reasonExclude"
+  );
 
-  const handleFilterByProgram = (program: string) => {
-    const next = toggleInSet(programFilter, program);
-    setProgramFilter(next);
-    setUrlFilter("program", joinSet(next));
-  };
+  const handleFilterBySeverity = makeFilterCycleHandler(
+    severityFilter, severityExcludeFilter, setSeverityFilter, setSeverityExcludeFilter, "severity", "severityExclude"
+  );
 
-  const handleFilterByCategory = (category: string) => {
-    const next = toggleInSet(categoryFilter, category);
-    setCategoryFilter(next);
-    setUrlFilter("category", joinSet(next));
-  };
+  const handleFilterByProgram = makeFilterCycleHandler(
+    programFilter, programExcludeFilter, setProgramFilter, setProgramExcludeFilter, "program", "programExclude"
+  );
 
-  const handleFilterByTag = (tagValue: string) => {
-    const next = toggleInSet(tagFilter, tagValue);
-    setTagFilter(next);
-    setUrlFilter("tag", joinSet(next));
-  };
+  const handleFilterByCategory = makeFilterCycleHandler(
+    categoryFilter, categoryExcludeFilter, setCategoryFilter, setCategoryExcludeFilter, "category", "categoryExclude"
+  );
+
+  const handleFilterByTag = makeFilterCycleHandler(
+    tagFilter, tagExcludeFilter, setTagFilter, setTagExcludeFilter, "tag", "tagExclude"
+  );
 
   const handlePrFilterChange = (value: "all" | "has-pr" | "no-pr") => {
     setPrFilter(value);
@@ -745,11 +830,17 @@ export function ReviewQueuePanel({
       searchDebounceRef.current = null;
     }
     setPriorityFilter(new Set());
+    setPriorityExcludeFilter(new Set());
     setReasonFilter(new Set());
+    setReasonExcludeFilter(new Set());
     setSeverityFilter(new Set());
+    setSeverityExcludeFilter(new Set());
     setProgramFilter(new Set());
+    setProgramExcludeFilter(new Set());
     setCategoryFilter(new Set());
+    setCategoryExcludeFilter(new Set());
     setTagFilter(new Set());
+    setTagExcludeFilter(new Set());
     setPrFilter("all");
     setDivergedOnly(false);
     setSearchText("");
@@ -781,11 +872,17 @@ export function ReviewQueuePanel({
 
   const activeFilterCount =
     priorityFilter.size +
+    priorityExcludeFilter.size +
     reasonFilter.size +
+    reasonExcludeFilter.size +
     severityFilter.size +
+    severityExcludeFilter.size +
     programFilter.size +
+    programExcludeFilter.size +
     categoryFilter.size +
+    categoryExcludeFilter.size +
     tagFilter.size +
+    tagExcludeFilter.size +
     (prFilter !== "all" ? 1 : 0) +
     (divergedOnly ? 1 : 0) +
     (searchText.trim() ? 1 : 0) +
@@ -1173,14 +1270,17 @@ export function ReviewQueuePanel({
               {[Priority.URGENT, Priority.HIGH, Priority.MEDIUM, Priority.LOW].map(
                 (priority) => {
                   const priorityCount = byPriority.get(priority) ?? 0;
+                  const isExcluded = priorityExcludeFilter.has(priority);
                   return (
                     <button
                       key={priority}
-                      className={`${filterButton} ${priorityFilter.has(priority) ? filterButtonActive : ""}`}
+                      className={`${filterButton} ${priorityFilter.has(priority) ? filterButtonActive : isExcluded ? filterButtonExcluded : ""}`}
                       onClick={() => handleFilterByPriority(priority)}
                       disabled={priorityCount === 0}
                       aria-pressed={priorityFilter.has(priority)}
+                      title={isExcluded ? "Excluded — click to clear" : "Click to include, click again to exclude"}
                     >
+                      {isExcluded ? "🚫 " : ""}
                       {getPriorityLabel(priority)} ({priorityCount})
                     </button>
                   );
@@ -1206,14 +1306,17 @@ export function ReviewQueuePanel({
                 const reasonCount = byReason.get(reason) ?? 0;
                 // Hide TESTS_FAILING when count is 0 (detection may be disabled)
                 if (reason === AttentionReason.TESTS_FAILING && reasonCount === 0) return null;
+                const isExcluded = reasonExcludeFilter.has(reason);
                 return (
                   <button
                     key={reason}
-                    className={`${filterButton} ${reasonFilter.has(reason) ? filterButtonActive : ""}`}
+                    className={`${filterButton} ${reasonFilter.has(reason) ? filterButtonActive : isExcluded ? filterButtonExcluded : ""}`}
                     onClick={() => handleFilterByReason(reason)}
                     disabled={reasonCount === 0}
                     aria-pressed={reasonFilter.has(reason)}
+                    title={isExcluded ? "Excluded — click to clear" : "Click to include, click again to exclude"}
                   >
+                    {isExcluded ? "🚫 " : ""}
                     {getReasonLabel(reason)} ({reasonCount})
                   </button>
                 );
@@ -1227,14 +1330,17 @@ export function ReviewQueuePanel({
               {SEVERITY_FILTER_VALUES.map((severity) => {
                 const severityCount = bySeverity.get(severity) ?? 0;
                 const label = severity === UNRECORDED_SEVERITY ? "Not recorded" : getRiskLevelInfo(severity).label;
+                const isExcluded = severityExcludeFilter.has(severity);
                 return (
                   <button
                     key={severity}
-                    className={`${filterButton} ${severityFilter.has(severity) ? filterButtonActive : ""}`}
+                    className={`${filterButton} ${severityFilter.has(severity) ? filterButtonActive : isExcluded ? filterButtonExcluded : ""}`}
                     onClick={() => handleFilterBySeverity(severity)}
                     disabled={severityCount === 0}
                     aria-pressed={severityFilter.has(severity)}
+                    title={isExcluded ? "Excluded — click to clear" : "Click to include, click again to exclude"}
                   >
+                    {isExcluded ? "🚫 " : ""}
                     {label} ({severityCount})
                   </button>
                 );
@@ -1246,16 +1352,21 @@ export function ReviewQueuePanel({
             <div className={filterGroup}>
               <label className={filterLabel}>Program (any):</label>
               <div className={filterButtons}>
-                {availablePrograms.map(([program, n]) => (
-                  <button
-                    key={program}
-                    className={`${filterButton} ${programFilter.has(program) ? filterButtonActive : ""}`}
-                    onClick={() => handleFilterByProgram(program)}
-                    aria-pressed={programFilter.has(program)}
-                  >
-                    {program} ({n})
-                  </button>
-                ))}
+                {availablePrograms.map(([program, n]) => {
+                  const isExcluded = programExcludeFilter.has(program);
+                  return (
+                    <button
+                      key={program}
+                      className={`${filterButton} ${programFilter.has(program) ? filterButtonActive : isExcluded ? filterButtonExcluded : ""}`}
+                      onClick={() => handleFilterByProgram(program)}
+                      aria-pressed={programFilter.has(program)}
+                      title={isExcluded ? "Excluded — click to clear" : "Click to include, click again to exclude"}
+                    >
+                      {isExcluded ? "🚫 " : ""}
+                      {program} ({n})
+                    </button>
+                  );
+                })}
               </div>
             </div>
           )}
@@ -1264,16 +1375,21 @@ export function ReviewQueuePanel({
             <div className={filterGroup}>
               <label className={filterLabel}>Category (any):</label>
               <div className={filterButtons}>
-                {availableCategories.map(([category, n]) => (
-                  <button
-                    key={category}
-                    className={`${filterButton} ${categoryFilter.has(category) ? filterButtonActive : ""}`}
-                    onClick={() => handleFilterByCategory(category)}
-                    aria-pressed={categoryFilter.has(category)}
-                  >
-                    {category} ({n})
-                  </button>
-                ))}
+                {availableCategories.map(([category, n]) => {
+                  const isExcluded = categoryExcludeFilter.has(category);
+                  return (
+                    <button
+                      key={category}
+                      className={`${filterButton} ${categoryFilter.has(category) ? filterButtonActive : isExcluded ? filterButtonExcluded : ""}`}
+                      onClick={() => handleFilterByCategory(category)}
+                      aria-pressed={categoryFilter.has(category)}
+                      title={isExcluded ? "Excluded — click to clear" : "Click to include, click again to exclude"}
+                    >
+                      {isExcluded ? "🚫 " : ""}
+                      {category} ({n})
+                    </button>
+                  );
+                })}
               </div>
             </div>
           )}
@@ -1282,16 +1398,21 @@ export function ReviewQueuePanel({
             <div className={filterGroup}>
               <label className={filterLabel}>Tags (any):</label>
               <div className={filterButtons}>
-                {availableTags.map(([t, n]) => (
-                  <button
-                    key={t}
-                    className={`${filterButton} ${tagFilter.has(t) ? filterButtonActive : ""}`}
-                    onClick={() => handleFilterByTag(t)}
-                    aria-pressed={tagFilter.has(t)}
-                  >
-                    {t} ({n})
-                  </button>
-                ))}
+                {availableTags.map(([t, n]) => {
+                  const isExcluded = tagExcludeFilter.has(t);
+                  return (
+                    <button
+                      key={t}
+                      className={`${filterButton} ${tagFilter.has(t) ? filterButtonActive : isExcluded ? filterButtonExcluded : ""}`}
+                      onClick={() => handleFilterByTag(t)}
+                      aria-pressed={tagFilter.has(t)}
+                      title={isExcluded ? "Excluded — click to clear" : "Click to include, click again to exclude"}
+                    >
+                      {isExcluded ? "🚫 " : ""}
+                      {t} ({n})
+                    </button>
+                  );
+                })}
               </div>
             </div>
           )}
