@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -14,7 +15,19 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/ent"
 )
+
+// erroringWorkflowRepo wraps a real WorkflowRepository but fails ListByTriggerType —
+// used to distinguish "infra failure listing candidates" (500) from "no candidate's
+// secret verified" (401) in verifySignatureForRepo.
+type erroringWorkflowRepo struct {
+	session.WorkflowRepository
+}
+
+func (e *erroringWorkflowRepo) ListByTriggerType(context.Context, string) ([]*ent.Workflow, error) {
+	return nil, errors.New("simulated DB failure")
+}
 
 // --- extractPRFixEvent table-driven tests (Story 2.1.2) ---------------------
 
@@ -311,6 +324,20 @@ func TestHandlePRFixEvent_should_Return401AndRecordRejected_When_WorkflowSecretE
 	rec := doPRFixEventRequest(t, h, "check_run", body, "delivery-empty-secret", "sha256=whatever")
 
 	assert.Equal(t, http.StatusUnauthorized, rec.Code)
+	assert.Equal(t, 0, router.callCount())
+}
+
+func TestHandlePRFixEvent_should_Return500NotUnauthorized_When_CandidateLookupErrors(t *testing.T) {
+	infra := newWebhookTestInfra(t)
+	infra.cfg.FeatureFlags["pr_event_webhooks"] = true
+	newGitHubPushWorkflow(t, infra, "gh-8", "s3cr3t", "tstapler/stapler-squad", "main", "x")
+	router := &fakePRFixEventRouter{matched: true}
+	h := NewGitHubWebhookHandler(&erroringWorkflowRepo{WorkflowRepository: infra.workflowRepo}, infra.scheduler, infra.fireEvents, infra.cfg, router)
+
+	body := checkRunFailureBody(t)
+	rec := doPRFixEventRequest(t, h, "check_run", body, "delivery-lookup-error", sign("s3cr3t", body))
+
+	assert.Equal(t, http.StatusInternalServerError, rec.Code, "an infra failure listing candidates must surface as 500, not be misreported as an invalid signature")
 	assert.Equal(t, 0, router.callCount())
 }
 

@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"strings"
 	"sync"
@@ -11,6 +12,13 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
 )
+
+// prFixEventTypes is the single source of truth for the 4 GitHub webhook event types
+// this feature reacts to — used to build both Handle's dispatch switch guard and
+// GitHubWebhookHandler's firstPRFixDelivery map, so adding a 5th event type later only
+// means updating this slice (and extractPRFixEvent's dispatch) instead of silently
+// missing one of several previously hand-duplicated lists.
+var prFixEventTypes = []string{"check_run", "workflow_run", "pull_request_review", "issue_comment"}
 
 // GitHub's documented action/conclusion/state enum values relevant to deciding
 // whether a check_run/workflow_run/pull_request_review/issue_comment delivery is
@@ -46,10 +54,8 @@ var failureShapedConclusions = map[string]bool{
 // to" case is reported via actionable=false, ok=true.
 func extractPRFixEvent(eventType string, payload map[string]interface{}) (repoFullName string, prNumbers []int, actionable bool, ok bool) {
 	switch eventType {
-	case "check_run":
-		return extractCheckOrWorkflowRunEvent(payload, "check_run")
-	case "workflow_run":
-		return extractCheckOrWorkflowRunEvent(payload, "workflow_run")
+	case "check_run", "workflow_run":
+		return extractCheckOrWorkflowRunEvent(payload, eventType)
 	case "pull_request_review":
 		return extractPullRequestReviewEvent(payload)
 	case "issue_comment":
@@ -248,7 +254,13 @@ func (h *GitHubWebhookHandler) handlePRFixEvent(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	if !h.verifySignatureForRepo(ctx, fullName, body, r.Header.Get("X-Hub-Signature-256")) {
+	verified, sigErr := h.verifySignatureForRepo(ctx, fullName, body, r.Header.Get("X-Hub-Signature-256"))
+	if sigErr != nil {
+		log.Error("[GitHubWebhookHandler] failed to list github_push workflows", "err", sigErr)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	if !verified {
 		persistTriggerFireEvent(ctx, h.fireEvents, session.TriggerFireEventInput{
 			Outcome: "rejected", DeliveryID: deliveryID, ErrorMessage: "invalid signature",
 		})
@@ -258,7 +270,7 @@ func (h *GitHubWebhookHandler) handlePRFixEvent(w http.ResponseWriter, r *http.R
 
 	if once, ok := h.firstPRFixDelivery[eventType]; ok {
 		once.Do(func() {
-			log.Info("[GitHubWebhookHandler] first verified delivery received — /webhooks/github reachability confirmed", "event_type", eventType)
+			log.Info(fmt.Sprintf("[GitHubWebhookHandler] first verified %s delivery received — /webhooks/github reachability confirmed", eventType))
 		})
 	}
 
