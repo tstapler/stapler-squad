@@ -6,10 +6,16 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/tstapler/stapler-squad/log"
 )
+
+// dropLogInterval logs only every Nth "queue full" drop (with a running
+// total) instead of every single one — under sustained backpressure this
+// fired thousands of times per hour at Warn level for identical reasons.
+const dropLogInterval = 100
 
 const (
 	workerPoolSize = 4
@@ -40,6 +46,9 @@ type TokenStore struct {
 
 	// inflight tracks files currently being parsed to prevent duplicate work.
 	inflight sync.Map // key: filePath, value: struct{}
+
+	// droppedCount tracks total queue-full drops for rate-limited logging.
+	droppedCount atomic.Uint64
 
 	// subscribers receive notifications when the store is updated.
 	subsMu sync.RWMutex
@@ -168,7 +177,9 @@ func (ts *TokenStore) enqueue(filePath string) {
 	default:
 		// Queue full — remove from inflight so it can be retried later.
 		ts.inflight.Delete(filePath)
-		log.Warn("[TokenStore] parse queue full, dropping", "path", filePath)
+		if n := ts.droppedCount.Add(1); n%dropLogInterval == 1 {
+			log.Warn("[TokenStore] parse queue full, dropping", "path", filePath, "total_dropped", n)
+		}
 	}
 }
 

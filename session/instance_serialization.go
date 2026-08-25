@@ -11,6 +11,7 @@ import (
 	"os/user"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -18,6 +19,14 @@ import (
 	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
+
+// loggedMissingWorktree suppresses repeat "worktree directory missing"
+// warnings for a session whose on-disk status is never persisted back as
+// Paused (see fromInstanceData) — every health-check LoadInstances() tick
+// (session/health.go, ~15s) re-detects and re-transitions the same session
+// in memory, so without this the warning fires on every tick forever
+// instead of once. Keyed by session title; cleared implicitly on restart.
+var loggedMissingWorktree sync.Map //nolint:gochecknoglobals
 
 // ToInstanceData converts an Instance to its serializable form
 //
@@ -377,10 +386,15 @@ func fromInstanceData(data InstanceData, deferStart bool) (*Instance, error) {
 		worktreePath := instance.gitManager.GetWorktreePath()
 		if _, err := os.Stat(worktreePath); os.IsNotExist(err) {
 			// Worktree has been deleted — use transitionTo so the state machine is respected.
-			log.ForSession(instance.Title).Warn("worktree directory missing, marking as paused", "path", worktreePath)
+			_, alreadyLogged := loggedMissingWorktree.LoadOrStore(instance.Title, struct{}{})
+			logAt := log.ForSession(instance.Title).Warn
+			if alreadyLogged {
+				logAt = log.ForSession(instance.Title).Debug
+			}
+			logAt("worktree directory missing, marking as paused", "path", worktreePath)
 			if err := instance.transitionTo(context.Background(), Paused); err != nil {
 				// If the transition is somehow invalid (e.g. already Stopped), fall back to loadStatus.
-				log.ForSession(instance.Title).Warn("could not transition to paused via state machine, using loadStatus", "err", err)
+				logAt("could not transition to paused via state machine, using loadStatus", "err", err)
 				instance.loadStatus(Paused)
 			}
 		}

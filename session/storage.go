@@ -287,7 +287,7 @@ func (s *Storage) saveInstancesToRepo(instances []*Instance) error {
 			continue
 		}
 		data := inst.ToInstanceData()
-		log.Info("SaveInstances: converting instance",
+		log.Debug("SaveInstances: converting instance",
 			"session", data.Title, "is_worktree", data.IsWorktree, "main_repo_path", data.MainRepoPath,
 			"github_owner", data.GitHubOwner, "github_repo", data.GitHubRepo)
 		if err := s.repo.Update(ctx, data); err != nil {

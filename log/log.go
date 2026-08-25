@@ -1,6 +1,7 @@
 package log
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -8,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -628,20 +630,41 @@ func (sl *SessionLogger) Error(format string, v ...interface{}) {
 	LogForSession(sl.sessionID, "error", format, v...)
 }
 
+// logAt builds and emits a slog.Record with the PC of Info/Warn/Error/Debug's
+// caller (not this function, and not Info/Warn/etc. themselves) so
+// PackageLevelHandler can resolve per-package overrides correctly. Calling
+// slog.Info/Warn/etc. directly from those wrappers would instead attribute
+// every call site to this log package, since slog's top-level convenience
+// functions assume they're called directly from user code — see
+// https://pkg.go.dev/log/slog#hdr-Wrapping_output_methods for the pattern
+// this follows (skip=3: Callers, logAt, Info/Warn/Error/Debug, caller).
+func logAt(level slog.Level, msg string, args ...any) {
+	logger := slog.Default()
+	ctx := context.Background()
+	if !logger.Enabled(ctx, level) {
+		return
+	}
+	var pcs [1]uintptr
+	runtime.Callers(3, pcs[:])
+	r := slog.NewRecord(time.Now(), level, msg, pcs[0])
+	r.Add(args...)
+	_ = logger.Handler().Handle(ctx, r)
+}
+
 // Info logs an info-level message through the default slog handler (async, no mutex hold).
 // args are alternating key-value pairs: log.Info("msg", "key", val, "key2", val2)
-func Info(msg string, args ...any) { slog.Info(msg, args...) }
+func Info(msg string, args ...any) { logAt(slog.LevelInfo, msg, args...) }
 
 // Warn logs a warning-level message through the default slog handler.
-func Warn(msg string, args ...any) { slog.Warn(msg, args...) }
+func Warn(msg string, args ...any) { logAt(slog.LevelWarn, msg, args...) }
 
 // Error logs an error-level message through the default slog handler.
-func Error(msg string, args ...any) { slog.Error(msg, args...) }
+func Error(msg string, args ...any) { logAt(slog.LevelError, msg, args...) }
 
 // Debug logs a debug-level message through the default slog handler.
 // The handler drops debug records when the runtime level is above DEBUG, so
 // this is safe to call without an IsDebugEnabled() guard.
-func Debug(msg string, args ...any) { slog.Debug(msg, args...) }
+func Debug(msg string, args ...any) { logAt(slog.LevelDebug, msg, args...) }
 
 // Global convenience functions for structured logging (legacy — prefer Info/Warn/Error/Debug)
 
@@ -949,12 +972,15 @@ func initializeWithConfig(daemon bool, cfg *LogConfig) {
 
 	// Install async slog bridge so log.Printf calls route through slog.
 	// Handler ordering: TraceIDHandler (outermost, captures trace IDs at call time)
+	// → PackageLevelHandler (per-package level overrides, see log/package_level.go)
 	// → AsyncHandler → JSONHandler (innermost, writes to combinedWriter).
 	// TraceIDHandler is a no-op identity handler until E2-S2 adds the real implementation.
-	jsonHandler := slog.NewJSONHandler(combinedWriter, &slog.HandlerOptions{Level: &slogLevel})
+	jsonHandler := slog.NewJSONHandler(combinedWriter, &slog.HandlerOptions{Level: slog.LevelDebug})
 	asyncHandler := NewAsyncHandler(jsonHandler, defaultAsyncBufSize)
 	asyncHandler.StartDrain()
-	slog.SetDefault(slog.New(NewTraceIDHandler(asyncHandler)))
+	packageLevelHandler := NewPackageLevelHandler(asyncHandler)
+	slog.SetDefault(slog.New(NewTraceIDHandler(packageLevelHandler)))
+	LoadPackageLevelsFromEnv()
 
 	// Populate the default LogManager so package consumers can use it via dependency injection.
 	defaultManager = newLogManager(cfg, InfoLog(), WarningLog(), ErrorLog(), DebugLog(), globalLogFile, structuredLogger, asyncHandler, asyncLogFileWriter, asyncLogConsoleWriter)
