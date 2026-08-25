@@ -61,6 +61,13 @@ test.describe("session-completion-summary", () => {
         expect(box!.y + box!.height).toBeLessThanOrEqual(viewport!.height);
         expect(box!.y).toBeGreaterThanOrEqual(0);
       }).toPass({ timeout: 5000 });
+      // scrollIntoViewIfNeeded() succeeds identically whether .modal's overflow-y is
+      // "auto" or "hidden" (only a real mouse-wheel scroll distinguishes them), so the
+      // bounding-box check above wouldn't catch a regression back to "hidden" on its own.
+      const overflowY = await page.getByTestId("omnibar-modal").evaluate(
+        (el) => getComputedStyle(el).overflowY,
+      );
+      expect(overflowY).not.toBe("hidden");
 
       const createRequest = page.waitForRequest(
         (req) => req.url().includes("CreateSession") && req.method() === "POST",

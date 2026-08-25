@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
+import { createPortal } from "react-dom";
 import { useRouter } from "next/navigation";
 import Fuse from "fuse.js";
 import { detect, InputType, INPUT_TYPE_INFO, DetectionResult } from "@/lib/omnibar";
@@ -1254,6 +1255,7 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
     >
       <div
         className={modal}
+        data-testid="omnibar-modal"
         onClick={(e) => e.stopPropagation()}
         onKeyDown={handleKeyDown}
       >
@@ -1515,13 +1517,13 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
         )}
 
         {/* R2: Confirmation dialog for Directory mode with non-existent path */}
-        {showPathConfirmation && pendingSessionData && (
+        {showPathConfirmation && pendingSessionData && createPortal(
           <div
             role="dialog"
             aria-modal="true"
             aria-labelledby="path-confirm-title"
             style={{
-              position: "absolute",
+              position: "fixed",
               inset: 0,
               display: "flex",
               alignItems: "center",
@@ -1601,7 +1603,8 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
                 </button>
               </div>
             </div>
-          </div>
+          </div>,
+          document.body
         )}
 
         {/* Keyboard Shortcuts */}
