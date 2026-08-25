@@ -174,22 +174,64 @@ func runGated[T any](ctx context.Context, serverSocket string, fn func() (T, err
 // of execGateAcquireTimeout. Used by CapturePaneContentPriority/
 // RefreshClientPriority so resync-triggered tmux subprocess calls never queue
 // behind ordinary tmux traffic on the same socket.
+//
+// Note this only bounds the *wait* for a free slot (via ctx passed down into
+// runGatedWith's gateCtx) — it does not, by itself, bound fn()'s own
+// execution once the slot is acquired. Prefer runFastLaneSubprocess below
+// over calling this directly: it closes that gap.
 func runGatedFastLane[T any](ctx context.Context, serverSocket string, fn func() (T, error)) (T, error) {
 	return runGatedWith(ctx, serverSocket, resyncFastLaneAcquireTimeout, AcquireResyncExecSlot, fn)
+}
+
+// resyncFastLaneTimeout bounds the ENTIRE runFastLaneSubprocess call — both
+// the exec-gate acquire wait and the subprocess execution that follows it —
+// not just the acquire step runGatedFastLane's own ctx parameter bounds.
+// 2026-08-25 incident: CapturePaneContentPriority/CapturePaneContentRawPriority
+// each hand-built their own context.WithTimeout(context.Background(),
+// defaultCapturePaneTimeout) — 10s, sized for the unrelated default pool —
+// and RefreshClientPriority had no bound on its subprocess call at all
+// (context.Background(), built via the context-less buildTmuxCommand rather
+// than buildTmuxCommandContext). A capture that took a few seconds under real
+// load (confirmed via debug tracing: the exec-gate slot itself was acquired
+// in 0ms, so the delay was entirely in the subprocess call, not gate
+// contention) stayed well within 10s and so never errored — but the client's
+// own RESYNC_STALL_TIMEOUT_MS (4s, useVisibilityResync.ts) had already given
+// up and force-disconnected, so the slow response was wasted work landing on
+// a closed connection. Mirrors resyncFastLaneAcquireTimeout's margin logic:
+// 3s leaves a 1s safety margin under the 4s client ceiling for network/
+// marshal/dispatch latency after the call returns.
+const resyncFastLaneTimeout = 3 * time.Second
+
+// runFastLaneSubprocess is the single call-site pattern every fast-lane tmux
+// subprocess spawn (the *Priority() methods) must use instead of hand-rolling
+// context creation + runGatedFastLane around each one — see
+// resyncFastLaneTimeout's doc comment for the incident this closes off. fn
+// receives the same ctx bounded by resyncFastLaneTimeout that governs the
+// exec-gate acquire wait, so build the *exec.Cmd inside fn via
+// buildTmuxCommandContext(ctx, ...) — never the context-less buildTmuxCommand
+// (see its own doc comment: "callers that need timeout protection should use
+// exec.CommandContext directly") — so ctx expiring actually kills a wedged
+// subprocess mid-flight, not just gives up waiting for a free gate slot.
+func runFastLaneSubprocess[T any](serverSocket string, fn func(ctx context.Context) (T, error)) (T, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), resyncFastLaneTimeout)
+	defer cancel()
+	return runGatedFastLane(ctx, serverSocket, func() (T, error) {
+		return fn(ctx)
+	})
+}
+
+// runFastLaneSubprocessErr is runFastLaneSubprocess for the common
+// error-only result, mirroring runGatedErr's relationship to runGated.
+func runFastLaneSubprocessErr(serverSocket string, fn func(ctx context.Context) error) error {
+	_, err := runFastLaneSubprocess(serverSocket, func(ctx context.Context) (struct{}, error) {
+		return struct{}{}, fn(ctx)
+	})
+	return err
 }
 
 // runGatedErr is runGated for the common case of an error-only result.
 func runGatedErr(ctx context.Context, serverSocket string, fn func() error) error {
 	_, err := runGated(ctx, serverSocket, func() (struct{}, error) {
-		return struct{}{}, fn()
-	})
-	return err
-}
-
-// runGatedErrFastLane is runGatedFastLane for the common case of an
-// error-only result, mirroring runGatedErr's relationship to runGated.
-func runGatedErrFastLane(ctx context.Context, serverSocket string, fn func() error) error {
-	_, err := runGatedFastLane(ctx, serverSocket, func() (struct{}, error) {
 		return struct{}{}, fn()
 	})
 	return err
