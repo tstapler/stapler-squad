@@ -5,7 +5,8 @@
  * Follows StateApplicator.test.ts pattern with MockTerminal class.
  */
 
-import { TerminalStreamManager, HIGH_WATERMARK, LOW_WATERMARK, CHUNK_SIZE, ANSI_SNAPSHOT_PREFIX, type ITerminal, type SendFlowControlFn } from '../TerminalStreamManager';
+import { TerminalStreamManager, HIGH_WATERMARK, LOW_WATERMARK, CHUNK_SIZE, ANSI_SNAPSHOT_PREFIX, type SendFlowControlFn } from '../TerminalStreamManager';
+import { MockTerminal } from './mockTerminal';
 
 // RAF mock for deterministic testing
 let rafCallback: FrameRequestCallback | null = null;
@@ -35,70 +36,6 @@ function flushRAF(): void {
 function flushAllRAF(): void {
   while (rafCallback) {
     flushRAF();
-  }
-}
-
-// Mock Terminal
-class MockTerminal implements ITerminal {
-  rows = 24;
-  cols = 80;
-  private written: Array<{ data: string; callback?: () => void }> = [];
-  private cleared = false;
-  private refreshed: Array<{ start: number; end: number }> = [];
-  private scrolledToBottom = false;
-
-  write(data: string | Uint8Array, callback?: () => void): void {
-    const str = typeof data === 'string' ? data : new TextDecoder().decode(data);
-    this.written.push({ data: str, callback });
-    // Auto-invoke callback to simulate xterm.js processing
-    callback?.();
-  }
-
-  clear(): void {
-    this.cleared = true;
-  }
-
-  refresh(start: number, end: number): void {
-    this.refreshed.push({ start, end });
-  }
-
-  scrollToBottom(): void {
-    this.scrolledToBottom = true;
-  }
-
-  get buffer() {
-    return {
-      active: { cursorY: 0, viewportY: 0, length: 0 },
-      normal: { length: 0 },
-    };
-  }
-
-  // Test helpers
-  getWrittenData(): string[] {
-    return this.written.map(w => w.data);
-  }
-
-  getWrittenItems(): Array<{ data: string; callback?: () => void }> {
-    return [...this.written];
-  }
-
-  wasCleared(): boolean {
-    return this.cleared;
-  }
-
-  getRefreshCalls(): Array<{ start: number; end: number }> {
-    return [...this.refreshed];
-  }
-
-  wasScrolledToBottom(): boolean {
-    return this.scrolledToBottom;
-  }
-
-  resetTracking(): void {
-    this.written = [];
-    this.cleared = false;
-    this.refreshed = [];
-    this.scrolledToBottom = false;
   }
 }
 
