@@ -98,7 +98,7 @@ func (h *Handler) webauthnForHost(r *http.Request) (*webauthn.WebAuthn, error) {
 
 	h.mu.RLock()
 	for _, rpID := range h.rpIDs {
-		if strings.HasSuffix(hostname, rpID) {
+		if hostnameMatchesRPID(hostname, rpID) {
 			wa := h.webauthn[rpID]
 			h.mu.RUnlock()
 			return wa, nil
@@ -152,6 +152,15 @@ func (h *Handler) webauthnForHost(r *http.Request) (*webauthn.WebAuthn, error) {
 	h.origins = origins
 	log.Info("auth: dynamically registered new rpID", "rpID", hostname, "origin", newOrigin)
 	return wa, nil
+}
+
+// hostnameMatchesRPID reports whether hostname is rpID itself or a subdomain
+// of it. A plain strings.HasSuffix check has no label boundary, so a
+// registered rpID like "onyx.local" would also match an attacker-chosen Host
+// header like "evil-onyx.local" -- requiring only a spoofed Host header, not
+// any DNS control.
+func hostnameMatchesRPID(hostname, rpID string) bool {
+	return hostname == rpID || strings.HasSuffix(hostname, "."+rpID)
 }
 
 // originForHost builds the origin (scheme + hostname + port) that a

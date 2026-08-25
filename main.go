@@ -1146,6 +1146,45 @@ func startRemoteAccess(ctx context.Context, srv *server.Server, localAddr string
 		MinVersion:     tls.VersionTLS12,
 	}
 
+	// A hostname not in allRPIDs at startup may still be a legitimate LAN
+	// client -- discovery is one-shot at boot (see detectLANIPs/
+	// resolveLANHostnames above) and misses anything not yet resolvable at
+	// that instant (e.g. Wi-Fi/DHCP still coming up when launchd started
+	// this process). Accept it as a new rpID only if it forward-resolves to
+	// an IP this machine actually owns, so a request can't claim an
+	// arbitrary hostname as its RPID.
+	hostnameValidator := func(hostname string) bool {
+		resolvedIPs, err := net.LookupHost(hostname)
+		if err != nil {
+			return false
+		}
+		ownIPs := listNonLoopbackIPs()
+		for _, resolved := range resolvedIPs {
+			for _, own := range ownIPs {
+				if resolved == own {
+					return true
+				}
+			}
+		}
+		return false
+	}
+
+	// resolveLANHostnames' boot-time candidates (reverse DNS/PTR, avahi/mDNS,
+	// hostname -f, search-domain guesses) are never re-checked after this
+	// point, unlike a hostname registered dynamically at request time via
+	// hostnameValidator above. Run them through the same forward-DNS-ownership
+	// check here so a stale or spoofable boot-time guess can't sit in the
+	// static rpID list unverified for the life of the process.
+	var verifiedHostnames []string
+	for _, hn := range hostnames {
+		if hostnameValidator(hn) {
+			verifiedHostnames = append(verifiedHostnames, hn)
+		} else {
+			log.Warn("webauthn: dropping unverified boot-time hostname candidate", "hostname", hn)
+		}
+	}
+	hostnames = verifiedHostnames
+
 	// Determine rpID: config/flag override > first detected hostname > detected LAN IP.
 	// WebAuthn spec requires a domain name; IP addresses are not accepted by browsers.
 	rpID := cfg.PasskeyRPID
@@ -1188,29 +1227,6 @@ func startRemoteAccess(ctx context.Context, srv *server.Server, localAddr string
 	}
 	sessionsPath := filepath.Join(configDir, "auth-sessions.json")
 	sessions := serverauth.NewSessionManager(sessionsPath)
-
-	// A hostname not in allRPIDs at startup may still be a legitimate LAN
-	// client -- discovery is one-shot at boot (see detectLANIPs/
-	// resolveLANHostnames above) and misses anything not yet resolvable at
-	// that instant (e.g. Wi-Fi/DHCP still coming up when launchd started
-	// this process). Accept it as a new rpID only if it forward-resolves to
-	// an IP this machine actually owns, so a request can't claim an
-	// arbitrary hostname as its RPID.
-	hostnameValidator := func(hostname string) bool {
-		resolvedIPs, err := net.LookupHost(hostname)
-		if err != nil {
-			return false
-		}
-		ownIPs := listNonLoopbackIPs()
-		for _, resolved := range resolvedIPs {
-			for _, own := range ownIPs {
-				if resolved == own {
-					return true
-				}
-			}
-		}
-		return false
-	}
 
 	waHandler, err := serverauth.NewHandler(allRPIDs, origins, store, sessions, hostnameValidator)
 	if err != nil {
