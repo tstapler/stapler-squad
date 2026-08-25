@@ -738,6 +738,24 @@ func (i *Instance) CapturePaneContentPriority() (string, error) {
 	return i.pm().CapturePaneContent()
 }
 
+// CapturePaneContentRawPriority mirrors CapturePaneContentPriority but
+// returns the unjoined variant — see CapturePaneContentRaw's doc comment for
+// why a terminal-rendering caller needs this instead of the joined form. The
+// non-tmux fallback is CapturePaneContentRaw, not CapturePaneContent, for the
+// same reason.
+func (i *Instance) CapturePaneContentRawPriority() (streamhub.RawPaneContent, error) {
+	if !i.started.Load() || i.Status == Paused {
+		return "", fmt.Errorf("session not started or paused")
+	}
+	if tb, ok := i.processManager.(*TmuxBackend); ok {
+		content, err := tb.TmuxManager().CapturePaneContentRawPriority()
+		return streamhub.RawPaneContent(content), err
+	}
+	i.logFastLaneAssertionFailure("CapturePaneContentRawPriority")
+	content, err := i.pm().CapturePaneContentRaw()
+	return streamhub.RawPaneContent(content), err
+}
+
 // RefreshTmuxClientPriority forces the tmux client to refresh via the resync
 // exec-gate fast lane (Epic 4.2) when the instance is tmux-backed, falling
 // back to the plain RefreshTmuxClient() call otherwise. See
@@ -769,12 +787,13 @@ func (i *Instance) logFastLaneAssertionFailure(method string) {
 
 // CapturePaneContentRaw captures pane content with ANSI codes preserved (no line joining).
 // Essential for hybrid streaming where cursor positioning codes must be preserved.
-func (i *Instance) CapturePaneContentRaw() (string, error) {
+func (i *Instance) CapturePaneContentRaw() (streamhub.RawPaneContent, error) {
 	if !i.started.Load() || i.Status == Paused {
 		return "", fmt.Errorf("session not started or paused")
 	}
 
-	return i.pm().CapturePaneContentRaw()
+	content, err := i.pm().CapturePaneContentRaw()
+	return streamhub.RawPaneContent(content), err
 }
 
 // GetCurrentPaneContent captures the current visible tmux pane content.

@@ -151,8 +151,20 @@ func sanitizeInitialContent(content string) string {
 // is enabled. Since LNM state is uncertain (DECSTR in ansiSnapshotPrefix resets it
 // to OFF), we normalize every \n to \r\n so rows always start at column 0
 // regardless of terminal mode state.
-func prepareSnapshotContent(content string) string {
-	sanitized := sanitizeInitialContent(content)
+// content must be streamhub.RawPaneContent — capture-pane output taken
+// WITHOUT -J (CapturePaneContentRaw/CapturePaneContentRawPriority) — not the
+// -J "joined" variant (CapturePaneContent/CapturePaneContentPriority): -J
+// merges soft-wrapped continuation rows back into their source line and
+// strips cursor-positioning codes as a side effect, which is fine for
+// plain-text uses but destroys the visual row structure a terminal emulator
+// needs to redraw correctly. Requiring the type here, rather than a plain
+// string, is what makes passing the joined variant a compile error instead
+// of the silent reflow-scrambling bug that motivated this doc comment (see
+// streamhub's identically-purposed prepareSnapshotContent for the full
+// history — server/services can't import that one, so this copy exists
+// separately, but the type it now requires is imported from there).
+func prepareSnapshotContent(content streamhub.RawPaneContent) string {
+	sanitized := sanitizeInitialContent(string(content))
 	// Avoid creating \r\r\n from any pre-existing \r\n pairs.
 	sanitized = strings.ReplaceAll(sanitized, "\r\n", "\n")
 	return strings.ReplaceAll(sanitized, "\n", "\r\n")
@@ -470,7 +482,7 @@ func waitForPaneContent(instance *session.Instance) (string, error) {
 	for {
 		content, err := instance.CapturePaneContentRaw()
 		if err == nil {
-			return content, nil
+			return string(content), nil
 		}
 		switch instance.Snapshot().Status {
 		case session.Paused, session.Stopped, session.Hibernated, session.Crashed:
@@ -1132,7 +1144,7 @@ func (h *ConnectRPCWebSocketHandler) streamViaControlMode(stream *connectWebSock
 		// session. Replaying these in a fresh xterm.js terminal causes garbled output
 		// because the positions assume a prior terminal state that no longer exists.
 		// Colors (SGR) are preserved; only context-dependent positioning is removed.
-		fullContent := withCursorSync(ansiSnapshotPrefix+prepareSnapshotContent(initialContent), instance)
+		fullContent := withCursorSync(ansiSnapshotPrefix+prepareSnapshotContent(streamhub.RawPaneContent(initialContent)), instance)
 
 		terminalData := &sessionv1.TerminalData{
 			SessionId: sessionID,
@@ -1585,7 +1597,7 @@ func (h *ConnectRPCWebSocketHandler) streamViaHub(stream *connectWebSocketStream
 	// which the browser client depends on. Capturing directly here keeps
 	// this connection's initial paint correct; every other Transport (e.g.
 	// MuxTransport) now relies on the hub's own send instead.
-	if content, err := instance.CapturePaneContent(); err == nil && content != "" {
+	if content, err := instance.CapturePaneContentRaw(); err == nil && content != "" {
 		fullContent := withCursorSync(ansiSnapshotPrefix+prepareSnapshotContent(content), instance)
 		initMsg := &sessionv1.TerminalData{
 			SessionId: sessionID,
@@ -1823,7 +1835,7 @@ func (h *ConnectRPCWebSocketHandler) streamShellViaControlMode(stream *connectWe
 	}
 
 	if initialContent != "" {
-		fullContent := withCursorSync(ansiSnapshotPrefix+prepareSnapshotContent(initialContent), cursorTarget)
+		fullContent := withCursorSync(ansiSnapshotPrefix+prepareSnapshotContent(streamhub.RawPaneContent(initialContent)), cursorTarget)
 
 		terminalData := &sessionv1.TerminalData{
 			SessionId: sessionID,
@@ -1908,7 +1920,7 @@ func (h *ConnectRPCWebSocketHandler) streamShellViaControlMode(stream *connectWe
 				if snapContent, snapErr := shellSess.CapturePaneContentRaw(); snapErr == nil && snapContent != "" {
 					// Same cursor-sync requirement as the session post-resize snapshot —
 					// see withCursorSync's doc comment.
-					fullContent := withCursorSync(ansiSnapshotPrefix+prepareSnapshotContent(snapContent), cursorTarget)
+					fullContent := withCursorSync(ansiSnapshotPrefix+prepareSnapshotContent(streamhub.RawPaneContent(snapContent)), cursorTarget)
 					snapMsg := &sessionv1.TerminalData{
 						SessionId: sessionID,
 						ShellId:   shellID,
@@ -2086,9 +2098,16 @@ func (h *ConnectRPCWebSocketHandler) streamShellViaControlMode(stream *connectWe
 // can target either the main session's instance-managed PTY or a shell's sibling tmux
 // session. *session.Instance already satisfies this interface natively.
 type panePTY interface {
-	CapturePaneContent() (string, error)
-	CapturePaneContentPriority() (string, error)
-	CapturePaneContentRaw() (string, error)
+	// CapturePaneContentRaw/CapturePaneContentRawPriority — not the -J
+	// "joined" CapturePaneContent/CapturePaneContentPriority — deliberately:
+	// every use of this interface feeds a live xterm.js render
+	// (handleCurrentPaneRequest), and -J both collapses tmux's wrap
+	// structure and strips the cursor-positioning codes that render depends
+	// on (see streamhub.RawPaneContent's doc comment). Not declaring the
+	// joined variants here is what makes reaching for the wrong one a
+	// compile error instead of a silent scrambled-reflow bug.
+	CapturePaneContentRaw() (streamhub.RawPaneContent, error)
+	CapturePaneContentRawPriority() (streamhub.RawPaneContent, error)
 	GetPaneDimensions() (cols, rows int, err error)
 	ResizePTY(cols, rows int) error
 	RefreshTmuxClient() error
@@ -2102,12 +2121,13 @@ type shellPanePTY struct {
 	session *tmux.TmuxSession
 }
 
-func (p shellPanePTY) CapturePaneContent() (string, error) { return p.session.CapturePaneContent() }
-func (p shellPanePTY) CapturePaneContentPriority() (string, error) {
-	return p.session.CapturePaneContentPriority()
+func (p shellPanePTY) CapturePaneContentRaw() (streamhub.RawPaneContent, error) {
+	content, err := p.session.CapturePaneContentRaw()
+	return streamhub.RawPaneContent(content), err
 }
-func (p shellPanePTY) CapturePaneContentRaw() (string, error) {
-	return p.session.CapturePaneContentRaw()
+func (p shellPanePTY) CapturePaneContentRawPriority() (streamhub.RawPaneContent, error) {
+	content, err := p.session.CapturePaneContentRawPriority()
+	return streamhub.RawPaneContent(content), err
 }
 func (p shellPanePTY) GetPaneDimensions() (int, int, error) { return p.session.GetPaneDimensions() }
 func (p shellPanePTY) ResizePTY(cols, rows int) error       { return p.session.SetWindowSize(cols, rows) }
@@ -2133,8 +2153,8 @@ type ResyncOptions struct {
 	SkipStaleDimensionSlowPath bool
 	// UseFastLane, when true, routes capture/refresh calls through the
 	// exec-gate fast lane (Epic 4.2, terminal:resync-exec-gate-fast-lane) via
-	// target.CapturePaneContentPriority()/RefreshTmuxClientPriority() instead
-	// of the plain CapturePaneContent()/RefreshTmuxClient().
+	// target.CapturePaneContentRawPriority()/RefreshTmuxClientPriority()
+	// instead of the plain CapturePaneContentRaw()/RefreshTmuxClient().
 	UseFastLane bool
 	// EchoResyncID, when true, echoes the incoming request's ResyncId back on the
 	// TerminalOutput reply (Task 3.2.1.1, terminal:resync-correlation-id). When
@@ -2263,17 +2283,25 @@ func handleCurrentPaneRequest(sessionID string, target panePTY, req *sessionv1.C
 	}
 
 	// Force a fresh capture from the tmux pane (bypasses any streamer cache the caller may have).
-	var content string
+	// Raw (unjoined), not CapturePaneContent[Priority]'s -J variant: this
+	// content is about to be replayed straight into the client's xterm.js
+	// terminal below (fullContent), which needs tmux's own wrap points and
+	// cursor-positioning codes intact — see prepareSnapshotContent's doc
+	// comment. Passing the joined variant here silently reflowed every
+	// client-triggered resync into scrambled/staircased output; requiring
+	// streamhub.RawPaneContent at prepareSnapshotContent's call below is
+	// what makes that mistake a compile error now.
+	var content streamhub.RawPaneContent
 	var captureErr error
 	if opts.UseFastLane {
-		content, captureErr = target.CapturePaneContentPriority()
+		content, captureErr = target.CapturePaneContentRawPriority()
 	} else {
-		content, captureErr = target.CapturePaneContent()
+		content, captureErr = target.CapturePaneContentRaw()
 	}
 	if captureErr != nil {
 		return nil, fmt.Errorf("failed to capture fresh pane content: %w", captureErr)
 	}
-	fullContent := ansiSnapshotPrefix + content
+	fullContent := withCursorSync(ansiSnapshotPrefix+prepareSnapshotContent(content), target)
 
 	// PHASE 1: Log final captured dimensions for diagnostics.
 	finalCols, finalRows, finalErr := target.GetPaneDimensions()
@@ -2293,7 +2321,7 @@ func handleCurrentPaneRequest(sessionID string, target panePTY, req *sessionv1.C
 		// This is a known bug in Claude Code where UI elements (boxes, borders) render
 		// 1-2 columns wider than the terminal reports. Detecting this helps diagnose
 		// the issue and can inform future bug reports to Anthropic.
-		actualWidth := detectContentWidth(content)
+		actualWidth := detectContentWidth(string(content))
 		if actualWidth > finalCols {
 			log.Warn("[handleCurrentPaneRequest] CLAUDE CODE WIDTH BUG DETECTED: content rendered wider than terminal",
 				"actual_width", actualWidth, "terminal_cols", finalCols, "overage", actualWidth-finalCols)
@@ -2754,7 +2782,7 @@ func (h *ConnectRPCWebSocketHandler) streamViaTmuxCapturePane(stream *connectWeb
 	var initialContent string
 	if effectiveManaged {
 		if freshContent, captureErr := target.CapturePaneContentRaw(); captureErr == nil {
-			initialContent = freshContent
+			initialContent = string(freshContent)
 		} else {
 			log.Info("[streamViaTmuxCapture] fresh capture failed, falling back to cached", "err", captureErr)
 			initialContent = streamer.GetContent()
@@ -2763,7 +2791,7 @@ func (h *ConnectRPCWebSocketHandler) streamViaTmuxCapturePane(stream *connectWeb
 		initialContent = streamer.GetContent()
 	}
 	if initialContent != "" {
-		fullContent := withCursorSync(clearAndHome+prepareSnapshotContent(initialContent), target)
+		fullContent := withCursorSync(clearAndHome+prepareSnapshotContent(streamhub.RawPaneContent(initialContent)), target)
 		terminalData := &sessionv1.TerminalData{
 			SessionId: sessionID,
 			Data: &sessionv1.TerminalData_Output{
@@ -2842,7 +2870,7 @@ func (h *ConnectRPCWebSocketHandler) streamViaTmuxCapturePane(stream *connectWeb
 				// leftover absolute-positioning/clear codes are otherwise replayed raw into
 				// xterm.js on every poll tick, which is what produces the "messed up"
 				// staircased/garbled rendering for shell tabs.
-				fullContent := withCursorSync(clearAndHome+prepareSnapshotContent(content), target)
+				fullContent := withCursorSync(clearAndHome+prepareSnapshotContent(streamhub.RawPaneContent(content)), target)
 
 				terminalData := terminalDataPool.Get().(*sessionv1.TerminalData)
 				terminalData.SessionId = sessionID

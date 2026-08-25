@@ -29,6 +29,13 @@ func TestStreamHub_should_CallSetWindowSizeExactlyOnce_When_NegotiatedSizeChange
 		streamhub.WithQuiescenceTimeout(30*time.Millisecond),
 		streamhub.WithQuiescenceQuietPeriod(5*time.Millisecond),
 	)
+	// Registered after the goleak defer above, so — per Go's LIFO defer
+	// order — this runs BEFORE goleak's check even if a t.Fatalf below
+	// Goexits out of the rest of the test. ForceTeardown is idempotent (a
+	// no-op once already torn down), so this is safe alongside the trailing
+	// explicit ForceTeardown call some of this file's tests still make to
+	// assert on its return value.
+	defer hub.ForceTeardown()
 
 	id := hub.AttachSubscriber(newMemoryTransport(), streamhub.SubscriberCapability{CanResize: true})
 
@@ -60,6 +67,9 @@ func TestStreamHub_should_SuppressBroadcast_When_ResizeIsInProgress(t *testing.T
 		streamhub.WithQuiescenceTimeout(200*time.Millisecond),
 		streamhub.WithQuiescenceQuietPeriod(150*time.Millisecond),
 	)
+	// See TestStreamHub_should_CallSetWindowSizeExactlyOnce_When_NegotiatedSizeChanges's
+	// comment on this defer's placement/LIFO-ordering rationale.
+	defer hub.ForceTeardown()
 
 	transport := newMemoryTransport()
 	id := hub.AttachSubscriber(transport, streamhub.SubscriberCapability{CanResize: true})
@@ -112,6 +122,9 @@ func TestStreamHub_should_BroadcastSingleCapturedSnapshotToAllSubscribers_When_Q
 		streamhub.WithQuiescenceTimeout(30*time.Millisecond),
 		streamhub.WithQuiescenceQuietPeriod(5*time.Millisecond),
 	)
+	// See TestStreamHub_should_CallSetWindowSizeExactlyOnce_When_NegotiatedSizeChanges's
+	// comment on this defer's placement/LIFO-ordering rationale.
+	defer hub.ForceTeardown()
 
 	transportA := newMemoryTransport()
 	transportC := newMemoryTransport()
@@ -157,6 +170,13 @@ func TestStreamHub_should_BroadcastStreamEndedSentinelAndTearDown_When_SetWindow
 	controller := newFakeSessionController()
 	controller.setWindowSizeErr = wantErr
 	hub := streamhub.NewStreamHub("test-session", controller, streamhub.WithTeardownGrace(time.Hour))
+	// Defensive, not load-bearing for this test's own assertions: the hub is
+	// expected to tear itself down as the behavior under test, but if a
+	// waitFor below times out and Fatalf's before that happens, this closes
+	// the same leak risk as the other tests in this file — see
+	// TestStreamHub_should_CallSetWindowSizeExactlyOnce_When_NegotiatedSizeChanges's
+	// comment.
+	defer hub.ForceTeardown()
 
 	transport1 := newMemoryTransport()
 	transport2 := newMemoryTransport()
@@ -197,6 +217,8 @@ func TestStreamHub_should_BroadcastStreamEndedSentinelAndTearDown_When_CapturePa
 		streamhub.WithQuiescenceTimeout(30*time.Millisecond),
 		streamhub.WithQuiescenceQuietPeriod(5*time.Millisecond),
 	)
+	// Defensive — see the previous test's identical comment.
+	defer hub.ForceTeardown()
 
 	transport1 := newMemoryTransport()
 	transport2 := newMemoryTransport()

@@ -327,7 +327,7 @@ func (h *StreamHub) currentSnapshot() (content []byte, ok bool) {
 	if h.controller == nil {
 		return nil, false
 	}
-	captured, err := h.controller.CapturePaneContent()
+	captured, err := h.controller.CapturePaneContentRaw()
 	if err != nil {
 		log.Info("streamhub: no CatchUpSnapshot available for newly-attached subscriber",
 			"session", h.sessionName, "error", err)
@@ -337,7 +337,8 @@ func (h *StreamHub) currentSnapshot() (content []byte, ok bool) {
 		return nil, false
 	}
 
-	capturedBytes := []byte(captured)
+	prepared := ansiSnapshotPrefix + prepareSnapshotContent(captured)
+	capturedBytes := []byte(withCursorSync(prepared, h.controller))
 	h.snapshotMu.Lock()
 	h.lastSnapshot = capturedBytes
 	h.snapshotMu.Unlock()
@@ -625,22 +626,30 @@ func (h *StreamHub) applyNegotiatedSize(size TerminalSize) {
 	waitForQuiescence(updates, h.quiescenceTimeout, h.quiescenceQuietPeriod, h.sessionName)
 	h.controller.UnsubscribeControlModeUpdates(subID)
 
-	content, err := h.controller.CapturePaneContent()
+	content, err := h.controller.CapturePaneContentRaw()
 	if err != nil {
-		log.Error("streamhub: CapturePaneContent failed after resize", "session", h.sessionName, "error", err)
+		log.Error("streamhub: CapturePaneContentRaw failed after resize", "session", h.sessionName, "error", err)
 		h.handleControllerError(err)
 		return
 	}
 
+	// Raw capture-pane output must go through the same
+	// erase+home/CRLF-normalize/cursor-sync pipeline as any other
+	// full-screen snapshot (snapshot_prepare.go) before subscribers ever
+	// see it — sending it unprepared, as this used to, staircased every
+	// resize's new content diagonally across whatever the client was
+	// already displaying (2026-08-25 reflow bug).
+	prepared := []byte(withCursorSync(ansiSnapshotPrefix+prepareSnapshotContent(content), h.controller))
+
 	h.snapshotMu.Lock()
-	h.lastSnapshot = []byte(content)
+	h.lastSnapshot = prepared
 	h.snapshotMu.Unlock()
 
 	// The post-resize CatchUpSnapshot bypasses the BatchWindow entirely
 	// (Story 2.1.2, research/pitfalls.md §2c/§2d): it must never wait behind
 	// whatever raw output happens to be mid-accumulation, since it is itself
 	// the authoritative resync point every subscriber is waiting on.
-	h.batchWindow.Bypass([]byte(content))
+	h.batchWindow.Bypass(prepared)
 }
 
 // handleControllerError is reached when SetWindowSize or CapturePaneContent

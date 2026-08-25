@@ -951,9 +951,14 @@ type pumpTestController struct {
 	updates chan []byte
 }
 
-func (c *pumpTestController) SetWindowSize(int, int) error         { return nil }
-func (c *pumpTestController) ResizePTY(int, int) error             { return nil }
-func (c *pumpTestController) CapturePaneContent() (string, error)  { return "", nil }
+func (c *pumpTestController) SetWindowSize(int, int) error { return nil }
+func (c *pumpTestController) ResizePTY(int, int) error     { return nil }
+func (c *pumpTestController) CapturePaneContentRaw() (streamhub.RawPaneContent, error) {
+	return "", nil
+}
+func (c *pumpTestController) GetPaneCursorPosition() (x, y int, err error) {
+	return 0, 0, nil
+}
 func (c *pumpTestController) StopControlMode() error               { return nil }
 func (c *pumpTestController) UnsubscribeControlModeUpdates(string) {}
 func (c *pumpTestController) SubscribeControlModeUpdates() (string, <-chan []byte) {
@@ -1332,7 +1337,7 @@ func TestPrepareSnapshotContentNormalizesNewlines(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			got := prepareSnapshotContent(tc.input)
+			got := prepareSnapshotContent(streamhub.RawPaneContent(tc.input))
 			if got != tc.want {
 				t.Errorf("prepareSnapshotContent(%q) =\n  %q\nwant\n  %q", tc.input, got, tc.want)
 			}
@@ -1346,7 +1351,7 @@ func TestPrepareSnapshotContentStripsCursorPositioning(t *testing.T) {
 	t.Parallel()
 	// A realistic capture-pane fragment: cursor home + color + text + newline
 	input := "\x1b[H\x1b[1;32mline1\x1b[0m\nline2\n"
-	got := prepareSnapshotContent(input)
+	got := prepareSnapshotContent(streamhub.RawPaneContent(input))
 
 	if strings.Contains(got, "\x1b[H") {
 		t.Errorf("prepareSnapshotContent: cursor home ESC[H not stripped; got %q", got)
@@ -1364,7 +1369,7 @@ func TestPrepareSnapshotContentStripsCursorPositioning(t *testing.T) {
 func TestPrepareSnapshotContentPreservesSGR(t *testing.T) {
 	t.Parallel()
 	input := "\x1b[1;32mhello\x1b[0m\nworld\n"
-	got := prepareSnapshotContent(input)
+	got := prepareSnapshotContent(streamhub.RawPaneContent(input))
 
 	for _, sgr := range []string{"\x1b[1;32m", "\x1b[0m"} {
 		if !strings.Contains(got, sgr) {
@@ -1499,22 +1504,21 @@ type fakePanePTY struct {
 	refreshTmuxPriorityCalled int
 }
 
-func (f *fakePanePTY) CapturePaneContent() (string, error) {
+// CapturePaneContentRaw is the plain (non-fast-lane) capture path
+// handleCurrentPaneRequest now calls — tracks its own call count so tests
+// can assert which of the two methods (this or CapturePaneContentRawPriority)
+// was invoked, i.e. that ResyncOptions.UseFastLane routed the call correctly.
+func (f *fakePanePTY) CapturePaneContentRaw() (streamhub.RawPaneContent, error) {
 	f.capturePaneCalled++
-	return f.captureContent, f.captureErr
+	return streamhub.RawPaneContent(f.captureContent), f.captureErr
 }
 
-// CapturePaneContentPriority mirrors CapturePaneContent for this fake: it shares the same
-// content/error fields since the fake has no real exec-gate fast lane to distinguish, but
-// tracks its own call count so tests can assert which of the two methods was invoked (i.e.
-// that ResyncOptions.UseFastLane routed the call here instead of to CapturePaneContent).
-func (f *fakePanePTY) CapturePaneContentPriority() (string, error) {
+// CapturePaneContentRawPriority mirrors CapturePaneContentRaw for this fake: it shares the
+// same content/error fields since the fake has no real exec-gate fast lane to distinguish,
+// but tracks its own call count for the same reason CapturePaneContentRaw does.
+func (f *fakePanePTY) CapturePaneContentRawPriority() (streamhub.RawPaneContent, error) {
 	f.capturePanePriorityCalled++
-	return f.captureContent, f.captureErr
-}
-
-func (f *fakePanePTY) CapturePaneContentRaw() (string, error) {
-	return f.captureContent, f.captureErr
+	return streamhub.RawPaneContent(f.captureContent), f.captureErr
 }
 
 func (f *fakePanePTY) GetPaneDimensions() (int, int, error) {

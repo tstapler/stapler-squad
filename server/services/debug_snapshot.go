@@ -197,7 +197,7 @@ func collectSessionSnapshots(ctx context.Context, instances []*session.Instance)
 			if len(rawContent) > maxPaneContentBytes {
 				rawContent = rawContent[:maxPaneContentBytes]
 			}
-			ss.PaneContentRaw = rawContent
+			ss.PaneContentRaw = string(rawContent)
 		}
 
 		snapshots = append(snapshots, ss)

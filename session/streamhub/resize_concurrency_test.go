@@ -55,11 +55,15 @@ func (c *reentrancyTrackingController) SetWindowSize(_, _ int) error {
 
 func (c *reentrancyTrackingController) ResizePTY(_, _ int) error { return nil }
 
-func (c *reentrancyTrackingController) CapturePaneContent() (string, error) {
+func (c *reentrancyTrackingController) CapturePaneContentRaw() (streamhub.RawPaneContent, error) {
 	time.Sleep(2 * time.Millisecond)
 	c.pipelineRuns.Add(1)
 	c.exitPipeline()
 	return "snapshot", nil
+}
+
+func (c *reentrancyTrackingController) GetPaneCursorPosition() (x, y int, err error) {
+	return 0, 0, nil
 }
 
 func (c *reentrancyTrackingController) StopControlMode() error { return nil }
