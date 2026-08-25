@@ -518,7 +518,18 @@ func TestBuildClaudeCommand_LargePromptUsesTempFileNotInline(t *testing.T) {
 		t.Fatalf("test setup bug: prompt (%d bytes) should exceed the ~16KB tmux command-length limit this regression test guards against", len(prompt))
 	}
 
-	inst := &Instance{Program: "claude", OneShot: true, Prompt: prompt, promptFileCleanupDelayOverride: shortPromptFileCleanupDelay}
+	// This test only checks routing/content, not cleanup timing (that's
+	// TestBuildClaudeCommand_LargePromptTempFileIsCleanedUpAfterDelay's job),
+	// so it deliberately leaves promptFileCleanupDelayOverride unset and gets
+	// the real defaultPromptFileCleanupDelay (30s). Overriding it to
+	// shortPromptFileCleanupDelay here previously raced this test's own
+	// os.ReadFile below against promptArg's background cleanup goroutine: under
+	// this package's t.Parallel() fan-out (or with -p 1 removed and sibling
+	// packages' tests also contending for CPU), the test goroutine can be
+	// descheduled for more than 10ms before reaching os.ReadFile, so the
+	// cleanup goroutine deletes the file first and the read fails with "no
+	// such file or directory".
+	inst := &Instance{Program: "claude", OneShot: true, Prompt: prompt}
 	got := inst.buildLaunchCommand("")
 
 	// The whole point of the fix: the assembled command handed to tmux must
