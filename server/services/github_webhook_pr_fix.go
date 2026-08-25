@@ -219,12 +219,10 @@ func (c *selfLoginCache) Get(ctx context.Context) string {
 	return c.login
 }
 
-// handlePRFixEvent is the dispatch target (Task 2.1.1a) for check_run/workflow_run/
-// pull_request_review/issue_comment deliveries. It extracts the event, applies the
-// pr_event_webhooks flag gate and the actionability/self-actor pre-filters, verifies
-// the signature (only once actionable — an unsigned non-actionable request costs
-// nothing beyond a map lookup), and routes a match to h.prFixRouter, persisting a
-// TriggerFireEvent outcome for every branch.
+// handlePRFixEvent is the dispatch target for check_run/workflow_run/
+// pull_request_review/issue_comment deliveries. Order is deliberate: actionability
+// (cheap) before signature, and the self-actor filter's GitHub API call only runs
+// once verified, never reachable from an unauthenticated request.
 func (h *GitHubWebhookHandler) handlePRFixEvent(w http.ResponseWriter, r *http.Request, payload map[string]interface{}, body []byte, deliveryID, eventType string) {
 	ctx := r.Context()
 	if h.cfg == nil || !h.cfg.GetFeatureFlag("pr_event_webhooks") {
@@ -240,12 +238,6 @@ func (h *GitHubWebhookHandler) handlePRFixEvent(w http.ResponseWriter, r *http.R
 		})
 		http.Error(w, "missing repository.full_name", http.StatusBadRequest)
 		return
-	}
-
-	if actionable && (eventType == "issue_comment" || eventType == "pull_request_review") {
-		if actorLogin := extractActorLogin(eventType, payload); actorLogin != "" && strings.EqualFold(actorLogin, h.selfLogin.Get(ctx)) {
-			actionable = false
-		}
 	}
 
 	if !actionable || len(prNumbers) == 0 {
@@ -268,18 +260,25 @@ func (h *GitHubWebhookHandler) handlePRFixEvent(w http.ResponseWriter, r *http.R
 		return
 	}
 
+	// Self-actor filter (ADR-001): only reachable once the delivery is verified, so an
+	// unauthenticated request can never force selfLogin's GitHub API call.
+	if eventType == "issue_comment" || eventType == "pull_request_review" {
+		if actorLogin := extractActorLogin(eventType, payload); actorLogin != "" && strings.EqualFold(actorLogin, h.selfLogin.Get(ctx)) {
+			persistTriggerFireEvent(ctx, h.fireEvents, session.TriggerFireEventInput{Outcome: "no_match", DeliveryID: deliveryID})
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+	}
+
 	if once, ok := h.firstPRFixDelivery[eventType]; ok {
 		once.Do(func() {
 			log.Info(fmt.Sprintf("[GitHubWebhookHandler] first verified %s delivery received — /webhooks/github reachability confirmed", eventType))
 		})
 	}
 
-	// Delivery-level dedup (AC0): mirrors the push path's dedup intent, but via an
-	// application-level existence check rather than the (workflow_id, delivery_id)
-	// unique-index claim claimTriggerFireEvent relies on — that index cannot dedup
-	// these rows, which are persisted with WorkflowID: nil (see
-	// ExistsByDeliveryID's doc comment). A lookup failure fails open (proceeds with
-	// processing) rather than blocking a legitimate delivery on a dedup-check error.
+	// Delivery-level dedup (AC0) — see ExistsByDeliveryID's doc comment for why this
+	// can't reuse claimTriggerFireEvent's unique-index claim. A lookup failure fails
+	// open rather than blocking a legitimate delivery.
 	if deliveryID != "" && h.fireEvents != nil {
 		duplicate, dupErr := h.fireEvents.ExistsByDeliveryID(ctx, deliveryID)
 		if dupErr != nil {

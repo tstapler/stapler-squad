@@ -1583,6 +1583,19 @@ func findPRPendingItemForEvent(ctx context.Context, er *EntRepository, repoFullN
 // found, runs the same per-item reconciliation ReconcilePRPending's 60s tick
 // would eventually run for it — see ADR-002 for why the full body (merge
 // check included) is reused, not just the CI/review-check half.
+// TriggerPRFixForEvent's item lookup runs on the caller's ctx (a fast DB query,
+// safe to share the HTTP request's lifetime), but the actual reconciliation is
+// dispatched onto l.shutdownCtx in a goroutine rather than run inline. reconcilePRPendingItem
+// makes multiple sequential GitHub API calls and can spawn a full session (worktree +
+// tmux), which routinely exceeds GitHub's ~10s webhook delivery timeout; running it on
+// r.Context() would risk GitHub reporting the delivery failed/retried mid-reconciliation
+// and cancelling that work partway through (e.g. AutoReopenForPRFix's "restore original
+// notes regardless of spawn outcome" step would itself be cancelled). This mirrors the
+// existing async-dispatch shape every other remediation call site in this file already
+// uses (e.g. retryPushFailedWithBackoffGate below). matched=true means "a tracked item
+// was found and reconciliation was queued," not "reconciliation completed" — consistent
+// with fired_success's existing documented scope (see the webhook handler's Observability
+// Plan: it was never meant to imply a fix session was spawned).
 func (l *BacklogLifecycleListener) TriggerPRFixForEvent(ctx context.Context, repoFullName string, prNumber int) (matched bool, err error) {
 	if !l.enabled.Load() {
 		return false, nil
@@ -1593,19 +1606,16 @@ func (l *BacklogLifecycleListener) TriggerPRFixForEvent(ctx context.Context, rep
 		return false, nil
 	}
 	log.InfoLog().Printf("[BacklogLifecycle] TriggerPRFixForEvent item=%s repo=%s pr=%d: reconciling now (webhook-triggered)", item.ID, repoFullName, prNumber)
-	l.reconcilePRPendingItem(withPRFixTriggerSource(ctx, prFixTriggerSourceWebhook), er, item)
+	go func() {
+		l.reconcilePRPendingItem(withPRFixTriggerSource(l.shutdownCtx, prFixTriggerSourceWebhook), er, item)
+	}()
 	return true, nil
 }
 
-// prFixTriggerSource threads through context (rather than a new parameter on
-// reconcilePRPendingItem, which ADR-002 established as a pure, behavior-preserving
-// extraction) which of the two call sites — ReconcilePRPending's 60s-tick loop or
-// TriggerPRFixForEvent's on-demand webhook call — triggered a given reconciliation,
-// so remediatePRFixWithBackoffGate's fix-attempt log line can tag it. This is the
-// data AC8's "% of PR-fix reconciliations triggered by webhook vs. poller" needs:
-// TriggerFireEvent rows alone only ever see the webhook side (the poller never
-// writes to that table, by design), so the poller side is only derivable from this
-// log line, not a table query alone.
+// prFixTriggerSourceKey tags a reconciliation's ctx with which caller triggered it
+// (ReconcilePRPending's tick loop vs. TriggerPRFixForEvent's webhook call), so
+// remediatePRFixWithBackoffGate's fix-attempt log can distinguish them for AC8's
+// webhook-vs-poller metric — TriggerFireEvent rows alone only see the webhook side.
 type prFixTriggerSourceKey struct{}
 
 const (

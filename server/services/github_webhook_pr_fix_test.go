@@ -16,7 +16,30 @@ import (
 
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/ent"
+	"github.com/tstapler/stapler-squad/session/ent/triggerfireevent"
 )
+
+// requirePersistedOutcome fetches the (assumed single) TriggerFireEvent row for
+// deliveryID directly via the ent client — infra.fireEvents.ListByWorkflow can't see
+// these rows, since PR-fix outcomes always persist with WorkflowID: nil — and asserts
+// its Outcome and that WorkflowID is nil, per the Migration Plan.
+func requirePersistedOutcome(t *testing.T, infra *webhookTestInfra, deliveryID, wantOutcome string) {
+	t.Helper()
+	row, err := infra.entRepo.GetEntClient().TriggerFireEvent.Query().
+		Where(triggerfireevent.DeliveryID(deliveryID)).Only(context.Background())
+	require.NoError(t, err, "expected exactly one TriggerFireEvent row for delivery_id=%q", deliveryID)
+	assert.Equal(t, wantOutcome, row.Outcome)
+	assert.Nil(t, row.WorkflowID, "PR-fix rows must carry WorkflowID: nil per the Migration Plan")
+}
+
+// requireNoRowPersisted asserts zero TriggerFireEvent rows exist for deliveryID.
+func requireNoRowPersisted(t *testing.T, infra *webhookTestInfra, deliveryID string) {
+	t.Helper()
+	exists, err := infra.entRepo.GetEntClient().TriggerFireEvent.Query().
+		Where(triggerfireevent.DeliveryID(deliveryID)).Exist(context.Background())
+	require.NoError(t, err)
+	assert.False(t, exists, "expected no TriggerFireEvent row for delivery_id=%q", deliveryID)
+}
 
 // erroringWorkflowRepo wraps a real WorkflowRepository but fails ListByTriggerType —
 // used to distinguish "infra failure listing candidates" (500) from "no candidate's
@@ -153,7 +176,7 @@ func TestExtractIssueCommentEvent_should_HandleNonPRIssues(t *testing.T) {
 
 // --- selfLoginCache tests (Story 2.2.1, ADR-001) ----------------------------
 
-func TestSelfLoginCache_should_SuppressActionable_When_CommentAuthorMatchesCachedSelfLogin(t *testing.T) {
+func TestSelfLoginCache_should_ReturnCachedLogin_When_CacheIsFresh(t *testing.T) {
 	cache := newSelfLoginCache()
 	cache.mu.Lock()
 	cache.login = "stapler-squad-bot"
@@ -243,12 +266,13 @@ func TestHandlePRFixEvent_should_Return200WithNoAuditRow_When_FeatureFlagDisable
 
 	assert.Equal(t, http.StatusOK, rec.Code)
 	assert.Equal(t, 0, router.callCount(), "router must never be called while the flag is off")
+	requireNoRowPersisted(t, infra, "delivery-flag-off")
 }
 
 func TestHandlePRFixEvent_should_CallRouterAndPersistFiredSuccess_When_DeliveryActionableAndMatched(t *testing.T) {
 	infra := newWebhookTestInfra(t)
 	infra.cfg.FeatureFlags["pr_event_webhooks"] = true
-	wf := newGitHubPushWorkflow(t, infra, "gh-2", "s3cr3t", "tstapler/stapler-squad", "main", "x")
+	newGitHubPushWorkflow(t, infra, "gh-2", "s3cr3t", "tstapler/stapler-squad", "main", "x")
 	router := &fakePRFixEventRouter{matched: true}
 	h := NewGitHubWebhookHandler(infra.workflowRepo, infra.scheduler, infra.fireEvents, infra.cfg, router)
 
@@ -259,12 +283,7 @@ func TestHandlePRFixEvent_should_CallRouterAndPersistFiredSuccess_When_DeliveryA
 	require.Equal(t, 1, router.callCount())
 	assert.Equal(t, "tstapler/stapler-squad", router.calls[0].repoFullName)
 	assert.Equal(t, 189, router.calls[0].prNumber)
-
-	events, err := infra.fireEvents.ListByWorkflow(context.Background(), wf.ID, 10)
-	require.NoError(t, err)
-	// fired_success rows for PR-fix events carry WorkflowID: nil (Migration Plan) — they
-	// don't show up under this specific workflow's ListByWorkflow.
-	assert.Empty(t, events)
+	requirePersistedOutcome(t, infra, "delivery-fired", "fired_success")
 }
 
 // TestHandlePRFixEvent_should_NotReprocess_When_SameDeliveryIDRedelivered is the
@@ -300,6 +319,7 @@ func TestHandlePRFixEvent_should_PersistFiredFailed_When_PRFixRouterIsNilConfigu
 	rec := doPRFixEventRequest(t, h, "check_run", body, "delivery-no-router", sign("s3cr3t", body))
 
 	assert.Equal(t, http.StatusOK, rec.Code, "a router-wiring gap must never surface as a 5xx")
+	requirePersistedOutcome(t, infra, "delivery-no-router", "fired_failed")
 }
 
 func TestHandlePRFixEvent_should_PersistNoMatchWithoutCallingRouter_When_DeliveryNotActionable(t *testing.T) {
@@ -323,6 +343,7 @@ func TestHandlePRFixEvent_should_PersistNoMatchWithoutCallingRouter_When_Deliver
 
 	assert.Equal(t, http.StatusOK, rec.Code)
 	assert.Equal(t, 0, router.callCount())
+	requirePersistedOutcome(t, infra, "delivery-healthy", "no_match")
 }
 
 func TestHandlePRFixEvent_should_Return401AndRecordRejected_When_WorkflowSecretEmpty(t *testing.T) {
@@ -406,6 +427,62 @@ func TestHandlePRFixEvent_should_SuppressActionable_When_CommentAuthorIsSelf(t *
 
 	assert.Equal(t, http.StatusOK, rec.Code)
 	assert.Equal(t, 0, router.callCount(), "a comment from this instance's own GitHub identity must be suppressed")
+}
+
+// TestHandle_should_DispatchWorkflowRunAndPullRequestReviewToHandlePRFixEvent closes a
+// coverage gap: every other handlePRFixEvent test drives it via check_run/issue_comment,
+// leaving Handle's dispatch switch untested for its other two case labels.
+func TestHandle_should_DispatchWorkflowRunAndPullRequestReviewToHandlePRFixEvent(t *testing.T) {
+	infra := newWebhookTestInfra(t)
+	infra.cfg.FeatureFlags["pr_event_webhooks"] = true
+	newGitHubPushWorkflow(t, infra, "gh-10", "s3cr3t", "tstapler/stapler-squad", "main", "x")
+
+	t.Run("workflow_run", func(t *testing.T) {
+		router := &fakePRFixEventRouter{matched: true}
+		h := NewGitHubWebhookHandler(infra.workflowRepo, infra.scheduler, infra.fireEvents, infra.cfg, router)
+		body := jsonBody(t, map[string]interface{}{
+			"action": "completed",
+			"workflow_run": map[string]interface{}{
+				"conclusion":    "failure",
+				"pull_requests": []interface{}{map[string]interface{}{"number": float64(189)}},
+			},
+			"repository": map[string]interface{}{"full_name": "tstapler/stapler-squad"},
+		})
+		rec := doPRFixEventRequest(t, h, "workflow_run", body, "delivery-workflow-run", sign("s3cr3t", body))
+		assert.Equal(t, http.StatusOK, rec.Code)
+		assert.Equal(t, 1, router.callCount())
+	})
+
+	t.Run("pull_request_review", func(t *testing.T) {
+		router := &fakePRFixEventRouter{matched: true}
+		h := NewGitHubWebhookHandler(infra.workflowRepo, infra.scheduler, infra.fireEvents, infra.cfg, router)
+		body := jsonBody(t, map[string]interface{}{
+			"action":       "submitted",
+			"review":       map[string]interface{}{"state": "changes_requested", "user": map[string]interface{}{"login": "some-reviewer"}},
+			"pull_request": map[string]interface{}{"number": float64(189)},
+			"repository":   map[string]interface{}{"full_name": "tstapler/stapler-squad"},
+		})
+		rec := doPRFixEventRequest(t, h, "pull_request_review", body, "delivery-pr-review", sign("s3cr3t", body))
+		assert.Equal(t, http.StatusOK, rec.Code)
+		assert.Equal(t, 1, router.callCount())
+	})
+}
+
+// TestHandle_should_Return200NoAuditRow_When_EventTypeIsUnrecognized covers the
+// dispatch switch's default branch (e.g. GitHub's own "ping" delivery on webhook
+// setup) — no signature verification or persistence, just a trivial 200.
+func TestHandle_should_Return200NoAuditRow_When_EventTypeIsUnrecognized(t *testing.T) {
+	infra := newWebhookTestInfra(t)
+	infra.cfg.FeatureFlags["pr_event_webhooks"] = true
+	newGitHubPushWorkflow(t, infra, "gh-11", "s3cr3t", "tstapler/stapler-squad", "main", "x")
+	router := &fakePRFixEventRouter{matched: true}
+	h := NewGitHubWebhookHandler(infra.workflowRepo, infra.scheduler, infra.fireEvents, infra.cfg, router)
+
+	rec := doPRFixEventRequest(t, h, "ping", []byte(`{"zen":"hello"}`), "delivery-ping", "")
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, 0, router.callCount())
+	requireNoRowPersisted(t, infra, "delivery-ping")
 }
 
 // --- helpers -----------------------------------------------------------

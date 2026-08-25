@@ -35,13 +35,9 @@ type GitHubWebhookHandler struct {
 	prFixRouter PRFixEventRouter
 	selfLogin   *selfLoginCache
 
-	// firstPRFixDelivery logs once per event type, on the first successfully signature-
-	// verified delivery of that type this process lifetime (never persisted) — lets an
-	// operator grep "has this ever fired" instead of reasoning from TriggerFireEvent
-	// row absence, which can't distinguish "never configured" from "never reachable"
-	// (see .claude/docs/github-webhook-public-reachability.md's reachability-verification
-	// step). Not written to after construction, so safe for concurrent map reads;
-	// each *sync.Once value guards its own single log line.
+	// firstPRFixDelivery logs once per event type on the first verified delivery of
+	// that type (see github-webhook-public-reachability.md). Read-only after
+	// construction, so safe for concurrent map reads.
 	firstPRFixDelivery map[string]*sync.Once
 }
 
@@ -161,11 +157,9 @@ func (h *GitHubWebhookHandler) Handle(w http.ResponseWriter, r *http.Request) {
 }
 
 // repoCandidatesFor lists the enabled github_push-type Workflow rows watching
-// fullName's repo. Shared by the push path (above) and the PR-fix event path
-// (verifySignatureForRepo, github_webhook_pr_fix.go) — both need to answer "which
-// Workflow rows store a secret for this repo," since a github_push Workflow row is
-// this instance's only secret-storage source for a GitHub webhook, regardless of
-// which event type a given delivery carries.
+// fullName's repo — this instance's only secret-storage source for a GitHub
+// webhook. Shared by the push path (above) and the PR-fix event path
+// (verifySignatureForRepo, github_webhook_pr_fix.go).
 func (h *GitHubWebhookHandler) repoCandidatesFor(ctx context.Context, fullName string) ([]*ent.Workflow, error) {
 	candidates, err := h.repo.ListByTriggerType(ctx, "github_push")
 	if err != nil {
@@ -201,14 +195,9 @@ func verifiedWorkflowCandidates(cfg *config.Config, candidates []*ent.Workflow, 
 }
 
 // verifySignatureForRepo reports whether body/sigHeader verifies against ANY enabled
-// github_push-type Workflow row for fullName's repo. Used by handlePRFixEvent
-// (github_webhook_pr_fix.go) — GitHub signs every event type with the webhook's one
-// configured secret, so PR-fix events are authenticated against the same
-// github_push Workflow row(s) push events are. A non-nil error means the candidate
-// lookup itself failed (e.g. a DB error) — distinct from "no candidate verified,"
-// so the caller can answer with 500 rather than misreporting an infra failure as an
-// invalid signature (401), mirroring how the push path (Handle) treats the same
-// underlying repoCandidatesFor error.
+// github_push-type Workflow row for fullName's repo (used by handlePRFixEvent — GitHub
+// signs every event type with the same secret). A non-nil error means the candidate
+// lookup itself failed (500), distinct from "no candidate verified" (401).
 func (h *GitHubWebhookHandler) verifySignatureForRepo(ctx context.Context, fullName string, body []byte, sigHeader string) (bool, error) {
 	candidates, err := h.repoCandidatesFor(ctx, fullName)
 	if err != nil {

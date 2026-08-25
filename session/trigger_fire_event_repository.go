@@ -53,9 +53,16 @@ type TriggerFireEventRepository interface {
 	// delivery_id) unique index Create/ErrDuplicateDelivery rely on cannot dedup them —
 	// NULL is never equal to NULL in that index, so two nil-workflow rows sharing a
 	// delivery_id would never collide. This is an application-level existence check
-	// (a narrow TOCTOU window under concurrent duplicate deliveries, unlike Create's
-	// atomic DB-constraint claim), acceptable here since GitHub redeliveries of the
-	// same delivery_id are not expected to race concurrently in practice.
+	// (a narrow TOCTOU window under concurrent duplicate deliveries), not Create's
+	// atomic DB-constraint claim — a unique index on delivery_id alone isn't viable
+	// here since one delivery legitimately produces multiple rows sharing a
+	// delivery_id (one per PR number in a check_run's pull_requests array). The race
+	// is bounded, not just assumed benign: AutoReopenForPRFix's own CAS-guarded
+	// TransitionBacklogItemStatus (exercised by TestTransitionBacklogItemStatus_
+	// should_letExactlyOneWinnerThrough_When_TwoWritersRaceConcurrently) is what
+	// actually prevents a duplicate *spawn* if two racing deliveries both pass this
+	// check — the worst case here is a duplicate audit row and a redundant
+	// GetPRStatus/IsPRMerged call, not a duplicate fix session.
 	ExistsByDeliveryID(ctx context.Context, deliveryID string) (bool, error)
 }
 

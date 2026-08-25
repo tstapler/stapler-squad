@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	gogit "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/config"
@@ -121,9 +122,13 @@ func TestTriggerPRFixForEvent_should_ReconcileItemAndReturnMatchedTrue_When_Item
 	require.NoError(t, err)
 	assert.True(t, matched)
 
-	refreshed, err := storage.GetBacklogItem(ctx, item.ID)
-	require.NoError(t, err)
-	assert.Equal(t, string(BacklogStatusDone), refreshed.Status, "reconcilePRPendingItem should have run for the matched item (merged PR -> done)")
+	// Reconciliation runs asynchronously (dispatched onto l.shutdownCtx in a goroutine,
+	// see TriggerPRFixForEvent's doc comment) so matched=true only means "queued," not
+	// "completed" — poll for the done transition rather than asserting immediately.
+	require.Eventually(t, func() bool {
+		refreshed, refreshErr := storage.GetBacklogItem(ctx, item.ID)
+		return refreshErr == nil && refreshed.Status == string(BacklogStatusDone)
+	}, 2*time.Second, 20*time.Millisecond, "reconcilePRPendingItem should have run for the matched item (merged PR -> done)")
 }
 
 func TestTriggerPRFixForEvent_should_ReturnFalseNilWithoutQuerying_When_ListenerDisabled(t *testing.T) {
@@ -213,7 +218,11 @@ func TestTriggerPRFixForEvent_should_TagFixAttemptLogAsWebhookTriggered(t *testi
 
 	require.NoError(t, err)
 	assert.True(t, matched)
-	assert.True(t, strings.Contains(buf.String(), "attempting fix (trigger_source=webhook)"), "webhook-triggered reconciliation must tag its fix-attempt log line as trigger_source=webhook; got: %s", buf.String())
+	// Reconciliation runs asynchronously — poll for the log line rather than asserting
+	// immediately (see TriggerPRFixForEvent's doc comment).
+	require.Eventually(t, func() bool {
+		return strings.Contains(buf.String(), "attempting fix (trigger_source=webhook)")
+	}, 2*time.Second, 20*time.Millisecond, "webhook-triggered reconciliation must tag its fix-attempt log line as trigger_source=webhook; got: %s", buf.String())
 }
 
 func TestReconcilePRPending_should_TagFixAttemptLogAsPollerTriggered(t *testing.T) {
@@ -222,7 +231,7 @@ func TestReconcilePRPending_should_TagFixAttemptLogAsPollerTriggered(t *testing.
 	defer cleanup()
 	ctx := context.Background()
 
-	item := newPRPendingTestItem(t, storage, 9099)
+	newPRPendingTestItem(t, storage, 9099)
 
 	listener := NewBacklogLifecycleListener(storage)
 	overridePRPendingChecker(t, listener, &fakePRPendingChecker{
@@ -233,6 +242,5 @@ func TestReconcilePRPending_should_TagFixAttemptLogAsPollerTriggered(t *testing.
 	buf := redirectInfoLog(t)
 	listener.ReconcilePRPending(ctx, storage.repo)
 
-	_ = item
 	assert.True(t, strings.Contains(buf.String(), "attempting fix (trigger_source=poller)"), "poller-tick reconciliation must tag its fix-attempt log line as trigger_source=poller; got: %s", buf.String())
 }
