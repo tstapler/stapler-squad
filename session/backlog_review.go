@@ -267,16 +267,18 @@ func BuildReviewPrompt(item *BacklogItemData, acSnapshot []AcCriterion, diff str
 	// --- diff ---
 	sb.WriteString("## Git Diff\n")
 	if diff == "" {
-		// Defensive only: ReviewGateRunner.Run (review_gate.go), the sole caller that
-		// reaches this function via reviewPromptFor, already blocks on committedDiffEmpty
-		// before calling reviewPromptFor at all, recording a synthetic FAIL verdict
-		// instead. This branch is not known to be reachable in production — unlike
-		// BuildHeadlessReviewPrompt's diff=="" branch, which the sdd-mode headless
-		// TriggerReReview path (backlog_service_triage.go's reviewPromptFor) does reach
-		// live and which carries ReviewContextExtras for that reason. Kept as a fallback
-		// so this function degrades gracefully if a future caller ever skips that guard,
-		// rather than as a currently-exercised path — do not add ReviewContextExtras
-		// plumbing here without first confirming a real caller needs it.
+		// ReviewGateRunner.Run (review_gate.go), the sole caller that reaches this
+		// function via reviewPromptFor, blocks on committedDiffEmpty with a synthetic
+		// FAIL verdict for every empty-diff session EXCEPT one: a report_duplicate
+		// claim, which carries a duplicate_ref= marker in VerificationNotes and is
+		// deliberately let through with an empty diff so a real reviewer can confirm
+		// the claim (backlog item e2373931) — that is the one live-reachable path here
+		// today. Every other empty-diff session still hits the FAIL guard and never
+		// reaches this branch. Unlike BuildHeadlessReviewPrompt's diff=="" branch,
+		// which the sdd-mode headless TriggerReReview path
+		// (backlog_service_triage.go's reviewPromptFor) also reaches and which carries
+		// ReviewContextExtras for that reason, this branch has no such extras — do not
+		// add that plumbing here without first confirming this caller needs it too.
 		sb.WriteString("(no diff available — no committed code changes were found for this session)\n\n")
 		sb.WriteString("## No-Diff Verification\n")
 		sb.WriteString("This can mean the criteria were already satisfied before this session started, or that no work happened. Check each criterion against the CURRENT codebase yourself using your available tools before verdicting; do not rely on the work session's note or verification evidence alone.\n\n")
