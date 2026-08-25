@@ -5,6 +5,7 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"sync"
 
 	"github.com/tstapler/stapler-squad/log"
 
@@ -14,17 +15,36 @@ import (
 // Handler wraps the go-webauthn/webauthn library and provides dynamic RPID
 // selection to support multiple hostnames.
 type Handler struct {
+	mu sync.RWMutex
 	// A map of WebAuthn instances, keyed by RPID.
 	webauthn map[string]*webauthn.WebAuthn
 	// The list of allowed hostnames (RPIDs).
 	rpIDs []string
+	// The origins passed to every WebAuthn instance, including ones
+	// registered later via hostnameValidator.
+	origins []string
+	// Optional: called with a hostname webauthnForHost couldn't match
+	// against any known rpID. If it returns true, that hostname is
+	// registered as a new rpID on the fly instead of being rejected. Left
+	// nil to disable dynamic registration (e.g. in tests).
+	hostnameValidator func(hostname string) bool
+	// Guard rails around hostnameValidator: negativeCache avoids re-resolving
+	// a hostname that already failed validation recently, and ipLimiter caps
+	// how often a single source IP may trigger a validation attempt at all --
+	// see hostname_guard.go.
+	negativeCache *negativeHostnameCache
+	ipLimiter     *sourceIPLimiter
 	// The credential and session stores.
 	store   *CredentialStore
 	session *SessionManager
 }
 
 // NewHandler creates a new WebAuthn handler supporting multiple domains.
-func NewHandler(rpIDs []string, origins []string, store *CredentialStore, session *SessionManager) (*Handler, error) {
+// hostnameValidator, if non-nil, is consulted by webauthnForHost to decide
+// whether a hostname not present in rpIDs at construction time may still be
+// registered as a new rpID at request time -- see webauthnForHost for why
+// this exists.
+func NewHandler(rpIDs []string, origins []string, store *CredentialStore, session *SessionManager, hostnameValidator func(string) bool) (*Handler, error) {
 	if len(rpIDs) == 0 {
 		return nil, fmt.Errorf("at least one RPID is required")
 	}
@@ -46,10 +66,14 @@ func NewHandler(rpIDs []string, origins []string, store *CredentialStore, sessio
 	log.Info("auth: WebAuthn configured", "rpIDs", rpIDs, "origins", origins)
 
 	return &Handler{
-		webauthn: w,
-		rpIDs:    rpIDs,
-		store:    store,
-		session:  session,
+		webauthn:          w,
+		rpIDs:             rpIDs,
+		origins:           origins,
+		hostnameValidator: hostnameValidator,
+		negativeCache:     newNegativeHostnameCache(),
+		ipLimiter:         newSourceIPLimiter(),
+		store:             store,
+		session:           session,
 	}, nil
 }
 
@@ -57,18 +81,65 @@ func NewHandler(rpIDs []string, origins []string, store *CredentialStore, sessio
 // It iterates through the configured RPIDs and returns the first one that is a
 // suffix of the request's hostname. This allows a single server to handle
 // requests for e.g. onyx.local and onyx.staplerhome.internal.
+//
+// rpIDs is otherwise fixed at NewHandler time, which goes stale if a LAN
+// hostname wasn't resolvable yet when the server started (e.g. the service
+// launched before DHCP/Wi-Fi association finished) -- the discovery logic
+// itself can be correct and still miss a hostname because of *when* it ran.
+// Rather than rejecting a request from a legitimate, now-resolvable LAN
+// hostname for the rest of the process's life, fall back to hostnameValidator
+// and register the hostname as a new rpID on demand.
 func (h *Handler) webauthnForHost(r *http.Request) (*webauthn.WebAuthn, error) {
 	hostname := r.Host
 	if host, _, err := net.SplitHostPort(r.Host); err == nil {
 		hostname = host
 	}
 
+	h.mu.RLock()
 	for _, rpID := range h.rpIDs {
 		if strings.HasSuffix(hostname, rpID) {
-			return h.webauthn[rpID], nil
+			wa := h.webauthn[rpID]
+			h.mu.RUnlock()
+			return wa, nil
 		}
 	}
-	return nil, fmt.Errorf("no valid rpID found for host %s", hostname)
+	h.mu.RUnlock()
+
+	if h.hostnameValidator == nil {
+		return nil, fmt.Errorf("no valid rpID found for host %s", hostname)
+	}
+
+	if h.negativeCache.IsNegative(hostname) {
+		return nil, fmt.Errorf("no valid rpID found for host %s", hostname)
+	}
+
+	if !h.ipLimiter.Allow(sourceIP(r)) {
+		return nil, fmt.Errorf("too many rpID validation attempts from this source, try again later")
+	}
+
+	if !h.hostnameValidator(hostname) {
+		h.negativeCache.MarkNegative(hostname)
+		return nil, fmt.Errorf("no valid rpID found for host %s", hostname)
+	}
+
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if wa, ok := h.webauthn[hostname]; ok {
+		return wa, nil
+	}
+	wa, err := webauthn.New(&webauthn.Config{
+		RPDisplayName: "Stapler Squad",
+		RPID:          hostname,
+		RPOrigins:     h.origins,
+		Debug:         false,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("configure webauthn for rpID %s: %w", hostname, err)
+	}
+	h.webauthn[hostname] = wa
+	h.rpIDs = append(h.rpIDs, hostname)
+	log.Info("auth: dynamically registered new rpID", "rpID", hostname)
+	return wa, nil
 }
 
 // BeginRegistration starts a passkey registration ceremony.

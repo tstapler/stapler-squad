@@ -1189,7 +1189,30 @@ func startRemoteAccess(ctx context.Context, srv *server.Server, localAddr string
 	sessionsPath := filepath.Join(configDir, "auth-sessions.json")
 	sessions := serverauth.NewSessionManager(sessionsPath)
 
-	waHandler, err := serverauth.NewHandler(allRPIDs, origins, store, sessions)
+	// A hostname not in allRPIDs at startup may still be a legitimate LAN
+	// client -- discovery is one-shot at boot (see detectLANIPs/
+	// resolveLANHostnames above) and misses anything not yet resolvable at
+	// that instant (e.g. Wi-Fi/DHCP still coming up when launchd started
+	// this process). Accept it as a new rpID only if it forward-resolves to
+	// an IP this machine actually owns, so a request can't claim an
+	// arbitrary hostname as its RPID.
+	hostnameValidator := func(hostname string) bool {
+		resolvedIPs, err := net.LookupHost(hostname)
+		if err != nil {
+			return false
+		}
+		ownIPs := listNonLoopbackIPs()
+		for _, resolved := range resolvedIPs {
+			for _, own := range ownIPs {
+				if resolved == own {
+					return true
+				}
+			}
+		}
+		return false
+	}
+
+	waHandler, err := serverauth.NewHandler(allRPIDs, origins, store, sessions, hostnameValidator)
 	if err != nil {
 		return fmt.Errorf("create webauthn handler: %w", err)
 	}
