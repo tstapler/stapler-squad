@@ -237,3 +237,54 @@ func TestStreamHub_should_BroadcastStreamEndedSentinelAndTearDown_When_CapturePa
 		t.Fatalf("expected hub to tear down after a CapturePaneContent error, got %v", hub.State())
 	}
 }
+
+// TestStreamHub_should_StayAliveAndRetryLater_When_CapturePaneContentErrorsWithSessionNotStarted
+// is the regression test for the 2026-08-25 incident (see ErrSessionNotStarted's doc
+// comment): a subscriber attaching microseconds before its session finishes cold-starting
+// used to tear the entire hub down — killing every other attached subscriber too — over a
+// condition that resolves itself well under a second later. Unlike the previous test's
+// generic capture error (which must still tear down), ErrSessionNotStarted must leave the
+// hub alive so a later resize (once the session is actually running) succeeds normally.
+func TestStreamHub_should_StayAliveAndRetryLater_When_CapturePaneContentErrorsWithSessionNotStarted(t *testing.T) {
+	defer goleak.VerifyNone(t)
+
+	controller := newFakeSessionController()
+	controller.captureErr = streamhub.ErrSessionNotStarted
+	hub := streamhub.NewStreamHub("test-session", controller,
+		streamhub.WithTeardownGrace(time.Hour),
+		streamhub.WithQuiescenceTimeout(30*time.Millisecond),
+		streamhub.WithQuiescenceQuietPeriod(5*time.Millisecond),
+	)
+	defer hub.ForceTeardown()
+
+	transport1 := newMemoryTransport()
+	transport2 := newMemoryTransport()
+	id1 := hub.AttachSubscriber(transport1, streamhub.SubscriberCapability{CanResize: true})
+	hub.AttachSubscriber(transport2, streamhub.SubscriberCapability{CanResize: true})
+
+	hub.RequestResize(id1, mustSize(t, 100, 30))
+
+	// Give applyNegotiatedSize's goroutine time to run and (incorrectly, pre-fix)
+	// tear the hub down; then assert it's still alive and neither subscriber was
+	// sent the stream-ended sentinel.
+	time.Sleep(100 * time.Millisecond)
+	if got := hub.State(); got == streamhub.HubTornDown {
+		t.Fatalf("hub torn down after a session-not-started capture error — this exact transient condition must not kill the hub")
+	}
+	if got := transport1.receivedCount(); got != 0 {
+		t.Fatalf("subscriber 1 should not have received a stream-ended sentinel, got %d frames", got)
+	}
+	if got := transport2.receivedCount(); got != 0 {
+		t.Fatalf("subscriber 2 should not have received a stream-ended sentinel, got %d frames", got)
+	}
+
+	// Once the session is "running" (controller recovers), the next resize must
+	// succeed normally — proving the hub wasn't left in some half-dead state.
+	controller.captureErr = nil
+	controller.captureContent = "now running"
+	hub.RequestResize(id1, mustSize(t, 120, 40))
+
+	if !waitFor(t, time.Second, func() bool { return controller.resizeCallCount(120, 40) == 1 }) {
+		t.Fatalf("expected the hub to still service a later resize once the controller recovers")
+	}
+}

@@ -621,6 +621,10 @@ func (h *StreamHub) applyNegotiatedSize(size TerminalSize) {
 	}()
 
 	if err := h.controller.SetWindowSize(size.cols, size.rows); err != nil {
+		if errors.Is(err, ErrSessionNotStarted) {
+			log.Info("streamhub: session not started yet, skipping this resize (will retry on the next negotiated size)", "session", h.sessionName)
+			return
+		}
 		log.Error("streamhub: SetWindowSize failed", "session", h.sessionName, "cols", size.cols, "rows", size.rows, "error", err)
 		h.handleControllerError(err)
 		return
@@ -632,6 +636,17 @@ func (h *StreamHub) applyNegotiatedSize(size TerminalSize) {
 
 	content, err := h.controller.CapturePaneContentRaw()
 	if err != nil {
+		if errors.Is(err, ErrSessionNotStarted) {
+			// Expected, transient: a subscriber attached microseconds before
+			// the session's cold restore finished (2026-08-25 incident — see
+			// ErrSessionNotStarted's doc comment). Unlike a genuine controller
+			// failure, tearing the hub down here would kill every attached
+			// subscriber over something that resolves itself well under a
+			// second later; the hub simply stays alive and picks up the next
+			// resize/attach once the session is actually running.
+			log.Info("streamhub: session not started yet, skipping this resize's capture (will retry on the next negotiated size)", "session", h.sessionName)
+			return
+		}
 		log.Error("streamhub: CapturePaneContentRaw failed after resize", "session", h.sessionName, "error", err)
 		h.handleControllerError(err)
 		return
