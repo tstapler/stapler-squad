@@ -270,7 +270,7 @@ type PRVerification struct {
 // Rather than panic — which would take down the whole handler for what's
 // almost certainly a code-level logic bug in this package rather than bad
 // external input — the violation is forced to matched=false and logged
-// loudly via log.ErrorLog.Printf so it's impossible to miss in logs/tests,
+// loudly via log.ErrorLog().Printf so it's impossible to miss in logs/tests,
 // while production keeps running.
 //
 // Author is not part of this invariant and is carried through unvalidated;
@@ -279,7 +279,7 @@ type PRVerification struct {
 // policy decision based on it.
 func NewPRVerification(exists, matched bool, actualHeadBranch, state, author string) PRVerification {
 	if matched && !exists {
-		log.ErrorLog.Printf("NewPRVerification: illegal state matched=true with exists=false (actualHeadBranch=%q, state=%q, author=%q) — forcing matched=false", actualHeadBranch, state, author)
+		log.ErrorLog().Printf("NewPRVerification: illegal state matched=true with exists=false (actualHeadBranch=%q, state=%q, author=%q) — forcing matched=false", actualHeadBranch, state, author)
 		matched = false
 	}
 	return PRVerification{

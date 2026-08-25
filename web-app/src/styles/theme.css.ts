@@ -643,12 +643,13 @@ export const cleanTheme = createTheme(vars, {
     borderSubtle: "#1a2232",
     borderMuted: "#35354a",
     borderStrong: "#6b7280",
+    // borderHover: hardcoded independently of `primary` — now diverges in hue from it (was matched pre-fix).
     borderHover: "#6366f1",
     modalBorder: "#1e293b",
     inputBorder: "#35354a",
     inputFocusBorder: "#818cf8",
 
-    primary: "#6366f1",
+    primary: "#5457ef", /* was #6366f1 — #fff on #6366f1 = 4.46:1 fails WCAG AA; #5457ef = 5.27:1 ✅ */
     primaryHover: "#818cf8",
     primaryActive: "#4f46e5",
     primaryDark: "#3730a3",
@@ -669,6 +670,9 @@ export const cleanTheme = createTheme(vars, {
     criticalBg: "#831843",
     criticalText: "#fbcfe8", /* critical on criticalBg = 6.98:1 */
 
+    // accentBg: hardcoded rgba of the pre-fix primary, doesn't track `primary` — composited under
+    // ReviewQueuePanel.css.ts's border usage this is below the WCAG 1.4.11 3:1 floor (2.97:1).
+    // Tracked as backlog item c86119dd-22b6-400d-a0d0-f2308cef1d6e, not fixed here.
     accentBg: "rgba(99,102,241,0.1)",
     accentHover: "rgba(99,102,241,0.2)",
     // accentText: unchanged from pre-fix behavior (same as primary) — not in scope for this fix.

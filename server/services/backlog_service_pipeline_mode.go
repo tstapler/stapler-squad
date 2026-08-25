@@ -101,7 +101,7 @@ func (s *BacklogService) invalidatePipelineCache(ctx context.Context, id string)
 		return
 	}
 	if err := invalidator.InvalidateCache(ctx); err != nil {
-		log.WarningLog.Printf("[PipelineEngine] cache invalidation failed after successful write id=%s: %v — cache may be stale until next successful invalidation", id, err)
+		log.WarningLog().Printf("[PipelineEngine] cache invalidation failed after successful write id=%s: %v — cache may be stale until next successful invalidation", id, err)
 	}
 }
 

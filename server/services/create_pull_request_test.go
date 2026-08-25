@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -22,6 +24,7 @@ import (
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/headless"
+	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
 // firstCallJSONPR returns a valid first-call JSON response for DraftPullRequest tests,
@@ -359,35 +362,37 @@ func TestDraftPullRequest_should_UseFallbackBody_When_DraftPRDescriptionErrors(t
 // CreatePullRequest
 // --------------------------------------------------------------------------
 
-// fakePRGitExecutor is a fake executor.Executor for CreatePullRequest's
+// fakePRGitExecutor is a tmux.CommandRunner fake for CreatePullRequest's
 // commit -> push -> CreatePR pipeline. It intercepts every git/gh subprocess
-// GitWorktree would otherwise spawn, dispatching by argv shape, so these
+// GitWorktree would otherwise spawn, dispatching by name+args shape, so these
 // tests exercise the real CommitChanges/PushBranch/CreatePR code paths
-// without touching a real remote or a real `gh` binary — mirroring
-// capturingGHExecutor's pattern in session/git/worktree_git_test.go, extended
+// without touching a real remote or a real `gh` binary — mirrors
+// capturingGHRunner's pattern in session/git/worktree_git_test.go, extended
 // to cover the git-side commands CreatePullRequest's handler also drives.
 //
-// Since GitWorktree's cmdExec (once set) intercepts every command it would
-// run, and StageAllExceptScaffolding's UntrackScaffolding step uses go-git
-// directly against the (fake, nonexistent) worktree path and fails open on a
-// missing repo, these tests need no real git repo on disk at all — a fake
-// "/fake/repo"-shaped path is enough.
+// Since every git/gh call GitWorktree makes (runGitCommand, PushBranch,
+// checkGHCLI, findExistingPR, CreatePR) now routes through the single
+// tmux.CommandRunner seam (ADR-002), and StageAllExceptScaffolding's
+// UntrackScaffolding step uses go-git directly against the (fake,
+// nonexistent) worktree path and fails open on a missing repo, these tests
+// need no real git repo on disk at all — a fake "/fake/repo"-shaped path is
+// enough.
 type fakePRGitExecutor struct {
 	mu sync.Mutex
 
-	calls []string // every command run, as a space-joined argv, for call-order/never-called assertions
+	calls []string // every command run, as "name arg1 arg2 ...", for call-order/never-called assertions
 
 	dirty     bool   // git status --porcelain reports a dirty worktree (drives CommitChanges' real commit path)
 	commitErr error  // git commit fails with this error
 	pushErr   error  // git push fails with this error
 	createOut string // gh pr create's stdout (defaults to a canned PR URL if empty)
 	createErr error  // gh pr create fails with this error
-
-	// blockFirstCallStarted, when non-nil, is closed the first time
-	// CombinedOutput is invoked (signaling a test-driving goroutine that the
-	// first git/gh subprocess of the pipeline has started), after which that
-	// same call blocks until blockFirstCallProceed is closed. This lets a test
-	// pause the winning goroutine's pipeline mid-flight so a second, real,
+	authErr   error  // gh auth status fails with this error (checkGHCLI's not-authenticated path)
+	// blockFirstCallStarted, when non-nil, is closed the first time Run is
+	// invoked (signaling a test-driving goroutine that the first git/gh
+	// subprocess of the pipeline has started), after which that same call
+	// blocks until blockFirstCallProceed is closed. This lets a test pause the
+	// winning goroutine's pipeline mid-flight so a second, real,
 	// concurrently-launched goroutine has an actual window to race
 	// CreatePullRequest's LoadOrStore in-flight guard, rather than only proving
 	// the guard's error path against a pre-populated map entry.
@@ -396,12 +401,9 @@ type fakePRGitExecutor struct {
 	firstCallBlockOnce    sync.Once
 }
 
-func (e *fakePRGitExecutor) Run(_ *exec.Cmd) error              { return nil }
-func (e *fakePRGitExecutor) Output(_ *exec.Cmd) ([]byte, error) { return nil, nil }
-
-func (e *fakePRGitExecutor) CombinedOutput(cmd *exec.Cmd) ([]byte, error) {
+func (e *fakePRGitExecutor) Run(_ context.Context, _ string, name string, args ...string) ([]byte, error) {
 	e.mu.Lock()
-	e.calls = append(e.calls, strings.Join(cmd.Args, " "))
+	e.calls = append(e.calls, strings.TrimSpace(name+" "+strings.Join(args, " ")))
 	e.mu.Unlock()
 
 	if e.blockFirstCallStarted != nil {
@@ -411,39 +413,39 @@ func (e *fakePRGitExecutor) CombinedOutput(cmd *exec.Cmd) ([]byte, error) {
 		})
 	}
 
-	args := cmd.Args
-	if len(args) == 0 {
-		return nil, nil
-	}
-	prog := filepath.Base(args[0])
+	prog := filepath.Base(name)
 	switch {
-	case prog == "git" && len(args) > 3 && args[3] == "status":
+	case prog == "git" && len(args) > 0 && args[0] == "status":
 		if e.dirty {
 			return []byte("M file.txt\n"), nil
 		}
 		return nil, nil
-	case prog == "git" && len(args) > 3 && args[3] == "add":
+	case prog == "git" && len(args) > 0 && args[0] == "add":
 		return nil, nil
-	case prog == "git" && len(args) > 3 && args[3] == "diff":
+	case prog == "git" && len(args) > 0 && args[0] == "diff":
 		if e.dirty {
 			return []byte("file.txt\n"), nil
 		}
 		return nil, nil
-	case prog == "git" && len(args) > 3 && args[3] == "commit":
+	case prog == "git" && len(args) > 0 && args[0] == "commit":
 		if e.commitErr != nil {
 			return []byte("commit failed"), e.commitErr
 		}
 		return nil, nil
-	case prog == "git" && len(args) > 1 && args[1] == "push":
+	case prog == "git" && len(args) > 0 && args[0] == "push":
 		if e.pushErr != nil {
 			return []byte("push failed"), e.pushErr
 		}
 		return nil, nil
-	case prog == "gh" && len(args) > 2 && args[2] == "list":
-		// findExistingPR's pre-check: report no existing PR so CreatePR
+	case prog == "gh" && len(args) > 0 && args[0] == "auth":
+		if e.authErr != nil {
+			return nil, e.authErr
+		}
+		return nil, nil
+	case prog == "gh" && len(args) > 1 && args[0] == "pr" && args[1] == "list": // findExistingPR's pre-check: report no existing PR so CreatePR
 		// proceeds to `gh pr create`.
 		return nil, exec.ErrNotFound
-	case prog == "gh" && len(args) > 2 && args[2] == "create":
+	case prog == "gh" && len(args) > 1 && args[0] == "pr" && args[1] == "create":
 		if e.createErr != nil {
 			return nil, e.createErr
 		}
@@ -455,6 +457,14 @@ func (e *fakePRGitExecutor) CombinedOutput(cmd *exec.Cmd) ([]byte, error) {
 	}
 	return nil, nil
 }
+
+func (e *fakePRGitExecutor) Start(context.Context, string, string, ...string) (io.WriteCloser, io.ReadCloser, func() error, error) {
+	return nil, nil, nil, fmt.Errorf("fakePRGitExecutor.Start not implemented")
+}
+
+func (e *fakePRGitExecutor) IsRemote() bool { return false }
+
+var _ tmux.CommandRunner = (*fakePRGitExecutor)(nil)
 
 // calledWith reports whether any recorded call contains sub as a substring —
 // used to prove a step (e.g. "gh pr create") was, or was never, reached.
@@ -473,7 +483,7 @@ func (e *fakePRGitExecutor) calledWith(sub string) bool {
 // a fake (never touched on disk) repo/worktree path — CommitChanges/PushBranch/
 // CreatePR never need a real repo since every command they'd run is intercepted.
 func newFakePRWorktree(sessionID, branchName string, mock *fakePRGitExecutor) *git.GitWorktree {
-	return git.NewGitWorktreeFromStorageWithExecutor("/fake/repo", "/fake/worktree", sessionID, branchName, "", mock)
+	return git.NewGitWorktreeFromStorageWithExecutor("/fake/repo", "/fake/worktree", sessionID, branchName, "", git.WithCommandRunner(mock))
 }
 
 // fakePRInstanceStore is a minimal session.InstanceStore fake. Unlike the real
@@ -510,29 +520,6 @@ func (f *fakePRInstanceStore) SaveInstances(instances []*session.Instance) error
 }
 
 var _ session.InstanceStore = (*fakePRInstanceStore)(nil)
-
-// withPathPrepended prepends dir to PATH for the duration of the test. Uses
-// t.Setenv, so the test must not call t.Parallel().
-func withPathPrepended(t *testing.T, dir string) {
-	t.Helper()
-	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
-}
-
-// fakeGHNotAuthenticated installs a fake `gh` binary on PATH (ahead of the
-// real one) that fails `gh auth status`, causing checkGHCLI() — called for
-// real inside GitWorktree.CreatePR, not routed through the fake executor —
-// to return its exact "not configured" message. This is the only piece of
-// CreatePullRequest's pipeline that can't be faked via cmdExec, since
-// checkGHCLI shells out directly rather than through GitWorktree's injectable
-// executor. Must not run in a parallel test (uses t.Setenv).
-func fakeGHNotAuthenticated(t *testing.T) {
-	t.Helper()
-	dir := t.TempDir()
-	script := filepath.Join(dir, "gh")
-	content := "#!/bin/sh\nif [ \"$1\" = \"auth\" ] && [ \"$2\" = \"status\" ]; then\n  echo 'not logged in' >&2\n  exit 1\nfi\nexit 0\n"
-	require.NoError(t, os.WriteFile(script, []byte(content), 0o755))
-	withPathPrepended(t, dir)
-}
 
 func TestCreatePullRequest_should_CallCreatePRDirectly_NotHeadlessPool(t *testing.T) {
 	t.Parallel()
@@ -626,10 +613,8 @@ func TestCreatePullRequest_should_ReturnPersistedFalse_When_SaveInstancesFails(t
 }
 
 func TestCreatePullRequest_should_SurfaceSpecificError_When_GHNotAuthenticated(t *testing.T) {
-	// Not parallel: fakeGHNotAuthenticated uses t.Setenv.
-	fakeGHNotAuthenticated(t)
-
-	mock := &fakePRGitExecutor{}
+	t.Parallel()
+	mock := &fakePRGitExecutor{authErr: errors.New("not logged in")}
 	wt := newFakePRWorktree("sess-no-auth", "feature/no-auth", mock)
 	inst := &session.Instance{Title: "No auth session", UUID: uuid.New().String()}
 	inst.SetGitWorktree(wt)

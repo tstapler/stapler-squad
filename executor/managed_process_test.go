@@ -11,6 +11,16 @@ import (
 	"time"
 )
 
+// testProcessTimeout bounds how long these tests wait for a subprocess to
+// produce output or exit. 10s was too tight under `go test ./...`'s full
+// parallel run: every package's tests (including the race detector and other
+// subprocess-heavy suites) contend for CPU/scheduler time simultaneously, so
+// a helper subprocess that exits in ~1s in isolation can take several times
+// that under load. Confirmed by re-running the failing tests in isolation
+// (all passed in 0.6-1.6s) immediately after a full-suite run timed them out
+// at 10s. See .claude/rules/fix-flaky-tests-dont-defer.md.
+const testProcessTimeout = 30 * time.Second
+
 // readAllWithStop reads all bytes from r. If the read doesn't complete within
 // timeout it calls p.Stop() to kill the process (closing the pipe) and fails
 // the test. Under the race detector on CI, subprocess exit can be arbitrarily
@@ -168,7 +178,7 @@ func TestManagedProcess_WithEnv_appendsToEnvironment(t *testing.T) {
 	}
 	defer p.Stop() //nolint:errcheck
 
-	data, err := readAllWithStop(t, p.Stdout(), p, 10*time.Second)
+	data, err := readAllWithStop(t, p.Stdout(), p, testProcessTimeout)
 	if err != nil {
 		t.Fatalf("ReadAll stdout: %v", err)
 	}
@@ -191,7 +201,7 @@ func TestManagedProcess_Stdout_readsOutput(t *testing.T) {
 	}
 	defer p.Stop() //nolint:errcheck
 
-	data, err := readAllWithStop(t, p.Stdout(), p, 10*time.Second)
+	data, err := readAllWithStop(t, p.Stdout(), p, testProcessTimeout)
 	if err != nil {
 		t.Fatalf("ReadAll stdout: %v", err)
 	}
@@ -214,7 +224,7 @@ func TestManagedProcess_Stderr_readsErrors(t *testing.T) {
 	}
 	defer p.Stop() //nolint:errcheck
 
-	data, err := readAllWithStop(t, p.Stderr(), p, 10*time.Second)
+	data, err := readAllWithStop(t, p.Stderr(), p, testProcessTimeout)
 	if err != nil {
 		t.Fatalf("ReadAll stderr: %v", err)
 	}
@@ -236,7 +246,7 @@ func TestManagedProcess_ScanLines_callsCallbackPerLine(t *testing.T) {
 	}
 	defer p.Stop() //nolint:errcheck
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), testProcessTimeout)
 	defer cancel()
 
 	var lines []string
@@ -415,7 +425,7 @@ func TestManagedProcess_ConsumeStdout_returnsNilStdout(t *testing.T) {
 	if p.Stdout() != nil {
 		t.Error("expected Stdout() == nil when WithConsumeStdout is used")
 	}
-	_ = waitWithStop(t, p, 10*time.Second)
+	_ = waitWithStop(t, p, testProcessTimeout)
 }
 
 // TestManagedProcess_PID_afterStop verifies PID is still accessible after stop.

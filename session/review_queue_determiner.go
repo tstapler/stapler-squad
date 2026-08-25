@@ -262,7 +262,7 @@ func (d *DefaultStatusDeterminer) Determine(
 	if timeSinceOutput > d.config.StalenessThreshold {
 		if alreadyAcknowledged {
 			if log.IsDebugEnabled() {
-				log.DebugLog.Printf("[ReviewQueue] Session '%s': STALE but already acknowledged - skipping staleness flag",
+				log.DebugLog().Printf("[ReviewQueue] Session '%s': STALE but already acknowledged - skipping staleness flag",
 					inst.Title)
 			}
 		} else {
@@ -275,11 +275,11 @@ func (d *DefaultStatusDeterminer) Determine(
 				ctx = fmt.Sprintf("No activity for %s - session may be stuck or waiting",
 					detection.FormatDuration(timeSinceOutput))
 				if log.IsDebugEnabled() {
-					log.DebugLog.Printf("[ReviewQueue] Session '%s': STALENESS DETECTED - flagged as stale, %s since last meaningful output",
+					log.DebugLog().Printf("[ReviewQueue] Session '%s': STALENESS DETECTED - flagged as stale, %s since last meaningful output",
 						inst.Title, detection.FormatDuration(timeSinceOutput))
 				}
 			} else if log.IsDebugEnabled() {
-				log.DebugLog.Printf("[ReviewQueue] Session '%s': Stale but already has higher priority reason (%s)",
+				log.DebugLog().Printf("[ReviewQueue] Session '%s': Stale but already has higher priority reason (%s)",
 					inst.Title, reason.String())
 			}
 		}

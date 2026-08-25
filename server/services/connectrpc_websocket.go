@@ -27,6 +27,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/protocol"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/scrollback"
+	"github.com/tstapler/stapler-squad/session/streamhub"
 	"github.com/tstapler/stapler-squad/session/tmux"
 	"google.golang.org/protobuf/proto"
 )
@@ -264,6 +265,164 @@ func (h *ConnectRPCWebSocketHandler) recordControlModeStreamStart(sessionID, tmu
 			return cur, xsync.CancelOp
 		})
 	}
+}
+
+// hubRegistry is the process-wide registry handing out the one
+// *streamhub.StreamHub per tmux session name (Task 2.2.2b), generalizing
+// activeControlModeStreams's existing xsync.Map shape per plan.md's
+// HubRegistry glossary entry. Story 3.1.1 will widen this into the full
+// sticky per-session StreamPath resolver (StreamOwnershipLock-guarded); today
+// it is a plain get-or-create, safe under concurrent callers because
+// xsync.Map.LoadOrCompute runs valueFn at most once per key.
+type hubRegistry struct {
+	hubs *xsync.Map[string, *streamhub.StreamHub]
+}
+
+// HubRegistry is the single process-wide hub registry for the PathHubOwned
+// branch (env-var-gated, default off — see useStreamHub). Not yet wired to
+// StreamOwnershipLock (Epic 3.1) or hub-registry-consolidation observability
+// (Epic 3.2); those land in later epics of this plan.
+var HubRegistry = &hubRegistry{hubs: xsync.NewMap[string, *streamhub.StreamHub]()}
+
+// GetOrCreate returns the StreamHub for sessionName, creating it — and
+// starting its raw-output pump exactly once — if this is the first caller
+// for that name. controller is only consulted on that first (winning) call;
+// later callers for the same sessionName get the existing hub regardless of
+// what controller they pass.
+//
+// Story 3.1.2: before ever creating a hub, GetOrCreate itself acquires
+// sessionName's StreamOwnershipLock and asserts PathHubOwned via
+// ResolveExpecting. This makes GetOrCreate safe to call independently of
+// streamTerminal's own top-level Resolve()-gated routing decision — if a
+// concurrent legacy StartControlMode call already won the resolution for
+// this session, GetOrCreate refuses to create a competing hub and returns
+// ErrOwnershipResolvedToOtherPath instead, so the caller (streamViaHub) can
+// fall back to joining the legacy path explicitly rather than silently
+// operating as a second, independent owner.
+func (r *hubRegistry) GetOrCreate(sessionName string, controller streamhub.SessionController) (*streamhub.StreamHub, error) {
+	// Story 3.1.2: AcquireAndResolveExpecting holds the ownership lock's
+	// mutex for the full duration of the LoadOrCompute below, not just the
+	// resolve step — the same real critical section Instance.StartControlMode
+	// now enters (session/instance_tmux.go). That's what makes this call
+	// genuinely block on (rather than race) a concurrent StartControlMode
+	// call for the same session name, per the AC in plan.md's Story 3.1.2.
+	var hub *streamhub.StreamHub
+	if err := streamhub.AcquireOwnershipLock(sessionName).AcquireAndResolveExpecting(true, streamhub.PathHubOwned, func() error {
+		h, _ := r.hubs.LoadOrCompute(sessionName, func() (*streamhub.StreamHub, bool) {
+			newHub := streamhub.NewStreamHub(sessionName, controller)
+			go pumpControlModeOutputIntoHub(newHub, controller, sessionName)
+			return newHub, false
+		})
+		hub = h
+		return nil
+	}); err != nil {
+		return nil, err
+	}
+
+	// OverlapInvariant (Epic 3.2): xsync.Map.LoadOrCompute guarantees the
+	// constructor above runs at most once per key, so exactly one *StreamHub
+	// is ever vended for sessionName by this call — ownerCount is always 1
+	// here under correct xsync/GetOrCreate behavior. This is the real,
+	// production-reachable call site plan.md's OverlapInvariant Domain
+	// Glossary entry asks for: defense in depth against a future regression
+	// in that guarantee (e.g. a refactor that swaps LoadOrCompute for a
+	// racy Load+Store), which would then surface here immediately, on every
+	// hub creation/lookup, instead of only in a rare production incident.
+	streamhub.OverlapInvariant(sessionName, 1)
+
+	return hub, nil
+}
+
+// pumpControlModeOutputIntoHub is the single production feed from a
+// session's raw control-mode output into its StreamHub (Task 2.2.2b's
+// minimal wiring for a working PathHubOwned path): it runs exactly once per
+// hub, since GetOrCreate only invokes it from the winning LoadOrCompute call,
+// so N attached subscribers never each run their own duplicate subscription
+// (the exact per-connection duplication this project's hub replaces). It
+// exits when the underlying subscription channel closes (session exited).
+//
+// Known gap (left for Epic 3.2's registry-consolidation/observability
+// scope): nothing here calls UnsubscribeControlModeUpdates on hub teardown,
+// and a hub recreated after teardown starts a fresh pump rather than
+// resuming an old one. Acceptable for this epic's dark-launch-flagged,
+// default-off scope; not acceptable to leave unaddressed once the flag
+// defaults on.
+func pumpControlModeOutputIntoHub(hub *streamhub.StreamHub, controller streamhub.SessionController, sessionName string) {
+	_, updates := controller.SubscribeControlModeUpdates()
+	for data := range updates {
+		hub.OnRawOutput(data)
+
+		// Drain every frame immediately available on updates into the same
+		// hub-owned batch window, then flush opportunistically — mirroring
+		// the legacy per-connection coalesce loop's `select {...; default:
+		// break coalesce}` pattern (~line 964-976 below) so a burst that
+		// happens to drain the channel doesn't always pay BatchWindow's full
+		// MaxBatchWindow ceiling latency before subscribers see it.
+	drain:
+		for {
+			select {
+			case more, ok := <-updates:
+				if !ok {
+					break drain
+				}
+				hub.OnRawOutput(more)
+			default:
+				break drain
+			}
+		}
+		hub.TryFlush()
+	}
+	log.Info("streamhub raw-output pump exiting", "session", sessionName)
+}
+
+// useStreamHub is the global STAPLER_SQUAD_USE_STREAM_HUB default resolver,
+// re-read per connection — safe because StreamOwnershipLock.Resolve (Epic
+// 3.1) caches the first resolution per tmux session, so a later re-read
+// observing a changed value can never move an already-resolved session.
+//
+// Story 3.3.1/3.3.2 (pre-mortem P1 #4): requesting the global default to be
+// true is mechanically gated on config.ResolveGlobalStreamHubDefault —
+// refused, and safely defaulted to false with a loud log line, unless
+// config.RollbackRehearsalCompletedAt has been recorded (Story 3.3.2's
+// rehearsal). This gate does not apply to the per-session override path
+// (see the streamhub.SetSessionOverrideLookup wiring in init below), which
+// AcquireOwnershipLock's Resolve consults independently of this function's
+// return value.
+func useStreamHub() bool {
+	requested := os.Getenv("STAPLER_SQUAD_USE_STREAM_HUB") == "true"
+	effective, err := config.ResolveGlobalStreamHubDefault(config.LoadConfig(), requested)
+	if err != nil {
+		log.Error("streamhub: refusing to enable global default", "error", err)
+		return false
+	}
+	return effective
+}
+
+// init wires streamhub's per-session canary override (Story 3.3.1) to this
+// package's config access, so session/streamhub itself never needs to
+// import package config — the same one-way-dependency shape ADR-003
+// establishes for AcquireOwnershipLock. Re-reads config.LoadConfig() on
+// every call rather than caching, matching GetFeatureFlag's existing
+// re-read-every-time convention (a session's own override can be changed
+// without restarting the process).
+func init() {
+	streamhub.SetSessionOverrideLookup(func(sessionName string) (bool, bool) {
+		return config.LoadConfig().GetStreamHubSessionOverride(sessionName)
+	})
+}
+
+// tmuxSessionNameForStreamPath computes the tmux session name StreamPath
+// resolution keys on for instance, mirroring streamViaHub's own derivation
+// (session title + tmux prefix, default "staplersquad_"). Resolution must
+// use this same name so a session's StreamOwnershipLock lookup here and its
+// hub lookup inside streamViaHub (HubRegistry.GetOrCreate) agree.
+func tmuxSessionNameForStreamPath(instance *session.Instance) string {
+	snap := instance.Snapshot()
+	tmuxPrefix := snap.TmuxPrefix
+	if tmuxPrefix == "" {
+		tmuxPrefix = "staplersquad_"
+	}
+	return tmux.NewSessionName(snap.Title, tmuxPrefix).String()
 }
 
 // waitForQuiescence waits until no updates arrive for quietFor duration, or timeout elapses.
@@ -600,6 +759,16 @@ func (h *ConnectRPCWebSocketHandler) streamTerminal(stream *connectWebSocketStre
 	// Set STAPLER_SQUAD_USE_CONTROL_MODE=false to disable and use capture-pane polling
 	useControlMode := os.Getenv("STAPLER_SQUAD_USE_CONTROL_MODE")
 	if (useControlMode == "" || useControlMode == "true") && instance.Snapshot().IsManaged {
+		// StreamPath branch (Epic 3.1, Story 3.1.1): resolved once per tmux
+		// session via StreamOwnershipLock.Resolve and cached sticky for that
+		// session's lifetime, rather than re-reading useStreamHub() fresh on
+		// every connection (Task 2.2.2a's placeholder) — see ADR-003 for why
+		// a per-connection re-read would let a flag flip mid-rollout split
+		// one session across two owners.
+		if streamhub.AcquireOwnershipLock(tmuxSessionNameForStreamPath(instance)).Resolve(useStreamHub()) == streamhub.PathHubOwned {
+			log.Info("[WebSocket] routing managed session to hub-owned streaming", "session", sessionID)
+			return h.streamViaHub(stream, instance)
+		}
 		log.Info("[WebSocket] routing managed session to control mode streaming", "session", sessionID)
 		return h.streamViaControlMode(stream, instance)
 	}
@@ -644,6 +813,22 @@ func (h *ConnectRPCWebSocketHandler) streamViaControlMode(stream *connectWebSock
 	// a raw title containing spaces would target a session name that was never created (#162).
 	tmuxSessionName := tmux.NewSessionName(snap.Title, tmuxPrefix).String()
 
+	// Story 3.1.2: mirror GetOrCreate's own defensive check on the legacy
+	// side. streamTerminal's top-level routing already gates this call
+	// behind the same StreamOwnershipLock resolution, but re-asserting it
+	// here means streamViaControlMode is safe to call from any future
+	// entry point too — not just today's single gated call site. If a
+	// concurrent hub-bound connection already won the resolution for this
+	// session, this connection must join the hub rather than proceed as an
+	// independent legacy owner (which would let it resize/capture the pane
+	// outside the hub's single-owner pipeline, the exact corruption this
+	// project exists to prevent).
+	if _, err := streamhub.AcquireOwnershipLock(tmuxSessionName).ResolveExpecting(false, streamhub.PathLegacyPerConnection); err != nil {
+		log.Info("[streamViaControlMode] ownership resolved to hub-owned path concurrently, joining it instead of proceeding as an independent legacy owner",
+			"session", sessionID, "tmux", tmuxSessionName, "err", err)
+		return h.streamViaHub(stream, instance)
+	}
+
 	streamGeneration, doneStreaming := h.recordControlModeStreamStart(sessionID, tmuxSessionName)
 	defer doneStreaming()
 
@@ -671,6 +856,24 @@ func (h *ConnectRPCWebSocketHandler) streamViaControlMode(stream *connectWebSock
 	// Without the nudge, tmux resize-window is a no-op when dimensions match and the TUI
 	// never redraws, leaving capture-pane content from a prior mid-session state that
 	// produces garbled output in a fresh xterm.js terminal.
+	//
+	// This nudge already runs unconditionally on every reconnect (handshake),
+	// regardless of whether the browser's reported dimensions actually changed
+	// from last time -- which is exactly the "unconditional resize-on-reconnect"
+	// research/pitfalls.md §1 and Task 4.4.1e call for, and it needs no separate
+	// remote-specific implementation here at the call site: instance.ResizePTY
+	// below calls TmuxSession.SetWindowSize, whose tmux "resize-window" command
+	// travels over the same control-mode stdin (t.sendCMCommand) that Task
+	// 4.4.1c made remote-transparent by wiring StartControlMode's remote branch
+	// through CommandRunner.Start over the SSH channel -- so once a remote
+	// session's control-mode connection is up (session/tmux/control_mode.go's
+	// startRemoteControlMode, which streamViaControlMode itself just started a
+	// few lines above via streamer.StartControlMode()), this same nudge reaches
+	// the remote tmux server on every reconnect exactly as it does locally.
+	// SetWindowSize itself still has an IsRemote()-guarded fallback for when CM
+	// is unavailable (mirroring RefreshClient's identical guard) -- it refuses
+	// rather than silently resizing the wrong (local) tmux server in that case,
+	// so this call site needs no IsRemote() branch of its own either way.
 	// Start control mode streaming early so we can subscribe to output events
 	// for quiescence detection BEFORE the resize nudge.
 	// Use the SessionStreamer interface to decouple this handler from the concrete
@@ -1175,6 +1378,281 @@ func (h *ConnectRPCWebSocketHandler) streamViaControlMode(stream *connectWebSock
 	case err := <-errChan:
 		return err
 	case <-doneChan:
+		return nil
+	}
+}
+
+// connectionCountPollInterval bounds how quickly a subscriber-count change
+// (Epic 4.2, Story 4.2.1) reaches an already-connected browser tab. 1s is
+// fast enough for a human-perceptible "another tab just attached" signal
+// without adding meaningful load — hub.SubscriberCount() is an O(1) map-len
+// read under a mutex already held for microseconds elsewhere in the hub.
+const connectionCountPollInterval = 1 * time.Second
+
+// sendConnectionCountUpdates polls hub.SubscriberCount() and pushes a
+// side-channel TerminalData (an otherwise-empty TerminalOutput carrying only
+// ConnectionCount) to this one connection whenever the count changes. See
+// streamViaHub's call site for why this is a poll rather than being stamped
+// onto the hub's own broadcast frames. Returns once stop is closed.
+func sendConnectionCountUpdates(stream *connectWebSocketStream, hub *streamhub.StreamHub, sessionID string, stop <-chan struct{}) {
+	ticker := time.NewTicker(connectionCountPollInterval)
+	defer ticker.Stop()
+
+	lastSent := -1
+	send := func() {
+		count := hub.SubscriberCount()
+		if count == lastSent {
+			return
+		}
+		lastSent = count
+		countCopy := int32(count)
+		msg := &sessionv1.TerminalData{
+			SessionId: sessionID,
+			Data: &sessionv1.TerminalData_Output{
+				Output: &sessionv1.TerminalOutput{ConnectionCount: &countCopy},
+			},
+		}
+		if err := marshalProtoEnvelope(stream, 0, msg); err != nil {
+			log.Warn("[streamViaHub] failed to send connection_count update", "session", sessionID, "err", err)
+		}
+	}
+
+	send() // report the count this connection sees immediately, don't wait a full tick
+	for {
+		select {
+		case <-stop:
+			return
+		case <-ticker.C:
+			send()
+		}
+	}
+}
+
+// HubStartFailedErrorCode is the TerminalError.Code sent to the client when
+// the hub-owned streaming path fails to start AND its legacy fallback also
+// fails, leaving the connection with no working stream at all (design/ux.md
+// Surface 2). useTerminalStream.ts checks for this exact code to skip its
+// normal backoff-exhaustion path and surface TerminalOutput.tsx's existing
+// hardFailedBanner immediately, since retrying will hit the same failure.
+const HubStartFailedErrorCode = "HUB_START_FAILED"
+
+// streamViaHub is streamViaControlMode's PathHubOwned counterpart (Epic 2.2,
+// Story 2.2.2): instead of this connection running its own
+// resize/quiescence/capture pipeline, it attaches a WebSocketTransport to the
+// tmux session's single *streamhub.StreamHub (via HubRegistry's get-or-create)
+// and lets the hub own resize negotiation and output fan-out.
+//
+// Scope note: this wires the hub path to real production traffic for the
+// first time, but does not yet reproduce every refinement
+// streamViaControlMode has accumulated (e.g. the ±1 resize nudge, the
+// snapshot dirty-tracking cache, escape-sequence analytics). Those remain
+// exclusive to the legacy path pending later phases of this plan; this
+// function's job is a correct, working PathHubOwned path behind a
+// default-off flag, not full feature parity yet.
+func (h *ConnectRPCWebSocketHandler) streamViaHub(stream *connectWebSocketStream, instance *session.Instance) error {
+	snap := instance.Snapshot()
+	sessionID := snap.Title
+	tmuxPrefix := snap.TmuxPrefix
+	if tmuxPrefix == "" {
+		tmuxPrefix = "staplersquad_"
+	}
+	tmuxSessionName := tmux.NewSessionName(snap.Title, tmuxPrefix).String()
+
+	log.Info("[streamViaHub] starting", "session", sessionID, "tmux", tmuxSessionName)
+
+	instance.MarkViewed()
+
+	var handshakeData sessionv1.TerminalData
+	if err := proto.Unmarshal(stream.requestMsg, &handshakeData); err != nil {
+		return fmt.Errorf("failed to parse handshake: %w", err)
+	}
+	currentPaneReq := handshakeData.GetCurrentPaneRequest()
+	if currentPaneReq == nil {
+		return fmt.Errorf("handshake missing CurrentPaneRequest - client may need update")
+	}
+
+	tmuxSession := instance.GetTmuxSession()
+	if tmuxSession != nil && !tmuxSession.DoesSessionExistNoCache() {
+		log.Info("[streamViaHub] session not in tmux, restoring before control mode", "session", sessionID)
+		workDir := instance.GetWorkingDirectory()
+		if restoreErr := tmuxSession.RestoreWithWorkDir(workDir); restoreErr != nil {
+			if errors.Is(restoreErr, tmux.ErrWorkDirMissing) {
+				instance.SetCreationProgress(fmt.Sprintf("Session failed: %s", restoreErr.Error()))
+				instance.ForceStatus(session.Stopped)
+			}
+			return fmt.Errorf("tmux session missing and restore failed: %w", restoreErr)
+		}
+	}
+
+	// StartControlMode is refcounted (session/tmux/control_mode.go), so each
+	// concurrent connection to the same session incrementing/decrementing it
+	// is safe and mirrors streamViaControlMode's own per-connection call.
+	if err := instance.StartControlMode(); err != nil {
+		return fmt.Errorf("failed to start control mode: %w", err)
+	}
+	defer func() {
+		if err := instance.StopControlMode(); err != nil {
+			log.Warn("[streamViaHub] StopControlMode error", "err", err)
+		}
+	}()
+
+	// Story 3.1.2: GetOrCreate itself re-checks StreamOwnershipLock before
+	// creating a hub. If a concurrent legacy StartControlMode call already
+	// won the resolution for this session (ErrOwnershipResolvedToOtherPath),
+	// this connection must join the legacy path explicitly rather than
+	// treat control mode already being started above as this connection
+	// having become a hub owner — StartControlMode's refcounting is shared
+	// by both paths, so it succeeding here says nothing about which
+	// ownership model won.
+	hub, err := HubRegistry.GetOrCreate(tmuxSessionName, instance)
+	if err != nil {
+		log.Info("[streamViaHub] ownership resolved to legacy path concurrently, joining it instead of creating a competing hub",
+			"session", sessionID, "tmux", tmuxSessionName, "err", err)
+		if fallbackErr := h.streamViaControlMode(stream, instance); fallbackErr != nil {
+			// design/ux.md Surface 2: only signal a hub-start failure to the
+			// client when the hub-owned path AND its legacy fallback both
+			// failed — i.e. this connection has no working stream at all.
+			// The far more common case above (GetOrCreate loses the
+			// ownership race, falls back, and the fallback succeeds) must
+			// stay silent: sending an error frame there would be a false
+			// alarm on a connection the user experiences as working fine
+			// (research/ux.md §4b: don't announce a non-event). Best-effort,
+			// mirroring session_service.go's existing "send error back to
+			// client" TerminalData_Error convention (its WRITE_ERROR/
+			// RESIZE_ERROR call sites) — the caller's returned fallbackErr
+			// still closes the stream via sendEndStreamError regardless.
+			errMsg := &sessionv1.TerminalData{
+				SessionId: sessionID,
+				Data: &sessionv1.TerminalData_Error{
+					Error: &sessionv1.TerminalError{
+						Message: fmt.Sprintf("hub start failed (%v) and legacy fallback also failed: %v", err, fallbackErr),
+						Code:    HubStartFailedErrorCode,
+					},
+				},
+			}
+			if b, marshalErr := proto.Marshal(errMsg); marshalErr != nil {
+				log.Error("[streamViaHub] failed to marshal hub-start-failed error", "session", sessionID, "err", marshalErr)
+			} else if wsErr := stream.WriteMessage(websocket.BinaryMessage, protocol.CreateEnvelope(0, b)); wsErr != nil {
+				log.Warn("[streamViaHub] failed to send hub-start-failed error", "session", sessionID, "err", wsErr)
+			}
+			return fallbackErr
+		}
+		return nil
+	}
+
+	transport := NewWebSocketTransport(stream)
+	// StreamHub.AttachSubscriber now sends a CatchUpSnapshot to every
+	// Transport within the same call (Story 1.2.1's AC). Suppress that one
+	// send for the browser path specifically: it is a raw, unprepared
+	// []byte(content) write that this transport's Send would forward
+	// verbatim to the WebSocket, whereas the browser client needs the
+	// ANSI-sanitized, cursor-synced, proto-enveloped version this handler
+	// sends explicitly just below (fullContent/initMsg) — StreamHub has no
+	// notion of that framing. See WebSocketTransport.SuppressNextSend's doc
+	// comment for why suppressing exactly one Send call here is safe.
+	transport.SuppressNextSend()
+	subscriberID := hub.AttachSubscriber(transport, streamhub.SubscriberCapability{
+		CanResize: true,
+		CanWrite:  instance.Permissions.CanSendCommand,
+	})
+	transport.BindSubscriber(hub, subscriberID)
+	defer hub.DetachSubscriber(subscriberID)
+
+	log.Info("[streamViaHub] attached subscriber", "subscriber_id", string(subscriberID), "session", sessionID, "tmux", tmuxSessionName)
+
+	if currentPaneReq.TargetCols != nil && currentPaneReq.TargetRows != nil {
+		if size, sizeErr := streamhub.NewTerminalSize(int(*currentPaneReq.TargetCols), int(*currentPaneReq.TargetRows)); sizeErr != nil {
+			log.Warn("[streamViaHub] invalid handshake dimensions", "err", sizeErr)
+		} else {
+			hub.RequestResize(subscriberID, size)
+		}
+	} else {
+		log.Warn("[streamViaHub] handshake missing dimensions, layout may be incorrect")
+	}
+
+	// Send an immediate initial snapshot so the client isn't left blank while
+	// attached. StreamHub.AttachSubscriber above now also sends a
+	// CatchUpSnapshot within its own call (Story 1.2.1's AC) — that send was
+	// suppressed for this transport (transport.SuppressNextSend() above)
+	// specifically because it can't replicate the ANSI-sanitization,
+	// cursor-sync, and proto-envelope framing this handler applies here,
+	// which the browser client depends on. Capturing directly here keeps
+	// this connection's initial paint correct; every other Transport (e.g.
+	// MuxTransport) now relies on the hub's own send instead.
+	if content, err := instance.CapturePaneContent(); err == nil && content != "" {
+		fullContent := withCursorSync(ansiSnapshotPrefix+prepareSnapshotContent(content), instance)
+		initMsg := &sessionv1.TerminalData{
+			SessionId: sessionID,
+			Data: &sessionv1.TerminalData_Output{
+				Output: &sessionv1.TerminalOutput{Data: []byte(fullContent)},
+			},
+		}
+		if b, merr := proto.Marshal(initMsg); merr != nil {
+			log.Error("[streamViaHub] failed to marshal initial content", "err", merr)
+		} else if wsErr := stream.WriteMessage(websocket.BinaryMessage, protocol.CreateEnvelope(0, b)); wsErr != nil {
+			return fmt.Errorf("failed to send initial content: %w", wsErr)
+		}
+	}
+
+	doneChan := make(chan struct{})
+	errChan := make(chan error, 1)
+	var resizeSettling atomic.Bool
+
+	// Epic 4.2, Story 4.2.1: push hub.SubscriberCount() to this connection
+	// whenever it changes, so the frontend's ConnectionCountIndicator (Story
+	// 4.2.2) can mount/unmount without depending on real terminal output
+	// arriving (an idle session would otherwise never learn its peer count
+	// changed). This is deliberately a side-channel poll rather than
+	// stamping connection_count onto every hub-broadcast frame: the hub's
+	// raw-output fan-out (StreamHub.Broadcast -> Transport.Send) passes
+	// unmarshaled tmux bytes shared verbatim across all subscribers
+	// (session/streamhub/hub.go's onBatchFlush / WebSocketTransport.Send),
+	// so per-subscriber proto framing lives outside streamhub's and
+	// WebSocketTransport's current scope — out of bounds for this UI-only
+	// epic. Stops the moment this connection's read loop below returns.
+	stopConnCountUpdates := make(chan struct{})
+	defer close(stopConnCountUpdates)
+	go sendConnectionCountUpdates(stream, hub, sessionID, stopConnCountUpdates)
+
+	// runInputReadLoop blocks this goroutine until the WebSocket read errors
+	// or an EndStream flag arrives — there is no separate output-forwarding
+	// goroutine to race here (unlike streamViaControlMode) because the hub's
+	// own per-subscriber writer goroutine (session/streamhub/subscriber.go)
+	// already owns delivering output to this connection via transport.Send.
+	runInputReadLoop(stream, doneChan, errChan, sessionID, func(data []byte) {
+		if !instance.Permissions.CanSendCommand {
+			log.Warn("[streamViaHub] send permission denied", "session", sessionID)
+			return
+		}
+		instance.UpdateTerminalTimestamps(string(data), true)
+		instance.MarkUserResponded()
+
+		sendCtx, sendCancel := context.WithTimeout(context.Background(), 2*time.Second)
+		sendErr := instance.SendInputViaControlMode(sendCtx, data)
+		sendCancel()
+		if sendErr != nil {
+			log.Warn("[streamViaHub] CM input failed, retrying via subprocess", "session", tmuxSessionName, "err", sendErr)
+			if fbErr := sendInputToTmux(snap.TmuxServerSocket, tmuxSessionName, data); fbErr != nil {
+				log.Error("[streamViaHub] subprocess fallback also failed", "session", tmuxSessionName, "err", fbErr)
+			}
+		}
+	}, func(cols, rows int) {
+		size, sizeErr := streamhub.NewTerminalSize(cols, rows)
+		if sizeErr != nil {
+			log.Warn("[streamViaHub] invalid resize request", "cols", cols, "rows", rows, "err", sizeErr)
+			return
+		}
+		hub.RequestResize(subscriberID, size)
+	}, func(startLine, endLine string) (string, error) {
+		return instance.GetScrollbackHistory(startLine, endLine)
+	}, func(req *sessionv1.CurrentPaneRequest) (*sessionv1.TerminalOutput, error) {
+		return handleCurrentPaneRequest(sessionID, instance, req, currentResyncOptions())
+	}, &resizeSettling)
+
+	select {
+	case err := <-errChan:
+		return err
+	default:
 		return nil
 	}
 }
@@ -2560,7 +3038,7 @@ func sendInputToTmux(serverSocket, tmuxSessionName string, data []byte) error {
 
 	gateCtx, gateCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer gateCancel()
-	err := runTmuxGatedErr(gateCtx, serverSocket, func() error {
+	err := runTmuxInputGatedErr(gateCtx, serverSocket, func() error {
 		// Use a fresh context for the command itself, not gateCtx. Gate
 		// acquisition can consume most of gateCtx's budget under contention,
 		// leaving the exec below racing an already-expiring deadline: if
@@ -2606,13 +3084,29 @@ func sendInputToTmuxWithRetry(serverSocket, tmuxSessionName string, data []byte)
 }
 
 // runTmuxGatedErr acquires a tmux exec-gate slot for serverSocket (bounded by
-// ctx), runs fn, then releases the slot. These 3 call sites are the only
-// direct tmux subprocess spawns in this file that don't already route through
-// a gated TmuxSession method (see session/tmux's runGated, which this mirrors).
+// ctx), runs fn, then releases the slot. Used for resize-window/resize-pane
+// calls against external (unmanaged) sessions — see session/tmux's runGated,
+// which this mirrors, for the primary call-site pattern.
 func runTmuxGatedErr(ctx context.Context, serverSocket string, fn func() error) error {
 	release, err := tmux.AcquireExecSlot(ctx, serverSocket)
 	if err != nil {
 		return fmt.Errorf("exec gate: %w", err)
+	}
+	defer release()
+	return fn()
+}
+
+// runTmuxInputGatedErr acquires a tmux input-fast-lane exec-gate slot for
+// serverSocket (bounded by ctx), runs fn, then releases the slot. Used
+// specifically for keystroke input traffic (the legacy per-keystroke
+// send-keys path, sendInputToTmux): it draws from tmux.AcquireInputExecSlot's
+// pool, separate from the shared default pool runTmuxGatedErr uses, so user
+// input never queues behind a background poller's capture-pane calls on the
+// same tmux server.
+func runTmuxInputGatedErr(ctx context.Context, serverSocket string, fn func() error) error {
+	release, err := tmux.AcquireInputExecSlot(ctx, serverSocket)
+	if err != nil {
+		return fmt.Errorf("input exec gate: %w", err)
 	}
 	defer release()
 	return fn()

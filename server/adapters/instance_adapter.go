@@ -72,6 +72,8 @@ func InstanceToProto(inst *session.Instance, workflowNames map[string]string) *s
 		LastPrStatusCheck:     timestamppb.New(inst.LastPRStatusCheck),
 		WorkspaceKey:          inst.WorkspaceKey(),
 		LaunchCommand:         inst.LaunchCommand,
+		// Restart-from-session lineage (Story 2.3.1)
+		RestartedFromSessionId: snap.RestartedFromSessionID,
 	}
 
 	// Convert artifact data if available
@@ -120,6 +122,9 @@ func InstanceToProto(inst *session.Instance, workflowNames map[string]string) *s
 
 	// History file linkage — path to the Claude JSONL conversation file.
 	protoSession.HistoryFilePath = snap.HistoryFilePath
+
+	// Outcome of the most recent start/cold-restore decision.
+	protoSession.ReviveOutcome = reviveOutcomeToProto(snap.LastReviveOutcome)
 
 	// Creation progress message — only meaningful during Creating state.
 	if inst.IsCreating() {
@@ -196,6 +201,14 @@ func InstanceToProto(inst *session.Instance, workflowNames map[string]string) *s
 	}
 	if snap.ArchivedAt != nil {
 		protoSession.ArchivedAt = timestamppb.New(*snap.ArchivedAt)
+	}
+
+	// remote_name (field 76): host badge for a remote session (ssh-remote-workspaces
+	// Epic 6.2). Derived live from ExecutionTarget rather than a persisted field --
+	// see the proto field's doc comment for why (ExecutionTarget is `json:"-"`, not
+	// reconstructed across a restart). Empty (the zero value) for a LocalTarget.
+	if remoteTarget, ok := inst.GetExecutionTarget().(session.RemoteExecutionTarget); ok {
+		protoSession.RemoteName = remoteTarget.Target().Name
 	}
 
 	// Session goal summary — populated when a goal has been set via set_session_goal MCP tool.
@@ -366,6 +379,22 @@ func sessionTypeToProto(sessionType session.SessionType) sessionv1.SessionType {
 		return sessionv1.SessionType_SESSION_TYPE_EXISTING_WORKTREE
 	default:
 		return sessionv1.SessionType_SESSION_TYPE_UNSPECIFIED
+	}
+}
+
+// reviveOutcomeToProto converts session.ReviveOutcome to the proto ReviveOutcome enum.
+func reviveOutcomeToProto(outcome session.ReviveOutcome) sessionv1.ReviveOutcome {
+	switch outcome {
+	case session.ReviveOutcomeResumeLive:
+		return sessionv1.ReviveOutcome_REVIVE_OUTCOME_RESUME_LIVE
+	case session.ReviveOutcomeResumeRecovered:
+		return sessionv1.ReviveOutcome_REVIVE_OUTCOME_RESUME_RECOVERED
+	case session.ReviveOutcomeFreshExpected:
+		return sessionv1.ReviveOutcome_REVIVE_OUTCOME_FRESH_EXPECTED
+	case session.ReviveOutcomeFreshLostHistory:
+		return sessionv1.ReviveOutcome_REVIVE_OUTCOME_FRESH_LOST_HISTORY
+	default:
+		return sessionv1.ReviveOutcome_REVIVE_OUTCOME_UNSPECIFIED
 	}
 }
 

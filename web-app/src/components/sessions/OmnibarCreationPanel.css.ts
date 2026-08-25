@@ -188,3 +188,10 @@ export const createRepoNoticeBlocked = style({
 export const createRepoNoticeIconError = style({
   background: vars.color.error,
 });
+
+// ─── "Remote host" selector (ADR-001: remote-as-orthogonal-flag) ─────────────
+
+export const remoteIcon = style({
+  marginRight: vars.space[1],
+  fontSize: vars.fontSize.sm,
+});

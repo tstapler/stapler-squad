@@ -164,7 +164,11 @@ type Scanner struct {
 	triggerCh  chan struct{}  // signals coordinator to run a full scan now
 	scanDoneCh chan time.Time // emits timestamp after each full scan completes
 
-	tickInterval time.Duration // default 30s, overridable in tests
+	tickInterval time.Duration // default 5 minutes, overridable in tests
+
+	// maintenanceTickInterval paces Start's repo-cache-prune + scan-cache-persist
+	// goroutine. Default 1 minute, overridable in tests via SetMaintenanceTickInterval.
+	maintenanceTickInterval time.Duration
 
 	// sessionRepos tracks repos discovered via auto-spider (session paths),
 	// keyed by session UUID — not Title — so a later EventSessionDeleted
@@ -187,6 +191,13 @@ type Scanner struct {
 	// skipped repo, so the warning itself can't contribute to log-driven
 	// allocation pressure during a real incident.
 	severePressureWarned atomic.Bool
+
+	// cacheDirty is set whenever a worktree's cache entry changes (see
+	// setCache) and cleared by persistCacheToDisk. Lets the periodic persist
+	// tick skip the write entirely when nothing has changed since the last
+	// one, instead of unconditionally re-marshaling and rewriting the whole
+	// state file every minute forever.
+	cacheDirty atomic.Bool
 
 	mu deadlock.RWMutex
 }
@@ -215,16 +226,25 @@ func NewScannerWithReader(eventBus *pkgevents.EventBus, stateStore *StateStore, 
 		// this ticker is a backstop for anything fsnotify misses (e.g. a
 		// worktree mtime change with no .git write), so it no longer needs
 		// to run every 30s. Tests override via SetTickInterval.
-		tickInterval: 5 * time.Minute,
+		tickInterval:            5 * time.Minute,
+		maintenanceTickInterval: 1 * time.Minute,
 	}
 	s.autoSpiderEnabled.Store(true)
 	return s
 }
 
-// SetTickInterval overrides the default 30-second scan tick (for tests).
+// SetTickInterval overrides the default 5-minute scan tick (for tests).
 func (s *Scanner) SetTickInterval(d time.Duration) {
 	s.mu.Lock()
 	s.tickInterval = d
+	s.mu.Unlock()
+}
+
+// SetMaintenanceTickInterval overrides the default 1-minute repo-cache-prune
+// and scan-cache-persist tick (for tests).
+func (s *Scanner) SetMaintenanceTickInterval(d time.Duration) {
+	s.mu.Lock()
+	s.maintenanceTickInterval = d
 	s.mu.Unlock()
 }
 
@@ -237,6 +257,8 @@ func (s *Scanner) ScanDone() <-chan time.Time {
 // available) the fsnotify watch loop that makes scanning event-driven rather
 // than purely tick-driven. All goroutines exit cleanly when ctx is cancelled.
 func (s *Scanner) Start(ctx context.Context) {
+	s.hydrateCacheFromDisk()
+
 	const numWorkers = 4
 	for i := 0; i < numWorkers; i++ {
 		go s.worker(ctx)
@@ -254,23 +276,30 @@ func (s *Scanner) Start(ctx context.Context) {
 		go s.fsnotifyLoop(ctx)
 	}
 
-	if r, ok := s.reader.(*GoGitVCSReader); ok {
-		// Proactive, budget-respecting prune: runs far more often than the
-		// old 5-minute full ClearCache (every 1 minute, since a budget-based
-		// prune is cheap — no full teardown, just eviction of cold/over-budget
-		// entries) so cache pressure never has a chance to build up between
-		// polls. Under SEVERE pressure this escalates to the old full
-		// ClearCache as an emergency valve — evicting hot repos too, but only
-		// when the gentler path alone isn't enough; this should be rare, and
-		// firing often is itself a signal something else is wrong.
-		go func() {
-			tick := time.NewTicker(1 * time.Minute)
-			defer tick.Stop()
-			for {
-				select {
-				case <-ctx.Done():
-					return
-				case <-tick.C:
+	// Runs unconditionally (not gated on reader type) so cache persistence
+	// works with any VCSReader; the repo-cache pruning below only applies
+	// when the reader is the real GoGitVCSReader.
+	go func() {
+		s.mu.RLock()
+		maintenanceInterval := s.maintenanceTickInterval
+		s.mu.RUnlock()
+		tick := time.NewTicker(maintenanceInterval)
+		defer tick.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				s.persistCacheToDisk() // final flush so a clean shutdown doesn't lose the last <=1m of scans
+				return
+			case <-tick.C:
+				if r, ok := s.reader.(*GoGitVCSReader); ok {
+					// Proactive, budget-respecting prune: runs far more often than the
+					// old 5-minute full ClearCache (every 1 minute, since a budget-based
+					// prune is cheap — no full teardown, just eviction of cold/over-budget
+					// entries) so cache pressure never has a chance to build up between
+					// polls. Under SEVERE pressure this escalates to the old full
+					// ClearCache as an emergency valve — evicting hot repos too, but only
+					// when the gentler path alone isn't enough; this should be rare, and
+					// firing often is itself a signal something else is wrong.
 					if r.UnderSeverePressure() {
 						log.Warn("severe memory pressure — clearing entire repo cache as an emergency valve")
 						r.ClearCache()
@@ -286,8 +315,101 @@ func (s *Scanner) Start(ctx context.Context) {
 					// than duplicating pressure-tier logic here.
 					r.gogitstoreRegistry().Prune()
 				}
+				s.persistCacheToDisk()
 			}
-		}()
+		}
+	}()
+}
+
+// hydrateCacheFromDisk primes the in-memory worktreeCache from the state
+// store's last persisted snapshot so a restart doesn't force recomputing
+// every worktree cold. An entry is restored only within its own TTL, the
+// same freshness bound a live entry is held to via worktreeCache.Get.
+func (s *Scanner) hydrateCacheFromDisk() {
+	if s.stateStore == nil {
+		return
+	}
+	entries := s.stateStore.LoadScanCache()
+	if len(entries) == 0 {
+		return
+	}
+
+	s.mu.RLock()
+	ttl := s.tickInterval
+	s.mu.RUnlock()
+
+	restored := 0
+	for _, e := range entries {
+		if time.Since(e.ScanTime) >= ttl {
+			continue // stale — the coordinator's first tick will recompute it
+		}
+		c := &worktreeCache{ttl: ttl}
+		c.restore(e.Result, e.ScanTime)
+		s.cacheStore.Store(e.Result.WorktreePath, c)
+		restored++
+	}
+	if restored > 0 {
+		log.Info("unfinished scanner: restored scan cache from disk", "entries", restored)
+	}
+}
+
+// persistCacheToDisk snapshots every live worktree cache entry to the state
+// store in one batched write, called periodically (see Start) rather than
+// after every individual scanWorktree call. Two things keep this from
+// becoming its own CPU/I/O hotspot as tracked worktrees accumulate over a
+// long-running process:
+//
+//   - Entries for worktrees no longer on disk are evicted from cacheStore
+//     here (nothing else does — a worktree can disappear via any cleanup
+//     path, not just RemoveRepo), so the set of persisted entries can't grow
+//     without bound across session churn.
+//   - The write itself is skipped when cacheDirty is false, i.e. nothing
+//     changed since the last persist -- an idle scanner doesn't re-marshal
+//     and rewrite the whole state file every minute forever.
+func (s *Scanner) persistCacheToDisk() {
+	if s.stateStore == nil {
+		return
+	}
+
+	// Clear the flag before reading the cache, not after: a setCache/eviction
+	// that races with the Range below re-arms the flag for the *next* tick,
+	// so a write landing after we've already read its (now stale) value here
+	// is never permanently lost -- only deferred one cycle. Clearing after
+	// Range would instead let that race silently drop the update, since the
+	// flag it set could get wiped by this call's own clear.
+	wasDirty := s.cacheDirty.Swap(false)
+
+	var entries []scanCacheEntry
+	var evicted int
+	s.cacheStore.Range(func(k, v any) bool {
+		path, _ := k.(string)
+		if _, err := os.Stat(path); os.IsNotExist(err) {
+			s.cacheStore.Delete(k)
+			evicted++
+			return true
+		}
+		c, ok := v.(*worktreeCache)
+		if !ok {
+			return true
+		}
+		result, scanTime, hasValue := c.snapshot()
+		if !hasValue {
+			return true
+		}
+		entries = append(entries, scanCacheEntry{Result: result, ScanTime: scanTime})
+		return true
+	})
+	if evicted > 0 {
+		wasDirty = true
+		log.Info("unfinished scanner: evicted scan cache entries for missing worktrees", "count", evicted)
+	}
+
+	if !wasDirty {
+		return
+	}
+	if err := s.stateStore.SaveScanCache(entries); err != nil {
+		log.Warn("unfinished scanner: failed to persist scan cache", "err", err)
+		s.cacheDirty.Store(true) // retry on the next tick
 	}
 }
 
@@ -581,12 +703,12 @@ func (s *Scanner) scanWorktree(wt WorktreeInfo, defaultBranch, repoPath string, 
 			result.Status = ScanResultStatusTimeout
 			result.ErrorMsg = fmt.Sprintf("HasUncommitted timed out for %s", wt.Path)
 			s.recordTimeout(repoPath)
-			cache.Set(result)
+			s.setCache(cache, result)
 			return result
 		}
 		result.Status = ScanResultStatusError
 		result.ErrorMsg = err.Error()
-		cache.Set(result)
+		s.setCache(cache, result)
 		return result
 	}
 	result.HasUncommitted = uncommitted
@@ -612,8 +734,16 @@ func (s *Scanner) scanWorktree(wt WorktreeInfo, defaultBranch, repoPath string, 
 	}
 
 	result.Status = ScanResultStatusOK
-	cache.Set(result)
+	s.setCache(cache, result)
 	return result
+}
+
+// setCache stores result in cache and marks the persisted scan cache dirty,
+// so the next periodic persistCacheToDisk tick knows there's something new
+// to write instead of redundantly rewriting an unchanged state file.
+func (s *Scanner) setCache(cache *worktreeCache, result ScanResult) {
+	cache.Set(result)
+	s.cacheDirty.Store(true)
 }
 
 // parseDiffShortstat parses "3 files changed, 142 insertions(+), 28 deletions(-)" into a DiffStat.
@@ -927,9 +1057,16 @@ func findGitRepoRootSimple(path string) string {
 	}
 }
 
-// getOrCreateCache returns the worktreeCache for a given path, creating if absent.
+// getOrCreateCache returns the worktreeCache for a given path, creating if
+// absent. TTL tracks s.tickInterval rather than a fixed duration: fsnotify
+// already invalidates an entry the moment a real .git change lands (see
+// fsnotifyLoop), so a shorter TTL only forces the backstop tick to redo a
+// full HasUncommitted() walk on every worktree, every tick, for nothing.
 func (s *Scanner) getOrCreateCache(worktreePath string) *worktreeCache {
-	v, _ := s.cacheStore.LoadOrStore(worktreePath, &worktreeCache{ttl: 30 * time.Second})
+	s.mu.RLock()
+	ttl := s.tickInterval
+	s.mu.RUnlock()
+	v, _ := s.cacheStore.LoadOrStore(worktreePath, &worktreeCache{ttl: ttl})
 	c, _ := v.(*worktreeCache)
 	return c
 }

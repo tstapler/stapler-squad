@@ -861,6 +861,106 @@ func TestOneOffBaseDir_JSONRoundTrip(t *testing.T) {
 	assert.NotContains(t, string(emptyRaw), `"one_off_base_dir"`)
 }
 
+// ─── RemoteConfig tests (ssh-remote-workspaces Phase 3, Epic 3.1) ────────────
+
+// TestRemoteConfigRoundTrip covers plan.md Story 3.1.1's acceptance criterion:
+// a RemoteConfig saved via config.Save round-trips through config.json with
+// its exact field values intact.
+func TestRemoteConfigRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+
+	cfg := &Config{
+		Remotes: []RemoteConfig{
+			{
+				Name:        "prod-box",
+				Host:        "prod.example.com",
+				User:        "tyler",
+				BasePath:    "/srv/workspaces",
+				IdentityRef: "ssh-key:prod-box",
+			},
+		},
+	}
+	require.NoError(t, saveConfig(cfg, path))
+
+	loaded, err := LoadConfigFromPath(path)
+	require.NoError(t, err)
+	require.Len(t, loaded.Remotes, 1)
+	assert.Equal(t, "prod-box", loaded.Remotes[0].Name)
+	assert.Equal(t, "prod.example.com", loaded.Remotes[0].Host)
+	assert.Equal(t, "tyler", loaded.Remotes[0].User)
+	assert.Equal(t, "/srv/workspaces", loaded.Remotes[0].BasePath)
+	assert.Equal(t, "ssh-key:prod-box", loaded.Remotes[0].IdentityRef)
+
+	// omitempty: no configured remotes omits the "remotes" key entirely.
+	emptyCfg := &Config{}
+	emptyPath := filepath.Join(dir, "empty-config.json")
+	require.NoError(t, saveConfig(emptyCfg, emptyPath))
+	emptyRaw, err := os.ReadFile(emptyPath)
+	require.NoError(t, err)
+	assert.NotContains(t, string(emptyRaw), `"remotes"`)
+}
+
+// TestRemoteConfig_SavedJSONContainsNoPlaintextSecret pins plan.md Story
+// 3.1.1's "no secret material in config.json" acceptance criterion: a saved
+// RemoteConfig's raw JSON never contains a PEM-shaped value or a
+// private-key/passphrase field, because RemoteConfig has no such field —
+// IdentityRef is only an opaque pointer resolved against the OS keychain
+// (sshremote.KeyStore, Epic 3.2), never the key material itself.
+func TestRemoteConfig_SavedJSONContainsNoPlaintextSecret(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+
+	cfg := &Config{
+		Remotes: []RemoteConfig{
+			{
+				Name:        "prod-box",
+				Host:        "prod.example.com",
+				User:        "tyler",
+				BasePath:    "/srv/workspaces",
+				IdentityRef: "ssh-key:prod-box",
+			},
+		},
+	}
+	require.NoError(t, saveConfig(cfg, path))
+
+	raw, err := os.ReadFile(path)
+	require.NoError(t, err)
+	rawJSON := string(raw)
+
+	assert.False(t, strings.Contains(rawJSON, "BEGIN"), "config.json must not contain PEM-shaped content")
+	assert.NotContains(t, rawJSON, "private_key")
+	assert.NotContains(t, rawJSON, "passphrase")
+
+	// Sanity: the remote's non-secret fields are actually present, so this
+	// test isn't vacuously passing against an empty/failed save.
+	assert.Contains(t, rawJSON, `"remotes"`)
+	assert.Contains(t, rawJSON, "prod-box")
+}
+
+// TestConfig_RemoteByName covers the lookup helper consumed by session
+// creation (Phase 4) and Settings UI validation (Phase 6).
+func TestConfig_RemoteByName(t *testing.T) {
+	cfg := &Config{
+		Remotes: []RemoteConfig{
+			{Name: "prod-box", Host: "prod.example.com", User: "tyler", BasePath: "/srv/workspaces", IdentityRef: "ssh-key:prod-box"},
+			{Name: "staging-box", Host: "staging.example.com", User: "tyler", BasePath: "/srv/workspaces", IdentityRef: "ssh-key:staging-box"},
+		},
+	}
+
+	found, ok := cfg.RemoteByName("staging-box")
+	require.True(t, ok)
+	require.NotNil(t, found)
+	assert.Equal(t, "staging.example.com", found.Host)
+
+	_, ok = cfg.RemoteByName("does-not-exist")
+	assert.False(t, ok)
+
+	var nilCfg *Config
+	_, ok = nilCfg.RemoteByName("prod-box")
+	assert.False(t, ok, "RemoteByName must be nil-safe")
+}
+
 // ─── Escape analytics config tests ───────────────────────────────────────────
 
 // TestEscapeAnalyticsDefaults verifies that zero-value configs get the correct defaults
@@ -1206,4 +1306,52 @@ func TestSlackWebhookURLOverride_ReturnsEmptyString_When_EnvVarUnset(t *testing.
 	cfg, err := LoadConfigFromPath(path)
 	require.NoError(t, err)
 	assert.Equal(t, "", cfg.SlackWebhookURLOverride())
+}
+
+// ─── HandoffSummaryConfig ───────────────────────────────────────────────────
+
+// TestHandoffSummaryConfigOrDefault_AppliesDefaultToZeroBudget verifies a
+// zero-value HandoffSummaryConfig (nil Enabled, unset budget) resolves to the
+// enabled-by-default, 12000-token-budget state.
+func TestHandoffSummaryConfigOrDefault_AppliesDefaultToZeroBudget(t *testing.T) {
+	cfg := HandoffSummaryConfig{}
+
+	out := cfg.HandoffSummaryConfigOrDefault()
+
+	assert.True(t, out.EnabledOrDefault())
+	assert.Equal(t, 12000, out.MaxMiddleExcerptTokens)
+}
+
+// TestLoadConfig_HandoffSummaryExplicitlyDisabled_StaysDisabled verifies the
+// gotcha this feature is prone to: an explicit "enabled": false in config.json
+// must survive LoadConfigFromPath unchanged, not get silently re-defaulted to
+// enabled.
+func TestLoadConfig_HandoffSummaryExplicitlyDisabled_StaysDisabled(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	content := `{"handoff_summary": {"enabled": false}}`
+	require.NoError(t, os.WriteFile(path, []byte(content), 0600))
+
+	cfg, err := LoadConfigFromPath(path)
+	require.NoError(t, err)
+	assert.False(t, cfg.HandoffSummary.EnabledOrDefault())
+	assert.Equal(t, 12000, cfg.HandoffSummary.MaxMiddleExcerptTokens)
+}
+
+// TestLoadConfig_HandoffSummaryAbsentFromExistingConfig_DefaultsToEnabled
+// covers the actual real-world upgrade path: a config.json that predates this
+// feature (no "handoff_summary" key at all, unlike the empty-file/fresh-config
+// path DefaultConfig() takes) must still resolve to enabled — this is exactly
+// the case a plain `bool` field (indistinguishable zero-value from "absent")
+// would get wrong, which is why Enabled is *bool.
+func TestLoadConfig_HandoffSummaryAbsentFromExistingConfig_DefaultsToEnabled(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	content := `{"some_other_field_from_before_this_feature_existed": true}`
+	require.NoError(t, os.WriteFile(path, []byte(content), 0600))
+
+	cfg, err := LoadConfigFromPath(path)
+	require.NoError(t, err)
+	assert.True(t, cfg.HandoffSummary.EnabledOrDefault())
+	assert.Equal(t, 12000, cfg.HandoffSummary.MaxMiddleExcerptTokens)
 }

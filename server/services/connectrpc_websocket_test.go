@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -18,8 +20,12 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/protocol"
+	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/streamhub"
+	"github.com/tstapler/stapler-squad/session/tmux"
 
 	"github.com/gorilla/websocket"
+	"github.com/puzpuzpuz/xsync/v4"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
 )
@@ -471,6 +477,565 @@ func TestRecordControlModeStreamStart_should_LeaveEntryRegistered_When_OlderGene
 	if cur.generation != genNew {
 		t.Errorf("activeControlModeStreams entry generation = %d, want %d (the newer, still-active generation); got the older one (%d) instead", cur.generation, genNew, genOld)
 	}
+}
+
+// TestRecordControlModeStreamStart_should_LogOverlapWarning_When_TwoInvocationsOverlapForSameSession
+// is Story 3.2.1's other open gap named in this project's plan.md: the
+// "420584566" WARN log at recordControlModeStreamStart's overlap-detection
+// branch (connectrpc_websocket.go, "[streamViaControlMode] overlapping
+// control-mode stream detected for tmux session") is exercised by the two
+// TestRecordControlModeStreamStart_* tests above only for its generation
+// counter bookkeeping — neither asserts the WARN log line itself actually
+// fires. This test drives the same two-overlapping-invocations scenario
+// (recordControlModeStreamStart called for a second generation before the
+// first generation's done() has run — the exact sequence streamViaControlMode
+// produces when a reconnect races a still-in-flight prior connection for one
+// tmux session) and asserts the WARN is present, naming both generations, so
+// a future refactor that accidentally silences it is caught by a test
+// instead of only by an operator noticing missing logs during an incident.
+//
+// Not run with t.Parallel(): captureLogs swaps the process-global slog
+// default logger for the duration of the test, which would race against any
+// other t.Parallel() test emitting logs concurrently in this package.
+func TestRecordControlModeStreamStart_should_LogOverlapWarning_When_TwoInvocationsOverlapForSameSession(t *testing.T) {
+	buf := captureLogs(t)
+	h := NewConnectRPCWebSocketHandler(nil, nil, nil)
+	const sessionID = "sess-overlap"
+	const tmuxName = "staplersquad_sess-overlap"
+
+	genOld, doneOld := h.recordControlModeStreamStart(sessionID, tmuxName)
+	defer doneOld()
+
+	// genOld's done() has deliberately not run yet -- this second call is
+	// the overlapping invocation the WARN exists to catch.
+	genNew, doneNew := h.recordControlModeStreamStart(sessionID, tmuxName)
+	defer doneNew()
+
+	logs := buf.String()
+	if !strings.Contains(logs, "overlapping control-mode stream detected") {
+		t.Fatalf("expected the overlap WARN log line, got logs:\n%s", logs)
+	}
+	if !strings.Contains(logs, fmt.Sprintf("prior_generation=%d", genOld)) {
+		t.Errorf("expected the WARN to name the prior generation (%d), got logs:\n%s", genOld, logs)
+	}
+	if !strings.Contains(logs, fmt.Sprintf("new_generation=%d", genNew)) {
+		t.Errorf("expected the WARN to name the new generation (%d), got logs:\n%s", genNew, logs)
+	}
+	if !strings.Contains(logs, "level=WARN") {
+		t.Errorf("expected the log line to be at WARN level, got logs:\n%s", logs)
+	}
+}
+
+// --- HubRegistry / PathHubOwned routing (Epic 2.2) ---
+
+// TestUseStreamHub_should_DefaultToFalse_When_EnvVarUnset is the safety-net
+// regression test for this epic's core requirement: with
+// STAPLER_SQUAD_USE_STREAM_HUB unset (today's default, unchanged by this
+// change), streamTerminal must keep routing to the legacy
+// PathLegacyPerConnection branch.
+func TestUseStreamHub_should_DefaultToFalse_When_EnvVarUnset(t *testing.T) {
+	t.Setenv("STAPLER_SQUAD_USE_STREAM_HUB", "")
+	require.False(t, useStreamHub())
+}
+
+// TestUseStreamHub_should_ReturnTrue_When_EnvVarIsExactlyTrue verifies the
+// flag only turns PathHubOwned on for the literal value "true" — any other
+// value (including a typo like "1" or "True") stays on the legacy path
+// rather than failing open. Requires a recorded rollback rehearsal (Story
+// 3.3.2) since useStreamHub()'s gate refuses to enable the global default
+// otherwise (Story 3.3.1's Task 3.3.1d).
+func TestUseStreamHub_should_ReturnTrue_When_EnvVarIsExactlyTrue(t *testing.T) {
+	recordRollbackRehearsalCompletedForTest(t)
+
+	t.Setenv("STAPLER_SQUAD_USE_STREAM_HUB", "true")
+	require.True(t, useStreamHub())
+
+	t.Setenv("STAPLER_SQUAD_USE_STREAM_HUB", "1")
+	require.False(t, useStreamHub())
+}
+
+// recordRollbackRehearsalCompletedForTest records a passing rollback
+// rehearsal (Story 3.3.2's Task 3.3.2c) so a test's useStreamHub() call can
+// resolve the global default to true, and restores
+// RollbackRehearsalCompletedAt to nil via t.Cleanup so this doesn't leak
+// into other tests in the same package binary run.
+func recordRollbackRehearsalCompletedForTest(t *testing.T) {
+	t.Helper()
+	require.NoError(t, config.LoadConfig().RecordRollbackRehearsalCompleted())
+	t.Cleanup(func() {
+		cfg := config.LoadConfig()
+		cfg.RollbackRehearsalCompletedAt = nil
+		_ = config.SaveConfig(cfg)
+	})
+}
+
+// TestUseStreamHub_should_ReturnFalse_When_RehearsalNotCompleted is Story
+// 3.3.1/3.3.2's integration-level regression test (pre-mortem P1 #4): even
+// with STAPLER_SQUAD_USE_STREAM_HUB="true" set, useStreamHub() must return
+// false — safely, not by panicking or crashing the connection — when no
+// rollback rehearsal has been recorded.
+func TestUseStreamHub_should_ReturnFalse_When_RehearsalNotCompleted(t *testing.T) {
+	cfg := config.LoadConfig()
+	cfg.RollbackRehearsalCompletedAt = nil
+	require.NoError(t, config.SaveConfig(cfg))
+
+	t.Setenv("STAPLER_SQUAD_USE_STREAM_HUB", "true")
+	require.False(t, useStreamHub(), "expected the global default to stay false without a recorded rollback rehearsal")
+}
+
+// TestHubRegistry_should_CreateExactlyOneHub_When_GetOrCreateCalledConcurrently
+// is REQ-1's core wiring assertion from validation.md, scoped to
+// HubRegistry.GetOrCreate itself (the unit Story 2.2.2's task list actually
+// specifies — see Task 2.2.2b): concurrent callers for the same tmux session
+// name must all observe the same *streamhub.StreamHub instance, and the
+// controller passed by a losing caller must never be consulted (only the
+// winning LoadOrCompute call's controller matters).
+func TestHubRegistry_should_CreateExactlyOneHub_When_GetOrCreateCalledConcurrently(t *testing.T) {
+	t.Parallel()
+	registry := &hubRegistry{hubs: xsync.NewMap[string, *streamhub.StreamHub]()}
+	const sessionName = "hub-registry-concurrent-test"
+
+	const goroutines = 20
+	hubs := make([]*streamhub.StreamHub, goroutines)
+	var wg sync.WaitGroup
+	wg.Add(goroutines)
+	for i := 0; i < goroutines; i++ {
+		go func(i int) {
+			defer wg.Done()
+			controller := &fakeSessionController{}
+			hub, err := registry.GetOrCreate(sessionName, controller)
+			require.NoError(t, err)
+			hubs[i] = hub
+		}(i)
+	}
+	wg.Wait()
+
+	first := hubs[0]
+	require.NotNil(t, first)
+	for i, h := range hubs {
+		require.Same(t, first, h, "goroutine %d got a different StreamHub for the same session name", i)
+	}
+}
+
+// TestHubRegistry_should_ReturnDifferentHubs_When_SessionNamesDiffer is the
+// unremarkable counterpart proving GetOrCreate is actually keyed per session
+// name, not a single global hub.
+func TestHubRegistry_should_ReturnDifferentHubs_When_SessionNamesDiffer(t *testing.T) {
+	t.Parallel()
+	registry := &hubRegistry{hubs: xsync.NewMap[string, *streamhub.StreamHub]()}
+
+	hubA, errA := registry.GetOrCreate("session-a", &fakeSessionController{})
+	require.NoError(t, errA)
+	hubB, errB := registry.GetOrCreate("session-b", &fakeSessionController{})
+	require.NoError(t, errB)
+
+	require.NotSame(t, hubA, hubB)
+}
+
+// TestHubRegistry_should_RefuseToCreateHub_When_OwnershipLockAlreadyResolvedLegacy
+// is validation.md's REQ-8 scenario applied to the real HubRegistry: if a
+// concurrent legacy StartControlMode call already won this session's
+// StreamOwnershipLock resolution, GetOrCreate must refuse to create a
+// competing hub (ErrOwnershipResolvedToOtherPath) rather than silently
+// creating one anyway — the exact "no silent success reinterpreted"
+// requirement from Task 3.1.2b.
+func TestHubRegistry_should_RefuseToCreateHub_When_OwnershipLockAlreadyResolvedLegacy(t *testing.T) {
+	t.Parallel()
+	sessionName := "hub-registry-legacy-already-resolved-" + t.Name()
+
+	// Simulate the legacy path winning the race: it resolves the lock with
+	// flagValue=false before this connection's hub-creation attempt runs.
+	resolved := streamhub.AcquireOwnershipLock(sessionName).Resolve(false)
+	require.Equal(t, streamhub.PathLegacyPerConnection, resolved)
+
+	registry := &hubRegistry{hubs: xsync.NewMap[string, *streamhub.StreamHub]()}
+	hub, err := registry.GetOrCreate(sessionName, &fakeSessionController{})
+
+	require.Nil(t, hub, "GetOrCreate must not create a hub once ownership resolved legacy")
+	require.ErrorIs(t, err, streamhub.ErrOwnershipResolvedToOtherPath)
+}
+
+// TestHubRegistry_should_CreateHub_When_OwnershipLockResolvesHubOwned is the
+// happy-path counterpart: when no concurrent legacy call has won the race
+// (or this call is itself the first), GetOrCreate's own ownership check
+// passes and hub creation proceeds exactly as before Story 3.1.2.
+func TestHubRegistry_should_CreateHub_When_OwnershipLockResolvesHubOwned(t *testing.T) {
+	t.Parallel()
+	sessionName := "hub-registry-hub-owned-" + t.Name()
+
+	registry := &hubRegistry{hubs: xsync.NewMap[string, *streamhub.StreamHub]()}
+	hub, err := registry.GetOrCreate(sessionName, &fakeSessionController{})
+
+	require.NoError(t, err)
+	require.NotNil(t, hub)
+	require.Equal(t, streamhub.PathHubOwned, streamhub.AcquireOwnershipLock(sessionName).Resolve(false))
+}
+
+// TestHubRegistryAndStreamOwnershipLock_should_NeverProduceTwoOwners_When_RacedConcurrently
+// is REQ-8's race scenario (plan.md Story 3.1.2 AC2, scoped to the two real
+// entry points that live in this package/file rather than
+// Instance.StartControlMode, which this story's task explicitly leaves
+// untouched — see the commit message / PR description for why). Many
+// goroutines race GetOrCreate (the hub-creation intent) against
+// AcquireOwnershipLock(...).ResolveExpecting(false, PathLegacyPerConnection)
+// (the legacy-start intent, i.e. exactly the check streamViaControlMode now
+// performs before calling StartControlMode) for the same session name.
+// Exactly one intent may "win" (no error) per session; every loser must
+// observe ErrOwnershipResolvedToOtherPath and the single resolved StreamPath
+// must be consistent for all racers.
+func TestHubRegistryAndStreamOwnershipLock_should_NeverProduceTwoOwners_When_RacedConcurrently(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping 1000-iteration race test in short mode")
+	}
+
+	const iterations = 1000
+	const racersPerSide = 8
+
+	for i := 0; i < iterations; i++ {
+		sessionName := fmt.Sprintf("hub-vs-legacy-race-%d", i)
+		registry := &hubRegistry{hubs: xsync.NewMap[string, *streamhub.StreamHub]()}
+
+		var wg sync.WaitGroup
+		var hubWins, legacyWins atomic.Int64
+		var hubErrs, legacyErrs atomic.Int64
+
+		for g := 0; g < racersPerSide; g++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				if _, err := registry.GetOrCreate(sessionName, &fakeSessionController{}); err != nil {
+					hubErrs.Add(1)
+				} else {
+					hubWins.Add(1)
+				}
+			}()
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				if _, err := streamhub.AcquireOwnershipLock(sessionName).ResolveExpecting(false, streamhub.PathLegacyPerConnection); err != nil {
+					legacyErrs.Add(1)
+				} else {
+					legacyWins.Add(1)
+				}
+			}()
+		}
+		wg.Wait()
+
+		resolved := streamhub.AcquireOwnershipLock(sessionName).Resolve(false)
+		switch resolved {
+		case streamhub.PathHubOwned:
+			require.Equal(t, int64(racersPerSide), hubWins.Load(), "iteration %d: every hub-creation racer should win when ownership resolved PathHubOwned", i)
+			require.Equal(t, int64(0), legacyWins.Load(), "iteration %d: no legacy racer should win when ownership resolved PathHubOwned", i)
+			require.Equal(t, int64(racersPerSide), legacyErrs.Load())
+		case streamhub.PathLegacyPerConnection:
+			require.Equal(t, int64(racersPerSide), legacyWins.Load(), "iteration %d: every legacy racer should win when ownership resolved PathLegacyPerConnection", i)
+			require.Equal(t, int64(0), hubWins.Load(), "iteration %d: no hub-creation racer should win when ownership resolved PathLegacyPerConnection", i)
+			require.Equal(t, int64(racersPerSide), hubErrs.Load())
+		}
+	}
+}
+
+// --- Epic 3.2 / Story 3.2.1: registry consolidation ---
+
+// TestHubOwnedSession_should_NeverTouchActiveControlModeStreams_When_MultipleSubscribersAttach
+// is Story 3.2.1's core AC: for PathHubOwned sessions, hub.SubscriberCount()
+// is the sole source of truth for connection count — activeControlModeStreams
+// (the legacy, per-handler-instance registry) must never be incremented for
+// hub-owned sessions, since streamViaHub (unlike streamViaControlMode) never
+// calls recordControlModeStreamStart.
+func TestHubOwnedSession_should_NeverTouchActiveControlModeStreams_When_MultipleSubscribersAttach(t *testing.T) {
+	t.Parallel()
+	h := NewConnectRPCWebSocketHandler(nil, nil, nil)
+	sessionName := "hub-owned-connection-count-" + t.Name()
+
+	registry := &hubRegistry{hubs: xsync.NewMap[string, *streamhub.StreamHub]()}
+	hub, err := registry.GetOrCreate(sessionName, &fakeSessionController{})
+	require.NoError(t, err)
+
+	hub.AttachSubscriber(streamhub.NewMemoryTransport(), streamhub.SubscriberCapability{})
+	hub.AttachSubscriber(streamhub.NewMemoryTransport(), streamhub.SubscriberCapability{})
+
+	require.Equal(t, 2, hub.SubscriberCount(), "hub.SubscriberCount() must be the sole source of truth for PathHubOwned sessions")
+	_, loaded := h.activeControlModeStreams.Load(sessionName)
+	require.False(t, loaded, "hub-owned sessions must never touch activeControlModeStreams (Story 3.2.1)")
+}
+
+// listSessionsFakeExecutor is a minimal executor.Executor whose
+// CombinedOutput (the only method session/tmux's listSessionsRaw calls, per
+// TmuxSession.DoesSessionExist/DoesSessionExistNoCache) answers "does this
+// tmux session exist" deterministically by call count, not by talking to a
+// real tmux server. This is what lets
+// TestStreamViaHub_should_SendHubStartFailedError_... force streamViaHub's
+// own pre-GetOrCreate restore check and streamViaControlMode's later,
+// separate restore check to observe *different* answers from the exact same
+// *tmux.TmuxSession object without any timing race: the two checks are
+// distinguished purely by which call they are, not by when either runs.
+type listSessionsFakeExecutor struct {
+	mu         sync.Mutex
+	calls      int
+	existsName string
+}
+
+// CombinedOutput reports existsName as present on the first call (so
+// streamViaHub's own restore check sees the session as already there and
+// skips straight to HubRegistry.GetOrCreate) and absent on every call after
+// that (so streamViaControlMode's own restore check — and the retry loop
+// inside tmux.RestoreWithWorkDir it then drives — consistently finds no
+// session and genuinely falls through to validateWorkDir's fast failure).
+func (e *listSessionsFakeExecutor) CombinedOutput(_ *exec.Cmd) ([]byte, error) {
+	e.mu.Lock()
+	first := e.calls == 0
+	e.calls++
+	e.mu.Unlock()
+	if first {
+		return []byte(e.existsName + "\n"), nil
+	}
+	return nil, fmt.Errorf("no server running on socket (fake: session absent)")
+}
+
+func (e *listSessionsFakeExecutor) Run(_ *exec.Cmd) error {
+	return fmt.Errorf("listSessionsFakeExecutor: Run is unsupported, only list-sessions (CombinedOutput) is expected on this path")
+}
+
+func (e *listSessionsFakeExecutor) Output(_ *exec.Cmd) ([]byte, error) {
+	return nil, fmt.Errorf("listSessionsFakeExecutor: Output is unsupported, only list-sessions (CombinedOutput) is expected on this path")
+}
+
+// TestStreamViaHub_should_SendHubStartFailedError_When_HubCreationAndLegacyFallbackBothFail
+// is design/ux.md Surface 2's server-side half: when streamViaHub's
+// HubRegistry.GetOrCreate call fails (here, because the session's
+// StreamOwnershipLock is pre-resolved to PathLegacyPerConnection, simulating
+// a concurrent legacy StartControlMode having already won the race) AND its
+// streamViaControlMode fallback also fails (here, because the instance's
+// working directory has been removed, so RestoreWithWorkDir fails fast with
+// tmux.ErrWorkDirMissing instead of spawning a real tmux session), the
+// connection must receive a TerminalData_Error frame with
+// Code: HubStartFailedErrorCode over the WebSocket before streamViaHub
+// returns its error.
+//
+// Root cause of a previous version of this test hanging until the package
+// timeout: streamViaHub (connectrpc_websocket.go) has its OWN "session not
+// in tmux, restore before control mode" pre-check — structurally identical
+// to streamViaControlMode's — that runs *before* HubRegistry.GetOrCreate is
+// ever called. Attaching one real-but-never-started *tmux.TmuxSession (via a
+// missing work dir, so both checks see "doesn't exist") made THAT earlier
+// check fail and return first, so GetOrCreate — and therefore the
+// streamViaControlMode fallback and its HubStartFailedErrorCode frame — was
+// never reached at all; streamViaHub returned its own error without ever
+// writing anything to the client, so the test's readEnvelopeFromClient
+// blocked forever. listSessionsFakeExecutor's call-counted answers fix this
+// by making streamViaHub's own check see "session exists" (skip its restore,
+// proceed to GetOrCreate) while streamViaControlMode's later check
+// genuinely sees "doesn't exist" and fails via ErrWorkDirMissing as intended
+// — deterministic by construction, not by racing tmux subprocess timing.
+func TestStreamViaHub_should_SendHubStartFailedError_When_HubCreationAndLegacyFallbackBothFail(t *testing.T) {
+	// A working directory that is never created, rather than a real temp dir
+	// removed after the fact: os.Stat on it fails immediately, so
+	// tmux.RestoreWithWorkDir's validateWorkDir step returns
+	// tmux.ErrWorkDirMissing instead of proceeding to actually spawn a tmux
+	// session (which a since-deleted-but-once-real path risked doing, if
+	// e.g. symlink resolution made the deletion and the later Stat disagree).
+	dir := filepath.Join(t.TempDir(), "never-created")
+
+	inst, err := session.NewInstance(session.InstanceOptions{
+		Title: "hub-start-failed-" + t.Name(),
+		Path:  dir,
+	})
+	require.NoError(t, err)
+
+	snap := inst.Snapshot()
+	tmuxPrefix := snap.TmuxPrefix
+	if tmuxPrefix == "" {
+		tmuxPrefix = "staplersquad_"
+	}
+	tmuxSessionName := tmux.NewSessionName(snap.Title, tmuxPrefix).String()
+
+	// Force Instance.pm() to lazily initialize as a *TmuxBackend (a bare
+	// *Instance has no processManager until first use), then attach a
+	// *tmux.TmuxSession backed by listSessionsFakeExecutor so GetTmuxSession()
+	// returns non-nil below — otherwise streamViaControlMode's "session
+	// missing, restore" branch never runs at all (a nil GetTmuxSession()
+	// skips straight to a no-op StartControlMode success, per
+	// session/tmux_process_manager.go's StartControlMode returning nil when
+	// no session is set). NewTmuxSessionWithDeps (rather than
+	// NewTmuxSessionWithPrefix) is what makes the fake executor — and thus
+	// the call-counted exists/doesn't-exist answers — take effect; it also
+	// passes WithRegistry(nil) internally so the real push-based
+	// TmuxServerRegistry can never short-circuit DoesSessionExist(NoCache)
+	// ahead of the fake.
+	_ = inst.GetTmuxSessionName()
+	fakeExec := &listSessionsFakeExecutor{existsName: tmuxSessionName}
+	inst.SetTmuxSession(tmux.NewTmuxSessionWithDeps(snap.Title, "true", tmux.MakePtyFactory(), fakeExec))
+
+	// Simulate a concurrent legacy StartControlMode call having already won
+	// this session's ownership race, so streamViaHub's own GetOrCreate call
+	// below fails with ErrOwnershipResolvedToOtherPath.
+	_, err = streamhub.AcquireOwnershipLock(tmuxSessionName).ResolveExpecting(false, streamhub.PathLegacyPerConnection)
+	require.NoError(t, err)
+
+	serverStream, clientConn, cleanup := createTestWebSocketPair(t)
+	defer cleanup()
+
+	handshake := &sessionv1.TerminalData{
+		Data: &sessionv1.TerminalData_CurrentPaneRequest{
+			CurrentPaneRequest: &sessionv1.CurrentPaneRequest{},
+		},
+	}
+	handshakeBytes, err := proto.Marshal(handshake)
+	require.NoError(t, err)
+	serverStream.requestMsg = handshakeBytes
+
+	h := NewConnectRPCWebSocketHandler(nil, nil, nil)
+
+	// Run off the test goroutine with a hard deadline: if either failure
+	// assumption above doesn't hold, streamViaControlMode's fallback can end
+	// up actually starting a working (if degenerate) tmux-backed stream that
+	// blocks forever instead of returning an error — fail loudly and fast
+	// rather than hanging the whole package for the full `go test` timeout.
+	streamErrCh := make(chan error, 1)
+	go func() { streamErrCh <- h.streamViaHub(serverStream, inst) }()
+
+	var streamErr error
+	select {
+	case streamErr = <-streamErrCh:
+	case <-time.After(15 * time.Second):
+		t.Fatal("streamViaHub did not return within 15s — the legacy fallback likely succeeded instead of failing as this test requires")
+	}
+	require.Error(t, streamErr, "streamViaHub must return the legacy fallback's error once both paths fail")
+
+	env := readEnvelopeFromClient(t, clientConn)
+	var terminalData sessionv1.TerminalData
+	require.NoError(t, proto.Unmarshal(env.Data, &terminalData))
+
+	errData := terminalData.GetError()
+	require.NotNil(t, errData, "expected a TerminalData_Error frame when both the hub path and legacy fallback fail")
+	require.Equal(t, HubStartFailedErrorCode, errData.Code)
+}
+
+// TestHubRegistry_should_CallSubscribeControlModeUpdatesExactlyOnce_When_MultipleSubscribersAttach
+// is Story 3.2.1's Task 3.2.1c/3.2.1d AC: the hub subscribes to the
+// underlying TmuxSession's control-mode output exactly once (via
+// pumpControlModeOutputIntoHub, started only from GetOrCreate's winning
+// LoadOrCompute call), regardless of how many Subscribers later attach to
+// the hub itself — i.e. TmuxSession.controlModeSubscribers gets exactly one
+// entry for the hub's own subscription, not one per attached hub Subscriber.
+func TestHubRegistry_should_CallSubscribeControlModeUpdatesExactlyOnce_When_MultipleSubscribersAttach(t *testing.T) {
+	t.Parallel()
+	sessionName := "hub-subscribe-once-" + t.Name()
+	controller := &fakeSessionController{}
+	registry := &hubRegistry{hubs: xsync.NewMap[string, *streamhub.StreamHub]()}
+
+	hub, err := registry.GetOrCreate(sessionName, controller)
+	require.NoError(t, err)
+
+	for i := 0; i < 5; i++ {
+		hub.AttachSubscriber(streamhub.NewMemoryTransport(), streamhub.SubscriberCapability{})
+	}
+
+	require.Eventually(t, func() bool {
+		return atomic.LoadInt32(&controller.subscribeCalls) >= 1
+	}, time.Second, 5*time.Millisecond, "expected the pump goroutine to subscribe at least once")
+	require.EqualValues(t, 1, atomic.LoadInt32(&controller.subscribeCalls),
+		"the hub must subscribe to the underlying TmuxSession's control-mode output exactly once, regardless of how many Subscribers are attached to the hub itself")
+}
+
+// pumpTestController is a minimal streamhub.SessionController test double
+// that lets a test control exactly what pumpControlModeOutputIntoHub reads,
+// unlike fakeSessionController's SubscribeControlModeUpdates (which always
+// returns an already-closed channel and so can never deliver a burst).
+type pumpTestController struct {
+	updates chan []byte
+}
+
+func (c *pumpTestController) SetWindowSize(int, int) error         { return nil }
+func (c *pumpTestController) ResizePTY(int, int) error             { return nil }
+func (c *pumpTestController) CapturePaneContent() (string, error)  { return "", nil }
+func (c *pumpTestController) StopControlMode() error               { return nil }
+func (c *pumpTestController) UnsubscribeControlModeUpdates(string) {}
+func (c *pumpTestController) SubscribeControlModeUpdates() (string, <-chan []byte) {
+	return "pump-test-sub", c.updates
+}
+
+// TestPumpControlModeOutputIntoHub_should_FlushOpportunistically_When_ChannelMomentarilyDrained
+// is the regression test for the architecture gap this fix closes: before it,
+// pumpControlModeOutputIntoHub's `for data := range updates { hub.OnRawOutput(data) }`
+// loop never called BatchWindow.TryFlush, so every hub-owned burst always paid
+// the full MaxBatchWindow (20ms default) ceiling latency, unlike the legacy
+// per-connection coalesce loop's `select {...; default: break coalesce}`
+// early-flush behavior it is meant to mirror. This test sets the hub's batch
+// ceiling to a duration (2s) far longer than any reasonable flush latency, so
+// a frame reaching the subscriber quickly can only be explained by the pump's
+// drain-then-TryFlush step firing — not by the ceiling timer, which would
+// still be more than a second away from expiring.
+func TestPumpControlModeOutputIntoHub_should_FlushOpportunistically_When_ChannelMomentarilyDrained(t *testing.T) {
+	t.Parallel()
+
+	const ceiling = 2 * time.Second
+	controller := &pumpTestController{updates: make(chan []byte, 4)}
+	hub := streamhub.NewStreamHub("pump-early-flush-"+t.Name(), controller, streamhub.WithBatchMaxWindow(ceiling))
+
+	transport := streamhub.NewMemoryTransport()
+	hub.AttachSubscriber(transport, streamhub.SubscriberCapability{})
+
+	// Buffer every chunk of the burst before the pump goroutine ever reads
+	// from the channel, so the drain loop's non-blocking `default` branch is
+	// guaranteed to fire on an already-populated-then-momentarily-empty
+	// channel, exactly like the legacy coalesce loop's scenario.
+	controller.updates <- []byte("frame-1;")
+	controller.updates <- []byte("frame-2;")
+	controller.updates <- []byte("frame-3;")
+
+	start := time.Now()
+	go pumpControlModeOutputIntoHub(hub, controller, "pump-early-flush-"+t.Name())
+	t.Cleanup(func() { close(controller.updates) })
+
+	require.Eventually(t, func() bool {
+		for _, frame := range transport.ReceivedFrames() {
+			if bytes.Contains(frame, []byte("frame-3;")) {
+				return true
+			}
+		}
+		return false
+	}, 500*time.Millisecond, 5*time.Millisecond, "expected the burst to be flushed to the subscriber well before it did")
+
+	elapsed := time.Since(start)
+	require.Less(t, elapsed, ceiling/2,
+		"burst was flushed in %s — should have been well under half the %s ceiling if TryFlush fired opportunistically instead of waiting on the timer", elapsed, ceiling)
+}
+
+// TestStreamTerminal_should_RouteThroughHubWithNoLegacyResizeCall_When_PathHubOwnedResolved
+// is validation.md's REQ-1 test name. Full end-to-end coverage of
+// streamTerminal's session resolution (SessionService/storage/tmux) is out of
+// this unit test's scope; what's asserted here is the specific claim Story
+// 2.2.2's AC makes: when useStreamHub() is true, the PathHubOwned branch
+// attaches via HubRegistry/WebSocketTransport and never touches
+// streamViaControlMode's legacy per-connection resize/capture code — proven
+// by HubRegistry.GetOrCreate on a fake SessionController never having
+// SetWindowSize/ResizePTY/CapturePaneContent called by anything in this
+// epic's new code path (only AttachSubscriber's bookkeeping runs).
+func TestStreamTerminal_should_RouteThroughHubWithNoLegacyResizeCall_When_PathHubOwnedResolved(t *testing.T) {
+	// Story 3.3.1/3.3.2: useStreamHub() now refuses to resolve the global
+	// default to true unless a rollback rehearsal has been recorded
+	// (config.RollbackRehearsalCompletedAt) — record one here so this
+	// test's premise (the global default resolving true) still holds.
+	recordRollbackRehearsalCompletedForTest(t)
+	t.Setenv("STAPLER_SQUAD_USE_STREAM_HUB", "true")
+	require.True(t, useStreamHub(), "flag must resolve PathHubOwned for this test's premise to hold")
+
+	registry := &hubRegistry{hubs: xsync.NewMap[string, *streamhub.StreamHub]()}
+	controller := &fakeSessionController{}
+	hub, err := registry.GetOrCreate("path-hub-owned-test", controller)
+	require.NoError(t, err)
+
+	serverStream, _, cleanup := createTestWebSocketPair(t)
+	defer cleanup()
+
+	transport := NewWebSocketTransport(serverStream)
+	id := hub.AttachSubscriber(transport, streamhub.SubscriberCapability{CanResize: true, CanWrite: true})
+	transport.BindSubscriber(hub, id)
+
+	require.Equal(t, 1, hub.SubscriberCount())
+	require.Equal(t, 0, controller.stopControlModeCalls, "no teardown should have been triggered by attaching")
 }
 
 // --- getOrRefreshSnapshot / markSnapshotDirty ---
@@ -2020,4 +2585,71 @@ func TestHandleCurrentPaneRequest_should_OnlySkipSlowPath_When_OnlySkipStaleDime
 	if output.ResyncId != "" {
 		t.Errorf("expected ResyncId to remain unechoed, got %q", output.ResyncId)
 	}
+}
+
+// TestStreamTerminal_should_PopulateConnectionCount_When_SessionIsPathHubOwned
+// is Epic 4.2, Story 4.2.1's AC: a PathHubOwned session's connection reports
+// hub.SubscriberCount() via sendConnectionCountUpdates' side-channel
+// TerminalOutput messages, and the value tracks attach/detach in real time
+// (validation.md REQ-14).
+func TestStreamTerminal_should_PopulateConnectionCount_When_SessionIsPathHubOwned(t *testing.T) {
+	serverStream, clientConn, cleanup := createTestWebSocketPair(t)
+	defer cleanup()
+
+	controller := &fakeSessionController{}
+	hub := streamhub.NewStreamHub("conn-count-test", controller, streamhub.WithTeardownGrace(0))
+
+	stop := make(chan struct{})
+	defer close(stop)
+
+	transport1 := NewWebSocketTransport(serverStream)
+	id1 := hub.AttachSubscriber(transport1, streamhub.SubscriberCapability{CanResize: true})
+	transport1.BindSubscriber(hub, id1)
+	defer hub.DetachSubscriber(id1)
+
+	// Attach before spawning the updater, matching streamViaHub's real call order
+	// (AttachSubscriber at line ~1554, sendConnectionCountUpdates at ~1615) — the
+	// updater's immediate send() races hub.SubscriberCount() against whatever the
+	// caller does next, so spawning it before this attach (as this test used to)
+	// let the immediate send observe 0 subscribers instead of 1, intermittently
+	// failing the very next assertion.
+	go sendConnectionCountUpdates(serverStream, hub, "conn-count-test", stop)
+
+	readConnectionCount := func() int32 {
+		t.Helper()
+		require.NoError(t, clientConn.SetReadDeadline(time.Now().Add(3*time.Second)))
+		env := readEnvelopeFromClient(t, clientConn)
+		var msg sessionv1.TerminalData
+		require.NoError(t, proto.Unmarshal(env.Data, &msg))
+		output := msg.GetOutput()
+		require.NotNil(t, output, "expected a TerminalData_Output message")
+		require.NotNil(t, output.ConnectionCount, "expected ConnectionCount to be set")
+		return output.GetConnectionCount()
+	}
+
+	// sendConnectionCountUpdates' immediate send() (before its first ticker
+	// tick) delivers the current count without waiting a full poll interval.
+	require.Equal(t, int32(1), readConnectionCount())
+
+	transport2 := NewWebSocketTransport(serverStream)
+	id2 := hub.AttachSubscriber(transport2, streamhub.SubscriberCapability{CanResize: true})
+	transport2.BindSubscriber(hub, id2)
+	defer hub.DetachSubscriber(id2)
+
+	require.Equal(t, int32(2), readConnectionCount())
+}
+
+// TestStreamTerminal_should_OmitConnectionCount_When_SessionIsPathLegacyPerConnection
+// is Story 4.2.1's second AC: a legacy-path connection never has
+// sendConnectionCountUpdates running against it at all, so no
+// connection_count field is ever fabricated from a signal (e.g.
+// activeControlModeStreams) that isn't a real live subscriber count. This is
+// enforced structurally — streamViaControlMode's send paths
+// (marshalProtoEnvelope with TerminalOutput{Data: data}) never set
+// ConnectionCount, verified here as a proto-level guarantee: a
+// TerminalOutput built the same way streamViaControlMode builds one leaves
+// ConnectionCount nil.
+func TestStreamTerminal_should_OmitConnectionCount_When_SessionIsPathLegacyPerConnection(t *testing.T) {
+	msg := &sessionv1.TerminalOutput{Data: []byte("legacy output")}
+	require.Nil(t, msg.ConnectionCount, "legacy-path TerminalOutput must never carry a fabricated connection_count")
 }

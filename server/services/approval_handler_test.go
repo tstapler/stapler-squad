@@ -30,13 +30,22 @@ import (
 // must reflect whatever baseURLFn() returns at *their* point of use -- never a
 // value snapshotted once at ApprovalHandler construction time.
 func TestApprovalHandler_should_UseBaseURLFnValueAtCallTime_When_ThreeUsageSitesInvoked(t *testing.T) {
-	t.Parallel()
-	// hookApprovalURL() delegates to hook_injector.go's shared hookBaseURLFn (set via
-	// SetHookBaseURLFn) -- the same mechanism InjectHooksConfig uses -- rather than a
-	// separate ApprovalHandler-owned mechanism. Save/restore it so this test's
-	// deliberately-unstable stub base URL doesn't leak into other tests in this
-	// package that call hookApprovalURL()/InjectHookConfig and expect the stable
-	// default.
+	// Deliberately NOT t.Parallel(): this test overwrites the package-level hookBaseURLFn
+	// (hook_injector.go) with a stub whose return value changes on every invocation, and
+	// hookBaseURLFn's own accessors are only mutex-guarded against torn reads/writes of the
+	// closure value itself -- they don't protect against a *different* test's goroutine
+	// invoking whatever closure happens to be installed. Any other parallel test that calls
+	// hookApprovalURL()/InjectHooksConfig while this test's stub is installed would (a) get a
+	// non-default URL it doesn't expect, and (b) drive unsynchronized increments of this
+	// test's own `calls` counter from a foreign goroutine -- a genuine data race on `calls`
+	// caught by `-race`, which is exactly the flake this comment documents. Running this test
+	// non-parallel guarantees Go's test runner finishes it (including the t.Cleanup restore
+	// below) before any t.Parallel() tests in this package start, so the shared global is
+	// never observed mid-mutation. See .claude/rules/fix-flaky-tests-dont-defer.md.
+	//
+	// Save/restore hookBaseURLFn so this test's deliberately-unstable stub base URL doesn't
+	// leak into other tests in this package that call hookApprovalURL()/InjectHookConfig and
+	// expect the stable default.
 	original := getHookBaseURLFn()
 	t.Cleanup(func() { SetHookBaseURLFn(original) })
 

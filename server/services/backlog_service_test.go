@@ -48,6 +48,8 @@ import (
 func TestMain(m *testing.M) {
 	headless.DefaultCapabilitySelfCheck = headless.NewPassedCapabilitySelfCheckForTesting()
 	restore := envtest.ClearAmbientGitHubTokenEnv()
+	reapLeakedTmuxTestServers()
+	startTmuxTestServerWatchdog()
 	code := m.Run()
 	restore()
 	os.Exit(code)
@@ -78,7 +80,7 @@ type fakePoolCall struct {
 	hasDeadline    bool
 }
 
-func (f *fakeHeadlessPool) CallBlocking(ctx context.Context, key headless.FeatureKey, systemPrompt, userPrompt string, opts headless.CallOptions) (string, float64, error) {
+func (f *fakeHeadlessPool) CallBlocking(ctx context.Context, key headless.FeatureKey, systemPrompt, userPrompt string, opts headless.CallOptions, sink headless.CostSink) (string, error) {
 	f.mu.Lock()
 	callIndex := len(f.calls)
 	deadline, hasDeadline := ctx.Deadline()
@@ -105,13 +107,14 @@ func (f *fakeHeadlessPool) CallBlocking(ctx context.Context, key headless.Featur
 		select {
 		case <-timer.C:
 		case <-ctx.Done():
-			return "", 0, ctx.Err()
+			return "", ctx.Err()
 		}
 	}
 	if onCall != nil {
 		onCall(opts.WorkDir)
 	}
-	return resp, f.cost, f.err
+	sink(f.cost)
+	return resp, f.err
 }
 
 func (f *fakeHeadlessPool) callCount() int {
@@ -878,6 +881,40 @@ func TestBacklogItemToProto_should_IncludeAuditTrail_When_StatusEventsAndProgres
 	assert.Equal(t, "Helper", p.ActivityNotes[0].AuthorSessionTitle)
 	require.NotNil(t, p.ActivityNotes[0].CreatedAt)
 	assert.True(t, p.ActivityNotes[0].CreatedAt.AsTime().Equal(activityCreatedAt))
+}
+
+// ─── backlogItemSummaryToProto ─────────────────────────────────────────────────
+
+// TestBacklogItemSummaryToProto_should_SetAllowedTransitions_When_ItemHasAnyStatus
+// is the regression test for the empty Force-status dropdown bug: ListBacklogItems
+// (backed by backlogItemSummaryToProto) previously omitted AllowedTransitions
+// entirely, unlike GetBacklogItem (backed by backlogItemToProto). AllowedTransitions
+// is a pure function of status, so summary and full protos must always agree.
+func TestBacklogItemSummaryToProto_should_SetAllowedTransitions_When_ItemHasAnyStatus(t *testing.T) {
+	statuses := []session.BacklogStatus{
+		session.BacklogStatusIdea,
+		session.BacklogStatusRefining,
+		session.BacklogStatusReady,
+		session.BacklogStatusQueued,
+		session.BacklogStatusInProgress,
+		session.BacklogStatusReview,
+		session.BacklogStatusPRPending,
+		session.BacklogStatusDone,
+		session.BacklogStatusArchived,
+	}
+
+	for _, status := range statuses {
+		t.Run(string(status), func(t *testing.T) {
+			summary := &session.BacklogItemSummary{ID: "item-1", Status: status}
+			summaryProto := backlogItemSummaryToProto(summary, nil)
+
+			full := &session.BacklogItemData{ID: "item-1", Status: string(status)}
+			fullProto := backlogItemToProto(full, nil)
+
+			assert.Equal(t, fullProto.AllowedTransitions, summaryProto.AllowedTransitions)
+			assert.NotEmpty(t, summaryProto.AllowedTransitions, "status %q should have outbound transitions", status)
+		})
+	}
 }
 
 // ─── ApprovePlan ──────────────────────────────────────────────────────────────

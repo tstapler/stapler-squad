@@ -5,7 +5,7 @@
  * Follows StateApplicator.test.ts pattern with MockTerminal class.
  */
 
-import { TerminalStreamManager, HIGH_WATERMARK, LOW_WATERMARK, CHUNK_SIZE, type ITerminal, type SendFlowControlFn } from '../TerminalStreamManager';
+import { TerminalStreamManager, HIGH_WATERMARK, LOW_WATERMARK, CHUNK_SIZE, ANSI_SNAPSHOT_PREFIX, type ITerminal, type SendFlowControlFn } from '../TerminalStreamManager';
 
 // RAF mock for deterministic testing
 let rafCallback: FrameRequestCallback | null = null;
@@ -379,6 +379,44 @@ describe('TerminalStreamManager', () => {
 
       const written = terminal.getWrittenData();
       expect(written.some(w => w.includes('Clean text'))).toBe(true);
+    });
+  });
+
+  // Regression coverage (reflect-and-fix, 2026-08-23) for the stale-buffer-overlap
+  // bug: a post-resize/resync snapshot used to be appended onto whatever xterm
+  // already had buffered (content reflowed under the terminal's OLD wrap state, or
+  // rows the user had scrolled past), producing visibly overlapping/misaligned text.
+  // ANSI_SNAPSHOT_PREFIX (mirroring connectrpc_websocket.go's ansiSnapshotPrefix) is
+  // the server's reliable, trigger-independent signal that a chunk replaces the
+  // whole screen rather than appending to it — write() is the single funnel every
+  // output path goes through, so checking it here (not at each TerminalOutput.tsx
+  // call site) means a future call site can't reintroduce the bug by forgetting to.
+  describe('full-pane replacement snapshot detection (ANSI_SNAPSHOT_PREFIX)', () => {
+    it('clears the terminal and fires onFullSnapshot when a write starts with ANSI_SNAPSHOT_PREFIX', () => {
+      const onFullSnapshot = jest.fn();
+      manager.setOnFullSnapshot(onFullSnapshot);
+
+      manager.write(ANSI_SNAPSHOT_PREFIX + 'fresh pane content');
+
+      expect(terminal.wasCleared()).toBe(true);
+      expect(onFullSnapshot).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not clear the terminal or fire onFullSnapshot for ordinary incremental output', () => {
+      const onFullSnapshot = jest.fn();
+      manager.setOnFullSnapshot(onFullSnapshot);
+
+      manager.write('regular incremental output, no snapshot prefix');
+
+      expect(terminal.wasCleared()).toBe(false);
+      expect(onFullSnapshot).not.toHaveBeenCalled();
+    });
+
+    it('does not throw when a full-pane snapshot arrives with no onFullSnapshot callback registered', () => {
+      // TerminalOutput.tsx always registers one, but write() must not assume a
+      // caller has — clear() alone is the correctness-critical half of the fix.
+      expect(() => manager.write(ANSI_SNAPSHOT_PREFIX + 'content')).not.toThrow();
+      expect(terminal.wasCleared()).toBe(true);
     });
   });
 });

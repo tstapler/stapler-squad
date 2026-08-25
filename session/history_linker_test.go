@@ -217,6 +217,32 @@ func TestNewHistoryLinkerFromRealInspector_ReturnsNonNil(t *testing.T) {
 	// watcher is created but not started yet — Start() is called separately.
 }
 
+// TestNewHistoryLinkerFromRealInspector_should_WatchIsolatedDir_When_IsolatedInstance
+// is the end-to-end regression test for the constructor previously hard-coding
+// the fsnotify watch dir to os.UserHomeDir()+"/.claude/projects" with no
+// isolation check, so every test booting a real server recursively watched the
+// operator's real, large Claude history tree. Asserting on watchDir (rather
+// than just non-nil-ness, as the smoke test above does) is what actually
+// proves the redirect happened.
+//
+// Not parallel: it sets STAPLER_SQUAD_TEST_DIR, and t.Setenv is incompatible
+// with t.Parallel.
+func TestNewHistoryLinkerFromRealInspector_should_WatchIsolatedDir_When_IsolatedInstance(t *testing.T) {
+	testDir := t.TempDir()
+	t.Setenv("STAPLER_SQUAD_TEST_DIR", testDir)
+
+	linker := NewHistoryLinkerFromRealInspector()
+	require.NotNil(t, linker)
+	require.NotNil(t, linker.watcher, "watcher should be constructed under isolation")
+
+	require.Equal(t, filepath.Join(testDir, "claude-projects"), linker.watcher.watchDir)
+
+	homeDir, err := os.UserHomeDir()
+	require.NoError(t, err)
+	require.NotEqual(t, filepath.Join(homeDir, ".claude", "projects"), linker.watcher.watchDir,
+		"isolated instance must never watch the operator's real Claude history tree")
+}
+
 // TestHistoryLinker_Instances_SnapshotIncludesAddedSessions verifies that Instances()
 // returns a consistent snapshot that reflects AddInstance calls.
 func TestHistoryLinker_Instances_SnapshotIncludesAddedSessions(t *testing.T) {
