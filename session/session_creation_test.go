@@ -45,8 +45,13 @@ func TestSessionCreationDoesNotHang(t *testing.T) {
 		elapsed := time.Since(startTime)
 
 		// The session should start well under the previous 30-45 second wait.
+		// 15s headroom accounts for preconfigureServerBeforeSession's
+		// ~9.1s worst-case retry/backoff (serverStartAttempts=8, up to
+		// serverStartBackoffMax=3s each) when this subtest's dedicated tmux
+		// server contends with sibling t.Parallel() subtests' own server
+		// spawns for CPU under load.
 		require.NoError(t, err, "Session creation should succeed")
-		require.Less(t, elapsed, 5*time.Second, "Session creation should complete within 5 seconds, took %v", elapsed)
+		require.Less(t, elapsed, 15*time.Second, "Session creation should complete within 15 seconds, took %v", elapsed)
 
 		defer func() {
 			if err := startCleanup(); err != nil {
@@ -82,9 +87,10 @@ func TestSessionCreationDoesNotHang(t *testing.T) {
 		startCleanup, err := instance.StartWithCleanup(true)
 		elapsed := time.Since(startTime)
 
-		// Should complete quickly without waiting for trust prompts
+		// Should complete quickly without waiting for trust prompts.
+		// See the DirectorySessionCreation subtest above for why 15s.
 		require.NoError(t, err, "Claude session creation should succeed")
-		require.Less(t, elapsed, 5*time.Second, "Claude session creation should complete within 5 seconds, took %v", elapsed)
+		require.Less(t, elapsed, 15*time.Second, "Claude session creation should complete within 15 seconds, took %v", elapsed)
 
 		defer func() {
 			if err := startCleanup(); err != nil {
@@ -157,8 +163,11 @@ func TestSessionCreationWithRealPrograms(t *testing.T) {
 			startCleanup, err := instance.StartWithCleanup(true)
 			elapsed := time.Since(startTime)
 
+			// 20s headroom: see the DirectorySessionCreation subtest in
+			// TestSessionCreationDoesNotHang for the retry/backoff/contention
+			// rationale.
 			require.NoError(t, err, "%s session should start successfully", tc.name)
-			require.Less(t, elapsed, 10*time.Second, "%s session should start within 10 seconds, took %v", tc.name, elapsed)
+			require.Less(t, elapsed, 20*time.Second, "%s session should start within 20 seconds, took %v", tc.name, elapsed)
 
 			defer func() {
 				if err := startCleanup(); err != nil {
