@@ -3,6 +3,7 @@ package config
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -234,6 +235,34 @@ func TestDefaultConfig(t *testing.T) {
 		assert.NotEmpty(t, config.BranchPrefix)
 		assert.True(t, strings.HasSuffix(config.BranchPrefix, "/"))
 	})
+}
+
+// TestPruneStaleTestDirs is the regression test for the leak that filled
+// ~/.stapler-squad/test with 13,530 orphaned test-<pid> dirs (6.1G) going
+// back to March 2026: every go-test binary created one via GetConfigDirForDir
+// but nothing ever removed it. Verifies a dead pid's dir gets swept while a
+// live pid's dir and unrelated entries survive.
+func TestPruneStaleTestDirs(t *testing.T) {
+	testBaseDir := t.TempDir()
+
+	deadCmd := exec.Command("true")
+	require.NoError(t, deadCmd.Run())
+	deadPID := deadCmd.Process.Pid
+
+	alivePID := os.Getpid()
+
+	deadDir := filepath.Join(testBaseDir, fmt.Sprintf("test-%d", deadPID))
+	aliveDir := filepath.Join(testBaseDir, fmt.Sprintf("test-%d", alivePID))
+	junkDir := filepath.Join(testBaseDir, "not-a-test-dir")
+	require.NoError(t, os.MkdirAll(deadDir, 0755))
+	require.NoError(t, os.MkdirAll(aliveDir, 0755))
+	require.NoError(t, os.MkdirAll(junkDir, 0755))
+
+	pruneStaleTestDirs(testBaseDir)
+
+	assert.NoDirExists(t, deadDir, "dead process's test dir should be pruned")
+	assert.DirExists(t, aliveDir, "live process's test dir must survive")
+	assert.DirExists(t, junkDir, "non test-<pid> entries must be left alone")
 }
 
 func TestGetConfigDir(t *testing.T) {
