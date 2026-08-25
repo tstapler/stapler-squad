@@ -757,6 +757,9 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 					log.Error("failed to start loaded instance", "session", inst.Title, "err", err)
 				} else {
 					log.Info("started loaded instance", "session", inst.Title)
+					// Lets waitForInstanceStartedEvent (connectrpc_websocket.go) unblock a
+					// connection that raced this loop's stagger, instead of only polling.
+					eventBus.Publish(events.NewSessionUpdatedEvent(inst, []string{"status"}))
 				}
 			}
 		}
@@ -774,6 +777,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 					log.Warn("Reconcile: hot-restore failed", "session", inst.Title, "err", err)
 				} else {
 					log.Info("Reconcile: restored session (was Stopped, now Running)", "session", inst.Title)
+					eventBus.Publish(events.NewSessionUpdatedEvent(inst, []string{"status"}))
 				}
 			}
 		}

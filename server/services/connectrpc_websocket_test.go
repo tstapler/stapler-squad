@@ -20,6 +20,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/protocol"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/streamhub"
@@ -2272,94 +2273,79 @@ func TestWithCursorSync_should_ReturnWithinTimeout_When_PositionLookupIsSlow(t *
 	<-calledCh
 }
 
-// fakeStartedChecker is a minimal startedChecker test double: startsAfter, if
-// non-nil, flips Started() from false to true once that channel is closed
-// (simulating a concurrent Instance.Start() completing mid-wait); a nil
-// startsAfter means Started() always reports startedNow's fixed value.
-type fakeStartedChecker struct {
-	startedNow  atomic.Bool
-	startsAfter chan struct{}
-}
-
-func (f *fakeStartedChecker) Started() bool {
-	if f.startsAfter != nil {
-		select {
-		case <-f.startsAfter:
-			return true
-		default:
-			return false
-		}
-	}
-	return f.startedNow.Load()
-}
-
-// TestWaitForInstanceStarted_should_ReturnImmediately_When_AlreadyStarted covers the
-// zero-wait fast path — the common case, since streamViaHub only reaches this wait when
-// Started() was already observed false once.
-func TestWaitForInstanceStarted_should_ReturnImmediately_When_AlreadyStarted(t *testing.T) {
-	chk := &fakeStartedChecker{}
-	chk.startedNow.Store(true)
-
-	start := time.Now()
-	got := waitForInstanceStarted(chk, time.Second, 50*time.Millisecond)
-	elapsed := time.Since(start)
-
-	if !got {
-		t.Error("expected true when already started")
-	}
-	if elapsed > 10*time.Millisecond {
-		t.Errorf("expected an immediate return, took %v", elapsed)
-	}
-}
-
-// TestWaitForInstanceStarted_should_ReturnTrue_When_StartedBecomesTrueDuringWait is the
-// regression test for the 2026-08-25 incident (see startupWaitTimeout's doc comment): a
-// concurrently-starting Instance flips Started() true partway through the wait window, and
-// this must observe that and return promptly rather than only checking once at the start
-// or blocking for the full timeout regardless.
-func TestWaitForInstanceStarted_should_ReturnTrue_When_StartedBecomesTrueDuringWait(t *testing.T) {
-	startsAfter := make(chan struct{})
-	chk := &fakeStartedChecker{startsAfter: startsAfter}
+// TestWaitForEvent_should_ReturnTrue_When_MatchingEventArrivesDuringWait proves waitForEvent
+// observes an event published mid-wait, not just at subscribe time.
+func TestWaitForEvent_should_ReturnTrue_When_MatchingEventArrivesDuringWait(t *testing.T) {
+	bus := events.NewEventBus(1)
 	go func() {
-		time.Sleep(120 * time.Millisecond)
-		close(startsAfter)
+		time.Sleep(50 * time.Millisecond)
+		bus.Publish(&events.Event{Type: events.EventSessionUpdated})
 	}()
 
 	start := time.Now()
-	got := waitForInstanceStarted(chk, 2*time.Second, 20*time.Millisecond)
+	got := waitForEvent(bus, 2*time.Second, func(ev *events.Event) bool { return ev.Type == events.EventSessionUpdated })
 	elapsed := time.Since(start)
 
 	if !got {
-		t.Error("expected true once Started() flips true mid-wait")
+		t.Error("expected true once a matching event is published")
 	}
 	if elapsed >= 2*time.Second {
-		t.Errorf("expected to return well before the 2s timeout once started, took %v", elapsed)
-	}
-	if elapsed < 100*time.Millisecond {
-		t.Errorf("returned suspiciously fast (%v) — expected to actually observe the 120ms delay, not race past it", elapsed)
+		t.Errorf("expected to return well before the 2s timeout, took %v", elapsed)
 	}
 }
 
-// TestWaitForInstanceStarted_should_ReturnFalse_When_NeverStartsWithinTimeout proves the
-// bound: a session that never finishes starting must not block streamViaHub forever —
-// waitForInstanceStarted gives up after timeout and lets the caller's existing
-// graceful-degradation path (streamhub.ErrSessionNotStarted) handle it instead.
-func TestWaitForInstanceStarted_should_ReturnFalse_When_NeverStartsWithinTimeout(t *testing.T) {
-	chk := &fakeStartedChecker{}
-	chk.startedNow.Store(false)
+// TestWaitForEvent_should_ReturnFalse_When_NoMatchingEventWithinTimeout proves the bound:
+// waitForEvent gives up after timeout instead of blocking forever.
+func TestWaitForEvent_should_ReturnFalse_When_NoMatchingEventWithinTimeout(t *testing.T) {
+	bus := events.NewEventBus(1)
 
 	start := time.Now()
-	got := waitForInstanceStarted(chk, 100*time.Millisecond, 20*time.Millisecond)
+	got := waitForEvent(bus, 100*time.Millisecond, func(ev *events.Event) bool { return true })
 	elapsed := time.Since(start)
 
 	if got {
-		t.Error("expected false when Started() never becomes true")
+		t.Error("expected false when no event is ever published")
 	}
 	if elapsed < 100*time.Millisecond {
 		t.Errorf("expected to wait out the full 100ms timeout, took %v", elapsed)
 	}
-	if elapsed > 500*time.Millisecond {
-		t.Errorf("expected to return promptly after timeout, took %v", elapsed)
+}
+
+// TestWaitForEvent_should_ReturnFalse_When_BusIsNil covers a nil/unwired event bus (e.g. a
+// test double) — must not panic or hang.
+func TestWaitForEvent_should_ReturnFalse_When_BusIsNil(t *testing.T) {
+	if waitForEvent(nil, time.Second, func(ev *events.Event) bool { return true }) {
+		t.Error("expected false for a nil bus")
+	}
+}
+
+// TestWaitForInstanceStartedEvent_should_Ignore_UnrelatedUpdateOnSameInstance is the
+// regression test for the false-positive this predicate must avoid: many code paths publish
+// EventSessionUpdated for reasons unrelated to Start() completing (title rename, rate-limit
+// state, PR URL, ...). An event for the right instance whose Session isn't actually
+// Started() must not be treated as the started signal.
+func TestWaitForInstanceStartedEvent_should_Ignore_UnrelatedUpdateOnSameInstance(t *testing.T) {
+	inst := &session.Instance{UUID: "same-uuid"}
+	bus := events.NewEventBus(1)
+	go func() {
+		time.Sleep(20 * time.Millisecond)
+		bus.Publish(events.NewSessionUpdatedEvent(inst, []string{"title"}))
+	}()
+
+	got := waitForInstanceStartedEvent(bus, inst, 200*time.Millisecond)
+
+	if got {
+		t.Error("expected false: the published event's Session is not actually Started()")
+	}
+}
+
+// TestWaitForInstanceStartedEvent_should_ReturnFalse_When_BusIsNil covers the fallback path
+// for an unwired event bus — falls back to instance.Started() rather than hanging.
+func TestWaitForInstanceStartedEvent_should_ReturnFalse_When_BusIsNil(t *testing.T) {
+	inst := &session.Instance{UUID: "some-uuid"}
+
+	if waitForInstanceStartedEvent(nil, inst, 50*time.Millisecond) {
+		t.Error("expected false: nil bus falls back to instance.Started(), which is false for a never-started Instance")
 	}
 }
 

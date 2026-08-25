@@ -24,6 +24,7 @@ import (
 	"github.com/tstapler/stapler-squad/gen/proto/go/session/v1/sessionv1connect"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/pkg/ansi"
+	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/protocol"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/scrollback"
@@ -200,41 +201,48 @@ type cursorPositioner interface {
 // the resync always meeting the client's deadline.
 const withCursorSyncTimeout = 300 * time.Millisecond
 
-// startupWaitTimeout/startupWaitPollInterval bound streamViaHub's wait for a
-// concurrently-starting Instance to finish before attaching — see that wait
-// loop's doc comment for the 2026-08-25 incident this closes. The observed
-// real-world gap between a hub attach attempt and the instance's own Start()
-// completing was ~1.26s; 2s leaves comfortable margin without blocking this
-// connection indefinitely if that other code path never finishes.
-const (
-	startupWaitTimeout      = 2 * time.Second
-	startupWaitPollInterval = 50 * time.Millisecond
-)
+// startupWaitTimeout bounds streamViaHub's wait for a concurrently-starting
+// Instance to finish before attaching. Observed real-world gap was ~1.26s.
+const startupWaitTimeout = 2 * time.Second
 
-// startedChecker is the single method streamViaHub's startup wait needs from
-// *session.Instance — narrowed to an interface so the wait loop is testable
-// without constructing a real Instance.
-type startedChecker interface {
-	Started() bool
-}
-
-// waitForInstanceStarted polls chk.Started() every pollInterval until it
-// reports true or timeout elapses, returning the final observed value.
-// Returns immediately (true, no sleep) if already started. See
-// startupWaitTimeout's doc comment for why this exists and why it's bounded
-// rather than blocking indefinitely.
-func waitForInstanceStarted(chk startedChecker, timeout, pollInterval time.Duration) (started bool) {
-	if chk.Started() {
-		return true
+// waitForEvent blocks until bus delivers an event matching match, or timeout
+// elapses. Generic on purpose — reuse for other "watch for a session
+// transition" needs instead of adding another poll loop.
+func waitForEvent(bus *events.EventBus, timeout time.Duration, match func(*events.Event) bool) bool {
+	if bus == nil {
+		return false
 	}
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
-		time.Sleep(pollInterval)
-		if chk.Started() {
-			return true
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	ch, _ := bus.Subscribe(ctx)
+	for {
+		select {
+		case ev, ok := <-ch:
+			if !ok {
+				return false
+			}
+			if match(ev) {
+				return true
+			}
+		case <-ctx.Done():
+			return false
 		}
 	}
-	return false
+}
+
+// waitForInstanceStartedEvent waits for an EventSessionUpdated confirming
+// instance.Started(), rather than polling it directly. Relies on every
+// Start()-completion path publishing that event (server/dependencies.go's
+// boot-time restart and reconcile loops were missing it — now fixed). Falls
+// back to a direct Started() check on timeout or a nil bus.
+func waitForInstanceStartedEvent(bus *events.EventBus, instance *session.Instance, timeout time.Duration) bool {
+	if waitForEvent(bus, timeout, func(ev *events.Event) bool {
+		return ev.Type == events.EventSessionUpdated && ev.Session != nil &&
+			ev.Session.UUID == instance.UUID && ev.Session.Started()
+	}) {
+		return true
+	}
+	return instance.Started()
 }
 
 func withCursorSync(content string, target cursorPositioner) string {
@@ -1608,24 +1616,12 @@ func (h *ConnectRPCWebSocketHandler) streamViaHub(stream *connectWebSocketStream
 		}
 	}
 
-	// 2026-08-25 incident: the check above only covers "does the tmux session exist" —
-	// it says nothing about whether *this Instance's own* Start() sequence has finished.
-	// A tmux session can already exist (e.g. reused across a service restart), skipping
-	// the restore branch above entirely, while a *separate*, concurrently-triggered
-	// Instance.Start() call (from whatever code path opened this session in the UI) is
-	// still mid-flight — CapturePaneContentRaw/RefreshClientPriority/etc. all return
-	// streamhub.ErrSessionNotStarted until i.started flips true. Without this wait,
-	// AttachSubscriber below immediately negotiates a resize that's doomed to hit that
-	// error; streamhub now handles it gracefully (doesn't tear the hub down — see
-	// ErrSessionNotStarted's doc comment) but still wastes a full doomed attempt and
-	// whatever it costs the client (a resync round trip that returns nothing useful).
-	// Bounded and best-effort: if the instance still isn't started after
-	// startupWaitTimeout, proceed anyway and let the existing graceful-degradation path
-	// handle it, rather than blocking this connection indefinitely on some other code
-	// path's startup that may never complete.
+	// The tmux-session check above doesn't cover a concurrent Instance.Start() (e.g.
+	// server/dependencies.go's boot-time restart) still being mid-flight on a reused
+	// session. Wait briefly rather than racing AttachSubscriber into a doomed resize.
 	if !instance.Started() {
 		log.Info("[streamViaHub] instance not started yet, waiting briefly before attaching", "session", sessionID)
-		if !waitForInstanceStarted(instance, startupWaitTimeout, startupWaitPollInterval) {
+		if !waitForInstanceStartedEvent(h.sessionService.GetEventBus(), instance, startupWaitTimeout) {
 			log.Warn("[streamViaHub] instance still not started after waiting, proceeding anyway", "session", sessionID, "waited", startupWaitTimeout)
 		}
 	}
