@@ -345,46 +345,77 @@ func (r *hubRegistry) GetOrCreate(sessionName string, controller streamhub.Sessi
 	return hub, nil
 }
 
+// pumpControlModeResubscribeDelay bounds how fast pumpControlModeOutputIntoHub
+// retries SubscribeControlModeUpdates after its subscription channel closes.
+// Control mode's process can crash and restart mid-session (StartControlMode
+// is refcounted and shared across connections; a crash closes every
+// subscriber, per control_mode.go's exit handler) — this is the retry
+// interval, not a one-shot timeout, since a genuinely abandoned session's
+// hub tears itself down independently (0 subscribers, grace period) and
+// takes this loop down with it via hub.State() below.
+const pumpControlModeResubscribeDelay = 500 * time.Millisecond
+
 // pumpControlModeOutputIntoHub is the single production feed from a
 // session's raw control-mode output into its StreamHub (Task 2.2.2b's
 // minimal wiring for a working PathHubOwned path): it runs exactly once per
 // hub, since GetOrCreate only invokes it from the winning LoadOrCompute call,
 // so N attached subscribers never each run their own duplicate subscription
-// (the exact per-connection duplication this project's hub replaces). It
-// exits when the underlying subscription channel closes (session exited).
+// (the exact per-connection duplication this project's hub replaces).
 //
-// Known gap (left for Epic 3.2's registry-consolidation/observability
-// scope): nothing here calls UnsubscribeControlModeUpdates on hub teardown,
-// and a hub recreated after teardown starts a fresh pump rather than
-// resuming an old one. Acceptable for this epic's dark-launch-flagged,
-// default-off scope; not acceptable to leave unaddressed once the flag
-// defaults on.
+// Resubscribes when the subscription channel closes, instead of exiting for
+// good, as long as the hub itself hasn't torn down. Control mode's
+// subscription channel closes both when a session genuinely ends AND when
+// its control-mode process merely crashes/restarts (StartControlMode is
+// refcounted; a mid-session crash-restart is a normal recoverable event, not
+// a session end) — the one-shot version of this function treated both
+// identically, so a single control-mode restart anywhere in a hub's
+// lifetime permanently starved it of live output with no way to recover
+// short of every subscriber detaching and a fresh reattach recreating the
+// hub (2026-08-25 regression: reported as "no real-time feedback while
+// typing, only updates after a resize" — resize still worked because
+// handleCurrentPaneRequest captures fresh via a direct capture-pane
+// subprocess call, entirely bypassing this pump). This was flagged as a
+// known gap not acceptable to ship once the streamhub default flipped on;
+// it shipped anyway — this closes it.
 func pumpControlModeOutputIntoHub(hub *streamhub.StreamHub, controller streamhub.SessionController, sessionName string) {
-	_, updates := controller.SubscribeControlModeUpdates()
-	for data := range updates {
-		hub.OnRawOutput(data)
+	for {
+		if hub.State() == streamhub.HubTornDown {
+			log.Info("streamhub raw-output pump exiting: hub torn down", "session", sessionName)
+			return
+		}
 
-		// Drain every frame immediately available on updates into the same
-		// hub-owned batch window, then flush opportunistically — mirroring
-		// the legacy per-connection coalesce loop's `select {...; default:
-		// break coalesce}` pattern (~line 964-976 below) so a burst that
-		// happens to drain the channel doesn't always pay BatchWindow's full
-		// MaxBatchWindow ceiling latency before subscribers see it.
-	drain:
-		for {
-			select {
-			case more, ok := <-updates:
-				if !ok {
+		_, updates := controller.SubscribeControlModeUpdates()
+		for data := range updates {
+			hub.OnRawOutput(data)
+
+			// Drain every frame immediately available on updates into the same
+			// hub-owned batch window, then flush opportunistically — mirroring
+			// the legacy per-connection coalesce loop's `select {...; default:
+			// break coalesce}` pattern (~line 964-976 below) so a burst that
+			// happens to drain the channel doesn't always pay BatchWindow's full
+			// MaxBatchWindow ceiling latency before subscribers see it.
+		drain:
+			for {
+				select {
+				case more, ok := <-updates:
+					if !ok {
+						break drain
+					}
+					hub.OnRawOutput(more)
+				default:
 					break drain
 				}
-				hub.OnRawOutput(more)
-			default:
-				break drain
 			}
+			hub.TryFlush()
 		}
-		hub.TryFlush()
+
+		if hub.State() == streamhub.HubTornDown {
+			log.Info("streamhub raw-output pump exiting: hub torn down", "session", sessionName)
+			return
+		}
+		log.Warn("streamhub raw-output pump: control mode subscription closed, resubscribing", "session", sessionName)
+		time.Sleep(pumpControlModeResubscribeDelay)
 	}
-	log.Info("streamhub raw-output pump exiting", "session", sessionName)
 }
 
 // useStreamHub is the global STAPLER_SQUAD_USE_STREAM_HUB default resolver,

@@ -949,6 +949,15 @@ func TestHubRegistry_should_CallSubscribeControlModeUpdatesExactlyOnce_When_Mult
 // returns an already-closed channel and so can never deliver a burst).
 type pumpTestController struct {
 	updates chan []byte
+
+	// subscribeCalls counts SubscribeControlModeUpdates invocations —
+	// TestPumpControlModeOutputIntoHub_should_ResubscribeAndKeepDelivering_When_ControlModeRestartsMidSession
+	// uses this to hand back a fresh channel starting from the second call,
+	// simulating control mode crashing and restarting mid-session.
+	subscribeCalls atomic.Int32
+	// resubscribeUpdates, when non-nil, is returned from the second
+	// SubscribeControlModeUpdates call onward instead of updates.
+	resubscribeUpdates chan []byte
 }
 
 func (c *pumpTestController) SetWindowSize(int, int) error { return nil }
@@ -962,6 +971,10 @@ func (c *pumpTestController) GetPaneCursorPosition() (x, y int, err error) {
 func (c *pumpTestController) StopControlMode() error               { return nil }
 func (c *pumpTestController) UnsubscribeControlModeUpdates(string) {}
 func (c *pumpTestController) SubscribeControlModeUpdates() (string, <-chan []byte) {
+	n := c.subscribeCalls.Add(1)
+	if n > 1 && c.resubscribeUpdates != nil {
+		return "pump-test-sub-resubscribed", c.resubscribeUpdates
+	}
 	return "pump-test-sub", c.updates
 }
 
@@ -996,7 +1009,17 @@ func TestPumpControlModeOutputIntoHub_should_FlushOpportunistically_When_Channel
 
 	start := time.Now()
 	go pumpControlModeOutputIntoHub(hub, controller, "pump-early-flush-"+t.Name())
-	t.Cleanup(func() { close(controller.updates) })
+	// ForceTeardown before closing updates: the pump now resubscribes
+	// whenever its channel closes (2026-08-25 fix — control mode can
+	// crash/restart mid-session, so a closed channel alone no longer means
+	// "stop for good"), and only exits when hub.State() reports
+	// HubTornDown. Without this, closing controller.updates alone would
+	// leave the pump goroutine spinning a resubscribe retry forever in the
+	// background after this test returns.
+	t.Cleanup(func() {
+		_ = hub.ForceTeardown()
+		close(controller.updates)
+	})
 
 	require.Eventually(t, func() bool {
 		for _, frame := range transport.ReceivedFrames() {
@@ -1010,6 +1033,56 @@ func TestPumpControlModeOutputIntoHub_should_FlushOpportunistically_When_Channel
 	elapsed := time.Since(start)
 	require.Less(t, elapsed, ceiling/2,
 		"burst was flushed in %s — should have been well under half the %s ceiling if TryFlush fired opportunistically instead of waiting on the timer", elapsed, ceiling)
+}
+
+// TestPumpControlModeOutputIntoHub_should_ResubscribeAndKeepDelivering_When_ControlModeRestartsMidSession
+// is the regression test for the 2026-08-25 bug: control mode's process can
+// crash and restart mid-session (StartControlMode is refcounted; a crash
+// closes every subscriber's channel — session/tmux/control_mode.go's exit
+// handler), which is a normal recoverable event, not a session end. Before
+// this fix, pumpControlModeOutputIntoHub treated its subscription channel
+// closing as permanent and returned for good, silently starving the hub of
+// all live output for the rest of its lifetime even though control mode
+// came back seconds later — reported as "no real-time feedback while
+// typing, updates only appear after a resize" (resize still worked because
+// handleCurrentPaneRequest captures fresh via a direct capture-pane
+// subprocess call, bypassing this pump entirely).
+func TestPumpControlModeOutputIntoHub_should_ResubscribeAndKeepDelivering_When_ControlModeRestartsMidSession(t *testing.T) {
+	t.Parallel()
+
+	controller := &pumpTestController{
+		updates:            make(chan []byte, 4),
+		resubscribeUpdates: make(chan []byte, 4),
+	}
+	hub := streamhub.NewStreamHub("pump-resubscribe-"+t.Name(), controller,
+		streamhub.WithBatchMaxWindow(2*time.Second))
+	t.Cleanup(func() { _ = hub.ForceTeardown() })
+
+	transport := streamhub.NewMemoryTransport()
+	hub.AttachSubscriber(transport, streamhub.SubscriberCapability{})
+
+	go pumpControlModeOutputIntoHub(hub, controller, "pump-resubscribe-"+t.Name())
+
+	// First "control mode session": deliver a frame, then simulate a crash
+	// by closing its channel — control mode's own exit handler does the same
+	// to every subscriber when the process dies.
+	controller.updates <- []byte("before-crash;")
+	require.Eventually(t, func() bool {
+		return bytes.Contains(bytes.Join(transport.ReceivedFrames(), nil), []byte("before-crash;"))
+	}, time.Second, 5*time.Millisecond, "expected the pre-crash frame to be delivered")
+	close(controller.updates)
+
+	// Control mode "restarts": the pump must resubscribe (picking up
+	// resubscribeUpdates, per the fake's second-call behavior) and keep
+	// delivering — not have exited for good when updates closed above.
+	require.Eventually(t, func() bool {
+		return controller.subscribeCalls.Load() >= 2
+	}, time.Second, 5*time.Millisecond, "expected the pump to resubscribe after its channel closed instead of exiting for good")
+
+	controller.resubscribeUpdates <- []byte("after-restart;")
+	require.Eventually(t, func() bool {
+		return bytes.Contains(bytes.Join(transport.ReceivedFrames(), nil), []byte("after-restart;"))
+	}, time.Second, 5*time.Millisecond, "expected the post-restart frame to be delivered via the resubscribed channel")
 }
 
 // TestStreamTerminal_should_RouteThroughHubWithNoLegacyResizeCall_When_PathHubOwnedResolved
