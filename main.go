@@ -1146,49 +1146,6 @@ func startRemoteAccess(ctx context.Context, srv *server.Server, localAddr string
 		MinVersion:     tls.VersionTLS12,
 	}
 
-	// Determine rpID: config/flag override > first detected hostname > detected LAN IP.
-	// WebAuthn spec requires a domain name; IP addresses are not accepted by browsers.
-	rpID := cfg.PasskeyRPID
-	if rpID == "" {
-		if len(hostnames) > 0 {
-			rpID = hostnames[0]
-		} else {
-			rpID = lanIPStr
-		}
-	}
-	allRPIDs := []string{rpID}
-	if len(hostnames) > 1 {
-		allRPIDs = append(allRPIDs, hostnames...)
-	}
-
-	origins := []string{fmt.Sprintf("https://%s:%d", rpID, remotePort)}
-	for _, hn := range hostnames {
-		origins = append(origins, fmt.Sprintf("https://%s:%d", hn, remotePort))
-	}
-	origins = append(origins, fmt.Sprintf("https://localhost:%d", remotePort))
-
-	displayHost := rpID
-	if len(hostnames) > 0 {
-		displayHost = hostnames[0]
-	}
-	origin := fmt.Sprintf("https://%s:%d", displayHost, remotePort)
-
-	srv.SetOrigins(append(srv.GetOrigins(), origins...))
-
-	// Initialise auth subsystem.
-	store, err := serverauth.NewCredentialStore()
-	if err != nil {
-		return fmt.Errorf("create credential store: %w", err)
-	}
-
-	// Persist auth sessions so the phone stays logged in across server restarts.
-	configDir, err := config.GetConfigDir()
-	if err != nil {
-		return fmt.Errorf("get config dir: %w", err)
-	}
-	sessionsPath := filepath.Join(configDir, "auth-sessions.json")
-	sessions := serverauth.NewSessionManager(sessionsPath)
-
 	// A hostname not in allRPIDs at startup may still be a legitimate LAN
 	// client -- discovery is one-shot at boot (see detectLANIPs/
 	// resolveLANHostnames above) and misses anything not yet resolvable at
@@ -1211,6 +1168,76 @@ func startRemoteAccess(ctx context.Context, srv *server.Server, localAddr string
 		}
 		return false
 	}
+
+	// resolveLANHostnames' boot-time candidates (reverse DNS/PTR, avahi/mDNS,
+	// hostname -f, search-domain guesses) are never re-checked after this
+	// point, unlike a hostname registered dynamically at request time via
+	// hostnameValidator above. Run them through the same forward-DNS-ownership
+	// check here so a stale or spoofable boot-time guess can't sit in the
+	// static rpID list unverified for the life of the process.
+	rawHostnames := hostnames
+	var verifiedHostnames []string
+	for _, hn := range hostnames {
+		if hostnameValidator(hn) {
+			verifiedHostnames = append(verifiedHostnames, hn)
+		} else {
+			log.Warn("webauthn: dropping unverified boot-time hostname candidate", "hostname", hn)
+		}
+	}
+	hostnames = verifiedHostnames
+
+	// Determine rpID: config/flag override > first detected hostname > detected LAN IP.
+	// WebAuthn spec requires a domain name; IP addresses are not accepted by browsers.
+	rpID := cfg.PasskeyRPID
+	if rpID == "" {
+		if len(hostnames) > 0 {
+			rpID = hostnames[0]
+		} else {
+			rpID = lanIPStr
+		}
+	}
+	allRPIDs := []string{rpID}
+	if len(hostnames) > 1 {
+		allRPIDs = append(allRPIDs, hostnames...)
+	}
+
+	origins := []string{fmt.Sprintf("https://%s:%d", rpID, remotePort)}
+	for _, hn := range hostnames {
+		origins = append(origins, fmt.Sprintf("https://%s:%d", hn, remotePort))
+	}
+	origins = append(origins, fmt.Sprintf("https://localhost:%d", remotePort))
+
+	// displayHost is shown to the user (QR code, setup URL, console banner) --
+	// it is not trusted as an rpID/origin here. If every boot-time candidate
+	// failed hostnameValidator above (e.g. DNS/Wi-Fi still coming up when this
+	// process started), prefer an unverified hostname over lanIPStr: WebAuthn
+	// requires a domain name, browsers reject IP RPIDs, and a real request to
+	// this hostname is re-validated for real by webauthnForHost's runtime path
+	// (server/auth/webauthn.go) before it's ever trusted as an rpID.
+	displayHost := rpID
+	switch {
+	case len(hostnames) > 0:
+		displayHost = hostnames[0]
+	case len(rawHostnames) > 0:
+		displayHost = rawHostnames[0]
+	}
+	origin := fmt.Sprintf("https://%s:%d", displayHost, remotePort)
+
+	srv.SetOrigins(append(srv.GetOrigins(), origins...))
+
+	// Initialise auth subsystem.
+	store, err := serverauth.NewCredentialStore()
+	if err != nil {
+		return fmt.Errorf("create credential store: %w", err)
+	}
+
+	// Persist auth sessions so the phone stays logged in across server restarts.
+	configDir, err := config.GetConfigDir()
+	if err != nil {
+		return fmt.Errorf("get config dir: %w", err)
+	}
+	sessionsPath := filepath.Join(configDir, "auth-sessions.json")
+	sessions := serverauth.NewSessionManager(sessionsPath)
 
 	waHandler, err := serverauth.NewHandler(allRPIDs, origins, store, sessions, hostnameValidator)
 	if err != nil {
