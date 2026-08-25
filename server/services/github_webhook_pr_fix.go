@@ -274,6 +274,23 @@ func (h *GitHubWebhookHandler) handlePRFixEvent(w http.ResponseWriter, r *http.R
 		})
 	}
 
+	// Delivery-level dedup (AC0): mirrors the push path's dedup intent, but via an
+	// application-level existence check rather than the (workflow_id, delivery_id)
+	// unique-index claim claimTriggerFireEvent relies on — that index cannot dedup
+	// these rows, which are persisted with WorkflowID: nil (see
+	// ExistsByDeliveryID's doc comment). A lookup failure fails open (proceeds with
+	// processing) rather than blocking a legitimate delivery on a dedup-check error.
+	if deliveryID != "" && h.fireEvents != nil {
+		duplicate, dupErr := h.fireEvents.ExistsByDeliveryID(ctx, deliveryID)
+		if dupErr != nil {
+			log.Warn("[GitHubWebhookHandler] delivery-dedup check failed, proceeding without dedup", "delivery_id", deliveryID, "err", dupErr)
+		} else if duplicate {
+			log.Info("[GitHubWebhookHandler] duplicate delivery, skipping reprocessing", "delivery_id", deliveryID, "event_type", eventType)
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+	}
+
 	if h.prFixRouter == nil {
 		persistTriggerFireEvent(ctx, h.fireEvents, session.TriggerFireEventInput{
 			Outcome: "fired_failed", DeliveryID: deliveryID, ErrorMessage: "no PRFixEventRouter configured",

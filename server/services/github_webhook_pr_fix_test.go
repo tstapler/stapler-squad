@@ -267,6 +267,29 @@ func TestHandlePRFixEvent_should_CallRouterAndPersistFiredSuccess_When_DeliveryA
 	assert.Empty(t, events)
 }
 
+// TestHandlePRFixEvent_should_NotReprocess_When_SameDeliveryIDRedelivered is the
+// regression test for the review-verdict gap: since PR-fix TriggerFireEvent rows
+// carry WorkflowID: nil, the (workflow_id, delivery_id) unique index the push path's
+// dedup relies on cannot distinguish two nil-workflow rows sharing a delivery_id
+// (NULL != NULL) — a GitHub redelivery must still be recognized as a duplicate via
+// ExistsByDeliveryID before ever reaching the router a second time.
+func TestHandlePRFixEvent_should_NotReprocess_When_SameDeliveryIDRedelivered(t *testing.T) {
+	infra := newWebhookTestInfra(t)
+	infra.cfg.FeatureFlags["pr_event_webhooks"] = true
+	newGitHubPushWorkflow(t, infra, "gh-9", "s3cr3t", "tstapler/stapler-squad", "main", "x")
+	router := &fakePRFixEventRouter{matched: true}
+	h := NewGitHubWebhookHandler(infra.workflowRepo, infra.scheduler, infra.fireEvents, infra.cfg, router)
+
+	body := checkRunFailureBody(t)
+	rec1 := doPRFixEventRequest(t, h, "check_run", body, "delivery-redelivered", sign("s3cr3t", body))
+	require.Equal(t, http.StatusOK, rec1.Code)
+	require.Equal(t, 1, router.callCount())
+
+	rec2 := doPRFixEventRequest(t, h, "check_run", body, "delivery-redelivered", sign("s3cr3t", body))
+	assert.Equal(t, http.StatusOK, rec2.Code)
+	assert.Equal(t, 1, router.callCount(), "a redelivery of the same X-GitHub-Delivery ID must not call the router a second time")
+}
+
 func TestHandlePRFixEvent_should_PersistFiredFailed_When_PRFixRouterIsNilConfigured(t *testing.T) {
 	infra := newWebhookTestInfra(t)
 	infra.cfg.FeatureFlags["pr_event_webhooks"] = true

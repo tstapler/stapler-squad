@@ -1219,6 +1219,13 @@ func (l *BacklogLifecycleListener) remediatePRFixWithBackoffGate(ctx context.Con
 		return false, nil
 	}
 
+	// Trigger-source tag (webhook vs poller-tick) at the single funnel both
+	// ReconcilePRPending's 60s-tick loop and TriggerPRFixForEvent's on-demand call
+	// share for an actual fix attempt — the data point AC8's "% triggered by webhook
+	// vs poller" measurement needs, since TriggerFireEvent alone only ever sees the
+	// webhook side (the poller never writes to that table, by design — AC3).
+	log.InfoLog().Printf("[BacklogLifecycle] remediatePRFixWithBackoffGate item=%s: attempting fix (trigger_source=%s)", itemID, prFixTriggerSourceFrom(ctx))
+
 	return true, fixSpawner.AutoReopenForPRFix(ctx, itemID, fixCtx)
 }
 
@@ -1586,8 +1593,38 @@ func (l *BacklogLifecycleListener) TriggerPRFixForEvent(ctx context.Context, rep
 		return false, nil
 	}
 	log.InfoLog().Printf("[BacklogLifecycle] TriggerPRFixForEvent item=%s repo=%s pr=%d: reconciling now (webhook-triggered)", item.ID, repoFullName, prNumber)
-	l.reconcilePRPendingItem(ctx, er, item)
+	l.reconcilePRPendingItem(withPRFixTriggerSource(ctx, prFixTriggerSourceWebhook), er, item)
 	return true, nil
+}
+
+// prFixTriggerSource threads through context (rather than a new parameter on
+// reconcilePRPendingItem, which ADR-002 established as a pure, behavior-preserving
+// extraction) which of the two call sites — ReconcilePRPending's 60s-tick loop or
+// TriggerPRFixForEvent's on-demand webhook call — triggered a given reconciliation,
+// so remediatePRFixWithBackoffGate's fix-attempt log line can tag it. This is the
+// data AC8's "% of PR-fix reconciliations triggered by webhook vs. poller" needs:
+// TriggerFireEvent rows alone only ever see the webhook side (the poller never
+// writes to that table, by design), so the poller side is only derivable from this
+// log line, not a table query alone.
+type prFixTriggerSourceKey struct{}
+
+const (
+	prFixTriggerSourceWebhook = "webhook"
+	prFixTriggerSourcePoller  = "poller"
+)
+
+func withPRFixTriggerSource(ctx context.Context, source string) context.Context {
+	return context.WithValue(ctx, prFixTriggerSourceKey{}, source)
+}
+
+// prFixTriggerSourceFrom defaults to "poller" — ReconcilePRPending's loop (the only
+// other caller of reconcilePRPendingItem) doesn't tag its ctx, since that's the
+// baseline 60s-tick path.
+func prFixTriggerSourceFrom(ctx context.Context) string {
+	if v, ok := ctx.Value(prFixTriggerSourceKey{}).(string); ok && v != "" {
+		return v
+	}
+	return prFixTriggerSourcePoller
 }
 
 // logFeedbackBatchCoverage logs the count and authors of every substantive

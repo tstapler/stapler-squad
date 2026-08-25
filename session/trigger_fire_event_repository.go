@@ -46,6 +46,17 @@ type TriggerFireEventRepository interface {
 	// "pending" row to "fired_success"/"fired_failed" after the fire attempt completes.
 	// Returns an error if no row matches the key.
 	UpdateOutcome(ctx context.Context, workflowID uuid.UUID, deliveryID, outcome, sessionID, errMsg string) error
+	// ExistsByDeliveryID reports whether ANY row already exists for deliveryID,
+	// regardless of workflow_id. Used by handlePRFixEvent (the check_run/workflow_run/
+	// pull_request_review/issue_comment path) for redelivery dedup: those rows are
+	// persisted with WorkflowID: nil (Migration Plan), so the (workflow_id,
+	// delivery_id) unique index Create/ErrDuplicateDelivery rely on cannot dedup them —
+	// NULL is never equal to NULL in that index, so two nil-workflow rows sharing a
+	// delivery_id would never collide. This is an application-level existence check
+	// (a narrow TOCTOU window under concurrent duplicate deliveries, unlike Create's
+	// atomic DB-constraint claim), acceptable here since GitHub redeliveries of the
+	// same delivery_id are not expected to race concurrently in practice.
+	ExistsByDeliveryID(ctx context.Context, deliveryID string) (bool, error)
 }
 
 // EntTriggerFireEventRepository implements TriggerFireEventRepository using the ent ORM.
@@ -153,4 +164,17 @@ func (r *EntTriggerFireEventRepository) UpdateOutcome(ctx context.Context, workf
 		return fmt.Errorf("update trigger fire event outcome: no row found for workflow_id=%s delivery_id=%q", workflowID, deliveryID)
 	}
 	return nil
+}
+
+// ExistsByDeliveryID reports whether any row already exists for deliveryID, across
+// all workflow_id values (including nil). See the interface doc comment for why this
+// exists as a separate, non-unique-index-backed check.
+func (r *EntTriggerFireEventRepository) ExistsByDeliveryID(ctx context.Context, deliveryID string) (bool, error) {
+	exists, err := r.client.TriggerFireEvent.Query().
+		Where(triggerfireevent.DeliveryID(deliveryID)).
+		Exist(ctx)
+	if err != nil {
+		return false, fmt.Errorf("check trigger fire event exists for delivery_id=%q: %w", deliveryID, err)
+	}
+	return exists, nil
 }

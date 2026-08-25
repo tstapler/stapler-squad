@@ -2,12 +2,14 @@ package session
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	gogit "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/config"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/session/git"
 )
 
 // newTestRepoWithRemote creates a real (empty) git repository at a fresh temp
@@ -168,4 +170,69 @@ func TestTriggerPRFixForEvent_should_ReturnFalseNil_When_NoPrPendingItemMatches(
 
 	require.NoError(t, err)
 	assert.False(t, matched)
+}
+
+// TestTriggerPRFixForEvent_should_TagFixAttemptLogAsWebhookTriggered and
+// TestReconcilePRPending_should_TagFixAttemptLogAsPollerTriggered are the regression
+// tests for the review-verdict gap on AC8 ("% of PR-fix reconciliations triggered by
+// webhook vs. poller ... derivable from TriggerFireEvent outcomes and the
+// first-successful-delivery log line"): since PRStatusPoller never writes to
+// TriggerFireEvent (by design, AC3), the poller side of that split is only knowable
+// via remediatePRFixWithBackoffGate's trigger_source-tagged log line. These two tests
+// confirm the same fix-attempt funnel logs the correct source for each of
+// TriggerPRFixForEvent's two callers.
+func TestTriggerPRFixForEvent_should_TagFixAttemptLogAsWebhookTriggered(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	repoPath := newTestRepoWithRemote(t, "https://github.com/tstapler/stapler-squad.git")
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:              "PR pending test item",
+		AcceptanceCriteria: `[]`,
+		Priority:           1,
+		Status:             string(BacklogStatusPRPending),
+		RepoPath:           repoPath,
+	})
+	require.NoError(t, err)
+	prURL := "https://github.com/tstapler/stapler-squad/pull/189"
+	prNumber := 189
+	_, err = storage.UpdateBacklogItem(ctx, item.ID, BacklogItemUpdate{PrURL: &prURL, PrNumber: &prNumber}, nil)
+	require.NoError(t, err)
+
+	listener := NewBacklogLifecycleListener(storage)
+	listener.SetEnabled(true)
+	overridePRPendingChecker(t, listener, &fakePRPendingChecker{
+		status: &git.PRStatus{CIFailing: true, FeedbackText: "CI failed"},
+	})
+	listener.SetPRFixSpawner(&fakePRFixSpawner{})
+
+	buf := redirectInfoLog(t)
+	matched, err := listener.TriggerPRFixForEvent(ctx, "tstapler/stapler-squad", 189)
+
+	require.NoError(t, err)
+	assert.True(t, matched)
+	assert.True(t, strings.Contains(buf.String(), "attempting fix (trigger_source=webhook)"), "webhook-triggered reconciliation must tag its fix-attempt log line as trigger_source=webhook; got: %s", buf.String())
+}
+
+func TestReconcilePRPending_should_TagFixAttemptLogAsPollerTriggered(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	item := newPRPendingTestItem(t, storage, 9099)
+
+	listener := NewBacklogLifecycleListener(storage)
+	overridePRPendingChecker(t, listener, &fakePRPendingChecker{
+		status: &git.PRStatus{CIFailing: true, FeedbackText: "CI failed"},
+	})
+	listener.SetPRFixSpawner(&fakePRFixSpawner{})
+
+	buf := redirectInfoLog(t)
+	listener.ReconcilePRPending(ctx, storage.repo)
+
+	_ = item
+	assert.True(t, strings.Contains(buf.String(), "attempting fix (trigger_source=poller)"), "poller-tick reconciliation must tag its fix-attempt log line as trigger_source=poller; got: %s", buf.String())
 }
