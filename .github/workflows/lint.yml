@@ -169,12 +169,27 @@ jobs:
       - name: ESLint (no-100vh, mobile regression rules)
         working-directory: web-app
         run: |
-          # Only lint files changed in this PR to avoid surfacing pre-existing issues
-          # in unmodified files. Falls back to full scan on push-to-main (no PR context).
-          # --max-warnings 0 is not used for full scan: pre-existing warnings in untouched
-          # files should not block push/workflow_dispatch. Errors (no-100vh etc.) still fail.
-          if [ -n "${{ github.event.pull_request.base.sha }}" ]; then
-            CHANGED=$(git diff --name-only "${{ github.event.pull_request.base.sha }}"...HEAD \
+          # Only lint files changed by this push/PR — avoids surfacing the repo's ~1450
+          # pre-existing warnings (found 2026-08-25: this file's OLD "falls back to full
+          # scan on push" comment claimed pre-existing warnings wouldn't block push, but
+          # `next lint` (unlike raw eslint) exits 1 on ANY warning, not just errors — so
+          # every direct push to main had been failing this check silently for at least
+          # 6 commits before anyone noticed, since push events never got the PR path's
+          # file-scoped treatment). Push events now diff against github.event.before (the
+          # commit before this push) using the same file-scoped `next lint --file` call
+          # the PR path already uses — PRs and pushes share one code path below.
+          BASE_SHA="${{ github.event.pull_request.base.sha }}"
+          if [ -z "$BASE_SHA" ]; then
+            CANDIDATE="${{ github.event.before }}"
+            # event.before is all-zeros on a new branch's first push (no prior commit to
+            # diff against) — fall back to a full scan in that case, same as before.
+            if [ -n "$CANDIDATE" ] && [ "$CANDIDATE" != "0000000000000000000000000000000000000000" ] \
+              && git cat-file -e "$CANDIDATE" 2>/dev/null; then
+              BASE_SHA="$CANDIDATE"
+            fi
+          fi
+          if [ -n "$BASE_SHA" ]; then
+            CHANGED=$(git diff --name-only "$BASE_SHA"...HEAD \
               -- 'web-app/**.ts' 'web-app/**.tsx' 2>/dev/null \
               | grep -E '\.(ts|tsx)$' | sed 's|^web-app/||' || true)
             if [ -z "$CHANGED" ]; then
