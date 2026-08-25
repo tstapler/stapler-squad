@@ -71,3 +71,35 @@ func TestArchiveSessionByUUID_SetsStatusStopped(t *testing.T) {
 	assert.NotNil(t, snap.ArchivedAt, "expected ArchivedAt to be set")
 	assert.Equal(t, session.Stopped, snap.Status, "expected Status to transition to Stopped when archiving by UUID")
 }
+
+// TestArchiveSessionByUUID_should_useStorageFallback_When_SessionNotInLivePoller is the
+// regression test for the fix where ArchiveSessionByUUID silently no-op'd for any session
+// not resident in ReviewQueuePoller.instances (e.g. after a server restart) — the
+// done-transition hook and the periodic archive_terminal_sessions safety-net sweep both
+// called it correctly, but ArchivedAt never got set because FindLiveInstance came back
+// nil. This session is persisted in storage but deliberately never added to fix.poller.
+func TestArchiveSessionByUUID_should_useStorageFallback_When_SessionNotInLivePoller(t *testing.T) {
+	t.Parallel()
+	fix := setupForkTestFixture(t)
+	defer fix.cleanup()
+
+	inst := &session.Instance{
+		Title:     "not-in-poller",
+		UUID:      "test-uuid-not-in-poller",
+		Path:      "/tmp/test",
+		Status:    session.Paused,
+		Program:   "claude",
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	}
+	require.NoError(t, fix.storage.AddInstance(inst))
+	require.Nil(t, fix.poller.FindInstance("test-uuid-not-in-poller"), "precondition: session must not be in the live poller")
+
+	err := fix.svc.ArchiveSessionByUUID(context.Background(), "test-uuid-not-in-poller")
+	require.NoError(t, err)
+
+	data, err := fix.storage.FindInstanceDataByID("test-uuid-not-in-poller")
+	require.NoError(t, err)
+	assert.NotNil(t, data.ArchivedAt, "expected ArchivedAt to be set via the storage fallback")
+	assert.Equal(t, session.Stopped, data.Status, "expected Status to transition to Stopped via the storage fallback")
+}

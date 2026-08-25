@@ -877,12 +877,26 @@ func (s *SessionService) FindLiveInstance(id string) *session.Instance {
 // session.SessionArchiver interface (implemented here so both BacklogService and
 // session.BacklogLifecycleListener can soft-archive backlog work sessions without
 // reinventing the ArchiveSession RPC's logic — see ArchiveSession above).
-// No-op (not an error) if the session isn't tracked live or is already archived, so
+// Falls back to a storage-only write when the session isn't in the live in-memory
+// registry (FindLiveInstance only searches ReviewQueuePoller.instances, which does not
+// necessarily contain every session ever persisted — e.g. after a server restart).
+// Without this fallback, archival silently no-ops for such sessions and they never get
+// hidden from the default session list, no matter how many times a sweep retries them
+// (root cause of the 337/352-session pileup investigated 2026-08-24: a done backlog item
+// still had 14 un-archived work sessions despite the done-transition hook and the
+// periodic archive_terminal_sessions safety-net both firing correctly).
+// No-op (not an error) if the session doesn't exist anywhere or is already archived, so
 // callers can invoke this unconditionally from a sweep without extra existence checks.
 func (s *SessionService) ArchiveSessionByUUID(ctx context.Context, sessionUUID string) error {
 	inst := s.FindLiveInstance(sessionUUID)
 	if inst == nil {
-		return nil // already gone / never tracked
+		if s.concStorage == nil {
+			return nil // fake InstanceStore (tests) — no storage-only fallback available
+		}
+		if _, err := s.concStorage.ArchiveInstanceDataByID(sessionUUID, time.Now()); err != nil {
+			return fmt.Errorf("failed to archive session %s via storage fallback: %w", sessionUUID, err)
+		}
+		return nil
 	}
 	// SetArchivedAtIfNilAndStop also transitions Status to Stopped (see ArchiveSession's
 	// comment) — safe to call unconditionally: no-ops the transition if already Stopped.
