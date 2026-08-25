@@ -183,7 +183,7 @@ func runGatedFastLane[T any](ctx context.Context, serverSocket string, fn func()
 	return runGatedWith(ctx, serverSocket, resyncFastLaneAcquireTimeout, AcquireResyncExecSlot, fn)
 }
 
-// resyncFastLaneTimeout bounds the ENTIRE runFastLaneSubprocess call — both
+// ResyncFastLaneTimeout bounds the ENTIRE runFastLaneSubprocess call — both
 // the exec-gate acquire wait and the subprocess execution that follows it —
 // not just the acquire step runGatedFastLane's own ctx parameter bounds.
 // 2026-08-25 incident: CapturePaneContentPriority/CapturePaneContentRawPriority
@@ -200,21 +200,31 @@ func runGatedFastLane[T any](ctx context.Context, serverSocket string, fn func()
 // a closed connection. Mirrors resyncFastLaneAcquireTimeout's margin logic:
 // 3s leaves a 1s safety margin under the 4s client ceiling for network/
 // marshal/dispatch latency after the call returns.
-const resyncFastLaneTimeout = 3 * time.Second
+const ResyncFastLaneTimeout = 3 * time.Second
 
 // runFastLaneSubprocess is the single call-site pattern every fast-lane tmux
 // subprocess spawn (the *Priority() methods) must use instead of hand-rolling
 // context creation + runGatedFastLane around each one — see
-// resyncFastLaneTimeout's doc comment for the incident this closes off. fn
-// receives the same ctx bounded by resyncFastLaneTimeout that governs the
-// exec-gate acquire wait, so build the *exec.Cmd inside fn via
-// buildTmuxCommandContext(ctx, ...) — never the context-less buildTmuxCommand
-// (see its own doc comment: "callers that need timeout protection should use
-// exec.CommandContext directly") — so ctx expiring actually kills a wedged
-// subprocess mid-flight, not just gives up waiting for a free gate slot.
-func runFastLaneSubprocess[T any](serverSocket string, fn func(ctx context.Context) (T, error)) (T, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), resyncFastLaneTimeout)
-	defer cancel()
+// ResyncFastLaneTimeout's doc comment for the incident this closes off.
+//
+// ctx is caller-supplied, not manufactured fresh here — a single resync
+// operation (handleCurrentPaneRequest) makes several of these calls in
+// sequence (up to 3 refresh-client calls, a dimension verify, a final
+// capture), and each minting its own independent ResyncFastLaneTimeout
+// budget let the *total* elapsed time silently exceed the client's stall
+// watchdog even after the per-call bound was fixed — 5 sequential 3s
+// allowances is still up to 15s of real wall-clock time. The caller
+// constructs ctx ONCE via context.WithTimeout(context.Background(),
+// ResyncFastLaneTimeout) at the start of the whole operation and threads it
+// through every call in that operation instead, so the shared deadline
+// actually decreases call to call rather than resetting every time — a real
+// remaining-time budget, not a repeated arbitrary default. Build the
+// *exec.Cmd inside fn via buildTmuxCommandContext(ctx, ...) — never the
+// context-less buildTmuxCommand (see its own doc comment: "callers that need
+// timeout protection should use exec.CommandContext directly") — so ctx
+// expiring actually kills a wedged subprocess mid-flight, not just gives up
+// waiting for a free gate slot.
+func runFastLaneSubprocess[T any](ctx context.Context, serverSocket string, fn func(ctx context.Context) (T, error)) (T, error) {
 	return runGatedFastLane(ctx, serverSocket, func() (T, error) {
 		return fn(ctx)
 	})
@@ -222,8 +232,8 @@ func runFastLaneSubprocess[T any](serverSocket string, fn func(ctx context.Conte
 
 // runFastLaneSubprocessErr is runFastLaneSubprocess for the common
 // error-only result, mirroring runGatedErr's relationship to runGated.
-func runFastLaneSubprocessErr(serverSocket string, fn func(ctx context.Context) error) error {
-	_, err := runFastLaneSubprocess(serverSocket, func(ctx context.Context) (struct{}, error) {
+func runFastLaneSubprocessErr(ctx context.Context, serverSocket string, fn func(ctx context.Context) error) error {
+	_, err := runFastLaneSubprocess(ctx, serverSocket, func(ctx context.Context) (struct{}, error) {
 		return struct{}{}, fn(ctx)
 	})
 	return err

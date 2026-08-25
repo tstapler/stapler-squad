@@ -440,62 +440,60 @@ poll:
 	assert.Equal(t, n, maxHeld, "gate should reach full saturation across processes at some point during the test")
 }
 
-// TestRunFastLaneSubprocess_should_BoundCtxToResyncFastLaneTimeout_When_Called
-// is the regression test for the 2026-08-25 incident (see resyncFastLaneTimeout's
-// doc comment): CapturePaneContentPriority/CapturePaneContentRawPriority each
-// hand-built their own context.WithTimeout(..., defaultCapturePaneTimeout) — 10s,
-// sized for the unrelated default pool — and RefreshClientPriority had no bound
-// on its subprocess call at all (context.Background()). Either mistake is
-// exactly the class runFastLaneSubprocess's consolidation closes off: fn can
-// only ever receive the one ctx the helper itself constructs, so a future
-// *Priority() method literally cannot reach for the wrong constant or skip the
-// bound entirely — this test asserts that ctx actually carries the deadline
-// resyncFastLaneTimeout (not defaultCapturePaneTimeout, not no deadline at
-// all) directly, without needing to simulate a real hung subprocess.
-func TestRunFastLaneSubprocess_should_BoundCtxToResyncFastLaneTimeout_When_Called(t *testing.T) {
+// TestRunFastLaneSubprocess_should_ForwardCallerCtxUnchanged_When_Called is the
+// regression test for two incidents (see ResyncFastLaneTimeout's doc comment):
+// (1) CapturePaneContentPriority/CapturePaneContentRawPriority each hand-built their own
+// context.WithTimeout(..., defaultCapturePaneTimeout) — 10s, sized for the unrelated
+// default pool — and RefreshClientPriority had no bound on its subprocess call at all
+// (context.Background()); (2) even after each individual call was bounded, several fast-lane
+// calls in one resync each minting an independent fresh ResyncFastLaneTimeout budget could
+// still add up to far more real wall-clock time than the client's stall watchdog allows.
+// runFastLaneSubprocess no longer manufactures its own timeout at all — the caller
+// constructs one shared ctx per whole operation and passes it in — so this test asserts fn
+// receives exactly the ctx the caller supplied (same deadline, not a fresh unrelated one),
+// proving the helper is a pure pass-through rather than silently creating a second budget.
+func TestRunFastLaneSubprocess_should_ForwardCallerCtxUnchanged_When_Called(t *testing.T) {
 	serverSocket := setupExecGateTestConfig(t, 4, 4)
 
-	before := time.Now()
+	callerCtx, cancel := context.WithTimeout(context.Background(), ResyncFastLaneTimeout)
+	defer cancel()
+	wantDeadline, ok := callerCtx.Deadline()
+	require.True(t, ok)
+
 	var observedDeadline time.Time
 	var hadDeadline bool
-	_, err := runFastLaneSubprocess(serverSocket, func(ctx context.Context) (struct{}, error) {
+	_, err := runFastLaneSubprocess(callerCtx, serverSocket, func(ctx context.Context) (struct{}, error) {
 		observedDeadline, hadDeadline = ctx.Deadline()
 		return struct{}{}, nil
 	})
-	after := time.Now()
 
 	require.NoError(t, err)
 	require.True(t, hadDeadline, "fn's ctx must carry a deadline — an unbounded context.Background() is exactly the RefreshClientPriority regression")
-
-	minExpected := before.Add(resyncFastLaneTimeout)
-	maxExpected := after.Add(resyncFastLaneTimeout)
-	assert.False(t, observedDeadline.Before(minExpected),
-		"deadline %v is before the earliest expected %v — timeout is shorter than resyncFastLaneTimeout", observedDeadline, minExpected)
-	assert.False(t, observedDeadline.After(maxExpected),
-		"deadline %v is after the latest expected %v — timeout is longer than resyncFastLaneTimeout (e.g. still defaultCapturePaneTimeout's 10s)", observedDeadline, maxExpected)
+	assert.Equal(t, wantDeadline, observedDeadline,
+		"fn should receive exactly the caller's ctx, not a fresh independently-timed one")
 }
 
-// TestRunFastLaneSubprocessErr_should_BoundCtxToResyncFastLaneTimeout_When_Called
-// is runFastLaneSubprocessErr's sibling coverage — RefreshClientPriority uses
-// the Err-returning variant, so this asserts the same bound on that specific
-// path rather than relying only on the shared implementation this delegates to.
-func TestRunFastLaneSubprocessErr_should_BoundCtxToResyncFastLaneTimeout_When_Called(t *testing.T) {
+// TestRunFastLaneSubprocessErr_should_ForwardCallerCtxUnchanged_When_Called is
+// runFastLaneSubprocessErr's sibling coverage — RefreshClientPriority uses the Err-returning
+// variant, so this asserts the same pass-through on that specific path rather than relying
+// only on the shared implementation this delegates to.
+func TestRunFastLaneSubprocessErr_should_ForwardCallerCtxUnchanged_When_Called(t *testing.T) {
 	serverSocket := setupExecGateTestConfig(t, 4, 4)
 
-	before := time.Now()
+	callerCtx, cancel := context.WithTimeout(context.Background(), ResyncFastLaneTimeout)
+	defer cancel()
+	wantDeadline, ok := callerCtx.Deadline()
+	require.True(t, ok)
+
 	var observedDeadline time.Time
 	var hadDeadline bool
-	err := runFastLaneSubprocessErr(serverSocket, func(ctx context.Context) error {
+	err := runFastLaneSubprocessErr(callerCtx, serverSocket, func(ctx context.Context) error {
 		observedDeadline, hadDeadline = ctx.Deadline()
 		return nil
 	})
-	after := time.Now()
 
 	require.NoError(t, err)
 	require.True(t, hadDeadline, "fn's ctx must carry a deadline")
-
-	minExpected := before.Add(resyncFastLaneTimeout)
-	maxExpected := after.Add(resyncFastLaneTimeout)
-	assert.False(t, observedDeadline.Before(minExpected), "deadline %v earlier than expected %v", observedDeadline, minExpected)
-	assert.False(t, observedDeadline.After(maxExpected), "deadline %v later than expected %v", observedDeadline, maxExpected)
+	assert.Equal(t, wantDeadline, observedDeadline,
+		"fn should receive exactly the caller's ctx, not a fresh independently-timed one")
 }

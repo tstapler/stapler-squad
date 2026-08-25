@@ -3,6 +3,7 @@ package services
 import (
 	"bytes"
 	"compress/gzip"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -1632,6 +1633,13 @@ type fakePanePTY struct {
 	refreshTmuxCalled         int
 	capturePanePriorityCalled int
 	refreshTmuxPriorityCalled int
+
+	// fastLaneCtxsSeen records every ctx a fast-lane (*Priority) method received, in call
+	// order — lets a test assert handleCurrentPaneRequest actually shares one ctx (and
+	// therefore one real, decreasing deadline) across every fast-lane call in a single
+	// resize/resync, rather than each call getting its own independent
+	// tmux.ResyncFastLaneTimeout allowance (2026-08-25 incident).
+	fastLaneCtxsSeen []context.Context
 }
 
 // CapturePaneContentRaw is the plain (non-fast-lane) capture path
@@ -1645,13 +1653,24 @@ func (f *fakePanePTY) CapturePaneContentRaw() (streamhub.RawPaneContent, error) 
 
 // CapturePaneContentRawPriority mirrors CapturePaneContentRaw for this fake: it shares the
 // same content/error fields since the fake has no real exec-gate fast lane to distinguish,
-// but tracks its own call count for the same reason CapturePaneContentRaw does.
-func (f *fakePanePTY) CapturePaneContentRawPriority() (streamhub.RawPaneContent, error) {
+// but tracks its own call count for the same reason CapturePaneContentRaw does. ctx is
+// accepted (handleCurrentPaneRequest threads one shared ctx through every fast-lane call in
+// a single resync — see tmux.ResyncFastLaneTimeout's doc comment) but this fake has no
+// timeout behavior of its own to exercise, so it's unused here.
+func (f *fakePanePTY) CapturePaneContentRawPriority(ctx context.Context) (streamhub.RawPaneContent, error) {
 	f.capturePanePriorityCalled++
+	f.fastLaneCtxsSeen = append(f.fastLaneCtxsSeen, ctx)
 	return streamhub.RawPaneContent(f.captureContent), f.captureErr
 }
 
 func (f *fakePanePTY) GetPaneDimensions() (int, int, error) {
+	return f.cols, f.rows, f.dimensionsErr
+}
+
+// GetPaneDimensionsPriority mirrors GetPaneDimensions for this fake — see
+// CapturePaneContentRawPriority's doc comment on why ctx is recorded.
+func (f *fakePanePTY) GetPaneDimensionsPriority(ctx context.Context) (int, int, error) {
+	f.fastLaneCtxsSeen = append(f.fastLaneCtxsSeen, ctx)
 	return f.cols, f.rows, f.dimensionsErr
 }
 
@@ -1667,9 +1686,11 @@ func (f *fakePanePTY) RefreshTmuxClient() error {
 }
 
 // RefreshTmuxClientPriority mirrors RefreshTmuxClient for this fake, tracking its own call
-// count so tests can assert the fast-lane path (ResyncOptions.UseFastLane) was used.
-func (f *fakePanePTY) RefreshTmuxClientPriority() error {
+// count so tests can assert the fast-lane path (ResyncOptions.UseFastLane) was used. See
+// CapturePaneContentRawPriority's doc comment on why ctx is unused here.
+func (f *fakePanePTY) RefreshTmuxClientPriority(ctx context.Context) error {
 	f.refreshTmuxPriorityCalled++
+	f.fastLaneCtxsSeen = append(f.fastLaneCtxsSeen, ctx)
 	return f.refreshTmuxErr
 }
 
@@ -2703,6 +2724,52 @@ func TestHandleCurrentPaneRequest_should_OnlyRouteFastLane_When_OnlyExecGateFast
 	// Unchanged: correlation-id flag is off, so resync_id must still not be echoed.
 	if output.ResyncId != "" {
 		t.Errorf("expected ResyncId to remain unechoed (correlation-id flag off), got %q", output.ResyncId)
+	}
+}
+
+// TestHandleCurrentPaneRequest_should_ShareOneDeadlineAcrossAllFastLaneCalls_When_ResizeNeeded
+// is the regression test for the second half of the 2026-08-25 incident (see
+// tmux.ResyncFastLaneTimeout's doc comment): fixing each fast-lane call's individual
+// timeout wasn't enough on its own — handleCurrentPaneRequest makes up to 5 fast-lane
+// calls in sequence for one resize/resync (a dimension check, up to 3 refresh-client
+// calls, a dimension verify, and a final capture), and each one independently minting a
+// fresh 3s budget could still let the *total* elapsed time silently blow well past the
+// client's stall watchdog. This asserts every fast-lane call the request actually
+// triggers received the exact same ctx (by deadline) — a single shared, decreasing
+// budget for the whole operation, not N independent ones.
+func TestHandleCurrentPaneRequest_should_ShareOneDeadlineAcrossAllFastLaneCalls_When_ResizeNeeded(t *testing.T) {
+	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	setOnlyResyncFlag(t, terminalResyncExecGateFastLaneFlagName)
+
+	target := &fakePanePTY{captureContent: "fast-lane-content", cols: 80, rows: 24}
+	req := &sessionv1.CurrentPaneRequest{
+		TargetCols: int32Ptr(120),
+		TargetRows: int32Ptr(40),
+	}
+
+	_, err := handleCurrentPaneRequest("test-session", target, req, currentResyncOptions())
+	if err != nil {
+		t.Fatalf("handleCurrentPaneRequest returned error: %v", err)
+	}
+
+	// Dimension check (1) + refresh x3 + dimension verify (1) + final capture (1) = 6.
+	if len(target.fastLaneCtxsSeen) != 6 {
+		t.Fatalf("expected 6 fast-lane calls in the resize-through-verify path, got %d", len(target.fastLaneCtxsSeen))
+	}
+	wantDeadline, ok := target.fastLaneCtxsSeen[0].Deadline()
+	if !ok {
+		t.Fatal("expected the first fast-lane call's ctx to carry a deadline")
+	}
+	for i, ctx := range target.fastLaneCtxsSeen {
+		gotDeadline, ok := ctx.Deadline()
+		if !ok {
+			t.Errorf("call %d: ctx has no deadline", i)
+			continue
+		}
+		if !gotDeadline.Equal(wantDeadline) {
+			t.Errorf("call %d: deadline %v does not match the first call's deadline %v — each fast-lane call must share one budget, not mint its own",
+				i, gotDeadline, wantDeadline)
+		}
 	}
 }
 

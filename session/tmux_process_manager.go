@@ -264,12 +264,14 @@ func (tm *TmuxProcessManager) CapturePaneContentRaw() (string, error) {
 
 // CapturePaneContentRawPriority mirrors CapturePaneContentPriority but
 // without -J — see TmuxSession.CapturePaneContentRawPriority's doc comment.
-func (tm *TmuxProcessManager) CapturePaneContentRawPriority() (string, error) {
+// ctx is caller-supplied and forwarded as-is — see that same doc comment for
+// why this must share its deadline with sibling fast-lane calls.
+func (tm *TmuxProcessManager) CapturePaneContentRawPriority(ctx context.Context) (string, error) {
 	s := tm.session.Load()
 	if s == nil {
 		return "", fmt.Errorf("tmux session not initialized")
 	}
-	return s.CapturePaneContentRawPriority()
+	return s.CapturePaneContentRawPriority(ctx)
 }
 
 // CapturePaneContentWithOptions captures pane content between startLine and endLine.
@@ -288,6 +290,19 @@ func (tm *TmuxProcessManager) GetPaneDimensions() (width, height int, err error)
 		return 0, 0, fmt.Errorf("tmux session not initialized")
 	}
 	return s.GetPaneDimensions()
+}
+
+// GetPaneDimensionsPriority mirrors GetPaneDimensions but routes its
+// subprocess fallback through the resync exec-gate fast lane — see
+// TmuxSession.GetPaneDimensionsPriority's doc comment. ctx is caller-supplied
+// and forwarded as-is, for the same shared-deadline reason as
+// CapturePaneContentRawPriority.
+func (tm *TmuxProcessManager) GetPaneDimensionsPriority(ctx context.Context) (width, height int, err error) {
+	s := tm.session.Load()
+	if s == nil {
+		return 0, 0, fmt.Errorf("tmux session not initialized")
+	}
+	return s.GetPaneDimensionsPriority(ctx)
 }
 
 // GetCursorPosition returns the current cursor column and row (0-based).
@@ -346,13 +361,14 @@ func (tm *TmuxProcessManager) RefreshClient() error {
 
 // RefreshClientPriority mirrors RefreshClient but routes the subprocess call
 // through the resync exec-gate fast lane instead of the default pool
-// (Epic 4.2, terminal:resync-exec-gate-fast-lane).
-func (tm *TmuxProcessManager) RefreshClientPriority() error {
+// (Epic 4.2, terminal:resync-exec-gate-fast-lane). ctx is caller-supplied and
+// forwarded as-is — see CapturePaneContentRawPriority's doc comment.
+func (tm *TmuxProcessManager) RefreshClientPriority(ctx context.Context) error {
 	s := tm.session.Load()
 	if s == nil {
 		return nil
 	}
-	return s.RefreshClientPriority()
+	return s.RefreshClientPriority(ctx)
 }
 
 // TapEnter sends an Enter key to the session.
@@ -544,15 +560,16 @@ type TmuxManager interface {
 	CapturePaneContent() (string, error)
 	CapturePaneContentPriority() (string, error)
 	CapturePaneContentRaw() (string, error)
-	CapturePaneContentRawPriority() (string, error)
+	CapturePaneContentRawPriority(ctx context.Context) (string, error)
 	CapturePaneContentWithOptions(startLine, endLine string) (string, error)
 	GetPaneDimensions() (width, height int, err error)
+	GetPaneDimensionsPriority(ctx context.Context) (width, height int, err error)
 	GetCursorPosition() (x, y int, err error)
 	GetPTY() (*os.File, error)
 	SendKeys(keys string) (int, error)
 	SetWindowSize(cols, rows int) error
 	RefreshClient() error
-	RefreshClientPriority() error
+	RefreshClientPriority(ctx context.Context) error
 	TapEnter() error
 	HasUpdated() (updated bool, hasPrompt bool, content string)
 	RestoreWithWorkDir(workDir string) error

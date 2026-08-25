@@ -2176,11 +2176,20 @@ type panePTY interface {
 	// joined variants here is what makes reaching for the wrong one a
 	// compile error instead of a silent scrambled-reflow bug.
 	CapturePaneContentRaw() (streamhub.RawPaneContent, error)
-	CapturePaneContentRawPriority() (streamhub.RawPaneContent, error)
+	// CapturePaneContentRawPriority/RefreshTmuxClientPriority/
+	// GetPaneDimensionsPriority all take a caller-supplied ctx rather than
+	// managing their own — handleCurrentPaneRequest calls several of these in
+	// sequence for one resync and threads the same bounded ctx through all of
+	// them, so the group shares one real, decreasing deadline instead of each
+	// getting an independent fresh timeout (see
+	// session/tmux/exec_gate.go's runFastLaneSubprocess doc comment for the
+	// 2026-08-25 incident this closes off).
+	CapturePaneContentRawPriority(ctx context.Context) (streamhub.RawPaneContent, error)
 	GetPaneDimensions() (cols, rows int, err error)
+	GetPaneDimensionsPriority(ctx context.Context) (cols, rows int, err error)
 	ResizePTY(cols, rows int) error
 	RefreshTmuxClient() error
-	RefreshTmuxClientPriority() error
+	RefreshTmuxClientPriority(ctx context.Context) error
 	GetPaneCursorPosition() (x, y int, err error)
 }
 
@@ -2194,14 +2203,19 @@ func (p shellPanePTY) CapturePaneContentRaw() (streamhub.RawPaneContent, error) 
 	content, err := p.session.CapturePaneContentRaw()
 	return streamhub.RawPaneContent(content), err
 }
-func (p shellPanePTY) CapturePaneContentRawPriority() (streamhub.RawPaneContent, error) {
-	content, err := p.session.CapturePaneContentRawPriority()
+func (p shellPanePTY) CapturePaneContentRawPriority(ctx context.Context) (streamhub.RawPaneContent, error) {
+	content, err := p.session.CapturePaneContentRawPriority(ctx)
 	return streamhub.RawPaneContent(content), err
 }
 func (p shellPanePTY) GetPaneDimensions() (int, int, error) { return p.session.GetPaneDimensions() }
-func (p shellPanePTY) ResizePTY(cols, rows int) error       { return p.session.SetWindowSize(cols, rows) }
-func (p shellPanePTY) RefreshTmuxClient() error             { return p.session.RefreshClient() }
-func (p shellPanePTY) RefreshTmuxClientPriority() error     { return p.session.RefreshClientPriority() }
+func (p shellPanePTY) GetPaneDimensionsPriority(ctx context.Context) (int, int, error) {
+	return p.session.GetPaneDimensionsPriority(ctx)
+}
+func (p shellPanePTY) ResizePTY(cols, rows int) error { return p.session.SetWindowSize(cols, rows) }
+func (p shellPanePTY) RefreshTmuxClient() error       { return p.session.RefreshClient() }
+func (p shellPanePTY) RefreshTmuxClientPriority(ctx context.Context) error {
+	return p.session.RefreshClientPriority(ctx)
+}
 func (p shellPanePTY) GetPaneCursorPosition() (x, y int, err error) {
 	return p.session.GetCursorPosition()
 }
@@ -2277,6 +2291,16 @@ func handleCurrentPaneRequest(sessionID string, target panePTY, req *sessionv1.C
 	log.ForSession(sessionID).Debug("current pane request",
 		"targetCols", derefOr(req.TargetCols, 0), "targetRows", derefOr(req.TargetRows, 0))
 
+	// One shared deadline for every fast-lane call this single resync makes
+	// (up to 3 RefreshTmuxClientPriority calls, a dimension verify, the final
+	// capture) — not a fresh tmux.ResyncFastLaneTimeout allowance per call.
+	// 2026-08-25 incident: even after each individual call was bounded, 5
+	// sequential fresh 3s budgets could still add up to far more real
+	// wall-clock time than the client's own stall watchdog allows. Unused
+	// when !opts.UseFastLane (those call sites don't take a ctx).
+	ctx, cancel := context.WithTimeout(context.Background(), tmux.ResyncFastLaneTimeout)
+	defer cancel()
+
 	// Epic 4.1 (Task 4.1.1.1): when the client itself flags its target dimensions as
 	// stale (e.g. computed while backgrounded) and terminal:resync-skip-stale-dimension-slowpath
 	// is on (opts.SkipStaleDimensionSlowPath, resolved by the caller), skip the entire
@@ -2296,7 +2320,13 @@ func handleCurrentPaneRequest(sessionID string, target panePTY, req *sessionv1.C
 		targetRows := int(*req.TargetRows)
 
 		// Check current dimensions to see if resize is actually needed.
-		currentCols, currentRows, dimensionErr := target.GetPaneDimensions()
+		var currentCols, currentRows int
+		var dimensionErr error
+		if opts.UseFastLane {
+			currentCols, currentRows, dimensionErr = target.GetPaneDimensionsPriority(ctx)
+		} else {
+			currentCols, currentRows, dimensionErr = target.GetPaneDimensions()
+		}
 		if dimensionErr != nil {
 			log.Warn("[handleCurrentPaneRequest] failed to get current pane dimensions", "err", dimensionErr)
 		}
@@ -2318,7 +2348,7 @@ func handleCurrentPaneRequest(sessionID string, target panePTY, req *sessionv1.C
 				for i := 0; i < 3; i++ {
 					var refreshErr error
 					if opts.UseFastLane {
-						refreshErr = target.RefreshTmuxClientPriority()
+						refreshErr = target.RefreshTmuxClientPriority(ctx)
 					} else {
 						refreshErr = target.RefreshTmuxClient()
 					}
@@ -2338,7 +2368,13 @@ func handleCurrentPaneRequest(sessionID string, target panePTY, req *sessionv1.C
 				time.Sleep(250 * time.Millisecond)
 
 				// PHASE 1: Verify resize succeeded before capture.
-				verifiedCols, verifiedRows, verifyErr := target.GetPaneDimensions()
+				var verifiedCols, verifiedRows int
+				var verifyErr error
+				if opts.UseFastLane {
+					verifiedCols, verifiedRows, verifyErr = target.GetPaneDimensionsPriority(ctx)
+				} else {
+					verifiedCols, verifiedRows, verifyErr = target.GetPaneDimensions()
+				}
 				if verifyErr != nil {
 					log.Warn("[handleCurrentPaneRequest] failed to verify resize before capture", "err", verifyErr)
 				} else if verifiedCols != targetCols || verifiedRows != targetRows {
@@ -2363,7 +2399,7 @@ func handleCurrentPaneRequest(sessionID string, target panePTY, req *sessionv1.C
 	var content streamhub.RawPaneContent
 	var captureErr error
 	if opts.UseFastLane {
-		content, captureErr = target.CapturePaneContentRawPriority()
+		content, captureErr = target.CapturePaneContentRawPriority(ctx)
 	} else {
 		content, captureErr = target.CapturePaneContentRaw()
 	}
