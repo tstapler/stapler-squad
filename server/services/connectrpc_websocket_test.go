@@ -702,15 +702,17 @@ func TestHubRegistryAndStreamOwnershipLock_should_NeverProduceTwoOwners_When_Rac
 		var wg sync.WaitGroup
 		var hubWins, legacyWins atomic.Int64
 		var hubErrs, legacyErrs atomic.Int64
+		var createdHub atomic.Pointer[streamhub.StreamHub]
 
 		for g := 0; g < racersPerSide; g++ {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				if _, err := registry.GetOrCreate(sessionName, &fakeSessionController{}); err != nil {
+				if h, err := registry.GetOrCreate(sessionName, &fakeSessionController{}); err != nil {
 					hubErrs.Add(1)
 				} else {
 					hubWins.Add(1)
+					createdHub.Store(h)
 				}
 			}()
 			wg.Add(1)
@@ -724,6 +726,19 @@ func TestHubRegistryAndStreamOwnershipLock_should_NeverProduceTwoOwners_When_Rac
 			}()
 		}
 		wg.Wait()
+
+		// Every winning GetOrCreate spawns a pumpControlModeOutputIntoHub
+		// goroutine that only exits once the hub reports HubTornDown.
+		// fakeSessionController always hands back an already-closed update
+		// channel, so left un-torn-down these goroutines loop forever,
+		// Warn-logging every pumpControlModeResubscribeDelay — across up to
+		// `iterations` hubs, that's a mass of leaked goroutines racing every
+		// later test's captureLogs buffer (log/slog's default logger is
+		// process-global) for the rest of the binary's run, surfacing as a
+		// `-race` failure in an unrelated, much-later test.
+		if hub := createdHub.Load(); hub != nil {
+			_ = hub.ForceTeardown()
+		}
 
 		resolved := streamhub.AcquireOwnershipLock(sessionName).Resolve(false)
 		switch resolved {
