@@ -740,6 +740,175 @@ func TestReviewGateRunner_EmptyCommittedDiff_BlocksReviewInsteadOfFalsePass(t *t
 	}
 }
 
+// newEmptyDiffFixture creates a backlog item and work-role ItemSession whose
+// committed diff is genuinely empty (base == HEAD, no worktree row) — the same
+// fixture shape as TestReviewGateRunner_EmptyCommittedDiff_BlocksReviewInsteadOfFalsePass,
+// factored out for the duplicate-claim variants below.
+func newEmptyDiffFixture(t *testing.T, ctx context.Context, storage *Storage, title string) (*BacklogItemData, ItemSessionSummary) {
+	t.Helper()
+	repoDir := t.TempDir()
+	runGitOrFail(t, repoDir, "init", "-b", "main")
+	runGitOrFail(t, repoDir, "config", "user.email", "test@example.com")
+	runGitOrFail(t, repoDir, "config", "user.name", "Test")
+	require.NoError(t, os.WriteFile(repoDir+"/file.txt", []byte("hello\n"), 0o644))
+	runGitOrFail(t, repoDir, "add", "file.txt")
+	runGitOrFail(t, repoDir, "commit", "-m", "initial commit")
+	headSHA := strings.TrimSpace(runGitOutputOrFail(t, repoDir, "rev-parse", "HEAD"))
+
+	itemData := BacklogItemData{
+		Title:              title,
+		AcceptanceCriteria: `[]`,
+		Priority:           1,
+		Status:             string(BacklogStatusInProgress),
+		RepoPath:           repoDir,
+	}
+	createdItemData, err := storage.CreateBacklogItem(ctx, itemData)
+	require.NoError(t, err)
+
+	workSessionUUID := uuid.New().String()
+	workIS, err := storage.CreateItemSession(ctx, ItemSessionData{
+		ItemID:      createdItemData.ID,
+		SessionUUID: workSessionUUID,
+		SessionRole: SessionRoleWork,
+	})
+	require.NoError(t, err)
+	// No SaveInstances call, so GetWorktreeDataBySessionUUID finds nothing and Run
+	// takes the no-worktree branch, diffing BaseCommitSha against repoPath's HEAD —
+	// which are the same commit, so the diff is genuinely empty with no error.
+	workIS.BaseCommitSha = headSHA
+
+	item := &BacklogItemData{ID: createdItemData.ID, RepoPath: repoDir}
+	return item, workIS
+}
+
+// TestReviewGateRunner_EmptyCommittedDiff_DuplicateClaimSpawnsRealReview covers
+// backlog item e2373931 AC0-AC2: a report_duplicate claim has, by design, nothing
+// committed — the same empty-diff shape the guard above blocks — but its
+// VerificationNotes carry a duplicate_ref= marker (server/mcp/tools_backlog.go).
+// Unlike a genuinely abandoned session, this must fall through to a real reviewer
+// instead of the hardcoded FAIL, so a human/reviewer can actually confirm the claim.
+func TestReviewGateRunner_EmptyCommittedDiff_DuplicateClaimSpawnsRealReview(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	item, workIS := newEmptyDiffFixture(t, ctx, storage, "Duplicate claim, empty diff test")
+	workIS.VerificationNotes = "duplicate_ref=https://github.com/tstapler/stapler-squad/pull/372 reason=already merged in #372"
+
+	spawner := &mockReviewGateSpawner{instance: &Instance{UUID: uuid.New().String()}}
+	getAutoReopener := func() AutoReopenSpawner { return nil }
+	getSessionCreator := func() ReviewGateSpawner { return spawner }
+	notifier := &fakeNotifier{}
+	getNotifier := func() Notifier { return notifier }
+
+	runner := NewReviewGateRunner(storage, getAutoReopener, getNotifier, getSessionCreator, nil)
+
+	var onPassCalled atomic.Bool
+	runner.Run(ctx, item, workIS, func(ctx context.Context, item *BacklogItemData, is ItemSessionSummary) {
+		onPassCalled.Store(true)
+	})
+
+	require.Equal(t, 1, spawner.getCallCount(), "a duplicate_ref marker must route to a real review session, not the hardcoded empty-diff FAIL")
+	assert.False(t, onPassCalled.Load(), "onPass must never be called directly by Run — the verdict is only known once the spawned session exits")
+	assert.Contains(t, spawner.lastPrompt, "duplicate_ref=https://github.com/tstapler/stapler-squad/pull/372", "the reviewer prompt must carry the duplicate_ref evidence")
+
+	outcome, err := storage.GetMostRecentReviewVerdictForItem(ctx, item.ID)
+	require.NoError(t, err)
+	assert.Empty(t, outcome, "no synthetic FAIL verdict should be recorded for a duplicate claim")
+
+	assert.NotContains(t, notifier.titles(), "Review blocked — no changes to review")
+}
+
+// TestReviewGateRunner_EmptyCommittedDiff_TwoConsecutiveDuplicateClaims reproduces
+// this bug's exact reported sequence (backlog item e2373931): report_duplicate
+// called twice in a row on the same item, each triggering Run with an empty
+// committed diff and a duplicate_ref= marker. Before the fix, each call recorded
+// the guard's identical static FAIL summary and the second call tripped
+// IsRepeatedFailure, permanently parking the item in review. Confirms neither call
+// produces that FAIL, so the breaker never even sees two comparable verdicts.
+func TestReviewGateRunner_EmptyCommittedDiff_TwoConsecutiveDuplicateClaims(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	item, workIS := newEmptyDiffFixture(t, ctx, storage, "Two consecutive duplicate claims test")
+	workIS.VerificationNotes = "duplicate_ref=https://github.com/tstapler/stapler-squad/pull/372 reason=already merged in #372"
+
+	getAutoReopener := func() AutoReopenSpawner { return nil }
+	getNotifier := func() Notifier { return nil }
+
+	for i := 0; i < 2; i++ {
+		spawner := &mockReviewGateSpawner{instance: &Instance{UUID: uuid.New().String()}}
+		getSessionCreator := func() ReviewGateSpawner { return spawner }
+		runner := NewReviewGateRunner(storage, getAutoReopener, getNotifier, getSessionCreator, nil)
+
+		runner.Run(ctx, item, workIS, func(ctx context.Context, item *BacklogItemData, is ItemSessionSummary) {})
+
+		require.Equal(t, 1, spawner.getCallCount(), "call %d: duplicate claim must spawn a real review session", i+1)
+
+		outcome, err := storage.GetMostRecentReviewVerdictForItem(ctx, item.ID)
+		require.NoError(t, err)
+		assert.Empty(t, outcome, "call %d: no FAIL verdict should be recorded for a duplicate claim", i+1)
+	}
+
+	recent, err := storage.GetRecentReviewVerdictSummaries(ctx, item.ID, 5)
+	require.NoError(t, err)
+	assert.Empty(t, recent, "two duplicate-claim calls must never produce a comparable pair of FAIL verdicts")
+	assert.False(t, IsRepeatedFailure(recent), "IsRepeatedFailure must never trip for a duplicate claim")
+}
+
+// TestParseDuplicateRef covers backlog item e2373931 AC4: parseDuplicateRef must
+// find the most recent duplicate_ref= marker and treat an empty/malformed ref, or
+// no marker as the current attempt's last entry, as not-a-duplicate.
+func TestParseDuplicateRef(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		notes   string
+		wantRef string
+		wantOk  bool
+	}{
+		{name: "empty notes", notes: ""},
+		{name: "no duplicate_ref prefix anywhere", notes: "ran make quick-check, all green"},
+		{
+			name:    "single valid marker",
+			notes:   "duplicate_ref=https://github.com/tstapler/stapler-squad/pull/372 reason=already merged",
+			wantRef: "https://github.com/tstapler/stapler-squad/pull/372",
+			wantOk:  true,
+		},
+		{
+			name: "multiple duplicate_ref entries, most recent wins",
+			notes: "duplicate_ref=https://github.com/tstapler/stapler-squad/pull/100 reason=stale first attempt" +
+				"\n\n---\n\n" +
+				"duplicate_ref=https://github.com/tstapler/stapler-squad/pull/372 reason=current attempt",
+			wantRef: "https://github.com/tstapler/stapler-squad/pull/372",
+			wantOk:  true,
+		},
+		{
+			name:  "marker present but ref value empty",
+			notes: "duplicate_ref= reason=malformed",
+		},
+		{
+			name: "stale duplicate_ref from an earlier rework cycle must not be resurrected",
+			notes: "duplicate_ref=https://github.com/tstapler/stapler-squad/pull/372 reason=old claim, item was reopened" +
+				"\n\n---\n\n" +
+				"ran make quick-check, all green — this is a fresh, unrelated work session",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			ref, ok := parseDuplicateRef(tt.notes)
+			assert.Equal(t, tt.wantOk, ok)
+			assert.Equal(t, tt.wantRef, ref)
+		})
+	}
+}
+
 // TestReviewGateRunner_DiffComputationFailure_AutoRepairsFromDivergentBranch is the
 // positive counterpart to the blocking test above: it reproduces the exact live-data
 // shape of backlog item ae1e2070-db02-4ad7-8580-633ef9904f31 — a real feature branch
