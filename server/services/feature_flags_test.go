@@ -79,26 +79,30 @@ func TestGetFeatureFlags_ReturnsKnownFlags(t *testing.T) {
 	assert.NotEmpty(t, backlogFlag.Description, "backlog flag should have a non-empty description")
 }
 
-// GetFeatureFlags_should_ReturnAllSevenResyncFlagsDefaultingFalse_When_RegistryQueried
-// is the test named in project_plans/terminal-resync-reliability/implementation/validation.md's
-// AC7 row: all 7 terminal-resync feature flags must be present in the
-// GetFeatureFlags response and default to disabled (no controller wired, no
-// config.json override).
-func TestGetFeatureFlags_should_ReturnAllSevenResyncFlagsDefaultingFalse_When_RegistryQueried(t *testing.T) {
+// TestGetFeatureFlags_should_ReturnAllSevenResyncFlagsWithCorrectDefaults_When_RegistryQueried
+// covers project_plans/terminal-resync-reliability/implementation/validation.md's AC7 row:
+// all 7 terminal-resync feature flags must be present in the GetFeatureFlags response with
+// no controller wired and no config.json override. Originally all 7 defaulted to disabled;
+// terminal:resync-exec-gate-fast-lane graduated to default-on 2026-08-25 (see
+// featureFlagDefault's doc comment), so this now checks each flag against its own expected
+// default instead of asserting a single shared value.
+func TestGetFeatureFlags_should_ReturnAllSevenResyncFlagsWithCorrectDefaults_When_RegistryQueried(t *testing.T) {
 	svc := newFeatureFlagService(t)
 
 	resp, err := svc.GetFeatureFlags(context.Background(), connect.NewRequest(&sessionv1.GetFeatureFlagsRequest{}))
 	require.NoError(t, err)
 	require.NotNil(t, resp.Msg)
 
-	wantFlags := []string{
-		"terminal:resync-visibility-scope",
-		"terminal:resync-correlation-id",
-		"terminal:resync-skip-stale-dimension-slowpath",
-		"terminal:resync-exec-gate-fast-lane",
-		"terminal:resync-stagger",
-		"terminal:resync-compression",
-		"terminal:resync-batching",
+	// terminal:resync-exec-gate-fast-lane graduated to default-on 2026-08-25 (see
+	// featureFlagDefault's doc comment) — every other resync flag still defaults off.
+	wantDefault := map[string]bool{
+		"terminal:resync-visibility-scope":              false,
+		"terminal:resync-correlation-id":                false,
+		"terminal:resync-skip-stale-dimension-slowpath": false,
+		"terminal:resync-exec-gate-fast-lane":           true,
+		"terminal:resync-stagger":                       false,
+		"terminal:resync-compression":                   false,
+		"terminal:resync-batching":                      false,
 	}
 
 	byName := make(map[string]*sessionv1.FeatureFlag, len(resp.Msg.Flags))
@@ -106,10 +110,10 @@ func TestGetFeatureFlags_should_ReturnAllSevenResyncFlagsDefaultingFalse_When_Re
 		byName[f.Name] = f
 	}
 
-	for _, name := range wantFlags {
+	for name, want := range wantDefault {
 		flag, ok := byName[name]
 		require.Truef(t, ok, "expected %q flag in GetFeatureFlags response", name)
-		assert.Falsef(t, flag.Enabled, "%q should default to disabled", name)
+		assert.Equalf(t, want, flag.Enabled, "%q default mismatch", name)
 		assert.NotEmptyf(t, flag.Description, "%q should have a non-empty description", name)
 	}
 }

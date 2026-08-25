@@ -2238,7 +2238,7 @@ type ResyncOptions struct {
 func currentResyncOptions() ResyncOptions {
 	return ResyncOptions{
 		SkipStaleDimensionSlowPath: config.LoadConfig().GetFeatureFlag(terminalResyncSkipStaleDimensionSlowpathFlagName),
-		UseFastLane:                config.LoadConfig().GetFeatureFlag(terminalResyncExecGateFastLaneFlagName),
+		UseFastLane:                config.LoadConfig().GetFeatureFlagWithDefault(terminalResyncExecGateFastLaneFlagName, featureFlagDefault(terminalResyncExecGateFastLaneFlagName)),
 		EchoResyncID:               config.LoadConfig().GetFeatureFlag(terminalResyncCorrelationIDFlagName),
 	}
 }

@@ -1380,6 +1380,27 @@ func (c *Config) GetFeatureFlag(name string) bool {
 	return c.FeatureFlags[name]
 }
 
+// GetFeatureFlagWithDefault returns the persisted enabled state of the named feature
+// flag, or defaultValue if it has never been explicitly set. Unlike GetFeatureFlag
+// (every absent flag defaults to false), this lets one flag graduate to "on by
+// default" — e.g. terminal:resync-exec-gate-fast-lane (2026-08-25: an unset default
+// left resync-triggered resizes contending on the shared 5s-timeout exec-gate pool,
+// which can exceed the client's 4s stall watchdog and force a disconnect+reconnect;
+// the fast lane's dedicated 3s-budget pool exists specifically to avoid this) —
+// while every other flag keeps defaulting to false via GetFeatureFlag. An explicit
+// persisted false still opts back out; only a genuinely absent key falls through to
+// defaultValue.
+func (c *Config) GetFeatureFlagWithDefault(name string, defaultValue bool) bool {
+	if c == nil || c.FeatureFlags == nil {
+		return defaultValue
+	}
+	v, ok := c.FeatureFlags[name]
+	if !ok {
+		return defaultValue
+	}
+	return v
+}
+
 // SetFeatureFlag sets the named feature flag and persists the config to disk.
 func (c *Config) SetFeatureFlag(name string, value bool) error {
 	if c.FeatureFlags == nil {
