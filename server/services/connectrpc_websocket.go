@@ -200,6 +200,43 @@ type cursorPositioner interface {
 // the resync always meeting the client's deadline.
 const withCursorSyncTimeout = 300 * time.Millisecond
 
+// startupWaitTimeout/startupWaitPollInterval bound streamViaHub's wait for a
+// concurrently-starting Instance to finish before attaching — see that wait
+// loop's doc comment for the 2026-08-25 incident this closes. The observed
+// real-world gap between a hub attach attempt and the instance's own Start()
+// completing was ~1.26s; 2s leaves comfortable margin without blocking this
+// connection indefinitely if that other code path never finishes.
+const (
+	startupWaitTimeout      = 2 * time.Second
+	startupWaitPollInterval = 50 * time.Millisecond
+)
+
+// startedChecker is the single method streamViaHub's startup wait needs from
+// *session.Instance — narrowed to an interface so the wait loop is testable
+// without constructing a real Instance.
+type startedChecker interface {
+	Started() bool
+}
+
+// waitForInstanceStarted polls chk.Started() every pollInterval until it
+// reports true or timeout elapses, returning the final observed value.
+// Returns immediately (true, no sleep) if already started. See
+// startupWaitTimeout's doc comment for why this exists and why it's bounded
+// rather than blocking indefinitely.
+func waitForInstanceStarted(chk startedChecker, timeout, pollInterval time.Duration) (started bool) {
+	if chk.Started() {
+		return true
+	}
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		time.Sleep(pollInterval)
+		if chk.Started() {
+			return true
+		}
+	}
+	return false
+}
+
 func withCursorSync(content string, target cursorPositioner) string {
 	if target == nil {
 		return content
@@ -1568,6 +1605,28 @@ func (h *ConnectRPCWebSocketHandler) streamViaHub(stream *connectWebSocketStream
 				instance.ForceStatus(session.Stopped)
 			}
 			return fmt.Errorf("tmux session missing and restore failed: %w", restoreErr)
+		}
+	}
+
+	// 2026-08-25 incident: the check above only covers "does the tmux session exist" —
+	// it says nothing about whether *this Instance's own* Start() sequence has finished.
+	// A tmux session can already exist (e.g. reused across a service restart), skipping
+	// the restore branch above entirely, while a *separate*, concurrently-triggered
+	// Instance.Start() call (from whatever code path opened this session in the UI) is
+	// still mid-flight — CapturePaneContentRaw/RefreshClientPriority/etc. all return
+	// streamhub.ErrSessionNotStarted until i.started flips true. Without this wait,
+	// AttachSubscriber below immediately negotiates a resize that's doomed to hit that
+	// error; streamhub now handles it gracefully (doesn't tear the hub down — see
+	// ErrSessionNotStarted's doc comment) but still wastes a full doomed attempt and
+	// whatever it costs the client (a resync round trip that returns nothing useful).
+	// Bounded and best-effort: if the instance still isn't started after
+	// startupWaitTimeout, proceed anyway and let the existing graceful-degradation path
+	// handle it, rather than blocking this connection indefinitely on some other code
+	// path's startup that may never complete.
+	if !instance.Started() {
+		log.Info("[streamViaHub] instance not started yet, waiting briefly before attaching", "session", sessionID)
+		if !waitForInstanceStarted(instance, startupWaitTimeout, startupWaitPollInterval) {
+			log.Warn("[streamViaHub] instance still not started after waiting, proceeding anyway", "session", sessionID, "waited", startupWaitTimeout)
 		}
 	}
 
