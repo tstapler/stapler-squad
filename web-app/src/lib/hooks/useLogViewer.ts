@@ -12,6 +12,8 @@ import type { VirtuosoHandle } from "react-virtuoso";
 import { createClient } from "@connectrpc/connect";
 import { createConnectTransport } from "@connectrpc/connect-web";
 import { SessionService } from "@/gen/session/v1/session_pb";
+import type { LogEntry as ProtoLogEntry } from "@/gen/session/v1/session_pb";
+import { timestampFromDate } from "@bufbuild/protobuf/wkt";
 import { getApiBaseUrl } from "@/lib/config";
 import { useLiveTail } from "./useLiveTail";
 import { detectLevel } from "@/lib/logs/logParser";
@@ -25,6 +27,18 @@ export interface LogEntry {
   level: LogLevel;
   message: string;
   raw: string;
+}
+
+export interface LogViewerTimeRange {
+  start: Date;
+  end: Date;
+}
+
+export interface LogViewerOptions {
+  /** Restrict fetches to this time range. Omit for "most recent N" (default behavior). */
+  timeRange?: LogViewerTimeRange;
+  /** Max entries to fetch per request (default: 200). */
+  limit?: number;
 }
 
 export interface LogViewerState {
@@ -46,6 +60,14 @@ export interface LogViewerState {
   virtuosoRef: React.RefObject<VirtuosoHandle | null>;
   liveTailEnabled: boolean;
   setLiveTailEnabled: (enabled: boolean) => void;
+  /** Raw proto entries matching the current search/level filters — for export and pattern analysis. */
+  rawEntries: ProtoLogEntry[];
+  /** Total entries matching the current filters on the server (not just what's been fetched). */
+  serverTotalCount: number;
+  /** Timestamp of the last successful fetch (initial or live-tail poll). */
+  lastRefresh: Date | null;
+  /** Re-runs the initial fetch — for a manual "Refresh" action. */
+  refresh: () => void;
 }
 
 function mapLevel(raw: string): LogLevel {
@@ -66,10 +88,22 @@ function makeId() {
 export function useLogViewer(
   source: "app" | "session",
   sessionId?: string,
+  options?: LogViewerOptions,
 ): LogViewerState {
+  const fetchLimit = options?.limit ?? 200;
+  const timeRange = options?.timeRange;
+  // Time range as primitives so it can sit in a dependency array without a
+  // new-object-every-render identity problem (callers often build the Date
+  // objects inline).
+  const timeRangeStartMs = timeRange?.start.getTime();
+  const timeRangeEndMs = timeRange?.end.getTime();
+
   // --- Core log storage: mutable ref + version counter for O(1) appending ---
   const logsRef = useRef<LogEntry[]>([]);
+  const rawEntriesRef = useRef<ProtoLogEntry[]>([]);
   const [version, setVersion] = useState(0);
+  const [serverTotalCount, setServerTotalCount] = useState(0);
+  const [lastRefresh, setLastRefresh] = useState<Date | null>(null);
 
   // --- Search and filter ---
   const [searchQuery, setSearchQuery] = useState("");
@@ -109,12 +143,15 @@ export function useLogViewer(
     if (!clientRef.current) return;
     try {
       const response = await clientRef.current.getLogs({
-        limit: 200,
+        limit: fetchLimit,
         offset: 0,
         sessionId: source === "session" ? sessionId : undefined,
+        startTime: timeRangeStartMs !== undefined ? timestampFromDate(new Date(timeRangeStartMs)) : undefined,
+        endTime: timeRangeEndMs !== undefined ? timestampFromDate(new Date(timeRangeEndMs)) : undefined,
         // levels will be applied once filters are set (initial fetch uses no level filter)
       });
-      const entries: LogEntry[] = (response.entries ?? []).map((e, i) => ({
+      const protoEntries = response.entries ?? [];
+      const entries: LogEntry[] = protoEntries.map((e) => ({
         id: makeId(),
         timestamp: e.timestamp
           ? new Date(Number(e.timestamp.seconds) * 1000).toISOString()
@@ -127,11 +164,14 @@ export function useLogViewer(
       // how many entries the server already had.
       knownTotalRef.current = response.totalCount ?? entries.length;
       logsRef.current = entries;
+      rawEntriesRef.current = protoEntries;
+      setServerTotalCount(response.totalCount ?? entries.length);
+      setLastRefresh(new Date());
       setVersion((v) => v + 1);
     } catch {
       // Non-fatal: show empty list; errors surfaced elsewhere
     }
-  }, [source, sessionId]);
+  }, [source, sessionId, fetchLimit, timeRangeStartMs, timeRangeEndMs]);
 
   useEffect(() => {
     void fetchInitialLogs();
@@ -145,6 +185,11 @@ export function useLogViewer(
 
   const fetchNewLogs = useCallback(async () => {
     if (!clientRef.current) return;
+    // A caller-supplied time range means "browse this historical window",
+    // not "follow the tail" — polling for entries newer than knownTotalRef
+    // would pull in current-time entries outside that window. The live-tail
+    // toggle stays available but is a no-op until the range is cleared.
+    if (timeRange) return;
     try {
       const knownTotal = knownTotalRef.current;
       // Pass multi-level filter via repeated levels field; fall back to no filter for "ALL"
@@ -160,13 +205,15 @@ export function useLogViewer(
       });
       const serverTotal = response.totalCount ?? 0;
       const newCount = serverTotal - knownTotal;
+      setServerTotalCount(serverTotal);
+      setLastRefresh(new Date());
       if (newCount <= 0) return;
 
       // The first `newCount` entries in the newest-first response are the ones
       // we haven't seen yet. Slice them off and reverse so they're oldest-first
       // for appending at the end of logsRef.current.
-      const freshSlice = (response.entries ?? []).slice(0, newCount);
-      const newEntries: LogEntry[] = freshSlice.reverse().map((e) => ({
+      const freshProtoSlice = (response.entries ?? []).slice(0, newCount).reverse();
+      const newEntries: LogEntry[] = freshProtoSlice.map((e) => ({
         id: makeId(),
         timestamp: e.timestamp
           ? new Date(Number(e.timestamp.seconds) * 1000).toISOString()
@@ -179,6 +226,7 @@ export function useLogViewer(
 
       knownTotalRef.current = serverTotal;
       logsRef.current = [...logsRef.current, ...newEntries];
+      rawEntriesRef.current = [...rawEntriesRef.current, ...freshProtoSlice];
 
       startTransition(() => {
         setVersion((v) => v + 1);
@@ -189,7 +237,7 @@ export function useLogViewer(
     } catch {
       // Non-fatal polling error
     }
-  }, [source, sessionId, levelFilters]);
+  }, [source, sessionId, levelFilters, timeRange]);
 
   const [_liveTailState, _liveTailControls] = useLiveTail(fetchNewLogs, {
     enabled: liveTailEnabled,
@@ -218,22 +266,41 @@ export function useLogViewer(
     setExpandedRowIndex((prev) => (prev === i ? null : i));
   }, []);
 
-  // --- Derived: filtered logs ---
+  // --- Derived: filtered logs (and the parallel raw proto entries — the two
+  // refs are always extended in lockstep by the same index, so filtering by
+  // index on the display copy tells us which raw entries survive too) ---
+  const matchesFilter = useCallback(
+    (e: LogEntry) => {
+      if (searchQuery && !e.message.toLowerCase().includes(searchQuery.toLowerCase())) return false;
+      if (levelFilters.length > 0 && !levelFilters.includes("ALL") && !levelFilters.includes(e.level)) return false;
+      return true;
+    },
+    [searchQuery, levelFilters],
+  );
+
   const filteredLogs = useMemo(() => {
     // version is the cache key — reading logsRef.current here is intentional
     // eslint-disable-next-line @typescript-eslint/no-unused-expressions
     version;
-    let result = logsRef.current;
-    if (searchQuery) {
-      const lower = searchQuery.toLowerCase();
-      result = result.filter((e) => e.message.toLowerCase().includes(lower));
-    }
-    if (levelFilters.length > 0 && !levelFilters.includes("ALL")) {
-      result = result.filter((e) => levelFilters.includes(e.level));
-    }
-    return result;
+    return logsRef.current.filter(matchesFilter);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [version, searchQuery, levelFilters]);
+  }, [version, matchesFilter]);
+
+  const filteredRawEntries = useMemo(() => {
+    // eslint-disable-next-line @typescript-eslint/no-unused-expressions
+    version;
+    return logsRef.current.reduce<ProtoLogEntry[]>((acc, e, i) => {
+      if (matchesFilter(e) && rawEntriesRef.current[i]) {
+        acc.push(rawEntriesRef.current[i]);
+      }
+      return acc;
+    }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [version, matchesFilter]);
+
+  const refresh = useCallback(() => {
+    void fetchInitialLogs();
+  }, [fetchInitialLogs]);
 
   return {
     logs: filteredLogs,
@@ -254,5 +321,9 @@ export function useLogViewer(
     virtuosoRef,
     liveTailEnabled,
     setLiveTailEnabled,
+    rawEntries: filteredRawEntries,
+    serverTotalCount,
+    lastRefresh,
+    refresh,
   };
 }

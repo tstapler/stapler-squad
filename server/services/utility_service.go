@@ -3,12 +3,15 @@ package services
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"os"
 	"regexp"
 	"runtime"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -22,7 +25,128 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
+// logLineRegex matches the legacy stdlib-logger line format
+// ("[instance] LEVEL:2026/08/25 12:34:56 file.go:123: message"), still
+// emitted by call sites that haven't migrated off log.InfoLog().Printf and
+// co. (see log/log.go's atomicLogger-backed loggers). Most log lines are
+// JSON now (see parseJSONLogLine) — this is the fallback for the rest.
 var logLineRegex = regexp.MustCompile(`^\[([^\]]+)\]\s+(\w+):(\d{4}/\d{2}/\d{2})\s+(\d{2}:\d{2}:\d{2})\s+([^:]+:\d+):\s+(.*)$`)
+
+// parsedLogLine is the format-agnostic result of parsing one log line,
+// whichever of the two on-disk formats (JSON or legacy plain-text) produced it.
+type parsedLogLine struct {
+	Timestamp time.Time
+	Level     string
+	Message   string
+	Source    string
+}
+
+// parseJSONLogLine parses one slog JSON-lines record (the format
+// log/log.go's handler chain writes today: {"time":...,"level":...,"msg":...,
+// plus arbitrary attribute fields}). Extra attributes beyond time/level/msg
+// are folded into Message as "key=value" pairs, sorted by key for
+// deterministic output, since sessionv1.LogEntry has no structured-fields
+// slot — this keeps them visible (and searchable) in the API response
+// without a proto change.
+func parseJSONLogLine(line string) (parsedLogLine, bool) {
+	var raw map[string]any
+	if err := json.Unmarshal([]byte(line), &raw); err != nil {
+		return parsedLogLine{}, false
+	}
+
+	timeStr, _ := raw["time"].(string)
+	msg, hasMsg := raw["msg"].(string)
+	level, _ := raw["level"].(string)
+	if timeStr == "" || !hasMsg {
+		return parsedLogLine{}, false
+	}
+
+	timestamp, err := time.Parse(time.RFC3339Nano, timeStr)
+	if err != nil {
+		return parsedLogLine{}, false
+	}
+
+	extraKeys := make([]string, 0, len(raw))
+	for k := range raw {
+		switch k {
+		case "time", "level", "msg":
+			continue
+		}
+		extraKeys = append(extraKeys, k)
+	}
+	sort.Strings(extraKeys)
+
+	message := msg
+	if len(extraKeys) > 0 {
+		pairs := make([]string, 0, len(extraKeys))
+		for _, k := range extraKeys {
+			pairs = append(pairs, k+"="+formatLogFieldValue(raw[k]))
+		}
+		message = msg + " " + strings.Join(pairs, " ")
+	}
+
+	if level == "" {
+		level = "INFO"
+	}
+
+	return parsedLogLine{Timestamp: timestamp, Level: level, Message: message}, true
+}
+
+// formatLogFieldValue renders one JSON attribute value as it would appear
+// in the legacy plain-text logger's key=value convention.
+func formatLogFieldValue(v any) string {
+	switch val := v.(type) {
+	case string:
+		return val
+	case float64:
+		return strconv.FormatFloat(val, 'g', -1, 64)
+	case bool:
+		return strconv.FormatBool(val)
+	case nil:
+		return "null"
+	default:
+		b, err := json.Marshal(val)
+		if err != nil {
+			return fmt.Sprintf("%v", val)
+		}
+		return string(b)
+	}
+}
+
+// parseLegacyLogLine parses one line in the old stdlib-logger format via
+// logLineRegex — see that variable's doc comment.
+func parseLegacyLogLine(line string) (parsedLogLine, bool) {
+	matches := logLineRegex.FindStringSubmatch(line)
+	if len(matches) < 7 {
+		return parsedLogLine{}, false
+	}
+
+	// matches[1] = instance (ignored for API)
+	level := matches[2]
+	dateStr := matches[3]
+	timeStr := matches[4]
+	source := matches[5]
+	message := matches[6]
+
+	timestampStr := fmt.Sprintf("%s %s", dateStr, timeStr)
+	// ParseInLocation with Local timezone since these lines are written in local time.
+	timestamp, err := time.ParseInLocation("2006/01/02 15:04:05", timestampStr, time.Local)
+	if err != nil {
+		return parsedLogLine{}, false
+	}
+
+	return parsedLogLine{Timestamp: timestamp, Level: level, Message: message, Source: source}, true
+}
+
+// parseLogLine parses one log line in whichever format it's actually
+// written in — JSON first (the current default), falling back to the
+// legacy plain-text format for lines from call sites that still use it.
+func parseLogLine(line string) (parsedLogLine, bool) {
+	if parsed, ok := parseJSONLogLine(line); ok {
+		return parsed, true
+	}
+	return parseLegacyLogLine(line)
+}
 
 // UtilityService handles miscellaneous utility RPCs: GetLogs, FocusWindow,
 // and CreateDebugSnapshot.
@@ -356,47 +480,31 @@ func parseLogs(reader io.Reader, req *sessionv1.GetLogsRequest) (*parseLogsResul
 	for scanner.Scan() {
 		line := scanner.Text()
 
-		// Try to parse the log line
-		matches := logLineRegex.FindStringSubmatch(line)
-		if len(matches) < 7 {
-			// Skip lines that don't match expected format
-			continue
-		}
-
-		// Extract fields from regex match
-		// matches[1] = instance (ignored for API)
-		level := matches[2]
-		dateStr := matches[3]
-		timeStr := matches[4]
-		source := matches[5]
-		message := matches[6]
-
-		// Parse timestamp - use ParseInLocation with Local timezone since logs are written in local time
-		timestampStr := fmt.Sprintf("%s %s", dateStr, timeStr)
-		timestamp, err := time.ParseInLocation("2006/01/02 15:04:05", timestampStr, time.Local)
-		if err != nil {
-			// Skip entries with invalid timestamps
+		parsed, ok := parseLogLine(line)
+		if !ok {
+			// Skip lines that don't match either known format (e.g. a
+			// stray non-log line, or one truncated mid-write).
 			continue
 		}
 
 		// Apply level filter (OR logic across multi-level set)
 		if len(levelFilterSet) > 0 {
-			if _, ok := levelFilterSet[strings.ToUpper(level)]; !ok {
+			if _, ok := levelFilterSet[strings.ToUpper(parsed.Level)]; !ok {
 				continue
 			}
 		}
 
 		// Apply time range filters
-		if startTime != nil && timestamp.Before(*startTime) {
+		if startTime != nil && parsed.Timestamp.Before(*startTime) {
 			continue
 		}
-		if endTime != nil && timestamp.After(*endTime) {
+		if endTime != nil && parsed.Timestamp.After(*endTime) {
 			continue
 		}
 
 		// Apply search query filter (case-insensitive, searches message and source)
 		if searchQuery != "" {
-			messageAndSource := strings.ToLower(message + " " + source)
+			messageAndSource := strings.ToLower(parsed.Message + " " + parsed.Source)
 			if !strings.Contains(messageAndSource, searchQuery) {
 				continue
 			}
@@ -404,10 +512,10 @@ func parseLogs(reader io.Reader, req *sessionv1.GetLogsRequest) (*parseLogsResul
 
 		// Create log entry
 		entry := &sessionv1.LogEntry{
-			Timestamp: timestamppb.New(timestamp),
-			Level:     level,
-			Message:   message,
-			Source:    &source,
+			Timestamp: timestamppb.New(parsed.Timestamp),
+			Level:     parsed.Level,
+			Message:   parsed.Message,
+			Source:    &parsed.Source,
 		}
 
 		entries = append(entries, entry)

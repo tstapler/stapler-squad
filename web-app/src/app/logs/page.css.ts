@@ -118,6 +118,38 @@ export const select = style({
   },
 });
 
+export const viewTab = style({
+  padding: "0.4rem 0.9rem",
+  backgroundColor: "transparent",
+  border: `1px solid ${vars.color.borderColor}`,
+  color: vars.color.textMuted,
+  cursor: "pointer",
+  borderRadius: vars.radii.sm,
+  fontSize: vars.fontSize.base,
+  fontFamily: vars.font.mono,
+  transition: "background-color 0.15s, color 0.15s",
+  selectors: {
+    "&:hover": {
+      backgroundColor: vars.color.hoverBackground,
+      color: vars.color.textPrimary,
+    },
+  },
+});
+
+export const viewTabActive = style([
+  viewTab,
+  {
+    backgroundColor: vars.color.primary,
+    borderColor: vars.color.primary,
+    color: vars.color.background,
+    selectors: {
+      "&:hover": {
+        backgroundColor: vars.color.primaryHover,
+      },
+    },
+  },
+]);
+
 export const loading = style({
   padding: "2rem",
   textAlign: "center",
