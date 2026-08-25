@@ -2885,6 +2885,33 @@ func (t *TmuxSession) CapturePaneContentPriority() (string, error) {
 	return sanitizeUTF8String(output), nil
 }
 
+// CapturePaneContentRawPriority mirrors CapturePaneContentPriority but
+// without -J, for the same reason CapturePaneContentRaw omits it from
+// CapturePaneContent (see its doc comment): a fast-lane caller that will
+// replay the result into a live terminal emulator needs tmux's own wrap
+// points and cursor-positioning codes intact, not joined/stripped by -J.
+func (t *TmuxSession) CapturePaneContentRawPriority() (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), defaultCapturePaneTimeout)
+	defer cancel()
+	cmd := t.buildTmuxCommandContext(ctx, "capture-pane", "-p", "-e", "-t", t.sanitizedName)
+	recordSpawn(time.Now())
+	output, err := runGatedFastLane(ctx, t.serverSocket, func() ([]byte, error) {
+		return t.cmdExec.Output(cmd)
+	})
+	if err != nil {
+		recordFailure(time.Now())
+		t.invalidateExistsCache()
+		logArgs := []any{"session", t.sanitizedName, "err", err}
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) && len(exitErr.Stderr) > 0 {
+			logArgs = append(logArgs, "stderr", strings.TrimSpace(string(exitErr.Stderr)))
+		}
+		log.Warn("failed to capture raw pane content for session (fast lane)", logArgs...)
+		return "", fmt.Errorf("error capturing raw pane content for session '%s': %v", t.sanitizedName, err)
+	}
+	return sanitizeUTF8String(output), nil
+}
+
 // RefreshClientPriority mirrors RefreshClient's Method 1 subprocess path but
 // routes through the resync exec-gate fast lane (runGatedFastLane) instead of
 // the default pool (Epic 4.2). Unlike RefreshClient, it does not attempt the

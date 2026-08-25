@@ -262,6 +262,16 @@ func (tm *TmuxProcessManager) CapturePaneContentRaw() (string, error) {
 	return s.CapturePaneContentRaw()
 }
 
+// CapturePaneContentRawPriority mirrors CapturePaneContentPriority but
+// without -J — see TmuxSession.CapturePaneContentRawPriority's doc comment.
+func (tm *TmuxProcessManager) CapturePaneContentRawPriority() (string, error) {
+	s := tm.session.Load()
+	if s == nil {
+		return "", fmt.Errorf("tmux session not initialized")
+	}
+	return s.CapturePaneContentRawPriority()
+}
+
 // CapturePaneContentWithOptions captures pane content between startLine and endLine.
 func (tm *TmuxProcessManager) CapturePaneContentWithOptions(startLine, endLine string) (string, error) {
 	s := tm.session.Load()
@@ -534,6 +544,7 @@ type TmuxManager interface {
 	CapturePaneContent() (string, error)
 	CapturePaneContentPriority() (string, error)
 	CapturePaneContentRaw() (string, error)
+	CapturePaneContentRawPriority() (string, error)
 	CapturePaneContentWithOptions(startLine, endLine string) (string, error)
 	GetPaneDimensions() (width, height int, err error)
 	GetCursorPosition() (x, y int, err error)
