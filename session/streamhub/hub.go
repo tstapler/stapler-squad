@@ -208,7 +208,11 @@ func NewStreamHub(sessionName string, controller SessionController, opts ...HubO
 // wire envelope a subscriber receives is Epic 2.2's WebSocketTransport
 // scope, not this epic's.
 func (h *StreamHub) onBatchFlush(unit BroadcastUnit) {
-	log.Info("streamhub batch flushed",
+	// Debug, not Info: this fires on every coalesced flush (up to ~1/batch
+	// window, i.e. many times per second per active session during
+	// continuous output) — Story 3.2.2's flush telemetry is better read from
+	// recordBatchFlushFramesCoalesced's metric than from a log line per flush.
+	log.Debug("streamhub batch flushed",
 		"session", h.sessionName,
 		"frames_coalesced", unit.FramesCoalesced,
 		"bytes", len(unit.Data),

@@ -52,7 +52,11 @@ func captureLogs(t *testing.T) *syncLogBuffer {
 	t.Helper()
 	buf := &syncLogBuffer{}
 	prev := slog.Default()
-	slog.SetDefault(slog.New(slog.NewJSONHandler(buf, nil)))
+	// Level: Debug — some assertions below (e.g. the batch-flush event) are
+	// intentionally logged at Debug rather than Info to avoid per-flush
+	// noise on the default-visible path (see session/streamhub/hub.go's
+	// onBatchFlush doc comment); capturing at Info here would silently miss them.
+	slog.SetDefault(slog.New(slog.NewJSONHandler(buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
 	t.Cleanup(func() { slog.SetDefault(prev) })
 	return buf
 }
