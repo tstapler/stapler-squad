@@ -685,7 +685,7 @@ func TestFromInstanceData_ActiveSession_DetectsAlreadyRunningTmux(t *testing.T) 
 		Program:          "bash -c 'echo test session; exec bash'",
 		SessionType:      SessionTypeDirectory,
 		AutoYes:          true,
-		TmuxServerSocket: getTestTmuxSocket(t),
+		TmuxServerSocket: testTmuxSocket(t),
 	})
 	require.NoError(t, err)
 	defer func() {
@@ -779,7 +779,7 @@ func TestLoadInstances_DoesNotBlockOnStartingActiveSessions(t *testing.T) {
 		Program:          "bash -c 'echo hi; exec bash'",
 		SessionType:      SessionTypeDirectory,
 		AutoYes:          true,
-		TmuxServerSocket: getTestTmuxSocket(t),
+		TmuxServerSocket: testTmuxSocket(t),
 	})
 	require.NoError(t, err)
 	defer func() {

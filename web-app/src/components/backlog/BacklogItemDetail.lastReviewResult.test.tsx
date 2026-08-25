@@ -16,9 +16,9 @@ import { render, screen, act } from "@testing-library/react";
 import { BacklogItemDetail } from "./BacklogItemDetail";
 import type { BacklogItem, LinkedSession } from "@/lib/hooks/useBacklogService";
 
-jest.mock("./SessionMonitor", () => ({ SessionMonitor: () => null }));
-jest.mock("./TriageReviewPanel", () => ({ TriageReviewPanel: () => null }));
-jest.mock("./TriageLoadingIndicator", () => ({ TriageLoadingIndicator: () => null }));
+jest.mock("./SessionMonitor", () => require("./backlogItemDetailTestFixtures").sessionMonitorMock());
+jest.mock("./TriageReviewPanel", () => require("./backlogItemDetailTestFixtures").triageReviewPanelMock());
+jest.mock("./TriageLoadingIndicator", () => require("./backlogItemDetailTestFixtures").triageLoadingIndicatorMock());
 jest.mock("./ReviewChangesModal", () => ({ ReviewChangesModal: () => null }));
 jest.mock("./BacklogFileBrowserModal", () => ({ BacklogFileBrowserModal: () => null }));
 
@@ -36,18 +36,10 @@ jest.mock("@/lib/hooks/useBacklogItemShipStatus", () => ({
   useBacklogItemShipStatus: (...args: unknown[]) => useBacklogItemShipStatusMock(...args),
 }));
 
-jest.mock("@/lib/hooks/useSessionRepoPaths", () => ({
-  useSessionRepoPaths: () => [],
-}));
-jest.mock("@/lib/hooks/usePathCompletions", () => ({
-  usePathCompletions: () => ({ entries: [], isLoading: false }),
-}));
-jest.mock("@/lib/hooks/useSessionService", () => ({
-  useSessionService: () => ({ deleteSession: jest.fn() }),
-}));
-jest.mock("@/lib/analytics", () => ({
-  useAnalytics: () => ({ track: jest.fn() }),
-}));
+jest.mock("@/lib/hooks/useSessionRepoPaths", () => require("./backlogItemDetailTestFixtures").useSessionRepoPathsMock());
+jest.mock("@/lib/hooks/usePathCompletions", () => require("./backlogItemDetailTestFixtures").usePathCompletionsMock());
+jest.mock("@/lib/hooks/useSessionService", () => require("./backlogItemDetailTestFixtures").useSessionServiceMock());
+jest.mock("@/lib/analytics", () => require("./backlogItemDetailTestFixtures").analyticsMock());
 
 // Epic 5.3 (backlog-event-driven-updates): BacklogItemDetail now also
 // subscribes via useWatchBacklogItems + a Redux selector, and opens its own
@@ -55,20 +47,10 @@ jest.mock("@/lib/analytics", () => ({
 // (Task 5.3.1b/5.3.1c). None of these tests exercise that live-update path,
 // so everything is stubbed inert: no live item ever arrives, and the raw
 // terminal stream yields no events.
-jest.mock("@/lib/hooks/useWatchBacklogItems", () => ({
-  useWatchBacklogItems: () => ({ items: [], connectionState: "live" }),
-}));
-jest.mock("@/lib/store", () => ({
-  useAppSelector: () => undefined,
-}));
-jest.mock("@connectrpc/connect", () => ({
-  createClient: () => ({
-    watchBacklogItems: () => (async function* () {})(),
-  }),
-}));
-jest.mock("@connectrpc/connect-web", () => ({
-  createConnectTransport: jest.fn().mockReturnValue({}),
-}));
+jest.mock("@/lib/hooks/useWatchBacklogItems", () => require("./backlogItemDetailTestFixtures").useWatchBacklogItemsMock());
+jest.mock("@/lib/store", () => require("./backlogItemDetailTestFixtures").storeMock());
+jest.mock("@connectrpc/connect", () => require("./backlogItemDetailTestFixtures").connectMock());
+jest.mock("@connectrpc/connect-web", () => require("./backlogItemDetailTestFixtures").connectWebMock());
 
 const getBacklogItem = jest.fn();
 const listPipelineModes = jest.fn().mockResolvedValue([]);

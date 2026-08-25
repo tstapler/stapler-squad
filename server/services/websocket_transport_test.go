@@ -24,9 +24,14 @@ type fakeSessionController struct {
 	subscribeCalls int32
 }
 
-func (f *fakeSessionController) SetWindowSize(int, int) error        { return nil }
-func (f *fakeSessionController) ResizePTY(int, int) error            { return nil }
-func (f *fakeSessionController) CapturePaneContent() (string, error) { return "", nil }
+func (f *fakeSessionController) SetWindowSize(int, int) error { return nil }
+func (f *fakeSessionController) ResizePTY(int, int) error     { return nil }
+func (f *fakeSessionController) CapturePaneContentRaw() (streamhub.RawPaneContent, error) {
+	return "", nil
+}
+func (f *fakeSessionController) GetPaneCursorPosition() (x, y int, err error) {
+	return 0, 0, nil
+}
 func (f *fakeSessionController) StopControlMode() error {
 	f.stopControlModeCalls++
 	return nil

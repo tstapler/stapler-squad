@@ -22,6 +22,8 @@ import { create } from "@bufbuild/protobuf";
 import { SessionEvent, NotificationEvent } from "@/gen/session/v1/events_pb";
 import { getApiBaseUrl, createAuthInterceptor } from "@/lib/config";
 import { BackoffState, getWsCloseCode, isNonRetriableConnectError } from "@/lib/utils/backoff";
+import { RefreshCoordinator } from "@/lib/utils/refreshCoordinator";
+import type { ListSessionsResponse } from "@/gen/session/v1/session_pb";
 import { createRpcTimingInterceptor } from "@/lib/telemetry/rpcTiming";
 import { getErrorMessage } from "@/lib/utils/connectError";
 import { useAnalytics } from "@/lib/contexts/AnalyticsContext";
@@ -69,6 +71,13 @@ import { removeItem as removeReviewQueueItem } from "@/lib/store/reviewQueueSlic
 // server's own createSessionTimeout (150s in session_service.go); if that
 // value changes, update this one too.
 const CREATE_SESSION_TIMEOUT_MS = 160_000;
+
+// Bounds every ListSessions RPC (all 4 call sites share refreshCoordinatorRef,
+// see below) so a hung/slow backend can't wedge the coordinator's single
+// in-flight slot forever — adversarial-review Blocker 1. A read-only list
+// call is expected to be fast; well above typical latency but far below
+// CREATE_SESSION_TIMEOUT_MS since no backend work (tmux/clone) is involved.
+export const LIST_SESSIONS_TIMEOUT_MS = 15_000;
 
 interface UseSessionServiceOptions {
   baseUrl?: string;
@@ -200,6 +209,10 @@ export function useSessionService(
   const shouldReconnectRef = useRef(false);
   // Jittered exponential backoff state
   const backoffRef = useRef(new BackoffState(1000, 30_000));
+  // Coalesces concurrent ListSessions fetches across all 4 call sites in
+  // this hook (listSessions, watch-stream initial snapshot, backwards-jump
+  // resync ×2, staleness-backstop reconnect) — see refreshCoordinator.ts.
+  const refreshCoordinatorRef = useRef(new RefreshCoordinator<ListSessionsResponse>());
   // Timestamp of last received stream event, used to detect staleness
   const lastEventTimeRef = useRef<number | null>(null);
   // Last seen event sequence number — passed as after_seq on reconnect so the
@@ -243,22 +256,36 @@ export function useSessionService(
       dispatch(setError(null));
 
       try {
-        const response = await clientRef.current.listSessions({
-          category: listOptions?.category,
-          status: listOptions?.status,
-          includeArchived: listOptions?.includeArchived,
-        });
-
-        dispatch(setSessions(response.sessions));
-        dispatch(setError(null)); // Clear any previous errors
-        if (response.systemMemoryPct > 0) {
-          setSystemMemoryPct(response.systemMemoryPct);
-        }
+        await refreshCoordinatorRef.current.request(
+          () =>
+            clientRef.current!.listSessions(
+              {
+                category: listOptions?.category,
+                status: listOptions?.status,
+                includeArchived: listOptions?.includeArchived,
+              },
+              { timeoutMs: LIST_SESSIONS_TIMEOUT_MS }
+            ),
+          (response) => {
+            dispatch(setSessions(response.sessions));
+            dispatch(setError(null)); // Clear any previous errors
+            if (response.systemMemoryPct > 0) {
+              setSystemMemoryPct(response.systemMemoryPct);
+            }
+          }
+        );
       } catch (err) {
         const error = err instanceof Error ? err : new Error("Failed to list sessions");
         dispatch(setError(error.message));
         console.error("Failed to list sessions:", error);
       } finally {
+        // Known limitation (sdd:6-verify follow-up, not fixed here): this
+        // clears as soon as THIS call's own request() settles, even if it
+        // got coalesced behind a still-in-flight rerun whose data hasn't
+        // landed yet — `loading` can briefly read false mid-refresh. A
+        // correct fix needs a site-scoped "is my own work done" signal, not
+        // the coordinator's shared busy state (which also reflects unrelated
+        // background stream reconnects from sites #2/#3/#3b).
         dispatch(setLoading(false));
       }
     },
@@ -940,6 +967,27 @@ export function useSessionService(
       setReconnectAttemptCount(0);
       ++streamGenerationRef.current; // Invalidate any in-flight startStream from prior call
 
+      // Backwards-jump full resync, shared by both the stream-close and
+      // stream-error paths below. Guarded — must not be silently dropped by
+      // a later unguarded caller (adversarial-review Blocker 2).
+      const runFullResync = (myGeneration: number) =>
+        refreshCoordinatorRef.current.request(
+          () =>
+            clientRef.current!.listSessions(
+              {
+                category: watchOptionsRef.current?.categoryFilter,
+                status: watchOptionsRef.current?.statusFilter,
+              },
+              { timeoutMs: LIST_SESSIONS_TIMEOUT_MS }
+            ),
+          (response) => {
+            if (shouldReconnectRef.current && streamGenerationRef.current === myGeneration) {
+              dispatch(setSessions(response.sessions));
+            }
+          },
+          { guarded: true }
+        );
+
       const startStream = async () => {
         if (!shouldReconnectRef.current || !clientRef.current) return;
         const myGeneration = ++streamGenerationRef.current;
@@ -948,13 +996,25 @@ export function useSessionService(
         lastEventTimeRef.current = Date.now(); // Treat stream start as an activity timestamp
 
         try {
-          // Initial snapshot before stream starts (pass active filters so the snapshot matches the stream)
-          const initialResponse = await clientRef.current.listSessions({
-            category: watchOptionsRef.current?.categoryFilter,
-            status: watchOptionsRef.current?.statusFilter,
-          });
-          if (!shouldReconnectRef.current || streamGenerationRef.current !== myGeneration) return;
-          dispatch(setSessions(initialResponse.sessions));
+          // Initial snapshot before stream starts (pass active filters so the snapshot matches the stream).
+          // Guarded: this reconnect-flush RPC must always fire, even if a
+          // later, unguarded listSessions() call coalesces behind it
+          // (adversarial-review Blocker 2).
+          await refreshCoordinatorRef.current.request(
+            () =>
+              clientRef.current!.listSessions(
+                {
+                  category: watchOptionsRef.current?.categoryFilter,
+                  status: watchOptionsRef.current?.statusFilter,
+                },
+                { timeoutMs: LIST_SESSIONS_TIMEOUT_MS }
+              ),
+            (response) => {
+              if (!shouldReconnectRef.current || streamGenerationRef.current !== myGeneration) return;
+              dispatch(setSessions(response.sessions));
+            },
+            { guarded: true }
+          );
 
           const stream = clientRef.current.watchSessions(
             {
@@ -982,16 +1042,11 @@ export function useSessionService(
             dispatch(setConnectionState("disconnected"));
             isConnectedRef.current = false;
 
-            // Handle backwards-jump: do a full resync
+            // Handle backwards-jump: do a full resync.
             if (needsFullResyncRef.current) {
               needsFullResyncRef.current = false;
-              void clientRef.current?.listSessions({
-                category: watchOptionsRef.current?.categoryFilter,
-                status: watchOptionsRef.current?.statusFilter,
-              }).then(r => {
-                if (shouldReconnectRef.current && streamGenerationRef.current === myGeneration) {
-                  dispatch(setSessions(r.sessions));
-                }
+              runFullResync(myGeneration).catch((err) => {
+                console.error("[reconnect] full resync failed:", err);
               });
             }
 
@@ -1030,16 +1085,11 @@ export function useSessionService(
             dispatch(setConnectionState("disconnected"));
             isConnectedRef.current = false;
 
-            // Handle backwards-jump: do a full resync
+            // Handle backwards-jump: do a full resync.
             if (needsFullResyncRef.current) {
               needsFullResyncRef.current = false;
-              void clientRef.current?.listSessions({
-                category: watchOptionsRef.current?.categoryFilter,
-                status: watchOptionsRef.current?.statusFilter,
-              }).then(r => {
-                if (shouldReconnectRef.current && streamGenerationRef.current === myGeneration) {
-                  dispatch(setSessions(r.sessions));
-                }
+              runFullResync(myGeneration).catch((err) => {
+                console.error("[reconnect] full resync failed:", err);
               });
             }
 

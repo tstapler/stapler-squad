@@ -1,6 +1,7 @@
 # BUG-090: `StreamHub` teardown reaches `HubTornDown` state before/without `StopControlMode` being called [SEVERITY: Medium]
 
-**Status**: 🐛 Open
+**Status**: ✅ FIXED (2026-08-24, commit `39751d4c6`)
+**Resolution**: `ForceTeardown` now flips `h.state` to `HubTornDown` only after `StopControlMode` returns (or is skipped for a nil controller), using a separate `teardownInFlight` guard instead of the old state field. Verified `go test ./session/streamhub/... -run TestStreamHub_should_ScheduleTeardownAfterGracePeriod_When_LastSubscriberDetaches -race -count=50` all green.
 **Discovered**: 2026-08-23
 **Impact**: `session/streamhub`'s grace-period teardown test flakes (~13% locally under `-race` with CPU contention, and confirmed in PR #605's CI). This is `session/streamhub`'s core session-teardown path — the mechanism that stops a tmux control-mode session after its last subscriber detaches — so if the underlying ordering gap is real (not just a slow test timer), it could mean a hub occasionally reports itself torn down without actually having stopped the control-mode process, in production, not just in tests.
 

@@ -9,10 +9,11 @@ package streamhub
 // edge rather than an import cycle — see plan.md's SessionController
 // Pattern Decisions entry.
 //
-// Scoped to exactly the six *session.Instance methods it mirrors:
-// session/instance_tmux.go's ResizePTY (:587), CapturePaneContent (:600),
-// StopControlMode (:727), SubscribeControlModeUpdates (:733),
-// UnsubscribeControlModeUpdates (:738), and SetWindowSize (:752).
+// Scoped to exactly the seven *session.Instance methods it mirrors:
+// session/instance_tmux.go's ResizePTY (:587), CapturePaneContentRaw (:772),
+// GetPaneCursorPosition (:792), StopControlMode (:727),
+// SubscribeControlModeUpdates (:733), UnsubscribeControlModeUpdates (:738),
+// and SetWindowSize (:752).
 type SessionController interface {
 	// SetWindowSize propagates a negotiated resize to the underlying tmux
 	// session. StreamHub.applyNegotiatedSize is its sole caller.
@@ -26,10 +27,23 @@ type SessionController interface {
 	// phase migrates it onto the hub).
 	ResizePTY(cols, rows int) error
 
-	// CapturePaneContent captures the current visible pane content. The hub
-	// calls this exactly once per resize, after quiescence is reached, and
-	// broadcasts the result to every attached subscriber.
-	CapturePaneContent() (string, error)
+	// CapturePaneContentRaw captures the current visible pane content
+	// without joining tmux's soft-wrapped lines (no -J) and with cursor
+	// positioning codes intact. The hub calls this exactly once per resize,
+	// after quiescence is reached, and once at attach time for a new
+	// subscriber's catch-up snapshot; both call sites run the result through
+	// prepareSnapshotContent/withCursorSync (snapshot_prepare.go) before
+	// broadcasting. Deliberately not the joined CapturePaneContent variant:
+	// -J strips the escape codes a snapshot's cursor-sync depends on and
+	// collapses tmux's own wrap points, which is what made every post-resize
+	// snapshot render staircased across the previous frame (2026-08-25
+	// reflow bug — see snapshot_prepare.go's doc comment).
+	CapturePaneContentRaw() (RawPaneContent, error)
+
+	// GetPaneCursorPosition reports the tmux pane's current cursor
+	// coordinates, used by withCursorSync (snapshot_prepare.go) to reposition
+	// the client cursor after a snapshot renders.
+	GetPaneCursorPosition() (x, y int, err error)
 
 	// StopControlMode stops the control-mode stream. Called exactly once by
 	// StreamHub.ForceTeardown.

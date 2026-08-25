@@ -1237,17 +1237,31 @@ func ValidateWorkDir(workDir string) error {
 // distinct argv elements), not a shell operator -- no shell is involved via
 // exec.Cmd, so no escaping is needed or applicable.
 //
-// Best-effort: log and continue on failure, matching every other
-// non-essential tmux option set in start() (history-limit,
-// setRemainOnExit itself) -- a failure here degrades to the pre-existing
-// (racy) behavior, not a hard Start() failure.
-func (t *TmuxSession) preconfigureServerBeforeSession() {
+// Retried with the same backoff schedule as EnsureServerRunning
+// (serverStartAttempts/serverStartBackoffStart/serverStartBackoffMax): this
+// chain's own "start-server" sub-command can transiently fail with "server
+// exited unexpectedly" under the same concurrent-spawn contention documented
+// there, and returning that failure to the caller (rather than logging and
+// continuing) matters here because -- unlike every other non-essential
+// option this method used to lump itself in with (history-limit,
+// setRemainOnExit) -- a failed start-server here means no server exists at
+// all, so the new-session call start() makes right after this returns is
+// guaranteed to fail too, just with a more confusing "error starting tmux
+// session" message instead of surfacing the real cause.
+func (t *TmuxSession) preconfigureServerBeforeSession() error {
 	preconfigureCmd := t.buildTmuxCommand("start-server", ";", "set-option", "-g", "exit-empty", "off", ";", "set-option", "-g", "remain-on-exit", "on")
-	if err := runGatedErr(context.Background(), t.serverSocket, func() error {
-		return t.cmdExec.Run(preconfigureCmd)
-	}); err != nil {
-		log.Warn("failed to pre-configure tmux server before session creation", "session", t.sanitizedName, "serverSocket", t.serverSocket, "err", err)
+	run := func() ([]byte, error) {
+		runCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		return runGated(runCtx, t.serverSocket, func() ([]byte, error) {
+			return nil, t.cmdExec.Run(preconfigureCmd)
+		})
 	}
+	_, err := ensureServerRunningWithRetry(run, func() bool { return checkServerNotRunning(t.serverSocket) }, serverStartAttempts, serverStartBackoffStart, serverStartBackoffMax)
+	if err != nil {
+		return fmt.Errorf("failed to pre-configure tmux server before session creation: %w", err)
+	}
+	return nil
 }
 
 // start is the internal implementation for Start and StartWithCleanup
@@ -1289,7 +1303,9 @@ func (t *TmuxSession) start(workDir string, setupCleanup bool, cleanup *CleanupF
 		return fmt.Errorf("cannot start tmux session %s: %w", t.sanitizedName, err)
 	}
 
-	t.preconfigureServerBeforeSession()
+	if err := t.preconfigureServerBeforeSession(); err != nil {
+		return fmt.Errorf("cannot start tmux session %s: %w", t.sanitizedName, err)
+	}
 
 	// Create a new detached tmux session and start the program in it.
 	// Pass -e CLAUDECODE= to unset CLAUDECODE in the child environment so that
@@ -2855,6 +2871,33 @@ func (t *TmuxSession) CapturePaneContentPriority() (string, error) {
 		}
 		log.Warn("failed to capture pane content for session (fast lane)", logArgs...)
 		return "", fmt.Errorf("error capturing pane content for session '%s': %v", t.sanitizedName, err)
+	}
+	return sanitizeUTF8String(output), nil
+}
+
+// CapturePaneContentRawPriority mirrors CapturePaneContentPriority but
+// without -J, for the same reason CapturePaneContentRaw omits it from
+// CapturePaneContent (see its doc comment): a fast-lane caller that will
+// replay the result into a live terminal emulator needs tmux's own wrap
+// points and cursor-positioning codes intact, not joined/stripped by -J.
+func (t *TmuxSession) CapturePaneContentRawPriority() (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), defaultCapturePaneTimeout)
+	defer cancel()
+	cmd := t.buildTmuxCommandContext(ctx, "capture-pane", "-p", "-e", "-t", t.sanitizedName)
+	recordSpawn(time.Now())
+	output, err := runGatedFastLane(ctx, t.serverSocket, func() ([]byte, error) {
+		return t.cmdExec.Output(cmd)
+	})
+	if err != nil {
+		recordFailure(time.Now())
+		t.invalidateExistsCache()
+		logArgs := []any{"session", t.sanitizedName, "err", err}
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) && len(exitErr.Stderr) > 0 {
+			logArgs = append(logArgs, "stderr", strings.TrimSpace(string(exitErr.Stderr)))
+		}
+		log.Warn("failed to capture raw pane content for session (fast lane)", logArgs...)
+		return "", fmt.Errorf("error capturing raw pane content for session '%s': %v", t.sanitizedName, err)
 	}
 	return sanitizeUTF8String(output), nil
 }
