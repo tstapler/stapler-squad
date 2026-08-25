@@ -19,6 +19,10 @@ import (
 type fakeSessionController struct {
 	stopCalls atomic.Int32
 	stopErr   error
+	// stopFn, when set, replaces StopControlMode's body entirely (stopCalls
+	// is still incremented) — lets a test block ForceTeardown mid-call to
+	// assert on state visible only during that window.
+	stopFn func() error
 
 	setWindowSizeCalls atomic.Int32
 	setWindowSizeErr   error
@@ -42,6 +46,9 @@ func newFakeSessionController() *fakeSessionController {
 
 func (f *fakeSessionController) StopControlMode() error {
 	f.stopCalls.Add(1)
+	if f.stopFn != nil {
+		return f.stopFn()
+	}
 	return f.stopErr
 }
 
@@ -122,7 +129,10 @@ func TestStreamHub_should_ScheduleTeardownAfterGracePeriod_When_LastSubscriberDe
 		t.Fatalf("expected StopControlMode not yet called, got %d calls", calls)
 	}
 
-	if !waitFor(t, time.Second, func() bool { return hub.State() == streamhub.HubTornDown }) {
+	// 5s, not 1s: under a full `-race` suite run, CPU contention from other
+	// packages' tests can delay this hub's 30ms teardown timer well past 1s
+	// (observed flake in CI: "expected StopControlMode called exactly once, got 0 calls").
+	if !waitFor(t, 5*time.Second, func() bool { return hub.State() == streamhub.HubTornDown }) {
 		t.Fatalf("expected HubTornDown after grace period elapses, got %v", hub.State())
 	}
 	if calls := controller.stopCalls.Load(); calls != 1 {
@@ -211,5 +221,113 @@ func TestStreamHub_should_ReturnStopControlModeError_When_ForceTeardownControlle
 	}
 	if got := hub.State(); got != streamhub.HubTornDown {
 		t.Fatalf("expected HubTornDown even when StopControlMode errors, got %v", got)
+	}
+}
+
+func TestStreamHub_should_NotReportHubTornDown_While_StopControlModeInFlight(t *testing.T) {
+	defer goleak.VerifyNone(t)
+
+	controller := newFakeSessionController()
+	inStopControlMode := make(chan struct{})
+	release := make(chan struct{})
+	controller.stopFn = func() error {
+		close(inStopControlMode)
+		<-release
+		return nil
+	}
+	hub := streamhub.NewStreamHub("test-session", controller, streamhub.WithTeardownGrace(time.Hour))
+	hub.AttachSubscriber(newMemoryTransport(), streamhub.SubscriberCapability{})
+
+	done := make(chan error, 1)
+	go func() { done <- hub.ForceTeardown() }()
+
+	<-inStopControlMode
+	if got := hub.State(); got == streamhub.HubTornDown {
+		t.Fatalf("State() reported HubTornDown while StopControlMode was still running")
+	}
+	close(release)
+	if err := <-done; err != nil {
+		t.Fatalf("ForceTeardown: %v", err)
+	}
+	if got := hub.State(); got != streamhub.HubTornDown {
+		t.Fatalf("expected HubTornDown after StopControlMode returns, got %v", got)
+	}
+}
+
+func TestStreamHub_should_CallStopControlModeExactlyOnce_When_ForceTeardownRacesConcurrently(t *testing.T) {
+	defer goleak.VerifyNone(t)
+
+	controller := newFakeSessionController()
+	release := make(chan struct{})
+	controller.stopFn = func() error {
+		<-release
+		return nil
+	}
+	hub := streamhub.NewStreamHub("test-session", controller, streamhub.WithTeardownGrace(time.Hour))
+	hub.AttachSubscriber(newMemoryTransport(), streamhub.SubscriberCapability{})
+
+	var wg sync.WaitGroup
+	errs := make([]error, 2)
+	for i := range errs {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			errs[i] = hub.ForceTeardown()
+		}(i)
+	}
+	// Give both goroutines a chance to reach ForceTeardown's guard before
+	// releasing StopControlMode — without this, the second call could run
+	// entirely before the first even starts, which wouldn't exercise the
+	// teardownInFlight branch at all.
+	time.Sleep(20 * time.Millisecond)
+	close(release)
+	wg.Wait()
+
+	for i, err := range errs {
+		if err != nil {
+			t.Fatalf("ForceTeardown call %d: %v", i, err)
+		}
+	}
+	if calls := controller.stopCalls.Load(); calls != 1 {
+		t.Fatalf("expected StopControlMode called exactly once under concurrent ForceTeardown, got %d calls", calls)
+	}
+	if got := hub.State(); got != streamhub.HubTornDown {
+		t.Fatalf("expected HubTornDown after both ForceTeardown calls settle, got %v", got)
+	}
+}
+
+func TestStreamHub_should_NotClobberReArmedHubDraining_When_SubscriberReattachesAndDetachesDuringTeardown(t *testing.T) {
+	defer goleak.VerifyNone(t)
+
+	controller := newFakeSessionController()
+	inStopControlMode := make(chan struct{})
+	release := make(chan struct{})
+	controller.stopFn = func() error {
+		close(inStopControlMode)
+		<-release
+		return nil
+	}
+	hub := streamhub.NewStreamHub("test-session", controller, streamhub.WithTeardownGrace(time.Hour))
+	hub.AttachSubscriber(newMemoryTransport(), streamhub.SubscriberCapability{})
+
+	done := make(chan error, 1)
+	go func() { done <- hub.ForceTeardown() }()
+	<-inStopControlMode
+
+	// Reattach then detach again while the original ForceTeardown's
+	// StopControlMode call is still in flight — len(subscribers) is back to
+	// 0 by the time StopControlMode returns, but a real subscriber lifecycle
+	// happened in between and removeSubscriber re-armed a fresh HubDraining
+	// grace period for it (scheduleTeardownLocked). ForceTeardown's stale
+	// call must not clobber that back to HubTornDown.
+	id := hub.AttachSubscriber(newMemoryTransport(), streamhub.SubscriberCapability{})
+	hub.DetachSubscriber(id)
+
+	close(release)
+	if err := <-done; err != nil {
+		t.Fatalf("ForceTeardown: %v", err)
+	}
+	if got := hub.State(); got != streamhub.HubDraining {
+		t.Fatalf("expected the reattach+redetach's own HubDraining to survive the original ForceTeardown call, got %v", got)
 	}
 }

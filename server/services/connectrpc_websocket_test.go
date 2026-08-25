@@ -528,27 +528,31 @@ func TestRecordControlModeStreamStart_should_LogOverlapWarning_When_TwoInvocatio
 
 // --- HubRegistry / PathHubOwned routing (Epic 2.2) ---
 
-// TestUseStreamHub_should_DefaultToFalse_When_EnvVarUnset is the safety-net
-// regression test for this epic's core requirement: with
-// STAPLER_SQUAD_USE_STREAM_HUB unset (today's default, unchanged by this
-// change), streamTerminal must keep routing to the legacy
-// PathLegacyPerConnection branch.
-func TestUseStreamHub_should_DefaultToFalse_When_EnvVarUnset(t *testing.T) {
+// TestUseStreamHub_should_DefaultToTrue_When_EnvVarUnsetAndRehearsalRecorded
+// covers the post-rollout default: with STAPLER_SQUAD_USE_STREAM_HUB unset
+// (mirrors STAPLER_SQUAD_USE_CONTROL_MODE's "unset means on" convention) and
+// a recorded rollback rehearsal, streamTerminal routes to PathHubOwned.
+func TestUseStreamHub_should_DefaultToTrue_When_EnvVarUnsetAndRehearsalRecorded(t *testing.T) {
+	recordRollbackRehearsalCompletedForTest(t)
+
 	t.Setenv("STAPLER_SQUAD_USE_STREAM_HUB", "")
-	require.False(t, useStreamHub())
+	require.True(t, useStreamHub())
 }
 
-// TestUseStreamHub_should_ReturnTrue_When_EnvVarIsExactlyTrue verifies the
-// flag only turns PathHubOwned on for the literal value "true" — any other
-// value (including a typo like "1" or "True") stays on the legacy path
-// rather than failing open. Requires a recorded rollback rehearsal (Story
-// 3.3.2) since useStreamHub()'s gate refuses to enable the global default
-// otherwise (Story 3.3.1's Task 3.3.1d).
-func TestUseStreamHub_should_ReturnTrue_When_EnvVarIsExactlyTrue(t *testing.T) {
+// TestUseStreamHub_should_ReturnFalse_When_EnvVarIsExactlyFalse verifies the
+// opt-out: any value other than "" or "true" (e.g. the literal "false", or a
+// typo like "1"/"True") stays on the legacy path rather than failing open.
+// Requires a recorded rollback rehearsal (Story 3.3.2) since useStreamHub()'s
+// gate refuses to enable the global default otherwise (Story 3.3.1's Task
+// 3.3.1d).
+func TestUseStreamHub_should_ReturnFalse_When_EnvVarIsExactlyFalse(t *testing.T) {
 	recordRollbackRehearsalCompletedForTest(t)
 
 	t.Setenv("STAPLER_SQUAD_USE_STREAM_HUB", "true")
 	require.True(t, useStreamHub())
+
+	t.Setenv("STAPLER_SQUAD_USE_STREAM_HUB", "false")
+	require.False(t, useStreamHub())
 
 	t.Setenv("STAPLER_SQUAD_USE_STREAM_HUB", "1")
 	require.False(t, useStreamHub())

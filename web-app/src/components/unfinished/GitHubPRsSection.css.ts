@@ -1,54 +1,16 @@
 import { style } from "@vanilla-extract/css";
 import { vars } from "@/styles/theme.css";
+import { badgeBase } from "@/styles/collapsibleSection.css";
 
-export const section = style({
-  display: "flex",
-  flexDirection: "column",
-  gap: vars.space["3"],
-});
+export {
+  section,
+  sectionHeader,
+  chevron,
+  chevronExpanded,
+  sectionTitle,
+} from "@/styles/collapsibleSection.css";
 
-export const sectionHeader = style({
-  display: "flex",
-  alignItems: "center",
-  gap: vars.space["2"],
-  padding: `${vars.space["2"]} ${vars.space["3"]}`,
-  borderRadius: vars.radii.sm,
-  cursor: "pointer",
-  userSelect: "none",
-  outline: "none",
-  ":hover": {
-    background: vars.color.hoverBackground,
-  },
-  ":focus-visible": {
-    boxShadow: `0 0 0 2px ${vars.color.inputFocusBorder}`,
-  },
-});
-
-export const chevron = style({
-  fontSize: vars.fontSize.xs,
-  color: vars.color.textMuted,
-  transition: "transform 0.15s",
-  display: "inline-block",
-});
-
-export const chevronExpanded = style({
-  transform: "rotate(90deg)",
-});
-
-export const sectionTitle = style({
-  fontWeight: 600,
-  fontSize: vars.fontSize.sm,
-  color: vars.color.textPrimary,
-});
-
-export const badge = style({
-  fontSize: vars.fontSize.xs,
-  color: vars.color.textMuted,
-  background: vars.color.surfaceSubtle,
-  borderRadius: vars.radii.full,
-  padding: `${vars.space["1"]} ${vars.space["2"]}`,
-  marginLeft: vars.space["2"],
-});
+export const badge = style([badgeBase, { marginLeft: vars.space["2"] }]);
 
 export const username = style({
   fontSize: vars.fontSize.xs,

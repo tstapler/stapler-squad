@@ -1,78 +1,33 @@
 import React from "react";
 import { render, screen } from "@testing-library/react";
 import { SessionCard } from "./SessionCard";
-import { SessionStatus } from "@/gen/session/v1/types_pb";
+import { ReviveOutcome, SessionStatus } from "@/gen/session/v1/types_pb";
 import type { Session } from "@/gen/session/v1/types_pb";
 import { staleBadge } from "./SessionCard.css";
 
-jest.mock("@connectrpc/connect", () => ({
-  createClient: jest.fn(() => ({})),
-}));
+jest.mock("@connectrpc/connect", () => require("./__tests__/sessionCardTestFixtures").mockConnect());
 
-jest.mock("@connectrpc/connect-web", () => ({
-  createConnectTransport: jest.fn(() => ({ unary: jest.fn(), stream: jest.fn() })),
-}));
+jest.mock("@connectrpc/connect-web", () => require("./__tests__/sessionCardTestFixtures").mockConnectWeb());
 
-jest.mock("@/lib/contexts/ReviewQueueContext", () => ({
-  useReviewQueueContext: () => ({ items: [] }),
-}));
+jest.mock("@/lib/contexts/ReviewQueueContext", () => require("./__tests__/sessionCardTestFixtures").mockReviewQueueContext());
 
-jest.mock("@/lib/contexts/SessionServiceContext", () => ({
-  useSessionServiceContext: () => ({
-    draftPullRequest: jest.fn(),
-    createPullRequest: jest.fn(),
-  }),
-}));
+jest.mock("@/lib/contexts/SessionServiceContext", () => require("./__tests__/sessionCardTestFixtures").mockSessionServiceContext());
 
-jest.mock("@/lib/store", () => ({
-  useAppSelector: jest.fn(() => ({})),
-}));
+jest.mock("@/lib/store", () => require("./__tests__/sessionCardTestFixtures").mockStore());
 
-jest.mock("@/lib/store/sessionsSlice", () => ({
-  selectDetectedStatusMap: jest.fn(),
-}));
+jest.mock("@/lib/store/sessionsSlice", () => require("./__tests__/sessionCardTestFixtures").mockSessionsSlice());
 
-jest.mock("@/lib/hooks/useTerminalSnapshot", () => ({
-  useTerminalSnapshot: () => ({ snapshot: null, loading: false }),
-}));
+jest.mock("@/lib/hooks/useTerminalSnapshot", () => require("./__tests__/sessionCardTestFixtures").mockUseTerminalSnapshot());
 
-jest.mock("@/lib/hooks/useFocusTrap", () => ({
-  useFocusTrap: () => {},
-}));
+jest.mock("@/lib/hooks/useFocusTrap", () => require("./__tests__/sessionCardTestFixtures").mockUseFocusTrap());
 
-jest.mock("@/components/ui/AppLink", () => ({
-  AppLink: ({ href, children, ...rest }: React.AnchorHTMLAttributes<HTMLAnchorElement> & { href: string }) => (
-    <a href={href} {...rest}>{children}</a>
-  ),
-}));
+jest.mock("@/components/ui/AppLink", () => require("./__tests__/sessionCardTestFixtures").mockAppLink());
 
-jest.mock("@/components/ui/Modal", () => ({
-  Modal: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
-  ModalContent: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
-  ModalTitle: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
-  ModalFooter: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
-}));
+jest.mock("@/components/ui/Modal", () => require("./__tests__/sessionCardTestFixtures").mockModal());
 
-// Radix's real Tooltip only reveals its label on hover after a delay via a portal —
-// mock it so the label is assertable synchronously without simulating pointer timing.
-jest.mock("@/components/ui/Tooltip", () => ({
-  Tooltip: ({ children, label }: { children: React.ReactNode; label: string }) => (
-    <div data-testid="tooltip-mock" data-label={label}>{children}</div>
-  ),
-}));
+jest.mock("@/components/ui/Tooltip", () => require("./__tests__/sessionCardTestFixtures").mockTooltip());
 
-jest.mock("@/lib/hooks/useSessionActions", () => ({
-  useSessionActions: () => ({
-    pause: jest.fn(),
-    resume: jest.fn(),
-    delete: jest.fn(),
-    rename: jest.fn(),
-    restart: jest.fn(),
-    createCheckpoint: jest.fn(),
-    updateTags: jest.fn(),
-    update: jest.fn(),
-  }),
-}));
+jest.mock("@/lib/hooks/useSessionActions", () => require("./__tests__/sessionCardTestFixtures").mockUseSessionActions());
 
 const minimalSession: Partial<Session> = {
   id: "s1",
@@ -109,6 +64,20 @@ describe("SessionCard — note badge", () => {
     const badge = screen.getByTestId("badge-has-note");
     const expected = "N".repeat(119) + "…";
     expect(badge.closest('[data-testid="tooltip-mock"]')).toHaveAttribute("data-label", expected);
+  });
+});
+
+describe("SessionCard — revived context badge", () => {
+  it("SessionCard_should_RenderRevivedContextBadge_When_ReviveOutcomeIsFreshLostHistory", () => {
+    const session = { ...minimalSession, reviveOutcome: ReviveOutcome.FRESH_LOST_HISTORY } as unknown as Session;
+    render(<SessionCard session={session} />);
+    expect(screen.getByTestId("revived-context-badge")).toBeInTheDocument();
+  });
+
+  it("SessionCard_should_NotRenderRevivedContextBadge_When_ReviveOutcomeIsNotFreshLostHistory", () => {
+    const session = { ...minimalSession, reviveOutcome: ReviveOutcome.RESUME_LIVE } as unknown as Session;
+    render(<SessionCard session={session} />);
+    expect(screen.queryByTestId("revived-context-badge")).toBeNull();
   });
 });
 

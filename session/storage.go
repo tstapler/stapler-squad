@@ -110,9 +110,17 @@ type InstanceData struct {
 	Checkpoints      CheckpointList `json:"checkpoints,omitempty"`
 	ActiveCheckpoint string         `json:"active_checkpoint,omitempty"`
 	ForkedFromID     string         `json:"forked_from_id,omitempty"`
+	// RestartedFromSessionID — see Instance.RestartedFromSessionID's doc comment.
+	RestartedFromSessionID string `json:"restarted_from_session_id,omitempty"`
 
 	// History file linkage for cold restore
 	HistoryFilePath string `json:"history_file_path,omitempty"`
+
+	// EverHadConversationHistory and LastReviveOutcome persist the
+	// session-revive-uuid-loss AC3 signal across full process restarts, not
+	// just tmux restarts — see Instance.EverHadConversationHistory.
+	EverHadConversationHistory bool   `json:"ever_had_conversation_history,omitempty"`
+	LastReviveOutcome          string `json:"last_revive_outcome,omitempty"`
 
 	// OneShot runs claude in -p mode; session exits after task completes.
 	OneShot bool `json:"one_shot,omitempty"`
@@ -420,6 +428,41 @@ func (d InstanceData) MatchesID(id string) bool {
 
 // ErrInstanceDataNotFound is returned by FindInstanceDataByID when no match exists.
 var ErrInstanceDataNotFound = errors.New("instance data not found")
+
+// ArchiveInstanceDataByID sets ArchivedAt and Status=Stopped directly in storage for a
+// session that is not (or is no longer) resident in the live in-memory instance registry
+// (ReviewQueuePoller.instances) — e.g. an old backlog work/review session left over after a
+// server restart. This is the storage-only counterpart to Instance.SetArchivedAtIfNilAndStop,
+// used as ArchiveSessionByUUID's fallback so terminal-transition and safety-net archival
+// sweeps don't silently no-op just because a session isn't currently being polled. Read-
+// modify-write on the full InstanceData row (not a partial struct), so EntRepository.Update's
+// guarded-optional-field pattern can't zero out fields this call didn't intend to touch.
+// Returns false (no error) if the session doesn't exist or is already archived, matching
+// SetArchivedAtIfNilAndStop's CAS semantics.
+//
+// The read and the write are two separate, unguarded round-trips: if the session is resumed
+// (added back to the live poller) between them, this can race a concurrent live-instance
+// write and leave a stale snapshot in storage. Callers that can't rule this out should
+// re-check FindLiveInstance after calling this and, if now live, re-save the live instance's
+// current state to overwrite any stale write (see ArchiveSessionByUUID).
+func (s *Storage) ArchiveInstanceDataByID(id string, at time.Time) (bool, error) {
+	data, err := s.FindInstanceDataByID(id)
+	if err != nil {
+		if errors.Is(err, ErrInstanceDataNotFound) {
+			return false, nil
+		}
+		return false, err
+	}
+	if data.ArchivedAt != nil {
+		return false, nil
+	}
+	data.ArchivedAt = &at
+	data.Status = Stopped
+	if err := s.repo.Update(context.Background(), *data); err != nil {
+		return false, fmt.Errorf("update session %s: %w", id, err)
+	}
+	return true, nil
+}
 
 // FindInstanceDataByID finds the first InstanceData whose stable ID or title matches id.
 // Returns ErrInstanceDataNotFound when no match exists.

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
@@ -416,4 +417,55 @@ func TestSetup_SerializesConcurrentWorktreeCreation_When_MultipleGoroutinesRaceO
 		wt := wt
 		defer func() { _ = wt.Cleanup() }()
 	}
+}
+
+// TestRetryBranchRefExists_SucceedsAfterRetries_When_CheckFlakesTransiently drives the
+// "cannot lock ref" self-heal branch in setupNewWorktree deterministically, by injecting
+// a check func that fails like a lock-contended ref read for the first two attempts and
+// then succeeds — rather than relying on real concurrent git-subprocess timing (as
+// TestSetupNewWorktree_SelfHeals_When_ConcurrentSpawnsRaceOnBranchCreate above does) to
+// coincidentally hit this exact code path.
+func TestRetryBranchRefExists_SucceedsAfterRetries_When_CheckFlakesTransiently(t *testing.T) {
+	t.Parallel()
+	var calls int
+	exists := retryBranchRefExists(func() (bool, error) {
+		calls++
+		if calls < 3 {
+			return false, errors.New("simulated lock contention")
+		}
+		return true, nil
+	})
+	assert.True(t, exists, "retry must observe the ref once the simulated contention clears")
+	assert.Equal(t, 3, calls, "must stop retrying as soon as the check succeeds")
+}
+
+// TestRetryBranchRefExists_GivesUp_When_CheckNeverSucceeds forces the retry loop's give-up
+// path deterministically: a check that always errors must exhaust lockRaceRetryAttempts and
+// report false, rather than retrying forever or masking the persistent failure.
+func TestRetryBranchRefExists_GivesUp_When_CheckNeverSucceeds(t *testing.T) {
+	t.Parallel()
+	var calls int
+	exists := retryBranchRefExists(func() (bool, error) {
+		calls++
+		return false, errors.New("simulated persistent lock contention")
+	})
+	assert.False(t, exists, "retry must give up and report the ref as not (yet) existing")
+	assert.Equal(t, lockRaceRetryAttempts, calls, "must attempt exactly lockRaceRetryAttempts times before giving up")
+}
+
+// TestRetryBranchRefExists_DoesNotSleep_BeforeFirstAttempt confirms the no-contention
+// common path pays no latency: a check that succeeds immediately must be called exactly
+// once, with no sleep beforehand.
+func TestRetryBranchRefExists_DoesNotSleep_BeforeFirstAttempt(t *testing.T) {
+	t.Parallel()
+	var calls int
+	start := time.Now()
+	exists := retryBranchRefExists(func() (bool, error) {
+		calls++
+		return true, nil
+	})
+	elapsed := time.Since(start)
+	assert.True(t, exists)
+	assert.Equal(t, 1, calls)
+	assert.Less(t, elapsed, lockRaceRetryDelay, "first attempt must not be preceded by a sleep")
 }

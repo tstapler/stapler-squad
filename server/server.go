@@ -445,6 +445,15 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		log.Info("Registered SessionSummaryService handler", "path", ssAPIPath)
 	}
 
+	// Register HandoffSummaryService handler (Story 2.2.1).
+	if deps.HandoffSummaryGenerator != nil {
+		handoffSummaryService := services.NewHandoffSummaryService(deps.HandoffSummaryGenerator)
+		hsPath, hsHandler := sessionv1connect.NewHandoffSummaryServiceHandler(handoffSummaryService, ConnectOptions(deps.ErrorRegistry)...)
+		hsAPIPath := "/api" + hsPath
+		srv.RegisterConnectHandler(hsAPIPath, http.StripPrefix("/api", hsHandler))
+		log.Info("Registered HandoffSummaryService handler", "path", hsAPIPath)
+	}
+
 	// Register InsightsService handler for token usage analytics.
 	if deps.InsightsService != nil {
 		insightsPath, insightsHandler := sessionv1connect.NewInsightsServiceHandler(deps.InsightsService, ConnectOptions(deps.ErrorRegistry)...)

@@ -43,7 +43,12 @@ func TestGetOrBuildUntrackedMatcher_SurvivesCachedRepoEviction_WhenHeadUnchanged
 	}
 }
 
-func TestGetOrBuildUntrackedMatcher_Rebuilds_WhenHeadChanged(t *testing.T) {
+// TestGetOrBuildUntrackedMatcher_Rebuilds_WhenCachedHeadHashKeyMismatches
+// exercises matcherCache's cache-key correctness in isolation from
+// resolveHeadTreeHashes's gitignore-content gate (covered separately in
+// gogit_vcs_reader_gitignore_invalidation_test.go): a matcher cached under one
+// headTreeHash must not be served to an entry keyed by a different hash.
+func TestGetOrBuildUntrackedMatcher_Rebuilds_WhenCachedHeadHashKeyMismatches(t *testing.T) {
 	t.Parallel()
 	dir := newGitignoreBenchRepo(t, 1)
 	g := &GoGitVCSReader{}

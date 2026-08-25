@@ -1296,7 +1296,15 @@ func buildLogConfig(daemon bool, cfg *config.Config, consoleEnabled bool) *log.L
 		UseSessionLogs: cfg.UseSessionLogs,
 		ConsoleEnabled: consoleEnabled,
 		FileEnabled:    true,
-		FileLevel:      log.DEBUG,
+		// INFO by default — DEBUG floods the log with per-poll-cycle noise
+		// (staleness checks, history-linker correlation, terminal snapshots)
+		// on every boot. Adjustable at runtime without a restart via
+		// POST /api/debug/log-level. Both must be set: initializeWithConfig
+		// seeds the runtime level from min(FileLevel, ConsoleLevel), and an
+		// unset ConsoleLevel zero-values to DEBUG (LogLevel's iota starts at
+		// DEBUG=0), silently overriding FileLevel.
+		FileLevel:    log.INFO,
+		ConsoleLevel: log.INFO,
 	}
 }
 
