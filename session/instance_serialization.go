@@ -7,10 +7,12 @@ package session
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/user"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -18,6 +20,38 @@ import (
 	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
+
+// loggedMissingWorktree suppresses repeat "worktree directory missing"
+// warnings for a session whose on-disk status is never persisted back as
+// Paused (see fromInstanceData) — every health-check LoadInstances() tick
+// (session/health.go, ~15s) constructs a brand-new, throwaway Instance from
+// disk (see health.go's checkSingleSession comment) and re-detects the same
+// missing worktree, so an Instance-scoped flag can't dedupe across ticks the
+// way this package-level map does; it must outlive any single Instance
+// object. Keyed by session title, cleaned up by clearLoggedMissingWorktree
+// on session deletion (Storage.DeleteInstance/DeleteAllInstances) so it
+// doesn't grow unboundedly over the process's lifetime — the earlier version
+// of this map had no such cleanup, which was a real (if slow) leak.
+var loggedMissingWorktree sync.Map //nolint:gochecknoglobals
+
+// clearLoggedMissingWorktree removes title's dedup entry, if any. Called
+// when a session is deleted so the map doesn't retain an entry for a title
+// that no longer exists.
+func clearLoggedMissingWorktree(title string) {
+	loggedMissingWorktree.Delete(title)
+}
+
+// worktreeMissingLevel picks the level for the "worktree directory missing"
+// log line: Warn the first time a given session title has been seen, Debug
+// on any repeat (see loggedMissingWorktree). Returning a level rather than a
+// bound *slog.Logger method keeps this directly unit-testable — method
+// values aren't comparable.
+func worktreeMissingLevel(alreadyLogged bool) slog.Level {
+	if alreadyLogged {
+		return slog.LevelDebug
+	}
+	return slog.LevelWarn
+}
 
 // ToInstanceData converts an Instance to its serializable form
 //
@@ -377,10 +411,14 @@ func fromInstanceData(data InstanceData, deferStart bool) (*Instance, error) {
 		worktreePath := instance.gitManager.GetWorktreePath()
 		if _, err := os.Stat(worktreePath); os.IsNotExist(err) {
 			// Worktree has been deleted — use transitionTo so the state machine is respected.
-			log.ForSession(instance.Title).Warn("worktree directory missing, marking as paused", "path", worktreePath)
+			_, alreadyLogged := loggedMissingWorktree.LoadOrStore(instance.Title, struct{}{})
+			level := worktreeMissingLevel(alreadyLogged)
+			logger := log.ForSession(instance.Title)
+			warnOrDebug := func(msg string, args ...any) { logger.Log(context.Background(), level, msg, args...) }
+			warnOrDebug("worktree directory missing, marking as paused", "path", worktreePath)
 			if err := instance.transitionTo(context.Background(), Paused); err != nil {
 				// If the transition is somehow invalid (e.g. already Stopped), fall back to loadStatus.
-				log.ForSession(instance.Title).Warn("could not transition to paused via state machine, using loadStatus", "err", err)
+				warnOrDebug("could not transition to paused via state machine, using loadStatus", "err", err)
 				instance.loadStatus(Paused)
 			}
 		}

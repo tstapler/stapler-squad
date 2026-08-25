@@ -2346,7 +2346,7 @@ func (t *TmuxSession) Close() error {
 		}
 		t.waitForSessionGone(killSessionConfirmTimeout)
 	} else {
-		log.Info("tmux session doesn't exist, no need to kill", "session", t.sanitizedName)
+		log.Debug("tmux session doesn't exist, no need to kill", "session", t.sanitizedName)
 	}
 
 	// Unregister circuit breaker from global registry to prevent stale entries

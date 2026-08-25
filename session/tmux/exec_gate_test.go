@@ -388,7 +388,15 @@ func TestExecGate_CrossProcess(t *testing.T) {
 	markerDir := t.TempDir()
 	const n = 2
 	const numProcs = 5
-	const holdMS = 150
+	// holdMS must be generous relative to OS process-start scheduling jitter:
+	// each helper is a full re-exec of this test binary, and under heavy
+	// concurrent load (e.g. running the whole package suite in parallel) two
+	// helpers' 150ms hold windows could fail to overlap in wall-clock time
+	// even though the gate itself correctly saturates at n — a timing flake,
+	// not a gate bug (root-caused via `go test -run TestExecGate_CrossProcess
+	// -count=3`, which passed 3/3 in isolation with low contention). 1500ms
+	// gives enough margin to observe the overlap reliably under load.
+	const holdMS = 1500
 
 	procs := make([]*exec.Cmd, numProcs)
 	for i := range procs {

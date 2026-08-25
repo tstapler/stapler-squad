@@ -306,3 +306,4 @@ Per `local-dev-port-management`'s Sequential Batch Strategy: a fixed block reser
 | macOS restart can leave orphaned processes racing over tmux/session state | `.claude/docs/service-restart-orphan-process.md` |
 | Fix flaky tests when found, don't just re-defer as "known pre-existing" | `.claude/rules/fix-flaky-tests-dont-defer.md` |
 | Slack Phase 2 interactive-approvals public reachability (scoping a tunnel to one path) | `.claude/docs/slack-phase2-public-reachability.md` |
+| Log debugging: file locations, global/per-package log levels, reducing log volume, pattern-clustering tool | `.claude/docs/log-debugging.md` |
