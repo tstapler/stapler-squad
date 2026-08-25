@@ -2796,6 +2796,23 @@ func cmCtx() (context.Context, context.CancelFunc) {
 // wedged tmux server block the calling goroutine indefinitely.
 const defaultCapturePaneTimeout = 10 * time.Second
 
+// resyncFastLaneTimeout bounds the ENTIRE fast-lane *Priority() call — both
+// the exec-gate acquire wait and the subprocess execution that follows it —
+// not just the acquire step. 2026-08-25 incident: CapturePaneContentPriority/
+// CapturePaneContentRawPriority used defaultCapturePaneTimeout (10s, sized
+// for the default/non-priority pool) even on the fast lane, and
+// RefreshClientPriority had no bound on its subprocess call at all
+// (context.Background()). A capture that took a few seconds under real load
+// (confirmed via debug tracing: the exec-gate slot was acquired in 0ms, so
+// the delay was entirely in the subprocess call itself, not gate contention)
+// stayed well within 10s and so never errored — but the client's own
+// RESYNC_STALL_TIMEOUT_MS (4s, useVisibilityResync.ts) had already given up
+// and force-disconnected, so the slow response was wasted work landing on a
+// closed connection. Mirrors resyncFastLaneAcquireTimeout's margin logic: 3s
+// leaves a 1s safety margin under the 4s client ceiling for network/marshal/
+// dispatch latency after the call returns.
+const resyncFastLaneTimeout = 3 * time.Second
+
 // CapturePaneContent captures the content of the tmux pane.
 // When STAPLER_SQUAD_CM_COMMANDS=true and control mode is running, the query is sent
 // over the control mode stdin pipe (zero new subprocesses); otherwise falls back to subprocess.
@@ -2864,7 +2881,7 @@ func (t *TmuxSession) CapturePaneContentContext(ctx context.Context) (string, er
 // isolation the subprocess gate provides, and control mode has no gate to
 // isolate against.
 func (t *TmuxSession) CapturePaneContentPriority() (string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), defaultCapturePaneTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), resyncFastLaneTimeout)
 	defer cancel()
 	cmd := t.buildTmuxCommandContext(ctx, "capture-pane", "-p", "-e", "-J", "-t", t.sanitizedName)
 	recordSpawn(time.Now())
@@ -2891,7 +2908,7 @@ func (t *TmuxSession) CapturePaneContentPriority() (string, error) {
 // replay the result into a live terminal emulator needs tmux's own wrap
 // points and cursor-positioning codes intact, not joined/stripped by -J.
 func (t *TmuxSession) CapturePaneContentRawPriority() (string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), defaultCapturePaneTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), resyncFastLaneTimeout)
 	defer cancel()
 	cmd := t.buildTmuxCommandContext(ctx, "capture-pane", "-p", "-e", "-t", t.sanitizedName)
 	recordSpawn(time.Now())
@@ -2919,8 +2936,10 @@ func (t *TmuxSession) CapturePaneContentRawPriority() (string, error) {
 // caller wants a bounded, fast-lane-only refresh, not the full fallback
 // chain.
 func (t *TmuxSession) RefreshClientPriority() error {
-	cmd := t.buildTmuxCommand("refresh-client", "-t", t.sanitizedName)
-	return runGatedErrFastLane(context.Background(), t.serverSocket, func() error {
+	ctx, cancel := context.WithTimeout(context.Background(), resyncFastLaneTimeout)
+	defer cancel()
+	cmd := t.buildTmuxCommandContext(ctx, "refresh-client", "-t", t.sanitizedName)
+	return runGatedErrFastLane(ctx, t.serverSocket, func() error {
 		return t.cmdExec.Run(cmd)
 	})
 }
