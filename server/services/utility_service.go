@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"regexp"
 	"runtime"
@@ -41,6 +42,16 @@ type parsedLogLine struct {
 	Source    string
 }
 
+// sensitiveLogAttributeKeys are folded into Message as "key=<redacted>"
+// instead of their real value — parseJSONLogLine has no allowlist for what
+// a slog call site anywhere in the codebase might attach, so any of these
+// names showing up as an attribute key gets redacted before it can reach
+// the GetLogs API response and the Logs/Patterns page.
+var sensitiveLogAttributeKeys = map[string]bool{ //nolint:gochecknoglobals
+	"token": true, "password": true, "secret": true, "authorization": true,
+	"cookie": true, "api_key": true, "apikey": true, "access_token": true,
+}
+
 // parseJSONLogLine parses one slog JSON-lines record (the format
 // log/log.go's handler chain writes today: {"time":...,"level":...,"msg":...,
 // plus arbitrary attribute fields}). Extra attributes beyond time/level/msg
@@ -48,6 +59,17 @@ type parsedLogLine struct {
 // deterministic output, since sessionv1.LogEntry has no structured-fields
 // slot — this keeps them visible (and searchable) in the API response
 // without a proto change.
+//
+// Source stays empty unless the record carries slog's own AddSource shape
+// (a "source" key holding {"function","file","line"}) — log/log.go's
+// JSONHandler doesn't set HandlerOptions.AddSource today, so this is inert
+// in production for now, but several call sites already pass a plain
+// *string* "source" attribute for unrelated domain data (e.g.
+// credentials.go's "credential source", database_service.go's merge source
+// dir) — treating that string as a caller location would be actively wrong,
+// so only the structural object shape is ever read into Source; a string
+// "source" attribute is left to the generic extraKeys fold below like any
+// other field.
 func parseJSONLogLine(line string) (parsedLogLine, bool) {
 	var raw map[string]any
 	if err := json.Unmarshal([]byte(line), &raw); err != nil {
@@ -66,11 +88,17 @@ func parseJSONLogLine(line string) (parsedLogLine, bool) {
 		return parsedLogLine{}, false
 	}
 
+	source := slogAddSourceLocation(raw["source"])
+
 	extraKeys := make([]string, 0, len(raw))
 	for k := range raw {
 		switch k {
 		case "time", "level", "msg":
 			continue
+		case "source":
+			if source != "" {
+				continue // already consumed as the structural AddSource object
+			}
 		}
 		extraKeys = append(extraKeys, k)
 	}
@@ -80,7 +108,11 @@ func parseJSONLogLine(line string) (parsedLogLine, bool) {
 	if len(extraKeys) > 0 {
 		pairs := make([]string, 0, len(extraKeys))
 		for _, k := range extraKeys {
-			pairs = append(pairs, k+"="+formatLogFieldValue(raw[k]))
+			value := formatLogFieldValue(raw[k])
+			if sensitiveLogAttributeKeys[strings.ToLower(k)] {
+				value = "<redacted>"
+			}
+			pairs = append(pairs, k+"="+value)
 		}
 		message = msg + " " + strings.Join(pairs, " ")
 	}
@@ -89,7 +121,25 @@ func parseJSONLogLine(line string) (parsedLogLine, bool) {
 		level = "INFO"
 	}
 
-	return parsedLogLine{Timestamp: timestamp, Level: level, Message: message}, true
+	return parsedLogLine{Timestamp: timestamp, Level: level, Message: message, Source: source}, true
+}
+
+// slogAddSourceLocation extracts "file:line" from a "source" attribute
+// value shaped like slog's built-in AddSource output
+// ({"function":"...","file":"...","line":42}). Returns "" for anything
+// else (missing, or a plain string from a call site's own domain-specific
+// "source" attribute) — see parseJSONLogLine's doc comment.
+func slogAddSourceLocation(v any) string {
+	obj, ok := v.(map[string]any)
+	if !ok {
+		return ""
+	}
+	file, _ := obj["file"].(string)
+	line, _ := obj["line"].(float64)
+	if file == "" || line == 0 {
+		return ""
+	}
+	return fmt.Sprintf("%s:%d", file, int64(line))
 }
 
 // formatLogFieldValue renders one JSON attribute value as it would appear
@@ -99,6 +149,14 @@ func formatLogFieldValue(v any) string {
 	case string:
 		return val
 	case float64:
+		// Whole-number floats (byte counts, durations, PIDs — the common
+		// case for numeric slog attributes) must render as plain integers:
+		// 'g' formatting switches to scientific notation at 1e6
+		// (strconv.FormatFloat(1_000_000, 'g', -1, 64) == "1e+06"), which is
+		// actively misleading in a human-readable log viewer.
+		if val == math.Trunc(val) && math.Abs(val) < 1e15 {
+			return strconv.FormatInt(int64(val), 10)
+		}
 		return strconv.FormatFloat(val, 'g', -1, 64)
 	case bool:
 		return strconv.FormatBool(val)

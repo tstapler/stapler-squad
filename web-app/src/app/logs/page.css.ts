@@ -426,3 +426,15 @@ export const searchHistoryWrapper = style({
 export const densityCompact = style({});
 export const densityComfortable = style({});
 export const densitySpacious = style({});
+
+// viewPane toggles the Table view's visibility while switching to Patterns —
+// "contents" (not "none") when shown, so LogViewer's own layout box doesn't
+// gain an extra wrapper in the flex/grid flow; see page.tsx's view-mode toggle.
+export const viewPane = style({
+  display: "contents",
+  selectors: {
+    '&[data-hidden="true"]': {
+      display: "none",
+    },
+  },
+});

@@ -66,6 +66,8 @@ export interface LogViewerState {
   serverTotalCount: number;
   /** Timestamp of the last successful fetch (initial or live-tail poll). */
   lastRefresh: Date | null;
+  /** Message from the most recent failed fetch, or null if the last fetch succeeded. */
+  error: string | null;
   /** Re-runs the initial fetch — for a manual "Refresh" action. */
   refresh: () => void;
 }
@@ -111,6 +113,7 @@ export function useLogViewer(
   const [version, setVersion] = useState(0);
   const [serverTotalCount, setServerTotalCount] = useState(0);
   const [lastRefresh, setLastRefresh] = useState<Date | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   // --- Search and filter ---
   const [searchQuery, setSearchQuery] = useState("");
@@ -176,9 +179,10 @@ export function useLogViewer(
       entriesRef.current = entries;
       setServerTotalCount(response.totalCount ?? entries.length);
       setLastRefresh(new Date());
+      setError(null);
       setVersion((v) => v + 1);
-    } catch {
-      // Non-fatal: show empty list; errors surfaced elsewhere
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to load logs");
     }
   }, [source, sessionId, fetchLimit, timeRangeStartMs, timeRangeEndMs]);
 
@@ -198,7 +202,7 @@ export function useLogViewer(
     // not "follow the tail" — polling for entries newer than knownTotalRef
     // would pull in current-time entries outside that window. The live-tail
     // toggle stays available but is a no-op until the range is cleared.
-    if (timeRange) return;
+    if (timeRangeStartMs !== undefined || timeRangeEndMs !== undefined) return;
     try {
       const knownTotal = knownTotalRef.current;
       // Pass multi-level filter via repeated levels field; fall back to no filter for "ALL"
@@ -216,6 +220,7 @@ export function useLogViewer(
       const newCount = serverTotal - knownTotal;
       setServerTotalCount(serverTotal);
       setLastRefresh(new Date());
+      setError(null);
       if (newCount <= 0) return;
 
       // The first `newCount` entries in the newest-first response are the ones
@@ -245,10 +250,10 @@ export function useLogViewer(
           setQueuedNewLineCount((prev) => prev + newEntries.length);
         }
       });
-    } catch {
-      // Non-fatal polling error
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to refresh logs");
     }
-  }, [source, sessionId, levelFilters, timeRange]);
+  }, [source, sessionId, levelFilters, timeRangeStartMs, timeRangeEndMs]);
 
   const [_liveTailState, _liveTailControls] = useLiveTail(fetchNewLogs, {
     enabled: liveTailEnabled,
@@ -325,6 +330,7 @@ export function useLogViewer(
     rawEntries: filteredRawEntries,
     serverTotalCount,
     lastRefresh,
+    error,
     refresh,
   };
 }

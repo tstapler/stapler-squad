@@ -57,6 +57,11 @@ describe("groupLogsByPattern", () => {
     expect(groups[0].entries).toHaveLength(3);
   });
 
+  it("builds a stable key from level and pattern joined by a literal space", () => {
+    const groups = groupLogsByPattern([makeEntry({ level: "WARN", message: "x" })]);
+    expect(groups[0].key).toBe("WARN x");
+  });
+
   it("keeps different levels separate even for the same message text", () => {
     const entries = [
       makeEntry({ level: "WARN", message: "flaky thing happened" }),

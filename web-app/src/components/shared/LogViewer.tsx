@@ -27,6 +27,7 @@ interface LogViewerProps {
     rawEntries: ProtoLogEntry[];
     totalCount: number;
     lastRefresh: Date | null;
+    error: string | null;
   }) => void;
 }
 
@@ -67,14 +68,15 @@ export const LogViewer = forwardRef<LogViewerHandle, LogViewerProps>(function Lo
     rawEntries,
     serverTotalCount,
     lastRefresh,
+    error,
     refresh,
   } = useLogViewer(source, sessionId, { timeRange, limit });
 
   useImperativeHandle(ref, () => ({ refresh }), [refresh]);
 
   useEffect(() => {
-    onStateChange?.({ logs, rawEntries, totalCount: serverTotalCount, lastRefresh });
-  }, [logs, rawEntries, serverTotalCount, lastRefresh, onStateChange]);
+    onStateChange?.({ logs, rawEntries, totalCount: serverTotalCount, lastRefresh, error });
+  }, [logs, rawEntries, serverTotalCount, lastRefresh, error, onStateChange]);
 
   const containerRef = useRef<HTMLDivElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);

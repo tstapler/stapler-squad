@@ -101,6 +101,27 @@ describe("useLogViewer", () => {
     expect(result.current.logs[0].message).toBe("error line");
   });
 
+  it("threads active level filters into a live-tail poll request", async () => {
+    mockGetLogs.mockResolvedValueOnce({ entries: [protoEntry("x")], totalCount: 1 });
+
+    const { result } = renderHook(() => useLogViewer("app"));
+    await waitFor(() => expect(result.current.logs).toHaveLength(1));
+
+    act(() => {
+      result.current.setLevelFilters(["ERROR"]);
+    });
+
+    mockGetLogs.mockResolvedValueOnce({ entries: [protoEntry("x")], totalCount: 1 });
+    const fetchNewLogs = capturedFetchNewLogs;
+    expect(fetchNewLogs).not.toBeNull();
+    await act(async () => {
+      await fetchNewLogs?.();
+    });
+
+    const lastCall = mockGetLogs.mock.calls.at(-1)?.[0];
+    expect(lastCall.levels).toEqual(["ERROR"]);
+  });
+
   it("keeps logs and rawEntries aligned after a live-tail poll appends new entries", async () => {
     mockGetLogs.mockResolvedValueOnce({
       entries: [protoEntry("existing")],
@@ -149,6 +170,23 @@ describe("useLogViewer", () => {
 
     await waitFor(() => expect(mockGetLogs).toHaveBeenCalledTimes(1));
     expect(mockGetLogs.mock.calls[0][0].limit).toBe(50);
+  });
+
+  it("makes live-tail polling a no-op while a historical timeRange is active", async () => {
+    const start = new Date("2026-01-01T00:00:00.000Z");
+    const end = new Date("2026-01-02T00:00:00.000Z");
+    mockGetLogs.mockResolvedValueOnce({ entries: [protoEntry("one")], totalCount: 1 });
+
+    renderHook(() => useLogViewer("app", undefined, { timeRange: { start, end } }));
+    await waitFor(() => expect(mockGetLogs).toHaveBeenCalledTimes(1));
+
+    const fetchNewLogs = capturedFetchNewLogs;
+    expect(fetchNewLogs).not.toBeNull();
+    await act(async () => {
+      await fetchNewLogs?.();
+    });
+
+    expect(mockGetLogs).toHaveBeenCalledTimes(1);
   });
 
   it("re-runs the initial fetch when refresh() is called", async () => {

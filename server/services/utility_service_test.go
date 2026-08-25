@@ -207,6 +207,67 @@ func TestParseLogLine_JSON_should_DefaultLevelToInfo_When_LevelFieldMissing(t *t
 	assert.Equal(t, "INFO", parsed.Level)
 }
 
+// TestParseLogLine_JSON_should_ExtractSource_When_SourceIsSlogAddSourceObject
+// covers the day log/log.go's JSONHandler gets HandlerOptions.AddSource:
+// true — slog's built-in shape is a nested object, not a plain string.
+func TestParseLogLine_JSON_should_ExtractSource_When_SourceIsSlogAddSourceObject(t *testing.T) {
+	t.Parallel()
+	line := `{"time":"2026-08-25T11:25:03Z","level":"INFO","msg":"started","source":{"function":"main.run","file":"/app/main.go","line":42}}`
+
+	parsed, ok := parseLogLine(line)
+
+	require.True(t, ok)
+	assert.Equal(t, "/app/main.go:42", parsed.Source)
+	assert.NotContains(t, parsed.Message, "source=", "the structural AddSource object must not also be folded into Message as a generic attribute")
+}
+
+// TestParseLogLine_JSON_should_LeaveSourceEmpty_When_SourceIsAPlainStringAttribute
+// guards against the wrong fix: several call sites (credentials.go,
+// database_service.go) already pass a plain-string "source" attribute for
+// unrelated domain data — treating that as a caller location would show a
+// credential name or directory path as if it were "file.go:42".
+func TestParseLogLine_JSON_should_LeaveSourceEmpty_When_SourceIsAPlainStringAttribute(t *testing.T) {
+	t.Parallel()
+	line := `{"time":"2026-08-25T11:25:03Z","level":"DEBUG","msg":"resolved credential","source":"keychain"}`
+
+	parsed, ok := parseLogLine(line)
+
+	require.True(t, ok)
+	assert.Empty(t, parsed.Source, "a plain-string source attribute is domain data, not a caller location")
+	assert.Contains(t, parsed.Message, "source=keychain", "the domain-specific value must still be visible via the generic attribute fold")
+}
+
+// TestParseLogLine_JSON_should_RedactSensitiveAttributeKeys_When_KnownSensitiveNamePresent
+// guards the widened exposure surface this parser introduces: before this
+// fix, JSON log lines (and any secret-shaped attribute on them) never
+// reached GetLogs at all. Now that they do, a known-sensitive attribute
+// name must be redacted rather than surfaced verbatim to anyone viewing
+// the Logs/Patterns page.
+func TestParseLogLine_JSON_should_RedactSensitiveAttributeKeys_When_KnownSensitiveNamePresent(t *testing.T) {
+	t.Parallel()
+	line := `{"time":"2026-08-25T11:25:03Z","level":"ERROR","msg":"auth failed","token":"sk-live-abc123","user":"alice"}`
+
+	parsed, ok := parseLogLine(line)
+
+	require.True(t, ok)
+	assert.Contains(t, parsed.Message, "token=<redacted>")
+	assert.NotContains(t, parsed.Message, "sk-live-abc123")
+	assert.Contains(t, parsed.Message, "user=alice", "non-sensitive attributes are unaffected")
+}
+
+// TestFormatLogFieldValue_should_RenderWholeNumberFloatsAsPlainIntegers_When_ValueIsLarge
+// guards against strconv.FormatFloat's 'g' format switching to scientific
+// notation at 1e6 (e.g. FormatFloat(1_000_000, 'g', -1, 64) == "1e+06") —
+// misleading for the common case of byte counts, durations, and PIDs
+// logged as JSON numbers.
+func TestFormatLogFieldValue_should_RenderWholeNumberFloatsAsPlainIntegers_When_ValueIsLarge(t *testing.T) {
+	t.Parallel()
+	assert.Equal(t, "1000000", formatLogFieldValue(float64(1_000_000)))
+	assert.Equal(t, "21474836480", formatLogFieldValue(float64(21_474_836_480)))
+	assert.Equal(t, "1048576", formatLogFieldValue(float64(1_048_576)))
+	assert.Equal(t, "100000", formatLogFieldValue(float64(100_000)))
+}
+
 // TestParseLogLine_Legacy_should_StillParse_When_LineIsOldPlainTextFormat
 // guards backward compatibility: lines from call sites still on
 // log.InfoLog().Printf (or older rotated log segments) must keep parsing.

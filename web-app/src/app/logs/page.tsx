@@ -40,15 +40,23 @@ export default function LogsPage() {
   const [rawEntries, setRawEntries] = useState<ProtoLogEntry[]>([]);
   const [serverTotalCount, setServerTotalCount] = useState(0);
   const [lastRefresh, setLastRefresh] = useState<Date | null>(null);
+  const [logsError, setLogsError] = useState<string | null>(null);
 
   const logViewerRef = useRef<LogViewerHandle>(null);
 
   const handleLogViewerStateChange = useCallback(
-    (state: { logs: LogEntry[]; rawEntries: ProtoLogEntry[]; totalCount: number; lastRefresh: Date | null }) => {
+    (state: {
+      logs: LogEntry[];
+      rawEntries: ProtoLogEntry[];
+      totalCount: number;
+      lastRefresh: Date | null;
+      error: string | null;
+    }) => {
       setLogs(state.logs);
       setRawEntries(state.rawEntries);
       setServerTotalCount(state.totalCount);
       setLastRefresh(state.lastRefresh);
+      setLogsError(state.error);
     },
     [],
   );
@@ -165,10 +173,16 @@ export default function LogsPage() {
         </FilterPills>
       )}
 
+      {logsError && (
+        <div className={styles.error} role="alert" data-testid="logs-error-banner">
+          Error loading logs: {logsError}
+        </div>
+      )}
+
       {/* LogViewer stays mounted (and fetching) in both view modes so
           switching to Patterns and back doesn't lose live-tail state or
           re-fetch from scratch — only its visibility toggles. */}
-      <div style={{ display: viewMode === "table" ? "contents" : "none" }}>
+      <div className={styles.viewPane} data-hidden={viewMode !== "table"}>
         <div className={styles.logsContainer}>
           <LogViewer
             ref={logViewerRef}
