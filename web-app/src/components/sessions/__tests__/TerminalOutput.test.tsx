@@ -82,51 +82,37 @@ jest.mock("@/lib/hooks/useTerminalStream", () => ({
 // ── Supporting mocks (origin/main scaffolding TerminalOutput now depends on;
 // see TerminalOutput.reconnect.test.tsx for the canonical set) ──────────────
 
-jest.mock("@/lib/terminal/TerminalDimensionCache", () => ({
-  getCachedDimensions: jest.fn().mockReturnValue(null),
-  saveDimensions: jest.fn(),
-  validateCellDimensions: jest.fn().mockReturnValue(null),
-}));
+jest.mock("@/lib/terminal/TerminalDimensionCache", () =>
+  require("./terminalOutputTestMocks").terminalDimensionCacheWithValidationMockModule()
+);
 
-jest.mock("@/lib/terminal/TerminalStreamManager", () => ({
-  TerminalStreamManager: jest.fn().mockImplementation(() => ({
-    setOnFirstOutput: jest.fn(),
-    setSerializeAddon: jest.fn(),
-    installDebugMonitor: jest.fn(),
-    writeInitialContent: jest.fn().mockResolvedValue(undefined),
-    write: jest.fn(),
-    cleanup: jest.fn(),
-    updateSendFlowControl: jest.fn(),
-  })),
-}));
+jest.mock("@/lib/terminal/TerminalStreamManager", () =>
+  require("./terminalOutputTestMocks").terminalStreamManagerWithSerializeAddonMockModule()
+);
 
-jest.mock("@/lib/contexts/AnalyticsContext", () => ({
-  useAnalytics: () => ({ track: jest.fn() }),
-}));
+jest.mock("@/lib/contexts/AnalyticsContext", () =>
+  require("./terminalOutputTestMocks").analyticsContextPlainMockModule()
+);
 
-jest.mock("@/lib/contexts/ApprovalsContext", () => ({
-  useApprovalsContext: () => ({
-    clearForSession: jest.fn(),
-    refresh: jest.fn(),
-    pendingCount: 0,
-  }),
-}));
+jest.mock("@/lib/contexts/ApprovalsContext", () =>
+  require("./terminalOutputTestMocks").approvalsContextMockModule()
+);
 
-jest.mock("@/lib/hooks/useHandedness", () => ({
-  useHandedness: () => ({ leftHanded: false, toggleHandedness: jest.fn() }),
-}));
+jest.mock("@/lib/hooks/useHandedness", () =>
+  require("./terminalOutputTestMocks").handednessMockModule()
+);
 
-jest.mock("@/lib/hooks/useSplitContainerSize", () => ({
-  useSplitContainerSize: () => ({ width: 800, height: 600 }),
-}));
+jest.mock("@/lib/hooks/useSplitContainerSize", () =>
+  require("./terminalOutputTestMocks").splitContainerSizeMockModule()
+);
 
-jest.mock("@/lib/hooks/useBrowserLogStream", () => ({
-  useBrowserLogStream: jest.fn(),
-}));
+jest.mock("@/lib/hooks/useBrowserLogStream", () =>
+  require("./terminalOutputTestMocks").browserLogStreamMockModule()
+);
 
-jest.mock("@/components/providers/ViewportProvider", () => ({
-  useViewport: () => ({ isMobile: false }),
-}));
+jest.mock("@/components/providers/ViewportProvider", () =>
+  require("./terminalOutputTestMocks").viewportProviderDesktopMockModule()
+);
 
 import { TerminalOutput } from "../TerminalOutput";
 
