@@ -3,25 +3,12 @@ package streamhub
 import "errors"
 
 // ErrSessionNotStarted is the sentinel a SessionController implementation
-// should wrap (or return directly) from any of the methods below when the
-// underlying session simply hasn't finished starting yet (or is paused) —
-// as opposed to a genuinely dead/crashed controller. *session.Instance
-// returns it from CapturePaneContentRaw/CapturePaneContentPriority/etc.
-// (session/instance_tmux.go) during its cold-start window.
-//
-// 2026-08-25 incident: applyNegotiatedSize (hub.go) treated this exact,
-// entirely expected transient condition — a session accessed via a fresh
-// WebSocket connection microseconds before its "cold restore" finishes —
-// identically to a permanent controller failure, tearing the whole hub down
-// (killing every attached subscriber, not just the one new connection) for
-// something that resolved itself well under a second later. currentSnapshot
-// (used at attach time) already handled this gracefully by returning
-// ok=false instead of tearing anything down; applyNegotiatedSize's resize
-// path didn't have the same distinction because there was no way to tell
-// "session not started yet" apart from any other capture error short of
-// string-matching. Introducing this sentinel (rather than a lint rule or a
-// test alone) is what makes that distinction possible in the first place —
-// see handleControllerError's doc comment for how it's used.
+// returns from the methods below when the session simply hasn't finished
+// starting yet (or is paused), as opposed to a dead/crashed controller.
+// *session.Instance returns it during its cold-start window
+// (session/instance_tmux.go). applyNegotiatedSize (hub.go) checks for it via
+// errors.Is to skip-and-retry instead of tearing the whole hub down for a
+// transient condition that resolves itself.
 var ErrSessionNotStarted = errors.New("session not started or paused")
 
 // SessionController is the narrow interface StreamHub depends on for
