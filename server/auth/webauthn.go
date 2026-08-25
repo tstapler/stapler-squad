@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 
@@ -127,10 +128,20 @@ func (h *Handler) webauthnForHost(r *http.Request) (*webauthn.WebAuthn, error) {
 	if wa, ok := h.webauthn[hostname]; ok {
 		return wa, nil
 	}
+	// go-webauthn requires an exact origin match (no suffix/wildcard support --
+	// see IsOriginInHaystack in go-webauthn/protocol/client.go), so a hostname
+	// accepted as a new rpID also needs its own origin added here, or every
+	// real ceremony from it will fail verification despite webauthnForHost
+	// having selected an instance for it.
+	newOrigin := originForHost(h.origins, hostname)
+	if newOrigin == "" {
+		return nil, fmt.Errorf("determine origin for dynamically registered rpID %s: no existing origin to derive scheme/port from", hostname)
+	}
+	origins := append(append([]string{}, h.origins...), newOrigin)
 	wa, err := webauthn.New(&webauthn.Config{
 		RPDisplayName: "Stapler Squad",
 		RPID:          hostname,
-		RPOrigins:     h.origins,
+		RPOrigins:     origins,
 		Debug:         false,
 	})
 	if err != nil {
@@ -138,8 +149,28 @@ func (h *Handler) webauthnForHost(r *http.Request) (*webauthn.WebAuthn, error) {
 	}
 	h.webauthn[hostname] = wa
 	h.rpIDs = append(h.rpIDs, hostname)
-	log.Info("auth: dynamically registered new rpID", "rpID", hostname)
+	h.origins = origins
+	log.Info("auth: dynamically registered new rpID", "rpID", hostname, "origin", newOrigin)
 	return wa, nil
+}
+
+// originForHost builds the origin (scheme + hostname + port) that a
+// dynamically-registered rpID should be allowed to authenticate from, reusing
+// the scheme and port of an existing configured origin -- every origin in
+// this handler is served by the same listener, so they share both. Returns
+// "" if origins is empty or unparseable.
+func originForHost(origins []string, hostname string) string {
+	if len(origins) == 0 {
+		return ""
+	}
+	u, err := url.Parse(origins[0])
+	if err != nil || u.Scheme == "" {
+		return ""
+	}
+	if port := u.Port(); port != "" {
+		return fmt.Sprintf("%s://%s:%s", u.Scheme, hostname, port)
+	}
+	return fmt.Sprintf("%s://%s", u.Scheme, hostname)
 }
 
 // BeginRegistration starts a passkey registration ceremony.

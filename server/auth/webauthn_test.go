@@ -98,6 +98,40 @@ func Test_webauthnForHost_should_RegisterNewRPID_When_HostnameValidatorApproves(
 	}
 }
 
+// Test_webauthnForHost_should_IncludeMatchingOrigin_When_RegisteringNewRPID is
+// the regression test for the origin-mismatch bug: go-webauthn requires an
+// exact origin match (protocol/client.go's IsOriginInHaystack has no
+// suffix/wildcard support), so a dynamically-registered rpID whose
+// RPOrigins never gained an entry for its own hostname would select a valid
+// WebAuthn instance here but fail every real ceremony's origin check. This
+// verifies the new instance's RPOrigins actually contains an origin for the
+// newly-approved hostname, reusing the scheme/port of the configured origins.
+func Test_webauthnForHost_should_IncludeMatchingOrigin_When_RegisteringNewRPID(t *testing.T) {
+	const newHost = "netflix1.staplerhome.internal"
+	h := newTestHandler(t, []string{"onyx.local"}, func(hostname string) bool {
+		return hostname == newHost
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Host = newHost + ":8444"
+
+	wa, err := h.webauthnForHost(req)
+	if err != nil {
+		t.Fatalf("webauthnForHost: %v", err)
+	}
+
+	wantOrigin := "https://" + newHost
+	found := false
+	for _, o := range wa.Config.RPOrigins {
+		if o == wantOrigin {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected RPOrigins to contain %q, got %v", wantOrigin, wa.Config.RPOrigins)
+	}
+}
+
 func Test_webauthnForHost_should_Reject_When_HostnameValidatorDenies(t *testing.T) {
 	h := newTestHandler(t, []string{"onyx.local"}, func(hostname string) bool {
 		return false
