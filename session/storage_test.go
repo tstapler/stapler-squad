@@ -601,6 +601,32 @@ func TestStorage_ArchiveInstanceDataByID_should_setArchivedAt_When_SessionExists
 	assert.Equal(t, Stopped, data.Status, "Status should transition to Stopped")
 }
 
+// TestStorage_ArchiveInstanceDataByID_should_preserveOtherFields_When_Archiving guards the
+// doc comment's claim that this is a read-modify-write on the full row, not a partial
+// struct: a future refactor that built a bare InstanceData{ID, ArchivedAt, Status} instead
+// of mutating a fresh FindInstanceDataByID read would pass every other test here (they only
+// assert ArchivedAt/Status) while silently clobbering every other field via
+// EntRepository.Update's guarded-optional-field pattern (empty/zero fields get cleared).
+func TestStorage_ArchiveInstanceDataByID_should_preserveOtherFields_When_Archiving(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+
+	inst := newTestInstance("archive-preserves-fields")
+	inst.Note = "do not clobber me"
+	inst.Category = "preserve-category"
+	require.NoError(t, storage.AddInstance(inst))
+
+	archived, err := storage.ArchiveInstanceDataByID("archive-preserves-fields", time.Now())
+	require.NoError(t, err)
+	require.True(t, archived)
+
+	data, err := storage.FindInstanceDataByID("archive-preserves-fields")
+	require.NoError(t, err)
+	assert.Equal(t, "do not clobber me", data.Note, "archiving must not clobber unrelated fields")
+	assert.Equal(t, "preserve-category", data.Category, "archiving must not clobber unrelated fields")
+}
+
 // TestStorage_ArchiveInstanceDataByID_should_beIdempotent_When_AlreadyArchived matches
 // SetArchivedAtIfNilAndStop's CAS semantics: a second archive call on an already-archived
 // session is a no-op, not an error, and does not clobber the original ArchivedAt.

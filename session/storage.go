@@ -439,6 +439,12 @@ var ErrInstanceDataNotFound = errors.New("instance data not found")
 // guarded-optional-field pattern can't zero out fields this call didn't intend to touch.
 // Returns false (no error) if the session doesn't exist or is already archived, matching
 // SetArchivedAtIfNilAndStop's CAS semantics.
+//
+// The read and the write are two separate, unguarded round-trips: if the session is resumed
+// (added back to the live poller) between them, this can race a concurrent live-instance
+// write and leave a stale snapshot in storage. Callers that can't rule this out should
+// re-check FindLiveInstance after calling this and, if now live, re-save the live instance's
+// current state to overwrite any stale write (see ArchiveSessionByUUID).
 func (s *Storage) ArchiveInstanceDataByID(id string, at time.Time) (bool, error) {
 	data, err := s.FindInstanceDataByID(id)
 	if err != nil {
@@ -453,7 +459,7 @@ func (s *Storage) ArchiveInstanceDataByID(id string, at time.Time) (bool, error)
 	data.ArchivedAt = &at
 	data.Status = Stopped
 	if err := s.repo.Update(context.Background(), *data); err != nil {
-		return false, fmt.Errorf("failed to archive session %s: %w", id, err)
+		return false, fmt.Errorf("update session %s: %w", id, err)
 	}
 	return true, nil
 }

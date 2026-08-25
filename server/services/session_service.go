@@ -893,8 +893,26 @@ func (s *SessionService) ArchiveSessionByUUID(ctx context.Context, sessionUUID s
 		if s.concStorage == nil {
 			return nil // fake InstanceStore (tests) — no storage-only fallback available
 		}
-		if _, err := s.concStorage.ArchiveInstanceDataByID(sessionUUID, time.Now()); err != nil {
+		archived, err := s.concStorage.ArchiveInstanceDataByID(sessionUUID, time.Now())
+		if err != nil {
 			return fmt.Errorf("failed to archive session %s via storage fallback: %w", sessionUUID, err)
+		}
+		// Re-check for a live instance: the session may have been resumed (added back
+		// to the poller, e.g. via ResumeHibernatedSession) in the window between the
+		// FindLiveInstance miss above and the storage write just now. If so, the write
+		// above raced a genuinely live session and may have clobbered its storage row
+		// back to a stale, ArchivedAt=now/Status=Stopped snapshot even though the
+		// in-memory Instance is still active. Re-save the live instance's actual
+		// (unmodified) current state to overwrite that stale write immediately, rather
+		// than leaving storage inconsistent with the poller until whatever next
+		// unrelated mutation happens to call SaveInstances for it.
+		if archived {
+			log.Info("ArchiveSessionByUUID: archived via storage-only fallback (session not in live poller)", "uuid", sessionUUID)
+			if reInst := s.FindLiveInstance(sessionUUID); reInst != nil {
+				if err := s.storage.SaveInstances([]*session.Instance{reInst}); err != nil {
+					return fmt.Errorf("failed to re-save resumed session %s after storage fallback race: %w", sessionUUID, err)
+				}
+			}
 		}
 		return nil
 	}

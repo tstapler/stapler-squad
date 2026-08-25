@@ -103,3 +103,27 @@ func TestArchiveSessionByUUID_should_useStorageFallback_When_SessionNotInLivePol
 	assert.NotNil(t, data.ArchivedAt, "expected ArchivedAt to be set via the storage fallback")
 	assert.Equal(t, session.Stopped, data.Status, "expected Status to transition to Stopped via the storage fallback")
 }
+
+// TestArchiveSessionByUUID_should_returnNilWithoutPanicking_When_ConcStorageIsNil covers
+// the fake-InstanceStore-in-tests degrade path: concStorage is only ever nil when the
+// SessionService is constructed with an InstanceStore that isn't a *session.Storage (see
+// NewSessionServiceWithSearchEngine's type assertion). The storage fallback must not be
+// attempted in that case — no nil-pointer dereference on concStorage.ArchiveInstanceDataByID.
+func TestArchiveSessionByUUID_should_returnNilWithoutPanicking_When_ConcStorageIsNil(t *testing.T) {
+	t.Parallel()
+
+	queue := session.NewReviewQueue()
+	statusMgr := session.NewInstanceStatusManager()
+	poller := session.NewReviewQueuePoller(queue, statusMgr, nil)
+
+	// Construct SessionService directly (not via NewSessionService) so this test only
+	// exercises ArchiveSessionByUUID's concStorage nil-guard, not the rest of the
+	// constructor's unrelated wiring (sub-services that assume a fully-formed service).
+	svc := &SessionService{
+		storage:           &fakeInstanceStore{},
+		reviewQueuePoller: poller,
+	}
+
+	err := svc.ArchiveSessionByUUID(context.Background(), "not-tracked-anywhere")
+	assert.NoError(t, err)
+}
