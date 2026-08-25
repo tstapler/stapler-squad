@@ -28,6 +28,395 @@ import (
 	"go.uber.org/goleak"
 )
 
+// newTestLinkBacklogSvc constructs a real *services.BacklogService for
+// link_session_to_item tests — matching this package's established pattern
+// (see e.g. TestImportGitHubIssue_should_TriggerTriage_When_BacklogSvcWiredAndRepoPathSet)
+// for exercising AttachSessionToItem's actual validation (ITEM_NOT_FOUND,
+// FAILED_PRECONDITION) rather than scripting a fake — backlogHandlers.backlogSvc
+// is a concrete *services.BacklogService field, not an interface, so a fake
+// double can no longer be injected there.
+func newTestLinkBacklogSvc(t *testing.T, storage *session.Storage) *services.BacklogService {
+	t.Helper()
+	svc := services.NewBacklogService(storage, nil, nil, nil, nil, nil)
+	t.Cleanup(svc.Shutdown)
+	return svc
+}
+
+// createTestItem creates a backlog item with the given status for link_session_to_item tests.
+func createTestItem(t *testing.T, storage *session.Storage, status string) *session.BacklogItemData {
+	t.Helper()
+	item, err := storage.CreateBacklogItem(context.Background(), session.BacklogItemData{
+		Title:              "Link test item",
+		Description:        "Item used to test link_session_to_item",
+		AcceptanceCriteria: `[{"index":0,"text":"Criterion","status":"pending"}]`,
+		Priority:           1,
+		Status:             status,
+	})
+	require.NoError(t, err)
+	return item
+}
+
+func TestLinkSessionToItem_should_CreateItemSession_When_ValidUnlinkedItem(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	item := createTestItem(t, storage, string(session.BacklogStatusInProgress))
+	backlogSvc := newTestLinkBacklogSvc(t, storage)
+	handler := &backlogHandlers{storage: storage, backlogSvc: backlogSvc}
+	callerUUID := uuid.New().String()
+	ctx := WithSessionUUID(context.Background(), callerUUID)
+
+	result, err := handler.linkSessionToItem(ctx, makeToolReq(map[string]interface{}{"item_id": item.ID}))
+	require.NoError(t, err)
+
+	m := parseResult(t, result)
+	require.True(t, m["success"].(bool))
+	assert.False(t, m["already_linked"].(bool))
+	assert.Equal(t, item.ID, m["item_id"].(string))
+
+	_, lookupErr := storage.GetItemSessionBySessionAndItem(context.Background(), callerUUID, item.ID)
+	assert.NoError(t, lookupErr, "AttachSessionToItem must have created a real ItemSession row")
+}
+
+func TestLinkSessionToItem_should_UnblockReportProgress_When_CalledAgainstRealStorage(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	item := createTestItem(t, storage, string(session.BacklogStatusInProgress))
+	callerUUID := uuid.New().String()
+	ctx := WithSessionUUID(context.Background(), callerUUID)
+
+	backlogSvc := newTestLinkBacklogSvc(t, storage)
+	handler := &backlogHandlers{storage: storage, backlogSvc: backlogSvc}
+	linkResult, err := handler.linkSessionToItem(ctx, makeToolReq(map[string]interface{}{"item_id": item.ID}))
+	require.NoError(t, err)
+	require.True(t, parseResult(t, linkResult)["success"].(bool))
+
+	progressResult, err := handler.reportProgress(ctx, makeToolReq(map[string]interface{}{
+		"item_id": item.ID, "criteria_index": float64(0), "status": "pass",
+	}))
+	require.NoError(t, err)
+	// reportProgress returns plain text (not a JSON MCPResult) on success — confirm
+	// it did not return the PERMISSION_DENIED JSON error shape.
+	require.Len(t, progressResult.Content, 1)
+	tc, ok := progressResult.Content[0].(mcpgo.TextContent)
+	require.True(t, ok)
+	assert.NotContains(t, tc.Text, string(ErrPermissionDenied))
+}
+
+func TestLinkSessionToItem_should_ShortCircuitToNoOp_When_AlreadyLinkedToSameItem(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	item := createTestItem(t, storage, string(session.BacklogStatusInProgress))
+	callerUUID := uuid.New().String()
+	ctx := WithSessionUUID(context.Background(), callerUUID)
+	_, err := storage.CreateItemSession(context.Background(), session.ItemSessionData{
+		ItemID: item.ID, SessionUUID: callerUUID, SessionRole: session.SessionRoleWork,
+	})
+	require.NoError(t, err)
+
+	backlogSvc := newTestLinkBacklogSvc(t, storage)
+	handler := &backlogHandlers{storage: storage, backlogSvc: backlogSvc}
+
+	result, err := handler.linkSessionToItem(ctx, makeToolReq(map[string]interface{}{"item_id": item.ID}))
+	require.NoError(t, err)
+	m := parseResult(t, result)
+	require.True(t, m["success"].(bool))
+	assert.True(t, m["already_linked"].(bool))
+
+	sessions, listErr := storage.ListItemSessions(context.Background(), item.ID)
+	require.NoError(t, listErr)
+	assert.Len(t, sessions, 1, "attach must not be re-triggered on an idempotent relink — no duplicate row")
+}
+
+func TestLinkSessionToItem_should_ReturnConflict_When_ItemClaimedByOtherLiveSession(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	item := createTestItem(t, storage, string(session.BacklogStatusInProgress))
+	otherUUID := uuid.New().String()
+	_, err := storage.CreateItemSession(context.Background(), session.ItemSessionData{
+		ItemID: item.ID, SessionUUID: otherUUID, SessionRole: session.SessionRoleWork,
+	})
+	require.NoError(t, err)
+
+	callerUUID := uuid.New().String()
+	ctx := WithSessionUUID(context.Background(), callerUUID)
+	backlogSvc := newTestLinkBacklogSvc(t, storage)
+	handler := &backlogHandlers{storage: storage, backlogSvc: backlogSvc}
+
+	result, err := handler.linkSessionToItem(ctx, makeToolReq(map[string]interface{}{"item_id": item.ID}))
+	require.NoError(t, err)
+	m := parseResult(t, result)
+	require.False(t, m["success"].(bool))
+	errObj := m["error"].(map[string]interface{})
+	assert.Equal(t, ErrConflict, errObj["code"].(string))
+	assert.NotContains(t, errObj["message"].(string), otherUUID,
+		"the owning session's UUID must never be disclosed to a different caller — it doubles as this MCP layer's bearer credential")
+
+	// No new row was created for the caller.
+	_, lookupErr := storage.GetItemSessionBySessionAndItem(context.Background(), callerUUID, item.ID)
+	assert.Error(t, lookupErr)
+}
+
+func TestLinkSessionToItem_should_CreateItemSession_When_ConflictingRowOwnerIsLivenessDead(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	item := createTestItem(t, storage, string(session.BacklogStatusInProgress))
+	deadUUID := uuid.New().String()
+	_, err := storage.CreateItemSession(context.Background(), session.ItemSessionData{
+		ItemID: item.ID, SessionUUID: deadUUID, SessionRole: session.SessionRoleWork,
+	})
+	require.NoError(t, err)
+
+	callerUUID := uuid.New().String()
+	ctx := WithSessionUUID(context.Background(), callerUUID)
+	backlogSvc := newTestLinkBacklogSvc(t, storage)
+	handler := &backlogHandlers{
+		storage: storage, backlogSvc: backlogSvc,
+		liveCheck: func(sessionUUID string) bool { return sessionUUID != deadUUID },
+	}
+
+	result, err := handler.linkSessionToItem(ctx, makeToolReq(map[string]interface{}{"item_id": item.ID}))
+	require.NoError(t, err)
+	m := parseResult(t, result)
+	require.True(t, m["success"].(bool), "a liveness-dead owner's row must not block a relink")
+	assert.False(t, m["already_linked"].(bool))
+
+	// Confirm the nil-liveCheck fallback still returns CONFLICT (preserves pre-feature behavior).
+	handlerNoLiveCheck := &backlogHandlers{storage: storage, backlogSvc: backlogSvc}
+	ctx2 := WithSessionUUID(context.Background(), uuid.New().String())
+	result2, err := handlerNoLiveCheck.linkSessionToItem(ctx2, makeToolReq(map[string]interface{}{"item_id": item.ID}))
+	require.NoError(t, err)
+	m2 := parseResult(t, result2)
+	require.False(t, m2["success"].(bool))
+	assert.Equal(t, ErrConflict, m2["error"].(map[string]interface{})["code"].(string))
+}
+
+// TestLinkSessionToItem_should_CreateItemSession_When_OtherRoleIsReviewNotWork verifies
+// activeWorkSessionOwner's role filter: a live review-role session on the item must not
+// block a work-role relink — only a Role==SessionRoleWork row can conflict.
+func TestLinkSessionToItem_should_CreateItemSession_When_OtherRoleIsReviewNotWork(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	item := createTestItem(t, storage, string(session.BacklogStatusInProgress))
+	_, err := storage.CreateItemSession(context.Background(), session.ItemSessionData{
+		ItemID: item.ID, SessionUUID: uuid.New().String(), SessionRole: "review",
+	})
+	require.NoError(t, err)
+
+	callerUUID := uuid.New().String()
+	ctx := WithSessionUUID(context.Background(), callerUUID)
+	backlogSvc := newTestLinkBacklogSvc(t, storage)
+	handler := &backlogHandlers{storage: storage, backlogSvc: backlogSvc}
+
+	result, err := handler.linkSessionToItem(ctx, makeToolReq(map[string]interface{}{"item_id": item.ID}))
+	require.NoError(t, err)
+	m := parseResult(t, result)
+	require.True(t, m["success"].(bool), "a live review-role session must not block a work-role relink")
+}
+
+// TestLinkSessionToItem_should_CreateItemSession_When_OtherRowAlreadyEnded verifies
+// activeWorkSessionOwner's EndedAt filter: a work-role row whose session already ended
+// normally must not block a relink.
+func TestLinkSessionToItem_should_CreateItemSession_When_OtherRowAlreadyEnded(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	item := createTestItem(t, storage, string(session.BacklogStatusInProgress))
+	endedIS, err := storage.CreateItemSession(context.Background(), session.ItemSessionData{
+		ItemID: item.ID, SessionUUID: uuid.New().String(), SessionRole: session.SessionRoleWork,
+	})
+	require.NoError(t, err)
+	require.NoError(t, storage.UpdateItemSessionEnded(context.Background(), endedIS.ID, time.Now()))
+
+	callerUUID := uuid.New().String()
+	ctx := WithSessionUUID(context.Background(), callerUUID)
+	backlogSvc := newTestLinkBacklogSvc(t, storage)
+	handler := &backlogHandlers{storage: storage, backlogSvc: backlogSvc}
+
+	result, err := handler.linkSessionToItem(ctx, makeToolReq(map[string]interface{}{"item_id": item.ID}))
+	require.NoError(t, err)
+	m := parseResult(t, result)
+	require.True(t, m["success"].(bool), "a normally-ended prior work session must not block a relink")
+}
+
+// TestLinkSessionToItem_should_ReportRegeneratedAndStatus_When_CallerIsLiveInstance verifies
+// slash_commands_regenerated flips to true and item_status is populated when the caller's
+// UUID matches a live instance with a resolvable path (sessionHasWritableInstance's true
+// branch) — every other test in this file leaves store nil, which trivially short-circuits
+// this to false and never exercises it.
+func TestLinkSessionToItem_should_ReportRegeneratedAndStatus_When_CallerIsLiveInstance(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	item := createTestItem(t, storage, string(session.BacklogStatusInProgress))
+	callerUUID := uuid.New().String()
+	ctx := WithSessionUUID(context.Background(), callerUUID)
+	backlogSvc := newTestLinkBacklogSvc(t, storage)
+	store := &stubStore{instances: []*session.Instance{{UUID: callerUUID, Path: t.TempDir(), Title: "caller-instance"}}}
+	handler := &backlogHandlers{storage: storage, backlogSvc: backlogSvc, store: store}
+
+	result, err := handler.linkSessionToItem(ctx, makeToolReq(map[string]interface{}{"item_id": item.ID}))
+	require.NoError(t, err)
+	m := parseResult(t, result)
+	require.True(t, m["success"].(bool))
+	assert.True(t, m["slash_commands_regenerated"].(bool), "a live instance with a resolvable path must report slash_commands_regenerated=true")
+	assert.Equal(t, string(session.BacklogStatusInProgress), m["item_status"].(string))
+}
+
+func TestLinkSessionToItem_should_ReturnItemNotFound_When_ItemIdDoesNotExist(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	backlogSvc := newTestLinkBacklogSvc(t, storage)
+	handler := &backlogHandlers{storage: storage, backlogSvc: backlogSvc}
+	ctx := WithSessionUUID(context.Background(), uuid.New().String())
+
+	result, err := handler.linkSessionToItem(ctx, makeToolReq(map[string]interface{}{"item_id": "00000000-0000-0000-0000-000000000099"}))
+	require.NoError(t, err)
+	m := parseResult(t, result)
+	require.False(t, m["success"].(bool))
+	assert.Equal(t, ErrItemNotFound, m["error"].(map[string]interface{})["code"].(string))
+}
+
+func TestLinkSessionToItem_should_ReturnFailedPrecondition_When_ItemInTerminalStatus(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	item := createTestItem(t, storage, string(session.BacklogStatusDone))
+	backlogSvc := newTestLinkBacklogSvc(t, storage)
+	handler := &backlogHandlers{storage: storage, backlogSvc: backlogSvc}
+	ctx := WithSessionUUID(context.Background(), uuid.New().String())
+
+	result, err := handler.linkSessionToItem(ctx, makeToolReq(map[string]interface{}{"item_id": item.ID}))
+	require.NoError(t, err)
+	m := parseResult(t, result)
+	require.False(t, m["success"].(bool))
+	assert.Equal(t, ErrFailedPrecondition, m["error"].(map[string]interface{})["code"].(string))
+}
+
+func TestLinkSessionToItem_should_ReturnUnavailable_When_AttacherNil(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	handler := &backlogHandlers{storage: storage, backlogSvc: nil}
+	ctx := WithSessionUUID(context.Background(), uuid.New().String())
+
+	result, err := handler.linkSessionToItem(ctx, makeToolReq(map[string]interface{}{"item_id": uuid.New().String()}))
+	require.NoError(t, err)
+	m := parseResult(t, result)
+	require.False(t, m["success"].(bool))
+	assert.Equal(t, ErrUnavailable, m["error"].(map[string]interface{})["code"].(string))
+}
+
+func TestGetLinkedItem_should_ReturnMostRecentLink_When_NoItemIdProvided(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	olderItem := createTestItem(t, storage, string(session.BacklogStatusInProgress))
+	newerItem := createTestItem(t, storage, string(session.BacklogStatusInProgress))
+	callerUUID := uuid.New().String()
+	ctx := WithSessionUUID(context.Background(), callerUUID)
+
+	_, err := storage.CreateItemSession(context.Background(), session.ItemSessionData{
+		ItemID: olderItem.ID, SessionUUID: callerUUID, SessionRole: session.SessionRoleWork,
+	})
+	require.NoError(t, err)
+	time.Sleep(2 * time.Millisecond) // ensure distinct created_at ordering
+	_, err = storage.CreateItemSession(context.Background(), session.ItemSessionData{
+		ItemID: newerItem.ID, SessionUUID: callerUUID, SessionRole: session.SessionRoleWork,
+	})
+	require.NoError(t, err)
+
+	handler := &backlogHandlers{storage: storage}
+	result, err := handler.getLinkedItem(ctx, makeToolReq(nil))
+	require.NoError(t, err)
+	m := parseResult(t, result)
+	require.True(t, m["success"].(bool))
+	assert.True(t, m["linked"].(bool))
+	assert.Equal(t, newerItem.ID, m["item_id"].(string))
+}
+
+func TestGetLinkedItem_should_ReturnNotLinked_When_SessionHasNoItemSessionRows(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	handler := &backlogHandlers{storage: storage}
+	ctx := WithSessionUUID(context.Background(), uuid.New().String())
+
+	result, err := handler.getLinkedItem(ctx, makeToolReq(nil))
+	require.NoError(t, err)
+	m := parseResult(t, result)
+	require.True(t, m["success"].(bool), "not-linked is a valid read result, not an error")
+	assert.False(t, m["linked"].(bool))
+}
+
+func TestGetLinkedItem_should_ReturnLinkedFalseForSpecificItem_When_SessionLinkedToDifferentItem(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	linkedItem := createTestItem(t, storage, string(session.BacklogStatusInProgress))
+	otherItem := createTestItem(t, storage, string(session.BacklogStatusInProgress))
+	callerUUID := uuid.New().String()
+	ctx := WithSessionUUID(context.Background(), callerUUID)
+	_, err := storage.CreateItemSession(context.Background(), session.ItemSessionData{
+		ItemID: linkedItem.ID, SessionUUID: callerUUID, SessionRole: session.SessionRoleWork,
+	})
+	require.NoError(t, err)
+
+	handler := &backlogHandlers{storage: storage}
+	result, err := handler.getLinkedItem(ctx, makeToolReq(map[string]interface{}{"item_id": otherItem.ID}))
+	require.NoError(t, err)
+	m := parseResult(t, result)
+	require.True(t, m["success"].(bool))
+	assert.False(t, m["linked"].(bool))
+	assert.Equal(t, otherItem.ID, m["item_id"].(string))
+}
+
+func TestResolveItemLink_should_NameBothItemsAndLinkTool_When_LinkedToDifferentItem(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	linkedItem := createTestItem(t, storage, string(session.BacklogStatusInProgress))
+	otherItem := createTestItem(t, storage, string(session.BacklogStatusInProgress))
+	callerUUID := uuid.New().String()
+	_, err := storage.CreateItemSession(context.Background(), session.ItemSessionData{
+		ItemID: linkedItem.ID, SessionUUID: callerUUID, SessionRole: session.SessionRoleWork,
+	})
+	require.NoError(t, err)
+
+	handler := &backlogHandlers{storage: storage}
+	_, result := handler.resolveItemLink(context.Background(), callerUUID, otherItem.ID)
+	require.NotNil(t, result)
+	m := parseResult(t, result)
+	require.False(t, m["success"].(bool))
+	errObj := m["error"].(map[string]interface{})
+	assert.Equal(t, ErrPermissionDenied, errObj["code"].(string))
+	assert.Contains(t, errObj["remediation"].(string), linkedItem.ID)
+	assert.Contains(t, errObj["remediation"].(string), otherItem.ID)
+	assert.Contains(t, errObj["remediation"].(string), "link_session_to_item")
+}
+
+func TestResolveItemLink_should_NameLinkToolWithNoPriorLink_When_SessionHasNoLink(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	item := createTestItem(t, storage, string(session.BacklogStatusInProgress))
+	handler := &backlogHandlers{storage: storage}
+
+	_, result := handler.resolveItemLink(context.Background(), uuid.New().String(), item.ID)
+	require.NotNil(t, result)
+	m := parseResult(t, result)
+	require.False(t, m["success"].(bool))
+	errObj := m["error"].(map[string]interface{})
+	assert.Equal(t, ErrPermissionDenied, errObj["code"].(string))
+	assert.Contains(t, errObj["remediation"].(string), "link_session_to_item")
+	assert.Contains(t, errObj["remediation"].(string), item.ID)
+}
+
+func TestReportProgress_should_ReturnActionableHint_When_SessionNotLinked(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	item := createTestItem(t, storage, string(session.BacklogStatusInProgress))
+	handler := &backlogHandlers{storage: storage}
+	ctx := WithSessionUUID(context.Background(), uuid.New().String())
+
+	result, err := handler.reportProgress(ctx, makeToolReq(map[string]interface{}{
+		"item_id": item.ID, "criteria_index": float64(0), "status": "pass",
+	}))
+	require.NoError(t, err)
+	m := parseResult(t, result)
+	require.False(t, m["success"].(bool))
+	errObj := m["error"].(map[string]interface{})
+	assert.Contains(t, errObj["remediation"].(string), "link_session_to_item")
+}
+
+func TestRegisterBacklogTools_should_RegisterLinkSessionToItemTool_When_ToolsRegistered(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	s := NewCore(&stubStore{}, nil, nil, storage, nil, nil, nil, nil, nil, nil)
+	tools := s.ListTools()
+	linkTool, hasLink := tools["link_session_to_item"]
+	_, hasGetLinked := tools["get_linked_item"]
+	require.True(t, hasLink, "link_session_to_item must be registered")
+	assert.True(t, hasGetLinked, "get_linked_item must be registered")
+
+	desc := linkTool.Tool.Description
+	assert.Contains(t, desc, "ITEM_NOT_FOUND", "description must document the ITEM_NOT_FOUND constraint")
+	assert.Contains(t, desc, "CONFLICT", "description must document the CONFLICT constraint")
+	assert.Contains(t, desc, "FAILED_PRECONDITION", "description must document the FAILED_PRECONDITION constraint")
+}
+
 // newTestBacklogStorage creates a temporary Storage for testing.
 func newTestBacklogStorage(t *testing.T) *session.Storage {
 	t.Helper()
@@ -3022,8 +3411,9 @@ func TestReportPRCreated_should_RejectReassignment_When_AuthorMismatch(t *testin
 // temp dir).
 type fakeTriageHeadlessPool struct{}
 
-func (f *fakeTriageHeadlessPool) CallBlocking(ctx context.Context, key headless.FeatureKey, systemPrompt, userPrompt string, opts headless.CallOptions) (string, float64, error) {
-	return `{"title":"t","summary":"s","suggestions":[]}`, 0, nil
+func (f *fakeTriageHeadlessPool) CallBlocking(ctx context.Context, key headless.FeatureKey, systemPrompt, userPrompt string, opts headless.CallOptions, sink headless.CostSink) (string, error) {
+	sink(0)
+	return `{"title":"t","summary":"s","suggestions":[]}`, nil
 }
 
 // TestCreateBacklogItem_should_TriggerTriage_When_BacklogSvcWiredAndRepoPathSet
@@ -3448,6 +3838,14 @@ func TestReportDuplicate_RejectsWhenSessionRoleNotWork(t *testing.T) {
 	assert.Equal(t, ErrPermissionDenied, errObj["code"])
 }
 
+// TestReportDuplicate_RejectsWhenSessionNotLinked covers the claimed-item
+// side of the unlinked-caller split (reportDuplicateUnclaimed): a session
+// with no ItemSession link can flag an *unclaimed* item as a duplicate (see
+// TestReportDuplicate_UnclaimedItem_ArchivesDirectly), but an in_progress
+// item is claimed by someone else's work session, so it must still be
+// refused — just with a status-specific INVALID_ARGUMENT instead of the old
+// blanket PERMISSION_DENIED, since "not linked" is no longer disqualifying
+// on its own.
 func TestReportDuplicate_RejectsWhenSessionNotLinked(t *testing.T) {
 	storage := newTestBacklogStorage(t)
 	ctx := context.Background()
@@ -3474,7 +3872,97 @@ func TestReportDuplicate_RejectsWhenSessionNotLinked(t *testing.T) {
 	m := parseResult(t, result)
 	require.False(t, m["success"].(bool))
 	errObj := m["error"].(map[string]interface{})
-	assert.Equal(t, ErrPermissionDenied, errObj["code"])
+	assert.Equal(t, ErrInvalidArgument, errObj["code"])
+	assert.Contains(t, errObj["message"].(string), "not linked to it")
+}
+
+// TestReportDuplicate_UnclaimedItem_ArchivesDirectly covers
+// reportDuplicateUnclaimed's success path: a session with no ItemSession
+// link on an item nobody has claimed yet (status=ready) archives it directly
+// once duplicate_ref is verified — no review-gate routing, since there is no
+// work/diff for a human to check (see that function's doc comment).
+func TestReportDuplicate_UnclaimedItem_ArchivesDirectly(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	ctx := context.Background()
+
+	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+		Title:  "Unclaimed duplicate",
+		Status: string(session.BacklogStatusReady),
+	})
+	require.NoError(t, err)
+
+	sessionUUID := uuid.New().String()
+	handler := &backlogHandlers{
+		storage:         storage,
+		verifyGitHubRef: func(ctx context.Context, ref *githubpkg.ParsedGitHubRef) error { return nil },
+	}
+	ctxWithUUID := WithSessionUUID(ctx, sessionUUID)
+
+	req := makeToolReq(map[string]interface{}{
+		"item_id":       item.ID,
+		"duplicate_ref": "https://github.com/tstapler/stapler-squad/pull/272",
+		"reason":        "already shipped in #272",
+	})
+
+	result, err := handler.reportDuplicate(ctxWithUUID, req)
+	require.NoError(t, err)
+
+	tc, ok := result.Content[0].(mcpgo.TextContent)
+	require.True(t, ok)
+	assert.Contains(t, tc.Text, "archived directly")
+
+	reloaded, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, string(session.BacklogStatusArchived), reloaded.Status)
+	require.NotNil(t, reloaded.ArchivedAt)
+}
+
+// TestReportDuplicate_UnclaimedItem_RefusesWhenActiveTriageSessionExists covers
+// reportDuplicateUnclaimed's active-session guard: an item at "refining" can
+// carry an active (not yet ended) triage-role ItemSession even though nobody
+// has claimed it as work — archiving out from under that triage session would
+// be the same "yanked out from under whoever's on it" failure ADR-001 exists
+// to prevent for a work session, just for triage instead.
+func TestReportDuplicate_UnclaimedItem_RefusesWhenActiveTriageSessionExists(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	ctx := context.Background()
+
+	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+		Title:  "Being triaged",
+		Status: string(session.BacklogStatusRefining),
+	})
+	require.NoError(t, err)
+
+	triageSessionUUID := uuid.New().String()
+	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: triageSessionUUID,
+		SessionRole: session.SessionRoleTriage,
+	})
+	require.NoError(t, err)
+
+	callerUUID := uuid.New().String()
+	handler := &backlogHandlers{storage: storage, verifyGitHubRef: failOnCallVerifyGitHubRef(t)}
+	ctxWithUUID := WithSessionUUID(ctx, callerUUID)
+
+	req := makeToolReq(map[string]interface{}{
+		"item_id":       item.ID,
+		"duplicate_ref": "https://github.com/tstapler/stapler-squad/pull/272",
+		"reason":        "already shipped in #272",
+	})
+
+	result, err := handler.reportDuplicate(ctxWithUUID, req)
+	require.NoError(t, err)
+
+	m := parseResult(t, result)
+	require.False(t, m["success"].(bool))
+	errObj := m["error"].(map[string]interface{})
+	assert.Equal(t, ErrInvalidArgument, errObj["code"])
+	assert.Contains(t, errObj["message"].(string), "active")
+
+	reloaded, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, string(session.BacklogStatusRefining), reloaded.Status)
 }
 
 func TestReportDuplicate_RejectsWhenSourceStatusNotAllowed(t *testing.T) {
@@ -4763,7 +5251,7 @@ func TestWaitForBacklogEvent_ReturnsImmediatelyWhenItemAlreadyArchived(t *testin
 		Status: string(session.BacklogStatusDone),
 	})
 	require.NoError(t, err)
-	_, err = storage.ArchiveBacklogItem(ctx, item.ID)
+	_, err = storage.ArchiveBacklogItem(ctx, item.ID, nil, session.TriggeredByUser, "")
 	require.NoError(t, err)
 
 	handler := &backlogHandlers{storage: storage, eventBus: events.NewEventBus(32)}
@@ -5061,21 +5549,21 @@ func TestWaitForBacklogEvent_NoGoroutineLeak(t *testing.T) {
 
 // TestWaitForBacklogEvent_SubscribeBeforeReadClosesRace proves the
 // subscribe-before-read ordering: an event published inside
-// testAfterWaitSubscribeHook (after Subscribe returns, before the precheck
-// read) is not missed. This var is shared package state — do not run this
-// test with t.Parallel() relative to other tests using the same hook.
+// withTestAfterWaitSubscribeHook's hook (after Subscribe returns, before the
+// precheck read) is not missed. The hook is scoped to this test's own ctx via
+// context.WithValue, so it can never collide with a t.Parallel() sibling's
+// call into the same code path.
 func TestWaitForBacklogEvent_SubscribeBeforeReadClosesRace(t *testing.T) {
 	storage := newTestBacklogStorage(t)
-	ctx := context.Background()
 	bus := events.NewEventBus(32)
 
-	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(context.Background(), session.BacklogItemData{
 		Title:  "Race window",
 		Status: string(session.BacklogStatusReview),
 	})
 	require.NoError(t, err)
 
-	testAfterWaitSubscribeHook = func() {
+	ctx := withTestAfterWaitSubscribeHook(context.Background(), func() {
 		bus.Publish(&events.Event{
 			Type: events.EventBacklogItemChanged,
 			BacklogItemPayload: &events.BacklogItemEventPayload{
@@ -5087,8 +5575,7 @@ func TestWaitForBacklogEvent_SubscribeBeforeReadClosesRace(t *testing.T) {
 				},
 			},
 		})
-	}
-	t.Cleanup(func() { testAfterWaitSubscribeHook = nil })
+	})
 
 	handler := &backlogHandlers{storage: storage, eventBus: bus}
 	req := makeToolReq(map[string]interface{}{"item_id": item.ID, "timeout_seconds": float64(2)})
@@ -6109,4 +6596,280 @@ func TestGetBacklogItem_should_NotUseVerdictFormatStrings_When_NoVerdictExists(t
 
 	assert.NotContains(t, text, "Outcome:")
 	assert.NotContains(t, text, "Criterion ")
+}
+
+// --- Link error consistency (ITEM_NOT_FOUND vs PERMISSION_DENIED) ---
+//
+// See project_plans/backlog-link-error-consistency/. Before this fix, every
+// mutating tool collapsed "item doesn't exist" and "item exists but this
+// session has no link to it" into the same PERMISSION_DENIED, while
+// get_backlog_item correctly distinguished the two via ITEM_NOT_FOUND.
+
+type linkConsistencyCase struct {
+	name   string
+	invoke func(h *backlogHandlers, ctx context.Context, itemID string) (*mcpgo.CallToolResult, error)
+}
+
+// linkConsistencyMutatingTools covers link-check disambiguation only (item-missing
+// vs. item-exists-no-link) — it deliberately does not encode a "correct role" per
+// tool, since 2 of the 7 (report_progress, request_review) have no role check at
+// all. Role-mismatch coverage lives in the standalone Test*_should_ReturnPermissionDenied_When_CallerRoleNot*
+// tests below, one per handler that actually has a role branch.
+var linkConsistencyMutatingTools = []linkConsistencyCase{
+	{"report_progress", func(h *backlogHandlers, ctx context.Context, itemID string) (*mcpgo.CallToolResult, error) {
+		return h.reportProgress(ctx, makeToolReq(map[string]interface{}{"item_id": itemID, "criteria_index": float64(0), "status": "pass"}))
+	}},
+	{"request_review", func(h *backlogHandlers, ctx context.Context, itemID string) (*mcpgo.CallToolResult, error) {
+		return h.requestReview(ctx, makeToolReq(map[string]interface{}{"item_id": itemID, "message": "done"}))
+	}},
+	{"submit_review_verdict", func(h *backlogHandlers, ctx context.Context, itemID string) (*mcpgo.CallToolResult, error) {
+		return h.submitReviewVerdict(ctx, makeToolReq(map[string]interface{}{
+			"item_id": itemID, "summary": "s",
+			"verdicts": []interface{}{map[string]interface{}{"criterion_index": float64(0), "outcome": "PASS", "evidence": "e"}},
+		}))
+	}},
+	{"report_pr_created", func(h *backlogHandlers, ctx context.Context, itemID string) (*mcpgo.CallToolResult, error) {
+		return h.reportPRCreated(ctx, makeToolReq(map[string]interface{}{
+			"item_id": itemID, "pr_url": "https://github.com/tstapler/stapler-squad/pull/1", "pr_number": float64(1), "summary": "s",
+		}))
+	}},
+	{"submit_triage_result", func(h *backlogHandlers, ctx context.Context, itemID string) (*mcpgo.CallToolResult, error) {
+		return h.submitTriageResult(ctx, makeToolReq(map[string]interface{}{"item_id": itemID, "summary": "s"}))
+	}},
+	{"report_blocked", func(h *backlogHandlers, ctx context.Context, itemID string) (*mcpgo.CallToolResult, error) {
+		return h.reportBlocked(ctx, makeToolReq(map[string]interface{}{"item_id": itemID, "rationale": "blocked on external dependency"}))
+	}},
+	{"report_duplicate", func(h *backlogHandlers, ctx context.Context, itemID string) (*mcpgo.CallToolResult, error) {
+		return h.reportDuplicate(ctx, makeToolReq(map[string]interface{}{
+			"item_id": itemID, "duplicate_ref": "https://github.com/tstapler/stapler-squad/pull/1", "reason": "dup",
+		}))
+	}},
+}
+
+// TestBacklogTools_LinkErrorConsistency_should_ReturnPermissionDenied_When_ItemExistsButNoLink
+// verifies AC3(a): when the backlog item exists but the calling session has no
+// ItemSession link row, every mutating tool returns PERMISSION_DENIED with a
+// self-diagnosable message (AC2) naming both the session UUID/item ID and all
+// mutating tools, not just the one that was called.
+//
+// report_duplicate is deliberately excluded: it's the one mutating tool where
+// "not linked" isn't automatically PERMISSION_DENIED — a passerby session may
+// still flag an *unclaimed* item as a duplicate (reportDuplicateUnclaimed).
+// This fixture creates the item at in_progress (claimed), so report_duplicate
+// correctly returns INVALID_ARGUMENT instead — covered by its own
+// TestReportDuplicate_RejectsWhenSessionNotLinked /
+// TestReportDuplicate_UnclaimedItem_ArchivesDirectly.
+func TestBacklogTools_LinkErrorConsistency_should_ReturnPermissionDenied_When_ItemExistsButNoLink(t *testing.T) {
+	for _, tc := range linkConsistencyMutatingTools {
+		if tc.name == "report_duplicate" {
+			continue
+		}
+		t.Run(tc.name, func(t *testing.T) {
+			storage := newTestBacklogStorage(t)
+			item, err := storage.CreateBacklogItem(context.Background(), session.BacklogItemData{
+				Title:              "Link consistency test item",
+				AcceptanceCriteria: `[{"index":0,"text":"Criterion","status":"pending"}]`,
+				Priority:           1,
+				Status:             string(session.BacklogStatusInProgress),
+			})
+			require.NoError(t, err)
+
+			sessionUUID := uuid.New().String()
+			handler := &backlogHandlers{storage: storage}
+			ctx := WithSessionUUID(context.Background(), sessionUUID)
+
+			result, err := tc.invoke(handler, ctx, item.ID)
+			require.NoError(t, err)
+			m := parseResult(t, result)
+			require.False(t, m["success"].(bool))
+
+			errObj, ok := m["error"].(map[string]interface{})
+			require.True(t, ok)
+			assert.Equal(t, ErrPermissionDenied, errObj["code"].(string))
+
+			message, _ := errObj["message"].(string)
+			assert.Contains(t, message, sessionUUID)
+			assert.Contains(t, message, item.ID)
+
+			remediation, _ := errObj["remediation"].(string)
+			for _, toolName := range []string{
+				"report_progress", "request_review", "submit_review_verdict", "report_pr_created",
+				"submit_triage_result", "report_blocked", "report_duplicate",
+			} {
+				assert.Contains(t, remediation, toolName)
+			}
+		})
+	}
+}
+
+// TestBacklogTools_LinkErrorConsistency_should_ReturnItemNotFound_When_ItemDoesNotExist
+// verifies AC3(b): when the backlog item itself does not exist, get_backlog_item
+// and every mutating tool return ITEM_NOT_FOUND — never PERMISSION_DENIED —
+// regardless of the calling session's link state.
+func TestBacklogTools_LinkErrorConsistency_should_ReturnItemNotFound_When_ItemDoesNotExist(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	itemID := uuid.New().String() // never created
+	sessionUUID := uuid.New().String()
+	handler := &backlogHandlers{storage: storage}
+	ctx := WithSessionUUID(context.Background(), sessionUUID)
+
+	assertItemNotFound := func(t *testing.T, result *mcpgo.CallToolResult, err error) {
+		t.Helper()
+		require.NoError(t, err)
+		m := parseResult(t, result)
+		require.False(t, m["success"].(bool))
+		errObj, ok := m["error"].(map[string]interface{})
+		require.True(t, ok)
+		assert.Equal(t, ErrItemNotFound, errObj["code"].(string))
+		remediation, _ := errObj["remediation"].(string)
+		assert.NotEmpty(t, remediation)
+		assert.Contains(t, strings.ToLower(remediation), "not exist")
+		assert.Contains(t, strings.ToLower(remediation), "do not retry")
+	}
+
+	t.Run("get_backlog_item", func(t *testing.T) {
+		result, err := handler.getBacklogItem(ctx, makeToolReq(map[string]interface{}{"item_id": itemID}))
+		assertItemNotFound(t, result, err)
+	})
+
+	for _, tc := range linkConsistencyMutatingTools {
+		t.Run(tc.name, func(t *testing.T) {
+			result, err := tc.invoke(handler, ctx, itemID)
+			assertItemNotFound(t, result, err)
+		})
+	}
+}
+
+// TestSubmitReviewVerdict_should_ReturnPermissionDenied_When_CallerRoleNotReview
+// verifies the pre-existing role-mismatch PERMISSION_DENIED branch is intact
+// after routing submitReviewVerdict's link check through resolveItemLink — no
+// prior test in this file covered this branch (adversarial-review.md Concern 1).
+func TestSubmitReviewVerdict_should_ReturnPermissionDenied_When_CallerRoleNotReview(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	item, err := storage.CreateBacklogItem(context.Background(), session.BacklogItemData{
+		Title:              "Wrong role item",
+		AcceptanceCriteria: `[{"index":0,"text":"Criterion","status":"pending"}]`,
+		Priority:           1,
+		Status:             string(session.BacklogStatusReview),
+	})
+	require.NoError(t, err)
+
+	sessionUUID := uuid.New().String()
+	_, err = storage.CreateItemSession(context.Background(), session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: sessionUUID,
+		SessionRole: session.SessionRoleWork, // wrong role
+	})
+	require.NoError(t, err)
+
+	handler := &backlogHandlers{storage: storage}
+	ctx := WithSessionUUID(context.Background(), sessionUUID)
+
+	result, err := handler.submitReviewVerdict(ctx, makeToolReq(map[string]interface{}{
+		"item_id": item.ID, "summary": "s",
+		"verdicts": []interface{}{map[string]interface{}{"criterion_index": float64(0), "outcome": "PASS", "evidence": "e"}},
+	}))
+	require.NoError(t, err)
+	m := parseResult(t, result)
+	require.False(t, m["success"].(bool))
+	errObj, ok := m["error"].(map[string]interface{})
+	require.True(t, ok)
+	assert.Equal(t, ErrPermissionDenied, errObj["code"].(string))
+	assert.Contains(t, errObj["message"].(string), "only 'review' role may submit verdicts")
+}
+
+// TestSubmitTriageResult_should_ReturnPermissionDenied_When_CallerRoleNotTriage
+// mirrors TestSubmitReviewVerdict_should_ReturnPermissionDenied_When_CallerRoleNotReview
+// for submitTriageResult's role check.
+func TestSubmitTriageResult_should_ReturnPermissionDenied_When_CallerRoleNotTriage(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	item, err := storage.CreateBacklogItem(context.Background(), session.BacklogItemData{
+		Title:              "Wrong role item",
+		AcceptanceCriteria: `[{"index":0,"text":"Criterion","status":"pending"}]`,
+		Priority:           1,
+		Status:             string(session.BacklogStatusInProgress),
+	})
+	require.NoError(t, err)
+
+	sessionUUID := uuid.New().String()
+	_, err = storage.CreateItemSession(context.Background(), session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: sessionUUID,
+		SessionRole: session.SessionRoleWork, // wrong role
+	})
+	require.NoError(t, err)
+
+	handler := &backlogHandlers{storage: storage}
+	ctx := WithSessionUUID(context.Background(), sessionUUID)
+
+	result, err := handler.submitTriageResult(ctx, makeToolReq(map[string]interface{}{"item_id": item.ID, "summary": "s"}))
+	require.NoError(t, err)
+	m := parseResult(t, result)
+	require.False(t, m["success"].(bool))
+	errObj, ok := m["error"].(map[string]interface{})
+	require.True(t, ok)
+	assert.Equal(t, ErrPermissionDenied, errObj["code"].(string))
+	assert.Contains(t, errObj["message"].(string), "only 'triage' role may submit triage results")
+}
+
+// TestReportBlocked_should_ReturnPermissionDenied_When_CallerRoleNotWork mirrors
+// TestSubmitTriageResult_should_ReturnPermissionDenied_When_CallerRoleNotTriage for
+// reportBlocked's role check — prior to this test, reportBlocked had zero role-mismatch
+// coverage anywhere in this file (confirmed by testing-quality review of this PR).
+func TestReportBlocked_should_ReturnPermissionDenied_When_CallerRoleNotWork(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	item, err := storage.CreateBacklogItem(context.Background(), session.BacklogItemData{
+		Title:              "Wrong role item",
+		AcceptanceCriteria: `[{"index":0,"text":"Criterion","status":"pending"}]`,
+		Priority:           1,
+		Status:             string(session.BacklogStatusInProgress),
+	})
+	require.NoError(t, err)
+
+	sessionUUID := uuid.New().String()
+	_, err = storage.CreateItemSession(context.Background(), session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: sessionUUID,
+		SessionRole: session.SessionRoleReview, // wrong role
+	})
+	require.NoError(t, err)
+
+	handler := &backlogHandlers{storage: storage}
+	ctx := WithSessionUUID(context.Background(), sessionUUID)
+
+	result, err := handler.reportBlocked(ctx, makeToolReq(map[string]interface{}{"item_id": item.ID, "rationale": "blocked on external dependency"}))
+	require.NoError(t, err)
+	m := parseResult(t, result)
+	require.False(t, m["success"].(bool))
+	errObj, ok := m["error"].(map[string]interface{})
+	require.True(t, ok)
+	assert.Equal(t, ErrPermissionDenied, errObj["code"].(string))
+	assert.Contains(t, errObj["message"].(string), "only 'work' role may report a blocked item")
+}
+
+// TestBacklogHandlers_should_HaveNoRemainingRawLinkCheck_When_SourceIsScanned is a
+// structural guard (pre-mortem.md Failure #1, adversarial-review.md Concern 2):
+// asserts the pre-fix raw "errors.Is(linkErr, session.ErrNotFound) -> unconditional
+// PERMISSION_DENIED" pattern is gone from every call site, so a future mutating
+// tool (or a silently-skipped story) that reintroduces it is caught even if nobody
+// remembers to add it to linkConsistencyMutatingTools above. The expected count
+// below must be bumped whenever a new mutating backlog tool is added — see the
+// first review cycle of project_plans/backlog-link-error-consistency, which
+// caught report_blocked and report_duplicate missing this exact guard after a
+// stale-base merge with origin/main.
+func TestBacklogHandlers_should_HaveNoRemainingRawLinkCheck_When_SourceIsScanned(t *testing.T) {
+	data, err := os.ReadFile("tools_backlog.go")
+	require.NoError(t, err, "read tools_backlog.go")
+	content := string(data)
+
+	const staleMessage = "this session is not linked to the specified backlog item"
+	assert.Equal(t, 0, strings.Count(content, staleMessage),
+		"the old undisambiguated PERMISSION_DENIED message must not appear anywhere — every call site must route through resolveItemLink")
+
+	assert.Equal(t, 1, strings.Count(content, "func (h *backlogHandlers) resolveItemLink("),
+		"resolveItemLink must be defined exactly once")
+
+	callSiteCount := strings.Count(content, "h.resolveItemLink(ctx, callerUUID, itemID)")
+	assert.Equal(t, 7, callSiteCount,
+		"expected exactly 7 mutating handlers (report_progress, request_review, submit_review_verdict, report_pr_created, submit_triage_result, report_blocked, report_duplicate) to call resolveItemLink")
 }

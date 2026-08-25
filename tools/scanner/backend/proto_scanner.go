@@ -25,62 +25,63 @@ type BackendFeature struct {
 }
 
 // methodToID maps proto RPC method names to their canonical feature IDs.
-var methodToID = map[string]string{
-	"CreateSession":            "session:create",
-	"GetSession":               "session:get",
-	"UpdateSession":            "session:update",
-	"DeleteSession":            "session:delete",
-	"ListSessions":             "session:list",
-	"WatchSessions":            "session:watch",
-	"StreamTerminal":           "session:stream-terminal",
-	"GetSessionDiff":           "session:get-diff",
-	"GetVCSStatus":             "session:get-vcs-status",
-	"GetReviewQueue":           "review-queue:get",
-	"AcknowledgeSession":       "session:acknowledge",
-	"GetLogs":                  "logs:get",
-	"WatchReviewQueue":         "review-queue:watch",
-	"LogUserInteraction":       "interaction:log",
-	"GetClaudeConfig":          "claude-config:get",
-	"ListClaudeConfigs":        "claude-config:list",
-	"UpdateClaudeConfig":       "claude-config:update",
-	"ListClaudeHistory":        "history:list",
-	"GetClaudeHistoryDetail":   "history:get-detail",
-	"GetClaudeHistoryMessages": "history:get-messages",
-	"SearchClaudeHistory":      "history:search",
-	"GetPRInfo":                "pr:get-info",
-	"GetPRComments":            "pr:get-comments",
-	"PostPRComment":            "pr:post-comment",
-	"MergePR":                  "pr:merge",
-	"ClosePR":                  "pr:close",
-	"SendNotification":         "notification:send",
-	"FocusWindow":              "window:focus",
-	"RenameSession":            "session:rename",
-	"RestartSession":           "session:restart",
-	"GetWorkspaceInfo":         "workspace:get-info",
-	"ListWorkspaceTargets":     "workspace:list-targets",
-	"SwitchWorkspace":          "workspace:switch",
-	"ResolveApproval":          "approval:resolve",
-	"ListPendingApprovals":     "approval:list-pending",
-	"CreateDebugSnapshot":      "debug:create-snapshot",
-	"GetNotificationHistory":   "notification:get-history",
-	"MarkNotificationRead":     "notification:mark-read",
-	"ClearNotificationHistory": "notification:clear-history",
-	"ListApprovalRules":        "approval:list-rules",
-	"UpsertApprovalRule":       "approval:upsert-rule",
-	"DeleteApprovalRule":       "approval:delete-rule",
-	"GetApprovalAnalytics":     "approval:get-analytics",
-	"ListDatabases":            "database:list",
-	"GetCurrentDatabase":       "database:get-current",
-	"SwitchDatabase":           "database:switch",
-	"MergeDatabase":            "database:merge",
-	"CreateCheckpoint":         "checkpoint:create",
-	"ListCheckpoints":          "checkpoint:list",
-	"ForkSession":              "session:fork",
-	"ListFiles":                "file:list",
-	"GetFileContent":           "file:get-content",
-	"SearchFiles":              "file:search",
-	"ListPathCompletions":      "path:list-completions",
-	"ListWorktrees":            "worktree:list",
+var methodToID = map[string]string{ //nolint:gochecknoglobals
+	"CreateSession":             "session:create",
+	"GetSession":                "session:get",
+	"UpdateSession":             "session:update",
+	"DeleteSession":             "session:delete",
+	"ListSessions":              "session:list",
+	"WatchSessions":             "session:watch",
+	"StreamTerminal":            "session:stream-terminal",
+	"GetSessionDiff":            "session:get-diff",
+	"GetVCSStatus":              "session:get-vcs-status",
+	"GetReviewQueue":            "review-queue:get",
+	"AcknowledgeSession":        "session:acknowledge",
+	"GetLogs":                   "logs:get",
+	"WatchReviewQueue":          "review-queue:watch",
+	"LogUserInteraction":        "interaction:log",
+	"GetClaudeConfig":           "claude-config:get",
+	"ListClaudeConfigs":         "claude-config:list",
+	"UpdateClaudeConfig":        "claude-config:update",
+	"ListClaudeHistory":         "history:list",
+	"GetClaudeHistoryDetail":    "history:get-detail",
+	"GetClaudeHistoryMessages":  "history:get-messages",
+	"SearchClaudeHistory":       "history:search",
+	"GetPRInfo":                 "pr:get-info",
+	"GetPRComments":             "pr:get-comments",
+	"PostPRComment":             "pr:post-comment",
+	"MergePR":                   "pr:merge",
+	"ClosePR":                   "pr:close",
+	"SendNotification":          "notification:send",
+	"FocusWindow":               "window:focus",
+	"RenameSession":             "session:rename",
+	"RestartSession":            "session:restart",
+	"GetWorkspaceInfo":          "workspace:get-info",
+	"ListWorkspaceTargets":      "workspace:list-targets",
+	"SwitchWorkspace":           "workspace:switch",
+	"ResolveApproval":           "approval:resolve",
+	"ListPendingApprovals":      "approval:list-pending",
+	"CreateDebugSnapshot":       "debug:create-snapshot",
+	"GetNotificationHistory":    "notification:get-history",
+	"MarkNotificationRead":      "notification:mark-read",
+	"ClearNotificationHistory":  "notification:clear-history",
+	"ListApprovalRules":         "approval:list-rules",
+	"UpsertApprovalRule":        "approval:upsert-rule",
+	"DeleteApprovalRule":        "approval:delete-rule",
+	"ReloadClaudeSettingsRules": "approval:reload-claude-settings-rules",
+	"GetApprovalAnalytics":      "approval:get-analytics",
+	"ListDatabases":             "database:list",
+	"GetCurrentDatabase":        "database:get-current",
+	"SwitchDatabase":            "database:switch",
+	"MergeDatabase":             "database:merge",
+	"CreateCheckpoint":          "checkpoint:create",
+	"ListCheckpoints":           "checkpoint:list",
+	"ForkSession":               "session:fork",
+	"ListFiles":                 "file:list",
+	"GetFileContent":            "file:get-content",
+	"SearchFiles":               "file:search",
+	"ListPathCompletions":       "path:list-completions",
+	"ListWorktrees":             "worktree:list",
 	// Project management RPCs
 	"CreateProject":           "project:create",
 	"ListProjects":            "project:list",
@@ -217,6 +218,10 @@ var methodToID = map[string]string{
 	// Outbound callback config RPCs (webhook-triggers Phase 5, FR7)
 	"GetCallbackConfig":    "callback-config:get",
 	"UpdateCallbackConfig": "callback-config:update",
+	// Stream Hub Rollout RPCs (terminal-multi-connection-streaming Story 3.3)
+	"GetStreamHubRolloutStatus":          "stream-hub-rollout:get",
+	"CompleteStreamHubRollbackRehearsal": "stream-hub-rollout:complete-rehearsal",
+	"SetStreamHubSessionOverride":        "stream-hub-rollout:set-session-override",
 	// Approval rules RPCs
 	"BulkUpsertRules":       "approval:bulk-upsert-rules",
 	"ExportRules":           "approval:export-rules",
@@ -258,6 +263,42 @@ var methodToID = map[string]string{
 	"GetSlackConfig":    "slack-config:get",
 	"UpdateSlackConfig": "slack-config:update",
 	"TestSlackWebhook":  "slack-config:test-webhook",
+	// PR creation RPCs
+	"DraftPullRequest":  "session:draft-pull-request",
+	"CreatePullRequest": "session:create-pull-request",
+	// Remote (SSH remote workspaces) RPCs (RemoteService in remote.proto).
+	// remote.proto was omitted from registry-generate-backend's explicit proto
+	// enumeration until this mapping was added (ssh-remote-workspaces Phase 6
+	// Epic 6.3, Story 6.3.1) -- these RPCs' // +api: markers in
+	// remote_service.go already used these exact kebab-case ids, so the ids
+	// here must match verbatim or ScanProto's method-name fallback would
+	// produce a second, non-marker-matching id and file.
+	"TestRemoteConnection":   "remote:test-connection",
+	"TrustRemoteHostKey":     "remote:trust-host-key",
+	"GenerateRemoteIdentity": "remote:generate-identity",
+	"ListRemotes":            "remote:list",
+	"CreateRemote":           "remote:create",
+	"DeleteRemote":           "remote:delete",
+	// Headless call RPC (HeadlessService in headless.proto). Found via
+	// TestMethodToIDCompleteness after that test was switched from a hardcoded proto file
+	// list to globbing proto/session/v1/*.proto -- headless.proto was invisible to every
+	// hardcoded proto enumeration in this repo (Makefile's registry-generate-backend,
+	// prune-stale-backend.sh, validate-registry.sh, AND this test's own old list), the same
+	// bug class ssh-remote-workspaces Phase 6 Epic 6.3 found and fixed for remote.proto.
+	// Only the methodToID mapping is added here (this map is what
+	// TestMethodToIDCompleteness checks); wiring headless.proto into the Makefile/
+	// prune-stale-backend.sh/validate-registry.sh's own scan enumerations so it actually
+	// gets a generated per-feature file is a separate, larger followup (a new feature's
+	// registry entries + testIds, not a completeness-test fix) -- out of scope here.
+	"RunHeadlessCall": "headless:run-call",
+	// Handoff summary RPCs (HandoffSummaryService in handoff_summary.proto,
+	// added by #612 without a methodToID entry or a registry-generate-backend
+	// Makefile enumeration — the same hardcoded-proto-list bug class as
+	// remote.proto/headless.proto above, caught by TestMethodToIDCompleteness's
+	// glob. Wired fully (map entry + Makefile enumeration) like remote.proto,
+	// not left as a followup like headless.proto, since it was cheap here.
+	"GetHandoffSummary":     "handoff-summary:get",
+	"TriggerHandoffSummary": "handoff-summary:trigger",
 }
 
 // rpcPattern matches lines like:   rpc MethodName(  (indented or not)

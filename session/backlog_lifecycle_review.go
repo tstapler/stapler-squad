@@ -69,7 +69,7 @@ const maxConcurrentReviewGates = 8
 func (l *BacklogLifecycleListener) handleReviewSessionExited(ctx context.Context, reviewIS ItemSessionSummary, forcePush bool) {
 	item, err := l.storage.GetBacklogItem(ctx, reviewIS.BacklogItemID)
 	if err != nil {
-		log.ErrorLog.Printf("[BacklogLifecycle] handleReviewSessionExited GetBacklogItem item=%s: %v", reviewIS.BacklogItemID, err)
+		log.ErrorLog().Printf("[BacklogLifecycle] handleReviewSessionExited GetBacklogItem item=%s: %v", reviewIS.BacklogItemID, err)
 		return
 	}
 
@@ -77,7 +77,7 @@ func (l *BacklogLifecycleListener) handleReviewSessionExited(ctx context.Context
 	// eagerly loads the ReviewVerdict edge, which is what we need here.
 	sessions, err := l.storage.ListItemSessions(ctx, item.ID)
 	if err != nil {
-		log.ErrorLog.Printf("[BacklogLifecycle] handleReviewSessionExited ListItemSessions item=%s: %v", item.ID, err)
+		log.ErrorLog().Printf("[BacklogLifecycle] handleReviewSessionExited ListItemSessions item=%s: %v", item.ID, err)
 		return
 	}
 
@@ -118,10 +118,10 @@ func (l *BacklogLifecycleListener) handleReviewSessionExited(ctx context.Context
 		// error (proceeds to notify) rather than silently going quiet.
 		blocked, blockedErr := l.storage.RemediationBlocked(ctx, item.ID, domain.StuckReasonBouncing)
 		if blockedErr != nil {
-			log.WarningLog.Printf("[BacklogLifecycle] handleReviewSessionExited RemediationBlocked(bouncing) item=%s: %v", item.ID, blockedErr)
+			log.WarningLog().Printf("[BacklogLifecycle] handleReviewSessionExited RemediationBlocked(bouncing) item=%s: %v", item.ID, blockedErr)
 		}
 		if !blocked {
-			log.WarningLog.Printf("[BacklogLifecycle] handleReviewSessionExited item=%s review session %s exited without a verdict", item.ID, reviewIS.SessionUUID)
+			log.WarningLog().Printf("[BacklogLifecycle] handleReviewSessionExited item=%s review session %s exited without a verdict", item.ID, reviewIS.SessionUUID)
 			l.notify(item.ID,
 				"Review session ended without a verdict",
 				fmt.Sprintf("%s — the review session exited without calling submit_review_verdict. Treating as a failed review.", item.Title),
@@ -137,19 +137,19 @@ func (l *BacklogLifecycleListener) handleReviewSessionExited(ctx context.Context
 	overall := ReviewOutcome(verdict.OverallOutcome)
 	perCriterion, parseErr := parsePerCriterionVerdicts(verdict.PerCriterion)
 	if parseErr != nil {
-		log.WarningLog.Printf("[BacklogLifecycle] handleReviewSessionExited parsePerCriterionVerdicts item=%s: %v", item.ID, parseErr)
+		log.WarningLog().Printf("[BacklogLifecycle] handleReviewSessionExited parsePerCriterionVerdicts item=%s: %v", item.ID, parseErr)
 	}
 	acSnapshot, _ := ParseAcCriteria(reviewIS.AcSnapshot)
 	applyVerdictsToACs(ctx, l.storage, item, acSnapshot, perCriterion)
 
-	log.InfoLog.Printf("[BacklogLifecycle] handleReviewSessionExited item=%s outcome=%s (review session %s)", item.ID, overall, reviewIS.SessionUUID)
+	log.InfoLog().Printf("[BacklogLifecycle] handleReviewSessionExited item=%s outcome=%s (review session %s)", item.ID, overall, reviewIS.SessionUUID)
 
 	switch overall {
 	case ReviewVerdictFail, ReviewVerdictPartial, ReviewVerdictUnverifiable:
 		l.autoReopenWithBackoffGate(ctx, item.ID, item.Title, BacklogStatus(item.Status))
 	case ReviewVerdictPass:
 		if workEntry == nil {
-			log.ErrorLog.Printf("[BacklogLifecycle] handleReviewSessionExited item=%s: PASS verdict but no work session found — cannot push", item.ID)
+			log.ErrorLog().Printf("[BacklogLifecycle] handleReviewSessionExited item=%s: PASS verdict but no work session found — cannot push", item.ID)
 			return
 		}
 		if workEntry.EndedAt == nil && !forcePush {
@@ -163,7 +163,7 @@ func (l *BacklogLifecycleListener) handleReviewSessionExited(ctx context.Context
 			// in review and let the live agent drive shipping; do not race it with the
 			// mechanical push path. Mirrors AutoReopenAfterFailedReview's identical
 			// hasActiveWorkSession guard on the FAIL/PARTIAL side of this same loop.
-			log.InfoLog.Printf("[BacklogLifecycle] handleReviewSessionExited item=%s: PASS verdict with a live work session (%s) — leaving PR creation to the agent via /backlog/ship instead of the mechanical push path", item.ID, workEntry.SessionUUID)
+			log.InfoLog().Printf("[BacklogLifecycle] handleReviewSessionExited item=%s: PASS verdict with a live work session (%s) — leaving PR creation to the agent via /backlog/ship instead of the mechanical push path", item.ID, workEntry.SessionUUID)
 			return
 		}
 		// Reached when either the work session that earned this PASS already exited
@@ -207,7 +207,7 @@ func (l *BacklogLifecycleListener) autoReopenWithBackoffGate(ctx context.Context
 
 	due, justParked, gateErr := l.storage.RemediationDue(ctx, itemID, domain.StuckReasonBouncing)
 	if gateErr != nil {
-		log.WarningLog.Printf("[BacklogLifecycle] autoReopenWithBackoffGate RemediationDue item=%s: %v", itemID, gateErr)
+		log.WarningLog().Printf("[BacklogLifecycle] autoReopenWithBackoffGate RemediationDue item=%s: %v", itemID, gateErr)
 		due = true // fail open — see doc comment above
 	}
 	if justParked {
@@ -223,7 +223,7 @@ func (l *BacklogLifecycleListener) autoReopenWithBackoffGate(ctx context.Context
 		// writes.
 		applied, markErr := l.storage.MarkStuck(ctx, itemID, domain.StuckReasonBounceCapExhausted, itemStatus, "bouncing remediation cap exhausted while bouncing reason still open")
 		if markErr != nil {
-			log.WarningLog.Printf("[BacklogLifecycle] autoReopenWithBackoffGate MarkStuck(bounce_cap_exhausted) item=%s: %v", itemID, markErr)
+			log.WarningLog().Printf("[BacklogLifecycle] autoReopenWithBackoffGate MarkStuck(bounce_cap_exhausted) item=%s: %v", itemID, markErr)
 		}
 		// Only notify if the row was actually written. If MarkStuck's
 		// expectedStatus precondition failed closed (itemStatus drifted from
@@ -239,7 +239,7 @@ func (l *BacklogLifecycleListener) autoReopenWithBackoffGate(ctx context.Context
 		// reopen-attempt logic further down this function — a failed mark
 		// must not block the actual auto-reopen.
 		if applied {
-			log.WarningLog.Printf("[BacklogLifecycle] bounce cap exhausted while still bouncing item=%s", itemID)
+			log.WarningLog().Printf("[BacklogLifecycle] bounce cap exhausted while still bouncing item=%s", itemID)
 			l.notify(itemID,
 				"Bounce cap exhausted — retry loop not converging",
 				fmt.Sprintf("%s — automated rework hit its retry cap (%d attempts) while still bouncing between in_progress and review. This is evidence the retry loop itself isn't converging, not a transient failure — a different approach may be needed before using Reset.", itemTitle, MaxRemediationAttempts),
@@ -247,18 +247,18 @@ func (l *BacklogLifecycleListener) autoReopenWithBackoffGate(ctx context.Context
 				4, // sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_URGENT
 			)
 			if _, notifiedErr := l.storage.MarkStuckNotified(ctx, itemID, domain.StuckReasonBounceCapExhausted); notifiedErr != nil {
-				log.WarningLog.Printf("[BacklogLifecycle] autoReopenWithBackoffGate MarkStuckNotified(bounce_cap_exhausted) item=%s: %v", itemID, notifiedErr)
+				log.WarningLog().Printf("[BacklogLifecycle] autoReopenWithBackoffGate MarkStuckNotified(bounce_cap_exhausted) item=%s: %v", itemID, notifiedErr)
 			}
 		}
 	}
 	if !due {
-		log.InfoLog.Printf("[BacklogLifecycle] autoReopenWithBackoffGate item=%s: bouncing remediation backoff not yet due, skipping auto-reopen", itemID)
+		log.InfoLog().Printf("[BacklogLifecycle] autoReopenWithBackoffGate item=%s: bouncing remediation backoff not yet due, skipping auto-reopen", itemID)
 		return
 	}
 
 	go func() {
 		if err := reopener.AutoReopenAfterFailedReview(ctx, itemID); err != nil {
-			log.ErrorLog.Printf("[BacklogLifecycle] autoReopenWithBackoffGate AutoReopenAfterFailedReview item=%s: %v", itemID, err)
+			log.ErrorLog().Printf("[BacklogLifecycle] autoReopenWithBackoffGate AutoReopenAfterFailedReview item=%s: %v", itemID, err)
 		}
 	}()
 }
@@ -285,18 +285,18 @@ func (l *BacklogLifecycleListener) TriggerReviewForSession(workSessionUUID strin
 		ctx := l.shutdownCtx
 		is, err := l.storage.GetItemSessionBySessionUUID(ctx, workSessionUUID)
 		if err != nil {
-			log.ErrorLog.Printf("[BacklogLifecycle] TriggerReviewForSession GetItemSessionBySessionUUID(%s): %v", workSessionUUID, err)
+			log.ErrorLog().Printf("[BacklogLifecycle] TriggerReviewForSession GetItemSessionBySessionUUID(%s): %v", workSessionUUID, err)
 			return
 		}
 		item, err := l.storage.GetBacklogItem(ctx, is.BacklogItemID)
 		if err != nil {
-			log.ErrorLog.Printf("[BacklogLifecycle] TriggerReviewForSession GetBacklogItem session=%s item=%s: %v", workSessionUUID, is.BacklogItemID, err)
+			log.ErrorLog().Printf("[BacklogLifecycle] TriggerReviewForSession GetBacklogItem session=%s item=%s: %v", workSessionUUID, is.BacklogItemID, err)
 			return
 		}
 		if item.SkipReviewGate {
 			return
 		}
-		log.InfoLog.Printf("[BacklogLifecycle] TriggerReviewForSession: spawning immediate review gate item=%s session=%s", item.ID, workSessionUUID)
+		log.InfoLog().Printf("[BacklogLifecycle] TriggerReviewForSession: spawning immediate review gate item=%s session=%s", item.ID, workSessionUUID)
 		l.spawnReviewGate(item, is)
 	}()
 }
@@ -348,15 +348,15 @@ func applyVerdictsToACs(ctx context.Context, storage *Storage, item *BacklogItem
 
 	newJSON, err := SerializeAcCriteria(updated)
 	if err != nil {
-		log.ErrorLog.Printf("[BacklogLifecycle] applyVerdictsToACs serialize item=%s: %v", item.ID, err)
+		log.ErrorLog().Printf("[BacklogLifecycle] applyVerdictsToACs serialize item=%s: %v", item.ID, err)
 		return
 	}
 	acj := newJSON
 	if _, err := storage.UpdateBacklogItem(ctx, item.ID, BacklogItemUpdate{AcceptanceCriteria: &acj}, nil); err != nil {
-		log.ErrorLog.Printf("[BacklogLifecycle] applyVerdictsToACs update item=%s: %v", item.ID, err)
+		log.ErrorLog().Printf("[BacklogLifecycle] applyVerdictsToACs update item=%s: %v", item.ID, err)
 		return
 	}
-	log.InfoLog.Printf("[BacklogLifecycle] applyVerdictsToACs: updated AC statuses for item=%s (%d criteria)", item.ID, len(updated))
+	log.InfoLog().Printf("[BacklogLifecycle] applyVerdictsToACs: updated AC statuses for item=%s (%d criteria)", item.ID, len(updated))
 }
 
 // spawnReviewGate creates a one-shot review session for item, using the diff
@@ -377,7 +377,7 @@ func (l *BacklogLifecycleListener) reconcileStuckReviewItems(ctx context.Context
 
 	items, err := er.FindStuckReviewItems(ctx)
 	if err != nil {
-		log.WarningLog.Printf("[BacklogLifecycle] reconcileStuckReviewItems query error: %v", err)
+		log.WarningLog().Printf("[BacklogLifecycle] reconcileStuckReviewItems query error: %v", err)
 	} else {
 		for _, item := range items {
 			seen[item.ID.String()] = true
@@ -392,7 +392,7 @@ func (l *BacklogLifecycleListener) reconcileStuckReviewItems(ctx context.Context
 	if checker != nil {
 		zombieCandidates, zErr := er.FindZombieReviewItems(ctx)
 		if zErr != nil {
-			log.WarningLog.Printf("[BacklogLifecycle] reconcileStuckReviewItems FindZombieReviewItems error: %v", zErr)
+			log.WarningLog().Printf("[BacklogLifecycle] reconcileStuckReviewItems FindZombieReviewItems error: %v", zErr)
 		} else {
 			for _, item := range zombieCandidates {
 				if seen[item.ID.String()] {
@@ -415,7 +415,7 @@ func (l *BacklogLifecycleListener) reconcileStuckReviewItems(ctx context.Context
 				// just dispatched to perform — the zombie detection fired for nothing.
 				for _, is := range item.Edges.ItemSessions {
 					if endErr := l.storage.UpdateItemSessionEnded(ctx, is.ID.String(), time.Now()); endErr != nil { //nolint:silenttransition best-effort tombstone; markAbandonedReview below still flags/notifies for this item on this same tick regardless of this specific row's outcome, and a failed tombstone here is retried on the next tick since the item still matches FindZombieReviewItems
-						log.WarningLog.Printf("[BacklogLifecycle] reconcileStuckReviewItems UpdateItemSessionEnded item=%s session=%s: %v", item.ID, is.ID, endErr)
+						log.WarningLog().Printf("[BacklogLifecycle] reconcileStuckReviewItems UpdateItemSessionEnded item=%s session=%s: %v", item.ID, is.ID, endErr)
 					}
 				}
 				seen[item.ID.String()] = true
@@ -431,7 +431,7 @@ func (l *BacklogLifecycleListener) reconcileStuckReviewItems(ctx context.Context
 	// same-status clear.
 	open, openErr := er.FindOpenStuckStates(ctx)
 	if openErr != nil {
-		log.WarningLog.Printf("[BacklogLifecycle] reconcileStuckReviewItems FindOpenStuckStates error: %v", openErr)
+		log.WarningLog().Printf("[BacklogLifecycle] reconcileStuckReviewItems FindOpenStuckStates error: %v", openErr)
 		return
 	}
 	for _, row := range open {
@@ -492,7 +492,7 @@ func (l *BacklogLifecycleListener) reconcileStuckReviewItems(ctx context.Context
 func (l *BacklogLifecycleListener) reconcileUnprocessedReviewVerdicts(ctx context.Context, er *EntRepository) {
 	items, err := er.FindReviewItemsWithUnprocessedVerdict(ctx)
 	if err != nil {
-		log.WarningLog.Printf("[BacklogLifecycle] reconcileUnprocessedReviewVerdicts query error: %v", err)
+		log.WarningLog().Printf("[BacklogLifecycle] reconcileUnprocessedReviewVerdicts query error: %v", err)
 		return
 	}
 	checker := l.getSessionLivenessChecker()
@@ -543,22 +543,22 @@ func (l *BacklogLifecycleListener) reconcileUnprocessedReviewVerdicts(ctx contex
 		// session created before the item's current review stay began cannot
 		// be what that stay's outcome will be judged on.
 		if reviewAt, found, evErr := er.GetMostRecentStatusEventAt(ctx, item.ID.String(), BacklogStatusReview); evErr != nil {
-			log.WarningLog.Printf("[BacklogLifecycle] reconcileUnprocessedReviewVerdicts GetMostRecentStatusEventAt item=%s: %v", item.ID, evErr)
+			log.WarningLog().Printf("[BacklogLifecycle] reconcileUnprocessedReviewVerdicts GetMostRecentStatusEventAt item=%s: %v", item.ID, evErr)
 		} else if found && latest.CreatedAt.Before(reviewAt) {
 			continue // verdict belongs to a prior, already-concluded review cycle
 		}
 
 		if latest.EndedAt == nil {
 			if endErr := l.storage.UpdateItemSessionEnded(ctx, latest.ID.String(), time.Now()); endErr != nil { //nolint:silenttransition best-effort bookkeeping; the verdict processing below (handleReviewSessionExited) runs regardless of this write's outcome
-				log.WarningLog.Printf("[BacklogLifecycle] reconcileUnprocessedReviewVerdicts tombstone item=%s session=%s: %v", item.ID, latest.ID, endErr)
+				log.WarningLog().Printf("[BacklogLifecycle] reconcileUnprocessedReviewVerdicts tombstone item=%s session=%s: %v", item.ID, latest.ID, endErr)
 			}
 		}
 
 		if latest.Edges.ReviewVerdict != nil {
-			log.WarningLog.Printf("[BacklogLifecycle] item %s: review session %s has an unprocessed %s verdict — applying it now",
+			log.WarningLog().Printf("[BacklogLifecycle] item %s: review session %s has an unprocessed %s verdict — applying it now",
 				item.ID, latest.SessionUUID, latest.Edges.ReviewVerdict.OverallOutcome)
 		} else {
-			log.WarningLog.Printf("[BacklogLifecycle] item %s: review session %s (the most recent review attempt) exited without ever writing a verdict — processing as a failed review now",
+			log.WarningLog().Printf("[BacklogLifecycle] item %s: review session %s (the most recent review attempt) exited without ever writing a verdict — processing as a failed review now",
 				item.ID, latest.SessionUUID)
 		}
 		// forcePush=true: this is the crash-recovery sweep for a review session that
@@ -594,7 +594,7 @@ func (l *BacklogLifecycleListener) reconcileUnprocessedReviewVerdicts(ctx contex
 func (l *BacklogLifecycleListener) markAbandonedReview(ctx context.Context, er *EntRepository, itemID, itemTitle, contextDesc string) {
 	applied, err := er.MarkStuck(ctx, itemID, domain.StuckReasonAbandonedReview, BacklogStatusReview, contextDesc)
 	if err != nil {
-		log.WarningLog.Printf("[BacklogLifecycle] markAbandonedReview MarkStuck item=%s: %v", itemID, err)
+		log.WarningLog().Printf("[BacklogLifecycle] markAbandonedReview MarkStuck item=%s: %v", itemID, err)
 		return
 	}
 	if !applied {
@@ -606,12 +606,12 @@ func (l *BacklogLifecycleListener) markAbandonedReview(ctx context.Context, er *
 	// e.g. an item seeded directly into review by a test or migration).
 	lastReviewAt, found, evErr := er.GetMostRecentStatusEventAt(ctx, itemID, BacklogStatusReview)
 	if evErr != nil {
-		log.WarningLog.Printf("[BacklogLifecycle] markAbandonedReview GetMostRecentStatusEventAt item=%s: %v", itemID, evErr)
+		log.WarningLog().Printf("[BacklogLifecycle] markAbandonedReview GetMostRecentStatusEventAt item=%s: %v", itemID, evErr)
 	}
 
 	rows, findErr := er.FindOpenStuckStates(ctx)
 	if findErr != nil {
-		log.WarningLog.Printf("[BacklogLifecycle] markAbandonedReview FindOpenStuckStates item=%s: %v", itemID, findErr)
+		log.WarningLog().Printf("[BacklogLifecycle] markAbandonedReview FindOpenStuckStates item=%s: %v", itemID, findErr)
 		return
 	}
 	row, ok := findOpenStuckStateFor(rows, itemID, domain.StuckReasonAbandonedReview)
@@ -631,7 +631,7 @@ func (l *BacklogLifecycleListener) markAbandonedReview(ctx context.Context, er *
 	// (per the exponential schedule) would also re-notify, which would be
 	// spam, not signal.
 	if row.NotifiedAt == nil {
-		log.WarningLog.Printf("[BacklogLifecycle] item %s stuck in review with nothing in flight (%s)", itemID, contextDesc)
+		log.WarningLog().Printf("[BacklogLifecycle] item %s stuck in review with nothing in flight (%s)", itemID, contextDesc)
 		l.notify(itemID,
 			"Review item needs attention",
 			fmt.Sprintf("%s — stuck in review with no active session (%s). It may need manual re-review or rework.", itemTitle, contextDesc),
@@ -639,7 +639,7 @@ func (l *BacklogLifecycleListener) markAbandonedReview(ctx context.Context, er *
 			2, // sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_MEDIUM
 		)
 		if _, notifyErr := er.MarkStuckNotified(ctx, itemID, domain.StuckReasonAbandonedReview); notifyErr != nil {
-			log.WarningLog.Printf("[BacklogLifecycle] markAbandonedReview MarkStuckNotified item=%s: %v", itemID, notifyErr)
+			log.WarningLog().Printf("[BacklogLifecycle] markAbandonedReview MarkStuckNotified item=%s: %v", itemID, notifyErr)
 			// Do NOT proceed to dispatch a respawn below on this tick: a sustained
 			// MarkStuckNotified failure would otherwise re-notify (not just
 			// respawn) every ~60s tick, breaking the "exactly once per
@@ -662,7 +662,7 @@ func (l *BacklogLifecycleListener) markAbandonedReview(ctx context.Context, er *
 	// this runs inside a synchronous detector sweep that must not block.
 	respawner := l.getReviewRespawner()
 	if respawner == nil {
-		log.DebugLog.Printf("[BacklogLifecycle] markAbandonedReview item=%s: no ReviewRespawner configured, notification only", itemID)
+		log.DebugLog().Printf("[BacklogLifecycle] markAbandonedReview item=%s: no ReviewRespawner configured, notification only", itemID)
 		return
 	}
 
@@ -684,15 +684,15 @@ func (l *BacklogLifecycleListener) markAbandonedReview(ctx context.Context, er *
 	// fails open (proceeds with the respawn) rather than silently stalling an
 	// item that might otherwise be perfectly fine to retry.
 	if blocked, blockedErr := l.storage.RemediationBlocked(ctx, itemID, domain.StuckReasonBouncing); blockedErr != nil {
-		log.WarningLog.Printf("[BacklogLifecycle] markAbandonedReview RemediationBlocked(bouncing) item=%s: %v", itemID, blockedErr)
+		log.WarningLog().Printf("[BacklogLifecycle] markAbandonedReview RemediationBlocked(bouncing) item=%s: %v", itemID, blockedErr)
 	} else if blocked {
-		log.WarningLog.Printf("[BacklogLifecycle] markAbandonedReview item=%s: skipping respawn — a fresh verdict would be discarded by the bouncing reopen gate, which is not due yet; not spending an abandoned_review attempt on a foregone conclusion", itemID)
+		log.WarningLog().Printf("[BacklogLifecycle] markAbandonedReview item=%s: skipping respawn — a fresh verdict would be discarded by the bouncing reopen gate, which is not due yet; not spending an abandoned_review attempt on a foregone conclusion", itemID)
 		return
 	}
 
 	due, justParked, gateErr := l.storage.RemediationDue(ctx, itemID, domain.StuckReasonAbandonedReview)
 	if gateErr != nil {
-		log.WarningLog.Printf("[BacklogLifecycle] markAbandonedReview RemediationDue item=%s: %v", itemID, gateErr)
+		log.WarningLog().Printf("[BacklogLifecycle] markAbandonedReview RemediationDue item=%s: %v", itemID, gateErr)
 		due = true // fail open — see autoReopenWithBackoffGate's identical rationale
 	}
 	if justParked {
@@ -704,7 +704,7 @@ func (l *BacklogLifecycleListener) markAbandonedReview(ctx context.Context, er *
 		)
 	}
 	if !due {
-		log.InfoLog.Printf("[BacklogLifecycle] markAbandonedReview item=%s: abandoned_review remediation backoff not yet due, skipping respawn", itemID)
+		log.InfoLog().Printf("[BacklogLifecycle] markAbandonedReview item=%s: abandoned_review remediation backoff not yet due, skipping respawn", itemID)
 		return
 	}
 
@@ -716,7 +716,7 @@ func (l *BacklogLifecycleListener) markAbandonedReview(ctx context.Context, er *
 		}
 		defer func() { <-l.reviewSem }()
 		if respawnErr := respawner.AutoRespawnReview(l.shutdownCtx, id); respawnErr != nil {
-			log.WarningLog.Printf("[BacklogLifecycle] markAbandonedReview AutoRespawnReview item=%s: %v", id, respawnErr)
+			log.WarningLog().Printf("[BacklogLifecycle] markAbandonedReview AutoRespawnReview item=%s: %v", id, respawnErr)
 		}
 	}(itemID)
 }
@@ -763,7 +763,7 @@ const reviewVerdictIdleThreshold = maxWorkSessionStaleness
 func (l *BacklogLifecycleListener) reconcileRespawnBlockedActiveResolution(ctx context.Context, er *EntRepository) {
 	open, openErr := er.FindOpenStuckStates(ctx)
 	if openErr != nil {
-		log.WarningLog.Printf("[BacklogLifecycle] reconcileRespawnBlockedActiveResolution FindOpenStuckStates error: %v", openErr)
+		log.WarningLog().Printf("[BacklogLifecycle] reconcileRespawnBlockedActiveResolution FindOpenStuckStates error: %v", openErr)
 		return
 	}
 	for _, row := range open {
@@ -772,7 +772,7 @@ func (l *BacklogLifecycleListener) reconcileRespawnBlockedActiveResolution(ctx c
 		}
 		sessions, sessErr := l.storage.ListItemSessions(ctx, row.ItemID)
 		if sessErr != nil {
-			log.WarningLog.Printf("[BacklogLifecycle] reconcileRespawnBlockedActiveResolution ListItemSessions item=%s: %v", row.ItemID, sessErr)
+			log.WarningLog().Printf("[BacklogLifecycle] reconcileRespawnBlockedActiveResolution ListItemSessions item=%s: %v", row.ItemID, sessErr)
 			continue
 		}
 		if hasActiveSession(sessions) {

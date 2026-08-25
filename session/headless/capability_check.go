@@ -54,9 +54,9 @@ func (c *CodebaseReadCapabilitySelfCheck) Ensure(ctx context.Context, pool PoolC
 		c.ok.Store(ok)
 		c.checked.Store(true)
 		if ok {
-			log.InfoLog.Printf("[headless] codebase-read capability self-check passed")
+			log.InfoLog().Printf("[headless] codebase-read capability self-check passed")
 		} else {
-			log.WarningLog.Printf("[headless] codebase-read capability self-check FAILED")
+			log.WarningLog().Printf("[headless] codebase-read capability self-check FAILED")
 		}
 	})
 	return c.ok.Load()
@@ -116,28 +116,28 @@ func (c *CodebaseReadCapabilitySelfCheck) run(pool PoolClient) bool {
 
 	tempDir, err := os.MkdirTemp("", "capability-check-*")
 	if err != nil {
-		log.WarningLog.Printf("[headless] codebase-read capability self-check: MkdirTemp failed: %v", err)
+		log.WarningLog().Printf("[headless] codebase-read capability self-check: MkdirTemp failed: %v", err)
 		return false
 	}
 	defer os.RemoveAll(tempDir)
 
 	if err := os.WriteFile(filepath.Join(tempDir, "marker.txt"), []byte(capabilityCheckMarkerValue), 0o644); err != nil {
-		log.WarningLog.Printf("[headless] codebase-read capability self-check: WriteFile failed: %v", err)
+		log.WarningLog().Printf("[headless] codebase-read capability self-check: WriteFile failed: %v", err)
 		return false
 	}
 
 	checkCtx, cancel := context.WithTimeout(context.Background(), capabilityCheckTimeout)
 	defer cancel()
 
-	result, _, err := pool.CallBlocking(checkCtx, FeatureKeyCustom, "",
+	result, err := pool.CallBlocking(checkCtx, FeatureKeyCustom, "",
 		"Read the file marker.txt in your current working directory and output ONLY its exact contents, nothing else.",
 		CallOptions{
 			WorkDir:        tempDir,
 			AllowedTools:   CodebaseReadAllowedTools,
 			PermissionMode: "bypassPermissions",
-		})
+		}, DiscardCost)
 	if err != nil {
-		log.WarningLog.Printf("[headless] codebase-read capability self-check: CallBlocking failed: %v", err)
+		log.WarningLog().Printf("[headless] codebase-read capability self-check: CallBlocking failed: %v", err)
 		return false
 	}
 	return strings.Contains(result, capabilityCheckMarkerValue)

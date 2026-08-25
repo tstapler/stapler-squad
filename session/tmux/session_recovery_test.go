@@ -241,18 +241,28 @@ func testSessionRecoveryWithRealTmux(t *testing.T) {
 	// Verify session exists
 	require.True(t, session.DoesSessionExist(), "Session should exist after restore")
 
-	// Capture session output to verify working directory
-	content, err := session.CapturePaneContent()
-	require.NoError(t, err)
-
 	// Handle path resolution for macOS /var vs /private/var
 	resolvedWorktreeDir, _ := filepath.EvalSymlinks(worktreeDir)
-
-	// Check if content contains the worktree directory name (more flexible matching)
 	worktreeDirName := filepath.Base(worktreeDir)
-	containsPath := strings.Contains(content, worktreeDir) ||
-		strings.Contains(content, resolvedWorktreeDir) ||
-		strings.Contains(content, worktreeDirName)
+
+	// DoesSessionExist only confirms the tmux session/pane was created, not
+	// that the shell inside it has run "pwd" yet — capturing immediately
+	// after can race the shell's first write to the pane buffer and observe
+	// it still empty. Poll CapturePaneContent until the expected path shows
+	// up (or the timeout elapses) instead of a single immediate capture.
+	var content string
+	pollErr := wait.WaitForConditionWithError(func() (bool, error) {
+		var captureErr error
+		content, captureErr = session.CapturePaneContent()
+		if captureErr != nil {
+			return false, captureErr
+		}
+		return strings.Contains(content, worktreeDir) ||
+			strings.Contains(content, resolvedWorktreeDir) ||
+			strings.Contains(content, worktreeDirName), nil
+	}, wait.WaitConfig{Timeout: 10 * time.Second, PollInterval: 100 * time.Millisecond, Description: "pane content shows worktree directory"})
+
+	containsPath := pollErr == nil
 	require.True(t, containsPath,
 		"Session should be running in worktree directory. Expected path containing: %s, %s, or %s. Got content: %s",
 		worktreeDir, resolvedWorktreeDir, worktreeDirName, content)

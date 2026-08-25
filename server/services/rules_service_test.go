@@ -3,7 +3,9 @@ package services
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1543,4 +1545,183 @@ func TestSaveRulesToConfigFile_should_returnCodeUnimplemented_when_configStoreIs
 	_, err := svc.SaveRulesToConfigFile(context.Background(), connect.NewRequest(&sessionv1.SaveRulesToConfigFileRequest{}))
 	require.Error(t, err)
 	assert.Equal(t, connect.CodeUnimplemented, connect.CodeOf(err))
+}
+
+// ── ReloadClaudeSettingsRules ──────────────────────────────────────────────────
+
+func TestReloadClaudeSettingsRules_WatcherNotConfigured_ReturnsUnimplemented(t *testing.T) {
+	svc := newSimpleRulesService(t) // claudeSettingsWatcher never set
+
+	_, err := svc.ReloadClaudeSettingsRules(context.Background(), connect.NewRequest(&sessionv1.ReloadClaudeSettingsRulesRequest{}))
+
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeUnimplemented, connect.CodeOf(err))
+}
+
+func TestReloadClaudeSettingsRules_ValidSettings_ReturnsSuccessAndRuleCount(t *testing.T) {
+	svc := newSimpleRulesService(t)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	writeSettingsFile(t, filepath.Join(home, ".claude", "settings.json"),
+		`{"permissions":{"allow":["Bash(git *)","Bash(npm test*)"]}}`)
+	svc.SetClaudeSettingsWatcher(NewClaudeSettingsWatcher("", func(rules []classifier.Rule, origin string, notify bool) {
+		svc.rebuildClaudeSettingsRules(rules)
+	}))
+
+	resp, err := svc.ReloadClaudeSettingsRules(context.Background(), connect.NewRequest(&sessionv1.ReloadClaudeSettingsRulesRequest{}))
+
+	require.NoError(t, err)
+	assert.True(t, resp.Msg.Success)
+	assert.EqualValues(t, 2, resp.Msg.RuleCount)
+	assert.Contains(t, resp.Msg.Message, "Reloaded 2 claude-settings rule(s)")
+}
+
+func TestReloadClaudeSettingsRules_MalformedPath_ReturnsFailureWithLastKnownGoodCount(t *testing.T) {
+	svc := newSimpleRulesService(t)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	settingsPath := filepath.Join(home, ".claude", "settings.json")
+	writeSettingsFile(t, settingsPath, `{"permissions":{"allow":["Bash(git *)"]}}`)
+	svc.SetClaudeSettingsWatcher(NewClaudeSettingsWatcher("", func(rules []classifier.Rule, origin string, notify bool) {
+		svc.rebuildClaudeSettingsRules(rules)
+	}))
+
+	// Establish a known-good baseline.
+	first, err := svc.ReloadClaudeSettingsRules(context.Background(), connect.NewRequest(&sessionv1.ReloadClaudeSettingsRulesRequest{}))
+	require.NoError(t, err)
+	require.True(t, first.Msg.Success)
+
+	writeSettingsFile(t, settingsPath, `{"permissions": {"allow": [`) // corrupt
+
+	resp, err := svc.ReloadClaudeSettingsRules(context.Background(), connect.NewRequest(&sessionv1.ReloadClaudeSettingsRulesRequest{}))
+
+	require.NoError(t, err)
+	assert.False(t, resp.Msg.Success)
+	assert.EqualValues(t, first.Msg.RuleCount, resp.Msg.RuleCount, "rule count must fall back to last-known-good")
+	assert.Contains(t, resp.Msg.Message, "previous rules still active")
+	assert.Contains(t, resp.Msg.Message, settingsPath)
+}
+
+// TestUpsertApprovalRule_StillHotSwapsClassifierRules_AfterRebuildMuAdded regression-guards
+// REQ-6: adding rebuildMu to rebuildClassifier must not change UpsertApprovalRule's existing
+// hot-swap behavior.
+func TestUpsertApprovalRule_StillHotSwapsClassifierRules_AfterRebuildMuAdded(t *testing.T) {
+	svc := newRulesService(t)
+
+	_, err := svc.UpsertApprovalRule(context.Background(), connect.NewRequest(&sessionv1.UpsertApprovalRuleRequest{
+		Rule: &sessionv1.ApprovalRuleProto{
+			Id:       "hot-swap-rule",
+			Name:     "hot swap",
+			ToolName: "Bash",
+			Decision: sessionv1.AutoDecision_AUTO_DECISION_ALLOW,
+			Enabled:  true,
+			Source:   "user",
+		},
+	}))
+	require.NoError(t, err)
+
+	found := false
+	for _, r := range svc.classifier.Rules() {
+		if r.ID == "hot-swap-rule" {
+			found = true
+		}
+	}
+	assert.True(t, found, "new user rule must be immediately classify-visible, unchanged from pre-rebuildMu behavior")
+}
+
+// TestDeleteApprovalRule_InvalidRuleID_LeavesExistingRulesIntact guards against a rebuildMu
+// deadlock or partial-clear regression on the error path.
+func TestDeleteApprovalRule_InvalidRuleID_LeavesExistingRulesIntact(t *testing.T) {
+	svc := newRulesService(t)
+	_, err := svc.UpsertApprovalRule(context.Background(), connect.NewRequest(&sessionv1.UpsertApprovalRuleRequest{
+		Rule: &sessionv1.ApprovalRuleProto{
+			Id:       "keep-me",
+			Name:     "keep me",
+			ToolName: "Bash",
+			Decision: sessionv1.AutoDecision_AUTO_DECISION_ALLOW,
+			Enabled:  true,
+			Source:   "user",
+		},
+	}))
+	require.NoError(t, err)
+
+	_, err = svc.DeleteApprovalRule(context.Background(), connect.NewRequest(&sessionv1.DeleteApprovalRuleRequest{Id: "does-not-exist"}))
+	require.Error(t, err)
+
+	found := false
+	for _, r := range svc.classifier.Rules() {
+		if r.ID == "keep-me" {
+			found = true
+		}
+	}
+	assert.True(t, found, "a failed delete of an unrelated rule must not clear existing rules")
+}
+
+// TestRebuildMu_ForcesSerialization_ConcurrentPathBlocksUntilFirstCompletes is the Story
+// 3.1.1 regression test, replacing two prior tests found in review to be vacuous:
+// TestRebuildClassifier_ConcurrentWithClaudeSettingsRebuild_NeitherUpdateIsLost and
+// TestClassify_DuringConcurrentReload_NeverObservesPartialRuleSet both still passed
+// identically with rebuildMu fully removed from the production code (verified in review by
+// deleting the Lock/Unlock calls and running both 5x under -race). The reason: a lost-update
+// race — goroutine A reads, B reads-and-writes, A's stale write clobbers B's — is a logical
+// race, not a memory race. Every individual field access here is already protected by
+// classifier.RuleBasedClassifier's own internal lock, so go test -race structurally cannot
+// see this class of bug; only forcing a genuine overlap and observing the mutex actually
+// block the second caller proves serialization holds. Uses the test-only testHook seam
+// (rs.testHook, called mid-critical-section) to do exactly that.
+func TestRebuildMu_ForcesSerialization_ConcurrentPathBlocksUntilFirstCompletes(t *testing.T) {
+	svc := newRulesService(t)
+
+	hookEntered := make(chan struct{})
+	releaseHook := make(chan struct{})
+	var hookCalls atomic.Int32
+	svc.testHook = func() {
+		// Only the FIRST call (guaranteed to be A's — B hasn't started yet) blocks. Any
+		// later call — B's, whether it arrives concurrently because rebuildMu is missing, or
+		// serially after A releases it because rebuildMu correctly blocked B's Lock() — must
+		// pass straight through, or this hook would itself force serialization regardless of
+		// whether the production mutex does.
+		if hookCalls.Add(1) == 1 {
+			close(hookEntered)
+			<-releaseHook
+		}
+	}
+
+	// Goroutine A: rebuildClaudeSettingsRules acquires rebuildMu, reads, then blocks inside
+	// the hook — still holding rebuildMu — until releaseHook is closed.
+	aDone := make(chan struct{})
+	go func() {
+		defer close(aDone)
+		svc.rebuildClaudeSettingsRules([]classifier.Rule{{
+			ID: "cs-a", ToolName: "Read", Decision: classifier.AutoAllow, Enabled: true,
+			Source: "claude-settings", Priority: 150,
+		}})
+	}()
+	<-hookEntered // A is now paused mid-critical-section, holding rebuildMu.
+
+	// Goroutine B: rebuildClassifier must block trying to acquire rebuildMu, since A holds it.
+	bDone := make(chan struct{})
+	go func() {
+		defer close(bDone)
+		svc.rebuildClassifier()
+	}()
+
+	select {
+	case <-bDone:
+		t.Fatal("rebuildClassifier completed while rebuildClaudeSettingsRules was mid-critical-section — rebuildMu is not serializing the two rebuild paths")
+	case <-time.After(150 * time.Millisecond):
+		// Expected: B is still blocked waiting on rebuildMu.
+	}
+
+	close(releaseHook) // let A finish and release rebuildMu; B can then proceed.
+	<-aDone
+	<-bDone
+
+	found := false
+	for _, r := range svc.classifier.Rules() {
+		if r.ID == "cs-a" {
+			found = true
+		}
+	}
+	assert.True(t, found, "goroutine B's rebuildClassifier must not have clobbered A's claude-settings rule")
 }

@@ -7,6 +7,7 @@ import (
 	"runtime"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"go.uber.org/goleak"
@@ -30,8 +31,11 @@ func TestStartZombieReaper_GoroutineFullyExits_When_WaitGroupIsJoined(t *testing
 
 	StartZombieReaper(ctx, time.Millisecond, func(string, ...any) {}, &wg)
 
-	// Give the goroutine a moment to actually start running.
-	time.Sleep(10 * time.Millisecond)
+	// No sleep needed before cancel: wg.Add(1) already ran synchronously
+	// inside StartZombieReaper before it returned, and closing ctx.Done()
+	// unblocks the goroutine's select as soon as it reaches it, regardless
+	// of whether that happens before or after cancel() runs. wg.Wait()
+	// below is what provides the deterministic join.
 	cancel()
 
 	joined := make(chan struct{})
@@ -60,9 +64,19 @@ func TestStartZombieReaper_GoroutineFullyExits_When_WaitGroupIsJoined(t *testing
 // TestReapZombieChildren_ReturnsZero_When_NoZombieChildrenExist documents
 // reapZombieChildren's behavior in the common case (no zombies present) so
 // the goroutine-exit test above isn't the only coverage of this function.
+//
+// reapZombieChildren calls Wait4(-1, ...), which reaps ANY zombie child of
+// this process — including subprocesses spawned by other tests running in
+// parallel in this package (several call t.Parallel() and spawn real
+// subprocesses). So this test can't assert an absolute "0" on the first
+// call: under -race/full-suite load, a concurrently-running test's child may
+// have exited and be sitting as a zombie at this exact instant. Instead,
+// drain first, then assert idempotency — a second call immediately after
+// MUST return 0, since nothing can have exited in that instant.
 func TestReapZombieChildren_ReturnsZero_When_NoZombieChildrenExist(t *testing.T) {
+	reapZombieChildren()
 	if n := reapZombieChildren(); n != 0 {
-		t.Fatalf("expected 0 zombies reaped when none exist, got %d", n)
+		t.Fatalf("expected 0 zombies reaped on second immediate call (idempotent drain), got %d", n)
 	}
 }
 
@@ -74,26 +88,19 @@ func TestReapZombieChildren_ReturnsZero_When_NoZombieChildrenExist(t *testing.T)
 func TestStartZombieReaper_JoinsOnCtxCancel(t *testing.T) {
 	baseline := goleak.IgnoreCurrent()
 
-	ctx, cancel := context.WithCancel(context.Background())
-	var wg sync.WaitGroup
-	StartZombieReaper(ctx, time.Millisecond, func(string, ...any) {}, &wg)
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		var wg sync.WaitGroup
+		StartZombieReaper(ctx, time.Millisecond, func(string, ...any) {}, &wg)
 
-	time.Sleep(20 * time.Millisecond) // let several ticks fire
-	cancel()
+		time.Sleep(20 * time.Millisecond) // let several ticks fire
+		cancel()
 
-	done := make(chan struct{})
-	go func() {
+		// wg.Wait() durably blocks until the reaper goroutine exits; synctest's
+		// deadlock detection fails the test if it never does, instead of a
+		// real-time.After race.
 		wg.Wait()
-		close(done)
-	}()
-	select {
-	case <-done:
-	case <-time.After(5 * time.Second):
-		// Mirrors the margin in zombie_detector_test.go: under heavy parallel
-		// test-suite load, scheduling delays alone (even without a subprocess
-		// call here) can push a tick past 1s without indicating a real hang.
-		t.Fatal("wg.Wait() did not return within 5s of ctx cancellation")
-	}
+	})
 
 	goleak.VerifyNone(t, baseline)
 }

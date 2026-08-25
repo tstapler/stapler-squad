@@ -337,10 +337,27 @@ func TestExpandTildePath(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			got := expandTildePath(tc.input)
+			got, err := expandTildePath(tc.input, false)
+			require.NoError(t, err)
 			tc.check(t, got)
 		})
 	}
+}
+
+// TestExpandTildePath_RemoteRejectsTilde proves the pre-ship review fix: a
+// `~`-prefixed path must be rejected for a remote-targeted session rather than
+// silently expanded against this server process's own local home directory
+// (which names a location on the wrong host entirely).
+func TestExpandTildePath_RemoteRejectsTilde(t *testing.T) {
+	t.Parallel()
+	for _, input := range []string{"~", "~/foo/bar"} {
+		_, err := expandTildePath(input, true)
+		require.Error(t, err, "expandTildePath(%q, remote=true) must reject tilde expansion", input)
+	}
+	// An absolute path is unaffected by the remote flag.
+	got, err := expandTildePath("/absolute/path", true)
+	require.NoError(t, err)
+	assert.Equal(t, "/absolute/path", got)
 }
 
 // TestExpandTildePath_AliasPathCallSite documents the tilde expansion that
@@ -354,12 +371,14 @@ func TestExpandTildePath_AliasPathCallSite(t *testing.T) {
 
 	// Simulate the pattern at CreateSession:1083-1084:
 	//   if resolvedPath == "" && resolved.Path != "" {
-	//       resolvedPath = expandTildePath(resolved.Path)
+	//       resolvedPath, err = expandTildePath(resolved.Path, remoteRequested)
 	//   }
 	aliasPath := "~/projects/myrepo"
 	var resolvedPath string
 	if resolvedPath == "" && aliasPath != "" {
-		resolvedPath = expandTildePath(aliasPath)
+		expanded, expandErr := expandTildePath(aliasPath, false)
+		require.NoError(t, expandErr)
+		resolvedPath = expanded
 	}
 	assert.Equal(t, home+"/projects/myrepo", resolvedPath,
 		"alias path with tilde prefix must be expanded when resolvedPath is initially empty")

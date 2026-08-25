@@ -149,7 +149,7 @@ func TestBackfillStuckStates_should_seedDBDerivableRowsWithNotifiedAt_When_Items
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	reviewItem := newStuckReviewTestItem(t, storage, ReviewVerdictUnverifiable, true, false)
 	staleItem := newStaleWorkTestItem(t, storage, er)
@@ -197,7 +197,7 @@ func TestBackfillStuckStates_should_notCallGitHubNorSeedPRReady_When_Run(t *test
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	newPRPendingTestItem(t, storage, 148)
 
@@ -220,7 +220,7 @@ func TestBackfillStuckStates_should_beIdempotent_When_RunTwice(t *testing.T) {
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	newStuckReviewTestItem(t, storage, ReviewVerdictUnverifiable, true, false)
 	newStaleWorkTestItem(t, storage, er)
@@ -275,7 +275,7 @@ func TestReconcilePRPending_should_markStuck_When_PRGreenMergeableUnapproved(t *
 		},
 	})
 
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	// First tick: opens the row but must not notify yet (within 30m threshold).
 	listener.ReconcilePRPending(ctx, er)
@@ -307,7 +307,7 @@ func TestReconcilePRPending_should_resolvePRReadyRow_When_PRMerged(t *testing.T)
 
 	item := newPRPendingTestItem(t, storage, 148)
 	newTrackedWorkSession(t, storage, item.ID, item.RepoPath, "backlog/pr-ready-merged", "")
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 	applied, err := er.MarkStuck(ctx, item.ID, domain.StuckReasonPRReadyUnmerged, BacklogStatusPRPending, "PR is green & mergeable")
 	require.NoError(t, err)
 	require.True(t, applied)
@@ -339,7 +339,7 @@ func TestReconcilePRPending_should_resolvePRReadyRow_When_NewCommitClearsReadine
 	ctx := context.Background()
 
 	item := newPRPendingTestItem(t, storage, 148)
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 	applied, err := er.MarkStuck(ctx, item.ID, domain.StuckReasonPRReadyUnmerged, BacklogStatusPRPending, "PR is green & mergeable")
 	require.NoError(t, err)
 	require.True(t, applied)
@@ -385,7 +385,7 @@ func TestReconcileStuckReviewItems_should_markAbandoned_When_OnlyActiveSessionIs
 	listener.SetNotifier(notifier)
 	listener.SetSessionLivenessChecker(func(sessionUUID string) bool { return false }) // always dead
 
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 	listener.reconcileStuckReviewItems(ctx, er)
 
 	open, err := er.FindOpenStuckStates(ctx)
@@ -412,7 +412,7 @@ func TestReconcileStuckReviewItems_should_tombstoneZombieSession_When_ConfirmedD
 	listener := NewBacklogLifecycleListener(storage)
 	listener.SetSessionLivenessChecker(func(sessionUUID string) bool { return false }) // always dead
 
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 	listener.reconcileStuckReviewItems(ctx, er)
 
 	sessions, err := storage.ListItemSessions(ctx, item.ID)
@@ -435,7 +435,7 @@ func TestReconcileStuckReviewItems_should_notMarkAbandoned_When_ActiveSessionSti
 	listener := NewBacklogLifecycleListener(storage)
 	listener.SetSessionLivenessChecker(func(sessionUUID string) bool { return true }) // always alive
 
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 	listener.reconcileStuckReviewItems(ctx, er)
 
 	open, err := er.FindOpenStuckStates(ctx)
@@ -471,7 +471,7 @@ func TestReconcileUnprocessedReviewVerdicts_should_applyPassVerdict_When_ReviewS
 		return !strings.HasPrefix(sessionUUID, "headless-review-")
 	})
 
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 	listener.reconcileUnprocessedReviewVerdicts(ctx, er)
 
 	fetched, err := storage.GetBacklogItem(ctx, item.ID)
@@ -508,7 +508,7 @@ func TestReconcileUnprocessedReviewVerdicts_should_notAct_When_ReviewSessionStil
 		listener := NewBacklogLifecycleListener(storage)
 		listener.SetSessionLivenessChecker(func(sessionUUID string) bool { return true }) // everything alive
 
-		er := storage.repo.(*EntRepository)
+		er := storage.repo
 		listener.reconcileUnprocessedReviewVerdicts(ctx, er)
 
 		fetched, err := storage.GetBacklogItem(ctx, item.ID)
@@ -522,7 +522,7 @@ func TestReconcileUnprocessedReviewVerdicts_should_notAct_When_ReviewSessionStil
 		defer cleanup()
 		ctx := context.Background()
 
-		er := storage.repo.(*EntRepository)
+		er := storage.repo
 		item := newStuckReviewTestItemWithVerdictAge(t, storage, er, ReviewVerdictFail, reviewVerdictIdleThreshold+time.Hour)
 
 		listener := NewBacklogLifecycleListener(storage)
@@ -555,7 +555,7 @@ func TestReconcileUnprocessedReviewVerdicts_should_notAct_When_ReviewSessionStil
 		defer cleanup()
 		ctx := context.Background()
 
-		er := storage.repo.(*EntRepository)
+		er := storage.repo
 		item := newStuckReviewTestItemWithVerdictAge(t, storage, er, ReviewVerdictFail, reviewVerdictIdleThreshold-time.Minute)
 
 		listener := NewBacklogLifecycleListener(storage)
@@ -581,7 +581,7 @@ func TestReconcileUnprocessedReviewVerdicts_should_notAct_When_ReviewSessionStil
 		defer cleanup()
 		ctx := context.Background()
 
-		er := storage.repo.(*EntRepository)
+		er := storage.repo
 		item := newStuckReviewTestItemWithVerdictAge(t, storage, er, ReviewVerdictPass, reviewVerdictIdleThreshold+time.Hour)
 
 		// A work session so the PASS verdict has something to ship — mirrors
@@ -636,7 +636,7 @@ func TestReconcileUnprocessedReviewVerdicts_should_skipStaleVerdict_When_ItemRee
 
 	listener := NewBacklogLifecycleListener(storage)
 	listener.SetSessionLivenessChecker(func(sessionUUID string) bool { return false }) // everything dead
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	listener.reconcileUnprocessedReviewVerdicts(ctx, er)
 	shipped, err := storage.GetBacklogItem(ctx, item.ID)
@@ -706,7 +706,7 @@ func TestReconcileUnprocessedReviewVerdicts_should_invokeAutoReopener_When_Newes
 	reopener := newFakeAutoReopenSpawner()
 	listener.SetAutoReopener(reopener)
 
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 	listener.reconcileUnprocessedReviewVerdicts(ctx, er)
 
 	select {
@@ -741,7 +741,7 @@ func TestReconcileStuckReviewItems_should_resolveAbandonedRow_When_ReviewGateBac
 	item := newStuckReviewTestItem(t, storage, ReviewVerdictUnverifiable, true, false)
 
 	listener := NewBacklogLifecycleListener(storage)
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	listener.reconcileStuckReviewItems(ctx, er)
 	open, err := er.FindOpenStuckStates(ctx)
@@ -771,7 +771,7 @@ func TestReconcileStaleWorkSessions_should_writeDurableStaleWorkRow_When_ActiveS
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	item := newStaleWorkTestItem(t, storage, er)
 
@@ -802,7 +802,7 @@ func TestReconcileStaleWorkSessions_should_resolveStaleWorkRow_When_SessionResum
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	item := newStaleWorkTestItem(t, storage, er)
 
@@ -866,7 +866,7 @@ func TestReconcileStaleWorkSessions_should_notRemediateOnFirstSighting_When_RowJ
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	newStaleWorkTestItem(t, storage, er)
 
@@ -898,7 +898,7 @@ func TestReconcileStaleWorkSessions_should_dispatchRemediation_When_RowAlreadyOp
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	item := newStaleWorkTestItem(t, storage, er)
 
@@ -939,7 +939,7 @@ func TestRemediateStaleWorkWithBackoffGate_should_respectBackoffSchedule_When_Ca
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	item := newStaleWorkTestItem(t, storage, er)
 
@@ -971,7 +971,7 @@ func TestReconcileStaleWorkSessions_should_notTouchHealthySession_When_ProgressI
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
 		Title:  "Healthy in-progress item",
@@ -1026,7 +1026,7 @@ func TestRemediateStaleWorkWithBackoffGate_should_parkAfterMaxAttempts_When_Rewo
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	unlimited := 0
 	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
@@ -1119,7 +1119,7 @@ func TestReconcileReworkBlockedStaleResolution_should_delegateToResolver_When_Op
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
 		Title:  "Item blocked by a stale-but-alive session",
@@ -1148,7 +1148,7 @@ func TestReconcileReworkBlockedStaleResolution_should_beNoOp_When_NoOpenRows(t *
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	listener := NewBacklogLifecycleListener(storage)
 	resolver := &fakeReworkBlockStaleResolver{}
@@ -1168,7 +1168,7 @@ func TestReconcileReworkBlockedStaleResolution_should_beNoOp_When_ResolverNotWir
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	listener := NewBacklogLifecycleListener(storage)
 
@@ -1205,7 +1205,7 @@ func TestReconcileRespawnBlockedActiveResolution_should_resolveRow_When_Blocking
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
 		Title:  "Item stuck abandoned_review, its abandoned_review remediation now parked",
@@ -1250,7 +1250,7 @@ func TestReconcileRespawnBlockedActiveResolution_should_leaveRowOpen_When_Blocki
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
 		Title:  "Item still genuinely blocked by an active work session",
@@ -1292,7 +1292,7 @@ func TestReconcileRespawnBlockedActiveResolution_should_beNoOp_When_NoOpenRows(t
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	listener := NewBacklogLifecycleListener(storage)
 
@@ -1309,7 +1309,7 @@ func TestReconcileOrphanedTriageItems_should_writeDurableRowNotifyOnce_When_Tria
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	item := newOrphanedTriageTestItem(t, storage, er, 3*time.Hour) // beyond maxWorkSessionStaleness (2h)
 
@@ -1342,7 +1342,7 @@ func TestReconcileOrphanedTriageItems_should_tombstoneStaleSession_When_Detected
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	item := newOrphanedTriageTestItem(t, storage, er, 3*time.Hour) // beyond maxWorkSessionStaleness (2h)
 
@@ -1360,7 +1360,7 @@ func TestReconcileOrphanedTriageItems_should_notFlag_When_TriageSessionRecent(t 
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	// A triage session that just started (well within maxWorkSessionStaleness)
 	// must not be flagged — it is plausibly still running.
@@ -1384,7 +1384,7 @@ func TestReconcileOrphanedTriageItems_should_flagHeadlessSession_After30Min(t *t
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	// 45 minutes: past maxHeadlessTriageSessionStaleness (30m) but nowhere near the
 	// general-purpose maxWorkSessionStaleness (2h) — would NOT have been flagged
@@ -1417,7 +1417,7 @@ func TestReconcileOrphanedTriageItems_should_notTombstone_When_HeadlessSessionSt
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	// 45 minutes: past maxHeadlessTriageSessionStaleness (35m) — would have been
 	// tombstoned unconditionally before this fix.
@@ -1475,7 +1475,7 @@ func TestReconcileOrphanedTriageItems_should_flagImmediately_When_TriageSessionE
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	item := newEndedTriageTestItem(t, storage, er)
 
@@ -1515,7 +1515,7 @@ func TestReconcileOrphanedTriageItems_should_surfaceEndReasonInContext_When_Tria
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
 		Title:              "Process-error-ended triage test item",
@@ -1558,7 +1558,7 @@ func TestReconcileOrphanedTriageItems_should_fallBackToUnknown_When_EndReasonNev
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	item := newEndedTriageTestItem(t, storage, er) // ends via UpdateItemSessionEnded, no reason recorded
 
@@ -1591,7 +1591,7 @@ func TestReconcileOrphanedTriageItems_should_respawnImmediatelyWithNoPenalty_Whe
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
 		Title:              "Shutdown-orphaned triage test item",
@@ -1642,7 +1642,7 @@ func TestReconcileOrphanedTriageItems_should_preferNewerOpenSession_When_OlderEn
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	item := newEndedTriageTestItem(t, storage, er) // older session: ended, no transition
 
@@ -1672,7 +1672,7 @@ func TestReconcileOrphanedTriageItems_should_notFlag_When_NoTriageSessionEverRan
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	_, err := storage.CreateBacklogItem(ctx, BacklogItemData{
 		Title:  "Never triaged item",
@@ -1702,7 +1702,7 @@ func TestReconcileOrphanedTriageRemediation_should_retryEndedWithoutTransitionRo
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	item := newEndedTriageTestItem(t, storage, er)
 
@@ -1767,7 +1767,7 @@ func TestReconcileOrphanedTriageRemediation_should_dispatchRetryThroughBackoffGa
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	item := newOrphanedTriageTestItem(t, storage, er, 3*time.Hour)
 
@@ -1801,7 +1801,7 @@ func TestReconcileOrphanedTriageRemediation_should_skip_When_ItemNoLongerIdea(t 
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
 		Title:  "Orphaned triage item no longer idea",
@@ -1879,7 +1879,7 @@ func TestReconcileOrphanedTriageItems_should_flagQueuedItem_When_TriageResultUnu
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	item := newQueuedNoTriageResultTestItem(t, storage)
 
@@ -1913,7 +1913,7 @@ func TestReconcileOrphanedTriageItems_should_notFlagQueuedItem_When_TriageResult
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
 		Title:              "Queued item with a real plan",
@@ -1955,7 +1955,7 @@ func TestReconcileOrphanedTriageItems_should_notFlag_When_QueuedItemHasOpenTriag
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
 		Title:              "Queued item with an unexpected open triage session",
@@ -2003,7 +2003,7 @@ func TestReconcileOrphanedTriageItems_should_notFlagQueuedItem_When_SkipPlanning
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	for _, tc := range []struct {
 		name         string
@@ -2050,7 +2050,7 @@ func TestReconcileOrphanedTriageRemediation_should_retryQueuedRow_When_Due(t *te
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	item := newQueuedNoTriageResultTestItem(t, storage)
 	applied, err := er.MarkStuck(ctx, item.ID, domain.StuckReasonOrphanedTriage, BacklogStatusQueued, "no usable triage result")
@@ -2084,7 +2084,7 @@ func TestSelfHealSweep_should_resolveOrphanedTriageRow_When_QueuedItemReachesRea
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	item := newQueuedNoTriageResultTestItem(t, storage)
 	applied, err := er.MarkStuck(ctx, item.ID, domain.StuckReasonOrphanedTriage, BacklogStatusQueued, "no usable triage result")
@@ -2122,7 +2122,7 @@ func TestRetryOrphanedTriageWithBackoffGate_should_respectBackoffSchedule_When_C
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
 		Title:  "Orphaned triage backoff test item",
@@ -2153,7 +2153,7 @@ func TestSelfHealSweep_should_resolveOrphanedTriageRow_When_ItemLeavesIdea(t *te
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
 		Title:  "Orphaned triage item that got re-triggered",
@@ -2462,7 +2462,7 @@ func TestCountReviewCyclesSince_should_countInProgressToReviewTransitions_When_W
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
 		Title:  "Bouncing cycle count test item",
@@ -2497,7 +2497,7 @@ func TestReconcileBouncingItems_should_writeBouncingRowNotifyOnce_When_ThreeCycl
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
 		Title:  "Bouncing item",
@@ -2544,7 +2544,7 @@ func TestReconcileBouncingItems_should_surfaceVerdictOutcomeAndSummaryInContext_
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
 		Title:  "Bouncing item with failed verdict",
@@ -2598,7 +2598,7 @@ func TestReconcileBouncingItems_should_notFlag_When_BelowThresholdOrHasPass(t *t
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	// Below threshold: only 2 cycles.
 	belowThreshold, err := storage.CreateBacklogItem(ctx, BacklogItemData{
@@ -2660,7 +2660,7 @@ func TestReconcileBouncingItems_should_transitionToDone_When_LinkedPRAlreadyMerg
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
 		Title:    "Bouncing item with merged PR",
@@ -2715,7 +2715,7 @@ func TestReconcileBouncingItems_should_ResolveBounceCapExhausted_When_BouncingRe
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
 		Title:    "Bouncing item, capped, with merged PR",
@@ -2782,7 +2782,7 @@ func TestReconcileBouncingItems_should_recordPassVerdictAndUseLegalEdges_When_Li
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
 		Title:    "Bouncing item with merged PR, verdict gate check",
@@ -2845,7 +2845,7 @@ func TestReconcileBouncingItems_should_recordPassVerdictAndUseLegalEdges_When_Li
 // as BUG-030/040/041/046/048, and this fix's originally-reported findings):
 // reconcileBouncingItems confirms the linked PR is already merged, then its
 // own TransitionBacklogItemStatus(done) call can fail — previously that
-// failure was only log.WarningLog.Printf'd, leaving the item bouncing forever
+// failure was only log.WarningLog().Printf'd, leaving the item bouncing forever
 // with code that had already shipped and nothing else surfacing the mismatch.
 //
 // The precondition failure is forced deterministically (not via a real
@@ -2858,7 +2858,7 @@ func TestReconcileBouncingItems_should_notifyTransitionFailed_When_DoneTransitio
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
 		Title:    "Bouncing item with merged PR, concurrent status race",
@@ -2919,7 +2919,7 @@ func TestReconcileBouncingItems_should_stillFlag_When_LinkedPRNotYetMerged(t *te
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
 		Title:    "Bouncing item with open PR",
@@ -3001,7 +3001,7 @@ func TestReconcileBouncingItems_should_transitionToDone_When_ShippedWithoutPR(t 
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	repoPath, mainSHA := setupBounceMainRepo(t)
 
@@ -3068,7 +3068,7 @@ func TestReconcileBouncingItems_should_stillFlag_When_NoPRAndCommitNotOnMain(t *
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	repoPath, _ := setupBounceMainRepo(t)
 	runGitTestCmd(t, repoPath, "checkout", "-b", "feature")
@@ -3143,7 +3143,7 @@ func TestReconcileBouncingItems_should_stillFlag_When_LastCommitShaIsStaleBaseSe
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	repoPath, mainSHA := setupBounceMainRepo(t)
 	runGitTestCmd(t, repoPath, "checkout", "-b", "feature")
@@ -3223,7 +3223,7 @@ func TestReconcileBouncingItems_should_notTreatFreshBranchBaseAsShipped_When_Zer
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	repoPath, mainSHA := setupBounceMainRepo(t)
 	// A feature branch created from main's tip with zero commits of its own —
@@ -3298,7 +3298,7 @@ func TestReconcileBouncingItems_should_stillFlag_When_WorktreePathWasRecycledToA
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	repoPath, _ := setupBounceMainRepo(t)
 	runGitTestCmd(t, repoPath, "checkout", "-b", "feature")
@@ -3380,7 +3380,7 @@ func TestReconcileBouncingItems_should_stillTransitionToDone_When_WorkCommittedD
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	repoPath, mainSHA := setupBounceMainRepo(t)
 
@@ -3445,7 +3445,7 @@ func TestStayInReviewAndNotify_should_markPushFailedRow_When_PushAndCreatePRFail
 
 	assert.Contains(t, notifier.titles(), "PR creation failed", "existing ERROR toast must still fire")
 
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 	open, err := er.FindOpenStuckStates(ctx)
 	require.NoError(t, err)
 	require.Len(t, open, 1)
@@ -3515,7 +3515,7 @@ func TestAttemptPushRemediation_should_resolveStuckRow_When_MergeSucceedsAndRetr
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	item, is := newPushAndCreatePRTestFixture(t, storage)
 
@@ -3570,7 +3570,7 @@ func TestAttemptPushRemediation_should_notifyManualRebaseNeeded_When_BranchRecon
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	item, is := newPushAndCreatePRTestFixture(t, storage)
 
@@ -3608,7 +3608,7 @@ func TestRetryPushFailedWithBackoffGate_should_respectBackoffSchedule_When_Calle
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	item, is := newPushAndCreatePRTestFixture(t, storage)
 	listener := NewBacklogLifecycleListener(storage)
@@ -3649,7 +3649,7 @@ func TestReconcilePushFailedItems_should_dispatchRetryThroughBackoffGate_When_Ro
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	item, is := newPushAndCreatePRTestFixture(t, storage)
 	listener := NewBacklogLifecycleListener(storage)
@@ -3682,7 +3682,7 @@ func TestReconcilePushFailedItems_should_skip_When_ItemNoLongerInReview(t *testi
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	item, is := newPushAndCreatePRTestFixture(t, storage)
 	listener := NewBacklogLifecycleListener(storage)
@@ -3717,7 +3717,7 @@ func TestSelfHealSweep_should_resolveAnchoredRow_When_ItemStatusInconsistentWith
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
 		Title:  "Phantom stale_work item",
@@ -3745,7 +3745,7 @@ func TestSelfHealSweep_should_notResolveBouncingRow_When_ItemInInProgressHealthy
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
 		Title:  "Bouncing item mid-cycle",
@@ -3772,7 +3772,7 @@ func TestSelfHealSweep_should_resolveBouncingRow_When_ItemReachesDoneOrPass(t *t
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
 		Title:  "Bouncing item converged",
@@ -3805,7 +3805,7 @@ func TestSelfHealStuck_should_ResolveBounceCapExhausted_When_ItemStatusLeavesInP
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
 		Title:  "Bounce cap exhausted item now pr_pending",
@@ -3832,7 +3832,7 @@ func TestSelfHealStuck_should_notResolveBounceCapExhaustedRow_When_ItemStillInRe
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
 		Title:  "Bounce cap exhausted item still in review",
@@ -3865,7 +3865,7 @@ func TestSelfHealSweep_should_notResolveEventShapedRows_When_ItemNotYetTerminal(
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
 		Title:  "Event-shaped rows item",
@@ -3894,7 +3894,7 @@ func TestSelfHealSweep_should_resolvePhantomRow_When_WriteRacedTransitionToDone(
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	// Simulate the race: item is created in_progress, a stale_work row is
 	// marked while the precondition read still shows in_progress, then the
@@ -3965,7 +3965,7 @@ func TestSelfHealSweep_should_resolveAnyReasonRow_When_ItemReachesTerminalStatus
 				storage, cleanup := createTestStorage(t)
 				defer cleanup()
 				ctx := context.Background()
-				er := storage.repo.(*EntRepository)
+				er := storage.repo
 
 				item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
 					Title:  "Terminal blanket-rule item: " + tc.name,
@@ -4011,7 +4011,7 @@ func TestSelfHealSweep_should_resolveReworkCapRow_When_ItemReachesDone(t *testin
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
 		Title:  "Rework-cap item that finished",
@@ -4048,7 +4048,7 @@ func TestSelfHealSweep_should_notResolveAutonomousStuckRow_When_ItemStillInProgr
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
 		Title:  "Autonomous item still stuck",
@@ -4084,7 +4084,7 @@ func TestSelfHealSweep_should_notResolveAutonomousStuckRow_When_ItemTransientlyI
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
 		Title:  "Autonomous item mid-cycle",
@@ -4130,7 +4130,7 @@ func TestSelfHealSweep_should_notResolvePushFailedRow_When_ItemStillInReview(t *
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
 		Title:  "Push-failed item still stuck",
@@ -4162,7 +4162,7 @@ func TestSelfHealSweep_should_notResolvePushFailedRow_When_ItemTransientlyInProg
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
 		Title:  "Push-failed item mid-cycle",
@@ -4273,7 +4273,7 @@ func TestArchiveStaleDoneItems_should_ArchiveItem_When_DoneMoreThan3DaysAgo(t *t
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	item := newDoneTestItem(t, storage, er, maxDoneAge+time.Hour)
 
@@ -4290,7 +4290,7 @@ func TestArchiveStaleDoneItems_should_NotArchiveItem_When_DoneLessThan3DaysAgo(t
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	item := newDoneTestItem(t, storage, er, maxDoneAge-time.Hour)
 
@@ -4307,7 +4307,7 @@ func TestArchiveStaleDoneItems_should_BeIdempotent_When_RunTwice(t *testing.T) {
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	item := newDoneTestItem(t, storage, er, maxDoneAge+time.Hour)
 
@@ -4356,7 +4356,7 @@ func TestArchiveStaleDoneItems_should_DisappearFromDefaultBacklogView_When_AutoA
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	staleDone := newDoneTestItem(t, storage, er, maxDoneAge+time.Hour)
 	recentDone := newDoneTestItem(t, storage, er, time.Hour)
@@ -4416,7 +4416,7 @@ func TestReconcilePlanNotApprovedItems_should_writeDurableRowNotifyOnce_When_Que
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	item := newQueuedPlanNotApprovedTestItem(t, storage, 10*time.Minute) // beyond planApprovalStaleness (5m)
 
@@ -4446,7 +4446,7 @@ func TestReconcilePlanNotApprovedItems_should_notFlag_When_QueuedRecently(t *tes
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	newQueuedPlanNotApprovedTestItem(t, storage, 1*time.Minute) // within planApprovalStaleness (5m)
 
@@ -4465,7 +4465,7 @@ func TestReconcilePlanNotApprovedItems_should_notFlag_When_SkipPlanningTrue(t *t
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	queuedAt := time.Now().Add(-10 * time.Minute)
 	_, err := storage.CreateBacklogItem(ctx, BacklogItemData{
@@ -4499,7 +4499,7 @@ func TestReconcilePlanNotApprovedItems_should_notFlag_When_LatestTriageResultUnu
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	item := newQueuedNoTriageResultTestItem(t, storage)
 	queuedAt := time.Now().Add(-10 * time.Minute)
@@ -4525,7 +4525,7 @@ func TestSelfHealSweep_should_resolvePlanNotApprovedRow_When_ItemLeavesQueued(t 
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	item := newQueuedPlanNotApprovedTestItem(t, storage, 10*time.Minute)
 
@@ -4561,7 +4561,7 @@ func TestReconcilePRPendingWithoutPRItems_should_writeDurableRowNotifyOnce_When_
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
 		Title:              "PR-pending-no-PR test item",
@@ -4597,7 +4597,7 @@ func TestReconcilePRPendingWithoutPRItems_should_notFlag_When_PrNumberSet(t *tes
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	item := newPRPendingTestItem(t, storage, 152)
 	_ = item
@@ -4618,7 +4618,7 @@ func TestSelfHealSweep_should_resolvePRPendingNoPRRow_When_ItemLeavesPRPending(t
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
 		Title:              "PR-pending-no-PR self-heal test item",
@@ -4664,7 +4664,7 @@ func TestReconcileBlockedByDependencyResolution_should_resolveRow_When_BlockerHa
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	blocker, err := storage.CreateBacklogItem(ctx, BacklogItemData{Title: "blocker item"})
 	require.NoError(t, err)
@@ -4707,7 +4707,7 @@ func TestReconcileBlockedByDependencyResolution_should_leaveRowOpen_When_Blocker
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	blocker, err := storage.CreateBacklogItem(ctx, BacklogItemData{Title: "blocker item still in progress"})
 	require.NoError(t, err)
@@ -4751,7 +4751,7 @@ func TestReconcileMultiReasonEscalation_should_MarkStuckWithoutNotifying_When_Th
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
 		Title:  "Multi-reason item",
@@ -4789,7 +4789,7 @@ func TestReconcileMultiReasonEscalation_should_Notify_When_DwellElapsedAndStillO
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
 		Title:  "Multi-reason item, dwell elapsed",
@@ -4838,7 +4838,7 @@ func TestReconcileMultiReasonEscalation_should_ResolveStuck_When_CountDropsBelow
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
 		Title:  "Multi-reason item, de-escalating",
@@ -4881,7 +4881,7 @@ func TestReconcileMultiReasonEscalation_should_ExcludeEscalationReasonsFromCount
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
 		Title:  "Self-reinforcement guard item",
@@ -4916,7 +4916,7 @@ func TestReconcileMultiReasonEscalation_should_NotEscalate_When_OnlyCoupledBounc
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
 		Title:  "Coupled bouncing+abandoned_review item",
@@ -4953,7 +4953,7 @@ func TestReconcileMultiReasonEscalation_should_Escalate_When_CoupledPairPlusInde
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
 		Title:  "Coupled pair plus independent reason item",

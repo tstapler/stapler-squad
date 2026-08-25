@@ -1,9 +1,9 @@
 package session
 
 import (
-	"context"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -16,6 +16,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/tmux"
 	"github.com/tstapler/stapler-squad/testutil/tmuxreap"
+	"github.com/tstapler/stapler-squad/testutil/wait"
 
 	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing/object"
@@ -73,45 +74,31 @@ func dumpGoroutines(reason string) {
 	fmt.Fprintf(os.Stderr, "\n=== goroutine dump (%s) ===\n%s\n", reason, buf[:n])
 }
 
-// Test utilities for waiting without static sleeps
+// Test utilities for waiting without static sleeps. Both delegate their polling
+// loop to testutil/wait.WaitForCondition rather than reimplementing a
+// ticker/context-deadline loop, while preserving t.Fatalf-based failure
+// semantics and (for waitForContent) a richer last-content/last-error message.
 
 // waitForCondition polls a condition until it returns true or timeout occurs
 func waitForCondition(t *testing.T, condition func() bool, timeout time.Duration, description string) {
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
-
-	ticker := time.NewTicker(100 * time.Millisecond)
-	defer ticker.Stop()
-
-	// Check immediately first
-	if condition() {
-		return
-	}
-
-	for {
-		select {
-		case <-ctx.Done():
-			t.Fatalf("timeout waiting for %s after %v", description, timeout)
-		case <-ticker.C:
-			if condition() {
-				return
-			}
-		}
+	t.Helper()
+	err := wait.WaitForCondition(condition, wait.WaitConfig{
+		Timeout:      timeout,
+		PollInterval: 100 * time.Millisecond,
+		Description:  description,
+	})
+	if err != nil {
+		t.Fatalf("timeout waiting for %s after %v", description, timeout)
 	}
 }
 
 // waitForContent polls a content getter until it contains expected text
 func waitForContent(t *testing.T, getter func() (string, error), expectedText string, timeout time.Duration, description string) string {
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
-
-	ticker := time.NewTicker(100 * time.Millisecond)
-	defer ticker.Stop()
-
+	t.Helper()
 	var lastContent string
 	var lastErr error
 
-	checkContent := func() bool {
+	condition := func() bool {
 		content, err := getter()
 		if err != nil {
 			lastErr = err
@@ -121,24 +108,18 @@ func waitForContent(t *testing.T, getter func() (string, error), expectedText st
 		return len(content) > 0 && strings.Contains(content, expectedText)
 	}
 
-	// Check immediately first
-	if checkContent() {
-		return lastContent
-	}
-
-	for {
-		select {
-		case <-ctx.Done():
-			if lastErr != nil {
-				t.Fatalf("timeout waiting for %s after %v (last error: %v)", description, timeout, lastErr)
-			}
-			t.Fatalf("timeout waiting for %s after %v (last content: %q)", description, timeout, lastContent)
-		case <-ticker.C:
-			if checkContent() {
-				return lastContent
-			}
+	err := wait.WaitForCondition(condition, wait.WaitConfig{
+		Timeout:      timeout,
+		PollInterval: 100 * time.Millisecond,
+		Description:  description,
+	})
+	if err != nil {
+		if lastErr != nil {
+			t.Fatalf("timeout waiting for %s after %v (last error: %v)", description, timeout, lastErr)
 		}
+		t.Fatalf("timeout waiting for %s after %v (last content: %q)", description, timeout, lastContent)
 	}
+	return lastContent
 }
 
 // TestSessionRecoveryScenarios tests the real-world session recovery scenarios
@@ -205,7 +186,7 @@ func testSessionRestoredInCorrectWorktree(t *testing.T) {
 		Path:             tempRepo,
 		Program:          "bash -c 'pwd; read'",
 		SessionType:      SessionTypeNewWorktree,
-		TmuxServerSocket: "test_" + strings.ReplaceAll(t.Name(), "/", "_"),
+		TmuxServerSocket: uniqueTestTmuxSocket(t, ""),
 	})
 	require.NoError(t, err)
 	defer func() {
@@ -291,7 +272,7 @@ func testMultipleSessionsRestoreIndependently(t *testing.T) {
 		Path:             tempRepo,
 		Program:          "bash -c 'pwd && sleep 30'",
 		SessionType:      SessionTypeNewWorktree,
-		TmuxServerSocket: "test_" + strings.ReplaceAll(t.Name(), "/", "_") + "_1",
+		TmuxServerSocket: uniqueTestTmuxSocket(t, "1"),
 	})
 	require.NoError(t, err)
 	defer func() {
@@ -305,7 +286,7 @@ func testMultipleSessionsRestoreIndependently(t *testing.T) {
 		Path:             tempRepo,
 		Program:          "bash -c 'pwd && sleep 30'",
 		SessionType:      SessionTypeNewWorktree,
-		TmuxServerSocket: "test_" + strings.ReplaceAll(t.Name(), "/", "_") + "_2",
+		TmuxServerSocket: uniqueTestTmuxSocket(t, "2"),
 	})
 	require.NoError(t, err)
 	defer func() {
@@ -414,7 +395,7 @@ func testSessionRecoveryWithExistingChanges(t *testing.T) {
 		Path:             tempRepo,
 		Program:          "bash -c 'pwd && sleep 30'",
 		SessionType:      SessionTypeNewWorktree,
-		TmuxServerSocket: "test_" + strings.ReplaceAll(t.Name(), "/", "_"),
+		TmuxServerSocket: uniqueTestTmuxSocket(t, ""),
 	})
 	require.NoError(t, err)
 	defer func() {
@@ -497,6 +478,31 @@ func testFailsLoudlyWhenWorktreePathMissing(t *testing.T) {
 		"expected error to match tmux.ErrWorkDirMissing, got: %v", err)
 }
 
+// uniqueTestTmuxSocket returns a tmux server socket name that is unique per
+// invocation, not just per test name. t.Name() alone is deterministic and
+// identical across repeated invocations of the same test (e.g. -count=N, or
+// separate closely-spaced `go test` runs), so a leftover tmux server from a
+// prior invocation reusing that same socket path collides with the new
+// invocation's session creation, producing tmux's "duplicate session" error.
+// Mixing in os.Getpid() and time.Now().UnixNano() guarantees a fresh socket
+// every time. See session/tmux/session_recovery_test.go for the precedent.
+//
+// The socket path (/private/tmp/tmux-<uid>/<name>) is a Unix domain socket
+// path subject to the OS's sun_path length limit (~104 bytes on macOS), so
+// t.Name() is hashed rather than embedded verbatim — a deeply nested subtest
+// name plus pid/timestamp/suffix can otherwise exceed that limit and fail
+// with tmux's "(File name too long)" error instead of connecting.
+func uniqueTestTmuxSocket(t *testing.T, suffix string) string {
+	t.Helper()
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(t.Name()))
+	name := fmt.Sprintf("ssq_%08x_%d_%d", h.Sum32(), os.Getpid(), time.Now().UnixNano())
+	if suffix != "" {
+		name += "_" + suffix
+	}
+	return name
+}
+
 // setupTestRepository creates a temporary git repository for testing
 //
 // Uses go-git directly rather than shelling out — see
@@ -562,7 +568,7 @@ func testExistingSessionResumption(t *testing.T, tempRepo string) {
 		Title:            sessionName,
 		Path:             tempRepo,
 		Program:          "bash -c 'echo resumed && sleep 30'",
-		TmuxServerSocket: "test_" + strings.ReplaceAll(t.Name(), "/", "_"),
+		TmuxServerSocket: uniqueTestTmuxSocket(t, ""),
 	})
 	require.NoError(t, err)
 	defer func() {
@@ -606,7 +612,7 @@ func testExistingWorktreeResumption(t *testing.T, tempRepo string) {
 		Path:             tempRepo,
 		Program:          "bash -c 'echo first && sleep 30'",
 		SessionType:      SessionTypeNewWorktree,
-		TmuxServerSocket: "test_" + strings.ReplaceAll(t.Name(), "/", "_") + "_1",
+		TmuxServerSocket: uniqueTestTmuxSocket(t, "1"),
 	})
 	require.NoError(t, err)
 	defer func() {
@@ -637,7 +643,7 @@ func testExistingWorktreeResumption(t *testing.T, tempRepo string) {
 		Path:             tempRepo,
 		Program:          "bash -c 'echo second && sleep 30'",
 		SessionType:      SessionTypeNewWorktree,
-		TmuxServerSocket: "test_" + strings.ReplaceAll(t.Name(), "/", "_") + "_2",
+		TmuxServerSocket: uniqueTestTmuxSocket(t, "2"),
 	})
 	require.NoError(t, err)
 	defer func() {
@@ -714,7 +720,7 @@ func testFullResumptionScenario(t *testing.T, tempRepo string) {
 		Path:             tempRepo,
 		Program:          "bash -c 'echo initial session && sleep 30'",
 		SessionType:      SessionTypeNewWorktree,
-		TmuxServerSocket: "test_" + strings.ReplaceAll(t.Name(), "/", "_") + "_1",
+		TmuxServerSocket: uniqueTestTmuxSocket(t, "1"),
 	})
 	require.NoError(t, err)
 	defer func() {
@@ -747,7 +753,7 @@ func testFullResumptionScenario(t *testing.T, tempRepo string) {
 		Path:             tempRepo,     // Same path
 		Program:          "bash -c 'echo resumed session && sleep 30'",
 		SessionType:      SessionTypeNewWorktree,
-		TmuxServerSocket: "test_" + strings.ReplaceAll(t.Name(), "/", "_") + "_2",
+		TmuxServerSocket: uniqueTestTmuxSocket(t, "2"),
 	})
 	require.NoError(t, err)
 	defer func() {

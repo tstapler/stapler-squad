@@ -1532,7 +1532,7 @@ func (g *GoGitVCSReader) diffShortstatUncached(worktreePath string) (DiffStat, e
 		// F7: surface when the LCS cap forces a "fully replaced" approximation
 		// instead of an exact diff, so this is discoverable without reading code.
 		if oldLines, newLines := countBytesLines(headData), countBytesLines(wtData); oldLines > maxLCSLines || newLines > maxLCSLines {
-			log.DebugLog.Printf("[GoGitVCSReader] LCS cap hit for %s (old=%d new=%d lines, cap=%d): reporting a fully-replaced approximation instead of an exact line diff", t.name, oldLines, newLines, maxLCSLines)
+			log.DebugLog().Printf("[GoGitVCSReader] LCS cap hit for %s (old=%d new=%d lines, cap=%d): reporting a fully-replaced approximation instead of an exact line diff", t.name, oldLines, newLines, maxLCSLines)
 		}
 		ins, del := linesDiffBytes(headData, wtData)
 		d.Insertions += ins

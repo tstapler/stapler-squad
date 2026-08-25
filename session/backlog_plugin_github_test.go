@@ -43,6 +43,7 @@ func withGitHubTestServer(t *testing.T, handler http.HandlerFunc) *httptest.Serv
 		githubAPIBaseURL = orig
 		github.DefaultRateLimiter = origLimiter
 		ts.Close()
+		github.DefaultRateLimiter.Reset()
 	})
 	return ts
 }

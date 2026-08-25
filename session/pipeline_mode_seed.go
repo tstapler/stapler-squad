@@ -73,13 +73,13 @@ func EnsureDefaultSDDPipelineMode(ctx context.Context, repo PipelineModeReposito
 			// Lost a create race (another boot, or a concurrent caller) —
 			// the row exists now either way, which is the only thing this
 			// function promises.
-			log.InfoLog.Printf("[PipelineEngine] %q pipeline mode already created by a concurrent seed — nothing to do", DefaultSDDPipelineModeSlug)
+			log.InfoLog().Printf("[PipelineEngine] %q pipeline mode already created by a concurrent seed — nothing to do", DefaultSDDPipelineModeSlug)
 			return nil
 		}
 		return fmt.Errorf("EnsureDefaultSDDPipelineMode: Create: %w", err)
 	}
 
-	log.InfoLog.Printf("[PipelineEngine] seeded default %q pipeline mode", DefaultSDDPipelineModeSlug)
+	log.InfoLog().Printf("[PipelineEngine] seeded default %q pipeline mode", DefaultSDDPipelineModeSlug)
 	return nil
 }
 

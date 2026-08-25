@@ -6,6 +6,15 @@ export const diffAdded = style({
   color: vars.color.success,
 });
 
+/** "Restarted from" lineage link in the Info tab -- a real theme token
+ *  (matching RestartWithSummaryButton.css.ts's accent color) rather than the
+ *  hardcoded `var(--color-link, #3b82f6)` inline style this row previously
+ *  used, which always fell back to the hex literal since --color-link is
+ *  never defined anywhere in the theme. */
+export const restartedFromLink = style({
+  color: vars.color.primary,
+});
+
 /** Full-area overlay displayed when the current session is paused.
  *  Sits above the terminal pool (which stays mounted for keep-alive).
  *  Uses position:absolute inside the existing position:relative terminal container.

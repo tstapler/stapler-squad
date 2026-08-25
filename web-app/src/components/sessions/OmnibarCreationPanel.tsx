@@ -80,6 +80,25 @@ const ADVANCED_VALUES = new Set<string>(ADVANCED_TYPES.map((t) => t.value));
 // dependency array unnecessarily.
 const EMPTY_PRESETS: LauncherPresetEntry[] = [];
 
+// Stable identity for callers that omit remotes — see EMPTY_PRESETS above for why.
+const EMPTY_REMOTES: RemoteOption[] = [];
+
+/**
+ * A configured remote target, shown in the "Remote host" selector (ADR-001:
+ * remote-as-orthogonal-flag; see project_plans/ssh-remote-workspaces/decisions/ADR-001-
+ * remote-as-orthogonal-flag.md). Deliberately minimal — only what this selector needs to
+ * display an option and identify it by name.
+ *
+ * TODO(Phase 6): this list will be sourced from a `remotesSlice` in Redux, populated by a
+ * `ListRemotes` RPC over the full `RemoteConfig` (proto/session/v1/remote.proto — host, port,
+ * username, etc.), and a Settings UI to manage it. Neither exists yet; until then, callers
+ * pass this list in as a prop (defaulting to empty, which hides the selector entirely).
+ */
+export interface RemoteOption {
+  /** RemoteConfig.Name — the identifier threaded through as RemoteTarget.remoteName. */
+  name: string;
+}
+
 // Radio options for the "Open as" sub-selector inside New Project mode.
 const NEW_PROJECT_OPEN_AS = [
   { value: "new_worktree", label: "New Worktree" },
@@ -161,6 +180,9 @@ export interface OmnibarCreationPanelProps {
   launcherPresets?: LauncherPresetEntry[];
   launcherPresetsLoading?: boolean;
   launcherPresetsLoadError?: string | null;
+  /** Configured remotes for the "Remote host" selector. Renders only when non-empty — see
+   * RemoteOption's doc comment for why this is a prop rather than a Redux-sourced list. */
+  remotes?: RemoteOption[];
 }
 
 // Helper: file → base64 string (strips data URL prefix).
@@ -199,12 +221,13 @@ export function OmnibarCreationPanel({
   launcherPresets: presets = EMPTY_PRESETS,
   launcherPresetsLoading: presetsLoading = false,
   launcherPresetsLoadError: presetsLoadError = null,
+  remotes = EMPTY_REMOTES,
 }: OmnibarCreationPanelProps) {
   const {
     sessionName, branch, program, category, autoYes, autoApprove,
     useTitleAsBranch, sessionType, existingWorktree, workingDir,
     parentDir, projectName, newProjectSessionType, createIfMissing, firstPrompt,
-    autonomousMode,
+    autonomousMode, remoteName,
   } = formState;
 
   // If the program changes to an unsupported agent after auto-approve was checked
@@ -523,6 +546,35 @@ export function OmnibarCreationPanel({
             onChange={(v) => setFormField("sessionType", v)}
           />
         </div>
+
+        {/* "Remote host" selector — an orthogonal control (ADR-001: remote-as-orthogonal-flag)
+            that composes with whichever SESSION_TYPES value is selected above, not a 6th
+            radio option. Renders only once ≥1 remote is configured (research/ux.md §2:
+            "defaulting to This machine"); absent entirely otherwise, not merely disabled. */}
+        {remotes.length > 0 && (
+          <div className={field} data-testid="remote-selector-field">
+            <label className={labelClass} htmlFor="omnibar-remote">
+              <span className={styles.remoteIcon} aria-hidden="true">🌐</span> Remote host
+            </label>
+            <select
+              id="omnibar-remote"
+              data-testid="remote-selector"
+              className={selectClass}
+              value={remoteName ?? ""}
+              onChange={(e) => setFormField("remoteName", e.target.value || undefined)}
+            >
+              <option value="">This machine</option>
+              {remotes.map((r) => (
+                <option key={r.name} value={r.name}>{r.name}</option>
+              ))}
+            </select>
+            <span className={hint}>
+              {remoteName
+                ? `Runs on "${remoteName}" over SSH.`
+                : "Runs locally by default — pick a configured remote to run this session over SSH instead."}
+            </span>
+          </div>
+        )}
 
         {/* Autonomous mode — an orthogonal flag, not a session type: it composes with
             whichever type is selected above instead of forcing a scratch directory. */}

@@ -25,16 +25,17 @@ type fakeHeadlessPool struct {
 	firstCallOnce sync.Once
 }
 
-func (f *fakeHeadlessPool) CallBlocking(_ context.Context, key headless.FeatureKey, _, _ string, _ headless.CallOptions) (string, float64, error) {
+func (f *fakeHeadlessPool) CallBlocking(_ context.Context, key headless.FeatureKey, _, _ string, _ headless.CallOptions, sink headless.CostSink) (string, error) {
 	if f.firstCallCh != nil {
 		f.firstCallOnce.Do(func() { close(f.firstCallCh) })
 	}
 	idx := int(atomic.AddInt32(&f.callCount, 1)) - 1
 	f.capturedKeys = append(f.capturedKeys, key)
+	sink(0)
 	if idx < len(f.responses) {
-		return f.responses[idx], 0, nil
+		return f.responses[idx], nil
 	}
-	return "NEXT_MESSAGE: keep going", 0, nil
+	return "NEXT_MESSAGE: keep going", nil
 }
 
 func TestParseOrchestrationResponse_NextMessage(t *testing.T) {
@@ -918,9 +919,9 @@ func TestAutonomousDriver_Stop_CancelsLoop_DuringNudgeSuppression(t *testing.T) 
 // rather than returning as soon as it's called.
 type blockingPool struct{}
 
-func (p *blockingPool) CallBlocking(ctx context.Context, _ headless.FeatureKey, _, _ string, _ headless.CallOptions) (string, float64, error) {
+func (p *blockingPool) CallBlocking(ctx context.Context, _ headless.FeatureKey, _, _ string, _ headless.CallOptions, _ headless.CostSink) (string, error) {
 	<-ctx.Done()
-	return "", 0, ctx.Err()
+	return "", ctx.Err()
 }
 
 // TestAutonomousDriver_Wait_BlocksUntilRunExits proves Wait() is a real join
@@ -1035,7 +1036,7 @@ func TestAutonomousDriver_Wait_RespectsOwnContextTimeout(t *testing.T) {
 // panicPool panics on the first call to simulate a driver panic.
 type panicPool struct{}
 
-func (p *panicPool) CallBlocking(_ context.Context, _ headless.FeatureKey, _, _ string, _ headless.CallOptions) (string, float64, error) {
+func (p *panicPool) CallBlocking(_ context.Context, _ headless.FeatureKey, _, _ string, _ headless.CallOptions, _ headless.CostSink) (string, error) {
 	panic("simulated panic in headless pool")
 }
 

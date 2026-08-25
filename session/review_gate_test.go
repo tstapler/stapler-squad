@@ -1,12 +1,10 @@
 package session
 
 import (
-	"bytes"
 	"context"
 	"database/sql"
 	"errors"
 	"fmt"
-	stdlog "log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -18,7 +16,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
-	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/git"
 	_ "modernc.org/sqlite" // Pure Go SQLite driver
@@ -435,8 +432,7 @@ func runGitOutputOrFail(t *testing.T, dir string, args ...string) string {
 // to exercise the `wt.BranchName != ""` repair-skip guard in ReviewGateRunner.Run.
 func forceEmptyBranchNameViaRawSQL(t *testing.T, storage *Storage, sessionName string) {
 	t.Helper()
-	er, ok := storage.repo.(*EntRepository)
-	require.True(t, ok, "forceEmptyBranchNameViaRawSQL requires an EntRepository-backed Storage")
+	er := storage.repo
 
 	db, err := sql.Open("sqlite", er.dbPath)
 	require.NoError(t, err)
@@ -480,6 +476,10 @@ func newNonEmptyDiffGitRepo(t *testing.T) string {
 // notifyReworkCapHit instead of looping silently.
 func TestReviewGateRunner_DiffComputationFailure_BlocksReviewInsteadOfFalseUnverifiable(t *testing.T) {
 	t.Parallel()
+	// RecoverBaseCommitSHA fails here and hits review_gate.go's WarningLog.Printf
+	// directly; redirect it so this write serializes against every other test's
+	// concurrent swapWarningLog redirection instead of landing in one of their buffers.
+	_ = swapWarningLog(t)
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -666,6 +666,10 @@ func TestReviewGateRunner_NoWorktreeRecorded_DiffComputationFailure_BlocksReview
 // to.
 func TestReviewGateRunner_EmptyCommittedDiff_BlocksReviewInsteadOfFalsePass(t *testing.T) {
 	t.Parallel()
+	// Empty committed diff hits review_gate.go's WarningLog.Printf directly; redirect
+	// it so this write serializes against every other test's concurrent
+	// swapWarningLog redirection instead of landing in one of their buffers.
+	_ = swapWarningLog(t)
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -837,6 +841,10 @@ func TestReviewGateRunner_DiffComputationFailure_AutoRepairsFromDivergentBranch(
 // — and diffing HEAD against HEAD is empty by construction.
 func TestReviewGateRunner_DiffComputationFailure_RecoveredButEmptyDiff_StillBlocks(t *testing.T) {
 	t.Parallel()
+	// The recovered-but-empty diff path hits review_gate.go's WarningLog.Printf
+	// directly; redirect it so this write serializes against every other test's
+	// concurrent swapWarningLog redirection instead of landing in one of their buffers.
+	_ = swapWarningLog(t)
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -990,12 +998,8 @@ func TestReviewGateRunner_NoBranchName_DiffComputationFailure_SkipsRepairAndBloc
 
 	runner := NewReviewGateRunner(storage, getAutoReopener, getNotifier, getSessionCreator, nil)
 
-	var buf bytes.Buffer
-	redirectInfoLog(t, &buf)
-	var warnBuf bytes.Buffer
-	origWarning := log.WarningLog
-	log.WarningLog = stdlog.New(&warnBuf, "WARNING: ", 0)
-	t.Cleanup(func() { log.WarningLog = origWarning })
+	redirectInfoLog(t)
+	warnBuf := swapWarningLog(t)
 
 	var onPassCalled atomic.Bool
 	runner.Run(ctx, item, workIS, func(ctx context.Context, item *BacklogItemData, is ItemSessionSummary) {
@@ -1051,6 +1055,10 @@ func commitOnRepo(t *testing.T, dir string, n int, prefix string) {
 // diff reach the reviewer.
 func TestReviewGateRunner_BranchDrift_BlocksReviewWithConflictDetails_When_AutoSyncConflicts(t *testing.T) {
 	t.Parallel()
+	// The unresolvable branch-drift conflict hits review_gate.go's WarningLog.Printf
+	// directly; redirect it so this write serializes against every other test's
+	// concurrent swapWarningLog redirection instead of landing in one of their buffers.
+	_ = swapWarningLog(t)
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()

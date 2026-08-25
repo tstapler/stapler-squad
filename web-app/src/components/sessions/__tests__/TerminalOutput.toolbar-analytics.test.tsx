@@ -9,56 +9,32 @@ import { render, screen, fireEvent } from "@testing-library/react";
 
 // ── Mocks ─────────────────────────────────────────────────────────────────────
 
-const mockXtermHandle = {
-  terminal: null as null,
-  fit: jest.fn(),
-  write: jest.fn(),
-  writeln: jest.fn(),
-  clear: jest.fn(),
-  focus: jest.fn(),
-  search: jest.fn().mockReturnValue(false),
-  searchNext: jest.fn().mockReturnValue(false),
-  searchPrevious: jest.fn().mockReturnValue(false),
-};
+const mockXtermHandle = require("./terminalOutputTestMocks").createMockXtermHandle();
 
-jest.mock("../XtermTerminal", () => {
-  const React = require("react");
-  const XtermTerminal = React.forwardRef((props: any, ref: any) => {
-    React.useImperativeHandle(ref, () => mockXtermHandle);
-    return React.createElement("div", { "data-testid": "mock-xterm" });
-  });
-  XtermTerminal.displayName = "XtermTerminal";
-  return { XtermTerminal };
-});
+jest.mock("../XtermTerminal", () =>
+  require("./terminalOutputTestMocks").xtermTerminalMockModule(mockXtermHandle)
+);
 
-jest.mock("@/lib/hooks/useTerminalStream", () => ({
-  useTerminalStream: jest.fn(),
-}));
+jest.mock("@/lib/hooks/useTerminalStream", () =>
+  require("./terminalOutputTestMocks").useTerminalStreamMockModule()
+);
 
-jest.mock("@/lib/terminal/TerminalDimensionCache", () => ({
-  getCachedDimensions: jest.fn().mockReturnValue(null),
-  saveDimensions: jest.fn(),
-}));
+jest.mock("@/lib/terminal/TerminalDimensionCache", () =>
+  require("./terminalOutputTestMocks").terminalDimensionCacheMockModule()
+);
 
-jest.mock("@/lib/terminal/TerminalStreamManager", () => ({
-  TerminalStreamManager: jest.fn().mockImplementation(() => ({
-    setOnFirstOutput: jest.fn(),
-    installDebugMonitor: jest.fn(),
-    writeInitialContent: jest.fn().mockResolvedValue(undefined),
-    write: jest.fn(),
-    cleanup: jest.fn(),
-    updateSendFlowControl: jest.fn(),
-  })),
-}));
+jest.mock("@/lib/terminal/TerminalStreamManager", () =>
+  require("./terminalOutputTestMocks").terminalStreamManagerMockModule()
+);
 
 const mockTrack = jest.fn();
-jest.mock("@/lib/contexts/AnalyticsContext", () => ({
-  useAnalytics: () => ({ track: mockTrack }),
-}));
+jest.mock("@/lib/contexts/AnalyticsContext", () =>
+  require("./terminalOutputTestMocks").analyticsContextMockModule(mockTrack)
+);
 
-jest.mock("@/lib/hooks/useBrowserLogStream", () => ({
-  useBrowserLogStream: jest.fn(),
-}));
+jest.mock("@/lib/hooks/useBrowserLogStream", () =>
+  require("./terminalOutputTestMocks").browserLogStreamMockModule()
+);
 
 const mockUseViewport = jest.fn();
 jest.mock("@/components/providers/ViewportProvider", () => ({

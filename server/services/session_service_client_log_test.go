@@ -21,13 +21,17 @@ func newLogClientEventsRequest(entries ...*sessionv1.ClientLogEntry) *connect.Re
 
 // captureInfoLog temporarily redirects the slog default logger to a buffer
 // and returns a function that restores it and returns the captured output.
+// Holds slogDefaultMu (declared in autonomous_orchestration_service_test.go) for the
+// full swap-to-restore window so it can't race other tests' slog.Default() swaps.
 func captureInfoLog() func() string {
+	slogDefaultMu.Lock()
 	var buf bytes.Buffer
 	h := slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})
 	original := slog.Default()
 	slog.SetDefault(slog.New(h))
 	return func() string {
 		slog.SetDefault(original)
+		slogDefaultMu.Unlock()
 		return buf.String()
 	}
 }

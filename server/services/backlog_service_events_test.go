@@ -138,32 +138,6 @@ func requireCleanReturn(t *testing.T, cancel context.CancelFunc, done <-chan err
 	}
 }
 
-// TestTestAfterSubscribeHook_should_NotLeakBetweenEventBusInstances guards the
-// map-keyed-by-bus isolation testAfterSubscribeHooks relies on: a hook set on
-// one EventBus must never fire for a different EventBus, since many of this
-// package's WatchBacklogItems tests run t.Parallel() against their own buses.
-func TestTestAfterSubscribeHook_should_NotLeakBetweenEventBusInstances(t *testing.T) {
-	t.Parallel()
-	busA := events.NewEventBus(10)
-	busB := events.NewEventBus(10)
-
-	var callsOnA, callsOnB int
-	setTestAfterSubscribeHook(busA, func() { callsOnA++ })
-	t.Cleanup(func() { setTestAfterSubscribeHook(busA, nil) })
-	setTestAfterSubscribeHook(busB, func() { callsOnB++ })
-	t.Cleanup(func() { setTestAfterSubscribeHook(busB, nil) })
-
-	callTestAfterSubscribeHook(busA)
-
-	assert.Equal(t, 1, callsOnA, "hook registered on busA must fire when busA's subscribe point runs")
-	assert.Equal(t, 0, callsOnB, "hook registered on busB must not fire from busA's subscribe point")
-
-	callTestAfterSubscribeHook(busB)
-
-	assert.Equal(t, 1, callsOnA, "busB's subscribe point must not re-trigger busA's hook")
-	assert.Equal(t, 1, callsOnB, "hook registered on busB must fire when busB's own subscribe point runs")
-}
-
 // ─── Story 3.2.1: fresh-snapshot branch (Task 3.2.1b) ─────────────────────
 
 func TestWatchBacklogItems_should_sendSnapshotEventsForAllItems_When_AfterSeqIsZero(t *testing.T) {
@@ -269,7 +243,7 @@ func TestWatchBacklogItems_should_replayBufferedEventsInSeqOrder_When_AfterSeqIs
 // exactly between the handler's Subscribe() and EventsSince() calls — pure
 // goroutine-scheduling races cannot do this reliably (confirmed: no
 // existing precedent in this repo's WatchSessions tests, which don't cover
-// this scenario at all). testAfterSubscribeHook (backlog_service_events.go)
+// this scenario at all). withTestAfterSubscribeHook (backlog_service_events.go)
 // is a minimal test-only seam added specifically to make this race
 // reproducible on every run rather than only occasionally.
 func TestWatchBacklogItems_should_deliverRaceWindowEventExactlyOnceAsSnapshot_When_PublishedBetweenSubscribeAndEventsSince(t *testing.T) {
@@ -295,13 +269,10 @@ func TestWatchBacklogItems_should_deliverRaceWindowEventExactlyOnceAsSnapshot_Wh
 		IsSnapshot:    false, // as originally published — must not be trusted verbatim by the replay branch
 	})
 
-	setTestAfterSubscribeHook(bus, func() {
+	runCtx, cancel := context.WithCancel(withTestAfterSubscribeHook(ctx, func() {
 		bus.Publish(raceEvent)
-	})
-	t.Cleanup(func() { setTestAfterSubscribeHook(bus, nil) })
-
+	}))
 	sender := &fakeBacklogItemEventSender{}
-	runCtx, cancel := context.WithCancel(ctx)
 	done := runWatchBacklogItems(runCtx, svc, &sessionv1.WatchBacklogItemsRequest{AfterSeq: afterSeq}, sender)
 
 	// The race event, published right after Subscribe() registered the
@@ -373,7 +344,7 @@ func TestWatchBacklogItems_should_forwardLiveEvent_When_PublishedWhileStreamIsLi
 
 func TestWatchBacklogItems_should_excludeNonMatchingItems_When_StatusFilterAppliedToSnapshot(t *testing.T) {
 	t.Parallel()
-	svc, storage, _ := newTestBacklogServiceWithBus(t)
+	svc, storage, bus := newTestBacklogServiceWithBus(t)
 	ctx := context.Background()
 
 	matching, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{Title: "In progress item", Status: string(session.BacklogStatusInProgress)})
@@ -386,14 +357,38 @@ func TestWatchBacklogItems_should_excludeNonMatchingItems_When_StatusFilterAppli
 	done := runWatchBacklogItems(runCtx, svc, &sessionv1.WatchBacklogItemsRequest{StatusFilter: []string{string(session.BacklogStatusInProgress)}}, sender)
 
 	require.Eventually(t, func() bool { return len(sender.Sent()) >= 1 }, 2*time.Second, 10*time.Millisecond)
-	// Give a brief window to make sure the filtered-out item's event doesn't
-	// also arrive before we cancel.
-	time.Sleep(50 * time.Millisecond)
+	require.Eventually(t, func() bool { return bus.SubscriberCount() >= 1 }, 2*time.Second, 10*time.Millisecond)
+
+	// The snapshot loop (watchBacklogItems's fresh-connection branch) sends
+	// one message per matching item in a single synchronous for-loop before
+	// the handler ever reaches the live-event select — seeing the matching
+	// item land in sender.Sent() does not by itself prove the loop is done
+	// filtering the *other* (non-matching) item too. Publish a sentinel live
+	// event on the matching item and wait for it: since the live loop only
+	// runs after the snapshot loop returns, the sentinel's arrival
+	// deterministically proves the snapshot phase (and any filtering bug in
+	// it) has already fully resolved — no fixed sleep needed.
+	const sentinelStatus = "sentinel-done"
+	bus.Publish(events.NewBacklogItemChangedEvent(&events.BacklogItemEventPayload{
+		Kind:      events.BacklogChangeStatusTransition,
+		Item:      matching,
+		OldStatus: matching.Status,
+		NewStatus: sentinelStatus,
+	}))
+	require.Eventually(t, func() bool {
+		for _, e := range sender.Sent() {
+			if e.GetStatusChanged().GetNewStatus() == sentinelStatus {
+				return true
+			}
+		}
+		return false
+	}, 2*time.Second, 10*time.Millisecond, "sentinel live event never arrived")
 	requireCleanReturn(t, cancel, done)
 
 	sent := sender.Sent()
-	require.Len(t, sent, 1, "only the status-matching item should be sent")
+	require.Len(t, sent, 2, "only the status-matching item's snapshot, plus the sentinel, should be sent")
 	assert.Equal(t, matching.ID, sent[0].GetItemUpdated().GetItemId())
+	assert.Equal(t, matching.ID, sent[1].GetStatusChanged().GetItemId())
 }
 
 // TestWatchBacklogItems_should_returnEmptySnapshot_When_StatusFilterMatchesNoItems
@@ -414,7 +409,7 @@ func TestWatchBacklogItems_should_excludeNonMatchingItems_When_StatusFilterAppli
 // unblock on; this test asserts that corrected behavior instead.
 func TestWatchBacklogItems_should_returnEmptySnapshot_When_StatusFilterMatchesNoItems(t *testing.T) {
 	t.Parallel()
-	svc, storage, _ := newTestBacklogServiceWithBus(t)
+	svc, storage, bus := newTestBacklogServiceWithBus(t)
 	ctx := context.Background()
 
 	_, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{Title: "In progress item", Status: string(session.BacklogStatusInProgress)})
@@ -430,12 +425,33 @@ func TestWatchBacklogItems_should_returnEmptySnapshot_When_StatusFilterMatchesNo
 	// real item events — but the handler must still send exactly one
 	// snapshot_complete marker so the client isn't left hanging.
 	require.Eventually(t, func() bool { return len(sender.Sent()) >= 1 }, 2*time.Second, 10*time.Millisecond)
-	time.Sleep(50 * time.Millisecond)
+
+	// Publish a sentinel live event matching this filter (status "archived")
+	// and wait for it, rather than sleeping: since the snapshot loop always
+	// runs to completion before the live-event loop starts, observing the
+	// sentinel proves the snapshot phase (and its zero-item send decision)
+	// has already fully resolved.
+	const sentinelID = "sentinel-archived"
+	bus.Publish(events.NewBacklogItemChangedEvent(&events.BacklogItemEventPayload{
+		Kind:      events.BacklogChangeStatusTransition,
+		Item:      &session.BacklogItemData{ID: sentinelID, Status: string(session.BacklogStatusArchived)},
+		OldStatus: string(session.BacklogStatusReady),
+		NewStatus: string(session.BacklogStatusArchived),
+	}))
+	require.Eventually(t, func() bool {
+		for _, e := range sender.Sent() {
+			if e.GetStatusChanged().GetItemId() == sentinelID {
+				return true
+			}
+		}
+		return false
+	}, 2*time.Second, 10*time.Millisecond, "sentinel live event never arrived")
 	requireCleanReturn(t, cancel, done)
 
 	sent := sender.Sent()
-	require.Len(t, sent, 1, "a status filter matching no items must produce exactly one snapshot-complete marker, no item events, no error/panic")
-	assert.NotNil(t, sent[0].GetSnapshotComplete(), "the sole message must be the synthetic snapshot-complete marker")
+	require.Len(t, sent, 2, "a status filter matching no items must produce exactly one snapshot-complete marker, no item events, plus the sentinel")
+	assert.NotNil(t, sent[0].GetSnapshotComplete(), "the first message must be the synthetic snapshot-complete marker")
+	assert.Equal(t, sentinelID, sent[1].GetStatusChanged().GetItemId())
 }
 
 // TestWatchBacklogItems_should_sendSnapshotCompleteMarker_When_BacklogIsGenuinelyEmpty
@@ -447,7 +463,7 @@ func TestWatchBacklogItems_should_returnEmptySnapshot_When_StatusFilterMatchesNo
 // from a healthy connection with real items.
 func TestWatchBacklogItems_should_sendSnapshotCompleteMarker_When_BacklogIsGenuinelyEmpty(t *testing.T) {
 	t.Parallel()
-	svc, _, _ := newTestBacklogServiceWithBus(t)
+	svc, _, bus := newTestBacklogServiceWithBus(t)
 	ctx := context.Background()
 
 	sender := &fakeBacklogItemEventSender{}
@@ -458,17 +474,36 @@ func TestWatchBacklogItems_should_sendSnapshotCompleteMarker_When_BacklogIsGenui
 	// a genuinely empty backlog still produces a message promptly.
 	require.Eventually(t, func() bool { return len(sender.Sent()) >= 1 }, 2*time.Second, 10*time.Millisecond,
 		"a genuinely empty backlog must still send a snapshot-complete marker promptly, not hang")
-	time.Sleep(50 * time.Millisecond)
+
+	// Publish an unfiltered sentinel live event and wait for it, rather than
+	// sleeping: since the snapshot loop always finishes before the live-event
+	// loop starts, its arrival proves the (empty) snapshot phase is done.
+	const sentinelID = "sentinel-empty-backlog"
+	bus.Publish(events.NewBacklogItemChangedEvent(&events.BacklogItemEventPayload{
+		Kind:      events.BacklogChangeStatusTransition,
+		Item:      &session.BacklogItemData{ID: sentinelID, Status: string(session.BacklogStatusInProgress)},
+		OldStatus: string(session.BacklogStatusReady),
+		NewStatus: string(session.BacklogStatusInProgress),
+	}))
+	require.Eventually(t, func() bool {
+		for _, e := range sender.Sent() {
+			if e.GetStatusChanged().GetItemId() == sentinelID {
+				return true
+			}
+		}
+		return false
+	}, 2*time.Second, 10*time.Millisecond, "sentinel live event never arrived")
 	requireCleanReturn(t, cancel, done)
 
 	sent := sender.Sent()
-	require.Len(t, sent, 1)
+	require.Len(t, sent, 2)
 	assert.NotNil(t, sent[0].GetSnapshotComplete())
+	assert.Equal(t, sentinelID, sent[1].GetStatusChanged().GetItemId())
 }
 
 func TestWatchBacklogItems_should_excludeNonMatchingItems_When_CategoryFilterAppliedToSnapshot(t *testing.T) {
 	t.Parallel()
-	svc, storage, _ := newTestBacklogServiceWithBus(t)
+	svc, storage, bus := newTestBacklogServiceWithBus(t)
 	ctx := context.Background()
 
 	matching, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{Title: "Repo A item", Status: string(session.BacklogStatusReady), RepoPath: "/repo/a"})
@@ -481,12 +516,33 @@ func TestWatchBacklogItems_should_excludeNonMatchingItems_When_CategoryFilterApp
 	done := runWatchBacklogItems(runCtx, svc, &sessionv1.WatchBacklogItemsRequest{CategoryFilter: []string{"/repo/a"}}, sender)
 
 	require.Eventually(t, func() bool { return len(sender.Sent()) >= 1 }, 2*time.Second, 10*time.Millisecond)
-	time.Sleep(50 * time.Millisecond)
+
+	// Publish a sentinel live event on the matching item (same RepoPath, so
+	// it also passes this test's category filter) and wait for it, rather
+	// than sleeping: since the snapshot loop always finishes before the
+	// live-event loop starts, its arrival proves the snapshot phase's
+	// filtering of the non-matching item has already fully resolved.
+	const sentinelStatus = "sentinel-done"
+	bus.Publish(events.NewBacklogItemChangedEvent(&events.BacklogItemEventPayload{
+		Kind:      events.BacklogChangeStatusTransition,
+		Item:      matching,
+		OldStatus: matching.Status,
+		NewStatus: sentinelStatus,
+	}))
+	require.Eventually(t, func() bool {
+		for _, e := range sender.Sent() {
+			if e.GetStatusChanged().GetNewStatus() == sentinelStatus {
+				return true
+			}
+		}
+		return false
+	}, 2*time.Second, 10*time.Millisecond, "sentinel live event never arrived")
 	requireCleanReturn(t, cancel, done)
 
 	sent := sender.Sent()
-	require.Len(t, sent, 1, "category_filter is matched against RepoPath — see backlogItemMatchesFilters's doc comment")
+	require.Len(t, sent, 2, "category_filter is matched against RepoPath — see backlogItemMatchesFilters's doc comment")
 	assert.Equal(t, matching.ID, sent[0].GetItemUpdated().GetItemId())
+	assert.Equal(t, matching.ID, sent[1].GetStatusChanged().GetItemId())
 }
 
 func TestWatchBacklogItems_should_onlyForwardMatchingLiveEvents_When_StatusFilterIsSet(t *testing.T) {
@@ -524,16 +580,41 @@ func TestWatchBacklogItems_should_onlyForwardMatchingLiveEvents_When_StatusFilte
 	bus.Publish(matchingEvt)
 
 	require.Eventually(t, func() bool { return len(sender.Sent()) >= 2 }, 2*time.Second, 10*time.Millisecond)
-	// Extra grace window so a wrongly-unfiltered nonMatching send would have
-	// time to show up as a 3rd message before we cancel.
-	time.Sleep(50 * time.Millisecond)
+
+	// Rather than sleeping to give a wrongly-unfiltered nonMatching send time
+	// to show up, publish a third guaranteed-matching sentinel event and wait
+	// for it. Delivery is synchronous and strictly FIFO through the single
+	// live-event loop, so nonMatching (published first) would have to be
+	// processed — and, if the filter were broken, sent — before the sentinel
+	// can arrive. Observing the sentinel therefore proves nonMatching has
+	// already been fully resolved (dropped) without a fixed-duration sleep.
+	const sentinelStatus = "sentinel-done"
+	sentinelEvt := events.NewBacklogItemChangedEvent(&events.BacklogItemEventPayload{
+		Kind:      events.BacklogChangeStatusTransition,
+		Item:      matchItem,
+		OldStatus: "in_progress",
+		NewStatus: sentinelStatus,
+	})
+	bus.Publish(sentinelEvt)
+	require.Eventually(t, func() bool {
+		for _, e := range sender.Sent() {
+			if e.GetStatusChanged().GetNewStatus() == sentinelStatus {
+				return true
+			}
+		}
+		return false
+	}, 2*time.Second, 10*time.Millisecond, "sentinel live event never arrived")
 	requireCleanReturn(t, cancel, done)
 
 	sent := sender.Sent()
-	require.Len(t, sent, 2, "1 snapshot + 1 live matching event; the non-matching live event must never be sent")
+	require.Len(t, sent, 3, "1 snapshot + 1 live matching event + 1 sentinel; the non-matching live event must never be sent")
 	sc := sent[1].GetStatusChanged()
 	require.NotNil(t, sc)
 	assert.Equal(t, matchItem.ID, sc.GetItemId())
+	assert.Equal(t, "in_progress", sc.GetNewStatus())
+	sentinelSC := sent[2].GetStatusChanged()
+	require.NotNil(t, sentinelSC)
+	assert.Equal(t, sentinelStatus, sentinelSC.GetNewStatus())
 }
 
 // ─── Degraded mode: nil eventBus ───────────────────────────────────────────

@@ -44,7 +44,7 @@ make build && make test     # Build (generates protos) then test
 make quick-check            # Build + test + lint (fast validation)
 make ci                     # Full CI pipeline (definitive pre-push check)
 
-go test ./server/services   # Specific packages (requires make build first)
+go test ./server/services -timeout=20m   # Specific packages (requires make build first)
 go test ./ui -run TestFoo   # Specific test
 make test-coverage
 
@@ -69,6 +69,38 @@ gofmt -w .         # Format before committing
 ```
 
 Nil safety and static analysis tool reference: `.claude/docs/nil-safety.md`
+
+### Duplication and hotspot checks — required before pushing
+
+`make ready` (superset of `make ci`) runs two **blocking** duplication gates —
+both fail the build, not just report:
+
+- **Go — `dupl`** (`.golangci.yml`'s settings block, `.github/workflows/lint.yml`):
+  new-code-only via `--new-from-rev=origin/main`, mirroring the existing
+  gocyclo/gocognit/funlen/revive complexity gate — only duplication introduced
+  by your own diff fails; the repo's unmeasured pre-existing pool is never in
+  scope. Run locally with `make ready-complexity-gate` (needs `dupl` from
+  `make install-tools`). Fix what it finds in your diff before pushing —
+  usually an Extract/Move Function refactor (see `quality:reflect-and-fix`'s
+  Level 0 consolidation gate), not a suppression.
+- **web-app — `jscpd`** (`web-app/.jscpd.json`; `make ready-duplication-gate-web`
+  or `pnpm run lint:duplicates` in `web-app/`): jscpd has no git-diff scoping
+  like `--new-from-rev`, so this gates on an absolute `threshold` (0.1%) instead
+  of new-code-only — a ratchet against today's cleaned-up baseline (~0.09%,
+  ~215 duplicated lines), not zero-tolerance. `minLines`/`minTokens` are tuned
+  to 20/200: verified empirically (2026-08-24 repo-wide sweep + fix) that at
+  that size every finding was real, actionable duplication — component forks,
+  copy-pasted hooks/effects, shared style/test-fixture blocks — not
+  boilerplate noise, which dominates at jscpd's noisy 5-line/50-token
+  defaults. The ~0.09% baseline that remains is `jest.mock(...)` registration
+  lines that can't be extracted into a shared function (babel-jest hoists them
+  per test file), so it's irreducible, not unfixed debt. Long-term, true
+  diff-aware cross-file duplicate detection belongs in `kibitzer`
+  (github.com/tstapler/kibitzer) — see `tstapler/kibitzer#28`.
+
+For "which files are actually risky to touch" (complexity × git-churn, not
+literal duplication), see the `code-hotspot-analysis` skill and
+`tstapler/kibitzer#15` (not yet implemented in kibitzer).
 
 ### Go Skills — Always Invoke for Go Work
 
@@ -133,6 +165,8 @@ Use [Conventional Commits](https://www.conventionalcommits.org/):
 Releases are not automatic — release-please opens a "Release PR"; merge when ready to ship.
 
 **`gh pr merge` always needs `--repo owner/repo`** — this repo's worktrees make `gh` misresolve `main` otherwise. See `.claude/docs/gh-pr-merge-repo-flag.md`.
+
+**PRs in this repo default to ready for review, not draft.** This overrides the global "Draft PRs by default" instruction specifically for `tstapler/stapler-squad` — open with `gh pr create` (no `--draft`) unless the user asks for a draft.
 
 ## Adding New Features
 
@@ -249,6 +283,7 @@ Per `local-dev-port-management`'s Sequential Batch Strategy: a fixed block reser
 |---|---|
 | Profiling / lock-up debugging | `.claude/docs/profiling.md` |
 | OpenTelemetry / Datadog setup | `.claude/docs/opentelemetry.md` |
+| Compile-time auto-instrumentation (opt-in `stapler-squad-otel` build) | `.claude/docs/opentelemetry-auto-instrumentation.md` |
 | macOS code signing / TCC | `.claude/docs/codesigning.md` |
 | PTY multiplexing (ssq-mux) | `.claude/docs/pty-multiplexing.md` |
 | State file isolation / multi-instance | `.claude/docs/state-isolation.md` |

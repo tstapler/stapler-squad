@@ -11,6 +11,8 @@ import (
 	"connectrpc.com/connect"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/goleak"
+
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
@@ -164,8 +166,7 @@ func TestCreateSession_EmptyPath_OneOff_PassesPathValidation(t *testing.T) {
 	storage := createTestStorage(t)
 	svc := newCreateTestService(t, storage)
 
-	baseDir := t.TempDir()
-	t.Setenv("HOME", baseDir)
+	withFakeHome(t)
 
 	resp, err := svc.CreateSession(context.Background(), connect.NewRequest(&sessionv1.CreateSessionRequest{
 		Title:       "scratch-session",
@@ -192,8 +193,7 @@ func TestCreateSession_EmptyPath_Autonomous_PassesPathValidation(t *testing.T) {
 	storage := createTestStorage(t)
 	svc := newCreateTestService(t, storage)
 
-	baseDir := t.TempDir()
-	t.Setenv("HOME", baseDir)
+	withFakeHome(t)
 
 	resp, err := svc.CreateSession(context.Background(), connect.NewRequest(&sessionv1.CreateSessionRequest{
 		Title:          "autonomous-session",
@@ -216,20 +216,12 @@ func TestCreateSession_EmptyPath_Autonomous_PassesPathValidation(t *testing.T) {
 // An autonomous request that supplies its own path must use that path as-is, not
 // have it silently replaced by a generated ~/oneoff scratch directory.
 func TestCreateSession_Autonomous_ExplicitPath_DoesNotGenerateScratchDir(t *testing.T) {
-	// baseDir/HOME must be established — and its t.TempDir() cleanup registered —
-	// before the service is constructed. t.Cleanup runs LIFO, and svc.Shutdown()
-	// (registered by newCreateTestService) must await CreateSession's async init
-	// goroutine (trackCleanup, session_service.go) before baseDir's RemoveAll
-	// runs, or the goroutine can still be writing under
-	// baseDir/.stapler-squad/test/test-<pid> when TempDir cleanup fires,
-	// producing a flaky "directory not empty" error.
-	baseDir := t.TempDir()
-	t.Setenv("HOME", baseDir)
-	explicitPath := t.TempDir()
-	oneOffDir := filepath.Join(baseDir, "oneoff")
-
 	storage := createTestStorage(t)
 	svc := newCreateTestService(t, storage)
+
+	baseDir := withFakeHome(t)
+	explicitPath := t.TempDir()
+	oneOffDir := filepath.Join(baseDir, "oneoff")
 
 	resp, err := svc.CreateSession(context.Background(), connect.NewRequest(&sessionv1.CreateSessionRequest{
 		Title:          "autonomous-explicit-path-test",
@@ -289,8 +281,7 @@ func TestCreateSession_OneOff_CreatesDirectoryInBaseDir(t *testing.T) {
 	storage := createTestStorage(t)
 	svc := newCreateTestService(t, storage)
 
-	baseDir := t.TempDir()
-	t.Setenv("HOME", baseDir) // ~/oneoff resolves under here
+	baseDir := withFakeHome(t) // ~/oneoff resolves under here
 
 	expectedBase := filepath.Join(baseDir, "oneoff")
 
@@ -320,8 +311,7 @@ func TestCreateSession_OneOff_TwoCallsCreateTwoDistinctDirectories(t *testing.T)
 	storage := createTestStorage(t)
 	svc := newCreateTestService(t, storage)
 
-	baseDir := t.TempDir()
-	t.Setenv("HOME", baseDir)
+	baseDir := withFakeHome(t)
 	expectedBase := filepath.Join(baseDir, "oneoff")
 
 	for i, title := range []string{"session-a", "session-b"} {
@@ -345,8 +335,7 @@ func TestCreateSession_Autonomous_CreatesDirectoryInBaseDir(t *testing.T) {
 	storage := createTestStorage(t)
 	svc := newCreateTestService(t, storage)
 
-	baseDir := t.TempDir()
-	t.Setenv("HOME", baseDir)
+	baseDir := withFakeHome(t)
 	expectedBase := filepath.Join(baseDir, "oneoff")
 
 	resp, err := svc.CreateSession(context.Background(), connect.NewRequest(&sessionv1.CreateSessionRequest{
@@ -371,21 +360,9 @@ func TestCreateSession_OneOff_BadBaseDir_ReturnsInternalError(t *testing.T) {
 	svc := newCreateTestService(t, storage)
 
 	// Point HOME at a file (not a directory) so ~/oneoff cannot be created.
-	tmpFile, err := os.CreateTemp("", "not-a-dir-*")
-	require.NoError(t, err)
-	t.Cleanup(func() { os.Remove(tmpFile.Name()) })
-	tmpFile.Close()
+	withFakeHomeAsFile(t)
 
-	// Set HOME to the file's directory and give an explicit base that is the file itself.
-	// We do this by setting ONE_OFF_BASE_DIR via config — but since config is loaded
-	// from disk and we can't inject it here, we instead make the HOME trick: point HOME
-	// to a path whose parent does not allow mkdir.
-	//
-	// Simpler: make the base dir a regular file so os.MkdirAll fails.
-	bogusHome := tmpFile.Name() // HOME = a file; ~/oneoff = file + "/oneoff" which can't be created
-	t.Setenv("HOME", bogusHome)
-
-	_, err = svc.CreateSession(context.Background(), connect.NewRequest(&sessionv1.CreateSessionRequest{
+	_, err := svc.CreateSession(context.Background(), connect.NewRequest(&sessionv1.CreateSessionRequest{
 		Title:       "cant-make-dir",
 		SessionType: sessionv1.SessionType_SESSION_TYPE_ONE_OFF,
 	}))
@@ -453,7 +430,13 @@ func TestCreateSession_GitHubURLResolution_BoundedByContext(t *testing.T) {
 //
 // Requires tmux to be installed; skipped automatically otherwise.
 func TestCreateSession_StatusManagerWiredBeforeDriver(t *testing.T) {
-	t.Parallel()
+	// Not t.Parallel(): this test's goleak.IgnoreCurrent()/VerifyNone() baseline
+	// would be polluted by goroutines started/stopped in sibling parallel tests.
+	baseline := goleak.IgnoreCurrent()
+	// Registered first so it runs LAST (t.Cleanup is LIFO) — after
+	// destroyCreatedSession/svc.Shutdown/bus.Close have fully torn everything down.
+	t.Cleanup(func() { goleak.VerifyNone(t, baseline) })
+
 	storage := createTestStorage(t)
 	bus := events.NewEventBus(16)
 	t.Cleanup(bus.Close)
@@ -517,16 +500,42 @@ func newCreateTestService(t *testing.T, storage *session.Storage) *SessionServic
 	t.Cleanup(bus.Close)
 	svc := NewSessionService(storage, bus)
 	t.Cleanup(func() { svc.Shutdown() })
+
+	// Wire a ReviewQueuePoller so FindLiveInstance (used by destroyCreatedSession to
+	// join the driver goroutine) resolves the live instance instead of always nil.
+	statusMgr := session.NewInstanceStatusManager()
+	queue := session.NewReviewQueue()
+	poller := session.NewReviewQueuePoller(queue, statusMgr, nil)
+	svc.SetReviewQueuePoller(poller)
+
 	return svc
 }
 
 // destroyCreatedSession cleans up a session that was successfully created during a test.
 // Errors are soft-logged so cleanup failures don't mask the actual test assertion.
+//
+// It waits for DeleteSession's background Destroy() cleanup (waitForPendingCleanup)
+// before returning: these tests set HOME to a t.TempDir(), and since t.Cleanup runs
+// LIFO, that TempDir's RemoveAll (registered after the service, later in the test
+// body) would otherwise race Destroy() for files under HOME (e.g. the tmux exec-gate
+// directory) — see waitForPendingCleanup's doc comment.
+//
+// It also joins the session's SessionDriver goroutine (session.JoinSessionDriver):
+// Destroy()'s call to StopSessionDriver only bounds its wait to driverStopTimeout and
+// proceeds anyway on timeout, so without this join the driver goroutine can still be
+// polling Preview() — which resolves the tmux exec-gate directory via the process-wide
+// HOME/config dir — after waitForPendingCleanup returns and the test's t.TempDir() is
+// removed, intermittently producing "directory not empty" from RemoveAll.
 func destroyCreatedSession(t *testing.T, svc *SessionService, id string) {
 	t.Helper()
+	inst := svc.FindLiveInstance(id)
 	_, err := svc.DeleteSession(context.Background(), connect.NewRequest(&sessionv1.DeleteSessionRequest{Id: id}))
 	if err != nil {
 		t.Logf("destroyCreatedSession: cleanup for %q failed (non-fatal): %v", id, err)
+	}
+	svc.waitForPendingCleanup()
+	if inst != nil {
+		session.JoinSessionDriver(inst)
 	}
 }
 
