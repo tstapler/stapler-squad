@@ -29,6 +29,15 @@ func externalCallerPC() uintptr {
 func TestInfo_AttributesToCallerNotLogPackage(t *testing.T) {
 	t.Cleanup(applog.ClearAllPackageLevels)
 
+	// Pin the runtime level explicitly: this test's assertions depend on the
+	// global level being at or above INFO (a Debug call would otherwise be
+	// dropped for a different reason than the one this test guards against),
+	// and this must not silently rely on test-execution order leaving the
+	// global at its INFO default.
+	origLevel := applog.GetRuntimeLevel()
+	applog.SetRuntimeLevel(applog.INFO)
+	t.Cleanup(func() { applog.SetRuntimeLevel(origLevel) })
+
 	var buf bytes.Buffer
 	base := slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})
 	origDefault := slog.Default()

@@ -6,6 +6,7 @@ import (
 	"os"
 	"runtime"
 	"strings"
+	"sync"
 	"sync/atomic"
 )
 
@@ -19,12 +20,20 @@ const modulePrefix = "github.com/tstapler/stapler-squad/"
 // a mutex. nil means "no overrides configured" (the common case).
 var packageLevels atomic.Pointer[map[string]slog.Level] //nolint:gochecknoglobals
 
+// packageLevelsMu serializes writers (SetPackageLevel/ClearPackageLevel/
+// ClearAllPackageLevels) so a load->copy->mutate->store sequence from one
+// goroutine can't be lost to a concurrent one. Readers stay lock-free via
+// packageLevels.Load().
+var packageLevelsMu sync.Mutex //nolint:gochecknoglobals
+
 // SetPackageLevel sets a minimum log level for one package (and, by prefix,
 // its subpackages unless they have a more specific override — the same
 // hierarchical-logger convention as Java's log4j/logback). Pass a path
 // relative to the module root, e.g. "session/tmux" or "server/services".
 func SetPackageLevel(pkg string, level LogLevel) {
 	pkg = strings.TrimPrefix(pkg, modulePrefix)
+	packageLevelsMu.Lock()
+	defer packageLevelsMu.Unlock()
 	next := copyPackageLevels()
 	next[pkg] = toSlogLevel(level)
 	packageLevels.Store(&next)
@@ -34,6 +43,8 @@ func SetPackageLevel(pkg string, level LogLevel) {
 // runtime level (or a less-specific ancestor override) for that package.
 func ClearPackageLevel(pkg string) {
 	pkg = strings.TrimPrefix(pkg, modulePrefix)
+	packageLevelsMu.Lock()
+	defer packageLevelsMu.Unlock()
 	next := copyPackageLevels()
 	delete(next, pkg)
 	packageLevels.Store(&next)
@@ -41,6 +52,8 @@ func ClearPackageLevel(pkg string) {
 
 // ClearAllPackageLevels removes every override.
 func ClearAllPackageLevels() {
+	packageLevelsMu.Lock()
+	defer packageLevelsMu.Unlock()
 	empty := make(map[string]slog.Level)
 	packageLevels.Store(&empty)
 }
@@ -111,10 +124,8 @@ func LoadPackageLevelsFromEnv() {
 
 // PackageLevelHandler wraps a slog.Handler and drops records that fall below
 // the calling package's configured minimum level, resolved from the log
-// call's program counter. It always reports Enabled=true at the lowest
-// level so records reach Handle (per-package thresholds aren't knowable from
-// level alone) and instead filters inside Handle, mirroring the pattern
-// slog's own documentation describes for context-dependent filtering.
+// call's program counter. Enabled fast-paths on the global level when no
+// override is active; Handle does the precise per-package check otherwise.
 type PackageLevelHandler struct {
 	next slog.Handler
 }
@@ -124,7 +135,19 @@ func NewPackageLevelHandler(next slog.Handler) *PackageLevelHandler {
 	return &PackageLevelHandler{next: next}
 }
 
-func (h *PackageLevelHandler) Enabled(context.Context, slog.Level) bool { return true }
+// Enabled restores slog's normal fast path (level >= global threshold) for
+// the common no-override case, so logAt's own Enabled check can still skip
+// runtime.Callers/NewRecord/Add for a disabled level. When a per-package
+// override is active, it reports true unconditionally — Handle is the only
+// place with enough information (the record's PC) to resolve the precise
+// per-package threshold.
+func (h *PackageLevelHandler) Enabled(_ context.Context, level slog.Level) bool {
+	overrides := packageLevels.Load()
+	if overrides == nil || len(*overrides) == 0 {
+		return level >= slogLevel.Level()
+	}
+	return true
+}
 
 func (h *PackageLevelHandler) Handle(ctx context.Context, r slog.Record) error {
 	overrides := packageLevels.Load()

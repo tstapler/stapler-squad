@@ -3,9 +3,11 @@ package log
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"log/slog"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -86,5 +88,37 @@ func TestPackageLevelHandler_OverrideAllowsDebugForOnePackageOnly(t *testing.T) 
 	}
 	if !strings.Contains(buf.String(), "should be logged") {
 		t.Errorf("expected debug record to pass with package override, got: %s", buf.String())
+	}
+}
+
+// TestSetPackageLevel_ConcurrentSetsForDistinctPackagesAllSurvive guards
+// against a lost-update race: SetPackageLevel used to do an unsynchronized
+// load->copy->mutate->Store, so two concurrent calls for different packages
+// could race and one update would silently overwrite the other's copy of the
+// map instead of merging with it.
+func TestSetPackageLevel_ConcurrentSetsForDistinctPackagesAllSurvive(t *testing.T) {
+	t.Cleanup(ClearAllPackageLevels)
+	ClearAllPackageLevels()
+
+	const n = 50
+	var wg sync.WaitGroup
+	wg.Add(n)
+	for i := range n {
+		go func(i int) {
+			defer wg.Done()
+			SetPackageLevel(fmt.Sprintf("pkg%d", i), DEBUG)
+		}(i)
+	}
+	wg.Wait()
+
+	got := GetPackageLevels()
+	if len(got) != n {
+		t.Fatalf("GetPackageLevels() has %d entries, want %d (lost-update race in SetPackageLevel)", len(got), n)
+	}
+	for i := range n {
+		pkg := fmt.Sprintf("pkg%d", i)
+		if level, ok := got[pkg]; !ok || level != DEBUG {
+			t.Errorf("GetPackageLevels()[%q] = (%v, %v), want (DEBUG, true)", pkg, level, ok)
+		}
 	}
 }

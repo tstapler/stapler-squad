@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/tstapler/stapler-squad/log"
@@ -17,11 +16,6 @@ const (
 	artifactWorkerPoolSize = 4
 	artifactQueueSize      = 256
 	maxScannerTokenSize    = 10 * 1024 * 1024 // 10 MB, matches tokens/parser.go
-
-	// dropLogInterval logs only every Nth "queue full" drop (with a running
-	// total) instead of every single one — see tokens/store.go's identical
-	// constant for the same worker-pool pattern and the incident it fixed.
-	dropLogInterval = 100
 )
 
 // ArtifactExtractor reads Claude Code JSONL files and extracts structured
@@ -32,7 +26,7 @@ type ArtifactExtractor struct {
 	inflight sync.Map // key: filePath, value: struct{}
 
 	// droppedCount tracks total queue-full drops for rate-limited logging.
-	droppedCount atomic.Uint64
+	droppedCount log.DropCounter
 
 	// offsets tracks the last scanned byte offset per file.
 	offsetsMu sync.Mutex
@@ -112,7 +106,7 @@ func (ae *ArtifactExtractor) enqueue(filePath string) {
 	case ae.queue <- filePath:
 	default:
 		ae.inflight.Delete(filePath)
-		if n := ae.droppedCount.Add(1); n%dropLogInterval == 1 {
+		if n, shouldLog := ae.droppedCount.Hit(); shouldLog {
 			log.Warn("[ArtifactExtractor] queue full, dropping", "path", filePath, "total_dropped", n)
 		}
 	}
