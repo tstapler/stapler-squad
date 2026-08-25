@@ -1,5 +1,6 @@
 import { style, keyframes } from "@vanilla-extract/css";
 import { vars } from "@/styles/theme.css";
+import { zIndex } from "@/styles/theme-contract.css";
 
 // ── Animated modal chrome ───────────────────────────────────────────────────
 // Fade/slide-up overlay + panel used by the session dialogs (ConfirmKillDialog,
@@ -26,7 +27,7 @@ export const animatedOverlay = style({
   display: "flex",
   alignItems: "center",
   justifyContent: "center",
-  zIndex: 1000,
+  zIndex: zIndex.modal,
   animation: `${fadeIn} 0.2s ease`,
 });
 
