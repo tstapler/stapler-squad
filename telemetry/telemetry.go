@@ -17,7 +17,7 @@ import (
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
-	semconv "go.opentelemetry.io/otel/semconv/v1.24.0"
+	semconv "go.opentelemetry.io/otel/semconv/v1.41.0"
 	"go.opentelemetry.io/otel/trace"
 )
 
@@ -119,7 +119,7 @@ func Initialize(ctx context.Context, cfg Config) (*Provider, error) {
 			semconv.SchemaURL,
 			semconv.ServiceName(ServiceName),
 			semconv.ServiceVersion(cfg.ServiceVersion),
-			semconv.DeploymentEnvironment(cfg.Environment),
+			semconv.DeploymentEnvironmentNameKey.String(cfg.Environment),
 		),
 	)
 	if err != nil {
