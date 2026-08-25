@@ -215,17 +215,18 @@ jobs:
           # Split into two invocations, mirroring the Makefile's test/test-race/
           # test-coverage targets (see BUG-051): session, session/mux, and
           # session/tmux fork real tmux subprocesses at high t.Parallel() fan-out,
-          # so they're serialized against each other with -p 1 here. Everything
-          # else in the original ADR-001 scope runs with full package parallelism
-          # (root cause there was -race CPU contention across ALL packages, not
-          # specifically these three — see
-          # project_plans/flaky-hook-url-tests/decisions/ADR-001 — so removing the
-          # blanket -p 1 for the non-tmux packages is safe; local baseline runs on
-          # this branch confirm the only -p 1 failures are tmux-contention ones in
-          # `session` itself, already covered by the first invocation below).
+          # so they were run separately from the rest of the suite. They no
+          # longer need -p 1 against each other: the flake that justified it
+          # was TestBuildClaudeCommand_LargePromptUsesTempFileNotInline
+          # overriding promptArg's background cleanup delay to 10ms in a test
+          # that doesn't exercise cleanup timing, racing its own os.ReadFile
+          # against that goroutine under CPU contention (see
+          # session/instance_tmux_test.go). Fixed by leaving the real 30s
+          # default delay in place; validated with a clean -race run of all
+          # three packages together sans -p 1.
           TMUX_TEST_PKGS="./session ./session/mux ./session/tmux"
           REST_TEST_PKGS="$(go list ./server/... ./session/... ./config/... | grep -vE '^github\.com/tstapler/stapler-squad/(session|session/mux|session/tmux)$')"
-          TMUX_BIN="$(pwd)/bin/tmux" go test -race -p 1 -timeout=20m -coverprofile=coverage.tmux.out \
+          TMUX_BIN="$(pwd)/bin/tmux" go test -race -timeout=20m -coverprofile=coverage.tmux.out \
             -covermode=atomic $TMUX_TEST_PKGS \
             || (TMUX_BIN="$(pwd)/bin/tmux" go test -race -timeout=20m -v $TMUX_TEST_PKGS; exit 1)
           TMUX_BIN="$(pwd)/bin/tmux" go test -race -timeout=20m -coverprofile=coverage.rest.out \
