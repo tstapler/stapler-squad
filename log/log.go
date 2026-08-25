@@ -632,12 +632,9 @@ func (sl *SessionLogger) Error(format string, v ...interface{}) {
 
 // logAt builds and emits a slog.Record with the PC of Info/Warn/Error/Debug's
 // caller (not this function, and not Info/Warn/etc. themselves) so
-// PackageLevelHandler can resolve per-package overrides correctly. Calling
-// slog.Info/Warn/etc. directly from those wrappers would instead attribute
-// every call site to this log package, since slog's top-level convenience
-// functions assume they're called directly from user code — see
-// https://pkg.go.dev/log/slog#hdr-Wrapping_output_methods for the pattern
-// this follows (skip=3: Callers, logAt, Info/Warn/Error/Debug, caller).
+// PackageLevelHandler can resolve per-package overrides correctly (skip=3:
+// Callers, logAt, Info/Warn/Error/Debug, caller).
+// See also: https://pkg.go.dev/log/slog#hdr-Wrapping_output_methods.
 func logAt(level slog.Level, msg string, args ...any) {
 	logger := slog.Default()
 	ctx := context.Background()

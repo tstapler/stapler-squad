@@ -7,11 +7,11 @@ package session
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/user"
 	"path/filepath"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -20,13 +20,17 @@ import (
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
-// loggedMissingWorktree suppresses repeat "worktree directory missing"
-// warnings for a session whose on-disk status is never persisted back as
-// Paused (see fromInstanceData) — every health-check LoadInstances() tick
-// (session/health.go, ~15s) re-detects and re-transitions the same session
-// in memory, so without this the warning fires on every tick forever
-// instead of once. Keyed by session title; cleared implicitly on restart.
-var loggedMissingWorktree sync.Map //nolint:gochecknoglobals
+// worktreeMissingLevel picks the level for the "worktree directory missing"
+// log line: Warn the first time this Instance has seen it, Debug on any
+// repeat (see Instance.loggedMissingWorktree). Returning a level rather than
+// a bound *slog.Logger method keeps this directly unit-testable — method
+// values aren't comparable.
+func worktreeMissingLevel(alreadyLogged bool) slog.Level {
+	if alreadyLogged {
+		return slog.LevelDebug
+	}
+	return slog.LevelWarn
+}
 
 // ToInstanceData converts an Instance to its serializable form
 //
@@ -386,15 +390,14 @@ func fromInstanceData(data InstanceData, deferStart bool) (*Instance, error) {
 		worktreePath := instance.gitManager.GetWorktreePath()
 		if _, err := os.Stat(worktreePath); os.IsNotExist(err) {
 			// Worktree has been deleted — use transitionTo so the state machine is respected.
-			_, alreadyLogged := loggedMissingWorktree.LoadOrStore(instance.Title, struct{}{})
-			logAt := log.ForSession(instance.Title).Warn
-			if alreadyLogged {
-				logAt = log.ForSession(instance.Title).Debug
-			}
-			logAt("worktree directory missing, marking as paused", "path", worktreePath)
+			level := worktreeMissingLevel(instance.loggedMissingWorktree)
+			instance.loggedMissingWorktree = true
+			logger := log.ForSession(instance.Title)
+			warnOrDebug := func(msg string, args ...any) { logger.Log(context.Background(), level, msg, args...) }
+			warnOrDebug("worktree directory missing, marking as paused", "path", worktreePath)
 			if err := instance.transitionTo(context.Background(), Paused); err != nil {
 				// If the transition is somehow invalid (e.g. already Stopped), fall back to loadStatus.
-				logAt("could not transition to paused via state machine, using loadStatus", "err", err)
+				warnOrDebug("could not transition to paused via state machine, using loadStatus", "err", err)
 				instance.loadStatus(Paused)
 			}
 		}
