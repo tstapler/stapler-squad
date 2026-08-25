@@ -138,7 +138,7 @@ func NewTestInstance(t *testing.T, title string) *TestInstanceBuilder {
 			Path:             t.TempDir(),                              // Each test gets its own temp directory
 			Program:          "bash -c 'echo test session; exec bash'", // Safe default program
 			SessionType:      SessionTypeDirectory,
-			AutoYes:          true,                 // Tests shouldn't prompt for input
+			AutoYes:          true,              // Tests shouldn't prompt for input
 			TmuxServerSocket: testTmuxSocket(t), // Isolated tmux server per test
 		},
 	}
