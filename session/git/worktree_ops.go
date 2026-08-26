@@ -174,7 +174,12 @@ func (g *GitWorktree) setupFromExistingBranch() error {
 // remains empty and Diff() will fall back to its own resolution.
 func (g *GitWorktree) initBaseCommitSHA() {
 	for _, branch := range []string{"main", "master", "develop", "trunk"} {
-		output, err := g.runGitCommand(g.repoPath, "merge-base", "HEAD", branch)
+		// cwd must be g.worktreePath, not g.repoPath: HEAD needs to resolve to this
+		// worktree's own branch tip. g.repoPath is the shared parent checkout, whose
+		// ambient checked-out branch can be anything a concurrent process left it on
+		// (mirrors the fix in resolveBaseCommitSHA, session/git/diff.go, which already
+		// does this correctly).
+		output, err := g.runGitCommand(g.worktreePath, "merge-base", "HEAD", branch)
 		if err == nil {
 			if sha := strings.TrimSpace(output); sha != "" {
 				g.baseCommitSHA = sha

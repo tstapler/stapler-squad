@@ -4742,3 +4742,48 @@ func TestShouldAttributeTombstoneToShutdown_should_MatchOnlyPreBootNonStaleNotLi
 		})
 	}
 }
+
+// TestBacklogWorkBranchSlug_TwoItemsWithCollidingTitles_ShareOneWorktree is a
+// regression/documentation test for backlog item e7664cbf's worktree-identity root
+// cause (research/architecture.md's "Option B", explicitly deferred by plan.md):
+// worktree identity is resolved by title-derived branch name
+// (backlogWorkBranchSlug + session.CreateBacklogWorktree), not by item/session UUID.
+// Two items whose titles differ only in characters slugify() strips (punctuation)
+// collide on the exact same branch name, and — confirmed here — CreateBacklogWorktree
+// then hands the second item the exact same worktree directory as the first, via
+// findExistingWorktreeForBranch's (session/git/worktree.go) "branch already checked
+// out, reuse its worktree" path.
+//
+// This is a known, tracked limitation, not something this bug fix addresses:
+// ReviewGateRunner.Run's new worktree-identity check (session/review_gate.go) only
+// catches a *mismatched* branch — here the worktree genuinely does have the recorded
+// branch checked out, so there is nothing for that check to catch. A real fix
+// requires re-resolving worktree identity by item/session UUID instead of branch
+// name, which touches every caller of GetWorktreeDataBySessionUUID — out of scope
+// for this bug fix (see plan.md's explicit deferral).
+func TestBacklogWorkBranchSlug_TwoItemsWithCollidingTitles_ShareOneWorktree(t *testing.T) {
+	t.Parallel()
+
+	repoDir := t.TempDir()
+	runGitTestCmd(t, repoDir, "init", "-b", "main")
+	runGitTestCmd(t, repoDir, "config", "user.email", "test@example.com")
+	runGitTestCmd(t, repoDir, "config", "user.name", "Test")
+	require.NoError(t, os.WriteFile(filepath.Join(repoDir, "README.md"), []byte("base\n"), 0o644))
+	runGitTestCmd(t, repoDir, "add", "README.md")
+	runGitTestCmd(t, repoDir, "commit", "-m", "initial")
+
+	titleA := "Fix the login bug!"
+	titleB := "Fix the login bug?"
+	slugA := backlogWorkBranchSlug(repoDir, titleA)
+	slugB := backlogWorkBranchSlug(repoDir, titleB)
+	require.Equal(t, slugA, slugB, "fixture requires titleA/titleB to collide on the same slug")
+
+	pathA, err := session.CreateBacklogWorktree(repoDir, slugA)
+	require.NoError(t, err)
+
+	pathB, err := session.CreateBacklogWorktree(repoDir, slugB)
+	require.NoError(t, err)
+
+	assert.Equal(t, pathA, pathB,
+		"colliding title slugs currently resolve to the exact same worktree — a known, tracked limitation, not fixed by this bug fix")
+}

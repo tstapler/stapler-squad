@@ -485,17 +485,18 @@ func TestReviewGateRunner_DiffComputationFailure_BlocksReviewInsteadOfFalseUnver
 	ctx := context.Background()
 
 	// Real git repo with one commit so `git diff <bogus-sha>..HEAD` fails with a real
-	// "unknown revision" error rather than "not a git repository". The branch is
-	// explicitly pinned to "main" (rather than relying on the host's
-	// init.defaultBranch config, as other tests in this file also avoid) so that the
-	// worktree's recorded BranchName below ("master") deterministically does NOT
-	// match any real branch in this repo — this drives RecoverBaseCommitSHA's `git
-	// merge-base HEAD master` to fail outright (unknown revision), exercising the
-	// "auto-repair itself cannot resolve the branch" sub-branch of the repair logic,
-	// distinct from TestReviewGateRunner_DiffComputationFailure_RecoveredButEmptyDiff_StillBlocks's
+	// "unknown revision" error rather than "not a git repository". The repo's only
+	// branch is deliberately named "feature" — none of RecoverBaseCommitSHA's default
+	// candidates (main/master/develop/trunk) exist here — so the worktree's recorded
+	// BranchName below ("feature") both matches what's actually checked out (passing
+	// the worktree-identity check) and still drives every one of RecoverBaseCommitSHA's
+	// `git merge-base HEAD <candidate>` attempts to fail outright (unknown revision),
+	// exercising the "auto-repair itself cannot resolve any candidate" sub-branch of the
+	// repair logic, distinct from
+	// TestReviewGateRunner_DiffComputationFailure_RecoveredButEmptyDiff_StillBlocks's
 	// "repair resolves but the recovered diff is empty" sub-branch below.
 	repoDir := t.TempDir()
-	runGitOrFail(t, repoDir, "init", "-b", "main")
+	runGitOrFail(t, repoDir, "init", "-b", "feature")
 	runGitOrFail(t, repoDir, "config", "user.email", "test@example.com")
 	runGitOrFail(t, repoDir, "config", "user.name", "Test")
 	require.NoError(t, os.WriteFile(repoDir+"/file.txt", []byte("hello\n"), 0o644))
@@ -525,7 +526,7 @@ func TestReviewGateRunner_DiffComputationFailure_BlocksReviewInsteadOfFalseUnver
 	inst := newTestInstance("diff-error-test")
 	inst.UUID = workSessionUUID
 	inst.gitManager.worktree = git.NewGitWorktreeFromStorage(
-		repoDir, repoDir, "diff-error-test", "master", "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef")
+		repoDir, repoDir, "diff-error-test", "feature", "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef")
 	require.NoError(t, storage.SaveInstances([]*Instance{inst}))
 
 	item := &BacklogItemData{ID: createdItemData.ID, RepoPath: repoDir}
@@ -745,11 +746,18 @@ func TestReviewGateRunner_EmptyCommittedDiff_BlocksReviewInsteadOfFalsePass(t *t
 // shape of backlog item ae1e2070-db02-4ad7-8580-633ef9904f31 — a real feature branch
 // with real committed work, whose recorded base_commit_sha is a well-formed but
 // nonexistent SHA (simulating a pruned/corrupted commit) — and verifies the review
-// proceeds on the recovered (real) diff instead of blocking, because repoPath's
-// checked-out HEAD ("main") and the work branch ("feature") have a genuine common
-// ancestor that RecoverBaseCommitSHA can find and a non-empty diff results. Since
-// review now always spawns a real session rather than computing a verdict inline,
-// "proceeds" means SpawnReviewSession is called with the recovered diff in its prompt.
+// proceeds on the recovered (real) diff instead of blocking, because the feature
+// branch and "main" have a genuine common ancestor that RecoverBaseCommitSHA can find
+// and a non-empty diff results. Uses a real, separate `git worktree add` checkout for
+// wt.WorktreePath (distinct from repoDir/item.RepoPath) rather than pointing both at
+// the same directory — matching real worktree topology (a worktree always has its own
+// branch checked out) is what exercises RecoverBaseCommitSHA's actual fix (backlog item
+// e7664cbf: recompute inside the worktree, not repoPath's ambient checkout) and avoids
+// tripping the worktree-identity guard, which would otherwise correctly flag a
+// same-directory fixture as a mismatch (repoDir can only have one branch checked out
+// at a time). Since review now always spawns a real session rather than computing a
+// verdict inline, "proceeds" means SpawnReviewSession is called with the recovered
+// diff in its prompt.
 func TestReviewGateRunner_DiffComputationFailure_AutoRepairsFromDivergentBranch(t *testing.T) {
 	t.Parallel()
 	storage, cleanup := createTestStorage(t)
@@ -764,14 +772,14 @@ func TestReviewGateRunner_DiffComputationFailure_AutoRepairsFromDivergentBranch(
 	runGitOrFail(t, repoDir, "add", "README.md")
 	runGitOrFail(t, repoDir, "commit", "-m", "initial")
 
-	// Real feature branch with real committed work — the same shape as ae1e2070's
-	// stelekit worktree, which had a genuine 302+/88- fix already committed.
-	runGitOrFail(t, repoDir, "branch", "feature")
-	runGitOrFail(t, repoDir, "checkout", "feature")
-	require.NoError(t, os.WriteFile(repoDir+"/feature.txt", []byte("real work\n"), 0o644))
-	runGitOrFail(t, repoDir, "add", "feature.txt")
-	runGitOrFail(t, repoDir, "commit", "-m", "real fix")
-	runGitOrFail(t, repoDir, "checkout", "main")
+	// Real feature branch with real committed work, checked out in its own dedicated
+	// worktree directory — the same shape as ae1e2070's stelekit worktree, which had a
+	// genuine 302+/88- fix already committed.
+	worktreeDir := t.TempDir()
+	runGitOrFail(t, repoDir, "worktree", "add", "-b", "feature", worktreeDir, "main")
+	require.NoError(t, os.WriteFile(worktreeDir+"/feature.txt", []byte("real work\n"), 0o644))
+	runGitOrFail(t, worktreeDir, "add", "feature.txt")
+	runGitOrFail(t, worktreeDir, "commit", "-m", "real fix")
 
 	itemData := BacklogItemData{
 		Title:              "Diff auto-repair test",
@@ -792,12 +800,12 @@ func TestReviewGateRunner_DiffComputationFailure_AutoRepairsFromDivergentBranch(
 	require.NoError(t, err)
 
 	// Same corruption as the blocking test: a well-formed but nonexistent base SHA.
-	// worktreePath == repoDir keeps the fixture simple; GetGitDiff(worktree) fails the
-	// same way GetGitDiffRef(repo fallback) does, exactly as observed for ae1e2070.
+	// GetGitDiff(worktree) fails the same way GetGitDiffRef(repo fallback) does,
+	// exactly as observed for ae1e2070.
 	inst := newTestInstance("diff-repair-test")
 	inst.UUID = workSessionUUID
 	inst.gitManager.worktree = git.NewGitWorktreeFromStorage(
-		repoDir, repoDir, "diff-repair-test", "feature", "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef")
+		repoDir, worktreeDir, "diff-repair-test", "feature", "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef")
 	require.NoError(t, storage.SaveInstances([]*Instance{inst}))
 
 	item := &BacklogItemData{ID: createdItemData.ID, RepoPath: repoDir}
@@ -1015,6 +1023,170 @@ func TestReviewGateRunner_NoBranchName_DiffComputationFailure_SkipsRepairAndBloc
 	assert.Equal(t, ReviewVerdictFail, outcome, "a distinct FAIL verdict must be recorded, not a silent pass-through")
 
 	assert.Contains(t, notifier.titles(), "Review blocked — diff computation failed")
+}
+
+// TestReviewGateRunner_WorktreeBranchMismatch_BlocksReviewWithDistinctVerdict is a
+// regression test for backlog item e7664cbf's "worktree reset to an unrelated empty
+// repo" symptom: worktree paths are resolved by title-derived branch name, not
+// item/session UUID (session/git/worktree.go's findExistingWorktreeForBranch), so a
+// session's recorded worktree row can point at a directory that has since been
+// recreated/reused for a different item's branch. Mirrors
+// TestReconcileBouncingItems_should_stillFlag_When_WorktreePathWasRecycledToAnotherBranch's
+// fixture shape (session/backlog_lifecycle_stuck_test.go): the row still names this
+// item's own branch ("feature"), but the directory is actually checked out on a
+// different branch. Before this fix, Run would either diff (or auto-repair) against
+// whatever happened to be there; it must now fail closed with a distinct verdict
+// before ever computing a diff.
+func TestReviewGateRunner_WorktreeBranchMismatch_BlocksReviewWithDistinctVerdict(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	repoDir := t.TempDir()
+	runGitOrFail(t, repoDir, "init", "-b", "main")
+	runGitOrFail(t, repoDir, "config", "user.email", "test@example.com")
+	runGitOrFail(t, repoDir, "config", "user.name", "Test")
+	require.NoError(t, os.WriteFile(repoDir+"/README.md", []byte("base\n"), 0o644))
+	runGitOrFail(t, repoDir, "add", "README.md")
+	runGitOrFail(t, repoDir, "commit", "-m", "initial")
+
+	// The path this session's worktree row will claim — but it's checked out on
+	// "other-item-branch" (a later, unrelated item's work), not this session's own
+	// "feature" branch. Simulates the path having been recycled/recreated after this
+	// session's own worktree was torn down.
+	recycledPath := t.TempDir()
+	runGitOrFail(t, repoDir, "worktree", "add", "-b", "other-item-branch", recycledPath, "main")
+	require.NoError(t, os.WriteFile(recycledPath+"/other-item.txt", []byte("a later item's own commit\n"), 0o644))
+	runGitOrFail(t, recycledPath, "add", "other-item.txt")
+	runGitOrFail(t, recycledPath, "commit", "-m", "later item's real work")
+
+	itemData := BacklogItemData{
+		Title:              "Worktree identity mismatch test",
+		AcceptanceCriteria: `[]`,
+		Priority:           1,
+		Status:             string(BacklogStatusInProgress),
+		RepoPath:           repoDir,
+	}
+	createdItemData, err := storage.CreateBacklogItem(ctx, itemData)
+	require.NoError(t, err)
+
+	workSessionUUID := uuid.New().String()
+	workIS, err := storage.CreateItemSession(ctx, ItemSessionData{
+		ItemID:      createdItemData.ID,
+		SessionUUID: workSessionUUID,
+		SessionRole: SessionRoleWork,
+	})
+	require.NoError(t, err)
+
+	inst := newTestInstance("worktree-mismatch-test")
+	inst.UUID = workSessionUUID
+	inst.gitManager.worktree = git.NewGitWorktreeFromStorage(
+		repoDir, recycledPath, "worktree-mismatch-test", "feature", "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef")
+	require.NoError(t, storage.SaveInstances([]*Instance{inst}))
+
+	item := &BacklogItemData{ID: createdItemData.ID, RepoPath: repoDir}
+
+	// The session creator must never be consulted — the review should be blocked
+	// before any diff/branch-sync operation ever touches the mismatched worktree.
+	spawner := &mockReviewGateSpawner{}
+	getSessionCreator := func() ReviewGateSpawner { return spawner }
+
+	reopener := newFakeAutoReopenSpawner()
+	getAutoReopener := func() AutoReopenSpawner { return reopener }
+
+	notifier := &fakeNotifier{}
+	getNotifier := func() Notifier { return notifier }
+
+	runner := NewReviewGateRunner(storage, getAutoReopener, getNotifier, getSessionCreator, nil)
+
+	var onPassCalled atomic.Bool
+	runner.Run(ctx, item, workIS, func(ctx context.Context, item *BacklogItemData, is ItemSessionSummary) {
+		onPassCalled.Store(true)
+	})
+
+	assert.Equal(t, 0, spawner.getCallCount(), "session creator must never be consulted for a worktree identity mismatch")
+	assert.False(t, onPassCalled.Load(), "onPass must not fire for a blocked review")
+
+	outcome, err := storage.GetMostRecentReviewVerdictForItem(ctx, item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, ReviewVerdictFail, outcome, "a distinct FAIL verdict must be recorded, not a silent pass-through against the wrong worktree")
+
+	assert.Contains(t, notifier.titles(), "Review blocked — worktree identity mismatch")
+
+	select {
+	case gotItemID := <-reopener.called:
+		assert.Equal(t, item.ID, gotItemID, "auto-reopen must still be invoked so the cap/notify machinery eventually engages")
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for AutoReopenAfterFailedReview to be called")
+	}
+}
+
+// TestReviewGateRunner_WorktreeBranchMismatch_RepeatedFailure_StillDedupsViaIsRepeatedFailure
+// confirms IsRepeatedFailure's exact-summary-match dedup (session/stuck_decisions.go)
+// still trips against the new worktree-identity-mismatch verdict text: two consecutive
+// review attempts against the same unresolved mismatch must produce byte-identical
+// Summary strings, so the existing rework-cap backstop is not silently defeated by the
+// new verdict's message text varying between attempts.
+func TestReviewGateRunner_WorktreeBranchMismatch_RepeatedFailure_StillDedupsViaIsRepeatedFailure(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	repoDir := t.TempDir()
+	runGitOrFail(t, repoDir, "init", "-b", "main")
+	runGitOrFail(t, repoDir, "config", "user.email", "test@example.com")
+	runGitOrFail(t, repoDir, "config", "user.name", "Test")
+	require.NoError(t, os.WriteFile(repoDir+"/README.md", []byte("base\n"), 0o644))
+	runGitOrFail(t, repoDir, "add", "README.md")
+	runGitOrFail(t, repoDir, "commit", "-m", "initial")
+
+	recycledPath := t.TempDir()
+	runGitOrFail(t, repoDir, "worktree", "add", "-b", "other-item-branch", recycledPath, "main")
+
+	itemData := BacklogItemData{
+		Title:              "Worktree identity mismatch repeated-failure test",
+		AcceptanceCriteria: `[]`,
+		Priority:           1,
+		Status:             string(BacklogStatusInProgress),
+		RepoPath:           repoDir,
+	}
+	createdItemData, err := storage.CreateBacklogItem(ctx, itemData)
+	require.NoError(t, err)
+
+	notifier := &fakeNotifier{}
+	getNotifier := func() Notifier { return notifier }
+	getAutoReopener := func() AutoReopenSpawner { return nil }
+	spawner := &mockReviewGateSpawner{}
+	getSessionCreator := func() ReviewGateSpawner { return spawner }
+	runner := NewReviewGateRunner(storage, getAutoReopener, getNotifier, getSessionCreator, nil)
+
+	// Two independent rework attempts, same unresolved mismatch each time.
+	for i := 0; i < 2; i++ {
+		workSessionUUID := uuid.New().String()
+		workIS, err := storage.CreateItemSession(ctx, ItemSessionData{
+			ItemID:      createdItemData.ID,
+			SessionUUID: workSessionUUID,
+			SessionRole: SessionRoleWork,
+		})
+		require.NoError(t, err)
+
+		sessionName := fmt.Sprintf("worktree-mismatch-repeat-test-%d", i)
+		inst := newTestInstance(sessionName)
+		inst.UUID = workSessionUUID
+		inst.gitManager.worktree = git.NewGitWorktreeFromStorage(
+			repoDir, recycledPath, sessionName, "feature", "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef")
+		require.NoError(t, storage.SaveInstances([]*Instance{inst}))
+
+		item := &BacklogItemData{ID: createdItemData.ID, RepoPath: repoDir}
+		runner.Run(ctx, item, workIS, func(ctx context.Context, item *BacklogItemData, is ItemSessionSummary) {})
+	}
+
+	recent, err := storage.GetRecentReviewVerdictSummaries(ctx, createdItemData.ID, 2)
+	require.NoError(t, err)
+	require.Len(t, recent, 2)
+	assert.True(t, IsRepeatedFailure(recent), "IsRepeatedFailure must still trip against two consecutive worktree-identity-mismatch verdicts with identical Summary text")
 }
 
 // cloneWithOrigin clones originDir into a fresh temp directory with a real "origin"

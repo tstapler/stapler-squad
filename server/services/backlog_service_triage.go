@@ -3714,15 +3714,25 @@ func (s *BacklogService) getWorkSessionDiff(ctx context.Context, repoPath string
 
 	// Auto-repair: mirror ReviewGateRunner.Run's recovery (session/review_gate.go) for a
 	// stale/corrupted base_commit_sha — the same failure mode found via manual QA on item
-	// ae1e2070 and fixed there first. Only attemptable when a branch ref is known; recompute
-	// the merge-base of repoPath's own checked-out HEAD against the branch and retry once
-	// before giving up on what may just be a recoverable infrastructure hiccup rather than
-	// "no changes were made".
+	// ae1e2070 and fixed there first. Only attemptable when a branch ref is known.
+	// RecoverBaseCommitSHA now compares branchName against explicit default-branch refs
+	// rather than implicit HEAD (backlog item e7664cbf — repoPath's ambient checked-out
+	// branch is unreliable, since a concurrent process can leave it on anything), so the
+	// directory it runs in no longer needs to be the branch's own checkout: prefer the
+	// session's own dedicated worktree when it still exists on disk, falling back to
+	// repoPath when it doesn't (e.g. a torn-down worktree — its commits remain reachable
+	// via the shared object store) rather than skipping repair entirely.
+	recoverDir := diffDir
+	if wt.WorktreePath != "" {
+		if info, statErr := os.Stat(wt.WorktreePath); statErr == nil && info.IsDir() {
+			recoverDir = wt.WorktreePath
+		}
+	}
 	if diffHeadRef != "" {
-		if recoveredSHA, recoverErr := session.RecoverBaseCommitSHA(ctx, diffDir, diffHeadRef); recoverErr != nil {
-			log.WarningLog().Printf("[TriggerReReview] RecoverBaseCommitSHA in %s ref=%s failed: %v", diffDir, diffHeadRef, recoverErr)
-		} else if recoveredDiff, _, retryErr := session.GetGitDiffRef(ctx, diffDir, recoveredSHA, diffHeadRef); retryErr != nil {
-			log.WarningLog().Printf("[TriggerReReview] retry with recovered base %s in %s failed: %v", recoveredSHA, diffDir, retryErr)
+		if recoveredSHA, recoverErr := session.RecoverBaseCommitSHA(ctx, recoverDir, diffHeadRef); recoverErr != nil {
+			log.WarningLog().Printf("[TriggerReReview] RecoverBaseCommitSHA in %s failed: %v", recoverDir, recoverErr)
+		} else if recoveredDiff, _, retryErr := session.GetGitDiffRef(ctx, recoverDir, recoveredSHA, diffHeadRef); retryErr != nil {
+			log.WarningLog().Printf("[TriggerReReview] retry with recovered base %s in %s failed: %v", recoveredSHA, recoverDir, retryErr)
 		} else if strings.TrimSpace(recoveredDiff) == "" {
 			// A recovered base that produces an empty diff is indistinguishable from
 			// "nothing changed" and just as unsafe to trust as the original failure — see
