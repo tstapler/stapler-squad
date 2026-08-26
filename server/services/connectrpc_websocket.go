@@ -1721,7 +1721,13 @@ func (h *ConnectRPCWebSocketHandler) streamViaHub(stream *connectWebSocketStream
 	// which the browser client depends on. Capturing directly here keeps
 	// this connection's initial paint correct; every other Transport (e.g.
 	// MuxTransport) now relies on the hub's own send instead.
-	if content, err := instance.CapturePaneContentRaw(); err == nil && content != "" {
+	//
+	// Sent even when content == "" (a genuinely empty pane): the client only
+	// clears its loading spinner on a received message with non-empty output
+	// bytes, and ansiSnapshotPrefix alone is non-empty, so an idle/empty
+	// session still reaches "connected, nothing to show" instead of spinning
+	// forever with no future event to ever clear it.
+	if content, err := instance.CapturePaneContentRaw(); err == nil {
 		fullContent := withCursorSync(ansiSnapshotPrefix+prepareSnapshotContent(content), instance)
 		initMsg := &sessionv1.TerminalData{
 			SessionId: sessionID,
