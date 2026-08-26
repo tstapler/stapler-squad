@@ -30,6 +30,8 @@ import (
 	"github.com/tstapler/stapler-squad/session/scrollback"
 	"github.com/tstapler/stapler-squad/session/streamhub"
 	"github.com/tstapler/stapler-squad/session/tmux"
+	"github.com/tstapler/stapler-squad/telemetry"
+	"go.opentelemetry.io/otel/attribute"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -2602,6 +2604,7 @@ func runInputReadLoop(
 			// Handle resize — send to coalescing worker so rapid window-drag events
 			// never stall input reading and don't pile up unbounded goroutines.
 			if resize := incomingData.GetResize(); resize != nil {
+				log.Debug("[runInputReadLoop] received mid-stream resize frame", "session", sessionID, "cols", resize.Cols, "rows", resize.Rows)
 				onResize(int(resize.Cols), int(resize.Rows))
 			}
 
@@ -2712,13 +2715,25 @@ func handleCurrentPaneRequestFrame(
 	onCurrentPaneRequest func(req *sessionv1.CurrentPaneRequest) (*sessionv1.TerminalOutput, error),
 	resizeSettling *atomic.Bool,
 ) {
+	_, span := telemetry.StartSpan(context.Background(), "terminal.mid_stream_current_pane_request")
+	span.SetAttributes(
+		attribute.String("session_id", sessionID),
+		attribute.String("resync_id", paneReq.GetResyncId()),
+	)
+	defer span.End()
+
+	log.Debug("[runInputReadLoop] received mid-stream currentPaneRequest frame", "session", sessionID, "resync_id", paneReq.GetResyncId())
+
 	resizeSettling.Store(true)
 	defer resizeSettling.Store(false)
 	output, err := onCurrentPaneRequest(paneReq)
 	if err != nil {
-		log.Error("[streamViaControlMode] failed to handle mid-stream current pane request", "session", sessionID, "err", err)
+		span.RecordError(err)
+		log.Error("[streamViaControlMode] failed to handle mid-stream current pane request", "session", sessionID, "resync_id", paneReq.GetResyncId(), "err", err)
 		return
 	}
+	span.SetAttributes(attribute.Int("output.bytes", len(output.GetData())))
+	log.Debug("[runInputReadLoop] answered mid-stream currentPaneRequest", "session", sessionID, "resync_id", paneReq.GetResyncId(), "output_bytes", len(output.GetData()))
 	writeCurrentPaneResponse(stream, sessionID, "", output)
 }
 
@@ -2772,7 +2787,9 @@ func writeCurrentPaneResponse(stream *connectWebSocketStream, sessionID string, 
 		}
 	}
 
-	_ = stream.WriteMessage(websocket.BinaryMessage, protocol.CreateEnvelope(envelopeFlags, payload))
+	if wsErr := stream.WriteMessage(websocket.BinaryMessage, protocol.CreateEnvelope(envelopeFlags, payload)); wsErr != nil {
+		log.Error("[streamViaControlMode] failed to write current pane response", "session", sessionID, "err", wsErr)
+	}
 }
 
 // handleBatchedCurrentPaneRequest answers each CurrentPaneRequest coalesced inside a
