@@ -783,7 +783,15 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		// flag off requires a restart to stop serving these routes, same limitation the
 		// "backlog" flag already has for its own route-gated pieces.
 		if webhookCfg.GetFeatureFlag("webhook_triggers") {
-			githubWebhookHandler := services.NewGitHubWebhookHandler(deps.WorkflowRepo, deps.WorkflowScheduler, deps.TriggerFireEventRepo, webhookCfg)
+			// deps.BacklogLifecycleListener is nil-guarded (rather than passed directly)
+			// to avoid boxing a nil *session.BacklogLifecycleListener into a non-nil
+			// services.PRFixEventRouter interface value (a "typed nil" — handlePRFixEvent's
+			// `h.prFixRouter == nil` check would then never trip).
+			var prFixRouter services.PRFixEventRouter
+			if deps.BacklogLifecycleListener != nil {
+				prFixRouter = deps.BacklogLifecycleListener
+			}
+			githubWebhookHandler := services.NewGitHubWebhookHandler(deps.WorkflowRepo, deps.WorkflowScheduler, deps.TriggerFireEventRepo, webhookCfg, prFixRouter)
 			githubWebhookHandler.RegisterRoutes(srv.mux)
 			genericWebhookHandler := services.NewGenericWebhookHandler(deps.WorkflowRepo, deps.WorkflowScheduler, deps.TriggerFireEventRepo, webhookCfg)
 			genericWebhookHandler.RegisterRoutes(srv.mux)
@@ -796,6 +804,12 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 			// route). This log line at least makes the boot-time-only nature of the gate
 			// visible in the service log.
 			log.Info("webhook-trigger routes NOT registered (webhook_triggers flag off) — /webhooks/* will 404 until the flag is enabled and the service restarts")
+			if webhookCfg.GetFeatureFlag("pr_event_webhooks") {
+				// pr_event_webhooks has no effect unless webhook_triggers is also enabled
+				// (the route itself isn't registered above) — a silent-404 trap an
+				// operator could otherwise hit with zero signal.
+				log.Warn("pr_event_webhooks is enabled but webhook_triggers is not — /webhooks/github is not registered, PR-fix webhook events will silently 404")
+			}
 		}
 	}
 
@@ -1047,6 +1061,16 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		log.Info("Stale session notifier started",
 			"threshold_minutes", cfg.StaleSession.ThresholdMinutesOrDefault(),
 			"notify_enabled", cfg.StaleSession.NotifyEnabledOrDefault())
+	}
+
+	// Start memory pressure notifier (fires an operator-facing notification the first time
+	// this process's own cgroup memory usage crosses its MemoryHigh ceiling — see
+	// MemoryPressureNotifier doc comment). No-ops on non-Linux (telemetry.CgroupMemoryUsageRatio
+	// always reports unavailable there).
+	if deps.ReviewQueuePoller != nil {
+		memNotifier := services.NewMemoryPressureNotifier(deps.ReviewQueuePoller, deps.EventBus)
+		go memNotifier.Start(serverCtx)
+		log.Info("Memory pressure notifier started")
 	}
 }
 

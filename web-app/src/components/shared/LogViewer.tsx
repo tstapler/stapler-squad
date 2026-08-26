@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useRef, useState, useCallback } from "react";
-import { useLogViewer } from "@/lib/hooks/useLogViewer";
+import { useEffect, useRef, useState, useCallback, useImperativeHandle, forwardRef } from "react";
+import type { LogEntry as ProtoLogEntry } from "@/gen/session/v1/session_pb";
+import { useLogViewer, type LogViewerTimeRange, type LogEntry } from "@/lib/hooks/useLogViewer";
 import { VirtualLogList } from "./VirtualLogList";
 import { JumpToLatestButton } from "./JumpToLatestButton";
 import { LogViewerToolbar } from "./LogViewerToolbar";
@@ -11,6 +12,28 @@ import * as styles from "./LogViewer.css";
 interface LogViewerProps {
   source: "app" | "session";
   sessionId?: string;
+  /** Restrict fetched logs to this time range. Omit for "most recent N" (the default). */
+  timeRange?: LogViewerTimeRange;
+  /** Max entries to fetch per request (default: 200). */
+  limit?: number;
+  /**
+   * Reports the current exportable entries/counters up to the caller
+   * whenever they change — lets a page-level toolbar (time range, limit,
+   * export, refresh) act on the same data this component actually
+   * displays, instead of maintaining a second, disconnected fetch.
+   */
+  onStateChange?: (state: {
+    logs: LogEntry[];
+    rawEntries: ProtoLogEntry[];
+    totalCount: number;
+    lastRefresh: Date | null;
+    error: string | null;
+  }) => void;
+}
+
+export interface LogViewerHandle {
+  /** Re-fetches from the server — for a page-level "Refresh" action. */
+  refresh: () => void;
 }
 
 /**
@@ -19,7 +42,10 @@ interface LogViewerProps {
  * and Jump to Latest pill.
  * Epic 3: keyboard shortcuts (/, Esc, g, G, =, ?, Cmd+F) and shortcut help overlay.
  */
-export function LogViewer({ source, sessionId }: LogViewerProps) {
+export const LogViewer = forwardRef<LogViewerHandle, LogViewerProps>(function LogViewer(
+  { source, sessionId, timeRange, limit, onStateChange },
+  ref,
+) {
   const {
     logs,
     isFollowing,
@@ -39,7 +65,18 @@ export function LogViewer({ source, sessionId }: LogViewerProps) {
     virtuosoRef,
     liveTailEnabled,
     setLiveTailEnabled,
-  } = useLogViewer(source, sessionId);
+    rawEntries,
+    serverTotalCount,
+    lastRefresh,
+    error,
+    refresh,
+  } = useLogViewer(source, sessionId, { timeRange, limit });
+
+  useImperativeHandle(ref, () => ({ refresh }), [refresh]);
+
+  useEffect(() => {
+    onStateChange?.({ logs, rawEntries, totalCount: serverTotalCount, lastRefresh, error });
+  }, [logs, rawEntries, serverTotalCount, lastRefresh, error, onStateChange]);
 
   const containerRef = useRef<HTMLDivElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
@@ -218,6 +255,6 @@ export function LogViewer({ source, sessionId }: LogViewerProps) {
       )}
     </div>
   );
-}
+});
 
 export default LogViewer;

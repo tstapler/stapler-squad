@@ -1043,3 +1043,67 @@ func TestGetWorktreeDirtyPaths_NonGitDirectory_ReturnsNilNil(t *testing.T) {
 	require.NoError(t, err)
 	assert.Nil(t, paths)
 }
+
+// TestRecoverBaseCommitSHA_UsesExplicitBranchRef_NotAmbientHEAD is a regression test
+// for backlog item e7664cbf: RecoverBaseCommitSHA used to compute
+// `git merge-base HEAD <branch>`, so its result depended on whatever branch a
+// concurrent process happened to leave the cwd's repo checked out to — unreliable
+// when cwd is the shared parent repoPath, since a concurrent process can leave it on
+// anything. This reproduces that exact hazard by deliberately checking repoDir out to
+// an orphan branch sharing no history at all with the work branch, then confirms the
+// fixed implementation — which compares branchName against each candidate default
+// branch via explicit refs, never implicit HEAD — still recovers the correct
+// merge-base with "main" when run *even in repoDir itself*, entirely unaffected by
+// its ambient checkout.
+func TestRecoverBaseCommitSHA_UsesExplicitBranchRef_NotAmbientHEAD(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	repoDir := t.TempDir()
+	runGitOrFail(t, repoDir, "init", "-b", "main")
+	runGitOrFail(t, repoDir, "config", "user.email", "test@example.com")
+	runGitOrFail(t, repoDir, "config", "user.name", "Test")
+	require.NoError(t, os.WriteFile(repoDir+"/README.md", []byte("base\n"), 0o644))
+	runGitOrFail(t, repoDir, "add", "README.md")
+	runGitOrFail(t, repoDir, "commit", "-m", "initial")
+	mainSHA := strings.TrimSpace(runGitCapture(t, repoDir, "rev-parse", "main"))
+
+	// The session's own dedicated worktree, branched from main, with real committed work.
+	worktreeDir := t.TempDir()
+	runGitOrFail(t, repoDir, "worktree", "add", "-b", "feature", worktreeDir, "main")
+	require.NoError(t, os.WriteFile(worktreeDir+"/feature.txt", []byte("real work\n"), 0o644))
+	runGitOrFail(t, worktreeDir, "add", "feature.txt")
+	runGitOrFail(t, worktreeDir, "commit", "-m", "real fix")
+
+	// Simulate a concurrent process leaving the shared repoPath on an unrelated branch
+	// with no common history with "feature" — the exact shape that made the old
+	// implicit-HEAD implementation unreliable (and, for an orphan branch, would make it
+	// fail outright with "no merge base" rather than merely returning a wrong answer).
+	runGitOrFail(t, repoDir, "checkout", "--orphan", "unrelated")
+	runGitOrFail(t, repoDir, "commit", "--allow-empty", "-m", "unrelated history")
+
+	// Called with dir=repoDir (not worktreeDir) — the worst case for the old ambient-HEAD
+	// implementation — to prove the fix no longer depends on which directory it runs in.
+	recoveredSHA, err := RecoverBaseCommitSHA(ctx, repoDir, "feature")
+	require.NoError(t, err)
+	assert.Equal(t, mainSHA, recoveredSHA, "recovery must find feature's real merge-base with main via explicit refs, unaffected by repoDir's ambient checkout")
+
+	// Also confirm it works from the worktree itself (the preferred cwd in production).
+	recoveredFromWorktree, err := RecoverBaseCommitSHA(ctx, worktreeDir, "feature")
+	require.NoError(t, err)
+	assert.Equal(t, mainSHA, recoveredFromWorktree)
+}
+
+// TestRecoverBaseCommitSHA_MissingDirOrBranch_Errors verifies the guard against an
+// empty directory or branch name errors immediately rather than running a git command
+// against an invalid cwd or ref.
+func TestRecoverBaseCommitSHA_MissingDirOrBranch_Errors(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	_, err := RecoverBaseCommitSHA(ctx, "", "feature")
+	require.Error(t, err)
+
+	_, err = RecoverBaseCommitSHA(ctx, t.TempDir(), "")
+	require.Error(t, err)
+}

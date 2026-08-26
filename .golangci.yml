@@ -128,6 +128,15 @@ linters:
             # it was fixed to use session.HandoffSummary (a plain domain DTO)
             # instead of importing session/ent directly.
             - "!**/server/services/handoff_summary_service_test.go"
+            # github_webhook_pr_fix_test.go's erroringWorkflowRepo wraps the real
+            # session.WorkflowRepository and overrides only ListByTriggerType to
+            # simulate an infra failure (e.g. a DB error) — the interface method's
+            # signature itself returns []*ent.Workflow, so implementing that one
+            # override requires naming the type. Same justification as
+            # handoff_summary_service_test.go above: a test-only fixture the
+            # production API has no way to construct otherwise. The production
+            # file (github_webhook_pr_fix.go) does NOT need this exclusion.
+            - "!**/server/services/github_webhook_pr_fix_test.go"
           deny:
             - pkg: "github.com/tstapler/stapler-squad/session/ent"
               desc: "server/services must not import session/ent directly; use domain DTOs from session package"

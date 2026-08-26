@@ -1248,6 +1248,16 @@ func ValidateWorkDir(workDir string) error {
 // all, so the new-session call start() makes right after this returns is
 // guaranteed to fail too, just with a more confusing "error starting tmux
 // session" message instead of surfacing the real cause.
+//
+// Known accepted gap: startServerSucceededDespiteError only checks "is a
+// server running", so if start-server succeeds but a trailing set-option in
+// this chain fails (exit-empty/remain-on-exit are built-in global options on
+// a live server, so this is not expected in practice), the retry treats it
+// as success with no log at all -- silently leaving the session unprotected
+// against the exact fast-exit race this method exists to close. Splitting
+// the chain to detect this precisely was rejected: a separate start-server
+// then set-option invocation reintroduces the race PR #445 fixed (a
+// zero-session server can exit before the second call reaches it).
 func (t *TmuxSession) preconfigureServerBeforeSession() error {
 	preconfigureCmd := t.buildTmuxCommand("start-server", ";", "set-option", "-g", "exit-empty", "off", ";", "set-option", "-g", "remain-on-exit", "on")
 	run := func() ([]byte, error) {
@@ -2336,7 +2346,7 @@ func (t *TmuxSession) Close() error {
 		}
 		t.waitForSessionGone(killSessionConfirmTimeout)
 	} else {
-		log.Info("tmux session doesn't exist, no need to kill", "session", t.sanitizedName)
+		log.Debug("tmux session doesn't exist, no need to kill", "session", t.sanitizedName)
 	}
 
 	// Unregister circuit breaker from global registry to prevent stale entries
@@ -2854,11 +2864,15 @@ func (t *TmuxSession) CapturePaneContentContext(ctx context.Context) (string, er
 // isolation the subprocess gate provides, and control mode has no gate to
 // isolate against.
 func (t *TmuxSession) CapturePaneContentPriority() (string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), defaultCapturePaneTimeout)
+	// No caller currently chains this with other fast-lane calls in one
+	// operation, so a fresh, self-contained deadline is correct here — see
+	// CapturePaneContentRawPriority's doc comment for the case where that
+	// wouldn't be true.
+	ctx, cancel := context.WithTimeout(context.Background(), ResyncFastLaneTimeout)
 	defer cancel()
-	cmd := t.buildTmuxCommandContext(ctx, "capture-pane", "-p", "-e", "-J", "-t", t.sanitizedName)
 	recordSpawn(time.Now())
-	output, err := runGatedFastLane(ctx, t.serverSocket, func() ([]byte, error) {
+	output, err := runFastLaneSubprocess(ctx, t.serverSocket, func(ctx context.Context) ([]byte, error) {
+		cmd := t.buildTmuxCommandContext(ctx, "capture-pane", "-p", "-e", "-J", "-t", t.sanitizedName)
 		return t.cmdExec.Output(cmd)
 	})
 	if err != nil {
@@ -2875,15 +2889,51 @@ func (t *TmuxSession) CapturePaneContentPriority() (string, error) {
 	return sanitizeUTF8String(output), nil
 }
 
+// CapturePaneContentRawPriority mirrors CapturePaneContentPriority but
+// without -J, for the same reason CapturePaneContentRaw omits it from
+// CapturePaneContent (see its doc comment): a fast-lane caller that will
+// replay the result into a live terminal emulator needs tmux's own wrap
+// points and cursor-positioning codes intact, not joined/stripped by -J.
+//
+// ctx is caller-supplied — see runFastLaneSubprocess's doc comment: this is
+// typically the last of several fast-lane calls handleCurrentPaneRequest
+// makes for one resync (refresh-client x3, a dimension verify, then this),
+// so it must share the same overall deadline as its siblings rather than get
+// its own fresh ResyncFastLaneTimeout allowance.
+func (t *TmuxSession) CapturePaneContentRawPriority(ctx context.Context) (string, error) {
+	recordSpawn(time.Now())
+	output, err := runFastLaneSubprocess(ctx, t.serverSocket, func(ctx context.Context) ([]byte, error) {
+		cmd := t.buildTmuxCommandContext(ctx, "capture-pane", "-p", "-e", "-t", t.sanitizedName)
+		return t.cmdExec.Output(cmd)
+	})
+	if err != nil {
+		recordFailure(time.Now())
+		t.invalidateExistsCache()
+		logArgs := []any{"session", t.sanitizedName, "err", err}
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) && len(exitErr.Stderr) > 0 {
+			logArgs = append(logArgs, "stderr", strings.TrimSpace(string(exitErr.Stderr)))
+		}
+		log.Warn("failed to capture raw pane content for session (fast lane)", logArgs...)
+		return "", fmt.Errorf("error capturing raw pane content for session '%s': %v", t.sanitizedName, err)
+	}
+	return sanitizeUTF8String(output), nil
+}
+
 // RefreshClientPriority mirrors RefreshClient's Method 1 subprocess path but
 // routes through the resync exec-gate fast lane (runGatedFastLane) instead of
 // the default pool (Epic 4.2). Unlike RefreshClient, it does not attempt the
 // control-mode path or the SIGWINCH fallback (Method 2) — resync's priority
 // caller wants a bounded, fast-lane-only refresh, not the full fallback
 // chain.
-func (t *TmuxSession) RefreshClientPriority() error {
-	cmd := t.buildTmuxCommand("refresh-client", "-t", t.sanitizedName)
-	return runGatedErrFastLane(context.Background(), t.serverSocket, func() error {
+//
+// ctx is caller-supplied — see CapturePaneContentRawPriority's doc comment:
+// handleCurrentPaneRequest calls this up to 3 times per resync, and all 3
+// must share one overall deadline rather than each getting its own fresh
+// ResyncFastLaneTimeout allowance.
+func (t *TmuxSession) RefreshClientPriority(ctx context.Context) error {
+	return runFastLaneSubprocessErr(ctx, t.serverSocket, func(ctx context.Context) error {
+		cmd := t.buildTmuxCommandContext(ctx, "refresh-client", "-t", t.sanitizedName)
 		return t.cmdExec.Run(cmd)
 	})
 }
@@ -3033,6 +3083,49 @@ func (t *TmuxSession) GetPaneDimensions() (width, height int, err error) {
 	}
 
 	// Parse "width height" format
+	var paneWidth, paneHeight int
+	_, err = fmt.Sscanf(strings.TrimSpace(string(output)), "%d %d", &paneWidth, &paneHeight)
+	if err != nil {
+		return 0, 0, fmt.Errorf("failed to parse pane dimensions '%s': %w", string(output), err)
+	}
+
+	return paneWidth, paneHeight, nil
+}
+
+// GetPaneDimensionsPriority mirrors GetPaneDimensions' control-mode-first
+// behavior, but routes its subprocess fallback through the resync exec-gate
+// fast lane (with a caller-supplied, shared ctx — see
+// CapturePaneContentRawPriority's doc comment) instead of the default pool
+// with no subprocess-level bound at all. handleCurrentPaneRequest's
+// resize-through-verify path calls GetPaneDimensions twice per resync (an
+// initial check, then a post-resize verify); when control mode isn't
+// available and it falls through to a subprocess, that call needs the same
+// fast-lane isolation and shared deadline as the refresh/capture calls
+// around it, not the unbounded default-pool path.
+func (t *TmuxSession) GetPaneDimensionsPriority(ctx context.Context) (width, height int, err error) {
+	if t.cmEnabledForBackground() {
+		cmCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+		defer cancel()
+		body, cmErr := t.sendCMCommand(cmCtx,
+			"display-message", "-p", "-t", t.sanitizedName, "'#{pane_width} #{pane_height}'")
+		if cmErr == nil {
+			var paneWidth, paneHeight int
+			if _, parseErr := fmt.Sscanf(strings.TrimSpace(body), "%d %d", &paneWidth, &paneHeight); parseErr == nil {
+				return paneWidth, paneHeight, nil
+			}
+		}
+		log.Debug("GetPaneDimensionsPriority CM path failed, falling back to subprocess", "session", t.sanitizedName, "err", cmErr)
+	}
+
+	output, err := runFastLaneSubprocess(ctx, t.serverSocket, func(ctx context.Context) ([]byte, error) {
+		cmd := t.buildTmuxCommandContext(ctx, "display-message", "-p", "-t", t.sanitizedName,
+			"#{pane_width} #{pane_height}")
+		return t.cmdExec.Output(cmd)
+	})
+	if err != nil {
+		return 0, 0, fmt.Errorf("failed to get pane dimensions for session '%s' (fast lane): %w", t.sanitizedName, err)
+	}
+
 	var paneWidth, paneHeight int
 	_, err = fmt.Sscanf(strings.TrimSpace(string(output)), "%d %d", &paneWidth, &paneHeight)
 	if err != nil {

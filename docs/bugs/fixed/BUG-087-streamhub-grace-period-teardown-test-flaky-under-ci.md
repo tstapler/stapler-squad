@@ -1,6 +1,7 @@
 # BUG-087: `TestStreamHub_should_ScheduleTeardownAfterGracePeriod_When_LastSubscriberDetaches` flaky under CI timing [SEVERITY: Low]
 
-**Status**: 🐛 Open
+**Status**: ✅ FIXED (2026-08-24, commit `39751d4c6`, same fix as BUG-090)
+**Resolution**: Root cause was not test timing but a real ordering bug in `ForceTeardown` — `State()` could observe `HubTornDown` before `StopControlMode` had been called. Fixed by only flipping state after `StopControlMode` returns. Verified `go test ./session/streamhub/... -run TestStreamHub_should_ScheduleTeardownAfterGracePeriod_When_LastSubscriberDetaches -race -count=50` all green.
 **Discovered**: 2026-08-23, during `github:pr-ship` CI run for PR #609 (`fix(session): durable signal + badge for lost-history cold restore`, session-revive-uuid-loss).
 **Impact**: Intermittent CI failure on `go test ./session/streamhub/...` with coverage instrumentation. Not reproducible locally (5/5 passes in isolation, 5/5 passes for the full package with `-count=1`, no `-race` issue observed).
 
