@@ -454,7 +454,7 @@ func TestHandlePermissionRequest_EscalationReason_UnexpectedDecision(t *testing.
 	var entries []AnalyticsEntry
 	require.Eventually(t, func() bool {
 		var err error
-		entries, err = analyticsStore.LoadWindow(time.Now().Add(-1 * time.Hour))
+		entries, err = analyticsStore.LoadWindow(context.Background(), time.Now().Add(-1 * time.Hour))
 		return err == nil && len(entries) >= 1
 	}, 2*time.Second, 10*time.Millisecond, "analytics entry must persist within 2s")
 
