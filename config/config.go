@@ -1373,6 +1373,12 @@ func (c *Config) SlackSigningSecretOverride() string {
 // Currently recognized flags:
 //
 //	"backlog" — enables the Backlog tab and backlog lifecycle controller.
+//	"webhook_triggers" — registers POST /webhooks/github and POST /webhooks/generic/{slug}.
+//	"pr_event_webhooks" — reacts to check_run/workflow_run/pull_request_review/issue_comment
+//	  GitHub deliveries on /webhooks/github by immediately reconciling a matching pr_pending
+//	  item, instead of waiting for PRStatusPoller's next tick. Independently toggleable from
+//	  "webhook_triggers", but has no effect unless "webhook_triggers" is also enabled (that
+//	  flag gates whether the route is registered at all).
 func (c *Config) GetFeatureFlag(name string) bool {
 	if c == nil || c.FeatureFlags == nil {
 		return false
