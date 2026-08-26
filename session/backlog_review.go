@@ -785,7 +785,7 @@ func RecoverBaseCommitSHA(ctx context.Context, dir, branchName string) (string, 
 		return "", fmt.Errorf("cannot recover a base commit without both a directory and a branch to compare against")
 	}
 	var errs []error
-	for _, candidate := range []string{"main", "master", "develop", "trunk"} {
+	for _, candidate := range git.CandidateDefaultBranches {
 		cmd := safeexec.CommandContext(ctx, "git", "merge-base", branchName, candidate)
 		cmd.Dir = dir
 		out, err := cmd.Output()
@@ -797,7 +797,7 @@ func RecoverBaseCommitSHA(ctx context.Context, dir, branchName string) (string, 
 			return sha, nil
 		}
 	}
-	return "", fmt.Errorf("no merge-base found for %s against any default branch (main/master/develop/trunk) in %s: %w", branchName, dir, errors.Join(errs...))
+	return "", fmt.Errorf("no merge-base found for %s against any default branch (%s) in %s: %w", branchName, strings.Join(git.CandidateDefaultBranches, "/"), dir, errors.Join(errs...))
 }
 
 // readPlanFile reads plan.md from the given artifacts directory.

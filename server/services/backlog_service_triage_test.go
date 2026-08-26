@@ -4888,8 +4888,7 @@ func TestShouldAttributeTombstoneToShutdown_should_MatchOnlyPreBootNonStaleNotLi
 
 // TestBacklogWorkBranchSlug_TwoItemsWithCollidingTitles_ShareOneWorktree is a
 // regression/documentation test for backlog item e7664cbf's worktree-identity root
-// cause (research/architecture.md's "Option B", explicitly deferred by plan.md):
-// worktree identity is resolved by title-derived branch name
+// cause: worktree identity is resolved by title-derived branch name
 // (backlogWorkBranchSlug + session.CreateBacklogWorktree), not by item/session UUID.
 // Two items whose titles differ only in characters slugify() strips (punctuation)
 // collide on the exact same branch name, and — confirmed here — CreateBacklogWorktree
@@ -4897,13 +4896,13 @@ func TestShouldAttributeTombstoneToShutdown_should_MatchOnlyPreBootNonStaleNotLi
 // findExistingWorktreeForBranch's (session/git/worktree.go) "branch already checked
 // out, reuse its worktree" path.
 //
-// This is a known, tracked limitation, not something this bug fix addresses:
-// ReviewGateRunner.Run's new worktree-identity check (session/review_gate.go) only
-// catches a *mismatched* branch — here the worktree genuinely does have the recorded
-// branch checked out, so there is nothing for that check to catch. A real fix
-// requires re-resolving worktree identity by item/session UUID instead of branch
-// name, which touches every caller of GetWorktreeDataBySessionUUID — out of scope
-// for this bug fix (see plan.md's explicit deferral).
+// This is a known limitation, not something this bug fix addresses (no tracked
+// follow-up exists yet): ReviewGateRunner.Run's new worktree-identity check
+// (session/review_gate.go) only catches a *mismatched* branch — here the worktree
+// genuinely does have the recorded branch checked out, so there is nothing for that
+// check to catch. A real fix requires re-resolving worktree identity by item/session
+// UUID instead of branch name, which touches every caller of
+// GetWorktreeDataBySessionUUID — out of scope for this bug fix.
 func TestBacklogWorkBranchSlug_TwoItemsWithCollidingTitles_ShareOneWorktree(t *testing.T) {
 	t.Parallel()
 

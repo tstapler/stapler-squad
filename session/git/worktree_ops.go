@@ -173,7 +173,7 @@ func (g *GitWorktree) setupFromExistingBranch() error {
 // stores it in g.baseCommitSHA. Non-fatal: if no default branch is found the field
 // remains empty and Diff() will fall back to its own resolution.
 func (g *GitWorktree) initBaseCommitSHA() {
-	for _, branch := range []string{"main", "master", "develop", "trunk"} {
+	for _, branch := range CandidateDefaultBranches {
 		// cwd must be g.worktreePath, not g.repoPath: HEAD needs to resolve to this
 		// worktree's own branch tip. g.repoPath is the shared parent checkout, whose
 		// ambient checked-out branch can be anything a concurrent process left it on

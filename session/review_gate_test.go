@@ -1275,6 +1275,94 @@ func TestReviewGateRunner_WorktreeDirectoryGone_FallsBackToRepoPath_DoesNotHardB
 	assert.Contains(t, prompt, "feature.txt", "the reviewer prompt must contain the real diff recovered via the repoPath fallback")
 }
 
+// TestReviewGateRunner_WorktreeGoneAndBaseSHACorrupted_RecoversViaRepoPath is a
+// regression test for a gap in the auto-repair recovery path itself: unlike the
+// "gone worktree, valid base SHA" case above (which never reaches recovery because
+// the item.RepoPath fallback at line ~216 already succeeds), a torn-down worktree
+// combined with an independently corrupted/stale base_commit_sha makes *both* diff
+// attempts fail, so worktreeDiffErr triggers recovery. Before this fix, recovery
+// called RecoverBaseCommitSHA(ctx, wt.WorktreePath, ...) unconditionally — with the
+// worktree directory gone, that pointed `git merge-base`'s cmd.Dir at a nonexistent
+// path, the command never started, recovery was abandoned, and the review was
+// wrongly hard-blocked even though the branch's commits remain reachable via the
+// shared object store at item.RepoPath (mirroring the sibling fix already applied
+// to getWorkSessionDiff's recoverDir logic in
+// server/services/backlog_service_triage.go). Recovery must fall back to
+// item.RepoPath here too and let the review proceed on the recovered diff.
+func TestReviewGateRunner_WorktreeGoneAndBaseSHACorrupted_RecoversViaRepoPath(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	repoDir := t.TempDir()
+	runGitOrFail(t, repoDir, "init", "-b", "main")
+	runGitOrFail(t, repoDir, "config", "user.email", "test@example.com")
+	runGitOrFail(t, repoDir, "config", "user.name", "Test")
+	require.NoError(t, os.WriteFile(repoDir+"/README.md", []byte("base\n"), 0o644))
+	runGitOrFail(t, repoDir, "add", "README.md")
+	runGitOrFail(t, repoDir, "commit", "-m", "initial")
+
+	// A real worktree, with real committed work, then fully torn down — same as the
+	// test above, except the recorded base_commit_sha below is corrupted/unreachable
+	// instead of the real (valid) base SHA, so the item.RepoPath fallback at line
+	// ~216 also fails and recovery is actually exercised.
+	worktreeDir := t.TempDir()
+	runGitOrFail(t, repoDir, "worktree", "add", "-b", "feature", worktreeDir, "main")
+	require.NoError(t, os.WriteFile(worktreeDir+"/feature.txt", []byte("real work\n"), 0o644))
+	runGitOrFail(t, worktreeDir, "add", "feature.txt")
+	runGitOrFail(t, worktreeDir, "commit", "-m", "real fix")
+	runGitOrFail(t, repoDir, "worktree", "remove", "--force", worktreeDir)
+
+	corruptedBaseSHA := "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
+
+	itemData := BacklogItemData{
+		Title:              "Worktree torn down, base SHA corrupted test",
+		AcceptanceCriteria: `[]`,
+		Priority:           1,
+		Status:             string(BacklogStatusInProgress),
+		RepoPath:           repoDir,
+	}
+	createdItemData, err := storage.CreateBacklogItem(ctx, itemData)
+	require.NoError(t, err)
+
+	workSessionUUID := uuid.New().String()
+	workIS, err := storage.CreateItemSession(ctx, ItemSessionData{
+		ItemID:      createdItemData.ID,
+		SessionUUID: workSessionUUID,
+		SessionRole: SessionRoleWork,
+	})
+	require.NoError(t, err)
+
+	inst := newTestInstance("worktree-gone-basesha-corrupted-test")
+	inst.UUID = workSessionUUID
+	inst.gitManager.worktree = git.NewGitWorktreeFromStorage(
+		repoDir, worktreeDir, "worktree-gone-basesha-corrupted-test", "feature", corruptedBaseSHA)
+	require.NoError(t, storage.SaveInstances([]*Instance{inst}))
+
+	item := &BacklogItemData{ID: createdItemData.ID, RepoPath: repoDir}
+
+	spawner := &mockReviewGateSpawner{}
+	getSessionCreator := func() ReviewGateSpawner { return spawner }
+	getAutoReopener := func() AutoReopenSpawner { return nil }
+	notifier := &fakeNotifier{}
+	getNotifier := func() Notifier { return notifier }
+
+	runner := NewReviewGateRunner(storage, getAutoReopener, getNotifier, getSessionCreator, nil)
+
+	var onPassCalled atomic.Bool
+	runner.Run(ctx, item, workIS, func(ctx context.Context, item *BacklogItemData, is ItemSessionSummary) {
+		onPassCalled.Store(true)
+	})
+
+	require.Equal(t, 1, spawner.getCallCount(), "a gone worktree with a corrupted base SHA must recover via item.RepoPath and proceed, not hard-block")
+	assert.False(t, onPassCalled.Load())
+	assert.NotContains(t, notifier.titles(), "Review blocked — worktree identity mismatch")
+
+	prompt := spawner.getLastPrompt()
+	assert.Contains(t, prompt, "feature.txt", "the reviewer prompt must contain the real diff recovered via item.RepoPath after base-SHA repair")
+}
+
 // TestWorktreeIdentityMismatch covers WorktreeIdentityMismatch's branches directly —
 // it's a small, trivially unit-testable function, but the integration-level
 // ReviewGateRunner.Run tests above only exercise the "match," "branch mismatch," and

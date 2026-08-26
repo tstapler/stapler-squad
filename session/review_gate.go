@@ -245,9 +245,22 @@ func (r *ReviewGateRunner) Run(
 	// giving up; this lets a genuinely-complete review proceed on a real diff instead of
 	// unconditionally blocking (or worse, silently returning an empty one).
 	if worktreeDiffErr != nil && wt.BranchName != "" && wt.WorktreePath != "" {
-		if recoveredSHA, recoverErr := RecoverBaseCommitSHA(ctx, wt.WorktreePath, wt.BranchName); recoverErr != nil {
+		// Recover against whichever directory is actually still on disk: prefer the
+		// session's own worktree, but fall back to item.RepoPath when it's been torn
+		// down — mirrors getWorkSessionDiff's identical recoverDir fallback
+		// (server/services/backlog_service_triage.go). Without this, a torn-down
+		// worktree combined with a corrupted/stale base_commit_sha made
+		// RecoverBaseCommitSHA run `git merge-base` with cmd.Dir pointed at a
+		// nonexistent directory — the command never even starts, so recovery is
+		// abandoned and the review is wrongly hard-blocked, even though the branch's
+		// commits remain reachable via the shared object store at item.RepoPath.
+		recoverDir := item.RepoPath
+		if info, statErr := os.Stat(wt.WorktreePath); statErr == nil && info.IsDir() {
+			recoverDir = wt.WorktreePath
+		}
+		if recoveredSHA, recoverErr := RecoverBaseCommitSHA(ctx, recoverDir, wt.BranchName); recoverErr != nil {
 			log.WarningLog().Printf("[BacklogLifecycle] spawnReviewGate RecoverBaseCommitSHA item=%s: %v", item.ID, recoverErr)
-		} else if recoveredDiff, recoveredTruncated, retryErr := GetGitDiffRef(ctx, wt.WorktreePath, recoveredSHA, wt.BranchName); retryErr != nil {
+		} else if recoveredDiff, recoveredTruncated, retryErr := GetGitDiffRef(ctx, recoverDir, recoveredSHA, wt.BranchName); retryErr != nil {
 			log.WarningLog().Printf("[BacklogLifecycle] spawnReviewGate retry with recovered base %s item=%s: %v", recoveredSHA, item.ID, retryErr)
 		} else if strings.TrimSpace(recoveredDiff) == "" {
 			// A recovered base that produces an empty diff is indistinguishable from
