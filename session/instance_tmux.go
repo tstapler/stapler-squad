@@ -710,7 +710,7 @@ func (i *Instance) ResizePTY(cols, rows int) error {
 // with the terminal WebSocket handlers.
 func (i *Instance) CapturePaneContent() (string, error) {
 	if !i.started.Load() || i.Status == Paused {
-		return "", fmt.Errorf("session not started or paused")
+		return "", streamhub.ErrSessionNotStarted
 	}
 	return i.pm().CapturePaneContent()
 }
@@ -729,7 +729,7 @@ const terminalResyncExecGateFastLaneFlagName = "terminal:resync-exec-gate-fast-l
 // plain call is a correct, if unoptimized, behavior).
 func (i *Instance) CapturePaneContentPriority() (string, error) {
 	if !i.started.Load() || i.Status == Paused {
-		return "", fmt.Errorf("session not started or paused")
+		return "", streamhub.ErrSessionNotStarted
 	}
 	if tb, ok := i.processManager.(*TmuxBackend); ok {
 		return tb.TmuxManager().CapturePaneContentPriority()
@@ -738,16 +738,54 @@ func (i *Instance) CapturePaneContentPriority() (string, error) {
 	return i.pm().CapturePaneContent()
 }
 
+// CapturePaneContentRawPriority mirrors CapturePaneContentPriority but
+// returns the unjoined variant — see CapturePaneContentRaw's doc comment for
+// why a terminal-rendering caller needs this instead of the joined form. The
+// non-tmux fallback is CapturePaneContentRaw, not CapturePaneContent, for the
+// same reason.
+//
+// ctx is caller-supplied, not manufactured here — see
+// session/tmux/exec_gate.go's runFastLaneSubprocess doc comment: a resync
+// operation calls this alongside RefreshTmuxClientPriority/
+// GetPaneDimensionsPriority in sequence, and all of them must share the same
+// overall deadline rather than each getting an independent fresh one.
+func (i *Instance) CapturePaneContentRawPriority(ctx context.Context) (streamhub.RawPaneContent, error) {
+	if !i.started.Load() || i.Status == Paused {
+		return "", streamhub.ErrSessionNotStarted
+	}
+	if tb, ok := i.processManager.(*TmuxBackend); ok {
+		content, err := tb.TmuxManager().CapturePaneContentRawPriority(ctx)
+		return streamhub.RawPaneContent(content), err
+	}
+	i.logFastLaneAssertionFailure("CapturePaneContentRawPriority")
+	content, err := i.pm().CapturePaneContentRaw()
+	return streamhub.RawPaneContent(content), err
+}
+
 // RefreshTmuxClientPriority forces the tmux client to refresh via the resync
 // exec-gate fast lane (Epic 4.2) when the instance is tmux-backed, falling
 // back to the plain RefreshTmuxClient() call otherwise. See
-// CapturePaneContentPriority's doc comment for the fallback rationale.
-func (i *Instance) RefreshTmuxClientPriority() error {
+// CapturePaneContentPriority's doc comment for the fallback rationale, and
+// CapturePaneContentRawPriority's for why ctx is caller-supplied.
+func (i *Instance) RefreshTmuxClientPriority(ctx context.Context) error {
 	if tb, ok := i.processManager.(*TmuxBackend); ok {
-		return tb.TmuxManager().RefreshClientPriority()
+		return tb.TmuxManager().RefreshClientPriority(ctx)
 	}
 	i.logFastLaneAssertionFailure("RefreshTmuxClientPriority")
 	return i.pm().RefreshClient()
+}
+
+// GetPaneDimensionsPriority mirrors GetPaneDimensions but routes its
+// subprocess fallback through the resync exec-gate fast lane when the
+// instance is tmux-backed — see TmuxSession.GetPaneDimensionsPriority's doc
+// comment. ctx is caller-supplied, for the same shared-deadline reason as
+// CapturePaneContentRawPriority.
+func (i *Instance) GetPaneDimensionsPriority(ctx context.Context) (width, height int, err error) {
+	if tb, ok := i.processManager.(*TmuxBackend); ok {
+		return tb.TmuxManager().GetPaneDimensionsPriority(ctx)
+	}
+	i.logFastLaneAssertionFailure("GetPaneDimensionsPriority")
+	return i.pm().GetPaneDimensions()
 }
 
 // logFastLaneAssertionFailure logs, at debug level, that a Priority() call
@@ -769,12 +807,13 @@ func (i *Instance) logFastLaneAssertionFailure(method string) {
 
 // CapturePaneContentRaw captures pane content with ANSI codes preserved (no line joining).
 // Essential for hybrid streaming where cursor positioning codes must be preserved.
-func (i *Instance) CapturePaneContentRaw() (string, error) {
+func (i *Instance) CapturePaneContentRaw() (streamhub.RawPaneContent, error) {
 	if !i.started.Load() || i.Status == Paused {
-		return "", fmt.Errorf("session not started or paused")
+		return "", streamhub.ErrSessionNotStarted
 	}
 
-	return i.pm().CapturePaneContentRaw()
+	content, err := i.pm().CapturePaneContentRaw()
+	return streamhub.RawPaneContent(content), err
 }
 
 // GetCurrentPaneContent captures the current visible tmux pane content.

@@ -112,7 +112,6 @@ When writing, reviewing, or refactoring Go code, invoke the relevant skill(s):
 | Concurrency primitive selection (mutex vs atomic vs channel vs lock-free) | `/go-concurrency` |
 | pprof profiling — CPU, memory, goroutine, mutex profiles | `/go-profiling` |
 | Fix a specific pprof hotspot (atomic shadow, RWMutex, TTL cache, etc.) | `/go:optimize` |
-| Goroutine fan-out, singleflight, avoiding mutex contention | `/go:parallelism` |
 
 Invoke proactively — do not wait to be asked. If a task involves any `.go` file, load the appropriate skill before starting.
 
@@ -308,3 +307,4 @@ Per `local-dev-port-management`'s Sequential Batch Strategy: a fixed block reser
 | Fix flaky tests when found, don't just re-defer as "known pre-existing" | `.claude/rules/fix-flaky-tests-dont-defer.md` |
 | Slack Phase 2 interactive-approvals public reachability (scoping a tunnel to one path) | `.claude/docs/slack-phase2-public-reachability.md` |
 | GitHub webhook (`/webhooks/github`, incl. PR-fix events) public reachability | `.claude/docs/github-webhook-public-reachability.md` |
+| Log debugging: file locations, global/per-package log levels, reducing log volume, pattern-clustering tool | `.claude/docs/log-debugging.md` |

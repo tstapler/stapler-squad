@@ -43,8 +43,13 @@ func (c *tmuxSessionController) ResizePTY(cols, rows int) error {
 	return c.session.SetWindowSize(cols, rows)
 }
 
-func (c *tmuxSessionController) CapturePaneContent() (string, error) {
-	return c.session.CapturePaneContent()
+func (c *tmuxSessionController) CapturePaneContentRaw() (streamhub.RawPaneContent, error) {
+	content, err := c.session.CapturePaneContentRaw()
+	return streamhub.RawPaneContent(content), err
+}
+
+func (c *tmuxSessionController) GetPaneCursorPosition() (x, y int, err error) {
+	return c.session.GetCursorPosition()
 }
 
 func (c *tmuxSessionController) StopControlMode() error {
