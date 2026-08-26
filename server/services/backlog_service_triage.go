@@ -3669,6 +3669,17 @@ func (s *BacklogService) resolveCodebaseWorkDir(ctx context.Context, repoPath st
 		// the shared main checkout's current, arbitrary working-tree state (BUG-045).
 		return repoPath, false
 	}
+	// Worktree-identity guard (backlog item e7664cbf): worktree paths are resolved by
+	// title-derived branch slug, not item/session UUID, so a recorded row can point at
+	// a directory that's since been reused/recreated for a different item — same
+	// hazard session.ReviewGateRunner.Run guards against before trusting a diff. A
+	// present-but-wrong-branch directory must not be handed to the reviewer as this
+	// session's own codebase; a missing directory is not itself a mismatch (mirrors
+	// the review-gate fallback), so it still reaches the exists-check below.
+	if mismatchReason := session.WorktreeIdentityMismatch(wt.WorktreePath, wt.BranchName); mismatchReason != "" {
+		log.WarningLog().Printf("[TriggerReReview] resolveCodebaseWorkDir worktree identity mismatch session=%s worktree=%s: %s", workSession.SessionUUID, wt.WorktreePath, mismatchReason)
+		return wt.WorktreePath, false
+	}
 	info, statErr := os.Stat(wt.WorktreePath)
 	return wt.WorktreePath, statErr == nil && info.IsDir()
 }
@@ -3684,7 +3695,22 @@ func (s *BacklogService) getWorkSessionDiff(ctx context.Context, repoPath string
 	diffBaseSHA := ""
 	diffHeadRef := ""
 	wt, wtErr := s.storage.GetWorktreeDataBySessionUUID(ctx, workSession.SessionUUID)
-	if wtErr == nil && wt.WorktreePath != "" {
+	haveWorktree := wtErr == nil && wt.WorktreePath != ""
+	// Worktree-identity guard (backlog item e7664cbf): same hazard and same check as
+	// resolveCodebaseWorkDir above and session.ReviewGateRunner.Run — a worktree row
+	// can point at a directory that's since been reused/recreated for a different
+	// item's branch. Route a mismatch through the same "worktree unusable" path as a
+	// gone directory (set base/head from the row, skip straight to the repoPath
+	// fallback below) rather than trusting GetGitDiff to diff the wrong checkout.
+	if haveWorktree {
+		if mismatchReason := session.WorktreeIdentityMismatch(wt.WorktreePath, wt.BranchName); mismatchReason != "" {
+			log.WarningLog().Printf("[TriggerReReview] getWorkSessionDiff worktree identity mismatch session=%s worktree=%s: %s", workSession.SessionUUID, wt.WorktreePath, mismatchReason)
+			haveWorktree = false
+			diffBaseSHA = wt.BaseCommitSHA
+			diffHeadRef = wt.BranchName
+		}
+	}
+	if haveWorktree {
 		// Try the dedicated worktree first.
 		diff, _, diffErr := session.GetGitDiff(ctx, wt.WorktreePath, wt.BaseCommitSHA)
 		if diffErr == nil {
@@ -3722,8 +3748,12 @@ func (s *BacklogService) getWorkSessionDiff(ctx context.Context, repoPath string
 	// session's own dedicated worktree when it still exists on disk, falling back to
 	// repoPath when it doesn't (e.g. a torn-down worktree — its commits remain reachable
 	// via the shared object store) rather than skipping repair entirely.
+	// haveWorktree is false both when there was never a worktree row and when
+	// WorktreeIdentityMismatch above rejected it — in the mismatch case wt.WorktreePath
+	// is still populated but must not be trusted for repair either, same as it wasn't
+	// trusted for the initial diff attempt.
 	recoverDir := diffDir
-	if wt.WorktreePath != "" {
+	if haveWorktree && wt.WorktreePath != "" {
 		if info, statErr := os.Stat(wt.WorktreePath); statErr == nil && info.IsDir() {
 			recoverDir = wt.WorktreePath
 		}

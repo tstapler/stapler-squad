@@ -106,20 +106,24 @@ func (r *ReviewGateRunner) Run(
 	// blocks the review instead of silently handing the reviewer an empty diff.
 	var worktreeDiffErr error
 	wt, wtErr := r.storage.GetWorktreeDataBySessionUUID(ctx, is.SessionUUID)
-	if wtErr == nil && wt.WorktreePath != "" && wt.BranchName != "" {
+	if wtErr == nil && wt.WorktreePath != "" {
 		// Worktree-identity guard: if a directory still sits at the recorded worktree
 		// path, confirm it actually has this session's own branch checked out before
 		// touching it at all — including the branch-drift sync just below, which would
 		// otherwise run against whatever unrelated repo/branch happens to be at that
 		// path. (A missing directory is not itself a mismatch — see
-		// worktreeIdentityMismatch's doc comment for why.) Worktree identity is resolved
-		// by title-derived branch name, not item/session UUID
+		// WorktreeIdentityMismatch's doc comment for why.) Gated only on WorktreePath,
+		// not also requiring BranchName: a row with a path but no recorded branch must
+		// still go through this check (it reports "unverifiable" rather than being
+		// silently skipped) — the branch-drift block just below assumes wt.BranchName
+		// is meaningful and must never be reached with it empty. Worktree identity is
+		// resolved by title-derived branch name, not item/session UUID
 		// (findExistingWorktreeForBranch, session/git/worktree.go), so two items with
 		// colliding sanitized titles can silently be handed the same worktree — the
 		// "diff computed against the wrong worktree" failure class this guards against
 		// (backlog item e7664cbf). Fail closed with a distinct verdict instead of
 		// diffing (or auto-repairing against) whatever actually turns out to be there.
-		if mismatchReason := worktreeIdentityMismatch(wt.WorktreePath, wt.BranchName); mismatchReason != "" {
+		if mismatchReason := WorktreeIdentityMismatch(wt.WorktreePath, wt.BranchName); mismatchReason != "" {
 			summary := fmt.Sprintf("Review blocked: this session's recorded worktree (%s) %s. "+
 				"The worktree path may have been reused or recreated for a different item — this needs investigation, not rework.",
 				wt.WorktreePath, mismatchReason)
@@ -463,22 +467,25 @@ func (r *ReviewGateRunner) Run(
 	log.InfoLog().Printf("[BacklogLifecycle] spawnReviewGate spawned review session %s for item %s", reviewInst.UUID, item.ID)
 }
 
-// worktreeIdentityMismatch reports why worktreePath does not actually belong to
+// WorktreeIdentityMismatch reports why worktreePath does not actually belong to
 // branchName, or "" if it does — or if worktreePath doesn't exist on disk at all.
 // A missing directory is deliberately NOT reported as a mismatch here: it's the
 // same "worktree torn down, but its commits remain reachable via the shared
-// object store" case Run's own GetGitDiff→GetGitDiffRef(item.RepoPath, ...)
-// fallback (and getWorkSessionDiff's mirror in
-// server/services/backlog_service_triage.go) already handles gracefully — this
-// check exists to catch a *present* directory that's actually the wrong one,
-// not to duplicate or preempt that existing recovery path. Worktree paths are
-// resolved by title-derived branch name rather than item/session UUID
-// (findExistingWorktreeForBranch, session/git/worktree.go), so a recorded
-// worktree row can point at a path that's since been reused, recreated, or
-// handed to a different item while a directory still sits there — that's the
-// shape this check exists to catch before any diff/sync/repair operation
-// trusts the path.
-func worktreeIdentityMismatch(worktreePath, branchName string) string {
+// object store" case the diff-recovery fallbacks in this package and
+// server/services/backlog_service_triage.go's getWorkSessionDiff already handle
+// gracefully — this check exists to catch a *present* directory that's actually
+// the wrong one, not to duplicate or preempt that existing recovery path.
+// Worktree paths are resolved by title-derived branch name rather than
+// item/session UUID (findExistingWorktreeForBranch, session/git/worktree.go), so
+// a recorded worktree row can point at a path that's since been reused,
+// recreated, or handed to a different item while a directory still sits there.
+// An empty branchName can never match a real checked-out branch, so it's always
+// reported as unverifiable rather than silently skipping the check — a legacy
+// row with a path but no recorded branch is exactly the case this guard exists
+// to be cautious about, not a case to wave through. Exported: called from
+// server/services' TriggerReReview diff/codebase-read paths too, which need the
+// identical guard against the same title-collision hazard.
+func WorktreeIdentityMismatch(worktreePath, branchName string) string {
 	info, statErr := os.Stat(worktreePath)
 	if statErr != nil {
 		if os.IsNotExist(statErr) {
@@ -488,6 +495,9 @@ func worktreeIdentityMismatch(worktreePath, branchName string) string {
 	}
 	if !info.IsDir() {
 		return "exists on disk but is not a directory"
+	}
+	if branchName == "" {
+		return "has no recorded branch name to verify against"
 	}
 	actualBranch, branchErr := git.GetCurrentBranchName(worktreePath)
 	if branchErr != nil {

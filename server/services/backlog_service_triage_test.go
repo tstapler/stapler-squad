@@ -3861,6 +3861,149 @@ func TestGetWorkSessionDiff_should_RecoverViaMergeBase_When_WorktreeGoneAndBaseS
 		"must recover the real diff via merge-base auto-repair instead of giving up empty")
 }
 
+// TestGetWorkSessionDiff_should_RecoverUsingWorktreePath_When_WorktreeExistsButBaseShaCorrupted
+// covers the ae1e2070 shape directly, distinct from the gone-worktree test above: the
+// worktree directory is still present, so recoverDir must be wt.WorktreePath, not
+// repoPath — proving getWorkSessionDiff's mirror of the review_gate.go/worktree_ops.go
+// fix (RecoverBaseCommitSHA now depends on being run inside the worktree, not
+// repoPath's ambient checkout). repoPath is deliberately left on an unrelated orphan
+// branch, the worst case for the old repoPath-only recovery.
+func TestGetWorkSessionDiff_should_RecoverUsingWorktreePath_When_WorktreeExistsButBaseShaCorrupted(t *testing.T) {
+	repoDir := t.TempDir()
+	initGitRepoWithCommit(t, repoDir)
+	runGitTestCmd(t, repoDir, "branch", "-M", "main")
+
+	const workBranch = "backlog/recover-diff-worktree-path"
+	worktreeDir := t.TempDir()
+	runGitTestCmd(t, repoDir, "worktree", "add", "-b", workBranch, worktreeDir, "main")
+	require.NoError(t, os.WriteFile(filepath.Join(worktreeDir, "feature.txt"), []byte("real work\n"), 0o644))
+	runGitTestCmd(t, worktreeDir, "add", "feature.txt")
+	runGitTestCmd(t, worktreeDir, "commit", "-m", "real fix")
+
+	// Leave repoPath on an unrelated orphan branch — the worst case for the old
+	// diffDir-only recovery, which would fail to find any merge-base at all.
+	runGitTestCmd(t, repoDir, "checkout", "--orphan", "unrelated")
+	runGitTestCmd(t, repoDir, "commit", "--allow-empty", "-m", "unrelated")
+
+	storage, repo := createTestStorageWithRepo(t)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+
+	item, err := storage.CreateBacklogItem(context.Background(), session.BacklogItemData{
+		Title:    "Diff recovery uses worktree path",
+		RepoPath: repoDir,
+		Status:   string(session.BacklogStatusReview),
+	})
+	require.NoError(t, err)
+
+	const workSessionUUID = "diff-repair-worktree-path-uuid"
+	_, err = storage.CreateItemSession(context.Background(), session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: workSessionUUID,
+		SessionRole: session.SessionRoleWork,
+	})
+	require.NoError(t, err)
+
+	now := time.Now()
+	require.NoError(t, repo.Create(context.Background(), session.InstanceData{
+		Title:      workSessionUUID,
+		UUID:       workSessionUUID,
+		Path:       worktreeDir,
+		WorkingDir: worktreeDir,
+		Branch:     workBranch,
+		Status:     session.Paused,
+		Program:    "claude",
+		CreatedAt:  now,
+		UpdatedAt:  now,
+		Worktree: session.GitWorktreeData{
+			RepoPath:      repoDir,
+			WorktreePath:  worktreeDir,
+			SessionName:   workSessionUUID,
+			BranchName:    workBranch,
+			BaseCommitSHA: "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef", // corrupted, worktree intact
+		},
+	}))
+
+	diff := svc.getWorkSessionDiff(context.Background(), repoDir, &session.ItemSessionSummary{SessionUUID: workSessionUUID})
+	assert.Contains(t, diff, "feature.txt",
+		"must recover via merge-base computed inside worktreeDir, unaffected by repoPath's unrelated orphan checkout")
+}
+
+// TestGetWorkSessionDiff_should_FallBackToRepoPath_When_WorktreeIdentityMismatched is a
+// regression test for backlog item e7664cbf's identity-guard gap found in code review:
+// getWorkSessionDiff (and resolveCodebaseWorkDir) originally trusted wt.WorktreePath
+// without the same WorktreeIdentityMismatch check ReviewGateRunner.Run applies, so a
+// worktree row recycled to a different item's branch would silently hand the reviewer
+// that other item's diff. The recorded branch here ("feature") does not match what's
+// actually checked out at the worktree path ("other-item-branch"), simulating a path
+// reused by a later item — getWorkSessionDiff must skip the worktree entirely and
+// recover the real diff via the repoPath fallback instead.
+func TestGetWorkSessionDiff_should_FallBackToRepoPath_When_WorktreeIdentityMismatched(t *testing.T) {
+	repoDir := t.TempDir()
+	initGitRepoWithCommit(t, repoDir)
+	runGitTestCmd(t, repoDir, "branch", "-M", "main")
+
+	const recordedBranch = "feature"
+	runGitTestCmd(t, repoDir, "branch", recordedBranch)
+
+	// A later, unrelated item's branch is what's actually checked out at the worktree
+	// path — the row's recorded branch ("feature") never diverged from main at all.
+	worktreeDir := t.TempDir()
+	runGitTestCmd(t, repoDir, "worktree", "add", "-b", "other-item-branch", worktreeDir, "main")
+	require.NoError(t, os.WriteFile(filepath.Join(worktreeDir, "other-item.txt"), []byte("later item's work\n"), 0o644))
+	runGitTestCmd(t, worktreeDir, "add", "other-item.txt")
+	runGitTestCmd(t, worktreeDir, "commit", "-m", "later item's real work")
+
+	// The recorded branch's own real, distinguishing work — reachable from repoDir even
+	// though the worktree at worktreeDir isn't actually checked out to it.
+	runGitTestCmd(t, repoDir, "checkout", recordedBranch)
+	require.NoError(t, os.WriteFile(filepath.Join(repoDir, "feature.txt"), []byte("this item's real work\n"), 0o644))
+	runGitTestCmd(t, repoDir, "add", "feature.txt")
+	runGitTestCmd(t, repoDir, "commit", "-m", "this item's real fix")
+	runGitTestCmd(t, repoDir, "checkout", "main")
+
+	storage, repo := createTestStorageWithRepo(t)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+
+	item, err := storage.CreateBacklogItem(context.Background(), session.BacklogItemData{
+		Title:    "Diff falls back on worktree identity mismatch",
+		RepoPath: repoDir,
+		Status:   string(session.BacklogStatusReview),
+	})
+	require.NoError(t, err)
+
+	const workSessionUUID = "diff-identity-mismatch-uuid"
+	_, err = storage.CreateItemSession(context.Background(), session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: workSessionUUID,
+		SessionRole: session.SessionRoleWork,
+	})
+	require.NoError(t, err)
+
+	now := time.Now()
+	require.NoError(t, repo.Create(context.Background(), session.InstanceData{
+		Title:      workSessionUUID,
+		UUID:       workSessionUUID,
+		Path:       worktreeDir,
+		WorkingDir: worktreeDir,
+		Branch:     recordedBranch,
+		Status:     session.Paused,
+		Program:    "claude",
+		CreatedAt:  now,
+		UpdatedAt:  now,
+		Worktree: session.GitWorktreeData{
+			RepoPath:      repoDir,
+			WorktreePath:  worktreeDir,
+			SessionName:   workSessionUUID,
+			BranchName:    recordedBranch,
+			BaseCommitSHA: "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+		},
+	}))
+
+	diff := svc.getWorkSessionDiff(context.Background(), repoDir, &session.ItemSessionSummary{SessionUUID: workSessionUUID})
+	assert.Contains(t, diff, "feature.txt", "must recover this item's own real work via the repoPath fallback")
+	assert.NotContains(t, diff, "other-item.txt", "must never surface the mismatched worktree's unrelated content")
+}
+
 // TestTriggerReReview_should_BlockInsteadOfFalseFail_When_WorktreeGoneAndDiffUnrecoverable
 // reproduces the live bug end to end: no diff is recoverable (worktree gone, branch
 // itself unresolvable — simulating a fully torn-down session, the case where even the

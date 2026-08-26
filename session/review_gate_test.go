@@ -933,15 +933,15 @@ func TestReviewGateRunner_DiffComputationFailure_RecoveredButEmptyDiff_StillBloc
 	}
 }
 
-// TestReviewGateRunner_NoBranchName_DiffComputationFailure_SkipsRepairAndBlocksImmediately
-// is a regression test for the `wt.BranchName != ""` guard on the auto-repair attempt:
-// a worktree record with no BranchName (directory-mode/branchless sessions) has no
-// branch to recompute a merge-base against, so repair must be skipped entirely rather
-// than calling RecoverBaseCommitSHA with an empty ref (which would itself error, but
-// for the wrong reason, and would show up as a RecoverBaseCommitSHA log line this test
-// asserts never appears). The review must still fall straight through to the
-// block-and-notify path.
-func TestReviewGateRunner_NoBranchName_DiffComputationFailure_SkipsRepairAndBlocksImmediately(t *testing.T) {
+// TestReviewGateRunner_NoBranchName_BlockedByIdentityGuard_SkipsRepairEntirely is a
+// regression test for a worktree row with a populated WorktreePath but an empty
+// BranchName (directory-mode/branchless sessions, or a legacy row predating the
+// BranchName field). WorktreeIdentityMismatch treats an empty branchName as always
+// unverifiable, so the worktree-identity guard at the top of Run now catches and
+// blocks this case with its own distinct verdict before the diff-computation/repair
+// logic further down (which would otherwise call RecoverBaseCommitSHA with an empty
+// ref — itself an error, but for the wrong, less specific reason) is ever reached.
+func TestReviewGateRunner_NoBranchName_BlockedByIdentityGuard_SkipsRepairEntirely(t *testing.T) {
 	t.Parallel()
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
@@ -1014,15 +1014,15 @@ func TestReviewGateRunner_NoBranchName_DiffComputationFailure_SkipsRepairAndBloc
 		onPassCalled.Store(true)
 	})
 
-	assert.Equal(t, 0, spawner.getCallCount(), "session creator must not be consulted when the diff could not be computed")
+	assert.Equal(t, 0, spawner.getCallCount(), "session creator must not be consulted when the worktree identity could not be verified")
 	assert.False(t, onPassCalled.Load(), "onPass must not fire for a blocked review")
-	assert.NotContains(t, warnBuf.String(), "RecoverBaseCommitSHA", "repair must never be attempted when the worktree has no BranchName")
+	assert.NotContains(t, warnBuf.String(), "RecoverBaseCommitSHA", "repair must never be attempted when the identity guard has already blocked the review")
 
 	outcome, err := storage.GetMostRecentReviewVerdictForItem(ctx, item.ID)
 	require.NoError(t, err)
 	assert.Equal(t, ReviewVerdictFail, outcome, "a distinct FAIL verdict must be recorded, not a silent pass-through")
 
-	assert.Contains(t, notifier.titles(), "Review blocked — diff computation failed")
+	assert.Contains(t, notifier.titles(), "Review blocked — worktree identity mismatch")
 }
 
 // TestReviewGateRunner_WorktreeBranchMismatch_BlocksReviewWithDistinctVerdict is a
@@ -1273,6 +1273,43 @@ func TestReviewGateRunner_WorktreeDirectoryGone_FallsBackToRepoPath_DoesNotHardB
 
 	prompt := spawner.getLastPrompt()
 	assert.Contains(t, prompt, "feature.txt", "the reviewer prompt must contain the real diff recovered via the repoPath fallback")
+}
+
+// TestWorktreeIdentityMismatch covers WorktreeIdentityMismatch's branches directly —
+// it's a small, trivially unit-testable function, but the integration-level
+// ReviewGateRunner.Run tests above only exercise the "match," "branch mismatch," and
+// "directory gone" outcomes. This adds the two remaining ones: a path that exists but
+// isn't a directory, and a worktree in detached HEAD (a plausible transient state,
+// e.g. mid-rebase, that must still fail closed rather than silently passing).
+func TestWorktreeIdentityMismatch(t *testing.T) {
+	t.Parallel()
+
+	repoDir := t.TempDir()
+	runGitOrFail(t, repoDir, "init", "-b", "main")
+	runGitOrFail(t, repoDir, "config", "user.email", "test@example.com")
+	runGitOrFail(t, repoDir, "config", "user.name", "Test")
+	require.NoError(t, os.WriteFile(repoDir+"/f.txt", []byte("x"), 0o644))
+	runGitOrFail(t, repoDir, "add", "f.txt")
+	runGitOrFail(t, repoDir, "commit", "-m", "initial")
+	detachedSHA := strings.TrimSpace(runGitCapture(t, repoDir, "rev-parse", "HEAD"))
+	runGitOrFail(t, repoDir, "checkout", detachedSHA)
+
+	notADir := filepath.Join(t.TempDir(), "not-a-dir")
+	require.NoError(t, os.WriteFile(notADir, []byte("x"), 0o644))
+
+	tests := []struct {
+		name, worktreePath, branchName, wantContains string
+	}{
+		{"path is a regular file, not a directory", notADir, "main", "not a directory"},
+		{"detached HEAD cannot be verified", repoDir, "main", "could not be verified"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := WorktreeIdentityMismatch(tt.worktreePath, tt.branchName)
+			assert.Contains(t, got, tt.wantContains)
+		})
+	}
 }
 
 // cloneWithOrigin clones originDir into a fresh temp directory with a real "origin"
