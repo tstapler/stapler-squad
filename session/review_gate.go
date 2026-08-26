@@ -462,18 +462,30 @@ func (r *ReviewGateRunner) Run(
 }
 
 // worktreeIdentityMismatch reports why worktreePath does not actually belong to
-// branchName, or "" if it does. Worktree paths are resolved by title-derived
-// branch name rather than item/session UUID (findExistingWorktreeForBranch,
-// session/git/worktree.go), so a recorded worktree row can point at a path that
-// has since been reused, recreated, or handed to a different item — this check
-// exists to catch that before any diff/sync/repair operation trusts the path.
+// branchName, or "" if it does — or if worktreePath doesn't exist on disk at all.
+// A missing directory is deliberately NOT reported as a mismatch here: it's the
+// same "worktree torn down, but its commits remain reachable via the shared
+// object store" case Run's own GetGitDiff→GetGitDiffRef(item.RepoPath, ...)
+// fallback (and getWorkSessionDiff's mirror in
+// server/services/backlog_service_triage.go) already handles gracefully — this
+// check exists to catch a *present* directory that's actually the wrong one,
+// not to duplicate or preempt that existing recovery path. Worktree paths are
+// resolved by title-derived branch name rather than item/session UUID
+// (findExistingWorktreeForBranch, session/git/worktree.go), so a recorded
+// worktree row can point at a path that's since been reused, recreated, or
+// handed to a different item while a directory still sits there — that's the
+// shape this check exists to catch before any diff/sync/repair operation
+// trusts the path.
 func worktreeIdentityMismatch(worktreePath, branchName string) string {
 	info, statErr := os.Stat(worktreePath)
 	if statErr != nil {
-		return fmt.Sprintf("no longer exists on disk (%v)", statErr)
+		if os.IsNotExist(statErr) {
+			return ""
+		}
+		return fmt.Sprintf("could not be verified: %v", statErr)
 	}
 	if !info.IsDir() {
-		return "no longer exists on disk (not a directory)"
+		return "exists on disk but is not a directory"
 	}
 	actualBranch, branchErr := git.GetCurrentBranchName(worktreePath)
 	if branchErr != nil {

@@ -1189,6 +1189,92 @@ func TestReviewGateRunner_WorktreeBranchMismatch_RepeatedFailure_StillDedupsViaI
 	assert.True(t, IsRepeatedFailure(recent), "IsRepeatedFailure must still trip against two consecutive worktree-identity-mismatch verdicts with identical Summary text")
 }
 
+// TestReviewGateRunner_WorktreeDirectoryGone_FallsBackToRepoPath_DoesNotHardBlock is a
+// regression test for a bug in the worktree-identity guard itself, caught in review: a
+// worktree whose recorded row still names the right branch, but whose directory has
+// since been torn down entirely (e.g. cleaned up after the session ended), must NOT be
+// treated the same as a worktree recycled to a *different* branch. Before this fix,
+// worktreeIdentityMismatch reported "no longer exists on disk" as a mismatch and Run
+// hard-blocked with a FAIL verdict before ever reaching the pre-existing
+// GetGitDiff(worktree)→GetGitDiffRef(item.RepoPath, ...) fallback — even though that
+// fallback (and its mirror in getWorkSessionDiff,
+// server/services/backlog_service_triage.go) already handles a gone worktree
+// gracefully, since worktrees share one object store and the branch's commits remain
+// reachable from item.RepoPath. The review must still proceed normally on the real
+// diff recovered via that fallback.
+func TestReviewGateRunner_WorktreeDirectoryGone_FallsBackToRepoPath_DoesNotHardBlock(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	repoDir := t.TempDir()
+	runGitOrFail(t, repoDir, "init", "-b", "main")
+	runGitOrFail(t, repoDir, "config", "user.email", "test@example.com")
+	runGitOrFail(t, repoDir, "config", "user.name", "Test")
+	require.NoError(t, os.WriteFile(repoDir+"/README.md", []byte("base\n"), 0o644))
+	runGitOrFail(t, repoDir, "add", "README.md")
+	runGitOrFail(t, repoDir, "commit", "-m", "initial")
+	baseSHA := strings.TrimSpace(runGitCapture(t, repoDir, "rev-parse", "main"))
+
+	// A real worktree, with real committed work, that is then fully torn down —
+	// `git worktree remove` deletes the directory but leaves the branch (and its
+	// commits) intact and reachable from repoDir, exactly like a session whose
+	// worktree was cleaned up after it ended.
+	worktreeDir := t.TempDir()
+	runGitOrFail(t, repoDir, "worktree", "add", "-b", "feature", worktreeDir, "main")
+	require.NoError(t, os.WriteFile(worktreeDir+"/feature.txt", []byte("real work\n"), 0o644))
+	runGitOrFail(t, worktreeDir, "add", "feature.txt")
+	runGitOrFail(t, worktreeDir, "commit", "-m", "real fix")
+	runGitOrFail(t, repoDir, "worktree", "remove", "--force", worktreeDir)
+
+	itemData := BacklogItemData{
+		Title:              "Worktree torn down, branch intact test",
+		AcceptanceCriteria: `[]`,
+		Priority:           1,
+		Status:             string(BacklogStatusInProgress),
+		RepoPath:           repoDir,
+	}
+	createdItemData, err := storage.CreateBacklogItem(ctx, itemData)
+	require.NoError(t, err)
+
+	workSessionUUID := uuid.New().String()
+	workIS, err := storage.CreateItemSession(ctx, ItemSessionData{
+		ItemID:      createdItemData.ID,
+		SessionUUID: workSessionUUID,
+		SessionRole: SessionRoleWork,
+	})
+	require.NoError(t, err)
+
+	inst := newTestInstance("worktree-gone-test")
+	inst.UUID = workSessionUUID
+	inst.gitManager.worktree = git.NewGitWorktreeFromStorage(
+		repoDir, worktreeDir, "worktree-gone-test", "feature", baseSHA)
+	require.NoError(t, storage.SaveInstances([]*Instance{inst}))
+
+	item := &BacklogItemData{ID: createdItemData.ID, RepoPath: repoDir}
+
+	spawner := &mockReviewGateSpawner{}
+	getSessionCreator := func() ReviewGateSpawner { return spawner }
+	getAutoReopener := func() AutoReopenSpawner { return nil }
+	notifier := &fakeNotifier{}
+	getNotifier := func() Notifier { return notifier }
+
+	runner := NewReviewGateRunner(storage, getAutoReopener, getNotifier, getSessionCreator, nil)
+
+	var onPassCalled atomic.Bool
+	runner.Run(ctx, item, workIS, func(ctx context.Context, item *BacklogItemData, is ItemSessionSummary) {
+		onPassCalled.Store(true)
+	})
+
+	require.Equal(t, 1, spawner.getCallCount(), "a gone worktree with an intact branch must fall back to repoPath and proceed, not hard-block as an identity mismatch")
+	assert.False(t, onPassCalled.Load())
+	assert.NotContains(t, notifier.titles(), "Review blocked — worktree identity mismatch")
+
+	prompt := spawner.getLastPrompt()
+	assert.Contains(t, prompt, "feature.txt", "the reviewer prompt must contain the real diff recovered via the repoPath fallback")
+}
+
 // cloneWithOrigin clones originDir into a fresh temp directory with a real "origin"
 // remote pointing back at originDir, so git.EnsureBranchSyncedWithMain's fetch/merge/
 // push calls have something real to talk to (unlike this file's other fixtures, which
