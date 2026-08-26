@@ -4780,6 +4780,11 @@ func (s *SessionService) SetStreamHubSessionOverride(ctx context.Context, req *c
 	return s.streamHubRolloutSvc.SetStreamHubSessionOverride(ctx, req)
 }
 
+// SetStreamHubGlobalOverride sets or clears the live global stream-hub override.
+func (s *SessionService) SetStreamHubGlobalOverride(ctx context.Context, req *connect.Request[sessionv1.SetStreamHubGlobalOverrideRequest]) (*connect.Response[sessionv1.StreamHubRolloutStatus], error) {
+	return s.streamHubRolloutSvc.SetStreamHubGlobalOverride(ctx, req)
+}
+
 // SetOnGlobalDefaultsUpdated wires in the callback invoked after every
 // successful UpdateGlobalDefaults save (server/dependencies.go uses this to
 // trigger an immediate backlog-queue dequeue sweep when the concurrency limit

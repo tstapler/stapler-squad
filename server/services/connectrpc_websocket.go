@@ -517,28 +517,37 @@ func pumpControlModeOutputIntoHub(hub *streamhub.StreamHub, controller streamhub
 	}
 }
 
-// useStreamHub is the global STAPLER_SQUAD_USE_STREAM_HUB default resolver,
-// re-read per connection — safe because StreamOwnershipLock.Resolve (Epic
-// 3.1) caches the first resolution per tmux session, so a later re-read
-// observing a changed value can never move an already-resolved session.
+// useStreamHub is the global stream-hub default resolver, re-read per
+// connection — safe because StreamOwnershipLock.Resolve (Epic 3.1) caches
+// the first resolution per tmux session, so a later re-read observing a
+// changed value can never move an already-resolved session.
 //
-// Defaults on (mirrors STAPLER_SQUAD_USE_CONTROL_MODE's "unset or true"
-// convention) now that the staged rollout's rehearsal gate and trial period
-// (Story 3.3.1-3.3.3) are both satisfied; set STAPLER_SQUAD_USE_STREAM_HUB=false
-// to opt a run back out.
+// Resolution order: config.StreamHubGlobalOverride (Story 3.3.4's live,
+// browser-settable override — no restart required) takes precedence when
+// set; otherwise falls back to the STAPLER_SQUAD_USE_STREAM_HUB env var,
+// which defaults on (mirrors STAPLER_SQUAD_USE_CONTROL_MODE's "unset or
+// true" convention) now that the staged rollout's rehearsal gate and trial
+// period (Story 3.3.1-3.3.3) are both satisfied.
 //
 // Story 3.3.1/3.3.2 (pre-mortem P1 #4): requesting the global default to be
-// true is still mechanically gated on config.ResolveGlobalStreamHubDefault —
-// refused, and safely defaulted to false with a loud log line, unless
-// config.RollbackRehearsalCompletedAt has been recorded (Story 3.3.2's
-// rehearsal) on that instance. This gate does not apply to the per-session
-// override path (see the streamhub.SetSessionOverrideLookup wiring in init
-// below), which AcquireOwnershipLock's Resolve consults independently of
-// this function's return value.
+// true — from either source — is still mechanically gated on
+// config.ResolveGlobalStreamHubDefault — refused, and safely defaulted to
+// false with a loud log line, unless config.RollbackRehearsalCompletedAt
+// has been recorded (Story 3.3.2's rehearsal) on that instance. This gate
+// does not apply to the per-session override path (see the
+// streamhub.SetSessionOverrideLookup wiring in init below), which
+// AcquireOwnershipLock's Resolve consults independently of this function's
+// return value.
 func useStreamHub() bool {
-	v := os.Getenv("STAPLER_SQUAD_USE_STREAM_HUB")
-	requested := v == "" || v == "true"
-	effective, err := config.ResolveGlobalStreamHubDefault(config.LoadConfig(), requested)
+	cfg := config.LoadConfig()
+	var requested bool
+	if cfg.StreamHubGlobalOverride != nil {
+		requested = *cfg.StreamHubGlobalOverride
+	} else {
+		v := os.Getenv("STAPLER_SQUAD_USE_STREAM_HUB")
+		requested = v == "" || v == "true"
+	}
+	effective, err := config.ResolveGlobalStreamHubDefault(cfg, requested)
 	if err != nil {
 		log.Error("streamhub: refusing to enable global default", "error", err)
 		return false

@@ -484,6 +484,13 @@ type Config struct {
 	// (pre-mortem P1 #4's mechanical gate) — the per-session override above
 	// is unaffected by this gate. Set via RecordRollbackRehearsalCompleted.
 	RollbackRehearsalCompletedAt *time.Time `json:"rollback_rehearsal_completed_at,omitempty"`
+	// StreamHubGlobalOverride is a live, config.json-backed override of the
+	// global stream-hub default, settable from the browser via
+	// SetStreamHubGlobalOverride with no process restart required. nil means
+	// "no override — resolve from the STAPLER_SQUAD_USE_STREAM_HUB env var as
+	// before". A non-nil value is still subject to
+	// ResolveGlobalStreamHubDefault's rollback-rehearsal gate when true.
+	StreamHubGlobalOverride *bool `json:"stream_hub_global_override,omitempty"`
 }
 
 // ErrRollbackRehearsalNotCompleted is returned by ResolveGlobalStreamHubDefault
@@ -556,6 +563,17 @@ func (c *Config) SetStreamHubSessionOverride(sessionName string, forceHub *bool)
 		c.StreamHubSessionOverrides = make(map[string]bool)
 	}
 	c.StreamHubSessionOverrides[sessionName] = *forceHub
+	return SaveConfig(c)
+}
+
+// SetStreamHubGlobalOverride sets or clears the live global stream-hub
+// override and persists the config to disk. forceHub follows this file's
+// tri-state *bool convention: nil clears the override (reverting to the
+// STAPLER_SQUAD_USE_STREAM_HUB env var default), non-nil forces that value
+// for every session connection resolved from now on — subject to
+// ResolveGlobalStreamHubDefault's rollback-rehearsal gate when true.
+func (c *Config) SetStreamHubGlobalOverride(forceHub *bool) error {
+	c.StreamHubGlobalOverride = forceHub
 	return SaveConfig(c)
 }
 
