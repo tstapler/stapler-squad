@@ -1019,9 +1019,9 @@ type pumpTestController struct {
 	resubscribeUpdates chan []byte
 }
 
-func (c *pumpTestController) SetWindowSize(int, int) error { return nil }
-func (c *pumpTestController) ResizePTY(int, int) error     { return nil }
-func (c *pumpTestController) CapturePaneContentRaw() (streamhub.RawPaneContent, error) {
+func (c *pumpTestController) SetWindowSizeContext(context.Context, int, int) error { return nil }
+func (c *pumpTestController) ResizePTY(int, int) error                             { return nil }
+func (c *pumpTestController) CapturePaneContentRawContext(context.Context) (streamhub.RawPaneContent, error) {
 	return "", nil
 }
 func (c *pumpTestController) GetPaneCursorPosition() (x, y int, err error) {

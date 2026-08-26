@@ -1,6 +1,7 @@
 package streamhub_test
 
 import (
+	"context"
 	"errors"
 	"testing"
 	"time"
@@ -41,13 +42,13 @@ func TestStreamHub_should_CallSetWindowSizeExactlyOnce_When_NegotiatedSizeChange
 
 	// Establish an initial baseline — a real production hub always starts
 	// from some negotiated size before ever reaching {100,30}.
-	hub.RequestResize(id, mustSize(t, 80, 24))
+	hub.RequestResize(context.Background(), id, mustSize(t, 80, 24))
 
 	// Multiple subscribers voting for the same target size must still only
 	// produce one SetWindowSize(100, 30) call.
 	secondID := hub.AttachSubscriber(newMemoryTransport(), streamhub.SubscriberCapability{CanResize: true})
-	hub.RequestResize(id, mustSize(t, 100, 30))
-	hub.RequestResize(secondID, mustSize(t, 100, 30))
+	hub.RequestResize(context.Background(), id, mustSize(t, 100, 30))
+	hub.RequestResize(context.Background(), secondID, mustSize(t, 100, 30))
 
 	if got := controller.resizeCallCount(100, 30); got != 1 {
 		t.Fatalf("expected exactly one SetWindowSize(100, 30) call, got %d", got)
@@ -82,7 +83,7 @@ func TestStreamHub_should_SuppressBroadcast_When_ResizeIsInProgress(t *testing.T
 
 	resizeDone := make(chan struct{})
 	go func() {
-		hub.RequestResize(id, mustSize(t, 100, 30))
+		hub.RequestResize(context.Background(), id, mustSize(t, 100, 30))
 		close(resizeDone)
 	}()
 
@@ -146,7 +147,7 @@ func TestStreamHub_should_BroadcastSingleCapturedSnapshotToAllSubscribers_When_Q
 	controller.captureContent = "shared-snapshot"
 
 	// Resize is triggered by B's vote; A and C never voted at all (C can't).
-	hub.RequestResize(idB, mustSize(t, 90, 28))
+	hub.RequestResize(context.Background(), idB, mustSize(t, 90, 28))
 
 	if !waitFor(t, time.Second, func() bool {
 		return transportA.receivedCount() == 1 && transportC.receivedCount() == 1
@@ -190,7 +191,7 @@ func TestStreamHub_should_BroadcastStreamEndedSentinelAndTearDown_When_SetWindow
 	// "CapturePaneContent is never called at all".
 	captureCallsBeforeResize := controller.captureCalls.Load()
 
-	hub.RequestResize(id1, mustSize(t, 100, 30))
+	hub.RequestResize(context.Background(), id1, mustSize(t, 100, 30))
 
 	if !waitFor(t, time.Second, func() bool {
 		return transport1.receivedCount() == 1 && transport2.receivedCount() == 1
@@ -225,7 +226,7 @@ func TestStreamHub_should_BroadcastStreamEndedSentinelAndTearDown_When_CapturePa
 	id1 := hub.AttachSubscriber(transport1, streamhub.SubscriberCapability{CanResize: true})
 	hub.AttachSubscriber(transport2, streamhub.SubscriberCapability{CanResize: true})
 
-	hub.RequestResize(id1, mustSize(t, 100, 30))
+	hub.RequestResize(context.Background(), id1, mustSize(t, 100, 30))
 
 	if !waitFor(t, time.Second, func() bool {
 		return transport1.receivedCount() == 1 && transport2.receivedCount() == 1
@@ -262,7 +263,7 @@ func TestStreamHub_should_StayAliveAndRetryLater_When_CapturePaneContentErrorsWi
 	id1 := hub.AttachSubscriber(transport1, streamhub.SubscriberCapability{CanResize: true})
 	hub.AttachSubscriber(transport2, streamhub.SubscriberCapability{CanResize: true})
 
-	hub.RequestResize(id1, mustSize(t, 100, 30))
+	hub.RequestResize(context.Background(), id1, mustSize(t, 100, 30))
 
 	// Give applyNegotiatedSize's goroutine time to run and (incorrectly, pre-fix)
 	// tear the hub down; then assert it's still alive and neither subscriber was
@@ -282,7 +283,7 @@ func TestStreamHub_should_StayAliveAndRetryLater_When_CapturePaneContentErrorsWi
 	// succeed normally — proving the hub wasn't left in some half-dead state.
 	controller.captureErr = nil
 	controller.captureContent = "now running"
-	hub.RequestResize(id1, mustSize(t, 120, 40))
+	hub.RequestResize(context.Background(), id1, mustSize(t, 120, 40))
 
 	if !waitFor(t, time.Second, func() bool { return controller.resizeCallCount(120, 40) == 1 }) {
 		t.Fatalf("expected the hub to still service a later resize once the controller recovers")

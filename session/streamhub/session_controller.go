@@ -1,6 +1,9 @@
 package streamhub
 
-import "errors"
+import (
+	"context"
+	"errors"
+)
 
 // ErrSessionNotStarted is the sentinel a SessionController implementation
 // returns from the methods below when the session simply hasn't finished
@@ -21,14 +24,23 @@ var ErrSessionNotStarted = errors.New("session not started or paused")
 // Pattern Decisions entry.
 //
 // Scoped to exactly the seven *session.Instance methods it mirrors:
-// session/instance_tmux.go's ResizePTY (:587), CapturePaneContentRaw (:772),
+// session/instance_tmux.go's ResizePTY (:587), CapturePaneContentRawContext,
 // GetPaneCursorPosition (:792), StopControlMode (:727),
 // SubscribeControlModeUpdates (:733), UnsubscribeControlModeUpdates (:738),
-// and SetWindowSize (:752).
+// and SetWindowSizeContext.
+//
+// SetWindowSizeContext/CapturePaneContentRawContext take ctx rather than
+// reusing *session.Instance's existing context-less SetWindowSize/
+// CapturePaneContentRaw (which stay in place for their many other, non-hub
+// callers) — a caller-supplied deadline lets applyNegotiatedSize's callers
+// signal "stop waiting" early (e.g. the WebSocket connection whose resize
+// vote triggered this call disconnecting) instead of only ever waiting out
+// a fixed internal ceiling with no way to cancel sooner.
 type SessionController interface {
-	// SetWindowSize propagates a negotiated resize to the underlying tmux
-	// session. StreamHub.applyNegotiatedSize is its sole caller.
-	SetWindowSize(cols, rows int) error
+	// SetWindowSizeContext propagates a negotiated resize to the underlying
+	// tmux session, bounded by ctx. StreamHub.applyNegotiatedSize is its sole
+	// caller.
+	SetWindowSizeContext(ctx context.Context, cols, rows int) error
 
 	// ResizePTY resizes the terminal dimensions, mirroring
 	// *session.Instance.ResizePTY's cols/rows nudge pattern. Part of the
@@ -38,18 +50,19 @@ type SessionController interface {
 	// phase migrates it onto the hub).
 	ResizePTY(cols, rows int) error
 
-	// CapturePaneContentRaw captures the current visible pane content
+	// CapturePaneContentRawContext captures the current visible pane content
 	// without joining tmux's soft-wrapped lines (no -J) and with cursor
-	// positioning codes intact. The hub calls this exactly once per resize,
-	// after quiescence is reached, and once at attach time for a new
-	// subscriber's catch-up snapshot; both call sites run the result through
-	// prepareSnapshotContent/withCursorSync (snapshot_prepare.go) before
-	// broadcasting. Deliberately not the joined CapturePaneContent variant:
-	// -J strips the escape codes a snapshot's cursor-sync depends on and
-	// collapses tmux's own wrap points, which is what made every post-resize
-	// snapshot render staircased across the previous frame (2026-08-25
-	// reflow bug — see snapshot_prepare.go's doc comment).
-	CapturePaneContentRaw() (RawPaneContent, error)
+	// positioning codes intact, bounded by ctx. The hub calls this exactly
+	// once per resize, after quiescence is reached, and once at attach time
+	// for a new subscriber's catch-up snapshot; both call sites run the
+	// result through prepareSnapshotContent/withCursorSync
+	// (snapshot_prepare.go) before broadcasting. Deliberately not the joined
+	// CapturePaneContent variant: -J strips the escape codes a snapshot's
+	// cursor-sync depends on and collapses tmux's own wrap points, which is
+	// what made every post-resize snapshot render staircased across the
+	// previous frame (2026-08-25 reflow bug — see snapshot_prepare.go's doc
+	// comment).
+	CapturePaneContentRawContext(ctx context.Context) (RawPaneContent, error)
 
 	// GetPaneCursorPosition reports the tmux pane's current cursor
 	// coordinates, used by withCursorSync (snapshot_prepare.go) to reposition

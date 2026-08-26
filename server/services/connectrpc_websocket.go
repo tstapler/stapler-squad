@@ -1598,6 +1598,16 @@ const HubStartFailedErrorCode = "HUB_START_FAILED"
 // function's job is a correct, working PathHubOwned path behind a
 // default-off flag, not full feature parity yet.
 func (h *ConnectRPCWebSocketHandler) streamViaHub(stream *connectWebSocketStream, instance *session.Instance) error {
+	// connCtx is scoped to this WebSocket connection's lifetime, not a fixed
+	// background timeout — it's threaded into every hub.RequestResize call
+	// below so an upstream disconnect cancels an in-flight resize's
+	// SetWindowSize/CapturePaneContentRaw pipeline immediately instead of
+	// always waiting out a fixed ceiling. http.Request.Context() is not used
+	// here because its post-Hijack() behavior is not well-defined for a
+	// long-lived WebSocket connection.
+	connCtx, cancelConn := context.WithCancel(context.Background())
+	defer cancelConn()
+
 	snap := instance.Snapshot()
 	sessionID := snap.Title
 	tmuxPrefix := snap.TmuxPrefix
@@ -1722,7 +1732,7 @@ func (h *ConnectRPCWebSocketHandler) streamViaHub(stream *connectWebSocketStream
 		if size, sizeErr := streamhub.NewTerminalSize(int(*currentPaneReq.TargetCols), int(*currentPaneReq.TargetRows)); sizeErr != nil {
 			log.Warn("[streamViaHub] invalid handshake dimensions", "err", sizeErr)
 		} else {
-			hub.RequestResize(subscriberID, size)
+			hub.RequestResize(connCtx, subscriberID, size)
 		}
 	} else {
 		log.Warn("[streamViaHub] handshake missing dimensions, layout may be incorrect")
@@ -1806,7 +1816,7 @@ func (h *ConnectRPCWebSocketHandler) streamViaHub(stream *connectWebSocketStream
 			log.Warn("[streamViaHub] invalid resize request", "cols", cols, "rows", rows, "err", sizeErr)
 			return
 		}
-		hub.RequestResize(subscriberID, size)
+		hub.RequestResize(connCtx, subscriberID, size)
 	}, func(startLine, endLine string) (string, error) {
 		return instance.GetScrollbackHistory(startLine, endLine)
 	}, func(req *sessionv1.CurrentPaneRequest) (*sessionv1.TerminalOutput, error) {

@@ -816,6 +816,16 @@ func (i *Instance) CapturePaneContentRaw() (streamhub.RawPaneContent, error) {
 	return streamhub.RawPaneContent(content), err
 }
 
+// CapturePaneContentRawContext mirrors CapturePaneContentRaw but honors ctx:
+// it delegates to CapturePaneContentRawPriority, which already races the
+// underlying capture against ctx.Done() via the resync exec-gate fast lane
+// (session/tmux/exec_gate.go's runFastLaneSubprocess) for tmux-backed
+// instances. Satisfies streamhub.SessionController for
+// StreamHub.applyNegotiatedSize.
+func (i *Instance) CapturePaneContentRawContext(ctx context.Context) (streamhub.RawPaneContent, error) {
+	return i.CapturePaneContentRawPriority(ctx)
+}
+
 // GetCurrentPaneContent captures the current visible tmux pane content.
 // Delegates to processManager.CaptureViewport.
 func (i *Instance) GetCurrentPaneContent(lines int) (string, error) {
@@ -952,6 +962,25 @@ func (i *Instance) SetWindowSize(cols, rows int) error {
 		return i.pm().SetWindowSize(cols, rows)
 	}
 	return nil
+}
+
+// SetWindowSizeContext mirrors SetWindowSize but returns as soon as ctx is
+// canceled or its deadline expires, instead of only ever waiting out
+// SetWindowSize's own internal fixed timeout — the underlying tmux command
+// path (session/tmux/tmux.go's cmCtx) has no caller-overridable context, so
+// this wraps the blocking call in a goroutine and races it against ctx,
+// following the same pattern as CapturePaneContentRawPriority for the
+// resync fast lane. StreamHub.applyNegotiatedSize is the sole caller, via
+// the streamhub.SessionController interface.
+func (i *Instance) SetWindowSizeContext(ctx context.Context, cols, rows int) error {
+	done := make(chan error, 1)
+	go func() { done <- i.SetWindowSize(cols, rows) }()
+	select {
+	case err := <-done:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 // RefreshTmuxClient forces the tmux client to refresh, triggering a redraw

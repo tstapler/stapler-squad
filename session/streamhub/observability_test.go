@@ -2,6 +2,7 @@ package streamhub_test
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"log/slog"
 	"strings"
@@ -96,7 +97,7 @@ func TestStreamHub_should_LogHubCreatedAttachResizeAndDetach_InOrder(t *testing.
 	id := hub.AttachSubscriber(mt, streamhub.SubscriberCapability{CanResize: true})
 
 	size := mustSize(t, 80, 24)
-	hub.RequestResize(id, size)
+	hub.RequestResize(context.Background(), id, size)
 
 	hub.DetachSubscriber(id)
 
@@ -216,7 +217,7 @@ func TestStreamHubMetrics_should_IncrementResizeNegotiationsTotal_When_ResizeReq
 	defer func() { _ = hub.ForceTeardown() }()
 
 	id := hub.AttachSubscriber(streamhub.NewMemoryTransport(), streamhub.SubscriberCapability{CanResize: true})
-	hub.RequestResize(id, mustSize(t, 80, 24))
+	hub.RequestResize(context.Background(), id, mustSize(t, 80, 24))
 
 	if got := streamhub.ResizeNegotiationsTotal(); got != before+1 {
 		t.Fatalf("expected ResizeNegotiationsTotal() to increment by 1 after RequestResize, got %d -> %d", before, got)

@@ -1,6 +1,7 @@
 package streamhub
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"sync"
@@ -33,6 +34,16 @@ const (
 	// waits before tearing down control mode, so a brief reconnect doesn't
 	// kill it (Story 1.2.2).
 	DefaultHubTeardownGrace = 5 * time.Second
+
+	// captureTimeout bounds each individual SetWindowSizeContext/
+	// CapturePaneContentRawContext call against the underlying tmux session.
+	// It's the fallback ceiling used whenever no caller-derived deadline is
+	// tighter (e.g. currentSnapshot's attach-time capture, which has no
+	// resize-vote caller to inherit a deadline from); applyNegotiatedSize
+	// derives its own deadline from the resize caller's ctx via
+	// context.WithTimeout so an early upstream disconnect still cancels
+	// promptly instead of waiting out this ceiling.
+	captureTimeout = 5 * time.Second
 )
 
 // HubOption configures a StreamHub at construction time. Tests use these to
@@ -370,7 +381,9 @@ func (h *StreamHub) currentSnapshot() (content []byte, ok bool) {
 	if h.controller == nil {
 		return nil, false
 	}
-	captured, err := h.controller.CapturePaneContentRaw()
+	ctx, cancel := context.WithTimeout(context.Background(), captureTimeout)
+	defer cancel()
+	captured, err := h.controller.CapturePaneContentRawContext(ctx)
 	if err != nil {
 		log.Info("streamhub: no CatchUpSnapshot available for newly-attached subscriber",
 			"session", h.sessionName, "error", err)
@@ -645,10 +658,18 @@ func (h *StreamHub) TryFlush() {
 // the hub captures the pane exactly once and broadcasts the result to every
 // attached subscriber (Task 1.3.2e), not just the one whose vote triggered
 // the resize.
-func (h *StreamHub) applyNegotiatedSize(size TerminalSize) {
+func (h *StreamHub) applyNegotiatedSize(ctx context.Context, size TerminalSize) {
 	if h.controller == nil {
 		return
 	}
+
+	// One shared, decreasing deadline for both controller calls below,
+	// derived from the resize caller's ctx rather than two independently
+	// manufactured timeouts — an early upstream disconnect (ctx canceled)
+	// stops this pipeline immediately instead of waiting out a fixed
+	// ceiling neither call could otherwise be told about.
+	ctx, cancel := context.WithTimeout(ctx, captureTimeout)
+	defer cancel()
 
 	h.resizeMu.Lock()
 	h.resizing = true
@@ -659,9 +680,13 @@ func (h *StreamHub) applyNegotiatedSize(size TerminalSize) {
 		h.resizeMu.Unlock()
 	}()
 
-	if err := h.controller.SetWindowSize(size.cols, size.rows); err != nil {
+	if err := h.controller.SetWindowSizeContext(ctx, size.cols, size.rows); err != nil {
 		if errors.Is(err, ErrSessionNotStarted) {
 			log.Info("streamhub: session not started yet, skipping this resize (will retry on the next negotiated size)", "session", h.sessionName)
+			return
+		}
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			log.Info("streamhub: resize caller disconnected or timed out, skipping this resize (will retry on the next negotiated size)", "session", h.sessionName, "error", err)
 			return
 		}
 		log.Error("streamhub: SetWindowSize failed", "session", h.sessionName, "cols", size.cols, "rows", size.rows, "error", err)
@@ -673,10 +698,14 @@ func (h *StreamHub) applyNegotiatedSize(size TerminalSize) {
 	waitForQuiescence(updates, h.quiescenceTimeout, h.quiescenceQuietPeriod, h.sessionName)
 	h.controller.UnsubscribeControlModeUpdates(subID)
 
-	content, err := h.controller.CapturePaneContentRaw()
+	content, err := h.controller.CapturePaneContentRawContext(ctx)
 	if err != nil {
 		if errors.Is(err, ErrSessionNotStarted) {
 			log.Info("streamhub: session not started yet, skipping this resize's capture (will retry on the next negotiated size)", "session", h.sessionName)
+			return
+		}
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			log.Info("streamhub: resize caller disconnected or timed out, skipping this resize's capture (will retry on the next negotiated size)", "session", h.sessionName, "error", err)
 			return
 		}
 		log.Error("streamhub: CapturePaneContentRaw failed after resize", "session", h.sessionName, "error", err)

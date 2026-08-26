@@ -1,6 +1,7 @@
 package streamhub_test
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
@@ -70,7 +71,7 @@ func TestWaitForQuiescence_should_LogHubScopedWarn_When_QuiescenceTimesOutAfter5
 	}()
 
 	id := hub.AttachSubscriber(newMemoryTransport(), streamhub.SubscriberCapability{CanResize: true})
-	hub.RequestResize(id, mustSize(t, 100, 30))
+	hub.RequestResize(context.Background(), id, mustSize(t, 100, 30))
 
 	close(stopFeed)
 	<-feedDone

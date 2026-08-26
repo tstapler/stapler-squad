@@ -1,6 +1,7 @@
 package services
 
 import (
+	"context"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -24,9 +25,9 @@ type fakeSessionController struct {
 	subscribeCalls int32
 }
 
-func (f *fakeSessionController) SetWindowSize(int, int) error { return nil }
-func (f *fakeSessionController) ResizePTY(int, int) error     { return nil }
-func (f *fakeSessionController) CapturePaneContentRaw() (streamhub.RawPaneContent, error) {
+func (f *fakeSessionController) SetWindowSizeContext(context.Context, int, int) error { return nil }
+func (f *fakeSessionController) ResizePTY(int, int) error                             { return nil }
+func (f *fakeSessionController) CapturePaneContentRawContext(context.Context) (streamhub.RawPaneContent, error) {
 	return "", nil
 }
 func (f *fakeSessionController) GetPaneCursorPosition() (x, y int, err error) {

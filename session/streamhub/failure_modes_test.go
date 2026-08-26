@@ -1,6 +1,7 @@
 package streamhub_test
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"sync"
@@ -52,7 +53,7 @@ func TestStreamHub_should_BroadcastStreamEndedSentinelToAllSubscribersAndAttempt
 	id1 := hub.AttachSubscriber(mt1, streamhub.SubscriberCapability{CanResize: true})
 	hub.AttachSubscriber(mt2, streamhub.SubscriberCapability{CanResize: true})
 
-	hub.RequestResize(id1, mustSize(t, 100, 30))
+	hub.RequestResize(context.Background(), id1, mustSize(t, 100, 30))
 
 	if !waitFor(t, time.Second, func() bool {
 		return len(mt1.ReceivedFrames()) == 1 && len(mt2.ReceivedFrames()) == 1
@@ -84,7 +85,7 @@ func TestStreamHub_should_BroadcastStreamEndedSentinelAndAttemptRestart_When_Cap
 	id1 := hub.AttachSubscriber(mt1, streamhub.SubscriberCapability{CanResize: true})
 	hub.AttachSubscriber(mt2, streamhub.SubscriberCapability{CanResize: true})
 
-	hub.RequestResize(id1, mustSize(t, 90, 28))
+	hub.RequestResize(context.Background(), id1, mustSize(t, 90, 28))
 
 	if !waitFor(t, time.Second, func() bool {
 		return len(mt1.ReceivedFrames()) == 1 && len(mt2.ReceivedFrames()) == 1
