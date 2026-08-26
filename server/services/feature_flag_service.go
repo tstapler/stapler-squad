@@ -114,9 +114,15 @@ func workspacePeersBlockFor(ctx context.Context, storage *session.Storage, repoP
 
 // knownFeatureFlags is the authoritative list of feature flags exposed via the RPC API.
 // Moved here from session_service.go (ADR-001: single-concern cluster gets its own file).
+// defaultValue is what GetFeatureFlags (below) reports, and what the flag's real call
+// site should resolve to via GetFeatureFlagWithDefault, when the flag has never been
+// explicitly persisted — Go's zero value (false) for any entry that omits the field, so
+// only a flag graduating to "on by default" (like terminalResyncExecGateFastLaneFlagName)
+// needs to set it.
 var knownFeatureFlags = []struct {
-	name        string
-	description string
+	name         string
+	description  string
+	defaultValue bool
 }{
 	{
 		name:        "backlog",
@@ -163,8 +169,9 @@ var knownFeatureFlags = []struct {
 		description: "Skip the stale-dimension slow path for backgrounded terminals during resync, avoiding unnecessary pane-size recalculation for terminals not currently visible. Not live-updated on already-open tabs. Default: off.",
 	},
 	{
-		name:        terminalResyncExecGateFastLaneFlagName,
-		description: "Route resync's tmux subprocess calls through a dedicated fast-lane slot pool (see TmuxExecGateConfig.ResyncFastLaneSlots) instead of contending with other tmux exec traffic for the shared gate. Default: off.",
+		name:         terminalResyncExecGateFastLaneFlagName,
+		description:  "Route resync's tmux subprocess calls through a dedicated fast-lane slot pool (see TmuxExecGateConfig.ResyncFastLaneSlots) instead of contending with other tmux exec traffic for the shared gate. Default: on (2026-08-25) — without it, a resync-triggered resize's sequential subprocess calls can exceed the client's 4s stall watchdog under exec-gate contention, forcing an unnecessary disconnect+reconnect. Persist an explicit false to opt back out.",
+		defaultValue: true,
 	},
 	{
 		name:        terminalResyncStaggerFlagName,
@@ -178,6 +185,20 @@ var knownFeatureFlags = []struct {
 		name:        terminalResyncBatchingFlagName,
 		description: "Batch multiple terminals' resync requests into a single round trip instead of issuing one request per terminal. Default: off.",
 	},
+}
+
+// featureFlagDefault looks up name's defaultValue in knownFeatureFlags — the single
+// source of truth both GetFeatureFlags (the registry listing) and a flag's own call
+// site (e.g. currentResyncOptions' UseFastLane) resolve against, so the two can never
+// drift on what "default" means for a given flag. Returns false for an unregistered
+// name, matching GetFeatureFlag's own "absent means false" convention.
+func featureFlagDefault(name string) bool {
+	for _, kf := range knownFeatureFlags {
+		if kf.name == name {
+			return kf.defaultValue
+		}
+	}
+	return false
 }
 
 // FeatureFlagService handles GetFeatureFlags and UpdateFeatureFlag RPCs.
@@ -238,10 +259,7 @@ func (f *FeatureFlagService) GetFeatureFlags(
 
 	flags := make([]*sessionv1.FeatureFlag, 0, len(knownFeatureFlags))
 	for _, kf := range knownFeatureFlags {
-		enabled := false
-		if cfg.FeatureFlags != nil {
-			enabled = cfg.FeatureFlags[kf.name]
-		}
+		enabled := cfg.GetFeatureFlagWithDefault(kf.name, kf.defaultValue)
 		// If a controller is wired, its live state is the source of truth.
 		if ctrl, ok := f.featureControllers[kf.name]; ok {
 			enabled = ctrl.IsEnabled()

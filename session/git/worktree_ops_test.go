@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
@@ -258,6 +259,64 @@ func TestSetupNewWorktree_RespectsPreSetBaseCommitSHA(t *testing.T) {
 	assert.True(t, os.IsNotExist(statErr), "worktree must not contain changes made after the pre-set base commit")
 }
 
+// TestInitBaseCommitSHA_UsesWorktreePath_NotRepoPathAmbientCheckout is a direct
+// regression test for backlog item e7664cbf: initBaseCommitSHA used to run
+// `git merge-base HEAD <candidate>` with cwd=g.repoPath, so "HEAD" resolved to
+// whatever branch the shared parent repoPath's checkout happened to be on —
+// not this worktree's own branch — making the computed base wrong (or, for an
+// orphan branch, unresolvable) whenever repoPath had drifted. This constructs a
+// GitWorktree pointing at a real, separate worktree directory (not repoPath
+// itself) with "feature" checked out, deliberately leaves repoPath on an
+// unrelated orphan branch sharing no history with "feature", and confirms
+// initBaseCommitSHA still computes the correct merge-base with main by running
+// inside the worktree — mirroring the already-correct sibling
+// resolveBaseCommitSHA (session/git/diff.go), which this fix now matches.
+func TestInitBaseCommitSHA_UsesWorktreePath_NotRepoPathAmbientCheckout(t *testing.T) {
+	t.Parallel()
+	repoDir := setupTestRepo(t)
+
+	mainSHA, err := safeexec.CommandContext(context.Background(), "git", "-C", repoDir, "rev-parse", "main").CombinedOutput()
+	require.NoError(t, err)
+	expectedBaseSHA := strings.TrimSpace(string(mainSHA))
+
+	worktreeDir := t.TempDir()
+	for _, args := range [][]string{
+		{"-C", repoDir, "worktree", "add", "-b", "feature", worktreeDir, "main"},
+		{"-C", worktreeDir, "config", "user.email", "test@example.com"},
+		{"-C", worktreeDir, "config", "user.name", "Test"},
+	} {
+		out, cmdErr := safeexec.CommandContext(context.Background(), "git", args...).CombinedOutput()
+		require.NoError(t, cmdErr, "git %v failed: %s", args, out)
+	}
+	require.NoError(t, os.WriteFile(filepath.Join(worktreeDir, "feature.txt"), []byte("real work"), 0644))
+	for _, args := range [][]string{
+		{"-C", worktreeDir, "add", "."},
+		{"-C", worktreeDir, "commit", "-m", "real fix"},
+	} {
+		out, cmdErr := safeexec.CommandContext(context.Background(), "git", args...).CombinedOutput()
+		require.NoError(t, cmdErr, "git %v failed: %s", args, out)
+	}
+
+	// Simulate a concurrent process leaving the shared repoPath on an unrelated
+	// orphan branch with no common history with "feature" — the worst case for the
+	// old repoPath-cwd implementation (would fail outright with "no merge base").
+	for _, args := range [][]string{
+		{"-C", repoDir, "checkout", "--orphan", "unrelated"},
+		{"-C", repoDir, "commit", "--allow-empty", "-m", "unrelated history"},
+	} {
+		out, cmdErr := safeexec.CommandContext(context.Background(), "git", args...).CombinedOutput()
+		require.NoError(t, cmdErr, "git %v failed: %s", args, out)
+	}
+
+	wt := NewGitWorktreeFromStorage(repoDir, worktreeDir, "test-init-base-sha", "feature", "")
+	require.NotNil(t, wt)
+
+	wt.initBaseCommitSHA()
+
+	assert.Equal(t, expectedBaseSHA, wt.GetBaseCommitSHA(),
+		"initBaseCommitSHA must find feature's real merge-base with main by running inside the worktree, unaffected by repoPath's ambient checkout")
+}
+
 // TestSetupNewWorktree_UsesExistingBranch_When_BranchRefExists covers setupNewWorktree()'s
 // own reuse path directly, independent of Setup()'s upfront goroutine (which would normally
 // short-circuit straight to setupFromExistingBranch and never reach setupNewWorktree() at
@@ -416,4 +475,55 @@ func TestSetup_SerializesConcurrentWorktreeCreation_When_MultipleGoroutinesRaceO
 		wt := wt
 		defer func() { _ = wt.Cleanup() }()
 	}
+}
+
+// TestRetryBranchRefExists_SucceedsAfterRetries_When_CheckFlakesTransiently drives the
+// "cannot lock ref" self-heal branch in setupNewWorktree deterministically, by injecting
+// a check func that fails like a lock-contended ref read for the first two attempts and
+// then succeeds — rather than relying on real concurrent git-subprocess timing (as
+// TestSetupNewWorktree_SelfHeals_When_ConcurrentSpawnsRaceOnBranchCreate above does) to
+// coincidentally hit this exact code path.
+func TestRetryBranchRefExists_SucceedsAfterRetries_When_CheckFlakesTransiently(t *testing.T) {
+	t.Parallel()
+	var calls int
+	exists := retryBranchRefExists(func() (bool, error) {
+		calls++
+		if calls < 3 {
+			return false, errors.New("simulated lock contention")
+		}
+		return true, nil
+	})
+	assert.True(t, exists, "retry must observe the ref once the simulated contention clears")
+	assert.Equal(t, 3, calls, "must stop retrying as soon as the check succeeds")
+}
+
+// TestRetryBranchRefExists_GivesUp_When_CheckNeverSucceeds forces the retry loop's give-up
+// path deterministically: a check that always errors must exhaust lockRaceRetryAttempts and
+// report false, rather than retrying forever or masking the persistent failure.
+func TestRetryBranchRefExists_GivesUp_When_CheckNeverSucceeds(t *testing.T) {
+	t.Parallel()
+	var calls int
+	exists := retryBranchRefExists(func() (bool, error) {
+		calls++
+		return false, errors.New("simulated persistent lock contention")
+	})
+	assert.False(t, exists, "retry must give up and report the ref as not (yet) existing")
+	assert.Equal(t, lockRaceRetryAttempts, calls, "must attempt exactly lockRaceRetryAttempts times before giving up")
+}
+
+// TestRetryBranchRefExists_DoesNotSleep_BeforeFirstAttempt confirms the no-contention
+// common path pays no latency: a check that succeeds immediately must be called exactly
+// once, with no sleep beforehand.
+func TestRetryBranchRefExists_DoesNotSleep_BeforeFirstAttempt(t *testing.T) {
+	t.Parallel()
+	var calls int
+	start := time.Now()
+	exists := retryBranchRefExists(func() (bool, error) {
+		calls++
+		return true, nil
+	})
+	elapsed := time.Since(start)
+	assert.True(t, exists)
+	assert.Equal(t, 1, calls)
+	assert.Less(t, elapsed, lockRaceRetryDelay, "first attempt must not be preceded by a sleep")
 }

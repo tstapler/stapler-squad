@@ -343,7 +343,9 @@ export function createWebsocketBasedTransport(
                     sessionId: (msg as any).sessionId,
                     dataCase: (msg as any).data?.case,
                     serializedLength: serialized.length,
-                    envelopeLength: 5 + serialized.length
+                    envelopeLength: 5 + serialized.length,
+                    readyState: (stream.socket as unknown as WebSocket).readyState,
+                    bufferedAmount: (stream.socket as unknown as WebSocket).bufferedAmount,
                   });
                 }
                 const msgBytes = encodeEnvelope(0, serialized);

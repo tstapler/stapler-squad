@@ -42,9 +42,9 @@ type spyRulesStore struct {
 	upsertCalls int
 }
 
-func (s *spyRulesStore) Upsert(spec RuleSpec) (RuleSpec, error) {
+func (s *spyRulesStore) Upsert(ctx context.Context, spec RuleSpec) (RuleSpec, error) {
 	s.upsertCalls++
-	return s.RulesStore.Upsert(spec)
+	return s.RulesStore.Upsert(ctx, spec)
 }
 
 // newRulesServiceWithAI creates a RulesService wired with the given mock AI client.
@@ -152,7 +152,7 @@ func TestBuildPromptContext_IncludesRulesAndGaps(t *testing.T) {
 
 	// Insert 2 user rules.
 	for i := 0; i < 2; i++ {
-		_, err := rulesStore.Upsert(RuleSpec{
+		_, err := rulesStore.Upsert(context.Background(), RuleSpec{
 			ID:       fmt.Sprintf("rule-%d", i),
 			Name:     fmt.Sprintf("Rule %d", i),
 			Decision: "auto_allow",
@@ -182,7 +182,7 @@ func TestBuildPromptContext_IncludesRulesAndGaps(t *testing.T) {
 	}
 	// Wait for the async write to complete by polling LoadWindow until all 3 entries appear.
 	require.Eventually(t, func() bool {
-		entries, err := analyticsStore.LoadWindow(time.Now().Add(-1 * time.Hour))
+		entries, err := analyticsStore.LoadWindow(context.Background(), time.Now().Add(-1 * time.Hour))
 		return err == nil && len(entries) >= 3
 	}, 2*time.Second, 10*time.Millisecond, "analytics entries must be persisted within 2s")
 
@@ -192,7 +192,7 @@ func TestBuildPromptContext_IncludesRulesAndGaps(t *testing.T) {
 	req := &sessionv1.GenerateSuggestedRuleRequest{
 		Source: sessionv1.SuggestionSource_SUGGESTION_SOURCE_ANALYTICS_GAPS,
 	}
-	promptCtx := svc.buildPromptContext(req, 7)
+	promptCtx := svc.buildPromptContext(context.Background(), req, 7)
 
 	// existingRules should include the 2 user rules + seed rules.
 	assert.GreaterOrEqual(t, len(promptCtx.ExistingRules), 2, "existing rules must include user rules")
@@ -382,7 +382,7 @@ func TestAttachConflictInfo_SeedRuleAtHigherPriority_ShadowsSuggestion(t *testin
 	require.NoError(t, err)
 
 	// Insert a user rule with same ToolName + CommandPattern at higher priority.
-	_, err = rulesStore.Upsert(RuleSpec{
+	_, err = rulesStore.Upsert(context.Background(), RuleSpec{
 		ID:             "high-priority-rule",
 		Name:           "High Priority Rule",
 		ToolName:       "Bash",
@@ -430,7 +430,7 @@ func newRulesServiceForCoverage(t *testing.T, specs []RuleSpec) *RulesService {
 		if spec.Source == "" {
 			spec.Source = "user"
 		}
-		_, err := rulesStore.Upsert(spec)
+		_, err := rulesStore.Upsert(context.Background(), spec)
 		require.NoError(t, err)
 	}
 	analyticsStore := NewAnalyticsStore(storage)
@@ -947,7 +947,7 @@ func TestExportRules_ExcludesSeedAndClaudeSettingsRules(t *testing.T) {
 	require.NoError(t, svc.rulesStore.reload())
 	// Add 2 user rules.
 	for i := 0; i < 2; i++ {
-		_, err := svc.rulesStore.Upsert(RuleSpec{
+		_, err := svc.rulesStore.Upsert(context.Background(), RuleSpec{
 			ID:       fmt.Sprintf("user-rule-%d", i),
 			Name:     fmt.Sprintf("User Rule %d", i),
 			Decision: "auto_allow",
@@ -975,7 +975,7 @@ func TestExportRules_FilterByRuleIDs(t *testing.T) {
 	t.Parallel()
 	svc := newSimpleRulesService(t)
 	for i := 0; i < 3; i++ {
-		_, err := svc.rulesStore.Upsert(RuleSpec{
+		_, err := svc.rulesStore.Upsert(context.Background(), RuleSpec{
 			ID:       fmt.Sprintf("user-rule-%d", i),
 			Name:     fmt.Sprintf("User Rule %d", i),
 			Decision: "auto_allow",
@@ -1011,7 +1011,7 @@ func TestExportRules_EmptyStore_ProducesEmptyRulesKey(t *testing.T) {
 func TestExportRules_OptionalFieldsOmitted(t *testing.T) {
 	t.Parallel()
 	svc := newSimpleRulesService(t)
-	_, err := svc.rulesStore.Upsert(RuleSpec{
+	_, err := svc.rulesStore.Upsert(context.Background(), RuleSpec{
 		ID:       "user-minimal",
 		Name:     "Minimal Rule",
 		Decision: "auto_allow",
@@ -1034,7 +1034,7 @@ func TestExportRules_EnabledDefaultOmitted(t *testing.T) {
 	t.Parallel()
 	svc := newSimpleRulesService(t)
 	// enabled=true
-	_, err := svc.rulesStore.Upsert(RuleSpec{
+	_, err := svc.rulesStore.Upsert(context.Background(), RuleSpec{
 		ID:       "user-enabled",
 		Name:     "Enabled Rule",
 		Decision: "auto_allow",
@@ -1044,7 +1044,7 @@ func TestExportRules_EnabledDefaultOmitted(t *testing.T) {
 	})
 	require.NoError(t, err)
 	// enabled=false
-	_, err = svc.rulesStore.Upsert(RuleSpec{
+	_, err = svc.rulesStore.Upsert(context.Background(), RuleSpec{
 		ID:       "user-disabled",
 		Name:     "Disabled Rule",
 		Decision: "auto_allow",
@@ -1081,7 +1081,7 @@ func TestExportRules_Roundtrip(t *testing.T) {
 		{ID: "user-r3", Name: "Rule Gamma", CommandPattern: `^git log`, Decision: "escalate", Enabled: true, Source: "user", Priority: 20},
 	}
 	for _, spec := range originals {
-		_, err := svc.rulesStore.Upsert(spec)
+		_, err := svc.rulesStore.Upsert(context.Background(), spec)
 		require.NoError(t, err)
 	}
 
@@ -1232,7 +1232,7 @@ func TestBulkUpsertRules_SkipDuplicates(t *testing.T) {
 	svc := newSimpleRulesService(t)
 	// Pre-insert 2 rules.
 	for i := 0; i < 2; i++ {
-		_, err := svc.rulesStore.Upsert(RuleSpec{
+		_, err := svc.rulesStore.Upsert(context.Background(), RuleSpec{
 			ID:       fmt.Sprintf("user-existing-%d", i),
 			Name:     fmt.Sprintf("Rule %d", i),
 			Decision: "auto_allow",
@@ -1271,7 +1271,7 @@ func TestBulkUpsertRules_OverwriteDuplicates(t *testing.T) {
 	svc := newSimpleRulesService(t)
 	// Pre-insert 2 rules.
 	for i := 0; i < 2; i++ {
-		_, err := svc.rulesStore.Upsert(RuleSpec{
+		_, err := svc.rulesStore.Upsert(context.Background(), RuleSpec{
 			ID:       fmt.Sprintf("user-existing-%d", i),
 			Name:     fmt.Sprintf("Rule %d", i),
 			Decision: "auto_allow",
@@ -1398,7 +1398,7 @@ func TestIntegration_ExportThenValidate_Roundtrip(t *testing.T) {
 		{ID: "user-it-3", Name: "IT Rule Gamma", CommandPattern: `^npm`, Decision: "escalate", Enabled: true, Source: "user", Priority: 20},
 	}
 	for _, spec := range specs {
-		_, err := svc.rulesStore.Upsert(spec)
+		_, err := svc.rulesStore.Upsert(context.Background(), spec)
 		require.NoError(t, err)
 	}
 

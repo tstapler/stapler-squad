@@ -31,6 +31,33 @@ func branchRefExists(repo *git.Repository, branchRef plumbing.ReferenceName) (bo
 	}
 }
 
+// lockRaceRetryAttempts and lockRaceRetryDelay bound the self-heal retry in
+// retryBranchRefExists — see setupNewWorktree's doc comment for the race it waits out.
+const (
+	lockRaceRetryAttempts = 5
+	lockRaceRetryDelay    = 10 * time.Millisecond
+)
+
+// retryBranchRefExists polls check up to lockRaceRetryAttempts times, sleeping
+// lockRaceRetryDelay between attempts (never before the first, so the common
+// no-contention caller of this — which only runs after a lock error — pays no extra
+// latency), and returns the last observed existence result once check reports the ref
+// exists or attempts are exhausted.
+func retryBranchRefExists(check func() (bool, error)) bool {
+	var exists bool
+	for attempt := 0; attempt < lockRaceRetryAttempts; attempt++ {
+		if attempt > 0 {
+			time.Sleep(lockRaceRetryDelay)
+		}
+		var err error
+		exists, err = check()
+		if err == nil && exists {
+			return true
+		}
+	}
+	return exists
+}
+
 // Setup creates a new worktree for the session. The entire branch-check +
 // add/reuse dispatch is serialized per-repoPath (across goroutines and OS
 // processes) because git worktree add mutates shared .git/worktrees/
@@ -173,8 +200,13 @@ func (g *GitWorktree) setupFromExistingBranch() error {
 // stores it in g.baseCommitSHA. Non-fatal: if no default branch is found the field
 // remains empty and Diff() will fall back to its own resolution.
 func (g *GitWorktree) initBaseCommitSHA() {
-	for _, branch := range []string{"main", "master", "develop", "trunk"} {
-		output, err := g.runGitCommand(g.repoPath, "merge-base", "HEAD", branch)
+	for _, branch := range CandidateDefaultBranches {
+		// cwd must be g.worktreePath, not g.repoPath: HEAD needs to resolve to this
+		// worktree's own branch tip. g.repoPath is the shared parent checkout, whose
+		// ambient checked-out branch can be anything a concurrent process left it on
+		// (mirrors the fix in resolveBaseCommitSHA, session/git/diff.go, which already
+		// does this correctly).
+		output, err := g.runGitCommand(g.worktreePath, "merge-base", "HEAD", branch)
 		if err == nil {
 			if sha := strings.TrimSpace(output); sha != "" {
 				g.baseCommitSHA = sha
@@ -327,12 +359,21 @@ func (g *GitWorktree) setupNewWorktree() error {
 	// Otherwise, we'll inherit uncommitted changes from the previous worktree.
 	// This way, we can start the worktree with a clean slate.
 	if _, err := g.runGitCommand(g.repoPath, "worktree", "add", "-b", g.branchName, g.worktreePath, headCommit); err != nil {
-		// Two concurrent spawns for the same backlog item compute the identical
-		// deterministic branch name (see backlogWorkBranchSlug) and can both pass the
-		// branchRefExists check above before either creates the branch — the loser hits
-		// this exact "already exists" error, leaving a branch with no worktree. Rather
-		// than hard-failing, self-heal by falling back to setupFromExistingBranch, the
-		// same reuse path that would already handle a retry of this same call.
+		// Two concurrent spawns for the same backlog item can both pass the
+		// branchRefExists check above before either creates the branch (see
+		// backlogWorkBranchSlug). "cannot lock ref" is git's transient error for the
+		// loser arriving while the winner still holds the ref lock — retry briefly,
+		// then self-heal via setupFromExistingBranch, same as the "already exists" case.
+		if strings.Contains(err.Error(), "cannot lock ref") {
+			exists := retryBranchRefExists(func() (bool, error) {
+				return branchRefExists(repo, branchRef)
+			})
+			if !exists {
+				return fmt.Errorf("failed to create worktree from commit %s: %w", headCommit, err)
+			}
+			log.Info("branch ref was lock-contended by a concurrent create race, reusing it for worktree", "branch", g.branchName)
+			return g.setupFromExistingBranch()
+		}
 		if strings.Contains(err.Error(), "already exists") {
 			log.Info("branch already exists (lost a concurrent create race), reusing it for worktree", "branch", g.branchName)
 			return g.setupFromExistingBranch()

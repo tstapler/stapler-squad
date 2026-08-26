@@ -1,6 +1,7 @@
 package streamhub_test
 
 import (
+	"context"
 	"errors"
 	"sync"
 	"sync/atomic"
@@ -52,7 +53,7 @@ func (f *fakeSessionController) StopControlMode() error {
 	return f.stopErr
 }
 
-func (f *fakeSessionController) SetWindowSize(cols, rows int) error {
+func (f *fakeSessionController) SetWindowSizeContext(_ context.Context, cols, rows int) error {
 	f.setWindowSizeCalls.Add(1)
 	f.mu.Lock()
 	f.lastResize = [2]int{cols, rows}
@@ -66,9 +67,16 @@ func (f *fakeSessionController) ResizePTY(_, _ int) error {
 	return nil
 }
 
-func (f *fakeSessionController) CapturePaneContent() (string, error) {
+func (f *fakeSessionController) CapturePaneContentRawContext(_ context.Context) (streamhub.RawPaneContent, error) {
 	f.captureCalls.Add(1)
-	return f.captureContent, f.captureErr
+	return streamhub.RawPaneContent(f.captureContent), f.captureErr
+}
+
+// GetPaneCursorPosition always reports the origin — no fakeSessionController
+// test asserts on the cursor-sync escape withCursorSync appends, only on
+// capture call counts/timing.
+func (f *fakeSessionController) GetPaneCursorPosition() (x, y int, err error) {
+	return 0, 0, nil
 }
 
 // SubscribeControlModeUpdates returns the fake's single shared updates
@@ -114,6 +122,11 @@ func TestStreamHub_should_ScheduleTeardownAfterGracePeriod_When_LastSubscriberDe
 
 	controller := newFakeSessionController()
 	hub := streamhub.NewStreamHub("test-session", controller, streamhub.WithTeardownGrace(30*time.Millisecond))
+	// Registered after the goleak defer above, so — per Go's LIFO defer
+	// order — this runs BEFORE goleak's check even if a t.Fatalf below
+	// Goexits out of the rest of the test. Idempotent, so safe alongside
+	// this test's own grace-period-driven teardown.
+	defer hub.ForceTeardown()
 
 	id := hub.AttachSubscriber(newMemoryTransport(), streamhub.SubscriberCapability{})
 	if got := hub.State(); got != streamhub.HubActive {
@@ -145,6 +158,9 @@ func TestStreamHub_should_CancelPendingTeardown_When_SubscriberReattachesDuringG
 
 	controller := newFakeSessionController()
 	hub := streamhub.NewStreamHub("test-session", controller, streamhub.WithTeardownGrace(150*time.Millisecond))
+	// See TestStreamHub_should_ScheduleTeardownAfterGracePeriod_When_LastSubscriberDetaches's
+	// comment on this defer's placement/LIFO-ordering rationale.
+	defer hub.ForceTeardown()
 
 	firstID := hub.AttachSubscriber(newMemoryTransport(), streamhub.SubscriberCapability{})
 	hub.DetachSubscriber(firstID)
@@ -180,6 +196,9 @@ func TestStreamHub_should_CallStopControlModeExactlyOnce_When_ForceTeardownIsCal
 
 	controller := newFakeSessionController()
 	hub := streamhub.NewStreamHub("test-session", controller, streamhub.WithTeardownGrace(time.Hour))
+	// See TestStreamHub_should_ScheduleTeardownAfterGracePeriod_When_LastSubscriberDetaches's
+	// comment on this defer's placement/LIFO-ordering rationale.
+	defer hub.ForceTeardown()
 
 	hub.AttachSubscriber(newMemoryTransport(), streamhub.SubscriberCapability{})
 	hub.AttachSubscriber(newMemoryTransport(), streamhub.SubscriberCapability{})
@@ -212,6 +231,9 @@ func TestStreamHub_should_ReturnStopControlModeError_When_ForceTeardownControlle
 	controller := newFakeSessionController()
 	controller.stopErr = wantErr
 	hub := streamhub.NewStreamHub("test-session", controller, streamhub.WithTeardownGrace(time.Hour))
+	// See TestStreamHub_should_ScheduleTeardownAfterGracePeriod_When_LastSubscriberDetaches's
+	// comment on this defer's placement/LIFO-ordering rationale.
+	defer hub.ForceTeardown()
 
 	hub.AttachSubscriber(newMemoryTransport(), streamhub.SubscriberCapability{})
 
@@ -236,6 +258,13 @@ func TestStreamHub_should_NotReportHubTornDown_While_StopControlModeInFlight(t *
 		return nil
 	}
 	hub := streamhub.NewStreamHub("test-session", controller, streamhub.WithTeardownGrace(time.Hour))
+	// Defensive, not a full guarantee here: if a Fatalf fires before
+	// close(release) below, the background ForceTeardown goroutine is still
+	// blocked in stopFn and this deferred call just no-ops (teardownInFlight
+	// already true) rather than waiting for it — see
+	// TestStreamHub_should_ScheduleTeardownAfterGracePeriod_When_LastSubscriberDetaches's
+	// comment for the general rationale this still covers every other path.
+	defer hub.ForceTeardown()
 	hub.AttachSubscriber(newMemoryTransport(), streamhub.SubscriberCapability{})
 
 	done := make(chan error, 1)
@@ -264,6 +293,9 @@ func TestStreamHub_should_CallStopControlModeExactlyOnce_When_ForceTeardownRaces
 		return nil
 	}
 	hub := streamhub.NewStreamHub("test-session", controller, streamhub.WithTeardownGrace(time.Hour))
+	// Defensive — see TestStreamHub_should_NotReportHubTornDown_While_StopControlModeInFlight's
+	// identical comment on this test shape's residual limitation.
+	defer hub.ForceTeardown()
 	hub.AttachSubscriber(newMemoryTransport(), streamhub.SubscriberCapability{})
 
 	var wg sync.WaitGroup
@@ -308,6 +340,15 @@ func TestStreamHub_should_NotClobberReArmedHubDraining_When_SubscriberReattaches
 		return nil
 	}
 	hub := streamhub.NewStreamHub("test-session", controller, streamhub.WithTeardownGrace(time.Hour))
+	// No defensive defer hub.ForceTeardown() here, unlike this file's other
+	// tests: this test's whole point is that the hub ends in HubDraining
+	// (re-armed, not torn down — see the final assertion below), so
+	// ForceTeardown's idempotency guard wouldn't short-circuit a second call
+	// the way it does everywhere else. A second real call would re-invoke
+	// controller.stopFn, which closes inStopControlMode — already closed by
+	// the first call — and panic. Not needed anyway: every subscriber this
+	// test attaches is already accounted for by ForceTeardown's own
+	// subscriber-closing sweep or the explicit DetachSubscriber below.
 	hub.AttachSubscriber(newMemoryTransport(), streamhub.SubscriberCapability{})
 
 	done := make(chan error, 1)
