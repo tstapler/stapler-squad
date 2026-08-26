@@ -21,7 +21,7 @@ SCANNER="tools/scanner/backend/cmd/scanner"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
-for p in session unfinished backlog insights github_user import session_summary remote handoff_summary; do
+for p in session unfinished backlog insights github_user import session_summary remote handoff_summary tymux_rollout; do
   "$SCANNER" "proto/session/v1/$p.proto" server/services/ "$TMP" >/dev/null
 done
 

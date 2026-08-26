@@ -114,6 +114,13 @@ if ! ./tools/scanner/backend/cmd/scanner \
   echo "ERROR: backend scanner failed (handoff_summary.proto)" >&2
   exit 2
 fi
+if ! ./tools/scanner/backend/cmd/scanner \
+      proto/session/v1/tymux_rollout.proto \
+      server/services/ \
+      "${TEMP_BACKEND}" 2>&1; then
+  echo "ERROR: backend scanner failed (tymux_rollout.proto)" >&2
+  exit 2
+fi
 
 list_ids() {
   local dir="$1"

@@ -698,6 +698,12 @@ message CreateSessionRequest {
 
   // Required to proceed when restart_from_session_id names a still-live source instance.
   bool confirm_restart_with_live_source = 33;
+
+  // Optional: force a specific ProcessManager backend for this session ("tmux", "tymux"),
+  // overriding both the per-session config override and the process-wide default. Empty
+  // means no per-request override — normal precedence applies (see
+  // session.ResolveSessionBackend).
+  optional string backend_override = 34;
 }
 
 // RemoteTarget names a previously-saved remote (by RemoteConfig.Name) that a

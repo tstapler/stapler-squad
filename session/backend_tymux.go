@@ -2,11 +2,28 @@ package session
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"time"
 
 	"github.com/tstapler/stapler-squad/session/tymux"
 )
+
+// tymuxColdStartTimeout bounds how long TymuxBackend.Start/RestoreWithWorkDir
+// wait on tymux.EnsureDaemonRunning before giving up. 15s sits comfortably
+// above session/tymux/supervise.go's ~9.1s worst-case spawn-and-retry budget
+// (daemonStartAttempts/daemonStartBackoffStart/daemonStartBackoffMax), so a
+// healthy cold start always completes inside the deadline while a genuinely
+// wedged daemon fails this specific call (and therefore this session's async
+// creation) at a bounded ~15s instead of hanging the async goroutine
+// forever. See ADR-004 for why this lives here and not in NewProcessManager.
+const tymuxColdStartTimeout = 15 * time.Second
+
+// ensureDaemonRunningFn is the injection seam for tymux.EnsureDaemonRunning,
+// mirroring session/tymux/supervise.go's own checkDaemonHealthyFn-style
+// package-level function-var injection: tests substitute a deterministic
+// fake here instead of spawning a real tymuxd subprocess.
+var ensureDaemonRunningFn = tymux.EnsureDaemonRunning
 
 // TymuxBackend implements ProcessManager by delegating to a tymux.TymuxManager.
 // It is the tymux-backed alternative to TmuxBackend, mirroring TmuxBackend's exact
@@ -27,11 +44,47 @@ func (b *TymuxBackend) TymuxManager() tymux.TymuxManager { return b.mgr }
 
 // --- Lifecycle ---
 
-func (b *TymuxBackend) Start(dir string) error            { return b.mgr.Start(dir) }
-func (b *TymuxBackend) RestoreWithWorkDir(w string) error { return b.mgr.RestoreWithWorkDir(w) }
-func (b *TymuxBackend) Close() error                      { return b.mgr.Close() }
-func (b *TymuxBackend) IsAlive() bool                     { return b.mgr.IsAlive() }
-func (b *TymuxBackend) HasSession() bool                  { return b.mgr.HasSession() }
+// ensureDaemonReady calls tymux.EnsureDaemonRunning under tymuxColdStartTimeout,
+// shared by Start and RestoreWithWorkDir (both need the identical
+// daemon-check-before-delegate contract; see Start's doc comment for why it
+// lives here and not in NewProcessManager).
+func (b *TymuxBackend) ensureDaemonReady() error {
+	ctx, cancel := context.WithTimeout(context.Background(), tymuxColdStartTimeout)
+	defer cancel()
+	if _, err := ensureDaemonRunningFn(ctx, tymux.ResolveDaemonConfig()); err != nil {
+		return fmt.Errorf("tymux backend requested but daemon unavailable: %w", err)
+	}
+	return nil
+}
+
+// Start calls tymux.EnsureDaemonRunning before delegating to the wrapped
+// TymuxManager's Start, so a per-session BackendTymux override set at
+// runtime (SetTymuxSessionOverride, no process restart) actually starts
+// tymuxd on this session's first async start if it isn't already running
+// (Story 2.1.3). This method is only ever reached from inside the async
+// goroutine session_service.go's CreateSession already uses to absorb
+// "starting tmux/the process" for every backend (ADR-004) — never on the
+// synchronous CreateSession RPC path — so the bounded wait here does not
+// regress RPC latency.
+func (b *TymuxBackend) Start(dir string) error {
+	if err := b.ensureDaemonReady(); err != nil {
+		return err
+	}
+	return b.mgr.Start(dir)
+}
+
+// RestoreWithWorkDir mirrors Start's daemon-check-before-delegate contract
+// for the restore path.
+func (b *TymuxBackend) RestoreWithWorkDir(w string) error {
+	if err := b.ensureDaemonReady(); err != nil {
+		return err
+	}
+	return b.mgr.RestoreWithWorkDir(w)
+}
+
+func (b *TymuxBackend) Close() error     { return b.mgr.Close() }
+func (b *TymuxBackend) IsAlive() bool    { return b.mgr.IsAlive() }
+func (b *TymuxBackend) HasSession() bool { return b.mgr.HasSession() }
 
 // GetSessionIdentifier implements ProcessManager by delegating to the underlying
 // TymuxManager's own identifier.

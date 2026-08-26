@@ -24,6 +24,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/scrollback"
 	"github.com/tstapler/stapler-squad/session/tmux"
+	"github.com/tstapler/stapler-squad/session/tymux"
 	"github.com/tstapler/stapler-squad/telemetry"
 	"io"
 	"net"
@@ -57,6 +58,7 @@ var (
 	remotePortFlag          int
 	rpIDFlag                string
 	tmuxKeepServerFlag      bool
+	tymuxdKeepServerFlag    bool
 	openURLFlag             string
 	registerLinuxSchemeFlag string
 	listKnownHostsFlag      bool
@@ -166,13 +168,15 @@ var (
 
 			// Register the process manager backend before any session is created.
 			// Empty string defaults to "tmux" for backwards-compatibility.
-			{
-				backend := session.ProcessManagerBackend(cfg.ProcessManagerBackend)
-				if backend == "" {
-					backend = session.BackendTmux
-				}
-				session.RegisterBackendProvider(backend)
+			// resolveStartupBackend is the single source of truth for the
+			// effective backend, routing both the config value and the env var
+			// through the same rollback-rehearsal gate (ADR-002) so hand-editing
+			// process_manager_backend: "tymux" in config.json can never bypass it.
+			resolvedBackend, err := resolveStartupBackend(cfg, os.Getenv("STAPLER_SQUAD_USE_TYMUX") == "true")
+			if err != nil {
+				log.Warn("tymux: global default requested but rollback rehearsal not completed; falling back to tmux", "err", err)
 			}
+			session.RegisterBackendProvider(resolvedBackend)
 
 			// Load discovery config
 			discoveryCfg := config.LoadDiscoveryConfig()
@@ -362,6 +366,44 @@ var (
 					}
 					log.Warn("Failed to ensure tmux server running", "err", tmuxReadyErr)
 				}
+
+				// Start tymuxd supervision only when it's actually needed (Epic 2.2,
+				// project_plans/tymux-bundled-integration/implementation/plan.md). Mirrors
+				// tmux's own EnsureServerRunning posture immediately above: non-fatal by
+				// default (log.Warn and continue) so a tymuxd that fails to start never
+				// blocks stapler-squad from serving tmux-backed sessions, unless
+				// STAPLER_SQUAD_STRICT_STARTUP opts into hard failure.
+				//
+				// tymuxNeeded also checks cfg.TymuxSessionOverrides (Phase 4): a true
+				// entry there triggers startup supervision even when the global default
+				// is tmux, so a session pinned to tymux by a prior process finds a daemon
+				// running when it resumes.
+				if tymuxNeeded(cfg, resolvedBackend) {
+					tymuxdReady, tymuxErr := tymux.EnsureDaemonRunning(ctx, tymux.ResolveDaemonConfig())
+					if tymuxErr != nil {
+						if strictStartup {
+							return fmt.Errorf("tymuxd startup failed (unset STAPLER_SQUAD_STRICT_STARTUP to suppress): %w", tymuxErr)
+						}
+						log.Warn("Failed to ensure tymuxd running", "err", tymuxErr)
+					} else if !tymuxdReady.Spawned {
+						// This process only reused an already-healthy tymuxd -- per
+						// TymuxdReady.Spawned's doc comment (session/tymux/supervise.go),
+						// that daemon may belong to a DIFFERENT process sharing the same
+						// configDir (default/"shared" instance, or a named instance
+						// started twice). Never register a stop hook for a daemon this
+						// process didn't start -- StopTymuxd() has no ownership check of
+						// its own, only a PID file, so doing so could kill a daemon a
+						// still-running sibling process depends on (the same "isolated
+						// config dir, shared daemon" hazard config.IsNamedInstance's doc
+						// comment documents for tmux).
+						log.Info("tymuxd already running (reused, not started by this process) -- not registering a stop hook for it")
+					} else if !tymuxdKeepServerFlag {
+						a.OnStop("tymuxd", func(ctx context.Context) error { return tymux.StopTymuxd() })
+					} else {
+						log.Info("tymuxd will remain running across this shutdown (--tymuxd-keep-server=true)")
+					}
+				}
+
 				// --tmux-keep-server intentionally keeps the tmux server (and anything
 				// attached to it) alive across this restart, but any control-mode client
 				// this process spawns will be brand new -- so any control-mode client
@@ -784,6 +826,10 @@ func init() {
 	rootCmd.Flags().BoolVar(&tmuxKeepServerFlag, "tmux-keep-server", true,
 		"Keep tmux server running even when all user sessions close (sets exit-empty off). "+
 			"Use this if the tmux server frequently stops between sessions.")
+	rootCmd.Flags().BoolVar(&tymuxdKeepServerFlag, "tymuxd-keep-server", true,
+		"Keep the tymuxd daemon running across a stapler-squad restart, matching tmux's own "+
+			"--tmux-keep-server default. Pass --tymuxd-keep-server=false to stop it via the "+
+			"App.OnStop hook on shutdown instead.")
 	rootCmd.Flags().StringVar(&openURLFlag, "open-url", "",
 		"Translate an ssq:// deep link to a local web UI URL and open it via the OS's default "+
 			"opener (open on macOS, xdg-open on Linux), then exit. Used as the ssq:// scheme handler.")
@@ -816,6 +862,55 @@ func init() {
 	rootCmd.AddCommand(listSessionsCmd)
 	rootCmd.AddCommand(printQRCodesCmd)
 	rootCmd.AddCommand(commands.GetSessionCmd)
+}
+
+// resolveStartupBackend is the single source of truth for the effective
+// process-manager backend at startup (ADR-002, Epic 3.2, Story 3.2.1). It
+// routes both cfg.ProcessManagerBackend and tymuxEnvRequested (the
+// STAPLER_SQUAD_USE_TYMUX env var) through the same
+// config.ResolveGlobalTymuxDefault rollback-rehearsal gate, so hand-editing
+// process_manager_backend: "tymux" directly in config.json cannot bypass the
+// gate the way it could if the config value were honored independently of
+// the env var (research/pitfalls.md §3). Requesting tymux without a
+// completed rehearsal is not fatal — the caller is expected to log the
+// returned error and continue with the tmux fallback this function already
+// returns.
+func resolveStartupBackend(cfg *config.Config, tymuxEnvRequested bool) (session.ProcessManagerBackend, error) {
+	backend := session.ProcessManagerBackend(cfg.ProcessManagerBackend)
+	if backend == "" {
+		backend = session.BackendTmux
+	}
+	tymuxRequested := backend == session.BackendTymux || tymuxEnvRequested
+	tymuxEffective, err := config.ResolveGlobalTymuxDefault(cfg, tymuxRequested)
+	if tymuxEffective {
+		backend = session.BackendTymux
+	} else if backend == session.BackendTymux {
+		backend = session.BackendTmux
+	}
+	return backend, err
+}
+
+// tymuxNeeded reports whether tymuxd supervision should run for this process
+// (Epic 2.2, project_plans/tymux-bundled-integration/implementation/plan.md
+// Task 2.2.1a). True when resolvedBackend is the tymux global default, OR
+// when any entry in cfg.TymuxSessionOverrides (Phase 4, config/config.go) is
+// true — a per-session override set (e.g. via SetTymuxSessionOverride) before
+// this process started must also trigger startup supervision, otherwise a
+// session already pinned to tymux from a prior process would find no daemon
+// running when it starts.
+func tymuxNeeded(cfg *config.Config, resolvedBackend session.ProcessManagerBackend) bool {
+	if resolvedBackend == session.BackendTymux {
+		return true
+	}
+	if cfg == nil {
+		return false
+	}
+	for _, forceTymux := range cfg.TymuxSessionOverrides {
+		if forceTymux {
+			return true
+		}
+	}
+	return false
 }
 
 // extraOriginPattern matches an exact http(s)://localhost:<port> or

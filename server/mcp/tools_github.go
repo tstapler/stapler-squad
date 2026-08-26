@@ -11,6 +11,7 @@ import (
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
+	"github.com/tstapler/stapler-squad/config"
 	githubpkg "github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/services"
@@ -210,6 +211,7 @@ func (gh *githubHandlers) createSessionForPR(ctx context.Context, req mcpgo.Call
 		}
 	}
 
+	cfg := config.LoadConfig()
 	inst, err := session.NewInstance(session.InstanceOptions{
 		Title:       title,
 		Path:        repoPath,
@@ -217,6 +219,10 @@ func (gh *githubHandlers) createSessionForPR(ctx context.Context, req mcpgo.Call
 		Program:     program,
 		SessionType: session.SessionTypeNewWorktree,
 		Tags:        []string{"source:mcp", "pr:" + fmt.Sprintf("%s/%s#%d", owner, repo, prNumber)},
+		// Backend consults the session-name override map (tymux-bundled-integration
+		// Epic 4.4.1) so a canary override applies through this entry point too;
+		// there's no per-request override field on this MCP tool's schema.
+		Backend: session.ResolveSessionBackendForTitle(cfg, title, ""),
 	})
 	if err != nil {
 		return errResult(ErrInternalError, fmt.Sprintf("create session: %v", err), ""), nil

@@ -49,28 +49,32 @@ func (i *Instance) ToInstanceData() InstanceData {
 	})
 
 	data := InstanceData{
-		Title:                snap.Title,
-		UUID:                 snap.UUID,
-		Path:                 snap.Path,
-		WorkingDir:           snap.WorkingDir,
-		Branch:               snap.Branch,
-		Status:               snap.Status,
-		Height:               snap.Height,
-		Width:                snap.Width,
-		CreatedAt:            snap.CreatedAt,
-		UpdatedAt:            time.Now(),
-		Program:              snap.Program,
-		AutoYes:              snap.AutoYes,
-		AutoApprove:          snap.AutoApprove,
-		Prompt:               snap.Prompt,
-		InitialPrompt:        snap.InitialPrompt,
-		Category:             snap.Category,
-		Note:                 snap.Note,
-		IsExpanded:           snap.IsExpanded,
-		Tags:                 snap.Tags, // Include tags in serialization
-		SessionType:          snap.SessionType,
-		TmuxPrefix:           snap.TmuxPrefix,
-		TmuxServerSocket:     snap.TmuxServerSocket,
+		Title:            snap.Title,
+		UUID:             snap.UUID,
+		Path:             snap.Path,
+		WorkingDir:       snap.WorkingDir,
+		Branch:           snap.Branch,
+		Status:           snap.Status,
+		Height:           snap.Height,
+		Width:            snap.Width,
+		CreatedAt:        snap.CreatedAt,
+		UpdatedAt:        time.Now(),
+		Program:          snap.Program,
+		AutoYes:          snap.AutoYes,
+		AutoApprove:      snap.AutoApprove,
+		Prompt:           snap.Prompt,
+		InitialPrompt:    snap.InitialPrompt,
+		Category:         snap.Category,
+		Note:             snap.Note,
+		IsExpanded:       snap.IsExpanded,
+		Tags:             snap.Tags, // Include tags in serialization
+		SessionType:      snap.SessionType,
+		TmuxPrefix:       snap.TmuxPrefix,
+		TmuxServerSocket: snap.TmuxServerSocket,
+		// Backend is set once at construction and never mutated afterward — same
+		// as LaunchCommand below, it isn't in InstanceSnapshot, so read it
+		// directly off the Instance rather than adding it to the snapshot.
+		Backend:              i.Backend,
 		LastTerminalUpdate:   snap.LastTerminalUpdate,
 		LastMeaningfulOutput: snap.LastMeaningfulOutput,
 		LastOutputSignature:  snap.LastOutputSignature,
@@ -243,6 +247,7 @@ func fromInstanceData(data InstanceData, deferStart bool) (*Instance, error) {
 		SessionType:      data.SessionType,
 		TmuxPrefix:       data.TmuxPrefix,
 		TmuxServerSocket: data.TmuxServerSocket,
+		Backend:          data.Backend,
 		ReviewState: ReviewState{
 			LastTerminalUpdate:   data.LastTerminalUpdate,
 			LastMeaningfulOutput: data.LastMeaningfulOutput,
@@ -328,9 +333,14 @@ func fromInstanceData(data InstanceData, deferStart bool) (*Instance, error) {
 	// Initialize the process manager via the factory so selectedBackend is honored.
 	// The underlying session is wired below (for Paused/Stopped/Hibernated) or
 	// by initTmuxSession() when Start() is called (for Active sessions).
-	// instance.Backend is not currently persisted in InstanceData (out of Epic 2.1's
-	// scope — see plan.md Task 2.1.3c), so restored sessions fall back to the
-	// process-wide default here, same as before this field existed.
+	// instance.Backend now persists across restarts (Epic 5.1): it's set above
+	// from data.Backend, so a per-session pin (e.g. BackendTymux) survives a
+	// process restart instead of silently reverting to the process-wide default.
+	// Backward compatibility needs no migration code: an old sessions.json entry
+	// written before this field existed has no "backend" key, which the JSON
+	// decoder leaves as the Go zero value ("") on data.Backend — identical to
+	// today's pre-persistence behavior, it falls through to whatever
+	// NewProcessManager's process-wide default resolves to.
 	pm, err := NewProcessManager(context.Background(), BackendTmux, ProcessManagerOptions{Backend: instance.Backend})
 	if err != nil {
 		return nil, fmt.Errorf("session: construct process manager for restored instance %q: %w", instance.Title, err)

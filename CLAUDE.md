@@ -292,6 +292,7 @@ Per `local-dev-port-management`'s Sequential Batch Strategy: a fixed block reser
 | Nil safety & static analysis tools | `.claude/docs/nil-safety.md` |
 | Go concurrency patterns | `.claude/docs/concurrency-patterns.md` |
 | Bundling tmux (single-binary) | `.claude/docs/bundling-tmux.md` |
+| Bundling tymuxd (single-binary, supervised) | `.claude/docs/bundling-tymuxd.md` |
 | CSS architecture (vanilla-extract) | `.claude/docs/css-architecture.md` |
 | Feature registry rules | `.claude/docs/feature-registry.md` |
 | Omnibar feature testing registry | `.claude/docs/feature-testing-registry.md` |

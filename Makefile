@@ -57,7 +57,7 @@ endif
 		touch $(ASDF_STAMP); \
 	fi
 
-.PHONY: help ports build test benchmark install-tools lint lint-custom actor-lint analyze nil-safety security format fmt-check check-deps clean all proto-gen proto-lint proto-build ent-gen web-build web-dev restart-web restart-web-profile qr demo-video demo-post-process demo-gif benchmark-baseline benchmark-compare benchmark-tier1 profile-goroutines profile-block profile-mutex profile-trace build-mux install-mux install-service install-hooks rollback backup-binary uninstall-service setup-codesign _codesign-binary verify-codesign tcc-reset preview dev-stack coverage-func coverage-gaps coverage-pkg coverage-refactor registry-generate-backend registry-generate-frontend registry-generate registry-diff e2e-report e2e-lighthouse build-tmux build-tmux-embed build-embedded clean-tmux init-submodules test-with-pinned-tmux test-trace test-profile vet-architecture vet-rpc-markers coverage-integration actor-field-guard ptmx-field-guard checklocks build-otel-auto build-otel-auto-embedded otel-auto-isolation-guard otel-auto-isolation-guard-selftest otel-auto-smoke otel-auto-smoke-suppression otel-auto-test
+.PHONY: help ports build test benchmark install-tools lint lint-custom actor-lint analyze nil-safety security format fmt-check check-deps clean all proto-gen proto-lint proto-build ent-gen web-build web-dev restart-web restart-web-profile qr demo-video demo-post-process demo-gif benchmark-baseline benchmark-compare benchmark-tier1 profile-goroutines profile-block profile-mutex profile-trace build-mux install-mux install-service install-hooks rollback backup-binary uninstall-service setup-codesign _codesign-binary verify-codesign tcc-reset preview dev-stack coverage-func coverage-gaps coverage-pkg coverage-refactor registry-generate-backend registry-generate-frontend registry-generate registry-diff e2e-report e2e-lighthouse build-tmux build-tmux-embed build-embedded build-embedded-tymux clean-tmux init-submodules fetch-tymuxd build-tymuxd-embed test-with-pinned-tmux test-trace test-profile vet-architecture vet-rpc-markers coverage-integration actor-field-guard ptmx-field-guard checklocks build-otel-auto build-otel-auto-embedded otel-auto-isolation-guard otel-auto-isolation-guard-selftest otel-auto-smoke otel-auto-smoke-suppression otel-auto-test
 
 # Default target
 help: ## Show this help message
@@ -99,6 +99,7 @@ registry-generate-backend: ## Scan proto+markers → write per-feature files und
 	@./$(BACKEND_SCANNER_BIN) proto/session/v1/session_summary.proto server/services/ $(BACKEND_FEATURES_DIR)
 	@./$(BACKEND_SCANNER_BIN) proto/session/v1/remote.proto server/services/ $(BACKEND_FEATURES_DIR)
 	@./$(BACKEND_SCANNER_BIN) proto/session/v1/handoff_summary.proto server/services/ $(BACKEND_FEATURES_DIR)
+	@./$(BACKEND_SCANNER_BIN) proto/session/v1/tymux_rollout.proto server/services/ $(BACKEND_FEATURES_DIR)
 	@# Generation is additive; prune files whose RPC no longer exists so the
 	@# committed set stays in sync with the proto (avoids registry-validation drift).
 	@bash tools/scanner/prune-stale-backend.sh $(BACKEND_FEATURES_DIR)
@@ -276,6 +277,38 @@ build-tmux-embed: build-tmux ## Copy built tmux into the embed dir for go build 
 	@cp $(BIN_TMUX) session/tmux/embed/tmux
 	@echo "✅ session/tmux/embed/tmux ready ($(shell $(BIN_TMUX) -V 2>/dev/null || echo unknown))"
 
+# ── Pinned tymuxd binary (fetched, not compiled — see ADR-001) ─────────────
+# Fetches a prebuilt tymuxd release binary from github.com/tstapler/tymux
+# instead of requiring a cargo/rustc toolchain anywhere in this repo.
+
+# Bump this and the github.com/tstapler/tymux/clients/go/gen/tymux/v1 require
+# in go.mod together — nothing enforces this automatically; see ADR-001
+# (project_plans/tymux-bundled-integration/decisions/ADR-001-prebuilt-tymuxd-binary-download.md).
+TYMUX_VERSION ?= v1.0.0
+BIN_TYMUXD        := session/tymux/embed/tymuxd
+TYMUXD_FETCH_STAMP := .tymuxd-fetch.stamp
+
+# Stamp-file approach: only re-fetch when TYMUX_VERSION changes. Unlike
+# TMUX_BUILD_STAMP (gated on submodule source files changing), the fetch
+# input here is a variable, not a file, so the stamp records the last-fetched
+# version and FORCE re-evaluates that comparison on every invocation.
+$(BIN_TYMUXD): $(TYMUXD_FETCH_STAMP)
+	@true
+
+$(TYMUXD_FETCH_STAMP): FORCE
+	@if [ ! -f $(BIN_TYMUXD) ] || [ "$$(cat $@ 2>/dev/null)" != "$(TYMUX_VERSION)" ]; then \
+		TYMUX_VERSION=$(TYMUX_VERSION) ./scripts/fetch-tymuxd.sh && \
+		echo "$(TYMUX_VERSION)" > $@; \
+	fi
+
+.PHONY: FORCE
+FORCE:
+
+fetch-tymuxd: $(BIN_TYMUXD) ## Fetch pinned tymuxd release binary (no cargo/rustc required)
+
+build-tymuxd-embed: fetch-tymuxd ## Confirm tymuxd is present in the embed dir for go build -tags embed_tymux
+	@echo "✅ session/tymux/embed/tymuxd ready ($(shell du -h $(BIN_TYMUXD) 2>/dev/null | cut -f1 || echo unknown))"
+
 build-embedded: build-tmux-embed ## Build stapler-squad with tmux bundled inside the binary
 ifeq ($(UNAME_S),Darwin)
 	CGO_LDFLAGS="-sectcreate __TEXT __info_plist $(CURDIR)/macos/Info.plist" \
@@ -286,6 +319,22 @@ else
 	go build -tags embed_tmux -ldflags "$(LDFLAGS)" -o stapler-squad .
 endif
 	@echo "✅ stapler-squad built with embedded tmux"
+
+# build-embedded-tymux: kept separate from build-embedded (tags "embed_tmux
+# embed_tymux" instead of changing build-embedded's tag set) so existing
+# CI/release artifacts depending on -tags embed_tmux alone are unaffected.
+# Darwin CGO_LDFLAGS/Info.plist branch mirrors build-embedded unchanged —
+# tymuxd embedding doesn't touch TCC entitlement plumbing.
+build-embedded-tymux: build-tmux-embed build-tymuxd-embed ## Build stapler-squad with tmux AND tymuxd bundled inside the binary
+ifeq ($(UNAME_S),Darwin)
+	CGO_LDFLAGS="-sectcreate __TEXT __info_plist $(CURDIR)/macos/Info.plist" \
+		go build -tags "embed_tmux embed_tymux" -ldflags "$(LDFLAGS)" -o stapler-squad .
+	@otool -s __TEXT __info_plist "$(CURDIR)/stapler-squad" | grep -q "Contents of" || \
+		(echo "ERROR: Info.plist was not embedded in embedded build." && exit 1)
+else
+	go build -tags "embed_tmux embed_tymux" -ldflags "$(LDFLAGS)" -o stapler-squad .
+endif
+	@echo "✅ stapler-squad built with embedded tmux + tymuxd"
 
 # build-otel-auto: opt-in, structurally isolated build path (go-auto-instrumentation
 # project, project_plans/go-auto-instrumentation/). Never a prerequisite of build,

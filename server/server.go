@@ -470,6 +470,19 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		log.Info("Registered GitHubUserService handler", "path", ghAPIPath)
 	}
 
+	// Register TymuxRolloutService handler (tymux-bundled-integration Epic
+	// 3.3: operator-facing controls for the staged tymux rollout, mirroring
+	// StreamHubRolloutService's registration). Config-backed with no
+	// external deps, so it's constructed inline rather than threaded
+	// through ServerDependencies.
+	{
+		tymuxRolloutSvc := services.NewTymuxRolloutService()
+		tymuxRolloutPath, tymuxRolloutHandler := sessionv1connect.NewTymuxRolloutServiceHandler(tymuxRolloutSvc, ConnectOptions(deps.ErrorRegistry)...)
+		tymuxRolloutAPIPath := "/api" + tymuxRolloutPath
+		srv.RegisterConnectHandler(tymuxRolloutAPIPath, http.StripPrefix("/api", tymuxRolloutHandler))
+		log.Info("Registered TymuxRolloutService handler", "path", tymuxRolloutAPIPath)
+	}
+
 	// Register RemoteService handler (ssh-remote-workspaces Epic 3.3: TOFU
 	// host-key confirmation flow for configured SSH remotes). KnownHostsStore
 	// construction is the only fallible step (it touches disk under

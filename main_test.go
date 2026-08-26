@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"log/slog"
 	"strings"
 	"testing"
@@ -183,5 +184,164 @@ func TestBuildLogConfig_DefaultsToInfoNotDebug(t *testing.T) {
 	}
 	if cfg.ConsoleLevel != log.INFO {
 		t.Errorf("ConsoleLevel = %v, want %v", cfg.ConsoleLevel, log.INFO)
+	}
+}
+
+// Test_tymuxNeeded_should_ReturnExpected_When_GivenResolvedBackend covers
+// Epic 2.2 Task 2.2.1a (project_plans/tymux-bundled-integration/implementation/
+// plan.md): tymuxNeeded checks resolvedBackend == BackendTymux, independent
+// of any TymuxSessionOverrides entries (each case here uses an empty cfg).
+func Test_tymuxNeeded_should_ReturnExpected_When_GivenResolvedBackend(t *testing.T) {
+	tests := []struct {
+		name            string
+		resolvedBackend session.ProcessManagerBackend
+		want            bool
+	}{
+		{"tymux backend needs supervision", session.BackendTymux, true},
+		{"tmux backend does not need supervision", session.BackendTmux, false},
+		{"unknown backend does not need supervision", session.ProcessManagerBackend("bogus"), false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := tymuxNeeded(&config.Config{}, tt.resolvedBackend)
+			if got != tt.want {
+				t.Errorf("tymuxNeeded(cfg, %q) = %v, want %v", tt.resolvedBackend, got, tt.want)
+			}
+		})
+	}
+}
+
+// Test_tymuxNeeded_should_ReturnTrue_When_AnyTymuxSessionOverrideIsTrue
+// covers the Phase 4 half of Task 2.2.1a: a per-session override set before
+// this process started (e.g. via SetTymuxSessionOverride) must also trigger
+// startup supervision, even when the resolved global default is BackendTmux.
+func Test_tymuxNeeded_should_ReturnTrue_When_AnyTymuxSessionOverrideIsTrue(t *testing.T) {
+	cfg := &config.Config{
+		TymuxSessionOverrides: map[string]bool{
+			"some-other-session": false,
+			"canary-session":     true,
+		},
+	}
+
+	if !tymuxNeeded(cfg, session.BackendTmux) {
+		t.Fatal("tymuxNeeded() = false, want true: a true TymuxSessionOverrides entry must trigger supervision even when the global default is tmux")
+	}
+}
+
+// Test_tymuxNeeded_should_ReturnFalse_When_AllTymuxSessionOverridesAreFalse
+// confirms a session-name override forcing tmux does NOT itself trigger
+// supervision when nothing else needs it.
+func Test_tymuxNeeded_should_ReturnFalse_When_AllTymuxSessionOverridesAreFalse(t *testing.T) {
+	cfg := &config.Config{
+		TymuxSessionOverrides: map[string]bool{
+			"some-session": false,
+		},
+	}
+
+	if tymuxNeeded(cfg, session.BackendTmux) {
+		t.Fatal("tymuxNeeded() = true, want false: an all-false override map must not trigger supervision on its own")
+	}
+}
+
+// Test_tymuxNeeded_should_ReturnFalse_When_ConfigIsNil confirms the nil-safety
+// guard added alongside the TymuxSessionOverrides check.
+func Test_tymuxNeeded_should_ReturnFalse_When_ConfigIsNil(t *testing.T) {
+	if tymuxNeeded(nil, session.BackendTmux) {
+		t.Fatal("tymuxNeeded(nil, BackendTmux) = true, want false")
+	}
+}
+
+// TestResolveStartupBackend_EmptyConfigDefaultsToTmux covers Epic 3.2 Task
+// 3.2.1a/b (project_plans/tymux-bundled-integration/implementation/plan.md):
+// with no ProcessManagerBackend set and no env var, the function must default
+// to BackendTmux with no error — the pre-existing backwards-compatible
+// behavior of the inline block it replaces.
+func TestResolveStartupBackend_EmptyConfigDefaultsToTmux(t *testing.T) {
+	backend, err := resolveStartupBackend(&config.Config{}, false)
+	if err != nil {
+		t.Fatalf("resolveStartupBackend() error = %v, want nil", err)
+	}
+	if backend != session.BackendTmux {
+		t.Errorf("resolveStartupBackend() backend = %q, want %q", backend, session.BackendTmux)
+	}
+}
+
+// TestResolveStartupBackend_TymuxConfigValueWithoutRehearsalFallsBackToTmux is
+// the bypass-guard regression test named in the plan: hand-editing
+// process_manager_backend: "tymux" directly into config.json, with no env var
+// set and no rollback rehearsal recorded, must NOT bypass the rehearsal gate
+// (research/pitfalls.md §3). It must resolve to BackendTmux and surface
+// config.ErrTymuxRollbackRehearsalNotCompleted for the caller to log.
+func TestResolveStartupBackend_TymuxConfigValueWithoutRehearsalFallsBackToTmux(t *testing.T) {
+	cfg := &config.Config{ProcessManagerBackend: "tymux"} // hand-edited config.json, no rehearsal, no env var
+
+	backend, err := resolveStartupBackend(cfg, false)
+
+	if backend != session.BackendTmux {
+		t.Errorf("resolveStartupBackend() backend = %q, want %q (bypass guard failed)", backend, session.BackendTmux)
+	}
+	if !errors.Is(err, config.ErrTymuxRollbackRehearsalNotCompleted) {
+		t.Errorf("resolveStartupBackend() error = %v, want %v", err, config.ErrTymuxRollbackRehearsalNotCompleted)
+	}
+}
+
+// TestResolveStartupBackend_TymuxConfigValueWithRehearsalCompletes verifies
+// the config-value path DOES resolve to tymux once the rehearsal has been
+// recorded — the gate blocks the unrehearsed case above, not the tymux value
+// unconditionally.
+func TestResolveStartupBackend_TymuxConfigValueWithRehearsalCompletes(t *testing.T) {
+	completedAt := time.Now()
+	cfg := &config.Config{
+		ProcessManagerBackend:             "tymux",
+		TymuxRollbackRehearsalCompletedAt: &completedAt,
+	}
+
+	backend, err := resolveStartupBackend(cfg, false)
+
+	if err != nil {
+		t.Fatalf("resolveStartupBackend() error = %v, want nil", err)
+	}
+	if backend != session.BackendTymux {
+		t.Errorf("resolveStartupBackend() backend = %q, want %q", backend, session.BackendTymux)
+	}
+}
+
+// TestResolveStartupBackend_EnvVarWithRehearsalCompletes verifies
+// STAPLER_SQUAD_USE_TYMUX=true (tymuxEnvRequested=true) also resolves to
+// tymux once the rehearsal is recorded, even when the config value itself is
+// something other than "tymux" — the env var and the config value both feed
+// the same tymuxRequested gate.
+func TestResolveStartupBackend_EnvVarWithRehearsalCompletes(t *testing.T) {
+	completedAt := time.Now()
+	cfg := &config.Config{
+		ProcessManagerBackend:             "tmux",
+		TymuxRollbackRehearsalCompletedAt: &completedAt,
+	}
+
+	backend, err := resolveStartupBackend(cfg, true)
+
+	if err != nil {
+		t.Fatalf("resolveStartupBackend() error = %v, want nil", err)
+	}
+	if backend != session.BackendTymux {
+		t.Errorf("resolveStartupBackend() backend = %q, want %q", backend, session.BackendTymux)
+	}
+}
+
+// TestResolveStartupBackend_NativeBackendPassesThroughUnaffected verifies the
+// gate only ever intercepts the tymux case — a "native" backend value passes
+// through completely unaffected, with no error, matching the plan's
+// acceptance criteria.
+func TestResolveStartupBackend_NativeBackendPassesThroughUnaffected(t *testing.T) {
+	cfg := &config.Config{ProcessManagerBackend: "native"}
+
+	backend, err := resolveStartupBackend(cfg, false)
+
+	if err != nil {
+		t.Fatalf("resolveStartupBackend() error = %v, want nil", err)
+	}
+	if backend != session.BackendNative {
+		t.Errorf("resolveStartupBackend() backend = %q, want %q", backend, session.BackendNative)
 	}
 }
