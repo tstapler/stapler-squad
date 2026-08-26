@@ -62,10 +62,15 @@ var (
 // EnsureDaemonRunning's exported signature is fixed to (ctx, cfg) and the
 // singleflight-coalesced spawn (Task 2.1.2g) needs one seam reachable from
 // both a direct call and a concurrent-caller test.
+// stopTymuxdFn is the same injection-seam pattern applied to StopTymuxd:
+// EnsureDaemonRunning's failure paths below call through this var (rather
+// than StopTymuxd directly) so a unit test can assert cleanup fired without
+// needing a real PID file or a real process to kill.
 var (
 	checkDaemonHealthyFn = checkDaemonHealthy
 	startDaemonAttemptFn = startDaemonAttempt
 	portListeningFn      = portListening
+	stopTymuxdFn         = StopTymuxd
 )
 
 // spawnSF coalesces concurrent EnsureDaemonRunning callers that both observe
@@ -193,6 +198,14 @@ func startDaemonAttempt(cfg DaemonConfig) (*os.Process, error) {
 	}
 
 	if err := writeTymuxdPIDFile(cmd.Process.Pid); err != nil {
+		// Release() has not run yet, so Process.Kill() still works -- without
+		// this, a PID-file write failure here would orphan the just-spawned
+		// child with zero record of it anywhere (no PID file, and the
+		// *os.Process handle is about to go out of scope unreleased and
+		// unkilled).
+		if killErr := cmd.Process.Kill(); killErr != nil {
+			log.Warn("[tymux] failed to kill tymuxd after PID file write failure (process may be orphaned)", "err", killErr)
+		}
 		return nil, fmt.Errorf("tymux: failed to write tymuxd PID file: %w", err)
 	}
 
@@ -282,6 +295,20 @@ func EnsureDaemonRunning(ctx context.Context, cfg DaemonConfig) (TymuxdReady, er
 		)
 		if healthy {
 			return TymuxdReady{Spawned: true}, nil
+		}
+
+		// The health-check retry loop exhausted without the daemon becoming
+		// healthy. The process spawnAttemptFn just started (if any) is about
+		// to be abandoned by this closure -- stop it via the recorded PID
+		// file before returning the error, so a failed cold start doesn't
+		// leave an orphan squatting cfg.Addr that poisons every future
+		// EnsureDaemonRunning call for it. cmd.Process.Release() already ran
+		// inside startDaemonAttempt, so this process can no longer Kill() the
+		// *os.Process handle directly -- StopTymuxd() already knows how to
+		// read the PID file startDaemonAttempt wrote, kill that PID, and
+		// remove the file, idempotently.
+		if stopErr := stopTymuxdFn(); stopErr != nil {
+			log.Warn("[tymux] failed to stop orphaned tymuxd after failed cold start", "err", stopErr)
 		}
 
 		if portListeningFn(cfg) {

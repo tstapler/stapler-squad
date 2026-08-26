@@ -39,6 +39,12 @@ func stubPortListening(fn func(DaemonConfig) bool) func() {
 	return func() { portListeningFn = orig }
 }
 
+func stubStopTymuxd(fn func() error) func() {
+	orig := stopTymuxdFn
+	stopTymuxdFn = fn
+	return func() { stopTymuxdFn = orig }
+}
+
 // withFastRetryBounds overrides daemonStartAttempts/backoffStart/backoffMax
 // with small, test-friendly values so a test exercising the spawn-and-retry
 // path doesn't have to wait out the multi-second production worst case.
@@ -142,6 +148,51 @@ func TestEnsureDaemonRunning_UnhealthyAndPortNotListeningSurfacesPlainError(t *t
 
 	require.Error(t, err)
 	require.NotErrorIs(t, err, ErrTymuxdPortSquatted)
+}
+
+// TestEnsureDaemonRunning_should_StopOrphanedTymuxd_When_HealthCheckRetryExhausts
+// is the regression test for the BLOCKER fixed in this change: when the
+// coalesced spawn-and-retry closure exhausts every retry without the daemon
+// becoming healthy, EnsureDaemonRunning must call stopTymuxdFn (StopTymuxd in
+// production) to reap the process it just spawned before returning the
+// error -- otherwise a failed cold start leaves an orphan squatting cfg.Addr
+// that poisons every future call. Covers both failure branches (port
+// squatted and plain timeout) since the fix applies to both.
+func TestEnsureDaemonRunning_should_StopOrphanedTymuxd_When_HealthCheckRetryExhausts(t *testing.T) {
+	testCases := []struct {
+		name          string
+		portListening bool
+	}{
+		{name: "PortSquatted", portListening: true},
+		{name: "PlainTimeout", portListening: false},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			withFastRetryBounds(t, 2, time.Millisecond, 2*time.Millisecond)
+
+			defer stubCheckDaemonHealthy(func(context.Context, DaemonConfig) bool { return false })()
+			defer stubPortListening(func(DaemonConfig) bool { return tc.portListening })()
+
+			var spawned atomic.Bool
+			defer stubStartDaemonAttempt(func(DaemonConfig) (*os.Process, error) {
+				spawned.Store(true)
+				return nil, nil
+			})()
+
+			var stopCalls int32
+			defer stubStopTymuxd(func() error {
+				atomic.AddInt32(&stopCalls, 1)
+				return nil
+			})()
+
+			_, err := EnsureDaemonRunning(context.Background(), DaemonConfig{Addr: "http://127.0.0.1:19993", BinaryPath: "tymuxd"})
+
+			require.Error(t, err)
+			require.True(t, spawned.Load(), "test setup sanity check: a spawn attempt must have happened")
+			require.Equal(t, int32(1), atomic.LoadInt32(&stopCalls), "a failed cold start must reap the spawned process exactly once")
+		})
+	}
 }
 
 // TestStopTymuxd_IdempotentWhenNoPIDFile mirrors daemon/daemon.go's

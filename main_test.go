@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"log/slog"
 	"strings"
@@ -11,6 +12,7 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/tymux"
 )
 
 // captureLogWarn temporarily redirects the default slog handler to a text
@@ -249,6 +251,92 @@ func Test_tymuxNeeded_should_ReturnFalse_When_AllTymuxSessionOverridesAreFalse(t
 func Test_tymuxNeeded_should_ReturnFalse_When_ConfigIsNil(t *testing.T) {
 	if tymuxNeeded(nil, session.BackendTmux) {
 		t.Fatal("tymuxNeeded(nil, BackendTmux) = true, want false")
+	}
+}
+
+// Test_superviseTymuxd_should_DecideRegisterStopAndError_When_GivenEachCombination
+// covers the CRITICAL gap: main.go's cobra "runtime" phase decided whether to
+// register a shutdown hook that could kill a sibling process's tymuxd
+// entirely inline, with zero test coverage. superviseTymuxd extracts that
+// decision so it's testable via fakes for ensure/registerStop instead of a
+// real tymuxd subprocess or a real *warren.App.
+func Test_superviseTymuxd_should_DecideRegisterStopAndError_When_GivenEachCombination(t *testing.T) {
+	errSample := errors.New("ensure failed")
+
+	testCases := []struct {
+		name             string
+		ensureErr        error
+		spawned          bool
+		keepServer       bool
+		strictStartup    bool
+		wantErr          bool
+		wantRegisterStop bool
+	}{
+		{
+			name:             "ErrorWithStrictStartup_ReturnsError",
+			ensureErr:        errSample,
+			strictStartup:    true,
+			wantErr:          true,
+			wantRegisterStop: false,
+		},
+		{
+			name:             "ErrorWithoutStrictStartup_WarnsAndContinues",
+			ensureErr:        errSample,
+			strictStartup:    false,
+			wantErr:          false,
+			wantRegisterStop: false,
+		},
+		{
+			name:             "ReusedNotSpawned_NeverRegistersStopHook",
+			ensureErr:        nil,
+			spawned:          false,
+			keepServer:       false,
+			wantErr:          false,
+			wantRegisterStop: false,
+		},
+		{
+			name:             "SpawnedAndNotKeepServer_RegistersStopHook",
+			ensureErr:        nil,
+			spawned:          true,
+			keepServer:       false,
+			wantErr:          false,
+			wantRegisterStop: true,
+		},
+		{
+			name:             "SpawnedButKeepServer_NeverRegistersStopHook",
+			ensureErr:        nil,
+			spawned:          true,
+			keepServer:       true,
+			wantErr:          false,
+			wantRegisterStop: false,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			fakeEnsure := func(context.Context, tymux.DaemonConfig) (tymux.TymuxdReady, error) {
+				return tymux.TymuxdReady{Spawned: tc.spawned}, tc.ensureErr
+			}
+
+			var registerStopCalls int
+			fakeRegisterStop := func(name string, fn func(context.Context) error) {
+				registerStopCalls++
+			}
+
+			err := superviseTymuxd(context.Background(), tymux.DaemonConfig{}, tc.strictStartup, tc.keepServer, fakeEnsure, fakeRegisterStop)
+
+			if tc.wantErr && err == nil {
+				t.Fatal("superviseTymuxd() error = nil, want non-nil")
+			}
+			if !tc.wantErr && err != nil {
+				t.Fatalf("superviseTymuxd() error = %v, want nil", err)
+			}
+
+			gotRegisterStop := registerStopCalls > 0
+			if gotRegisterStop != tc.wantRegisterStop {
+				t.Errorf("registerStop called = %v, want %v (called %d times)", gotRegisterStop, tc.wantRegisterStop, registerStopCalls)
+			}
+		})
 	}
 }
 

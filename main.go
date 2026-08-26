@@ -379,28 +379,9 @@ var (
 				// is tmux, so a session pinned to tymux by a prior process finds a daemon
 				// running when it resumes.
 				if tymuxNeeded(cfg, resolvedBackend) {
-					tymuxdReady, tymuxErr := tymux.EnsureDaemonRunning(ctx, tymux.ResolveDaemonConfig())
-					if tymuxErr != nil {
-						if strictStartup {
-							return fmt.Errorf("tymuxd startup failed (unset STAPLER_SQUAD_STRICT_STARTUP to suppress): %w", tymuxErr)
-						}
-						log.Warn("Failed to ensure tymuxd running", "err", tymuxErr)
-					} else if !tymuxdReady.Spawned {
-						// This process only reused an already-healthy tymuxd -- per
-						// TymuxdReady.Spawned's doc comment (session/tymux/supervise.go),
-						// that daemon may belong to a DIFFERENT process sharing the same
-						// configDir (default/"shared" instance, or a named instance
-						// started twice). Never register a stop hook for a daemon this
-						// process didn't start -- StopTymuxd() has no ownership check of
-						// its own, only a PID file, so doing so could kill a daemon a
-						// still-running sibling process depends on (the same "isolated
-						// config dir, shared daemon" hazard config.IsNamedInstance's doc
-						// comment documents for tmux).
-						log.Info("tymuxd already running (reused, not started by this process) -- not registering a stop hook for it")
-					} else if !tymuxdKeepServerFlag {
-						a.OnStop("tymuxd", func(ctx context.Context) error { return tymux.StopTymuxd() })
-					} else {
-						log.Info("tymuxd will remain running across this shutdown (--tymuxd-keep-server=true)")
+					if err := superviseTymuxd(ctx, tymux.ResolveDaemonConfig(), strictStartup, tymuxdKeepServerFlag,
+						tymux.EnsureDaemonRunning, a.OnStop); err != nil {
+						return err
 					}
 				}
 
@@ -911,6 +892,50 @@ func tymuxNeeded(cfg *config.Config, resolvedBackend session.ProcessManagerBacke
 		}
 	}
 	return false
+}
+
+// superviseTymuxd is the daemon startup/shutdown decision logic for tymuxd
+// (Epic 2.2, project_plans/tymux-bundled-integration/implementation/plan.md),
+// extracted out of the cobra "runtime" phase's RunE closure so it's
+// independently testable. Mirrors tmux's own EnsureServerRunning posture:
+// non-fatal by default (log.Warn and continue) so a tymuxd that fails to
+// start never blocks stapler-squad from serving tmux-backed sessions, unless
+// strictStartup opts into hard failure.
+//
+// ensure and registerStop are injected (rather than calling
+// tymux.EnsureDaemonRunning / a.OnStop directly) so tests can substitute
+// fakes instead of spawning a real tymuxd subprocess or a real *warren.App.
+func superviseTymuxd(ctx context.Context, cfg tymux.DaemonConfig, strictStartup, keepServer bool,
+	ensure func(context.Context, tymux.DaemonConfig) (tymux.TymuxdReady, error),
+	registerStop func(name string, fn func(context.Context) error)) error {
+	tymuxdReady, tymuxErr := ensure(ctx, cfg)
+	if tymuxErr != nil {
+		if strictStartup {
+			return fmt.Errorf("tymuxd startup failed (unset STAPLER_SQUAD_STRICT_STARTUP to suppress): %w", tymuxErr)
+		}
+		log.Warn("Failed to ensure tymuxd running", "err", tymuxErr)
+		return nil
+	}
+
+	switch {
+	case !tymuxdReady.Spawned:
+		// This process only reused an already-healthy tymuxd -- per
+		// TymuxdReady.Spawned's doc comment (session/tymux/supervise.go),
+		// that daemon may belong to a DIFFERENT process sharing the same
+		// configDir (default/"shared" instance, or a named instance
+		// started twice). Never register a stop hook for a daemon this
+		// process didn't start -- StopTymuxd() has no ownership check of
+		// its own, only a PID file, so doing so could kill a daemon a
+		// still-running sibling process depends on (the same "isolated
+		// config dir, shared daemon" hazard config.IsNamedInstance's doc
+		// comment documents for tmux).
+		log.Info("tymuxd already running (reused, not started by this process) -- not registering a stop hook for it")
+	case !keepServer:
+		registerStop("tymuxd", func(ctx context.Context) error { return tymux.StopTymuxd() })
+	default:
+		log.Info("tymuxd will remain running across this shutdown (--tymuxd-keep-server=true)")
+	}
+	return nil
 }
 
 // extraOriginPattern matches an exact http(s)://localhost:<port> or
