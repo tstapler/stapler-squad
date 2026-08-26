@@ -156,7 +156,7 @@ func (rs *RulesService) UpsertApprovalRule(
 		spec.CreatedAt = r.CreatedAt.AsTime()
 	}
 
-	saved, err := rs.rulesStore.Upsert(spec)
+	saved, err := rs.rulesStore.Upsert(ctx, spec)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInvalidArgument, err)
 	}
@@ -179,7 +179,7 @@ func (rs *RulesService) DeleteApprovalRule(
 	if req.Msg.Id == "" {
 		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("id is required"))
 	}
-	if err := rs.rulesStore.Delete(req.Msg.Id); err != nil {
+	if err := rs.rulesStore.Delete(ctx, req.Msg.Id); err != nil {
 		return nil, connect.NewError(connect.CodeNotFound, err)
 	}
 	rs.rebuildClassifier()
@@ -235,7 +235,7 @@ func (rs *RulesService) GetApprovalAnalytics(
 	}
 
 	since := time.Now().AddDate(0, 0, -days)
-	entries, err := rs.analyticsStore.LoadWindow(since)
+	entries, err := rs.analyticsStore.LoadWindow(ctx, since)
 	if err != nil {
 		log.Warn("[RulesService] analytics load error", "err", err)
 		// Return empty summary rather than erroring.
@@ -730,7 +730,7 @@ func (rs *RulesService) GenerateSuggestedRule(
 		days = int(*req.Msg.WindowDays)
 	}
 
-	promptCtx := rs.buildPromptContext(req.Msg, days)
+	promptCtx := rs.buildPromptContext(ctx, req.Msg, days)
 	systemPrompt := rs.promptBuilder.BuildSystemPrompt(promptCtx)
 	userPrompt := rs.promptBuilder.BuildUserPrompt(promptCtx)
 
@@ -756,8 +756,8 @@ func (rs *RulesService) GenerateSuggestedRule(
 }
 
 // buildPromptContext assembles a RulePromptContext from the request and analytics store.
-func (rs *RulesService) buildPromptContext(req *sessionv1.GenerateSuggestedRuleRequest, days int) RulePromptContext {
-	ctx := RulePromptContext{
+func (rs *RulesService) buildPromptContext(ctx context.Context, req *sessionv1.GenerateSuggestedRuleRequest, days int) RulePromptContext {
+	promptCtx := RulePromptContext{
 		ExistingRules:  rs.allRuleSpecs(),
 		WindowDays:     days,
 		CommandSample:  req.CommandSample,
@@ -767,7 +767,7 @@ func (rs *RulesService) buildPromptContext(req *sessionv1.GenerateSuggestedRuleR
 
 	// Load analytics window and build gap clusters.
 	since := time.Now().AddDate(0, 0, -days)
-	entries, err := rs.analyticsStore.LoadWindow(since)
+	entries, err := rs.analyticsStore.LoadWindow(ctx, since)
 	if err != nil {
 		log.Warn("[RulesService] buildPromptContext: analytics load error", "err", err)
 	}
@@ -806,9 +806,9 @@ func (rs *RulesService) buildPromptContext(req *sessionv1.GenerateSuggestedRuleR
 	if len(gaps) > 10 {
 		gaps = gaps[:10]
 	}
-	ctx.AnalyticsGaps = gaps
+	promptCtx.AnalyticsGaps = gaps
 
-	return ctx
+	return promptCtx
 }
 
 // rawSuggestion is the intermediate struct used to unmarshal the AI JSON response.

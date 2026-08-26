@@ -41,6 +41,9 @@ type TokenStore struct {
 	// inflight tracks files currently being parsed to prevent duplicate work.
 	inflight sync.Map // key: filePath, value: struct{}
 
+	// droppedCount tracks total queue-full drops for rate-limited logging.
+	droppedCount log.DropCounter
+
 	// subscribers receive notifications when the store is updated.
 	subsMu sync.RWMutex
 	subs   []chan struct{}
@@ -168,7 +171,9 @@ func (ts *TokenStore) enqueue(filePath string) {
 	default:
 		// Queue full — remove from inflight so it can be retried later.
 		ts.inflight.Delete(filePath)
-		log.Warn("[TokenStore] parse queue full, dropping", "path", filePath)
+		if n, shouldLog := ts.droppedCount.Hit(); shouldLog {
+			log.Warn("[TokenStore] parse queue full, dropping", "path", filePath, "total_dropped", n)
+		}
 	}
 }
 

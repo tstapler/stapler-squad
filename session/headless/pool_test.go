@@ -21,6 +21,23 @@ func firstCallJSON(sessionID, result string) string {
 	return fmt.Sprintf(`{"session_id":%q,"result":%q,"cost_usd":0.001}`, sessionID, result)
 }
 
+// TestPool_CallBlocking_FirstCall_ToleratesTrailingNonJSONOutput covers the fix
+// for a real claude CLI failure mode: --output-format json's stdout can be
+// followed by a trailing non-JSON line (e.g. an update notice), which
+// json.Unmarshal on the whole buffer rejects outright as "invalid character
+// ... after top-level value" even though the leading JSON is well-formed.
+// See session/headless/caller.go's json.NewDecoder usage in the first-call path.
+func TestPool_CallBlocking_FirstCall_ToleratesTrailingNonJSONOutput(t *testing.T) {
+	t.Parallel()
+	response := firstCallJSON("abc", "hello") + "\nClaude Code v2.1.0 is available. Run `claude update` to install.\n"
+	runner := NewFakeRunner(response)
+	pool := newTestPool(PoolConfig{MaxCallsPerSession: 25}, runner)
+
+	result, err := pool.CallBlocking(context.Background(), "feat1", "system", "user prompt", CallOptions{}, DiscardCost)
+	require.NoError(t, err)
+	assert.Equal(t, "hello", result)
+}
+
 // newTestPool creates a Pool with FakeRunner for unit testing.
 func newTestPool(cfg PoolConfig, runner *FakeRunner) *Pool {
 	return NewPoolWithRunner(cfg, runner)

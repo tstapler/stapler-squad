@@ -4,12 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/tstapler/stapler-squad/executor/safeexec"
-	"github.com/tstapler/stapler-squad/log"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/tstapler/stapler-squad/executor/safeexec"
+	"github.com/tstapler/stapler-squad/log"
 
 	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
@@ -53,7 +54,10 @@ func branchRefExists(repo *git.Repository, branchRef plumbing.ReferenceName) (bo
 // a `worktree add -b` failure, poll branchRefExists up to worktreeAddRetryAttempts times
 // (sleeping worktreeAddRetryDelay between attempts) to give a concurrent race winner's own
 // still-in-flight `worktree add` a chance to finish, rather than deciding the outcome from
-// the failed command's error text.
+// the failed command's error text. This supersedes an earlier, narrower fix (PR #595's
+// retryBranchRefExists) that only retried on a "cannot lock ref" string match — this
+// function's caller no longer inspects error text at all, so it already covers that case
+// (and any other unrecognized error string) uniformly; see ADR-001 for why.
 //
 // Re-opens the repository fresh on every attempt, mirroring getHeadCommitSHA's precedent
 // (util.go:310-329) — go-git has been observed to unreliably resolve state immediately
@@ -228,8 +232,13 @@ func (g *GitWorktree) setupFromExistingBranch() error {
 // stores it in g.baseCommitSHA. Non-fatal: if no default branch is found the field
 // remains empty and Diff() will fall back to its own resolution.
 func (g *GitWorktree) initBaseCommitSHA() {
-	for _, branch := range []string{"main", "master", "develop", "trunk"} {
-		output, err := g.runGitCommand(g.repoPath, "merge-base", "HEAD", branch)
+	for _, branch := range CandidateDefaultBranches {
+		// cwd must be g.worktreePath, not g.repoPath: HEAD needs to resolve to this
+		// worktree's own branch tip. g.repoPath is the shared parent checkout, whose
+		// ambient checked-out branch can be anything a concurrent process left it on
+		// (mirrors the fix in resolveBaseCommitSHA, session/git/diff.go, which already
+		// does this correctly).
+		output, err := g.runGitCommand(g.worktreePath, "merge-base", "HEAD", branch)
 		if err == nil {
 			if sha := strings.TrimSpace(output); sha != "" {
 				g.baseCommitSHA = sha
@@ -438,10 +447,11 @@ func (g *GitWorktree) setupNewWorktree() error {
 		// branchRefExists check above before either creates the branch — the loser's
 		// `worktree add -b` then fails, leaving a branch with no worktree. Ground-Truth
 		// Re-Query (ADR-001): rather than inferring a lost race from err's text (which
-		// misses a timeout-killed subprocess's "signal: killed", a locale-translated
-		// message, or a future git wording change — see ADR-001), re-check actual git
-		// state directly. Any error here still falls through to the hard error below if
-		// the branch genuinely never appears.
+		// misses a timeout-killed subprocess's "signal: killed", a lock-contended
+		// "cannot lock ref", a locale-translated message, or a future git wording
+		// change — see ADR-001), re-check actual git state directly. Any error here
+		// still falls through to the hard error below if the branch genuinely never
+		// appears.
 		if g.branchExistsAfterAddFailure(branchRef) {
 			log.Info("branch already exists (lost a concurrent create race), reusing it for worktree", "branch", g.branchName)
 			return g.setupFromExistingBranch()

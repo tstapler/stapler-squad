@@ -222,6 +222,7 @@ var methodToID = map[string]string{ //nolint:gochecknoglobals
 	"GetStreamHubRolloutStatus":          "stream-hub-rollout:get",
 	"CompleteStreamHubRollbackRehearsal": "stream-hub-rollout:complete-rehearsal",
 	"SetStreamHubSessionOverride":        "stream-hub-rollout:set-session-override",
+	"SetStreamHubGlobalOverride":         "stream-hub-rollout:set-global-override",
 	// Approval rules RPCs
 	"BulkUpsertRules":       "approval:bulk-upsert-rules",
 	"ExportRules":           "approval:export-rules",
@@ -291,9 +292,12 @@ var methodToID = map[string]string{ //nolint:gochecknoglobals
 	// gets a generated per-feature file is a separate, larger followup (a new feature's
 	// registry entries + testIds, not a completeness-test fix) -- out of scope here.
 	"RunHeadlessCall": "headless:run-call",
-	// Handoff summary RPCs (HandoffSummaryService in handoff_summary.proto). Added to fix
-	// TestMethodToIDCompleteness, which was failing on main independent of any specific PR --
-	// the handoff-summary feature (#612 and its stack) never ran make registry-generate.
+	// Handoff summary RPCs (HandoffSummaryService in handoff_summary.proto,
+	// added by #612 without a methodToID entry or a registry-generate-backend
+	// Makefile enumeration — the same hardcoded-proto-list bug class as
+	// remote.proto/headless.proto above, caught by TestMethodToIDCompleteness's
+	// glob. Wired fully (map entry + Makefile enumeration) like remote.proto,
+	// not left as a followup like headless.proto, since it was cheap here.
 	"GetHandoffSummary":     "handoff-summary:get",
 	"TriggerHandoffSummary": "handoff-summary:trigger",
 }

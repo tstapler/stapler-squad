@@ -11,6 +11,7 @@ const mockClient = {
   listSessions: jest.fn(),
   completeStreamHubRollbackRehearsal: jest.fn(),
   setStreamHubSessionOverride: jest.fn(),
+  setStreamHubGlobalOverride: jest.fn(),
 };
 
 jest.mock("@connectrpc/connect", () => ({
@@ -95,5 +96,35 @@ describe("StreamHubRolloutPanel", () => {
 
     await waitFor(() => expect(screen.queryByTestId("stream-hub-override-row")).not.toBeInTheDocument());
     expect(mockClient.setStreamHubSessionOverride).toHaveBeenCalledWith({ sessionName: "canary-session" });
+  });
+
+  it("forces the global override on and reflects the new status", async () => {
+    mockClient.getStreamHubRolloutStatus.mockResolvedValue(emptyStatus());
+    mockClient.setStreamHubGlobalOverride.mockResolvedValue({
+      ...emptyStatus(),
+      globalOverride: true,
+    });
+    render(<StreamHubRolloutPanel />);
+
+    await waitFor(() => screen.getByTestId("stream-hub-global-override-on"));
+    fireEvent.click(screen.getByTestId("stream-hub-global-override-on"));
+
+    await waitFor(() => expect(screen.getByText("Forced on")).toBeInTheDocument());
+    expect(mockClient.setStreamHubGlobalOverride).toHaveBeenCalledWith({ forceHub: true });
+  });
+
+  it("clears the global override", async () => {
+    mockClient.getStreamHubRolloutStatus.mockResolvedValue({
+      ...emptyStatus(),
+      globalOverride: false,
+    });
+    mockClient.setStreamHubGlobalOverride.mockResolvedValue(emptyStatus());
+    render(<StreamHubRolloutPanel />);
+
+    await waitFor(() => screen.getByTestId("stream-hub-global-override-clear"));
+    fireEvent.click(screen.getByTestId("stream-hub-global-override-clear"));
+
+    await waitFor(() => expect(screen.getByText("Not set (using env var)")).toBeInTheDocument());
+    expect(mockClient.setStreamHubGlobalOverride).toHaveBeenCalledWith({ forceHub: undefined });
   });
 });

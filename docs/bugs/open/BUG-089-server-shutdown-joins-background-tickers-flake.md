@@ -16,15 +16,34 @@
 
 ## Root Cause
 
-Not yet investigated in depth — only confirmed non-reproducible in isolation, which points at cross-test interference (shared global state, or ordering/timing sensitivity under the full suite's concurrency) rather than a bug in the test's own logic. Needs the same kind of investigation BUG-087 received (identify what global/shared resource the test and some other concurrently-running test both touch).
+**2026-08-25 update**: root cause identified. Confirmed reproducing 3/3 with `go test ./server/... -count=3` (independent of the diff being tested at the time — reproduces identically with or without an unrelated in-flight change, ruling out interference from that change specifically). The failure is `server_test.go:257`'s `verifyNoLeaksTolerant` reporting one unexpected goroutine:
+
+```
+Goroutine ... in state syscall, with syscall.Syscall6 on top of the stack:
+...
+os/exec.(*Cmd).Wait(...)
+github.com/tstapler/stapler-squad/session/tmux.(*TmuxSession).RestoreWithWorkDir.gowrap1.(*TmuxSession).RestoreWithWorkDir.func2.1()
+	session/tmux/tmux.go:1758
+sync.(*Once).doSlow(...)
+github.com/tstapler/stapler-squad/session/tmux.(*TmuxSession).RestoreWithWorkDir.func2(...)
+	session/tmux/tmux.go:1758
+created by github.com/tstapler/stapler-squad/session/tmux.(*TmuxSession).RestoreWithWorkDir in goroutine ...
+	session/tmux/tmux.go:1756
+```
+
+This is a real subprocess-reaping goroutine spawned by `TestSessionService_CreateThenImmediateDelete_NoDataRace` (visible immediately before it in the log: that test creates a session named `staplersquad_ptmx-race-repro-<ts>` and its `RestoreWithWorkDir` call spawns a `sync.Once`-guarded goroutine that calls `exec.Cmd.Wait()` on the tmux subprocess). That test doesn't wait for the spawned goroutine to finish reaping before returning, so it's still alive (blocked in the `Waitid` syscall) when `TestServer_Shutdown_JoinsBackgroundTickers` runs its own `ignoreCurrentTolerant`/`verifyNoLeaksTolerant` baseline shortly after — the leak is attributed to the wrong test because of *when* it's observed, not *where* it originates. This is a Go-test-suite ordering artifact (both tests are in the `server` package's binary and share the process-wide goroutine pool goleak inspects), not a defect in `TestServer_Shutdown_JoinsBackgroundTickers`'s own logic, matching this doc's original suspicion.
+
+A second, consistently co-occurring failure was also observed in the same runs: `TestHandleActuatorHealth_ReturnsOK_InNormalConditions` fails every time `TestServer_Shutdown_JoinsBackgroundTickers` does (same 3/3 pattern) — not yet confirmed whether it shares the same root cause or is a second, independent ordering artifact; worth checking together.
 
 ## Files Likely Affected
 
-- The `server` package file containing `TestServer_Shutdown_JoinsBackgroundTickers` (not yet located — `grep -rn "TestServer_Shutdown_JoinsBackgroundTickers" server/` will find it).
+- `server/server_test.go` (`TestServer_Shutdown_JoinsBackgroundTickers`, `verifyNoLeaksTolerant`)
+- `server/services/session_service_test.go` (`TestSessionService_CreateThenImmediateDelete_NoDataRace` — the actual leak source)
+- `session/tmux/tmux.go:1750-1760` (`RestoreWithWorkDir`'s `sync.Once`-guarded `exec.Cmd.Wait()` goroutine)
 
 ## Fix Approach
 
-Unknown pending investigation — likely the same class of fix as BUG-087 (remove shared global-state mutation from the test, or isolate it properly), once the specific interfering test/resource is identified.
+`TestSessionService_CreateThenImmediateDelete_NoDataRace` needs to block until `RestoreWithWorkDir`'s spawned wait-goroutine has actually exited before the test returns — e.g. if `TmuxSession` exposes (or can expose) a way to wait on that `sync.Once` completing, or the test's own cleanup kills/waits on the tmux subprocess directly before returning. This is the same shape as the fix already applied to `session/streamhub`'s tests this session (2026-08-25, `withCursorSync`'s `slowCursorPositioner` test waiting on a `calledCh` before returning, in `session/streamhub/snapshot_prepare_test.go`) — don't return from a test until every goroutine it spawned (directly or via the code under test) has actually finished, not just handed off its result.
 
 ## Verification
 

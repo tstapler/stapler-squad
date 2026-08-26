@@ -41,7 +41,7 @@ func NewHandoffSummaryService(generator *session.HandoffSummaryGenerator) *Hando
 // mechanism — mirrors SessionSummaryService.GetSessionSummary's identical
 // pattern; see that method's doc comment for why a caller polling this every
 // few seconds can otherwise observe GENERATING forever.
-// +api: GetHandoffSummary
+// +api: handoff-summary:get
 func (s *HandoffSummaryService) GetHandoffSummary(
 	ctx context.Context,
 	req *connect.Request[sessionv1.GetHandoffSummaryRequest],
@@ -67,7 +67,7 @@ func (s *HandoffSummaryService) GetHandoffSummary(
 // HandoffSummaryGenerator.GenerateAndPersist (not this handler) is what
 // prevents a second overlapping pipeline when one is already in flight for
 // this session.
-// +api: TriggerHandoffSummary
+// +api: handoff-summary:trigger
 func (s *HandoffSummaryService) TriggerHandoffSummary(
 	ctx context.Context,
 	req *connect.Request[sessionv1.TriggerHandoffSummaryRequest],
