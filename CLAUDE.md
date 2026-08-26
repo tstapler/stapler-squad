@@ -70,6 +70,38 @@ gofmt -w .         # Format before committing
 
 Nil safety and static analysis tool reference: `.claude/docs/nil-safety.md`
 
+### Duplication and hotspot checks — required before pushing
+
+`make ready` (superset of `make ci`) runs two **blocking** duplication gates —
+both fail the build, not just report:
+
+- **Go — `dupl`** (`.golangci.yml`'s settings block, `.github/workflows/lint.yml`):
+  new-code-only via `--new-from-rev=origin/main`, mirroring the existing
+  gocyclo/gocognit/funlen/revive complexity gate — only duplication introduced
+  by your own diff fails; the repo's unmeasured pre-existing pool is never in
+  scope. Run locally with `make ready-complexity-gate` (needs `dupl` from
+  `make install-tools`). Fix what it finds in your diff before pushing —
+  usually an Extract/Move Function refactor (see `quality:reflect-and-fix`'s
+  Level 0 consolidation gate), not a suppression.
+- **web-app — `jscpd`** (`web-app/.jscpd.json`; `make ready-duplication-gate-web`
+  or `pnpm run lint:duplicates` in `web-app/`): jscpd has no git-diff scoping
+  like `--new-from-rev`, so this gates on an absolute `threshold` (0.1%) instead
+  of new-code-only — a ratchet against today's cleaned-up baseline (~0.09%,
+  ~215 duplicated lines), not zero-tolerance. `minLines`/`minTokens` are tuned
+  to 20/200: verified empirically (2026-08-24 repo-wide sweep + fix) that at
+  that size every finding was real, actionable duplication — component forks,
+  copy-pasted hooks/effects, shared style/test-fixture blocks — not
+  boilerplate noise, which dominates at jscpd's noisy 5-line/50-token
+  defaults. The ~0.09% baseline that remains is `jest.mock(...)` registration
+  lines that can't be extracted into a shared function (babel-jest hoists them
+  per test file), so it's irreducible, not unfixed debt. Long-term, true
+  diff-aware cross-file duplicate detection belongs in `kibitzer`
+  (github.com/tstapler/kibitzer) — see `tstapler/kibitzer#28`.
+
+For "which files are actually risky to touch" (complexity × git-churn, not
+literal duplication), see the `code-hotspot-analysis` skill and
+`tstapler/kibitzer#15` (not yet implemented in kibitzer).
+
 ### Go Skills — Always Invoke for Go Work
 
 When writing, reviewing, or refactoring Go code, invoke the relevant skill(s):
@@ -80,7 +112,6 @@ When writing, reviewing, or refactoring Go code, invoke the relevant skill(s):
 | Concurrency primitive selection (mutex vs atomic vs channel vs lock-free) | `/go-concurrency` |
 | pprof profiling — CPU, memory, goroutine, mutex profiles | `/go-profiling` |
 | Fix a specific pprof hotspot (atomic shadow, RWMutex, TTL cache, etc.) | `/go:optimize` |
-| Goroutine fan-out, singleflight, avoiding mutex contention | `/go:parallelism` |
 
 Invoke proactively — do not wait to be asked. If a task involves any `.go` file, load the appropriate skill before starting.
 
@@ -251,6 +282,7 @@ Per `local-dev-port-management`'s Sequential Batch Strategy: a fixed block reser
 |---|---|
 | Profiling / lock-up debugging | `.claude/docs/profiling.md` |
 | OpenTelemetry / Datadog setup | `.claude/docs/opentelemetry.md` |
+| Compile-time auto-instrumentation (opt-in `stapler-squad-otel` build) | `.claude/docs/opentelemetry-auto-instrumentation.md` |
 | macOS code signing / TCC | `.claude/docs/codesigning.md` |
 | PTY multiplexing (ssq-mux) | `.claude/docs/pty-multiplexing.md` |
 | State file isolation / multi-instance | `.claude/docs/state-isolation.md` |
@@ -274,3 +306,4 @@ Per `local-dev-port-management`'s Sequential Batch Strategy: a fixed block reser
 | macOS restart can leave orphaned processes racing over tmux/session state | `.claude/docs/service-restart-orphan-process.md` |
 | Fix flaky tests when found, don't just re-defer as "known pre-existing" | `.claude/rules/fix-flaky-tests-dont-defer.md` |
 | Slack Phase 2 interactive-approvals public reachability (scoping a tunnel to one path) | `.claude/docs/slack-phase2-public-reachability.md` |
+| Log debugging: file locations, global/per-package log levels, reducing log volume, pattern-clustering tool | `.claude/docs/log-debugging.md` |

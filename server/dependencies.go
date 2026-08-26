@@ -118,6 +118,11 @@ type ServerDependencies struct {
 	// dependencies are wired later via SetNotificationLister/SetTokenStore (see
 	// server.go's RunServer) — see the comment on SetNotificationLister for why.
 	SessionSummaryGenerator *session.SessionSummaryGenerator
+
+	// HandoffSummaryGenerator drives async restart-handoff-summary generation
+	// (Story 2.2.1). Nil when storage is not ent-backed, mirroring
+	// SessionSummaryGenerator.
+	HandoffSummaryGenerator *session.HandoffSummaryGenerator
 }
 
 // ToServerDeps converts RuntimeDeps to the flat ServerDependencies struct consumed
@@ -161,6 +166,7 @@ func (rt *RuntimeDeps) ToServerDeps() *ServerDependencies {
 		TriggerFireEventRepo:    rt.TriggerFireEventRepo,
 		Registry:                rt.Registry,
 		SessionSummaryGenerator: rt.SessionSummaryGenerator,
+		HandoffSummaryGenerator: rt.HandoffSummaryGenerator,
 	}
 }
 
@@ -475,6 +481,10 @@ type RuntimeDeps struct {
 	// SessionSummaryGenerator drives async session-completion-summary generation.
 	// Nil when storage is not ent-backed.
 	SessionSummaryGenerator *session.SessionSummaryGenerator
+
+	// HandoffSummaryGenerator drives async restart-handoff-summary generation
+	// (Story 2.2.1). Nil when storage is not ent-backed.
+	HandoffSummaryGenerator *session.HandoffSummaryGenerator
 }
 
 // reviewQueueLookupAdapter adapts session.Storage's ItemSession/ReviewVerdict
@@ -652,6 +662,18 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		log.Warn("session summary generation unavailable: storage is not ent-backed")
 	}
 
+	// HandoffSummaryGenerator (Story 2.2.1) — same construction/nil-guard shape
+	// as sessionSummaryGenerator just above. No SetSessionSummaryGenerator-style
+	// wiring onto sessionService needed: unlike SessionSummaryGenerator, nothing
+	// in the live-instance lifecycle dispatches handoff-summary generation —
+	// it's only triggered on demand via HandoffSummaryService's RPC handlers.
+	var handoffSummaryGenerator *session.HandoffSummaryGenerator
+	if entClient := storage.GetEntClient(); entClient != nil {
+		handoffSummaryGenerator = session.NewHandoffSummaryGenerator(entClient, headlessPool)
+	} else {
+		log.Warn("handoff summary generation unavailable: storage is not ent-backed")
+	}
+
 	// Backlog lifecycle listener — always created, enabled state set from config below.
 	// The pool is passed at construction time to close the race window that existed when
 	// SetHeadlessPool was called hundreds of lines after instance wiring.
@@ -735,6 +757,9 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 					log.Error("failed to start loaded instance", "session", inst.Title, "err", err)
 				} else {
 					log.Info("started loaded instance", "session", inst.Title)
+					// Lets waitForInstanceStartedEvent (connectrpc_websocket.go) unblock a
+					// connection that raced this loop's stagger, instead of only polling.
+					eventBus.Publish(events.NewSessionUpdatedEvent(inst, []string{"status"}))
 				}
 			}
 		}
@@ -752,6 +777,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 					log.Warn("Reconcile: hot-restore failed", "session", inst.Title, "err", err)
 				} else {
 					log.Info("Reconcile: restored session (was Stopped, now Running)", "session", inst.Title)
+					eventBus.Publish(events.NewSessionUpdatedEvent(inst, []string{"status"}))
 				}
 			}
 		}
@@ -1270,6 +1296,12 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	sessionService.SetResolveConversationUUID(storage.GetClaudeConversationUUIDBySessionUUID)
 	sessionService.SetFeatureController("backlog", backlogCtrl)
 	sessionService.SetStatusDetailProvider("backlog", quotaGate.StatusDetail)
+	// Read-only visibility for the restart-with-handoff-summary feature (see
+	// services.HandoffSummaryFeatureController's doc comment): lets the frontend
+	// discover config.json's handoff_summary.enabled up front via GetFeatureFlags,
+	// instead of only finding out disabled on the first TriggerHandoffSummary
+	// call's Code.FailedPrecondition.
+	sessionService.SetFeatureController("handoff-summary", services.HandoffSummaryFeatureController{})
 
 	// Check VNC dependencies once at startup so the server knows whether browser
 	// passthrough is available on this host. Non-fatal: Missing deps log a warning.
@@ -1484,6 +1516,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		TriggerFireEventRepo:    triggerFireEventRepo,
 		Registry:                svc.Registry,
 		SessionSummaryGenerator: sessionSummaryGenerator,
+		HandoffSummaryGenerator: handoffSummaryGenerator,
 	}, nil
 }
 

@@ -388,7 +388,6 @@ type fakePRGitExecutor struct {
 	createOut string // gh pr create's stdout (defaults to a canned PR URL if empty)
 	createErr error  // gh pr create fails with this error
 	authErr   error  // gh auth status fails with this error (checkGHCLI's not-authenticated path)
-
 	// blockFirstCallStarted, when non-nil, is closed the first time Run is
 	// invoked (signaling a test-driving goroutine that the first git/gh
 	// subprocess of the pipeline has started), after which that same call
@@ -443,8 +442,7 @@ func (e *fakePRGitExecutor) Run(_ context.Context, _ string, name string, args .
 			return nil, e.authErr
 		}
 		return nil, nil
-	case prog == "gh" && len(args) > 1 && args[0] == "pr" && args[1] == "list":
-		// findExistingPR's pre-check: report no existing PR so CreatePR
+	case prog == "gh" && len(args) > 1 && args[0] == "pr" && args[1] == "list": // findExistingPR's pre-check: report no existing PR so CreatePR
 		// proceeds to `gh pr create`.
 		return nil, exec.ErrNotFound
 	case prog == "gh" && len(args) > 1 && args[0] == "pr" && args[1] == "create":

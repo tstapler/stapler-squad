@@ -1,5 +1,37 @@
 # Changelog
 
+## [1.48.0](https://github.com/tstapler/stapler-squad/compare/v1.47.0...v1.48.0) (2026-08-23)
+
+
+### Features
+
+* **session/tymux:** add reconnect loop with backoff, resync, and daemon-restart detection (Epic 2.5) ([46ac1d7](https://github.com/tstapler/stapler-squad/commit/46ac1d71f82e1243234e6a42b8dce03509ee7af1))
+* **session/tymux:** implement CellSGRRenderer for CapturePaneContent (Epic 2.6) ([eb82dfc](https://github.com/tstapler/stapler-squad/commit/eb82dfcf97394e5a70a07e7235f5be09f80d89ea))
+* **session/tymux:** implement lifecycle, capture, and introspection methods (Epic 2.2) ([984609d](https://github.com/tstapler/stapler-squad/commit/984609d5d21066d28a28abb9e75ac5904509e3b5))
+* **session/tymux:** open standing Attach stream with client-side fan-out (Epic 2.3) ([e68c4d4](https://github.com/tstapler/stapler-squad/commit/e68c4d4e922d3796cd622ca2c484dd8e29cca4a1))
+* **session/tymux:** wire resize and fire-once exit-status callback (Epic 2.4) ([2ec2244](https://github.com/tstapler/stapler-squad/commit/2ec224445da802323b55b8f13918eca148e9322c))
+* **session:** add TymuxBackend skeleton with per-session backend selection (Epic 2.1) ([acbbd57](https://github.com/tstapler/stapler-squad/commit/acbbd57273d19d8b5271372bf92666d6d160e01b))
+* **web-app:** adopt ConnectRPC-native streaming for WatchSessions/WatchReviewQueue on TLS listener ([#605](https://github.com/tstapler/stapler-squad/issues/605)) ([9316ad9](https://github.com/tstapler/stapler-squad/commit/9316ad99893ff86856d2409bde499e8003ba0281))
+* **web-app:** wire stream-hub rollout controls into the Feature Flags page ([19f92f5](https://github.com/tstapler/stapler-squad/commit/19f92f51f7d3dd73f22305ef812af83ccf47a5da))
+
+
+### Bug Fixes
+
+* **ci:** replace broken tymux sibling-checkout with plain git clone ([#604](https://github.com/tstapler/stapler-squad/issues/604)) ([deda08c](https://github.com/tstapler/stapler-squad/commit/deda08c594ae3cb34381c2964e532f3071bb220a))
+* **ci:** use git clone instead of actions/checkout for the tymux sibling directory (Phase 6 fixes) ([b0a5387](https://github.com/tstapler/stapler-squad/commit/b0a53877a5269e6332f6ef92112ea111fc725d1e))
+* **lint:** fix depguard files: glob bug hiding no_server_in_core/no_ent_in_services ([#608](https://github.com/tstapler/stapler-squad/issues/608)) ([a624930](https://github.com/tstapler/stapler-squad/commit/a624930879ba47730c1d6feccbbffc082e9645b1))
+* **log:** stop defaulting to DEBUG on every boot, wire slog to the runtime level ([8414b42](https://github.com/tstapler/stapler-squad/commit/8414b4252de90dd9169bce0b77a3ad874239c252))
+* **session/tymux:** close Phase 5 spec-compliance gaps ([f498c6b](https://github.com/tstapler/stapler-squad/commit/f498c6b21e80129f5d9ab84d27e596afb51acfa6))
+* **session/tymux:** stop misclassifying clean exit as daemon restart, make reconnect-path calls interruptible (Phase 6 fixes) ([477eacd](https://github.com/tstapler/stapler-squad/commit/477eacd6af5a6f8f20b8ba00e41244732e0c84bc))
+* **session/tymux:** thread context cancellation and preserve unreachable-vs-dead distinction in IsAlive (Phase 6 fixes) ([7cd632a](https://github.com/tstapler/stapler-squad/commit/7cd632a1ef6293b61ba52d8f3d1d0aeb3e02ce7a))
+* **session:** bump UpdatedAt on status transitions so the frontend sees them ([#601](https://github.com/tstapler/stapler-squad/issues/601)) ([704f9c1](https://github.com/tstapler/stapler-squad/commit/704f9c1e879cc0b5ed69e6fa463fc77260405c20))
+* **session:** durable signal + badge for lost-history cold restore ([#609](https://github.com/tstapler/stapler-squad/issues/609)) ([360d845](https://github.com/tstapler/stapler-squad/commit/360d845a0f813886aec2bdaf799186b0f6b1acb1))
+* **session:** resolve worktree-path RepoPath to the main repo before anchoring ([1be9d69](https://github.com/tstapler/stapler-squad/commit/1be9d69104fe616e860ed8883d3ba358bc640699))
+* **session:** stop backlog worktrees from silently branching off ambient HEAD ([43be584](https://github.com/tstapler/stapler-squad/commit/43be58416e3dcad5ed2b402e15cc54fcecef8930))
+* **tmux:** eliminate goroutine leak from uncancellable capture-pane calls ([#597](https://github.com/tstapler/stapler-squad/issues/597)) ([47083ea](https://github.com/tstapler/stapler-squad/commit/47083ea7abe6df646afb72433be2261d033df98d))
+* **web-app:** make /settings/features scroll on mobile ([aeeda53](https://github.com/tstapler/stapler-squad/commit/aeeda53aab47a364373349159d0c56cb9559b740))
+* **web-app:** show linked backlog item on every session tab, scope workspace peers to literal path ([ab511c4](https://github.com/tstapler/stapler-squad/commit/ab511c42b07ef358f05dce33f7ad8cd8aa1be83f))
+
 ## [1.47.0](https://github.com/tstapler/stapler-squad/compare/v1.46.0...v1.47.0) (2026-08-22)
 
 

@@ -18,22 +18,22 @@ on:
       - '.gitmodules'
       - 'third_party/tmux/**'
   workflow_dispatch:
+  # No paths: filter here (unlike push above) — branch protection requires the
+  # "Test" job's status check, and a workflow that never triggers for a given
+  # PR never posts ANY status for that check, which leaves GitHub's required-
+  # check gate permanently "expected, never reported" instead of skipped-and-
+  # passing — blocking merge forever regardless of what else passed (see PR
+  # #618/#619). A job *skipped* via `if:` counts as a passing status for
+  # required checks (documented GitHub Actions behavior; already relied on by
+  # e2e-video.yml's detect-feature-changes gate), so detect-changes below
+  # moves the same path-relevance check from the trigger into a job condition
+  # instead, preserving "skip the expensive jobs for an irrelevant PR" while
+  # still letting the required check resolve to something GitHub can read.
+  # push (above) keeps its paths: filter untouched — a push to main that
+  # never triggers this workflow at all isn't blocked by anything, since
+  # there's no PR being merged for it to gate.
   pull_request:
     branches: [ main ]
-    paths:
-      - '**.go'
-      - 'go.mod'
-      - 'go.sum'
-      - 'Makefile'
-      - 'install.sh'
-      - 'proto/**'
-      - 'web-app/src/**'
-      - 'web-app/package.json'
-      - 'web-app/pnpm-lock.yaml'
-      - '.github/workflows/build.yml'
-      - '.github/actions/prepare/**'
-      - '.gitmodules'
-      - 'third_party/tmux/**'
 
 permissions:
   contents: read
@@ -41,31 +41,56 @@ permissions:
 
 jobs:
   # ─────────────────────────────────────────────────────────────────────────────
+  # detect-changes: PR-only relevance gate — see the pull_request trigger's
+  # comment above for why this lives here instead of a paths: filter. Mirrors
+  # the same path list the old pull_request paths: filter used to have.
+  # ─────────────────────────────────────────────────────────────────────────────
+  detect-changes:
+    name: Detect Relevant Changes
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    outputs:
+      relevant: ${{ steps.detect.outputs.relevant }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Detect Go/proto/web-app source or build-tooling changes
+        id: detect
+        run: |
+          CHANGED=$(git diff --name-only "origin/${{ github.base_ref }}...HEAD")
+          echo "Changed files:"
+          echo "$CHANGED"
+          if echo "$CHANGED" | grep -qE '\.go$|^go\.(mod|sum)$|^Makefile$|^install\.sh$|^proto/|^web-app/src/|^web-app/package\.json$|^web-app/pnpm-lock\.yaml$|^\.github/workflows/build\.yml$|^\.github/actions/prepare/|^\.gitmodules$|^third_party/tmux/'; then
+            echo "relevant=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "relevant=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  # ─────────────────────────────────────────────────────────────────────────────
   # prepare: generate proto code and build web UI once, share as artifacts.
   # Both test and build matrix download these instead of re-running the pipeline.
   # ─────────────────────────────────────────────────────────────────────────────
   prepare:
     name: Generate & Build Web UI
     runs-on: ubuntu-latest
+    needs: detect-changes
+    # always() is required, not decorative: a job with `needs:` gets an
+    # implicit success()-of-needs check ANDed into ANY if: you write, unless
+    # your if: itself calls a status function (always/success/failure/
+    # cancelled). detect-changes is *skipped* (not run) on every push/
+    # workflow_dispatch event, and skipped fails the implicit success()
+    # check — so without always() here, this job (and everything chained
+    # off it) would silently skip on every push to main and manual
+    # workflow_dispatch, not just irrelevant PRs. Confirmed via GitHub's
+    # own docs and multiple actions/runner issues describing this exact
+    # gotcha (e.g. actions/runner#2205).
+    if: always() && (github.event_name != 'pull_request' || needs.detect-changes.outputs.relevant == 'true')
     steps:
       - uses: actions/checkout@v4
         with:
           submodules: true
-
-      # go.mod's `replace github.com/tstapler/tymux/clients/go => ../tymux/clients/go`
-      # (Epic 2.1, stapler-squad-integration) is a relative local path resolved against
-      # $GITHUB_WORKSPACE's parent — Go's module-graph resolution fails immediately for
-      # ANY package (not just ones importing tymux's client) if that path doesn't exist
-      # on disk, so this checkout must land before the first `go` invocation in every
-      # job that builds/tests/vets Go code.
-      # actions/checkout's `path` input is validated to stay under $GITHUB_WORKSPACE
-      # (it refuses to write outside it, even to the runner's own parent "_work"
-      # dir) — so a true sibling checkout can't go through actions/checkout at
-      # all. Plain `git clone` has no such restriction; tstapler/tymux is public
-      # so this needs no auth.
-      - name: Checkout tymux (sibling, for go.mod replace directive)
-        shell: bash
-        run: git clone --depth 1 --branch main https://github.com/tstapler/tymux.git ../tymux
 
       - name: Generate protos and build web UI
         uses: ./.github/actions/prepare
@@ -93,25 +118,22 @@ jobs:
   web-build-smoke:
     name: make web-build (clean checkout smoke test)
     runs-on: ubuntu-latest
+    needs: detect-changes
+    # always() is required, not decorative: a job with `needs:` gets an
+    # implicit success()-of-needs check ANDed into ANY if: you write, unless
+    # your if: itself calls a status function (always/success/failure/
+    # cancelled). detect-changes is *skipped* (not run) on every push/
+    # workflow_dispatch event, and skipped fails the implicit success()
+    # check — so without always() here, this job (and everything chained
+    # off it) would silently skip on every push to main and manual
+    # workflow_dispatch, not just irrelevant PRs. Confirmed via GitHub's
+    # own docs and multiple actions/runner issues describing this exact
+    # gotcha (e.g. actions/runner#2205).
+    if: always() && (github.event_name != 'pull_request' || needs.detect-changes.outputs.relevant == 'true')
     steps:
       - uses: actions/checkout@v4
         with:
           submodules: true
-
-      # go.mod's `replace github.com/tstapler/tymux/clients/go => ../tymux/clients/go`
-      # (Epic 2.1, stapler-squad-integration) is a relative local path resolved against
-      # $GITHUB_WORKSPACE's parent — Go's module-graph resolution fails immediately for
-      # ANY package (not just ones importing tymux's client) if that path doesn't exist
-      # on disk, so this checkout must land before the first `go` invocation in every
-      # job that builds/tests/vets Go code.
-      # actions/checkout's `path` input is validated to stay under $GITHUB_WORKSPACE
-      # (it refuses to write outside it, even to the runner's own parent "_work"
-      # dir) — so a true sibling checkout can't go through actions/checkout at
-      # all. Plain `git clone` has no such restriction; tstapler/tymux is public
-      # so this needs no auth.
-      - name: Checkout tymux (sibling, for go.mod replace directive)
-        shell: bash
-        run: git clone --depth 1 --branch main https://github.com/tstapler/tymux.git ../tymux
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -190,21 +212,6 @@ jobs:
         with:
           submodules: true
 
-      # go.mod's `replace github.com/tstapler/tymux/clients/go => ../tymux/clients/go`
-      # (Epic 2.1, stapler-squad-integration) is a relative local path resolved against
-      # $GITHUB_WORKSPACE's parent — Go's module-graph resolution fails immediately for
-      # ANY package (not just ones importing tymux's client) if that path doesn't exist
-      # on disk, so this checkout must land before the first `go` invocation in every
-      # job that builds/tests/vets Go code.
-      # actions/checkout's `path` input is validated to stay under $GITHUB_WORKSPACE
-      # (it refuses to write outside it, even to the runner's own parent "_work"
-      # dir) — so a true sibling checkout can't go through actions/checkout at
-      # all. Plain `git clone` has no such restriction; tstapler/tymux is public
-      # so this needs no auth.
-      - name: Checkout tymux (sibling, for go.mod replace directive)
-        shell: bash
-        run: git clone --depth 1 --branch main https://github.com/tstapler/tymux.git ../tymux
-
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
@@ -250,16 +257,36 @@ jobs:
         env:
           STAPLER_SQUAD_TMUX_CREATE_TIMEOUT_SECONDS: "30"
         run: |
-          # -p 1: serializes package binaries to reduce -race CPU contention that caused intermittent hook/MCP-URL test timeouts — see project_plans/flaky-hook-url-tests/decisions/ADR-001. Do not remove without re-reading that ADR and re-verifying flake rate.
           # -timeout=20m: explicit budget instead of relying on go test's silent 10m
           # default. server/services previously tripped that default timeout with
           # only an opaque "test timed out after 10m0s" — no goroutine/fd context —
           # making it hard to tell a genuine hang apart from cumulative suite
-          # duration under -race -p 1. See BUG-067 and DeleteSession's cleanup
+          # duration under -race. See BUG-067 and DeleteSession's cleanup
           # goroutine leak fix (deleteCleanupWG in server/services/session_service.go).
-          TMUX_BIN="$(pwd)/bin/tmux" go test -race -p 1 -timeout=20m -coverprofile=coverage.out \
-            -covermode=atomic ./server/... ./session/... ./config/... \
-            || (TMUX_BIN="$(pwd)/bin/tmux" go test -race -timeout=20m -v ./...; exit 1)
+          #
+          # Split into two invocations, mirroring the Makefile's test/test-race/
+          # test-coverage targets (see BUG-051): session, session/mux, and
+          # session/tmux fork real tmux subprocesses at high t.Parallel() fan-out,
+          # so they were run separately from the rest of the suite. They no
+          # longer need -p 1 against each other: the flake that justified it
+          # was TestBuildClaudeCommand_LargePromptUsesTempFileNotInline
+          # overriding promptArg's background cleanup delay to 10ms in a test
+          # that doesn't exercise cleanup timing, racing its own os.ReadFile
+          # against that goroutine under CPU contention (see
+          # session/instance_tmux_test.go). Fixed by leaving the real 30s
+          # default delay in place; validated with a clean -race run of all
+          # three packages together sans -p 1.
+          TMUX_TEST_PKGS="./session ./session/mux ./session/tmux"
+          REST_TEST_PKGS="$(go list ./server/... ./session/... ./config/... | grep -vE '^github\.com/tstapler/stapler-squad/(session|session/mux|session/tmux)$')"
+          TMUX_BIN="$(pwd)/bin/tmux" go test -race -timeout=20m -coverprofile=coverage.tmux.out \
+            -covermode=atomic $TMUX_TEST_PKGS \
+            || (TMUX_BIN="$(pwd)/bin/tmux" go test -race -timeout=20m -v $TMUX_TEST_PKGS; exit 1)
+          TMUX_BIN="$(pwd)/bin/tmux" go test -race -timeout=20m -coverprofile=coverage.rest.out \
+            -covermode=atomic $REST_TEST_PKGS \
+            || (TMUX_BIN="$(pwd)/bin/tmux" go test -race -timeout=20m -v $REST_TEST_PKGS; exit 1)
+          head -n 1 coverage.tmux.out > coverage.out
+          tail -q -n +2 coverage.tmux.out coverage.rest.out >> coverage.out
+          rm -f coverage.tmux.out coverage.rest.out
 
       - name: Run scanner unit tests
         run: cd tools/scanner && go test ./...
@@ -417,21 +444,6 @@ jobs:
         with:
           submodules: true
 
-      # go.mod's `replace github.com/tstapler/tymux/clients/go => ../tymux/clients/go`
-      # (Epic 2.1, stapler-squad-integration) is a relative local path resolved against
-      # $GITHUB_WORKSPACE's parent — Go's module-graph resolution fails immediately for
-      # ANY package (not just ones importing tymux's client) if that path doesn't exist
-      # on disk, so this checkout must land before the first `go` invocation in every
-      # job that builds/tests/vets Go code.
-      # actions/checkout's `path` input is validated to stay under $GITHUB_WORKSPACE
-      # (it refuses to write outside it, even to the runner's own parent "_work"
-      # dir) — so a true sibling checkout can't go through actions/checkout at
-      # all. Plain `git clone` has no such restriction; tstapler/tymux is public
-      # so this needs no auth.
-      - name: Checkout tymux (sibling, for go.mod replace directive)
-        shell: bash
-        run: git clone --depth 1 --branch main https://github.com/tstapler/tymux.git ../tymux
-
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
@@ -523,21 +535,6 @@ jobs:
         with:
           submodules: true
 
-      # go.mod's `replace github.com/tstapler/tymux/clients/go => ../tymux/clients/go`
-      # (Epic 2.1, stapler-squad-integration) is a relative local path resolved against
-      # $GITHUB_WORKSPACE's parent — Go's module-graph resolution fails immediately for
-      # ANY package (not just ones importing tymux's client) if that path doesn't exist
-      # on disk, so this checkout must land before the first `go` invocation in every
-      # job that builds/tests/vets Go code.
-      # actions/checkout's `path` input is validated to stay under $GITHUB_WORKSPACE
-      # (it refuses to write outside it, even to the runner's own parent "_work"
-      # dir) — so a true sibling checkout can't go through actions/checkout at
-      # all. Plain `git clone` has no such restriction; tstapler/tymux is public
-      # so this needs no auth.
-      - name: Checkout tymux (sibling, for go.mod replace directive)
-        shell: bash
-        run: git clone --depth 1 --branch main https://github.com/tstapler/tymux.git ../tymux
-
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
@@ -604,21 +601,6 @@ jobs:
         with:
           submodules: true
 
-      # go.mod's `replace github.com/tstapler/tymux/clients/go => ../tymux/clients/go`
-      # (Epic 2.1, stapler-squad-integration) is a relative local path resolved against
-      # $GITHUB_WORKSPACE's parent — Go's module-graph resolution fails immediately for
-      # ANY package (not just ones importing tymux's client) if that path doesn't exist
-      # on disk, so this checkout must land before the first `go` invocation in every
-      # job that builds/tests/vets Go code.
-      # actions/checkout's `path` input is validated to stay under $GITHUB_WORKSPACE
-      # (it refuses to write outside it, even to the runner's own parent "_work"
-      # dir) — so a true sibling checkout can't go through actions/checkout at
-      # all. Plain `git clone` has no such restriction; tstapler/tymux is public
-      # so this needs no auth.
-      - name: Checkout tymux (sibling, for go.mod replace directive)
-        shell: bash
-        run: git clone --depth 1 --branch main https://github.com/tstapler/tymux.git ../tymux
-
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
@@ -664,21 +646,6 @@ jobs:
         with:
           submodules: true
 
-      # go.mod's `replace github.com/tstapler/tymux/clients/go => ../tymux/clients/go`
-      # (Epic 2.1, stapler-squad-integration) is a relative local path resolved against
-      # $GITHUB_WORKSPACE's parent — Go's module-graph resolution fails immediately for
-      # ANY package (not just ones importing tymux's client) if that path doesn't exist
-      # on disk, so this checkout must land before the first `go` invocation in every
-      # job that builds/tests/vets Go code.
-      # actions/checkout's `path` input is validated to stay under $GITHUB_WORKSPACE
-      # (it refuses to write outside it, even to the runner's own parent "_work"
-      # dir) — so a true sibling checkout can't go through actions/checkout at
-      # all. Plain `git clone` has no such restriction; tstapler/tymux is public
-      # so this needs no auth.
-      - name: Checkout tymux (sibling, for go.mod replace directive)
-        shell: bash
-        run: git clone --depth 1 --branch main https://github.com/tstapler/tymux.git ../tymux
-
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
@@ -713,7 +680,10 @@ jobs:
     name: Benchmark Gate (main only)
     runs-on: ubuntu-latest
     timeout-minutes: 45
-    needs: [prepare, test]
+    # Only depends on `prepare`'s generated-files artifact (downloaded below) --
+    # never consumes anything `test` produces, so it runs in parallel with `test`
+    # instead of waiting on it.
+    needs: prepare
     permissions:
       contents: read
       pull-requests: read
@@ -726,16 +696,6 @@ jobs:
         with:
           submodules: true
           token: ${{ secrets.GITHUB_TOKEN }}
-
-      # See "Checkout tymux (sibling, for go.mod replace directive)" above for why.
-      # actions/checkout's `path` input is validated to stay under $GITHUB_WORKSPACE
-      # (it refuses to write outside it, even to the runner's own parent "_work"
-      # dir) — so a true sibling checkout can't go through actions/checkout at
-      # all. Plain `git clone` has no such restriction; tstapler/tymux is public
-      # so this needs no auth.
-      - name: Checkout tymux (sibling, for go.mod replace directive)
-        shell: bash
-        run: git clone --depth 1 --branch main https://github.com/tstapler/tymux.git ../tymux
 
       - name: Set up Go
         uses: actions/setup-go@v5

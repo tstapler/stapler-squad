@@ -237,6 +237,25 @@ func CreateBacklogWorktree(repoPath, branchSuffix string) (string, error) {
 		return "", fmt.Errorf("CreateBacklogWorktree: %w", err)
 	}
 
+	// BacklogItem.RepoPath is stored verbatim from whatever the reporting caller
+	// supplied — nothing upstream guarantees it's the main checkout rather than a
+	// worktree (e.g. an agent running inside one filed the item and passed its own
+	// CWD). git worktree add technically still works when run from another
+	// worktree's directory (they share the same .git), but every later operation on
+	// the new worktree — WithRepoWorktreeLock's lock key, RemoveWorktree's cleanup —
+	// would then be anchored to that other worktree's path instead of the real repo
+	// root. If that anchor is itself ephemeral (e.g. a triage worktree deleted once
+	// triage finishes), later git -C <deleted-dir> calls fail with a generic error
+	// that isn't recognized as expected cleanup, orphaning .git/worktrees metadata.
+	// Resolve to the actual main repo root before doing anything else so the entire
+	// operation — repair, lock, fetch, worktree add — is anchored consistently no
+	// matter what path got stored. Best-effort: if resolution fails (e.g. repoPath
+	// isn't a git repo at all yet), fall through with the original path unchanged —
+	// resolveSessionPath's caller handles that case (directory-mode fallback).
+	if mainRepo, mainErr := GetMainRepoPath(resolvedRepo); mainErr == nil && mainRepo != "" {
+		resolvedRepo = mainRepo
+	}
+
 	var worktreePath string
 	err = git.WithRepoWorktreeLock(resolvedRepo, func() error {
 		if err := RepairCorruptedGitRepo(resolvedRepo); err != nil {

@@ -1,8 +1,11 @@
 package session
 
 import (
+	"bytes"
+	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/go-git/go-git/v5"
@@ -458,5 +461,138 @@ func TestRepairCorruptedGitRepo_NoOp_When_NotAGitRepo(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dir, "f.txt")); err != nil {
 		t.Errorf("RepairCorruptedGitRepo deleted a non-git directory: %v", err)
+	}
+}
+
+// TestGetMainRepoPath_ResolvesWorktreeToMainRepo is the regression test for
+// CreateBacklogWorktree's anchor-path fix: a BacklogItem's stored RepoPath can be a
+// worktree's own directory rather than the main checkout (e.g. an agent running inside
+// one filed the item using its own CWD). git worktree add still succeeds when run from
+// such a worktree, but every later operation anchored at that same path — WithRepoWorktreeLock's
+// lock key, RepairCorruptedGitRepo's target — would then be keyed to a directory that
+// might not outlive the call (e.g. an ephemeral triage worktree). GetMainRepoPath must
+// resolve a worktree path back to the real main repo root so CreateBacklogWorktree can
+// anchor there instead.
+func TestGetMainRepoPath_ResolvesWorktreeToMainRepo(t *testing.T) {
+	t.Parallel()
+	mainDir := t.TempDir()
+	repo, err := git.PlainInit(mainDir, false)
+	if err != nil {
+		t.Fatalf("PlainInit failed: %v", err)
+	}
+	wt, err := repo.Worktree()
+	if err != nil {
+		t.Fatalf("Worktree failed: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(mainDir, "f.txt"), []byte("x"), 0644); err != nil {
+		t.Fatalf("WriteFile failed: %v", err)
+	}
+	if _, err := wt.Add("f.txt"); err != nil {
+		t.Fatalf("Add failed: %v", err)
+	}
+	if _, err := wt.Commit("init", &git.CommitOptions{Author: &object.Signature{Name: "t", Email: "t@example.com"}}); err != nil {
+		t.Fatalf("Commit failed: %v", err)
+	}
+
+	worktreeDir := filepath.Join(t.TempDir(), "extra-worktree")
+	runGitOrFail(t, mainDir, "worktree", "add", "-b", "extra-branch", worktreeDir)
+
+	resolved, err := GetMainRepoPath(worktreeDir)
+	if err != nil {
+		t.Fatalf("GetMainRepoPath(worktreeDir) failed: %v", err)
+	}
+
+	// Compare canonicalized paths — t.TempDir() can itself sit under a symlink
+	// (e.g. macOS's /tmp -> /private/tmp), which would break a literal string compare.
+	wantMain, err := filepath.EvalSymlinks(mainDir)
+	if err != nil {
+		t.Fatalf("EvalSymlinks(mainDir) failed: %v", err)
+	}
+	gotMain, err := filepath.EvalSymlinks(resolved)
+	if err != nil {
+		t.Fatalf("EvalSymlinks(resolved) failed: %v", err)
+	}
+	if gotMain != wantMain {
+		t.Errorf("GetMainRepoPath(%q) = %q, want %q (the main repo, not the worktree itself)", worktreeDir, gotMain, wantMain)
+	}
+}
+
+// TestCreateBacklogWorktree_AnchorsAtMainRepo_When_RepoPathIsAWorktree verifies
+// CreateBacklogWorktree end-to-end when given a worktree's path (rather than the main
+// checkout) as repoPath: it must still succeed, branching from the main repo's default
+// branch tip, rather than erroring or misbehaving because GetMainRepoPath's resolution
+// wasn't wired in.
+func TestCreateBacklogWorktree_AnchorsAtMainRepo_When_RepoPathIsAWorktree(t *testing.T) {
+	// Not t.Parallel(): this test swaps the global slog default to capture
+	// CreateBacklogWorktree's log output, which would race other parallel tests'
+	// logging.
+	origin := t.TempDir()
+	originRepo, err := git.PlainInit(origin, false)
+	if err != nil {
+		t.Fatalf("PlainInit(origin) failed: %v", err)
+	}
+	originWT, err := originRepo.Worktree()
+	if err != nil {
+		t.Fatalf("Worktree failed: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(origin, "f.txt"), []byte("x"), 0644); err != nil {
+		t.Fatalf("WriteFile failed: %v", err)
+	}
+	if _, err := originWT.Add("f.txt"); err != nil {
+		t.Fatalf("Add failed: %v", err)
+	}
+	mainTip, err := originWT.Commit("init", &git.CommitOptions{Author: &object.Signature{Name: "t", Email: "t@example.com"}})
+	if err != nil {
+		t.Fatalf("Commit failed: %v", err)
+	}
+	runGitOrFail(t, origin, "branch", "-M", "main")
+
+	mainRepo := cloneWithOrigin(t, origin)
+
+	// Simulate a backlog item whose RepoPath got stored as a worktree's own directory —
+	// an agent running inside one filed the item using its own CWD instead of the main
+	// checkout. First create a stand-in worktree via a real backlog spawn.
+	anchorWorktree, err := CreateBacklogWorktree(mainRepo, "anchor-item")
+	if err != nil {
+		t.Fatalf("CreateBacklogWorktree(mainRepo) failed: %v", err)
+	}
+	wantMain, err := filepath.EvalSymlinks(mainRepo)
+	if err != nil {
+		t.Fatalf("EvalSymlinks(mainRepo) failed: %v", err)
+	}
+
+	// Capture slog output (at Debug level, since the line asserted on below logs at
+	// Debug) to verify which repo path CreateBacklogWorktree actually operated
+	// against — the resulting branch's commit history alone isn't a reliable signal:
+	// go-git's Head() resolution against a *linked worktree* path (rather than the
+	// main repo) is unreliable enough that, pre-fix, this exact scenario was
+	// misdetected as an unborn (zero-commit) repo and took the ambient-HEAD fallback
+	// instead — which still happened to branch from the right commit here only
+	// because that fallback shells out to real git, not because the resolution was
+	// actually correct.
+	var logBuf bytes.Buffer
+	prevLogger := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	defer slog.SetDefault(prevLogger)
+
+	childWorktree, err := CreateBacklogWorktree(anchorWorktree, "child-item")
+	if err != nil {
+		t.Fatalf("CreateBacklogWorktree(anchorWorktree) failed: %v", err)
+	}
+
+	logOutput := logBuf.String()
+	if strings.Contains(logOutput, "no default branch found and repo has no commits yet") {
+		t.Errorf("CreateBacklogWorktree(anchorWorktree) took the unborn-repo/ambient-HEAD fallback — GetMainRepoPath resolution did not take effect; log:\n%s", logOutput)
+	}
+	if !strings.Contains(logOutput, `defaultBranch=main`) {
+		t.Errorf("expected a debug log confirming resolution against the main branch; log:\n%s", logOutput)
+	}
+	if !strings.Contains(logOutput, "repoPath="+wantMain) {
+		t.Errorf("CreateBacklogWorktree did not operate against the resolved main repo path %q; log:\n%s", wantMain, logOutput)
+	}
+
+	base := strings.TrimSpace(runGitOutputOrFail(t, childWorktree, "merge-base", "HEAD", mainTip.String()))
+	if base != mainTip.String() {
+		t.Errorf("child worktree's branch point = %s, want origin's main tip %s (must branch from the resolved main repo, not the anchor worktree)", base, mainTip)
 	}
 }

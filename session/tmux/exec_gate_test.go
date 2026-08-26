@@ -388,7 +388,15 @@ func TestExecGate_CrossProcess(t *testing.T) {
 	markerDir := t.TempDir()
 	const n = 2
 	const numProcs = 5
-	const holdMS = 150
+	// holdMS must be generous relative to OS process-start scheduling jitter:
+	// each helper is a full re-exec of this test binary, and under heavy
+	// concurrent load (e.g. running the whole package suite in parallel) two
+	// helpers' 150ms hold windows could fail to overlap in wall-clock time
+	// even though the gate itself correctly saturates at n — a timing flake,
+	// not a gate bug (root-caused via `go test -run TestExecGate_CrossProcess
+	// -count=3`, which passed 3/3 in isolation with low contention). 1500ms
+	// gives enough margin to observe the overlap reliably under load.
+	const holdMS = 1500
 
 	procs := make([]*exec.Cmd, numProcs)
 	for i := range procs {
@@ -430,4 +438,62 @@ poll:
 	assert.Empty(t, entries, "all marker files should be cleaned up after every helper exits")
 	assert.LessOrEqual(t, maxHeld, n, "more than n separate processes held the gate simultaneously")
 	assert.Equal(t, n, maxHeld, "gate should reach full saturation across processes at some point during the test")
+}
+
+// TestRunFastLaneSubprocess_should_ForwardCallerCtxUnchanged_When_Called is the
+// regression test for two incidents (see ResyncFastLaneTimeout's doc comment):
+// (1) CapturePaneContentPriority/CapturePaneContentRawPriority each hand-built their own
+// context.WithTimeout(..., defaultCapturePaneTimeout) — 10s, sized for the unrelated
+// default pool — and RefreshClientPriority had no bound on its subprocess call at all
+// (context.Background()); (2) even after each individual call was bounded, several fast-lane
+// calls in one resync each minting an independent fresh ResyncFastLaneTimeout budget could
+// still add up to far more real wall-clock time than the client's stall watchdog allows.
+// runFastLaneSubprocess no longer manufactures its own timeout at all — the caller
+// constructs one shared ctx per whole operation and passes it in — so this test asserts fn
+// receives exactly the ctx the caller supplied (same deadline, not a fresh unrelated one),
+// proving the helper is a pure pass-through rather than silently creating a second budget.
+func TestRunFastLaneSubprocess_should_ForwardCallerCtxUnchanged_When_Called(t *testing.T) {
+	serverSocket := setupExecGateTestConfig(t, 4, 4)
+
+	callerCtx, cancel := context.WithTimeout(context.Background(), ResyncFastLaneTimeout)
+	defer cancel()
+	wantDeadline, ok := callerCtx.Deadline()
+	require.True(t, ok)
+
+	var observedDeadline time.Time
+	var hadDeadline bool
+	_, err := runFastLaneSubprocess(callerCtx, serverSocket, func(ctx context.Context) (struct{}, error) {
+		observedDeadline, hadDeadline = ctx.Deadline()
+		return struct{}{}, nil
+	})
+
+	require.NoError(t, err)
+	require.True(t, hadDeadline, "fn's ctx must carry a deadline — an unbounded context.Background() is exactly the RefreshClientPriority regression")
+	assert.Equal(t, wantDeadline, observedDeadline,
+		"fn should receive exactly the caller's ctx, not a fresh independently-timed one")
+}
+
+// TestRunFastLaneSubprocessErr_should_ForwardCallerCtxUnchanged_When_Called is
+// runFastLaneSubprocessErr's sibling coverage — RefreshClientPriority uses the Err-returning
+// variant, so this asserts the same pass-through on that specific path rather than relying
+// only on the shared implementation this delegates to.
+func TestRunFastLaneSubprocessErr_should_ForwardCallerCtxUnchanged_When_Called(t *testing.T) {
+	serverSocket := setupExecGateTestConfig(t, 4, 4)
+
+	callerCtx, cancel := context.WithTimeout(context.Background(), ResyncFastLaneTimeout)
+	defer cancel()
+	wantDeadline, ok := callerCtx.Deadline()
+	require.True(t, ok)
+
+	var observedDeadline time.Time
+	var hadDeadline bool
+	err := runFastLaneSubprocessErr(callerCtx, serverSocket, func(ctx context.Context) error {
+		observedDeadline, hadDeadline = ctx.Deadline()
+		return nil
+	})
+
+	require.NoError(t, err)
+	require.True(t, hadDeadline, "fn's ctx must carry a deadline")
+	assert.Equal(t, wantDeadline, observedDeadline,
+		"fn should receive exactly the caller's ctx, not a fresh independently-timed one")
 }

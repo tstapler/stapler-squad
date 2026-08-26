@@ -55,6 +55,34 @@ func NewReviewGateRunner(
 	}
 }
 
+// parseDuplicateRef reports whether notes — VerificationNotes as written by
+// report_duplicate (server/mcp/tools_backlog.go), entries joined by
+// "\n\n---\n\n" — ends in a "duplicate_ref=<ref> reason=<reason>" marker for the
+// CURRENT attempt, and if so returns its ref.
+//
+// Only the last entry is inspected, never an earlier one. report_duplicate always
+// appends its marker as the newest entry, so a duplicate claim's marker is always
+// last; conversely, if the latest entry is something else (e.g. a later work
+// session's request_review notes from a subsequent rework cycle), an older
+// duplicate_ref= entry further back is stale and must not be resurrected — reading
+// past it would treat that later, unrelated empty-diff session as a duplicate claim
+// too and route it around the guard below — exactly the false-PASS regression this
+// fix (backlog item e2373931) must not reintroduce.
+func parseDuplicateRef(notes string) (ref string, ok bool) {
+	const marker = "duplicate_ref="
+	entries := strings.Split(notes, "\n\n---\n\n")
+	last := strings.TrimSpace(entries[len(entries)-1])
+	if !strings.HasPrefix(last, marker) {
+		return "", false
+	}
+	rest := strings.TrimPrefix(last, marker)
+	if idx := strings.Index(rest, " "); idx >= 0 {
+		rest = rest[:idx]
+	}
+	rest = strings.TrimSpace(rest)
+	return rest, rest != ""
+}
+
 // reviewPromptFor returns r.pipelineEngine.InteractiveReviewPromptFor(...) when
 // pipelineEngine is wired, or the default BuildReviewPrompt otherwise — mirrors
 // BacklogService.reviewPromptFor's identical nil-safe fallback pattern
@@ -307,7 +335,23 @@ func (r *ReviewGateRunner) Run(
 	// for every other guardrail in this function, routes a no-work item back
 	// through AutoReopenAfterFailedReview to in_progress instead of letting it
 	// silently pass review.
-	if committedDiffEmpty {
+	//
+	// Exception: report_duplicate (server/mcp/tools_backlog.go) deliberately routes an
+	// item to review with zero committed diff — a duplicate claim has nothing to
+	// commit by design — and writes a duplicate_ref= marker into VerificationNotes
+	// before triggering this gate specifically so a real reviewer can confirm it
+	// (backlog item e2373931). Without this carve-out, every report_duplicate call hit
+	// this guard's hardcoded FAIL, and two calls in a row tripped IsRepeatedFailure and
+	// permanently parked the item in review with no reviewer ever consulted. Detecting
+	// the marker here and falling through to the normal SpawnReviewSession path below
+	// is what fixes that: the reviewer's prompt already carries the duplicate_ref line
+	// (writeVerificationEvidenceSection in backlog_review.go), and BuildReviewPrompt's
+	// diff=="" branch already tells the reviewer to check the codebase itself. A
+	// session with no duplicate_ref marker — the genuinely abandoned case this guard
+	// exists for — is unaffected: isDup is false and the FAIL below still fires
+	// exactly as before.
+	_, isDup := parseDuplicateRef(is.VerificationNotes)
+	if committedDiffEmpty && !isDup {
 		summary := "Review blocked: no committed changes were found for this session. " +
 			"There is nothing to review — the work session ended without shipping any commits."
 		emptyDiffIS, createErr := recordTerminalReviewVerdict(r.storage, item.ID, is.AcSnapshot, "empty-diff-"+uuid.New().String(), ReviewVerdictFail, summary)

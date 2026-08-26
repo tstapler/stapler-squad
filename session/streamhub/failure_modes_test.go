@@ -39,6 +39,13 @@ func TestStreamHub_should_BroadcastStreamEndedSentinelToAllSubscribersAndAttempt
 	controller := newFakeSessionController()
 	controller.setWindowSizeErr = wantErr
 	hub := streamhub.NewStreamHub("crash-test-session", controller, streamhub.WithTeardownGrace(time.Hour))
+	// Defensive, not load-bearing: the hub is expected to tear itself down as
+	// the behavior under test, but if a waitFor below times out and Fatalf's
+	// first, this closes the same leak risk documented in hub_test.go's
+	// TestStreamHub_should_CallSetWindowSizeExactlyOnce_When_NegotiatedSizeChanges.
+	// ForceTeardown is idempotent once fully torn down, so harmless if the
+	// hub already got there on its own.
+	defer hub.ForceTeardown()
 
 	mt1 := streamhub.NewMemoryTransport()
 	mt2 := streamhub.NewMemoryTransport()
@@ -69,6 +76,8 @@ func TestStreamHub_should_BroadcastStreamEndedSentinelAndAttemptRestart_When_Cap
 		streamhub.WithQuiescenceTimeout(30*time.Millisecond),
 		streamhub.WithQuiescenceQuietPeriod(5*time.Millisecond),
 	)
+	// Defensive — see the previous test's identical comment.
+	defer hub.ForceTeardown()
 
 	mt1 := streamhub.NewMemoryTransport()
 	mt2 := streamhub.NewMemoryTransport()
@@ -100,6 +109,9 @@ func TestStreamHub_should_EvictSubscriberExactlyOnce_When_MemoryTransportConfigu
 	failing := streamhub.NewMemoryTransport(streamhub.WithErrorSend(sendErr))
 
 	normalID := hub.AttachSubscriber(normal, streamhub.SubscriberCapability{})
+	// See hub_test.go's TestStreamHub_should_CallSetWindowSizeExactlyOnce_When_NegotiatedSizeChanges
+	// comment on this defer's placement/LIFO-ordering rationale.
+	defer hub.DetachSubscriber(normalID)
 	hub.AttachSubscriber(failing, streamhub.SubscriberCapability{})
 
 	hub.Broadcast([]byte("frame"))
@@ -110,8 +122,6 @@ func TestStreamHub_should_EvictSubscriberExactlyOnce_When_MemoryTransportConfigu
 	if !waitFor(t, time.Second, func() bool { return len(normal.ReceivedFrames()) == 1 }) {
 		t.Fatalf("expected the normal subscriber to still receive the broadcast, got %d frames", len(normal.ReceivedFrames()))
 	}
-
-	hub.DetachSubscriber(normalID)
 }
 
 // --- Sustained backpressure: eviction without stalling fast subscribers, drop counter ---
@@ -129,6 +139,7 @@ func TestStreamHub_should_EvictSlowSubscriberUnderSustainedBackpressure_And_Incr
 	blocked := streamhub.NewMemoryTransport(streamhub.WithBlockingSend())
 
 	normalID := hub.AttachSubscriber(normal, streamhub.SubscriberCapability{})
+	defer hub.DetachSubscriber(normalID)
 	hub.AttachSubscriber(blocked, streamhub.SubscriberCapability{})
 
 	const frameCount = 100
@@ -150,8 +161,6 @@ func TestStreamHub_should_EvictSlowSubscriberUnderSustainedBackpressure_And_Incr
 	if got := hub.SlowSubscriberDropsTotal(); got != 1 {
 		t.Fatalf("expected streamhub_slow_subscriber_drops_total to be incremented exactly once for the eviction (not once per dropped frame), got %d", got)
 	}
-
-	hub.DetachSubscriber(normalID)
 }
 
 // --- Flag-flip mid-session: single-owner resolution race ---

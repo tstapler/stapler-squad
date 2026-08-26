@@ -55,20 +55,6 @@ jobs:
         with:
           fetch-depth: 0
 
-      # go.mod's `replace github.com/tstapler/tymux/clients/go => ../tymux/clients/go`
-      # (Epic 2.1, stapler-squad-integration) is a relative local path — Go's
-      # module-graph resolution fails for ANY package if it doesn't exist on disk, so
-      # this checkout must land before this job's `go run`/`go build ./...`/
-      # golangci-lint steps below.
-      # actions/checkout's `path` input is validated to stay under $GITHUB_WORKSPACE
-      # (it refuses to write outside it, even to the runner's own parent "_work"
-      # dir) — so a true sibling checkout can't go through actions/checkout at
-      # all. Plain `git clone` has no such restriction; tstapler/tymux is public
-      # so this needs no auth.
-      - name: Checkout tymux (sibling, for go.mod replace directive)
-        shell: bash
-        run: git clone --depth 1 --branch main https://github.com/tstapler/tymux.git ../tymux
-
       # ubuntu-latest ships shellcheck preinstalled; no setup step needed.
       # Runs 'make lint-shell' rather than duplicating its file-discovery
       # logic here, so there's one source of truth for which scripts are
@@ -136,11 +122,14 @@ jobs:
       # gocyclo/gocognit/funlen/revive(file-length-limit) flag files/functions getting too
       # big or too complex — the shape that let session/backlog_lifecycle.go grow to 4930
       # lines before anyone noticed (see the code-hotspot-analysis skill + the split PR that
-      # added this step). Thresholds live in .golangci.yml's settings block. Run as a
-      # separate step (not folded into the block above) because it needs new-issues-only
-      # filtering — the repo has ~100 pre-existing violations in files this step doesn't
-      # touch, and failing on those would block unrelated PRs. `make lint`/`make ci` are
-      # deliberately unaffected (these 4 linters are NOT in .golangci.yml's enable: list).
+      # added this step). dupl flags copy-pasted blocks — the "Duplicated/Divergent Logic"
+      # failure mode (see quality:reflect-and-fix's Level 0 gate, added 2026-08-24 after a
+      # resize fix landed at one call site and silently missed two others). Thresholds live
+      # in .golangci.yml's settings block. Run as a separate step (not folded into the block
+      # above) because it needs new-issues-only filtering — the repo has pre-existing
+      # violations of all 5 of these in files this step doesn't touch, and failing on those
+      # would block unrelated PRs. `make lint`/`make ci` are deliberately unaffected (none of
+      # these 5 linters are in .golangci.yml's enable: list).
       #
       # Uses golangci-lint's native --new-from-rev (git-based) instead of the action's own
       # only-new-issues: true. only-new-issues fetches the PR diff from the GitHub REST API
@@ -152,13 +141,27 @@ jobs:
       # blew past the cap and flooded the check with ~90 unrelated pre-existing violations.
       # --new-from-rev computes the diff via local git instead (no API, no line cap) —
       # requires fetch-depth: 0 above so origin/main is resolvable.
-      - name: golangci-lint (complexity/size gate — new code only)
+      - name: golangci-lint (complexity/size/duplication gate — new code only)
         uses: golangci/golangci-lint-action@v7
         with:
           version: v2.11.4
-          args: --timeout=5m --max-issues-per-linter=0 --max-same-issues=0 --enable=gocyclo,gocognit,funlen,revive --new-from-rev=origin/main
+          args: --timeout=5m --max-issues-per-linter=0 --max-same-issues=0 --enable=gocyclo,gocognit,funlen,revive,dupl --new-from-rev=origin/main
           skip-cache: false
           only-new-issues: false
+
+      # jscpd (web-app/src duplication) — blocking (2026-08-24). Config lives in
+      # web-app/.jscpd.json: minLines/minTokens tuned to 20/200 (empirically verified —
+      # every finding at that size across the whole repo was real, actionable duplication,
+      # not boilerplate/token noise), plus a 0.1% --threshold. Unlike golangci-lint's
+      # --new-from-rev, jscpd has no native git-diff scoping, so this is a ratchet against
+      # an absolute threshold rather than new-code-only — the threshold sits just above the
+      # ~0.09% baseline that's irreducible (jest.mock(...) registration calls can't be
+      # extracted into a shared function; babel-jest hoists them per-file), not at zero.
+      # Long-term, true diff-aware cross-file duplicate detection belongs in kibitzer
+      # (github.com/tstapler/kibitzer) — see tstapler/kibitzer#28.
+      - name: jscpd (web-app duplication)
+        working-directory: web-app
+        run: pnpm run lint:duplicates
 
       - name: Import cycle check
         run: go build ./...
@@ -166,12 +169,27 @@ jobs:
       - name: ESLint (no-100vh, mobile regression rules)
         working-directory: web-app
         run: |
-          # Only lint files changed in this PR to avoid surfacing pre-existing issues
-          # in unmodified files. Falls back to full scan on push-to-main (no PR context).
-          # --max-warnings 0 is not used for full scan: pre-existing warnings in untouched
-          # files should not block push/workflow_dispatch. Errors (no-100vh etc.) still fail.
-          if [ -n "${{ github.event.pull_request.base.sha }}" ]; then
-            CHANGED=$(git diff --name-only "${{ github.event.pull_request.base.sha }}"...HEAD \
+          # Only lint files changed by this push/PR — avoids surfacing the repo's ~1450
+          # pre-existing warnings (found 2026-08-25: this file's OLD "falls back to full
+          # scan on push" comment claimed pre-existing warnings wouldn't block push, but
+          # `next lint` (unlike raw eslint) exits 1 on ANY warning, not just errors — so
+          # every direct push to main had been failing this check silently for at least
+          # 6 commits before anyone noticed, since push events never got the PR path's
+          # file-scoped treatment). Push events now diff against github.event.before (the
+          # commit before this push) using the same file-scoped `next lint --file` call
+          # the PR path already uses — PRs and pushes share one code path below.
+          BASE_SHA="${{ github.event.pull_request.base.sha }}"
+          if [ -z "$BASE_SHA" ]; then
+            CANDIDATE="${{ github.event.before }}"
+            # event.before is all-zeros on a new branch's first push (no prior commit to
+            # diff against) — fall back to a full scan in that case, same as before.
+            if [ -n "$CANDIDATE" ] && [ "$CANDIDATE" != "0000000000000000000000000000000000000000" ] \
+              && git cat-file -e "$CANDIDATE" 2>/dev/null; then
+              BASE_SHA="$CANDIDATE"
+            fi
+          fi
+          if [ -n "$BASE_SHA" ]; then
+            CHANGED=$(git diff --name-only "$BASE_SHA"...HEAD \
               -- 'web-app/**.ts' 'web-app/**.tsx' 2>/dev/null \
               | grep -E '\.(ts|tsx)$' | sed 's|^web-app/||' || true)
             if [ -z "$CHANGED" ]; then
