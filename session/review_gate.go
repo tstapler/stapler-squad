@@ -107,11 +107,13 @@ func (r *ReviewGateRunner) Run(
 	var worktreeDiffErr error
 	wt, wtErr := r.storage.GetWorktreeDataBySessionUUID(ctx, is.SessionUUID)
 	if wtErr == nil && wt.WorktreePath != "" && wt.BranchName != "" {
-		// Worktree-identity guard: confirm the recorded worktree path still exists and
-		// still has this session's own branch checked out before touching it at all —
-		// including the branch-drift sync just below, which would otherwise run against
-		// whatever unrelated repo/branch happens to be at that path. Worktree identity is
-		// resolved by title-derived branch name, not item/session UUID
+		// Worktree-identity guard: if a directory still sits at the recorded worktree
+		// path, confirm it actually has this session's own branch checked out before
+		// touching it at all — including the branch-drift sync just below, which would
+		// otherwise run against whatever unrelated repo/branch happens to be at that
+		// path. (A missing directory is not itself a mismatch — see
+		// worktreeIdentityMismatch's doc comment for why.) Worktree identity is resolved
+		// by title-derived branch name, not item/session UUID
 		// (findExistingWorktreeForBranch, session/git/worktree.go), so two items with
 		// colliding sanitized titles can silently be handed the same worktree — the
 		// "diff computed against the wrong worktree" failure class this guards against
