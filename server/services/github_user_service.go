@@ -238,12 +238,21 @@ func (s *GitHubUserService) ListGitHubAccounts(
 	accounts := s.buildAccountList()
 
 	// EnterpriseHosts drives the omnibar's GHE URL detector, so it must reflect
-	// every host the user can actually reach — not just hosts with a
-	// statically configured OAuth App (s.enterpriseHosts), which omits hosts
-	// added via AddGitHubAccountWithToken/AddGitHubAccountFromCLI (e.g. gh CLI
-	// import) since those never touch s.enterpriseHosts.
-	seen := make(map[string]bool, len(s.enterpriseHosts)+len(accounts))
-	hosts := make([]string, 0, len(s.enterpriseHosts)+len(accounts))
+	// every host the user has ever linked — not just hosts with a statically
+	// configured OAuth App (s.enterpriseHosts), which omits hosts added via
+	// AddGitHubAccountWithToken/AddGitHubAccountFromCLI (e.g. gh CLI import)
+	// since those never touch s.enterpriseHosts. It's sourced from the
+	// persisted keychain account index (ListKeychainAccounts), NOT from
+	// s.cache.GetCachedAccounts()/buildAccountList(): that cache is gated on a
+	// live, network-dependent revalidation of every token (see
+	// UserPRCache.resolveAllLogins) that silently drops an account on any
+	// transient failure to reach its host — very plausible for a
+	// VPN/corp-network-gated GHES host — which would otherwise make the
+	// omnibar detector flicker in and out for an account that is, from the
+	// user's perspective, still linked.
+	keychainAccounts := githubpkg.ListKeychainAccounts()
+	seen := make(map[string]bool, len(s.enterpriseHosts)+len(keychainAccounts))
+	hosts := make([]string, 0, len(s.enterpriseHosts)+len(keychainAccounts))
 	addHost := func(host string) {
 		host = githubpkg.NormalizeHost(host)
 		if host == "" || githubpkg.IsGitHubCom(host) || seen[host] {
@@ -255,7 +264,7 @@ func (s *GitHubUserService) ListGitHubAccounts(
 	for _, h := range s.enterpriseHosts {
 		addHost(h.Host)
 	}
-	for _, a := range accounts {
+	for _, a := range keychainAccounts {
 		addHost(a.Host)
 	}
 	return connect.NewResponse(&sessionv1.ListGitHubAccountsResponse{
