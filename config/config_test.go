@@ -245,7 +245,7 @@ func TestDefaultConfig(t *testing.T) {
 func TestPruneStaleTestDirs(t *testing.T) {
 	testBaseDir := t.TempDir()
 
-	deadCmd := exec.Command("true")
+	deadCmd := safeexec.CommandContext(context.Background(), "true")
 	require.NoError(t, deadCmd.Run())
 	deadPID := deadCmd.Process.Pid
 
