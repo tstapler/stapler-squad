@@ -259,6 +259,64 @@ func TestSetupNewWorktree_RespectsPreSetBaseCommitSHA(t *testing.T) {
 	assert.True(t, os.IsNotExist(statErr), "worktree must not contain changes made after the pre-set base commit")
 }
 
+// TestInitBaseCommitSHA_UsesWorktreePath_NotRepoPathAmbientCheckout is a direct
+// regression test for backlog item e7664cbf: initBaseCommitSHA used to run
+// `git merge-base HEAD <candidate>` with cwd=g.repoPath, so "HEAD" resolved to
+// whatever branch the shared parent repoPath's checkout happened to be on —
+// not this worktree's own branch — making the computed base wrong (or, for an
+// orphan branch, unresolvable) whenever repoPath had drifted. This constructs a
+// GitWorktree pointing at a real, separate worktree directory (not repoPath
+// itself) with "feature" checked out, deliberately leaves repoPath on an
+// unrelated orphan branch sharing no history with "feature", and confirms
+// initBaseCommitSHA still computes the correct merge-base with main by running
+// inside the worktree — mirroring the already-correct sibling
+// resolveBaseCommitSHA (session/git/diff.go), which this fix now matches.
+func TestInitBaseCommitSHA_UsesWorktreePath_NotRepoPathAmbientCheckout(t *testing.T) {
+	t.Parallel()
+	repoDir := setupTestRepo(t)
+
+	mainSHA, err := safeexec.CommandContext(context.Background(), "git", "-C", repoDir, "rev-parse", "main").CombinedOutput()
+	require.NoError(t, err)
+	expectedBaseSHA := strings.TrimSpace(string(mainSHA))
+
+	worktreeDir := t.TempDir()
+	for _, args := range [][]string{
+		{"-C", repoDir, "worktree", "add", "-b", "feature", worktreeDir, "main"},
+		{"-C", worktreeDir, "config", "user.email", "test@example.com"},
+		{"-C", worktreeDir, "config", "user.name", "Test"},
+	} {
+		out, cmdErr := safeexec.CommandContext(context.Background(), "git", args...).CombinedOutput()
+		require.NoError(t, cmdErr, "git %v failed: %s", args, out)
+	}
+	require.NoError(t, os.WriteFile(filepath.Join(worktreeDir, "feature.txt"), []byte("real work"), 0644))
+	for _, args := range [][]string{
+		{"-C", worktreeDir, "add", "."},
+		{"-C", worktreeDir, "commit", "-m", "real fix"},
+	} {
+		out, cmdErr := safeexec.CommandContext(context.Background(), "git", args...).CombinedOutput()
+		require.NoError(t, cmdErr, "git %v failed: %s", args, out)
+	}
+
+	// Simulate a concurrent process leaving the shared repoPath on an unrelated
+	// orphan branch with no common history with "feature" — the worst case for the
+	// old repoPath-cwd implementation (would fail outright with "no merge base").
+	for _, args := range [][]string{
+		{"-C", repoDir, "checkout", "--orphan", "unrelated"},
+		{"-C", repoDir, "commit", "--allow-empty", "-m", "unrelated history"},
+	} {
+		out, cmdErr := safeexec.CommandContext(context.Background(), "git", args...).CombinedOutput()
+		require.NoError(t, cmdErr, "git %v failed: %s", args, out)
+	}
+
+	wt := NewGitWorktreeFromStorage(repoDir, worktreeDir, "test-init-base-sha", "feature", "")
+	require.NotNil(t, wt)
+
+	wt.initBaseCommitSHA()
+
+	assert.Equal(t, expectedBaseSHA, wt.GetBaseCommitSHA(),
+		"initBaseCommitSHA must find feature's real merge-base with main by running inside the worktree, unaffected by repoPath's ambient checkout")
+}
+
 // TestSetupNewWorktree_UsesExistingBranch_When_BranchRefExists covers setupNewWorktree()'s
 // own reuse path directly, independent of Setup()'s upfront goroutine (which would normally
 // short-circuit straight to setupFromExistingBranch and never reach setupNewWorktree() at

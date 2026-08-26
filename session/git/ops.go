@@ -34,14 +34,16 @@ func FetchBranch(repoPath, branchName string) error {
 	return nil
 }
 
-// candidateDefaultBranches are tried, in order, by ResolveDefaultBranchSHA when the
+// CandidateDefaultBranches are tried, in order, by ResolveDefaultBranchSHA when the
 // caller doesn't know the repo's actual default branch name. Mirrors the candidate list
 // session/unfinished's GoGitVCSReader.ResolveDefaultBranch already uses. "main" stays
-// first so the common case costs exactly one fetch.
-var candidateDefaultBranches = []string{"main", "master", "develop", "trunk"} //nolint:gochecknoglobals
+// first so the common case costs exactly one fetch. Exported so other packages needing
+// the same candidate list (session.RecoverBaseCommitSHA, GitWorktree.initBaseCommitSHA)
+// share one definition instead of re-declaring the literal.
+var CandidateDefaultBranches = []string{"main", "master", "develop", "trunk"} //nolint:gochecknoglobals
 
 // ResolveDefaultBranchSHA finds repoPath's real default branch and returns its freshly-
-// fetched origin tip SHA, trying candidateDefaultBranches in order via ResolveOriginBranchSHA
+// fetched origin tip SHA, trying CandidateDefaultBranches in order via ResolveOriginBranchSHA
 // until one exists on origin. Exists because a repo's default branch can be named anything
 // (this repo's own sibling dotfiles project uses "master", not "main") — a caller that
 // hardcodes "main" gets a fetch failure on every single call against such a repo, which used
@@ -51,14 +53,14 @@ var candidateDefaultBranches = []string{"main", "master", "develop", "trunk"} //
 // fetch step itself.
 func ResolveDefaultBranchSHA(repoPath string) (branch, sha string, err error) {
 	var errs []error
-	for _, candidate := range candidateDefaultBranches {
+	for _, candidate := range CandidateDefaultBranches {
 		if candidateSHA, fetchErr := ResolveOriginBranchSHA(repoPath, candidate); fetchErr == nil {
 			return candidate, candidateSHA, nil
 		} else {
 			errs = append(errs, fetchErr)
 		}
 	}
-	return "", "", fmt.Errorf("no candidate default branch (%v) exists on origin: %w", candidateDefaultBranches, errors.Join(errs...))
+	return "", "", fmt.Errorf("no candidate default branch (%v) exists on origin: %w", CandidateDefaultBranches, errors.Join(errs...))
 }
 
 // ResolveOriginBranchSHA fetches mainBranch from origin into repoPath and returns the
@@ -101,18 +103,18 @@ func ResolveLocalBranchSHA(repoPath, branchName string) (string, error) {
 }
 
 // ResolveDefaultLocalBranchSHA is ResolveDefaultBranchSHA's fully-offline counterpart:
-// tries candidateDefaultBranches against repoPath's own local refs (no fetch), for use
+// tries CandidateDefaultBranches against repoPath's own local refs (no fetch), for use
 // when every origin candidate fetch has already failed.
 func ResolveDefaultLocalBranchSHA(repoPath string) (branch, sha string, err error) {
 	var errs []error
-	for _, candidate := range candidateDefaultBranches {
+	for _, candidate := range CandidateDefaultBranches {
 		if candidateSHA, localErr := ResolveLocalBranchSHA(repoPath, candidate); localErr == nil {
 			return candidate, candidateSHA, nil
 		} else {
 			errs = append(errs, localErr)
 		}
 	}
-	return "", "", fmt.Errorf("no candidate default branch (%v) exists locally: %w", candidateDefaultBranches, errors.Join(errs...))
+	return "", "", fmt.Errorf("no candidate default branch (%v) exists locally: %w", CandidateDefaultBranches, errors.Join(errs...))
 }
 
 // IsUnbornRepo reports whether repoPath is a git repository with zero commits (HEAD

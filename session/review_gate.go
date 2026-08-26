@@ -3,6 +3,7 @@ package session
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/google/uuid"
@@ -133,7 +134,58 @@ func (r *ReviewGateRunner) Run(
 	// blocks the review instead of silently handing the reviewer an empty diff.
 	var worktreeDiffErr error
 	wt, wtErr := r.storage.GetWorktreeDataBySessionUUID(ctx, is.SessionUUID)
-	if wtErr == nil && wt.WorktreePath != "" && wt.BranchName != "" {
+	if wtErr == nil && wt.WorktreePath != "" {
+		// Worktree-identity guard: if a directory still sits at the recorded worktree
+		// path, confirm it actually has this session's own branch checked out before
+		// touching it at all — including the branch-drift sync just below, which would
+		// otherwise run against whatever unrelated repo/branch happens to be at that
+		// path. (A missing directory is not itself a mismatch — see
+		// WorktreeIdentityMismatch's doc comment for why.) Gated only on WorktreePath,
+		// not also requiring BranchName: a row with a path but no recorded branch must
+		// still go through this check (it reports "unverifiable" rather than being
+		// silently skipped) — the branch-drift block just below assumes wt.BranchName
+		// is meaningful and must never be reached with it empty. Worktree identity is
+		// resolved by title-derived branch name, not item/session UUID
+		// (findExistingWorktreeForBranch, session/git/worktree.go), so two items with
+		// colliding sanitized titles can silently be handed the same worktree — the
+		// "diff computed against the wrong worktree" failure class this guards against
+		// (backlog item e7664cbf). Fail closed with a distinct verdict instead of
+		// diffing (or auto-repairing against) whatever actually turns out to be there.
+		if mismatchReason := WorktreeIdentityMismatch(wt.WorktreePath, wt.BranchName); mismatchReason != "" {
+			summary := fmt.Sprintf("Review blocked: this session's recorded worktree (%s) %s. "+
+				"The worktree path may have been reused or recreated for a different item — this needs investigation, not rework.",
+				wt.WorktreePath, mismatchReason)
+			log.ErrorLog().Printf("[BacklogLifecycle] spawnReviewGate worktree identity mismatch item=%s worktree=%s branch=%s: %s", item.ID, wt.WorktreePath, wt.BranchName, mismatchReason)
+			mismatchIS, createErr := recordTerminalReviewVerdict(r.storage, item.ID, is.AcSnapshot, "worktree-identity-"+uuid.New().String(), ReviewVerdictFail, summary)
+			if createErr != nil {
+				log.ErrorLog().Printf("[BacklogLifecycle] spawnReviewGate CreateItemSessionWithVerdict (worktree identity) item=%s: %v", item.ID, createErr)
+				return
+			}
+			log.WarningLog().Printf("[BacklogLifecycle] spawnReviewGate worktree identity mismatch blocked review for item %s — FAIL verdict recorded (session %s)", item.ID, mismatchIS.ID)
+			if r.getNotifier != nil {
+				if n := r.getNotifier(); n != nil {
+					n.Notify(item.ID,
+						"Review blocked — worktree identity mismatch",
+						fmt.Sprintf("%s — the session's recorded worktree %s. See the item's review history for details.", item.Title, mismatchReason),
+						7, // sessionv1.NotificationType_NOTIFICATION_TYPE_ERROR
+						3, // sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_HIGH
+					)
+				}
+			}
+			// Feed into the same auto-reopen/cap-and-notify machinery every other terminal
+			// block in this function uses — a recycled/misattributed worktree left by
+			// worktree-management flakiness is exactly the kind of thing a rework session's
+			// respawn can resolve, and the rework cap still protects against a persistently
+			// broken case looping silently forever.
+			if reopener := r.getAutoReopener(); reopener != nil {
+				go func() {
+					if err := reopener.AutoReopenAfterFailedReview(ctx, item.ID); err != nil {
+						log.ErrorLog().Printf("[BacklogLifecycle] spawnReviewGate AutoReopenAfterFailedReview (worktree identity) item=%s: %v", item.ID, err)
+					}
+				}()
+			}
+			return
+		}
 		// Precondition of review, not a best-effort side effect of the reactive PR-fix
 		// path (BUG-044): a branch left to drift unbounded from main eventually produces
 		// a diff dominated by unrelated upstream commits rather than the item's own
@@ -220,10 +272,23 @@ func (r *ReviewGateRunner) Run(
 	// even when the recorded SHA is not. Recompute the merge-base and retry once before
 	// giving up; this lets a genuinely-complete review proceed on a real diff instead of
 	// unconditionally blocking (or worse, silently returning an empty one).
-	if worktreeDiffErr != nil && wt.BranchName != "" {
-		if recoveredSHA, recoverErr := RecoverBaseCommitSHA(ctx, item.RepoPath, wt.BranchName); recoverErr != nil {
+	if worktreeDiffErr != nil && wt.BranchName != "" && wt.WorktreePath != "" {
+		// Recover against whichever directory is actually still on disk: prefer the
+		// session's own worktree, but fall back to item.RepoPath when it's been torn
+		// down — mirrors getWorkSessionDiff's identical recoverDir fallback
+		// (server/services/backlog_service_triage.go). Without this, a torn-down
+		// worktree combined with a corrupted/stale base_commit_sha made
+		// RecoverBaseCommitSHA run `git merge-base` with cmd.Dir pointed at a
+		// nonexistent directory — the command never even starts, so recovery is
+		// abandoned and the review is wrongly hard-blocked, even though the branch's
+		// commits remain reachable via the shared object store at item.RepoPath.
+		recoverDir := item.RepoPath
+		if info, statErr := os.Stat(wt.WorktreePath); statErr == nil && info.IsDir() {
+			recoverDir = wt.WorktreePath
+		}
+		if recoveredSHA, recoverErr := RecoverBaseCommitSHA(ctx, recoverDir, wt.BranchName); recoverErr != nil {
 			log.WarningLog().Printf("[BacklogLifecycle] spawnReviewGate RecoverBaseCommitSHA item=%s: %v", item.ID, recoverErr)
-		} else if recoveredDiff, recoveredTruncated, retryErr := GetGitDiffRef(ctx, item.RepoPath, recoveredSHA, wt.BranchName); retryErr != nil {
+		} else if recoveredDiff, recoveredTruncated, retryErr := GetGitDiffRef(ctx, recoverDir, recoveredSHA, wt.BranchName); retryErr != nil {
 			log.WarningLog().Printf("[BacklogLifecycle] spawnReviewGate retry with recovered base %s item=%s: %v", recoveredSHA, item.ID, retryErr)
 		} else if strings.TrimSpace(recoveredDiff) == "" {
 			// A recovered base that produces an empty diff is indistinguishable from
@@ -457,4 +522,46 @@ func (r *ReviewGateRunner) Run(
 	}
 
 	log.InfoLog().Printf("[BacklogLifecycle] spawnReviewGate spawned review session %s for item %s", reviewInst.UUID, item.ID)
+}
+
+// WorktreeIdentityMismatch reports why worktreePath does not actually belong to
+// branchName, or "" if it does — or if worktreePath doesn't exist on disk at all.
+// A missing directory is deliberately NOT reported as a mismatch here: it's the
+// same "worktree torn down, but its commits remain reachable via the shared
+// object store" case the diff-recovery fallbacks in this package and
+// server/services/backlog_service_triage.go's getWorkSessionDiff already handle
+// gracefully — this check exists to catch a *present* directory that's actually
+// the wrong one, not to duplicate or preempt that existing recovery path.
+// Worktree paths are resolved by title-derived branch name rather than
+// item/session UUID (findExistingWorktreeForBranch, session/git/worktree.go), so
+// a recorded worktree row can point at a path that's since been reused,
+// recreated, or handed to a different item while a directory still sits there.
+// An empty branchName can never match a real checked-out branch, so it's always
+// reported as unverifiable rather than silently skipping the check — a legacy
+// row with a path but no recorded branch is exactly the case this guard exists
+// to be cautious about, not a case to wave through. Exported: called from
+// server/services' TriggerReReview diff/codebase-read paths too, which need the
+// identical guard against the same title-collision hazard.
+func WorktreeIdentityMismatch(worktreePath, branchName string) string {
+	info, statErr := os.Stat(worktreePath)
+	if statErr != nil {
+		if os.IsNotExist(statErr) {
+			return ""
+		}
+		return fmt.Sprintf("could not be verified: %v", statErr)
+	}
+	if !info.IsDir() {
+		return "exists on disk but is not a directory"
+	}
+	if branchName == "" {
+		return "has no recorded branch name to verify against"
+	}
+	actualBranch, branchErr := git.GetCurrentBranchName(worktreePath)
+	if branchErr != nil {
+		return fmt.Sprintf("could not be verified: %v", branchErr)
+	}
+	if actualBranch != branchName {
+		return fmt.Sprintf("is checked out to %q, not the expected %q", actualBranch, branchName)
+	}
+	return ""
 }
