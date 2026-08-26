@@ -170,6 +170,14 @@ type StreamHub struct {
 	// (research/pitfalls.md) — nil until the first successful resize
 	// quiescence cycle completes.
 	lastSnapshot []byte
+
+	// pumpActive tracks whether a production raw-output pump
+	// (pumpControlModeOutputIntoHub, server/services) is currently running
+	// for this hub. Guarded by mu, not a separate lock: TryStartPump/
+	// MarkPumpExited are rare, non-blocking bookkeeping calls, not part of
+	// any hot path this hub's other locks were split out to protect.
+	// See TryStartPump's doc comment for why this exists.
+	pumpActive bool
 }
 
 // NewStreamHub constructs a StreamHub for one tmux session, starting in
@@ -233,6 +241,37 @@ func (h *StreamHub) SubscriberCount() int {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	return len(h.subscribers)
+}
+
+// TryStartPump atomically claims the right to run this hub's raw-output
+// pump, returning true for exactly one caller. AttachSubscriber's doc
+// comment notes that reactivating a HubTornDown hub is HubRegistry's policy
+// to own — this is that policy's missing half: a hub that has fully torn
+// down (0 subscribers, grace period expired) has no pump goroutine left
+// feeding it (MarkPumpExited already flipped this back to false), and
+// nothing else restarts one on reattach, silently losing live output for
+// the rest of the process's life. Callers (HubRegistry.GetOrCreate) should
+// call this unconditionally after every LoadOrCompute — a healthy hub with
+// pumpActive already true simply loses the CAS and spawns nothing, so this
+// is safe to call on every reconnect, not just a detected cache-hit case.
+func (h *StreamHub) TryStartPump() bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.pumpActive {
+		return false
+	}
+	h.pumpActive = true
+	return true
+}
+
+// MarkPumpExited records that this hub's raw-output pump has stopped
+// running — called by pumpControlModeOutputIntoHub immediately before each
+// of its return points, so TryStartPump's next caller can correctly restart
+// one. See TryStartPump's doc comment.
+func (h *StreamHub) MarkPumpExited() {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.pumpActive = false
 }
 
 // AttachSubscriber registers a new subscriber backed by transport, starts its

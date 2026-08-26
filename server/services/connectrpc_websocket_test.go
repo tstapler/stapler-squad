@@ -1144,6 +1144,88 @@ func TestPumpControlModeOutputIntoHub_should_ResubscribeAndKeepDelivering_When_C
 	}, time.Second, 5*time.Millisecond, "expected the post-restart frame to be delivered via the resubscribed channel")
 }
 
+// TestHubRegistry_should_RestartPump_When_ReconnectingAfterFullTeardown is
+// the regression test for the bug AttachSubscriber's doc comment left as
+// HubRegistry's policy to close: a hub that has fully torn down (0
+// subscribers, grace period expired, StopControlMode returned) has no pump
+// goroutine left — pumpControlModeOutputIntoHub already exited for good and
+// called MarkPumpExited. GetOrCreate's LoadOrCompute only runs its
+// pump-starting constructor on a genuine cache miss, so before
+// TryStartPump/MarkPumpExited existed, a reconnect to that same session
+// found the hub already in the registry, reactivated its *state* via
+// AttachSubscriber, and never restarted the pump — silently losing live
+// output for the rest of the process's life. Fails against the pre-fix
+// GetOrCreate (which never called TryStartPump on a cache hit); passes with
+// it.
+func TestHubRegistry_should_RestartPump_When_ReconnectingAfterFullTeardown(t *testing.T) {
+	t.Parallel()
+
+	sessionName := "pump-restart-after-teardown-" + t.Name()
+	controller := &pumpTestController{
+		updates:            make(chan []byte, 4),
+		resubscribeUpdates: make(chan []byte, 4),
+	}
+	registry := &hubRegistry{hubs: xsync.NewMap[string, *streamhub.StreamHub]()}
+
+	// First connection: create the hub via the real registry path, attach,
+	// and confirm live delivery works before tearing anything down.
+	hub, err := getOrCreateHubForTest(t, registry, sessionName, controller)
+	require.NoError(t, err)
+
+	transport1 := streamhub.NewMemoryTransport()
+	subID1 := hub.AttachSubscriber(transport1, streamhub.SubscriberCapability{})
+
+	controller.updates <- []byte("first-connection;")
+	require.Eventually(t, func() bool {
+		return bytes.Contains(bytes.Join(transport1.ReceivedFrames(), nil), []byte("first-connection;"))
+	}, time.Second, 5*time.Millisecond, "expected the first connection's frame to be delivered")
+
+	// Detach and force a full teardown, matching what a real grace-period
+	// expiry (onTeardownGraceExpired -> ForceTeardown) does once every
+	// viewer has disconnected. Close controller.updates right after so the
+	// original pump — still blocked reading it — notices and exits, mirroring
+	// the real StopControlMode's side effect of closing the underlying
+	// control-mode subscription.
+	hub.DetachSubscriber(subID1)
+	require.NoError(t, hub.ForceTeardown())
+	require.Equal(t, streamhub.HubTornDown, hub.State())
+	close(controller.updates)
+
+	// Deterministically wait for the original pump goroutine to have
+	// actually returned (MarkPumpExited flips this hub's internal pumpActive
+	// back to false) before reconnecting below. Without this, Go's scheduler
+	// could let this test's own reconnect reactivate the hub's state before
+	// the original pump notices HubTornDown and exits — that stale-but-still-
+	// running pump would then coincidentally resubscribe on its own,
+	// producing a false pass that doesn't actually exercise GetOrCreate's
+	// fix. TryStartPump/MarkPumpExited are the only exported hooks onto that
+	// state, so this uses them as a poll-and-release probe: claim, observe
+	// success, release immediately so the real reconnect below can claim it
+	// for real.
+	require.Eventually(t, func() bool {
+		if hub.TryStartPump() {
+			hub.MarkPumpExited()
+			return true
+		}
+		return false
+	}, time.Second, 5*time.Millisecond, "expected the original pump to exit after its subscription channel closed")
+
+	// Reconnect: GetOrCreate must find the same (cached) hub AND restart its
+	// pump. Pre-fix, this silently reactivated the hub's state with nothing
+	// feeding it, so a frame pushed after this point would never arrive.
+	hub2, err := getOrCreateHubForTest(t, registry, sessionName, controller)
+	require.NoError(t, err)
+	require.Same(t, hub, hub2, "expected GetOrCreate to reuse the same hub instance on reconnect")
+
+	transport2 := streamhub.NewMemoryTransport()
+	hub2.AttachSubscriber(transport2, streamhub.SubscriberCapability{})
+
+	controller.resubscribeUpdates <- []byte("after-reconnect;")
+	require.Eventually(t, func() bool {
+		return bytes.Contains(bytes.Join(transport2.ReceivedFrames(), nil), []byte("after-reconnect;"))
+	}, time.Second, 5*time.Millisecond, "expected live output to resume after reconnecting to a fully-torn-down hub")
+}
+
 // TestStreamTerminal_should_RouteThroughHubWithNoLegacyResizeCall_When_PathHubOwnedResolved
 // is validation.md's REQ-1 test name. Full end-to-end coverage of
 // streamTerminal's session resolution (SessionService/storage/tmux) is out of

@@ -406,11 +406,19 @@ func (r *hubRegistry) GetOrCreate(sessionName string, controller streamhub.Sessi
 	var hub *streamhub.StreamHub
 	if err := streamhub.AcquireOwnershipLock(sessionName).AcquireAndResolveExpecting(true, streamhub.PathHubOwned, func() error {
 		h, _ := r.hubs.LoadOrCompute(sessionName, func() (*streamhub.StreamHub, bool) {
-			newHub := streamhub.NewStreamHub(sessionName, controller)
-			go pumpControlModeOutputIntoHub(newHub, controller, sessionName)
-			return newHub, false
+			return streamhub.NewStreamHub(sessionName, controller), false
 		})
 		hub = h
+		// Covers both a fresh hub (never had a pump) and a reactivated one
+		// whose pump already exited when it fully tore down — LoadOrCompute's
+		// constructor only runs on a genuine cache miss, so a reconnect to an
+		// already-torn-down hub would otherwise reactivate its state
+		// (AttachSubscriber) without ever restarting the pump that feeds it
+		// live output. TryStartPump's CAS makes this a no-op for a hub whose
+		// pump is already running, so it's safe to call unconditionally.
+		if hub.TryStartPump() {
+			go pumpControlModeOutputIntoHub(hub, controller, sessionName)
+		}
 		return nil
 	}); err != nil {
 		return nil, err
@@ -463,6 +471,12 @@ const pumpControlModeResubscribeDelay = 500 * time.Millisecond
 // known gap not acceptable to ship once the streamhub default flipped on;
 // it shipped anyway — this closes it.
 func pumpControlModeOutputIntoHub(hub *streamhub.StreamHub, controller streamhub.SessionController, sessionName string) {
+	// Unconditional on every exit path (including a future panic) — this is
+	// the other half of TryStartPump's CAS (session/streamhub/hub.go): a
+	// caller must be able to tell "the pump that used to feed this hub is
+	// truly gone" so a later reconnect can restart one instead of silently
+	// reactivating a hub with nothing feeding it live output.
+	defer hub.MarkPumpExited()
 	for {
 		if hub.State() == streamhub.HubTornDown {
 			log.Info("streamhub raw-output pump exiting: hub torn down", "session", sessionName)
