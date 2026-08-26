@@ -90,15 +90,11 @@ registry-generate-backend: ## Scan proto+markers → write per-feature files und
 	@echo "Building backend scanner..."
 	@cd tools/scanner && go build -o backend/cmd/scanner ./backend/cmd/
 	@echo "Scanning backend features..."
-	@./$(BACKEND_SCANNER_BIN) proto/session/v1/session.proto server/services/ $(BACKEND_FEATURES_DIR)
-	@./$(BACKEND_SCANNER_BIN) proto/session/v1/unfinished.proto server/services/ $(BACKEND_FEATURES_DIR)
-	@./$(BACKEND_SCANNER_BIN) proto/session/v1/backlog.proto server/services/ $(BACKEND_FEATURES_DIR)
-	@./$(BACKEND_SCANNER_BIN) proto/session/v1/insights.proto server/services/ $(BACKEND_FEATURES_DIR)
-	@./$(BACKEND_SCANNER_BIN) proto/session/v1/github_user.proto server/services/ $(BACKEND_FEATURES_DIR)
-	@./$(BACKEND_SCANNER_BIN) proto/session/v1/import.proto server/services/ $(BACKEND_FEATURES_DIR)
-	@./$(BACKEND_SCANNER_BIN) proto/session/v1/session_summary.proto server/services/ $(BACKEND_FEATURES_DIR)
-	@./$(BACKEND_SCANNER_BIN) proto/session/v1/remote.proto server/services/ $(BACKEND_FEATURES_DIR)
-	@./$(BACKEND_SCANNER_BIN) proto/session/v1/handoff_summary.proto server/services/ $(BACKEND_FEATURES_DIR)
+	@protos="$$(LC_ALL=C grep -l '^service ' proto/session/v1/*.proto)"; \
+	if [ -z "$$protos" ]; then echo "ERROR: no service-bearing .proto files found under proto/session/v1/" >&2; exit 1; fi; \
+	for proto in $$protos; do \
+		./$(BACKEND_SCANNER_BIN) "$$proto" server/services/ $(BACKEND_FEATURES_DIR) || exit 1; \
+	done
 	@# Generation is additive; prune files whose RPC no longer exists so the
 	@# committed set stays in sync with the proto (avoids registry-validation drift).
 	@bash tools/scanner/prune-stale-backend.sh $(BACKEND_FEATURES_DIR)
