@@ -93,11 +93,95 @@ spawning a goroutine — never two live pipelines for one instance. The same
 "bump-then-check" shape is used by `CancelSessionCreation` (Task 3.2.1c),
 so both RPCs share one race-resolution idiom.
 
+**Terminal writes must persist durably *before* the in-memory epoch check
+is allowed to "win" — not after.** `TryForceStatusIfEpoch` as described
+above is only the *in-memory* half of a terminal write; call sites in the
+original draft of this ADR applied it first and persisted via
+`storage.UpdateInstance` afterward, as a separate step. That ordering
+leaves a crash window: if the process is killed between the in-memory win
+and the persist, the on-disk row is still `Creating` even though the
+in-memory actor (now dead along with the process) had already decided
+`Active`/`Failed`, and the worktree/tmux side effects of a successful
+pipeline are already real and live on disk/in the tmux server. On restart,
+the reloaded instance is indistinguishable from a genuinely-still-running
+pipeline that never got this far — the Stale-Creation Sweeper (Epic 4.1)
+will eventually flip it to `Failed`/`Stale`, and a subsequent Retry's
+`cleanupPartialCreation` will then delete the live worktree and kill the
+live tmux session, destroying real, possibly-unsaved agent work. See
+pre-mortem.md failure #2 (P1).
+
+To close this, every terminal write goes through a new persisted,
+epoch-guarded conditional update, `storage.UpdateInstanceIfEpoch(ctx,
+instanceID, capturedEpoch, status, failureReason) (applied bool, err
+error)` — an ent bulk update (`client.Instance.Update().Where(id(...),
+creationEpoch(capturedEpoch)).SetStatus(...).SetFailureReason(...).Save(ctx)`,
+whose returned affected-row count is the `applied` result) — run **first**,
+against the durable store, before touching in-memory state at all. Only if
+`applied == true` (the row's persisted `creation_epoch` still matched —
+i.e. this writer has not been superseded, at the database's own
+authoritative view, not just the in-process actor's) does the caller then
+call the existing in-memory `TryForceStatusIfEpoch(capturedEpoch, status,
+failureReason)` to bring the actor's cached copy in sync, so subsequent
+in-process reads (e.g. `GetSession`, `WatchSessions`) reflect the new state
+immediately without waiting on a reload. If `applied == false`, the caller
+returns `false` overall and never touches in-memory state — there is
+nothing to reconcile, since the DB is the source of truth and it already
+reflects a later writer's outcome.
+
+This reverses the previously-implied order ("in-memory first, persist
+second") to "durable persist first, in-memory second" for exactly the one
+call site (the terminal write) where a crash between the two steps is
+destructive. It does **not** apply to `SetCreationProgress`'s per-phase
+persistence (Task 2.2.2c-2) — that write's own persist-after-mailbox-write
+ordering is fine as-is, because losing an in-flight progress update to a
+crash has no destructive consequence (worst case, the Stale-Creation
+Sweeper uses a slightly-stale `CreationProgressUpdatedAt` and flips the
+row to stale somewhat later than ideal — annoying, not destructive). Only
+terminal writes (`Active` on success, `Failed` on any error/stale-timeout)
+carry the "a live resource might get destroyed based on this state"
+consequence that justifies the durable-first ordering and its extra DB
+round-trip.
+
+The persisted `creationEpoch` field (already planned as an ent-schema
+addition per the Migration Plan) is what makes this DB-level conditional
+update possible — the epoch is not just an in-process actor field, it is
+also the fencing predicate the database itself enforces, giving the
+terminal write the same "only the current writer can win" guarantee at the
+persistence layer that the actor mailbox already gives it in-process.
+
+**Residual risk, explicitly scoped**: a crash after the pipeline has
+already produced real side effects (worktree written to disk, tmux session
+started) but *before* `UpdateInstanceIfEpoch`'s durable write is even
+attempted is not eliminated by this reordering — it cannot be, since the
+side effects and the DB write are not one transaction. In that narrow
+window, the persisted row still reads `Creating`, matching every other
+phase of an in-flight creation, and the Stale-Creation Sweeper will
+(correctly, from its own information) eventually flip it stale. This
+residual window is not new or enlarged by this ADR (it exists for every
+phase transition, not just the terminal one) — it is closed instead by a
+resource-liveness guard in `cleanupPartialCreation` (plan.md Epic 3.1):
+before deleting a worktree or killing a tmux session, check whether the
+resource is actually alive/healthy (`DoesSessionExist()` for tmux, worktree
+directory + git status for the clone) and refuse/warn instead of deleting
+when it looks alive. That check is cheap, already has a precedent
+(`DoesSessionExist()` polling per `CLAUDE.md`'s log-pattern reference), and
+is defense-in-depth against exactly this residual window — it is not a
+substitute for the durable-first reordering above, which closes the much
+larger and much more probable window (the gap between an in-memory win and
+its persist, previously unbounded by any ordering guarantee at all).
+
 ## Consequences
 
 - Exactly one terminal write per creation attempt is guaranteed: only the
   writer whose captured epoch matches current can succeed, and only one
   epoch value is ever "current" at a time.
+- Every terminal write costs one extra DB round-trip (the conditional
+  `UpdateInstanceIfEpoch` call) compared to the original in-memory-first
+  design — accepted as the price of closing pre-mortem.md failure #2 (P1);
+  this is a per-creation-attempt cost (once per success/failure/stale/
+  cancel outcome), not a per-phase or per-request cost, so it does not
+  compound with `architecture-review.md`'s separate write-amplification
+  concern about per-phase progress persistence.
 - Non-terminal writes (`SetCreationProgress` for in-flight phase text) are
   **not** epoch-gated — a stale goroutine's progress text updates are
   harmless UI noise at worst (overwritten by the next legitimate update) and
@@ -143,3 +227,19 @@ so both RPCs share one race-resolution idiom.
   cancel/retry return immediately while the stale goroutine's eventual
   wake-up becomes a guaranteed no-op instead of something callers must wait
   out.
+- **In-memory write first, persist second** (the original draft's implied
+  order): rejected — this is exactly pre-mortem.md failure #2 (P1). A crash
+  between the two steps leaves a live, successfully-provisioned
+  worktree/tmux session behind a persisted row that still reads `Creating`,
+  which the Stale-Creation Sweeper and Retry's `cleanupPartialCreation` will
+  then treat as genuinely orphaned and destroy. Reordering to
+  durable-persist-first (this ADR's `UpdateInstanceIfEpoch`) closes the
+  window at the one call site (terminal writes) where it is destructive.
+- **Rely solely on a resource-liveness check in `cleanupPartialCreation`**
+  (pre-mortem.md's originally-proposed prevention, taken alone): rejected as
+  the *sole* fix, though kept as defense-in-depth — it only guards the
+  moment of deletion, so it doesn't prevent the Stale-Creation Sweeper from
+  incorrectly flipping a genuinely-successful session to `Failed` in the
+  first place (a user-visible incorrect status, even before any deletion
+  happens), and it re-derives "is this actually alive" heuristically
+  per-resource-type instead of closing the actual race at its source.

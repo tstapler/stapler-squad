@@ -17,23 +17,29 @@ fencing token), ADR-003 (linked-root-span for background goroutine tracing)
 
 | Term | Definition | Notes |
 |------|-----------|-------|
-| `CreateSession` synchronous prefix | The portion of the RPC handler that still runs before the RPC returns: fast-fail validation, fork dispatch, config/remote/restart-source resolution, title-uniqueness check, instance construction, `storage.SaveInstances`, `SessionCreatedEvent` publish. | Must stay small and reviewed as one unit — see `research/architecture.md` §7's "synchronous prefix becomes the new single point of total failure." |
-| Background Resolution Pipeline | The single tracked goroutine (`s.trackCleanup`) that runs, in order, GitHub-URL resolution → alias/default resolution → branch/session-type inference → worktree setup → tmux startup, publishing `creation_progress` between phases and making exactly one terminal status write at the end. | Merges today's synchronous L1912-1938 GitHub-resolution logic with today's existing L2397-2439 worktree/tmux tail into one pipeline. |
+| `CreateSession` synchronous prefix | The portion of the RPC handler that still runs before the RPC returns: fast-fail validation (including **alias-existence** — `config.FindAlias(cfg, req.Msg.AliasName) != nil`, a cheap in-memory lookup over already-loaded config, no I/O, returning the same synchronous `NotFound` RPC error as today when the named alias doesn't exist), fork dispatch, config/remote/restart-source resolution, title-uniqueness check, instance construction, `storage.SaveInstances`, `SessionCreatedEvent` publish. | Must stay small and reviewed as one unit — see `research/architecture.md` §7's "synchronous prefix becomes the new single point of total failure." Alias-existence is a fast-fail check in the same category as missing title/duplicate title/resume_id format/fork-source-not-found (requirements.md Constraints, design/ux.md Surface 1) — only the *downstream* alias-based defaults merge (env vars, CLI flags, path, program, session type) is async; see the Background Resolution Pipeline row. |
+| Background Resolution Pipeline | The single tracked goroutine (`s.trackCleanup`) that runs, in order, GitHub-URL resolution → default/CLI-flag/env-var resolution (the full `config.ResolveAlias`/`config.ResolveDefaults` merge — alias *existence* has already been confirmed synchronously above, so this phase only ever fails in ways that don't need a fast, in-dialog RPC error) → branch/session-type inference → worktree setup → tmux startup, publishing `creation_progress` between phases and making exactly one terminal status write at the end. | Merges today's synchronous L1912-1938 GitHub-resolution logic with today's existing L2397-2439 worktree/tmux tail into one pipeline. |
 | Creation Phase | One named step of the Background Resolution Pipeline (`ResolvingGitHubURL`, `CloningRepository`, `ResolvingDefaults`, `InferringBranch`, `SettingUpWorktree`, `StartingSession`). | Each phase transition calls `SetCreationProgress` + publishes `SessionUpdatedEvent{"creation_progress"}`. |
 | `creationEpoch` | A `uint64` field on `session.Instance`, actor-owned, incremented exactly on cancel-issued and on retry-started. A background writer captures it at spawn and must present the same value to win the terminal write. | See ADR-002. Not used for non-terminal (`SetCreationProgress`-only) writes. |
-| `TryForceStatusIfEpoch(epoch, status, failureReason) bool` | The one atomic, actor-routed compound check-and-set: applies a terminal status+failure-reason write and returns `true` only if `epoch` still matches `creationEpoch`; otherwise no-ops and returns `false`. | The single serialization point for every terminal write (success, resolution failure, startup failure, stale-timeout). Internally the only caller of `setFailureReasonLocked` — there is no public `SetFailureReason` (see ADR-002). |
+| `TryForceStatusIfEpoch(epoch, status, failureReason) bool` | The **in-memory half** of a terminal write: applies a terminal status+failure-reason write to the actor's cached state and returns `true` only if `epoch` still matches `creationEpoch`; otherwise no-ops and returns `false`. Never called directly by a terminal-write call site anymore — only from inside `commitTerminalStatus` (below), after the durable persist has already succeeded. | Internally the only caller of `setFailureReasonLocked` — there is no public `SetFailureReason` (see ADR-002). |
+| `storage.UpdateInstanceIfEpoch(ctx, id, epoch, status, failureReason) (applied bool, err error)` | The **durable half** of a terminal write: an ent bulk conditional update (`.Where(id(...), creationEpoch(epoch))...Save(ctx)`) against the persisted row, run **before** any in-memory state changes. `applied == false` means this writer has already been superseded at the database's own authoritative view (a later cancel/retry/pipeline attempt won first). | New in this plan per ADR-002's durable-first-ordering addendum (added to close pre-mortem.md failure #2, P1). |
+| `commitTerminalStatus(ctx, instance, epoch, status, failureReason) bool` | The one function every terminal-write call site (pipeline success/failure, panic recovery, Stale-Creation Sweeper) actually calls: runs `storage.UpdateInstanceIfEpoch` first, and only if it returns `applied == true`, calls `instance.TryForceStatusIfEpoch` to sync the in-memory actor state, then returns the combined result. | Reverses the previously-implied "in-memory write, then persist" order — see ADR-002. Not itself actor-routed (it orchestrates one DB call and one actor call in sequence); the atomicity guarantee comes from the DB-level epoch predicate, not from a new lock. |
 | `TryStartRetry() (newEpoch uint64, started bool)` | Atomic, actor-routed compound check-and-set for *starting* a retry: no-ops (`started=false`) unless `Status == Failed`, otherwise bumps `creationEpoch`, resets to `Creating` with fresh `creation_progress`, and returns the new epoch. | Closes the double-click-retry race — see ADR-002's addendum. `RetrySessionCreation`'s first state-mutating call, before cleanup or pipeline spawn. |
 | `SESSION_STATUS_FAILED` | New enum value (`= 11`) on `SessionStatus` representing "this session's creation never completed" — distinct from `CRASHED` (post-Running failure) and non-terminal (unlike `STOPPED`). | See ADR-001. |
 | `FailureReason` | A short, distinct enum/string stored on the instance alongside `SESSION_STATUS_FAILED`, one of `GitHubResolutionError`, `StartupError`, `Stale`, `Cancelled`. Rendered as different copy on the session card and in the toast. Written only inside `TryForceStatusIfEpoch`'s command closure — no independent public setter. | Cancelled is not itself terminal-Failed (see `Cancelled` outcome below) but shares the reason vocabulary for logging consistency. |
 | `CreationProgressUpdatedAt` | A `time.Time` field on `session.Instance`, actor-owned, bumped by the same locked helper `SetCreationProgress` already calls, and persisted via `storage.UpdateInstance` at each phase transition (not only at the terminal write) — `SaveInstances` is the wrong call here because it silently skips any instance where `!inst.Started()`, and `started` isn't set until the pipeline's final (worktree/tmux) phase; `UpdateInstance` calls `s.repo.Update` directly with no such gate (`session/storage.go:546-548`). | The Stale-Creation Sweeper's actual staleness clock — survives a process restart, unlike in-process elapsed time. Falls back to `CreatedAt` only for an instance that never received a single progress update (Task 4.1.2f). |
 | Cancel-in-progress | The user action (and its RPC, `CancelSessionCreation`) that stops a `Creating` session's background pipeline: bumps `creationEpoch`, calls the instance's stored background `context.CancelFunc`, then runs idempotent cleanup and removes the instance. | Distinct outcome from `SESSION_STATUS_FAILED` — a cancelled session is deleted, not left in a Failed card (see UX research §4: "a user-initiated cancel and a system-detected failure should never look identical"). |
 | Retry-in-progress | The user action (and its RPC, `RetrySessionCreation`) on a `Failed` session: calls `TryStartRetry()` (validate-`Failed`+bump-`creationEpoch`+reset-to-`Creating`, atomically), then runs idempotent cleanup, then re-spawns the Background Resolution Pipeline against the **same** instance ID/storage row. | Never publishes a second `SessionCreatedEvent` — only `SessionUpdatedEvent`s. A second concurrent retry call's `TryStartRetry()` deterministically returns `started=false` — see ADR-002's addendum. |
-| Idempotent Creation Cleanup | The shared cleanup primitive (extended from `DeleteSession`'s existing cleanup path) that removes a clone/worktree directory and kills any tmux session for an instance, safe to call whether zero, some, or all of those resources actually exist. | Shared by cancel, retry (pre-resolution step), and `DeleteSession` itself. |
+| Idempotent Creation Cleanup | The shared cleanup primitive (extended from `DeleteSession`'s existing cleanup path) that removes a clone/worktree directory and kills any tmux session for an instance, safe to call whether zero, some, or all of those resources actually exist. | Shared by cancel, retry (pre-resolution step), and `DeleteSession` itself. Inherits BUG-072 (hung cleanup leaks an untracked goroutine past the wait timeout) — accepted, not fixed here; see Epic 3.1's "Known dependency" note. |
 | Stale-Creation Sweeper | New ticker-driven background type (`StaleCreationSweeper`, structural sibling of `StaleSessionNotifier`) that scans `Creating`-status instances and flips any whose persisted `CreationProgressUpdatedAt` (falling back to `CreatedAt` if never updated) exceeds a configurable threshold to `SESSION_STATUS_FAILED` with `FailureReason = Stale`. | Threshold: `CreationStaleConfig.ThresholdMinutesOrDefault()`, default 10, config-overridable — mirrors `config.StaleSessionConfig`'s shape. |
 | Background Resolution Context | The `context.Context` the pipeline actually runs against: `context.WithTimeout(context.WithoutCancel(rpcCtx), maxCreationResolutionTimeout)`. Never a direct derivative of the RPC's own `ctx` beyond `WithoutCancel`. | See `research/pitfalls.md` §2 — the single most common bug class in this refactor shape. |
 | `StartLinkedBackgroundSpan` | New `telemetry` helper producing a new-root span linked (via `trace.WithLinks`) to the RPC's trace, used once per Background Resolution Pipeline invocation. | See ADR-003. |
 | `session.creation.outcome` | New OTel counter, one increment per terminal pipeline outcome, attributed by `outcome ∈ {success, failed, stale, cancelled}`. | |
 | `session.creation.duration_ms` | New OTel histogram of pipeline wall-clock duration, same `outcome` attribute. | |
+| `AwaitCreationTerminal(ctx, instanceID, timeout) (CreationOutcome, error)` | The **MCP-facing wait primitive** (Epic 2.3): polls `s.FindLiveInstance(instanceID)` on a short interval until the instance's `Status()` is a terminal value (`Active`/`Running` or `Failed`), the instance disappears (`ErrCreationVanished` — raced with a `CancelSessionCreation` from elsewhere), `timeout` elapses (`ErrCreationAwaitTimeout`), or the caller's own `ctx` is done first (`ctx.Err()`). Returns a single atomic `CreationOutcome` snapshot — never a live `*session.Instance` pointer — captured in the *same* actor round-trip that determined terminality, so there is no window for a concurrent `RetrySessionCreation` to mutate `Status`/`FailureReason` between "terminality observed" and "outcome read" (see `CreationOutcome`, below). A pure reader — never writes `creationEpoch`/`Status` itself, so it needs no new fencing semantics beyond ADR-002's existing writer-side guarantee (see Epic 2.3's Goal). | `server/services/session_creation_await.go`. Referred to generically in requirements.md as "blocks... until the instance reaches a terminal status." |
+| `CreationOutcome{Status session.Status, FailureReason string, InstanceID string}` | The atomic snapshot `AwaitCreationTerminal` returns on its terminal-status exit — produced by one actor-routed read (e.g. a single `FindLiveInstance` call whose result is copied into the struct before returning), never two. Story 2.3.4's outcome mapping consumes only this snapshot; it never re-reads `Status()`/`FailureReason()` off the actor afterward. | `server/services/session_creation_await.go`. See the correctness note below the table for why a second, separate re-read is unsafe: `TryStartRetry` can legally fire between two reads (it only requires `Status == Failed`) and resets `Status` to `Creating` without clearing the prior attempt's `failureReason` (that's only ever cleared inside `TryForceStatusIfEpoch`'s closure), so a second read could observe a `Creating`/stale-`FailureReason` combination that falls outside every named outcome branch. |
+| `mcpAwaitTerminalTimeout` | The MCP tool handlers' own bounded wait passed into `AwaitCreationTerminal` — `150 * time.Second`. Today's MCP path is unbounded: `create_session`/`create_session_for_pr` call `inst.Start(true)` with no context deadline threaded into their GitHub/worktree/tmux calls at all. `150s` is therefore a new, deliberately chosen cap, not a preservation of an existing one — picked to align with the frontend's independently-existing SLO expectation for the same underlying RPC (`createSessionTimeout`), not because the MCP path itself had this bound before. Intentionally shorter than `maxCreationResolutionTimeout` (10 min) so a genuinely slow pipeline degrades to the "still creating" result (Epic 2.3) rather than holding the MCP tool call open for the pipeline's full budget. | `server/mcp/tools_lifecycle.go`. See Epic 2.3, Story 2.3.3. |
+| `ErrCreationVanished` / `ErrCreationAwaitTimeout` | Sentinel errors `AwaitCreationTerminal` returns for two of its three non-terminal-status exits: the instance was removed mid-wait (cancel), or the bounded wait elapsed first. (The third non-terminal exit, the caller's own `ctx.Err()`, is not a sentinel defined by this package — it's returned as-is; see Story 2.3.4's fourth mapped outcome.) | `server/services/session_creation_await.go`. Mapped to distinct MCP result shapes in Epic 2.3, Story 2.3.3 — never conflated with a pipeline `Failed` outcome. |
 
 ---
 
@@ -52,6 +58,7 @@ fencing token), ADR-003 (linked-root-span for background goroutine tracing)
 | Retry/Cancel RPC surface | Two new, narrow RPC methods (`RetrySessionCreation`, `CancelSessionCreation`) rather than overloading `DeleteSession`/`RestartSession` | PoEAA: thin Service Layer methods, one per distinct use case | Overload `DeleteSession` with a "cancel-only" flag; overload `RestartSession` for retry | `RestartSession` creates a *new* session lineage from a *finished* one — semantically wrong for "resume resolution on the same never-finished instance" (`research/features.md` §7). Overloading `DeleteSession` with a boolean would create a same-typed-parameter-pile / hidden-mode smell (`.claude/rules/primitive-obsession-checklist.md`'s spirit) for two operations with different preconditions (`Creating` vs. `Failed`) and different postconditions (row removed vs. row reset). |
 | Frontend optimistic state | Extend existing Redux + `WatchSessions`-stream-dispatch pattern in `useSessionService.ts` | This repo's established pattern (`research/stack.md` §c) | React 19's `useOptimistic` hook | `useOptimistic` is designed around a single async transition tied to one component's local state; a session card outlives the dialog that created it and is viewed from multiple places (session list, backlog links) — Redux+stream-dispatch already generalizes correctly across those consumers; adding `useOptimistic` would be a second, inconsistent state mechanism for the same data. |
 | Failed-state visual token | New, distinct CSS token `statusCreationFailed` (not reused `statusCrashed`) | UX research recommendation (`research/ux.md` §6.1) | Reuse `statusCrashed` styling | Crashed-after-running and failed-before-running are different enough states that a future design pass may want to differentiate visually; reusing the token now would make that harder to discover later, and reusing a token across two semantically distinct enum values invites the same "silent conflation" ADR-001 was written to avoid at the backend layer. |
+| MCP synchronous-until-terminal wait mechanism | In-process polling of `s.FindLiveInstance(instanceID)` on a short interval (`AwaitCreationTerminal`, Epic 2.3) | Simplest primitive that also correctly observes the one outcome the event bus cannot represent: instance *removal* (Cancel deletes the row rather than writing a terminal status/event) | Subscribing to `pkg/events.EventBus` for the instance's `SessionUpdatedEvent`/terminal write | The event bus (`pkg/events/bus.go:86-93`) drops events for a slow/full subscriber non-blockingly, and `CancelSessionCreation` never publishes an event for the instances it deletes (Epic 3.2) — an event-only waiter could hang past its own timeout on a dropped event, or never learn a cancelled instance is gone. Polling `FindLiveInstance` (already the side-effect-free, non-PTY-spawning lookup this package uses everywhere else, e.g. `tools_lifecycle.go:313,383,448`) sidesteps both failure modes for one mechanism instead of "subscribe, plus poll anyway as a fallback for the cases the subscription can't cover." No ConnectRPC streaming layer is involved since this is a server-internal, same-process wait (requirements.md's explicit framing). |
 
 ---
 
@@ -83,6 +90,26 @@ row genuinely orphaned across the deploy boundary).
 wire-compatible (additive) — no proto migration tooling needed, run
 `make proto-gen` once added.
 
+- **Reversibility**: Fully reversible by reverting this project's commits.
+  All ent schema additions are new, optional, additive fields with no
+  renamed/removed columns — `session/ent`'s generated code is never
+  committed (`CLAUDE.md`), so reverting the hand-written schema file and
+  re-running `go run -mod=mod entgo.io/ent/cmd/ent generate --feature sql/upsert
+  ./session/ent/schema` regenerates a schema with these fields absent, and
+  existing rows (which already have zero-value/absent values for them today)
+  are unaffected. `SESSION_STATUS_FAILED = 11`'s proto addition is likewise
+  reversible by reverting and re-running `make proto-gen`. No down-migration
+  script is needed because no destructive schema change (column
+  rename/removal, backfill, or data transformation) is ever made.
+- **Zero-downtime strategy**: All changes are additive — new optional fields,
+  a new proto enum value, and a new RPC pair. Existing rows and existing
+  clients (older frontend builds, or any external gRPC client) continue to
+  work unmodified against the new schema/proto during a rolling deploy; the
+  reverse (new frontend against an old server) only loses the new
+  Failed/Cancel/Retry UI affordances gracefully, per the plan's normal
+  proto-compatibility guarantees — no coordinated cutover or backfill step
+  is required.
+
 ## Observability Plan
 
 - **Logs**: one `log.Info`/`log.Error` per Creation Phase transition and at
@@ -102,6 +129,16 @@ wire-compatible (additive) — no proto migration tooling needed, run
 - **Tracing**: `telemetry.StartLinkedBackgroundSpan` per pipeline invocation
   (ADR-003), with `span.AddEvent(...)` per phase transition and
   `span.SetStatus(codes.Error, ...)` on failure.
+- **Post-merge check (manual, "watch it for a bit" — no formal on-call/
+  alerting, appropriate for a solo-maintainer local tool)**: in the hours/
+  days after merging, grep `~/.stapler-squad/logs/stapler-squad.log` for
+  the new per-phase log lines and any `FailureReason` occurrences; spot-check
+  that session creation still works for a few different session types
+  (directory, GHE PR URL, alias); and watch for any unexpected `Failed`/
+  `Stale` transitions on sessions that should have succeeded. This is the
+  practical backstop given Risk Control's "no flag, no staged rollout"
+  posture below — it substitutes a short period of active attention for a
+  rollout mechanism that doesn't exist here.
 
 ## Risk Control
 
@@ -162,6 +199,13 @@ Phase 2: Backend CreateSession restructure
    |
    |-- Epic 2.1: Synchronous prefix (instance created+published before resolution)
    |-- Epic 2.2: Background Resolution Pipeline (merged GitHub + worktree/tmux)
+   |-- Epic 2.3: MCP tools (create_session/create_session_for_pr) onto the pipeline
+   |     (depends on Epic 1.2's commitTerminalStatus/epoch primitives for the
+   |      status/FailureReason it reads, and on Epic 2.1+2.2 existing end-to-end
+   |      so there is a real terminal status to await; does not depend on Phase 3 —
+   |      see Epic 2.3's Goal for why a pure reader needs no new writer-side fencing.
+   |      One of its tests (3.2.1f) is added to Phase 3 instead of here, since it
+   |      needs the real CancelSessionCreation RPC to exist.)
    v
 Phase 3: Cancel & Retry RPCs  ------------------\
    |                                              \
@@ -264,14 +308,13 @@ call site silently renders "Unknown" or mismatches a filter.
   - *Given* a `WatchSessions` request with `StatusFilter = [FAILED]`, *When*
     an instance transitions to `Failed` and publishes `SessionUpdatedEvent`,
     *Then* the subscriber receives it (filter matches).
-**Files**: wherever `adapters.StatusToProto`/`InstanceToProto` live (grep
-`func StatusToProto` in Task 1.1.3a to find the exact file — not yet located
-in this survey), `server/services/session_service.go` (`WatchSessions`'s
-filter mapping).
+**Files**: `server/adapters/instance_adapter.go` (`InstanceToProto` at line 15,
+`StatusToProto` at line 322), `server/services/session_service.go`
+(`WatchSessions`'s filter mapping).
 
-##### Task 1.1.3a: Locate and update `adapters.StatusToProto`/`InstanceToProto` (~5 min)
-- `grep -rn "func StatusToProto\|func InstanceToProto"` to find the exact file (likely under `server/services/adapters/` or `session/`), add the `Failed` case to both.
-- Files: TBD by grep (record actual path in the PR description)
+##### Task 1.1.3a: Update `adapters.StatusToProto`/`InstanceToProto` (~5 min)
+- Add the `Failed` case to both `InstanceToProto` and `StatusToProto` in `server/adapters/instance_adapter.go`.
+- Files: `server/adapters/instance_adapter.go`
 
 ##### Task 1.1.3b: Update `WatchSessions`'s `StatusFilter` mapping (~3 min)
 - Add `Failed` to whatever mapping table `WatchSessions` (`session_service.go:3317`) uses to translate `StatusFilter` proto values into `session.Status` for comparison.
@@ -405,15 +448,79 @@ clicks can never both spawn a live pipeline sharing the same epoch.
     `go test -race -count=50`, *Then* exactly one call returns
     `started == true`; the other observes `Status` already `Creating` (no
     longer `Failed`) and returns `(0, false)`.
+  - *Given* an instance whose prior `CreationProgressUpdatedAt` is stale
+    (from the failed attempt), *When* `TryStartRetry()` resets
+    `creation_progress`, *Then* `CreationProgressUpdatedAt` is bumped to
+    "now" as part of the *same* atomic command — not left at the failed
+    attempt's stale value — so the Stale-Creation Sweeper's next tick does
+    not immediately re-flip the freshly-retried instance to
+    `Failed`/`Stale` before its new pipeline has a chance to run.
 **Files**: `session/instance_state.go`, `session/instance_actor_setters.go`
 
 ##### Task 1.2.3a: Implement `TryStartRetry` as one actor command (~5 min)
-- Single `sendSyncErr`/`send` closure: check `Status == Failed`, and if so, bump `creationEpoch`, transition to `Creating`, reset `creation_progress` — all inside one enqueued command, mirroring Task 1.2.2a's shape exactly.
+- Single `sendSyncErr`/`send` closure: check `Status == Failed`, and if so, bump `creationEpoch`, transition to `Creating`, reset `creation_progress` — all inside one enqueued command, mirroring Task 1.2.2a's shape exactly. The `creation_progress` reset **must** route through the same locked helper Story 1.1.4's `SetCreationProgress` uses (the one that also bumps `CreationProgressUpdatedAt`), not a direct field write — reusing that helper inside this command is what guarantees `CreationProgressUpdatedAt` is reset to "now" in the same atomic step as the status/progress reset. A direct write to `creation_progress` that skips this helper would leave `CreationProgressUpdatedAt` at its stale pre-retry value, and the Stale-Creation Sweeper (Epic 4.1) would then immediately re-flip the retried session to `Failed`/`Stale` on its next tick, before the new pipeline has a chance to run.
 - Files: `session/instance_actor_setters.go`
 
 ##### Task 1.2.3b: Unit tests for the double-click-retry fencing guarantee (~5 min)
-- Table test per the Given/When/Then above, including the concurrent `-race -count=50` case with an atomic counter of `true` returns asserting it equals exactly 1.
+- Table test per the Given/When/Then above, including the concurrent `-race -count=50` case with an atomic counter of `true` returns asserting it equals exactly 1. Also assert, per the new acceptance criterion above, that `CreationProgressUpdatedAt` is bumped to a time at-or-after the `TryStartRetry()` call (not left at its pre-retry value) — the regression test for "retry doesn't get immediately re-flipped stale by the sweeper."
 - Files: `session/instance_state_test.go` or `session/instance_epoch_test.go`
+
+#### Story 1.2.4: Durable-first terminal write (`UpdateInstanceIfEpoch` + `commitTerminalStatus`)
+**As a** background pipeline / stale sweeper, **I want** the terminal
+write's durable persist to happen *before* the in-memory epoch check can
+"win," **so that** a process crash between the two steps can never leave a
+genuinely-successful, live worktree/tmux session behind a persisted row
+that still reads `Creating` — which the Stale-Creation Sweeper and Retry's
+`cleanupPartialCreation` would otherwise treat as orphaned and destroy.
+Addresses pre-mortem.md failure #2 (P1); see ADR-002's addendum for the
+full rationale and the alternatives considered.
+**Acceptance Criteria**:
+- `storage.UpdateInstanceIfEpoch(ctx, id, capturedEpoch, status,
+  failureReason) (applied bool, err error)` performs a single ent bulk
+  conditional update (`client.Instance.Update().Where(id(id),
+  creationEpoch(capturedEpoch)).SetStatus(status).SetFailureReason(...).Save(ctx)`)
+  and returns `applied = (affected rows == 1)`.
+  - *Given* a persisted instance row with `creation_epoch = 3`, *When*
+    `UpdateInstanceIfEpoch(ctx, id, 3, Active, "")` is called, *Then* it
+    returns `(true, nil)` and the persisted row now reads `Active`.
+  - *Given* a persisted instance row with `creation_epoch = 3` (already
+    bumped past the caller's stale captured value of `2` by a cancel),
+    *When* `UpdateInstanceIfEpoch(ctx, id, 2, Active, "")` is called, *Then*
+    it returns `(false, nil)` and the persisted row is unchanged.
+- `commitTerminalStatus(ctx, instance, capturedEpoch, status,
+  failureReason) bool` calls `UpdateInstanceIfEpoch` first; only if it
+  returns `applied == true` does it then call
+  `instance.TryForceStatusIfEpoch(capturedEpoch, status, failureReason)` to
+  sync in-memory state, and returns that combined result. If
+  `UpdateInstanceIfEpoch` returns `applied == false`, `commitTerminalStatus`
+  returns `false` immediately without ever touching in-memory state.
+  - *Given* a process is killed after `UpdateInstanceIfEpoch` durably
+    commits `Active` but before the in-memory `TryForceStatusIfEpoch` call
+    runs, *When* the process restarts and reloads the instance from
+    storage, *Then* the reloaded instance reads `Active` (not `Creating`)
+    — the Stale-Creation Sweeper never considers it, because storage
+    already reflects the true terminal state.
+- Every terminal-write call site in this plan (Task 2.2.3a's pipeline
+  success/failure/panic-recovery write, Task 4.1.2b's sweeper stale-flip)
+  calls `commitTerminalStatus`, never `instance.TryForceStatusIfEpoch`
+  directly.
+**Files**: `session/storage.go`, `server/services/session_service.go`
+(new small helper, e.g. `server/services/session_creation_terminal_write.go`)
+
+##### Task 1.2.4a: Implement `storage.UpdateInstanceIfEpoch` as an ent bulk conditional update (~5 min)
+- Files: `session/storage.go`
+- Depends on the `creationEpoch` ent-schema field (Task 1.2.1a's persisted counterpart, added to the same Migration Plan ent-schema change as `FailureReason`/`CreationProgressUpdatedAt`).
+
+##### Task 1.2.4b: Implement `commitTerminalStatus` orchestrating durable-then-in-memory (~4 min)
+- Files: `server/services/session_creation_terminal_write.go` (new)
+
+##### Task 1.2.4c: Unit test — durable persist wins/loses independently of in-memory actor state (~5 min)
+- Table test: DB-epoch-matches → persisted + in-memory both updated; DB-epoch-mismatch → neither updated (assert in-memory `Status()` untouched even though the caller never even attempted the in-memory call).
+- Files: `session/storage_test.go` or `server/services/session_creation_terminal_write_test.go`
+
+##### Task 1.2.4d: Regression test — crash between durable persist and in-memory sync never produces a stale-looking-but-live session (~7 min)
+- Simulate the crash by calling `UpdateInstanceIfEpoch` directly (bypassing `commitTerminalStatus`) to model "durable write succeeded, process died before the in-memory call," then reload the instance from storage into a fresh registry (no live goroutine) and assert its status is the correct terminal value, not `Creating` — i.e. assert the Stale-Creation Sweeper would never see this row as a stale-candidate at all. This is the regression test pre-mortem.md failure #2 calls for.
+- Files: `server/services/session_creation_terminal_write_test.go`
 
 ### Epic 1.3: Telemetry helper + creation metrics
 
@@ -475,8 +582,9 @@ is non-trivial — see Task 1.3.2a)
 
 **Goal**: For every session type, `storage.SaveInstances` +
 `SessionCreatedEvent` publish happen immediately after the (unchanged)
-fast-fail/uniqueness checks, before any GitHub/alias/branch/worktree work
-starts.
+fast-fail/uniqueness checks — including alias-existence, which stays
+synchronous — before any GitHub-clone/alias-defaults-merge/branch/worktree
+work starts.
 
 #### Story 2.1.1: Reorder `CreateSession`'s synchronous section
 **As a** user creating any session, **I want** the RPC to return almost
@@ -492,11 +600,22 @@ regardless of session type.
   - *Given* a `CreateSessionRequest` with a `title` matching an existing
     session, *When* `CreateSession` is called, *Then* it returns a
     synchronous `AlreadyExists` RPC error, with no new `Instance` created.
+  - *Given* a `CreateSessionRequest` with an `alias_name` that does not
+    match any configured alias, *When* `CreateSession` is called, *Then* it
+    returns a synchronous `NotFound` RPC error (via `config.FindAlias`,
+    unchanged from today's `config.ResolveAlias`/`ErrAliasNotFound` path),
+    with no `Instance` created — this stays a fast-fail check in the same
+    category as duplicate title/missing path/bad resume_id/fork-source-not-
+    found (requirements.md Constraints, design/ux.md Surface 1); it is
+    **not** deferred to the Background Resolution Pipeline.
 - Instance construction, `storage.SaveInstances`, and
   `eventBus.Publish(NewSessionCreatedEvent(instance))` happen immediately
-  after the uniqueness check, for every session type — no GitHub
-  resolution, alias/default resolution, or branch inference runs before
-  this point.
+  after the uniqueness check, for every session type — no GitHub clone,
+  alias-based *defaults merge* (env vars, CLI flags, path, program, session
+  type — the work `config.ResolveAlias` does once it already knows the
+  alias exists), or branch inference runs before this point. Alias
+  *existence* itself (`config.FindAlias`) is checked here, synchronously,
+  same as today.
   - *Given* a `CreateSessionRequest` with a `github_url` pointing at a slow
     GHE host, *When* `CreateSession` is called, *Then* the RPC returns
     within the SLO (<500ms p99) with `status=CREATING` and a non-empty
@@ -508,8 +627,12 @@ regardless of session type.
 - Pure extraction (no behavior change yet) so Task 2.1.1b can reorder call sites cleanly; e.g. `resolveGitHubInput(...)`, `constructInstance(...)` as named locals or small methods — keep the shared pre-branch skeleton minimal per `research/architecture.md` §7's mitigation.
 - Files: `server/services/session_service.go`
 
+##### Task 2.1.1a-2: Keep the alias-existence check (`config.FindAlias`) in the synchronous prefix, unchanged (~2 min)
+- Today's `config.ResolveAlias` call (`session_service.go:1965`) does both the existence check and the full defaults merge in one call. Split it: call `config.FindAlias(cfg, req.Msg.AliasName)` here, synchronously, and return the same `NotFound` RPC error as today if it's `nil` — before instance construction. Do **not** move this check into the pipeline (see Task 2.2.2b).
+- Files: `server/services/session_service.go`
+
 ##### Task 2.1.1b: Move instance-construction+save+publish ahead of resolution calls (~5 min)
-- Reorder so `storage.SaveInstances`+`eventBus.Publish(NewSessionCreatedEvent(...))` happen before the (now-deferred) GitHub/alias/branch calls; snapshot `InstanceToProto` for the RPC response at this point (mirrors today's pre-goroutine snapshot discipline, just earlier).
+- Reorder so `storage.SaveInstances`+`eventBus.Publish(NewSessionCreatedEvent(...))` happen before the (now-deferred) GitHub-clone/alias-defaults-merge/branch calls; snapshot `InstanceToProto` for the RPC response at this point (mirrors today's pre-goroutine snapshot discipline, just earlier). The alias-existence check (Task 2.1.1a-2) runs before this point, same as today.
 - Files: `server/services/session_service.go`
 
 ##### Task 2.1.1c: Confirm `storage.SaveInstances` ordering preserves the title-uniqueness race property (~3 min)
@@ -519,10 +642,12 @@ regardless of session type.
 ### Epic 2.2: Background Resolution Pipeline
 
 **Goal**: One `trackCleanup`-dispatched goroutine runs the full merged
-pipeline (GitHub resolution → alias/defaults → branch inference →
-worktree/tmux) against a properly-detached, timed-out, cancelable context,
-publishing progress and making exactly one terminal write via
-`TryForceStatusIfEpoch`.
+pipeline (GitHub resolution → alias-based/default-based defaults merge →
+branch inference → worktree/tmux) against a properly-detached, timed-out,
+cancelable context, publishing progress and making exactly one terminal
+write via `commitTerminalStatus` (Story 1.2.4). Alias *existence* was
+already checked synchronously in Epic 2.1 — only the downstream defaults
+merge lives here.
 
 #### Story 2.2.1: Background Resolution Context construction
 **As a** background pipeline, **I want** a context detached from the RPC
@@ -554,11 +679,16 @@ hang forever.
 - Per the Given-When-Then above; this is the test that would have caught `research/pitfalls.md` §2's "single most common bug."
 - Files: `server/services/session_service_test.go`
 
-#### Story 2.2.2: Merge GitHub/alias/branch resolution into the pipeline, ahead of worktree/tmux
-**As a** background pipeline, **I want** GitHub-URL resolution, alias/default
-resolution, and branch/session-type inference to run in the same goroutine
-as today's worktree/tmux tail, **so that** every session type goes through
-one consistent, observable pipeline.
+#### Story 2.2.2: Merge GitHub resolution, alias-defaults merge, and branch inference into the pipeline, ahead of worktree/tmux
+**As a** background pipeline, **I want** GitHub-URL resolution, the
+alias-based/default-based defaults merge, and branch/session-type inference
+to run in the same goroutine as today's worktree/tmux tail, **so that**
+every session type goes through one consistent, observable pipeline.
+Alias *existence* is **not** part of this — it was already validated
+synchronously in Epic 2.1 (Task 2.1.1a-2), per requirements.md's Constraints
+and design/ux.md's Surface 1. Only the downstream merge (env vars, CLI
+flags, path, program, session type) — the work that never needs to surface
+a fast, in-dialog RPC error — moves here.
 **Acceptance Criteria**:
 - Today's `ResolveGitHubInputCtxWithHosts` call is moved from the RPC's
   synchronous section into the pipeline, called against the Background
@@ -566,9 +696,19 @@ one consistent, observable pipeline.
   - *Given* a session created from a `github_url` pointing at
     `github.netflix.net`, *When* the pipeline runs, *Then*
     `creation_progress` transitions through `"Resolving GitHub URL..."` →
-    `"Cloning repository..."` → (alias/branch phases) →
-    `"Setting up worktree..."` → `"Starting session..."`, each backed by a
+    `"Cloning repository..."` → `"Resolving defaults..."` (alias-defaults-
+    merge/branch-inference phases) → `"Setting up worktree..."` →
+    `"Starting session..."`, each backed by a
     `SessionUpdatedEvent{"creation_progress"}` publish.
+  - *Given* a session created with a *valid* `alias_name` (existence
+    already confirmed synchronously), *When* the pipeline's defaults-merge
+    phase runs `config.ResolveAlias`, *Then* it always succeeds at the
+    existence check internally (the alias cannot have disappeared between
+    the synchronous check and this phase, since aliases come from static
+    config, not another user's concurrent mutation) — any failure surfaced
+    from this phase is therefore never `ErrAliasNotFound`, only a
+    downstream merge error, and is reported as `FailureReason =
+    StartupError`, not re-litigated as a fast-fail case.
   - *Given* a plain directory session (no GitHub URL), *When* the pipeline
     runs, *Then* it completes in low-single-digit milliseconds (no network
     I/O in its phases) and the RPC caller sees no latency regression.
@@ -589,9 +729,13 @@ one consistent, observable pipeline.
 - Relocate the L1912-1938-era call (now against `bgCtx`), wrapped with `SetCreationProgress("Resolving GitHub URL...")` / `"Cloning repository..."` before/after.
 - Files: `server/services/session_service.go`
 
-##### Task 2.2.2b: Move alias/default resolution + branch/session-type inference into the pipeline (~5 min)
-- Locate the exact current call sites (between old L1938 and instance construction — confirm exact lines while editing) and relocate as their own phase functions with progress messages.
+##### Task 2.2.2b: Move the alias-based/default-based defaults merge + branch/session-type inference into the pipeline (~5 min)
+- The alias-existence check (`config.FindAlias(cfg, req.Msg.AliasName) != nil`) does **not** move — it already ran synchronously in the RPC prefix (Task 2.1.1a-2) and must stay there; moving it here would surface an invalid alias as an async `Failed` card instead of the synchronous `NotFound` RPC error requirements.md's Constraints and design/ux.md's Surface 1 both mandate. Only the downstream merge (today's `config.ResolveAlias`/`config.ResolveDefaults` post-existence work: env vars, CLI flags, path, program, autoyes, alias session type) moves into this pipeline phase — none of that work ever needs to fail visibly enough to justify a synchronous RPC error, so `FailureReason = StartupError` on failure is sufficient. Locate the exact current call sites (between old L1938 and instance construction — confirm exact lines while editing) and relocate as their own phase functions with progress messages.
 - Files: `server/services/session_service.go`
+
+##### Task 2.2.2b-2: Regression test — invalid alias returns a synchronous RPC error, never an async Failed card (~4 min)
+- *Given* a `CreateSessionRequest` with an `alias_name` that doesn't exist, *When* `CreateSession` is called, *Then* it returns synchronously with `connect.CodeNotFound` and no `Instance`/session card is ever created — assert no `SessionCreatedEvent` fires and no card subsequently appears as `Failed`. This is the regression test for the cross-artifact consistency gap between this plan and requirements.md/design/ux.md.
+- Files: `server/services/session_service_test.go`
 
 ##### Task 2.2.2c: Keep worktree/tmux startup as the pipeline's final phase (~4 min)
 - Adapt today's L2397-2413 tail to be the last phase of the same pipeline function rather than a separately-dispatched goroutine — same `SetCreationProgress`/`instance.Start(true)` logic, now sharing one `trackCleanup` invocation and one terminal-write call site with the earlier phases.
@@ -612,29 +756,36 @@ between cancel/retry/stale-timeout can double-publish or silently drop the
 result.
 **Acceptance Criteria**:
 - The pipeline captures `instance.CreationEpoch()` once at spawn and passes
-  it to `TryForceStatusIfEpoch` at its one terminal call site (success or
-  any failure branch).
+  it to `commitTerminalStatus` (Story 1.2.4) at its one terminal call site
+  (success or any failure branch) — never calling
+  `instance.TryForceStatusIfEpoch` directly, so the durable persist always
+  happens before the in-memory state change (ADR-002's addendum; closes
+  pre-mortem.md failure #2).
   - *Given* the pipeline succeeds and its captured epoch still matches
-    current, *When* it calls `TryForceStatusIfEpoch(epoch, Active, "")`,
-    *Then* it returns `true`, the instance transitions to `Active`, exactly
-    one `SessionUpdatedEvent{"status"}` is published, and
-    `session.creation.outcome{outcome="success"}` increments by 1.
+    current, *When* it calls `commitTerminalStatus(ctx, instance, epoch,
+    Active, "")`, *Then* it returns `true`, the persisted row and the
+    instance both read `Active`, exactly one `SessionUpdatedEvent{"status"}`
+    is published, and `session.creation.outcome{outcome="success"}`
+    increments by 1.
   - *Given* the pipeline fails at the GitHub-resolution phase, *When* it
-    calls `TryForceStatusIfEpoch(epoch, Failed, "GitHubResolutionError")`,
-    *Then* the instance transitions to `Failed` with that reason, and
+    calls `commitTerminalStatus(ctx, instance, epoch, Failed,
+    "GitHubResolutionError")`, *Then* the persisted row and the instance
+    both transition to `Failed` with that reason, and
     `session.creation.outcome{outcome="failed"}` increments by 1.
-  - *Given* a cancel has already bumped the epoch before the pipeline's
-    terminal write, *When* the pipeline calls `TryForceStatusIfEpoch` with
-    its stale captured epoch, *Then* it returns `false`, no event is
-    published, and no metric increments (the cancel path owns the outcome
-    in this case — see Epic 3.2).
+  - *Given* a cancel has already bumped the epoch (in storage, not just
+    in-memory) before the pipeline's terminal write, *When* the pipeline
+    calls `commitTerminalStatus` with its stale captured epoch, *Then* the
+    durable `UpdateInstanceIfEpoch` call inside it returns `applied ==
+    false`, the overall call returns `false`, no in-memory state is
+    touched, no event is published, and no metric increments (the cancel
+    path owns the outcome in this case — see Epic 3.2).
 - `StartLinkedBackgroundSpan` wraps the whole pipeline invocation; span ends
   (with `codes.Error` set on failure) at the same point the terminal write
   happens.
 **Files**: `server/services/session_service.go`
 
-##### Task 2.2.3a: Wire `TryForceStatusIfEpoch` at the single terminal call site (~4 min)
-- One call site for all outcomes (success/failure/panic-recovered), passing the appropriate `Status`/`FailureReason`.
+##### Task 2.2.3a: Wire `commitTerminalStatus` at the single terminal call site (~4 min)
+- One call site for all outcomes (success/failure/panic-recovered), passing the appropriate `Status`/`FailureReason` through to `commitTerminalStatus` (Task 1.2.4b) — not `instance.TryForceStatusIfEpoch` directly, per ADR-002's durable-first-ordering addendum.
 - Files: `server/services/session_service.go`
 
 ##### Task 2.2.3b: Wire span start/end + metric emission around the pipeline (~4 min)
@@ -645,6 +796,300 @@ result.
 - Per `research/pitfalls.md` §4's explicit ask: assert exactly one terminal `SessionUpdatedEvent` publishes even when cancel and pipeline-success are made to race (`-race -count=50`).
 - Files: `server/services/session_service_test.go`
 
+### Epic 2.3: Route `create_session`/`create_session_for_pr` MCP tools through the pipeline
+
+**Goal**: `server/mcp/tools_lifecycle.go`'s `createSession` and
+`server/mcp/tools_github.go`'s `createSessionForPR` stop building instances
+inline (`session.NewInstance` → `inst.Start(true)` → `store.AddInstance`) and
+instead call `SessionService.CreateSession` (Epic 2.1/2.2's now-fast RPC,
+in-process, no network hop — both handlers already hold a `*services.SessionService`)
+to get a `Creating` instance ID, then call a new bounded-wait primitive,
+`AwaitCreationTerminal`, until that instance reaches `Active`/`Running` or
+`Failed` — so from the calling agent's perspective the tool call is exactly
+as synchronous-until-terminal as it is today, per requirements.md's Success
+Metrics. Every MCP-tool-specific behavior named in requirements.md's
+Constraints (path-traversal validation, title-collision pre-check, rate
+limiting, MCP config injection, hook injection, the PR short-circuit) is
+preserved — most unchanged in place, two (injection, driver wiring)
+necessarily *reordered* to after the wait, since they depend on
+worktree/tmux state the pipeline now produces asynchronously (see Story
+2.3.1).
+
+**Why this needs no new writer-side race handling beyond what Epic 1.2/3.x
+already provide**: `AwaitCreationTerminal` is a pure reader — it never calls
+`TryForceStatusIfEpoch`, `TryStartRetry`, or bumps `creationEpoch`. ADR-002's
+fencing guarantee ("exactly one terminal write per creation attempt... only
+one epoch value is ever current") already guarantees there is exactly one
+authoritative terminal outcome for the reader to observe; adding a reader
+that blocks on it introduces no new writer and no new interleaving among
+the pipeline/cancel/retry/sweeper writers. The one outcome ADR-002 doesn't
+already name for a *reader* is Cancel's **deletion** of the instance (not a
+status write at all) — Story 2.3.2 handles that explicitly as its own
+result, `ErrCreationVanished`, rather than something the epoch model needs
+to be extended to cover.
+
+#### Story 2.3.1: `create_session` MCP handler onto the pipeline
+**As an** MCP tool caller (an agent), **I want** `create_session` to route
+through the same `CreateSession` + Background Resolution Pipeline as the web
+UI, **so that** I get the same correctness guarantees (epoch fencing,
+idempotent cleanup, stale-timeout protection) the web UI gets, with no
+change in what I observe when the call returns.
+**Acceptance Criteria**:
+- All of today's pre-`CreateSession` validation stays exactly where it is,
+  unchanged: rate-limit check (`createSessionLimiter.allow("global")`),
+  `title`/`path` required checks, path-traversal defense
+  (`filepath.IsAbs`/`..`/`os.Stat`), `session_type` string→enum validation,
+  and the title-collision pre-check via `store.ListInstanceData()` (kept as
+  a fast, PTY-spawn-free, agent-friendly pre-check *in addition to*
+  `CreateSession`'s own synchronous title-uniqueness check — a TOCTOU race
+  between the two is not a correctness gap, since `CreateSession` still
+  authoritatively rejects a duplicate that slips past the pre-check; the
+  pre-check exists only to give a cheap, immediate, MCP-specific error
+  message without an extra RPC round-trip in the common case).
+  - *Given* a `create_session` call with a `path` containing `..`, *When*
+    the handler runs, *Then* it returns `errResult(ErrInvalidPath, ...)`
+    exactly as today, with `CreateSession` never called.
+  - *Given* a `create_session` call whose `title` collides with an existing
+    session, *When* the handler runs, *Then* it returns the same
+    `ErrInvalidArgument`/"already exists" result as today, with
+    `CreateSession` never called.
+- `session.NewInstance`/`inst.Start(true)`/`store.AddInstance` are replaced
+  by one call: `lh.svc.CreateSession(ctx, connect.NewRequest(&sessionv1.CreateSessionRequest{...}))`,
+  built from the same validated/defaulted arguments (`title`, `path`,
+  `branch`, `program`, mapped `session_type`) the old inline path used.
+  - *Given* a valid `create_session` call, *When* the handler calls
+    `CreateSession`, *Then* it receives back a `Creating`-status instance ID
+    within the RPC's fast SLO (<500ms p99, per requirements.md's Success
+    Metrics), before any worktree/tmux work has necessarily happened.
+- A synchronous RPC error from `CreateSession` itself (e.g. a race that lets
+  a duplicate title through the pre-check, or an alias/path failure the MCP
+  pre-checks don't already cover) is mapped to the equivalent `errResult`
+  code MCP callers see today — never surfaced as a raw Connect error.
+  - *Given* `CreateSession` returns `connect.CodeAlreadyExists`, *When* the
+    handler maps it, *Then* the MCP result is `errResult(ErrInvalidArgument,
+    "session with title %q already exists", ...)`, matching today's message
+    shape.
+- MCP config injection (`injectMCPConfig`), hook injection
+  (`services.InjectHooksConfig`), and `session.StartSessionDriver` — all of
+  which read/write into `inst.GetEffectiveRootDir()` or require a live tmux
+  pane — move to run **after** `AwaitCreationTerminal` observes `Active`,
+  not immediately after the (now-fast, pre-worktree) `CreateSession` call
+  returns, since the worktree/tmux state they depend on is now produced by
+  the pipeline's later phases (Task 2.2.2c), not by the synchronous prefix.
+  - *Given* a successful creation, *When* the handler reaches the
+    post-`AwaitCreationTerminal` step, *Then* MCP/hook injection and driver
+    wiring run against the real, now-live worktree root — identical
+    end-state to today's inline path, just later in wall-clock time.
+**Files**: `server/mcp/tools_lifecycle.go`, `proto/session/v1/session.proto`
+(tags field, see Task 2.3.1c)
+
+##### Task 2.3.1a: Build the `CreateSessionRequest` from validated MCP args and call `lh.svc.CreateSession` (~5 min)
+- Map `session_type` string→proto `SessionType` enum using the same conversion `CreateSession`'s own request handling already applies (do not hand-roll a second string→enum switch) — confirm the exact existing helper while implementing.
+- Files: `server/mcp/tools_lifecycle.go`
+
+##### Task 2.3.1b: Map `CreateSession`'s synchronous RPC errors onto today's `errResult` codes (~4 min)
+- Table: `connect.CodeAlreadyExists`→`ErrInvalidArgument` (duplicate title), `connect.CodeNotFound`→`ErrInvalidArgument`/`ErrInvalidPath` as appropriate, `connect.CodeInvalidArgument`→`ErrInvalidArgument`, default→`ErrInternalError`. This is defense-in-depth for the TOCTOU window above, not the primary error path (the MCP-level pre-checks already catch the common cases before ever calling `CreateSession`).
+- Files: `server/mcp/tools_lifecycle.go`
+
+##### Task 2.3.1c: Add a `tags` field to `CreateSessionRequest` and thread it into the synchronous-prefix instance construction (~5 min)
+- `CreateSessionRequest` today has no `tags` field (confirmed by reading the full message in `proto/session/v1/session.proto`) — the web/omnibar path never needed one. `create_session`'s MCP tool accepts a `tags` argument and always appends `"source:mcp"`; losing that would be a silent behavior regression, not a currently-covered constraint, but real existing behavior worth preserving. Add `repeated string tags = 34;` and pass it through to the same instance-construction step Epic 2.1's Task 2.1.1b already builds (pure metadata, no resolution-pipeline involvement — set once, synchronously, like `title`/`path`).
+- Files: `proto/session/v1/session.proto`, `server/services/session_service.go` (Epic 2.1's instance-construction helper)
+
+##### Task 2.3.1d: Move MCP/hook injection and `StartSessionDriver` to run after `AwaitCreationTerminal` succeeds (~5 min)
+- Preserve exact injection/driver logic and error handling (non-fatal, `log.Warn`-and-continue) — only the call site moves.
+- Files: `server/mcp/tools_lifecycle.go`
+
+##### Task 2.3.1e: Unit tests — pre-checks still fast-fail before any `CreateSession` call (~5 min)
+- Table test: empty title, empty path, path-traversal, title collision — assert `CreateSession`/pipeline is never invoked (e.g. via a call-counting fake `SessionService` or an in-memory store assertion) and the same `errResult` codes as today are returned.
+- Files: `server/mcp/tools_lifecycle_test.go`
+
+#### Story 2.3.2: `create_session_for_pr` MCP handler onto the pipeline
+**As an** MCP tool caller, **I want** `create_session_for_pr` to gain the
+same pipeline-routing benefits, **so that** the two MCP creation tools stay
+consistent and neither is a second, divergent path.
+**Acceptance Criteria**:
+- The existing-session-for-PR short-circuit (`gh.cache.GetAll()` lookup by
+  `owner`/`repo`/`pr_number`, returning the already-associated session
+  without ever constructing anything) stays exactly where it is, before any
+  `CreateSession` call — a request that hits the short-circuit never touches
+  the pipeline at all, same as today.
+  - *Given* a PR that already has an associated session, *When*
+    `create_session_for_pr` is called, *Then* the existing session is
+    returned unchanged and `CreateSession` is never called.
+- Auto-detected/validated `repoPath`, path-traversal defense, title
+  defaulting (`owner/repo#number`), and the title-collision pre-check all
+  stay unchanged, before the `CreateSession` call.
+- `session.NewInstance`/`inst.Start(true)`/`store.AddInstance` are replaced
+  by a `CreateSession` call built with `SessionType: SESSION_TYPE_NEW_WORKTREE`,
+  the given `branch`, and tags `["source:mcp", "pr:owner/repo#number"]` (via
+  Task 2.3.1c's new `tags` field), followed by `AwaitCreationTerminal`,
+  mirroring Story 2.3.1's shape exactly.
+  - *Given* a PR with no existing session, *When* `create_session_for_pr` is
+    called, *Then* the resulting session reaches `Active` via the pipeline
+    (worktree checked out against the PR's head branch) and the handler's
+    final result is identical in shape to today's.
+- MCP injection is applied identically to `create_session` (this tool never
+  injected hooks in the old code — confirmed by reading `tools_github.go`,
+  which calls `injectMCPConfig` but not `services.InjectHooksConfig` — this
+  asymmetry is preserved as-is, not "fixed" as part of this routing change).
+**Files**: `server/mcp/tools_github.go`
+
+##### Task 2.3.2a: Build the `CreateSessionRequest` (worktree type, branch, PR tags) and call `lh.svc.CreateSession` (~5 min)
+- Files: `server/mcp/tools_github.go`
+
+##### Task 2.3.2b: Move `AwaitCreationTerminal` + MCP-injection call site to after pipeline completion (~4 min)
+- Same reordering rationale as Task 2.3.1d; note this tool has no hook-injection call to move (asymmetry preserved, see acceptance criteria).
+- Files: `server/mcp/tools_github.go`
+
+##### Task 2.3.2c: Unit test — existing-session-for-PR short-circuit still bypasses `CreateSession` entirely (~4 min)
+- Regression test for the exact constraint requirements.md names: assert `CreateSession`/pipeline is never invoked when the short-circuit fires.
+- Files: `server/mcp/tools_github_test.go`
+
+#### Story 2.3.3: `AwaitCreationTerminal` — the bounded wait primitive
+**As an** MCP handler, **I want** one shared, bounded, polling primitive that
+resolves once an instance reaches a terminal outcome (or times out, or the
+instance vanishes), **so that** neither MCP handler hand-rolls its own wait
+loop.
+**Acceptance Criteria**:
+- `AwaitCreationTerminal(ctx context.Context, instanceID string, timeout time.Duration) (CreationOutcome, error)`
+  polls `s.FindLiveInstance(instanceID)` on a short interval (250ms) and
+  returns:
+  - `(CreationOutcome{Status, FailureReason, InstanceID}, nil)` as soon as
+    the polled instance's `Status()` is a terminal value (`Active`/`Running`
+    or `Failed`) — `Status` and `FailureReason` in the returned struct are
+    copied from that **same** poll iteration's `FindLiveInstance` result,
+    never re-read afterward, so the snapshot cannot straddle an intervening
+    `TryStartRetry`/`TryForceStatusIfEpoch` write. `AwaitCreationTerminal`
+    itself makes no success/failure judgment — Story 2.3.4's caller inspects
+    the snapshot's `Status`/`FailureReason` fields to decide the outcome.
+  - `(CreationOutcome{}, ErrCreationAwaitTimeout)` if `timeout` elapses
+    before a terminal status is observed.
+  - `(CreationOutcome{}, ErrCreationVanished)` if `FindLiveInstance` returns
+    `nil` for an ID that was previously found `Creating` (i.e. a concurrent
+    `CancelSessionCreation` removed it) — distinct from a timeout, since the
+    instance is gone rather than merely slow.
+  - `(CreationOutcome{}, ctx.Err())` if the caller's own `ctx` is done first
+    (e.g. the MCP stdio transport's own request lifecycle ends).
+  - *Given* an instance that transitions to `Active` 2 seconds into a 150s
+    timeout, *When* `AwaitCreationTerminal` is called, *Then* it returns
+    `(CreationOutcome{Status: Active, ...}, nil)` within one poll interval
+    of the transition, not at the full timeout.
+  - *Given* an instance that never leaves `Creating` within the timeout,
+    *When* the timeout elapses, *Then* it returns `(CreationOutcome{},
+    ErrCreationAwaitTimeout)`.
+  - *Given* an instance that is deleted (by a concurrent `Cancel`) partway
+    through the wait, *When* the next poll observes its absence, *Then* it
+    returns `(CreationOutcome{}, ErrCreationVanished)` immediately (not
+    waiting out the full timeout).
+  - *Given* an instance whose `Status` reads `Failed` with a stale
+    `FailureReason` from a prior attempt at the moment of the terminal poll,
+    but which a concurrent `RetrySessionCreation` resets to `Creating`
+    immediately afterward, *When* `AwaitCreationTerminal` returns, *Then*
+    the returned `CreationOutcome` reflects the `Failed`/stale-reason pair
+    exactly as observed in that one poll (a legitimate, self-consistent
+    snapshot of "what this reader saw"), never a torn combination read
+    across two separate actor round-trips — this is the regression test for
+    the non-atomic-reader race this struct exists to close.
+**Files**: `server/services/session_creation_await.go` (new)
+
+##### Task 2.3.3a: Implement `AwaitCreationTerminal` as a polling loop over `FindLiveInstance` (~5 min)
+- `time.NewTicker(250 * time.Millisecond)` + `time.After(timeout)` + `ctx.Done()` in one `select`; track "was seen at least once" to distinguish "never existed" (a caller bug, not `ErrCreationVanished`) from "existed, now gone." On the terminal-status branch, build the `CreationOutcome` struct directly from that iteration's `FindLiveInstance` result (`Status()`, `FailureReason()`, `ID`) in the same statement — do not store the `*session.Instance` pointer and read from it later, even a few lines down; that reopens the exact non-atomic-read window this primitive exists to close.
+- Files: `server/services/session_creation_await.go`
+
+##### Task 2.3.3b: Define `ErrCreationAwaitTimeout`/`ErrCreationVanished` sentinel errors (~2 min)
+- Files: `server/services/session_creation_await.go`
+
+##### Task 2.3.3c: Unit tests — success, timeout, and vanished-mid-wait paths (~5 min)
+- Use a real `SessionService` + fake clock or short test timeouts/poll intervals (inject via a test-only constructor parameter, not the production 250ms) to keep the test fast and deterministic.
+- Files: `server/services/session_creation_await_test.go`
+
+#### Story 2.3.4: Map pipeline outcomes onto the MCP tool result shape
+**As an** MCP tool caller, **I want** a `Failed` pipeline outcome, a timeout,
+a vanished-instance case, and the caller's-own-context-done case to each
+surface as a distinct, actionable result, **so that** I never mistake
+"still working" for "broken" or vice versa, and never see an unspecified
+implementer-default result for a case the primitive itself already
+distinguishes.
+**Acceptance Criteria**:
+- All four mapping branches below consume only the `CreationOutcome`
+  snapshot (or sentinel error) `AwaitCreationTerminal` returned — never a
+  second, separate read of `Status()`/`FailureReason()` off the actor. See
+  the Domain Glossary's `CreationOutcome` entry for why a second read is
+  unsafe.
+- On `outcome.Status == Failed`: return `errResult(ErrSessionCreationFailed,
+  fmt.Sprintf("session creation failed: %s", outcome.FailureReason), "Use
+  get_session to inspect the session, or call create_session again to
+  retry.")` — never the generic `ErrInternalError`, so the caller can tell
+  "resolution failed" from "the tool itself errored."
+  - *Given* a pipeline that fails with `FailureReason = GitHubResolutionError`,
+    *When* the MCP handler maps the outcome, *Then* the result includes that
+    reason in the message and `Success: false`.
+- On `ErrCreationAwaitTimeout`: return a **success** result with a new
+  `StillCreating: true` field and the session ID, per requirements.md's
+  Success Metrics ("a distinct 'still creating' result... never an
+  open-ended hang"), pointing the caller at `get_session` (confirmed to
+  already exist as an MCP tool, `server/mcp/server.go:172`) for follow-up —
+  never a bare timeout error, since the session *was* successfully created
+  and is genuinely still in progress, not failed.
+  - *Given* the pipeline is still `Creating` after `mcpAwaitTerminalTimeout`
+    (150s) elapses, *When* the handler maps the outcome, *Then* it returns
+    `CreateSessionResult{MCPResult{Success: true}, StillCreating: true,
+    Session: &SessionDetail{ID: instanceID, Status: "creating", ...}}` (a
+    partial `SessionDetail` is fine here — status/ID are all that's known —
+    and the tool description should be updated to mention this outcome).
+- On `ErrCreationVanished`: return `errResult(ErrSessionCreationCancelled,
+  "session creation was cancelled while waiting for it to complete", "The
+  session no longer exists; call create_session again if you still need
+  it.")` — distinct from both the Failed and timeout cases, since the
+  session was intentionally removed by another caller, not stuck or broken.
+  - *Given* the instance is cancelled by a concurrent `CancelSessionCreation`
+    call while the MCP handler is waiting, *When* the handler observes
+    `ErrCreationVanished`, *Then* it returns this distinct error code, not
+    `ErrSessionNotFound` (which today means "never existed," a different
+    caller-facing fact than "existed, then was cancelled").
+- On `ctx.Err() != nil` (the MCP caller's own context — e.g. its stdio
+  transport's request lifecycle — ended before `AwaitCreationTerminal`
+  observed a terminal status, a timeout, or a vanish): return
+  `errResult(ErrSessionCreationAwaitCanceled, "the wait for session creation
+  was ended by the caller's own request context (not a pipeline timeout or
+  failure); the session may still be resolving", "Use get_session to check
+  on its status.")` — a distinct, explicit result, never silently folded
+  into `ErrInternalError` or into either of the other two error branches.
+  This case is plausible in practice: an MCP stdio client can carry its own
+  deadline shorter than `mcpAwaitTerminalTimeout` (150s).
+  - *Given* the caller's own `ctx` is canceled/deadline-exceeded while
+    `AwaitCreationTerminal` is still waiting, *When* the handler maps the
+    outcome, *Then* it returns `errResult(ErrSessionCreationAwaitCanceled,
+    ...)`, distinct in code from `ErrSessionCreationFailed`,
+    `ErrSessionCreationCancelled`, and the timeout's `StillCreating: true`
+    success result.
+**Files**: `server/mcp/tools_lifecycle.go`, `server/mcp/tools_github.go`,
+`server/mcp/types.go` (new error codes), `server/mcp/tools_lifecycle.go`
+(`CreateSessionResult.StillCreating` field), `server/mcp/tools_github.go`
+(`CreateSessionForPRResult.StillCreating` field)
+
+##### Task 2.3.4a: Add `ErrSessionCreationFailed`/`ErrSessionCreationCancelled`/`ErrSessionCreationAwaitCanceled` error codes (~2 min)
+- Files: `server/mcp/types.go`
+
+##### Task 2.3.4b: Add `StillCreating bool` to `CreateSessionResult` and `CreateSessionForPRResult` (~2 min)
+- Files: `server/mcp/tools_lifecycle.go`, `server/mcp/tools_github.go`
+
+##### Task 2.3.4c: Wire the four-way outcome mapping (`Failed` / timeout / vanished / caller-`ctx.Err()`) in both handlers (~5 min)
+- All four branches read only the `CreationOutcome` snapshot or sentinel error `AwaitCreationTerminal` returned — no second call back into `FindLiveInstance`/`Status()`/`FailureReason()` after the wait returns.
+- Files: `server/mcp/tools_lifecycle.go`, `server/mcp/tools_github.go`
+
+##### Task 2.3.4d: Update both tools' `mcpgo.WithDescription` text to mention the `still_creating` outcome (~3 min)
+- So an agent reading the tool description up front knows to expect and handle it, per requirements.md's "never returning early with a `Creating` placeholder [without explanation]" framing.
+- Files: `server/mcp/tools_lifecycle.go`, `server/mcp/tools_github.go`
+
+##### Task 2.3.4e: Unit tests — all four outcome mappings, end-to-end through the real handler (~5 min)
+- One test per outcome (`Failed`, timeout, vanished, caller-`ctx.Err()` — the last via a test-supplied `ctx` with a deadline shorter than the fake pipeline's completion) driving the real pipeline/`AwaitCreationTerminal` (not a mocked outcome), asserting the exact result shape/error code for each.
+- Files: `server/mcp/tools_lifecycle_test.go`
+
+##### Task 2.3.4f: Extend Epic 6.2's goroutine/race hammer test to include the MCP path (~4 min)
+- Add MCP-tool-driven create/fail/timeout iterations to Story 6.2.1's loop so `AwaitCreationTerminal`'s polling goroutine-free design (it runs in the calling goroutine, so this is mostly a confirmation, not new leak-risk) is covered by the same `-race`/`goleak` pass as the RPC/web path.
+- Files: `server/services/session_service_test.go` (Epic 6.2.1's hammer test, extended)
+
 ---
 
 ## Phase 3: Cancel & Retry RPCs
@@ -653,6 +1098,24 @@ result.
 
 **Goal**: One shared cleanup helper, safe to call on any subset of
 already-present resources, used by `DeleteSession`, cancel, and retry.
+
+**Known dependency, accepted as-is (BUG-072):** `cleanupPartialCreation`
+inherits `DeleteSession`'s existing cleanup chain, which inherits
+[BUG-072](../../../docs/bugs/open/BUG-072-destroywithtimeout-untracked-goroutine-on-hung-cleanup.md) —
+`destroyWithTimeout`/`Instance.Destroy()` bounds only the *wait* on cleanup,
+not the *work*, so a hung `git worktree remove` (locked index, stale NFS
+mount) leaks an untracked goroutine that keeps running after the timeout
+returns. Concretely: a Cancel or Retry on a session whose cleanup happens to
+hang will appear to succeed at the RPC/UI layer while the worktree removal
+silently continues in the background, indefinitely. This is a known,
+pre-existing risk, not introduced or worsened by this project — Cancel and
+Retry are simply two new call sites of a chain that already had this
+property via `DeleteSession`. No mitigation is added here; fixing it
+requires threading `context.Context` through `Instance.Destroy` and
+everything beneath it (`session/instance.go`, `session/instance_tmux.go`,
+`session/instance_worktree.go`, `session/git/worktree_ops.go`), which is
+BUG-072's own separate, larger fix and out of scope for this project's
+appetite.
 
 #### Story 3.1.1: Extract `cleanupPartialCreation`
 **As a** developer implementing cancel/retry, **I want** one idempotent
@@ -683,11 +1146,35 @@ already-solved edge cases.
 ##### Task 3.1.1c: Idempotency tests — call twice, call on a never-started instance (~4 min)
 - Files: `server/services/session_service_test.go`
 
+##### Task 3.1.1d: Add a resource-liveness guard before any destructive step (defense-in-depth) (~5 min)
+- Before killing a tmux session or removing a worktree directory, check whether the resource actually looks alive/healthy (`DoesSessionExist()` for tmux, worktree directory existence + a cheap git-status check for the clone) and skip/warn-log instead of deleting when it does. This does not replace Story 1.2.4's durable-first terminal-write ordering (which closes the much larger window where a genuinely-successful session gets *mis-flagged* `Failed` in the first place) — it is a second, independent backstop for the narrow residual crash window ADR-002's addendum names (a crash after real side effects exist but before the durable terminal write is even attempted), per pre-mortem.md failure #2 (P1).
+- Files: `server/services/session_service.go`
+
+##### Task 3.1.1e: Test — `cleanupPartialCreation` refuses to delete a resource that looks alive (~5 min)
+- *Given* a worktree/tmux session that is actually live and healthy, *When* `cleanupPartialCreation` is called against an instance whose persisted status incorrectly suggests it should be torn down, *Then* the live resource is not deleted/killed (warn-logged instead).
+- Files: `server/services/session_service_test.go`
+
 ### Epic 3.2: `CancelSessionCreation` RPC
 
 **Goal**: A user can cancel a `Creating` session; its background pipeline
 stops, resources are cleaned up, and the instance is removed — with no
 lingering "brief flash of Running" if cancel loses a race with success.
+
+**Known asymmetry, not in scope for this project**: unlike the existing
+`DeleteSession` RPC, `CancelSessionCreation` never publishes a
+`SessionDeletedEvent`-equivalent for the instance it removes — subscribers
+that rely on that event to learn a session is gone (rather than polling or
+observing its absence some other way) will not be notified for a cancelled
+creation the way they would be for a deleted one. Flagged here as adjacent
+territory surfaced during review of Epic 2.3, not a defect this epic
+introduces or is required to fix. The fix itself would be a one-line
+addition mirroring `DeleteSession`'s own call
+(`s.eventBus.Publish(events.NewSessionDeletedEvent(sessionUUID))`,
+`session_service.go:3283`) — see optional Task 3.2.1g below.
+
+##### Task 3.2.1g (optional): Publish `SessionDeletedEvent` for the cancelled instance, mirroring `DeleteSession` (~2 min)
+- Add `s.eventBus.Publish(events.NewSessionDeletedEvent(instanceUUID))` at the same point in the handler `DeleteSession` publishes it (after removal succeeds), closing the asymmetry noted above. Optional: include only if implementation time allows: it is not required for this epic's own acceptance criteria.
+- Files: `server/services/session_service.go`
 
 #### Story 3.2.1: RPC handler + proto method
 **As a** user, **I want** to cancel a stuck-in-Creating session, **so that**
@@ -749,6 +1236,10 @@ before the server itself last restarted.
 
 ##### Task 3.2.1e: Wire `outcome="cancelled"` metric emission (~2 min)
 - Files: `server/services/session_service.go`
+
+##### Task 3.2.1f: Integration test — real `CancelSessionCreation` racing a live `AwaitCreationTerminal` wait (~5 min)
+- Depends on Epic 2.3 (`AwaitCreationTerminal`) already existing. *Given* an MCP-style caller blocked inside `AwaitCreationTerminal` for an instance, *When* a concurrent `CancelSessionCreation` call removes it, *Then* the waiter observes `ErrCreationVanished` promptly (within one poll interval of the deletion), not a hang until its own timeout. This is the cross-epic regression test for the interaction Epic 2.3's Goal names but can only be exercised end-to-end once this RPC is real (Epic 2.3 itself only unit-tests the vanished-path via a direct store deletion, not the real RPC).
+- Files: `server/services/session_service_test.go`
 
 ### Epic 3.3: `RetrySessionCreation` RPC
 
@@ -840,7 +1331,11 @@ clean it up.
   `time.Since(lastProgress) > threshold` — where `lastProgress` is
   `instance.CreationProgressUpdatedAt()` (Story 1.1.4), or `instance.CreatedAt()`
   if `CreationProgressUpdatedAt` is the zero value (never updated) — calls
-  `TryForceStatusIfEpoch(instance.CreationEpoch(), Failed, "Stale")`.
+  `commitTerminalStatus(ctx, instance, instance.CreationEpoch(), Failed,
+  "Stale")` (Story 1.2.4) — never `instance.TryForceStatusIfEpoch` directly,
+  so a stale-flip can never win against a row whose durable state has
+  already moved on (e.g. the pipeline's own success committed to storage
+  moments earlier but the in-memory sync hadn't yet run).
   - *Given* an instance in `Creating` status whose last persisted
     `creation_progress` update was 15 minutes ago (threshold 10), *When*
     the sweeper ticks, *Then* the instance transitions to `Failed` with
@@ -873,7 +1368,7 @@ sibling of `server/services/stale_session_notifier.go`)
 - Files: `server/services/stale_creation_sweeper.go`
 
 ##### Task 4.1.2b: Implement the scan-and-flip logic using persisted timestamps (~5 min)
-- Read `instance.CreationProgressUpdatedAt()` (falling back to `CreatedAt` when zero-valued), per Story 1.1.4's field.
+- Read `instance.CreationProgressUpdatedAt()` (falling back to `CreatedAt` when zero-valued), per Story 1.1.4's field. The flip itself goes through `commitTerminalStatus` (Story 1.2.4), not `instance.TryForceStatusIfEpoch` directly — see this story's acceptance criteria.
 - Files: `server/services/stale_creation_sweeper.go`
 
 ##### Task 4.1.2c: Wire the sweeper's `Start(ctx)` into server startup (~3 min)
@@ -1074,6 +1569,7 @@ that** I don't have to re-enter the omnibar.
 - Files: `web-app/src/components/sessions/SessionCard.tsx`
 
 ##### Task 5.4.2c: Playwright test — retry-in-place, no duplicate card, double-click guarded (~5 min)
+- Verify "same card" by DOM node identity / the same `data-testid` key across the `Failed → Creating` transition, not just "a card with the same visible title" — per design/ux.md Surface 3's acceptance criteria.
 - Files: `tests/e2e/session-lifecycle.spec.ts`
 
 ---
@@ -1114,6 +1610,41 @@ per-mode tests or add a table-driven test iterating all 7)
 ##### Task 6.1.1b-h: One task per session-creation mode, asserting it reaches `Active` via the new pipeline (~5 min each, 7 tasks)
 - directory, one-off, restart, fork, alias, autonomous, remote — each gets its own focused test or an extension of its existing test.
 - Files: `server/services/session_service_test.go`
+
+#### Story 6.1.2: Manual pre-merge soak test against a real, slow GHE clone
+**As the** team shipping a no-flag, no-staged-rollout change to the single
+most load-bearing RPC, **we want** one human sanity pass against a real
+VPN-gated GitHub Enterprise host, **so that** the automated suite's
+mocked/local-network assumptions can't hide a behavior that only shows up
+against genuine network latency/flakiness before this ships to every
+teammate at once.
+**Acceptance Criteria**:
+- A person (not CI) manually creates a session from a real GHE PR URL
+  (e.g. `github.netflix.net`) over a realistically slow/VPN connection,
+  observes the `Creating` status and `creation_progress` messages update
+  as expected through the omnibar/session card, and lets the pipeline
+  either succeed or — to exercise the failure path — has network access
+  interrupted mid-clone to confirm a clean transition to `Failed` with a
+  sensible `FailureReason` and toast/card copy.
+  - *Given* a successful real-host clone, *When* observed end-to-end,
+    *Then* the session reaches `Active` and the card never shows a stuck
+    or contradictory status.
+  - *Given* network access is cut mid-clone, *When* the pipeline's context
+    times out or the clone subprocess errors, *Then* the session
+    transitions to `Failed` (not stuck `Creating`) with a legible failure
+    message.
+- Cancel and Retry are exercised against this same real (not mocked)
+  session and both work as expected.
+- This is a manual verification step, run once before merge and recorded
+  in the PR description — not a new automated test (the automated
+  per-mode/race/leak suites in Story 6.1.1 and Epic 6.2 already cover
+  correctness; this step exists specifically to catch anything only a real
+  slow/flaky network surfaces, given there is no flag to fall back on).
+**Files**: none (manual verification, recorded in the PR description)
+
+##### Task 6.1.2a: Perform the manual soak run and record the outcome in the PR description (~15 min)
+- Create-from-GHE-PR-URL → observe progress → success-or-interrupted-failure → Cancel/Retry against the real session, per the acceptance criteria above.
+- Files: none
 
 ### Epic 6.2: Race/leak tests
 

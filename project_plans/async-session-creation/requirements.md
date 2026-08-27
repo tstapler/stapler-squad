@@ -39,6 +39,19 @@ that silently got orphaned (e.g. by a server restart mid-goroutine).
   `creation_progress` text (`SessionCard.tsx:235,955-959`) but currently
   never gets a chance to show it early, since the RPC doesn't return (and
   the instance doesn't exist) until all resolution work is done.
+- **MCP tool callers** — agents (e.g. a Claude Code session) invoking the
+  `create_session` (`server/mcp/tools_lifecycle.go`) or
+  `create_session_for_pr` (`server/mcp/tools_github.go`) MCP tools. Unlike
+  the omnibar/web UI, these callers expect a tool call that returns once,
+  synchronously, with either a fully-resolved session or a clear error — an
+  agent has no UI to watch a `Creating` card update in. Today these two
+  tools implement their own fully-synchronous, separate creation path
+  (`session.NewInstance` → `inst.Start(true)` → `store.AddInstance`, never
+  calling `SessionService.CreateSession`) and would otherwise block on the
+  same slow GitHub-clone/worktree-startup work this project fixes for the
+  web UI — an out-of-scope gap identified in a Product-lens triad review
+  and pulled into scope by explicit user decision. See Scope and
+  `implementation/plan.md`'s Epic 2.3.
 
 ## Success Metrics
 
@@ -56,6 +69,20 @@ that silently got orphaned (e.g. by a server restart mid-goroutine).
   automatically detected and flipped to Failed (with a distinguishable
   "orphaned/stale" reason) rather than hanging indefinitely, and this
   condition emits a metric.
+- `create_session`/`create_session_for_pr` MCP tool callers see no
+  regression in effective wait time in the **normal case**: the handler
+  blocks internally until the instance reaches a terminal status, and the
+  tool call returns a fully-created session or a clear error — behaviorally
+  identical to today's synchronous return, while gaining the same
+  correctness/consistency benefits (epoch-fenced terminal writes, idempotent
+  cleanup, stale-timeout protection) as the web UI path, since both now
+  route through the same `CreateSession` + Background Resolution Pipeline.
+  Only in the **abnormal case** — the internal wait itself exceeds its own
+  bounded timeout (`mcpAwaitTerminalTimeout`, see `implementation/plan.md`'s
+  Epic 2.3) — does the tool call return early with a distinct "still
+  creating" result (session ID included, for follow-up via `get_session`),
+  which is strictly better than today's alternative of an open-ended hang
+  past `createSessionTimeout`.
 - Zero regression in existing synchronous fast-path behavior (duplicate
   title, invalid alias, missing path, etc. — see Non-Goals below) — these
   must still return a synchronous RPC error exactly as they do today.
@@ -78,6 +105,18 @@ Large (3–6 weeks)
   `CLAUDE.md` (`--feature sql/upsert`, generated code not committed).
 - Must not break `session/backlog_plugin_github*.go` or other internal
   callers of the GitHub resolution helpers being touched.
+- `create_session`/`create_session_for_pr`'s existing MCP-tool-specific
+  behavior — path-traversal validation, title-collision pre-check, rate
+  limiting (`createSessionLimiter`, 3/min, `server/mcp/rate_limiter.go`),
+  MCP config injection, hook injection, and (for `create_session_for_pr`)
+  existing-session-for-PR short-circuit — must be preserved even though the
+  underlying instance-construction call changes. The MCP tool call itself
+  must still behave as synchronous-until-terminal for its caller in the
+  normal case (returns a fully-resolved session or a clear failure), even
+  though it now internally routes through the fast-returning `CreateSession`
+  RPC/pipeline rather than its own inline construction — with the single
+  documented exception of the bounded-wait-timeout fallback described in
+  Success Metrics above.
 
 ## Non-functional Requirements
 
@@ -126,6 +165,25 @@ Large (3–6 weeks)
   duration; a tracing span around the background resolution goroutine
   consistent with however this repo's existing OpenTelemetry setup
   (`.claude/docs/opentelemetry.md`) is wired in, if applicable.
+- **Route the `create_session` and `create_session_for_pr` MCP tools
+  (`server/mcp/tools_lifecycle.go`, `server/mcp/tools_github.go`) through
+  the same restructured `CreateSession` + Background Resolution Pipeline**,
+  instead of their current separate, fully-synchronous
+  `session.NewInstance`/`inst.Start(true)`/`store.AddInstance` path — so
+  every session-creation entry point (omnibar, "New Session" dialog, MCP
+  tools) shares one pipeline's correctness guarantees (epoch fencing,
+  idempotent cleanup, stale-timeout protection, telemetry). Since an MCP
+  tool call is expected to return once with a usable result, not leave the
+  calling agent in limbo, the handler internally calls the new fast
+  `CreateSession` to obtain an instance ID and then blocks (with its own
+  bounded timeout) until the instance reaches a terminal status
+  (`Active`/`Running` or `Failed`), returning a fully-resolved session or a
+  mapped error in the normal case — not returning early with a bare
+  `Creating` placeholder the way the web UI does. If that internal wait
+  itself exceeds its own bounded timeout, the tool call falls back to a
+  distinct "still creating" result rather than hanging indefinitely (see
+  Success Metrics). See
+  `implementation/plan.md`'s Epic 2.3 for the mechanism design.
 
 ### Out of Scope
 
@@ -136,6 +194,11 @@ Large (3–6 weeks)
   for free by calling the same `CreateSession` RPC.
 - Retrying/cancelling sessions that are already `Running` (only applies to
   the `Creating`/`Failed` states introduced/extended here).
+- Any change to `create_session`/`create_session_for_pr`'s MCP tool call
+  signatures, input schemas, or success/error response shapes — the
+  mechanism underneath changes, but the tool contract as seen by a calling
+  agent does not, aside from the new (strictly-better-than-today) "still
+  creating" fallback result on the rare internal-timeout path.
 - Multi-instance/distributed coordination of stale-creation detection —
   single-process, single-instance is the only deployment model today.
 
@@ -240,3 +303,8 @@ Large (3–6 weeks)
   retry re-publish an event, or is the existing instance's status change
   (Failed → Creating → Running) sufficient for `WatchSessions` subscribers
   to pick up without a new event type?
+- What should the MCP path's internal bounded-wait timeout
+  (`mcpAwaitTerminalTimeout`) be? **Resolved during plan.md's Epic 2.3
+  design: 150s, matching the existing `createSessionTimeout` this replaces
+  — see `implementation/plan.md`'s Domain Glossary for the full
+  justification.**
