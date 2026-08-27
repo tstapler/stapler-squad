@@ -19,6 +19,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/detection"
+	"github.com/tstapler/stapler-squad/session/tmux"
 	"go.uber.org/goleak"
 )
 
@@ -2207,6 +2208,165 @@ func TestCreateSession_TitleAlreadyExists(t *testing.T) {
 	var connectErr *connect.Error
 	require.ErrorAs(t, err, &connectErr)
 	assert.Equal(t, connect.CodeAlreadyExists, connectErr.Code())
+}
+
+// --------------------------------------------------------------------------
+// CreateSession — backend resolution (tymux-bundled-integration Epic 4.3):
+// wiring session.ResolveSessionBackend's precedence (explicit request
+// override > TymuxSessionOverrides, keyed by the sanitized tmux session name
+// > the process-wide registered default) into instanceOpts.Backend.
+// --------------------------------------------------------------------------
+
+// TestCreateSession_HonorsExplicitBackendOverride verifies that a request's
+// backend_override field wins over both this session's own TymuxSessionOverrides
+// entry and the process-wide default, mirroring ResolveSessionBackend's top
+// precedence tier (session/backend_resolution_test.go).
+func TestCreateSession_HonorsExplicitBackendOverride(t *testing.T) {
+	storage := createTestStorage(t)
+	svc := newCreateTestService(t, storage)
+
+	testDir := t.TempDir()
+	t.Setenv("STAPLER_SQUAD_TEST_DIR", testDir)
+	const title = "explicit-override-session"
+	sessionKey := tmux.NewSessionName(title, tmux.TmuxPrefix).String()
+	// The session's own override forces tmux; the request override must still win.
+	require.NoError(t, os.WriteFile(filepath.Join(testDir, "config.json"),
+		[]byte(`{"tymux_session_overrides": {"`+sessionKey+`": false}}`), 0o644))
+
+	backendOverride := string(session.BackendTymux)
+	resp, err := svc.CreateSession(context.Background(), connect.NewRequest(&sessionv1.CreateSessionRequest{
+		Title:           title,
+		Path:            t.TempDir(),
+		Program:         "claude",
+		BackendOverride: &backendOverride,
+	}))
+	require.NoError(t, err)
+	t.Cleanup(func() { destroyCreatedSession(t, svc, resp.Msg.Session.Id) })
+
+	inst := svc.FindLiveInstance(resp.Msg.Session.Id)
+	require.NotNil(t, inst)
+	assert.Equal(t, session.BackendTymux, inst.Backend,
+		"request backend_override must win even though this session's TymuxSessionOverrides entry forces tmux")
+}
+
+// TestCreateSession_HonorsSessionNameOverrideMap verifies that, absent a
+// request override, a TymuxSessionOverrides entry keyed by the sanitized tmux
+// session name (tmux.NewSessionName's derivation of the request Title — not
+// the raw Title itself) forces the session's backend.
+func TestCreateSession_HonorsSessionNameOverrideMap(t *testing.T) {
+	storage := createTestStorage(t)
+	svc := newCreateTestService(t, storage)
+
+	testDir := t.TempDir()
+	t.Setenv("STAPLER_SQUAD_TEST_DIR", testDir)
+	const title = "session-override-map-test"
+	sessionKey := tmux.NewSessionName(title, tmux.TmuxPrefix).String()
+	require.NoError(t, os.WriteFile(filepath.Join(testDir, "config.json"),
+		[]byte(`{"tymux_session_overrides": {"`+sessionKey+`": true}}`), 0o644))
+
+	resp, err := svc.CreateSession(context.Background(), connect.NewRequest(&sessionv1.CreateSessionRequest{
+		Title:   title,
+		Path:    t.TempDir(),
+		Program: "claude",
+	}))
+	require.NoError(t, err)
+	t.Cleanup(func() { destroyCreatedSession(t, svc, resp.Msg.Session.Id) })
+
+	inst := svc.FindLiveInstance(resp.Msg.Session.Id)
+	require.NotNil(t, inst)
+	assert.Equal(t, session.BackendTymux, inst.Backend,
+		"a TymuxSessionOverrides entry keyed by the sanitized tmux session name must force the backend with no request override present")
+}
+
+// TestCreateSession_FallsBackToGlobalDefaultWhenNoOverrides verifies that with
+// no request override and no TymuxSessionOverrides entry for this session,
+// CreateSession applies the process-wide registered backend
+// (session.RegisterBackendProvider) rather than a hardcoded BackendTmux.
+func TestCreateSession_FallsBackToGlobalDefaultWhenNoOverrides(t *testing.T) {
+	session.RegisterBackendProvider(session.BackendTymux)
+	t.Cleanup(func() { session.RegisterBackendProvider(session.BackendTmux) })
+
+	storage := createTestStorage(t)
+	svc := newCreateTestService(t, storage)
+
+	testDir := t.TempDir()
+	t.Setenv("STAPLER_SQUAD_TEST_DIR", testDir)
+	require.NoError(t, os.WriteFile(filepath.Join(testDir, "config.json"), []byte(`{}`), 0o644))
+
+	resp, err := svc.CreateSession(context.Background(), connect.NewRequest(&sessionv1.CreateSessionRequest{
+		Title:   "no-override-session",
+		Path:    t.TempDir(),
+		Program: "claude",
+	}))
+	require.NoError(t, err)
+	t.Cleanup(func() { destroyCreatedSession(t, svc, resp.Msg.Session.Id) })
+
+	inst := svc.FindLiveInstance(resp.Msg.Session.Id)
+	require.NotNil(t, inst)
+	assert.Equal(t, session.BackendTymux, inst.Backend,
+		"with no request override and no session-name override, CreateSession must apply the process-wide registered default")
+}
+
+// --------------------------------------------------------------------------
+// CreateDirectorySession / CreateWorktreeSession — backend resolution
+// (tymux-bundled-integration Epic 4.4.2): these internal session creators
+// have no per-request override field, so they wire session.ResolveSessionBackend
+// with requestOverride="" -- only the session-name override map (or the
+// process-wide default) can influence their Backend.
+// --------------------------------------------------------------------------
+
+// TestCreateDirectorySession_HonorsSessionNameOverrideMap verifies that a
+// TymuxSessionOverrides entry keyed by the sanitized tmux session name
+// (tmux.NewSessionName's derivation of the title passed to
+// CreateDirectorySession) forces the resulting instance's backend even
+// though the process-wide default is registered as tymux.
+func TestCreateDirectorySession_HonorsSessionNameOverrideMap(t *testing.T) {
+	session.RegisterBackendProvider(session.BackendTymux)
+	t.Cleanup(func() { session.RegisterBackendProvider(session.BackendTmux) })
+
+	storage := createTestStorage(t)
+	svc := newCreateTestService(t, storage)
+
+	testDir := t.TempDir()
+	t.Setenv("STAPLER_SQUAD_TEST_DIR", testDir)
+	const title = "directory-session-override-map-test"
+	sessionKey := tmux.NewSessionName(title, tmux.TmuxPrefix).String()
+	require.NoError(t, os.WriteFile(filepath.Join(testDir, "config.json"),
+		[]byte(`{"default_program": "claude", "tymux_session_overrides": {"`+sessionKey+`": false}}`), 0o644))
+
+	inst, err := svc.CreateDirectorySession(context.Background(), title, t.TempDir(), "", nil, true, false)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = inst.Destroy() })
+
+	assert.Equal(t, session.BackendTmux, inst.Backend,
+		"a TymuxSessionOverrides entry keyed by the sanitized tmux session name must force the backend even though the process-wide default is tymux")
+}
+
+// TestCreateWorktreeSession_HonorsSessionNameOverrideMap is the
+// CreateWorktreeSession analogue of the CreateDirectorySession test above.
+func TestCreateWorktreeSession_HonorsSessionNameOverrideMap(t *testing.T) {
+	session.RegisterBackendProvider(session.BackendTymux)
+	t.Cleanup(func() { session.RegisterBackendProvider(session.BackendTmux) })
+
+	storage := createTestStorage(t)
+	svc := newCreateTestService(t, storage)
+
+	testDir := t.TempDir()
+	t.Setenv("STAPLER_SQUAD_TEST_DIR", testDir)
+	const title = "worktree-session-override-map-test"
+	sessionKey := tmux.NewSessionName(title, tmux.TmuxPrefix).String()
+	require.NoError(t, os.WriteFile(filepath.Join(testDir, "config.json"),
+		[]byte(`{"default_program": "claude", "tymux_session_overrides": {"`+sessionKey+`": false}}`), 0o644))
+
+	worktreePath := t.TempDir()
+	initGitRepoWithCommit(t, worktreePath)
+
+	inst, err := svc.CreateWorktreeSession(context.Background(), title, t.TempDir(), worktreePath, "", nil, true, false)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = inst.Destroy() })
+
+	assert.Equal(t, session.BackendTmux, inst.Backend,
+		"a TymuxSessionOverrides entry keyed by the sanitized tmux session name must force the backend even though the process-wide default is tymux")
 }
 
 // TestSessionService_CreateSession_DelegatesToCreateManagedInstance_When_HandlerInvoked

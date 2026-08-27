@@ -491,6 +491,26 @@ type Config struct {
 	// before". A non-nil value is still subject to
 	// ResolveGlobalStreamHubDefault's rollback-rehearsal gate when true.
 	StreamHubGlobalOverride *bool `json:"stream_hub_global_override,omitempty"`
+	// TymuxRollbackRehearsalCompletedAt records when the tymux backend's own
+	// rollback rehearsal was last completed successfully. This is a distinct
+	// field from RollbackRehearsalCompletedAt above — the two rehearsals
+	// verify different things (ADR-002/ADR-003): streamhub's rollback means
+	// "reconnect cleanly under the legacy path"; tymux's rollback cannot mean
+	// that, since it means "new sessions honor the reverted default while
+	// existing tymux-backed sessions stay pinned to tymux for their
+	// lifetime". nil means "never completed". ResolveGlobalTymuxDefault
+	// refuses to let the *global* tymux default resolve to true until this
+	// is set. Set via RecordTymuxRollbackRehearsalCompleted.
+	TymuxRollbackRehearsalCompletedAt *time.Time `json:"tymux_rollback_rehearsal_completed_at,omitempty"`
+	// TymuxSessionOverrides forces the tymux-bundled-integration project's
+	// process-manager backend for specific named tmux sessions, regardless of
+	// the global process-manager-backend default — the per-session override
+	// mechanism (Phase 4, Epic 4.1). Keys are tmux session names; an absent
+	// key means "no override, use the global default". Mirrors
+	// StreamHubSessionOverrides's shape exactly (see that field's doc
+	// comment above); consulted by ResolveSessionBackend
+	// (session/backend_resolution.go).
+	TymuxSessionOverrides map[string]bool `json:"tymux_session_overrides,omitempty"`
 }
 
 // ErrRollbackRehearsalNotCompleted is returned by ResolveGlobalStreamHubDefault
@@ -498,6 +518,44 @@ type Config struct {
 // resolve to true but RollbackRehearsalCompletedAt is unset — Story 3.3.2's
 // rollback rehearsal must be executed and recorded first (pre-mortem P1 #4).
 var ErrRollbackRehearsalNotCompleted = errors.New("config: cannot enable the global stream-hub default: rollback rehearsal (RollbackRehearsalCompletedAt) has not been completed — see Story 3.3.2")
+
+// ErrTymuxRollbackRehearsalNotCompleted is returned by ResolveGlobalTymuxDefault
+// when the caller requests the global tymux backend default resolve to true
+// but TymuxRollbackRehearsalCompletedAt is unset — the tymux rollback
+// rehearsal must be executed and recorded first (ADR-002, Story 3.1.1).
+var ErrTymuxRollbackRehearsalNotCompleted = errors.New("config: cannot enable the global tymux default: rollback rehearsal (TymuxRollbackRehearsalCompletedAt) has not been completed — see Story 3.1.1")
+
+// ResolveGlobalTymuxDefault applies Story 3.1.1's mechanical
+// rollback-rehearsal gate to a raw requested value for the *global* tymux
+// process-manager-backend default (e.g. derived from cfg.ProcessManagerBackend
+// or the STAPLER_SQUAD_USE_TYMUX environment variable). Requesting false is
+// always permitted — the gate only blocks turning the risky path *on*.
+// Requesting true is refused with ErrTymuxRollbackRehearsalNotCompleted, not
+// a silent fallback to false, unless cfg.TymuxRollbackRehearsalCompletedAt is
+// a recorded, non-zero timestamp. This gate does not apply to any per-session
+// override path, which callers resolve independently and which remains
+// available even when this function returns an error.
+func ResolveGlobalTymuxDefault(cfg *Config, requested bool) (bool, error) {
+	if !requested {
+		return false, nil
+	}
+	if cfg == nil || cfg.TymuxRollbackRehearsalCompletedAt == nil || cfg.TymuxRollbackRehearsalCompletedAt.IsZero() {
+		return false, ErrTymuxRollbackRehearsalNotCompleted
+	}
+	return true, nil
+}
+
+// RecordTymuxRollbackRehearsalCompleted persists the current time as
+// TymuxRollbackRehearsalCompletedAt and saves the config — intended to be
+// called exactly once, after manually verifying a tymux rollback rehearsal
+// (new sessions honor the reverted default while existing tymux-backed
+// sessions stay pinned) passed against a real disposable session. Unblocks
+// ResolveGlobalTymuxDefault from refusing to enable the global default.
+func (c *Config) RecordTymuxRollbackRehearsalCompleted() error {
+	now := time.Now()
+	c.TymuxRollbackRehearsalCompletedAt = &now
+	return SaveConfig(c)
+}
 
 // ResolveGlobalStreamHubDefault applies Story 3.3.1/3.3.2's mechanical
 // rollback-rehearsal gate to a raw requested value for the *global*
@@ -574,6 +632,42 @@ func (c *Config) SetStreamHubSessionOverride(sessionName string, forceHub *bool)
 // ResolveGlobalStreamHubDefault's rollback-rehearsal gate when true.
 func (c *Config) SetStreamHubGlobalOverride(forceHub *bool) error {
 	c.StreamHubGlobalOverride = forceHub
+	return SaveConfig(c)
+}
+
+// GetTymuxSessionOverride reports whether sessionName has a per-session
+// TymuxSessionOverrides entry recorded, and if so, what it forces. Mirrors
+// GetStreamHubSessionOverride's nil-safe shape: a nil Config or nil map
+// reports (false, false) — no override.
+func (c *Config) GetTymuxSessionOverride(sessionName string) (forceTymux bool, ok bool) {
+	if c == nil || c.TymuxSessionOverrides == nil {
+		return false, false
+	}
+	forceTymux, ok = c.TymuxSessionOverrides[sessionName]
+	return forceTymux, ok
+}
+
+// SetTymuxSessionOverride sets or clears sessionName's per-session
+// process-manager-backend override and persists the config to disk.
+// forceTymux follows this file's existing *bool convention for a tri-state
+// field (see SetStreamHubSessionOverride): nil removes any override for
+// sessionName (falling back to the global default), a non-nil false
+// explicitly pins the session to the tmux backend regardless of the global
+// default, and a non-nil true forces the tymux backend. Unlike
+// streamhub/ownership.go's resolveLocked (see research/features.md (b).5),
+// this accessor is a plain map write with no combinator logic, so it has no
+// directional bias toward either value.
+func (c *Config) SetTymuxSessionOverride(sessionName string, forceTymux *bool) error {
+	if forceTymux == nil {
+		if c.TymuxSessionOverrides != nil {
+			delete(c.TymuxSessionOverrides, sessionName)
+		}
+		return SaveConfig(c)
+	}
+	if c.TymuxSessionOverrides == nil {
+		c.TymuxSessionOverrides = make(map[string]bool)
+	}
+	c.TymuxSessionOverrides[sessionName] = *forceTymux
 	return SaveConfig(c)
 }
 

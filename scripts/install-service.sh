@@ -284,6 +284,10 @@ StartLimitBurst=10
 
 [Service]
 Type=simple
+# tymuxd's equivalent flag, --tymuxd-keep-server, also defaults to true.
+# Do NOT add --tymuxd-keep-server=false here — that's the same class of
+# drift that made this line originally omit --tmux-keep-server and kill
+# every live tmux session on restart (.claude/docs/tmux-keep-server-on-restart.md).
 ExecStart=$bin_path --remote-access --tmux-keep-server$extra_flags
 WorkingDirectory=$HOME
 Restart=on-failure
@@ -511,6 +515,10 @@ install_macos() {
 
     # Build XML <string> entries for any extra flags (e.g. --profile --profile-port 6060).
     # We rely on the EnvironmentVariables PATH key above, so no shell wrapper is needed.
+    # tymuxd's equivalent flag, --tymuxd-keep-server, also defaults to true.
+    # Do NOT add --tymuxd-keep-server=false to ProgramArguments below — that's
+    # the same class of drift that once left this platform's tmux flag out of
+    # sync with the other's (.claude/docs/tmux-keep-server-on-restart.md).
     extra_args_xml=""
     for arg in $extra_flags; do
         extra_args_xml="$extra_args_xml

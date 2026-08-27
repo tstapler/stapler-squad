@@ -77,6 +77,11 @@ type InstanceData struct {
 	TmuxPrefix string `json:"tmux_prefix,omitempty"`
 	// Tmux server socket name for isolation (used with tmux -L flag)
 	TmuxServerSocket string `json:"tmux_server_socket,omitempty"`
+	// Backend is the per-session ProcessManager backend pin (e.g. BackendTymux),
+	// persisted so a process restart doesn't silently drop it — see
+	// Instance.Backend's doc comment for precedence. Empty means "no pin,
+	// fall through to the process-wide default."
+	Backend ProcessManagerBackend `json:"backend,omitempty"`
 
 	// Terminal update timestamps for activity tracking
 	LastTerminalUpdate   time.Time `json:"last_terminal_update,omitempty"`
