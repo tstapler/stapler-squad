@@ -201,6 +201,15 @@ export function SessionBoard({
     new Map()
   );
 
+  // Set right after a "moved" outcome resolves (drag or MoveToMenu); a no-dependency effect
+  // below re-checks it on every render and focuses the target once it's back in the DOM
+  // (Task 4.2.1b -- focus must land on the card's new location, not fall back to <body>).
+  const pendingFocusRef = useRef<{ sessionId: string; via: "drag" | "menu" } | null>(null);
+
+  // Only clears the in-flight/pickup-column tracking -- NOT the optimistic column override.
+  // A "moved" outcome must keep its override in place after the RPC settles (see
+  // clearOptimisticOverride below for why); only a rejected/cancelled/network-error outcome
+  // should call clearOptimisticOverride to snap the card back to its real column.
   const releaseInFlight = useCallback((sessionId: string) => {
     dragStartColumnRef.current.delete(sessionId);
     setInFlightDragSessionIds((prev) => {
@@ -209,6 +218,9 @@ export function SessionBoard({
       next.delete(sessionId);
       return next;
     });
+  }, []);
+
+  const clearOptimisticOverride = useCallback((sessionId: string) => {
     setOptimisticColumnOverrides((prev) => {
       if (!prev.has(sessionId)) return prev;
       const next = new Map(prev);
@@ -216,6 +228,38 @@ export function SessionBoard({
       return next;
     });
   }, []);
+
+  // Shared by both the drag path (handleDragStart) and the MoveToMenu path (handleMenuMove,
+  // Task 4.1.1a) so a menu-triggered move freezes watchSessions-driven reassignment exactly
+  // the same way a drag does.
+  const beginInFlight = useCallback((sessionId: string, fromColumn: BoardColumnKey) => {
+    dragStartColumnRef.current.set(sessionId, fromColumn);
+    setInFlightDragSessionIds((prev) => new Set(prev).add(sessionId));
+  }, []);
+
+  // Once the real `sessions` prop (via a subsequent watchSessions push) reports a session in
+  // the column its optimistic override already predicted -- or the session is gone entirely --
+  // the override is redundant and is dropped so a later, genuinely different server-driven
+  // change isn't incorrectly pinned to the stale override. Deliberately does NOT key off
+  // `filteredSessions` (which excludes sessions the current search/filter hides) -- an
+  // optimistically-moved session that's about to be filtered out must still reconcile against
+  // its real status via `sessionById`, not linger forever because it dropped out of the
+  // filtered set.
+  useEffect(() => {
+    setOptimisticColumnOverrides((prev) => {
+      if (prev.size === 0) return prev;
+      let changed = false;
+      const next = new Map(prev);
+      for (const [sessionId, overrideColumn] of prev) {
+        const session = sessionById.get(sessionId);
+        if (!session || getBoardColumnKey(session) === overrideColumn) {
+          next.delete(sessionId);
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+  }, [sessionById]);
 
   const buckets = useMemo(() => {
     const map: Record<BoardColumnKey, Session[]> = {
@@ -257,33 +301,50 @@ export function SessionBoard({
     return () => clearTimeout(timer);
   }, [toast]);
 
+  // --- Screen-reader-only live region (Task 4.2.1a) --------------------------------------
+  // Kept independent of `toast` (the visible bubble, error/warning outcomes only) -- a
+  // "moved" outcome has no visible toast (the card's new column position is the sighted-user
+  // feedback) but still needs its own distinct announcement for screen-reader users.
+  const [liveMessage, setLiveMessage] = useState("");
+  const announceLive = useCallback((message: string) => setLiveMessage(message), []);
+
+  const columnLabel = useCallback(
+    (key?: BoardColumnKey) => BOARD_COLUMNS.find((c) => c.key === key)?.label ?? key ?? "",
+    []
+  );
+
   const announceOutcome = useCallback(
-    (outcome: DragOutcome, session?: Session) => {
+    (outcome: DragOutcome, session?: Session, toColumn?: BoardColumnKey) => {
       switch (outcome.type) {
+        case "moved":
+          announceLive(`${session?.title ?? "Session"} moved to ${columnLabel(toColumn)}.`);
+          return;
         case "rejected_illegal": {
-          const fromLabel = BOARD_COLUMNS.find((c) => c.key === outcome.from)?.label ?? outcome.from;
-          const toLabel = BOARD_COLUMNS.find((c) => c.key === outcome.to)?.label ?? outcome.to;
-          showToast(`Can't move a ${fromLabel} session to ${toLabel}.`, "error");
+          const fromLabel = columnLabel(outcome.from);
+          const toLabel = columnLabel(outcome.to);
+          const message = `Can't move a ${fromLabel} session to ${toLabel}.`;
+          showToast(message, "error");
+          announceLive(message);
           return;
         }
-        case "rejected_by_server":
-          showToast(
-            `"${session?.title ?? "Session"}" already changed state — showing its current status.`,
-            "error"
-          );
+        case "rejected_by_server": {
+          const message = `"${session?.title ?? "Session"}" already changed state — showing its current status.`;
+          showToast(message, "error");
+          announceLive(message);
           return;
-        case "network_error":
-          showToast(
-            `Network error — couldn't move "${session?.title ?? "session"}". Check your connection and try again.`,
-            "warning"
-          );
+        }
+        case "network_error": {
+          const message = `Network error — couldn't move "${session?.title ?? "session"}". Check your connection and try again.`;
+          showToast(message, "warning");
+          announceLive(message);
           return;
+        }
         case "cancelled":
-        case "moved":
+          announceLive("Move cancelled.");
           return;
       }
     },
-    [showToast]
+    [showToast, announceLive, columnLabel]
   );
 
   // --- Complete-column confirmation (Task 3.1.0 / AC12) ----------------------------------
@@ -339,10 +400,10 @@ export function SessionBoard({
       const { entityId: sessionId } = parseCompositeId(String(event.active.id));
       const session = sessionById.get(sessionId);
       if (!session) return;
-      dragStartColumnRef.current.set(sessionId, getBoardColumnKey(session));
-      setInFlightDragSessionIds((prev) => new Set(prev).add(sessionId));
+      beginInFlight(sessionId, getBoardColumnKey(session));
+      announceLive(`${session.title} picked up.`);
     },
-    [sessionById]
+    [sessionById, announceLive, beginInFlight]
   );
 
   const handleDragCancel = useCallback(
@@ -391,11 +452,22 @@ export function SessionBoard({
       });
 
       releaseInFlight(sessionId);
-      announceOutcome(outcome, session);
+      if (outcome.type === "moved") {
+        // Keep the optimistic override in place -- clearing it here would fall back to the
+        // still-stale `sessions` prop (the real watchSessions push hasn't landed yet) and
+        // bounce the card back to its old column for one render, which also yanks focus off
+        // the element the effect below is about to target. clearOptimisticOverride's own
+        // reconciliation effect drops the override once real props catch up.
+        pendingFocusRef.current = { sessionId, via: "drag" };
+      } else {
+        clearOptimisticOverride(sessionId);
+      }
+      announceOutcome(outcome, session, toColumn);
     },
     [
       sessionById,
       releaseInFlight,
+      clearOptimisticOverride,
       announceOutcome,
       updateSession,
       resumeHibernatedSession,
@@ -404,6 +476,66 @@ export function SessionBoard({
       getSessionsErrorState,
     ]
   );
+
+  // MoveToMenu's non-drag counterpart to handleDragEnd: same attemptColumnMove call, same
+  // in-flight freeze (Story 3.2.2) so a mid-request watchSessions push can't flicker the card
+  // back before the RPC settles, same outcome announcement/focus handling -- only the trigger
+  // differs (a discrete menu selection instead of a dnd-kit drop event).
+  const attemptMoveViaMenu = useCallback(
+    async (session: Session, fromColumn: BoardColumnKey, toColumn: BoardColumnKey) => {
+      const sessionId = session.id;
+      beginInFlight(sessionId, fromColumn);
+
+      const outcome = await attemptColumnMove(session, fromColumn, toColumn, {
+        updateSession,
+        resumeHibernatedSession,
+        approveNeedsReview,
+        confirmComplete,
+        getSessionsErrorState,
+        onOptimisticMove: (target) => {
+          setOptimisticColumnOverrides((prev) => new Map(prev).set(sessionId, target));
+        },
+      });
+
+      releaseInFlight(sessionId);
+      if (outcome.type === "moved") {
+        pendingFocusRef.current = { sessionId, via: "menu" };
+      } else {
+        clearOptimisticOverride(sessionId);
+      }
+      announceOutcome(outcome, session, toColumn);
+      return outcome;
+    },
+    [
+      beginInFlight,
+      releaseInFlight,
+      clearOptimisticOverride,
+      announceOutcome,
+      updateSession,
+      resumeHibernatedSession,
+      approveNeedsReview,
+      confirmComplete,
+      getSessionsErrorState,
+    ]
+  );
+
+  // Task 4.2.1b: after a successful move, focus the card's control (drag handle or menu
+  // trigger) in its new column rather than letting focus fall back to <body>. No dependency
+  // array -- runs after every render, but only acts (and only once) while a focus target is
+  // pending, so the cost on unrelated renders is a no-op ref check.
+  useEffect(() => {
+    const pending = pendingFocusRef.current;
+    if (!pending) return;
+    const elementId =
+      pending.via === "menu"
+        ? `board-card-move-trigger-${pending.sessionId}`
+        : `board-card-drag-handle-${pending.sessionId}`;
+    const el = document.getElementById(elementId);
+    if (el) {
+      el.focus();
+      pendingFocusRef.current = null;
+    }
+  });
 
   // Builds the SessionCard-shaped callback props for one session — SessionBoard receives the
   // id/session-keyed handler surface (matching SessionListProps) and adapts it per card here,
@@ -433,6 +565,9 @@ export function SessionBoard({
       onResumeFromHibernation: onResumeHibernatedSession
         ? () => onResumeHibernatedSession(session.id)
         : undefined,
+      onMoveToColumn: (toColumn: BoardColumnKey) => {
+        void attemptMoveViaMenu(session, getBoardColumnKey(session), toColumn);
+      },
     }),
     [
       onSessionClick,
@@ -454,6 +589,7 @@ export function SessionBoard({
       onToggleAutoApprove,
       onSteerAutonomousSession,
       onClearConversationState,
+      attemptMoveViaMenu,
       onHibernateSession,
       onResumeHibernatedSession,
     ]
@@ -476,7 +612,7 @@ export function SessionBoard({
       </DndContext>
 
       <div role="status" aria-live="polite" className={liveRegion} data-testid="board-live-region">
-        {toast?.message ?? ""}
+        {liveMessage}
       </div>
 
       {toast && (

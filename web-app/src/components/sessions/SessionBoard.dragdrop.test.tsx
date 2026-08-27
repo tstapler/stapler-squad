@@ -1,5 +1,6 @@
 import React from "react";
 import { act, render, screen, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { Code } from "@connectrpc/connect";
 import { SessionStatus, SubStatus } from "@/gen/session/v1/types_pb";
 import type { Session } from "@/gen/session/v1/types_pb";
@@ -387,5 +388,130 @@ describe("SessionBoard — drag-freeze against live pushes (Story 3.2.2)", () =>
     expect(within(running).getByText("Active session")).toBeInTheDocument();
     const complete = screen.getByTestId("board-column-complete");
     expect(within(complete).queryByText("Active session")).not.toBeInTheDocument();
+  });
+});
+
+// Task 4.1.1a / row 49 of validation.md: the drop handler (onDragEnd) and the MoveToMenu
+// selection handler must converge on the exact same attemptColumnMove call -- exercised here
+// via the real MoveToMenu UI (not by calling attemptColumnMove directly, which the top
+// `describe("attemptColumnMove", ...)` block above already covers in isolation).
+//
+// Several of these tests resolve the (mocked) updateSession RPC and update the `sessions`
+// prop -- simulating the watchSessions live push a Redux-connected parent would deliver, since
+// useSessionService's real updateSession dispatches `upsertSession` into the store BEFORE its
+// promise resolves (see useSessionService.ts) -- inside the *same* `act()`/order-of-operations
+// window. That mirrors production, where the store update and the optimistic-override-clearing
+// continuation land close enough together that the card never has a moment to revert to its
+// pre-move column; doing the two separately in a test (resolve now, rerender later) would
+// introduce an artificial revert-then-recover flicker this static-`sessions`-prop test harness
+// doesn't otherwise reproduce.
+describe("SessionBoard — MoveToMenu wiring (Phase 4)", () => {
+  const sessions: Session[] = [
+    makeSession({ id: "run-1", title: "Active session", status: SessionStatus.ACTIVE }),
+  ];
+  const pausedSessions: Session[] = [
+    makeSession({ id: "run-1", title: "Active session", status: SessionStatus.PAUSED }),
+  ];
+
+  beforeEach(() => {
+    rectHeight = 600;
+  });
+
+  it("attemptColumnMove_should_ProduceIdenticalOutcomeAsMoveToMenu_When_SameLogicalMoveTriggeredByDragOrMenu", async () => {
+    // Keep the RPC pending, same reason as the drag-triggered version of this assertion above
+    // ("onDragEnd_should_CallUpdateSessionWithPausedStatus..."): the optimistic re-bucket is
+    // only observable before the mutation settles.
+    let resolveUpdate: (session: Session) => void = () => {};
+    updateSessionMock.mockReturnValue(
+      new Promise<Session>((resolve) => { resolveUpdate = resolve; })
+    );
+    const user = userEvent.setup();
+    render(<SessionBoard sessions={sessions} />);
+
+    const running = screen.getByTestId("board-column-running");
+    await user.click(within(running).getByTestId("move-to-menu-trigger"));
+    await user.click(screen.getByRole("menuitem", { name: "Paused" }));
+
+    expect(updateSessionMock).toHaveBeenCalledTimes(1);
+    expect(updateSessionMock).toHaveBeenCalledWith("run-1", { status: SessionStatus.PAUSED });
+
+    // Optimistic: the card renders under Paused immediately, exactly as the drag path does --
+    // same shared attemptColumnMove call, same onOptimisticMove callback.
+    const paused = screen.getByTestId("board-column-paused");
+    expect(within(paused).getByText("Active session")).toBeInTheDocument();
+
+    await act(async () => {
+      resolveUpdate({ id: "run-1" } as Session);
+    });
+  });
+
+  it("liveRegion_should_AnnounceMovedText_When_MoveToMenuSelectionSucceeds", async () => {
+    let resolveUpdate: (session: Session) => void = () => {};
+    updateSessionMock.mockReturnValue(
+      new Promise<Session>((resolve) => { resolveUpdate = resolve; })
+    );
+    const user = userEvent.setup();
+    const { rerender } = render(<SessionBoard sessions={sessions} />);
+
+    const running = screen.getByTestId("board-column-running");
+    await user.click(within(running).getByTestId("move-to-menu-trigger"));
+    await user.click(screen.getByRole("menuitem", { name: "Paused" }));
+
+    await act(async () => {
+      rerender(<SessionBoard sessions={pausedSessions} />);
+      resolveUpdate({ id: "run-1" } as Session);
+    });
+
+    expect(screen.getByTestId("board-live-region")).toHaveTextContent(
+      "Active session moved to Paused."
+    );
+  });
+
+  it("moveToMenu_should_PlaceFocusOnTriggerInNewColumn_When_MoveSucceeds", async () => {
+    let resolveUpdate: (session: Session) => void = () => {};
+    updateSessionMock.mockReturnValue(
+      new Promise<Session>((resolve) => { resolveUpdate = resolve; })
+    );
+    const user = userEvent.setup();
+    const { rerender } = render(<SessionBoard sessions={sessions} />);
+
+    const running = screen.getByTestId("board-column-running");
+    await user.click(within(running).getByTestId("move-to-menu-trigger"));
+    await user.click(screen.getByRole("menuitem", { name: "Paused" }));
+
+    await act(async () => {
+      rerender(<SessionBoard sessions={pausedSessions} />);
+      resolveUpdate({ id: "run-1" } as Session);
+    });
+
+    const paused = screen.getByTestId("board-column-paused");
+    expect(within(paused).getByTestId("move-to-menu-trigger")).toHaveFocus();
+  });
+
+  it("dragCard_should_PlaceFocusOnDragHandleInNewColumn_When_MoveSucceeds", async () => {
+    let resolveUpdate: (session: Session) => void = () => {};
+    updateSessionMock.mockReturnValue(
+      new Promise<Session>((resolve) => { resolveUpdate = resolve; })
+    );
+    const { rerender } = render(<SessionBoard sessions={sessions} />);
+
+    await act(async () => {
+      captured.onDragStart?.(dragEvent("__default__:run-1", null));
+    });
+    let dragEndSettled: Promise<void> | undefined;
+    act(() => {
+      dragEndSettled = captured.onDragEnd?.(dragEvent("__default__:run-1", "__default__:paused")) as
+        | Promise<void>
+        | undefined;
+    });
+
+    await act(async () => {
+      rerender(<SessionBoard sessions={pausedSessions} />);
+      resolveUpdate({ id: "run-1" } as Session);
+      await dragEndSettled;
+    });
+
+    const paused = screen.getByTestId("board-column-paused");
+    expect(within(paused).getByLabelText("Drag Active session to move")).toHaveFocus();
   });
 });

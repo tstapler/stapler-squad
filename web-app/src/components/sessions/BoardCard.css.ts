@@ -17,6 +17,16 @@ export const cardBody = style({
   minWidth: 0,
 });
 
+// Stacks the drag handle above the MoveToMenu trigger -- both are non-drag-surface controls
+// that live in the same narrow rail to the left of the card body.
+export const cardControls = style({
+  display: "flex",
+  flexDirection: "column",
+  alignItems: "center",
+  gap: vars.space["1"],
+  flexShrink: 0,
+});
+
 // touchAction is set on the handle only (not cardWrapper/cardBody) so the card itself keeps
 // normal touch scrolling — only this element becomes a drag surface once Phase 3 wires
 // useDraggable. cursor: grab is applied now for the same reason: no retrofit later.
