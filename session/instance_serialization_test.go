@@ -1,9 +1,82 @@
 package session
 
 import (
+	"encoding/json"
 	"log/slog"
 	"testing"
+	"time"
 )
+
+// TestToInstanceData_PreservesBackend verifies that Instance.Backend (a
+// per-session ProcessManager backend pin, e.g. BackendTymux) survives the
+// ToInstanceData -> FromInstanceData round trip (Epic 5.1's persistence
+// story) instead of silently reverting to the process-wide default across a
+// process restart.
+func TestToInstanceData_PreservesBackend(t *testing.T) {
+	t.Parallel()
+	now := time.Now()
+
+	instance := &Instance{
+		Title:     "backend-roundtrip",
+		Path:      "/path/to/repo",
+		Status:    Paused,
+		CreatedAt: now,
+		UpdatedAt: now,
+		Program:   "claude",
+		Backend:   BackendTymux,
+	}
+
+	data := instance.ToInstanceData()
+	if data.Backend != BackendTymux {
+		t.Fatalf("ToInstanceData(): expected Backend %q, got %q", BackendTymux, data.Backend)
+	}
+
+	restored, err := FromInstanceData(data)
+	if err != nil {
+		t.Fatalf("FromInstanceData: %v", err)
+	}
+	if restored.Backend != BackendTymux {
+		t.Fatalf("FromInstanceData(): expected Backend %q, got %q", BackendTymux, restored.Backend)
+	}
+}
+
+// TestFromInstanceData_OldJSONWithoutBackendFieldDefaultsEmpty is the
+// backward-compatibility regression test named by Epic 5.1's doc comment
+// update: an InstanceData/sessions.json entry written before the "backend"
+// field existed has no "backend" key at all. Confirm it unmarshals to the Go
+// zero value ("") rather than failing or defaulting to some other value, and
+// that a restored instance carries that empty pin through — i.e. it falls
+// through to whatever NewProcessManager's process-wide default resolves to,
+// with no explicit migration code required.
+func TestFromInstanceData_OldJSONWithoutBackendFieldDefaultsEmpty(t *testing.T) {
+	t.Parallel()
+
+	// Hand-constructed legacy JSON blob: a real pre-Epic-5.1 sessions.json
+	// entry would never contain a "backend" key.
+	oldJSON := `{
+		"title": "legacy-session",
+		"path": "/path/to/repo",
+		"status": 2,
+		"program": "claude"
+	}`
+
+	var data InstanceData
+	if err := json.Unmarshal([]byte(oldJSON), &data); err != nil {
+		t.Fatalf("Unmarshal legacy InstanceData JSON: %v", err)
+	}
+
+	if data.Backend != "" {
+		t.Fatalf("expected Backend to default to \"\" for legacy JSON without a backend key, got %q", data.Backend)
+	}
+
+	restored, err := FromInstanceData(data)
+	if err != nil {
+		t.Fatalf("FromInstanceData: %v", err)
+	}
+	if restored.Backend != "" {
+		t.Fatalf("expected restored instance Backend to be \"\" (falls through to process-wide default), got %q", restored.Backend)
+	}
+}
 
 // TestWorktreeMissingLevel_WarnsOnFirstDebugsOnRepeat guards the dedup
 // decision fromInstanceData uses when it detects a missing worktree

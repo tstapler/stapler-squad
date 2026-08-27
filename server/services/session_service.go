@@ -1390,6 +1390,10 @@ func (s *SessionService) CreateDirectorySession(ctx context.Context, title, path
 		MCPServerURL:     s.resolveMCPServerURL(),
 		CreateIfMissing:  true,
 		TmuxServerSocket: s.testTmuxServerSocket,
+		// Backend consults the session-name override map (tymux-bundled-integration
+		// Epic 4.4.2) so a canary override applies through this entry point too;
+		// there's no per-request override concept for this internal creator.
+		Backend: session.ResolveSessionBackendForTitle(cfg, title, ""),
 	}
 	instance, err := session.NewInstance(opts)
 	if err != nil {
@@ -1443,6 +1447,10 @@ func (s *SessionService) CreateWorktreeSession(ctx context.Context, title, repoP
 		MCPServerURL:     s.resolveMCPServerURL(),
 		CreateIfMissing:  false,
 		TmuxServerSocket: s.testTmuxServerSocket,
+		// Backend consults the session-name override map (tymux-bundled-integration
+		// Epic 4.4.2) so a canary override applies through this entry point too;
+		// there's no per-request override concept for this internal creator.
+		Backend: session.ResolveSessionBackendForTitle(cfg, title, ""),
 	}
 	instance, err := session.NewInstance(opts)
 	if err != nil {
@@ -2397,6 +2405,14 @@ func (s *SessionService) CreateSession(
 		// request (Story 2.3.1); empty for a normal CreateSession call. The
 		// still-live guard and path derivation already ran above.
 		RestartedFromSessionID: req.Msg.RestartFromSessionId,
+		// Backend resolves the effective ProcessManager backend (tymux-bundled-integration
+		// Epic 4.3): req.Msg.BackendOverride as the per-request override, keyed by the
+		// sanitized tmux session name (tmux.NewSessionName, via ResolveSessionBackendForTitle)
+		// that initTmuxSession will use to create this session's tmux session — NOT the raw
+		// req.Msg.Title — since that's what TymuxSessionOverrides/StreamHubSessionOverrides are
+		// keyed by (see config.Config.TymuxSessionOverrides's doc comment and
+		// tmuxSessionNameForStreamPath's identical derivation in connectrpc_websocket.go).
+		Backend: session.ResolveSessionBackendForTitle(cfg, req.Msg.Title, session.ProcessManagerBackend(req.Msg.GetBackendOverride())),
 	}
 
 	// Add GitHub metadata if this was a GitHub URL
@@ -4876,6 +4892,11 @@ func (s *SessionService) CompleteStreamHubRollbackRehearsal(ctx context.Context,
 // SetStreamHubSessionOverride sets or clears a per-session stream-hub canary override.
 func (s *SessionService) SetStreamHubSessionOverride(ctx context.Context, req *connect.Request[sessionv1.SetStreamHubSessionOverrideRequest]) (*connect.Response[sessionv1.StreamHubRolloutStatus], error) {
 	return s.streamHubRolloutSvc.SetStreamHubSessionOverride(ctx, req)
+}
+
+// SetStreamHubGlobalOverride sets or clears the live global stream-hub override.
+func (s *SessionService) SetStreamHubGlobalOverride(ctx context.Context, req *connect.Request[sessionv1.SetStreamHubGlobalOverrideRequest]) (*connect.Response[sessionv1.StreamHubRolloutStatus], error) {
+	return s.streamHubRolloutSvc.SetStreamHubGlobalOverride(ctx, req)
 }
 
 // SetOnGlobalDefaultsUpdated wires in the callback invoked after every

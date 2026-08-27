@@ -92,6 +92,10 @@ build/
 # so its contents don't need ignore rules).
 .tmux-build.stamp
 
+# Pinned tymuxd fetch stamp (records the last-fetched TYMUX_VERSION; see
+# scripts/fetch-tymuxd.sh and ADR-001).
+.tymuxd-fetch.stamp
+
 # Scanner build artifacts
 tools/scanner/cmd
 tools/scanner/backend/cmd/scanner

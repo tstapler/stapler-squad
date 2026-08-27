@@ -4,9 +4,12 @@ import (
 	"context"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/tstapler/stapler-squad/session/tymux"
 )
 
 // Epic 2.1 Story 2.1.3 / Task 2.1.3d: ProcessManagerOptions.Backend is an explicit
@@ -98,4 +101,61 @@ func TestNewProcessManager_ShouldReturnConstructionError_WhenBackendConstantUnre
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrUnrecognizedBackend)
 	assert.Nil(t, pm)
+}
+
+// TestNewProcessManager_should_ReturnImmediately_When_BackendIsTymuxRegardlessOfDaemonState
+// is Task 2.1.3b's regression guard for ADR-004: NewProcessManager's
+// BackendTymux case must never call (or block on) tymux.EnsureDaemonRunning —
+// that check moved into TymuxBackend.Start()/RestoreWithWorkDir(), which only
+// ever runs inside the async goroutine session_service.go's CreateSession
+// already uses, never on the synchronous construction path. Proven here by
+// stubbing backend_tymux.go's ensureDaemonRunningFn seam to block
+// indefinitely (simulating a wedged/cold tymuxd) and asserting
+// NewProcessManager still returns promptly and successfully — if
+// NewProcessManager regressed to calling that seam at construction time,
+// this test would hang until its own timeout and fail.
+func TestNewProcessManager_should_ReturnImmediately_When_BackendIsTymuxRegardlessOfDaemonState(t *testing.T) {
+	RegisterBackendProvider(BackendTmux)
+	defer RegisterBackendProvider(BackendTmux)
+
+	blockForever := make(chan struct{})
+	restore := stubEnsureDaemonRunning(func(context.Context, tymux.DaemonConfig) (tymux.TymuxdReady, error) {
+		<-blockForever
+		return tymux.TymuxdReady{}, nil
+	})
+	defer restore()
+
+	done := make(chan struct{})
+	var pm ProcessManager
+	var err error
+	go func() {
+		pm, err = NewProcessManager(context.Background(), BackendTmux, ProcessManagerOptions{Backend: BackendTymux})
+		close(done)
+	}()
+
+	timedOut := false
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		timedOut = true
+	}
+
+	// Unblock the stub and join the spawned goroutine unconditionally,
+	// before this test function returns via any path (including the
+	// t.Fatal below): a select-timeout branch that returned without
+	// joining first left the goroutine racing later tests over shared
+	// package globals (ensureDaemonRunningFn, the backend registry) -- a
+	// genuine, reproduced -race failure caught in code review. Root-caused
+	// and fixed here rather than re-excused as a rare flake (see
+	// .claude/rules/fix-flaky-tests-dont-defer.md).
+	close(blockForever)
+	<-done
+
+	if timedOut {
+		t.Fatal("NewProcessManager blocked for BackendTymux -- daemon check must not run at construction time (ADR-004)")
+	}
+
+	require.NoError(t, err)
+	_, ok := pm.(*TymuxBackend)
+	assert.True(t, ok, "expected *TymuxBackend, got %T", pm)
 }

@@ -310,10 +310,12 @@ service SessionService {
   rpc UpdateCallbackConfig(UpdateCallbackConfigRequest) returns (UpdateCallbackConfigResponse) {}
 
   // Stream Hub Rollout RPCs (terminal-multi-connection-streaming Story 3.3).
-  // The global STAPLER_SQUAD_USE_STREAM_HUB default is env-var-gated and
-  // requires a process restart to change — none of these RPCs can flip it.
-  // What they control is config.json-backed and takes effect immediately:
-  // the rollback-rehearsal completion gate and per-session canary overrides.
+  // Everything these RPCs control is config.json-backed and takes effect
+  // immediately (for session connections resolved from that point on, not
+  // already-connected sessions): the rollback-rehearsal completion gate,
+  // per-session canary overrides, and — via SetStreamHubGlobalOverride — a
+  // live global override, so flipping the effective default no longer
+  // requires editing STAPLER_SQUAD_USE_STREAM_HUB and restarting the process.
 
   // GetStreamHubRolloutStatus reports the current rollout status: whether
   // the global env var is set in this process's environment right now,
@@ -332,6 +334,17 @@ service SessionService {
   // SetStreamHubSessionOverride sets or clears a per-session canary
   // override (Story 3.3.1), independent of the rollback rehearsal gate.
   rpc SetStreamHubSessionOverride(SetStreamHubSessionOverrideRequest) returns (StreamHubRolloutStatus) {}
+
+  // SetStreamHubGlobalOverride sets or clears a live, config.json-backed
+  // override of the global stream-hub default, taking effect immediately
+  // for every session connection resolved after this call — no process
+  // restart required. Forcing it on still goes through the same rollback
+  // rehearsal gate as the env var path (ResolveGlobalStreamHubDefault);
+  // clearing it (force_hub unset) reverts to the STAPLER_SQUAD_USE_STREAM_HUB
+  // env var default. Like all stream-hub resolution, this can only affect
+  // sessions whose ownership lock hasn't resolved yet — an already-connected
+  // session's resolution is cached for its lifetime and cannot be moved.
+  rpc SetStreamHubGlobalOverride(SetStreamHubGlobalOverrideRequest) returns (StreamHubRolloutStatus) {}
 
   // ListWorktrees returns the git worktrees for a given repository path.
   // Used by the Omnibar to populate the "Use Existing Worktree" dropdown.
@@ -698,6 +711,12 @@ message CreateSessionRequest {
 
   // Required to proceed when restart_from_session_id names a still-live source instance.
   bool confirm_restart_with_live_source = 33;
+
+  // Optional: force a specific ProcessManager backend for this session ("tmux", "tymux"),
+  // overriding both the per-session config override and the process-wide default. Empty
+  // means no per-request override — normal precedence applies (see
+  // session.ResolveSessionBackend).
+  optional string backend_override = 34;
 }
 
 // RemoteTarget names a previously-saved remote (by RemoteConfig.Name) that a
@@ -2103,12 +2122,16 @@ message StreamHubSessionOverrideEntry {
 
 message StreamHubRolloutStatus {
   // Whether STAPLER_SQUAD_USE_STREAM_HUB=true is set in this process's
-  // environment right now. Purely informational: the global default can
-  // only be changed by setting the env var and restarting the process.
+  // environment right now. Purely informational — superseded by
+  // global_override when the latter is set.
   bool global_env_var_set = 1;
   // Unset when the rollback rehearsal has never been completed.
   google.protobuf.Timestamp rollback_rehearsal_completed_at = 2;
   repeated StreamHubSessionOverrideEntry session_overrides = 3;
+  // Live, config.json-backed override of the global default, settable via
+  // SetStreamHubGlobalOverride with no restart required. Unset means no
+  // override is active and the env var default applies.
+  optional bool global_override = 4;
 }
 
 message CompleteStreamHubRollbackRehearsalRequest {}
@@ -2120,6 +2143,14 @@ message SetStreamHubSessionOverrideRequest {
   // pins it onto the legacy path — either way, regardless of the global
   // default.
   optional bool force_hub = 2;
+}
+
+message SetStreamHubGlobalOverrideRequest {
+  // Unset clears the global override, reverting to the
+  // STAPLER_SQUAD_USE_STREAM_HUB env var default. true/false forces the
+  // global default for every session connection resolved from now on,
+  // still subject to the rollback rehearsal gate when forcing true.
+  optional bool force_hub = 1;
 }
 
 // UpsertProfile

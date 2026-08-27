@@ -9,6 +9,7 @@ import (
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
+	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/session"
@@ -159,6 +160,7 @@ func (lh *lifecycleHandlers) createSession(ctx context.Context, req mcpgo.CallTo
 		}
 	}
 
+	cfg := config.LoadConfig()
 	inst, err := session.NewInstance(session.InstanceOptions{
 		Title:       title,
 		Path:        path,
@@ -166,6 +168,10 @@ func (lh *lifecycleHandlers) createSession(ctx context.Context, req mcpgo.CallTo
 		Program:     program,
 		SessionType: sessionType,
 		Tags:        tags,
+		// Backend consults the session-name override map (tymux-bundled-integration
+		// Epic 4.4.1) so a canary override applies through this entry point too;
+		// there's no per-request override field on this MCP tool's schema.
+		Backend: session.ResolveSessionBackendForTitle(cfg, title, ""),
 	})
 	if err != nil {
 		return errResult(ErrInternalError, fmt.Sprintf("create session: %v", err), ""), nil

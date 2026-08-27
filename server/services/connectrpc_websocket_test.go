@@ -589,6 +589,45 @@ func TestUseStreamHub_should_ReturnFalse_When_RehearsalNotCompleted(t *testing.T
 	require.False(t, useStreamHub(), "expected the global default to stay false without a recorded rollback rehearsal")
 }
 
+// TestUseStreamHub_should_PreferGlobalOverride_Over_EnvVar (Story 3.3.4)
+// verifies the live, browser-settable config.StreamHubGlobalOverride takes
+// precedence over the STAPLER_SQUAD_USE_STREAM_HUB env var in both
+// directions, and that clearing it (nil) reverts resolution to the env var.
+func TestUseStreamHub_should_PreferGlobalOverride_Over_EnvVar(t *testing.T) {
+	recordRollbackRehearsalCompletedForTest(t)
+	t.Setenv("STAPLER_SQUAD_USE_STREAM_HUB", "true")
+
+	cfg := config.LoadConfig()
+	forceFalse := false
+	require.NoError(t, cfg.SetStreamHubGlobalOverride(&forceFalse))
+	require.False(t, useStreamHub(), "override=false must win over env var=true")
+
+	forceTrue := true
+	require.NoError(t, cfg.SetStreamHubGlobalOverride(&forceTrue))
+	require.True(t, useStreamHub())
+
+	t.Setenv("STAPLER_SQUAD_USE_STREAM_HUB", "false")
+	require.True(t, useStreamHub(), "override=true must win over env var=false")
+
+	require.NoError(t, cfg.SetStreamHubGlobalOverride(nil))
+	require.False(t, useStreamHub(), "clearing the override must revert resolution to the env var")
+}
+
+// TestUseStreamHub_should_GateGlobalOverride_On_RollbackRehearsal (Story
+// 3.3.4) verifies forcing the override to true is refused, same as the env
+// var path, when no rollback rehearsal has been recorded.
+func TestUseStreamHub_should_GateGlobalOverride_On_RollbackRehearsal(t *testing.T) {
+	cfg := config.LoadConfig()
+	cfg.RollbackRehearsalCompletedAt = nil
+	require.NoError(t, config.SaveConfig(cfg))
+
+	forceTrue := true
+	require.NoError(t, cfg.SetStreamHubGlobalOverride(&forceTrue))
+	t.Cleanup(func() { _ = cfg.SetStreamHubGlobalOverride(nil) })
+
+	require.False(t, useStreamHub(), "override=true must still be refused without a recorded rollback rehearsal")
+}
+
 // getOrCreateHubForTest wraps hubRegistry.GetOrCreate and registers
 // t.Cleanup to tear down the hub it returns (if any) — the single place
 // this file's tests get automatic hub teardown from, instead of each test

@@ -84,10 +84,23 @@ func NewProcessManager(_ context.Context, defaultBackend ProcessManagerBackend, 
 // stub transport can no longer stand in here the way it did through Epic
 // 2.2 (see tymux.NewRealTransport's doc comment for why that gap existed
 // and closing it landed in this epic rather than 2.1/2.2 as originally
-// expected). The address defaults to tymuxd's documented loopback
-// address, overridable via the TYMUXD_ADDR environment variable.
+// expected).
+//
+// The address comes from tymux.ResolveDaemonConfig().Addr -- NOT a bare ""
+// (which would fall back to NewRealTransport's own tymuxdAddr(), the
+// non-instance-aware resolver) -- so that a named STAPLER_SQUAD_INSTANCE's
+// RPC traffic actually reaches the same instance-derived port supervision
+// (EnsureDaemonRunning, session/tymux/daemon_config.go's ResolveDaemonConfig)
+// spawns tymuxd at. Using tymuxdAddr() here instead would silently point
+// every tymux-backed session's real traffic at the shared/default
+// 127.0.0.1:7419 regardless of instance, even though its own supervision
+// correctly started (or found) a daemon at a different, instance-scoped
+// address -- a real found-in-review gap (not hypothetical: supervision and
+// RPC traffic would simply never agree on which daemon to talk to for any
+// named instance) fixed here rather than filed away, since both call sites
+// ultimately need the identical DaemonConfig.Addr to agree.
 func newTymuxBackendFromOpts(opts ProcessManagerOptions) *TymuxBackend {
-	return NewTymuxBackend(tymux.NewTymuxGRPCSession(tymux.NewRealTransport("")))
+	return NewTymuxBackend(tymux.NewTymuxGRPCSession(tymux.NewRealTransport(tymux.ResolveDaemonConfig().Addr)))
 }
 
 // newTmuxBackendFromOpts constructs a TmuxProcessManager from ProcessManagerOptions

@@ -81,6 +81,38 @@ func TestStorage_UUID_PersistedThroughAddAndLoad(t *testing.T) {
 		"UUID must survive AddInstance → LoadInstances round-trip")
 }
 
+// TestStorage_Backend_PersistedThroughAddAndLoad is the real-persistence
+// regression test for Epic 5.1: Instance.Backend must survive a round trip
+// through the actual ent-backed repository (EntRepository.Create/Update and
+// sessionToInstanceData), not just the in-process ToInstanceData/
+// FromInstanceData conversion — session/storage.go's SaveInstances/
+// LoadInstances is what a real process restart actually goes through.
+func TestStorage_Backend_PersistedThroughAddAndLoad(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+
+	inst := &Instance{
+		Title:     "backend-roundtrip",
+		Path:      "/tmp/test",
+		Status:    Paused,
+		Program:   "claude",
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+		Backend:   BackendTymux,
+	}
+	inst.started.Store(true)
+
+	require.NoError(t, storage.AddInstance(inst))
+
+	loaded, err := storage.LoadInstances()
+	require.NoError(t, err)
+	require.Len(t, loaded, 1)
+
+	assert.Equal(t, BackendTymux, loaded[0].Backend,
+		"Backend must survive AddInstance → LoadInstances round-trip through the ent repository")
+}
+
 // TestStorage_UUID_StableAcrossMultipleLoads verifies that the UUID returned by
 // LoadInstances is deterministic across repeated calls (no re-generation).
 func TestStorage_UUID_StableAcrossMultipleLoads(t *testing.T) {
