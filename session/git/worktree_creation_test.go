@@ -44,12 +44,8 @@ func setupTestRepo(t *testing.T) string {
 	return dir
 }
 
-// TestNewGitWorktreeWithBranch_should_Error_When_RepoPathIsEmpty guards against the
-// mechanism that let a zero-value/unresolved repoPath silently fall through to
-// filepath.Abs("") (which resolves to the process's cwd) and reach findGitRepoRoot
-// against whatever real repo the process happened to be running from — see this
-// package's util.go doc comments on findGitRepoRoot and createInitialCommit for the
-// incident this caused.
+// TestNewGitWorktreeWithBranch_should_Error_When_RepoPathIsEmpty guards against a
+// zero-value repoPath falling through to filepath.Abs("") (resolves to cwd).
 func TestNewGitWorktreeWithBranch_should_Error_When_RepoPathIsEmpty(t *testing.T) {
 	_, _, err := NewGitWorktreeWithBranch("", "test-empty-path", "")
 	require.Error(t, err)

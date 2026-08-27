@@ -348,12 +348,9 @@ func commitRealFile(t *testing.T, repoDir, name, content, message string) string
 }
 
 // breakHeadReference rewrites repoDir/.git/HEAD to point at a branch that does
-// not exist, reproducing the go-git failure mode that caused this bug:
-// git.PlainOpen still succeeds and repo.References() still enumerates the
-// repo's real refs (including the real commit made via commitRealFile), but
-// repo.Head() fails to resolve — the exact "repo.Head() errors on an otherwise
-// real, non-empty repo" case findGitRepoRoot previously misdiagnosed as
-// "repository has no commits yet".
+// not exist, reproducing the go-git failure this bug hinged on: repo.Head()
+// fails to resolve even though repo.References() still enumerates the repo's
+// real refs — exactly what findGitRepoRoot previously misdiagnosed as unborn.
 func breakHeadReference(t *testing.T, repoDir string) {
 	t.Helper()
 	headPath := filepath.Join(repoDir, ".git", "HEAD")

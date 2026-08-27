@@ -147,10 +147,8 @@ func (r *RemoteWorktreeOps) RemoveWorktree(ctx context.Context, w RemoteWorktree
 func (r *RemoteWorktreeOps) InitializeProjectDirectory(ctx context.Context, projectPath string) error {
 	// The `git rev-parse --verify -q HEAD` check right before the destructive
 	// .gitignore write/commit is a self-defending guard, not the primary gate
-	// (the `[ -e .git ]` check above it already prevents re-running against an
-	// existing repo in the normal case) — mirroring createInitialCommit's
-	// repoHasAnyRef guard in util.go, which protects every caller regardless of
-	// how it was reached rather than trusting a single earlier check.
+	// (`[ -e .git ]` above already prevents the normal re-run case) — mirrors
+	// createInitialCommit's repoHasAnyRef guard in util.go.
 	script := fmt.Sprintf(`set -e
 mkdir -p %[1]s
 cd %[1]s

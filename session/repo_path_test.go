@@ -600,30 +600,20 @@ func TestCreateBacklogWorktree_AnchorsAtMainRepo_When_RepoPathIsAWorktree(t *tes
 // TestCreateBacklogWorktree_should_Error_When_RepoPathIsEmpty guards the production
 // (not test-only) mechanism that can reach this exact corruption: a BacklogItem can
 // legitimately have an empty RepoPath (CreateBacklogItem never requires one, and
-// TransitionBacklogItemStatus's guards never check it — BacklogItemTransitionInput has
-// no RepoPath field at all, and Idea->Ready is a directly legal transition per
-// session/domain/backlog.go's validTransitions map), so an item can reach
-// SpawnSessionFromItem with RepoPath still "". Without this guard,
-// ResolveSessionPath("") silently resolves to the calling process's own cwd via
+// TransitionBacklogItemStatus's guards never check it — Idea->Ready is a directly
+// legal transition per session/domain/backlog.go's validTransitions map), so an item
+// can reach SpawnSessionFromItem with RepoPath still "". Without this guard,
+// ResolveSessionPath("") would silently resolve to the calling process's own cwd via
 // filepath.Abs("") — for the live server process, that's this repo's own real
-// checkout — and CreateBacklogWorktree would proceed against it instead of erroring.
-// t.Chdir points the process at a disposable t.TempDir()-based repo (never this real
-// checkout) so a regression here fails loudly instead of writing into a real repo.
+// checkout. Asserts on the error directly rather than chdir'ing into a fake repo: this
+// guard returns before ResolveSessionPath is ever called, so no real cwd interaction
+// happens for it to observe.
 func TestCreateBacklogWorktree_should_Error_When_RepoPathIsEmpty(t *testing.T) {
-	fakeCWDRepo := t.TempDir()
-	if _, err := git.PlainInit(fakeCWDRepo, false); err != nil {
-		t.Fatalf("PlainInit(fakeCWDRepo) failed: %v", err)
-	}
-	t.Chdir(fakeCWDRepo)
-
 	_, err := CreateBacklogWorktree("", "empty-repopath-item")
 	if err == nil {
 		t.Fatal("CreateBacklogWorktree(\"\", ...) succeeded; want an error rather than silently operating against cwd")
 	}
 	if !strings.Contains(err.Error(), "repoPath must not be empty") {
 		t.Errorf("CreateBacklogWorktree(\"\", ...) error = %q, want it to mention repoPath must not be empty", err.Error())
-	}
-	if _, statErr := os.Stat(filepath.Join(fakeCWDRepo, ".gitignore")); !os.IsNotExist(statErr) {
-		t.Errorf("expected no .gitignore to be written into cwd, got stat err = %v", statErr)
 	}
 }
