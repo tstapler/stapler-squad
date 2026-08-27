@@ -26,22 +26,10 @@
 
 import { test, expect, Page } from "@playwright/test";
 import { SessionClient } from "./helpers/session-client";
+import { waitUntilSettled } from "./helpers/wait";
 import { SessionsPage } from "./pages/SessionsPage";
 
 const BASE_URL = process.env.TEST_SERVER_URL || "http://localhost:8544";
-
-// Mirrors create-pull-request.spec.ts's waitUntilSettled: WatchSessions is
-// aborted below so there's no live update to pick up CREATING -> ACTIVE: poll
-// via GetSession until the session has settled before navigating.
-async function waitUntilSettled(client: SessionClient, sessionId: string, timeoutMs = 10000) {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    const session = await client.getSession(sessionId);
-    if (session.status !== "SESSION_STATUS_CREATING") return session;
-    await new Promise((r) => setTimeout(r, 250));
-  }
-  throw new Error(`Session ${sessionId} still SESSION_STATUS_CREATING after ${timeoutMs}ms`);
-}
 
 interface SteerFixture {
   /** Resolves once ListSessions has been intercepted at least once, so the

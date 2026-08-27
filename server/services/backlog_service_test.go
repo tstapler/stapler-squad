@@ -239,9 +239,13 @@ func (m *mockSessionStopper) ArchiveSessionByUUID(_ context.Context, uuid string
 // mockSessionSteerer implements SessionSteerer for tests, mirroring
 // mockSessionStopper's shape. mu guards steerCalls against concurrent
 // SteerActiveSession calls (needed by the steerInFlight race test,
-// server/services/backlog_service_pr_fix_steer_integration_test.go) — programs
-// and steerErr are only ever written at construction time, so reads of those
-// two maps need no lock.
+// server/services/backlog_service_pr_fix_steer_integration_test.go). programs
+// and steerErr are unguarded — no write to them ever races a concurrent
+// read in the current tests, but that's because those writes happen between
+// two sequential (non-concurrent) calls in the same goroutine (e.g.
+// TestAutoReopenForPRFix_ActiveWorkSession_ProgramGatingDoesNotAffectDedupKey
+// mutates programs after construction), not because the maps are safe for
+// genuinely concurrent mutation — this fake is not safe for that.
 type mockSessionSteerer struct {
 	mu         sync.Mutex
 	programs   map[string]string // uuid -> program; absent = not live

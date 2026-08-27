@@ -220,6 +220,39 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
     setShowOverflow((o) => !o);
   }, []);
 
+  // sendSteerMessage is the steer dialog's single submit path, shared by the
+  // input's Enter-key handler and the Send button's onClick — both need the
+  // identical sequence (disable input, move focus off it before the browser
+  // auto-blurs it, deliver, then close/clear only on success). The try/catch
+  // (in addition to the existing finally) treats a rejected promise the same
+  // as an onSteerAutonomousSession that resolves to false — without it, a
+  // caller that rejects rather than resolving false would surface as an
+  // unhandled promise rejection from inside a DOM event handler.
+  const sendSteerMessage = useCallback(async () => {
+    const message = steerMessage.trim();
+    if (!message || isSteering) return;
+    setIsSteering(true);
+    // Move focus to Cancel *before* the input's disabled prop takes effect,
+    // so focus stays inside the dialog instead of the browser auto-blurring
+    // it to document.body — that auto-blur would break both the Escape
+    // handler and useFocusTrap's Tab-cycling (its focusable-elements
+    // snapshot isn't re-evaluated when the input drops out of the tab
+    // order).
+    steerCancelButtonRef.current?.focus();
+    try {
+      const ok = await onSteerAutonomousSession?.(session.id, message);
+      if (ok !== false) {
+        setIsSteerOpen(false);
+        setSteerMessage("");
+      }
+    } catch {
+      // Treat a rejected promise the same as a resolved `false` — the steer
+      // failed, so leave the dialog open with the message intact.
+    } finally {
+      setIsSteering(false);
+    }
+  }, [steerMessage, isSteering, onSteerAutonomousSession, session.id]);
+
   const close = () => setShowOverflow(false);
 
   const handleRestartConfirm = async (e: React.MouseEvent) => {
@@ -511,32 +544,18 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
               type="text"
               value={steerMessage}
               onChange={(e) => setSteerMessage(e.target.value)}
-              onKeyDown={async (e) => {
+              onKeyDown={(e) => {
                 if (e.key === "Enter" && steerMessage.trim() && !isSteering) {
-                  // Without this, moving focus to Cancel below (still inside
-                  // this same keydown handler) lets the browser's default
-                  // Enter-key handling re-target the now-focused Cancel
-                  // button and synthesize a click on it once the handler
-                  // returns — closing the dialog immediately instead of
-                  // sending. Confirmed via a real-browser Playwright repro:
-                  // Cancel's onClick fired right after setIsSteering(true),
-                  // before onSteerAutonomousSession had even resolved.
+                  // Without preventDefault + sendSteerMessage's own focus
+                  // move to Cancel, the browser's default Enter-key handling
+                  // re-targets the now-focused Cancel button and synthesizes
+                  // a click on it once this handler returns — closing the
+                  // dialog immediately instead of sending. Confirmed via a
+                  // real-browser Playwright repro: Cancel's onClick fired
+                  // right after setIsSteering(true), before
+                  // onSteerAutonomousSession had even resolved.
                   e.preventDefault();
-                  setIsSteering(true);
-                  // Move focus to Cancel *before* the input's disabled prop
-                  // takes effect, so focus stays inside the dialog instead of
-                  // the browser auto-blurring it to document.body — that
-                  // auto-blur would break both the Escape handler above and
-                  // useFocusTrap's Tab-cycling (its focusable-elements
-                  // snapshot isn't re-evaluated when the input drops out of
-                  // the tab order).
-                  steerCancelButtonRef.current?.focus();
-                  try {
-                    const ok = await onSteerAutonomousSession?.(session.id, steerMessage.trim());
-                    if (ok !== false) { setIsSteerOpen(false); setSteerMessage(""); }
-                  } finally {
-                    setIsSteering(false);
-                  }
+                  void sendSteerMessage();
                 }
               }}
               placeholder="e.g. Focus on the UI tests first"
@@ -546,18 +565,9 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
             />
             <div className={dialogActions}>
               <button
-                onClick={async (e) => {
+                onClick={(e) => {
                   e.stopPropagation();
-                  if (steerMessage.trim() && !isSteering) {
-                    setIsSteering(true);
-                    steerCancelButtonRef.current?.focus();
-                    try {
-                      const ok = await onSteerAutonomousSession?.(session.id, steerMessage.trim());
-                      if (ok !== false) { setIsSteerOpen(false); setSteerMessage(""); }
-                    } finally {
-                      setIsSteering(false);
-                    }
-                  }
+                  void sendSteerMessage();
                 }}
                 disabled={!steerMessage.trim() || isSteering}
                 className={submitButton}

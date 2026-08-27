@@ -2042,9 +2042,13 @@ func (s *BacklogService) HasActiveWorkSession(ctx context.Context, itemID string
 	return findActiveWorkSession(sessions) != nil, nil
 }
 
-// AutoReopenForPRFix implements session.PRFixSpawner. It transitions the item
-// from pr_pending back to in_progress and spawns a new autonomous work session
-// pre-loaded with the CI/review failure context so the agent can fix and push.
+// AutoReopenForPRFix implements session.PRFixSpawner. When no work session is
+// active for the item, it transitions the item from pr_pending back to
+// in_progress and spawns a new autonomous work session pre-loaded with the
+// CI/review failure context so the agent can fix and push; when a work
+// session is already active, it instead steers that session with the same
+// fixContext (see steerActiveSessionForPRFix) rather than spawning a
+// duplicate.
 func (s *BacklogService) AutoReopenForPRFix(ctx context.Context, itemID string, fixContext string) error {
 	if s.storage == nil {
 		return fmt.Errorf("storage not available")

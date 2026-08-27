@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -298,6 +299,30 @@ func TestBuildSteerMessage_RealisticComposedLongFixContext_SuffixSurvivesTruncat
 	require.True(t, strings.HasSuffix(got, prShipSuffix), "suffix must survive truncation, got %q", got)
 }
 
+// TestBuildSteerMessage_MultiByteRuneAtTruncationBoundary_NeverSplitsRune guards
+// against the naive body[:budget] byte slice buildSteerMessage used before —
+// fixContext embeds GitHub reviewer/PR comment bodies verbatim
+// (PRStatus.render, session/git/worktree_git.go), which routinely contain
+// non-ASCII content (em dashes, curly quotes, emoji, non-English text), so a
+// truncation boundary landing mid-rune is a routine failure mode, not a
+// synthetic edge case. "€" (U+20AC) is placed so its first byte lands
+// exactly at the naive byte budget: body[:budget] would previously cut
+// after only that first byte, producing invalid UTF-8 in the PTY-bound
+// steer message.
+func TestBuildSteerMessage_MultiByteRuneAtTruncationBoundary_NeverSplitsRune(t *testing.T) {
+	budget := session.MaxSteerMessageLength - len(prShipSuffix) - len(truncationPointer)
+	require.Positive(t, budget)
+
+	fixContext := strings.Repeat("a", budget-1) + "€" + strings.Repeat("b", 200)
+	require.Greater(t, len(fixContext), budget, "fixture must actually require truncation")
+
+	got := buildSteerMessage("claude", fixContext)
+
+	require.Truef(t, utf8.ValidString(got), "truncated steer message must be valid UTF-8, got %q", got)
+	require.LessOrEqual(t, len(got), session.MaxSteerMessageLength)
+	require.True(t, strings.HasSuffix(got, prShipSuffix))
+}
+
 // ---------------------------------------------------------------------------
 // Epic 4.3: StuckReasonSteerFailed and notifyActiveSessionSteered
 // ---------------------------------------------------------------------------
@@ -326,6 +351,23 @@ func TestHumanReadableReasonSet_ThreeOrMoreHeaders_OxfordCommaJoined(t *testing.
 	}})
 
 	require.Equal(t, "a merge conflict, failing CI, and reviewer comments", got)
+}
+
+// TestHumanReadableReasonSet_FiveHeaders_OxfordCommaJoined exercises the
+// full realistic 5-header case PRStatus.render() can emit at once (per
+// TestBuildReasonSignature_HeaderStrings_MatchPRStatusRender's fixture)
+// directly through humanReadableReasonSet, not just the 3-header case the
+// "3+" branch's other test covers.
+func TestHumanReadableReasonSet_FiveHeaders_OxfordCommaJoined(t *testing.T) {
+	got := humanReadableReasonSet(reasonSignature{headers: []string{
+		"## Merge conflict",
+		"## Failing CI checks",
+		"## Review: changes requested by @reviewer1",
+		"## Reviewer comments",
+		"## PR comments",
+	}})
+
+	require.Equal(t, "a merge conflict, failing CI, a blocking review, reviewer comments, and PR comments", got)
 }
 
 func TestHumanReadableReasonSet_ReviewHeader_StripsAuthorToGenericPhrase(t *testing.T) {

@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
@@ -228,9 +229,41 @@ func buildSteerMessage(program, fixContext string) string {
 		budget = 0
 	}
 	if len(body) > budget {
-		body = body[:budget] + truncationPointer
+		body = truncateUTF8Bytes(body, budget) + truncationPointer
 	}
 	return body + suffix
+}
+
+// truncateUTF8Bytes cuts s to at most maxBytes bytes without splitting a
+// multi-byte UTF-8 rune. A naive s[:maxBytes] byte slice (the bug this
+// guards against) can land mid-rune when fixContext embeds GitHub reviewer
+// or PR comment bodies verbatim (session/git/worktree_git.go's
+// PRStatus.render) — those routinely contain non-ASCII content (em dashes,
+// curly quotes, emoji, non-English text) — producing invalid UTF-8 in the
+// PTY-bound steer message. Mirrors approval_handler.go's truncateString
+// ("Safe for any UTF-8 content"), but truncates by a byte budget rather
+// than a rune count since session.MaxSteerMessageLength is an RPC-level
+// byte limit.
+func truncateUTF8Bytes(s string, maxBytes int) string {
+	if maxBytes <= 0 {
+		return ""
+	}
+	if len(s) <= maxBytes {
+		return s
+	}
+	cut := s[:maxBytes]
+	// utf8.DecodeLastRuneInString returns (RuneError, 1) when cut's trailing
+	// bytes are an incomplete encoding of the rune that continues past the
+	// naive byte cut — back off one byte at a time until the boundary no
+	// longer splits a rune.
+	for len(cut) > 0 {
+		r, size := utf8.DecodeLastRuneInString(cut)
+		if r != utf8.RuneError || size != 1 {
+			break
+		}
+		cut = cut[:len(cut)-1]
+	}
+	return cut
 }
 
 // ---------------------------------------------------------------------------
@@ -265,22 +298,18 @@ func (s *BacklogService) steerActiveSessionForPRFix(ctx context.Context, itemID,
 	// open/resolve StuckReasonSteerFailed/StuckReasonRespawnBlockedActive
 	// out of order. Mirrors spawnInFlight's LoadOrStore/defer-Delete idiom.
 	if _, already := s.steerInFlight.LoadOrStore(itemID, struct{}{}); already {
+		log.InfoLog().Printf("[AutoReopenForPRFix] steer already in flight for item=%s; rejecting concurrent attempt", itemID)
 		return
 	}
 	defer s.steerInFlight.Delete(itemID)
 
 	if s.sessionSteerer == nil {
-		// A degrade path reaffirms "blocked by active session," which is
-		// never simultaneously a failed-steer condition — resolve any stale
-		// SteerFailed row from an earlier tick (Story 4.3.2's invariant).
-		s.resolveSteerFailedLogged(ctx, "AutoReopenForPRFix", itemID)
-		s.notifyRespawnBlockedByActiveSession(ctx, "AutoReopenForPRFix", itemID, itemTitle, currentStatus, activeSessionUUID)
+		s.degradeToRespawnBlocked(ctx, itemID, itemTitle, currentStatus, activeSessionUUID)
 		return
 	}
 	program, ok := s.sessionSteerer.SessionProgram(activeSessionUUID)
 	if !ok {
-		s.resolveSteerFailedLogged(ctx, "AutoReopenForPRFix", itemID)
-		s.notifyRespawnBlockedByActiveSession(ctx, "AutoReopenForPRFix", itemID, itemTitle, currentStatus, activeSessionUUID)
+		s.degradeToRespawnBlocked(ctx, itemID, itemTitle, currentStatus, activeSessionUUID)
 		return
 	}
 
@@ -296,8 +325,7 @@ func (s *BacklogService) steerActiveSessionForPRFix(ctx context.Context, itemID,
 		confirmed, next := confirmConflictChange(candidate, last.signature, activeSessionUUID, debounceState)
 		s.steerConflictDebounce.Store(itemID, next)
 		if !confirmed {
-			s.resolveSteerFailedLogged(ctx, "AutoReopenForPRFix", itemID)
-			s.notifyRespawnBlockedByActiveSession(ctx, "AutoReopenForPRFix", itemID, itemTitle, currentStatus, activeSessionUUID)
+			s.degradeToRespawnBlocked(ctx, itemID, itemTitle, currentStatus, activeSessionUUID)
 			return
 		}
 	} else {
@@ -305,8 +333,7 @@ func (s *BacklogService) steerActiveSessionForPRFix(ctx context.Context, itemID,
 	}
 
 	if isDuplicateSteerReason(candidate, last, activeSessionUUID, time.Now(), steerCooldown) {
-		s.resolveSteerFailedLogged(ctx, "AutoReopenForPRFix", itemID)
-		s.notifyRespawnBlockedByActiveSession(ctx, "AutoReopenForPRFix", itemID, itemTitle, currentStatus, activeSessionUUID)
+		s.degradeToRespawnBlocked(ctx, itemID, itemTitle, currentStatus, activeSessionUUID)
 		return
 	}
 
@@ -314,6 +341,18 @@ func (s *BacklogService) steerActiveSessionForPRFix(ctx context.Context, itemID,
 	deliverErr := s.sessionSteerer.SteerActiveSession(ctx, activeSessionUUID, message)
 	s.steerDedup.Store(itemID, nextLastSteerReason(last, candidate, activeSessionUUID, deliverErr == nil))
 	s.notifyActiveSessionSteered(ctx, itemID, itemTitle, currentStatus, activeSessionUUID, message, program, candidate, deliverErr)
+}
+
+// degradeToRespawnBlocked is steerActiveSessionForPRFix's shared exit for
+// every branch that falls back to the existing notify-only behavior instead
+// of delivering a steer (no SessionSteerer, session no longer live,
+// unconfirmed conflict debounce, or dedup-suppressed repeat reason). A
+// degrade path reaffirms "blocked by active session," which is never
+// simultaneously a failed-steer condition — resolve any stale SteerFailed
+// row from an earlier tick (Story 4.3.2's invariant) before notifying.
+func (s *BacklogService) degradeToRespawnBlocked(ctx context.Context, itemID, itemTitle string, currentStatus session.BacklogStatus, activeSessionUUID string) {
+	s.resolveSteerFailedLogged(ctx, "AutoReopenForPRFix", itemID)
+	s.notifyRespawnBlockedByActiveSession(ctx, "AutoReopenForPRFix", itemID, itemTitle, currentStatus, activeSessionUUID)
 }
 
 // ---------------------------------------------------------------------------
