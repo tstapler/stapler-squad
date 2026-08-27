@@ -67,7 +67,11 @@ func TestEnsureDaemonRunning_ReusesAlreadyHealthyDaemon(t *testing.T) {
 	var spawnCalls int32
 	defer stubStartDaemonAttempt(func(DaemonConfig) (*os.Process, error) {
 		atomic.AddInt32(&spawnCalls, 1)
-		return nil, nil
+		// Non-nil sentinel: startDaemonAttemptFn's result is discarded via
+		// the blank identifier at the only call site (supervise.go's
+		// EnsureDaemonRunning), so a fake process is safe -- nilnil would
+		// otherwise flag "nil, nil" as an ambiguous success/no-result return.
+		return &os.Process{}, nil
 	})()
 
 	ready, err := EnsureDaemonRunning(context.Background(), DaemonConfig{Addr: "http://127.0.0.1:19999", BinaryPath: "tymuxd"})
@@ -96,7 +100,7 @@ func TestEnsureDaemonRunning_SpawnsAndRetriesUntilHealthy(t *testing.T) {
 	var spawnCalls int32
 	defer stubStartDaemonAttempt(func(DaemonConfig) (*os.Process, error) {
 		atomic.AddInt32(&spawnCalls, 1)
-		return nil, nil
+		return &os.Process{}, nil // see sentinel-value note above
 	})()
 
 	ready, err := EnsureDaemonRunning(context.Background(), DaemonConfig{Addr: "http://127.0.0.1:19998", BinaryPath: "tymuxd"})
@@ -122,7 +126,7 @@ func TestEnsureDaemonRunning_PortSquattedFailsLoudly(t *testing.T) {
 	var spawnCalls int32
 	defer stubStartDaemonAttempt(func(DaemonConfig) (*os.Process, error) {
 		atomic.AddInt32(&spawnCalls, 1)
-		return nil, nil
+		return &os.Process{}, nil // see sentinel-value note above
 	})()
 
 	_, err := EnsureDaemonRunning(context.Background(), DaemonConfig{Addr: "http://127.0.0.1:19997", BinaryPath: "tymuxd"})
@@ -142,7 +146,7 @@ func TestEnsureDaemonRunning_UnhealthyAndPortNotListeningSurfacesPlainError(t *t
 
 	defer stubCheckDaemonHealthy(func(context.Context, DaemonConfig) bool { return false })()
 	defer stubPortListening(func(DaemonConfig) bool { return false })()
-	defer stubStartDaemonAttempt(func(DaemonConfig) (*os.Process, error) { return nil, nil })()
+	defer stubStartDaemonAttempt(func(DaemonConfig) (*os.Process, error) { return &os.Process{}, nil })() // see sentinel-value note above
 
 	_, err := EnsureDaemonRunning(context.Background(), DaemonConfig{Addr: "http://127.0.0.1:19995", BinaryPath: "tymuxd"})
 
@@ -177,7 +181,7 @@ func TestEnsureDaemonRunning_should_StopOrphanedTymuxd_When_HealthCheckRetryExha
 			var spawned atomic.Bool
 			defer stubStartDaemonAttempt(func(DaemonConfig) (*os.Process, error) {
 				spawned.Store(true)
-				return nil, nil
+				return &os.Process{}, nil // see sentinel-value note above
 			})()
 
 			var stopCalls int32
@@ -230,7 +234,7 @@ func TestEnsureDaemonRunning_should_CoalesceViaSingleflight_When_ConcurrentCalle
 		// of a lucky-timing race deciding whether they do.
 		time.Sleep(50 * time.Millisecond)
 		spawned.Store(true)
-		return nil, nil
+		return &os.Process{}, nil // see sentinel-value note above
 	})()
 
 	cfg := DaemonConfig{Addr: "http://127.0.0.1:19996", BinaryPath: "tymuxd"}
@@ -269,7 +273,7 @@ func TestEnsureDaemonRunning_should_CoalesceViaSingleflight_When_ConcurrentCalle
 	defer stubStartDaemonAttempt(func(DaemonConfig) (*os.Process, error) {
 		atomic.AddInt32(&spawnCalls, 1)
 		time.Sleep(50 * time.Millisecond)
-		return nil, nil
+		return &os.Process{}, nil // see sentinel-value note above
 	})()
 
 	cfg := DaemonConfig{Addr: "http://127.0.0.1:19994", BinaryPath: "tymuxd"}
