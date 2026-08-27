@@ -771,6 +771,12 @@ var reasonsWithoutAutomatedRemediation = map[domain.StuckReason]bool{
 	// only, same shape as StuckReasonReworkBlockedStale above.
 	domain.StuckReasonMultipleReasons:    true,
 	domain.StuckReasonBounceCapExhausted: true,
+	// StuckReasonSteerFailed: same gap as StuckReasonRespawnBlockedActive
+	// above — known pre-existing, not a regression (see plan.md's Epic 4.3
+	// goal note and remediationActionByReason's doc comment). Wiring
+	// automated remediation for a failed steer is out of scope for
+	// pr-fix-steering.
+	domain.StuckReasonSteerFailed: true,
 }
 
 // TestRemediationActionByReason_should_beDecidedForEveryStuckReason_When_NewReasonIsAdded

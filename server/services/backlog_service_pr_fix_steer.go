@@ -7,10 +7,17 @@ package services
 // sections here rather than replacing what's below.
 
 import (
+	"context"
+	"fmt"
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
+	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // ---------------------------------------------------------------------------
@@ -224,4 +231,201 @@ func buildSteerMessage(program, fixContext string) string {
 		body = body[:budget] + truncationPointer
 	}
 	return body + suffix
+}
+
+// ---------------------------------------------------------------------------
+// Epic 4.2: steerActiveSessionForPRFix — AutoReopenForPRFix's active-session
+// branch, integrating Phase 1's SessionSteerer with Phase 2/3's dedup/
+// debounce/message-construction helpers above.
+// ---------------------------------------------------------------------------
+
+// steerActiveSessionForPRFix is AutoReopenForPRFix's active-session branch:
+// steer the already-running session with fixContext instead of skipping the
+// respawn outright, falling back to the existing notify-only behavior
+// whenever it can't safely do so. Never calls TransitionBacklogItemStatus —
+// see backlog_service_triage.go's double-transition-churn incident (around
+// AutoReopenForPRFix's own reopen transition).
+func (s *BacklogService) steerActiveSessionForPRFix(ctx context.Context, itemID, itemTitle string, currentStatus session.BacklogStatus, activeSessionUUID, fixContext string) {
+	// steerInFlight guards this method's ENTIRE body, not just the
+	// delivery call below — including every degrade branch's
+	// resolveSteerFailedLogged/notifyRespawnBlockedByActiveSession calls
+	// (pre-mortem.md P2 #2). reconcilePRPendingItem is the shared body for
+	// both the 60s-tick loop (ReconcilePRPending) AND TriggerPRFixForEvent
+	// (session/backlog_lifecycle_pr.go). TriggerPRFixForEvent is itself
+	// invoked synchronously from the GitHub webhook handler
+	// (server/services/github_webhook_pr_fix.go) on every
+	// check_run/workflow_run/pull_request_review/issue_comment event (PR
+	// #628), but dispatches reconcilePRPendingItem onto a background
+	// goroutine rather than running it inline — it's that dispatched
+	// goroutine, concurrent with the ticker, that actually races. A
+	// CI-churning PR (this feature's target population) will routinely
+	// have a webhook-dispatched goroutine land mid-tick, not as a rare
+	// synthetic race. Guarding only delivery would leave the degrade
+	// branches racing unguarded, letting two overlapping calls
+	// open/resolve StuckReasonSteerFailed/StuckReasonRespawnBlockedActive
+	// out of order. Mirrors spawnInFlight's LoadOrStore/defer-Delete idiom.
+	if _, already := s.steerInFlight.LoadOrStore(itemID, struct{}{}); already {
+		return
+	}
+	defer s.steerInFlight.Delete(itemID)
+
+	if s.sessionSteerer == nil {
+		// A degrade path reaffirms "blocked by active session," which is
+		// never simultaneously a failed-steer condition — resolve any stale
+		// SteerFailed row from an earlier tick (Story 4.3.2's invariant).
+		s.resolveSteerFailedLogged(ctx, "AutoReopenForPRFix", itemID)
+		s.notifyRespawnBlockedByActiveSession(ctx, "AutoReopenForPRFix", itemID, itemTitle, currentStatus, activeSessionUUID)
+		return
+	}
+	program, ok := s.sessionSteerer.SessionProgram(activeSessionUUID)
+	if !ok {
+		s.resolveSteerFailedLogged(ctx, "AutoReopenForPRFix", itemID)
+		s.notifyRespawnBlockedByActiveSession(ctx, "AutoReopenForPRFix", itemID, itemTitle, currentStatus, activeSessionUUID)
+		return
+	}
+
+	candidate := buildReasonSignature(fixContext)
+
+	lastVal, _ := s.steerDedup.Load(itemID)
+	last, _ := lastVal.(lastSteerReason)
+
+	newlyConflict := candidate.hasHeader(conflictHeader) && !last.signature.hasHeader(conflictHeader)
+	if newlyConflict {
+		debounceVal, _ := s.steerConflictDebounce.Load(itemID)
+		debounceState, _ := debounceVal.(conflictDebounceState)
+		confirmed, next := confirmConflictChange(candidate, last.signature, activeSessionUUID, debounceState)
+		s.steerConflictDebounce.Store(itemID, next)
+		if !confirmed {
+			s.resolveSteerFailedLogged(ctx, "AutoReopenForPRFix", itemID)
+			s.notifyRespawnBlockedByActiveSession(ctx, "AutoReopenForPRFix", itemID, itemTitle, currentStatus, activeSessionUUID)
+			return
+		}
+	} else {
+		s.steerConflictDebounce.Delete(itemID)
+	}
+
+	if isDuplicateSteerReason(candidate, last, activeSessionUUID, time.Now(), steerCooldown) {
+		s.resolveSteerFailedLogged(ctx, "AutoReopenForPRFix", itemID)
+		s.notifyRespawnBlockedByActiveSession(ctx, "AutoReopenForPRFix", itemID, itemTitle, currentStatus, activeSessionUUID)
+		return
+	}
+
+	message := buildSteerMessage(program, fixContext)
+	deliverErr := s.sessionSteerer.SteerActiveSession(ctx, activeSessionUUID, message)
+	s.steerDedup.Store(itemID, nextLastSteerReason(last, candidate, activeSessionUUID, deliverErr == nil))
+	s.notifyActiveSessionSteered(ctx, itemID, itemTitle, currentStatus, activeSessionUUID, message, program, candidate, deliverErr)
+}
+
+// ---------------------------------------------------------------------------
+// Epic 4.3: StuckReasonSteerFailed and notifyActiveSessionSteered
+// ---------------------------------------------------------------------------
+
+// humanReadableReasonSet turns a reasonSignature's ordered headers into a
+// short phrase for a notification title/body, e.g. ["## Merge conflict",
+// "## Failing CI checks"] -> "a merge conflict and failing CI". Strips the
+// dynamic "@author" half of a review header down to "a blocking review" —
+// that detail belongs in the terminal's full fixContext, not the compact
+// notification card (research/ux.md §2). Falls back to "a PR problem" for
+// a header-less signature (e.g. the "PR closed without merging" fixContext).
+//
+// Note: a new PRStatus.render() section header added without a matching
+// case here silently falls through to the generic fallback phrase rather
+// than failing loudly — acceptable since the fallback is still
+// informative, but worth knowing (the pinning test below only catches a
+// wording change to an existing header, not an entirely new one).
+func humanReadableReasonSet(sig reasonSignature) string {
+	var phrases []string
+	for _, h := range sig.headers {
+		switch {
+		case h == "## Merge conflict":
+			phrases = append(phrases, "a merge conflict")
+		case h == "## Failing CI checks":
+			phrases = append(phrases, "failing CI")
+		case strings.HasPrefix(h, "## Review: changes requested by"):
+			phrases = append(phrases, "a blocking review")
+		case h == "## Reviewer comments":
+			phrases = append(phrases, "reviewer comments")
+		case h == "## PR comments":
+			phrases = append(phrases, "PR comments")
+		}
+	}
+	switch len(phrases) {
+	case 0:
+		return "a PR problem"
+	case 1:
+		return phrases[0]
+	case 2:
+		return phrases[0] + " and " + phrases[1]
+	default:
+		return strings.Join(phrases[:len(phrases)-1], ", ") + ", and " + phrases[len(phrases)-1]
+	}
+}
+
+// notifyActiveSessionSteered records the outcome of a PR-fix steer attempt
+// against an already-active session — success is INFO/LOW and resolves any
+// open respawn_blocked_active or steer_failed row (a successful steer isn't
+// a stuck condition, and supersedes any earlier tick's failure); failure is
+// WARNING and marks StuckReasonSteerFailed (ADR-002) so it's visible via
+// BlockerChip without opening the notification bell, resolving any open
+// respawn_blocked_active row so the two reasons are never both open at once
+// (adversarial review: BlockerChip's single-chip collapse would otherwise
+// non-deterministically show whichever stale reason a query happened to
+// return first). Both branches name the actual reason category via
+// humanReadableReasonSet(reason) rather than a generic phrase, since a
+// failed steer produces zero terminal signal and this notification is the
+// operator's only record of what was wrong (research/ux.md §2/§3). The
+// failure branch also names a remediation path for a Claude Code session
+// (isClaudeCodeProgram(program), Task 3.1.1a) — the operator's only signal
+// otherwise says what's wrong but not what to do about it (UX triad review).
+func (s *BacklogService) notifyActiveSessionSteered(ctx context.Context, itemID, itemTitle string, currentStatus session.BacklogStatus, activeSessionUUID, message, program string, reason reasonSignature, deliverErr error) {
+	reasonPhrase := humanReadableReasonSet(reason)
+	if deliverErr == nil {
+		log.InfoLog().Printf("[AutoReopenForPRFix] steered active session %s for item %s", activeSessionUUID, itemID)
+		s.resolveRespawnBlockedActiveLogged(ctx, "AutoReopenForPRFix", itemID)
+		s.resolveSteerFailedLogged(ctx, "AutoReopenForPRFix", itemID)
+		if s.eventBus == nil {
+			return
+		}
+		s.eventBus.Publish(events.NewNotificationEvent(
+			itemID, "", uuid.New().String(),
+			int32(sessionv1.NotificationType_NOTIFICATION_TYPE_INFO),
+			int32(sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_LOW),
+			fmt.Sprintf("Steered active session — %s has %s", itemTitle, reasonPhrase),
+			fmt.Sprintf("%s — session %s was steered for %s.", itemTitle, activeSessionUUID, reasonPhrase),
+			map[string]string{"item_id": itemID},
+		))
+		return
+	}
+
+	log.WarningLog().Printf("[AutoReopenForPRFix] failed to steer active session %s for item %s: %v", activeSessionUUID, itemID, deliverErr)
+	if s.storage != nil {
+		if _, err := s.storage.MarkStuck(ctx, itemID, domain.StuckReasonSteerFailed, currentStatus,
+			fmt.Sprintf("AutoReopenForPRFix failed to steer active session %s (%s): %v", activeSessionUUID, reasonPhrase, deliverErr)); err != nil {
+			log.WarningLog().Printf("[AutoReopenForPRFix] MarkStuck(steer_failed) item=%s: %v", itemID, err)
+		}
+	}
+	// A prior degrade-path tick may have left RespawnBlockedActive open for this
+	// item; a failed steer is a strictly more specific/severe finding, so clear
+	// the stale one — see this story's "at most one open at a time" acceptance
+	// criterion (adversarial review).
+	s.resolveRespawnBlockedActiveLogged(ctx, "AutoReopenForPRFix", itemID)
+	if s.eventBus == nil {
+		return
+	}
+	body := fmt.Sprintf("%s — steering session %s failed (%s): %v", itemTitle, activeSessionUUID, reasonPhrase, deliverErr)
+	// Name a remediation path for a Claude Code session — the operator's only
+	// signal on a failed steer otherwise says what's wrong but not what to do
+	// about it (UX triad review). Reuses buildSteerMessage's own program-gating
+	// decision (Epic 3.1) rather than a second, divergent check.
+	if isClaudeCodeProgram(program) {
+		body += " — try /github:pr-ship manually"
+	}
+	s.eventBus.Publish(events.NewNotificationEvent(
+		itemID, "", uuid.New().String(),
+		int32(sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING),
+		int32(sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_MEDIUM),
+		fmt.Sprintf("Failed to steer active session — %s needs attention for %s", itemTitle, reasonPhrase),
+		body,
+		map[string]string{"item_id": itemID},
+	))
 }

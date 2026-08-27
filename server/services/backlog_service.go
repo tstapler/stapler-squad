@@ -174,6 +174,24 @@ type BacklogService struct {
 	// section.
 	spawnInFlight sync.Map
 
+	// steerDedup maps itemID -> lastSteerReason, the most recently delivered
+	// PR-fix steer reason signature, when, and which session received it —
+	// suppresses an exact-repeat steer within steerCooldown, but only for the
+	// same session (a changed active work session is always treated as never
+	// delivered — architecture review concern). In-memory only (see plan.md's
+	// Pattern Decisions: bounded blast radius, no DB durability needed).
+	steerDedup sync.Map
+	// steerConflictDebounce maps itemID -> conflictDebounceState — the
+	// two-consecutive-tick confirmation gate for a newly-appearing merge
+	// conflict signal (pitfalls research §6, cli/cli#9583), also keyed by
+	// session identity via conflictDebounceState's own pendingConflict.sessionUUID.
+	steerConflictDebounce sync.Map
+	// steerInFlight maps itemID -> struct{}, guarding steerActiveSessionForPRFix
+	// against two overlapping reconcile ticks racing to steer the same item
+	// before steerDedup is updated. Mirrors spawnInFlight's self-cleaning
+	// LoadOrStore/defer-Delete idiom.
+	steerInFlight sync.Map
+
 	// headless triage pool and concurrency controls.
 	headlessPool   headless.PoolClient
 	shutdownCtx    context.Context

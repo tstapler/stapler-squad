@@ -1411,6 +1411,20 @@ func (s *BacklogService) resolveRespawnBlockedActiveLogged(ctx context.Context, 
 	}
 }
 
+// resolveSteerFailedLogged clears an open StuckReasonSteerFailed row for
+// itemID, logging (not returning) any storage error. Mirrors
+// resolveRespawnBlockedActiveLogged exactly, for the opposite direction of
+// this project's "at most one of {SteerFailed, RespawnBlockedActive} open
+// at a time" invariant (adversarial review).
+func (s *BacklogService) resolveSteerFailedLogged(ctx context.Context, caller, itemID string) {
+	if s.storage == nil {
+		return
+	}
+	if _, err := s.storage.ResolveStuck(ctx, itemID, domain.StuckReasonSteerFailed); err != nil {
+		log.WarningLog().Printf("[%s] ResolveStuck(steer_failed) item=%s: %v", caller, itemID, err)
+	}
+}
+
 // notifyIfActiveWorkSessionStale closes the "zero operator signal" half of a
 // live gap: AutoReopenAfterFailedReview's hasActiveWorkSession guard treats
 // any work session with EndedAt == nil as "in flight" and skips reopening
@@ -2012,6 +2026,22 @@ func (s *BacklogService) RemediateStaleWorkSession(ctx context.Context, itemID s
 	return s.AutoRespawnAutonomousWork(ctx, itemID)
 }
 
+// HasActiveWorkSession implements session.PRFixSpawner's query half — a
+// side-effect-free check letting remediatePRFixWithBackoffGate decide
+// whether to bypass its backoff gate before calling AutoReopenForPRFix.
+// Mirrors the same findActiveWorkSession check AutoReopenForPRFix performs
+// internally; does not transition status or mark/notify anything.
+func (s *BacklogService) HasActiveWorkSession(ctx context.Context, itemID string) (bool, error) {
+	if s.storage == nil {
+		return false, fmt.Errorf("storage not available")
+	}
+	sessions, err := s.storage.ListItemSessions(ctx, itemID)
+	if err != nil {
+		return false, fmt.Errorf("list sessions: %w", err)
+	}
+	return findActiveWorkSession(sessions) != nil, nil
+}
+
 // AutoReopenForPRFix implements session.PRFixSpawner. It transitions the item
 // from pr_pending back to in_progress and spawns a new autonomous work session
 // pre-loaded with the CI/review failure context so the agent can fix and push.
@@ -2046,7 +2076,7 @@ func (s *BacklogService) AutoReopenForPRFix(ctx context.Context, itemID string, 
 	// (see docs/tasks/backlog-feature-improvement.md).
 	s.tombstoneOrphanWorkSessions(ctx, itemID, sessions)
 	if active := findActiveWorkSession(sessions); active != nil {
-		s.notifyRespawnBlockedByActiveSession(ctx, "AutoReopenForPRFix", itemID, item.Title, session.BacklogStatus(item.Status), active.SessionUUID)
+		s.steerActiveSessionForPRFix(ctx, itemID, item.Title, session.BacklogStatus(item.Status), active.SessionUUID, fixContext)
 		return nil
 	}
 	s.resolveRespawnBlockedActiveLogged(ctx, "AutoReopenForPRFix", itemID)

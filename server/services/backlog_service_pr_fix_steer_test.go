@@ -1,13 +1,18 @@
 package services
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/git"
 )
 
@@ -291,4 +296,290 @@ func TestBuildSteerMessage_RealisticComposedLongFixContext_SuffixSurvivesTruncat
 
 	require.LessOrEqual(t, len(got), session.MaxSteerMessageLength)
 	require.True(t, strings.HasSuffix(got, prShipSuffix), "suffix must survive truncation, got %q", got)
+}
+
+// ---------------------------------------------------------------------------
+// Epic 4.3: StuckReasonSteerFailed and notifyActiveSessionSteered
+// ---------------------------------------------------------------------------
+
+func TestHumanReadableReasonSet_NoHeaders_FallsBackToGenericPhrase(t *testing.T) {
+	got := humanReadableReasonSet(reasonSignature{})
+
+	require.Equal(t, "a PR problem", got)
+}
+
+func TestHumanReadableReasonSet_SingleHeader(t *testing.T) {
+	got := humanReadableReasonSet(reasonSignature{headers: []string{"## Merge conflict"}})
+
+	require.Equal(t, "a merge conflict", got)
+}
+
+func TestHumanReadableReasonSet_TwoHeaders_JoinedWithAnd(t *testing.T) {
+	got := humanReadableReasonSet(reasonSignature{headers: []string{"## Merge conflict", "## Failing CI checks"}})
+
+	require.Equal(t, "a merge conflict and failing CI", got)
+}
+
+func TestHumanReadableReasonSet_ThreeOrMoreHeaders_OxfordCommaJoined(t *testing.T) {
+	got := humanReadableReasonSet(reasonSignature{headers: []string{
+		"## Merge conflict", "## Failing CI checks", "## Reviewer comments",
+	}})
+
+	require.Equal(t, "a merge conflict, failing CI, and reviewer comments", got)
+}
+
+func TestHumanReadableReasonSet_ReviewHeader_StripsAuthorToGenericPhrase(t *testing.T) {
+	got := humanReadableReasonSet(reasonSignature{headers: []string{"## Review: changes requested by @reviewer1"}})
+
+	require.Equal(t, "a blocking review", got)
+}
+
+// TestHumanReadableReasonSet_HeaderStrings_MatchPRStatusRender pins
+// humanReadableReasonSet's switch cases against PRStatus.render()'s actual
+// output, mirroring TestBuildReasonSignature_HeaderStrings_MatchPRStatusRender
+// (Task 2.1.1d) — a future wording change to render()'s headers should fail
+// this test loudly instead of silently making humanReadableReasonSet fall
+// through to the empty-phrases branch for a header it no longer recognizes.
+func TestHumanReadableReasonSet_HeaderStrings_MatchPRStatusRender(t *testing.T) {
+	raw := []byte(`{
+		"statusCheckRollup": [{"__typename": "CheckRun", "name": "lint", "conclusion": "FAILURE", "status": "COMPLETED"}],
+		"reviews": [
+			{"state": "CHANGES_REQUESTED", "body": "Fix the null check", "author": {"login": "reviewer1"}, "submittedAt": "2026-08-02T14:00:00Z"},
+			{"state": "COMMENTED", "body": "Consider extracting this into a helper function.", "author": {"login": "copilot-pull-request-reviewer[bot]"}, "submittedAt": "2026-08-02T14:32:07Z"}
+		],
+		"comments": [{"body": "Please rebase this branch soon.", "author": {"login": "tstapler"}, "createdAt": "2026-08-02T15:10:00Z"}],
+		"mergeable": "CONFLICTING",
+		"mergeStateStatus": "DIRTY"
+	}`)
+
+	status, err := git.ParsePRStatusPayload(raw)
+	require.NoError(t, err)
+	require.True(t, status.HasConflicts, "fixture must exercise the HasConflicts branch")
+
+	sig := buildReasonSignature(status.FeedbackText)
+	got := humanReadableReasonSet(sig)
+
+	require.Equal(t, "a merge conflict, failing CI, a blocking review, reviewer comments, and PR comments", got)
+}
+
+func newTestBacklogServiceForSteerNotify(t *testing.T) (*BacklogService, *events.EventBus) {
+	t.Helper()
+	storage := createTestStorage(t)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+	bus := events.NewEventBus(4)
+	svc.SetEventBus(bus)
+	return svc, bus
+}
+
+func createTestBacklogItemForSteerNotify(t *testing.T, svc *BacklogService) string {
+	t.Helper()
+	item, err := svc.storage.CreateBacklogItem(context.Background(), session.BacklogItemData{
+		Title:  "Steer notify test item",
+		Status: string(session.BacklogStatusPRPending),
+	})
+	require.NoError(t, err)
+	return item.ID
+}
+
+func openStuckReasons(t *testing.T, svc *BacklogService) map[domain.StuckReason]bool {
+	t.Helper()
+	open, err := svc.storage.FindOpenStuckStates(context.Background())
+	require.NoError(t, err)
+	reasons := make(map[domain.StuckReason]bool, len(open))
+	for _, row := range open {
+		reasons[row.Reason] = true
+	}
+	return reasons
+}
+
+func TestNotifyActiveSessionSteered_Success_PublishesInfoAndDoesNotMarkStuck(t *testing.T) {
+	svc, bus := newTestBacklogServiceForSteerNotify(t)
+	itemID := createTestBacklogItemForSteerNotify(t, svc)
+	ctx := context.Background()
+	subCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	ch, _ := bus.Subscribe(subCtx)
+
+	reason := reasonSignature{headers: []string{"## Merge conflict", "## Failing CI checks"}}
+	svc.notifyActiveSessionSteered(ctx, itemID, "My Item", session.BacklogStatusPRPending, "session-uuid-1", "steer message", "claude", reason, nil)
+
+	select {
+	case ev := <-ch:
+		assert.Equal(t, events.EventNotification, ev.Type)
+		assert.Equal(t, int32(sessionv1.NotificationType_NOTIFICATION_TYPE_INFO), ev.NotificationType, "unexpected notification type")
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected a notification event on success")
+	}
+
+	reasons := openStuckReasons(t, svc)
+	assert.False(t, reasons[domain.StuckReasonSteerFailed], "success must not mark steer_failed")
+	assert.False(t, reasons[domain.StuckReasonRespawnBlockedActive], "success must not leave respawn_blocked_active open")
+}
+
+func TestNotifyActiveSessionSteered_Success_ResolvesOpenRespawnBlockedActiveRow(t *testing.T) {
+	svc, _ := newTestBacklogServiceForSteerNotify(t)
+	itemID := createTestBacklogItemForSteerNotify(t, svc)
+	ctx := context.Background()
+
+	_, err := svc.storage.MarkStuck(ctx, itemID, domain.StuckReasonRespawnBlockedActive, session.BacklogStatusPRPending, "previously skipped")
+	require.NoError(t, err)
+
+	svc.notifyActiveSessionSteered(ctx, itemID, "My Item", session.BacklogStatusPRPending, "session-uuid-1", "steer message", "claude", reasonSignature{headers: []string{"## Failing CI checks"}}, nil)
+
+	reasons := openStuckReasons(t, svc)
+	assert.False(t, reasons[domain.StuckReasonRespawnBlockedActive], "a successful steer must resolve a stale respawn_blocked_active row")
+}
+
+// TestNotifyActiveSessionSteered_Success_ResolvesOpenSteerFailedRow is the
+// mutual-exclusion regression test (adversarial review): a success on a
+// later tick must clear a StuckReasonSteerFailed row left open by an
+// earlier failed tick, not leave it lingering forever.
+func TestNotifyActiveSessionSteered_Success_ResolvesOpenSteerFailedRow(t *testing.T) {
+	svc, _ := newTestBacklogServiceForSteerNotify(t)
+	itemID := createTestBacklogItemForSteerNotify(t, svc)
+	ctx := context.Background()
+
+	_, err := svc.storage.MarkStuck(ctx, itemID, domain.StuckReasonSteerFailed, session.BacklogStatusPRPending, "previous tick failed")
+	require.NoError(t, err)
+
+	svc.notifyActiveSessionSteered(ctx, itemID, "My Item", session.BacklogStatusPRPending, "session-uuid-1", "steer message", "claude", reasonSignature{headers: []string{"## Failing CI checks"}}, nil)
+
+	reasons := openStuckReasons(t, svc)
+	assert.False(t, reasons[domain.StuckReasonSteerFailed], "success on a later tick must resolve a prior steer_failed row")
+}
+
+func TestNotifyActiveSessionSteered_Success_TitleAndBodyNameTheReason(t *testing.T) {
+	svc, bus := newTestBacklogServiceForSteerNotify(t)
+	itemID := createTestBacklogItemForSteerNotify(t, svc)
+	ctx := context.Background()
+	subCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	ch, _ := bus.Subscribe(subCtx)
+
+	reason := reasonSignature{headers: []string{"## Merge conflict", "## Failing CI checks"}}
+	svc.notifyActiveSessionSteered(ctx, itemID, "My Item", session.BacklogStatusPRPending, "session-uuid-1", "steer message", "claude", reason, nil)
+
+	ev := requireNotificationEvent(t, ch)
+	assert.Equal(t, "Steered active session — My Item has a merge conflict and failing CI", ev.NotificationTitle)
+	assert.Contains(t, ev.NotificationMessage, "session-uuid-1")
+	assert.Contains(t, ev.NotificationMessage, "a merge conflict and failing CI")
+}
+
+func TestNotifyActiveSessionSteered_Failure_MarksStuckAndPublishesWarning(t *testing.T) {
+	svc, bus := newTestBacklogServiceForSteerNotify(t)
+	itemID := createTestBacklogItemForSteerNotify(t, svc)
+	ctx := context.Background()
+	subCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	ch, _ := bus.Subscribe(subCtx)
+
+	deliverErr := fmt.Errorf("SendKeys failed: pty closed")
+	reason := reasonSignature{headers: []string{"## Merge conflict", "## Failing CI checks"}}
+	svc.notifyActiveSessionSteered(ctx, itemID, "My Item", session.BacklogStatusPRPending, "session-uuid-1", "steer message", "claude", reason, deliverErr)
+
+	select {
+	case ev := <-ch:
+		assert.Equal(t, events.EventNotification, ev.Type)
+		assert.Equal(t, int32(sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING), ev.NotificationType, "unexpected notification type")
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected a notification event on failure")
+	}
+
+	reasons := openStuckReasons(t, svc)
+	assert.True(t, reasons[domain.StuckReasonSteerFailed], "failure must mark steer_failed")
+}
+
+func TestNotifyActiveSessionSteered_Failure_ResolvesOpenRespawnBlockedActiveRow(t *testing.T) {
+	svc, _ := newTestBacklogServiceForSteerNotify(t)
+	itemID := createTestBacklogItemForSteerNotify(t, svc)
+	ctx := context.Background()
+
+	_, err := svc.storage.MarkStuck(ctx, itemID, domain.StuckReasonRespawnBlockedActive, session.BacklogStatusPRPending, "previously skipped")
+	require.NoError(t, err)
+
+	deliverErr := fmt.Errorf("SendKeys failed: pty closed")
+	svc.notifyActiveSessionSteered(ctx, itemID, "My Item", session.BacklogStatusPRPending, "session-uuid-1", "steer message", "claude", reasonSignature{headers: []string{"## Failing CI checks"}}, deliverErr)
+
+	reasons := openStuckReasons(t, svc)
+	assert.False(t, reasons[domain.StuckReasonRespawnBlockedActive], "a failed steer must resolve a stale respawn_blocked_active row — the two reasons are mutually exclusive")
+	assert.True(t, reasons[domain.StuckReasonSteerFailed])
+}
+
+func TestNotifyActiveSessionSteered_Failure_TitleAndBodyNameTheReasonAndError(t *testing.T) {
+	svc, bus := newTestBacklogServiceForSteerNotify(t)
+	itemID := createTestBacklogItemForSteerNotify(t, svc)
+	ctx := context.Background()
+	subCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	ch, _ := bus.Subscribe(subCtx)
+
+	deliverErr := fmt.Errorf("SendKeys failed: pty closed")
+	reason := reasonSignature{headers: []string{"## Merge conflict", "## Failing CI checks"}}
+	svc.notifyActiveSessionSteered(ctx, itemID, "My Item", session.BacklogStatusPRPending, "session-uuid-1", "steer message", "aider", reason, deliverErr)
+
+	ev := requireNotificationEvent(t, ch)
+	assert.Equal(t, "Failed to steer active session — My Item needs attention for a merge conflict and failing CI", ev.NotificationTitle)
+	assert.Contains(t, ev.NotificationMessage, "session-uuid-1")
+	assert.Contains(t, ev.NotificationMessage, "a merge conflict and failing CI")
+	assert.Contains(t, ev.NotificationMessage, deliverErr.Error())
+}
+
+func TestNotifyActiveSessionSteered_Failure_ClaudeCodeProgram_AppendsRemediationPath(t *testing.T) {
+	svc, bus := newTestBacklogServiceForSteerNotify(t)
+	itemID := createTestBacklogItemForSteerNotify(t, svc)
+	ctx := context.Background()
+	subCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	ch, _ := bus.Subscribe(subCtx)
+
+	deliverErr := fmt.Errorf("SendKeys failed: pty closed")
+	svc.notifyActiveSessionSteered(ctx, itemID, "My Item", session.BacklogStatusPRPending, "session-uuid-1", "steer message", "claude", reasonSignature{headers: []string{"## Failing CI checks"}}, deliverErr)
+
+	ev := requireNotificationEvent(t, ch)
+	assert.Contains(t, ev.NotificationMessage, " — try /github:pr-ship manually")
+}
+
+func TestNotifyActiveSessionSteered_Failure_NonClaudeCodeProgram_NoRemediationPath(t *testing.T) {
+	svc, bus := newTestBacklogServiceForSteerNotify(t)
+	itemID := createTestBacklogItemForSteerNotify(t, svc)
+	ctx := context.Background()
+	subCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	ch, _ := bus.Subscribe(subCtx)
+
+	deliverErr := fmt.Errorf("SendKeys failed: pty closed")
+	svc.notifyActiveSessionSteered(ctx, itemID, "My Item", session.BacklogStatusPRPending, "session-uuid-1", "steer message", "aider", reasonSignature{headers: []string{"## Failing CI checks"}}, deliverErr)
+
+	ev := requireNotificationEvent(t, ch)
+	assert.NotContains(t, ev.NotificationMessage, "/github:pr-ship")
+}
+
+func TestNotifyActiveSessionSteered_HeaderlessReason_FallsBackToGenericPhrase(t *testing.T) {
+	svc, bus := newTestBacklogServiceForSteerNotify(t)
+	itemID := createTestBacklogItemForSteerNotify(t, svc)
+	ctx := context.Background()
+	subCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	ch, _ := bus.Subscribe(subCtx)
+
+	headerless := buildReasonSignature("PR #42 (https://github.com/tstapler/stapler-squad/pull/42) was closed without merging.")
+	svc.notifyActiveSessionSteered(ctx, itemID, "My Item", session.BacklogStatusPRPending, "session-uuid-1", "steer message", "claude", headerless, nil)
+
+	ev := requireNotificationEvent(t, ch)
+	assert.Contains(t, ev.NotificationTitle, "a PR problem")
+}
+
+// requireNotificationEvent drains ch for a single notification event within
+// a bounded timeout, failing the test loudly if none arrives — same pattern
+// as TestNotifyReworkCapHit_should_stillPublishNotification_When_MarkStuckReturnsError.
+func requireNotificationEvent(t *testing.T, ch <-chan *events.Event) *events.Event {
+	t.Helper()
+	select {
+	case ev := <-ch:
+		require.Equal(t, events.EventNotification, ev.Type)
+		return ev
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected a notification event")
+		return &events.Event{}
+	}
 }

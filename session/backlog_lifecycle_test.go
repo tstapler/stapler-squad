@@ -757,6 +757,10 @@ type fakePRFixSpawner struct {
 	lastFixContext string
 	err            error
 	onCall         func()
+	// hasActiveWorkSession backs HasActiveWorkSession. Defaults to false,
+	// matching every existing test's implicit "no active session" behavior
+	// (none of them set it).
+	hasActiveWorkSession bool
 }
 
 func (f *fakePRFixSpawner) AutoReopenForPRFix(ctx context.Context, itemID string, fixContext string) error {
@@ -767,6 +771,12 @@ func (f *fakePRFixSpawner) AutoReopenForPRFix(ctx context.Context, itemID string
 		f.onCall()
 	}
 	return f.err
+}
+
+// HasActiveWorkSession implements PRFixSpawner's query half for tests —
+// side-effect-free, just reports the configured hasActiveWorkSession value.
+func (f *fakePRFixSpawner) HasActiveWorkSession(ctx context.Context, itemID string) (bool, error) {
+	return f.hasActiveWorkSession, nil
 }
 
 // fakeReviewRespawner is a test double implementing ReviewRespawner. Calls are

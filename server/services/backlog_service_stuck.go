@@ -65,6 +65,8 @@ func toProtoStuckReason(reason domain.StuckReason) sessionv1.StuckReason {
 		return sessionv1.StuckReason_STUCK_REASON_MULTIPLE_REASONS
 	case domain.StuckReasonBounceCapExhausted:
 		return sessionv1.StuckReason_STUCK_REASON_BOUNCE_CAP_EXHAUSTED
+	case domain.StuckReasonSteerFailed:
+		return sessionv1.StuckReason_STUCK_REASON_STEER_FAILED
 	default:
 		return sessionv1.StuckReason_STUCK_REASON_UNSPECIFIED
 	}
@@ -112,6 +114,8 @@ func fromProtoStuckReason(reason sessionv1.StuckReason) domain.StuckReason {
 		return domain.StuckReasonMultipleReasons
 	case sessionv1.StuckReason_STUCK_REASON_BOUNCE_CAP_EXHAUSTED:
 		return domain.StuckReasonBounceCapExhausted
+	case sessionv1.StuckReason_STUCK_REASON_STEER_FAILED:
+		return domain.StuckReasonSteerFailed
 	default:
 		return ""
 	}
@@ -309,6 +313,12 @@ func pluralSuffix(n int) string {
 // StaleWorkRemediator). Wired reasons are the ones with a working respawn
 // action as of this Epic; every other reason returns
 // connect.CodeUnimplemented until a future phase adds it here.
+//
+// Known pre-existing gap, not a regression: domain.StuckReasonRespawnBlockedActive
+// and domain.StuckReasonSteerFailed both fall through to the default case, so
+// BlockerChip's "Retry now" affordance renders for them but this RPC returns
+// CodeUnimplemented on click — wiring automated remediation for either reason
+// is out of scope for pr-fix-steering (see its plan.md Epic 4.3 goal note).
 func (s *BacklogService) remediationActionByReason(reason domain.StuckReason) func(ctx context.Context, itemID string) error {
 	switch reason {
 	case domain.StuckReasonBouncing:
