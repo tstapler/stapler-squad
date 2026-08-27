@@ -1,15 +1,41 @@
 import React from "react";
 import { render, screen, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { SessionBoard } from "./SessionBoard";
 import { SessionStatus, SubStatus } from "@/gen/session/v1/types_pb";
 import type { Session } from "@/gen/session/v1/types_pb";
 
 // SessionCard pulls in a lot of machinery (terminal snapshots, tooltips, session actions)
 // that's irrelevant to board bucketing/virtualization — replace it with a lightweight stub,
-// same strategy SessionList's own tests use for the same component.
+// same strategy SessionList's own tests use for the same component. Renders a selection
+// toggle button whenever selectMode is active (Task 6.3.1b's isSelected/onToggleSelect
+// wiring) so bulk-select tests can exercise the real prop plumbing from SessionBoard ->
+// BoardCard -> SessionCard without pulling in the real, heavy SessionCard implementation.
 jest.mock("./SessionCard", () => ({
-  SessionCard: ({ session }: { session: Session }) => (
-    <div data-testid="session-card">{session.title}</div>
+  SessionCard: ({
+    session,
+    selectMode,
+    isSelected,
+    onToggleSelect,
+  }: {
+    session: Session;
+    selectMode?: boolean;
+    isSelected?: boolean;
+    onToggleSelect?: () => void;
+  }) => (
+    <div data-testid="session-card">
+      {session.title}
+      {selectMode && (
+        <button
+          type="button"
+          data-testid={`select-toggle-${session.id}`}
+          aria-pressed={isSelected}
+          onClick={() => onToggleSelect?.()}
+        >
+          {isSelected ? "Selected" : "Select"}
+        </button>
+      )}
+    </div>
   ),
 }));
 
@@ -53,6 +79,13 @@ beforeAll(() => {
 
 afterAll(() => {
   jest.restoreAllMocks();
+});
+
+// SessionBoard's search/grouping-strategy state persists to real jsdom localStorage
+// (Task 6.1.1a/6.2.1a share SessionList's storage keys) -- clear it between tests so one
+// test's grouping selection can't leak into the next.
+beforeEach(() => {
+  localStorage.clear();
 });
 
 function makeSession(overrides: Partial<Session> & { id: string; title: string }): Session {
@@ -136,5 +169,173 @@ describe("SessionBoard — per-column virtualization", () => {
     const renderedCards = within(paused).getAllByTestId("session-card");
     expect(renderedCards.length).toBeGreaterThan(0);
     expect(renderedCards.length).toBeLessThan(50);
+  });
+});
+
+// Task 6.1.1c: swimlane rows crossed with status columns, and Tag grouping's multi-membership
+// rendering the same session in every matching row.
+describe("SessionBoard — swimlanes (Task 6.1.1a-c, AC6)", () => {
+  beforeEach(() => {
+    rectHeight = 600;
+  });
+
+  it("SessionBoard_should_RenderOneSwimlaneRowPerBranch_When_GroupingStrategyIsBranch", async () => {
+    const user = userEvent.setup();
+    const sessions: Session[] = [
+      makeSession({ id: "s1", title: "Login flow", status: SessionStatus.ACTIVE, branch: "feature/login" }),
+      makeSession({ id: "s2", title: "Login cleanup", status: SessionStatus.PAUSED, branch: "feature/login" }),
+      makeSession({ id: "s3", title: "Main session", status: SessionStatus.STOPPED, branch: "main" }),
+    ];
+
+    render(<SessionBoard sessions={sessions} />);
+    await user.selectOptions(screen.getByTestId("board-grouping-select"), "branch");
+
+    const loginRow = screen.getByTestId("board-swimlane-feature/login");
+    expect(within(loginRow).getByText("feature/login")).toBeInTheDocument();
+    expect(
+      within(within(loginRow).getByTestId("board-column-running")).getByLabelText("1 sessions")
+    ).toBeInTheDocument();
+    expect(
+      within(within(loginRow).getByTestId("board-column-paused")).getByLabelText("1 sessions")
+    ).toBeInTheDocument();
+
+    const mainRow = screen.getByTestId("board-swimlane-main");
+    expect(
+      within(within(mainRow).getByTestId("board-column-complete")).getByLabelText("1 sessions")
+    ).toBeInTheDocument();
+  });
+
+  it("SessionBoard_should_OmitEmptyGroupRow_When_NoSessionsMatchThatGroupValue", async () => {
+    const user = userEvent.setup();
+    const sessions: Session[] = [
+      makeSession({ id: "s1", title: "Login flow", status: SessionStatus.ACTIVE, branch: "feature/login" }),
+      makeSession({ id: "s2", title: "Main session", status: SessionStatus.STOPPED, branch: "main" }),
+    ];
+
+    render(<SessionBoard sessions={sessions} />);
+    await user.selectOptions(screen.getByTestId("board-grouping-select"), "branch");
+
+    expect(screen.getAllByTestId(/^board-swimlane-/)).toHaveLength(2);
+    expect(screen.queryByTestId("board-swimlane-develop")).not.toBeInTheDocument();
+  });
+
+  it("SessionBoard_should_RenderCardInBothMatchingTagRows_When_SessionHasTwoTags", async () => {
+    const user = userEvent.setup();
+    const sessions: Session[] = [
+      makeSession({
+        id: "sess-1",
+        title: "Shared session",
+        status: SessionStatus.ACTIVE,
+        tags: ["frontend", "urgent"],
+      }),
+    ];
+
+    render(<SessionBoard sessions={sessions} />);
+    await user.selectOptions(screen.getByTestId("board-grouping-select"), "tag");
+
+    const frontendRow = screen.getByTestId("board-swimlane-frontend");
+    const urgentRow = screen.getByTestId("board-swimlane-urgent");
+    expect(within(frontendRow).getByText("Shared session")).toBeInTheDocument();
+    expect(within(urgentRow).getByText("Shared session")).toBeInTheDocument();
+
+    // Two independent DOM instances of the same session -- not deduped to a single row.
+    expect(screen.getAllByText("Shared session")).toHaveLength(2);
+  });
+});
+
+// Task 6.2.1a-b: SessionBoard buckets from filteredSessions (the search-filtered output of
+// useFilteredGroupedSessions), not the raw `sessions` prop.
+describe("SessionBoard — search parity (Task 6.2.1a-b, AC7)", () => {
+  beforeEach(() => {
+    rectHeight = 600;
+  });
+
+  const sessions: Session[] = [
+    makeSession({ id: "s1", title: "Login flow", status: SessionStatus.ACTIVE }),
+    makeSession({ id: "s2", title: "Login bugfix", status: SessionStatus.PAUSED }),
+    makeSession({ id: "s3", title: "Billing sync", status: SessionStatus.STOPPED }),
+    makeSession({
+      id: "s4",
+      title: "Onboarding",
+      status: SessionStatus.ACTIVE,
+      subStatus: SubStatus.NEEDS_APPROVAL,
+    }),
+  ];
+
+  it("SessionBoard_should_BucketFromFilteredSessions_When_SearchQueryIsSet", async () => {
+    const user = userEvent.setup();
+    render(<SessionBoard sessions={sessions} />);
+
+    await user.type(screen.getByTestId("board-search-input"), "login");
+
+    expect(screen.getAllByTestId("session-card")).toHaveLength(2);
+    expect(
+      within(screen.getByTestId("board-column-running")).getByLabelText("1 sessions")
+    ).toBeInTheDocument();
+    expect(
+      within(screen.getByTestId("board-column-paused")).getByLabelText("1 sessions")
+    ).toBeInTheDocument();
+    expect(
+      within(screen.getByTestId("board-column-complete")).getByLabelText("0 sessions")
+    ).toBeInTheDocument();
+    expect(
+      within(screen.getByTestId("board-column-needs_review")).getByLabelText("0 sessions")
+    ).toBeInTheDocument();
+  });
+
+  it("SessionBoard_should_ShowEmptyStateInEveryColumn_When_SearchMatchesZeroSessions", async () => {
+    const user = userEvent.setup();
+    render(<SessionBoard sessions={sessions} />);
+
+    await user.type(screen.getByTestId("board-search-input"), "zzz-no-match");
+
+    expect(screen.queryAllByTestId("session-card")).toHaveLength(0);
+    for (const key of ["running", "needs_review", "paused", "complete"]) {
+      const col = screen.getByTestId(`board-column-${key}`);
+      expect(within(col).getByText("No sessions")).toBeInTheDocument();
+    }
+  });
+});
+
+// Task 6.3.1a-b: cross-column selection state and BulkActions parity with SessionList.
+describe("SessionBoard — cross-column bulk select (Task 6.3.1a-b, AC8)", () => {
+  beforeEach(() => {
+    rectHeight = 600;
+  });
+
+  const sessions: Session[] = [
+    makeSession({ id: "sess-1", title: "Running one", status: SessionStatus.ACTIVE }),
+    makeSession({
+      id: "sess-2",
+      title: "Needs review one",
+      status: SessionStatus.ACTIVE,
+      subStatus: SubStatus.NEEDS_APPROVAL,
+    }),
+  ];
+
+  it("SessionBoard_should_ComputeSelectedCountAcrossColumns_When_CardsSelectedInDifferentColumns", async () => {
+    const user = userEvent.setup();
+    render(<SessionBoard sessions={sessions} />);
+
+    await user.click(screen.getByTestId("board-select-mode-toggle"));
+    await user.click(screen.getByTestId("select-toggle-sess-1"));
+    await user.click(screen.getByTestId("select-toggle-sess-2"));
+
+    expect(screen.getByText("2 of 2 selected")).toBeInTheDocument();
+  });
+
+  it("onPauseAll_should_CallUpdateSessionOncePerSelectedId_When_BulkPauseTriggeredAcrossColumns", async () => {
+    const user = userEvent.setup();
+    const onPauseSession = jest.fn();
+    render(<SessionBoard sessions={sessions} onPauseSession={onPauseSession} />);
+
+    await user.click(screen.getByTestId("board-select-mode-toggle"));
+    await user.click(screen.getByTestId("select-toggle-sess-1"));
+    await user.click(screen.getByTestId("select-toggle-sess-2"));
+    await user.click(screen.getByTestId("bulk-pause-button"));
+
+    expect(onPauseSession).toHaveBeenCalledTimes(2);
+    expect(onPauseSession).toHaveBeenCalledWith("sess-1");
+    expect(onPauseSession).toHaveBeenCalledWith("sess-2");
   });
 });

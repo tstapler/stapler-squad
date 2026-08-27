@@ -7,10 +7,34 @@ import type { Session } from "@/gen/session/v1/types_pb";
 import { attemptColumnMove, SessionBoard } from "./SessionBoard";
 
 // SessionCard pulls in a lot of machinery irrelevant to drag/drop wiring -- same stub
-// strategy as SessionBoard.test.tsx.
+// strategy as SessionBoard.test.tsx. Renders a selection toggle button when selectMode is
+// active so the multi-select drag fan-out tests (Task 6.3.1c-d) can select cards through the
+// same isSelected/onToggleSelect prop plumbing SessionBoard wires in production.
 jest.mock("./SessionCard", () => ({
-  SessionCard: ({ session }: { session: Session }) => (
-    <div data-testid="session-card">{session.title}</div>
+  SessionCard: ({
+    session,
+    selectMode,
+    isSelected,
+    onToggleSelect,
+  }: {
+    session: Session;
+    selectMode?: boolean;
+    isSelected?: boolean;
+    onToggleSelect?: () => void;
+  }) => (
+    <div data-testid="session-card">
+      {session.title}
+      {selectMode && (
+        <button
+          type="button"
+          data-testid={`select-toggle-${session.id}`}
+          aria-pressed={isSelected}
+          onClick={() => onToggleSelect?.()}
+        >
+          {isSelected ? "Selected" : "Select"}
+        </button>
+      )}
+    </div>
   ),
 }));
 
@@ -513,5 +537,81 @@ describe("SessionBoard — MoveToMenu wiring (Phase 4)", () => {
 
     const paused = screen.getByTestId("board-column-paused");
     expect(within(paused).getByLabelText("Drag Active session to move")).toHaveFocus();
+  });
+});
+
+// Task 6.3.1c-d: dragging a card that's part of the current cross-column selection moves the
+// whole selection (client-side fan-out: one attemptColumnMove/updateSession call per selected
+// session ID, same target column) -- including surfacing which sessions failed on a partial
+// failure (AC8).
+describe("SessionBoard — multi-select drag fan-out (Task 6.3.1c-d, AC8)", () => {
+  beforeEach(() => {
+    rectHeight = 600;
+  });
+
+  it("multiSelectDrag_should_CallUpdateSessionOncePerSelectedId_When_DraggingASelectedCard", async () => {
+    const sessA = makeSession({ id: "sess-a", title: "Session A", status: SessionStatus.ACTIVE });
+    const sessB = makeSession({ id: "sess-b", title: "Session B", status: SessionStatus.ACTIVE });
+    updateSessionMock.mockResolvedValue({ id: "sess-a" } as Session);
+
+    const user = userEvent.setup();
+    render(<SessionBoard sessions={[sessA, sessB]} />);
+
+    await user.click(screen.getByTestId("board-select-mode-toggle"));
+    await user.click(screen.getByTestId("select-toggle-sess-a"));
+    await user.click(screen.getByTestId("select-toggle-sess-b"));
+
+    await act(async () => {
+      captured.onDragStart?.(dragEvent("__default__:sess-a", null));
+    });
+    await act(async () => {
+      await captured.onDragEnd?.(dragEvent("__default__:sess-a", "__default__:paused"));
+    });
+
+    expect(updateSessionMock).toHaveBeenCalledTimes(2);
+    expect(updateSessionMock).toHaveBeenCalledWith("sess-a", { status: SessionStatus.PAUSED });
+    expect(updateSessionMock).toHaveBeenCalledWith("sess-b", { status: SessionStatus.PAUSED });
+
+    const paused = screen.getByTestId("board-column-paused");
+    expect(within(paused).getByText("Session A")).toBeInTheDocument();
+    expect(within(paused).getByText("Session B")).toBeInTheDocument();
+  });
+
+  it("multiSelectDrag_should_ReportPerSessionOutcome_When_OneOfTwoSelectedSessionsRejectsTransition", async () => {
+    // Session A: Running -> legal drag to Paused. Session B: Complete (Stopped) -> Paused is
+    // illegal (legalBoardTransitions["complete"] has no outbound edges) -- exercises AC8's
+    // "some selected sessions succeed, some fail -- surface which failed" partial-failure path.
+    const sessA = makeSession({ id: "sess-a", title: "Session A", status: SessionStatus.ACTIVE });
+    const sessB = makeSession({ id: "sess-b", title: "Session B", status: SessionStatus.STOPPED });
+    updateSessionMock.mockResolvedValue({ id: "sess-a" } as Session);
+
+    const user = userEvent.setup();
+    render(<SessionBoard sessions={[sessA, sessB]} />);
+
+    await user.click(screen.getByTestId("board-select-mode-toggle"));
+    await user.click(screen.getByTestId("select-toggle-sess-a"));
+    await user.click(screen.getByTestId("select-toggle-sess-b"));
+
+    await act(async () => {
+      captured.onDragStart?.(dragEvent("__default__:sess-a", null));
+    });
+    await act(async () => {
+      await captured.onDragEnd?.(dragEvent("__default__:sess-a", "__default__:paused"));
+    });
+
+    // Only the legal transition mutated -- the illegal one never calls updateSession.
+    expect(updateSessionMock).toHaveBeenCalledTimes(1);
+    expect(updateSessionMock).toHaveBeenCalledWith("sess-a", { status: SessionStatus.PAUSED });
+
+    const paused = screen.getByTestId("board-column-paused");
+    expect(within(paused).getByText("Session A")).toBeInTheDocument();
+    // Session B stays put -- its rejected transition doesn't move it.
+    const complete = screen.getByTestId("board-column-complete");
+    expect(within(complete).getByText("Session B")).toBeInTheDocument();
+
+    // Surfaces which session failed, not just that "something" failed.
+    expect(screen.getByTestId("board-toast")).toHaveTextContent(
+      "Moved 1 of 2 selected sessions to Paused — couldn't move: Session B."
+    );
   });
 });

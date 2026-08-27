@@ -13,8 +13,9 @@ import {
 } from "@dnd-kit/core";
 import { Code } from "@connectrpc/connect";
 import { SessionStatus, type Session } from "@/gen/session/v1/types_pb";
-import { GroupingStrategy } from "@/lib/grouping/strategies";
+import { GroupingStrategy, GroupingStrategyLabels } from "@/lib/grouping/strategies";
 import { useFilteredGroupedSessions } from "@/lib/hooks/useFilteredGroupedSessions";
+import { usePersistedViewState, type PersistedFieldsConfig } from "@/lib/hooks/usePersistedViewState";
 import { useSessionService } from "@/lib/hooks/useSessionService";
 import { useApprovalsContext } from "@/lib/contexts/ApprovalsContext";
 import { store } from "@/lib/store/store";
@@ -24,18 +25,30 @@ import { statusForColumnMove } from "@/lib/board/statusForColumnMove";
 import { parseCompositeId } from "@/lib/board/compositeId";
 import type { DragOutcome } from "@/lib/board/dragOutcome";
 import { BoardColumn } from "./BoardColumn";
+import { BoardSwimlane } from "./BoardSwimlane";
 import { BoardCompleteConfirmDialog } from "./BoardCompleteConfirmDialog";
+import { BulkActions } from "./BulkActions";
+import { TagEditor } from "./TagEditor";
 import type { BoardCardProps } from "./BoardCard";
 import type { SessionListProps } from "./SessionList";
-import { container, board, liveRegion, toastError, toastWarning } from "./SessionBoard.css";
+import { searchInput, select, selectModeButton, selectModeButtonActive } from "./SessionList.css";
+import {
+  container,
+  board,
+  boardRows,
+  boardHeader,
+  boardHeaderSearch,
+  liveRegion,
+  toastError,
+  toastWarning,
+} from "./SessionBoard.css";
 
 // Identical to SessionList's prop surface so a caller (the future SessionListPaneBody) can
 // spread the same props object into either component when switching view modes.
 export type SessionBoardProps = SessionListProps;
 
-// Sole swimlane row until Phase 6 (Task 6.1.1b) wires real grouping-strategy row keys — kept
-// as a named constant now so the composite id scheme (`${rowKey}:${entityId}`) is uniform
-// from Phase 3 onward rather than retrofitted later.
+// Sole swimlane row when GroupingStrategy.None is active -- kept as a named constant so the
+// composite id scheme (`${rowKey}:${entityId}`) is uniform whether or not swimlanes render.
 const DEFAULT_ROW_KEY = "__default__";
 
 // Stable empty collections so useFilteredGroupedSessions's memoized pipeline doesn't
@@ -57,6 +70,34 @@ const NETWORKISH_ERROR_CODES: number[] = [
   Code.Internal,
 ];
 
+const GROUPING_STRATEGY_VALUES = Object.values(GroupingStrategy);
+
+interface BoardViewState {
+  searchQuery: string;
+  groupingStrategy: GroupingStrategy;
+}
+
+// Same localStorage KEY NAMES SessionList.tsx's BASE_STORAGE_KEYS uses for these two fields
+// (intentionally duplicated, not imported -- SessionList doesn't export them) so that, per
+// Phase 5's "toggling List/Board preserves search/grouping, no reset" AC, both views read and
+// write the exact same persisted value once the user has touched either one's control.
+const BOARD_SEARCH_QUERY_KEY = "stapler-squad-search-query";
+const BOARD_GROUPING_STRATEGY_KEY = "stapler-squad-grouping-strategy";
+
+function buildBoardViewFields(prefix = ""): PersistedFieldsConfig<BoardViewState> {
+  return {
+    searchQuery: { key: `${prefix}${BOARD_SEARCH_QUERY_KEY}`, defaultValue: "" },
+    groupingStrategy: {
+      key: `${prefix}${BOARD_GROUPING_STRATEGY_KEY}`,
+      // Deliberately GroupingStrategy.None (flat board), NOT SessionList's own Category
+      // default -- since the storage key is shared, this fallback only governs the very
+      // first time a workspace visits *either* view before anyone has touched the selector.
+      defaultValue: GroupingStrategy.None,
+      isValid: (v) => GROUPING_STRATEGY_VALUES.includes(v as GroupingStrategy),
+    },
+  };
+}
+
 interface AttemptColumnMoveDeps {
   updateSession: (id: string, updates: { status: SessionStatus }) => Promise<Session | null>;
   resumeHibernatedSession: (id: string) => Promise<Session | null>;
@@ -71,9 +112,10 @@ interface AttemptColumnMoveDeps {
 
 /**
  * Decides and executes one column-move attempt. Shared by both call sites (Task 4.1.1a):
- * `handleDragEnd` calls it directly, and `attemptMoveViaMenu` wraps it for MoveToMenu -- so a
- * drag and an equivalent menu selection always converge on identical legality checks,
- * confirmation prompts, and DragOutcome results.
+ * `handleDragEnd` calls it directly (once per selected session for a multi-select fan-out,
+ * Task 6.3.1c), and `attemptMoveViaMenu` wraps it for MoveToMenu -- so a drag and an
+ * equivalent menu selection always converge on identical legality checks, confirmation
+ * prompts, and DragOutcome results.
  */
 export async function attemptColumnMove(
   session: Session,
@@ -133,9 +175,10 @@ export async function attemptColumnMove(
 }
 
 /**
- * Kanban-style alternative to SessionList: the same sessions, filtered/sorted through the
- * shared pipeline (currently ungrouped -- swimlanes land in a later phase), bucketed into the
- * 4 board columns, with drag-and-drop (dnd-kit) mutating status via `attemptColumnMove`.
+ * Kanban-style alternative to SessionList: the same sessions, filtered/sorted/grouped through
+ * the shared pipeline, bucketed into the 4 board columns (crossed with swimlane rows when a
+ * grouping strategy is active, Task 6.1.1a), with drag-and-drop (dnd-kit) mutating status via
+ * `attemptColumnMove`.
  */
 export function SessionBoard({
   sessions,
@@ -144,6 +187,7 @@ export function SessionBoard({
   onDeleteSession,
   onPauseSession,
   onResumeSession,
+  onDirectResumeSession,
   onCloneSession,
   onNewWorkspaceSession,
   onRenameSession,
@@ -160,13 +204,23 @@ export function SessionBoard({
   onClearConversationState,
   onHibernateSession,
   onResumeHibernatedSession,
+  storageKeyPrefix,
 }: SessionBoardProps) {
   const { updateSession, resumeHibernatedSession } = useSessionService();
   const { approvals, approve } = useApprovalsContext();
 
-  const { filteredSessions } = useFilteredGroupedSessions({
+  // Search + swimlane grouping-strategy state (Task 6.1.1a, 6.2.1a). Persisted under the same
+  // localStorage keys SessionList.tsx uses (namespaced by the same `storageKeyPrefix`), so
+  // switching List<->Board carries the value over rather than resetting it (Phase 5 AC).
+  const boardViewFields = useMemo(() => buildBoardViewFields(storageKeyPrefix), [storageKeyPrefix]);
+  const { state: boardViewState, setters: boardViewSetters } = usePersistedViewState<BoardViewState>(boardViewFields);
+  const { searchQuery, groupingStrategy } = boardViewState;
+  const { searchQuery: setSearchQuery, groupingStrategy: setGroupingStrategy } = boardViewSetters;
+  const groupingActive = groupingStrategy !== GroupingStrategy.None;
+
+  const { filteredSessions, groupedSessions, filteredSessionIds } = useFilteredGroupedSessions({
     sessions,
-    searchQuery: "",
+    searchQuery,
     selectedStatus: "all",
     selectedCategory: "all",
     selectedTag: "all",
@@ -177,7 +231,7 @@ export function SessionBoard({
     sortField: "lastActivity",
     sortDir: "desc",
     costById: EMPTY_COST_MAP,
-    groupingStrategy: GroupingStrategy.None,
+    groupingStrategy,
     staleThresholdMinutes: STALE_THRESHOLD_MINUTES,
     staleRecomputeTick: 0,
   });
@@ -188,13 +242,108 @@ export function SessionBoard({
     return map;
   }, [sessions]);
 
+  // --- Cross-column bulk-select state (Task 6.3.1a) --------------------------------------
+  // Mirrors SessionList.tsx's selectMode/selectedSessions shape and semantics exactly
+  // (including intersecting against filteredSessionIds so a selection survives filter/search
+  // changes without silently including sessions the user can no longer see).
+  const [selectMode, setSelectMode] = useState(false);
+  const [selectedSessions, setSelectedSessions] = useState<Set<string>>(new Set());
+  const [isBulkTagEditing, setIsBulkTagEditing] = useState(false);
+  const bulkTagEditorTriggerRef = useRef<HTMLElement | null>(null);
+
+  const activeSelection = useMemo(
+    () => new Set([...selectedSessions].filter((id) => filteredSessionIds.has(id))),
+    [selectedSessions, filteredSessionIds]
+  );
+
+  const handleToggleSelectMode = useCallback(() => {
+    setSelectMode((prev) => {
+      if (prev) setSelectedSessions(new Set());
+      return !prev;
+    });
+  }, []);
+
+  const handleToggleSession = useCallback((sessionId: string) => {
+    setSelectMode(true);
+    setSelectedSessions((prev) => {
+      const next = new Set(prev);
+      if (next.has(sessionId)) {
+        next.delete(sessionId);
+      } else {
+        next.add(sessionId);
+      }
+      return next;
+    });
+  }, []);
+
+  const handleSelectAll = useCallback(() => {
+    setSelectedSessions(new Set(filteredSessions.map((s) => s.id)));
+  }, [filteredSessions]);
+
+  const handleClearSelection = useCallback(() => {
+    setSelectedSessions(new Set());
+    setSelectMode(false);
+  }, []);
+
+  const handlePauseAll = useCallback(() => {
+    if (!onPauseSession) return;
+    activeSelection.forEach((id) => onPauseSession(id));
+    setSelectedSessions(new Set());
+    setSelectMode(false);
+  }, [onPauseSession, activeSelection]);
+
+  const handleResumeAll = useCallback(() => {
+    if (!onDirectResumeSession && !onResumeSession) return;
+    activeSelection.forEach((id) => {
+      const session = sessionById.get(id);
+      if (!session) return;
+      if (onDirectResumeSession) {
+        onDirectResumeSession(session);
+      } else {
+        onResumeSession?.(session);
+      }
+    });
+    setSelectedSessions(new Set());
+    setSelectMode(false);
+  }, [onDirectResumeSession, onResumeSession, activeSelection, sessionById]);
+
+  const handleDeleteAll = useCallback(() => {
+    if (!onDeleteSession) return;
+    activeSelection.forEach((id) => {
+      void onDeleteSession(id);
+    });
+    setSelectedSessions(new Set());
+    setSelectMode(false);
+  }, [onDeleteSession, activeSelection]);
+
+  const handleBulkAddTag = useCallback((triggerEl: HTMLElement) => {
+    bulkTagEditorTriggerRef.current = triggerEl;
+    setIsBulkTagEditing(true);
+  }, []);
+
+  const handleBulkTagSave = useCallback(
+    (newTags: string[]) => {
+      if (newTags.length > 0 && onUpdateTags) {
+        activeSelection.forEach((id) => {
+          const session = sessionById.get(id);
+          const merged = Array.from(new Set([...(session?.tags ?? []), ...newTags]));
+          onUpdateTags(id, merged);
+        });
+      }
+      setIsBulkTagEditing(false);
+    },
+    [onUpdateTags, activeSelection, sessionById]
+  );
+
   // --- Drag lifecycle state -------------------------------------------------------------
   // inFlightDragSessionIds: session IDs currently mid-drag or mid-mutation -- suppresses
   // watchSessions-driven column reassignment for those IDs until the drag/mutation settles
-  // or is cancelled (Story 3.2.2). dragStartColumnRef snapshots each such session's column
-  // at pickup time so the frozen render has something to show. optimisticColumnOverrides
-  // holds the *destination* column once a legal move starts mutating, for the "moves
-  // immediately, pending visual state until the RPC resolves" behavior (Story 3.1.1).
+  // or is cancelled (Story 3.2.2). A multi-select drag (Task 6.3.1c) adds every selected
+  // session's ID, not just the one the pointer grabbed. dragStartColumnRef snapshots each
+  // such session's column at pickup time so the frozen render has something to show.
+  // optimisticColumnOverrides holds the *destination* column once a legal move starts
+  // mutating, for the "moves immediately, pending visual state until the RPC resolves"
+  // behavior (Story 3.1.1).
   const [inFlightDragSessionIds, setInFlightDragSessionIds] = useState<ReadonlySet<string>>(new Set());
   const dragStartColumnRef = useRef<Map<string, BoardColumnKey>>(new Map());
   const [optimisticColumnOverrides, setOptimisticColumnOverrides] = useState<Map<string, BoardColumnKey>>(
@@ -261,13 +410,11 @@ export function SessionBoard({
     });
   }, [sessionById]);
 
-  const buckets = useMemo(() => {
-    const map: Record<BoardColumnKey, Session[]> = {
-      running: [],
-      needs_review: [],
-      paused: [],
-      complete: [],
-    };
+  // Resolves each visible session's current column exactly once, so a session rendered in
+  // multiple swimlane rows simultaneously (Tag grouping's multi-membership) always shows --
+  // and drags from -- the same column in every row it appears in.
+  const columnForSession = useMemo(() => {
+    const map = new Map<string, BoardColumnKey>();
     for (const session of filteredSessions) {
       const override = optimisticColumnOverrides.get(session.id);
       let col: BoardColumnKey;
@@ -278,10 +425,30 @@ export function SessionBoard({
       } else {
         col = getBoardColumnKey(session);
       }
-      map[col].push(session);
+      map.set(session.id, col);
     }
     return map;
   }, [filteredSessions, optimisticColumnOverrides, inFlightDragSessionIds]);
+
+  const bucketRow = useCallback(
+    (sessionsForRow: Session[]): Record<BoardColumnKey, Session[]> => {
+      const map: Record<BoardColumnKey, Session[]> = {
+        running: [],
+        needs_review: [],
+        paused: [],
+        complete: [],
+      };
+      for (const session of sessionsForRow) {
+        const col = columnForSession.get(session.id) ?? getBoardColumnKey(session);
+        map[col].push(session);
+      }
+      return map;
+    },
+    [columnForSession]
+  );
+
+  // Flat (non-swimlane) bucketing -- used when groupingStrategy === GroupingStrategy.None.
+  const buckets = useMemo(() => bucketRow(filteredSessions), [bucketRow, filteredSessions]);
 
   // --- Toast / announcement surface -----------------------------------------------------
   const [toast, setToast] = useState<{ id: number; message: string; kind: "error" | "warning" } | null>(null);
@@ -347,6 +514,36 @@ export function SessionBoard({
     [showToast, announceLive, columnLabel]
   );
 
+  // Task 6.3.1c/d: combined outcome announcement for a multi-select drag fan-out -- reports
+  // which sessions (if any) failed to move, rather than only the single dragged session's
+  // outcome, per AC8's "surface which failed" partial-bulk-failure requirement.
+  const announceMultiOutcome = useCallback(
+    (results: { id: string; session: Session; outcome: DragOutcome }[], toColumn: BoardColumnKey) => {
+      if (results.length === 0) return;
+      const succeeded = results.filter((r) => r.outcome.type === "moved");
+      const failed = results.filter((r) => r.outcome.type !== "moved");
+      const toLabel = columnLabel(toColumn);
+
+      if (failed.length === 0) {
+        announceLive(`${succeeded.length} session${succeeded.length !== 1 ? "s" : ""} moved to ${toLabel}.`);
+        return;
+      }
+
+      const failedTitles = failed.map((f) => f.session.title).join(", ");
+      if (succeeded.length === 0) {
+        const message = `Couldn't move ${failed.length} selected session${failed.length !== 1 ? "s" : ""} to ${toLabel}: ${failedTitles}.`;
+        showToast(message, "error");
+        announceLive(message);
+        return;
+      }
+
+      const message = `Moved ${succeeded.length} of ${results.length} selected sessions to ${toLabel} — couldn't move: ${failedTitles}.`;
+      showToast(message, "warning");
+      announceLive(message);
+    },
+    [columnLabel, showToast, announceLive]
+  );
+
   // --- Complete-column confirmation (Task 3.1.0 / AC12) ----------------------------------
   const [pendingComplete, setPendingComplete] = useState<{
     session: Session;
@@ -400,19 +597,35 @@ export function SessionBoard({
       const { entityId: sessionId } = parseCompositeId(String(event.active.id));
       const session = sessionById.get(sessionId);
       if (!session) return;
-      beginInFlight(sessionId, getBoardColumnKey(session));
-      announceLive(`${session.title} picked up.`);
+
+      // Multi-select fan-out (Task 6.3.1c): if the picked-up card is part of the current
+      // selection AND that selection has more than one member, the whole selection moves --
+      // freeze watchSessions reassignment for every selected ID up front, not just the one
+      // the pointer grabbed.
+      const isMultiSelectDrag = activeSelection.has(sessionId) && activeSelection.size > 1;
+      if (isMultiSelectDrag) {
+        activeSelection.forEach((id) => {
+          const s = sessionById.get(id);
+          if (s) beginInFlight(id, getBoardColumnKey(s));
+        });
+        announceLive(`${activeSelection.size} sessions picked up.`);
+      } else {
+        beginInFlight(sessionId, getBoardColumnKey(session));
+        announceLive(`${session.title} picked up.`);
+      }
     },
-    [sessionById, announceLive, beginInFlight]
+    [sessionById, activeSelection, announceLive, beginInFlight]
   );
 
   const handleDragCancel = useCallback(
     (event: DragCancelEvent) => {
       const { entityId: sessionId } = parseCompositeId(String(event.active.id));
-      releaseInFlight(sessionId);
+      const isMultiSelectDrag = activeSelection.has(sessionId) && activeSelection.size > 1;
+      const idsToRelease = isMultiSelectDrag ? Array.from(activeSelection) : [sessionId];
+      idsToRelease.forEach((id) => releaseInFlight(id));
       announceOutcome({ type: "cancelled" });
     },
-    [releaseInFlight, announceOutcome]
+    [activeSelection, releaseInFlight, announceOutcome]
   );
 
   const handleDragEnd = useCallback(
@@ -426,8 +639,11 @@ export function SessionBoard({
         return;
       }
 
+      const isMultiSelectDrag = activeSelection.has(sessionId) && activeSelection.size > 1;
+      const idsToMove = isMultiSelectDrag ? Array.from(activeSelection) : [sessionId];
+
       if (!event.over) {
-        releaseInFlight(sessionId);
+        idsToMove.forEach((id) => releaseInFlight(id));
         announceOutcome({ type: "cancelled" });
         return;
       }
@@ -435,40 +651,86 @@ export function SessionBoard({
       const { entityId: toColumnId } = parseCompositeId(String(event.over.id));
       const toColumn = toColumnId as BoardColumnKey;
 
-      if (fromColumn === toColumn) {
+      if (!isMultiSelectDrag) {
+        if (fromColumn === toColumn) {
+          releaseInFlight(sessionId);
+          return;
+        }
+
+        const outcome = await attemptColumnMove(session, fromColumn, toColumn, {
+          updateSession,
+          resumeHibernatedSession,
+          approveNeedsReview,
+          confirmComplete,
+          getSessionsErrorState,
+          onOptimisticMove: (target) => {
+            setOptimisticColumnOverrides((prev) => new Map(prev).set(sessionId, target));
+          },
+        });
+
         releaseInFlight(sessionId);
+        if (outcome.type === "moved") {
+          // Keep the optimistic override in place -- clearing it here would fall back to the
+          // still-stale `sessions` prop (the real watchSessions push hasn't landed yet) and
+          // bounce the card back to its old column for one render, which also yanks focus off
+          // the element the effect below is about to target. clearOptimisticOverride's own
+          // reconciliation effect drops the override once real props catch up.
+          pendingFocusRef.current = { sessionId, via: "drag" };
+        } else {
+          clearOptimisticOverride(sessionId);
+        }
+        announceOutcome(outcome, session, toColumn);
         return;
       }
 
-      const outcome = await attemptColumnMove(session, fromColumn, toColumn, {
-        updateSession,
-        resumeHibernatedSession,
-        approveNeedsReview,
-        confirmComplete,
-        getSessionsErrorState,
-        onOptimisticMove: (target) => {
-          setOptimisticColumnOverrides((prev) => new Map(prev).set(sessionId, target));
-        },
-      });
+      // Multi-select fan-out (Task 6.3.1c): one attemptColumnMove call per selected session,
+      // targeting the same toColumn. Sequential (not Promise.all) is deliberate -- a drop into
+      // "Complete" opens a single-slot confirmation dialog (confirmComplete/pendingComplete)
+      // per session, and awaiting each call in turn keeps those prompts from racing each other.
+      const results: { id: string; session: Session; outcome: DragOutcome }[] = [];
+      for (const id of idsToMove) {
+        const s = sessionById.get(id);
+        const from = dragStartColumnRef.current.get(id);
+        if (!s || !from) {
+          releaseInFlight(id);
+          continue;
+        }
+        if (from === toColumn) {
+          releaseInFlight(id);
+          continue;
+        }
 
-      releaseInFlight(sessionId);
-      if (outcome.type === "moved") {
-        // Keep the optimistic override in place -- clearing it here would fall back to the
-        // still-stale `sessions` prop (the real watchSessions push hasn't landed yet) and
-        // bounce the card back to its old column for one render, which also yanks focus off
-        // the element the effect below is about to target. clearOptimisticOverride's own
-        // reconciliation effect drops the override once real props catch up.
-        pendingFocusRef.current = { sessionId, via: "drag" };
-      } else {
-        clearOptimisticOverride(sessionId);
+        const outcome = await attemptColumnMove(s, from, toColumn, {
+          updateSession,
+          resumeHibernatedSession,
+          approveNeedsReview,
+          confirmComplete,
+          getSessionsErrorState,
+          onOptimisticMove: (target) => {
+            setOptimisticColumnOverrides((prev) => new Map(prev).set(id, target));
+          },
+        });
+
+        releaseInFlight(id);
+        if (outcome.type !== "moved") {
+          clearOptimisticOverride(id);
+        }
+        results.push({ id, session: s, outcome });
       }
-      announceOutcome(outcome, session, toColumn);
+
+      const draggedResult = results.find((r) => r.id === sessionId);
+      if (draggedResult?.outcome.type === "moved") {
+        pendingFocusRef.current = { sessionId, via: "drag" };
+      }
+      announceMultiOutcome(results, toColumn);
     },
     [
       sessionById,
+      activeSelection,
       releaseInFlight,
       clearOptimisticOverride,
       announceOutcome,
+      announceMultiOutcome,
       updateSession,
       resumeHibernatedSession,
       approveNeedsReview,
@@ -480,7 +742,8 @@ export function SessionBoard({
   // MoveToMenu's non-drag counterpart to handleDragEnd: same attemptColumnMove call, same
   // in-flight freeze (Story 3.2.2) so a mid-request watchSessions push can't flicker the card
   // back before the RPC settles, same outcome announcement/focus handling -- only the trigger
-  // differs (a discrete menu selection instead of a dnd-kit drop event).
+  // differs (a discrete menu selection instead of a dnd-kit drop event). MoveToMenu always
+  // targets a single session -- it has no concept of "act on the current selection".
   const attemptMoveViaMenu = useCallback(
     async (session: Session, fromColumn: BoardColumnKey, toColumn: BoardColumnKey) => {
       const sessionId = session.id;
@@ -568,6 +831,9 @@ export function SessionBoard({
       onMoveToColumn: (toColumn: BoardColumnKey) => {
         void attemptMoveViaMenu(session, getBoardColumnKey(session), toColumn);
       },
+      selectMode,
+      isSelected: activeSelection.has(session.id),
+      onToggleSelect: () => handleToggleSession(session.id),
     }),
     [
       onSessionClick,
@@ -592,22 +858,71 @@ export function SessionBoard({
       attemptMoveViaMenu,
       onHibernateSession,
       onResumeHibernatedSession,
+      selectMode,
+      activeSelection,
+      handleToggleSession,
     ]
   );
 
   return (
     <div className={container} data-context="session-board">
-      <DndContext sensors={sensors} onDragStart={handleDragStart} onDragEnd={handleDragEnd} onDragCancel={handleDragCancel}>
-        <div className={board} role="region" aria-label="Session board">
-          {BOARD_COLUMNS.map((col) => (
-            <BoardColumn
-              key={col.key}
-              column={col}
-              rowKey={DEFAULT_ROW_KEY}
-              sessions={buckets[col.key]}
-              getCardProps={getCardProps}
-            />
+      <div className={boardHeader}>
+        <input
+          type="text"
+          placeholder="Search sessions..."
+          value={searchQuery}
+          onChange={(e) => setSearchQuery(e.target.value)}
+          className={`${searchInput} ${boardHeaderSearch}`}
+          aria-label="Search sessions"
+          data-testid="board-search-input"
+        />
+        <select
+          value={groupingStrategy}
+          onChange={(e) => setGroupingStrategy(e.target.value as GroupingStrategy)}
+          className={select}
+          title="Group by"
+          aria-label="Group sessions by"
+          data-testid="board-grouping-select"
+        >
+          {Object.entries(GroupingStrategyLabels).map(([value, label]) => (
+            <option key={value} value={value}>
+              {label}
+            </option>
           ))}
+        </select>
+        <button
+          type="button"
+          onClick={handleToggleSelectMode}
+          className={`${selectModeButton} ${selectMode ? selectModeButtonActive : ""}`}
+          aria-label={selectMode ? "Exit select mode" : "Enter select mode"}
+          aria-pressed={selectMode}
+          data-testid="board-select-mode-toggle"
+        >
+          {selectMode ? "Cancel" : "Select"}
+        </button>
+      </div>
+
+      <DndContext sensors={sensors} onDragStart={handleDragStart} onDragEnd={handleDragEnd} onDragCancel={handleDragCancel}>
+        <div className={groupingActive ? boardRows : board} role="region" aria-label="Session board">
+          {groupingActive
+            ? groupedSessions.map((group) => (
+                <BoardSwimlane
+                  key={group.groupKey}
+                  rowKey={group.groupKey}
+                  displayName={group.displayName}
+                  buckets={bucketRow(group.sessions)}
+                  getCardProps={getCardProps}
+                />
+              ))
+            : BOARD_COLUMNS.map((col) => (
+                <BoardColumn
+                  key={col.key}
+                  column={col}
+                  rowKey={DEFAULT_ROW_KEY}
+                  sessions={buckets[col.key]}
+                  getCardProps={getCardProps}
+                />
+              ))}
         </div>
       </DndContext>
 
@@ -629,6 +944,29 @@ export function SessionBoard({
           sessionTitle={pendingComplete.session.title}
           onConfirm={handleCompleteConfirm}
           onCancel={handleCompleteCancel}
+        />
+      )}
+
+      {selectMode && (
+        <BulkActions
+          selectedCount={activeSelection.size}
+          totalCount={filteredSessions.length}
+          onPauseAll={handlePauseAll}
+          onResumeAll={handleResumeAll}
+          onDeleteAll={handleDeleteAll}
+          onAddTagAll={(e) => handleBulkAddTag(e.currentTarget)}
+          onSelectAll={handleSelectAll}
+          onClearSelection={handleClearSelection}
+        />
+      )}
+
+      {isBulkTagEditing && (
+        <TagEditor
+          tags={[]}
+          onSave={handleBulkTagSave}
+          onCancel={() => setIsBulkTagEditing(false)}
+          sessionTitle={`${activeSelection.size} selected session${activeSelection.size !== 1 ? "s" : ""}`}
+          triggerRef={bulkTagEditorTriggerRef}
         />
       )}
     </div>

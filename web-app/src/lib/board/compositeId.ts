@@ -11,12 +11,14 @@ export function makeCompositeId(rowKey: string, entityId: string): string {
 }
 
 /**
- * Splits a composite `${rowKey}:${entityId}` id on the first `:` — session IDs and
- * BoardColumnKey values never contain `:`, so this is unambiguous even if a future rowKey
- * (e.g. a branch name) did.
+ * Splits a composite `${rowKey}:${entityId}` id on the LAST `:` — session IDs and
+ * BoardColumnKey values never contain `:`, but rowKey does once Phase 6 wires real
+ * grouping-strategy values through (a tag/category/path string can legitimately contain a
+ * colon, e.g. a Windows-style path or a "type:bug" tag). Splitting on the last occurrence
+ * keeps parsing correct regardless of what the rowKey contains.
  */
 export function parseCompositeId(id: string): { rowKey: string; entityId: string } {
-  const idx = id.indexOf(":");
+  const idx = id.lastIndexOf(":");
   if (idx === -1) {
     return { rowKey: "", entityId: id };
   }
