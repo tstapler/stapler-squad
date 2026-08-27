@@ -257,6 +257,11 @@ export function SessionBoard({
     [selectedSessions, filteredSessionIds]
   );
 
+  // Moved above its first use (handlePauseAll/handleResumeAll below) -- declared again lower
+  // in the file previously, which is unreachable dead code now that it's hoisted up here.
+  const [liveMessage, setLiveMessage] = useState("");
+  const announceLive = useCallback((message: string) => setLiveMessage(message), []);
+
   const handleToggleSelectMode = useCallback(() => {
     setSelectMode((prev) => {
       if (prev) setSelectedSessions(new Set());
@@ -288,13 +293,16 @@ export function SessionBoard({
 
   const handlePauseAll = useCallback(() => {
     if (!onPauseSession) return;
+    const count = activeSelection.size;
     activeSelection.forEach((id) => onPauseSession(id));
+    announceLive(`${count} session${count !== 1 ? "s" : ""} paused`);
     setSelectedSessions(new Set());
     setSelectMode(false);
-  }, [onPauseSession, activeSelection]);
+  }, [onPauseSession, activeSelection, announceLive]);
 
   const handleResumeAll = useCallback(() => {
     if (!onDirectResumeSession && !onResumeSession) return;
+    const count = activeSelection.size;
     activeSelection.forEach((id) => {
       const session = sessionById.get(id);
       if (!session) return;
@@ -304,9 +312,10 @@ export function SessionBoard({
         onResumeSession?.(session);
       }
     });
+    announceLive(`${count} session${count !== 1 ? "s" : ""} resumed`);
     setSelectedSessions(new Set());
     setSelectMode(false);
-  }, [onDirectResumeSession, onResumeSession, activeSelection, sessionById]);
+  }, [onDirectResumeSession, onResumeSession, activeSelection, sessionById, announceLive]);
 
   const handleDeleteAll = useCallback(() => {
     if (!onDeleteSession) return;
@@ -473,8 +482,8 @@ export function SessionBoard({
   // Kept independent of `toast` (the visible bubble, error/warning outcomes only) -- a
   // "moved" outcome has no visible toast (the card's new column position is the sighted-user
   // feedback) but still needs its own distinct announcement for screen-reader users.
-  const [liveMessage, setLiveMessage] = useState("");
-  const announceLive = useCallback((message: string) => setLiveMessage(message), []);
+  // (liveMessage/announceLive are declared earlier in this component, before their first use
+  // in handlePauseAll/handleResumeAll.)
 
   const columnLabel = useCallback(
     (key?: BoardColumnKey) => BOARD_COLUMNS.find((c) => c.key === key)?.label ?? key ?? "",
