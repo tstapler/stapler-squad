@@ -131,6 +131,37 @@ export const resetLayoutButton = style({
   color: vars.color.textMuted,
 });
 
+export const viewModeToggleBar = style({
+  display: "flex",
+  justifyContent: "flex-end",
+  gap: vars.space["1"],
+  padding: `${vars.space["1"]} ${vars.space["1"]} 0`,
+  flexShrink: 0,
+});
+
+export const viewModeToggleButton = recipe({
+  base: {
+    fontSize: vars.fontSize.xs,
+    padding: `2px ${vars.space["2"]}`,
+    background: "transparent",
+    border: `1px solid ${vars.color.borderColor}`,
+    borderRadius: vars.radii.sm,
+    cursor: "pointer",
+    color: vars.color.textMuted,
+    minHeight: "28px",
+  },
+  variants: {
+    active: {
+      true: {
+        background: vars.color.accentBg,
+        color: vars.color.accentText,
+        borderColor: vars.color.primary,
+      },
+      false: {},
+    },
+  },
+});
+
 export const rendererRoot = style({
   display: "flex",
   flexDirection: "column",
