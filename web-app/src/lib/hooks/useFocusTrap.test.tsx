@@ -59,8 +59,33 @@ describe("useFocusTrap", () => {
       });
     }).not.toThrow();
 
-    // No trigger to restore to — focus simply isn't forced anywhere else.
-    expect(document.activeElement).not.toBe(first);
+    // No trigger to restore to — jsdom (like real browsers) drops focus to
+    // <body> once the focused node is removed. Asserting body specifically
+    // (not just "!== first") catches a future regression that refocuses some
+    // other stray element instead of leaving focus alone.
+    expect(document.activeElement).toBe(document.body);
+  });
+
+  it("useFocusTrap_should_NotThrow_When_TriggerElementRemovedFromDomBeforeUnmount", () => {
+    const trigger = document.createElement("button");
+    document.body.appendChild(trigger);
+    const triggerRef = { current: trigger as HTMLElement | null };
+
+    const { unmount } = render(<TrapHarness isActive triggerRef={triggerRef} />);
+
+    // Trigger is removed from the DOM while the trap is still active — e.g.
+    // the row that opened the modal was filtered/deleted mid-review.
+    trigger.remove();
+
+    expect(() => {
+      act(() => {
+        unmount();
+      });
+    }).not.toThrow();
+
+    // .focus() on a detached node is a documented DOM no-op — focus falls
+    // back to <body>, not left dangling on some other stray element.
+    expect(document.activeElement).toBe(document.body);
   });
 
   it("useFocusTrap_should_MoveFocusToFirstFocusable_When_Activated", () => {
