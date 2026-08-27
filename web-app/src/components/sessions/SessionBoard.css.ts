@@ -16,6 +16,13 @@ export const board = style({
   flex: 1,
   minHeight: 0,
   alignItems: "stretch",
+  "@media": {
+    "(max-width: 768px)": {
+      gap: vars.space["3"],
+      padding: vars.space["3"],
+      scrollSnapType: "x mandatory",
+    },
+  },
 });
 
 // Alternative to `board` used when a swimlane grouping strategy is active (Task 6.1.1a):

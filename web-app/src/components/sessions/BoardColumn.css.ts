@@ -11,6 +11,14 @@ export const column = style({
   borderRadius: vars.radii.md,
   maxHeight: "100%",
   minHeight: 0,
+  "@media": {
+    "(max-width: 768px)": {
+      // Near-full-viewport width so one column is legible at a time; MoveToMenu (not
+      // drag) is the primary interaction path at this width per the plan's mobile story.
+      width: `calc(100vw - 2 * ${vars.space["3"]})`,
+      scrollSnapAlign: "start",
+    },
+  },
 });
 
 export const columnHeader = style({

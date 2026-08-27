@@ -19,4 +19,10 @@ export const swimlaneRow = style({
   gap: vars.space["4"],
   overflowX: "auto",
   alignItems: "stretch",
+  "@media": {
+    "(max-width: 768px)": {
+      gap: vars.space["3"],
+      scrollSnapType: "x mandatory",
+    },
+  },
 });
