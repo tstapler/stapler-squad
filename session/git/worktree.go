@@ -128,6 +128,17 @@ func NewGitWorktreeFromCommitSHA(repoPath, sessionName, branchName, commitSHA st
 	if commitSHA == "" {
 		return nil, "", fmt.Errorf("commitSHA must not be empty")
 	}
+	if repoPath == "" {
+		// filepath.Abs("") silently resolves to the process's cwd, which for a
+		// server process is whatever real repo it happens to be running from —
+		// exactly the mechanism that let findGitRepoRoot misdiagnose a real
+		// checkout as unborn and hand it to createInitialCommit. An empty
+		// repoPath here always means an upstream caller failed to resolve a
+		// real path (a zero-value Instance/test fixture, never a legitimate
+		// caller — see production callers of this function), so reject it
+		// outright instead of silently operating on cwd.
+		return nil, "", fmt.Errorf("repoPath must not be empty")
+	}
 
 	absPath, err := filepath.Abs(repoPath)
 	if err != nil {
@@ -225,6 +236,14 @@ func NewGitWorktreeWithBranch(repoPath string, sessionName string, customBranch 
 // NewGitWorktreeFromStorageWithExecutor's doc comment; use WithCommandRunner to
 // override how this worktree's subprocesses run.
 func NewGitWorktreeWithBranchAndExecutor(repoPath string, sessionName string, customBranch string, opts ...GitWorktreeOption) (tree *GitWorktree, branchname string, err error) {
+	if repoPath == "" {
+		// See NewGitWorktreeFromCommitSHA's identical check for why: an empty
+		// repoPath would otherwise resolve to the process's cwd via
+		// filepath.Abs("") below and get handed to findGitRepoRoot, which can
+		// misdiagnose a real checkout as unborn and overwrite its .gitignore.
+		return nil, "", fmt.Errorf("repoPath must not be empty")
+	}
+
 	cfg := config.LoadConfig()
 
 	var branchName string

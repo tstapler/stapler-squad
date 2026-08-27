@@ -15,6 +15,7 @@ import (
 	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
+	"github.com/go-git/go-git/v5/plumbing/storer"
 )
 
 // isTraversalPathSegment reports whether s is "." or ".." — mirrors
@@ -199,11 +200,19 @@ func findGitRepoRoot(path string) (string, error) {
 	for {
 		repo, err := git.PlainOpen(currentPath)
 		if err == nil {
-			// Found the repository root
-			// Check if the repository has any commits (worktrees require at least one)
-			_, err := repo.Head()
+			// Found the repository root. A bare repo.Head() error is not reliable
+			// evidence the repo is unborn: go-git can transiently fail to resolve HEAD
+			// for an otherwise-real repo (see getHeadCommitSHA's doc comment below for
+			// the same class of failure). Trusting that error alone here previously
+			// caused createInitialCommit to overwrite a real repo's .gitignore and
+			// fabricate a disconnected "Initial commit" on top of real history.
+			// repoHasAnyRef checks the ref store directly, with the same retry shape
+			// getHeadCommitSHA uses, before concluding the repo truly has zero history.
+			hasRef, err := repoHasAnyRef(currentPath)
 			if err != nil {
-				// Repository has no commits - create initial commit
+				return "", fmt.Errorf("failed to check for existing refs at '%s': %w", currentPath, err)
+			}
+			if !hasRef {
 				log.Info("repository has no commits, creating initial commit", "path", currentPath)
 				if err := createInitialCommit(repo, currentPath); err != nil {
 					return "", fmt.Errorf("failed to create initial commit at '%s': %w", currentPath, err)
@@ -342,6 +351,50 @@ func getHeadCommitSHA(path string) (string, error) {
 	return getHeadCommitSHAViaCLI(path)
 }
 
+// repoHasAnyRef reports whether the git repository at path has at least one
+// hash reference (a branch, tag, or other ref that resolves directly to an
+// object) — a reliable signal that it has real history, unlike repo.Head()
+// which can transiently fail to resolve for an otherwise-real repo (see
+// getHeadCommitSHA's doc comment). Symbolic references (HEAD itself) don't
+// count: git.PlainInit always creates a symbolic "HEAD -> refs/heads/master"
+// ref even in a brand-new, zero-commit repo, so counting it would make this
+// always report true and defeat the guard's purpose. Retries with the same
+// shape as getHeadCommitSHA since both are working around the same class of
+// go-git flakiness.
+func repoHasAnyRef(path string) (bool, error) {
+	var lastErr error
+	for attempt := 0; attempt < headSHARetryAttempts; attempt++ {
+		if attempt > 0 {
+			time.Sleep(headSHARetryDelay)
+		}
+		repo, err := git.PlainOpenWithOptions(path, &git.PlainOpenOptions{DetectDotGit: true})
+		if err != nil {
+			lastErr = fmt.Errorf("failed to open git repo at %s: %w", path, err)
+			continue
+		}
+		refs, err := repo.References()
+		if err != nil {
+			lastErr = fmt.Errorf("failed to list refs at %s: %w", path, err)
+			continue
+		}
+		found := false
+		iterErr := refs.ForEach(func(ref *plumbing.Reference) error {
+			if ref.Type() != plumbing.HashReference {
+				return nil
+			}
+			found = true
+			return storer.ErrStop
+		})
+		refs.Close()
+		if iterErr != nil {
+			lastErr = fmt.Errorf("failed to iterate refs at %s: %w", path, iterErr)
+			continue
+		}
+		return found, nil
+	}
+	return false, lastErr
+}
+
 // getHeadCommitSHAViaCLI is the fallback path for getHeadCommitSHA when go-git
 // repeatedly fails to resolve HEAD to a real object. The git CLI relies on atomic-rename
 // ref updates, so it doesn't observe the torn-read race go-git is susceptible to.
@@ -413,6 +466,18 @@ func InitializeProjectDirectory(path string) error {
 // createInitialCommit creates an initial commit in a new git repository
 // This is required because git worktrees need at least one commit to exist
 func createInitialCommit(repo *git.Repository, repoPath string) error {
+	// Self-defending guard: refuse to run against a repo that already has any
+	// ref, regardless of which caller reached here. A fresh git.PlainInit repo
+	// has zero refs by construction, so this is a no-op for every legitimate
+	// caller (InitializeProjectDirectory, findGitRepoRoot's genuinely-unborn
+	// case) — it only ever fires when something upstream misdiagnosed a real
+	// repo as unborn, which is exactly the corruption this guard exists to stop.
+	if hasRef, err := repoHasAnyRef(repoPath); err != nil {
+		return fmt.Errorf("failed to check for existing refs at '%s': %w", repoPath, err)
+	} else if hasRef {
+		return fmt.Errorf("refusing to create initial commit at '%s': repository already has existing refs", repoPath)
+	}
+
 	// Get the worktree
 	worktree, err := repo.Worktree()
 	if err != nil {
