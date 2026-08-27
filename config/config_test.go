@@ -3,6 +3,8 @@ package config
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -234,6 +236,34 @@ func TestDefaultConfig(t *testing.T) {
 		assert.NotEmpty(t, config.BranchPrefix)
 		assert.True(t, strings.HasSuffix(config.BranchPrefix, "/"))
 	})
+}
+
+// TestPruneStaleTestDirs is the regression test for the leak that filled
+// ~/.stapler-squad/test with 13,530 orphaned test-<pid> dirs (6.1G) going
+// back to March 2026: every go-test binary created one via GetConfigDirForDir
+// but nothing ever removed it. Verifies a dead pid's dir gets swept while a
+// live pid's dir and unrelated entries survive.
+func TestPruneStaleTestDirs(t *testing.T) {
+	testBaseDir := t.TempDir()
+
+	deadCmd := safeexec.CommandContext(context.Background(), "true")
+	require.NoError(t, deadCmd.Run())
+	deadPID := deadCmd.Process.Pid
+
+	alivePID := os.Getpid()
+
+	deadDir := filepath.Join(testBaseDir, fmt.Sprintf("test-%d", deadPID))
+	aliveDir := filepath.Join(testBaseDir, fmt.Sprintf("test-%d", alivePID))
+	junkDir := filepath.Join(testBaseDir, "not-a-test-dir")
+	require.NoError(t, os.MkdirAll(deadDir, 0755))
+	require.NoError(t, os.MkdirAll(aliveDir, 0755))
+	require.NoError(t, os.MkdirAll(junkDir, 0755))
+
+	pruneStaleTestDirs(testBaseDir)
+
+	assert.NoDirExists(t, deadDir, "dead process's test dir should be pruned")
+	assert.DirExists(t, aliveDir, "live process's test dir must survive")
+	assert.DirExists(t, junkDir, "non test-<pid> entries must be left alone")
 }
 
 func TestGetConfigDir(t *testing.T) {
@@ -861,6 +891,106 @@ func TestOneOffBaseDir_JSONRoundTrip(t *testing.T) {
 	assert.NotContains(t, string(emptyRaw), `"one_off_base_dir"`)
 }
 
+// ─── RemoteConfig tests (ssh-remote-workspaces Phase 3, Epic 3.1) ────────────
+
+// TestRemoteConfigRoundTrip covers plan.md Story 3.1.1's acceptance criterion:
+// a RemoteConfig saved via config.Save round-trips through config.json with
+// its exact field values intact.
+func TestRemoteConfigRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+
+	cfg := &Config{
+		Remotes: []RemoteConfig{
+			{
+				Name:        "prod-box",
+				Host:        "prod.example.com",
+				User:        "tyler",
+				BasePath:    "/srv/workspaces",
+				IdentityRef: "ssh-key:prod-box",
+			},
+		},
+	}
+	require.NoError(t, saveConfig(cfg, path))
+
+	loaded, err := LoadConfigFromPath(path)
+	require.NoError(t, err)
+	require.Len(t, loaded.Remotes, 1)
+	assert.Equal(t, "prod-box", loaded.Remotes[0].Name)
+	assert.Equal(t, "prod.example.com", loaded.Remotes[0].Host)
+	assert.Equal(t, "tyler", loaded.Remotes[0].User)
+	assert.Equal(t, "/srv/workspaces", loaded.Remotes[0].BasePath)
+	assert.Equal(t, "ssh-key:prod-box", loaded.Remotes[0].IdentityRef)
+
+	// omitempty: no configured remotes omits the "remotes" key entirely.
+	emptyCfg := &Config{}
+	emptyPath := filepath.Join(dir, "empty-config.json")
+	require.NoError(t, saveConfig(emptyCfg, emptyPath))
+	emptyRaw, err := os.ReadFile(emptyPath)
+	require.NoError(t, err)
+	assert.NotContains(t, string(emptyRaw), `"remotes"`)
+}
+
+// TestRemoteConfig_SavedJSONContainsNoPlaintextSecret pins plan.md Story
+// 3.1.1's "no secret material in config.json" acceptance criterion: a saved
+// RemoteConfig's raw JSON never contains a PEM-shaped value or a
+// private-key/passphrase field, because RemoteConfig has no such field —
+// IdentityRef is only an opaque pointer resolved against the OS keychain
+// (sshremote.KeyStore, Epic 3.2), never the key material itself.
+func TestRemoteConfig_SavedJSONContainsNoPlaintextSecret(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+
+	cfg := &Config{
+		Remotes: []RemoteConfig{
+			{
+				Name:        "prod-box",
+				Host:        "prod.example.com",
+				User:        "tyler",
+				BasePath:    "/srv/workspaces",
+				IdentityRef: "ssh-key:prod-box",
+			},
+		},
+	}
+	require.NoError(t, saveConfig(cfg, path))
+
+	raw, err := os.ReadFile(path)
+	require.NoError(t, err)
+	rawJSON := string(raw)
+
+	assert.False(t, strings.Contains(rawJSON, "BEGIN"), "config.json must not contain PEM-shaped content")
+	assert.NotContains(t, rawJSON, "private_key")
+	assert.NotContains(t, rawJSON, "passphrase")
+
+	// Sanity: the remote's non-secret fields are actually present, so this
+	// test isn't vacuously passing against an empty/failed save.
+	assert.Contains(t, rawJSON, `"remotes"`)
+	assert.Contains(t, rawJSON, "prod-box")
+}
+
+// TestConfig_RemoteByName covers the lookup helper consumed by session
+// creation (Phase 4) and Settings UI validation (Phase 6).
+func TestConfig_RemoteByName(t *testing.T) {
+	cfg := &Config{
+		Remotes: []RemoteConfig{
+			{Name: "prod-box", Host: "prod.example.com", User: "tyler", BasePath: "/srv/workspaces", IdentityRef: "ssh-key:prod-box"},
+			{Name: "staging-box", Host: "staging.example.com", User: "tyler", BasePath: "/srv/workspaces", IdentityRef: "ssh-key:staging-box"},
+		},
+	}
+
+	found, ok := cfg.RemoteByName("staging-box")
+	require.True(t, ok)
+	require.NotNil(t, found)
+	assert.Equal(t, "staging.example.com", found.Host)
+
+	_, ok = cfg.RemoteByName("does-not-exist")
+	assert.False(t, ok)
+
+	var nilCfg *Config
+	_, ok = nilCfg.RemoteByName("prod-box")
+	assert.False(t, ok, "RemoteByName must be nil-safe")
+}
+
 // ─── Escape analytics config tests ───────────────────────────────────────────
 
 // TestEscapeAnalyticsDefaults verifies that zero-value configs get the correct defaults
@@ -1206,4 +1336,253 @@ func TestSlackWebhookURLOverride_ReturnsEmptyString_When_EnvVarUnset(t *testing.
 	cfg, err := LoadConfigFromPath(path)
 	require.NoError(t, err)
 	assert.Equal(t, "", cfg.SlackWebhookURLOverride())
+}
+
+// ─── HandoffSummaryConfig ───────────────────────────────────────────────────
+
+// TestHandoffSummaryConfigOrDefault_AppliesDefaultToZeroBudget verifies a
+// zero-value HandoffSummaryConfig (nil Enabled, unset budget) resolves to the
+// enabled-by-default, 12000-token-budget state.
+func TestHandoffSummaryConfigOrDefault_AppliesDefaultToZeroBudget(t *testing.T) {
+	cfg := HandoffSummaryConfig{}
+
+	out := cfg.HandoffSummaryConfigOrDefault()
+
+	assert.True(t, out.EnabledOrDefault())
+	assert.Equal(t, 12000, out.MaxMiddleExcerptTokens)
+}
+
+// TestLoadConfig_HandoffSummaryExplicitlyDisabled_StaysDisabled verifies the
+// gotcha this feature is prone to: an explicit "enabled": false in config.json
+// must survive LoadConfigFromPath unchanged, not get silently re-defaulted to
+// enabled.
+func TestLoadConfig_HandoffSummaryExplicitlyDisabled_StaysDisabled(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	content := `{"handoff_summary": {"enabled": false}}`
+	require.NoError(t, os.WriteFile(path, []byte(content), 0600))
+
+	cfg, err := LoadConfigFromPath(path)
+	require.NoError(t, err)
+	assert.False(t, cfg.HandoffSummary.EnabledOrDefault())
+	assert.Equal(t, 12000, cfg.HandoffSummary.MaxMiddleExcerptTokens)
+}
+
+// TestLoadConfig_HandoffSummaryAbsentFromExistingConfig_DefaultsToEnabled
+// covers the actual real-world upgrade path: a config.json that predates this
+// feature (no "handoff_summary" key at all, unlike the empty-file/fresh-config
+// path DefaultConfig() takes) must still resolve to enabled — this is exactly
+// the case a plain `bool` field (indistinguishable zero-value from "absent")
+// would get wrong, which is why Enabled is *bool.
+func TestLoadConfig_HandoffSummaryAbsentFromExistingConfig_DefaultsToEnabled(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	content := `{"some_other_field_from_before_this_feature_existed": true}`
+	require.NoError(t, os.WriteFile(path, []byte(content), 0600))
+
+	cfg, err := LoadConfigFromPath(path)
+	require.NoError(t, err)
+	assert.True(t, cfg.HandoffSummary.EnabledOrDefault())
+	assert.Equal(t, 12000, cfg.HandoffSummary.MaxMiddleExcerptTokens)
+}
+
+// TestResolveGlobalTymuxDefault_AlwaysAllowsFalse verifies the gate never
+// blocks the safe direction: requesting the global tymux default be false is
+// always permitted, regardless of whether the tymux rollback rehearsal has
+// been recorded. Mirrors
+// TestResolveGlobalStreamHubDefault_should_ReturnFalseWithNoError_When_RequestedIsFalse
+// (config/stream_hub_rollout_test.go).
+func TestResolveGlobalTymuxDefault_AlwaysAllowsFalse(t *testing.T) {
+	cfg := &Config{} // TymuxRollbackRehearsalCompletedAt unset
+
+	got, err := ResolveGlobalTymuxDefault(cfg, false)
+	if err != nil {
+		t.Fatalf("expected no error requesting false, got %v", err)
+	}
+	if got != false {
+		t.Fatalf("expected false, got %v", got)
+	}
+}
+
+// TestResolveGlobalTymuxDefault_RefusesTrueWithoutRehearsal is ADR-002's
+// mechanical gate: with TymuxRollbackRehearsalCompletedAt unset, requesting
+// the global tymux default resolve to true must fail with an explicit error,
+// not silently fall back to false without signaling why. Mirrors
+// TestResolveGlobalStreamHubDefault_should_FailFast_When_RehearsalNotCompleted.
+func TestResolveGlobalTymuxDefault_RefusesTrueWithoutRehearsal(t *testing.T) {
+	cfg := &Config{} // TymuxRollbackRehearsalCompletedAt unset
+
+	got, err := ResolveGlobalTymuxDefault(cfg, true)
+	if !errors.Is(err, ErrTymuxRollbackRehearsalNotCompleted) {
+		t.Fatalf("expected ErrTymuxRollbackRehearsalNotCompleted, got %v", err)
+	}
+	if got != false {
+		t.Fatalf("expected false to be returned alongside the error, got %v", got)
+	}
+}
+
+// TestResolveGlobalTymuxDefault_AllowsTrueAfterRehearsal is the happy path:
+// once TymuxRollbackRehearsalCompletedAt is set to a valid, non-zero
+// timestamp, the same resolution that previously failed now succeeds and
+// permits the global tymux default to be true.
+func TestResolveGlobalTymuxDefault_AllowsTrueAfterRehearsal(t *testing.T) {
+	completedAt := time.Now()
+	cfg := &Config{TymuxRollbackRehearsalCompletedAt: &completedAt}
+
+	got, err := ResolveGlobalTymuxDefault(cfg, true)
+	if err != nil {
+		t.Fatalf("expected no error once rehearsal is recorded, got %v", err)
+	}
+	if got != true {
+		t.Fatalf("expected true, got %v", got)
+	}
+}
+
+// TestRecordTymuxRollbackRehearsalCompleted_PersistsTimestamp exercises
+// recording a completed tymux rehearsal end to end: it persists
+// TymuxRollbackRehearsalCompletedAt to disk, and a freshly reloaded config
+// subsequently permits ResolveGlobalTymuxDefault to return true where it
+// previously refused. Mirrors
+// TestRecordRollbackRehearsalCompleted_should_PersistTimestamp_And_UnblockResolution.
+func TestRecordTymuxRollbackRehearsalCompleted_PersistsTimestamp(t *testing.T) {
+	tempHome := t.TempDir()
+	origHome := os.Getenv("HOME")
+	origInstance := os.Getenv("STAPLER_SQUAD_INSTANCE")
+	os.Setenv("HOME", tempHome)
+	os.Setenv("STAPLER_SQUAD_INSTANCE", "shared")
+	defer func() {
+		os.Setenv("HOME", origHome)
+		if origInstance == "" {
+			os.Unsetenv("STAPLER_SQUAD_INSTANCE")
+		} else {
+			os.Setenv("STAPLER_SQUAD_INSTANCE", origInstance)
+		}
+	}()
+
+	cfg := &Config{}
+
+	// Before recording, the gate refuses.
+	if _, err := ResolveGlobalTymuxDefault(cfg, true); !errors.Is(err, ErrTymuxRollbackRehearsalNotCompleted) {
+		t.Fatalf("expected gate to refuse before rehearsal is recorded, got %v", err)
+	}
+
+	before := time.Now()
+	if err := cfg.RecordTymuxRollbackRehearsalCompleted(); err != nil {
+		t.Fatalf("RecordTymuxRollbackRehearsalCompleted returned error: %v", err)
+	}
+	after := time.Now()
+
+	if cfg.TymuxRollbackRehearsalCompletedAt == nil {
+		t.Fatal("expected TymuxRollbackRehearsalCompletedAt to be set in memory")
+	}
+	if cfg.TymuxRollbackRehearsalCompletedAt.Before(before) || cfg.TymuxRollbackRehearsalCompletedAt.After(after) {
+		t.Fatalf("expected TymuxRollbackRehearsalCompletedAt to be within [%v, %v], got %v", before, after, *cfg.TymuxRollbackRehearsalCompletedAt)
+	}
+
+	if _, err := ResolveGlobalTymuxDefault(cfg, true); err != nil {
+		t.Fatalf("expected gate to succeed after rehearsal is recorded, got %v", err)
+	}
+
+	configPath := filepath.Join(tempHome, ".stapler-squad", ConfigFileName)
+	reloaded, err := LoadConfigFromPath(configPath)
+	if err != nil {
+		t.Fatalf("LoadConfigFromPath after RecordTymuxRollbackRehearsalCompleted: %v", err)
+	}
+	if reloaded.TymuxRollbackRehearsalCompletedAt == nil {
+		t.Fatal("expected persisted config to carry TymuxRollbackRehearsalCompletedAt")
+	}
+	if _, err := ResolveGlobalTymuxDefault(reloaded, true); err != nil {
+		t.Fatalf("expected reloaded config's gate to succeed, got %v", err)
+	}
+}
+
+// TestGetTymuxSessionOverride_NilConfigIsNilSafe verifies the nil-safe
+// zero-value behavior mirroring GetStreamHubSessionOverride's shape: a nil
+// *Config and a config with a nil TymuxSessionOverrides map both report no
+// override rather than panicking.
+func TestGetTymuxSessionOverride_NilConfigIsNilSafe(t *testing.T) {
+	var nilCfg *Config
+	if _, ok := nilCfg.GetTymuxSessionOverride("canary-1"); ok {
+		t.Fatal("expected nil config to report no override")
+	}
+
+	cfg := &Config{} // TymuxSessionOverrides is nil
+	if _, ok := cfg.GetTymuxSessionOverride("canary-1"); ok {
+		t.Fatal("expected config with nil map to report no override")
+	}
+}
+
+// TestSetTymuxSessionOverride_ForceTrueThenForceFalse exercises Task
+// 4.1.1b's both-directions regression guard (plan.md Epic 4.1): setting the
+// same session name's override to true, then to false, must actually flip
+// the stored value both ways and persist each direction to disk. This is
+// the accessor-level proof that config storage carries no directional bias
+// toward true, unlike streamhub/ownership.go's resolveLocked (see
+// research/features.md (b).5), which only ever pushes toward true.
+func TestSetTymuxSessionOverride_ForceTrueThenForceFalse(t *testing.T) {
+	tempHome := t.TempDir()
+	origHome := os.Getenv("HOME")
+	origInstance := os.Getenv("STAPLER_SQUAD_INSTANCE")
+	os.Setenv("HOME", tempHome)
+	os.Setenv("STAPLER_SQUAD_INSTANCE", "shared")
+	defer func() {
+		os.Setenv("HOME", origHome)
+		if origInstance == "" {
+			os.Unsetenv("STAPLER_SQUAD_INSTANCE")
+		} else {
+			os.Setenv("STAPLER_SQUAD_INSTANCE", origInstance)
+		}
+	}()
+
+	configPath := filepath.Join(tempHome, ".stapler-squad", ConfigFileName)
+	cfg := &Config{}
+
+	// Direction 1: force tymux (true).
+	forceTymux := true
+	if err := cfg.SetTymuxSessionOverride("canary-1", &forceTymux); err != nil {
+		t.Fatalf("SetTymuxSessionOverride(true) returned error: %v", err)
+	}
+	if got, ok := cfg.GetTymuxSessionOverride("canary-1"); !ok || !got {
+		t.Fatalf("expected override to force tymux, got (%v, %v)", got, ok)
+	}
+	reloaded, err := LoadConfigFromPath(configPath)
+	if err != nil {
+		t.Fatalf("LoadConfigFromPath after forcing true: %v", err)
+	}
+	if got, ok := reloaded.GetTymuxSessionOverride("canary-1"); !ok || !got {
+		t.Fatalf("expected persisted override to force tymux, got (%v, %v)", got, ok)
+	}
+
+	// Direction 2: same session name, now force tmux (false). If the
+	// accessor had streamhub's resolveLocked bias, this would fail to move
+	// the effective value back to false.
+	forceTmux := false
+	if err := cfg.SetTymuxSessionOverride("canary-1", &forceTmux); err != nil {
+		t.Fatalf("SetTymuxSessionOverride(false) returned error: %v", err)
+	}
+	if got, ok := cfg.GetTymuxSessionOverride("canary-1"); !ok || got {
+		t.Fatalf("expected override to force tmux (false), got (%v, %v)", got, ok)
+	}
+	reloadedAfterFalse, err := LoadConfigFromPath(configPath)
+	if err != nil {
+		t.Fatalf("LoadConfigFromPath after forcing false: %v", err)
+	}
+	if got, ok := reloadedAfterFalse.GetTymuxSessionOverride("canary-1"); !ok || got {
+		t.Fatalf("expected persisted override to force tmux (false), got (%v, %v)", got, ok)
+	}
+
+	// nil clears the override entirely, falling back to the global default.
+	if err := cfg.SetTymuxSessionOverride("canary-1", nil); err != nil {
+		t.Fatalf("SetTymuxSessionOverride(nil) returned error: %v", err)
+	}
+	if _, ok := cfg.GetTymuxSessionOverride("canary-1"); ok {
+		t.Fatal("expected override to be cleared")
+	}
+	reloadedAfterClear, err := LoadConfigFromPath(configPath)
+	if err != nil {
+		t.Fatalf("LoadConfigFromPath after clear: %v", err)
+	}
+	if _, ok := reloadedAfterClear.GetTymuxSessionOverride("canary-1"); ok {
+		t.Fatal("expected persisted config to no longer have the override")
+	}
 }

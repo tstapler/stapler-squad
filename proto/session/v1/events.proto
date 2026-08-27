@@ -4,6 +4,7 @@ package session.v1;
 
 import "google/protobuf/timestamp.proto";
 import "session/v1/types.proto";
+import "session/v1/remote.proto";
 
 // SessionEvent represents a real-time event about session state changes.
 // Used for WatchSessions streaming RPC to push updates to clients.
@@ -21,6 +22,12 @@ message SessionEvent {
     SessionAcknowledgedEvent session_acknowledged = 7;
     ApprovalResponseEvent approval_response = 8;
     NotificationEvent notification = 9;
+    // remote_health_changed carries a configured remote's SSH connection
+    // health-state transition (session/sshremote.RemoteHealthProber, Epic
+    // 6.4) -- session is nil for this event type, so WatchSessions' per-event
+    // category_filter/status_filter checks (which only test event.Session)
+    // never drop it.
+    RemoteHealthChangedEvent remote_health_changed = 11;
   }
 
   reserved 5;
@@ -56,6 +63,21 @@ message SessionUpdatedEvent {
 message SessionDeletedEvent {
   string session_id = 1;
   string reason = 2; // Optional deletion reason
+}
+
+// RemoteHealthChangedEvent is emitted when a configured remote's SSH
+// connection health transitions between connected/reconnecting/disconnected
+// (session/sshremote.RemoteHealthProber, Epic 6.4; wired onto SessionEvent's
+// oneof by Epic 6.2's RemoteConnectionIndicator, which is what actually
+// consumes this on the frontend -- WatchSessions is the only stream this
+// event type is published on, there is no separate remote-health stream).
+message RemoteHealthChangedEvent {
+  // remote_name is the config.RemoteConfig.Name this transition applies to.
+  string remote_name = 1;
+  // state is the remote's connection state as of this event.
+  RemoteConnectionState state = 2;
+  // previous_state is the state immediately before this transition.
+  RemoteConnectionState previous_state = 3;
 }
 
 // TerminalData represents terminal I/O for bidirectional streaming.
@@ -136,6 +158,17 @@ message TerminalOutput {
   // the most recent request is always the one being answered. Empty when this
   // output is not a resync reply.
   string resync_id = 2;
+
+  // Number of transports currently attached to this session's StreamHub
+  // (Epic 4.2, Story 4.2.1). Only ever populated for PathHubOwned sessions —
+  // proto3 `optional` presence lets the frontend distinguish "not reported"
+  // (PathLegacyPerConnection, flag off) from a real count, since fabricating
+  // a number from PathLegacyPerConnection's activeControlModeStreams
+  // generation counter would show a misleading value (it isn't a live
+  // subscriber count). May arrive on a side-channel message carrying no
+  // `data` (an otherwise-empty TerminalOutput) when the server has a count
+  // update but no new terminal bytes to send.
+  optional int32 connection_count = 4;
 }
 
 // TerminalInput contains user input for the terminal (client to server)

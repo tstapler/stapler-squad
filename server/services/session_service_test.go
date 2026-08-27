@@ -15,9 +15,11 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/pkg/classifier"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/detection"
+	"github.com/tstapler/stapler-squad/session/tmux"
 	"go.uber.org/goleak"
 )
 
@@ -2268,6 +2270,165 @@ func TestCreateSession_TitleAlreadyExists(t *testing.T) {
 	assert.Equal(t, connect.CodeAlreadyExists, connectErr.Code())
 }
 
+// --------------------------------------------------------------------------
+// CreateSession — backend resolution (tymux-bundled-integration Epic 4.3):
+// wiring session.ResolveSessionBackend's precedence (explicit request
+// override > TymuxSessionOverrides, keyed by the sanitized tmux session name
+// > the process-wide registered default) into instanceOpts.Backend.
+// --------------------------------------------------------------------------
+
+// TestCreateSession_HonorsExplicitBackendOverride verifies that a request's
+// backend_override field wins over both this session's own TymuxSessionOverrides
+// entry and the process-wide default, mirroring ResolveSessionBackend's top
+// precedence tier (session/backend_resolution_test.go).
+func TestCreateSession_HonorsExplicitBackendOverride(t *testing.T) {
+	storage := createTestStorage(t)
+	svc := newCreateTestService(t, storage)
+
+	testDir := t.TempDir()
+	t.Setenv("STAPLER_SQUAD_TEST_DIR", testDir)
+	const title = "explicit-override-session"
+	sessionKey := tmux.NewSessionName(title, tmux.TmuxPrefix).String()
+	// The session's own override forces tmux; the request override must still win.
+	require.NoError(t, os.WriteFile(filepath.Join(testDir, "config.json"),
+		[]byte(`{"tymux_session_overrides": {"`+sessionKey+`": false}}`), 0o644))
+
+	backendOverride := string(session.BackendTymux)
+	resp, err := svc.CreateSession(context.Background(), connect.NewRequest(&sessionv1.CreateSessionRequest{
+		Title:           title,
+		Path:            t.TempDir(),
+		Program:         "claude",
+		BackendOverride: &backendOverride,
+	}))
+	require.NoError(t, err)
+	t.Cleanup(func() { destroyCreatedSession(t, svc, resp.Msg.Session.Id) })
+
+	inst := svc.FindLiveInstance(resp.Msg.Session.Id)
+	require.NotNil(t, inst)
+	assert.Equal(t, session.BackendTymux, inst.Backend,
+		"request backend_override must win even though this session's TymuxSessionOverrides entry forces tmux")
+}
+
+// TestCreateSession_HonorsSessionNameOverrideMap verifies that, absent a
+// request override, a TymuxSessionOverrides entry keyed by the sanitized tmux
+// session name (tmux.NewSessionName's derivation of the request Title — not
+// the raw Title itself) forces the session's backend.
+func TestCreateSession_HonorsSessionNameOverrideMap(t *testing.T) {
+	storage := createTestStorage(t)
+	svc := newCreateTestService(t, storage)
+
+	testDir := t.TempDir()
+	t.Setenv("STAPLER_SQUAD_TEST_DIR", testDir)
+	const title = "session-override-map-test"
+	sessionKey := tmux.NewSessionName(title, tmux.TmuxPrefix).String()
+	require.NoError(t, os.WriteFile(filepath.Join(testDir, "config.json"),
+		[]byte(`{"tymux_session_overrides": {"`+sessionKey+`": true}}`), 0o644))
+
+	resp, err := svc.CreateSession(context.Background(), connect.NewRequest(&sessionv1.CreateSessionRequest{
+		Title:   title,
+		Path:    t.TempDir(),
+		Program: "claude",
+	}))
+	require.NoError(t, err)
+	t.Cleanup(func() { destroyCreatedSession(t, svc, resp.Msg.Session.Id) })
+
+	inst := svc.FindLiveInstance(resp.Msg.Session.Id)
+	require.NotNil(t, inst)
+	assert.Equal(t, session.BackendTymux, inst.Backend,
+		"a TymuxSessionOverrides entry keyed by the sanitized tmux session name must force the backend with no request override present")
+}
+
+// TestCreateSession_FallsBackToGlobalDefaultWhenNoOverrides verifies that with
+// no request override and no TymuxSessionOverrides entry for this session,
+// CreateSession applies the process-wide registered backend
+// (session.RegisterBackendProvider) rather than a hardcoded BackendTmux.
+func TestCreateSession_FallsBackToGlobalDefaultWhenNoOverrides(t *testing.T) {
+	session.RegisterBackendProvider(session.BackendTymux)
+	t.Cleanup(func() { session.RegisterBackendProvider(session.BackendTmux) })
+
+	storage := createTestStorage(t)
+	svc := newCreateTestService(t, storage)
+
+	testDir := t.TempDir()
+	t.Setenv("STAPLER_SQUAD_TEST_DIR", testDir)
+	require.NoError(t, os.WriteFile(filepath.Join(testDir, "config.json"), []byte(`{}`), 0o644))
+
+	resp, err := svc.CreateSession(context.Background(), connect.NewRequest(&sessionv1.CreateSessionRequest{
+		Title:   "no-override-session",
+		Path:    t.TempDir(),
+		Program: "claude",
+	}))
+	require.NoError(t, err)
+	t.Cleanup(func() { destroyCreatedSession(t, svc, resp.Msg.Session.Id) })
+
+	inst := svc.FindLiveInstance(resp.Msg.Session.Id)
+	require.NotNil(t, inst)
+	assert.Equal(t, session.BackendTymux, inst.Backend,
+		"with no request override and no session-name override, CreateSession must apply the process-wide registered default")
+}
+
+// --------------------------------------------------------------------------
+// CreateDirectorySession / CreateWorktreeSession — backend resolution
+// (tymux-bundled-integration Epic 4.4.2): these internal session creators
+// have no per-request override field, so they wire session.ResolveSessionBackend
+// with requestOverride="" -- only the session-name override map (or the
+// process-wide default) can influence their Backend.
+// --------------------------------------------------------------------------
+
+// TestCreateDirectorySession_HonorsSessionNameOverrideMap verifies that a
+// TymuxSessionOverrides entry keyed by the sanitized tmux session name
+// (tmux.NewSessionName's derivation of the title passed to
+// CreateDirectorySession) forces the resulting instance's backend even
+// though the process-wide default is registered as tymux.
+func TestCreateDirectorySession_HonorsSessionNameOverrideMap(t *testing.T) {
+	session.RegisterBackendProvider(session.BackendTymux)
+	t.Cleanup(func() { session.RegisterBackendProvider(session.BackendTmux) })
+
+	storage := createTestStorage(t)
+	svc := newCreateTestService(t, storage)
+
+	testDir := t.TempDir()
+	t.Setenv("STAPLER_SQUAD_TEST_DIR", testDir)
+	const title = "directory-session-override-map-test"
+	sessionKey := tmux.NewSessionName(title, tmux.TmuxPrefix).String()
+	require.NoError(t, os.WriteFile(filepath.Join(testDir, "config.json"),
+		[]byte(`{"default_program": "claude", "tymux_session_overrides": {"`+sessionKey+`": false}}`), 0o644))
+
+	inst, err := svc.CreateDirectorySession(context.Background(), title, t.TempDir(), "", nil, true, false)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = inst.Destroy() })
+
+	assert.Equal(t, session.BackendTmux, inst.Backend,
+		"a TymuxSessionOverrides entry keyed by the sanitized tmux session name must force the backend even though the process-wide default is tymux")
+}
+
+// TestCreateWorktreeSession_HonorsSessionNameOverrideMap is the
+// CreateWorktreeSession analogue of the CreateDirectorySession test above.
+func TestCreateWorktreeSession_HonorsSessionNameOverrideMap(t *testing.T) {
+	session.RegisterBackendProvider(session.BackendTymux)
+	t.Cleanup(func() { session.RegisterBackendProvider(session.BackendTmux) })
+
+	storage := createTestStorage(t)
+	svc := newCreateTestService(t, storage)
+
+	testDir := t.TempDir()
+	t.Setenv("STAPLER_SQUAD_TEST_DIR", testDir)
+	const title = "worktree-session-override-map-test"
+	sessionKey := tmux.NewSessionName(title, tmux.TmuxPrefix).String()
+	require.NoError(t, os.WriteFile(filepath.Join(testDir, "config.json"),
+		[]byte(`{"default_program": "claude", "tymux_session_overrides": {"`+sessionKey+`": false}}`), 0o644))
+
+	worktreePath := t.TempDir()
+	initGitRepoWithCommit(t, worktreePath)
+
+	inst, err := svc.CreateWorktreeSession(context.Background(), title, t.TempDir(), worktreePath, "", nil, true, false)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = inst.Destroy() })
+
+	assert.Equal(t, session.BackendTmux, inst.Backend,
+		"a TymuxSessionOverrides entry keyed by the sanitized tmux session name must force the backend even though the process-wide default is tymux")
+}
+
 // TestSessionService_CreateSession_DelegatesToCreateManagedInstance_When_HandlerInvoked
 // is the Story 1.2.0a regression test: it proves CreateSession's handler no
 // longer contains its own inline path-existence check but instead delegates
@@ -2305,6 +2466,161 @@ func TestSessionService_CreateSession_DelegatesToCreateManagedInstance_When_Hand
 	for _, d := range data {
 		assert.NotEqual(t, "delegation-regression", d.Title, "no instance should be persisted when path resolution fails")
 	}
+}
+
+// --------------------------------------------------------------------------
+// CreateSession — restart_from_session_id (Story 2.3.1): path derivation,
+// lineage, and the still-live guard.
+// --------------------------------------------------------------------------
+
+// TestCreateSession_RestartFromSessionId_DerivesPathFromSource verifies that
+// when restart_from_session_id is set and path is left empty, the new
+// session's path is resolved from the (persisted, not live) source session's
+// Path, and the created session records RestartedFromSessionId.
+func TestCreateSession_RestartFromSessionId_DerivesPathFromSource(t *testing.T) {
+	fix := setupForkTestFixture(t)
+	t.Cleanup(fix.cleanup)
+
+	sourcePath := t.TempDir()
+	require.NoError(t, fix.storage.AddInstance(&session.Instance{
+		Title:   "restart-source",
+		Path:    sourcePath,
+		Program: "claude",
+		Status:  session.Paused,
+	}))
+
+	resp, err := fix.svc.CreateSession(context.Background(), connect.NewRequest(&sessionv1.CreateSessionRequest{
+		Title:                "restarted-session",
+		Path:                 "",
+		Program:              "claude",
+		RestartFromSessionId: "restart-source",
+	}))
+	require.NoError(t, err)
+	t.Cleanup(func() { destroyCreatedSession(t, fix.svc, resp.Msg.Session.Id) })
+
+	assert.Equal(t, sourcePath, resp.Msg.Session.Path, "path should be derived from the source session")
+	assert.Equal(t, "restart-source", resp.Msg.Session.RestartedFromSessionId)
+}
+
+// TestCreateSession_RestartFromSessionId_ExplicitPathWins verifies that an
+// explicit request Path always wins over the restart-derived path -- it must
+// never be silently overridden, even though lineage is still recorded.
+func TestCreateSession_RestartFromSessionId_ExplicitPathWins(t *testing.T) {
+	fix := setupForkTestFixture(t)
+	t.Cleanup(fix.cleanup)
+
+	sourcePath := t.TempDir()
+	require.NoError(t, fix.storage.AddInstance(&session.Instance{
+		Title:   "restart-source-explicit",
+		Path:    sourcePath,
+		Program: "claude",
+		Status:  session.Paused,
+	}))
+
+	explicitPath := t.TempDir()
+	require.NotEqual(t, sourcePath, explicitPath)
+
+	resp, err := fix.svc.CreateSession(context.Background(), connect.NewRequest(&sessionv1.CreateSessionRequest{
+		Title:                "restarted-session-explicit-path",
+		Path:                 explicitPath,
+		Program:              "claude",
+		RestartFromSessionId: "restart-source-explicit",
+	}))
+	require.NoError(t, err)
+	t.Cleanup(func() { destroyCreatedSession(t, fix.svc, resp.Msg.Session.Id) })
+
+	assert.Equal(t, explicitPath, resp.Msg.Session.Path, "explicit path must win over the restart-derived path")
+	assert.Equal(t, "restart-source-explicit", resp.Msg.Session.RestartedFromSessionId, "lineage must still be recorded even when path is explicit")
+}
+
+// TestCreateSession_RestartFromSessionId_MissingSourceReturnsNotFound verifies
+// that a restart_from_session_id naming a session that exists neither live nor
+// in storage returns CodeNotFound naming the missing source -- not a silent
+// fallback (e.g. to cwd).
+func TestCreateSession_RestartFromSessionId_MissingSourceReturnsNotFound(t *testing.T) {
+	fix := setupForkTestFixture(t)
+	t.Cleanup(fix.cleanup)
+
+	_, err := fix.svc.CreateSession(context.Background(), connect.NewRequest(&sessionv1.CreateSessionRequest{
+		Title:                "restarted-session-missing-source",
+		Path:                 t.TempDir(),
+		Program:              "claude",
+		RestartFromSessionId: "does-not-exist",
+	}))
+	require.Error(t, err)
+
+	var connectErr *connect.Error
+	require.ErrorAs(t, err, &connectErr)
+	assert.Equal(t, connect.CodeNotFound, connectErr.Code())
+	assert.Contains(t, err.Error(), "does-not-exist")
+}
+
+// TestCreateSession_RestartFromSessionId_RejectsStillLiveSourceWithoutConfirmation
+// verifies the still-live guard: when the source session named by
+// restart_from_session_id is currently live (found via FindLiveInstance) and
+// confirm_restart_with_live_source is not set, CreateSession returns
+// CodeFailedPrecondition and creates nothing.
+func TestCreateSession_RestartFromSessionId_RejectsStillLiveSourceWithoutConfirmation(t *testing.T) {
+	fix := setupForkTestFixture(t)
+	t.Cleanup(fix.cleanup)
+
+	liveSource := &session.Instance{
+		Title:   "restart-source-live",
+		Path:    t.TempDir(),
+		Program: "claude",
+		Status:  session.Active,
+	}
+	addInstanceToPoller(fix.poller, liveSource)
+
+	_, err := fix.svc.CreateSession(context.Background(), connect.NewRequest(&sessionv1.CreateSessionRequest{
+		Title:                "restarted-session-rejected",
+		Path:                 t.TempDir(),
+		Program:              "claude",
+		RestartFromSessionId: "restart-source-live",
+	}))
+	require.Error(t, err)
+
+	var connectErr *connect.Error
+	require.ErrorAs(t, err, &connectErr)
+	assert.Equal(t, connect.CodeFailedPrecondition, connectErr.Code())
+	assert.Contains(t, err.Error(), "restart-source-live")
+
+	data, listErr := fix.storage.ListInstanceData()
+	require.NoError(t, listErr)
+	for _, d := range data {
+		assert.NotEqual(t, "restarted-session-rejected", d.Title, "no session should be created when the still-live guard rejects the request")
+	}
+}
+
+// TestCreateSession_RestartFromSessionId_ProceedsWhenLiveSourceConfirmed
+// verifies that the same still-live source, with
+// confirm_restart_with_live_source: true, lets CreateSession proceed normally
+// -- the explicit confirmation overrides the guard.
+func TestCreateSession_RestartFromSessionId_ProceedsWhenLiveSourceConfirmed(t *testing.T) {
+	fix := setupForkTestFixture(t)
+	t.Cleanup(fix.cleanup)
+
+	sourcePath := t.TempDir()
+	liveSource := &session.Instance{
+		Title:   "restart-source-live-confirmed",
+		Path:    sourcePath,
+		Program: "claude",
+		Status:  session.Active,
+	}
+	addInstanceToPoller(fix.poller, liveSource)
+
+	resp, err := fix.svc.CreateSession(context.Background(), connect.NewRequest(&sessionv1.CreateSessionRequest{
+		Title:                        "restarted-session-confirmed",
+		Path:                         "",
+		Program:                      "claude",
+		RestartFromSessionId:         "restart-source-live-confirmed",
+		ConfirmRestartWithLiveSource: true,
+	}))
+	require.NoError(t, err)
+	t.Cleanup(func() { destroyCreatedSession(t, fix.svc, resp.Msg.Session.Id) })
+
+	assert.Equal(t, sourcePath, resp.Msg.Session.Path, "path should be derived from the confirmed live source")
+	assert.Equal(t, "restart-source-live-confirmed", resp.Msg.Session.RestartedFromSessionId)
 }
 
 // --------------------------------------------------------------------------
@@ -2704,6 +3020,99 @@ func TestWireRateLimitCallbacks_StampsItemIDMetadata_When_BacklogLinkedAndNotHid
 	assert.Equal(t, "true", notifs[0].NotificationMetadata[events.MetadataKeySessionScoped])
 }
 
+// TestOnColdRestoreLostHistory_PublishesNotification_UnlessHidden verifies the
+// session-revive-uuid-loss AC3 notification: a non-Hidden instance whose cold
+// restore was forced fresh despite prior conversation history gets a durable
+// WARNING/MEDIUM notification, while a Hidden instance (e.g. a headless
+// review session) never does — mirroring onRateLimitRecovery's Hidden gate.
+func TestOnColdRestoreLostHistory_PublishesNotification_UnlessHidden(t *testing.T) {
+	storage := createTestStorage(t)
+	eventBus := events.NewEventBus(8)
+	svc := NewSessionService(storage, eventBus)
+	t.Cleanup(func() { svc.Shutdown() })
+
+	newInstance := func(title string, hidden bool) *session.Instance {
+		inst := &session.Instance{
+			Title:     title,
+			UUID:      title + "-uuid",
+			Path:      "/tmp/test",
+			Status:    session.Paused,
+			Program:   "claude",
+			Hidden:    hidden,
+			CreatedAt: time.Now(),
+			UpdatedAt: time.Now(),
+		}
+		require.NoError(t, storage.AddInstance(inst))
+		return inst
+	}
+
+	t.Run("not hidden publishes notification", func(t *testing.T) {
+		inst := newInstance("cold-restore-visible", false)
+		subCtx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		ch, _ := eventBus.Subscribe(subCtx)
+
+		svc.onColdRestoreLostHistory(inst)
+
+		notifs := drainNotificationEvents(ch)
+		require.Len(t, notifs, 1, "expected exactly one cold-restore-lost-history notification")
+		assert.Equal(t, int32(8), notifs[0].NotificationType, "must be NotificationType_WARNING")
+		assert.Equal(t, int32(2), notifs[0].NotificationPriority, "must be NotificationPriority_MEDIUM")
+		assert.Contains(t, notifs[0].NotificationTitle, inst.Title)
+	})
+
+	t.Run("hidden suppresses notification", func(t *testing.T) {
+		inst := newInstance("cold-restore-hidden", true)
+		subCtx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		ch, _ := eventBus.Subscribe(subCtx)
+
+		svc.onColdRestoreLostHistory(inst)
+
+		notifs := drainNotificationEvents(ch)
+		assert.Empty(t, notifs, "a Hidden instance must never receive a cold-restore-lost-history notification")
+	})
+}
+
+// TestColdRestoreOutcomeListener_FiltersOnReason verifies
+// coldRestoreOutcomeListener only calls onColdRestoreLostHistory for an
+// EventStarted carrying exactly session.ReasonColdRestoreLostHistory — a
+// normal start (empty reason) or any other event/reason combination must not
+// notify (session-revive-uuid-loss AC3).
+func TestColdRestoreOutcomeListener_FiltersOnReason(t *testing.T) {
+	storage := createTestStorage(t)
+	eventBus := events.NewEventBus(8)
+	svc := NewSessionService(storage, eventBus)
+	t.Cleanup(func() { svc.Shutdown() })
+
+	inst := &session.Instance{
+		Title:     "cold-restore-listener",
+		UUID:      "cold-restore-listener-uuid",
+		Path:      "/tmp/test",
+		Status:    session.Paused,
+		Program:   "claude",
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	}
+	require.NoError(t, storage.AddInstance(inst))
+
+	listener := &coldRestoreOutcomeListener{svc: svc, inst: inst}
+
+	subCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ch, _ := eventBus.Subscribe(subCtx)
+
+	listener.OnLifecycleEvent(session.EventStarted, "")
+	assert.Empty(t, drainNotificationEvents(ch), "a normal start (empty reason) must not notify")
+
+	listener.OnLifecycleEvent(session.EventExited, session.ReasonColdRestoreLostHistory)
+	assert.Empty(t, drainNotificationEvents(ch), "the reason must only be honored on EventStarted")
+
+	listener.OnLifecycleEvent(session.EventStarted, session.ReasonColdRestoreLostHistory)
+	notifs := drainNotificationEvents(ch)
+	require.Len(t, notifs, 1, "EventStarted with the lost-history reason must notify")
+}
+
 // TestSessionService_Shutdown_StopsAnalyticsFlushGoroutine confirms Shutdown() calls
 // through to AnalyticsStore.Stop(), is idempotent, and leaves Record() as a safe no-op
 // afterward. Shutdown() joins the flush goroutine synchronously (AnalyticsStore.Stop
@@ -2735,4 +3144,133 @@ func TestSessionService_Shutdown_StopsAnalyticsFlushGoroutine(t *testing.T) {
 	require.NotPanics(t, func() {
 		store.Record(AnalyticsEntry{SessionID: "sess-1", ToolName: "Bash"})
 	}, "Record() after Shutdown() must stay a silent no-op, not panic")
+}
+
+// TestLoadClaudeSettingsRulesAtStartup_MergesRulesIntoClassifier is the Story 2.1.1
+// root-cause regression test: LoadClaudeSettingsRules had zero call sites before this
+// project, so ~/.claude/settings.json permissions.allow entries never took effect as
+// stapler-squad auto-approval rules. Exercises the extracted
+// loadClaudeSettingsRulesAtStartup helper directly rather than going through
+// NewSessionService, which skips this under config.IsTestMode() precisely so the rest of
+// this repo's test suite doesn't depend on the developer's real ~/.claude/settings.json —
+// see loadClaudeSettingsRulesAtStartup's call site in NewSessionServiceWithSearchEngine.
+func TestLoadClaudeSettingsRulesAtStartup_MergesRulesIntoClassifier(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	writeSettingsFile(t, filepath.Join(home, ".claude", "settings.json"),
+		`{"permissions":{"allow":["Bash(git log*)"]}}`)
+
+	classifierObj := classifier.NewRuleBasedClassifier()
+	loadClaudeSettingsRulesAtStartup(classifierObj, "", events.NewEventBus(100))
+
+	toolName := ""
+	found := false
+	for _, r := range classifierObj.Rules() {
+		if r.Source == "claude-settings" {
+			found = true
+			toolName = r.ToolName
+		}
+	}
+	require.True(t, found, "claude-settings rule from ~/.claude/settings.json must be present at startup")
+	assert.Equal(t, "Bash", toolName)
+}
+
+// TestNewSessionService_ClaudeSettingsWatcherWiredAndReachable is the Story 4.3.1
+// lifecycle-wiring regression test: GetClaudeSettingsWatcher must return a non-nil watcher
+// after NewSessionService, so wireDepsIntoServer has something to Start with the server's
+// lifecycle context.
+func TestNewSessionService_ClaudeSettingsWatcherWiredAndReachable(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	storage := createTestStorage(t)
+	eventBus := events.NewEventBus(100)
+	svc := NewSessionService(storage, eventBus)
+	t.Cleanup(func() { svc.Shutdown() })
+
+	assert.NotNil(t, svc.GetClaudeSettingsWatcher())
+}
+
+// TestLoadClaudeSettingsRulesAtStartup_CwdEqualsHome_NoDuplicateClaudeSettingsRules is the
+// Blocker 2 end-to-end regression test: the live deployed systemd unit runs with
+// WorkingDirectory=$HOME (see scripts/install-service.sh), so the server's own cwd equals
+// home. Without the settingsPaths dedup fix, the classifier would load the same file's rules
+// twice (once tagged "global", once tagged "project"). Exercises
+// loadClaudeSettingsRulesAtStartup directly — see the sibling
+// TestLoadClaudeSettingsRulesAtStartup_MergesRulesIntoClassifier's doc comment for why.
+func TestLoadClaudeSettingsRulesAtStartup_CwdEqualsHome_NoDuplicateClaudeSettingsRules(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	writeSettingsFile(t, filepath.Join(home, ".claude", "settings.json"),
+		`{"permissions":{"allow":["Bash(git *)"]}}`)
+
+	classifierObj := classifier.NewRuleBasedClassifier()
+	loadClaudeSettingsRulesAtStartup(classifierObj, home, events.NewEventBus(100)) // cwd == home, mirrors the live deployed config
+
+	type key struct {
+		pattern  string
+		priority int
+	}
+	seen := make(map[key]int)
+	for _, r := range classifierObj.Rules() {
+		if r.Source != "claude-settings" {
+			continue
+		}
+		pattern := ""
+		if r.CommandPattern != nil {
+			pattern = r.CommandPattern.String()
+		}
+		seen[key{pattern: pattern, priority: r.Priority}]++
+	}
+	require.NotEmpty(t, seen)
+	for k, count := range seen {
+		assert.Equal(t, 1, count, "claude-settings rule %+v must not be duplicated when cwd == home", k)
+	}
+}
+
+// TestClaudeSettingsWatcher_StartsWiredCallback_InitialPrimingReloadPublishesNoNotification
+// is the end-to-end regression test for the reviewed defect against the ACTUAL callback
+// wired up in NewSessionServiceWithSearchEngine (not just the isolated watcher unit test):
+// Start()'s initial priming reload must never publish a "Claude Settings Reloaded"
+// EventNotification, whether or not any claude-settings rules are configured. Covers both
+// halves the reviewer flagged: a spurious "0 claude-settings rule(s) reloaded" toast on
+// every restart with no rules configured, and a redundant duplicate of the startup
+// activation notification when rules do exist.
+func TestClaudeSettingsWatcher_StartsWiredCallback_InitialPrimingReloadPublishesNoNotification(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		withRules bool
+	}{
+		{name: "zero rules configured", withRules: false},
+		{name: "rules configured", withRules: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("HOME", home)
+			if tc.withRules {
+				writeSettingsFile(t, filepath.Join(home, ".claude", "settings.json"),
+					`{"permissions":{"allow":["Bash(git log*)"]}}`)
+			}
+
+			storage := createTestStorage(t)
+			eventBus := events.NewEventBus(100)
+			svc := NewSessionService(storage, eventBus)
+			t.Cleanup(func() { svc.Shutdown() })
+
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			eventCh, _ := eventBus.Subscribe(ctx)
+
+			watcher := svc.GetClaudeSettingsWatcher()
+			require.NotNil(t, watcher)
+			watcher.Start(ctx) // exercises the exact NewSessionServiceWithSearchEngine-wired callback
+
+			select {
+			case ev := <-eventCh:
+				t.Fatalf("Start's initial priming reload must not publish a notification, got: %+v", ev)
+			case <-time.After(200 * time.Millisecond):
+				// No notification observed within the window — expected.
+			}
+		})
+	}
 }

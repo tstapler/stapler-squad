@@ -134,10 +134,16 @@ func TestSearchClaudeHistory_LogsExcludedCountOnlyWhenSessionsActuallyExcluded(t
 	hiddenInst.SetClaudeConversationUUID("hidden-session")
 	svc.SetInstanceProvider(func() []*session.Instance { return []*session.Instance{hiddenInst} })
 
+	// slogDefaultMu (declared in autonomous_orchestration_service_test.go) serializes this
+	// swap against every other slog.Default() swap in this package.
+	slogDefaultMu.Lock()
 	var buf bytes.Buffer
 	prev := slog.Default()
 	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
-	defer slog.SetDefault(prev)
+	defer func() {
+		slog.SetDefault(prev)
+		slogDefaultMu.Unlock()
+	}()
 
 	resp, err := svc.SearchClaudeHistory(t.Context(), connect.NewRequest(&sessionv1.SearchClaudeHistoryRequest{
 		Query:                     "dark mode toggle",

@@ -320,6 +320,15 @@ func (r *EntRepository) Create(ctx context.Context, data InstanceData) error {
 	if data.TmuxPrefix != "" {
 		sessionCreate.SetTmuxPrefix(data.TmuxPrefix)
 	}
+	// Backend is write-once per instance today (set at construction via
+	// session.ResolveSessionBackend, never reset to "" afterward) -- this guard
+	// intentionally only ever sets a non-empty value, mirroring TmuxPrefix above,
+	// not clearing an explicit unset like PauseReason/ExitReason do. If a future
+	// feature ever needs to unpin an instance's backend back to "", this needs an
+	// explicit ClearBackend() branch too, or the clear will silently no-op here.
+	if data.Backend != "" {
+		sessionCreate.SetBackend(string(data.Backend))
+	}
 	if !data.LastTerminalUpdate.IsZero() {
 		sessionCreate.SetLastTerminalUpdate(data.LastTerminalUpdate)
 	}
@@ -536,6 +545,11 @@ func (r *EntRepository) Update(ctx context.Context, data InstanceData) error {
 	}
 	if data.TmuxPrefix != "" {
 		sessionUpdate.SetTmuxPrefix(data.TmuxPrefix)
+	}
+	// See the matching comment in Create above: Backend is write-once per
+	// instance today, so this guard is intentionally set-only, never clear.
+	if data.Backend != "" {
+		sessionUpdate.SetBackend(string(data.Backend))
 	}
 	if !data.LastTerminalUpdate.IsZero() {
 		sessionUpdate.SetLastTerminalUpdate(data.LastTerminalUpdate)
@@ -1240,6 +1254,7 @@ func (r *EntRepository) sessionToInstanceData(sess *ent.Session) *InstanceData {
 		Note:                sess.Note,
 		IsExpanded:          sess.IsExpanded,
 		TmuxPrefix:          sess.TmuxPrefix,
+		Backend:             ProcessManagerBackend(sess.Backend),
 		LastOutputSignature: sess.LastOutputSignature,
 		MCPServerURL:        sess.McpServerURL,
 		OneShot:             sess.OneShot,

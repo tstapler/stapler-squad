@@ -6,6 +6,57 @@ import (
 	"testing"
 )
 
+// TestResolveClaudeHistoryDir_should_ReturnConfigDirSubpath_When_IsolatedInstance
+// is the regression test for both consumers of this path previously
+// hard-coding os.UserHomeDir()+"/.claude/projects" with no isolation check:
+// server/dependencies.go's TokenStore/ArtifactExtractor and
+// session/history_linker.go's fsnotify watcher. Either one made a test that
+// boots a real server walk and watch the operator's real, large
+// ~/.claude/projects tree. STAPLER_SQUAD_TEST_DIR pins GetConfigDir()'s
+// return value so the expected path is deterministic.
+func TestResolveClaudeHistoryDir_should_ReturnConfigDirSubpath_When_IsolatedInstance(t *testing.T) {
+	homeDir := t.TempDir()
+	configDir := t.TempDir()
+	t.Setenv("STAPLER_SQUAD_TEST_DIR", configDir)
+
+	got, err := ResolveClaudeHistoryDir(homeDir, true)
+	if err != nil {
+		t.Fatalf("ResolveClaudeHistoryDir() error = %v", err)
+	}
+
+	want := filepath.Join(configDir, "claude-projects")
+	if got != want {
+		t.Errorf("ResolveClaudeHistoryDir() = %q, want %q", got, want)
+	}
+	info, statErr := os.Stat(got)
+	if statErr != nil {
+		t.Fatalf("ResolveClaudeHistoryDir() = %q was not created: %v", got, statErr)
+	}
+	if !info.IsDir() {
+		t.Errorf("ResolveClaudeHistoryDir() = %q exists but is not a directory", got)
+	}
+}
+
+// TestResolveClaudeHistoryDir_should_ReturnRealHomeDir_When_NotIsolated guards
+// the production fallback: with isIsolated=false the real ~/.claude/projects
+// path must come back byte-identical regardless of what GetConfigDir() would
+// otherwise resolve to, so production behavior is unaffected by the isolation
+// branch above.
+func TestResolveClaudeHistoryDir_should_ReturnRealHomeDir_When_NotIsolated(t *testing.T) {
+	homeDir := t.TempDir()
+	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+
+	got, err := ResolveClaudeHistoryDir(homeDir, false)
+	if err != nil {
+		t.Fatalf("ResolveClaudeHistoryDir() error = %v", err)
+	}
+
+	want := filepath.Join(homeDir, ".claude", "projects")
+	if got != want {
+		t.Errorf("ResolveClaudeHistoryDir() = %q, want %q", got, want)
+	}
+}
+
 func TestNewClaudeConfigManager(t *testing.T) {
 	mgr, err := NewClaudeConfigManager()
 	if err != nil {

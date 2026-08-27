@@ -1,14 +1,20 @@
 "use client";
+// +feature: remote-host-badge
 
 import { useRef, memo } from "react";
 import { useSessionActions } from "@/lib/hooks/useSessionActions";
 import { Session, SessionStatus, SubStatus } from "@/gen/session/v1/types_pb";
 import { Tooltip } from "../ui/Tooltip";
-import { SessionActionsOverflow, SessionActionsOverflowHandle } from "./SessionActionsOverflow";
+import {
+  SessionActionsOverflow,
+  SessionActionsOverflowHandle,
+} from "./SessionActionsOverflow";
+import { hasLostContext, RevivedContextBadge } from "./RevivedContextBadge";
 import { SubStatusChip } from "./SubStatusChip";
 import { GitHubBadge } from "@/components/shared/GitHubBadge";
+import { RemoteConnectionIndicator } from "./RemoteConnectionIndicator";
 import { isSessionStale } from "@/lib/session-staleness";
-import { staleBadge } from "./SessionCard.css";
+import { staleBadge, hostBadge } from "./SessionCard.css";
 import {
   row,
   rowPaused,
@@ -36,7 +42,11 @@ import {
   checkboxCell,
   checkboxButton,
 } from "./SessionRow.css";
-import { ColumnKey, DEFAULT_VISIBLE_COLUMNS, buildRowGridTemplate } from "./session-columns";
+import {
+  ColumnKey,
+  DEFAULT_VISIBLE_COLUMNS,
+  buildRowGridTemplate,
+} from "./session-columns";
 import { truncateGoal } from "@/lib/utils/string";
 
 interface SessionRowProps {
@@ -50,7 +60,6 @@ interface SessionRowProps {
   onNewWorkspace?: () => void;
   onRestart?: (sessionId: string) => Promise<boolean | void>;
   onCreateCheckpoint?: (sessionId: string, label: string) => Promise<boolean>;
-  onRunOneShot?: (sessionId: string) => Promise<void>;
   onSetRateLimitEnabled?: (sessionId: string, enabled: boolean) => void;
   onToggleAutonomousMode?: (sessionId: string, enabled: boolean) => void;
   onToggleAutoApprove?: (sessionId: string, enabled: boolean) => void;
@@ -81,7 +90,7 @@ const BIGINT_ZERO = BigInt(0);
 
 function getStatusDotValue(status: SessionStatus): string {
   switch (status) {
-    case SessionStatus.ACTIVE:  // includes legacy RUNNING (same wire value = 1)
+    case SessionStatus.ACTIVE: // includes legacy RUNNING (same wire value = 1)
       return "running";
     case SessionStatus.READY:
       return "idle";
@@ -104,14 +113,14 @@ function getStatusDotValue(status: SessionStatus): string {
 }
 
 const STATUS_DOT_LABELS: Record<string, string> = {
-  "running": "Running",
-  "idle": "Idle",
+  running: "Running",
+  idle: "Idle",
   "paused-session": "Paused",
-  "paused": "Stopped",
-  "loading": "Loading",
+  paused: "Stopped",
+  loading: "Loading",
   "needs-approval": "Needs Approval",
-  "hibernated": "Hibernated",
-  "crashed": "Crashed",
+  hibernated: "Hibernated",
+  crashed: "Crashed",
 };
 
 function getStatusDotLabel(dotValue: string): string {
@@ -146,20 +155,36 @@ function abbreviatePath(p: string): string {
   return p.replace(/^\/home\/[^/]+\//, "~/").replace(/^\/Users\/[^/]+\//, "~/");
 }
 
-function getLastActivity(session: Session): { seconds: bigint; nanos: number } | undefined {
+function getLastActivity(
+  session: Session,
+): { seconds: bigint; nanos: number } | undefined {
   const moSecs = session.lastMeaningfulOutput?.seconds ?? BIGINT_ZERO;
   const tuSecs = session.lastTerminalUpdate?.seconds ?? BIGINT_ZERO;
   if (moSecs === BIGINT_ZERO && tuSecs === BIGINT_ZERO) return undefined;
-  return moSecs >= tuSecs ? session.lastMeaningfulOutput : session.lastTerminalUpdate;
+  return moSecs >= tuSecs
+    ? session.lastMeaningfulOutput
+    : session.lastTerminalUpdate;
 }
 
 function SessionRowInner({
-  session, onClick,
-  onPause, onResume, onDelete,
-  onClone, onOpenInNewPane, onNewWorkspace,
-  onRestart, onCreateCheckpoint, onRunOneShot,
-  onSetRateLimitEnabled, onToggleAutonomousMode, onToggleAutoApprove, onSteerAutonomousSession, onClearConversationState, onUpdateTags,
-  onHibernate, onResumeFromHibernation,
+  session,
+  onClick,
+  onPause,
+  onResume,
+  onDelete,
+  onClone,
+  onOpenInNewPane,
+  onNewWorkspace,
+  onRestart,
+  onCreateCheckpoint,
+  onSetRateLimitEnabled,
+  onToggleAutonomousMode,
+  onToggleAutoApprove,
+  onSteerAutonomousSession,
+  onClearConversationState,
+  onUpdateTags,
+  onHibernate,
+  onResumeFromHibernation,
   suppressApprovalSubStatus = false,
   staleThresholdMinutes = 30,
   visibleColumns = DEFAULT_VISIBLE_COLUMNS,
@@ -182,15 +207,16 @@ function SessionRowInner({
   const elapsedText = formatElapsed(lastActivity ?? session.updatedAt);
   // Show branch separately if the branch column is visible; otherwise fold into displayName.
   const showBranchCol = visibleColumns.includes("branch");
-  const displayName = showBranchCol ? session.title : (session.branch || session.title);
+  const displayName = showBranchCol
+    ? session.title
+    : session.branch || session.title;
 
   const trimmedNote = session.note?.trim();
   const noteTooltip = trimmedNote ? truncateGoal(trimmedNote, 120) : undefined;
 
   const memMB = Number(session.memoryRssMb ?? 0n);
   const memorySeverityClass =
-    memMB > 500 ? memoryBadgeHigh :
-    memMB > 300 ? memoryBadgeWarning : "";
+    memMB > 500 ? memoryBadgeHigh : memMB > 300 ? memoryBadgeWarning : "";
 
   const handleContextMenu = (e: React.MouseEvent<HTMLDivElement>) => {
     e.preventDefault();
@@ -198,7 +224,14 @@ function SessionRowInner({
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
-    if ((e.key === "Enter" || e.key === " ") && !(e.target instanceof HTMLButtonElement) && !(e.target instanceof HTMLInputElement) && !(e.target instanceof HTMLTextAreaElement) && !(e.target instanceof HTMLAnchorElement) && !(e.target instanceof HTMLSelectElement)) {
+    if (
+      (e.key === "Enter" || e.key === " ") &&
+      !(e.target instanceof HTMLButtonElement) &&
+      !(e.target instanceof HTMLInputElement) &&
+      !(e.target instanceof HTMLTextAreaElement) &&
+      !(e.target instanceof HTMLAnchorElement) &&
+      !(e.target instanceof HTMLSelectElement)
+    ) {
       e.preventDefault();
       onClick?.();
     }
@@ -211,12 +244,20 @@ function SessionRowInner({
         memMB > 500 ? rowMemoryPressure : "",
         isPaused ? rowPaused : "",
         session.status === SessionStatus.ACTIVE &&
-          (session.subStatus === SubStatus.PROCESSING || session.subStatus === SubStatus.WAITING_FOR_AGENT)
+        (session.subStatus === SubStatus.PROCESSING ||
+          session.subStatus === SubStatus.WAITING_FOR_AGENT)
           ? rowActive
           : "",
         isSelected ? rowSelected : "",
-      ].filter(Boolean).join(" ")}
-      style={{ gridTemplateColumns: buildRowGridTemplate(visibleColumns ?? DEFAULT_VISIBLE_COLUMNS, { reserveCheckbox: true }) }}
+      ]
+        .filter(Boolean)
+        .join(" ")}
+      style={{
+        gridTemplateColumns: buildRowGridTemplate(
+          visibleColumns ?? DEFAULT_VISIBLE_COLUMNS,
+          { reserveCheckbox: true },
+        ),
+      }}
       data-testid="session-row"
       data-paused={isPaused ? "true" : undefined}
       data-actions-visible={actionsAlwaysVisible ? "true" : undefined}
@@ -224,7 +265,7 @@ function SessionRowInner({
       onContextMenu={handleContextMenu}
       onKeyDown={handleKeyDown}
       tabIndex={0}
-      aria-label={`Session ${session.title}, status: ${getStatusDotLabel(dotStatus)}, program: ${session.program}${session.path ? `, path: ${abbreviatePath(session.path)}` : ""}`}
+      aria-label={`Session ${session.title}, status: ${getStatusDotLabel(dotStatus)}, program: ${session.program}${session.path ? `, path: ${abbreviatePath(session.path)}` : ""}${hasLostContext(session) ? ", context: lost" : ""}`}
     >
       {/* Checkbox cell — always in DOM to keep the reserved grid column occupied */}
       <div
@@ -262,7 +303,11 @@ function SessionRowInner({
         <span className={pathLineStyle}>
           {session.path && (
             <Tooltip label={session.path} side="bottom">
-              <span className={pathStyle} role="img" aria-label={`Path: ${session.path}`}>
+              <span
+                className={pathStyle}
+                role="img"
+                aria-label={`Path: ${session.path}`}
+              >
                 {abbreviatePath(session.path)}
               </span>
             </Tooltip>
@@ -271,9 +316,17 @@ function SessionRowInner({
             session.subStatus !== SubStatus.UNSPECIFIED &&
             session.subStatus !== SubStatus.READY &&
             session.subStatus !== SubStatus.IDLE &&
-            !(suppressApprovalSubStatus && (session.subStatus === SubStatus.NEEDS_APPROVAL || session.subStatus === SubStatus.INPUT_REQUIRED)) && (
-              <SubStatusChip subStatus={session.subStatus} subagentCount={session.subagentCount} />
+            !(
+              suppressApprovalSubStatus &&
+              (session.subStatus === SubStatus.NEEDS_APPROVAL ||
+                session.subStatus === SubStatus.INPUT_REQUIRED)
+            ) && (
+              <SubStatusChip
+                subStatus={session.subStatus}
+                subagentCount={session.subagentCount}
+              />
             )}
+          <RevivedContextBadge session={session} />
           {isSessionStale(session, staleThresholdMinutes) && (
             <span
               role="img"
@@ -282,6 +335,33 @@ function SessionRowInner({
             >
               🟠 Stale
             </span>
+          )}
+          {/* Row-mode counterpart of SessionCard.tsx's host badge (registry entry:
+              docs/registry/features/frontend/remote-host-badge.json, lists both files --
+              this file's own // +feature: remote-host-badge marker above is a second, duplicate
+              marker the frontend scanner will warn-and-skip in favor of whichever file it walks
+              first; the per-feature JSON file is hand-maintained and is the actual source of
+              truth for which paths are listed, not the scanner's pick -- the JSON's `alsoIn`
+              field documenting both files is a new convention this feature introduced, not a
+              pre-existing repo pattern; see that file's note for the reasoning). SessionList.tsx's default
+              displayMode is "row" (SessionRow, this file), and "card" mode (SessionCard.tsx) is
+              reached only via the list header's view toggle, so the badge needs to exist in
+              both or most users never see it at all. Added while writing
+              remote-workspaces.spec.ts (ssh-remote-workspaces Phase 6 Epic 6.3), which found
+              the row-mode gap by actually exercising the default view in a browser. */}
+          {session.remoteName && (
+            <span
+              className={hostBadge}
+              role="img"
+              title={`Running on ${session.remoteName}`}
+              aria-label={`Running on ${session.remoteName}`}
+              data-testid="host-badge"
+            >
+              <span aria-hidden="true">🖥️</span> {session.remoteName}
+            </span>
+          )}
+          {session.remoteName && (
+            <RemoteConnectionIndicator remoteName={session.remoteName} />
           )}
           <GitHubBadge
             prNumber={session.githubPrNumber}
@@ -328,17 +408,34 @@ function SessionRowInner({
       {visibleColumns.includes("diff") && (
         <span
           className={diffBadge}
-          role={session.diffStats && (session.diffStats.added > 0 || session.diffStats.removed > 0) ? "img" : undefined}
-          aria-label={session.diffStats && (session.diffStats.added > 0 || session.diffStats.removed > 0)
-            ? `Diff: +${session.diffStats.added} -${session.diffStats.removed}`
-            : undefined}
-          aria-hidden={session.diffStats && (session.diffStats.added > 0 || session.diffStats.removed > 0) ? undefined : "true"}
+          role={
+            session.diffStats &&
+            (session.diffStats.added > 0 || session.diffStats.removed > 0)
+              ? "img"
+              : undefined
+          }
+          aria-label={
+            session.diffStats &&
+            (session.diffStats.added > 0 || session.diffStats.removed > 0)
+              ? `Diff: +${session.diffStats.added} -${session.diffStats.removed}`
+              : undefined
+          }
+          aria-hidden={
+            session.diffStats &&
+            (session.diffStats.added > 0 || session.diffStats.removed > 0)
+              ? undefined
+              : "true"
+          }
         >
-          {session.diffStats && (session.diffStats.added > 0 || session.diffStats.removed > 0) ? (
+          {session.diffStats &&
+          (session.diffStats.added > 0 || session.diffStats.removed > 0) ? (
             <>
-              <span style={{ color: "var(--success)" }}>+{session.diffStats.added}</span>
-              {" "}
-              <span style={{ color: "var(--error)" }}>-{session.diffStats.removed}</span>
+              <span style={{ color: "var(--success)" }}>
+                +{session.diffStats.added}
+              </span>{" "}
+              <span style={{ color: "var(--error)" }}>
+                -{session.diffStats.removed}
+              </span>
             </>
           ) : (
             <span style={{ opacity: 0.3 }}>—</span>
@@ -349,16 +446,22 @@ function SessionRowInner({
       {/* Memory usage — optional column, colored by severity */}
       {visibleColumns.includes("memory") && (
         <span
-          className={[memoryBadge, memorySeverityClass].filter(Boolean).join(" ")}
+          className={[memoryBadge, memorySeverityClass]
+            .filter(Boolean)
+            .join(" ")}
           role="img"
           title={memMB > 0 ? `Process RSS: ${memMB} MB` : undefined}
           aria-label={memMB > 0 ? `${memMB} MB RAM` : "No memory data"}
         >
-          {memMB > 0
-            ? memMB >= 1024
-              ? `${(memMB / 1024).toFixed(1)} GB`
-              : `${memMB} MB`
-            : <span style={{ opacity: 0.3 }}>—</span>}
+          {memMB > 0 ? (
+            memMB >= 1024 ? (
+              `${(memMB / 1024).toFixed(1)} GB`
+            ) : (
+              `${memMB} MB`
+            )
+          ) : (
+            <span style={{ opacity: 0.3 }}>—</span>
+          )}
         </span>
       )}
 
@@ -368,7 +471,9 @@ function SessionRowInner({
           className={branchCell}
           role="img"
           title={session.branch || undefined}
-          aria-label={session.branch ? `Branch: ${session.branch}` : "No branch"}
+          aria-label={
+            session.branch ? `Branch: ${session.branch}` : "No branch"
+          }
         >
           {session.branch || <span style={{ opacity: 0.3 }}>—</span>}
         </span>
@@ -378,13 +483,30 @@ function SessionRowInner({
       {visibleColumns.includes("elapsed") && (
         <time
           className={elapsedStyle}
-          dateTime={lastActivity ? new Date(Number(lastActivity.seconds) * 1000).toISOString() : undefined}
-          title={lastActivity ? new Date(Number(lastActivity.seconds) * 1000).toLocaleString() : undefined}
-          aria-label={elapsedText ? `Last active: ${elapsedText}` : "No recent activity"}
+          dateTime={
+            lastActivity
+              ? new Date(Number(lastActivity.seconds) * 1000).toISOString()
+              : undefined
+          }
+          title={
+            lastActivity
+              ? new Date(Number(lastActivity.seconds) * 1000).toLocaleString()
+              : undefined
+          }
+          aria-label={
+            elapsedText ? `Last active: ${elapsedText}` : "No recent activity"
+          }
         >
-          {elapsedText
-            ? <><span className={elapsedIconStyle} aria-hidden="true">⏱</span>{elapsedText}</>
-            : <span style={{ opacity: 0.3 }}>—</span>}
+          {elapsedText ? (
+            <>
+              <span className={elapsedIconStyle} aria-hidden="true">
+                ⏱
+              </span>
+              {elapsedText}
+            </>
+          ) : (
+            <span style={{ opacity: 0.3 }}>—</span>
+          )}
         </time>
       )}
 
@@ -394,7 +516,10 @@ function SessionRowInner({
           {(isPaused || isNeedsApproval) && onResume && (
             <button
               className={inlineActionButton}
-              onClick={(e) => { e.stopPropagation(); onResume(); }}
+              onClick={(e) => {
+                e.stopPropagation();
+                onResume();
+              }}
               aria-label={`Resume session ${session.title}`}
             >
               <span aria-hidden="true">▶️</span> Resume
@@ -403,7 +528,10 @@ function SessionRowInner({
           {isHibernated && onResumeFromHibernation && (
             <button
               className={inlineActionButton}
-              onClick={(e) => { e.stopPropagation(); onResumeFromHibernation(); }}
+              onClick={(e) => {
+                e.stopPropagation();
+                onResumeFromHibernation();
+              }}
               aria-label={`Wake session ${session.title} from hibernation`}
             >
               <span aria-hidden="true">▶️</span> Resume
@@ -412,7 +540,10 @@ function SessionRowInner({
           {isRunning && !isCreating && onPause && (
             <button
               className={inlineActionButton}
-              onClick={(e) => { e.stopPropagation(); onPause(); }}
+              onClick={(e) => {
+                e.stopPropagation();
+                onPause();
+              }}
               aria-label={`Pause session ${session.title}`}
             >
               <span aria-hidden="true">⏸️</span> Pause
@@ -434,7 +565,6 @@ function SessionRowInner({
           onNewWorkspace={onNewWorkspace}
           onRestart={onRestart}
           onCreateCheckpoint={onCreateCheckpoint}
-          onRunOneShot={onRunOneShot}
           onSetRateLimitEnabled={onSetRateLimitEnabled}
           onToggleAutonomousMode={onToggleAutonomousMode}
           onToggleAutoApprove={onToggleAutoApprove}

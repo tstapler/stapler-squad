@@ -28,6 +28,14 @@ func (i *Instance) setStatus(status Status) {
 	i.loadStatus(status)
 }
 
+// touchUpdatedAt bumps UpdatedAt so an operational status change isn't mistaken
+// for a no-op by the frontend's upsertSession reducer (sessionsSlice.ts), which
+// skips an incoming Session whose UpdatedAt matches the cached copy. Must be
+// called with i.mu held.
+func (i *Instance) touchUpdatedAt() {
+	i.UpdatedAt = time.Now()
+}
+
 // transitionTo validates and executes a state transition using the TransitionDef table.
 // Must be called with i.mu held.
 func (i *Instance) transitionTo(ctx context.Context, to Status) error {
@@ -41,6 +49,7 @@ func (i *Instance) transitionTo(ctx context.Context, to Status) error {
 		}
 	}
 	i.Status = to
+	i.touchUpdatedAt()
 	// Store before calling After: After hooks may spawn goroutines that race with
 	// a post-After snapshot read of the same fields.
 	// Caller already holds i.mu (see doc comment above), so buildSnapshot's
@@ -90,6 +99,7 @@ func transitionToLocked(s *instanceState, ctx context.Context, to Status) error 
 	i.mu.Lock()
 	from := i.Status
 	i.Status = to
+	i.touchUpdatedAt()
 	snap := buildSnapshot(i)
 	i.mu.Unlock()
 	i.snapshot.Store(snap)
@@ -325,6 +335,7 @@ func (i *Instance) RecoverFromStopped() {
 	defer i.mu.Unlock()
 	if i.Status == Stopped {
 		i.loadStatus(Creating)
+		i.touchUpdatedAt()
 		i.started.Store(false)
 		i.snapshot.Store(buildSnapshot(i))
 	}
@@ -357,6 +368,7 @@ func (i *Instance) ForceStatus(s Status) {
 	_ = i.sendCtx(context.Background(), func(_ *instanceState) {
 		i.mu.Lock()
 		i.loadStatus(s)
+		i.touchUpdatedAt()
 		snap := buildSnapshot(i)
 		i.mu.Unlock()
 		i.snapshot.Store(snap)

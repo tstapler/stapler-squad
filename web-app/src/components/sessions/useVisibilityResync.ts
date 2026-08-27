@@ -208,6 +208,14 @@ export function useVisibilityResync(params: UseVisibilityResyncParams): UseVisib
   const forceResyncRecovery = useCallback((reason: 'watchdog' | 'escalation') => {
     if (!pendingResyncCompletionRef.current) return;
     const stalledResyncId = pendingResyncIdRef.current;
+    // Actual wall-clock time since this resync's request was sent, not just the
+    // nominal watchdog constant — an escalation-triggered fire can have been
+    // outstanding far longer than RESYNC_STALL_ESCALATION_CEILING_MS if sibling
+    // traffic kept resetting the per-fire timer (see this function's own doc
+    // comment). Falls back to the nominal constant if the start time was
+    // somehow never recorded, so the log line never shows an undefined/NaN
+    // duration.
+    const actualElapsedMs = resyncStartTimeRef.current !== null ? Date.now() - resyncStartTimeRef.current : undefined;
     pendingResyncCompletionRef.current = false;
     pendingResyncIdRef.current = undefined;
     bannerShownRef.current = false;
@@ -218,7 +226,15 @@ export function useVisibilityResync(params: UseVisibilityResyncParams): UseVisib
     clearBannerTimer();
     const elapsedMs = reason === 'escalation' ? RESYNC_STALL_ESCALATION_CEILING_MS : RESYNC_STALL_TIMEOUT_MS;
     const label = reason === 'escalation' ? 'escalation ceiling' : 'stall watchdog';
-    console.warn(`[resync] sessionId=${sessionIdRef.current} ${label} fired after ${elapsedMs}ms, forcing disconnect+reconnect`);
+    // resyncId is included so a future occurrence can be grepped directly out of
+    // the server's structured log (matches the resync_id field logged wherever
+    // EchoResyncID/terminal:resync-correlation-id echoes it back) without first
+    // having to correlate on session name + rough timestamp, which is how the
+    // 2026-08-25 investigation into this exact symptom (see
+    // session/tmux/tmux.go's resyncFastLaneTimeout doc comment) had to be done.
+    console.warn(
+      `[resync] sessionId=${sessionIdRef.current} resyncId=${stalledResyncId ?? '(none)'} ${label} fired after ${elapsedMs}ms nominal (${actualElapsedMs ?? 'unknown'}ms actual), forcing disconnect+reconnect`,
+    );
     // Task 7.1.1.5 (Epic 7.1 observability) — structured analytics event
     // alongside the console.warn above, so stall-watchdog/escalation fires
     // are queryable (e.g. correlated with visibility_state) rather than only

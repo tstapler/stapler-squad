@@ -6,7 +6,16 @@ module.exports = {
       preset: "ts-jest",
       testEnvironment: "jest-environment-jsdom",
       roots: ["<rootDir>/src"],
-      testMatch: ["**/__tests__/**/*.ts?(x)", "**/?(*.)+(spec|test).ts?(x)"],
+      // Narrowed to *.test.ts(x)/*.spec.ts(x) (2026-08-24): the previous
+      // "**/__tests__/**/*.ts?(x)" pattern matched any file inside a
+      // __tests__/ directory, not just test files. A repo-wide search found
+      // zero existing test files that relied on the broad form — every real
+      // suite already matches the narrower pattern below — but 7 non-test
+      // fixture/mock helper files (extracted while deduplicating jscpd
+      // findings) newly hit it, each failing CI with "Your test suite must
+      // contain at least one test". Narrowing here fixes the root cause so a
+      // future __tests__/ helper file can't silently break the same way.
+      testMatch: ["**/?(*.)+(spec|test).ts?(x)"],
       // Default 5000ms is too tight for this project's full-suite runs: with
       // ~350 suites sharing jest-worker processes, scheduler contention alone
       // has intermittently pushed otherwise-fast async tests (e.g.

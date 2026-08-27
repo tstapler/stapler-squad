@@ -50,6 +50,7 @@ import type { XtermTerminalHandle, XtermTerminalProps } from "./XtermTerminal";
 import type { ForwardRefExoticComponent, RefAttributes } from "react";
 const XtermTerminal = lazy(() => import("./XtermTerminal").then((m) => ({ default: m.XtermTerminal }))) as ForwardRefExoticComponent<XtermTerminalProps & RefAttributes<XtermTerminalHandle>>;
 import { InputDropBadge } from "./InputDropBadge";
+import { ConnectionCountIndicator } from "./ConnectionCountIndicator";
 import { useDropEpisodeCoalescer } from "./useDropEpisodeCoalescer";
 import { TerminalStreamManager } from "@/lib/terminal/TerminalStreamManager";
 import { getCachedDimensions, saveDimensions, validateCellDimensions } from "@/lib/terminal/TerminalDimensionCache";
@@ -361,6 +362,35 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
   // the surrounding chrome stayed dark.
   const theme = "dark" as const;
 
+  // Paging state for on-demand scrollback loading (Task 2.3.1 / 2.3.2)
+  const isFetchingScrollbackRef = useRef(false);
+  const hasMoreScrollbackRef = useRef(false);
+  const oldestSequenceReceivedRef = useRef(0);
+
+  // Resets scrollback paging so a subsequent scroll-up re-fetches history fresh from
+  // the server (which re-derives it width-agnostically via `tmux capture-pane -J`,
+  // see handleScrollbackRequest in connectrpc_websocket.go) instead of assuming
+  // whatever paging cursor was left over from before the terminal was last cleared.
+  // Registered as TerminalStreamManager's onFullSnapshot callback below — the manager
+  // itself owns detecting a full-pane replacement snapshot and clearing the xterm
+  // buffer for it (ANSI_SNAPSHOT_PREFIX in TerminalStreamManager.ts); this only resets
+  // the paging refs the manager doesn't know about.
+  const resetScrollbackPaging = useCallback(() => {
+    hasMoreScrollbackRef.current = true;
+    oldestSequenceReceivedRef.current = 0;
+    isFetchingScrollbackRef.current = false;
+  }, []);
+
+  // Proactively clears the terminal and resets scrollback paging before a resize RPC
+  // is sent — used only by the resize triggers below (auto-fit and the manual Resize
+  // button), so the screen goes blank immediately rather than showing stale,
+  // differently-wrapped content for the ~100-400ms round trip until the server's
+  // post-resize snapshot arrives and TerminalStreamManager clears it again anyway.
+  const clearBufferBeforeResize = useCallback(() => {
+    xtermRef.current?.clear();
+    resetScrollbackPaging();
+  }, [resetScrollbackPaging]);
+
   // Lazily create or get the TerminalStreamManager
   const getOrCreateStreamManager = useCallback((): TerminalStreamManager | null => {
     if (streamManagerRef.current) return streamManagerRef.current;
@@ -372,6 +402,11 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
       terminal,
       (paused, watermark) => sendFlowControlRef.current?.(paused, watermark)
     );
+
+    // Detect + clear on a full-pane replacement snapshot (ANSI_SNAPSHOT_PREFIX) — the
+    // single spot this is handled; every write() call site (live output, the RESIZING
+    // queue flush) benefits without needing its own check.
+    manager.setOnFullSnapshot(resetScrollbackPaging);
 
     // Inject SerializeAddon so prependScrollbackBatch can serialize the current buffer
     // before clearing it (enables correct history order without losing live content).
@@ -400,14 +435,10 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
 
     streamManagerRef.current = manager;
     return manager;
-  }, [logTerminalMetrics, sessionId, track]);
+  }, [logTerminalMetrics, sessionId, track, resetScrollbackPaging]);
 
   // Ref to track whether the initial scrollback has been written (Task 2.3.2)
   const isInitialScrollbackDoneRef = useRef(false);
-  // Paging state for on-demand scrollback loading (Task 2.3.1 / 2.3.2)
-  const isFetchingScrollbackRef = useRef(false);
-  const hasMoreScrollbackRef = useRef(false);
-  const oldestSequenceReceivedRef = useRef(0);
 
   // Callback to write initial pane content to terminal.
   // Metadata guard removed (R2.7): all scrollback — both initial and historical —
@@ -514,6 +545,9 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
       return;
     }
 
+    // TerminalStreamManager.write() itself detects a full-pane replacement snapshot
+    // (ANSI_SNAPSHOT_PREFIX) and clears the buffer for it — see setOnFullSnapshot in
+    // getOrCreateStreamManager above.
     const manager = getOrCreateStreamManager();
     if (manager) {
       manager.write(output);
@@ -561,7 +595,7 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
     };
   }, [reportDroppedInput]);
 
-  const { isConnected, error, sendInput, resize, connect, disconnect, scrollbackLoaded, requestScrollback, sendFlowControl, startRecording, stopRecording, terminalState, isHardFailed, handleManualReconnect: handleHookReconnect, requestFullResync, markResyncComplete, markPaneResponseReceived } = useTerminalStream({
+  const { isConnected, error, sendInput, resize, connect, disconnect, scrollbackLoaded, requestScrollback, sendFlowControl, startRecording, stopRecording, terminalState, isHardFailed, handleManualReconnect: handleHookReconnect, requestFullResync, markResyncComplete, markPaneResponseReceived, connectionCount } = useTerminalStream({
     baseUrl,
     sessionId: effectiveSessionId,
     shellId,
@@ -622,6 +656,8 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
       const manager = streamManagerRef.current;
       if (manager) {
         const pending = pendingOutputDuringResizeRef.current.splice(0);
+        // manager.write() itself detects and clears for a full-pane snapshot — see
+        // setOnFullSnapshot in getOrCreateStreamManager above.
         for (const chunk of pending) {
           manager.write(chunk);
         }
@@ -830,8 +866,9 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
     }
 
     console.log(`[TerminalOutput] Sending resize: ${cols}x${rows} (prev: ${lastResize?.cols || 'none'}x${lastResize?.rows || 'none'})`);
+    clearBufferBeforeResize();
     resize(cols, rows);
-  }, [isConnected, resize, connect, error, sessionId]);
+  }, [isConnected, resize, connect, error, sessionId, clearBufferBeforeResize]);
 
   // Monitor connection state changes
   useEffect(() => {
@@ -1441,11 +1478,27 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
         if (isConnected) {
           console.log(`[TerminalOutput] Forcing resize message to backend: ${cols}x${rows}`);
           lastResizeRef.current = { cols, rows };
+          clearBufferBeforeResize();
           resize(cols, rows, true);
         }
       }
     }
   };
+
+  // Epic 4.2, Story 4.2.2 (Task 4.2.2b) — best-effort resize-mismatch signal
+  // for ConnectionCountIndicator's tooltip. No wire field carries "did this
+  // tab's ResizeVote win the hub's negotiation" (out of this UI-only epic's
+  // scope), so this compares what this tab last asked to resize to
+  // (lastResizeRef, set in handleTerminalResize) against xterm's actual
+  // applied dimensions — if they differ, another connection's vote is
+  // constraining this tab's pane size. Never shown speculatively: both refs
+  // must have resolved values before a mismatch is reported (UX-AC-10).
+  const appliedTerminal = xtermRef.current?.terminal;
+  const hasResizeSizeMismatch = !!(
+    lastResizeRef.current &&
+    appliedTerminal &&
+    (appliedTerminal.cols !== lastResizeRef.current.cols || appliedTerminal.rows !== lastResizeRef.current.rows)
+  );
 
   const secondaryActions = [
     {
@@ -1538,6 +1591,8 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
           {isHardFailed && (
             <span className={styles.errorText}> • Terminal unavailable</span>
           )}
+          {/* Epic 4.2, Story 4.2.2 — renders only when connectionCount > 1 */}
+          <ConnectionCountIndicator count={connectionCount} sizeMismatch={hasResizeSizeMismatch} />
         </div>
         <div className={styles.actions}>
           {/* Toolbar toggle — always visible on mobile; hidden on desktop via CSS */}
@@ -1712,11 +1767,11 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
                         track({ name: "toolbar_button_click", category: "user_action", sessionId, component: "TerminalOutput", labels: { button: "log-stream", state: logStreamEnabled ? "off" : "on" } });
                         handleToggleLogStream();
                       }}
-                      title={logStreamEnabled ? "Stop forwarding verbose debug logs to server (errors always stream)" : "Also forward verbose debug logs to server (errors always stream automatically)"}
-                      aria-label={logStreamEnabled ? "Disable verbose debug log streaming" : "Enable verbose debug log streaming"}
+                      title={logStreamEnabled ? "Stop forwarding verbose per-frame debug traces to server (info/warn/error always stream)" : "Also forward verbose per-frame debug traces to server (info/warn/error always stream automatically)"}
+                      aria-label={logStreamEnabled ? "Disable verbose debug trace streaming" : "Enable verbose debug trace streaming"}
                       style={logStreamEnabled ? { backgroundColor: '#2a4', color: 'white', fontWeight: 'bold' } : {}}
                     >
-                      📡 {logStreamEnabled ? 'Debug Log Stream ON' : 'Debug Log Stream'}
+                      📡 {logStreamEnabled ? 'Debug Traces ON' : 'Debug Traces'}
                     </button>
                     <button
                       className={`${styles.toolbarButton} ${styles.devOnly}`}

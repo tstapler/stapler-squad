@@ -34,6 +34,35 @@ func FetchBranch(repoPath, branchName string) error {
 	return nil
 }
 
+// CandidateDefaultBranches are tried, in order, by ResolveDefaultBranchSHA when the
+// caller doesn't know the repo's actual default branch name. Mirrors the candidate list
+// session/unfinished's GoGitVCSReader.ResolveDefaultBranch already uses. "main" stays
+// first so the common case costs exactly one fetch. Exported so other packages needing
+// the same candidate list (session.RecoverBaseCommitSHA, GitWorktree.initBaseCommitSHA)
+// share one definition instead of re-declaring the literal.
+var CandidateDefaultBranches = []string{"main", "master", "develop", "trunk"} //nolint:gochecknoglobals
+
+// ResolveDefaultBranchSHA finds repoPath's real default branch and returns its freshly-
+// fetched origin tip SHA, trying CandidateDefaultBranches in order via ResolveOriginBranchSHA
+// until one exists on origin. Exists because a repo's default branch can be named anything
+// (this repo's own sibling dotfiles project uses "master", not "main") — a caller that
+// hardcodes "main" gets a fetch failure on every single call against such a repo, which used
+// to silently fall through to branching from the caller's ambient HEAD instead. Querying each
+// candidate by fetch (rather than inspecting locally-cached remote-tracking refs) works even
+// when the repo has never been fetched before, since a nonexistent branch fails fast at the
+// fetch step itself.
+func ResolveDefaultBranchSHA(repoPath string) (branch, sha string, err error) {
+	var errs []error
+	for _, candidate := range CandidateDefaultBranches {
+		if candidateSHA, fetchErr := ResolveOriginBranchSHA(repoPath, candidate); fetchErr == nil {
+			return candidate, candidateSHA, nil
+		} else {
+			errs = append(errs, fetchErr)
+		}
+	}
+	return "", "", fmt.Errorf("no candidate default branch (%v) exists on origin: %w", CandidateDefaultBranches, errors.Join(errs...))
+}
+
 // ResolveOriginBranchSHA fetches mainBranch from origin into repoPath and returns the
 // resulting origin/mainBranch tip commit SHA. Unlike a bare `rev-parse HEAD` against
 // repoPath's own checkout, this always fetches first, so the returned SHA reflects
@@ -54,6 +83,53 @@ func ResolveOriginBranchSHA(repoPath, mainBranch string) (string, error) {
 		return "", fmt.Errorf("failed to resolve origin/%s: %w", mainBranch, err)
 	}
 	return ref.Hash().String(), nil
+}
+
+// ResolveLocalBranchSHA returns the tip commit SHA of the local branch (refs/heads/<branchName>)
+// in repoPath, without fetching. Used as a same-branch-only fallback when ResolveOriginBranchSHA's
+// fetch fails (offline, no origin remote) — still guarantees the caller branches from branchName
+// itself, just not guaranteed fresh, unlike falling back to repoPath's ambient HEAD which could be
+// checked out to any branch a concurrent process last left it on.
+func ResolveLocalBranchSHA(repoPath, branchName string) (string, error) {
+	repo, err := git.PlainOpenWithOptions(repoPath, &git.PlainOpenOptions{DetectDotGit: true})
+	if err != nil {
+		return "", fmt.Errorf("failed to open git repo at %s: %w", repoPath, err)
+	}
+	ref, err := repo.Reference(plumbing.NewBranchReferenceName(branchName), true)
+	if err != nil {
+		return "", fmt.Errorf("failed to resolve local branch %s: %w", branchName, err)
+	}
+	return ref.Hash().String(), nil
+}
+
+// ResolveDefaultLocalBranchSHA is ResolveDefaultBranchSHA's fully-offline counterpart:
+// tries CandidateDefaultBranches against repoPath's own local refs (no fetch), for use
+// when every origin candidate fetch has already failed.
+func ResolveDefaultLocalBranchSHA(repoPath string) (branch, sha string, err error) {
+	var errs []error
+	for _, candidate := range CandidateDefaultBranches {
+		if candidateSHA, localErr := ResolveLocalBranchSHA(repoPath, candidate); localErr == nil {
+			return candidate, candidateSHA, nil
+		} else {
+			errs = append(errs, localErr)
+		}
+	}
+	return "", "", fmt.Errorf("no candidate default branch (%v) exists locally: %w", CandidateDefaultBranches, errors.Join(errs...))
+}
+
+// IsUnbornRepo reports whether repoPath is a git repository with zero commits (HEAD
+// points at a branch ref that doesn't exist yet, e.g. right after `git init`). Distinct
+// from "no candidate default branch found": that can also mean a repo with real commit
+// history whose default branch just isn't named main/master/develop/trunk, which is not
+// safe to fall back to ambient HEAD for (see CreateBacklogWorktree). An unborn repo has
+// no commit history at all, so there is nothing to misattribute either way.
+func IsUnbornRepo(repoPath string) bool {
+	repo, err := git.PlainOpenWithOptions(repoPath, &git.PlainOpenOptions{DetectDotGit: true})
+	if err != nil {
+		return false
+	}
+	_, err = repo.Head()
+	return errors.Is(err, plumbing.ErrReferenceNotFound)
 }
 
 // IsCommitOnMain reports whether sha has actually landed on mainBranch — either the

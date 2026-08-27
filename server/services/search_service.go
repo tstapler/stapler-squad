@@ -124,7 +124,7 @@ func (ss *SearchService) SetInstanceProvider(fn func() []*session.Instance) {
 // cachedBranch returns the current git branch for projectPath, caching the
 // result for branchCacheTTL (60 s). Returns "" on error or detached HEAD.
 // Uses sync.Map for lock-free concurrent reads; git is invoked outside any lock.
-func (ss *SearchService) cachedBranch(projectPath string) string {
+func (ss *SearchService) cachedBranch(ctx context.Context, projectPath string) string {
 	if projectPath == "" {
 		return ""
 	}
@@ -136,7 +136,7 @@ func (ss *SearchService) cachedBranch(projectPath string) string {
 		}
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
 	out, err := safeexec.CommandContext(ctx, "git", "-C", projectPath, "rev-parse", "--abbrev-ref", "HEAD").Output()
 	branch := ""
@@ -324,7 +324,7 @@ func (ss *SearchService) ListClaudeHistory(
 			UpdatedAt:     timestamppb.New(entry.UpdatedAt),
 			Model:         entry.Model,
 			MessageCount:  int32(entry.MessageCount),
-			Branch:        ss.cachedBranch(entry.Project),
+			Branch:        ss.cachedBranch(ctx, entry.Project),
 			SessionStatus: ss.liveSessionStatus(entry.ID),
 		})
 	}

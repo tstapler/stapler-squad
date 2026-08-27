@@ -55,6 +55,8 @@ describe("SessionServiceContext", () => {
       listCheckpoints: jest.fn(),
       forkSession: jest.fn(),
       runOneShot: jest.fn(),
+      draftPullRequest: jest.fn(),
+      createPullRequest: jest.fn(),
       listPromptHistory: jest.fn(),
       watchSessions: jest.fn(),
       stopWatching: jest.fn(),

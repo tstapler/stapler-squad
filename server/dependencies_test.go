@@ -191,6 +191,34 @@ func TestBuildRuntimeDeps_should_ShareSinglePipelineEngineInstance_When_Construc
 	}
 }
 
+// TestBuildRuntimeDeps_should_PopulateBacklogLifecycleListener_When_ServerBoots is the
+// dependency-wiring regression test for pr-event-webhooks Task 3.1.1: before this
+// feature, backlogLifecycleListener was only a local variable inside BuildRuntimeDeps,
+// unreachable from server.go's webhook-route-registration block — NewGitHubWebhookHandler
+// had no way to be given a real PRFixEventRouter. deps.BacklogLifecycleListener must be
+// the exact same instance SetPRFixSpawner/SetAutoReopener etc. were wired onto, not a
+// second, independently-constructed listener.
+func TestBuildRuntimeDeps_should_PopulateBacklogLifecycleListener_When_ServerBoots(t *testing.T) {
+	deps, err := BuildDependencies()
+	if err != nil {
+		t.Fatalf("BuildDependencies: %v", err)
+	}
+
+	if deps.BacklogLifecycleListener == nil {
+		t.Fatal("expected BacklogLifecycleListener to be wired")
+	}
+	if deps.SessionService == nil {
+		t.Fatal("expected SessionService to be wired")
+	}
+	listener := deps.SessionService.GetBacklogLifecycleListener()
+	if listener == nil {
+		t.Fatal("expected BacklogLifecycleListener to be wired onto SessionService")
+	}
+	if deps.BacklogLifecycleListener != listener {
+		t.Fatalf("expected deps.BacklogLifecycleListener to be the identical instance wired onto SessionService, got distinct pointers %p vs %p", deps.BacklogLifecycleListener, listener)
+	}
+}
+
 // TestBuildRuntimeDeps_should_CallReconcileSynchronouslyAtBoot_When_BacklogFlagDisabledByDefault
 // verifies QuotaGate.Enable is only ever reached via quotaGate.Reconcile's own
 // decision path (Story 2.2.2), not a bare unconditional call — exercised against

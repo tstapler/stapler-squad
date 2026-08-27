@@ -2,6 +2,7 @@ package headless
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -364,8 +365,13 @@ func (p *Pool) call(ctx context.Context, key FeatureKey, systemPrompt, userPromp
 				return
 			}
 
+			// Decode only the leading JSON value rather than json.Unmarshal-ing the
+			// whole buffer: the claude CLI can append a trailing non-JSON line to
+			// stdout after the --output-format json result (e.g. an update notice),
+			// which json.Unmarshal rejects outright as "invalid character ... after
+			// top-level value" even though the JSON result itself is well-formed.
 			var result firstCallJSONResult
-			if jsonErr := json.Unmarshal(data, &result); jsonErr != nil {
+			if jsonErr := json.NewDecoder(bytes.NewReader(data)).Decode(&result); jsonErr != nil {
 				// Not valid JSON: treat the whole output as plain text.
 				text := strings.TrimSpace(string(data))
 				if text != "" {
@@ -490,17 +496,32 @@ func (p *Pool) CallWithOptions(ctx context.Context, key FeatureKey, systemPrompt
 	return p.call(ctx, key, systemPrompt, userPrompt, opts.Model, p.runner)
 }
 
-// CallBlocking makes a single blocking headless call and returns the result text,
-// the cost in USD reported by claude, and any error. opts is the single place to
-// pass WorkDir/Model/AllowedTools/PermissionMode; the zero value reproduces the
-// simplest call shape. Cost is always parsed from the JSON result at no extra cost
-// to callers that ignore it via `_`.
-func (p *Pool) CallBlocking(ctx context.Context, key FeatureKey, systemPrompt, userPrompt string, opts CallOptions) (string, float64, error) {
+// CostSink receives the USD cost of a completed CallBlocking call. Every call site
+// must supply one — see DiscardCost for the explicit, greppable opt-out for a call
+// with nowhere to persist cost. This replaced a `(string, float64, error)` return
+// shape that let several pipeline call sites silently drop real cost data via `_`.
+type CostSink func(usd float64)
+
+// DiscardCost is the explicit opt-out for a CallBlocking call with nowhere to
+// persist cost (e.g. a capability self-check). Grep this name to find every call
+// site not wired into cost tracking.
+func DiscardCost(float64) {}
+
+// CallBlocking makes a single blocking headless call and returns the result text
+// and any error. opts is the single place to pass WorkDir/Model/AllowedTools/
+// PermissionMode; the zero value reproduces the simplest call shape. sink is
+// always invoked with the cost in USD reported by claude, parsed from the JSON
+// result at no extra cost — pass DiscardCost if the caller has nowhere to put it.
+func (p *Pool) CallBlocking(ctx context.Context, key FeatureKey, systemPrompt, userPrompt string, opts CallOptions, sink CostSink) (string, error) {
 	ch, err := p.CallWithOptions(ctx, key, systemPrompt, userPrompt, opts)
 	if err != nil {
-		return "", 0, err
+		return "", err
 	}
-	return drainChannelWithCost(ch)
+	text, cost, err := drainChannelWithCost(ch)
+	if sink != nil {
+		sink(cost)
+	}
+	return text, err
 }
 
 // drainChannelWithCost collects all StreamChunk text from ch until Done=true or

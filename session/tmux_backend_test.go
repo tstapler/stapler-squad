@@ -148,9 +148,10 @@ type mockTmuxManager struct {
 	resetExitCalls int
 
 	// PaneExitStatus
-	paneExitCode   int
-	paneExitSignal string
-	paneExitDead   bool
+	paneExitCode        int
+	paneExitSignal      string
+	paneExitDead        bool
+	paneExitStatusCalls int
 }
 
 func (m *mockTmuxManager) IsAlive() bool {
@@ -303,6 +304,7 @@ func (m *mockTmuxManager) DoesSessionExist() bool         { return m.isAliveRetu
 
 // PaneExitStatus
 func (m *mockTmuxManager) PaneExitStatus() (code int, signal string, dead bool) {
+	m.paneExitStatusCalls++
 	return m.paneExitCode, m.paneExitSignal, m.paneExitDead
 }
 

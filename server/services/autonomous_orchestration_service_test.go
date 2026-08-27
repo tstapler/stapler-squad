@@ -9,6 +9,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"sync"
 	"testing"
 	"time"
 
@@ -31,8 +32,10 @@ func (p *instantDonePool) CallBlocking(
 	_ headless.FeatureKey,
 	_, _ string,
 	_ headless.CallOptions,
-) (string, float64, error) {
-	return "DONE: test complete", 0, nil
+	sink headless.CostSink,
+) (string, error) {
+	sink(0)
+	return "DONE: test complete", nil
 }
 
 // addPausedAutonomousInstance inserts a paused session with AutonomousMode=true into storage.
@@ -401,14 +404,27 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_DoesNotForceR
 	assert.Empty(t, trigger.calls, "no review session may be spawned off the orchestrator's inferred DONE signal")
 }
 
+// slogDefaultMu serializes every test in this package that swaps the process-global
+// slog.Default() logger. slog.Default() is stored in an unexported atomic pointer, so
+// -race never flags concurrent swaps, but two t.Parallel() tests both redirecting it
+// still race semantically: one test's log lines land in another test's capture buffer.
+// Every swap site in this package (captureLogs, captureInfoLog/captureErrorLog in
+// session_service_client_log_test.go, and the inline swaps in search_service_test.go
+// and slack_notifier_test.go) must hold this lock for the full swap-to-restore window.
+var slogDefaultMu sync.Mutex
+
 // captureLogs swaps the default slog logger for one that writes to a buffer at Debug level,
 // restoring the previous logger via t.Cleanup. Returns the buffer to inspect after the call.
 func captureLogs(t *testing.T) *bytes.Buffer {
 	t.Helper()
+	slogDefaultMu.Lock()
 	var buf bytes.Buffer
 	prev := slog.Default()
 	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
-	t.Cleanup(func() { slog.SetDefault(prev) })
+	t.Cleanup(func() {
+		slog.SetDefault(prev)
+		slogDefaultMu.Unlock()
+	})
 	return &buf
 }
 
@@ -417,7 +433,10 @@ func captureLogs(t *testing.T) *bytes.Buffer {
 // session (the common, expected case — most autonomous sessions are not backlog-linked), the
 // lookup "failure" must log at Debug, not escalate to Warn.
 func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_LogsNotLinkedAtDebug(t *testing.T) {
-	t.Parallel()
+	// Deliberately not t.Parallel(): captureLogs swaps the process-global
+	// slog.Default() logger. A parallel sibling logging during that window
+	// would write into this test's buffer from another goroutine — a real
+	// data race under -race — and could corrupt the assertions below.
 	storage := createTestStorage(t)
 	eventBus := events.NewEventBus(4)
 	svc := NewSessionService(storage, eventBus)
@@ -445,7 +464,8 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_LogsNotLinked
 // must log at Warn so it's diagnosable — previously this took the identical silent path as
 // the expected not-linked case above.
 func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_LogsRealLookupFailureAtWarn(t *testing.T) {
-	t.Parallel()
+	// Deliberately not t.Parallel(): see LogsNotLinkedAtDebug above — captureLogs
+	// swaps the process-global slog.Default() logger.
 	storage := createTestStorage(t)
 	ctx := context.Background()
 	eventBus := events.NewEventBus(4)
@@ -496,7 +516,8 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_LogsRealLooku
 // into the same silent early-return as the expected SessionRoleReview case, leaving the
 // operator with zero signal that anything happened at all.
 func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_UnrecognizedRoleStillNotifies(t *testing.T) {
-	t.Parallel()
+	// Deliberately not t.Parallel(): see LogsNotLinkedAtDebug above — captureLogs
+	// swaps the process-global slog.Default() logger.
 	storage := createTestStorage(t)
 	ctx := context.Background()
 	eventBus := events.NewEventBus(4)

@@ -5,11 +5,15 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	gh "github.com/tstapler/stapler-squad/github"
+	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
 // resetGhBaseURL is defined once for the package in tools_backlog_test.go
@@ -112,4 +116,48 @@ func TestVerifyPRMatchesBranch_should_ReturnError_When_GetPRByNumberFails(t *tes
 	v, err := VerifyPRMatchesBranch(context.Background(), "tstapler", "stapler-squad", 326, "feature/ci-status-diff-viewer")
 	require.Error(t, err)
 	assert.Equal(t, PRVerification{}, v)
+}
+
+// TestCreateSessionForPR_HonorsSessionNameOverrideMap verifies that
+// createSessionForPR wires session.ResolveSessionBackend (tymux-bundled-
+// integration Epic 4.4.1): with no per-request override field on this MCP
+// tool's schema, a TymuxSessionOverrides entry keyed by the sanitized tmux
+// session name still forces the resulting instance's backend even though
+// the process-wide default is registered as tymux.
+func TestCreateSessionForPR_HonorsSessionNameOverrideMap(t *testing.T) {
+	session.RegisterBackendProvider(session.BackendTymux)
+	t.Cleanup(func() { session.RegisterBackendProvider(session.BackendTmux) })
+
+	testDir := t.TempDir()
+	t.Setenv("STAPLER_SQUAD_TEST_DIR", testDir)
+
+	const title = "pr-session-override-map-test"
+	sessionKey := tmux.NewSessionName(title, tmux.TmuxPrefix).String()
+	require.NoError(t, os.WriteFile(filepath.Join(testDir, "config.json"),
+		[]byte(`{"default_program": "claude", "tymux_session_overrides": {"`+sessionKey+`": false}}`), 0o644))
+
+	repoPath := initGitRepo(t)
+	store := &stubStore{}
+	handlers := &githubHandlers{cache: gh.NewUserPRCache(), store: store}
+
+	res, err := handlers.createSessionForPR(context.Background(), makeToolReq(map[string]interface{}{
+		"owner":     "tstapler",
+		"repo":      "stapler-squad",
+		"branch":    "feature/override-test",
+		"pr_number": float64(4242),
+		"path":      repoPath,
+		"title":     title,
+	}))
+	require.NoError(t, err)
+	result := parseResult(t, res)
+	require.Equal(t, true, result["success"], "createSessionForPR must succeed: %+v", result)
+	t.Cleanup(func() {
+		if len(store.instances) > 0 {
+			_ = store.instances[0].Destroy()
+		}
+	})
+
+	require.Len(t, store.instances, 1)
+	assert.Equal(t, session.BackendTmux, store.instances[0].Backend,
+		"a TymuxSessionOverrides entry keyed by the sanitized tmux session name must force the backend even though the process-wide default is tymux")
 }

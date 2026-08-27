@@ -4,6 +4,7 @@ import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { SessionList } from "../SessionList";
 import type { Session } from "@/gen/session/v1/types_pb";
+import { makeSession } from "./sessionListTestFixtures";
 
 // Heavy dependency mocks for SessionList (mirrors SessionList.mobile.test.tsx)
 
@@ -15,122 +16,44 @@ jest.mock("@connectrpc/connect", () => ({
   })),
 }));
 
-jest.mock("@connectrpc/connect-web", () => ({
-  createConnectTransport: jest.fn(() => ({ unary: jest.fn(), stream: jest.fn() })),
-}));
+jest.mock("@connectrpc/connect-web", () => require("./sessionListTestFixtures").mockConnectWeb());
 
 // @tanstack/react-virtual and react-virtuoso both skip rendering off-screen items
 // based on real layout measurements, which jsdom doesn't provide. Replace both with
 // pass-through implementations that render every item, so collapse filtering (which
 // happens upstream of virtualization, in flatItems/cardGroupCounts) is observable.
-jest.mock("@tanstack/react-virtual", () => ({
-  useVirtualizer: ({ count }: { count: number }) => ({
-    getVirtualItems: () =>
-      Array.from({ length: count }, (_, index) => ({ index, key: index, start: index * 50, size: 50 })),
-    getTotalSize: () => count * 50,
-    measureElement: () => {},
-  }),
-}));
+jest.mock("@tanstack/react-virtual", () => require("./sessionListTestFixtures").mockReactVirtual());
 
-jest.mock("react-virtuoso", () => ({
-  GroupedVirtuoso: ({
-    groupCounts,
-    groupContent,
-    itemContent,
-  }: {
-    groupCounts: number[];
-    groupContent: (groupIndex: number) => React.ReactNode;
-    itemContent: (index: number) => React.ReactNode;
-  }) => {
-    const nodes: React.ReactNode[] = [];
-    let flatIndex = 0;
-    groupCounts.forEach((count, groupIndex) => {
-      nodes.push(<React.Fragment key={`g-${groupIndex}`}>{groupContent(groupIndex)}</React.Fragment>);
-      for (let i = 0; i < count; i++) {
-        nodes.push(<React.Fragment key={`i-${flatIndex}`}>{itemContent(flatIndex)}</React.Fragment>);
-        flatIndex++;
-      }
-    });
-    return <div data-testid="grouped-virtuoso">{nodes}</div>;
-  },
-}));
+jest.mock("react-virtuoso", () => require("./sessionListTestFixtures").mockReactVirtuoso());
 
-jest.mock("@/lib/contexts/ReviewQueueContext", () => ({
-  useReviewQueueContext: () => ({ items: [] }),
-}));
+jest.mock("@/lib/contexts/ReviewQueueContext", () => require("./sessionListTestFixtures").mockReviewQueueContext());
 
-jest.mock("@/lib/contexts/NotificationContext", () => ({
-  useNotifications: () => ({
-    showUndoToast: jest.fn(() => "toast-id"),
-    removeNotification: jest.fn(),
-    addNotification: jest.fn(),
-  }),
-}));
+jest.mock("@/lib/contexts/NotificationContext", () => require("./sessionListTestFixtures").mockNotificationContext());
 
-jest.mock("@/lib/store", () => ({
-  useAppSelector: jest.fn(() => ({})),
-}));
+jest.mock("@/lib/store", () => require("./sessionListTestFixtures").mockStore());
 
-jest.mock("@/lib/store/sessionsSlice", () => ({
-  selectDetectedStatusMap: jest.fn(),
-}));
+jest.mock("@/lib/store/sessionsSlice", () => require("./sessionListTestFixtures").mockSessionsSlice());
 
-jest.mock("../SessionCard", () => ({
-  SessionCard: ({ session }: { session: { title: string } }) => (
-    <div data-testid="session-card">{session.title}</div>
-  ),
-}));
+jest.mock("../SessionCard", () => require("./sessionListTestFixtures").mockSessionCard());
 
-jest.mock("../SessionRow", () => ({
-  SessionRow: ({ session }: { session: { title: string } }) => (
-    <div data-testid="session-row">{session.title}</div>
-  ),
-}));
+jest.mock("../SessionRow", () => require("./sessionListTestFixtures").mockSessionRow());
 
-jest.mock("../BulkActions", () => ({
-  BulkActions: () => null,
-}));
+jest.mock("../BulkActions", () => require("./sessionListTestFixtures").mockBulkActions());
 
-jest.mock("../TagEditor", () => ({
-  TagEditor: () => null,
-}));
+jest.mock("../TagEditor", () => require("./sessionListTestFixtures").mockTagEditor());
 
-jest.mock("@/components/ui/ActionBar", () => ({
-  ActionBar: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
-}));
+jest.mock("@/components/ui/ActionBar", () => require("./sessionListTestFixtures").mockActionBarPassthrough());
 
-jest.mock("@/components/ui/Modal", () => ({
-  Modal: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
-  ModalContent: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
-  ModalTitle: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
-  ModalFooter: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
-}));
+jest.mock("@/components/ui/Modal", () => require("./sessionListTestFixtures").mockModal());
 
-jest.mock("@/components/ui/AppLink", () => ({
-  AppLink: ({ href, children, ...rest }: React.AnchorHTMLAttributes<HTMLAnchorElement> & { href: string }) => (
-    <a href={href} {...rest}>{children}</a>
-  ),
-}));
+jest.mock("@/components/ui/AppLink", () => require("./sessionListTestFixtures").mockAppLink());
 
-jest.mock("@/lib/contexts/ApprovalsContext", () => ({
-  useApprovalsContext: () => ({ clearedSessions: new Set() }),
-}));
-
-const makeSession = (id: string, title: string, category: string): Partial<Session> => ({
-  id,
-  title,
-  status: 1 as Session["status"],
-  tags: [],
-  category,
-  path: "/tmp/session",
-  branch: "",
-  program: "claude",
-});
+jest.mock("@/lib/contexts/ApprovalsContext", () => require("./sessionListTestFixtures").mockApprovalsContext());
 
 const twoGroupSessions = [
-  makeSession("s1", "Backlog Session A", "Backlog") as Session,
-  makeSession("s2", "Backlog Session B", "Backlog") as Session,
-  makeSession("s3", "Working Session A", "Working") as Session,
+  makeSession("s1", "Backlog Session A", { category: "Backlog" }) as Session,
+  makeSession("s2", "Backlog Session B", { category: "Backlog" }) as Session,
+  makeSession("s3", "Working Session A", { category: "Working" }) as Session,
 ];
 
 const STORAGE_KEY = "stapler-squad-collapsed-groups";

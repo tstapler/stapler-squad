@@ -2,12 +2,15 @@ package session
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
 func TestCheckpoint_SerializationRoundtrip(t *testing.T) {
@@ -141,6 +144,39 @@ func TestCreateCheckpoint_StartedInstance_AllFieldsPopulated(t *testing.T) {
 	// GitCommitSHA may be empty when no worktree is set — that's OK.
 	assert.True(t, !cp.Timestamp.Before(before) && !cp.Timestamp.After(after),
 		"timestamp should be within test execution window")
+}
+
+// TestForkFromCheckpoint_HonorsSessionNameOverrideMap verifies that
+// ForkFromCheckpoint wires session.ResolveSessionBackend (tymux-bundled-
+// integration Epic 4.4.3): with no per-request override concept for this
+// restore-from-state path, a TymuxSessionOverrides entry keyed by the
+// sanitized tmux session name of the *new* (forked) title still forces the
+// forked instance's backend even though the process-wide default is
+// registered as tymux.
+func TestForkFromCheckpoint_HonorsSessionNameOverrideMap(t *testing.T) {
+	RegisterBackendProvider(BackendTymux)
+	t.Cleanup(func() { RegisterBackendProvider(BackendTmux) })
+
+	testDir := t.TempDir()
+	t.Setenv("STAPLER_SQUAD_TEST_DIR", testDir)
+
+	inst := &Instance{Title: "checkpoint-fork-source"}
+	inst.started.Store(true)
+	cp, err := inst.CreateCheckpoint("before-fork", 0)
+	require.NoError(t, err)
+	require.NotNil(t, cp)
+
+	const newTitle = "checkpoint-fork-override-test"
+	sessionKey := tmux.NewSessionName(newTitle, tmux.TmuxPrefix).String()
+	require.NoError(t, os.WriteFile(filepath.Join(testDir, "config.json"),
+		[]byte(`{"tymux_session_overrides": {"`+sessionKey+`": false}}`), 0o644))
+
+	newInst, err := inst.ForkFromCheckpoint(cp.ID, newTitle, t.TempDir())
+	require.NoError(t, err)
+	require.NotNil(t, newInst)
+
+	assert.Equal(t, BackendTmux, newInst.Backend,
+		"a TymuxSessionOverrides entry keyed by the sanitized tmux session name must force the backend even though the process-wide default is tymux")
 }
 
 func TestCreateCheckpoint_IdIsValidUUID(t *testing.T) {
