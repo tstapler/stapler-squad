@@ -561,7 +561,12 @@ type PRStatus struct {
 
 // render assembles FeedbackText from the fields captured during evaluation,
 // in a fixed order (conflict first — features.md §2A), so FeedbackText can
-// never drift from the bools it's derived from.
+// never drift from the bools it's derived from. The exact "## <Section>"
+// header strings emitted here are pinned by
+// server/services/backlog_service_pr_fix_steer_test.go's
+// TestBuildReasonSignature_HeaderStrings_MatchPRStatusRender — a wording
+// change here silently changes every PR-fix-steer dedup signature's
+// identity, so that test must be updated in step with any change below.
 func (s *PRStatus) render() string {
 	var sb strings.Builder
 
