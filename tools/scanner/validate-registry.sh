@@ -51,15 +51,8 @@ fi
 TEMP_BACKEND="${TMPDIR_WORK}/backend"
 mkdir -p "${TEMP_BACKEND}"
 echo "Scanning backend features..."
-shopt -s nullglob
-BACKEND_PROTOS=()
-for proto in proto/session/v1/*.proto; do
-  grep -q '^service ' "${proto}" && BACKEND_PROTOS+=("${proto}")
-done
-if [ "${#BACKEND_PROTOS[@]}" -eq 0 ]; then
-  echo "ERROR: no service-bearing .proto files found under proto/session/v1/" >&2
-  exit 2
-fi
+BACKEND_PROTOS_RAW="$("${SCRIPT_DIR}/list-backend-protos.sh")" || exit 2
+mapfile -t BACKEND_PROTOS <<< "${BACKEND_PROTOS_RAW}"
 for proto in "${BACKEND_PROTOS[@]}"; do
   if ! ./tools/scanner/backend/cmd/scanner \
         "${proto}" \

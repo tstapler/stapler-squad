@@ -23,14 +23,8 @@ SCANNER="tools/scanner/backend/cmd/scanner"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
-protos=()
-for proto in proto/session/v1/*.proto; do
-  grep -q '^service ' "$proto" && protos+=("$proto")
-done
-if [ "${#protos[@]}" -eq 0 ]; then
-  echo "ERROR: no service-bearing .proto files found under proto/session/v1/" >&2
-  exit 1
-fi
+protos_raw="$("$SCRIPT_DIR/list-backend-protos.sh")"
+mapfile -t protos <<< "$protos_raw"
 
 for proto in "${protos[@]}"; do
   "$SCANNER" "$proto" server/services/ "$TMP" >/dev/null

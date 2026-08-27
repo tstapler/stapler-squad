@@ -90,8 +90,7 @@ registry-generate-backend: ## Scan proto+markers → write per-feature files und
 	@echo "Building backend scanner..."
 	@cd tools/scanner && go build -o backend/cmd/scanner ./backend/cmd/
 	@echo "Scanning backend features..."
-	@protos="$$(LC_ALL=C grep -l '^service ' proto/session/v1/*.proto)"; \
-	if [ -z "$$protos" ]; then echo "ERROR: no service-bearing .proto files found under proto/session/v1/" >&2; exit 1; fi; \
+	@protos="$$(tools/scanner/list-backend-protos.sh)" || exit 1; \
 	for proto in $$protos; do \
 		./$(BACKEND_SCANNER_BIN) "$$proto" server/services/ $(BACKEND_FEATURES_DIR) || exit 1; \
 	done
