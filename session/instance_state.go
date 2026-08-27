@@ -31,7 +31,7 @@ func (i *Instance) setStatus(status Status) {
 // transitionTo validates and executes a state transition using the TransitionDef table.
 // Must be called with i.mu held.
 func (i *Instance) transitionTo(ctx context.Context, to Status) error {
-	def, ok := transitionIndex[transitionKey{i.Status, to}]
+	def, ok := lookupTransition(i.Status, to)
 	if !ok {
 		return ErrInvalidTransition{From: i.Status, To: to}
 	}
@@ -68,7 +68,7 @@ func transitionToLocked(s *instanceState, ctx context.Context, to Status) error 
 	i.mu.RLock()
 	status := i.Status
 	i.mu.RUnlock()
-	def, ok := transitionIndex[transitionKey{status, to}]
+	def, ok := lookupTransition(status, to)
 	if !ok {
 		return ErrInvalidTransition{From: status, To: to}
 	}

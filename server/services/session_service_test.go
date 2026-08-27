@@ -1492,6 +1492,66 @@ func TestUpdateSession_Resume_PermissionDenied_ReturnsFailedPrecondition(t *test
 	assert.Equal(t, connect.CodeFailedPrecondition, connectErr.Code())
 }
 
+// TestUpdateSession_should_StopSession_When_TargetIsStoppedFromActive verifies the
+// board-view "drag into Complete" path: targeting SESSION_STATUS_STOPPED from an
+// Active instance calls StopByUser() and lands the session in Stopped.
+func TestUpdateSession_should_StopSession_When_TargetIsStoppedFromActive(t *testing.T) {
+	t.Parallel()
+	fix := setupForkTestFixture(t)
+	t.Cleanup(fix.cleanup)
+
+	inst := &session.Instance{
+		Title:       "active-session-to-stop",
+		Path:        "/tmp/test",
+		Status:      session.Active,
+		Program:     "claude",
+		Permissions: session.GetManagedPermissions(),
+		CreatedAt:   time.Now(),
+		UpdatedAt:   time.Now(),
+	}
+	addInstanceToPoller(fix.poller, inst)
+
+	stopped := sessionv1.SessionStatus_SESSION_STATUS_STOPPED
+	resp, err := fix.svc.UpdateSession(context.Background(), connect.NewRequest(&sessionv1.UpdateSessionRequest{
+		Id:     "active-session-to-stop",
+		Status: &stopped,
+	}))
+	require.NoError(t, err)
+	require.NotNil(t, resp.Msg.Session)
+	assert.Equal(t, sessionv1.SessionStatus_SESSION_STATUS_STOPPED, resp.Msg.Session.Status)
+}
+
+// TestUpdateSession_should_RejectStop_When_TransitionIsIllegal verifies that an
+// illegal target (Restoring -> Stopped, which has no entry in transitionDefs) is
+// classified as FailedPrecondition, not CodeInternal.
+func TestUpdateSession_should_RejectStop_When_TransitionIsIllegal(t *testing.T) {
+	t.Parallel()
+	fix := setupForkTestFixture(t)
+	t.Cleanup(fix.cleanup)
+
+	inst := &session.Instance{
+		Title:       "restoring-session",
+		Path:        "/tmp/test",
+		Status:      session.Restoring,
+		Program:     "claude",
+		Permissions: session.GetManagedPermissions(),
+		CreatedAt:   time.Now(),
+		UpdatedAt:   time.Now(),
+	}
+	addInstanceToPoller(fix.poller, inst)
+
+	stopped := sessionv1.SessionStatus_SESSION_STATUS_STOPPED
+	_, err := fix.svc.UpdateSession(context.Background(), connect.NewRequest(&sessionv1.UpdateSessionRequest{
+		Id:     "restoring-session",
+		Status: &stopped,
+	}))
+	require.Error(t, err)
+
+	var connectErr *connect.Error
+	require.ErrorAs(t, err, &connectErr)
+	assert.Equal(t, connect.CodeFailedPrecondition, connectErr.Code())
+}
+
 // --------------------------------------------------------------------------
 // UpdateSession — steer_message (ADR-001: widened steer RPC)
 // --------------------------------------------------------------------------
