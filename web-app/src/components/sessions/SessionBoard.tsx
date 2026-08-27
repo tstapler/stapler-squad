@@ -1,4 +1,5 @@
 "use client";
+// +feature: session-board-view
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
