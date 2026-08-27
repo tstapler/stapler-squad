@@ -40,14 +40,23 @@ type aiCacheEntry struct {
 	GeneratedAt time.Time `json:"generated_at"`
 }
 
+// scanCacheEntry is a persisted snapshot of one worktree's last scan result,
+// used only to prime the in-memory worktreeCache after a restart (see
+// Scanner.hydrateCacheFromDisk, which restores an entry only within its TTL).
+type scanCacheEntry struct {
+	Result   ScanResult `json:"result"`
+	ScanTime time.Time  `json:"scan_time"`
+}
+
 // unfinishedState is the on-disk JSON shape.
 type unfinishedState struct {
-	Dismissed   []dismissEntry `json:"dismissed"`
-	Snoozed     []snoozeEntry  `json:"snoozed"`
-	WatchDirs   []string       `json:"watch_dirs"`
-	PinnedRepos []string       `json:"pinned_repos"`
-	AICache     []aiCacheEntry `json:"ai_summary_cache"`
-	AutoSpider  bool           `json:"auto_spider_sessions"`
+	Dismissed   []dismissEntry   `json:"dismissed"`
+	Snoozed     []snoozeEntry    `json:"snoozed"`
+	WatchDirs   []string         `json:"watch_dirs"`
+	PinnedRepos []string         `json:"pinned_repos"`
+	AICache     []aiCacheEntry   `json:"ai_summary_cache"`
+	AutoSpider  bool             `json:"auto_spider_sessions"`
+	ScanCache   []scanCacheEntry `json:"scan_cache,omitempty"`
 }
 
 // StateStore manages persistent state for the unfinished-work feature.
@@ -299,6 +308,29 @@ func (s *StateStore) CacheSummary(repoPath, branch, diffHash, summary string) er
 		GeneratedAt: time.Now(),
 	})
 	s.state.AICache = kept
+	return s.save()
+}
+
+// --- Scan Result Cache (restart persistence) ---
+
+// LoadScanCache returns the persisted worktree scan cache from the last save.
+func (s *StateStore) LoadScanCache() []scanCacheEntry {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]scanCacheEntry, len(s.state.ScanCache))
+	copy(out, s.state.ScanCache)
+	return out
+}
+
+// SaveScanCache atomically replaces the persisted worktree scan cache with
+// entries and writes it to disk in one batch. Callers should snapshot the
+// whole in-memory cache and call this periodically (e.g. once a minute)
+// rather than on every individual scan -- writing on every scan would trade
+// the CPU hotspot this cache exists to avoid for a new per-scan I/O one.
+func (s *StateStore) SaveScanCache(entries []scanCacheEntry) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.state.ScanCache = entries
 	return s.save()
 }
 

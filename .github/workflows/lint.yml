@@ -149,17 +149,18 @@ jobs:
           skip-cache: false
           only-new-issues: false
 
-      # jscpd (web-app/src duplication) — advisory only for now: unlike golangci-lint's
-      # --new-from-rev, jscpd has no native git-diff scoping, so there's no cheap way to
-      # fail only on duplication a PR actually introduces without either flooding on
-      # unmeasured pre-existing debt or building a bespoke changed-file/JSON-report filter.
-      # Long-term this is better solved by kibitzer (github.com/tstapler/kibitzer), which
-      # already has diff-aware scoping infrastructure and an intra-file duplicate-code
-      # checker (src/duplicate_code.rs) — see tstapler/kibitzer#28 for extending it to
-      # cross-file detection. continue-on-error keeps this from blocking merges.
-      - name: jscpd (web-app duplication — advisory)
+      # jscpd (web-app/src duplication) — blocking (2026-08-24). Config lives in
+      # web-app/.jscpd.json: minLines/minTokens tuned to 20/200 (empirically verified —
+      # every finding at that size across the whole repo was real, actionable duplication,
+      # not boilerplate/token noise), plus a 0.1% --threshold. Unlike golangci-lint's
+      # --new-from-rev, jscpd has no native git-diff scoping, so this is a ratchet against
+      # an absolute threshold rather than new-code-only — the threshold sits just above the
+      # ~0.09% baseline that's irreducible (jest.mock(...) registration calls can't be
+      # extracted into a shared function; babel-jest hoists them per-file), not at zero.
+      # Long-term, true diff-aware cross-file duplicate detection belongs in kibitzer
+      # (github.com/tstapler/kibitzer) — see tstapler/kibitzer#28.
+      - name: jscpd (web-app duplication)
         working-directory: web-app
-        continue-on-error: true
         run: pnpm run lint:duplicates
 
       - name: Import cycle check
@@ -168,12 +169,27 @@ jobs:
       - name: ESLint (no-100vh, mobile regression rules)
         working-directory: web-app
         run: |
-          # Only lint files changed in this PR to avoid surfacing pre-existing issues
-          # in unmodified files. Falls back to full scan on push-to-main (no PR context).
-          # --max-warnings 0 is not used for full scan: pre-existing warnings in untouched
-          # files should not block push/workflow_dispatch. Errors (no-100vh etc.) still fail.
-          if [ -n "${{ github.event.pull_request.base.sha }}" ]; then
-            CHANGED=$(git diff --name-only "${{ github.event.pull_request.base.sha }}"...HEAD \
+          # Only lint files changed by this push/PR — avoids surfacing the repo's ~1450
+          # pre-existing warnings (found 2026-08-25: this file's OLD "falls back to full
+          # scan on push" comment claimed pre-existing warnings wouldn't block push, but
+          # `next lint` (unlike raw eslint) exits 1 on ANY warning, not just errors — so
+          # every direct push to main had been failing this check silently for at least
+          # 6 commits before anyone noticed, since push events never got the PR path's
+          # file-scoped treatment). Push events now diff against github.event.before (the
+          # commit before this push) using the same file-scoped `next lint --file` call
+          # the PR path already uses — PRs and pushes share one code path below.
+          BASE_SHA="${{ github.event.pull_request.base.sha }}"
+          if [ -z "$BASE_SHA" ]; then
+            CANDIDATE="${{ github.event.before }}"
+            # event.before is all-zeros on a new branch's first push (no prior commit to
+            # diff against) — fall back to a full scan in that case, same as before.
+            if [ -n "$CANDIDATE" ] && [ "$CANDIDATE" != "0000000000000000000000000000000000000000" ] \
+              && git cat-file -e "$CANDIDATE" 2>/dev/null; then
+              BASE_SHA="$CANDIDATE"
+            fi
+          fi
+          if [ -n "$BASE_SHA" ]; then
+            CHANGED=$(git diff --name-only "$BASE_SHA"...HEAD \
               -- 'web-app/**.ts' 'web-app/**.tsx' 2>/dev/null \
               | grep -E '\.(ts|tsx)$' | sed 's|^web-app/||' || true)
             if [ -z "$CHANGED" ]; then

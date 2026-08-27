@@ -11,21 +11,20 @@ import (
 )
 
 // StreamHubRolloutService handles the GetStreamHubRolloutStatus/
-// CompleteStreamHubRollbackRehearsal/SetStreamHubSessionOverride RPCs — the
-// web UI's controls for the terminal-multi-connection-streaming staged
-// rollout (Story 3.3). Delegated to from SessionService exactly like
-// SlackConfigService/CallbackConfigService — a config-backed handler with no
-// second implementation, so a concrete type per
+// CompleteStreamHubRollbackRehearsal/SetStreamHubSessionOverride/
+// SetStreamHubGlobalOverride RPCs — the web UI's controls for the
+// terminal-multi-connection-streaming staged rollout (Story 3.3).
+// Delegated to from SessionService exactly like SlackConfigService/
+// CallbackConfigService — a config-backed handler with no second
+// implementation, so a concrete type per
 // .claude/rules/interface-pollution-checklist.md.
 //
-// The global STAPLER_SQUAD_USE_STREAM_HUB default is deliberately NOT
-// settable here — it's env-var-gated and requires a process restart by
-// design (see useStreamHub's doc comment in connectrpc_websocket.go),
-// keeping the final rollout step a conscious operator action rather than a
-// UI toggle that could silently change live terminal-streaming behavior for
-// every connected session. What this service exposes is everything that IS
-// safe to change live: the rollback-rehearsal completion gate and
-// per-session canary overrides, both config.json-backed.
+// The global STAPLER_SQUAD_USE_STREAM_HUB env var remains the default
+// source when no override is set, and still requires a process restart to
+// change — but SetStreamHubGlobalOverride (Story 3.3.4) now lets the global
+// effective value be flipped live from the browser too, no restart
+// required, still subject to the same rollback-rehearsal gate
+// (config.ResolveGlobalStreamHubDefault) as the env var path.
 type StreamHubRolloutService struct{}
 
 // NewStreamHubRolloutService creates a StreamHubRolloutService.
@@ -56,6 +55,7 @@ func (s *StreamHubRolloutService) status() *sessionv1.StreamHubRolloutStatus {
 		GlobalEnvVarSet:              os.Getenv("STAPLER_SQUAD_USE_STREAM_HUB") == "true",
 		RollbackRehearsalCompletedAt: rehearsalCompletedAt,
 		SessionOverrides:             overrides,
+		GlobalOverride:               cfg.StreamHubGlobalOverride,
 	}
 }
 
@@ -90,6 +90,22 @@ func (s *StreamHubRolloutService) SetStreamHubSessionOverride(
 ) (*connect.Response[sessionv1.StreamHubRolloutStatus], error) {
 	cfg := config.LoadConfig()
 	if err := cfg.SetStreamHubSessionOverride(req.Msg.GetSessionName(), req.Msg.ForceHub); err != nil {
+		return nil, connect.NewError(connect.CodeInternal, err)
+	}
+	return connect.NewResponse(s.status()), nil
+}
+
+// SetStreamHubGlobalOverride sets or clears the live global stream-hub
+// override (Story 3.3.4). Takes effect immediately for session connections
+// resolved after this call — no process restart required. Forcing it on is
+// still gated behind the rollback rehearsal, mirroring the env var path.
+// +api: stream-hub-rollout:set-global-override
+func (s *StreamHubRolloutService) SetStreamHubGlobalOverride(
+	ctx context.Context,
+	req *connect.Request[sessionv1.SetStreamHubGlobalOverrideRequest],
+) (*connect.Response[sessionv1.StreamHubRolloutStatus], error) {
+	cfg := config.LoadConfig()
+	if err := cfg.SetStreamHubGlobalOverride(req.Msg.ForceHub); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
 	return connect.NewResponse(s.status()), nil

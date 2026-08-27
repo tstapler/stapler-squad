@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -253,7 +254,7 @@ func TestSweeper_SystemMemoryPct_should_notCallReader_When_CacheIsWarm(t *testin
 }
 
 // TestSweeper_warmRSSCache_should_populateCache_When_ActiveSession verifies that
-// warmRSSCache calls SessionRSSMB for active sessions and stores the result.
+// warmRSSCache calls SessionsRSSMB for active sessions and stores the result.
 func TestSweeper_warmRSSCache_should_populateCache_When_ActiveSession(t *testing.T) {
 	t.Parallel()
 	reader := &memorytest.FakeReader{
@@ -266,7 +267,7 @@ func TestSweeper_warmRSSCache_should_populateCache_When_ActiveSession(t *testing
 	inst := makeIdleInstance(t, "uuid-rss", "rss-session", 10*time.Minute)
 	sweeper.warmRSSCache(context.Background(), []*Instance{inst})
 
-	assert.Equal(t, 1, reader.GetSessionRSSCalls(), "SessionRSSMB should be called for each active session")
+	assert.Equal(t, 1, reader.GetSessionRSSCalls(), "SessionsRSSMB should be called once for the batch")
 	assert.Equal(t, int64(128), sweeper.GetCachedRSSMB("uuid-rss"), "cache should be warm after warmRSSCache")
 }
 
@@ -282,7 +283,63 @@ func TestSweeper_warmRSSCache_should_skipInactive_When_InstanceNotActive(t *test
 	inst.Status = Paused
 	sweeper.warmRSSCache(context.Background(), []*Instance{inst})
 
-	assert.Equal(t, 0, reader.GetSessionRSSCalls(), "SessionRSSMB should not be called for inactive sessions")
+	assert.Equal(t, 0, reader.GetSessionRSSCalls(), "SessionsRSSMB should not be called when there are no active sessions")
+}
+
+// TestSweeper_warmRSSCache_should_batchAllActiveSessions_When_Multiple verifies
+// warmRSSCache measures every active session through a single SessionsRSSMB call
+// rather than one call per session. This is the fix for the CPU hotspot where each
+// session independently re-enumerated the entire system process table (see
+// processSnapshot in session/memory/reader.go) -- a regression here would mean
+// GetSessionRSSCalls scales with instance count again instead of staying at 1
+// regardless of how many active sessions are being swept.
+func TestSweeper_warmRSSCache_should_batchAllActiveSessions_When_Multiple(t *testing.T) {
+	t.Parallel()
+	reader := &memorytest.FakeReader{
+		SystemPct: 90,
+		RSSBySession: map[string]int64{
+			"tmux-a": 50,
+			"tmux-b": 78,
+		},
+	}
+	sweeper, _, cleanup := makeTestSweeper(t, reader, 0)
+	defer cleanup()
+
+	// Give each instance a distinct tmux session name via the mock backend
+	// seam, not the zero-value GetTmuxSessionName() a bare Instance returns —
+	// otherwise every session collapses onto the same "" cache key and this
+	// test can't tell a correct name->UUID mapping from a broken one.
+	instA := makeIdleInstance(t, "uuid-a", "session-a", time.Minute)
+	instA.processManager = NewTmuxBackend(&mockTmuxManager{tmuxSessionName: "tmux-a"})
+	instB := makeIdleInstance(t, "uuid-b", "session-b", time.Minute)
+	instB.processManager = NewTmuxBackend(&mockTmuxManager{tmuxSessionName: "tmux-b"})
+	instC := makeIdleInstance(t, "uuid-c", "session-c", time.Minute)
+	instC.Status = Paused // inactive — should be excluded from the batch
+
+	sweeper.warmRSSCache(context.Background(), []*Instance{instA, instB, instC})
+
+	assert.Equal(t, 1, reader.GetSessionRSSCalls(), "all active sessions should be measured in a single batch call")
+	assert.ElementsMatch(t, []string{"tmux-a", "tmux-b"}, reader.LastRSSNames(), "only the two active sessions' names should be requested, not the inactive one")
+	assert.Equal(t, int64(50), sweeper.GetCachedRSSMB("uuid-a"))
+	assert.Equal(t, int64(78), sweeper.GetCachedRSSMB("uuid-b"))
+	assert.Equal(t, int64(0), sweeper.GetCachedRSSMB("uuid-c"), "inactive session should not be cached")
+}
+
+// TestSweeper_warmRSSCache_should_preserveStaleCache_When_BatchFails verifies
+// that a failed SessionsRSSMB call leaves existing cache entries untouched
+// rather than clobbering them with zero values — a transient measurement
+// failure should degrade to "last known value," not "no value."
+func TestSweeper_warmRSSCache_should_preserveStaleCache_When_BatchFails(t *testing.T) {
+	t.Parallel()
+	reader := &memorytest.FakeReader{RSSErr: errors.New("boom")}
+	sweeper, _, cleanup := makeTestSweeper(t, reader, 0)
+	defer cleanup()
+	sweeper.memCache.SetAll(map[string]int64{"uuid-a": 42}) // pre-existing warm value
+
+	inst := makeIdleInstance(t, "uuid-a", "session-a", time.Minute)
+	sweeper.warmRSSCache(context.Background(), []*Instance{inst})
+
+	assert.Equal(t, int64(42), sweeper.GetCachedRSSMB("uuid-a"), "a failed batch must not clobber the existing cached value")
 }
 
 // TestSweeper_GetCachedRSSMB_should_returnZero_When_Empty verifies that GetCachedRSSMB

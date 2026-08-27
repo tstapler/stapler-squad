@@ -90,15 +90,10 @@ registry-generate-backend: ## Scan proto+markers → write per-feature files und
 	@echo "Building backend scanner..."
 	@cd tools/scanner && go build -o backend/cmd/scanner ./backend/cmd/
 	@echo "Scanning backend features..."
-	@./$(BACKEND_SCANNER_BIN) proto/session/v1/session.proto server/services/ $(BACKEND_FEATURES_DIR)
-	@./$(BACKEND_SCANNER_BIN) proto/session/v1/unfinished.proto server/services/ $(BACKEND_FEATURES_DIR)
-	@./$(BACKEND_SCANNER_BIN) proto/session/v1/backlog.proto server/services/ $(BACKEND_FEATURES_DIR)
-	@./$(BACKEND_SCANNER_BIN) proto/session/v1/insights.proto server/services/ $(BACKEND_FEATURES_DIR)
-	@./$(BACKEND_SCANNER_BIN) proto/session/v1/github_user.proto server/services/ $(BACKEND_FEATURES_DIR)
-	@./$(BACKEND_SCANNER_BIN) proto/session/v1/import.proto server/services/ $(BACKEND_FEATURES_DIR)
-	@./$(BACKEND_SCANNER_BIN) proto/session/v1/session_summary.proto server/services/ $(BACKEND_FEATURES_DIR)
-	@./$(BACKEND_SCANNER_BIN) proto/session/v1/remote.proto server/services/ $(BACKEND_FEATURES_DIR)
-	@./$(BACKEND_SCANNER_BIN) proto/session/v1/handoff_summary.proto server/services/ $(BACKEND_FEATURES_DIR)
+	@protos="$$(tools/scanner/list-backend-protos.sh)" || exit 1; \
+	for proto in $$protos; do \
+		./$(BACKEND_SCANNER_BIN) "$$proto" server/services/ $(BACKEND_FEATURES_DIR) || exit 1; \
+	done
 	@# Generation is additive; prune files whose RPC no longer exists so the
 	@# committed set stays in sync with the proto (avoids registry-validation drift).
 	@bash tools/scanner/prune-stale-backend.sh $(BACKEND_FEATURES_DIR)
@@ -852,7 +847,7 @@ ci: build $(BIN_TMUX) test test-race vet lint lint-css-tokens test-integration f
 # local equivalent (the external go-test-coverage action, the E2E-coverage PR
 # comment) — those only run in CI. `--new-from-rev=origin/main` requires a
 # reachable origin/main; `git fetch origin main` first if it's stale.
-ready: ci ready-complexity-gate ready-duplication-report-web ## Local approximation of every required PR check (make ci + complexity/duplication gate + web-app lint/scanner suites)
+ready: ci ready-complexity-gate ready-duplication-gate-web ## Local approximation of every required PR check (make ci + complexity/duplication gates + web-app lint/scanner suites)
 	cd web-app && npx next lint
 	cd web-app && pnpm run lint:css && pnpm run lint:css-vars
 	cd tools/scanner && go test ./...
@@ -869,11 +864,19 @@ ready-complexity-gate: ensure-tools ## New-code-only gocyclo/gocognit/funlen/rev
 	golangci-lint run --timeout=5m --max-issues-per-linter=0 --max-same-issues=0 \
 		--enable=gocyclo,gocognit,funlen,revive,dupl --new-from-rev=origin/main
 
-# Advisory only — see lint.yml's "jscpd (web-app duplication — advisory)" step for why this
-# doesn't block (no git-diff scoping in jscpd; kibitzer is the intended long-term fix,
-# tstapler/kibitzer#28). Prints findings; never fails the target.
-ready-duplication-report-web: ## Advisory web-app duplication report (jscpd) — never fails
-	@cd web-app && pnpm run lint:duplicates || true
+# Blocking (2026-08-24): web-app/.jscpd.json sets minLines/minTokens to a precision-tuned
+# 20/200 (empirically verified: every finding at that size was real, actionable duplication —
+# not test-boilerplate/token noise) and a 0.1% threshold. jscpd exits non-zero via its own
+# --threshold flag when duplication exceeds that. The threshold is a RATCHET, not zero-tolerance:
+# jscpd has no git-diff scoping like golangci-lint's --new-from-rev (kibitzer is the intended
+# long-term fix for that gap, tstapler/kibitzer#28), so blocking on literal zero would fail
+# every PR the moment two Jest files legitimately need the same set of jest.mock(...)
+# registrations (those calls can't be extracted into a shared function — babel-jest hoists them
+# per-file — so a small amount of that specific duplication is irreducible, ~0.09% today).
+# 0.1% leaves a small buffer above that irreducible baseline while still failing on any
+# meaningfully-sized new duplication.
+ready-duplication-gate-web: ## Blocking web-app duplication gate (jscpd, see web-app/.jscpd.json)
+	cd web-app && pnpm run lint:duplicates
 
 # Quick development workflows
 quick-check: build $(BIN_TMUX) test-coverage test-race lint lint-css-tokens registry-diff ## Quick development validation

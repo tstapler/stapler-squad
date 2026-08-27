@@ -14,8 +14,10 @@ import (
 	"os/user"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -107,6 +109,45 @@ func IsIsolatedInstance() bool {
 	return IsTestMode() || IsNamedInstance() || os.Getenv("STAPLER_SQUAD_TEST_DIR") != ""
 }
 
+// pruneStaleTestDirs removes test-<pid> directories under testBaseDir whose
+// owning process is no longer running. Every go-test binary gets its own
+// isolated state dir here (see the IsTestMode branch below), but nothing else
+// ever deletes it — unlike t.TempDir(), this survives the test run on
+// purpose, for post-mortem debugging. Left unswept, that accumulates forever:
+// found 13,530 orphaned dirs (6.1G) going back to March 2026, which
+// contributed to the disk filling up. Checking the pid instead of an mtime
+// cutoff means this is safe to run even mid a legitimately slow test run.
+func pruneStaleTestDirs(testBaseDir string) {
+	entries, err := os.ReadDir(testBaseDir)
+	if err != nil {
+		return
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		pidStr, ok := strings.CutPrefix(entry.Name(), "test-")
+		if !ok {
+			continue
+		}
+		pid, err := strconv.Atoi(pidStr)
+		if err != nil || isProcessAlive(pid) {
+			continue
+		}
+		_ = os.RemoveAll(filepath.Join(testBaseDir, entry.Name()))
+	}
+}
+
+// isProcessAlive reports whether pid is a running process, via the null
+// signal (no-op existence check, doesn't actually signal the process).
+func isProcessAlive(pid int) bool {
+	proc, err := os.FindProcess(pid)
+	if err != nil {
+		return false
+	}
+	return proc.Signal(syscall.Signal(0)) == nil
+}
+
 // GetConfigDir returns the path to the application's configuration directory
 // with hierarchical isolation for safe multi-instance and test execution.
 //
@@ -164,8 +205,10 @@ func GetConfigDirForDir(dir string) (string, error) {
 	// preference set by a production instance cannot leak into test runs.
 	if IsTestMode() {
 		// Each test/benchmark process gets its own isolated state
+		testBaseDir := filepath.Join(baseDir, "test")
+		pruneStaleTestDirs(testBaseDir)
 		pid := os.Getpid()
-		return filepath.Join(baseDir, "test", fmt.Sprintf("test-%d", pid)), nil
+		return filepath.Join(testBaseDir, fmt.Sprintf("test-%d", pid)), nil
 	}
 
 	return resolveDefaultConfigDir(dir, baseDir)
@@ -441,6 +484,13 @@ type Config struct {
 	// (pre-mortem P1 #4's mechanical gate) — the per-session override above
 	// is unaffected by this gate. Set via RecordRollbackRehearsalCompleted.
 	RollbackRehearsalCompletedAt *time.Time `json:"rollback_rehearsal_completed_at,omitempty"`
+	// StreamHubGlobalOverride is a live, config.json-backed override of the
+	// global stream-hub default, settable from the browser via
+	// SetStreamHubGlobalOverride with no process restart required. nil means
+	// "no override — resolve from the STAPLER_SQUAD_USE_STREAM_HUB env var as
+	// before". A non-nil value is still subject to
+	// ResolveGlobalStreamHubDefault's rollback-rehearsal gate when true.
+	StreamHubGlobalOverride *bool `json:"stream_hub_global_override,omitempty"`
 }
 
 // ErrRollbackRehearsalNotCompleted is returned by ResolveGlobalStreamHubDefault
@@ -513,6 +563,17 @@ func (c *Config) SetStreamHubSessionOverride(sessionName string, forceHub *bool)
 		c.StreamHubSessionOverrides = make(map[string]bool)
 	}
 	c.StreamHubSessionOverrides[sessionName] = *forceHub
+	return SaveConfig(c)
+}
+
+// SetStreamHubGlobalOverride sets or clears the live global stream-hub
+// override and persists the config to disk. forceHub follows this file's
+// tri-state *bool convention: nil clears the override (reverting to the
+// STAPLER_SQUAD_USE_STREAM_HUB env var default), non-nil forces that value
+// for every session connection resolved from now on — subject to
+// ResolveGlobalStreamHubDefault's rollback-rehearsal gate when true.
+func (c *Config) SetStreamHubGlobalOverride(forceHub *bool) error {
+	c.StreamHubGlobalOverride = forceHub
 	return SaveConfig(c)
 }
 
@@ -1330,11 +1391,38 @@ func (c *Config) SlackSigningSecretOverride() string {
 // Currently recognized flags:
 //
 //	"backlog" — enables the Backlog tab and backlog lifecycle controller.
+//	"webhook_triggers" — registers POST /webhooks/github and POST /webhooks/generic/{slug}.
+//	"pr_event_webhooks" — reacts to check_run/workflow_run/pull_request_review/issue_comment
+//	  GitHub deliveries on /webhooks/github by immediately reconciling a matching pr_pending
+//	  item, instead of waiting for PRStatusPoller's next tick. Independently toggleable from
+//	  "webhook_triggers", but has no effect unless "webhook_triggers" is also enabled (that
+//	  flag gates whether the route is registered at all).
 func (c *Config) GetFeatureFlag(name string) bool {
 	if c == nil || c.FeatureFlags == nil {
 		return false
 	}
 	return c.FeatureFlags[name]
+}
+
+// GetFeatureFlagWithDefault returns the persisted enabled state of the named feature
+// flag, or defaultValue if it has never been explicitly set. Unlike GetFeatureFlag
+// (every absent flag defaults to false), this lets one flag graduate to "on by
+// default" — e.g. terminal:resync-exec-gate-fast-lane (2026-08-25: an unset default
+// left resync-triggered resizes contending on the shared 5s-timeout exec-gate pool,
+// which can exceed the client's 4s stall watchdog and force a disconnect+reconnect;
+// the fast lane's dedicated 3s-budget pool exists specifically to avoid this) —
+// while every other flag keeps defaulting to false via GetFeatureFlag. An explicit
+// persisted false still opts back out; only a genuinely absent key falls through to
+// defaultValue.
+func (c *Config) GetFeatureFlagWithDefault(name string, defaultValue bool) bool {
+	if c == nil || c.FeatureFlags == nil {
+		return defaultValue
+	}
+	v, ok := c.FeatureFlags[name]
+	if !ok {
+		return defaultValue
+	}
+	return v
 }
 
 // SetFeatureFlag sets the named feature flag and persists the config to disk.

@@ -2,6 +2,7 @@ package streamhub_test
 
 import (
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -108,6 +109,17 @@ func TestAttachSubscriber_should_IncrementSubscriberCount_When_CalledOnActiveHub
 	transport := newMemoryTransport()
 
 	id := hub.AttachSubscriber(transport, streamhub.SubscriberCapability{CanResize: true})
+	// Registered after the goleak defer above, so — per Go's LIFO defer
+	// order — this runs BEFORE goleak's check, guaranteeing the writer
+	// goroutine is gone by the time it looks. A trailing (non-deferred) call
+	// at the end of the test function is skipped by any t.Fatal/t.Fatalf
+	// before it (Fatal calls runtime.Goexit, unwinding the rest of the
+	// function) — that's exactly what leaked a goroutine into later tests'
+	// goleak checks in this file before this fix. DetachSubscriber is a
+	// no-op on an already-detached id (removeSubscriber's map-lookup guard),
+	// so this defer is safe to combine with this test's own explicit
+	// mid-test DetachSubscriber call below.
+	defer hub.DetachSubscriber(id)
 
 	if id == "" {
 		t.Fatal("expected a non-empty SubscriberID")
@@ -129,6 +141,9 @@ func TestDetachSubscriber_should_RemoveSubscriberAndStopWriterGoroutine_When_Sub
 	transport := newMemoryTransport()
 
 	id := hub.AttachSubscriber(transport, streamhub.SubscriberCapability{})
+	// See TestAttachSubscriber_should_IncrementSubscriberCount_When_CalledOnActiveHub's
+	// comment on this defer's placement/LIFO-ordering rationale.
+	defer hub.DetachSubscriber(id)
 	if got := hub.SubscriberCount(); got != 1 {
 		t.Fatalf("expected SubscriberCount() == 1 after attach, got %d", got)
 	}
@@ -171,7 +186,9 @@ func TestStreamHub_should_NotBlockOtherSubscribers_When_OneSubscriberChannelStay
 	slow := newMemoryTransport(withBlockingSend())
 
 	fastID := hub.AttachSubscriber(fast, streamhub.SubscriberCapability{})
+	defer hub.DetachSubscriber(fastID)
 	slowID := hub.AttachSubscriber(slow, streamhub.SubscriberCapability{})
+	defer hub.DetachSubscriber(slowID)
 
 	// Broadcast far more frames than the outbound buffer holds. slow's
 	// writer never drains (Send blocks forever), so its queue fills and
@@ -196,9 +213,6 @@ func TestStreamHub_should_NotBlockOtherSubscribers_When_OneSubscriberChannelStay
 	if !waitFor(t, time.Second, func() bool { return slow.isClosed() }) {
 		t.Fatal("expected slow subscriber's transport to be closed on eviction")
 	}
-
-	hub.DetachSubscriber(fastID)
-	_ = slowID
 }
 
 func TestStreamHub_should_EvictSubscriberExactlyOnce_When_TransportSendReturnsError(t *testing.T) {
@@ -211,7 +225,9 @@ func TestStreamHub_should_EvictSubscriberExactlyOnce_When_TransportSendReturnsEr
 	failing := newMemoryTransport(withErrorSend(sendErr))
 
 	otherID := hub.AttachSubscriber(other, streamhub.SubscriberCapability{})
+	defer hub.DetachSubscriber(otherID)
 	failingID := hub.AttachSubscriber(failing, streamhub.SubscriberCapability{})
+	defer hub.DetachSubscriber(failingID)
 
 	if got := hub.SubscriberCount(); got != 2 {
 		t.Fatalf("expected SubscriberCount() == 2 after both attach, got %d", got)
@@ -232,9 +248,6 @@ func TestStreamHub_should_EvictSubscriberExactlyOnce_When_TransportSendReturnsEr
 	if got := hub.SubscriberCount(); got != 1 {
 		t.Fatalf("expected SubscriberCount() to remain 1, got %d", got)
 	}
-
-	hub.DetachSubscriber(otherID)
-	_ = failingID
 }
 
 // TestAttachSubscriber_should_SendCatchUpSnapshot_When_SubscriberJoinsActiveHub
@@ -263,17 +276,25 @@ func TestAttachSubscriber_should_SendCatchUpSnapshot_When_SubscriberJoinsActiveH
 	// redundant capture-pane calls.
 	first := streamhub.NewMemoryTransport()
 	firstID := hub.AttachSubscriber(first, streamhub.SubscriberCapability{CanResize: true})
+	defer hub.DetachSubscriber(firstID)
 
 	// A second subscriber attaching to the now-active hub must also receive
 	// a CatchUpSnapshot within this same AttachSubscriber call.
 	second := streamhub.NewMemoryTransport()
 	secondID := hub.AttachSubscriber(second, streamhub.SubscriberCapability{CanResize: true})
+	defer hub.DetachSubscriber(secondID)
 
 	frames := second.ReceivedFrames()
 	if len(frames) != 1 {
 		t.Fatalf("expected exactly 1 CatchUpSnapshot frame delivered within AttachSubscriber, got %d", len(frames))
 	}
-	if got, want := string(frames[0]), "existing pane content"; got != want {
+	// Exact equality isn't the right check here: the hub wraps captured
+	// content in a full-screen-redraw envelope (erase+home prefix, CRLF
+	// normalization, trailing cursor-sync escape — snapshot_prepare.go)
+	// before ever broadcasting it, so the frame is never byte-identical to
+	// what the controller returned. What this test cares about is that the
+	// controller's content made it into the frame at all.
+	if got, want := string(frames[0]), "existing pane content"; !strings.Contains(got, want) {
 		t.Fatalf("expected the CatchUpSnapshot frame to contain %q, got %q", want, got)
 	}
 	// The cache reuse means the second attach must not have triggered
@@ -281,9 +302,6 @@ func TestAttachSubscriber_should_SendCatchUpSnapshot_When_SubscriberJoinsActiveH
 	if got := controller.captureCalls.Load(); got != 1 {
 		t.Fatalf("expected exactly 1 CapturePaneContent call (cached for the second attach), got %d", got)
 	}
-
-	hub.DetachSubscriber(firstID)
-	hub.DetachSubscriber(secondID)
 }
 
 // TestAttachSubscriber_should_NotFailOrSend_When_NoSnapshotIsAvailableYet
@@ -300,6 +318,7 @@ func TestAttachSubscriber_should_NotFailOrSend_When_NoSnapshotIsAvailableYet(t *
 
 	transport := streamhub.NewMemoryTransport()
 	id := hub.AttachSubscriber(transport, streamhub.SubscriberCapability{CanResize: true})
+	defer hub.DetachSubscriber(id)
 
 	if got := len(transport.ReceivedFrames()); got != 0 {
 		t.Fatalf("expected no CatchUpSnapshot frame when no snapshot is available, got %d frames", got)
@@ -307,8 +326,6 @@ func TestAttachSubscriber_should_NotFailOrSend_When_NoSnapshotIsAvailableYet(t *
 	if got := hub.SubscriberCount(); got != 1 {
 		t.Fatalf("expected AttachSubscriber to still succeed despite the capture error, SubscriberCount() == %d", got)
 	}
-
-	hub.DetachSubscriber(id)
 }
 
 func TestAttachSubscriber_should_ReturnDistinctIDs_When_CalledMultipleTimes(t *testing.T) {
@@ -317,7 +334,9 @@ func TestAttachSubscriber_should_ReturnDistinctIDs_When_CalledMultipleTimes(t *t
 	hub := streamhub.NewStreamHub("test-session", nil, streamhub.WithTeardownGrace(time.Hour))
 
 	firstID := hub.AttachSubscriber(newMemoryTransport(), streamhub.SubscriberCapability{})
+	defer hub.DetachSubscriber(firstID)
 	secondID := hub.AttachSubscriber(newMemoryTransport(), streamhub.SubscriberCapability{})
+	defer hub.DetachSubscriber(secondID)
 
 	if firstID == secondID {
 		t.Fatalf("expected distinct SubscriberIDs, both were %q", firstID)
@@ -325,7 +344,4 @@ func TestAttachSubscriber_should_ReturnDistinctIDs_When_CalledMultipleTimes(t *t
 	if got := hub.SubscriberCount(); got != 2 {
 		t.Fatalf("expected SubscriberCount() == 2, got %d", got)
 	}
-
-	hub.DetachSubscriber(firstID)
-	hub.DetachSubscriber(secondID)
 }
