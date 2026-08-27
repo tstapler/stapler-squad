@@ -887,15 +887,37 @@ func (s *SessionService) SessionProgram(sessionUUID string) (string, bool) {
 	return inst.Program, true
 }
 
+// safeIdleStatusContexts allowlists the exact detection.StatusIdle pattern
+// descriptions (session/detection/binaries/claude.go's Idle group) that are
+// unambiguously Claude Code's own idle prompt, as opposed to a raw shell/vim/
+// editor prompt that also reports StatusIdle. Pinned verbatim against the
+// actual pattern set by TestSafeIdleStatusContexts_MatchClaudeIdlePatternDescriptions
+// so a future wording change in claude.go fails this test loudly instead of
+// silently disabling the gate. insert_mode is deliberately excluded: its
+// regex/description aren't distinguishable from a real vim INSERT-mode
+// status line.
+var safeIdleStatusContexts = map[string]bool{
+	"Claude Code readline input prompt":                                                              true, // claude_readline_prompt
+	"Claude Code idle prompt showing ? for shortcuts":                                                true, // claude_shortcuts_prompt
+	"Claude Code 'accept edits' review mode — session completed turn, user reviews proposed changes": true, // claude_accept_edits
+}
+
+// isSafeSteerStatus reports whether a detection result is safe for an
+// unattended PTY write: StatusIdle with a description on the Claude-specific
+// safeIdleStatusContexts allowlist. StatusIdle alone is NOT sufficient —
+// command_prompt/vim_normal_mode/bracket_insert_mode share the same
+// DetectedStatus value but mean a raw shell or editor prompt, exactly the
+// state where injected text would be misread as a literal command.
+func isSafeSteerStatus(status detection.DetectedStatus, statusContext string) bool {
+	return status == detection.StatusIdle && safeIdleStatusContexts[statusContext]
+}
+
 // IsReadyForSteer implements SessionSteerer. It gates an unattended PTY
-// write (e.g. PR-fix steering) on detection.StatusReady — the one signal
-// that means "idle at its own prompt, safe for a blind write" — as opposed
-// to detection.StatusIdle, which despite the name means a raw shell/vim
-// prompt, exactly the state where injected text would be misread as a
-// literal command (the vulnerability this method exists to close). Any
-// case where readiness can't be confirmed (no live instance, no status
-// manager, no registered controller, or a queued/in-flight command) returns
-// false rather than assuming ready.
+// write (e.g. PR-fix steering) on isSafeSteerStatus — see that function's
+// doc comment for the StatusIdle-vs-safe-description invariant. Any case
+// where readiness can't be confirmed (no live instance, no status manager,
+// no registered controller, or a queued/in-flight command) returns false
+// rather than assuming ready.
 func (s *SessionService) IsReadyForSteer(sessionUUID string) bool {
 	inst := s.FindLiveInstance(sessionUUID)
 	if inst == nil || s.statusManager == nil {
@@ -908,7 +930,7 @@ func (s *SessionService) IsReadyForSteer(sessionUUID string) bool {
 	if ctrl, ok := s.statusManager.GetController(inst.Title); ok && ctrl != nil && ctrl.GetCurrentCommand() != nil {
 		return false
 	}
-	return info.ClaudeStatus == detection.StatusReady
+	return isSafeSteerStatus(info.ClaudeStatus, info.StatusContext)
 }
 
 // SteerActiveSession implements SessionSteerer, delegating to the same

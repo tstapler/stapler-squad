@@ -20,6 +20,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/detection"
+	"github.com/tstapler/stapler-squad/session/detection/binaries"
 	"go.uber.org/goleak"
 )
 
@@ -1948,6 +1949,89 @@ func TestSessionService_IsReadyForSteer_ReturnsFalse_When_ControllerNotRegistere
 	addInstanceToPoller(fix.poller, inst)
 
 	assert.False(t, fix.svc.IsReadyForSteer("no-controller-session"))
+}
+
+// TestSafeIdleStatusContexts_MatchClaudeIdlePatternDescriptions pins
+// safeIdleStatusContexts against the actual Idle pattern descriptions in
+// session/detection/binaries/claude.go (the single source of truth per that
+// file's Patterns() doc comment) — both that the three safe entries match
+// verbatim, and that the allowlist contains nothing else. A future wording
+// change to claude.go's Idle patterns fails this test loudly instead of
+// silently breaking IsReadyForSteer's security gate (either by no longer
+// matching a real safe prompt, or by an unnoticed unsafe pattern reusing one
+// of the pinned strings).
+func TestSafeIdleStatusContexts_MatchClaudeIdlePatternDescriptions(t *testing.T) {
+	t.Parallel()
+
+	idlePatterns := binaries.NewClaudeDetector().Patterns().Idle
+	byName := make(map[string]string, len(idlePatterns))
+	for _, p := range idlePatterns {
+		byName[p.Name] = p.Description
+	}
+
+	wantSafe := map[string]string{
+		"claude_readline_prompt":  "Claude Code readline input prompt",
+		"claude_shortcuts_prompt": "Claude Code idle prompt showing ? for shortcuts",
+		"claude_accept_edits":     "Claude Code 'accept edits' review mode — session completed turn, user reviews proposed changes",
+	}
+	for name, wantDesc := range wantSafe {
+		gotDesc, ok := byName[name]
+		require.True(t, ok, "claude.go's Idle group no longer has a pattern named %q", name)
+		require.Equal(t, wantDesc, gotDesc, "claude.go's %q description changed", name)
+		require.True(t, safeIdleStatusContexts[gotDesc], "safeIdleStatusContexts missing current %q description %q", name, gotDesc)
+	}
+	require.Len(t, safeIdleStatusContexts, len(wantSafe), "safeIdleStatusContexts has entries beyond the three pinned safe patterns")
+
+	// insert_mode is deliberately excluded (ambiguous with a real vim INSERT-mode
+	// status line) and the raw shell/vim/editor prompts must never be treated as safe.
+	for _, unsafeName := range []string{"insert_mode", "command_prompt", "vim_normal_mode", "bracket_insert_mode"} {
+		desc, ok := byName[unsafeName]
+		require.True(t, ok, "claude.go's Idle group no longer has a pattern named %q", unsafeName)
+		require.False(t, safeIdleStatusContexts[desc], "%q's description %q must not be on the safe allowlist", unsafeName, desc)
+	}
+}
+
+// TestSessionService_IsReadyForSteer_ReturnsTrue_When_RealDetectionSeesClaudeReadlinePrompt
+// runs realistic Claude Code idle-prompt terminal text through the real
+// detection.PatternSet.MatchLines pipeline (built from the actual
+// binaries.NewClaudeDetector() pattern set, not a hand-fabricated status) and
+// verifies isSafeSteerStatus — the exact function IsReadyForSteer defers to —
+// accepts the resulting (status, description) pair. Building a fully live
+// *session.ClaudeController here would additionally require a real PTY and
+// Start()'s background goroutines (see session/claude_controller_test.go's
+// newControllerWithMock, which stays inside package session for the same
+// reason); exercising the real regexes directly is the documented fallback.
+func TestSessionService_IsReadyForSteer_ReturnsTrue_When_RealDetectionSeesClaudeReadlinePrompt(t *testing.T) {
+	t.Parallel()
+
+	ps, err := detection.NewPatternSet(binaries.NewClaudeDetector().Patterns())
+	require.NoError(t, err)
+
+	text := "I've fixed the null check in validator.go.\n> "
+	status, name, desc, _ := ps.MatchLines(text, nil)
+
+	require.Equal(t, detection.StatusIdle, status, "matched pattern: %s", name)
+	assert.True(t, isSafeSteerStatus(status, desc), "description %q (pattern %s) should be treated as safe to steer", desc, name)
+}
+
+// TestSessionService_IsReadyForSteer_ReturnsFalse_When_RealDetectionSeesShellPrompt
+// is the regression test for the original StatusReady-vs-StatusIdle
+// confusion this fix addresses: a raw shell prompt also reports
+// detection.StatusIdle, so a naive `ClaudeStatus == StatusIdle` check (the
+// unsafe "fix" this test guards against) would incorrectly treat it as safe
+// to steer. Only the description allowlist in isSafeSteerStatus tells the
+// two apart.
+func TestSessionService_IsReadyForSteer_ReturnsFalse_When_RealDetectionSeesShellPrompt(t *testing.T) {
+	t.Parallel()
+
+	ps, err := detection.NewPatternSet(binaries.NewClaudeDetector().Patterns())
+	require.NoError(t, err)
+
+	text := "tstapler@dev-box:~/stapler-squad$ "
+	status, name, desc, _ := ps.MatchLines(text, nil)
+
+	require.Equal(t, detection.StatusIdle, status, "matched pattern: %s", name)
+	assert.False(t, isSafeSteerStatus(status, desc), "raw shell prompt description %q (pattern %s) must not be treated as safe to steer", desc, name)
 }
 
 // TestUpdateSession_SteerMessage_ExceedsMaxLength_ReturnsInvalidArgument verifies
