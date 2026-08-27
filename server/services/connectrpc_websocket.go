@@ -477,8 +477,23 @@ func pumpControlModeOutputIntoHub(hub *streamhub.StreamHub, controller streamhub
 	// truly gone" so a later reconnect can restart one instead of silently
 	// reactivating a hub with nothing feeding it live output.
 	defer hub.MarkPumpExited()
-	for {
-		if hub.State() == streamhub.HubTornDown {
+	// first skips the torn-down check below on this goroutine's very first
+	// iteration: GetOrCreate spawns this goroutine (TryStartPump's CAS) and
+	// then returns to its caller, who reactivates the hub via AttachSubscriber
+	// (HubTornDown -> HubActive) — but that happens after GetOrCreate
+	// returns, outside this goroutine. If this goroutine's first State()
+	// read races ahead of that AttachSubscriber call, it observes the stale
+	// HubTornDown left by the *previous* teardown and exits immediately,
+	// permanently starving the reactivated hub of live output (2026-08-26
+	// regression: TestHubRegistry_should_RestartPump_When_ReconnectingAfterFullTeardown
+	// failed ~5/6 local -race runs). A pump only ever starts because
+	// TryStartPump's CAS was won, which happens exactly when a caller is
+	// about to consume the hub, so the first iteration can safely skip the
+	// check and subscribe unconditionally; the same check on every later
+	// iteration (after a subscription closes) still correctly distinguishes
+	// a genuine teardown from a resubscribe-worthy control-mode restart.
+	for first := true; ; first = false {
+		if !first && hub.State() == streamhub.HubTornDown {
 			log.Info("streamhub raw-output pump exiting: hub torn down", "session", sessionName)
 			return
 		}

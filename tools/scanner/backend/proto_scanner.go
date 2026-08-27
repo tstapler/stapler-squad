@@ -222,6 +222,7 @@ var methodToID = map[string]string{ //nolint:gochecknoglobals
 	"GetStreamHubRolloutStatus":          "stream-hub-rollout:get",
 	"CompleteStreamHubRollbackRehearsal": "stream-hub-rollout:complete-rehearsal",
 	"SetStreamHubSessionOverride":        "stream-hub-rollout:set-session-override",
+	"SetStreamHubGlobalOverride":         "stream-hub-rollout:set-global-override",
 	// Approval rules RPCs
 	"BulkUpsertRules":       "approval:bulk-upsert-rules",
 	"ExportRules":           "approval:export-rules",
