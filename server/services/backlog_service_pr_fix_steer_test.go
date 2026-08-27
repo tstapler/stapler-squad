@@ -177,11 +177,10 @@ func TestNextLastSteerReason_Delivered_AdvancesAndRecordsSessionUUID(t *testing.
 // ---------------------------------------------------------------------------
 
 func TestConfirmConflictChange_FirstTick_NotConfirmed(t *testing.T) {
-	last := reasonSignature{headers: []string{"## Failing CI checks"}}
 	state := conflictDebounceState{}
 	candidate := reasonSignature{headers: []string{"## Merge conflict", "## Failing CI checks"}}
 
-	confirmed, next := confirmConflictChange(candidate, last, "uuid-1", state)
+	confirmed, next := confirmConflictChange(candidate, "uuid-1", state)
 
 	require.False(t, confirmed)
 	require.NotNil(t, next.pending)
@@ -190,35 +189,32 @@ func TestConfirmConflictChange_FirstTick_NotConfirmed(t *testing.T) {
 }
 
 func TestConfirmConflictChange_SecondConsecutiveTick_Confirmed(t *testing.T) {
-	last := reasonSignature{headers: []string{"## Failing CI checks"}}
 	candidate := reasonSignature{headers: []string{"## Merge conflict", "## Failing CI checks"}}
-	_, pending := confirmConflictChange(candidate, last, "uuid-1", conflictDebounceState{})
+	_, pending := confirmConflictChange(candidate, "uuid-1", conflictDebounceState{})
 
-	confirmed, next := confirmConflictChange(candidate, last, "uuid-1", pending)
+	confirmed, next := confirmConflictChange(candidate, "uuid-1", pending)
 
 	require.True(t, confirmed)
 	require.Equal(t, conflictDebounceState{}, next)
 }
 
 func TestConfirmConflictChange_ConflictResolved_ClearsPending(t *testing.T) {
-	last := reasonSignature{headers: []string{"## Failing CI checks"}}
 	priorCandidate := reasonSignature{headers: []string{"## Merge conflict", "## Failing CI checks"}}
-	_, pending := confirmConflictChange(priorCandidate, last, "uuid-1", conflictDebounceState{})
+	_, pending := confirmConflictChange(priorCandidate, "uuid-1", conflictDebounceState{})
 	require.NotNil(t, pending.pending)
 
 	candidate := reasonSignature{headers: []string{"## Failing CI checks"}}
-	confirmed, next := confirmConflictChange(candidate, last, "uuid-1", pending)
+	confirmed, next := confirmConflictChange(candidate, "uuid-1", pending)
 
 	require.False(t, confirmed)
 	require.Equal(t, conflictDebounceState{}, next)
 }
 
 func TestConfirmConflictChange_SessionUUIDChanged_RestartsConfirmation(t *testing.T) {
-	last := reasonSignature{headers: []string{"## Failing CI checks"}}
 	candidate := reasonSignature{headers: []string{"## Merge conflict", "## Failing CI checks"}}
-	_, pending := confirmConflictChange(candidate, last, "uuid-1", conflictDebounceState{})
+	_, pending := confirmConflictChange(candidate, "uuid-1", conflictDebounceState{})
 
-	confirmed, next := confirmConflictChange(candidate, last, "uuid-2", pending)
+	confirmed, next := confirmConflictChange(candidate, "uuid-2", pending)
 
 	require.False(t, confirmed, "a session change must restart confirmation, not confirm")
 	require.NotNil(t, next.pending)

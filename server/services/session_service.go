@@ -887,6 +887,30 @@ func (s *SessionService) SessionProgram(sessionUUID string) (string, bool) {
 	return inst.Program, true
 }
 
+// IsReadyForSteer implements SessionSteerer. It gates an unattended PTY
+// write (e.g. PR-fix steering) on detection.StatusReady — the one signal
+// that means "idle at its own prompt, safe for a blind write" — as opposed
+// to detection.StatusIdle, which despite the name means a raw shell/vim
+// prompt, exactly the state where injected text would be misread as a
+// literal command (the vulnerability this method exists to close). Any
+// case where readiness can't be confirmed (no live instance, no status
+// manager, no registered controller, or a queued/in-flight command) returns
+// false rather than assuming ready.
+func (s *SessionService) IsReadyForSteer(sessionUUID string) bool {
+	inst := s.FindLiveInstance(sessionUUID)
+	if inst == nil || s.statusManager == nil {
+		return false
+	}
+	info := s.statusManager.GetStatus(inst)
+	if !info.IsControllerActive || info.QueuedCommands > 0 {
+		return false
+	}
+	if ctrl, ok := s.statusManager.GetController(inst.Title); ok && ctrl != nil && ctrl.GetCurrentCommand() != nil {
+		return false
+	}
+	return info.ClaudeStatus == detection.StatusReady
+}
+
 // SteerActiveSession implements SessionSteerer, delegating to the same
 // steerInstance UpdateSession's SteerMessage handling uses.
 func (s *SessionService) SteerActiveSession(ctx context.Context, sessionUUID, message string) error {
@@ -3022,19 +3046,12 @@ func (s *SessionService) UpdateSession(
 }
 
 // steerInstance injects message into instance's active session. Autonomous
-// sessions keep the existing ClaudeController command-queue path (ADR-001);
+// sessions keep the existing ClaudeController command-queue path;
 // non-autonomous, Instance-backed sessions fall back to the same PTY send
-// primitive the MCP steer_session tool already uses (tools_terminal.go's
-// SendKeys fallback branch) so browser-originated steering reaches ordinary
-// backlog work/review sessions too, not just autonomous ones.
-//
-// steerInstance returns only plain fmt.Errorf-wrapped errors on every
-// branch — never a connect.NewError/connect.Code* — since SteerActiveSession
-// calls this in-process from BacklogService, which must not need to import
-// connectrpc.com/connect to interpret a delivery error. UpdateSession is the
-// sole caller that translates a steerInstance error into a connect.Code,
-// distinguishing a timeout (errors.Is(err, context.DeadlineExceeded)) from
-// any other delivery failure.
+// primitive the MCP steer_session tool already uses. Returns only plain
+// fmt.Errorf-wrapped errors — never connect.NewError/connect.Code* — since
+// SteerActiveSession calls this in-process from BacklogService; UpdateSession
+// is the sole caller that translates the error into a connect.Code.
 func (s *SessionService) steerInstance(ctx context.Context, instance *session.Instance, message string) error {
 	if instance.AutonomousMode {
 		controller := instance.GetController()
@@ -3042,13 +3059,9 @@ func (s *SessionService) steerInstance(ctx context.Context, instance *session.In
 			return fmt.Errorf("steer autonomous session %q: controller not started", instance.Title)
 		}
 
-		// Bound the PTY write the same way the sibling non-autonomous branch
-		// already bounds SendKeys: SendCommandImmediate's own ~5min internal
-		// timeout doesn't start protecting until after the raw PTY write
-		// already happened (session/pty_access.go's Write has no deadline),
-		// so a wedged/dead controller can hang this call indefinitely —
-		// which would leak steerActiveSessionForPRFix's steerInFlight guard
-		// forever (its deferred Delete never runs).
+		// SendCommandImmediate's own ~5min internal timeout doesn't protect
+		// against the raw PTY write itself hanging, which would leak
+		// steerActiveSessionForPRFix's steerInFlight guard forever.
 		errCh := make(chan error, 1)
 		go func() {
 			_, sendErr := controller.SendCommandImmediate(message + "\r")
@@ -3070,14 +3083,9 @@ func (s *SessionService) steerInstance(ctx context.Context, instance *session.In
 		return nil
 	}
 
-	// Non-autonomous, Instance-backed sessions get the same PTY send
-	// primitive the MCP steer_session tool already falls back to. Unlike the
-	// autonomous branch, a send failure IS returned to the caller so the UI
-	// can surface it (research/ux.md's Gap 2 error-state table).
-	//
-	// SendKeys is bounded with a timeout, mirroring terminal_service.go's
-	// WriteToSession — a browser click against a wedged/dead session must not
-	// hang this RPC handler goroutine forever.
+	// Non-autonomous sessions get the same PTY send primitive the MCP
+	// steer_session tool falls back to, bounded with a timeout so a browser
+	// click against a wedged/dead session can't hang this goroutine forever.
 	text := session.BuildSubmittableInput(message, true)
 	errCh := make(chan error, 1)
 	go func() { errCh <- instance.SendKeys(text) }()

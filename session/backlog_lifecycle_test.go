@@ -757,10 +757,18 @@ type fakePRFixSpawner struct {
 	lastFixContext string
 	err            error
 	onCall         func()
-	// hasActiveWorkSession backs HasActiveWorkSession. Defaults to false,
-	// matching every existing test's implicit "no active session" behavior
-	// (none of them set it).
-	hasActiveWorkSession bool
+	// hasActiveWorkSession backs HasActiveWorkSession's returned session.
+	// nil (default) matches every existing test's implicit "no active
+	// session" behavior (none of them set it).
+	hasActiveWorkSession *ItemSessionSummary
+	// hasActiveWorkSessionErr backs HasActiveWorkSession's returned error,
+	// exercising remediatePRFixWithBackoffGate's fail-open branch.
+	hasActiveWorkSessionErr error
+	// knownActiveReceived records the knownActive argument
+	// AutoReopenForPRFixWithKnownSession was called with, so a test can
+	// assert the caller actually threaded HasActiveWorkSession's result
+	// through instead of re-querying independently (TOCTOU fix).
+	knownActiveReceived *ItemSessionSummary
 }
 
 func (f *fakePRFixSpawner) AutoReopenForPRFix(ctx context.Context, itemID string, fixContext string) error {
@@ -773,9 +781,20 @@ func (f *fakePRFixSpawner) AutoReopenForPRFix(ctx context.Context, itemID string
 	return f.err
 }
 
+// AutoReopenForPRFixWithKnownSession implements PRFixSpawner's TOCTOU-safe
+// variant for tests — records knownActive, then delegates to
+// AutoReopenForPRFix for the rest of the recorded behavior.
+func (f *fakePRFixSpawner) AutoReopenForPRFixWithKnownSession(ctx context.Context, itemID, fixContext string, knownActive *ItemSessionSummary) error {
+	f.knownActiveReceived = knownActive
+	return f.AutoReopenForPRFix(ctx, itemID, fixContext)
+}
+
 // HasActiveWorkSession implements PRFixSpawner's query half for tests —
-// side-effect-free, just reports the configured hasActiveWorkSession value.
-func (f *fakePRFixSpawner) HasActiveWorkSession(ctx context.Context, itemID string) (bool, error) {
+// side-effect-free, just reports the configured fields.
+func (f *fakePRFixSpawner) HasActiveWorkSession(ctx context.Context, itemID string) (*ItemSessionSummary, error) {
+	if f.hasActiveWorkSessionErr != nil {
+		return nil, f.hasActiveWorkSessionErr
+	}
 	return f.hasActiveWorkSession, nil
 }
 
@@ -1507,6 +1526,68 @@ func TestReconcilePRPending_RespawnsFixSession_When_BackoffElapses(t *testing.T)
 
 	listener.ReconcilePRPending(ctx, er)
 	assert.Equal(t, 2, fakeSpawner.callCount, "once the backoff window has elapsed, the next tick must retry")
+}
+
+// TestRemediatePRFixWithBackoffGate_ThreadsHasActiveWorkSessionResult_IntoKnownSessionCall
+// is the TOCTOU-fix regression test (PR #645 Gate 2 review finding #1):
+// remediatePRFixWithBackoffGate must call AutoReopenForPRFixWithKnownSession
+// with the exact *ItemSessionSummary HasActiveWorkSession already resolved,
+// not re-derive it independently — proving the backoff-bypass decision and
+// the steer-vs-spawn decision share one query.
+func TestRemediatePRFixWithBackoffGate_ThreadsHasActiveWorkSessionResult_IntoKnownSessionCall(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	newPRPendingTestItem(t, storage, 9201)
+
+	listener := NewBacklogLifecycleListener(storage)
+	overridePRPendingChecker(t, listener, &fakePRPendingChecker{
+		status: &git.PRStatus{CIFailing: true, FeedbackText: "## Failing CI checks\n- build FAILED\n"},
+	})
+	knownActive := &ItemSessionSummary{SessionUUID: "known-active-uuid"}
+	fakeSpawner := &fakePRFixSpawner{hasActiveWorkSession: knownActive}
+	listener.SetPRFixSpawner(fakeSpawner)
+
+	listener.ReconcilePRPending(ctx, storage.repo)
+
+	require.Equal(t, 1, fakeSpawner.callCount, "an active-session item must take the steer path")
+	require.NotNil(t, fakeSpawner.knownActiveReceived, "AutoReopenForPRFixWithKnownSession must be called, not AutoReopenForPRFix")
+	assert.Equal(t, knownActive.SessionUUID, fakeSpawner.knownActiveReceived.SessionUUID, "the exact session HasActiveWorkSession resolved must be threaded through, not re-queried")
+}
+
+// TestRemediatePRFixWithBackoffGate_FallsThroughToBackoffGate_When_HasActiveWorkSessionErrors
+// exercises the fail-open branch (session/backlog_lifecycle_pr.go's
+// activeErr != nil case) — previously untested (server code review finding
+// #4): fakePRFixSpawner.HasActiveWorkSession always returned a nil error, so
+// this branch never ran. An error here must fall through to the normal
+// RemediationDue-gated path, not bypass backoff as if a session were active.
+func TestRemediatePRFixWithBackoffGate_FallsThroughToBackoffGate_When_HasActiveWorkSessionErrors(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	newPRPendingTestItem(t, storage, 9202)
+
+	listener := NewBacklogLifecycleListener(storage)
+	overridePRPendingChecker(t, listener, &fakePRPendingChecker{
+		status: &git.PRStatus{CIFailing: true, FeedbackText: "## Failing CI checks\n- build FAILED\n"},
+	})
+	fakeSpawner := &fakePRFixSpawner{hasActiveWorkSessionErr: errors.New("simulated ListItemSessions failure")}
+	listener.SetPRFixSpawner(fakeSpawner)
+
+	er := storage.repo
+	listener.ReconcilePRPending(ctx, er)
+	require.Equal(t, 1, fakeSpawner.callCount, "first tick must still attempt the fix via the due-gated fallback path")
+	assert.Nil(t, fakeSpawner.knownActiveReceived, "the fail-open path must call plain AutoReopenForPRFix, not the known-session variant")
+
+	// A second tick within the backoff window must still be gated — proving
+	// the HasActiveWorkSession error did not bypass RemediationDue the way a
+	// genuine active session legitimately does.
+	listener.ReconcilePRPending(ctx, er)
+	assert.Equal(t, 1, fakeSpawner.callCount, "an error resolving active-session state must NOT bypass the backoff gate")
 }
 
 // TestReconcilePRPending_ClosedWithoutMerge_DoesNotRespawn_When_BackoffNotDue

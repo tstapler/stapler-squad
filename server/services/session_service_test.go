@@ -1891,6 +1891,65 @@ func TestSessionService_SteerActiveSession_ReturnsErrorForUnknownUUID(t *testing
 	require.Error(t, err)
 }
 
+// --------------------------------------------------------------------------
+// IsReadyForSteer (PR #645 Gate 2 P1) — never assume ready when the
+// detection signal is unavailable.
+// --------------------------------------------------------------------------
+
+// TestSessionService_IsReadyForSteer_ReturnsFalseForUnknownUUID verifies the
+// not-live case degrades to false (matches SessionProgram's ok=false shape).
+func TestSessionService_IsReadyForSteer_ReturnsFalseForUnknownUUID(t *testing.T) {
+	t.Parallel()
+	fix := setupForkTestFixture(t)
+	t.Cleanup(fix.cleanup)
+
+	assert.False(t, fix.svc.IsReadyForSteer("no-such-session"))
+}
+
+// TestSessionService_IsReadyForSteer_ReturnsFalse_When_StatusManagerNotWired
+// verifies that a live instance with no statusManager wired (so readiness
+// genuinely can't be determined) returns false rather than assuming ready.
+func TestSessionService_IsReadyForSteer_ReturnsFalse_When_StatusManagerNotWired(t *testing.T) {
+	t.Parallel()
+	fix := setupForkTestFixture(t)
+	t.Cleanup(fix.cleanup)
+
+	inst := &session.Instance{
+		Title:       "no-status-manager-session",
+		Program:     "claude",
+		Permissions: session.GetManagedPermissions(),
+		CreatedAt:   time.Now(),
+		UpdatedAt:   time.Now(),
+	}
+	addInstanceToPoller(fix.poller, inst)
+
+	assert.False(t, fix.svc.IsReadyForSteer("no-status-manager-session"))
+}
+
+// TestSessionService_IsReadyForSteer_ReturnsFalse_When_ControllerNotRegistered
+// verifies the "unknown detection signal" case: a statusManager is wired but
+// no controller was ever registered for this instance's title (e.g. it never
+// started one). This must degrade to false, not true — the vulnerability
+// this method exists to close is exactly a PTY write with no confirmed idle
+// signal.
+func TestSessionService_IsReadyForSteer_ReturnsFalse_When_ControllerNotRegistered(t *testing.T) {
+	t.Parallel()
+	fix := setupForkTestFixture(t)
+	t.Cleanup(fix.cleanup)
+	fix.svc.SetStatusManager(session.NewInstanceStatusManager())
+
+	inst := &session.Instance{
+		Title:       "no-controller-session",
+		Program:     "claude",
+		Permissions: session.GetManagedPermissions(),
+		CreatedAt:   time.Now(),
+		UpdatedAt:   time.Now(),
+	}
+	addInstanceToPoller(fix.poller, inst)
+
+	assert.False(t, fix.svc.IsReadyForSteer("no-controller-session"))
+}
+
 // TestUpdateSession_SteerMessage_ExceedsMaxLength_ReturnsInvalidArgument verifies
 // that a steer_message longer than session.MaxSteerMessageLength is rejected with
 // InvalidArgument before any send is attempted, mirroring the Note field's

@@ -173,6 +173,62 @@ func TestAutoReopenForPRFix_ActiveWorkSession_DegradesToNotifyOnly_When_SessionP
 }
 
 // ---------------------------------------------------------------------------
+// Readiness gate (security: never blind-write fixContext into a busy pane)
+// ---------------------------------------------------------------------------
+
+// TestAutoReopenForPRFix_ActiveWorkSession_SteersWhenReady is the positive
+// case: mockSessionSteerer's IsReadyForSteer defaults to true, and every
+// steer-succeeds test in this file already exercises this path — this test
+// names the readiness precondition explicitly so a regression that starts
+// requiring readiness-check wiring doesn't silently rely only on the
+// implicit default.
+func TestAutoReopenForPRFix_ActiveWorkSession_SteersWhenReady(t *testing.T) {
+	t.Parallel()
+	svc, steerer, _ := newTestBacklogServiceForSteerIntegration(t, activeSessionUUIDPrimary, "claude")
+	itemID := createPRPendingItemWithActiveSession(t, svc.storage, activeSessionUUIDPrimary)
+
+	require.NoError(t, svc.AutoReopenForPRFix(context.Background(), itemID, ciOnlyFixContext))
+
+	require.Len(t, steerer.calls(), 1, "a ready session must be steered")
+}
+
+// TestAutoReopenForPRFix_ActiveWorkSession_DegradesToNotifyOnly_When_NotReadyForSteer
+// is the security-critical negative case (PR #645 Gate 2 P1): a session
+// reported busy/not-ready must never receive the raw, unauthenticated
+// fixContext PTY write — steering must degrade to the same notify-only
+// fallback used for a not-live session, without ever calling
+// SteerActiveSession.
+func TestAutoReopenForPRFix_ActiveWorkSession_DegradesToNotifyOnly_When_NotReadyForSteer(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	svc := NewBacklogService(storage, &mockSessionCreator{}, nil, nil, nil, nil)
+	steerer := &mockSessionSteerer{
+		programs: map[string]string{activeSessionUUIDPrimary: "claude"},
+		steerErr: map[string]error{},
+		notReady: map[string]bool{activeSessionUUIDPrimary: true},
+	}
+	svc.SetSessionSteerer(steerer)
+	bus := events.NewEventBus(4)
+	svc.SetEventBus(bus)
+	subCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ch, _ := bus.Subscribe(subCtx)
+	itemID := createPRPendingItemWithActiveSession(t, storage, activeSessionUUIDPrimary)
+
+	require.NoError(t, svc.AutoReopenForPRFix(context.Background(), itemID, ciOnlyFixContext))
+
+	select {
+	case ev := <-ch:
+		assert.Equal(t, events.EventNotification, ev.Type)
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected a notify-only notification when the session reports not-ready")
+	}
+	assert.Empty(t, steerer.calls(), "must never write fixContext into a session reported as not ready/busy")
+	assert.True(t, openStuckReasons(t, svc)[domain.StuckReasonRespawnBlockedActive])
+	requireItemStatus(t, storage, itemID, string(session.BacklogStatusPRPending))
+}
+
+// ---------------------------------------------------------------------------
 // Dedup + cooldown, including reason-change and session-change bypasses
 // ---------------------------------------------------------------------------
 

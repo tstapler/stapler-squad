@@ -251,6 +251,12 @@ type mockSessionSteerer struct {
 	programs   map[string]string // uuid -> program; absent = not live
 	steerErr   map[string]error  // uuid -> error SteerActiveSession returns
 	steerCalls []mockSteerCall
+	// notReady marks uuids whose IsReadyForSteer must return false. Absent
+	// (or a uuid not in the set) defaults to true — every existing test's
+	// implicit "the session is idle and ready" assumption, matching
+	// production's TestAutoReopenForPRFix_ActiveWorkSession_* fixture
+	// default (see requirement to keep those tests unchanged).
+	notReady map[string]bool
 }
 
 type mockSteerCall struct {
@@ -261,6 +267,12 @@ type mockSteerCall struct {
 func (m *mockSessionSteerer) SessionProgram(uuid string) (string, bool) {
 	p, ok := m.programs[uuid]
 	return p, ok
+}
+
+// IsReadyForSteer implements SessionSteerer. Defaults to true (ready) unless
+// uuid is explicitly marked in notReady — see that field's doc comment.
+func (m *mockSessionSteerer) IsReadyForSteer(uuid string) bool {
+	return !m.notReady[uuid]
 }
 
 func (m *mockSessionSteerer) SteerActiveSession(_ context.Context, uuid, message string) error {

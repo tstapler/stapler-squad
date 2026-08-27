@@ -83,6 +83,12 @@ type SessionStopper interface {
 // not wired, mirroring SessionStopper.
 type SessionSteerer interface {
 	SessionProgram(sessionUUID string) (program string, ok bool)
+	// IsReadyForSteer reports whether sessionUUID's pane is confirmed idle
+	// and safe for an unattended PTY write. False — including when
+	// readiness can't be determined — means the caller must not steer (see
+	// *SessionService.IsReadyForSteer's doc comment for why "unknown" must
+	// never default to true here).
+	IsReadyForSteer(sessionUUID string) bool
 	SteerActiveSession(ctx context.Context, sessionUUID, message string) error
 }
 

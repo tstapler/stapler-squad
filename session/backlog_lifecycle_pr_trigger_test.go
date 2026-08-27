@@ -250,7 +250,7 @@ func TestReconcilePRPending_should_SteerOnEveryTick_When_ActiveSessionPresentEve
 	overridePRPendingChecker(t, listener, &fakePRPendingChecker{
 		status: &git.PRStatus{HasConflicts: true, FeedbackText: "## Merge conflict\nconflict details\n"},
 	})
-	fakeSpawner := &fakePRFixSpawner{hasActiveWorkSession: true}
+	fakeSpawner := &fakePRFixSpawner{hasActiveWorkSession: &ItemSessionSummary{SessionUUID: "active-work-uuid"}}
 	listener.SetPRFixSpawner(fakeSpawner)
 
 	er := storage.repo
