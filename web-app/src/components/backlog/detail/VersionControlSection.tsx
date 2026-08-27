@@ -1,5 +1,6 @@
 "use client";
 
+import type { MouseEvent } from "react";
 import type { BacklogItem } from "@/lib/hooks/useBacklogService";
 import type { VcsWidgetData } from "@/lib/vcs/types";
 import { CollapsibleSection } from "@/components/ui/Collapsible";
@@ -12,8 +13,8 @@ export interface VersionControlSectionProps {
   activeSessionCount: number;
   worktreePath: string | undefined;
   defaultExpanded: boolean;
-  onViewDiff: () => void;
-  onBrowseFiles: () => void;
+  onViewDiff: (e: MouseEvent<HTMLElement>) => void;
+  onBrowseFiles: (e: MouseEvent<HTMLElement>) => void;
 }
 
 /**

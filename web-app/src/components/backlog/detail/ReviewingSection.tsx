@@ -1,5 +1,6 @@
 "use client";
 
+import type { MouseEvent } from "react";
 import type { BacklogItem, LinkedSession } from "@/lib/hooks/useBacklogService";
 import { CollapsibleSection } from "@/components/ui/Collapsible";
 import { GateVerdictBox } from "../GateVerdictBox";
@@ -11,7 +12,7 @@ export interface ReviewingSectionProps {
   workSession: LinkedSession | undefined;
   actionLoading: string | null;
   defaultExpanded: boolean;
-  onViewChanges: () => void;
+  onViewChanges: (e: MouseEvent<HTMLElement>) => void;
   onGateApprove: () => Promise<void>;
   onGateReopen: (feedback: string) => Promise<void>;
   onGateOverride: (reason: string) => Promise<void>;
