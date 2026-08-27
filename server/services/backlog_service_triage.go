@@ -615,6 +615,19 @@ func (s *BacklogService) SpawnSessionFromItem(
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to get backlog item: %w", err))
 	}
 
+	// 1a. Repo path required, mirroring TriggerTriage's identical step 3 check.
+	// CreateBacklogItem never requires repo_path, and TransitionBacklogItemStatus's
+	// guards never check it either (session/domain/backlog.go's
+	// BacklogItemTransitionInput has no RepoPath field), so an item can reach
+	// Ready/spawn-eligible status with RepoPath still "" -- without this check, that
+	// silently reaches CreateBacklogWorktree/ResolveSessionPath with an empty path
+	// (see CreateBacklogWorktree's own guard in session/instance_worktree.go for the
+	// corruption mechanism this closes).
+	if item.RepoPath == "" {
+		return nil, connect.NewError(connect.CodeFailedPrecondition,
+			fmt.Errorf("set repo_path before spawning a session"))
+	}
+
 	// 1b. Atomic check-and-set: only one SpawnSessionFromItem call for this item may be
 	// in flight at a time. Without this, two concurrent calls (e.g. AutoReopenAfterFailedReview
 	// / AutoRespawnAutonomousWork / AutoReopenForPRFix all funnel here, and any of them can
