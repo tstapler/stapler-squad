@@ -70,10 +70,10 @@ interface AttemptColumnMoveDeps {
 }
 
 /**
- * Decides and executes one column-move attempt (drag-drop or, from Phase 4, MoveToMenu --
- * both will route through this same function once it's extracted to a shared module). Lives
- * inline in SessionBoard.tsx for now per the plan: extraction to a shared file happens in
- * Phase 4 when MoveToMenu needs the identical logic.
+ * Decides and executes one column-move attempt. Shared by both call sites (Task 4.1.1a):
+ * `handleDragEnd` calls it directly, and `attemptMoveViaMenu` wraps it for MoveToMenu -- so a
+ * drag and an equivalent menu selection always converge on identical legality checks,
+ * confirmation prompts, and DragOutcome results.
  */
 export async function attemptColumnMove(
   session: Session,
