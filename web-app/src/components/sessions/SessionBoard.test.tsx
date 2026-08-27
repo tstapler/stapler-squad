@@ -1,5 +1,5 @@
 import React from "react";
-import { render, screen, within } from "@testing-library/react";
+import { render, screen, within, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { SessionBoard } from "./SessionBoard";
 import { SessionStatus, SubStatus } from "@/gen/session/v1/types_pb";
@@ -40,13 +40,17 @@ jest.mock("./SessionCard", () => ({
 }));
 
 // SessionBoard calls useSessionService() directly (for the drag-drop mutation path added in
-// Phase 3) — mock the module rather than requiring a Redux <Provider>/WebSocket transport in
-// these column-bucketing/virtualization tests, matching the established pattern (see
-// SessionMonitor.test.tsx, BacklogItemDetail.test.tsx).
+// Phase 3, and for bulk Pause/Resume, Task 6.3.1e) — mock the module rather than requiring a
+// Redux <Provider>/WebSocket transport in these column-bucketing/virtualization tests,
+// matching the established pattern (see SessionMonitor.test.tsx, BacklogItemDetail.test.tsx).
+// Module-level (not per-call inline) so tests can assert on these mocks directly, matching
+// SessionBoard.dragdrop.test.tsx's updateSessionMock/resumeHibernatedSessionMock pattern.
+const updateSessionMock = jest.fn().mockResolvedValue({ id: "s1" } as Session);
+const resumeHibernatedSessionMock = jest.fn().mockResolvedValue({ id: "s1" } as Session);
 jest.mock("@/lib/hooks/useSessionService", () => ({
   useSessionService: () => ({
-    updateSession: jest.fn(),
-    resumeHibernatedSession: jest.fn(),
+    updateSession: updateSessionMock,
+    resumeHibernatedSession: resumeHibernatedSessionMock,
   }),
 }));
 
@@ -86,6 +90,8 @@ afterAll(() => {
 // test's grouping selection can't leak into the next.
 beforeEach(() => {
   localStorage.clear();
+  updateSessionMock.mockClear();
+  resumeHibernatedSessionMock.mockClear();
 });
 
 function makeSession(overrides: Partial<Session> & { id: string; title: string }): Session {
@@ -325,17 +331,37 @@ describe("SessionBoard — cross-column bulk select (Task 6.3.1a-b, AC8)", () =>
   });
 
   it("onPauseAll_should_CallUpdateSessionOncePerSelectedId_When_BulkPauseTriggeredAcrossColumns", async () => {
+    // Bulk Pause calls updateSession directly (Task 6.3.1e) rather than the void-returning
+    // onPauseSession prop, so real per-session success/failure can be tracked (AC8).
     const user = userEvent.setup();
-    const onPauseSession = jest.fn();
-    render(<SessionBoard sessions={sessions} onPauseSession={onPauseSession} />);
+    render(<SessionBoard sessions={sessions} />);
 
     await user.click(screen.getByTestId("board-select-mode-toggle"));
     await user.click(screen.getByTestId("select-toggle-sess-1"));
     await user.click(screen.getByTestId("select-toggle-sess-2"));
     await user.click(screen.getByTestId("bulk-pause-button"));
 
-    expect(onPauseSession).toHaveBeenCalledTimes(2);
-    expect(onPauseSession).toHaveBeenCalledWith("sess-1");
-    expect(onPauseSession).toHaveBeenCalledWith("sess-2");
+    await waitFor(() => expect(updateSessionMock).toHaveBeenCalledTimes(2));
+    expect(updateSessionMock).toHaveBeenCalledWith("sess-1", { status: SessionStatus.PAUSED });
+    expect(updateSessionMock).toHaveBeenCalledWith("sess-2", { status: SessionStatus.PAUSED });
+  });
+
+  it("onPauseAll_should_ReportPartialFailure_When_OneOfTwoSelectedSessionsFailsToPause", async () => {
+    updateSessionMock.mockImplementation((id: string) =>
+      id === "sess-2" ? Promise.resolve(null) : Promise.resolve({ id } as Session)
+    );
+    const user = userEvent.setup();
+    render(<SessionBoard sessions={sessions} />);
+
+    await user.click(screen.getByTestId("board-select-mode-toggle"));
+    await user.click(screen.getByTestId("select-toggle-sess-1"));
+    await user.click(screen.getByTestId("select-toggle-sess-2"));
+    await user.click(screen.getByTestId("bulk-pause-button"));
+
+    await waitFor(() =>
+      expect(screen.getByTestId("board-toast")).toHaveTextContent(
+        "Paused 1 of 2 selected sessions — couldn't pause: Needs review one."
+      )
+    );
   });
 });

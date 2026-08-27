@@ -188,7 +188,6 @@ export function SessionBoard({
   onDeleteSession,
   onPauseSession,
   onResumeSession,
-  onDirectResumeSession,
   onCloneSession,
   onNewWorkspaceSession,
   onRenameSession,
@@ -257,10 +256,18 @@ export function SessionBoard({
     [selectedSessions, filteredSessionIds]
   );
 
-  // Moved above its first use (handlePauseAll/handleResumeAll below) -- declared again lower
-  // in the file previously, which is unreachable dead code now that it's hoisted up here.
+  // Moved above their first use (handlePauseAll/handleResumeAll below) -- declared again
+  // lower in the file previously, which is unreachable dead code now that it's hoisted here.
   const [liveMessage, setLiveMessage] = useState("");
   const announceLive = useCallback((message: string) => setLiveMessage(message), []);
+
+  const [toast, setToast] = useState<{ id: number; message: string; kind: "error" | "warning" } | null>(null);
+  const toastIdRef = useRef(0);
+  const showToast = useCallback((message: string, kind: "error" | "warning") => {
+    toastIdRef.current += 1;
+    const id = toastIdRef.current;
+    setToast({ id, message, kind });
+  }, []);
 
   const handleToggleSelectMode = useCallback(() => {
     setSelectMode((prev) => {
@@ -291,31 +298,71 @@ export function SessionBoard({
     setSelectMode(false);
   }, []);
 
+  // Bulk Pause/Resume call updateSession/resumeHibernatedSession directly (the same RPCs
+  // attemptColumnMove's drag path already uses for these exact transitions) rather than the
+  // void-returning onPauseSession/onResumeSession props -- those props report no result at
+  // all, which made real partial-failure tracking impossible even though AC8 explicitly
+  // requires it. Promise.all + a per-session ok flag gives genuine per-session feedback.
   const handlePauseAll = useCallback(() => {
-    if (!onPauseSession) return;
-    const count = activeSelection.size;
-    activeSelection.forEach((id) => onPauseSession(id));
-    announceLive(`${count} session${count !== 1 ? "s" : ""} paused`);
+    const ids = Array.from(activeSelection);
+    if (ids.length === 0) return;
     setSelectedSessions(new Set());
     setSelectMode(false);
-  }, [onPauseSession, activeSelection, announceLive]);
+    void (async () => {
+      const results = await Promise.all(
+        ids.map(async (id) => {
+          const title = sessionById.get(id)?.title ?? id;
+          const result = await updateSession(id, { status: SessionStatus.PAUSED });
+          return { title, ok: result !== null };
+        })
+      );
+      const failed = results.filter((r) => !r.ok);
+      if (failed.length === 0) {
+        announceLive(`${results.length} session${results.length !== 1 ? "s" : ""} paused`);
+      } else if (failed.length === results.length) {
+        const message = `Couldn't pause ${failed.length} selected session${failed.length !== 1 ? "s" : ""}: ${failed.map((f) => f.title).join(", ")}.`;
+        showToast(message, "error");
+        announceLive(message);
+      } else {
+        const message = `Paused ${results.length - failed.length} of ${results.length} selected sessions — couldn't pause: ${failed.map((f) => f.title).join(", ")}.`;
+        showToast(message, "warning");
+        announceLive(message);
+      }
+    })();
+  }, [activeSelection, sessionById, updateSession, announceLive, showToast]);
 
   const handleResumeAll = useCallback(() => {
-    if (!onDirectResumeSession && !onResumeSession) return;
-    const count = activeSelection.size;
-    activeSelection.forEach((id) => {
-      const session = sessionById.get(id);
-      if (!session) return;
-      if (onDirectResumeSession) {
-        onDirectResumeSession(session);
-      } else {
-        onResumeSession?.(session);
-      }
-    });
-    announceLive(`${count} session${count !== 1 ? "s" : ""} resumed`);
+    const ids = Array.from(activeSelection);
+    if (ids.length === 0) return;
     setSelectedSessions(new Set());
     setSelectMode(false);
-  }, [onDirectResumeSession, onResumeSession, activeSelection, sessionById, announceLive]);
+    void (async () => {
+      const results = await Promise.all(
+        ids.map(async (id) => {
+          const session = sessionById.get(id);
+          const title = session?.title ?? id;
+          if (!session) return { title, ok: false };
+          const result =
+            session.status === SessionStatus.HIBERNATED
+              ? await resumeHibernatedSession(id)
+              : await updateSession(id, { status: SessionStatus.ACTIVE });
+          return { title, ok: result !== null };
+        })
+      );
+      const failed = results.filter((r) => !r.ok);
+      if (failed.length === 0) {
+        announceLive(`${results.length} session${results.length !== 1 ? "s" : ""} resumed`);
+      } else if (failed.length === results.length) {
+        const message = `Couldn't resume ${failed.length} selected session${failed.length !== 1 ? "s" : ""}: ${failed.map((f) => f.title).join(", ")}.`;
+        showToast(message, "error");
+        announceLive(message);
+      } else {
+        const message = `Resumed ${results.length - failed.length} of ${results.length} selected sessions — couldn't resume: ${failed.map((f) => f.title).join(", ")}.`;
+        showToast(message, "warning");
+        announceLive(message);
+      }
+    })();
+  }, [activeSelection, sessionById, updateSession, resumeHibernatedSession, announceLive, showToast]);
 
   const handleDeleteAll = useCallback(() => {
     if (!onDeleteSession) return;
@@ -461,14 +508,8 @@ export function SessionBoard({
   const buckets = useMemo(() => bucketRow(filteredSessions), [bucketRow, filteredSessions]);
 
   // --- Toast / announcement surface -----------------------------------------------------
-  const [toast, setToast] = useState<{ id: number; message: string; kind: "error" | "warning" } | null>(null);
-  const toastIdRef = useRef(0);
-
-  const showToast = useCallback((message: string, kind: "error" | "warning") => {
-    toastIdRef.current += 1;
-    const id = toastIdRef.current;
-    setToast({ id, message, kind });
-  }, []);
+  // (toast/showToast/toastIdRef are declared earlier in this component, before their first
+  // use in handlePauseAll/handleResumeAll.)
 
   useEffect(() => {
     if (!toast) return;
@@ -505,7 +546,7 @@ export function SessionBoard({
           return;
         }
         case "rejected_by_server": {
-          const message = `"${session?.title ?? "Session"}" already changed state — showing its current status.`;
+          const message = `Couldn't move "${session?.title ?? "session"}": ${outcome.reason}`;
           showToast(message, "error");
           announceLive(message);
           return;

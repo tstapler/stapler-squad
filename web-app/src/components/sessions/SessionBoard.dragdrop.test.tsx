@@ -5,6 +5,8 @@ import { Code } from "@connectrpc/connect";
 import { SessionStatus, SubStatus } from "@/gen/session/v1/types_pb";
 import type { Session } from "@/gen/session/v1/types_pb";
 import { attemptColumnMove, SessionBoard } from "./SessionBoard";
+import { store } from "@/lib/store/store";
+import { setError, setErrorCode } from "@/lib/store/sessionsSlice";
 
 // SessionCard pulls in a lot of machinery irrelevant to drag/drop wiring -- same stub
 // strategy as SessionBoard.test.tsx. Renders a selection toggle button when selectMode is
@@ -340,6 +342,36 @@ describe("SessionBoard — onDragEnd wiring", () => {
     expect(screen.getByTestId("board-toast")).toHaveTextContent(
       "Can't move a Complete session to Needs Review."
     );
+  });
+
+  it("onDragEnd_should_ShowSpecificServerRejectionReason_When_UpdateSessionResolvesNull", async () => {
+    // updateSession resolving null (not rejecting) is how useSessionService reports a
+    // server-side rejection -- the real failure detail lives in the sessions Redux slice,
+    // which attemptColumnMove reads via getSessionsErrorState. The toast must surface that
+    // specific reason, not a generic "already changed state" message (AC5's "specific-reason"
+    // requirement).
+    updateSessionMock.mockResolvedValue(null);
+    store.dispatch(setError("session is already stopped"));
+    store.dispatch(setErrorCode(Code.FailedPrecondition));
+
+    const running: Session[] = [
+      makeSession({ id: "sess-789", title: "Race session", status: SessionStatus.ACTIVE }),
+    ];
+    render(<SessionBoard sessions={running} />);
+
+    await act(async () => {
+      captured.onDragStart?.(dragEvent("__default__:sess-789", null));
+    });
+    await act(async () => {
+      await captured.onDragEnd?.(dragEvent("__default__:sess-789", "__default__:paused"));
+    });
+
+    expect(screen.getByTestId("board-toast")).toHaveTextContent(
+      'Couldn\'t move "Race session": session is already stopped'
+    );
+
+    store.dispatch(setError(null));
+    store.dispatch(setErrorCode(undefined));
   });
 
   it("dragCancel_should_ProduceCancelledOutcome_When_EscapeInterruptsDrag", async () => {
