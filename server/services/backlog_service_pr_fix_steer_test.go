@@ -334,6 +334,26 @@ func TestHumanReadableReasonSet_ReviewHeader_StripsAuthorToGenericPhrase(t *test
 	require.Equal(t, "a blocking review", got)
 }
 
+// TestHumanReadableReasonSet_MultipleReasons_NamesTheSet and
+// TestHumanReadableReasonSet_HeaderlessSignature_FallsBackToGenericPhrase are
+// plan.md Task 5.3.1g's literal test names for coverage
+// TestHumanReadableReasonSet_TwoHeaders_JoinedWithAnd and
+// TestHumanReadableReasonSet_NoHeaders_FallsBackToGenericPhrase above already
+// provide — kept as their own named tests so a `go test -run` against either
+// exact name (per this repo's naming-as-documentation convention) finds
+// something.
+func TestHumanReadableReasonSet_MultipleReasons_NamesTheSet(t *testing.T) {
+	got := humanReadableReasonSet(reasonSignature{headers: []string{"## Merge conflict", "## Failing CI checks"}})
+
+	require.Equal(t, "a merge conflict and failing CI", got, "both reasons must be named, not just the first")
+}
+
+func TestHumanReadableReasonSet_HeaderlessSignature_FallsBackToGenericPhrase(t *testing.T) {
+	got := humanReadableReasonSet(reasonSignature{})
+
+	require.Equal(t, "a PR problem", got)
+}
+
 // TestHumanReadableReasonSet_HeaderStrings_MatchPRStatusRender pins
 // humanReadableReasonSet's switch cases against PRStatus.render()'s actual
 // output, mirroring TestBuildReasonSignature_HeaderStrings_MatchPRStatusRender

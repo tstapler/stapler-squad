@@ -236,6 +236,46 @@ func (m *mockSessionStopper) ArchiveSessionByUUID(_ context.Context, uuid string
 	return nil
 }
 
+// mockSessionSteerer implements SessionSteerer for tests, mirroring
+// mockSessionStopper's shape. mu guards steerCalls against concurrent
+// SteerActiveSession calls (needed by the steerInFlight race test,
+// server/services/backlog_service_pr_fix_steer_integration_test.go) — programs
+// and steerErr are only ever written at construction time, so reads of those
+// two maps need no lock.
+type mockSessionSteerer struct {
+	mu         sync.Mutex
+	programs   map[string]string // uuid -> program; absent = not live
+	steerErr   map[string]error  // uuid -> error SteerActiveSession returns
+	steerCalls []mockSteerCall
+}
+
+type mockSteerCall struct {
+	uuid    string
+	message string
+}
+
+func (m *mockSessionSteerer) SessionProgram(uuid string) (string, bool) {
+	p, ok := m.programs[uuid]
+	return p, ok
+}
+
+func (m *mockSessionSteerer) SteerActiveSession(_ context.Context, uuid, message string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.steerCalls = append(m.steerCalls, mockSteerCall{uuid: uuid, message: message})
+	return m.steerErr[uuid]
+}
+
+// calls returns a snapshot copy of steerCalls, safe to read concurrently with
+// in-flight SteerActiveSession calls.
+func (m *mockSessionSteerer) calls() []mockSteerCall {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]mockSteerCall, len(m.steerCalls))
+	copy(out, m.steerCalls)
+	return out
+}
+
 // fakeAutonomousDriverStarter records StartAutonomousDriverForInstance calls for inspection.
 type fakeAutonomousDriverStarter struct {
 	calls []*session.Instance
