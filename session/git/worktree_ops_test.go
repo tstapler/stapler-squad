@@ -431,6 +431,223 @@ func TestSetupNewWorktree_SelfHeals_When_ConcurrentSpawnsRaceOnBranchCreate(t *t
 	assert.True(t, strings.Contains(string(out), branchName), "branch must exist once the race resolves")
 }
 
+// isWorktreeAddDashBCall reports whether a recorded gitSpyRunCall is setupNewWorktree's
+// "git worktree add -b <branch> <path> <commit>" call, as opposed to the unconditional
+// "worktree remove -f" cleanup call or a "rev-parse HEAD" call that also route through the
+// same spy.
+func isWorktreeAddDashBCall(call gitSpyRunCall) bool {
+	return len(call.args) >= 3 && call.args[0] == "worktree" && call.args[1] == "add" && call.args[2] == "-b"
+}
+
+// TestSetupNewWorktree_SelfHeals_When_WorktreeAddFailsWithUnrecognizedError is the
+// deterministic regression test for Ground-Truth Re-Query (ADR-001) at setupNewWorktree's
+// layer: an error string the old strings.Contains("already exists") check would NOT have
+// matched (git's real "signal: killed" message for a timeout-killed subprocess, confirmed
+// in research/features.md) must still self-heal when the branch was actually created by a
+// race winner at that exact moment — proving the self-heal decision no longer depends on
+// err.Error() content at all.
+func TestSetupNewWorktree_SelfHeals_When_WorktreeAddFailsWithUnrecognizedError(t *testing.T) {
+	t.Parallel()
+	repoDir := setupTestRepo(t)
+	branchName := "backlog/unrecognized-error-layer1"
+
+	spy := &gitSpyCommandRunner{}
+	spy.runFunc = func() ([]byte, error) {
+		call := spy.runCalls[len(spy.runCalls)-1]
+		if !isWorktreeAddDashBCall(call) {
+			return nil, nil
+		}
+		// Simulate the race winner completing at the exact instant our "subprocess"
+		// would have run.
+		cmd := safeexec.CommandContext(context.Background(), "git", "-C", repoDir, "branch", branchName)
+		require.NoError(t, cmd.Run())
+		return nil, errors.New("signal: killed")
+	}
+
+	wt, _, err := NewGitWorktreeWithBranch(repoDir, "test-unrecognized-error-layer1", branchName, WithCommandRunner(spy))
+	require.NoError(t, err)
+
+	err = wt.setupNewWorktree()
+	require.NoError(t, err, "must self-heal on an error string neither old literal matched, since the branch now exists")
+	defer func() { _ = wt.Cleanup() }()
+}
+
+// TestSetupNewWorktree_SelfHeals_When_BranchCreatedByDelayedRaceWinner is the pre-mortem
+// Failure #5 addendum: the happy-path test above creates the branch synchronously before
+// returning the error, so branchExistsAfterAddFailure's very first check already succeeds
+// and the retry loop's actual looping/backoff behavior is never exercised. This test delays
+// branch creation until after the loop's first two checks would have observed "not found",
+// so it only passes if the loop genuinely retries rather than checking once.
+func TestSetupNewWorktree_SelfHeals_When_BranchCreatedByDelayedRaceWinner(t *testing.T) {
+	t.Parallel()
+	repoDir := setupTestRepo(t)
+	branchName := "backlog/delayed-race-winner-layer1"
+
+	spy := &gitSpyCommandRunner{}
+	spy.runFunc = func() ([]byte, error) {
+		call := spy.runCalls[len(spy.runCalls)-1]
+		if !isWorktreeAddDashBCall(call) {
+			return nil, nil
+		}
+		go func() {
+			// Past the loop's first two checks (attempt 0 has no pre-sleep; attempt 1
+			// sleeps once) but well within its total budget.
+			time.Sleep(2 * worktreeAddRetryDelay)
+			cmd := safeexec.CommandContext(context.Background(), "git", "-C", repoDir, "branch", branchName)
+			_ = cmd.Run()
+		}()
+		return nil, errors.New("signal: killed")
+	}
+
+	wt, _, err := NewGitWorktreeWithBranch(repoDir, "test-delayed-race-winner-layer1", branchName, WithCommandRunner(spy))
+	require.NoError(t, err)
+
+	err = wt.setupNewWorktree()
+	require.NoError(t, err, "must self-heal once the delayed race winner's branch appears within the retry window")
+	defer func() { _ = wt.Cleanup() }()
+}
+
+// TestSetupNewWorktree_HardFails_When_WorktreeAddErrorsAndBranchStillDoesNotExist is Story
+// 1.1.1's negative case: Ground-Truth Re-Query must not spuriously mask a genuine failure
+// (disk full, permissions) by self-healing when the branch never actually appears.
+func TestSetupNewWorktree_HardFails_When_WorktreeAddErrorsAndBranchStillDoesNotExist(t *testing.T) {
+	t.Parallel()
+	repoDir := setupTestRepo(t)
+	branchName := "backlog/never-created-layer1"
+
+	spy := &gitSpyCommandRunner{}
+	spy.runFunc = func() ([]byte, error) {
+		call := spy.runCalls[len(spy.runCalls)-1]
+		if !isWorktreeAddDashBCall(call) {
+			return nil, nil
+		}
+		return nil, errors.New("signal: killed")
+	}
+
+	wt, _, err := NewGitWorktreeWithBranch(repoDir, "test-never-created-layer1", branchName, WithCommandRunner(spy))
+	require.NoError(t, err)
+
+	err = wt.setupNewWorktree()
+	require.Error(t, err, "must not self-heal when the branch genuinely never appears")
+	assert.Contains(t, err.Error(), "failed to create worktree from commit")
+}
+
+// isWorktreeAddNoBranchCall reports whether a recorded gitSpyRunCall is
+// setupFromExistingBranch's "git worktree add <path> <branch>" call (no "-b"), as opposed
+// to the "worktree unlock"/"worktree remove -f" cleanup calls or a "worktree list
+// --porcelain" call that also route through the same spy.
+func isWorktreeAddNoBranchCall(call gitSpyRunCall) bool {
+	return len(call.args) == 4 && call.args[0] == "worktree" && call.args[1] == "add"
+}
+
+func isWorktreeListCall(call gitSpyRunCall) bool {
+	return len(call.args) >= 2 && call.args[0] == "worktree" && call.args[1] == "list"
+}
+
+// worktreeListPorcelainFor synthesizes a 'git worktree list --porcelain' response
+// reporting branchName checked out at path.
+func worktreeListPorcelainFor(path, branchName string) []byte {
+	return []byte(fmt.Sprintf("worktree %s\nHEAD 0000000000000000000000000000000000000000\nbranch refs/heads/%s\n", path, branchName))
+}
+
+// TestSetupFromExistingBranch_SelfHeals_When_WorktreeAddFailsWithUnrecognizedError is the
+// deterministic regression test for Ground-Truth Re-Query (ADR-001) at
+// setupFromExistingBranch's layer: an error string neither of the old
+// "already checked out"/"already used by worktree" literals would have matched must still
+// self-heal by adopting the winner's worktree path once 'worktree list --porcelain' reports
+// it registered there.
+func TestSetupFromExistingBranch_SelfHeals_When_WorktreeAddFailsWithUnrecognizedError(t *testing.T) {
+	t.Parallel()
+	repoDir := setupTestRepo(t)
+	branchName := "backlog/unrecognized-error-layer2"
+	winnerPath := CanonicalizeWorktreePath(t.TempDir())
+
+	spy := &gitSpyCommandRunner{}
+	spy.runFunc = func() ([]byte, error) {
+		call := spy.runCalls[len(spy.runCalls)-1]
+		switch {
+		case isWorktreeAddNoBranchCall(call):
+			return nil, errors.New("signal: killed")
+		case isWorktreeListCall(call):
+			return worktreeListPorcelainFor(winnerPath, branchName), nil
+		default:
+			return nil, nil
+		}
+	}
+
+	wt := NewGitWorktreeFromStorageWithExecutor(repoDir, filepath.Join(t.TempDir(), "loser-worktree"), "test-unrecognized-error-layer2", branchName, "", WithCommandRunner(spy))
+
+	err := wt.setupFromExistingBranch()
+	require.NoError(t, err, "must self-heal by adopting the winner's registered worktree path")
+	assert.Equal(t, winnerPath, wt.worktreePath)
+}
+
+// TestSetupFromExistingBranch_SelfHeals_When_WorktreeRegisteredByDelayedRaceWinner is the
+// pre-mortem Failure #5 addendum for layer 2: the happy-path test above reports the winner
+// registered on the very first 'worktree list --porcelain' call, so
+// findLiveWorktreeForBranch's retry loop is never actually exercised. This test reports
+// "not found" for the first two calls and only registers the winner on the third, so it
+// only passes if the loop genuinely retries.
+func TestSetupFromExistingBranch_SelfHeals_When_WorktreeRegisteredByDelayedRaceWinner(t *testing.T) {
+	t.Parallel()
+	repoDir := setupTestRepo(t)
+	branchName := "backlog/delayed-race-winner-layer2"
+	winnerPath := CanonicalizeWorktreePath(t.TempDir())
+
+	spy := &gitSpyCommandRunner{}
+	listCalls := 0
+	spy.runFunc = func() ([]byte, error) {
+		call := spy.runCalls[len(spy.runCalls)-1]
+		switch {
+		case isWorktreeAddNoBranchCall(call):
+			return nil, errors.New("signal: killed")
+		case isWorktreeListCall(call):
+			listCalls++
+			if listCalls < 3 {
+				return []byte(""), nil
+			}
+			return worktreeListPorcelainFor(winnerPath, branchName), nil
+		default:
+			return nil, nil
+		}
+	}
+
+	wt := NewGitWorktreeFromStorageWithExecutor(repoDir, filepath.Join(t.TempDir(), "loser-worktree"), "test-delayed-race-winner-layer2", branchName, "", WithCommandRunner(spy))
+
+	err := wt.setupFromExistingBranch()
+	require.NoError(t, err, "must self-heal once the delayed race winner's registration appears within the retry window")
+	assert.Equal(t, winnerPath, wt.worktreePath)
+	assert.GreaterOrEqual(t, listCalls, 3, "must have actually retried, not just checked once")
+}
+
+// TestSetupFromExistingBranch_HardFails_When_WorktreeAddErrorsAndBranchNotFoundAnywhere is
+// Story 1.1.2's negative case: the unconditional re-query must still correctly hard-fail
+// when the branch genuinely isn't registered to any worktree.
+func TestSetupFromExistingBranch_HardFails_When_WorktreeAddErrorsAndBranchNotFoundAnywhere(t *testing.T) {
+	t.Parallel()
+	repoDir := setupTestRepo(t)
+	branchName := "backlog/never-registered-layer2"
+
+	spy := &gitSpyCommandRunner{}
+	spy.runFunc = func() ([]byte, error) {
+		call := spy.runCalls[len(spy.runCalls)-1]
+		switch {
+		case isWorktreeAddNoBranchCall(call):
+			return nil, errors.New("signal: killed")
+		case isWorktreeListCall(call):
+			return []byte(""), nil
+		default:
+			return nil, nil
+		}
+	}
+
+	wt := NewGitWorktreeFromStorageWithExecutor(repoDir, filepath.Join(t.TempDir(), "loser-worktree"), "test-never-registered-layer2", branchName, "", WithCommandRunner(spy))
+
+	err := wt.setupFromExistingBranch()
+	require.Error(t, err, "must not self-heal when the branch is genuinely registered nowhere")
+	assert.Contains(t, err.Error(), "failed to create worktree from branch")
+}
+
 // TestSetup_SerializesConcurrentWorktreeCreation_When_MultipleGoroutinesRaceOnSameRepo models the
 // real-world failure this fix addresses: several independent worktree creations (e.g. multiple
 // backlog-triage spawns, or duplicate server processes) hitting the same repo's shared
@@ -475,55 +692,4 @@ func TestSetup_SerializesConcurrentWorktreeCreation_When_MultipleGoroutinesRaceO
 		wt := wt
 		defer func() { _ = wt.Cleanup() }()
 	}
-}
-
-// TestRetryBranchRefExists_SucceedsAfterRetries_When_CheckFlakesTransiently drives the
-// "cannot lock ref" self-heal branch in setupNewWorktree deterministically, by injecting
-// a check func that fails like a lock-contended ref read for the first two attempts and
-// then succeeds — rather than relying on real concurrent git-subprocess timing (as
-// TestSetupNewWorktree_SelfHeals_When_ConcurrentSpawnsRaceOnBranchCreate above does) to
-// coincidentally hit this exact code path.
-func TestRetryBranchRefExists_SucceedsAfterRetries_When_CheckFlakesTransiently(t *testing.T) {
-	t.Parallel()
-	var calls int
-	exists := retryBranchRefExists(func() (bool, error) {
-		calls++
-		if calls < 3 {
-			return false, errors.New("simulated lock contention")
-		}
-		return true, nil
-	})
-	assert.True(t, exists, "retry must observe the ref once the simulated contention clears")
-	assert.Equal(t, 3, calls, "must stop retrying as soon as the check succeeds")
-}
-
-// TestRetryBranchRefExists_GivesUp_When_CheckNeverSucceeds forces the retry loop's give-up
-// path deterministically: a check that always errors must exhaust lockRaceRetryAttempts and
-// report false, rather than retrying forever or masking the persistent failure.
-func TestRetryBranchRefExists_GivesUp_When_CheckNeverSucceeds(t *testing.T) {
-	t.Parallel()
-	var calls int
-	exists := retryBranchRefExists(func() (bool, error) {
-		calls++
-		return false, errors.New("simulated persistent lock contention")
-	})
-	assert.False(t, exists, "retry must give up and report the ref as not (yet) existing")
-	assert.Equal(t, lockRaceRetryAttempts, calls, "must attempt exactly lockRaceRetryAttempts times before giving up")
-}
-
-// TestRetryBranchRefExists_DoesNotSleep_BeforeFirstAttempt confirms the no-contention
-// common path pays no latency: a check that succeeds immediately must be called exactly
-// once, with no sleep beforehand.
-func TestRetryBranchRefExists_DoesNotSleep_BeforeFirstAttempt(t *testing.T) {
-	t.Parallel()
-	var calls int
-	start := time.Now()
-	exists := retryBranchRefExists(func() (bool, error) {
-		calls++
-		return true, nil
-	})
-	elapsed := time.Since(start)
-	assert.True(t, exists)
-	assert.Equal(t, 1, calls)
-	assert.Less(t, elapsed, lockRaceRetryDelay, "first attempt must not be preceded by a sleep")
 }

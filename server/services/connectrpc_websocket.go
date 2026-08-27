@@ -477,8 +477,23 @@ func pumpControlModeOutputIntoHub(hub *streamhub.StreamHub, controller streamhub
 	// truly gone" so a later reconnect can restart one instead of silently
 	// reactivating a hub with nothing feeding it live output.
 	defer hub.MarkPumpExited()
-	for {
-		if hub.State() == streamhub.HubTornDown {
+	// first skips the torn-down check below on this goroutine's very first
+	// iteration: GetOrCreate spawns this goroutine (TryStartPump's CAS) and
+	// then returns to its caller, who reactivates the hub via AttachSubscriber
+	// (HubTornDown -> HubActive) — but that happens after GetOrCreate
+	// returns, outside this goroutine. If this goroutine's first State()
+	// read races ahead of that AttachSubscriber call, it observes the stale
+	// HubTornDown left by the *previous* teardown and exits immediately,
+	// permanently starving the reactivated hub of live output (2026-08-26
+	// regression: TestHubRegistry_should_RestartPump_When_ReconnectingAfterFullTeardown
+	// failed ~5/6 local -race runs). A pump only ever starts because
+	// TryStartPump's CAS was won, which happens exactly when a caller is
+	// about to consume the hub, so the first iteration can safely skip the
+	// check and subscribe unconditionally; the same check on every later
+	// iteration (after a subscription closes) still correctly distinguishes
+	// a genuine teardown from a resubscribe-worthy control-mode restart.
+	for first := true; ; first = false {
+		if !first && hub.State() == streamhub.HubTornDown {
 			log.Info("streamhub raw-output pump exiting: hub torn down", "session", sessionName)
 			return
 		}
@@ -517,28 +532,37 @@ func pumpControlModeOutputIntoHub(hub *streamhub.StreamHub, controller streamhub
 	}
 }
 
-// useStreamHub is the global STAPLER_SQUAD_USE_STREAM_HUB default resolver,
-// re-read per connection — safe because StreamOwnershipLock.Resolve (Epic
-// 3.1) caches the first resolution per tmux session, so a later re-read
-// observing a changed value can never move an already-resolved session.
+// useStreamHub is the global stream-hub default resolver, re-read per
+// connection — safe because StreamOwnershipLock.Resolve (Epic 3.1) caches
+// the first resolution per tmux session, so a later re-read observing a
+// changed value can never move an already-resolved session.
 //
-// Defaults on (mirrors STAPLER_SQUAD_USE_CONTROL_MODE's "unset or true"
-// convention) now that the staged rollout's rehearsal gate and trial period
-// (Story 3.3.1-3.3.3) are both satisfied; set STAPLER_SQUAD_USE_STREAM_HUB=false
-// to opt a run back out.
+// Resolution order: config.StreamHubGlobalOverride (Story 3.3.4's live,
+// browser-settable override — no restart required) takes precedence when
+// set; otherwise falls back to the STAPLER_SQUAD_USE_STREAM_HUB env var,
+// which defaults on (mirrors STAPLER_SQUAD_USE_CONTROL_MODE's "unset or
+// true" convention) now that the staged rollout's rehearsal gate and trial
+// period (Story 3.3.1-3.3.3) are both satisfied.
 //
 // Story 3.3.1/3.3.2 (pre-mortem P1 #4): requesting the global default to be
-// true is still mechanically gated on config.ResolveGlobalStreamHubDefault —
-// refused, and safely defaulted to false with a loud log line, unless
-// config.RollbackRehearsalCompletedAt has been recorded (Story 3.3.2's
-// rehearsal) on that instance. This gate does not apply to the per-session
-// override path (see the streamhub.SetSessionOverrideLookup wiring in init
-// below), which AcquireOwnershipLock's Resolve consults independently of
-// this function's return value.
+// true — from either source — is still mechanically gated on
+// config.ResolveGlobalStreamHubDefault — refused, and safely defaulted to
+// false with a loud log line, unless config.RollbackRehearsalCompletedAt
+// has been recorded (Story 3.3.2's rehearsal) on that instance. This gate
+// does not apply to the per-session override path (see the
+// streamhub.SetSessionOverrideLookup wiring in init below), which
+// AcquireOwnershipLock's Resolve consults independently of this function's
+// return value.
 func useStreamHub() bool {
-	v := os.Getenv("STAPLER_SQUAD_USE_STREAM_HUB")
-	requested := v == "" || v == "true"
-	effective, err := config.ResolveGlobalStreamHubDefault(config.LoadConfig(), requested)
+	cfg := config.LoadConfig()
+	var requested bool
+	if cfg.StreamHubGlobalOverride != nil {
+		requested = *cfg.StreamHubGlobalOverride
+	} else {
+		v := os.Getenv("STAPLER_SQUAD_USE_STREAM_HUB")
+		requested = v == "" || v == "true"
+	}
+	effective, err := config.ResolveGlobalStreamHubDefault(cfg, requested)
 	if err != nil {
 		log.Error("streamhub: refusing to enable global default", "error", err)
 		return false

@@ -222,6 +222,7 @@ var methodToID = map[string]string{ //nolint:gochecknoglobals
 	"GetStreamHubRolloutStatus":          "stream-hub-rollout:get",
 	"CompleteStreamHubRollbackRehearsal": "stream-hub-rollout:complete-rehearsal",
 	"SetStreamHubSessionOverride":        "stream-hub-rollout:set-session-override",
+	"SetStreamHubGlobalOverride":         "stream-hub-rollout:set-global-override",
 	// Tymux Rollout RPCs (tymux-bundled-integration Epic 3.3)
 	"GetTymuxRolloutStatus":          "tymux-rollout:get",
 	"CompleteTymuxRollbackRehearsal": "tymux-rollout:complete-rehearsal",

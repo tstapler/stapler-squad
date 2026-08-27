@@ -68,3 +68,36 @@ func TestSetStreamHubSessionOverride_SetsAndClears(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, resp.Msg.SessionOverrides)
 }
+
+func TestSetStreamHubGlobalOverride_SetsAndClears(t *testing.T) {
+	s := newIsolatedStreamHubRolloutService(t)
+	forceFalse := false
+
+	resp, err := s.SetStreamHubGlobalOverride(context.Background(), connect.NewRequest(&sessionv1.SetStreamHubGlobalOverrideRequest{
+		ForceHub: &forceFalse,
+	}))
+	require.NoError(t, err)
+	require.NotNil(t, resp.Msg.GlobalOverride)
+	assert.False(t, *resp.Msg.GlobalOverride)
+
+	// Unset ForceHub clears the override (config.SetStreamHubGlobalOverride's
+	// nil-means-clear convention).
+	resp, err = s.SetStreamHubGlobalOverride(context.Background(), connect.NewRequest(&sessionv1.SetStreamHubGlobalOverrideRequest{}))
+	require.NoError(t, err)
+	assert.Nil(t, resp.Msg.GlobalOverride)
+}
+
+func TestGetStreamHubRolloutStatus_ReportsGlobalOverride(t *testing.T) {
+	s := newIsolatedStreamHubRolloutService(t)
+	forceTrue := true
+
+	_, err := s.SetStreamHubGlobalOverride(context.Background(), connect.NewRequest(&sessionv1.SetStreamHubGlobalOverrideRequest{
+		ForceHub: &forceTrue,
+	}))
+	require.NoError(t, err)
+
+	resp, err := s.GetStreamHubRolloutStatus(context.Background(), connect.NewRequest(&sessionv1.GetStreamHubRolloutStatusRequest{}))
+	require.NoError(t, err)
+	require.NotNil(t, resp.Msg.GlobalOverride)
+	assert.True(t, *resp.Msg.GlobalOverride)
+}
