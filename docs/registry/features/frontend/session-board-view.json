@@ -15,7 +15,8 @@
     "onDragEnd_should_SkipRpcAndBounceCardBack_When_DropTargetIsIllegal",
     "dragFreeze_should_KeepCardInPreDragColumn_When_LivePushChangesStatusMidDrag",
     "SessionBoard_should_RenderOneSwimlaneRowPerBranch_When_GroupingStrategyIsBranch",
-    "SessionBoard_should_RenderCardInBothMatchingTagRows_When_SessionHasTwoTags"
+    "SessionBoard_should_RenderCardInBothMatchingTagRows_When_SessionHasTwoTags",
+    "tests/e2e/session-board-view.spec.ts"
   ],
   "lastModified": "2026-08-27T00:00:00Z"
 }
