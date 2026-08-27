@@ -77,6 +77,15 @@ type SessionStopper interface {
 	TimeSinceLastMeaningfulOutput(sessionUUID string) (dur time.Duration, ok bool)
 }
 
+// SessionSteerer allows BacklogService to inject a message into an already-
+// active session (e.g. a PR-fix problem description) instead of skipping a
+// respawn outright. It is nil-safe: BacklogService degrades gracefully when
+// not wired, mirroring SessionStopper.
+type SessionSteerer interface {
+	SessionProgram(sessionUUID string) (program string, ok bool)
+	SteerActiveSession(ctx context.Context, sessionUUID, message string) error
+}
+
 // RepoWatchRemover lets BacklogService tell the background unfinished-changes
 // scanner (session/unfinished.Scanner) to stop watching a repo path once its
 // worktree has been removed from disk — see BUG-034. Without this, the
@@ -102,6 +111,7 @@ type BacklogService struct {
 	sourceBackend     itemSourceBackend
 	sessionCreator    SessionCreator
 	sessionStopper    SessionStopper
+	sessionSteerer    SessionSteerer
 	autonomousStarter AutonomousDriverStarter
 	// repoWatchRemover tells the unfinished-changes scanner to stop watching a
 	// worktree path once it's removed from disk (BUG-034). nil-safe — wired via
@@ -465,6 +475,31 @@ func (s *BacklogService) Shutdown() {
 // SetSessionStopper wires the optional session stopper used to kill orphaned sessions on re-triage.
 func (s *BacklogService) SetSessionStopper(stopper SessionStopper) {
 	s.sessionStopper = stopper
+}
+
+// SetSessionSteerer wires the optional session steerer used to inject a
+// PR-fix problem description into an already-active session instead of
+// skipping the respawn outright.
+func (s *BacklogService) SetSessionSteerer(steerer SessionSteerer) {
+	s.sessionSteerer = steerer
+}
+
+// GetSessionSteerer returns the wired SessionSteerer, or nil if
+// SetSessionSteerer was never called. Exists so server-package tests can
+// assert real bootstrap wiring (dependencies.go) without exposing the
+// field directly — mirrors SessionService.GetBacklogLifecycleListener's
+// wiring-test-support role (pre-mortem.md P2 #5: this is the first such
+// getter for this pattern on BacklogService).
+func (s *BacklogService) GetSessionSteerer() SessionSteerer {
+	return s.sessionSteerer
+}
+
+// GetSessionStopper returns the wired SessionStopper, or nil. Added
+// alongside GetSessionSteerer since SetSessionStopper had the identical
+// untested-wiring gap (pre-mortem.md P2 #5) — fixing both costs one extra
+// assertion in the same test, not a second test file.
+func (s *BacklogService) GetSessionStopper() SessionStopper {
+	return s.sessionStopper
 }
 
 // SetRepoWatchRemover wires the optional unfinished-changes scanner hook used

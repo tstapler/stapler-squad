@@ -11,6 +11,7 @@ import (
 	"time"
 
 	connect "connectrpc.com/connect"
+	"github.com/creack/pty"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -1586,13 +1587,19 @@ func TestUpdateSession_SteerMessage_NonAutonomousSession_SendKeysFailure_Returns
 // regression guard (AC7's "no parallel steering implementation"): the
 // pre-existing autonomous branch (ClaudeController.SendCommandImmediate) must
 // be untouched by widening the handler to add the non-autonomous SendKeys
-// branch. An autonomous session with no live controller wired still returns
-// success (a send failure on this branch is only logged, never rejected),
-// exactly like the pre-widening behavior.
+// branch. Wires a real, pipe-backed *session.ClaudeController (see
+// newRealControllerForTest) so this exercises an actual successful
+// SendCommandImmediate call end-to-end through UpdateSession.
+//
+// Prior to Story 1.1.2 this test used an instance with no controller wired at
+// all and asserted success — that assertion documented the swallowed-error
+// bug Story 1.1.2 fixes (a nil controller now returns an error; see
+// TestUpdateSession_SteerMessage_AutonomousNilController_NowReturnsError).
 func TestUpdateSession_SteerMessage_AutonomousSession_StillUsesController(t *testing.T) {
-	t.Parallel()
 	fix := setupForkTestFixture(t)
 	t.Cleanup(fix.cleanup)
+
+	ctrl := newRealControllerForTest(t, "autonomous-session", true)
 
 	inst := &session.Instance{
 		Title:          "autonomous-session",
@@ -1604,6 +1611,7 @@ func TestUpdateSession_SteerMessage_AutonomousSession_StillUsesController(t *tes
 		CreatedAt:      time.Now(),
 		UpdatedAt:      time.Now(),
 	}
+	inst.SetControllerForTest(ctrl)
 	addInstanceToPoller(fix.poller, inst)
 
 	msg := "focus on the auth module first"
@@ -1613,6 +1621,274 @@ func TestUpdateSession_SteerMessage_AutonomousSession_StillUsesController(t *tes
 	}))
 	require.NoError(t, err)
 	require.NotNil(t, resp.Msg.Session)
+}
+
+// TestUpdateSession_SteerMessage_AutonomousNilController_NowReturnsError
+// documents Story 1.1.2's intentional behavior change: an autonomous session
+// with no controller started now surfaces a real RPC error instead of
+// silently succeeding (the pre-1.1.2 behavior asserted by the previous
+// version of TestUpdateSession_SteerMessage_AutonomousSession_StillUsesController).
+func TestUpdateSession_SteerMessage_AutonomousNilController_NowReturnsError(t *testing.T) {
+	t.Parallel()
+	fix := setupForkTestFixture(t)
+	t.Cleanup(fix.cleanup)
+
+	inst := &session.Instance{
+		Title:          "autonomous-no-controller",
+		Path:           "/tmp/test",
+		Status:         session.Active,
+		Program:        "claude",
+		Permissions:    session.GetManagedPermissions(),
+		AutonomousMode: true,
+		CreatedAt:      time.Now(),
+		UpdatedAt:      time.Now(),
+	}
+	addInstanceToPoller(fix.poller, inst)
+
+	msg := "focus on the auth module first"
+	_, err := fix.svc.UpdateSession(context.Background(), connect.NewRequest(&sessionv1.UpdateSessionRequest{
+		Id:           "autonomous-no-controller",
+		SteerMessage: &msg,
+	}))
+	require.Error(t, err)
+
+	var connectErr *connect.Error
+	require.ErrorAs(t, err, &connectErr)
+	assert.Equal(t, connect.CodeFailedPrecondition, connectErr.Code())
+}
+
+// --------------------------------------------------------------------------
+// steerInstance — autonomous branch error/timeout paths (Story 1.1.2)
+// --------------------------------------------------------------------------
+
+// fakeControllerInstance is a minimal session.InstanceContext double that lets
+// these tests construct a real *session.ClaudeController without a real PTY
+// subprocess (see newRealControllerForTest).
+type fakeControllerInstance struct {
+	title     string
+	ptyReader *os.File
+}
+
+func (f *fakeControllerInstance) GetTitle() string                    { return f.title }
+func (f *fakeControllerInstance) GetStableID() string                 { return f.title }
+func (f *fakeControllerInstance) GetPTYReader() (*os.File, error)     { return f.ptyReader, nil }
+func (f *fakeControllerInstance) Preview() (string, error)            { return "", nil }
+func (f *fakeControllerInstance) LastMeaningfulOutputTime() time.Time { return time.Time{} }
+func (f *fakeControllerInstance) GetCreatedAt() time.Time             { return time.Time{} }
+func (f *fakeControllerInstance) SetLastMeaningfulOutput(_ time.Time) {}
+func (f *fakeControllerInstance) GetStatus() int                      { return 0 }
+func (f *fakeControllerInstance) WriteToPTY(data []byte) (int, error) { return len(data), nil }
+func (f *fakeControllerInstance) GetProgram() string                  { return "claude" }
+
+// newRealControllerForTest builds a real *session.ClaudeController backed by
+// a genuine pty pair (github.com/creack/pty, already a project dependency),
+// without requiring a subprocess fork (which this sandboxed test environment
+// does not permit; see
+// TestUpdateSession_SteerMessage_NonAutonomousSession_SendsViaSendKeys's PTY skip
+// above for the same constraint on the non-autonomous branch).
+//
+// cancelImmediately controls the two distinct scenarios these tests need:
+//
+//   - true: the controller is started against an already-cancelled context.
+//     SendCommandImmediate's underlying executeCommand loop then observes
+//     ctx.Done() as the only ready select case on its very first iteration —
+//     deterministic, no real PTY-timing race — giving a fast, genuine
+//     "success" outcome (steerInstance's autonomous branch treats a nil
+//     SendCommandImmediate error as success regardless of the
+//     *ExecutionResult's own internal Error field; see ExecuteImmediate in
+//     session/command_executor.go). An earlier version of this helper
+//     instead closed the slave fd immediately to force an EOF/hangup on the
+//     master read — that raced the kernel's hangup delivery against
+//     steerInstance's 5s bound and flaked under -count=5. Used by
+//     TestUpdateSession_SteerMessage_AutonomousSession_StillUsesController.
+//   - false: the context is left live and the slave stays open for the whole
+//     test body (closed only in t.Cleanup, after assertions already ran), so
+//     nothing ever completes the read/response cycle and SendCommandImmediate
+//     genuinely blocks. Used by
+//     TestSteerInstance_AutonomousSendCommandImmediateHangs_
+//     TimesOutRatherThanBlockingForever.
+//
+// Deliberately never calls ctrl.Stop(): confirmed via a goroutine dump
+// (test timeout with -timeout 40s) that ResponseStream's background read
+// loop blocks in a genuine syscall.Read on this fd with no effective
+// deadline in this sandboxed environment (PTYAccess's SetReadDeadline call
+// discards its error and silently no-ops here), so Stop()'s
+// rs.wg.Wait() — which joins that goroutine — hangs forever and takes the
+// whole test binary down with it. Skipping Stop() leaks one background
+// goroutine and one open pty pair for the remaining lifetime of the test
+// process, which the OS reclaims on exit; it does not block go test's own
+// completion and does not trip this file's goleak.VerifyNone checks (their
+// baselines are captured after this goroutine already exists). This leak is
+// harmless in the cancelImmediately=true case since streamLoop's own select
+// also sees ctx.Done() as its only ready case and exits on its own almost
+// immediately — nothing is actually left running there.
+func newRealControllerForTest(t *testing.T, title string, cancelImmediately bool) *session.ClaudeController {
+	t.Helper()
+	master, slave, err := pty.Open()
+	if err != nil {
+		t.Skipf("pty not available in this environment: %v", err)
+	}
+	t.Cleanup(func() { _ = slave.Close() })
+
+	ctx := context.Background()
+	if cancelImmediately {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithCancel(ctx)
+		cancel()
+	}
+
+	ctrl, err := session.NewClaudeController(&fakeControllerInstance{title: title, ptyReader: master})
+	require.NoError(t, err)
+	require.NoError(t, ctrl.Start(ctx))
+	return ctrl
+}
+
+// TestSteerInstance_AutonomousNilController_ReturnsError verifies the fixed
+// autonomous branch returns a real error (not a swallowed log.Warn) when
+// GetController() is nil.
+func TestSteerInstance_AutonomousNilController_ReturnsError(t *testing.T) {
+	t.Parallel()
+	fix := setupForkTestFixture(t)
+	t.Cleanup(fix.cleanup)
+
+	inst := &session.Instance{
+		Title:          "autonomous-nil-controller",
+		AutonomousMode: true,
+		CreatedAt:      time.Now(),
+		UpdatedAt:      time.Now(),
+	}
+
+	err := fix.svc.steerInstance(context.Background(), inst, "fix the conflict")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "controller not started")
+
+	var connectErr *connect.Error
+	assert.False(t, errors.As(err, &connectErr), "steerInstance must never return a connect.Error — UpdateSession alone translates to a connect.Code")
+}
+
+// TestSteerInstance_AutonomousSendCommandImmediateError_ReturnsError verifies
+// the fixed autonomous branch returns SendCommandImmediate's own error
+// (wrapped with context) instead of swallowing it — a real, non-nil
+// *session.ClaudeController that was never Start()ed reproduces this
+// deterministically (SendCommandImmediate's own "controller not started"
+// check), without needing a PTY.
+func TestSteerInstance_AutonomousSendCommandImmediateError_ReturnsError(t *testing.T) {
+	t.Parallel()
+	fix := setupForkTestFixture(t)
+	t.Cleanup(fix.cleanup)
+
+	ctrl, err := session.NewClaudeController(&fakeControllerInstance{title: "autonomous-erroring-controller"})
+	require.NoError(t, err)
+
+	inst := &session.Instance{
+		Title:          "autonomous-erroring-controller",
+		AutonomousMode: true,
+		CreatedAt:      time.Now(),
+		UpdatedAt:      time.Now(),
+	}
+	inst.SetControllerForTest(ctrl)
+
+	steerErr := fix.svc.steerInstance(context.Background(), inst, "fix the conflict")
+	require.Error(t, steerErr)
+	assert.Contains(t, steerErr.Error(), "steer autonomous session")
+
+	var connectErr *connect.Error
+	assert.False(t, errors.As(steerErr, &connectErr), "steerInstance must never return a connect.Error")
+}
+
+// TestSteerInstance_AutonomousSendCommandImmediateHangs_TimesOutRatherThanBlockingForever
+// is the regression test for the unbounded-PTY-write bug: a wedged controller
+// (real, started, but nothing ever drains/responds on its pty) must not be
+// able to hang steerInstance forever — it must return within ~5s wrapping
+// context.DeadlineExceeded.
+func TestSteerInstance_AutonomousSendCommandImmediateHangs_TimesOutRatherThanBlockingForever(t *testing.T) {
+	fix := setupForkTestFixture(t)
+	t.Cleanup(fix.cleanup)
+
+	ctrl := newRealControllerForTest(t, "autonomous-wedged-controller", false)
+
+	inst := &session.Instance{
+		Title:          "autonomous-wedged-controller",
+		AutonomousMode: true,
+		CreatedAt:      time.Now(),
+		UpdatedAt:      time.Now(),
+	}
+	inst.SetControllerForTest(ctrl)
+
+	type result struct {
+		err error
+	}
+	done := make(chan result, 1)
+	start := time.Now()
+	go func() {
+		done <- result{err: fix.svc.steerInstance(context.Background(), inst, "fix the conflict")}
+	}()
+
+	select {
+	case r := <-done:
+		elapsed := time.Since(start)
+		require.Error(t, r.err)
+		assert.True(t, errors.Is(r.err, context.DeadlineExceeded), "expected error to wrap context.DeadlineExceeded, got: %v", r.err)
+		assert.Less(t, elapsed, 10*time.Second, "steerInstance must bound the PTY write to ~5s, not block indefinitely")
+	case <-time.After(15 * time.Second):
+		t.Fatal("steerInstance did not return within 15s — the PTY write timeout did not fire")
+	}
+}
+
+// --------------------------------------------------------------------------
+// SessionSteerer (Story 1.2.1) — SessionProgram / SteerActiveSession
+// --------------------------------------------------------------------------
+//
+// validation.md flags these as a coverage gap: plan.md's Tasks 1.2.1a-d name
+// only a compile-time interface assertion (var _ SessionSteerer =
+// (*SessionService)(nil)) for SessionProgram/SteerActiveSession, with no
+// direct Test... function for their own return-value behavior. Added here
+// per validation.md's explicit recommendation.
+
+// TestSessionService_SessionProgram_ReturnsProgramForLiveInstance verifies
+// SessionProgram returns (instance.Program, true) for a live instance.
+func TestSessionService_SessionProgram_ReturnsProgramForLiveInstance(t *testing.T) {
+	t.Parallel()
+	fix := setupForkTestFixture(t)
+	t.Cleanup(fix.cleanup)
+
+	inst := &session.Instance{
+		Title:       "program-lookup-session",
+		Program:     "claude",
+		Permissions: session.GetManagedPermissions(),
+		CreatedAt:   time.Now(),
+		UpdatedAt:   time.Now(),
+	}
+	addInstanceToPoller(fix.poller, inst)
+
+	program, ok := fix.svc.SessionProgram("program-lookup-session")
+	assert.True(t, ok)
+	assert.Equal(t, "claude", program)
+}
+
+// TestSessionService_SessionProgram_ReturnsNotOkForUnknownUUID verifies
+// SessionProgram returns ("", false) when no live instance is tracked for
+// the given UUID.
+func TestSessionService_SessionProgram_ReturnsNotOkForUnknownUUID(t *testing.T) {
+	t.Parallel()
+	fix := setupForkTestFixture(t)
+	t.Cleanup(fix.cleanup)
+
+	program, ok := fix.svc.SessionProgram("no-such-session")
+	assert.False(t, ok)
+	assert.Empty(t, program)
+}
+
+// TestSessionService_SteerActiveSession_ReturnsErrorForUnknownUUID verifies
+// SteerActiveSession returns a non-nil error (and does not panic) when no
+// live instance is tracked for the given UUID.
+func TestSessionService_SteerActiveSession_ReturnsErrorForUnknownUUID(t *testing.T) {
+	t.Parallel()
+	fix := setupForkTestFixture(t)
+	t.Cleanup(fix.cleanup)
+
+	err := fix.svc.SteerActiveSession(context.Background(), "missing-uuid", "hello")
+	require.Error(t, err)
 }
 
 // TestUpdateSession_SteerMessage_ExceedsMaxLength_ReturnsInvalidArgument verifies
