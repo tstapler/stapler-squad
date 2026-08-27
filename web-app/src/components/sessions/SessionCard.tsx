@@ -145,7 +145,9 @@ const IS_DEBUG_MODE =
   typeof window !== "undefined" &&
   new URLSearchParams(window.location.search).get("debug") === "1";
 
-interface SessionCardProps {
+// Exported so BoardCard (SessionBoard.tsx's per-card wrapper) can declare an identical
+// callback surface without duplicating this list.
+export interface SessionCardProps {
   session: Session;
   onClick?: () => void;
   onOpenInNewPane?: () => void;
