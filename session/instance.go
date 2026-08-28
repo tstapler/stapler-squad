@@ -16,6 +16,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/linkdata/deadlock"
 	"github.com/tstapler/stapler-squad/config"
+	"github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/artifacts"
 	"github.com/tstapler/stapler-squad/session/detection"
@@ -260,6 +261,13 @@ type Instance struct {
 	GitHubChangesReqCount int `json:"github_changes_req_count,omitempty"`
 	// GitHubCheckConclusion is the CI rollup: success/failure/pending/action_required/neutral/""
 	GitHubCheckConclusion string `json:"github_check_conclusion,omitempty"`
+	// GitHubChecks is the itemized statusCheckRollup from the last successful poll.
+	GitHubChecks []github.CheckItem `json:"github_checks,omitempty"`
+	// GitHubReviewFeedback is the itemized review list (author/state/body) from the
+	// last successful poll.
+	GitHubReviewFeedback []github.ReviewItem `json:"github_review_feedback,omitempty"`
+	// GitHubMergeable mirrors PRInfo.Mergeable: "mergeable"/"conflicting"/"unknown".
+	GitHubMergeable string `json:"github_mergeable,omitempty"`
 	// GitHubPRStatusTerminal is true when the PR is merged/closed and polling should stop
 	GitHubPRStatusTerminal bool `json:"github_pr_status_terminal,omitempty"`
 	// LastPRStatusCheck is when the PR status was last successfully fetched
