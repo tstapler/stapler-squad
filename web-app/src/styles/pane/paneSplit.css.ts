@@ -152,9 +152,14 @@ export const viewModeToggleButton = recipe({
   },
   variants: {
     active: {
+      // primary/primaryText (not accentBg/accentText) -- every theme verifies this specific
+      // pairing for WCAG AA contrast (see the "#fff on #6366f1 = 4.46:1 fails" comments next
+      // to each theme's `primary` value in theme.css.ts); accentText is documented there as
+      // "unchanged from pre-fix behavior... not in scope" for the exact contrast class this
+      // button hit in CI (axe: 3.84:1 against composited accentBg, needs 4.5:1).
       true: {
-        background: vars.color.accentBg,
-        color: vars.color.accentText,
+        background: vars.color.primary,
+        color: vars.color.primaryText,
         borderColor: vars.color.primary,
       },
       false: {},
