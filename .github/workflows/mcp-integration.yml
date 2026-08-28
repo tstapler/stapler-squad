@@ -26,6 +26,13 @@ on:
   pull_request:
     branches: [ main ]
 
+# Cancel a superseded run's in-flight jobs. Applies to both pull_request and
+# push-to-main triggers — cancelling a superseded push-to-main run is
+# harmless here since this workflow writes no shared state.
+concurrency:
+  group: mcp-integration-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   # PR-only relevance gate — see the pull_request trigger's comment above.
   # Mirrors the same path list the old pull_request paths: filter used to have.
@@ -33,6 +40,7 @@ jobs:
     name: Detect Relevant Changes
     runs-on: ubuntu-latest
     if: github.event_name == 'pull_request'
+    timeout-minutes: 5
     outputs:
       relevant: ${{ steps.detect.outputs.relevant }}
     steps:
@@ -62,6 +70,7 @@ jobs:
     # skipped needs: job fails the implicit success() check any if: without
     # a status function otherwise gets ANDed with).
     if: always() && (github.event_name != 'pull_request' || needs.detect-changes.outputs.relevant == 'true')
+    timeout-minutes: 30
 
     steps:
       - uses: actions/checkout@v4
@@ -69,13 +78,16 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.25.0'
+          go-version-file: 'go.mod'
           cache: true
 
-      - name: Generate protos and build web UI
-        uses: ./.github/actions/prepare
-        with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
+      # server/mcp and server/services tests don't assert on rendered UI
+      # content (neither package imports server/web or its go:embed'd
+      # dist/ output) — only go build/go test compiling against the
+      # go:embed directive in server/web/embed.go, so a real Next.js
+      # build is wasted work here. See plan.md Epic 3.2 Story 3.2.1.
+      - name: Generate protos and stub web UI
+        uses: ./.github/actions/prepare-stub
 
       # The integration test (TestMCPHandshakeSubprocess) spawns a real
       # --mcp subprocess and exercises the full MCP stdio handshake.
@@ -91,8 +103,13 @@ jobs:
       # cost once, so its test binary alone needs on the order of 15
       # minutes of headroom under -race; the previous 150s budget was
       # sized for the old cgo driver and never adjusted for the new one.
+      #
+      # Soft-timeout wrapper: 25m soft budget below this job's 30m hard
+      # timeout-minutes: ceiling, so a budget breach fails this step with
+      # a diagnosable marker instead of a bare GHA-killed `timed_out`.
+      # keep this marker prefix in sync with ciBudgetExceededMarker in server/services/github_webhook_pr_fix.go
       - name: Run MCP integration tests
         run: |
-          go test -tags=integration -timeout=1200s -v -race \
+          timeout 25m go test -tags=integration -timeout=1200s -v -race \
             ./server/mcp/... \
-            ./server/services/...
+            ./server/services/... || { echo "::error::CI-BUDGET-EXCEEDED: 'mcp-integration' exceeded its 25m budget"; echo "CI-BUDGET-EXCEEDED: 'mcp-integration' exceeded its 25m budget" >> "$GITHUB_STEP_SUMMARY"; exit 1; }
