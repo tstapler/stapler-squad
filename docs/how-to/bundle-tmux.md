@@ -9,7 +9,7 @@ make build-embedded         # Build stapler-squad with tmux embedded
 make test-with-pinned-tmux  # Tests against pinned tmux (reproducible)
 ```
 
-All benchmarks MUST be run with `&` — see `.claude/docs/benchmarks.md`.
+All benchmarks MUST be run with `&` — see `docs/reference/benchmarks.md`.
 
 ## Bundling tymuxd alongside tmux
 
@@ -23,6 +23,6 @@ make build-embedded-tymux  # Build stapler-squad with both tmux and tymuxd embed
 ```
 
 This is a separate target from `build-embedded` so existing `-tags embed_tmux`
-consumers are unaffected. See `.claude/docs/bundling-tymuxd.md` for the full
+consumers are unaffected. See `docs/reference/bundling-tymuxd.md` for the full
 reference: supervision, the rollout-safety flags, `--tymuxd-keep-server`, and
 the accepted TCP-loopback security tradeoff.

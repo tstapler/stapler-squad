@@ -1,9 +1,21 @@
+---
+name: interface-pollution-checklist
+description: Use when writing, reviewing, or refactoring Go types and interfaces in stapler-squad to catch Java/Spring-shaped leaky abstractions before they merge — speculative interfaces, interfaces defined next to their implementation, no-op getters/setters, forwarding-only wrappers, unjustified generics, and struct-wraps-struct-wraps-struct.
+---
+
 # Interface Pollution — Catch Leaky Abstractions Before They Merge
 
 This repo is written almost entirely with Claude Code. LLMs default to Java/Spring-shaped
 abstractions — interfaces-first, Repository/Manager/Service layering, getter/setter pairs —
 which don't mesh with Go's data model and make code harder to maintain, not easier. Review
 every new type/interface an LLM introduces against this checklist before merging.
+
+## When to Use This Skill
+
+- Reviewing a PR or diff that adds a new Go interface, `Manager`/`Handler`/`Processor`/
+  `Service` type, or generic function/type
+- Writing new Go code yourself and deciding whether a concept needs an interface at all
+- Doing a `quality:architecture-review` or `code:review` pass over Go changes
 
 ## The 6 Smells to Detect
 
@@ -96,4 +108,4 @@ every new type/interface an LLM introduces against this checklist before merging
 Go's idiom is the inverse of the layered-abstraction style Java/Spring-heavy training data
 over-represents. Rob Pike: "Don't design with interfaces, discover them." Interfaces belong
 in the *consumer* package, not the implementer's — the opposite of Java convention. See the
-`go-development` skill for the full idiom set this checklist complements.
+`golang-development` skill for the full idiom set this checklist complements.

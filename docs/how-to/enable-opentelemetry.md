@@ -47,4 +47,4 @@ otlp_config:
 
 ## Compile-time auto-instrumentation (opt-in)
 
-A separate, opt-in build (`make build-otel-auto` → `stapler-squad-otel`) uses `otelc` compile-time weaving to add spans for surfaces the hand-written instrumentation above doesn't cover (e.g. ent's `database/sql` queries), without any source change. See `.claude/docs/opentelemetry-auto-instrumentation.md` for the install/build/run recipe and the validated operational findings.
+A separate, opt-in build (`make build-otel-auto` → `stapler-squad-otel`) uses `otelc` compile-time weaving to add spans for surfaces the hand-written instrumentation above doesn't cover (e.g. ent's `database/sql` queries), without any source change. See `docs/how-to/enable-otel-auto-instrumentation.md` for the install/build/run recipe and the validated operational findings.

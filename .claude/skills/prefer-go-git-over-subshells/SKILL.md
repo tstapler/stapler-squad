@@ -1,6 +1,17 @@
+---
+name: prefer-go-git-over-subshells
+description: Use when writing or reviewing Go code in stapler-squad that shells out to git — prefer github.com/go-git/go-git/v5 over safeexec.CommandContext("git", ...) wherever go-git can do the job, to avoid subprocess overhead, zombie-process risk, and text-parsed output.
+---
+
 # Prefer go-git Over Shelling Out
 
 When a git operation can be done with `github.com/go-git/go-git/v5`, use it instead of shelling out via `safeexec.CommandContext("git", ...)`. Reduce subshells wherever a native Go integration exists.
+
+## When to Use This Skill
+
+- Writing new Go code that needs to inspect or mutate a git repository
+- Reviewing a diff that adds a `safeexec.CommandContext(ctx, "git", ...)` call
+- Deciding whether an existing `git` subshell can be replaced with a native go-git call
 
 **Wrong:**
 ```go
