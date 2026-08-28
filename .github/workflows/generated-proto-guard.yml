@@ -23,6 +23,10 @@ jobs:
   guard:
     name: no-checked-in-generated-protos
     runs-on: ubuntu-latest
+    # Set deliberately tight relative to this guard's own 35.6m tail-latency outlier
+    # (baseline avg ~5m) so a recurrence is caught by this budget instead of silently
+    # tolerated. Backstop only — a timeout here is a real failure.
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
         with:

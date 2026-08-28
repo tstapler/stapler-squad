@@ -28,6 +28,8 @@ jobs:
   guard:
     name: no-backlog-scaffolding-in-diff
     runs-on: ubuntu-latest
+    # Baseline avg 4m / max 10.1m. Backstop only — a timeout here is a real failure.
+    timeout-minutes: 8
     steps:
       - uses: actions/checkout@v4
         with:
