@@ -71,8 +71,25 @@ jobs:
       - name: Install benchstat
         run: go install golang.org/x/perf/cmd/benchstat@v0.0.0-20260312031701-16a31bc5fbd0
 
+      - name: Install buf
+        run: |
+          curl -sSL "https://github.com/bufbuild/buf/releases/download/v1.41.0/buf-Linux-x86_64" \
+            -o /usr/local/bin/buf && chmod +x /usr/local/bin/buf
+
+      - name: Generate protobuf code
+        # Go-only template: this job never installs pnpm/node (it doesn't need
+        # a web UI build), so the default buf.gen.yaml's local protoc-gen-es
+        # plugin (web-app/node_modules/.bin/protoc-gen-es) isn't present and
+        # `buf generate proto` would fail outright. buf.gen.go-only.yaml
+        # generates only the Go/ConnectRPC output these target packages need.
+        run: buf generate proto --template buf.gen.go-only.yaml
+
+      - name: Generate ent ORM code
+        run: go run -mod=mod entgo.io/ent/cmd/ent generate --feature sql/upsert ./session/ent/schema
+
       - name: Run Tier 1 benchmarks
         run: |
+          set -o pipefail
           go test \
             -bench='BenchmarkEventBus|BenchmarkDeltaGenerat|BenchmarkCircularBuffer|BenchmarkGetTimeSinceLastMeaningfulOutput|BenchmarkStripANSI|BenchmarkStripANSICodes|BenchmarkIsBanner|BenchmarkProcessOutput|BenchmarkDiffShortstat|BenchmarkReviewQueue|BenchmarkDetectCommandsInText|BenchmarkTokenParser' \
             -run='^$' \
