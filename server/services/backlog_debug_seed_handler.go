@@ -11,7 +11,7 @@ package services
 // waiting out real detector thresholds (e.g. 30 minutes for
 // pr_ready_unmerged). It is registered by server.go ONLY when
 // STAPLER_SQUAD_INSTANCE=e2e-local, mirroring how the e2e test server itself
-// is gated (see .claude/rules/e2e-test-conventions.md / CLAUDE.md's E2E Tests
+// is gated (see the `e2e-test-conventions` skill / CLAUDE.md's E2E Tests
 // section) — never reachable in a normal deploy.
 
 import (

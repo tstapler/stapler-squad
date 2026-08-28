@@ -316,7 +316,7 @@ func (g *GitWorktree) PushBranch() error {
 // PRCreateOptions bundles CreatePR's arguments. Title, Body, and BaseBranch are
 // all plain strings with no compiler-enforced distinction between them, so a
 // transposed call (e.g. body and baseBranch swapped) would previously compile
-// silently wrong — the exact smell .claude/rules/primitive-obsession-checklist.md
+// silently wrong — the exact smell the `primitive-obsession-checklist` skill
 // exists to catch. A named field wins that transposition back at every call site.
 type PRCreateOptions struct {
 	// Title defaults to the branch name (with hyphens replaced by spaces) if empty.

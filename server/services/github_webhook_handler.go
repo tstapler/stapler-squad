@@ -17,7 +17,7 @@ import (
 // PRFixEventRouter looks up and immediately reconciles a tracked pr_pending item for
 // a GitHub PR event. Satisfied by *session.BacklogLifecycleListener (its
 // TriggerPRFixForEvent method) — defined here, the consumer, per
-// .claude/rules/interface-pollution-checklist.md.
+// the `interface-pollution-checklist` skill.
 type PRFixEventRouter interface {
 	TriggerPRFixForEvent(ctx context.Context, repoFullName string, prNumber int) (matched bool, err error)
 }
@@ -26,7 +26,7 @@ type PRFixEventRouter interface {
 // matched against enabled github_push-type Workflow rows, plus (Story 2.1.1)
 // check_run/workflow_run/pull_request_review/issue_comment deliveries routed to
 // handlePRFixEvent. Concrete type, not an interface — one implementation, per
-// .claude/rules/interface-pollution-checklist.md.
+// the `interface-pollution-checklist` skill.
 type GitHubWebhookHandler struct {
 	repo        session.WorkflowRepository
 	scheduler   *workflows.Scheduler

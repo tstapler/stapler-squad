@@ -18,7 +18,7 @@ import (
 // a helper subprocess that exits in ~1s in isolation can take several times
 // that under load. Confirmed by re-running the failing tests in isolation
 // (all passed in 0.6-1.6s) immediately after a full-suite run timed them out
-// at 10s. See .claude/rules/fix-flaky-tests-dont-defer.md.
+// at 10s. See the `fix-flaky-tests-dont-defer` skill.
 const testProcessTimeout = 30 * time.Second
 
 // readAllWithStop reads all bytes from r. If the read doesn't complete within

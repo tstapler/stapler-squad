@@ -22,7 +22,7 @@ func TestResolveDaemonConfig_should_UseDefaultAddr_When_InstanceIsShared(t *test
 	// "shared" is this codebase's established convention for "explicitly
 	// selecting the default/shared instance" (config.IsNamedInstance's
 	// inverse condition, config.GetConfigDirForDir's "shared" backward-
-	// compatibility carve-out, .claude/docs/state-isolation.md) — it must
+	// compatibility carve-out, docs/reference/state-isolation.md) — it must
 	// resolve identically to unset, not derive a distinct instance-scoped
 	// port. Regression guard for the adversarial-review-caught gap where
 	// this only checked instanceID == "".

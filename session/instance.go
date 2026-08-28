@@ -585,7 +585,7 @@ type Instance struct {
 	// import cycle exists (session/sshremote no longer imports this package
 	// after Part A), and there is no second implementation on the horizon --
 	// introducing an interface purely for testability here is exactly the
-	// speculative abstraction .claude/rules/interface-pollution-checklist.md
+	// speculative abstraction the `interface-pollution-checklist` skill
 	// warns against.
 	remoteApprovalRelay   *sshremote.RemoteApprovalRelay
 	remoteApprovalRelayMu deadlock.Mutex

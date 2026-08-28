@@ -147,7 +147,7 @@ func TestNewProcessManager_should_ReturnImmediately_When_BackendIsTymuxRegardles
 	// package globals (ensureDaemonRunningFn, the backend registry) -- a
 	// genuine, reproduced -race failure caught in code review. Root-caused
 	// and fixed here rather than re-excused as a rare flake (see
-	// .claude/rules/fix-flaky-tests-dont-defer.md).
+	// the `fix-flaky-tests-dont-defer` skill).
 	close(blockForever)
 	<-done
 

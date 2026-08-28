@@ -522,7 +522,7 @@ func TestMmapIndex_PinnedReadersSurviveConcurrentRealRepack(t *testing.T) {
 	// fixed 2s wall-clock deadline based on an assumption that `git gc
 	// --aggressive` "reliably takes tens to hundreds of milliseconds" —
 	// on a slower machine (or one with per-file EDR/AV syscall hooking
-	// overhead, see .claude/rules/playwright-chromium-extraction-stall.md
+	// overhead, see docs/how-to/fix-playwright-chromium-install-stall.md
 	// for a similar symptom) that gc call can instead take on the order
 	// of a minute, so a fixed 2s reader window reliably finished before
 	// the repack was even detected and sawEmptyRead was never observed —

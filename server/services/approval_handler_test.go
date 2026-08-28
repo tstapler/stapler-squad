@@ -41,7 +41,7 @@ func TestApprovalHandler_should_UseBaseURLFnValueAtCallTime_When_ThreeUsageSites
 	// caught by `-race`, which is exactly the flake this comment documents. Running this test
 	// non-parallel guarantees Go's test runner finishes it (including the t.Cleanup restore
 	// below) before any t.Parallel() tests in this package start, so the shared global is
-	// never observed mid-mutation. See .claude/rules/fix-flaky-tests-dont-defer.md.
+	// never observed mid-mutation. See the `fix-flaky-tests-dont-defer` skill.
 	//
 	// Save/restore hookBaseURLFn so this test's deliberately-unstable stub base URL doesn't
 	// leak into other tests in this package that call hookApprovalURL()/InjectHookConfig and

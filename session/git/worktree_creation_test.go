@@ -20,7 +20,7 @@ import (
 // user identity. It returns the repo directory path and a cleanup function.
 //
 // Uses go-git directly rather than shelling out — see
-// .claude/rules/prefer-go-git-over-subshells.md.
+// the `prefer-go-git-over-subshells` skill.
 func setupTestRepo(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()

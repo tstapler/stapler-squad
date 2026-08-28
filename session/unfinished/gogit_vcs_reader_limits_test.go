@@ -33,7 +33,7 @@ import (
 // initRepoInternal mirrors initRepo from vcsreader_test.go for white-box tests.
 //
 // Uses go-git directly rather than shelling out — see
-// .claude/rules/prefer-go-git-over-subshells.md.
+// the `prefer-go-git-over-subshells` skill.
 func initRepoInternal(t *testing.T) string {
 	t.Helper()
 	raw := t.TempDir()

@@ -144,7 +144,7 @@ func sigkillEscalationsDelta(t *testing.T, baseline int64) int64 {
 // restoring it on cleanup — the escalation path is tested via the actual
 // sigkillGrace timer, never a mocked syscall.Kill, so a short grace keeps
 // these tests fast without being flaky (per
-// .claude/rules/fix-flaky-tests-dont-defer.md's timing guidance).
+// the `fix-flaky-tests-dont-defer` skill's timing guidance).
 func withSigkillGrace(t *testing.T, grace time.Duration) {
 	t.Helper()
 	prev := sigkillGrace

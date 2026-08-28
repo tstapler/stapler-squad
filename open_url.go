@@ -40,7 +40,7 @@ func translateDeepLinkURL(raw string) (string, error) {
 // default browser: "open" on macOS, "xdg-open" on Linux. No Go stdlib
 // equivalent exists for launching the OS's default URL handler, so shelling
 // out here is justified per
-// .claude/rules/prefer-go-git-over-subshells.md's "still fine" exception.
+// the `prefer-go-git-over-subshells` skill's "still fine" exception.
 func osOpenerCommand() (string, error) {
 	switch runtime.GOOS {
 	case "darwin":

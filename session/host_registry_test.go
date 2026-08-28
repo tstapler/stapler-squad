@@ -10,7 +10,7 @@ import (
 )
 
 // fakeClock is a controllable Clock for deterministic TTL/prune tests --
-// never wall-clock time.Sleep, per .claude/rules/fix-flaky-tests-dont-defer.md.
+// never wall-clock time.Sleep, per the `fix-flaky-tests-dont-defer` skill.
 type fakeClock struct {
 	now time.Time
 }

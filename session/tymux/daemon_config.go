@@ -8,7 +8,7 @@ import (
 
 // DaemonConfig bundles the two string concepts every tymuxd supervision
 // function needs: where to reach the daemon (Addr) and which binary to spawn
-// it from (BinaryPath). Per .claude/rules/primitive-obsession-checklist.md,
+// it from (BinaryPath). Per the `primitive-obsession-checklist` skill,
 // this exists so no later supervision function signature grows a second bare
 // string parameter that could be silently swapped with the first — every such
 // function should take a DaemonConfig, not separate addr/binaryPath strings.

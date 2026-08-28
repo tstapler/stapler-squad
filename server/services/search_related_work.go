@@ -87,7 +87,7 @@ func contextWindowAndBookends(messages []session.ClaudeConversationMessage, hitI
 // items after this call. Shared by filterHistoryEntriesByAutomation,
 // filterAutomationSessions, and filterByProject, which differ only in
 // element type and predicate — per this repo's own
-// .claude/rules/interface-pollution-checklist.md rule 5 ("generalize once
+// the `interface-pollution-checklist` skill's rule 5 ("generalize once
 // 2+ real call sites need identical logic"), now satisfied by three.
 func filterInPlace[T any](items []T, exclude func(T) bool) []T {
 	out := items[:0]
