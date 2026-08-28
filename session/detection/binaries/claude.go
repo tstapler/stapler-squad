@@ -1,7 +1,12 @@
 // Package binaries provides per-binary BinaryDetector implementations.
 package binaries
 
-import "github.com/tstapler/stapler-squad/session/detection/dtypes"
+import (
+	"regexp"
+	"strings"
+
+	"github.com/tstapler/stapler-squad/session/detection/dtypes"
+)
 
 // ClaudeDetector implements dtypes.BinaryDetector for the Claude Code CLI.
 type ClaudeDetector struct{}
@@ -403,4 +408,40 @@ func (d *ClaudeDetector) Patterns() dtypes.StatusPatterns {
 			},
 		},
 	}
+}
+
+// oscBrailleSpinnerRegex matches any Braille Pattern character (U+2800-U+28FF).
+// Claude Code's OSC window title uses these as spinner frames while working.
+// Deliberately the full Unicode block (broader than the hand-listed frame sets
+// already used for screen-text matching in the Active patterns above) — OSC
+// titles are short, single-purpose strings, so the wider range's false-positive
+// risk is low (see osc-status-signals research/stack.md).
+var oscBrailleSpinnerRegex = regexp.MustCompile(`[\x{2800}-\x{28FF}]`)
+
+// oscIdleGlyph is the exact glyph (U+2733 EIGHT SPOKED ASTERISK) Claude Code's
+// OSC window title uses to signal idle/done — NOT the visually similar ✻
+// (U+273B) or ✽ (U+273D) used elsewhere in this file's screen-text patterns.
+const oscIdleGlyph = '✳'
+
+// ClassifyOSCTitle inspects a Claude Code OSC window-title payload (already
+// extracted via pkg/ansi.ExtractLastOSC) and returns a definitive OSC-derived
+// status if the title contains an unambiguous spinner or idle marker. Returns
+// ok=false for an empty or unrecognized title — callers must fall back to
+// text-pattern detection in that case.
+//
+// Spinner is checked before the idle glyph: if a title somehow contained both,
+// treating it as "still executing" is the lower-cost mistake (a false busy
+// indicator self-corrects on the next idle title; a false idle indicator could
+// mask genuinely active work) — see osc-status-signals research/pitfalls.md §4.
+func ClassifyOSCTitle(title string) (dtypes.OSCStatus, bool) {
+	if title == "" {
+		return dtypes.OSCStatusNone, false
+	}
+	if oscBrailleSpinnerRegex.MatchString(title) {
+		return dtypes.OSCStatusExecuting, true
+	}
+	if strings.ContainsRune(title, oscIdleGlyph) {
+		return dtypes.OSCStatusIdle, true
+	}
+	return dtypes.OSCStatusNone, false
 }

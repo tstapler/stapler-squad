@@ -10,6 +10,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/pkg/analytics"
 	"github.com/tstapler/stapler-squad/session/detection"
+	"github.com/tstapler/stapler-squad/session/detection/dtypes"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
@@ -1258,4 +1259,153 @@ func TestClaudeController_StatusChangeListener_NotCalledAfterStop(t *testing.T) 
 	case <-time.After(200 * time.Millisecond):
 		// Expected: silence after stop.
 	}
+}
+
+// ---------------------------------------------------------------------------
+// OSC title status override (osc-status-signals)
+// ---------------------------------------------------------------------------
+
+func TestGetCurrentStatus_OSCSpinnerOverridesFalseIdle(t *testing.T) {
+	t.Parallel()
+	cc, _ := newControllerWithMock("$ \x1b]0;⠋ working\x07")
+	cc.started.Store(true)
+
+	status, desc := cc.GetCurrentStatus()
+	if status != detection.StatusExecuting {
+		t.Errorf("GetCurrentStatus() = (%v, %q), want StatusExecuting (OSC spinner title over a bare prompt)", status, desc)
+	}
+}
+
+func TestGetCurrentStatus_OSCIdleMarker_PromotesReadyOnlyText(t *testing.T) {
+	t.Parallel()
+	cc, _ := newControllerWithMock("$ \x1b]0;✳\x07")
+	cc.started.Store(true)
+
+	status, desc := cc.GetCurrentStatus()
+	if status != detection.StatusIdle {
+		t.Errorf("GetCurrentStatus() = (%v, %q), want StatusIdle (OSC ✳ marker over Ready/Unknown text)", status, desc)
+	}
+}
+
+func TestGetCurrentStatus_OSCIdle_DoesNotOverrideActiveText(t *testing.T) {
+	t.Parallel()
+	cc, _ := newControllerWithMock("esc to interrupt\x1b]0;✳\x07")
+	cc.started.Store(true)
+
+	status, desc := cc.GetCurrentStatus()
+	if status != detection.StatusExecuting {
+		t.Errorf("GetCurrentStatus() = (%v, %q), want StatusExecuting (a stale/nested ✳ OSC title must not downgrade active text)", status, desc)
+	}
+}
+
+func TestGetCurrentStatus_NoOSCTitle_FallsBackToTextPattern(t *testing.T) {
+	t.Parallel()
+	ccWithOSC, _ := newControllerWithMock(tmuxOutputSmall)
+	ccWithOSC.started.Store(true)
+	statusStarted, descStarted := ccWithOSC.GetCurrentStatus()
+
+	ccNotStarted, _ := newControllerWithMock(tmuxOutputSmall)
+	statusNotStarted, descNotStarted := ccNotStarted.GetCurrentStatus()
+
+	// tmuxOutputSmall contains no OSC sequence, so classifyOSC never matches
+	// regardless of cc.started — the result must be identical either way,
+	// proving AC7 (no behavior change when no OSC title is present).
+	if statusStarted != statusNotStarted || descStarted != descNotStarted {
+		t.Errorf("result differs with no OSC title present: started=(%v,%q) not-started=(%v,%q)",
+			statusStarted, descStarted, statusNotStarted, descNotStarted)
+	}
+}
+
+func TestGetStatusAndIdleInfo_OSCPromotesIdleState(t *testing.T) {
+	t.Parallel()
+	cc, _ := newControllerWithMock("$ \x1b]0;⠋ working\x07")
+	cc.started.Store(true)
+
+	status, _, idleInfo, _ := cc.GetStatusAndIdleInfo()
+	if status != detection.StatusExecuting {
+		t.Errorf("GetStatusAndIdleInfo() status = %v, want StatusExecuting", status)
+	}
+	if idleInfo.State != detection.IdleStateActive {
+		t.Errorf("GetStatusAndIdleInfo() idleInfo.State = %v, want IdleStateActive", idleInfo.State)
+	}
+}
+
+func TestGetIdleState_OSCSpinnerMatchesGetStatusAndIdleInfo(t *testing.T) {
+	t.Parallel()
+	cc, _ := newControllerWithMock("$ \x1b]0;⠋ working\x07")
+	cc.started.Store(true)
+
+	state, _ := cc.GetIdleState()
+	if state != detection.IdleStateActive {
+		t.Errorf("GetIdleState() = %v, want IdleStateActive (consistent with GetStatusAndIdleInfo)", state)
+	}
+}
+
+func TestClassifyOSC_StaleActivity_FallsBackToNone(t *testing.T) {
+	t.Parallel()
+	cc, _ := newControllerWithMock("$ \x1b]0;⠋ working\x07")
+	cc.started.Store(true)
+
+	id := cc.idleDetector.Load()
+	id.InitializeFromTimestamp(time.Now().Add(-oscStaleThreshold - time.Second))
+
+	if osc, ok := cc.classifyOSC("$ \x1b]0;⠋ working\x07"); ok {
+		t.Errorf("classifyOSC() with stale activity = (%v, true), want (_, false)", osc)
+	}
+
+	// Recent activity: the spinner title is still classified normally — proves
+	// the guard doesn't fire on legitimate in-progress work.
+	id.InitializeFromTimestamp(time.Now())
+	if _, ok := cc.classifyOSC("$ \x1b]0;⠋ working\x07"); !ok {
+		t.Error("classifyOSC() with recent activity should still classify the OSC title")
+	}
+}
+
+func TestApplyOSCStatusOverride_FullMatrix(t *testing.T) {
+	t.Parallel()
+	allStatuses := []detection.DetectedStatus{
+		detection.StatusUnknown, detection.StatusReady, detection.StatusProcessing,
+		detection.StatusNeedsApproval, detection.StatusInputRequired, detection.StatusError,
+		detection.StatusTestsFailing, detection.StatusIdle, detection.StatusExecuting,
+		detection.StatusSuccess, detection.StatusWaitingForAgent, detection.StatusCompacting,
+	}
+	executingPromotable := map[detection.DetectedStatus]bool{
+		detection.StatusReady: true, detection.StatusUnknown: true,
+		detection.StatusIdle: true, detection.StatusProcessing: true,
+	}
+	idlePromotable := map[detection.DetectedStatus]bool{
+		detection.StatusReady: true, detection.StatusUnknown: true,
+	}
+
+	for _, s := range allStatuses {
+		t.Run(s.String()+"/OSCStatusExecuting", func(t *testing.T) {
+			got, _ := applyOSCStatusOverride(s, "orig", dtypes.OSCStatusExecuting)
+			wantPromoted := executingPromotable[s]
+			if wantPromoted && got != detection.StatusExecuting {
+				t.Errorf("applyOSCStatusOverride(%v, OSCStatusExecuting) = %v, want StatusExecuting (promotable)", s, got)
+			}
+			if !wantPromoted && got != s {
+				t.Errorf("applyOSCStatusOverride(%v, OSCStatusExecuting) = %v, want %v (never demoted/changed)", s, got, s)
+			}
+		})
+		t.Run(s.String()+"/OSCStatusIdle", func(t *testing.T) {
+			got, _ := applyOSCStatusOverride(s, "orig", dtypes.OSCStatusIdle)
+			wantPromoted := idlePromotable[s]
+			if wantPromoted && got != detection.StatusIdle {
+				t.Errorf("applyOSCStatusOverride(%v, OSCStatusIdle) = %v, want StatusIdle (promotable)", s, got)
+			}
+			if !wantPromoted && got != s {
+				t.Errorf("applyOSCStatusOverride(%v, OSCStatusIdle) = %v, want %v (never demoted/changed)", s, got, s)
+			}
+		})
+	}
+
+	t.Run("OSCStatusNone is always a no-op", func(t *testing.T) {
+		for _, s := range allStatuses {
+			got, gotDesc := applyOSCStatusOverride(s, "orig", dtypes.OSCStatusNone)
+			if got != s || gotDesc != "orig" {
+				t.Errorf("applyOSCStatusOverride(%v, OSCStatusNone) = (%v, %q), want (%v, %q)", s, got, gotDesc, s, "orig")
+			}
+		}
+	})
 }

@@ -13,7 +13,10 @@ import (
 	"github.com/spaolacci/murmur3"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/pkg/analytics"
+	"github.com/tstapler/stapler-squad/pkg/ansi"
 	"github.com/tstapler/stapler-squad/session/detection"
+	"github.com/tstapler/stapler-squad/session/detection/binaries"
+	"github.com/tstapler/stapler-squad/session/detection/dtypes"
 	"github.com/tstapler/stapler-squad/session/detection/ratelimit"
 )
 
@@ -650,6 +653,65 @@ func (cc *ClaudeController) Unsubscribe(subscriberID string) error {
 // This function holds no lifecycle lock — it reads ptyAccess and statusDetector
 // via atomic.Pointer, and the status/idle caches via atomic.Pointer. It therefore never
 // blocks when Stop() is running its slow cleanup.
+// oscStaleThreshold bounds how long a stale OSC title is trusted after the
+// PTY stops producing real output (crash/kill without a clean Stop() call —
+// cc.IsStarted() alone stays true for an indefinite period after an
+// unexpected exit, since Stop() is only called from deliberate
+// operator/driver paths, never from the exit callbacks that fire on a
+// crash). Compared against IdleDetector.GetLastActivityNs(), which is
+// already updated on every real PTY read independent of this feature, so
+// this reuses an existing liveness clock rather than adding a new one. Set
+// well above OSCDebounceDelay/spinner redraw cadence so no legitimate
+// in-progress spinner can trip it.
+const oscStaleThreshold = 5 * time.Second
+
+// classifyOSC extracts and classifies the OSC window-title payload from tail,
+// gated on the session still being started AND on recent real PTY activity —
+// an exited process's last-written title could otherwise be misread as
+// current state forever (see oscStaleThreshold doc above). Returns ok=false
+// whenever the controller isn't started, the PTY has been silent longer than
+// oscStaleThreshold, no OSC title is present in tail, or the title matches
+// neither recognized marker — callers must fall back to text-pattern
+// detection in that case (AC7).
+func (cc *ClaudeController) classifyOSC(tail string) (dtypes.OSCStatus, bool) {
+	if !cc.IsStarted() {
+		return dtypes.OSCStatusNone, false
+	}
+	if detector := cc.idleDetector.Load(); detector != nil {
+		if ns := detector.GetLastActivityNs(); ns > 0 && time.Since(time.Unix(0, ns)) > oscStaleThreshold {
+			return dtypes.OSCStatusNone, false
+		}
+	}
+	title, ok := ansi.ExtractLastOSC(tail, "0", "2")
+	if !ok {
+		return dtypes.OSCStatusNone, false
+	}
+	return binaries.ClassifyOSCTitle(title)
+}
+
+// applyOSCStatusOverride applies osc as an asymmetric, upgrade-only overlay on
+// top of textStatus/textDesc: OSCStatusExecuting may promote a low-urgency
+// text result toward StatusExecuting; OSCStatusIdle may only promote
+// Ready/Unknown toward StatusIdle. Neither direction ever demotes a
+// higher-urgency text-pattern result (Error, NeedsApproval, InputRequired,
+// TestsFailing, Success, WaitingForAgent, Executing). Uses
+// detection.IsOSCExecutingPromotable/IsOSCIdlePromotable — the same
+// predicates IdleDetector.DetectStateFromContentWithOSC uses for the
+// IdleState side — so the two overlays can never independently drift.
+func applyOSCStatusOverride(textStatus detection.DetectedStatus, textDesc string, osc dtypes.OSCStatus) (detection.DetectedStatus, string) {
+	switch osc {
+	case dtypes.OSCStatusExecuting:
+		if detection.IsOSCExecutingPromotable(textStatus) {
+			return detection.StatusExecuting, "osc_title: spinner glyph detected"
+		}
+	case dtypes.OSCStatusIdle:
+		if detection.IsOSCIdlePromotable(textStatus) {
+			return detection.StatusIdle, "osc_title: idle marker (✳) detected"
+		}
+	}
+	return textStatus, textDesc
+}
+
 func (cc *ClaudeController) GetCurrentStatus() (detection.DetectedStatus, string) {
 	pa := cc.ptyAccess.Load()
 	if pa == nil {
@@ -727,6 +789,14 @@ func (cc *ClaudeController) GetCurrentStatus() (detection.DetectedStatus, string
 			"lines_count", len(lines),
 			"tail_snippet", fmt.Sprintf("%q", snippet),
 		)
+	}
+
+	if osc, ok := cc.classifyOSC(tail); ok {
+		newStatus, newDesc := applyOSCStatusOverride(status, desc, osc)
+		if newStatus != status {
+			log.Debug("GetCurrentStatus: OSC override changed status", "session", cc.sessionName, "text_status", status, "osc_status", newStatus)
+		}
+		status, desc = newStatus, newDesc
 	}
 
 	// count is stored in the cache (not returned — GetCurrentStatus's callers don't need
@@ -934,7 +1004,11 @@ func (cc *ClaudeController) GetIdleState() (detection.IdleState, time.Time) {
 					tail := string((*bufp)[:n])
 					tailBufPool.Put(bufp)
 					filtered, _ := filterTmuxMetadata(tail)
-					state = id.DetectStateFromContent(filtered)
+					if osc, ok := cc.classifyOSC(tail); ok {
+						state = id.DetectStateFromContentWithOSC(filtered, osc)
+					} else {
+						state = id.DetectStateFromContent(filtered)
+					}
 					cc.idleCache.Store(&idleCacheEntry{tailHash: h, state: state})
 				} else {
 					tailBufPool.Put(bufp)
@@ -1080,16 +1154,35 @@ func (cc *ClaudeController) GetStatusAndIdleInfo() (detection.DetectedStatus, st
 	var count int
 	var idleState detection.IdleState
 
+	osc, oscOK := cc.classifyOSC(tail)
+
 	if statusHit {
 		status, desc, count = cachedStatus, cachedDesc, cachedCount
 	} else {
 		status, desc, count = cc.resolveStatusFromTail(filtered, tail)
+		// Guard against an uninitialized statusDetector: resolveStatusFromTail
+		// leaves status at its zero value (StatusUnknown) in that case, and
+		// StatusUnknown is in both OSC promotable sets — without this guard an
+		// uninitialized detector could report a confident StatusExecuting/
+		// StatusIdle sourced entirely from OSC instead of surfacing the
+		// uninitialized state.
+		if oscOK && cc.statusDetector.Load() != nil {
+			newStatus, newDesc := applyOSCStatusOverride(status, desc, osc)
+			if newStatus != status {
+				log.Debug("GetStatusAndIdleInfo: OSC override changed status", "session", cc.sessionName, "text_status", status, "osc_status", newStatus)
+			}
+			status, desc = newStatus, newDesc
+		}
 	}
 
 	if idleHit {
 		idleState = cachedIdleState
 	} else if id != nil {
-		idleState = id.DetectStateFromContent(filtered)
+		if oscOK {
+			idleState = id.DetectStateFromContentWithOSC(filtered, osc)
+		} else {
+			idleState = id.DetectStateFromContent(filtered)
+		}
 	}
 
 	if !statusHit {
