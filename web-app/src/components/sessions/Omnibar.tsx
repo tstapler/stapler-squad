@@ -24,7 +24,7 @@ import type { WorkflowEntry } from "@/lib/omnibar/detectors/WorkflowDetector";
 import type { AliasMetadata } from "@/lib/omnibar/detectors/AliasDetector";
 import { OmnibarResultList, getResultListItemCount, getHighlightedItemId } from "./OmnibarResultList";
 import { OmnibarModeBadge } from "./OmnibarModeBadge";
-import { OmnibarCreationPanel, SESSION_TYPES } from "./OmnibarCreationPanel";
+import { OmnibarCreationPanel, SESSION_TYPES, type RemoteOption } from "./OmnibarCreationPanel";
 import { parseSlashCommand } from "@/lib/omnibar/parseSlashCommand";
 import { parseInputWithSeparator } from "@/lib/omnibar/parseInput";
 import { toSessionSlug } from "@/lib/omnibar/slugify";
@@ -48,6 +48,7 @@ import type { PresetMetadata, PresetNotFoundMetadata } from "@/lib/omnibar/detec
 // would restart the 150ms debounce on every render for such callers.
 const EMPTY_WORKFLOWS: WorkflowEntry[] = [];
 const EMPTY_PRESETS: LauncherPresetEntry[] = [];
+const EMPTY_REMOTES: RemoteOption[] = [];
 
 interface OmnibarProps {
   isOpen: boolean;
@@ -56,6 +57,8 @@ interface OmnibarProps {
   onNavigateToSession: (sessionId: string) => void;
   onNavigateToSessionInNewPane?: (sessionId: string) => void;
   onRunWorkflow?: (slug: string, arg: string) => Promise<void>;
+  /** Creates a backlog item from a free-text chat message (the "backlog: <message>" trigger). */
+  onCreateBacklogItemFromChat?: (text: string) => Promise<void>;
   initialMode?: "discovery" | "creation";
   initialInput?: string;
   initialTitle?: string;
@@ -67,6 +70,11 @@ interface OmnibarProps {
   launcherPresets?: LauncherPresetEntry[];
   launcherPresetsLoading?: boolean;
   launcherPresetsLoadError?: string | null;
+  /** Configured remotes for the "Remote host" selector (ADR-001: remote-as-orthogonal-flag).
+   * TODO(Phase 6): OmnibarContext will source this from a `remotesSlice` populated by a
+   * ListRemotes RPC — until then it's an optional prop that defaults to empty (no selector
+   * rendered, today's local-only behavior unchanged). */
+  remotes?: RemoteOption[];
 }
 
 // Consolidated form state
@@ -98,6 +106,11 @@ export interface OmnibarFormState {
   // extraArgs carries a selected launcher preset's argv[1:] verbatim (never whitespace-split)
   // through to the extra_args RPC field. Parallel to program, which carries argv[0].
   extraArgs: string[];
+  // Remote target: an orthogonal flag that composes with whichever sessionType is selected
+  // (any type) rather than a session type of its own — see ADR-001
+  // (remote-as-orthogonal-flag) and OmnibarCreationPanel's "Remote host" selector. Names an
+  // already-configured RemoteConfig by name; undefined means "run locally" (today's default).
+  remoteName?: string;
 }
 
 const INITIAL_FORM_STATE: OmnibarFormState = {
@@ -119,6 +132,8 @@ const INITIAL_FORM_STATE: OmnibarFormState = {
   autonomousMode: false,
   autoApprove: false,
   extraArgs: [],
+  // undefined = local (this machine) — see OmnibarFormState.remoteName's doc comment.
+  remoteName: undefined,
 };
 
 // Consolidated UI state
@@ -161,6 +176,10 @@ export interface OmnibarSessionData {
   aliasName?: string;
   extraCliFlags?: string;
   extraArgs?: string[];
+  // Names an already-configured remote (RemoteConfig.Name) to run this session on over SSH,
+  // per ADR-001 (remote-as-orthogonal-flag). Undefined runs locally — see
+  // OmnibarFormState.remoteName's doc comment.
+  remoteName?: string;
 }
 
 // Validates a project name: no path separators, null bytes, or leading/trailing spaces/dots.
@@ -181,7 +200,7 @@ function protoSessionTypeToFormString(st: SessionType): OmnibarFormState["sessio
   }
 }
 
-export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession, onNavigateToSessionInNewPane, onRunWorkflow, initialMode, initialInput, initialTitle, workflows = EMPTY_WORKFLOWS, launcherPresets = EMPTY_PRESETS, launcherPresetsLoading = false, launcherPresetsLoadError = null }: OmnibarProps) {
+export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession, onNavigateToSessionInNewPane, onRunWorkflow, onCreateBacklogItemFromChat, initialMode, initialInput, initialTitle, workflows = EMPTY_WORKFLOWS, launcherPresets = EMPTY_PRESETS, launcherPresetsLoading = false, launcherPresetsLoadError = null, remotes = EMPTY_REMOTES }: OmnibarProps) {
   const router = useRouter();
   const { setTheme } = useTheme();
 
@@ -1049,6 +1068,8 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
     // Recognized commands (>theme ..., >go ...) and spawn_shell are always submittable
     if (detection?.type === InputType.Command && detection.confidence === 1.0) return true;
     if (detection?.type === InputType.SpawnShell && detection.confidence === 1.0) return true;
+    // Chat backlog item creation (backlog: <message>) needs no sessionName/path.
+    if (detection?.type === InputType.ChatBacklogItem) return true;
 
     if (!input.trim()) return false;
     if (!sessionName.trim()) return false;
@@ -1096,6 +1117,23 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
         router.push(commandArg);
       }
       onClose();
+      return;
+    }
+
+    // Chat backlog item creation (backlog: <message>) — no session-creation flow, just
+    // hands the free-text message off to the backlog RPC and closes the omnibar.
+    if (detection?.type === InputType.ChatBacklogItem) {
+      const message = detection.parsedValue;
+      setIsSubmitting(true);
+      setError(null);
+      try {
+        await onCreateBacklogItemFromChat?.(message);
+        onClose();
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Failed to create backlog item");
+      } finally {
+        setIsSubmitting(false);
+      }
       return;
     }
 
@@ -1231,6 +1269,9 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
           workingDir: isOneOff ? undefined : (workingDir.trim() || undefined),
           autonomousMode: isAutonomous ? true : undefined,
           permissionMode: isAutonomous ? "auto" : undefined,
+          // Remote target composes with sessionType exactly like autonomousMode above —
+          // passed through only when set (ADR-001: remote-as-orthogonal-flag).
+          remoteName: formState.remoteName || undefined,
           // Only forward when relevant (non-existent path + opt-in checked).
           createIfMissing: pathDoesNotExist && createIfMissing ? true : undefined,
           initialPrompt: firstPromptText,
@@ -1302,9 +1343,11 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
     onCreateSession,
     onClose,
     onRunWorkflow,
+    onCreateBacklogItemFromChat,
     formState.firstPrompt,
     formState.autonomousMode,
     formState.extraArgs,
+    formState.remoteName,
     router,
     setTheme,
   ]);
@@ -1619,6 +1662,7 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
             launcherPresets={launcherPresets}
             launcherPresetsLoading={launcherPresetsLoading}
             launcherPresetsLoadError={launcherPresetsLoadError}
+            remotes={remotes}
           />
         )}
 

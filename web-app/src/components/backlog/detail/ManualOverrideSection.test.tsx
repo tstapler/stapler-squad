@@ -19,6 +19,7 @@ function makeItem(overrides: Partial<BacklogItem> = {}): BacklogItem {
     notes: "",
     statusEvents: [],
     progressNotes: [],
+    activityNotes: [],
     totalEstimatedCostUsd: 0,
     allowedTransitions: ["pr_pending", "done", "in_progress"],
     ...overrides,

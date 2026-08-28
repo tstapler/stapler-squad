@@ -45,6 +45,13 @@ type TmuxServerRegistry struct {
 	mu       sync.RWMutex
 	sessions map[string]bool
 
+	// closedAt pins a session as absent for closedPinWindow after an explicit
+	// close (NotifySessionClosed or a %session-closed event), so a
+	// syncSessionsLocked fetch that was already in flight when the close
+	// happened can't resurrect it by overwriting r.sessions with a stale
+	// "still exists" snapshot. See BUG-074.
+	closedAt map[string]time.Time
+
 	// subsMu guards subscribers. CRITICAL: never close(ch) while holding subsMu.
 	// Copy subscribers out under the lock, release the lock, then close outside.
 	subsMu      sync.Mutex
@@ -79,6 +86,7 @@ func NewTmuxServerRegistry(serverSocket string) *TmuxServerRegistry {
 	return &TmuxServerRegistry{
 		serverSocket: serverSocket,
 		sessions:     make(map[string]bool),
+		closedAt:     make(map[string]time.Time),
 		subscribers:  make(map[string][]*paneExitSub),
 		ctx:          ctx,
 		cancel:       cancel,
@@ -193,6 +201,20 @@ func (r *TmuxServerRegistry) IsHealthy() bool {
 func (r *TmuxServerRegistry) NotifySessionCreated(name string) {
 	r.mu.Lock()
 	r.sessions[name] = true
+	delete(r.closedAt, name)
+	r.mu.Unlock()
+}
+
+// NotifySessionClosed proactively marks a session as gone in the registry.
+// Called by TmuxSession.Close() right after a synchronous "kill-session"
+// subprocess confirms the session is dead, so DoesSessionExist()'s registry
+// fast path returns false immediately instead of trusting a stale "exists"
+// entry until the async %session-closed control-mode event is processed --
+// the symmetric counterpart of NotifySessionCreated's create-side fast path.
+func (r *TmuxServerRegistry) NotifySessionClosed(name string) {
+	r.mu.Lock()
+	delete(r.sessions, name)
+	r.closedAt[name] = time.Now()
 	r.mu.Unlock()
 }
 
@@ -253,6 +275,14 @@ func (r *TmuxServerRegistry) firePaneExit(sessionName string) {
 // fastRecheckSyncTimeout in waitBackoffWithFastRecheck).
 const defaultSyncTimeout = 10 * time.Second
 
+// closedPinWindow bounds how long a name recently marked closed (via
+// NotifySessionClosed or a %session-closed event) is protected from being
+// resurrected by a syncSessionsLocked swap. Needed because a list-sessions
+// fetch already in flight when the close happens can return a stale
+// "still exists" snapshot that would otherwise clobber the close. 2s comfortably
+// covers list-sessions' subprocess latency plus the 50ms debounce delay.
+const closedPinWindow = 2 * time.Second
+
 // syncSessions acquires syncMu and runs the fetch-diff-swap sequence. Used
 // by the 3 pre-existing callers with no tight latency budget (Start,
 // reconnectLoop's post-connect sync, the debounce callback). The
@@ -295,6 +325,17 @@ func (r *TmuxServerRegistry) syncSessionsLocked(ctx context.Context, timeout tim
 	// notified even when control-mode events were missed (e.g. in a
 	// headless environment where the control-mode connection is short-lived).
 	r.mu.Lock()
+	now := time.Now()
+	for name, closedAt := range r.closedAt {
+		if now.Sub(closedAt) < closedPinWindow {
+			// A close happened after (or concurrently with) this fetch was
+			// issued -- honor the more recent close rather than the stale
+			// "still exists" snapshot list-sessions may have captured.
+			delete(sessions, name)
+		} else {
+			delete(r.closedAt, name)
+		}
+	}
 	var disappeared []string
 	for name := range r.sessions {
 		if !sessions[name] {
@@ -628,6 +669,7 @@ func (r *TmuxServerRegistry) handleEvent(line string) {
 			name := parts[2]
 			r.mu.Lock()
 			r.sessions[name] = true
+			delete(r.closedAt, name)
 			r.mu.Unlock()
 			log.Info("[registry] session created", "session", name)
 		}
@@ -639,6 +681,7 @@ func (r *TmuxServerRegistry) handleEvent(line string) {
 			name := parts[2]
 			r.mu.Lock()
 			delete(r.sessions, name)
+			r.closedAt[name] = time.Now()
 			r.mu.Unlock()
 			log.Info("[registry] session closed", "session", name)
 			r.firePaneExit(name)

@@ -267,6 +267,7 @@ func (t *testFileService) searchFiles(ctx context.Context, req *connect.Request[
 // ---- Tests for resolveAndValidatePath ----
 
 func TestResolveAndValidatePath_TraversalRejected(t *testing.T) {
+	t.Parallel()
 	base := t.TempDir()
 
 	cases := []struct {
@@ -280,6 +281,7 @@ func TestResolveAndValidatePath_TraversalRejected(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.desc, func(t *testing.T) {
+			t.Parallel()
 			_, err := resolveAndValidatePath(base, tc.rel)
 			if err == nil {
 				t.Fatalf("expected error for path %q, got nil", tc.rel)
@@ -289,6 +291,7 @@ func TestResolveAndValidatePath_TraversalRejected(t *testing.T) {
 }
 
 func TestResolveAndValidatePath_ValidPath(t *testing.T) {
+	t.Parallel()
 	base := t.TempDir()
 
 	cases := []string{".", "subdir", "subdir/file.go", "a/b/c"}
@@ -303,6 +306,7 @@ func TestResolveAndValidatePath_ValidPath(t *testing.T) {
 // ---- Tests for ListFiles ----
 
 func TestListFiles_HardSkipDirs(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 
 	for _, dir := range []string{"node_modules", "vendor", ".git", "__pycache__"} {
@@ -345,6 +349,7 @@ func TestListFiles_HardSkipDirs(t *testing.T) {
 }
 
 func TestListFiles_GitignoreFiltering(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 
 	if err := os.WriteFile(filepath.Join(root, ".gitignore"), []byte("*.tmp\n"), 0644); err != nil {
@@ -395,6 +400,7 @@ func TestListFiles_GitignoreFiltering(t *testing.T) {
 }
 
 func TestListFiles_DirectoriesFirst(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 
 	if err := os.MkdirAll(filepath.Join(root, "zdir"), 0755); err != nil {
@@ -435,6 +441,7 @@ func TestListFiles_DirectoriesFirst(t *testing.T) {
 }
 
 func TestListFiles_PathTraversalRejected(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	svc := newTestFileService(root)
 
@@ -448,6 +455,7 @@ func TestListFiles_PathTraversalRejected(t *testing.T) {
 }
 
 func TestListFiles_NotFound(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	svc := newTestFileService(root)
 
@@ -461,6 +469,7 @@ func TestListFiles_NotFound(t *testing.T) {
 }
 
 func TestListFiles_NodeCap(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 
 	// Create more than maxDirEntries files.
@@ -487,6 +496,7 @@ func TestListFiles_NodeCap(t *testing.T) {
 // ---- Tests for GetFileContent ----
 
 func TestGetFileContent_TextFile(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	content := "package main\n\nfunc main() {}\n"
 	if err := os.WriteFile(filepath.Join(root, "main.go"), []byte(content), 0644); err != nil {
@@ -510,6 +520,7 @@ func TestGetFileContent_TextFile(t *testing.T) {
 }
 
 func TestGetFileContent_BinaryFile(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "data.bin"), []byte{0x00, 0x01, 0x02, 0x00}, 0644); err != nil {
 		t.Fatal(err)
@@ -532,6 +543,7 @@ func TestGetFileContent_BinaryFile(t *testing.T) {
 }
 
 func TestGetFileContent_FileTooLarge(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	bigContent := strings.Repeat("a", maxFileSize+1)
 	if err := os.WriteFile(filepath.Join(root, "huge.txt"), []byte(bigContent), 0644); err != nil {
@@ -549,6 +561,7 @@ func TestGetFileContent_FileTooLarge(t *testing.T) {
 }
 
 func TestGetFileContent_NotFound(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	svc := newTestFileService(root)
 
@@ -562,6 +575,7 @@ func TestGetFileContent_NotFound(t *testing.T) {
 }
 
 func TestGetFileContent_PathTraversal(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	svc := newTestFileService(root)
 
@@ -575,6 +589,7 @@ func TestGetFileContent_PathTraversal(t *testing.T) {
 }
 
 func TestGetFileContent_Truncation(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	content := strings.Repeat("x", truncateSize+1)
 	if err := os.WriteFile(filepath.Join(root, "big.txt"), []byte(content), 0644); err != nil {
@@ -600,6 +615,7 @@ func TestGetFileContent_Truncation(t *testing.T) {
 // ---- Tests for SearchFiles ----
 
 func TestSearchFiles_NestedMatch(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 
 	if err := os.MkdirAll(filepath.Join(root, "a", "b", "c"), 0755); err != nil {
@@ -633,6 +649,7 @@ func TestSearchFiles_NestedMatch(t *testing.T) {
 }
 
 func TestSearchFiles_HardSkipDirs(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 
 	if err := os.MkdirAll(filepath.Join(root, "node_modules"), 0755); err != nil {
@@ -671,6 +688,7 @@ func TestSearchFiles_HardSkipDirs(t *testing.T) {
 }
 
 func TestSearchFiles_GitignoreFiltering(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 
 	if err := os.WriteFile(filepath.Join(root, ".gitignore"), []byte("*.tmp\n"), 0644); err != nil {
@@ -721,6 +739,7 @@ func TestSearchFiles_GitignoreFiltering(t *testing.T) {
 }
 
 func TestSearchFiles_ShortQueryReturnsEmpty(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "a.go"), []byte(""), 0644); err != nil {
 		t.Fatal(err)
@@ -740,6 +759,7 @@ func TestSearchFiles_ShortQueryReturnsEmpty(t *testing.T) {
 }
 
 func TestSearchFiles_MaxResultsCap(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 
 	for i := 0; i < 10; i++ {
@@ -770,6 +790,7 @@ func TestSearchFiles_MaxResultsCap(t *testing.T) {
 }
 
 func TestSearchFiles_NoMatchReturnsEmpty(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "main.go"), []byte(""), 0644); err != nil {
 		t.Fatal(err)
@@ -792,6 +813,7 @@ func TestSearchFiles_NoMatchReturnsEmpty(t *testing.T) {
 }
 
 func TestSearchFiles_PathTraversalRejected(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	svc := newTestFileService(root)
 
@@ -806,6 +828,7 @@ func TestSearchFiles_PathTraversalRejected(t *testing.T) {
 }
 
 func TestSearchFiles_PathMatchOnFullPath(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 
 	if err := os.MkdirAll(filepath.Join(root, "src", "cmd"), 0755); err != nil {
@@ -852,6 +875,7 @@ func serveFileRawRequest(t *testing.T, svc *FileService, relPath string, extraQu
 }
 
 func TestServeFileRaw_PDF(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	// Minimal PDF header so the file is recognisable.
 	pdfContent := []byte("%PDF-1.4 minimal pdf content for testing purposes")
@@ -883,6 +907,7 @@ func TestServeFileRaw_PDF(t *testing.T) {
 }
 
 func TestServeFileRaw_SVG(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	svgContent := []byte(`<svg xmlns="http://www.w3.org/2000/svg"><circle r="10"/></svg>`)
 	if err := os.WriteFile(filepath.Join(root, "image.svg"), svgContent, 0644); err != nil {
@@ -903,6 +928,7 @@ func TestServeFileRaw_SVG(t *testing.T) {
 }
 
 func TestServeFileRaw_HTML_RewritesRelativeLinks(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(root, "logos", "iterations"), 0755); err != nil {
 		t.Fatal(err)
@@ -938,6 +964,7 @@ func TestServeFileRaw_HTML_RewritesRelativeLinks(t *testing.T) {
 }
 
 func TestServeFileRaw_VideoMP4(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	// Minimal ftyp box so Go's http.ServeContent doesn't choke; content-type is driven by extension.
 	mp4Content := make([]byte, 512)
@@ -959,6 +986,7 @@ func TestServeFileRaw_VideoMP4(t *testing.T) {
 }
 
 func TestServeFileRaw_VideoOGV(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	ogvContent := make([]byte, 512)
 	if err := os.WriteFile(filepath.Join(root, "clip.ogv"), ogvContent, 0644); err != nil {
@@ -979,6 +1007,7 @@ func TestServeFileRaw_VideoOGV(t *testing.T) {
 }
 
 func TestServeFileRaw_LargeFilePDF(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	// PDF larger than maxFileSize (10 MB) — must still return 200 (no size cap for PDF).
 	largeContent := make([]byte, maxFileSize+1024)
@@ -997,6 +1026,7 @@ func TestServeFileRaw_LargeFilePDF(t *testing.T) {
 }
 
 func TestServeFileRaw_LargeFileBinary(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	// Generic binary (null bytes) larger than maxFileSize — must return 413.
 	largeContent := make([]byte, maxFileSize+1024)

@@ -109,6 +109,7 @@ func failingCIChecker() *fakePRPendingChecker {
 // has landed since spawn. It must instead follow the normal CI-failing path
 // and spawn a fix session.
 func TestReconcilePRPending_should_NotCloseUnmergedPRAsSuperseded_When_LastCommitShaIsOnlyTheSpawnTimeBase(t *testing.T) {
+	t.Parallel()
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -123,7 +124,7 @@ func TestReconcilePRPending_should_NotCloseUnmergedPRAsSuperseded_When_LastCommi
 	spawner := &fakePRFixSpawner{}
 	listener.SetPRFixSpawner(spawner)
 
-	listener.ReconcilePRPending(ctx, storage.repo.(*EntRepository))
+	listener.ReconcilePRPending(ctx, storage.repo)
 
 	assert.False(t, checker.closeCalled,
 		"PR #342 carries real unmerged work; it must never be closed as superseded on the strength of the session's own base commit")
@@ -145,6 +146,7 @@ func TestReconcilePRPending_should_NotCloseUnmergedPRAsSuperseded_When_LastCommi
 // back into the original bug for every pre-fix row still in the database. The
 // explicit BaseCommitSha comparison is what makes the fallback safe.
 func TestReconcilePRPending_should_NotCloseUnmergedPRAsSuperseded_When_SessionHeadCannotBeResolved(t *testing.T) {
+	t.Parallel()
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -159,7 +161,7 @@ func TestReconcilePRPending_should_NotCloseUnmergedPRAsSuperseded_When_SessionHe
 	overridePRPendingChecker(t, listener, checker)
 	listener.SetPRFixSpawner(&fakePRFixSpawner{})
 
-	listener.ReconcilePRPending(ctx, storage.repo.(*EntRepository))
+	listener.ReconcilePRPending(ctx, storage.repo)
 
 	assert.False(t, checker.closeCalled,
 		"an unresolvable HEAD must not license closing the PR against the session's base commit")
@@ -176,6 +178,7 @@ func TestReconcilePRPending_should_NotCloseUnmergedPRAsSuperseded_When_SessionHe
 // not its base — is confirmed on main. Without this, "never close anything"
 // would pass the regression tests while silently deleting the feature.
 func TestReconcilePRPending_should_StillCloseSupersededPR_When_SessionsRealTipIsOnMain(t *testing.T) {
+	t.Parallel()
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -201,7 +204,7 @@ func TestReconcilePRPending_should_StillCloseSupersededPR_When_SessionsRealTipIs
 	// as verified rather than failing closed.
 	stubMatchingPRByNumberFinder(listener, branch)
 
-	listener.ReconcilePRPending(ctx, storage.repo.(*EntRepository))
+	listener.ReconcilePRPending(ctx, storage.repo)
 
 	assert.True(t, checker.closeCalled,
 		"a PR whose session's real tip commit is already on main is genuinely superseded and must still be closed")
@@ -237,6 +240,7 @@ func TestReconcilePRPending_should_StillCloseSupersededPR_When_SessionsRealTipIs
 // was never recorded (empty), and LastCommitSha holds the same base value (the
 // only value it was ever seeded with).
 func TestReconcilePRPending_should_NotCloseUnmergedPRAsSuperseded_When_BaseCommitShaWasNeverRecorded(t *testing.T) {
+	t.Parallel()
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -289,7 +293,7 @@ func TestReconcilePRPending_should_NotCloseUnmergedPRAsSuperseded_When_BaseCommi
 	// below would pass for the wrong reason even without BUG-065's fix.
 	stubMatchingPRByNumberFinder(listener, branch)
 
-	listener.ReconcilePRPending(ctx, storage.repo.(*EntRepository))
+	listener.ReconcilePRPending(ctx, storage.repo)
 
 	assert.False(t, checker.closeCalled,
 		"an empty BaseCommitSha must not let the session's own spawn-time base slip through as if it were real work")
@@ -306,6 +310,7 @@ func TestReconcilePRPending_should_NotCloseUnmergedPRAsSuperseded_When_BaseCommi
 // held the spawn-time base because nothing refreshed it; this sweep — wired
 // into the existing reconciliation tick — is what makes the field's name true.
 func TestRefreshWorkSessionGitActivity_should_ReplaceSpawnTimeBaseWithSessionsRealTip(t *testing.T) {
+	t.Parallel()
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -345,6 +350,7 @@ func TestRefreshWorkSessionGitActivity_should_ReplaceSpawnTimeBaseWithSessionsRe
 // and handing it to automated remediation. Progress is recorded when it is
 // observed; last_commit_at keeps the true author time for display.
 func TestUpdateItemSessionGitActivity_should_RecordProgressAtObservationTime_When_CommitIsBackdated(t *testing.T) {
+	t.Parallel()
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()

@@ -15,6 +15,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -25,12 +26,15 @@ import (
 // it to STUCK_REASON_UNSPECIFIED, while all six known domain.StuckReason
 // constants map to their matching proto enum value.
 func TestToProtoStuckReason_should_mapToUnspecified_When_UnknownString(t *testing.T) {
+	t.Parallel()
 	t.Run("unknown reason maps to unspecified", func(t *testing.T) {
+		t.Parallel()
 		got := toProtoStuckReason(domain.StuckReason("banana"))
 		assert.Equal(t, sessionv1.StuckReason_STUCK_REASON_UNSPECIFIED, got)
 	})
 
 	t.Run("empty reason maps to unspecified", func(t *testing.T) {
+		t.Parallel()
 		got := toProtoStuckReason(domain.StuckReason(""))
 		assert.Equal(t, sessionv1.StuckReason_STUCK_REASON_UNSPECIFIED, got)
 	})
@@ -53,6 +57,7 @@ func TestToProtoStuckReason_should_mapToUnspecified_When_UnknownString(t *testin
 	}
 	for _, c := range cases {
 		t.Run(string(c.reason), func(t *testing.T) {
+			t.Parallel()
 			assert.Equal(t, c.want, toProtoStuckReason(c.reason))
 			// Round-trip: the inverse mapping must recover the same domain reason.
 			assert.Equal(t, c.reason, fromProtoStuckReason(c.want))
@@ -65,6 +70,7 @@ func TestToProtoStuckReason_should_mapToUnspecified_When_UnknownString(t *testin
 // Epic 1.1) maps to its dedicated proto enum value rather than falling
 // through to STUCK_REASON_UNSPECIFIED.
 func TestToProtoStuckReason_should_ReturnMultipleReasons_When_DomainStuckReasonMultipleReasons(t *testing.T) {
+	t.Parallel()
 	got := toProtoStuckReason(domain.StuckReasonMultipleReasons)
 	assert.Equal(t, sessionv1.StuckReason_STUCK_REASON_MULTIPLE_REASONS, got)
 }
@@ -73,6 +79,7 @@ func TestToProtoStuckReason_should_ReturnMultipleReasons_When_DomainStuckReasonM
 // verifies the inverse mapping for the new synthetic aggregate reason
 // (backlog-bounce-escalation, Epic 1.1) recovers the correct domain constant.
 func TestFromProtoStuckReason_should_ReturnBounceCapExhausted_When_ProtoBounceCapExhausted(t *testing.T) {
+	t.Parallel()
 	got := fromProtoStuckReason(sessionv1.StuckReason_STUCK_REASON_BOUNCE_CAP_EXHAUSTED)
 	assert.Equal(t, domain.StuckReasonBounceCapExhausted, got)
 }
@@ -105,6 +112,7 @@ func seedOpenStuckRow(t *testing.T, storage *session.Storage, itemID string, rea
 // parent item) to a StuckBacklogItem with the correct reason enum, PR
 // context, and duration.
 func TestListStuckBacklogItems_should_returnMappedItems_When_OpenRowsExist(t *testing.T) {
+	t.Parallel()
 	storage := createTestStorage(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	ctx := t.Context()
@@ -149,6 +157,7 @@ func TestListStuckBacklogItems_should_returnMappedItems_When_OpenRowsExist(t *te
 // (StuckItemDetail.tsx) has real data to check instead of trusting `reason`
 // alone (research/pitfalls.md #1).
 func TestListStuckBacklogItems_should_PopulatePlanArtifactsPath(t *testing.T) {
+	t.Parallel()
 	storage := createTestStorage(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	ctx := t.Context()
@@ -189,6 +198,7 @@ func TestListStuckBacklogItems_should_PopulatePlanArtifactsPath(t *testing.T) {
 // verifies SnoozeStuckItem sets snoozed_until on the matching open row and
 // that the next ListStuckBacklogItems call omits it.
 func TestSnoozeStuckItem_should_setSnoozedUntilAndOmitFromList_When_Called(t *testing.T) {
+	t.Parallel()
 	storage := createTestStorage(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	ctx := t.Context()
@@ -223,6 +233,7 @@ func TestSnoozeStuckItem_should_setSnoozedUntilAndOmitFromList_When_Called(t *te
 // TestSnoozeStuckItem_should_rejectInvalidArguments_When_ReasonOrItemMissing
 // covers the handler's input validation guards.
 func TestSnoozeStuckItem_should_rejectInvalidArguments_When_ReasonOrItemMissing(t *testing.T) {
+	t.Parallel()
 	storage := createTestStorage(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	ctx := t.Context()
@@ -247,6 +258,7 @@ func TestSnoozeStuckItem_should_rejectInvalidArguments_When_ReasonOrItemMissing(
 // verifies the RPC handler resets remediation_attempts/next_remediation_at on
 // the matching open row and the reset is visible via ListStuckBacklogItems.
 func TestResetStuckRemediation_should_clearCountersAndSurfaceInList_When_RowIsOpen(t *testing.T) {
+	t.Parallel()
 	storage := createTestStorage(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	ctx := t.Context()
@@ -279,6 +291,7 @@ func TestResetStuckRemediation_should_clearCountersAndSurfaceInList_When_RowIsOp
 // TestResetStuckRemediation_should_rejectInvalidArguments_When_ReasonOrItemMissing
 // mirrors SnoozeStuckItem's input validation test.
 func TestResetStuckRemediation_should_rejectInvalidArguments_When_ReasonOrItemMissing(t *testing.T) {
+	t.Parallel()
 	storage := createTestStorage(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	ctx := t.Context()
@@ -302,6 +315,7 @@ func TestResetStuckRemediation_should_rejectInvalidArguments_When_ReasonOrItemMi
 // only_parked_explicitly_set — a parked row is reset, a mid-backoff
 // (not-yet-parked) row is left alone.
 func TestBulkResetStuckRemediation_should_defaultToOnlyParked_When_FlagNotExplicitlySet(t *testing.T) {
+	t.Parallel()
 	storage := createTestStorage(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	ctx := t.Context()
@@ -339,6 +353,7 @@ func TestBulkResetStuckRemediation_should_defaultToOnlyParked_When_FlagNotExplic
 // verifies only_parked_explicitly_set=true with only_parked=false performs a
 // full reset regardless of attempt count.
 func TestBulkResetStuckRemediation_should_resetEveryOpenRow_When_OnlyParkedExplicitlyFalse(t *testing.T) {
+	t.Parallel()
 	storage := createTestStorage(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	ctx := t.Context()
@@ -358,9 +373,257 @@ func TestBulkResetStuckRemediation_should_resetEveryOpenRow_When_OnlyParkedExpli
 	assert.Equal(t, int32(1), resp.Msg.ResetCount)
 }
 
+// TestBulkResetStuckRemediation_should_onlyResetMatchingReason_When_ReasonFilterSet
+// verifies a reason-scoped sweep (AC 2 of the reason-scoped-sweep feature)
+// resets only parked rows matching the requested reason, leaving a different
+// reason's parked row untouched — the whole point of scoping the "recover
+// items parked by a now-fixed bucket" sweep to just that bucket rather than
+// resetting every parked row regardless of cause.
+func TestBulkResetStuckRemediation_should_onlyResetMatchingReason_When_ReasonFilterSet(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+	ctx := t.Context()
+
+	bouncing, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{Title: "bouncing", Status: string(session.BacklogStatusReview)})
+	require.NoError(t, err)
+	seedOpenStuckRow(t, storage, bouncing.ID, domain.StuckReasonBouncing, time.Now(), "bouncing")
+	_, err = storage.RecordRemediationAttempt(ctx, bouncing.ID, domain.StuckReasonBouncing, session.MaxRemediationAttempts, nil)
+	require.NoError(t, err)
+
+	staleWork, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{Title: "stale-work", Status: string(session.BacklogStatusInProgress)})
+	require.NoError(t, err)
+	seedOpenStuckRow(t, storage, staleWork.ID, domain.StuckReasonStaleWork, time.Now(), "stale")
+	_, err = storage.RecordRemediationAttempt(ctx, staleWork.ID, domain.StuckReasonStaleWork, session.MaxRemediationAttempts, nil)
+	require.NoError(t, err)
+
+	resp, err := svc.BulkResetStuckRemediation(ctx, connect.NewRequest(&sessionv1.BulkResetStuckRemediationRequest{
+		Reason: sessionv1.StuckReason_STUCK_REASON_BOUNCING,
+	}))
+	require.NoError(t, err)
+	assert.Equal(t, int32(1), resp.Msg.ResetCount, "only the bouncing row should be reset")
+
+	list, err := svc.ListStuckBacklogItems(ctx, connect.NewRequest(&sessionv1.ListStuckBacklogItemsRequest{}))
+	require.NoError(t, err)
+	require.Len(t, list.Msg.Items, 2)
+	for _, item := range list.Msg.Items {
+		switch item.ItemId {
+		case bouncing.ID:
+			assert.Equal(t, int32(0), item.RemediationAttempts, "reason-matched row must be reset")
+		case staleWork.ID:
+			assert.Equal(t, int32(session.MaxRemediationAttempts), item.RemediationAttempts, "different-reason row must be untouched")
+		default:
+			t.Fatalf("unexpected item %s", item.ItemId)
+		}
+	}
+}
+
+// TestBulkResetStuckRemediation_should_publishNotification_When_RowsReset
+// verifies AC 3 of the reason-scoped-sweep feature: a bulk reset that
+// actually changes rows fires a visible operator notification naming the
+// reason and the reset count, mirroring the existing justParked one-time-notify
+// pattern (session/backlog_lifecycle.go's notify) instead of mutating
+// silently — the exact "notify-once-then-silent" gap this feature exists to
+// close on the *reset* side.
+func TestBulkResetStuckRemediation_should_publishNotification_When_RowsReset(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+	bus := events.NewEventBus(4)
+	svc.SetEventBus(bus)
+	ctx := t.Context()
+
+	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{Title: "bouncing", Status: string(session.BacklogStatusReview)})
+	require.NoError(t, err)
+	seedOpenStuckRow(t, storage, item.ID, domain.StuckReasonBouncing, time.Now(), "bouncing")
+	_, err = storage.RecordRemediationAttempt(ctx, item.ID, domain.StuckReasonBouncing, session.MaxRemediationAttempts, nil)
+	require.NoError(t, err)
+
+	subCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	ch, _ := bus.Subscribe(subCtx)
+
+	resp, err := svc.BulkResetStuckRemediation(ctx, connect.NewRequest(&sessionv1.BulkResetStuckRemediationRequest{
+		Reason: sessionv1.StuckReason_STUCK_REASON_BOUNCING,
+	}))
+	require.NoError(t, err)
+	require.Equal(t, int32(1), resp.Msg.ResetCount)
+
+	select {
+	case ev := <-ch:
+		assert.Equal(t, events.EventNotification, ev.Type)
+		assert.Contains(t, ev.NotificationMessage, string(domain.StuckReasonBouncing))
+		assert.Contains(t, ev.NotificationMessage, "1 parked item")
+		assert.Equal(t, string(domain.StuckReasonBouncing), ev.NotificationMetadata["reason"])
+		assert.Equal(t, "1", ev.NotificationMetadata["reset_count"])
+		assert.NotEmpty(t, ev.SessionID, "sessionID must not be empty — see notifyBulkResetParked's doc comment for the coalescing-collision bug this avoids")
+		assert.Equal(t, ev.SessionID, ev.NotificationMetadata["item_id"], "item_id must mirror sessionID so eventToRecord doesn't fall back SessionName to the raw synthetic key")
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected a notification event after a non-empty bulk reset")
+	}
+}
+
+// TestBulkResetStuckRemediation_should_useDistinctSessionIDsPerReason_When_NotifyingDifferentScopes
+// covers the notification-history-collision bug an earlier draft of
+// notifyBulkResetParked reintroduced (caught in review): NotificationHistoryStore
+// coalesces unread notifications by (sessionID, notificationType) with no time
+// bound (server/notifications/store.go's findUnreadDuplicate), and
+// EventBusNotifier.Notify's doc comment (server/services/backlog_notifier.go)
+// documents the exact prior incident this class of bug caused — two different
+// items'/scopes' same-type notifications sharing sessionID="" silently
+// clobbered each other in the persisted history. This test proves
+// notifyBulkResetParked's fix: two different-reason resets, and a reason-scoped
+// reset vs. the global (unscoped) reset, always produce distinct SessionIDs, so
+// they can never collapse into the same coalescing bucket
+// (TestCoalescing_DifferentBacklogItemsSurviveWithinWindow in
+// server/notifications/subscriber_test.go covers the general
+// distinct-sessionID-survives-coalescing mechanism this relies on).
+func TestBulkResetStuckRemediation_should_useDistinctSessionIDsPerReason_When_NotifyingDifferentScopes(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+	bus := events.NewEventBus(8)
+	svc.SetEventBus(bus)
+	ctx := t.Context()
+
+	bouncing, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{Title: "bouncing", Status: string(session.BacklogStatusReview)})
+	require.NoError(t, err)
+	seedOpenStuckRow(t, storage, bouncing.ID, domain.StuckReasonBouncing, time.Now(), "bouncing")
+	_, err = storage.RecordRemediationAttempt(ctx, bouncing.ID, domain.StuckReasonBouncing, session.MaxRemediationAttempts, nil)
+	require.NoError(t, err)
+
+	staleWork, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{Title: "stale-work", Status: string(session.BacklogStatusInProgress)})
+	require.NoError(t, err)
+	seedOpenStuckRow(t, storage, staleWork.ID, domain.StuckReasonStaleWork, time.Now(), "stale")
+	_, err = storage.RecordRemediationAttempt(ctx, staleWork.ID, domain.StuckReasonStaleWork, session.MaxRemediationAttempts, nil)
+	require.NoError(t, err)
+
+	subCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	ch, _ := bus.Subscribe(subCtx)
+
+	_, err = svc.BulkResetStuckRemediation(ctx, connect.NewRequest(&sessionv1.BulkResetStuckRemediationRequest{
+		Reason: sessionv1.StuckReason_STUCK_REASON_BOUNCING,
+	}))
+	require.NoError(t, err)
+	_, err = svc.BulkResetStuckRemediation(ctx, connect.NewRequest(&sessionv1.BulkResetStuckRemediationRequest{
+		Reason: sessionv1.StuckReason_STUCK_REASON_STALE_WORK,
+	}))
+	require.NoError(t, err)
+
+	var sessionIDs []string
+	for i := 0; i < 2; i++ {
+		select {
+		case ev := <-ch:
+			sessionIDs = append(sessionIDs, ev.SessionID)
+		case <-time.After(2 * time.Second):
+			t.Fatalf("expected 2 notification events, got %d", i)
+		}
+	}
+	require.Len(t, sessionIDs, 2)
+	assert.NotEqual(t, sessionIDs[0], sessionIDs[1], "two different-reason resets must not share a coalescing sessionID")
+}
+
+// TestBulkResetStuckRemediation_should_notPublishNotification_When_NothingReset
+// verifies the notification only fires when the sweep actually changed
+// something — a no-op bulk reset (nothing parked) must not still surface a
+// "reset 0 items" notification.
+func TestBulkResetStuckRemediation_should_notPublishNotification_When_NothingReset(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+	bus := events.NewEventBus(4)
+	svc.SetEventBus(bus)
+	ctx := t.Context()
+
+	subCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	ch, _ := bus.Subscribe(subCtx)
+
+	resp, err := svc.BulkResetStuckRemediation(ctx, connect.NewRequest(&sessionv1.BulkResetStuckRemediationRequest{}))
+	require.NoError(t, err)
+	require.Equal(t, int32(0), resp.Msg.ResetCount)
+
+	select {
+	case ev := <-ch:
+		t.Fatalf("expected no notification event for a no-op reset, got %+v", ev)
+	case <-time.After(200 * time.Millisecond):
+		// expected: nothing published
+	}
+}
+
+// TestBulkResetStuckRemediation_should_resolveToLastWriterDeterministically_When_RacingAConcurrentColdRetryWrite
+// covers AC 5 of the reason-scoped-sweep feature: a reason-scoped bulk reset
+// racing a concurrent cold-retry heartbeat write (BUG-083, PR #572) on the
+// SAME row. This test intentionally does NOT use goroutines: the ent SQLite
+// connection is opened with SetMaxOpenConns(1) (session/ent_repository.go),
+// so database/sql fully serializes both writers' Exec calls regardless of
+// goroutine scheduling — a goroutine-based version of this test cannot
+// exercise real interleaving and would pass identically whether the
+// underlying logic is correct or not (caught in review of an earlier draft).
+// Instead this proves the actual claim directly: both writers issue a
+// single-column literal UPDATE (never read-modify-write), so whichever call
+// runs LAST always wins outright — exercised here in both orders — and the
+// row is never torn/partial. This is the documented last-write-wins outcome
+// (research/pitfalls.md §3), not silent corruption.
+func TestBulkResetStuckRemediation_should_resolveToLastWriterDeterministically_When_RacingAConcurrentColdRetryWrite(t *testing.T) {
+	t.Parallel()
+
+	t.Run("cold-retry re-park runs last: re-park wins", func(t *testing.T) {
+		t.Parallel()
+		storage := createTestStorage(t)
+		ctx := t.Context()
+		reason := domain.StuckReasonBouncing
+
+		item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{Title: "racing item", Status: string(session.BacklogStatusReview)})
+		require.NoError(t, err)
+		seedOpenStuckRow(t, storage, item.ID, reason, time.Now(), "bouncing")
+		_, err = storage.RecordRemediationAttempt(ctx, item.ID, reason, session.MaxRemediationAttempts, nil)
+		require.NoError(t, err)
+
+		_, err = storage.BulkResetStuckRemediation(ctx, &reason, true)
+		require.NoError(t, err)
+		// Simulates a cold-retry heartbeat tick landing right after the sweep.
+		_, err = storage.RecordRemediationAttempt(ctx, item.ID, reason, session.MaxRemediationAttempts, nil)
+		require.NoError(t, err)
+
+		rows, err := storage.FindOpenStuckStates(ctx)
+		require.NoError(t, err)
+		require.Len(t, rows, 1, "row must still exist exactly once — no torn/duplicate write")
+		assert.Equal(t, int32(session.MaxRemediationAttempts), rows[0].RemediationAttempts,
+			"the write that ran last (re-park) must win outright, not be partially applied")
+	})
+
+	t.Run("bulk reset runs last: reset wins", func(t *testing.T) {
+		t.Parallel()
+		storage := createTestStorage(t)
+		ctx := t.Context()
+		reason := domain.StuckReasonBouncing
+
+		item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{Title: "racing item", Status: string(session.BacklogStatusReview)})
+		require.NoError(t, err)
+		seedOpenStuckRow(t, storage, item.ID, reason, time.Now(), "bouncing")
+		_, err = storage.RecordRemediationAttempt(ctx, item.ID, reason, session.MaxRemediationAttempts, nil)
+		require.NoError(t, err)
+
+		// Simulates a cold-retry heartbeat tick landing right before the sweep.
+		_, err = storage.RecordRemediationAttempt(ctx, item.ID, reason, session.MaxRemediationAttempts, nil)
+		require.NoError(t, err)
+		_, err = storage.BulkResetStuckRemediation(ctx, &reason, true)
+		require.NoError(t, err)
+
+		rows, err := storage.FindOpenStuckStates(ctx)
+		require.NoError(t, err)
+		require.Len(t, rows, 1, "row must still exist exactly once — no torn/duplicate write")
+		assert.Equal(t, int32(0), rows[0].RemediationAttempts,
+			"the write that ran last (reset) must win outright, not be partially applied")
+	})
+}
+
 // TestTriggerRemediationNow_should_reject_When_NoOpenStuckRow verifies the
 // operator "Retry now" RPC fails clearly when there is nothing to remediate.
 func TestTriggerRemediationNow_should_reject_When_NoOpenStuckRow(t *testing.T) {
+	t.Parallel()
 	storage := createTestStorage(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	ctx := t.Context()
@@ -380,6 +643,7 @@ func TestTriggerRemediationNow_should_reject_When_NoOpenStuckRow(t *testing.T) {
 // parked row (remediation_attempts at cap) is not silently un-parked by a
 // manual trigger — the operator must call ResetStuckRemediation first.
 func TestTriggerRemediationNow_should_reject_When_AlreadyParked(t *testing.T) {
+	t.Parallel()
 	storage := createTestStorage(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	ctx := t.Context()
@@ -407,6 +671,7 @@ func TestTriggerRemediationNow_should_reject_When_AlreadyParked(t *testing.T) {
 // a Phase B reason (no wired remediation action yet) is rejected with
 // Unimplemented rather than silently doing nothing.
 func TestTriggerRemediationNow_should_reject_When_ReasonHasNoPhaseAAction(t *testing.T) {
+	t.Parallel()
 	storage := createTestStorage(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	ctx := t.Context()
@@ -429,6 +694,7 @@ func TestTriggerRemediationNow_should_reject_When_ReasonHasNoPhaseAAction(t *tes
 // legitimate, error-free outcome) and the attempt is recorded exactly like a
 // normal dispatcher-triggered one.
 func TestTriggerRemediationNow_should_succeedAndConsumeAnAttempt_When_ActionRuns(t *testing.T) {
+	t.Parallel()
 	storage := createTestStorage(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	ctx := t.Context()
@@ -505,6 +771,12 @@ var reasonsWithoutAutomatedRemediation = map[domain.StuckReason]bool{
 	// only, same shape as StuckReasonReworkBlockedStale above.
 	domain.StuckReasonMultipleReasons:    true,
 	domain.StuckReasonBounceCapExhausted: true,
+	// StuckReasonSteerFailed: same gap as StuckReasonRespawnBlockedActive
+	// above — known pre-existing, not a regression (see plan.md's Epic 4.3
+	// goal note and remediationActionByReason's doc comment). Wiring
+	// automated remediation for a failed steer is out of scope for
+	// pr-fix-steering.
+	domain.StuckReasonSteerFailed: true,
 }
 
 // TestRemediationActionByReason_should_beDecidedForEveryStuckReason_When_NewReasonIsAdded
@@ -521,6 +793,7 @@ var reasonsWithoutAutomatedRemediation = map[domain.StuckReason]bool{
 // switches there use iota types with intentional defaults — this test is the
 // narrowly-scoped substitute for this one specific reason/action contract.
 func TestRemediationActionByReason_should_beDecidedForEveryStuckReason_When_NewReasonIsAdded(t *testing.T) {
+	t.Parallel()
 	svc := NewBacklogService(nil, nil, nil, nil, nil, nil)
 	for _, reason := range domain.AllStuckReasons {
 		wired := svc.remediationActionByReason(reason) != nil

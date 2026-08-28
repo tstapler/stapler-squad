@@ -10,6 +10,7 @@ import (
 // string validates as false — the validated-at-boundary guard that keeps
 // unvalidated strings from ever reaching MarkStuck.
 func TestStuckReason_IsValid_should_returnTrueForKnown_And_FalseForUnknown(t *testing.T) {
+	t.Parallel()
 	for _, r := range AllStuckReasons {
 		if !r.IsValid() {
 			t.Errorf("StuckReason(%q).IsValid() = false, want true", r)
@@ -25,18 +26,30 @@ func TestStuckReason_IsValid_should_returnTrueForKnown_And_FalseForUnknown(t *te
 // new reason (review-gate-stale-session-rework) round-trips through IsValid
 // exactly like the other 11 established reasons.
 func TestStuckReasonReworkBlockedStale_should_beValid_When_Checked(t *testing.T) {
+	t.Parallel()
 	if !StuckReasonReworkBlockedStale.IsValid() {
 		t.Errorf("StuckReasonReworkBlockedStale.IsValid() = false, want true")
 	}
 }
 
-// TestAllStuckReasons_should_contain18Entries_When_Enumerated is a regression
+// TestAllStuckReasons_should_contain19Entries_When_Enumerated is a regression
 // guard: catches an accidental removal from AllStuckReasons (which would
 // silently exclude a valid reason from every consumer that iterates the full
 // set, e.g. exhaustiveness tests) independent of IsValid's own switch.
-func TestAllStuckReasons_should_contain18Entries_When_Enumerated(t *testing.T) {
-	if len(AllStuckReasons) != 18 {
-		t.Errorf("len(AllStuckReasons) = %d, want 18", len(AllStuckReasons))
+func TestAllStuckReasons_should_contain19Entries_When_Enumerated(t *testing.T) {
+	t.Parallel()
+	if len(AllStuckReasons) != 19 {
+		t.Errorf("len(AllStuckReasons) = %d, want 19", len(AllStuckReasons))
+	}
+}
+
+// TestStuckReasonSteerFailed_should_beValid_When_Checked confirms the new
+// reason (pr-fix-steering Epic 4.3, ADR-002) round-trips through IsValid
+// exactly like the other established reasons.
+func TestStuckReasonSteerFailed_should_beValid_When_Checked(t *testing.T) {
+	t.Parallel()
+	if !StuckReasonSteerFailed.IsValid() {
+		t.Errorf("StuckReasonSteerFailed.IsValid() = false, want true")
 	}
 }
 
@@ -45,6 +58,7 @@ func TestAllStuckReasons_should_contain18Entries_When_Enumerated(t *testing.T) {
 // docs/tasks/backlog-feature-improvement.md 2026-07-28) round-trips through
 // IsValid exactly like the other 12 established reasons.
 func TestStuckReasonPRNeedsFix_should_beValid_When_Checked(t *testing.T) {
+	t.Parallel()
 	if !StuckReasonPRNeedsFix.IsValid() {
 		t.Errorf("StuckReasonPRNeedsFix.IsValid() = false, want true")
 	}
@@ -54,6 +68,7 @@ func TestStuckReasonPRNeedsFix_should_beValid_When_Checked(t *testing.T) {
 // Story 3.2.1 reason round-trips through IsValid like every other established
 // reason.
 func TestStuckReasonLikelyFlaky_should_beValid_When_Checked(t *testing.T) {
+	t.Parallel()
 	if !StuckReasonLikelyFlaky.IsValid() {
 		t.Errorf("StuckReasonLikelyFlaky.IsValid() = false, want true")
 	}
@@ -64,6 +79,7 @@ func TestStuckReasonLikelyFlaky_should_beValid_When_Checked(t *testing.T) {
 // AutoRespawnReview's audit-trail fix) round-trips through IsValid exactly
 // like the other established reasons.
 func TestStuckReasonRespawnBlockedActive_should_beValid_When_Checked(t *testing.T) {
+	t.Parallel()
 	if !StuckReasonRespawnBlockedActive.IsValid() {
 		t.Errorf("StuckReasonRespawnBlockedActive.IsValid() = false, want true")
 	}
@@ -73,6 +89,7 @@ func TestStuckReasonRespawnBlockedActive_should_beValid_When_Checked(t *testing.
 // synthetic, aggregate reason (backlog-bounce-escalation, Epic 1.1) round-trips
 // through IsValid exactly like the other established reasons.
 func TestStuckReasonMultipleReasons_should_beValid_When_Checked(t *testing.T) {
+	t.Parallel()
 	if !StuckReasonMultipleReasons.IsValid() {
 		t.Errorf("StuckReasonMultipleReasons.IsValid() = false, want true")
 	}
@@ -82,6 +99,7 @@ func TestStuckReasonMultipleReasons_should_beValid_When_Checked(t *testing.T) {
 // new synthetic, aggregate reason (backlog-bounce-escalation, Epic 1.1)
 // round-trips through IsValid exactly like the other established reasons.
 func TestStuckReasonBounceCapExhausted_should_beValid_When_Checked(t *testing.T) {
+	t.Parallel()
 	if !StuckReasonBounceCapExhausted.IsValid() {
 		t.Errorf("StuckReasonBounceCapExhausted.IsValid() = false, want true")
 	}
@@ -92,6 +110,7 @@ func TestStuckReasonBounceCapExhausted_should_beValid_When_Checked(t *testing.T)
 // empty string also validates as true — "uncategorized" is a legitimate value
 // here, not an unvalidated placeholder.
 func TestBacklogCategory_IsValid_should_ReturnTrue_When_KnownOrEmpty(t *testing.T) {
+	t.Parallel()
 	known := []BacklogCategory{
 		BacklogCategoryBugfix, BacklogCategoryFeature, BacklogCategoryChore, BacklogCategoryRefactor, "",
 	}
@@ -105,6 +124,7 @@ func TestBacklogCategory_IsValid_should_ReturnTrue_When_KnownOrEmpty(t *testing.
 // TestBacklogCategory_IsValid_should_ReturnFalse_When_Unknown guards against
 // an unvalidated string ever being treated as a real category.
 func TestBacklogCategory_IsValid_should_ReturnFalse_When_Unknown(t *testing.T) {
+	t.Parallel()
 	if BacklogCategory("banana").IsValid() {
 		t.Errorf(`BacklogCategory("banana").IsValid() = true, want false`)
 	}
@@ -116,6 +136,7 @@ func TestBacklogCategory_IsValid_should_ReturnFalse_When_Unknown(t *testing.T) {
 // dequeue/start, regardless of its plan-approval state, and a resolved (or
 // absent) blocker must not itself block the transition.
 func TestTransitionGuard_should_BlockDequeue_When_ItemHasUnresolvedBlockers(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name    string
 		from    BacklogStatus

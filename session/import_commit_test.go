@@ -3,9 +3,13 @@ package session
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
 // newNotFoundDetector returns a HistoryFileDetector that will resolve any
@@ -20,6 +24,7 @@ func newNotFoundDetector(t *testing.T) *HistoryFileDetector {
 }
 
 func TestCommitImportExternalSession_ReturnsErrCorrelationDrifted_When_FreshKindDiffersFromExpected(t *testing.T) {
+	t.Parallel()
 	store := &fakeInstanceStore{}
 	detector := newNotFoundDetector(t)
 
@@ -41,6 +46,7 @@ func TestCommitImportExternalSession_ReturnsErrCorrelationDrifted_When_FreshKind
 }
 
 func TestCommitImportExternalSession_ReturnsErrPathAlreadyManaged_When_PathCollides(t *testing.T) {
+	t.Parallel()
 	path := t.TempDir()
 	store := &fakeInstanceStore{
 		instances: []InstanceData{{Title: "existing", Path: path}},
@@ -62,6 +68,7 @@ func TestCommitImportExternalSession_ReturnsErrPathAlreadyManaged_When_PathColli
 }
 
 func TestCommitImportExternalSession_ReturnsErrPathNotExist_When_CandidatePathMissing(t *testing.T) {
+	t.Parallel()
 	store := &fakeInstanceStore{}
 	detector := newNotFoundDetector(t)
 
@@ -137,6 +144,63 @@ func TestCommitImportExternalSession_PersistsAndLinksAndSuspends_When_StartAndSu
 
 	// Clean up: resume the original process so t.Cleanup's Kill/Wait on the
 	// sleeper doesn't hang on a stopped process.
+	_ = ResumeOriginalProcess(pid)
+}
+
+// TestCommitImportExternalSession_HonorsSessionNameOverrideMap verifies that
+// CommitImportExternalSession wires session.ResolveSessionBackend
+// (tymux-bundled-integration Epic 4.4.3): with no per-request override
+// concept for this restore-from-state path, a TymuxSessionOverrides entry
+// keyed by the sanitized tmux session name still forces the resulting
+// instance's backend even though the process-wide default is registered as
+// tymux.
+func TestCommitImportExternalSession_HonorsSessionNameOverrideMap(t *testing.T) {
+	RegisterBackendProvider(BackendTymux)
+	t.Cleanup(func() { RegisterBackendProvider(BackendTmux) })
+
+	testDir := t.TempDir()
+	t.Setenv("STAPLER_SQUAD_TEST_DIR", testDir)
+
+	suspended, err := NewSuspendedProcessStore()
+	require.NoError(t, err)
+
+	linker := NewHistoryLinker(newNotFoundDetector(t), nil)
+
+	store := &fakeInstanceStore{}
+	detector := newNotFoundDetector(t)
+
+	cmd := spawnSleeper(t)
+	pid := int32(cmd.Process.Pid)
+
+	path := t.TempDir()
+	candidate := ExternalSessionCandidate{
+		Path:        path,
+		Program:     "true",
+		TmuxSession: "",
+		PID:         0, // see importInstanceTitle: with TmuxSession=="" and PID==0, title is deterministic.
+	}
+	title := importInstanceTitle(candidate)
+	sessionKey := tmux.NewSessionName(title, tmux.TmuxPrefix).String()
+	require.NoError(t, os.WriteFile(filepath.Join(testDir, "config.json"),
+		[]byte(`{"tymux_session_overrides": {"`+sessionKey+`": false}}`), 0o644))
+
+	result, err := CommitImportExternalSession(context.Background(), CommitImportParams{
+		Detector:         detector,
+		Storage:          store,
+		Linker:           linker,
+		Suspended:        suspended,
+		AliveChecker:     &fakeAliveChecker{alive: true},
+		Candidate:        candidate,
+		OriginalPID:      pid,
+		TmuxServerSocket: coldRestoreSocket(t),
+	})
+	require.NoError(t, err)
+	require.NotNil(t, result.Instance)
+	t.Cleanup(func() { _ = result.Instance.Kill() })
+
+	assert.Equal(t, BackendTmux, result.Instance.Backend,
+		"a TymuxSessionOverrides entry keyed by the sanitized tmux session name must force the backend even though the process-wide default is tymux")
+
 	_ = ResumeOriginalProcess(pid)
 }
 
@@ -266,6 +330,7 @@ func TestCommitImportExternalSession_ReturnsError_When_AliveCheckerRejectsOrigin
 // a candidate's client-supplied TmuxSession name without confirming it
 // actually corresponds to a live tmux session at commit time.
 func TestCommitImportExternalSession_ReturnsErrTmuxSessionNotFound_When_CandidateTmuxSessionMissing(t *testing.T) {
+	t.Parallel()
 	store := &fakeInstanceStore{}
 	detector := newNotFoundDetector(t)
 

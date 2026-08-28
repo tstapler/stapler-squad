@@ -34,6 +34,35 @@ func FetchBranch(repoPath, branchName string) error {
 	return nil
 }
 
+// CandidateDefaultBranches are tried, in order, by ResolveDefaultBranchSHA when the
+// caller doesn't know the repo's actual default branch name. Mirrors the candidate list
+// session/unfinished's GoGitVCSReader.ResolveDefaultBranch already uses. "main" stays
+// first so the common case costs exactly one fetch. Exported so other packages needing
+// the same candidate list (session.RecoverBaseCommitSHA, GitWorktree.initBaseCommitSHA)
+// share one definition instead of re-declaring the literal.
+var CandidateDefaultBranches = []string{"main", "master", "develop", "trunk"} //nolint:gochecknoglobals
+
+// ResolveDefaultBranchSHA finds repoPath's real default branch and returns its freshly-
+// fetched origin tip SHA, trying CandidateDefaultBranches in order via ResolveOriginBranchSHA
+// until one exists on origin. Exists because a repo's default branch can be named anything
+// (this repo's own sibling dotfiles project uses "master", not "main") — a caller that
+// hardcodes "main" gets a fetch failure on every single call against such a repo, which used
+// to silently fall through to branching from the caller's ambient HEAD instead. Querying each
+// candidate by fetch (rather than inspecting locally-cached remote-tracking refs) works even
+// when the repo has never been fetched before, since a nonexistent branch fails fast at the
+// fetch step itself.
+func ResolveDefaultBranchSHA(repoPath string) (branch, sha string, err error) {
+	var errs []error
+	for _, candidate := range CandidateDefaultBranches {
+		if candidateSHA, fetchErr := ResolveOriginBranchSHA(repoPath, candidate); fetchErr == nil {
+			return candidate, candidateSHA, nil
+		} else {
+			errs = append(errs, fetchErr)
+		}
+	}
+	return "", "", fmt.Errorf("no candidate default branch (%v) exists on origin: %w", CandidateDefaultBranches, errors.Join(errs...))
+}
+
 // ResolveOriginBranchSHA fetches mainBranch from origin into repoPath and returns the
 // resulting origin/mainBranch tip commit SHA. Unlike a bare `rev-parse HEAD` against
 // repoPath's own checkout, this always fetches first, so the returned SHA reflects
@@ -56,6 +85,53 @@ func ResolveOriginBranchSHA(repoPath, mainBranch string) (string, error) {
 	return ref.Hash().String(), nil
 }
 
+// ResolveLocalBranchSHA returns the tip commit SHA of the local branch (refs/heads/<branchName>)
+// in repoPath, without fetching. Used as a same-branch-only fallback when ResolveOriginBranchSHA's
+// fetch fails (offline, no origin remote) — still guarantees the caller branches from branchName
+// itself, just not guaranteed fresh, unlike falling back to repoPath's ambient HEAD which could be
+// checked out to any branch a concurrent process last left it on.
+func ResolveLocalBranchSHA(repoPath, branchName string) (string, error) {
+	repo, err := git.PlainOpenWithOptions(repoPath, &git.PlainOpenOptions{DetectDotGit: true})
+	if err != nil {
+		return "", fmt.Errorf("failed to open git repo at %s: %w", repoPath, err)
+	}
+	ref, err := repo.Reference(plumbing.NewBranchReferenceName(branchName), true)
+	if err != nil {
+		return "", fmt.Errorf("failed to resolve local branch %s: %w", branchName, err)
+	}
+	return ref.Hash().String(), nil
+}
+
+// ResolveDefaultLocalBranchSHA is ResolveDefaultBranchSHA's fully-offline counterpart:
+// tries CandidateDefaultBranches against repoPath's own local refs (no fetch), for use
+// when every origin candidate fetch has already failed.
+func ResolveDefaultLocalBranchSHA(repoPath string) (branch, sha string, err error) {
+	var errs []error
+	for _, candidate := range CandidateDefaultBranches {
+		if candidateSHA, localErr := ResolveLocalBranchSHA(repoPath, candidate); localErr == nil {
+			return candidate, candidateSHA, nil
+		} else {
+			errs = append(errs, localErr)
+		}
+	}
+	return "", "", fmt.Errorf("no candidate default branch (%v) exists locally: %w", CandidateDefaultBranches, errors.Join(errs...))
+}
+
+// IsUnbornRepo reports whether repoPath is a git repository with zero commits (HEAD
+// points at a branch ref that doesn't exist yet, e.g. right after `git init`). Distinct
+// from "no candidate default branch found": that can also mean a repo with real commit
+// history whose default branch just isn't named main/master/develop/trunk, which is not
+// safe to fall back to ambient HEAD for (see CreateBacklogWorktree). An unborn repo has
+// no commit history at all, so there is nothing to misattribute either way.
+func IsUnbornRepo(repoPath string) bool {
+	repo, err := git.PlainOpenWithOptions(repoPath, &git.PlainOpenOptions{DetectDotGit: true})
+	if err != nil {
+		return false
+	}
+	_, err = repo.Head()
+	return errors.Is(err, plumbing.ErrReferenceNotFound)
+}
+
 // IsCommitOnMain reports whether sha has actually landed on mainBranch — either the
 // local branch (a commit merged directly to main without ever going through a PR) or
 // origin's copy (a PR merged remotely on GitHub that hasn't been pulled locally yet).
@@ -65,7 +141,7 @@ func ResolveOriginBranchSHA(repoPath, mainBranch string) (string, error) {
 // opened), or simply wrong for a manually-merged branch.
 //
 // Uses go-git rather than shelling out (repo convention — see
-// .claude/rules/prefer-go-git-over-subshells.md). The origin fetch is best-effort: a
+// the `prefer-go-git-over-subshells` skill). The origin fetch is best-effort: a
 // failure (offline, no such remote, nothing new) does not fail the whole check, since
 // the local-main check alone still answers the "merged directly to main locally" case.
 func IsCommitOnMain(repoPath, mainBranch, sha string) (bool, error) {
@@ -260,7 +336,7 @@ type ShippedCommit struct {
 
 // CommitInfo returns the summary line, author and author timestamp for a single
 // resolved commit hash in the repo at repoPath, read via go-git — no subshell
-// (.claude/rules/prefer-go-git-over-subshells.md).
+// (the `prefer-go-git-over-subshells` skill).
 func CommitInfo(repoPath, sha string) (ShippedCommit, error) {
 	repo, err := git.PlainOpenWithOptions(repoPath, &git.PlainOpenOptions{DetectDotGit: true})
 	if err != nil {
@@ -341,7 +417,7 @@ func ListShippedCommits(repoPath, baseSHA, headSHA string) ([]ShippedCommit, err
 // FileStatsBetween returns the per-file diff-stat summary (path, status,
 // additions, deletions) for every file that changed between baseSHA and
 // headSHA in the repo at repoPath, using go-git's typed diff API — no
-// safeexec shell-out (.claude/rules/prefer-go-git-over-subshells.md).
+// safeexec shell-out (the `prefer-go-git-over-subshells` skill).
 //
 // Renames are reported as a single entry keyed by the file's new path, not a
 // delete+add pair: go-git's FilePatch.Files() already exposes the from/to
@@ -462,12 +538,19 @@ func DiffHashBetween(repoPath, baseSHA, headSHA string) (string, error) {
 		return "", err
 	}
 
+	return diffHashFromFilePatches(patch.FilePatches()), nil
+}
+
+// diffHashFromFilePatches is DiffHashBetween's core, split out so a test can
+// drive it with fake fdiff.FilePatch values instead of coaxing a real git
+// repository into producing a specific go-git edge case.
+func diffHashFromFilePatches(filePatches []fdiff.FilePatch) string {
 	type fileDigest struct {
 		path    string
 		content string
 	}
-	digests := make([]fileDigest, 0, len(patch.FilePatches()))
-	for _, fp := range patch.FilePatches() {
+	digests := make([]fileDigest, 0, len(filePatches))
+	for _, fp := range filePatches {
 		chunks := fp.Chunks()
 		if len(chunks) == 0 {
 			// Binary file (or submodule ref update) — no line-level diff to
@@ -483,6 +566,13 @@ func DiffHashBetween(repoPath, baseSHA, headSHA string) (string, error) {
 		path := ""
 		status := ""
 		switch {
+		case from == nil && to == nil:
+			// go-git can return (nil, nil) from Files() even when Chunks() is
+			// non-empty -- observed in production on symlink/gitlink type-change
+			// entries whose textual content still produces chunks. Skip rather
+			// than falling into the single-sided cases below, which assume at
+			// most one side is nil and would dereference the other.
+			continue
 		case from == nil:
 			status, path = "added", to.Path()
 		case to == nil:
@@ -510,7 +600,7 @@ func DiffHashBetween(repoPath, baseSHA, headSHA string) (string, error) {
 		h.Write([]byte(d.content))
 		h.Write([]byte{0})
 	}
-	return fmt.Sprintf("%x", h.Sum(nil)), nil
+	return fmt.Sprintf("%x", h.Sum(nil))
 }
 
 // CheckoutBranch checks out a branch in an existing repository.

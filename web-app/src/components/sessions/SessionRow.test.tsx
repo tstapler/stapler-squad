@@ -1,6 +1,7 @@
 import React from "react";
 import { render, screen } from "@testing-library/react";
 import { SessionRow } from "./SessionRow";
+import { ReviveOutcome, SessionStatus } from "@/gen/session/v1/types_pb";
 import type { Session } from "@/gen/session/v1/types_pb";
 
 jest.mock("@connectrpc/connect", () => ({
@@ -9,6 +10,13 @@ jest.mock("@connectrpc/connect", () => ({
 
 jest.mock("@connectrpc/connect-web", () => ({
   createConnectTransport: jest.fn(() => ({ unary: jest.fn(), stream: jest.fn() })),
+}));
+
+jest.mock("@/lib/contexts/SessionServiceContext", () => ({
+  useSessionServiceContext: () => ({
+    draftPullRequest: jest.fn(),
+    createPullRequest: jest.fn(),
+  }),
 }));
 
 jest.mock("@/lib/hooks/useFocusTrap", () => ({
@@ -58,5 +66,62 @@ describe("SessionRow — note badge", () => {
     const emptySession = { ...minimalSession, note: "" } as unknown as Session;
     rerender(<SessionRow session={emptySession} />);
     expect(screen.queryByTestId("badge-has-note")).toBeNull();
+  });
+});
+
+// session-revive-uuid-loss UX AC7: the row folds the "context lost" signal
+// into its single combined aria-label instead of adding a second,
+// separately-announced landmark (ux.md's explicit accessibility rule).
+describe("SessionRow — revived context badge", () => {
+  it("SessionRow_should_RenderBadgeAndExtendAriaLabel_When_ReviveOutcomeIsFreshLostHistory", () => {
+    const session = { ...minimalSession, reviveOutcome: ReviveOutcome.FRESH_LOST_HISTORY } as unknown as Session;
+    render(<SessionRow session={session} />);
+    expect(screen.getByTestId("revived-context-badge")).toBeInTheDocument();
+    expect(screen.getByTestId("session-row")).toHaveAttribute(
+      "aria-label",
+      expect.stringContaining(", context: lost"),
+    );
+  });
+
+  it("SessionRow_should_NotRenderBadgeOrExtendAriaLabel_When_ReviveOutcomeIsNotFreshLostHistory", () => {
+    const session = { ...minimalSession, reviveOutcome: ReviveOutcome.RESUME_LIVE } as unknown as Session;
+    render(<SessionRow session={session} />);
+    expect(screen.queryByTestId("revived-context-badge")).toBeNull();
+    expect(screen.getByTestId("session-row").getAttribute("aria-label")).not.toContain("context: lost");
+  });
+});
+
+// Builds a Timestamp-shaped object (seconds/nanos) the number of minutes ago from now —
+// matches the {seconds: bigint, nanos: number} shape session-staleness.ts and SessionRow's
+// own formatElapsed helper read from lastMeaningfulOutput/lastTerminalUpdate.
+function minutesAgoTimestamp(minutes: number) {
+  const seconds = Math.floor(Date.now() / 1000) - minutes * 60;
+  return { seconds: BigInt(seconds), nanos: 0 };
+}
+
+describe("SessionRow — stale badge", () => {
+  it("SessionRow_should_RenderStaleBadge_When_ActiveSessionExceedsThreshold", () => {
+    const session = {
+      ...minimalSession,
+      status: SessionStatus.ACTIVE,
+      lastMeaningfulOutput: minutesAgoTimestamp(45),
+    } as unknown as Session;
+    render(<SessionRow session={session} staleThresholdMinutes={30} />);
+
+    const badge = screen.getByText("Stale", { exact: false });
+    expect(badge).toBeInTheDocument();
+    expect(badge).toHaveAttribute("role", "img");
+    expect(badge.getAttribute("aria-label")).toMatch(/^Stale — no output for/);
+  });
+
+  it("SessionRow_should_NotRenderStaleBadge_When_PausedSessionLastOutputWasSixHoursAgo", () => {
+    const session = {
+      ...minimalSession,
+      status: SessionStatus.PAUSED,
+      lastMeaningfulOutput: minutesAgoTimestamp(6 * 60),
+    } as unknown as Session;
+    render(<SessionRow session={session} staleThresholdMinutes={30} />);
+
+    expect(screen.queryByText("Stale", { exact: false })).toBeNull();
   });
 });

@@ -130,12 +130,17 @@ func TestPluginWatcher_should_collapseBurstIntoOneReload_When_sameFileWrittenRep
 
 	before := rebuildCount.Load()
 
+	// Writes are issued back-to-back with no inter-write sleep: the burst
+	// must land inside a single pluginReloadDebounce (200ms) window, and
+	// under CI scheduler contention even a 5ms-per-iteration sleep (50ms
+	// total) could erode enough of that margin to split the burst across
+	// two debounce windows and produce a spurious second rebuild — see the
+	// FAIL in https://github.com/tstapler/stapler-squad/actions/runs/32808236831.
 	path := filepath.Join(dir, "my-agent.toml")
 	for i := 0; i < 10; i++ {
 		if err := os.WriteFile(path, []byte(validPluginTOML("my-agent", []string{"my-agent"})), 0o644); err != nil {
 			t.Fatalf("iteration %d: failed to write plugin file: %v", i, err)
 		}
-		time.Sleep(5 * time.Millisecond) // stay well inside pluginReloadDebounce (200ms)
 	}
 
 	// Wait for the debounced reload to land, then hold steady for a further
@@ -161,6 +166,7 @@ func TestPluginWatcher_should_collapseBurstIntoOneReload_When_sameFileWrittenRep
 // entries (e.g. the example.toml.sample seed file) so an unrelated file drop
 // doesn't trigger an unnecessary full rebuild.
 func TestPluginDirFingerprint_should_changeOnlyWhenTomlEntriesChange(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 
 	fp1, err := pluginDirFingerprint(dir)
@@ -256,6 +262,7 @@ func TestPluginWatcher_should_skipRebuild_When_periodicTickFindsNoDirectoryChang
 // copies — this is what lets buildSnapshot skip recompiling identical
 // patterns once per binary name.
 func TestPluginDetector_should_shareOneCompiledPatternSet_When_fileDeclaresMultipleBinaryNames(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	writePluginFile(t, dir, "multi.toml", validPluginTOML("multi-agent", []string{"agent-a", "agent-b", "agent-c"}))
 
@@ -283,6 +290,7 @@ func TestPluginDetector_should_shareOneCompiledPatternSet_When_fileDeclaresMulti
 // produces for a plugin binary name must wrap the exact PatternSet pointer
 // the PluginDetector already compiled, not a freshly-recompiled one.
 func TestBuildSnapshot_should_reuseCompiledPatternSet_When_detectorProvidesOne(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	writePluginFile(t, dir, "my-agent.toml", validPluginTOML("my-agent", []string{"my-agent"}))
 

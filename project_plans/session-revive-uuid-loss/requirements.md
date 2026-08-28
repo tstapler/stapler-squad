@@ -57,26 +57,73 @@ memory of the prior conversation, signaled only by a single `log.Warn` line.
 - Changing `RunWithResume`'s one-off `-p --resume` subprocess flow — unaffected by this
   bug (it already errors cleanly if no UUID is set).
 
+## Status update (2026-08-21 re-triage)
+
+This exact backlog item (`ab4293a9-4a84-4207-886f-3a4ef48bbd20`) already has a full
+requirements/research/plan artifact set in this directory from an earlier planning pass.
+Since then, a **separate** backlog item (`f5c5a35e-b5f1-491d-81de-66e94028a085`, same
+underlying bug) shipped `fix(session): recover conversation UUID from disk before
+cold-restore launch decision` (#439, commit `e156a3f9d`, 2026-08-11) — **after** this
+directory's `plan.md` (dated 2026-08-06) was written. Re-reading the current code
+confirms the core problem this requirements doc describes is already fixed:
+
+- `recoverConversationBeforeLaunch()` (`session/instance.go:939-944`) now runs
+  `tryExtractConversationUUID()`'s `DetectByPath` fallback **before** the
+  resume-vs-fresh decision, at both cold-restore call sites (`startLocked` line 970,
+  `start` line 1166) — this satisfies **Goal 1 / AC1**, **AC4** (single shared call,
+  no divergent duplication), and **AC2** (no-op when nothing to recover).
+- `conversationClearedAt` (`session/instance_claude.go:293,354-359`) guards recovery
+  against resurrecting a conversation the user explicitly cleared — this is the
+  `RecoverySuppressed` mechanism `plan.md`'s glossary proposed as new work; it already
+  exists under a different name. **Goal 4 / AC6** satisfied.
+- Regression tests already exist for this path (`TestColdRestore_WithoutUUID_
+  RecoversFromJSONL`, `TestKillSessionThenStart_DoesNotRebuildLaunchCommand`,
+  `TestTryExtractConversationUUID_ClearedAtGuard`) — **AC5** satisfied for the
+  recovery-ordering behavior.
+
+**Not yet implemented** — confirmed absent via `grep -rn "ConversationLost\|ReviveOutcome\|
+EverHadConversationHistory\|ResumeFailed" session/ server/ web-app/src`:
+
+- **Goal 3 / AC3** — a durable, user-visible signal distinguishing "resumed" from "lost
+  history, started fresh anyway." Today, when recovery still finds nothing, the session
+  just starts fresh with only a `log.Warn` line (`session/instance.go:1003`) — exactly
+  the silent-data-loss complaint the original bug report was about, just now triggered
+  only in the genuinely-unrecoverable case (no JSONL on disk at all) rather than on
+  every UUID-capture race.
+
+**Effective remaining scope of this item is AC3 only.** `plan.md`'s proposed
+`prepareColdRestore`/`RecoverySuppressed`/shared-helper refactor (Pattern Decisions rows
+1-3) is superseded by the already-shipped `recoverConversationBeforeLaunch`/
+`conversationClearedAt` — do not re-implement it. The `ReviveOutcome` enum,
+`EverHadConversationHistory` bool, `onColdRestoreLostHistory` notification, and
+`RevivedContextBadge` frontend component (Pattern Decisions rows 4-7) are still valid
+and are the actual remaining work.
+
 ## Acceptance Criteria
 
-1. Given a session whose tmux pane is dead and whose in-memory `ConversationUUID` is
-   empty, but a JSONL transcript exists under `~/.claude/projects/<encoded-effective-root>/`
-   for that session's path, revive resumes using the UUID recovered from that JSONL
-   (via the existing `DetectByPath` fallback, invoked before the resume/fresh decision)
-   instead of starting a fresh Claude process.
-2. Given the same dead-tmux/no-UUID case where recovery genuinely finds nothing (no
-   JSONL for this path — a real brand-new session, or first-time setup), the session
-   starts fresh exactly as it does today, with no change in behavior or added latency
-   that matters.
-3. When a session is forced to start fresh in a case where it previously had a captured
+Status markers added 2026-08-21 — see "Status update" above for evidence.
+
+1. **[SHIPPED — #439]** Given a session whose tmux pane is dead and whose in-memory
+   `ConversationUUID` is empty, but a JSONL transcript exists under
+   `~/.claude/projects/<encoded-effective-root>/` for that session's path, revive resumes
+   using the UUID recovered from that JSONL (via the existing `DetectByPath` fallback,
+   invoked before the resume/fresh decision) instead of starting a fresh Claude process.
+2. **[SHIPPED — #439]** Given the same dead-tmux/no-UUID case where recovery genuinely
+   finds nothing (no JSONL for this path — a real brand-new session, or first-time
+   setup), the session starts fresh exactly as it does today, with no change in behavior
+   or added latency that matters.
+3. **[REMAINING — this item's actual scope]** When a session is forced to start fresh in a case where it previously had a captured
    UUID or `HistoryFilePath` (recovery attempted and still failed), a durable,
    user-visible signal is recorded (not only a log line) — e.g. a session event/status
    field the frontend can surface — distinguishing "resumed" from "lost & restarted
    fresh."
-4. The fix applies symmetrically to both cold-restore call sites
-   (`session/instance.go` startLocked ~L867-921 and its mirror ~L1067-1127) — no
-   duplicated divergent logic between the two.
-5. Existing tests for `HasClaudeSession`, `tryExtractConversationUUID`, and the
-   cold-restore paths continue to pass; new test(s) cover the recovery-before-decision
-   ordering and the fresh-with-prior-history visibility signal.
-6. No change to legitimate first-time-setup or explicit "start fresh" flows.
+4. **[SHIPPED — #439]** The fix applies symmetrically to both cold-restore call sites
+   (`session/instance.go` `startLocked` line 970, `start` line 1166, via the shared
+   `recoverConversationBeforeLaunch` helper) — no duplicated divergent logic between
+   the two.
+5. **[PARTIAL]** Existing tests for `HasClaudeSession`, `tryExtractConversationUUID`, and
+   the cold-restore paths continue to pass, and recovery-ordering regression tests
+   already exist (shipped in #439). **Remaining**: a new test covering the
+   fresh-with-prior-history visibility signal (AC3).
+6. **[SHIPPED — #439]** No change to legitimate first-time-setup or explicit "start
+   fresh" flows (`conversationClearedAt` guard).

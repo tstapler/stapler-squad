@@ -36,6 +36,26 @@ func TestQuotaConfigOrDefault_should_FillAllDefaults_When_ZeroValueStruct(t *tes
 	}
 }
 
+func TestResyncFastLaneSlotsOrDefault_should_ReturnFour_When_Unset(t *testing.T) {
+	cfg := TmuxExecGateConfig{}
+
+	out := cfg.ResyncFastLaneSlotsOrDefault()
+
+	if out != 4 {
+		t.Errorf("ResyncFastLaneSlotsOrDefault() = %v, want 4", out)
+	}
+}
+
+func TestResyncFastLaneSlotsOrDefault_should_PreserveExplicitValue_When_FieldAlreadySet(t *testing.T) {
+	cfg := TmuxExecGateConfig{ResyncFastLaneSlots: 12}
+
+	out := cfg.ResyncFastLaneSlotsOrDefault()
+
+	if out != 12 {
+		t.Errorf("ResyncFastLaneSlotsOrDefault() = %v, want 12 (explicit value must survive defaulting)", out)
+	}
+}
+
 func TestQuotaConfigOrDefault_should_PreserveExplicitValue_When_FieldAlreadySet(t *testing.T) {
 	cfg := QuotaConfig{PauseBelowHeadroomPct: 35.0}
 
@@ -49,5 +69,56 @@ func TestQuotaConfigOrDefault_should_PreserveExplicitValue_When_FieldAlreadySet(
 	}
 	if out.ConsecutiveTicksToPause != 2 {
 		t.Errorf("ConsecutiveTicksToPause = %v, want 2 (default)", out.ConsecutiveTicksToPause)
+	}
+}
+
+func TestThresholdMinutesOrDefault_should_ReturnThirty_When_ZeroValueStruct(t *testing.T) {
+	cfg := StaleSessionConfig{}
+
+	out := cfg.ThresholdMinutesOrDefault()
+
+	if out != 30 {
+		t.Errorf("ThresholdMinutesOrDefault() = %v, want 30", out)
+	}
+}
+
+func TestNotifyEnabledOrDefault_should_ReturnTrue_When_ZeroValueStruct(t *testing.T) {
+	cfg := StaleSessionConfig{}
+
+	out := cfg.NotifyEnabledOrDefault()
+
+	if out != true {
+		t.Errorf("NotifyEnabledOrDefault() = %v, want true", out)
+	}
+}
+
+func TestThresholdMinutesOrDefault_should_ReturnThirty_When_NegativeValue(t *testing.T) {
+	cfg := StaleSessionConfig{ThresholdMinutes: -5}
+
+	out := cfg.ThresholdMinutesOrDefault()
+
+	if out != 30 {
+		t.Errorf("ThresholdMinutesOrDefault() = %v, want 30 (negative value must never resolve to itself or to 0, which would make every session immediately stale)", out)
+	}
+}
+
+func TestThresholdMinutesOrDefault_should_PreserveExplicitValue_When_Positive(t *testing.T) {
+	cfg := StaleSessionConfig{ThresholdMinutes: 45}
+
+	out := cfg.ThresholdMinutesOrDefault()
+
+	if out != 45 {
+		t.Errorf("ThresholdMinutesOrDefault() = %v, want 45 (explicit value must survive defaulting)", out)
+	}
+}
+
+func TestNotifyEnabledOrDefault_should_ReturnFalse_When_ExplicitlyDisabled(t *testing.T) {
+	disabled := false
+	cfg := StaleSessionConfig{NotifyEnabled: &disabled}
+
+	out := cfg.NotifyEnabledOrDefault()
+
+	if out != false {
+		t.Errorf("NotifyEnabledOrDefault() = %v, want false", out)
 	}
 }

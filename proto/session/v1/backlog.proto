@@ -60,6 +60,17 @@ message TriageResult {
   // feedback is the free-text feedback that produced this iteration, empty
   // for the initial (non-refined) triage run.
   string feedback = 6;
+  // chat_history is the running transcript for chat-originated creation/
+  // refinement (CreateBacklogItemFromChat). Empty for triage runs triggered
+  // via the structured form/refine-feedback path.
+  repeated ChatTriageTurn chat_history = 7;
+}
+
+// ChatTriageTurn is a single message in a chat-originated triage conversation.
+message ChatTriageTurn {
+  string role = 1; // "user" or "assistant"
+  string text = 2;
+  google.protobuf.Timestamp created_at = 3;
 }
 
 // ItemSession records a session that was spawned or attached to a backlog item.
@@ -82,7 +93,7 @@ message ItemSession {
   string pipeline_mode_snapshot = 16;
   string pipeline_mode_snapshot_hash = 17;
   // end_reason is set alongside ended_at for a headless (triage/review) call:
-  // classifyHeadlessCallError's bucket ("shutdown", "timeout", "process_error",
+  // classifyHeadlessCallError's bucket ("shutdown", "timeout", "subprocess_start_error",
   // "claude_not_found", "other"), or empty for a successful end. Already captured
   // durably (session.ItemSessionSummary.EndReason) but previously never surfaced
   // over the wire.
@@ -92,6 +103,21 @@ message ItemSession {
   // whose result failed to parse — see session.WriteHeadlessFailureCapture. Empty
   // when the call succeeded and parsed cleanly, or capture itself failed.
   string failure_capture_path = 19;
+  // claimant_host_id identifies the physical stapler-squad process/host that
+  // created this ItemSession — either by claiming the item (DequeueNextQueuedItems
+  // -> SpawnSessionFromItem) or by attaching an externally-created session
+  // (AttachSessionToItem, where it is the attaching process's own identity, not
+  // anything embedded in the attached session). A random UUID generated once and
+  // persisted in that process's own config (Config.GetOrCreateClaimantHostID),
+  // stable across restarts of the same process/config directory and distinct
+  // across different hosts or STAPLER_SQUAD_INSTANCE-namespaced config dirs on the
+  // same machine. Purely descriptive provenance — never read by
+  // TransitionBacklogItemStatus's CAS guard. Do not confuse with
+  // STAPLER_SQUAD_INSTANCE (namespaces on-disk state on a single machine) or
+  // session/contexts.go's CloudContext.InstanceID (a cloud provider's instance
+  // identifier, not populated for local/dev sessions). Empty for ItemSession rows
+  // created before this field existed.
+  string claimant_host_id = 20;
 }
 
 // BacklogStatusEvent records a single status transition for a backlog item.
@@ -117,6 +143,20 @@ message BacklogProgressNote {
   int32 criterion_index = 2;
   string note = 3;
   string status = 4; // "pending", "in_progress", "done", "fail"
+  google.protobuf.Timestamp created_at = 5;
+}
+
+// BacklogActivityNote records a single free-form, timestamped, attributed
+// note posted via post_backlog_update — the ungated sibling log to
+// BacklogProgressNote (see ADR-001: sibling table, not extending
+// BacklogProgressNote). Unlike BacklogProgressNote, it is never role/item-
+// gated and carries no criterion index or status: it's an informal comment,
+// not an official progress or review signal.
+message BacklogActivityNote {
+  string id = 1;
+  string message = 2;
+  string author_session_uuid = 3;
+  string author_session_title = 4;
   google.protobuf.Timestamp created_at = 5;
 }
 
@@ -176,6 +216,14 @@ message BacklogItem {
   // "no outstanding rejection".
   string plan_rejection_reason = 33;
   google.protobuf.Timestamp plan_rejected_at = 34;
+  // activity_notes is the ungated post_backlog_update log — eagerly loaded
+  // alongside progress_notes (see GetBacklogItem).
+  repeated BacklogActivityNote activity_notes = 35;
+  // public_id is the externally-shareable identifier (a "bl_"-prefixed
+  // BacklogItemID), used by ssq:// deep links and the UI's Copy Link/Copy ID
+  // affordances instead of the internal UUID `id`. Empty for rows that
+  // predate the public_id backfill — callers must fall back to `id`.
+  string public_id = 36;
 }
 
 // ItemSource represents an external plugin source that syncs items into the
@@ -254,6 +302,21 @@ message CreateBacklogItemRequest {
 }
 
 message CreateBacklogItemResponse {
+  BacklogItem item = 1;
+  bool triage_triggered = 2;
+}
+
+// CreateBacklogItemFromChatRequest carries a single free-text chat turn.
+// When existing_item_id is empty, this is the first turn of a new
+// chat-originated item (delegates to CreateBacklogItem internally). When
+// existing_item_id is set, this is a refinement turn on an existing item
+// (delegates to TriggerTriage with feedback = message).
+message CreateBacklogItemFromChatRequest {
+  string existing_item_id = 1;
+  string message = 2;
+}
+
+message CreateBacklogItemFromChatResponse {
   BacklogItem item = 1;
   bool triage_triggered = 2;
 }
@@ -418,6 +481,14 @@ message ArchiveBacklogItemResponse {
   BacklogItem item = 1;
 }
 
+message UnarchiveBacklogItemRequest {
+  string item_id = 1;
+}
+
+message UnarchiveBacklogItemResponse {
+  BacklogItem item = 1;
+}
+
 message DeleteBacklogItemRequest {
   string item_id = 1;
 }
@@ -484,6 +555,12 @@ message TriggerTriageRequest {
   // completed triage result instead of a fresh triage run. Requires a prior
   // completed triage result to exist.
   string feedback = 2;
+  // chat_mode, when true alongside a non-empty feedback, tightens the
+  // refinement prompt to ask at most one clarifying question per turn
+  // instead of a batch of questions — set by CreateBacklogItemFromChat for
+  // chat-originated refinement turns. Ignored for a fresh triage run
+  // (feedback empty).
+  bool chat_mode = 3;
 }
 
 message TriggerTriageResponse {
@@ -716,6 +793,9 @@ message BacklogItemEvent {
     // useWatchBacklogItems.ts's handling (falls through to a no-op case) and
     // backlog_service_events.go's watchBacklogItems doc comment.
     BacklogSnapshotCompleteEvent snapshot_complete = 9;
+    // Field 8 is seq (message-level, not part of this oneof); 9 is
+    // snapshot_complete above, so 10 is next.
+    BacklogItemActivityNoteAddedEvent activity_note_added = 10;
   }
 
   // Monotonically-increasing sequence number assigned by pkg/events.EventBus
@@ -757,6 +837,10 @@ message BacklogItemSessionAttachedEvent {
   string session_id = 2;
   BacklogItem item = 3;
   bool is_snapshot = 4;
+  // claimant_host_id is the attaching process's own identity (Config.GetOrCreateClaimantHostID),
+  // never anything read from the attached session. See ItemSession.claimant_host_id for the full
+  // disambiguation against STAPLER_SQUAD_INSTANCE and session/contexts.go's CloudContext.InstanceID.
+  string claimant_host_id = 5;
 }
 
 // BacklogItemUpdatedEvent is emitted when one or more item fields change
@@ -766,6 +850,16 @@ message BacklogItemUpdatedEvent {
   repeated string updated_fields = 2;
   BacklogItem item = 3;
   bool is_snapshot = 4;
+}
+
+// BacklogItemActivityNoteAddedEvent is emitted when post_backlog_update
+// appends a new BacklogActivityNote. Deliberately has no item/is_snapshot
+// field (see ADR-002): every post is a genuine live event — there is no
+// snapshot-replay concept for this kind, since the full log already rides
+// GetBacklogItem's activity_notes.
+message BacklogItemActivityNoteAddedEvent {
+  string item_id = 1;
+  BacklogActivityNote note = 2;
 }
 
 // BacklogItemArchivedEvent is emitted when an item is soft-deleted via
@@ -809,6 +903,12 @@ service BacklogService {
   // CreateBacklogItem adds a new item to the backlog.
   rpc CreateBacklogItem(CreateBacklogItemRequest) returns (CreateBacklogItemResponse) {}
 
+  // CreateBacklogItemFromChat handles one turn of a natural-language chat
+  // conversation for creating or refining a backlog item. First turn (no
+  // existing_item_id) creates a minimal item via CreateBacklogItem; later
+  // turns delegate to TriggerTriage with feedback = message.
+  rpc CreateBacklogItemFromChat(CreateBacklogItemFromChatRequest) returns (CreateBacklogItemFromChatResponse) {}
+
   // GetBacklogItem retrieves a single backlog item by ID.
   rpc GetBacklogItem(GetBacklogItemRequest) returns (GetBacklogItemResponse) {}
 
@@ -826,6 +926,12 @@ service BacklogService {
 
   // ArchiveBacklogItem soft-deletes an item by setting its archived_at timestamp.
   rpc ArchiveBacklogItem(ArchiveBacklogItemRequest) returns (ArchiveBacklogItemResponse) {}
+
+  // UnarchiveBacklogItem restores a previously archived item to the "idea"
+  // status and clears archived_at. It does not restore any prior status
+  // history, nor recreate a deleted git worktree/session — the item simply
+  // re-enters the idea column needing a fresh session.
+  rpc UnarchiveBacklogItem(UnarchiveBacklogItemRequest) returns (UnarchiveBacklogItemResponse) {}
 
   // DeleteBacklogItem permanently removes an item and all its child records.
   rpc DeleteBacklogItem(DeleteBacklogItemRequest) returns (DeleteBacklogItemResponse) {}
@@ -1153,6 +1259,12 @@ enum StuckReason {
   // skipped this item because at least one of its blocker items has not yet
   // reached a resolved status (done or archived).
   STUCK_REASON_BLOCKED_BY_DEPENDENCY = 18;
+  // STUCK_REASON_STEER_FAILED: see domain.StuckReasonSteerFailed
+  // (session/domain/backlog.go) — AutoReopenForPRFix attempted to steer an
+  // already-active session with a PR-fix problem description and the
+  // delivery itself failed. Distinct from STUCK_REASON_RESPAWN_BLOCKED_ACTIVE,
+  // which covers the degrade paths where a steer was never attempted at all.
+  STUCK_REASON_STEER_FAILED = 19;
 }
 
 // StuckBacklogItem is a single open (unresolved, un-snoozed) BacklogStuckState

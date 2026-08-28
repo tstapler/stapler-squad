@@ -43,6 +43,7 @@ func fakeGitHubEnterpriseHandler(w http.ResponseWriter, r *http.Request) {
 // ─── SearchGitHubRepos ────────────────────────────────────────────────────────
 
 func TestSearchGitHubRepos_NilStorage(t *testing.T) {
+	t.Parallel()
 	svc := newBacklogServiceNilStorage()
 	_, err := svc.SearchGitHubRepos(context.Background(),
 		connect.NewRequest(&sessionv1.SearchGitHubReposRequest{}))
@@ -96,6 +97,7 @@ func TestSearchGitHubRepos_ReturnsRepos(t *testing.T) {
 // ─── ListGitHubIssues ─────────────────────────────────────────────────────────
 
 func TestListGitHubIssues_NilStorage(t *testing.T) {
+	t.Parallel()
 	svc := newBacklogServiceNilStorage()
 	_, err := svc.ListGitHubIssues(context.Background(),
 		connect.NewRequest(&sessionv1.ListGitHubIssuesRequest{Owner: "a", Repo: "b"}))
@@ -106,6 +108,7 @@ func TestListGitHubIssues_NilStorage(t *testing.T) {
 }
 
 func TestListGitHubIssues_EmptyOwner(t *testing.T) {
+	t.Parallel()
 	svc := newBacklogService(t)
 	_, err := svc.ListGitHubIssues(context.Background(),
 		connect.NewRequest(&sessionv1.ListGitHubIssuesRequest{Owner: "", Repo: "repo"}))
@@ -116,6 +119,7 @@ func TestListGitHubIssues_EmptyOwner(t *testing.T) {
 }
 
 func TestListGitHubIssues_EmptyRepo(t *testing.T) {
+	t.Parallel()
 	svc := newBacklogService(t)
 	_, err := svc.ListGitHubIssues(context.Background(),
 		connect.NewRequest(&sessionv1.ListGitHubIssuesRequest{Owner: "owner", Repo: ""}))
@@ -126,6 +130,7 @@ func TestListGitHubIssues_EmptyRepo(t *testing.T) {
 }
 
 func TestListGitHubIssues_InvalidOwnerChars(t *testing.T) {
+	t.Parallel()
 	svc := newBacklogService(t)
 	_, err := svc.ListGitHubIssues(context.Background(),
 		connect.NewRequest(&sessionv1.ListGitHubIssuesRequest{Owner: "a b", Repo: "repo"}))
@@ -213,6 +218,7 @@ func TestListGitHubIssues_PopulatesBodyAuthorAndTimestamps(t *testing.T) {
 // ─── ImportGitHubIssue ────────────────────────────────────────────────────────
 
 func TestImportGitHubIssue_NilStorage(t *testing.T) {
+	t.Parallel()
 	svc := newBacklogServiceNilStorage()
 	_, err := svc.ImportGitHubIssue(context.Background(),
 		connect.NewRequest(&sessionv1.ImportGitHubIssueRequest{IssueUrl: "https://github.com/acme/widgets/issues/1"}))
@@ -223,6 +229,7 @@ func TestImportGitHubIssue_NilStorage(t *testing.T) {
 }
 
 func TestImportGitHubIssue_EmptyURL(t *testing.T) {
+	t.Parallel()
 	svc := newBacklogService(t)
 	_, err := svc.ImportGitHubIssue(context.Background(),
 		connect.NewRequest(&sessionv1.ImportGitHubIssueRequest{IssueUrl: ""}))
@@ -233,6 +240,7 @@ func TestImportGitHubIssue_EmptyURL(t *testing.T) {
 }
 
 func TestImportGitHubIssue_NotAnIssueURL(t *testing.T) {
+	t.Parallel()
 	svc := newBacklogService(t)
 	_, err := svc.ImportGitHubIssue(context.Background(),
 		connect.NewRequest(&sessionv1.ImportGitHubIssueRequest{IssueUrl: "https://github.com/acme/widgets"}))
@@ -326,6 +334,7 @@ func TestImportGitHubIssue_ResolvesRepoPathWhenNotProvided(t *testing.T) {
 // ─── GetSessionBacklogIndex ───────────────────────────────────────────────────
 
 func TestGetSessionBacklogIndex_NilStorage(t *testing.T) {
+	t.Parallel()
 	svc := newBacklogServiceNilStorage()
 	_, err := svc.GetSessionBacklogIndex(context.Background(),
 		connect.NewRequest(&sessionv1.GetSessionBacklogIndexRequest{}))
@@ -336,6 +345,7 @@ func TestGetSessionBacklogIndex_NilStorage(t *testing.T) {
 }
 
 func TestGetSessionBacklogIndex_EmptyDB(t *testing.T) {
+	t.Parallel()
 	svc := newBacklogService(t)
 	resp, err := svc.GetSessionBacklogIndex(context.Background(),
 		connect.NewRequest(&sessionv1.GetSessionBacklogIndexRequest{}))
@@ -344,6 +354,7 @@ func TestGetSessionBacklogIndex_EmptyDB(t *testing.T) {
 }
 
 func TestGetSessionBacklogIndex_WithEntries(t *testing.T) {
+	t.Parallel()
 	storage := createTestStorage(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 

@@ -77,6 +77,11 @@ type InstanceData struct {
 	TmuxPrefix string `json:"tmux_prefix,omitempty"`
 	// Tmux server socket name for isolation (used with tmux -L flag)
 	TmuxServerSocket string `json:"tmux_server_socket,omitempty"`
+	// Backend is the per-session ProcessManager backend pin (e.g. BackendTymux),
+	// persisted so a process restart doesn't silently drop it — see
+	// Instance.Backend's doc comment for precedence. Empty means "no pin,
+	// fall through to the process-wide default."
+	Backend ProcessManagerBackend `json:"backend,omitempty"`
 
 	// Terminal update timestamps for activity tracking
 	LastTerminalUpdate   time.Time `json:"last_terminal_update,omitempty"`
@@ -110,9 +115,17 @@ type InstanceData struct {
 	Checkpoints      CheckpointList `json:"checkpoints,omitempty"`
 	ActiveCheckpoint string         `json:"active_checkpoint,omitempty"`
 	ForkedFromID     string         `json:"forked_from_id,omitempty"`
+	// RestartedFromSessionID — see Instance.RestartedFromSessionID's doc comment.
+	RestartedFromSessionID string `json:"restarted_from_session_id,omitempty"`
 
 	// History file linkage for cold restore
 	HistoryFilePath string `json:"history_file_path,omitempty"`
+
+	// EverHadConversationHistory and LastReviveOutcome persist the
+	// session-revive-uuid-loss AC3 signal across full process restarts, not
+	// just tmux restarts — see Instance.EverHadConversationHistory.
+	EverHadConversationHistory bool   `json:"ever_had_conversation_history,omitempty"`
+	LastReviveOutcome          string `json:"last_revive_outcome,omitempty"`
 
 	// OneShot runs claude in -p mode; session exits after task completes.
 	OneShot bool `json:"one_shot,omitempty"`
@@ -225,11 +238,11 @@ var _ InstanceStore = (*Storage)(nil)
 
 // Storage handles saving and loading instances via the repository backend.
 type Storage struct {
-	repo Repository
+	repo *EntRepository
 }
 
-// NewStorageWithRepository creates a Storage backed by a Repository.
-func NewStorageWithRepository(repo Repository) (*Storage, error) {
+// NewStorageWithRepository creates a Storage backed by an EntRepository.
+func NewStorageWithRepository(repo *EntRepository) (*Storage, error) {
 	return &Storage{repo: repo}, nil
 }
 
@@ -238,38 +251,19 @@ func (s *Storage) Close() error {
 	return nil
 }
 
-// GetEntClient returns the *ent.Client from the underlying EntRepository, or nil
-// when the repository is not ent-backed (e.g. in-memory test doubles).
+// GetEntClient returns the *ent.Client from the underlying EntRepository.
 func (s *Storage) GetEntClient() *ent.Client {
-	if er, ok := s.repo.(*EntRepository); ok {
-		return er.GetEntClient()
-	}
-	return nil
+	return s.repo.GetEntClient()
 }
 
-// SetItemChangePublisher wires p into the underlying repository when it is
-// ent-backed, following the same type-assertion-forwarding precedent as
-// GetEntClient above. server/dependencies.go only has a *Storage value in
-// scope (Storage.repo is a Repository interface field, not a concrete
-// *EntRepository), so this forwarding method is the entry point it uses to
-// reach ItemChangePublisher wiring. When the repository is not ent-backed
-// (e.g. an in-memory test double), the type assertion fails gracefully and
-// the publisher is simply never wired — no panic, matching GetEntClient's
-// nil-on-mismatch behavior.
+// SetItemChangePublisher wires p into the underlying repository.
 func (s *Storage) SetItemChangePublisher(p ItemChangePublisher) {
-	if er, ok := s.repo.(*EntRepository); ok {
-		er.SetItemChangePublisher(p)
-	}
+	s.repo.SetItemChangePublisher(p)
 }
 
-// SetCallbackDispatcher forwards to the concrete *EntRepository's
-// SetCallbackDispatcher, mirroring SetItemChangePublisher above — same reasoning:
-// server/dependencies.go only has a *Storage value in scope. When the repository
-// is not ent-backed, the dispatcher is simply never wired (no panic).
+// SetCallbackDispatcher forwards to the underlying *EntRepository's SetCallbackDispatcher.
 func (s *Storage) SetCallbackDispatcher(d CallbackDispatcher) {
-	if er, ok := s.repo.(*EntRepository); ok {
-		er.SetCallbackDispatcher(d)
-	}
+	s.repo.SetCallbackDispatcher(d)
 }
 
 // WireChainFirer constructs a ChainFirer bound to the underlying
@@ -277,16 +271,10 @@ func (s *Storage) SetCallbackDispatcher(d CallbackDispatcher) {
 // exact same callbackDispatcher/itemChangePublisher wiring as every other
 // backlog mutation) and wires it as that repository's own chain-fire
 // dispatcher (EntRepository.SetChainFirer — the happy-path caller from
-// TransitionBacklogItemStatus, webhook-triggers Phase 6). Returns nil when
-// the repository is not ent-backed, mirroring GetEntClient's nil-on-mismatch
-// behavior — callers should skip TriggerChainReconciler wiring in that case.
+// TransitionBacklogItemStatus, webhook-triggers Phase 6).
 func (s *Storage) WireChainFirer(workflows WorkflowRepository, fireEvents TriggerFireEventRepository, firer TriggerFirer, cfg *config.Config) *ChainFirer {
-	er, ok := s.repo.(*EntRepository)
-	if !ok {
-		return nil
-	}
-	cf := NewChainFirer(er, workflows, fireEvents, firer, cfg)
-	er.SetChainFirer(cf)
+	cf := NewChainFirer(s.repo, workflows, fireEvents, firer, cfg)
+	s.repo.SetChainFirer(cf)
 	return cf
 }
 
@@ -304,7 +292,7 @@ func (s *Storage) saveInstancesToRepo(instances []*Instance) error {
 			continue
 		}
 		data := inst.ToInstanceData()
-		log.Info("SaveInstances: converting instance",
+		log.Debug("SaveInstances: converting instance",
 			"session", data.Title, "is_worktree", data.IsWorktree, "main_repo_path", data.MainRepoPath,
 			"github_owner", data.GitHubOwner, "github_repo", data.GitHubRepo)
 		if err := s.repo.Update(ctx, data); err != nil {
@@ -341,9 +329,7 @@ func (s *Storage) LoadInstances() ([]*Instance, error) {
 			continue
 		}
 		// Inject shell repository so shell operations can persist to the DB.
-		if sr, ok := s.repo.(ShellRepository); ok {
-			inst.SetShellRepository(sr)
-		}
+		inst.SetShellRepository(s.repo)
 		instances = append(instances, inst)
 	}
 
@@ -416,7 +402,16 @@ func (s *Storage) LoadInstances() ([]*Instance, error) {
 // Instance objects. This avoids the side effect of FromInstanceData() calling Start()
 // (which spawns PTY processes). Use for read-only existence and title checks.
 func (s *Storage) ListInstanceData() ([]InstanceData, error) {
-	return s.repo.List(context.Background())
+	return s.repo.ListWithOptions(context.Background(), LoadMinimal)
+}
+
+// ListInstanceDataWithWorktree returns raw InstanceData with the Worktree edge eager-loaded.
+// Use this instead of ListInstanceData whenever a read-only pass needs Worktree.WorktreePath/
+// RepoPath/BranchName/BaseCommitSHA (e.g. to stat the worktree or check dirty status) — plain
+// ListInstanceData uses LoadMinimal, which never populates Worktree, so any such field will
+// silently read as its zero value under that call.
+func (s *Storage) ListInstanceDataWithWorktree() ([]InstanceData, error) {
+	return s.repo.ListWithOptions(context.Background(), LoadOptions{LoadWorktree: true})
 }
 
 // GetStableID mirrors Instance.GetStableID for InstanceData: returns UUID when set,
@@ -438,6 +433,41 @@ func (d InstanceData) MatchesID(id string) bool {
 
 // ErrInstanceDataNotFound is returned by FindInstanceDataByID when no match exists.
 var ErrInstanceDataNotFound = errors.New("instance data not found")
+
+// ArchiveInstanceDataByID sets ArchivedAt and Status=Stopped directly in storage for a
+// session that is not (or is no longer) resident in the live in-memory instance registry
+// (ReviewQueuePoller.instances) — e.g. an old backlog work/review session left over after a
+// server restart. This is the storage-only counterpart to Instance.SetArchivedAtIfNilAndStop,
+// used as ArchiveSessionByUUID's fallback so terminal-transition and safety-net archival
+// sweeps don't silently no-op just because a session isn't currently being polled. Read-
+// modify-write on the full InstanceData row (not a partial struct), so EntRepository.Update's
+// guarded-optional-field pattern can't zero out fields this call didn't intend to touch.
+// Returns false (no error) if the session doesn't exist or is already archived, matching
+// SetArchivedAtIfNilAndStop's CAS semantics.
+//
+// The read and the write are two separate, unguarded round-trips: if the session is resumed
+// (added back to the live poller) between them, this can race a concurrent live-instance
+// write and leave a stale snapshot in storage. Callers that can't rule this out should
+// re-check FindLiveInstance after calling this and, if now live, re-save the live instance's
+// current state to overwrite any stale write (see ArchiveSessionByUUID).
+func (s *Storage) ArchiveInstanceDataByID(id string, at time.Time) (bool, error) {
+	data, err := s.FindInstanceDataByID(id)
+	if err != nil {
+		if errors.Is(err, ErrInstanceDataNotFound) {
+			return false, nil
+		}
+		return false, err
+	}
+	if data.ArchivedAt != nil {
+		return false, nil
+	}
+	data.ArchivedAt = &at
+	data.Status = Stopped
+	if err := s.repo.Update(context.Background(), *data); err != nil {
+		return false, fmt.Errorf("update session %s: %w", id, err)
+	}
+	return true, nil
+}
 
 // FindInstanceDataByID finds the first InstanceData whose stable ID or title matches id.
 // Returns ErrInstanceDataNotFound when no match exists.
@@ -493,7 +523,9 @@ func (s *Storage) ListSessionRecords() []tokens.SessionRecord {
 
 // DeleteInstance removes an instance from storage.
 func (s *Storage) DeleteInstance(title string) error {
-	return s.repo.Delete(context.Background(), title)
+	err := s.repo.Delete(context.Background(), title)
+	clearLoggedMissingWorktree(title)
+	return err
 }
 
 // AddInstance adds a new instance to storage.
@@ -511,9 +543,7 @@ func (s *Storage) AddInstance(instance *Instance) error {
 		}
 	}
 	// Inject shell repository so shell operations can persist to the DB.
-	if sr, ok := s.repo.(ShellRepository); ok {
-		instance.SetShellRepository(sr)
-	}
+	instance.SetShellRepository(s.repo)
 	return nil
 }
 
@@ -543,6 +573,7 @@ func (s *Storage) DeleteAllInstances() error {
 		if err := s.repo.Delete(ctx, data.Title); err != nil {
 			log.Warn("failed to delete instance", "session", data.Title, "err", err)
 		}
+		clearLoggedMissingWorktree(data.Title)
 	}
 	return nil
 }
@@ -593,11 +624,7 @@ func (s *Storage) UpdateInstancePRStatus(_, _, _, _ string, _, _ int, _, _ bool)
 // UpdateInstancePRNumber persists the discovered PR number for a session so it
 // survives restarts and avoids repeated branch-name lookups in PRStatusPoller.
 func (s *Storage) UpdateInstancePRNumber(title string, prNumber int) error {
-	repo, ok := s.repo.(*EntRepository)
-	if !ok {
-		return nil
-	}
-	return repo.UpdateGitHubPRNumber(context.Background(), title, prNumber)
+	return s.repo.UpdateGitHubPRNumber(context.Background(), title, prNumber)
 }
 
 // UpdateInstanceForkFlag is intentionally a no-op: fork status is not persisted in
@@ -610,31 +637,19 @@ func (s *Storage) UpdateInstanceForkFlag(_ string, _ bool) error {
 // UpdateInstanceArtifacts persists the JSON-encoded artifact blob for a session.
 // Only the session_artifacts column is touched; all other fields are unchanged.
 func (s *Storage) UpdateInstanceArtifacts(title string, blob string) error {
-	repo, ok := s.repo.(*EntRepository)
-	if !ok {
-		return nil
-	}
-	return repo.UpdateSessionArtifacts(context.Background(), title, blob)
+	return s.repo.UpdateSessionArtifacts(context.Background(), title, blob)
 }
 
 // GetInstanceArtifacts loads the raw JSON-encoded artifact blob for a session.
 // Returns ("", nil) if the session exists but has no artifacts yet.
 func (s *Storage) GetInstanceArtifacts(title string) (string, error) {
-	repo, ok := s.repo.(*EntRepository)
-	if !ok {
-		return "", nil
-	}
-	return repo.GetSessionArtifacts(context.Background(), title)
+	return s.repo.GetSessionArtifacts(context.Background(), title)
 }
 
 // GetAllInstanceArtifacts returns a map of title → raw artifacts JSON for all sessions
 // that have stored artifacts. Single bulk query (M-4 fix).
 func (s *Storage) GetAllInstanceArtifacts() (map[string]string, error) {
-	repo, ok := s.repo.(*EntRepository)
-	if !ok {
-		return map[string]string{}, nil
-	}
-	return repo.GetAllSessionArtifacts(context.Background())
+	return s.repo.GetAllSessionArtifacts(context.Background())
 }
 
 // --- Session-first convenience methods (Task 2.5) ---
@@ -784,9 +799,15 @@ func (s *Storage) UpdateBacklogItem(ctx context.Context, id string, update Backl
 	return s.repo.UpdateBacklogItem(ctx, id, update, precondition)
 }
 
-// ArchiveBacklogItem sets the archived_at timestamp.
-func (s *Storage) ArchiveBacklogItem(ctx context.Context, id string) (*BacklogItemData, error) {
-	return s.repo.ArchiveBacklogItem(ctx, id)
+// ArchiveBacklogItem sets the archived_at timestamp and status. See
+// EntRepository.ArchiveBacklogItem's doc comment for precondition/triggeredBy/note.
+func (s *Storage) ArchiveBacklogItem(ctx context.Context, id string, precondition *BacklogItemPrecondition, triggeredBy, note string) (*BacklogItemData, error) {
+	return s.repo.ArchiveBacklogItem(ctx, id, precondition, triggeredBy, note)
+}
+
+// UnarchiveBacklogItem clears archived_at and restores the item to "idea".
+func (s *Storage) UnarchiveBacklogItem(ctx context.Context, id string) (*BacklogItemData, error) {
+	return s.repo.UnarchiveBacklogItem(ctx, id)
 }
 
 // DeleteBacklogItem permanently removes an item and all its child records.
@@ -894,11 +915,6 @@ func (s *Storage) SetBacklogItemPRAndTransition(ctx context.Context, observed *B
 	// folds both writes into one UPDATE ... WHERE statement guarded by the
 	// same CAS precondition, so they always commit together — no reader can
 	// ever observe one without the other.
-	er, ok := s.repo.(*EntRepository)
-	if !ok {
-		return fmt.Errorf("SetBacklogItemPRAndTransition requires an *EntRepository backend, got %T", s.repo)
-	}
-
 	// AC6: distinguish a first-time recording from a correction in the audit
 	// trail — otherwise a pr_pending -> pr_pending event reads as a no-op in
 	// BacklogStatusEvent history, and the reconciler/manual-override callers
@@ -915,7 +931,7 @@ func (s *Storage) SetBacklogItemPRAndTransition(ctx context.Context, observed *B
 		ExpectedUpdatedAt: &expectedUpdatedAt,
 		Note:              fmt.Sprintf("[%s] %s", noteLabel, summary),
 	}
-	if _, err := er.TransitionBacklogItemStatusWithPRFields(ctx, observed.ID, BacklogStatusPRPending, prURL, prNumber, precondition, TriggeredBySystem); err != nil {
+	if _, err := s.repo.TransitionBacklogItemStatusWithPRFields(ctx, observed.ID, BacklogStatusPRPending, prURL, prNumber, precondition, TriggeredBySystem); err != nil {
 		return fmt.Errorf("transition to pr_pending with PR fields: %w", err)
 	}
 
@@ -925,13 +941,13 @@ func (s *Storage) SetBacklogItemPRAndTransition(ctx context.Context, observed *B
 	// reported as this call's own failure — mirrors report_progress's
 	// primary-write/secondary-enrichment split (AppendProgressNote there).
 	if appendErr := s.AppendProgressNote(ctx, observed.ID, -1, summary, progressNoteStatus); appendErr != nil {
-		log.WarningLog.Printf("[Storage] SetBacklogItemPRAndTransition: failed to append summary note item=%s: %v", observed.ID, appendErr)
+		log.WarningLog().Printf("[Storage] SetBacklogItemPRAndTransition: failed to append summary note item=%s: %v", observed.ID, appendErr)
 	}
 	if _, resolveErr := s.ResolveStuck(ctx, observed.ID, domain.StuckReasonPushFailed); resolveErr != nil {
-		log.WarningLog.Printf("[Storage] SetBacklogItemPRAndTransition: failed to resolve push_failed row item=%s: %v", observed.ID, resolveErr)
+		log.WarningLog().Printf("[Storage] SetBacklogItemPRAndTransition: failed to resolve push_failed row item=%s: %v", observed.ID, resolveErr)
 	}
 	if _, resolveErr := s.ResolveStuck(ctx, observed.ID, domain.StuckReasonAbandonedReview); resolveErr != nil {
-		log.WarningLog.Printf("[Storage] SetBacklogItemPRAndTransition: failed to resolve abandoned_review row item=%s: %v", observed.ID, resolveErr)
+		log.WarningLog().Printf("[Storage] SetBacklogItemPRAndTransition: failed to resolve abandoned_review row item=%s: %v", observed.ID, resolveErr)
 	}
 
 	// AC7: reassigning to a new PR must not leave the old PR's
@@ -941,7 +957,7 @@ func (s *Storage) SetBacklogItemPRAndTransition(ctx context.Context, observed *B
 	// as the resolves above.
 	if isReassignment {
 		if _, clearErr := s.UpdateBacklogItem(ctx, observed.ID, BacklogItemUpdate{ClearPrFeedbackAddressedAt: true}, nil); clearErr != nil {
-			log.WarningLog.Printf("[Storage] SetBacklogItemPRAndTransition: failed to clear pr_feedback_addressed_at item=%s: %v", observed.ID, clearErr)
+			log.WarningLog().Printf("[Storage] SetBacklogItemPRAndTransition: failed to clear pr_feedback_addressed_at item=%s: %v", observed.ID, clearErr)
 		}
 	}
 
@@ -954,11 +970,7 @@ func (s *Storage) SetBacklogItemPRAndTransition(ctx context.Context, observed *B
 // nil, nil for backends that don't support it (e.g. an in-memory test
 // double), never an error.
 func (s *Storage) FindDoneItemsOlderThan(ctx context.Context, cutoff time.Time) ([]BacklogItemData, error) {
-	er, ok := s.repo.(*EntRepository)
-	if !ok {
-		return nil, nil
-	}
-	return er.FindDoneItemsOlderThan(ctx, cutoff)
+	return s.repo.FindDoneItemsOlderThan(ctx, cutoff)
 }
 
 // --- BacklogStuckState (durable stuck-state read surface) ---
@@ -968,11 +980,7 @@ func (s *Storage) FindDoneItemsOlderThan(ctx context.Context, cutoff time.Time) 
 // an empty slice (no error) when the backend does not support stuck-state
 // queries (e.g. an in-memory test double).
 func (s *Storage) FindOpenStuckStates(ctx context.Context) ([]OpenStuckStateData, error) {
-	er, ok := s.repo.(*EntRepository)
-	if !ok {
-		return nil, nil
-	}
-	return er.FindOpenStuckStates(ctx)
+	return s.repo.FindOpenStuckStates(ctx)
 }
 
 // SnoozeStuckState sets snoozed_until on an open BacklogStuckState row for
@@ -980,11 +988,7 @@ func (s *Storage) FindOpenStuckStates(ctx context.Context) ([]OpenStuckStateData
 // stuck-state writes or no matching open row exists — never an error for a
 // missing row.
 func (s *Storage) SnoozeStuckState(ctx context.Context, itemID string, reason domain.StuckReason, until time.Time) (bool, error) {
-	er, ok := s.repo.(*EntRepository)
-	if !ok {
-		return false, nil
-	}
-	return er.SnoozeStuckState(ctx, itemID, reason, until)
+	return s.repo.SnoozeStuckState(ctx, itemID, reason, until)
 }
 
 // MarkStuck opens/refreshes/reopens a durable BacklogStuckState row for
@@ -993,31 +997,19 @@ func (s *Storage) SnoozeStuckState(ctx context.Context, itemID string, reason do
 // write stuck state. Returns false, nil when the backend does not support
 // stuck-state writes — never an error for an unsupported backend.
 func (s *Storage) MarkStuck(ctx context.Context, itemID string, reason domain.StuckReason, expectedStatus BacklogStatus, stuckContext string) (bool, error) {
-	er, ok := s.repo.(*EntRepository)
-	if !ok {
-		return false, nil
-	}
-	return er.MarkStuck(ctx, itemID, reason, expectedStatus, stuckContext)
+	return s.repo.MarkStuck(ctx, itemID, reason, expectedStatus, stuckContext)
 }
 
 // ResolveStuck atomically, idempotently closes an open BacklogStuckState row
 // for (itemID, reason). Thin passthrough, same rationale as MarkStuck above.
 func (s *Storage) ResolveStuck(ctx context.Context, itemID string, reason domain.StuckReason) (bool, error) {
-	er, ok := s.repo.(*EntRepository)
-	if !ok {
-		return false, nil
-	}
-	return er.ResolveStuck(ctx, itemID, reason)
+	return s.repo.ResolveStuck(ctx, itemID, reason)
 }
 
 // MarkStuckNotified sets notified_at=now on an open, not-yet-notified stuck
 // row for (itemID, reason). Thin passthrough, same rationale as MarkStuck above.
 func (s *Storage) MarkStuckNotified(ctx context.Context, itemID string, reason domain.StuckReason) (bool, error) {
-	er, ok := s.repo.(*EntRepository)
-	if !ok {
-		return false, nil
-	}
-	return er.MarkStuckNotified(ctx, itemID, reason)
+	return s.repo.MarkStuckNotified(ctx, itemID, reason)
 }
 
 // --- ItemSource ---
@@ -1048,11 +1040,7 @@ func (s *Storage) DeleteItemSource(ctx context.Context, id string) error {
 // source (ForwardSyncEnabled, ForwardSyncCloseLabel, PluginID, Config) without
 // needing an *EntRepository handle of its own.
 func (s *Storage) GetItemSourceByID(ctx context.Context, id string) (*ItemSourceData, error) {
-	er, ok := s.repo.(*EntRepository)
-	if !ok {
-		return nil, ErrNotFound
-	}
-	src, err := er.GetItemSourceByID(ctx, id)
+	src, err := s.repo.GetItemSourceByID(ctx, id)
 	if err != nil {
 		return nil, err
 	}
@@ -1063,201 +1051,133 @@ func (s *Storage) GetItemSourceByID(ctx context.Context, id string) (*ItemSource
 // ListSourceSyncEvents returns sync history events for an item source, most
 // recent first. Direct EntRepository delegation, like GetItemSession below.
 func (s *Storage) ListSourceSyncEvents(ctx context.Context, sourceID string) ([]SourceSyncEventData, bool, error) {
-	er, ok := s.repo.(*EntRepository)
-	if !ok {
-		return nil, false, ErrNotFound
-	}
-	return er.ListSourceSyncEvents(ctx, sourceID)
+	return s.repo.ListSourceSyncEvents(ctx, sourceID)
 }
 
 // CreateSourceSyncEvent records a sync run for an item source. Direct EntRepository
 // delegation, like ListSourceSyncEvents above.
 func (s *Storage) CreateSourceSyncEvent(ctx context.Context, sourceID, cursorAfter string, created, updated, skipped, errored int, errMsg string, startedAt, finishedAt time.Time) error {
-	er, ok := s.repo.(*EntRepository)
-	if !ok {
-		return ErrNotFound
-	}
-	return er.CreateSourceSyncEvent(ctx, sourceID, cursorAfter, created, updated, skipped, errored, errMsg, startedAt, finishedAt)
+	return s.repo.CreateSourceSyncEvent(ctx, sourceID, cursorAfter, created, updated, skipped, errored, errMsg, startedAt, finishedAt)
 }
 
 // RecordSourceSyncFailure records a forward-sync failure (e.g. CloseIssue
 // erroring) as a queryable sync-history row. Direct EntRepository delegation,
 // like CreateSourceSyncEvent above.
 func (s *Storage) RecordSourceSyncFailure(ctx context.Context, sourceID, message string) error {
-	er, ok := s.repo.(*EntRepository)
-	if !ok {
-		return ErrNotFound
-	}
-	return er.RecordSourceSyncFailure(ctx, sourceID, message)
+	return s.repo.RecordSourceSyncFailure(ctx, sourceID, message)
 }
 
 // --- ItemSession (direct EntRepository delegation) ---
 
 // GetItemSession looks up an ItemSession by entity UUID (loads BacklogItem edge).
 func (s *Storage) GetItemSession(ctx context.Context, id string) (ItemSessionSummary, error) {
-	er, ok := s.repo.(*EntRepository)
-	if !ok {
-		return ItemSessionSummary{}, ErrNotFound
-	}
-	return er.GetItemSession(ctx, id)
+	return s.repo.GetItemSession(ctx, id)
 }
 
 // GetBaseCommitSHAsForSessions returns a sessionUUID→base_commit_sha map for the given UUIDs.
 func (s *Storage) GetBaseCommitSHAsForSessions(ctx context.Context, uuids []string) (map[string]string, error) {
-	er, ok := s.repo.(*EntRepository)
-	if !ok {
-		return map[string]string{}, nil
-	}
-	return er.GetBaseCommitSHAsForSessions(ctx, uuids)
+	return s.repo.GetBaseCommitSHAsForSessions(ctx, uuids)
 }
 
 // GetItemSessionBySessionUUID looks up the ItemSession for a given session UUID (loads BacklogItem edge).
 func (s *Storage) GetItemSessionBySessionUUID(ctx context.Context, sessionUUID string) (ItemSessionSummary, error) {
-	er, ok := s.repo.(*EntRepository)
-	if !ok {
-		return ItemSessionSummary{}, ErrNotFound
-	}
-	return er.GetItemSessionBySessionUUID(ctx, sessionUUID)
+	return s.repo.GetItemSessionBySessionUUID(ctx, sessionUUID)
 }
 
 // GetWorktreeDataBySessionUUID returns the git worktree data for the Session with
 // the given UUID. Returns empty GitWorktreeData for directory-mode sessions or if
 // the session is not found.
 func (s *Storage) GetWorktreeDataBySessionUUID(ctx context.Context, sessionUUID string) (GitWorktreeData, error) {
-	er, ok := s.repo.(*EntRepository)
-	if !ok {
-		return GitWorktreeData{}, nil
-	}
-	return er.GetWorktreeDataBySessionUUID(ctx, sessionUUID)
+	return s.repo.GetWorktreeDataBySessionUUID(ctx, sessionUUID)
 }
 
 // UpdateItemSessionTriageResult stores the triage result JSON payload on an ItemSession.
 func (s *Storage) UpdateItemSessionTriageResult(ctx context.Context, id string, triageResult string) error {
-	er, ok := s.repo.(*EntRepository)
-	if !ok {
-		return fmt.Errorf("item session updates not supported by this storage backend")
-	}
-	return er.UpdateItemSessionTriageResult(ctx, id, triageResult)
+	return s.repo.UpdateItemSessionTriageResult(ctx, id, triageResult)
 }
 
 // UpdateItemSessionVerificationNotes stores verification evidence (commands run, manual
 // checks performed) reported via request_review on an ItemSession.
 func (s *Storage) UpdateItemSessionVerificationNotes(ctx context.Context, id string, verificationNotes string) error {
-	er, ok := s.repo.(*EntRepository)
-	if !ok {
-		return fmt.Errorf("item session updates not supported by this storage backend")
-	}
-	return er.UpdateItemSessionVerificationNotes(ctx, id, verificationNotes)
+	return s.repo.UpdateItemSessionVerificationNotes(ctx, id, verificationNotes)
 }
 
 // UpdateItemSessionStarted records the start time for an ItemSession.
 func (s *Storage) UpdateItemSessionStarted(ctx context.Context, id string, startedAt time.Time) error {
-	er, ok := s.repo.(*EntRepository)
-	if !ok {
-		return fmt.Errorf("item session updates not supported by this storage backend")
-	}
-	return er.UpdateItemSessionStarted(ctx, id, startedAt)
+	return s.repo.UpdateItemSessionStarted(ctx, id, startedAt)
 }
 
 // SetItemSessionBaseCommit records the pre-work base commit SHA on an ItemSession.
 // See the EntRepository method for why this is separate from git activity.
 func (s *Storage) SetItemSessionBaseCommit(ctx context.Context, id, sha string) error {
-	er, ok := s.repo.(*EntRepository)
-	if !ok {
-		return fmt.Errorf("item session updates not supported by this storage backend")
-	}
-	return er.SetItemSessionBaseCommit(ctx, id, sha)
+	return s.repo.SetItemSessionBaseCommit(ctx, id, sha)
 }
 
 // UpdateItemSessionGitActivity records the session's current tip commit and
 // related fields on an ItemSession. For the spawn-time baseline, use
 // SetItemSessionBaseCommit.
 func (s *Storage) UpdateItemSessionGitActivity(ctx context.Context, id string, sha, msg string, commitAt time.Time, commitCount int) error {
-	er, ok := s.repo.(*EntRepository)
-	if !ok {
-		return fmt.Errorf("item session updates not supported by this storage backend")
-	}
-	return er.UpdateItemSessionGitActivity(ctx, id, sha, msg, commitAt, commitCount)
+	return s.repo.UpdateItemSessionGitActivity(ctx, id, sha, msg, commitAt, commitCount)
 }
 
 // UpdateItemSessionEnded records the end time for an ItemSession.
 func (s *Storage) UpdateItemSessionEnded(ctx context.Context, id string, endedAt time.Time) error {
-	er, ok := s.repo.(*EntRepository)
-	if !ok {
-		return fmt.Errorf("item session updates not supported by this storage backend")
-	}
-	return er.UpdateItemSessionEnded(ctx, id, endedAt)
+	return s.repo.UpdateItemSessionEnded(ctx, id, endedAt)
 }
 
 // UpdateItemSessionEndedWithReason records the end time for an ItemSession alongside
 // classifyHeadlessCallError's bucket (or "" for a successful end).
 func (s *Storage) UpdateItemSessionEndedWithReason(ctx context.Context, id string, endedAt time.Time, reason string) error {
-	er, ok := s.repo.(*EntRepository)
-	if !ok {
-		return fmt.Errorf("item session updates not supported by this storage backend")
-	}
-	return er.UpdateItemSessionEndedWithReason(ctx, id, endedAt, reason)
+	return s.repo.UpdateItemSessionEndedWithReason(ctx, id, endedAt, reason)
 }
 
 // UpdateItemSessionFailureCapture records the absolute path to a durable raw-output
 // capture file for a headless triage/review call that errored or produced
 // unparseable output. See EntRepository.UpdateItemSessionFailureCapture.
 func (s *Storage) UpdateItemSessionFailureCapture(ctx context.Context, id string, path string) error {
-	er, ok := s.repo.(*EntRepository)
-	if !ok {
-		return fmt.Errorf("item session updates not supported by this storage backend")
-	}
-	return er.UpdateItemSessionFailureCapture(ctx, id, path)
+	return s.repo.UpdateItemSessionFailureCapture(ctx, id, path)
+}
+
+// UpdateItemSessionCost adds usd to an ItemSession's estimated_cost_usd. See
+// EntRepository.UpdateItemSessionCost.
+func (s *Storage) UpdateItemSessionCost(ctx context.Context, id string, usd float64) error {
+	return s.repo.UpdateItemSessionCost(ctx, id, usd)
+}
+
+// AddHeadlessCostBySessionUUID adds usd to the estimated_cost_usd of the ItemSession
+// for sessionUUID, if any. See EntRepository.AddHeadlessCostBySessionUUID.
+func (s *Storage) AddHeadlessCostBySessionUUID(ctx context.Context, sessionUUID string, usd float64) error {
+	return s.repo.AddHeadlessCostBySessionUUID(ctx, sessionUUID, usd)
 }
 
 // GetItemSessionBySessionAndItem looks up an ItemSession by both sessionUUID and backlog item ID.
 // Returns ErrNotFound if no matching record exists.
 func (s *Storage) GetItemSessionBySessionAndItem(ctx context.Context, sessionUUID string, itemID string) (ItemSessionSummary, error) {
-	er, ok := s.repo.(*EntRepository)
-	if !ok {
-		return ItemSessionSummary{}, ErrNotFound
-	}
-	return er.GetItemSessionBySessionAndItem(ctx, sessionUUID, itemID)
+	return s.repo.GetItemSessionBySessionAndItem(ctx, sessionUUID, itemID)
 }
 
 // GetClaudeConversationUUIDBySessionUUID returns the Claude conversation UUID
 // for the session whose title matches the given UUID. Returns "" when the session
 // has no ClaudeSession, and ErrNotFound when no session matches.
 func (s *Storage) GetClaudeConversationUUIDBySessionUUID(ctx context.Context, sessionUUID string) (string, error) {
-	er, ok := s.repo.(*EntRepository)
-	if !ok {
-		return "", ErrNotFound
-	}
-	return er.GetClaudeConversationUUIDBySessionUUID(ctx, sessionUUID)
+	return s.repo.GetClaudeConversationUUIDBySessionUUID(ctx, sessionUUID)
 }
 
 // GetMostRecentReviewVerdictForItem returns the OverallOutcome of the most recent
 // ReviewVerdict linked to any ItemSession for itemID. Returns "" when none exists.
 func (s *Storage) GetMostRecentReviewVerdictForItem(ctx context.Context, itemID string) (ReviewOutcome, error) {
-	er, ok := s.repo.(*EntRepository)
-	if !ok {
-		return "", nil
-	}
-	return er.GetMostRecentReviewVerdictForItem(ctx, itemID)
+	return s.repo.GetMostRecentReviewVerdictForItem(ctx, itemID)
 }
 
 // GetRecentReviewVerdictSummaries returns up to limit ReviewVerdicts for itemID,
 // most recent first. Returns nil (not an error) when the repo isn't ent-backed.
 func (s *Storage) GetRecentReviewVerdictSummaries(ctx context.Context, itemID string, limit int) ([]ReviewVerdictSummary, error) {
-	er, ok := s.repo.(*EntRepository)
-	if !ok {
-		return nil, nil
-	}
-	return er.GetRecentReviewVerdictSummaries(ctx, itemID, limit)
+	return s.repo.GetRecentReviewVerdictSummaries(ctx, itemID, limit)
 }
 
 // SaveReviewVerdict upserts a ReviewVerdict for a given ItemSession UUID.
 func (s *Storage) SaveReviewVerdict(ctx context.Context, itemSessionID string, verdict ReviewVerdictData) error {
-	er, ok := s.repo.(*EntRepository)
-	if !ok {
-		return fmt.Errorf("review verdicts not supported by this storage backend")
-	}
-	return er.SaveReviewVerdict(ctx, itemSessionID, verdict)
+	return s.repo.SaveReviewVerdict(ctx, itemSessionID, verdict)
 }
 
 // ComputeCurrentDiffHash resolves itemID's most recent completed work
@@ -1275,17 +1195,13 @@ func (s *Storage) SaveReviewVerdict(ctx context.Context, itemSessionID string, v
 // missing DiffHash just means IsFlakyVerdictFlipFlop treats that verdict as
 // unknown, never as a false match.
 func (s *Storage) ComputeCurrentDiffHash(ctx context.Context, itemID string) string {
-	er, ok := s.repo.(*EntRepository)
-	if !ok {
-		return ""
-	}
-	repoPath, baseSHA, headSHA, err := er.GetRepoPathAndLatestCompletedWorkSessionCommits(ctx, itemID)
+	repoPath, baseSHA, headSHA, err := s.repo.GetRepoPathAndLatestCompletedWorkSessionCommits(ctx, itemID)
 	if err != nil || repoPath == "" || baseSHA == "" || headSHA == "" {
 		return ""
 	}
 	hash, err := git.DiffHashBetween(repoPath, baseSHA, headSHA)
 	if err != nil {
-		log.WarningLog.Printf("[ComputeCurrentDiffHash] item=%s base=%s head=%s: %v", itemID, baseSHA, headSHA, err)
+		log.WarningLog().Printf("[ComputeCurrentDiffHash] item=%s base=%s head=%s: %v", itemID, baseSHA, headSHA, err)
 		return ""
 	}
 	return hash
@@ -1293,79 +1209,59 @@ func (s *Storage) ComputeCurrentDiffHash(ctx context.Context, itemID string) str
 
 // UpdateAcCriterionStatus updates a single acceptance criterion's status by index.
 func (s *Storage) UpdateAcCriterionStatus(ctx context.Context, itemID string, criterionIndex int, status string, note string) error {
-	er, ok := s.repo.(*EntRepository)
-	if !ok {
-		return fmt.Errorf("AC criterion updates not supported by this storage backend")
-	}
-	return er.UpdateAcCriterionStatus(ctx, itemID, criterionIndex, status, note)
+	return s.repo.UpdateAcCriterionStatus(ctx, itemID, criterionIndex, status, note)
 }
 
 // AppendProgressNote records a single report_progress call as an immutable history
 // entry, in addition to the current-note-per-criterion updated by UpdateAcCriterionStatus.
 func (s *Storage) AppendProgressNote(ctx context.Context, itemID string, criterionIndex int, note, status string) error {
-	er, ok := s.repo.(*EntRepository)
-	if !ok {
-		return fmt.Errorf("progress note history not supported by this storage backend")
-	}
-	return er.AppendProgressNote(ctx, itemID, criterionIndex, note, status)
+	return s.repo.AppendProgressNote(ctx, itemID, criterionIndex, note, status)
 }
 
 // ListProgressNotesForItem returns the full append-only history of report_progress
 // calls for a backlog item, ordered by created_at ascending.
 func (s *Storage) ListProgressNotesForItem(ctx context.Context, itemID string) ([]ProgressNoteData, error) {
-	er, ok := s.repo.(*EntRepository)
-	if !ok {
-		return nil, ErrNotFound
-	}
-	return er.ListProgressNotesForItem(ctx, itemID)
+	return s.repo.ListProgressNotesForItem(ctx, itemID)
+}
+
+// AppendActivityNote records a single post_backlog_update call as an immutable,
+// append-only history entry — the ungated sibling to AppendProgressNote (ADR-001).
+func (s *Storage) AppendActivityNote(ctx context.Context, itemID, authorSessionUUID, authorSessionTitle, message string) error {
+	return s.repo.AppendActivityNote(ctx, itemID, authorSessionUUID, authorSessionTitle, message)
+}
+
+// ListActivityNotesForItem returns the full append-only activity-note history for
+// a backlog item, ordered by created_at ascending.
+func (s *Storage) ListActivityNotesForItem(ctx context.Context, itemID string) ([]ActivityNoteData, error) {
+	return s.repo.ListActivityNotesForItem(ctx, itemID)
 }
 
 // CreateItemSession creates a new ItemSession linked to a BacklogItem.
 func (s *Storage) CreateItemSession(ctx context.Context, data ItemSessionData) (ItemSessionSummary, error) {
-	er, ok := s.repo.(*EntRepository)
-	if !ok {
-		return ItemSessionSummary{}, fmt.Errorf("item sessions not supported by this storage backend")
-	}
-	return er.CreateItemSession(ctx, data)
+	return s.repo.CreateItemSession(ctx, data)
 }
 
 // CreateItemSessionWithVerdict atomically creates an ItemSession and its initial
 // ReviewVerdict in a single transaction. Falls back gracefully if the backend is
 // not ent-based.
 func (s *Storage) CreateItemSessionWithVerdict(ctx context.Context, isData ItemSessionData, verdict ReviewVerdictData) (ItemSessionSummary, error) {
-	er, ok := s.repo.(*EntRepository)
-	if !ok {
-		return ItemSessionSummary{}, fmt.Errorf("item sessions not supported by this storage backend")
-	}
-	return er.CreateItemSessionWithVerdict(ctx, isData, verdict)
+	return s.repo.CreateItemSessionWithVerdict(ctx, isData, verdict)
 }
 
 // ListItemSessions returns all ItemSessions for a given BacklogItem UUID string.
 func (s *Storage) ListItemSessions(ctx context.Context, itemID string) ([]ItemSessionSummary, error) {
-	er, ok := s.repo.(*EntRepository)
-	if !ok {
-		return nil, ErrNotFound
-	}
-	return er.ListItemSessions(ctx, itemID)
+	return s.repo.ListItemSessions(ctx, itemID)
 }
 
 // UpdateItemSessionSessionUUID updates the session_uuid on an existing ItemSession record.
 func (s *Storage) UpdateItemSessionSessionUUID(ctx context.Context, id string, sessionUUID string) error {
-	er, ok := s.repo.(*EntRepository)
-	if !ok {
-		return fmt.Errorf("item session updates not supported by this storage backend")
-	}
-	return er.UpdateItemSessionSessionUUID(ctx, id, sessionUUID)
+	return s.repo.UpdateItemSessionSessionUUID(ctx, id, sessionUUID)
 }
 
 // GetAllItemSessionsWithBacklogInfo returns all item sessions joined with backlog item metadata.
 // Delegates to EntRepository; returns an error for non-ent backends.
 func (s *Storage) GetAllItemSessionsWithBacklogInfo(ctx context.Context) ([]ItemSessionBacklogEntry, error) {
-	er, ok := s.repo.(*EntRepository)
-	if !ok {
-		return nil, fmt.Errorf("item sessions not supported by this storage backend")
-	}
-	return er.GetAllItemSessionsWithBacklogInfo(ctx)
+	return s.repo.GetAllItemSessionsWithBacklogInfo(ctx)
 }
 
 // --- Session Goal ---

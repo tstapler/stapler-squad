@@ -52,7 +52,7 @@ type DecisionRecord struct {
 // exactly what BuildDecisionsSnapshot needs, satisfied by a thin adapter over
 // *notifications.NotificationHistoryStore.List (wired in Phase 2). Defined here,
 // next to its consumer, per
-// .claude/rules/interface-pollution-checklist.md's "define the interface where
+// the `interface-pollution-checklist` skill's "define the interface where
 // it's consumed".
 type NotificationDecisionLister interface {
 	ListDecisionRecords(ctx context.Context, sessionID string) ([]DecisionRecord, error)
@@ -61,7 +61,7 @@ type NotificationDecisionLister interface {
 // ReviewQueueLookup is a small consumer-defined interface, scoped to exactly what
 // BuildDecisionsSnapshot needs, satisfied by existing ItemSession/ReviewVerdict
 // query code. Defined here, next to its consumer, per
-// .claude/rules/interface-pollution-checklist.md's "define the interface where
+// the `interface-pollution-checklist` skill's "define the interface where
 // it's consumed".
 type ReviewQueueLookup interface {
 	// ReviewQueueResolvedCount returns the count of resolved and still-open review

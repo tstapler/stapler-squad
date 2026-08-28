@@ -11,6 +11,7 @@ import (
 )
 
 func TestSetAutoApprove_should_NotRestart_When_StatusPaused(t *testing.T) {
+	t.Parallel()
 	inst := minimalInstance(t)
 	inst.Status = Paused
 
@@ -26,6 +27,7 @@ func TestSetAutoApprove_should_NotRestart_When_StatusPaused(t *testing.T) {
 }
 
 func TestSetAutoApprove_should_ReturnErrorAndSkipRestart_When_PersistFails(t *testing.T) {
+	t.Parallel()
 	inst := minimalInstance(t)
 	inst.Status = Active
 	inst.started.Store(true)
@@ -48,6 +50,7 @@ func TestSetAutoApprove_should_ReturnErrorAndSkipRestart_When_PersistFails(t *te
 // the caller (UpdateSession) and the persisted store agree on the new value even though
 // the session didn't actually restart.
 func TestSetAutoApprove_RestartError_PersistAlreadyRan(t *testing.T) {
+	t.Parallel()
 	inst := minimalInstance(t)
 	inst.Status = Active
 	inst.started.Store(true)
@@ -74,6 +77,7 @@ func TestSetAutoApprove_RestartError_PersistAlreadyRan(t *testing.T) {
 // just via -race) by blocking SetAutoApprove mid-persist and asserting a concurrent
 // SwitchProgram call cannot proceed until the lock is released.
 func TestSetAutoApprove_SerializesWithSwitchProgram_When_ConcurrentCalls(t *testing.T) {
+	t.Parallel()
 	inst := minimalInstance(t)
 	inst.Program = "claude"
 	inst.Status = Active

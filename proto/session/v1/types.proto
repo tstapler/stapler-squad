@@ -253,6 +253,27 @@ message Session {
   // Count of active background agents/shells/monitors from the WaitingForAgent detector.
   // Only meaningful when detected_status == DETECTED_STATUS_WAITING_FOR_AGENT; 0 otherwise.
   int32 subagent_count = 75;
+
+  // Name of the configured remote (session.v1.RemoteConfigProto.name, see
+  // remote.proto) this session's ExecutionTarget is running on. Empty for a
+  // local session. Derived live from the in-memory session.Instance.
+  // ExecutionTarget at read time (ssh-remote-workspaces Epic 6.2's
+  // SessionCard host badge) -- NOT persisted, so it reverts to empty across
+  // a server restart until the session is next resumed (ExecutionTarget
+  // itself is `json:"-"`, matching every other execution-target-derived
+  // read in this codebase; see session/execution_target.go).
+  string remote_name = 76;
+
+  // Cached signal for whether the branch has commits ahead of its base — used to
+  // pre-emptively disable the "Create PR" trigger (AC6), refreshed on the same
+  // cadence as diff_stats, not computed synchronously per-request.
+  bool has_commits_ahead = 77;
+
+  // Outcome of the most recent start/cold-restore decision. See ReviveOutcome.
+  ReviveOutcome revive_outcome = 78;
+
+  // Empty unless this session was created via Restart-with-Summary.
+  string restarted_from_session_id = 79;
 }
 
 // SessionArtifacts holds structured artifacts extracted from the session's
@@ -414,6 +435,24 @@ enum DetectedStatus {
   // Claude is actively compacting/summarizing conversation history (distinct
   // from the "N% until auto-compact" approaching indicator).
   DETECTED_STATUS_COMPACTING = 12;
+}
+
+// ReviveOutcome records the outcome of the most recent cold-restore decision
+// (session-revive-uuid-loss AC3): whether the session resumed its previous
+// conversation, and if not, whether that was expected (genuinely no prior
+// history) or an unexpected loss (a conversation existed but could not be
+// recovered from disk).
+enum ReviveOutcome {
+  REVIVE_OUTCOME_UNSPECIFIED = 0;
+  // Had a conversation UUID already in memory; no recovery needed.
+  REVIVE_OUTCOME_RESUME_LIVE = 1;
+  // No UUID in memory, but disk-based recovery found one before launch.
+  REVIVE_OUTCOME_RESUME_RECOVERED = 2;
+  // Started fresh with no prior conversation history to lose.
+  REVIVE_OUTCOME_FRESH_EXPECTED = 3;
+  // Started fresh even though this session previously had captured
+  // conversation history — recovery ran and found nothing.
+  REVIVE_OUTCOME_FRESH_LOST_HISTORY = 4;
 }
 
 // WorkingState represents the active-work status of a session for review queue filtering.
@@ -646,6 +685,11 @@ message ReviewItem {
   // was enqueued. Used by the frontend deriveWorkingState() utility to compute
   // the effective WorkingState without relying on the deprecated working_state field.
   SubStatus sub_status = 21;
+
+  // Cached signal for whether the branch has commits ahead of its base — used
+  // to pre-emptively disable the "Create PR" trigger in the review queue
+  // (mirrors Session.has_commits_ahead), not computed synchronously per-request.
+  bool has_commits_ahead = 22;
 }
 
 // Priority levels for review queue items (highest to lowest urgency).
@@ -1136,6 +1180,10 @@ message ApprovalRuleProto {
   // require_ci_passing, when true, only matches when the requesting session's GitHub
   // CI check conclusion is "success". Combinable (AND) with all other conditions.
   bool            require_ci_passing      = 29;
+  // min_session_idle_minutes, when > 0, only matches if the requesting session has
+  // been idle >= N minutes since its last meaningful output. 0 = condition not
+  // applied. Combinable (AND) with all other conditions.
+  int32 min_session_idle_minutes = 30;
 }
 
 // AnalyticsSummaryProto aggregates classification decisions over a time window.

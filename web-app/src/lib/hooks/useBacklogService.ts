@@ -6,6 +6,7 @@ import { createConnectTransport } from "@connectrpc/connect-web";
 import { timestampDate } from "@bufbuild/protobuf/wkt";
 import type { Timestamp } from "@bufbuild/protobuf/wkt";
 import { getApiBaseUrl, createAuthInterceptor } from "@/lib/config";
+import { getErrorMessage } from "@/lib/utils/connectError";
 import {
   BacklogService,
   BacklogItem as BacklogItemProto,
@@ -14,6 +15,7 @@ import {
   TriageTask as TriageTaskProto,
   BacklogStatusEvent as BacklogStatusEventProto,
   BacklogProgressNote as BacklogProgressNoteProto,
+  BacklogActivityNote as BacklogActivityNoteProto,
   PipelineMode as PipelineModeProto,
 } from "@/gen/session/v1/backlog_pb";
 
@@ -64,6 +66,14 @@ export interface LinkedSession {
   role: string;
   startedAt?: string;
   endedAt?: string;
+  /** Number of commits made since this session was spawned; 0 if none yet. */
+  commitCountSinceSpawn?: number;
+  /** Timestamp of the session's most recent commit, if it has made one. */
+  lastCommitAt?: string;
+  /** Full text (possibly multi-line) of the session's most recent commit message. */
+  lastCommitMessage?: string;
+  /** Timestamp of the session's most recent file modification, if any. */
+  lastFileTouchAt?: string;
   reviewVerdict?: {
     overallOutcome?: "PASS" | "PARTIAL" | "FAIL" | "PENDING" | "UNVERIFIABLE";
     summary?: string;
@@ -91,7 +101,7 @@ export interface LinkedSession {
   pipelineModeSnapshotHash?: string;
   /**
    * Set alongside endedAt for a headless (triage/review) call: a coarse
-   * failure bucket ("shutdown", "timeout", "process_error", "claude_not_found",
+   * failure bucket ("shutdown", "timeout", "subprocess_start_error", "claude_not_found",
    * "other"), or "" for a successful end. See classifyHeadlessCallError
    * (server/services/backlog_service_triage.go) for the bucketing logic.
    */
@@ -107,6 +117,13 @@ export interface LinkedSession {
 
 export interface BacklogItem {
   id: string;
+  /**
+   * Externally-shareable identifier (a "bl_"-prefixed ULID). Empty for rows
+   * created before the public_id backfill (see
+   * session/storage_backlog.go's BackfillBacklogItemPublicIDs) — callers
+   * must fall back to `id` in that case.
+   */
+  publicId?: string;
   title: string;
   description?: string;
   status: BacklogItemStatus;
@@ -160,6 +177,8 @@ export interface BacklogItem {
   statusEvents: StatusEvent[];
   /** Implementer's report_progress audit trail (audit log) */
   progressNotes: ProgressNote[];
+  /** Free-form, timestamped, attributed notes posted via post_backlog_update (ungated audit log — see ADR-001, backlog-item-activity-log). */
+  activityNotes: ActivityNote[];
   /** Sum of estimated USD cost across all linked sessions */
   totalEstimatedCostUsd: number;
   /** GitHub PR URL when item is in pr_pending status */
@@ -280,6 +299,15 @@ export interface ProgressNote {
   createdAt?: string;
 }
 
+/** A single post_backlog_update call — an ungated, free-form, attributed note. */
+export interface ActivityNote {
+  id: string;
+  message: string;
+  authorSessionUuid: string;
+  authorSessionTitle: string;
+  createdAt?: string;
+}
+
 export interface BacklogItemInput {
   title: string;
   description?: string;
@@ -341,6 +369,10 @@ function mapItemSession(s: ItemSessionProto): LinkedSession {
     role: s.sessionRole,
     startedAt: s.startedAt ? new Date(Number(s.startedAt.seconds) * 1000).toISOString() : undefined,
     endedAt: s.endedAt ? new Date(Number(s.endedAt.seconds) * 1000).toISOString() : undefined,
+    commitCountSinceSpawn: s.commitCountSinceSpawn ?? 0,
+    lastCommitAt: s.lastCommitAt ? timestampDate(s.lastCommitAt).toISOString() : undefined,
+    lastCommitMessage: s.lastCommitMessage || undefined,
+    lastFileTouchAt: s.lastFileTouchAt ? timestampDate(s.lastFileTouchAt).toISOString() : undefined,
     estimatedCostUsd: s.estimatedCostUsd ?? 0,
     worktreeBranch: s.worktreeBranch || undefined,
     worktreePath: s.worktreePath || undefined,
@@ -409,6 +441,16 @@ function mapProgressNote(n: BacklogProgressNoteProto): ProgressNote {
     criterionIndex: n.criterionIndex,
     note: n.note,
     status: n.status,
+    createdAt: n.createdAt ? new Date(Number(n.createdAt.seconds) * 1000).toISOString() : undefined,
+  };
+}
+
+function mapActivityNote(n: BacklogActivityNoteProto): ActivityNote {
+  return {
+    id: n.id,
+    message: n.message,
+    authorSessionUuid: n.authorSessionUuid,
+    authorSessionTitle: n.authorSessionTitle,
     createdAt: n.createdAt ? new Date(Number(n.createdAt.seconds) * 1000).toISOString() : undefined,
   };
 }
@@ -486,6 +528,7 @@ export function mapBacklogItem(p: BacklogItemProto): BacklogItem {
 
   return {
     id: p.id,
+    publicId: p.publicId || undefined,
     title: p.title,
     description: p.description || undefined,
     status: (p.status || "idea") as BacklogItemStatus,
@@ -519,6 +562,7 @@ export function mapBacklogItem(p: BacklogItemProto): BacklogItem {
     triageResult,
     statusEvents: (p.statusEvents ?? []).map(mapStatusEvent),
     progressNotes: (p.progressNotes ?? []).map(mapProgressNote),
+    activityNotes: (p.activityNotes ?? []).map(mapActivityNote),
     totalEstimatedCostUsd: p.totalEstimatedCostUsd ?? 0,
     prUrl: p.prUrl || undefined,
     prNumber: p.prNumber || undefined,
@@ -585,11 +629,14 @@ interface UseBacklogServiceReturn {
   listBacklogItems: (filter?: ListBacklogItemsFilter) => Promise<BacklogItem[]>;
   getBacklogItem: (id: string) => Promise<BacklogItem | null>;
   createBacklogItem: (data: BacklogItemInput) => Promise<{ item: BacklogItem; triageTriggered: boolean } | null>;
+  /** One turn of chat-based backlog creation/refinement. Empty existingItemId creates a new item (delegates to createBacklogItem); a set existingItemId delegates to TriggerTriage's feedback-driven refine path. */
+  createBacklogItemFromChat: (message: string, existingItemId?: string) => Promise<{ item: BacklogItem; triageTriggered: boolean } | null>;
   importGitHubIssue: (issueUrl: string, options?: { repoPath?: string; skipPlanning?: boolean }) => Promise<{ item: BacklogItem; triageTriggered: boolean } | null>;
   searchGitHubRepos: (query: string, limit?: number) => Promise<GitHubRepo[]>;
   listGitHubIssues: (owner: string, repo: string, options?: { state?: string; search?: string; limit?: number }) => Promise<GitHubIssue[]>;
   updateBacklogItem: (id: string, data: Partial<BacklogItemInput>) => Promise<BacklogItem | null>;
   archiveBacklogItem: (id: string) => Promise<boolean>;
+  unarchiveBacklogItem: (id: string) => Promise<boolean>;
   deleteBacklogItem: (id: string) => Promise<boolean>;
   transitionStatus: (
     id: string,
@@ -737,7 +784,28 @@ export function useBacklogService(): UseBacklogServiceReturn {
           : null;
       } catch (err) {
         console.error("[useBacklogService] createBacklogItem:", err);
-        setLastError(err instanceof Error ? err : new Error(String(err)));
+        setLastError(new Error(getErrorMessage(err, "Failed to create backlog item.")));
+        return null;
+      }
+    },
+    []
+  );
+
+  const createBacklogItemFromChat = useCallback(
+    async (message: string, existingItemId?: string): Promise<{ item: BacklogItem; triageTriggered: boolean } | null> => {
+      if (!clientRef.current) return null;
+      try {
+        setLastError(null);
+        const resp = await clientRef.current.createBacklogItemFromChat({
+          message,
+          existingItemId: existingItemId ?? "",
+        });
+        return resp.item
+          ? { item: mapBacklogItem(resp.item), triageTriggered: resp.triageTriggered }
+          : null;
+      } catch (err) {
+        console.error("[useBacklogService] createBacklogItemFromChat:", err);
+        setLastError(new Error(getErrorMessage(err, "Failed to create backlog item from chat.")));
         return null;
       }
     },
@@ -770,7 +838,7 @@ export function useBacklogService(): UseBacklogServiceReturn {
         return resp.item ? mapBacklogItem(resp.item) : null;
       } catch (err) {
         console.error("[useBacklogService] updateBacklogItem:", err);
-        setLastError(err instanceof Error ? err : new Error(String(err)));
+        setLastError(new Error(getErrorMessage(err, "Failed to update backlog item.")));
         return null;
       }
     },
@@ -784,7 +852,19 @@ export function useBacklogService(): UseBacklogServiceReturn {
       return true;
     } catch (err) {
       console.error("[useBacklogService] archiveBacklogItem:", err);
-      setLastError(err instanceof Error ? err : new Error(String(err)));
+      setLastError(new Error(getErrorMessage(err, "Failed to archive backlog item.")));
+      throw err;
+    }
+  }, []);
+
+  const unarchiveBacklogItem = useCallback(async (id: string): Promise<boolean> => {
+    if (!clientRef.current) return false;
+    try {
+      await clientRef.current.unarchiveBacklogItem({ itemId: id });
+      return true;
+    } catch (err) {
+      console.error("[useBacklogService] unarchiveBacklogItem:", err);
+      setLastError(new Error(getErrorMessage(err, "Failed to unarchive backlog item.")));
       throw err;
     }
   }, []);
@@ -796,7 +876,7 @@ export function useBacklogService(): UseBacklogServiceReturn {
       return true;
     } catch (err) {
       console.error("[useBacklogService] deleteBacklogItem:", err);
-      setLastError(err instanceof Error ? err : new Error(String(err)));
+      setLastError(new Error(getErrorMessage(err, "Failed to delete backlog item.")));
       throw err;
     }
   }, []);
@@ -826,7 +906,7 @@ export function useBacklogService(): UseBacklogServiceReturn {
         return resp.item ? mapBacklogItem(resp.item) : null;
       } catch (err) {
         console.error("[useBacklogService] transitionStatus:", err);
-        setLastError(err instanceof Error ? err : new Error(String(err)));
+        setLastError(new Error(getErrorMessage(err, "Failed to transition backlog item status.")));
         throw err;
       }
     },
@@ -846,7 +926,7 @@ export function useBacklogService(): UseBacklogServiceReturn {
         return { sessionUuid: resp.sessionUuid, queued: resp.queued };
       } catch (err) {
         console.error("[useBacklogService] spawnSessionFromItem:", err);
-        setLastError(err instanceof Error ? err : new Error(String(err)));
+        setLastError(new Error(getErrorMessage(err, "Failed to spawn session from item.")));
         throw err;
       }
     },
@@ -861,7 +941,7 @@ export function useBacklogService(): UseBacklogServiceReturn {
         return { itemSessionId: resp.itemSession?.id ?? "" };
       } catch (err) {
         console.error("[useBacklogService] triggerTriage:", err);
-        setLastError(err instanceof Error ? err : new Error(String(err)));
+        setLastError(new Error(getErrorMessage(err, "Failed to trigger triage.")));
         throw err;
       }
     },
@@ -875,7 +955,7 @@ export function useBacklogService(): UseBacklogServiceReturn {
       return resp.cancelled;
     } catch (err) {
       console.error("[useBacklogService] cancelTriage:", err);
-      setLastError(err instanceof Error ? err : new Error(String(err)));
+      setLastError(new Error(getErrorMessage(err, "Failed to cancel triage.")));
       throw err;
     }
   }, []);
@@ -887,7 +967,7 @@ export function useBacklogService(): UseBacklogServiceReturn {
       return resp.item ? mapBacklogItem(resp.item) : null;
     } catch (err) {
       console.error("[useBacklogService] approvePlan:", err);
-      setLastError(err instanceof Error ? err : new Error(String(err)));
+      setLastError(new Error(getErrorMessage(err, "Failed to approve plan.")));
       throw err;
     }
   }, []);
@@ -899,7 +979,7 @@ export function useBacklogService(): UseBacklogServiceReturn {
       return resp.item ? mapBacklogItem(resp.item) : null;
     } catch (err) {
       console.error("[useBacklogService] rejectPlan:", err);
-      setLastError(err instanceof Error ? err : new Error(String(err)));
+      setLastError(new Error(getErrorMessage(err, "Failed to reject plan.")));
       throw err;
     }
   }, []);
@@ -916,7 +996,7 @@ export function useBacklogService(): UseBacklogServiceReturn {
         return true;
       } catch (err) {
         console.error("[useBacklogService] overrideVerdict:", err);
-        setLastError(err instanceof Error ? err : new Error(String(err)));
+        setLastError(new Error(getErrorMessage(err, "Failed to override verdict.")));
         throw err;
       }
     },
@@ -930,7 +1010,7 @@ export function useBacklogService(): UseBacklogServiceReturn {
       return true;
     } catch (err) {
       console.error("[useBacklogService] triggerReReview:", err);
-      setLastError(err instanceof Error ? err : new Error(String(err)));
+      setLastError(new Error(getErrorMessage(err, "Failed to trigger re-review.")));
       throw err;
     }
   }, []);
@@ -951,7 +1031,7 @@ export function useBacklogService(): UseBacklogServiceReturn {
       return { prUrl: resp.prUrl };
     } catch (err) {
       console.error("[useBacklogService] triggerShipPR:", err);
-      setLastError(err instanceof Error ? err : new Error(String(err)));
+      setLastError(new Error(getErrorMessage(err, "Failed to ship PR.")));
       throw err;
     }
   }, []);
@@ -965,7 +1045,7 @@ export function useBacklogService(): UseBacklogServiceReturn {
         return resp.item ? mapBacklogItem(resp.item) : null;
       } catch (err) {
         console.error("[useBacklogService] submitManualReview:", err);
-        setLastError(err instanceof Error ? err : new Error(String(err)));
+        setLastError(new Error(getErrorMessage(err, "Failed to submit manual review.")));
         throw err;
       }
     },
@@ -1078,7 +1158,7 @@ export function useBacklogService(): UseBacklogServiceReturn {
           : null;
       } catch (err) {
         console.error("[useBacklogService] importGitHubIssue:", err);
-        setLastError(err instanceof Error ? err : new Error(String(err)));
+        setLastError(new Error(getErrorMessage(err, "Failed to import GitHub issue.")));
         return null;
       }
     },
@@ -1152,11 +1232,13 @@ export function useBacklogService(): UseBacklogServiceReturn {
       listBacklogItems,
       getBacklogItem,
       createBacklogItem,
+      createBacklogItemFromChat,
       importGitHubIssue,
       searchGitHubRepos,
       listGitHubIssues,
       updateBacklogItem,
       archiveBacklogItem,
+      unarchiveBacklogItem,
       deleteBacklogItem,
       transitionStatus,
       spawnSessionFromItem,

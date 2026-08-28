@@ -4,9 +4,12 @@ import { createContext, useContext, useState, useCallback, useEffect, useRef, us
 import { useRouter } from "next/navigation";
 import { Omnibar, OmnibarSessionData } from "@/components/sessions/Omnibar";
 import { useSessionService } from "@/lib/hooks/useSessionService";
+import { useBacklogService } from "@/lib/hooks/useBacklogService";
 import { useWorkflows } from "@/lib/hooks/useWorkflows";
 import { useAuth } from "@/lib/contexts/AuthContext";
 import { SessionType } from "@/gen/session/v1/types_pb";
+import { RemoteTargetSchema } from "@/gen/session/v1/session_pb";
+import { create } from "@bufbuild/protobuf";
 import { getDefaultRegistry } from "@/lib/omnibar/detector";
 import { WorkflowDetector, type WorkflowEntry } from "@/lib/omnibar/detectors/WorkflowDetector";
 import { useAliases } from "@/lib/hooks/useAliases";
@@ -15,6 +18,7 @@ import { useLauncherPresets } from "@/lib/hooks/useLauncherPresets";
 import { PresetDetector } from "@/lib/omnibar/detectors/PresetDetector";
 import { useGitHubEnterpriseHosts } from "@/lib/hooks/useGitHubEnterpriseHosts";
 import { GitHubEnterpriseURLDetector } from "@/lib/omnibar/detectors/GitHubEnterpriseURLDetector";
+import { useConfiguredRemotes } from "@/lib/hooks/useConfiguredRemotes";
 
 const sessionTypeMap: Record<string, SessionType> = {
   directory: SessionType.DIRECTORY,
@@ -58,6 +62,7 @@ export function OmnibarProvider({ children }: OmnibarProviderProps) {
   const { createSession, runWorkflow: runWorkflowRPC } = useSessionService({
     enabled: !authLoading && (!authEnabled || authenticated),
   });
+  const { createBacklogItemFromChat } = useBacklogService();
   const { workflows } = useWorkflows();
 
   // Lean WorkflowEntry[] for the detector and @ autocomplete dropdown.
@@ -117,6 +122,11 @@ export function OmnibarProvider({ children }: OmnibarProviderProps) {
   // would never reach it, since each hook call owns disconnected state.
   const { presets: launcherPresets, loading: launcherPresetsLoading, loadError: launcherPresetsLoadError, refetch: refetchLauncherPresets } = useLauncherPresets();
 
+  // Configured remotes for the Omnibar's "Remote host" selector (ADR-001:
+  // remote-as-orthogonal-flag) -- see useConfiguredRemotes' doc comment for why this wiring
+  // was missing until ssh-remote-workspaces Phase 6 Epic 6.3.
+  const { remotes: configuredRemotes } = useConfiguredRemotes();
+
   // Dynamically register/unregister PresetDetector whenever the preset list changes.
   const presetDetectorRef = useRef<PresetDetector | null>(null);
   useEffect(() => {
@@ -133,33 +143,30 @@ export function OmnibarProvider({ children }: OmnibarProviderProps) {
     };
   }, [launcherPresets]);
 
-  // Re-fetch presets each time the omnibar opens so a hand-edited launcher-presets.json
-  // change appears immediately, without a server restart (Success Criterion 1).
+  const { hosts: enterpriseHosts, refetch: refetchEnterpriseHosts } = useGitHubEnterpriseHosts();
+
+  // Re-fetch presets and GHE hosts each time the omnibar opens so a hand-edited
+  // launcher-presets.json change, or a GitHub Enterprise account added mid-session,
+  // appears immediately without a server restart or page reload (Success Criterion 1;
+  // same staleness problem for enterprise hosts as launcher presets).
   const prevOmnibarOpenRef = useRef(false);
   useEffect(() => {
     if (isOpen && !prevOmnibarOpenRef.current) {
       refetchLauncherPresets();
+      refetchEnterpriseHosts();
     }
     prevOmnibarOpenRef.current = isOpen;
-  }, [isOpen, refetchLauncherPresets]);
+  }, [isOpen, refetchLauncherPresets, refetchEnterpriseHosts]);
 
-  const enterpriseHosts = useGitHubEnterpriseHosts();
-
-  // Dynamically register/unregister GitHubEnterpriseURLDetector whenever the
-  // configured GHES host list changes.
-  const githubEnterpriseDetectorRef = useRef<GitHubEnterpriseURLDetector | null>(null);
+  // GitHubEnterpriseURLDetector is registered synchronously (with an empty host
+  // list) inside createDefaultRegistry(), so the registry always has a slot for
+  // it — no window where a GHES URL falls through to SessionSearch. This effect
+  // just keeps its host list in sync as the async RPC result changes.
   useEffect(() => {
-    const registry = getDefaultRegistry();
-    if (githubEnterpriseDetectorRef.current) {
-      registry.unregister(githubEnterpriseDetectorRef.current);
-    }
-    const detector = new GitHubEnterpriseURLDetector(enterpriseHosts);
-    registry.register(detector);
-    githubEnterpriseDetectorRef.current = detector;
-    return () => {
-      registry.unregister(detector);
-      githubEnterpriseDetectorRef.current = null;
-    };
+    const detector = getDefaultRegistry().find("GitHubEnterpriseURL") as
+      | GitHubEnterpriseURLDetector
+      | undefined;
+    detector?.setHosts(enterpriseHosts);
   }, [enterpriseHosts]);
 
   const open = useCallback(() => {
@@ -262,6 +269,10 @@ export function OmnibarProvider({ children }: OmnibarProviderProps) {
         createIfMissing: data.createIfMissing ?? false,
         initialPrompt: data.initialPrompt,
         autonomousMode: data.autonomousMode ?? false,
+        // Remote target composes with sessionType (ADR-001: remote-as-orthogonal-flag) —
+        // omitted entirely (not just an empty remote_name) when no remote is selected, so a
+        // local session's CreateSessionRequest stays byte-identical to pre-change behavior.
+        remote: data.remoteName ? create(RemoteTargetSchema, { remoteName: data.remoteName }) : undefined,
         permissionMode: data.permissionMode ?? "",
         aliasName: data.aliasName ?? "",
         cliFlags: data.extraCliFlags ?? "",
@@ -297,6 +308,19 @@ export function OmnibarProvider({ children }: OmnibarProviderProps) {
     [runWorkflowRPC, workflows, router]
   );
 
+  // Handle chat_backlog_item: create a backlog item from a free-text message with no
+  // structured form fields — title/description both come from the raw message, and the
+  // normal auto-triage pipeline (skipTriage defaults to false) takes it from there.
+  const handleCreateBacklogItemFromChat = useCallback(
+    async (text: string) => {
+      const result = await createBacklogItemFromChat(text);
+      if (result) {
+        router.push(`/backlog?item=${result.item.id}`);
+      }
+    },
+    [createBacklogItemFromChat, router]
+  );
+
   const value: OmnibarContextValue = {
     isOpen,
     open,
@@ -316,6 +340,7 @@ export function OmnibarProvider({ children }: OmnibarProviderProps) {
         onNavigateToSession={handleNavigateToSession}
         onNavigateToSessionInNewPane={handleNavigateToSessionInNewPane}
         onRunWorkflow={handleRunWorkflow}
+        onCreateBacklogItemFromChat={handleCreateBacklogItemFromChat}
         initialMode={initialMode}
         initialInput={initialInput}
         initialTitle={initialTitle}
@@ -323,6 +348,7 @@ export function OmnibarProvider({ children }: OmnibarProviderProps) {
         launcherPresets={launcherPresets}
         launcherPresetsLoading={launcherPresetsLoading}
         launcherPresetsLoadError={launcherPresetsLoadError}
+        remotes={configuredRemotes}
       />
     </OmnibarContext.Provider>
   );

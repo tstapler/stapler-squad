@@ -13,6 +13,7 @@ import (
 // the deterministic prefix NewGitWorktreeWithBranchAndExecutor computes, without the
 // non-deterministic "_<random-suffix>" it appends at actual creation time.
 func TestPreviewWorktreePath_ReturnsPrefixWithoutRandomSuffix(t *testing.T) {
+	t.Parallel()
 	repoDir := setupTestRepo(t)
 
 	path, err := PreviewWorktreePath(repoDir, "My Feature Branch")
@@ -28,6 +29,7 @@ func TestPreviewWorktreePath_ReturnsPrefixWithoutRandomSuffix(t *testing.T) {
 // TestPreviewWorktreePath_ErrorsOnNonGitRepo verifies preview fails fast (no filesystem
 // mutation, no git subprocess calls) when repoPath isn't inside a git repository.
 func TestPreviewWorktreePath_ErrorsOnNonGitRepo(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 
 	_, err := PreviewWorktreePath(dir, "some-session")
@@ -43,6 +45,7 @@ func TestPreviewWorktreePath_ErrorsOnNonGitRepo(t *testing.T) {
 // disk — the mutating fallback findGitRepoRoot uses for the actual creation path must
 // never be reachable from PreviewWorktreePath.
 func TestPreviewWorktreePath_DoesNotCreateRepoWhenPathIsMissing(t *testing.T) {
+	t.Parallel()
 	parent := t.TempDir()
 	missingPath := filepath.Join(parent, "does-not-exist-yet")
 
@@ -59,6 +62,7 @@ func TestPreviewWorktreePath_DoesNotCreateRepoWhenPathIsMissing(t *testing.T) {
 // creation) must produce an error, never a silently fabricated disconnected repo with
 // a fake placeholder commit.
 func TestNewGitWorktreeWithBranch_ErrorsWhenRepoPathIsMissing(t *testing.T) {
+	t.Parallel()
 	parent := t.TempDir()
 	missingPath := filepath.Join(parent, "does-not-exist-yet")
 
@@ -74,6 +78,7 @@ func TestNewGitWorktreeWithBranch_ErrorsWhenRepoPathIsMissing(t *testing.T) {
 // TestNewGitWorktreeWithBranch_ErrorsWhenRepoPathIsMissing — both constructors call
 // findGitRepoRoot internally and must reject a missing repoPath rather than fabricate one.
 func TestNewGitWorktreeFromCommitSHA_ErrorsWhenRepoPathIsMissing(t *testing.T) {
+	t.Parallel()
 	parent := t.TempDir()
 	missingPath := filepath.Join(parent, "does-not-exist-yet")
 
@@ -88,6 +93,7 @@ func TestNewGitWorktreeFromCommitSHA_ErrorsWhenRepoPathIsMissing(t *testing.T) {
 // the same sanitization NewGitWorktreeWithBranchAndExecutor uses, so the prefix shown to
 // the user matches what actual creation would produce.
 func TestPreviewWorktreePath_SanitizesSessionNameConsistently(t *testing.T) {
+	t.Parallel()
 	repoDir := setupTestRepo(t)
 
 	path, err := PreviewWorktreePath(repoDir, "Weird!!! Name///Here")

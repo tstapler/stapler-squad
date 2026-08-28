@@ -31,6 +31,7 @@ func appendN(t *testing.T, m *ScrollbackManager, sessionID string, n int) {
 // ---- TestGetScrollbackBefore ----
 
 func TestGetScrollbackBefore_BeforeSeqZero_ReturnsEmpty(t *testing.T) {
+	t.Parallel()
 	m := newTestManager(t)
 	appendN(t, m, "sess1", 5)
 
@@ -44,6 +45,7 @@ func TestGetScrollbackBefore_BeforeSeqZero_ReturnsEmpty(t *testing.T) {
 }
 
 func TestGetScrollbackBefore_BeforeSeq1_ReturnsEmpty(t *testing.T) {
+	t.Parallel()
 	// Only entry 1 exists; nothing is strictly before seq 1.
 	m := newTestManager(t)
 	appendN(t, m, "sess1", 1)
@@ -58,6 +60,7 @@ func TestGetScrollbackBefore_BeforeSeq1_ReturnsEmpty(t *testing.T) {
 }
 
 func TestGetScrollbackBefore_BeforeSeq5_Returns4Entries(t *testing.T) {
+	t.Parallel()
 	// 10 entries (seq 1–10); beforeSeq=5 → entries 1–4.
 	m := newTestManager(t)
 	appendN(t, m, "sess1", 10)
@@ -85,6 +88,7 @@ func TestGetScrollbackBefore_BeforeSeq5_Returns4Entries(t *testing.T) {
 }
 
 func TestGetScrollbackBefore_LimitIsRespected(t *testing.T) {
+	t.Parallel()
 	// 10 entries (seq 1–10); beforeSeq=10, limit=3 → last 3 before seq 10 = entries 7,8,9.
 	m := newTestManager(t)
 	appendN(t, m, "sess1", 10)
@@ -105,6 +109,7 @@ func TestGetScrollbackBefore_LimitIsRespected(t *testing.T) {
 }
 
 func TestGetScrollbackBefore_BeforeSeqExceedsAll_ReturnsAllUpToLimit(t *testing.T) {
+	t.Parallel()
 	// 5 entries; beforeSeq=100 (beyond all) with limit=10 → all 5 entries.
 	m := newTestManager(t)
 	appendN(t, m, "sess1", 5)
@@ -126,6 +131,7 @@ func TestGetScrollbackBefore_BeforeSeqExceedsAll_ReturnsAllUpToLimit(t *testing.
 }
 
 func TestGetScrollbackBefore_NoEntries_ReturnsEmpty(t *testing.T) {
+	t.Parallel()
 	// Session has no scrollback at all.
 	m := newTestManager(t)
 
@@ -139,6 +145,7 @@ func TestGetScrollbackBefore_NoEntries_ReturnsEmpty(t *testing.T) {
 }
 
 func TestGetScrollbackBefore_LimitLargerThanAvailable(t *testing.T) {
+	t.Parallel()
 	// 3 entries; beforeSeq=10, limit=50 → all 3 entries.
 	m := newTestManager(t)
 	appendN(t, m, "sess1", 3)

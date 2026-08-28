@@ -52,6 +52,7 @@ type PRInfo struct {
 	Title        string    `json:"title"`
 	Body         string    `json:"body"`
 	HeadRef      string    `json:"headRefName"`
+	HeadSHA      string    `json:"headRefOid"`
 	BaseRef      string    `json:"baseRefName"`
 	State        string    `json:"state"`
 	Author       string    `json:"author"`
@@ -90,6 +91,7 @@ type ghPRResponse struct {
 	Title        string `json:"title"`
 	Body         string `json:"body"`
 	HeadRefName  string `json:"headRefName"`
+	HeadRefOid   string `json:"headRefOid"`
 	BaseRefName  string `json:"baseRefName"`
 	State        string `json:"state"`
 	URL          string `json:"url"`
@@ -271,7 +273,7 @@ func GetPRInfoCtx(ctx context.Context, owner, repo string, prNumber int) (*PRInf
 	repoRef := fmt.Sprintf("%s/%s", owner, repo)
 	prRef := strconv.Itoa(prNumber)
 
-	fields := "number,title,body,headRefName,baseRefName,state,url,createdAt,updatedAt,isDraft,mergeable,additions,deletions,changedFiles,author,labels,reviews,reviewDecision,statusCheckRollup"
+	fields := "number,title,body,headRefName,headRefOid,baseRefName,state,url,createdAt,updatedAt,isDraft,mergeable,additions,deletions,changedFiles,author,labels,reviews,reviewDecision,statusCheckRollup"
 	cmd := safeexec.CommandContext(ctx, "gh", "pr", "view", prRef, "--repo", repoRef, "--json", fields)
 	output, err := cmd.Output()
 	if err != nil {
@@ -302,6 +304,7 @@ func GetPRInfoCtx(ctx context.Context, owner, repo string, prNumber int) (*PRInf
 		Title:                 resp.Title,
 		Body:                  resp.Body,
 		HeadRef:               resp.HeadRefName,
+		HeadSHA:               resp.HeadRefOid,
 		BaseRef:               resp.BaseRefName,
 		State:                 strings.ToLower(resp.State),
 		Author:                resp.Author.Login,
@@ -814,7 +817,14 @@ func GeneratePRPrompt(pr *PRInfo, includeDescription bool) string {
 // GetPRForBranchConditional is GetPRForBranch with ETag conditional request support.
 // Pass the previously returned newEtag (empty string for first call).
 // Returns (nil, etag, false, nil) on 304 Not Modified — caller should treat as unchanged.
+// Every error path also returns changed=false, including ErrNotAuthenticated
+// when no token is configured — callers must check err before treating
+// changed=false as "unchanged, no error."
 func GetPRForBranchConditional(ctx context.Context, owner, repo, branch, etag string) (info *PRInfo, newEtag string, changed bool, err error) {
+	if getGHToken(ctx) == "" {
+		return nil, etag, false, ErrNotAuthenticated
+	}
+
 	apiPath := fmt.Sprintf("repos/%s/%s/pulls?head=%s&state=all&per_page=10",
 		url.PathEscape(owner), url.PathEscape(repo),
 		url.QueryEscape(owner+":"+branch))

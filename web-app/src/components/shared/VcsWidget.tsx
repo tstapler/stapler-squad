@@ -1,5 +1,6 @@
 "use client";
 
+import type { MouseEvent } from "react";
 import { RefreshCw } from "lucide-react";
 import { MergeabilityPill } from "./vcs-widget/MergeabilityPill";
 import { VcsWidgetHeader } from "./vcs-widget/VcsWidgetHeader";
@@ -15,11 +16,11 @@ interface VcsWidgetProps {
   data: VcsWidgetData;
   mode: VcsWidgetMode;
   onNavigateToFile?: (path: string) => void;
-  onViewDiff?: () => void;
+  onViewDiff?: (event: MouseEvent<HTMLButtonElement>) => void;
   onRefresh?: () => void;
   activeSessionCount?: number;
   worktreePath?: string;
-  onBrowseFiles?: () => void;
+  onBrowseFiles?: (event: MouseEvent<HTMLButtonElement>) => void;
   /**
    * Threaded through to `VcsWidgetGithubRow` (D4 opt-out prop). Default
    * `true` — every existing call site keeps its current PR-link text

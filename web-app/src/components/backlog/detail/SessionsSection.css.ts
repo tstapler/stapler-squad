@@ -64,7 +64,7 @@ export const sessionSteerBtn = style({
  * (Gap 1's same disclosure pattern). Stacks full-width below breakpoints.sm
  * instead of wrapping the input/buttons awkwardly on one line, via a plain
  * media query on the container's flex-direction (no inline style, per
- * .claude/rules/css-architecture.md).
+ * docs/reference/css-architecture.md).
  */
 export const steerComposer = style({
   display: "flex",
@@ -165,4 +165,16 @@ export const steerCancelButton = style({
 export const steerError = style({
   color: vars.color.error,
   fontSize: vars.fontSize.xs,
+});
+
+/**
+ * Empty-state nudge shown when an item has no linked sessions (AC0 fix) —
+ * mirrors BacklogEmptyState.tsx's FooterNudge treatment for visual
+ * consistency rather than inventing new markup/CSS.
+ */
+export const emptyState = style({
+  padding: vars.space["4"],
+  textAlign: "center",
+  fontSize: vars.fontSize.sm,
+  color: vars.color.textMuted,
 });

@@ -3,10 +3,13 @@ package adapters
 import (
 	"testing"
 
+	"golang.org/x/crypto/ssh"
+
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/detection"
 	"github.com/tstapler/stapler-squad/session/detection/ratelimit"
+	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
 func TestRateLimitStateToProto_AllStates(t *testing.T) {
@@ -30,6 +33,45 @@ func TestRateLimitStateToProto_AllStates(t *testing.T) {
 				t.Errorf("rateLimitStateToProto(%v) = %v, want %v", tc.input, got, tc.expected)
 			}
 		})
+	}
+}
+
+func TestReviveOutcomeToProto_AllOutcomes(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    session.ReviveOutcome
+		expected sessionv1.ReviveOutcome
+	}{
+		{"ResumeLive", session.ReviveOutcomeResumeLive, sessionv1.ReviveOutcome_REVIVE_OUTCOME_RESUME_LIVE},
+		{"ResumeRecovered", session.ReviveOutcomeResumeRecovered, sessionv1.ReviveOutcome_REVIVE_OUTCOME_RESUME_RECOVERED},
+		{"FreshExpected", session.ReviveOutcomeFreshExpected, sessionv1.ReviveOutcome_REVIVE_OUTCOME_FRESH_EXPECTED},
+		{"FreshLostHistory", session.ReviveOutcomeFreshLostHistory, sessionv1.ReviveOutcome_REVIVE_OUTCOME_FRESH_LOST_HISTORY},
+		{"Unspecified", session.ReviveOutcomeUnspecified, sessionv1.ReviveOutcome_REVIVE_OUTCOME_UNSPECIFIED},
+		{"Unknown value defaults to Unspecified", session.ReviveOutcome("bogus"), sessionv1.ReviveOutcome_REVIVE_OUTCOME_UNSPECIFIED},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := reviveOutcomeToProto(tc.input)
+			if got != tc.expected {
+				t.Errorf("reviveOutcomeToProto(%v) = %v, want %v", tc.input, got, tc.expected)
+			}
+		})
+	}
+}
+
+// TestInstanceToProto_ReviveOutcome verifies InstanceToProto wires
+// Instance.LastReviveOutcome through to protoSession.ReviveOutcome — the
+// wire-format boundary a swapped reviveOutcomeToProto case would silently
+// corrupt without failing any other test.
+func TestInstanceToProto_ReviveOutcome(t *testing.T) {
+	inst := &session.Instance{LastReviveOutcome: session.ReviveOutcomeFreshLostHistory}
+	proto := InstanceToProto(inst, nil)
+	if proto == nil {
+		t.Fatal("expected non-nil proto for non-nil instance")
+	}
+	if proto.ReviveOutcome != sessionv1.ReviveOutcome_REVIVE_OUTCOME_FRESH_LOST_HISTORY {
+		t.Errorf("expected ReviveOutcome=FRESH_LOST_HISTORY, got %v", proto.ReviveOutcome)
 	}
 }
 
@@ -80,6 +122,37 @@ func TestInstanceToProto_SubagentCount_DefaultZero(t *testing.T) {
 	}
 	if proto.SubagentCount != 0 {
 		t.Errorf("SubagentCount = %d, want 0 for an instance with no status manager", proto.SubagentCount)
+	}
+}
+
+// TestInstanceToProto_RemoteName_EmptyForLocal verifies a plain (LocalTarget)
+// instance's RemoteName proto field stays empty -- a local session's card
+// must never show the Epic 6.2 host badge.
+func TestInstanceToProto_RemoteName_EmptyForLocal(t *testing.T) {
+	inst := &session.Instance{} // ExecutionTarget nil → defaults to LocalTarget{}
+	proto := InstanceToProto(inst, nil)
+	if proto == nil {
+		t.Fatal("expected non-nil proto for non-nil instance")
+	}
+	if proto.RemoteName != "" {
+		t.Errorf("RemoteName = %q, want empty for a local session", proto.RemoteName)
+	}
+}
+
+// TestInstanceToProto_RemoteName_SetForRemote verifies a session.Instance
+// whose ExecutionTarget is a RemoteExecutionTarget surfaces the remote's
+// name on the proto Session -- the data source for the SessionCard host
+// badge (ssh-remote-workspaces Epic 6.2).
+func TestInstanceToProto_RemoteName_SetForRemote(t *testing.T) {
+	runner := tmux.NewSSHRunner(tmux.SSHTarget{Name: "prod-box", Addr: "prod-box.example.com:22"}, ssh.ClientConfig{})
+	target := session.NewRemoteExecutionTarget(session.RemoteTarget{Name: "prod-box"}, runner)
+	inst := &session.Instance{ExecutionTarget: target}
+	proto := InstanceToProto(inst, nil)
+	if proto == nil {
+		t.Fatal("expected non-nil proto for non-nil instance")
+	}
+	if proto.RemoteName != "prod-box" {
+		t.Errorf("RemoteName = %q, want %q", proto.RemoteName, "prod-box")
 	}
 }
 

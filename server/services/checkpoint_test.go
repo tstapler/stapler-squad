@@ -14,6 +14,7 @@ import (
 // ─── CreateCheckpoint ─────────────────────────────────────────────────────────
 
 func TestCreateCheckpoint_MissingSessionID(t *testing.T) {
+	t.Parallel()
 	fix := setupForkTestFixture(t)
 	t.Cleanup(fix.cleanup)
 
@@ -28,6 +29,7 @@ func TestCreateCheckpoint_MissingSessionID(t *testing.T) {
 }
 
 func TestCreateCheckpoint_MissingLabel(t *testing.T) {
+	t.Parallel()
 	fix := setupForkTestFixture(t)
 	t.Cleanup(fix.cleanup)
 
@@ -42,6 +44,7 @@ func TestCreateCheckpoint_MissingLabel(t *testing.T) {
 }
 
 func TestCreateCheckpoint_SessionNotFound(t *testing.T) {
+	t.Parallel()
 	fix := setupForkTestFixture(t)
 	t.Cleanup(fix.cleanup)
 
@@ -56,6 +59,7 @@ func TestCreateCheckpoint_SessionNotFound(t *testing.T) {
 }
 
 func TestCreateCheckpoint_SessionNotStarted(t *testing.T) {
+	t.Parallel()
 	fix := setupForkTestFixture(t)
 	t.Cleanup(fix.cleanup)
 
@@ -86,6 +90,7 @@ func TestCreateCheckpoint_SessionNotStarted(t *testing.T) {
 // ─── ListCheckpoints ──────────────────────────────────────────────────────────
 
 func TestListCheckpoints_MissingSessionID(t *testing.T) {
+	t.Parallel()
 	fix := setupForkTestFixture(t)
 	t.Cleanup(fix.cleanup)
 
@@ -99,6 +104,7 @@ func TestListCheckpoints_MissingSessionID(t *testing.T) {
 }
 
 func TestListCheckpoints_SessionNotFound(t *testing.T) {
+	t.Parallel()
 	fix := setupForkTestFixture(t)
 	t.Cleanup(fix.cleanup)
 
@@ -112,6 +118,7 @@ func TestListCheckpoints_SessionNotFound(t *testing.T) {
 }
 
 func TestListCheckpoints_ReturnsExistingCheckpoints(t *testing.T) {
+	t.Parallel()
 	fix := setupForkTestFixture(t)
 	t.Cleanup(fix.cleanup)
 
@@ -128,6 +135,7 @@ func TestListCheckpoints_ReturnsExistingCheckpoints(t *testing.T) {
 }
 
 func TestListCheckpoints_EmptyWhenNoCheckpoints(t *testing.T) {
+	t.Parallel()
 	fix := setupForkTestFixture(t)
 	t.Cleanup(fix.cleanup)
 

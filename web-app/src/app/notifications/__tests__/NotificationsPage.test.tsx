@@ -10,7 +10,7 @@
  */
 
 import React from "react";
-import { render, screen } from "@testing-library/react";
+import { render, screen, fireEvent } from "@testing-library/react";
 import { NotificationsPage } from "../NotificationsPage";
 import type { NotificationHistoryItem } from "@/lib/types/notification";
 import type { Session } from "@/gen/session/v1/types_pb";
@@ -59,6 +59,8 @@ function makeNotification(overrides: Partial<NotificationHistoryItem> = {}): Not
 }
 
 let mockHistory: NotificationHistoryItem[] = [];
+let mockHistoryHasMore = false;
+const mockLoadMoreHistory = jest.fn();
 jest.mock("@/lib/contexts/NotificationContext", () => ({
   useNotifications: () => ({
     notificationHistory: mockHistory,
@@ -69,8 +71,8 @@ jest.mock("@/lib/contexts/NotificationContext", () => ({
     clearHistory: jest.fn(),
     getUnreadCount: () => mockHistory.filter((n) => !n.isRead).length,
     historyLoading: false,
-    historyHasMore: false,
-    loadMoreHistory: jest.fn(),
+    historyHasMore: mockHistoryHasMore,
+    loadMoreHistory: mockLoadMoreHistory,
   }),
 }));
 
@@ -98,5 +100,143 @@ describe("NotificationsPage — session link fallback (Task 3.3.2b)", () => {
 
     const link = screen.getByRole("link", { name: "View Session" });
     expect(link).toHaveAttribute("href", "/?session=sess-live");
+  });
+});
+
+describe("NotificationsPage — hide backlog items toggle", () => {
+  beforeEach(() => {
+    mockLiveSessions = [];
+    mockHistory = [];
+    mockHistoryHasMore = false;
+  });
+
+  it("hides backlog-item notifications (those with metadata.item_id) when toggled on, and restores them when toggled off", () => {
+    mockHistory = [
+      makeNotification({ id: "notif-backlog", sessionId: "sess-backlog", sessionName: "Backlog Item", metadata: { item_id: "item-1" } }),
+      makeNotification({ id: "notif-regular", sessionId: "sess-regular", sessionName: "Regular Item" }),
+    ];
+
+    render(<NotificationsPage />);
+
+    expect(screen.getByText("Backlog Item")).toBeInTheDocument();
+    expect(screen.getByText("Regular Item")).toBeInTheDocument();
+
+    const toggle = screen.getByRole("button", { name: "Exclude backlog notifications" });
+    fireEvent.click(toggle);
+
+    expect(toggle).toHaveAttribute("aria-pressed", "true");
+    expect(screen.queryByText("Backlog Item")).not.toBeInTheDocument();
+    expect(screen.getByText("Regular Item")).toBeInTheDocument();
+
+    fireEvent.click(toggle);
+
+    expect(toggle).toHaveAttribute("aria-pressed", "false");
+    expect(screen.getByText("Backlog Item")).toBeInTheDocument();
+    expect(screen.getByText("Regular Item")).toBeInTheDocument();
+  });
+});
+
+describe("NotificationsPage — search across extended fields", () => {
+  beforeEach(() => {
+    mockLiveSessions = [];
+    mockHistory = [];
+    mockHistoryHasMore = false;
+  });
+
+  function search(query: string) {
+    fireEvent.change(screen.getByLabelText("Search notifications"), { target: { value: query } });
+  }
+
+  it("matches on sourceProject", () => {
+    mockHistory = [
+      makeNotification({ id: "notif-1", sessionId: "sess-a", sessionName: "First", sourceProject: "stapler-squad" }),
+      makeNotification({ id: "notif-2", sessionId: "sess-b", sessionName: "Second", sourceProject: "other-repo" }),
+    ];
+    render(<NotificationsPage />);
+
+    search("stapler-squad");
+
+    expect(screen.getByText("First")).toBeInTheDocument();
+    expect(screen.queryByText("Second")).not.toBeInTheDocument();
+  });
+
+  it("matches on sourceWorkingDir", () => {
+    mockHistory = [
+      makeNotification({ id: "notif-1", sessionId: "sess-a", sessionName: "First", sourceWorkingDir: "/home/user/worktrees/feature-x" }),
+      makeNotification({ id: "notif-2", sessionId: "sess-b", sessionName: "Second", sourceWorkingDir: "/home/user/worktrees/feature-y" }),
+    ];
+    render(<NotificationsPage />);
+
+    search("feature-x");
+
+    expect(screen.getByText("First")).toBeInTheDocument();
+    expect(screen.queryByText("Second")).not.toBeInTheDocument();
+  });
+
+  it("matches on metadata.tool_name", () => {
+    mockHistory = [
+      makeNotification({ id: "notif-1", sessionId: "sess-a", sessionName: "First", metadata: { tool_name: "Bash" } }),
+      makeNotification({ id: "notif-2", sessionId: "sess-b", sessionName: "Second", metadata: { tool_name: "Edit" } }),
+    ];
+    render(<NotificationsPage />);
+
+    search("bash");
+
+    expect(screen.getByText("First")).toBeInTheDocument();
+    expect(screen.queryByText("Second")).not.toBeInTheDocument();
+  });
+
+  it("matches on metadata.tool_input_command", () => {
+    mockHistory = [
+      makeNotification({ id: "notif-1", sessionId: "sess-a", sessionName: "First", metadata: { tool_input_command: "npm run build" } }),
+      makeNotification({ id: "notif-2", sessionId: "sess-b", sessionName: "Second", metadata: { tool_input_command: "go test ./..." } }),
+    ];
+    render(<NotificationsPage />);
+
+    search("npm run");
+
+    expect(screen.getByText("First")).toBeInTheDocument();
+    expect(screen.queryByText("Second")).not.toBeInTheDocument();
+  });
+
+  it("matches on metadata.tool_input_file", () => {
+    mockHistory = [
+      makeNotification({ id: "notif-1", sessionId: "sess-a", sessionName: "First", metadata: { tool_input_file: "src/index.ts" } }),
+      makeNotification({ id: "notif-2", sessionId: "sess-b", sessionName: "Second", metadata: { tool_input_file: "src/other.ts" } }),
+    ];
+    render(<NotificationsPage />);
+
+    search("index.ts");
+
+    expect(screen.getByText("First")).toBeInTheDocument();
+    expect(screen.queryByText("Second")).not.toBeInTheDocument();
+  });
+});
+
+describe("NotificationsPage — clear search button", () => {
+  beforeEach(() => {
+    mockLiveSessions = [];
+    mockHistory = [];
+    mockHistoryHasMore = false;
+  });
+
+  it("resets the search query and clears the active-filter empty state when clicked", () => {
+    mockHistory = [makeNotification({ id: "notif-1", sessionName: "Only Item" })];
+    render(<NotificationsPage />);
+
+    const input = screen.getByLabelText("Search notifications") as HTMLInputElement;
+    fireEvent.change(input, { target: { value: "no-match-at-all" } });
+
+    expect(input.value).toBe("no-match-at-all");
+    expect(screen.getByText("No matching notifications")).toBeInTheDocument();
+
+    const clearButton = screen.getByRole("button", { name: "Clear search" });
+    fireEvent.click(clearButton);
+
+    expect(input.value).toBe("");
+    expect(screen.queryByText("No matching notifications")).not.toBeInTheDocument();
+    expect(screen.getByText("Only Item")).toBeInTheDocument();
+    // The clear button itself only renders while a query is present.
+    expect(screen.queryByRole("button", { name: "Clear search" })).not.toBeInTheDocument();
   });
 });

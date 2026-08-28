@@ -9,6 +9,9 @@ import (
 	"testing"
 	"time"
 
+	gogit "github.com/go-git/go-git/v5"
+	"github.com/go-git/go-git/v5/plumbing"
+	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/session/git"
 )
@@ -16,30 +19,33 @@ import (
 // setupTestGitRepo creates a temporary git repository with an initial commit and a
 // configured test identity, mirroring session/git/worktree_creation_test.go's
 // setupTestRepo helper (duplicated here rather than imported since that one lives in
-// package git and is unexported).
+// package git and is unexported). Uses go-git directly rather than shelling out — see
+// the `prefer-go-git-over-subshells` skill.
 func setupTestGitRepo(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
 
-	run := func(args ...string) {
-		t.Helper()
-		cmd := safeexec.CommandContext(context.Background(), "git", args...)
-		cmd.Dir = dir
-		out, err := cmd.CombinedOutput()
-		if err != nil {
-			t.Fatalf("git %s failed: %s: %v", strings.Join(args, " "), out, err)
-		}
+	repo, err := gogit.PlainInitWithOptions(dir, &gogit.PlainInitOptions{
+		InitOptions: gogit.InitOptions{DefaultBranch: plumbing.NewBranchReferenceName("main")},
+	})
+	if err != nil {
+		t.Fatalf("git init failed: %v", err)
 	}
-
-	run("init")
-	run("config", "user.email", "test@example.com")
-	run("config", "user.name", "Test User")
 	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("# Test\n"), 0o644); err != nil {
 		t.Fatalf("failed to write README.md: %v", err)
 	}
-	run("add", ".")
-	run("commit", "-m", "Initial commit")
-	run("branch", "-M", "main")
+	wt, err := repo.Worktree()
+	if err != nil {
+		t.Fatalf("worktree failed: %v", err)
+	}
+	if _, err := wt.Add("README.md"); err != nil {
+		t.Fatalf("git add failed: %v", err)
+	}
+	if _, err := wt.Commit("Initial commit", &gogit.CommitOptions{
+		Author: &object.Signature{Name: "Test User", Email: "test@example.com", When: time.Now()},
+	}); err != nil {
+		t.Fatalf("git commit failed: %v", err)
+	}
 
 	return dir
 }
@@ -104,8 +110,10 @@ func makeTestBacklogItemWithID(id, title, acJSON string) *BacklogItemData {
 }
 
 // TestWriteSlashCommands_CreatesCorrectFileCount verifies that 2 AC criteria produce
-// status.md + done-0.md + fail-0.md + done-1.md + fail-1.md + review.md + ship.md + help.md = 8 files.
+// status.md + done-0.md + fail-0.md + done-1.md + fail-1.md + review.md + ship.md +
+// help.md + block.md + duplicate.md = 10 files.
 func TestWriteSlashCommands_CreatesCorrectFileCount(t *testing.T) {
+	t.Parallel()
 	worktree := t.TempDir()
 	ac := `[{"index":0,"text":"First criterion","status":"pending"},{"index":1,"text":"Second criterion","status":"pending"}]`
 	item := makeTestBacklogItemWithID("test-item-id-1", "My Feature", ac)
@@ -129,6 +137,8 @@ func TestWriteSlashCommands_CreatesCorrectFileCount(t *testing.T) {
 		"review.md",
 		"ship.md",
 		"help.md",
+		"block.md",
+		"duplicate.md",
 	}
 	if len(entries) != len(wantFiles) {
 		names := make([]string, len(entries))
@@ -148,6 +158,7 @@ func TestWriteSlashCommands_CreatesCorrectFileCount(t *testing.T) {
 
 // TestWriteSlashCommands_DoneFileContainsItemUUID verifies done-0.md contains the item UUID.
 func TestWriteSlashCommands_DoneFileContainsItemUUID(t *testing.T) {
+	t.Parallel()
 	worktree := t.TempDir()
 	itemID := "550e8400-e29b-41d4-a716-446655440000"
 	ac := `[{"index":0,"text":"Do something","status":"pending"},{"index":1,"text":"Do more","status":"pending"}]`
@@ -175,13 +186,207 @@ func TestWriteSlashCommands_DoneFileContainsItemUUID(t *testing.T) {
 	}
 }
 
+// TestWriteSlashCommands_BlockAndDuplicateFilesContainItemIDAndGatingLanguage
+// verifies block.md and duplicate.md (written via buildBlockAndDuplicateCommands)
+// substitute the item's UUID and each explain the work-role-session gating and
+// the SkipReviewGate exception, so an agent reading either file understands why
+// a call might be rejected before it tries.
+func TestWriteSlashCommands_BlockAndDuplicateFilesContainItemIDAndGatingLanguage(t *testing.T) {
+	t.Parallel()
+	worktree := t.TempDir()
+	itemID := "550e8400-e29b-41d4-a716-446655440002"
+	ac := `[{"index":0,"text":"Do something","status":"pending"}]`
+	item := makeTestBacklogItemWithID(itemID, "Feature", ac)
+
+	if err := WriteSlashCommands(nil, item, worktree); err != nil {
+		t.Fatalf("WriteSlashCommands returned error: %v", err)
+	}
+
+	blockPath := filepath.Join(worktree, backlogCommandsDir, "block.md")
+	blockData, err := os.ReadFile(blockPath)
+	if err != nil {
+		t.Fatalf("failed to read block.md: %v", err)
+	}
+	blockContent := string(blockData)
+	blockMustContain := []string{itemID, "report_blocked", "work-role session"}
+	for _, want := range blockMustContain {
+		if !strings.Contains(blockContent, want) {
+			t.Errorf("expected block.md to contain %q\nContent:\n%s", want, blockContent)
+		}
+	}
+
+	duplicatePath := filepath.Join(worktree, backlogCommandsDir, "duplicate.md")
+	duplicateData, err := os.ReadFile(duplicatePath)
+	if err != nil {
+		t.Fatalf("failed to read duplicate.md: %v", err)
+	}
+	duplicateContent := string(duplicateData)
+	duplicateMustContain := []string{itemID, "report_duplicate", "work-role session", "skip the review gate"}
+	for _, want := range duplicateMustContain {
+		if !strings.Contains(duplicateContent, want) {
+			t.Errorf("expected duplicate.md to contain %q\nContent:\n%s", want, duplicateContent)
+		}
+	}
+}
+
+// TestPruneStaleSlashCommandFiles_should_RemoveExtraFiles_When_NewItemHasFewerCriteria
+// verifies pruneStaleSlashCommandFiles deletes done-N.md/fail-N.md files whose index is
+// not present in the newly generated file set, while leaving unrelated always-present
+// files (status.md) untouched.
+func TestPruneStaleSlashCommandFiles_should_RemoveExtraFiles_When_NewItemHasFewerCriteria(t *testing.T) {
+	cmdDir := t.TempDir()
+	for i := 0; i < 8; i++ {
+		for _, prefix := range []string{"done", "fail"} {
+			name := fmt.Sprintf("%s-%d.md", prefix, i)
+			if err := os.WriteFile(filepath.Join(cmdDir, name), []byte("old content"), 0o644); err != nil {
+				t.Fatalf("seed %s: %v", name, err)
+			}
+		}
+	}
+	if err := os.WriteFile(filepath.Join(cmdDir, "status.md"), []byte("status"), 0o644); err != nil {
+		t.Fatalf("seed status.md: %v", err)
+	}
+
+	newFiles := map[string]string{
+		"status.md": "status", "done-0.md": "new", "fail-0.md": "new",
+		"done-1.md": "new", "fail-1.md": "new", "done-2.md": "new", "fail-2.md": "new",
+	}
+	pruneStaleSlashCommandFiles(cmdDir, newFiles)
+
+	for i := 3; i < 8; i++ {
+		for _, prefix := range []string{"done", "fail"} {
+			path := filepath.Join(cmdDir, fmt.Sprintf("%s-%d.md", prefix, i))
+			if _, err := os.Stat(path); !os.IsNotExist(err) {
+				t.Errorf("expected %s to be pruned, but it still exists", filepath.Base(path))
+			}
+		}
+	}
+	for i := 0; i < 3; i++ {
+		for _, prefix := range []string{"done", "fail"} {
+			path := filepath.Join(cmdDir, fmt.Sprintf("%s-%d.md", prefix, i))
+			if _, err := os.Stat(path); os.IsNotExist(err) {
+				t.Errorf("expected %s to be preserved, but it was removed", filepath.Base(path))
+			}
+		}
+	}
+	if _, err := os.Stat(filepath.Join(cmdDir, "status.md")); os.IsNotExist(err) {
+		t.Error("status.md should never be pruned by index-based logic")
+	}
+}
+
+// TestPruneStaleSlashCommandFiles_should_PreserveAllFiles_When_NewItemHasMoreOrEqualCriteria
+// verifies pruneStaleSlashCommandFiles never deletes a file that's about to be rewritten.
+func TestPruneStaleSlashCommandFiles_should_PreserveAllFiles_When_NewItemHasMoreOrEqualCriteria(t *testing.T) {
+	cmdDir := t.TempDir()
+	for i := 0; i < 3; i++ {
+		for _, prefix := range []string{"done", "fail"} {
+			name := fmt.Sprintf("%s-%d.md", prefix, i)
+			if err := os.WriteFile(filepath.Join(cmdDir, name), []byte("old"), 0o644); err != nil {
+				t.Fatalf("seed %s: %v", name, err)
+			}
+		}
+	}
+
+	newFiles := map[string]string{}
+	for i := 0; i < 10; i++ {
+		newFiles[fmt.Sprintf("done-%d.md", i)] = "new"
+		newFiles[fmt.Sprintf("fail-%d.md", i)] = "new"
+	}
+	pruneStaleSlashCommandFiles(cmdDir, newFiles)
+
+	for i := 0; i < 3; i++ {
+		for _, prefix := range []string{"done", "fail"} {
+			path := filepath.Join(cmdDir, fmt.Sprintf("%s-%d.md", prefix, i))
+			if _, err := os.Stat(path); os.IsNotExist(err) {
+				t.Errorf("expected %s to survive when the new set is a superset, but it was removed", filepath.Base(path))
+			}
+		}
+	}
+}
+
+// TestWriteSlashCommands_should_MatchExactFileSet_When_CalledTwiceWithDifferentCriteriaCounts
+// exercises pruneStaleSlashCommandFiles through the real WriteSlashCommands entry point:
+// an 8-AC item's files followed by a 3-AC item's must leave exactly the 3-AC file set on
+// disk, with done-0.md content carrying the second item's id.
+func TestWriteSlashCommands_should_MatchExactFileSet_When_CalledTwiceWithDifferentCriteriaCounts(t *testing.T) {
+	worktree := t.TempDir()
+
+	buildAC := func(n int) string {
+		var sb strings.Builder
+		sb.WriteString("[")
+		for i := 0; i < n; i++ {
+			if i > 0 {
+				sb.WriteString(",")
+			}
+			fmt.Fprintf(&sb, `{"index":%d,"text":"Criterion %d","status":"pending"}`, i, i)
+		}
+		sb.WriteString("]")
+		return sb.String()
+	}
+
+	oldItemID := "old-item-id"
+	oldItem := makeTestBacklogItemWithID(oldItemID, "Old item", buildAC(8))
+	if err := WriteSlashCommands(nil, oldItem, worktree); err != nil {
+		t.Fatalf("WriteSlashCommands (first call, 8 AC) failed: %v", err)
+	}
+
+	newItemID := "new-item-id"
+	newItem := makeTestBacklogItemWithID(newItemID, "New item", buildAC(3))
+	if err := WriteSlashCommands(nil, newItem, worktree); err != nil {
+		t.Fatalf("WriteSlashCommands (second call, 3 AC) failed: %v", err)
+	}
+
+	cmdDir := filepath.Join(worktree, backlogCommandsDir)
+	entries, err := os.ReadDir(cmdDir)
+	if err != nil {
+		t.Fatalf("read command dir: %v", err)
+	}
+	wantFiles := map[string]bool{
+		"status.md": true, "review.md": true, "ship.md": true, "help.md": true,
+		"block.md": true, "duplicate.md": true,
+		"done-0.md": true, "fail-0.md": true, "done-1.md": true, "fail-1.md": true,
+		"done-2.md": true, "fail-2.md": true,
+	}
+	got := map[string]bool{}
+	for _, e := range entries {
+		got[e.Name()] = true
+	}
+	if len(got) != len(wantFiles) {
+		t.Errorf("expected exactly %d files for the 3-AC item, got %d: %v", len(wantFiles), len(got), got)
+	}
+	for name := range wantFiles {
+		if !got[name] {
+			t.Errorf("expected %s to exist after relink to the 3-AC item", name)
+		}
+	}
+	for name := range got {
+		if !wantFiles[name] {
+			t.Errorf("stale file %s from the 8-AC item leaked into the 3-AC item's file set", name)
+		}
+	}
+
+	data, err := os.ReadFile(filepath.Join(cmdDir, "done-0.md"))
+	if err != nil {
+		t.Fatalf("read done-0.md: %v", err)
+	}
+	content := string(data)
+	if !strings.Contains(content, newItemID) {
+		t.Errorf("done-0.md should contain the second item's id %q, got:\n%s", newItemID, content)
+	}
+	if strings.Contains(content, oldItemID) {
+		t.Errorf("done-0.md should not contain the stale first item's id %q, got:\n%s", oldItemID, content)
+	}
+}
+
 // TestWriteSlashCommands_ReviewFileInstructsShipOnPassAndAfterAttemptCap verifies
 // review.md tells the agent to run /backlog/ship both immediately on a PASS
-// verdict and as a bounded escape hatch after MaxSameSessionReviewAttempts
-// review cycles without one — closing the gap where review.md previously said
-// "PASS → you're done" and "Keep looping until PASS" with no mention of
-// /backlog/ship at all (see de6d7878-9d6e-4081-acfa-02ff545c87b4, 2026-07-20).
+// verdict and as a bounded escape hatch once the server-tracked attempt count
+// (MaxSameSessionReviewAttempts) reports the cap is hit — closing the gap where
+// review.md previously said "PASS → you're done" and "Keep looping until PASS"
+// with no mention of /backlog/ship at all (see
+// de6d7878-9d6e-4081-acfa-02ff545c87b4, 2026-07-20).
 func TestWriteSlashCommands_ReviewFileInstructsShipOnPassAndAfterAttemptCap(t *testing.T) {
+	t.Parallel()
 	worktree := t.TempDir()
 	itemID := "550e8400-e29b-41d4-a716-446655440001"
 	ac := `[{"index":0,"text":"Do something","status":"pending"}]`
@@ -200,7 +405,7 @@ func TestWriteSlashCommands_ReviewFileInstructsShipOnPassAndAfterAttemptCap(t *t
 
 	mustContain := []string{
 		"/backlog/ship",
-		fmt.Sprintf("%d review cycles", MaxSameSessionReviewAttempts),
+		fmt.Sprintf("%d allowed in this session", MaxSameSessionReviewAttempts),
 	}
 	for _, want := range mustContain {
 		if !strings.Contains(content, want) {
@@ -217,6 +422,7 @@ func TestWriteSlashCommands_ReviewFileInstructsShipOnPassAndAfterAttemptCap(t *t
 // TestWriteBacklogContextFile_WritesFileWithExpectedContent verifies the context file
 // contains BuildSessionInitialPrompt output and the fallback instructions block.
 func TestWriteBacklogContextFile_WritesFileWithExpectedContent(t *testing.T) {
+	t.Parallel()
 	worktree := t.TempDir()
 	ac := `[{"index":0,"text":"Implement handler","status":"pending"}]`
 	item := &BacklogItemData{
@@ -260,6 +466,7 @@ func TestWriteBacklogContextFile_WritesFileWithExpectedContent(t *testing.T) {
 // prompt gets — this is the exact consistency this PR's fix moved into
 // BuildSessionInitialPrompt so both channels render identically by construction.
 func TestWriteBacklogContextFile_IncludesPlanArtifactsPath(t *testing.T) {
+	t.Parallel()
 	worktree := t.TempDir()
 	ac := `[{"index":0,"text":"Implement handler","status":"pending"}]`
 	item := &BacklogItemData{
@@ -291,6 +498,7 @@ func TestWriteBacklogContextFile_IncludesPlanArtifactsPath(t *testing.T) {
 // priorSessions slice is actually threaded through to the rendered content — the
 // prior signature-only update (always passing nil) never exercised this contract.
 func TestWriteBacklogContextFile_IncludesPriorSessions(t *testing.T) {
+	t.Parallel()
 	worktree := t.TempDir()
 	ac := `[{"index":0,"text":"Implement handler","status":"pending"}]`
 	item := &BacklogItemData{
@@ -331,6 +539,7 @@ func TestWriteBacklogContextFile_IncludesPriorSessions(t *testing.T) {
 
 // TestCleanupSlashCommands_NoErrorWhenAbsent verifies cleanup doesn't error on missing dir.
 func TestCleanupSlashCommands_NoErrorWhenAbsent(t *testing.T) {
+	t.Parallel()
 	worktree := t.TempDir()
 	if err := CleanupSlashCommands(worktree); err != nil {
 		t.Errorf("CleanupSlashCommands should not error when dir absent, got: %v", err)
@@ -339,6 +548,7 @@ func TestCleanupSlashCommands_NoErrorWhenAbsent(t *testing.T) {
 
 // TestCleanupBacklogContextFile_NoErrorWhenAbsent verifies cleanup doesn't error on missing file.
 func TestCleanupBacklogContextFile_NoErrorWhenAbsent(t *testing.T) {
+	t.Parallel()
 	worktree := t.TempDir()
 	if err := CleanupBacklogContextFile(worktree); err != nil {
 		t.Errorf("CleanupBacklogContextFile should not error when file absent, got: %v", err)
@@ -355,6 +565,7 @@ func TestCleanupBacklogContextFile_NoErrorWhenAbsent(t *testing.T) {
 // approach only prevents NEW files from being staged — it does nothing once a file is
 // already tracked.
 func TestWriteBacklogContextFile_UntracksPreviouslyCommittedContextFile(t *testing.T) {
+	t.Parallel()
 	repo := setupTestGitRepo(t)
 
 	// Simulate the historical pollution: .backlog-context.md gets committed to the branch.
@@ -408,6 +619,7 @@ func TestWriteBacklogContextFile_UntracksPreviouslyCommittedContextFile(t *testi
 // self-heal for .claude/commands/backlog/ — the other half of the "chore(backlog):
 // untrack backlog context/command files" incident history.
 func TestWriteSlashCommands_UntracksPreviouslyCommittedSlashCommandFiles(t *testing.T) {
+	t.Parallel()
 	repo := setupTestGitRepo(t)
 
 	cmdDir := filepath.Join(repo, backlogCommandsDir)
@@ -463,6 +675,7 @@ func TestWriteSlashCommands_UntracksPreviouslyCommittedSlashCommandFiles(t *test
 // tmp-file-then-rename), so a later spawn can never see content mixed from an earlier
 // item or session.
 func TestWriteBacklogContextFile_NoStaleContentLeaksAcrossRespawn(t *testing.T) {
+	t.Parallel()
 	worktree := t.TempDir()
 
 	firstAC := `[{"index":0,"text":"First item criterion","status":"pending"}]`
@@ -503,6 +716,7 @@ func TestWriteBacklogContextFile_NoStaleContentLeaksAcrossRespawn(t *testing.T) 
 // have no git backing at all — mirroring addWorktreeExcludes' existing best-effort
 // handling of the same case.
 func TestUntrackTrackedScaffolding_NoErrorOnNonGitDirectory(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	removed, err := git.UntrackScaffolding(dir, git.ScaffoldingExcludePatterns)
 	if err != nil {
@@ -517,6 +731,7 @@ func TestUntrackTrackedScaffolding_NoErrorOnNonGitDirectory(t *testing.T) {
 // only touches paths matching git.ScaffoldingExcludePatterns and leaves everything else in
 // the index untouched.
 func TestUntrackTrackedScaffolding_LeavesUnrelatedTrackedFilesAlone(t *testing.T) {
+	t.Parallel()
 	repo := setupTestGitRepo(t)
 
 	before := gitLsFiles(t, repo)
@@ -545,6 +760,7 @@ func TestUntrackTrackedScaffolding_LeavesUnrelatedTrackedFilesAlone(t *testing.T
 // --git-dir and --git-common-dir resolve identically there. This test only fails against the
 // pre-fix code (--git-dir); see the accompanying commit message for the RED/GREEN record.
 func TestAddWorktreeExcludes_LinkedWorktree_ExcludesScaffoldingFiles(t *testing.T) {
+	t.Parallel()
 	repoPath := setupTestGitRepo(t)
 	worktreePath := setupLinkedWorktree(t, repoPath, "excludes-regression")
 
@@ -568,6 +784,7 @@ func TestAddWorktreeExcludes_LinkedWorktree_ExcludesScaffoldingFiles(t *testing.
 // the --git-common-dir fix is a no-op for plain (non-worktree) repos: both flags must
 // resolve to the same directory there.
 func TestAddWorktreeExcludes_PlainRepo_GitCommonDirEqualsGitDir(t *testing.T) {
+	t.Parallel()
 	repoPath := setupTestGitRepo(t)
 
 	// Both sides must go through git's own --path-format=absolute resolution.
@@ -617,6 +834,7 @@ func runGitRevParse(t *testing.T, dir string, args ...string) string {
 // exclude-path fix and GetWorktreeDirtyPaths compose correctly end-to-end: a linked
 // worktree containing only scaffolding files must never be reported dirty.
 func TestGetWorktreeDirtyPaths_EmptyForScaffoldingOnlyLinkedWorktree(t *testing.T) {
+	t.Parallel()
 	repoPath := setupTestGitRepo(t)
 	worktreePath := setupLinkedWorktree(t, repoPath, "scaffolding-only")
 

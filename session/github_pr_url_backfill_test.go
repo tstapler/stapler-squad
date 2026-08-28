@@ -17,6 +17,7 @@ import (
 // persisted path (following the GOPATH-style <host>/<owner>/<repo>
 // convention) lets the backfill build the URL without guessing.
 func TestRunGitHubPRURLBackfill_should_PopulateURL_When_HostRecoverableFromPath(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := createTestEntRepository(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -46,6 +47,7 @@ func TestRunGitHubPRURLBackfill_should_PopulateURL_When_HostRecoverableFromPath(
 // host-shaped segment (e.g. a plain local-directory session) — a wrong guess
 // would silently produce an incorrect URL for GitHub Enterprise rows.
 func TestRunGitHubPRURLBackfill_should_SkipRow_When_HostNotRecoverableFromPath(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := createTestEntRepository(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -74,6 +76,7 @@ func TestRunGitHubPRURLBackfill_should_SkipRow_When_HostNotRecoverableFromPath(t
 // second run is a safe no-op — the query itself excludes rows that already
 // have a github_pr_url, including ones the first run just populated.
 func TestRunGitHubPRURLBackfill_should_BeIdempotent_When_RunTwice(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := createTestEntRepository(t)
 	defer cleanup()
 	ctx := context.Background()

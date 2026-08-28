@@ -34,6 +34,7 @@ func readMCPJSON(t *testing.T, dir string) map[string]json.RawMessage {
 // TestInjectMCPConfigCreatesFile (U-3.1): InjectMCPConfig creates .mcp.json
 // with the correct MCP server entry when it does not exist.
 func TestInjectMCPConfigCreatesFile(t *testing.T) {
+	t.Parallel()
 	tmpDir := t.TempDir()
 	err := InjectMCPConfig(tmpDir, "/usr/local/bin/stapler-squad")
 	if err != nil {
@@ -80,6 +81,7 @@ func TestInjectMCPConfigCreatesFile(t *testing.T) {
 // TestInjectMCPConfigMerges (U-3.2): InjectMCPConfig preserves existing mcpServers
 // entries while adding stapler-squad.
 func TestInjectMCPConfigMerges(t *testing.T) {
+	t.Parallel()
 	tmpDir := t.TempDir()
 	existing := `{"mcpServers":{"other-tool":{"type":"stdio","command":"/usr/bin/other","args":[]}}}`
 	writeMCPJSON(t, tmpDir, existing)
@@ -111,6 +113,7 @@ func TestInjectMCPConfigMerges(t *testing.T) {
 // TestInjectMCPConfigIdempotent (U-3.3): calling InjectMCPConfig twice yields the same
 // result and exactly one stapler-squad entry.
 func TestInjectMCPConfigIdempotent(t *testing.T) {
+	t.Parallel()
 	tmpDir := t.TempDir()
 
 	if err := InjectMCPConfig(tmpDir, "/usr/bin/ss"); err != nil {
@@ -144,6 +147,7 @@ func TestInjectMCPConfigIdempotent(t *testing.T) {
 // TestInjectMCPConfigUpdatesPath (U-3.4): when the binary path changes InjectMCPConfig
 // updates the command field to the new path.
 func TestInjectMCPConfigUpdatesPath(t *testing.T) {
+	t.Parallel()
 	tmpDir := t.TempDir()
 
 	// Pre-seed with old path.
@@ -208,6 +212,7 @@ func TestInjectMCPConfigMalformedJSON(t *testing.T) {
 
 // TestRemoveMCPConfig (bonus): RemoveMCPConfig removes the stapler-squad entry.
 func TestRemoveMCPConfig(t *testing.T) {
+	t.Parallel()
 	tmpDir := t.TempDir()
 
 	if err := InjectMCPConfig(tmpDir, "/usr/bin/ss"); err != nil {

@@ -8,6 +8,7 @@ import (
 
 // TestSessionJSONSerialization verifies Session can be serialized and deserialized
 func TestSessionJSONSerialization(t *testing.T) {
+	t.Parallel()
 	now := time.Now().Truncate(time.Second) // Truncate for JSON comparison
 
 	original := &Session{
@@ -159,6 +160,7 @@ func TestSessionJSONSerialization(t *testing.T) {
 
 // TestSessionMinimalSerialization verifies Session with nil contexts serializes correctly
 func TestSessionMinimalSerialization(t *testing.T) {
+	t.Parallel()
 	now := time.Now().Truncate(time.Second)
 
 	minimal := &Session{
@@ -204,6 +206,7 @@ func TestSessionMinimalSerialization(t *testing.T) {
 
 // TestInstanceToSessionConversion verifies Instance -> Session conversion
 func TestInstanceToSessionConversion(t *testing.T) {
+	t.Parallel()
 	now := time.Now()
 
 	instance := &Instance{
@@ -308,6 +311,7 @@ func TestInstanceToSessionConversion(t *testing.T) {
 
 // TestSessionToInstanceConversion verifies Session -> Instance conversion
 func TestSessionToInstanceConversion(t *testing.T) {
+	t.Parallel()
 	now := time.Now()
 
 	session := &Session{
@@ -411,6 +415,7 @@ func TestSessionToInstanceConversion(t *testing.T) {
 
 // TestRoundTripConversion verifies Instance -> Session -> Instance preserves data
 func TestRoundTripConversion(t *testing.T) {
+	t.Parallel()
 	now := time.Now()
 
 	original := &Instance{
@@ -473,6 +478,7 @@ func TestRoundTripConversion(t *testing.T) {
 
 // TestNilInstanceConversion verifies nil handling
 func TestNilInstanceConversion(t *testing.T) {
+	t.Parallel()
 	if session := InstanceToSession(nil); session != nil {
 		t.Error("InstanceToSession(nil) should return nil")
 	}
@@ -484,6 +490,7 @@ func TestNilInstanceConversion(t *testing.T) {
 
 // TestContextHelperMethods verifies context checker and accessor methods
 func TestContextHelperMethods(t *testing.T) {
+	t.Parallel()
 	// Session with no contexts
 	empty := &Session{
 		ID:      "empty",
@@ -546,6 +553,7 @@ func TestContextHelperMethods(t *testing.T) {
 
 // TestContextOptionsPresets verifies the ContextOptions presets exist and have expected values
 func TestContextOptionsPresets(t *testing.T) {
+	t.Parallel()
 	// ContextMinimal should have nothing loaded
 	if ContextMinimal.AnyContextLoaded() {
 		t.Error("ContextMinimal should not have any contexts loaded")
@@ -579,6 +587,7 @@ func TestContextOptionsPresets(t *testing.T) {
 
 // TestContextOptionsMerge verifies merging ContextOptions
 func TestContextOptionsMerge(t *testing.T) {
+	t.Parallel()
 	opts1 := ContextOptions{
 		LoadGit:      true,
 		LoadActivity: true,

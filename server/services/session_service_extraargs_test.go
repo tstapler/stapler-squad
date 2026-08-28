@@ -16,6 +16,7 @@ import (
 // extra_args on the request (as sent by a preset-prefilled Omnibar submission) reaches the
 // live instance's ExtraArgs field, mirroring the existing EnvVars threading test.
 func TestCreateSession_should_SetInstanceExtraArgs_When_RequestIncludesExtraArgs(t *testing.T) {
+	t.Parallel()
 	storage := createTestStorage(t)
 	bus := events.NewEventBus(16)
 	t.Cleanup(bus.Close)
@@ -45,6 +46,7 @@ func TestCreateSession_should_SetInstanceExtraArgs_When_RequestIncludesExtraArgs
 // backward-compatibility guard: an old client (or any non-preset flow) that never sets
 // extra_args must produce zero behavior change.
 func TestCreateSession_should_LeaveInstanceExtraArgsEmpty_When_RequestOmitsExtraArgs(t *testing.T) {
+	t.Parallel()
 	storage := createTestStorage(t)
 	bus := events.NewEventBus(16)
 	t.Cleanup(bus.Close)

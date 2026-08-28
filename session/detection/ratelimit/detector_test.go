@@ -10,6 +10,7 @@ import (
 )
 
 func TestDetector_ProcessOutput_AnthropicRateLimit(t *testing.T) {
+	t.Parallel()
 	detector := NewDetector("test-session")
 
 	output := `Usage limit reached for claude-3-opus.
@@ -33,6 +34,7 @@ Access resets at 2:53 PM PDT.
 }
 
 func TestDetector_ProcessOutput_GeminiRateLimit(t *testing.T) {
+	t.Parallel()
 	detector := NewDetector("test-session")
 
 	output := `│ Usage limit reached for gemini-3-flash-preview.                                                                                                                          │
@@ -65,6 +67,7 @@ func TestDetector_ProcessOutput_GeminiRateLimit(t *testing.T) {
 }
 
 func TestDetector_ProcessOutput_NoRateLimit(t *testing.T) {
+	t.Parallel()
 	detector := NewDetector("test-session")
 
 	output := `Hello, this is normal output.
@@ -84,6 +87,7 @@ Just a regular conversation.`
 }
 
 func TestDetector_should_LogCanaryOnce_When_OutputHasUnmatchedQuotaKeyword(t *testing.T) {
+	t.Parallel()
 	detector := NewDetector("test-session")
 
 	// "quota" is a canary keyword but doesn't match any configured rate-limit
@@ -104,6 +108,7 @@ func TestDetector_should_LogCanaryOnce_When_OutputHasUnmatchedQuotaKeyword(t *te
 }
 
 func TestDetector_should_NotLogCanary_When_OutputHasNoQuotaKeyword(t *testing.T) {
+	t.Parallel()
 	detector := NewDetector("test-session")
 
 	detector.ProcessOutput([]byte("just a normal turn with no relevant wording"))
@@ -114,6 +119,7 @@ func TestDetector_should_NotLogCanary_When_OutputHasNoQuotaKeyword(t *testing.T)
 }
 
 func TestDetector_ProcessOutput_FalsePositive(t *testing.T) {
+	t.Parallel()
 	detector := NewDetector("test-session")
 
 	output := `I should check the rate limit documentation.
@@ -133,6 +139,7 @@ Let me try again later.`
 }
 
 func TestDetector_Cooldown(t *testing.T) {
+	t.Parallel()
 	detector := NewDetector("test-session")
 	detector.SetCooldown(500 * time.Millisecond)
 
@@ -162,6 +169,7 @@ Access resets at 2:53 PM PDT.
 }
 
 func TestDetector_IdentifyProvider_Anthropic(t *testing.T) {
+	t.Parallel()
 	detector := NewDetector("test-session")
 
 	tests := []struct {
@@ -182,6 +190,7 @@ func TestDetector_IdentifyProvider_Anthropic(t *testing.T) {
 }
 
 func TestDetector_IdentifyProvider_OpenAI(t *testing.T) {
+	t.Parallel()
 	detector := NewDetector("test-session")
 
 	tests := []struct {
@@ -200,6 +209,7 @@ func TestDetector_IdentifyProvider_OpenAI(t *testing.T) {
 }
 
 func TestScheduler_ScheduleRecovery(t *testing.T) {
+	t.Parallel()
 	scheduler := NewScheduler("test-session")
 	scheduler.SetBuffer(1)
 
@@ -225,6 +235,7 @@ func TestScheduler_ScheduleRecovery(t *testing.T) {
 }
 
 func TestScheduler_CancelRecovery(t *testing.T) {
+	t.Parallel()
 	scheduler := NewScheduler("test-session")
 
 	var executed atomic.Bool
@@ -249,6 +260,7 @@ func TestScheduler_CancelRecovery(t *testing.T) {
 }
 
 func TestRecoveryHandler_Execute(t *testing.T) {
+	t.Parallel()
 	var sentInput []byte
 	handler := NewRecoveryHandler("test-session", func(data []byte) error {
 		sentInput = data
@@ -268,6 +280,7 @@ func TestRecoveryHandler_Execute(t *testing.T) {
 }
 
 func TestRecoveryHandler_Execute_Error(t *testing.T) {
+	t.Parallel()
 	handler := NewRecoveryHandler("test-session", func(data []byte) error {
 		return assertErr
 	})
@@ -288,6 +301,7 @@ func (e assertErrT) Error() string {
 }
 
 func TestEventBus_Subscribe_Publish(t *testing.T) {
+	t.Parallel()
 	bus := NewEventBus()
 
 	ch := bus.Subscribe(eventDetected)
@@ -310,6 +324,7 @@ func TestEventBus_Subscribe_Publish(t *testing.T) {
 }
 
 func TestManager_ProcessOutput(t *testing.T) {
+	t.Parallel()
 	manager := NewManager("test-session", nil)
 	manager.SetEnabled(true)
 
@@ -329,6 +344,7 @@ func TestManager_ProcessOutput(t *testing.T) {
 }
 
 func TestManager_Disable(t *testing.T) {
+	t.Parallel()
 	manager := NewManager("test-session", nil)
 	manager.SetEnabled(false)
 
@@ -343,6 +359,7 @@ func TestManager_Disable(t *testing.T) {
 }
 
 func TestStripANSI(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		input    string
 		expected string
@@ -366,6 +383,7 @@ func TestStripANSI(t *testing.T) {
 }
 
 func TestDetector_StateTransitions(t *testing.T) {
+	t.Parallel()
 	detector := NewDetector("test-session")
 
 	if state := detector.GetState(); state != StateNone {
@@ -389,6 +407,7 @@ func TestDetector_StateTransitions(t *testing.T) {
 }
 
 func TestParseTimestamp_RetryAfter(t *testing.T) {
+	t.Parallel()
 	detector := NewDetector("test-session")
 
 	output := "Please retry after 60 second"
@@ -419,6 +438,7 @@ func TestParseTimestamp_RetryAfter(t *testing.T) {
 }
 
 func TestParseTimestamp_SpecificTime(t *testing.T) {
+	t.Parallel()
 	detector := NewDetector("test-session")
 
 	output := "Access resets at 3:00 PM"
@@ -436,6 +456,7 @@ func TestParseTimestamp_SpecificTime(t *testing.T) {
 }
 
 func TestDetector_ConcurrentProcessOutput(t *testing.T) {
+	t.Parallel()
 	detector := NewDetector("test-session")
 
 	var wg sync.WaitGroup
@@ -465,6 +486,7 @@ func TestDetector_ConcurrentProcessOutput(t *testing.T) {
 // ============================================================================
 
 func TestDetector_ClaudeNewFormat_DetectsRateLimit(t *testing.T) {
+	t.Parallel()
 	detector := NewDetector("test-session")
 
 	output := "You've hit your limit - resets 11pm (America/Los_Angeles)\n/extra-usage to finish what you're working on.\n"
@@ -484,6 +506,7 @@ func TestDetector_ClaudeNewFormat_DetectsRateLimit(t *testing.T) {
 }
 
 func TestDetector_ClaudeNewFormat_ParsesResetTime(t *testing.T) {
+	t.Parallel()
 	detector := NewDetector("test-session")
 
 	output := "You've hit your limit - resets 11pm (America/Los_Angeles)\n/extra-usage to finish what you're working on.\n"
@@ -515,6 +538,7 @@ func TestDetector_ClaudeNewFormat_ParsesResetTime(t *testing.T) {
 // ============================================================================
 
 func TestParseTimeWithTZ_IANAName(t *testing.T) {
+	t.Parallel()
 	result := parseTimeWithTZ("11pm", "America/Los_Angeles")
 	if result.IsZero() {
 		t.Fatal("expected non-zero time for '11pm America/Los_Angeles'")
@@ -526,6 +550,7 @@ func TestParseTimeWithTZ_IANAName(t *testing.T) {
 }
 
 func TestParseTimeWithTZ_Abbreviation_PDT(t *testing.T) {
+	t.Parallel()
 	result := parseTimeWithTZ("11pm", "PDT")
 	if result.IsZero() {
 		t.Fatal("expected non-zero time for '11pm PDT'")
@@ -537,6 +562,7 @@ func TestParseTimeWithTZ_Abbreviation_PDT(t *testing.T) {
 }
 
 func TestParseTimeWithTZ_Abbreviation_PST(t *testing.T) {
+	t.Parallel()
 	result := parseTimeWithTZ("11pm", "PST")
 	if result.IsZero() {
 		t.Fatal("expected non-zero time for '11pm PST'")
@@ -550,6 +576,7 @@ func TestParseTimeWithTZ_Abbreviation_PST(t *testing.T) {
 }
 
 func TestParseTimeWithTZ_CommonName_Pacific(t *testing.T) {
+	t.Parallel()
 	result := parseTimeWithTZ("11:30pm", "Pacific")
 	if result.IsZero() {
 		t.Fatal("expected non-zero time for '11:30pm Pacific'")
@@ -564,6 +591,7 @@ func TestParseTimeWithTZ_CommonName_Pacific(t *testing.T) {
 }
 
 func TestParseTimeWithTZ_UnknownTZ_ReturnsZero(t *testing.T) {
+	t.Parallel()
 	// Unknown timezone strings should return zero so the scheduler uses its
 	// 30-minute fallback rather than scheduling at a potentially wrong time.
 	result := parseTimeWithTZ("11pm", "FakeZone")
@@ -573,6 +601,7 @@ func TestParseTimeWithTZ_UnknownTZ_ReturnsZero(t *testing.T) {
 }
 
 func TestParseTimeWithTZ_ParenthesesAreStripped(t *testing.T) {
+	t.Parallel()
 	result := parseTimeWithTZ("11pm", "(America/Los_Angeles)")
 	if result.IsZero() {
 		t.Fatal("expected non-zero time when timezone has parentheses")
@@ -584,6 +613,7 @@ func TestParseTimeWithTZ_ParenthesesAreStripped(t *testing.T) {
 }
 
 func TestParseTimeWithTZ_PastTimeGetsNextDay(t *testing.T) {
+	t.Parallel()
 	// Construct a time string for 1am — a time that has almost certainly already
 	// passed today (safe for tests run any time after midnight + epsilon).
 	// The function should roll the result to tomorrow.
@@ -601,6 +631,7 @@ func TestParseTimeWithTZ_PastTimeGetsNextDay(t *testing.T) {
 // ============================================================================
 
 func TestScheduler_FallbackIs30Min(t *testing.T) {
+	t.Parallel()
 	scheduler := NewScheduler("test-session")
 
 	// Schedule with zero reset time (triggers the fallback path).
@@ -626,6 +657,7 @@ func TestScheduler_FallbackIs30Min(t *testing.T) {
 // ============================================================================
 
 func TestDetector_ReDetectionAfterRecovery(t *testing.T) {
+	t.Parallel()
 	detector := NewDetector("test-session")
 	detector.SetCooldown(0) // Disable cooldown for fast re-detection
 
@@ -660,6 +692,7 @@ func TestDetector_ReDetectionAfterRecovery(t *testing.T) {
 }
 
 func TestDetector_CooldownPreventsImmediateReDetection(t *testing.T) {
+	t.Parallel()
 	detector := NewDetector("test-session")
 	detector.SetCooldown(60 * time.Second)
 
@@ -695,6 +728,7 @@ func TestDetector_CooldownPreventsImmediateReDetection(t *testing.T) {
 }
 
 func TestDetector_SetStateNone_ClearsResetTime(t *testing.T) {
+	t.Parallel()
 	detector := NewDetector("test-session")
 
 	output := "You've hit your limit - resets 11pm (America/Los_Angeles)\n/extra-usage to finish what you're working on.\n"
@@ -723,6 +757,7 @@ func TestDetector_SetStateNone_ClearsResetTime(t *testing.T) {
 // ============================================================================
 
 func TestManager_GetResetTime_DelegatesToDetector(t *testing.T) {
+	t.Parallel()
 	manager := NewManager("test-session", nil)
 	manager.SetEnabled(true)
 
@@ -740,6 +775,7 @@ func TestManager_GetResetTime_DelegatesToDetector(t *testing.T) {
 }
 
 func TestManager_SetDetectionCallback_IsCalled(t *testing.T) {
+	t.Parallel()
 	manager := NewManager("test-session", nil)
 	manager.SetEnabled(true)
 
@@ -760,6 +796,7 @@ func TestManager_SetDetectionCallback_IsCalled(t *testing.T) {
 }
 
 func TestManager_SetRecoveryCallback_IsCalled(t *testing.T) {
+	t.Parallel()
 	manager := NewManager("test-session", nil) // nil instance → sendRecoveryInput returns nil
 	manager.SetEnabled(true)
 

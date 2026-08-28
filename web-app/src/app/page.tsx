@@ -19,13 +19,17 @@ import { useFocusTrap } from "@/lib/hooks/useFocusTrap";
 import { useOmnibar } from "@/lib/contexts/OmnibarContext";
 import { PaneTilingContainer } from "@/components/pane/PaneTilingContainer";
 import { CockpitActionsProvider } from "@/lib/contexts/CockpitActionsContext";
+import { SessionViewModeProvider } from "@/lib/contexts/SessionViewModeContext";
+import { useSessionViewMode } from "@/lib/hooks/useSessionViewMode";
 import { usePageView } from "@/lib/analytics/usePageView";
 import { useAnalytics } from "@/lib/contexts/AnalyticsContext";
+import { useNotifications } from "@/lib/contexts/NotificationContext";
 import * as styles from "./page.css";
 
 function HomeContent() {
   usePageView();
   const { track } = useAnalytics();
+  const { addNotification } = useNotifications();
   const searchParams = useSearchParams();
   const router = useRouter();
   const { openInCreationMode, openOmnibar } = useOmnibar();
@@ -35,6 +39,11 @@ function HomeContent() {
   const [pendingSessionId, setPendingSessionId] = useState<string | null>(null);
   // j/k keyboard navigation index within the session list
   const [focusedSessionIndex, setFocusedSessionIndex] = useState<number>(-1);
+
+  // List/Board view mode — lifted here (rather than called again deep in the pane
+  // tree) so the 'b' shortcut below and SessionListPaneBody's render both observe
+  // the same state instead of two independent useSessionViewMode() instances.
+  const [viewMode, setViewMode] = useSessionViewMode();
 
   // Tiling: tracks the most-recently-clicked session to route to the focused pane.
   // Using a counter-based key so that clicking the same session again still triggers.
@@ -50,6 +59,7 @@ function HomeContent() {
   const sessionTriggerRef = useRef<HTMLElement | null>(null);
   const deleteDialogRef = useRef<HTMLDivElement>(null);
   const lastFocusBeforeDelete = useRef<HTMLElement | null>(null);
+  const resumeTriggerRef = useRef<HTMLElement | null>(null);
 
   // Tracks the last URL params that were routed to a pane. Prevents the URL-watching
   // effect from re-triggering pane assignment on every sessions stream update (which
@@ -67,13 +77,7 @@ function HomeContent() {
   }, [selectedSession]);
 
   // Trap focus inside delete confirmation dialog; return focus on close
-  useFocusTrap(deleteDialogRef, !!deleteConfirmTarget);
-  useEffect(() => {
-    if (!deleteConfirmTarget && lastFocusBeforeDelete.current) {
-      lastFocusBeforeDelete.current.focus();
-      lastFocusBeforeDelete.current = null;
-    }
-  }, [deleteConfirmTarget]);
+  useFocusTrap(deleteDialogRef, !!deleteConfirmTarget, lastFocusBeforeDelete);
 
 
   const {
@@ -89,7 +93,6 @@ function HomeContent() {
     createCheckpoint,
     listCheckpoints,
     forkSession,
-    runOneShot,
     listSessions,
     updateSession,
     getSession,
@@ -295,16 +298,23 @@ function HomeContent() {
     }
   }, [updateSession, track]);
 
-  const handleSteerAutonomousSession = useCallback(async (sessionId: string, message: string): Promise<void> => {
+  const handleSteerAutonomousSession = useCallback(async (sessionId: string, message: string): Promise<boolean> => {
     track({ name: "session_autonomous_steer", category: "user_action" });
-    await updateSession(sessionId, { steerMessage: message });
-  }, [updateSession, track]);
-
-  const handleRunOneShot = useCallback(async (sessionId: string): Promise<void> => {
-    await runOneShot(sessionId, "Create a pull request for the changes in this session.", 0);
-  }, [runOneShot]);
+    const result = await updateSession(sessionId, { steerMessage: message });
+    if (result === null) {
+      addNotification({
+        message: "Failed to send steering message — the session may not be running.",
+        notificationType: "error",
+        sessionId,
+        sessionName: "",
+      });
+      return false;
+    }
+    return true;
+  }, [updateSession, track, addNotification]);
 
   const handleResumeRequest = useCallback((session: Session) => {
+    resumeTriggerRef.current = document.activeElement as HTMLElement;
     setResumeTarget(session);
   }, []);
 
@@ -383,6 +393,12 @@ function HomeContent() {
         sessions.length === 0 ? -1 : Math.min(prev + 1, sessions.length - 1)
       );
     },
+    // List/Board view toggle. useKeyboard's default ignoreElements (INPUT/TEXTAREA/SELECT)
+    // already covers the instant-search box, so this never fires while typing "b" into it.
+    "b": () => {
+      if (deleteConfirmTarget || resumeTarget) return;
+      setViewMode(viewMode === "board" ? "list" : "board");
+    },
     "k": () => {
       if (deleteConfirmTarget || resumeTarget) return;
       setFocusedSessionIndex(prev =>
@@ -409,7 +425,13 @@ function HomeContent() {
     },
     "d": () => {
       if (selectedSession && !deleteConfirmTarget) {
-        lastFocusBeforeDelete.current = document.activeElement as HTMLElement;
+        // document.activeElement is unreliable here: the effect above focuses
+        // sessionDetailRef (the cockpit container) whenever selectedSession is
+        // set, so by the time this fires, activeElement is that container, not
+        // the row that was actually clicked. sessionTriggerRef still holds the
+        // real opener; fall back to activeElement only for the deep-link case
+        // where a session was selected without a click (no captured trigger).
+        lastFocusBeforeDelete.current = sessionTriggerRef.current ?? (document.activeElement as HTMLElement);
         setDeleteConfirmTarget(selectedSession);
       }
     },
@@ -436,7 +458,6 @@ function HomeContent() {
     onCreateCheckpoint: createCheckpoint,
     onListCheckpoints: listCheckpoints,
     onForkFromCheckpoint: forkSession,
-    onRunOneShot: handleRunOneShot,
     onSetRateLimitEnabled: handleSetRateLimitEnabled,
     onToggleAutonomousMode: handleToggleAutonomousMode,
     onToggleAutoApprove: handleToggleAutoApprove,
@@ -447,7 +468,7 @@ function HomeContent() {
     handleSessionClick, handleDeleteSession, pauseSession, handleResumeRequest,
     handleDirectResume, handleCloneSession, handleNewWorkspaceSession, renameSession,
     restartSession, handleUpdateTags, handleNewSession, createCheckpoint,
-    listCheckpoints, forkSession, handleRunOneShot, handleSetRateLimitEnabled,
+    listCheckpoints, forkSession, handleSetRateLimitEnabled,
     handleToggleAutonomousMode, handleToggleAutoApprove, handleSteerAutonomousSession, clearConversationState, listSessions,
   ]);
 
@@ -455,22 +476,24 @@ function HomeContent() {
     <div className={styles.page}>
       {/* Unified tiling cockpit — session list and detail panels are both pane views */}
       <CockpitActionsProvider value={cockpitActions}>
-        <div
-          ref={sessionDetailRef}
-          className={styles.cockpitContainer}
-          tabIndex={-1}
-          role="region"
-          aria-label="Session cockpit"
-          data-context="cockpit"
-        >
-          <PaneTilingContainer
-            sessions={sessions}
-            externalSessionAssign={externalAssignSession ? {
-              ...externalAssignSession,
-              version: externalAssignCounter,
-            } : null}
-          />
-        </div>
+        <SessionViewModeProvider value={{ viewMode, setViewMode }}>
+          <div
+            ref={sessionDetailRef}
+            className={styles.cockpitContainer}
+            tabIndex={-1}
+            role="region"
+            aria-label="Session cockpit"
+            data-context="cockpit"
+          >
+            <PaneTilingContainer
+              sessions={sessions}
+              externalSessionAssign={externalAssignSession ? {
+                ...externalAssignSession,
+                version: externalAssignCounter,
+              } : null}
+            />
+          </div>
+        </SessionViewModeProvider>
       </CockpitActionsProvider>
 
       {/* Resume session modal */}
@@ -481,6 +504,7 @@ function HomeContent() {
           sessions={sessions}
           onConfirm={handleResumeConfirm}
           onCancel={handleResumeCancel}
+          triggerRef={resumeTriggerRef}
         />
       )}
 

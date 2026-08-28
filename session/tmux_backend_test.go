@@ -148,9 +148,10 @@ type mockTmuxManager struct {
 	resetExitCalls int
 
 	// PaneExitStatus
-	paneExitCode   int
-	paneExitSignal string
-	paneExitDead   bool
+	paneExitCode        int
+	paneExitSignal      string
+	paneExitDead        bool
+	paneExitStatusCalls int
 }
 
 func (m *mockTmuxManager) IsAlive() bool {
@@ -303,12 +304,14 @@ func (m *mockTmuxManager) DoesSessionExist() bool         { return m.isAliveRetu
 
 // PaneExitStatus
 func (m *mockTmuxManager) PaneExitStatus() (code int, signal string, dead bool) {
+	m.paneExitStatusCalls++
 	return m.paneExitCode, m.paneExitSignal, m.paneExitDead
 }
 
 // --- T-UNIT-1: GetSessionIdentifier value correctness ---
 
 func TestTmuxBackend_GetSessionIdentifier_MatchesTmuxSessionName(t *testing.T) {
+	t.Parallel()
 	mock := &mockTmuxManager{tmuxSessionName: "staplersquad_my-session"}
 	b := NewTmuxBackend(mock)
 	assert.Equal(t, "staplersquad_my-session", b.GetSessionIdentifier())
@@ -318,6 +321,7 @@ func TestTmuxBackend_GetSessionIdentifier_MatchesTmuxSessionName(t *testing.T) {
 // --- T-UNIT-2: Delegation coverage for all ProcessManager methods ---
 
 func TestTmuxBackend_DelegatesIsAlive(t *testing.T) {
+	t.Parallel()
 	mock := &mockTmuxManager{isAliveReturn: true}
 	b := NewTmuxBackend(mock)
 	assert.True(t, b.IsAlive())
@@ -325,12 +329,14 @@ func TestTmuxBackend_DelegatesIsAlive(t *testing.T) {
 }
 
 func TestTmuxBackend_DelegatesHasSession(t *testing.T) {
+	t.Parallel()
 	mock := &mockTmuxManager{hasSessionReturn: true}
 	b := NewTmuxBackend(mock)
 	assert.True(t, b.HasSession())
 }
 
 func TestTmuxBackend_DelegatesStart(t *testing.T) {
+	t.Parallel()
 	mock := &mockTmuxManager{}
 	b := NewTmuxBackend(mock)
 	err := b.Start("/tmp")
@@ -339,6 +345,7 @@ func TestTmuxBackend_DelegatesStart(t *testing.T) {
 }
 
 func TestTmuxBackend_DelegatesClose(t *testing.T) {
+	t.Parallel()
 	mock := &mockTmuxManager{}
 	b := NewTmuxBackend(mock)
 	err := b.Close()
@@ -347,6 +354,7 @@ func TestTmuxBackend_DelegatesClose(t *testing.T) {
 }
 
 func TestTmuxBackend_DelegatesRestoreWithWorkDir(t *testing.T) {
+	t.Parallel()
 	mock := &mockTmuxManager{}
 	b := NewTmuxBackend(mock)
 	err := b.RestoreWithWorkDir("/home/user/project")
@@ -355,6 +363,7 @@ func TestTmuxBackend_DelegatesRestoreWithWorkDir(t *testing.T) {
 }
 
 func TestTmuxBackend_DelegatesDetachSafely(t *testing.T) {
+	t.Parallel()
 	mock := &mockTmuxManager{}
 	b := NewTmuxBackend(mock)
 	err := b.DetachSafely()
@@ -363,6 +372,7 @@ func TestTmuxBackend_DelegatesDetachSafely(t *testing.T) {
 }
 
 func TestTmuxBackend_DelegatesGetPTY(t *testing.T) {
+	t.Parallel()
 	mock := &mockTmuxManager{getPTYFile: nil, getPTYReturn: nil}
 	b := NewTmuxBackend(mock)
 	f, err := b.GetPTY()
@@ -371,6 +381,7 @@ func TestTmuxBackend_DelegatesGetPTY(t *testing.T) {
 }
 
 func TestTmuxBackend_DelegatesSendKeys(t *testing.T) {
+	t.Parallel()
 	mock := &mockTmuxManager{sendKeysN: 5}
 	b := NewTmuxBackend(mock)
 	n, err := b.SendKeys("hello")
@@ -380,6 +391,7 @@ func TestTmuxBackend_DelegatesSendKeys(t *testing.T) {
 }
 
 func TestTmuxBackend_DelegatesTapEnter(t *testing.T) {
+	t.Parallel()
 	mock := &mockTmuxManager{}
 	b := NewTmuxBackend(mock)
 	err := b.TapEnter()
@@ -388,6 +400,7 @@ func TestTmuxBackend_DelegatesTapEnter(t *testing.T) {
 }
 
 func TestTmuxBackend_DelegatesSendPromptWithEnter(t *testing.T) {
+	t.Parallel()
 	mock := &mockTmuxManager{}
 	b := NewTmuxBackend(mock)
 	err := b.SendPromptWithEnter("test prompt")
@@ -396,6 +409,7 @@ func TestTmuxBackend_DelegatesSendPromptWithEnter(t *testing.T) {
 }
 
 func TestTmuxBackend_DelegatesSendInputViaControlMode(t *testing.T) {
+	t.Parallel()
 	mock := &mockTmuxManager{}
 	b := NewTmuxBackend(mock)
 	data := []byte("ctrl-c")
@@ -405,6 +419,7 @@ func TestTmuxBackend_DelegatesSendInputViaControlMode(t *testing.T) {
 }
 
 func TestTmuxBackend_DelegatesCapturePaneContent(t *testing.T) {
+	t.Parallel()
 	mock := &mockTmuxManager{capturePaneReturn: "terminal output"}
 	b := NewTmuxBackend(mock)
 	content, err := b.CapturePaneContent()
@@ -413,6 +428,7 @@ func TestTmuxBackend_DelegatesCapturePaneContent(t *testing.T) {
 }
 
 func TestTmuxBackend_DelegatesCapturePaneContentRaw(t *testing.T) {
+	t.Parallel()
 	mock := &mockTmuxManager{capturePaneRawReturn: "raw\033[0m"}
 	b := NewTmuxBackend(mock)
 	content, err := b.CapturePaneContentRaw()
@@ -421,6 +437,7 @@ func TestTmuxBackend_DelegatesCapturePaneContentRaw(t *testing.T) {
 }
 
 func TestTmuxBackend_DelegatesCapturePaneContentWithOptions(t *testing.T) {
+	t.Parallel()
 	mock := &mockTmuxManager{captureWithOptsReturn: "scrollback"}
 	b := NewTmuxBackend(mock)
 	content, err := b.CapturePaneContentWithOptions("-100", "-")
@@ -431,6 +448,7 @@ func TestTmuxBackend_DelegatesCapturePaneContentWithOptions(t *testing.T) {
 }
 
 func TestTmuxBackend_DelegatesCaptureViewport(t *testing.T) {
+	t.Parallel()
 	mock := &mockTmuxManager{captureViewportReturn: "viewport content"}
 	b := NewTmuxBackend(mock)
 	content, err := b.CaptureViewport(50)
@@ -440,6 +458,7 @@ func TestTmuxBackend_DelegatesCaptureViewport(t *testing.T) {
 }
 
 func TestTmuxBackend_DelegatesGetCursorPosition(t *testing.T) {
+	t.Parallel()
 	mock := &mockTmuxManager{cursorX: 10, cursorY: 5}
 	b := NewTmuxBackend(mock)
 	x, y, err := b.GetCursorPosition()
@@ -449,6 +468,7 @@ func TestTmuxBackend_DelegatesGetCursorPosition(t *testing.T) {
 }
 
 func TestTmuxBackend_DelegatesGetPaneDimensions(t *testing.T) {
+	t.Parallel()
 	mock := &mockTmuxManager{paneWidth: 220, paneHeight: 50}
 	b := NewTmuxBackend(mock)
 	w, h, err := b.GetPaneDimensions()
@@ -458,6 +478,7 @@ func TestTmuxBackend_DelegatesGetPaneDimensions(t *testing.T) {
 }
 
 func TestTmuxBackend_DelegatesSetWindowSize(t *testing.T) {
+	t.Parallel()
 	mock := &mockTmuxManager{}
 	b := NewTmuxBackend(mock)
 	err := b.SetWindowSize(200, 40)
@@ -467,6 +488,7 @@ func TestTmuxBackend_DelegatesSetWindowSize(t *testing.T) {
 }
 
 func TestTmuxBackend_DelegatesSetDetachedSize(t *testing.T) {
+	t.Parallel()
 	mock := &mockTmuxManager{}
 	b := NewTmuxBackend(mock)
 	err := b.SetDetachedSize(150, 35, "my-session")
@@ -477,6 +499,7 @@ func TestTmuxBackend_DelegatesSetDetachedSize(t *testing.T) {
 }
 
 func TestTmuxBackend_DelegatesRefreshClient(t *testing.T) {
+	t.Parallel()
 	mock := &mockTmuxManager{}
 	b := NewTmuxBackend(mock)
 	err := b.RefreshClient()
@@ -485,6 +508,7 @@ func TestTmuxBackend_DelegatesRefreshClient(t *testing.T) {
 }
 
 func TestTmuxBackend_DelegatesGetPanePID(t *testing.T) {
+	t.Parallel()
 	mock := &mockTmuxManager{panePIDReturn: 42}
 	b := NewTmuxBackend(mock)
 	pid, err := b.GetPanePID()
@@ -493,6 +517,7 @@ func TestTmuxBackend_DelegatesGetPanePID(t *testing.T) {
 }
 
 func TestTmuxBackend_DelegatesHasUpdated(t *testing.T) {
+	t.Parallel()
 	mock := &mockTmuxManager{
 		hasUpdatedUpdated:   true,
 		hasUpdatedHasPrompt: true,
@@ -506,6 +531,7 @@ func TestTmuxBackend_DelegatesHasUpdated(t *testing.T) {
 }
 
 func TestTmuxBackend_DelegatesFilterBanners(t *testing.T) {
+	t.Parallel()
 	mock := &mockTmuxManager{filterBannersResult: "clean", filterBannersCount: 2}
 	b := NewTmuxBackend(mock)
 	result, count := b.FilterBanners("banner content")
@@ -515,6 +541,7 @@ func TestTmuxBackend_DelegatesFilterBanners(t *testing.T) {
 }
 
 func TestTmuxBackend_DelegatesHasMeaningfulContent(t *testing.T) {
+	t.Parallel()
 	mock := &mockTmuxManager{hasMeaningfulReturn: true}
 	b := NewTmuxBackend(mock)
 	assert.True(t, b.HasMeaningfulContent("some output"))
@@ -522,6 +549,7 @@ func TestTmuxBackend_DelegatesHasMeaningfulContent(t *testing.T) {
 }
 
 func TestTmuxBackend_DelegatesStartControlMode(t *testing.T) {
+	t.Parallel()
 	mock := &mockTmuxManager{}
 	b := NewTmuxBackend(mock)
 	err := b.StartControlMode()
@@ -529,6 +557,7 @@ func TestTmuxBackend_DelegatesStartControlMode(t *testing.T) {
 }
 
 func TestTmuxBackend_DelegatesStopControlMode(t *testing.T) {
+	t.Parallel()
 	mock := &mockTmuxManager{}
 	b := NewTmuxBackend(mock)
 	err := b.StopControlMode()
@@ -536,6 +565,7 @@ func TestTmuxBackend_DelegatesStopControlMode(t *testing.T) {
 }
 
 func TestTmuxBackend_DelegatesSubscribeToControlModeUpdates(t *testing.T) {
+	t.Parallel()
 	ch := make(chan []byte, 1)
 	mock := &mockTmuxManager{subscribeID: "sub-123", subscribeCh: ch}
 	b := NewTmuxBackend(mock)
@@ -545,6 +575,7 @@ func TestTmuxBackend_DelegatesSubscribeToControlModeUpdates(t *testing.T) {
 }
 
 func TestTmuxBackend_DelegatesUnsubscribeFromControlModeUpdates(t *testing.T) {
+	t.Parallel()
 	mock := &mockTmuxManager{}
 	b := NewTmuxBackend(mock)
 	b.UnsubscribeFromControlModeUpdates("sub-456")
@@ -552,6 +583,7 @@ func TestTmuxBackend_DelegatesUnsubscribeFromControlModeUpdates(t *testing.T) {
 }
 
 func TestTmuxBackend_DelegatesAttach(t *testing.T) {
+	t.Parallel()
 	done := make(chan struct{})
 	mock := &mockTmuxManager{attachCh: done}
 	b := NewTmuxBackend(mock)
@@ -561,6 +593,7 @@ func TestTmuxBackend_DelegatesAttach(t *testing.T) {
 }
 
 func TestTmuxBackend_DelegatesSetOnExitCallback(t *testing.T) {
+	t.Parallel()
 	mock := &mockTmuxManager{}
 	b := NewTmuxBackend(mock)
 	called := false
@@ -572,6 +605,7 @@ func TestTmuxBackend_DelegatesSetOnExitCallback(t *testing.T) {
 }
 
 func TestTmuxBackend_DelegatesResetExitOnce(t *testing.T) {
+	t.Parallel()
 	mock := &mockTmuxManager{}
 	b := NewTmuxBackend(mock)
 	b.ResetExitOnce()
@@ -581,6 +615,7 @@ func TestTmuxBackend_DelegatesResetExitOnce(t *testing.T) {
 // GetCurrentWorkingDirectory delegates via *TmuxProcessManager type assertion.
 // For a non-TmuxProcessManager manager (mockTmuxManager), it returns ("", nil).
 func TestTmuxBackend_DelegatesGetCurrentWorkingDirectory_MockReturnsEmpty(t *testing.T) {
+	t.Parallel()
 	mock := &mockTmuxManager{}
 	b := NewTmuxBackend(mock)
 	cwd, err := b.GetCurrentWorkingDirectory()
@@ -591,6 +626,7 @@ func TestTmuxBackend_DelegatesGetCurrentWorkingDirectory_MockReturnsEmpty(t *tes
 // --- Error-path delegation tests ---
 
 func TestTmuxBackend_Start_PropagatesError(t *testing.T) {
+	t.Parallel()
 	want := errors.New("tmux: session launch failed")
 	mock := &mockTmuxManager{startReturn: want}
 	b := NewTmuxBackend(mock)
@@ -600,6 +636,7 @@ func TestTmuxBackend_Start_PropagatesError(t *testing.T) {
 }
 
 func TestTmuxBackend_Close_PropagatesError(t *testing.T) {
+	t.Parallel()
 	want := errors.New("tmux: kill-session failed")
 	mock := &mockTmuxManager{closeReturn: want}
 	b := NewTmuxBackend(mock)
@@ -609,6 +646,7 @@ func TestTmuxBackend_Close_PropagatesError(t *testing.T) {
 }
 
 func TestTmuxBackend_GetPTY_PropagatesError(t *testing.T) {
+	t.Parallel()
 	want := errors.New("tmux: no PTY available")
 	mock := &mockTmuxManager{getPTYReturn: want}
 	b := NewTmuxBackend(mock)
@@ -618,6 +656,7 @@ func TestTmuxBackend_GetPTY_PropagatesError(t *testing.T) {
 }
 
 func TestTmuxBackend_CapturePaneContent_PropagatesError(t *testing.T) {
+	t.Parallel()
 	want := errors.New("tmux: capture-pane failed")
 	mock := &mockTmuxManager{capturePaneErr: want}
 	b := NewTmuxBackend(mock)
@@ -627,6 +666,7 @@ func TestTmuxBackend_CapturePaneContent_PropagatesError(t *testing.T) {
 }
 
 func TestTmuxBackend_Attach_PropagatesError(t *testing.T) {
+	t.Parallel()
 	want := errors.New("tmux: attach-session failed")
 	mock := &mockTmuxManager{attachErr: want}
 	b := NewTmuxBackend(mock)
@@ -636,6 +676,7 @@ func TestTmuxBackend_Attach_PropagatesError(t *testing.T) {
 }
 
 func TestTmuxBackend_SetWindowSize_PropagatesError(t *testing.T) {
+	t.Parallel()
 	want := errors.New("tmux: resize-window failed")
 	mock := &mockTmuxManager{setWindowErr: want}
 	b := NewTmuxBackend(mock)
@@ -644,6 +685,7 @@ func TestTmuxBackend_SetWindowSize_PropagatesError(t *testing.T) {
 }
 
 func TestTmuxBackend_SendKeys_PropagatesError(t *testing.T) {
+	t.Parallel()
 	want := errors.New("tmux: send-keys failed")
 	mock := &mockTmuxManager{sendKeysReturn: want}
 	b := NewTmuxBackend(mock)

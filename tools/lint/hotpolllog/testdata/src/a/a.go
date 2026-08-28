@@ -88,6 +88,39 @@ func bad5(ch <-chan int) {
 	}
 }
 
+// BAD6: the accessor form the real log package moved to once the package-level
+// logger vars became atomic.Pointer-backed — log.DebugLog() / log.InfoLog()
+// instead of log.DebugLog / log.InfoLog. Here the receiver of .Printf is a
+// CallExpr wrapping the qualified selector, not an Ident/SelectorExpr, which is
+// exactly the shape that slipped past the analyzer before receiverIsHotLog
+// learned to unwrap calls.
+type accessorPkg struct{}
+
+func (accessorPkg) DebugLog() *log.Logger { return DebugLog }
+func (accessorPkg) InfoLog() *log.Logger  { return InfoLog }
+
+var logAccessors accessorPkg
+
+func bad6(ch <-chan int) {
+	for {
+		select {
+		case <-ch:
+			logAccessors.DebugLog().Printf("accessor debug inside select") // want `hot-log call`
+			logAccessors.InfoLog().Printf("accessor info inside select")   // want `hot-log call`
+		}
+	}
+}
+
+// GOOD5: accessor form outside the select — same exemption as GOOD1.
+func good5(ch <-chan int) {
+	for {
+		select {
+		case <-ch:
+		}
+		logAccessors.DebugLog().Printf("after select, not in case")
+	}
+}
+
 // GOOD4: select without a surrounding for loop — not a hot-poll pattern.
 func good4(ch <-chan int) {
 	select {

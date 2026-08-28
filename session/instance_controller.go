@@ -45,6 +45,19 @@ func (i *Instance) StartController() error {
 	// This prevents deadlock when Start() calls GetPTYReader() which acquires read lock
 	i.mu.Unlock()
 
+	// Bail out if the instance was destroyed before we got here. This closes the
+	// same TOCTOU window driverMu/driverDestroyed closes for StartSessionDriver
+	// (see the doc comment on driverMu in instance.go): CreateSession's async
+	// init goroutine can call StartController well after the RPC returned, racing
+	// a fast-following DeleteSession's Destroy(). Destroy() sets i.destroyed
+	// before calling StopController, so if it's already set here Destroy() either
+	// already ran StopController (finding nothing to stop) or is about to — either
+	// way this instance is being torn down and must not register a new controller.
+	if i.destroyed.Load() {
+		log.Debug("instance destroyed, refusing to start controller", "session", i.Title)
+		return nil
+	}
+
 	// Create new controller (no lock needed - NewClaudeController doesn't access mutex-protected fields)
 	controller, err := NewClaudeController(i)
 	if err != nil {
@@ -90,16 +103,30 @@ func (i *Instance) StartController() error {
 
 	// Re-acquire lock to update instance state
 	i.mu.Lock()
-	defer i.mu.Unlock()
 
 	// Double-check controller hasn't been set by another goroutine (defensive)
 	if i.controllerManager.HasController() {
+		i.mu.Unlock()
 		log.Debug("controller already exists for instance (race detected)", "session", i.Title)
+		return nil
+	}
+
+	// Destroy() may have run StopController while controller.Start() (above) was
+	// still executing; since nothing was registered yet at that point, StopController
+	// no-op'd and the controller we just started would otherwise leak forever with
+	// no one left to stop it. Discard it instead of registering.
+	if i.destroyed.Load() {
+		i.mu.Unlock()
+		log.Debug("instance destroyed while controller was starting; stopping newly started controller", "session", i.Title)
+		if stopErr := controller.Stop(); stopErr != nil {
+			log.Warn("failed to stop discarded controller after concurrent destroy", "session", i.Title, "err", stopErr)
+		}
 		return nil
 	}
 
 	// Register with status manager and store controller
 	i.controllerManager.RegisterController(i.Title, controller)
+	i.mu.Unlock()
 
 	log.Info("started claudecontroller for instance", "session", i.Title)
 	return nil
@@ -142,6 +169,19 @@ func (i *Instance) fireLifecycleEvent(event LifecycleEvent, reason string) {
 // exclusively in cross-package tests that need to simulate an unexpected exit.
 func (i *Instance) FireLifecycleEventForTest(event LifecycleEvent, reason string) {
 	i.fireLifecycleEvent(event, reason)
+}
+
+// SetControllerForTest wires c as this instance's controller, bypassing
+// StartController's normal preconditions (status manager wiring, a live PTY
+// subprocess). Exported exclusively for cross-package tests (e.g.
+// server/services' steerInstance autonomous-branch error/timeout tests) that
+// need a real, pipe-backed *ClaudeController (session.NewClaudeController +
+// Start against an os.Pipe()-backed InstanceContext, mirroring
+// TestClaudeController_Start_TagsEscapeAnalyticsWithStableID's approach)
+// without spinning up a full session. Mirrors FireLifecycleEventForTest's
+// "exported for test" pattern.
+func (i *Instance) SetControllerForTest(c *ClaudeController) {
+	i.controllerManager.SetController(c)
 }
 
 // StopController stops and cleans up the ClaudeController for this instance.

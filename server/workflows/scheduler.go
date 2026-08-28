@@ -29,8 +29,8 @@ type SessionServiceInterface interface {
 // Epic 1.3 — closes the pre-existing bypass where FireNow called CreateSession directly,
 // skipping the same MaxConcurrentBacklogWorkItems check BacklogService's own spawn path
 // enforces). Defined here (consumer-defined), not in server/services, to avoid a
-// server/workflows → server/services import — per .claude/rules/interface-pollution-
-// checklist.md. Satisfied by *services.BacklogService's Admit method.
+// server/workflows → server/services import — per the `interface-pollution-checklist`
+// skill. Satisfied by *services.BacklogService's Admit method.
 type AdmissionGate interface {
 	// Admit reports whether a new trigger-fired session may be created right now.
 	Admit(ctx context.Context) (bool, error)
@@ -46,8 +46,8 @@ type triggerFireEventRecorder interface {
 // triggerRateLimiterGate is the narrow interface Scheduler needs for per-Workflow rate
 // limiting (webhook-triggers Epic 2.4.2) — satisfied by *services.TriggerRateLimiter's
 // Allow method. Defined here (consumer-defined), not in server/services, to avoid a
-// server/workflows -> server/services import — per .claude/rules/interface-pollution-
-// checklist.md.
+// server/workflows -> server/services import — per the `interface-pollution-checklist`
+// skill.
 type triggerRateLimiterGate interface {
 	// Allow reports whether a fire for workflowID is permitted right now.
 	Allow(workflowID uuid.UUID) bool
@@ -162,6 +162,11 @@ func (s *Scheduler) Start(ctx context.Context) {
 
 	// One-time backfill of trigger_type on rows that predate the field (Task 1.1.1d).
 	backfillTriggerTypes(ctx, s.repo)
+	// The analogous enabled-field backfill runs once, in session.NewEntRepository,
+	// gated on whether the enabled column itself was just added — see
+	// session/workflow_enabled_field_migration.go's doc comment for why that
+	// backfill can't safely run unconditionally on every Start() the way this
+	// one does (its correction condition doesn't naturally self-exhaust).
 
 	wfs, err := s.repo.ListEnabled(ctx)
 	if err != nil {

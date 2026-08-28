@@ -11,6 +11,7 @@ import (
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
+	"github.com/tstapler/stapler-squad/config"
 	githubpkg "github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/services"
@@ -210,6 +211,7 @@ func (gh *githubHandlers) createSessionForPR(ctx context.Context, req mcpgo.Call
 		}
 	}
 
+	cfg := config.LoadConfig()
 	inst, err := session.NewInstance(session.InstanceOptions{
 		Title:       title,
 		Path:        repoPath,
@@ -217,6 +219,10 @@ func (gh *githubHandlers) createSessionForPR(ctx context.Context, req mcpgo.Call
 		Program:     program,
 		SessionType: session.SessionTypeNewWorktree,
 		Tags:        []string{"source:mcp", "pr:" + fmt.Sprintf("%s/%s#%d", owner, repo, prNumber)},
+		// Backend consults the session-name override map (tymux-bundled-integration
+		// Epic 4.4.1) so a canary override applies through this entry point too;
+		// there's no per-request override field on this MCP tool's schema.
+		Backend: session.ResolveSessionBackendForTitle(cfg, title, ""),
 	})
 	if err != nil {
 		return errResult(ErrInternalError, fmt.Sprintf("create session: %v", err), ""), nil
@@ -270,7 +276,7 @@ type PRVerification struct {
 // Rather than panic — which would take down the whole handler for what's
 // almost certainly a code-level logic bug in this package rather than bad
 // external input — the violation is forced to matched=false and logged
-// loudly via log.ErrorLog.Printf so it's impossible to miss in logs/tests,
+// loudly via log.ErrorLog().Printf so it's impossible to miss in logs/tests,
 // while production keeps running.
 //
 // Author is not part of this invariant and is carried through unvalidated;
@@ -279,7 +285,7 @@ type PRVerification struct {
 // policy decision based on it.
 func NewPRVerification(exists, matched bool, actualHeadBranch, state, author string) PRVerification {
 	if matched && !exists {
-		log.ErrorLog.Printf("NewPRVerification: illegal state matched=true with exists=false (actualHeadBranch=%q, state=%q, author=%q) — forcing matched=false", actualHeadBranch, state, author)
+		log.ErrorLog().Printf("NewPRVerification: illegal state matched=true with exists=false (actualHeadBranch=%q, state=%q, author=%q) — forcing matched=false", actualHeadBranch, state, author)
 		matched = false
 	}
 	return PRVerification{

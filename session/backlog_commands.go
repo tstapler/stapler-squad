@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -58,6 +59,20 @@ func WriteSlashCommands(engine PipelineEngine, item *BacklogItemData, worktreePa
 	if err != nil {
 		return err
 	}
+
+	// block.md/duplicate.md wrap report_blocked/report_duplicate. Written here,
+	// outside both the default and any DB-configured pipeline mode's template
+	// set, because these two MCP tools' contracts (role=work gating, rationale/
+	// duplicate_ref/reason shape) are identical regardless of pipeline mode —
+	// unlike review.md/ship.md, nothing about them needs to vary by mode. This
+	// also sidesteps needing a PipelineMode schema migration (a new template
+	// column per mode) just to cover two mode-agnostic commands.
+	for name, content := range buildBlockAndDuplicateCommands(item.ID) {
+		files[name] = content
+	}
+
+	pruneStaleSlashCommandFiles(cmdDir, files)
+
 	for name, content := range files {
 		if err := writeFile(filepath.Join(cmdDir, name), content); err != nil {
 			return err
@@ -65,6 +80,37 @@ func WriteSlashCommands(engine PipelineEngine, item *BacklogItemData, worktreePa
 	}
 
 	return nil
+}
+
+// staleCommandFileRe matches the per-criterion slash command filenames whose
+// count varies per item — done-N.md/fail-N.md — as opposed to status.md,
+// review.md, ship.md, help.md, which every item has regardless of AC count.
+var staleCommandFileRe = regexp.MustCompile(`^(done|fail)-\d+\.md$`)
+
+// pruneStaleSlashCommandFiles removes done-N.md/fail-N.md files in cmdDir not present in
+// newFiles (leftover from a prior item with more acceptance criteria). Never touches the
+// fixed status/review/ship/help.md set. Best-effort — logs and continues past a single
+// removal failure rather than failing the whole write.
+func pruneStaleSlashCommandFiles(cmdDir string, newFiles map[string]string) {
+	entries, err := os.ReadDir(cmdDir)
+	if err != nil {
+		return // directory just created / unreadable — nothing to prune
+	}
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		if !staleCommandFileRe.MatchString(name) {
+			continue
+		}
+		if _, keep := newFiles[name]; keep {
+			continue
+		}
+		if rmErr := os.Remove(filepath.Join(cmdDir, name)); rmErr != nil {
+			log.WarningLog().Printf("[pruneStaleSlashCommandFiles] failed to remove stale %s: %v", name, rmErr)
+		}
+	}
 }
 
 // buildDefaultSlashCommandSet returns the filename→rendered-content map for
@@ -90,8 +136,15 @@ func buildDefaultSlashCommandSet(item *BacklogItemData) (map[string]string, erro
 
 	// Per-criterion done-N.md and fail-N.md
 	for _, c := range criteria {
-		files[fmt.Sprintf("done-%d.md", c.Index)] = fmt.Sprintf("Call report_progress with item_id=%s, criteria_index=%d, status=pass\n", itemID, c.Index)
-		files[fmt.Sprintf("fail-%d.md", c.Index)] = fmt.Sprintf("Call report_progress with item_id=%s, criteria_index=%d, status=fail\n", itemID, c.Index)
+		files[fmt.Sprintf("done-%d.md", c.Index)] = fmt.Sprintf("Call report_progress with item_id=%s, criteria_index=%d, status=pass. "+
+			"Include the optional note parameter with a 1-2 sentence description of what you verified (e.g. "+
+			"\"ran the new unit test, it passes\" or \"manually tested via curl against the new endpoint\") — it is "+
+			"appended to this item's permanent audit trail and is what a reviewer reads to judge whether this "+
+			"criterion is genuinely done, not just marked done.\n", itemID, c.Index)
+		files[fmt.Sprintf("fail-%d.md", c.Index)] = fmt.Sprintf("Call report_progress with item_id=%s, criteria_index=%d, status=fail. "+
+			"Include the optional note parameter with a 1-2 sentence explanation of specifically what is blocking "+
+			"this criterion — it is appended to this item's permanent audit trail and is what a reviewer or the "+
+			"next session reads to understand why this criterion isn't done yet.\n", itemID, c.Index)
 	}
 
 	// review.md
@@ -102,11 +155,11 @@ func buildDefaultSlashCommandSet(item *BacklogItemData) (map[string]string, erro
 		"PASS → run /backlog/ship now to open the pull request yourself (it drives /github:pr-ship through local "+
 		"CI, code review, remote CI, and merge-conflict resolution) — do not stop here; shipping the PR is part "+
 		"of this task, not a separate step someone else does.\n\n"+
-		"FAIL/PARTIAL → fix the noted gaps in this same session and run /backlog/review again. Keep count of how "+
-		"many times you've run /backlog/review in THIS session (count your own calls in this conversation — "+
-		"nothing tracks it for you). After %d review cycles without a PASS, STOP looping: run /backlog/ship "+
-		"anyway to open a PR so a human can pick up the review directly, rather than retrying /backlog/review "+
-		"again.\n", itemID, MaxSameSessionReviewAttempts)
+		"FAIL/PARTIAL → fix the noted gaps in this same session and run /backlog/review again. Its request_review "+
+		"call reports which attempt number you're on out of %d allowed in this session — the count is tracked "+
+		"server-side, so trust what it reports rather than counting your own calls. Once it says you've hit the "+
+		"cap, STOP looping: run /backlog/ship anyway to open a PR so a human can pick up the review directly, "+
+		"rather than retrying /backlog/review again.\n", itemID, MaxSameSessionReviewAttempts)
 
 	// ship.md
 	files["ship.md"] = fmt.Sprintf("You are ready to ship your work as a pull request — either because /backlog/review just "+
@@ -146,9 +199,39 @@ func buildDefaultSlashCommandSet(item *BacklogItemData) (map[string]string, erro
 	}
 	helpSb.WriteString("- `/backlog/review` — Submit for review with a summary\n")
 	helpSb.WriteString("- `/backlog/ship` — Create a PR with /github:pr-ship and submit for review\n")
+	helpSb.WriteString("- `/backlog/block` — Report that you're stuck and hand this item back (not for bugs you can fix yourself)\n")
+	helpSb.WriteString("- `/backlog/duplicate` — Report this item is already covered by an existing PR, issue, or commit\n")
 	files["help.md"] = helpSb.String()
 
 	return files, nil
+}
+
+// buildBlockAndDuplicateCommands returns block.md and duplicate.md, wrapping
+// the report_blocked/report_duplicate MCP tools. Shared by every pipeline
+// mode (see WriteSlashCommands' call site) since neither tool's contract
+// changes based on pipeline mode.
+func buildBlockAndDuplicateCommands(itemID string) map[string]string {
+	return map[string]string{
+		"block.md": fmt.Sprintf("Call report_blocked with item_id=%s and a rationale (1-3 sentences) that names "+
+			"specifically what is stopping you — a missing credential or access grant, an acceptance criterion "+
+			"that is ambiguous or contradictory, a hard dependency on another backlog item or an external team, "+
+			"or a design decision you are not authorized to make unilaterally.\n\n"+
+			"Do NOT use this for a bug, failing test, or error you are able to fix yourself — fix it and keep "+
+			"going instead of blocking. Blocking returns the item to ready so a human or another session can "+
+			"pick it up; if this item has been blocked repeatedly, it escalates straight to review instead so a "+
+			"human sees the recurring pattern directly rather than the item bouncing in the queue indefinitely. "+
+			"This call is rejected unless it comes from a work-role session actively assigned to this item.\n", itemID),
+
+		"duplicate.md": fmt.Sprintf("Call report_duplicate with item_id=%s, duplicate_ref=<the GitHub URL of the "+
+			"pull request, issue, or commit that already covers this exact work>, and reason=<1-2 sentences "+
+			"explaining why this item is the same work as that reference>.\n\n"+
+			"duplicate_ref must be a real GitHub PR/issue/commit URL — it is verified against GitHub before the "+
+			"call succeeds, and a link to something that doesn't exist there is rejected. This routes the item "+
+			"to review rather than closing it outright, because a duplicate claim always needs a human or "+
+			"reviewer to confirm before the item is archived — never assume your own claim is enough. This call "+
+			"is rejected unless it comes from a work-role session, and is unavailable on items configured to "+
+			"skip the review gate (use /backlog/review instead for those).\n", itemID),
+	}
 }
 
 // CleanupSlashCommands removes the backlog slash command directory.
@@ -165,7 +248,7 @@ func CleanupSlashCommands(worktreePath string) error {
 	cmdDir := filepath.Join(worktreePath, backlogCommandsDir)
 	if err := os.RemoveAll(cmdDir); err != nil {
 		if !os.IsNotExist(err) {
-			log.WarningLog.Printf("CleanupSlashCommands: failed to remove %s: %v", cmdDir, err)
+			log.WarningLog().Printf("CleanupSlashCommands: failed to remove %s: %v", cmdDir, err)
 		}
 	}
 	return nil
@@ -222,7 +305,7 @@ func CleanupBacklogContextFile(worktreePath string) error {
 	path := filepath.Join(worktreePath, ".backlog-context.md")
 	if err := os.Remove(path); err != nil {
 		if !os.IsNotExist(err) {
-			log.WarningLog.Printf("CleanupBacklogContextFile: failed to remove %s: %v", path, err)
+			log.WarningLog().Printf("CleanupBacklogContextFile: failed to remove %s: %v", path, err)
 		}
 	}
 	return nil
@@ -251,14 +334,14 @@ func addWorktreeExcludes(worktreePath string) {
 	cmd.Dir = worktreePath
 	out, err := cmd.Output()
 	if err != nil {
-		log.WarningLog.Printf("[addWorktreeExcludes] git rev-parse --git-common-dir in %s: %v", worktreePath, err)
+		log.WarningLog().Printf("[addWorktreeExcludes] git rev-parse --git-common-dir in %s: %v", worktreePath, err)
 		return
 	}
 	gitCommonDir := strings.TrimSpace(string(out))
 
 	excludeFile := filepath.Join(gitCommonDir, "info", "exclude")
 	if mkErr := os.MkdirAll(filepath.Dir(excludeFile), 0o755); mkErr != nil {
-		log.WarningLog.Printf("[addWorktreeExcludes] mkdir %s: %v", filepath.Dir(excludeFile), mkErr)
+		log.WarningLog().Printf("[addWorktreeExcludes] mkdir %s: %v", filepath.Dir(excludeFile), mkErr)
 		return
 	}
 
@@ -267,7 +350,7 @@ func addWorktreeExcludes(worktreePath string) {
 
 	f, openErr := os.OpenFile(excludeFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 	if openErr != nil {
-		log.WarningLog.Printf("[addWorktreeExcludes] open %s: %v", excludeFile, openErr)
+		log.WarningLog().Printf("[addWorktreeExcludes] open %s: %v", excludeFile, openErr)
 		return
 	}
 	defer f.Close()
@@ -293,9 +376,9 @@ func addWorktreeExcludes(worktreePath string) {
 func selfHealWorktreeScaffolding(worktreePath string) {
 	removed, err := git.UntrackScaffolding(worktreePath, git.ScaffoldingExcludePatterns)
 	if err != nil {
-		log.WarningLog.Printf("[selfHealWorktreeScaffolding] untrack in %s: %v", worktreePath, err)
+		log.WarningLog().Printf("[selfHealWorktreeScaffolding] untrack in %s: %v", worktreePath, err)
 	} else if len(removed) > 0 {
-		log.InfoLog.Printf("[selfHealWorktreeScaffolding] auto-untracked previously committed scaffolding file(s) in %s: %v", worktreePath, removed)
+		log.InfoLog().Printf("[selfHealWorktreeScaffolding] auto-untracked previously committed scaffolding file(s) in %s: %v", worktreePath, removed)
 	}
 	addWorktreeExcludes(worktreePath)
 }
