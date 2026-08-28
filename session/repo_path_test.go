@@ -155,6 +155,9 @@ func TestGetCloneURL_EmbedsKeychainToken_When_HostHasStoredAccount(t *testing.T)
 	if err := github.SetKeychainTokenForAccount(host, "octocat", "token-abc123"); err != nil {
 		t.Fatalf("SetKeychainTokenForAccount failed: %v", err)
 	}
+	t.Cleanup(func() {
+		_ = github.DeleteKeychainTokenForAccount(host, "octocat")
+	})
 
 	m := NewRepoPathManagerWithBase("/tmp/repos-base")
 	url := m.GetCloneURL(&GitHubRef{Host: host, Owner: "engineering", Repo: "widget-service"})
