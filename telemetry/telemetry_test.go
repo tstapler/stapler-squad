@@ -90,3 +90,23 @@ func TestMeterProviderConfig_ExemplarFilterDisabled_NoExemplarsCollected(t *test
 	require.Len(t, data.DataPoints, 1)
 	require.Empty(t, data.DataPoints[0].Exemplars)
 }
+
+// TestInitialize_Enabled_NonEnumEnvironment_NoSchemaURLConflict guards the
+// edge case TestInitialize_Enabled_NoSchemaURLConflict doesn't cover:
+// cfg.Environment is a free-form, env-var-overridable string
+// (OTEL_SERVICE_ENVIRONMENT), not one of semconv's 4 fixed
+// DeploymentEnvironmentName* enum values, so a value like a per-PR preview
+// environment name must still round-trip through
+// DeploymentEnvironmentNameKey.String(cfg.Environment) without error.
+func TestInitialize_Enabled_NonEnumEnvironment_NoSchemaURLConflict(t *testing.T) {
+	p, err := Initialize(context.Background(), Config{
+		Enabled:        true,
+		OTLPEndpoint:   "127.0.0.1:1",
+		ServiceVersion: "test",
+		Environment:    "pr-1234",
+		SampleRate:     1.0,
+	})
+	require.NoError(t, err)
+	require.True(t, p.IsEnabled())
+	_ = p.Shutdown(context.Background())
+}

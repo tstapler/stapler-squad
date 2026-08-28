@@ -387,14 +387,6 @@ message BacklogItemShipStatus {
   bool snapshot_capture_failed = 18;
 }
 
-// ShippedCommit is one commit in a BacklogItemShipStatus's shipped range.
-message ShippedCommit {
-  string sha = 1;
-  string summary = 2; // first line of the commit message
-  string author_name = 3;
-  google.protobuf.Timestamp authored_at = 4;
-}
-
 // ShippedFileStat is one file's durable per-file diff-stat snapshot,
 // captured at ship time via FileStatsBetween. Mirrors FileChange's field
 // shape so the proto<->ent mapping stays mechanical.

@@ -119,8 +119,7 @@ func Initialize(ctx context.Context, cfg Config) (*Provider, error) {
 	// Create resource with service information
 	res, err := resource.Merge(
 		resource.Default(),
-		resource.NewWithAttributes(
-			semconv.SchemaURL,
+		resource.NewSchemaless(
 			semconv.ServiceName(ServiceName),
 			semconv.ServiceVersion(cfg.ServiceVersion),
 			semconv.DeploymentEnvironmentNameKey.String(cfg.Environment),

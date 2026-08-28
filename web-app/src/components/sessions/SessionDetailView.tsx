@@ -1163,6 +1163,7 @@ export function SessionDetailView({
                 setFilesSelectedPath(path);
                 handleTabChange("files");
               }}
+              onBrowseFiles={() => handleTabChange("files")}
             />
           </div>
         )}

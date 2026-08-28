@@ -128,7 +128,7 @@ func (s *BacklogService) GetBacklogItemShipStatus(
 	}
 
 	if wtErr == nil && wt.BaseCommitSHA != "" {
-		shipped, commitsErr := git.ListShippedCommits(item.RepoPath, wt.BaseCommitSHA, lastCommitSha)
+		shipped, _, commitsErr := git.ListShippedCommits(ctx, item.RepoPath, wt.BaseCommitSHA, lastCommitSha)
 		if commitsErr != nil {
 			// Non-fatal: the badge/branch info above is still valid even if the
 			// commit list itself can't be resolved (e.g. the base SHA has since
