@@ -755,6 +755,58 @@ func TestIdleDetector_DetectStateFromContentWithOSC_BypassesTextDebounceViaShort
 	}
 }
 
+// TestIdleDetector_DetectStateFromContentWithOSC_IdleDirectionBypassesTextDebounceViaShorterWindow
+// is the OSCStatusIdle-direction counterpart to the OSCStatusExecuting test above — AC9 requires
+// debounce-bypass-window coverage "for both directions (Executing and Idle)", and the code path
+// treats both directions symmetrically (same debounce assignment in DetectStateFromContentWithOSC),
+// so this proves the 150ms OSCDebounceDelay actually governs the Idle direction's timing too, not
+// just Executing's.
+func TestIdleDetector_DetectStateFromContentWithOSC_IdleDirectionBypassesTextDebounceViaShorterWindow(t *testing.T) {
+	t.Parallel()
+	buffer := &mockPTYReader{}
+	detector, advance := newDetectorWithFakeClock("test", buffer, DefaultIdleDetectorConfig())
+
+	// "hello world" text-classifies as StatusUnknown (the catch-all pattern), which
+	// is promotable in both directions — unlike "$ " (StatusIdle via command_prompt),
+	// which is already-Idle and therefore NOT in IsOSCIdlePromotable's set.
+	const promotableContent = "hello world"
+
+	// Seed currentState = IdleStateActive (first transition, no debounce).
+	if got := detector.DetectStateFromContentWithOSC(promotableContent, dtypes.OSCStatusExecuting); got != IdleStateActive {
+		t.Fatalf("seed: DetectStateFromContentWithOSC(_, OSCStatusExecuting) = %v, want IdleStateActive", got)
+	}
+
+	// 200ms satisfies OSCDebounceDelay (150ms) but not DebounceDelay (500ms).
+	advance(200 * time.Millisecond)
+	got := detector.DetectStateFromContentWithOSC(promotableContent, dtypes.OSCStatusIdle)
+	if got != IdleStateWaiting {
+		t.Errorf("OSC-derived idle transition at 200ms: got %v, want IdleStateWaiting", got)
+	}
+}
+
+// TestIdleDetector_DetectStateFromContent_IdleDirection_StillBlockedByLongerTextDebounceAtSameElapsed
+// is the contrast case for the test above: the same 200ms elapsed does NOT satisfy a pure
+// text-pattern transition's 500ms DebounceDelay, proving the two windows are independent in the
+// Idle direction too.
+func TestIdleDetector_DetectStateFromContent_IdleDirection_StillBlockedByLongerTextDebounceAtSameElapsed(t *testing.T) {
+	t.Parallel()
+	buffer := &mockPTYReader{}
+	detector, advance := newDetectorWithFakeClock("test", buffer, DefaultIdleDetectorConfig())
+
+	// Seed currentState = IdleStateActive (first transition, no debounce).
+	if got := detector.DetectStateFromContent("Running... (esc to interrupt)"); got != IdleStateActive {
+		t.Fatalf("seed: DetectStateFromContent(...) = %v, want IdleStateActive", got)
+	}
+
+	// Same 200ms elapsed as the OSC test above, but a pure text-pattern transition
+	// needs the full 500ms DebounceDelay.
+	advance(200 * time.Millisecond)
+	got := detector.DetectStateFromContent("$ ")
+	if got != IdleStateActive {
+		t.Errorf("text-pattern transition at 200ms (< 500ms DebounceDelay): got %v, want IdleStateActive (blocked)", got)
+	}
+}
+
 func TestIdleDetector_DetectStateFromContent_StillBlockedByLongerTextDebounceAtSameElapsed(t *testing.T) {
 	t.Parallel()
 	buffer := &mockPTYReader{}
