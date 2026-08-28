@@ -1,0 +1,25 @@
+name: 'Prepare: Protos, Ent ORM, and Web UI Stub'
+description: 'Generates protobuf code and ent ORM code, then stubs server/web/dist/index.html for jobs that only need go build/go test to compile against the go:embed directive, without a real Next.js build'
+
+runs:
+  using: composite
+  steps:
+    - name: Install buf
+      shell: bash
+      run: |
+        curl -sSL "https://github.com/bufbuild/buf/releases/download/v1.41.0/buf-Linux-x86_64" \
+          -o /usr/local/bin/buf && chmod +x /usr/local/bin/buf
+
+    - name: Generate protobuf code
+      shell: bash
+      run: buf generate proto
+
+    - name: Generate ent ORM code
+      shell: bash
+      run: go run -mod=mod entgo.io/ent/cmd/ent generate --feature sql/upsert ./session/ent/schema
+
+    - name: Create web dist stub
+      shell: bash
+      run: |
+        mkdir -p server/web/dist
+        printf '<!DOCTYPE html><html><body></body></html>' > server/web/dist/index.html
