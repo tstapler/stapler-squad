@@ -44,14 +44,16 @@ jobs:
     outputs:
       relevant: ${{ steps.detect.outputs.relevant }}
     steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
+      # No checkout: see build.yml's detect-changes job for why -- this
+      # repo's ~16GB .git pack makes a `fetch-depth: 0` full-history clone
+      # take minutes just to diff file paths. The compare API gives the same
+      # three-dot (merge-base) file list with no clone at all.
       - name: Detect server/mcp, server/services, or Go module changes
         id: detect
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          CHANGED=$(git diff --name-only "origin/${{ github.base_ref }}...HEAD")
+          CHANGED=$(gh api "repos/${{ github.repository }}/compare/${{ github.event.pull_request.base.sha }}...${{ github.event.pull_request.head.sha }}" --paginate --jq '.files[].filename')
           echo "Changed files:"
           echo "$CHANGED"
           if echo "$CHANGED" | grep -qE '^server/mcp/|^server/services/|^main\.go$|^go\.(mod|sum)$|^\.github/workflows/mcp-integration\.yml$'; then

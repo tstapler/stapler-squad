@@ -63,14 +63,18 @@ jobs:
     outputs:
       relevant: ${{ steps.detect.outputs.relevant }}
     steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
+      # No checkout: this repo's .git pack data is ~16GB (accumulated demo
+      # GIFs/videos in history), so the `fetch-depth: 0` full-history clone
+      # this job previously did just to diff file paths took ~4.4m on its
+      # own -- the dominant cost of this job and the first thing every other
+      # job in the workflow waits on. The compare API gives the same
+      # three-dot (merge-base) file list with no clone at all.
       - name: Detect Go/proto/web-app source or build-tooling changes
         id: detect
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          CHANGED=$(git diff --name-only "origin/${{ github.base_ref }}...HEAD")
+          CHANGED=$(gh api "repos/${{ github.repository }}/compare/${{ github.event.pull_request.base.sha }}...${{ github.event.pull_request.head.sha }}" --paginate --jq '.files[].filename')
           echo "Changed files:"
           echo "$CHANGED"
           if echo "$CHANGED" | grep -qE '\.go$|^go\.(mod|sum)$|^Makefile$|^install\.sh$|^proto/|^web-app/src/|^web-app/package\.json$|^web-app/pnpm-lock\.yaml$|^\.github/workflows/build\.yml$|^\.github/actions/prepare/|^\.gitmodules$|^third_party/tmux/'; then
