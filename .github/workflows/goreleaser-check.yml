@@ -33,6 +33,7 @@ jobs:
   check:
     name: goreleaser check
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - name: Check out code
         uses: actions/checkout@v4
@@ -72,6 +73,7 @@ jobs:
   build-smoke-test:
     name: build + smoke test (CGO_ENABLED=0, matches release build)
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     # `goreleaser check` above only validates the config schema — it never
     # compiles anything. .goreleaser.yaml pins CGO_ENABLED=0 for every
     # release build, so a cgo-only dependency (e.g. mattn/go-sqlite3) can
@@ -87,8 +89,8 @@ jobs:
         with:
           submodules: true
 
-      - name: Generate protos and build web UI
-        uses: ./.github/actions/prepare
+      - name: Generate protos and stub web UI
+        uses: ./.github/actions/prepare-stub
 
       - name: Install GoReleaser
         uses: goreleaser/goreleaser-action@v6
