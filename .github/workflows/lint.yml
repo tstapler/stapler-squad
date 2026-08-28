@@ -65,7 +65,30 @@ jobs:
           go-version-file: 'go.mod'
           cache: true
 
+      - name: Set up pnpm
+        uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+        with:
+          version: 10.27.0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'pnpm'
+          cache-dependency-path: web-app/pnpm-lock.yaml
+
+      # web-lint's Jest tests jest.mock() modules under web-app/src/gen/ — module
+      # resolution needs the file to exist even for a mocked import. That requires
+      # web-app/node_modules/.bin/protoc-gen-es, so web-app deps must be installed
+      # before buf generate proto runs (same ordering this job's predecessor
+      # required — see the original lint.yml's "Ordering bug history" comment).
+      - name: Install web-app dependencies
+        working-directory: web-app
+        run: pnpm install --frozen-lockfile
+
       - uses: ./.github/actions/prepare-stub
+        with:
+          buf-template: buf.gen.yaml
 
       - name: Upload generated files
         uses: actions/upload-artifact@v4
@@ -75,6 +98,7 @@ jobs:
             gen/
             session/ent/
             server/web/dist/
+            web-app/src/gen/
 
   # Standalone — no codegen dependency, so it isn't blocked on lint-prepare.
   shell-lint:

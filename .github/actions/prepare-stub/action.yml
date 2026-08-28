@@ -1,6 +1,20 @@
 name: 'Prepare: Protos, Ent ORM, and Web UI Stub'
 description: 'Generates protobuf code and ent ORM code, then stubs server/web/dist/index.html for jobs that only need go build/go test to compile against the go:embed directive, without a real Next.js build'
 
+inputs:
+  buf-template:
+    description: >
+      buf generate --template value. Default buf.gen.go-only.yaml generates
+      only Go/ConnectRPC output via remote plugins — no node dependency,
+      correct for callers (mcp-integration.yml, goreleaser-check.yml) that
+      skip pnpm/node install entirely. Callers that DO install web-app pnpm
+      deps first (e.g. lint.yml's lint-prepare, which needs the TS/ES stubs
+      for Jest's `@/gen/...` module resolution — even mocked imports need
+      the file to exist) must pass buf.gen.yaml (the default template,
+      needs web-app/node_modules/.bin/protoc-gen-es) instead.
+    required: false
+    default: 'buf.gen.go-only.yaml'
+
 runs:
   using: composite
   steps:
@@ -10,13 +24,9 @@ runs:
         curl -sSL "https://github.com/bufbuild/buf/releases/download/v1.41.0/buf-Linux-x86_64" \
           -o /usr/local/bin/buf && chmod +x /usr/local/bin/buf
 
-    # buf.gen.go-only.yaml generates only the Go/ConnectRPC output via remote
-    # plugins — the default buf.gen.yaml also needs
-    # web-app/node_modules/.bin/protoc-gen-es, a local plugin binary this
-    # action can't provide since it deliberately skips pnpm/node install.
     - name: Generate protobuf code
       shell: bash
-      run: buf generate proto --template buf.gen.go-only.yaml
+      run: buf generate proto --template ${{ inputs.buf-template }}
 
     - name: Generate ent ORM code
       shell: bash
