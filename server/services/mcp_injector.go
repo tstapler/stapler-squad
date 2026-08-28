@@ -159,6 +159,8 @@ func writeSettingsAtomic(settingsPath, claudeDir string, raw map[string]json.Raw
 	if err := os.Rename(tmpPath, settingsPath); err != nil {
 		return fmt.Errorf("rename %s: %w", tmpPath, err)
 	}
-	log.Info("[InjectMCPConfig] wrote settings", "path", settingsPath)
+	// Shared by InjectMCPConfig, RemoveMCPConfig, InjectHooksConfig, RemoveHooksConfig,
+	// and InjectHookConfig — no single caller-specific tag applies, so this stays generic.
+	log.Info("[writeSettingsAtomic] wrote settings", "path", settingsPath)
 	return nil
 }
