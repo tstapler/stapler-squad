@@ -52,6 +52,136 @@ func (e *erroringWorkflowRepo) ListByTriggerType(context.Context, string) ([]*en
 	return nil, errors.New("simulated DB failure")
 }
 
+// --- CI-budget-exceeded marker detection (Epic 4.2 Story 4.2.1) ------------
+
+// fakeCheckRunAnnotationsFetcher is the fake test double for checkRunAnnotationsFetcher
+// (Task 4.2.1i-a) — this file has no existing fake HTTP client to reuse for the
+// check-runs/annotations endpoint, so tests substitute this instead of a real call.
+func fakeCheckRunAnnotationsFetcher(annotations []checkRunAnnotation, err error) checkRunAnnotationsFetcher {
+	return func(context.Context, string, int64) ([]checkRunAnnotation, error) {
+		return annotations, err
+	}
+}
+
+func TestCheckRunHasBudgetMarker_should_DetectMarkerPrefixOrFailOpenOnFetchError(t *testing.T) {
+	tests := []struct {
+		name        string
+		annotations []checkRunAnnotation
+		fetchErr    error
+		wantHas     bool
+		wantErr     bool
+	}{
+		{
+			name:        "marker-present annotation is detected",
+			annotations: []checkRunAnnotation{{Message: "CI-BUDGET-EXCEEDED: test exceeded its 44m soft budget"}},
+			wantHas:     true,
+		},
+		{
+			name:        "marker-absent annotation is a genuine failure",
+			annotations: []checkRunAnnotation{{Message: "go test failed: TestFoo"}},
+			wantHas:     false,
+		},
+		{
+			name:    "no annotations at all is a genuine failure",
+			wantHas: false,
+		},
+		{
+			name:     "fetch error propagates so the caller can fail open",
+			fetchErr: errors.New("simulated GitHub API failure"),
+			wantHas:  false,
+			wantErr:  true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			hasMarker, err := checkRunHasBudgetMarker(context.Background(), "tstapler/stapler-squad", 42,
+				fakeCheckRunAnnotationsFetcher(tt.annotations, tt.fetchErr))
+			assert.Equal(t, tt.wantHas, hasMarker)
+			if tt.wantErr {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
+// fakeWorkflowRunJobsFetcher is the fake test double for workflowRunJobsFetcher
+// (Task 4.2.1i-b).
+func fakeWorkflowRunJobsFetcher(jobs []workflowRunJob, err error) workflowRunJobsFetcher {
+	return func(context.Context, string, int64) ([]workflowRunJob, error) {
+		return jobs, err
+	}
+}
+
+// fakeAnnotationsFetcherPerCheckRun answers checkRunAnnotationsFetcher calls
+// per-check-run-id, so workflowRunHasOnlyBudgetFailures's per-job marker check (which
+// reuses Task 4.2.1i-a's fake, per Task 4.2.1i-b) can be primed with a mixed
+// marked/unmarked set of jobs in a single table-driven case.
+func fakeAnnotationsFetcherPerCheckRun(marked map[int64]bool) checkRunAnnotationsFetcher {
+	return func(_ context.Context, _ string, checkRunID int64) ([]checkRunAnnotation, error) {
+		if marked[checkRunID] {
+			return []checkRunAnnotation{{Message: ciBudgetExceededMarker + " test exceeded its budget"}}, nil
+		}
+		return nil, nil
+	}
+}
+
+func TestWorkflowRunHasOnlyBudgetFailures_should_RequireEveryFailingJobMarked(t *testing.T) {
+	tests := []struct {
+		name    string
+		jobs    []workflowRunJob
+		jobsErr error
+		marked  map[int64]bool
+		wantHas bool
+		wantErr bool
+	}{
+		{
+			name:    "all failing jobs marked -> downgrade to no_match",
+			jobs:    []workflowRunJob{{conclusion: "failure", checkRunID: 1}, {conclusion: "timed_out", checkRunID: 2}},
+			marked:  map[int64]bool{1: true, 2: true},
+			wantHas: true,
+		},
+		{
+			name:    "one unmarked among several failing -> stays actionable",
+			jobs:    []workflowRunJob{{conclusion: "failure", checkRunID: 1}, {conclusion: "failure", checkRunID: 2}},
+			marked:  map[int64]bool{1: true, 2: false},
+			wantHas: false,
+		},
+		{
+			name: "a passing job alongside all-marked failing jobs is ignored -> downgrade",
+			jobs: []workflowRunJob{
+				{conclusion: "success", checkRunID: 3},
+				{conclusion: "failure", checkRunID: 1},
+				{conclusion: "cancelled", checkRunID: 2},
+			},
+			marked:  map[int64]bool{1: true, 2: true},
+			wantHas: true,
+		},
+		{
+			name:    "jobs-list fetch error propagates so the caller can fail open",
+			jobsErr: errors.New("simulated GitHub API failure"),
+			wantHas: false,
+			wantErr: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			hasOnlyBudgetFailures, err := workflowRunHasOnlyBudgetFailures(
+				context.Background(), "tstapler/stapler-squad", 99,
+				fakeWorkflowRunJobsFetcher(tt.jobs, tt.jobsErr),
+				fakeAnnotationsFetcherPerCheckRun(tt.marked),
+			)
+			assert.Equal(t, tt.wantHas, hasOnlyBudgetFailures)
+			if tt.wantErr {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
 // --- extractPRFixEvent table-driven tests (Story 2.1.2) ---------------------
 
 func TestExtractCheckRunEvent_should_HandleAllActionabilityCases(t *testing.T) {
