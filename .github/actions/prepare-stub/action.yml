@@ -10,9 +10,13 @@ runs:
         curl -sSL "https://github.com/bufbuild/buf/releases/download/v1.41.0/buf-Linux-x86_64" \
           -o /usr/local/bin/buf && chmod +x /usr/local/bin/buf
 
+    # buf.gen.go-only.yaml generates only the Go/ConnectRPC output via remote
+    # plugins — the default buf.gen.yaml also needs
+    # web-app/node_modules/.bin/protoc-gen-es, a local plugin binary this
+    # action can't provide since it deliberately skips pnpm/node install.
     - name: Generate protobuf code
       shell: bash
-      run: buf generate proto
+      run: buf generate proto --template buf.gen.go-only.yaml
 
     - name: Generate ent ORM code
       shell: bash
