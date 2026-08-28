@@ -44,6 +44,23 @@ func setupTestRepo(t *testing.T) string {
 	return dir
 }
 
+// TestNewGitWorktreeWithBranch_should_Error_When_RepoPathIsEmpty guards against a
+// zero-value repoPath falling through to filepath.Abs("") (resolves to cwd).
+func TestNewGitWorktreeWithBranch_should_Error_When_RepoPathIsEmpty(t *testing.T) {
+	_, _, err := NewGitWorktreeWithBranch("", "test-empty-path", "")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "repoPath must not be empty")
+}
+
+// TestNewGitWorktreeFromCommitSHA_should_Error_When_RepoPathIsEmpty mirrors
+// TestNewGitWorktreeWithBranch_should_Error_When_RepoPathIsEmpty for
+// NewGitWorktreeFromCommitSHA, the other findGitRepoRoot-reaching constructor.
+func TestNewGitWorktreeFromCommitSHA_should_Error_When_RepoPathIsEmpty(t *testing.T) {
+	_, _, err := NewGitWorktreeFromCommitSHA("", "test-empty-path", "branch", "deadbeef")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "repoPath must not be empty")
+}
+
 // TestNewWorktreeSetup_SetsBaseCommitSHA verifies that Setup() on a brand-new worktree
 // records the HEAD SHA as baseCommitSHA so Diff() can work immediately.
 func TestNewWorktreeSetup_SetsBaseCommitSHA(t *testing.T) {

@@ -615,6 +615,17 @@ func (s *BacklogService) SpawnSessionFromItem(
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to get backlog item: %w", err))
 	}
 
+	// 1a. Repo path required. spawnSessionAfterGates (step 5 below) already rejects a
+	// missing repo_path on the direct-spawn path, but the WIP-cap gate (step 4) can
+	// queue this item via queueBacklogItem without ever reaching spawnSessionAfterGates
+	// until a later DequeueNextQueuedItems sweep -- without this earlier check, a
+	// repo_path-less item would occupy a WIP slot until that eventual, easy-to-miss
+	// failure instead of erroring immediately.
+	if item.RepoPath == "" {
+		return nil, connect.NewError(connect.CodeFailedPrecondition,
+			fmt.Errorf("set repo_path before spawning a session"))
+	}
+
 	// 1b. Atomic check-and-set: only one SpawnSessionFromItem call for this item may be
 	// in flight at a time. Without this, two concurrent calls (e.g. AutoReopenAfterFailedReview
 	// / AutoRespawnAutonomousWork / AutoReopenForPRFix all funnel here, and any of them can
