@@ -1982,6 +1982,73 @@ func (i *Instance) Resume() error {
 	return nil
 }
 
+// StopByUser transitions an Active, Paused, or Hibernated session to Stopped in
+// response to a direct user action (e.g. a board-view drag into "Complete").
+// Mirrors pauseLocked's cleanup (stop controller, commit-if-dirty, kill tmux, remove
+// worktree) but lands in Stopped instead of Paused.
+func (i *Instance) StopByUser() error {
+	return i.sendSyncErr(func(s *instanceState) error { return stopByUserLocked(s) })
+}
+
+// stopByUserLocked is the actor-safe body of StopByUser().
+func stopByUserLocked(s *instanceState) error {
+	i := s.inst
+	if !i.Permissions.CanPause {
+		return ErrPauseNotPermitted
+	}
+	if i.Status == Stopped {
+		return fmt.Errorf("instance is already stopped")
+	}
+	// Validate the transition before any destructive side effect (kill tmux, remove
+	// worktree) — canTransitionLocked is side-effect-free, so a rejected call leaves
+	// the tmux session and worktree untouched.
+	if !canTransitionLocked(s, Stopped) {
+		return ErrInvalidTransition{From: i.Status, To: Stopped}
+	}
+
+	stopControllerLocked(s)
+
+	var errs []error
+	if i.IsWorktree {
+		if dirty, err := i.gitManager.IsDirty(); err != nil {
+			errs = append(errs, fmt.Errorf("failed to check if worktree is dirty: %w", err))
+		} else if dirty {
+			commitMsg := fmt.Sprintf("[claudesquad] update from '%s' on %s (stopped)", i.Title, time.Now().Format(time.RFC822))
+			if err := i.gitManager.CommitChanges(commitMsg); err != nil {
+				return i.combineErrors(append(errs, fmt.Errorf("failed to commit changes: %w", err)))
+			}
+		}
+	}
+
+	if err := i.KillSession(); err != nil {
+		if detachErr := i.pm().DetachSafely(); detachErr != nil {
+			errs = append(errs, fmt.Errorf("failed to detach tmux session: %w", detachErr))
+		}
+	}
+
+	if i.IsWorktree {
+		if _, err := os.Stat(i.gitManager.GetWorktreePath()); err == nil {
+			if err := i.gitManager.Remove(); err != nil {
+				return i.combineErrors(append(errs, fmt.Errorf("failed to remove git worktree: %w", err)))
+			}
+			_ = i.gitManager.Prune()
+		}
+	}
+
+	if err := i.combineErrors(errs); err != nil {
+		return err
+	}
+
+	if err := transitionToLocked(s, context.Background(), Stopped); err != nil {
+		// Should not happen — canTransitionLocked already validated this above — but
+		// keep the check as defense-in-depth against the two functions' logic diverging.
+		return fmt.Errorf("failed to transition to Stopped: %w", err)
+	}
+	i.gitManager.InvalidateDirtyCache()
+	log.ForSession(i.Title).Info("session stopped by user")
+	return nil
+}
+
 // Restart restarts the session by killing and recreating the tmux session.
 // The git worktree is preserved during restart.
 // If preserveOutput is true, captures terminal output before killing the session.

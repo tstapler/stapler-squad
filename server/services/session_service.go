@@ -2797,6 +2797,17 @@ func classifyPauseResumeErr(err error, opDesc string) *connect.Error {
 	return connect.NewError(connect.CodeInternal, fmt.Errorf("failed to %s session: %w", opDesc, err))
 }
 
+// classifyStopErr maps a StopByUser() error to the appropriate connect error code,
+// using the same permission/state-machine-rejection-vs-operational-failure split as
+// classifyPauseResumeErr.
+func classifyStopErr(err error, opDesc string) *connect.Error {
+	var transErr session.ErrInvalidTransition
+	if errors.As(err, &transErr) || errors.Is(err, session.ErrPauseNotPermitted) {
+		return connect.NewError(connect.CodeFailedPrecondition, fmt.Errorf("failed to %s session: %w", opDesc, err))
+	}
+	return connect.NewError(connect.CodeInternal, fmt.Errorf("failed to %s session: %w", opDesc, err))
+}
+
 // UpdateSession modifies session properties (pause/resume, category, title).
 // +api: session:update
 func (s *SessionService) UpdateSession(
@@ -3031,7 +3042,13 @@ func (s *SessionService) UpdateSession(
 	if req.Msg.Status != nil && *req.Msg.Status != sessionv1.SessionStatus_SESSION_STATUS_UNSPECIFIED {
 		targetStatus := adapters.ProtoToStatus(*req.Msg.Status)
 
-		if targetStatus == session.Paused && instance.Status != session.Paused {
+		if targetStatus == session.Stopped && instance.Status != session.Stopped {
+			if err := instance.StopByUser(); err != nil {
+				return nil, classifyStopErr(err, "stop")
+			}
+			updatedFields = append(updatedFields, "status")
+			sideEffectChanged = true
+		} else if targetStatus == session.Paused && instance.Status != session.Paused {
 			if err := instance.Pause(); err != nil {
 				return nil, classifyPauseResumeErr(err, "pause")
 			}
