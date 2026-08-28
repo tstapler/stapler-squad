@@ -49,9 +49,23 @@ func writeWorkspaceMeta(configDir, cwd, wsType string) {
 		return
 	}
 
-	// Atomic write via temp file + rename
-	tmpPath := filepath.Join(configDir, workspaceMetaFileName+".tmp")
-	if err := os.WriteFile(tmpPath, data, 0644); err != nil {
+	// Atomic write via unique temp file + rename (not a fixed ".tmp" suffix): two
+	// concurrent writers targeting the same configDir could otherwise interleave
+	// writes and rename a torn file into place. Mirrors config.go's saveConfigLocked
+	// fix for the identical hazard.
+	tmpFile, err := os.CreateTemp(configDir, workspaceMetaFileName+".*.tmp")
+	if err != nil {
+		return
+	}
+	tmpPath := tmpFile.Name()
+	_, writeErr := tmpFile.Write(data)
+	closeErr := tmpFile.Close()
+	if writeErr != nil || closeErr != nil {
+		_ = os.Remove(tmpPath)
+		return
+	}
+	if err := os.Chmod(tmpPath, 0644); err != nil {
+		_ = os.Remove(tmpPath)
 		return
 	}
 	_ = os.Rename(tmpPath, filepath.Join(configDir, workspaceMetaFileName))
@@ -82,11 +96,33 @@ func SetPreferredWorkspace(baseDir, configDir string) error {
 	if configDir == "" {
 		return os.Remove(prefFile)
 	}
-	tmpFile := prefFile + ".tmp"
-	if err := os.WriteFile(tmpFile, []byte(configDir), 0644); err != nil {
-		return fmt.Errorf("failed to write preferred workspace: %w", err)
+	// Unique temp name (not prefFile+".tmp") for the same reason writeWorkspaceMeta
+	// above uses one — avoids two concurrent SetPreferredWorkspace callers clobbering
+	// each other's in-progress write.
+	tmpFile, err := os.CreateTemp(baseDir, filepath.Base(prefFile)+".*.tmp")
+	if err != nil {
+		return fmt.Errorf("failed to create temp preferred workspace file: %w", err)
 	}
-	return os.Rename(tmpFile, prefFile)
+	tmpPath := tmpFile.Name()
+	_, writeErr := tmpFile.Write([]byte(configDir))
+	closeErr := tmpFile.Close()
+	if writeErr != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("failed to write preferred workspace: %w", writeErr)
+	}
+	if closeErr != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("failed to write preferred workspace: %w", closeErr)
+	}
+	if err := os.Chmod(tmpPath, 0644); err != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("failed to chmod temp preferred workspace file: %w", err)
+	}
+	if err := os.Rename(tmpPath, prefFile); err != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("failed to rename preferred workspace: %w", err)
+	}
+	return nil
 }
 
 // ListAvailableWorkspaces discovers all known workspaces by scanning workspace and instance subdirs.
