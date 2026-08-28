@@ -247,7 +247,7 @@ install_linux() {
     # small VM or a large workstation alike. Skipped entirely if detection fails.
     #
     # Raised from the original 60%/80% on 2026-08-25: telemetry/cgroup_linux.go's
-    # new cgroup_memory_* OTel metrics (see .claude/docs/opentelemetry.md) showed
+    # new cgroup_memory_* OTel metrics (see docs/how-to/enable-opentelemetry.md) showed
     # usage chronically pinned at the 60% MemoryHigh ceiling — memory.events'
     # "high" counter climbing continuously, PSI full avg10 nonzero (real task
     # stalls, not just theoretical) — while `free -h` showed >20GiB genuinely
@@ -287,7 +287,7 @@ Type=simple
 # tymuxd's equivalent flag, --tymuxd-keep-server, also defaults to true.
 # Do NOT add --tymuxd-keep-server=false here — that's the same class of
 # drift that made this line originally omit --tmux-keep-server and kill
-# every live tmux session on restart (.claude/docs/tmux-keep-server-on-restart.md).
+# every live tmux session on restart (docs/explanation/tmux-keep-server-on-restart.md).
 ExecStart=$bin_path --remote-access --tmux-keep-server$extra_flags
 WorkingDirectory=$HOME
 Restart=on-failure
@@ -518,7 +518,7 @@ install_macos() {
     # tymuxd's equivalent flag, --tymuxd-keep-server, also defaults to true.
     # Do NOT add --tymuxd-keep-server=false to ProgramArguments below — that's
     # the same class of drift that once left this platform's tmux flag out of
-    # sync with the other's (.claude/docs/tmux-keep-server-on-restart.md).
+    # sync with the other's (docs/explanation/tmux-keep-server-on-restart.md).
     extra_args_xml=""
     for arg in $extra_flags; do
         extra_args_xml="$extra_args_xml

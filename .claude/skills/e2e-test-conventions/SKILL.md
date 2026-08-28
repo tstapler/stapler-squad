@@ -1,6 +1,7 @@
 ---
 name: e2e-test-conventions
 description: Use when writing or reviewing Playwright e2e specs in stapler-squad's tests/e2e/ — enforces the four hard, CI-checked conventions — feature annotation headers, no waitForTimeout, data-testid/ARIA-only locators, and page helpers under tests/e2e/pages/.
+globs: ["tests/e2e/**/*.ts"]
 ---
 
 # E2E Test Conventions
