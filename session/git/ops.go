@@ -141,7 +141,7 @@ func IsUnbornRepo(repoPath string) bool {
 // opened), or simply wrong for a manually-merged branch.
 //
 // Uses go-git rather than shelling out (repo convention — see
-// .claude/rules/prefer-go-git-over-subshells.md). The origin fetch is best-effort: a
+// the `prefer-go-git-over-subshells` skill). The origin fetch is best-effort: a
 // failure (offline, no such remote, nothing new) does not fail the whole check, since
 // the local-main check alone still answers the "merged directly to main locally" case.
 func IsCommitOnMain(repoPath, mainBranch, sha string) (bool, error) {
@@ -336,7 +336,7 @@ type ShippedCommit struct {
 
 // CommitInfo returns the summary line, author and author timestamp for a single
 // resolved commit hash in the repo at repoPath, read via go-git — no subshell
-// (.claude/rules/prefer-go-git-over-subshells.md).
+// (the `prefer-go-git-over-subshells` skill).
 func CommitInfo(repoPath, sha string) (ShippedCommit, error) {
 	repo, err := git.PlainOpenWithOptions(repoPath, &git.PlainOpenOptions{DetectDotGit: true})
 	if err != nil {
@@ -417,7 +417,7 @@ func ListShippedCommits(repoPath, baseSHA, headSHA string) ([]ShippedCommit, err
 // FileStatsBetween returns the per-file diff-stat summary (path, status,
 // additions, deletions) for every file that changed between baseSHA and
 // headSHA in the repo at repoPath, using go-git's typed diff API — no
-// safeexec shell-out (.claude/rules/prefer-go-git-over-subshells.md).
+// safeexec shell-out (the `prefer-go-git-over-subshells` skill).
 //
 // Renames are reported as a single entry keyed by the file's new path, not a
 // delete+add pair: go-git's FilePatch.Files() already exposes the from/to

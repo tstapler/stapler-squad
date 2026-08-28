@@ -149,7 +149,9 @@ const IS_DEBUG_MODE =
   typeof window !== "undefined" &&
   new URLSearchParams(window.location.search).get("debug") === "1";
 
-interface SessionCardProps {
+// Exported so BoardCard (SessionBoard.tsx's per-card wrapper) can declare an identical
+// callback surface without duplicating this list.
+export interface SessionCardProps {
   session: Session;
   onClick?: () => void;
   onOpenInNewPane?: () => void;
@@ -167,7 +169,7 @@ interface SessionCardProps {
   onSetRateLimitEnabled?: (sessionId: string, enabled: boolean) => void;
   onToggleAutonomousMode?: (sessionId: string, enabled: boolean) => void;
   onToggleAutoApprove?: (sessionId: string, enabled: boolean) => void;
-  onSteerAutonomousSession?: (sessionId: string, message: string) => void;
+  onSteerAutonomousSession?: (sessionId: string, message: string) => Promise<boolean> | void;
   onClearConversationState?: (sessionId: string) => Promise<boolean>;
   onHibernate?: () => void;
   onResumeFromHibernation?: () => void;

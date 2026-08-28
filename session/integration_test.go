@@ -506,7 +506,7 @@ func uniqueTestTmuxSocket(t *testing.T, suffix string) string {
 // setupTestRepository creates a temporary git repository for testing
 //
 // Uses go-git directly rather than shelling out — see
-// .claude/rules/prefer-go-git-over-subshells.md.
+// the `prefer-go-git-over-subshells` skill.
 func setupTestRepository(t *testing.T) string {
 	t.Helper()
 	dir, err := setupTestRepositoryCommon(t.TempDir(), "# Test Repository")
@@ -868,7 +868,7 @@ func BenchmarkSessionRestorePerformance(b *testing.B) {
 }
 
 // Uses go-git directly rather than shelling out — see
-// .claude/rules/prefer-go-git-over-subshells.md.
+// the `prefer-go-git-over-subshells` skill.
 func setupTestRepositoryBench(b *testing.B) string {
 	dir, err := setupTestRepositoryCommon(b.TempDir(), "# Benchmark Repository")
 	if err != nil {

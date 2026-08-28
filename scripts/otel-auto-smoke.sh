@@ -279,7 +279,7 @@ run_suppression_mode() {
   # unset" per spike-verdicts.md's Spike D finding (Spike D.2's Exporter Toggle
   # remedy was N/A — no leak observed) — NOT the generic "OTEL_ENABLED=false"
   # some doc templates assume; kept in sync with
-  # .claude/docs/opentelemetry-auto-instrumentation.md's Run Recipe.
+  # docs/how-to/enable-otel-auto-instrumentation.md's Run Recipe.
   # --self-test forces tracing ON here instead, to prove the zero-span
   # assertion below actually discriminates.
   local suppressed_count

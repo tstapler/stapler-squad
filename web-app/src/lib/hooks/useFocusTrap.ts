@@ -23,22 +23,34 @@ export function useFocusTrap(
     if (!isActive || !ref.current) return;
 
     const container = ref.current as HTMLElement;
-    const focusable = Array.from(
-      container.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTORS)
-    ).filter((el) => !el.closest("[aria-hidden='true']"));
 
-    const first = focusable[0];
-    const last = focusable[focusable.length - 1];
+    // Computed fresh on every Tab press (not cached once at activation) so a
+    // control that becomes disabled/enabled after the trap activates (e.g. a
+    // dialog's input+Send disabled while its own async action is in flight)
+    // doesn't leave a stale "first"/"last" pointing at an element that's no
+    // longer in the tab order — chasing a stale pointer would fail to
+    // preventDefault, letting Tab/Shift+Tab escape the container to whatever
+    // real browser tab order finds next (confirmed via a real-browser
+    // regression: SessionActionsOverflow's "Give Direction" dialog disables
+    // its input/Send while steering, and a stale snapshot let Shift+Tab from
+    // the still-enabled Cancel button escape the dialog entirely).
+    const getFocusable = () =>
+      Array.from(container.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTORS)).filter(
+        (el) => !el.closest("[aria-hidden='true']")
+      );
 
     // Move focus into the container
-    first?.focus();
+    getFocusable()[0]?.focus();
 
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key !== "Tab") return;
+      const focusable = getFocusable();
       if (focusable.length === 0) {
         e.preventDefault();
         return;
       }
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
       if (e.shiftKey) {
         if (document.activeElement === first) {
           e.preventDefault();

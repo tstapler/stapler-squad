@@ -17,7 +17,7 @@ import (
 // Delegated to from SessionService exactly like SlackConfigService/
 // CallbackConfigService — a config-backed handler with no second
 // implementation, so a concrete type per
-// .claude/rules/interface-pollution-checklist.md.
+// the `interface-pollution-checklist` skill.
 //
 // The global STAPLER_SQUAD_USE_STREAM_HUB env var remains the default
 // source when no override is set, and still requires a process restart to

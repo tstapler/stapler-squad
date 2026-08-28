@@ -5,7 +5,7 @@
 //
 // This is deliberately a small, fixed enum rather than an extensible CRUD
 // settings page (unlike PipelineMode) — see
-// .claude/rules/interface-pollution-checklist.md: a 4-value taxonomy with no
+// the `interface-pollution-checklist` skill: a 4-value taxonomy with no
 // evidence of a need for custom categories doesn't warrant a
 // web-app/src/app/settings/categories/ CRUD page. The server only persists
 // and validates the category string itself (session.IsValidBacklogCategory,

@@ -19,7 +19,7 @@ import (
 // not the fuller clone/branch fixtures ops_test.go uses.
 //
 // Uses go-git directly rather than shelling out — see
-// .claude/rules/prefer-go-git-over-subshells.md.
+// the `prefer-go-git-over-subshells` skill.
 func addCommitForDiffHashTest(t *testing.T, repo *gogit.Repository, path, message string) string {
 	t.Helper()
 	wt, err := repo.Worktree()

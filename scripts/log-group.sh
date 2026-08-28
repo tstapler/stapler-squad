@@ -5,7 +5,7 @@
 # identical messages collapse into one row even when a value happens to be
 # interpolated into the message text instead of a separate JSON field.
 #
-# See .claude/docs/log-debugging.md for when/why to reach for this.
+# See docs/how-to/debug-with-logs.md for when/why to reach for this.
 #
 # Usage:
 #   log-group.sh [-n TOP] [-l LEVEL] [FILE ...]

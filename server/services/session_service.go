@@ -47,6 +47,10 @@ import (
 // Compile-time interface check: SessionService must implement the full ConnectRPC handler.
 var _ sessionv1connect.SessionServiceHandler = (*SessionService)(nil)
 
+// Compile-time interface check: SessionService satisfies BacklogService's
+// consumer-defined SessionSteerer interface.
+var _ SessionSteerer = (*SessionService)(nil)
+
 // resumeIDRe validates the client-supplied resume_id field: must be a standard UUID.
 // createSessionTimeout bounds the synchronous portion of CreateSession (path
 // resolution, GitHub URL clone). It must stay comfortably above the slowest
@@ -871,6 +875,72 @@ func (s *SessionService) FindLiveInstance(id string) *session.Instance {
 		return nil
 	}
 	return s.reviewQueuePoller.FindInstance(id)
+}
+
+// SessionProgram implements SessionSteerer. Returns ok=false if sessionUUID
+// has no live instance tracked.
+func (s *SessionService) SessionProgram(sessionUUID string) (string, bool) {
+	inst := s.FindLiveInstance(sessionUUID)
+	if inst == nil {
+		return "", false
+	}
+	return inst.Program, true
+}
+
+// safeIdleStatusContexts allowlists the exact detection.StatusIdle pattern
+// descriptions (session/detection/binaries/claude.go's Idle group) that are
+// unambiguously Claude Code's own idle prompt, as opposed to a raw shell/vim/
+// editor prompt that also reports StatusIdle. Pinned verbatim against the
+// actual pattern set by TestSafeIdleStatusContexts_MatchClaudeIdlePatternDescriptions
+// so a future wording change in claude.go fails this test loudly instead of
+// silently disabling the gate. insert_mode is deliberately excluded: its
+// regex/description aren't distinguishable from a real vim INSERT-mode
+// status line.
+var safeIdleStatusContexts = map[string]bool{
+	"Claude Code readline input prompt":                                                              true, // claude_readline_prompt
+	"Claude Code idle prompt showing ? for shortcuts":                                                true, // claude_shortcuts_prompt
+	"Claude Code 'accept edits' review mode — session completed turn, user reviews proposed changes": true, // claude_accept_edits
+}
+
+// isSafeSteerStatus reports whether a detection result is safe for an
+// unattended PTY write: StatusIdle with a description on the Claude-specific
+// safeIdleStatusContexts allowlist. StatusIdle alone is NOT sufficient —
+// command_prompt/vim_normal_mode/bracket_insert_mode share the same
+// DetectedStatus value but mean a raw shell or editor prompt, exactly the
+// state where injected text would be misread as a literal command.
+func isSafeSteerStatus(status detection.DetectedStatus, statusContext string) bool {
+	return status == detection.StatusIdle && safeIdleStatusContexts[statusContext]
+}
+
+// IsReadyForSteer implements SessionSteerer. It gates an unattended PTY
+// write (e.g. PR-fix steering) on isSafeSteerStatus — see that function's
+// doc comment for the StatusIdle-vs-safe-description invariant. Any case
+// where readiness can't be confirmed (no live instance, no status manager,
+// no registered controller, or a queued/in-flight command) returns false
+// rather than assuming ready.
+func (s *SessionService) IsReadyForSteer(sessionUUID string) bool {
+	inst := s.FindLiveInstance(sessionUUID)
+	if inst == nil || s.statusManager == nil {
+		return false
+	}
+	info := s.statusManager.GetStatus(inst)
+	if !info.IsControllerActive || info.QueuedCommands > 0 {
+		return false
+	}
+	if ctrl, ok := s.statusManager.GetController(inst.Title); ok && ctrl != nil && ctrl.GetCurrentCommand() != nil {
+		return false
+	}
+	return isSafeSteerStatus(info.ClaudeStatus, info.StatusContext)
+}
+
+// SteerActiveSession implements SessionSteerer, delegating to the same
+// steerInstance UpdateSession's SteerMessage handling uses.
+func (s *SessionService) SteerActiveSession(ctx context.Context, sessionUUID, message string) error {
+	inst := s.FindLiveInstance(sessionUUID)
+	if inst == nil {
+		return fmt.Errorf("steer session %q: not tracked live", sessionUUID)
+	}
+	return s.steerInstance(ctx, inst, message)
 }
 
 // ArchiveSessionByUUID satisfies the BacklogService.SessionStopper interface and the
@@ -2727,6 +2797,17 @@ func classifyPauseResumeErr(err error, opDesc string) *connect.Error {
 	return connect.NewError(connect.CodeInternal, fmt.Errorf("failed to %s session: %w", opDesc, err))
 }
 
+// classifyStopErr maps a StopByUser() error to the appropriate connect error code,
+// using the same permission/state-machine-rejection-vs-operational-failure split as
+// classifyPauseResumeErr.
+func classifyStopErr(err error, opDesc string) *connect.Error {
+	var transErr session.ErrInvalidTransition
+	if errors.As(err, &transErr) || errors.Is(err, session.ErrPauseNotPermitted) {
+		return connect.NewError(connect.CodeFailedPrecondition, fmt.Errorf("failed to %s session: %w", opDesc, err))
+	}
+	return connect.NewError(connect.CodeInternal, fmt.Errorf("failed to %s session: %w", opDesc, err))
+}
+
 // UpdateSession modifies session properties (pause/resume, category, title).
 // +api: session:update
 func (s *SessionService) UpdateSession(
@@ -2947,43 +3028,11 @@ func (s *SessionService) UpdateSession(
 			return nil, connect.NewError(connect.CodeInvalidArgument,
 				fmt.Errorf("steer_message exceeds maximum length of %d bytes", session.MaxSteerMessageLength))
 		}
-		if instance.AutonomousMode {
-			// Unchanged: autonomous sessions keep the ClaudeController command-queue path.
-			controller := instance.GetController()
-			if controller != nil {
-				if _, sendErr := controller.SendCommandImmediate(*req.Msg.SteerMessage + "\r"); sendErr != nil {
-					log.Warn("[UpdateSession] failed to send steer_message", "session", instance.Title, "err", sendErr)
-				} else {
-					s.notifySteerSent(instance, *req.Msg.SteerMessage)
-				}
+		if err := s.steerInstance(ctx, instance, *req.Msg.SteerMessage); err != nil {
+			if errors.Is(err, context.DeadlineExceeded) {
+				return nil, connect.NewError(connect.CodeDeadlineExceeded, err)
 			}
-		} else {
-			// New: non-autonomous, Instance-backed sessions get the same PTY send
-			// primitive the MCP steer_session tool already falls back to. Unlike the
-			// autonomous branch, a send failure IS returned to the caller so the UI
-			// can surface it (research/ux.md's Gap 2 error-state table).
-			//
-			// SendKeys is bounded with a timeout, mirroring terminal_service.go's
-			// WriteToSession — a browser click against a wedged/dead session must not
-			// hang this RPC handler goroutine forever.
-			text := session.BuildSubmittableInput(*req.Msg.SteerMessage, true)
-			errCh := make(chan error, 1)
-			go func() { errCh <- instance.SendKeys(text) }()
-
-			timeoutCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-			defer cancel()
-
-			select {
-			case err := <-errCh:
-				if err != nil {
-					return nil, connect.NewError(connect.CodeFailedPrecondition,
-						fmt.Errorf("failed to steer session %q: %w", instance.Title, err))
-				}
-			case <-timeoutCtx.Done():
-				return nil, connect.NewError(connect.CodeDeadlineExceeded,
-					fmt.Errorf("timed out steering session %q", instance.Title))
-			}
-			s.notifySteerSent(instance, *req.Msg.SteerMessage)
+			return nil, connect.NewError(connect.CodeFailedPrecondition, err)
 		}
 	}
 
@@ -2993,7 +3042,13 @@ func (s *SessionService) UpdateSession(
 	if req.Msg.Status != nil && *req.Msg.Status != sessionv1.SessionStatus_SESSION_STATUS_UNSPECIFIED {
 		targetStatus := adapters.ProtoToStatus(*req.Msg.Status)
 
-		if targetStatus == session.Paused && instance.Status != session.Paused {
+		if targetStatus == session.Stopped && instance.Status != session.Stopped {
+			if err := instance.StopByUser(); err != nil {
+				return nil, classifyStopErr(err, "stop")
+			}
+			updatedFields = append(updatedFields, "status")
+			sideEffectChanged = true
+		} else if targetStatus == session.Paused && instance.Status != session.Paused {
 			if err := instance.Pause(); err != nil {
 				return nil, classifyPauseResumeErr(err, "pause")
 			}
@@ -3043,6 +3098,66 @@ func (s *SessionService) UpdateSession(
 	return connect.NewResponse(&sessionv1.UpdateSessionResponse{
 		Session: adapters.InstanceToProto(instance, s.workflowNames()),
 	}), nil
+}
+
+// steerInstance injects message into instance's active session. Autonomous
+// sessions keep the existing ClaudeController command-queue path;
+// non-autonomous, Instance-backed sessions fall back to the same PTY send
+// primitive the MCP steer_session tool already uses. Returns only plain
+// fmt.Errorf-wrapped errors — never connect.NewError/connect.Code* — since
+// SteerActiveSession calls this in-process from BacklogService; UpdateSession
+// is the sole caller that translates the error into a connect.Code.
+func (s *SessionService) steerInstance(ctx context.Context, instance *session.Instance, message string) error {
+	if instance.AutonomousMode {
+		controller := instance.GetController()
+		if controller == nil {
+			return fmt.Errorf("steer autonomous session %q: controller not started", instance.Title)
+		}
+
+		// SendCommandImmediate's own ~5min internal timeout doesn't protect
+		// against the raw PTY write itself hanging, which would leak
+		// steerActiveSessionForPRFix's steerInFlight guard forever.
+		errCh := make(chan error, 1)
+		go func() {
+			_, sendErr := controller.SendCommandImmediate(message + "\r")
+			errCh <- sendErr
+		}()
+
+		timeoutCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+
+		select {
+		case sendErr := <-errCh:
+			if sendErr != nil {
+				return fmt.Errorf("steer autonomous session %q: %w", instance.Title, sendErr)
+			}
+		case <-timeoutCtx.Done():
+			return fmt.Errorf("timed out steering autonomous session %q: %w", instance.Title, timeoutCtx.Err())
+		}
+		s.notifySteerSent(instance, message)
+		return nil
+	}
+
+	// Non-autonomous sessions get the same PTY send primitive the MCP
+	// steer_session tool falls back to, bounded with a timeout so a browser
+	// click against a wedged/dead session can't hang this goroutine forever.
+	text := session.BuildSubmittableInput(message, true)
+	errCh := make(chan error, 1)
+	go func() { errCh <- instance.SendKeys(text) }()
+
+	timeoutCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	select {
+	case err := <-errCh:
+		if err != nil {
+			return fmt.Errorf("steer session %q: %w", instance.Title, err)
+		}
+	case <-timeoutCtx.Done():
+		return fmt.Errorf("timed out steering session %q: %w", instance.Title, timeoutCtx.Err())
+	}
+	s.notifySteerSent(instance, message)
+	return nil
 }
 
 // notifySteerSent logs and publishes the "steering input sent" notification

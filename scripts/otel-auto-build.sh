@@ -6,7 +6,7 @@
 # go.mod/go.sum during the build itself (Module Mutation Guard, Story 2.1.4 —
 # pitfalls.md #1c). Build-time concerns ONLY — this process exits once the
 # child build finishes and never sets any OTEL_* runtime var; see the Run
-# Recipe in .claude/docs/opentelemetry-auto-instrumentation.md for that.
+# Recipe in docs/how-to/enable-otel-auto-instrumentation.md for that.
 #
 # Runs `otelc setup` twice (auto-discover built-in rules, then inject this
 # repo's own custom rule import and re-run) because otelc has no additive way
@@ -18,7 +18,7 @@
 # never affected by this having run. Full investigation trail, exact repro
 # commands, and dated findings:
 # project_plans/go-auto-instrumentation/implementation/spike-verdicts.md
-# (Spike E) and .claude/docs/opentelemetry-auto-instrumentation.md.
+# (Spike E) and docs/how-to/enable-otel-auto-instrumentation.md.
 #
 # Usage:
 #   ./scripts/otel-auto-build.sh go build -ldflags "-X main.version=1.2.3" -o stapler-squad-otel .

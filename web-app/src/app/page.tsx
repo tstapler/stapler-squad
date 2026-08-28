@@ -19,13 +19,17 @@ import { useFocusTrap } from "@/lib/hooks/useFocusTrap";
 import { useOmnibar } from "@/lib/contexts/OmnibarContext";
 import { PaneTilingContainer } from "@/components/pane/PaneTilingContainer";
 import { CockpitActionsProvider } from "@/lib/contexts/CockpitActionsContext";
+import { SessionViewModeProvider } from "@/lib/contexts/SessionViewModeContext";
+import { useSessionViewMode } from "@/lib/hooks/useSessionViewMode";
 import { usePageView } from "@/lib/analytics/usePageView";
 import { useAnalytics } from "@/lib/contexts/AnalyticsContext";
+import { useNotifications } from "@/lib/contexts/NotificationContext";
 import * as styles from "./page.css";
 
 function HomeContent() {
   usePageView();
   const { track } = useAnalytics();
+  const { addNotification } = useNotifications();
   const searchParams = useSearchParams();
   const router = useRouter();
   const { openInCreationMode, openOmnibar } = useOmnibar();
@@ -35,6 +39,11 @@ function HomeContent() {
   const [pendingSessionId, setPendingSessionId] = useState<string | null>(null);
   // j/k keyboard navigation index within the session list
   const [focusedSessionIndex, setFocusedSessionIndex] = useState<number>(-1);
+
+  // List/Board view mode — lifted here (rather than called again deep in the pane
+  // tree) so the 'b' shortcut below and SessionListPaneBody's render both observe
+  // the same state instead of two independent useSessionViewMode() instances.
+  const [viewMode, setViewMode] = useSessionViewMode();
 
   // Tiling: tracks the most-recently-clicked session to route to the focused pane.
   // Using a counter-based key so that clicking the same session again still triggers.
@@ -289,10 +298,20 @@ function HomeContent() {
     }
   }, [updateSession, track]);
 
-  const handleSteerAutonomousSession = useCallback(async (sessionId: string, message: string): Promise<void> => {
+  const handleSteerAutonomousSession = useCallback(async (sessionId: string, message: string): Promise<boolean> => {
     track({ name: "session_autonomous_steer", category: "user_action" });
-    await updateSession(sessionId, { steerMessage: message });
-  }, [updateSession, track]);
+    const result = await updateSession(sessionId, { steerMessage: message });
+    if (result === null) {
+      addNotification({
+        message: "Failed to send steering message — the session may not be running.",
+        notificationType: "error",
+        sessionId,
+        sessionName: "",
+      });
+      return false;
+    }
+    return true;
+  }, [updateSession, track, addNotification]);
 
   const handleResumeRequest = useCallback((session: Session) => {
     resumeTriggerRef.current = document.activeElement as HTMLElement;
@@ -374,6 +393,12 @@ function HomeContent() {
         sessions.length === 0 ? -1 : Math.min(prev + 1, sessions.length - 1)
       );
     },
+    // List/Board view toggle. useKeyboard's default ignoreElements (INPUT/TEXTAREA/SELECT)
+    // already covers the instant-search box, so this never fires while typing "b" into it.
+    "b": () => {
+      if (deleteConfirmTarget || resumeTarget) return;
+      setViewMode(viewMode === "board" ? "list" : "board");
+    },
     "k": () => {
       if (deleteConfirmTarget || resumeTarget) return;
       setFocusedSessionIndex(prev =>
@@ -451,22 +476,24 @@ function HomeContent() {
     <div className={styles.page}>
       {/* Unified tiling cockpit — session list and detail panels are both pane views */}
       <CockpitActionsProvider value={cockpitActions}>
-        <div
-          ref={sessionDetailRef}
-          className={styles.cockpitContainer}
-          tabIndex={-1}
-          role="region"
-          aria-label="Session cockpit"
-          data-context="cockpit"
-        >
-          <PaneTilingContainer
-            sessions={sessions}
-            externalSessionAssign={externalAssignSession ? {
-              ...externalAssignSession,
-              version: externalAssignCounter,
-            } : null}
-          />
-        </div>
+        <SessionViewModeProvider value={{ viewMode, setViewMode }}>
+          <div
+            ref={sessionDetailRef}
+            className={styles.cockpitContainer}
+            tabIndex={-1}
+            role="region"
+            aria-label="Session cockpit"
+            data-context="cockpit"
+          >
+            <PaneTilingContainer
+              sessions={sessions}
+              externalSessionAssign={externalAssignSession ? {
+                ...externalAssignSession,
+                version: externalAssignCounter,
+              } : null}
+            />
+          </div>
+        </SessionViewModeProvider>
       </CockpitActionsProvider>
 
       {/* Resume session modal */}

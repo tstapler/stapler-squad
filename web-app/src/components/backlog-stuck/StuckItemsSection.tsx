@@ -40,6 +40,7 @@ const GROUP_ORDER: StuckReason[] = [
   StuckReason.BOUNCE_CAP_EXHAUSTED,
   StuckReason.PUSH_FAILED,
   StuckReason.SPAWN_FAILED,
+  StuckReason.STEER_FAILED,
   StuckReason.PR_PENDING_NO_PR,
   StuckReason.REWORK_BLOCKED_STALE,
   StuckReason.PR_NEEDS_FIX,

@@ -32,14 +32,24 @@ func TestStuckReasonReworkBlockedStale_should_beValid_When_Checked(t *testing.T)
 	}
 }
 
-// TestAllStuckReasons_should_contain18Entries_When_Enumerated is a regression
+// TestAllStuckReasons_should_contain19Entries_When_Enumerated is a regression
 // guard: catches an accidental removal from AllStuckReasons (which would
 // silently exclude a valid reason from every consumer that iterates the full
 // set, e.g. exhaustiveness tests) independent of IsValid's own switch.
-func TestAllStuckReasons_should_contain18Entries_When_Enumerated(t *testing.T) {
+func TestAllStuckReasons_should_contain19Entries_When_Enumerated(t *testing.T) {
 	t.Parallel()
-	if len(AllStuckReasons) != 18 {
-		t.Errorf("len(AllStuckReasons) = %d, want 18", len(AllStuckReasons))
+	if len(AllStuckReasons) != 19 {
+		t.Errorf("len(AllStuckReasons) = %d, want 19", len(AllStuckReasons))
+	}
+}
+
+// TestStuckReasonSteerFailed_should_beValid_When_Checked confirms the new
+// reason (pr-fix-steering Epic 4.3, ADR-002) round-trips through IsValid
+// exactly like the other established reasons.
+func TestStuckReasonSteerFailed_should_beValid_When_Checked(t *testing.T) {
+	t.Parallel()
+	if !StuckReasonSteerFailed.IsValid() {
+		t.Errorf("StuckReasonSteerFailed.IsValid() = false, want true")
 	}
 }
 

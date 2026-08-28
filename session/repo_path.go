@@ -267,7 +267,7 @@ func sanitizeCloneOutput(output []byte, cloneURL string) string {
 // clone (which would then fail trying to read a nonexistent origin remote
 // for re-clone instead of letting normal "create an initial commit" handling
 // take over).
-// Uses go-git per .claude/rules/prefer-go-git-over-subshells.md.
+// Uses go-git per the `prefer-go-git-over-subshells` skill.
 func isCorruptedClone(repoPath string) bool {
 	repo, err := git.PlainOpen(repoPath)
 	if err != nil {

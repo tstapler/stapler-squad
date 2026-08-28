@@ -225,6 +225,51 @@ func TestTriggerPRFixForEvent_should_TagFixAttemptLogAsWebhookTriggered(t *testi
 	}, 2*time.Second, 20*time.Millisecond, "webhook-triggered reconciliation must tag its fix-attempt log line as trigger_source=webhook; got: %s", buf.String())
 }
 
+// TestReconcilePRPending_should_SteerOnEveryTick_When_ActiveSessionPresentEvenWithinBackoffWindow
+// is the session-package-level regression test for pre-mortem.md's P1
+// finding (Story 4.2.2): remediatePRFixWithBackoffGate must bypass
+// RemediationDue's 30m->72h backoff entirely whenever the item has an active
+// work session, so the steer path's own tighter dedup/debounce throttle
+// (Epic 2.2/2.3) actually gets to run at the ~60s reconcile-tick cadence it
+// was designed for — without this bypass, a changed failure reason (e.g.
+// conflict resolved, CI now failing — the same example requirements.md uses
+// for Success Metric #2) would not reach AutoReopenForPRFix again for up to
+// 72h after the first tick. Distinct from the server/services-level tests
+// (Epic 5.3) that cover steerActiveSessionForPRFix's own dedup/debounce
+// logic in isolation — this test only proves the gate bypass at the
+// session-package boundary, via fakePRFixSpawner.callCount.
+func TestReconcilePRPending_should_SteerOnEveryTick_When_ActiveSessionPresentEvenWithinBackoffWindow(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	newPRPendingTestItem(t, storage, 9101)
+
+	listener := NewBacklogLifecycleListener(storage)
+	overridePRPendingChecker(t, listener, &fakePRPendingChecker{
+		status: &git.PRStatus{HasConflicts: true, FeedbackText: "## Merge conflict\nconflict details\n"},
+	})
+	fakeSpawner := &fakePRFixSpawner{hasActiveWorkSession: &ItemSessionSummary{SessionUUID: "active-work-uuid"}}
+	listener.SetPRFixSpawner(fakeSpawner)
+
+	er := storage.repo
+	listener.ReconcilePRPending(ctx, er)
+	require.Equal(t, 1, fakeSpawner.callCount, "first tick must call AutoReopenForPRFix (steer path)")
+
+	// Change the underlying failure reason before the second tick — conflict
+	// resolved, CI now failing instead — without advancing time or
+	// backdating next_remediation_at, so this tick still falls well within
+	// RemediationDue's 30-minute floor. If the backoff gate weren't bypassed
+	// for the active-session case, this second call would be skipped.
+	overridePRPendingChecker(t, listener, &fakePRPendingChecker{
+		status: &git.PRStatus{CIFailing: true, FeedbackText: "## Failing CI checks\n- build FAILED\n"},
+	})
+
+	listener.ReconcilePRPending(ctx, er)
+	assert.Equal(t, 2, fakeSpawner.callCount, "an active-session item must be steered on every tick regardless of RemediationDue's backoff window — bypass path (pre-mortem.md P1)")
+}
+
 func TestReconcilePRPending_should_TagFixAttemptLogAsPollerTriggered(t *testing.T) {
 	t.Parallel()
 	storage, cleanup := createTestStorage(t)

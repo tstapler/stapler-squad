@@ -596,3 +596,24 @@ func TestCreateBacklogWorktree_AnchorsAtMainRepo_When_RepoPathIsAWorktree(t *tes
 		t.Errorf("child worktree's branch point = %s, want origin's main tip %s (must branch from the resolved main repo, not the anchor worktree)", base, mainTip)
 	}
 }
+
+// TestCreateBacklogWorktree_should_Error_When_RepoPathIsEmpty guards the production
+// (not test-only) mechanism that can reach this exact corruption: a BacklogItem can
+// legitimately have an empty RepoPath (CreateBacklogItem never requires one, and
+// TransitionBacklogItemStatus's guards never check it — Idea->Ready is a directly
+// legal transition per session/domain/backlog.go's validTransitions map), so an item
+// can reach SpawnSessionFromItem with RepoPath still "". Without this guard,
+// ResolveSessionPath("") would silently resolve to the calling process's own cwd via
+// filepath.Abs("") — for the live server process, that's this repo's own real
+// checkout. Asserts on the error directly rather than chdir'ing into a fake repo: this
+// guard returns before ResolveSessionPath is ever called, so no real cwd interaction
+// happens for it to observe.
+func TestCreateBacklogWorktree_should_Error_When_RepoPathIsEmpty(t *testing.T) {
+	_, err := CreateBacklogWorktree("", "empty-repopath-item")
+	if err == nil {
+		t.Fatal("CreateBacklogWorktree(\"\", ...) succeeded; want an error rather than silently operating against cwd")
+	}
+	if !strings.Contains(err.Error(), "repoPath must not be empty") {
+		t.Errorf("CreateBacklogWorktree(\"\", ...) error = %q, want it to mention repoPath must not be empty", err.Error())
+	}
+}

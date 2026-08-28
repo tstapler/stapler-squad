@@ -1173,7 +1173,7 @@ func loadConfigWithDefaultFallback(configPath string) *Config {
 // JSON that the next LoadConfig call silently falls back to DefaultConfig()
 // over (losing whatever was there). Keyed per path (rather than one global
 // mutex) so concurrent saves to different configPaths — e.g. distinct
-// per-instance state dirs under state-isolation, see .claude/docs/state-isolation.md
+// per-instance state dirs under state-isolation, see docs/reference/state-isolation.md
 // — aren't needlessly serialized against each other.
 var saveConfigMu sync.Map //nolint:gochecknoglobals // per-configPath *sync.Mutex, serializes concurrent saveConfig callers sharing the same tmpPath
 

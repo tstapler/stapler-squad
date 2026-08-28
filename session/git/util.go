@@ -15,6 +15,7 @@ import (
 	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
+	"github.com/go-git/go-git/v5/plumbing/storer"
 )
 
 // isTraversalPathSegment reports whether s is "." or ".." — mirrors
@@ -199,11 +200,15 @@ func findGitRepoRoot(path string) (string, error) {
 	for {
 		repo, err := git.PlainOpen(currentPath)
 		if err == nil {
-			// Found the repository root
-			// Check if the repository has any commits (worktrees require at least one)
-			_, err := repo.Head()
+			// Found the repository root. A bare repo.Head() error is not reliable
+			// evidence the repo is unborn — go-git can transiently fail to resolve
+			// HEAD for an otherwise-real repo (see getHeadCommitSHA's doc comment) —
+			// so check the ref store directly before concluding it has zero history.
+			hasRef, err := repoHasAnyRef(currentPath)
 			if err != nil {
-				// Repository has no commits - create initial commit
+				return "", fmt.Errorf("failed to check for existing refs at '%s': %w", currentPath, err)
+			}
+			if !hasRef {
 				log.Info("repository has no commits, creating initial commit", "path", currentPath)
 				if err := createInitialCommit(repo, currentPath); err != nil {
 					return "", fmt.Errorf("failed to create initial commit at '%s': %w", currentPath, err)
@@ -342,6 +347,68 @@ func getHeadCommitSHA(path string) (string, error) {
 	return getHeadCommitSHAViaCLI(path)
 }
 
+// repoHasAnyRef reports whether the git repository at path has at least one
+// hash reference — a reliable signal of real history, unlike repo.Head() (see
+// getHeadCommitSHA's doc comment). Only HashReferences count: git.PlainInit's
+// symbolic "HEAD -> refs/heads/master" always exists even in a zero-commit
+// repo, so counting it would always report true. Retry/CLI-fallback shape
+// mirrors getHeadCommitSHA (same underlying go-git flakiness class).
+func repoHasAnyRef(path string) (bool, error) {
+	if _, err := git.PlainOpenWithOptions(path, &git.PlainOpenOptions{DetectDotGit: true}); err != nil {
+		return false, fmt.Errorf("failed to open git repo at %s: %w", path, err)
+	}
+
+	var lastErr error
+	for attempt := 0; attempt < headSHARetryAttempts; attempt++ {
+		if attempt > 0 {
+			time.Sleep(headSHARetryDelay)
+		}
+		repo, err := git.PlainOpenWithOptions(path, &git.PlainOpenOptions{DetectDotGit: true})
+		if err != nil {
+			lastErr = fmt.Errorf("failed to open git repo at %s: %w", path, err)
+			continue
+		}
+		refs, err := repo.References()
+		if err != nil {
+			lastErr = fmt.Errorf("failed to list refs at %s: %w", path, err)
+			continue
+		}
+		found := false
+		iterErr := refs.ForEach(func(ref *plumbing.Reference) error {
+			if ref.Type() != plumbing.HashReference {
+				return nil
+			}
+			found = true
+			return storer.ErrStop
+		})
+		refs.Close()
+		if iterErr != nil {
+			lastErr = fmt.Errorf("failed to iterate refs at %s: %w", path, iterErr)
+			continue
+		}
+		return found, nil
+	}
+	log.Warn("repoHasAnyRef: go-git repeatedly failed to read refs, falling back to git CLI", "path", path, "err", lastErr)
+	return repoHasAnyRefViaCLI(path)
+}
+
+// repoHasAnyRefViaCLI is repoHasAnyRef's fallback when go-git repeatedly fails to read
+// the ref store — see getHeadCommitSHAViaCLI's identical rationale (atomic-rename ref
+// updates mean the CLI doesn't observe the torn-read race go-git is susceptible to).
+// `git for-each-ref` does not enumerate the symbolic HEAD pseudo-ref, matching
+// repoHasAnyRef's own HashReference-only filter.
+func repoHasAnyRefViaCLI(path string) (bool, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	cmd := safeexec.CommandContext(ctx, "git", "for-each-ref", "--count=1")
+	cmd.Dir = path
+	out, err := cmd.Output()
+	if err != nil {
+		return false, fmt.Errorf("failed to list refs at %s: %w", path, err)
+	}
+	return len(strings.TrimSpace(string(out))) > 0, nil
+}
+
 // getHeadCommitSHAViaCLI is the fallback path for getHeadCommitSHA when go-git
 // repeatedly fails to resolve HEAD to a real object. The git CLI relies on atomic-rename
 // ref updates, so it doesn't observe the torn-read race go-git is susceptible to.
@@ -413,6 +480,16 @@ func InitializeProjectDirectory(path string) error {
 // createInitialCommit creates an initial commit in a new git repository
 // This is required because git worktrees need at least one commit to exist
 func createInitialCommit(repo *git.Repository, repoPath string) error {
+	// Self-defending guard: refuse to run against a repo that already has any
+	// ref, regardless of caller. A fresh git.PlainInit repo has zero refs by
+	// construction, so this is a no-op for every legitimate caller — it only
+	// fires when something upstream misdiagnosed a real repo as unborn.
+	if hasRef, err := repoHasAnyRef(repoPath); err != nil {
+		return fmt.Errorf("failed to check for existing refs at '%s': %w", repoPath, err)
+	} else if hasRef {
+		return fmt.Errorf("refusing to create initial commit at '%s': repository already has existing refs", repoPath)
+	}
+
 	// Get the worktree
 	worktree, err := repo.Worktree()
 	if err != nil {

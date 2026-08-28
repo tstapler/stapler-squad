@@ -48,6 +48,7 @@ import {
   removeSession,
   setLoading,
   setError,
+  setErrorCode,
   setConnectionState,
   selectAllSessions,
   selectSessionsLoading,
@@ -393,6 +394,12 @@ export function useSessionService(
       } catch (err) {
         console.error("[useSessionService] updateSession failed:", err);
         dispatch(setError(getErrorMessage(err, "Failed to update session")));
+        // Board drag-rejection reconciliation (SessionBoard's attemptColumnMove) needs the
+        // ConnectRPC code to distinguish a transport failure from a business-rule rejection —
+        // see sessionsSlice.ts's errorCode doc comment.
+        if (err instanceof ConnectError) {
+          dispatch(setErrorCode(err.code));
+        }
         return null;
       }
     },
@@ -475,6 +482,9 @@ export function useSessionService(
       } catch (err) {
         console.error("[useSessionService] resumeHibernatedSession failed:", err);
         dispatch(setError(err instanceof Error ? err.message : "Failed to resume hibernated session"));
+        if (err instanceof ConnectError) {
+          dispatch(setErrorCode(err.code));
+        }
         return null;
       }
     },

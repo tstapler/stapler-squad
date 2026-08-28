@@ -403,7 +403,7 @@ func TestClaudeBuiltinDetector_should_matchGetDefaultPatterns_When_resolvedFromS
 // whole snapshot if a name in reg.Names() somehow fails reg.Lookup (can't
 // happen via the public DetectorRegistry API today, but the nil-guard shape
 // in buildSnapshot/lookupBinaryDetector is exactly what NilAway flags as
-// required — see .claude/rules/interface-pollution-checklist.md).
+// required — see the `interface-pollution-checklist` skill).
 func TestBuildSnapshot_should_produceUsableSnapshot_When_givenDefaultRegistry(t *testing.T) {
 	t.Parallel()
 	snap := buildSnapshot(DefaultRegistry(), nil)
