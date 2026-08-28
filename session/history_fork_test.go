@@ -2,10 +2,12 @@ package session
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -132,4 +134,45 @@ func TestForkClaudeConversation_ReturnsDifferentUUIDs(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.NotEqual(t, uuid1, uuid2, "each fork should produce a unique UUID")
+}
+
+// TestForkClaudeConversation_ConcurrentCallsToSameDstDir_NeverProduceCorruptOutput is a
+// regression test for ForkClaudeConversation's tmp-file write, now os.CreateTemp-based
+// (previously dstPath+".tmp"). dstPath is already unique per call via a fresh UUID, so
+// this wasn't concretely racy, but the concurrent-writer shape is exercised here anyway
+// to prove no two calls interfere via dstDir, mirroring config_test.go's
+// TestSaveConfig_ConcurrentWritesToSamePath pattern.
+func TestForkClaudeConversation_ConcurrentCallsToSameDstDir_NeverProduceCorruptOutput(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	srcPath := filepath.Join(dir, "conv.jsonl")
+	dstDir := filepath.Join(dir, "fork")
+	writeFakeConvJSONL(t, srcPath, 3)
+
+	const n = 20
+	var wg sync.WaitGroup
+	uuids := make([]string, n)
+	errs := make([]error, n)
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			uuids[i], errs[i] = ForkClaudeConversation(srcPath, 3, dstDir)
+		}(i)
+	}
+	wg.Wait()
+
+	seen := make(map[string]bool, n)
+	for i, err := range errs {
+		require.NoError(t, err, "ForkClaudeConversation must not error under concurrent callers targeting the same dstDir")
+		assert.False(t, seen[uuids[i]], "each concurrent call must produce a distinct UUID")
+		seen[uuids[i]] = true
+
+		outPath := filepath.Join(dstDir, uuids[i]+".jsonl")
+		data, readErr := os.ReadFile(outPath)
+		require.NoError(t, readErr, "output file for uuid %s must exist", uuids[i])
+		for _, line := range bytes.Split(bytes.TrimSpace(data), []byte("\n")) {
+			assert.True(t, json.Valid(line), "output for uuid %s must be valid JSON per line, not torn/corrupt: %s", uuids[i], data)
+		}
+	}
 }
