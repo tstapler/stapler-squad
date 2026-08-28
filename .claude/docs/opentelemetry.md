@@ -26,6 +26,12 @@ otlp_config:
         endpoint: 0.0.0.0:4317
 ```
 
+Both OTLP gRPC exporters (`otlptracegrpc.WithCompressor("gzip")` /
+`otlpmetricgrpc.WithCompressor("gzip")` in `telemetry/telemetry.go`) send
+gzip-compressed payloads. This needs no Agent-side config change — gRPC
+compression is negotiated by the client and decoded transparently by the
+receiver.
+
 ## Instrumented Operations
 
 - All HTTP requests (via otelhttp middleware)
