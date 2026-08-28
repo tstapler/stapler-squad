@@ -8,6 +8,10 @@
 # See project_plans/ci-speed/implementation/plan.md Epic 3.1, Story 3.1.1,
 # Task 3.1.1c.
 #
+# `lint-generated-files` is a deliberately distinct artifact (Epic 3.3's
+# stub build, not build-once/fan-out's real build) and is exempted, as are
+# comment-only lines and this script's own filename.
+#
 # Usage: ./tools/ci/check-generated-files-literal.sh
 #
 # Exit codes:
@@ -21,7 +25,11 @@ WORKFLOWS_DIR="${REPO_ROOT}/.github/workflows"
 
 MATCHES="$(grep -rn "generated-files" "${WORKFLOWS_DIR}" --include='*.yml' \
   | grep -v '_prepare.yml' \
-  | grep -v 'outputs.artifact-name' || true)"
+  | grep -v 'outputs.artifact-name' \
+  | grep -v 'lint-generated-files' \
+  | grep -v 'check-generated-files-literal.sh' \
+  | grep -v 'Guard against stray' \
+  | grep -vE ':[0-9]+: *#' || true)"
 
 if [ -n "${MATCHES}" ]; then
   echo "Found literal 'generated-files' string outside .github/workflows/_prepare.yml:" >&2
