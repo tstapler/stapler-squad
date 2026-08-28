@@ -72,7 +72,7 @@ describe("fromSessionVcs", () => {
       checkConclusion: "success",
       approvedCount: 1,
       changesReqCount: 0,
-      mergeable: "",
+      mergeable: "unknown",
       checks: [],
       reviewFeedback: [],
     });
@@ -123,10 +123,26 @@ describe("fromSessionVcs", () => {
     expect(result.statusAsOf).toBeUndefined();
     expect(result.commitsTruncated).toBe(false);
     expect(result.commitsUnavailable).toBe(false);
-    expect(result.github?.mergeable).toBe("");
+    expect(result.github?.mergeable).toBe("unknown");
     expect(result.github?.checks).toEqual([]);
     expect(result.github?.reviewFeedback).toEqual([]);
     expect(result.github?.lastCheckedAt).toBeUndefined();
+  });
+
+  it("fromSessionVcs_should_PassThroughRealMergeableValue_When_GithubMergeableSet", () => {
+    // Companion to the "defaults to unknown" case above — confirms the
+    // `|| "unknown"` fallback in fromSessionGithub doesn't clobber a real,
+    // non-empty mergeable value from the poller.
+    const status = create(VCSStatusSchema, { branch: "feat/foo" });
+    const session = create(SessionSchema, {
+      githubOwner: "tstapler",
+      githubRepo: "stapler-squad",
+      githubMergeable: "conflicting",
+    });
+
+    const result = fromSessionVcs(status, session);
+
+    expect(result.github?.mergeable).toBe("conflicting");
   });
 });
 

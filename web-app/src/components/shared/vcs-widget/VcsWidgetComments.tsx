@@ -25,21 +25,24 @@ interface VcsWidgetCommentsProps {
 type LoadState = "idle" | "loading" | "loaded" | "error";
 
 /**
- * PR comments section, collapsed by default. Fetches lazily on first expand
- * only — never on mount. Because this section renders inside VcsWidget's
- * shared CollapsibleGroup, `CollapsibleSection`'s `onExpandedChange` prop is
- * inert there (grouped mode only speaks through the group's own
- * value/onValueChange — see Collapsible.tsx), so the fetch trigger instead
- * lives in a `useEffect` on the section's children: the group unmounts
- * `Accordion.Content` on collapse and remounts it on expand, so mounting is
- * a reliable "just expanded" signal. The `fetchedRef` guard lives on this
- * always-mounted wrapper (not the child that gets unmounted) so a
- * collapse/re-expand cycle does not refetch.
+ * PR comments section, collapsed by default. Fetches lazily on first expand,
+ * triggered by the child mounting (CollapsibleGroup unmounts/remounts
+ * `Accordion.Content` on collapse/expand — see Collapsible.tsx) since grouped
+ * mode makes `onExpandedChange` inert.
  */
 export function VcsWidgetComments({ owner, repo, prNumber, sessionId }: VcsWidgetCommentsProps) {
   const [comments, setComments] = useState<PRComment[]>([]);
   const [loadState, setLoadState] = useState<LoadState>("idle");
   const fetchedRef = useRef(false);
+  // Guards against a setState after unmount: queue navigation remounts this
+  // component (keyed by sessionId in VcsWidget.tsx) while a fetch from the
+  // previous session may still be in flight.
+  const unmountedRef = useRef(false);
+  useEffect(() => {
+    return () => {
+      unmountedRef.current = true;
+    };
+  }, []);
 
   const fetchComments = useCallback(() => {
     if (fetchedRef.current) return;
@@ -49,10 +52,12 @@ export function VcsWidgetComments({ owner, repo, prNumber, sessionId }: VcsWidge
     client
       .getPRComments({ id: sessionId })
       .then((response) => {
+        if (unmountedRef.current) return;
         setComments(response.comments ?? []);
         setLoadState("loaded");
       })
       .catch((err) => {
+        if (unmountedRef.current) return;
         console.error("[VcsWidgetComments] failed to load PR comments", err);
         setLoadState("error");
       });

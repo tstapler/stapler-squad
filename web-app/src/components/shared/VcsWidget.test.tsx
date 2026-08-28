@@ -1,7 +1,7 @@
 import React from "react";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { VcsWidget } from "./VcsWidget";
-import type { VcsWidgetData } from "@/lib/vcs/types";
+import type { VcsWidgetData, GithubSummary } from "@/lib/vcs/types";
 
 // VcsWidgetComments (rendered only when data.github + sessionId are both
 // present) calls GetPRComments via createClient — mocked here so tests that
@@ -33,24 +33,32 @@ function makeData(overrides: Partial<VcsWidgetData> = {}): VcsWidgetData {
   } as VcsWidgetData;
 }
 
+// Shared factory for the repeated 13-field GithubSummary literal below —
+// mirrors the `makeCheck`/`githubSummary` convention already used in
+// MergeabilityPill.test.tsx and VersionControlSection.test.tsx.
+function makeGithub(overrides: Partial<GithubSummary> = {}): GithubSummary {
+  return {
+    owner: "acme",
+    repo: "widget",
+    prUrl: "https://github.com/acme/widget/pull/1",
+    prNumber: 1,
+    prState: "open",
+    isDraft: false,
+    checkConclusion: "success",
+    approvedCount: 0,
+    changesReqCount: 0,
+    mergeable: "unknown",
+    checks: [],
+    reviewFeedback: [],
+    ...overrides,
+  };
+}
+
 describe("VcsWidget", () => {
   it("VcsWidget_should_RenderSectionsInMergeabilityPillFirstOrder_When_FullModeWithPopulatedData", () => {
     const data = makeData({
       branch: "feat/order-test",
-      github: {
-        owner: "acme",
-        repo: "widget",
-        prUrl: "https://github.com/acme/widget/pull/99",
-        prNumber: 99,
-        prState: "open",
-        isDraft: false,
-        checkConclusion: "success",
-        approvedCount: 0,
-        changesReqCount: 0,
-        mergeable: "unknown",
-        checks: [],
-        reviewFeedback: [],
-      },
+      github: makeGithub({ prUrl: "https://github.com/acme/widget/pull/99", prNumber: 99 }),
       fileChanges: [
         {
           path: "src/order.go",
@@ -130,20 +138,7 @@ describe("VcsWidget", () => {
 
   it("compact mode omits VcsWidgetGithubRow but shows the aggregate stat line", () => {
     const data = makeData({
-      github: {
-        owner: "acme",
-        repo: "widget",
-        prUrl: "https://github.com/acme/widget/pull/1",
-        prNumber: 1,
-        prState: "open",
-        isDraft: false,
-        checkConclusion: "success",
-        approvedCount: 0,
-        changesReqCount: 0,
-        mergeable: "unknown",
-        checks: [],
-        reviewFeedback: [],
-      },
+      github: makeGithub(),
       aggregateStats: { filesChanged: 5, additions: 42, deletions: 8 },
     });
 
@@ -297,21 +292,7 @@ describe("VcsWidget", () => {
         data={makeData({
           kind: "live",
           statusAsOf,
-          github: {
-            owner: "acme",
-            repo: "widget",
-            prUrl: "https://github.com/acme/widget/pull/1",
-            prNumber: 1,
-            prState: "open",
-            isDraft: false,
-            checkConclusion: "success",
-            approvedCount: 0,
-            changesReqCount: 0,
-            mergeable: "unknown",
-            checks: [],
-            reviewFeedback: [],
-            lastCheckedAt,
-          },
+          github: makeGithub({ lastCheckedAt }),
         })}
         mode="full"
       />
@@ -341,21 +322,7 @@ describe("VcsWidget", () => {
         data={makeData({
           kind: "live",
           statusAsOf: undefined,
-          github: {
-            owner: "acme",
-            repo: "widget",
-            prUrl: "https://github.com/acme/widget/pull/1",
-            prNumber: 1,
-            prState: "open",
-            isDraft: false,
-            checkConclusion: "success",
-            approvedCount: 0,
-            changesReqCount: 0,
-            mergeable: "unknown",
-            checks: [],
-            reviewFeedback: [],
-            lastCheckedAt,
-          },
+          github: makeGithub({ lastCheckedAt }),
         })}
         mode="full"
       />
@@ -368,22 +335,7 @@ describe("VcsWidget", () => {
   it("VcsWidget_should_RenderCommentsSection_When_FullModeWithGithubAndSessionIdBothPresent", () => {
     render(
       <VcsWidget
-        data={makeData({
-          github: {
-            owner: "acme",
-            repo: "widget",
-            prUrl: "https://github.com/acme/widget/pull/1",
-            prNumber: 1,
-            prState: "open",
-            isDraft: false,
-            checkConclusion: "success",
-            approvedCount: 0,
-            changesReqCount: 0,
-            mergeable: "unknown",
-            checks: [],
-            reviewFeedback: [],
-          },
-        })}
+        data={makeData({ github: makeGithub() })}
         mode="full"
         sessionId="session-1"
       />
@@ -395,22 +347,7 @@ describe("VcsWidget", () => {
   it("VcsWidget_should_OmitCommentsSection_When_SessionIdMissingEvenWithGithubData", () => {
     render(
       <VcsWidget
-        data={makeData({
-          github: {
-            owner: "acme",
-            repo: "widget",
-            prUrl: "https://github.com/acme/widget/pull/1",
-            prNumber: 1,
-            prState: "open",
-            isDraft: false,
-            checkConclusion: "success",
-            approvedCount: 0,
-            changesReqCount: 0,
-            mergeable: "unknown",
-            checks: [],
-            reviewFeedback: [],
-          },
-        })}
+        data={makeData({ github: makeGithub() })}
         mode="full"
       />
     );
@@ -422,24 +359,15 @@ describe("VcsWidget", () => {
     render(
       <VcsWidget
         data={makeData({
-          github: {
-            owner: "acme",
-            repo: "widget",
-            prUrl: "https://github.com/acme/widget/pull/1",
-            prNumber: 1,
-            prState: "open",
-            isDraft: false,
-            checkConclusion: "success",
-            approvedCount: 0,
+          github: makeGithub({
             changesReqCount: 1,
-            mergeable: "unknown",
             checks: [
               { name: "build", context: "ci/build", state: "completed", status: "completed", conclusion: "success" },
             ],
             reviewFeedback: [
               { author: "reviewer1", state: "CHANGES_REQUESTED", body: "Please fix this" },
             ],
-          },
+          }),
         })}
         mode="full"
         sessionId="session-1"

@@ -77,7 +77,10 @@ function fromSessionGithub(session?: Session): GithubSummary | null {
     checkConclusion: toCheckConclusion(session.githubCheckConclusion),
     approvedCount: session.githubApprovedCount,
     changesReqCount: session.githubChangesReqCount,
-    mergeable: session.githubMergeable,
+    // "unknown" sentinel matches fromShipStatusGithub/fromUnfinishedWorktreeGithub
+    // below — one "not known" value across all three adapters, not an
+    // empty-string special case only this one produces.
+    mergeable: session.githubMergeable || "unknown",
     checks: session.githubChecks.map((c) => ({
       name: c.name,
       context: c.context,

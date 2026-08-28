@@ -443,13 +443,10 @@ type AggregateDiffStat struct {
 }
 
 // DiffStatBetween returns the aggregate files-changed/additions/deletions
-// counts between baseSHA and headSHA, by summing the existing
-// FileStatsBetween's per-file counts rather than adding a second go-git
-// diff implementation. Takes a ctx so the new live-session call site
-// (WorkspaceService.GetVCSStatus) can bound it the same way ListShippedCommits
-// is bounded; FileStatsBetween's own go-git patch computation doesn't accept
-// a ctx, so the timeout guards against starting the call once the caller's
-// deadline has already passed, not against a hang mid-computation.
+// between baseSHA and headSHA, summing FileStatsBetween's per-file counts.
+// ctx only guards against starting once the caller's deadline has passed —
+// FileStatsBetween's go-git patch computation takes no ctx, so this can't
+// bound a hang mid-computation.
 func DiffStatBetween(ctx context.Context, repoPath, baseSHA, headSHA string) (AggregateDiffStat, error) {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()

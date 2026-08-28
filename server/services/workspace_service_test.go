@@ -634,6 +634,45 @@ func TestWorkspaceService_GetVCSStatus_HeadResolutionFailure_SetsCommitsUnavaila
 	assert.Empty(t, vcsStatus.Commits)
 }
 
+// TestWorkspaceService_GetVCSStatus_ListShippedCommitsFailure_SetsCommitsUnavailable
+// covers the sibling failure branch to the HEAD-resolution test above: HEAD
+// resolves fine, but the recorded base SHA doesn't exist in the repo, so
+// ListShippedCommits itself fails resolving baseSHA. Distinct code path
+// (workspace_service.go's listErr != nil branch, not headErr != nil) — a
+// regression here would silently render a stale/empty commit list
+// indistinguishable from "genuinely zero commits."
+func TestWorkspaceService_GetVCSStatus_ListShippedCommitsFailure_SetsCommitsUnavailable(t *testing.T) {
+	t.Parallel()
+	fix := setupWorkspaceTestFixture(t)
+	t.Cleanup(fix.cleanup)
+
+	dir, _, _ := newVCSStatusTestRepo(t)
+
+	inst := &session.Instance{Title: "bad-base-sha-session", Path: dir, Status: session.Paused, Program: "claude"}
+	// HEAD resolves fine; this base SHA is well-formed but doesn't exist in
+	// the repo, so ListShippedCommits's CommitObject(baseSHA) lookup fails.
+	inst.SetDirBaseSHA("0000000000000000000000000000000000dead")
+	fix.svc.SetLiveFinder(&stubLiveFinder{inst: inst})
+
+	resp, err := fix.svc.GetVCSStatus(context.Background(), connect.NewRequest(&sessionv1.GetVCSStatusRequest{
+		Id: "bad-base-sha-session",
+	}))
+	require.NoError(t, err)
+	require.Empty(t, resp.Msg.Error)
+
+	cached, ok := fix.svc.vcsStatusCache.Load(dir)
+	require.True(t, ok)
+	entry := cached.(vcsStatusCacheEntry)
+
+	assert.True(t, entry.status.CommitsUnavailable)
+	assert.Nil(t, entry.status.Commits)
+
+	vcsStatus := resp.Msg.VcsStatus
+	require.NotNil(t, vcsStatus)
+	assert.True(t, vcsStatus.CommitsUnavailable)
+	assert.Empty(t, vcsStatus.Commits)
+}
+
 func TestWorkspaceService_GetVCSStatus_CacheHit_ReturnsSameStatusAsOf(t *testing.T) {
 	t.Parallel()
 	fix := setupWorkspaceTestFixture(t)

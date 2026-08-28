@@ -791,12 +791,9 @@ message PRInfo {
   google.protobuf.Timestamp updated_at = 16;
 }
 
-// GithubCheckItem is one itemized CI check from a PR's statusCheckRollup —
-// the data github_check_conclusion (below) collapses into a single rollup
-// string. `state`/`status`/`conclusion` map to distinct GitHub concepts:
-// `state` is the legacy Commit Status API's value, while `status`/`conclusion`
-// come from the newer Checks API (status: queued/in_progress/completed;
-// conclusion: success/failure/etc., only set once status is completed).
+// GithubCheckItem is one itemized CI check from a PR's statusCheckRollup.
+// `state` is the legacy Commit Status API's value; `status`/`conclusion` come
+// from the newer Checks API and may be empty for a legacy-API item.
 message GithubCheckItem {
   string name = 1;
   string context = 2;
@@ -977,13 +974,10 @@ message FileChange {
   int32 deletions = 6;
 }
 
-// ShippedCommit is one commit, used by two distinct call sites with different
-// meanings for "shipped": a live session's VCSStatus.commits (this file) lists
-// commits not yet on the branch's recorded base (still local/pending), while
-// BacklogItemShipStatus's durable snapshot (backlog.proto, which imports this
-// file) lists commits already confirmed merged into main. Relocated here from
-// backlog.proto so the two call sites share one message definition instead of
-// two independently-maintained copies.
+// ShippedCommit is one commit. Shared by VCSStatus.commits (below — a live
+// session's unshipped-vs-base commits) and BacklogItemShipStatus.commits
+// (backlog.proto — confirmed-merged commits); relocated here so both share
+// one definition instead of two independently-maintained copies.
 message ShippedCommit {
   string sha = 1;
   string summary = 2; // first line of the commit message

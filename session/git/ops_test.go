@@ -485,6 +485,30 @@ func TestListShippedCommits_should_ReportTruncatedTrue_When_CommitCountExceedsCa
 	assert.True(t, truncated, "5 commits against a cap of 3 must report truncated")
 }
 
+// TestListShippedCommits_should_ReturnContextError_When_ContextAlreadyCanceled
+// covers the new ctx.Err() check inside listShippedCommitsWithCap's walk
+// loop (added for the live-session VCS-tab call site) — previously
+// unexercised by any test, so a broken check (inverted condition, wrong
+// return arity) would compile and pass everything else.
+func TestListShippedCommits_should_ReturnContextError_When_ContextAlreadyCanceled(t *testing.T) {
+	t.Parallel()
+	origin := setupTestRepo(t)
+	work := cloneTestRepo(t, origin)
+	baseSHA := strings.TrimSpace(runGit(t, work, "rev-parse", "HEAD"))
+
+	runGit(t, work, "checkout", "-b", "feature")
+	require.NoError(t, os.WriteFile(filepath.Join(work, "feature.txt"), []byte("work\n"), 0o644))
+	runGit(t, work, "add", "feature.txt")
+	runGit(t, work, "commit", "-m", "feature commit")
+	headSHA := strings.TrimSpace(runGit(t, work, "rev-parse", "HEAD"))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, _, err := listShippedCommitsWithCap(ctx, work, baseSHA, headSHA, 100)
+	require.ErrorIs(t, err, context.Canceled)
+}
+
 // TestFileStatsBetween_ShouldReturnPerFileCounts_WhenCommitsAddAndDeleteLines
 // verifies the happy path (Story 3.2.1): a two-commit range that adds 5 lines to one
 // file and deletes 2 from another must report per-file addition/deletion counts with
@@ -710,6 +734,22 @@ func TestDiffStatBetween(t *testing.T) {
 
 		stat, err := DiffStatBetween(context.Background(), work, "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef", headSHA)
 		require.Error(t, err)
+		assert.Equal(t, AggregateDiffStat{}, stat)
+	})
+
+	t.Run("context already canceled", func(t *testing.T) {
+		// Covers the new ctx.Err() check added for the live-session VCS-tab
+		// call site — previously unexercised by any test.
+		t.Parallel()
+		origin := setupTestRepo(t)
+		work := cloneTestRepo(t, origin)
+		sha := strings.TrimSpace(runGit(t, work, "rev-parse", "HEAD"))
+
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+
+		stat, err := DiffStatBetween(ctx, work, sha, sha)
+		require.ErrorIs(t, err, context.Canceled)
 		assert.Equal(t, AggregateDiffStat{}, stat)
 	})
 }

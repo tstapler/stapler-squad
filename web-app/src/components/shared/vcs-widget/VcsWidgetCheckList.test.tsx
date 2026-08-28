@@ -82,6 +82,40 @@ describe("VcsWidgetCheckList", () => {
     expect(screen.getByText("Pending:")).toBeInTheDocument();
   });
 
+  it("VcsWidgetCheckList_should_FallBackToState_When_ConclusionEmpty", () => {
+    // Regression test: `conclusion` is Checks-API-only and empty for a
+    // legacy Commit-Status-API item. Without falling back to `state`
+    // (mirroring github.getCheckConclusion server-side), a passed/failed
+    // legacy-API check rendered with a blank conclusion and the gray
+    // "Pending" clock icon regardless of its real outcome.
+    const checks = [
+      makeCheck({ name: "coverage-bot", context: "coverage", conclusion: "", state: "success" }),
+      makeCheck({ name: "legacy-ci", context: "legacy", conclusion: "", state: "failure" }),
+    ];
+    render(<VcsWidgetCheckList checks={checks} />);
+    fireEvent.click(screen.getByTestId("collapsible-header-ci-checks"));
+
+    const rows = screen.getAllByRole("listitem");
+    expect(rows[0].querySelector("svg")).toHaveClass("lucide-circle-check");
+    expect(rows[1].querySelector("svg")).toHaveClass("lucide-circle-x");
+    expect(screen.getByText("Passed:")).toBeInTheDocument();
+    expect(screen.getByText("Failed:")).toBeInTheDocument();
+  });
+
+  it("VcsWidgetCheckList_should_RenderSkippedGlyphAndLabel_When_ConclusionIsNeutralSkippedOrCancelled", () => {
+    const checks = [
+      makeCheck({ name: "a", context: "a", conclusion: "neutral" }),
+      makeCheck({ name: "b", context: "b", conclusion: "skipped" }),
+      makeCheck({ name: "c", context: "c", conclusion: "cancelled" }),
+    ];
+    render(<VcsWidgetCheckList checks={checks} />);
+    fireEvent.click(screen.getByTestId("collapsible-header-ci-checks"));
+
+    const rows = screen.getAllByRole("listitem");
+    rows.forEach((row) => expect(row.querySelector("svg")).toHaveClass("lucide-circle-minus"));
+    expect(screen.getAllByText("Skipped:")).toHaveLength(3);
+  });
+
   it("VcsWidgetCheckList_should_StartCollapsed_When_Rendered", () => {
     render(<VcsWidgetCheckList checks={[makeCheck()]} />);
 

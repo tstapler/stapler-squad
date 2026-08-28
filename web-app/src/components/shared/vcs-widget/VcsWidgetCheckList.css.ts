@@ -28,3 +28,4 @@ export const context = style({
 export const checkSuccess = style({ color: vars.color.success });
 export const checkFailure = style({ color: vars.color.errorText });
 export const checkPending = style({ color: vars.color.textSecondary });
+export const checkNeutral = style({ color: vars.color.textMuted });
