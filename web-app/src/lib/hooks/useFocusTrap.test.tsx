@@ -79,7 +79,7 @@ describe("useFocusTrap", () => {
     trigger.remove();
   });
 
-  it("useFocusTrap_should_NotThrowAndLeaveFocusUnchanged_When_NoTriggerRefSupplied", () => {
+  it("useFocusTrap_should_NotThrowAndDropFocusToBody_When_NoTriggerRefSupplied", () => {
     const { unmount, getByTestId } = render(<TrapHarness isActive />);
     const first = getByTestId("first");
     expect(document.activeElement).toBe(first);
