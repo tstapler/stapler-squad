@@ -267,7 +267,7 @@ func checkPoolStartAllowed(t *testing.T) {
 // WorkDir with version control context. Without this, claude may exit immediately
 // on some systems that require a git repo for project-context features. Uses
 // go-git directly rather than shelling out — see
-// .claude/rules/prefer-go-git-over-subshells.md.
+// the `prefer-go-git-over-subshells` skill.
 func initGitRepo(t *testing.T, dir string) {
 	t.Helper()
 	initGitRepoForTest(t, dir)

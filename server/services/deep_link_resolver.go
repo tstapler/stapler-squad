@@ -27,7 +27,7 @@ type backlogItemGetter interface {
 // HostResolver resolves a deep link's hostname to either a live remote
 // host's advertised address or a reason it can't be reached, via the
 // Workspace Host Registry (Epic 3). Defined narrowly here (consumer-side,
-// per .claude/rules/interface-pollution-checklist.md) so Epic 3's Story 3.3
+// per the `interface-pollution-checklist` skill) so Epic 3's Story 3.3
 // can implement it against session.HostRegistry independently of this file.
 type HostResolver interface {
 	// ResolveHost looks up hostname in the registry. ok is false when the

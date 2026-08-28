@@ -64,7 +64,7 @@ func ResolvedModeLabel(mode string) string {
 // mechanism and has a genuine, independently-verified caller elsewhere in the
 // codebase (see plan.md's Pattern Decisions row on method count) — splitting
 // them into multiple interfaces would be exactly the kind of speculative
-// interface-pollution .claude/rules/interface-pollution-checklist.md warns
+// interface-pollution the `interface-pollution-checklist` skill warns
 // against, not less of it.
 type PipelineEngine interface {
 	// SlashCommandSet returns the filename→rendered-content map that

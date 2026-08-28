@@ -40,7 +40,7 @@ type PRFixSpawner interface {
 // OneShotShipRunner runs a one-shot LLM prompt against a session's worktree,
 // returning the PR URL the prompt produced (or "" if none was found in its
 // output). Defined here — the consumer — per this repo's anti-interface-
-// pollution convention (.claude/rules/interface-pollution-checklist.md);
+// pollution convention (the `interface-pollution-checklist` skill);
 // *services.SessionService satisfies it via RunOneShotForSession, wired in
 // production via SetOneShotShipRunner from server/dependencies.go. Mirrors
 // services.PRRunner (server/services/backlog_service_ship.go), which the same
@@ -1073,7 +1073,7 @@ func (l *BacklogLifecycleListener) RecordPRCreatedOutOfBand(ctx context.Context,
 // unified-vcs-widget requirement. It is a free function, not a method on
 // BacklogLifecycleListener: it needs no state from that type beyond
 // *Storage, which is passed explicitly here (per
-// .claude/rules/interface-pollution-checklist.md, a method only earns its
+// the `interface-pollution-checklist` skill, a method only earns its
 // receiver when it genuinely needs the type's other state).
 //
 // Two data groups are captured independently — a failure in one must never
@@ -1107,7 +1107,7 @@ func (l *BacklogLifecycleListener) RecordPRCreatedOutOfBand(ctx context.Context,
 // direct write-through via UpdateBacklogItem. If a future caching layer is
 // added on top of this function, it must return the locally-computed
 // snapshot value rather than re-reading a cache slot after a lock is
-// released, per .claude/rules/go-double-checked-locking.md.
+// released, per docs/explanation/concurrency-patterns.md.
 func CaptureShipSnapshot(ctx context.Context, storage *Storage, item *BacklogItemData, prStatus *git.PRStatus, lastWork *ItemSessionSummary, wt *GitWorktreeData) error {
 	var update BacklogItemUpdate
 	groupAFailed := false
@@ -1615,7 +1615,7 @@ func findPRPendingItemForEvent(ctx context.Context, er *EntRepository, repoFullN
 }
 
 // TriggerPRFixForEvent satisfies services.PRFixEventRouter (defined in the
-// consuming package, per .claude/rules/interface-pollution-checklist.md). It
+// consuming package, per the `interface-pollution-checklist` skill). It
 // looks up the pr_pending item tracking (repoFullName, prNumber) and, if
 // found, runs the same per-item reconciliation ReconcilePRPending's 60s tick
 // would eventually run for it — see ADR-002 for why the full body (merge

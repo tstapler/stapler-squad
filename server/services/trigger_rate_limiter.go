@@ -19,7 +19,7 @@ const (
 // TriggerRateLimiter enforces a per-Workflow rate limit on trigger fires (webhook-
 // triggers Epic 2.4.2), guarding against a noisy or malicious webhook source spawning
 // unbounded sessions. Concrete type, not an interface — one implementation, per
-// .claude/rules/interface-pollution-checklist.md. server/workflows.Scheduler consumes
+// the `interface-pollution-checklist` skill. server/workflows.Scheduler consumes
 // it through its own narrow triggerRateLimiterGate interface (defined in
 // scheduler.go), to avoid a server/workflows -> server/services import.
 type TriggerRateLimiter struct {

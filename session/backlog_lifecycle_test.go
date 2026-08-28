@@ -4133,7 +4133,7 @@ func TestBacklogLifecycleListener_HeadlessPoolAlone_NoLongerTriggersReviewGateSp
 // runGitTestCmd runs `git <args...>` in dir, failing the test on error. Test-only
 // helper — CaptureShipSnapshot itself never shells out (it calls
 // git.FileStatsBetween, which is go-git-based per
-// .claude/rules/prefer-go-git-over-subshells.md); this just builds fixture repo
+// the `prefer-go-git-over-subshells` skill); this just builds fixture repo
 // data for FileStatsBetween to read.
 func runGitTestCmd(t *testing.T, dir string, args ...string) string {
 	t.Helper()

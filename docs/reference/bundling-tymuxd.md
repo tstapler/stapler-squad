@@ -6,7 +6,7 @@
 alternative to the tmux backend. This doc covers fetching/embedding the
 binary, how stapler-squad supervises it, the rollout-safety flags that gate
 switching to it, and the accepted security tradeoffs of doing so. It
-supersedes the placeholder pointer left in `.claude/docs/bundling-tmux.md`'s
+supersedes the placeholder pointer left in `docs/how-to/bundle-tmux.md`'s
 "Bundling tymuxd alongside tmux" section.
 
 See `project_plans/tymux-bundled-integration/decisions/` for the full
@@ -15,7 +15,7 @@ ADRs (ADR-001 through ADR-004) referenced throughout.
 ## Fetching and embedding the binary
 
 Unlike tmux (compiled from a pinned git submodule — see
-`.claude/docs/bundling-tmux.md`), `tymuxd` is a multi-crate Rust workspace
+`docs/how-to/bundle-tmux.md`), `tymuxd` is a multi-crate Rust workspace
 this repo has no reason to require a Cargo/rustc toolchain for. Instead, a
 pinned prebuilt release binary is fetched from `tstapler/tymux`'s GitHub
 Releases and checksum-verified (ADR-001):
@@ -162,7 +162,7 @@ already-attached session is not transparently reconnected to it.
 
 `--tymuxd-keep-server` defaults to `true`, mirroring `--tmux-keep-server`'s
 own default and rationale (see
-`.claude/docs/tmux-keep-server-on-restart.md`) — a restart should not tear
+`docs/explanation/tmux-keep-server-on-restart.md`) — a restart should not tear
 down live tymux-backed sessions unless an operator explicitly opts out. When
 `false`, the daemon is stopped via `pkg/warren`'s `App.OnStop` hook
 (`tymux.StopTymuxd()`) — this is the first production use of `OnStop` in

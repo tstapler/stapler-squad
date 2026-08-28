@@ -19,7 +19,7 @@ var _ sessionv1connect.ImportServiceHandler = (*ImportService)(nil)
 
 // ProcessCreateTimeReader is the subset of procinfo.ProcessInspector needed
 // to mint a PIDIdentity at preview time. Scoped to the one method this
-// service actually calls (see .claude/rules/interface-pollution-checklist.md
+// service actually calls (see the `interface-pollution-checklist` skill
 // smell #1 -- this is deliberately narrow, not a general process-inspection
 // interface).
 type ProcessCreateTimeReader interface {

@@ -246,7 +246,7 @@ var (
 			// Acquire an exclusive, process-lifetime lock before touching any
 			// shared state (tmux server, ent DB) so a prior process that
 			// launchd/systemd has lost track of (see
-			// .claude/rules/service-restart-orphan-process.md) can't race
+			// docs/explanation/service-restart-orphan-process.md) can't race
 			// this one over the same instance directory.
 			configDir, err := config.GetConfigDir()
 			if err != nil {

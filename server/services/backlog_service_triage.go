@@ -119,7 +119,7 @@ func recentReviewHadVerdict(sessions []session.ItemSessionSummary, n int) []bool
 // first), one per completed (EndedAt != nil) work-role ItemSession in
 // sessions — computed lazily via go-git tree comparison of each session's
 // BaseCommitSha/LastCommitSha (git.FileStatsBetween; no git subshell, see
-// .claude/rules/prefer-go-git-over-subshells.md). sessions must be ordered
+// the `prefer-go-git-over-subshells` skill). sessions must be ordered
 // oldest-first, as Storage.ListItemSessions returns (mirrors
 // recentReviewHadVerdict's contract above). Feeds
 // session.IsTestOnlyReworkCycle.
@@ -2887,7 +2887,7 @@ func (s *BacklogService) TriggerTriage(
 		// mode; nothing for default mode, which writes to artifactAbsPath instead
 		// — CommitChanges no-ops when the worktree isn't dirty) so the docs
 		// survive past this goroutine instead of sitting uncommitted indefinitely
-		// (the exact gap .claude/rules/sdd-planning-artifacts-commit.md already
+		// (the exact gap docs/how-to/commit-sdd-planning-artifacts.md already
 		// names). Only when triageWorktree is non-nil — the itemRepoPath fallback
 		// path must never auto-commit into a repo this code didn't create.
 		if triageWorktree != nil {

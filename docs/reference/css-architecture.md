@@ -1,14 +1,4 @@
----
-globs:
-  - "web-app/**/*.css"
-  - "web-app/**/*.module.css"
-  - "web-app/**/*.css.ts"
-  - "web-app/**/*.tsx"
-  - "web-app/**/*.ts"
-  - "web-app/**/*.html"
----
-
-# CSS Architecture Rules (ADR-009)
+# CSS Architecture Reference (ADR-009)
 
 This project has adopted **vanilla-extract** for all new CSS. See `docs/adr/009-vanilla-extract-type-safe-css.md`.
 

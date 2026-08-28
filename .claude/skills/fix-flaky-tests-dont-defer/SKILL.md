@@ -1,6 +1,18 @@
+---
+name: fix-flaky-tests-dont-defer
+description: Use when a test in stapler-squad fails intermittently and you're tempted to call it "a known pre-existing flake" — root-cause and fix it in the same session, or file it as a tracked bug immediately, instead of silently re-excusing it again.
+---
+
 # Fix Flaky Tests When You Find Them — Don't Just Defer Them
 
 When a test fails intermittently and you recognize it as "a known pre-existing flake," root-cause and fix it in the same session, or file it as a tracked bug immediately — don't just note it as unrelated and move past it again.
+
+## When to Use This Skill
+
+- A test fails intermittently in local runs or CI and re-running it passes
+- You're about to write "known pre-existing flake, unrelated to this diff" in a PR
+  description or commit message
+- You recognize a test name that has been cited as a flake in a previous PR
 
 **Wrong:**
 ```

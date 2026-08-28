@@ -745,7 +745,7 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	// unauthenticated prober scanning generic guessable webhook paths
 	// (plan.md Risk Control) — that rationale doesn't apply here:
 	// /api/hooks/slack-interactive is a single, fixed, already
-	// publicly-documented path (.claude/docs/slack-phase2-public-reachability.md),
+	// publicly-documented path (docs/how-to/expose-slack-interactive-endpoint.md),
 	// not a guessable pattern, so an explicit 404 leaks nothing a prober
 	// couldn't already find in the docs. Boot-time-only gate either way
 	// (flipping the flag requires a restart to take effect).

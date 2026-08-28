@@ -95,7 +95,7 @@ export function HostKeyTrustDialog({ host, port, fingerprint, onTrust, onCancel 
   );
 
   // createPortal escapes any ancestor CSS transform/filter/will-change that
-  // would break position:fixed (ADR-009 / .claude/rules/css-architecture.md).
+  // would break position:fixed (ADR-009 / docs/reference/css-architecture.md).
   if (typeof document === "undefined") return null;
   return createPortal(content, document.body);
 }

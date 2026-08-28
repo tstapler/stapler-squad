@@ -322,7 +322,7 @@ func TestResolveSessionPath_should_CreateWorktree_When_RepoHasNoInitialCommit(t 
 // TestRecentWorkSessionFileLists_should_returnChangedFiles_When_CompletedWorkSessionsHaveValidRanges
 // verifies the happy path: two completed work sessions, each with a real
 // base..head commit range, produce two file lists (most recent first),
-// computed via go-git (no subshell — .claude/rules/prefer-go-git-over-subshells.md).
+// computed via go-git (no subshell — the `prefer-go-git-over-subshells` skill).
 func TestRecentWorkSessionFileLists_should_returnChangedFiles_When_CompletedWorkSessionsHaveValidRanges(t *testing.T) {
 	t.Parallel()
 	repoPath := t.TempDir()

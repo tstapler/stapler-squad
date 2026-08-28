@@ -22,7 +22,7 @@ import (
 
 // setupTestGitRepoForPreview creates a minimal git repo for PreviewWorktreePath's
 // repo-root validation (mirrors session/git's setupTestRepo helper). Uses go-git
-// directly rather than shelling out — see .claude/rules/prefer-go-git-over-subshells.md.
+// directly rather than shelling out — see the `prefer-go-git-over-subshells` skill.
 func setupTestGitRepoForPreview(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()

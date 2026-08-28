@@ -2335,7 +2335,7 @@ func (p shellPanePTY) GetPaneCursorPosition() (x, y int, err error) {
 // It exists so Epic 4.1 (stale-dimension slow-path skip) and Epic 4.2 (exec-gate
 // fast lane) can each add their flag as a named field here instead of accreting
 // another positional bool parameter onto handleCurrentPaneRequest's signature —
-// see .claude/rules/primitive-obsession-checklist.md. Callers resolve the
+// see the `primitive-obsession-checklist` skill. Callers resolve the
 // corresponding feature flag (config.LoadConfig().GetFeatureFlag(...)) and pass
 // the result in; handleCurrentPaneRequest itself stays free of feature-flag
 // lookups, so unit tests can exercise both branches by constructing ResyncOptions

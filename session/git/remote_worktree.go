@@ -47,7 +47,7 @@ func NewRemoteWorktreeOps(runner tmux.CommandRunner) *RemoteWorktreeOps {
 // RemoveWorktree. RepoPath and WorktreePath are bundled into this single value
 // object rather than passed as separate positional string parameters so a caller
 // can't silently transpose them at the call site
-// (.claude/rules/primitive-obsession-checklist.md).
+// (the `primitive-obsession-checklist` skill).
 type RemoteWorktree struct {
 	// RepoPath is the existing repository on the remote host that `git worktree
 	// add`/`remove` runs against (the CommandRunner.Run "dir" argument).

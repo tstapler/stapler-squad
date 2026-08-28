@@ -3473,7 +3473,7 @@ func TestTriggerTriage_FallsBackToRepoPathDirectly_When_RepoPathIsNotAGitRepo(t 
 // TestTriggerTriage_CommitsSDDArtifactsInWorktree_AndUpdatesPlanArtifactsPath is the
 // end-to-end regression test for both halves of the fix: SDD-mode triage's
 // project_plans/<name>/ output must land in the isolated worktree and get
-// committed there (closing the gap .claude/rules/sdd-planning-artifacts-commit.md
+// committed there (closing the gap docs/how-to/commit-sdd-planning-artifacts.md
 // already names), and PlanArtifactsPath must point at the implementation/
 // subdirectory the SDD skills actually write plan.md into — not artifactAbsPath,
 // which SDD-mode never writes to at all.

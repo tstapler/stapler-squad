@@ -653,7 +653,7 @@ No other text.`
 // the most recent nudge actually delivered (both SendKeys calls succeeded); a zero
 // lastSent (lastSent.at.IsZero()) means none has been sent yet. Bundled into one
 // struct param (rather than two same-shaped text/time.Time args) per
-// .claude/rules/primitive-obsession-checklist.md — the two values are always read
+// the `primitive-obsession-checklist` skill — the two values are always read
 // and passed together, so a struct removes the chance of them being supplied out of
 // order at a call site. lastSent.text is LLM-generated content from a prior turn, so
 // it's wrapped in its own <last_nudge> tag (same anti-spoofing rationale as
@@ -704,7 +704,7 @@ var orchestrationDirectiveMarker = regexp.MustCompile(`(?i)(DONE|NEXT_MESSAGE|WA
 // orchestrationDirective is the 3-way outcome of parsing an orchestrator reply. A
 // dedicated enum (rather than a second bool alongside nextMsg/reason strings) avoids
 // the same same-typed-parameter ambiguity flagged by
-// .claude/rules/primitive-obsession-checklist.md for function parameters — here applied
+// the `primitive-obsession-checklist` skill for function parameters — here applied
 // to a return value that would otherwise need a second bool to distinguish WAIT from
 // DONE.
 type orchestrationDirective int

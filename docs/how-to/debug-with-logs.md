@@ -9,7 +9,7 @@
 | `staplersquad.log` | Current live log, JSON-lines (one `slog` record per line: `time`, `level`, `msg`, plus arbitrary key/value fields). |
 | `staplersquad-<timestamp>.log.gz` | Rotated log segments (lumberjack). Same JSON-lines format, gzipped. |
 | `service.log` / `service.log.old` | Raw stdout/stderr of the systemd/launchd-managed service — startup banners, panics that happen before logging is initialized, and anything written outside the `log` package. Check here first for crash-on-boot issues the structured log never saw. |
-| `debug-snapshot-*.json` | One-off diagnostic dumps (goroutine/heap snapshots), not part of the regular log stream — see `.claude/docs/profiling.md`. |
+| `debug-snapshot-*.json` | One-off diagnostic dumps (goroutine/heap snapshots), not part of the regular log stream — see `docs/how-to/profile-lockups.md`. |
 
 Every line is a flat JSON object — pull specific fields with `jq` rather than `grep`ping text:
 
@@ -151,7 +151,7 @@ JSON blob or path baked into the text) or level filtering.
 
 Before adding a log line to track something that happens frequently (a
 counter, a rate, a distribution), check whether it belongs as an
-OpenTelemetry metric instead — see `.claude/docs/opentelemetry.md`. The
+OpenTelemetry metric instead — see `docs/how-to/enable-opentelemetry.md`. The
 `onBatchFlush` case above is the template: `recordBatchFlushFramesCoalesced`
 already exports this as a metric, so the log line was pure duplication once
 downgraded off the default-visible path.
