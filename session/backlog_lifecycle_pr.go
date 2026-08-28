@@ -21,6 +21,20 @@ import (
 // failures/comments to pass as context to the new work session.
 type PRFixSpawner interface {
 	AutoReopenForPRFix(ctx context.Context, itemID string, fixContext string) error
+	// HasActiveWorkSession resolves itemID's current active work session, if
+	// any (nil if none). Side-effect-free. Returning the resolved session
+	// itself — not just a bool — lets remediatePRFixWithBackoffGate pass it
+	// into AutoReopenForPRFixWithKnownSession so the backoff-bypass decision
+	// and the steer-vs-spawn decision share one observation of mutable
+	// state instead of two independent reads (TOCTOU: the session could end
+	// between two separate queries).
+	HasActiveWorkSession(ctx context.Context, itemID string) (*ItemSessionSummary, error)
+	// AutoReopenForPRFixWithKnownSession behaves like AutoReopenForPRFix,
+	// except knownActive (from a prior HasActiveWorkSession call in the same
+	// tick) is trusted as a floor on activity: if a fresh internal check no
+	// longer finds an active session, knownActive still prevents the spawn
+	// branch from firing.
+	AutoReopenForPRFixWithKnownSession(ctx context.Context, itemID, fixContext string, knownActive *ItemSessionSummary) error
 }
 
 // OneShotShipRunner runs a one-shot LLM prompt against a session's worktree,
@@ -1179,6 +1193,11 @@ func CaptureShipSnapshot(ctx context.Context, storage *Storage, item *BacklogIte
 // this exactly like "nothing happened this tick" and MUST NOT run any
 // AutoReopenForPRFix-result-dependent logic (e.g. the closed-branch's
 // BUG-040 field-clearing), since nothing was actually attempted.
+//
+// Before consulting RemediationDue, this checks fixSpawner.HasActiveWorkSession:
+// an active session skips the backoff gate entirely for that tick (it always
+// steers, never spawns). Only the no-active-session (spawn) path is gated by
+// RemediationDue.
 func (l *BacklogLifecycleListener) remediatePRFixWithBackoffGate(ctx context.Context, er *EntRepository, fixSpawner PRFixSpawner, itemID, itemTitle, fixCtx string) (attempted bool, err error) {
 	applied, markErr := er.MarkStuck(ctx, itemID, domain.StuckReasonPRNeedsFix, BacklogStatusPRPending, fixCtx)
 	if markErr != nil {
@@ -1199,6 +1218,24 @@ func (l *BacklogLifecycleListener) remediatePRFixWithBackoffGate(ctx context.Con
 				log.WarningLog().Printf("[BacklogLifecycle] remediatePRFixWithBackoffGate MarkStuckNotified item=%s: %v", itemID, notifyErr)
 			}
 		}
+	}
+
+	// Bypass the backoff gate entirely for the steer path: steering an
+	// already-active session has its own tighter, content-aware throttle
+	// (5-min cooldown + reason-signature dedup, two-tick conflict debounce)
+	// and can't create a duplicate session, so it must not be slowed by the
+	// 30m->72h backoff that exists solely to prevent a spawn storm on the
+	// no-active-session branch. active is threaded into
+	// AutoReopenForPRFixWithKnownSession below rather than discarded, so
+	// this decision and that call's steer-vs-spawn decision share one query.
+	active, activeErr := fixSpawner.HasActiveWorkSession(ctx, itemID)
+	if activeErr != nil {
+		log.WarningLog().Printf("[BacklogLifecycle] remediatePRFixWithBackoffGate HasActiveWorkSession item=%s: %v", itemID, activeErr)
+		// fail open — fall through to the due-gated path below, same rationale
+		// as every other best-effort check in this function.
+	} else if active != nil {
+		log.InfoLog().Printf("[BacklogLifecycle] remediatePRFixWithBackoffGate item=%s: active session found, steering unconditionally (bypassing backoff gate)", itemID)
+		return true, fixSpawner.AutoReopenForPRFixWithKnownSession(ctx, itemID, fixCtx, active)
 	}
 
 	due, justParked, gateErr := l.storage.RemediationDue(ctx, itemID, domain.StuckReasonPRNeedsFix)

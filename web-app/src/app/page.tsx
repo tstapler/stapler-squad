@@ -21,11 +21,13 @@ import { PaneTilingContainer } from "@/components/pane/PaneTilingContainer";
 import { CockpitActionsProvider } from "@/lib/contexts/CockpitActionsContext";
 import { usePageView } from "@/lib/analytics/usePageView";
 import { useAnalytics } from "@/lib/contexts/AnalyticsContext";
+import { useNotifications } from "@/lib/contexts/NotificationContext";
 import * as styles from "./page.css";
 
 function HomeContent() {
   usePageView();
   const { track } = useAnalytics();
+  const { addNotification } = useNotifications();
   const searchParams = useSearchParams();
   const router = useRouter();
   const { openInCreationMode, openOmnibar } = useOmnibar();
@@ -289,10 +291,20 @@ function HomeContent() {
     }
   }, [updateSession, track]);
 
-  const handleSteerAutonomousSession = useCallback(async (sessionId: string, message: string): Promise<void> => {
+  const handleSteerAutonomousSession = useCallback(async (sessionId: string, message: string): Promise<boolean> => {
     track({ name: "session_autonomous_steer", category: "user_action" });
-    await updateSession(sessionId, { steerMessage: message });
-  }, [updateSession, track]);
+    const result = await updateSession(sessionId, { steerMessage: message });
+    if (result === null) {
+      addNotification({
+        message: "Failed to send steering message — the session may not be running.",
+        notificationType: "error",
+        sessionId,
+        sessionName: "",
+      });
+      return false;
+    }
+    return true;
+  }, [updateSession, track, addNotification]);
 
   const handleResumeRequest = useCallback((session: Session) => {
     resumeTriggerRef.current = document.activeElement as HTMLElement;

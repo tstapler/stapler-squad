@@ -1411,6 +1411,19 @@ func (s *BacklogService) resolveRespawnBlockedActiveLogged(ctx context.Context, 
 	}
 }
 
+// resolveSteerFailedLogged clears an open StuckReasonSteerFailed row for
+// itemID, logging (not returning) any storage error. Mirrors
+// resolveRespawnBlockedActiveLogged for the opposite direction of "at most
+// one of {SteerFailed, RespawnBlockedActive} open at a time."
+func (s *BacklogService) resolveSteerFailedLogged(ctx context.Context, caller, itemID string) {
+	if s.storage == nil {
+		return
+	}
+	if _, err := s.storage.ResolveStuck(ctx, itemID, domain.StuckReasonSteerFailed); err != nil {
+		log.WarningLog().Printf("[%s] ResolveStuck(steer_failed) item=%s: %v", caller, itemID, err)
+	}
+}
+
 // notifyIfActiveWorkSessionStale closes the "zero operator signal" half of a
 // live gap: AutoReopenAfterFailedReview's hasActiveWorkSession guard treats
 // any work session with EndedAt == nil as "in flight" and skips reopening
@@ -2012,10 +2025,43 @@ func (s *BacklogService) RemediateStaleWorkSession(ctx context.Context, itemID s
 	return s.AutoRespawnAutonomousWork(ctx, itemID)
 }
 
-// AutoReopenForPRFix implements session.PRFixSpawner. It transitions the item
-// from pr_pending back to in_progress and spawns a new autonomous work session
-// pre-loaded with the CI/review failure context so the agent can fix and push.
+// HasActiveWorkSession implements session.PRFixSpawner's query half — a
+// side-effect-free check letting remediatePRFixWithBackoffGate decide
+// whether to bypass its backoff gate before calling
+// AutoReopenForPRFixWithKnownSession with the same resolved session. Does
+// not transition status or mark/notify anything.
+func (s *BacklogService) HasActiveWorkSession(ctx context.Context, itemID string) (*session.ItemSessionSummary, error) {
+	if s.storage == nil {
+		return nil, fmt.Errorf("storage not available")
+	}
+	sessions, err := s.storage.ListItemSessions(ctx, itemID)
+	if err != nil {
+		return nil, fmt.Errorf("list sessions: %w", err)
+	}
+	return findActiveWorkSession(sessions), nil
+}
+
+// AutoReopenForPRFix implements session.PRFixSpawner. When no work session is
+// active for the item, it transitions the item from pr_pending back to
+// in_progress and spawns a new autonomous work session pre-loaded with the
+// CI/review failure context so the agent can fix and push; when a work
+// session is already active, it instead steers that session with the same
+// fixContext (see steerActiveSessionForPRFix) rather than spawning a
+// duplicate.
 func (s *BacklogService) AutoReopenForPRFix(ctx context.Context, itemID string, fixContext string) error {
+	return s.autoReopenForPRFix(ctx, itemID, fixContext, nil)
+}
+
+// AutoReopenForPRFixWithKnownSession implements session.PRFixSpawner's
+// TOCTOU-safe variant: knownActive (from a prior HasActiveWorkSession call
+// in the same tick) is trusted as a floor on activity, so this call's
+// steer-vs-spawn decision can't diverge from the caller's already-decided
+// backoff bypass even if the session ended in between.
+func (s *BacklogService) AutoReopenForPRFixWithKnownSession(ctx context.Context, itemID, fixContext string, knownActive *session.ItemSessionSummary) error {
+	return s.autoReopenForPRFix(ctx, itemID, fixContext, knownActive)
+}
+
+func (s *BacklogService) autoReopenForPRFix(ctx context.Context, itemID string, fixContext string, knownActive *session.ItemSessionSummary) error {
 	if s.storage == nil {
 		return fmt.Errorf("storage not available")
 	}
@@ -2045,8 +2091,15 @@ func (s *BacklogService) AutoReopenForPRFix(ctx context.Context, itemID string, 
 	// progress while its 4-hour-old autonomous work session was, in fact, still active
 	// (see docs/tasks/backlog-feature-improvement.md).
 	s.tombstoneOrphanWorkSessions(ctx, itemID, sessions)
-	if active := findActiveWorkSession(sessions); active != nil {
-		s.notifyRespawnBlockedByActiveSession(ctx, "AutoReopenForPRFix", itemID, item.Title, session.BacklogStatus(item.Status), active.SessionUUID)
+	active := findActiveWorkSession(sessions)
+	if active == nil {
+		// Fall back to the caller's already-resolved session (same tick, one
+		// query earlier) so a session ending in this narrow window can't
+		// flip an already-decided backoff-bypass into an ungated spawn.
+		active = knownActive
+	}
+	if active != nil {
+		s.steerActiveSessionForPRFix(ctx, itemID, item.Title, session.BacklogStatus(item.Status), active.SessionUUID, fixContext)
 		return nil
 	}
 	s.resolveRespawnBlockedActiveLogged(ctx, "AutoReopenForPRFix", itemID)

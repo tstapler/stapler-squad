@@ -171,6 +171,19 @@ func (i *Instance) FireLifecycleEventForTest(event LifecycleEvent, reason string
 	i.fireLifecycleEvent(event, reason)
 }
 
+// SetControllerForTest wires c as this instance's controller, bypassing
+// StartController's normal preconditions (status manager wiring, a live PTY
+// subprocess). Exported exclusively for cross-package tests (e.g.
+// server/services' steerInstance autonomous-branch error/timeout tests) that
+// need a real, pipe-backed *ClaudeController (session.NewClaudeController +
+// Start against an os.Pipe()-backed InstanceContext, mirroring
+// TestClaudeController_Start_TagsEscapeAnalyticsWithStableID's approach)
+// without spinning up a full session. Mirrors FireLifecycleEventForTest's
+// "exported for test" pattern.
+func (i *Instance) SetControllerForTest(c *ClaudeController) {
+	i.controllerManager.SetController(c)
+}
+
 // StopController stops and cleans up the ClaudeController for this instance.
 func (i *Instance) StopController() {
 	i.mu.Lock()
