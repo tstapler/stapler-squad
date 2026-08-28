@@ -58,7 +58,7 @@
       },
       {
         "selector": "JSXAttribute[name.name='style'] > JSXExpressionContainer > ObjectExpression > Property[key.name=/^(flexDirection|flexWrap|display|alignItems|alignSelf|justifyContent|justifySelf|order|flex|float|clear|gridColumn|gridRow|gridArea)$/]",
-        "message": "Avoid inline style for layout-managed properties. Use a data-* attribute + selectors in the matching .css.ts file so CSS cascade and theme overrides can win. See .claude/rules/css-architecture.md."
+        "message": "Avoid inline style for layout-managed properties. Use a data-* attribute + selectors in the matching .css.ts file so CSS cascade and theme overrides can win. See docs/reference/css-architecture.md."
       },
       {
         "selector": "ImportDeclaration[source.value='@/lib/telemetry']",
