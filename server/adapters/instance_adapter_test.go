@@ -6,6 +6,7 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/detection"
 	"github.com/tstapler/stapler-squad/session/detection/ratelimit"
@@ -338,5 +339,83 @@ func TestInstanceToProto_omitsGoalSummaryWhenNil(t *testing.T) {
 	}
 	if proto.Goal != nil {
 		t.Errorf("expected Goal to be nil when inst.SessionGoal is nil, got %+v", proto.Goal)
+	}
+}
+
+// TestInstanceToProto_should_MapChecksAndReviewFeedback_When_Populated verifies
+// GithubChecks/GithubReviewFeedback/GithubMergeable populate field-for-field from
+// Instance.GitHubChecks/GitHubReviewFeedback/GitHubMergeable, matching the existing
+// sibling GitHub-status field GithubCheckConclusion.
+func TestInstanceToProto_should_MapChecksAndReviewFeedback_When_Populated(t *testing.T) {
+	inst := &session.Instance{
+		GitHubCheckConclusion: "success",
+		GitHubChecks: []github.CheckItem{
+			{Name: "build", Context: "ci/build", State: "SUCCESS", Status: "COMPLETED", Conclusion: "SUCCESS"},
+			{Name: "lint", Context: "ci/lint", State: "FAILURE", Status: "COMPLETED", Conclusion: "FAILURE"},
+		},
+		GitHubReviewFeedback: []github.ReviewItem{
+			{Author: "alice", State: "APPROVED", Body: "LGTM"},
+			{Author: "bob", State: "CHANGES_REQUESTED", Body: "please fix X"},
+		},
+		GitHubMergeable: "mergeable",
+	}
+
+	proto := InstanceToProto(inst, nil)
+	if proto == nil {
+		t.Fatal("expected non-nil proto")
+	}
+
+	if proto.GithubMergeable != "mergeable" {
+		t.Errorf("GithubMergeable = %q, want %q", proto.GithubMergeable, "mergeable")
+	}
+
+	if len(proto.GithubChecks) != 2 {
+		t.Fatalf("expected 2 GithubChecks, got %d", len(proto.GithubChecks))
+	}
+	wantChecks := []struct{ name, context, state, status, conclusion string }{
+		{"build", "ci/build", "SUCCESS", "COMPLETED", "SUCCESS"},
+		{"lint", "ci/lint", "FAILURE", "COMPLETED", "FAILURE"},
+	}
+	for i, want := range wantChecks {
+		got := proto.GithubChecks[i]
+		if got.Name != want.name || got.Context != want.context || got.State != want.state ||
+			got.Status != want.status || got.Conclusion != want.conclusion {
+			t.Errorf("GithubChecks[%d] = %+v, want %+v", i, got, want)
+		}
+	}
+
+	if len(proto.GithubReviewFeedback) != 2 {
+		t.Fatalf("expected 2 GithubReviewFeedback, got %d", len(proto.GithubReviewFeedback))
+	}
+	wantReviews := []struct{ author, state, body string }{
+		{"alice", "APPROVED", "LGTM"},
+		{"bob", "CHANGES_REQUESTED", "please fix X"},
+	}
+	for i, want := range wantReviews {
+		got := proto.GithubReviewFeedback[i]
+		if got.Author != want.author || got.State != want.state || got.Body != want.body {
+			t.Errorf("GithubReviewFeedback[%d] = %+v, want %+v", i, got, want)
+		}
+	}
+}
+
+// TestInstanceToProto_should_ProduceEmptySlices_When_ChecksAndReviewFeedbackNil verifies
+// the nil/empty case doesn't panic and produces empty (non-nil-required) slices.
+func TestInstanceToProto_should_ProduceEmptySlices_When_ChecksAndReviewFeedbackNil(t *testing.T) {
+	inst := &session.Instance{}
+
+	proto := InstanceToProto(inst, nil)
+	if proto == nil {
+		t.Fatal("expected non-nil proto")
+	}
+
+	if len(proto.GithubChecks) != 0 {
+		t.Errorf("expected empty GithubChecks, got %+v", proto.GithubChecks)
+	}
+	if len(proto.GithubReviewFeedback) != 0 {
+		t.Errorf("expected empty GithubReviewFeedback, got %+v", proto.GithubReviewFeedback)
+	}
+	if proto.GithubMergeable != "" {
+		t.Errorf("expected empty GithubMergeable, got %q", proto.GithubMergeable)
 	}
 }
