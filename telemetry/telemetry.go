@@ -167,12 +167,11 @@ func Initialize(ctx context.Context, cfg Config) (*Provider, error) {
 		sdkmetric.WithReader(sdkmetric.NewPeriodicReader(metricExporter,
 			sdkmetric.WithInterval(15*time.Second),
 		)),
-		// Root cause of "received message larger than max (5193148 vs
-		// 4194304)": the SDK's default TraceBasedFilter exemplars every
-		// histogram bucket recorded inside a sampled span, and SampleRate:1.0
-		// above samples every span — not a label-cardinality problem (every
-		// custom instrument here uses bounded attributes). Nothing reads
-		// exemplars, so disable them instead of paying for them.
+		// The SDK's default TraceBasedFilter attaches an exemplar to every
+		// histogram bucket recorded inside a sampled span, and SampleRate
+		// above samples every span. Nothing reads exemplars, so disable them
+		// instead of paying for them. See commit 13a90ec31 for the incident
+		// this fixes.
 		sdkmetric.WithExemplarFilter(exemplar.AlwaysOffFilter),
 	)
 	otel.SetMeterProvider(mp)
