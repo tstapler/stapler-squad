@@ -1311,7 +1311,7 @@ func (l *BacklogLifecycleListener) refreshWorkSessionGitActivity(ctx context.Con
 
 		commitCount := lastWork.CommitCountSinceSpawn
 		if lastWork.BaseCommitSha != "" {
-			if shipped, listErr := git.ListShippedCommits(item.RepoPath, lastWork.BaseCommitSha, head); listErr == nil {
+			if shipped, _, listErr := git.ListShippedCommits(ctx, item.RepoPath, lastWork.BaseCommitSha, head); listErr == nil {
 				commitCount = len(shipped)
 			} else {
 				log.DebugLog().Printf("[BacklogLifecycle] refreshWorkSessionGitActivity ListShippedCommits item=%s: %v", item.ID, listErr)

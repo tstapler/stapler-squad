@@ -13,6 +13,11 @@
       { "type": "settings",  "pattern": "src/components/settings/**" },
       { "type": "telemetry", "pattern": "src/components/telemetry/**" },
       { "type": "ui",        "pattern": "src/components/ui/**" },
+      {
+        "type": "shared-vcs-widget",
+        "mode": "full",
+        "pattern": ["src/components/shared/vcs-widget/**", "src/components/shared/VcsWidget.*"]
+      },
       { "type": "shared",    "pattern": "src/components/shared/**" },
       { "type": "lib",       "pattern": "src/lib/**" },
       { "type": "gen",       "pattern": "src/gen/**" }
@@ -76,21 +81,25 @@
         "rules": [
           {
             "from": "app",
-            "allow": ["layout", "providers", "sessions", "unfinished", "history", "logs", "settings", "telemetry", "ui", "shared", "lib", "gen"]
+            "allow": ["layout", "providers", "sessions", "unfinished", "history", "logs", "settings", "telemetry", "ui", "shared-vcs-widget", "shared", "lib", "gen"]
           },
           {
             "from": "layout",
-            "allow": ["providers", "sessions", "unfinished", "history", "logs", "settings", "telemetry", "ui", "shared", "lib", "gen"]
+            "allow": ["providers", "sessions", "unfinished", "history", "logs", "settings", "telemetry", "ui", "shared-vcs-widget", "shared", "lib", "gen"]
           },
           {
             "from": "providers",
-            "allow": ["ui", "shared", "lib", "gen"]
+            "allow": ["ui", "shared-vcs-widget", "shared", "lib", "gen"]
           },
           {
             "from": ["sessions", "unfinished", "history", "logs", "settings", "telemetry"],
-            "allow": ["providers", "ui", "shared", "lib", "gen"]
+            "allow": ["providers", "ui", "shared-vcs-widget", "shared", "lib", "gen"]
           },
           { "from": "ui",     "allow": ["lib", "gen"] },
+          {
+            "from": "shared-vcs-widget",
+            "allow": ["shared-vcs-widget", "ui", "lib", "gen"]
+          },
           { "from": "shared", "allow": ["lib", "gen"] },
           { "from": "lib",    "allow": ["ui", "sessions", "gen"] },
           { "from": "gen",    "allow": [] }

@@ -5,8 +5,9 @@ import {
   SessionSchema,
   UnfinishedWorktreeSchema,
   FileStatus,
+  ShippedCommitSchema,
 } from "@/gen/session/v1/types_pb";
-import { BacklogItemShipStatusSchema, ShippedCommitSchema, ShippedFileStatSchema } from "@/gen/session/v1/backlog_pb";
+import { BacklogItemShipStatusSchema, ShippedFileStatSchema } from "@/gen/session/v1/backlog_pb";
 import { fromSessionVcs, fromShipStatus, fromUnfinishedWorktree, toPrState, toCheckConclusion } from "./adapters";
 import { deriveMergeabilityState } from "./mergeability";
 
@@ -71,6 +72,9 @@ describe("fromSessionVcs", () => {
       checkConclusion: "success",
       approvedCount: 1,
       changesReqCount: 0,
+      mergeable: "",
+      checks: [],
+      reviewFeedback: [],
     });
   });
 
@@ -81,6 +85,48 @@ describe("fromSessionVcs", () => {
 
     const sessionNoOwner = create(SessionSchema, { githubOwner: "" });
     expect(fromSessionVcs(status, sessionNoOwner).github).toBeNull();
+  });
+
+  it("fromSessionVcs_should_MapCommitsAndStatusFields_When_StatusHasCommitsAndAggregateDiffStat", () => {
+    const authoredAt = { seconds: BigInt(Math.floor(new Date("2026-08-20").getTime() / 1000)), nanos: 0 };
+    const statusAsOf = { seconds: BigInt(Math.floor(new Date("2026-08-27T12:00:00Z").getTime() / 1000)), nanos: 0 };
+    const status = create(VCSStatusSchema, {
+      branch: "feat/vcs-widget",
+      commits: [
+        create(ShippedCommitSchema, { sha: "abc123", summary: "feat: add widget", authoredAt }),
+      ],
+      commitsTruncated: true,
+      commitsUnavailable: false,
+      statusAsOf,
+      aggregateDiffStat: { filesChanged: 3, additions: 10, deletions: 4 },
+    });
+
+    const result = fromSessionVcs(status);
+
+    expect(result.commits).toEqual([
+      { sha: "abc123", summary: "feat: add widget", authoredAt: new Date("2026-08-20") },
+    ]);
+    expect(result.commitsTruncated).toBe(true);
+    expect(result.commitsUnavailable).toBe(false);
+    expect(result.statusAsOf).toEqual(new Date("2026-08-27T12:00:00Z"));
+    expect(result.aggregateStats).toEqual({ filesChanged: 3, additions: 10, deletions: 4 });
+  });
+
+  it("fromSessionVcs_should_DefaultGracefully_When_CommitsChecksAndReviewFeedbackAbsent", () => {
+    const status = create(VCSStatusSchema, { branch: "feat/foo" });
+    const session = create(SessionSchema, { githubOwner: "tstapler", githubRepo: "stapler-squad" });
+
+    const result = fromSessionVcs(status, session);
+
+    expect(result.commits).toEqual([]);
+    expect(result.aggregateStats).toBeUndefined();
+    expect(result.statusAsOf).toBeUndefined();
+    expect(result.commitsTruncated).toBe(false);
+    expect(result.commitsUnavailable).toBe(false);
+    expect(result.github?.mergeable).toBe("");
+    expect(result.github?.checks).toEqual([]);
+    expect(result.github?.reviewFeedback).toEqual([]);
+    expect(result.github?.lastCheckedAt).toBeUndefined();
   });
 });
 
@@ -155,6 +201,9 @@ describe("fromShipStatus", () => {
       checkConclusion: "success",
       approvedCount: 2,
       changesReqCount: 0,
+      mergeable: "unknown",
+      checks: [],
+      reviewFeedback: [],
     });
     expect(result.fileChanges).toEqual([
       { path: "src/foo.ts", status: "modified", additions: 5, deletions: 2, section: "unstaged" },
@@ -188,6 +237,9 @@ describe("fromShipStatus", () => {
       checkConclusion: "success",
       approvedCount: 2,
       changesReqCount: 0,
+      mergeable: "unknown",
+      checks: [],
+      reviewFeedback: [],
     });
     expect(result.fileChanges).toEqual([]);
     expect(deriveMergeabilityState(result)).toBe("snapshot_unavailable");
@@ -256,6 +308,9 @@ describe("fromUnfinishedWorktree", () => {
       checkConclusion: "",
       approvedCount: 0,
       changesReqCount: 0,
+      mergeable: "unknown",
+      checks: [],
+      reviewFeedback: [],
     });
   });
 
@@ -276,6 +331,9 @@ describe("fromUnfinishedWorktree", () => {
       checkConclusion: "",
       approvedCount: 0,
       changesReqCount: 0,
+      mergeable: "unknown",
+      checks: [],
+      reviewFeedback: [],
     });
 
     const noPr = create(UnfinishedWorktreeSchema, { githubPrUrl: "", githubPrState: "" });

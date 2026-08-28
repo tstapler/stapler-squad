@@ -366,30 +366,48 @@ const listShippedCommitsCap = 100
 // hashes (not branch names): the caller typically has these directly from
 // GitWorktreeData.BaseCommitSHA and the work session's LastCommitSha, which
 // remain valid even after the branch itself has been deleted post-merge.
-func ListShippedCommits(repoPath, baseSHA, headSHA string) ([]ShippedCommit, error) {
+// truncated reports whether the walk hit listShippedCommitsCap before
+// exhausting the range — the caller may want to surface that a longer list
+// exists than what's returned.
+func ListShippedCommits(ctx context.Context, repoPath, baseSHA, headSHA string) (commits []ShippedCommit, truncated bool, err error) {
+	return listShippedCommitsWithCap(ctx, repoPath, baseSHA, headSHA, listShippedCommitsCap)
+}
+
+// listShippedCommitsWithCap is ListShippedCommits' implementation with the
+// cap taken as a parameter rather than read from the package-level
+// listShippedCommitsCap constant, so a test can exercise the truncated==true
+// path against a small fixture (e.g. cap=3) instead of needing a 100+-commit
+// repo.
+func listShippedCommitsWithCap(ctx context.Context, repoPath, baseSHA, headSHA string, maxCommits int) ([]ShippedCommit, bool, error) {
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
 	repo, err := git.PlainOpenWithOptions(repoPath, &git.PlainOpenOptions{DetectDotGit: true})
 	if err != nil {
-		return nil, fmt.Errorf("failed to open git repo at %s: %w", repoPath, err)
+		return nil, false, fmt.Errorf("failed to open git repo at %s: %w", repoPath, err)
 	}
 
 	head, err := repo.CommitObject(plumbing.NewHash(headSHA))
 	if err != nil {
-		return nil, fmt.Errorf("failed to resolve commit %s: %w", headSHA, err)
+		return nil, false, fmt.Errorf("failed to resolve commit %s: %w", headSHA, err)
 	}
 	base, err := repo.CommitObject(plumbing.NewHash(baseSHA))
 	if err != nil {
-		return nil, fmt.Errorf("failed to resolve commit %s: %w", baseSHA, err)
+		return nil, false, fmt.Errorf("failed to resolve commit %s: %w", baseSHA, err)
 	}
 
 	var commits []ShippedCommit
 	seen := map[plumbing.Hash]bool{head.Hash: true}
 	queue := []*object.Commit{head}
-	for len(queue) > 0 && len(commits) < listShippedCommitsCap {
+	for len(queue) > 0 && len(commits) < maxCommits {
+		if err := ctx.Err(); err != nil {
+			return commits, len(commits) >= maxCommits, err
+		}
 		c := queue[0]
 		queue = queue[1:]
 		isAncestor, err := c.IsAncestor(base)
 		if err != nil {
-			return commits, err
+			return commits, len(commits) >= maxCommits, err
 		}
 		if isAncestor {
 			continue
@@ -408,10 +426,46 @@ func ListShippedCommits(repoPath, baseSHA, headSHA string) ([]ShippedCommit, err
 			}
 			return nil
 		}); err != nil {
-			return commits, err
+			return commits, len(commits) >= maxCommits, err
 		}
 	}
-	return commits, nil
+	return commits, len(commits) >= maxCommits, nil
+}
+
+// AggregateDiffStat is the files-changed/additions/deletions summary
+// returned by DiffStatBetween — a DiffShortstat-equivalent for a branch's
+// range vs. its base. Distinct from DiffStats (session/git/diff.go), which
+// holds working-tree diff content, not a committed-range summary.
+type AggregateDiffStat struct {
+	FilesChanged int
+	Additions    int
+	Deletions    int
+}
+
+// DiffStatBetween returns the aggregate files-changed/additions/deletions
+// counts between baseSHA and headSHA, by summing the existing
+// FileStatsBetween's per-file counts rather than adding a second go-git
+// diff implementation. Takes a ctx so the new live-session call site
+// (WorkspaceService.GetVCSStatus) can bound it the same way ListShippedCommits
+// is bounded; FileStatsBetween's own go-git patch computation doesn't accept
+// a ctx, so the timeout guards against starting the call once the caller's
+// deadline has already passed, not against a hang mid-computation.
+func DiffStatBetween(ctx context.Context, repoPath, baseSHA, headSHA string) (AggregateDiffStat, error) {
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	if err := ctx.Err(); err != nil {
+		return AggregateDiffStat{}, err
+	}
+	stats, err := FileStatsBetween(repoPath, baseSHA, headSHA)
+	if err != nil {
+		return AggregateDiffStat{}, err
+	}
+	var additions, deletions int
+	for _, s := range stats {
+		additions += s.Additions
+		deletions += s.Deletions
+	}
+	return AggregateDiffStat{FilesChanged: len(stats), Additions: additions, Deletions: deletions}, nil
 }
 
 // FileStatsBetween returns the per-file diff-stat summary (path, status,

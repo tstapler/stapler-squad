@@ -409,6 +409,24 @@ func (i *Instance) HasGitWorktree() bool {
 	return i.gitManager.HasWorktree()
 }
 
+// GetBaseCommitSHA returns the commit SHA this session's branch diverged
+// from. Branches on whether the session has a git worktree: worktree-mode
+// sessions read GitWorktreeManager.GetBaseCommitSHA(); SessionTypeDirectory
+// sessions (the default session type — no worktree is ever created for
+// them) have no worktree, so this falls back to GetDirBaseSHA(), mirroring
+// computeDirDiffStats's existing HasWorktree()-gated pattern for exactly
+// the same reason. Returns "" only when neither is set (e.g. a session
+// that hasn't resolved a base SHA yet). Delegates to the unexported
+// gitManager (a concrete GitWorktreeManager value, not an interface) so
+// callers outside the session package (e.g. WorkspaceService) don't need
+// direct access to it.
+func (i *Instance) GetBaseCommitSHA() string {
+	if i.gitManager.HasWorktree() {
+		return i.gitManager.GetBaseCommitSHA()
+	}
+	return i.gitManager.GetDirBaseSHA()
+}
+
 // SetGitWorktree sets the git worktree for testing purposes.
 func (i *Instance) SetGitWorktree(worktree *git.GitWorktree) {
 	i.gitManager.SetWorktree(worktree)
