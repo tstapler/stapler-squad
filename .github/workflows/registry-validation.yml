@@ -35,6 +35,15 @@ jobs:
           go-version-file: 'go.mod'
           cache: true
 
+      # Needed by the "Install frontend scanner dependencies" step below —
+      # previously provided as a side effect of the inline `prepare` composite
+      # action this job used to call directly; lost when Epic 3.1 migrated
+      # this job to consume _prepare.yml's artifact instead.
+      - name: Set up pnpm
+        uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+        with:
+          version: 10.27.0
+
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
