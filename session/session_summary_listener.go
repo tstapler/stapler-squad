@@ -7,7 +7,7 @@ import (
 
 // summaryGenerator is the narrow consumer-side interface sessionSummaryListener needs
 // from a session summary generator. Defined here, next to its only consumer, per
-// .claude/rules/interface-pollution-checklist.md's "define the interface where it's
+// the `interface-pollution-checklist` skill's "define the interface where it's
 // consumed" — *SessionSummaryGenerator (session/session_summary_service.go) satisfies
 // this structurally, with no explicit "implements" declaration.
 type summaryGenerator interface {

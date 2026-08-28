@@ -94,7 +94,7 @@ export function BackwardSyncConfirmDialog({
 
   // createPortal ensures the dialog renders at document.body, escaping any
   // ancestor CSS transform/filter/will-change that would break position:fixed
-  // (ADR-009 / .claude/rules/css-architecture.md).
+  // (ADR-009 / docs/reference/css-architecture.md).
   if (typeof document === "undefined") return null;
   return createPortal(content, document.body);
 }

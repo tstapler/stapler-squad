@@ -29,7 +29,7 @@ func initRepo(t *testing.T) string {
 	}
 
 	// Uses go-git directly rather than shelling out — see
-	// .claude/rules/prefer-go-git-over-subshells.md.
+	// the `prefer-go-git-over-subshells` skill.
 	repo, err := git.PlainInitWithOptions(dir, &git.PlainInitOptions{
 		InitOptions: git.InitOptions{DefaultBranch: plumbing.NewBranchReferenceName("main")},
 	})
@@ -60,7 +60,7 @@ func initRepo(t *testing.T) string {
 // addCommit adds a file and commits it, returning the short hash.
 //
 // Uses go-git directly rather than shelling out — see
-// .claude/rules/prefer-go-git-over-subshells.md.
+// the `prefer-go-git-over-subshells` skill.
 func addCommit(t *testing.T, repoPath, filename, message string) {
 	t.Helper()
 	if err := os.WriteFile(filepath.Join(repoPath, filename), []byte(message), 0644); err != nil {
@@ -377,7 +377,7 @@ func TestGoGitVCSReader_HasUncommitted_StagedChange(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Uses go-git directly rather than shelling out — see
-	// .claude/rules/prefer-go-git-over-subshells.md.
+	// the `prefer-go-git-over-subshells` skill.
 	repo2, err := git.PlainOpen(repo)
 	if err != nil {
 		t.Fatalf("PlainOpen: %v", err)
@@ -407,7 +407,7 @@ func TestGoGitVCSReader_HasUncommitted_StagedDeletion(t *testing.T) {
 
 	// Stage a deletion of the initial README.md.
 	// Uses go-git directly rather than shelling out — see
-	// .claude/rules/prefer-go-git-over-subshells.md.
+	// the `prefer-go-git-over-subshells` skill.
 	repo2, err := git.PlainOpen(repo)
 	if err != nil {
 		t.Fatalf("PlainOpen: %v", err)

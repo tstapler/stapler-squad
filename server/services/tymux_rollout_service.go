@@ -15,7 +15,7 @@ import (
 // operator-facing controls for the tymux-bundled-integration staged rollout
 // (Epic 3.3), mirroring StreamHubRolloutService's shape exactly: a
 // config-backed handler with no second implementation, so a concrete type
-// per .claude/rules/interface-pollution-checklist.md.
+// per the `interface-pollution-checklist` skill.
 //
 // The global STAPLER_SQUAD_USE_TYMUX default is deliberately NOT settable
 // here — it's env-var-gated and requires a process restart by design (see

@@ -54,8 +54,8 @@ minimum); Release Please and Benchmarks aren't blocking in the same sense.
 If CI fails, pull the failing job's log (`gh run view <run-id> --log-failed
 --repo tstapler/stapler-squad`) and fix the actual cause before pushing again.
 
-**Flaky tests are the trap here.** Per
-`.claude/rules/fix-flaky-tests-dont-defer.md`, "known pre-existing flake, unrelated,
+**Flaky tests are the trap here.** Per the
+`fix-flaky-tests-dont-defer` skill, "known pre-existing flake, unrelated,
 re-ran and it passed" is not an acceptable resolution — it's exactly the pattern
 that let `TestRemoveHooksConfig_...` and BUG-074's three tmux-restart tests get
 re-excused across multiple PRs before finally being root-caused. If a failure looks

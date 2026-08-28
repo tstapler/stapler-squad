@@ -412,4 +412,95 @@ describe("SessionActionsOverflow", () => {
       expect(screen.queryByTestId("create-pr-modal")).not.toBeInTheDocument();
     });
   });
+
+  // -------------------------------------------------------------------------
+  // Give Direction / steer dialog (pr-fix-steering Story 1.1.3): the dialog
+  // must check the steer RPC's result instead of unconditionally closing —
+  // see plan.md's Task 1.1.3c.
+  // -------------------------------------------------------------------------
+  describe("give direction (steer) dialog", () => {
+    function openSteerDialog(onSteerAutonomousSession: jest.Mock) {
+      const session = makeSession({ autonomousMode: true });
+      renderOverflow({ session, onSteerAutonomousSession });
+      openMenu();
+      fireEvent.click(screen.getByRole("menuitem", { name: /give direction/i }));
+      const input = screen.getByPlaceholderText(/focus on the ui tests first/i);
+      fireEvent.change(input, { target: { value: "fix the bug" } });
+      return input;
+    }
+
+    it("keeps the dialog open and preserves the message when the steer call resolves false", async () => {
+      const onSteerAutonomousSession = jest.fn().mockResolvedValue(false);
+      const input = openSteerDialog(onSteerAutonomousSession);
+
+      fireEvent.keyDown(input, { key: "Enter" });
+      await waitFor(() => expect(onSteerAutonomousSession).toHaveBeenCalledWith("session-1", "fix the bug"));
+
+      expect(screen.getByRole("dialog", { name: /give direction/i })).toBeInTheDocument();
+      expect(screen.getByDisplayValue("fix the bug")).toBeInTheDocument();
+    });
+
+    it("closes the dialog and clears the message when the steer call resolves true", async () => {
+      const onSteerAutonomousSession = jest.fn().mockResolvedValue(true);
+      const input = openSteerDialog(onSteerAutonomousSession);
+
+      fireEvent.keyDown(input, { key: "Enter" });
+      await waitFor(() =>
+        expect(screen.queryByRole("dialog", { name: /give direction/i })).not.toBeInTheDocument()
+      );
+    });
+
+    it("disables the Send button and input while the steer call is pending, and ignores a second click", async () => {
+      let resolveSteer: (ok: boolean) => void = () => {};
+      const pending = new Promise<boolean>((resolve) => {
+        resolveSteer = resolve;
+      });
+      const onSteerAutonomousSession = jest.fn().mockReturnValue(pending);
+      openSteerDialog(onSteerAutonomousSession);
+
+      const sendButton = screen.getByRole("button", { name: /send/i });
+      fireEvent.click(sendButton);
+
+      await waitFor(() => expect(sendButton).toBeDisabled());
+      expect(screen.getByPlaceholderText(/focus on the ui tests first/i)).toBeDisabled();
+
+      // A second click while the RPC is in flight must not fire a duplicate call.
+      fireEvent.click(sendButton);
+      expect(onSteerAutonomousSession).toHaveBeenCalledTimes(1);
+
+      await act(async () => {
+        resolveSteer(true);
+        await pending;
+      });
+
+      await waitFor(() =>
+        expect(screen.queryByRole("dialog", { name: /give direction/i })).not.toBeInTheDocument()
+      );
+    });
+
+    it("keeps Cancel enabled and Escape working while the steer call is pending", async () => {
+      let resolveSteer: (ok: boolean) => void = () => {};
+      const pending = new Promise<boolean>((resolve) => {
+        resolveSteer = resolve;
+      });
+      const onSteerAutonomousSession = jest.fn().mockReturnValue(pending);
+      const input = openSteerDialog(onSteerAutonomousSession);
+
+      fireEvent.keyDown(input, { key: "Enter" });
+      await waitFor(() => expect(onSteerAutonomousSession).toHaveBeenCalledTimes(1));
+
+      const cancelButton = screen.getByRole("button", { name: /^cancel$/i });
+      expect(cancelButton).not.toBeDisabled();
+
+      const dialog = screen.getByRole("dialog", { name: /give direction/i });
+      fireEvent.keyDown(dialog, { key: "Escape" });
+      expect(screen.queryByRole("dialog", { name: /give direction/i })).not.toBeInTheDocument();
+
+      // Avoid an unhandled-rejection/act warning from the now-orphaned promise.
+      resolveSteer(true);
+      await act(async () => {
+        await pending;
+      });
+    });
+  });
 });

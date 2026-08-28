@@ -117,7 +117,7 @@ func hookEndpoints(baseURLFn func() string) map[HookName]string {
 //
 // SocketPath and BearerToken are two independently meaningful strings a caller could
 // otherwise transpose at a call site with no compiler error -- exactly what
-// .claude/rules/primitive-obsession-checklist.md exists to catch -- so this is a named
+// the `primitive-obsession-checklist` skill exists to catch -- so this is a named
 // struct, not two positional string parameters threaded through InjectHooksConfig.
 //
 // PRODUCTION WIRING: the real session-creation call site (server/services/session_service.go's

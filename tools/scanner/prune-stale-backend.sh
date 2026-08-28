@@ -8,8 +8,6 @@
 # gap: it regenerates the authoritative id-set into a temp dir and removes any
 # committed file whose id is absent from it.
 set -euo pipefail
-export LC_ALL=C
-shopt -s nullglob
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"

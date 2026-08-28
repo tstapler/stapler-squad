@@ -128,6 +128,12 @@ func NewGitWorktreeFromCommitSHA(repoPath, sessionName, branchName, commitSHA st
 	if commitSHA == "" {
 		return nil, "", fmt.Errorf("commitSHA must not be empty")
 	}
+	if repoPath == "" {
+		// filepath.Abs("") below would otherwise silently resolve to the
+		// process's own cwd instead of erroring — reject up front so a caller
+		// that failed to resolve a real path fails loudly here.
+		return nil, "", fmt.Errorf("repoPath must not be empty")
+	}
 
 	absPath, err := filepath.Abs(repoPath)
 	if err != nil {
@@ -225,6 +231,11 @@ func NewGitWorktreeWithBranch(repoPath string, sessionName string, customBranch 
 // NewGitWorktreeFromStorageWithExecutor's doc comment; use WithCommandRunner to
 // override how this worktree's subprocesses run.
 func NewGitWorktreeWithBranchAndExecutor(repoPath string, sessionName string, customBranch string, opts ...GitWorktreeOption) (tree *GitWorktree, branchname string, err error) {
+	if repoPath == "" {
+		// See NewGitWorktreeFromCommitSHA's identical check.
+		return nil, "", fmt.Errorf("repoPath must not be empty")
+	}
+
 	cfg := config.LoadConfig()
 
 	var branchName string

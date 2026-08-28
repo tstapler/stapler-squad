@@ -41,7 +41,7 @@ func TestApprovalHandler_should_UseBaseURLFnValueAtCallTime_When_ThreeUsageSites
 	// caught by `-race`, which is exactly the flake this comment documents. Running this test
 	// non-parallel guarantees Go's test runner finishes it (including the t.Cleanup restore
 	// below) before any t.Parallel() tests in this package start, so the shared global is
-	// never observed mid-mutation. See .claude/rules/fix-flaky-tests-dont-defer.md.
+	// never observed mid-mutation. See the `fix-flaky-tests-dont-defer` skill.
 	//
 	// Save/restore hookBaseURLFn so this test's deliberately-unstable stub base URL doesn't
 	// leak into other tests in this package that call hookApprovalURL()/InjectHookConfig and
@@ -454,7 +454,7 @@ func TestHandlePermissionRequest_EscalationReason_UnexpectedDecision(t *testing.
 	var entries []AnalyticsEntry
 	require.Eventually(t, func() bool {
 		var err error
-		entries, err = analyticsStore.LoadWindow(context.Background(), time.Now().Add(-1 * time.Hour))
+		entries, err = analyticsStore.LoadWindow(context.Background(), time.Now().Add(-1*time.Hour))
 		return err == nil && len(entries) >= 1
 	}, 2*time.Second, 10*time.Millisecond, "analytics entry must persist within 2s")
 

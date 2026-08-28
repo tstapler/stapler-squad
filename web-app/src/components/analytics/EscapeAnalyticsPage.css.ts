@@ -38,7 +38,7 @@ export const subtitle = style({
 
 // Tab toggle ("Per-Session" / "All Sessions") — same visual language (underline
 // on the active tab) as SessionDetail.css.ts's `tabs`/`tab`/`active` trio, but
-// this page owns its own token references per .claude/rules/css-architecture.md.
+// this page owns its own token references per docs/reference/css-architecture.md.
 export const tablist = style({
   display: "flex",
   gap: vars.space["2"],

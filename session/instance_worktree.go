@@ -232,6 +232,13 @@ const BacklogBranchPrefix = "backlog/"
 // resolve HEAD as a valid ref". Setup runs via wt.SetupLocked() rather than wt.Setup() here
 // because this goroutine already holds the (non-reentrant) lock.
 func CreateBacklogWorktree(repoPath, branchSuffix string) (string, error) {
+	if repoPath == "" {
+		// ResolveSessionPath("") silently resolves to the process's own cwd
+		// (the live server's own checkout) instead of erroring — a BacklogItem
+		// can reach here with RepoPath still "" (nothing upstream requires it;
+		// see SpawnSessionFromItem's own guard), so reject before that happens.
+		return "", fmt.Errorf("CreateBacklogWorktree: repoPath must not be empty")
+	}
 	resolvedRepo, err := ResolveSessionPath(repoPath)
 	if err != nil {
 		return "", fmt.Errorf("CreateBacklogWorktree: %w", err)

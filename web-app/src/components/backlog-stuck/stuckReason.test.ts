@@ -23,6 +23,7 @@ const ALL_REASONS: StuckReason[] = [
   StuckReason.RESPAWN_BLOCKED_ACTIVE,
   StuckReason.LIKELY_FLAKY,
   StuckReason.BLOCKED_BY_DEPENDENCY,
+  StuckReason.STEER_FAILED,
 ];
 
 describe("stuckReason", () => {
@@ -67,6 +68,15 @@ describe("stuckReason", () => {
         getStuckReasonLabel(StuckReason.UNSPECIFIED)
       );
       expect(getStuckReasonClass(StuckReason.RESPAWN_BLOCKED_ACTIVE)).not.toBe(
+        getStuckReasonClass(StuckReason.UNSPECIFIED)
+      );
+    });
+
+    it("gives steer_failed a real label/class, not the Unknown-reason fallback", () => {
+      expect(getStuckReasonLabel(StuckReason.STEER_FAILED)).not.toBe(
+        getStuckReasonLabel(StuckReason.UNSPECIFIED)
+      );
+      expect(getStuckReasonClass(StuckReason.STEER_FAILED)).not.toBe(
         getStuckReasonClass(StuckReason.UNSPECIFIED)
       );
     });

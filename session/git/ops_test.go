@@ -512,7 +512,7 @@ func TestListShippedCommits_should_ReturnContextError_When_ContextAlreadyCancele
 // TestFileStatsBetween_ShouldReturnPerFileCounts_WhenCommitsAddAndDeleteLines
 // verifies the happy path (Story 3.2.1): a two-commit range that adds 5 lines to one
 // file and deletes 2 from another must report per-file addition/deletion counts with
-// no error, and without shelling out to git (.claude/rules/prefer-go-git-over-subshells.md).
+// no error, and without shelling out to git (the `prefer-go-git-over-subshells` skill).
 func TestFileStatsBetween_ShouldReturnPerFileCounts_WhenCommitsAddAndDeleteLines(t *testing.T) {
 	t.Parallel()
 	origin := setupTestRepo(t)

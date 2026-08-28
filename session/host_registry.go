@@ -45,7 +45,7 @@ const DefaultHostRegistryTTL = 3 * DefaultHostAdvertisementInterval
 
 // Clock abstracts time.Now for injectable-fake-clock testing (TTL/prune
 // logic must not depend on wall-clock sleep, per
-// .claude/rules/fix-flaky-tests-dont-defer.md). Defined locally rather than
+// the `fix-flaky-tests-dont-defer` skill). Defined locally rather than
 // reusing executor.Clock to avoid a session -> executor dependency for what
 // is otherwise just time.Now(); mirrors executor/circuit_breaker.go's Clock
 // interface shape.

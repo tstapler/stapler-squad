@@ -236,6 +236,62 @@ func (m *mockSessionStopper) ArchiveSessionByUUID(_ context.Context, uuid string
 	return nil
 }
 
+// mockSessionSteerer implements SessionSteerer for tests, mirroring
+// mockSessionStopper's shape. mu guards steerCalls against concurrent
+// SteerActiveSession calls (needed by the steerInFlight race test,
+// server/services/backlog_service_pr_fix_steer_integration_test.go). programs
+// and steerErr are unguarded — no write to them ever races a concurrent
+// read in the current tests, but that's because those writes happen between
+// two sequential (non-concurrent) calls in the same goroutine (e.g.
+// TestAutoReopenForPRFix_ActiveWorkSession_ProgramGatingDoesNotAffectDedupKey
+// mutates programs after construction), not because the maps are safe for
+// genuinely concurrent mutation — this fake is not safe for that.
+type mockSessionSteerer struct {
+	mu         sync.Mutex
+	programs   map[string]string // uuid -> program; absent = not live
+	steerErr   map[string]error  // uuid -> error SteerActiveSession returns
+	steerCalls []mockSteerCall
+	// notReady marks uuids whose IsReadyForSteer must return false. Absent
+	// (or a uuid not in the set) defaults to true — every existing test's
+	// implicit "the session is idle and ready" assumption, matching
+	// production's TestAutoReopenForPRFix_ActiveWorkSession_* fixture
+	// default (see requirement to keep those tests unchanged).
+	notReady map[string]bool
+}
+
+type mockSteerCall struct {
+	uuid    string
+	message string
+}
+
+func (m *mockSessionSteerer) SessionProgram(uuid string) (string, bool) {
+	p, ok := m.programs[uuid]
+	return p, ok
+}
+
+// IsReadyForSteer implements SessionSteerer. Defaults to true (ready) unless
+// uuid is explicitly marked in notReady — see that field's doc comment.
+func (m *mockSessionSteerer) IsReadyForSteer(uuid string) bool {
+	return !m.notReady[uuid]
+}
+
+func (m *mockSessionSteerer) SteerActiveSession(_ context.Context, uuid, message string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.steerCalls = append(m.steerCalls, mockSteerCall{uuid: uuid, message: message})
+	return m.steerErr[uuid]
+}
+
+// calls returns a snapshot copy of steerCalls, safe to read concurrently with
+// in-flight SteerActiveSession calls.
+func (m *mockSessionSteerer) calls() []mockSteerCall {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]mockSteerCall, len(m.steerCalls))
+	copy(out, m.steerCalls)
+	return out
+}
+
 // fakeAutonomousDriverStarter records StartAutonomousDriverForInstance calls for inspection.
 type fakeAutonomousDriverStarter struct {
 	calls []*session.Instance
@@ -3417,7 +3473,7 @@ func TestTriggerTriage_FallsBackToRepoPathDirectly_When_RepoPathIsNotAGitRepo(t 
 // TestTriggerTriage_CommitsSDDArtifactsInWorktree_AndUpdatesPlanArtifactsPath is the
 // end-to-end regression test for both halves of the fix: SDD-mode triage's
 // project_plans/<name>/ output must land in the isolated worktree and get
-// committed there (closing the gap .claude/rules/sdd-planning-artifacts-commit.md
+// committed there (closing the gap docs/how-to/commit-sdd-planning-artifacts.md
 // already names), and PlanArtifactsPath must point at the implementation/
 // subdirectory the SDD skills actually write plan.md into — not artifactAbsPath,
 // which SDD-mode never writes to at all.

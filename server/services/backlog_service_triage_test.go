@@ -322,7 +322,7 @@ func TestResolveSessionPath_should_CreateWorktree_When_RepoHasNoInitialCommit(t 
 // TestRecentWorkSessionFileLists_should_returnChangedFiles_When_CompletedWorkSessionsHaveValidRanges
 // verifies the happy path: two completed work sessions, each with a real
 // base..head commit range, produce two file lists (most recent first),
-// computed via go-git (no subshell — .claude/rules/prefer-go-git-over-subshells.md).
+// computed via go-git (no subshell — the `prefer-go-git-over-subshells` skill).
 func TestRecentWorkSessionFileLists_should_returnChangedFiles_When_CompletedWorkSessionsHaveValidRanges(t *testing.T) {
 	t.Parallel()
 	repoPath := t.TempDir()
@@ -3143,6 +3143,52 @@ func TestSpawnSessionFromItem_should_ReportNotTrackedLive_When_BlockedByActiveWo
 	require.Error(t, err)
 	assert.Equal(t, connect.CodeAlreadyExists, connect.CodeOf(err))
 	assert.Contains(t, err.Error(), "progress signal unavailable: session not currently tracked live")
+}
+
+// TestSpawnSessionFromItem_should_RejectEmptyRepoPath_BeforeSpawnInFlight proves the
+// actual production-reachable chain to the .gitignore-corruption mechanism this
+// backlog item exists to fix: CreateBacklogItem never requires repo_path, and
+// TransitionBacklogItemStatus's guards never check it either (Idea->Ready is a
+// directly legal transition per session/domain/backlog.go's validTransitions map,
+// and BacklogItemTransitionInput carries no RepoPath field) — so an item can reach
+// Ready status with RepoPath still "". Without SpawnSessionFromItem's own guard,
+// that would proceed to resolveSessionPath -> CreateBacklogWorktree("") ->
+// session.ResolveSessionPath("") -> filepath.Abs("") -> the calling process's own
+// cwd, silently succeeding. Also asserts the rejection happens before the
+// spawnInFlight atomic check-and-set, so a rejected item is immediately
+// retriable rather than left occupying its in-flight slot.
+func TestSpawnSessionFromItem_should_RejectEmptyRepoPath_BeforeSpawnInFlight(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	creator := &mockSessionCreator{}
+	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
+	ctx := t.Context()
+
+	createResp, err := svc.CreateBacklogItem(ctx, connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
+		Title: "no-repo-path-item",
+		AcceptanceCriteria: []*sessionv1.AcCriterion{
+			{Index: 0, Text: "test", Status: "pending"},
+		},
+		SkipTriage:   true,
+		SkipPlanning: true,
+	}))
+	require.NoError(t, err)
+	itemID := createResp.Msg.Item.Id
+	require.Empty(t, createResp.Msg.Item.RepoPath, "item must be created with no repo_path to exercise this path")
+
+	_, err = svc.TransitionBacklogItemStatus(ctx, connect.NewRequest(&sessionv1.TransitionBacklogItemStatusRequest{
+		ItemId:       itemID,
+		TargetStatus: "ready",
+	}))
+	require.NoError(t, err, "Idea->Ready must succeed with no repo_path check in the transition guards")
+
+	_, err = svc.SpawnSessionFromItem(ctx, connect.NewRequest(&sessionv1.SpawnSessionFromItemRequest{ItemId: itemID}))
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(err))
+	assert.Contains(t, err.Error(), "set repo_path before spawning a session")
+
+	_, inFlight := svc.spawnInFlight.Load(itemID)
+	assert.False(t, inFlight, "rejected item must not be left occupying its spawnInFlight slot")
 }
 
 // TestSpawnSessionFromItem_should_SnapshotEmptyHash_When_PipelineModeIsDefaultOrUnresolved

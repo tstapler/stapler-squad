@@ -76,7 +76,7 @@ func pipelineModeToProto(pm *ent.PipelineMode) *sessionv1.PipelineMode {
 }
 
 // pipelineCacheInvalidator is a narrow, consumer-defined interface (per
-// .claude/rules/interface-pollution-checklist.md — defined where consumed,
+// the `interface-pollution-checklist` skill — defined where consumed,
 // not next to CachingPipelineEngine) matched via duck typing against
 // s.pipelineEngine. CachingPipelineEngine.InvalidateCache satisfies it;
 // PipelineEngine itself intentionally does NOT declare this method (it is a

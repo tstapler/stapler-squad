@@ -21,12 +21,26 @@ import (
 // failures/comments to pass as context to the new work session.
 type PRFixSpawner interface {
 	AutoReopenForPRFix(ctx context.Context, itemID string, fixContext string) error
+	// HasActiveWorkSession resolves itemID's current active work session, if
+	// any (nil if none). Side-effect-free. Returning the resolved session
+	// itself — not just a bool — lets remediatePRFixWithBackoffGate pass it
+	// into AutoReopenForPRFixWithKnownSession so the backoff-bypass decision
+	// and the steer-vs-spawn decision share one observation of mutable
+	// state instead of two independent reads (TOCTOU: the session could end
+	// between two separate queries).
+	HasActiveWorkSession(ctx context.Context, itemID string) (*ItemSessionSummary, error)
+	// AutoReopenForPRFixWithKnownSession behaves like AutoReopenForPRFix,
+	// except knownActive (from a prior HasActiveWorkSession call in the same
+	// tick) is trusted as a floor on activity: if a fresh internal check no
+	// longer finds an active session, knownActive still prevents the spawn
+	// branch from firing.
+	AutoReopenForPRFixWithKnownSession(ctx context.Context, itemID, fixContext string, knownActive *ItemSessionSummary) error
 }
 
 // OneShotShipRunner runs a one-shot LLM prompt against a session's worktree,
 // returning the PR URL the prompt produced (or "" if none was found in its
 // output). Defined here — the consumer — per this repo's anti-interface-
-// pollution convention (.claude/rules/interface-pollution-checklist.md);
+// pollution convention (the `interface-pollution-checklist` skill);
 // *services.SessionService satisfies it via RunOneShotForSession, wired in
 // production via SetOneShotShipRunner from server/dependencies.go. Mirrors
 // services.PRRunner (server/services/backlog_service_ship.go), which the same
@@ -1059,7 +1073,7 @@ func (l *BacklogLifecycleListener) RecordPRCreatedOutOfBand(ctx context.Context,
 // unified-vcs-widget requirement. It is a free function, not a method on
 // BacklogLifecycleListener: it needs no state from that type beyond
 // *Storage, which is passed explicitly here (per
-// .claude/rules/interface-pollution-checklist.md, a method only earns its
+// the `interface-pollution-checklist` skill, a method only earns its
 // receiver when it genuinely needs the type's other state).
 //
 // Two data groups are captured independently — a failure in one must never
@@ -1093,7 +1107,7 @@ func (l *BacklogLifecycleListener) RecordPRCreatedOutOfBand(ctx context.Context,
 // direct write-through via UpdateBacklogItem. If a future caching layer is
 // added on top of this function, it must return the locally-computed
 // snapshot value rather than re-reading a cache slot after a lock is
-// released, per .claude/rules/go-double-checked-locking.md.
+// released, per docs/explanation/concurrency-patterns.md.
 func CaptureShipSnapshot(ctx context.Context, storage *Storage, item *BacklogItemData, prStatus *git.PRStatus, lastWork *ItemSessionSummary, wt *GitWorktreeData) error {
 	var update BacklogItemUpdate
 	groupAFailed := false
@@ -1179,6 +1193,11 @@ func CaptureShipSnapshot(ctx context.Context, storage *Storage, item *BacklogIte
 // this exactly like "nothing happened this tick" and MUST NOT run any
 // AutoReopenForPRFix-result-dependent logic (e.g. the closed-branch's
 // BUG-040 field-clearing), since nothing was actually attempted.
+//
+// Before consulting RemediationDue, this checks fixSpawner.HasActiveWorkSession:
+// an active session skips the backoff gate entirely for that tick (it always
+// steers, never spawns). Only the no-active-session (spawn) path is gated by
+// RemediationDue.
 func (l *BacklogLifecycleListener) remediatePRFixWithBackoffGate(ctx context.Context, er *EntRepository, fixSpawner PRFixSpawner, itemID, itemTitle, fixCtx string) (attempted bool, err error) {
 	applied, markErr := er.MarkStuck(ctx, itemID, domain.StuckReasonPRNeedsFix, BacklogStatusPRPending, fixCtx)
 	if markErr != nil {
@@ -1199,6 +1218,24 @@ func (l *BacklogLifecycleListener) remediatePRFixWithBackoffGate(ctx context.Con
 				log.WarningLog().Printf("[BacklogLifecycle] remediatePRFixWithBackoffGate MarkStuckNotified item=%s: %v", itemID, notifyErr)
 			}
 		}
+	}
+
+	// Bypass the backoff gate entirely for the steer path: steering an
+	// already-active session has its own tighter, content-aware throttle
+	// (5-min cooldown + reason-signature dedup, two-tick conflict debounce)
+	// and can't create a duplicate session, so it must not be slowed by the
+	// 30m->72h backoff that exists solely to prevent a spawn storm on the
+	// no-active-session branch. active is threaded into
+	// AutoReopenForPRFixWithKnownSession below rather than discarded, so
+	// this decision and that call's steer-vs-spawn decision share one query.
+	active, activeErr := fixSpawner.HasActiveWorkSession(ctx, itemID)
+	if activeErr != nil {
+		log.WarningLog().Printf("[BacklogLifecycle] remediatePRFixWithBackoffGate HasActiveWorkSession item=%s: %v", itemID, activeErr)
+		// fail open — fall through to the due-gated path below, same rationale
+		// as every other best-effort check in this function.
+	} else if active != nil {
+		log.InfoLog().Printf("[BacklogLifecycle] remediatePRFixWithBackoffGate item=%s: active session found, steering unconditionally (bypassing backoff gate)", itemID)
+		return true, fixSpawner.AutoReopenForPRFixWithKnownSession(ctx, itemID, fixCtx, active)
 	}
 
 	due, justParked, gateErr := l.storage.RemediationDue(ctx, itemID, domain.StuckReasonPRNeedsFix)
@@ -1578,7 +1615,7 @@ func findPRPendingItemForEvent(ctx context.Context, er *EntRepository, repoFullN
 }
 
 // TriggerPRFixForEvent satisfies services.PRFixEventRouter (defined in the
-// consuming package, per .claude/rules/interface-pollution-checklist.md). It
+// consuming package, per the `interface-pollution-checklist` skill). It
 // looks up the pr_pending item tracking (repoFullName, prNumber) and, if
 // found, runs the same per-item reconciliation ReconcilePRPending's 60s tick
 // would eventually run for it — see ADR-002 for why the full body (merge

@@ -1251,6 +1251,12 @@ enum StuckReason {
   // skipped this item because at least one of its blocker items has not yet
   // reached a resolved status (done or archived).
   STUCK_REASON_BLOCKED_BY_DEPENDENCY = 18;
+  // STUCK_REASON_STEER_FAILED: see domain.StuckReasonSteerFailed
+  // (session/domain/backlog.go) — AutoReopenForPRFix attempted to steer an
+  // already-active session with a PR-fix problem description and the
+  // delivery itself failed. Distinct from STUCK_REASON_RESPAWN_BLOCKED_ACTIVE,
+  // which covers the degrade paths where a steer was never attempted at all.
+  STUCK_REASON_STEER_FAILED = 19;
 }
 
 // StuckBacklogItem is a single open (unresolved, un-snoozed) BacklogStuckState
