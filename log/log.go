@@ -360,13 +360,34 @@ func (sl *StructuredLogger) Fatal(message string, fields ...map[string]interface
 	sl.Log(FATAL, message, f)
 }
 
-// GetConfigDir returns the path to the application's configuration directory
+// GetConfigDir returns the path to the application's configuration directory,
+// honoring the same STAPLER_SQUAD_TEST_DIR / STAPLER_SQUAD_INSTANCE precedence as
+// config.GetConfigDirForDir (Priorities 1-2 only; see that function's doc comment
+// for the full 6-priority list — Priorities 3-6 are DB/session-state concerns with
+// no log-directory analogue). Duplicated here rather than imported because config
+// already imports log, and importing back would create a cycle.
 func GetConfigDir() (string, error) {
+	// Priority 1: Test directory override (from --test-mode flag) wins outright.
+	if testDir := os.Getenv("STAPLER_SQUAD_TEST_DIR"); testDir != "" {
+		if err := os.MkdirAll(testDir, 0755); err != nil {
+			return "", fmt.Errorf("failed to create test directory: %w", err)
+		}
+		return testDir, nil
+	}
+
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
 		return "", fmt.Errorf("failed to get home directory: %w", err)
 	}
-	return filepath.Join(homeDir, ".stapler-squad"), nil
+	baseDir := filepath.Join(homeDir, ".stapler-squad")
+
+	// Priority 2: Explicit instance ID. "shared" (or unset) keeps the shared,
+	// pre-fix path so the live default instance needs no migration.
+	if instanceID := os.Getenv("STAPLER_SQUAD_INSTANCE"); instanceID != "" && instanceID != "shared" {
+		return filepath.Join(baseDir, "instances", instanceID), nil
+	}
+
+	return baseDir, nil
 }
 
 // GetLogDir returns the directory where logs should be stored

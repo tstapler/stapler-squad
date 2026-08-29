@@ -89,7 +89,10 @@ Subtle patterns (double-checked locking, etc.): `.claude/docs/concurrency-patter
 ## Application Data
 
 State and logs live in `~/.stapler-squad/`:
-- `logs/stapler-squad.log` — main log; check here for session creation issues
+- `logs/staplersquad.log` — main log; check here for session creation issues.
+  With `STAPLER_SQUAD_INSTANCE=<name>` set, an instance logs to
+  `instances/<name>/logs/staplersquad.log` instead (unset or `shared` uses the
+  path above, unchanged)
 - `worktrees/` — git worktrees for isolated sessions
 - `config.json`, `sessions.json`
 

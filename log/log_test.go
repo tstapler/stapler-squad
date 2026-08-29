@@ -10,6 +10,87 @@ import (
 	"testing"
 )
 
+// withCleanEnv unsets STAPLER_SQUAD_TEST_DIR and STAPLER_SQUAD_INSTANCE, restoring
+// their prior values via t.Cleanup. Do not run tests using this helper with
+// t.Parallel() — they mutate process-global env state.
+func withCleanEnv(t *testing.T) {
+	t.Helper()
+	originalTestDir := os.Getenv("STAPLER_SQUAD_TEST_DIR")
+	originalInstance := os.Getenv("STAPLER_SQUAD_INSTANCE")
+	os.Unsetenv("STAPLER_SQUAD_TEST_DIR")
+	os.Unsetenv("STAPLER_SQUAD_INSTANCE")
+	t.Cleanup(func() {
+		if originalTestDir == "" {
+			os.Unsetenv("STAPLER_SQUAD_TEST_DIR")
+		} else {
+			os.Setenv("STAPLER_SQUAD_TEST_DIR", originalTestDir)
+		}
+		if originalInstance == "" {
+			os.Unsetenv("STAPLER_SQUAD_INSTANCE")
+		} else {
+			os.Setenv("STAPLER_SQUAD_INSTANCE", originalInstance)
+		}
+	})
+}
+
+func TestGetConfigDir_ReturnsBaseDir_WhenSTAPLER_SQUAD_INSTANCEUnset(t *testing.T) {
+	withCleanEnv(t)
+
+	dir, err := GetConfigDir()
+	if err != nil {
+		t.Fatalf("GetConfigDir failed: %v", err)
+	}
+	if !strings.HasSuffix(dir, ".stapler-squad") || strings.Contains(dir, "instances") {
+		t.Errorf("expected unchanged ~/.stapler-squad path, got %s", dir)
+	}
+}
+
+func TestGetConfigDir_ReturnsBaseDir_WhenSTAPLER_SQUAD_INSTANCEIsShared(t *testing.T) {
+	withCleanEnv(t)
+	os.Setenv("STAPLER_SQUAD_INSTANCE", "shared")
+
+	dir, err := GetConfigDir()
+	if err != nil {
+		t.Fatalf("GetConfigDir failed: %v", err)
+	}
+	if !strings.HasSuffix(dir, ".stapler-squad") || strings.Contains(dir, "instances") {
+		t.Errorf("expected shared instance to use unchanged ~/.stapler-squad path, got %s", dir)
+	}
+}
+
+func TestGetConfigDir_ReturnsInstanceScopedPath_WhenSTAPLER_SQUAD_INSTANCESet(t *testing.T) {
+	withCleanEnv(t)
+	os.Setenv("STAPLER_SQUAD_INSTANCE", "alpha")
+
+	dir, err := GetConfigDir()
+	if err != nil {
+		t.Fatalf("GetConfigDir failed: %v", err)
+	}
+	wantSuffix := filepath.Join(".stapler-squad", "instances", "alpha")
+	if !strings.HasSuffix(dir, wantSuffix) {
+		t.Errorf("expected path ending in %s, got %s", wantSuffix, dir)
+	}
+}
+
+func TestGetConfigDir_ReturnsTestDir_WhenSTAPLER_SQUAD_TEST_DIRSet(t *testing.T) {
+	withCleanEnv(t)
+	testDir := filepath.Join(t.TempDir(), "custom-test-dir")
+	os.Setenv("STAPLER_SQUAD_TEST_DIR", testDir)
+	// STAPLER_SQUAD_TEST_DIR must win outright even with an instance also set.
+	os.Setenv("STAPLER_SQUAD_INSTANCE", "alpha")
+
+	dir, err := GetConfigDir()
+	if err != nil {
+		t.Fatalf("GetConfigDir failed: %v", err)
+	}
+	if dir != testDir {
+		t.Errorf("expected STAPLER_SQUAD_TEST_DIR to win, got %s want %s", dir, testDir)
+	}
+	if info, err := os.Stat(testDir); err != nil || !info.IsDir() {
+		t.Errorf("expected GetConfigDir to create %s via MkdirAll", testDir)
+	}
+}
+
 func TestGetLogDir(t *testing.T) {
 	// Test with nil config
 	dir, err := GetLogDir(nil)
@@ -61,6 +142,37 @@ func TestGetLogDir(t *testing.T) {
 	}
 }
 
+func TestGetLogDir_NamedInstance_CreatesNestedInstanceLogsDir(t *testing.T) {
+	withCleanEnv(t)
+	os.Setenv("STAPLER_SQUAD_INSTANCE", "alpha")
+
+	dir, err := GetLogDir(&LogConfig{LogsEnabled: true})
+	if err != nil {
+		t.Fatalf("GetLogDir failed: %v", err)
+	}
+
+	wantSuffix := filepath.Join("instances", "alpha", "logs")
+	if !strings.HasSuffix(dir, wantSuffix) {
+		t.Errorf("expected path ending in %s, got %s", wantSuffix, dir)
+	}
+	if info, statErr := os.Stat(dir); statErr != nil || !info.IsDir() {
+		t.Errorf("expected GetLogDir to create %s via MkdirAll", dir)
+	}
+}
+
+func TestGetLogDir_LogsDirOverride_WinsOverSTAPLER_SQUAD_INSTANCE(t *testing.T) {
+	withCleanEnv(t)
+	os.Setenv("STAPLER_SQUAD_INSTANCE", "alpha")
+
+	dir, err := GetLogDir(&LogConfig{LogsEnabled: true, LogsDir: "/custom/log/dir"})
+	if err != nil {
+		t.Fatalf("GetLogDir failed: %v", err)
+	}
+	if dir != "/custom/log/dir" {
+		t.Errorf("expected LogsDir override to win regardless of instance, got %s", dir)
+	}
+}
+
 func TestGetLogFilePath(t *testing.T) {
 	// Test with default config
 	cfg := &LogConfig{
@@ -86,6 +198,34 @@ func TestGetLogFilePath(t *testing.T) {
 	}
 	if path != "/custom/log/dir/staplersquad.log" {
 		t.Errorf("GetLogFilePath should return custom log path, got %s", path)
+	}
+}
+
+func TestGetLogFilePath_NamedInstance_DivergesFromDefaultInstance(t *testing.T) {
+	withCleanEnv(t)
+
+	cfg := &LogConfig{LogsEnabled: true}
+
+	os.Setenv("STAPLER_SQUAD_INSTANCE", "alpha")
+	alphaPath, err := GetLogFilePath(cfg)
+	if err != nil {
+		t.Fatalf("GetLogFilePath failed for alpha: %v", err)
+	}
+
+	os.Setenv("STAPLER_SQUAD_INSTANCE", "beta")
+	betaPath, err := GetLogFilePath(cfg)
+	if err != nil {
+		t.Fatalf("GetLogFilePath failed for beta: %v", err)
+	}
+
+	if alphaPath == betaPath {
+		t.Errorf("expected distinct log paths per instance, both got %s", alphaPath)
+	}
+	for name, path := range map[string]string{"alpha": alphaPath, "beta": betaPath} {
+		wantSuffix := filepath.Join("instances", name, "logs", "staplersquad.log")
+		if !strings.HasSuffix(path, wantSuffix) {
+			t.Errorf("expected %s path ending in %s, got %s", name, wantSuffix, path)
+		}
 	}
 }
 
