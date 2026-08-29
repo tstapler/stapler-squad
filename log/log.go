@@ -41,11 +41,21 @@ func IsDebugEnabled() bool {
 	return LogLevel(runtimeLevel.Load()) <= DEBUG
 }
 
+// Env var names and sentinel values shared by getInstanceIdentifier and GetConfigDir.
+// Mirrors the identical literals in config/config.go (GetConfigDirForDir, IsNamedInstance)
+// which this package can't import directly (see GetConfigDir's doc comment) — named here
+// so the two copies can't silently drift apart on a typo.
+const (
+	envInstanceID    = "STAPLER_SQUAD_INSTANCE"
+	envTestDir       = "STAPLER_SQUAD_TEST_DIR"
+	sharedInstanceID = "shared"
+)
+
 // getInstanceIdentifier returns a unique identifier for this process instance
 // This helps differentiate log messages when multiple instances are running
 func getInstanceIdentifier() string {
 	// Priority 1: Use explicit instance ID from environment
-	if instanceID := os.Getenv("STAPLER_SQUAD_INSTANCE"); instanceID != "" {
+	if instanceID := os.Getenv(envInstanceID); instanceID != "" {
 		return instanceID
 	}
 
@@ -368,7 +378,7 @@ func (sl *StructuredLogger) Fatal(message string, fields ...map[string]interface
 // already imports log, and importing back would create a cycle.
 func GetConfigDir() (string, error) {
 	// Priority 1: Test directory override (from --test-mode flag) wins outright.
-	if testDir := os.Getenv("STAPLER_SQUAD_TEST_DIR"); testDir != "" {
+	if testDir := os.Getenv(envTestDir); testDir != "" {
 		if err := os.MkdirAll(testDir, 0755); err != nil {
 			return "", fmt.Errorf("failed to create test directory: %w", err)
 		}
@@ -383,7 +393,14 @@ func GetConfigDir() (string, error) {
 
 	// Priority 2: Explicit instance ID. "shared" (or unset) keeps the shared,
 	// pre-fix path so the live default instance needs no migration.
-	if instanceID := os.Getenv("STAPLER_SQUAD_INSTANCE"); instanceID != "" && instanceID != "shared" {
+	if instanceID := os.Getenv(envInstanceID); instanceID != "" && instanceID != sharedInstanceID {
+		// Reject path separators/".." so a stray or malicious instance ID can't
+		// escape baseDir via filepath.Join's lexical Clean() — same gap as
+		// config.GetConfigDirForDir, closed here first since this is the one
+		// touching this precedence logic today.
+		if strings.ContainsAny(instanceID, `/\`) || strings.Contains(instanceID, "..") {
+			return "", fmt.Errorf("invalid STAPLER_SQUAD_INSTANCE %q: must not contain path separators or \"..\"", instanceID)
+		}
 		return filepath.Join(baseDir, "instances", instanceID), nil
 	}
 
@@ -719,7 +736,11 @@ func init() {
 // Initialize should be called once at the beginning of the program to set up logging.
 // defer Close() after calling this function. It sets the go log output to the file in
 // the configured log directory (default: ~/.stapler-squad/logs/).
-
+//
+// Must run after config.LoadConfig() in any real entry point: GetConfigDir (used
+// internally here) doesn't perform config.GetConfigDirForDir's legacy ~/.claude-squad
+// migration, so calling this first would create ~/.stapler-squad ahead of migration
+// and cause config's migration guard to skip it.
 func Initialize(daemon bool) {
 	// Use default config
 	cfg := DefaultLogConfig()

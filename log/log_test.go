@@ -33,62 +33,69 @@ func withCleanEnv(t *testing.T) {
 	})
 }
 
-func TestGetConfigDir_ReturnsBaseDir_WhenSTAPLER_SQUAD_INSTANCEUnset(t *testing.T) {
-	withCleanEnv(t)
+func TestGetConfigDir(t *testing.T) {
+	tests := []struct {
+		name            string
+		instance        string // "" = leave STAPLER_SQUAD_INSTANCE unset
+		wantSuffix      string
+		wantNoInstances bool // dir must not contain "instances"
+	}{
+		{
+			name:            "unset instance returns unchanged base dir",
+			wantSuffix:      ".stapler-squad",
+			wantNoInstances: true,
+		},
+		{
+			name:            "shared instance returns unchanged base dir",
+			instance:        "shared",
+			wantSuffix:      ".stapler-squad",
+			wantNoInstances: true,
+		},
+		{
+			name:       "named instance returns instance-scoped path",
+			instance:   "alpha",
+			wantSuffix: filepath.Join(".stapler-squad", "instances", "alpha"),
+		},
+	}
 
-	dir, err := GetConfigDir()
-	if err != nil {
-		t.Fatalf("GetConfigDir failed: %v", err)
-	}
-	if !strings.HasSuffix(dir, ".stapler-squad") || strings.Contains(dir, "instances") {
-		t.Errorf("expected unchanged ~/.stapler-squad path, got %s", dir)
-	}
-}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			withCleanEnv(t)
+			t.Setenv("HOME", t.TempDir()) // keep the real-homedir fallback off the developer's actual ~/.stapler-squad
+			if tt.instance != "" {
+				os.Setenv("STAPLER_SQUAD_INSTANCE", tt.instance)
+			}
 
-func TestGetConfigDir_ReturnsBaseDir_WhenSTAPLER_SQUAD_INSTANCEIsShared(t *testing.T) {
-	withCleanEnv(t)
-	os.Setenv("STAPLER_SQUAD_INSTANCE", "shared")
+			dir, err := GetConfigDir()
+			if err != nil {
+				t.Fatalf("GetConfigDir failed: %v", err)
+			}
+			if !strings.HasSuffix(dir, tt.wantSuffix) {
+				t.Errorf("expected path ending in %s, got %s", tt.wantSuffix, dir)
+			}
+			if tt.wantNoInstances && strings.Contains(dir, "instances") {
+				t.Errorf("expected no instances/ segment, got %s", dir)
+			}
+		})
+	}
 
-	dir, err := GetConfigDir()
-	if err != nil {
-		t.Fatalf("GetConfigDir failed: %v", err)
-	}
-	if !strings.HasSuffix(dir, ".stapler-squad") || strings.Contains(dir, "instances") {
-		t.Errorf("expected shared instance to use unchanged ~/.stapler-squad path, got %s", dir)
-	}
-}
+	t.Run("STAPLER_SQUAD_TEST_DIR wins outright over STAPLER_SQUAD_INSTANCE", func(t *testing.T) {
+		withCleanEnv(t)
+		testDir := filepath.Join(t.TempDir(), "custom-test-dir")
+		os.Setenv("STAPLER_SQUAD_TEST_DIR", testDir)
+		os.Setenv("STAPLER_SQUAD_INSTANCE", "alpha")
 
-func TestGetConfigDir_ReturnsInstanceScopedPath_WhenSTAPLER_SQUAD_INSTANCESet(t *testing.T) {
-	withCleanEnv(t)
-	os.Setenv("STAPLER_SQUAD_INSTANCE", "alpha")
-
-	dir, err := GetConfigDir()
-	if err != nil {
-		t.Fatalf("GetConfigDir failed: %v", err)
-	}
-	wantSuffix := filepath.Join(".stapler-squad", "instances", "alpha")
-	if !strings.HasSuffix(dir, wantSuffix) {
-		t.Errorf("expected path ending in %s, got %s", wantSuffix, dir)
-	}
-}
-
-func TestGetConfigDir_ReturnsTestDir_WhenSTAPLER_SQUAD_TEST_DIRSet(t *testing.T) {
-	withCleanEnv(t)
-	testDir := filepath.Join(t.TempDir(), "custom-test-dir")
-	os.Setenv("STAPLER_SQUAD_TEST_DIR", testDir)
-	// STAPLER_SQUAD_TEST_DIR must win outright even with an instance also set.
-	os.Setenv("STAPLER_SQUAD_INSTANCE", "alpha")
-
-	dir, err := GetConfigDir()
-	if err != nil {
-		t.Fatalf("GetConfigDir failed: %v", err)
-	}
-	if dir != testDir {
-		t.Errorf("expected STAPLER_SQUAD_TEST_DIR to win, got %s want %s", dir, testDir)
-	}
-	if info, err := os.Stat(testDir); err != nil || !info.IsDir() {
-		t.Errorf("expected GetConfigDir to create %s via MkdirAll", testDir)
-	}
+		dir, err := GetConfigDir()
+		if err != nil {
+			t.Fatalf("GetConfigDir failed: %v", err)
+		}
+		if dir != testDir {
+			t.Errorf("expected STAPLER_SQUAD_TEST_DIR to win, got %s want %s", dir, testDir)
+		}
+		if info, statErr := os.Stat(testDir); statErr != nil || !info.IsDir() {
+			t.Errorf("expected GetConfigDir to create %s via MkdirAll", testDir)
+		}
+	})
 }
 
 func TestGetLogDir(t *testing.T) {
