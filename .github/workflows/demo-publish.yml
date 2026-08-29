@@ -1,8 +1,20 @@
 name: Publish Demo GIFs
 
 # Manually dispatched. Records the curated feature-demo specs (same
-# FEATURE_SPECS set as e2e-video.yml), sharded 2-way, and commits the
-# resulting GIFs to docs/demos/ so they stay current in the default branch.
+# FEATURE_SPECS set as e2e-video.yml), sharded 2-way, and publishes the
+# resulting GIFs as assets on a rolling "demo-gifs-latest" GitHub Release —
+# not committed to docs/demos/ in git history.
+#
+# Previously committed GIFs straight into docs/demos/ on main. Multi-MB
+# binary GIFs don't delta-compress between re-recordings, so 16 runs of
+# this workflow left ~15.6GB of dead blob history behind (docs/demos/ is
+# empty in the current tree — every byte of that was pure clone-time cost
+# for every future `git clone`/`fetch-depth: 0` on this repo, forever).
+# Release assets are durable and get a stable download URL
+# (https://github.com/<repo>/releases/download/demo-gifs-latest/<name>.gif)
+# without touching git history at all. Note nothing in this repo's docs
+# currently links to a docs/demos/ path (checked via grep before this
+# change), so there was nothing to migrate.
 
 on:
   workflow_dispatch:
@@ -53,8 +65,6 @@ jobs:
 
       - name: Generate protos and build web UI
         uses: ./.github/actions/prepare
-        with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build binary
         run: go build -o stapler-squad .
@@ -151,8 +161,8 @@ jobs:
           path: /tmp/demo-gifs/*.gif
           retention-days: 5
 
-  commit-gifs:
-    name: Commit GIFs to docs/demos
+  publish-gifs:
+    name: Publish GIFs to demo-gifs-latest release
     runs-on: ubuntu-latest
     timeout-minutes: 10
     needs: record-demos
@@ -161,8 +171,6 @@ jobs:
       contents: write
 
     steps:
-      - uses: actions/checkout@v4
-
       - name: Download demo GIFs from both shards
         uses: actions/download-artifact@v4
         with:
@@ -170,19 +178,23 @@ jobs:
           path: /tmp/demo-gifs
           merge-multiple: true
 
-      - name: Commit GIFs to docs/demos
+      - name: Upload GIFs as demo-gifs-latest release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           shopt -s nullglob
           gifs=(/tmp/demo-gifs/*.gif)
           if [ ${#gifs[@]} -eq 0 ]; then
-            echo "No GIFs downloaded from either shard — nothing to commit"
+            echo "No GIFs downloaded from either shard — nothing to publish"
             exit 0
           fi
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git config user.name "github-actions[bot]"
-          mkdir -p docs/demos
-          cp /tmp/demo-gifs/*.gif docs/demos/
-          git add docs/demos/
-          git diff --cached --quiet && echo "No GIF changes to commit" && exit 0
-          git commit -m "chore(demos): update E2E feature GIFs [skip ci]"
-          for i in 1 2 3; do git pull --rebase --autostash && git push && break || sleep 5; done
+          if ! gh release view demo-gifs-latest --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            gh release create demo-gifs-latest \
+              --repo "${{ github.repository }}" \
+              --title "Demo GIFs (latest)" \
+              --notes "Auto-updated by demo-publish.yml. Not a versioned release -- assets here are overwritten on every run; link to https://github.com/${{ github.repository }}/releases/download/demo-gifs-latest/<name>.gif for a stable URL to the current GIF." \
+              --latest=false
+          fi
+          # --clobber replaces an asset with the same filename in place, so
+          # the download URL for a given demo name stays stable across runs.
+          gh release upload demo-gifs-latest "${gifs[@]}" --repo "${{ github.repository }}" --clobber
