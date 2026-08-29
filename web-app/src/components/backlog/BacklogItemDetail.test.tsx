@@ -19,8 +19,13 @@ import { create } from "@bufbuild/protobuf";
 import { timestampFromDate } from "@bufbuild/protobuf/wkt";
 import { BacklogItemDetail } from "./BacklogItemDetail";
 import type { BacklogItem, LinkedSession, PipelineMode } from "@/lib/hooks/useBacklogService";
-import { VCSStatusSchema } from "@/gen/session/v1/types_pb";
-import { BacklogItemShipStatusSchema, StuckReason, type StuckBacklogItem } from "@/gen/session/v1/backlog_pb";
+import { VCSStatusSchema, FileStatus } from "@/gen/session/v1/types_pb";
+import {
+  BacklogItemShipStatusSchema,
+  ShippedFileStatSchema,
+  StuckReason,
+  type StuckBacklogItem,
+} from "@/gen/session/v1/backlog_pb";
 
 // Heavy children pull their own hooks/timers; stub them out so this test is
 // focused on BacklogItemDetail's own render behavior.
@@ -428,6 +433,81 @@ describe("BacklogItemDetail — Story 2.2.3: VcsWidget wiring", () => {
     fireEvent.click(screen.getByRole("button", { name: "Browse files in this worktree" }));
 
     expect(screen.getByTestId("file-browser-modal-stub")).toBeInTheDocument();
+  });
+
+  it("BacklogItemDetail_should_RenderShippedCiConclusionAndReviewCounts_When_ShipStatusHasSnapshot", async () => {
+    useVcsStatusMock.mockReturnValue({ data: null, loading: false, error: null, refetch: jest.fn() });
+    useBacklogItemShipStatusMock.mockReturnValue({
+      data: create(BacklogItemShipStatusSchema, {
+        shipped: true,
+        shippedVia: "pr",
+        branchName: "feature/foo",
+        branchExists: false,
+        prUrl: "https://github.com/tstapler/stapler-squad/pull/999",
+        shippedCheckConclusion: "success",
+        shippedApprovedCount: 2,
+        shippedChangesReqCount: 1,
+        fileStats: [
+          create(ShippedFileStatSchema, { path: "server/foo.go", status: FileStatus.MODIFIED, additions: 5, deletions: 1 }),
+        ],
+        snapshotAt: timestampFromDate(new Date("2026-07-17T10:00:00Z")),
+        snapshotCaptureFailed: false,
+      }),
+      loading: false,
+      refetch: jest.fn(),
+    });
+
+    const session = makeSession({ role: "work", worktreePath: "/tmp/repo-wt" });
+    getBacklogItem.mockReset().mockResolvedValue(makeItem([session]));
+    listPipelineModes.mockReset().mockResolvedValue([]);
+
+    render(<BacklogItemDetail itemId="item-1" />);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    fireEvent.click(screen.getByTestId("collapsible-header-version-control"));
+
+    expect(screen.getByText("CI: success")).toBeInTheDocument();
+    expect(screen.getByLabelText("2 approved")).toBeInTheDocument();
+    expect(screen.getByLabelText("1 changes requested")).toBeInTheDocument();
+  });
+
+  it("BacklogItemDetail_should_RenderCaptureFailedCopy_When_ShipStatusSnapshotCaptureFailedTrue", async () => {
+    useVcsStatusMock.mockReturnValue({ data: null, loading: false, error: null, refetch: jest.fn() });
+    useBacklogItemShipStatusMock.mockReturnValue({
+      data: create(BacklogItemShipStatusSchema, {
+        shipped: true,
+        shippedVia: "pr",
+        branchName: "feature/foo",
+        branchExists: false,
+        prUrl: "https://github.com/tstapler/stapler-squad/pull/999",
+        shippedCheckConclusion: "success",
+        shippedApprovedCount: 2,
+        shippedChangesReqCount: 1,
+        fileStats: [
+          create(ShippedFileStatSchema, { path: "server/foo.go", status: FileStatus.MODIFIED, additions: 5, deletions: 1 }),
+        ],
+        snapshotCaptureFailed: true,
+      }),
+      loading: false,
+      refetch: jest.fn(),
+    });
+
+    const session = makeSession({ role: "work", worktreePath: "/tmp/repo-wt" });
+    getBacklogItem.mockReset().mockResolvedValue(makeItem([session]));
+    listPipelineModes.mockReset().mockResolvedValue([]);
+
+    render(<BacklogItemDetail itemId="item-1" />);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    fireEvent.click(screen.getByTestId("collapsible-header-version-control"));
+
+    expect(screen.getByText("Couldn't capture PR status at ship time")).toBeInTheDocument();
   });
 });
 
