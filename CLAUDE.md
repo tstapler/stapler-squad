@@ -120,7 +120,7 @@ Subtle patterns (double-checked locking, etc.): `docs/explanation/concurrency-pa
 ## Application Data
 
 State and logs live in `~/.stapler-squad/`:
-- `logs/staplersquad.log` — main log (JSON-lines, one `slog` record per line); check here for session creation issues. `logs/service.log` is a different file — raw systemd stdout/stderr (startup banners, panics before logging init) — see `docs/how-to/debug-with-logs.md` for the full file breakdown, log-level controls, and volume-reduction guidance.
+- `logs/staplersquad.log` — main log (JSON-lines, one `slog` record per line); check here for session creation issues. `logs/service.log` is a different file — raw systemd stdout/stderr (startup banners, panics before logging init) — see `docs/how-to/debug-with-logs.md` for the full file breakdown, log-level controls, and volume-reduction guidance. With `STAPLER_SQUAD_INSTANCE=<name>` set, an instance logs to `instances/<name>/logs/staplersquad.log` instead (unset or `shared` uses the path above, unchanged)
 - `worktrees/` — git worktrees for isolated sessions
 - `config.json`, `sessions.json`
 
