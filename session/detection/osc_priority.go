@@ -2,15 +2,10 @@ package detection
 
 // IsOSCExecutingPromotable reports whether a text-pattern-derived DetectedStatus
 // is eligible to be promoted to Executing by an OSC-derived spinner signal.
-// Single source of truth shared by applyOSCStatusOverride (session package,
-// DetectedStatus side) and IdleDetector.DetectStateFromContentWithOSC (IdleState
-// side) — see osc-status-signals architecture-review.md BLOCKER 2. Neither
-// direction ever promotes over a higher-urgency status (Error, NeedsApproval,
-// InputRequired, TestsFailing, Success, WaitingForAgent, Executing) — a false
-// OSC-idle or stale-spinner title must never mask a state needing user
-// attention. Cases are enumerated exhaustively (rather than a default
-// fallthrough) so a future new DetectedStatus constant fails golangci-lint's
-// exhaustive check instead of silently defaulting to "never promotable".
+// Single source of truth shared by applyOSCStatusOverride and
+// IdleDetector.DetectStateFromContentWithOSC — see architecture-review.md
+// BLOCKER 2. Cases are enumerated exhaustively so a future DetectedStatus
+// constant fails the exhaustive lint check rather than silently defaulting.
 func IsOSCExecutingPromotable(status DetectedStatus) bool {
 	switch status {
 	case StatusReady, StatusUnknown, StatusIdle, StatusProcessing:

@@ -41,18 +41,41 @@ type InstanceContext interface {
 
 // statusCacheEntry holds the result of the last successful status detection
 // along with the FNV hash of the tail content that produced it.
+//
+// oscContributed marks an entry computed using an OSC title (see
+// oscCacheStillFresh) — a frozen tail keeps tailHash constant forever, so
+// this is what stops a crashed process's cache-hit from outliving
+// oscStaleThreshold.
 type statusCacheEntry struct {
-	tailHash      uint64
-	status        detection.DetectedStatus
-	desc          string
-	subagentCount int
+	tailHash       uint64
+	status         detection.DetectedStatus
+	desc           string
+	subagentCount  int
+	oscContributed bool
 }
 
 // idleCacheEntry holds the result of the last successful idle state detection
-// along with the FNV hash of the tail content that produced it.
+// along with the FNV hash of the tail content that produced it. See
+// statusCacheEntry's oscContributed doc for why this field exists.
 type idleCacheEntry struct {
-	tailHash uint64
-	state    detection.IdleState
+	tailHash       uint64
+	state          detection.IdleState
+	oscContributed bool
+}
+
+// oscCacheStillFresh reports whether a cache entry tagged oscContributed is
+// still valid, re-checked against the *live* activity clock (not a snapshot
+// from write time) so a process that crashes after caching is still caught.
+func (cc *ClaudeController) oscCacheStillFresh(oscContributed bool) bool {
+	if !oscContributed {
+		return true
+	}
+	detector := cc.idleDetector.Load()
+	if detector == nil {
+		return true
+	}
+	ns := detector.GetLastActivityNs()
+	return ns == 0 || time.Since(time.Unix(0, ns)) <= oscStaleThreshold
 }
 
 // statusDetectionTailBytes is the number of bytes taken from the tail of the
@@ -639,40 +662,18 @@ func (cc *ClaudeController) Unsubscribe(subscriberID string) error {
 	return rs.Unsubscribe(subscriberID)
 }
 
-// GetCurrentStatus detects the current status of the Claude instance.
-//
-// Two optimisations are applied on every call:
-//  1. Tail slicing — only the last statusDetectionTailBytes bytes of the
-//     terminal content are examined. Status indicators (◇ Ready, Thinking…,
-//     esc to interrupt) always appear near the current cursor position, so
-//     scanning the full scrollback is unnecessary.
-//  2. Content hash cache — a FNV-64a hash of the tail is compared against the
-//     previous call. If the tail is unchanged the cached result is returned
-//     immediately with zero allocations.
-//
-// This function holds no lifecycle lock — it reads ptyAccess and statusDetector
-// via atomic.Pointer, and the status/idle caches via atomic.Pointer. It therefore never
-// blocks when Stop() is running its slow cleanup.
 // oscStaleThreshold bounds how long a stale OSC title is trusted after the
-// PTY stops producing real output (crash/kill without a clean Stop() call —
-// cc.IsStarted() alone stays true for an indefinite period after an
-// unexpected exit, since Stop() is only called from deliberate
-// operator/driver paths, never from the exit callbacks that fire on a
-// crash). Compared against IdleDetector.GetLastActivityNs(), which is
-// already updated on every real PTY read independent of this feature, so
-// this reuses an existing liveness clock rather than adding a new one. Set
+// PTY stops producing real output. Compared against IdleDetector.GetLastActivityNs(),
+// already updated on every real PTY read independent of this feature. Set
 // well above OSCDebounceDelay/spinner redraw cadence so no legitimate
 // in-progress spinner can trip it.
 const oscStaleThreshold = 5 * time.Second
 
-// classifyOSC extracts and classifies the OSC window-title payload from tail,
-// gated on the session still being started AND on recent real PTY activity —
-// an exited process's last-written title could otherwise be misread as
-// current state forever (see oscStaleThreshold doc above). Returns ok=false
-// whenever the controller isn't started, the PTY has been silent longer than
-// oscStaleThreshold, no OSC title is present in tail, or the title matches
-// neither recognized marker — callers must fall back to text-pattern
-// detection in that case (AC7).
+// classifyOSC extracts and classifies the OSC window-title payload from tail.
+// Returns ok=false whenever the controller isn't started, the PTY has been
+// silent longer than oscStaleThreshold, or no title is present — callers
+// must fall back to text-pattern detection (AC7) and, if caching this
+// result, tag the entry with oscContributed=ok (see oscCacheStillFresh).
 func (cc *ClaudeController) classifyOSC(tail string) (dtypes.OSCStatus, bool) {
 	if !cc.IsStarted() {
 		return dtypes.OSCStatusNone, false
@@ -689,15 +690,10 @@ func (cc *ClaudeController) classifyOSC(tail string) (dtypes.OSCStatus, bool) {
 	return binaries.ClassifyOSCTitle(title)
 }
 
-// applyOSCStatusOverride applies osc as an asymmetric, upgrade-only overlay on
-// top of textStatus/textDesc: OSCStatusExecuting may promote a low-urgency
-// text result toward StatusExecuting; OSCStatusIdle may only promote
-// Ready/Unknown toward StatusIdle. Neither direction ever demotes a
-// higher-urgency text-pattern result (Error, NeedsApproval, InputRequired,
-// TestsFailing, Success, WaitingForAgent, Executing). Uses
-// detection.IsOSCExecutingPromotable/IsOSCIdlePromotable — the same
-// predicates IdleDetector.DetectStateFromContentWithOSC uses for the
-// IdleState side — so the two overlays can never independently drift.
+// applyOSCStatusOverride applies osc as an asymmetric, upgrade-only overlay:
+// it may only promote textStatus toward Executing/Idle (never demote a
+// higher-urgency result), gated by the same IsOSCExecutingPromotable/
+// IsOSCIdlePromotable predicates the IdleState-side overlay uses.
 func applyOSCStatusOverride(textStatus detection.DetectedStatus, textDesc string, osc dtypes.OSCStatus) (detection.DetectedStatus, string) {
 	switch osc {
 	case dtypes.OSCStatusExecuting:
@@ -712,6 +708,20 @@ func applyOSCStatusOverride(textStatus detection.DetectedStatus, textDesc string
 	return textStatus, textDesc
 }
 
+// GetCurrentStatus detects the current status of the Claude instance.
+//
+// Two optimisations are applied on every call:
+//  1. Tail slicing — only the last statusDetectionTailBytes bytes of the
+//     terminal content are examined. Status indicators (◇ Ready, Thinking…,
+//     esc to interrupt) always appear near the current cursor position, so
+//     scanning the full scrollback is unnecessary.
+//  2. Content hash cache — a FNV-64a hash of the tail is compared against the
+//     previous call. If the tail is unchanged the cached result is returned
+//     immediately with zero allocations.
+//
+// This function holds no lifecycle lock — it reads ptyAccess and statusDetector
+// via atomic.Pointer, and the status/idle caches via atomic.Pointer. It therefore never
+// blocks when Stop() is running its slow cleanup.
 func (cc *ClaudeController) GetCurrentStatus() (detection.DetectedStatus, string) {
 	pa := cc.ptyAccess.Load()
 	if pa == nil {
@@ -724,7 +734,7 @@ func (cc *ClaudeController) GetCurrentStatus() (detection.DetectedStatus, string
 		return detection.StatusUnknown, "No terminal content"
 	}
 
-	if sc := cc.statusCache.Load(); sc != nil && sc.tailHash == h {
+	if sc := cc.statusCache.Load(); sc != nil && sc.tailHash == h && cc.oscCacheStillFresh(sc.oscContributed) {
 		return sc.status, sc.desc
 	}
 
@@ -791,10 +801,11 @@ func (cc *ClaudeController) GetCurrentStatus() (detection.DetectedStatus, string
 		)
 	}
 
-	if osc, ok := cc.classifyOSC(tail); ok {
+	osc, oscOK := cc.classifyOSC(tail)
+	if oscOK {
 		newStatus, newDesc := applyOSCStatusOverride(status, desc, osc)
 		if newStatus != status {
-			log.Debug("GetCurrentStatus: OSC override changed status", "session", cc.sessionName, "text_status", status, "osc_status", newStatus)
+			log.Debug("GetCurrentStatus: OSC override changed status", "session", cc.sessionName, "text_status", status, "new_status", newStatus)
 		}
 		status, desc = newStatus, newDesc
 	}
@@ -802,7 +813,7 @@ func (cc *ClaudeController) GetCurrentStatus() (detection.DetectedStatus, string
 	// count is stored in the cache (not returned — GetCurrentStatus's callers don't need
 	// it) purely for coherence with GetStatusAndIdleInfo, which shares this same
 	// atomic.Pointer[statusCacheEntry] cache keyed by tail hash. See ADR-001.
-	cc.statusCache.Store(&statusCacheEntry{tailHash: h, status: status, desc: desc, subagentCount: count})
+	cc.statusCache.Store(&statusCacheEntry{tailHash: h, status: status, desc: desc, subagentCount: count, oscContributed: oscOK})
 	return status, desc
 }
 
@@ -995,7 +1006,7 @@ func (cc *ClaudeController) GetIdleState() (detection.IdleState, time.Time) {
 	if pa != nil {
 		h, hasData := pa.GetRecentHash(statusDetectionTailBytes)
 		if hasData {
-			if ic := cc.idleCache.Load(); ic != nil && ic.tailHash == h {
+			if ic := cc.idleCache.Load(); ic != nil && ic.tailHash == h && cc.oscCacheStillFresh(ic.oscContributed) {
 				state = ic.state
 			} else {
 				bufp := tailBufPool.Get().(*[]byte)
@@ -1004,12 +1015,13 @@ func (cc *ClaudeController) GetIdleState() (detection.IdleState, time.Time) {
 					tail := string((*bufp)[:n])
 					tailBufPool.Put(bufp)
 					filtered, _ := filterTmuxMetadata(tail)
-					if osc, ok := cc.classifyOSC(tail); ok {
+					osc, oscOK := cc.classifyOSC(tail)
+					if oscOK {
 						state = id.DetectStateFromContentWithOSC(filtered, osc)
 					} else {
 						state = id.DetectStateFromContent(filtered)
 					}
-					cc.idleCache.Store(&idleCacheEntry{tailHash: h, state: state})
+					cc.idleCache.Store(&idleCacheEntry{tailHash: h, state: state, oscContributed: oscOK})
 				} else {
 					tailBufPool.Put(bufp)
 					state = id.GetState()
@@ -1124,13 +1136,13 @@ func (cc *ClaudeController) GetStatusAndIdleInfo() (detection.DetectedStatus, st
 	var cachedDesc string
 	var cachedCount int
 	var cachedIdleState detection.IdleState
-	if sc := cc.statusCache.Load(); sc != nil && sc.tailHash == h {
+	if sc := cc.statusCache.Load(); sc != nil && sc.tailHash == h && cc.oscCacheStillFresh(sc.oscContributed) {
 		statusHit = true
 		cachedStatus = sc.status
 		cachedDesc = sc.desc
 		cachedCount = sc.subagentCount
 	}
-	if ic := cc.idleCache.Load(); ic != nil && ic.tailHash == h {
+	if ic := cc.idleCache.Load(); ic != nil && ic.tailHash == h && cc.oscCacheStillFresh(ic.oscContributed) {
 		idleHit = true
 		cachedIdleState = ic.state
 	}
@@ -1169,7 +1181,7 @@ func (cc *ClaudeController) GetStatusAndIdleInfo() (detection.DetectedStatus, st
 		if oscOK && cc.statusDetector.Load() != nil {
 			newStatus, newDesc := applyOSCStatusOverride(status, desc, osc)
 			if newStatus != status {
-				log.Debug("GetStatusAndIdleInfo: OSC override changed status", "session", cc.sessionName, "text_status", status, "osc_status", newStatus)
+				log.Debug("GetStatusAndIdleInfo: OSC override changed status", "session", cc.sessionName, "text_status", status, "new_status", newStatus)
 			}
 			status, desc = newStatus, newDesc
 		}
@@ -1186,10 +1198,10 @@ func (cc *ClaudeController) GetStatusAndIdleInfo() (detection.DetectedStatus, st
 	}
 
 	if !statusHit {
-		cc.statusCache.Store(&statusCacheEntry{tailHash: h, status: status, desc: desc, subagentCount: count})
+		cc.statusCache.Store(&statusCacheEntry{tailHash: h, status: status, desc: desc, subagentCount: count, oscContributed: oscOK})
 	}
 	if !idleHit {
-		cc.idleCache.Store(&idleCacheEntry{tailHash: h, state: idleState})
+		cc.idleCache.Store(&idleCacheEntry{tailHash: h, state: idleState, oscContributed: oscOK})
 	}
 	return status, desc, buildIdleInfo(idleState), count
 }

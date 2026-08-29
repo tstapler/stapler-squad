@@ -27,12 +27,9 @@ type IdleDetectorConfig struct {
 	DebounceDelay time.Duration // Delay before changing state to prevent flickering
 	BufferSize    int           // Number of bytes to analyze from recent output
 
-	// OSCDebounceDelay gates OSC-derived state transitions (see
-	// DetectStateFromContentWithOSC) with its own, much shorter window than
-	// DebounceDelay (which gates text-pattern-derived transitions). Both
-	// compare elapsed time against the same lastStateChange timestamp — see
-	// osc-status-signals ADR-002 for why a second, separately-tracked clock
-	// was deliberately avoided.
+	// OSCDebounceDelay gates OSC-derived transitions (DetectStateFromContentWithOSC)
+	// with a shorter window than DebounceDelay, sharing the same lastStateChange
+	// clock — see osc-status-signals ADR-002.
 	OSCDebounceDelay time.Duration
 }
 
@@ -170,15 +167,11 @@ func (id *IdleDetector) DetectStateFromContent(content string) IdleState {
 	return id.DetectStateFromContentWithOSC(content, dtypes.OSCStatusNone)
 }
 
-// DetectStateFromContentWithOSC analyzes content the same way DetectStateFromContent
-// does, then folds in an OSC-derived signal (see ClaudeController.classifyOSC) as an
-// asymmetric, upgrade-only overlay — gated by IsOSCExecutingPromotable/IsOSCIdlePromotable,
-// the same predicates applyOSCStatusOverride uses for DetectedStatus, so the two overlays
-// can never disagree about which text-pattern statuses are eligible for promotion. Computes
-// both candidate states and performs exactly one lock-protected write with the correct
-// debounce window (DebounceDelay or OSCDebounceDelay) for whichever source is authoritative
-// on this call — see osc-status-signals architecture-review.md BLOCKER 1 for why two
-// sequential state-committing calls sharing lastStateChange is unsafe.
+// DetectStateFromContentWithOSC is DetectStateFromContent plus an OSC-derived
+// overlay (gated by IsOSCExecutingPromotable/IsOSCIdlePromotable, shared with
+// applyOSCStatusOverride's DetectedStatus side), resolved with exactly one
+// lock-protected write — see osc-status-signals architecture-review.md
+// BLOCKER 1 for why two sequential commits sharing lastStateChange is unsafe.
 func (id *IdleDetector) DetectStateFromContentWithOSC(content string, osc dtypes.OSCStatus) IdleState {
 	if content == "" {
 		id.mu.RLock()

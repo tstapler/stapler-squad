@@ -29,17 +29,10 @@ func findOSCTerminator(data string, start int) (idx int, termLen int) {
 }
 
 // ExtractLastOSC scans data for complete OSC sequences whose numeric command
-// matches one of oscNums (e.g. "0", "2" for window-title sequences),
-// terminated by BEL (\x07) or ST (\x1b\), and returns the payload of the
-// last (right-most, by terminator position) complete match — regardless of
-// which oscNums entry it matched or the order oscNums was passed in.
-//
-// data should already be a bounded window (e.g. a fixed-size PTY tail) —
-// this function does not itself cap scan length. An occurrence whose opening
-// prefix falls outside data (truncated at the window's leading edge) is
-// never matched, since matching only starts from a found prefix; a stray
-// terminator with no preceding prefix in this window is correctly treated as
-// "no title," not misattributed to unrelated content.
+// matches one of oscNums, terminated by BEL or ST, and returns the payload of
+// the last (right-most) complete match, regardless of oscNums order. data
+// should already be a bounded window (e.g. a fixed-size PTY tail) — this
+// function does not itself cap scan length.
 func ExtractLastOSC(data string, oscNums ...string) (payload string, ok bool) {
 	if !strings.Contains(data, "\x1b]") {
 		return "", false

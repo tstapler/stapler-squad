@@ -1265,36 +1265,27 @@ func TestClaudeController_StatusChangeListener_NotCalledAfterStop(t *testing.T) 
 // OSC title status override (osc-status-signals)
 // ---------------------------------------------------------------------------
 
-func TestGetCurrentStatus_OSCSpinnerOverridesFalseIdle(t *testing.T) {
+func TestGetCurrentStatus_OSCOverride(t *testing.T) {
 	t.Parallel()
-	cc, _ := newControllerWithMock("$ \x1b]0;⠋ working\x07")
-	cc.started.Store(true)
-
-	status, desc := cc.GetCurrentStatus()
-	if status != detection.StatusExecuting {
-		t.Errorf("GetCurrentStatus() = (%v, %q), want StatusExecuting (OSC spinner title over a bare prompt)", status, desc)
+	tests := []struct {
+		name    string
+		content string
+		want    detection.DetectedStatus
+	}{
+		{"spinner overrides false idle", "$ \x1b]0;⠋ working\x07", detection.StatusExecuting},
+		{"idle marker promotes ready-only text", "$ \x1b]0;✳\x07", detection.StatusIdle},
+		{"idle marker does not override active text", "esc to interrupt\x1b]0;✳\x07", detection.StatusExecuting},
 	}
-}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			cc, _ := newControllerWithMock(tt.content)
+			cc.started.Store(true)
 
-func TestGetCurrentStatus_OSCIdleMarker_PromotesReadyOnlyText(t *testing.T) {
-	t.Parallel()
-	cc, _ := newControllerWithMock("$ \x1b]0;✳\x07")
-	cc.started.Store(true)
-
-	status, desc := cc.GetCurrentStatus()
-	if status != detection.StatusIdle {
-		t.Errorf("GetCurrentStatus() = (%v, %q), want StatusIdle (OSC ✳ marker over Ready/Unknown text)", status, desc)
-	}
-}
-
-func TestGetCurrentStatus_OSCIdle_DoesNotOverrideActiveText(t *testing.T) {
-	t.Parallel()
-	cc, _ := newControllerWithMock("esc to interrupt\x1b]0;✳\x07")
-	cc.started.Store(true)
-
-	status, desc := cc.GetCurrentStatus()
-	if status != detection.StatusExecuting {
-		t.Errorf("GetCurrentStatus() = (%v, %q), want StatusExecuting (a stale/nested ✳ OSC title must not downgrade active text)", status, desc)
+			if status, desc := cc.GetCurrentStatus(); status != tt.want {
+				t.Errorf("GetCurrentStatus() = (%v, %q), want %v", status, desc, tt.want)
+			}
+		})
 	}
 }
 
@@ -1313,6 +1304,31 @@ func TestGetCurrentStatus_NoOSCTitle_FallsBackToTextPattern(t *testing.T) {
 	if statusStarted != statusNotStarted || descStarted != descNotStarted {
 		t.Errorf("result differs with no OSC title present: started=(%v,%q) not-started=(%v,%q)",
 			statusStarted, descStarted, statusNotStarted, descNotStarted)
+	}
+}
+
+// TestGetStatusAndIdleInfo_UninitializedStatusDetector_DoesNotApplyOSCOverride is the
+// direct regression test for the guard at claude_controller.go's OSC-override site:
+// resolveStatusFromTail leaves status at its zero value (StatusUnknown) when
+// statusDetector is nil, and StatusUnknown is in both OSC promotable sets — without
+// the `cc.statusDetector.Load() != nil` guard, an uninitialized detector could report
+// a confident StatusExecuting/StatusIdle sourced entirely from OSC instead of
+// surfacing the uninitialized state.
+func TestGetStatusAndIdleInfo_UninitializedStatusDetector_DoesNotApplyOSCOverride(t *testing.T) {
+	t.Parallel()
+	inst := &mockInstance{title: "test", preview: "$ \x1b]0;⠋ working\x07"}
+	cc := &ClaudeController{sessionName: "test", instance: inst}
+	// Deliberately no cc.statusDetector.Store(...).
+	cc.idleDetector.Store(detection.NewIdleDetector("test", nil))
+	buf := NewCircularBuffer(256 * 1024)
+	_, _ = buf.Write([]byte("$ \x1b]0;⠋ working\x07"))
+	cc.ptyAccess.Store(NewPTYAccess("test", nil, buf))
+	cc.started.Store(true)
+
+	status, desc, _, _ := cc.GetStatusAndIdleInfo()
+	if status != detection.StatusUnknown {
+		t.Errorf("GetStatusAndIdleInfo() with nil statusDetector = (%v, %q), want StatusUnknown — "+
+			"an OSC-derived status must not be reported when the underlying text detector never ran", status, desc)
 	}
 }
 
@@ -1358,6 +1374,60 @@ func TestClassifyOSC_StaleActivity_FallsBackToNone(t *testing.T) {
 	id.InitializeFromTimestamp(time.Now())
 	if _, ok := cc.classifyOSC("$ \x1b]0;⠋ working\x07"); !ok {
 		t.Error("classifyOSC() with recent activity should still classify the OSC title")
+	}
+}
+
+// TestGetCurrentStatus_CacheDoesNotOutliveOSCStaleness is a regression test for a
+// code-review BLOCKER: classifyOSC's own staleness gate (proven above) only runs on a
+// cache MISS. Without re-validating staleness on a cache HIT too, a crashed process's
+// frozen PTY tail (constant tailHash forever) would keep serving a pre-staleness
+// OSC-derived status indefinitely — the exact "stuck at Executing forever" failure
+// AC7 requires guarding against, just reached through the cache instead of through
+// classifyOSC directly.
+func TestGetCurrentStatus_CacheDoesNotOutliveOSCStaleness(t *testing.T) {
+	t.Parallel()
+	cc, _ := newControllerWithMock("$ \x1b]0;⠋ working\x07")
+	cc.started.Store(true)
+
+	// First call: fresh activity, OSC spinner promotes to Executing, cache is
+	// populated with this OSC-derived result.
+	status1, _ := cc.GetCurrentStatus()
+	if status1 != detection.StatusExecuting {
+		t.Fatalf("seed: GetCurrentStatus() = %v, want StatusExecuting", status1)
+	}
+
+	// Simulate a crashed process: PTY content is frozen (identical tail, identical
+	// hash — a real cache hit), but the activity clock has gone stale.
+	id := cc.idleDetector.Load()
+	id.InitializeFromTimestamp(time.Now().Add(-oscStaleThreshold - time.Second))
+
+	status2, desc2 := cc.GetCurrentStatus()
+	if status2 == detection.StatusExecuting {
+		t.Errorf("GetCurrentStatus() after staleness elapsed = (%v, %q), want NOT StatusExecuting — "+
+			"the cache served a pre-staleness OSC-derived result instead of re-validating", status2, desc2)
+	}
+}
+
+// TestGetStatusAndIdleInfo_CacheDoesNotOutliveOSCStaleness is the GetStatusAndIdleInfo
+// counterpart to TestGetCurrentStatus_CacheDoesNotOutliveOSCStaleness — it shares a
+// different cache (statusCache is common to both, but this proves the fix applies to
+// the call site GetCurrentStatus doesn't exercise).
+func TestGetStatusAndIdleInfo_CacheDoesNotOutliveOSCStaleness(t *testing.T) {
+	t.Parallel()
+	cc, _ := newControllerWithMock("$ \x1b]0;⠋ working\x07")
+	cc.started.Store(true)
+
+	status1, _, _, _ := cc.GetStatusAndIdleInfo()
+	if status1 != detection.StatusExecuting {
+		t.Fatalf("seed: GetStatusAndIdleInfo() status = %v, want StatusExecuting", status1)
+	}
+
+	id := cc.idleDetector.Load()
+	id.InitializeFromTimestamp(time.Now().Add(-oscStaleThreshold - time.Second))
+
+	status2, desc2, _, _ := cc.GetStatusAndIdleInfo()
+	if status2 == detection.StatusExecuting {
+		t.Errorf("GetStatusAndIdleInfo() status after staleness elapsed = (%v, %q), want NOT StatusExecuting", status2, desc2)
 	}
 }
 
