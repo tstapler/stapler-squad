@@ -122,6 +122,17 @@ changes its schema.
   (`fmt.Sprintf("(%d/%d total)", failures, attempts)`) per the Pattern Decisions row above. No new
   pprof/Prometheus surface — matches this repo's existing minimum bar for background-hook
   visibility (`capability_check.go`'s precedent).
+- **Ongoing enabled/success signal (pre-mortem #2, P1)**: the startup log line alone
+  ("credential unresolved, reviewer disabled") is not sufficient — a systemd-service deployment
+  whose environment can't resolve `~/.claude/.credentials.json`/`ANTHROPIC_API_KEY` would look
+  identical, from `REPO.md`'s perspective, to "nothing worth learning happened in weeks," and
+  nobody would notice. Add a periodic (e.g. every 100th `done` transition, or hourly, whichever
+  is cheaper to implement against the existing counters) `log.Info` line stating
+  `"completion_reviewer: enabled=<bool> attempts=%d failures=%d since_start"` so "disabled: no
+  credential" is distinguishable from "enabled, 0/N successes" by grep at any point after
+  startup, not just at boot. Task 1.5.3b's manual-verification note must include confirming this
+  line appears in the real deployed service's logs post-rollout — not just in a manual
+  `/tmp/ssq-manual-test` run where a dev's own OAuth credential happens to be present.
 - **Alerts**: none — explicitly out of scope; "failures logged, never surfaced to the user or the
   backlog item" is a hard AC, and no alerting infra exists for background hooks of this kind
   elsewhere in the repo (`backlog_github_forward_sync.go` has none either).
@@ -138,6 +149,16 @@ changes its schema.
   appends a human can hand-edit/trim if needed.
 - **Staged rollout**: not applicable — this is a background, best-effort, non-user-facing hook;
   no user-facing surface to stage.
+- **Unbounded `REPO.md` growth (pre-mortem #4, P1)**: the periodic curator/pruning pass is
+  explicitly out of scope for this item (requirements.md's Out of Scope), but shipping with zero
+  bound and zero owner risks the opposite of the stated goal — context-budget bloat degrading
+  future triage/work/review prompts rather than improving them, discovered only anecdotally.
+  Mitigation, in scope for this item: `fileMemoryStore.Append` (Task 1.4.2d) enforces a hard cap
+  — reject the append (log + increment the failure counter, same "logged not surfaced" path as
+  any other failure) once `REPO.md` exceeds a fixed size (e.g. 64KB) or section count (e.g. 200
+  sections), rather than growing without limit. Separately, file a tracked follow-up backlog item
+  for the periodic curator pass before this item ships, so the cap has a real successor rather
+  than being the permanent ceiling.
 
 ## Unresolved Questions
 
@@ -198,6 +219,16 @@ server/server.go   (THIS ITEM — 1 new call, near line 669's forward-sync regis
 
 No new proto/RPC. No new ent schema. No new third-party dependency (`gofrs/flock` already in
 go.mod).
+
+### Epic-level dispatch/parallelism (for `sdd:5-implement`)
+
+The diagram above is a call/import graph, not a file-conflict graph — per engineering triad
+review (2026-08-29), Epics 1.2 through 1.5 all incrementally edit the same file
+(`server/services/completion_reviewer.go`), and Epics 1.3/1.5 both also touch `server/server.go`.
+**Epic 1.1 is the only epic safely dispatchable in parallel with the rest** (it only touches
+`session/backlog_completion_review_context.go` + its test file, disjoint from every other epic).
+Epics 1.2 → 1.3 → 1.4 → 1.5 must be dispatched as one sequential unit, in that order, by whichever
+worker/coordinator executes this plan — do not parallel-dispatch across them.
 
 ---
 
@@ -516,6 +547,12 @@ source item ID.
   - *Given* that content, *When* `Append` runs, *Then* `opmemory.ScanForPromptInjection` rejects
     it before any file write occurs, and `Append` returns that error unchanged (satisfies
     operator-memory requirement 6, "scan runs before any write").
+- Given `REPO.md` already has 200 sections (or is already ≥64KB), and a new, otherwise-valid
+  entry,
+  - *Given* that state, *When* `Append` runs, *Then* it returns an error (`"completion_reviewer:
+    memory file at cap (N sections / N bytes), append rejected"`) without writing, and the
+    failure counter increments via the normal AC3 failure path — satisfies pre-mortem #4 (P1):
+    `REPO.md` cannot grow unbounded before a curator pass exists.
 
 ##### Task 1.4.2a: `fileMemoryStore` type + path resolution (3 min)
 - New file `server/services/completion_reviewer_memory.go`. `type fileMemoryStore struct{}`;
@@ -535,14 +572,28 @@ source item ID.
   `entry.SourceItemID`.
 - Files: `server/services/completion_reviewer_memory.go`
 
-##### Task 1.4.2d: `flock`-guarded read-modify-write-atomic-rename (5 min)
+##### Task 1.4.2d: `flock`-guarded read-modify-write-atomic-rename, with a hard growth cap (6 min)
 - `lock := flock.New(path + ".lock")`; `locked, err := lock.TryLockContext(ctx, 100*time.Millisecond)`
-  (mirrors `config/state.go:260`'s exact call shape); on success, `defer lock.Unlock()`. Read
-  existing content via `os.ReadFile` (missing file → `""`, not an error). Write
-  `existing + "\n" + newSection` to a `os.CreateTemp` file in the same directory, then
-  `os.Rename` over `path` (mirrors `hook_injector_test.go`'s temp-file+atomic-rename precedent
-  cited in pitfalls.md §5). `os.MkdirAll` the parent directory first if missing.
+  (mirrors `config/state.go`'s `TryLockContext` call shape — see note below on line-number drift);
+  on success, `defer lock.Unlock()`. Read existing content via `os.ReadFile` (missing file → `""`,
+  not an error). **Before writing**: if `len(existing) >= maxMemoryFileBytes` (const, 64*1024) OR
+  `strings.Count(existing, "<!-- completion-reviewer ") >= maxMemorySections` (const, 200), return
+  an error and do not write (pre-mortem #4 / P1 mitigation — hard cap on unbounded growth). Only
+  the successful path continues: write `existing + "\n" + newSection` to a `os.CreateTemp` file in
+  the same directory, then `os.Rename` over `path` (mirrors `hook_injector_test.go`'s
+  temp-file+atomic-rename precedent cited in pitfalls.md §5). `os.MkdirAll` the parent directory
+  first if missing.
 - Files: `server/services/completion_reviewer_memory.go`
+- *Note on citations*: the `config/state.go` `flock`/`TryLockContext` precedent this task mirrors
+  is confirmed present in that file (per engineering triad review, 2026-08-29) but at different
+  line numbers than earlier drafts of this plan cited — `grep -n TryLockContext config/state.go`
+  before implementing rather than trusting a specific line number here.
+
+##### Task 1.4.2i: Unit test — growth cap rejects further appends (3 min)
+- `TestFileMemoryStore_Append_should_RejectAppend_When_FileExceedsGrowthCap` — seed `REPO.md`
+  past `maxMemoryFileBytes` (or `maxMemorySections`), call `Append`, assert a non-nil error is
+  returned and the file's byte content is unchanged (read back and compare).
+- Files: `server/services/completion_reviewer_memory_test.go`
 
 ##### Task 1.4.2e: Unit test — append preserves prior content (4 min)
 - `TestFileMemoryStore_Append_should_PreserveExistingContent_When_FileAlreadyHasEntries` — seed
@@ -611,8 +662,12 @@ a visible trace per firing.
   ahead of the semaphore so a duplicate/rapid-redelivered event never consumes a fan-out slot).
   Then: `go func(item *session.BacklogItemData) { select { case sem <- struct{}{}: case
   <-ctx.Done(): return }; defer func() { <-sem }(); handleCompletionReview(ctx, storage, aiClient,
-  memoryStore, notifier, item) }(payload.Item)` — `handleCompletionReview` itself does not take
-  the dedup state; dedup is fully resolved before dispatch.
+  memoryStore, item) }(payload.Item)` — `handleCompletionReview` itself does not take
+  the dedup state; dedup is fully resolved before dispatch. **Note**: `notifier` is added as a
+  parameter to both `StartCompletionReviewerSubscriber` and `handleCompletionReview` by Task
+  1.5.2a, not here — Epics 1.2-1.5 are dispatched as one sequential unit (see "Epic-level
+  dispatch/parallelism" above), so this task's code is expected to be completed by the same
+  worker that lands 1.5.2a before either is committed/tested standalone.
 - Files: `server/services/completion_reviewer.go`
 
 ##### Task 1.5.1c: Fetch prior sessions for context assembly (3 min)
@@ -635,7 +690,7 @@ a visible trace per firing.
   (via a counter + `require.Never` exceeding the cap, then release and drain).
 - Files: `server/services/completion_reviewer_test.go`
 
-#### Story 1.5.2: Audit trail
+#### Story 1.5.2: Audit trail + periodic enabled/success signal
 
 **Acceptance Criteria**:
 - Given a successful review + memory write for item `b09c1b49-...`,
@@ -643,6 +698,12 @@ a visible trace per firing.
     and one `EventBusNotifier.Notify(item.ID, "Completion review recorded", "...", <low
     priority>)` call happen, distinct from (and after) the `memoryStore.Append` call itself —
     satisfies pitfalls.md's "auditability without a UI" finding.
+- Given the subscriber has processed `N` `done` transitions since start (successes + failures,
+  `N` a multiple of 100) OR at least 1 hour has elapsed since the last such log line,
+  - *Given* that state, *When* the next event is dispatched, *Then* one additional `log.Info` line
+    is emitted: `"completion_reviewer: enabled=<bool> attempts=%d failures=%d since_start"` —
+    satisfies pre-mortem #4 (P1): "disabled: no credential" must be distinguishable from "enabled,
+    0/N successes" by grep at any point after startup, not just at boot.
 
 ##### Task 1.5.2a: Wire the notifier + log line (3 min)
 - Add `notifier session.Notifier` parameter to `StartCompletionReviewerSubscriber` (nilable, same
@@ -655,6 +716,22 @@ a visible trace per firing.
 - `TestHandleCompletionReview_should_Notify_When_WriteSucceeds` and
   `TestHandleCompletionReview_should_NotNotify_When_GateSkips` (thin-content case never reaches
   the AI call or the notify step) using a fake `session.Notifier`.
+- Files: `server/services/completion_reviewer_test.go`
+
+##### Task 1.5.2c: Periodic enabled/success log line (4 min)
+- Inside `StartCompletionReviewerSubscriber`'s dispatch loop, after each `handleCompletionReview`
+  call returns: if `attempts.Load()%100 == 0 || time.Since(lastStatusLog) >= time.Hour`, emit
+  `log.Info("completion_reviewer: enabled=%v attempts=%d failures=%d since_start", aiClient != nil
+  && memoryStore != nil, attempts.Load(), failures.Load())` and update `lastStatusLog`. Closes the
+  gap named in pre-mortem #2 (P1): a startup-only log line can't distinguish "disabled" from
+  "enabled, 0 successes for weeks" once the process has been running.
+- Files: `server/services/completion_reviewer.go`
+
+##### Task 1.5.2d: Unit test — periodic status line fires on the Nth event (3 min)
+- `TestStartCompletionReviewerSubscriber_should_LogStatusLine_When_HundredthEventProcessed` —
+  publish 100 `done` events through a fake `AIClient`, assert the status-line log fires exactly
+  once (capture via a test log sink / injected logger) with the correct `attempts`/`failures`
+  counts.
 - Files: `server/services/completion_reviewer_test.go`
 
 #### Story 1.5.3: `server.go` wiring
