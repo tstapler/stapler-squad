@@ -14,7 +14,7 @@
  */
 
 import React from "react";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { ReviewQueuePanel, isCreateRuleEligibleCategory } from "../ReviewQueuePanel";
 import { AttentionReason, Priority, SubStatus, SuggestionSource } from "@/gen/session/v1/types_pb";
 import type { ReviewItem } from "@/gen/session/v1/types_pb";
@@ -203,6 +203,77 @@ describe("ReviewQueuePanel — empty state", () => {
     renderPanel();
     // Panel header should always be present
     expect(screen.getByText(/review queue/i)).toBeInTheDocument();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Bulk skip — "Skip all (N)" acts on every currently-visible non-approval item
+// ---------------------------------------------------------------------------
+
+describe("ReviewQueuePanel — bulk skip", () => {
+  let confirmSpy: jest.SpyInstance;
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    confirmSpy = jest.spyOn(window, "confirm");
+  });
+
+  afterEach(() => {
+    confirmSpy.mockRestore();
+  });
+
+  it("counts only non-approval items in the Skip all label", () => {
+    const items = [
+      makeReviewItem({ sessionId: "s1" }),
+      makeReviewItem({ sessionId: "s2" }),
+      makeApprovalItem({ sessionId: "s3" }),
+    ];
+    mockUseReviewQueueContext.mockReturnValue(makeContextValue(items));
+
+    renderPanel();
+
+    expect(screen.getByTestId("skip-all-visible")).toHaveTextContent("Skip all (2)");
+  });
+
+  it("is not rendered when every visible item is an approval request", () => {
+    mockUseReviewQueueContext.mockReturnValue(
+      makeContextValue([makeApprovalItem({ sessionId: "s1" })])
+    );
+
+    renderPanel();
+
+    expect(screen.queryByTestId("skip-all-visible")).not.toBeInTheDocument();
+  });
+
+  it("does nothing when the user cancels the confirmation", async () => {
+    confirmSpy.mockReturnValue(false);
+    mockUseReviewQueueContext.mockReturnValue(
+      makeContextValue([makeReviewItem({ sessionId: "s1" })])
+    );
+
+    renderPanel();
+    fireEvent.click(screen.getByTestId("skip-all-visible"));
+
+    expect(confirmSpy).toHaveBeenCalled();
+    await waitFor(() => expect(mockAcknowledge).not.toHaveBeenCalled());
+  });
+
+  it("acknowledges every visible non-approval item, skipping approval requests, once confirmed", async () => {
+    confirmSpy.mockReturnValue(true);
+    const items = [
+      makeReviewItem({ sessionId: "s1" }),
+      makeReviewItem({ sessionId: "s2" }),
+      makeApprovalItem({ sessionId: "s3" }),
+    ];
+    mockUseReviewQueueContext.mockReturnValue(makeContextValue(items));
+
+    renderPanel();
+    fireEvent.click(screen.getByTestId("skip-all-visible"));
+
+    await waitFor(() => expect(mockAcknowledge).toHaveBeenCalledTimes(2));
+    expect(mockAcknowledge).toHaveBeenCalledWith("s1");
+    expect(mockAcknowledge).toHaveBeenCalledWith("s2");
+    expect(mockAcknowledge).not.toHaveBeenCalledWith("s3");
   });
 });
 

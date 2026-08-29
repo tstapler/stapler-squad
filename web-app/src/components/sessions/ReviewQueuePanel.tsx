@@ -622,6 +622,34 @@ export function ReviewQueuePanel({
       .filter((g) => g.items.length > 0);
   }, [items, groupingStrategy, sessionByItemId]);
 
+  // Items eligible for bulk skip — approval requests are excluded because they need an
+  // explicit Approve/Deny decision, not a blanket dismissal (mirrors the single-item Skip
+  // button's own exclusion below).
+  const skippableItems = useMemo(
+    () => items.filter((it) => !it.metadata?.["pending_approval_id"]),
+    [items]
+  );
+  const [isBulkSkipping, setIsBulkSkipping] = useState(false);
+  const handleSkipAllVisible = useCallback(async () => {
+    if (skippableItems.length === 0 || isBulkSkipping) return;
+    const count = skippableItems.length;
+    if (!window.confirm(`Skip all ${count} visible item${count === 1 ? "" : "s"}? This removes ${count === 1 ? "it" : "them"} from the review queue.`)) {
+      return;
+    }
+    setIsBulkSkipping(true);
+    try {
+      await Promise.allSettled(
+        skippableItems.map((it) =>
+          Promise.resolve(onSkipSession ? onSkipSession(it.sessionId) : acknowledgeSession(it.sessionId)).then(
+            () => onAcknowledged?.(it.sessionId)
+          )
+        )
+      );
+    } finally {
+      setIsBulkSkipping(false);
+    }
+  }, [skippableItems, isBulkSkipping, onSkipSession, acknowledgeSession, onAcknowledged]);
+
   // Approval actions for APPROVAL_PENDING items
   const { approve: approveRequest, deny: denyRequest } = useApprovalsContext();
 
@@ -977,10 +1005,12 @@ export function ReviewQueuePanel({
               <span className={detailLabel}>Program:</span>
               <span className={detailValue}>{queueItem.program}</span>
             </div>
-            <div className={detailRow}>
-              <span className={detailLabel}>Branch:</span>
-              <span className={detailValue}>{queueItem.branch}</span>
-            </div>
+            {queueItem.branch && (
+              <div className={detailRow}>
+                <span className={detailLabel}>Branch:</span>
+                <span className={detailValue}>{queueItem.branch}</span>
+              </div>
+            )}
             <div className={detailRow}>
               <span className={detailLabel}>Path:</span>
               <span className={detailValue} title={queueItem.path}>{queueItem.path}</span>
@@ -1245,6 +1275,19 @@ export function ReviewQueuePanel({
             >
               ✕ Clear
             </button>
+          )}
+          {skippableItems.length > 0 && (
+            <Button
+              intent="ghost"
+              size="md"
+              onClick={handleSkipAllVisible}
+              disabled={isBulkSkipping}
+              title={`Skip every item currently shown${hasActiveFilter ? " by the active filter" : ""} (excludes approval requests)`}
+              aria-label={`Skip all ${skippableItems.length} visible items`}
+              data-testid="skip-all-visible"
+            >
+              {isBulkSkipping ? "Skipping…" : `⏭ Skip all (${skippableItems.length})`}
+            </Button>
           )}
         </div>
       )}
