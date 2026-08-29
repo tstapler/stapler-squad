@@ -187,6 +187,14 @@ describe('Flow Control Stress Tests', () => {
   });
 
   describe('Control Code Heavy Output', () => {
+    beforeEach(() => {
+      jest.useFakeTimers();
+    });
+
+    afterEach(() => {
+      jest.useRealTimers();
+    });
+
     test('handles Claude Code style animations', async () => {
       const tracker = new WatermarkTracker();
       const parser = new EscapeSequenceParser();
@@ -204,16 +212,17 @@ describe('Flow Control Stress Tests', () => {
 
         const safeChunk = parser.processChunk(chunk);
         if (safeChunk.length > 0) {
-          await new Promise<void>((resolve) => {
+          const writeDone = new Promise<void>((resolve) => {
             tracker.write(safeChunk, () => {
               completed++;
               resolve();
             });
           });
+          await Promise.all([writeDone, jest.advanceTimersByTimeAsync(1)]);
         }
 
-        // Simulate 60fps animation
-        await new Promise(resolve => setTimeout(resolve, 16));
+        // Simulate 60fps animation (fake-advanced — assertions don't measure real elapsed time; see Pattern Decisions)
+        await jest.advanceTimersByTimeAsync(16);
       }
 
       expect(completed).toBeGreaterThan(0);
@@ -234,12 +243,13 @@ describe('Flow Control Stress Tests', () => {
 
         const safeChunk = parser.processChunk(chunk);
         if (safeChunk.length > 0) {
-          await new Promise<void>((resolve) => {
+          const writeDone = new Promise<void>((resolve) => {
             tracker.write(safeChunk, () => {
               completed++;
               resolve();
             });
           });
+          await Promise.all([writeDone, jest.advanceTimersByTimeAsync(1)]);
         }
       }
 
@@ -248,6 +258,14 @@ describe('Flow Control Stress Tests', () => {
   });
 
   describe('Mixed Content Stress', () => {
+    beforeEach(() => {
+      jest.useFakeTimers();
+    });
+
+    afterEach(() => {
+      jest.useRealTimers();
+    });
+
     test('handles alternating text and control codes', async () => {
       const tracker = new WatermarkTracker();
       const parser = new EscapeSequenceParser();
@@ -271,17 +289,18 @@ describe('Flow Control Stress Tests', () => {
 
         const safeChunk = parser.processChunk(chunk);
         if (safeChunk.length > 0) {
-          await new Promise<void>((resolve) => {
+          const writeDone = new Promise<void>((resolve) => {
             tracker.write(safeChunk, () => {
               completed++;
               resolve();
             });
           });
+          await Promise.all([writeDone, jest.advanceTimersByTimeAsync(1)]);
         }
 
         // Yield occasionally
         if (i % 100 === 0) {
-          await new Promise(resolve => setTimeout(resolve, 0));
+          await jest.advanceTimersByTimeAsync(0);
         }
       }
 
