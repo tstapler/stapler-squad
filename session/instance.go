@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/user"
@@ -15,12 +16,25 @@ import (
 	"github.com/google/uuid"
 	"github.com/linkdata/deadlock"
 	"github.com/tstapler/stapler-squad/config"
+	"github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/artifacts"
 	"github.com/tstapler/stapler-squad/session/detection"
 	"github.com/tstapler/stapler-squad/session/sshremote"
 	"github.com/tstapler/stapler-squad/session/tmux"
+	"github.com/tstapler/stapler-squad/session/tymux"
 )
+
+// logPTYUnavailableIfUnexpected logs a GetPTY() failure as ERROR unless it's
+// tymux.ErrNotSupportedOnTymuxBackend, which every TymuxBackend session
+// returns as a matter of course (see that error's own doc comment) —
+// logging it there would be spurious noise, not a real failure signal.
+func logPTYUnavailableIfUnexpected(msg, sessionTitle string, ptyErr error) {
+	if errors.Is(ptyErr, tymux.ErrNotSupportedOnTymuxBackend) {
+		return
+	}
+	log.Error(msg, "session", sessionTitle, "err", ptyErr)
+}
 
 type Status int
 
@@ -95,6 +109,12 @@ const (
 	// both.
 	EventStopped
 )
+
+// ReasonColdRestoreLostHistory is passed to fireLifecycleEvent(EventStarted, ...)
+// when a cold restore was forced fresh after recoverConversationBeforeLaunch's
+// recovery attempt found nothing, despite EverHadConversationHistory being true
+// (session-revive-uuid-loss AC3).
+const ReasonColdRestoreLostHistory = "cold-restore-fresh-lost-history"
 
 // LifecycleListener is implemented by any component that wants to receive Instance
 // lifecycle notifications. Implementations must be non-blocking; use a goroutine
@@ -241,6 +261,13 @@ type Instance struct {
 	GitHubChangesReqCount int `json:"github_changes_req_count,omitempty"`
 	// GitHubCheckConclusion is the CI rollup: success/failure/pending/action_required/neutral/""
 	GitHubCheckConclusion string `json:"github_check_conclusion,omitempty"`
+	// GitHubChecks is the itemized statusCheckRollup from the last successful poll.
+	GitHubChecks []github.CheckItem `json:"github_checks,omitempty"`
+	// GitHubReviewFeedback is the itemized review list (author/state/body) from the
+	// last successful poll.
+	GitHubReviewFeedback []github.ReviewItem `json:"github_review_feedback,omitempty"`
+	// GitHubMergeable mirrors PRInfo.Mergeable: "mergeable"/"conflicting"/"unknown".
+	GitHubMergeable string `json:"github_mergeable,omitempty"`
 	// GitHubPRStatusTerminal is true when the PR is merged/closed and polling should stop
 	GitHubPRStatusTerminal bool `json:"github_pr_status_terminal,omitempty"`
 	// LastPRStatusCheck is when the PR status was last successfully fetched
@@ -249,6 +276,13 @@ type Instance struct {
 	Checkpoints      CheckpointList
 	ActiveCheckpoint string
 	ForkedFromID     string
+	// RestartedFromSessionID is the ID of the source session this session was
+	// restarted from (CreateSessionRequest.restart_from_session_id), empty for
+	// normally-created sessions. Distinct from ForkedFromID, which records
+	// checkpoint-based forking -- this lineage comes from Story 2.3.1's
+	// restart-from-session-id flow (CreateSession's restart-source resolution
+	// block in server/services/session_service.go).
+	RestartedFromSessionID string
 
 	// OneShot runs claude in -p mode; the session exits after the task completes.
 	OneShot bool
@@ -264,6 +298,15 @@ type Instance struct {
 	// HistoryFilePath is the path to the Claude conversation JSONL history file.
 	// Set by HistoryLinker when it correlates this session to an open JSONL file.
 	HistoryFilePath string
+
+	// EverHadConversationHistory is true once a conversation UUID has ever been
+	// captured for this instance; reset to false only by ClearConversationState().
+	// Guarded by claudeSessionMu, same lock order as HistoryFilePath.
+	EverHadConversationHistory bool
+
+	// LastReviveOutcome records the outcome of the most recent start/cold-restore
+	// decision. Guarded by claudeSessionMu, same lock order as HistoryFilePath.
+	LastReviveOutcome ReviveOutcome
 
 	// MCPServerURL is the URL of the stapler-squad HTTP MCP endpoint.
 	// When set, passed as --mcp-config to claude on session start so no
@@ -550,7 +593,7 @@ type Instance struct {
 	// import cycle exists (session/sshremote no longer imports this package
 	// after Part A), and there is no second implementation on the horizon --
 	// introducing an interface purely for testability here is exactly the
-	// speculative abstraction .claude/rules/interface-pollution-checklist.md
+	// speculative abstraction the `interface-pollution-checklist` skill
 	// warns against.
 	remoteApprovalRelay   *sshremote.RemoteApprovalRelay
 	remoteApprovalRelayMu deadlock.Mutex
@@ -694,6 +737,14 @@ type InstanceOptions struct {
 	// ResumeId is the Claude conversation ID to resume (from history browser).
 	// When set, the session will start with --resume <id> flag.
 	ResumeId string
+
+	// RestartedFromSessionID is the ID of the source session this instance is
+	// being restarted from (CreateSessionRequest.restart_from_session_id).
+	// Recorded as lineage metadata only -- path derivation and the still-live
+	// guard are resolved by the CreateSession RPC handler before NewInstance
+	// is called; this field just carries the already-validated source ID
+	// through to the constructed Instance.
+	RestartedFromSessionID string
 
 	// OneShot runs claude in -p mode; the session exits after the task completes.
 	OneShot bool
@@ -852,6 +903,8 @@ func NewInstance(opts InstanceOptions) (*Instance, error) {
 		CLIFlags:        opts.CLIFlags,
 		ExtraArgs:       opts.ExtraArgs,
 		ExecutionTarget: opts.ExecutionTarget,
+		// Restart-from-session lineage (Story 2.3.1)
+		RestartedFromSessionID: opts.RestartedFromSessionID,
 	}
 	if instance.ExecutionTarget == nil {
 		instance.ExecutionTarget = LocalTarget{}
@@ -1079,6 +1132,34 @@ func (i *Instance) recoverConversationBeforeLaunch(firstTimeSetup bool) {
 	i.tryExtractConversationUUID()
 }
 
+// reasonForReviveOutcome returns the fireLifecycleEvent(EventStarted, ...)
+// reason for outcome — non-empty only for ReviveOutcomeFreshLostHistory, so
+// the notification listener in server/services/session_service.go can filter
+// on the reason string alone (session-revive-uuid-loss AC3).
+func reasonForReviveOutcome(outcome ReviveOutcome) string {
+	if outcome == ReviveOutcomeFreshLostHistory {
+		return ReasonColdRestoreLostHistory
+	}
+	return ""
+}
+
+// reviveOutcomeForColdRestore derives the ColdRestore branch's ReviveOutcome
+// (session-revive-uuid-loss AC3) from its three decision inputs. Pure and
+// side-effect-free so startLocked/start share one definition instead of
+// duplicating the branch logic.
+func reviveOutcomeForColdRestore(hadUUIDBeforeRecovery, hasClaudeSession, everHadHistory bool) ReviveOutcome {
+	if hasClaudeSession {
+		if hadUUIDBeforeRecovery {
+			return ReviveOutcomeResumeLive
+		}
+		return ReviveOutcomeResumeRecovered
+	}
+	if everHadHistory {
+		return ReviveOutcomeFreshLostHistory
+	}
+	return ReviveOutcomeFreshExpected
+}
+
 // startLocked is the actor-safe body of Start(). Called only from within
 // sendSyncErr/send closures. The param is named actorState (not s) to make
 // actor-only ownership visually distinct and prevent future edits from treating
@@ -1103,7 +1184,17 @@ func startLocked(actorState *instanceState, firstTimeSetup bool) error {
 		return fmt.Errorf("instance title cannot be empty")
 	}
 
+	// Captured before recoverConversationBeforeLaunch so the cold-restore decision
+	// below can distinguish "already had a UUID, no recovery needed" (ResumeLive)
+	// from "recovery just found one" (ResumeRecovered) — session-revive-uuid-loss AC3.
+	hadUUIDBeforeRecovery := i.HasClaudeSession()
 	i.recoverConversationBeforeLaunch(firstTimeSetup)
+
+	// Set in every branch below (ColdRestore, HotRestore, firstTimeSetup) so
+	// LastReviveOutcome never goes stale across a later cycle that doesn't
+	// enter the ColdRestore branch — session-revive-uuid-loss AC3. Written
+	// once, under lock, at this function's existing final buildSnapshot call.
+	var reviveOutcome ReviveOutcome
 
 	i.pm().ResetExitOnce()
 	i.pm().SetOnExitCallback(instanceOnExitCallback(i))
@@ -1133,11 +1224,16 @@ func startLocked(actorState *instanceState, firstTimeSetup bool) error {
 	if !firstTimeSetup {
 		if !i.pm().IsAlive() {
 			startPath := i.resolveStartPath(i.GetEffectiveRootDir())
-			if i.HasClaudeSession() {
+			hasClaudeSession := i.HasClaudeSession()
+			if hasClaudeSession {
 				log.Info("cold restoring with --resume", "session", i.Title, "uuid", i.claudeSession.ConversationUUID, "path", startPath)
 			} else {
 				log.Warn("cold start: tmux dead, no conversation UUID, starting fresh", "session", i.Title, "path", startPath)
 			}
+			i.claudeSessionMu.RLock()
+			everHadHistory := i.EverHadConversationHistory
+			i.claudeSessionMu.RUnlock()
+			reviveOutcome = reviveOutcomeForColdRestore(hadUUIDBeforeRecovery, hasClaudeSession, everHadHistory)
 			i.startVNCDisplay(context.Background())
 			i.allocateCDPPort()
 			if displayEnv := i.VNCDisplayEnv(); displayEnv != "" {
@@ -1160,7 +1256,7 @@ func startLocked(actorState *instanceState, firstTimeSetup bool) error {
 			}
 			_ = i.pm().RestoreWithWorkDir(startPath)
 			if _, ptyErr := i.pm().GetPTY(); ptyErr != nil {
-				log.Error("cold-restored session: pty attach failed, controller and sendkeys unavailable", "session", i.Title, "err", ptyErr)
+				logPTYUnavailableIfUnexpected("cold-restored session: pty attach failed, controller and sendkeys unavailable", i.Title, ptyErr)
 			}
 			if i.claudeSession != nil {
 				i.claudeSession.ConversationUUID = ""
@@ -1175,6 +1271,8 @@ func startLocked(actorState *instanceState, firstTimeSetup bool) error {
 			// right there to detect from.
 			i.tryExtractConversationUUID()
 		} else {
+			// HotRestore: tmux never died, so nothing was ever at risk of loss.
+			reviveOutcome = ReviveOutcomeResumeLive
 			i.startVNCDisplay(context.Background())
 			i.allocateCDPPort()
 			workDir := i.Path
@@ -1189,6 +1287,8 @@ func startLocked(actorState *instanceState, firstTimeSetup bool) error {
 			log.Info("successfully restored tmux session", "session", i.Title)
 		}
 	} else {
+		// firstTimeSetup: a brand new instance can never have prior history to lose.
+		reviveOutcome = ReviveOutcomeFreshExpected
 		basePath := i.Path
 		if i.gitManager.HasWorktree() {
 			// ExistingWorktree sessions have a pre-created worktree; Setup() would tear it down.
@@ -1266,7 +1366,7 @@ func startLocked(actorState *instanceState, firstTimeSetup bool) error {
 			}
 			_ = i.pm().RestoreWithWorkDir(startPath)
 			if _, ptyErr := i.pm().GetPTY(); ptyErr != nil {
-				log.Error("new session: pty attach failed after retries, controller and sendkeys unavailable", "session", i.Title, "err", ptyErr)
+				logPTYUnavailableIfUnexpected("new session: pty attach failed after retries, controller and sendkeys unavailable", i.Title, ptyErr)
 			}
 		}
 	}
@@ -1283,12 +1383,17 @@ func startLocked(actorState *instanceState, firstTimeSetup bool) error {
 	// runs inside an actor command with no OTHER actor writers to worry about)
 	// because legacy setters (MarkViewed & co.) mutate fields directly under
 	// i.mu.Lock() from outside the actor — see runActor's doc comment in
-	// actor.go for the full explanation.
+	// actor.go for the full explanation. claudeSessionMu nests outside i.mu
+	// around the LastReviveOutcome write too, matching SetHistoryInfo/
+	// ClearConversationState/tryExtractConversationUUID's lock order.
+	i.claudeSessionMu.Lock()
 	i.mu.Lock()
+	i.LastReviveOutcome = reviveOutcome
 	snap := buildSnapshot(i)
 	i.mu.Unlock()
+	i.claudeSessionMu.Unlock()
 	i.snapshot.Store(snap)
-	i.fireLifecycleEvent(EventStarted, "")
+	i.fireLifecycleEvent(EventStarted, reasonForReviveOutcome(reviveOutcome))
 
 	i.startVNCServer(context.Background())
 	i.startCDP(context.Background())
@@ -1329,7 +1434,17 @@ func (i *Instance) start(firstTimeSetup bool, setupCleanup bool, cleanup *tmux.C
 		return fmt.Errorf("instance title cannot be empty")
 	}
 
+	// Captured before recoverConversationBeforeLaunch so the cold-restore decision
+	// below can distinguish "already had a UUID, no recovery needed" (ResumeLive)
+	// from "recovery just found one" (ResumeRecovered) — session-revive-uuid-loss AC3.
+	hadUUIDBeforeRecovery := i.HasClaudeSession()
 	i.recoverConversationBeforeLaunch(firstTimeSetup)
+
+	// Set in every branch below (ColdRestore, HotRestore, firstTimeSetup) so
+	// LastReviveOutcome never goes stale across a later cycle that doesn't
+	// enter the ColdRestore branch — session-revive-uuid-loss AC3. Written
+	// once, under lock, at this function's existing final buildSnapshot call.
+	var reviveOutcome ReviveOutcome
 
 	// Wire the exit callback so control-mode %exit / PTY EOF fires our handler.
 	// ResetExitOnce is called first so repeated start() calls (restarts) allow
@@ -1368,7 +1483,8 @@ func (i *Instance) start(firstTimeSetup bool, setupCleanup bool, cleanup *tmux.C
 		if !i.pm().IsAlive() {
 			// tmux session is dead (machine reboot, tmux kill-server, etc.)
 			startPath := i.resolveStartPath(i.GetEffectiveRootDir())
-			if i.HasClaudeSession() {
+			hasClaudeSession := i.HasClaudeSession()
+			if hasClaudeSession {
 				// Cold restore: we have a conversation UUID — relaunch with --resume.
 				// initTmuxSession() (called above) already built the program command
 				// with --resume via ClaudeCommandBuilder, so Start() uses it directly.
@@ -1377,6 +1493,10 @@ func (i *Instance) start(firstTimeSetup bool, setupCleanup bool, cleanup *tmux.C
 				// Dead tmux, no UUID — start a fresh session without --resume.
 				log.Warn("cold start: tmux dead, no conversation UUID, starting fresh", "session", i.Title, "path", startPath)
 			}
+			i.claudeSessionMu.RLock()
+			everHadHistory := i.EverHadConversationHistory
+			i.claudeSessionMu.RUnlock()
+			reviveOutcome = reviveOutcomeForColdRestore(hadUUIDBeforeRecovery, hasClaudeSession, everHadHistory)
 			// Phase 1: Allocate X display before creating the tmux session so DISPLAY
 			// can be injected via ExtraEnv at new-session time.
 			// context.Background() is safe here: the VNC manager creates its own internal
@@ -1406,7 +1526,7 @@ func (i *Instance) start(firstTimeSetup bool, setupCleanup bool, cleanup *tmux.C
 			// Attach PTY — same pattern as firstTimeSetup path (lines 867-870).
 			_ = i.pm().RestoreWithWorkDir(startPath)
 			if _, ptyErr := i.pm().GetPTY(); ptyErr != nil {
-				log.Error("cold-restored session: pty attach failed, controller and sendkeys unavailable", "session", i.Title, "err", ptyErr)
+				logPTYUnavailableIfUnexpected("cold-restored session: pty attach failed, controller and sendkeys unavailable", i.Title, ptyErr)
 			}
 			// Clear the stored session ID so HistoryLinker re-detects the actual
 			// UUID from the running process's open files. The --resume flag was
@@ -1425,7 +1545,9 @@ func (i *Instance) start(firstTimeSetup bool, setupCleanup bool, cleanup *tmux.C
 			// process/jsonl file is right there to detect from right now.
 			i.tryExtractConversationUUID()
 		} else {
-			// Hot restore: tmux session is alive — attach to it.
+			// Hot restore: tmux session is alive — attach to it. Never died, so
+			// nothing was ever at risk of loss.
+			reviveOutcome = ReviveOutcomeResumeLive
 			// Phase 1 (display) runs here too so VNC is available for the browser tab.
 			// DISPLAY injection via ExtraEnv is not possible for an already-running
 			// session, but x11vnc still needs to start so the browser passthrough works.
@@ -1447,6 +1569,8 @@ func (i *Instance) start(firstTimeSetup bool, setupCleanup bool, cleanup *tmux.C
 			log.Info("successfully restored tmux session", "session", i.Title)
 		}
 	} else {
+		// firstTimeSetup: a brand new instance can never have prior history to lose.
+		reviveOutcome = ReviveOutcomeFreshExpected
 		basePath := i.Path
 		if i.gitManager.HasWorktree() {
 			// ExistingWorktree sessions have a pre-created worktree; Setup() would tear it down.
@@ -1507,16 +1631,21 @@ func (i *Instance) start(firstTimeSetup bool, setupCleanup bool, cleanup *tmux.C
 		// Note: RestoreWithWorkDir always returns nil even on PTY failure; check GetPTY() to confirm.
 		_ = i.pm().RestoreWithWorkDir(startPath)
 		if _, ptyErr := i.pm().GetPTY(); ptyErr != nil {
-			log.Error("new session: pty attach failed after retries, controller and sendkeys unavailable", "session", i.Title, "err", ptyErr)
+			logPTYUnavailableIfUnexpected("new session: pty attach failed after retries, controller and sendkeys unavailable", i.Title, ptyErr)
 		}
 	}
 
+	// claudeSessionMu nests outside i.mu around the LastReviveOutcome write too,
+	// matching SetHistoryInfo/ClearConversationState/tryExtractConversationUUID's
+	// lock order.
+	i.claudeSessionMu.Lock()
 	i.mu.Lock()
 	// Only transition if not already Active (e.g., recovery/restart after KillSession
 	// preserves the Active status).
 	if i.Status != Active {
 		if err := i.transitionTo(context.Background(), Active); err != nil {
 			i.mu.Unlock()
+			i.claudeSessionMu.Unlock()
 			setupErr = fmt.Errorf("failed to transition to Active: %w", err)
 			return setupErr
 		}
@@ -1526,9 +1655,11 @@ func (i *Instance) start(firstTimeSetup bool, setupCleanup bool, cleanup *tmux.C
 	// follow-up) so Started() stays race-free even for callers that don't go
 	// through Snapshot().
 	i.started.Store(true)
+	i.LastReviveOutcome = reviveOutcome
 	i.snapshot.Store(buildSnapshot(i))
 	i.mu.Unlock()
-	i.fireLifecycleEvent(EventStarted, "")
+	i.claudeSessionMu.Unlock()
+	i.fireLifecycleEvent(EventStarted, reasonForReviveOutcome(reviveOutcome))
 
 	// Phase 2: Start x11vnc and window tracker now that the tmux session is live.
 	// Run unconditionally (not gated on firstTimeSetup) so hot-restores also get VNC.
@@ -1856,6 +1987,73 @@ func (i *Instance) Resume() error {
 		// Continue - controller is optional functionality
 	}
 
+	return nil
+}
+
+// StopByUser transitions an Active, Paused, or Hibernated session to Stopped in
+// response to a direct user action (e.g. a board-view drag into "Complete").
+// Mirrors pauseLocked's cleanup (stop controller, commit-if-dirty, kill tmux, remove
+// worktree) but lands in Stopped instead of Paused.
+func (i *Instance) StopByUser() error {
+	return i.sendSyncErr(func(s *instanceState) error { return stopByUserLocked(s) })
+}
+
+// stopByUserLocked is the actor-safe body of StopByUser().
+func stopByUserLocked(s *instanceState) error {
+	i := s.inst
+	if !i.Permissions.CanPause {
+		return ErrPauseNotPermitted
+	}
+	if i.Status == Stopped {
+		return fmt.Errorf("instance is already stopped")
+	}
+	// Validate the transition before any destructive side effect (kill tmux, remove
+	// worktree) — canTransitionLocked is side-effect-free, so a rejected call leaves
+	// the tmux session and worktree untouched.
+	if !canTransitionLocked(s, Stopped) {
+		return ErrInvalidTransition{From: i.Status, To: Stopped}
+	}
+
+	stopControllerLocked(s)
+
+	var errs []error
+	if i.IsWorktree {
+		if dirty, err := i.gitManager.IsDirty(); err != nil {
+			errs = append(errs, fmt.Errorf("failed to check if worktree is dirty: %w", err))
+		} else if dirty {
+			commitMsg := fmt.Sprintf("[claudesquad] update from '%s' on %s (stopped)", i.Title, time.Now().Format(time.RFC822))
+			if err := i.gitManager.CommitChanges(commitMsg); err != nil {
+				return i.combineErrors(append(errs, fmt.Errorf("failed to commit changes: %w", err)))
+			}
+		}
+	}
+
+	if err := i.KillSession(); err != nil {
+		if detachErr := i.pm().DetachSafely(); detachErr != nil {
+			errs = append(errs, fmt.Errorf("failed to detach tmux session: %w", detachErr))
+		}
+	}
+
+	if i.IsWorktree {
+		if _, err := os.Stat(i.gitManager.GetWorktreePath()); err == nil {
+			if err := i.gitManager.Remove(); err != nil {
+				return i.combineErrors(append(errs, fmt.Errorf("failed to remove git worktree: %w", err)))
+			}
+			_ = i.gitManager.Prune()
+		}
+	}
+
+	if err := i.combineErrors(errs); err != nil {
+		return err
+	}
+
+	if err := transitionToLocked(s, context.Background(), Stopped); err != nil {
+		// Should not happen — canTransitionLocked already validated this above — but
+		// keep the check as defense-in-depth against the two functions' logic diverging.
+		return fmt.Errorf("failed to transition to Stopped: %w", err)
+	}
+	i.gitManager.InvalidateDirtyCache()
+	log.ForSession(i.Title).Info("session stopped by user")
 	return nil
 }
 

@@ -1581,7 +1581,7 @@ func (r *EntRepository) RevertChainFireClaim(ctx context.Context, id string) err
 // ListItemSessions (see server/mcp/tools_backlog.go's listItemSessionsFn doc
 // comment): EntRepository has no second real implementation to abstract
 // this over, so adding it to the interface would be pure speculation
-// (see .claude/rules/interface-pollution-checklist.md).
+// (see the `interface-pollution-checklist` skill).
 func (r *EntRepository) TransitionBacklogItemStatusWithPRFields(ctx context.Context, id string, toStatus BacklogStatus, prURL string, prNumber int, precondition *BacklogItemPrecondition, triggeredBy string) (*BacklogItemData, error) {
 	parsedID, err := r.resolveBacklogItemLookup(ctx, id)
 	if err != nil {

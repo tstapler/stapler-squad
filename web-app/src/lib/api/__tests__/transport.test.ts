@@ -21,7 +21,10 @@ describe("getConnectTransport", () => {
   it("creates a transport on first call", () => {
     const t = getConnectTransport();
     expect(createConnectTransport).toHaveBeenCalledTimes(1);
-    expect(createConnectTransport).toHaveBeenCalledWith({ baseUrl: "http://localhost:8543" });
+    expect(createConnectTransport).toHaveBeenCalledWith({
+      baseUrl: "http://localhost:8543",
+      defaultTimeoutMs: 30_000,
+    });
     expect(t).toBeDefined();
   });
 
@@ -35,7 +38,10 @@ describe("getConnectTransport", () => {
   it("uses the URL from getApiBaseUrl at call time", () => {
     (getApiBaseUrl as jest.Mock).mockReturnValue("https://custom.host:9000");
     getConnectTransport();
-    expect(createConnectTransport).toHaveBeenCalledWith({ baseUrl: "https://custom.host:9000" });
+    expect(createConnectTransport).toHaveBeenCalledWith({
+      baseUrl: "https://custom.host:9000",
+      defaultTimeoutMs: 30_000,
+    });
   });
 });
 

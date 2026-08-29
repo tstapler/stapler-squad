@@ -64,7 +64,7 @@ export const sessionSteerBtn = style({
  * (Gap 1's same disclosure pattern). Stacks full-width below breakpoints.sm
  * instead of wrapping the input/buttons awkwardly on one line, via a plain
  * media query on the container's flex-direction (no inline style, per
- * .claude/rules/css-architecture.md).
+ * docs/reference/css-architecture.md).
  */
 export const steerComposer = style({
   display: "flex",

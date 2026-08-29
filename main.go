@@ -24,6 +24,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/scrollback"
 	"github.com/tstapler/stapler-squad/session/tmux"
+	"github.com/tstapler/stapler-squad/session/tymux"
 	"github.com/tstapler/stapler-squad/telemetry"
 	"io"
 	"net"
@@ -57,6 +58,7 @@ var (
 	remotePortFlag          int
 	rpIDFlag                string
 	tmuxKeepServerFlag      bool
+	tymuxdKeepServerFlag    bool
 	openURLFlag             string
 	registerLinuxSchemeFlag string
 	listKnownHostsFlag      bool
@@ -166,13 +168,15 @@ var (
 
 			// Register the process manager backend before any session is created.
 			// Empty string defaults to "tmux" for backwards-compatibility.
-			{
-				backend := session.ProcessManagerBackend(cfg.ProcessManagerBackend)
-				if backend == "" {
-					backend = session.BackendTmux
-				}
-				session.RegisterBackendProvider(backend)
+			// resolveStartupBackend is the single source of truth for the
+			// effective backend, routing both the config value and the env var
+			// through the same rollback-rehearsal gate (ADR-002) so hand-editing
+			// process_manager_backend: "tymux" in config.json can never bypass it.
+			resolvedBackend, err := resolveStartupBackend(cfg, os.Getenv("STAPLER_SQUAD_USE_TYMUX") == "true")
+			if err != nil {
+				log.Warn("tymux: global default requested but rollback rehearsal not completed; falling back to tmux", "err", err)
 			}
+			session.RegisterBackendProvider(resolvedBackend)
 
 			// Load discovery config
 			discoveryCfg := config.LoadDiscoveryConfig()
@@ -242,7 +246,7 @@ var (
 			// Acquire an exclusive, process-lifetime lock before touching any
 			// shared state (tmux server, ent DB) so a prior process that
 			// launchd/systemd has lost track of (see
-			// .claude/rules/service-restart-orphan-process.md) can't race
+			// docs/explanation/service-restart-orphan-process.md) can't race
 			// this one over the same instance directory.
 			configDir, err := config.GetConfigDir()
 			if err != nil {
@@ -362,6 +366,25 @@ var (
 					}
 					log.Warn("Failed to ensure tmux server running", "err", tmuxReadyErr)
 				}
+
+				// Start tymuxd supervision only when it's actually needed (Epic 2.2,
+				// project_plans/tymux-bundled-integration/implementation/plan.md). Mirrors
+				// tmux's own EnsureServerRunning posture immediately above: non-fatal by
+				// default (log.Warn and continue) so a tymuxd that fails to start never
+				// blocks stapler-squad from serving tmux-backed sessions, unless
+				// STAPLER_SQUAD_STRICT_STARTUP opts into hard failure.
+				//
+				// tymuxNeeded also checks cfg.TymuxSessionOverrides (Phase 4): a true
+				// entry there triggers startup supervision even when the global default
+				// is tmux, so a session pinned to tymux by a prior process finds a daemon
+				// running when it resumes.
+				if tymuxNeeded(cfg, resolvedBackend) {
+					if err := superviseTymuxd(ctx, tymux.ResolveDaemonConfig(), strictStartup, tymuxdKeepServerFlag,
+						tymux.EnsureDaemonRunning, a.OnStop); err != nil {
+						return err
+					}
+				}
+
 				// --tmux-keep-server intentionally keeps the tmux server (and anything
 				// attached to it) alive across this restart, but any control-mode client
 				// this process spawns will be brand new -- so any control-mode client
@@ -784,6 +807,10 @@ func init() {
 	rootCmd.Flags().BoolVar(&tmuxKeepServerFlag, "tmux-keep-server", true,
 		"Keep tmux server running even when all user sessions close (sets exit-empty off). "+
 			"Use this if the tmux server frequently stops between sessions.")
+	rootCmd.Flags().BoolVar(&tymuxdKeepServerFlag, "tymuxd-keep-server", true,
+		"Keep the tymuxd daemon running across a stapler-squad restart, matching tmux's own "+
+			"--tmux-keep-server default. Pass --tymuxd-keep-server=false to stop it via the "+
+			"App.OnStop hook on shutdown instead.")
 	rootCmd.Flags().StringVar(&openURLFlag, "open-url", "",
 		"Translate an ssq:// deep link to a local web UI URL and open it via the OS's default "+
 			"opener (open on macOS, xdg-open on Linux), then exit. Used as the ssq:// scheme handler.")
@@ -816,6 +843,99 @@ func init() {
 	rootCmd.AddCommand(listSessionsCmd)
 	rootCmd.AddCommand(printQRCodesCmd)
 	rootCmd.AddCommand(commands.GetSessionCmd)
+}
+
+// resolveStartupBackend is the single source of truth for the effective
+// process-manager backend at startup (ADR-002, Epic 3.2, Story 3.2.1). It
+// routes both cfg.ProcessManagerBackend and tymuxEnvRequested (the
+// STAPLER_SQUAD_USE_TYMUX env var) through the same
+// config.ResolveGlobalTymuxDefault rollback-rehearsal gate, so hand-editing
+// process_manager_backend: "tymux" directly in config.json cannot bypass the
+// gate the way it could if the config value were honored independently of
+// the env var (research/pitfalls.md §3). Requesting tymux without a
+// completed rehearsal is not fatal — the caller is expected to log the
+// returned error and continue with the tmux fallback this function already
+// returns.
+func resolveStartupBackend(cfg *config.Config, tymuxEnvRequested bool) (session.ProcessManagerBackend, error) {
+	backend := session.ProcessManagerBackend(cfg.ProcessManagerBackend)
+	if backend == "" {
+		backend = session.BackendTmux
+	}
+	tymuxRequested := backend == session.BackendTymux || tymuxEnvRequested
+	tymuxEffective, err := config.ResolveGlobalTymuxDefault(cfg, tymuxRequested)
+	if tymuxEffective {
+		backend = session.BackendTymux
+	} else if backend == session.BackendTymux {
+		backend = session.BackendTmux
+	}
+	return backend, err
+}
+
+// tymuxNeeded reports whether tymuxd supervision should run for this process
+// (Epic 2.2, project_plans/tymux-bundled-integration/implementation/plan.md
+// Task 2.2.1a). True when resolvedBackend is the tymux global default, OR
+// when any entry in cfg.TymuxSessionOverrides (Phase 4, config/config.go) is
+// true — a per-session override set (e.g. via SetTymuxSessionOverride) before
+// this process started must also trigger startup supervision, otherwise a
+// session already pinned to tymux from a prior process would find no daemon
+// running when it starts.
+func tymuxNeeded(cfg *config.Config, resolvedBackend session.ProcessManagerBackend) bool {
+	if resolvedBackend == session.BackendTymux {
+		return true
+	}
+	if cfg == nil {
+		return false
+	}
+	for _, forceTymux := range cfg.TymuxSessionOverrides {
+		if forceTymux {
+			return true
+		}
+	}
+	return false
+}
+
+// superviseTymuxd is the daemon startup/shutdown decision logic for tymuxd
+// (Epic 2.2, project_plans/tymux-bundled-integration/implementation/plan.md),
+// extracted out of the cobra "runtime" phase's RunE closure so it's
+// independently testable. Mirrors tmux's own EnsureServerRunning posture:
+// non-fatal by default (log.Warn and continue) so a tymuxd that fails to
+// start never blocks stapler-squad from serving tmux-backed sessions, unless
+// strictStartup opts into hard failure.
+//
+// ensure and registerStop are injected (rather than calling
+// tymux.EnsureDaemonRunning / a.OnStop directly) so tests can substitute
+// fakes instead of spawning a real tymuxd subprocess or a real *warren.App.
+func superviseTymuxd(ctx context.Context, cfg tymux.DaemonConfig, strictStartup, keepServer bool,
+	ensure func(context.Context, tymux.DaemonConfig) (tymux.TymuxdReady, error),
+	registerStop func(name string, fn func(context.Context) error)) error {
+	tymuxdReady, tymuxErr := ensure(ctx, cfg)
+	if tymuxErr != nil {
+		if strictStartup {
+			return fmt.Errorf("tymuxd startup failed (unset STAPLER_SQUAD_STRICT_STARTUP to suppress): %w", tymuxErr)
+		}
+		log.Warn("Failed to ensure tymuxd running", "err", tymuxErr)
+		return nil
+	}
+
+	switch {
+	case !tymuxdReady.Spawned:
+		// This process only reused an already-healthy tymuxd -- per
+		// TymuxdReady.Spawned's doc comment (session/tymux/supervise.go),
+		// that daemon may belong to a DIFFERENT process sharing the same
+		// configDir (default/"shared" instance, or a named instance
+		// started twice). Never register a stop hook for a daemon this
+		// process didn't start -- StopTymuxd() has no ownership check of
+		// its own, only a PID file, so doing so could kill a daemon a
+		// still-running sibling process depends on (the same "isolated
+		// config dir, shared daemon" hazard config.IsNamedInstance's doc
+		// comment documents for tmux).
+		log.Info("tymuxd already running (reused, not started by this process) -- not registering a stop hook for it")
+	case !keepServer:
+		registerStop("tymuxd", func(ctx context.Context) error { return tymux.StopTymuxd() })
+	default:
+		log.Info("tymuxd will remain running across this shutdown (--tymuxd-keep-server=true)")
+	}
+	return nil
 }
 
 // extraOriginPattern matches an exact http(s)://localhost:<port> or
@@ -1146,6 +1266,46 @@ func startRemoteAccess(ctx context.Context, srv *server.Server, localAddr string
 		MinVersion:     tls.VersionTLS12,
 	}
 
+	// A hostname not in allRPIDs at startup may still be a legitimate LAN
+	// client -- discovery is one-shot at boot (see detectLANIPs/
+	// resolveLANHostnames above) and misses anything not yet resolvable at
+	// that instant (e.g. Wi-Fi/DHCP still coming up when launchd started
+	// this process). Accept it as a new rpID only if it forward-resolves to
+	// an IP this machine actually owns, so a request can't claim an
+	// arbitrary hostname as its RPID.
+	hostnameValidator := func(hostname string) bool {
+		resolvedIPs, err := net.LookupHost(hostname)
+		if err != nil {
+			return false
+		}
+		ownIPs := listNonLoopbackIPs()
+		for _, resolved := range resolvedIPs {
+			for _, own := range ownIPs {
+				if resolved == own {
+					return true
+				}
+			}
+		}
+		return false
+	}
+
+	// resolveLANHostnames' boot-time candidates (reverse DNS/PTR, avahi/mDNS,
+	// hostname -f, search-domain guesses) are never re-checked after this
+	// point, unlike a hostname registered dynamically at request time via
+	// hostnameValidator above. Run them through the same forward-DNS-ownership
+	// check here so a stale or spoofable boot-time guess can't sit in the
+	// static rpID list unverified for the life of the process.
+	rawHostnames := hostnames
+	var verifiedHostnames []string
+	for _, hn := range hostnames {
+		if hostnameValidator(hn) {
+			verifiedHostnames = append(verifiedHostnames, hn)
+		} else {
+			log.Warn("webauthn: dropping unverified boot-time hostname candidate", "hostname", hn)
+		}
+	}
+	hostnames = verifiedHostnames
+
 	// Determine rpID: config/flag override > first detected hostname > detected LAN IP.
 	// WebAuthn spec requires a domain name; IP addresses are not accepted by browsers.
 	rpID := cfg.PasskeyRPID
@@ -1167,9 +1327,19 @@ func startRemoteAccess(ctx context.Context, srv *server.Server, localAddr string
 	}
 	origins = append(origins, fmt.Sprintf("https://localhost:%d", remotePort))
 
+	// displayHost is shown to the user (QR code, setup URL, console banner) --
+	// it is not trusted as an rpID/origin here. If every boot-time candidate
+	// failed hostnameValidator above (e.g. DNS/Wi-Fi still coming up when this
+	// process started), prefer an unverified hostname over lanIPStr: WebAuthn
+	// requires a domain name, browsers reject IP RPIDs, and a real request to
+	// this hostname is re-validated for real by webauthnForHost's runtime path
+	// (server/auth/webauthn.go) before it's ever trusted as an rpID.
 	displayHost := rpID
-	if len(hostnames) > 0 {
+	switch {
+	case len(hostnames) > 0:
 		displayHost = hostnames[0]
+	case len(rawHostnames) > 0:
+		displayHost = rawHostnames[0]
 	}
 	origin := fmt.Sprintf("https://%s:%d", displayHost, remotePort)
 
@@ -1189,7 +1359,7 @@ func startRemoteAccess(ctx context.Context, srv *server.Server, localAddr string
 	sessionsPath := filepath.Join(configDir, "auth-sessions.json")
 	sessions := serverauth.NewSessionManager(sessionsPath)
 
-	waHandler, err := serverauth.NewHandler(allRPIDs, origins, store, sessions)
+	waHandler, err := serverauth.NewHandler(allRPIDs, origins, store, sessions, hostnameValidator)
 	if err != nil {
 		return fmt.Errorf("create webauthn handler: %w", err)
 	}
@@ -1296,7 +1466,15 @@ func buildLogConfig(daemon bool, cfg *config.Config, consoleEnabled bool) *log.L
 		UseSessionLogs: cfg.UseSessionLogs,
 		ConsoleEnabled: consoleEnabled,
 		FileEnabled:    true,
-		FileLevel:      log.DEBUG,
+		// INFO by default — DEBUG floods the log with per-poll-cycle noise
+		// (staleness checks, history-linker correlation, terminal snapshots)
+		// on every boot. Adjustable at runtime without a restart via
+		// POST /api/debug/log-level. Both must be set: initializeWithConfig
+		// seeds the runtime level from min(FileLevel, ConsoleLevel), and an
+		// unset ConsoleLevel zero-values to DEBUG (LogLevel's iota starts at
+		// DEBUG=0), silently overriding FileLevel.
+		FileLevel:    log.INFO,
+		ConsoleLevel: log.INFO,
 	}
 }
 

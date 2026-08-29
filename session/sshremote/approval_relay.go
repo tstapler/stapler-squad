@@ -305,7 +305,7 @@ func withBearerTokenTTL(ttl time.Duration) RemoteApprovalRelayOption {
 // independently meaningful, same-typed strings a caller could silently
 // transpose at a call site with no compiler error (e.g. passing
 // StableSessionID where Title is expected still compiles) -- exactly what
-// .claude/rules/primitive-obsession-checklist.md exists to catch. Field
+// the `primitive-obsession-checklist` skill exists to catch. Field
 // names carry the disambiguation a positional four-string parameter list
 // can't.
 type RemoteApprovalRelayTarget struct {

@@ -1,6 +1,6 @@
 /* eslint-disable no-restricted-syntax -- this file defines the literal hex values behind
  * vars.color.* for every theme (see theme-contract.css.ts); consuming .css.ts files must
- * use vars.color.* tokens instead of hex literals per .claude/rules/css-architecture.md. */
+ * use vars.color.* tokens instead of hex literals per docs/reference/css-architecture.md. */
 import { createTheme } from "@vanilla-extract/css";
 import { vars } from "./theme-contract.css";
 

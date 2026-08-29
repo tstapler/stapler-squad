@@ -30,7 +30,7 @@ function formatBadgeText(count: number): string {
 /**
  * Portal-rendered, auto-dismissing badge that visibly and audibly announces
  * a `DropEpisode` (Story 2.3). Modeled on `XtermTerminal.tsx`'s `copiedToast`
- * pattern — see `.claude/rules/css-architecture.md` for the vanilla-extract
+ * pattern — see `docs/reference/css-architecture.md` for the vanilla-extract
  * convention used by `InputDropBadge.css.ts`.
  *
  * The nested `LiveRegion` is unconditionally rendered (never gated on the

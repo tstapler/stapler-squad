@@ -10,52 +10,28 @@ import { render, screen, fireEvent } from "@testing-library/react";
 
 // ── Mocks ─────────────────────────────────────────────────────────────────────
 
-const mockXtermHandle = {
-  terminal: null as null,
-  fit: jest.fn(),
-  write: jest.fn(),
-  writeln: jest.fn(),
-  clear: jest.fn(),
-  focus: jest.fn(),
-  search: jest.fn().mockReturnValue(false),
-  searchNext: jest.fn().mockReturnValue(false),
-  searchPrevious: jest.fn().mockReturnValue(false),
-};
+const mockXtermHandle = require("./terminalOutputTestMocks").createMockXtermHandle();
 
-jest.mock("../XtermTerminal", () => {
-  const React = require("react");
-  const XtermTerminal = React.forwardRef((props: any, ref: any) => {
-    React.useImperativeHandle(ref, () => mockXtermHandle);
-    return React.createElement("div", { "data-testid": "mock-xterm" });
-  });
-  XtermTerminal.displayName = "XtermTerminal";
-  return { XtermTerminal };
-});
+jest.mock("../XtermTerminal", () =>
+  require("./terminalOutputTestMocks").xtermTerminalMockModule(mockXtermHandle)
+);
 
-jest.mock("@/lib/hooks/useTerminalStream", () => ({
-  useTerminalStream: jest.fn(),
-}));
+jest.mock("@/lib/hooks/useTerminalStream", () =>
+  require("./terminalOutputTestMocks").useTerminalStreamMockModule()
+);
 
-jest.mock("@/lib/terminal/TerminalDimensionCache", () => ({
-  getCachedDimensions: jest.fn().mockReturnValue(null),
-  saveDimensions: jest.fn(),
-}));
+jest.mock("@/lib/terminal/TerminalDimensionCache", () =>
+  require("./terminalOutputTestMocks").terminalDimensionCacheMockModule()
+);
 
-jest.mock("@/lib/terminal/TerminalStreamManager", () => ({
-  TerminalStreamManager: jest.fn().mockImplementation(() => ({
-    setOnFirstOutput: jest.fn(),
-    installDebugMonitor: jest.fn(),
-    writeInitialContent: jest.fn().mockResolvedValue(undefined),
-    write: jest.fn(),
-    cleanup: jest.fn(),
-    updateSendFlowControl: jest.fn(),
-  })),
-}));
+jest.mock("@/lib/terminal/TerminalStreamManager", () =>
+  require("./terminalOutputTestMocks").terminalStreamManagerMockModule()
+);
 
 const mockTrack = jest.fn();
-jest.mock("@/lib/contexts/AnalyticsContext", () => ({
-  useAnalytics: () => ({ track: mockTrack }),
-}));
+jest.mock("@/lib/contexts/AnalyticsContext", () =>
+  require("./terminalOutputTestMocks").analyticsContextMockModule(mockTrack)
+);
 
 // Mock useBrowserLogStream so hook side-effects (console patching) don't bleed
 // into the test environment.
@@ -140,7 +116,7 @@ afterEach(() => {
 describe("UT-UI-01: renders log stream button in expanded toolbar", () => {
   it("renders_log_stream_button_in_expanded_toolbar", () => {
     renderTerminal();
-    const btn = screen.getByRole("button", { name: /enable verbose debug log streaming/i });
+    const btn = screen.getByRole("button", { name: /enable verbose debug trace streaming/i });
     expect(btn).toBeInTheDocument();
   });
 });
@@ -150,7 +126,7 @@ describe("UT-UI-01: renders log stream button in expanded toolbar", () => {
 describe("UT-UI-02: log stream button has devOnly class", () => {
   it("log_stream_button_has_devOnly_class", () => {
     renderTerminal();
-    const btn = screen.getByRole("button", { name: /enable verbose debug log streaming/i });
+    const btn = screen.getByRole("button", { name: /enable verbose debug trace streaming/i });
     // The button should have the devOnly class (controls mobile visibility via CSS)
     expect(btn.className).toContain("devOnly");
   });
@@ -163,7 +139,7 @@ describe("UT-UI-03: toggle on calls localStorage.setItem with correct key", () =
     const setItemSpy = jest.spyOn(Storage.prototype, "setItem");
     renderTerminal();
 
-    const btn = screen.getByRole("button", { name: /enable verbose debug log streaming/i });
+    const btn = screen.getByRole("button", { name: /enable verbose debug trace streaming/i });
     fireEvent.click(btn);
 
     expect(setItemSpy).toHaveBeenCalledWith("stapler-squad-remote-debug", "true");
@@ -180,7 +156,7 @@ describe("UT-UI-04: toggle off calls localStorage.removeItem", () => {
 
     renderTerminal();
 
-    const btn = screen.getByRole("button", { name: /disable verbose debug log streaming/i });
+    const btn = screen.getByRole("button", { name: /disable verbose debug trace streaming/i });
     fireEvent.click(btn);
 
     expect(removeItemSpy).toHaveBeenCalledWith("stapler-squad-remote-debug");
@@ -193,10 +169,10 @@ describe("UT-UI-05: default state is off when localStorage empty", () => {
   it("default_state_is_off_when_localStorage_empty", () => {
     renderTerminal();
     // When off, aria-label should say "Enable..."
-    const btn = screen.getByRole("button", { name: /enable verbose debug log streaming/i });
+    const btn = screen.getByRole("button", { name: /enable verbose debug trace streaming/i });
     expect(btn).toBeInTheDocument();
-    // Should NOT show "Debug Log Stream ON"
-    expect(btn.textContent).not.toContain("Debug Log Stream ON");
+    // Should NOT show "Debug Traces ON"
+    expect(btn.textContent).not.toContain("Debug Traces ON");
   });
 });
 
@@ -207,12 +183,12 @@ describe("UT-UI-06: active state shows ON label and green style", () => {
     renderTerminal();
 
     // Click to activate
-    const btn = screen.getByRole("button", { name: /enable verbose debug log streaming/i });
+    const btn = screen.getByRole("button", { name: /enable verbose debug trace streaming/i });
     fireEvent.click(btn);
 
     // Now it should show the ON label
-    const activeBtn = screen.getByRole("button", { name: /disable verbose debug log streaming/i });
-    expect(activeBtn.textContent).toContain("Debug Log Stream ON");
+    const activeBtn = screen.getByRole("button", { name: /disable verbose debug trace streaming/i });
+    expect(activeBtn.textContent).toContain("Debug Traces ON");
     expect(activeBtn).toHaveStyle({ backgroundColor: "#2a4" });
   });
 });
@@ -238,8 +214,8 @@ describe("UT-UI-08: initializes from localStorage true", () => {
     renderTerminal();
 
     // When seeded as ON, button should show "disable" aria-label
-    const btn = screen.getByRole("button", { name: /disable verbose debug log streaming/i });
+    const btn = screen.getByRole("button", { name: /disable verbose debug trace streaming/i });
     expect(btn).toBeInTheDocument();
-    expect(btn.textContent).toContain("Debug Log Stream ON");
+    expect(btn.textContent).toContain("Debug Traces ON");
   });
 });

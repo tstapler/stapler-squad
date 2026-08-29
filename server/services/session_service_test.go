@@ -11,6 +11,7 @@ import (
 	"time"
 
 	connect "connectrpc.com/connect"
+	"github.com/creack/pty"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -19,6 +20,8 @@ import (
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/detection"
+	"github.com/tstapler/stapler-squad/session/detection/binaries"
+	"github.com/tstapler/stapler-squad/session/tmux"
 	"go.uber.org/goleak"
 )
 
@@ -1493,6 +1496,66 @@ func TestUpdateSession_Resume_PermissionDenied_ReturnsFailedPrecondition(t *test
 	assert.Equal(t, connect.CodeFailedPrecondition, connectErr.Code())
 }
 
+// TestUpdateSession_should_StopSession_When_TargetIsStoppedFromActive verifies the
+// board-view "drag into Complete" path: targeting SESSION_STATUS_STOPPED from an
+// Active instance calls StopByUser() and lands the session in Stopped.
+func TestUpdateSession_should_StopSession_When_TargetIsStoppedFromActive(t *testing.T) {
+	t.Parallel()
+	fix := setupForkTestFixture(t)
+	t.Cleanup(fix.cleanup)
+
+	inst := &session.Instance{
+		Title:       "active-session-to-stop",
+		Path:        "/tmp/test",
+		Status:      session.Active,
+		Program:     "claude",
+		Permissions: session.GetManagedPermissions(),
+		CreatedAt:   time.Now(),
+		UpdatedAt:   time.Now(),
+	}
+	addInstanceToPoller(fix.poller, inst)
+
+	stopped := sessionv1.SessionStatus_SESSION_STATUS_STOPPED
+	resp, err := fix.svc.UpdateSession(context.Background(), connect.NewRequest(&sessionv1.UpdateSessionRequest{
+		Id:     "active-session-to-stop",
+		Status: &stopped,
+	}))
+	require.NoError(t, err)
+	require.NotNil(t, resp.Msg.Session)
+	assert.Equal(t, sessionv1.SessionStatus_SESSION_STATUS_STOPPED, resp.Msg.Session.Status)
+}
+
+// TestUpdateSession_should_RejectStop_When_TransitionIsIllegal verifies that an
+// illegal target (Restoring -> Stopped, which has no entry in transitionDefs) is
+// classified as FailedPrecondition, not CodeInternal.
+func TestUpdateSession_should_RejectStop_When_TransitionIsIllegal(t *testing.T) {
+	t.Parallel()
+	fix := setupForkTestFixture(t)
+	t.Cleanup(fix.cleanup)
+
+	inst := &session.Instance{
+		Title:       "restoring-session",
+		Path:        "/tmp/test",
+		Status:      session.Restoring,
+		Program:     "claude",
+		Permissions: session.GetManagedPermissions(),
+		CreatedAt:   time.Now(),
+		UpdatedAt:   time.Now(),
+	}
+	addInstanceToPoller(fix.poller, inst)
+
+	stopped := sessionv1.SessionStatus_SESSION_STATUS_STOPPED
+	_, err := fix.svc.UpdateSession(context.Background(), connect.NewRequest(&sessionv1.UpdateSessionRequest{
+		Id:     "restoring-session",
+		Status: &stopped,
+	}))
+	require.Error(t, err)
+
+	var connectErr *connect.Error
+	require.ErrorAs(t, err, &connectErr)
+	assert.Equal(t, connect.CodeFailedPrecondition, connectErr.Code())
+}
+
 // --------------------------------------------------------------------------
 // UpdateSession — steer_message (ADR-001: widened steer RPC)
 // --------------------------------------------------------------------------
@@ -1586,13 +1649,19 @@ func TestUpdateSession_SteerMessage_NonAutonomousSession_SendKeysFailure_Returns
 // regression guard (AC7's "no parallel steering implementation"): the
 // pre-existing autonomous branch (ClaudeController.SendCommandImmediate) must
 // be untouched by widening the handler to add the non-autonomous SendKeys
-// branch. An autonomous session with no live controller wired still returns
-// success (a send failure on this branch is only logged, never rejected),
-// exactly like the pre-widening behavior.
+// branch. Wires a real, pipe-backed *session.ClaudeController (see
+// newRealControllerForTest) so this exercises an actual successful
+// SendCommandImmediate call end-to-end through UpdateSession.
+//
+// Prior to Story 1.1.2 this test used an instance with no controller wired at
+// all and asserted success — that assertion documented the swallowed-error
+// bug Story 1.1.2 fixes (a nil controller now returns an error; see
+// TestUpdateSession_SteerMessage_AutonomousNilController_NowReturnsError).
 func TestUpdateSession_SteerMessage_AutonomousSession_StillUsesController(t *testing.T) {
-	t.Parallel()
 	fix := setupForkTestFixture(t)
 	t.Cleanup(fix.cleanup)
+
+	ctrl := newRealControllerForTest(t, "autonomous-session", true)
 
 	inst := &session.Instance{
 		Title:          "autonomous-session",
@@ -1604,6 +1673,7 @@ func TestUpdateSession_SteerMessage_AutonomousSession_StillUsesController(t *tes
 		CreatedAt:      time.Now(),
 		UpdatedAt:      time.Now(),
 	}
+	inst.SetControllerForTest(ctrl)
 	addInstanceToPoller(fix.poller, inst)
 
 	msg := "focus on the auth module first"
@@ -1613,6 +1683,416 @@ func TestUpdateSession_SteerMessage_AutonomousSession_StillUsesController(t *tes
 	}))
 	require.NoError(t, err)
 	require.NotNil(t, resp.Msg.Session)
+}
+
+// TestUpdateSession_SteerMessage_AutonomousNilController_NowReturnsError
+// documents Story 1.1.2's intentional behavior change: an autonomous session
+// with no controller started now surfaces a real RPC error instead of
+// silently succeeding (the pre-1.1.2 behavior asserted by the previous
+// version of TestUpdateSession_SteerMessage_AutonomousSession_StillUsesController).
+func TestUpdateSession_SteerMessage_AutonomousNilController_NowReturnsError(t *testing.T) {
+	t.Parallel()
+	fix := setupForkTestFixture(t)
+	t.Cleanup(fix.cleanup)
+
+	inst := &session.Instance{
+		Title:          "autonomous-no-controller",
+		Path:           "/tmp/test",
+		Status:         session.Active,
+		Program:        "claude",
+		Permissions:    session.GetManagedPermissions(),
+		AutonomousMode: true,
+		CreatedAt:      time.Now(),
+		UpdatedAt:      time.Now(),
+	}
+	addInstanceToPoller(fix.poller, inst)
+
+	msg := "focus on the auth module first"
+	_, err := fix.svc.UpdateSession(context.Background(), connect.NewRequest(&sessionv1.UpdateSessionRequest{
+		Id:           "autonomous-no-controller",
+		SteerMessage: &msg,
+	}))
+	require.Error(t, err)
+
+	var connectErr *connect.Error
+	require.ErrorAs(t, err, &connectErr)
+	assert.Equal(t, connect.CodeFailedPrecondition, connectErr.Code())
+}
+
+// --------------------------------------------------------------------------
+// steerInstance — autonomous branch error/timeout paths (Story 1.1.2)
+// --------------------------------------------------------------------------
+
+// fakeControllerInstance is a minimal session.InstanceContext double that lets
+// these tests construct a real *session.ClaudeController without a real PTY
+// subprocess (see newRealControllerForTest).
+type fakeControllerInstance struct {
+	title     string
+	ptyReader *os.File
+}
+
+func (f *fakeControllerInstance) GetTitle() string                    { return f.title }
+func (f *fakeControllerInstance) GetStableID() string                 { return f.title }
+func (f *fakeControllerInstance) GetPTYReader() (*os.File, error)     { return f.ptyReader, nil }
+func (f *fakeControllerInstance) Preview() (string, error)            { return "", nil }
+func (f *fakeControllerInstance) LastMeaningfulOutputTime() time.Time { return time.Time{} }
+func (f *fakeControllerInstance) GetCreatedAt() time.Time             { return time.Time{} }
+func (f *fakeControllerInstance) SetLastMeaningfulOutput(_ time.Time) {}
+func (f *fakeControllerInstance) GetStatus() int                      { return 0 }
+func (f *fakeControllerInstance) WriteToPTY(data []byte) (int, error) { return len(data), nil }
+func (f *fakeControllerInstance) GetProgram() string                  { return "claude" }
+
+// newRealControllerForTest builds a real *session.ClaudeController backed by
+// a genuine pty pair (github.com/creack/pty, already a project dependency),
+// without requiring a subprocess fork (which this sandboxed test environment
+// does not permit; see
+// TestUpdateSession_SteerMessage_NonAutonomousSession_SendsViaSendKeys's PTY skip
+// above for the same constraint on the non-autonomous branch).
+//
+// cancelImmediately controls the two distinct scenarios these tests need:
+//
+//   - true: the controller is started against an already-cancelled context.
+//     SendCommandImmediate's underlying executeCommand loop then observes
+//     ctx.Done() as the only ready select case on its very first iteration —
+//     deterministic, no real PTY-timing race — giving a fast, genuine
+//     "success" outcome (steerInstance's autonomous branch treats a nil
+//     SendCommandImmediate error as success regardless of the
+//     *ExecutionResult's own internal Error field; see ExecuteImmediate in
+//     session/command_executor.go). An earlier version of this helper
+//     instead closed the slave fd immediately to force an EOF/hangup on the
+//     master read — that raced the kernel's hangup delivery against
+//     steerInstance's 5s bound and flaked under -count=5. Used by
+//     TestUpdateSession_SteerMessage_AutonomousSession_StillUsesController.
+//   - false: the context is left live and the slave stays open for the whole
+//     test body (closed only in t.Cleanup, after assertions already ran), so
+//     nothing ever completes the read/response cycle and SendCommandImmediate
+//     genuinely blocks. Used by
+//     TestSteerInstance_AutonomousSendCommandImmediateHangs_
+//     TimesOutRatherThanBlockingForever.
+//
+// Deliberately never calls ctrl.Stop(): confirmed via a goroutine dump
+// (test timeout with -timeout 40s) that ResponseStream's background read
+// loop blocks in a genuine syscall.Read on this fd with no effective
+// deadline in this sandboxed environment (PTYAccess's SetReadDeadline call
+// discards its error and silently no-ops here), so Stop()'s
+// rs.wg.Wait() — which joins that goroutine — hangs forever and takes the
+// whole test binary down with it. Skipping Stop() leaks one background
+// goroutine and one open pty pair for the remaining lifetime of the test
+// process, which the OS reclaims on exit; it does not block go test's own
+// completion and does not trip this file's goleak.VerifyNone checks (their
+// baselines are captured after this goroutine already exists). This leak is
+// harmless in the cancelImmediately=true case since streamLoop's own select
+// also sees ctx.Done() as its only ready case and exits on its own almost
+// immediately — nothing is actually left running there.
+func newRealControllerForTest(t *testing.T, title string, cancelImmediately bool) *session.ClaudeController {
+	t.Helper()
+	master, slave, err := pty.Open()
+	if err != nil {
+		t.Skipf("pty not available in this environment: %v", err)
+	}
+	t.Cleanup(func() { _ = slave.Close() })
+
+	ctx := context.Background()
+	if cancelImmediately {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithCancel(ctx)
+		cancel()
+	}
+
+	ctrl, err := session.NewClaudeController(&fakeControllerInstance{title: title, ptyReader: master})
+	require.NoError(t, err)
+	require.NoError(t, ctrl.Start(ctx))
+	return ctrl
+}
+
+// TestSteerInstance_AutonomousNilController_ReturnsError verifies the fixed
+// autonomous branch returns a real error (not a swallowed log.Warn) when
+// GetController() is nil.
+func TestSteerInstance_AutonomousNilController_ReturnsError(t *testing.T) {
+	t.Parallel()
+	fix := setupForkTestFixture(t)
+	t.Cleanup(fix.cleanup)
+
+	inst := &session.Instance{
+		Title:          "autonomous-nil-controller",
+		AutonomousMode: true,
+		CreatedAt:      time.Now(),
+		UpdatedAt:      time.Now(),
+	}
+
+	err := fix.svc.steerInstance(context.Background(), inst, "fix the conflict")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "controller not started")
+
+	var connectErr *connect.Error
+	assert.False(t, errors.As(err, &connectErr), "steerInstance must never return a connect.Error — UpdateSession alone translates to a connect.Code")
+}
+
+// TestSteerInstance_AutonomousSendCommandImmediateError_ReturnsError verifies
+// the fixed autonomous branch returns SendCommandImmediate's own error
+// (wrapped with context) instead of swallowing it — a real, non-nil
+// *session.ClaudeController that was never Start()ed reproduces this
+// deterministically (SendCommandImmediate's own "controller not started"
+// check), without needing a PTY.
+func TestSteerInstance_AutonomousSendCommandImmediateError_ReturnsError(t *testing.T) {
+	t.Parallel()
+	fix := setupForkTestFixture(t)
+	t.Cleanup(fix.cleanup)
+
+	ctrl, err := session.NewClaudeController(&fakeControllerInstance{title: "autonomous-erroring-controller"})
+	require.NoError(t, err)
+
+	inst := &session.Instance{
+		Title:          "autonomous-erroring-controller",
+		AutonomousMode: true,
+		CreatedAt:      time.Now(),
+		UpdatedAt:      time.Now(),
+	}
+	inst.SetControllerForTest(ctrl)
+
+	steerErr := fix.svc.steerInstance(context.Background(), inst, "fix the conflict")
+	require.Error(t, steerErr)
+	assert.Contains(t, steerErr.Error(), "steer autonomous session")
+
+	var connectErr *connect.Error
+	assert.False(t, errors.As(steerErr, &connectErr), "steerInstance must never return a connect.Error")
+}
+
+// TestSteerInstance_AutonomousSendCommandImmediateHangs_TimesOutRatherThanBlockingForever
+// is the regression test for the unbounded-PTY-write bug: a wedged controller
+// (real, started, but nothing ever drains/responds on its pty) must not be
+// able to hang steerInstance forever — it must return within ~5s wrapping
+// context.DeadlineExceeded.
+func TestSteerInstance_AutonomousSendCommandImmediateHangs_TimesOutRatherThanBlockingForever(t *testing.T) {
+	fix := setupForkTestFixture(t)
+	t.Cleanup(fix.cleanup)
+
+	ctrl := newRealControllerForTest(t, "autonomous-wedged-controller", false)
+
+	inst := &session.Instance{
+		Title:          "autonomous-wedged-controller",
+		AutonomousMode: true,
+		CreatedAt:      time.Now(),
+		UpdatedAt:      time.Now(),
+	}
+	inst.SetControllerForTest(ctrl)
+
+	type result struct {
+		err error
+	}
+	done := make(chan result, 1)
+	start := time.Now()
+	go func() {
+		done <- result{err: fix.svc.steerInstance(context.Background(), inst, "fix the conflict")}
+	}()
+
+	select {
+	case r := <-done:
+		elapsed := time.Since(start)
+		require.Error(t, r.err)
+		assert.True(t, errors.Is(r.err, context.DeadlineExceeded), "expected error to wrap context.DeadlineExceeded, got: %v", r.err)
+		assert.Less(t, elapsed, 10*time.Second, "steerInstance must bound the PTY write to ~5s, not block indefinitely")
+	case <-time.After(15 * time.Second):
+		t.Fatal("steerInstance did not return within 15s — the PTY write timeout did not fire")
+	}
+}
+
+// --------------------------------------------------------------------------
+// SessionSteerer (Story 1.2.1) — SessionProgram / SteerActiveSession
+// --------------------------------------------------------------------------
+//
+// validation.md flags these as a coverage gap: plan.md's Tasks 1.2.1a-d name
+// only a compile-time interface assertion (var _ SessionSteerer =
+// (*SessionService)(nil)) for SessionProgram/SteerActiveSession, with no
+// direct Test... function for their own return-value behavior. Added here
+// per validation.md's explicit recommendation.
+
+// TestSessionService_SessionProgram_ReturnsProgramForLiveInstance verifies
+// SessionProgram returns (instance.Program, true) for a live instance.
+func TestSessionService_SessionProgram_ReturnsProgramForLiveInstance(t *testing.T) {
+	t.Parallel()
+	fix := setupForkTestFixture(t)
+	t.Cleanup(fix.cleanup)
+
+	inst := &session.Instance{
+		Title:       "program-lookup-session",
+		Program:     "claude",
+		Permissions: session.GetManagedPermissions(),
+		CreatedAt:   time.Now(),
+		UpdatedAt:   time.Now(),
+	}
+	addInstanceToPoller(fix.poller, inst)
+
+	program, ok := fix.svc.SessionProgram("program-lookup-session")
+	assert.True(t, ok)
+	assert.Equal(t, "claude", program)
+}
+
+// TestSessionService_SessionProgram_ReturnsNotOkForUnknownUUID verifies
+// SessionProgram returns ("", false) when no live instance is tracked for
+// the given UUID.
+func TestSessionService_SessionProgram_ReturnsNotOkForUnknownUUID(t *testing.T) {
+	t.Parallel()
+	fix := setupForkTestFixture(t)
+	t.Cleanup(fix.cleanup)
+
+	program, ok := fix.svc.SessionProgram("no-such-session")
+	assert.False(t, ok)
+	assert.Empty(t, program)
+}
+
+// TestSessionService_SteerActiveSession_ReturnsErrorForUnknownUUID verifies
+// SteerActiveSession returns a non-nil error (and does not panic) when no
+// live instance is tracked for the given UUID.
+func TestSessionService_SteerActiveSession_ReturnsErrorForUnknownUUID(t *testing.T) {
+	t.Parallel()
+	fix := setupForkTestFixture(t)
+	t.Cleanup(fix.cleanup)
+
+	err := fix.svc.SteerActiveSession(context.Background(), "missing-uuid", "hello")
+	require.Error(t, err)
+}
+
+// --------------------------------------------------------------------------
+// IsReadyForSteer (PR #645 Gate 2 P1) — never assume ready when the
+// detection signal is unavailable.
+// --------------------------------------------------------------------------
+
+// TestSessionService_IsReadyForSteer_ReturnsFalseForUnknownUUID verifies the
+// not-live case degrades to false (matches SessionProgram's ok=false shape).
+func TestSessionService_IsReadyForSteer_ReturnsFalseForUnknownUUID(t *testing.T) {
+	t.Parallel()
+	fix := setupForkTestFixture(t)
+	t.Cleanup(fix.cleanup)
+
+	assert.False(t, fix.svc.IsReadyForSteer("no-such-session"))
+}
+
+// TestSessionService_IsReadyForSteer_ReturnsFalse_When_StatusManagerNotWired
+// verifies that a live instance with no statusManager wired (so readiness
+// genuinely can't be determined) returns false rather than assuming ready.
+func TestSessionService_IsReadyForSteer_ReturnsFalse_When_StatusManagerNotWired(t *testing.T) {
+	t.Parallel()
+	fix := setupForkTestFixture(t)
+	t.Cleanup(fix.cleanup)
+
+	inst := &session.Instance{
+		Title:       "no-status-manager-session",
+		Program:     "claude",
+		Permissions: session.GetManagedPermissions(),
+		CreatedAt:   time.Now(),
+		UpdatedAt:   time.Now(),
+	}
+	addInstanceToPoller(fix.poller, inst)
+
+	assert.False(t, fix.svc.IsReadyForSteer("no-status-manager-session"))
+}
+
+// TestSessionService_IsReadyForSteer_ReturnsFalse_When_ControllerNotRegistered
+// verifies the "unknown detection signal" case: a statusManager is wired but
+// no controller was ever registered for this instance's title (e.g. it never
+// started one). This must degrade to false, not true — the vulnerability
+// this method exists to close is exactly a PTY write with no confirmed idle
+// signal.
+func TestSessionService_IsReadyForSteer_ReturnsFalse_When_ControllerNotRegistered(t *testing.T) {
+	t.Parallel()
+	fix := setupForkTestFixture(t)
+	t.Cleanup(fix.cleanup)
+	fix.svc.SetStatusManager(session.NewInstanceStatusManager())
+
+	inst := &session.Instance{
+		Title:       "no-controller-session",
+		Program:     "claude",
+		Permissions: session.GetManagedPermissions(),
+		CreatedAt:   time.Now(),
+		UpdatedAt:   time.Now(),
+	}
+	addInstanceToPoller(fix.poller, inst)
+
+	assert.False(t, fix.svc.IsReadyForSteer("no-controller-session"))
+}
+
+// TestSafeIdleStatusContexts_MatchClaudeIdlePatternDescriptions pins
+// safeIdleStatusContexts against the actual Idle pattern descriptions in
+// session/detection/binaries/claude.go (the single source of truth per that
+// file's Patterns() doc comment) — both that the three safe entries match
+// verbatim, and that the allowlist contains nothing else. A future wording
+// change to claude.go's Idle patterns fails this test loudly instead of
+// silently breaking IsReadyForSteer's security gate (either by no longer
+// matching a real safe prompt, or by an unnoticed unsafe pattern reusing one
+// of the pinned strings).
+func TestSafeIdleStatusContexts_MatchClaudeIdlePatternDescriptions(t *testing.T) {
+	t.Parallel()
+
+	idlePatterns := binaries.NewClaudeDetector().Patterns().Idle
+	byName := make(map[string]string, len(idlePatterns))
+	for _, p := range idlePatterns {
+		byName[p.Name] = p.Description
+	}
+
+	wantSafe := map[string]string{
+		"claude_readline_prompt":  "Claude Code readline input prompt",
+		"claude_shortcuts_prompt": "Claude Code idle prompt showing ? for shortcuts",
+		"claude_accept_edits":     "Claude Code 'accept edits' review mode — session completed turn, user reviews proposed changes",
+	}
+	for name, wantDesc := range wantSafe {
+		gotDesc, ok := byName[name]
+		require.True(t, ok, "claude.go's Idle group no longer has a pattern named %q", name)
+		require.Equal(t, wantDesc, gotDesc, "claude.go's %q description changed", name)
+		require.True(t, safeIdleStatusContexts[gotDesc], "safeIdleStatusContexts missing current %q description %q", name, gotDesc)
+	}
+	require.Len(t, safeIdleStatusContexts, len(wantSafe), "safeIdleStatusContexts has entries beyond the three pinned safe patterns")
+
+	// insert_mode is deliberately excluded (ambiguous with a real vim INSERT-mode
+	// status line) and the raw shell/vim/editor prompts must never be treated as safe.
+	for _, unsafeName := range []string{"insert_mode", "command_prompt", "vim_normal_mode", "bracket_insert_mode"} {
+		desc, ok := byName[unsafeName]
+		require.True(t, ok, "claude.go's Idle group no longer has a pattern named %q", unsafeName)
+		require.False(t, safeIdleStatusContexts[desc], "%q's description %q must not be on the safe allowlist", unsafeName, desc)
+	}
+}
+
+// TestSessionService_IsReadyForSteer_ReturnsTrue_When_RealDetectionSeesClaudeReadlinePrompt
+// runs realistic Claude Code idle-prompt terminal text through the real
+// detection.PatternSet.MatchLines pipeline (built from the actual
+// binaries.NewClaudeDetector() pattern set, not a hand-fabricated status) and
+// verifies isSafeSteerStatus — the exact function IsReadyForSteer defers to —
+// accepts the resulting (status, description) pair. Building a fully live
+// *session.ClaudeController here would additionally require a real PTY and
+// Start()'s background goroutines (see session/claude_controller_test.go's
+// newControllerWithMock, which stays inside package session for the same
+// reason); exercising the real regexes directly is the documented fallback.
+func TestSessionService_IsReadyForSteer_ReturnsTrue_When_RealDetectionSeesClaudeReadlinePrompt(t *testing.T) {
+	t.Parallel()
+
+	ps, err := detection.NewPatternSet(binaries.NewClaudeDetector().Patterns())
+	require.NoError(t, err)
+
+	text := "I've fixed the null check in validator.go.\n> "
+	status, name, desc, _ := ps.MatchLines(text, nil)
+
+	require.Equal(t, detection.StatusIdle, status, "matched pattern: %s", name)
+	assert.True(t, isSafeSteerStatus(status, desc), "description %q (pattern %s) should be treated as safe to steer", desc, name)
+}
+
+// TestSessionService_IsReadyForSteer_ReturnsFalse_When_RealDetectionSeesShellPrompt
+// is the regression test for the original StatusReady-vs-StatusIdle
+// confusion this fix addresses: a raw shell prompt also reports
+// detection.StatusIdle, so a naive `ClaudeStatus == StatusIdle` check (the
+// unsafe "fix" this test guards against) would incorrectly treat it as safe
+// to steer. Only the description allowlist in isSafeSteerStatus tells the
+// two apart.
+func TestSessionService_IsReadyForSteer_ReturnsFalse_When_RealDetectionSeesShellPrompt(t *testing.T) {
+	t.Parallel()
+
+	ps, err := detection.NewPatternSet(binaries.NewClaudeDetector().Patterns())
+	require.NoError(t, err)
+
+	text := "tstapler@dev-box:~/stapler-squad$ "
+	status, name, desc, _ := ps.MatchLines(text, nil)
+
+	require.Equal(t, detection.StatusIdle, status, "matched pattern: %s", name)
+	assert.False(t, isSafeSteerStatus(status, desc), "raw shell prompt description %q (pattern %s) must not be treated as safe to steer", desc, name)
 }
 
 // TestUpdateSession_SteerMessage_ExceedsMaxLength_ReturnsInvalidArgument verifies
@@ -2209,6 +2689,165 @@ func TestCreateSession_TitleAlreadyExists(t *testing.T) {
 	assert.Equal(t, connect.CodeAlreadyExists, connectErr.Code())
 }
 
+// --------------------------------------------------------------------------
+// CreateSession — backend resolution (tymux-bundled-integration Epic 4.3):
+// wiring session.ResolveSessionBackend's precedence (explicit request
+// override > TymuxSessionOverrides, keyed by the sanitized tmux session name
+// > the process-wide registered default) into instanceOpts.Backend.
+// --------------------------------------------------------------------------
+
+// TestCreateSession_HonorsExplicitBackendOverride verifies that a request's
+// backend_override field wins over both this session's own TymuxSessionOverrides
+// entry and the process-wide default, mirroring ResolveSessionBackend's top
+// precedence tier (session/backend_resolution_test.go).
+func TestCreateSession_HonorsExplicitBackendOverride(t *testing.T) {
+	storage := createTestStorage(t)
+	svc := newCreateTestService(t, storage)
+
+	testDir := t.TempDir()
+	t.Setenv("STAPLER_SQUAD_TEST_DIR", testDir)
+	const title = "explicit-override-session"
+	sessionKey := tmux.NewSessionName(title, tmux.TmuxPrefix).String()
+	// The session's own override forces tmux; the request override must still win.
+	require.NoError(t, os.WriteFile(filepath.Join(testDir, "config.json"),
+		[]byte(`{"tymux_session_overrides": {"`+sessionKey+`": false}}`), 0o644))
+
+	backendOverride := string(session.BackendTymux)
+	resp, err := svc.CreateSession(context.Background(), connect.NewRequest(&sessionv1.CreateSessionRequest{
+		Title:           title,
+		Path:            t.TempDir(),
+		Program:         "claude",
+		BackendOverride: &backendOverride,
+	}))
+	require.NoError(t, err)
+	t.Cleanup(func() { destroyCreatedSession(t, svc, resp.Msg.Session.Id) })
+
+	inst := svc.FindLiveInstance(resp.Msg.Session.Id)
+	require.NotNil(t, inst)
+	assert.Equal(t, session.BackendTymux, inst.Backend,
+		"request backend_override must win even though this session's TymuxSessionOverrides entry forces tmux")
+}
+
+// TestCreateSession_HonorsSessionNameOverrideMap verifies that, absent a
+// request override, a TymuxSessionOverrides entry keyed by the sanitized tmux
+// session name (tmux.NewSessionName's derivation of the request Title — not
+// the raw Title itself) forces the session's backend.
+func TestCreateSession_HonorsSessionNameOverrideMap(t *testing.T) {
+	storage := createTestStorage(t)
+	svc := newCreateTestService(t, storage)
+
+	testDir := t.TempDir()
+	t.Setenv("STAPLER_SQUAD_TEST_DIR", testDir)
+	const title = "session-override-map-test"
+	sessionKey := tmux.NewSessionName(title, tmux.TmuxPrefix).String()
+	require.NoError(t, os.WriteFile(filepath.Join(testDir, "config.json"),
+		[]byte(`{"tymux_session_overrides": {"`+sessionKey+`": true}}`), 0o644))
+
+	resp, err := svc.CreateSession(context.Background(), connect.NewRequest(&sessionv1.CreateSessionRequest{
+		Title:   title,
+		Path:    t.TempDir(),
+		Program: "claude",
+	}))
+	require.NoError(t, err)
+	t.Cleanup(func() { destroyCreatedSession(t, svc, resp.Msg.Session.Id) })
+
+	inst := svc.FindLiveInstance(resp.Msg.Session.Id)
+	require.NotNil(t, inst)
+	assert.Equal(t, session.BackendTymux, inst.Backend,
+		"a TymuxSessionOverrides entry keyed by the sanitized tmux session name must force the backend with no request override present")
+}
+
+// TestCreateSession_FallsBackToGlobalDefaultWhenNoOverrides verifies that with
+// no request override and no TymuxSessionOverrides entry for this session,
+// CreateSession applies the process-wide registered backend
+// (session.RegisterBackendProvider) rather than a hardcoded BackendTmux.
+func TestCreateSession_FallsBackToGlobalDefaultWhenNoOverrides(t *testing.T) {
+	session.RegisterBackendProvider(session.BackendTymux)
+	t.Cleanup(func() { session.RegisterBackendProvider(session.BackendTmux) })
+
+	storage := createTestStorage(t)
+	svc := newCreateTestService(t, storage)
+
+	testDir := t.TempDir()
+	t.Setenv("STAPLER_SQUAD_TEST_DIR", testDir)
+	require.NoError(t, os.WriteFile(filepath.Join(testDir, "config.json"), []byte(`{}`), 0o644))
+
+	resp, err := svc.CreateSession(context.Background(), connect.NewRequest(&sessionv1.CreateSessionRequest{
+		Title:   "no-override-session",
+		Path:    t.TempDir(),
+		Program: "claude",
+	}))
+	require.NoError(t, err)
+	t.Cleanup(func() { destroyCreatedSession(t, svc, resp.Msg.Session.Id) })
+
+	inst := svc.FindLiveInstance(resp.Msg.Session.Id)
+	require.NotNil(t, inst)
+	assert.Equal(t, session.BackendTymux, inst.Backend,
+		"with no request override and no session-name override, CreateSession must apply the process-wide registered default")
+}
+
+// --------------------------------------------------------------------------
+// CreateDirectorySession / CreateWorktreeSession — backend resolution
+// (tymux-bundled-integration Epic 4.4.2): these internal session creators
+// have no per-request override field, so they wire session.ResolveSessionBackend
+// with requestOverride="" -- only the session-name override map (or the
+// process-wide default) can influence their Backend.
+// --------------------------------------------------------------------------
+
+// TestCreateDirectorySession_HonorsSessionNameOverrideMap verifies that a
+// TymuxSessionOverrides entry keyed by the sanitized tmux session name
+// (tmux.NewSessionName's derivation of the title passed to
+// CreateDirectorySession) forces the resulting instance's backend even
+// though the process-wide default is registered as tymux.
+func TestCreateDirectorySession_HonorsSessionNameOverrideMap(t *testing.T) {
+	session.RegisterBackendProvider(session.BackendTymux)
+	t.Cleanup(func() { session.RegisterBackendProvider(session.BackendTmux) })
+
+	storage := createTestStorage(t)
+	svc := newCreateTestService(t, storage)
+
+	testDir := t.TempDir()
+	t.Setenv("STAPLER_SQUAD_TEST_DIR", testDir)
+	const title = "directory-session-override-map-test"
+	sessionKey := tmux.NewSessionName(title, tmux.TmuxPrefix).String()
+	require.NoError(t, os.WriteFile(filepath.Join(testDir, "config.json"),
+		[]byte(`{"default_program": "claude", "tymux_session_overrides": {"`+sessionKey+`": false}}`), 0o644))
+
+	inst, err := svc.CreateDirectorySession(context.Background(), title, t.TempDir(), "", nil, true, false)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = inst.Destroy() })
+
+	assert.Equal(t, session.BackendTmux, inst.Backend,
+		"a TymuxSessionOverrides entry keyed by the sanitized tmux session name must force the backend even though the process-wide default is tymux")
+}
+
+// TestCreateWorktreeSession_HonorsSessionNameOverrideMap is the
+// CreateWorktreeSession analogue of the CreateDirectorySession test above.
+func TestCreateWorktreeSession_HonorsSessionNameOverrideMap(t *testing.T) {
+	session.RegisterBackendProvider(session.BackendTymux)
+	t.Cleanup(func() { session.RegisterBackendProvider(session.BackendTmux) })
+
+	storage := createTestStorage(t)
+	svc := newCreateTestService(t, storage)
+
+	testDir := t.TempDir()
+	t.Setenv("STAPLER_SQUAD_TEST_DIR", testDir)
+	const title = "worktree-session-override-map-test"
+	sessionKey := tmux.NewSessionName(title, tmux.TmuxPrefix).String()
+	require.NoError(t, os.WriteFile(filepath.Join(testDir, "config.json"),
+		[]byte(`{"default_program": "claude", "tymux_session_overrides": {"`+sessionKey+`": false}}`), 0o644))
+
+	worktreePath := t.TempDir()
+	initGitRepoWithCommit(t, worktreePath)
+
+	inst, err := svc.CreateWorktreeSession(context.Background(), title, t.TempDir(), worktreePath, "", nil, true, false)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = inst.Destroy() })
+
+	assert.Equal(t, session.BackendTmux, inst.Backend,
+		"a TymuxSessionOverrides entry keyed by the sanitized tmux session name must force the backend even though the process-wide default is tymux")
+}
+
 // TestSessionService_CreateSession_DelegatesToCreateManagedInstance_When_HandlerInvoked
 // is the Story 1.2.0a regression test: it proves CreateSession's handler no
 // longer contains its own inline path-existence check but instead delegates
@@ -2246,6 +2885,161 @@ func TestSessionService_CreateSession_DelegatesToCreateManagedInstance_When_Hand
 	for _, d := range data {
 		assert.NotEqual(t, "delegation-regression", d.Title, "no instance should be persisted when path resolution fails")
 	}
+}
+
+// --------------------------------------------------------------------------
+// CreateSession — restart_from_session_id (Story 2.3.1): path derivation,
+// lineage, and the still-live guard.
+// --------------------------------------------------------------------------
+
+// TestCreateSession_RestartFromSessionId_DerivesPathFromSource verifies that
+// when restart_from_session_id is set and path is left empty, the new
+// session's path is resolved from the (persisted, not live) source session's
+// Path, and the created session records RestartedFromSessionId.
+func TestCreateSession_RestartFromSessionId_DerivesPathFromSource(t *testing.T) {
+	fix := setupForkTestFixture(t)
+	t.Cleanup(fix.cleanup)
+
+	sourcePath := t.TempDir()
+	require.NoError(t, fix.storage.AddInstance(&session.Instance{
+		Title:   "restart-source",
+		Path:    sourcePath,
+		Program: "claude",
+		Status:  session.Paused,
+	}))
+
+	resp, err := fix.svc.CreateSession(context.Background(), connect.NewRequest(&sessionv1.CreateSessionRequest{
+		Title:                "restarted-session",
+		Path:                 "",
+		Program:              "claude",
+		RestartFromSessionId: "restart-source",
+	}))
+	require.NoError(t, err)
+	t.Cleanup(func() { destroyCreatedSession(t, fix.svc, resp.Msg.Session.Id) })
+
+	assert.Equal(t, sourcePath, resp.Msg.Session.Path, "path should be derived from the source session")
+	assert.Equal(t, "restart-source", resp.Msg.Session.RestartedFromSessionId)
+}
+
+// TestCreateSession_RestartFromSessionId_ExplicitPathWins verifies that an
+// explicit request Path always wins over the restart-derived path -- it must
+// never be silently overridden, even though lineage is still recorded.
+func TestCreateSession_RestartFromSessionId_ExplicitPathWins(t *testing.T) {
+	fix := setupForkTestFixture(t)
+	t.Cleanup(fix.cleanup)
+
+	sourcePath := t.TempDir()
+	require.NoError(t, fix.storage.AddInstance(&session.Instance{
+		Title:   "restart-source-explicit",
+		Path:    sourcePath,
+		Program: "claude",
+		Status:  session.Paused,
+	}))
+
+	explicitPath := t.TempDir()
+	require.NotEqual(t, sourcePath, explicitPath)
+
+	resp, err := fix.svc.CreateSession(context.Background(), connect.NewRequest(&sessionv1.CreateSessionRequest{
+		Title:                "restarted-session-explicit-path",
+		Path:                 explicitPath,
+		Program:              "claude",
+		RestartFromSessionId: "restart-source-explicit",
+	}))
+	require.NoError(t, err)
+	t.Cleanup(func() { destroyCreatedSession(t, fix.svc, resp.Msg.Session.Id) })
+
+	assert.Equal(t, explicitPath, resp.Msg.Session.Path, "explicit path must win over the restart-derived path")
+	assert.Equal(t, "restart-source-explicit", resp.Msg.Session.RestartedFromSessionId, "lineage must still be recorded even when path is explicit")
+}
+
+// TestCreateSession_RestartFromSessionId_MissingSourceReturnsNotFound verifies
+// that a restart_from_session_id naming a session that exists neither live nor
+// in storage returns CodeNotFound naming the missing source -- not a silent
+// fallback (e.g. to cwd).
+func TestCreateSession_RestartFromSessionId_MissingSourceReturnsNotFound(t *testing.T) {
+	fix := setupForkTestFixture(t)
+	t.Cleanup(fix.cleanup)
+
+	_, err := fix.svc.CreateSession(context.Background(), connect.NewRequest(&sessionv1.CreateSessionRequest{
+		Title:                "restarted-session-missing-source",
+		Path:                 t.TempDir(),
+		Program:              "claude",
+		RestartFromSessionId: "does-not-exist",
+	}))
+	require.Error(t, err)
+
+	var connectErr *connect.Error
+	require.ErrorAs(t, err, &connectErr)
+	assert.Equal(t, connect.CodeNotFound, connectErr.Code())
+	assert.Contains(t, err.Error(), "does-not-exist")
+}
+
+// TestCreateSession_RestartFromSessionId_RejectsStillLiveSourceWithoutConfirmation
+// verifies the still-live guard: when the source session named by
+// restart_from_session_id is currently live (found via FindLiveInstance) and
+// confirm_restart_with_live_source is not set, CreateSession returns
+// CodeFailedPrecondition and creates nothing.
+func TestCreateSession_RestartFromSessionId_RejectsStillLiveSourceWithoutConfirmation(t *testing.T) {
+	fix := setupForkTestFixture(t)
+	t.Cleanup(fix.cleanup)
+
+	liveSource := &session.Instance{
+		Title:   "restart-source-live",
+		Path:    t.TempDir(),
+		Program: "claude",
+		Status:  session.Active,
+	}
+	addInstanceToPoller(fix.poller, liveSource)
+
+	_, err := fix.svc.CreateSession(context.Background(), connect.NewRequest(&sessionv1.CreateSessionRequest{
+		Title:                "restarted-session-rejected",
+		Path:                 t.TempDir(),
+		Program:              "claude",
+		RestartFromSessionId: "restart-source-live",
+	}))
+	require.Error(t, err)
+
+	var connectErr *connect.Error
+	require.ErrorAs(t, err, &connectErr)
+	assert.Equal(t, connect.CodeFailedPrecondition, connectErr.Code())
+	assert.Contains(t, err.Error(), "restart-source-live")
+
+	data, listErr := fix.storage.ListInstanceData()
+	require.NoError(t, listErr)
+	for _, d := range data {
+		assert.NotEqual(t, "restarted-session-rejected", d.Title, "no session should be created when the still-live guard rejects the request")
+	}
+}
+
+// TestCreateSession_RestartFromSessionId_ProceedsWhenLiveSourceConfirmed
+// verifies that the same still-live source, with
+// confirm_restart_with_live_source: true, lets CreateSession proceed normally
+// -- the explicit confirmation overrides the guard.
+func TestCreateSession_RestartFromSessionId_ProceedsWhenLiveSourceConfirmed(t *testing.T) {
+	fix := setupForkTestFixture(t)
+	t.Cleanup(fix.cleanup)
+
+	sourcePath := t.TempDir()
+	liveSource := &session.Instance{
+		Title:   "restart-source-live-confirmed",
+		Path:    sourcePath,
+		Program: "claude",
+		Status:  session.Active,
+	}
+	addInstanceToPoller(fix.poller, liveSource)
+
+	resp, err := fix.svc.CreateSession(context.Background(), connect.NewRequest(&sessionv1.CreateSessionRequest{
+		Title:                        "restarted-session-confirmed",
+		Path:                         "",
+		Program:                      "claude",
+		RestartFromSessionId:         "restart-source-live-confirmed",
+		ConfirmRestartWithLiveSource: true,
+	}))
+	require.NoError(t, err)
+	t.Cleanup(func() { destroyCreatedSession(t, fix.svc, resp.Msg.Session.Id) })
+
+	assert.Equal(t, sourcePath, resp.Msg.Session.Path, "path should be derived from the confirmed live source")
+	assert.Equal(t, "restart-source-live-confirmed", resp.Msg.Session.RestartedFromSessionId)
 }
 
 // --------------------------------------------------------------------------
@@ -2643,6 +3437,99 @@ func TestWireRateLimitCallbacks_StampsItemIDMetadata_When_BacklogLinkedAndNotHid
 	require.NotNil(t, notifs[0].NotificationMetadata, "metadata must not be nil so downstream consumers can correlate the notification to its item")
 	assert.Equal(t, item.ID, notifs[0].NotificationMetadata[events.MetadataKeyItemID])
 	assert.Equal(t, "true", notifs[0].NotificationMetadata[events.MetadataKeySessionScoped])
+}
+
+// TestOnColdRestoreLostHistory_PublishesNotification_UnlessHidden verifies the
+// session-revive-uuid-loss AC3 notification: a non-Hidden instance whose cold
+// restore was forced fresh despite prior conversation history gets a durable
+// WARNING/MEDIUM notification, while a Hidden instance (e.g. a headless
+// review session) never does — mirroring onRateLimitRecovery's Hidden gate.
+func TestOnColdRestoreLostHistory_PublishesNotification_UnlessHidden(t *testing.T) {
+	storage := createTestStorage(t)
+	eventBus := events.NewEventBus(8)
+	svc := NewSessionService(storage, eventBus)
+	t.Cleanup(func() { svc.Shutdown() })
+
+	newInstance := func(title string, hidden bool) *session.Instance {
+		inst := &session.Instance{
+			Title:     title,
+			UUID:      title + "-uuid",
+			Path:      "/tmp/test",
+			Status:    session.Paused,
+			Program:   "claude",
+			Hidden:    hidden,
+			CreatedAt: time.Now(),
+			UpdatedAt: time.Now(),
+		}
+		require.NoError(t, storage.AddInstance(inst))
+		return inst
+	}
+
+	t.Run("not hidden publishes notification", func(t *testing.T) {
+		inst := newInstance("cold-restore-visible", false)
+		subCtx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		ch, _ := eventBus.Subscribe(subCtx)
+
+		svc.onColdRestoreLostHistory(inst)
+
+		notifs := drainNotificationEvents(ch)
+		require.Len(t, notifs, 1, "expected exactly one cold-restore-lost-history notification")
+		assert.Equal(t, int32(8), notifs[0].NotificationType, "must be NotificationType_WARNING")
+		assert.Equal(t, int32(2), notifs[0].NotificationPriority, "must be NotificationPriority_MEDIUM")
+		assert.Contains(t, notifs[0].NotificationTitle, inst.Title)
+	})
+
+	t.Run("hidden suppresses notification", func(t *testing.T) {
+		inst := newInstance("cold-restore-hidden", true)
+		subCtx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		ch, _ := eventBus.Subscribe(subCtx)
+
+		svc.onColdRestoreLostHistory(inst)
+
+		notifs := drainNotificationEvents(ch)
+		assert.Empty(t, notifs, "a Hidden instance must never receive a cold-restore-lost-history notification")
+	})
+}
+
+// TestColdRestoreOutcomeListener_FiltersOnReason verifies
+// coldRestoreOutcomeListener only calls onColdRestoreLostHistory for an
+// EventStarted carrying exactly session.ReasonColdRestoreLostHistory — a
+// normal start (empty reason) or any other event/reason combination must not
+// notify (session-revive-uuid-loss AC3).
+func TestColdRestoreOutcomeListener_FiltersOnReason(t *testing.T) {
+	storage := createTestStorage(t)
+	eventBus := events.NewEventBus(8)
+	svc := NewSessionService(storage, eventBus)
+	t.Cleanup(func() { svc.Shutdown() })
+
+	inst := &session.Instance{
+		Title:     "cold-restore-listener",
+		UUID:      "cold-restore-listener-uuid",
+		Path:      "/tmp/test",
+		Status:    session.Paused,
+		Program:   "claude",
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	}
+	require.NoError(t, storage.AddInstance(inst))
+
+	listener := &coldRestoreOutcomeListener{svc: svc, inst: inst}
+
+	subCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ch, _ := eventBus.Subscribe(subCtx)
+
+	listener.OnLifecycleEvent(session.EventStarted, "")
+	assert.Empty(t, drainNotificationEvents(ch), "a normal start (empty reason) must not notify")
+
+	listener.OnLifecycleEvent(session.EventExited, session.ReasonColdRestoreLostHistory)
+	assert.Empty(t, drainNotificationEvents(ch), "the reason must only be honored on EventStarted")
+
+	listener.OnLifecycleEvent(session.EventStarted, session.ReasonColdRestoreLostHistory)
+	notifs := drainNotificationEvents(ch)
+	require.Len(t, notifs, 1, "EventStarted with the lost-history reason must notify")
 }
 
 // TestSessionService_Shutdown_StopsAnalyticsFlushGoroutine confirms Shutdown() calls

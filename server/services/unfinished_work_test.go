@@ -207,7 +207,7 @@ func TestQuickCommitPush_SkipsIgnoredTrackedFiles(t *testing.T) {
 	repoDir := t.TempDir()
 
 	// Uses go-git directly rather than shelling out — see
-	// .claude/rules/prefer-go-git-over-subshells.md.
+	// the `prefer-go-git-over-subshells` skill.
 	repo, err := gogit.PlainInitWithOptions(repoDir, &gogit.PlainInitOptions{
 		InitOptions: gogit.InitOptions{DefaultBranch: plumbing.NewBranchReferenceName("main")},
 	})

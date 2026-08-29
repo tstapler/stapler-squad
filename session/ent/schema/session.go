@@ -65,6 +65,10 @@ func (Session) Fields() []ent.Field {
 			Optional(),
 		field.String("tmux_prefix").
 			Optional(),
+		field.String("backend").
+			Optional().
+			Default("").
+			Comment("Per-session ProcessManager backend pin (e.g. \"tymux\"); empty means no pin, falls through to the process-wide default."),
 		field.Time("last_terminal_update").
 			Optional().
 			Nillable(),

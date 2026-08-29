@@ -39,8 +39,8 @@ const failureThreshold = 2
 // before the checker started (see the sessionPredatesRestart check at its use
 // site below). A service restart can leave an orphaned pre-restart process
 // racing the new process over the same tmux server (see
-// .claude/rules/service-restart-orphan-process.md and
-// .claude/rules/tmux-keep-server-on-restart.md), which can surface as a spurious
+// docs/explanation/service-restart-orphan-process.md and
+// docs/explanation/tmux-keep-server-on-restart.md), which can surface as a spurious
 // dead-pane detection right after startup for one of those pre-existing
 // sessions. During the grace period, such dead panes are still self-healed via
 // the old kill+respawn behavior; only after it elapses does a dead pane surface

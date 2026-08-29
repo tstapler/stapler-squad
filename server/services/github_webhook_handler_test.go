@@ -69,7 +69,7 @@ func doGitHubWebhookRequest(t *testing.T, h *GitHubWebhookHandler, body []byte, 
 func TestGitHubWebhookHandler_should_CreateSessionAndRecordFiredSuccess_When_SignatureValidAndRepoBranchMatch(t *testing.T) {
 	infra := newWebhookTestInfra(t)
 	wf := newGitHubPushWorkflow(t, infra, "gh-push-1", "s3cr3t", "tstapler/stapler-squad", "main", "Review {{.head_commit.message}}")
-	h := NewGitHubWebhookHandler(infra.workflowRepo, infra.scheduler, infra.fireEvents, infra.cfg)
+	h := NewGitHubWebhookHandler(infra.workflowRepo, infra.scheduler, infra.fireEvents, infra.cfg, nil)
 
 	body := githubPushBody(t, "tstapler/stapler-squad", "main", "fix the bug")
 	sig := sign("s3cr3t", body)
@@ -99,7 +99,7 @@ func TestGitHubWebhookHandler_should_CreateSessionAndRecordFiredSuccess_When_Sig
 func TestGitHubWebhookHandler_should_Return401AndRecordRejected_When_SignatureInvalid(t *testing.T) {
 	infra := newWebhookTestInfra(t)
 	wf := newGitHubPushWorkflow(t, infra, "gh-push-2", "s3cr3t", "tstapler/stapler-squad", "main", "Review {{.head_commit.message}}")
-	h := NewGitHubWebhookHandler(infra.workflowRepo, infra.scheduler, infra.fireEvents, infra.cfg)
+	h := NewGitHubWebhookHandler(infra.workflowRepo, infra.scheduler, infra.fireEvents, infra.cfg, nil)
 
 	body := githubPushBody(t, "tstapler/stapler-squad", "main", "fix the bug")
 
@@ -135,7 +135,7 @@ func TestGitHubWebhookHandler_should_Return200AndRecordNoMatch_When_EnabledIsFal
 		Enabled:                boolPtr(false),
 	})
 	require.NoError(t, err)
-	h := NewGitHubWebhookHandler(infra.workflowRepo, infra.scheduler, infra.fireEvents, infra.cfg)
+	h := NewGitHubWebhookHandler(infra.workflowRepo, infra.scheduler, infra.fireEvents, infra.cfg, nil)
 
 	body := githubPushBody(t, "tstapler/stapler-squad", "main", "fix the bug")
 
@@ -149,7 +149,7 @@ func TestGitHubWebhookHandler_should_Return404_When_FeatureFlagDisabled(t *testi
 	infra := newWebhookTestInfra(t)
 	infra.cfg.FeatureFlags["webhook_triggers"] = false
 	newGitHubPushWorkflow(t, infra, "gh-push-3", "s3cr3t", "tstapler/stapler-squad", "main", "Review {{.head_commit.message}}")
-	h := NewGitHubWebhookHandler(infra.workflowRepo, infra.scheduler, infra.fireEvents, infra.cfg)
+	h := NewGitHubWebhookHandler(infra.workflowRepo, infra.scheduler, infra.fireEvents, infra.cfg, nil)
 
 	body := githubPushBody(t, "tstapler/stapler-squad", "main", "fix the bug")
 	sig := sign("s3cr3t", body)
@@ -162,7 +162,7 @@ func TestGitHubWebhookHandler_should_Return404_When_FeatureFlagDisabled(t *testi
 
 func TestGitHubWebhookHandler_should_Return200AndRecordNoMatch_When_NoWorkflowWatchesRepo(t *testing.T) {
 	infra := newWebhookTestInfra(t)
-	h := NewGitHubWebhookHandler(infra.workflowRepo, infra.scheduler, infra.fireEvents, infra.cfg)
+	h := NewGitHubWebhookHandler(infra.workflowRepo, infra.scheduler, infra.fireEvents, infra.cfg, nil)
 
 	body := githubPushBody(t, "someone/unrelated-repo", "main", "fix the bug")
 
@@ -175,7 +175,7 @@ func TestGitHubWebhookHandler_should_Return200AndRecordNoMatch_When_NoWorkflowWa
 func TestGitHubWebhookHandler_should_Return200AndRecordNoMatch_When_SignatureValidButBranchDoesNotMatch(t *testing.T) {
 	infra := newWebhookTestInfra(t)
 	newGitHubPushWorkflow(t, infra, "gh-push-5", "s3cr3t", "tstapler/stapler-squad", "main", "Review {{.head_commit.message}}")
-	h := NewGitHubWebhookHandler(infra.workflowRepo, infra.scheduler, infra.fireEvents, infra.cfg)
+	h := NewGitHubWebhookHandler(infra.workflowRepo, infra.scheduler, infra.fireEvents, infra.cfg, nil)
 
 	body := githubPushBody(t, "tstapler/stapler-squad", "feature-branch", "wip")
 	sig := sign("s3cr3t", body)
@@ -188,7 +188,7 @@ func TestGitHubWebhookHandler_should_Return200AndRecordNoMatch_When_SignatureVal
 
 func TestGitHubWebhookHandler_should_Return400_When_BodyIsMalformedJSON(t *testing.T) {
 	infra := newWebhookTestInfra(t)
-	h := NewGitHubWebhookHandler(infra.workflowRepo, infra.scheduler, infra.fireEvents, infra.cfg)
+	h := NewGitHubWebhookHandler(infra.workflowRepo, infra.scheduler, infra.fireEvents, infra.cfg, nil)
 
 	rec := doGitHubWebhookRequest(t, h, []byte("not json"), "delivery-6", "sha256=whatever")
 
@@ -201,7 +201,7 @@ func TestGitHubWebhookHandler_should_Return400_When_BodyIsMalformedJSON(t *testi
 func TestGitHubWebhookHandler_should_NotFireTwice_When_DeliveryIsReplayed(t *testing.T) {
 	infra := newWebhookTestInfra(t)
 	newGitHubPushWorkflow(t, infra, "gh-push-7", "s3cr3t", "tstapler/stapler-squad", "main", "Review {{.head_commit.message}}")
-	h := NewGitHubWebhookHandler(infra.workflowRepo, infra.scheduler, infra.fireEvents, infra.cfg)
+	h := NewGitHubWebhookHandler(infra.workflowRepo, infra.scheduler, infra.fireEvents, infra.cfg, nil)
 
 	body := githubPushBody(t, "tstapler/stapler-squad", "main", "fix the bug")
 	sig := sign("s3cr3t", body)
@@ -222,7 +222,7 @@ func TestGitHubWebhookHandler_should_NotFireTwice_When_DeliveryIsReplayed(t *tes
 func TestGitHubWebhookHandler_should_FireExactlyOnce_When_ConcurrentRequestsWithSameDeliveryIDRace(t *testing.T) {
 	infra := newWebhookTestInfra(t)
 	newGitHubPushWorkflow(t, infra, "gh-push-8", "s3cr3t", "tstapler/stapler-squad", "main", "Review {{.head_commit.message}}")
-	h := NewGitHubWebhookHandler(infra.workflowRepo, infra.scheduler, infra.fireEvents, infra.cfg)
+	h := NewGitHubWebhookHandler(infra.workflowRepo, infra.scheduler, infra.fireEvents, infra.cfg, nil)
 
 	body := githubPushBody(t, "tstapler/stapler-squad", "main", "fix the bug")
 	sig := sign("s3cr3t", body)

@@ -28,6 +28,44 @@ const blockApprovalOnCIFailureFlagName = "review:block-approval-on-ci-failure"
 // where it's read.
 const workspacePeersNudgeFlagName = "session:workspace-peers-nudge"
 
+// handoffSummaryFlagName is the generic-registry name for the
+// restart-with-handoff-summary feature, so the frontend can discover
+// HandoffSummaryConfig.Enabled up front (via GetFeatureFlags) instead of only
+// finding out on the first TriggerHandoffSummary call's
+// Code.FailedPrecondition (see HandoffSummaryService.TriggerHandoffSummary's
+// identical EnabledOrDefault() check). Shared with HandoffSummaryFeatureController
+// below so the flag name can't drift between where it's declared and where it's
+// wired.
+const handoffSummaryFlagName = "handoff-summary"
+
+// HandoffSummaryFeatureController is a read-only FeatureController for
+// handoffSummaryFlagName: IsEnabled defers to config.HandoffSummaryConfig's
+// EnabledOrDefault, the same real source of truth
+// HandoffSummaryService.TriggerHandoffSummary already gates on. The generic
+// feature-flags map (config.json's top-level feature_flags key) is
+// deliberately NOT the source of truth here -- config.json's own
+// handoff_summary.enabled key is -- so this flag is exposed for GetFeatureFlags
+// visibility only. Enable/Disable both refuse: this flag's real setting has
+// no in-process runtime toggle for UpdateFeatureFlag to drive, and letting the
+// call silently "succeed" while IsEnabled stays keyed to a different config
+// field would make GetFeatureFlags lie about the effect of an
+// UpdateFeatureFlag call that just apparently succeeded. Exported (unlike
+// this file's other flag machinery) because server/dependencies.go, not this
+// package, is where every other SetFeatureController call is wired.
+type HandoffSummaryFeatureController struct{}
+
+func (HandoffSummaryFeatureController) Enable(context.Context) error {
+	return fmt.Errorf("%q is read-only via this API: set handoff_summary.enabled in config.json directly", handoffSummaryFlagName)
+}
+
+func (HandoffSummaryFeatureController) Disable() error {
+	return fmt.Errorf("%q is read-only via this API: set handoff_summary.enabled in config.json directly", handoffSummaryFlagName)
+}
+
+func (HandoffSummaryFeatureController) IsEnabled() bool {
+	return config.LoadConfig().HandoffSummary.EnabledOrDefault()
+}
+
 // terminalResyncCorrelationIDFlagName is shared between knownFeatureFlags below and
 // handleCurrentPaneRequest's resync_id echo (connectrpc_websocket.go) so the flag name
 // can't drift between where it's declared and where it's read.
@@ -76,9 +114,15 @@ func workspacePeersBlockFor(ctx context.Context, storage *session.Storage, repoP
 
 // knownFeatureFlags is the authoritative list of feature flags exposed via the RPC API.
 // Moved here from session_service.go (ADR-001: single-concern cluster gets its own file).
+// defaultValue is what GetFeatureFlags (below) reports, and what the flag's real call
+// site should resolve to via GetFeatureFlagWithDefault, when the flag has never been
+// explicitly persisted — Go's zero value (false) for any entry that omits the field, so
+// only a flag graduating to "on by default" (like terminalResyncExecGateFastLaneFlagName)
+// needs to set it.
 var knownFeatureFlags = []struct {
-	name        string
-	description string
+	name         string
+	description  string
+	defaultValue bool
 }{
 	{
 		name:        "backlog",
@@ -109,6 +153,10 @@ var knownFeatureFlags = []struct {
 		description: "Auto-inject an 'Other Active Sessions In This Workspace' nudge into every new session's initial prompt. Off by default — use the list_workspace_peers MCP tool on demand instead. Default: off.",
 	},
 	{
+		name:        handoffSummaryFlagName,
+		description: "Restart-with-summary: generate an AI handoff summary and restart into a fresh session. Read-only here -- the real toggle is config.json's handoff_summary.enabled key. Default: on.",
+	},
+	{
 		name:        terminalResyncVisibilityScopeFlagName,
 		description: "Scope terminal resync-on-visibility-change to only the terminal instance actually in the foreground, instead of every mounted terminal. Applies to newly-focused terminals only — already-open tabs need a reload to pick up the change. Default: off.",
 	},
@@ -121,8 +169,9 @@ var knownFeatureFlags = []struct {
 		description: "Skip the stale-dimension slow path for backgrounded terminals during resync, avoiding unnecessary pane-size recalculation for terminals not currently visible. Not live-updated on already-open tabs. Default: off.",
 	},
 	{
-		name:        terminalResyncExecGateFastLaneFlagName,
-		description: "Route resync's tmux subprocess calls through a dedicated fast-lane slot pool (see TmuxExecGateConfig.ResyncFastLaneSlots) instead of contending with other tmux exec traffic for the shared gate. Default: off.",
+		name:         terminalResyncExecGateFastLaneFlagName,
+		description:  "Route resync's tmux subprocess calls through a dedicated fast-lane slot pool (see TmuxExecGateConfig.ResyncFastLaneSlots) instead of contending with other tmux exec traffic for the shared gate. Default: on (2026-08-25) — without it, a resync-triggered resize's sequential subprocess calls can exceed the client's 4s stall watchdog under exec-gate contention, forcing an unnecessary disconnect+reconnect. Persist an explicit false to opt back out.",
+		defaultValue: true,
 	},
 	{
 		name:        terminalResyncStaggerFlagName,
@@ -136,6 +185,20 @@ var knownFeatureFlags = []struct {
 		name:        terminalResyncBatchingFlagName,
 		description: "Batch multiple terminals' resync requests into a single round trip instead of issuing one request per terminal. Default: off.",
 	},
+}
+
+// featureFlagDefault looks up name's defaultValue in knownFeatureFlags — the single
+// source of truth both GetFeatureFlags (the registry listing) and a flag's own call
+// site (e.g. currentResyncOptions' UseFastLane) resolve against, so the two can never
+// drift on what "default" means for a given flag. Returns false for an unregistered
+// name, matching GetFeatureFlag's own "absent means false" convention.
+func featureFlagDefault(name string) bool {
+	for _, kf := range knownFeatureFlags {
+		if kf.name == name {
+			return kf.defaultValue
+		}
+	}
+	return false
 }
 
 // FeatureFlagService handles GetFeatureFlags and UpdateFeatureFlag RPCs.
@@ -196,10 +259,7 @@ func (f *FeatureFlagService) GetFeatureFlags(
 
 	flags := make([]*sessionv1.FeatureFlag, 0, len(knownFeatureFlags))
 	for _, kf := range knownFeatureFlags {
-		enabled := false
-		if cfg.FeatureFlags != nil {
-			enabled = cfg.FeatureFlags[kf.name]
-		}
+		enabled := cfg.GetFeatureFlagWithDefault(kf.name, kf.defaultValue)
 		// If a controller is wired, its live state is the source of truth.
 		if ctrl, ok := f.featureControllers[kf.name]; ok {
 			enabled = ctrl.IsEnabled()

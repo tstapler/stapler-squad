@@ -830,6 +830,11 @@ func hookApprovalURL() string {
 func InjectHookConfig(rootDir, sessionTitle string) error {
 	claudeDir := filepath.Join(rootDir, ".claude")
 	settingsPath := filepath.Join(claudeDir, "settings.local.json")
+	// Serializes the read-merge-write sequence below against InjectHooksConfig and
+	// RemoveHooksConfig, which independently read-modify-write the same settingsPath —
+	// see settingsFileLocks' doc comment in mcp_injector.go for the lost-update hazard
+	// this closes.
+	defer lockSettingsPath(settingsPath)()
 
 	url := hookApprovalURL()
 	// Desired hook entry for this session.
@@ -857,17 +862,19 @@ func InjectHookConfig(rootDir, sessionTitle string) error {
 		return nil
 	}
 
-	if err := os.MkdirAll(claudeDir, 0o755); err != nil {
-		return fmt.Errorf("create .claude dir: %w", err)
+	// Re-parse out back into a raw map so this shares writeSettingsAtomic's
+	// unique-tmp-filename write with hook_injector.go's settings.local.json
+	// writers, instead of the fixed settingsPath+".tmp" name this used to write via a
+	// direct os.WriteFile: two concurrent writers of the same rootDir's settings.local.json
+	// (e.g. this and InjectHooksConfig racing on session creation) could
+	// clobber each other's temp file mid-write and rename in a corrupt result. See
+	// writeSettingsAtomic's doc comment for the identical hazard it already fixes.
+	raw := map[string]json.RawMessage{}
+	if err := json.Unmarshal(out, &raw); err != nil {
+		return fmt.Errorf("re-parse merged settings: %w", err)
 	}
-	// Write atomically via temp file to avoid partial writes corrupting the file.
-	tmpPath := settingsPath + ".tmp"
-	if err := os.WriteFile(tmpPath, out, 0o644); err != nil {
-		return fmt.Errorf("write temp %s: %w", tmpPath, err)
-	}
-	if err := os.Rename(tmpPath, settingsPath); err != nil {
-		os.Remove(tmpPath)
-		return fmt.Errorf("rename %s: %w", tmpPath, err)
+	if err := writeSettingsAtomic(settingsPath, claudeDir, raw); err != nil {
+		return err
 	}
 	log.Info("[InjectHookConfig] wrote hook config", "path", settingsPath, "session", sessionTitle)
 	return nil

@@ -25,7 +25,7 @@ const slackTestMessageText = "stapler-squad test message — if you can see this
 // TestSlackWebhook RPCs. Delegated to from SessionService exactly like
 // DefaultsService/CallbackConfigService — a config-backed handler with no
 // second implementation, so a concrete type per
-// .claude/rules/interface-pollution-checklist.md.
+// the `interface-pollution-checklist` skill.
 type SlackConfigService struct {
 	slackNotifier *SlackNotifier
 }

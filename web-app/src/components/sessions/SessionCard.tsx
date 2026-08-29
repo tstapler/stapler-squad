@@ -5,6 +5,7 @@ import { useState, useRef, memo } from "react";
 import { Session, SessionStatus, SubStatus, ReviewItem, InstanceType, RateLimitState, CheckpointProto, DetectedStatus } from "@/gen/session/v1/types_pb";
 import { Tooltip } from "../ui/Tooltip";
 import { ReviewQueueBadge } from "./ReviewQueueBadge";
+import { RevivedContextBadge } from "./RevivedContextBadge";
 import { StatusBadge } from "./StatusBadge";
 import { SubStatusChip } from "./SubStatusChip";
 import { GitHubBadge } from "@/components/shared/GitHubBadge";
@@ -148,7 +149,9 @@ const IS_DEBUG_MODE =
   typeof window !== "undefined" &&
   new URLSearchParams(window.location.search).get("debug") === "1";
 
-interface SessionCardProps {
+// Exported so BoardCard (SessionBoard.tsx's per-card wrapper) can declare an identical
+// callback surface without duplicating this list.
+export interface SessionCardProps {
   session: Session;
   onClick?: () => void;
   onOpenInNewPane?: () => void;
@@ -166,7 +169,7 @@ interface SessionCardProps {
   onSetRateLimitEnabled?: (sessionId: string, enabled: boolean) => void;
   onToggleAutonomousMode?: (sessionId: string, enabled: boolean) => void;
   onToggleAutoApprove?: (sessionId: string, enabled: boolean) => void;
-  onSteerAutonomousSession?: (sessionId: string, message: string) => void;
+  onSteerAutonomousSession?: (sessionId: string, message: string) => Promise<boolean> | void;
   onClearConversationState?: (sessionId: string) => Promise<boolean>;
   onHibernate?: () => void;
   onResumeFromHibernation?: () => void;
@@ -632,6 +635,7 @@ function SessionCardInner({
               (session.subStatus === SubStatus.UNSPECIFIED || session.subStatus === SubStatus.IDLE) && (
               <StatusBadge detectedStatus={detectedStatus} context={detectedContext} />
             )}
+            <RevivedContextBadge session={session} />
             {/* Sub-status chip from the proto sub_status field.
                 ACTIVE covers legacy RUNNING (same wire value via allow_alias).
                 Cast to number to bypass TS's duplicate-value narrowing for allow_alias enums. */}

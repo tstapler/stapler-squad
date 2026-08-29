@@ -277,12 +277,32 @@ func WriteBacklogContextFile(item *BacklogItemData, priorSessions []ItemSessionS
 	content := sb.String()
 
 	destPath := filepath.Join(worktreePath, ".backlog-context.md")
-	tmpPath := destPath + ".tmp"
 
-	if err := os.WriteFile(tmpPath, []byte(content), 0o644); err != nil {
-		return fmt.Errorf("WriteBacklogContextFile: failed to write tmp file: %w", err)
+	// Unique tmp name (not destPath+".tmp"): this is called on every spawn AND re-attach
+	// for the same worktreePath (see doc comment above), so two concurrent callers writing
+	// the same fixed name could interleave writes and rename a torn/corrupt file into place.
+	// Mirrors config.go's saveConfigLocked fix for the identical hazard.
+	tmpFile, err := os.CreateTemp(worktreePath, ".backlog-context.md.*.tmp")
+	if err != nil {
+		return fmt.Errorf("WriteBacklogContextFile: failed to create tmp file: %w", err)
+	}
+	tmpPath := tmpFile.Name()
+	_, writeErr := tmpFile.Write([]byte(content))
+	closeErr := tmpFile.Close()
+	if writeErr != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("WriteBacklogContextFile: failed to write tmp file: %w", writeErr)
+	}
+	if closeErr != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("WriteBacklogContextFile: failed to close tmp file: %w", closeErr)
+	}
+	if err := os.Chmod(tmpPath, 0o644); err != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("WriteBacklogContextFile: failed to chmod tmp file: %w", err)
 	}
 	if err := os.Rename(tmpPath, destPath); err != nil {
+		_ = os.Remove(tmpPath)
 		return fmt.Errorf("WriteBacklogContextFile: failed to rename tmp to dest: %w", err)
 	}
 	return nil

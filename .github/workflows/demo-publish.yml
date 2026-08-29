@@ -1,18 +1,43 @@
 name: Publish Demo GIFs
 
-# Runs after PRs merge to main. Records demo flows and commits the resulting
-# GIFs to docs/demos/ so they stay current in the default branch.
-# paths-ignore prevents this from re-triggering on its own [skip ci] commit.
+# Manually dispatched. Records the curated feature-demo specs (same
+# FEATURE_SPECS set as e2e-video.yml), sharded 2-way, and publishes the
+# resulting GIFs as assets on a rolling "demo-gifs-latest" GitHub Release —
+# not committed to docs/demos/ in git history.
+#
+# Previously committed GIFs straight into docs/demos/ on main. Multi-MB
+# binary GIFs don't delta-compress between re-recordings, so 16 runs of
+# this workflow left ~15.6GB of dead blob history behind (docs/demos/ is
+# empty in the current tree — every byte of that was pure clone-time cost
+# for every future `git clone`/`fetch-depth: 0` on this repo, forever).
+# Release assets are durable and get a stable download URL
+# (https://github.com/<repo>/releases/download/demo-gifs-latest/<name>.gif)
+# without touching git history at all. Note nothing in this repo's docs
+# currently links to a docs/demos/ path (checked via grep before this
+# change), so there was nothing to migrate.
 
 on:
   workflow_dispatch:
 
+# Feature specs recorded — mirrors e2e-video.yml's curated set (excludes
+# terminal-flickering.spec.ts, accessibility.spec.ts, smoke.spec.ts).
+env:
+  FEATURE_SPECS: >-
+    demo.spec.ts
+    review-queue.spec.ts
+    session-lifecycle.spec.ts
+    history-search.spec.ts
+    workspace-management.spec.ts
+
 jobs:
-  publish-demos:
-    name: Record and Publish Demo GIFs
+  record-demos:
+    name: Record Demo Flows (shard ${{ matrix.shard }}/2)
     runs-on: ubuntu-22.04
-    permissions:
-      contents: write
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
 
     steps:
       - uses: actions/checkout@v4
@@ -20,45 +45,43 @@ jobs:
           lfs: true
           submodules: true
 
-      # go.mod's `replace github.com/tstapler/tymux/clients/go => ../tymux/clients/go`
-      # (Epic 2.1, stapler-squad-integration) is a relative local path — Go's
-      # module-graph resolution fails for ANY package if it doesn't exist on disk, so
-      # this checkout must land before "Build binary" (`go build`) below.
-      # actions/checkout's `path` input is validated to stay under $GITHUB_WORKSPACE
-      # (it refuses to write outside it, even to the runner's own parent "_work"
-      # dir) — so a true sibling checkout can't go through actions/checkout at
-      # all. Plain `git clone` has no such restriction; tstapler/tymux is public
-      # so this needs no auth.
-      - name: Checkout tymux (sibling, for go.mod replace directive)
-        shell: bash
-        run: git clone --depth 1 --branch main https://github.com/tstapler/tymux.git ../tymux
-
       - name: Set up Go
-        uses: actions/setup-go@v4
+        uses: actions/setup-go@v5
         with:
-          go-version: '1.23'
+          go-version-file: 'go.mod'
           cache: true
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+        with:
+          version: 10.27.0
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '20'
+          cache: 'pnpm'
+          cache-dependency-path: tests/e2e/pnpm-lock.yaml
 
       - name: Generate protos and build web UI
         uses: ./.github/actions/prepare
-        with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build binary
         run: go build -o stapler-squad .
 
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('tests/e2e/pnpm-lock.yaml') }}
+
       - name: Install Playwright dependencies
         run: |
           cd tests/e2e
-          npm install
+          pnpm install --frozen-lockfile
           npx playwright install chromium --with-deps
 
-      - name: Record demo flows
+      - name: Record demo flows (shard ${{ matrix.shard }}/2)
         env:
           RECORD_FEATURES: 'true'
           TEST_SERVER_URL: http://localhost:8543
@@ -80,7 +103,9 @@ jobs:
           done
 
           cd tests/e2e
-          npx playwright test --reporter=list || true
+          npx playwright test ${{ env.FEATURE_SPECS }} \
+            --shard=${{ matrix.shard }}/2 \
+            --reporter=list || true
 
           kill $SERVER_PID 2>/dev/null || true
           rm -rf "$DEMO_DIR"
@@ -125,17 +150,51 @@ jobs:
           done
           echo "names=${NAMES%,}" >> $GITHUB_OUTPUT
           if [ -z "$NAMES" ]; then
-            echo "::warning::No GIFs were produced — WebM artifacts are still available"
+            echo "::warning::No GIFs were produced in shard ${{ matrix.shard }} — WebM artifacts are still available"
           fi
 
-      - name: Commit GIFs to docs/demos
+      - name: Upload GIFs (shard ${{ matrix.shard }})
         if: steps.convert-gifs.outputs.names != ''
+        uses: actions/upload-artifact@v7
+        with:
+          name: demo-gifs-shard${{ matrix.shard }}
+          path: /tmp/demo-gifs/*.gif
+          retention-days: 5
+
+  publish-gifs:
+    name: Publish GIFs to demo-gifs-latest release
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: record-demos
+    if: always()
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download demo GIFs from both shards
+        uses: actions/download-artifact@v4
+        with:
+          pattern: demo-gifs-shard*
+          path: /tmp/demo-gifs
+          merge-multiple: true
+
+      - name: Upload GIFs as demo-gifs-latest release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git config user.name "github-actions[bot]"
-          mkdir -p docs/demos
-          cp /tmp/demo-gifs/*.gif docs/demos/
-          git add docs/demos/
-          git diff --cached --quiet && echo "No GIF changes to commit" && exit 0
-          git commit -m "chore(demos): update E2E feature GIFs [skip ci]"
-          for i in 1 2 3; do git pull --rebase --autostash && git push && break || sleep 5; done
+          shopt -s nullglob
+          gifs=(/tmp/demo-gifs/*.gif)
+          if [ ${#gifs[@]} -eq 0 ]; then
+            echo "No GIFs downloaded from either shard — nothing to publish"
+            exit 0
+          fi
+          if ! gh release view demo-gifs-latest --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            gh release create demo-gifs-latest \
+              --repo "${{ github.repository }}" \
+              --title "Demo GIFs (latest)" \
+              --notes "Auto-updated by demo-publish.yml. Not a versioned release -- assets here are overwritten on every run; link to https://github.com/${{ github.repository }}/releases/download/demo-gifs-latest/<name>.gif for a stable URL to the current GIF." \
+              --latest=false
+          fi
+          # --clobber replaces an asset with the same filename in place, so
+          # the download URL for a given demo name stays stable across runs.
+          gh release upload demo-gifs-latest "${gifs[@]}" --repo "${{ github.repository }}" --clobber

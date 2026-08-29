@@ -35,7 +35,7 @@ const maxSlackErrorBodyLen = 256
 
 // SlackNotifier formats Block Kit messages and delivers them to a configured
 // Slack Incoming Webhook. It is the single implementation of this concern in
-// the codebase (no interface — see .claude/rules/interface-pollution-checklist.md).
+// the codebase (no interface — see the `interface-pollution-checklist` skill).
 // All Notify*/MaybeNotify* methods are non-blocking: they dispatch the actual
 // HTTP POST on an internal goroutine (dispatchAsync) and return immediately.
 type SlackNotifier struct {

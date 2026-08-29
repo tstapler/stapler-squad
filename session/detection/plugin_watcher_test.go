@@ -130,12 +130,17 @@ func TestPluginWatcher_should_collapseBurstIntoOneReload_When_sameFileWrittenRep
 
 	before := rebuildCount.Load()
 
+	// Writes are issued back-to-back with no inter-write sleep: the burst
+	// must land inside a single pluginReloadDebounce (200ms) window, and
+	// under CI scheduler contention even a 5ms-per-iteration sleep (50ms
+	// total) could erode enough of that margin to split the burst across
+	// two debounce windows and produce a spurious second rebuild — see the
+	// FAIL in https://github.com/tstapler/stapler-squad/actions/runs/32808236831.
 	path := filepath.Join(dir, "my-agent.toml")
 	for i := 0; i < 10; i++ {
 		if err := os.WriteFile(path, []byte(validPluginTOML("my-agent", []string{"my-agent"})), 0o644); err != nil {
 			t.Fatalf("iteration %d: failed to write plugin file: %v", i, err)
 		}
-		time.Sleep(5 * time.Millisecond) // stay well inside pluginReloadDebounce (200ms)
 	}
 
 	// Wait for the debounced reload to land, then hold steady for a further

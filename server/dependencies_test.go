@@ -191,6 +191,58 @@ func TestBuildRuntimeDeps_should_ShareSinglePipelineEngineInstance_When_Construc
 	}
 }
 
+// TestBuildRuntimeDeps_should_PopulateBacklogLifecycleListener_When_ServerBoots is the
+// dependency-wiring regression test for pr-event-webhooks Task 3.1.1: before this
+// feature, backlogLifecycleListener was only a local variable inside BuildRuntimeDeps,
+// unreachable from server.go's webhook-route-registration block — NewGitHubWebhookHandler
+// had no way to be given a real PRFixEventRouter. deps.BacklogLifecycleListener must be
+// the exact same instance SetPRFixSpawner/SetAutoReopener etc. were wired onto, not a
+// second, independently-constructed listener.
+func TestBuildRuntimeDeps_should_PopulateBacklogLifecycleListener_When_ServerBoots(t *testing.T) {
+	deps, err := BuildDependencies()
+	if err != nil {
+		t.Fatalf("BuildDependencies: %v", err)
+	}
+
+	if deps.BacklogLifecycleListener == nil {
+		t.Fatal("expected BacklogLifecycleListener to be wired")
+	}
+	if deps.SessionService == nil {
+		t.Fatal("expected SessionService to be wired")
+	}
+	listener := deps.SessionService.GetBacklogLifecycleListener()
+	if listener == nil {
+		t.Fatal("expected BacklogLifecycleListener to be wired onto SessionService")
+	}
+	if deps.BacklogLifecycleListener != listener {
+		t.Fatalf("expected deps.BacklogLifecycleListener to be the identical instance wired onto SessionService, got distinct pointers %p vs %p", deps.BacklogLifecycleListener, listener)
+	}
+}
+
+// TestBuildRuntimeDeps_should_WireSessionSteererAndSessionStopper_When_ServerBoots
+// is the pr-fix-steering Task 1.2.2d wiring-assertion test (pre-mortem.md P2 #5):
+// SetSessionSteerer/SetSessionStopper's wiring in BuildRuntimeDeps (one new line
+// each) had no test that would fail if either call were ever omitted or
+// misplaced — both fields' nil-safe degrade paths are, by design, externally
+// indistinguishable from today's shipped behavior, so a forgotten wiring line
+// compiles, passes make ci, and ships the feature silently inert. This is the
+// first such test for either setter — there is no prior instance to extend.
+func TestBuildRuntimeDeps_should_WireSessionSteererAndSessionStopper_When_ServerBoots(t *testing.T) {
+	deps, err := BuildDependencies()
+	if err != nil {
+		t.Fatalf("BuildDependencies: %v", err)
+	}
+	if deps.BacklogService.GetSessionSteerer() == nil {
+		t.Fatal("expected SessionSteerer to be wired onto BacklogService")
+	}
+	if deps.BacklogService.GetSessionSteerer() != deps.SessionService {
+		t.Fatal("expected the wired SessionSteerer to be the same *SessionService instance BuildDependencies constructs")
+	}
+	if deps.BacklogService.GetSessionStopper() == nil {
+		t.Fatal("expected SessionStopper to be wired onto BacklogService")
+	}
+}
+
 // TestBuildRuntimeDeps_should_CallReconcileSynchronouslyAtBoot_When_BacklogFlagDisabledByDefault
 // verifies QuotaGate.Enable is only ever reached via quotaGate.Reconcile's own
 // decision path (Story 2.2.2), not a bare unconditional call — exercised against

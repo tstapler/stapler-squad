@@ -40,6 +40,10 @@ const (
 	AttrReviewQueueSize     = "review_queue.size"
 	AttrReviewQueuePriority = "review_queue.priority"
 	AttrReviewQueueReason   = "review_queue.reason"
+
+	// Subprocess attributes (executor/safeexec instrumentation)
+	AttrSubprocessCommand  = "subprocess.command"
+	AttrSubprocessArgCount = "subprocess.arg_count"
 )
 
 // SessionIDAttr creates an attribute for session ID
@@ -105,4 +109,14 @@ func DBRowCountAttr(count int) attribute.KeyValue {
 // ReviewQueueSizeAttr creates an attribute for review queue size
 func ReviewQueueSizeAttr(size int) attribute.KeyValue {
 	return attribute.Int(AttrReviewQueueSize, size)
+}
+
+// SubprocessCommandAttr creates an attribute for the subprocess command name
+func SubprocessCommandAttr(cmd string) attribute.KeyValue {
+	return attribute.String(AttrSubprocessCommand, cmd)
+}
+
+// SubprocessArgCountAttr creates an attribute for the subprocess argument count
+func SubprocessArgCountAttr(n int) attribute.KeyValue {
+	return attribute.Int(AttrSubprocessArgCount, n)
 }
