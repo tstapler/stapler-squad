@@ -136,13 +136,14 @@ func TestForkClaudeConversation_ReturnsDifferentUUIDs(t *testing.T) {
 	assert.NotEqual(t, uuid1, uuid2, "each fork should produce a unique UUID")
 }
 
-// TestForkClaudeConversation_ConcurrentCallsToSameDstDir_NeverProduceCorruptOutput is a
-// regression test for ForkClaudeConversation's tmp-file write, now os.CreateTemp-based
-// (previously dstPath+".tmp"). dstPath is already unique per call via a fresh UUID, so
-// this wasn't concretely racy, but the concurrent-writer shape is exercised here anyway
-// to prove no two calls interfere via dstDir, mirroring config_test.go's
-// TestSaveConfig_ConcurrentWritesToSamePath pattern.
-func TestForkClaudeConversation_ConcurrentCallsToSameDstDir_NeverProduceCorruptOutput(t *testing.T) {
+// TestForkClaudeConversation_ConcurrentCalls_ProduceValidOutput is a concurrent-load
+// sanity check, not a regression test for the tmp-filename write race: dstPath is
+// already unique per call via a fresh UUID generated before any I/O, so concurrent
+// calls here never share a destination path and this cannot fail under the old
+// dstPath+".tmp" fixed-suffix code either. It verifies that concurrent calls with
+// distinct destinations each still produce valid, non-corrupt output, mirroring
+// config_test.go's TestSaveConfig_ConcurrentWritesToSamePath pattern in shape only.
+func TestForkClaudeConversation_ConcurrentCalls_ProduceValidOutput(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	srcPath := filepath.Join(dir, "conv.jsonl")

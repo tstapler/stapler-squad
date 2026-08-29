@@ -23,8 +23,15 @@ type WorkspaceMeta struct {
 
 // writeWorkspaceMeta writes metadata for a workspace to disk.
 // Uses atomic temp-file + rename to avoid partial writes.
-// Errors are silently ignored — this is best-effort metadata.
+// Errors are silently ignored — this is best-effort metadata. See
+// writeWorkspaceMetaErr for the error-returning core (used directly by tests
+// that need to assert on failure).
 func writeWorkspaceMeta(configDir, cwd, wsType string) {
+	_ = writeWorkspaceMetaErr(configDir, cwd, wsType)
+}
+
+// writeWorkspaceMetaErr is writeWorkspaceMeta's error-returning core.
+func writeWorkspaceMetaErr(configDir, cwd, wsType string) error {
 	name := filepath.Base(cwd)
 	if wsType == "shared" || cwd == "" {
 		name = "Default"
@@ -41,12 +48,12 @@ func writeWorkspaceMeta(configDir, cwd, wsType string) {
 	}
 
 	if err := os.MkdirAll(configDir, 0755); err != nil {
-		return
+		return err
 	}
 
 	data, err := json.MarshalIndent(meta, "", "  ")
 	if err != nil {
-		return
+		return err
 	}
 
 	// Atomic write via unique temp file + rename (not a fixed ".tmp" suffix): two
@@ -55,20 +62,27 @@ func writeWorkspaceMeta(configDir, cwd, wsType string) {
 	// fix for the identical hazard.
 	tmpFile, err := os.CreateTemp(configDir, workspaceMetaFileName+".*.tmp")
 	if err != nil {
-		return
+		return err
 	}
 	tmpPath := tmpFile.Name()
 	_, writeErr := tmpFile.Write(data)
 	closeErr := tmpFile.Close()
-	if writeErr != nil || closeErr != nil {
+	if writeErr != nil {
 		_ = os.Remove(tmpPath)
-		return
+		return writeErr
+	}
+	if closeErr != nil {
+		_ = os.Remove(tmpPath)
+		return closeErr
 	}
 	if err := os.Chmod(tmpPath, 0644); err != nil {
 		_ = os.Remove(tmpPath)
-		return
+		return err
 	}
-	_ = os.Rename(tmpPath, filepath.Join(configDir, workspaceMetaFileName))
+	if err := os.Rename(tmpPath, filepath.Join(configDir, workspaceMetaFileName)); err != nil {
+		return err
+	}
+	return nil
 }
 
 // ReadWorkspaceMeta reads workspace metadata from the given config directory.
