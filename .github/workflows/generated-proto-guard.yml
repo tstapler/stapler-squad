@@ -28,17 +28,21 @@ jobs:
     # tolerated. Backstop only — a timeout here is a real failure.
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
+      # No checkout: this repo's .git pack data is ~16GB (see build.yml's
+      # detect-changes job for the root cause), so a `fetch-depth: 0`
+      # full-history clone just to list changed file paths cost minutes here
+      # for no reason -- this guard only ever needed a filename list. The
+      # compare API gives the same info with no clone at all. --diff-filter
+      # ACMR (added/copied/modified/renamed, excludes deletes) maps to the
+      # compare API's per-file `status` field, checked below instead.
       - name: Check PR diff for committed generated protobuf files
         env:
+          GH_TOKEN: ${{ github.token }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
-          CHANGED=$(git diff --name-only --diff-filter=ACMR "$BASE_SHA...$HEAD_SHA" || true)
+          CHANGED=$(gh api "repos/${{ github.repository }}/compare/$BASE_SHA...$HEAD_SHA" --paginate --jq '.files[] | select(.status != "removed") | .filename')
           if [ -z "$CHANGED" ]; then
             echo "No added/modified files detected"
             exit 0

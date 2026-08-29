@@ -12,6 +12,7 @@ on:
     branches: [main]
 
 permissions:
+  contents: read
   pull-requests: write
 
 # Guards the delete-on-clean comment mutation against out-of-order runs. This
@@ -42,14 +43,22 @@ jobs:
     outputs:
       record_features: ${{ steps.detect.outputs.record_features }}
     steps:
+      # Default (shallow) checkout: detect-feature-changes.sh greps the
+      # *content* of changed files, which a normal HEAD checkout already
+      # provides -- it doesn't need history at all once CHANGED_FILES is
+      # supplied below, so the `fetch-depth: 0` full-history clone this job
+      # used to do (this repo's .git pack is ~16GB, see build.yml's
+      # detect-changes job) was pure waste.
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
       - name: Detect feature-marked file changes
         id: detect
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set +e
+          CHANGED_FILES=$(gh api "repos/${{ github.repository }}/compare/${{ github.event.pull_request.base.sha }}...${{ github.event.pull_request.head.sha }}" --paginate --jq '.files[].filename')
+          export CHANGED_FILES
           ./tools/ci/detect-feature-changes.sh origin/main
           EXIT_CODE=$?
           if [ $EXIT_CODE -eq 0 ]; then
