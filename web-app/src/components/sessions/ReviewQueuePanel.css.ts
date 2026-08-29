@@ -166,6 +166,12 @@ export const item = style({
       boxShadow: "0 2px 8px rgba(0, 0, 0, 0.1)",
     },
   },
+  "@media": {
+    "(max-width: 640px)": {
+      flexDirection: "column",
+      gap: 0,
+    },
+  },
 });
 
 export const itemClickable = style({
@@ -186,6 +192,19 @@ export const itemActions = style({
   gap: "6px",
   padding: `12px 12px 12px 0`,
   borderLeft: `1px solid ${vars.color.borderColor}`,
+  "@media": {
+    "(max-width: 640px)": {
+      flexDirection: "row",
+      flexWrap: "wrap",
+      justifyContent: "flex-start",
+      width: "100%",
+      padding: "0 16px 16px",
+      borderLeft: "none",
+      borderTop: `1px solid ${vars.color.borderColor}`,
+      marginTop: "8px",
+      paddingTop: "12px",
+    },
+  },
 });
 
 export const itemHeader = style({
@@ -471,6 +490,7 @@ export const savedIndicator = style({
 export const filterToggleRow = style({
   display: "flex",
   alignItems: "center",
+  flexWrap: "wrap",
   gap: vars.space["2"],
   marginBottom: vars.space["3"],
 });
