@@ -205,6 +205,68 @@ describe("useReviewQueue — acknowledgeSession", () => {
   });
 });
 
+describe("useReviewQueue — acknowledgeSessions (bulk)", () => {
+  beforeEach(() => {
+    mockAcknowledgeSession.mockReset();
+    mockGetReviewQueue.mockReset();
+    mockWatchReviewQueue.mockReset();
+
+    mockGetReviewQueue.mockResolvedValue({ reviewQueue: makeQueue([]) });
+    mockWatchReviewQueue.mockReturnValue({
+      [Symbol.asyncIterator]: () => ({ next: () => new Promise(() => {}) }),
+    });
+  });
+
+  it("removes all items from the store synchronously, then resolves with an empty failed list on full success", async () => {
+    const store = makeTestStore();
+    store.dispatch(setReviewQueue(makeQueue([makeItem("s1"), makeItem("s2"), makeItem("s3")]) as never));
+    mockAcknowledgeSession.mockResolvedValue({});
+
+    const { result } = renderHook(() => useReviewQueue({ useWebSocketPush: false, autoRefresh: false }), {
+      wrapper: makeWrapper(store),
+    });
+
+    let bulkResult!: { failed: string[] };
+    act(() => {
+      void result.current.acknowledgeSessions(["s1", "s2"]).then((r) => { bulkResult = r; });
+    });
+
+    // Optimistic removal happens synchronously for every id passed in.
+    expect(selectReviewQueueItems(store.getState() as never).map((i) => i.sessionId)).toEqual(["s3"]);
+
+    await waitFor(() => expect(bulkResult).toBeDefined());
+    expect(bulkResult.failed).toEqual([]);
+    expect(mockAcknowledgeSession).toHaveBeenCalledTimes(2);
+  });
+
+  it("collects only the failed ids and calls refresh() to reconcile when some acknowledgements fail", async () => {
+    const store = makeTestStore();
+    store.dispatch(setReviewQueue(makeQueue([makeItem("s1"), makeItem("s2")]) as never));
+
+    // s1 succeeds, s2 fails
+    mockAcknowledgeSession.mockImplementation((req: { id: string }) =>
+      req.id === "s2" ? Promise.reject(new Error("boom")) : Promise.resolve({})
+    );
+    // Rollback refresh restores s2 (acknowledge never actually landed server-side)
+    mockGetReviewQueue.mockResolvedValue({ reviewQueue: makeQueue([makeItem("s2")]) });
+
+    const { result } = renderHook(() => useReviewQueue({ useWebSocketPush: false, autoRefresh: false }), {
+      wrapper: makeWrapper(store),
+    });
+
+    let bulkResult!: { failed: string[] };
+    await act(async () => {
+      bulkResult = await result.current.acknowledgeSessions(["s1", "s2"]);
+    });
+
+    expect(bulkResult.failed).toEqual(["s2"]);
+    // refresh() was called to reconcile the optimistic removal of the failed item
+    await waitFor(() => {
+      expect(selectReviewQueueItems(store.getState() as never).map((i) => i.sessionId)).toEqual(["s2"]);
+    });
+  });
+});
+
 // ── Reconnect retry loop ───────────────────────────────────────────────────
 
 describe("useReviewQueue — WebSocket reconnect retry loop", () => {

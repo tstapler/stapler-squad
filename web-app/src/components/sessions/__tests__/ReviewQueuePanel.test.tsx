@@ -29,6 +29,7 @@ afterEach(() => {
 
 const mockRefresh = jest.fn();
 const mockAcknowledge = jest.fn().mockResolvedValue(undefined);
+const mockAcknowledgeSessions = jest.fn().mockResolvedValue({ failed: [] });
 
 // Overrides the global next/navigation stub (jest.setup.js) so URL-persisted filter
 // state (useFilterState) can be seeded and asserted on.
@@ -183,6 +184,7 @@ function makeContextValue(items: ReviewItem[] = []) {
     oldestAgeSeconds: 0,
     refresh: mockRefresh,
     acknowledgeSession: mockAcknowledge,
+    acknowledgeSessions: mockAcknowledgeSessions,
   };
 }
 
@@ -255,10 +257,10 @@ describe("ReviewQueuePanel — bulk skip", () => {
     fireEvent.click(screen.getByTestId("skip-all-visible"));
 
     expect(confirmSpy).toHaveBeenCalled();
-    await waitFor(() => expect(mockAcknowledge).not.toHaveBeenCalled());
+    await waitFor(() => expect(mockAcknowledgeSessions).not.toHaveBeenCalled());
   });
 
-  it("acknowledges every visible non-approval item, skipping approval requests, once confirmed", async () => {
+  it("acknowledges every visible non-approval item in a single bulk call, skipping approval requests, once confirmed", async () => {
     confirmSpy.mockReturnValue(true);
     const items = [
       makeReviewItem({ sessionId: "s1" }),
@@ -270,10 +272,69 @@ describe("ReviewQueuePanel — bulk skip", () => {
     renderPanel();
     fireEvent.click(screen.getByTestId("skip-all-visible"));
 
-    await waitFor(() => expect(mockAcknowledge).toHaveBeenCalledTimes(2));
-    expect(mockAcknowledge).toHaveBeenCalledWith("s1");
-    expect(mockAcknowledge).toHaveBeenCalledWith("s2");
-    expect(mockAcknowledge).not.toHaveBeenCalledWith("s3");
+    await waitFor(() => expect(mockAcknowledgeSessions).toHaveBeenCalledTimes(1));
+    expect(mockAcknowledgeSessions).toHaveBeenCalledWith(["s1", "s2"]);
+  });
+
+  it("calls acknowledgeSessions once with the full id array and only reports success for ids not in the returned failed list", async () => {
+    confirmSpy.mockReturnValue(true);
+    mockAcknowledgeSessions.mockResolvedValueOnce({ failed: ["s2"] });
+    const items = [
+      makeReviewItem({ sessionId: "s1" }),
+      makeReviewItem({ sessionId: "s2" }),
+    ];
+    const mockOnAcknowledged = jest.fn();
+    mockUseReviewQueueContext.mockReturnValue(makeContextValue(items));
+
+    renderPanel({ onAcknowledged: mockOnAcknowledged });
+    fireEvent.click(screen.getByTestId("skip-all-visible"));
+
+    await waitFor(() => expect(mockAcknowledgeSessions).toHaveBeenCalledTimes(1));
+    expect(mockAcknowledgeSessions).toHaveBeenCalledWith(["s1", "s2"]);
+    await waitFor(() => expect(mockOnAcknowledged).toHaveBeenCalledWith("s1"));
+    expect(mockOnAcknowledged).not.toHaveBeenCalledWith("s2");
+  });
+
+  it("routes through the onSkipSession prop override instead of acknowledgeSessions when provided", async () => {
+    confirmSpy.mockReturnValue(true);
+    const mockOnSkipSession = jest.fn().mockResolvedValue(undefined);
+    const items = [
+      makeReviewItem({ sessionId: "s1" }),
+      makeReviewItem({ sessionId: "s2" }),
+    ];
+    mockUseReviewQueueContext.mockReturnValue(makeContextValue(items));
+
+    renderPanel({ onSkipSession: mockOnSkipSession });
+    fireEvent.click(screen.getByTestId("skip-all-visible"));
+
+    await waitFor(() => expect(mockOnSkipSession).toHaveBeenCalledTimes(2));
+    expect(mockOnSkipSession).toHaveBeenCalledWith("s1");
+    expect(mockOnSkipSession).toHaveBeenCalledWith("s2");
+    expect(mockAcknowledgeSessions).not.toHaveBeenCalled();
+  });
+
+  it("pluralizes the aria-label correctly for a single skippable item", () => {
+    mockUseReviewQueueContext.mockReturnValue(
+      makeContextValue([makeReviewItem({ sessionId: "s1" })])
+    );
+
+    renderPanel();
+
+    expect(screen.getByTestId("skip-all-visible")).toHaveAccessibleName("Skip all 1 visible item");
+  });
+
+  it("hides the Branch row when branch is empty and shows it with the correct text when set", () => {
+    const withoutBranch = makeReviewItem({ sessionId: "s1", branch: "" });
+    mockUseReviewQueueContext.mockReturnValue(makeContextValue([withoutBranch]));
+    const { unmount } = renderPanel();
+    expect(screen.queryByText("Branch:")).not.toBeInTheDocument();
+    unmount();
+
+    const withBranch = makeReviewItem({ sessionId: "s2", branch: "feat/x" });
+    mockUseReviewQueueContext.mockReturnValue(makeContextValue([withBranch]));
+    renderPanel();
+    expect(screen.getByText("Branch:")).toBeInTheDocument();
+    expect(screen.getByText("feat/x")).toBeInTheDocument();
   });
 });
 
