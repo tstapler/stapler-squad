@@ -130,17 +130,23 @@ from scratch or re-file a duplicate item.
     change needed for this criterion.
 - `VersionControlSection` is confirmed to render as the fallback once the live PR is closed.
   - *Given* `BacklogItemDetail.tsx` line 177 (`useVcsStatus` returns `null` once the work
-    session's worktree is cleaned up) and line 181's ternary, *When* `vcsStatus` is falsy and
-    `shipStatus` is non-null, *Then* `vcsWidgetData = fromShipStatus(shipStatus)` and
-    `VersionControlSection` (rendered from `BacklogItemDetail` with that `widgetData`) renders
-    the historical/shipped branch — already true today, no code change needed.
+    session's worktree is cleaned up) and the fallback ternary at line **182**
+    (`vcsStatus ? fromSessionVcs(...) : shipStatus ? fromShipStatus(...) : null` — corrected
+    per adversarial review; the explanatory comment sits at lines 178–180, not 180–181 as
+    originally cited), *When* `vcsStatus` is falsy and `shipStatus` is non-null, *Then*
+    `vcsWidgetData = fromShipStatus(shipStatus)` and `VersionControlSection` (rendered from
+    `BacklogItemDetail` with that `widgetData`) renders the historical/shipped branch — already
+    true today, no code change needed, and already proven by the pre-existing test
+    `VcsStatusNullAndShipStatusShipped` at `BacklogItemDetail.test.tsx:331` (adversarial review
+    minor finding — cite the existing test directly rather than only inferring from source).
 **Files**: `project_plans/shipped-snapshot-display/implementation/plan.md` (this document — the
 citations above constitute the write-up; no source file is touched in this story).
 
 ##### Task 1.1.1a: No-op — citations already captured above (~2 min)
-- Confirm the two Given-When-Then citations above resolve to the exact lines quoted (already
-  verified while writing this plan: `web-app/src/lib/vcs/adapters.ts:148-150,163-182`,
-  `web-app/src/components/backlog/BacklogItemDetail.tsx:177,180-181`).
+- Confirm the two Given-When-Then citations above resolve to the exact lines quoted (corrected
+  after adversarial review: `web-app/src/lib/vcs/adapters.ts:148-150,163-182`,
+  `web-app/src/components/backlog/BacklogItemDetail.tsx:177-182`, and the pre-existing proof test
+  `BacklogItemDetail.test.tsx:331`).
 - No file changes. This task exists only to make Acceptance Criteria 1–2 traceable to a task in
   this plan, per the template's requirement that every criterion map to a task.
 - Files: none.
@@ -160,18 +166,24 @@ props in the future, **I want** a test that fails if the shipped-snapshot wiring
 that** `adapters.test.ts` and `VcsWidgetGithubRow.test.tsx` passing in isolation can't mask a
 broken connection between them.
 **Acceptance Criteria**:
-- A shipped item with a captured snapshot (`shippedCheckConclusion: "success"`,
+- A shipped item with a captured snapshot (`prUrl` set, `shippedCheckConclusion: "success"`,
   `shippedApprovedCount: 2`, `shippedChangesReqCount: 1`, one `ShippedFileStat`,
-  `snapshotCaptureFailed: false`) displays the CI conclusion text and both review-count
-  aria-labels once the panel is expanded.
+  `snapshotAt` set, `snapshotCaptureFailed: false`) displays the CI conclusion text and both
+  review-count aria-labels once the panel is expanded.
   - *Given* `useVcsStatusMock` returns `{ data: null, ... }` (live worktree gone) and
     `useBacklogItemShipStatusMock` returns `{ data: create(BacklogItemShipStatusSchema, {
     shipped: true, shippedVia: "pr", branchName: "feature/foo", branchExists: false,
+    prUrl: "https://github.com/tstapler/stapler-squad/pull/999",
     shippedCheckConclusion: "success", shippedApprovedCount: 2, shippedChangesReqCount: 1,
     fileStats: [create(ShippedFileStatSchema, { path: "server/foo.go", status:
     FileStatus.FILE_STATUS_MODIFIED, additions: 5, deletions: 1 })], snapshotAt:
     timestampFromDate(new Date("2026-07-17T10:00:00Z")), snapshotCaptureFailed: false }),
-    loading: false, refetch: jest.fn() }`, *When* `BacklogItemDetail` renders and the
+    loading: false, refetch: jest.fn() }` — **`prUrl` and `snapshotAt` are both required, not
+    optional**: `fromShipStatusGithub` (`adapters.ts:136`) returns `null` if `!status.prUrl`,
+    and `fromShipStatus` (`adapters.ts:164,174`) gates the whole `github` object behind
+    `hasSnapshot = status.snapshotAt != null` — omitting either makes `github: null` and the
+    CI/review assertions fail immediately (adversarial review concern; the plan's own cited
+    precedent `adapters.test.ts:132-160` sets both), *When* `BacklogItemDetail` renders and the
     "Version Control" collapsible is expanded (`fireEvent.click(screen.getByTestId(
     "collapsible-header-version-control"))`, matching line 356's existing pattern), *Then*
     `screen.getByText("CI: success")`, `screen.getByLabelText("2 approved")`, and
@@ -248,8 +260,9 @@ merged on an untested claim (per this repo's evidence-and-claims standard).
 **Acceptance Criteria**:
 - `docs/registry/features/frontend/ui/backlog-item-detail.json`'s `testIds` array includes both
   new test names and `lastModified` is updated.
-  - *Given* the file's current `testIds` array (28 entries, `lastModified:
-    "2026-07-24T00:00:00Z"`), *When* Task 3.1.1a runs, *Then* the array has 30 entries including
+  - *Given* the file's current `testIds` array (**19 entries**, verified by direct count —
+    corrected from an earlier miscount of 28 caught in adversarial review), *When* Task 3.1.1a
+    runs, *Then* the array has **21 entries** including
     `BacklogItemDetail_should_RenderShippedCiConclusionAndReviewCounts_When_ShipStatusHasSnapshot`
     and
     `BacklogItemDetail_should_RenderCaptureFailedCopy_When_ShipStatusSnapshotCaptureFailedTrue`,
@@ -260,6 +273,13 @@ merged on an untested claim (per this repo's evidence-and-claims standard).
 - Add the two new test name strings to the `testIds` array in
   `docs/registry/features/frontend/ui/backlog-item-detail.json`, and update `"lastModified"` to
   `"2026-08-29T00:00:00Z"`.
+- **Pre-existing gap, backfill in the same edit** (adversarial review concern): the three
+  existing `describe("BacklogItemDetail — Story 2.2.3: VcsWidget wiring")` tests —
+  `BacklogItemDetail_should_RenderShippedPillWithViewDiff..._When_...` (line 331),
+  `..._PreferLiveVcsStatusOverShipStatus..._When_...` (line 365), and
+  `..._OpenFileBrowserModal..._When_...` (line 403) — are not yet in this file's `testIds` at
+  all. Add all three alongside the two new IDs (5 additions total, 19→24 entries) rather than
+  compounding the drift by only adding the new ones.
 - Do not touch `docs/registry/features/frontend/vcs-widget.json` — its existing `testIds`
   (lines 33–36) already correctly reflect `VcsWidgetGithubRow.test.tsx`'s coverage; see Corrected
   Finding above.
@@ -295,9 +315,21 @@ isn't re-opened or re-filed by someone who doesn't have this session's context.
 **Files**: none (backlog item is managed via the backlog service, not a repo file).
 
 ##### Task 3.2.1a: Write the closure annotation and close the item (~4 min)
-- Using the backlog item tooling available in this environment (e.g. the `backlog:*` skills or
-  the equivalent MCP/CLI surface for item `9832b7e3-edf8-469f-af79-e128604904f6`), write a
-  comment/annotation containing: the commit SHA (`aedd80648`), the corrected call chain listed
-  above, and a pointer to `project_plans/shipped-snapshot-display/implementation/plan.md` plus the
-  two new test names from Epic 2.1. Then close/resolve the item as already-implemented.
+- **BLOCKER guard (adversarial review)**: whichever session's `backlog:done-N`/`backlog:fail-N`/
+  `backlog:review`/`backlog:status` skills are bound in *this* worktree may be pre-parameterized
+  for a **different** backlog item ID than `9832b7e3-edf8-469f-af79-e128604904f6` — do not invoke
+  a bound `backlog:*` skill on faith. Before writing anything, confirm the exact item ID the
+  chosen tool call targets (e.g. `get_backlog_item(item_id="9832b7e3-edf8-469f-af79-e128604904f6")`
+  to read it back first), and pass `item_id=9832b7e3-edf8-469f-af79-e128604904f6` **explicitly**
+  to whatever `report_progress`/closure tool call is made — never rely on a skill's implicit
+  bound default. Silently closing/annotating the wrong item corrupts unrelated backlog state with
+  no error signal.
+- Using the backlog item tooling available in this environment, with the item ID confirmed as
+  above, write a comment/annotation containing: the commit SHA (`aedd80648`), the corrected call
+  chain listed above, and a pointer to `project_plans/shipped-snapshot-display/implementation/plan.md`
+  plus the two new test names from Epic 2.1. Also note (adversarial review minor finding):
+  `useBacklogItemShipStatus.ts` swallows RPC failures into `data: null`, indistinguishable from
+  "item never shipped" — flag this in the annotation so a future triager doesn't mistake a
+  transient RPC failure for "nothing to display" and re-file this same item a third time. Then
+  close/resolve the item as already-implemented.
 - Files: none.
