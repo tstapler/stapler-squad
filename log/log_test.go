@@ -96,6 +96,18 @@ func TestGetConfigDir(t *testing.T) {
 			t.Errorf("expected GetConfigDir to create %s via MkdirAll", testDir)
 		}
 	})
+
+	for _, bad := range []string{"../escape", "a/../../etc", "nested/segment", `back\slash`} {
+		t.Run("rejects instance ID "+bad, func(t *testing.T) {
+			withCleanEnv(t)
+			t.Setenv("HOME", t.TempDir())
+			os.Setenv("STAPLER_SQUAD_INSTANCE", bad)
+
+			if _, err := GetConfigDir(); err == nil {
+				t.Errorf("expected error for STAPLER_SQUAD_INSTANCE=%q, got nil", bad)
+			}
+		})
+	}
 }
 
 func TestGetLogDir(t *testing.T) {
@@ -151,6 +163,7 @@ func TestGetLogDir(t *testing.T) {
 
 func TestGetLogDir_NamedInstance_CreatesNestedInstanceLogsDir(t *testing.T) {
 	withCleanEnv(t)
+	t.Setenv("HOME", t.TempDir()) // GetLogDir's MkdirAll must not land in the real ~/.stapler-squad
 	os.Setenv("STAPLER_SQUAD_INSTANCE", "alpha")
 
 	dir, err := GetLogDir(&LogConfig{LogsEnabled: true})
@@ -210,6 +223,7 @@ func TestGetLogFilePath(t *testing.T) {
 
 func TestGetLogFilePath_NamedInstance_DivergesFromDefaultInstance(t *testing.T) {
 	withCleanEnv(t)
+	t.Setenv("HOME", t.TempDir()) // GetLogFilePath's underlying MkdirAll must not land in the real ~/.stapler-squad
 
 	cfg := &LogConfig{LogsEnabled: true}
 
