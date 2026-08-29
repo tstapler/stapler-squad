@@ -72,6 +72,21 @@ After fix: `go test -short -timeout=20m ./session/` run repeatedly (~20x)
 with zero `TestCommitImportExternalSession_..._StartAndSuspendSucceed` goleak
 failures.
 
+## Investigation note — 2026-08-28 (backlog item c0e88be9, flaky-tests-under-CI-load)
+
+`TestCommitImportExternalSession_PersistsAndLinksAndSuspends_When_StartAndSuspendSucceed`
+is one of the 4 tests originally named in backlog item c0e88be9. Confirmed **not
+subsumed** by `a32a01d5d`/#548's `trackCleanup` fix: that fix joins `CreateSession`'s own
+start goroutine in `server/services`, not the `pkg/events.(*EventBus).Subscribe`
+forwarder goroutine leaked somewhere in the `session` package's own test suite — different
+package, different goroutine, different owning code path.
+
+1 full `TMUX_BIN=$(which tmux) go test -race -timeout=20m ./session` run today (171.4s,
+no `-short`, no `-count`) did not reproduce this leak — consistent with, not proof against,
+this bug's own documented ~1-in-7-full-runs rate (0/1 here is within that noise). Remains
+open; still out of scope for c0e88be9 per this doc's own filed exception (needs a
+package-wide `EventBus.Subscribe`-caller cleanup audit).
+
 ## Related
 
 - `.claude/rules/fix-flaky-tests-dont-defer.md` — filed per this rule's

@@ -61,12 +61,14 @@ func ForkScrollback(srcPath string, upToSeq uint64, dstPath string) error {
 		reader = dec
 	}
 
-	// Write to a temp file alongside dst, then atomically rename.
-	tmpPath := dstPath + ".tmp"
-	tmpFile, err := os.OpenFile(tmpPath, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0600)
+	// Write to a temp file alongside dst, then atomically rename. Unique temp name
+	// (not dstPath+".tmp") to match the write-tmp-then-rename shape used by the
+	// other atomic writers in this codebase (config.go's saveConfigLocked, etc.).
+	tmpFile, err := os.CreateTemp(filepath.Dir(dstPath), filepath.Base(dstPath)+".*.tmp")
 	if err != nil {
 		return fmt.Errorf("fork scrollback: create tmp: %w", err)
 	}
+	tmpPath := tmpFile.Name()
 
 	enc := json.NewEncoder(tmpFile)
 	scanner := bufio.NewScanner(reader)

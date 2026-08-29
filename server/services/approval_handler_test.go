@@ -7,7 +7,10 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -596,4 +599,37 @@ func TestBroadcastApprovalNotification_NoPanic_When_SlackNotifierNil(t *testing.
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for baseline eventBus notification")
 	}
+}
+
+// TestInjectHookConfig_ConcurrentWritesToSameRootDir_NeverProduceCorruptJSON is a
+// regression test for the fixed-tmp-filename write race InjectHookConfig used to have
+// (writing settingsPath+".tmp" directly via os.WriteFile instead of the hardened
+// writeSettingsAtomic) — concurrent InjectHookConfig calls against the same rootDir
+// must never interleave writes and rename a torn/corrupt settings.local.json into
+// place. Mirrors config_test.go's TestSaveConfig_ConcurrentWritesToSamePath.
+func TestInjectHookConfig_ConcurrentWritesToSameRootDir_NeverProduceCorruptJSON(t *testing.T) {
+	rootDir := t.TempDir()
+
+	const n = 20
+	var wg sync.WaitGroup
+	errCh := make(chan error, n)
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			errCh <- InjectHookConfig(rootDir, fmt.Sprintf("session-%d", i))
+		}(i)
+	}
+	wg.Wait()
+	close(errCh)
+
+	for err := range errCh {
+		require.NoError(t, err, "InjectHookConfig must not error under concurrent callers targeting the same rootDir")
+	}
+
+	data, err := os.ReadFile(filepath.Join(rootDir, ".claude", "settings.local.json"))
+	require.NoError(t, err, "settings.local.json must exist after concurrent InjectHookConfig calls")
+
+	var parsed map[string]json.RawMessage
+	require.NoError(t, json.Unmarshal(data, &parsed), "settings.local.json must be valid JSON after concurrent writes, not torn/corrupt: %s", data)
 }

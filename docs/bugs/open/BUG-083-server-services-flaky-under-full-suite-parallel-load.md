@@ -46,6 +46,22 @@ None of the four touch a file in PR #628's diff (`server/services/github_webhook
 
 **Sharper root-cause candidate found for `TestHandleCurrentPaneRequest_should_OnlyRouteFastLane_When_OnlyExecGateFastLaneFlagOn`**: it (and its `setOnlyResyncFlag`/`setAllTerminalResyncFlags` sibling helpers, `connectrpc_websocket_test.go:2205-2230`) mutate feature flags via `config.LoadConfig().SetFeatureFlag(name, ...)` — a **process-wide singleton**, not a per-test fixture — and restore them via `t.Cleanup`, not synchronously. Any other test in the same package running under `t.Parallel()` that also reads/writes the same global config's feature flags (or a different flag, if `SetFeatureFlag`'s map isn't independently locked per key) can observe a flag value flip mid-assertion. This would explain both this bug's original "different tests fail each time" symptom (any parallel test touching the shared config singleton is a candidate, not just these two) and this occurrence's repeat of the *same* two tests across 3 consecutive job attempts (same package's scheduler tends to interleave the same subset of tests similarly run to run). Not fixed here — confirming this requires tracing every `t.Parallel()` test in `server/services` against `config.LoadConfig()` usage, which is its own investigation, out of scope for PR #628.
 
+## Investigation note — 2026-08-28 (backlog item c0e88be9, flaky-tests-under-CI-load)
+
+Confirmed **not subsumed** by `a32a01d5d`/#548's `trackCleanup` fix: that fix joins
+`CreateSession`'s own fire-and-forget start goroutine at `Shutdown`/`DeleteSession` —
+none of this bug's named tests (`TestListWorktrees_EmptyPath`,
+`TestWatchBacklogItems_...`, the PR #628 recurrence's four) exercise that code path, and
+the leading hypothesis here (a process-wide `config.LoadConfig()` feature-flag singleton
+raced across `t.Parallel()` tests) is a different mechanism entirely.
+
+3 consecutive full `TMUX_BIN=$(which tmux) go test -race -timeout=20m ./server/services/...`
+runs today (233.959s, 228.817s, 217.899s) did not reproduce this bug — consistent with its
+existing "intermittent, coverage/CI-load-dependent" characterization rather than evidence
+it's fixed. Remains open; still out of scope for c0e88be9 (requires the
+`config.LoadConfig()`-vs-`t.Parallel()` audit this doc's own "Sharper root-cause candidate"
+section already flags as its own investigation).
+
 ## Related
 
 - Filed per `.claude/rules/fix-flaky-tests-dont-defer.md` — found during BUG-051 remediation validation but out of scope to fix in that change (different package, different root cause per-test, would expand that change's blast radius).
