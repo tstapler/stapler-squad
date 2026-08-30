@@ -209,10 +209,10 @@ describe('Flow Control Stress Tests', () => {
       // write completion in one synchronous flush. jest.advanceTimersByTimeAsync
       // (the async variant) inserts a real microtask-queue flush per fired timer —
       // with thousands of same-tick timers that alone can take seconds of real
-      // wall-clock time (measured directly; see adversarial-review.md), which is
-      // exactly the kind of compounding-under-contention cost AC1 exists to remove.
-      // The synchronous advanceTimersByTime() fires them all with no per-timer
-      // real-clock dependency, since none of these callbacks are themselves async.
+      // wall-clock time (measured directly; see plan.md's "Correction" section),
+      // which is exactly the kind of compounding-under-contention cost AC1 exists
+      // to remove. The synchronous advanceTimersByTime() fires them all with no
+      // per-timer real-clock dependency, since none of these callbacks are async.
       for (let i = 0; i < frames; i++) {
         const percent = Math.floor((i / frames) * 100);
         const bar = '='.repeat(Math.floor(percent / 2)) + ' '.repeat(50 - Math.floor(percent / 2));
@@ -232,7 +232,10 @@ describe('Flow Control Stress Tests', () => {
       // flush covering every queued 1ms write-completion timer is equivalent.
       jest.advanceTimersByTime(10);
 
-      expect(completed).toBeGreaterThan(0);
+      // Exact count, not toBeGreaterThan(0): the flush is now fully deterministic
+      // (every queued write's callback fires), so an incomplete flush regression
+      // — e.g. only 1 of 100 timers firing — must fail this assertion.
+      expect(completed).toBe(frames);
       expect(parser.getBuffered()).toBe(''); // No partial sequences left
     }, 10000);
 
@@ -258,7 +261,7 @@ describe('Flow Control Stress Tests', () => {
 
       jest.advanceTimersByTime(10);
 
-      expect(completed).toBeGreaterThan(0);
+      expect(completed).toBe(iterations);
     }, 10000);
   });
 
@@ -310,7 +313,7 @@ describe('Flow Control Stress Tests', () => {
       // Flush every queued 1ms write-completion timer in one shot.
       jest.advanceTimersByTime(10);
 
-      expect(completed).toBeGreaterThan(0);
+      expect(completed).toBe(iterations);
       const metrics = tracker.getMetrics();
       expect(metrics.watermark).toBeLessThan(50000); // Should drain well
     }, 15000);
