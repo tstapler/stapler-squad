@@ -109,7 +109,14 @@ func resolveRetryPolicy(global config.RetryPolicyConfig, override *config.RetryP
 		resolved.MaxAttempts = override.MaxAttempts
 	}
 	if len(override.RetryOn) > 0 {
-		resolved.RetryOn = override.RetryOnOrDefault()
+		// FilteredRetryOn (not RetryOnOrDefault) so an override where every
+		// entry is an unknown/typo'd reason falls back to the already-resolved
+		// global value above, rather than RetryOnOrDefault's own empty-result
+		// fallback silently widening a deliberately narrow override to all
+		// three reasons.
+		if filtered := override.FilteredRetryOn(); len(filtered) > 0 {
+			resolved.RetryOn = filtered
+		}
 	}
 	if override.InitialDelaySeconds > 0 {
 		resolved.InitialDelay = time.Duration(override.InitialDelaySeconds) * time.Second

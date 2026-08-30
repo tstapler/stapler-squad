@@ -232,15 +232,18 @@ func (c RetryPolicyConfig) MaxDelaySecondsOrDefault() int {
 	return c.MaxDelaySeconds
 }
 
-// RetryOnOrDefault returns RetryOn, defaulting to all three known reasons
-// when empty, and dropping (with a logged warning, not a hard error) any
-// entry that isn't one of the three known reasons — a config typo like
-// "crashd" would otherwise silently produce a policy that never matches that
-// reason, with no error/warning/UI signal anywhere that the entry is being
-// ignored.
-func (c RetryPolicyConfig) RetryOnOrDefault() []string {
+// FilteredRetryOn returns RetryOn with any entry that isn't one of the three
+// known reasons dropped (with a logged warning, not a hard error) — a config
+// typo like "crashd" would otherwise silently produce a policy that never
+// matches that reason, with no error/warning/UI signal anywhere that the
+// entry is being ignored. Unlike RetryOnOrDefault, this does NOT widen an
+// empty result back to all three reasons: session.resolveRetryPolicy's
+// per-session override path needs the filtered result on its own, so an
+// override where every entry is a typo falls back to the already-resolved
+// *global* value instead of silently widening back to all three reasons.
+func (c RetryPolicyConfig) FilteredRetryOn() []string {
 	if len(c.RetryOn) == 0 {
-		return append([]string(nil), validRetryOnReasons...)
+		return nil
 	}
 	filtered := make([]string, 0, len(c.RetryOn))
 	for _, reason := range c.RetryOn {
@@ -250,10 +253,17 @@ func (c RetryPolicyConfig) RetryOnOrDefault() []string {
 			log.Warn("RetryPolicyConfig.RetryOn: ignoring unknown retry reason", "reason", reason)
 		}
 	}
-	if len(filtered) == 0 {
-		return append([]string(nil), validRetryOnReasons...)
-	}
 	return filtered
+}
+
+// RetryOnOrDefault returns RetryOn, defaulting to all three known reasons
+// when empty or when every entry is unknown. See FilteredRetryOn for the
+// filtering-without-fallback variant used by the override-resolution path.
+func (c RetryPolicyConfig) RetryOnOrDefault() []string {
+	if filtered := c.FilteredRetryOn(); len(filtered) > 0 {
+		return filtered
+	}
+	return append([]string(nil), validRetryOnReasons...)
 }
 
 // BackoffOrWarn validates Backoff at config-load time: if it's set and isn't

@@ -207,6 +207,12 @@ func (h *SessionHealthChecker) checkSingleSession(instance *Instance) HealthChec
 	case Crashed:
 		result.Actions = append(result.Actions, "Skipped (session has crashed, awaiting resume)")
 		return result
+	case PermanentlyFailed:
+		// Skip permanently-failed instances too — PermanentlyFailed is a terminal
+		// state (ADR-001) requiring an explicit Retry now, not silent
+		// health-checker recovery.
+		result.Actions = append(result.Actions, "Skipped (session is permanently failed, awaiting retry)")
+		return result
 	}
 
 	// LoadInstances() (session/storage.go) always deserializes with

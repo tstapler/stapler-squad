@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/google/uuid"
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
@@ -356,8 +357,16 @@ func tailFile(path string, n int) ([]string, error) {
 
 // WriteSnapshot serializes the snapshot to a JSON file in the given directory.
 // Returns the absolute path of the written file.
+//
+// The filename includes a short random suffix in addition to the
+// second-granularity timestamp: two CreateDebugSnapshot calls landing within
+// the same second (plausible for an automated snapshot racing a manual one,
+// or two concurrent test calls) would otherwise collide on the same path,
+// letting one call's os.WriteFile truncate the file out from under another
+// call's concurrent write/stat -- observed as an intermittent
+// zero-byte/corrupt snapshot rather than a distinct file per call.
 func WriteSnapshot(snap *DebugSnapshot, dir string) (string, error) {
-	filename := fmt.Sprintf("debug-snapshot-%s.json", snap.Timestamp.Format("20060102-150405"))
+	filename := fmt.Sprintf("debug-snapshot-%s-%s.json", snap.Timestamp.Format("20060102-150405"), uuid.NewString()[:8])
 	path := filepath.Join(dir, filename)
 
 	data, err := json.MarshalIndent(snap, "", "  ")

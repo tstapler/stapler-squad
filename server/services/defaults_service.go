@@ -144,6 +144,10 @@ func (d *DefaultsService) UpdateGlobalDefaults(
 			RetryOn:             rp.RetryOn,
 			StaleTriggersRetry:  &staleTriggers,
 		}
+		// Normalize immediately, matching LoadConfigFromPath's boot-time
+		// normalization -- otherwise an invalid value persists un-normalized in
+		// config.json until the next restart.
+		cfg.RetryPolicy.Backoff = cfg.RetryPolicy.BackoffOrWarn()
 	}
 	if req.Msg.EnvVars != nil {
 		cfg.SessionDefaults.EnvVars = req.Msg.EnvVars

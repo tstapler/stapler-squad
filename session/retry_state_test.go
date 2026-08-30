@@ -12,13 +12,23 @@ import (
 // fakeLivenessProcessManager reuses stuckDialogProcessManager's full
 // ProcessManager implementation (session_driver_test.go) and overrides only
 // IsAlive, so classifyFailureReason's tests don't need to hand-roll every
-// interface method.
+// interface method. restoreDelay, when set, is slept inside
+// RestoreWithWorkDir() -- see TestRestartForRetry_..._TwoCallersRaceRetryInFlight
+// for why a real concurrency test needs this.
 type fakeLivenessProcessManager struct {
 	stuckDialogProcessManager
-	alive bool
+	alive        bool
+	restoreDelay time.Duration
 }
 
 func (m *fakeLivenessProcessManager) IsAlive() bool { return m.alive }
+
+func (m *fakeLivenessProcessManager) RestoreWithWorkDir(dir string) error {
+	if m.restoreDelay > 0 {
+		time.Sleep(m.restoreDelay)
+	}
+	return m.stuckDialogProcessManager.RestoreWithWorkDir(dir)
+}
 
 func TestBackoffDelay_should_DoubleEachAttempt_When_BelowMaxDelayCap(t *testing.T) {
 	t.Parallel()
@@ -202,6 +212,21 @@ func TestResolveRetryPolicy_should_PreferPerFieldOverride_When_OnlySomeFieldsSet
 	}
 }
 
+func TestResolveRetryPolicy_should_FallBackToGlobal_When_OverrideRetryOnIsAllUnknownReasons(t *testing.T) {
+	t.Parallel()
+	// A narrowed global RetryOn plus an override RetryOn made entirely of
+	// typo'd/unknown reasons must fall back to the resolved *global* value,
+	// not RetryOnOrDefault()'s own empty-after-filter fallback to all three --
+	// that would silently widen a deliberately narrow override.
+	global := config.RetryPolicyConfig{RetryOn: []string{"crashed"}}
+	override := &config.RetryPolicyConfig{RetryOn: []string{"totally-bogus-reason"}}
+
+	got := resolveRetryPolicy(global, override)
+	if len(got.RetryOn) != 1 || got.RetryOn[0] != "crashed" {
+		t.Errorf("RetryOn = %v, want [crashed] (fall back to global, not widen to all three)", got.RetryOn)
+	}
+}
+
 func TestRetryExhausted_should_ReturnTrue_When_AttemptAtOrAboveMax(t *testing.T) {
 	t.Parallel()
 	inst := &Instance{Title: "t"}
@@ -263,12 +288,26 @@ func TestRetryNow_should_ReturnErrRetryInFlight_When_RetryInFlightAlreadyClaimed
 	}
 }
 
+// TestRestartForRetry_should_PreventConcurrentRestart_When_TwoCallersRaceRetryInFlight
+// was flaky under full-package-suite load: restartForRetry's synchronous work
+// (RecoverFromStopped/StopController/Start/pm().RestoreWithWorkDir, all
+// near-instant with this mock) could complete -- including the deferred
+// retryInFlight.Store(false) release -- before the scheduler ever ran the
+// second goroutine's CompareAndSwap, especially when this test's two
+// goroutines are competing for CPU time against dozens of other packages'
+// parallel tests. That isn't a bug in the CAS guard (mutual exclusion is
+// still correctly enforced whenever the two calls actually overlap); it's a
+// test that needs its critical section to have nonzero, real duration to
+// make that overlap reliable regardless of system load. restoreDelay widens
+// the window pm().RestoreWithWorkDir spends holding retryInFlight so the
+// second goroutine's CAS attempt reliably lands while the first still holds
+// it, without relying on scheduler timing.
 func TestRestartForRetry_should_PreventConcurrentRestart_When_TwoCallersRaceRetryInFlight(t *testing.T) {
 	t.Parallel()
 	inst := &Instance{
 		Title:          "t",
 		Status:         Stopped,
-		processManager: &fakeLivenessProcessManager{alive: true},
+		processManager: &fakeLivenessProcessManager{alive: true, restoreDelay: 50 * time.Millisecond},
 	}
 	policy := RetryPolicy{Enabled: true, MaxAttempts: 3, RetryOn: []string{"crashed"}}
 

@@ -266,8 +266,16 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
     setIsRetrying(true);
     setRetryError("");
     try {
-      await onRetryNow?.(session.id);
-      setIsRetryConfirmOpen(false);
+      const success = await onRetryNow?.(session.id);
+      // onRetryNow (useSessionService's retrySession) catches all errors
+      // internally and resolves to false on failure rather than throwing, so
+      // the result must be checked explicitly — only close the dialog on
+      // success, otherwise surface an error instead of silently dismissing it.
+      if (success === false) {
+        setRetryError("Failed to retry session.");
+      } else {
+        setIsRetryConfirmOpen(false);
+      }
     } catch (err) {
       // A concurrent retry already in flight (backend CAS guard) is not a
       // failure — the automated path already has this covered.
