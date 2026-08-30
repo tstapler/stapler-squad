@@ -203,6 +203,14 @@ describe('Flow Control Stress Tests', () => {
       const frames = 100;
       let completed = 0;
 
+      // Run the whole synchronous loop first, then flush every fake-scheduled
+      // write completion in one synchronous flush. jest.advanceTimersByTimeAsync
+      // (the async variant) inserts a real microtask-queue flush per fired timer —
+      // with thousands of same-tick timers that alone can take seconds of real
+      // wall-clock time (measured directly; see adversarial-review.md), which is
+      // exactly the kind of compounding-under-contention cost AC1 exists to remove.
+      // The synchronous advanceTimersByTime() fires them all with no per-timer
+      // real-clock dependency, since none of these callbacks are themselves async.
       for (let i = 0; i < frames; i++) {
         const percent = Math.floor((i / frames) * 100);
         const bar = '='.repeat(Math.floor(percent / 2)) + ' '.repeat(50 - Math.floor(percent / 2));
@@ -212,18 +220,15 @@ describe('Flow Control Stress Tests', () => {
 
         const safeChunk = parser.processChunk(chunk);
         if (safeChunk.length > 0) {
-          const writeDone = new Promise<void>((resolve) => {
-            tracker.write(safeChunk, () => {
-              completed++;
-              resolve();
-            });
+          tracker.write(safeChunk, () => {
+            completed++;
           });
-          await Promise.all([writeDone, jest.advanceTimersByTimeAsync(1)]);
         }
-
-        // Simulate 60fps animation (fake-advanced — assertions don't measure real elapsed time; see Pattern Decisions)
-        await jest.advanceTimersByTimeAsync(16);
       }
+
+      // Assertions don't measure real elapsed time or frame cadence, so a single
+      // flush covering every queued 1ms write-completion timer is equivalent.
+      jest.advanceTimersByTime(10);
 
       expect(completed).toBeGreaterThan(0);
       expect(parser.getBuffered()).toBe(''); // No partial sequences left
@@ -243,15 +248,13 @@ describe('Flow Control Stress Tests', () => {
 
         const safeChunk = parser.processChunk(chunk);
         if (safeChunk.length > 0) {
-          const writeDone = new Promise<void>((resolve) => {
-            tracker.write(safeChunk, () => {
-              completed++;
-              resolve();
-            });
+          tracker.write(safeChunk, () => {
+            completed++;
           });
-          await Promise.all([writeDone, jest.advanceTimersByTimeAsync(1)]);
         }
       }
+
+      jest.advanceTimersByTime(10);
 
       expect(completed).toBeGreaterThan(0);
     }, 10000);
@@ -273,6 +276,9 @@ describe('Flow Control Stress Tests', () => {
       const iterations = 5000;
       let completed = 0;
 
+      // Run the whole synchronous loop first, then flush every fake-scheduled
+      // write completion in one synchronous flush (see the comment on the
+      // sibling test above for why advanceTimersByTime, not the async variant).
       for (let i = 0; i < iterations; i++) {
         let chunk: string;
 
@@ -289,20 +295,14 @@ describe('Flow Control Stress Tests', () => {
 
         const safeChunk = parser.processChunk(chunk);
         if (safeChunk.length > 0) {
-          const writeDone = new Promise<void>((resolve) => {
-            tracker.write(safeChunk, () => {
-              completed++;
-              resolve();
-            });
+          tracker.write(safeChunk, () => {
+            completed++;
           });
-          await Promise.all([writeDone, jest.advanceTimersByTimeAsync(1)]);
-        }
-
-        // Yield occasionally
-        if (i % 100 === 0) {
-          await jest.advanceTimersByTimeAsync(0);
         }
       }
+
+      // Flush every queued 1ms write-completion timer in one shot.
+      jest.advanceTimersByTime(10);
 
       expect(completed).toBeGreaterThan(0);
       const metrics = tracker.getMetrics();
