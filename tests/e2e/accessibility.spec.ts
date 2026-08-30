@@ -19,7 +19,13 @@ import {
   disableBacklogFeatureFlag,
 } from './pages/StuckItemsPage';
 import { BacklogPage } from './pages/BacklogPage';
-import { createBacklogItemDirect, transitionBacklogItemDirect, updateBacklogItemDirect } from './pages/BacklogMutations';
+import {
+  createBacklogItemDirect,
+  transitionBacklogItemDirect,
+  updateBacklogItemDirect,
+  seedWorkItemSessionDirect,
+  seedWorkSessionWithWorktreeDirect,
+} from './pages/BacklogMutations';
 
 const BASE_URL = process.env.TEST_SERVER_URL || 'http://localhost:8544';
 
@@ -335,4 +341,76 @@ test.describe('Accessibility — backlog live updates (WCAG 4.1.3 AA)', () => {
       await page.close();
     }
   });
+
+  // modal-focus-trap AC5: proves Tab wraps within ReviewChangesModal instead
+  // of escaping to the backgrounded page, using the same Tab-loop technique
+  // as the keyboard-reachability test above (lines 266-272) since Axe's
+  // static scan cannot detect a Tab-escape.
+  test('Tab wraps within ReviewChangesModal instead of escaping to the page (modal-focus-trap AC5)', async ({ page, request }) => {
+    const title = `e2e-focus-trap-changes-${Date.now()}`;
+    await seedWorkItemSessionDirect(request, { title, status: 'review' });
+
+    const backlogPage = new BacklogPage(page);
+    await backlogPage.goto();
+    await backlogPage.waitForPageLoad();
+    await backlogPage.openItemDetail(title);
+
+    await page.getByTestId('backlog-review-view-changes').click();
+
+    const dialog = page.getByTestId('review-changes-modal');
+    await expect(dialog).toBeVisible();
+
+    await assertTabWrapsWithinDialog(page, dialog);
+  });
+
+  // BacklogFileBrowserModal, unlike ReviewChangesModal above: react-arborist's
+  // FileTree rewrites its own row tabindex on focus, which breaks a generic
+  // Tab-wrap assertion once focus enters the tree (a separate, pre-existing
+  // bug in FileTree's own focus bookkeeping, not a useFocusTrap regression —
+  // filed as backlog item 4a1f73c4-5558-41f8-9860-8508fb874fcc). This test
+  // only asserts what's in this fix's scope: activation moves focus to the
+  // dialog's first focusable element.
+  test('useFocusTrap moves focus to BacklogFileBrowserModal\'s first focusable element on activation (modal-focus-trap AC5)', async ({ page, request }) => {
+    const title = `e2e-focus-trap-files-${Date.now()}`;
+    await seedWorkSessionWithWorktreeDirect(request, { title, status: 'review' });
+
+    const backlogPage = new BacklogPage(page);
+    await backlogPage.goto();
+    await backlogPage.waitForPageLoad();
+    await backlogPage.openItemDetail(title);
+
+    await page.getByRole('button', { name: 'Browse files in this worktree' }).click();
+
+    const dialog = page.getByTestId('file-browser-modal');
+    await expect(dialog).toBeVisible();
+
+    const terminalLink = page.getByRole('link', { name: /open in terminal/i });
+    await expect(terminalLink).toBeFocused();
+  });
 });
+
+/**
+ * useFocusTrap moves focus to the dialog's first focusable element on
+ * activation (web-app/src/lib/hooks/useFocusTrap.ts) — capture it, then Tab
+ * in a loop and assert every resulting document.activeElement stays inside
+ * the dialog's DOM subtree (a real Tab-escape would land outside it), and
+ * that focus eventually wraps back to that same first element rather than
+ * merely "hasn't escaped yet".
+ */
+async function assertTabWrapsWithinDialog(
+  page: import('@playwright/test').Page,
+  dialog: ReturnType<import('@playwright/test').Page['locator']>
+) {
+  const initial = await page.evaluateHandle(() => document.activeElement);
+  let wrapped = false;
+  for (let i = 0; i < 30; i++) {
+    await page.keyboard.press('Tab');
+    const stillInside = await dialog.evaluate((el) => !!document.activeElement && el.contains(document.activeElement));
+    expect(stillInside, `Tab press #${i + 1} moved focus outside the dialog`).toBe(true);
+    if (await page.evaluate((el) => el === document.activeElement, initial)) {
+      wrapped = true;
+      break;
+    }
+  }
+  expect(wrapped, "Tab never wrapped back to the dialog's first focusable element").toBe(true);
+}

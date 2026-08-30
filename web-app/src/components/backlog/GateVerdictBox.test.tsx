@@ -288,19 +288,17 @@ describe("GateVerdictBox — skip gate", () => {
   // Test: 15 — Focus trap: Tab cycles between Cancel and Confirm only
   // ---------------------------------------------------------------------------
 
-  it("Tab key in confirmation dialog cycles focus between Cancel and Confirm", () => {
+  it("GateVerdictBox_should_wrapFocusToCancelButton_When_TabPressedOnConfirmButton", () => {
     render(<GateVerdictBox {...makeProps({ verdict: "PASS" })} />);
 
     fireEvent.click(screen.getByRole("button", { name: /Skip gate and mark done without review/i }));
 
-    const dialog = screen.getByRole("alertdialog");
     const cancelBtn = screen.getByRole("button", { name: /^Cancel$/i });
     const confirmBtn = screen.getByRole("button", { name: /Confirm — Skip Gate/i });
 
-    // Simulate Tab when focused on the last button (Confirm) — should wrap to Cancel
+    // useFocusTrap listens at the document level, not on the dialog element
     confirmBtn.focus();
-    fireEvent.keyDown(dialog, { key: "Tab", shiftKey: false });
-    // The handler calls e.preventDefault() and focuses first element
+    fireEvent.keyDown(document, { key: "Tab", shiftKey: false });
     expect(cancelBtn).toHaveFocus();
   });
 
@@ -309,14 +307,31 @@ describe("GateVerdictBox — skip gate", () => {
 
     fireEvent.click(screen.getByRole("button", { name: /Skip gate and mark done without review/i }));
 
-    const dialog = screen.getByRole("alertdialog");
     const cancelBtn = screen.getByRole("button", { name: /^Cancel$/i });
     const confirmBtn = screen.getByRole("button", { name: /Confirm — Skip Gate/i });
 
-    // Simulate Shift+Tab when focused on the first button (Cancel) — should wrap to Confirm
     cancelBtn.focus();
-    fireEvent.keyDown(dialog, { key: "Tab", shiftKey: true });
+    fireEvent.keyDown(document, { key: "Tab", shiftKey: true });
     expect(confirmBtn).toHaveFocus();
+  });
+
+  it("GateVerdictBox_should_notThrow_When_EscapeClosesDialogWithTriggerButtonUnmounted", () => {
+    render(<GateVerdictBox {...makeProps({ verdict: "PASS" })} />);
+
+    fireEvent.click(screen.getByRole("button", { name: /Skip gate and mark done without review/i }));
+    // The skip-link trigger button (skipLinkRef) is unmounted while the
+    // dialog is open (see the ternary in GateVerdictBox.tsx). Escape flips
+    // showSkipConfirm back to false, which is useFocusTrap's isActive dep —
+    // its cleanup (triggerEl?.focus()) then runs against that now-null ref
+    // and must no-op rather than throw. Confirming the dialog doesn't
+    // exercise this: handleSkipGateConfirm never sets showSkipConfirm(false)
+    // itself (the parent closes it via a status transition instead), so
+    // useFocusTrap's cleanup never runs on that path within this component.
+    expect(() => {
+      fireEvent.keyDown(screen.getByRole("alertdialog"), { key: "Escape" });
+    }).not.toThrow();
+
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
   });
 });
 

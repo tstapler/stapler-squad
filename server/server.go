@@ -910,7 +910,7 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	if os.Getenv("STAPLER_SQUAD_INSTANCE") == "e2e-local" && deps.Storage != nil {
 		backlogSeedHandler := services.NewBacklogDebugSeedHandler(deps.Storage)
 		backlogSeedHandler.RegisterRoutes(srv.mux)
-		log.Info("Registered backlog debug seed handlers at /api/debug/backlog/seed-stuck, /api/debug/backlog/seed-queued, and /api/debug/backlog/seed-headless-triage-session (e2e-local only)")
+		log.Info("Registered backlog debug seed handlers at /api/debug/backlog/seed-stuck, /api/debug/backlog/seed-queued, /api/debug/backlog/seed-headless-triage-session, /api/debug/backlog/seed-work-item-session, and /api/debug/backlog/seed-work-session-with-worktree (e2e-local only)")
 
 		// Registered for project_plans/backlog-event-driven-updates's Playwright
 		// e2e layer — lets tests mutate a backlog item directly through the

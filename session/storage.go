@@ -547,6 +547,18 @@ func (s *Storage) AddInstance(instance *Instance) error {
 	return nil
 }
 
+// CreateInstanceData persists a plain InstanceData record directly, bypassing
+// Instance/ToInstanceData's actor synchronization entirely.
+//
+// Do not call this for a session that has (or will have) a live *Instance/
+// actor attached — it can race or diverge from that actor's own writes. Only
+// for callers building a DB-only fixture row with no backing tmux process
+// (e.g. e2e debug seed handlers). Use AddInstance for anything with a live
+// Instance.
+func (s *Storage) CreateInstanceData(ctx context.Context, data InstanceData) error {
+	return s.repo.Create(ctx, data)
+}
+
 // UpdateInstance updates an existing instance in storage.
 func (s *Storage) UpdateInstance(instance *Instance) error {
 	return s.repo.Update(context.Background(), instance.ToInstanceData())
