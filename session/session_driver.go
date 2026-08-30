@@ -353,34 +353,8 @@ func runSessionDriverWithPrompt(inst *Instance, allowedPath string, initialPromp
 	sendAnswerKey := func() error { return inst.SendKeys("1\n") }
 
 	for {
-		select {
-		case <-stop:
-			return
-		case <-ticker.C:
-		}
-
-		if time.Now().After(totalDeadline) {
-			return
-		}
-
-		// inst.destroyed is set by Destroy() (session/instance.go). Checking it
-		// here bounds how long this goroutine can outlive its own instance's
-		// teardown to a single driverPollInterval tick, instead of continuing
-		// until totalDeadline and racing subsequent tmux/config calls
-		// (AcquireExecSlot's gateDir/LoadConfig, both keyed off the
-		// process-global STAPLER_SQUAD_TEST_DIR env var) against whatever test
-		// or session happens to be using that env var's value next.
-		if inst.destroyed.Load() {
-			return
-		}
-
-		// GetEffectiveStatus for lifecycle decisions (Paused, Stopped).
-		// GetDetectedStatus for fine-grained terminal-content signals (Idle = readline prompt).
-		st := inst.GetEffectiveStatus()
-		detectedSt := inst.GetDetectedStatus()
-
-		// Paused is always a clean stop for the driver.
-		if st == Paused {
+		st, detectedSt, exit := driverTickGate(inst, stop, ticker, totalDeadline)
+		if exit {
 			return
 		}
 
@@ -394,39 +368,17 @@ func runSessionDriverWithPrompt(inst *Instance, allowedPath string, initialPromp
 		// retry would be re-evaluated on every 2s tick during the backoff
 		// wait, re-appending RetryAttemptRecords and re-incrementing
 		// RetryAttempt every tick instead of once after the intended delay.
-		if pending, elapsed := inst.retryPendingElapsed(time.Now()); pending {
-			if !elapsed {
-				continue
-			}
-			reason := inst.lastRetryFailureReason()
-			prompt := buildRetryContinuationPrompt(inst, reason)
-			if err := restartForRetry(inst, allowedPath, prompt, policy, stop); err != nil {
-				if errors.Is(err, ErrRetryInFlight) {
-					// A racing restart (e.g. a concurrent manual RetryNow) is
-					// already in flight — leave NextRetryAt set and retry on
-					// a later tick rather than dropping this scheduled retry.
-					continue
-				}
-				log.Warn("SessionDriver: automated retry restart failed",
-					"session", inst.Title, "err", err,
-				)
-				return
-			}
-			inst.clearNextRetryAt()
-			// restartForRetry spawned a fresh continuation goroutine on
-			// success; this one's job is done.
+		if cont, ret := handleRetryPendingTick(inst, allowedPath, policy, stop); ret {
 			return
+		} else if cont {
+			continue
 		}
 
 		// Stopped after sentInitial = potential unexpected exit.
-		if st == Stopped {
-			cont, ret := handleStoppedStatus(ctx, inst, allowedPath, initialPrompt, policy, stop, sentInitial, initialPromptSentAt)
-			if ret {
-				return
-			}
-			if cont {
-				continue
-			}
+		if cont, ret := handleStoppedStatus(ctx, inst, st, allowedPath, initialPrompt, policy, stop, sentInitial, initialPromptSentAt); ret {
+			return
+		} else if cont {
+			continue
 		}
 
 		// Always check Preview for startup dialogs that appear before the status
@@ -477,15 +429,101 @@ func runSessionDriverWithPrompt(inst *Instance, allowedPath string, initialPromp
 	}
 }
 
+// driverTickGate blocks until the next poll tick (or stop fires), then
+// evaluates the driver loop's per-tick early-exit conditions in order: the
+// stop channel, the total driver deadline, inst.destroyed (see the inline
+// comment this replaced for why that check exists), and Paused status
+// (always a clean stop for the driver). Also returns the effective/detected
+// status the caller needs regardless — GetEffectiveStatus for lifecycle
+// decisions (Paused, Stopped), GetDetectedStatus for fine-grained
+// terminal-content signals (Idle = readline prompt) — so callers don't
+// re-fetch it. exit reports whether runSessionDriverWithPrompt's loop should
+// return immediately without processing this tick further.
+func driverTickGate(inst *Instance, stop <-chan struct{}, ticker *time.Ticker, totalDeadline time.Time) (st Status, detectedSt detection.DetectedStatus, exit bool) {
+	select {
+	case <-stop:
+		return 0, 0, true
+	case <-ticker.C:
+	}
+
+	if time.Now().After(totalDeadline) {
+		return 0, 0, true
+	}
+
+	// inst.destroyed is set by Destroy() (session/instance.go). Checking it
+	// here bounds how long this goroutine can outlive its own instance's
+	// teardown to a single driverPollInterval tick, instead of continuing
+	// until totalDeadline and racing subsequent tmux/config calls
+	// (AcquireExecSlot's gateDir/LoadConfig, both keyed off the
+	// process-global STAPLER_SQUAD_TEST_DIR env var) against whatever test
+	// or session happens to be using that env var's value next.
+	if inst.destroyed.Load() {
+		return 0, 0, true
+	}
+
+	st = inst.GetEffectiveStatus()
+	detectedSt = inst.GetDetectedStatus()
+
+	if st == Paused {
+		return st, detectedSt, true
+	}
+	return st, detectedSt, false
+}
+
+// handleRetryPendingTick checks for, and applies, a pending backoff-scheduled
+// retry (see runSessionDriverWithPrompt's call site for why this must be
+// checked before st == Stopped re-enters handleStoppedStatus's re-evaluation
+// path). Mirrors handleStoppedStatus/handleInactivityTick's
+// (shouldContinue, shouldReturn) signal pattern: shouldContinue means no
+// retry was pending (or it's still pending) so the loop should proceed to its
+// next tick unchanged; shouldReturn means this goroutine's job is done
+// (either restartForRetry succeeded and spawned a fresh continuation, or it
+// failed with a non-racing error).
+func handleRetryPendingTick(inst *Instance, allowedPath string, policy RetryPolicy, stop <-chan struct{}) (shouldContinue, shouldReturn bool) {
+	pending, elapsed := inst.retryPendingElapsed(time.Now())
+	if !pending {
+		return false, false
+	}
+	if !elapsed {
+		return true, false
+	}
+	reason := inst.lastRetryFailureReason()
+	prompt := buildRetryContinuationPrompt(inst, reason)
+	if err := restartForRetry(inst, allowedPath, prompt, policy, stop); err != nil {
+		if errors.Is(err, ErrRetryInFlight) {
+			// A racing restart (e.g. a concurrent manual RetryNow) is already
+			// in flight — leave NextRetryAt set and retry on a later tick
+			// rather than dropping this scheduled retry.
+			return true, false
+		}
+		log.Warn("SessionDriver: automated retry restart failed",
+			"session", inst.Title, "err", err,
+		)
+		return false, true
+	}
+	inst.clearNextRetryAt()
+	// restartForRetry spawned a fresh continuation goroutine on success; this
+	// one's job is done.
+	return false, true
+}
+
 // handleStoppedStatus handles the driver loop's `st == Stopped` branch: an
-// unexpected or expected session exit. shouldContinue and shouldReturn tell
-// the caller which loop control-flow to apply; at most one is ever true —
-// this mirrors handleInactivityTick's existing signal pattern, needed since
-// a scheduled retry (evaluateSessionRetry's "scheduled" decision, reached via
-// handleDriverFailure) must let the poll loop keep ticking so its own
-// NextRetryAt gate can fire the actual restart once the backoff delay
-// elapses, rather than this function always being terminal.
-func handleStoppedStatus(ctx context.Context, inst *Instance, allowedPath string, initialPrompt string, policy RetryPolicy, stop <-chan struct{}, sentInitial bool, initialPromptSentAt time.Time) (shouldContinue, shouldReturn bool) {
+// unexpected or expected session exit. Takes st itself (rather than the
+// caller gating on `st == Stopped` before calling) so the call site is a
+// single flat if/else-if on this function's own (shouldContinue,
+// shouldReturn) result, matching handleRetryPendingTick's pattern, instead of
+// wrapping a second nested if/if pair inside `if st == Stopped { ... }`.
+// shouldContinue and shouldReturn tell the caller which loop control-flow to
+// apply; at most one is ever true — this mirrors handleInactivityTick's
+// existing signal pattern, needed since a scheduled retry (evaluateSessionRetry's
+// "scheduled" decision, reached via handleDriverFailure) must let the poll
+// loop keep ticking so its own NextRetryAt gate can fire the actual restart
+// once the backoff delay elapses, rather than this function always being
+// terminal.
+func handleStoppedStatus(ctx context.Context, inst *Instance, st Status, allowedPath string, initialPrompt string, policy RetryPolicy, stop <-chan struct{}, sentInitial bool, initialPromptSentAt time.Time) (shouldContinue, shouldReturn bool) {
+	if st != Stopped {
+		return false, false
+	}
 	if !sentInitial {
 		// Exited before we even sent the first prompt — likely a startup crash.
 		// One-shot sessions (backlog:triage/backlog:review) are never retried.
