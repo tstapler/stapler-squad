@@ -24,7 +24,6 @@ export function CommitPushModal({ repoPath, branch, onClose }: CommitPushModalPr
   const [message, setMessage] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
   const dialogRef = useRef<HTMLDivElement>(null);
 
   useFocusTrap(dialogRef, true);
@@ -87,7 +86,6 @@ export function CommitPushModal({ repoPath, branch, onClose }: CommitPushModalPr
           </label>
           <textarea
             id="commit-message"
-            ref={textareaRef}
             className={styles.textarea}
             value={message}
             onChange={(e) => setMessage(e.target.value)}

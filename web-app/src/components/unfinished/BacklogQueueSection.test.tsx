@@ -22,6 +22,13 @@ jest.mock("@/lib/hooks/useBacklogService", () => ({
 const pickerRender = jest.fn();
 let capturedOnSelect: ((owner: string, repo: string, issues: GitHubIssue[]) => void) | null = null;
 let capturedOnCancel: (() => void) | null = null;
+// useFocusTrap.ts's own Tab-wrap behavior has its own dedicated suite
+// (useFocusTrap.test.tsx) run against the real hook — mocked here so this
+// file only asserts what's actually this component's responsibility: that
+// it wires the hook onto its import-dialog ref with the trap active.
+const useFocusTrapSpy = jest.fn();
+jest.mock("@/lib/hooks/useFocusTrap", () => ({ useFocusTrap: (...args: unknown[]) => useFocusTrapSpy(...args) }));
+
 jest.mock("@/components/backlog/GitHubIssuePicker", () => ({
   GitHubIssuePicker: (props: { onSelect: (owner: string, repo: string, issues: GitHubIssue[]) => void; onCancel: () => void }) => {
     pickerRender(props);
@@ -243,21 +250,17 @@ describe("BacklogQueueSection — import button keyboard activation does not tog
 });
 
 describe("BacklogQueueSection — import dialog traps focus via useFocusTrap", () => {
-  it("BacklogQueueSection_should_wrapFocusWithinImportDialog_When_TabPressedOnLastElement", async () => {
+  it("BacklogQueueSection_should_activateFocusTrapOnImportDialogRef_When_ImportOpened", async () => {
     render(<BacklogQueueSection />);
     await waitFor(() => expect(screen.getByText("Fix flaky test")).toBeInTheDocument());
 
     fireEvent.click(screen.getByTestId("import-github-issue-button"));
 
-    const input = screen.getByLabelText("Repository");
-    const cancelButton = screen.getByRole("button", { name: "Cancel" });
-
-    cancelButton.focus();
-    fireEvent.keyDown(document, { key: "Tab" });
-    expect(document.activeElement).toBe(input);
-
-    fireEvent.keyDown(document, { key: "Tab", shiftKey: true });
-    expect(document.activeElement).toBe(cancelButton);
+    await waitFor(() => expect(useFocusTrapSpy).toHaveBeenCalledWith(expect.anything(), true));
+    const lastCall = useFocusTrapSpy.mock.calls[useFocusTrapSpy.mock.calls.length - 1];
+    const [refArg, isActiveArg] = lastCall;
+    expect(refArg.current).toBeInstanceOf(HTMLElement);
+    expect(isActiveArg).toBe(true);
   });
 
   it("BacklogQueueSection_should_notCloseImportDialog_When_EscapePressed", async () => {

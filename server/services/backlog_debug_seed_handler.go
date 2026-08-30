@@ -388,15 +388,10 @@ type seedWorkItemSessionResponse struct {
 	SessionID string `json:"sessionId"`
 }
 
-// handleSeedWorkItemSession creates a backlog item with one linked
-// ItemSession (role "work", no backing Session/Worktree DB row — deliberately
-// lighter than a real session). project_plans/modal-focus-trap's AC5
-// Playwright Tab-loop test needs a truthy work session to reach
-// ReviewChangesModal's real "View Changes" trigger (ReviewingSection.tsx —
-// gated only on `workSession` being present, not on a worktreePath), without
-// paying for a real git worktree/tmux spin-up. Mirrors
-// handleSeedHeadlessTriageSession's shape exactly, one line different
-// (SessionRole).
+// handleSeedWorkItemSession creates a backlog item with a linked "work"
+// ItemSession but no backing Session/Worktree row — enough for
+// ReviewChangesModal's "View Changes" trigger (gated on a truthy work
+// session only), without a real worktree/tmux spin-up.
 func (h *BacklogDebugSeedHandler) handleSeedWorkItemSession(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -464,16 +459,10 @@ type seedWorkSessionWithWorktreeResponse struct {
 	WorktreePath string `json:"worktreePath"`
 }
 
-// handleSeedWorkSessionWithWorktree creates a backlog item with one linked
-// ItemSession (role "work") backed by a real Session+Worktree DB row
-// pointing at a real (git-init'd) temp directory on disk — no live tmux
-// process, no actual `git worktree add`. Unlike handleSeedWorkItemSession
-// (which only needs an ItemSession row), BacklogFileBrowserModal's real
-// trigger — VcsWidgetHeader's "Browse files in this worktree" button — is
-// gated on a truthy `worktreePath` (VcsWidgetHeader.tsx's showWorktreeRow),
-// which the frontend only gets via GetWorktreeDataBySessionUUID joining to
-// an actual ent.Session/ent.Worktree row, not just the ItemSession table —
-// hence the extra Storage.CreateInstanceData write here.
+// handleSeedWorkSessionWithWorktree creates a backlog item with a "work"
+// ItemSession backed by a real Session+Worktree row over a git-init'd temp
+// dir — needed because BacklogFileBrowserModal's trigger is gated on a
+// truthy worktreePath, which only a real ent.Worktree join produces.
 func (h *BacklogDebugSeedHandler) handleSeedWorkSessionWithWorktree(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -498,10 +487,25 @@ func (h *BacklogDebugSeedHandler) handleSeedWorkSessionWithWorktree(w http.Respo
 		status = string(session.BacklogStatusReview)
 	}
 
-	worktreePath, err := os.MkdirTemp("", "sq-e2e-worktree-*")
+	// Rooted under this instance's own isolated config/state dir
+	// (STAPLER_SQUAD_TEST_DIR, set by the e2e harness's global-setup.ts)
+	// rather than the shared os.TempDir() — same rationale as the HasPlan
+	// branch above: avoids a predictable, world-writable temp path
+	// (CWE-377/CWE-59 symlink-race risk) and gets cleaned up for free by
+	// the e2e harness's global-teardown.ts, which deletes the whole test
+	// dir when the run ends (a bare os.MkdirTemp here would leak one
+	// directory per test run on any long-lived dev/CI host, since nothing
+	// else cleans up outside STAPLER_SQUAD_TEST_DIR).
+	configDir, err := config.GetConfigDir()
 	if err != nil {
-		log.Error("backlog debug seed: create temp worktree dir failed", "err", err)
-		http.Error(w, "failed to create temp worktree dir: "+err.Error(), http.StatusInternalServerError)
+		log.Error("backlog debug seed: resolve config dir failed", "err", err)
+		http.Error(w, "failed to resolve config dir: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	worktreePath := filepath.Join(configDir, "e2e-worktree-artifacts", uuid.New().String())
+	if err := os.MkdirAll(worktreePath, 0o755); err != nil {
+		log.Error("backlog debug seed: create worktree dir failed", "err", err)
+		http.Error(w, "failed to create worktree dir: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 	if err := os.WriteFile(filepath.Join(worktreePath, "README.md"), []byte("# e2e fixture\n"), 0o644); err != nil {

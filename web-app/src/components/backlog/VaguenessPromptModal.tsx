@@ -23,8 +23,6 @@ interface VaguenessPromptModalProps {
 export function VaguenessPromptModal({ itemTitle, onRefine, onProceed }: VaguenessPromptModalProps) {
   const headingId = useId();
   const dialogRef = useRef<HTMLDivElement>(null);
-  const refineButtonRef = useRef<HTMLButtonElement>(null);
-  const proceedButtonRef = useRef<HTMLButtonElement>(null);
 
   // Traps Tab/Shift+Tab between the two buttons and moves focus onto the
   // primary button on open. No escape-key dismissal — user must choose
@@ -51,7 +49,6 @@ export function VaguenessPromptModal({ itemTitle, onRefine, onProceed }: Vaguene
         <p className={styles.prompt}>What would you like to do?</p>
         <div className={styles.actions}>
           <button
-            ref={refineButtonRef}
             type="button"
             className={styles.primaryButton}
             onClick={onRefine}
@@ -60,7 +57,6 @@ export function VaguenessPromptModal({ itemTitle, onRefine, onProceed }: Vaguene
             Add more detail
           </button>
           <button
-            ref={proceedButtonRef}
             type="button"
             className={styles.secondaryButton}
             onClick={onProceed}

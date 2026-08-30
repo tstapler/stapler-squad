@@ -56,6 +56,9 @@ export function BacklogQueueSection() {
   const [showImport, setShowImport] = useState(false);
   const headingId = useId();
   const importDialogRef = useRef<HTMLDivElement>(null);
+  // No Escape-to-close: pre-existing behavior, unchanged by this fix (which
+  // scopes to wiring the Tab trap, not adding new dismiss affordances) — use
+  // the dialog's own Cancel button to close it.
   useFocusTrap(importDialogRef, showImport);
 
   // ponytail: request-id guard, not AbortController — listBacklogItems has no signal param
