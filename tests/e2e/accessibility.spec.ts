@@ -19,7 +19,13 @@ import {
   disableBacklogFeatureFlag,
 } from './pages/StuckItemsPage';
 import { BacklogPage } from './pages/BacklogPage';
-import { createBacklogItemDirect, transitionBacklogItemDirect, updateBacklogItemDirect } from './pages/BacklogMutations';
+import {
+  createBacklogItemDirect,
+  transitionBacklogItemDirect,
+  updateBacklogItemDirect,
+  seedWorkItemSessionDirect,
+  seedWorkSessionWithWorktreeDirect,
+} from './pages/BacklogMutations';
 
 const BASE_URL = process.env.TEST_SERVER_URL || 'http://localhost:8544';
 
@@ -335,4 +341,92 @@ test.describe('Accessibility — backlog live updates (WCAG 4.1.3 AA)', () => {
       await page.close();
     }
   });
+
+  // modal-focus-trap AC5: proves Tab wraps within ReviewChangesModal instead
+  // of escaping to the backgrounded page, using the same Tab-loop technique
+  // as the keyboard-reachability test above (lines 266-272) since Axe's
+  // static scan cannot detect a Tab-escape.
+  test('Tab wraps within ReviewChangesModal instead of escaping to the page (modal-focus-trap AC5)', async ({ page, request }) => {
+    const title = `e2e-focus-trap-changes-${Date.now()}`;
+    await seedWorkItemSessionDirect(request, { title, status: 'review' });
+
+    const backlogPage = new BacklogPage(page);
+    await backlogPage.goto();
+    await backlogPage.waitForPageLoad();
+    await backlogPage.openItemDetail(title);
+
+    await page.getByTestId('backlog-review-view-changes').click();
+
+    const dialog = page.locator('[role="dialog"][aria-modal="true"]').filter({ has: page.locator('#review-changes-title') });
+    await expect(dialog).toBeVisible();
+
+    await assertTabWrapsWithinDialog(page, dialog);
+  });
+
+  // modal-focus-trap AC5, BacklogFileBrowserModal: its real trigger
+  // (VcsWidgetHeader's "Browse files in this worktree" button) is gated on a
+  // truthy worktreePath, needing the heavier seed-work-session-with-worktree
+  // fixture. Deliberately narrower than ReviewChangesModal's full forward
+  // Tab-loop above: FileTree embeds a real react-arborist Tree
+  // (role="tree"). Investigation (a Playwright run against this exact
+  // fixture, logging document.activeElement after each keypress) showed
+  // that the instant a tree row receives real DOM focus, react-arborist's
+  // own re-render rewrites that row's tabindex attribute to "-1" out from
+  // under it — so a generic Tab-loop that re-queries
+  // `[tabindex]:not([tabindex="-1"])` (useFocusTrap.ts's own technique)
+  // can't reliably track "first"/"last" once focus has entered the tree,
+  // and calling `.focus()` on a since-recycled virtualized row can silently
+  // no-op, dropping focus to `document.body` — a genuine escape, but one
+  // rooted in FileTree/react-arborist's own internal focus bookkeeping, not
+  // in BacklogFileBrowserModal's useFocusTrap wiring (what AC1/AC2 scope
+  // this fix to). That's a separate, pre-existing FileTree issue worth its
+  // own follow-up backlog item, not something to paper over with a test
+  // that would be flaky by construction. This test instead proves the one
+  // thing squarely in this fix's scope against the real, unmocked FileTree:
+  // useFocusTrap moves focus to the dialog's first focusable element on
+  // activation (the "Open in Terminal" link, not whatever the tree's
+  // internal DOM order happens to produce first).
+  test('useFocusTrap moves focus to BacklogFileBrowserModal\'s first focusable element on activation (modal-focus-trap AC5)', async ({ page, request }) => {
+    const title = `e2e-focus-trap-files-${Date.now()}`;
+    await seedWorkSessionWithWorktreeDirect(request, { title, status: 'review' });
+
+    const backlogPage = new BacklogPage(page);
+    await backlogPage.goto();
+    await backlogPage.waitForPageLoad();
+    await backlogPage.openItemDetail(title);
+
+    await page.getByRole('button', { name: 'Browse files in this worktree' }).click();
+
+    const dialog = page.locator('[role="dialog"][aria-modal="true"]').filter({ has: page.locator('#file-browser-title') });
+    await expect(dialog).toBeVisible();
+
+    const terminalLink = page.getByRole('link', { name: /open in terminal/i });
+    await expect(terminalLink).toBeFocused();
+  });
 });
+
+/**
+ * useFocusTrap moves focus to the dialog's first focusable element on
+ * activation (web-app/src/lib/hooks/useFocusTrap.ts) — capture it, then Tab
+ * in a loop and assert every resulting document.activeElement stays inside
+ * the dialog's DOM subtree (a real Tab-escape would land outside it), and
+ * that focus eventually wraps back to that same first element rather than
+ * merely "hasn't escaped yet".
+ */
+async function assertTabWrapsWithinDialog(
+  page: import('@playwright/test').Page,
+  dialog: ReturnType<import('@playwright/test').Page['locator']>
+) {
+  const initial = await page.evaluateHandle(() => document.activeElement);
+  let wrapped = false;
+  for (let i = 0; i < 30; i++) {
+    await page.keyboard.press('Tab');
+    const stillInside = await dialog.evaluate((el) => !!document.activeElement && el.contains(document.activeElement));
+    expect(stillInside, `Tab press #${i + 1} moved focus outside the dialog`).toBe(true);
+    if (await page.evaluate((el) => el === document.activeElement, initial)) {
+      wrapped = true;
+      break;
+    }
+  }
+  expect(wrapped, "Tab never wrapped back to the dialog's first focusable element").toBe(true);
+}

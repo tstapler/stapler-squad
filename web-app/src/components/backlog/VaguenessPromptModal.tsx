@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useRef, useId } from "react";
+import { useRef, useId } from "react";
 import { createPortal } from "react-dom";
+import { useFocusTrap } from "@/lib/hooks/useFocusTrap";
 import * as styles from "./VaguenessPromptModal.css";
 
 interface VaguenessPromptModalProps {
@@ -21,37 +22,23 @@ interface VaguenessPromptModalProps {
  */
 export function VaguenessPromptModal({ itemTitle, onRefine, onProceed }: VaguenessPromptModalProps) {
   const headingId = useId();
+  const dialogRef = useRef<HTMLDivElement>(null);
   const refineButtonRef = useRef<HTMLButtonElement>(null);
   const proceedButtonRef = useRef<HTMLButtonElement>(null);
 
-  // Move focus to the primary button when the dialog opens
-  useEffect(() => {
-    refineButtonRef.current?.focus();
-  }, []);
-
-  // Trap focus between the two buttons
-  const handleKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
-    if (e.key === "Tab") {
-      const activeEl = document.activeElement;
-      if (!e.shiftKey && activeEl === proceedButtonRef.current) {
-        e.preventDefault();
-        refineButtonRef.current?.focus();
-      } else if (e.shiftKey && activeEl === refineButtonRef.current) {
-        e.preventDefault();
-        proceedButtonRef.current?.focus();
-      }
-    }
-    // No escape-key dismissal — user must choose explicitly
-  };
+  // Traps Tab/Shift+Tab between the two buttons and moves focus onto the
+  // primary button on open. No escape-key dismissal — user must choose
+  // explicitly, and useFocusTrap has no Escape handling of its own.
+  useFocusTrap(dialogRef, true);
 
   const content = (
     <div className={styles.overlay} data-testid="vagueness-prompt-modal">
       <div
+        ref={dialogRef}
         role="dialog"
         aria-modal="true"
         aria-labelledby={headingId}
         className={styles.dialog}
-        onKeyDown={handleKeyDown}
       >
         <h2 id={headingId} className={styles.heading}>
           Item created.

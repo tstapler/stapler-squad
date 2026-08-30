@@ -63,6 +63,20 @@ function MutableSetHarness({
   );
 }
 
+// SoleElementHarness has exactly one focusable element — first === last —
+// the degenerate case the forward/backward wrap harnesses above never
+// exercise (they always have a distinct "first" and "last").
+function SoleElementHarness({ isActive }: { isActive: boolean }) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  useFocusTrap(containerRef, isActive);
+
+  return (
+    <div ref={containerRef} data-testid="container">
+      <button data-testid="only">Only</button>
+    </div>
+  );
+}
+
 describe("useFocusTrap", () => {
   it("useFocusTrap_should_RestoreFocusToTrigger_When_UnmountedWithTriggerRefSupplied", () => {
     const trigger = document.createElement("button");
@@ -198,5 +212,17 @@ describe("useFocusTrap", () => {
     getByTestId("second").focus();
     fireEvent.keyDown(document, { key: "Tab", shiftKey: true });
     expect(document.activeElement).toBe(getByTestId("third"));
+  });
+
+  it("useFocusTrap_should_KeepFocusOnSoleElement_When_OnlyOneFocusableElementExists", () => {
+    const { getByTestId } = render(<SoleElementHarness isActive />);
+    const only = getByTestId("only");
+    expect(document.activeElement).toBe(only);
+
+    fireEvent.keyDown(document, { key: "Tab" });
+    expect(document.activeElement).toBe(only);
+
+    fireEvent.keyDown(document, { key: "Tab", shiftKey: true });
+    expect(document.activeElement).toBe(only);
   });
 });

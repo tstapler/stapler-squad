@@ -114,7 +114,7 @@ describe("VaguenessPromptModal_calls_onProceed_when_proceed_clicked", () => {
 // ---------------------------------------------------------------------------
 
 describe("VaguenessPromptModal_has_no_escape_dismiss", () => {
-  it("does not call onRefine or onProceed when Escape is pressed", () => {
+  it("VaguenessPromptModal_should_remainOpen_When_EscapePressed", () => {
     const onRefine = jest.fn();
     const onProceed = jest.fn();
 
@@ -126,10 +126,32 @@ describe("VaguenessPromptModal_has_no_escape_dismiss", () => {
       />
     );
 
-    const dialog = screen.getByRole("dialog");
-    fireEvent.keyDown(dialog, { key: "Escape", code: "Escape" });
+    fireEvent.keyDown(document, { key: "Escape", code: "Escape" });
 
     expect(onRefine).not.toHaveBeenCalled();
     expect(onProceed).not.toHaveBeenCalled();
+    expect(screen.getByTestId("vagueness-prompt-modal")).toBeInTheDocument();
+  });
+});
+
+describe("VaguenessPromptModal_traps_focus_via_useFocusTrap", () => {
+  it("VaguenessPromptModal_should_wrapFocusToRefineButton_When_TabPressedOnProceedButton", () => {
+    render(
+      <VaguenessPromptModal
+        itemTitle="Vague item"
+        onRefine={jest.fn()}
+        onProceed={jest.fn()}
+      />
+    );
+
+    const refineButton = screen.getByTestId("vagueness-refine-button");
+    const proceedButton = screen.getByTestId("vagueness-proceed-button");
+
+    proceedButton.focus();
+    fireEvent.keyDown(document, { key: "Tab" });
+    expect(document.activeElement).toBe(refineButton);
+
+    fireEvent.keyDown(document, { key: "Tab", shiftKey: true });
+    expect(document.activeElement).toBe(proceedButton);
   });
 });

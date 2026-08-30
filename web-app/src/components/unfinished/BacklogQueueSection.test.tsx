@@ -27,7 +27,14 @@ jest.mock("@/components/backlog/GitHubIssuePicker", () => ({
     pickerRender(props);
     capturedOnSelect = props.onSelect;
     capturedOnCancel = props.onCancel;
-    return <div data-testid="mock-github-issue-picker" />;
+    return (
+      <div data-testid="mock-github-issue-picker">
+        <input aria-label="Repository" />
+        <button type="button" onClick={props.onCancel}>
+          Cancel
+        </button>
+      </div>
+    );
   },
 }));
 
@@ -232,5 +239,36 @@ describe("BacklogQueueSection — import button keyboard activation does not tog
     // The section must remain expanded — the keydown must not have reached the
     // ancestor header's handleKeyDown (which would collapse the section).
     expect(header).toHaveAttribute("aria-expanded", "true");
+  });
+});
+
+describe("BacklogQueueSection — import dialog traps focus via useFocusTrap", () => {
+  it("BacklogQueueSection_should_wrapFocusWithinImportDialog_When_TabPressedOnLastElement", async () => {
+    render(<BacklogQueueSection />);
+    await waitFor(() => expect(screen.getByText("Fix flaky test")).toBeInTheDocument());
+
+    fireEvent.click(screen.getByTestId("import-github-issue-button"));
+
+    const input = screen.getByLabelText("Repository");
+    const cancelButton = screen.getByRole("button", { name: "Cancel" });
+
+    cancelButton.focus();
+    fireEvent.keyDown(document, { key: "Tab" });
+    expect(document.activeElement).toBe(input);
+
+    fireEvent.keyDown(document, { key: "Tab", shiftKey: true });
+    expect(document.activeElement).toBe(cancelButton);
+  });
+
+  it("BacklogQueueSection_should_notCloseImportDialog_When_EscapePressed", async () => {
+    render(<BacklogQueueSection />);
+    await waitFor(() => expect(screen.getByText("Fix flaky test")).toBeInTheDocument());
+
+    fireEvent.click(screen.getByTestId("import-github-issue-button"));
+    expect(screen.getByTestId("backlog-queue-import-modal")).toBeInTheDocument();
+
+    fireEvent.keyDown(document, { key: "Escape" });
+
+    expect(screen.getByTestId("backlog-queue-import-modal")).toBeInTheDocument();
   });
 });

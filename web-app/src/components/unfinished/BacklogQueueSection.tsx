@@ -6,6 +6,7 @@ import { createPortal } from "react-dom";
 import Link from "next/link";
 import { useBacklogService, type BacklogItem, type GitHubIssue } from "@/lib/hooks/useBacklogService";
 import { GitHubIssuePicker } from "@/components/backlog/GitHubIssuePicker";
+import { useFocusTrap } from "@/lib/hooks/useFocusTrap";
 import * as styles from "./BacklogQueueSection.css";
 
 const QUEUED_STATUSES = ["idea", "refining", "ready"] as const;
@@ -54,6 +55,8 @@ export function BacklogQueueSection() {
   const [isOpen, setIsOpen] = useState(true);
   const [showImport, setShowImport] = useState(false);
   const headingId = useId();
+  const importDialogRef = useRef<HTMLDivElement>(null);
+  useFocusTrap(importDialogRef, showImport);
 
   // ponytail: request-id guard, not AbortController — listBacklogItems has no signal param
   const loadRequestIdRef = useRef(0);
@@ -167,7 +170,7 @@ export function BacklogQueueSection() {
         typeof document !== "undefined" &&
         createPortal(
           <div className={styles.overlay} data-testid="backlog-queue-import-modal">
-            <div role="dialog" aria-modal="true" aria-labelledby={headingId} className={styles.dialog}>
+            <div ref={importDialogRef} role="dialog" aria-modal="true" aria-labelledby={headingId} className={styles.dialog}>
               <h2 id={headingId} className={styles.dialogHeading}>
                 Import GitHub Issue
               </h2>

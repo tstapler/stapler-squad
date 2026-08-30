@@ -288,19 +288,17 @@ describe("GateVerdictBox — skip gate", () => {
   // Test: 15 — Focus trap: Tab cycles between Cancel and Confirm only
   // ---------------------------------------------------------------------------
 
-  it("Tab key in confirmation dialog cycles focus between Cancel and Confirm", () => {
+  it("GateVerdictBox_should_wrapFocusToCancelButton_When_TabPressedOnConfirmButton", () => {
     render(<GateVerdictBox {...makeProps({ verdict: "PASS" })} />);
 
     fireEvent.click(screen.getByRole("button", { name: /Skip gate and mark done without review/i }));
 
-    const dialog = screen.getByRole("alertdialog");
     const cancelBtn = screen.getByRole("button", { name: /^Cancel$/i });
     const confirmBtn = screen.getByRole("button", { name: /Confirm — Skip Gate/i });
 
-    // Simulate Tab when focused on the last button (Confirm) — should wrap to Cancel
+    // useFocusTrap listens at the document level, not on the dialog element
     confirmBtn.focus();
-    fireEvent.keyDown(dialog, { key: "Tab", shiftKey: false });
-    // The handler calls e.preventDefault() and focuses first element
+    fireEvent.keyDown(document, { key: "Tab", shiftKey: false });
     expect(cancelBtn).toHaveFocus();
   });
 
@@ -309,14 +307,27 @@ describe("GateVerdictBox — skip gate", () => {
 
     fireEvent.click(screen.getByRole("button", { name: /Skip gate and mark done without review/i }));
 
-    const dialog = screen.getByRole("alertdialog");
     const cancelBtn = screen.getByRole("button", { name: /^Cancel$/i });
     const confirmBtn = screen.getByRole("button", { name: /Confirm — Skip Gate/i });
 
-    // Simulate Shift+Tab when focused on the first button (Cancel) — should wrap to Confirm
     cancelBtn.focus();
-    fireEvent.keyDown(dialog, { key: "Tab", shiftKey: true });
+    fireEvent.keyDown(document, { key: "Tab", shiftKey: true });
     expect(confirmBtn).toHaveFocus();
+  });
+
+  it("GateVerdictBox_should_notThrow_When_ConfirmClickedAndTriggerButtonIsUnmounted", async () => {
+    const onSkipGate = jest.fn().mockResolvedValue(undefined);
+    render(<GateVerdictBox {...makeProps({ verdict: "PASS", onSkipGate })} />);
+
+    fireEvent.click(screen.getByRole("button", { name: /Skip gate and mark done without review/i }));
+    // The skip-link trigger button is unmounted while the dialog is open, so
+    // useFocusTrap's cleanup (triggerEl?.focus()) has no live element to
+    // restore focus to — this must not throw.
+    expect(() => {
+      fireEvent.click(screen.getByRole("button", { name: /Confirm — Skip Gate/i }));
+    }).not.toThrow();
+
+    await waitFor(() => expect(onSkipGate).toHaveBeenCalledTimes(1));
   });
 });
 
