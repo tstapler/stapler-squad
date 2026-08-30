@@ -2,15 +2,19 @@ package session
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
 func TestCheckpoint_SerializationRoundtrip(t *testing.T) {
+	t.Parallel()
 	cp := Checkpoint{
 		ID:             "550e8400-e29b-41d4-a716-446655440000",
 		SessionID:      "test-session-id",
@@ -39,6 +43,7 @@ func TestCheckpoint_SerializationRoundtrip(t *testing.T) {
 }
 
 func TestInstanceData_BackwardCompatNilCheckpoints(t *testing.T) {
+	t.Parallel()
 	// Old format without checkpoints field
 	oldJSON := `{"title":"test","path":"/tmp","status":0}`
 	var data InstanceData
@@ -49,6 +54,7 @@ func TestInstanceData_BackwardCompatNilCheckpoints(t *testing.T) {
 }
 
 func TestCheckpointList_FindByID(t *testing.T) {
+	t.Parallel()
 	cl := CheckpointList{
 		{ID: "id-1", Label: "first"},
 		{ID: "id-2", Label: "second"},
@@ -64,6 +70,7 @@ func TestCheckpointList_FindByID(t *testing.T) {
 }
 
 func TestCheckpointList_FindByLabel(t *testing.T) {
+	t.Parallel()
 	cl := CheckpointList{
 		{ID: "id-1", Label: "first"},
 		{ID: "id-2", Label: "second"},
@@ -79,6 +86,7 @@ func TestCheckpointList_FindByLabel(t *testing.T) {
 }
 
 func TestCheckpointList_Latest(t *testing.T) {
+	t.Parallel()
 	now := time.Now()
 	cl := CheckpointList{
 		{ID: "id-1", Timestamp: now.Add(-2 * time.Hour)},
@@ -92,6 +100,7 @@ func TestCheckpointList_Latest(t *testing.T) {
 }
 
 func TestCheckpointList_Latest_Empty(t *testing.T) {
+	t.Parallel()
 	var cl CheckpointList
 	latest := cl.Latest()
 	assert.Nil(t, latest)
@@ -100,6 +109,7 @@ func TestCheckpointList_Latest_Empty(t *testing.T) {
 // --- Story 1.3.2d: Instance.CreateCheckpoint tests ---
 
 func TestCreateCheckpoint_UnstartedInstance_ReturnsError(t *testing.T) {
+	t.Parallel()
 	inst := &Instance{Title: "test-session"}
 	// inst.started == false by default
 
@@ -111,6 +121,7 @@ func TestCreateCheckpoint_UnstartedInstance_ReturnsError(t *testing.T) {
 }
 
 func TestCreateCheckpoint_StartedInstance_AllFieldsPopulated(t *testing.T) {
+	t.Parallel()
 	inst := &Instance{
 		Title: "test-session",
 	}
@@ -135,7 +146,41 @@ func TestCreateCheckpoint_StartedInstance_AllFieldsPopulated(t *testing.T) {
 		"timestamp should be within test execution window")
 }
 
+// TestForkFromCheckpoint_HonorsSessionNameOverrideMap verifies that
+// ForkFromCheckpoint wires session.ResolveSessionBackend (tymux-bundled-
+// integration Epic 4.4.3): with no per-request override concept for this
+// restore-from-state path, a TymuxSessionOverrides entry keyed by the
+// sanitized tmux session name of the *new* (forked) title still forces the
+// forked instance's backend even though the process-wide default is
+// registered as tymux.
+func TestForkFromCheckpoint_HonorsSessionNameOverrideMap(t *testing.T) {
+	RegisterBackendProvider(BackendTymux)
+	t.Cleanup(func() { RegisterBackendProvider(BackendTmux) })
+
+	testDir := t.TempDir()
+	t.Setenv("STAPLER_SQUAD_TEST_DIR", testDir)
+
+	inst := &Instance{Title: "checkpoint-fork-source"}
+	inst.started.Store(true)
+	cp, err := inst.CreateCheckpoint("before-fork", 0)
+	require.NoError(t, err)
+	require.NotNil(t, cp)
+
+	const newTitle = "checkpoint-fork-override-test"
+	sessionKey := tmux.NewSessionName(newTitle, tmux.TmuxPrefix).String()
+	require.NoError(t, os.WriteFile(filepath.Join(testDir, "config.json"),
+		[]byte(`{"tymux_session_overrides": {"`+sessionKey+`": false}}`), 0o644))
+
+	newInst, err := inst.ForkFromCheckpoint(cp.ID, newTitle, t.TempDir())
+	require.NoError(t, err)
+	require.NotNil(t, newInst)
+
+	assert.Equal(t, BackendTmux, newInst.Backend,
+		"a TymuxSessionOverrides entry keyed by the sanitized tmux session name must force the backend even though the process-wide default is tymux")
+}
+
 func TestCreateCheckpoint_IdIsValidUUID(t *testing.T) {
+	t.Parallel()
 	inst := &Instance{Title: "test-session"}
 	inst.started.Store(true)
 
@@ -147,6 +192,7 @@ func TestCreateCheckpoint_IdIsValidUUID(t *testing.T) {
 }
 
 func TestCreateCheckpoint_MultipleCheckpoints_AppendCorrectly(t *testing.T) {
+	t.Parallel()
 	inst := &Instance{Title: "test-session"}
 	inst.started.Store(true)
 
@@ -163,6 +209,7 @@ func TestCreateCheckpoint_MultipleCheckpoints_AppendCorrectly(t *testing.T) {
 }
 
 func TestCreateCheckpoint_ActiveCheckpointUpdated(t *testing.T) {
+	t.Parallel()
 	inst := &Instance{Title: "test-session"}
 	inst.started.Store(true)
 
@@ -174,6 +221,7 @@ func TestCreateCheckpoint_ActiveCheckpointUpdated(t *testing.T) {
 }
 
 func TestCreateCheckpoint_NoConversationUUID_EmptyField(t *testing.T) {
+	t.Parallel()
 	inst := &Instance{Title: "test-session"}
 	inst.started.Store(true)
 	// claudeSession is nil — no UUID available yet.

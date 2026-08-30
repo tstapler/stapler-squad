@@ -49,12 +49,16 @@ import { useSplitContainerSize } from "@/lib/hooks/useSplitContainerSize";
 import type { XtermTerminalHandle, XtermTerminalProps } from "./XtermTerminal";
 import type { ForwardRefExoticComponent, RefAttributes } from "react";
 const XtermTerminal = lazy(() => import("./XtermTerminal").then((m) => ({ default: m.XtermTerminal }))) as ForwardRefExoticComponent<XtermTerminalProps & RefAttributes<XtermTerminalHandle>>;
+import { InputDropBadge } from "./InputDropBadge";
+import { ConnectionCountIndicator } from "./ConnectionCountIndicator";
+import { useDropEpisodeCoalescer } from "./useDropEpisodeCoalescer";
 import { TerminalStreamManager } from "@/lib/terminal/TerminalStreamManager";
 import { getCachedDimensions, saveDimensions, validateCellDimensions } from "@/lib/terminal/TerminalDimensionCache";
 import { DEFAULT_TERMINAL_CONFIG } from "@/lib/config/terminalConfig";
 import { useAnalytics } from "@/lib/contexts/AnalyticsContext";
 import { useApprovalsContext } from "@/lib/contexts/ApprovalsContext";
 import { useViewport } from "@/components/providers/ViewportProvider";
+import { useInputModeOverride } from "@/lib/hooks/useInputModeOverride";
 import * as styles from "./TerminalOutput.css";
 
 interface TerminalOutputProps {
@@ -67,6 +71,15 @@ interface TerminalOutputProps {
   shellId?: string;
   /** Callback invoked when a ShellStatusUpdate is received for this shell. */
   onShellStatusChange?: (status: "running" | "stopped" | "error", exitCode?: number) => void;
+  /**
+   * Epic 6.1 (terminal:resync-stagger) — passed straight through to
+   * `useVisibilityResync`'s identically-named param. When
+   * `SessionDetailView.tsx` wires this in (flag on), it routes this
+   * instance's visibility/focus-triggered resync through its per-view
+   * stagger queue instead of firing immediately. Omitted (flag off)
+   * preserves exact pre-Epic-6.1 behavior — see useVisibilityResync.ts.
+   */
+  scheduleResync?: (fire: () => void, opts: { preempt: boolean }) => void;
 }
 
 // Minimum dimensions considered "real" — anything smaller is a transient value
@@ -82,7 +95,10 @@ const MIN_ROWS = 10;
 const XTERM_DEFAULT_COLS = 80;
 const XTERM_DEFAULT_ROWS = 24;
 
-export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSessionName, isVisible, shellId, onShellStatusChange }: TerminalOutputProps) {
+// Story 2.3 — coalescing window for InputDropBadge drop episodes (design/ux.md §2.2).
+const DROP_EPISODE_COALESCE_WINDOW_MS = 400;
+
+export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSessionName, isVisible, shellId, onShellStatusChange, scheduleResync }: TerminalOutputProps) {
   const { track } = useAnalytics();
   const { clearForSession, refresh: refreshApprovals, pendingCount } = useApprovalsContext();
   const { leftHanded, toggleHandedness } = useHandedness();
@@ -248,7 +264,14 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
   }, [keyboardStorageKey]);
 
   // Mobile detection — use shared ViewportProvider hook for consistency
-  const { isMobile } = useViewport();
+  const { isMobile, hasFinePointer } = useViewport();
+
+  // User-overridable detection for a real mouse+keyboard attached to a phone/tablet —
+  // see Settings > Appearance > Terminal Input Mode.
+  const { inputModeOverride } = useInputModeOverride();
+  const compactToolbar =
+    inputModeOverride === 'desktop' ||
+    (inputModeOverride === 'auto' && isMobile && hasFinePointer);
 
   // Toolbar collapsed/expanded state — persisted in localStorage; collapsed by default
   const [toolbarExpanded, setToolbarExpanded] = useState(() => {
@@ -261,6 +284,25 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
     }
   });
   const [mobileOverflowOpen, setMobileOverflowOpen] = useState(false);
+
+  // The first time a mouse+physical keyboard is detected on this mobile session,
+  // collapse the toolbar and hide the on-screen keyboard row by default so they
+  // don't eat screen space — but only if the user hasn't already made an explicit
+  // choice for either. Runs once per session mount; manual toggles afterward are
+  // fully respected.
+  const appliedCompactDefaultsRef = useRef(false);
+  useEffect(() => {
+    if (!compactToolbar || appliedCompactDefaultsRef.current) return;
+    appliedCompactDefaultsRef.current = true;
+    setToolbarExpanded(false);
+    try {
+      if (localStorage.getItem(keyboardStorageKey) === null) {
+        setIsKeyboardVisible(false);
+      }
+    } catch {
+      // localStorage unavailable — leave the on-screen keyboard row visible
+    }
+  }, [compactToolbar, keyboardStorageKey]);
 
   // Dev tools panel — persisted in localStorage; collapsed by default
   const [devGroupOpen, setDevGroupOpen] = useState(() => {
@@ -320,6 +362,35 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
   // the surrounding chrome stayed dark.
   const theme = "dark" as const;
 
+  // Paging state for on-demand scrollback loading (Task 2.3.1 / 2.3.2)
+  const isFetchingScrollbackRef = useRef(false);
+  const hasMoreScrollbackRef = useRef(false);
+  const oldestSequenceReceivedRef = useRef(0);
+
+  // Resets scrollback paging so a subsequent scroll-up re-fetches history fresh from
+  // the server (which re-derives it width-agnostically via `tmux capture-pane -J`,
+  // see handleScrollbackRequest in connectrpc_websocket.go) instead of assuming
+  // whatever paging cursor was left over from before the terminal was last cleared.
+  // Registered as TerminalStreamManager's onFullSnapshot callback below — the manager
+  // itself owns detecting a full-pane replacement snapshot and clearing the xterm
+  // buffer for it (ANSI_SNAPSHOT_PREFIX in TerminalStreamManager.ts); this only resets
+  // the paging refs the manager doesn't know about.
+  const resetScrollbackPaging = useCallback(() => {
+    hasMoreScrollbackRef.current = true;
+    oldestSequenceReceivedRef.current = 0;
+    isFetchingScrollbackRef.current = false;
+  }, []);
+
+  // Proactively clears the terminal and resets scrollback paging before a resize RPC
+  // is sent — used only by the resize triggers below (auto-fit and the manual Resize
+  // button), so the screen goes blank immediately rather than showing stale,
+  // differently-wrapped content for the ~100-400ms round trip until the server's
+  // post-resize snapshot arrives and TerminalStreamManager clears it again anyway.
+  const clearBufferBeforeResize = useCallback(() => {
+    xtermRef.current?.clear();
+    resetScrollbackPaging();
+  }, [resetScrollbackPaging]);
+
   // Lazily create or get the TerminalStreamManager
   const getOrCreateStreamManager = useCallback((): TerminalStreamManager | null => {
     if (streamManagerRef.current) return streamManagerRef.current;
@@ -331,6 +402,11 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
       terminal,
       (paused, watermark) => sendFlowControlRef.current?.(paused, watermark)
     );
+
+    // Detect + clear on a full-pane replacement snapshot (ANSI_SNAPSHOT_PREFIX) — the
+    // single spot this is handled; every write() call site (live output, the RESIZING
+    // queue flush) benefits without needing its own check.
+    manager.setOnFullSnapshot(resetScrollbackPaging);
 
     // Inject SerializeAddon so prependScrollbackBatch can serialize the current buffer
     // before clearing it (enables correct history order without losing live content).
@@ -359,14 +435,10 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
 
     streamManagerRef.current = manager;
     return manager;
-  }, [logTerminalMetrics, sessionId, track]);
+  }, [logTerminalMetrics, sessionId, track, resetScrollbackPaging]);
 
   // Ref to track whether the initial scrollback has been written (Task 2.3.2)
   const isInitialScrollbackDoneRef = useRef(false);
-  // Paging state for on-demand scrollback loading (Task 2.3.1 / 2.3.2)
-  const isFetchingScrollbackRef = useRef(false);
-  const hasMoreScrollbackRef = useRef(false);
-  const oldestSequenceReceivedRef = useRef(0);
 
   // Callback to write initial pane content to terminal.
   // Metadata guard removed (R2.7): all scrollback — both initial and historical —
@@ -418,26 +490,64 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
   // values) — referencing it directly in this dependency array would be a
   // temporal-dead-zone error. Same ref-mirror idiom used throughout this file
   // (e.g. sendFlowControlRef) and in useTerminalStream.ts (connectRef).
-  const notifyResyncOutputReceivedRef = useRef<() => void>(() => {});
+  const notifyResyncOutputReceivedRef = useRef<(resyncId?: string) => void>(() => {});
+
+  // Epic 3.1, Task 3.1.2.1 — shared between useTerminalStream (which forwards
+  // it to useTerminalFlowControl, where both the visibility- and
+  // resize-triggered resync paths register their resync_id) and this
+  // component's own handleOutput below (which checks/clears membership on
+  // each incoming TerminalOutput.resync_id). Lets either resync flow's stall
+  // watchdog be reset when a match arrives on ANY tracked request, without
+  // merging useVisibilityResync and useTerminalFlowControl into one hook.
+  //
+  // Task 3.1.2.4a — a plain `Set<string>` only records *membership*, not
+  // *when* an ID was added, so a resync whose own response silently hangs
+  // has no way to notice it's been outstanding too long if sibling resync
+  // traffic keeps resetting the shared stall watchdog. Map<resyncId, addedAtMs>
+  // keeps the same membership semantics (`.has`/`.delete` used by
+  // handleOutput below are unchanged) while letting useVisibilityResync's
+  // resetStallWatchdog (Task 3.1.2.4b) compute a specific ID's elapsed
+  // outstanding time and escalate past a 2x-timeout ceiling instead of
+  // resetting indefinitely.
+  const outstandingResyncIdsRef = useRef<Map<string, number>>(new Map());
+
+  // Ref-mirror for resetStallWatchdog (Epic 3.1, Task 3.1.2.2) — same
+  // temporal-dead-zone reason as notifyResyncOutputReceivedRef above:
+  // useVisibilityResync isn't called until after this handleOutput
+  // definition and the useTerminalStream call that consumes it.
+  const resetStallWatchdogRef = useRef<() => void>(() => {});
 
   // Callback to write output directly to terminal via TerminalStreamManager.
   // Task 4.2.2: Output is queued during RESIZING to prevent bytes at the old column width
   // from being written before the post-resize snapshot.
-  const handleOutput = useCallback((output: string) => {
+  const handleOutput = useCallback((output: string, resyncId?: string) => {
     if (!xtermRef.current) return;
+
+    // Epic 3.1 (AC2) — if this output is the reply to a correlation-ID-
+    // tagged resync request tracked via EITHER hook's resync flow (resize or
+    // visibility/focus), clear it here and reconcile the visibility hook's
+    // stall watchdog too, so a resize-triggered resync response doesn't
+    // leave a concurrently-pending visibility resync looking stalled.
+    if (resyncId && outstandingResyncIdsRef.current.has(resyncId)) {
+      outstandingResyncIdsRef.current.delete(resyncId);
+      resetStallWatchdogRef.current();
+    }
 
     // Signal resync receipt regardless of whether this output is written
     // immediately or queued for post-resize flush — a concurrent resize
     // (plausible on backgrounded-tab wakeup) must not make a pending
     // visibility/focus resync look stalled just because its response
     // arrived while RESIZING.
-    notifyResyncOutputReceivedRef.current();
+    notifyResyncOutputReceivedRef.current(resyncId);
 
     if (terminalStateRef.current === 'RESIZING') {
       pendingOutputDuringResizeRef.current.push(output);
       return;
     }
 
+    // TerminalStreamManager.write() itself detects a full-pane replacement snapshot
+    // (ANSI_SNAPSHOT_PREFIX) and clears the buffer for it — see setOnFullSnapshot in
+    // getOrCreateStreamManager above.
     const manager = getOrCreateStreamManager();
     if (manager) {
       manager.write(output);
@@ -453,7 +563,39 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
     console.error(`Terminal stream error (${isExternal ? 'external' : 'managed'}):`, err);
     setConnectionAttempts((prev) => prev + 1);
   }, [isExternal]);
-  const { isConnected, error, sendInput, resize, connect, disconnect, scrollbackLoaded, requestScrollback, sendFlowControl, startRecording, stopRecording, terminalState, isHardFailed, handleManualReconnect: handleHookReconnect, requestFullResync, markResyncComplete, markPaneResponseReceived } = useTerminalStream({
+  // Story 2.3 — InputDropBadge: dropped-keystroke count + a monotonic
+  // per-episode sequence number (so two consecutive episodes with an
+  // identical count still produce a distinct announcement, see
+  // InputDropBadge.tsx's `episodeSeq` doc comment).
+  const [dropEpisode, setDropEpisode] = useState({ count: 0, seq: 0 });
+  const handleDropEpisodeFlush = useCallback((count: number) => {
+    if (count <= 0) return; // design/ux.md §3.3 — defensive no-op
+    setDropEpisode((prev) => ({ count, seq: prev.seq + 1 }));
+  }, []);
+  const reportDroppedInput = useDropEpisodeCoalescer(handleDropEpisodeFlush, DROP_EPISODE_COALESCE_WINDOW_MS);
+
+  // Task 2.3.5 — e2e test-only trigger. Reproducing a genuine WebSocket
+  // reconnect race (the real trigger for onInputDropped) inside Playwright
+  // proved impractical for this pass (it would require deterministically
+  // racing a server-side connection teardown against a client keystroke),
+  // so tests/e2e/input-drop-badge.spec.ts exercises the badge's rendering/
+  // announcement/dismiss behavior via this harmless, additive test seam
+  // instead of the full reconnect path (Stories 2.1/2.2 already have direct
+  // Jest coverage of the drop mechanism itself). Gated on NODE_ENV (matching
+  // the existing dev-only-hook convention in WebVitalsReporter.tsx /
+  // rpcTiming.ts) so this unauthenticated, script-callable surface is never
+  // attached in a production bundle — Next.js statically inlines
+  // `process.env.NODE_ENV` at build time, so the production build tree-shakes
+  // this block out entirely rather than merely no-op'ing it at runtime.
+  useEffect(() => {
+    if (typeof window === "undefined" || process.env.NODE_ENV === "production") return;
+    (window as unknown as { __e2eTriggerInputDropped?: (count: number) => void }).__e2eTriggerInputDropped = reportDroppedInput;
+    return () => {
+      delete (window as unknown as { __e2eTriggerInputDropped?: (count: number) => void }).__e2eTriggerInputDropped;
+    };
+  }, [reportDroppedInput]);
+
+  const { isConnected, error, sendInput, resize, connect, disconnect, scrollbackLoaded, requestScrollback, sendFlowControl, startRecording, stopRecording, terminalState, isHardFailed, handleManualReconnect: handleHookReconnect, requestFullResync, markResyncComplete, markPaneResponseReceived, connectionCount } = useTerminalStream({
     baseUrl,
     sessionId: effectiveSessionId,
     shellId,
@@ -467,10 +609,24 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
     initialCols: lastResizeRef.current?.cols,
     initialRows: lastResizeRef.current?.rows,
     isExternal: isExternal,
+    onInputDropped: reportDroppedInput,
+    foreground: isVisible,
+    outstandingResyncIdsRef,
   });
 
-  const { notifyResyncOutputReceived } = useVisibilityResync({
+  const { notifyResyncOutputReceived, resetStallWatchdog } = useVisibilityResync({
     sessionId: effectiveSessionId,
+    // TerminalOutputProps.isVisible is optional (external callers may omit
+    // it entirely); useVisibilityResync's isVisible is required since its
+    // visibility-scoped resync gating (Task 6.1.1.3) needs a concrete
+    // boolean, not undefined. Default to false — matching the "external
+    // caller opted out of visibility awareness" behavior other isVisible
+    // call sites in this component already fall back to (e.g. line ~1785's
+    // `isVisible !== false` treats undefined as visible for rendering, but
+    // for resync-gating purposes treating "unknown" as "not visible" is the
+    // safer default: it defers resync-on-focus rather than risking one
+    // firing for a caller that never intended to opt in).
+    isVisible: isVisible ?? false,
     isConnected,
     terminalState,
     connect,
@@ -480,10 +636,15 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
     markPaneResponseReceived,
     setShowReconnectButton,
     setShowReconnectBanner,
+    scheduleResync,
+    outstandingResyncIdsRef,
   });
   useEffect(() => {
     notifyResyncOutputReceivedRef.current = notifyResyncOutputReceived;
   }, [notifyResyncOutputReceived]);
+  useEffect(() => {
+    resetStallWatchdogRef.current = resetStallWatchdog;
+  }, [resetStallWatchdog]);
 
   // Sync terminalState into a ref so handleOutput can read it without recreating the callback.
   // Also flushes queued output when transitioning from RESIZING to STABLE (Task 4.2.2).
@@ -495,6 +656,8 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
       const manager = streamManagerRef.current;
       if (manager) {
         const pending = pendingOutputDuringResizeRef.current.splice(0);
+        // manager.write() itself detects and clears for a full-pane snapshot — see
+        // setOnFullSnapshot in getOrCreateStreamManager above.
         for (const chunk of pending) {
           manager.write(chunk);
         }
@@ -703,8 +866,9 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
     }
 
     console.log(`[TerminalOutput] Sending resize: ${cols}x${rows} (prev: ${lastResize?.cols || 'none'}x${lastResize?.rows || 'none'})`);
+    clearBufferBeforeResize();
     resize(cols, rows);
-  }, [isConnected, resize, connect, error, sessionId]);
+  }, [isConnected, resize, connect, error, sessionId, clearBufferBeforeResize]);
 
   // Monitor connection state changes
   useEffect(() => {
@@ -860,6 +1024,12 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
   // Auto-reconnect with exponential backoff
   useEffect(() => {
     if (process.env.NEXT_PUBLIC_RECONNECT_V2 === "true") return; // hook-level reconnect handles it
+    // Must not fire once the hook has hard-failed (e.g. a non-retriable WS
+    // close code): the hook already set shouldReconnectRef.current = false
+    // in that case, but calling connect() below unconditionally resets it
+    // back to true (see useTerminalStream.ts's connect()), silently
+    // reconnecting right through the hard-fail and hiding the Retry banner.
+    if (isHardFailed) return;
     if (!isConnected && error && connectionAttempts > 0 && connectionAttempts < 5) {
       const backoffDelay = Math.min(1000 * Math.pow(2, connectionAttempts - 1), 10000);
       console.log(`[TerminalOutput] Auto-reconnecting in ${backoffDelay}ms (attempt ${connectionAttempts})`);
@@ -871,7 +1041,7 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
 
       return () => clearTimeout(timeout);
     }
-  }, [isConnected, error, connectionAttempts, connect]);
+  }, [isConnected, error, connectionAttempts, connect, isHardFailed]);
 
   // Initialize with cached dimensions on mount.
   // When cell pixel metrics are also cached, pre-calculate cols/rows from the
@@ -1308,11 +1478,27 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
         if (isConnected) {
           console.log(`[TerminalOutput] Forcing resize message to backend: ${cols}x${rows}`);
           lastResizeRef.current = { cols, rows };
+          clearBufferBeforeResize();
           resize(cols, rows, true);
         }
       }
     }
   };
+
+  // Epic 4.2, Story 4.2.2 (Task 4.2.2b) — best-effort resize-mismatch signal
+  // for ConnectionCountIndicator's tooltip. No wire field carries "did this
+  // tab's ResizeVote win the hub's negotiation" (out of this UI-only epic's
+  // scope), so this compares what this tab last asked to resize to
+  // (lastResizeRef, set in handleTerminalResize) against xterm's actual
+  // applied dimensions — if they differ, another connection's vote is
+  // constraining this tab's pane size. Never shown speculatively: both refs
+  // must have resolved values before a mismatch is reported (UX-AC-10).
+  const appliedTerminal = xtermRef.current?.terminal;
+  const hasResizeSizeMismatch = !!(
+    lastResizeRef.current &&
+    appliedTerminal &&
+    (appliedTerminal.cols !== lastResizeRef.current.cols || appliedTerminal.rows !== lastResizeRef.current.rows)
+  );
 
   const secondaryActions = [
     {
@@ -1405,6 +1591,8 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
           {isHardFailed && (
             <span className={styles.errorText}> • Terminal unavailable</span>
           )}
+          {/* Epic 4.2, Story 4.2.2 — renders only when connectionCount > 1 */}
+          <ConnectionCountIndicator count={connectionCount} sizeMismatch={hasResizeSizeMismatch} />
         </div>
         <div className={styles.actions}>
           {/* Toolbar toggle — always visible on mobile; hidden on desktop via CSS */}
@@ -1438,6 +1626,18 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
               🔄 Reconnect
             </button>
           )}
+          {/* Resize — always visible (minimized default); heavily used per analytics */}
+          <button
+            className={styles.toolbarButton}
+            onClick={() => {
+              track({ name: "toolbar_button_click", category: "user_action", sessionId, component: "TerminalOutput", labels: { button: "resize" } });
+              handleManualResize();
+            }}
+            aria-label="Resize terminal to fit container"
+            title="Resize terminal to fit container"
+          >
+            ↔️ Resize
+          </button>
           {toolbarExpanded && (
             <div className={styles.toolbarActions} data-testid="toolbar-actions">
               {/* Secondary actions (Copy, Paste, Bottom, Clear, Mouse) — inline on desktop, hidden on mobile */}
@@ -1511,18 +1711,6 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
               >
                 {uploadingCount > 0 ? `⏳ ${uploadingCount}…` : "📁 Files"}
               </button>
-              {/* Resize — always visible, needed to re-fit terminal after layout changes */}
-              <button
-                className={styles.toolbarButton}
-                onClick={() => {
-                  track({ name: "toolbar_button_click", category: "user_action", sessionId, component: "TerminalOutput", labels: { button: "resize" } });
-                  handleManualResize();
-                }}
-                aria-label="Resize terminal to fit container"
-                title="Resize terminal to fit container"
-              >
-                ↔️ Resize
-              </button>
               {/* Camera button — hidden on desktop (pointer: fine = mouse), visible on touch */}
               <button
                 className={`${styles.toolbarButton} ${styles.mobileOnlyUpload}`}
@@ -1579,11 +1767,11 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
                         track({ name: "toolbar_button_click", category: "user_action", sessionId, component: "TerminalOutput", labels: { button: "log-stream", state: logStreamEnabled ? "off" : "on" } });
                         handleToggleLogStream();
                       }}
-                      title={logStreamEnabled ? "Stop forwarding verbose debug logs to server (info/warn/error always stream)" : "Also forward verbose debug logs to server (info/warn/error already stream automatically)"}
-                      aria-label={logStreamEnabled ? "Disable verbose debug log streaming" : "Enable verbose debug log streaming"}
+                      title={logStreamEnabled ? "Stop forwarding verbose per-frame debug traces to server (info/warn/error always stream)" : "Also forward verbose per-frame debug traces to server (info/warn/error always stream automatically)"}
+                      aria-label={logStreamEnabled ? "Disable verbose debug trace streaming" : "Enable verbose debug trace streaming"}
                       style={logStreamEnabled ? { backgroundColor: '#2a4', color: 'white', fontWeight: 'bold' } : {}}
                     >
-                      📡 {logStreamEnabled ? 'Debug Log Stream ON' : 'Debug Log Stream'}
+                      📡 {logStreamEnabled ? 'Debug Traces ON' : 'Debug Traces'}
                     </button>
                     <button
                       className={`${styles.toolbarButton} ${styles.devOnly}`}
@@ -1651,12 +1839,17 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
       )}
       <div className={styles.terminal} ref={terminalContainerRef}>
         {showReconnectBanner && !isHardFailed && (
-          <div className={styles.reconnectingBanner}>
+          <div
+            className={styles.reconnectingBanner}
+            role="status"
+            aria-live="polite"
+            aria-label="Reconnecting"
+          >
             Reconnecting terminal…
           </div>
         )}
         {showReconnectBanner && isHardFailed && (
-          <div className={styles.hardFailedBanner}>
+          <div className={styles.hardFailedBanner} role="alert">
             Connection lost — <button onClick={handleHookReconnect}>Retry</button>
           </div>
         )}
@@ -1700,6 +1893,13 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
   />
 </Suspense>
       </div>
+      {/* Story 2.3 — InputDropBadge is `position: fixed` and portal-rendered
+          to document.body (modeled on XtermTerminal's `copiedToast`), unlike
+          the absolutely-positioned overlays above that live inside
+          styles.terminal — rendering it as a sibling here (not nested inside
+          that container) avoids clipping/mispositioning it. See design/ux.md
+          §Step 4 item 1. */}
+      <InputDropBadge count={dropEpisode.count} episodeSeq={dropEpisode.seq} />
       {/* Mobile keyboard toolbar — Termux-compatible extra-keys layout.
           Row 1: ESC / - HOME ↑ END PGUP
           Row 2: TAB CTRL ALT ← ↓ → PGDN

@@ -54,6 +54,7 @@ func attachWorkSessionWithCommit(t *testing.T, storage *session.Storage, repo *s
 // covers the "committed directly to main, no PR" case — the shipped_via must read
 // "direct", and since the branch is main itself, ahead/behind must both be 0.
 func TestGetBacklogItemShipStatus_should_ReportShippedDirect_When_CommitOnMainNoPrURL(t *testing.T) {
+	t.Parallel()
 	_, repoPath := setupPRFixSyncRepo(t)
 	sha := strings.TrimSpace(runGitTestCmd(t, repoPath, "rev-parse", "HEAD"))
 
@@ -81,6 +82,7 @@ func TestGetBacklogItemShipStatus_should_ReportShippedDirect_When_CommitOnMainNo
 // covers the "opened a PR, it got merged" case — shipped_via must read "pr", and the
 // branch (now merged into main) must report zero ahead, since main already contains it.
 func TestGetBacklogItemShipStatus_should_ReportShippedViaPr_When_PrUrlSetAndMerged(t *testing.T) {
+	t.Parallel()
 	_, repoPath := setupPRFixSyncRepo(t)
 
 	runGitTestCmd(t, repoPath, "checkout", "-b", "feature")
@@ -118,6 +120,7 @@ func TestGetBacklogItemShipStatus_should_ReportShippedViaPr_When_PrUrlSetAndMerg
 // TestGetBacklogItemShipStatus_should_ReportNotShipped_When_BranchNeverMerged covers
 // the exact regression case: a PR URL is set but the branch was never actually merged.
 func TestGetBacklogItemShipStatus_should_ReportNotShipped_When_BranchNeverMerged(t *testing.T) {
+	t.Parallel()
 	_, repoPath := setupPRFixSyncRepo(t)
 
 	runGitTestCmd(t, repoPath, "checkout", "-b", "feature")
@@ -153,6 +156,7 @@ func TestGetBacklogItemShipStatus_should_ReportNotShipped_When_BranchNeverMerged
 // TestGetBacklogItemShipStatus_should_ReturnErrorField_When_NoWorkSessionEverCommitted
 // verifies the no-code case reports a descriptive error rather than a false "shipped".
 func TestGetBacklogItemShipStatus_should_ReturnErrorField_When_NoWorkSessionEverCommitted(t *testing.T) {
+	t.Parallel()
 	_, repoPath := setupPRFixSyncRepo(t)
 	storage, _ := createTestStorageWithRepo(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
@@ -174,6 +178,7 @@ func TestGetBacklogItemShipStatus_should_ReturnErrorField_When_NoWorkSessionEver
 // covers Tyler's ask: identifying which commits actually shipped, like a PR's
 // commits tab, so newest-first ordering and content must both be right.
 func TestGetBacklogItemShipStatus_should_ListShippedCommits_When_MultipleCommitsInRange(t *testing.T) {
+	t.Parallel()
 	_, repoPath := setupPRFixSyncRepo(t)
 	baseSHA := strings.TrimSpace(runGitTestCmd(t, repoPath, "rev-parse", "HEAD"))
 
@@ -225,6 +230,7 @@ func snapshotBacklogItemUpdate(checkConclusion string, approvedCount, changesReq
 // BacklogItem's 6 new columns must flow straight into the response, with the
 // JSON-encoded file stats decoded into ShippedFileStat entries.
 func TestGetBacklogItemShipStatus_ShouldPopulateSnapshotFields_WhenShippedSnapshotAtNonNil(t *testing.T) {
+	t.Parallel()
 	_, repoPath := setupPRFixSyncRepo(t)
 	sha := strings.TrimSpace(runGitTestCmd(t, repoPath, "rev-parse", "HEAD"))
 
@@ -316,6 +322,7 @@ func TestGetBacklogItemShipStatus_ShouldDegradeGracefully_WhenShippedFileStatsJs
 // ent-backed Storage, then read through the actual connect RPC handler — confirming the
 // full storage-to-RPC mapping path, not just handler logic against an in-memory value.
 func TestGetBacklogItemShipStatus_ShouldReturnDurableSnapshot_WhenCalledAgainstRealEntStorage(t *testing.T) {
+	t.Parallel()
 	_, repoPath := setupPRFixSyncRepo(t)
 	sha := strings.TrimSpace(runGitTestCmd(t, repoPath, "rev-parse", "HEAD"))
 
@@ -357,4 +364,50 @@ func TestGetBacklogItemShipStatus_ShouldReturnDurableSnapshot_WhenCalledAgainstR
 	assert.True(t, snapshotAt.Equal(st.SnapshotAt.AsTime()))
 	require.Len(t, st.FileStats, 1)
 	assert.Equal(t, "only.go", st.FileStats[0].Path)
+}
+
+// TestGetBacklogItemShipStatus_should_NotReportShipped_When_OnlySpawnTimeBaseShaIsRecorded
+// is the RPC-side half of BUG-047's regression coverage (the reconciler side
+// lives in session/backlog_lifecycle_superseded_test.go).
+//
+// ItemSession.LastCommitSha used to be seeded once at spawn with the worktree's
+// pre-work base SHA and never refreshed. A base SHA is by construction already
+// an ancestor of main, so this RPC — which backs the item detail page's Ship PR
+// button and its "shipped" badge — reported *every* item as already shipped,
+// however much unmerged work its session actually had. This test records only
+// the base SHA (no work commit recorded on top) and asserts the RPC refuses to
+// claim the item shipped.
+func TestGetBacklogItemShipStatus_should_NotReportShipped_When_OnlySpawnTimeBaseShaIsRecorded(t *testing.T) {
+	t.Parallel()
+	_, repoPath := setupPRFixSyncRepo(t)
+	baseSHA := strings.TrimSpace(runGitTestCmd(t, repoPath, "rev-parse", "HEAD"))
+
+	storage, repo := createTestStorageWithRepo(t)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+
+	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+		Title:    "item whose session only ever recorded its base SHA",
+		RepoPath: repoPath,
+		Status:   string(session.BacklogStatusPRPending),
+	})
+	require.NoError(t, err)
+
+	is, err := storage.CreateItemSession(t.Context(), session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: "base-only-work",
+		SessionRole: session.SessionRoleWork,
+	})
+	require.NoError(t, err)
+	// Exactly what spawn seeding leaves behind, in both the new field and the
+	// legacy one, so pre-fix rows already in production are covered too.
+	require.NoError(t, repo.SetItemSessionBaseCommit(t.Context(), is.ID, baseSHA))
+	require.NoError(t, repo.UpdateItemSessionGitActivity(t.Context(), is.ID, baseSHA, "", time.Now(), 0))
+
+	resp, err := svc.GetBacklogItemShipStatus(t.Context(), connect.NewRequest(&sessionv1.GetBacklogItemShipStatusRequest{ItemId: item.ID}))
+	require.NoError(t, err)
+	st := resp.Msg.Status
+	assert.False(t, st.Shipped,
+		"the session's own base commit is always on main; it must never be read as proof the item's work shipped")
+	assert.Empty(t, st.ShippedVia)
+	assert.NotEmpty(t, st.Error, "the RPC should say it has no committed work to judge, not silently claim success")
 }

@@ -16,6 +16,7 @@ import (
 func newPromptTestService(t *testing.T) *SessionService {
 	t.Helper()
 	svc := NewSessionService(createTestStorage(t), events.NewEventBus(10))
+	t.Cleanup(func() { svc.Shutdown() })
 	svc.promptStore = prompts.NewPromptStore(t.TempDir() + "/prompts.json")
 	return svc
 }
@@ -23,6 +24,7 @@ func newPromptTestService(t *testing.T) *SessionService {
 // ─── ListPromptHistory ────────────────────────────────────────────────────────
 
 func TestListPromptHistory_EmptyInitially(t *testing.T) {
+	t.Parallel()
 	svc := newPromptTestService(t)
 	resp, err := svc.ListPromptHistory(t.Context(), connect.NewRequest(&sessionv1.ListPromptHistoryRequest{}))
 	require.NoError(t, err)
@@ -30,6 +32,7 @@ func TestListPromptHistory_EmptyInitially(t *testing.T) {
 }
 
 func TestListPromptHistory_ReturnsEntriesAfterRecord(t *testing.T) {
+	t.Parallel()
 	svc := newPromptTestService(t)
 
 	svc.promptStore.RecordUsage("write unit tests")
@@ -48,6 +51,7 @@ func TestListPromptHistory_ReturnsEntriesAfterRecord(t *testing.T) {
 }
 
 func TestListPromptHistory_EntryFieldsPopulated(t *testing.T) {
+	t.Parallel()
 	svc := newPromptTestService(t)
 	svc.promptStore.RecordUsage("deploy to production")
 
@@ -65,6 +69,7 @@ func TestListPromptHistory_EntryFieldsPopulated(t *testing.T) {
 // ─── DeletePromptHistory ──────────────────────────────────────────────────────
 
 func TestDeletePromptHistory_EmptyID(t *testing.T) {
+	t.Parallel()
 	svc := newPromptTestService(t)
 	_, err := svc.DeletePromptHistory(t.Context(), connect.NewRequest(&sessionv1.DeletePromptHistoryRequest{Id: ""}))
 	require.Error(t, err)
@@ -74,6 +79,7 @@ func TestDeletePromptHistory_EmptyID(t *testing.T) {
 }
 
 func TestDeletePromptHistory_RemovesEntry(t *testing.T) {
+	t.Parallel()
 	svc := newPromptTestService(t)
 	svc.promptStore.RecordUsage("do something")
 
@@ -91,6 +97,7 @@ func TestDeletePromptHistory_RemovesEntry(t *testing.T) {
 }
 
 func TestDeletePromptHistory_DeleteOneKeepsOthers(t *testing.T) {
+	t.Parallel()
 	svc := newPromptTestService(t)
 	svc.promptStore.RecordUsage("keep me")
 	svc.promptStore.RecordUsage("delete me")

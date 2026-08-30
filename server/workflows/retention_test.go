@@ -15,9 +15,7 @@ import (
 // ent client plus a workflow repository backed by the same database.
 func newTestInfra(t *testing.T) (repo *session.EntRepository, wfRepo session.WorkflowRepository) {
 	t.Helper()
-	entRepo, err := session.NewEntRepository(session.WithDatabasePath(t.TempDir() + "/retention_test.db"))
-	require.NoError(t, err)
-	t.Cleanup(func() { entRepo.Close() })
+	entRepo := session.NewTestEntRepository(t)
 	return entRepo, session.NewEntWorkflowRepository(entRepo.GetEntClient())
 }
 

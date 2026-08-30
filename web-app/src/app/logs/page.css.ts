@@ -118,6 +118,38 @@ export const select = style({
   },
 });
 
+export const viewTab = style({
+  padding: "0.4rem 0.9rem",
+  backgroundColor: "transparent",
+  border: `1px solid ${vars.color.borderColor}`,
+  color: vars.color.textMuted,
+  cursor: "pointer",
+  borderRadius: vars.radii.sm,
+  fontSize: vars.fontSize.base,
+  fontFamily: vars.font.mono,
+  transition: "background-color 0.15s, color 0.15s",
+  selectors: {
+    "&:hover": {
+      backgroundColor: vars.color.hoverBackground,
+      color: vars.color.textPrimary,
+    },
+  },
+});
+
+export const viewTabActive = style([
+  viewTab,
+  {
+    backgroundColor: vars.color.primary,
+    borderColor: vars.color.primary,
+    color: vars.color.background,
+    selectors: {
+      "&:hover": {
+        backgroundColor: vars.color.primaryHover,
+      },
+    },
+  },
+]);
+
 export const loading = style({
   padding: "2rem",
   textAlign: "center",
@@ -394,3 +426,15 @@ export const searchHistoryWrapper = style({
 export const densityCompact = style({});
 export const densityComfortable = style({});
 export const densitySpacious = style({});
+
+// viewPane toggles the Table view's visibility while switching to Patterns —
+// "contents" (not "none") when shown, so LogViewer's own layout box doesn't
+// gain an extra wrapper in the flex/grid flow; see page.tsx's view-mode toggle.
+export const viewPane = style({
+  display: "contents",
+  selectors: {
+    '&[data-hidden="true"]': {
+      display: "none",
+    },
+  },
+});

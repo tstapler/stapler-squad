@@ -119,41 +119,15 @@ export const statusBadge = style({
   fontFamily: vars.font.mono,
 });
 
-export const statusIdea = style({
-  background: vars.color.surfaceMuted,
-  color: vars.color.textMuted,
-  border: `1px solid ${vars.color.borderMuted}`,
-});
-export const statusReady = style({
-  background: vars.statusBadge.inputBg,
-  color: vars.statusBadge.inputFg,
-  border: `1px solid ${vars.statusBadge.inputBorder}`,
-});
-export const statusInProgress = style({
-  background: vars.statusBadge.uncommittedBg,
-  color: vars.statusBadge.uncommittedFg,
-  border: `1px solid ${vars.statusBadge.uncommittedBorder}`,
-});
-export const statusReview = style({
-  background: vars.statusBadge.approvalBg,
-  color: vars.statusBadge.approvalFg,
-  border: `1px solid ${vars.statusBadge.approvalBorder}`,
-});
-export const statusDone = style({
-  background: vars.statusBadge.completeBg,
-  color: vars.statusBadge.completeFg,
-  border: `1px solid ${vars.statusBadge.completeBorder}`,
-});
-export const statusArchived = style({
-  background: vars.color.surfaceMuted,
-  color: vars.color.textDisabled,
-  border: `1px solid ${vars.color.borderMuted}`,
-});
-export const statusRefining = style({
-  background: vars.color.warningBg,
-  color: vars.color.warningText,
-  border: `1px solid ${vars.color.warning}`,
-});
+export {
+  statusIdea,
+  statusReady,
+  statusInProgress,
+  statusReview,
+  statusDone,
+  statusArchived,
+  statusRefining,
+} from "@/styles/statusBadgeVariants.css";
 
 export const priorityBadge = style({
   display: "inline-flex",
@@ -694,6 +668,16 @@ export const progressNoteMeta = style({
   color: vars.color.textMuted,
 });
 
+export const commitDetail = style({
+  marginTop: vars.space["1"],
+  fontSize: vars.fontSize.xs,
+  fontFamily: vars.font.mono,
+  color: vars.color.textMuted,
+  overflow: "hidden",
+  textOverflow: "ellipsis",
+  whiteSpace: "nowrap",
+});
+
 export const verdictDetail = style({
   marginTop: vars.space["1"],
   padding: vars.space["2"],
@@ -810,6 +794,19 @@ export const sessionTotalCost = style({
   marginTop: vars.space["2"],
   paddingTop: vars.space["2"],
   borderTop: `1px solid ${vars.color.borderColor}`,
+});
+
+export const autonomousHealthStrip = style({
+  display: "flex",
+  flexWrap: "wrap",
+  gap: vars.space["4"],
+  fontSize: vars.fontSize.sm,
+  color: vars.color.textSecondary,
+  padding: `${vars.space["2"]} ${vars.space["3"]}`,
+  marginBottom: vars.space["3"],
+  background: vars.color.surfaceSubtle,
+  borderRadius: vars.radii.sm,
+  border: `1px solid ${vars.color.borderSubtle}`,
 });
 
 export const errorState = style({

@@ -36,6 +36,49 @@ export const subtitle = style({
   margin: 0,
 });
 
+// Tab toggle ("Per-Session" / "All Sessions") — same visual language (underline
+// on the active tab) as SessionDetail.css.ts's `tabs`/`tab`/`active` trio, but
+// this page owns its own token references per docs/reference/css-architecture.md.
+export const tablist = style({
+  display: "flex",
+  gap: vars.space["2"],
+  borderBottom: `1px solid ${vars.color.borderColor}`,
+});
+
+export const tab = style({
+  display: "flex",
+  alignItems: "center",
+  padding: `${vars.space["2"]} ${vars.space["4"]}`,
+  border: "none",
+  background: "transparent",
+  color: vars.color.textMuted,
+  fontSize: vars.fontSize.sm,
+  fontWeight: vars.fontWeight.medium,
+  cursor: "pointer",
+  borderBottom: "2px solid transparent",
+  transition: "color 0.2s, border-color 0.2s",
+  selectors: {
+    "&:hover": {
+      color: vars.color.textPrimary,
+    },
+    '&[aria-selected="true"]': {
+      color: vars.color.primary,
+      borderBottomColor: vars.color.primary,
+      fontWeight: vars.fontWeight.semibold,
+    },
+  },
+  ":focus-visible": {
+    outline: `2px solid ${vars.color.inputFocusBorder}`,
+    outlineOffset: "2px",
+  },
+});
+
+export const tabpanel = style({
+  display: "flex",
+  flexDirection: "column",
+  gap: vars.space["4"],
+});
+
 export const sessionSelectorRow = style({
   display: "flex",
   alignItems: "center",

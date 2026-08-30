@@ -49,6 +49,13 @@ export const vars = createThemeContract({
     errorText: null,
     errorDark: null,
 
+    // Severity "critical" tier — distinct from error/errorBg/errorText so a Critical-risk
+    // badge doesn't share a hue with a High-risk badge within the same component's own
+    // tier set (review-queue-severity feature).
+    critical: null,
+    criticalBg: null,
+    criticalText: null,
+
     // Accent tints
     accentBg: null,
     accentHover: null,

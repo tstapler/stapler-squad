@@ -25,6 +25,11 @@ export const tableTitle = style({
   color: vars.color.textPrimary,
 });
 
+export const sortOrderHint = style({
+  fontWeight: vars.fontWeight.normal,
+  color: vars.color.textMuted,
+});
+
 export const orphanToggle = style({
   display: "flex",
   alignItems: "center",
@@ -63,6 +68,17 @@ export const thRight = style([
   th,
   { textAlign: "right" },
 ]);
+
+export const sortableTh = style({
+  cursor: "pointer",
+  display: "inline-block",
+  selectors: {
+    "&:focus-visible": {
+      outline: `2px solid ${vars.color.primary}`,
+      outlineOffset: "2px",
+    },
+  },
+});
 
 export const td = style({
   padding: `${vars.space[2]} ${vars.space[2]}`,

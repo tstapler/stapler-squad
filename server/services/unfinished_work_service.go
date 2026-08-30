@@ -259,7 +259,7 @@ func (s *UnfinishedWorkService) UndismissWorktree(
 
 // SnoozeWorktree hides a worktree until the next HEAD SHA change.
 func (s *UnfinishedWorkService) SnoozeWorktree(
-	_ context.Context,
+	ctx context.Context,
 	req *connect.Request[sessionv1.SnoozeWorktreeRequest],
 ) (*connect.Response[sessionv1.SnoozeWorktreeResponse], error) {
 	// Get current HEAD SHA from the stored scan result.
@@ -267,7 +267,7 @@ func (s *UnfinishedWorkService) SnoozeWorktree(
 	var headSHA string
 	if ok {
 		// Run git rev-parse HEAD in the worktree to get current SHA.
-		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 		defer cancel()
 		cmd := safeexec.CommandContext(ctx, "git", "-C", r.WorktreePath, "rev-parse", "HEAD")
 		out, err := cmd.Output()
@@ -374,7 +374,7 @@ func (s *UnfinishedWorkService) GetWorktreeAISummary(
 
 // QuickCommitPush stages all changes, commits, and pushes.
 func (s *UnfinishedWorkService) QuickCommitPush(
-	_ context.Context,
+	ctx context.Context,
 	req *connect.Request[sessionv1.QuickCommitPushRequest],
 ) (*connect.Response[sessionv1.QuickCommitPushResponse], error) {
 	if strings.TrimSpace(req.Msg.CommitMessage) == "" {
@@ -411,7 +411,7 @@ func (s *UnfinishedWorkService) QuickCommitPush(
 
 	if hasStaged {
 		// git commit -m <message>
-		commitCtx, commitCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		commitCtx, commitCancel := context.WithTimeout(ctx, 30*time.Second)
 		defer commitCancel()
 		commitCmd := safeexec.CommandContext(commitCtx, "git", "-C", worktreePath, "commit", "-m", req.Msg.CommitMessage)
 		commitCmd.WaitDelay = 2 * time.Second
@@ -424,7 +424,7 @@ func (s *UnfinishedWorkService) QuickCommitPush(
 	}
 
 	// git push -u origin <branch> (60s timeout)
-	pushCtx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	pushCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
 	pushCmd := safeexec.CommandContext(pushCtx, "git", "-C", worktreePath, "push", "-u", "origin", req.Msg.Branch)
 	if out, err := pushCmd.CombinedOutput(); err != nil {
@@ -501,7 +501,10 @@ func (s *UnfinishedWorkService) GetWorktreeDiff(
 
 	return connect.NewResponse(&sessionv1.GetWorktreeDiffResponse{
 		DiffStats: &sessionv1.DiffStats{
-			Content: content,
+			// git diff output is raw bytes and can contain sequences that aren't valid
+			// UTF-8; DiffStats.content is a proto3 string field, which rejects those at
+			// marshal time, so sanitize here at the source.
+			Content: strings.ToValidUTF8(content, "�"),
 			Added:   int32(added),
 			Removed: int32(removed),
 		},

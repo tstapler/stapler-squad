@@ -130,6 +130,85 @@ const (
 	// docs/tasks/backlog-feature-improvement.md's 2026-07-28 entry). Resolved
 	// once the PR becomes healthy again or the item reaches done.
 	StuckReasonPRNeedsFix StuckReason = "pr_needs_fix"
+	// StuckReasonRespawnBlockedActive: an automated respawn attempt
+	// (AutoRespawnAutonomousWork, AutoReopenForPRFix, or AutoRespawnReview —
+	// server/services/backlog_service_triage.go) was skipped because the item
+	// already has an active work or review session, per
+	// findActiveWorkSession/findActiveReviewSession. Before this reason
+	// existed, all three call sites only log.InfoLog().Printf'd the skip —
+	// zero operator-visible signal and no audit record, strictly worse than
+	// spawnSessionAfterGates' own 8b guard (activeWorkSessionBlockedError),
+	// which at least returns a progress-enriched error to its synchronous
+	// caller (docs/tasks/backlog-feature-improvement.md, 2026-07-31/
+	// 2026-08-03 updates). Set by notifyRespawnBlockedByActiveSession, which
+	// reuses workSessionStaleness for the same "still active" vs. "likely
+	// stalled" distinction. Distinct from StuckReasonReworkBlockedStale
+	// (review-status-only, staleness-gated) since this fires regardless of
+	// staleness and covers three different item statuses (in_progress,
+	// pr_pending, review). Resolved the next time the guarding function runs
+	// past its active-session check (the block has cleared).
+	StuckReasonRespawnBlockedActive StuckReason = "respawn_blocked_active"
+	// StuckReasonLikelyFlaky: session.IsFlakyVerdictFlipFlop or
+	// session.IsTestOnlyReworkCycle matched on this item's recent review
+	// history — behavioral evidence (not a keyword match on title/description;
+	// see project_plans/backlog-bounce-escalation/decisions/ADR-002) that the
+	// review outcome may be non-deterministic rather than a real pass/fail
+	// signal. Purely informational: set alongside AutoReopenAfterFailedReview's
+	// existing reopen/park decision, never gating it — a misfiring heuristic
+	// here cannot newly stall an item that would otherwise proceed. Both
+	// predicates carry documented false-positive sources (see their doc
+	// comments in session/stuck_decisions.go); the UI should present this as a
+	// hint to verify, not a confident verdict.
+	StuckReasonLikelyFlaky StuckReason = "likely_flaky"
+	// StuckReasonBlockedByDependency: DequeueNextQueuedItems' dependency gate
+	// (UnresolvedBlockerItemIDs) skipped this item because at least one of its
+	// blocker items (session/ent/schema/backlog_item_dependency.go) has not yet
+	// reached a resolved status (done or archived — see
+	// project_plans/backlog-item-dependencies/decisions/ADR-001-dangling-
+	// blocker-resolution.md). Purely detection/visibility: mirrors
+	// StuckReasonPlanNotApproved's precedent of surfacing an indefinite,
+	// by-design dequeue skip so it's visible on /unfinished and in the item
+	// detail view (BlockerChip) instead of only a per-tick log line. Resolved
+	// the next time UnresolvedBlockerItemIDs finds no unresolved blocker left
+	// for this item.
+	StuckReasonBlockedByDependency StuckReason = "blocked_by_dependency"
+	// StuckReasonMultipleReasons: a synthetic, aggregate reason marking an
+	// item that has multiReasonThreshold or more *other*, non-escalation
+	// stuck reasons open simultaneously (session/stuck_decisions.go's
+	// isMultiReasonEscalated). Set/resolved by reconcileMultiReasonEscalation
+	// (session/backlog_lifecycle_stuck.go) as the count of open non-escalation
+	// reasons crosses the threshold in either direction. Deliberately excludes
+	// itself and StuckReasonBounceCapExhausted from its own count (ADR-001)
+	// to avoid a self-reinforcing escalation loop. Unlike every other
+	// StuckReason, this one carries no independent remediation action of its
+	// own — it exists purely as an operator-visible severity signal that an
+	// item is stuck for multiple simultaneous reasons, not a single narrow
+	// one.
+	StuckReasonMultipleReasons StuckReason = "multiple_reasons"
+	// StuckReasonBounceCapExhausted: a synthetic, aggregate reason marking an
+	// item whose bouncing remediation gate hit MaxRemediationAttempts while
+	// StuckReasonBouncing itself is still open (autoReopenWithBackoffGate,
+	// session/backlog_lifecycle.go). Signals that automated remediation has
+	// given up retrying and the item now needs human intervention. Resolved
+	// by reconcileBouncingItems once StuckReasonBouncing itself resolves, or
+	// by the selfHealStuck backstop once the item's status leaves
+	// in_progress/review entirely. Like StuckReasonMultipleReasons, this is a
+	// meta/aggregate signal with no independent remediation action of its
+	// own.
+	StuckReasonBounceCapExhausted StuckReason = "bounce_cap_exhausted"
+	// StuckReasonSteerFailed: AutoReopenForPRFix attempted to steer an
+	// already-active session with a PR-fix problem description
+	// (SessionSteerer.SteerActiveSession) and the delivery itself failed —
+	// distinct from StuckReasonRespawnBlockedActive, which covers the
+	// degrade paths where a steer was never attempted at all (nil-safe
+	// SessionSteerer, session not live, or dedup/debounce suppression). See
+	// ADR-002 (project_plans/pr-fix-steering/decisions/): reusing
+	// RespawnBlockedActive here would render BlockerChip's fixed "Auto-
+	// respawn skipped" label for a strictly worse outcome (attempted and
+	// failed). Set/resolved by notifyActiveSessionSteered
+	// (server/services/backlog_service_pr_fix_steer.go); the two reasons are
+	// mutually exclusive per item — each path resolves the other.
+	StuckReasonSteerFailed StuckReason = "steer_failed"
 )
 
 // AllStuckReasons lists every valid StuckReason constant.
@@ -147,6 +226,12 @@ var AllStuckReasons = []StuckReason{
 	StuckReasonPRPendingNoPR,
 	StuckReasonReworkBlockedStale,
 	StuckReasonPRNeedsFix,
+	StuckReasonRespawnBlockedActive,
+	StuckReasonLikelyFlaky,
+	StuckReasonBlockedByDependency,
+	StuckReasonMultipleReasons,
+	StuckReasonBounceCapExhausted,
+	StuckReasonSteerFailed,
 }
 
 // IsValid reports whether r is a known stuck reason value.
@@ -155,7 +240,9 @@ func (r StuckReason) IsValid() bool {
 	case StuckReasonPRReadyUnmerged, StuckReasonReworkCap, StuckReasonAbandonedReview,
 		StuckReasonStaleWork, StuckReasonBouncing, StuckReasonPushFailed, StuckReasonOrphanedTriage,
 		StuckReasonAutonomousStuck, StuckReasonSpawnFailed, StuckReasonPlanNotApproved,
-		StuckReasonPRPendingNoPR, StuckReasonReworkBlockedStale, StuckReasonPRNeedsFix:
+		StuckReasonPRPendingNoPR, StuckReasonReworkBlockedStale, StuckReasonPRNeedsFix,
+		StuckReasonRespawnBlockedActive, StuckReasonLikelyFlaky, StuckReasonBlockedByDependency,
+		StuckReasonMultipleReasons, StuckReasonBounceCapExhausted, StuckReasonSteerFailed:
 		return true
 	}
 	return false
@@ -413,11 +500,13 @@ func ValidTransitions() map[BacklogStatus]map[BacklogStatus]bool {
 
 // Sentinel errors for transition guards.
 var (
-	ErrACRequired            = errors.New("acceptance criteria required before marking ready")
-	ErrPlanRequired          = errors.New("plan must be approved or skip_planning must be true before spawning work session")
-	ErrPlanArtifactsRequired = errors.New("plan artifacts path is required when planning is not skipped")
-	ErrVerdictRequired       = errors.New("PASS verdict or manual override required before marking done")
-	ErrCodeNotOnMain         = errors.New("code changes must actually be on main (merged locally or via a merged PR) before marking done; provide override_reason to bypass")
+	ErrACRequired                   = errors.New("acceptance criteria required before marking ready")
+	ErrPlanRequired                 = errors.New("plan must be approved or skip_planning must be true before spawning work session")
+	ErrPlanArtifactsRequired        = errors.New("plan artifacts path is required when planning is not skipped")
+	ErrVerdictRequired              = errors.New("PASS verdict or manual override required before marking done")
+	ErrCodeNotOnMain                = errors.New("code changes must actually be on main (merged locally or via a merged PR) before marking done; provide override_reason to bypass")
+	ErrUnresolvedBlockers           = errors.New("item has one or more blockers that have not reached done")
+	ErrVerdictClearRequiredForReady = errors.New("item has a recorded PASS verdict; provide override_reason to send it back to ready anyway")
 )
 
 // BacklogItemTransitionInput carries the fields needed by TransitionGuard.
@@ -436,6 +525,13 @@ type BacklogItemTransitionInput struct {
 	// still has PrURL set, so it was never proof the code shipped. The
 	// review→done guard uses this to block premature done transitions.
 	HasUnshippedCode bool
+	// HasUnresolvedBlockers is true when this item has at least one
+	// BacklogItemDependency where the blocker has not reached done. The
+	// ready/queued->in_progress guard uses this to keep a gated item from
+	// being dequeued/started ahead of its blocker. Callers populate this via
+	// a batched query (see DequeueNextQueuedItems) rather than a per-item
+	// lookup.
+	HasUnresolvedBlockers bool
 }
 
 // TransitionGuard validates business rules before a status transition.
@@ -455,6 +551,9 @@ func TransitionGuard(item BacklogItemTransitionInput, to BacklogStatus) error {
 
 	case from == BacklogStatusReady && to == BacklogStatusInProgress,
 		from == BacklogStatusQueued && to == BacklogStatusInProgress:
+		if item.HasUnresolvedBlockers {
+			return ErrUnresolvedBlockers
+		}
 		if !item.PlanApproved && !item.SkipPlanning {
 			return ErrPlanRequired
 		}
@@ -467,6 +566,21 @@ func TransitionGuard(item BacklogItemTransitionInput, to BacklogStatus) error {
 		criteria, err := ParseAcCriteria(item.AcCriteria)
 		if err != nil || len(criteria) == 0 {
 			return ErrACRequired
+		}
+		return nil
+
+	case (from == BacklogStatusReview || from == BacklogStatusPRPending) && to == BacklogStatusReady:
+		// Backward "re-spawn without re-triaging" edge. Without this guard, an
+		// item that already has a recorded PASS verdict can be sent back to
+		// ready and get permanently stuck: report_pr_created only accepts
+		// review/pr_pending, so the item can never complete that RPC again
+		// without a status transition first. Scoped to review/pr_pending only —
+		// must not affect the unrelated done->ready backward edge.
+		if item.OverrideReason != "" {
+			return nil
+		}
+		if item.OverallOutcome == ReviewOutcomePass {
+			return ErrVerdictClearRequiredForReady
 		}
 		return nil
 

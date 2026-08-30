@@ -1,0 +1,24 @@
+{
+  "id": "session:ci-status-badge",
+  "type": "frontend",
+  "name": "CI status badge in the diff viewer header",
+  "component": "CIStatusBadge",
+  "path": "web-app/src/components/sessions/CIStatusBadge.tsx",
+  "filePath": "web-app/src/components/sessions/CIStatusBadge.tsx",
+  "markerLine": 1,
+  "tested": true,
+  "testIds": [
+    "CIStatusBadge_should_RenderPassingBadge_When_CheckConclusionIsSuccess",
+    "CIStatusBadge_should_RenderNoChecksBadge_When_CheckConclusionIsEmptyOrNeutral",
+    "CIStatusBadge_should_LinkToChecksPage_When_PrUrlProvided",
+    "CIStatusBadge_should_OmitHref_When_PrUrlMissing",
+    "CIStatusBadge_should_ReturnNull_When_PrNumberIsZero",
+    "CIStatusBadge_should_ExposeStatusRoleAndAriaLabel_When_Rendered",
+    "CIStatusBadge_should_PairIconWithTextLabel_When_EachStateRenders",
+    "CIStatusBadge_should_NotInvokeAnyRPCOrFetch_When_Rendering",
+    "ci-status-badge > shows the expected badge text for each CI conclusion fixture",
+    "ci-status-badge > CIBadge_should_OpenChecksPageInNewTab_When_Clicked",
+    "ci-status-badge > shows no badge (not an empty placeholder) for the no-PR fixture"
+  ],
+  "lastModified": "2026-08-03T00:00:00Z"
+}

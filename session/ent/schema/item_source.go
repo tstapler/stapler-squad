@@ -28,6 +28,12 @@ func (ItemSource) Fields() []ent.Field {
 			Comment("JSON with encrypted PAT"),
 		field.Bool("enabled").
 			Default(true),
+		field.Bool("forward_sync_enabled").
+			Default(false),
+		field.Bool("backward_sync_enabled").
+			Default(false),
+		field.String("forward_sync_close_label").
+			Optional(),
 		field.String("sync_cursor").
 			Optional(),
 		field.Time("last_synced_at").

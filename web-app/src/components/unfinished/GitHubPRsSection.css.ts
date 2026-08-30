@@ -1,54 +1,16 @@
 import { style } from "@vanilla-extract/css";
 import { vars } from "@/styles/theme.css";
+import { badgeBase } from "@/styles/collapsibleSection.css";
 
-export const section = style({
-  display: "flex",
-  flexDirection: "column",
-  gap: vars.space["3"],
-});
+export {
+  section,
+  sectionHeader,
+  chevron,
+  chevronExpanded,
+  sectionTitle,
+} from "@/styles/collapsibleSection.css";
 
-export const sectionHeader = style({
-  display: "flex",
-  alignItems: "center",
-  gap: vars.space["2"],
-  padding: `${vars.space["2"]} ${vars.space["3"]}`,
-  borderRadius: vars.radii.sm,
-  cursor: "pointer",
-  userSelect: "none",
-  outline: "none",
-  ":hover": {
-    background: vars.color.hoverBackground,
-  },
-  ":focus-visible": {
-    boxShadow: `0 0 0 2px ${vars.color.inputFocusBorder}`,
-  },
-});
-
-export const chevron = style({
-  fontSize: vars.fontSize.xs,
-  color: vars.color.textMuted,
-  transition: "transform 0.15s",
-  display: "inline-block",
-});
-
-export const chevronExpanded = style({
-  transform: "rotate(90deg)",
-});
-
-export const sectionTitle = style({
-  fontWeight: 600,
-  fontSize: vars.fontSize.sm,
-  color: vars.color.textPrimary,
-});
-
-export const badge = style({
-  fontSize: vars.fontSize.xs,
-  color: vars.color.textMuted,
-  background: vars.color.surfaceSubtle,
-  borderRadius: vars.radii.full,
-  padding: `${vars.space["1"]} ${vars.space["2"]}`,
-  marginLeft: vars.space["2"],
-});
+export const badge = style([badgeBase, { marginLeft: vars.space["2"] }]);
 
 export const username = style({
   fontSize: vars.fontSize.xs,
@@ -90,6 +52,13 @@ export const prTitle = style({
   color: vars.color.textPrimary,
   textDecoration: "none",
   flexGrow: 1,
+  // minWidth:0 overrides the flex item's default content-based automatic
+  // minimum size; overflowWrap lets long unbreakable tokens (e.g.
+  // "cache_read_input_tokens/cache_creation_input_tokens") wrap instead of
+  // forcing this row (and every ancestor up to UnfinishedTab's .container)
+  // wider than the viewport on mobile.
+  minWidth: 0,
+  overflowWrap: "break-word",
   lineHeight: 1.4,
   ":hover": {
     textDecoration: "underline",
@@ -389,6 +358,47 @@ export const addAccountButton = style({
     borderColor: vars.color.primary,
     color: vars.color.primary,
   },
+});
+
+export const cliImportSection = style({
+  display: "flex",
+  flexDirection: "column",
+  gap: vars.space["1"],
+  padding: `${vars.space["2"]} 0`,
+});
+
+export const cliImportLabel = style({
+  fontSize: vars.fontSize.xs,
+  color: vars.color.textMuted,
+});
+
+export const cliImportHostList = style({
+  display: "flex",
+  flexWrap: "wrap",
+  gap: vars.space["2"],
+});
+
+export const cliImportHostButton = style({
+  padding: `2px ${vars.space["2"]}`,
+  background: vars.color.accentBg,
+  border: `1px solid ${vars.color.inputFocusBorder}`,
+  borderRadius: vars.radii.full,
+  fontSize: vars.fontSize.xs,
+  color: vars.color.inputFocusBorder,
+  cursor: "pointer",
+  whiteSpace: "nowrap",
+  selectors: {
+    "&:disabled": {
+      opacity: 0.6,
+      cursor: "default",
+    },
+  },
+});
+
+export const cliImportDivider = style({
+  fontSize: vars.fontSize.xs,
+  color: vars.color.textMuted,
+  opacity: 0.7,
 });
 
 // --- Stats bar ---

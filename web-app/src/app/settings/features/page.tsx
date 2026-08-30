@@ -4,6 +4,7 @@
 import { useFeatureFlags } from "@/lib/contexts/FeatureFlagsContext";
 import { usePageView } from "@/lib/analytics";
 import { vars } from "@/styles/theme.css";
+import { StreamHubRolloutPanel } from "@/components/settings/StreamHubRolloutPanel";
 import {
   container,
   title,
@@ -24,6 +25,16 @@ import {
 const FEATURE_META: Record<string, { label: string }> = {
   backlog: { label: "Backlog" },
   "backlog:sdd-default-pipeline": { label: "Backlog: default new items to SDD pipeline" },
+  "review:block-approval-on-ci-failure": { label: "Block Approve when CI is failing" },
+  "terminal:resync-visibility-scope": { label: "Terminal resync: scope to visible terminal" },
+  "terminal:resync-correlation-id": { label: "Terminal resync: correlation IDs" },
+  "terminal:resync-skip-stale-dimension-slowpath": {
+    label: "Terminal resync: skip slow path for backgrounded terminals",
+  },
+  "terminal:resync-exec-gate-fast-lane": { label: "Terminal resync: exec-gate fast lane" },
+  "terminal:resync-stagger": { label: "Terminal resync: stagger bursts" },
+  "terminal:resync-compression": { label: "Terminal resync: wire compression" },
+  "terminal:resync-batching": { label: "Terminal resync: batch requests" },
 };
 
 export default function FeaturesPage() {
@@ -46,20 +57,26 @@ export default function FeaturesPage() {
       ) : !error && flagList.length === 0 ? (
         <p className={emptyMessage}>No feature flags configured.</p>
       ) : (
-        flagList.map(({ name, enabled, description }) => {
+        flagList.map(({ name, enabled, description, statusDetail }) => {
           const meta = FEATURE_META[name];
           const label = meta?.label ?? name;
           return (
-            <div key={name} className={flagRow}>
+            <div key={name} className={flagRow} data-testid="feature-flag-row">
               <div className={flagInfo}>
-                <div className={flagName}>
+                <div className={flagName} data-testid="feature-flag-name">
                   {label}
-                  <span className={`${badge} ${enabled ? badgeEnabled : badgeDisabled}`}>
+                  <span
+                    className={`${badge} ${enabled ? badgeEnabled : badgeDisabled}`}
+                    data-testid="feature-flag-status"
+                  >
                     {enabled ? "On" : "Off"}
                   </span>
                 </div>
                 {description && (
                   <div className={flagDescription}>{description}</div>
+                )}
+                {statusDetail && (
+                  <div className={flagDescription}>{statusDetail}</div>
                 )}
               </div>
               <button
@@ -80,6 +97,8 @@ export default function FeaturesPage() {
           );
         })
       )}
+
+      <StreamHubRolloutPanel />
     </main>
   );
 }

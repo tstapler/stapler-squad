@@ -43,9 +43,31 @@ func (a *Associator) Associate(result *ParseResult) (sessionID string, isOrphan 
 	if a == nil || a.storage == nil {
 		return "", true
 	}
+	return associate(result, a.storage.ListSessionRecords())
+}
 
-	sessions := a.storage.ListSessionRecords()
+// Snapshot fetches the current session records once, for callers that need to
+// call AssociateWithSnapshot for many results without re-querying storage per
+// call. Both ListInstancesFiltered-style loops in InsightsService previously
+// called Associate per result, each paying a fresh ListSessionRecords() ->
+// ListInstanceData() full-repository scan.
+func (a *Associator) Snapshot() []SessionRecord {
+	if a == nil || a.storage == nil {
+		return nil
+	}
+	return a.storage.ListSessionRecords()
+}
 
+// AssociateWithSnapshot is Associate against a pre-fetched session snapshot
+// (see Snapshot), instead of re-querying storage on every call.
+func (a *Associator) AssociateWithSnapshot(result *ParseResult, sessions []SessionRecord) (sessionID string, isOrphan bool) {
+	if a == nil {
+		return "", true
+	}
+	return associate(result, sessions)
+}
+
+func associate(result *ParseResult, sessions []SessionRecord) (sessionID string, isOrphan bool) {
 	// Strategy 1: exact conversation UUID match.
 	if result.SessionUUID != "" {
 		for _, s := range sessions {

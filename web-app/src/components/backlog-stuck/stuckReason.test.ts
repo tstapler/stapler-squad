@@ -19,6 +19,11 @@ const ALL_REASONS: StuckReason[] = [
   StuckReason.BOUNCING,
   StuckReason.PUSH_FAILED,
   StuckReason.REWORK_BLOCKED_STALE,
+  StuckReason.PR_NEEDS_FIX,
+  StuckReason.RESPAWN_BLOCKED_ACTIVE,
+  StuckReason.LIKELY_FLAKY,
+  StuckReason.BLOCKED_BY_DEPENDENCY,
+  StuckReason.STEER_FAILED,
 ];
 
 describe("stuckReason", () => {
@@ -47,6 +52,45 @@ describe("stuckReason", () => {
 
     it("gives push_failed a distinct, descriptive label", () => {
       expect(getStuckReasonLabel(StuckReason.PUSH_FAILED)).toMatch(/push/i);
+    });
+
+    it("gives pr_needs_fix a real label, not the Unknown-reason fallback", () => {
+      expect(getStuckReasonLabel(StuckReason.PR_NEEDS_FIX)).not.toBe(
+        getStuckReasonLabel(StuckReason.UNSPECIFIED)
+      );
+      expect(getStuckReasonClass(StuckReason.PR_NEEDS_FIX)).not.toBe(
+        getStuckReasonClass(StuckReason.UNSPECIFIED)
+      );
+    });
+
+    it("gives respawn_blocked_active a real label, not the Unknown-reason fallback", () => {
+      expect(getStuckReasonLabel(StuckReason.RESPAWN_BLOCKED_ACTIVE)).not.toBe(
+        getStuckReasonLabel(StuckReason.UNSPECIFIED)
+      );
+      expect(getStuckReasonClass(StuckReason.RESPAWN_BLOCKED_ACTIVE)).not.toBe(
+        getStuckReasonClass(StuckReason.UNSPECIFIED)
+      );
+    });
+
+    it("gives steer_failed a real label/class, not the Unknown-reason fallback", () => {
+      expect(getStuckReasonLabel(StuckReason.STEER_FAILED)).not.toBe(
+        getStuckReasonLabel(StuckReason.UNSPECIFIED)
+      );
+      expect(getStuckReasonClass(StuckReason.STEER_FAILED)).not.toBe(
+        getStuckReasonClass(StuckReason.UNSPECIFIED)
+      );
+    });
+
+    it("gives likely_flaky a real label, class, and icon, not the Unknown-reason fallback", () => {
+      expect(getStuckReasonLabel(StuckReason.LIKELY_FLAKY)).not.toBe(
+        getStuckReasonLabel(StuckReason.UNSPECIFIED)
+      );
+      expect(getStuckReasonClass(StuckReason.LIKELY_FLAKY)).not.toBe(
+        getStuckReasonClass(StuckReason.UNSPECIFIED)
+      );
+      expect(getStuckReasonIcon(StuckReason.LIKELY_FLAKY).length).toBeGreaterThan(0);
+      // Copy must read as a hint to verify, not a confident verdict (validation.md).
+      expect(getStuckReasonLabel(StuckReason.LIKELY_FLAKY)).toMatch(/possibly|verify/i);
     });
 
     it("falls back to the UNSPECIFIED label/class for an out-of-range value", () => {
@@ -80,6 +124,32 @@ describe("stuckReason", () => {
       expect(icon).not.toBe(getStuckReasonIcon(StuckReason.STALE_WORK));
       // Icon must never be the sole signal — a text label always accompanies it.
       expect(getStuckReasonLabel(StuckReason.REWORK_BLOCKED_STALE).length).toBeGreaterThan(0);
+    });
+  });
+
+  // backlog-bounce-escalation Story 2.1.3: the two synthetic escalation
+  // reasons must render with real labels/classes rather than falling back to
+  // the UNSPECIFIED placeholder — mirrors the ReworkBlockedStale pattern
+  // above.
+  describe("getStuckReasonLabel_should_returnDistinctLabel_When_MultipleReasons", () => {
+    it("returns a real label/class, not the Unknown-reason fallback", () => {
+      expect(getStuckReasonLabel(StuckReason.MULTIPLE_REASONS)).not.toBe(
+        getStuckReasonLabel(StuckReason.UNSPECIFIED)
+      );
+      expect(getStuckReasonClass(StuckReason.MULTIPLE_REASONS)).not.toBe(
+        getStuckReasonClass(StuckReason.UNSPECIFIED)
+      );
+    });
+  });
+
+  describe("getStuckReasonLabel_should_returnDistinctLabel_When_BounceCapExhausted", () => {
+    it("returns a real label/class, not the Unknown-reason fallback", () => {
+      expect(getStuckReasonLabel(StuckReason.BOUNCE_CAP_EXHAUSTED)).not.toBe(
+        getStuckReasonLabel(StuckReason.UNSPECIFIED)
+      );
+      expect(getStuckReasonClass(StuckReason.BOUNCE_CAP_EXHAUSTED)).not.toBe(
+        getStuckReasonClass(StuckReason.UNSPECIFIED)
+      );
     });
   });
 

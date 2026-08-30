@@ -15,6 +15,7 @@ import (
 // TestSessionRestartWithConversationContinuity verifies that sessions restart
 // with the --resume flag when Claude session data is available
 func TestSessionRestartWithConversationContinuity(t *testing.T) {
+	t.Parallel()
 	if testing.Short() {
 		t.Skip("skipping integration test that starts real tmux sessions")
 	}
@@ -326,6 +327,7 @@ func testLazyRecoveryRestart(t *testing.T) {
 // TestClaudeCommandBuilderIntegration verifies the integration of ClaudeCommandBuilder
 // with the instance lifecycle
 func TestClaudeCommandBuilderIntegration(t *testing.T) {
+	t.Parallel()
 	if testing.Short() {
 		t.Skip("skipping integration test that starts real tmux sessions")
 	}
@@ -573,6 +575,7 @@ func testSessionDataPersistence(t *testing.T) {
 
 // TestInstanceWithWorktreeAndClaudeSession verifies Claude sessions work with git worktrees
 func TestInstanceWithWorktreeAndClaudeSession(t *testing.T) {
+	t.Parallel()
 	if testing.Short() {
 		t.Skip("skipping integration test that starts real tmux sessions")
 	}
@@ -671,6 +674,7 @@ func TestInstanceWithWorktreeAndClaudeSession(t *testing.T) {
 // pane's foreground PID is unchanged — i.e. it hot-attached to the same
 // process rather than relaunching it.
 func TestFromInstanceData_ActiveSession_DetectsAlreadyRunningTmux(t *testing.T) {
+	t.Parallel()
 	if testing.Short() {
 		t.Skip("skipping integration test that starts real tmux sessions")
 	}
@@ -681,7 +685,7 @@ func TestFromInstanceData_ActiveSession_DetectsAlreadyRunningTmux(t *testing.T) 
 		Program:          "bash -c 'echo test session; exec bash'",
 		SessionType:      SessionTypeDirectory,
 		AutoYes:          true,
-		TmuxServerSocket: getTestTmuxSocket(t),
+		TmuxServerSocket: testTmuxSocket(t),
 	})
 	require.NoError(t, err)
 	defer func() {
@@ -757,6 +761,7 @@ func TestFromInstanceData_ActiveSession_DetectsAlreadyRunningTmux(t *testing.T) 
 // program), comes back from LoadInstances() unstarted and near-instantly,
 // rather than blocking on a relaunch.
 func TestLoadInstances_DoesNotBlockOnStartingActiveSessions(t *testing.T) {
+	t.Parallel()
 	if testing.Short() {
 		t.Skip("skipping integration test that starts real tmux sessions")
 	}
@@ -774,7 +779,7 @@ func TestLoadInstances_DoesNotBlockOnStartingActiveSessions(t *testing.T) {
 		Program:          "bash -c 'echo hi; exec bash'",
 		SessionType:      SessionTypeDirectory,
 		AutoYes:          true,
-		TmuxServerSocket: getTestTmuxSocket(t),
+		TmuxServerSocket: testTmuxSocket(t),
 	})
 	require.NoError(t, err)
 	defer func() {

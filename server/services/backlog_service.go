@@ -15,6 +15,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	githubpkg "github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
@@ -76,6 +77,21 @@ type SessionStopper interface {
 	TimeSinceLastMeaningfulOutput(sessionUUID string) (dur time.Duration, ok bool)
 }
 
+// SessionSteerer allows BacklogService to inject a message into an already-
+// active session (e.g. a PR-fix problem description) instead of skipping a
+// respawn outright. It is nil-safe: BacklogService degrades gracefully when
+// not wired, mirroring SessionStopper.
+type SessionSteerer interface {
+	SessionProgram(sessionUUID string) (program string, ok bool)
+	// IsReadyForSteer reports whether sessionUUID's pane is confirmed idle
+	// and safe for an unattended PTY write. False — including when
+	// readiness can't be determined — means the caller must not steer (see
+	// *SessionService.IsReadyForSteer's doc comment for why "unknown" must
+	// never default to true here).
+	IsReadyForSteer(sessionUUID string) bool
+	SteerActiveSession(ctx context.Context, sessionUUID, message string) error
+}
+
 // RepoWatchRemover lets BacklogService tell the background unfinished-changes
 // scanner (session/unfinished.Scanner) to stop watching a repo path once its
 // worktree has been removed from disk — see BUG-034. Without this, the
@@ -101,6 +117,7 @@ type BacklogService struct {
 	sourceBackend     itemSourceBackend
 	sessionCreator    SessionCreator
 	sessionStopper    SessionStopper
+	sessionSteerer    SessionSteerer
 	autonomousStarter AutonomousDriverStarter
 	// repoWatchRemover tells the unfinished-changes scanner to stop watching a
 	// worktree path once it's removed from disk (BUG-034). nil-safe — wired via
@@ -163,11 +180,45 @@ type BacklogService struct {
 	// section.
 	spawnInFlight sync.Map
 
+	// steerDedup maps itemID -> lastSteerReason, the most recently delivered
+	// PR-fix steer reason signature, when, and which session received it —
+	// suppresses an exact-repeat steer within steerCooldown, but only for the
+	// same session (a changed active work session is always treated as never
+	// delivered — architecture review concern). In-memory only (see plan.md's
+	// Pattern Decisions: bounded blast radius, no DB durability needed).
+	steerDedup sync.Map
+	// steerConflictDebounce maps itemID -> conflictDebounceState — the
+	// two-consecutive-tick confirmation gate for a newly-appearing merge
+	// conflict signal (pitfalls research §6, cli/cli#9583), also keyed by
+	// session identity via conflictDebounceState's own pendingConflict.sessionUUID.
+	steerConflictDebounce sync.Map
+	// steerInFlight maps itemID -> struct{}, guarding steerActiveSessionForPRFix
+	// against two overlapping reconcile ticks racing to steer the same item
+	// before steerDedup is updated. Mirrors spawnInFlight's self-cleaning
+	// LoadOrStore/defer-Delete idiom.
+	steerInFlight sync.Map
+
 	// headless triage pool and concurrency controls.
 	headlessPool   headless.PoolClient
 	shutdownCtx    context.Context
 	shutdownCancel context.CancelFunc
 	triageSem      chan struct{}
+
+	// triageInFlight tracks, per item ID, whether a headless triage call this
+	// process itself started is still genuinely running. tombstoneOrphanTriageSessions
+	// has no other way to tell a still-running headless call apart from a dead one —
+	// unlike a work/review session, there's no tmux session to query liveness against
+	// (see BUG-054: before this field existed, tombstoneOrphanTriageSessions treated
+	// every not-yet-ended headless triage session as dead unconditionally, so
+	// retriggering triage for an item with a genuinely still-running call silently
+	// orphaned that live call in the DB and started a fully redundant duplicate).
+	// Same self-cleaning LoadOrStore-on-entry/Delete-via-defer-on-exit shape as
+	// spawnInFlight above, for the same reason: a sync.Map here never leaks an entry
+	// past the life of the call it tracks, and this is a single-process server so an
+	// in-process guard is sufficient. Deliberately NOT persisted — on a fresh process
+	// start after a restart, every item's entry is (correctly) absent, since no
+	// goroutine in the new process could possibly still be running an old triage call.
+	triageInFlight sync.Map
 
 	// capabilityCheck gates the first codebase-read call per process lifetime (Story
 	// 2.2.6). Defaults to headless.DefaultCapabilitySelfCheck (shared with
@@ -264,6 +315,33 @@ func (s *BacklogService) ConfigMu() *sync.RWMutex {
 	return &s.cfgMu
 }
 
+// EnterpriseHosts returns the statically-configured GitHub Enterprise
+// hostnames (normalized, github.com excluded), for callers that need to
+// recognize GHE PR/issue URLs — e.g. server/mcp/tools_backlog.go's
+// reportPRCreated and importGitHubIssue, which otherwise fall back to
+// session.ParseGitHubURL's github.com-only matching and silently fail to
+// recognize any GHE host. Mirrors SessionService.enterpriseHosts, minus that
+// method's additional union with cached-account hosts (BacklogService has no
+// UserPRCache dependency) — extend this if/when that's needed here too.
+// Read under cfgMu's read lock for the same reason as
+// maxConcurrentBacklogWorkItems below.
+func (s *BacklogService) EnterpriseHosts() []string {
+	s.cfgMu.RLock()
+	defer s.cfgMu.RUnlock()
+	configuredHosts := s.cfg.GetGitHubEnterpriseHosts()
+	hosts := make([]string, 0, len(configuredHosts))
+	seen := make(map[string]bool, len(configuredHosts))
+	for _, h := range configuredHosts {
+		host := githubpkg.NormalizeHost(h.Host)
+		if host == "" || githubpkg.IsGitHubCom(host) || seen[host] {
+			continue
+		}
+		seen[host] = true
+		hosts = append(hosts, host)
+	}
+	return hosts
+}
+
 // maxConcurrentBacklogWorkItems reads cfg.MaxConcurrentBacklogWorkItemsOrDefault()
 // under cfgMu's read lock so a concurrent DefaultsService.UpdateGlobalDefaults
 // write (propagated via SetSharedBacklogConfig) is always observed by the next
@@ -280,6 +358,28 @@ func (s *BacklogService) maxAutoReworkIterations() int {
 	s.cfgMu.RLock()
 	defer s.cfgMu.RUnlock()
 	return s.cfg.MaxAutoReworkIterationsOrDefault()
+}
+
+// autoSpawnReadyItemsEnabled reads cfg.AutoSpawnReadyItemsOrDefault() under
+// cfgMu's read lock — see maxConcurrentBacklogWorkItems's doc comment.
+func (s *BacklogService) autoSpawnReadyItemsEnabled() bool {
+	s.cfgMu.RLock()
+	defer s.cfgMu.RUnlock()
+	return s.cfg.AutoSpawnReadyItemsOrDefault()
+}
+
+// Admit reports whether a new trigger-fired session may be created right now, per the
+// same MaxConcurrentBacklogWorkItems WIP cap SpawnSessionFromItem's own gate enforces
+// (backlog_service_triage.go). Implements server/workflows.AdmissionGate — wired into
+// Scheduler at construction (server/dependencies.go) so Scheduler.FireNow/FireTrigger
+// can no longer bypass this cap (webhook-triggers Epic 1.3, closing the collateral
+// debt the 2026-07-12 OOM incident's WIP limit was meant to prevent everywhere).
+func (s *BacklogService) Admit(ctx context.Context) (bool, error) {
+	liveCount, err := s.countLiveBacklogWorkSessions(ctx)
+	if err != nil {
+		return false, fmt.Errorf("count live work sessions: %w", err)
+	}
+	return liveCount < s.maxConcurrentBacklogWorkItems(), nil
 }
 
 // SetEventBus wires in the event bus used to publish operator-facing notifications.
@@ -319,6 +419,24 @@ func NewBacklogService(storage *session.Storage, creator SessionCreator, cfg *co
 // SetHeadlessPool wires the headless pool for autonomous triage calls.
 func (s *BacklogService) SetHeadlessPool(pool headless.PoolClient) {
 	s.headlessPool = pool
+}
+
+// claimantHostID returns the stable per-host/per-instance identifier for the
+// process performing a backlog claim or attach, for cross-host provenance on
+// ItemSession rows. It is distinct from STAPLER_SQUAD_INSTANCE (a config
+// namespace, not an identity) and from session/contexts.go's cloud InstanceID
+// (cloud-only, not populated for local/dev). Returns "" on any failure so a
+// claim/attach never fails just because host-identity persistence did.
+func (s *BacklogService) claimantHostID() string {
+	if s.cfg == nil {
+		return ""
+	}
+	id, err := s.cfg.GetOrCreateClaimantHostID()
+	if err != nil {
+		log.WarningLog().Printf("[claimantHostID] failed to resolve claimant host id: %v", err)
+		return ""
+	}
+	return id
 }
 
 // SetScrollbackManager wires in the scrollback manager used to write a searchable
@@ -381,6 +499,31 @@ func (s *BacklogService) Shutdown() {
 // SetSessionStopper wires the optional session stopper used to kill orphaned sessions on re-triage.
 func (s *BacklogService) SetSessionStopper(stopper SessionStopper) {
 	s.sessionStopper = stopper
+}
+
+// SetSessionSteerer wires the optional session steerer used to inject a
+// PR-fix problem description into an already-active session instead of
+// skipping the respawn outright.
+func (s *BacklogService) SetSessionSteerer(steerer SessionSteerer) {
+	s.sessionSteerer = steerer
+}
+
+// GetSessionSteerer returns the wired SessionSteerer, or nil if
+// SetSessionSteerer was never called. Exists so server-package tests can
+// assert real bootstrap wiring (dependencies.go) without exposing the
+// field directly — mirrors SessionService.GetBacklogLifecycleListener's
+// wiring-test-support role (pre-mortem.md P2 #5: this is the first such
+// getter for this pattern on BacklogService).
+func (s *BacklogService) GetSessionSteerer() SessionSteerer {
+	return s.sessionSteerer
+}
+
+// GetSessionStopper returns the wired SessionStopper, or nil. Added
+// alongside GetSessionSteerer since SetSessionStopper had the identical
+// untested-wiring gap (pre-mortem.md P2 #5) — fixing both costs one extra
+// assertion in the same test, not a second test file.
+func (s *BacklogService) GetSessionStopper() SessionStopper {
+	return s.sessionStopper
 }
 
 // SetRepoWatchRemover wires the optional unfinished-changes scanner hook used
@@ -463,6 +606,9 @@ func itemSessionToProto(is session.ItemSessionSummary, costFor func(tmuxUUID str
 		CreatedAt:                timestamppb.New(is.CreatedAt),
 		PipelineModeSnapshot:     is.PipelineModeSnapshot,
 		PipelineModeSnapshotHash: is.PipelineModeSnapshotHash,
+		EndReason:                is.EndReason,
+		FailureCapturePath:       is.FailureCapturePath,
+		ClaimantHostId:           is.ClaimantHostID,
 	}
 	if is.StartedAt != nil {
 		p.StartedAt = timestamppb.New(*is.StartedAt)
@@ -510,7 +656,7 @@ func itemSessionToProto(is session.ItemSessionSummary, costFor func(tmuxUUID str
 	if is.TriageResult != "" {
 		var tr triageResultJSON
 		if jsonErr := json.Unmarshal([]byte(is.TriageResult), &tr); jsonErr != nil {
-			log.WarningLog.Printf("[itemSessionToProto] invalid triage_result JSON for session %s: %v", is.ID, jsonErr)
+			log.WarningLog().Printf("[itemSessionToProto] invalid triage_result JSON for session %s: %v", is.ID, jsonErr)
 		} else {
 			suggs := make([]*sessionv1.TriageSuggestion, len(tr.Suggestions))
 			for i, sg := range tr.Suggestions {
@@ -565,17 +711,23 @@ type triageResultJSON struct {
 // Used by ListBacklogItems to avoid over-hydrating description/plan fields.
 func backlogItemSummaryToProto(item *session.BacklogItemSummary, costFor func(tmuxUUID string) float64) *sessionv1.BacklogItem {
 	p := &sessionv1.BacklogItem{
-		Id:         item.ID,
-		Title:      item.Title,
-		Priority:   int32(item.Priority),
-		Status:     string(item.Status),
-		RepoPath:   item.RepoPath,
-		Notes:      item.Notes,
-		ExternalId: item.ExternalID,
-		PrUrl:      item.PrURL,
-		PrNumber:   int32(item.PrNumber),
-		CreatedAt:  timestamppb.New(item.CreatedAt),
-		UpdatedAt:  timestamppb.New(item.UpdatedAt),
+		Id:                 item.ID,
+		PublicId:           item.PublicIDRaw,
+		Title:              item.Title,
+		Priority:           int32(item.Priority),
+		Status:             string(item.Status),
+		RepoPath:           item.RepoPath,
+		Notes:              item.Notes,
+		ExternalId:         item.ExternalID,
+		Labels:             item.Labels,
+		PrUrl:              item.PrURL,
+		PrNumber:           int32(item.PrNumber),
+		CreatedAt:          timestamppb.New(item.CreatedAt),
+		UpdatedAt:          timestamppb.New(item.UpdatedAt),
+		AllowedTransitions: allowedTransitionStrings(item.Status),
+	}
+	if item.ExternalURL != "" {
+		p.ExternalUrl = &item.ExternalURL
 	}
 	if item.ArchivedAt != nil {
 		p.ArchivedAt = timestamppb.New(*item.ArchivedAt)
@@ -608,33 +760,62 @@ func backlogItemSummaryToProto(item *session.BacklogItemSummary, costFor func(tm
 	return p
 }
 
+// protoWorkflowEngine is a stateless, read-only WorkflowEngine used only to
+// surface AllowedTransitions on the wire (backlogItemToProto below) — package
+// state is safe here since the underlying transitions map is never mutated
+// after construction. Not s.engine: backlogItemToProto is a free function
+// called from many BacklogService methods, and threading an engine parameter
+// through every call site would be a much larger change for the same result.
+var protoWorkflowEngine = session.NewDefaultWorkflowEngine()
+
+// allowedTransitionStrings returns the string form of
+// protoWorkflowEngine.AllowedTransitions(from), for BacklogItem.allowed_transitions.
+func allowedTransitionStrings(from session.BacklogStatus) []string {
+	targets := protoWorkflowEngine.AllowedTransitions(from)
+	out := make([]string, len(targets))
+	for i, t := range targets {
+		out[i] = string(t)
+	}
+	return out
+}
+
 // backlogItemToProto maps a BacklogItemData to the proto BacklogItem message.
 func backlogItemToProto(item *session.BacklogItemData, costFor func(tmuxUUID string) float64) *sessionv1.BacklogItem {
 	p := &sessionv1.BacklogItem{
-		Id:                item.ID,
-		Title:             item.Title,
-		Description:       item.Description,
-		Priority:          int32(item.Priority),
-		Status:            item.Status,
-		RepoPath:          item.RepoPath,
-		SkipReviewGate:    item.SkipReviewGate,
-		SkipPlanning:      item.SkipPlanning,
-		AutoSpawnSession:  item.AutoSpawnSession,
-		AutoCreatePr:      item.AutoCreatePR,
-		PipelineMode:      &item.PipelineMode,
-		Category:          &item.Category,
-		PlanApproved:      item.PlanApproved,
-		PlanArtifactsPath: item.PlanArtifactsPath,
-		Notes:             item.Notes,
-		ExternalId:        item.ExternalID,
-		SourceId:          item.SourceID,
-		PrUrl:             item.PrURL,
-		PrNumber:          int32(item.PrNumber),
-		CreatedAt:         timestamppb.New(item.CreatedAt),
-		UpdatedAt:         timestamppb.New(item.UpdatedAt),
+		Id:                  item.ID,
+		Title:               item.Title,
+		Description:         item.Description,
+		Priority:            int32(item.Priority),
+		Status:              item.Status,
+		RepoPath:            item.RepoPath,
+		SkipReviewGate:      item.SkipReviewGate,
+		SkipPlanning:        item.SkipPlanning,
+		AutoSpawnSession:    item.AutoSpawnSession,
+		AutoCreatePr:        item.AutoCreatePR,
+		PipelineMode:        &item.PipelineMode,
+		Category:            &item.Category,
+		PlanApproved:        item.PlanApproved,
+		PlanArtifactsPath:   item.PlanArtifactsPath,
+		PlanRejectionReason: item.PlanRejectionReason,
+		Notes:               item.Notes,
+		ExternalId:          item.ExternalID,
+		Labels:              item.Labels,
+		SourceId:            item.SourceID,
+		PrUrl:               item.PrURL,
+		PrNumber:            int32(item.PrNumber),
+		CreatedAt:           timestamppb.New(item.CreatedAt),
+		UpdatedAt:           timestamppb.New(item.UpdatedAt),
+		AllowedTransitions:  allowedTransitionStrings(session.BacklogStatus(item.Status)),
+		PublicId:            item.PublicIDRaw,
+	}
+	if item.ExternalURL != "" {
+		p.ExternalUrl = &item.ExternalURL
 	}
 	if item.PlanApprovedAt != nil {
 		p.PlanApprovedAt = timestamppb.New(*item.PlanApprovedAt)
+	}
+	if item.PlanRejectedAt != nil {
+		p.PlanRejectedAt = timestamppb.New(*item.PlanRejectedAt)
 	}
 	if item.ArchivedAt != nil {
 		p.ArchivedAt = timestamppb.New(*item.ArchivedAt)
@@ -705,19 +886,32 @@ func backlogItemToProto(item *session.BacklogItemData, costFor func(tmuxUUID str
 		p.ProgressNotes = protoNotes
 	}
 
+	// Populate activity notes (the ungated post_backlog_update log) when they
+	// were eagerly loaded.
+	if len(item.ActivityNotes) > 0 {
+		protoActivityNotes := make([]*sessionv1.BacklogActivityNote, len(item.ActivityNotes))
+		for i := range item.ActivityNotes {
+			protoActivityNotes[i] = activityNoteDataToProto(&item.ActivityNotes[i])
+		}
+		p.ActivityNotes = protoActivityNotes
+	}
+
 	return p
 }
 
 // itemSourceToProto maps an ItemSourceData to the proto ItemSource message.
 func itemSourceToProto(src *session.ItemSourceData) *sessionv1.ItemSource {
 	p := &sessionv1.ItemSource{
-		Id:              src.ID,
-		PluginId:        src.PluginID,
-		DisplayName:     src.DisplayName,
-		Enabled:         src.Enabled,
-		TokenConfigured: src.TokenConfigured,
-		CreatedAt:       timestamppb.New(src.CreatedAt),
-		UpdatedAt:       timestamppb.New(src.UpdatedAt),
+		Id:                    src.ID,
+		PluginId:              src.PluginID,
+		DisplayName:           src.DisplayName,
+		Enabled:               src.Enabled,
+		ForwardSyncEnabled:    src.ForwardSyncEnabled,
+		BackwardSyncEnabled:   src.BackwardSyncEnabled,
+		ForwardSyncCloseLabel: src.ForwardSyncCloseLabel,
+		TokenConfigured:       src.TokenConfigured,
+		CreatedAt:             timestamppb.New(src.CreatedAt),
+		UpdatedAt:             timestamppb.New(src.UpdatedAt),
 	}
 	if src.LastSyncedAt != nil {
 		p.LastSyncedAt = timestamppb.New(*src.LastSyncedAt)
@@ -740,10 +934,10 @@ func (s *BacklogService) commitAndPushItemWorktrees(ctx context.Context, session
 		g := git.NewGitWorktreeFromStorage(wt.RepoPath, wt.WorktreePath, wt.SessionName, wt.BranchName, wt.BaseCommitSHA)
 		commitMsg := fmt.Sprintf("[claudesquad] save work before done (session %s)", is.SessionUUID)
 		if commitErr := g.CommitChanges(commitMsg); commitErr != nil {
-			log.WarningLog.Printf("[commitAndPushItemWorktrees] commit failed path=%s: %v", wt.WorktreePath, commitErr)
+			log.WarningLog().Printf("[commitAndPushItemWorktrees] commit failed path=%s: %v", wt.WorktreePath, commitErr)
 		}
 		if pushErr := g.PushBranch(); pushErr != nil {
-			log.WarningLog.Printf("[commitAndPushItemWorktrees] push failed path=%s: %v", wt.WorktreePath, pushErr)
+			log.WarningLog().Printf("[commitAndPushItemWorktrees] push failed path=%s: %v", wt.WorktreePath, pushErr)
 		}
 	}
 }
@@ -783,7 +977,7 @@ func (s *BacklogService) cleanupItemWorktreesExcept(ctx context.Context, session
 		}
 		g := git.NewGitWorktreeFromStorage(wt.RepoPath, wt.WorktreePath, wt.SessionName, wt.BranchName, wt.BaseCommitSHA)
 		if cleanErr := g.Cleanup(); cleanErr != nil {
-			log.WarningLog.Printf("[cleanupItemWorktrees] failed to cleanup worktree path=%s: %v", wt.WorktreePath, cleanErr)
+			log.WarningLog().Printf("[cleanupItemWorktrees] failed to cleanup worktree path=%s: %v", wt.WorktreePath, cleanErr)
 			continue
 		}
 		// The worktree directory is gone — stop the unfinished-changes scanner
@@ -823,10 +1017,10 @@ func (s *BacklogService) archiveItemWorkSessions(ctx context.Context, sessions [
 			continue
 		}
 		if err := s.sessionStopper.ArchiveSessionByUUID(ctx, is.SessionUUID); err != nil {
-			log.WarningLog.Printf("[archiveItemWorkSessions] failed to archive session=%s: %v", is.SessionUUID, err)
+			log.WarningLog().Printf("[archiveItemWorkSessions] failed to archive session=%s: %v", is.SessionUUID, err)
 		}
 		if err := s.sessionStopper.KillTmuxPaneOnly(ctx, is.SessionUUID); err != nil {
-			log.WarningLog.Printf("[archiveItemWorkSessions] failed to kill tmux pane session=%s: %v", is.SessionUUID, err)
+			log.WarningLog().Printf("[archiveItemWorkSessions] failed to kill tmux pane session=%s: %v", is.SessionUUID, err)
 		}
 	}
 }

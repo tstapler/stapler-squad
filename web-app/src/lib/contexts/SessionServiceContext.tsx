@@ -7,6 +7,8 @@ import {
   CreateSessionRequest,
   UpdateSessionRequest,
   RunOneShotResponse,
+  DraftPullRequestResponse,
+  CreatePullRequestResponse,
   PromptHistoryEntry,
 } from "@/gen/session/v1/session_pb";
 import { CheckpointProto } from "@/gen/session/v1/types_pb";
@@ -44,6 +46,13 @@ export interface SessionServiceContextValue {
   listCheckpoints: (sessionId: string) => Promise<CheckpointProto[]>;
   forkSession: (sessionId: string, checkpointId: string, newTitle: string) => Promise<Session | null>;
   runOneShot: (sessionId: string, prompt: string, timeoutSeconds?: number) => Promise<RunOneShotResponse | null>;
+  draftPullRequest: (sessionId: string) => Promise<DraftPullRequestResponse | null>;
+  createPullRequest: (req: {
+    sessionId: string;
+    title: string;
+    body: string;
+    baseBranch: string;
+  }) => Promise<CreatePullRequestResponse | null>;
   listPromptHistory: (limit?: number) => Promise<PromptHistoryEntry[]>;
   watchSessions: (options?: { categoryFilter?: string; statusFilter?: SessionStatus }) => void;
   stopWatching: () => void;

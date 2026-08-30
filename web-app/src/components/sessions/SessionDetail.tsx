@@ -25,7 +25,7 @@ const SessionDetailView = dynamic(
   }
 );
 
-export type SessionDetailTab = "terminal" | "diff" | "vcs" | "logs" | "info" | "files" | "browser" | "artifacts";
+export type SessionDetailTab = "terminal" | "diff" | "vcs" | "logs" | "info" | "files" | "browser" | "artifacts" | "summary";
 
 interface SessionDetailProps {
   session: Session;

@@ -14,7 +14,8 @@
     "TestGetBacklogItemShipStatus_should_ReturnErrorField_When_NoWorkSessionEverCommitted",
     "TestGetBacklogItemShipStatus_ShouldPopulateSnapshotFields_WhenShippedSnapshotAtNonNil",
     "TestGetBacklogItemShipStatus_ShouldDegradeGracefully_WhenShippedFileStatsJsonCorrupt",
-    "TestGetBacklogItemShipStatus_ShouldReturnDurableSnapshot_WhenCalledAgainstRealEntStorage"
+    "TestGetBacklogItemShipStatus_ShouldReturnDurableSnapshot_WhenCalledAgainstRealEntStorage",
+    "TestGetBacklogItemShipStatus_should_NotReportShipped_When_OnlySpawnTimeBaseShaIsRecorded"
   ],
-  "lastModified": "2026-07-18T00:00:00Z"
+  "lastModified": "2026-08-05T00:00:00Z"
 }

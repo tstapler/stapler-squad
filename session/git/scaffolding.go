@@ -41,7 +41,7 @@ var ScaffoldingExcludePatterns = []string{
 // semantics: the working-tree file is left alone, only the index entry is dropped)
 // and returns the list of paths it untracked. Uses go-git directly against the
 // index rather than shelling out to `git rm --cached`, per
-// .claude/rules/prefer-go-git-over-subshells.md.
+// the `prefer-go-git-over-subshells` skill.
 //
 // Returns (nil, nil) — not an error — when worktreePath isn't a git repository at
 // all (e.g. a directory-mode session with no git backing), matching the

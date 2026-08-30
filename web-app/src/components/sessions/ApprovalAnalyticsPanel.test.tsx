@@ -41,11 +41,17 @@ const baseSummary = {
   topCommandPrograms: [],
   topPythonImports: [],
   commandSubcommandStats: [],
+  escalationReasonCounts: {},
+  riskLevelCounts: {},
 };
+
+// Mutable per-test override — reset to `baseSummary` in `beforeEach`. Tests that need a
+// different `summary` (e.g. the Escalation Reasons fixtures) reassign this before rendering.
+let mockSummary: typeof baseSummary = baseSummary;
 
 jest.mock("@/lib/hooks/useApprovalAnalytics", () => ({
   useApprovalAnalytics: () => ({
-    summary: baseSummary,
+    summary: mockSummary,
     dailyBuckets: [],
     loading: false,
     error: null,
@@ -154,6 +160,7 @@ describe("ApprovalAnalyticsPanel", () => {
     mockSuggestions = [];
     mockGenerateLoading = false;
     mockGenerateError = null;
+    mockSummary = baseSummary;
   });
 
   describe("Suggest Rule button", () => {
@@ -317,6 +324,103 @@ describe("ApprovalAnalyticsPanel", () => {
       const manualLinks = screen.getAllByText("or add manually →");
       // Two uncovered tools + one uncovered program = 3 links.
       expect(manualLinks.length).toBeGreaterThanOrEqual(1);
+    });
+  });
+
+  describe("Escalation Reasons", () => {
+    it("renders Escalation Reasons table with mapped labels and counts", () => {
+      mockSummary = {
+        ...baseSummary,
+        escalationReasonCounts: {
+          "no-match": 12,
+          "explicit-rule": 5,
+          "domain-age": 2,
+          "secret-scan": 1,
+          "unclassifiable": 0,
+        },
+      };
+
+      render(<ApprovalAnalyticsPanel />);
+
+      expect(screen.getByText("Escalation Reasons")).toBeInTheDocument();
+
+      // Non-zero categories render with their mapped label + count.
+      expect(screen.getByText("No auto-approval rule matched")).toBeInTheDocument();
+      expect(screen.getByText("Rule explicitly flagged for review")).toBeInTheDocument();
+      expect(screen.getByText("Newly-registered domain")).toBeInTheDocument();
+      expect(screen.getByText("Plaintext secret detected")).toBeInTheDocument();
+      expect(screen.getByText("12")).toBeInTheDocument();
+      expect(screen.getByText("5")).toBeInTheDocument();
+      expect(screen.getByText("2")).toBeInTheDocument();
+      expect(screen.getByText("1")).toBeInTheDocument();
+
+      // Zero-count category is omitted.
+      expect(screen.queryByText("Shell expansion — couldn't classify")).not.toBeInTheDocument();
+    });
+
+    it("renders empty-state message when all escalation categories are zero", () => {
+      mockSummary = {
+        ...baseSummary,
+        escalationReasonCounts: {
+          "no-match": 0,
+          "explicit-rule": 0,
+          "domain-age": 0,
+          "secret-scan": 0,
+          "unclassifiable": 0,
+        },
+        // riskLevelCounts is also empty via baseSummary — both sections render the shared
+        // empty-state copy, so there are two matching nodes (see the getAllByText usage below).
+      };
+
+      render(<ApprovalAnalyticsPanel />);
+
+      expect(screen.getAllByText("No escalations in this window.")).toHaveLength(2);
+      expect(screen.queryByText("Escalation Reasons")).not.toBeInTheDocument();
+      expect(screen.queryByText("Risk Level Breakdown")).not.toBeInTheDocument();
+    });
+  });
+
+  describe("Risk Level Breakdown", () => {
+    it("ApprovalAnalyticsPanel_should_RenderRiskLevelBreakdownTable_When_SummaryHasRiskLevelCounts", () => {
+      mockSummary = {
+        ...baseSummary,
+        riskLevelCounts: {
+          critical: 5,
+          high: 10,
+          medium: 15,
+          low: 0,
+        },
+      };
+
+      render(<ApprovalAnalyticsPanel />);
+
+      expect(screen.getByText("Risk Level Breakdown")).toBeInTheDocument();
+      expect(screen.getByText("Critical")).toBeInTheDocument();
+      expect(screen.getByText("High")).toBeInTheDocument();
+      expect(screen.getByText("Medium")).toBeInTheDocument();
+      expect(screen.getByText("5")).toBeInTheDocument();
+      expect(screen.getByText("10")).toBeInTheDocument();
+      expect(screen.getByText("15")).toBeInTheDocument();
+
+      // Zero-count level is omitted.
+      expect(screen.queryByText("Low")).not.toBeInTheDocument();
+    });
+
+    it("ApprovalAnalyticsPanel_should_RenderSharedEmptyState_When_AllRiskLevelCountsAreZero", () => {
+      mockSummary = {
+        ...baseSummary,
+        riskLevelCounts: {
+          critical: 0,
+          high: 0,
+          medium: 0,
+          low: 0,
+        },
+      };
+
+      render(<ApprovalAnalyticsPanel />);
+
+      expect(screen.getAllByText("No escalations in this window.")).toHaveLength(2);
+      expect(screen.queryByText("Risk Level Breakdown")).not.toBeInTheDocument();
     });
   });
 });

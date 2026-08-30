@@ -31,11 +31,15 @@ func ForkClaudeConversation(srcConvPath string, lineCount uint64, dstDir string)
 	}
 	defer srcFile.Close()
 
-	tmpPath := dstPath + ".tmp"
-	tmpFile, err := os.OpenFile(tmpPath, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0600)
+	// Unique temp name (not dstPath+".tmp"): dstPath is already unique per call via
+	// newUUID, so this can't collide with another ForkClaudeConversation call, but
+	// os.CreateTemp keeps the write-tmp-then-rename shape consistent with the other
+	// atomic writers in this codebase (config.go's saveConfigLocked, etc.).
+	tmpFile, err := os.CreateTemp(dstDir, newUUID+".*.tmp")
 	if err != nil {
 		return "", fmt.Errorf("fork claude conversation: create tmp: %w", err)
 	}
+	tmpPath := tmpFile.Name()
 
 	scanner := bufio.NewScanner(srcFile)
 	const maxLine = 4 * 1024 * 1024 // 4 MiB — conversation entries can be large

@@ -1,0 +1,41 @@
+name: Prepare (reusable)
+
+# Reusable workflow wrapping ./.github/actions/prepare so every consumer
+# (build.yml, e2e-video.yml, registry-validation.yml, ux-analysis.yml, ...)
+# generates protos + builds the web UI exactly once and downloads the same
+# artifact, instead of each workflow file running its own copy of this job.
+# See project_plans/ci-speed/implementation/plan.md Epic 3.1 (Story 3.1.1).
+#
+# Deliberately has no `if:`/`needs:` relevance gate — the calling workflow
+# decides whether prepare is relevant (e.g. build.yml's detect-changes job)
+# before it calls this one, not this file.
+
+on:
+  workflow_call:
+    outputs:
+      artifact-name:
+        description: "Name of the uploaded generated-code artifact"
+        value: "generated-files"
+
+jobs:
+  prepare:
+    name: Generate & Build Web UI
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Generate protos and build web UI
+        uses: ./.github/actions/prepare
+
+      - name: Upload generated files
+        uses: actions/upload-artifact@v4
+        with:
+          name: generated-files
+          path: |
+            gen/
+            session/ent/
+            server/web/dist/
+            session/ent/
+          retention-days: 1

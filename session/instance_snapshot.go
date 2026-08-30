@@ -29,6 +29,7 @@ package session
 import (
 	"time"
 
+	"github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/session/artifacts"
 )
 
@@ -53,6 +54,9 @@ type GitHubIntegration struct {
 	GitHubApprovedCount    int
 	GitHubChangesReqCount  int
 	GitHubCheckConclusion  string
+	GitHubChecks           []github.CheckItem
+	GitHubReviewFeedback   []github.ReviewItem
+	GitHubMergeable        string
 	GitHubPRStatusTerminal bool
 	LastPRStatusCheck      time.Time
 }
@@ -90,10 +94,12 @@ type InstanceSnapshot struct {
 	Height           int
 	Width            int
 	AutoYes          bool
+	AutoApprove      bool
 	IsExpanded       bool
 	Prompt           string
 	InitialPrompt    string
 	Category         string
+	Note             string
 	SessionType      SessionType
 	TmuxPrefix       string
 	TmuxServerSocket string
@@ -109,22 +115,27 @@ type InstanceSnapshot struct {
 	Checkpoints      CheckpointList // defensive deep copy — see buildSnapshot
 	ActiveCheckpoint string
 	ForkedFromID     string
+	// RestartedFromSessionID — see Instance.RestartedFromSessionID's doc comment.
+	RestartedFromSessionID string
 
 	// Misc config
-	OneShot             bool
-	Hidden              bool
-	ProjectID           string
-	HistoryFilePath     string
-	MCPServerURL        string
-	AppendSystemPrompt  string
-	AllowedTools        string
-	PermissionMode      string
-	RateLimitAutoResume *bool // copy of pointee — see buildSnapshot
-	PauseReason         string
-	WorkflowID          string
-	EnvVars             map[string]string // defensive deep copy — see buildSnapshot
-	CLIFlags            string
-	ArchivedAt          *time.Time // copy of pointee — see buildSnapshot
+	OneShot                    bool
+	Hidden                     bool
+	ProjectID                  string
+	HistoryFilePath            string
+	EverHadConversationHistory bool
+	LastReviveOutcome          ReviveOutcome
+	MCPServerURL               string
+	AppendSystemPrompt         string
+	AllowedTools               string
+	PermissionMode             string
+	RateLimitAutoResume        *bool // copy of pointee — see buildSnapshot
+	PauseReason                string
+	ExitReason                 string
+	WorkflowID                 string
+	EnvVars                    map[string]string // defensive deep copy — see buildSnapshot
+	CLIFlags                   string
+	ArchivedAt                 *time.Time // copy of pointee — see buildSnapshot
 
 	// Review queue / activity state (embedded value — copied by value)
 	ReviewState
@@ -156,10 +167,12 @@ func buildSnapshot(i *Instance) *InstanceSnapshot {
 		Height:           i.Height,
 		Width:            i.Width,
 		AutoYes:          i.AutoYes,
+		AutoApprove:      i.AutoApprove,
 		IsExpanded:       i.IsExpanded,
 		Prompt:           i.Prompt,
 		InitialPrompt:    i.InitialPrompt,
 		Category:         i.Category,
+		Note:             i.Note,
 		SessionType:      i.SessionType,
 		TmuxPrefix:       i.TmuxPrefix,
 		TmuxServerSocket: i.TmuxServerSocket,
@@ -186,27 +199,34 @@ func buildSnapshot(i *Instance) *InstanceSnapshot {
 			GitHubApprovedCount:    i.GitHubApprovedCount,
 			GitHubChangesReqCount:  i.GitHubChangesReqCount,
 			GitHubCheckConclusion:  i.GitHubCheckConclusion,
+			GitHubChecks:           append([]github.CheckItem(nil), i.GitHubChecks...),
+			GitHubReviewFeedback:   append([]github.ReviewItem(nil), i.GitHubReviewFeedback...),
+			GitHubMergeable:        i.GitHubMergeable,
 			GitHubPRStatusTerminal: i.GitHubPRStatusTerminal,
 			LastPRStatusCheck:      i.LastPRStatusCheck,
 		},
-		Checkpoints:        append(CheckpointList(nil), i.Checkpoints...),
-		ActiveCheckpoint:   i.ActiveCheckpoint,
-		ForkedFromID:       i.ForkedFromID,
-		OneShot:            i.OneShot,
-		Hidden:             i.Hidden,
-		ProjectID:          i.ProjectID,
-		HistoryFilePath:    i.HistoryFilePath,
-		MCPServerURL:       i.MCPServerURL,
-		AppendSystemPrompt: i.AppendSystemPrompt,
-		AllowedTools:       i.AllowedTools,
-		PermissionMode:     i.PermissionMode,
-		PauseReason:        i.PauseReason,
-		WorkflowID:         i.WorkflowID,
-		CLIFlags:           i.CLIFlags,
-		ReviewState:        i.ReviewState,
-		InstanceType:       i.InstanceType,
-		IsManaged:          i.IsManaged,
-		Artifacts:          i.Artifacts,
+		Checkpoints:                append(CheckpointList(nil), i.Checkpoints...),
+		ActiveCheckpoint:           i.ActiveCheckpoint,
+		ForkedFromID:               i.ForkedFromID,
+		RestartedFromSessionID:     i.RestartedFromSessionID,
+		OneShot:                    i.OneShot,
+		Hidden:                     i.Hidden,
+		ProjectID:                  i.ProjectID,
+		HistoryFilePath:            i.HistoryFilePath,
+		EverHadConversationHistory: i.EverHadConversationHistory,
+		LastReviveOutcome:          i.LastReviveOutcome,
+		MCPServerURL:               i.MCPServerURL,
+		AppendSystemPrompt:         i.AppendSystemPrompt,
+		AllowedTools:               i.AllowedTools,
+		PermissionMode:             i.PermissionMode,
+		PauseReason:                i.PauseReason,
+		ExitReason:                 i.ExitReason,
+		WorkflowID:                 i.WorkflowID,
+		CLIFlags:                   i.CLIFlags,
+		ReviewState:                i.ReviewState,
+		InstanceType:               i.InstanceType,
+		IsManaged:                  i.IsManaged,
+		Artifacts:                  i.Artifacts,
 	}
 
 	// Deep copy RateLimitAutoResume *bool

@@ -2,11 +2,11 @@
 
 import { useMemo } from "react";
 import { useAppSelector } from "@/lib/store";
-import { selectAllSessions } from "@/lib/store/sessionsSlice";
+import { selectActiveSessionsSortedByUpdatedAt } from "@/lib/store/sessionsSlice";
 
 /** Returns deduplicated list of repo root paths from all known sessions. */
 export function useSessionRepoPaths(): string[] {
-  const sessions = useAppSelector(selectAllSessions);
+  const sessions = useAppSelector(selectActiveSessionsSortedByUpdatedAt);
   return useMemo(() => {
     const seen = new Set<string>();
     const paths: string[] = [];

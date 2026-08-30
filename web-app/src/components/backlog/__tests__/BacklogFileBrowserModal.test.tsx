@@ -30,6 +30,8 @@ jest.mock("@/lib/config", () => ({
   getApiBaseUrl: () => "http://localhost:8543",
 }));
 
+jest.mock("@/lib/hooks/useFocusTrap", () => ({ useFocusTrap: () => undefined }));
+
 beforeEach(() => {
   jest.clearAllMocks();
   capturedFileTreeProps = null;

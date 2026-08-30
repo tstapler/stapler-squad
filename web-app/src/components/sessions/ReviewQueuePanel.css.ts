@@ -126,6 +126,16 @@ export const filterButtonActive = style({
   borderColor: vars.color.primary,
 });
 
+// Third state of the include/exclude/neutral cycle — a value the user has explicitly
+// excluded from the queue (e.g. "hide LOW priority"), visually distinct from
+// filterButtonActive (inclusion) via vars.color.error, mirroring
+// filterPillExcludeActive in NotificationPanel.css.ts.
+export const filterButtonExcluded = style({
+  background: vars.color.error,
+  color: "white",
+  borderColor: vars.color.error,
+});
+
 export const items = style({
   flex: 1,
   overflowY: "auto",
@@ -156,6 +166,12 @@ export const item = style({
       boxShadow: "0 2px 8px rgba(0, 0, 0, 0.1)",
     },
   },
+  "@media": {
+    "(max-width: 640px)": {
+      flexDirection: "column",
+      gap: 0,
+    },
+  },
 });
 
 export const itemClickable = style({
@@ -176,6 +192,19 @@ export const itemActions = style({
   gap: "6px",
   padding: `12px 12px 12px 0`,
   borderLeft: `1px solid ${vars.color.borderColor}`,
+  "@media": {
+    "(max-width: 640px)": {
+      flexDirection: "row",
+      flexWrap: "wrap",
+      justifyContent: "flex-start",
+      width: "100%",
+      padding: "0 16px 16px",
+      borderLeft: "none",
+      borderTop: `1px solid ${vars.color.borderColor}`,
+      marginTop: "8px",
+      paddingTop: "12px",
+    },
+  },
 });
 
 export const itemHeader = style({
@@ -205,6 +234,14 @@ export const itemContext = style({
   color: vars.color.textSecondary,
   fontStyle: "italic",
 });
+
+// Composes itemContext rather than modifying it directly — itemContext is also used for
+// queueItem.context on non-approval cards, which must not gain this bound. Mirrors
+// commandPreview's own maxHeight/overflowY/wordBreak values.
+export const escalationReasonText = style([
+  itemContext,
+  { maxHeight: "6em", overflowY: "auto", wordBreak: "break-word" },
+]);
 
 export const commandPreview = style({
   margin: 0,
@@ -255,21 +292,23 @@ export const detailRow = style({
   gap: vars.space["2"],
   alignItems: "baseline",
   fontSize: "13px",
+  flexWrap: "wrap",
 });
 
 export const detailLabel = style({
   color: vars.color.textSecondary,
   fontWeight: 500,
   minWidth: "80px",
+  flexShrink: 0,
 });
 
 export const detailValue = style({
   color: vars.color.textPrimary,
   fontFamily: "monospace",
-  overflow: "hidden",
-  textOverflow: "ellipsis",
-  whiteSpace: "nowrap",
+  overflowWrap: "break-word",
+  wordBreak: "break-word",
   flex: 1,
+  minWidth: 0,
 });
 
 export const tags = style({
@@ -394,17 +433,9 @@ export const retryButton = style({
   },
 });
 
-export const visuallyHidden = style({
-  position: "absolute",
-  width: "1px",
-  height: "1px",
-  padding: 0,
-  margin: "-1px",
-  overflow: "hidden",
-  clipPath: "inset(50%)",
-  whiteSpace: "nowrap",
-  border: 0,
-});
+// Hoisted to a shared file so TriggersPanel/TriggerFormModal/CallbackSettings can
+// reuse it too instead of hand-rolling the same inline style object.
+export { visuallyHidden } from "@/styles/a11y.css";
 
 export const oldestCallout = style({
   marginTop: vars.space["2"],
@@ -459,6 +490,7 @@ export const savedIndicator = style({
 export const filterToggleRow = style({
   display: "flex",
   alignItems: "center",
+  flexWrap: "wrap",
   gap: vars.space["2"],
   marginBottom: vars.space["3"],
 });

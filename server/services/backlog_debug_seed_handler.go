@@ -11,15 +11,18 @@ package services
 // waiting out real detector thresholds (e.g. 30 minutes for
 // pr_ready_unmerged). It is registered by server.go ONLY when
 // STAPLER_SQUAD_INSTANCE=e2e-local, mirroring how the e2e test server itself
-// is gated (see .claude/rules/e2e-test-conventions.md / CLAUDE.md's E2E Tests
+// is gated (see the `e2e-test-conventions` skill / CLAUDE.md's E2E Tests
 // section) — never reachable in a normal deploy.
 
 import (
 	"encoding/json"
 	"net/http"
+	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
@@ -105,6 +108,12 @@ type seedStuckStateRequest struct {
 	PrNumber        int    `json:"prNumber"`
 	PrUrl           string `json:"prUrl"`
 	Context         string `json:"context"`
+	// HasPlan, when true, writes a real stub plan file to disk and sets it as
+	// the created item's plan_artifacts_path — so ApprovePlan's os.Stat check
+	// (server/services/backlog_service_lifecycle.go) succeeds, letting e2e
+	// tests exercise the real approve-plan flow instead of only the
+	// no-plan-yet gate.
+	HasPlan bool `json:"hasPlan"`
 }
 
 type seedStuckStateResponse struct {
@@ -122,6 +131,8 @@ func statusForSeedReason(reason domain.StuckReason) session.BacklogStatus {
 		return session.BacklogStatusInProgress
 	case domain.StuckReasonOrphanedTriage:
 		return session.BacklogStatusIdea
+	case domain.StuckReasonPlanNotApproved:
+		return session.BacklogStatusQueued
 	default: // abandoned_review, rework_cap, push_failed
 		return session.BacklogStatusReview
 	}
@@ -177,6 +188,40 @@ func (h *BacklogDebugSeedHandler) handleSeed(w http.ResponseWriter, r *http.Requ
 		}
 	}
 
+	if req.HasPlan {
+		// Rooted under this instance's own isolated config/state dir
+		// (STAPLER_SQUAD_TEST_DIR, set by the e2e harness's global-setup.ts)
+		// rather than the shared os.TempDir() — avoids a predictable,
+		// world-writable temp path (CWE-377/CWE-59 symlink-race risk) and
+		// gets cleaned up for free by the e2e harness's global-teardown.ts,
+		// which deletes the whole test dir when the run ends.
+		configDir, err := config.GetConfigDir()
+		if err != nil {
+			log.Error("backlog debug seed: resolve config dir failed", "err", err)
+			http.Error(w, "failed to resolve config dir: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		planDir := filepath.Join(configDir, "e2e-plan-artifacts", item.ID)
+		if err := os.MkdirAll(planDir, 0o755); err != nil {
+			log.Error("backlog debug seed: create plan dir failed", "err", err)
+			http.Error(w, "failed to create plan artifacts dir: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		planPath := filepath.Join(planDir, "plan.md")
+		if err := os.WriteFile(planPath, []byte("# Seeded e2e plan\n"), 0o644); err != nil {
+			log.Error("backlog debug seed: write plan file failed", "err", err)
+			http.Error(w, "failed to write plan artifacts file: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if _, err := h.storage.UpdateBacklogItem(ctx, item.ID, session.BacklogItemUpdate{
+			PlanArtifactsPath: &planPath,
+		}, nil); err != nil {
+			log.Error("backlog debug seed: set plan_artifacts_path failed", "err", err)
+			http.Error(w, "failed to set plan_artifacts_path: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}
+
 	firstDetectedAt := time.Now()
 	if req.FirstDetectedAt != "" {
 		if parsed, parseErr := time.Parse(time.RFC3339, req.FirstDetectedAt); parseErr == nil {
@@ -217,6 +262,14 @@ type seedHeadlessTriageSessionRequest struct {
 	Title   string `json:"title"`
 	Status  string `json:"status"`  // defaults to "review" if empty
 	Summary string `json:"summary"` // defaults to a canned summary if empty
+	// Ended, when true, also records an EndedAt on the seeded ItemSession so
+	// mapBacklogItem's triageStatus derivation (web-app's useBacklogService.ts)
+	// resolves to "completed" rather than "running" — needed to exercise the
+	// item's own live (non-readOnly) TriageReviewPanel, which requires
+	// status:"idea" + triageStatus:"completed" (BacklogItemDetail.tsx). The
+	// default (false) preserves the original behavior for callers exercising
+	// SessionDiagnosticPanel's readOnly branch, which doesn't consult EndedAt.
+	Ended bool `json:"ended"`
 }
 
 type seedHeadlessTriageSessionResponse struct {
@@ -303,6 +356,14 @@ func (h *BacklogDebugSeedHandler) handleSeedHeadlessTriageSession(w http.Respons
 		log.Error("backlog debug seed: create headless triage item session failed", "err", err)
 		http.Error(w, "failed to create item session: "+err.Error(), http.StatusInternalServerError)
 		return
+	}
+
+	if req.Ended {
+		if err := h.storage.UpdateItemSessionEnded(ctx, itemSession.ID, time.Now()); err != nil {
+			log.Error("backlog debug seed: mark headless triage item session ended failed", "err", err)
+			http.Error(w, "failed to mark item session ended: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
 	}
 
 	w.Header().Set("Content-Type", "application/json")

@@ -1,6 +1,6 @@
 import { createSlice, createSelector, PayloadAction } from "@reduxjs/toolkit";
 import { timestampDate } from "@bufbuild/protobuf/wkt";
-import type { BacklogItem } from "@/gen/session/v1/backlog_pb";
+import type { BacklogItem, BacklogActivityNote } from "@/gen/session/v1/backlog_pb";
 import type { RootState } from "./store";
 
 interface BacklogItemsState {
@@ -52,7 +52,44 @@ const backlogItemsSlice = createSlice({
         if (existing && timestampMs(incoming.updatedAt) < timestampMs(existing.updatedAt)) {
           return;
         }
-        state.items[incoming.id] = incoming;
+        // Backstop for a partially-loaded event push (item_sessions/activity_notes/
+        // allowed_transitions dropped by a publishItemChanged call site or a
+        // non-eager-loaded snapshot query) racing a fully-loaded one: never let an
+        // empty itemSessions, activityNotes, or allowedTransitions clobber data we
+        // already have for this item. A genuine all-removed update would still
+        // arrive with a newer updatedAt and populated (even if empty-by-intent)
+        // data from a call site that *did* eager-load, so this only masks the
+        // known-bad partial-load case, not real removals.
+        //
+        // activityNotes specifically: every BacklogChangeKind other than
+        // ChangeActivityNoteAdded publishes via publishItemChanged ->
+        // attachItemSessionsForPublish (session/ent_repository_backlog.go), which
+        // re-populates only ItemSessions, never ActivityNotes — so their wire
+        // events embed a full protoItem whose activity_notes is empty. Without
+        // this guard, the very next status transition/verdict/session-attach would
+        // wipe out any notes accumulated via the dedicated appendActivityNote
+        // reducer below (ADR-002, Blocker 1 fix).
+        //
+        // allowedTransitions specifically: a pure function of status, so it's
+        // never legitimately empty for a real item — an empty value is always a
+        // sparse-DTO/resync artifact (e.g. a stale ListBacklogItems shape).
+        let nextItem = incoming;
+        if (existing) {
+          const patch: Partial<BacklogItem> = {};
+          if ((existing.itemSessions?.length ?? 0) > 0 && (incoming.itemSessions?.length ?? 0) === 0) {
+            patch.itemSessions = existing.itemSessions;
+          }
+          if ((existing.activityNotes?.length ?? 0) > 0 && (incoming.activityNotes?.length ?? 0) === 0) {
+            patch.activityNotes = existing.activityNotes;
+          }
+          if ((existing.allowedTransitions?.length ?? 0) > 0 && (incoming.allowedTransitions?.length ?? 0) === 0) {
+            patch.allowedTransitions = existing.allowedTransitions;
+          }
+          if (Object.keys(patch).length > 0) {
+            nextItem = { ...incoming, ...patch };
+          }
+        }
+        state.items[incoming.id] = nextItem;
         if (!isSnapshot) {
           state.liveVersion[incoming.id] = (state.liveVersion[incoming.id] ?? 0) + 1;
         }
@@ -65,10 +102,28 @@ const backlogItemsSlice = createSlice({
     removeItem(state, action: PayloadAction<string>) {
       delete state.items[action.payload];
     },
+    /**
+     * Targeted single-note append for the dedicated activityNoteAdded live
+     * event (ADR-002, backlog-item-activity-log) — appends `note` to
+     * `state.items[itemId].activityNotes` without touching any other field,
+     * never a call to upsertItem/a wholesale item replace. No-op if the item
+     * isn't in the store yet (matches removeItem's "item not present"
+     * tolerance) — the next GetBacklogItem/ListBacklogItems refresh will
+     * include it.
+     */
+    appendActivityNote(state, action: PayloadAction<{ itemId: string; note: BacklogActivityNote }>) {
+      const { itemId, note } = action.payload;
+      const existing = state.items[itemId];
+      if (!existing) return;
+      state.items[itemId] = {
+        ...existing,
+        activityNotes: [...(existing.activityNotes ?? []), note],
+      };
+    },
   },
 });
 
-export const { upsertItem, removeItem } = backlogItemsSlice.actions;
+export const { upsertItem, removeItem, appendActivityNote } = backlogItemsSlice.actions;
 
 // Base selectors
 export const selectBacklogItemsMap = (state: RootState) => state.backlogItems.items;

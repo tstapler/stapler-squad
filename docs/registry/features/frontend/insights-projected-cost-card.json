@@ -1,0 +1,13 @@
+{
+  "id": "insights-projected-cost-card",
+  "type": "frontend",
+  "component": "ProjectedCostCard",
+  "path": "web-app/src/app/insights/ProjectedCostCard.tsx",
+  "markerLine": 1,
+  "tested": true,
+  "testIds": [
+    "ProjectedCostCard > ProjectedCostCard_should_showUnpricedCaveat_When_hasUnpricedUsageTrue",
+    "ProjectedCostCard > ProjectedCostCard_should_omitCaveat_When_hasUnpricedUsageFalse"
+  ],
+  "lastModified": "2026-08-02T00:00:00.000Z"
+}

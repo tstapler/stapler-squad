@@ -10,6 +10,7 @@ import (
 // TestDefaultStatusDeterminer_Determine verifies the pure detection logic of DefaultStatusDeterminer.
 // These tests run without a real tmux session: all inputs are constructed in-memory.
 func TestDefaultStatusDeterminer_Determine(t *testing.T) {
+	t.Parallel()
 	detector := detection.NewStatusDetector()
 	determiner := NewDefaultStatusDeterminer(DefaultReviewQueuePollerConfig())
 
@@ -178,6 +179,27 @@ func TestDefaultStatusDeterminer_Determine(t *testing.T) {
 			},
 		},
 		{
+			// Regression guard: the no-controller branch's status switch must include
+			// StatusCompacting alongside StatusExecuting/StatusProcessing/
+			// StatusWaitingForAgent, or a compacting session with no live controller
+			// falls through to the basicIdleThreshold fallback below and gets spuriously
+			// queued as ReasonIdle while Claude is actively compacting.
+			name:    "no_controller_compacting_removes_not_idle",
+			content: "✻ Compacting conversation… (esc to interrupt)",
+			statusInfo: InstanceStatusInfo{
+				IsControllerActive: false,
+			},
+			instSetup: func(inst *Instance) {
+				// UpdatedAt in the past would trigger basicIdleThreshold if the
+				// status switch didn't short-circuit first — proves the fix, not
+				// just the absence of a panic.
+				inst.UpdatedAt = time.Now().Add(-10 * time.Second)
+				inst.LastMeaningfulOutput = time.Now().Add(-10 * time.Second)
+			},
+			checkAction: true,
+			wantAction:  DetectionActionRemove,
+		},
+		{
 			name:    "no_controller_empty_content_idle_after_threshold",
 			content: "",
 			statusInfo: InstanceStatusInfo{
@@ -285,6 +307,7 @@ func TestDefaultStatusDeterminer_Determine(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			inst := &Instance{
 				Title:  "test-session",
 				UUID:   "test-uuid",
@@ -329,6 +352,7 @@ func TestDefaultStatusDeterminer_Determine(t *testing.T) {
 // that when a controller reports StatusNeedsApproval AND IdleStateActive simultaneously,
 // the approval wins (idle-active is only checked when no status-based condition is set).
 func TestDefaultStatusDeterminer_ControllerStatusTakesPriorityOverIdleActive(t *testing.T) {
+	t.Parallel()
 	detector := detection.NewStatusDetector()
 	determiner := NewDefaultStatusDeterminer(DefaultReviewQueuePollerConfig())
 
@@ -356,6 +380,7 @@ func TestDefaultStatusDeterminer_ControllerStatusTakesPriorityOverIdleActive(t *
 // TestDefaultStatusDeterminer_StatusContextPassedThrough verifies that the StatusContext
 // from InstanceStatusInfo is used as the queue item context when non-empty.
 func TestDefaultStatusDeterminer_StatusContextPassedThrough(t *testing.T) {
+	t.Parallel()
 	detector := detection.NewStatusDetector()
 	determiner := NewDefaultStatusDeterminer(DefaultReviewQueuePollerConfig())
 
@@ -381,6 +406,7 @@ func TestDefaultStatusDeterminer_StatusContextPassedThrough(t *testing.T) {
 // TestDefaultStatusDeterminer_NeedsApprovalDefaultContext verifies that when StatusContext
 // is empty, a non-empty default context is used.
 func TestDefaultStatusDeterminer_NeedsApprovalDefaultContext(t *testing.T) {
+	t.Parallel()
 	detector := detection.NewStatusDetector()
 	determiner := NewDefaultStatusDeterminer(DefaultReviewQueuePollerConfig())
 
@@ -404,6 +430,7 @@ func TestDefaultStatusDeterminer_NeedsApprovalDefaultContext(t *testing.T) {
 
 // TestDefaultStatusDeterminer_InputRequired verifies StatusInputRequired mapping.
 func TestDefaultStatusDeterminer_InputRequired(t *testing.T) {
+	t.Parallel()
 	detector := detection.NewStatusDetector()
 	determiner := NewDefaultStatusDeterminer(DefaultReviewQueuePollerConfig())
 
@@ -432,6 +459,7 @@ func TestDefaultStatusDeterminer_InputRequired(t *testing.T) {
 
 // TestDefaultStatusDeterminer_Error verifies StatusError mapping.
 func TestDefaultStatusDeterminer_Error(t *testing.T) {
+	t.Parallel()
 	detector := detection.NewStatusDetector()
 	determiner := NewDefaultStatusDeterminer(DefaultReviewQueuePollerConfig())
 
@@ -461,6 +489,7 @@ func TestDefaultStatusDeterminer_Error(t *testing.T) {
 // TestDefaultStatusDeterminer_UnknownStatusWithNoIdleStateSkips verifies that
 // StatusUnknown with no idle-state information and a fresh session results in Skip.
 func TestDefaultStatusDeterminer_UnknownStatusWithNoIdleStateSkips(t *testing.T) {
+	t.Parallel()
 	detector := detection.NewStatusDetector()
 	determiner := NewDefaultStatusDeterminer(DefaultReviewQueuePollerConfig())
 
@@ -489,6 +518,7 @@ func TestDefaultStatusDeterminer_UnknownStatusWithNoIdleStateSkips(t *testing.T)
 // narrowing must NOT suppress ReasonErrorState/ReasonTestsFailing — no other durable
 // detector watches a still-alive, stuck-in-error Hidden review session.
 func TestDetermine_ReturnsSkip_When_InstanceHiddenAndReasonIsTaskCompleteIdleOrStale(t *testing.T) {
+	t.Parallel()
 	detector := detection.NewStatusDetector()
 	determiner := NewDefaultStatusDeterminer(DefaultReviewQueuePollerConfig())
 
@@ -504,6 +534,7 @@ func TestDetermine_ReturnsSkip_When_InstanceHiddenAndReasonIsTaskCompleteIdleOrS
 	}
 
 	t.Run("task_complete_suppressed", func(t *testing.T) {
+		t.Parallel()
 		inst := newHiddenInstance()
 		inst.LastMeaningfulOutput = time.Now().Add(-1 * time.Second)
 		inst.SyncAtomicTimestamps()
@@ -521,6 +552,7 @@ func TestDetermine_ReturnsSkip_When_InstanceHiddenAndReasonIsTaskCompleteIdleOrS
 	})
 
 	t.Run("idle_suppressed", func(t *testing.T) {
+		t.Parallel()
 		inst := newHiddenInstance()
 		inst.LastMeaningfulOutput = time.Now().Add(-1 * time.Second)
 		inst.SyncAtomicTimestamps()
@@ -539,6 +571,7 @@ func TestDetermine_ReturnsSkip_When_InstanceHiddenAndReasonIsTaskCompleteIdleOrS
 	})
 
 	t.Run("stale_suppressed", func(t *testing.T) {
+		t.Parallel()
 		inst := newHiddenInstance()
 		// Beyond StalenessThreshold (5m) so the staleness path fires ReasonStale.
 		inst.LastMeaningfulOutput = time.Now().Add(-10 * time.Minute)
@@ -559,6 +592,7 @@ func TestDetermine_ReturnsSkip_When_InstanceHiddenAndReasonIsTaskCompleteIdleOrS
 	// Safety-net cases: the narrowing must not over-suppress ReasonErrorState or
 	// ReasonTestsFailing — these must still produce DetectionActionAdd even when Hidden.
 	t.Run("error_state_not_suppressed", func(t *testing.T) {
+		t.Parallel()
 		inst := newHiddenInstance()
 		inst.LastMeaningfulOutput = time.Now().Add(-1 * time.Second)
 		inst.SyncAtomicTimestamps()
@@ -579,6 +613,7 @@ func TestDetermine_ReturnsSkip_When_InstanceHiddenAndReasonIsTaskCompleteIdleOrS
 	})
 
 	t.Run("tests_failing_not_suppressed", func(t *testing.T) {
+		t.Parallel()
 		inst := newHiddenInstance()
 		inst.LastMeaningfulOutput = time.Now().Add(-1 * time.Second)
 		inst.SyncAtomicTimestamps()
@@ -603,6 +638,7 @@ func TestDetermine_ReturnsSkip_When_InstanceHiddenAndReasonIsTaskCompleteIdleOrS
 // of the regression test for the bug: approval content in terminal must be detected even
 // without a controller.
 func TestDefaultStatusDeterminer_NoControllerApprovalInTerminal(t *testing.T) {
+	t.Parallel()
 	detector := detection.NewStatusDetector()
 	determiner := NewDefaultStatusDeterminer(DefaultReviewQueuePollerConfig())
 

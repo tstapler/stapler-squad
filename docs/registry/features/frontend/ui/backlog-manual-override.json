@@ -1,0 +1,19 @@
+{
+  "id": "backlog:manual-override",
+  "type": "frontend",
+  "component": "ManualOverrideSection",
+  "path": "web-app/src/components/backlog/detail/ManualOverrideSection.tsx",
+  "markerLine": 2,
+  "tested": true,
+  "testIds": [
+    "ManualOverrideSection renders only the statuses the server reports in allowedTransitions",
+    "ManualOverrideSection keeps the override submit button disabled until a status is chosen and the reason meets the minimum length",
+    "ManualOverrideSection calls onOverrideStatus with the real reason text, not a hardcoded empty string",
+    "ManualOverrideSection surfaces the server's rejection message on failure instead of a generic error",
+    "ManualOverrideSection only renders the PR-association form while the item is in review status",
+    "ManualOverrideSection calls onAssociatePR with a parsed PR number",
+    "ManualOverrideSection disables every write action when readOnly",
+    "backlog-manual-override E2E: operator can force a valid status transition with a required reason"
+  ],
+  "lastModified": "2026-08-04T00:00:00Z"
+}

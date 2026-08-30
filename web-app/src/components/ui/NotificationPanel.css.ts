@@ -238,9 +238,8 @@ export const itemTitle = style({
 });
 
 globalStyle(`${itemTitle} strong`, {
-  whiteSpace: "nowrap",
-  overflow: "hidden",
-  textOverflow: "ellipsis",
+  overflowWrap: "break-word",
+  wordBreak: "break-word",
   flex: "0 1 auto",
   minWidth: 0,
 });
@@ -276,9 +275,8 @@ export const itemWorkingDir = style({
   display: "flex",
   alignItems: "center",
   gap: "0.25rem",
-  whiteSpace: "nowrap",
-  overflow: "hidden",
-  textOverflow: "ellipsis",
+  overflowWrap: "break-word",
+  wordBreak: "break-word",
 });
 
 export const itemActions = style({
@@ -408,6 +406,40 @@ export const loadMoreButton = style({
   },
 });
 
+export const incompleteSearchNotice = style({
+  display: "flex",
+  flexWrap: "wrap",
+  alignItems: "center",
+  gap: "0.5rem",
+  padding: "0.5rem 0.75rem",
+  margin: "0 0 0.5rem",
+  fontSize: "0.8rem",
+  color: vars.color.textSecondary,
+  backgroundColor: "rgba(0, 0, 0, 0.04)",
+  borderLeft: `2px solid ${vars.color.warning}`,
+  borderRadius: "0 4px 4px 0",
+});
+
+export const incompleteSearchNoticeButton = style({
+  padding: "0.2rem 0.6rem",
+  fontSize: "0.75rem",
+  fontWeight: 500,
+  border: `1px solid ${vars.color.borderColor}`,
+  borderRadius: "4px",
+  background: "transparent",
+  color: vars.color.primary,
+  cursor: "pointer",
+  selectors: {
+    "&:hover:not(:disabled)": {
+      borderColor: vars.color.primary,
+    },
+    "&:disabled": {
+      opacity: 0.5,
+      cursor: "not-allowed",
+    },
+  },
+});
+
 export const itemSubtitle = style({
   fontSize: "0.8rem",
   fontWeight: 500,
@@ -503,6 +535,24 @@ export const denyButton = style({
   },
 });
 
+export const ciBlockedRow = style({
+  display: "flex",
+  flexDirection: "column",
+  alignItems: "flex-start",
+  gap: "0.25rem",
+});
+
+export const ciBlockedText = style({
+  fontSize: "0.75rem",
+  color: vars.color.warningText,
+});
+
+export const ciBlockedLink = style({
+  fontSize: "0.75rem",
+  color: vars.color.primary,
+  textDecoration: "underline",
+});
+
 export const resolvedBadge = style({
   display: "inline-flex",
   alignItems: "center",
@@ -539,6 +589,12 @@ export const filterBar = style({
   flexShrink: 0,
 });
 
+export const searchRow = style({
+  display: "flex",
+  gap: "0.5rem",
+  alignItems: "center",
+});
+
 export const searchInput = style({
   width: "100%",
   padding: "0.5rem 0.75rem",
@@ -557,6 +613,35 @@ export const searchInput = style({
     "&:focus": {
       borderColor: vars.color.primary,
       boxShadow: `0 0 0 2px color-mix(in srgb, ${vars.color.primary} 20%, transparent)`,
+    },
+  },
+  "@media": {
+    [`screen and (max-width: ${breakpoints.md})`]: {
+      minHeight: "44px",
+    },
+  },
+});
+
+export const searchClearButton = style({
+  flexShrink: 0,
+  padding: "0.375rem 0.625rem",
+  fontSize: "0.75rem",
+  fontWeight: 500,
+  border: `1px solid ${vars.color.borderColor}`,
+  borderRadius: "6px",
+  background: "transparent",
+  color: vars.color.textSecondary,
+  cursor: "pointer",
+  selectors: {
+    "&:hover": {
+      borderColor: vars.color.primary,
+      color: vars.color.primary,
+    },
+  },
+  "@media": {
+    [`screen and (max-width: ${breakpoints.md})`]: {
+      minHeight: "44px",
+      minWidth: "44px",
     },
   },
 });
@@ -584,11 +669,26 @@ export const filterPill = style({
       color: vars.color.primary,
     },
   },
+  "@media": {
+    [`screen and (max-width: ${breakpoints.md})`]: {
+      minHeight: "44px",
+      padding: "0.5rem 0.75rem",
+    },
+  },
 });
 
 export const filterPillActive = style({
   backgroundColor: vars.color.primary,
   borderColor: vars.color.primary,
+  color: "white",
+});
+
+// Exclude-style (negative) filter pill — e.g. "hide backlog items" — visually
+// distinct from the inclusion-only filterPillActive so users can tell at a
+// glance which pills are narrowing vs. subtracting from the list.
+export const filterPillExcludeActive = style({
+  backgroundColor: vars.color.error,
+  borderColor: vars.color.error,
   color: "white",
 });
 
@@ -695,9 +795,8 @@ export const autoHandledContent = style({
 export const autoHandledTitle = style({
   fontWeight: 500,
   color: vars.color.textPrimary,
-  whiteSpace: "nowrap",
-  overflow: "hidden",
-  textOverflow: "ellipsis",
+  overflowWrap: "break-word",
+  wordBreak: "break-word",
 });
 
 export const autoHandledMeta = style({

@@ -45,6 +45,8 @@ type RuleSpec struct {
 	RequiredFlagPrefixes  []string `json:"required_flag_prefixes,omitempty"`
 	PythonModes           []string `json:"python_modes,omitempty"`
 	SafePythonImportsOnly bool     `json:"safe_python_imports_only,omitempty"`
+	RequireCIPassing      bool     `json:"require_ci_passing,omitempty"`
+	MinSessionIdleMinutes int32    `json:"min_session_idle_minutes,omitempty"`
 }
 
 // RulesFile is the top-level structure of auto_approve_rules.json.
@@ -88,7 +90,7 @@ func (s *RulesStore) ToRules() []classifier.Rule {
 
 // Upsert creates or updates a user rule. Source must be "user".
 // Returns the upserted spec.
-func (s *RulesStore) Upsert(spec RuleSpec) (RuleSpec, error) {
+func (s *RulesStore) Upsert(ctx context.Context, spec RuleSpec) (RuleSpec, error) {
 	if spec.Source != "user" {
 		return RuleSpec{}, fmt.Errorf("only user rules can be modified; got source=%q", spec.Source)
 	}
@@ -143,12 +145,14 @@ func (s *RulesStore) Upsert(spec RuleSpec) (RuleSpec, error) {
 		RequiredFlagPrefixes:  spec.RequiredFlagPrefixes,
 		PythonModes:           spec.PythonModes,
 		SafePythonImportsOnly: spec.SafePythonImportsOnly,
+		RequireCIPassing:      spec.RequireCIPassing,
+		MinSessionIdleMinutes: spec.MinSessionIdleMinutes,
 	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if err := s.storage.UpsertRule(context.Background(), ruleData); err != nil {
+	if err := s.storage.UpsertRule(ctx, ruleData); err != nil {
 		return RuleSpec{}, fmt.Errorf("save rule to DB: %w", err)
 	}
 
@@ -170,7 +174,7 @@ func (s *RulesStore) Upsert(spec RuleSpec) (RuleSpec, error) {
 }
 
 // Delete removes a user rule by ID. Returns error if not found or not a user rule.
-func (s *RulesStore) Delete(id string) error {
+func (s *RulesStore) Delete(ctx context.Context, id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -180,7 +184,7 @@ func (s *RulesStore) Delete(id string) error {
 				return fmt.Errorf("cannot delete %q rule %q; only user rules can be deleted", r.Source, id)
 			}
 
-			if err := s.storage.DeleteRule(context.Background(), id); err != nil {
+			if err := s.storage.DeleteRule(ctx, id); err != nil {
 				return fmt.Errorf("delete rule from DB: %w", err)
 			}
 
@@ -230,6 +234,8 @@ func (s *RulesStore) reload() error {
 			RequiredFlagPrefixes:  r.RequiredFlagPrefixes,
 			PythonModes:           r.PythonModes,
 			SafePythonImportsOnly: r.SafePythonImportsOnly,
+			RequireCIPassing:      r.RequireCIPassing,
+			MinSessionIdleMinutes: r.MinSessionIdleMinutes,
 		}
 	}
 
@@ -273,16 +279,18 @@ func specsToRules(specs []RuleSpec) []classifier.Rule {
 	rules := make([]classifier.Rule, 0, len(specs))
 	for _, spec := range specs {
 		r := classifier.Rule{
-			ID:          spec.ID,
-			Name:        spec.Name,
-			ToolName:    spec.ToolName,
-			Decision:    parseDecision(spec.Decision),
-			RiskLevel:   parseRiskLevel(spec.RiskLevel),
-			Reason:      spec.Reason,
-			Alternative: spec.Alternative,
-			Priority:    spec.Priority,
-			Enabled:     spec.Enabled,
-			Source:      spec.Source,
+			ID:                    spec.ID,
+			Name:                  spec.Name,
+			ToolName:              spec.ToolName,
+			Decision:              parseDecision(spec.Decision),
+			RiskLevel:             parseRiskLevel(spec.RiskLevel),
+			Reason:                spec.Reason,
+			Alternative:           spec.Alternative,
+			Priority:              spec.Priority,
+			Enabled:               spec.Enabled,
+			Source:                spec.Source,
+			RequireCIPassing:      spec.RequireCIPassing,
+			MinSessionIdleMinutes: spec.MinSessionIdleMinutes,
 		}
 		if spec.ToolPattern != "" {
 			re, err := regexp.Compile(spec.ToolPattern)

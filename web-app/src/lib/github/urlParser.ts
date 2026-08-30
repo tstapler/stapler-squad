@@ -441,11 +441,11 @@ export function getDisplayName(ref: ParsedGitHubRef): string {
 export function getSuggestedSessionName(ref: ParsedGitHubRef): string {
   switch (ref.type) {
     case RefType.PR:
-      return `pr-${ref.prNumber}-${ref.repo}`;
+      return `${ref.owner}-${ref.repo}-pr-${ref.prNumber}`;
     case RefType.Branch: {
       // Sanitize branch name for session name
       const branch = (ref.branch || '').replace(/\//g, '-');
-      return `${ref.repo}-${branch}`;
+      return `${ref.owner}-${ref.repo}-${branch}`;
     }
     case RefType.File: {
       // Use the file name as part of the session name
@@ -457,28 +457,28 @@ export function getSuggestedSessionName(ref: ParsedGitHubRef): string {
         fileName = fileName.substring(0, extIndex);
       }
       const branch = (ref.branch || '').replace(/\//g, '-');
-      return `${ref.repo}-${branch}-${fileName}`;
+      return `${ref.owner}-${ref.repo}-${branch}-${fileName}`;
     }
     case RefType.Commit: {
       let shortSHA = ref.commitSHA || '';
       if (shortSHA.length > 7) {
         shortSHA = shortSHA.substring(0, 7);
       }
-      return `${ref.repo}-commit-${shortSHA}`;
+      return `${ref.owner}-${ref.repo}-commit-${shortSHA}`;
     }
     case RefType.Issue:
-      return `issue-${ref.issueNumber}-${ref.repo}`;
+      return `${ref.owner}-${ref.repo}-issue-${ref.issueNumber}`;
     case RefType.Compare: {
       const base = (ref.baseBranch || '').replace(/\//g, '-');
       const head = (ref.headBranch || '').replace(/\//g, '-');
-      return `${ref.repo}-${base}-vs-${head}`;
+      return `${ref.owner}-${ref.repo}-${base}-vs-${head}`;
     }
     case RefType.Release: {
       const tag = (ref.tag || '').replace(/\//g, '-');
-      return `${ref.repo}-${tag}`;
+      return `${ref.owner}-${ref.repo}-${tag}`;
     }
     default:
-      return ref.repo;
+      return `${ref.owner}-${ref.repo}`;
   }
 }
 

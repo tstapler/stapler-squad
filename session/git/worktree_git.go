@@ -4,13 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os/exec"
 	"regexp"
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
-	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/log"
 )
 
@@ -21,22 +20,25 @@ import (
 // parent session package without a cycle.
 var prNumberFromURLRe = regexp.MustCompile(`/pull/(\d+)/?$`)
 
-// runGitCommand executes a git command and returns any error.
-// Uses the executor for circuit breaker support when available.
+// runGitCommand executes a git command scoped to path and returns any error.
+// Routes through g.commandRunner() unconditionally, exactly like every other
+// call site in this file (PushChanges, PushBranch, OpenBranchURL, CreatePR,
+// findExistingPR, GetPRStatus, EnablePRAutoMerge, RequestCopilotReview,
+// ClosePR, IsPRMerged) — see ADR-002's addendum for the history here: this
+// was previously the one call site with a g.cmdExec-gated branch (an
+// executor.Executor test-injection seam, never circuit-breaker-wrapped
+// anywhere in this package, unlike session/tmux's genuinely orthogonal
+// cmdExec), which made it dead code for all ~25 production callers of this
+// method (IsDirtyWithHint, RenameBranch, stageAndCommit,
+// StageAllExceptScaffolding, HasStagedChanges, plus every worktree_ops.go
+// worktree add/remove/prune/list call). IsDirtyWithHint's race/error-
+// injection tests now inject a tmux.CommandRunner spy via WithCommandRunner
+// instead of an executor.Executor mock.
 func (g *GitWorktree) runGitCommand(path string, args ...string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	baseArgs := make([]string, 0, 2+len(args))
-	baseArgs = append(baseArgs, "-C", path)
-	cmd := safeexec.CommandContext(ctx, "git", append(baseArgs, args...)...)
 
-	var output []byte
-	var err error
-	if g.cmdExec != nil {
-		output, err = g.cmdExec.CombinedOutput(cmd)
-	} else {
-		output, err = cmd.CombinedOutput()
-	}
+	output, err := g.commandRunner().Run(ctx, path, "git", args...)
 	if err != nil {
 		return "", fmt.Errorf("git command failed: %s (%w)", output, err)
 	}
@@ -46,7 +48,7 @@ func (g *GitWorktree) runGitCommand(path string, args ...string) (string, error)
 
 // PushChanges commits and pushes changes in the worktree to the remote branch
 func (g *GitWorktree) PushChanges(commitMessage string, open bool) error {
-	if err := checkGHCLI(); err != nil {
+	if err := g.checkGHCLI(); err != nil {
 		return err
 	}
 
@@ -66,15 +68,11 @@ func (g *GitWorktree) PushChanges(commitMessage string, open bool) error {
 	// First push the branch to remote to ensure it exists
 	pushCtx, pushCancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer pushCancel()
-	pushCmd := safeexec.CommandContext(pushCtx, "gh", "repo", "sync", "--source", "-b", g.branchName)
-	pushCmd.Dir = g.worktreePath
-	if err := g.runExec(pushCmd); err != nil {
+	if _, err := g.commandRunner().Run(pushCtx, g.worktreePath, "gh", "repo", "sync", "--source", "-b", g.branchName); err != nil {
 		// If sync fails, try creating the branch on remote first
 		gitPushCtx, gitPushCancel := context.WithTimeout(context.Background(), 60*time.Second)
 		defer gitPushCancel()
-		gitPushCmd := safeexec.CommandContext(gitPushCtx, "git", "push", "-u", "origin", g.branchName)
-		gitPushCmd.Dir = g.worktreePath
-		if pushOutput, pushErr := g.runCombinedOutput(gitPushCmd); pushErr != nil {
+		if pushOutput, pushErr := g.commandRunner().Run(gitPushCtx, g.worktreePath, "git", "push", "-u", "origin", g.branchName); pushErr != nil {
 			log.Error("failed to push branch", "err", pushErr)
 			return fmt.Errorf("failed to push branch: %s (%w)", pushOutput, pushErr)
 		}
@@ -83,9 +81,7 @@ func (g *GitWorktree) PushChanges(commitMessage string, open bool) error {
 	// Now sync with remote
 	syncCtx, syncCancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer syncCancel()
-	syncCmd := safeexec.CommandContext(syncCtx, "gh", "repo", "sync", "-b", g.branchName)
-	syncCmd.Dir = g.worktreePath
-	if output, err := g.runCombinedOutput(syncCmd); err != nil {
+	if output, err := g.commandRunner().Run(syncCtx, g.worktreePath, "gh", "repo", "sync", "-b", g.branchName); err != nil {
 		log.Error("failed to sync changes", "err", err)
 		return fmt.Errorf("failed to sync changes: %s (%w)", output, err)
 	}
@@ -116,6 +112,20 @@ func (g *GitWorktree) CommitChanges(commitMessage string) error {
 		g.InvalidateDirtyCache()
 	}
 
+	return nil
+}
+
+// RenameBranch renames the worktree's current branch in place (git branch -m) and
+// updates g.branchName to match. Used to move a worktree created under a
+// provisional name onto the final branch name once it's known, without losing the
+// worktree's existing content or commits — e.g. TriggerTriage names its worktree
+// before the LLM call reveals the item's slug, then renames it afterward to the
+// same "backlog/<item>" branch a later SpawnSessionFromItem will look for.
+func (g *GitWorktree) RenameBranch(newBranchName string) error {
+	if _, err := g.runGitCommand(g.worktreePath, "branch", "-m", newBranchName); err != nil {
+		return fmt.Errorf("failed to rename branch to %q: %w", newBranchName, err)
+	}
+	g.branchName = newBranchName
 	return nil
 }
 
@@ -282,51 +292,48 @@ func (g *GitWorktree) IsBranchCheckedOut() (bool, error) {
 // OpenBranchURL opens the branch URL in the default browser
 func (g *GitWorktree) OpenBranchURL() error {
 	// Check if GitHub CLI is available
-	if err := checkGHCLI(); err != nil {
+	if err := g.checkGHCLI(); err != nil {
 		return err
 	}
 
 	browseCtx, browseCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer browseCancel()
-	cmd := safeexec.CommandContext(browseCtx, "gh", "browse", "--branch", g.branchName)
-	cmd.Dir = g.worktreePath
-	if err := g.runExec(cmd); err != nil {
+	if _, err := g.commandRunner().Run(browseCtx, g.worktreePath, "gh", "browse", "--branch", g.branchName); err != nil {
 		return fmt.Errorf("failed to open branch URL: %w", err)
 	}
 	return nil
 }
 
-// runExec runs a command through the executor (or directly if no executor is set).
-func (g *GitWorktree) runExec(cmd *exec.Cmd) error {
-	if g.cmdExec != nil {
-		return g.cmdExec.Run(cmd)
-	}
-	return cmd.Run()
-}
-
-// runCombinedOutput runs a command through the executor and returns combined output.
-func (g *GitWorktree) runCombinedOutput(cmd *exec.Cmd) ([]byte, error) {
-	if g.cmdExec != nil {
-		return g.cmdExec.CombinedOutput(cmd)
-	}
-	return cmd.CombinedOutput()
-}
 func (g *GitWorktree) PushBranch() error {
 	pushCtx, pushCancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer pushCancel()
-	cmd := safeexec.CommandContext(pushCtx, "git", "push", "-u", "origin", g.branchName)
-	cmd.Dir = g.worktreePath
-	if out, err := g.runCombinedOutput(cmd); err != nil {
+	if out, err := g.commandRunner().Run(pushCtx, g.worktreePath, "git", "push", "-u", "origin", g.branchName); err != nil {
 		return fmt.Errorf("failed to push branch: %s (%w)", out, err)
 	}
 	return nil
 }
 
+// PRCreateOptions bundles CreatePR's arguments. Title, Body, and BaseBranch are
+// all plain strings with no compiler-enforced distinction between them, so a
+// transposed call (e.g. body and baseBranch swapped) would previously compile
+// silently wrong — the exact smell the `primitive-obsession-checklist` skill
+// exists to catch. A named field wins that transposition back at every call site.
+type PRCreateOptions struct {
+	// Title defaults to the branch name (with hyphens replaced by spaces) if empty.
+	Title string
+	Body  string
+	// BaseBranch, if non-empty, is passed to `gh pr create --base`; if empty,
+	// gh's own default-branch resolution is used (preserves pre-existing
+	// behavior for every caller that doesn't care which branch it targets).
+	BaseBranch string
+}
+
 // CreatePR creates a GitHub pull request for the current branch and returns the
-// PR URL and number. Title defaults to the branch name if empty.
-// If a PR already exists for the branch it is returned without creating a new one.
-func (g *GitWorktree) CreatePR(title, body string) (prURL string, prNumber int, err error) {
-	if err := checkGHCLI(); err != nil {
+// PR URL and number. If a PR already exists for the branch it is returned
+// without creating a new one.
+func (g *GitWorktree) CreatePR(opts PRCreateOptions) (prURL string, prNumber int, err error) {
+	title, body, baseBranch := opts.Title, opts.Body, opts.BaseBranch
+	if err := g.checkGHCLI(); err != nil {
 		return "", 0, err
 	}
 	if title == "" {
@@ -343,9 +350,10 @@ func (g *GitWorktree) CreatePR(title, body string) (prURL string, prNumber int, 
 	defer cancel()
 
 	args := []string{"pr", "create", "--title", title, "--body", body, "--head", g.branchName}
-	cmd := safeexec.CommandContext(ctx, "gh", args...)
-	cmd.Dir = g.worktreePath
-	out, runErr := g.runCombinedOutput(cmd)
+	if baseBranch != "" {
+		args = append(args, "--base", baseBranch)
+	}
+	out, runErr := g.commandRunner().Run(ctx, g.worktreePath, "gh", args...)
 	if runErr != nil {
 		// A race: PR was created between our check and now. Re-check once.
 		if u, n, err2 := g.findExistingPR(); err2 == nil && n > 0 {
@@ -379,9 +387,7 @@ func (g *GitWorktree) CreatePR(title, body string) (prURL string, prNumber int, 
 		// original gh-view-based lookup as a last resort.
 		numCtx, numCancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer numCancel()
-		numCmd := safeexec.CommandContext(numCtx, "gh", "pr", "view", "--json", "number", "--jq", ".number", "--head", g.branchName)
-		numCmd.Dir = g.worktreePath
-		numOut, numErr := g.runCombinedOutput(numCmd)
+		numOut, numErr := g.commandRunner().Run(numCtx, g.worktreePath, "gh", "pr", "view", "--json", "number", "--jq", ".number", "--head", g.branchName)
 		if numErr == nil {
 			prNumber, _ = strconv.Atoi(strings.TrimSpace(string(numOut)))
 		}
@@ -395,10 +401,8 @@ func (g *GitWorktree) CreatePR(title, body string) (prURL string, prNumber int, 
 func (g *GitWorktree) findExistingPR() (string, int, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	cmd := safeexec.CommandContext(ctx, "gh", "pr", "list", "--head", g.branchName,
+	out, err := g.commandRunner().Run(ctx, g.worktreePath, "gh", "pr", "list", "--head", g.branchName,
 		"--json", "number,url", "--jq", ".[0] | .number, .url")
-	cmd.Dir = g.worktreePath
-	out, err := g.runCombinedOutput(cmd)
 	if err != nil || strings.TrimSpace(string(out)) == "" {
 		return "", 0, fmt.Errorf("no existing PR")
 	}
@@ -414,8 +418,83 @@ func (g *GitWorktree) findExistingPR() (string, int, error) {
 	return url, num, nil
 }
 
+// HasCommitsAheadOfMain reports whether this worktree's branch has at least
+// one commit not present on mainBranch — i.e. whether there is genuinely
+// anything to ship. Used as a pre-flight check before attempting CreatePR: a
+// branch with zero commits ahead of main makes `gh pr create` fail with "No
+// commits between X and Y", which is not a retryable push/PR failure (see
+// BUG-063) but a signal that the item was already fully addressed elsewhere.
+// Returns true (the safe, existing default: attempt PR creation as before) if
+// the check itself is inconclusive — an error opening the repo, or the branch
+// not existing locally — so a check failure never causes a caller to skip PR
+// creation for a branch that may well need it.
+func (g *GitWorktree) HasCommitsAheadOfMain(mainBranch string) (bool, error) {
+	status, err := BranchAheadBehind(g.repoPath, g.branchName, mainBranch)
+	if err != nil {
+		return true, err
+	}
+	if !status.BranchExists {
+		return true, nil
+	}
+	return status.AheadOfMain > 0, nil
+}
+
 // reviewInfo captures the blocking review that tripped HasBlockingReviews.
 type reviewInfo struct{ author, body string }
+
+// prFeedbackItem captures one piece of substantive PR feedback (a COMMENTED
+// review or a plain comment) along with the GitHub-assigned timestamp it
+// carries, so callers can compute a max-timestamp watermark for dedup.
+type prFeedbackItem struct {
+	author, body string
+	at           time.Time
+}
+
+// substantiveFeedbackMinLen is the minimum trimmed-rune length a review/comment
+// body must have to count as substantive feedback (filters bare "LGTM"-style
+// noise out of the HasReviewFeedback signal).
+const substantiveFeedbackMinLen = 10
+
+// isSubstantiveFeedback reports whether body is long enough to be considered
+// actionable feedback rather than noise (a bare "lgtm", empty, or whitespace-only
+// body).
+func isSubstantiveFeedback(body string) bool {
+	return utf8.RuneCountInString(strings.TrimSpace(body)) >= substantiveFeedbackMinLen
+}
+
+// copilotReviewerLogin is the GitHub Copilot code-review bot account's login
+// — the one "[bot]" account whose feedback IS meant to count toward
+// HasReviewFeedback (it's this feature's motivating example). Mirrors the
+// literal login RequestCopilotReview requests a review from.
+const copilotReviewerLogin = "copilot-pull-request-reviewer[bot]"
+
+// isExcludedBotAuthor reports whether login belongs to an automated bot
+// account (GitHub's convention: a "[bot]" suffix, e.g. github-actions[bot],
+// codecov[bot], dependabot[bot]) OTHER than Copilot's own review account.
+// Without this exclusion, a long-enough recurring bot comment (a coverage
+// report, a CI status summary) would pass isSubstantiveFeedback and
+// repeatedly re-trigger a fix session on every push, burning the shared
+// rework-cap budget on non-actionable text (pre-mortem.md #5).
+func isExcludedBotAuthor(login string) bool {
+	return login != copilotReviewerLogin && strings.HasSuffix(login, "[bot]")
+}
+
+// parseFeedbackTimestamp parses raw as an RFC3339 timestamp (GitHub's
+// submittedAt/createdAt format), falling back to time.Now() on failure. A
+// zero-valued fallback could lose to an already-persisted, later watermark
+// and silently suppress detection of genuinely new feedback; time.Now() is
+// guaranteed no earlier than any watermark this process could have already
+// persisted, so it can only ever push LatestFeedbackAt later, never mask a
+// real later item under an earlier one. fieldLabel names the source field,
+// for the warning log.
+func parseFeedbackTimestamp(raw, fieldLabel string) time.Time {
+	at, err := time.Parse(time.RFC3339, raw)
+	if err != nil {
+		log.Warn("parsePRStatusPayload: failed to parse feedback timestamp", "field", fieldLabel, "value", raw, "err", err)
+		return time.Now()
+	}
+	return at
+}
 
 // PRStatus holds the CI, review, and conflict state for a pull request.
 type PRStatus struct {
@@ -452,6 +531,17 @@ type PRStatus struct {
 	// HasBlockingReviews — exposed as a count so callers building a
 	// github.PRInfo-shaped value don't need to re-derive it from the bool).
 	ChangesRequestedCount int
+	// HasReviewFeedback is true when at least one substantive COMMENTED-state
+	// review or substantive plain PR comment exists (Copilot's typical review
+	// posture is COMMENTED, not CHANGES_REQUESTED, so this is a distinct signal
+	// from HasBlockingReviews). Non-substantive feedback (bare "lgtm", empty,
+	// or whitespace-only bodies) never sets this.
+	HasReviewFeedback bool
+	// LatestFeedbackAt is the newest GitHub-assigned submittedAt/createdAt
+	// timestamp among all substantive feedback captured this call; the zero
+	// value when HasReviewFeedback is false. Callers use this as the dedup
+	// watermark comparison point (see ReconcilePRPending's hasNewFeedback).
+	LatestFeedbackAt time.Time
 	// FeedbackText is a combined human-readable summary for the fix agent.
 	FeedbackText string
 
@@ -463,12 +553,20 @@ type PRStatus struct {
 	// single source of truth for "is there a conflict" — render() branches on
 	// HasConflicts, not on this field's zero-ness.
 	conflictMergeStateStatus string
-	generalComments          []string // unexported; existing "general comments" section content (unchanged behavior, just relocated)
+	// commentReviews holds substantive COMMENTED-state reviews — today silently
+	// dropped since only CHANGES_REQUESTED feeds blockingReviews.
+	commentReviews  []prFeedbackItem
+	generalComments []prFeedbackItem // unexported; existing "general comments" section content, retyped to carry timestamps
 }
 
 // render assembles FeedbackText from the fields captured during evaluation,
 // in a fixed order (conflict first — features.md §2A), so FeedbackText can
-// never drift from the bools it's derived from.
+// never drift from the bools it's derived from. The exact "## <Section>"
+// header strings emitted here are pinned by
+// server/services/backlog_service_pr_fix_steer_test.go's
+// TestBuildReasonSignature_HeaderStrings_MatchPRStatusRender — a wording
+// change here silently changes every PR-fix-steer dedup signature's
+// identity, so that test must be updated in step with any change below.
 func (s *PRStatus) render() string {
 	var sb strings.Builder
 
@@ -513,33 +611,82 @@ func (s *PRStatus) render() string {
 		}
 	}
 
+	if len(s.commentReviews) > 0 {
+		sb.WriteString("## Reviewer comments\n")
+		for _, cr := range s.commentReviews {
+			sb.WriteString("@" + cr.author + ": " + cr.body + "\n\n")
+		}
+	}
+
 	if len(s.generalComments) > 0 {
 		sb.WriteString("## PR comments\n")
 		for _, c := range s.generalComments {
-			sb.WriteString(c + "\n\n")
+			sb.WriteString("@" + c.author + ": " + c.body + "\n\n")
 		}
 	}
 
 	return sb.String()
 }
 
+// countableGeneralComments returns the subset of generalComments that count
+// toward HasReviewFeedback/LatestFeedbackAt/FeedbackAuthors: substantive
+// bodies from non-excluded-bot authors. commentReviews needs no equivalent
+// filter here — it's already filtered to eligible entries at append time
+// (see the COMMENTED case in parsePRStatusPayload).
+func (s *PRStatus) countableGeneralComments() []prFeedbackItem {
+	out := make([]prFeedbackItem, 0, len(s.generalComments))
+	for _, gc := range s.generalComments {
+		if !isSubstantiveFeedback(gc.body) || isExcludedBotAuthor(gc.author) {
+			continue
+		}
+		out = append(out, gc)
+	}
+	return out
+}
+
+// FeedbackAuthors returns one author login per countable feedback item
+// (COMMENTED reviews plus countableGeneralComments) captured this call — NOT
+// deduplicated, so the same login appears once per item they authored.
+// Callers use len() of this slice as an item count and the logins as an
+// author list for a single hasNewFeedback-triggered dispatch, since a
+// partially-addressed multi-item batch is otherwise silently unresolved
+// forever once the dedup watermark advances past the whole batch.
+func (s *PRStatus) FeedbackAuthors() []string {
+	authors := make([]string, 0, len(s.commentReviews)+len(s.generalComments))
+	for _, cr := range s.commentReviews {
+		authors = append(authors, cr.author)
+	}
+	for _, gc := range s.countableGeneralComments() {
+		authors = append(authors, gc.author)
+	}
+	return authors
+}
+
 // GetPRStatus fetches the combined CI check status, reviewer decisions,
 // mergeability, and PR comments for the given pull request number.
 func (g *GitWorktree) GetPRStatus(prNumber int) (*PRStatus, error) {
-	if err := checkGHCLI(); err != nil {
+	if err := g.checkGHCLI(); err != nil {
 		return nil, err
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	cmd := safeexec.CommandContext(ctx, "gh", "pr", "view", strconv.Itoa(prNumber),
+	raw, err := g.commandRunner().Run(ctx, g.worktreePath, "gh", "pr", "view", strconv.Itoa(prNumber),
 		"--json", "statusCheckRollup,reviews,comments,mergeable,mergeStateStatus,state,isDraft")
-	cmd.Dir = g.worktreePath
-	raw, err := g.runCombinedOutput(cmd)
 	if err != nil {
 		return nil, fmt.Errorf("gh pr view failed: %s (%w)", raw, err)
 	}
 
+	return parsePRStatusPayload(raw)
+}
+
+// ParsePRStatusPayload parses gh pr view's combined JSON output into a
+// PRStatus. Exported so callers outside this package (e.g.
+// session/backlog_lifecycle_test.go's ReconcilePRPending fixtures) can build
+// a *PRStatus with commentReviews/generalComments genuinely populated —
+// FeedbackAuthors() depends on those unexported fields, which a struct
+// literal from another package cannot set directly.
+func ParsePRStatusPayload(raw []byte) (*PRStatus, error) {
 	return parsePRStatusPayload(raw)
 }
 
@@ -564,12 +711,14 @@ func parsePRStatusPayload(raw []byte) (*PRStatus, error) {
 			Author struct {
 				Login string `json:"login"`
 			} `json:"author"`
+			SubmittedAt string `json:"submittedAt"`
 		} `json:"reviews"`
 		Comments []struct {
 			Body   string `json:"body"`
 			Author struct {
 				Login string `json:"login"`
 			} `json:"author"`
+			CreatedAt string `json:"createdAt"`
 		} `json:"comments"`
 		Mergeable        string `json:"mergeable"`
 		MergeStateStatus string `json:"mergeStateStatus"`
@@ -632,12 +781,41 @@ func parsePRStatusPayload(raw []byte) (*PRStatus, error) {
 			status.blockingReviews = append(status.blockingReviews, reviewInfo{author: r.Author.Login, body: r.Body})
 		case "APPROVED":
 			status.ApprovedCount++
+		case "COMMENTED":
+			// Excluded-bot check alongside substantiveness: without it, a
+			// long-enough recurring bot COMMENTED review would repeatedly
+			// re-trigger a fix session, burning the shared rework-cap budget
+			// on non-actionable text (pre-mortem.md #5). Copilot's own
+			// review account is explicitly exempted — it's this feature's
+			// motivating example.
+			if !isSubstantiveFeedback(r.Body) || isExcludedBotAuthor(r.Author.Login) {
+				continue
+			}
+			at := parseFeedbackTimestamp(r.SubmittedAt, "submittedAt")
+			status.commentReviews = append(status.commentReviews, prFeedbackItem{author: r.Author.Login, body: r.Body, at: at})
 		}
 	}
 
-	// Include general PR comments as context.
+	// Include general PR comments as context. Every comment is captured
+	// unconditionally (unchanged behavior) — substantiveness/bot filtering
+	// only affects what counts toward HasReviewFeedback (below), not what
+	// renders in FeedbackText.
 	for _, c := range payload.Comments {
-		status.generalComments = append(status.generalComments, "@"+c.Author.Login+": "+c.Body)
+		at := parseFeedbackTimestamp(c.CreatedAt, "createdAt")
+		status.generalComments = append(status.generalComments, prFeedbackItem{author: c.Author.Login, body: c.Body, at: at})
+	}
+
+	for _, cr := range status.commentReviews {
+		status.HasReviewFeedback = true
+		if cr.at.After(status.LatestFeedbackAt) {
+			status.LatestFeedbackAt = cr.at
+		}
+	}
+	for _, gc := range status.countableGeneralComments() {
+		status.HasReviewFeedback = true
+		if gc.at.After(status.LatestFeedbackAt) {
+			status.LatestFeedbackAt = gc.at
+		}
 	}
 
 	status.FeedbackText = status.render()
@@ -648,16 +826,34 @@ func parsePRStatusPayload(raw []byte) (*PRStatus, error) {
 // automatically once required CI checks pass. Best-effort: fails silently
 // when the repo does not have auto-merge enabled in its branch protection rules.
 func (g *GitWorktree) EnablePRAutoMerge(prNumber int) error {
-	if err := checkGHCLI(); err != nil {
+	if err := g.checkGHCLI(); err != nil {
 		return err
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	cmd := safeexec.CommandContext(ctx, "gh", "pr", "merge", strconv.Itoa(prNumber), "--auto", "--squash")
-	cmd.Dir = g.worktreePath
-	out, err := g.runCombinedOutput(cmd)
+	out, err := g.commandRunner().Run(ctx, g.worktreePath, "gh", "pr", "merge", strconv.Itoa(prNumber), "--auto", "--squash")
 	if err != nil {
 		return fmt.Errorf("gh pr merge --auto failed: %s (%w)", out, err)
+	}
+	return nil
+}
+
+// RequestCopilotReview requests a GitHub Copilot code review on prNumber.
+// Best-effort: fails when Copilot code review isn't enabled for the org/repo,
+// or on any other gh error — callers must not fail PR creation on this error.
+// Uses the legacy bot-login form (copilot-pull-request-reviewer[bot]) via
+// --add-reviewer rather than the newer @copilot alias, since the literal
+// login is accepted by every gh version this repo targets while the alias is
+// version-gated (see plan.md's Pattern Decisions table).
+func (g *GitWorktree) RequestCopilotReview(prNumber int) error {
+	if err := g.checkGHCLI(); err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	out, err := g.commandRunner().Run(ctx, g.worktreePath, "gh", "pr", "edit", strconv.Itoa(prNumber), "--add-reviewer", copilotReviewerLogin)
+	if err != nil {
+		return fmt.Errorf("gh pr edit --add-reviewer copilot failed: %s (%w)", out, err)
 	}
 	return nil
 }
@@ -667,14 +863,12 @@ func (g *GitWorktree) EnablePRAutoMerge(prNumber int) error {
 // branch's work already landed on main through a different path) rather than
 // genuinely broken — see BUG-032.
 func (g *GitWorktree) ClosePR(prNumber int, comment string) error {
-	if err := checkGHCLI(); err != nil {
+	if err := g.checkGHCLI(); err != nil {
 		return err
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	cmd := safeexec.CommandContext(ctx, "gh", "pr", "close", strconv.Itoa(prNumber), "--comment", comment)
-	cmd.Dir = g.worktreePath
-	out, err := g.runCombinedOutput(cmd)
+	out, err := g.commandRunner().Run(ctx, g.worktreePath, "gh", "pr", "close", strconv.Itoa(prNumber), "--comment", comment)
 	if err != nil {
 		return fmt.Errorf("gh pr close failed: %s (%w)", out, err)
 	}
@@ -683,18 +877,14 @@ func (g *GitWorktree) ClosePR(prNumber int, comment string) error {
 
 // IsPRMerged reports whether the given PR number has been merged.
 func (g *GitWorktree) IsPRMerged(prNumber int) (bool, error) {
-	if err := checkGHCLI(); err != nil {
+	if err := g.checkGHCLI(); err != nil {
 		return false, err
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	cmd := safeexec.CommandContext(ctx, "gh", "pr", "view", strconv.Itoa(prNumber), "--json", "state", "--jq", ".state")
-	cmd.Dir = g.worktreePath
-	out, err := g.runCombinedOutput(cmd)
+	out, err := g.commandRunner().Run(ctx, g.worktreePath, "gh", "pr", "view", strconv.Itoa(prNumber), "--json", "state", "--jq", ".state")
 	if err != nil {
 		return false, fmt.Errorf("gh pr view failed: %s (%w)", out, err)
 	}
 	return strings.TrimSpace(string(out)) == "MERGED", nil
 }
-
-// runExec runs a command through the executor (or directly if no executor is set).

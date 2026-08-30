@@ -1,6 +1,6 @@
 # ADR-001: Eliminate tmux subprocess forks via control mode command dispatch
 
-**Status**: Proposed
+**Status**: Accepted (implemented)
 **Date**: 2026-04-24
 **Project**: tmux-optimization
 
@@ -64,12 +64,32 @@ Control mode command dispatch is the documented, production-proven path. iTerm2 
 - Confirm `capture-pane -S/-E` line range flags work over CM stdin
 - Implement feature flag `STAPLER_SQUAD_CM_COMMANDS`, start with `GetPaneDimensions` (smallest output), run parallel paths 24h logging discrepancies, then migrate remaining 8 call sites
 
+## Implementation Note (2026-08-21)
+
+All 9 call sites listed above were migrated to `sendCMCommand`, gated by
+`cmEnabledForBackground()` (`session/tmux/tmux.go`), each falling back to the
+original subprocess path when control mode isn't running or the CM call
+errors. `ExitStatus()` (not in the original 9, added during migration) got
+the same treatment.
+
+**Caveat found post-implementation, not anticipated in this ADR**: control
+mode is *viewer-gated* — `StartControlMode`/`StopControlMode` in
+`server/services/connectrpc_websocket.go` only run CM around an active
+websocket connection. This ADR's fix is a no-op for background/unviewed
+sessions, which is exactly the case the `SessionHealthChecker`'s 15s-interval
+per-session `PaneProcessDead()` polling hits regardless of viewer state — the
+actual dominant driver of the reported ~15k `display-message` calls/20min.
+That gap is closed independently, by socket-level batching rather than CM,
+in `session/health.go`'s `checkInstances()` (see
+`session/tmux/tmux.go`'s `BatchPaneDeadStatus`) — not by this ADR's
+mechanism, since CM cannot reach a session with no attached viewer.
+
 ## Related
 
 - Research: `project_plans/tmux-optimization/research/findings-control-mode-commands.md`
 - Research: `project_plans/tmux-optimization/research/findings-tmux-socket-ipc.md`
 - Synthesis: `project_plans/tmux-optimization/research/synthesis.md`
 - Source: `session/tmux/control_mode.go` (`processControlModeLine`, `readControlModeOutput`, `controlModeStdin`)
-- Source: `session/tmux/tmux.go` (9 call sites to migrate)
+- Source: `session/tmux/tmux.go` (9 call sites migrated; `BatchPaneDeadStatus` for the viewer-independent health-check path)
 - Supersedes: (none)
 - Related ADRs: ADR-002 (TTL caching — Phase 1 prerequisite)

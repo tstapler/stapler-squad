@@ -5,14 +5,19 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"github.com/google/uuid"
 	"github.com/tstapler/stapler-squad/log"
 	"io"
 	"os"
 	"os/user"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
+	"sync"
+	"syscall"
 	"time"
 )
 
@@ -104,6 +109,45 @@ func IsIsolatedInstance() bool {
 	return IsTestMode() || IsNamedInstance() || os.Getenv("STAPLER_SQUAD_TEST_DIR") != ""
 }
 
+// pruneStaleTestDirs removes test-<pid> directories under testBaseDir whose
+// owning process is no longer running. Every go-test binary gets its own
+// isolated state dir here (see the IsTestMode branch below), but nothing else
+// ever deletes it — unlike t.TempDir(), this survives the test run on
+// purpose, for post-mortem debugging. Left unswept, that accumulates forever:
+// found 13,530 orphaned dirs (6.1G) going back to March 2026, which
+// contributed to the disk filling up. Checking the pid instead of an mtime
+// cutoff means this is safe to run even mid a legitimately slow test run.
+func pruneStaleTestDirs(testBaseDir string) {
+	entries, err := os.ReadDir(testBaseDir)
+	if err != nil {
+		return
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		pidStr, ok := strings.CutPrefix(entry.Name(), "test-")
+		if !ok {
+			continue
+		}
+		pid, err := strconv.Atoi(pidStr)
+		if err != nil || isProcessAlive(pid) {
+			continue
+		}
+		_ = os.RemoveAll(filepath.Join(testBaseDir, entry.Name()))
+	}
+}
+
+// isProcessAlive reports whether pid is a running process, via the null
+// signal (no-op existence check, doesn't actually signal the process).
+func isProcessAlive(pid int) bool {
+	proc, err := os.FindProcess(pid)
+	if err != nil {
+		return false
+	}
+	return proc.Signal(syscall.Signal(0)) == nil
+}
+
 // GetConfigDir returns the path to the application's configuration directory
 // with hierarchical isolation for safe multi-instance and test execution.
 //
@@ -161,8 +205,10 @@ func GetConfigDirForDir(dir string) (string, error) {
 	// preference set by a production instance cannot leak into test runs.
 	if IsTestMode() {
 		// Each test/benchmark process gets its own isolated state
+		testBaseDir := filepath.Join(baseDir, "test")
+		pruneStaleTestDirs(testBaseDir)
 		pid := os.Getpid()
-		return filepath.Join(baseDir, "test", fmt.Sprintf("test-%d", pid)), nil
+		return filepath.Join(testBaseDir, fmt.Sprintf("test-%d", pid)), nil
 	}
 
 	return resolveDefaultConfigDir(dir, baseDir)
@@ -230,6 +276,18 @@ type Config struct {
 	// executor is the command executor used for shell command discovery.
 	// Set via NewConfigWithExecutor; defaults to a 5-second timeout executor.
 	executor CommandExecutor
+	// lazyMu guards the generate-on-first-use fields below (MachineEncryptionKey,
+	// ClaimantHostID) against concurrent first-callers racing to generate and
+	// persist their own value — see GetOrCreateEncryptionKey/GetOrCreateClaimantHostID.
+	lazyMu sync.Mutex
+	// slackWebhookURLOverride holds the SLACK_WEBHOOK_URL env var value, if
+	// set at load time. Never persisted to config.json — see ADR-001. Not
+	// serialized since the field is unexported; read via SlackWebhookURLOverride().
+	slackWebhookURLOverride string
+	// slackSigningSecretOverride holds the SLACK_SIGNING_SECRET env var value,
+	// if set at load time. Never persisted to config.json — see ADR-001. Not
+	// serialized since the field is unexported; read via SlackSigningSecretOverride().
+	slackSigningSecretOverride string
 	// ListenAddress is the address the HTTP server listens on.
 	// Default: "localhost:8543". Set to "0.0.0.0:8543" for remote access.
 	ListenAddress string `json:"listen_address"`
@@ -285,6 +343,11 @@ type Config struct {
 	SessionDefaults SessionDefaults `json:"session_defaults,omitempty"`
 	// Notifications holds the user's notification delivery preferences.
 	Notifications NotificationPrefs `json:"notifications,omitempty"`
+	// Remotes is a named list of SSH-reachable remote hosts sessions can be
+	// created against (ssh-remote-workspaces feature). Holds connection
+	// coordinates only — no SSH key material; see RemoteConfig's doc
+	// comment. Looked up by name via RemoteByName.
+	Remotes []RemoteConfig `json:"remotes,omitempty"`
 	// OneOffBaseDir is the base directory where one-off session directories are created.
 	// Default: "~/oneoff". Tilde is expanded at runtime. Created automatically on first use.
 	OneOffBaseDir string `json:"one_off_base_dir,omitempty"`
@@ -299,6 +362,16 @@ type Config struct {
 	// MachineEncryptionKey is a base64-encoded 32-byte AES-256-GCM key for local data encryption.
 	// Generated on first run and persisted here. Used to encrypt sensitive token data in ItemSource configs.
 	MachineEncryptionKey string `json:"machine_encryption_key,omitempty"`
+	// ClaimantHostID is a randomly generated identifier for THIS physical process/config
+	// directory, generated on first use and persisted here. Recorded on backlog ItemSession
+	// rows to show which host/process claimed or attached a session (see
+	// GetOrCreateClaimantHostID). Stable across restarts of this same process/config dir;
+	// distinct across different hosts and across different STAPLER_SQUAD_INSTANCE-namespaced
+	// config dirs on the same machine, since each gets its own config.json. Unrelated to
+	// STAPLER_SQUAD_INSTANCE (which only namespaces config/state directories on a single
+	// machine) and unrelated to session/contexts.go's CloudContext.InstanceID (a cloud
+	// provider's instance identifier, not populated for local/dev sessions).
+	ClaimantHostID string `json:"claimant_host_id,omitempty"`
 	// MaxAutoReworkIterations caps how many automated work sessions the backlog auto-reopen
 	// loop will spawn for a single item before leaving it for manual review. 0 = use the
 	// default (20). Individual items can also override this via
@@ -309,6 +382,15 @@ type Config struct {
 	// "in_progress" at the same time. 0 = use the default (2). Values above
 	// maxConcurrentBacklogWorkItemsHardCeiling are clamped to the ceiling.
 	MaxConcurrentBacklogWorkItems int `json:"max_concurrent_backlog_work_items,omitempty"`
+	// AutoSpawnReadyItems controls whether "ready" backlog items (post-triage, plan
+	// approved or SkipPlanning) automatically claim a free WIP slot and spawn a work
+	// session — in priority order (P1 first) — the moment one is free, without a
+	// human clicking "Spawn Session". A *bool, not bool: the zero value of bool
+	// can't represent "unset" the way 0 does for the int settings above, and this
+	// setting's default is true (unlike SkipReviewGate/AutoCreatePR's per-item
+	// false-by-default opt-ins), so nil must mean "use the default", not "disabled".
+	// Pass explicit false to require manual spawning instead.
+	AutoSpawnReadyItems *bool `json:"auto_spawn_ready_items,omitempty"`
 
 	// AnalyticsMaxRows is the maximum number of analytics events to retain in the database.
 	// When exceeded, the oldest rows are deleted. 0 means no row-count limit.
@@ -328,8 +410,25 @@ type Config struct {
 	Hibernation HibernationConfig `json:"hibernation,omitempty"`
 	// Capacity holds configuration for the provider capacity monitoring and transition feature.
 	Capacity CapacityConfig `json:"capacity,omitempty"`
+	// HandoffSummary holds configuration for the restart-with-handoff-summary feature.
+	HandoffSummary HandoffSummaryConfig `json:"handoff_summary,omitempty"`
+	// Quota holds configuration for the account-wide session-quota gate that
+	// pauses/resumes backlog automation based on inferred quota headroom.
+	Quota QuotaConfig `json:"quota,omitempty"`
 	// TmuxExecGate bounds concurrent tmux subprocess execution across all processes.
 	TmuxExecGate TmuxExecGateConfig `json:"tmux_exec_gate,omitempty"`
+	// SessionRetention holds configuration for the automatic session-retention cleanup sweep.
+	SessionRetention SessionRetentionConfig `json:"session_retention,omitempty"`
+	// StaleSession holds configuration for stale-session detection (inactivity threshold
+	// and notify-on-stale toggle).
+	StaleSession StaleSessionConfig `json:"stale_session,omitempty"`
+	// Callbacks holds the global singleton outbound-callback URLs (webhook-triggers
+	// Phase 5, FR7) fired by CallbackDispatcher on session-complete/session-stale/
+	// queue-item-created lifecycle events.
+	Callbacks CallbackConfig `json:"callbacks,omitempty"`
+	// Slack holds configuration for the Slack review-queue notification
+	// feature. Secret fields are ciphertext only — see ADR-001.
+	Slack SlackConfig `json:"slack,omitempty"`
 
 	// Escape analytics configuration
 
@@ -366,6 +465,210 @@ type Config struct {
 	// github.com) with their own OAuth App client IDs, enabling device-flow login,
 	// PR polling, and link detection against those hosts. Empty means github.com only.
 	GitHubEnterpriseHosts []GitHubEnterpriseHost `json:"github_enterprise_hosts,omitempty"`
+
+	// StreamHubSessionOverrides forces the terminal-multi-connection-streaming
+	// project's PathHubOwned resolution for specific named tmux sessions,
+	// regardless of the global STAPLER_SQUAD_USE_STREAM_HUB default — the
+	// per-session canary mechanism (Story 3.3.1). Keys are tmux session
+	// names; an absent key means "no override, use the global default".
+	// Consulted via streamhub.SetSessionOverrideLookup, wired at process
+	// startup in server/services so package session/streamhub never imports
+	// package config directly.
+	StreamHubSessionOverrides map[string]bool `json:"stream_hub_session_overrides,omitempty"`
+	// RollbackRehearsalCompletedAt records when Story 3.3.2's rollback
+	// rehearsal (flip STAPLER_SQUAD_USE_STREAM_HUB's per-session override on
+	// for a disposable session, use it briefly, remove the override, confirm
+	// a clean reconnect under the legacy path) was last completed
+	// successfully. nil means "never completed". ResolveGlobalStreamHubDefault
+	// refuses to let the *global* default resolve to true until this is set
+	// (pre-mortem P1 #4's mechanical gate) — the per-session override above
+	// is unaffected by this gate. Set via RecordRollbackRehearsalCompleted.
+	RollbackRehearsalCompletedAt *time.Time `json:"rollback_rehearsal_completed_at,omitempty"`
+	// StreamHubGlobalOverride is a live, config.json-backed override of the
+	// global stream-hub default, settable from the browser via
+	// SetStreamHubGlobalOverride with no process restart required. nil means
+	// "no override — resolve from the STAPLER_SQUAD_USE_STREAM_HUB env var as
+	// before". A non-nil value is still subject to
+	// ResolveGlobalStreamHubDefault's rollback-rehearsal gate when true.
+	StreamHubGlobalOverride *bool `json:"stream_hub_global_override,omitempty"`
+	// TymuxRollbackRehearsalCompletedAt records when the tymux backend's own
+	// rollback rehearsal was last completed successfully. This is a distinct
+	// field from RollbackRehearsalCompletedAt above — the two rehearsals
+	// verify different things (ADR-002/ADR-003): streamhub's rollback means
+	// "reconnect cleanly under the legacy path"; tymux's rollback cannot mean
+	// that, since it means "new sessions honor the reverted default while
+	// existing tymux-backed sessions stay pinned to tymux for their
+	// lifetime". nil means "never completed". ResolveGlobalTymuxDefault
+	// refuses to let the *global* tymux default resolve to true until this
+	// is set. Set via RecordTymuxRollbackRehearsalCompleted.
+	TymuxRollbackRehearsalCompletedAt *time.Time `json:"tymux_rollback_rehearsal_completed_at,omitempty"`
+	// TymuxSessionOverrides forces the tymux-bundled-integration project's
+	// process-manager backend for specific named tmux sessions, regardless of
+	// the global process-manager-backend default — the per-session override
+	// mechanism (Phase 4, Epic 4.1). Keys are tmux session names; an absent
+	// key means "no override, use the global default". Mirrors
+	// StreamHubSessionOverrides's shape exactly (see that field's doc
+	// comment above); consulted by ResolveSessionBackend
+	// (session/backend_resolution.go).
+	TymuxSessionOverrides map[string]bool `json:"tymux_session_overrides,omitempty"`
+}
+
+// ErrRollbackRehearsalNotCompleted is returned by ResolveGlobalStreamHubDefault
+// when the caller requests the global STAPLER_SQUAD_USE_STREAM_HUB default
+// resolve to true but RollbackRehearsalCompletedAt is unset — Story 3.3.2's
+// rollback rehearsal must be executed and recorded first (pre-mortem P1 #4).
+var ErrRollbackRehearsalNotCompleted = errors.New("config: cannot enable the global stream-hub default: rollback rehearsal (RollbackRehearsalCompletedAt) has not been completed — see Story 3.3.2")
+
+// ErrTymuxRollbackRehearsalNotCompleted is returned by ResolveGlobalTymuxDefault
+// when the caller requests the global tymux backend default resolve to true
+// but TymuxRollbackRehearsalCompletedAt is unset — the tymux rollback
+// rehearsal must be executed and recorded first (ADR-002, Story 3.1.1).
+var ErrTymuxRollbackRehearsalNotCompleted = errors.New("config: cannot enable the global tymux default: rollback rehearsal (TymuxRollbackRehearsalCompletedAt) has not been completed — see Story 3.1.1")
+
+// ResolveGlobalTymuxDefault applies Story 3.1.1's mechanical
+// rollback-rehearsal gate to a raw requested value for the *global* tymux
+// process-manager-backend default (e.g. derived from cfg.ProcessManagerBackend
+// or the STAPLER_SQUAD_USE_TYMUX environment variable). Requesting false is
+// always permitted — the gate only blocks turning the risky path *on*.
+// Requesting true is refused with ErrTymuxRollbackRehearsalNotCompleted, not
+// a silent fallback to false, unless cfg.TymuxRollbackRehearsalCompletedAt is
+// a recorded, non-zero timestamp. This gate does not apply to any per-session
+// override path, which callers resolve independently and which remains
+// available even when this function returns an error.
+func ResolveGlobalTymuxDefault(cfg *Config, requested bool) (bool, error) {
+	if !requested {
+		return false, nil
+	}
+	if cfg == nil || cfg.TymuxRollbackRehearsalCompletedAt == nil || cfg.TymuxRollbackRehearsalCompletedAt.IsZero() {
+		return false, ErrTymuxRollbackRehearsalNotCompleted
+	}
+	return true, nil
+}
+
+// RecordTymuxRollbackRehearsalCompleted persists the current time as
+// TymuxRollbackRehearsalCompletedAt and saves the config — intended to be
+// called exactly once, after manually verifying a tymux rollback rehearsal
+// (new sessions honor the reverted default while existing tymux-backed
+// sessions stay pinned) passed against a real disposable session. Unblocks
+// ResolveGlobalTymuxDefault from refusing to enable the global default.
+func (c *Config) RecordTymuxRollbackRehearsalCompleted() error {
+	now := time.Now()
+	c.TymuxRollbackRehearsalCompletedAt = &now
+	return SaveConfig(c)
+}
+
+// ResolveGlobalStreamHubDefault applies Story 3.3.1/3.3.2's mechanical
+// rollback-rehearsal gate to a raw requested value for the *global*
+// STAPLER_SQUAD_USE_STREAM_HUB default (e.g. read from that environment
+// variable). Requesting false is always permitted — the gate only blocks
+// turning the risky path *on*. Requesting true is refused with
+// ErrRollbackRehearsalNotCompleted, not a silent fallback to false, unless
+// cfg.RollbackRehearsalCompletedAt is a recorded, non-zero timestamp. This
+// gate does not apply to the per-session override path
+// (StreamHubSessionOverrides / streamhub.SetSessionOverrideLookup), which
+// callers resolve independently and which remains available even when this
+// function returns an error.
+func ResolveGlobalStreamHubDefault(cfg *Config, requested bool) (bool, error) {
+	if !requested {
+		return false, nil
+	}
+	if cfg == nil || cfg.RollbackRehearsalCompletedAt == nil || cfg.RollbackRehearsalCompletedAt.IsZero() {
+		return false, ErrRollbackRehearsalNotCompleted
+	}
+	return true, nil
+}
+
+// RecordRollbackRehearsalCompleted persists the current time as
+// RollbackRehearsalCompletedAt and saves the config — Story 3.3.2's Task
+// 3.3.2c, intended to be called exactly once, after manually verifying a
+// rollback rehearsal (flip on via the per-session override, use briefly,
+// remove the override, confirm clean legacy reconnect) passed against a
+// real disposable session. Unblocks ResolveGlobalStreamHubDefault from
+// refusing to enable the global default.
+func (c *Config) RecordRollbackRehearsalCompleted() error {
+	now := time.Now()
+	c.RollbackRehearsalCompletedAt = &now
+	return SaveConfig(c)
+}
+
+// GetStreamHubSessionOverride reports whether sessionName has a per-session
+// StreamHubSessionOverrides entry recorded, and if so, what it forces.
+// Mirrors GetFeatureFlag's nil-safe shape: a nil Config or nil map reports
+// (false, false) — no override.
+func (c *Config) GetStreamHubSessionOverride(sessionName string) (forceHub bool, ok bool) {
+	if c == nil || c.StreamHubSessionOverrides == nil {
+		return false, false
+	}
+	forceHub, ok = c.StreamHubSessionOverrides[sessionName]
+	return forceHub, ok
+}
+
+// SetStreamHubSessionOverride sets or clears sessionName's per-session
+// PathHubOwned override and persists the config to disk — Story 3.3.1's
+// canary mechanism. forceHub follows this file's existing *bool convention
+// for a tri-state field (see AutoSpawnReadyItems): nil removes any override
+// for sessionName (falling back to the global default), a non-nil false
+// explicitly pins the session to the legacy path regardless of the global
+// default, and a non-nil true forces PathHubOwned.
+func (c *Config) SetStreamHubSessionOverride(sessionName string, forceHub *bool) error {
+	if forceHub == nil {
+		if c.StreamHubSessionOverrides != nil {
+			delete(c.StreamHubSessionOverrides, sessionName)
+		}
+		return SaveConfig(c)
+	}
+	if c.StreamHubSessionOverrides == nil {
+		c.StreamHubSessionOverrides = make(map[string]bool)
+	}
+	c.StreamHubSessionOverrides[sessionName] = *forceHub
+	return SaveConfig(c)
+}
+
+// SetStreamHubGlobalOverride sets or clears the live global stream-hub
+// override and persists the config to disk. forceHub follows this file's
+// tri-state *bool convention: nil clears the override (reverting to the
+// STAPLER_SQUAD_USE_STREAM_HUB env var default), non-nil forces that value
+// for every session connection resolved from now on — subject to
+// ResolveGlobalStreamHubDefault's rollback-rehearsal gate when true.
+func (c *Config) SetStreamHubGlobalOverride(forceHub *bool) error {
+	c.StreamHubGlobalOverride = forceHub
+	return SaveConfig(c)
+}
+
+// GetTymuxSessionOverride reports whether sessionName has a per-session
+// TymuxSessionOverrides entry recorded, and if so, what it forces. Mirrors
+// GetStreamHubSessionOverride's nil-safe shape: a nil Config or nil map
+// reports (false, false) — no override.
+func (c *Config) GetTymuxSessionOverride(sessionName string) (forceTymux bool, ok bool) {
+	if c == nil || c.TymuxSessionOverrides == nil {
+		return false, false
+	}
+	forceTymux, ok = c.TymuxSessionOverrides[sessionName]
+	return forceTymux, ok
+}
+
+// SetTymuxSessionOverride sets or clears sessionName's per-session
+// process-manager-backend override and persists the config to disk.
+// forceTymux follows this file's existing *bool convention for a tri-state
+// field (see SetStreamHubSessionOverride): nil removes any override for
+// sessionName (falling back to the global default), a non-nil false
+// explicitly pins the session to the tmux backend regardless of the global
+// default, and a non-nil true forces the tymux backend. Unlike
+// streamhub/ownership.go's resolveLocked (see research/features.md (b).5),
+// this accessor is a plain map write with no combinator logic, so it has no
+// directional bias toward either value.
+func (c *Config) SetTymuxSessionOverride(sessionName string, forceTymux *bool) error {
+	if forceTymux == nil {
+		if c.TymuxSessionOverrides != nil {
+			delete(c.TymuxSessionOverrides, sessionName)
+		}
+		return SaveConfig(c)
+	}
+	if c.TymuxSessionOverrides == nil {
+		c.TymuxSessionOverrides = make(map[string]bool)
+	}
+	c.TymuxSessionOverrides[sessionName] = *forceTymux
+	return SaveConfig(c)
 }
 
 // GetGitHubEnterpriseHosts returns the configured GHES hosts, or nil if c is nil.
@@ -374,6 +677,21 @@ func (c *Config) GetGitHubEnterpriseHosts() []GitHubEnterpriseHost {
 		return nil
 	}
 	return c.GitHubEnterpriseHosts
+}
+
+// RemoteByName looks up a configured remote by its exact Name. Returns
+// (nil, false) if c is nil or no remote with that name is registered.
+// Consumed by session creation (Phase 4) and Settings UI validation (Phase 6).
+func (c *Config) RemoteByName(name string) (*RemoteConfig, bool) {
+	if c == nil {
+		return nil, false
+	}
+	for i := range c.Remotes {
+		if c.Remotes[i].Name == name {
+			return &c.Remotes[i], true
+		}
+	}
+	return nil, false
 }
 
 // DefaultConfig returns the default configuration
@@ -450,6 +768,8 @@ func defaultConfigWithExecutor(exec CommandExecutor) *Config {
 		RetentionDays:             30,
 	}
 	cfg.Capacity = CapacityConfig{}.CapacityConfigOrDefault()
+	cfg.HandoffSummary = HandoffSummaryConfig{}.HandoffSummaryConfigOrDefault()
+	cfg.Quota = QuotaConfig{}.QuotaConfigOrDefault()
 	// Initialize SessionDefaults maps so callers never encounter nil maps.
 	// LoadConfigFromPath applies the same guards after JSON decode; DefaultConfig
 	// must mirror them so the two code paths are equivalent.
@@ -469,6 +789,12 @@ func defaultConfigWithExecutor(exec CommandExecutor) *Config {
 	// Apply environment variable overrides (never log the value).
 	if v := os.Getenv("ANTHROPIC_API_KEY"); v != "" {
 		cfg.AnthropicAPIKey = v
+	}
+	if v := os.Getenv("SLACK_WEBHOOK_URL"); v != "" {
+		cfg.slackWebhookURLOverride = v
+	}
+	if v := os.Getenv("SLACK_SIGNING_SECRET"); v != "" {
+		cfg.slackSigningSecretOverride = v
 	}
 	return cfg
 }
@@ -533,6 +859,18 @@ func (c *Config) TriageArtifactDirOrDefault() (string, error) {
 	return filepath.Join(home, ".stapler-squad", "triage-artifacts"), nil
 }
 
+// HeadlessFailureCaptureDirOrDefault returns the resolved directory for durable
+// headless (triage/review claude -p) failure captures — see
+// session.WriteHeadlessFailureCapture. Always defaults to
+// "~/.stapler-squad/headless-failures".
+func (c *Config) HeadlessFailureCaptureDirOrDefault() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("cannot expand home dir: %w", err)
+	}
+	return filepath.Join(home, ".stapler-squad", "headless-failures"), nil
+}
+
 // BacklogAttachmentDirOrDefault returns the resolved backlog attachment directory.
 // Uploaded images referenced from backlog item descriptions are stored here,
 // durably (unlike the 24h temp paste dir) since they're linked from persisted
@@ -543,6 +881,17 @@ func (c *Config) BacklogAttachmentDirOrDefault() (string, error) {
 		return "", fmt.Errorf("cannot expand home dir: %w", err)
 	}
 	return filepath.Join(home, ".stapler-squad", "backlog-attachments"), nil
+}
+
+// PromptCacheDirOrDefault returns the resolved directory for temp-file-backed
+// session launch prompts (see Instance.promptArg). Always defaults to
+// "~/.stapler-squad/prompt-cache".
+func (c *Config) PromptCacheDirOrDefault() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("cannot expand home dir: %w", err)
+	}
+	return filepath.Join(home, ".stapler-squad", "prompt-cache"), nil
 }
 
 // NewProjectBaseDirOrDefault returns the resolved new-project base directory.
@@ -612,6 +961,17 @@ func (c *Config) MaxConcurrentBacklogWorkItemsOrDefault() int {
 		return maxConcurrentBacklogWorkItemsHardCeiling
 	}
 	return c.MaxConcurrentBacklogWorkItems
+}
+
+// AutoSpawnReadyItemsOrDefault reports whether "ready" items should be automatically
+// dequeued and spawned — in priority order, respecting the WIP cap — the moment a
+// slot frees up, without a human manually clicking "Spawn Session". Defaults to true
+// (nil or c == nil); pass explicit false to require manual spawning instead.
+func (c *Config) AutoSpawnReadyItemsOrDefault() bool {
+	if c == nil || c.AutoSpawnReadyItems == nil {
+		return true
+	}
+	return *c.AutoSpawnReadyItems
 }
 
 // AnalyticsMaxAgeDaysOrDefault returns the configured max analytics age in days,
@@ -768,17 +1128,61 @@ func LoadConfig() *Config {
 	cfg, err := LoadConfigFromPath(configPath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			defaultCfg := DefaultConfig()
-			if saveErr := saveConfig(defaultCfg); saveErr != nil {
-				log.Warn("failed to save default config", "err", saveErr)
-			}
-			return defaultCfg
+			return loadConfigWithDefaultFallback(configPath)
 		}
 		log.Warn("failed to load config file", "err", err)
 		return DefaultConfig()
 	}
 
 	return cfg
+}
+
+// loadConfigWithDefaultFallback handles a not-yet-created configPath by writing
+// DefaultConfig() as the initial file. It takes the same per-path lock saveConfig
+// uses (see saveConfigMu's doc comment) and re-checks existence under that lock
+// before writing: without the re-check, a caller that observed os.IsNotExist an
+// instant before a concurrent, legitimate config.SaveConfig() call (e.g. a test
+// seeding a profile) could still land its default-config write *after* that
+// real save, silently clobbering it back to defaults. Re-checking under the
+// same lock the real save also uses makes the two calls mutually exclusive and
+// ordered, so whichever wins the race, the file reflects that decision instead
+// of two writers reordering across the check-then-write gap.
+func loadConfigWithDefaultFallback(configPath string) *Config {
+	pathLock := saveConfigLockFor(configPath)
+	pathLock.Lock()
+	defer pathLock.Unlock()
+
+	if cfg, err := LoadConfigFromPath(configPath); err == nil {
+		return cfg
+	}
+
+	defaultCfg := DefaultConfig()
+	if saveErr := saveConfigLocked(defaultCfg, configPath); saveErr != nil {
+		log.Warn("failed to save default config", "err", saveErr)
+	}
+	return defaultCfg
+}
+
+// saveConfigMu serializes the write-tmp-then-rename sequence in saveConfig,
+// keyed per configPath. Without it, two concurrent callers targeting the same
+// tmpPath (e.g. two goroutines independently calling
+// GetOrCreateEncryptionKey/SaveConfig) can interleave: both os.WriteFile the
+// shared tmpPath, then both os.Rename it — the first rename succeeds and
+// consumes tmpPath, so the second fails with "no such file or directory" and,
+// in tighter interleavings, a torn write leaves config.json holding malformed
+// JSON that the next LoadConfig call silently falls back to DefaultConfig()
+// over (losing whatever was there). Keyed per path (rather than one global
+// mutex) so concurrent saves to different configPaths — e.g. distinct
+// per-instance state dirs under state-isolation, see docs/reference/state-isolation.md
+// — aren't needlessly serialized against each other.
+var saveConfigMu sync.Map //nolint:gochecknoglobals // per-configPath *sync.Mutex, serializes concurrent saveConfig callers sharing the same tmpPath
+
+// saveConfigLockFor returns the *sync.Mutex guarding writes to configPath,
+// creating it on first use. LoadOrStore's atomicity is what makes this safe
+// under concurrent callers racing to lock the same never-before-seen path.
+func saveConfigLockFor(configPath string) *sync.Mutex {
+	lock, _ := saveConfigMu.LoadOrStore(configPath, &sync.Mutex{})
+	return lock.(*sync.Mutex)
 }
 
 // saveConfig saves the configuration to disk atomically via a temp-file rename.
@@ -798,15 +1202,52 @@ func saveConfig(config *Config, paths ...string) error {
 		configPath = filepath.Join(configDir, ConfigFileName)
 	}
 
+	pathLock := saveConfigLockFor(configPath)
+	pathLock.Lock()
+	defer pathLock.Unlock()
+
+	return saveConfigLocked(config, configPath)
+}
+
+// saveConfigLocked performs the marshal + write-tmp-then-rename sequence.
+// Callers must hold saveConfigLockFor(configPath) — factored out so
+// loadConfigWithDefaultFallback can share the same critical section as
+// saveConfig without re-entering (and deadlocking on) the same mutex.
+func saveConfigLocked(config *Config, configPath string) error {
 	data, err := json.MarshalIndent(config, "", "  ")
 	if err != nil {
 		return fmt.Errorf("failed to marshal config: %w", err)
 	}
 
-	// Write to a temp file in the same directory, then rename for atomicity.
-	tmpPath := configPath + ".tmp"
-	if err := os.WriteFile(tmpPath, data, 0644); err != nil {
-		return fmt.Errorf("failed to write temp config: %w", err)
+	// Write to a uniquely-named temp file in the same directory, then rename
+	// for atomicity. The name must be unique per call (os.CreateTemp's random
+	// suffix) rather than a fixed "config.json.tmp": two concurrent saveConfig
+	// calls targeting the same directory previously raced on that shared name,
+	// each truncating the other's in-progress write via O_TRUNC, corrupting the
+	// JSON, and racing os.Rename against a tmpPath the other had already moved.
+	// The pathLock above still serializes callers so the final rename order
+	// matches call order instead of being left to goroutine scheduling.
+	tmpFile, err := os.CreateTemp(filepath.Dir(configPath), filepath.Base(configPath)+".*.tmp")
+	if err != nil {
+		return fmt.Errorf("failed to create temp config file: %w", err)
+	}
+	tmpPath := tmpFile.Name()
+	// os.CreateTemp creates the file 0600; match the previous os.WriteFile mode
+	// so the renamed config.json keeps its historical permissions.
+	chmodErr := tmpFile.Chmod(0644)
+	_, writeErr := tmpFile.Write(data)
+	closeErr := tmpFile.Close()
+	if chmodErr != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("failed to chmod temp config: %w", chmodErr)
+	}
+	if writeErr != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("failed to write temp config: %w", writeErr)
+	}
+	if closeErr != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("failed to write temp config: %w", closeErr)
 	}
 	if err := os.Rename(tmpPath, configPath); err != nil {
 		_ = os.Remove(tmpPath) // best-effort cleanup
@@ -892,10 +1333,18 @@ func LoadConfigFromPath(path string) (*Config, error) {
 	cfg.executor = newTimeoutCommandExecutor(5 * time.Second)
 
 	cfg.Capacity = cfg.Capacity.CapacityConfigOrDefault()
+	cfg.HandoffSummary = cfg.HandoffSummary.HandoffSummaryConfigOrDefault()
+	cfg.Quota = cfg.Quota.QuotaConfigOrDefault()
 
 	// Apply environment variable overrides (never log the value).
 	if v := os.Getenv("ANTHROPIC_API_KEY"); v != "" {
 		cfg.AnthropicAPIKey = v
+	}
+	if v := os.Getenv("SLACK_WEBHOOK_URL"); v != "" {
+		cfg.slackWebhookURLOverride = v
+	}
+	if v := os.Getenv("SLACK_SIGNING_SECRET"); v != "" {
+		cfg.slackSigningSecretOverride = v
 	}
 
 	return &cfg, nil
@@ -966,13 +1415,16 @@ func (c *Config) RemoveKeyCategory(key string) {
 // GetOrCreateEncryptionKey returns the 32-byte AES-256-GCM key for local data encryption.
 // Generates and persists a new key on first call. Non-fatal errors during save are logged.
 func (c *Config) GetOrCreateEncryptionKey() ([]byte, error) {
+	c.lazyMu.Lock()
+	defer c.lazyMu.Unlock()
+
 	if c.MachineEncryptionKey != "" {
 		data, err := base64.StdEncoding.DecodeString(c.MachineEncryptionKey)
 		if err == nil && len(data) == 32 {
 			return data, nil
 		}
 		// If existing key is invalid, regenerate
-		log.WarningLog.Printf("[Config] existing encryption key is invalid, regenerating")
+		log.WarningLog().Printf("[Config] existing encryption key is invalid, regenerating")
 	}
 
 	// Generate new 32-byte key
@@ -985,10 +1437,47 @@ func (c *Config) GetOrCreateEncryptionKey() ([]byte, error) {
 
 	// Persist to disk; non-fatal if it fails
 	if err := SaveConfig(c); err != nil {
-		log.WarningLog.Printf("[Config] failed to persist encryption key: %v", err)
+		log.WarningLog().Printf("[Config] failed to persist encryption key: %v", err)
 	}
 
 	return key, nil
+}
+
+// GetOrCreateClaimantHostID returns this process/config directory's stable ClaimantHostID,
+// generating and persisting a new random UUID on first call. See the ClaimantHostID field
+// doc comment for what this identifier is (and is not) used for.
+func (c *Config) GetOrCreateClaimantHostID() (string, error) {
+	c.lazyMu.Lock()
+	defer c.lazyMu.Unlock()
+
+	if c.ClaimantHostID != "" {
+		return c.ClaimantHostID, nil
+	}
+
+	c.ClaimantHostID = uuid.New().String()
+
+	// Persist to disk; non-fatal if it fails
+	if err := SaveConfig(c); err != nil {
+		log.WarningLog().Printf("[Config] failed to persist claimant host id: %v", err)
+	}
+
+	return c.ClaimantHostID, nil
+}
+
+// SlackWebhookURLOverride returns the SLACK_WEBHOOK_URL environment variable
+// value captured at load time, or "" if it was unset. Exported because
+// server/services (which resolves the effective Slack webhook URL per
+// ADR-001: env override first, else decrypt the stored ciphertext) cannot
+// read the unexported slackWebhookURLOverride field directly.
+func (c *Config) SlackWebhookURLOverride() string {
+	return c.slackWebhookURLOverride
+}
+
+// SlackSigningSecretOverride returns the SLACK_SIGNING_SECRET environment
+// variable value captured at load time, or "" if it was unset. See
+// SlackWebhookURLOverride for why this getter exists.
+func (c *Config) SlackSigningSecretOverride() string {
+	return c.slackSigningSecretOverride
 }
 
 // GetFeatureFlag returns the persisted enabled state of the named feature flag.
@@ -996,11 +1485,38 @@ func (c *Config) GetOrCreateEncryptionKey() ([]byte, error) {
 // Currently recognized flags:
 //
 //	"backlog" — enables the Backlog tab and backlog lifecycle controller.
+//	"webhook_triggers" — registers POST /webhooks/github and POST /webhooks/generic/{slug}.
+//	"pr_event_webhooks" — reacts to check_run/workflow_run/pull_request_review/issue_comment
+//	  GitHub deliveries on /webhooks/github by immediately reconciling a matching pr_pending
+//	  item, instead of waiting for PRStatusPoller's next tick. Independently toggleable from
+//	  "webhook_triggers", but has no effect unless "webhook_triggers" is also enabled (that
+//	  flag gates whether the route is registered at all).
 func (c *Config) GetFeatureFlag(name string) bool {
 	if c == nil || c.FeatureFlags == nil {
 		return false
 	}
 	return c.FeatureFlags[name]
+}
+
+// GetFeatureFlagWithDefault returns the persisted enabled state of the named feature
+// flag, or defaultValue if it has never been explicitly set. Unlike GetFeatureFlag
+// (every absent flag defaults to false), this lets one flag graduate to "on by
+// default" — e.g. terminal:resync-exec-gate-fast-lane (2026-08-25: an unset default
+// left resync-triggered resizes contending on the shared 5s-timeout exec-gate pool,
+// which can exceed the client's 4s stall watchdog and force a disconnect+reconnect;
+// the fast lane's dedicated 3s-budget pool exists specifically to avoid this) —
+// while every other flag keeps defaulting to false via GetFeatureFlag. An explicit
+// persisted false still opts back out; only a genuinely absent key falls through to
+// defaultValue.
+func (c *Config) GetFeatureFlagWithDefault(name string, defaultValue bool) bool {
+	if c == nil || c.FeatureFlags == nil {
+		return defaultValue
+	}
+	v, ok := c.FeatureFlags[name]
+	if !ok {
+		return defaultValue
+	}
+	return v
 }
 
 // SetFeatureFlag sets the named feature flag and persists the config to disk.
@@ -1010,4 +1526,16 @@ func (c *Config) SetFeatureFlag(name string, value bool) error {
 	}
 	c.FeatureFlags[name] = value
 	return SaveConfig(c)
+}
+
+// ImportSessionEnabled reports whether the import-external-session feature
+// (Phase 1: ssq-mux single-session import) is enabled. Unlike GetFeatureFlag,
+// this is a plain environment variable rather than a persisted config flag —
+// the feature involves signaling live, unmanaged processes (SIGSTOP/SIGCONT)
+// outside Stapler Squad's own supervision, so it defaults to a deliberate,
+// explicit opt-in per deployment/session rather than a UI-toggleable
+// persisted setting. Re-read on every call (not cached) so it can be flipped
+// without a server restart, matching the re-read behavior of GetFeatureFlag.
+func ImportSessionEnabled() bool {
+	return os.Getenv("STAPLER_SQUAD_ENABLE_SESSION_IMPORT") == "true"
 }
