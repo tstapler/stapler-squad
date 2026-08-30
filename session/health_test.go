@@ -490,7 +490,7 @@ func TestHealthCheckerRecovery_PermanentlyFailedInstance_SkippedNotAutoRestarted
 	// Call past the debounce threshold -- if the skip didn't fire, the second
 	// call would reach the recovery path and invoke Start().
 	for i := 0; i < 2; i++ {
-		result := checker.checkSingleSession(inst)
+		result := checker.checkSingleSession(inst, nil)
 		if !result.IsHealthy {
 			t.Errorf("call %d: expected IsHealthy=true (session skipped, not failing)", i+1)
 		}

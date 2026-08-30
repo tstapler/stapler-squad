@@ -2020,7 +2020,7 @@ func (s *BacklogService) RemediateStaleWorkSession(ctx context.Context, itemID s
 	// the double-remediation risk this AC exists to close, not a genuine
 	// second recovery path.
 	if s.sessionStopper != nil && s.sessionStopper.IsRetryPending(active.SessionUUID) {
-		log.InfoLog.Printf("[RemediateStaleWorkSession] item=%s session=%s: deferring — an automated retry is already in flight/scheduled for this session", itemID, active.SessionUUID)
+		log.InfoLog().Printf("[RemediateStaleWorkSession] item=%s session=%s: deferring — an automated retry is already in flight/scheduled for this session", itemID, active.SessionUUID)
 		return nil
 	}
 

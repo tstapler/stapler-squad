@@ -723,6 +723,16 @@ message CreateSessionRequest {
   // (session-retry-backoff). Unset fields inherit the resolved global value.
   optional RetryPolicyConfig retry_policy_override = 35;
 }
+
+// RemoteTarget names a previously-saved remote (by RemoteConfig.Name) that a
+// CreateSessionRequest's worktree/tmux setup should be created on instead of locally. It
+// references the remote by name rather than carrying host/user/key inline -- those live only
+// in the server-side RemoteConfig, resolved at request-handling time.
+message RemoteTarget {
+  // remote_name is the RemoteConfig.Name of an already-saved remote (see
+  // config.Config.RemoteByName), the same identifier used by
+  // TestRemoteConnectionRequest/TrustRemoteHostKeyRequest in remote.proto.
+  string remote_name = 1;
 }
 
 message CreateSessionResponse {
