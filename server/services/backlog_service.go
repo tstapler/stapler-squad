@@ -75,6 +75,13 @@ type SessionStopper interface {
 	// currently tracked live (same "not live" cases as IsSessionLive); dur is
 	// meaningless when ok is false.
 	TimeSinceLastMeaningfulOutput(sessionUUID string) (dur time.Duration, ok bool)
+	// IsRetryPending returns true if sessionUUID's live Instance currently has
+	// an automated retry claimed or scheduled by the configurable retry policy
+	// (session-retry-backoff). RemediateStaleWorkSession defers rather than
+	// killing the pane and respawning when this is true, so the two
+	// mechanisms never race the same session's process-level state (AC8).
+	// Returns false if the session isn't tracked live.
+	IsRetryPending(sessionUUID string) bool
 }
 
 // SessionSteerer allows BacklogService to inject a message into an already-

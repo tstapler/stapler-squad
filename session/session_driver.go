@@ -17,14 +17,15 @@ package session
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"regexp"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
+	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/internal/syncutil"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/detection"
@@ -251,10 +252,14 @@ func sanitizeInitialPromptForTmux(s string) string {
 	return strings.TrimSpace(s)
 }
 
-// runSessionDriver is the thin wrapper that creates the retried flag and
-// delegates to runSessionDriverWithPrompt.
+// runSessionDriver is the thin wrapper that resolves the effective retry
+// policy once and delegates to runSessionDriverWithPrompt.
 func runSessionDriver(inst *Instance, allowedPath string, stop <-chan struct{}) {
-	var retried atomic.Bool
+	policy := resolveRetryPolicy(config.LoadConfig().RetryPolicy, inst.RetryPolicyOverride)
+	inst.mu.Lock()
+	inst.RetryMaxAttempts = policy.MaxAttempts
+	inst.mu.Unlock()
+
 	var initialPrompt string
 	if inst.InitialPrompt != "" {
 		sanitized := sanitizeInitialPromptForTmux(inst.InitialPrompt)
@@ -262,15 +267,17 @@ func runSessionDriver(inst *Instance, allowedPath string, stop <-chan struct{}) 
 			initialPrompt = sanitized
 		}
 	}
-	runSessionDriverWithPrompt(inst, allowedPath, initialPrompt, &retried, stop)
+	runSessionDriverWithPrompt(inst, allowedPath, initialPrompt, policy, stop)
 }
 
-// runSessionDriverWithPrompt is the core driver loop. It accepts a custom initial
-// prompt (used by the retry path to inject a JSONL-derived continuation), a
-// pointer to the retried flag so the retry goroutine does not spawn a third
-// generation, and the stop channel from this run's sessionDriverStopper so
-// StopSessionDriver (called by Instance.Destroy()) can end the loop early.
-func runSessionDriverWithPrompt(inst *Instance, allowedPath string, initialPrompt string, retried *atomic.Bool, stop <-chan struct{}) {
+// runSessionDriverWithPrompt is the core driver loop. It accepts a custom
+// initial prompt (used by the retry path to inject a JSONL-derived
+// continuation), the resolved RetryPolicy for this run (resolved once at
+// driver start — never re-read from config mid-cycle, so a live config edit
+// doesn't change the cap/delay a session is already partway through), and
+// the stop channel from this run's sessionDriverStopper so StopSessionDriver
+// (called by Instance.Destroy()) can end the loop early.
+func runSessionDriverWithPrompt(inst *Instance, allowedPath string, initialPrompt string, policy RetryPolicy, stop <-chan struct{}) {
 	// CONCERN-3 fix: panic recovery inside this function so the retry goroutine is
 	// also protected (the retry goroutine does NOT go through the StartSessionDriver wrapper).
 	defer func() {
@@ -346,41 +353,32 @@ func runSessionDriverWithPrompt(inst *Instance, allowedPath string, initialPromp
 	sendAnswerKey := func() error { return inst.SendKeys("1\n") }
 
 	for {
-		select {
-		case <-stop:
-			return
-		case <-ticker.C:
-		}
-
-		if time.Now().After(totalDeadline) {
+		st, detectedSt, exit := driverTickGate(inst, stop, ticker, totalDeadline)
+		if exit {
 			return
 		}
 
-		// inst.destroyed is set by Destroy() (session/instance.go). Checking it
-		// here bounds how long this goroutine can outlive its own instance's
-		// teardown to a single driverPollInterval tick, instead of continuing
-		// until totalDeadline and racing subsequent tmux/config calls
-		// (AcquireExecSlot's gateDir/LoadConfig, both keyed off the
-		// process-global STAPLER_SQUAD_TEST_DIR env var) against whatever test
-		// or session happens to be using that env var's value next.
-		if inst.destroyed.Load() {
+		// A pending backoff-scheduled retry takes priority over every other
+		// branch below. Checked here — before st == Stopped re-enters
+		// handleStoppedStatus's re-evaluation path — rather than inside
+		// handleStoppedStatus itself, because GetEffectiveStatus() may already
+		// read something other than Stopped by the time a restart is
+		// mid-flight (or may still read Stopped on the very tick it just
+		// elapsed): this gate must not depend on which. Without it, a pending
+		// retry would be re-evaluated on every 2s tick during the backoff
+		// wait, re-appending RetryAttemptRecords and re-incrementing
+		// RetryAttempt every tick instead of once after the intended delay.
+		if cont, ret := handleRetryPendingTick(inst, allowedPath, policy, stop); ret {
 			return
-		}
-
-		// GetEffectiveStatus for lifecycle decisions (Paused, Stopped).
-		// GetDetectedStatus for fine-grained terminal-content signals (Idle = readline prompt).
-		st := inst.GetEffectiveStatus()
-		detectedSt := inst.GetDetectedStatus()
-
-		// Paused is always a clean stop for the driver.
-		if st == Paused {
-			return
+		} else if cont {
+			continue
 		}
 
 		// Stopped after sentInitial = potential unexpected exit.
-		if st == Stopped {
-			handleStoppedStatus(ctx, inst, allowedPath, initialPrompt, retried, stop, sentInitial, initialPromptSentAt)
+		if cont, ret := handleStoppedStatus(ctx, inst, st, allowedPath, initialPrompt, policy, stop, sentInitial, initialPromptSentAt); ret {
 			return
+		} else if cont {
+			continue
 		}
 
 		// Always check Preview for startup dialogs that appear before the status
@@ -413,7 +411,7 @@ func runSessionDriverWithPrompt(inst *Instance, allowedPath string, initialPromp
 		// Inactivity detection: only after initial prompt sent.
 		// Use GetEffectiveStatus() (acquires stateMutex.RLock) to avoid data race on Status field.
 		if st == Ready {
-			cont, ret := handleInactivityTick(inst, allowedPath, retried, stop, initialPromptSentAt, &nudgeSentAt)
+			cont, ret := handleInactivityTick(inst, allowedPath, policy, stop, initialPromptSentAt, &nudgeSentAt)
 			if ret {
 				return
 			}
@@ -431,29 +429,119 @@ func runSessionDriverWithPrompt(inst *Instance, allowedPath string, initialPromp
 	}
 }
 
+// driverTickGate blocks until the next poll tick (or stop fires), then
+// evaluates the driver loop's per-tick early-exit conditions in order: the
+// stop channel, the total driver deadline, inst.destroyed (see the inline
+// comment this replaced for why that check exists), and Paused status
+// (always a clean stop for the driver). Also returns the effective/detected
+// status the caller needs regardless — GetEffectiveStatus for lifecycle
+// decisions (Paused, Stopped), GetDetectedStatus for fine-grained
+// terminal-content signals (Idle = readline prompt) — so callers don't
+// re-fetch it. exit reports whether runSessionDriverWithPrompt's loop should
+// return immediately without processing this tick further.
+func driverTickGate(inst *Instance, stop <-chan struct{}, ticker *time.Ticker, totalDeadline time.Time) (st Status, detectedSt detection.DetectedStatus, exit bool) {
+	select {
+	case <-stop:
+		return 0, 0, true
+	case <-ticker.C:
+	}
+
+	if time.Now().After(totalDeadline) {
+		return 0, 0, true
+	}
+
+	// inst.destroyed is set by Destroy() (session/instance.go). Checking it
+	// here bounds how long this goroutine can outlive its own instance's
+	// teardown to a single driverPollInterval tick, instead of continuing
+	// until totalDeadline and racing subsequent tmux/config calls
+	// (AcquireExecSlot's gateDir/LoadConfig, both keyed off the
+	// process-global STAPLER_SQUAD_TEST_DIR env var) against whatever test
+	// or session happens to be using that env var's value next.
+	if inst.destroyed.Load() {
+		return 0, 0, true
+	}
+
+	st = inst.GetEffectiveStatus()
+	detectedSt = inst.GetDetectedStatus()
+
+	if st == Paused {
+		return st, detectedSt, true
+	}
+	return st, detectedSt, false
+}
+
+// handleRetryPendingTick checks for, and applies, a pending backoff-scheduled
+// retry (see runSessionDriverWithPrompt's call site for why this must be
+// checked before st == Stopped re-enters handleStoppedStatus's re-evaluation
+// path). Mirrors handleStoppedStatus/handleInactivityTick's
+// (shouldContinue, shouldReturn) signal pattern: shouldContinue means no
+// retry was pending (or it's still pending) so the loop should proceed to its
+// next tick unchanged; shouldReturn means this goroutine's job is done
+// (either restartForRetry succeeded and spawned a fresh continuation, or it
+// failed with a non-racing error).
+func handleRetryPendingTick(inst *Instance, allowedPath string, policy RetryPolicy, stop <-chan struct{}) (shouldContinue, shouldReturn bool) {
+	pending, elapsed := inst.retryPendingElapsed(time.Now())
+	if !pending {
+		return false, false
+	}
+	if !elapsed {
+		return true, false
+	}
+	reason := inst.lastRetryFailureReason()
+	prompt := buildRetryContinuationPrompt(inst, reason)
+	if err := restartForRetry(inst, allowedPath, prompt, policy, stop); err != nil {
+		if errors.Is(err, ErrRetryInFlight) {
+			// A racing restart (e.g. a concurrent manual RetryNow) is already
+			// in flight — leave NextRetryAt set and retry on a later tick
+			// rather than dropping this scheduled retry.
+			return true, false
+		}
+		log.Warn("SessionDriver: automated retry restart failed",
+			"session", inst.Title, "err", err,
+		)
+		return false, true
+	}
+	inst.clearNextRetryAt()
+	// restartForRetry spawned a fresh continuation goroutine on success; this
+	// one's job is done.
+	return false, true
+}
+
 // handleStoppedStatus handles the driver loop's `st == Stopped` branch: an
-// unexpected or expected session exit. The caller always returns from the
-// driver loop immediately after calling this — every path here is terminal.
-func handleStoppedStatus(ctx context.Context, inst *Instance, allowedPath string, initialPrompt string, retried *atomic.Bool, stop <-chan struct{}, sentInitial bool, initialPromptSentAt time.Time) {
+// unexpected or expected session exit. Takes st itself (rather than the
+// caller gating on `st == Stopped` before calling) so the call site is a
+// single flat if/else-if on this function's own (shouldContinue,
+// shouldReturn) result, matching handleRetryPendingTick's pattern, instead of
+// wrapping a second nested if/if pair inside `if st == Stopped { ... }`.
+// shouldContinue and shouldReturn tell the caller which loop control-flow to
+// apply; at most one is ever true — this mirrors handleInactivityTick's
+// existing signal pattern, needed since a scheduled retry (evaluateSessionRetry's
+// "scheduled" decision, reached via handleDriverFailure) must let the poll
+// loop keep ticking so its own NextRetryAt gate can fire the actual restart
+// once the backoff delay elapses, rather than this function always being
+// terminal.
+func handleStoppedStatus(ctx context.Context, inst *Instance, st Status, allowedPath string, initialPrompt string, policy RetryPolicy, stop <-chan struct{}, sentInitial bool, initialPromptSentAt time.Time) (shouldContinue, shouldReturn bool) {
+	if st != Stopped {
+		return false, false
+	}
 	if !sentInitial {
 		// Exited before we even sent the first prompt — likely a startup crash.
-		// For one-shot sessions or if we've already retried, just exit.
-		if isOneShot(inst) || retried.Load() {
-			return
+		// One-shot sessions (backlog:triage/backlog:review) are never retried.
+		if isOneShot(inst) {
+			return false, true
 		}
 		log.Warn("SessionDriver: session exited before initial prompt sent",
 			"session", inst.Title,
 		)
-		handleDriverFailure(inst, allowedPath, retried, "exit before initial prompt", stop)
-		return
+		return handleDriverFailure(inst, allowedPath, policy, classifyFailureReason(inst), stop)
 	}
 	// Stopped after initial prompt was sent.
 	if inst.OneShot {
 		tryExtractClaudeSessionID(ctx, inst)
 	}
-	if isOneShot(inst) || retried.Load() {
+	if isOneShot(inst) {
 		// One-shot sessions: BacklogLifecycleListener handles this; driver exits cleanly.
-		return
+		return false, true
 	}
 	if initialPrompt == "" {
 		// No initial prompt was ever configured for this session (e.g. a plain
@@ -464,7 +552,7 @@ func handleStoppedStatus(ctx context.Context, inst *Instance, allowedPath string
 		// protect by retrying, so a user-initiated `exit` (or any other exit)
 		// must be left as a clean Stopped, not silently respawned underneath
 		// them moments later.
-		return
+		return false, true
 	}
 	// CONCERN-2 guard: only restart if the session crashed quickly (within 5 minutes
 	// of sending the initial prompt). A session that ran for > 5 minutes and then stopped
@@ -477,12 +565,12 @@ func handleStoppedStatus(ctx context.Context, inst *Instance, allowedPath string
 		if inst.OneShot {
 			tryExtractClaudeSessionID(ctx, inst)
 		}
-		return
+		return false, true
 	}
 	log.Warn("SessionDriver: unexpected session exit after initial prompt",
 		"session", inst.Title,
 	)
-	handleDriverFailure(inst, allowedPath, retried, "unexpected exit", stop)
+	return handleDriverFailure(inst, allowedPath, policy, classifyFailureReason(inst), stop)
 }
 
 // handleStartupDialogTick answers a detected startup dialog and reports
@@ -648,7 +736,7 @@ func sendInitialPromptTick(ctx context.Context, inst *Instance, initialPrompt st
 // has been sent, sending a backlog-work nudge or escalating to
 // handleDriverFailure as needed. shouldContinue and shouldReturn tell the
 // caller which loop control-flow to apply; at most one is ever true.
-func handleInactivityTick(inst *Instance, allowedPath string, retried *atomic.Bool, stop <-chan struct{}, initialPromptSentAt time.Time, nudgeSentAt *time.Time) (shouldContinue, shouldReturn bool) {
+func handleInactivityTick(inst *Instance, allowedPath string, policy RetryPolicy, stop <-chan struct{}, initialPromptSentAt time.Time, nudgeSentAt *time.Time) (shouldContinue, shouldReturn bool) {
 	last := inst.LastMeaningfulOutputTime()
 	// Use the later of initialPromptSentAt or LastMeaningfulOutput as the activity
 	// reference. After a service restart, LastMeaningfulOutput may be stale (loaded
@@ -682,8 +770,7 @@ func handleInactivityTick(inst *Instance, allowedPath string, retried *atomic.Bo
 			"session", inst.Title,
 			"inactivity", idle.Round(time.Second),
 		)
-		handleDriverFailure(inst, allowedPath, retried, "inactivity timeout", stop)
-		return false, true
+		return handleDriverFailure(inst, allowedPath, policy, "stalled", stop)
 	}
 	return false, false
 }
@@ -764,79 +851,137 @@ func attemptBacklogNudge(inst *Instance, idle time.Duration) time.Time {
 	return time.Now()
 }
 
-// handleDriverFailure is called when the driver detects a stuck or crashed session.
-// On first call (retried == false): restarts the session and starts a new driver
+// handleDriverFailure is called when the driver detects a stuck or crashed
+// session. It evaluates the resolved RetryPolicy against the instance's
+// current RetryState via evaluateSessionRetry and branches:
+//   - scheduled: sets NextRetryAt + appends a RetryAttemptRecord under
+//     inst.mu; returns (true, false) so the caller's loop keeps ticking — the
+//     poll loop's own NextRetryAt gate (above) performs the actual restart
+//     once the backoff delay elapses.
+//   - restartGrace: restarts immediately via restartForRetry without
+//     consuming an attempt (a routine service restart, not a real crash);
+//     returns (false, true) — restartForRetry already spawned a fresh
+//     continuation goroutine on success.
+//   - notEligible / exhausted: transitions to PermanentlyFailed via
+//     markSessionPermanentlyFailed; returns (false, true).
 //
-//	goroutine with the continuation prompt.
-//
-// On second call (retried == true): adds the session to the ReviewQueue and exits.
-//
-// The caller must return immediately after calling handleDriverFailure.
-func handleDriverFailure(inst *Instance, allowedPath string, retried *atomic.Bool, reason string, stop <-chan struct{}) {
-	if !retried.CompareAndSwap(false, true) {
-		// Already retried once. Mark for human attention.
-		log.Warn("SessionDriver: session failed twice; marking for attention",
+// The caller must apply the returned signal immediately (continue/return),
+// mirroring handleInactivityTick's existing pattern.
+func handleDriverFailure(inst *Instance, allowedPath string, policy RetryPolicy, reason string, stop <-chan struct{}) (shouldContinue, shouldReturn bool) {
+	now := time.Now()
+	inst.mu.RLock()
+	rs := inst.RetryState
+	inst.mu.RUnlock()
+
+	switch evaluateSessionRetry(rs, policy, reason, now, serverStartTime) {
+	case retryDecisionScheduled:
+		nextAttempt := rs.RetryAttempt + 1
+		delay := backoffDelay(rs.RetryAttempt, policy.InitialDelay, policy.MaxDelay, defaultJitterFraction)
+		inst.mu.Lock()
+		inst.RetryAttempt = nextAttempt
+		inst.LastFailureReason = reason
+		inst.NextRetryAt = now.Add(delay)
+		inst.recordAttempt(nextAttempt, reason, now)
+		inst.mu.Unlock()
+		log.Info("SessionDriver: scheduling retry after failure",
+			"session", inst.Title, "reason", reason,
+			"attempt", nextAttempt, "max_attempts", rs.RetryMaxAttempts, "delay", delay,
+		)
+		return true, false
+
+	case retryDecisionRestartGrace:
+		log.Info("SessionDriver: restart-grace — server booted recently, restarting without consuming a retry attempt",
 			"session", inst.Title, "reason", reason,
 		)
-		markSessionNeedsAttention(inst, reason)
+		inst.mu.Lock()
+		inst.LastFailureReason = reason
+		inst.mu.Unlock()
+		prompt := buildRetryContinuationPrompt(inst, reason)
+		if err := restartForRetry(inst, allowedPath, prompt, policy, stop); err != nil {
+			log.Warn("SessionDriver: restart-grace restart failed",
+				"session", inst.Title, "err", err,
+			)
+		}
+		return false, true
+
+	default: // retryDecisionNotEligible, retryDecisionExhausted
+		markSessionPermanentlyFailed(inst, reason)
+		return false, true
+	}
+}
+
+// markSessionPermanentlyFailed transitions the session to the terminal
+// PermanentlyFailed status (ADR-001), adds the existing ReviewQueue entry
+// (unchanged ReasonStale), and fires a proactive notification — edge-
+// triggered on the actual transition, so a later observation of an
+// already-PermanentlyFailed session never re-fires either. Only RetryNow()
+// re-arms the one-shot by transitioning back to Active.
+func markSessionPermanentlyFailed(inst *Instance, reason string) {
+	inst.mu.Lock()
+	alreadyFailed := inst.Status == PermanentlyFailed
+	var snap *InstanceSnapshot
+	if !alreadyFailed {
+		inst.Status = PermanentlyFailed
+		// Publish the transition to inst.snapshot (the atomic pointer
+		// GetEffectiveStatus()/Snapshot() actually read) — this write, unlike
+		// transitionToLocked's, doesn't route through the state machine (there
+		// is no PermanentlyFailed entry in transitionIndex), so nothing else
+		// republishes it. Without this, GetEffectiveStatus() kept returning
+		// the instance's pre-failure status (e.g. Active) until some unrelated
+		// mutator happened to rebuild the snapshot, which broke both the UI's
+		// status display and restartForRetry's branch decision for a manual
+		// RetryNow() on this instance.
+		snap = buildSnapshot(inst)
+	}
+	attempt := inst.RetryAttempt
+	maxAttempts := inst.RetryMaxAttempts
+	inst.mu.Unlock()
+
+	if alreadyFailed {
 		return
 	}
+	inst.snapshot.Store(snap)
 
-	log.Info("SessionDriver: restarting session after failure",
-		"session", inst.Title, "reason", reason,
+	log.Warn("SessionDriver: session exhausted retry budget; marking permanently failed",
+		"session", inst.Title, "reason", reason, "attempts", attempt, "max_attempts", maxAttempts,
 	)
+	markSessionNeedsAttention(inst, reason)
 
-	// Build continuation prompt BEFORE restart (HistoryFilePath may clear after restart).
-	// If no conversation history exists yet (early PTY exit before Claude started), use the
-	// original InitialPrompt so the workflow task is not lost on the first retry.
-	continuationPrompt := buildContinuationPrompt(inst)
-	if continuationPrompt == "Your previous session exited unexpectedly. Please continue from where you left off." &&
+	if n := inst.GetNotifier(); n != nil {
+		n.Notify(inst.UUID,
+			"Session gave up after repeated failures",
+			fmt.Sprintf("%s failed to recover after %d attempt(s) (last reason: %s) and will not be retried automatically. Use \"Retry now\" to try again.", inst.Title, attempt, reason),
+			7, // sessionv1.NotificationType_NOTIFICATION_TYPE_ERROR
+			3, // sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_HIGH
+		)
+	}
+}
+
+// buildRetryContinuationPrompt builds the continuation prompt for an
+// automated or manual retry: the existing JSONL-derived (or
+// InitialPrompt-fallback) continuation text, prefixed with "Previous attempt
+// failed due to {reason}." (AC3) plus a one-line worktree-integrity hint —
+// not a detection mechanism, just surfacing the possibility to whoever reads
+// the resumed session (research/pitfalls.md §4).
+func buildRetryContinuationPrompt(inst *Instance, reason string) string {
+	base := buildContinuationPrompt(inst)
+	if base == "Your previous session exited unexpectedly. Please continue from where you left off." &&
 		inst.InitialPrompt != "" {
 		if sanitized := sanitizeInitialPromptForTmux(inst.InitialPrompt); sanitized != "" {
-			continuationPrompt = sanitized
+			base = sanitized
 		}
 	}
-
-	// Restart the session.
-	var restartErr error
-	st := inst.GetEffectiveStatus()
-	if st == Stopped {
-		inst.RecoverFromStopped()
-		// Clear the old (possibly dead) controller so StartController below creates a fresh one.
-		inst.StopController()
-		restartErr = inst.Start(false)
-		if restartErr == nil {
-			// Start(false) skips controller setup (reserved for the server wiring path).
-			// Restart it explicitly so the session driver can detect the Claude prompt.
-			if ctrlErr := inst.StartController(); ctrlErr != nil {
-				log.Warn("SessionDriver: failed to restart controller after session restart",
-					"session", inst.Title, "err", ctrlErr)
-			}
-		}
-	} else {
-		restartErr = inst.Restart(false)
+	if reason == "" {
+		return base
 	}
-
-	if restartErr != nil {
-		log.Error("SessionDriver: restart failed; marking for attention",
-			"session", inst.Title, "err", restartErr,
-		)
-		markSessionNeedsAttention(inst, "restart error: "+restartErr.Error())
-		return
-	}
-
-	// Set driverRunning = true before spawning to close the race window between
-	// the old goroutine's defer Store(false) and the new goroutine starting.
-	// (Design Decision D3 mitigation.)
-	inst.driverRunning.Store(true)
-
-	// Start a new driver goroutine for the restarted session.
-	// The new goroutine inherits the retried flag so it will not retry a second time.
-	inst.driverWG.Add(1)
-	go func() {
-		defer inst.driverWG.Done()
-		runSessionDriverWithPrompt(inst, allowedPath, continuationPrompt, retried, stop)
-	}()
+	inst.mu.RLock()
+	attempt := inst.RetryAttempt
+	inst.mu.RUnlock()
+	prefix := fmt.Sprintf(
+		"Previous attempt failed due to %s. (This is retry attempt %d; if this failure looks identical to the last one, the worktree itself may be the problem.) ",
+		reason, attempt,
+	)
+	return prefix + base
 }
 
 // markSessionNeedsAttention adds the instance to its ReviewQueue (if any)

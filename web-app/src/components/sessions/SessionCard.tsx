@@ -5,6 +5,7 @@ import { useState, useRef, memo } from "react";
 import { Session, SessionStatus, SubStatus, ReviewItem, InstanceType, RateLimitState, CheckpointProto, DetectedStatus } from "@/gen/session/v1/types_pb";
 import { Tooltip } from "../ui/Tooltip";
 import { ReviewQueueBadge } from "./ReviewQueueBadge";
+import { RetryBadge } from "./RetryBadge";
 import { RevivedContextBadge } from "./RevivedContextBadge";
 import { StatusBadge } from "./StatusBadge";
 import { SubStatusChip } from "./SubStatusChip";
@@ -162,6 +163,7 @@ export interface SessionCardProps {
   onNewWorkspace?: () => void;
   onRename?: (sessionId: string, newTitle: string) => Promise<boolean>;
   onRestart?: (sessionId: string) => Promise<boolean>;
+  onRetryNow?: (sessionId: string) => Promise<boolean>;
   onUpdateTags?: (sessionId: string, tags: string[]) => void;
   onCreateCheckpoint?: (sessionId: string, label: string) => Promise<boolean>;
   onListCheckpoints?: (sessionId: string) => Promise<CheckpointProto[]>;
@@ -198,6 +200,7 @@ function SessionCardInner({
   onNewWorkspace,
   onRename,
   onRestart,
+  onRetryNow,
   onUpdateTags,
   onCreateCheckpoint,
   onListCheckpoints,
@@ -277,6 +280,11 @@ function SessionCardInner({
         return statusPaused;  // no distinct style yet; reuses paused (session is idle/stopped)
       case SessionStatus.CRASHED:
         return statusCrashed;
+      case SessionStatus.PERMANENTLY_FAILED:
+        // Reuses CRASHED's error palette — never the same slot/style as a
+        // routine NeedsAttention reason (ReviewQueueBadge), which is the
+        // ambiguity this status exists to eliminate (research/ux.md).
+        return statusCrashed;
       default:
         return statusUnknown;
     }
@@ -302,6 +310,8 @@ function SessionCardInner({
         return "Hibernated";
       case SessionStatus.CRASHED:
         return "Crashed";
+      case SessionStatus.PERMANENTLY_FAILED:
+        return "Failed";
       default:
         return "Unknown";
     }
@@ -586,6 +596,13 @@ function SessionCardInner({
                 compact={true}
               />
             )}
+            {session.retryAttempt > 0 && (
+              <RetryBadge
+                retryAttempt={session.retryAttempt}
+                retryMaxAttempts={session.retryMaxAttempts}
+                compact={true}
+              />
+            )}
             {isPaused && session.pauseReason ? (
               <Tooltip label={formatPauseReason(session.pauseReason)} side="top">
                 <span
@@ -596,6 +613,14 @@ function SessionCardInner({
                   {getStatusText(session.status)}
                 </span>
               </Tooltip>
+            ) : session.status === SessionStatus.PERMANENTLY_FAILED ? (
+              <span
+                className={`${status} ${getStatusColor(session.status)}`}
+                role="img"
+                aria-label={`Session status: Failed — gave up after ${session.retryMaxAttempts} attempt${session.retryMaxAttempts === 1 ? "" : "s"}`}
+              >
+                {getStatusText(session.status)}
+              </span>
             ) : session.status === SessionStatus.STOPPED && session.creationProgress ? (
               // ponytail: reuses creationProgress — the field is only cleared on a
               // successful start, so a startup/reconnect failure written here (see
@@ -1031,6 +1056,7 @@ function SessionCardInner({
             try { await onDelete?.(); } finally { setIsDeleting(false); }
           }}
           onRestart={onRestart}
+          onRetryNow={onRetryNow}
           onClone={onClone}
           onOpenInNewPane={onOpenInNewPane}
           onNewWorkspace={onNewWorkspace}

@@ -89,6 +89,7 @@ function HomeContent() {
     resumeSession,
     renameSession,
     restartSession,
+    retrySession,
     clearConversationState,
     createCheckpoint,
     listCheckpoints,
@@ -453,6 +454,7 @@ function HomeContent() {
     onNewWorkspaceSession: handleNewWorkspaceSession,
     onRenameSession: renameSession,
     onRestartSession: restartSession,
+    onRetryNowSession: retrySession,
     onUpdateTags: handleUpdateTags,
     onNewSession: handleNewSession,
     onCreateCheckpoint: createCheckpoint,
@@ -467,7 +469,7 @@ function HomeContent() {
   }), [
     handleSessionClick, handleDeleteSession, pauseSession, handleResumeRequest,
     handleDirectResume, handleCloneSession, handleNewWorkspaceSession, renameSession,
-    restartSession, handleUpdateTags, handleNewSession, createCheckpoint,
+    restartSession, retrySession, handleUpdateTags, handleNewSession, createCheckpoint,
     listCheckpoints, forkSession, handleSetRateLimitEnabled,
     handleToggleAutonomousMode, handleToggleAutoApprove, handleSteerAutonomousSession, clearConversationState, listSessions,
   ]);

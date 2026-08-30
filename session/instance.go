@@ -58,6 +58,13 @@ const (
 	// Unlike Stopped, a Crashed session is not auto-recovered by the health checker —
 	// it surfaces to the user/automation for an explicit resume (see ExitReason).
 	Crashed Status = 6
+	// PermanentlyFailed is a terminal state reached when the configurable retry
+	// policy's automated crash/stall recovery (session/retry_state.go) exhausts
+	// MaxAttempts, or a failure reason isn't in RetryOn at all. Unlike Stopped, it
+	// is not auto-revived by reconcileSessions even if tmux is alive — it's a
+	// deliberate terminal state pending human action via "Retry now"
+	// (Instance.RetryNow), not an incidental stop. See ADR-001.
+	PermanentlyFailed Status = 7
 
 	// Deprecated: use Active.
 	Running = Active
@@ -84,6 +91,8 @@ func (s Status) String() string {
 		return "Restoring"
 	case Crashed:
 		return "Crashed"
+	case PermanentlyFailed:
+		return "PermanentlyFailed"
 	default:
 		return fmt.Sprintf("Status(%d)", int(s))
 	}
@@ -406,6 +415,24 @@ type Instance struct {
 	// Protected by mu (via sendSyncErr / Snapshot).
 	ReviewState
 
+	// RetryState holds the automated crash/stall retry lifecycle (attempt
+	// count, resolved max, last failure reason, pending-retry timestamp,
+	// history) for the configurable retry policy (session-retry-backoff).
+	// Fields are embedded (promoted) so callers can access inst.RetryAttempt
+	// etc. directly, mirroring ReviewState. Protected by mu.
+	RetryState
+
+	// RetryPolicyOverride is a per-session override for the global
+	// RetryPolicyConfig default, resolved once (global (+) override) at
+	// StartSessionDriver via resolveRetryPolicy. Mirrors ReworkCapOverride's
+	// nil-means-inherit convention. Nil means "use the global default".
+	RetryPolicyOverride *config.RetryPolicyConfig `json:"retry_policy_override,omitempty"`
+
+	// notifier delivers proactive notifications (e.g. a session giving up after
+	// exhausting its retry budget) independent of the passive ReviewQueue.
+	// Set via SetNotifier, mirroring reviewQueue/SetReviewQueue.
+	notifier Notifier
+
 	// controllerManager owns the ClaudeController and InstanceStatusManager references.
 	controllerManager ControllerManager
 
@@ -481,6 +508,13 @@ type Instance struct {
 	// driverRunning tracks whether a SessionDriver goroutine is active for this instance.
 	// Guarded by CompareAndSwap — see StartSessionDriver.
 	driverRunning atomic.Bool
+	// retryInFlight guards every restart path (automated backoff-expiry,
+	// restart-grace, manual RetryNow) against running concurrently for the
+	// same instance. Claimed exclusively inside restartForRetry via CAS — no
+	// other function CASes it directly, so every restart path is guarded by
+	// construction rather than by each caller remembering to. See
+	// session/retry_state.go's restartForRetry.
+	retryInFlight atomic.Bool
 	// driverStopper carries the stop/done signaling pair for the current
 	// SessionDriver run, if one has ever been started. Set by StartSessionDriver,
 	// read by StopSessionDriver (called from Destroy) to signal and join the
