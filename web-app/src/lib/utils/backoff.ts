@@ -1,4 +1,4 @@
-import { ConnectError } from "@connectrpc/connect";
+import { Code, ConnectError } from "@connectrpc/connect";
 
 /**
  * Full-jitter exponential backoff delay.
@@ -65,4 +65,69 @@ export function getWsCloseCode(err: unknown): number | null {
   const raw = err.metadata?.get("ws-close-code") ?? "";
   const code = parseInt(raw, 10);
   return isNaN(code) ? null : code;
+}
+
+/**
+ * Returns true if `err` represents a non-retriable failure, across BOTH the
+ * WS-bridge transport (createWatchTransport) and the native ConnectRPC
+ * transport (createConnectTransport).
+ *
+ * The WS-bridge signals this via a `ws-close-code` header (see getWsCloseCode);
+ * createConnectTransport never sets that header, so it's checked first and,
+ * when absent, falls back to comparing the ConnectError's own `code` against
+ * the native transport's equivalent signal for the same underlying
+ * server-side conditions (auth failure, session gone). Mirrors
+ * NON_RETRIABLE_WS_CODES' semantics:
+ *   Code.Unauthenticated — equivalent to ws-close-code 4001 (auth failure)
+ *   Code.NotFound        — equivalent to ws-close-code 4004 (session not found)
+ *
+ * The `Code.*` comparison is deferred until this function actually runs (not
+ * hoisted into a module-level constant) so importing this module never
+ * touches the `Code` enum eagerly — several existing tests mock
+ * `@connectrpc/connect` with only a subset of its exports (e.g. just
+ * `createClient`), and a top-level `Code.Unauthenticated` reference would
+ * throw at import time under those mocks even though the mocked test never
+ * exercises this branch.
+ */
+export function isNonRetriableConnectError(err: unknown): err is ConnectError {
+  if (!(err instanceof ConnectError)) return false;
+  const wsCode = getWsCloseCode(err);
+  if (wsCode !== null) {
+    return !isRetriableCloseCode(wsCode);
+  }
+  return err.code === Code.Unauthenticated || err.code === Code.NotFound;
+}
+
+// ---------------------------------------------------------------------------
+// Connect-timeout policy: per-attempt duration cap (foreground vs. background),
+// distinct from BackoffState's delay-between-attempts above.
+// ---------------------------------------------------------------------------
+
+/**
+ * Fast connect-timeout for the first FOREGROUND_FAST_ATTEMPTS attempts since a
+ * terminal became foreground. Unvalidated starting guess (herdr-web's real value
+ * isn't inspectable) — validate against real p95/p99 connect-to-first-message
+ * latency on VPN/high-RTT links before enabling NEXT_PUBLIC_RECONNECT_V2 broadly.
+ */
+export const FOREGROUND_CONNECT_TIMEOUT_MS = 1200;
+
+/** Normal connect-timeout: background attempts, and foreground attempts beyond FOREGROUND_FAST_ATTEMPTS. */
+export const CONNECT_TIMEOUT_MS = 3500;
+
+/** Number of connect attempts (since the most recent foreground transition) eligible for the fast timeout. */
+export const FOREGROUND_FAST_ATTEMPTS = 2;
+
+/**
+ * Returns the connect-timeout (ms) for a reconnect attempt: the maximum time
+ * to wait for the first stream message before abandoning the attempt.
+ * Foreground terminals get a shorter timeout for their first
+ * FOREGROUND_FAST_ATTEMPTS attempts since becoming foreground; all other
+ * attempts (background, or foreground beyond the fast window) use the
+ * normal timeout.
+ */
+export function connectTimeoutMs(foreground: boolean, attemptsSinceForeground: number): number {
+  if (foreground && attemptsSinceForeground < FOREGROUND_FAST_ATTEMPTS) {
+    return FOREGROUND_CONNECT_TIMEOUT_MS;
+  }
+  return CONNECT_TIMEOUT_MS;
 }

@@ -3,6 +3,7 @@ package session
 import "testing"
 
 func TestGitHubMetadataView_IsPRSession(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name     string
 		gh       GitHubMetadataView
@@ -14,6 +15,7 @@ func TestGitHubMetadataView_IsPRSession(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			if got := tt.gh.IsPRSession(); got != tt.expected {
 				t.Errorf("IsPRSession() = %v, want %v", got, tt.expected)
 			}
@@ -22,6 +24,7 @@ func TestGitHubMetadataView_IsPRSession(t *testing.T) {
 }
 
 func TestGitHubMetadataView_RepoFullName(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name     string
 		gh       GitHubMetadataView
@@ -34,6 +37,7 @@ func TestGitHubMetadataView_RepoFullName(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			if got := tt.gh.RepoFullName(); got != tt.expected {
 				t.Errorf("RepoFullName() = %q, want %q", got, tt.expected)
 			}
@@ -42,6 +46,7 @@ func TestGitHubMetadataView_RepoFullName(t *testing.T) {
 }
 
 func TestGitHubMetadataView_PRDisplayInfo(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name     string
 		gh       GitHubMetadataView
@@ -65,6 +70,7 @@ func TestGitHubMetadataView_PRDisplayInfo(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			if got := tt.gh.PRDisplayInfo(); got != tt.expected {
 				t.Errorf("PRDisplayInfo() = %q, want %q", got, tt.expected)
 			}
@@ -73,6 +79,7 @@ func TestGitHubMetadataView_PRDisplayInfo(t *testing.T) {
 }
 
 func TestGitHubMetadataView_IsGitHubSession(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name     string
 		gh       GitHubMetadataView
@@ -85,6 +92,7 @@ func TestGitHubMetadataView_IsGitHubSession(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			if got := tt.gh.IsGitHubSession(); got != tt.expected {
 				t.Errorf("IsGitHubSession() = %v, want %v", got, tt.expected)
 			}
@@ -93,6 +101,7 @@ func TestGitHubMetadataView_IsGitHubSession(t *testing.T) {
 }
 
 func TestGitHubMetadataView_IsEmpty(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name     string
 		gh       GitHubMetadataView
@@ -106,6 +115,7 @@ func TestGitHubMetadataView_IsEmpty(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			if got := tt.gh.IsEmpty(); got != tt.expected {
 				t.Errorf("IsEmpty() = %v, want %v", got, tt.expected)
 			}

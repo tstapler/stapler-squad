@@ -8,7 +8,9 @@ import (
 	"sync/atomic"
 	"unsafe"
 
+	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/pkg/ansi"
+	"github.com/tstapler/stapler-squad/session/detection/binaries"
 	"github.com/tstapler/stapler-squad/session/detection/dtypes"
 	"gopkg.in/yaml.v3"
 )
@@ -29,6 +31,10 @@ const (
 	StatusExecuting       // Actively executing commands (shows "esc to interrupt")
 	StatusSuccess         // Task completed successfully
 	StatusWaitingForAgent // Waiting for one or more background agents to finish
+	// StatusCompacting is set when Claude is actively summarizing/compacting older
+	// conversation history (distinct from the "N% until auto-compact"
+	// approaching-threshold indicator, which is StatusExecuting).
+	StatusCompacting
 )
 
 // StatusPattern represents a regex pattern for detecting a specific status.
@@ -49,6 +55,10 @@ type StatusDetector struct {
 	patternSet atomic.Pointer[PatternSet]
 	sink       DetectionEventSink
 	normalizer PTYNormalizer
+
+	// compactingCanaryLogged guards the TEMPORARY compacting-regex drift canary (see
+	// compactingCanary) so it fires at most once per detector/session, not once per scan.
+	compactingCanaryLogged atomic.Bool
 }
 
 // NewStatusDetector creates a new status detector with default patterns.
@@ -246,9 +256,49 @@ const StatusDetectionTailBytes = 4096
 // This is the shared core called by both Detect() and DetectWithContext().
 //
 // rawPTY must be the original PTY bytes before collapseCarriageReturns is applied.
-func (sd *StatusDetector) detectFromText(text string, rawPTY []byte) (DetectedStatus, string, string) {
+func (sd *StatusDetector) detectFromText(text string, rawPTY []byte) (DetectedStatus, string, string, int) {
 	ps := sd.patternSet.Load()
-	return ps.MatchLines(text, rawPTY)
+	status, name, desc, count := ps.MatchLines(text, rawPTY)
+	sd.compactingCanary(status, text)
+	return status, name, desc, count
+}
+
+// compactingCanary is a TEMPORARY bake-in canary (see project_plans/context-compaction-
+// detection/implementation/plan.md, Task 1.1.1c): the compacting_conversation pattern
+// (binaries/claude.go) was grounded in an INFERRED guess, not a verified live capture.
+// Until the follow-up backlog item confirms the regex against real Claude Code output,
+// log a line mentioning "compact" that did NOT classify as StatusCompacting, so a
+// near-miss regex surfaces during real usage instead of via a silent production gap.
+// Remove this method (and its call site above and the compactingCanaryLogged field)
+// once that follow-up item closes.
+//
+// Mirrors ratelimit.Detector.maybeLogUndetectedWording's two safeguards: fires at most
+// once per detector via compactingCanaryLogged (this is called once per scrollback line
+// per poll via detectFromLines, so an unguarded version would log continuously for as
+// long as an unmatched line sits in the tail), and never logs the raw matched text —
+// terminal output routinely contains secrets, so only the byte offset is logged.
+//
+// The pre-existing "N% until auto-compact" approaching-threshold indicator (present in
+// claude_active.txt, claude_thinking_verb.txt, claude_asterism_active.txt) also contains
+// "compact" and is EXPECTED to classify as StatusExecuting, not StatusCompacting — it is
+// excluded here, or the canary would fire on every near-limit session instead of only on
+// a genuine near-miss.
+func (sd *StatusDetector) compactingCanary(status DetectedStatus, text string) {
+	if status == StatusCompacting || sd.compactingCanaryLogged.Load() {
+		return
+	}
+	lower := strings.ToLower(text)
+	if strings.Contains(lower, "until auto-compact") {
+		return
+	}
+	idx := strings.Index(lower, "compact")
+	if idx == -1 {
+		return
+	}
+	if !sd.compactingCanaryLogged.CompareAndSwap(false, true) {
+		return
+	}
+	log.Debug("detection: line mentions 'compact' but did not classify as StatusCompacting — possible regex near-miss", "byte_offset", idx, "text_len", len(text))
 }
 
 // appendDetectionEvent records the outcome of a detection call to the ring buffer.
@@ -268,11 +318,11 @@ func (sd *StatusDetector) RecentEvents(n int) []DetectionEvent {
 }
 
 // Detect analyzes the provided PTY output and returns the detected status.
-// Patterns are checked in priority order: Error > TestsFailing > Success > NeedsApproval > InputRequired > Active > Processing > Idle > Ready.
+// Patterns are checked in priority order: Error > TestsFailing > NeedsApproval > InputRequired > WaitingForAgent > Success > Compacting > Active > Processing > Idle > Ready.
 // Returns StatusUnknown if no patterns match.
 func (sd *StatusDetector) Detect(output []byte) DetectedStatus {
 	text := sd.normalizer.Normalize(string(output))
-	status, patternName, _ := sd.detectFromText(text, output)
+	status, patternName, _, _ := sd.detectFromText(text, output)
 	sd.appendDetectionEvent(status, patternName, text)
 	return status
 }
@@ -281,7 +331,7 @@ func (sd *StatusDetector) Detect(output []byte) DetectedStatus {
 // Uses the pattern's Description field for human-readable messages instead of raw matched text.
 func (sd *StatusDetector) DetectWithContext(output []byte) (DetectedStatus, string) {
 	text := sd.normalizer.Normalize(string(output))
-	status, patternName, context := sd.detectFromText(text, output)
+	status, patternName, context, _ := sd.detectFromText(text, output)
 	sd.appendDetectionEvent(status, patternName, text)
 	return status, context
 }
@@ -289,357 +339,31 @@ func (sd *StatusDetector) DetectWithContext(output []byte) (DetectedStatus, stri
 // detectWithContextFromString is the string-accepting variant of DetectWithContext.
 // Avoids the string→[]byte→string round-trip in detectFromLines by aliasing the
 // string data via unsafe.Slice for the rawPTY argument (read-only use in hasScreenOverwrite).
-func (sd *StatusDetector) detectWithContextFromString(line string) (DetectedStatus, string) {
+// The 3rd return value is the subagent/shell/monitor count captured from the winning
+// WaitingForAgent match (0 for any other status) — see MatchLines.
+func (sd *StatusDetector) detectWithContextFromString(line string) (DetectedStatus, string, int) {
 	text := sd.normalizer.Normalize(line)
 	var rawPTY []byte
 	if len(line) > 0 {
 		rawPTY = unsafe.Slice(unsafe.StringData(line), len(line))
 	}
-	status, patternName, context := sd.detectFromText(text, rawPTY)
+	status, patternName, context, count := sd.detectFromText(text, rawPTY)
 	sd.appendDetectionEvent(status, patternName, text)
-	return status, context
+	return status, context, count
 }
 
-// getDefaultPatterns returns the default status detection patterns for Claude Code.
+// getDefaultPatterns returns the default status detection patterns used as
+// the generic fallback for any program with no registered per-binary
+// detector (see NewStatusDetector). It delegates to
+// binaries.NewClaudeDetector().Patterns() rather than holding its own copy:
+// this package already imports session/detection/binaries (registry.go
+// registers binaries.NewClaudeDetector() as the built-in "claude" detector),
+// so binaries.ClaudeDetector.Patterns() is the single source of truth for
+// Claude's default pattern set. Maintaining two copies previously let the
+// built-in registry entry (binaries/claude.go) drift into a stale, thinner
+// subset of this generic fallback — see that method's doc comment.
 func getDefaultPatterns() StatusPatterns {
-	return StatusPatterns{
-		Ready: []StatusPattern{
-			{
-				Name:        "claude_prompt",
-				Pattern:     `.*`,
-				Description: "Claude Code command prompt",
-				Priority:    1,
-			},
-			// NOTE: agy (Antigravity CLI) — agy uses the same TUI codebase as Gemini CLI
-			// (requirements confirmed: "same TUI codebase, rewritten core in Go"). The four
-			// gemini_* patterns below (gemini_ready, gemini_working, gemini_permission,
-			// gemini_allow_execution) cover agy sessions without additional patterns.
-			//
-			// If agy introduces divergent UI strings (e.g. rebranded permission dialog text)
-			// in a future version, add agy_* pattern variants alongside the gemini_* entries
-			// at the same priority levels.
-			//
-			// Gemini CLI status indicators
-			{
-				Name:        "gemini_ready",
-				Pattern:     `(?:◇|✓).*(?:Ready|ready)`,
-				Description: "Gemini CLI ready status (◇ Ready)",
-				Priority:    5,
-			},
-		},
-		Processing: []StatusPattern{
-			{
-				Name: "thinking",
-				// Match "Thinking/Processing/etc." as standalone action indicators.
-				// Require the keyword at or near the start of a line to avoid matching
-				// mid-sentence prose like "I was thinking about it".
-				Pattern:     `(?im)^\s*\W{0,3}\s*(thinking|processing|analyzing|working)\b`,
-				Description: "Claude is processing a command",
-				Priority:    10,
-			},
-			{
-				Name: "tool_use",
-				// Require tool action keywords at the start of a line (or after
-				// whitespace/indicator) followed by a path-like target, to avoid
-				// matching prose like "currently running in".
-				Pattern:     `(?im)^\s*(Reading|Writing|Editing|Executing|Running)\s+[./\w]`,
-				Description: "Claude is using tools",
-				Priority:    9,
-			},
-			{
-				Name:        "opencode_arrow_action",
-				Pattern:     `→\s*(Read|Write|Edit|Create|Delete)\b`,
-				Description: "OpenCode tool action arrow (→ Read, → Write, etc.)",
-				Priority:    10,
-			},
-			// Gemini CLI working status
-			{
-				Name:        "gemini_working",
-				Pattern:     `(?:✦|⏲).*(?:Working|working)`,
-				Description: "Gemini CLI working status (✦ Working)",
-				Priority:    11,
-			},
-		},
-		NeedsApproval: []StatusPattern{
-			{
-				Name:        "file_permission_claude",
-				Pattern:     `(?i)(Yes, allow reading|Yes, allow writing|Yes, allow once|No, and tell Claude)`,
-				Description: "Claude Code file permission prompt",
-				Priority:    20,
-			},
-			{
-				Name:        "proceed_prompt",
-				Pattern:     `(?i)Do you want to proceed\?`,
-				Description: "Generic proceed confirmation",
-				Priority:    19,
-			},
-			{
-				Name:        "aider_permission",
-				Pattern:     `\(Y\)es/\(N\)o/\(D\)on't ask again`,
-				Description: "Aider permission prompt",
-				Priority:    18,
-			},
-			{
-				Name:        "gemini_permission",
-				Pattern:     `(?i)Yes, allow once`,
-				Description: "Gemini permission prompt",
-				Priority:    17,
-			},
-			{
-				Name:        "gemini_allow_execution",
-				Pattern:     `(?i)Allow execution of:`,
-				Description: "Gemini tool execution permission prompt",
-				Priority:    19,
-			},
-			{
-				Name:        "opencode_permission",
-				Pattern:     `\[\s*Allow\s*\([aA]\)\s*\]`,
-				Description: "OpenCode permission prompt with [ Allow (a) ] buttons",
-				Priority:    18,
-			},
-		},
-		Error: []StatusPattern{
-			{
-				Name: "error_message",
-				// (?im) enables case-insensitive multiline matching.
-				// Anchors to start of line (^) OR after sentence-ending punctuation ([.!?]\s+)
-				// so that "Error:" in the middle of a paragraph (e.g. last N bytes of output)
-				// is still detected, while still avoiding false positives from indented
-				// shell/YAML content like `echo "ERROR: ..."` where ERROR is not at a
-				// line boundary or sentence boundary.
-				// error[\s:] matches "Error:" (colon) and "Error " (space) to catch
-				// variants like "Error occurred" and "Error while processing".
-				Pattern:     `(?im)(^|[.!?]\s+)(error[\s:]|fatal error|exception:|traceback|panic:)`,
-				Description: "Generic error indicators (not test failures)",
-				Priority:    30,
-			},
-			{
-				Name: "connection_error",
-				// (?im) case-insensitive multiline; require these to appear on their own
-				// line to avoid matching variable names or code paths that contain these words.
-				Pattern:     `(?im)^.*(connection refused|network timeout|network error)`,
-				Description: "Network and connection errors",
-				Priority:    29,
-			},
-		},
-		// TestsFailing: DISABLED - These patterns cause too many false positives.
-		// Test output varies wildly across languages/frameworks, and matching "FAIL"
-		// anywhere in output catches non-test-related content. Focus on Claude's
-		// actual status indicators (active, idle, approval, error) instead.
-		TestsFailing: []StatusPattern{},
-		Idle: []StatusPattern{
-			{
-				Name:        "insert_mode",
-				Pattern:     `—\s*INSERT\s*—`,
-				Description: "Claude Code in INSERT mode, waiting for input",
-				Priority:    15,
-			},
-			{
-				Name: "claude_readline_prompt",
-				// Matches the Claude Code readline prompt ">" optionally followed by
-				// the terminal cursor block character ▌ (U+258C) which tmux capture-pane
-				// includes when the cursor sits on the prompt line.
-				Pattern:     `(?m)^>\s*▌?\s*$`,
-				Description: "Claude Code readline input prompt",
-				Priority:    16,
-			},
-			{
-				Name:        "command_prompt",
-				Pattern:     `\$\s*$`,
-				Description: "Shell command prompt at end of output",
-				Priority:    14,
-			},
-			{
-				Name:        "vim_normal_mode",
-				Pattern:     `—\s*NORMAL\s*—`,
-				Description: "Vim in NORMAL mode",
-				Priority:    13,
-			},
-			{
-				Name:        "bracket_insert_mode",
-				Pattern:     `\[INSERT\]`,
-				Description: "Gemini/editor in INSERT mode (bracket format)",
-				Priority:    15,
-			},
-			{
-				Name:        "claude_shortcuts_prompt",
-				Pattern:     `\?\s+for shortcuts`,
-				Description: "Claude Code idle prompt showing ? for shortcuts",
-				Priority:    15,
-			},
-			{
-				Name:        "claude_accept_edits",
-				Pattern:     `⏵⏵\s+accept edits on`,
-				Description: "Claude Code 'accept edits' review mode — session completed turn, user reviews proposed changes",
-				Priority:    15,
-			},
-		},
-		Active: []StatusPattern{
-			{
-				Name: "esc_to_interrupt",
-				// Matches "esc to interrupt" and "esc to cancel". Also matches when the
-				// terminal cursor sits at column 0 of the line, replacing the 'e' with a
-				// half-block glyph (▊ U+258A, ▌ U+258C, etc.) — a tmux capture-pane
-				// rendering artifact seen as "[▊]sc to interrupt" in real captures.
-				Pattern:     `[e▊▌▍▋▎▏█]sc\s+(to\s+)?(interrupt|cancel)`,
-				Description: "Active operation that can be interrupted or cancelled",
-				Priority:    25,
-			},
-			{
-				Name:        "synthesizing",
-				Pattern:     `(?i)Synthesizing\.{0,3}`,
-				Description: "Claude is synthesizing a response",
-				Priority:    25,
-			},
-			{
-				Name: "claude_thinking_verb",
-				// Full spinner frame set: · ✢ ✳ ✶ ✻ ✽ (macOS bounce cycle), * (legacy),
-				// ● (reduced-motion), ✦ (Claude Code primary spinner U+2726 BLACK FOUR POINTED STAR).
-				// Direct UTF-8 embedding in [...] is valid RE2; \uXXXX escapes are NOT supported.
-				// Verb char class extends \w with hyphens (Dilly-dallying), apostrophes (Beboppin'),
-				// and Latin-1 accented chars (Flambéing, Sautéing) — Go RE2 \w = [0-9A-Za-z_] only.
-				// [ \t]* allows leading whitespace so indented spinners (e.g. task manager sub-items)
-				// are detected: "  ✽ Roosting… (9m 52s · ↓ 2.8k tokens)"
-				Pattern:     `(?m)^[ \t]*[·✢✳✶✻✽●*✦][ \t]+[A-Z][a-zA-Z'\-éèêàâùûôîïëüöäÿæœ]*(?:…|\.{1,3})`,
-				Description: "Claude thinking state with random verb — any spinner frame + capitalized verb + ellipsis",
-				Priority:    26,
-			},
-			{
-				Name:        "running_status",
-				Pattern:     `Running\.{3,}`,
-				Description: "Command actively running",
-				Priority:    24,
-			},
-			{
-				Name:        "progress_indicators",
-				Pattern:     `[✓✔⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏★].*(?:ing|Processing|Working|Executing|Verifying|Testing|Building|Synthesizing)`,
-				Description: "Progress indicators with action verbs",
-				Priority:    23,
-			},
-			{
-				Name:        "tool_execution_active",
-				Pattern:     `(?i)(Executing|Verifying|Testing|Building|Deploying).*\(esc`,
-				Description: "Tool execution with interrupt option",
-				Priority:    22,
-			},
-		},
-		Success: []StatusPattern{
-			{
-				Name:        "cost_summary_line",
-				Pattern:     `\$\d+\.\d+\s+•`,
-				Description: "Claude cost summary line — turn complete",
-				Priority:    22,
-			},
-			{
-				Name: "verb_duration_completion",
-				// ✻ (asterism U+273B), ◉ (fisheye U+25C9), and ✦ (black four pointed
-				// star U+2726, Claude Code primary spinner) are used as the turn-completion
-				// bullet. The verb is a random past-tense word that rotates each turn
-				// (Baked, Cooked, Pondered, Synthesized, etc.).
-				Pattern:     `[✻◉✦]\s+\w+\s+for\s+\d+[hms]`,
-				Description: "Claude turn complete — '<PastTenseVerb> for <duration>' format",
-				Priority:    21,
-			},
-			{
-				Name:        "task_complete",
-				Pattern:     `(?i)(✓ Successfully completed|Task (completed|finished)|I've completed|All done)`,
-				Description: "Task completed successfully",
-				Priority:    20,
-			},
-			{
-				Name:        "success_checkmark",
-				Pattern:     `(?i)✓.*(?:complete|done|success|finished)`,
-				Description: "Success indicator with completion words",
-				Priority:    19,
-			},
-			{
-				Name:        "finished_successfully",
-				Pattern:     `(?i)(Finished successfully|Completed successfully)`,
-				Description: "Explicit success confirmation",
-				Priority:    18,
-			},
-			{
-				Name:        "tests_passed",
-				Pattern:     `(?i)(All tests passed|Tests: .*passed)`,
-				Description: "Test suite completed successfully",
-				Priority:    17,
-			},
-			{
-				Name:        "build_success",
-				Pattern:     `(?i)(Build succeeded|Build: SUCCESS)`,
-				Description: "Build completed successfully",
-				Priority:    16,
-			},
-		},
-		WaitingForAgent: []StatusPattern{
-			{
-				Name: "waiting_for_background_agent",
-				// Matches Claude Code's "✻ Waiting for N background agent(s) to finish" and
-				// "✻ Waiting for N dynamic workflow(s) to finish" lines.
-				// ✻ (U+273B), ◉ (U+25C9), and ✦ (U+2726, primary spinner) are all used
-				// as the turn-marker bullet.
-				Pattern:     `[✻◉✦]\s+Waiting for \d+ (?:background agent|dynamic workflow)`,
-				Description: "Claude is waiting for one or more background agents or dynamic workflows to finish",
-				Priority:    27,
-			},
-			{
-				Name: "shells_still_running",
-				// Matches "✻ Churned for 52s · 1 shell still running" and similar lines that
-				// appear when Claude finishes a turn but background shell processes are still
-				// active. The "N shell(s) still running" suffix overrides the turn-completion
-				// verb-duration marker — the session is not done yet.
-				// Also matches bare "N shell(s) running" / "N shells still running" variants
-				// found in the Claude Code bottom status bar.
-				Pattern:     `\d+\s+shells?\s+(?:still\s+)?running`,
-				Description: "Background shell processes still running — session not yet idle",
-				Priority:    27,
-			},
-			{
-				Name: "monitors_still_running",
-				// Matches "✻ Cogitated for 18m 41s · 1 monitor still running" and similar
-				// lines that appear when Claude finishes a turn but background monitors (e.g.
-				// CI run watchers) are still active. Requires "still" to avoid false positives
-				// on generic "N monitors running" output from display tools, Prometheus, etc.
-				Pattern:     `\d+\s+monitors?\s+still\s+running`,
-				Description: "Background monitors still running — session not yet idle",
-				Priority:    27,
-			},
-		},
-		InputRequired: []StatusPattern{
-			// Claude Code's AskUserQuestion prompts have a very specific format:
-			// "Do you want to proceed?"
-			// " ❯ 1. Yes"
-			// "   2. Type here to tell Claude what to do differently"
-			//
-			// We detect this by looking for the numbered option selector pattern.
-			// This is much more reliable than trying to match generic question text.
-			{
-				Name: "numbered_option_selector",
-				// Matches Claude/Gemini numbered selection format with arrow/bullet selector.
-				// Uses ❯ and ● (not >) to avoid false positives on markdown blockquotes
-				// like "> 1. Clone the repository".
-				Pattern:     `[❯●]\s*\d+\.\s+\w`,
-				Description: "Selection prompt with numbered options",
-				Priority:    16,
-			},
-			{
-				Name: "opencode_bar_prefixed_options",
-				// Matches OpenCode's ┃-prefixed numbered options in the footer area.
-				// Example: "┃  4. Icons:" or "┃ 1. Option A"
-				Pattern:     `┃\s*\d+\.\s+\w`,
-				Description: "OpenCode bar-prefixed numbered option selector",
-				Priority:    17,
-			},
-			{
-				Name: "opencode_permission_buttons",
-				// Matches OpenCode's permission dialog buttons.
-				// Example: "Allow once   Allow always   Reject"
-				Pattern:     `(?i)Allow\s+once.*Allow\s+always|Allow\s+always.*Allow\s+once`,
-				Description: "OpenCode permission dialog buttons",
-				Priority:    18,
-			},
-		},
-	}
+	return binaries.NewClaudeDetector().Patterns()
 }
 
 // StatusString converts DetectedStatus to a human-readable string.
@@ -665,6 +389,8 @@ func (s DetectedStatus) String() string {
 		return "Success"
 	case StatusWaitingForAgent:
 		return "Waiting for Agent"
+	case StatusCompacting:
+		return "Compacting"
 	case StatusUnknown:
 		return "Unknown"
 	}
@@ -714,6 +440,8 @@ func (sd *StatusDetector) GetPatternNames(status DetectedStatus) []string {
 		patterns = p.Success
 	case StatusWaitingForAgent:
 		patterns = p.WaitingForAgent
+	case StatusCompacting:
+		patterns = p.Compacting
 	case StatusUnknown:
 		return nil
 	}
@@ -730,30 +458,15 @@ func (sd *StatusDetector) DetectFromString(output string) DetectedStatus {
 	return sd.Detect([]byte(output))
 }
 
-// builtBinaryDetectors is a package-level cache of per-binary StatusDetectors,
-// keyed by binary name. Initialized once at startup from DefaultRegistry().
-var builtBinaryDetectors = func() map[string]*StatusDetector {
-	m := make(map[string]*StatusDetector)
-	reg := DefaultRegistry()
-	for _, name := range reg.Names() {
-		bd, _ := reg.Lookup(name)
-		ps, _ := NewPatternSet(bd.Patterns()) // patterns are from code, always valid
-		bsd := &StatusDetector{}
-		bsd.patternSet.Store(ps)
-		m[name] = bsd
-	}
-	return m
-}()
-
 // DetectForProgram detects the status for output from a named program.
 // When the program has a registered BinaryDetector, its per-binary pattern set
 // is consulted first. If the per-binary detector returns StatusUnknown (no match),
 // the generic Detect() is called as a fallback. For unregistered programs, only
 // the generic Detect() is used.
 func (sd *StatusDetector) DetectForProgram(output []byte, program string) DetectedStatus {
-	if bsd, ok := builtBinaryDetectors[program]; ok {
+	if bsd, ok := lookupBinaryDetector(program); ok {
 		text := stripANSI(collapseCarriageReturns(string(output)))
-		status, patternName, _ := bsd.detectFromText(text, output)
+		status, patternName, _, _ := bsd.detectFromText(text, output)
 		if status != StatusUnknown {
 			sd.appendDetectionEvent(status, patternName, text)
 			return status
@@ -762,56 +475,86 @@ func (sd *StatusDetector) DetectForProgram(output []byte, program string) Detect
 	return sd.Detect(output)
 }
 
+// crSegmentScanResult is the outcome of scanning one \r-split line's segments in
+// scanCRSegments. When terminal is true, the caller must return (status, desc, count)
+// immediately — a definitive, higher-urgency match was found. Otherwise status/desc/count
+// carry the (possibly unchanged) best-candidate triple for the caller to fold back in.
+type crSegmentScanResult struct {
+	terminal bool
+	status   DetectedStatus
+	desc     string
+	count    int
+}
+
+// scanCRSegments scans the \r-split segments of a single terminal line in reverse order
+// (most recent segment first), applying the same urgency rules detectFromLines uses across
+// whole lines. bestStatus is the best candidate found so far on earlier (higher) lines;
+// it is only consulted, never assumed non-empty, so callers must fold non-terminal results
+// back in themselves (see detectFromLines).
+//
+// The last segment is always authoritative. Earlier segments: only promote high-urgency
+// statuses (Active, NeedsApproval, InputRequired, Error) — these represent session states
+// that can be visually hidden by a TUI overlay writing via \r but still indicate the session
+// needs attention. Low-urgency statuses (Success, Processing, Idle) in earlier segments were
+// overwritten and should not override the visual display.
+func (sd *StatusDetector) scanCRSegments(line string, bestStatus DetectedStatus) crSegmentScanResult {
+	segs := strings.Split(line, "\r")
+	result := crSegmentScanResult{status: bestStatus}
+	for j := len(segs) - 1; j >= 0; j-- {
+		if strings.TrimSpace(segs[j]) == "" {
+			continue
+		}
+		s, desc, count := sd.detectWithContextFromString(segs[j])
+		if s == StatusUnknown {
+			continue
+		}
+		if s == StatusReady {
+			if result.status == StatusUnknown {
+				result.status, result.desc, result.count = StatusReady, desc, count
+			}
+			continue
+		}
+		if j == len(segs)-1 || s == StatusExecuting || s == StatusNeedsApproval || s == StatusInputRequired || s == StatusError {
+			return crSegmentScanResult{terminal: true, status: s, desc: desc, count: count}
+		}
+		// Low-urgency earlier segment: record as candidate but keep scanning.
+		if result.status == StatusUnknown {
+			result.status, result.desc, result.count = s, desc, count
+		}
+	}
+	return result
+}
+
 // detectFromLines is the shared implementation for DetectFromLines and DetectWithContextFromLines.
 // Scans lines in reverse (most recent first), handling CR-split segments.
 // See DetectFromLines for the full algorithm documentation.
-func (sd *StatusDetector) detectFromLines(lines []string) (DetectedStatus, string) {
+func (sd *StatusDetector) detectFromLines(lines []string) (DetectedStatus, string, int) {
 	bestStatus := StatusUnknown
 	bestDesc := ""
+	bestCount := 0
 	for i := len(lines) - 1; i >= 0; i-- {
 		if strings.TrimSpace(lines[i]) == "" {
 			continue
 		}
 		if strings.ContainsRune(lines[i], '\r') {
-			segs := strings.Split(lines[i], "\r")
-			for j := len(segs) - 1; j >= 0; j-- {
-				if strings.TrimSpace(segs[j]) == "" {
-					continue
-				}
-				s, desc := sd.detectWithContextFromString(segs[j])
-				if s == StatusUnknown {
-					continue
-				}
-				if s == StatusReady {
-					if bestStatus == StatusUnknown {
-						bestStatus, bestDesc = StatusReady, desc
-					}
-					continue
-				}
-				// The last segment is always authoritative.
-				// Earlier segments: only promote high-urgency statuses (Active, NeedsApproval,
-				// InputRequired, Error) — these represent session states that can be visually
-				// hidden by a TUI overlay writing via \r but still indicate the session needs
-				// attention. Low-urgency statuses (Success, Processing, Idle) in earlier
-				// segments were overwritten and should not override the visual display.
-				if j == len(segs)-1 || s == StatusExecuting || s == StatusNeedsApproval || s == StatusInputRequired || s == StatusError {
-					return s, desc
-				}
-				// Low-urgency earlier segment: record as candidate but keep scanning.
-				if bestStatus == StatusUnknown {
-					bestStatus, bestDesc = s, desc
-				}
+			wasUnknown := bestStatus == StatusUnknown
+			res := sd.scanCRSegments(lines[i], bestStatus)
+			if res.terminal {
+				return res.status, res.desc, res.count
+			}
+			if wasUnknown && res.status != StatusUnknown {
+				bestStatus, bestDesc, bestCount = res.status, res.desc, res.count
 			}
 			continue // all segments of this CR line handled above
 		}
 
-		s, desc := sd.detectWithContextFromString(lines[i])
+		s, desc, count := sd.detectWithContextFromString(lines[i])
 		if s == StatusUnknown {
 			continue
 		}
 		if s == StatusReady {
 			if bestStatus == StatusUnknown {
-				bestStatus, bestDesc = StatusReady, desc
+				bestStatus, bestDesc, bestCount = StatusReady, desc, count
 			}
 			continue
 		}
@@ -821,7 +564,7 @@ func (sd *StatusDetector) detectFromLines(lines []string) (DetectedStatus, strin
 		// High-urgency statuses (Error, NeedsApproval, InputRequired) also override Active.
 		if s == StatusExecuting {
 			if bestStatus == StatusUnknown || bestStatus == StatusReady {
-				bestStatus, bestDesc = StatusExecuting, desc
+				bestStatus, bestDesc, bestCount = StatusExecuting, desc, count
 			}
 			continue
 		}
@@ -829,17 +572,17 @@ func (sd *StatusDetector) detectFromLines(lines []string) (DetectedStatus, strin
 		// earlier (higher) lines. Success/Processing/Idle on earlier lines are stale.
 		if bestStatus == StatusExecuting {
 			switch s {
-			case StatusWaitingForAgent, StatusError, StatusNeedsApproval, StatusInputRequired:
-				return s, desc
+			case StatusWaitingForAgent, StatusError, StatusNeedsApproval, StatusInputRequired, StatusCompacting:
+				return s, desc, count
 			case StatusUnknown, StatusReady, StatusProcessing, StatusIdle, StatusSuccess, StatusTestsFailing, StatusExecuting:
 				// Lower-urgency statuses when we already have Executing — skip
 				continue
 			}
 			continue
 		}
-		return s, desc // specific match wins immediately
+		return s, desc, count // specific match wins immediately
 	}
-	return bestStatus, bestDesc
+	return bestStatus, bestDesc, bestCount
 }
 
 // DetectFromLines analyzes multiple lines of output and returns the most relevant status.
@@ -852,7 +595,7 @@ func (sd *StatusDetector) detectFromLines(lines []string) (DetectedStatus, strin
 // status pattern on an earlier line. StatusReady is returned as a fallback if no more
 // specific status is found.
 func (sd *StatusDetector) DetectFromLines(lines []string) DetectedStatus {
-	s, _ := sd.detectFromLines(lines)
+	s, _, _ := sd.detectFromLines(lines)
 	return s
 }
 
@@ -864,7 +607,21 @@ func (sd *StatusDetector) DetectFromLines(lines []string) DetectedStatus {
 // Blank/whitespace-only lines are skipped. StatusReady is treated as a low-confidence
 // fallback — the scan continues past Ready results looking for a more specific status,
 // preventing the `.*` catch-all from masking real patterns on earlier lines.
+//
+// Signature intentionally left unchanged (pinned by the TerminalDetector interface and its
+// callers) — see DetectWithContextAndCountFromLines for the count-aware sibling.
 func (sd *StatusDetector) DetectWithContextFromLines(lines []string) (DetectedStatus, string) {
+	s, desc, _ := sd.detectFromLines(lines)
+	return s, desc
+}
+
+// DetectWithContextAndCountFromLines is the count-aware sibling of DetectWithContextFromLines.
+// It returns the same status and context, plus the subagent/shell/monitor count captured
+// from the winning WaitingForAgent match (0 for any other status). Added as a new method
+// rather than changing DetectWithContextFromLines in place because that method is pinned by
+// the TerminalDetector interface and consumed by review_queue_determiner.go plus several
+// test files that don't need the count.
+func (sd *StatusDetector) DetectWithContextAndCountFromLines(lines []string) (DetectedStatus, string, int) {
 	return sd.detectFromLines(lines)
 }
 

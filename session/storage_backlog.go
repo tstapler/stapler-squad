@@ -2,11 +2,15 @@ package session
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"path/filepath"
 	"regexp"
 	"strconv"
+	"strings"
 	"time"
 
+	"github.com/gofrs/flock"
 	"github.com/google/uuid"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/domain"
@@ -17,6 +21,152 @@ import (
 	"github.com/tstapler/stapler-squad/session/ent/itemsession"
 	"github.com/tstapler/stapler-squad/session/ent/reviewverdict"
 )
+
+// resolveBacklogItemLookup resolves a caller-supplied BacklogItem identifier
+// — either a legacy raw UUID string or a bl_-prefixed public id
+// (BacklogItemID, see session/backlog_item_id.go) — to the row's underlying
+// primary-key uuid.UUID. Every call site that touches a BacklogItem id
+// string replaces its bare uuid.Parse(id) with r.resolveBacklogItemLookup(ctx, id)
+// and keeps its own subsequent error-wrapping line unchanged (Story 1.3,
+// project_plans/backlog-deep-linking/implementation/plan.md task 1): the
+// legacy-UUID branch below is exactly uuid.Parse, so every existing
+// wrap/sentinel-error site (e.g. GetBacklogItem's ErrNotFound wrapping)
+// behaves identically for a malformed string, and now also for a
+// public_id that resolves to no row — both surface as the same error the
+// call site already turns into "not found" today.
+//
+// A public_id lookup costs one extra indexed query (by the unique public_id
+// column) to translate it to the row's id before the caller's existing
+// id-based query runs; this keeps the public_id branch in exactly one place
+// instead of duplicating it across every one of the ~30 call sites this
+// story wires.
+//
+// Enumeration of every other uuid.Parse/uuid.UUID call site touching a raw
+// id string in this repo (closing plan.md Story 1.3 Task 0, tracked as an
+// open item in adversarial-review.md): server/services/*.go's other
+// uuid.Parse calls (PipelineMode, Workflow, ItemSource ids) parse distinct
+// entity types, not BacklogItem, so they're correctly left on the legacy
+// path. Every consumer of a BacklogItem id string -- MCP tools
+// (server/mcp/tools_backlog.go), the deep-link resolver
+// (server/services/deep_link_resolver.go's resolveLocal), and the review/
+// triage/lifecycle update paths -- funnels through Storage.GetBacklogItem or
+// another EntRepository method that already calls resolveBacklogItemLookup,
+// so no other call site needs its own dual-ID branch.
+func (r *EntRepository) resolveBacklogItemLookup(ctx context.Context, id string) (uuid.UUID, error) {
+	if IsBacklogItemIDShape(id) {
+		item, err := r.client.BacklogItem.Query().
+			Where(backlogitem.PublicID(id)).
+			Only(ctx)
+		if err != nil {
+			return uuid.UUID{}, err
+		}
+		return item.ID, nil
+	}
+
+	return uuid.Parse(id)
+}
+
+// backlogItemPublicIDBackfillLockFileName is the flock coordination file
+// guarding BackfillBacklogItemPublicIDs against two processes racing to
+// mint different public_ids for the same row.
+const backlogItemPublicIDBackfillLockFileName = "backlog_item_public_id_backfill.lock"
+
+// backlogItemPublicIDBackfillLockTimeout bounds how long
+// BackfillBacklogItemPublicIDs waits to acquire its flock before giving up.
+// Mirrors hostRegistryLockTimeout (session/host_registry.go).
+const backlogItemPublicIDBackfillLockTimeout = 5 * time.Second
+
+// backfillLockFilePath returns the filesystem path to use for a
+// flock-guarded cross-process backfill lock named name, derived from
+// r.dbPath. Returns "" when there is no real on-disk directory to
+// coordinate on: a "file:" URI DSN (e.g. the shared-cache in-memory
+// database some tests use) or an EntRepository constructed via
+// NewEntRepositoryFromClient with no dbPath set at all. Callers must treat
+// "" as "skip locking" — there is no filesystem location to coordinate on,
+// and no plausible second OS process to race against in either case.
+func (r *EntRepository) backfillLockFilePath(name string) string {
+	if r.dbPath == "" || strings.HasPrefix(r.dbPath, "file:") {
+		return ""
+	}
+	return filepath.Join(filepath.Dir(r.dbPath), name)
+}
+
+// BackfillBacklogItemPublicIDs assigns a freshly minted BacklogItemID to
+// every pre-existing BacklogItem row that predates this feature and so has
+// no public_id (Story 1.4,
+// project_plans/backlog-deep-linking/implementation/plan.md). Idempotent:
+// rows that already have a public_id are excluded by the query itself
+// (backlogitem.PublicIDIsNil(), per session/ent/schema/backlog_item.go's
+// documented NULL-vs-empty-string representation), so re-running against an
+// already-backfilled dataset touches no rows. Guarded by a flock-based
+// exclusive lock — see backfillLockFilePath — so two instances racing on the
+// same state dir can't each assign a different id to the same row; when no
+// real lock path is available the backfill still runs, unguarded, since
+// there's no second process to race against in that case.
+func (r *EntRepository) BackfillBacklogItemPublicIDs(ctx context.Context) error {
+	lockPath := r.backfillLockFilePath(backlogItemPublicIDBackfillLockFileName)
+	if lockPath == "" {
+		return r.backfillBacklogItemPublicIDsLocked(ctx)
+	}
+
+	fl := flock.New(lockPath)
+	lockCtx, cancel := context.WithTimeout(ctx, backlogItemPublicIDBackfillLockTimeout)
+	defer cancel()
+	locked, err := fl.TryLockContext(lockCtx, 100*time.Millisecond)
+	if err != nil {
+		return fmt.Errorf("failed to acquire backlog item public id backfill lock: %w", err)
+	}
+	if !locked {
+		return fmt.Errorf("could not acquire backlog item public id backfill lock within timeout")
+	}
+	defer func() { _ = fl.Unlock() }()
+
+	return r.backfillBacklogItemPublicIDsLocked(ctx)
+}
+
+// backfillBacklogItemPublicIDsLocked does the actual query-and-save work for
+// BackfillBacklogItemPublicIDs. Split out so the exported method can wrap it
+// with (or, when no real lock path exists, skip) the flock guard without
+// duplicating the query/save logic.
+func (r *EntRepository) backfillBacklogItemPublicIDsLocked(ctx context.Context) error {
+	rows, err := r.client.BacklogItem.Query().
+		Where(backlogitem.PublicIDIsNil()).
+		All(ctx)
+	if err != nil {
+		// Table may not exist yet (fresh DB before schema.Create) — ignore,
+		// mirroring runGitHubPRURLBackfill's same defensive posture.
+		return nil //nolint:nilerr
+	}
+
+	var migrated int
+	for _, row := range rows {
+		// Confirm absence per row via the centralizing accessor (not a
+		// second raw == "" check) per plan.md's Story 1.4 note — guards
+		// against a row that was assigned a public_id (e.g. by a
+		// concurrent CreateBacklogItem call) between the query above and
+		// this loop iteration.
+		data := &BacklogItemData{PublicIDRaw: row.PublicID}
+		if _, ok := data.PublicID(); ok {
+			continue
+		}
+
+		newID, err := NewBacklogItemID()
+		if err != nil {
+			return fmt.Errorf("failed to mint backlog item public id for row %s: %w", row.ID, err)
+		}
+		if _, saveErr := r.client.BacklogItem.UpdateOneID(row.ID).
+			SetPublicID(newID.String()).
+			Save(ctx); saveErr != nil {
+			log.WarningLog().Printf("[Migration] backlog item public id backfill: item=%s: %v", row.ID, saveErr)
+			continue
+		}
+		migrated++
+	}
+	if migrated > 0 {
+		log.InfoLog().Printf("[Migration] backlog item public id backfill: populated %d row(s)", migrated)
+	}
+	return nil
+}
 
 // backlogItemForItemSession resolves the BacklogItemData owning the given
 // ItemSession id, for publish hooks that only have an ItemSession id in hand
@@ -54,6 +204,11 @@ type ItemSessionData struct {
 	TriageResult             string
 	VerificationNotes        string  // Freeform verification evidence reported via request_review
 	EstimatedCostUsd         float64 // Only set for headless sessions where cost is known at creation time
+	// ClaimantHostID is the claiming/attaching process's own stable host identifier
+	// (Config.GetOrCreateClaimantHostID), never anything derived from the session being
+	// claimed/attached. See ItemSession.claimant_host_id's schema comment for the full
+	// disambiguation against STAPLER_SQUAD_INSTANCE and session/contexts.go's CloudContext.InstanceID.
+	ClaimantHostID string
 }
 
 // ReviewVerdictData is the input data for saving a ReviewVerdict.
@@ -75,7 +230,7 @@ type ReviewVerdictData struct {
 
 // CreateItemSession creates a new ItemSession linked to a BacklogItem.
 func (r *EntRepository) CreateItemSession(ctx context.Context, data ItemSessionData) (ItemSessionSummary, error) {
-	parsedItemID, err := uuid.Parse(data.ItemID)
+	parsedItemID, err := r.resolveBacklogItemLookup(ctx, data.ItemID)
 	if err != nil {
 		return ItemSessionSummary{}, fmt.Errorf("invalid item id %q: %w", data.ItemID, err)
 	}
@@ -88,7 +243,8 @@ func (r *EntRepository) CreateItemSession(ctx context.Context, data ItemSessionD
 		SetPipelineModeSnapshot(data.PipelineModeSnapshot).
 		SetPipelineModeSnapshotHash(data.PipelineModeSnapshotHash).
 		SetNillableTriageResult(nilIfEmpty(data.TriageResult)).
-		SetNillableVerificationNotes(nilIfEmpty(data.VerificationNotes))
+		SetNillableVerificationNotes(nilIfEmpty(data.VerificationNotes)).
+		SetClaimantHostID(data.ClaimantHostID)
 	if data.EstimatedCostUsd > 0 {
 		q = q.SetEstimatedCostUsd(data.EstimatedCostUsd)
 	}
@@ -102,12 +258,12 @@ func (r *EntRepository) CreateItemSession(ctx context.Context, data ItemSessionD
 
 	// Best-effort publish: never blocks or fails session creation itself.
 	if item, lookupErr := r.GetBacklogItem(ctx, data.ItemID); lookupErr != nil {
-		log.WarningLog.Printf("[EntRepository] CreateItemSession: failed to resolve backlog item %s for publish: %v", data.ItemID, lookupErr)
+		log.WarningLog().Printf("[EntRepository] CreateItemSession: failed to resolve backlog item %s for publish: %v", data.ItemID, lookupErr)
 	} else {
-		r.attachItemSessionsForPublish(ctx, item)
-		r.publishItemChanged(item, BacklogItemChange{
-			Kind:      ChangeSessionAttached,
-			SessionID: data.SessionUUID,
+		r.publishItemChanged(ctx, item, BacklogItemChange{
+			Kind:           ChangeSessionAttached,
+			SessionID:      data.SessionUUID,
+			ClaimantHostID: data.ClaimantHostID,
 		})
 	}
 
@@ -136,7 +292,7 @@ func (r *EntRepository) GetItemSession(ctx context.Context, id string) (ItemSess
 
 // ListItemSessions returns all ItemSessions for a given BacklogItem UUID string.
 func (r *EntRepository) ListItemSessions(ctx context.Context, itemID string) ([]ItemSessionSummary, error) {
-	parsedItemID, err := uuid.Parse(itemID)
+	parsedItemID, err := r.resolveBacklogItemLookup(ctx, itemID)
 	if err != nil {
 		return nil, fmt.Errorf("invalid item id %q: %w", itemID, err)
 	}
@@ -158,20 +314,30 @@ func (r *EntRepository) ListItemSessions(ctx context.Context, itemID string) ([]
 	return result, nil
 }
 
-// GetBaseCommitSHAsForSessions returns a map of sessionUUID → last_commit_sha for the
-// given session UUIDs, including only rows where last_commit_sha is non-empty.
-// Used at startup to restore dirBaseSHA for directory-mode backlog sessions.
+// GetBaseCommitSHAsForSessions returns a map of sessionUUID → base_commit_sha for
+// the given session UUIDs, including only rows with a non-empty value. Used at
+// startup to restore dirBaseSHA for directory-mode backlog sessions — the
+// counterpart to the SetDirBaseSHA call at spawn.
+//
+// Reads base_commit_sha, falling back to last_commit_sha only for rows written
+// before the two were split. That fallback is safe precisely because the bug
+// being fixed meant the two fields held the same value on every legacy row; it
+// must NOT be extended to rows that have a base_commit_sha, since last_commit_sha
+// is now live-refreshed to the session's tip and would give a moving diff base.
 func (r *EntRepository) GetBaseCommitSHAsForSessions(ctx context.Context, sessionUUIDs []string) (map[string]string, error) {
 	rows, err := r.client.ItemSession.Query().
 		Where(itemsession.SessionUUIDIn(sessionUUIDs...)).
-		Select(itemsession.FieldSessionUUID, itemsession.FieldLastCommitSha).
+		Select(itemsession.FieldSessionUUID, itemsession.FieldBaseCommitSha, itemsession.FieldLastCommitSha).
 		All(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("GetBaseCommitSHAsForSessions: %w", err)
 	}
 	result := make(map[string]string, len(rows))
 	for _, row := range rows {
-		if row.LastCommitSha != "" {
+		switch {
+		case row.BaseCommitSha != "":
+			result[row.SessionUUID] = row.BaseCommitSha
+		case row.LastCommitSha != "":
 			result[row.SessionUUID] = row.LastCommitSha
 		}
 	}
@@ -199,7 +365,7 @@ func (r *EntRepository) GetItemSessionBySessionUUID(ctx context.Context, session
 
 // GetItemSessionBySessionAndItem looks up an ItemSession by both sessionUUID and backlog item ID.
 func (r *EntRepository) GetItemSessionBySessionAndItem(ctx context.Context, sessionUUID string, itemID string) (ItemSessionSummary, error) {
-	parsedItemID, err := uuid.Parse(itemID)
+	parsedItemID, err := r.resolveBacklogItemLookup(ctx, itemID)
 	if err != nil {
 		return ItemSessionSummary{}, fmt.Errorf("invalid item id %q: %w", itemID, err)
 	}
@@ -240,10 +406,9 @@ func (r *EntRepository) UpdateItemSessionStarted(ctx context.Context, id string,
 	// missing by the Phase 5 spec-compliance sweep's follow-up pass over the
 	// remaining publish-hook bypasses (docs/tasks/backlog-feature-improvement.md).
 	if item, lookupErr := r.backlogItemForItemSession(ctx, parsedID); lookupErr != nil {
-		log.WarningLog.Printf("[EntRepository] UpdateItemSessionStarted: failed to resolve owning backlog item for item session %s: %v", id, lookupErr)
+		log.WarningLog().Printf("[EntRepository] UpdateItemSessionStarted: failed to resolve owning backlog item for item session %s: %v", id, lookupErr)
 	} else {
-		r.attachItemSessionsForPublish(ctx, item)
-		r.publishItemChanged(item, BacklogItemChange{
+		r.publishItemChanged(ctx, item, BacklogItemChange{
 			Kind:          ChangeItemUpdated,
 			UpdatedFields: []string{"itemSessions"},
 		})
@@ -268,10 +433,9 @@ func (r *EntRepository) UpdateItemSessionSessionUUID(ctx context.Context, id str
 
 	// Best-effort publish: never blocks or fails the update itself.
 	if item, lookupErr := r.backlogItemForItemSession(ctx, parsedID); lookupErr != nil {
-		log.WarningLog.Printf("[EntRepository] UpdateItemSessionSessionUUID: failed to resolve owning backlog item for item session %s: %v", id, lookupErr)
+		log.WarningLog().Printf("[EntRepository] UpdateItemSessionSessionUUID: failed to resolve owning backlog item for item session %s: %v", id, lookupErr)
 	} else {
-		r.attachItemSessionsForPublish(ctx, item)
-		r.publishItemChanged(item, BacklogItemChange{
+		r.publishItemChanged(ctx, item, BacklogItemChange{
 			Kind:      ChangeSessionAttached,
 			SessionID: sessionUUID,
 		})
@@ -282,6 +446,14 @@ func (r *EntRepository) UpdateItemSessionSessionUUID(ctx context.Context, id str
 
 // UpdateItemSessionEnded records the end time for an ItemSession.
 func (r *EntRepository) UpdateItemSessionEnded(ctx context.Context, id string, endedAt time.Time) error {
+	return r.UpdateItemSessionEndedWithReason(ctx, id, endedAt, "")
+}
+
+// UpdateItemSessionEndedWithReason records the end time for an ItemSession alongside
+// classifyHeadlessCallError's bucket (or "" for a successful end) — see the end_reason
+// schema comment for why this exists: it lets orphan-recovery sweeps tell a call killed
+// by our own graceful shutdown apart from one that failed on its own merits.
+func (r *EntRepository) UpdateItemSessionEndedWithReason(ctx context.Context, id string, endedAt time.Time, reason string) error {
 	parsedID, err := uuid.Parse(id)
 	if err != nil {
 		return fmt.Errorf("invalid id %q: %w", id, err)
@@ -289,6 +461,7 @@ func (r *EntRepository) UpdateItemSessionEnded(ctx context.Context, id string, e
 
 	_, err = r.client.ItemSession.UpdateOneID(parsedID).
 		SetEndedAt(endedAt).
+		SetEndReason(reason).
 		Save(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to set ended_at on item session %s: %w", id, err)
@@ -296,19 +469,114 @@ func (r *EntRepository) UpdateItemSessionEnded(ctx context.Context, id string, e
 	return nil
 }
 
-// UpdateItemSessionGitActivity updates git-related fields on an ItemSession.
-func (r *EntRepository) UpdateItemSessionGitActivity(ctx context.Context, id string, sha, msg string, commitAt time.Time, commitCount int) error {
+// UpdateItemSessionFailureCapture records the absolute path to a durable raw-output
+// capture file (session.WriteHeadlessFailureCapture) for a headless triage/review
+// call that errored or produced unparseable output — see the failure_capture_path
+// schema comment. Set independently of UpdateItemSessionEndedWithReason (a separate,
+// orthogonal column) so a caller that already wrote the capture file to disk can
+// record its path without re-specifying ended_at/end_reason.
+func (r *EntRepository) UpdateItemSessionFailureCapture(ctx context.Context, id string, path string) error {
 	parsedID, err := uuid.Parse(id)
 	if err != nil {
 		return fmt.Errorf("invalid id %q: %w", id, err)
 	}
 
 	_, err = r.client.ItemSession.UpdateOneID(parsedID).
+		SetFailureCapturePath(path).
+		Save(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to set failure_capture_path on item session %s: %w", id, err)
+	}
+	return nil
+}
+
+// UpdateItemSessionCost adds usd to an ItemSession's estimated_cost_usd. Additive
+// (not a Set) so a session with multiple headless calls attributed to it — e.g.
+// the autonomous fix-loop's per-turn LLM calls — accumulates a real running total
+// instead of each call overwriting the last.
+func (r *EntRepository) UpdateItemSessionCost(ctx context.Context, id string, usd float64) error {
+	parsedID, err := uuid.Parse(id)
+	if err != nil {
+		return fmt.Errorf("invalid id %q: %w", id, err)
+	}
+
+	_, err = r.client.ItemSession.UpdateOneID(parsedID).
+		AddEstimatedCostUsd(usd).
+		Save(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to add estimated_cost_usd on item session %s: %w", id, err)
+	}
+	return nil
+}
+
+// AddHeadlessCostBySessionUUID looks up the most recent ItemSession for sessionUUID
+// and adds usd to its estimated_cost_usd. A no-op (nil error) when usd <= 0 or when
+// sessionUUID has no ItemSession at all — most interactive sessions aren't
+// backlog-linked, and that's an expected, not exceptional, outcome here.
+func (r *EntRepository) AddHeadlessCostBySessionUUID(ctx context.Context, sessionUUID string, usd float64) error {
+	if usd <= 0 {
+		return nil
+	}
+	is, err := r.GetItemSessionBySessionUUID(ctx, sessionUUID)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return nil
+		}
+		return err
+	}
+	return r.UpdateItemSessionCost(ctx, is.ID, usd)
+}
+
+// SetItemSessionBaseCommit records the worktree's pre-work HEAD SHA for the
+// item session, so the review gate can diff base..HEAD across every commit the
+// agent makes rather than just HEAD~1..HEAD.
+//
+// This is deliberately NOT UpdateItemSessionGitActivity: that function's fields
+// mean "the session's latest commit", and seeding them with the spawn-time base
+// SHA is what let closeIfSupersededByMain close real, unmerged PRs as
+// "superseded" — a branch's own base commit is by construction already an
+// ancestor of main, so IsCommitOnMain on it is always true (BUG-047).
+func (r *EntRepository) SetItemSessionBaseCommit(ctx context.Context, id, sha string) error {
+	parsedID, err := uuid.Parse(id)
+	if err != nil {
+		return fmt.Errorf("invalid id %q: %w", id, err)
+	}
+
+	if _, err := r.client.ItemSession.UpdateOneID(parsedID).
+		SetBaseCommitSha(sha).
+		Save(ctx); err != nil {
+		return fmt.Errorf("failed to set base commit sha on item session %s: %w", id, err)
+	}
+	return nil
+}
+
+// UpdateItemSessionGitActivity records the item session's *current* tip commit
+// and the count of commits it has authored since its base. Called repeatedly by
+// refreshWorkSessionGitActivity (session/backlog_lifecycle.go) while the session
+// is active, so downstream "has this session's work landed on main?" checks read
+// live data. To record the spawn-time baseline instead, use
+// SetItemSessionBaseCommit.
+func (r *EntRepository) UpdateItemSessionGitActivity(ctx context.Context, id string, sha, msg string, commitAt time.Time, commitCount int) error {
+	parsedID, err := uuid.Parse(id)
+	if err != nil {
+		return fmt.Errorf("invalid id %q: %w", id, err)
+	}
+
+	// last_progress_at records when progress was *observed*, not when the commit
+	// was authored — deliberately time.Now() rather than commitAt. Git author
+	// timestamps survive rebases and cherry-picks, and this repo rebases session
+	// worktrees onto main routinely, so feeding an author date into the staleness
+	// clock (reconcileStaleWorkSessions, which reads this field) would push it
+	// backwards on a rebase and falsely flag a healthy, actively-committing
+	// session as stale_work — triggering automated remediation against a session
+	// that is working fine. Observing a new commit right now IS progress now.
+	// last_commit_at keeps the true author time for display.
+	_, err = r.client.ItemSession.UpdateOneID(parsedID).
 		SetLastCommitSha(sha).
 		SetLastCommitMessage(msg).
 		SetLastCommitAt(commitAt).
 		SetCommitCountSinceSpawn(commitCount).
-		SetLastProgressAt(commitAt).
+		SetLastProgressAt(time.Now()).
 		Save(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to update git activity on item session %s: %w", id, err)
@@ -318,10 +586,9 @@ func (r *EntRepository) UpdateItemSessionGitActivity(ctx context.Context, id str
 	// missing by the Phase 5 spec-compliance sweep's follow-up pass over the
 	// remaining publish-hook bypasses (docs/tasks/backlog-feature-improvement.md).
 	if item, lookupErr := r.backlogItemForItemSession(ctx, parsedID); lookupErr != nil {
-		log.WarningLog.Printf("[EntRepository] UpdateItemSessionGitActivity: failed to resolve owning backlog item for item session %s: %v", id, lookupErr)
+		log.WarningLog().Printf("[EntRepository] UpdateItemSessionGitActivity: failed to resolve owning backlog item for item session %s: %v", id, lookupErr)
 	} else {
-		r.attachItemSessionsForPublish(ctx, item)
-		r.publishItemChanged(item, BacklogItemChange{
+		r.publishItemChanged(ctx, item, BacklogItemChange{
 			Kind:          ChangeItemUpdated,
 			UpdatedFields: []string{"itemSessions"},
 		})
@@ -349,10 +616,9 @@ func (r *EntRepository) UpdateItemSessionFileTouch(ctx context.Context, id strin
 	// missing by the Phase 5 spec-compliance sweep's follow-up pass over the
 	// remaining publish-hook bypasses (docs/tasks/backlog-feature-improvement.md).
 	if item, lookupErr := r.backlogItemForItemSession(ctx, parsedID); lookupErr != nil {
-		log.WarningLog.Printf("[EntRepository] UpdateItemSessionFileTouch: failed to resolve owning backlog item for item session %s: %v", id, lookupErr)
+		log.WarningLog().Printf("[EntRepository] UpdateItemSessionFileTouch: failed to resolve owning backlog item for item session %s: %v", id, lookupErr)
 	} else {
-		r.attachItemSessionsForPublish(ctx, item)
-		r.publishItemChanged(item, BacklogItemChange{
+		r.publishItemChanged(ctx, item, BacklogItemChange{
 			Kind:          ChangeItemUpdated,
 			UpdatedFields: []string{"itemSessions"},
 		})
@@ -380,10 +646,9 @@ func (r *EntRepository) UpdateItemSessionTriageResult(ctx context.Context, id st
 	// ItemSession row was deleted concurrently) — that's logged and skipped,
 	// not fatal, same "publish is best-effort" guarantee as every other hook.
 	if item, lookupErr := r.backlogItemForItemSession(ctx, parsedID); lookupErr != nil {
-		log.WarningLog.Printf("[EntRepository] UpdateItemSessionTriageResult: failed to resolve owning backlog item for item session %s: %v", id, lookupErr)
+		log.WarningLog().Printf("[EntRepository] UpdateItemSessionTriageResult: failed to resolve owning backlog item for item session %s: %v", id, lookupErr)
 	} else {
-		r.attachItemSessionsForPublish(ctx, item)
-		r.publishItemChanged(item, BacklogItemChange{
+		r.publishItemChanged(ctx, item, BacklogItemChange{
 			Kind:          ChangeTriageProgressUpdated,
 			UpdatedFields: []string{"triageResultSummary"},
 		})
@@ -411,10 +676,9 @@ func (r *EntRepository) UpdateItemSessionVerificationNotes(ctx context.Context, 
 	// missing by the Phase 5 spec-compliance sweep's follow-up pass over the
 	// remaining publish-hook bypasses (docs/tasks/backlog-feature-improvement.md).
 	if item, lookupErr := r.backlogItemForItemSession(ctx, parsedID); lookupErr != nil {
-		log.WarningLog.Printf("[EntRepository] UpdateItemSessionVerificationNotes: failed to resolve owning backlog item for item session %s: %v", id, lookupErr)
+		log.WarningLog().Printf("[EntRepository] UpdateItemSessionVerificationNotes: failed to resolve owning backlog item for item session %s: %v", id, lookupErr)
 	} else {
-		r.attachItemSessionsForPublish(ctx, item)
-		r.publishItemChanged(item, BacklogItemChange{
+		r.publishItemChanged(ctx, item, BacklogItemChange{
 			Kind:          ChangeItemUpdated,
 			UpdatedFields: []string{"itemSessions"},
 		})
@@ -495,10 +759,9 @@ func (r *EntRepository) SaveReviewVerdict(ctx context.Context, itemSessionID str
 	// verdict travels IN the payload (not via a client-side join against
 	// item_sessions) — see BacklogItemChange.Verdict's doc comment.
 	if item, lookupErr := r.backlogItemForItemSession(ctx, parsedSessionID); lookupErr != nil {
-		log.WarningLog.Printf("[EntRepository] SaveReviewVerdict: failed to resolve owning backlog item for item session %s: %v", itemSessionID, lookupErr)
+		log.WarningLog().Printf("[EntRepository] SaveReviewVerdict: failed to resolve owning backlog item for item session %s: %v", itemSessionID, lookupErr)
 	} else {
-		r.attachItemSessionsForPublish(ctx, item)
-		r.publishItemChanged(item, BacklogItemChange{
+		r.publishItemChanged(ctx, item, BacklogItemChange{
 			Kind:    ChangeVerdictRecorded,
 			Verdict: &verdict,
 		})
@@ -511,7 +774,7 @@ func (r *EntRepository) SaveReviewVerdict(ctx context.Context, itemSessionID str
 // ReviewVerdict in a single transaction. If the verdict write fails the ItemSession
 // is rolled back, preventing dangling sessions with no verdict.
 func (r *EntRepository) CreateItemSessionWithVerdict(ctx context.Context, isData ItemSessionData, verdict ReviewVerdictData) (ItemSessionSummary, error) {
-	parsedItemID, err := uuid.Parse(isData.ItemID)
+	parsedItemID, err := r.resolveBacklogItemLookup(ctx, isData.ItemID)
 	if err != nil {
 		return ItemSessionSummary{}, fmt.Errorf("invalid item id %q: %w", isData.ItemID, err)
 	}
@@ -569,10 +832,9 @@ func (r *EntRepository) CreateItemSessionWithVerdict(ctx context.Context, isData
 	// verdict-recording paths (RPC and MCP submit_review_verdict) converge on
 	// one event kind, each carrying the verdict inline.
 	if item, lookupErr := r.GetBacklogItem(ctx, isData.ItemID); lookupErr != nil {
-		log.WarningLog.Printf("[EntRepository] CreateItemSessionWithVerdict: failed to resolve backlog item %s for publish: %v", isData.ItemID, lookupErr)
+		log.WarningLog().Printf("[EntRepository] CreateItemSessionWithVerdict: failed to resolve backlog item %s for publish: %v", isData.ItemID, lookupErr)
 	} else {
-		r.attachItemSessionsForPublish(ctx, item)
-		r.publishItemChanged(item, BacklogItemChange{
+		r.publishItemChanged(ctx, item, BacklogItemChange{
 			Kind:    ChangeVerdictRecorded,
 			Verdict: &verdict,
 		})
@@ -643,12 +905,11 @@ func (r *EntRepository) ReconcileStuckItems(ctx context.Context) (int, error) {
 	for _, id := range transitionedIDs {
 		updated, getErr := r.client.BacklogItem.Get(ctx, id)
 		if getErr != nil {
-			log.WarningLog.Printf("[EntRepository] ReconcileStuckItems: failed to reload item %s for publish: %v", id, getErr)
+			log.WarningLog().Printf("[EntRepository] ReconcileStuckItems: failed to reload item %s for publish: %v", id, getErr)
 			continue
 		}
 		result := backlogItemToData(updated)
-		r.attachItemSessionsForPublish(ctx, &result)
-		r.publishItemChanged(&result, BacklogItemChange{
+		r.publishItemChanged(ctx, &result, BacklogItemChange{
 			Kind:      ChangeStatusTransition,
 			OldStatus: string(BacklogStatusInProgress),
 			NewStatus: string(BacklogStatusReview),
@@ -818,8 +1079,7 @@ func (r *EntRepository) BackfillMissingPRNumbers(ctx context.Context) (int, erro
 		// missing by the Phase 5 spec-compliance sweep's follow-up pass over the
 		// remaining publish-hook bypasses (docs/tasks/backlog-feature-improvement.md).
 		result := backlogItemToData(updated)
-		r.attachItemSessionsForPublish(ctx, &result)
-		r.publishItemChanged(&result, BacklogItemChange{
+		r.publishItemChanged(ctx, &result, BacklogItemChange{
 			Kind:          ChangeItemUpdated,
 			UpdatedFields: []string{"prNumber"},
 		})
@@ -850,6 +1110,7 @@ type OpenStuckStateData struct {
 	RemediationAttempts int32
 	NextRemediationAt   *time.Time
 	GraceBootTime       *time.Time
+	PlanArtifactsPath   string
 }
 
 // FindOpenStuckStates returns every BacklogStuckState row that is currently
@@ -892,6 +1153,7 @@ func (r *EntRepository) FindOpenStuckStates(ctx context.Context) ([]OpenStuckSta
 			data.ItemStatus = BacklogStatus(item.Status)
 			data.PrNumber = item.PrNumber
 			data.PrURL = item.PrURL
+			data.PlanArtifactsPath = item.PlanArtifactsPath
 		}
 		result = append(result, data)
 	}
@@ -904,7 +1166,7 @@ func (r *EntRepository) FindOpenStuckStates(ctx context.Context) ([]OpenStuckSta
 // most recently created ReviewVerdict associated with any ItemSession for the
 // given BacklogItem UUID. Returns "" (not an error) when no verdict exists yet.
 func (r *EntRepository) GetMostRecentReviewVerdictForItem(ctx context.Context, itemID string) (ReviewOutcome, error) {
-	parsedItemID, err := uuid.Parse(itemID)
+	parsedItemID, err := r.resolveBacklogItemLookup(ctx, itemID)
 	if err != nil {
 		return "", fmt.Errorf("invalid item id %q: %w", itemID, err)
 	}
@@ -933,11 +1195,11 @@ func (r *EntRepository) GetMostRecentReviewVerdictForItem(ctx context.Context, i
 
 // GetRecentReviewVerdictSummaries returns up to limit ReviewVerdicts for the
 // given BacklogItem UUID, most recent first. Reuses the existing
-// ReviewVerdictSummary DTO (see repository.go) — only OverallOutcome and
-// Summary are populated, since that's all callers (IsRepeatedFailure in
-// stuck_decisions.go) need.
+// ReviewVerdictSummary DTO (see repository.go) — only OverallOutcome,
+// Summary, and DiffHash are populated, since that's all callers
+// (IsRepeatedFailure and IsFlakyVerdictFlipFlop in stuck_decisions.go) need.
 func (r *EntRepository) GetRecentReviewVerdictSummaries(ctx context.Context, itemID string, limit int) ([]ReviewVerdictSummary, error) {
-	parsedItemID, err := uuid.Parse(itemID)
+	parsedItemID, err := r.resolveBacklogItemLookup(ctx, itemID)
 	if err != nil {
 		return nil, fmt.Errorf("invalid item id %q: %w", itemID, err)
 	}
@@ -964,6 +1226,7 @@ func (r *EntRepository) GetRecentReviewVerdictSummaries(ctx context.Context, ite
 			ID:             is.Edges.ReviewVerdict.ID.String(),
 			OverallOutcome: is.Edges.ReviewVerdict.OverallOutcome,
 			Summary:        is.Edges.ReviewVerdict.Summary,
+			DiffHash:       is.Edges.ReviewVerdict.DiffHash,
 		})
 	}
 	return result, nil
@@ -973,7 +1236,7 @@ func (r *EntRepository) GetRecentReviewVerdictSummaries(ctx context.Context, ite
 
 // UpdateAcCriterionStatus updates a single acceptance criterion's status by index.
 func (r *EntRepository) UpdateAcCriterionStatus(ctx context.Context, itemID string, criterionIndex int, status string, note string) error {
-	parsedID, err := uuid.Parse(itemID)
+	parsedID, err := r.resolveBacklogItemLookup(ctx, itemID)
 	if err != nil {
 		return fmt.Errorf("invalid item id %q: %w", itemID, err)
 	}
@@ -1020,8 +1283,7 @@ func (r *EntRepository) UpdateAcCriterionStatus(ctx context.Context, itemID stri
 	// until their next full poll/refresh — a real event-system bypass, not
 	// just a blanked field.
 	result := backlogItemToData(updated)
-	r.attachItemSessionsForPublish(ctx, &result)
-	r.publishItemChanged(&result, BacklogItemChange{
+	r.publishItemChanged(ctx, &result, BacklogItemChange{
 		Kind:          ChangeItemUpdated,
 		UpdatedFields: []string{"acceptanceCriteria"},
 	})
@@ -1101,7 +1363,7 @@ func (r *EntRepository) FindReviewItemsWithUnprocessedVerdict(ctx context.Contex
 // that JUST entered review isn't flagged before the reconciler has had a
 // chance to re-spawn a review gate.
 func (r *EntRepository) GetMostRecentStatusEventAt(ctx context.Context, itemID string, toStatus BacklogStatus) (time.Time, bool, error) {
-	parsedID, err := uuid.Parse(itemID)
+	parsedID, err := r.resolveBacklogItemLookup(ctx, itemID)
 	if err != nil {
 		return time.Time{}, false, fmt.Errorf("invalid item id %q: %w", itemID, err)
 	}
@@ -1127,7 +1389,7 @@ func (r *EntRepository) GetMostRecentStatusEventAt(ctx context.Context, itemID s
 // transitions for itemID created at or after since — the "round trip" signal
 // the bouncing detector (isBouncing) keys off.
 func (r *EntRepository) CountReviewCyclesSince(ctx context.Context, itemID string, since time.Time) (int, error) {
-	parsedID, err := uuid.Parse(itemID)
+	parsedID, err := r.resolveBacklogItemLookup(ctx, itemID)
 	if err != nil {
 		return 0, fmt.Errorf("invalid item id %q: %w", itemID, err)
 	}

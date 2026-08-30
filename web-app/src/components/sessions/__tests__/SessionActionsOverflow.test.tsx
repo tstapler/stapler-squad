@@ -25,6 +25,33 @@ jest.mock("@/lib/hooks/useFocusTrap", () => ({
   useFocusTrap: () => undefined,
 }));
 
+jest.mock("@/lib/contexts/SessionServiceContext", () => ({
+  useSessionServiceContext: () => ({
+    draftPullRequest: jest.fn(),
+    createPullRequest: jest.fn(),
+  }),
+}));
+
+// CreatePullRequestModal has its own dedicated test suite (CreatePullRequestModal.test.tsx) —
+// stub it here so these tests verify wiring (trigger -> open/close) without duplicating that
+// coverage, matching the same pattern used in ReviewQueuePanel.test.tsx.
+jest.mock("../CreatePullRequestModal", () => ({
+  CreatePullRequestModal: ({
+    session,
+    isOpen,
+    onClose,
+  }: {
+    session: { id: string };
+    isOpen: boolean;
+    onClose: () => void;
+  }) =>
+    isOpen ? (
+      <div data-testid="create-pr-modal" data-session-id={session.id}>
+        <button onClick={onClose}>Close</button>
+      </div>
+    ) : null,
+}));
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -325,6 +352,155 @@ describe("SessionActionsOverflow", () => {
       rerender(<SessionActionsOverflow session={updatedSession} onChangeProgram={jest.fn()} />);
 
       expect(screen.getByRole("combobox")).toHaveValue("agy");
+    });
+  });
+
+  describe("Create PR trigger", () => {
+    it("disables the Create PR trigger (with tooltip) when the session has no commits ahead (State B)", () => {
+      const session = makeSession({ hasCommitsAhead: false, githubPrUrl: "" });
+      renderOverflow({ session });
+      openMenu();
+
+      const trigger = screen.getByTestId(`create-pr-trigger-${session.id}`);
+      expect(trigger).toBeDisabled();
+      expect(trigger).toHaveAttribute("title", "No commits ahead of main yet");
+    });
+
+    it("enables the Create PR trigger when the session has commits ahead (State A)", () => {
+      const session = makeSession({ hasCommitsAhead: true, githubPrUrl: "" });
+      renderOverflow({ session });
+      openMenu();
+
+      const trigger = screen.getByTestId(`create-pr-trigger-${session.id}`);
+      expect(trigger).not.toBeDisabled();
+    });
+
+    it("shows a View PR link instead of the trigger when the session already has a githubPrUrl (State C)", () => {
+      const session = makeSession({
+        githubPrUrl: "https://github.com/org/repo/pull/99",
+        githubPrNumber: 99,
+      });
+      renderOverflow({ session });
+      openMenu();
+
+      expect(screen.queryByTestId(`create-pr-trigger-${session.id}`)).not.toBeInTheDocument();
+      const link = screen.getByTestId("github-pr-link");
+      expect(link).toHaveAttribute("href", "https://github.com/org/repo/pull/99");
+      expect(link).toHaveTextContent("#99");
+    });
+
+    it("opens the shared CreatePullRequestModal for the session when the enabled trigger is clicked", () => {
+      const session = makeSession({ hasCommitsAhead: true, githubPrUrl: "" });
+      renderOverflow({ session });
+      openMenu();
+
+      fireEvent.click(screen.getByTestId(`create-pr-trigger-${session.id}`));
+
+      const modal = screen.getByTestId("create-pr-modal");
+      expect(modal).toBeInTheDocument();
+      expect(modal).toHaveAttribute("data-session-id", session.id);
+    });
+
+    it("closes the modal when the modal's onClose fires", () => {
+      const session = makeSession({ hasCommitsAhead: true, githubPrUrl: "" });
+      renderOverflow({ session });
+      openMenu();
+
+      fireEvent.click(screen.getByTestId(`create-pr-trigger-${session.id}`));
+      fireEvent.click(screen.getByRole("button", { name: /close/i }));
+
+      expect(screen.queryByTestId("create-pr-modal")).not.toBeInTheDocument();
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Give Direction / steer dialog (pr-fix-steering Story 1.1.3): the dialog
+  // must check the steer RPC's result instead of unconditionally closing —
+  // see plan.md's Task 1.1.3c.
+  // -------------------------------------------------------------------------
+  describe("give direction (steer) dialog", () => {
+    function openSteerDialog(onSteerAutonomousSession: jest.Mock) {
+      const session = makeSession({ autonomousMode: true });
+      renderOverflow({ session, onSteerAutonomousSession });
+      openMenu();
+      fireEvent.click(screen.getByRole("menuitem", { name: /give direction/i }));
+      const input = screen.getByPlaceholderText(/focus on the ui tests first/i);
+      fireEvent.change(input, { target: { value: "fix the bug" } });
+      return input;
+    }
+
+    it("keeps the dialog open and preserves the message when the steer call resolves false", async () => {
+      const onSteerAutonomousSession = jest.fn().mockResolvedValue(false);
+      const input = openSteerDialog(onSteerAutonomousSession);
+
+      fireEvent.keyDown(input, { key: "Enter" });
+      await waitFor(() => expect(onSteerAutonomousSession).toHaveBeenCalledWith("session-1", "fix the bug"));
+
+      expect(screen.getByRole("dialog", { name: /give direction/i })).toBeInTheDocument();
+      expect(screen.getByDisplayValue("fix the bug")).toBeInTheDocument();
+    });
+
+    it("closes the dialog and clears the message when the steer call resolves true", async () => {
+      const onSteerAutonomousSession = jest.fn().mockResolvedValue(true);
+      const input = openSteerDialog(onSteerAutonomousSession);
+
+      fireEvent.keyDown(input, { key: "Enter" });
+      await waitFor(() =>
+        expect(screen.queryByRole("dialog", { name: /give direction/i })).not.toBeInTheDocument()
+      );
+    });
+
+    it("disables the Send button and input while the steer call is pending, and ignores a second click", async () => {
+      let resolveSteer: (ok: boolean) => void = () => {};
+      const pending = new Promise<boolean>((resolve) => {
+        resolveSteer = resolve;
+      });
+      const onSteerAutonomousSession = jest.fn().mockReturnValue(pending);
+      openSteerDialog(onSteerAutonomousSession);
+
+      const sendButton = screen.getByRole("button", { name: /send/i });
+      fireEvent.click(sendButton);
+
+      await waitFor(() => expect(sendButton).toBeDisabled());
+      expect(screen.getByPlaceholderText(/focus on the ui tests first/i)).toBeDisabled();
+
+      // A second click while the RPC is in flight must not fire a duplicate call.
+      fireEvent.click(sendButton);
+      expect(onSteerAutonomousSession).toHaveBeenCalledTimes(1);
+
+      await act(async () => {
+        resolveSteer(true);
+        await pending;
+      });
+
+      await waitFor(() =>
+        expect(screen.queryByRole("dialog", { name: /give direction/i })).not.toBeInTheDocument()
+      );
+    });
+
+    it("keeps Cancel enabled and Escape working while the steer call is pending", async () => {
+      let resolveSteer: (ok: boolean) => void = () => {};
+      const pending = new Promise<boolean>((resolve) => {
+        resolveSteer = resolve;
+      });
+      const onSteerAutonomousSession = jest.fn().mockReturnValue(pending);
+      const input = openSteerDialog(onSteerAutonomousSession);
+
+      fireEvent.keyDown(input, { key: "Enter" });
+      await waitFor(() => expect(onSteerAutonomousSession).toHaveBeenCalledTimes(1));
+
+      const cancelButton = screen.getByRole("button", { name: /^cancel$/i });
+      expect(cancelButton).not.toBeDisabled();
+
+      const dialog = screen.getByRole("dialog", { name: /give direction/i });
+      fireEvent.keyDown(dialog, { key: "Escape" });
+      expect(screen.queryByRole("dialog", { name: /give direction/i })).not.toBeInTheDocument();
+
+      // Avoid an unhandled-rejection/act warning from the now-orphaned promise.
+      resolveSteer(true);
+      await act(async () => {
+        await pending;
+      });
     });
   });
 });

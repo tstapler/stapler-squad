@@ -60,7 +60,7 @@ func (s *BacklogService) GetBacklogItem(
 	// Load item sessions with review verdicts so the detail panel can show gate results.
 	isSessions, isErr := s.storage.ListItemSessions(ctx, req.Msg.ItemId)
 	if isErr != nil {
-		log.ErrorLog.Printf("[GetBacklogItem] failed to load item sessions for %s: %v", req.Msg.ItemId, isErr)
+		log.ErrorLog().Printf("[GetBacklogItem] failed to load item sessions for %s: %v", req.Msg.ItemId, isErr)
 		// Non-fatal: return item without sessions.
 	} else {
 		// Tombstone stale headless-triage sessions (no endedAt, older than maxTriageSessionAge)
@@ -239,7 +239,7 @@ func (s *BacklogService) SearchGitHubRepos(ctx context.Context, req *connect.Req
 	if limit <= 0 {
 		limit = 30
 	}
-	results, err := gh.SearchUserRepos(ctx, req.Msg.Query, limit)
+	results, err := gh.SearchUserRepos(ctx, gh.AccountRef{}, req.Msg.Query, limit)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("search repos: %w", err))
 	}
@@ -271,7 +271,11 @@ func (s *BacklogService) ListGitHubIssues(ctx context.Context, req *connect.Requ
 	if limit <= 0 {
 		limit = 30
 	}
-	results, err := gh.ListRepoIssues(ctx, req.Msg.Owner, req.Msg.Repo, req.Msg.State, req.Msg.Search, limit)
+	repo, err := gh.NewRepoRef(req.Msg.Owner, req.Msg.Repo)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInvalidArgument, err)
+	}
+	results, err := gh.ListRepoIssues(ctx, gh.AccountRef{}, repo, req.Msg.State, req.Msg.Search, limit)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("list issues: %w", err))
 	}

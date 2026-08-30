@@ -3,6 +3,7 @@ package session
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -15,6 +16,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/headless"
+	"github.com/tstapler/stapler-squad/session/vc"
 )
 
 // secretPatterns lists compiled regexes for obvious secret patterns.
@@ -265,6 +267,18 @@ func BuildReviewPrompt(item *BacklogItemData, acSnapshot []AcCriterion, diff str
 	// --- diff ---
 	sb.WriteString("## Git Diff\n")
 	if diff == "" {
+		// ReviewGateRunner.Run (review_gate.go), the sole caller that reaches this
+		// function via reviewPromptFor, blocks on committedDiffEmpty with a synthetic
+		// FAIL verdict for every empty-diff session EXCEPT one: a report_duplicate
+		// claim, which carries a duplicate_ref= marker in VerificationNotes and is
+		// deliberately let through with an empty diff so a real reviewer can confirm
+		// the claim (backlog item e2373931) — that is the one live-reachable path here
+		// today. Every other empty-diff session still hits the FAIL guard and never
+		// reaches this branch. Unlike BuildHeadlessReviewPrompt's diff=="" branch,
+		// which the sdd-mode headless TriggerReReview path
+		// (backlog_service_triage.go's reviewPromptFor) also reaches and which carries
+		// ReviewContextExtras for that reason, this branch has no such extras — do not
+		// add that plumbing here without first confirming this caller needs it too.
 		sb.WriteString("(no diff available — no committed code changes were found for this session)\n\n")
 		sb.WriteString("## No-Diff Verification\n")
 		sb.WriteString("This can mean the criteria were already satisfied before this session started, or that no work happened. Check each criterion against the CURRENT codebase yourself using your available tools before verdicting; do not rely on the work session's note or verification evidence alone.\n\n")
@@ -289,6 +303,7 @@ func BuildReviewPrompt(item *BacklogItemData, acSnapshot []AcCriterion, diff str
 	sb.WriteString("  - outcome values: PASS, FAIL, PARTIAL, UNVERIFIABLE\n")
 	sb.WriteString("  - evidence: direct quote or reference from the diff\n\n")
 	fmt.Fprintf(&sb, "item_id (pass this as item_id to submit_review_verdict): %s\n", item.ID)
+	sb.WriteString("\nEnd your session immediately after calling submit_review_verdict. Do not wait, poll, or do further work — an idle-but-alive reviewer session leaves the item stuck in review.\n")
 
 	return sb.String()
 }
@@ -362,8 +377,17 @@ func BuildHeadlessReviewPrompt(item *BacklogItemData, acSnapshot []AcCriterion, 
 	sb.WriteString("## Instructions\n")
 	sb.WriteString("Evaluate every acceptance criterion against the diff above. Also verify the implementation follows the plan (if provided).\n")
 	sb.WriteString("Output ONLY a single JSON object with no surrounding text:\n")
-	sb.WriteString(`{"overall":"PASS","summary":"concise assessment","verdicts":[{"criterion_index":0,"outcome":"PASS","evidence":"direct quote from diff"}]}`)
-	sb.WriteString("\nValid outcome values: PASS, FAIL, PARTIAL, UNVERIFIABLE.\n")
+	if diff == "" {
+		// Must match headless.HeadlessReviewSystemPromptWithCodebaseAccess()'s schema
+		// example exactly: that system prompt requires tool_reads on this path, and
+		// DegradeIfUnverified force-downgrades the verdict to UNVERIFIABLE unless it's
+		// present and every listed path verifies (see verifyToolReadsExist below).
+		sb.WriteString(`{"overall":"PARTIAL","summary":"concise assessment","tool_reads":["auth/login.go","main.go"],"verdicts":[{"criterion_index":0,"outcome":"PASS","evidence":"auth/login.go:9-24 — quoted snippet you read yourself"}]}`)
+		sb.WriteString("\ntool_reads must list every file path you actually read via Read/Grep/Glob — verdicts not backed by a listed path are downgraded to UNVERIFIABLE.\n")
+	} else {
+		sb.WriteString(`{"overall":"PASS","summary":"concise assessment","verdicts":[{"criterion_index":0,"outcome":"PASS","evidence":"direct quote from diff"}]}`)
+	}
+	sb.WriteString("\nValid outcome values: PASS, FAIL, PARTIAL, UNVERIFIABLE. Mark a criterion UNVERIFIABLE rather than guessing if you cannot confirm it from what's in front of you — a missing or incomplete diff is a known limitation of this mode, not a signal the work is wrong.\n")
 
 	return sb.String()
 }
@@ -431,18 +455,38 @@ type headlessVerdictJSON struct {
 	Verdicts  []CriterionVerdict `json:"verdicts"`
 }
 
+// parseHeadlessVerdictJSON finds the last brace-delimited span in text that
+// unmarshals into headlessVerdictJSON with a non-empty overall or verdicts,
+// tolerating prose and stray unrelated braces around/before it — mirroring
+// ParseHeadlessTriageResult's use of extractTopLevelJSONObjects.
+func parseHeadlessVerdictJSON(text string) (headlessVerdictJSON, error) {
+	candidates := extractTopLevelJSONObjects(text)
+	var lastErr error
+	for i := len(candidates) - 1; i >= 0; i-- {
+		var v headlessVerdictJSON
+		if err := json.Unmarshal([]byte(candidates[i]), &v); err != nil {
+			lastErr = err
+			continue
+		}
+		if v.Overall == "" && len(v.Verdicts) == 0 {
+			// Syntactically valid but not a verdict object (e.g. a decoy/example
+			// object quoted earlier in the response) — keep looking.
+			continue
+		}
+		return v, nil
+	}
+	if lastErr == nil {
+		lastErr = fmt.Errorf("no JSON object found")
+	}
+	return headlessVerdictJSON{}, lastErr
+}
+
 // ParseHeadlessVerdictResult extracts verdict data from a headless LLM JSON response.
 // It searches for the outermost JSON object in text, tolerating prose around it.
 // Returns ReviewOutcomeFail overall if parsing fails or no verdicts are present.
 func ParseHeadlessVerdictResult(text string) (overall ReviewOutcome, verdicts []CriterionVerdict, summary string) {
-	start := strings.Index(text, "{")
-	end := strings.LastIndex(text, "}")
-	if start == -1 || end <= start {
-		return ReviewOutcomeFail, nil, "headless review response contained no parseable JSON"
-	}
-
-	var v headlessVerdictJSON
-	if err := json.Unmarshal([]byte(text[start:end+1]), &v); err != nil {
+	v, err := parseHeadlessVerdictJSON(text)
+	if err != nil {
 		return ReviewOutcomeFail, nil, fmt.Sprintf("headless review JSON parse failed: %v", err)
 	}
 
@@ -460,13 +504,8 @@ func ParseHeadlessVerdictResult(text string) (overall ReviewOutcome, verdicts []
 // ParseHeadlessToolReads extracts the tool_reads list from a headless LLM JSON
 // response. Returns nil if the field is absent or the JSON doesn't parse.
 func ParseHeadlessToolReads(text string) []string {
-	start := strings.Index(text, "{")
-	end := strings.LastIndex(text, "}")
-	if start == -1 || end <= start {
-		return nil
-	}
-	var v headlessVerdictJSON
-	if err := json.Unmarshal([]byte(text[start:end+1]), &v); err != nil {
+	v, err := parseHeadlessVerdictJSON(text)
+	if err != nil {
 		return nil
 	}
 	return v.ToolReads
@@ -582,12 +621,13 @@ func recordTerminalReviewVerdict(storage *Storage, itemID string, acSnapshot AcC
 	}, ReviewVerdictData{
 		OverallOutcome: outcome,
 		Summary:        summary,
+		DiffHash:       storage.ComputeCurrentDiffHash(cleanupCtx, itemID),
 	})
 	if err != nil {
 		return ItemSessionSummary{}, err
 	}
 	if updateErr := storage.UpdateItemSessionEnded(cleanupCtx, is.ID, time.Now()); updateErr != nil { //nolint:silenttransition bookkeeping timestamp only; the caller proceeds regardless (returns is, nil below either way), matching the convention of the other review-session-end bookkeeping call sites
-		log.WarningLog.Printf("[headless] recordTerminalReviewVerdict UpdateItemSessionEnded item=%s session=%s: %v", itemID, is.ID, updateErr)
+		log.WarningLog().Printf("[headless] recordTerminalReviewVerdict UpdateItemSessionEnded item=%s session=%s: %v", itemID, is.ID, updateErr)
 	}
 	return is, nil
 }
@@ -631,6 +671,45 @@ func IsWorktreeDirty(ctx context.Context, worktreePath string) (bool, error) {
 		return false, fmt.Errorf("git status in %s: %w", worktreePath, err)
 	}
 	return len(strings.TrimSpace(string(out))) > 0, nil
+}
+
+// GetWorktreeDirtyPaths returns the specific paths with uncommitted changes
+// (untracked, modified, or renamed — new path only) in the git worktree at
+// worktreePath, deduplicated. Returns (nil, nil), not an error, when
+// worktreePath is not a git repository at all — unlike IsWorktreeDirty, which
+// surfaces that case as an error from the underlying `git status` subprocess.
+// Additive sibling to IsWorktreeDirty: does not replace its boolean-only
+// callers.
+//
+// Reuses vc.GitProvider.GetChangedFiles/parsePorcelainV2Z (NUL-safe,
+// rename-aware porcelain-v2 parsing) rather than reimplementing status
+// parsing — see session/vc/git_provider.go.
+func GetWorktreeDirtyPaths(worktreePath string) ([]string, error) {
+	provider, err := vc.NewGitProvider(worktreePath)
+	if err != nil {
+		if errors.Is(err, vc.ErrNoVCSFound) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("resolve vc provider for %s: %w", worktreePath, err)
+	}
+	changes, err := provider.GetChangedFiles()
+	if err != nil {
+		return nil, fmt.Errorf("get changed files in %s: %w", worktreePath, err)
+	}
+	// A path that is both staged and further modified in the worktree produces two
+	// FileChange entries with the same Path (one per XY half — see
+	// parsePorcelainV2Z's "1 "/"2 " record handling), so dedup here is required for
+	// correctness, not just defensive.
+	seen := make(map[string]struct{}, len(changes))
+	paths := make([]string, 0, len(changes))
+	for _, c := range changes {
+		if _, ok := seen[c.Path]; ok {
+			continue
+		}
+		seen[c.Path] = struct{}{}
+		paths = append(paths, c.Path)
+	}
+	return paths, nil
 }
 
 // GetGitDiff returns the diff of changes in worktreePath relative to baseSHA
@@ -688,26 +767,39 @@ func GetGitDiffRef(ctx context.Context, dir string, baseSHA string, headRef stri
 // worktrees.base_commit_sha was a stale/corrupted 40-char SHA unreachable from
 // any ref, causing every review attempt to see an empty diff and return a
 // false UNVERIFIABLE verdict even though real, complete work was committed on
-// the branch. Recomputes the merge-base of headRef against repoPath's own
-// checked-out HEAD, which is reachable from any worktree of the same repo
-// (worktrees share one object store). Returns an error if headRef itself
-// doesn't resolve either (e.g. the branch was deleted) — that case is not
-// recoverable here and must surface to a human.
-func RecoverBaseCommitSHA(ctx context.Context, repoPath, headRef string) (string, error) {
-	if headRef == "" {
-		return "", fmt.Errorf("cannot recover a base commit without a branch/ref to compare against")
+// the branch.
+//
+// Recomputes the merge-base of branchName against each candidate default branch in
+// turn, entirely via explicit refs — never implicit HEAD. The old implementation
+// compared HEAD (ambient in whatever directory it ran in) against branchName; when
+// run in the shared parent repoPath, that made the result depend on whatever branch
+// a concurrent process happened to leave repoPath checked out to (backlog item
+// e7664cbf). Naming both refs explicitly removes that dependency entirely: dir only
+// needs to be *some* valid git checkout of the same repo (worktrees share one object
+// store, so branch refs resolve identically from any of them) — callers should pass
+// the session's own dedicated worktree path when it still exists on disk, falling
+// back to the shared repoPath when it doesn't (e.g. a torn-down worktree whose
+// commits remain reachable via the shared object store). Returns an error if no
+// candidate resolves — that case is not recoverable here and must surface to a
+// human.
+func RecoverBaseCommitSHA(ctx context.Context, dir, branchName string) (string, error) {
+	if dir == "" || branchName == "" {
+		return "", fmt.Errorf("cannot recover a base commit without both a directory and a branch to compare against")
 	}
-	cmd := safeexec.CommandContext(ctx, "git", "merge-base", "HEAD", headRef)
-	cmd.Dir = repoPath
-	out, err := cmd.Output()
-	if err != nil {
-		return "", fmt.Errorf("git merge-base HEAD %s in %s: %w", headRef, repoPath, err)
+	var errs []error
+	for _, candidate := range git.CandidateDefaultBranches {
+		cmd := safeexec.CommandContext(ctx, "git", "merge-base", branchName, candidate)
+		cmd.Dir = dir
+		out, err := cmd.Output()
+		if err != nil {
+			errs = append(errs, fmt.Errorf("git merge-base %s %s in %s: %w", branchName, candidate, dir, err))
+			continue
+		}
+		if sha := strings.TrimSpace(string(out)); sha != "" {
+			return sha, nil
+		}
 	}
-	sha := strings.TrimSpace(string(out))
-	if sha == "" {
-		return "", fmt.Errorf("git merge-base HEAD %s in %s returned empty output", headRef, repoPath)
-	}
-	return sha, nil
+	return "", fmt.Errorf("no merge-base found for %s against any default branch (%s) in %s: %w", branchName, strings.Join(git.CandidateDefaultBranches, "/"), dir, errors.Join(errs...))
 }
 
 // readPlanFile reads plan.md from the given artifacts directory.

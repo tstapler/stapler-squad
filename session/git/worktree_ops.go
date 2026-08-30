@@ -2,20 +2,119 @@ package git
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"github.com/tstapler/stapler-squad/executor/safeexec"
-	"github.com/tstapler/stapler-squad/log"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/tstapler/stapler-squad/executor/safeexec"
+	"github.com/tstapler/stapler-squad/log"
+
 	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
 )
 
-// Setup creates a new worktree for the session
+// worktreeAddRetryAttempts and worktreeAddRetryDelay bound Ground-Truth Re-Query (ADR-001):
+// after a `worktree add` failure, both self-heal layers (setupNewWorktree,
+// setupFromExistingBranch) re-verify actual git state instead of pattern-matching the
+// failure's error text, retrying briefly in case the race winner's own `worktree
+// add`/`worktree list` is still in flight.
+//
+// Deliberately NOT copied from headSHARetryAttempts/headSHARetryDelay (util.go:285-288,
+// 3 attempts / 20ms total) — that pair bounds an in-process go-git torn-read against a
+// local file write (microsecond-scale). This retry instead waits out a concurrent `git
+// worktree add` *subprocess*, which can run up to runGitCommand's 30s timeout under CI
+// load. No local repro captured real contended-completion timing, so this is sized as a
+// materially larger bound than the unrelated precedent — a few seconds with backoff, not
+// tens of milliseconds — rather than reusing 20ms unexamined.
+const (
+	worktreeAddRetryAttempts = 6
+	worktreeAddRetryDelay    = 300 * time.Millisecond
+)
+
+// branchRefExists reports whether branchRef exists in repo, distinguishing a genuine
+// "no such branch" (plumbing.ErrReferenceNotFound) from any other ref-read error (I/O,
+// lock contention from a concurrent git worktree add/git branch, etc.) — the latter must
+// never be treated as "branch does not exist".
+func branchRefExists(repo *git.Repository, branchRef plumbing.ReferenceName) (bool, error) {
+	_, err := repo.Reference(branchRef, false)
+	switch {
+	case err == nil:
+		return true, nil
+	case errors.Is(err, plumbing.ErrReferenceNotFound):
+		return false, nil
+	default:
+		return false, fmt.Errorf("failed to check branch reference %s: %w", branchRef, err)
+	}
+}
+
+// branchExistsAfterAddFailure is setupNewWorktree's Ground-Truth Re-Query (ADR-001): after
+// a `worktree add -b` failure, poll branchRefExists up to worktreeAddRetryAttempts times
+// (sleeping worktreeAddRetryDelay between attempts) to give a concurrent race winner's own
+// still-in-flight `worktree add` a chance to finish, rather than deciding the outcome from
+// the failed command's error text. This supersedes an earlier, narrower fix (PR #595's
+// retryBranchRefExists) that only retried on a "cannot lock ref" string match — this
+// function's caller no longer inspects error text at all, so it already covers that case
+// (and any other unrecognized error string) uniformly; see ADR-001 for why.
+//
+// Re-opens the repository fresh on every attempt, mirroring getHeadCommitSHA's precedent
+// (util.go:310-329) — go-git has been observed to unreliably resolve state immediately
+// after a concurrent git-CLI operation on the same repo, so a stale in-memory
+// *git.Repository handle held across the whole loop is exactly the failure mode that
+// precedent exists to avoid.
+//
+// A transient error from branchRefExists itself (e.g. the same subprocess/lock contention
+// this retry is guarding against) consumes an attempt and the loop continues, rather than
+// aborting immediately — a single transient re-query failure is not evidence the branch
+// doesn't exist, and the loop is already bounded.
+func (g *GitWorktree) branchExistsAfterAddFailure(branchRef plumbing.ReferenceName) bool {
+	for attempt := 0; attempt < worktreeAddRetryAttempts; attempt++ {
+		if attempt > 0 {
+			time.Sleep(worktreeAddRetryDelay)
+		}
+		repo, err := git.PlainOpen(g.repoPath)
+		if err != nil {
+			log.Warn("branchExistsAfterAddFailure: failed to open repository, retrying", "repoPath", g.repoPath, "attempt", attempt, "err", err)
+			continue
+		}
+		exists, err := branchRefExists(repo, branchRef)
+		if err != nil {
+			log.Warn("branchExistsAfterAddFailure: transient error re-checking branch reference, retrying", "branch", g.branchName, "attempt", attempt, "err", err)
+			continue
+		}
+		if exists {
+			return true
+		}
+	}
+	return false
+}
+
+// Setup creates a new worktree for the session. The entire branch-check +
+// add/reuse dispatch is serialized per-repoPath (across goroutines and OS
+// processes) because git worktree add mutates shared .git/worktrees/
+// administrative metadata that is not safe under concurrent access -- see
+// WithRepoWorktreeLock.
 func (g *GitWorktree) Setup() error {
+	return WithRepoWorktreeLock(g.repoPath, g.setupLocked)
+}
+
+// SetupLocked runs the same setup logic as Setup but assumes the caller already holds
+// repoPath's worktree lock (via WithRepoWorktreeLock) -- e.g. because the caller needs to run
+// other repoPath-mutating work (like a corrupted-repo repair/re-clone) in the very same
+// critical section, immediately before the worktree add. Calling this without already
+// holding the lock defeats the cross-process guarantee Setup() normally provides. See
+// session.CreateBacklogWorktree for the motivating caller and the race this closes: without
+// it, one process's unlocked repo repair (os.RemoveAll + re-clone) could delete/recreate
+// repoPath's working tree while a concurrent process was mid-way through the locked
+// `git worktree add` for the same repoPath, plausibly surfacing as git's generic
+// "fatal: failed to resolve HEAD as a valid ref".
+func (g *GitWorktree) SetupLocked() error {
+	return g.setupLocked()
+}
+
+func (g *GitWorktree) setupLocked() error {
 	// Ensure worktrees directory exists early (can be done in parallel with branch check)
 	worktreesDir, err := getWorktreeDirectory()
 	if err != nil {
@@ -40,9 +139,13 @@ func (g *GitWorktree) Setup() error {
 		}
 
 		branchRef := plumbing.NewBranchReferenceName(g.branchName)
-		if _, err := repo.Reference(branchRef, false); err == nil {
-			branchExists = true
+		exists, err := branchRefExists(repo, branchRef)
+		if err != nil {
+			log.Error("failed to check branch reference", "branch", g.branchName, "error", err)
+			errChan <- err
+			return
 		}
+		branchExists = exists
 		errChan <- nil
 	}()
 
@@ -68,6 +171,18 @@ func (g *GitWorktree) Setup() error {
 // and needlessly recreated the directory, which is exactly the behavior that left a
 // still in_progress/review item with a missing worktree once anything else (a
 // concurrent cleanup call, or simply a slow-running review) touched it mid-recreation.
+//
+// setupNewWorktree and setupFromExistingBranch are only ever reached, in production,
+// through Setup()/SetupLocked() (worktree_ops.go:53-70), both of which serialize via
+// WithRepoWorktreeLock before calling either. The specific two-unlocked-goroutines race
+// TestSetupNewWorktree_SelfHeals_When_ConcurrentSpawnsRaceOnBranchCreate constructs (by
+// calling setupNewWorktree directly, unlocked) cannot occur through any real caller —
+// confirmed by TestSetup_SerializesConcurrentWorktreeCreation_When_MultipleGoroutinesRaceOnSameRepo.
+// The self-heal fallback below is still real defense-in-depth, though: a branch can exist
+// for reasons other than a lost create race (a manual `git branch`, a prior partial run),
+// and the same Ground-Truth Re-Query handles that case identically. See
+// ADR-001-ground-truth-requery-over-stderr-matching.md for why the self-heal decision
+// mechanism is a git-state re-query rather than matching the failed command's error text.
 func (g *GitWorktree) setupFromExistingBranch() error {
 	// Directory already created in Setup(), skip duplicate creation
 
@@ -81,33 +196,27 @@ func (g *GitWorktree) setupFromExistingBranch() error {
 	// locked (initializing) by an interrupted `worktree add` — the exact state
 	// worktreeAlreadyRegisteredForBranch just rejected above — otherwise refuses
 	// `remove` regardless of -f, leaving the broken checkout stuck forever.
-	_, _ = g.runGitCommand(g.repoPath, "worktree", "unlock", g.worktreePath)     // Ignore error if not locked
+	_, _ = g.runGitCommand(g.repoPath, "worktree", "unlock", g.worktreePath)       // Ignore error if not locked
 	_, _ = g.runGitCommand(g.repoPath, "worktree", "remove", "-f", g.worktreePath) // Ignore error if worktree doesn't exist
 
 	// Create a new worktree from the existing branch
 	if _, err := g.runGitCommand(g.repoPath, "worktree", "add", g.worktreePath, g.branchName); err != nil {
-		// Check if the error is because the branch is already checked out elsewhere
-		if strings.Contains(err.Error(), "already checked out") {
-			// Try to find and connect to the existing worktree
-			log.Info("branch is already checked out, attempting to locate existing worktree", "branch", g.branchName)
+		// Ground-Truth Re-Query (ADR-001): rather than gating on specific error text
+		// (git's "already checked out"/"already used by worktree" wording, which varies
+		// by version and locale — and, per this fix's root-cause finding, doesn't cover
+		// a timeout-killed subprocess's "signal: killed" either), unconditionally
+		// re-check actual git state for any failure here. This is the second self-heal
+		// layer for the same concurrent-spawn race setupNewWorktree's own Re-Query
+		// handles: by the time this call runs, a race winner may have already checked
+		// out the branch into its own worktree.
+		log.Info("worktree add failed, checking whether the branch is already checked out elsewhere", "branch", g.branchName, "err", err)
 
-			// List all worktrees to find where this branch is checked out
-			output, listErr := g.runGitCommand(g.repoPath, "worktree", "list", "--porcelain")
-			if listErr != nil {
-				return fmt.Errorf("failed to list worktrees while handling checkout conflict: %w", listErr)
-			}
-
-			// Parse worktree list to find the one with our branch
-			existingPath, found := g.findWorktreeForBranch(output, g.branchName)
-			if found {
-				log.Info("found existing worktree for branch, using it instead", "branch", g.branchName, "path", existingPath)
-				g.worktreePath = existingPath
-				g.initBaseCommitSHA()
-				return nil
-			}
-
-			// If we can't find the existing worktree, return the original error
-			return fmt.Errorf("failed to create worktree from branch %s (branch already checked out elsewhere, but could not locate existing worktree): %w", g.branchName, err)
+		existingPath, found := g.findLiveWorktreeForBranch()
+		if found {
+			log.Info("found existing worktree for branch, using it instead", "branch", g.branchName, "path", existingPath)
+			g.worktreePath = existingPath
+			g.initBaseCommitSHA()
+			return nil
 		}
 
 		return fmt.Errorf("failed to create worktree from branch %s: %w", g.branchName, err)
@@ -123,8 +232,13 @@ func (g *GitWorktree) setupFromExistingBranch() error {
 // stores it in g.baseCommitSHA. Non-fatal: if no default branch is found the field
 // remains empty and Diff() will fall back to its own resolution.
 func (g *GitWorktree) initBaseCommitSHA() {
-	for _, branch := range []string{"main", "master", "develop", "trunk"} {
-		output, err := g.runGitCommand(g.repoPath, "merge-base", "HEAD", branch)
+	for _, branch := range CandidateDefaultBranches {
+		// cwd must be g.worktreePath, not g.repoPath: HEAD needs to resolve to this
+		// worktree's own branch tip. g.repoPath is the shared parent checkout, whose
+		// ambient checked-out branch can be anything a concurrent process left it on
+		// (mirrors the fix in resolveBaseCommitSHA, session/git/diff.go, which already
+		// does this correctly).
+		output, err := g.runGitCommand(g.worktreePath, "merge-base", "HEAD", branch)
 		if err == nil {
 			if sha := strings.TrimSpace(output); sha != "" {
 				g.baseCommitSHA = sha
@@ -159,7 +273,11 @@ func (g *GitWorktree) worktreeAlreadyRegisteredForBranch() bool {
 		return false
 	}
 	path, found := g.findWorktreeForBranch(output, g.branchName)
-	if !found || path != g.worktreePath {
+	// g.worktreePath may still be a raw, not-yet-migrated path (e.g. rehydrated
+	// from storage written before this normalization existed), while path always
+	// comes from git's realpath'd 'worktree list' output — canonicalize both
+	// sides so the comparison isn't defeated by a stale spelling difference.
+	if !found || CanonicalizeWorktreePath(path) != CanonicalizeWorktreePath(g.worktreePath) {
 		return false
 	}
 	return !isWorktreeLocked(output, g.worktreePath)
@@ -213,7 +331,58 @@ func (g *GitWorktree) findWorktreeForBranch(porcelainOutput, targetBranch string
 	return "", false
 }
 
-// setupNewWorktree creates a new worktree from HEAD
+// findLiveWorktreeForBranch is setupFromExistingBranch's Ground-Truth Re-Query (ADR-001):
+// after a `worktree add` failure, poll `git worktree list --porcelain` up to
+// worktreeAddRetryAttempts times (sleeping worktreeAddRetryDelay between attempts) looking
+// for g.branchName registered to some other worktree path — giving a concurrent race
+// winner's own still-in-flight worktree registration a chance to complete, symmetric with
+// setupNewWorktree's branchExistsAfterAddFailure.
+//
+// Before returning a match, verifies the path is actually present on disk (os.Stat),
+// mirroring worktreeAlreadyRegisteredForBranch's existing liveness check: a stale/prunable
+// 'worktree list --porcelain' entry left by an earlier crashed run (registered in git's
+// metadata but with no directory on disk) must not be silently adopted as a live worktree
+// — that would mask a genuine, unrelated `worktree add` failure (disk full, permission
+// denied) that happened to coincide with such a stale entry for the same branch name.
+//
+// A transient error from the `worktree list` subprocess itself consumes an attempt and the
+// loop continues, rather than aborting immediately, for the same reason
+// branchExistsAfterAddFailure does.
+func (g *GitWorktree) findLiveWorktreeForBranch() (string, bool) {
+	for attempt := 0; attempt < worktreeAddRetryAttempts; attempt++ {
+		if attempt > 0 {
+			time.Sleep(worktreeAddRetryDelay)
+		}
+		output, err := g.runGitCommand(g.repoPath, "worktree", "list", "--porcelain")
+		if err != nil {
+			log.Warn("findLiveWorktreeForBranch: transient error listing worktrees, retrying", "branch", g.branchName, "attempt", attempt, "err", err)
+			continue
+		}
+		path, found := g.findWorktreeForBranch(output, g.branchName)
+		if !found {
+			continue
+		}
+		// git realpath's the path it reports in 'worktree list' output, so canonicalize
+		// before storing to keep this consistent with the already-resolved paths
+		// getWorktreeDirectory hands to fresh creates.
+		path = CanonicalizeWorktreePath(path)
+		if _, statErr := os.Stat(path); statErr != nil {
+			log.Warn("findLiveWorktreeForBranch: found branch registered to a worktree path that doesn't exist on disk, treating as not found", "branch", g.branchName, "path", path, "err", statErr)
+			continue
+		}
+		return path, true
+	}
+	return "", false
+}
+
+// setupNewWorktree creates a new worktree from HEAD.
+//
+// Like setupFromExistingBranch (see its doc comment), setupNewWorktree is only ever
+// reached, in production, through Setup()/SetupLocked(), both of which serialize via
+// WithRepoWorktreeLock — the two-unlocked-goroutines race
+// TestSetupNewWorktree_SelfHeals_When_ConcurrentSpawnsRaceOnBranchCreate constructs cannot
+// occur through any real caller. The self-heal fallback below is still real
+// defense-in-depth: see ADR-001-ground-truth-requery-over-stderr-matching.md.
 func (g *GitWorktree) setupNewWorktree() error {
 	// Ensure worktrees directory exists
 	worktreesDir := filepath.Join(g.repoPath, "worktrees")
@@ -232,7 +401,12 @@ func (g *GitWorktree) setupNewWorktree() error {
 
 	// Check if the branch already exists - if so, use it instead of cleaning up
 	branchRef := plumbing.NewBranchReferenceName(g.branchName)
-	if _, err := repo.Reference(branchRef, false); err == nil {
+	exists, err := branchRefExists(repo, branchRef)
+	if err != nil {
+		log.Error("failed to check branch reference", "branch", g.branchName, "error", err)
+		return err
+	}
+	if exists {
 		// Branch exists - use setupFromExistingBranch instead
 		log.Info("branch already exists, using existing branch for worktree", "branch", g.branchName)
 		return g.setupFromExistingBranch()
@@ -243,23 +417,45 @@ func (g *GitWorktree) setupNewWorktree() error {
 		return fmt.Errorf("failed to cleanup existing branch: %w", err)
 	}
 
-	output, err := g.runGitCommand(g.repoPath, "rev-parse", "HEAD")
-	if err != nil {
-		if strings.Contains(err.Error(), "fatal: ambiguous argument 'HEAD'") ||
-			strings.Contains(err.Error(), "fatal: not a valid object name") ||
-			strings.Contains(err.Error(), "fatal: HEAD: not a valid object name") {
-			return fmt.Errorf("this appears to be a brand new repository: please create an initial commit before creating an instance")
+	// A caller that already knows the commit it wants (e.g. NewGitWorktreeFromCommitSHA,
+	// or CreateBacklogWorktree resolving origin/main's true tip before branching) sets
+	// baseCommitSHA ahead of time — respect it instead of clobbering it with whatever
+	// repoPath's own checkout happens to have as HEAD right now. Only fall back to
+	// rev-parse HEAD (branch from the current checkout, same as always) when no base
+	// was pre-selected.
+	headCommit := g.baseCommitSHA
+	if headCommit == "" {
+		output, err := g.runGitCommand(g.repoPath, "rev-parse", "HEAD")
+		if err != nil {
+			if strings.Contains(err.Error(), "fatal: ambiguous argument 'HEAD'") ||
+				strings.Contains(err.Error(), "fatal: not a valid object name") ||
+				strings.Contains(err.Error(), "fatal: HEAD: not a valid object name") {
+				return fmt.Errorf("this appears to be a brand new repository: please create an initial commit before creating an instance")
+			}
+			return fmt.Errorf("failed to get HEAD commit hash: %w", err)
 		}
-		return fmt.Errorf("failed to get HEAD commit hash: %w", err)
+		headCommit = strings.TrimSpace(string(output))
+		g.baseCommitSHA = headCommit
 	}
-	headCommit := strings.TrimSpace(string(output))
-	g.baseCommitSHA = headCommit
 
-	// Create a new worktree from the HEAD commit
+	// Create a new worktree from the resolved base commit.
 	// Otherwise, we'll inherit uncommitted changes from the previous worktree.
 	// This way, we can start the worktree with a clean slate.
-	// TODO: we might want to give an option to use main/master instead of the current branch.
 	if _, err := g.runGitCommand(g.repoPath, "worktree", "add", "-b", g.branchName, g.worktreePath, headCommit); err != nil {
+		// Two concurrent spawns for the same backlog item compute the identical
+		// deterministic branch name (see backlogWorkBranchSlug) and can both pass the
+		// branchRefExists check above before either creates the branch — the loser's
+		// `worktree add -b` then fails, leaving a branch with no worktree. Ground-Truth
+		// Re-Query (ADR-001): rather than inferring a lost race from err's text (which
+		// misses a timeout-killed subprocess's "signal: killed", a lock-contended
+		// "cannot lock ref", a locale-translated message, or a future git wording
+		// change — see ADR-001), re-check actual git state directly. Any error here
+		// still falls through to the hard error below if the branch genuinely never
+		// appears.
+		if g.branchExistsAfterAddFailure(branchRef) {
+			log.Info("branch already exists (lost a concurrent create race), reusing it for worktree", "branch", g.branchName)
+			return g.setupFromExistingBranch()
+		}
 		return fmt.Errorf("failed to create worktree from commit %s: %w", headCommit, err)
 	}
 
@@ -282,8 +478,14 @@ func (g *GitWorktree) Cleanup() error {
 	return g.Prune()
 }
 
-// Remove removes the worktree but keeps the branch
+// Remove removes the worktree but keeps the branch. Serialized per-repoPath like Setup —
+// it prunes and removes shared .git/worktrees/ administrative metadata, the same resource
+// Setup's branch-check + add dispatch touches.
 func (g *GitWorktree) Remove() error {
+	return WithRepoWorktreeLock(g.repoPath, g.removeLocked)
+}
+
+func (g *GitWorktree) removeLocked() error {
 	log.Info("starting worktree removal", "path", g.worktreePath)
 
 	// First, prune any stale worktree references
@@ -451,12 +653,15 @@ func (g *GitWorktree) forceCleanupWorktree() error {
 	return nil
 }
 
-// Prune removes all working tree administrative files and directories
+// Prune removes all working tree administrative files and directories. Serialized
+// per-repoPath like Setup/Remove — it rewrites the same shared .git/worktrees/ metadata.
 func (g *GitWorktree) Prune() error {
-	if _, err := g.runGitCommand(g.repoPath, "worktree", "prune"); err != nil {
-		return fmt.Errorf("failed to prune worktrees: %w", err)
-	}
-	return nil
+	return WithRepoWorktreeLock(g.repoPath, func() error {
+		if _, err := g.runGitCommand(g.repoPath, "worktree", "prune"); err != nil {
+			return fmt.Errorf("failed to prune worktrees: %w", err)
+		}
+		return nil
+	})
 }
 
 // CleanupWorktrees removes all worktree directories under the configured worktrees dir.

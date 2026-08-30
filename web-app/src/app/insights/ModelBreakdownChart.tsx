@@ -22,7 +22,9 @@ import {
   legendItem,
   legendDot,
   unpricedLabel,
+  cacheHitLabel,
 } from "./ModelBreakdownChart.css";
+import { fmtCost, fmtPct, computeCacheHitRate } from "./insightsFormatters";
 
 interface Props {
   models: ModelBreakdown[];
@@ -45,6 +47,7 @@ interface DataPoint {
   cost: number;
   color: string;
   pricingUnavailable: boolean;
+  cacheHitRate: number;
 }
 
 function toDataPoints(models: ModelBreakdown[]): DataPoint[] {
@@ -55,11 +58,8 @@ function toDataPoints(models: ModelBreakdown[]): DataPoint[] {
       cost: m.estimatedCostUsd,
       color: PALETTE[i % PALETTE.length],
       pricingUnavailable: m.pricingUnavailable,
+      cacheHitRate: computeCacheHitRate(Number(m.totalInputTokens), Number(m.cacheReadTokens)),
     }));
-}
-
-function fmtDollar(v: number): string {
-  return `$${v.toFixed(3)}`;
 }
 
 export function ModelBreakdownChart({ models }: Props) {
@@ -88,14 +88,14 @@ export function ModelBreakdownChart({ models }: Props) {
               axisLine={false}
             />
             <YAxis
-              tickFormatter={fmtDollar}
+              tickFormatter={fmtCost}
               tick={{ fontSize: 11 }}
               tickLine={false}
               axisLine={false}
               width={56}
             />
             <Tooltip
-              formatter={(v: unknown) => [fmtDollar(Number(v)), "Cost"]}
+              formatter={(v: unknown) => [fmtCost(Number(v)), "Cost"]}
               contentStyle={{ fontSize: "12px" }}
             />
             <Bar dataKey="cost" radius={[4, 4, 0, 0]}>
@@ -112,6 +112,7 @@ export function ModelBreakdownChart({ models }: Props) {
           <div key={d.family} className={legendItem}>
             <div className={legendDot} style={{ background: d.color }} />
             {d.family}
+            <span className={cacheHitLabel}> {fmtPct(d.cacheHitRate)} cache hit</span>
             {d.pricingUnavailable && (
               <span className={unpricedLabel}> (pricing unavailable)</span>
             )}

@@ -21,15 +21,28 @@ import type { SuggestedRuleProto } from "@/gen/session/v1/types_pb";
 const mockRefresh = jest.fn();
 const mockUpsertRule = jest.fn();
 const mockDeleteRule = jest.fn();
+const mockReloadClaudeSettingsRules = jest.fn();
+
+// Mutable — reassigned by individual tests (e.g. the Risk column tests below) before
+// rendering. Must start with "mock" per babel-plugin-jest-hoist's out-of-scope-variable rule.
+let mockRules: unknown[] = [];
 
 jest.mock("@/lib/hooks/useApprovalRules", () => ({
   useApprovalRules: () => ({
-    rules: [],
+    rules: mockRules,
     loading: false,
     error: null,
     upsertRule: mockUpsertRule,
     deleteRule: mockDeleteRule,
     refresh: mockRefresh,
+    reloadClaudeSettingsRules: mockReloadClaudeSettingsRules,
+  }),
+}));
+
+const mockShowActionToast = jest.fn();
+jest.mock("@/lib/contexts/NotificationContext", () => ({
+  useNotifications: () => ({
+    showActionToast: mockShowActionToast,
   }),
 }));
 
@@ -183,10 +196,23 @@ function resetHookConfig() {
   hookConfig.cmd.cancel = jest.fn();
   hookConfig.cmd.clear = jest.fn();
 
+  mockRules = [];
+
   mockRefresh.mockClear();
   mockUpsertRule.mockClear();
   mockDeleteRule.mockClear();
   mockExportRules.mockClear();
+  mockReloadClaudeSettingsRules.mockReset();
+  mockReloadClaudeSettingsRules.mockResolvedValue({ success: true, ruleCount: 0, message: "" });
+  mockShowActionToast.mockClear();
+}
+
+/** Clicks the "Claude Settings" source-filter tab so the reload button/hint renders. */
+function switchToClaudeSettingsTab() {
+  const tabLabel = screen.getByText("Claude Settings");
+  const tabButton = tabLabel.closest("button");
+  if (!tabButton) throw new Error("Claude Settings tab button not found");
+  fireEvent.click(tabButton);
 }
 
 // ---------------------------------------------------------------------------
@@ -518,6 +544,58 @@ describe("ApprovalRulesPanel", () => {
     });
   });
 
+  // ── Risk column (review-queue-severity Epic 7 — riskLevel was already threaded through
+  // upsertRule/ApprovalRuleProto but never rendered) ────────────────────────────────────
+  describe("Risk column", () => {
+    function makeApprovalRule(overrides: Partial<Record<string, unknown>> = {}) {
+      return {
+        id: "rule-1",
+        name: "Test Rule",
+        toolName: "Bash",
+        toolPattern: "",
+        toolCategory: "",
+        commandPattern: "",
+        filePattern: "",
+        decision: AutoDecision.ESCALATE,
+        riskLevel: "critical",
+        reason: "",
+        alternative: "",
+        priority: 500,
+        enabled: true,
+        source: "seed",
+        programs: [],
+        subcommands: [],
+        blockedSubcommands: [],
+        requiredFlags: [],
+        forbiddenFlags: [],
+        pythonModes: [],
+        safePythonImportsOnly: false,
+        requiredFlagPrefixes: [],
+        requireCiPassing: false,
+        ...overrides,
+      };
+    }
+
+    it("ApprovalRulesPanel_should_RenderRiskColumnWithSeverityBadge_When_RuleHasRiskLevel", () => {
+      mockRules = [makeApprovalRule({ riskLevel: "critical" })];
+      render(<ApprovalRulesPanel />);
+      expect(screen.getByTestId("severity-badge-critical")).toHaveAttribute("aria-label", "Critical risk");
+    });
+
+    it("ApprovalRulesPanel_should_RenderNotRecordedBadge_When_RuleRiskLevelIsEmpty", () => {
+      mockRules = [makeApprovalRule({ riskLevel: "" })];
+      render(<ApprovalRulesPanel />);
+      expect(screen.getByTestId("severity-badge-unrecorded")).toHaveAttribute("aria-label", "Severity not recorded");
+    });
+
+    it("ApprovalRulesPanel_should_ExposeRiskColumnWithoutAnyInteraction_When_TableRenders", () => {
+      mockRules = [makeApprovalRule({ riskLevel: "high" })];
+      render(<ApprovalRulesPanel />);
+      expect(screen.getByText("Risk")).toBeInTheDocument();
+      expect(screen.getByTestId("severity-badge-high")).toBeInTheDocument();
+    });
+  });
+
   // ── YAML import/export (UT-FE-25 through UT-FE-27) ───────────────────────
 
   describe("YAML import/export", () => {
@@ -569,6 +647,138 @@ describe("ApprovalRulesPanel", () => {
       const cmdPatternIdx = ids.indexOf("form-command-pattern-input");
       expect(toolNameIdx).toBeLessThan(sepIdx);
       expect(sepIdx).toBeLessThan(cmdPatternIdx);
+    });
+  });
+
+  // ── Claude Settings reload button ──────────────────────────────────────────
+
+  describe("Claude Settings reload button", () => {
+    it("ReloadRulesButton_should_TriggerReloadAndUpdateTable_When_ClickedOnce", async () => {
+      mockReloadClaudeSettingsRules.mockResolvedValue({ success: true, ruleCount: 3, message: "Reloaded 3 claude-settings rule(s)." });
+      render(<ApprovalRulesPanel />);
+      switchToClaudeSettingsTab();
+
+      fireEvent.click(screen.getByRole("button", { name: /Reload rules/ }));
+
+      await waitFor(() => expect(mockReloadClaudeSettingsRules).toHaveBeenCalledTimes(1));
+    });
+
+    it("ReloadRulesButton_should_ShowReloadingAndBeDisabled_When_ClickedBeforeRpcResolves", async () => {
+      let resolvePromise: (v: { success: boolean; ruleCount: number; message: string }) => void = () => {};
+      mockReloadClaudeSettingsRules.mockReturnValue(
+        new Promise((resolve) => {
+          resolvePromise = resolve;
+        })
+      );
+      render(<ApprovalRulesPanel />);
+      switchToClaudeSettingsTab();
+
+      fireEvent.click(screen.getByRole("button", { name: /Reload rules/ }));
+
+      const btn = screen.getByRole("button", { name: /Reloading…/ });
+      expect(btn).toBeDisabled();
+
+      resolvePromise({ success: true, ruleCount: 1, message: "Reloaded 1 claude-settings rule(s)." });
+      await waitFor(() => expect(screen.getByRole("button", { name: /Reload rules/ })).not.toBeDisabled());
+    });
+
+    it("handleReloadClaudeSettings_should_ShowSuccessToastAndUpdatedTable_When_ReloadSucceeds", async () => {
+      mockReloadClaudeSettingsRules.mockResolvedValue({ success: true, ruleCount: 4, message: "Reloaded 4 claude-settings rule(s)." });
+      render(<ApprovalRulesPanel />);
+      switchToClaudeSettingsTab();
+
+      fireEvent.click(screen.getByRole("button", { name: /Reload rules/ }));
+
+      await waitFor(() =>
+        expect(mockShowActionToast).toHaveBeenCalledWith("Reloaded 4 claude-settings rule(s).", "success", "claude-settings-reload")
+      );
+    });
+
+    it("handleReloadClaudeSettings_should_ShowSanitizedErrorToastAndReenableButton_When_ReloadReportsFailure", async () => {
+      mockReloadClaudeSettingsRules.mockResolvedValue({
+        success: false,
+        ruleCount: 1,
+        message: "Failed to reload Claude settings rules — previous rules still active (1 path failed to parse).",
+      });
+      render(<ApprovalRulesPanel />);
+      switchToClaudeSettingsTab();
+
+      fireEvent.click(screen.getByRole("button", { name: /Reload rules/ }));
+
+      await waitFor(() =>
+        expect(mockShowActionToast).toHaveBeenCalledWith(
+          "Failed to reload Claude settings rules — previous rules still active (1 path failed to parse).",
+          "error",
+          "claude-settings-reload"
+        )
+      );
+      expect(screen.getByRole("button", { name: /Reload rules/ })).not.toBeDisabled();
+    });
+
+    it("handleReloadClaudeSettings_should_ShowNetworkErrorToastAndReenableButton_When_RpcCallThrows", async () => {
+      mockReloadClaudeSettingsRules.mockRejectedValue(new Error("network down"));
+      render(<ApprovalRulesPanel />);
+      switchToClaudeSettingsTab();
+
+      fireEvent.click(screen.getByRole("button", { name: /Reload rules/ }));
+
+      await waitFor(() =>
+        expect(mockShowActionToast).toHaveBeenCalledWith(
+          "Could not reach the server to reload rules. Try again.",
+          "error",
+          "claude-settings-reload"
+        )
+      );
+      expect(screen.getByRole("button", { name: /Reload rules/ })).not.toBeDisabled();
+    });
+
+    it("ReloadRulesButton_should_FireExactlyOneRpcCall_When_DoubleClickedRapidly", async () => {
+      let resolvePromise: (v: { success: boolean; ruleCount: number; message: string }) => void = () => {};
+      mockReloadClaudeSettingsRules.mockReturnValue(
+        new Promise((resolve) => {
+          resolvePromise = resolve;
+        })
+      );
+      render(<ApprovalRulesPanel />);
+      switchToClaudeSettingsTab();
+
+      const btn = screen.getByRole("button", { name: /Reload rules/ });
+      fireEvent.click(btn);
+      fireEvent.click(btn); // second click while the first is still in-flight and the button is disabled
+
+      expect(mockReloadClaudeSettingsRules).toHaveBeenCalledTimes(1);
+
+      resolvePromise({ success: true, ruleCount: 1, message: "Reloaded 1 claude-settings rule(s)." });
+      await waitFor(() => expect(screen.getByRole("button", { name: /Reload rules/ })).not.toBeDisabled());
+    });
+
+    it("ReloadRulesButton_should_RemainClickableAfterEachOutcome_When_ClickedThreeTimesWithDifferentResults", async () => {
+      render(<ApprovalRulesPanel />);
+      switchToClaudeSettingsTab();
+
+      mockReloadClaudeSettingsRules.mockResolvedValueOnce({ success: true, ruleCount: 1, message: "ok" });
+      fireEvent.click(screen.getByRole("button", { name: /Reload rules/ }));
+      await waitFor(() => expect(screen.getByRole("button", { name: /Reload rules/ })).not.toBeDisabled());
+
+      mockReloadClaudeSettingsRules.mockResolvedValueOnce({ success: false, ruleCount: 1, message: "failed" });
+      fireEvent.click(screen.getByRole("button", { name: /Reload rules/ }));
+      await waitFor(() => expect(screen.getByRole("button", { name: /Reload rules/ })).not.toBeDisabled());
+
+      mockReloadClaudeSettingsRules.mockRejectedValueOnce(new Error("boom"));
+      fireEvent.click(screen.getByRole("button", { name: /Reload rules/ }));
+      await waitFor(() => expect(screen.getByRole("button", { name: /Reload rules/ })).not.toBeDisabled());
+
+      expect(mockReloadClaudeSettingsRules).toHaveBeenCalledTimes(3);
+    });
+
+    it("ReloadRulesButton_should_BeKeyboardOperableWithAccessibleName_When_TabbedToAndActivatedViaEnter", () => {
+      render(<ApprovalRulesPanel />);
+      switchToClaudeSettingsTab();
+
+      const btn = screen.getByRole("button", { name: /Reload rules/ });
+      expect(btn).toHaveAccessibleName(expect.stringContaining("Reload rules"));
+      btn.focus();
+      expect(btn).toHaveFocus();
     });
   });
 });

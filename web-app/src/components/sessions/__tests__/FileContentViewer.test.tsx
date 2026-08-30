@@ -1,13 +1,15 @@
 /**
- * Tests the CodeMirror-vs-Shiki branching in FileContentViewer:
- *  - a file with no diff for its path uses the Shiki viewer (small-file default)
- *  - a file that appears in diffContent uses CodeMirror, with gutter markers
- *    built from buildGutterMarks reaching the gutter() line-marker callback
+ * Tests FileContentViewer's CodeMirror rendering:
+ *  - a file with no diff (or a diff that doesn't cover this file) renders
+ *    CodeMirror with no gutter marks
+ *  - a file that appears in diffContent renders CodeMirror with gutter
+ *    markers built from buildGutterMarks reaching the gutter() line-marker
+ *    callback
  */
 
 import React from "react";
 import { render, waitFor } from "@testing-library/react";
-import { FileContentViewer } from "../FileContentViewer";
+import { FileContentViewer, isDoubleGPress, DOUBLE_G_WINDOW_MS } from "../FileContentViewer";
 
 // ---------------------------------------------------------------------------
 // Mocks
@@ -18,11 +20,6 @@ jest.mock("@/lib/hooks/useFileService", () => ({
   useGetFileContent: (...args: unknown[]) => mockUseGetFileContent(...args),
 }));
 
-const mockGetSingletonHighlighter = jest.fn();
-jest.mock("shiki", () => ({
-  getSingletonHighlighter: (...args: unknown[]) => mockGetSingletonHighlighter(...args),
-}));
-
 interface CapturedGutterConfig {
   lineMarker: (view: unknown, block: { from: number }) => { toDOM: () => HTMLElement } | null;
 }
@@ -30,20 +27,34 @@ interface CapturedGutterConfig {
 let capturedGutterConfig: CapturedGutterConfig | null = null;
 const mockEditorViewCtor = jest.fn();
 
+interface CapturedKeyBinding {
+  key: string;
+  run: (view: unknown) => boolean;
+}
+let capturedKeymapBindings: CapturedKeyBinding[] | null = null;
+
 jest.mock("@codemirror/view", () => {
   class GutterMarker {}
   class EditorView {
     static lineWrapping = {};
+    static theme = jest.fn(() => ({}));
     constructor(opts: unknown) {
       mockEditorViewCtor(opts);
     }
+    dispatch() {}
     destroy() {}
   }
   function gutter(config: CapturedGutterConfig) {
     capturedGutterConfig = config;
     return { __gutter: true };
   }
-  return { EditorView, gutter, GutterMarker };
+  const keymap = {
+    of: jest.fn((bindings: CapturedKeyBinding[]) => {
+      capturedKeymapBindings = bindings;
+      return { __keymap: bindings };
+    }),
+  };
+  return { EditorView, gutter, GutterMarker, keymap };
 });
 
 jest.mock("@codemirror/state", () => ({
@@ -51,10 +62,64 @@ jest.mock("@codemirror/state", () => ({
     readOnly: { of: (v: unknown) => ({ readOnly: v }) },
     create: (opts: unknown) => opts,
   },
+  // Minimal stand-in for CodeMirror's Compartment: of()/reconfigure() just
+  // need to be callable and return something dispatch() (also mocked) can
+  // accept; the real reconfiguration behavior is CodeMirror's own, not this
+  // component's, so it isn't re-tested here.
+  Compartment: class Compartment {
+    of(ext: unknown) {
+      return { __compartmentOf: ext };
+    }
+    reconfigure(ext: unknown) {
+      return { __compartmentReconfigure: ext };
+    }
+  },
 }));
 
 jest.mock("codemirror", () => ({ basicSetup: {} }));
 jest.mock("@codemirror/theme-one-dark", () => ({ oneDark: {} }));
+
+jest.mock("@codemirror/language", () => ({
+  HighlightStyle: { define: jest.fn(() => ({})) },
+  syntaxHighlighting: jest.fn(() => ({})),
+}));
+
+jest.mock("@codemirror/commands", () => ({
+  cursorCharLeft: jest.fn(),
+  cursorCharRight: jest.fn(),
+  cursorLineDown: jest.fn(),
+  cursorLineUp: jest.fn(),
+  selectCharLeft: jest.fn(),
+  selectCharRight: jest.fn(),
+  selectLineDown: jest.fn(),
+  selectLineUp: jest.fn(),
+  cursorLineBoundaryBackward: jest.fn(),
+  cursorLineBoundaryForward: jest.fn(),
+  selectLineBoundaryBackward: jest.fn(),
+  selectLineBoundaryForward: jest.fn(),
+  cursorDocStart: jest.fn(),
+  cursorDocEnd: jest.fn(),
+  cursorPageDown: jest.fn(),
+  cursorPageUp: jest.fn(),
+  selectPageDown: jest.fn(),
+  selectPageUp: jest.fn(),
+}));
+
+jest.mock("@codemirror/search", () => ({
+  openSearchPanel: jest.fn(),
+  findNext: jest.fn(),
+  findPrevious: jest.fn(),
+}));
+
+jest.mock("@lezer/highlight", () => {
+  // `tags` is accessed as both a property bag (tags.keyword) and via nested
+  // calls (tags.special(tags.string), tags.function(tags.variableName)) —
+  // a self-returning callable Proxy satisfies both shapes without needing
+  // to model the real tag semantics, which the component's own (also
+  // mocked) HighlightStyle.define never inspects in these tests.
+  const make = (): unknown => new Proxy(() => make(), { get: () => make() });
+  return { tags: make() };
+});
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -79,33 +144,27 @@ const MODIFY_DIFF = `diff --git a/src/foo.txt b/src/foo.txt
 beforeEach(() => {
   jest.clearAllMocks();
   capturedGutterConfig = null;
-  mockGetSingletonHighlighter.mockResolvedValue({
-    loadLanguage: jest.fn().mockResolvedValue(undefined),
-    codeToHtml: jest.fn().mockReturnValue("<pre><code>mock</code></pre>"),
-  });
+  capturedKeymapBindings = null;
 });
 
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
-describe("FileContentViewer — viewer selection", () => {
-  it("uses Shiki (not CodeMirror) for a small file with no diff", async () => {
+describe("FileContentViewer — CodeMirror rendering", () => {
+  it("renders CodeMirror with no gutter marks when there is no diff", async () => {
     mockUseGetFileContent.mockReturnValue({
       data: { isBinary: false, content: SMALL_CONTENT, isTruncated: false, size: BigInt(0) },
       loading: false,
       error: null,
     });
 
-    const { container } = render(
-      <FileContentViewer sessionId="s1" filePath="src/foo.txt" baseUrl="http://x" />
-    );
+    render(<FileContentViewer sessionId="s1" filePath="src/foo.txt" baseUrl="http://x" />);
 
-    // Shiki's highlighter promise is cached at module scope in FileContentViewer,
-    // so across tests only the first Shiki render actually invokes the mock —
-    // assert on rendered output instead of call count.
-    await waitFor(() => expect(container.innerHTML).toContain("mock"));
-    expect(mockEditorViewCtor).not.toHaveBeenCalled();
+    await waitFor(() => expect(mockEditorViewCtor).toHaveBeenCalled());
+    // The gutter is always constructed but reports no marks when there's no diff.
+    expect(capturedGutterConfig).not.toBeNull();
+    expect(capturedGutterConfig!.lineMarker(fakeViewForLine(1), { from: 0 })).toBeNull();
   });
 
   it("uses CodeMirror with a gutter marker when the file has a diff", async () => {
@@ -125,11 +184,10 @@ describe("FileContentViewer — viewer selection", () => {
     );
 
     await waitFor(() => expect(mockEditorViewCtor).toHaveBeenCalled());
-    expect(mockGetSingletonHighlighter).not.toHaveBeenCalled();
+    expect(capturedGutterConfig).not.toBeNull();
 
     // The gutter's lineMarker callback should mark line 1 as "modify" and
     // return null for an untouched line.
-    expect(capturedGutterConfig).not.toBeNull();
     const marker = capturedGutterConfig!.lineMarker(fakeViewForLine(1), { from: 0 });
     expect(marker).not.toBeNull();
     expect(marker!.toDOM().className).toBe("gutterMarkerModify");
@@ -138,7 +196,7 @@ describe("FileContentViewer — viewer selection", () => {
     expect(noMark).toBeNull();
   });
 
-  it("uses Shiki when diffContent is present but doesn't cover this file", async () => {
+  it("renders CodeMirror with no gutter marks when diffContent doesn't cover this file", async () => {
     mockUseGetFileContent.mockReturnValue({
       data: { isBinary: false, content: SMALL_CONTENT, isTruncated: false, size: BigInt(0) },
       loading: false,
@@ -146,7 +204,7 @@ describe("FileContentViewer — viewer selection", () => {
     });
 
     const diffForOtherFile = MODIFY_DIFF.replace(/foo\.txt/g, "bar.txt");
-    const { container } = render(
+    render(
       <FileContentViewer
         sessionId="s1"
         filePath="src/foo.txt"
@@ -155,7 +213,76 @@ describe("FileContentViewer — viewer selection", () => {
       />
     );
 
-    await waitFor(() => expect(container.innerHTML).toContain("mock"));
-    expect(mockEditorViewCtor).not.toHaveBeenCalled();
+    await waitFor(() => expect(mockEditorViewCtor).toHaveBeenCalled());
+    // The gutter is always constructed but reports no marks for an uncovered file.
+    expect(capturedGutterConfig).not.toBeNull();
+    expect(capturedGutterConfig!.lineMarker(fakeViewForLine(1), { from: 0 })).toBeNull();
+  });
+});
+
+describe("FileContentViewer — vim keybindings", () => {
+  it("isDoubleGPress_should_ReturnTrue_When_SecondPressIsWithinTheWindow", () => {
+    expect(isDoubleGPress(1000, 1000 + DOUBLE_G_WINDOW_MS - 1)).toBe(true);
+    expect(isDoubleGPress(1000, 1000 + 1)).toBe(true);
+  });
+
+  it("isDoubleGPress_should_ReturnFalse_When_SecondPressIsAtOrAfterTheWindow", () => {
+    expect(isDoubleGPress(1000, 1000 + DOUBLE_G_WINDOW_MS)).toBe(false);
+    expect(isDoubleGPress(1000, 1000 + DOUBLE_G_WINDOW_MS + 500)).toBe(false);
+  });
+
+  it("registers the expected hjkl/gg/G/ctrl-d/ctrl-u/shift-select/yank/search vim keymap bindings", async () => {
+    mockUseGetFileContent.mockReturnValue({
+      data: { isBinary: false, content: SMALL_CONTENT, isTruncated: false, size: BigInt(0) },
+      loading: false,
+      error: null,
+    });
+
+    render(<FileContentViewer sessionId="s1" filePath="src/foo.txt" baseUrl="http://x" />);
+
+    await waitFor(() => expect(mockEditorViewCtor).toHaveBeenCalled());
+    expect(capturedKeymapBindings).not.toBeNull();
+
+    const keys = capturedKeymapBindings!.map((b) => b.key);
+    expect(keys).toEqual(
+      expect.arrayContaining([
+        "h", "l", "j", "k", "0", "$", "g", "G",
+        "Ctrl-d", "Ctrl-u",
+        "Shift-h", "Shift-l", "Shift-j", "Shift-k", "Shift-0", "Shift-$",
+        "Shift-Ctrl-d", "Shift-Ctrl-u",
+        "y", "/", "n", "Shift-n",
+      ])
+    );
+  });
+
+  it("gg_should_JumpToDocStartOnlyOnTheSecondPress_When_PressedTwiceQuickly", async () => {
+    mockUseGetFileContent.mockReturnValue({
+      data: { isBinary: false, content: SMALL_CONTENT, isTruncated: false, size: BigInt(0) },
+      loading: false,
+      error: null,
+    });
+
+    render(<FileContentViewer sessionId="s1" filePath="src/foo.txt" baseUrl="http://x" />);
+    await waitFor(() => expect(mockEditorViewCtor).toHaveBeenCalled());
+
+    const gBinding = capturedKeymapBindings!.find((b) => b.key === "g");
+    expect(gBinding).toBeDefined();
+
+    const { cursorDocStart } = jest.requireMock("@codemirror/commands") as { cursorDocStart: jest.Mock };
+    cursorDocStart.mockReturnValue(true);
+
+    const fakeView = {};
+
+    // First "g" press: no prior press recorded, so this should be a no-op
+    // (returns true without invoking cursorDocStart).
+    const firstResult = gBinding!.run(fakeView);
+    expect(firstResult).toBe(true);
+    expect(cursorDocStart).not.toHaveBeenCalled();
+
+    // Second "g" press immediately after: should be treated as "gg" and
+    // jump to the document start.
+    const secondResult = gBinding!.run(fakeView);
+    expect(secondResult).toBe(true);
+    expect(cursorDocStart).toHaveBeenCalledWith(fakeView);
   });
 });

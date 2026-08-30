@@ -10,6 +10,13 @@ import {
   loading,
 } from "./AutocompleteInput.css";
 
+/** Default filter: plain case-insensitive substring match (unchanged pre-existing behavior). */
+function defaultFilterFn(query: string, suggestions: string[]): string[] {
+  return suggestions.filter((suggestion) =>
+    suggestion.toLowerCase().includes(query.toLowerCase())
+  );
+}
+
 interface AutocompleteInputProps {
   id: string;
   value: string;
@@ -22,6 +29,10 @@ interface AutocompleteInputProps {
   error?: boolean;
   disabled?: boolean;
   "data-testid"?: string;
+  /** Ranks/filters `suggestions` against the current query. Defaults to substring match. */
+  filterFn?: (query: string, suggestions: string[]) => string[];
+  /** Maps a suggestion value to its display label. Defaults to the value itself. */
+  getLabel?: (value: string) => string;
 }
 
 export function AutocompleteInput({
@@ -36,16 +47,16 @@ export function AutocompleteInput({
   error = false,
   disabled = false,
   "data-testid": dataTestId,
+  filterFn = defaultFilterFn,
+  getLabel = (v) => v,
 }: AutocompleteInputProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [highlightedIndex, setHighlightedIndex] = useState(-1);
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLUListElement>(null);
 
-  // Filter suggestions based on input value
-  const filteredSuggestions = suggestions.filter((suggestion) =>
-    suggestion.toLowerCase().includes(value.toLowerCase())
-  );
+  // Filter (and, when filterFn is fuzzy, rank) suggestions based on input value
+  const filteredSuggestions = filterFn(value, suggestions);
 
   // Close dropdown when clicking outside
   useEffect(() => {
@@ -174,7 +185,7 @@ export function AutocompleteInput({
               role="option"
               aria-selected={index === highlightedIndex}
             >
-              {sugg}
+              {getLabel(sugg)}
             </li>
           ))}
         </ul>

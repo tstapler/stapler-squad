@@ -1,0 +1,38 @@
+name: CI Duration Trend
+
+# Weekly, advisory-only regression signal complementing the hard
+# timeout-minutes: ceilings on individual jobs (see build.yml etc.). Records
+# each tracked workflow's rolling-average duration and warns (never fails)
+# when it grows >25% since the last recorded value. Never a required check —
+# a bug here can produce a false/missed alert, never a blocked merge. See
+# project_plans/ci-speed/decisions/ADR-002-ci-duration-budget-mechanism.md.
+
+on:
+  schedule:
+    - cron: '0 6 * * 1'
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  record-trends:
+    name: Record CI duration trends
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Record duration trends
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: ./tools/ci/duration-trend.sh
+
+      - name: Commit updated history
+        run: |
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git config user.name "github-actions[bot]"
+          git add docs/ci/duration-history.jsonl
+          git diff --cached --quiet && echo "No history changes to commit" && exit 0
+          git commit -m "chore(ci): record CI duration trend [skip ci]"
+          for i in 1 2 3; do git pull --rebase --autostash && git push && break || sleep 5; done

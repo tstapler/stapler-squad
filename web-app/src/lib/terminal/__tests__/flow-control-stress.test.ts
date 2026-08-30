@@ -156,7 +156,9 @@ describe('Flow Control Stress Tests', () => {
       let completed = 0;
       let maxWatermark = 0;
 
-      // Write rapidly to build up watermark
+      // Already fire-and-forget (no per-write await), so this doesn't share
+      // the serialize-then-await defect that made the Mixed Content Stress
+      // test above flaky under --maxWorkers=4 contention -- no change needed.
       for (let i = 0; i < writes; i++) {
         const chunk = `Line ${i}: ${'x'.repeat(80)}\n`;
         tracker.write(chunk, () => {
@@ -279,6 +281,10 @@ describe('Flow Control Stress Tests', () => {
       // Run the whole synchronous loop first, then flush every fake-scheduled
       // write completion in one synchronous flush (see the comment on the
       // sibling test above for why advanceTimersByTime, not the async variant).
+      // (main independently tried a real-timer concurrent-drain fix for just this
+      // test via Promise.all(pending) — superseded here since it doesn't eliminate
+      // the real-timer dependency AC1 requires, and doesn't generalize to the two
+      // Control Code Heavy Output tests the way this fake-timer approach does.)
       for (let i = 0; i < iterations; i++) {
         let chunk: string;
 

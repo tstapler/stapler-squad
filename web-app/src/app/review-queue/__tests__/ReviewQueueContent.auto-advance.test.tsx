@@ -49,6 +49,10 @@ jest.mock("@/lib/hooks/useKeyboard", () => ({
   useKeyboard: jest.fn(),
 }));
 
+jest.mock("@/lib/hooks/useWatchBacklogItems", () => ({
+  useWatchBacklogItems: jest.fn(() => ({ items: [], connectionState: "live" })),
+}));
+
 // ---------------------------------------------------------------------------
 // ReviewQueuePanel stub: captures callbacks, including onSessionClick
 // so tests can drive selectedSession state via handleSessionClick.
@@ -62,7 +66,6 @@ jest.mock("@/components/sessions/ReviewQueuePanel", () => ({
   ReviewQueuePanel: (props: {
     onItemsChange?: (items: ReviewItem[]) => void;
     onAcknowledged?: (id: string) => void;
-    onRunOneShot?: unknown;
     onSessionClick?: (sessionId: string) => void;
   }) => {
     capturedOnItemsChange = props.onItemsChange;

@@ -11,8 +11,7 @@ import (
 )
 
 func TestGetHookStatus_ReflectsGlobalSettings(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
+	home := withFakeHome(t)
 
 	svc := newCreateTestService(t, createTestStorage(t))
 
@@ -39,23 +38,39 @@ func TestGetHookStatus_ReflectsGlobalSettings(t *testing.T) {
 	}
 }
 
+func TestGetHookStatus_ReflectsAgyAndGemini(t *testing.T) {
+	withFakeHome(t)
+
+	svc := newCreateTestService(t, createTestStorage(t))
+
+	// Nothing installed yet.
+	resp, err := svc.GetHookStatus(context.Background(), connect.NewRequest(&sessionv1.GetHookStatusRequest{}))
+	if err != nil {
+		t.Fatalf("GetHookStatus: %v", err)
+	}
+	if resp.Msg.AgyRulesInstalled || resp.Msg.GeminiRulesInstalled {
+		t.Error("agy and gemini rules should not be installed on fresh HOME")
+	}
+}
+
 func TestInstallHooks_MissingBinary_ReportsManualFallback(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
+	home := withFakeHome(t)
 	t.Setenv("PATH", filepath.Join(home, "empty-bin")) // ensure ssq-hooks is not discoverable
 
 	svc := newCreateTestService(t, createTestStorage(t))
 
 	resp, err := svc.InstallHooks(context.Background(), connect.NewRequest(&sessionv1.InstallHooksRequest{
-		InstallRules: true,
+		InstallRules:       true,
+		InstallAgyRules:    true,
+		InstallGeminiRules: true,
 	}))
 	if err != nil {
 		t.Fatalf("InstallHooks: %v", err)
 	}
-	if resp.Msg.Status.RulesInstalled {
+	if resp.Msg.Status.RulesInstalled || resp.Msg.Status.AgyRulesInstalled || resp.Msg.Status.GeminiRulesInstalled {
 		t.Error("rules must not be reported installed when the binary is unavailable")
 	}
-	if len(resp.Msg.Messages) == 0 {
-		t.Error("expected a manual-fallback message when ssq-hooks is missing")
+	if len(resp.Msg.Messages) < 3 {
+		t.Errorf("expected manual-fallback messages for missing ssq-hooks, got %d messages: %v", len(resp.Msg.Messages), resp.Msg.Messages)
 	}
 }

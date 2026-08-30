@@ -24,13 +24,27 @@ import type { Session } from "@/gen/session/v1/types_pb";
 
 // --- Component mocks ---
 
+// SessionDetail.tsx dynamically imports SessionDetailView, which itself dynamically
+// imports TerminalOutput — one blanket stub can't serve both nested call sites once we
+// want the real SessionDetailView (with its correct ARIA markup) to render. Resolve the
+// SessionDetailView loader synchronously via require so assertions can stay synchronous;
+// stub everything else (i.e. TerminalOutput) as before.
 jest.mock("next/dynamic", () => (loader: () => Promise<{ default: React.ComponentType }>) => {
+  if (loader.toString().includes("SessionDetailView")) {
+    return require("../SessionDetailView").SessionDetailView;
+  }
   return function DynamicStub() {
     return <div data-testid="terminal-output" />;
   };
 });
 
 jest.mock("../DiffViewer", () => ({ DiffViewer: () => <div data-testid="diff-viewer" /> }));
+// HandoffSummarySection (Info tab) embeds RestartWithSummaryButton, which
+// calls useSessionService -> useAnalytics -- unavailable without an
+// AnalyticsContextProvider wrapper, which this file's render tree doesn't
+// set up (it isn't relevant to embedded-mode/initialTab behavior, this
+// file's own concern).
+jest.mock("../HandoffSummarySection", () => ({ HandoffSummarySection: () => null }));
 jest.mock("../VcsPanel", () => ({ VcsPanel: () => <div data-testid="vcs-panel" /> }));
 jest.mock("../SessionLogsTab", () => ({ SessionLogsTab: () => <div data-testid="logs-tab" /> }));
 jest.mock("../FilesTab", () => ({ FilesTab: () => <div data-testid="files-tab" /> }));
@@ -81,6 +95,28 @@ jest.mock("@/lib/constants/programs", () => ({
 }));
 jest.mock("@/lib/store", () => ({ useAppSelector: jest.fn(() => []) }));
 jest.mock("@/lib/store/sessionsSlice", () => ({ selectAllSessions: jest.fn() }));
+
+// useShells otherwise fires a real ConnectRPC listShells call on mount, and
+// useAvailablePrograms fires a real fetch("/api/server-info") — both land outside this
+// test's act() scope and produce noisy "not wrapped in act(...)" warnings plus real
+// network attempts. Stub them to keep runs deterministic (mirrors
+// SessionDetailView.summary-tab.test.tsx's useShells mock and Omnibar.alias.test.tsx's
+// useAvailablePrograms mock).
+jest.mock("@/lib/hooks/useShells", () => ({
+  useShells: () => ({
+    shells: [],
+    isLoading: false,
+    spawnShell: jest.fn(),
+    stopShell: jest.fn(),
+    restartShell: jest.fn(),
+    deleteShell: jest.fn(),
+    updateShellStatus: jest.fn(),
+    refetch: jest.fn(),
+  }),
+}));
+jest.mock("@/lib/hooks/useAvailablePrograms", () => ({
+  useAvailablePrograms: jest.fn(() => []),
+}));
 
 // --- Minimal session fixture ---
 

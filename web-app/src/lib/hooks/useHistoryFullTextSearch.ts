@@ -7,6 +7,7 @@ import {
   SearchResult,
   SearchSnippet,
   HighlightRange,
+  ClaudeMessage,
 } from "@/gen/session/v1/session_pb";
 import { timestampFromDate, timestampDate } from "@bufbuild/protobuf/wkt";
 import { getConnectTransport } from "@/lib/api/transport";
@@ -29,6 +30,12 @@ export interface SearchOptions {
   offset?: number;
   /** Whether to append results (for pagination) */
   append?: boolean;
+  /** Collapse results to one entry per session (default: false) */
+  groupBySession?: boolean;
+  /** Populate contextWindow/bookendFirst/bookendLast on each result (default: false) */
+  includeContext?: boolean;
+  /** Best-effort exclude hidden/background sessions (default: false) */
+  excludeAutomationSessions?: boolean;
 }
 
 export interface SearchResultItem {
@@ -51,6 +58,21 @@ export interface SearchResultItem {
     model: string;
     createdAt: Date | null;
   };
+  /** Additional matching messages in this session beyond this hit (only meaningful when groupBySession was set) */
+  moreMatchesInSessionCount: number;
+  /** ±5 messages around messageIndex (only populated when includeContext was set) */
+  contextWindow: SearchMessageItem[];
+  /** First 3 messages of the session (empty when contextWindow already spans the full session) */
+  bookendFirst: SearchMessageItem[];
+  /** Last 3 messages of the session (empty when contextWindow already spans the full session) */
+  bookendLast: SearchMessageItem[];
+}
+
+export interface SearchMessageItem {
+  role: string;
+  content: string;
+  timestamp: Date | null;
+  model: string;
 }
 
 export interface SearchSnippetItem {
@@ -117,6 +139,17 @@ export function useHistoryFullTextSearch(
     clientRef.current = createClient(SessionService, getConnectTransport());
   }, []);
 
+  const toSearchMessageItems = useCallback(
+    (msgs: ClaudeMessage[]): SearchMessageItem[] =>
+      msgs.map((m) => ({
+        role: m.role,
+        content: m.content,
+        timestamp: m.timestamp ? timestampDate(m.timestamp) : null,
+        model: m.model,
+      })),
+    []
+  );
+
   // Convert protobuf SearchResult to our interface
   const convertResult = useCallback((result: SearchResult): SearchResultItem => {
     return {
@@ -140,8 +173,12 @@ export function useHistoryFullTextSearch(
         model: result.metadata?.model ?? "",
         createdAt: result.metadata?.createdAt ? timestampDate(result.metadata.createdAt) : null,
       },
+      moreMatchesInSessionCount: result.moreMatchesInSessionCount ?? 0,
+      contextWindow: toSearchMessageItems(result.contextWindow),
+      bookendFirst: toSearchMessageItems(result.bookendFirst),
+      bookendLast: toSearchMessageItems(result.bookendLast),
     };
-  }, []);
+  }, [toSearchMessageItems]);
 
   // Execute search
   const search = useCallback(
@@ -176,6 +213,9 @@ export function useHistoryFullTextSearch(
           model: searchOptions.model ?? "",
           startTime: searchOptions.startTime ? timestampFromDate(searchOptions.startTime) : undefined,
           endTime: searchOptions.endTime ? timestampFromDate(searchOptions.endTime) : undefined,
+          groupBySession: searchOptions.groupBySession ?? false,
+          includeContext: searchOptions.includeContext ?? false,
+          excludeAutomationSessions: searchOptions.excludeAutomationSessions ?? false,
         }, {
           signal: abortControllerRef.current.signal,
         });

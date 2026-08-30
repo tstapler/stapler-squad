@@ -48,6 +48,7 @@ func newRefcountTestSession(t *testing.T) *TmuxSession {
 // that already has a running control mode process increments the refcount and returns nil
 // without starting another process.
 func TestRefcount_SecondStartIncrementsCount(t *testing.T) {
+	t.Parallel()
 	sess := newRefcountTestSession(t)
 
 	// Refcount is 1 (set in newRefcountTestSession to simulate a running process).
@@ -75,6 +76,7 @@ func TestRefcount_SecondStartIncrementsCount(t *testing.T) {
 // remaining subscribers (refcount > 1) decrements the refcount but does NOT close
 // controlModeDone or nil controlModeCmd.
 func TestRefcount_StopWithActiveClientsDoesNotKillProcess(t *testing.T) {
+	t.Parallel()
 	sess := newRefcountTestSession(t)
 
 	// Simulate a second client: manually bump refcount to 2.
@@ -110,6 +112,7 @@ func TestRefcount_StopWithActiveClientsDoesNotKillProcess(t *testing.T) {
 // TestRefcount_LastStopActuallyTearsDown verifies that when refcount reaches 0,
 // StopControlMode closes controlModeDone, nils controlModeCmd, and zeroes the refcount.
 func TestRefcount_LastStopActuallyTearsDown(t *testing.T) {
+	t.Parallel()
 	sess := newRefcountTestSession(t)
 	doneCh := sess.controlModeDone
 
@@ -138,6 +141,7 @@ func TestRefcount_LastStopActuallyTearsDown(t *testing.T) {
 // TestRefcount_UnderflowIsSafe verifies that calling StopControlMode when refcount is
 // already 0 does not panic or underflow to a negative number.
 func TestRefcount_UnderflowIsSafe(t *testing.T) {
+	t.Parallel()
 	sess := newRefcountTestSession(t)
 	// Manually set refcount=0 and cmd=nil to exercise the actual underflow guard
 	// (not the early-return path that fires when controlModeCmd is nil).
@@ -164,6 +168,7 @@ func TestRefcount_UnderflowIsSafe(t *testing.T) {
 // calls on a session that already has a running process all return nil and only bump the
 // refcount without forking additional processes.
 func TestRefcount_ConcurrentStartsAreIdempotent(t *testing.T) {
+	t.Parallel()
 	sess := newRefcountTestSession(t)
 	originalCmd := sess.controlModeCmd
 
@@ -202,6 +207,7 @@ func TestRefcount_ConcurrentStartsAreIdempotent(t *testing.T) {
 // TestRefcount_ConcurrentStartStopAtBoundary races a Stop against a Start at the 1→0→1
 // boundary and verifies the refcount never goes negative.
 func TestRefcount_ConcurrentStartStopAtBoundary(t *testing.T) {
+	t.Parallel()
 	sess := newRefcountTestSession(t)
 
 	var wg sync.WaitGroup
@@ -228,6 +234,7 @@ func TestRefcount_ConcurrentStartStopAtBoundary(t *testing.T) {
 // panic when UnsubscribeFromControlModeUpdates closes a channel concurrently.
 // This is a regression test for the RACE #7 (send-on-closed-channel) fix.
 func TestBroadcast_NoSendOnClosedPanic(t *testing.T) {
+	t.Parallel()
 	sess := newRefcountTestSession(t)
 
 	// Subscribe two clients.
@@ -271,4 +278,113 @@ func TestBroadcast_NoSendOnClosedPanic(t *testing.T) {
 
 	// Clean up client 1.
 	sess.UnsubscribeFromControlModeUpdates(id1)
+}
+
+// TestBroadcastControlModeUpdate_ClosesSlowSubscriber_When_ChannelFull is the regression
+// test for the bug this fix addresses: a subscriber whose channel is full used to have its
+// update silently dropped, which can strip partial escape sequences (cursor positioning,
+// erase-line, SGR resets) from the exact byte stream rendered in the browser terminal,
+// producing corrupted/overlapping rendering. The correct behavior — mirroring
+// NativeProcessManager.fanOut in session/native_process_manager.go — is to close and remove
+// the slow subscriber instead, so the consumer observes end-of-stream rather than silently
+// missing bytes mid-stream.
+func TestBroadcastControlModeUpdate_ClosesSlowSubscriber_When_ChannelFull(t *testing.T) {
+	t.Parallel()
+	sess := newRefcountTestSession(t)
+
+	// Subscribe one client and never drain it, so its buffered channel fills up.
+	slowID, slowCh := sess.SubscribeToControlModeUpdates()
+	// Subscribe a second, healthy client that we drain in lockstep with the send loop
+	// below. A background goroutine racing the tight send loop isn't guaranteed to keep
+	// up — if it loses that race, healthyCh fills too and gets closed just like slowCh,
+	// making the test flaky. Draining synchronously here guarantees healthyCh never holds
+	// more than one buffered message, regardless of scheduling.
+	healthyID, healthyCh := sess.SubscribeToControlModeUpdates()
+
+	// Fill the slow subscriber's buffer (capacity 100) and then push past it so a
+	// subsequent broadcast observes a full channel, while keeping the healthy
+	// subscriber's channel drained.
+	for i := 0; i < 101; i++ {
+		sess.broadcastControlModeUpdate([]byte("x"))
+		<-healthyCh
+	}
+
+	// The slow subscriber must be closed and removed, not left silently missing bytes.
+	// Every receive is bounded by its own timeout so pre-fix code (which never closes the
+	// channel) fails fast with a clear message instead of hanging the test run.
+	deadline := time.After(time.Second)
+drain:
+	for {
+		select {
+		case _, ok := <-slowCh:
+			if !ok {
+				break drain
+			}
+		case <-deadline:
+			t.Fatal("slow subscriber's channel was never closed")
+		}
+	}
+
+	sess.controlModeSubMu.RLock()
+	_, slowExists := sess.controlModeSubscribers[slowID]
+	_, healthyExists := sess.controlModeSubscribers[healthyID]
+	sess.controlModeSubMu.RUnlock()
+
+	if slowExists {
+		t.Error("slow subscriber should have been removed after its channel filled up")
+	}
+	if !healthyExists {
+		t.Error("healthy subscriber should not have been removed")
+	}
+
+	sess.UnsubscribeFromControlModeUpdates(healthyID)
+}
+
+// TestBroadcastControlModeUpdate_KeepsBurstySubscriberOpen_When_ConsumerCatchesUpWithinGracePeriod
+// is the regression test for the bug fixed on top of the close-slow-subscriber change above:
+// fast typing (readline/prompt redraws emit several %output events per keystroke) can fill the
+// 100-slot buffer in a single burst while the consumer is mid-write on a coalesced WebSocket
+// frame — that consumer is healthy and about to drain, not stuck. Closing on the very first
+// instantaneously-full send disconnected the terminal for exactly this case. A subscriber that
+// drains within the bounded grace period must NOT be closed.
+func TestBroadcastControlModeUpdate_KeepsBurstySubscriberOpen_When_ConsumerCatchesUpWithinGracePeriod(t *testing.T) {
+	t.Parallel()
+	sess := newRefcountTestSession(t)
+
+	id, ch := sess.SubscribeToControlModeUpdates()
+
+	// Fill the buffer completely without draining, simulating a fast-typing burst that
+	// produces more control-mode output than the 100-slot buffer holds before the consumer
+	// gets its next scheduler turn.
+	for i := 0; i < 100; i++ {
+		sess.broadcastControlModeUpdate([]byte("x"))
+	}
+
+	// Simulate the consumer catching up concurrently rather than being fully drained
+	// beforehand, so this exercises the actual race: room must open up mid-wait for the send
+	// below. No artificial delay before draining — whenever the goroutine actually gets
+	// scheduled, broadcastControlModeUpdate's 250ms grace period only needs it to land one
+	// drain within that window, so this holds regardless of scheduler contention. (An earlier
+	// version slept 10ms before draining; under heavy CPU contention across a full -race test
+	// run, that fixed delay left far less margin than draining immediately does, and caused a
+	// rare flake.)
+	go func() {
+		for i := 0; i < 100; i++ {
+			<-ch
+		}
+	}()
+
+	// This call observes the channel full and must wait for the drain above, not
+	// immediately close the subscriber.
+	sess.broadcastControlModeUpdate([]byte("y"))
+
+	sess.controlModeSubMu.RLock()
+	_, exists := sess.controlModeSubscribers[id]
+	sess.controlModeSubMu.RUnlock()
+
+	if !exists {
+		t.Error("subscriber was closed on a transient burst that cleared within the grace period; a bursty-but-healthy consumer must not be disconnected")
+	}
+
+	sess.UnsubscribeFromControlModeUpdates(id)
 }

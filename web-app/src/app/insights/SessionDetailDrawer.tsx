@@ -1,7 +1,7 @@
 // +feature: insights-dashboard
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useMemo } from "react";
 import { createPortal } from "react-dom";
 import type { SessionTokenSummary } from "@/gen/session/v1/insights_pb";
 import type { BacklogIndexEntry } from "@/lib/hooks/useBacklogService";
@@ -27,8 +27,15 @@ import {
   emptyState,
   srOnly,
   backlogLink,
+  outlierCell,
 } from "./SessionDetailDrawer.css";
-import { fmtCost, fmtPct, fmtDate, shortId } from "./insightsFormatters";
+import { fmtCost, fmtPct, fmtTokens, fmtDate, shortId, computeCacheHitRate } from "./insightsFormatters";
+import { useSessionTurnTimeline } from "@/lib/hooks/useInsightsService";
+import {
+  sortTurnsByTokensDesc,
+  computeOutlierThreshold,
+  isOutlierTurn,
+} from "./turnTimelineUtils";
 
 interface Props {
   session: SessionTokenSummary | null;
@@ -45,6 +52,10 @@ export function SessionDetailDrawer({ session, onClose, backlogEntry }: Props) {
     document.addEventListener("keydown", handleKey);
     return () => document.removeEventListener("keydown", handleKey);
   }, [session, onClose]);
+
+  const { turns } = useSessionTurnTimeline(session?.conversationId);
+  const sortedTurns = useMemo(() => sortTurnsByTokensDesc(turns), [turns]);
+  const outlierThreshold = useMemo(() => computeOutlierThreshold(turns), [turns]);
 
   if (!session || typeof document === "undefined") return null;
 
@@ -96,6 +107,9 @@ export function SessionDetailDrawer({ session, onClose, backlogEntry }: Props) {
             <dt className={metaLabel}>Cache hit rate</dt>
             <dd className={metaValue}>{fmtPct(session.cacheHitRate)}</dd>
 
+            <dt className={metaLabel}>Cache writes</dt>
+            <dd className={metaValue}>{fmtTokens(session.cacheCreationTokens)}</dd>
+
             <dt className={metaLabel}>First message</dt>
             <dd className={metaValue}>{fmtDate(session.firstMessageAt)}</dd>
 
@@ -132,6 +146,54 @@ export function SessionDetailDrawer({ session, onClose, backlogEntry }: Props) {
             </dl>
           </div>
         )}
+
+        <div className={section}>
+          <h3 className={sectionTitle}>Per-Turn Breakdown</h3>
+          {sortedTurns.length === 0 ? (
+            <p className={emptyState}>No per-turn data available for this session.</p>
+          ) : (
+            <table className={toolsTable}>
+              <thead>
+                <tr>
+                  <th className={toolsTh}>Timestamp</th>
+                  <th className={toolsTh}>Model</th>
+                  <th className={toolsThRight}>Input</th>
+                  <th className={toolsThRight}>Output</th>
+                  <th className={toolsThRight}>Cache</th>
+                  <th className={toolsTh}>Tools</th>
+                </tr>
+              </thead>
+              <tbody>
+                {sortedTurns.map((t, i) => {
+                  const outlier = isOutlierTurn(t, outlierThreshold);
+                  return (
+                    <tr key={i}>
+                      <td className={toolsTd}>{fmtDate(t.timestamp)}</td>
+                      <td className={toolsTd}>{t.model || "—"}</td>
+                      <td className={toolsTdRight}>
+                        <span className={outlier ? outlierCell : undefined}>
+                          {t.inputTokens.toString()}
+                        </span>
+                      </td>
+                      <td className={toolsTdRight}>
+                        <span className={outlier ? outlierCell : undefined}>
+                          {t.outputTokens.toString()}
+                        </span>
+                      </td>
+                      <td
+                        className={toolsTdRight}
+                        title={`${fmtTokens(t.cacheReadTokens)} read, ${fmtTokens(t.cacheCreationTokens)} written`}
+                      >
+                        {fmtPct(computeCacheHitRate(Number(t.inputTokens), Number(t.cacheReadTokens)))}
+                      </td>
+                      <td className={toolsTd}>{t.toolNames.join(", ") || "—"}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          )}
+        </div>
 
         <div className={section}>
           <h3 className={sectionTitle}>Tools Breakdown</h3>

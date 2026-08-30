@@ -51,48 +51,8 @@ export const prompt = style({
   margin: 0,
 });
 
-export const actions = style({
-  display: "flex",
-  gap: vars.space["3"],
-  justifyContent: "flex-end",
-  marginTop: vars.space["2"],
-});
-
-export const primaryButton = style({
-  backgroundColor: vars.color.primary,
-  color: vars.color.primaryText,
-  border: "none",
-  borderRadius: vars.radii.md,
-  padding: `${vars.space["2"]} ${vars.space["4"]}`,
-  fontSize: vars.fontSize.base,
-  fontWeight: vars.fontWeight.medium,
-  cursor: "pointer",
-  transition: vars.transition.fast,
-  ":hover": {
-    backgroundColor: vars.color.primaryHover,
-  },
-  ":focus-visible": {
-    outline: `2px solid ${vars.color.primary}`,
-    outlineOffset: "2px",
-  },
-});
-
-export const secondaryButton = style({
-  backgroundColor: "transparent",
-  color: vars.color.textSecondary,
-  border: `1px solid ${vars.color.borderColor}`,
-  borderRadius: vars.radii.md,
-  padding: `${vars.space["2"]} ${vars.space["4"]}`,
-  fontSize: vars.fontSize.base,
-  fontWeight: vars.fontWeight.medium,
-  cursor: "pointer",
-  transition: vars.transition.fast,
-  ":hover": {
-    backgroundColor: vars.color.hoverBackground,
-    borderColor: vars.color.borderHover,
-  },
-  ":focus-visible": {
-    outline: `2px solid ${vars.color.primary}`,
-    outlineOffset: "2px",
-  },
-});
+export {
+  confirmActions as actions,
+  confirmPrimaryButton as primaryButton,
+  confirmSecondaryButton as secondaryButton,
+} from "@/styles/modalChrome.css";

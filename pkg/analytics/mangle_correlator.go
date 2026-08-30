@@ -53,18 +53,27 @@ type MangleCorrelator struct {
 	// observing different transports, and each counts only what it has itself seen.
 	stage1Ordinals map[ordinalKey]int64
 	stage2Ordinals map[ordinalKey]int64
-	maxAge         time.Duration
-	maxSize        int
+	// ordinalLastSeen tracks the last time either ordinal counter for a given
+	// (session, type) pair was touched. stage1Ordinals/stage2Ordinals have no
+	// TTL of their own — a session's ordinal counters would otherwise grow
+	// unboundedly for the life of the process, since EvictExpired only ever
+	// pruned pending. Confirmed as the #1 live-heap consumer (25.18% inuse_space)
+	// before this field was added: sessions come and go, but their ordinal
+	// counters never did.
+	ordinalLastSeen map[ordinalKey]time.Time
+	maxAge          time.Duration
+	maxSize         int
 }
 
 // NewMangleCorrelator creates a correlator with the given TTL and max pending size.
 func NewMangleCorrelator(maxAge time.Duration, maxSize int) *MangleCorrelator {
 	return &MangleCorrelator{
-		pending:        make(map[pendingKey]Stage1Observation),
-		stage1Ordinals: make(map[ordinalKey]int64),
-		stage2Ordinals: make(map[ordinalKey]int64),
-		maxAge:         maxAge,
-		maxSize:        maxSize,
+		pending:         make(map[pendingKey]Stage1Observation),
+		stage1Ordinals:  make(map[ordinalKey]int64),
+		stage2Ordinals:  make(map[ordinalKey]int64),
+		ordinalLastSeen: make(map[ordinalKey]time.Time),
+		maxAge:          maxAge,
+		maxSize:         maxSize,
 	}
 }
 
@@ -86,6 +95,7 @@ func (c *MangleCorrelator) RecordStage1(sessionID, sequenceType, hash string, by
 	ok := ordinalKey{sessionID, sequenceType}
 	c.stage1Ordinals[ok]++
 	ordinal := c.stage1Ordinals[ok]
+	c.ordinalLastSeen[ok] = time.Now()
 
 	c.pending[pendingKey{sessionID, sequenceType, ordinal}] = Stage1Observation{
 		PayloadHash:  hash,
@@ -108,6 +118,7 @@ func (c *MangleCorrelator) CheckStage2(sessionID, sequenceType, hash string, byt
 	ok2 := ordinalKey{sessionID, sequenceType}
 	c.stage2Ordinals[ok2]++
 	ordinal := c.stage2Ordinals[ok2]
+	c.ordinalLastSeen[ok2] = time.Now()
 
 	pk := pendingKey{sessionID, sequenceType, ordinal}
 	obs, ok := c.pending[pk]
@@ -135,6 +146,17 @@ func (c *MangleCorrelator) EvictExpired(ctx context.Context, writer EscapeEventW
 		if obs.WallTime.Before(cutoff) {
 			expired = append(expired, obs)
 			delete(c.pending, key)
+		}
+	}
+	// Prune ordinal counters for (session, type) pairs that have gone quiet:
+	// a session that ended (or a sequence type it stopped emitting) leaves
+	// stage1Ordinals/stage2Ordinals entries with no further writer to ever
+	// clean them up otherwise.
+	for key, lastSeen := range c.ordinalLastSeen {
+		if lastSeen.Before(cutoff) {
+			delete(c.ordinalLastSeen, key)
+			delete(c.stage1Ordinals, key)
+			delete(c.stage2Ordinals, key)
 		}
 	}
 	c.mu.Unlock()

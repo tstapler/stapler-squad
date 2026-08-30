@@ -52,11 +52,15 @@ export function useShowMore<T>(
     }
   }, [itemId, sectionKey]);
 
-  const hasMore = items.length > cap && !showingAll;
-  const remaining = Math.max(items.length - cap, 0);
+  // Defends against callers (and test mocks) that pass an undefined/null
+  // list — e.g. a BacklogItem fixture that omits an optional notes field.
+  const safeItems = items ?? [];
+
+  const hasMore = safeItems.length > cap && !showingAll;
+  const remaining = Math.max(safeItems.length - cap, 0);
   const visible = useMemo(
-    () => (showingAll || items.length <= cap ? items : items.slice(-cap)),
-    [items, cap, showingAll]
+    () => (showingAll || safeItems.length <= cap ? safeItems : safeItems.slice(-cap)),
+    [safeItems, cap, showingAll]
   );
 
   return { visible, hasMore, remaining, showAll };

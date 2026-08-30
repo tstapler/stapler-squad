@@ -146,6 +146,24 @@ export const externalBadge = style({
   border: `1px solid ${vars.color.primaryDark}`,
 });
 
+// hostBadge shows which SSH remote a session is running on (ssh-remote-workspaces
+// Epic 6.2, Story 6.2.1). Mirrors externalBadge's shape (same shell) but uses
+// the neutral surface tokens rather than the primary-color pill -- a host
+// badge is informational, not a call-to-action the way externalBadge's
+// "this is a mux-attached external session" signal is.
+export const hostBadge = style({
+  display: "inline-flex",
+  alignItems: "center",
+  gap: vars.space["1"],
+  padding: `${vars.space["1"]} 10px`,
+  background: vars.color.surfaceSubtle,
+  color: vars.color.textSecondary,
+  borderRadius: vars.radii.full,
+  fontSize: vars.fontSize.sm,
+  fontWeight: 600,
+  border: `1px solid ${vars.color.borderColor}`,
+});
+
 export const muxIndicator = style({
   fontSize: "0.625rem",
   background: "rgba(255, 255, 255, 0.3)", // intentional: translucent white overlay on colored badge bg
@@ -224,6 +242,14 @@ export const statusNeedsApproval = style({
 export const statusUnknown = style({
   background: vars.statusBadge.idleBg,
   color: vars.statusBadge.idleFg,
+});
+
+/** Distinct style for CRASHED sessions — reuses the error palette (not the
+ *  pulsing NEEDS_APPROVAL animation, since a crash isn't an active prompt). */
+export const statusCrashed = style({
+  background: vars.color.errorBg,
+  color: vars.color.errorText,
+  border: `1px solid ${vars.color.error}`,
 });
 
 export const category = style({
@@ -829,6 +855,63 @@ export const workflowBadge = style({
   overflow: "hidden",
   textOverflow: "ellipsis",
   maxWidth: "120px",
+});
+
+export const autoApproveBadge = style({
+  display: "inline-flex",
+  alignItems: "center",
+  gap: vars.space["1"],
+  padding: `${vars.space["1"]} ${vars.space["2"]}`,
+  background: vars.color.warningBg,
+  color: vars.color.warningText,
+  borderRadius: vars.radii.full,
+  fontSize: vars.fontSize.xs,
+  fontWeight: 600,
+  border: `1px solid ${vars.color.warning}`,
+  cursor: "pointer",
+});
+
+export const autoApprovePendingBadge = style({
+  display: "inline-flex",
+  alignItems: "center",
+  gap: vars.space["1"],
+  padding: `${vars.space["1"]} ${vars.space["2"]}`,
+  borderRadius: vars.radii.sm,
+  background: vars.color.accentBg,
+  color: vars.color.textSecondary,
+  border: `1px solid ${vars.color.borderColor}`,
+  fontSize: vars.fontSize.xs,
+  fontWeight: 500,
+});
+
+export const noteBadge = style({
+  display: "inline-flex",
+  alignItems: "center",
+  gap: vars.space["1"],
+  padding: `${vars.space["1"]} ${vars.space["2"]}`,
+  borderRadius: vars.radii.sm,
+  background: vars.color.accentBg,
+  color: vars.color.textSecondary,
+  border: `1px solid ${vars.color.borderColor}`,
+  fontSize: vars.fontSize.xs,
+  fontWeight: vars.fontWeight.medium,
+  whiteSpace: "nowrap",
+});
+
+// Reuses the same warning tokens as backlog-stuck/stuckReason.css.ts's chipStaleWork
+// — both flag "no recent activity" states, so they share one visual language.
+export const staleBadge = style({
+  display: "inline-flex",
+  alignItems: "center",
+  gap: vars.space["1"],
+  padding: `${vars.space["1"]} ${vars.space["2"]}`,
+  borderRadius: vars.radii.sm,
+  background: vars.color.warningBg,
+  color: vars.color.warningText,
+  border: `1px solid ${vars.color.warning}`,
+  fontSize: vars.fontSize.xs,
+  fontWeight: 600,
+  whiteSpace: "nowrap",
 });
 
 /** Goal row compact display — session list card */

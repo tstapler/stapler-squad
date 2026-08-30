@@ -3,9 +3,12 @@ package services
 
 import (
 	"context"
-	"fmt"
 	"os"
+	"path/filepath"
+	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"connectrpc.com/connect"
 	"github.com/stretchr/testify/assert"
@@ -13,6 +16,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/vc"
 )
 
@@ -37,12 +41,7 @@ type workspaceTestFixture struct {
 func setupWorkspaceTestFixture(t *testing.T) *workspaceTestFixture {
 	t.Helper()
 
-	tmpDir, err := os.MkdirTemp("", "workspace-svc-test-*")
-	require.NoError(t, err)
-
-	dbPath := fmt.Sprintf("%s/sessions.db", tmpDir)
-	repo, err := session.NewEntRepository(session.WithDatabasePath(dbPath))
-	require.NoError(t, err)
+	repo := session.NewTestEntRepository(t)
 
 	storage, err := session.NewStorageWithRepository(repo)
 	require.NoError(t, err)
@@ -52,12 +51,6 @@ func setupWorkspaceTestFixture(t *testing.T) *workspaceTestFixture {
 
 	cleanup := func() {
 		bus.Close()
-		if err := repo.Close(); err != nil {
-			t.Logf("cleanup: repo.Close: %v", err)
-		}
-		if err := os.RemoveAll(tmpDir); err != nil {
-			t.Logf("cleanup: os.RemoveAll: %v", err)
-		}
 	}
 
 	return &workspaceTestFixture{
@@ -90,6 +83,7 @@ func seedInstance(t *testing.T, storage *session.Storage, title string) {
 // --------------------------------------------------------------------------
 
 func TestWorkspaceService_SwitchWorkspace_MissingID(t *testing.T) {
+	t.Parallel()
 	fix := setupWorkspaceTestFixture(t)
 	t.Cleanup(fix.cleanup)
 
@@ -104,6 +98,7 @@ func TestWorkspaceService_SwitchWorkspace_MissingID(t *testing.T) {
 }
 
 func TestWorkspaceService_SwitchWorkspace_MissingTarget(t *testing.T) {
+	t.Parallel()
 	fix := setupWorkspaceTestFixture(t)
 	t.Cleanup(fix.cleanup)
 
@@ -129,6 +124,7 @@ func TestWorkspaceService_SwitchWorkspace_MissingTarget(t *testing.T) {
 // inFlightSwitches before issuing the RPC call, mirroring exactly what the handler
 // does at the top of SwitchWorkspace.
 func TestWorkspaceService_ConcurrentSwitchReturnsUnavailable(t *testing.T) {
+	t.Parallel()
 	fix := setupWorkspaceTestFixture(t)
 	t.Cleanup(fix.cleanup)
 
@@ -163,6 +159,7 @@ func TestWorkspaceService_ConcurrentSwitchReturnsUnavailable(t *testing.T) {
 // After the call completes, a second call must NOT receive CodeUnavailable —
 // demonstrating that the defer ws.inFlightSwitches.Delete(req.Msg.Id) fired.
 func TestWorkspaceService_SwitchGuardCleansUpOnCompletion(t *testing.T) {
+	t.Parallel()
 	fix := setupWorkspaceTestFixture(t)
 	t.Cleanup(fix.cleanup)
 
@@ -209,6 +206,7 @@ func TestWorkspaceService_SwitchGuardCleansUpOnCompletion(t *testing.T) {
 // the underlying workspace operation fails. The key assertion is that the call
 // for session B is NOT rejected with CodeUnavailable.
 func TestWorkspaceService_SwitchGuardIsPerSession(t *testing.T) {
+	t.Parallel()
 	fix := setupWorkspaceTestFixture(t)
 	t.Cleanup(fix.cleanup)
 
@@ -246,6 +244,7 @@ func TestWorkspaceService_SwitchGuardIsPerSession(t *testing.T) {
 // accepts a session UUID as the ID parameter. Before the UUID migration, only
 // the Title was accepted; now MatchesID checks both UUID and Title.
 func TestWorkspaceService_GetVCSStatus_FindsByUUID(t *testing.T) {
+	t.Parallel()
 	fix := setupWorkspaceTestFixture(t)
 	t.Cleanup(fix.cleanup)
 
@@ -271,6 +270,7 @@ func TestWorkspaceService_GetVCSStatus_FindsByUUID(t *testing.T) {
 // TestWorkspaceService_GetVCSStatus_FindsByTitle verifies that the legacy
 // Title-based lookup still works after the UUID migration.
 func TestWorkspaceService_GetVCSStatus_FindsByTitle(t *testing.T) {
+	t.Parallel()
 	fix := setupWorkspaceTestFixture(t)
 	t.Cleanup(fix.cleanup)
 
@@ -291,6 +291,7 @@ func TestWorkspaceService_GetVCSStatus_FindsByTitle(t *testing.T) {
 // TestWorkspaceService_GetVCSStatus_UnknownIDReturnsNotFound verifies that an
 // ID that matches neither UUID nor Title of any session returns CodeNotFound.
 func TestWorkspaceService_GetVCSStatus_UnknownIDReturnsNotFound(t *testing.T) {
+	t.Parallel()
 	fix := setupWorkspaceTestFixture(t)
 	t.Cleanup(fix.cleanup)
 
@@ -312,6 +313,7 @@ func TestWorkspaceService_GetVCSStatus_UnknownIDReturnsNotFound(t *testing.T) {
 // that when SetLiveFinder is wired and FindLiveInstance returns an instance,
 // that instance is used directly without consulting storage.
 func TestWorkspaceService_FindInstanceFast_LiveFinderHit_BypassesStorage(t *testing.T) {
+	t.Parallel()
 	fix := setupWorkspaceTestFixture(t)
 	t.Cleanup(fix.cleanup)
 
@@ -336,6 +338,7 @@ func TestWorkspaceService_FindInstanceFast_LiveFinderHit_BypassesStorage(t *test
 // TestWorkspaceService_FindInstanceFast_LiveFinderMiss_FallsBackToStorage verifies
 // that when the live finder returns nil, findInstanceFast falls back to storage.
 func TestWorkspaceService_FindInstanceFast_LiveFinderMiss_FallsBackToStorage(t *testing.T) {
+	t.Parallel()
 	fix := setupWorkspaceTestFixture(t)
 	t.Cleanup(fix.cleanup)
 
@@ -363,6 +366,7 @@ func TestWorkspaceService_FindInstanceFast_LiveFinderMiss_FallsBackToStorage(t *
 // counts added alongside per-file insertion/deletion stats — through to the
 // sessionv1.FileChange proto.
 func TestFileChangeToProto(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name string
 		in   vc.FileChange
@@ -426,6 +430,7 @@ func TestFileChangeToProto(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			got := fileChangeToProto(tt.in)
 
 			assert.Equal(t, tt.want.Path, got.Path)
@@ -436,4 +441,308 @@ func TestFileChangeToProto(t *testing.T) {
 			assert.Equal(t, tt.want.Deletions, got.Deletions)
 		})
 	}
+}
+
+// --------------------------------------------------------------------------
+// GetVCSStatus: commit list / aggregate diff stat / StatusAsOf (Story 1.1.3,
+// proto mapping added by Story 2.2.1)
+//
+// These tests check both the internal vc.VCSStatus cached in
+// WorkspaceService's vcsStatusCache and the RPC response's VcsStatus proto —
+// the proto assertions are the real acceptance criterion ("all populate on
+// every GetVCSStatus response"); the cache assertions remain to pin down the
+// internal state the proto mapping is derived from.
+// --------------------------------------------------------------------------
+
+// newVCSStatusTestRepo creates a temp git repo with two commits on "main":
+// baseSHA (one file) then headSHA (a second file added) — so a caller with
+// baseSHA recorded sees exactly one unshipped commit and one changed file.
+func newVCSStatusTestRepo(t *testing.T) (dir, baseSHA, headSHA string) {
+	t.Helper()
+	dir = t.TempDir()
+	runGit(t, dir, "init", "-q", "-b", "main")
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "a.txt"), []byte("one\n"), 0o644))
+	runGit(t, dir, "add", ".")
+	runGit(t, dir, "commit", "-q", "-m", "base commit")
+	baseSHA = strings.TrimSpace(runGitOutput(t, dir, "rev-parse", "HEAD"))
+
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "b.txt"), []byte("two\n"), 0o644))
+	runGit(t, dir, "add", ".")
+	runGit(t, dir, "commit", "-q", "-m", "second commit")
+	headSHA = strings.TrimSpace(runGitOutput(t, dir, "rev-parse", "HEAD"))
+	return dir, baseSHA, headSHA
+}
+
+func TestWorkspaceService_GetVCSStatus_DirectoryMode_PopulatesCommitsAndDiffStat(t *testing.T) {
+	t.Parallel()
+	fix := setupWorkspaceTestFixture(t)
+	t.Cleanup(fix.cleanup)
+
+	dir, baseSHA, headSHA := newVCSStatusTestRepo(t)
+
+	inst := &session.Instance{Title: "dir-mode-session", Path: dir, Status: session.Paused, Program: "claude"}
+	inst.SetDirBaseSHA(baseSHA)
+	fix.svc.SetLiveFinder(&stubLiveFinder{inst: inst})
+
+	resp, err := fix.svc.GetVCSStatus(context.Background(), connect.NewRequest(&sessionv1.GetVCSStatusRequest{
+		Id: "dir-mode-session",
+	}))
+	require.NoError(t, err)
+	require.Empty(t, resp.Msg.Error)
+
+	cached, ok := fix.svc.vcsStatusCache.Load(dir)
+	require.True(t, ok, "GetVCSStatus should have cached the computed status")
+	entry := cached.(vcsStatusCacheEntry)
+
+	assert.Len(t, entry.status.Commits, 1, "one commit shipped past the recorded base")
+	assert.False(t, entry.status.CommitsTruncated)
+	assert.False(t, entry.status.CommitsUnavailable)
+	require.NotNil(t, entry.status.AggregateDiffStat)
+	assert.Equal(t, 1, entry.status.AggregateDiffStat.FilesChanged)
+	assert.False(t, entry.status.StatusAsOf.IsZero(), "StatusAsOf should be set on fresh compute")
+
+	vcsStatus := resp.Msg.VcsStatus
+	require.NotNil(t, vcsStatus)
+	require.Len(t, vcsStatus.Commits, 1, "one commit shipped past the recorded base")
+	assert.Equal(t, headSHA, vcsStatus.Commits[0].Sha)
+	assert.Equal(t, "second commit", vcsStatus.Commits[0].Summary)
+	assert.NotNil(t, vcsStatus.Commits[0].AuthoredAt)
+	assert.False(t, vcsStatus.CommitsTruncated)
+	assert.False(t, vcsStatus.CommitsUnavailable)
+	require.NotNil(t, vcsStatus.AggregateDiffStat)
+	assert.Equal(t, int32(1), vcsStatus.AggregateDiffStat.FilesChanged)
+	assert.Equal(t, int32(1), vcsStatus.AggregateDiffStat.Additions, "b.txt added one line")
+	assert.Equal(t, int32(0), vcsStatus.AggregateDiffStat.Deletions)
+	assert.NotNil(t, vcsStatus.StatusAsOf, "status_as_of should be set on fresh compute")
+}
+
+func TestWorkspaceService_GetVCSStatus_WorktreeMode_PopulatesCommitsAndDiffStat(t *testing.T) {
+	t.Parallel()
+	fix := setupWorkspaceTestFixture(t)
+	t.Cleanup(fix.cleanup)
+
+	dir, baseSHA, headSHA := newVCSStatusTestRepo(t)
+
+	// repoPath == worktreePath here, matching the pattern already used by
+	// create_pull_request_test.go's newDraftPRTestRepo call sites — the test
+	// only needs a valid git repo at the effective path, not an actual
+	// `git worktree add` checkout.
+	wt := git.NewGitWorktreeFromStorage(dir, dir, "wt-mode-session", "feature/x", baseSHA)
+	inst := &session.Instance{Title: "wt-mode-session", Status: session.Paused, Program: "claude"}
+	inst.SetGitWorktree(wt)
+	fix.svc.SetLiveFinder(&stubLiveFinder{inst: inst})
+
+	resp, err := fix.svc.GetVCSStatus(context.Background(), connect.NewRequest(&sessionv1.GetVCSStatusRequest{
+		Id: "wt-mode-session",
+	}))
+	require.NoError(t, err)
+	require.Empty(t, resp.Msg.Error)
+
+	cached, ok := fix.svc.vcsStatusCache.Load(dir)
+	require.True(t, ok, "GetVCSStatus should have cached the computed status")
+	entry := cached.(vcsStatusCacheEntry)
+
+	assert.Len(t, entry.status.Commits, 1, "one commit shipped past the recorded base")
+	assert.False(t, entry.status.CommitsUnavailable)
+	require.NotNil(t, entry.status.AggregateDiffStat)
+	assert.Equal(t, 1, entry.status.AggregateDiffStat.FilesChanged)
+	assert.False(t, entry.status.StatusAsOf.IsZero(), "StatusAsOf should be set on fresh compute")
+
+	vcsStatus := resp.Msg.VcsStatus
+	require.NotNil(t, vcsStatus)
+	require.Len(t, vcsStatus.Commits, 1, "one commit shipped past the recorded base")
+	assert.Equal(t, headSHA, vcsStatus.Commits[0].Sha)
+	assert.Equal(t, "second commit", vcsStatus.Commits[0].Summary)
+	assert.False(t, vcsStatus.CommitsUnavailable)
+	require.NotNil(t, vcsStatus.AggregateDiffStat)
+	assert.Equal(t, int32(1), vcsStatus.AggregateDiffStat.FilesChanged)
+	assert.Equal(t, int32(1), vcsStatus.AggregateDiffStat.Additions, "b.txt added one line")
+	assert.Equal(t, int32(0), vcsStatus.AggregateDiffStat.Deletions)
+	assert.NotNil(t, vcsStatus.StatusAsOf, "status_as_of should be set on fresh compute")
+}
+
+func TestWorkspaceService_GetVCSStatus_NoBaseSHA_LeavesCommitsAndDiffStatUnset(t *testing.T) {
+	t.Parallel()
+	fix := setupWorkspaceTestFixture(t)
+	t.Cleanup(fix.cleanup)
+
+	dir, _, _ := newVCSStatusTestRepo(t)
+
+	// No SetDirBaseSHA call: GetBaseCommitSHA() returns "".
+	inst := &session.Instance{Title: "no-base-session", Path: dir, Status: session.Paused, Program: "claude"}
+	fix.svc.SetLiveFinder(&stubLiveFinder{inst: inst})
+
+	resp, err := fix.svc.GetVCSStatus(context.Background(), connect.NewRequest(&sessionv1.GetVCSStatusRequest{
+		Id: "no-base-session",
+	}))
+	require.NoError(t, err)
+	require.Empty(t, resp.Msg.Error)
+
+	cached, ok := fix.svc.vcsStatusCache.Load(dir)
+	require.True(t, ok)
+	entry := cached.(vcsStatusCacheEntry)
+
+	assert.Nil(t, entry.status.Commits)
+	assert.Nil(t, entry.status.AggregateDiffStat)
+	assert.False(t, entry.status.CommitsUnavailable, "no recorded base SHA is not a fetch failure")
+
+	vcsStatus := resp.Msg.VcsStatus
+	require.NotNil(t, vcsStatus)
+	assert.Empty(t, vcsStatus.Commits)
+	assert.Nil(t, vcsStatus.AggregateDiffStat)
+	assert.False(t, vcsStatus.CommitsUnavailable, "no recorded base SHA is not a fetch failure")
+	assert.NotNil(t, vcsStatus.StatusAsOf, "status_as_of should still be set even with no base SHA")
+}
+
+// TestWorkspaceService_GetVCSStatus_HeadResolutionFailure_SetsCommitsUnavailable
+// uses a freshly `git init`ed repo with zero commits — HEAD is an unborn
+// branch ref, so git.GetHeadCommitSHA fails via both its go-git and CLI
+// fallback paths, while GitProvider.GetStatus still succeeds (git status
+// works fine before the first commit). This exercises the same failure mode
+// the plan's "point workDir at a path with no .git" example was after
+// (GetHeadCommitSHA failing) without tripping GetVCSStatus's earlier
+// NewGitProvider/GetStatus calls, which must succeed for this code path to
+// even run.
+func TestWorkspaceService_GetVCSStatus_HeadResolutionFailure_SetsCommitsUnavailable(t *testing.T) {
+	t.Parallel()
+	fix := setupWorkspaceTestFixture(t)
+	t.Cleanup(fix.cleanup)
+
+	dir := t.TempDir()
+	runGit(t, dir, "init", "-q", "-b", "main")
+
+	inst := &session.Instance{Title: "unborn-head-session", Path: dir, Status: session.Paused, Program: "claude"}
+	inst.SetDirBaseSHA("0000000000000000000000000000000000dead")
+	fix.svc.SetLiveFinder(&stubLiveFinder{inst: inst})
+
+	resp, err := fix.svc.GetVCSStatus(context.Background(), connect.NewRequest(&sessionv1.GetVCSStatusRequest{
+		Id: "unborn-head-session",
+	}))
+	require.NoError(t, err)
+	require.Empty(t, resp.Msg.Error, "GetStatus itself should still succeed on a commit-less repo")
+
+	cached, ok := fix.svc.vcsStatusCache.Load(dir)
+	require.True(t, ok)
+	entry := cached.(vcsStatusCacheEntry)
+
+	assert.True(t, entry.status.CommitsUnavailable)
+	assert.Nil(t, entry.status.Commits)
+
+	vcsStatus := resp.Msg.VcsStatus
+	require.NotNil(t, vcsStatus)
+	assert.True(t, vcsStatus.CommitsUnavailable)
+	assert.Empty(t, vcsStatus.Commits)
+}
+
+// TestWorkspaceService_GetVCSStatus_ListShippedCommitsFailure_SetsCommitsUnavailable
+// covers the sibling failure branch to the HEAD-resolution test above: HEAD
+// resolves fine, but the recorded base SHA doesn't exist in the repo, so
+// ListShippedCommits itself fails resolving baseSHA. Distinct code path
+// (workspace_service.go's listErr != nil branch, not headErr != nil) — a
+// regression here would silently render a stale/empty commit list
+// indistinguishable from "genuinely zero commits."
+func TestWorkspaceService_GetVCSStatus_ListShippedCommitsFailure_SetsCommitsUnavailable(t *testing.T) {
+	t.Parallel()
+	fix := setupWorkspaceTestFixture(t)
+	t.Cleanup(fix.cleanup)
+
+	dir, _, _ := newVCSStatusTestRepo(t)
+
+	inst := &session.Instance{Title: "bad-base-sha-session", Path: dir, Status: session.Paused, Program: "claude"}
+	// HEAD resolves fine; this base SHA is well-formed but doesn't exist in
+	// the repo, so ListShippedCommits's CommitObject(baseSHA) lookup fails.
+	inst.SetDirBaseSHA("0000000000000000000000000000000000dead")
+	fix.svc.SetLiveFinder(&stubLiveFinder{inst: inst})
+
+	resp, err := fix.svc.GetVCSStatus(context.Background(), connect.NewRequest(&sessionv1.GetVCSStatusRequest{
+		Id: "bad-base-sha-session",
+	}))
+	require.NoError(t, err)
+	require.Empty(t, resp.Msg.Error)
+
+	cached, ok := fix.svc.vcsStatusCache.Load(dir)
+	require.True(t, ok)
+	entry := cached.(vcsStatusCacheEntry)
+
+	assert.True(t, entry.status.CommitsUnavailable)
+	assert.Nil(t, entry.status.Commits)
+
+	vcsStatus := resp.Msg.VcsStatus
+	require.NotNil(t, vcsStatus)
+	assert.True(t, vcsStatus.CommitsUnavailable)
+	assert.Empty(t, vcsStatus.Commits)
+}
+
+func TestWorkspaceService_GetVCSStatus_CacheHit_ReturnsSameStatusAsOf(t *testing.T) {
+	t.Parallel()
+	fix := setupWorkspaceTestFixture(t)
+	t.Cleanup(fix.cleanup)
+
+	dir, baseSHA, _ := newVCSStatusTestRepo(t)
+
+	inst := &session.Instance{Title: "cache-hit-session", Path: dir, Status: session.Paused, Program: "claude"}
+	inst.SetDirBaseSHA(baseSHA)
+	fix.svc.SetLiveFinder(&stubLiveFinder{inst: inst})
+
+	req := connect.NewRequest(&sessionv1.GetVCSStatusRequest{Id: "cache-hit-session"})
+
+	resp1, err := fix.svc.GetVCSStatus(context.Background(), req)
+	require.NoError(t, err)
+	cached1, ok := fix.svc.vcsStatusCache.Load(dir)
+	require.True(t, ok)
+	entry1 := cached1.(vcsStatusCacheEntry)
+	require.False(t, entry1.cachedAt.IsZero())
+
+	// A short sleep so a wrongly-recomputed second call would produce a
+	// detectably different time.Now() value, not one that happens to match
+	// by coincidence.
+	time.Sleep(5 * time.Millisecond)
+
+	resp2, err := fix.svc.GetVCSStatus(context.Background(), req)
+	require.NoError(t, err)
+	cached2, ok := fix.svc.vcsStatusCache.Load(dir)
+	require.True(t, ok)
+	entry2 := cached2.(vcsStatusCacheEntry)
+
+	assert.True(t, entry1.cachedAt.Equal(entry2.cachedAt),
+		"second call within the 15s cache window must not recompute (cachedAt must not change)")
+	assert.True(t, entry2.status.StatusAsOf.Equal(entry1.cachedAt),
+		"cache-hit branch must set StatusAsOf from the cache entry's stored timestamp")
+
+	require.NotNil(t, resp1.Msg.VcsStatus.StatusAsOf)
+	require.NotNil(t, resp2.Msg.VcsStatus.StatusAsOf)
+	assert.True(t, resp1.Msg.VcsStatus.StatusAsOf.AsTime().Equal(resp2.Msg.VcsStatus.StatusAsOf.AsTime()),
+		"RPC response's status_as_of must also stay pinned to the cache entry's timestamp across a cache hit")
+}
+
+// TestWorkspaceService_GetVCSStatus_ConcurrentCacheHits_NoRace warms the cache
+// with a single synchronous call, then fires concurrent reads that should ALL
+// take the cache-hit fast path. It isolates whether the cache-hit branch's
+// StatusAsOf write races with itself or with vcsStatusToProto's concurrent
+// read of the same cached *vc.VCSStatus — run with `-race` to catch it.
+func TestWorkspaceService_GetVCSStatus_ConcurrentCacheHits_NoRace(t *testing.T) {
+	fix := setupWorkspaceTestFixture(t)
+	t.Cleanup(fix.cleanup)
+
+	dir, baseSHA, _ := newVCSStatusTestRepo(t)
+	inst := &session.Instance{Title: "race-warm-session", Path: dir, Status: session.Paused, Program: "claude"}
+	inst.SetDirBaseSHA(baseSHA)
+	fix.svc.SetLiveFinder(&stubLiveFinder{inst: inst})
+
+	req := connect.NewRequest(&sessionv1.GetVCSStatusRequest{Id: "race-warm-session"})
+
+	// Warm-up: populate the cache synchronously.
+	if _, err := fix.svc.GetVCSStatus(context.Background(), req); err != nil {
+		t.Fatal(err)
+	}
+
+	var wg sync.WaitGroup
+	for i := 0; i < 20; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, _ = fix.svc.GetVCSStatus(context.Background(), req)
+		}()
+	}
+	wg.Wait()
 }

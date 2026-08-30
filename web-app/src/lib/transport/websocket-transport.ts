@@ -54,6 +54,48 @@ function encodeEnvelope(flags: number, data: Uint8Array): Uint8Array {
 }
 
 /**
+ * Decompresses a gzip-compressed envelope payload (terminal-resync-reliability Epic 5.1,
+ * Task 5.1.1.0/5.1.1.2). The server sets the envelope's CompressedFlag (see
+ * server/protocol/envelope.go) when a payload exceeds its size threshold; this mirrors that
+ * on the client so parseResponseBody can decode the frame instead of hard-throwing.
+ *
+ * Built on ReadableStream + DecompressionStream directly (rather than Response/Blob.stream())
+ * so it also runs under Jest's jsdom environment, which polyfills those two from
+ * node:stream/web (see jest.setup.js) but does not provide a global Response.
+ */
+export async function decompressGzipPayload(data: Uint8Array): Promise<Uint8Array> {
+  // Typed as Uint8Array<ArrayBuffer> (rather than the bare Uint8Array default of
+  // Uint8Array<ArrayBufferLike>) to match DecompressionStream.readable's declared type in
+  // lib.dom.d.ts exactly — otherwise pipeThrough's generic inference can't reconcile the two
+  // and tsc rejects the call.
+  const stream = new ReadableStream<Uint8Array<ArrayBuffer>>({
+    start(controller) {
+      controller.enqueue(data as Uint8Array<ArrayBuffer>);
+      controller.close();
+    },
+  });
+  const decompressed = stream.pipeThrough(new DecompressionStream("gzip"));
+  const reader = decompressed.getReader();
+
+  const chunks: Uint8Array[] = [];
+  let totalLength = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(value);
+    totalLength += value.length;
+  }
+
+  const result = new Uint8Array(totalLength);
+  let offset = 0;
+  for (const chunk of chunks) {
+    result.set(chunk, offset);
+    offset += chunk.length;
+  }
+  return result;
+}
+
+/**
  * Creates a ConnectRPC transport that uses WebSocket for streaming calls.
  * This works around browser fetch() API limitations for bidirectional streaming.
  *
@@ -170,13 +212,9 @@ export function createWebsocketBasedTransport(
 
           const { flags, data } = result.value;
 
-          if ((flags & compressedFlag) === compressedFlag) {
-            throw new ConnectError(
-              `protocol error: received unsupported compressed output`,
-              Code.Internal
-            );
-          }
-
+          // The end-stream frame carries JSON trailer/error metadata (see endStreamFromJson
+          // below) and is never compressed by the server, so it must be checked ahead of the
+          // compressed-flag branch.
           if ((flags & endStreamFlag) === endStreamFlag) {
             endStreamReceived = true;
             const endStream = endStreamFromJson(data);
@@ -195,7 +233,19 @@ export function createWebsocketBasedTransport(
             continue;
           }
 
-          yield parse(data);
+          let payload = data;
+          if ((flags & compressedFlag) === compressedFlag) {
+            try {
+              payload = await decompressGzipPayload(data);
+            } catch (err) {
+              throw new ConnectError(
+                `protocol error: failed to decompress gzip payload: ${err instanceof Error ? err.message : String(err)}`,
+                Code.DataLoss
+              );
+            }
+          }
+
+          yield parse(payload);
         }
 
         if (!endStreamReceived) {
@@ -293,7 +343,9 @@ export function createWebsocketBasedTransport(
                     sessionId: (msg as any).sessionId,
                     dataCase: (msg as any).data?.case,
                     serializedLength: serialized.length,
-                    envelopeLength: 5 + serialized.length
+                    envelopeLength: 5 + serialized.length,
+                    readyState: (stream.socket as unknown as WebSocket).readyState,
+                    bufferedAmount: (stream.socket as unknown as WebSocket).bufferedAmount,
                   });
                 }
                 const msgBytes = encodeEnvelope(0, serialized);

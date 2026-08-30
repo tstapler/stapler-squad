@@ -1,16 +1,34 @@
 package tokens
 
 import (
+	"bytes"
 	"context"
+	"fmt"
+	"log/slog"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/log"
 )
 
+// captureLogs redirects slog's default logger to a JSON-lines buffer for the
+// duration of the test, restoring the previous default on cleanup. Not safe
+// to use from a t.Parallel() test — it mutates the process-wide slog default.
+func captureLogs(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	buf := &bytes.Buffer{}
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	return buf
+}
+
 func TestTokenStore_WhenFileNotCached_ExpectParseOnGetAll(t *testing.T) {
+	t.Parallel()
 	store := NewTokenStore("")
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -35,6 +53,7 @@ func TestTokenStore_WhenFileNotCached_ExpectParseOnGetAll(t *testing.T) {
 }
 
 func TestTokenStore_WhenFileCached_ExpectCacheHitSkipsReparse(t *testing.T) {
+	t.Parallel()
 	store := NewTokenStore("")
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -69,6 +88,7 @@ func TestTokenStore_WhenFileCached_ExpectCacheHitSkipsReparse(t *testing.T) {
 }
 
 func TestTokenStore_WhenGetByUUID_ExpectDirectLookup(t *testing.T) {
+	t.Parallel()
 	store := NewTokenStore("")
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -95,6 +115,7 @@ func TestTokenStore_WhenGetByUUID_ExpectDirectLookup(t *testing.T) {
 }
 
 func TestTokenStore_WhenConcurrentRequests_ExpectNoDataRace(t *testing.T) {
+	t.Parallel()
 	store := NewTokenStore("")
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -127,6 +148,7 @@ func TestTokenStore_WhenConcurrentRequests_ExpectNoDataRace(t *testing.T) {
 }
 
 func TestTokenStore_Subscribe_WhenStoreUpdated_ExpectNotification(t *testing.T) {
+	t.Parallel()
 	store := NewTokenStore("")
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -142,5 +164,38 @@ func TestTokenStore_Subscribe_WhenStoreUpdated_ExpectNotification(t *testing.T) 
 		// Notification received.
 	case <-time.After(5 * time.Second):
 		t.Fatal("expected subscription notification within 5 seconds")
+	}
+}
+
+// TestEnqueue_RateLimitsQueueFullWarnings guards the drop-log rate limiting
+// that motivated this package's log.DropCounter: without it, sustained
+// backpressure logs a Warn line for every single dropped file, which under
+// real load fired thousands of times per hour. Not t.Parallel(): it captures
+// the process-wide slog default.
+func TestEnqueue_RateLimitsQueueFullWarnings(t *testing.T) {
+	store := NewTokenStore("") // Start() deliberately not called — nothing drains parseQueue.
+
+	// Saturate the queue so every subsequent enqueue takes the drop path.
+	for i := 0; i < parseQueueSize; i++ {
+		store.enqueue(fmt.Sprintf("testdata/fill-%d.jsonl", i))
+	}
+
+	buf := captureLogs(t)
+
+	const drops = log.DropLogInterval + 5 // 105: crosses one rate-limit boundary
+	for i := 0; i < drops; i++ {
+		store.enqueue(fmt.Sprintf("testdata/drop-%d.jsonl", i))
+	}
+
+	lines := strings.Count(strings.TrimRight(buf.String(), "\n"), "\n") + 1
+	if buf.Len() == 0 {
+		lines = 0
+	}
+	// The counter logs on drop #1 and again on drop #101 (n%DropLogInterval==1),
+	// so 105 drops produce 2 log lines — far fewer than 105, which is the
+	// property under test.
+	const wantLines = 2
+	if lines != wantLines {
+		t.Fatalf("got %d log lines for %d drops, want %d (rate limiting not applied): %s", lines, drops, wantLines, buf.String())
 	}
 }

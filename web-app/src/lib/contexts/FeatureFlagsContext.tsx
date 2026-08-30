@@ -11,6 +11,7 @@ export interface FeatureFlagMeta {
   name: string;
   enabled: boolean;
   description: string;
+  statusDetail: string;
 }
 
 interface FeatureFlagsContextValue {
@@ -47,7 +48,7 @@ export function FeatureFlagsProvider({ children }: { children: ReactNode }) {
       const list: FeatureFlagMeta[] = [];
       for (const f of res.flags) {
         map[f.name] = f.enabled;
-        list.push({ name: f.name, enabled: f.enabled, description: f.description });
+        list.push({ name: f.name, enabled: f.enabled, description: f.description, statusDetail: f.statusDetail });
       }
       setFlags(map);
       setFlagList(list);

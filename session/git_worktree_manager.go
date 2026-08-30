@@ -25,17 +25,30 @@ import (
 // callers (e.g. GetEffectiveRootDir) don't consistently hold stateMutex, so
 // GitWorktreeManager protects its own fields directly.
 type GitWorktreeManager struct {
-	mu         deadlock.RWMutex
-	worktree   *git.GitWorktree
-	diffStats  *git.DiffStats
-	dirBaseSHA string
+	mu              deadlock.RWMutex
+	worktree        *git.GitWorktree
+	diffStats       *git.DiffStats
+	dirBaseSHA      string
+	hasCommitsAhead bool
 }
 
 // SetDirBaseSHA sets the base commit SHA for directory-mode diff computation.
-func (gm *GitWorktreeManager) SetDirBaseSHA(sha string) { gm.dirBaseSHA = sha }
+func (gm *GitWorktreeManager) SetDirBaseSHA(sha string) {
+	gm.mu.Lock()
+	defer gm.mu.Unlock()
+	gm.dirBaseSHA = sha
+}
 
 // GetDirBaseSHA returns the base commit SHA for directory-mode diff computation.
-func (gm *GitWorktreeManager) GetDirBaseSHA() string { return gm.dirBaseSHA }
+// Was unguarded until Instance.GetBaseCommitSHA() (added for the VCS-tab
+// redesign, session/instance_worktree.go) started calling it on every
+// WorkspaceService.GetVCSStatus RPC — a much hotter concurrent-read path than
+// this field previously saw, turning a latent race into a realistic one.
+func (gm *GitWorktreeManager) GetDirBaseSHA() string {
+	gm.mu.RLock()
+	defer gm.mu.RUnlock()
+	return gm.dirBaseSHA
+}
 
 // HasWorktree reports whether a git worktree has been initialized.
 func (gm *GitWorktreeManager) HasWorktree() bool {
@@ -272,6 +285,23 @@ func (gm *GitWorktreeManager) ClearDiffStats() {
 	gm.mu.Lock()
 	defer gm.mu.Unlock()
 	gm.diffStats = nil
+	gm.hasCommitsAhead = false
+}
+
+// GetHasCommitsAhead returns the most recently computed "has commits ahead of
+// base" signal (see SetHasCommitsAhead).
+func (gm *GitWorktreeManager) GetHasCommitsAhead() bool {
+	gm.mu.RLock()
+	defer gm.mu.RUnlock()
+	return gm.hasCommitsAhead
+}
+
+// SetHasCommitsAhead directly replaces the cached "has commits ahead of base"
+// signal, refreshed on the same cadence as diff stats (see UpdateDiffStats).
+func (gm *GitWorktreeManager) SetHasCommitsAhead(v bool) {
+	gm.mu.Lock()
+	defer gm.mu.Unlock()
+	gm.hasCommitsAhead = v
 }
 
 // GitManager is the interface satisfied by *GitWorktreeManager.
@@ -302,6 +332,8 @@ type GitManager interface {
 	GetDiffStats() *git.DiffStats
 	SetDiffStats(*git.DiffStats)
 	ClearDiffStats()
+	GetHasCommitsAhead() bool
+	SetHasCommitsAhead(bool)
 	GetCurrentCommitSHA() (string, error)
 	PrimeDirtyCacheJitter()
 }

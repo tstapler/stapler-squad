@@ -5,38 +5,19 @@
  */
 
 import React from "react";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import { BacklogItemDetail } from "./BacklogItemDetail";
 import type { BacklogItem } from "@/lib/hooks/useBacklogService";
 
-/**
- * DescriptionSection (Story 3.1.3) is collapsed by default — its content is
- * removed from the DOM (not just hidden) until the header is expanded, per
- * CollapsibleSection's contract. Expand it before asserting on rendered
- * description content.
- */
-async function expandDescription() {
-  const header = await screen.findByTestId("collapsible-header-description");
-  fireEvent.click(header);
-}
+jest.mock("./SessionMonitor", () => require("./backlogItemDetailTestFixtures").sessionMonitorMock());
+jest.mock("./GateVerdictBox", () => require("./backlogItemDetailTestFixtures").gateVerdictBoxMock());
+jest.mock("./TriageReviewPanel", () => require("./backlogItemDetailTestFixtures").triageReviewPanelMock());
+jest.mock("./TriageLoadingIndicator", () => require("./backlogItemDetailTestFixtures").triageLoadingIndicatorMock());
 
-jest.mock("./SessionMonitor", () => ({ SessionMonitor: () => null }));
-jest.mock("./GateVerdictBox", () => ({ GateVerdictBox: () => null }));
-jest.mock("./TriageReviewPanel", () => ({ TriageReviewPanel: () => null }));
-jest.mock("./TriageLoadingIndicator", () => ({ TriageLoadingIndicator: () => null }));
-
-jest.mock("@/lib/hooks/useSessionRepoPaths", () => ({
-  useSessionRepoPaths: () => [],
-}));
-jest.mock("@/lib/hooks/usePathCompletions", () => ({
-  usePathCompletions: () => ({ entries: [], isLoading: false }),
-}));
-jest.mock("@/lib/hooks/useSessionService", () => ({
-  useSessionService: () => ({ deleteSession: jest.fn() }),
-}));
-jest.mock("@/lib/analytics", () => ({
-  useAnalytics: () => ({ track: jest.fn() }),
-}));
+jest.mock("@/lib/hooks/useSessionRepoPaths", () => require("./backlogItemDetailTestFixtures").useSessionRepoPathsMock());
+jest.mock("@/lib/hooks/usePathCompletions", () => require("./backlogItemDetailTestFixtures").usePathCompletionsMock());
+jest.mock("@/lib/hooks/useSessionService", () => require("./backlogItemDetailTestFixtures").useSessionServiceMock());
+jest.mock("@/lib/analytics", () => require("./backlogItemDetailTestFixtures").analyticsMock());
 
 // Epic 5.3 (backlog-event-driven-updates): BacklogItemDetail now also
 // subscribes via useWatchBacklogItems + a Redux selector, and opens its own
@@ -44,27 +25,15 @@ jest.mock("@/lib/analytics", () => ({
 // (Task 5.3.1b/5.3.1c). None of these tests exercise that live-update path,
 // so everything is stubbed inert: no live item ever arrives, and the raw
 // terminal stream yields no events.
-jest.mock("@/lib/hooks/useWatchBacklogItems", () => ({
-  useWatchBacklogItems: () => ({ items: [], connectionState: "live" }),
-}));
-jest.mock("@/lib/store", () => ({
-  useAppSelector: () => undefined,
-}));
-jest.mock("@connectrpc/connect", () => ({
-  createClient: () => ({
-    watchBacklogItems: () => (async function* () {})(),
-  }),
-}));
-jest.mock("@connectrpc/connect-web", () => ({
-  createConnectTransport: jest.fn().mockReturnValue({}),
-}));
+jest.mock("@/lib/hooks/useWatchBacklogItems", () => require("./backlogItemDetailTestFixtures").useWatchBacklogItemsMock());
+jest.mock("@/lib/store", () => require("./backlogItemDetailTestFixtures").storeMock());
+jest.mock("@connectrpc/connect", () => require("./backlogItemDetailTestFixtures").connectMock());
+jest.mock("@connectrpc/connect-web", () => require("./backlogItemDetailTestFixtures").connectWebMock());
 
 // BacklogItemDetail calls useStuckBacklogItems() once and passes the
 // resolved StuckBacklogItem down to LifecycleSummary as a prop — stub it so
 // this suite never attempts a real ConnectRPC call.
-jest.mock("@/lib/hooks/useStuckBacklogItems", () => ({
-  useStuckBacklogItems: () => ({ items: [], isLoading: false, error: null }),
-}));
+jest.mock("@/lib/hooks/useStuckBacklogItems", () => require("./backlogItemDetailTestFixtures").useStuckBacklogItemsMock());
 
 const getBacklogItem = jest.fn();
 const listPipelineModes = jest.fn().mockResolvedValue([]);
@@ -105,6 +74,7 @@ const baseItem: BacklogItem = {
   statusEvents: [],
   totalEstimatedCostUsd: 0,
   progressNotes: [],
+  activityNotes: [],
   autoSpawnSession: false,
   autoCreatePR: false,
 };
@@ -114,10 +84,17 @@ describe("BacklogItemDetail — description markdown rendering", () => {
     getBacklogItem.mockReset();
     // Story 3.1.4's useSectionExpandState persists collapse state to
     // localStorage keyed by itemId — clear between tests so one test's
-    // expand click never leaks into the next test reusing "item-1".
+    // stored preference never leaks into the next test reusing "item-1".
     localStorage.clear();
   });
 
+  // Description now defaults expanded (backlog-description-prominence) — no
+  // click needed before asserting on rendered content. This suite renders
+  // the real BacklogItemDetail (not the isolated DescriptionSection), so it
+  // is the only place that verifies the seed value
+  // (BacklogItemDetail.tsx's useSectionExpandState default) and the
+  // threaded defaultExpanded prop stay in sync end-to-end — don't assume
+  // DescriptionSection.test.tsx already covers this.
   it("renders bold text and links instead of literal markdown syntax", async () => {
     getBacklogItem.mockResolvedValue({
       ...baseItem,
@@ -125,7 +102,6 @@ describe("BacklogItemDetail — description markdown rendering", () => {
     });
 
     render(<BacklogItemDetail itemId="item-1" />);
-    await expandDescription();
 
     const rendered = await screen.findByTestId("backlog-description-rendered");
     expect(rendered.querySelector("strong")).toHaveTextContent("bold");
@@ -141,7 +117,6 @@ describe("BacklogItemDetail — description markdown rendering", () => {
     });
 
     render(<BacklogItemDetail itemId="item-1" />);
-    await expandDescription();
 
     const rendered = await screen.findByTestId("backlog-description-rendered");
     const img = rendered.querySelector("img");
@@ -155,10 +130,23 @@ describe("BacklogItemDetail — description markdown rendering", () => {
     });
 
     render(<BacklogItemDetail itemId="item-1" />);
-    await expandDescription();
 
     const rendered = await screen.findByTestId("backlog-description-rendered");
     expect(rendered.querySelector("script")).not.toBeInTheDocument();
     expect((window as unknown as { __pwned?: boolean }).__pwned).toBeUndefined();
+  });
+
+  it("keeps Description collapsed when a stored per-item preference says so, even though the new default is expanded", async () => {
+    getBacklogItem.mockResolvedValue({
+      ...baseItem,
+      description: "**bold**",
+    });
+    localStorage.setItem("backlog-detail-section-item-1-description", "false");
+
+    render(<BacklogItemDetail itemId="item-1" />);
+
+    const header = await screen.findByTestId("collapsible-header-description");
+    expect(header).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByTestId("backlog-description-rendered")).not.toBeInTheDocument();
   });
 });

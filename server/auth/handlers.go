@@ -114,8 +114,11 @@ func (h *httpHandlers) beginRegistration(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// Gate: either authenticated, or setup token provided, or no passkeys yet
-	if h.store.HasCredentials() && !h.isAuthorised(r) {
+	// Gate: either authenticated, or a valid setup/invite token is provided.
+	// This must be checked even when no passkeys exist yet (bootstrap) --
+	// otherwise the first unauthenticated request wins the account with no
+	// proof of possessing the printed/QR setup token.
+	if !h.isAuthorised(r) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
@@ -145,7 +148,7 @@ func (h *httpHandlers) finishRegistration(w http.ResponseWriter, r *http.Request
 	}
 
 	// Gate: same as begin
-	if h.store.HasCredentials() && !h.isAuthorised(r) {
+	if !h.isAuthorised(r) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}

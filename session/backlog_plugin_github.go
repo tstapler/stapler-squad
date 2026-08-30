@@ -1,6 +1,7 @@
 package session
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -14,6 +15,14 @@ import (
 )
 
 const githubIssuesPerPage = 50
+
+// maxPreviewFetchPages bounds FetchAll's pagination loop (used only by
+// PreviewBackwardSyncImpact) so a repo with an enormous issue history can't
+// make the preview RPC do unbounded work. 20 pages * githubIssuesPerPage (50)
+// = up to 1000 issues fetched per preview call by default. A var (not a
+// const) so tests can shrink it to exercise the cap-hit/possiblyIncomplete
+// path without fabricating 1000 issues of fixture data.
+var maxPreviewFetchPages = 20
 
 // githubAPIBaseURL is the default base URL used when a plugin config doesn't
 // specify a Host. Overridden in tests (session/backlog_plugin_github_test.go)
@@ -47,6 +56,7 @@ type githubIssue struct {
 	Number    int    `json:"number"`
 	Title     string `json:"title"`
 	Body      string `json:"body"`
+	State     string `json:"state"`
 	UpdatedAt string `json:"updated_at"`
 	HTMLURL   string `json:"html_url"`
 	Labels    []struct {
@@ -71,59 +81,138 @@ func (g *GitHubIssuesPlugin) PluginID() string {
 // an ISO 8601 timestamp passed as the `since` query parameter. Returns the
 // updated cursor (the most recent updated_at seen) and the fetched items.
 // If the token field is empty, Fetch returns an empty list and the original cursor.
+//
+// Fetch is single-page (githubIssuesPerPage per call) — correct for the
+// incremental sync path, where the cursor bounds results to items updated
+// since the last tick. Callers that need the full result set regardless of
+// page size (e.g. PreviewBackwardSyncImpact) must use FetchAll instead; a
+// single Fetch call silently misses older items on repos with more than one
+// page of history, since GitHub sorts by `created` descending by default.
 func (g *GitHubIssuesPlugin) Fetch(ctx context.Context, config PluginConfig, cursor string) ([]ExternalItem, string, error) {
-	var cfg githubPluginConfig
-	if config.Raw != "" {
-		if err := json.Unmarshal([]byte(config.Raw), &cfg); err != nil {
-			return nil, cursor, fmt.Errorf("github_issues: parse config: %w", err)
+	cfg, disabled, err := decodeGithubIssuesFetchConfig(config)
+	if err != nil {
+		return nil, cursor, err
+	}
+	if disabled {
+		return nil, cursor, nil
+	}
+
+	issues, err := g.fetchIssuesPage(ctx, cfg, cursor, 1)
+	if err != nil {
+		return nil, cursor, err
+	}
+	items, newCursor := convertGithubIssues(issues, cfg.LabelPriorityMap, cursor)
+	return items, newCursor, nil
+}
+
+// FetchAll retrieves every GitHub issue across up to maxPreviewFetchPages
+// pages, aggregating results the way Fetch's single-page call cannot. Used
+// only by PreviewBackwardSyncImpact, which needs to see the true state of
+// all already-imported items rather than just the newest page.
+//
+// possiblyIncomplete is true if the page cap was hit while the last page
+// fetched was still full — meaning there may be more issues beyond what was
+// returned, and callers must not treat the result as exhaustive.
+func (g *GitHubIssuesPlugin) FetchAll(ctx context.Context, config PluginConfig, cursor string) (items []ExternalItem, newCursor string, possiblyIncomplete bool, err error) {
+	cfg, disabled, err := decodeGithubIssuesFetchConfig(config)
+	if err != nil {
+		return nil, cursor, false, err
+	}
+	if disabled {
+		return nil, cursor, false, nil
+	}
+
+	var allIssues []githubIssue
+	for page := 1; page <= maxPreviewFetchPages; page++ {
+		issues, fetchErr := g.fetchIssuesPage(ctx, cfg, cursor, page)
+		if fetchErr != nil {
+			return nil, cursor, false, fetchErr
+		}
+		allIssues = append(allIssues, issues...)
+		if len(issues) < githubIssuesPerPage {
+			// Short (or empty) page — no more results.
+			possiblyIncomplete = false
+			items, newCursor = convertGithubIssues(allIssues, cfg.LabelPriorityMap, cursor)
+			return items, newCursor, possiblyIncomplete, nil
+		}
+		if page == maxPreviewFetchPages {
+			// Hit the cap on a full page — there may be more beyond it.
+			possiblyIncomplete = true
 		}
 	}
 
-	// Token is required; disabled when absent.
+	items, newCursor = convertGithubIssues(allIssues, cfg.LabelPriorityMap, cursor)
+	return items, newCursor, possiblyIncomplete, nil
+}
+
+// decodeGithubIssuesFetchConfig parses config the way Fetch/FetchAll do.
+// disabled is true if the token is absent (source disabled, not an error) —
+// callers must check disabled before touching cfg, which is only valid when
+// disabled is false and err is nil.
+func decodeGithubIssuesFetchConfig(config PluginConfig) (cfg githubPluginConfig, disabled bool, err error) {
+	if config.Raw != "" {
+		if err := json.Unmarshal([]byte(config.Raw), &cfg); err != nil {
+			return githubPluginConfig{}, false, fmt.Errorf("github_issues: parse config: %w", err)
+		}
+	}
+	// Token is required; disabled when absent. Prefer the shared keychain (one
+	// credential per host, managed in Settings) over a per-source config token,
+	// falling back to it for sources configured before this migration.
+	if token := github.GetKeychainTokenForHost(cfg.Host); token != "" {
+		cfg.Token = token
+	}
 	if cfg.Token == "" {
-		return nil, cursor, nil
+		return githubPluginConfig{}, true, nil
 	}
 	if cfg.Owner == "" || cfg.Repo == "" {
-		return nil, cursor, fmt.Errorf("github_issues: owner and repo are required in config")
+		return githubPluginConfig{}, false, fmt.Errorf("github_issues: owner and repo are required in config")
 	}
+	return cfg, false, nil
+}
 
-	url := githubAPIURL(cfg.Host, fmt.Sprintf("repos/%s/%s/issues?state=open&per_page=%d", cfg.Owner, cfg.Repo, githubIssuesPerPage))
+// fetchIssuesPage fetches a single page of raw issues from the GitHub API.
+func (g *GitHubIssuesPlugin) fetchIssuesPage(ctx context.Context, cfg githubPluginConfig, cursor string, page int) ([]githubIssue, error) {
+	url := githubAPIURL(cfg.Host, fmt.Sprintf("repos/%s/%s/issues?state=all&per_page=%d&page=%d", cfg.Owner, cfg.Repo, githubIssuesPerPage, page))
 	if cursor != "" {
 		url += "&since=" + cursor
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return nil, cursor, fmt.Errorf("github_issues: build request: %w", err)
+		return nil, fmt.Errorf("github_issues: build request: %w", err)
 	}
 	req.Header.Set("Authorization", "token "+cfg.Token)
 	req.Header.Set("Accept", "application/vnd.github.v3+json")
 
-	client := &http.Client{Timeout: 30 * time.Second}
-	resp, err := client.Do(req)
+	resp, err := github.HTTPClient().Do(req)
 	if err != nil {
-		return nil, cursor, fmt.Errorf("github_issues: request failed: %w", err)
+		return nil, fmt.Errorf("github_issues: request failed: %w", err)
 	}
 	defer resp.Body.Close()
 
 	// Handle rate limiting.
 	if resp.StatusCode == http.StatusTooManyRequests ||
 		(resp.StatusCode == http.StatusForbidden && resp.Header.Get("X-RateLimit-Remaining") == "0") {
-		return nil, cursor, fmt.Errorf("github_issues: rate limited (status %d)", resp.StatusCode)
+		return nil, fmt.Errorf("github_issues: rate limited (status %d)", resp.StatusCode)
 	}
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return nil, cursor, fmt.Errorf("github_issues: unexpected status %d: %s", resp.StatusCode, string(body))
+		return nil, fmt.Errorf("github_issues: unexpected status %d: %s", resp.StatusCode, string(body))
 	}
 
 	var issues []githubIssue
 	if err := json.NewDecoder(resp.Body).Decode(&issues); err != nil {
-		return nil, cursor, fmt.Errorf("github_issues: decode response: %w", err)
+		return nil, fmt.Errorf("github_issues: decode response: %w", err)
 	}
+	return issues, nil
+}
 
+// convertGithubIssues maps raw GitHub issues to ExternalItems and computes
+// the new cursor (the most recent updated_at seen, starting from cursor).
+func convertGithubIssues(issues []githubIssue, labelPriorityMap map[string]int, cursor string) ([]ExternalItem, string) {
 	if len(issues) == 0 {
-		return nil, cursor, nil
+		return nil, cursor
 	}
 
 	items := make([]ExternalItem, 0, len(issues))
@@ -133,7 +222,7 @@ func (g *GitHubIssuesPlugin) Fetch(ctx context.Context, config PluginConfig, cur
 		// Compute priority from label map.
 		priority := 3
 		for _, label := range issue.Labels {
-			if p, ok := cfg.LabelPriorityMap[label.Name]; ok {
+			if p, ok := labelPriorityMap[label.Name]; ok {
 				priority = p
 				break
 			}
@@ -144,13 +233,21 @@ func (g *GitHubIssuesPlugin) Fetch(ctx context.Context, config PluginConfig, cur
 			labelNames[i] = l.Name
 		}
 
+		// Best-effort parse of updated_at for IssueUpdatedAt; if it fails to
+		// parse (unexpected format), IssueUpdatedAt is left at its zero value
+		// rather than failing the whole Fetch — the string form is still used
+		// unmodified for the newCursor comparison below.
+		issueUpdatedAt, _ := time.Parse(time.RFC3339, issue.UpdatedAt)
+
 		items = append(items, ExternalItem{
-			ExternalID:  strconv.Itoa(issue.Number),
-			Title:       issue.Title,
-			Description: issue.Body,
-			Labels:      labelNames,
-			Priority:    priority,
-			URL:         issue.HTMLURL,
+			ExternalID:     strconv.Itoa(issue.Number),
+			Title:          issue.Title,
+			Description:    issue.Body,
+			Labels:         labelNames,
+			Priority:       priority,
+			URL:            issue.HTMLURL,
+			State:          issue.State,
+			IssueUpdatedAt: issueUpdatedAt,
 		})
 
 		// Track latest updated_at as the new cursor.
@@ -159,7 +256,154 @@ func (g *GitHubIssuesPlugin) Fetch(ctx context.Context, config PluginConfig, cur
 		}
 	}
 
-	return items, newCursor, nil
+	return items, newCursor
+}
+
+// decodeGithubIssuesConfig parses a PluginConfig's raw JSON the same way Fetch
+// does, but — unlike Fetch, which treats a missing token as "source disabled,
+// return an empty result" — requires Owner/Repo/Token to be present, since
+// CloseIssue/PostIssueComment are only ever invoked once a source is already
+// known-enabled with credentials (the forward-sync subscriber checks
+// ForwardSyncEnabled before calling either method). Like
+// decodeGithubIssuesFetchConfig, prefers the shared keychain token for
+// cfg.Host over a per-source config token, falling back to it for sources
+// configured before the keychain migration.
+func decodeGithubIssuesConfig(config PluginConfig) (githubPluginConfig, error) {
+	var cfg githubPluginConfig
+	if config.Raw != "" {
+		if err := json.Unmarshal([]byte(config.Raw), &cfg); err != nil {
+			return cfg, fmt.Errorf("github_issues: parse config: %w", err)
+		}
+	}
+	if token := github.GetKeychainTokenForHost(cfg.Host); token != "" {
+		cfg.Token = token
+	}
+	if cfg.Token == "" {
+		return cfg, fmt.Errorf("github_issues: token is required")
+	}
+	if cfg.Owner == "" || cfg.Repo == "" {
+		return cfg, fmt.Errorf("github_issues: owner and repo are required in config")
+	}
+	return cfg, nil
+}
+
+// CloseIssue closes a GitHub issue and, if closeLabel is non-empty, merges it
+// into the issue's existing labels (never replacing them — GitHub's labels
+// field on this endpoint fully replaces the array, so existingLabels must be
+// passed in and merged locally; this replace-vs-merge semantic is documented
+// at https://docs.github.com/en/rest/issues/issues#update-an-issue — the
+// `labels` field, when present, sets the issue's full label list). Omitting
+// the `labels` field entirely (rather than sending an empty array) leaves the
+// issue's existing labels untouched, which is why closeLabel == "" skips the
+// field rather than sending `"labels":[]`.
+//
+// Returns the issue's post-close updated_at from GitHub's own response — the
+// caller uses this (not local wall-clock time) for the ADR-003 loop-prevention
+// watermark, to avoid clock-skew/read-after-write-lag entirely. Returns a zero
+// time (with a nil error) only in the narrow case where the close succeeded
+// (HTTP status < 300) but the response body couldn't be decoded — the close
+// itself must not be treated as failed just because the confirmation body was
+// unparseable.
+func (g *GitHubIssuesPlugin) CloseIssue(ctx context.Context, config PluginConfig, externalID string, existingLabels []string, closeLabel string) (time.Time, error) {
+	cfg, err := decodeGithubIssuesConfig(config)
+	if err != nil {
+		return time.Time{}, err
+	}
+
+	body := map[string]interface{}{"state": "closed"}
+	if closeLabel != "" {
+		body["labels"] = mergeLabels(existingLabels, closeLabel)
+	}
+	payload, err := json.Marshal(body)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("github_issues: encode close body: %w", err)
+	}
+
+	url := githubAPIURL(cfg.Host, fmt.Sprintf("repos/%s/%s/issues/%s", cfg.Owner, cfg.Repo, externalID))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPatch, url, bytes.NewReader(payload))
+	if err != nil {
+		return time.Time{}, fmt.Errorf("github_issues: build close request: %w", err)
+	}
+	req.Header.Set("Authorization", "token "+cfg.Token)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := github.HTTPClient().Do(req)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("github_issues: close issue %s request failed: %w", externalID, err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusTooManyRequests ||
+		(resp.StatusCode == http.StatusForbidden && resp.Header.Get("X-RateLimit-Remaining") == "0") {
+		return time.Time{}, fmt.Errorf("github_issues: rate limited closing issue %s (retry-after=%s)", externalID, resp.Header.Get("Retry-After"))
+	}
+	if resp.StatusCode >= 300 {
+		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		return time.Time{}, fmt.Errorf("github_issues: close issue %s failed: status %d: %s", externalID, resp.StatusCode, string(respBody))
+	}
+
+	var closed githubIssue
+	if err := json.NewDecoder(resp.Body).Decode(&closed); err != nil {
+		// The close itself succeeded (status < 300) — a response-body parse
+		// failure must not be treated as a failed close. Return a zero time;
+		// the caller falls back to local time for the watermark only in this
+		// narrow decode-failure case, not as the default path.
+		return time.Time{}, nil
+	}
+	updatedAt, _ := time.Parse(time.RFC3339, closed.UpdatedAt)
+	return updatedAt, nil
+}
+
+// mergeLabels returns existing with add appended, unless add is already
+// present (case-sensitive match, matching GitHub's own label-name comparison
+// for this endpoint).
+func mergeLabels(existing []string, add string) []string {
+	for _, l := range existing {
+		if l == add {
+			return existing
+		}
+	}
+	merged := make([]string, 0, len(existing)+1)
+	merged = append(merged, existing...)
+	return append(merged, add)
+}
+
+// PostIssueComment posts a comment on a GitHub issue — used by the
+// forward-sync subscriber to leave a visible trail explaining an automated
+// close, per the "no silent automated action" convention (pitfalls research
+// §7). Returns an error on any non-2xx response; callers treat a comment
+// failure as best-effort (the close itself already succeeded by the time this
+// is called).
+func (g *GitHubIssuesPlugin) PostIssueComment(ctx context.Context, config PluginConfig, externalID string, body string) error {
+	cfg, err := decodeGithubIssuesConfig(config)
+	if err != nil {
+		return err
+	}
+
+	payload, err := json.Marshal(map[string]string{"body": body})
+	if err != nil {
+		return fmt.Errorf("github_issues: encode comment body: %w", err)
+	}
+
+	url := githubAPIURL(cfg.Host, fmt.Sprintf("repos/%s/%s/issues/%s/comments", cfg.Owner, cfg.Repo, externalID))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(payload))
+	if err != nil {
+		return fmt.Errorf("github_issues: build comment request: %w", err)
+	}
+	req.Header.Set("Authorization", "token "+cfg.Token)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := github.HTTPClient().Do(req)
+	if err != nil {
+		return fmt.Errorf("github_issues: post comment on issue %s request failed: %w", externalID, err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 300 {
+		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		return fmt.Errorf("github_issues: post comment on issue %s failed: status %d: %s", externalID, resp.StatusCode, string(respBody))
+	}
+	return nil
 }
 
 // MapToBacklogItem converts a GitHub ExternalItem to a BacklogItemData.
@@ -180,6 +424,8 @@ func (g *GitHubIssuesPlugin) MapToBacklogItem(item ExternalItem, sourceID string
 		Priority:    item.Priority,
 		Status:      string(BacklogStatusIdea),
 		ExternalID:  item.ExternalID,
+		ExternalURL: item.URL,
+		Labels:      item.Labels,
 		SourceID:    sourceID,
 	}
 }

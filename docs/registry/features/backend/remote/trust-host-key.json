@@ -1,0 +1,19 @@
+{
+  "id": "remote:trust-host-key",
+  "type": "backend",
+  "service": "RemoteService",
+  "method": "TrustRemoteHostKey",
+  "protoFile": "proto/session/v1/remote.proto",
+  "markerFound": true,
+  "handlerFile": "server/services/remote_service.go",
+  "tested": true,
+  "testIds": [
+    "TestTrustRemoteHostKey_Then_TestRemoteConnection_RoundTripSucceeds",
+    "TestTrustRemoteHostKey_RejectsMismatchedFingerprint",
+    "TestTrustRemoteHostKey_MissingFingerprint_ReturnsInvalidArgument",
+    "TestTrustRemoteHostKey_UnknownRemote_ReturnsNotFound",
+    "TestDraftFlow_GenerateIdentity_TrustHostKey_Then_CreateRemote_RoundTripSucceeds",
+    "remote-workspaces \u003e add a remote, test connection, trust the host key, verify Connected status"
+  ],
+  "lastModified": "2026-08-17T00:00:00Z"
+}

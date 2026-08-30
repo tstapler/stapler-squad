@@ -1,0 +1,13 @@
+{
+  "id": "import-external-sessions-panel",
+  "type": "frontend",
+  "component": "ImportExternalSessionsPanel",
+  "path": "web-app/src/components/sessions/ImportExternalSessionsPanel.tsx",
+  "markerLine": 2,
+  "tested": true,
+  "testIds": [
+    "web-app/src/components/sessions/ImportExternalSessionsPanel.test.tsx",
+    "tests/e2e/import-external-session.spec.ts"
+  ],
+  "lastModified": "2026-07-27T00:00:00Z"
+}

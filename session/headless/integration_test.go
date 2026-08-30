@@ -18,13 +18,14 @@ import (
 // TestPool_RealClaude_SimplePrompt calls the real claude binary with a trivial prompt.
 // Requires CLAUDE_INTEGRATION_TESTS=true and claude in PATH.
 func TestPool_RealClaude_SimplePrompt(t *testing.T) {
+	t.Parallel()
 	pool, err := NewPool(PoolConfig{MaxCallsPerSession: 5, MaxConcurrentSessions: 2})
 	require.NoError(t, err, "NewPool should succeed when claude is in PATH")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
 
-	result, _, err := pool.CallBlocking(ctx, FeatureKeyCustom, "", "Say hello in exactly 3 words.", CallOptions{})
+	result, err := pool.CallBlocking(ctx, FeatureKeyCustom, "", "Say hello in exactly 3 words.", CallOptions{}, DiscardCost)
 	require.NoError(t, err)
 	assert.NotEmpty(t, result, "result should be non-empty")
 	t.Logf("claude response: %q", result)
@@ -32,6 +33,7 @@ func TestPool_RealClaude_SimplePrompt(t *testing.T) {
 
 // TestPool_RealClaude_SessionResumption verifies that the second call uses --resume.
 func TestPool_RealClaude_SessionResumption(t *testing.T) {
+	t.Parallel()
 	// Wrap a real pool to inspect args.
 	realPool, err := NewPool(PoolConfig{MaxCallsPerSession: 10, MaxConcurrentSessions: 1})
 	require.NoError(t, err)
@@ -45,10 +47,10 @@ func TestPool_RealClaude_SessionResumption(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
 
-	_, _, err = realPool.CallBlocking(ctx, "integration-test", "", "Say 'first call'", CallOptions{})
+	_, err = realPool.CallBlocking(ctx, "integration-test", "", "Say 'first call'", CallOptions{}, DiscardCost)
 	require.NoError(t, err, "first call should succeed")
 
-	_, _, err = realPool.CallBlocking(ctx, "integration-test", "", "Say 'second call'", CallOptions{})
+	_, err = realPool.CallBlocking(ctx, "integration-test", "", "Say 'second call'", CallOptions{}, DiscardCost)
 	require.NoError(t, err, "second call should succeed")
 
 	require.Len(t, capturedArgs, 2, "should have captured 2 calls")
@@ -78,6 +80,7 @@ func TestPool_RealClaude_SessionResumption(t *testing.T) {
 // CallOptions{WorkDir: ...} alone (no other flags) grants the headless
 // `claude -p` subprocess real read access to files in that directory.
 func TestPool_RealClaude_WorkDirOnly_GrantsReadAccess(t *testing.T) {
+	t.Parallel()
 	tempDir := t.TempDir()
 	markerValue := "STAPLER_SQUAD_MARKER_7f3a1"
 	require.NoError(t, os.WriteFile(filepath.Join(tempDir, "marker.txt"), []byte(markerValue), 0o644))
@@ -88,7 +91,7 @@ func TestPool_RealClaude_WorkDirOnly_GrantsReadAccess(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
 
-	result, _, err := pool.CallBlocking(ctx, FeatureKeyCustom, "", "Read the file marker.txt in your current working directory and output ONLY its exact contents, nothing else.", CallOptions{WorkDir: tempDir})
+	result, err := pool.CallBlocking(ctx, FeatureKeyCustom, "", "Read the file marker.txt in your current working directory and output ONLY its exact contents, nothing else.", CallOptions{WorkDir: tempDir}, DiscardCost)
 	require.NoError(t, err)
 	require.Contains(t, result, markerValue)
 }
@@ -100,6 +103,7 @@ func TestPool_RealClaude_WorkDirOnly_GrantsReadAccess(t *testing.T) {
 // break the WorkDir-only read access proven by
 // TestPool_RealClaude_WorkDirOnly_GrantsReadAccess above.
 func TestPool_RealClaude_WorkDirWithToolFlags_GrantsReadAccess(t *testing.T) {
+	t.Parallel()
 	tempDir := t.TempDir()
 	markerValue := "STAPLER_SQUAD_MARKER_9c2e4"
 	require.NoError(t, os.WriteFile(filepath.Join(tempDir, "marker.txt"), []byte(markerValue), 0o644))
@@ -113,11 +117,11 @@ func TestPool_RealClaude_WorkDirWithToolFlags_GrantsReadAccess(t *testing.T) {
 	// session.PermissionModeBypassPermissions == "bypassPermissions", but the
 	// session package imports session/headless, so importing session here
 	// would create an import cycle; use the literal value instead.
-	result, _, err := pool.CallBlocking(ctx, FeatureKeyCustom, "", "Read the file marker.txt in your current working directory and output ONLY its exact contents, nothing else.", CallOptions{
+	result, err := pool.CallBlocking(ctx, FeatureKeyCustom, "", "Read the file marker.txt in your current working directory and output ONLY its exact contents, nothing else.", CallOptions{
 		WorkDir:        tempDir,
 		AllowedTools:   "Read,Grep,Glob",
 		PermissionMode: "bypassPermissions",
-	})
+	}, DiscardCost)
 	require.NoError(t, err)
 	require.Contains(t, result, markerValue)
 }
@@ -165,6 +169,7 @@ const (
 // since either outcome (blocked or allowed) is a valid empirical finding, not a bug in
 // itself — the point is to know which one is true before trusting the feature.
 func TestPool_RealClaude_UnlistedBashCommand_BlockedOrAllowed(t *testing.T) {
+	t.Parallel()
 	pool, err := NewPool(PoolConfig{MaxCallsPerSession: 5, MaxConcurrentSessions: 2})
 	require.NoError(t, err, "NewPool should succeed when claude is in PATH")
 
@@ -180,12 +185,12 @@ func TestPool_RealClaude_UnlistedBashCommand_BlockedOrAllowed(t *testing.T) {
 			canaryPath, canaryPath,
 		)
 
-		result, _, err := pool.CallBlocking(ctx, FeatureKeyCustom, "", prompt, CallOptions{
+		result, err := pool.CallBlocking(ctx, FeatureKeyCustom, "", prompt, CallOptions{
 			WorkDir:         tempDir,
 			AllowedTools:    testCodebaseReadAllowedToolsWithBash,
 			PermissionMode:  "bypassPermissions",
 			DisallowedTools: testCodebaseReadDisallowedTools,
-		})
+		}, DiscardCost)
 
 		t.Logf("[UnlistedCommand] CallBlocking err: %v", err)
 		t.Logf("[UnlistedCommand] raw result: %q", result)
@@ -210,12 +215,12 @@ func TestPool_RealClaude_UnlistedBashCommand_BlockedOrAllowed(t *testing.T) {
 			canaryPath, canaryPath,
 		)
 
-		result, _, err := pool.CallBlocking(ctx, FeatureKeyCustom, "", prompt, CallOptions{
+		result, err := pool.CallBlocking(ctx, FeatureKeyCustom, "", prompt, CallOptions{
 			WorkDir:         tempDir,
 			AllowedTools:    testCodebaseReadAllowedToolsWithBash,
 			PermissionMode:  "bypassPermissions",
 			DisallowedTools: testCodebaseReadDisallowedTools,
-		})
+		}, DiscardCost)
 
 		t.Logf("[ChainedAfterAllowed] CallBlocking err: %v", err)
 		t.Logf("[ChainedAfterAllowed] raw result: %q", result)

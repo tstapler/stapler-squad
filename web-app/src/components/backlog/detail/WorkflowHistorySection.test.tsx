@@ -33,6 +33,7 @@ function makeItem(statusEvents: StatusEvent[]): BacklogItem {
     notes: "",
     statusEvents,
     progressNotes: [],
+    activityNotes: [],
     totalEstimatedCostUsd: 0,
   };
 }

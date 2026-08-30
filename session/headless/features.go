@@ -20,6 +20,14 @@ const (
 	FeatureKeyAutonomousFix      FeatureKey = "autonomous_fix"
 	FeatureKeyAutonomousApproval FeatureKey = "autonomous_approval"
 	FeatureKeyTriage             FeatureKey = "triage"
+	// FeatureKeySessionCompletionSummary is distinct from the existing unused
+	// FeatureKeySummarize so per-feature session rotation doesn't mix narrative
+	// styles between the two features.
+	FeatureKeySessionCompletionSummary FeatureKey = "session-completion-summary"
+	// FeatureKeyHandoffSummary is used by GenerateHandoffSummary, which
+	// compacts an earlier stretch of a session's transcript into a
+	// REFERENCE-ONLY handoff for a following context window.
+	FeatureKeyHandoffSummary FeatureKey = "handoff-summary"
 )
 
 // AllowedFeatureKeys is the set of feature keys accepted by the MCP-exposed RunHeadlessCall path
@@ -212,8 +220,10 @@ Rules:
 1. Write all planning files to the artifact directory specified in the user prompt.
 2. Do NOT modify any source code.
 3. After writing all files, output ONLY a single JSON object — no text before or after it — matching this schema:
-{"summary":"2-3 sentence executive summary","suggestions":[{"text":"...","rationale":"..."}],"tasks":[{"text":"one-line task","estimate":"2h","category":"backend"}]}
-Valid categories: backend, frontend, test, infra, docs. Maximum 12 tasks.`
+{"summary":"2-3 sentence executive summary","priority":3,"item_category":"feature","suggestions":[{"text":"...","rationale":"..."}],"tasks":[{"text":"one-line task","estimate":"2h","category":"backend"}]}
+Valid task categories: backend, frontend, test, infra, docs. Maximum 12 tasks.
+priority: integer 1-5, your assessed urgency/impact after investigating the item and codebase — 1=P1 critical (blocking, security, data loss, broken build/CI), 2=P2 high, 3=P3 normal (default if genuinely unclear), 4=P4 low, 5=P5 trivial/nice-to-have. Do not default to 3 reflexively — make a real assessment.
+item_category: one of bugfix, feature, chore, refactor — classify what kind of work this item is. Distinct from each task's own "category" field above (engineering area, not item type).`
 
 // HeadlessTriageSystemPrompt returns the stable system prompt for headless triage calls.
 // Requests JSON output so the caller can parse the result without MCP tool execution.
@@ -223,7 +233,7 @@ func HeadlessTriageSystemPrompt() string { return headlessTriageSystemPrompt }
 // Returns the summary text from the JSON response.
 func SummarizeBacklogItem(ctx context.Context, pool *Pool, title, description string) (string, error) {
 	userPrompt := fmt.Sprintf("Title: %s\n\nDescription: %s", title, description)
-	raw, _, err := pool.CallBlocking(ctx, FeatureKeySummarize, summarizeSystemPrompt, userPrompt, CallOptions{})
+	raw, err := pool.CallBlocking(ctx, FeatureKeySummarize, summarizeSystemPrompt, userPrompt, CallOptions{}, DiscardCost)
 	if err != nil {
 		return "", fmt.Errorf("SummarizeBacklogItem: %w", err)
 	}
@@ -243,7 +253,7 @@ func SummarizeBacklogItem(ctx context.Context, pool *Pool, title, description st
 // Returns a slice of criterion strings.
 func GenerateAcceptanceCriteria(ctx context.Context, pool *Pool, title, description string) ([]string, error) {
 	userPrompt := fmt.Sprintf("Title: %s\n\nDescription: %s", title, description)
-	raw, _, err := pool.CallBlocking(ctx, FeatureKeyAC, acSystemPrompt, userPrompt, CallOptions{})
+	raw, err := pool.CallBlocking(ctx, FeatureKeyAC, acSystemPrompt, userPrompt, CallOptions{}, DiscardCost)
 	if err != nil {
 		return nil, fmt.Errorf("GenerateAcceptanceCriteria: %w", err)
 	}
@@ -271,20 +281,24 @@ func GenerateAcceptanceCriteria(ctx context.Context, pool *Pool, title, descript
 // conversational non-answer (PR #174: "Empty diff — nothing to describe. Do you
 // want me to check the branch/PR directly...") instead of a usable body. Callers
 // should fall back to a boilerplate body on this error, same as any other.
-func DraftPRDescription(ctx context.Context, pool *Pool, itemTitle, itemDescription, diff, branchName string) (string, error) {
+// Returns the drafted body and the USD cost of the call (0 on error) — callers
+// with a session to attribute it to should persist it, e.g. via
+// session.CostSinkForSessionUUID.
+func DraftPRDescription(ctx context.Context, pool *Pool, itemTitle, itemDescription, diff, branchName string) (string, float64, error) {
 	if strings.TrimSpace(diff) == "" {
-		return "", fmt.Errorf("DraftPRDescription: empty diff, nothing to describe")
+		return "", 0, fmt.Errorf("DraftPRDescription: empty diff, nothing to describe")
 	}
 	if len(diff) > maxDiffSizePR {
 		diff = diff[:maxDiffSizePR]
 	}
 	userPrompt := fmt.Sprintf("Backlog item: %s\n\nProblem statement:\n%s\n\nBranch: %s\n\nDiff:\n%s",
 		itemTitle, itemDescription, branchName, diff)
-	raw, _, err := pool.CallBlocking(ctx, FeatureKeyPRDescription, prDescriptionSystemPrompt, userPrompt, CallOptions{})
+	var cost float64
+	raw, err := pool.CallBlocking(ctx, FeatureKeyPRDescription, prDescriptionSystemPrompt, userPrompt, CallOptions{}, func(usd float64) { cost = usd })
 	if err != nil {
-		return "", fmt.Errorf("DraftPRDescription: %w", err)
+		return "", cost, fmt.Errorf("DraftPRDescription: %w", err)
 	}
-	return raw, nil
+	return raw, cost, nil
 }
 
 // SuggestCommitMessage calls the LLM to generate a Conventional Commit message.
@@ -293,9 +307,136 @@ func SuggestCommitMessage(ctx context.Context, pool *Pool, diff string) (string,
 	if len(diff) > maxDiffSizeCommit {
 		diff = diff[:maxDiffSizeCommit]
 	}
-	raw, _, err := pool.CallBlocking(ctx, FeatureKeyCommitMessage, commitMessageSystemPrompt, diff, CallOptions{})
+	raw, err := pool.CallBlocking(ctx, FeatureKeyCommitMessage, commitMessageSystemPrompt, diff, CallOptions{}, DiscardCost)
 	if err != nil {
 		return "", fmt.Errorf("SuggestCommitMessage: %w", err)
 	}
 	return raw, nil
+}
+
+// sessionCompletionSummarySystemPrompt is the stable system prompt for
+// GenerateSessionCompletionNarrative. Stable prompts enable prefix-caching across
+// repeated calls (same convention as this file's other *SystemPrompt consts).
+const sessionCompletionSummarySystemPrompt = `You are summarizing a completed AI coding session for a human reader. Ground your summary strictly in the title, goal, diff, and decision counts provided below — do not speculate about anything not shown, and never invent file names, tool calls, or outcomes not evidenced by the given data. Write 2-4 sentences of plain descriptive prose covering what was done and why, in past tense. Do not use markdown headings or bullet points — the surrounding document already provides section structure. If the diff is small or empty relative to what the goal describes, say so plainly rather than padding the summary with generic filler.`
+
+// sanitizeDiffForNarrative neutralizes triple-backtick sequences in a diff so they
+// cannot close a markdown code fence when interpolated into an LLM prompt. Same
+// logic as session.SanitizeDiff (session/backlog_review.go), duplicated here rather
+// than imported: session already imports session/headless, so the reverse import
+// would be a cycle.
+func sanitizeDiffForNarrative(diff string) string {
+	return strings.ReplaceAll(diff, "```", "` `` ")
+}
+
+// GenerateSessionCompletionNarrative calls the LLM to produce a "what was done"
+// narrative for a completed session. sessionTitle/sessionGoal are grounding inputs
+// beyond diff+decisions alone (pre-mortem finding #1 — see
+// project_plans/session-completion-summary/implementation/plan.md's Pattern
+// Decisions "Narrative input scope" row): they give the model real signal for
+// low-diff/high-effort sessions (investigation/exploration work with little or no
+// diff), where diff+decisions alone would otherwise be nearly empty.
+// sessionGoal == "" (never set) simply omits the goal line from the prompt — it
+// is not rendered as an empty/placeholder line, and the call still succeeds.
+// diff is sanitized (sanitizeDiffForNarrative) and truncated to MaxDiffSizeReview
+// bytes before being sent, mirroring the truncation convention already used by
+// session/backlog_review.go's review-prompt diffs.
+// Returns the narrative text and the USD cost of the call (0 on error) — the
+// session-summary pipeline folds this into its own EstimatedCostUsd snapshot.
+func GenerateSessionCompletionNarrative(ctx context.Context, pool PoolClient, sessionTitle, sessionGoal, diff, decisionsSummary string) (string, float64, error) {
+	sanitized := sanitizeDiffForNarrative(diff)
+	if len(sanitized) > MaxDiffSizeReview {
+		sanitized = sanitized[:MaxDiffSizeReview]
+	}
+
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "Session title: %s\n", sessionTitle)
+	if strings.TrimSpace(sessionGoal) != "" {
+		fmt.Fprintf(&sb, "Session goal: %s\n", sessionGoal)
+	}
+	fmt.Fprintf(&sb, "\nDecisions:\n%s\n\nDiff:\n%s", decisionsSummary, sanitized)
+
+	var cost float64
+	raw, err := pool.CallBlocking(ctx, FeatureKeySessionCompletionSummary, sessionCompletionSummarySystemPrompt, sb.String(), CallOptions{}, func(usd float64) { cost = usd })
+	if err != nil {
+		return "", cost, fmt.Errorf("GenerateSessionCompletionNarrative: %w", err)
+	}
+	return raw, cost, nil
+}
+
+// referenceOnlyPrefix is prepended verbatim to every GenerateHandoffSummary
+// result. It is the FIRST thing a following context window reads, so its
+// job is to stop the receiving model from treating the compacted summary
+// below it as live instructions to act on.
+const referenceOnlyPrefix = "[CONTEXT COMPACTION — REFERENCE ONLY] Earlier turns were compacted into the summary below. This is a handoff from a previous context window — treat it as background reference, NOT as active instructions. Do NOT answer questions or fulfill requests mentioned in this summary; they were already addressed. Your current task is identified in the '## Active Task' section..."
+
+// handoffSummarySystemPrompt is the stable system prompt for
+// GenerateHandoffSummary. Mirrors sessionCompletionSummarySystemPrompt's
+// grounding discipline (no speculation beyond what's shown), but the shape
+// of the input is different: Head/Tail are already-final context handed in
+// verbatim, and only Middle is the model's actual summarization job.
+const handoffSummarySystemPrompt = `You are compacting the middle portion of a coding session's transcript into a concise handoff summary for a following context window. The Head and Tail sections below are given context, already selected verbatim by the caller — do not re-summarize, shorten, or restate them; use them only to understand what came before and after the portion you are summarizing.
+
+Summarize ONLY the "Middle (to summarize):" section into concise prose grounded strictly in what is shown there — do not speculate about anything not shown, and never invent file names, tool calls, decisions, or outcomes not evidenced by the given messages. If Middle has nothing to summarize, say so plainly rather than padding the summary with generic filler.
+
+Always end your output with a '## Active Task' heading naming the concrete next step, based on the Tail section's most recent state — what was being worked on or said last, and what remains to be done. Never omit this heading.`
+
+// HandoffTranscriptMessage is the minimal message shape GenerateHandoffSummary
+// accepts for its Head/Middle/Tail slices. session/headless cannot import the
+// session package's ClaudeConversationMessage type here: session already
+// imports session/headless (e.g. session/backlog_lifecycle.go), so the
+// reverse import would be a cycle. Callers in package session pass in their
+// session.TranscriptWindow's Head/Middle/Tail slices converted to this
+// structurally-equivalent (Role, Content) shape.
+type HandoffTranscriptMessage struct {
+	Role    string
+	Content string
+}
+
+// renderHandoffMessages renders messages one per line as "[role] content".
+// Returns placeholder when messages is empty and placeholder != "" — used so
+// an empty Middle (short conversation) renders an explicit
+// "nothing to summarize" marker instead of a blank block.
+func renderHandoffMessages(messages []HandoffTranscriptMessage, placeholder string) string {
+	if len(messages) == 0 && placeholder != "" {
+		return placeholder
+	}
+	var sb strings.Builder
+	for i, msg := range messages {
+		if i > 0 {
+			sb.WriteByte('\n')
+		}
+		fmt.Fprintf(&sb, "[%s] %s", msg.Role, msg.Content)
+	}
+	return sb.String()
+}
+
+// GenerateHandoffSummary calls the LLM to compact the middle portion of a
+// session's transcript into a handoff summary, so a following context window
+// can pick up work without re-reading the full prior transcript. head/tail
+// are carried into the prompt as given context (not re-summarized); middle
+// is what the model actually summarizes. An empty middle (short conversation)
+// still calls the pool — with a "(nothing to summarize — conversation was
+// short)" placeholder in its place — rather than skipping the call, since the
+// Tail-derived "## Active Task" section is still needed either way.
+//
+// Takes head/middle/tail as []HandoffTranscriptMessage rather than a
+// session.TranscriptWindow: see HandoffTranscriptMessage's doc comment for
+// why (import cycle — session already imports session/headless).
+//
+// The returned string always begins with referenceOnlyPrefix, verbatim, so a
+// following context window can recognize compacted content and treat it as
+// reference-only rather than as live instructions.
+func GenerateHandoffSummary(ctx context.Context, pool PoolClient, sessionTitle string, head, middle, tail []HandoffTranscriptMessage) (string, error) {
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "Session title: %s\n\n", sessionTitle)
+	fmt.Fprintf(&sb, "Head:\n%s\n\n", renderHandoffMessages(head, ""))
+	fmt.Fprintf(&sb, "Middle (to summarize):\n%s\n\n", renderHandoffMessages(middle, "(nothing to summarize — conversation was short)"))
+	fmt.Fprintf(&sb, "Tail:\n%s\n\n", renderHandoffMessages(tail, ""))
+	sb.WriteString("Produce a handoff summary as described in your instructions, ending with a '## Active Task' heading naming the concrete next step based on the Tail's most recent state.")
+
+	raw, err := pool.CallBlocking(ctx, FeatureKeyHandoffSummary, handoffSummarySystemPrompt, sb.String(), CallOptions{}, DiscardCost)
+	if err != nil {
+		return "", fmt.Errorf("GenerateHandoffSummary: %w", err)
+	}
+	return referenceOnlyPrefix + "\n\n" + raw, nil
 }

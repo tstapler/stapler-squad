@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -111,6 +112,15 @@ type AnalyticsSummary struct {
 	// truncated to top-N. Use this for drill-down analysis such as "which gh subcommands
 	// does Claude use most?" or "what sed patterns need rules?".
 	CommandSubcommandStats []SubcommandStat `json:"command_subcommand_stats"`
+
+	// EscalationReasonCounts breaks down escalations by category (classifier.EscalationCategory
+	// string values) — no-match, explicit-rule, domain-age, secret-scan, unclassifiable.
+	EscalationReasonCounts map[string]int `json:"escalation_reason_counts"`
+
+	// RiskLevelCounts breaks down escalations by classifier.RiskLevel string value
+	// ("low"/"medium"/"high"/"critical"), scoped to escalated decisions only — same scope as
+	// EscalationReasonCounts, so the two breakdowns share a denominator.
+	RiskLevelCounts map[string]int `json:"risk_level_counts"`
 }
 
 // AnalyticsStore writes AnalyticsEntry records asynchronously to SQLite
@@ -119,6 +129,10 @@ type AnalyticsStore struct {
 	storage *session.Storage
 	ch      chan AnalyticsEntry
 	dropped int64 // atomic counter for dropped entries
+
+	cancel   context.CancelFunc
+	done     chan struct{}
+	stopOnce sync.Once
 }
 
 const analyticsBufferSize = 1000
@@ -133,9 +147,27 @@ func NewAnalyticsStore(storage *session.Storage) *AnalyticsStore {
 }
 
 // Start launches the background goroutine that flushes entries to disk.
-// It stops when ctx is canceled.
-func (s *AnalyticsStore) Start(ctx interface{ Done() <-chan struct{} }) {
-	go s.flush(ctx)
+// It stops when Stop is called or ctx is canceled.
+func (s *AnalyticsStore) Start(ctx context.Context) {
+	ctx, cancel := context.WithCancel(ctx)
+	s.cancel = cancel
+	s.done = make(chan struct{})
+	go func() {
+		defer close(s.done)
+		s.flush(ctx)
+	}()
+}
+
+// Stop cancels the background flush goroutine and waits for it to drain and
+// exit. Idempotent — safe to call multiple times or before Start.
+func (s *AnalyticsStore) Stop() {
+	s.stopOnce.Do(func() {
+		if s.cancel == nil {
+			return
+		}
+		s.cancel()
+		<-s.done
+	})
 }
 
 // Record enqueues an analytics entry for async write. Non-blocking.
@@ -240,8 +272,8 @@ func analyticsDataToEntry(d session.AnalyticsData) AnalyticsEntry {
 
 // LoadWindow reads entries from DB with timestamps >= since.
 // Uses a DB-level WHERE clause via ListAnalyticsSince (AC-1).
-func (s *AnalyticsStore) LoadWindow(since time.Time) ([]AnalyticsEntry, error) {
-	data, err := s.storage.ListAnalyticsSince(context.Background(), since, 0)
+func (s *AnalyticsStore) LoadWindow(ctx context.Context, since time.Time) ([]AnalyticsEntry, error) {
+	data, err := s.storage.ListAnalyticsSince(ctx, since, 0)
 	if err != nil {
 		return nil, fmt.Errorf("list analytics since %s from DB: %w", since.Format(time.RFC3339), err)
 	}
@@ -337,6 +369,11 @@ func ComputeSummary(entries []AnalyticsEntry) AnalyticsSummary {
 	uncoveredProgramStats := make(map[string]ProgramStat)
 	// full (program, subcommand) distribution — keyed by "program\x00subcommand"
 	subcommandStats := make(map[string]SubcommandStat)
+	// escalation-reason breakdown: category → count
+	escalationReasonCounts := make(map[string]int)
+	// risk-level breakdown: classifier.RiskLevel string → count (same scope as
+	// escalationReasonCounts, so both tables share a denominator)
+	riskLevelCounts := make(map[string]int)
 
 	for _, e := range entries {
 		summary.TotalDecisions++
@@ -404,6 +441,19 @@ func ComputeSummary(entries []AnalyticsEntry) AnalyticsSummary {
 				uncoveredProgramStats[e.CommandProgram] = stat
 			}
 		}
+
+		// Escalation-reason breakdown: every escalate decision, plus the terminal
+		// secret-scan auto-deny (which never reaches this loop via `escalate` since it's
+		// an AutoDeny — see requirements.md's AC4 scope note). Broader than the
+		// coverage-gap branch above (which only catches RuleID == ""): this must catch
+		// all 5 categories.
+		if e.Decision == "escalate" || (e.Decision == "auto_deny" && e.RuleID == classifier.RuleIDSecretScan) {
+			cat := classifier.CategorizeEscalationRuleID(e.RuleID)
+			escalationReasonCounts[string(cat)]++
+			if e.RiskLevel != "" {
+				riskLevelCounts[e.RiskLevel]++
+			}
+		}
 	}
 
 	// Build sorted top lists (top 10).
@@ -435,6 +485,9 @@ func ComputeSummary(entries []AnalyticsEntry) AnalyticsSummary {
 		summary.ManualReviewRate = manual / total
 		summary.CoverageGapRate = float64(summary.CoverageGapCount) / total * 100
 	}
+
+	summary.EscalationReasonCounts = escalationReasonCounts
+	summary.RiskLevelCounts = riskLevelCounts
 
 	return summary
 }
