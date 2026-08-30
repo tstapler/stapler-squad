@@ -146,6 +146,24 @@ export const externalBadge = style({
   border: `1px solid ${vars.color.primaryDark}`,
 });
 
+// hostBadge shows which SSH remote a session is running on (ssh-remote-workspaces
+// Epic 6.2, Story 6.2.1). Mirrors externalBadge's shape (same shell) but uses
+// the neutral surface tokens rather than the primary-color pill -- a host
+// badge is informational, not a call-to-action the way externalBadge's
+// "this is a mux-attached external session" signal is.
+export const hostBadge = style({
+  display: "inline-flex",
+  alignItems: "center",
+  gap: vars.space["1"],
+  padding: `${vars.space["1"]} 10px`,
+  background: vars.color.surfaceSubtle,
+  color: vars.color.textSecondary,
+  borderRadius: vars.radii.full,
+  fontSize: vars.fontSize.sm,
+  fontWeight: 600,
+  border: `1px solid ${vars.color.borderColor}`,
+});
+
 export const muxIndicator = style({
   fontSize: "0.625rem",
   background: "rgba(255, 255, 255, 0.3)", // intentional: translucent white overlay on colored badge bg

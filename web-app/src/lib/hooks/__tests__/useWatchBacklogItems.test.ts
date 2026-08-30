@@ -137,6 +137,14 @@ describe("useWatchBacklogItems", () => {
   });
 
   // R11 error path — Task 4.2.1c
+  //
+  // Explicit timeout: this test drives real (non-fake) async microtask flushes
+  // through five act()/advanceTimersByTime() round trips. Each round trip's
+  // wall-clock cost is dominated by host scheduling, not simulated time — under
+  // full-suite parallel load (all 4 Jest projects + hundreds of test files
+  // contending for CPU) that cost can exceed the default 5000ms real-time
+  // timeout even though the test's actual work completes in well under 1s when
+  // run in isolation. See the `fix-flaky-tests-dont-defer` skill.
   it("retries with exponential backoff capped at 30s on stream error", async () => {
     jest.useFakeTimers();
     mockWatchBacklogItems.mockImplementation(() => {
@@ -175,7 +183,7 @@ describe("useWatchBacklogItems", () => {
       await flush();
     });
     expect(mockWatchBacklogItems).toHaveBeenCalledTimes(5);
-  });
+  }, 15000);
 
   // R11 integration — Task 4.2.1d
   it("falls back to REST polling after retries exhaust and attempts one reconnect on next successful poll", async () => {
@@ -814,6 +822,66 @@ describe("useWatchBacklogItems", () => {
     const item1 = result.current.items.find((i) => i.id === "item-1");
     expect(item1?.gateVerdict).toBe("FAIL");
     expect(item1?.gateVerdictSummary).toBe("inline verdict wins");
+  });
+
+  // Regression: the 30s fallback poll (refresh()) resyncs via the same
+  // upsertItem path as a live event, so a sparse allowedTransitions in its
+  // response must not blank an already-populated value in the store.
+  it("does not clobber allowedTransitions with an empty array from a same-timestamp fallback poll", async () => {
+    jest.useFakeTimers();
+    const stream = makeControllableStream();
+    mockWatchBacklogItems.mockReturnValueOnce(stream.stream);
+    mockWatchBacklogItems.mockReturnValue(makeHangingStream());
+
+    const store = makeStore();
+    const { result } = renderHook(() => useWatchBacklogItems(), { wrapper: makeWrapper(store) });
+
+    await act(async () => {
+      await flush();
+    });
+
+    // Neither event below sets updatedAt (both fall back to timestampMs's
+    // 0-default, matching this file's other event fixtures) — that's the
+    // same-timestamp case the coalesce backstop must handle, since a real
+    // same-millisecond resync is exactly as timestampMs-equal as two omitted
+    // ones.
+    await act(async () => {
+      stream.emit(
+        makeEvent(
+          "itemUpdated",
+          {
+            item: { id: "item-1", status: "idea", allowedTransitions: ["archived", "ready", "refining"] } as any,
+            itemId: "item-1",
+            updatedFields: [],
+            isSnapshot: false,
+          },
+          1n
+        )
+      );
+      await flush();
+    });
+    expect(result.current.items.find((i) => i.id === "item-1")?.allowedTransitions).toEqual([
+      "archived",
+      "ready",
+      "refining",
+    ]);
+
+    // A fallback-poll resync returns the item with an empty allowedTransitions
+    // (the pre-fix ListBacklogItems DTO shape) — must not blank the value the
+    // store already has.
+    mockListBacklogItems.mockResolvedValueOnce({
+      items: [{ id: "item-1", status: "idea", allowedTransitions: [] } as any],
+    });
+    await act(async () => {
+      jest.advanceTimersByTime(30_000);
+      await flush();
+    });
+
+    expect(result.current.items.find((i) => i.id === "item-1")?.allowedTransitions).toEqual([
+      "archived",
+      "ready",
+      "refining",
+    ]);
   });
 
   // Story 6.2.2 (backlog-item-activity-log): activityNoteAdded is a dedicated

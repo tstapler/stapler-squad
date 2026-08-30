@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -70,6 +71,8 @@ func WriteSlashCommands(engine PipelineEngine, item *BacklogItemData, worktreePa
 		files[name] = content
 	}
 
+	pruneStaleSlashCommandFiles(cmdDir, files)
+
 	for name, content := range files {
 		if err := writeFile(filepath.Join(cmdDir, name), content); err != nil {
 			return err
@@ -77,6 +80,37 @@ func WriteSlashCommands(engine PipelineEngine, item *BacklogItemData, worktreePa
 	}
 
 	return nil
+}
+
+// staleCommandFileRe matches the per-criterion slash command filenames whose
+// count varies per item — done-N.md/fail-N.md — as opposed to status.md,
+// review.md, ship.md, help.md, which every item has regardless of AC count.
+var staleCommandFileRe = regexp.MustCompile(`^(done|fail)-\d+\.md$`)
+
+// pruneStaleSlashCommandFiles removes done-N.md/fail-N.md files in cmdDir not present in
+// newFiles (leftover from a prior item with more acceptance criteria). Never touches the
+// fixed status/review/ship/help.md set. Best-effort — logs and continues past a single
+// removal failure rather than failing the whole write.
+func pruneStaleSlashCommandFiles(cmdDir string, newFiles map[string]string) {
+	entries, err := os.ReadDir(cmdDir)
+	if err != nil {
+		return // directory just created / unreadable — nothing to prune
+	}
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		if !staleCommandFileRe.MatchString(name) {
+			continue
+		}
+		if _, keep := newFiles[name]; keep {
+			continue
+		}
+		if rmErr := os.Remove(filepath.Join(cmdDir, name)); rmErr != nil {
+			log.WarningLog().Printf("[pruneStaleSlashCommandFiles] failed to remove stale %s: %v", name, rmErr)
+		}
+	}
 }
 
 // buildDefaultSlashCommandSet returns the filename→rendered-content map for
@@ -214,7 +248,7 @@ func CleanupSlashCommands(worktreePath string) error {
 	cmdDir := filepath.Join(worktreePath, backlogCommandsDir)
 	if err := os.RemoveAll(cmdDir); err != nil {
 		if !os.IsNotExist(err) {
-			log.WarningLog.Printf("CleanupSlashCommands: failed to remove %s: %v", cmdDir, err)
+			log.WarningLog().Printf("CleanupSlashCommands: failed to remove %s: %v", cmdDir, err)
 		}
 	}
 	return nil
@@ -243,12 +277,32 @@ func WriteBacklogContextFile(item *BacklogItemData, priorSessions []ItemSessionS
 	content := sb.String()
 
 	destPath := filepath.Join(worktreePath, ".backlog-context.md")
-	tmpPath := destPath + ".tmp"
 
-	if err := os.WriteFile(tmpPath, []byte(content), 0o644); err != nil {
-		return fmt.Errorf("WriteBacklogContextFile: failed to write tmp file: %w", err)
+	// Unique tmp name (not destPath+".tmp"): this is called on every spawn AND re-attach
+	// for the same worktreePath (see doc comment above), so two concurrent callers writing
+	// the same fixed name could interleave writes and rename a torn/corrupt file into place.
+	// Mirrors config.go's saveConfigLocked fix for the identical hazard.
+	tmpFile, err := os.CreateTemp(worktreePath, ".backlog-context.md.*.tmp")
+	if err != nil {
+		return fmt.Errorf("WriteBacklogContextFile: failed to create tmp file: %w", err)
+	}
+	tmpPath := tmpFile.Name()
+	_, writeErr := tmpFile.Write([]byte(content))
+	closeErr := tmpFile.Close()
+	if writeErr != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("WriteBacklogContextFile: failed to write tmp file: %w", writeErr)
+	}
+	if closeErr != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("WriteBacklogContextFile: failed to close tmp file: %w", closeErr)
+	}
+	if err := os.Chmod(tmpPath, 0o644); err != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("WriteBacklogContextFile: failed to chmod tmp file: %w", err)
 	}
 	if err := os.Rename(tmpPath, destPath); err != nil {
+		_ = os.Remove(tmpPath)
 		return fmt.Errorf("WriteBacklogContextFile: failed to rename tmp to dest: %w", err)
 	}
 	return nil
@@ -271,7 +325,7 @@ func CleanupBacklogContextFile(worktreePath string) error {
 	path := filepath.Join(worktreePath, ".backlog-context.md")
 	if err := os.Remove(path); err != nil {
 		if !os.IsNotExist(err) {
-			log.WarningLog.Printf("CleanupBacklogContextFile: failed to remove %s: %v", path, err)
+			log.WarningLog().Printf("CleanupBacklogContextFile: failed to remove %s: %v", path, err)
 		}
 	}
 	return nil
@@ -300,14 +354,14 @@ func addWorktreeExcludes(worktreePath string) {
 	cmd.Dir = worktreePath
 	out, err := cmd.Output()
 	if err != nil {
-		log.WarningLog.Printf("[addWorktreeExcludes] git rev-parse --git-common-dir in %s: %v", worktreePath, err)
+		log.WarningLog().Printf("[addWorktreeExcludes] git rev-parse --git-common-dir in %s: %v", worktreePath, err)
 		return
 	}
 	gitCommonDir := strings.TrimSpace(string(out))
 
 	excludeFile := filepath.Join(gitCommonDir, "info", "exclude")
 	if mkErr := os.MkdirAll(filepath.Dir(excludeFile), 0o755); mkErr != nil {
-		log.WarningLog.Printf("[addWorktreeExcludes] mkdir %s: %v", filepath.Dir(excludeFile), mkErr)
+		log.WarningLog().Printf("[addWorktreeExcludes] mkdir %s: %v", filepath.Dir(excludeFile), mkErr)
 		return
 	}
 
@@ -316,7 +370,7 @@ func addWorktreeExcludes(worktreePath string) {
 
 	f, openErr := os.OpenFile(excludeFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 	if openErr != nil {
-		log.WarningLog.Printf("[addWorktreeExcludes] open %s: %v", excludeFile, openErr)
+		log.WarningLog().Printf("[addWorktreeExcludes] open %s: %v", excludeFile, openErr)
 		return
 	}
 	defer f.Close()
@@ -342,9 +396,9 @@ func addWorktreeExcludes(worktreePath string) {
 func selfHealWorktreeScaffolding(worktreePath string) {
 	removed, err := git.UntrackScaffolding(worktreePath, git.ScaffoldingExcludePatterns)
 	if err != nil {
-		log.WarningLog.Printf("[selfHealWorktreeScaffolding] untrack in %s: %v", worktreePath, err)
+		log.WarningLog().Printf("[selfHealWorktreeScaffolding] untrack in %s: %v", worktreePath, err)
 	} else if len(removed) > 0 {
-		log.InfoLog.Printf("[selfHealWorktreeScaffolding] auto-untracked previously committed scaffolding file(s) in %s: %v", worktreePath, removed)
+		log.InfoLog().Printf("[selfHealWorktreeScaffolding] auto-untracked previously committed scaffolding file(s) in %s: %v", worktreePath, removed)
 	}
 	addWorktreeExcludes(worktreePath)
 }

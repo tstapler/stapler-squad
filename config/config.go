@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"github.com/google/uuid"
 	"github.com/tstapler/stapler-squad/log"
@@ -13,8 +14,10 @@ import (
 	"os/user"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -106,6 +109,45 @@ func IsIsolatedInstance() bool {
 	return IsTestMode() || IsNamedInstance() || os.Getenv("STAPLER_SQUAD_TEST_DIR") != ""
 }
 
+// pruneStaleTestDirs removes test-<pid> directories under testBaseDir whose
+// owning process is no longer running. Every go-test binary gets its own
+// isolated state dir here (see the IsTestMode branch below), but nothing else
+// ever deletes it — unlike t.TempDir(), this survives the test run on
+// purpose, for post-mortem debugging. Left unswept, that accumulates forever:
+// found 13,530 orphaned dirs (6.1G) going back to March 2026, which
+// contributed to the disk filling up. Checking the pid instead of an mtime
+// cutoff means this is safe to run even mid a legitimately slow test run.
+func pruneStaleTestDirs(testBaseDir string) {
+	entries, err := os.ReadDir(testBaseDir)
+	if err != nil {
+		return
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		pidStr, ok := strings.CutPrefix(entry.Name(), "test-")
+		if !ok {
+			continue
+		}
+		pid, err := strconv.Atoi(pidStr)
+		if err != nil || isProcessAlive(pid) {
+			continue
+		}
+		_ = os.RemoveAll(filepath.Join(testBaseDir, entry.Name()))
+	}
+}
+
+// isProcessAlive reports whether pid is a running process, via the null
+// signal (no-op existence check, doesn't actually signal the process).
+func isProcessAlive(pid int) bool {
+	proc, err := os.FindProcess(pid)
+	if err != nil {
+		return false
+	}
+	return proc.Signal(syscall.Signal(0)) == nil
+}
+
 // GetConfigDir returns the path to the application's configuration directory
 // with hierarchical isolation for safe multi-instance and test execution.
 //
@@ -163,8 +205,10 @@ func GetConfigDirForDir(dir string) (string, error) {
 	// preference set by a production instance cannot leak into test runs.
 	if IsTestMode() {
 		// Each test/benchmark process gets its own isolated state
+		testBaseDir := filepath.Join(baseDir, "test")
+		pruneStaleTestDirs(testBaseDir)
 		pid := os.Getpid()
-		return filepath.Join(baseDir, "test", fmt.Sprintf("test-%d", pid)), nil
+		return filepath.Join(testBaseDir, fmt.Sprintf("test-%d", pid)), nil
 	}
 
 	return resolveDefaultConfigDir(dir, baseDir)
@@ -299,6 +343,11 @@ type Config struct {
 	SessionDefaults SessionDefaults `json:"session_defaults,omitempty"`
 	// Notifications holds the user's notification delivery preferences.
 	Notifications NotificationPrefs `json:"notifications,omitempty"`
+	// Remotes is a named list of SSH-reachable remote hosts sessions can be
+	// created against (ssh-remote-workspaces feature). Holds connection
+	// coordinates only — no SSH key material; see RemoteConfig's doc
+	// comment. Looked up by name via RemoteByName.
+	Remotes []RemoteConfig `json:"remotes,omitempty"`
 	// OneOffBaseDir is the base directory where one-off session directories are created.
 	// Default: "~/oneoff". Tilde is expanded at runtime. Created automatically on first use.
 	OneOffBaseDir string `json:"one_off_base_dir,omitempty"`
@@ -361,6 +410,8 @@ type Config struct {
 	Hibernation HibernationConfig `json:"hibernation,omitempty"`
 	// Capacity holds configuration for the provider capacity monitoring and transition feature.
 	Capacity CapacityConfig `json:"capacity,omitempty"`
+	// HandoffSummary holds configuration for the restart-with-handoff-summary feature.
+	HandoffSummary HandoffSummaryConfig `json:"handoff_summary,omitempty"`
 	// Quota holds configuration for the account-wide session-quota gate that
 	// pauses/resumes backlog automation based on inferred quota headroom.
 	Quota QuotaConfig `json:"quota,omitempty"`
@@ -418,6 +469,210 @@ type Config struct {
 	// github.com) with their own OAuth App client IDs, enabling device-flow login,
 	// PR polling, and link detection against those hosts. Empty means github.com only.
 	GitHubEnterpriseHosts []GitHubEnterpriseHost `json:"github_enterprise_hosts,omitempty"`
+
+	// StreamHubSessionOverrides forces the terminal-multi-connection-streaming
+	// project's PathHubOwned resolution for specific named tmux sessions,
+	// regardless of the global STAPLER_SQUAD_USE_STREAM_HUB default — the
+	// per-session canary mechanism (Story 3.3.1). Keys are tmux session
+	// names; an absent key means "no override, use the global default".
+	// Consulted via streamhub.SetSessionOverrideLookup, wired at process
+	// startup in server/services so package session/streamhub never imports
+	// package config directly.
+	StreamHubSessionOverrides map[string]bool `json:"stream_hub_session_overrides,omitempty"`
+	// RollbackRehearsalCompletedAt records when Story 3.3.2's rollback
+	// rehearsal (flip STAPLER_SQUAD_USE_STREAM_HUB's per-session override on
+	// for a disposable session, use it briefly, remove the override, confirm
+	// a clean reconnect under the legacy path) was last completed
+	// successfully. nil means "never completed". ResolveGlobalStreamHubDefault
+	// refuses to let the *global* default resolve to true until this is set
+	// (pre-mortem P1 #4's mechanical gate) — the per-session override above
+	// is unaffected by this gate. Set via RecordRollbackRehearsalCompleted.
+	RollbackRehearsalCompletedAt *time.Time `json:"rollback_rehearsal_completed_at,omitempty"`
+	// StreamHubGlobalOverride is a live, config.json-backed override of the
+	// global stream-hub default, settable from the browser via
+	// SetStreamHubGlobalOverride with no process restart required. nil means
+	// "no override — resolve from the STAPLER_SQUAD_USE_STREAM_HUB env var as
+	// before". A non-nil value is still subject to
+	// ResolveGlobalStreamHubDefault's rollback-rehearsal gate when true.
+	StreamHubGlobalOverride *bool `json:"stream_hub_global_override,omitempty"`
+	// TymuxRollbackRehearsalCompletedAt records when the tymux backend's own
+	// rollback rehearsal was last completed successfully. This is a distinct
+	// field from RollbackRehearsalCompletedAt above — the two rehearsals
+	// verify different things (ADR-002/ADR-003): streamhub's rollback means
+	// "reconnect cleanly under the legacy path"; tymux's rollback cannot mean
+	// that, since it means "new sessions honor the reverted default while
+	// existing tymux-backed sessions stay pinned to tymux for their
+	// lifetime". nil means "never completed". ResolveGlobalTymuxDefault
+	// refuses to let the *global* tymux default resolve to true until this
+	// is set. Set via RecordTymuxRollbackRehearsalCompleted.
+	TymuxRollbackRehearsalCompletedAt *time.Time `json:"tymux_rollback_rehearsal_completed_at,omitempty"`
+	// TymuxSessionOverrides forces the tymux-bundled-integration project's
+	// process-manager backend for specific named tmux sessions, regardless of
+	// the global process-manager-backend default — the per-session override
+	// mechanism (Phase 4, Epic 4.1). Keys are tmux session names; an absent
+	// key means "no override, use the global default". Mirrors
+	// StreamHubSessionOverrides's shape exactly (see that field's doc
+	// comment above); consulted by ResolveSessionBackend
+	// (session/backend_resolution.go).
+	TymuxSessionOverrides map[string]bool `json:"tymux_session_overrides,omitempty"`
+}
+
+// ErrRollbackRehearsalNotCompleted is returned by ResolveGlobalStreamHubDefault
+// when the caller requests the global STAPLER_SQUAD_USE_STREAM_HUB default
+// resolve to true but RollbackRehearsalCompletedAt is unset — Story 3.3.2's
+// rollback rehearsal must be executed and recorded first (pre-mortem P1 #4).
+var ErrRollbackRehearsalNotCompleted = errors.New("config: cannot enable the global stream-hub default: rollback rehearsal (RollbackRehearsalCompletedAt) has not been completed — see Story 3.3.2")
+
+// ErrTymuxRollbackRehearsalNotCompleted is returned by ResolveGlobalTymuxDefault
+// when the caller requests the global tymux backend default resolve to true
+// but TymuxRollbackRehearsalCompletedAt is unset — the tymux rollback
+// rehearsal must be executed and recorded first (ADR-002, Story 3.1.1).
+var ErrTymuxRollbackRehearsalNotCompleted = errors.New("config: cannot enable the global tymux default: rollback rehearsal (TymuxRollbackRehearsalCompletedAt) has not been completed — see Story 3.1.1")
+
+// ResolveGlobalTymuxDefault applies Story 3.1.1's mechanical
+// rollback-rehearsal gate to a raw requested value for the *global* tymux
+// process-manager-backend default (e.g. derived from cfg.ProcessManagerBackend
+// or the STAPLER_SQUAD_USE_TYMUX environment variable). Requesting false is
+// always permitted — the gate only blocks turning the risky path *on*.
+// Requesting true is refused with ErrTymuxRollbackRehearsalNotCompleted, not
+// a silent fallback to false, unless cfg.TymuxRollbackRehearsalCompletedAt is
+// a recorded, non-zero timestamp. This gate does not apply to any per-session
+// override path, which callers resolve independently and which remains
+// available even when this function returns an error.
+func ResolveGlobalTymuxDefault(cfg *Config, requested bool) (bool, error) {
+	if !requested {
+		return false, nil
+	}
+	if cfg == nil || cfg.TymuxRollbackRehearsalCompletedAt == nil || cfg.TymuxRollbackRehearsalCompletedAt.IsZero() {
+		return false, ErrTymuxRollbackRehearsalNotCompleted
+	}
+	return true, nil
+}
+
+// RecordTymuxRollbackRehearsalCompleted persists the current time as
+// TymuxRollbackRehearsalCompletedAt and saves the config — intended to be
+// called exactly once, after manually verifying a tymux rollback rehearsal
+// (new sessions honor the reverted default while existing tymux-backed
+// sessions stay pinned) passed against a real disposable session. Unblocks
+// ResolveGlobalTymuxDefault from refusing to enable the global default.
+func (c *Config) RecordTymuxRollbackRehearsalCompleted() error {
+	now := time.Now()
+	c.TymuxRollbackRehearsalCompletedAt = &now
+	return SaveConfig(c)
+}
+
+// ResolveGlobalStreamHubDefault applies Story 3.3.1/3.3.2's mechanical
+// rollback-rehearsal gate to a raw requested value for the *global*
+// STAPLER_SQUAD_USE_STREAM_HUB default (e.g. read from that environment
+// variable). Requesting false is always permitted — the gate only blocks
+// turning the risky path *on*. Requesting true is refused with
+// ErrRollbackRehearsalNotCompleted, not a silent fallback to false, unless
+// cfg.RollbackRehearsalCompletedAt is a recorded, non-zero timestamp. This
+// gate does not apply to the per-session override path
+// (StreamHubSessionOverrides / streamhub.SetSessionOverrideLookup), which
+// callers resolve independently and which remains available even when this
+// function returns an error.
+func ResolveGlobalStreamHubDefault(cfg *Config, requested bool) (bool, error) {
+	if !requested {
+		return false, nil
+	}
+	if cfg == nil || cfg.RollbackRehearsalCompletedAt == nil || cfg.RollbackRehearsalCompletedAt.IsZero() {
+		return false, ErrRollbackRehearsalNotCompleted
+	}
+	return true, nil
+}
+
+// RecordRollbackRehearsalCompleted persists the current time as
+// RollbackRehearsalCompletedAt and saves the config — Story 3.3.2's Task
+// 3.3.2c, intended to be called exactly once, after manually verifying a
+// rollback rehearsal (flip on via the per-session override, use briefly,
+// remove the override, confirm clean legacy reconnect) passed against a
+// real disposable session. Unblocks ResolveGlobalStreamHubDefault from
+// refusing to enable the global default.
+func (c *Config) RecordRollbackRehearsalCompleted() error {
+	now := time.Now()
+	c.RollbackRehearsalCompletedAt = &now
+	return SaveConfig(c)
+}
+
+// GetStreamHubSessionOverride reports whether sessionName has a per-session
+// StreamHubSessionOverrides entry recorded, and if so, what it forces.
+// Mirrors GetFeatureFlag's nil-safe shape: a nil Config or nil map reports
+// (false, false) — no override.
+func (c *Config) GetStreamHubSessionOverride(sessionName string) (forceHub bool, ok bool) {
+	if c == nil || c.StreamHubSessionOverrides == nil {
+		return false, false
+	}
+	forceHub, ok = c.StreamHubSessionOverrides[sessionName]
+	return forceHub, ok
+}
+
+// SetStreamHubSessionOverride sets or clears sessionName's per-session
+// PathHubOwned override and persists the config to disk — Story 3.3.1's
+// canary mechanism. forceHub follows this file's existing *bool convention
+// for a tri-state field (see AutoSpawnReadyItems): nil removes any override
+// for sessionName (falling back to the global default), a non-nil false
+// explicitly pins the session to the legacy path regardless of the global
+// default, and a non-nil true forces PathHubOwned.
+func (c *Config) SetStreamHubSessionOverride(sessionName string, forceHub *bool) error {
+	if forceHub == nil {
+		if c.StreamHubSessionOverrides != nil {
+			delete(c.StreamHubSessionOverrides, sessionName)
+		}
+		return SaveConfig(c)
+	}
+	if c.StreamHubSessionOverrides == nil {
+		c.StreamHubSessionOverrides = make(map[string]bool)
+	}
+	c.StreamHubSessionOverrides[sessionName] = *forceHub
+	return SaveConfig(c)
+}
+
+// SetStreamHubGlobalOverride sets or clears the live global stream-hub
+// override and persists the config to disk. forceHub follows this file's
+// tri-state *bool convention: nil clears the override (reverting to the
+// STAPLER_SQUAD_USE_STREAM_HUB env var default), non-nil forces that value
+// for every session connection resolved from now on — subject to
+// ResolveGlobalStreamHubDefault's rollback-rehearsal gate when true.
+func (c *Config) SetStreamHubGlobalOverride(forceHub *bool) error {
+	c.StreamHubGlobalOverride = forceHub
+	return SaveConfig(c)
+}
+
+// GetTymuxSessionOverride reports whether sessionName has a per-session
+// TymuxSessionOverrides entry recorded, and if so, what it forces. Mirrors
+// GetStreamHubSessionOverride's nil-safe shape: a nil Config or nil map
+// reports (false, false) — no override.
+func (c *Config) GetTymuxSessionOverride(sessionName string) (forceTymux bool, ok bool) {
+	if c == nil || c.TymuxSessionOverrides == nil {
+		return false, false
+	}
+	forceTymux, ok = c.TymuxSessionOverrides[sessionName]
+	return forceTymux, ok
+}
+
+// SetTymuxSessionOverride sets or clears sessionName's per-session
+// process-manager-backend override and persists the config to disk.
+// forceTymux follows this file's existing *bool convention for a tri-state
+// field (see SetStreamHubSessionOverride): nil removes any override for
+// sessionName (falling back to the global default), a non-nil false
+// explicitly pins the session to the tmux backend regardless of the global
+// default, and a non-nil true forces the tymux backend. Unlike
+// streamhub/ownership.go's resolveLocked (see research/features.md (b).5),
+// this accessor is a plain map write with no combinator logic, so it has no
+// directional bias toward either value.
+func (c *Config) SetTymuxSessionOverride(sessionName string, forceTymux *bool) error {
+	if forceTymux == nil {
+		if c.TymuxSessionOverrides != nil {
+			delete(c.TymuxSessionOverrides, sessionName)
+		}
+		return SaveConfig(c)
+	}
+	if c.TymuxSessionOverrides == nil {
+		c.TymuxSessionOverrides = make(map[string]bool)
+	}
+	c.TymuxSessionOverrides[sessionName] = *forceTymux
+	return SaveConfig(c)
 }
 
 // GetGitHubEnterpriseHosts returns the configured GHES hosts, or nil if c is nil.
@@ -426,6 +681,21 @@ func (c *Config) GetGitHubEnterpriseHosts() []GitHubEnterpriseHost {
 		return nil
 	}
 	return c.GitHubEnterpriseHosts
+}
+
+// RemoteByName looks up a configured remote by its exact Name. Returns
+// (nil, false) if c is nil or no remote with that name is registered.
+// Consumed by session creation (Phase 4) and Settings UI validation (Phase 6).
+func (c *Config) RemoteByName(name string) (*RemoteConfig, bool) {
+	if c == nil {
+		return nil, false
+	}
+	for i := range c.Remotes {
+		if c.Remotes[i].Name == name {
+			return &c.Remotes[i], true
+		}
+	}
+	return nil, false
 }
 
 // DefaultConfig returns the default configuration
@@ -502,6 +772,7 @@ func defaultConfigWithExecutor(exec CommandExecutor) *Config {
 		RetentionDays:             30,
 	}
 	cfg.Capacity = CapacityConfig{}.CapacityConfigOrDefault()
+	cfg.HandoffSummary = HandoffSummaryConfig{}.HandoffSummaryConfigOrDefault()
 	cfg.Quota = QuotaConfig{}.QuotaConfigOrDefault()
 	// Initialize SessionDefaults maps so callers never encounter nil maps.
 	// LoadConfigFromPath applies the same guards after JSON decode; DefaultConfig
@@ -906,7 +1177,7 @@ func loadConfigWithDefaultFallback(configPath string) *Config {
 // JSON that the next LoadConfig call silently falls back to DefaultConfig()
 // over (losing whatever was there). Keyed per path (rather than one global
 // mutex) so concurrent saves to different configPaths — e.g. distinct
-// per-instance state dirs under state-isolation, see .claude/docs/state-isolation.md
+// per-instance state dirs under state-isolation, see docs/reference/state-isolation.md
 // — aren't needlessly serialized against each other.
 var saveConfigMu sync.Map //nolint:gochecknoglobals // per-configPath *sync.Mutex, serializes concurrent saveConfig callers sharing the same tmpPath
 
@@ -1071,6 +1342,7 @@ func LoadConfigFromPath(path string) (*Config, error) {
 	cfg.executor = newTimeoutCommandExecutor(5 * time.Second)
 
 	cfg.Capacity = cfg.Capacity.CapacityConfigOrDefault()
+	cfg.HandoffSummary = cfg.HandoffSummary.HandoffSummaryConfigOrDefault()
 	cfg.Quota = cfg.Quota.QuotaConfigOrDefault()
 
 	// Apply environment variable overrides (never log the value).
@@ -1161,7 +1433,7 @@ func (c *Config) GetOrCreateEncryptionKey() ([]byte, error) {
 			return data, nil
 		}
 		// If existing key is invalid, regenerate
-		log.WarningLog.Printf("[Config] existing encryption key is invalid, regenerating")
+		log.WarningLog().Printf("[Config] existing encryption key is invalid, regenerating")
 	}
 
 	// Generate new 32-byte key
@@ -1174,7 +1446,7 @@ func (c *Config) GetOrCreateEncryptionKey() ([]byte, error) {
 
 	// Persist to disk; non-fatal if it fails
 	if err := SaveConfig(c); err != nil {
-		log.WarningLog.Printf("[Config] failed to persist encryption key: %v", err)
+		log.WarningLog().Printf("[Config] failed to persist encryption key: %v", err)
 	}
 
 	return key, nil
@@ -1195,7 +1467,7 @@ func (c *Config) GetOrCreateClaimantHostID() (string, error) {
 
 	// Persist to disk; non-fatal if it fails
 	if err := SaveConfig(c); err != nil {
-		log.WarningLog.Printf("[Config] failed to persist claimant host id: %v", err)
+		log.WarningLog().Printf("[Config] failed to persist claimant host id: %v", err)
 	}
 
 	return c.ClaimantHostID, nil
@@ -1222,11 +1494,38 @@ func (c *Config) SlackSigningSecretOverride() string {
 // Currently recognized flags:
 //
 //	"backlog" — enables the Backlog tab and backlog lifecycle controller.
+//	"webhook_triggers" — registers POST /webhooks/github and POST /webhooks/generic/{slug}.
+//	"pr_event_webhooks" — reacts to check_run/workflow_run/pull_request_review/issue_comment
+//	  GitHub deliveries on /webhooks/github by immediately reconciling a matching pr_pending
+//	  item, instead of waiting for PRStatusPoller's next tick. Independently toggleable from
+//	  "webhook_triggers", but has no effect unless "webhook_triggers" is also enabled (that
+//	  flag gates whether the route is registered at all).
 func (c *Config) GetFeatureFlag(name string) bool {
 	if c == nil || c.FeatureFlags == nil {
 		return false
 	}
 	return c.FeatureFlags[name]
+}
+
+// GetFeatureFlagWithDefault returns the persisted enabled state of the named feature
+// flag, or defaultValue if it has never been explicitly set. Unlike GetFeatureFlag
+// (every absent flag defaults to false), this lets one flag graduate to "on by
+// default" — e.g. terminal:resync-exec-gate-fast-lane (2026-08-25: an unset default
+// left resync-triggered resizes contending on the shared 5s-timeout exec-gate pool,
+// which can exceed the client's 4s stall watchdog and force a disconnect+reconnect;
+// the fast lane's dedicated 3s-budget pool exists specifically to avoid this) —
+// while every other flag keeps defaulting to false via GetFeatureFlag. An explicit
+// persisted false still opts back out; only a genuinely absent key falls through to
+// defaultValue.
+func (c *Config) GetFeatureFlagWithDefault(name string, defaultValue bool) bool {
+	if c == nil || c.FeatureFlags == nil {
+		return defaultValue
+	}
+	v, ok := c.FeatureFlags[name]
+	if !ok {
+		return defaultValue
+	}
+	return v
 }
 
 // SetFeatureFlag sets the named feature flag and persists the config to disk.

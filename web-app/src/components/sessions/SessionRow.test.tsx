@@ -1,7 +1,7 @@
 import React from "react";
 import { render, screen } from "@testing-library/react";
 import { SessionRow } from "./SessionRow";
-import { SessionStatus } from "@/gen/session/v1/types_pb";
+import { ReviveOutcome, SessionStatus } from "@/gen/session/v1/types_pb";
 import type { Session } from "@/gen/session/v1/types_pb";
 
 jest.mock("@connectrpc/connect", () => ({
@@ -10,6 +10,13 @@ jest.mock("@connectrpc/connect", () => ({
 
 jest.mock("@connectrpc/connect-web", () => ({
   createConnectTransport: jest.fn(() => ({ unary: jest.fn(), stream: jest.fn() })),
+}));
+
+jest.mock("@/lib/contexts/SessionServiceContext", () => ({
+  useSessionServiceContext: () => ({
+    draftPullRequest: jest.fn(),
+    createPullRequest: jest.fn(),
+  }),
 }));
 
 jest.mock("@/lib/hooks/useFocusTrap", () => ({
@@ -59,6 +66,28 @@ describe("SessionRow — note badge", () => {
     const emptySession = { ...minimalSession, note: "" } as unknown as Session;
     rerender(<SessionRow session={emptySession} />);
     expect(screen.queryByTestId("badge-has-note")).toBeNull();
+  });
+});
+
+// session-revive-uuid-loss UX AC7: the row folds the "context lost" signal
+// into its single combined aria-label instead of adding a second,
+// separately-announced landmark (ux.md's explicit accessibility rule).
+describe("SessionRow — revived context badge", () => {
+  it("SessionRow_should_RenderBadgeAndExtendAriaLabel_When_ReviveOutcomeIsFreshLostHistory", () => {
+    const session = { ...minimalSession, reviveOutcome: ReviveOutcome.FRESH_LOST_HISTORY } as unknown as Session;
+    render(<SessionRow session={session} />);
+    expect(screen.getByTestId("revived-context-badge")).toBeInTheDocument();
+    expect(screen.getByTestId("session-row")).toHaveAttribute(
+      "aria-label",
+      expect.stringContaining(", context: lost"),
+    );
+  });
+
+  it("SessionRow_should_NotRenderBadgeOrExtendAriaLabel_When_ReviveOutcomeIsNotFreshLostHistory", () => {
+    const session = { ...minimalSession, reviveOutcome: ReviveOutcome.RESUME_LIVE } as unknown as Session;
+    render(<SessionRow session={session} />);
+    expect(screen.queryByTestId("revived-context-badge")).toBeNull();
+    expect(screen.getByTestId("session-row").getAttribute("aria-label")).not.toContain("context: lost");
   });
 });
 

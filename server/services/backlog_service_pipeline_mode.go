@@ -76,7 +76,7 @@ func pipelineModeToProto(pm *ent.PipelineMode) *sessionv1.PipelineMode {
 }
 
 // pipelineCacheInvalidator is a narrow, consumer-defined interface (per
-// .claude/rules/interface-pollution-checklist.md — defined where consumed,
+// the `interface-pollution-checklist` skill — defined where consumed,
 // not next to CachingPipelineEngine) matched via duck typing against
 // s.pipelineEngine. CachingPipelineEngine.InvalidateCache satisfies it;
 // PipelineEngine itself intentionally does NOT declare this method (it is a
@@ -101,7 +101,7 @@ func (s *BacklogService) invalidatePipelineCache(ctx context.Context, id string)
 		return
 	}
 	if err := invalidator.InvalidateCache(ctx); err != nil {
-		log.WarningLog.Printf("[PipelineEngine] cache invalidation failed after successful write id=%s: %v — cache may be stale until next successful invalidation", id, err)
+		log.WarningLog().Printf("[PipelineEngine] cache invalidation failed after successful write id=%s: %v — cache may be stale until next successful invalidation", id, err)
 	}
 }
 

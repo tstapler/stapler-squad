@@ -142,3 +142,25 @@ jest.mock("@/lib/hooks/useAvailablePrograms", () => ({
     return PROGRAMS;
   },
 }));
+
+// useHandoffSummary (HandoffSummarySection, mounted unconditionally in
+// SessionDetailView's Info tab) calls the real ConnectRPC transport on mount
+// unless mocked, which can hit whatever getConnectTransport() resolves to in
+// the test environment -- including the live systemd-managed dev instance's
+// own port. Stub it globally with a stable, non-fetching default so every
+// test that renders SessionDetailView's Info tab is protected, not just
+// tests that specifically exercise handoff-summary behavior. Tests that do
+// need to exercise it (HandoffSummarySection.test.tsx,
+// RestartWithSummaryButton.test.tsx) override this with their own
+// jest.mock("@/lib/hooks/useHandoffSummary", ...) at the top of the file.
+jest.mock("@/lib/hooks/useHandoffSummary", () => ({
+  ...jest.requireActual("@/lib/hooks/useHandoffSummary"),
+  useHandoffSummary: () => ({
+    data: null,
+    loading: false,
+    error: null,
+    neverResolved: false,
+    trigger: jest.fn(),
+    refetch: jest.fn(),
+  }),
+}));

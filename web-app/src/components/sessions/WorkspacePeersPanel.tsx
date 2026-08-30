@@ -1,13 +1,15 @@
 "use client";
 
 // +feature: workspace-peers-panel
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { useAppSelector } from "@/lib/store";
 import { selectAllSessions } from "@/lib/store/sessionsSlice";
 import { Session, SessionStatus } from "@/gen/session/v1/types_pb";
 import {
   panelContainer,
   heading,
+  headingRow,
+  dismissButton,
   peerList,
   peerItem,
   peerTitleRow,
@@ -54,28 +56,52 @@ export interface WorkspacePeersPanelProps {
   now?: number;
 }
 
+// ponytail: per-session dismiss, mirrors BacklogItemPanel's
+// `backlog-panel-${sessionId}` localStorage key.
+const dismissedKey = (sessionId: string) => `workspace-peers-dismissed-${sessionId}`;
+
 /**
- * WorkspacePeersPanel lists other active sessions sharing the current session's workspace
- * (same repo, any branch/worktree), live-updated via the existing WatchSessions Redux store —
- * no extra polling or RPC needed since Session already carries workspace_key and goal.updatedAt.
- * Renders nothing when the session has no workspace key or no peers.
+ * WorkspacePeersPanel lists other active sessions in this exact working directory
+ * (session.path), live-updated via the existing WatchSessions Redux store — no extra
+ * polling or RPC needed. Scoped to the literal path, not workspaceKey (which also
+ * matches sibling worktrees/branches of the same repo) — a peer editing a different
+ * worktree isn't touching this directory's files. Renders nothing when the session has
+ * no path, no peers, or the user dismissed it for this session.
  */
 export function WorkspacePeersPanel({ session, now }: WorkspacePeersPanelProps) {
   const allSessions = useAppSelector(selectAllSessions);
   const nowMs = now ?? Date.now();
+  const [dismissed, setDismissed] = useState(() => {
+    if (typeof window === "undefined") return false;
+    return localStorage.getItem(dismissedKey(session.id)) === "1";
+  });
 
   const peers = useMemo(() => {
-    if (!session.workspaceKey) return [];
+    if (!session.path) return [];
     return allSessions.filter(
-      (s) => s.id !== session.id && s.workspaceKey === session.workspaceKey
+      (s) => s.id !== session.id && s.path === session.path
     );
-  }, [allSessions, session.workspaceKey, session.id]);
+  }, [allSessions, session.path, session.id]);
 
-  if (!session.workspaceKey || peers.length === 0) return null;
+  if (!session.path || peers.length === 0 || dismissed) return null;
 
   return (
     <div className={panelContainer} data-testid="workspace-peers-panel">
-      <div className={heading}>Other Sessions in This Workspace</div>
+      <div className={headingRow}>
+        <div className={heading}>Other Sessions in This Directory</div>
+        <button
+          type="button"
+          className={dismissButton}
+          aria-label="Dismiss"
+          data-testid="workspace-peers-dismiss"
+          onClick={() => {
+            localStorage.setItem(dismissedKey(session.id), "1");
+            setDismissed(true);
+          }}
+        >
+          ✕
+        </button>
+      </div>
       <ul className={peerList} role="list">
         {peers.map((peer) => {
           const lifecycle = peerLifecycle(peer, nowMs);

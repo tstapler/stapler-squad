@@ -25,6 +25,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/workflows"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/memory"
+	"github.com/tstapler/stapler-squad/session/sshremote"
 	"github.com/tstapler/stapler-squad/session/tmux"
 
 	"github.com/google/uuid"
@@ -76,6 +77,23 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.mux.ServeHTTP(w, r)
+}
+
+// healthEventPublisherFunc adapts a plain func to
+// sshremote.HealthEventPublisher -- RemoteHealthProber needs an interface
+// value (session/sshremote/health_prober.go can't import pkg/events itself;
+// see that file's doc comment for the import-cycle reason), while this
+// file's existing EventBus-publish callbacks (tmux.RegisterForkPressureAlert
+// / SetServerRecoveryCallback in wireDepsIntoServer) are plain funcs -- this
+// is the same "closure straight into deps.EventBus.Publish" pattern, just
+// wrapped to satisfy the one-method interface RemoteHealthProber's
+// constructor requires. Must be a package-level type (not declared inside a
+// function) since Go doesn't allow methods on function-local types.
+type healthEventPublisherFunc func(remoteName string, state, previousState sshremote.RemoteConnectionState)
+
+// PublishRemoteHealthChanged implements sshremote.HealthEventPublisher.
+func (f healthEventPublisherFunc) PublishRemoteHealthChanged(remoteName string, state, previousState sshremote.RemoteConnectionState) {
+	f(remoteName, state, previousState)
 }
 
 // newServerBase creates the base Server struct and returns it alongside the
@@ -194,6 +212,15 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	// safety net for sessions that slip through.
 	go deps.HistoryLinker.Start(serverCtx)
 	log.Info("HistoryLinker started")
+
+	// Start ClaudeSettingsWatcher: hot-reloads auto-approval rules derived from
+	// ~/.claude/settings.json (and project-level equivalents) on edit. serverCtx
+	// cancellation on Shutdown() is what stops its goroutine cleanly — no separate
+	// shutdown hook needed.
+	if deps.ClaudeSettingsWatcher != nil {
+		go deps.ClaudeSettingsWatcher.Start(serverCtx)
+		log.Info("ClaudeSettingsWatcher started")
+	}
 
 	// Start UnfinishedWork scanner.
 	if deps.UnfinishedScanner != nil {
@@ -418,6 +445,15 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		log.Info("Registered SessionSummaryService handler", "path", ssAPIPath)
 	}
 
+	// Register HandoffSummaryService handler (Story 2.2.1).
+	if deps.HandoffSummaryGenerator != nil {
+		handoffSummaryService := services.NewHandoffSummaryService(deps.HandoffSummaryGenerator)
+		hsPath, hsHandler := sessionv1connect.NewHandoffSummaryServiceHandler(handoffSummaryService, ConnectOptions(deps.ErrorRegistry)...)
+		hsAPIPath := "/api" + hsPath
+		srv.RegisterConnectHandler(hsAPIPath, http.StripPrefix("/api", hsHandler))
+		log.Info("Registered HandoffSummaryService handler", "path", hsAPIPath)
+	}
+
 	// Register InsightsService handler for token usage analytics.
 	if deps.InsightsService != nil {
 		insightsPath, insightsHandler := sessionv1connect.NewInsightsServiceHandler(deps.InsightsService, ConnectOptions(deps.ErrorRegistry)...)
@@ -434,6 +470,78 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		log.Info("Registered GitHubUserService handler", "path", ghAPIPath)
 	}
 
+	// Register TymuxRolloutService handler (tymux-bundled-integration Epic
+	// 3.3: operator-facing controls for the staged tymux rollout, mirroring
+	// StreamHubRolloutService's registration). Config-backed with no
+	// external deps, so it's constructed inline rather than threaded
+	// through ServerDependencies.
+	{
+		tymuxRolloutSvc := services.NewTymuxRolloutService()
+		tymuxRolloutPath, tymuxRolloutHandler := sessionv1connect.NewTymuxRolloutServiceHandler(tymuxRolloutSvc, ConnectOptions(deps.ErrorRegistry)...)
+		tymuxRolloutAPIPath := "/api" + tymuxRolloutPath
+		srv.RegisterConnectHandler(tymuxRolloutAPIPath, http.StripPrefix("/api", tymuxRolloutHandler))
+		log.Info("Registered TymuxRolloutService handler", "path", tymuxRolloutAPIPath)
+	}
+
+	// Register RemoteService handler (ssh-remote-workspaces Epic 3.3: TOFU
+	// host-key confirmation flow for configured SSH remotes). KnownHostsStore
+	// construction is the only fallible step (it touches disk under
+	// config.GetConfigDir()); on failure, RemoteService is skipped entirely
+	// rather than registered half-working -- Settings' "Test connection" UI
+	// simply won't be reachable until the next restart, matching the
+	// suspended-process-store/backlog-attachment-handler degradation pattern
+	// used elsewhere in this function.
+	if knownHosts, khErr := sshremote.NewKnownHostsStore(); khErr != nil {
+		log.Error("Failed to create known_hosts store, RemoteService disabled", "err", khErr)
+	} else {
+		keyStore := sshremote.NewKeyStore()
+		remoteSvc := services.NewRemoteService(knownHosts, keyStore, config.LoadConfig)
+		remotePath, remoteHandler := sessionv1connect.NewRemoteServiceHandler(remoteSvc, ConnectOptions(deps.ErrorRegistry)...)
+		remoteAPIPath := "/api" + remotePath
+		srv.RegisterConnectHandler(remoteAPIPath, http.StripPrefix("/api", remoteHandler))
+		log.Info("Registered RemoteService handler", "path", remoteAPIPath)
+
+		// Share the same identity/host-key stores with SessionService so
+		// CreateSession's remote-target mode-specific block (ssh-remote-workspaces
+		// Phase 4, Epic 4.2) can dial with the identity/trust decisions made via
+		// this RemoteService's TOFU flow, with no separate wiring step.
+		if deps.SessionService != nil {
+			deps.SessionService.SetRemoteDeps(keyStore, knownHosts)
+		}
+
+		// Start one RemoteHealthProber per configured remote (ssh-remote-workspaces
+		// Epic 6.4, Task 6.4.1c), closing the loop for Epic 6.2's connection
+		// indicator: each prober shares tmux.DefaultSSHClientPool() -- the SAME
+		// process-wide pool a session's own SSHRunner/RemoteApprovalRelay for
+		// that remote already uses -- so this never opens a dedicated connection
+		// of its own (BuildRemoteHealthProber's doc comment). healthPublisher is
+		// a single shared adapter (defined below) wrapping deps.EventBus.Publish,
+		// reused across every remote since HealthEventPublisher.
+		// PublishRemoteHealthChanged already takes remoteName per call, mirroring
+		// the one-callback-many-callers shape of tmux.RegisterForkPressureAlert/
+		// SetServerRecoveryCallback elsewhere in this function.
+		//
+		// Only remotes present in config AT SERVER START are wired here --
+		// dynamically starting/stopping a prober when a remote is added/removed
+		// later via the Settings UI (Phase 6 Epic 6.1, not yet built) is out of
+		// scope for this task and left as a follow-up for whoever builds that UI.
+		healthPublisher := healthEventPublisherFunc(func(remoteName string, state, previousState sshremote.RemoteConnectionState) {
+			deps.EventBus.Publish(events.NewRemoteHealthChangedEvent(remoteName, state, previousState))
+		})
+		remotesCfg := config.LoadConfig().Remotes
+		for i := range remotesCfg {
+			remote := &remotesCfg[i]
+			prober, proberErr := services.BuildRemoteHealthProber(serverCtx, remote, tmux.DefaultSSHClientPool(), knownHosts, keyStore, healthPublisher)
+			if proberErr != nil {
+				log.Error("failed to build RemoteHealthProber, connection indicator will not update live for this remote", "remote", remote.Name, "err", proberErr)
+				continue
+			}
+			prober.Start(serverCtx)
+			srv.shutdownHooks = append(srv.shutdownHooks, prober.Stop)
+			log.Info("RemoteHealthProber started", "remote", remote.Name)
+		}
+	}
+
 	// Register BacklogService handler.
 	// The feature-flag interceptor is added on top of the standard options so that
 	// all BacklogService RPCs return CodeNotFound when the "backlog" flag is off.
@@ -448,7 +556,7 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		blPath, blHandler := sessionv1connect.NewBacklogServiceHandler(deps.BacklogService, blOpts...)
 		blAPIPath := "/api" + blPath
 		srv.RegisterConnectHandler(blAPIPath, http.StripPrefix("/api", blHandler))
-		log.InfoLog.Printf("Registered BacklogService handler at %s", blAPIPath)
+		log.InfoLog().Printf("Registered BacklogService handler at %s", blAPIPath)
 	}
 
 	// Start UserPRCache and register GitHubUserService handler.
@@ -610,6 +718,13 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	srv.mux.HandleFunc("/api/hooks/permission-request", approvalHandler.HandlePermissionRequest)
 	log.Info("Registered Claude Code hook approval handler at /api/hooks/permission-request")
 	srv.approvalHandler = approvalHandler
+	// Wire the same ApprovalHandler as the PermissionRequestHandler every
+	// remote session's RemoteApprovalRelay drives its requests through
+	// (ssh-remote-workspaces Phase 5 correction, ADR-003's addendum) --
+	// mirrors SetRemoteDeps's existing pattern of injecting a server.go-
+	// constructed dependency into SessionService rather than SessionService
+	// owning a second instance of its own.
+	deps.SessionService.SetPermissionRequestHandler(approvalHandler)
 
 	// Register non-approval hook receivers (stop, pre/post-tool-use, prompt-submit,
 	// post-tool-use-drift-check — the BUG-044 follow-up steering hook, wired only
@@ -630,7 +745,7 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	// unauthenticated prober scanning generic guessable webhook paths
 	// (plan.md Risk Control) — that rationale doesn't apply here:
 	// /api/hooks/slack-interactive is a single, fixed, already
-	// publicly-documented path (.claude/docs/slack-phase2-public-reachability.md),
+	// publicly-documented path (docs/how-to/expose-slack-interactive-endpoint.md),
 	// not a guessable pattern, so an explicit 404 leaks nothing a prober
 	// couldn't already find in the docs. Boot-time-only gate either way
 	// (flipping the flag requires a restart to take effect).
@@ -668,7 +783,15 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		// flag off requires a restart to stop serving these routes, same limitation the
 		// "backlog" flag already has for its own route-gated pieces.
 		if webhookCfg.GetFeatureFlag("webhook_triggers") {
-			githubWebhookHandler := services.NewGitHubWebhookHandler(deps.WorkflowRepo, deps.WorkflowScheduler, deps.TriggerFireEventRepo, webhookCfg)
+			// deps.BacklogLifecycleListener is nil-guarded (rather than passed directly)
+			// to avoid boxing a nil *session.BacklogLifecycleListener into a non-nil
+			// services.PRFixEventRouter interface value (a "typed nil" — handlePRFixEvent's
+			// `h.prFixRouter == nil` check would then never trip).
+			var prFixRouter services.PRFixEventRouter
+			if deps.BacklogLifecycleListener != nil {
+				prFixRouter = deps.BacklogLifecycleListener
+			}
+			githubWebhookHandler := services.NewGitHubWebhookHandler(deps.WorkflowRepo, deps.WorkflowScheduler, deps.TriggerFireEventRepo, webhookCfg, prFixRouter)
 			githubWebhookHandler.RegisterRoutes(srv.mux)
 			genericWebhookHandler := services.NewGenericWebhookHandler(deps.WorkflowRepo, deps.WorkflowScheduler, deps.TriggerFireEventRepo, webhookCfg)
 			genericWebhookHandler.RegisterRoutes(srv.mux)
@@ -681,6 +804,12 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 			// route). This log line at least makes the boot-time-only nature of the gate
 			// visible in the service log.
 			log.Info("webhook-trigger routes NOT registered (webhook_triggers flag off) — /webhooks/* will 404 until the flag is enabled and the service restarts")
+			if webhookCfg.GetFeatureFlag("pr_event_webhooks") {
+				// pr_event_webhooks has no effect unless webhook_triggers is also enabled
+				// (the route itself isn't registered above) — a silent-404 trap an
+				// operator could otherwise hit with zero signal.
+				log.Warn("pr_event_webhooks is enabled but webhook_triggers is not — /webhooks/github is not registered, PR-fix webhook events will silently 404")
+			}
 		}
 	}
 
@@ -705,7 +834,15 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	if deps.BacklogService != nil {
 		autoReopener = deps.BacklogService
 	}
-	mcpHTTPHandler := servermcp.NewHTTPHandler(deps.Storage, deps.SessionService, deps.ScrollbackManager, deps.Storage, deps.EventBus, deps.UserPRCache, deps.BacklogEnabledCheck, autoReopener, deps.BacklogService)
+	// Reuses the same liveness primitive wired onto BacklogLifecycleListener
+	// (see newSessionLivenessChecker's doc comment in dependencies.go) so
+	// link_session_to_item's exclusivity check doesn't trust a stale
+	// EndedAt==nil row for a crashed/killed session.
+	var mcpLiveCheck func(sessionUUID string) bool
+	if deps.Registry != nil {
+		mcpLiveCheck = newSessionLivenessChecker(deps.SessionService.FindLiveInstance, deps.Registry)
+	}
+	mcpHTTPHandler := servermcp.NewHTTPHandler(deps.Storage, deps.SessionService, deps.ScrollbackManager, deps.Storage, deps.EventBus, deps.UserPRCache, deps.BacklogEnabledCheck, autoReopener, deps.BacklogService, mcpLiveCheck)
 	// Wrap with middleware that injects session UUID from X-Stapler-Session-UUID header.
 	mcpWithUUID := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if uuid := r.Header.Get("X-Stapler-Session-UUID"); uuid != "" {
@@ -924,6 +1061,16 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		log.Info("Stale session notifier started",
 			"threshold_minutes", cfg.StaleSession.ThresholdMinutesOrDefault(),
 			"notify_enabled", cfg.StaleSession.NotifyEnabledOrDefault())
+	}
+
+	// Start memory pressure notifier (fires an operator-facing notification the first time
+	// this process's own cgroup memory usage crosses its MemoryHigh ceiling — see
+	// MemoryPressureNotifier doc comment). No-ops on non-Linux (telemetry.CgroupMemoryUsageRatio
+	// always reports unavailable there).
+	if deps.ReviewQueuePoller != nil {
+		memNotifier := services.NewMemoryPressureNotifier(deps.ReviewQueuePoller, deps.EventBus)
+		go memNotifier.Start(serverCtx)
+		log.Info("Memory pressure notifier started")
 	}
 }
 

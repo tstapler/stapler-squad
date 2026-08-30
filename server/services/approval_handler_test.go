@@ -7,7 +7,10 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -30,13 +33,22 @@ import (
 // must reflect whatever baseURLFn() returns at *their* point of use -- never a
 // value snapshotted once at ApprovalHandler construction time.
 func TestApprovalHandler_should_UseBaseURLFnValueAtCallTime_When_ThreeUsageSitesInvoked(t *testing.T) {
-	t.Parallel()
-	// hookApprovalURL() delegates to hook_injector.go's shared hookBaseURLFn (set via
-	// SetHookBaseURLFn) -- the same mechanism InjectHooksConfig uses -- rather than a
-	// separate ApprovalHandler-owned mechanism. Save/restore it so this test's
-	// deliberately-unstable stub base URL doesn't leak into other tests in this
-	// package that call hookApprovalURL()/InjectHookConfig and expect the stable
-	// default.
+	// Deliberately NOT t.Parallel(): this test overwrites the package-level hookBaseURLFn
+	// (hook_injector.go) with a stub whose return value changes on every invocation, and
+	// hookBaseURLFn's own accessors are only mutex-guarded against torn reads/writes of the
+	// closure value itself -- they don't protect against a *different* test's goroutine
+	// invoking whatever closure happens to be installed. Any other parallel test that calls
+	// hookApprovalURL()/InjectHooksConfig while this test's stub is installed would (a) get a
+	// non-default URL it doesn't expect, and (b) drive unsynchronized increments of this
+	// test's own `calls` counter from a foreign goroutine -- a genuine data race on `calls`
+	// caught by `-race`, which is exactly the flake this comment documents. Running this test
+	// non-parallel guarantees Go's test runner finishes it (including the t.Cleanup restore
+	// below) before any t.Parallel() tests in this package start, so the shared global is
+	// never observed mid-mutation. See the `fix-flaky-tests-dont-defer` skill.
+	//
+	// Save/restore hookBaseURLFn so this test's deliberately-unstable stub base URL doesn't
+	// leak into other tests in this package that call hookApprovalURL()/InjectHookConfig and
+	// expect the stable default.
 	original := getHookBaseURLFn()
 	t.Cleanup(func() { SetHookBaseURLFn(original) })
 
@@ -445,7 +457,7 @@ func TestHandlePermissionRequest_EscalationReason_UnexpectedDecision(t *testing.
 	var entries []AnalyticsEntry
 	require.Eventually(t, func() bool {
 		var err error
-		entries, err = analyticsStore.LoadWindow(time.Now().Add(-1 * time.Hour))
+		entries, err = analyticsStore.LoadWindow(context.Background(), time.Now().Add(-1*time.Hour))
 		return err == nil && len(entries) >= 1
 	}, 2*time.Second, 10*time.Millisecond, "analytics entry must persist within 2s")
 
@@ -587,4 +599,37 @@ func TestBroadcastApprovalNotification_NoPanic_When_SlackNotifierNil(t *testing.
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for baseline eventBus notification")
 	}
+}
+
+// TestInjectHookConfig_ConcurrentWritesToSameRootDir_NeverProduceCorruptJSON is a
+// regression test for the fixed-tmp-filename write race InjectHookConfig used to have
+// (writing settingsPath+".tmp" directly via os.WriteFile instead of the hardened
+// writeSettingsAtomic) — concurrent InjectHookConfig calls against the same rootDir
+// must never interleave writes and rename a torn/corrupt settings.local.json into
+// place. Mirrors config_test.go's TestSaveConfig_ConcurrentWritesToSamePath.
+func TestInjectHookConfig_ConcurrentWritesToSameRootDir_NeverProduceCorruptJSON(t *testing.T) {
+	rootDir := t.TempDir()
+
+	const n = 20
+	var wg sync.WaitGroup
+	errCh := make(chan error, n)
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			errCh <- InjectHookConfig(rootDir, fmt.Sprintf("session-%d", i))
+		}(i)
+	}
+	wg.Wait()
+	close(errCh)
+
+	for err := range errCh {
+		require.NoError(t, err, "InjectHookConfig must not error under concurrent callers targeting the same rootDir")
+	}
+
+	data, err := os.ReadFile(filepath.Join(rootDir, ".claude", "settings.local.json"))
+	require.NoError(t, err, "settings.local.json must exist after concurrent InjectHookConfig calls")
+
+	var parsed map[string]json.RawMessage
+	require.NoError(t, json.Unmarshal(data, &parsed), "settings.local.json must be valid JSON after concurrent writes, not torn/corrupt: %s", data)
 }

@@ -211,7 +211,7 @@ func TestReconcilePRPending_should_NotTransitionToDone_When_HeadBranchMismatchDe
 		return &github.PRInfo{HeadRef: "some-other-branch"}, nil
 	})
 
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 	listener.ReconcilePRPending(ctx, er)
 
 	fetched, err := storage.GetBacklogItem(ctx, item.ID)
@@ -228,7 +228,7 @@ func TestReconcileBouncingItems_should_NotTransitionToDone_When_HeadBranchMismat
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 
 	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
 		Title:    "Bouncing item with merged PR, mismatched head branch",
@@ -321,7 +321,7 @@ func TestReconcilePRPending_should_IncludeUnverifiedDisclaimer_When_ClosedPRHead
 		return &github.PRInfo{HeadRef: "some-other-branch"}, nil
 	})
 
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 	listener.ReconcilePRPending(ctx, er)
 
 	require.True(t, fakeSpawner.spawnCalled, "closeIfSupersededByMain must have fallen through to the normal reopen path (commit not yet on main)")
@@ -381,7 +381,7 @@ func TestReconcilePRPending_should_IncludeUnverifiedDisclaimer_When_CIFailingPRH
 		return &github.PRInfo{HeadRef: "some-other-branch"}, nil
 	})
 
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 	listener.ReconcilePRPending(ctx, er)
 
 	require.True(t, fakeSpawner.spawnCalled, "closeIfSupersededByMain must have fallen through to the normal fix-spawn path (commit not yet on main)")
@@ -444,7 +444,7 @@ func TestReconcilePRPending_should_OmitUnverifiedDisclaimer_When_CIFailingPRHead
 	// actually tracking.
 	stubMatchingPRByNumberFinder(listener, "backlog/ci-matches")
 
-	er := storage.repo.(*EntRepository)
+	er := storage.repo
 	listener.ReconcilePRPending(ctx, er)
 
 	require.True(t, fakeSpawner.spawnCalled)

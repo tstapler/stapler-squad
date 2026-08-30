@@ -28,7 +28,7 @@ export class BacklogItemDetailPage {
    * `Accordion.Trigger`-backed `<button aria-expanded="true|false">`
    * (web-app/src/components/ui/Collapsible.tsx), located by its
    * `data-testid="collapsible-header-<sectionKey>"` (never by CSS class,
-   * per .claude/rules/e2e-test-conventions.md). `sectionKey` matches the
+   * per the `e2e-test-conventions` skill). `sectionKey` matches the
    * `sectionKey` prop each extracted section passes, e.g. "sessions",
    * "version-control", "description".
    */

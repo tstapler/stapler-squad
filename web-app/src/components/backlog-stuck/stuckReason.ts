@@ -32,6 +32,7 @@ export const STUCK_REASON_LABELS: Record<StuckReason, string> = {
   [StuckReason.BLOCKED_BY_DEPENDENCY]: "Waiting on blocker item",
   [StuckReason.MULTIPLE_REASONS]: "Multiple reasons stuck",
   [StuckReason.BOUNCE_CAP_EXHAUSTED]: "Bounce cap exhausted",
+  [StuckReason.STEER_FAILED]: "Steer attempt failed",
 };
 
 /** Decorative icon glyph for every StuckReason (never the sole signal — text label always accompanies it). */
@@ -55,6 +56,7 @@ export const STUCK_REASON_ICONS: Record<StuckReason, string> = {
   [StuckReason.BLOCKED_BY_DEPENDENCY]: "🟠",
   [StuckReason.MULTIPLE_REASONS]: "🔺",
   [StuckReason.BOUNCE_CAP_EXHAUSTED]: "🛑",
+  [StuckReason.STEER_FAILED]: "⛔",
 };
 
 /** vanilla-extract class per StuckReason (design/ux.md Surface 7 chip legend). */
@@ -78,6 +80,7 @@ export const STUCK_REASON_CLASS: Record<StuckReason, string> = {
   [StuckReason.BLOCKED_BY_DEPENDENCY]: styles.chipBlockedByDependency,
   [StuckReason.MULTIPLE_REASONS]: styles.chipEscalated,
   [StuckReason.BOUNCE_CAP_EXHAUSTED]: styles.chipEscalated,
+  [StuckReason.STEER_FAILED]: styles.chipSteerFailed,
 };
 
 /** Derived (not stored) reason label/class for a stale GitHub-status check (design/ux.md Surface 8). */

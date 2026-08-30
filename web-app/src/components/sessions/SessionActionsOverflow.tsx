@@ -7,9 +7,11 @@ import { MoreHorizontal } from "lucide-react";
 import type { Session, CheckpointProto } from "@/gen/session/v1/types_pb";
 import { SessionStatus } from "@/gen/session/v1/types_pb";
 import { TagEditor } from "./TagEditor";
+import { CreatePullRequestModal } from "./CreatePullRequestModal";
 import { useFocusTrap } from "@/lib/hooks/useFocusTrap";
 import { useAvailablePrograms } from "@/lib/hooks/useAvailablePrograms";
 import { isAutoApproveSupported } from "@/lib/sessions/autoApprove";
+import { useSessionServiceContext } from "@/lib/contexts/SessionServiceContext";
 import {
   desktopActions,
   overflowContainer,
@@ -56,11 +58,10 @@ export interface SessionActionsOverflowProps {
   onOpenInNewPane?: () => void;
   onNewWorkspace?: () => void;
   onCreateCheckpoint?: (sessionId: string, label: string) => Promise<boolean>;
-  onRunOneShot?: (sessionId: string) => Promise<void>;
   onSetRateLimitEnabled?: (sessionId: string, enabled: boolean) => void;
   onToggleAutonomousMode?: (sessionId: string, enabled: boolean) => void;
   onToggleAutoApprove?: (sessionId: string, enabled: boolean) => void;
-  onSteerAutonomousSession?: (sessionId: string, message: string) => void;
+  onSteerAutonomousSession?: (sessionId: string, message: string) => Promise<boolean> | void;
   onClearConversationState?: (sessionId: string) => Promise<boolean>;
   onUpdateTags?: (sessionId: string, tags: string[]) => void;
   /** Trigger rename flow in parent (e.g. SessionDetail opens its rename modal) */
@@ -90,7 +91,6 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
   onOpenInNewPane,
   onNewWorkspace,
   onCreateCheckpoint,
-  onRunOneShot,
   onSetRateLimitEnabled,
   onToggleAutonomousMode,
   onToggleAutoApprove,
@@ -131,8 +131,7 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
   const [isCreatingCheckpoint, setIsCreatingCheckpoint] = useState(false);
   const [checkpointError, setCheckpointError] = useState("");
   const [isTagEditorOpen, setIsTagEditorOpen] = useState(false);
-  const [isRunningOneShot, setIsRunningOneShot] = useState(false);
-  const [oneShotResult, setOneShotResult] = useState<string | null>(null);
+  const [isCreatePrOpen, setIsCreatePrOpen] = useState(false);
   const [isAutonomousConfirmOpen, setIsAutonomousConfirmOpen] = useState(false);
   // Auto-approve toggle restart notice. SetAutoApprove (session/instance_actor_setters.go)
   // restarts an Active session unconditionally in EITHER direction (the flag is baked into
@@ -142,6 +141,7 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
   const [pendingAutoApproveValue, setPendingAutoApproveValue] = useState(false);
   const [isSteerOpen, setIsSteerOpen] = useState(false);
   const [steerMessage, setSteerMessage] = useState("");
+  const [isSteering, setIsSteering] = useState(false);
   const [isClearConversationConfirmOpen, setIsClearConversationConfirmOpen] = useState(false);
   const [isProgramPickerOpen, setIsProgramPickerOpen] = useState(false);
   const [programPickerValue, setProgramPickerValue] = useState(session.program || "");
@@ -150,6 +150,7 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
   const [isProgramRestartConfirmOpen, setIsProgramRestartConfirmOpen] = useState(false);
   const [pendingProgramValue, setPendingProgramValue] = useState("");
   const availablePrograms = useAvailablePrograms();
+  const { draftPullRequest, createPullRequest } = useSessionServiceContext();
 
   // Keep the picker's selected value in sync with the session while the dialog is
   // open — otherwise a concurrent server-side change (e.g. the capacity-monitor
@@ -169,9 +170,14 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
   const autonomousConfirmDialogRef = useRef<HTMLDivElement>(null);
   const autoApproveConfirmDialogRef = useRef<HTMLDivElement>(null);
   const steerDialogRef = useRef<HTMLDivElement>(null);
+  // Focus target while a steer RPC is in flight — see the onKeyDown/onClick
+  // handlers below for why focus is moved here explicitly rather than left
+  // to the browser's implicit auto-blur when the input becomes disabled.
+  const steerCancelButtonRef = useRef<HTMLButtonElement>(null);
   const clearConversationDialogRef = useRef<HTMLDivElement>(null);
   const programPickerDialogRef = useRef<HTMLDivElement>(null);
   const programConfirmDialogRef = useRef<HTMLDivElement>(null);
+  const createPrTriggerRef = useRef<HTMLButtonElement>(null);
 
   // All dialogs/menus spawned from this component return focus to overflowButtonRef
   // ("···") rather than the menu-item button that opened them — menu items unmount
@@ -230,22 +236,40 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
     setShowOverflow((o) => !o);
   }, []);
 
-  const close = () => setShowOverflow(false);
-
-  const handleRunOneShot = async (e: React.MouseEvent) => {
-    e.stopPropagation();
-    if (!onRunOneShot) return;
-    setIsRunningOneShot(true);
-    setOneShotResult(null);
+  // sendSteerMessage is the steer dialog's single submit path, shared by the
+  // input's Enter-key handler and the Send button's onClick — both need the
+  // identical sequence (disable input, move focus off it before the browser
+  // auto-blurs it, deliver, then close/clear only on success). The try/catch
+  // (in addition to the existing finally) treats a rejected promise the same
+  // as an onSteerAutonomousSession that resolves to false — without it, a
+  // caller that rejects rather than resolving false would surface as an
+  // unhandled promise rejection from inside a DOM event handler.
+  const sendSteerMessage = useCallback(async () => {
+    const message = steerMessage.trim();
+    if (!message || isSteering) return;
+    setIsSteering(true);
+    // Move focus to Cancel *before* the input's disabled prop takes effect,
+    // so focus stays inside the dialog instead of the browser auto-blurring
+    // it to document.body — that auto-blur would break both the Escape
+    // handler and useFocusTrap's Tab-cycling (its focusable-elements
+    // snapshot isn't re-evaluated when the input drops out of the tab
+    // order).
+    steerCancelButtonRef.current?.focus();
     try {
-      await onRunOneShot(session.id);
-      setOneShotResult("done");
+      const ok = await onSteerAutonomousSession?.(session.id, message);
+      if (ok !== false) {
+        setIsSteerOpen(false);
+        setSteerMessage("");
+      }
     } catch {
-      setOneShotResult("error");
+      // Treat a rejected promise the same as a resolved `false` — the steer
+      // failed, so leave the dialog open with the message intact.
     } finally {
-      setIsRunningOneShot(false);
+      setIsSteering(false);
     }
-  };
+  }, [steerMessage, isSteering, onSteerAutonomousSession, session.id]);
+
+  const close = () => setShowOverflow(false);
 
   const handleRestartConfirm = async (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -329,7 +353,9 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
     (isRunning && onHibernate) ||
     (isHibernated && onResumeFromHibernation)
   );
-  const hasGroup2 = !!(onRunOneShot || onCreateCheckpoint);
+  // Create/View PR item is now always rendered (no longer gated on a
+  // caller-supplied callback prop — see Task 2.3.1a).
+  const hasGroup2 = true;
   const hasGroup3 = !!(onRenameRequest || onChangeProgram || onClone || onOpenInNewPane || onUpdateTags || onNewWorkspace || onWorkspaceSwitchRequest);
   const hasGroup4 = !!(onSetRateLimitEnabled || onToggleAutonomousMode || onToggleAutoApprove);
   const hasGroup5 = !!(onClearConversationState || (onRestart && !isCreating) || (onRetryNow && (isPermanentlyFailed || isMidBackoffWait)) || onDelete);
@@ -579,6 +605,13 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
             aria-labelledby="steerDialogTitle"
             className={dialogContent}
             onClick={(e) => e.stopPropagation()}
+            onKeyDown={(e) => {
+              // Escape lives on the dialog wrapper (not just the input) so it
+              // keeps working while isSteering disables the input — a disabled
+              // element stops receiving keydown in most browsers, which would
+              // otherwise make the dialog unclosable by keyboard mid-flight.
+              if (e.key === "Escape") { setIsSteerOpen(false); setSteerMessage(""); }
+            }}
           >
             <h3 id="steerDialogTitle">Give Direction</h3>
             <p>Send a steering instruction to &quot;{session.title}&quot;:</p>
@@ -587,33 +620,40 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
               value={steerMessage}
               onChange={(e) => setSteerMessage(e.target.value)}
               onKeyDown={(e) => {
-                if (e.key === "Enter" && steerMessage.trim()) {
-                  onSteerAutonomousSession?.(session.id, steerMessage.trim());
-                  setIsSteerOpen(false);
-                  setSteerMessage("");
+                if (e.key === "Enter" && steerMessage.trim() && !isSteering) {
+                  // Without preventDefault + sendSteerMessage's own focus
+                  // move to Cancel, the browser's default Enter-key handling
+                  // re-targets the now-focused Cancel button and synthesizes
+                  // a click on it once this handler returns — closing the
+                  // dialog immediately instead of sending. Confirmed via a
+                  // real-browser Playwright repro: Cancel's onClick fired
+                  // right after setIsSteering(true), before
+                  // onSteerAutonomousSession had even resolved.
+                  e.preventDefault();
+                  void sendSteerMessage();
                 }
-                if (e.key === "Escape") { setIsSteerOpen(false); setSteerMessage(""); }
               }}
               placeholder="e.g. Focus on the UI tests first"
               className={renameInput}
               autoFocus
+              disabled={isSteering}
             />
             <div className={dialogActions}>
               <button
                 onClick={(e) => {
                   e.stopPropagation();
-                  if (steerMessage.trim()) {
-                    onSteerAutonomousSession?.(session.id, steerMessage.trim());
-                    setIsSteerOpen(false);
-                    setSteerMessage("");
-                  }
+                  void sendSteerMessage();
                 }}
-                disabled={!steerMessage.trim()}
+                disabled={!steerMessage.trim() || isSteering}
                 className={submitButton}
               >
-                Send
+                {isSteering ? "Sending…" : "Send"}
               </button>
-              <button onClick={(e) => { e.stopPropagation(); setIsSteerOpen(false); setSteerMessage(""); }} className={cancelButton}>
+              <button
+                ref={steerCancelButtonRef}
+                onClick={(e) => { e.stopPropagation(); setIsSteerOpen(false); setSteerMessage(""); }}
+                className={cancelButton}
+              >
                 Cancel
               </button>
             </div>
@@ -651,6 +691,15 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
         </div>,
         document.body
       )}
+
+      <CreatePullRequestModal
+        session={session}
+        isOpen={isCreatePrOpen}
+        onClose={() => setIsCreatePrOpen(false)}
+        draftPullRequest={draftPullRequest}
+        createPullRequest={createPullRequest}
+        triggerRef={createPrTriggerRef}
+      />
 
       <div className={desktopActions}>
         {showPrimaryAction && (isPaused || isReady) && (
@@ -758,14 +807,31 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
 
               {/* Group 2: Workflow */}
               {hasGroup1 && hasGroup2 && menuSeparator}
-              {onRunOneShot && (
-                <button role="menuitem" className={overflowMenuItem}
-                  onClick={(e) => { close(); handleRunOneShot(e); }}
-                  disabled={isRunningOneShot}
-                  aria-label={`Create PR for session ${session.title}`}
+              {session.githubPrUrl ? (
+                <a
+                  href={session.githubPrUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  role="menuitem"
+                  className={overflowMenuItem}
+                  aria-label={`PR #${session.githubPrNumber}: ${session.title}`}
+                  data-testid="github-pr-link"
+                  onClick={(e) => { e.stopPropagation(); close(); }}
                 >
-                  <span aria-hidden="true">🚀</span>{" "}
-                  {isRunningOneShot ? "Creating PR…" : oneShotResult === "done" ? "✅ PR Created" : oneShotResult === "error" ? "❌ Retry?" : "Create PR"}
+                  <span aria-hidden="true">✅</span> View PR #{session.githubPrNumber}
+                </a>
+              ) : (
+                <button
+                  ref={createPrTriggerRef}
+                  role="menuitem"
+                  className={overflowMenuItem}
+                  disabled={!session.hasCommitsAhead}
+                  title={session.hasCommitsAhead ? undefined : "No commits ahead of main yet"}
+                  onClick={(e) => { e.stopPropagation(); close(); setIsCreatePrOpen(true); }}
+                  aria-label={`Create PR for session ${session.title}`}
+                  data-testid={`create-pr-trigger-${session.id}`}
+                >
+                  <span aria-hidden="true">🔀</span> Create PR
                 </button>
               )}
               {onCreateCheckpoint && (

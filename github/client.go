@@ -72,6 +72,8 @@ type PRInfo struct {
 	ChangesRequestedCount int    // Count of current non-dismissed CHANGES_REQUESTED reviews
 	CheckConclusion       string // "success" / "failure" / "pending" / "action_required" / "neutral" / ""
 	CheckStatus           string // "completed" / "in_progress" / ""
+	Checks                []CheckItem
+	Reviews               []ReviewItem
 }
 
 // PRComment represents a comment on a PR (either issue comment or review comment)
@@ -129,6 +131,26 @@ type ghStatusCheckItem struct {
 	State      string `json:"state"`      // SUCCESS, FAILURE, PENDING, ERROR, NEUTRAL
 	Status     string `json:"status"`     // completed, in_progress, queued
 	Conclusion string `json:"conclusion"` // success, failure, cancelled, action_required, neutral, skipped, timed_out
+}
+
+// CheckItem is one itemized CI check from a PR's statusCheckRollup — the data
+// getCheckConclusion collapses into a single string; exported so callers that want
+// the itemized view (e.g. the VCS tab's "why blocked" rollup) don't need to.
+type CheckItem struct {
+	Name       string
+	Context    string
+	State      string
+	Status     string
+	Conclusion string
+}
+
+// ReviewItem is one PR review — the data parseReviewCounts collapses into
+// approved/changes-requested counts, exported so callers can also read the
+// reviewer's Body text (e.g. a CHANGES_REQUESTED review's stated reason).
+type ReviewItem struct {
+	Author string
+	State  string
+	Body   string
 }
 
 // ghCommentResponse represents a comment from gh pr view --json comments
@@ -299,6 +321,15 @@ func GetPRInfoCtx(ctx context.Context, owner, repo string, prNumber int) (*PRInf
 	approvedCount, changesReqCount := parseReviewCounts(resp.Reviews)
 	checkConclusion, checkStatus := getCheckConclusion(resp.StatusCheckRollup)
 
+	checks := make([]CheckItem, len(resp.StatusCheckRollup))
+	for i, c := range resp.StatusCheckRollup {
+		checks[i] = CheckItem(c)
+	}
+	reviews := make([]ReviewItem, len(resp.Reviews))
+	for i, r := range resp.Reviews {
+		reviews[i] = ReviewItem{Author: r.Author.Login, State: r.State, Body: r.Body}
+	}
+
 	return &PRInfo{
 		Number:                resp.Number,
 		Title:                 resp.Title,
@@ -322,6 +353,8 @@ func GetPRInfoCtx(ctx context.Context, owner, repo string, prNumber int) (*PRInf
 		ChangesRequestedCount: changesReqCount,
 		CheckConclusion:       checkConclusion,
 		CheckStatus:           checkStatus,
+		Checks:                checks,
+		Reviews:               reviews,
 	}, nil
 }
 
@@ -817,7 +850,14 @@ func GeneratePRPrompt(pr *PRInfo, includeDescription bool) string {
 // GetPRForBranchConditional is GetPRForBranch with ETag conditional request support.
 // Pass the previously returned newEtag (empty string for first call).
 // Returns (nil, etag, false, nil) on 304 Not Modified — caller should treat as unchanged.
+// Every error path also returns changed=false, including ErrNotAuthenticated
+// when no token is configured — callers must check err before treating
+// changed=false as "unchanged, no error."
 func GetPRForBranchConditional(ctx context.Context, owner, repo, branch, etag string) (info *PRInfo, newEtag string, changed bool, err error) {
+	if getGHToken(ctx) == "" {
+		return nil, etag, false, ErrNotAuthenticated
+	}
+
 	apiPath := fmt.Sprintf("repos/%s/%s/pulls?head=%s&state=all&per_page=10",
 		url.PathEscape(owner), url.PathEscape(repo),
 		url.QueryEscape(owner+":"+branch))

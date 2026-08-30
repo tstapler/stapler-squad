@@ -29,12 +29,14 @@ import { BacklogItemPanel } from "@/components/backlog/BacklogItemPanel";
 import { GoalPanel } from "./GoalPanel";
 import { NotePanel } from "./NotePanel";
 import { WorkspacePeersPanel } from "./WorkspacePeersPanel";
+import { HandoffSummarySection } from "./HandoffSummarySection";
 import { useShells } from "@/lib/hooks/useShells";
 import { useNotifications } from "@/lib/contexts/NotificationContext";
 import { ShellTabLabel } from "./ShellTab";
 import { NewShellDialog } from "./NewShellDialog";
 import { useWorkflows } from "@/lib/hooks/useWorkflows";
 import { attributionBadge } from "./TriggersPanel.css";
+import { routes } from "@/lib/routes";
 import * as styles from "./SessionDetail.css";
 import {
   diffAdded,
@@ -44,6 +46,7 @@ import {
   pausedOverlayReason,
   pausedOverlayButton,
   crashedOverlayIcon,
+  restartedFromLink,
 } from "./SessionDetailView.css";
 import { tabDisabled } from "./SessionDetail.css";
 import { formatPauseReason } from "@/lib/sessions/formatPauseReason";
@@ -416,6 +419,16 @@ export function SessionDetailView({
     : undefined;
   const isAutomatedTrigger = !!triggerWorkflow &&
     ["cron", "github_push", "webhook"].includes(triggerWorkflow.triggerType);
+
+  // Restart lineage (context-compression, UX acceptance criterion #10): resolve
+  // session.restartedFromSessionId against the live session list so the "Restarted
+  // from:" row can link to the source session by title when it's still around, and
+  // gracefully fall back to a plain, non-clickable "(no longer available)" label when
+  // it's been archived/deleted since the restart — mirrors the trigger-attribution
+  // lookup above.
+  const restartSourceSession = session.restartedFromSessionId
+    ? allSessions.find((s) => s.id === session.restartedFromSessionId)
+    : undefined;
 
   // Shell tabs
   const { shells, spawnShell, stopShell, restartShell, deleteShell, updateShellStatus } = useShells(session.id);
@@ -957,6 +970,9 @@ export function SessionDetailView({
       )}
       </div>
 
+      {/* Row wrapper so BacklogItemPanel (linked backlog item) stays visible beside
+          whichever tab is active, not just the terminal tab. */}
+      <div style={{ display: "flex", flexDirection: "row", flex: 1, minHeight: 0 }}>
       <div className={`${styles.content} ${isFullscreen ? styles.fullscreenContent : ""}`}>
         {/* Terminal tab: kept mounted but hidden via display:none to preserve xterm.js instances */}
         <div
@@ -964,9 +980,8 @@ export function SessionDetailView({
           role="tabpanel"
           aria-labelledby="tab-terminal"
           aria-hidden={activeTab !== "terminal"}
-          style={{ display: activeTab === "terminal" ? "flex" : "none", flexDirection: "row" }}
+          style={{ display: activeTab === "terminal" ? "flex" : "none" }}
         >
-          {/* Terminal content wrapper with flex: 1 to allow BacklogItemPanel to sit beside it */}
           <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
             {/* ApprovalPanel removed — approvals now handled in the global ApprovalDrawer in Header */}
             {session.instanceType === InstanceType.EXTERNAL && !session.externalMetadata?.muxSocketPath ? (
@@ -1079,14 +1094,6 @@ export function SessionDetailView({
               </div>
             )}
           </div>
-
-          {/* BacklogItemPanel — collapsible right sidebar showing linked backlog item */}
-          {backlogItemId && (
-            <BacklogItemPanel
-              backlogItemId={backlogItemId}
-              sessionId={session.id}
-            />
-          )}
         </div>
         {/* Browser tab: always mounted (not conditionally rendered) so the noVNC RFB
             connection persists across tab switches. Visibility controlled via CSS,
@@ -1161,6 +1168,7 @@ export function SessionDetailView({
                 setFilesSelectedPath(path);
                 handleTabChange("files");
               }}
+              onBrowseFiles={() => handleTabChange("files")}
             />
           </div>
         )}
@@ -1206,6 +1214,29 @@ export function SessionDetailView({
                 <div className={styles.infoItem}>
                   <span className={styles.infoLabel}>Instance Type:</span>
                   <span className={styles.infoValue}>External</span>
+                </div>
+              )}
+              {/* Restart lineage (context-compression UX AC#10) — only rendered when this
+                  session was created via "Restart with summary"; gracefully degrades to
+                  plain text (no dead link) when the source session is gone. */}
+              {session.restartedFromSessionId && (
+                <div className={styles.infoItem} data-testid="restarted-from-row">
+                  <span className={styles.infoLabel}>Restarted from:</span>
+                  <span className={styles.infoValue}>
+                    {restartSourceSession ? (
+                      <a
+                        href={routes.sessionDetail(restartSourceSession.id)}
+                        className={restartedFromLink}
+                        data-testid="restarted-from-link"
+                      >
+                        ↗ {restartSourceSession.title}
+                      </a>
+                    ) : (
+                      <span data-testid="restarted-from-unavailable">
+                        {session.restartedFromSessionId} (no longer available)
+                      </span>
+                    )}
+                  </span>
                 </div>
               )}
               {/* Timestamps */}
@@ -1622,6 +1653,9 @@ export function SessionDetailView({
             />
             {/* Other sessions sharing this workspace — shown when peers exist */}
             <WorkspacePeersPanel session={session} />
+            {/* Restart-handoff summary record (Story 3.3.1) — always rendered,
+                explicit empty state when no HandoffSummary row exists yet. */}
+            <HandoffSummarySection sessionId={session.id} />
           </div>
         )}
         {activeTab === "artifacts" && (
@@ -1635,6 +1669,16 @@ export function SessionDetailView({
             <RetryHistoryList history={session.retryHistory} />
           </div>
         )}
+      </div>
+
+      {/* BacklogItemPanel — collapsible sidebar showing the linked backlog item;
+          a sibling of `content` (not nested in one tab) so it's visible on every tab. */}
+      {backlogItemId && (
+        <BacklogItemPanel
+          backlogItemId={backlogItemId}
+          sessionId={session.id}
+        />
+      )}
       </div>
 
       {/* Workspace Switch Modal */}

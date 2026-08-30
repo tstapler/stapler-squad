@@ -831,22 +831,24 @@ remote: https://github.com/tstapler/stapler-squad/pull/42`,
 // condition Phase 0 used) and asserts SendKeys("1\n") is observed at most
 // maxDialogAnswerAttempts times, never growing with additional ticks.
 func TestSessionDriver_StuckDialogAnswersBoundedNotUnbounded(t *testing.T) {
-	t.Parallel()
+	// Not t.Parallel(): this test needs t.Setenv("HOME", ...) below, and
+	// t.Setenv panics if called on (or after) a parallel test.
+	// FindConversationFilePath walks $HOME/.claude/projects; on a dev machine
+	// with genuine session history this can stall for real wall-clock time
+	// and, under -count=20 stress, blow the test binary's global timeout.
+	// Point HOME at an empty temp dir so the walk resolves instantly.
+	t.Setenv("HOME", t.TempDir())
 	fakePM := &stuckDialogProcessManager{dialogText: trustDialogText}
 
 	inst := &Instance{
 		Title:          "stuck-dialog-bounded",
 		Status:         Ready,
 		processManager: fakePM,
+		InitialPrompt:  driverInitialPrompt,
 	}
 	inst.started.Store(true)
 
-	policy := RetryPolicy{Enabled: true, MaxAttempts: 1, RetryOn: []string{"crashed", "stalled", "tmux_exited"}}
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		runSessionDriverWithPrompt(inst, "/tmp", driverInitialPrompt, policy, make(chan struct{}))
-	}()
+	StartSessionDriver(inst, "/tmp")
 
 	// 6 ticks — double Phase 0's original 3-tick window — to prove the count
 	// does not keep growing with additional ticks, not just that it happened
@@ -861,20 +863,14 @@ func TestSessionDriver_StuckDialogAnswersBoundedNotUnbounded(t *testing.T) {
 			maxDialogAnswerAttempts, count)
 	}
 
-	// Cleanup: force the goroutine to observe Paused so it exits cleanly.
-	// Written under i.mu with an immediate snapshot republish (matching
-	// transitionTo's pattern) so this concurrent write doesn't race the
-	// still-running driver goroutine's Snapshot()-based reads, and so
-	// GetEffectiveStatus actually observes the new status instead of a
-	// stale cached snapshot.
-	inst.mu.Lock()
-	inst.Status = Paused
-	inst.snapshot.Store(buildSnapshot(inst))
-	inst.mu.Unlock()
-	select {
-	case <-done:
-	case <-time.After(driverPollInterval + time.Second):
-		t.Log("driver goroutine did not exit promptly after Status=Paused (leak, not fatal to this test)")
+	// StopSessionDriver closes the stop channel directly (the loop selects on
+	// it unconditionally), so the driver goroutine — and its stop-watcher
+	// child — are confirmed gone before this test returns, instead of the
+	// old Status=Paused-and-hope-it-notices approach which could leak both
+	// goroutines past the test's own lifetime.
+	StopSessionDriver(inst)
+	if inst.driverRunning.Load() {
+		t.Fatal("driverRunning still true after StopSessionDriver returned")
 	}
 }
 
@@ -886,7 +882,10 @@ func TestSessionDriver_StuckDialogAnswersBoundedNotUnbounded(t *testing.T) {
 // lines prepended each tick, mirroring an active non-flapping session
 // producing real output after the dialog was answered).
 func TestSessionDriver_TailSliceBoundsDialogMatchAndHash(t *testing.T) {
-	t.Parallel()
+	// Not t.Parallel(): see TestSessionDriver_StuckDialogAnswersBoundedNotUnbounded.
+	// Isolate HOME so FindConversationFilePath's walk can't stall on real
+	// session history.
+	t.Setenv("HOME", t.TempDir())
 	fakePM := &stuckDialogProcessManager{
 		dialogText:  trustDialogText,
 		growPerCall: true,
@@ -897,15 +896,11 @@ func TestSessionDriver_TailSliceBoundsDialogMatchAndHash(t *testing.T) {
 		Title:          "tail-slice-growing-buffer",
 		Status:         Ready,
 		processManager: fakePM,
+		InitialPrompt:  driverInitialPrompt,
 	}
 	inst.started.Store(true)
 
-	policy := RetryPolicy{Enabled: true, MaxAttempts: 1, RetryOn: []string{"crashed", "stalled", "tmux_exited"}}
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		runSessionDriverWithPrompt(inst, "/tmp", driverInitialPrompt, policy, make(chan struct{}))
-	}()
+	StartSessionDriver(inst, "/tmp")
 
 	time.Sleep(driverPollInterval*6 + 500*time.Millisecond)
 
@@ -917,14 +912,9 @@ func TestSessionDriver_TailSliceBoundsDialogMatchAndHash(t *testing.T) {
 			maxDialogAnswerAttempts, count)
 	}
 
-	inst.mu.Lock()
-	inst.Status = Paused
-	inst.snapshot.Store(buildSnapshot(inst))
-	inst.mu.Unlock()
-	select {
-	case <-done:
-	case <-time.After(driverPollInterval + time.Second):
-		t.Log("driver goroutine did not exit promptly after Status=Paused (leak, not fatal to this test)")
+	StopSessionDriver(inst)
+	if inst.driverRunning.Load() {
+		t.Fatal("driverRunning still true after StopSessionDriver returned")
 	}
 }
 
@@ -1167,6 +1157,35 @@ func TestAnswerDialogOnce(t *testing.T) {
 // Root cause: the driver's activityRef logic (session_driver.go) always uses
 // the *later* of LastMeaningfulOutput and initialPromptSentAt as the
 // inactivity reference — specifically to avoid false inactivity fires right
+// startSessionDriverForTest replicates StartSessionDriver's goroutine/WaitGroup
+// wiring exactly, but calls runSessionDriverWithPrompt with a caller-supplied
+// RetryPolicy instead of runSessionDriver's config-resolved one.
+// StartSessionDriver's public API intentionally can't express a pre-resolved
+// policy (see TestSessionDriver_DialogGaveUp_FallsThroughToInactivityEscalation's
+// doc comment for why) — this test-only, package-private helper exists so
+// callers that need one can still clean up via the real StopSessionDriver,
+// rather than hand-rolling stop/done channels outside the Start/Stop wrapper.
+func startSessionDriverForTest(inst *Instance, allowedPath, initialPrompt string, policy RetryPolicy) {
+	inst.driverMu.Lock()
+	if inst.driverDestroyed {
+		inst.driverMu.Unlock()
+		return
+	}
+	if !inst.driverRunning.CompareAndSwap(false, true) {
+		inst.driverMu.Unlock()
+		return
+	}
+	stopper := &sessionDriverStopper{stop: make(chan struct{})}
+	inst.driverWG.Add(1)
+	inst.driverStopper.Store(stopper)
+	inst.driverMu.Unlock()
+	go func() {
+		defer inst.driverWG.Done()
+		defer inst.driverRunning.Store(false)
+		runSessionDriverWithPrompt(inst, allowedPath, initialPrompt, policy, stopper.stop)
+	}()
+}
+
 // after startup. Once the dialogGaveUp fall-through reaches the
 // initial-prompt-send step (which it does almost immediately, since the
 // fake ProcessManager's failCount is exhausted by the dialog-answer
@@ -1183,7 +1202,20 @@ func TestAnswerDialogOnce(t *testing.T) {
 // the shared `if idle > graceTimeout` path (also covered indirectly by
 // TestSessionDriver_SecondFailure_MarksNeedsAttention's similar shape).
 func TestSessionDriver_DialogGaveUp_FallsThroughToInactivityEscalation(t *testing.T) {
-	t.Parallel()
+	// Not t.Parallel(): this test needs t.Setenv("HOME", ...) below, and
+	// t.Setenv panics if called on (or after) a parallel test.
+	// FindConversationFilePath (called by sendInitialPromptTick when deciding
+	// whether the initial prompt was already delivered) walks $HOME/.claude/projects
+	// on real disk. On a real dev machine that directory holds genuine, large
+	// session history, which can stall this search for real wall-clock seconds
+	// per driver-loop tick — long enough to burn through this test's entire
+	// deadline before sendInitialPromptTick ever reaches its SendKeys call,
+	// producing the exact "SendKeys count never exceeded" failure this test
+	// guards against, for a reason unrelated to the dialogGaveUp fall-through
+	// logic under test. Pointing HOME at an empty temp dir makes the walk
+	// resolve instantly and deterministically to "not found," independent of
+	// whatever real session history exists on the machine running the test.
+	t.Setenv("HOME", t.TempDir())
 	fakePM := &stuckDialogProcessManager{
 		dialogText: trustDialogText,
 		failCount:  maxDialogAnswerAttempts,
@@ -1202,18 +1234,37 @@ func TestSessionDriver_DialogGaveUp_FallsThroughToInactivityEscalation(t *testin
 	inst.RetryMaxAttempts = 1 // already at cap — simulates "already retried once" so the second-failure path fires directly
 	policy := RetryPolicy{Enabled: true, MaxAttempts: 1, RetryOn: []string{"crashed", "stalled", "tmux_exited"}}
 
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		runSessionDriverWithPrompt(inst, "/tmp", driverInitialPrompt, policy, make(chan struct{}))
-	}()
-	defer func() {
-		inst.mu.Lock()
-		inst.Status = Paused
-		inst.snapshot.Store(buildSnapshot(inst))
-		inst.mu.Unlock()
-		<-done
-	}()
+	// This test needs the "already retried once" precondition pre-seeded
+	// above (RetryAttempt already at RetryMaxAttempts, so the second-failure
+	// path fires directly) — a precondition StartSessionDriver cannot express
+	// through its public API — its wrapper always resolves the policy fresh
+	// from config, and extending its signature to accept a pre-seeded
+	// RetryPolicy for a single test call site would leak an implementation
+	// detail into production code for no other caller's benefit.
+	//
+	// Considered and rejected: driving the "already retried once" state
+	// organically through StartSessionDriver by forcing one real
+	// failure/restart cycle first. handleDriverFailure's first call
+	// (session_driver.go) doesn't just bump RetryAttempt — it restarts the
+	// whole session and spawns a fresh driver goroutine for the continuation.
+	// Routing through that path here would conflate two independent
+	// mechanisms under one test (the dialogGaveUp fall-through this test
+	// exists to prove, and the separate failure-restart machinery covered by
+	// TestSessionDriver_SecondFailure_MarksNeedsAttention), doubling the
+	// real wall-clock cost and adding a second independent timing-flakiness
+	// surface on top of the driverReadyTimeout margin already documented
+	// below (two recorded near-miss recurrences on this test alone).
+	//
+	// Instead this test uses startSessionDriverForTest (below), a test-only
+	// helper that replicates StartSessionDriver's exact goroutine/WaitGroup
+	// wiring but accepts a pre-resolved RetryPolicy — so cleanup goes
+	// through the real StopSessionDriver, identically to every other
+	// SessionDriver test, rather than a bespoke stop/done channel pair.
+	baseline := goleak.IgnoreCurrent()
+	defer goleak.VerifyNone(t, append(knownBackgroundGoroutines, baseline)...)
+
+	startSessionDriverForTest(inst, "/tmp", driverInitialPrompt, policy)
+	defer StopSessionDriver(inst)
 
 	// maxDialogAnswerAttempts failed dialog-answer sends drive the latch to
 	// dialogGaveUp; the 4th SendKeys call (initial-prompt send, unblocked by
@@ -1224,17 +1275,20 @@ func TestSessionDriver_DialogGaveUp_FallsThroughToInactivityEscalation(t *testin
 	// elapses — the deadline below must clear that, not just the dialog
 	// latch's own ~6s give-up window.
 	//
-	// The extra driverReadyTimeout term (doubling the base budget) is
-	// deliberate slack, not just the ~6s dialog-latch window plus a token
-	// second: this goroutine genuinely blocks on the real 30s
-	// driverReadyTimeout wall-clock wait, so under `go test -race -p 1` for
-	// the full suite (thousands of tests, heavy scheduler/CPU contention)
-	// that wait alone can occasionally overrun a razor-thin margin — this
-	// test was seen to pass in 34s of a 37s budget in an isolated run, a
-	// margin that intermittently failed when run alongside the rest of the
-	// package under -race. Widening the margin (not retrying) is the fix,
-	// since the 30s block is inherent to the code path under test.
-	deadline := time.After(2*driverReadyTimeout + driverPollInterval*3 + time.Second)
+	// The extra driverReadyTimeout term is deliberate slack, not just the
+	// ~6s dialog-latch window plus a token second: this goroutine genuinely
+	// blocks on the real 30s driverReadyTimeout wall-clock wait, so under
+	// heavy scheduler/CPU contention (go test -race -p 1 for the full
+	// suite, or session's own t.Parallel() fan-out within a single package)
+	// that wait alone can occasionally overrun a razor-thin margin. Two
+	// documented recurrences of exactly this: an isolated run once passed
+	// in 34s of a 37s (1x) budget and failed under -race package load; a
+	// later run passed in 68.52s against a since-widened 67s (2x) budget
+	// under session's own -p 1 in-package parallel load (see BUG-051's
+	// recurrence log). Each time, widening the margin (not retrying) is the
+	// fix, since the 30s block is inherent to the code path under test —
+	// bumped to 3x here for more headroom against the same contention.
+	deadline := time.After(3*driverReadyTimeout + driverPollInterval*3 + time.Second)
 	for fakePM.sendKeysCount.Load() <= maxDialogAnswerAttempts {
 		select {
 		case <-deadline:
@@ -1245,20 +1299,6 @@ func TestSessionDriver_DialogGaveUp_FallsThroughToInactivityEscalation(t *testin
 	}
 }
 
-// TestStopSessionDriver_ConcurrentWithInFlightPoll_ReturnsBoundedNoGoroutineLeak
-// is the dedicated regression test for the config/session TOCTOU-and-goroutine-
-// lifecycle fix: StopSessionDriver (called from Instance.Destroy()) must return
-// within a bounded time even when it races a driver goroutine that is genuinely
-// alive and blocked in its poll loop, and must leave no goroutine behind.
-//
-// The driver goroutine's main loop (runSessionDriverWithPrompt, session_driver.go)
-// spends nearly all of its life parked at `select { case <-stop: case
-// <-ticker.C: }` — so letting StartSessionDriver run for one scheduler tick
-// before calling StopSessionDriver concurrently is sufficient to catch it there,
-// mirroring the real race between an in-flight poll and a session being
-// destroyed. This does not depend on real tmux: the fake ProcessManager below
-// never matches a dialog or produces terminal content, so the loop always falls
-// straight through to the ticker wait.
 func TestStopSessionDriver_ConcurrentWithInFlightPoll_ReturnsBoundedNoGoroutineLeak(t *testing.T) {
 	// See TestActorNoLeak (actor_test.go) for why this baselines via
 	// goleak.IgnoreCurrent() instead of a bare process-wide goleak.VerifyNone().

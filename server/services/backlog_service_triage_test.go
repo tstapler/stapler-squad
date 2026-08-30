@@ -256,18 +256,8 @@ func TestTriageResultTitle_should_MatchSanitizedTitle_When_PersistedAndReReadFor
 	}
 }
 
-// initGitRepoForTest initialises a minimal git repository in dir. A smaller,
-// dependency-free duplicate of backlog_triage_harness_test.go's initGitRepo,
-// which lives behind the "harness" build tag and isn't linked into normal
-// `go test` runs. Uses go-git directly rather than shelling out — see
-// .claude/rules/prefer-go-git-over-subshells.md. No commit is made here, so
-// no user identity config is needed.
-func initGitRepoForTest(t *testing.T, dir string) {
-	t.Helper()
-	if _, err := git.PlainInit(dir, false); err != nil {
-		t.Fatalf("git init: %v", err)
-	}
-}
+// initGitRepoForTest is defined in git_fixture_test.go (go-git based, shared
+// across this package's test files).
 
 // TestResolveSessionPath_should_ErrorNotFallBackToRepoPath_When_GitManagedWorktreeCreationFails
 // guards BUG-057: a worktree-creation failure on a repo that IS git-managed
@@ -332,7 +322,7 @@ func TestResolveSessionPath_should_CreateWorktree_When_RepoHasNoInitialCommit(t 
 // TestRecentWorkSessionFileLists_should_returnChangedFiles_When_CompletedWorkSessionsHaveValidRanges
 // verifies the happy path: two completed work sessions, each with a real
 // base..head commit range, produce two file lists (most recent first),
-// computed via go-git (no subshell — .claude/rules/prefer-go-git-over-subshells.md).
+// computed via go-git (no subshell — the `prefer-go-git-over-subshells` skill).
 func TestRecentWorkSessionFileLists_should_returnChangedFiles_When_CompletedWorkSessionsHaveValidRanges(t *testing.T) {
 	t.Parallel()
 	repoPath := t.TempDir()
@@ -523,7 +513,7 @@ func TestNotifyReworkCapHit_should_persistRowSurvivingRestart_When_CapHit(t *tes
 // transitioned the item review->in_progress, its SpawnSessionFromItem call then
 // failed, and the scoped rollback to "review" ALSO failed (its precondition no
 // longer matched). Before this fix, that double failure was only
-// log.ErrorLog.Printf'd — the item was left silently stranded in_progress with
+// log.ErrorLog().Printf'd — the item was left silently stranded in_progress with
 // no work session and no operator-visible signal anywhere, invisible to every
 // stuck detector (none of them check "in_progress with zero live sessions").
 // notifySpawnAndRollbackFailed is the fix: a durable StuckReasonSpawnFailed row
@@ -1098,7 +1088,7 @@ func TestAutoReopenForPRFix_ActiveWorkSession_SkipsWithoutStatusChurn(t *testing
 
 // TestAutoReopenForPRFix_ActiveWorkSession_RecordsRespawnBlockedActive is the
 // regression test for the audit-trail gap this fix closes: before it, the
-// skip branch above only log.InfoLog.Printf'd — no durable
+// skip branch above only log.InfoLog().Printf'd — no durable
 // BacklogStuckState row and no operator notification, unlike every other
 // "an automated action was skipped" path in this file (notifyReworkCapHit,
 // notifySpawnAndRollbackFailed). Verifies a StuckReasonRespawnBlockedActive
@@ -1254,7 +1244,7 @@ func TestAutoReopenForPRFix_DeadWorkSession_TombstonesThenReopens(t *testing.T) 
 // TestAutoReopenForPRFix_ActiveWorkSession_RecordsRespawnBlockedActive — the
 // first of the three call sites this fix covers. Before this fix, an
 // in_progress item whose autonomous work session was still active only
-// produced a bare log.InfoLog.Printf'd skip with no durable record and no
+// produced a bare log.InfoLog().Printf'd skip with no durable record and no
 // operator notification.
 func TestAutoRespawnAutonomousWork_ActiveWorkSession_RecordsRespawnBlockedActive(t *testing.T) {
 	t.Parallel()
@@ -3155,6 +3145,52 @@ func TestSpawnSessionFromItem_should_ReportNotTrackedLive_When_BlockedByActiveWo
 	assert.Contains(t, err.Error(), "progress signal unavailable: session not currently tracked live")
 }
 
+// TestSpawnSessionFromItem_should_RejectEmptyRepoPath_BeforeSpawnInFlight proves the
+// actual production-reachable chain to the .gitignore-corruption mechanism this
+// backlog item exists to fix: CreateBacklogItem never requires repo_path, and
+// TransitionBacklogItemStatus's guards never check it either (Idea->Ready is a
+// directly legal transition per session/domain/backlog.go's validTransitions map,
+// and BacklogItemTransitionInput carries no RepoPath field) — so an item can reach
+// Ready status with RepoPath still "". Without SpawnSessionFromItem's own guard,
+// that would proceed to resolveSessionPath -> CreateBacklogWorktree("") ->
+// session.ResolveSessionPath("") -> filepath.Abs("") -> the calling process's own
+// cwd, silently succeeding. Also asserts the rejection happens before the
+// spawnInFlight atomic check-and-set, so a rejected item is immediately
+// retriable rather than left occupying its in-flight slot.
+func TestSpawnSessionFromItem_should_RejectEmptyRepoPath_BeforeSpawnInFlight(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	creator := &mockSessionCreator{}
+	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
+	ctx := t.Context()
+
+	createResp, err := svc.CreateBacklogItem(ctx, connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
+		Title: "no-repo-path-item",
+		AcceptanceCriteria: []*sessionv1.AcCriterion{
+			{Index: 0, Text: "test", Status: "pending"},
+		},
+		SkipTriage:   true,
+		SkipPlanning: true,
+	}))
+	require.NoError(t, err)
+	itemID := createResp.Msg.Item.Id
+	require.Empty(t, createResp.Msg.Item.RepoPath, "item must be created with no repo_path to exercise this path")
+
+	_, err = svc.TransitionBacklogItemStatus(ctx, connect.NewRequest(&sessionv1.TransitionBacklogItemStatusRequest{
+		ItemId:       itemID,
+		TargetStatus: "ready",
+	}))
+	require.NoError(t, err, "Idea->Ready must succeed with no repo_path check in the transition guards")
+
+	_, err = svc.SpawnSessionFromItem(ctx, connect.NewRequest(&sessionv1.SpawnSessionFromItemRequest{ItemId: itemID}))
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(err))
+	assert.Contains(t, err.Error(), "set repo_path before spawning a session")
+
+	_, inFlight := svc.spawnInFlight.Load(itemID)
+	assert.False(t, inFlight, "rejected item must not be left occupying its spawnInFlight slot")
+}
+
 // TestSpawnSessionFromItem_should_SnapshotEmptyHash_When_PipelineModeIsDefaultOrUnresolved
 // covers both zero-hash edge cases from Story 1.6.2's acceptance criteria: the default
 // mode ("") short-circuits ContentHashFor without touching the cache, and an unresolved
@@ -3446,15 +3482,15 @@ func TestTriggerTriage_NeverPublishesUntaggedNotification_OnHeadlessPoolFailureO
 	// keep succeeding is not constructible with this package's existing test
 	// fixtures. BacklogService.storage is a concrete *session.Storage, not an
 	// interface — it cannot be swapped for a test double. *session.Storage's
-	// ItemSession-specific methods (CreateItemSession, ListItemSessions,
-	// UpdateItemSessionTriageResult, UpdateItemSessionEnded — session/storage.go
-	// ~L953-1104) each hard type-assert their internal repo field to
-	// *session.EntRepository and fail closed otherwise (`er, ok :=
-	// s.repo.(*EntRepository); if !ok { return ... }`). Wrapping that repo in a
-	// decorator that overrides only UpdateBacklogItem (which is instead a plain
-	// passthrough to the session.Repository interface, session/storage.go:721-723)
-	// would make the decorator's dynamic type no longer *EntRepository, breaking
-	// every ItemSession call this same goroutine depends on — including the one
+	// internal repo field is itself a concrete *session.EntRepository (no
+	// interface indirection), so every ItemSession-specific method
+	// (CreateItemSession, ListItemSessions, UpdateItemSessionTriageResult,
+	// UpdateItemSessionEnded — session/storage.go ~L953-1104) always calls
+	// straight through to it. Wrapping that repo in a decorator that overrides
+	// only UpdateBacklogItem would require *session.Storage.repo to accept
+	// something other than *session.EntRepository, which it does not — and
+	// even if it did, such a decorator would need to forward every other
+	// method this same goroutine depends on — including the one
 	// this test needs to detect completion (UpdateItemSessionEnded). The only
 	// other lever — closing the real ent DB connection between TriggerTriage
 	// returning and its goroutine's persistence step running — races the
@@ -3871,6 +3907,149 @@ func TestGetWorkSessionDiff_should_RecoverViaMergeBase_When_WorktreeGoneAndBaseS
 		"must recover the real diff via merge-base auto-repair instead of giving up empty")
 }
 
+// TestGetWorkSessionDiff_should_RecoverUsingWorktreePath_When_WorktreeExistsButBaseShaCorrupted
+// covers the ae1e2070 shape directly, distinct from the gone-worktree test above: the
+// worktree directory is still present, so recoverDir must be wt.WorktreePath, not
+// repoPath — proving getWorkSessionDiff's mirror of the review_gate.go/worktree_ops.go
+// fix (RecoverBaseCommitSHA now depends on being run inside the worktree, not
+// repoPath's ambient checkout). repoPath is deliberately left on an unrelated orphan
+// branch, the worst case for the old repoPath-only recovery.
+func TestGetWorkSessionDiff_should_RecoverUsingWorktreePath_When_WorktreeExistsButBaseShaCorrupted(t *testing.T) {
+	repoDir := t.TempDir()
+	initGitRepoWithCommit(t, repoDir)
+	runGitTestCmd(t, repoDir, "branch", "-M", "main")
+
+	const workBranch = "backlog/recover-diff-worktree-path"
+	worktreeDir := t.TempDir()
+	runGitTestCmd(t, repoDir, "worktree", "add", "-b", workBranch, worktreeDir, "main")
+	require.NoError(t, os.WriteFile(filepath.Join(worktreeDir, "feature.txt"), []byte("real work\n"), 0o644))
+	runGitTestCmd(t, worktreeDir, "add", "feature.txt")
+	runGitTestCmd(t, worktreeDir, "commit", "-m", "real fix")
+
+	// Leave repoPath on an unrelated orphan branch — the worst case for the old
+	// diffDir-only recovery, which would fail to find any merge-base at all.
+	runGitTestCmd(t, repoDir, "checkout", "--orphan", "unrelated")
+	runGitTestCmd(t, repoDir, "commit", "--allow-empty", "-m", "unrelated")
+
+	storage, repo := createTestStorageWithRepo(t)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+
+	item, err := storage.CreateBacklogItem(context.Background(), session.BacklogItemData{
+		Title:    "Diff recovery uses worktree path",
+		RepoPath: repoDir,
+		Status:   string(session.BacklogStatusReview),
+	})
+	require.NoError(t, err)
+
+	const workSessionUUID = "diff-repair-worktree-path-uuid"
+	_, err = storage.CreateItemSession(context.Background(), session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: workSessionUUID,
+		SessionRole: session.SessionRoleWork,
+	})
+	require.NoError(t, err)
+
+	now := time.Now()
+	require.NoError(t, repo.Create(context.Background(), session.InstanceData{
+		Title:      workSessionUUID,
+		UUID:       workSessionUUID,
+		Path:       worktreeDir,
+		WorkingDir: worktreeDir,
+		Branch:     workBranch,
+		Status:     session.Paused,
+		Program:    "claude",
+		CreatedAt:  now,
+		UpdatedAt:  now,
+		Worktree: session.GitWorktreeData{
+			RepoPath:      repoDir,
+			WorktreePath:  worktreeDir,
+			SessionName:   workSessionUUID,
+			BranchName:    workBranch,
+			BaseCommitSHA: "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef", // corrupted, worktree intact
+		},
+	}))
+
+	diff := svc.getWorkSessionDiff(context.Background(), repoDir, &session.ItemSessionSummary{SessionUUID: workSessionUUID})
+	assert.Contains(t, diff, "feature.txt",
+		"must recover via merge-base computed inside worktreeDir, unaffected by repoPath's unrelated orphan checkout")
+}
+
+// TestGetWorkSessionDiff_should_FallBackToRepoPath_When_WorktreeIdentityMismatched is a
+// regression test for backlog item e7664cbf's identity-guard gap found in code review:
+// getWorkSessionDiff (and resolveCodebaseWorkDir) originally trusted wt.WorktreePath
+// without the same WorktreeIdentityMismatch check ReviewGateRunner.Run applies, so a
+// worktree row recycled to a different item's branch would silently hand the reviewer
+// that other item's diff. The recorded branch here ("feature") does not match what's
+// actually checked out at the worktree path ("other-item-branch"), simulating a path
+// reused by a later item — getWorkSessionDiff must skip the worktree entirely and
+// recover the real diff via the repoPath fallback instead.
+func TestGetWorkSessionDiff_should_FallBackToRepoPath_When_WorktreeIdentityMismatched(t *testing.T) {
+	repoDir := t.TempDir()
+	initGitRepoWithCommit(t, repoDir)
+	runGitTestCmd(t, repoDir, "branch", "-M", "main")
+
+	const recordedBranch = "feature"
+	runGitTestCmd(t, repoDir, "branch", recordedBranch)
+
+	// A later, unrelated item's branch is what's actually checked out at the worktree
+	// path — the row's recorded branch ("feature") never diverged from main at all.
+	worktreeDir := t.TempDir()
+	runGitTestCmd(t, repoDir, "worktree", "add", "-b", "other-item-branch", worktreeDir, "main")
+	require.NoError(t, os.WriteFile(filepath.Join(worktreeDir, "other-item.txt"), []byte("later item's work\n"), 0o644))
+	runGitTestCmd(t, worktreeDir, "add", "other-item.txt")
+	runGitTestCmd(t, worktreeDir, "commit", "-m", "later item's real work")
+
+	// The recorded branch's own real, distinguishing work — reachable from repoDir even
+	// though the worktree at worktreeDir isn't actually checked out to it.
+	runGitTestCmd(t, repoDir, "checkout", recordedBranch)
+	require.NoError(t, os.WriteFile(filepath.Join(repoDir, "feature.txt"), []byte("this item's real work\n"), 0o644))
+	runGitTestCmd(t, repoDir, "add", "feature.txt")
+	runGitTestCmd(t, repoDir, "commit", "-m", "this item's real fix")
+	runGitTestCmd(t, repoDir, "checkout", "main")
+
+	storage, repo := createTestStorageWithRepo(t)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+
+	item, err := storage.CreateBacklogItem(context.Background(), session.BacklogItemData{
+		Title:    "Diff falls back on worktree identity mismatch",
+		RepoPath: repoDir,
+		Status:   string(session.BacklogStatusReview),
+	})
+	require.NoError(t, err)
+
+	const workSessionUUID = "diff-identity-mismatch-uuid"
+	_, err = storage.CreateItemSession(context.Background(), session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: workSessionUUID,
+		SessionRole: session.SessionRoleWork,
+	})
+	require.NoError(t, err)
+
+	now := time.Now()
+	require.NoError(t, repo.Create(context.Background(), session.InstanceData{
+		Title:      workSessionUUID,
+		UUID:       workSessionUUID,
+		Path:       worktreeDir,
+		WorkingDir: worktreeDir,
+		Branch:     recordedBranch,
+		Status:     session.Paused,
+		Program:    "claude",
+		CreatedAt:  now,
+		UpdatedAt:  now,
+		Worktree: session.GitWorktreeData{
+			RepoPath:      repoDir,
+			WorktreePath:  worktreeDir,
+			SessionName:   workSessionUUID,
+			BranchName:    recordedBranch,
+			BaseCommitSHA: "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+		},
+	}))
+
+	diff := svc.getWorkSessionDiff(context.Background(), repoDir, &session.ItemSessionSummary{SessionUUID: workSessionUUID})
+	assert.Contains(t, diff, "feature.txt", "must recover this item's own real work via the repoPath fallback")
+	assert.NotContains(t, diff, "other-item.txt", "must never surface the mismatched worktree's unrelated content")
+}
+
 // TestTriggerReReview_should_BlockInsteadOfFalseFail_When_WorktreeGoneAndDiffUnrecoverable
 // reproduces the live bug end to end: no diff is recoverable (worktree gone, branch
 // itself unresolvable — simulating a fully torn-down session, the case where even the
@@ -4159,14 +4338,12 @@ func TestTriggerReReview_should_BlockOnBranchDriftInsteadOfMisleadingFailVerdict
 
 	// Main diverges on the same line AND drifts well past the default threshold — the
 	// exact shape that made 693c2700's diff unreviewable.
-	require.NoError(t, os.WriteFile(filepath.Join(origin, "README.md"), []byte("# Main Edit\n"), 0o644))
-	runGitTestCmd(t, origin, "add", "README.md")
-	runGitTestCmd(t, origin, "commit", "-m", "main: unrelated edit")
+	originRepo, err := git.PlainOpen(origin)
+	require.NoError(t, err)
+	commitFileForTest(t, originRepo, origin, "README.md", "# Main Edit\n", "main: unrelated edit")
 	for i := 0; i < 55; i++ {
 		fname := fmt.Sprintf("upstream-%d.txt", i)
-		require.NoError(t, os.WriteFile(filepath.Join(origin, fname), []byte("content\n"), 0o644))
-		runGitTestCmd(t, origin, "add", fname)
-		runGitTestCmd(t, origin, "commit", "-m", fmt.Sprintf("upstream commit %d", i))
+		commitFileForTest(t, originRepo, origin, fname, "content\n", fmt.Sprintf("upstream commit %d", i))
 	}
 
 	attachPRFixWorkSession(t, storage, repo, &session.BacklogItemData{ID: itemID},
@@ -4753,4 +4930,48 @@ func TestShouldAttributeTombstoneToShutdown_should_MatchOnlyPreBootNonStaleNotLi
 			assert.Equal(t, tt.want, got)
 		})
 	}
+}
+
+// TestBacklogWorkBranchSlug_TwoItemsWithCollidingTitles_ShareOneWorktree is a
+// regression/documentation test for backlog item e7664cbf's worktree-identity root
+// cause: worktree identity is resolved by title-derived branch name
+// (backlogWorkBranchSlug + session.CreateBacklogWorktree), not by item/session UUID.
+// Two items whose titles differ only in characters slugify() strips (punctuation)
+// collide on the exact same branch name, and — confirmed here — CreateBacklogWorktree
+// then hands the second item the exact same worktree directory as the first, via
+// findExistingWorktreeForBranch's (session/git/worktree.go) "branch already checked
+// out, reuse its worktree" path.
+//
+// This is a known limitation, not something this bug fix addresses (no tracked
+// follow-up exists yet): ReviewGateRunner.Run's new worktree-identity check
+// (session/review_gate.go) only catches a *mismatched* branch — here the worktree
+// genuinely does have the recorded branch checked out, so there is nothing for that
+// check to catch. A real fix requires re-resolving worktree identity by item/session
+// UUID instead of branch name, which touches every caller of
+// GetWorktreeDataBySessionUUID — out of scope for this bug fix.
+func TestBacklogWorkBranchSlug_TwoItemsWithCollidingTitles_ShareOneWorktree(t *testing.T) {
+	t.Parallel()
+
+	repoDir := t.TempDir()
+	runGitTestCmd(t, repoDir, "init", "-b", "main")
+	runGitTestCmd(t, repoDir, "config", "user.email", "test@example.com")
+	runGitTestCmd(t, repoDir, "config", "user.name", "Test")
+	require.NoError(t, os.WriteFile(filepath.Join(repoDir, "README.md"), []byte("base\n"), 0o644))
+	runGitTestCmd(t, repoDir, "add", "README.md")
+	runGitTestCmd(t, repoDir, "commit", "-m", "initial")
+
+	titleA := "Fix the login bug!"
+	titleB := "Fix the login bug?"
+	slugA := backlogWorkBranchSlug(repoDir, titleA)
+	slugB := backlogWorkBranchSlug(repoDir, titleB)
+	require.Equal(t, slugA, slugB, "fixture requires titleA/titleB to collide on the same slug")
+
+	pathA, err := session.CreateBacklogWorktree(repoDir, slugA)
+	require.NoError(t, err)
+
+	pathB, err := session.CreateBacklogWorktree(repoDir, slugB)
+	require.NoError(t, err)
+
+	assert.Equal(t, pathA, pathB,
+		"colliding title slugs currently resolve to the exact same worktree — a known, tracked limitation, not fixed by this bug fix")
 }

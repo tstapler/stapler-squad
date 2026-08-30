@@ -6,10 +6,13 @@ package session
 
 import (
 	"context"
+	"fmt"
+	"log/slog"
 	"os"
 	"os/user"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -17,6 +20,38 @@ import (
 	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
+
+// loggedMissingWorktree suppresses repeat "worktree directory missing"
+// warnings for a session whose on-disk status is never persisted back as
+// Paused (see fromInstanceData) — every health-check LoadInstances() tick
+// (session/health.go, ~15s) constructs a brand-new, throwaway Instance from
+// disk (see health.go's checkSingleSession comment) and re-detects the same
+// missing worktree, so an Instance-scoped flag can't dedupe across ticks the
+// way this package-level map does; it must outlive any single Instance
+// object. Keyed by session title, cleaned up by clearLoggedMissingWorktree
+// on session deletion (Storage.DeleteInstance/DeleteAllInstances) so it
+// doesn't grow unboundedly over the process's lifetime — the earlier version
+// of this map had no such cleanup, which was a real (if slow) leak.
+var loggedMissingWorktree sync.Map //nolint:gochecknoglobals
+
+// clearLoggedMissingWorktree removes title's dedup entry, if any. Called
+// when a session is deleted so the map doesn't retain an entry for a title
+// that no longer exists.
+func clearLoggedMissingWorktree(title string) {
+	loggedMissingWorktree.Delete(title)
+}
+
+// worktreeMissingLevel picks the level for the "worktree directory missing"
+// log line: Warn the first time a given session title has been seen, Debug
+// on any repeat (see loggedMissingWorktree). Returning a level rather than a
+// bound *slog.Logger method keeps this directly unit-testable — method
+// values aren't comparable.
+func worktreeMissingLevel(alreadyLogged bool) slog.Level {
+	if alreadyLogged {
+		return slog.LevelDebug
+	}
+	return slog.LevelWarn
+}
 
 // ToInstanceData converts an Instance to its serializable form
 //
@@ -48,28 +83,32 @@ func (i *Instance) ToInstanceData() InstanceData {
 	})
 
 	data := InstanceData{
-		Title:                snap.Title,
-		UUID:                 snap.UUID,
-		Path:                 snap.Path,
-		WorkingDir:           snap.WorkingDir,
-		Branch:               snap.Branch,
-		Status:               snap.Status,
-		Height:               snap.Height,
-		Width:                snap.Width,
-		CreatedAt:            snap.CreatedAt,
-		UpdatedAt:            time.Now(),
-		Program:              snap.Program,
-		AutoYes:              snap.AutoYes,
-		AutoApprove:          snap.AutoApprove,
-		Prompt:               snap.Prompt,
-		InitialPrompt:        snap.InitialPrompt,
-		Category:             snap.Category,
-		Note:                 snap.Note,
-		IsExpanded:           snap.IsExpanded,
-		Tags:                 snap.Tags, // Include tags in serialization
-		SessionType:          snap.SessionType,
-		TmuxPrefix:           snap.TmuxPrefix,
-		TmuxServerSocket:     snap.TmuxServerSocket,
+		Title:            snap.Title,
+		UUID:             snap.UUID,
+		Path:             snap.Path,
+		WorkingDir:       snap.WorkingDir,
+		Branch:           snap.Branch,
+		Status:           snap.Status,
+		Height:           snap.Height,
+		Width:            snap.Width,
+		CreatedAt:        snap.CreatedAt,
+		UpdatedAt:        time.Now(),
+		Program:          snap.Program,
+		AutoYes:          snap.AutoYes,
+		AutoApprove:      snap.AutoApprove,
+		Prompt:           snap.Prompt,
+		InitialPrompt:    snap.InitialPrompt,
+		Category:         snap.Category,
+		Note:             snap.Note,
+		IsExpanded:       snap.IsExpanded,
+		Tags:             snap.Tags, // Include tags in serialization
+		SessionType:      snap.SessionType,
+		TmuxPrefix:       snap.TmuxPrefix,
+		TmuxServerSocket: snap.TmuxServerSocket,
+		// Backend is set once at construction and never mutated afterward — same
+		// as LaunchCommand below, it isn't in InstanceSnapshot, so read it
+		// directly off the Instance rather than adding it to the snapshot.
+		Backend:              i.Backend,
 		LastTerminalUpdate:   snap.LastTerminalUpdate,
 		LastMeaningfulOutput: snap.LastMeaningfulOutput,
 		LastOutputSignature:  snap.LastOutputSignature,
@@ -102,11 +141,14 @@ func (i *Instance) ToInstanceData() InstanceData {
 		// Crew autonomy mode
 		AutonomousMode: snap.Autonomous.AutonomousMode,
 		// Checkpoint metadata
-		Checkpoints:      snap.Checkpoints,
-		ActiveCheckpoint: snap.ActiveCheckpoint,
-		ForkedFromID:     snap.ForkedFromID,
+		Checkpoints:            snap.Checkpoints,
+		ActiveCheckpoint:       snap.ActiveCheckpoint,
+		ForkedFromID:           snap.ForkedFromID,
+		RestartedFromSessionID: snap.RestartedFromSessionID,
 		// History file linkage
-		HistoryFilePath: snap.HistoryFilePath,
+		HistoryFilePath:            snap.HistoryFilePath,
+		EverHadConversationHistory: snap.EverHadConversationHistory,
+		LastReviveOutcome:          string(snap.LastReviveOutcome),
 		// One-shot mode
 		OneShot: snap.OneShot,
 		// Hidden (system/background) flag
@@ -239,6 +281,7 @@ func fromInstanceData(data InstanceData, deferStart bool) (*Instance, error) {
 		SessionType:      data.SessionType,
 		TmuxPrefix:       data.TmuxPrefix,
 		TmuxServerSocket: data.TmuxServerSocket,
+		Backend:          data.Backend,
 		ReviewState: ReviewState{
 			LastTerminalUpdate:   data.LastTerminalUpdate,
 			LastMeaningfulOutput: data.LastMeaningfulOutput,
@@ -278,11 +321,14 @@ func fromInstanceData(data InstanceData, deferStart bool) (*Instance, error) {
 		// Crew autonomy mode
 		AutonomousMode: data.AutonomousMode,
 		// Checkpoint metadata
-		Checkpoints:      data.Checkpoints,
-		ActiveCheckpoint: data.ActiveCheckpoint,
-		ForkedFromID:     data.ForkedFromID,
+		Checkpoints:            data.Checkpoints,
+		ActiveCheckpoint:       data.ActiveCheckpoint,
+		ForkedFromID:           data.ForkedFromID,
+		RestartedFromSessionID: data.RestartedFromSessionID,
 		// History file linkage
-		HistoryFilePath: data.HistoryFilePath,
+		HistoryFilePath:            data.HistoryFilePath,
+		EverHadConversationHistory: data.EverHadConversationHistory,
+		LastReviveOutcome:          ReviveOutcome(data.LastReviveOutcome),
 		// One-shot mode
 		OneShot: data.OneShot,
 		// Hidden (system/background) flag
@@ -321,7 +367,19 @@ func fromInstanceData(data InstanceData, deferStart bool) (*Instance, error) {
 	// Initialize the process manager via the factory so selectedBackend is honored.
 	// The underlying session is wired below (for Paused/Stopped/Hibernated) or
 	// by initTmuxSession() when Start() is called (for Active sessions).
-	instance.processManager = NewProcessManager(context.Background(), BackendTmux, ProcessManagerOptions{})
+	// instance.Backend now persists across restarts (Epic 5.1): it's set above
+	// from data.Backend, so a per-session pin (e.g. BackendTymux) survives a
+	// process restart instead of silently reverting to the process-wide default.
+	// Backward compatibility needs no migration code: an old sessions.json entry
+	// written before this field existed has no "backend" key, which the JSON
+	// decoder leaves as the Go zero value ("") on data.Backend — identical to
+	// today's pre-persistence behavior, it falls through to whatever
+	// NewProcessManager's process-wide default resolves to.
+	pm, err := NewProcessManager(context.Background(), BackendTmux, ProcessManagerOptions{Backend: instance.Backend})
+	if err != nil {
+		return nil, fmt.Errorf("session: construct process manager for restored instance %q: %w", instance.Title, err)
+	}
+	instance.processManager = pm
 
 	// Restore git worktree and diff stats via manager (cannot use struct literal for sub-manager fields).
 	instance.gitManager.SetWorktree(git.NewGitWorktreeFromStorage(
@@ -363,10 +421,14 @@ func fromInstanceData(data InstanceData, deferStart bool) (*Instance, error) {
 		worktreePath := instance.gitManager.GetWorktreePath()
 		if _, err := os.Stat(worktreePath); os.IsNotExist(err) {
 			// Worktree has been deleted — use transitionTo so the state machine is respected.
-			log.ForSession(instance.Title).Warn("worktree directory missing, marking as paused", "path", worktreePath)
+			_, alreadyLogged := loggedMissingWorktree.LoadOrStore(instance.Title, struct{}{})
+			level := worktreeMissingLevel(alreadyLogged)
+			logger := log.ForSession(instance.Title)
+			warnOrDebug := func(msg string, args ...any) { logger.Log(context.Background(), level, msg, args...) }
+			warnOrDebug("worktree directory missing, marking as paused", "path", worktreePath)
 			if err := instance.transitionTo(context.Background(), Paused); err != nil {
 				// If the transition is somehow invalid (e.g. already Stopped), fall back to loadStatus.
-				log.ForSession(instance.Title).Warn("could not transition to paused via state machine, using loadStatus", "err", err)
+				warnOrDebug("could not transition to paused via state machine, using loadStatus", "err", err)
 				instance.loadStatus(Paused)
 			}
 		}
@@ -413,25 +475,42 @@ func fromInstanceData(data InstanceData, deferStart bool) (*Instance, error) {
 		// back to Active on the very next LoadInstances() -- SessionHealthChecker's
 		// tick calls LoadInstances() every poll, so this raced the exact fix in
 		// session/health.go that makes freshly-created sessions reach Stopped promptly.
-		paneExited := false
-		if tb, ok := instance.processManager.(*TmuxBackend); ok {
-			if tm := tb.TmuxManager(); tm != nil {
-				_, _, paneExited = tm.PaneExitStatus()
+		//
+		// Skip this probe entirely for archived sessions: ArchivedAt is set only by
+		// archiveItemWorkSessions, which explicitly kills the tmux pane at archive
+		// time (see review_queue_poller.go's shouldSkipSession doc comment) -- there
+		// is no scenario where an archived session's pane is secretly still alive.
+		// Without this skip, every LoadInstances() call (the 15s health-check tick,
+		// most MCP tools, many RPC handlers) paid two uncached tmux subprocess spawns
+		// (PaneExitStatus + IsAlive) per archived session -- on one real deployment
+		// this was 280 archived-but-Stopped sessions out of 282 total Stopped, i.e.
+		// ~560 needless subprocess spawns on every single LoadInstances() call,
+		// which pprof's fork-pressure monitor flagged as a sustained "critical"
+		// spawn/failure rate (subprocess failures/spawns >> the exec-gate's timeout
+		// budget once a couple thousand archived sessions accumulate).
+		if instance.ArchivedAt != nil {
+			instance.started.Store(true)
+		} else {
+			paneExited := false
+			if tb, ok := instance.processManager.(*TmuxBackend); ok {
+				if tm := tb.TmuxManager(); tm != nil {
+					_, _, paneExited = tm.PaneExitStatus()
+				}
 			}
-		}
-		if instance.processManager.IsAlive() && !paneExited {
-			log.Warn("session stored as stopped but tmux is alive, recovering to active", "session", instance.Title)
-			instance.loadStatus(Active)
-			if deferStart {
-				// Leave started=false: the async Step 6 loop will call Start(false)
-				// and hot-attach to this already-live session off the critical path.
-			} else if err := instance.Start(false); err != nil {
-				log.Warn("recovery start failed, keeping stopped", "session", instance.Title, "err", err)
-				instance.loadStatus(Stopped)
+			if instance.processManager.IsAlive() && !paneExited {
+				log.Warn("session stored as stopped but tmux is alive, recovering to active", "session", instance.Title)
+				instance.loadStatus(Active)
+				if deferStart {
+					// Leave started=false: the async Step 6 loop will call Start(false)
+					// and hot-attach to this already-live session off the critical path.
+				} else if err := instance.Start(false); err != nil {
+					log.Warn("recovery start failed, keeping stopped", "session", instance.Title, "err", err)
+					instance.loadStatus(Stopped)
+					instance.started.Store(true)
+				}
+			} else {
 				instance.started.Store(true)
 			}
-		} else {
-			instance.started.Store(true)
 		}
 	} else if instance.Status == Hibernated {
 		// Wire the tmux session object (for IsAlive checks at resume time)

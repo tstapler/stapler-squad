@@ -168,9 +168,17 @@ func StartSessionDriver(inst *Instance, allowedPath string) {
 		return
 	}
 	stopper := &sessionDriverStopper{stop: make(chan struct{})}
+	// Add(1) must happen before driverStopper is published (and before driverMu is
+	// released): StopSessionDriver reads driverStopper under driverMu and, if
+	// non-nil, immediately calls driverWG.Wait() outside the lock. Storing the
+	// stopper before Add(1) would let that Wait() race the not-yet-executed Add
+	// on a concurrent goroutine — sync.WaitGroup's own contract forbids Add and
+	// Wait running concurrently without a happens-before edge, and go test -race
+	// flags it. Doing Add under the same critical section as the Store makes the
+	// mutex provide that ordering.
+	inst.driverWG.Add(1)
 	inst.driverStopper.Store(stopper)
 	inst.driverMu.Unlock()
-	inst.driverWG.Add(1)
 	go func() {
 		defer inst.driverWG.Done()
 		defer inst.driverRunning.Store(false)
@@ -322,7 +330,7 @@ func runSessionDriverWithPrompt(inst *Instance, allowedPath string, initialPromp
 		if startOutput, err := inst.PreviewContext(ctx); err == nil && outputShowsConversationStarted(startOutput) {
 			sentInitial = true
 			initialPromptSentAt = time.Now()
-		} else if _, err := FindConversationFilePath(inst.GetStableID()); err == nil {
+		} else if _, err := FindConversationFilePath(ctx, inst.GetStableID()); err == nil {
 			sentInitial = true
 			initialPromptSentAt = time.Now()
 		}
@@ -412,7 +420,7 @@ func runSessionDriverWithPrompt(inst *Instance, allowedPath string, initialPromp
 
 		// Stopped after sentInitial = potential unexpected exit.
 		if st == Stopped {
-			cont, ret := handleStoppedStatus(inst, allowedPath, initialPrompt, policy, stop, sentInitial, initialPromptSentAt)
+			cont, ret := handleStoppedStatus(ctx, inst, allowedPath, initialPrompt, policy, stop, sentInitial, initialPromptSentAt)
 			if ret {
 				return
 			}
@@ -477,7 +485,7 @@ func runSessionDriverWithPrompt(inst *Instance, allowedPath string, initialPromp
 // handleDriverFailure) must let the poll loop keep ticking so its own
 // NextRetryAt gate can fire the actual restart once the backoff delay
 // elapses, rather than this function always being terminal.
-func handleStoppedStatus(inst *Instance, allowedPath string, initialPrompt string, policy RetryPolicy, stop <-chan struct{}, sentInitial bool, initialPromptSentAt time.Time) (shouldContinue, shouldReturn bool) {
+func handleStoppedStatus(ctx context.Context, inst *Instance, allowedPath string, initialPrompt string, policy RetryPolicy, stop <-chan struct{}, sentInitial bool, initialPromptSentAt time.Time) (shouldContinue, shouldReturn bool) {
 	if !sentInitial {
 		// Exited before we even sent the first prompt — likely a startup crash.
 		// One-shot sessions (backlog:triage/backlog:review) are never retried.
@@ -491,7 +499,7 @@ func handleStoppedStatus(inst *Instance, allowedPath string, initialPrompt strin
 	}
 	// Stopped after initial prompt was sent.
 	if inst.OneShot {
-		tryExtractClaudeSessionID(inst)
+		tryExtractClaudeSessionID(ctx, inst)
 	}
 	if isOneShot(inst) {
 		// One-shot sessions: BacklogLifecycleListener handles this; driver exits cleanly.
@@ -517,7 +525,7 @@ func handleStoppedStatus(inst *Instance, allowedPath string, initialPrompt strin
 			"runtime", time.Since(initialPromptSentAt).Round(time.Second),
 		)
 		if inst.OneShot {
-			tryExtractClaudeSessionID(inst)
+			tryExtractClaudeSessionID(ctx, inst)
 		}
 		return false, true
 	}
@@ -597,7 +605,7 @@ func sendInitialPromptTick(ctx context.Context, inst *Instance, initialPrompt st
 		return
 	}
 
-	if _, convErr := FindConversationFilePath(inst.GetStableID()); convErr == nil {
+	if _, convErr := FindConversationFilePath(ctx, inst.GetStableID()); convErr == nil {
 		log.Info("SessionDriver: conversation file exists, skipping initial prompt injection",
 			"session", inst.Title,
 		)
@@ -1212,11 +1220,17 @@ func parseClaudeSessionID(output string) string {
 // tryExtractClaudeSessionID reads the terminal output for a completed OneShot
 // session and stores the extracted Claude session_id on the instance so that
 // future restarts use --resume.
-func tryExtractClaudeSessionID(inst *Instance) {
+//
+// Takes the driver loop's ctx (not inst.Preview()'s implicit
+// context.Background()) so this capture-pane subprocess is cancelled the
+// moment StopSessionDriver/Destroy() fires, instead of blocking the driver
+// goroutine's defer cancel() from ever running — see PreviewContext's doc
+// comment (instance_terminal.go).
+func tryExtractClaudeSessionID(ctx context.Context, inst *Instance) {
 	if !inst.OneShot {
 		return
 	}
-	output, err := inst.Preview()
+	output, err := inst.PreviewContext(ctx)
 	if err != nil || output == "" {
 		return
 	}

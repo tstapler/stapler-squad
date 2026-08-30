@@ -407,7 +407,7 @@ func TestGetApprovalAnalytics_IncludesEscalationReasonCounts(t *testing.T) {
 	}
 
 	require.Eventually(t, func() bool {
-		loaded, loadErr := analyticsStore.LoadWindow(time.Now().Add(-1 * time.Hour))
+		loaded, loadErr := analyticsStore.LoadWindow(context.Background(), time.Now().Add(-1 * time.Hour))
 		return loadErr == nil && len(loaded) >= len(entries)
 	}, 2*time.Second, 10*time.Millisecond, "all analytics entries must persist within 2s")
 

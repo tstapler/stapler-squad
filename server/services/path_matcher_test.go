@@ -35,8 +35,7 @@ func TestExpandPath_TildeSlash(t *testing.T) {
 }
 
 func TestExpandPath_DollarHOME(t *testing.T) {
-	home, _ := os.UserHomeDir()
-	t.Setenv("HOME", home)
+	home := withFakeHome(t)
 
 	got := ExpandPath("$HOME")
 	if got != home {
@@ -45,8 +44,7 @@ func TestExpandPath_DollarHOME(t *testing.T) {
 }
 
 func TestExpandPath_DollarHOMESubdir(t *testing.T) {
-	home, _ := os.UserHomeDir()
-	t.Setenv("HOME", home)
+	home := withFakeHome(t)
 
 	got := ExpandPath("$HOME/subdir")
 	want := filepath.Clean(home + "/subdir")

@@ -38,8 +38,13 @@ export interface UseStuckBacklogItemsReturn {
   snooze: (itemId: string, reason: StuckReason, until: Date) => Promise<boolean>;
   /** Clears remediation_attempts/next_remediation_at/notified_at on a single open row. */
   resetRemediation: (itemId: string, reason: StuckReason) => Promise<boolean>;
-  /** Resets every open row hitting the attempt cap (parked); returns the count reset. */
-  bulkResetParkedRemediation: () => Promise<number>;
+  /**
+   * Resets every open row hitting the attempt cap (parked); returns the
+   * count reset. An optional `reason` scopes the reset to just that
+   * StuckReason's parked rows, leaving every other reason's parked rows
+   * untouched — omit it for the existing "every reason" behavior.
+   */
+  bulkResetParkedRemediation: (reason?: StuckReason) => Promise<number>;
   /**
    * Immediately runs the reason's remediation action, bypassing only the
    * backoff timer — still subject to the 5-attempt cap and the wrapped
@@ -152,11 +157,12 @@ function useStuckBacklogItemsImpl(
     [client, fetchItems]
   );
 
-  const bulkResetParkedRemediation = useCallback(async (): Promise<number> => {
+  const bulkResetParkedRemediation = useCallback(async (reason?: StuckReason): Promise<number> => {
     try {
       const req = create(BulkResetStuckRemediationRequestSchema, {
         onlyParked: true,
         onlyParkedExplicitlySet: true,
+        ...(reason !== undefined ? { reason } : {}),
       });
       const res = await client.bulkResetStuckRemediation(req);
       if (res.resetCount > 0) {

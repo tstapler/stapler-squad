@@ -17,6 +17,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/adapters"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/vc"
 	"github.com/tstapler/stapler-squad/session/vcs"
 
@@ -153,8 +154,14 @@ func (ws *WorkspaceService) GetVCSStatus(
 	if cached, ok := ws.vcsStatusCache.Load(workDir); ok {
 		entry := cached.(vcsStatusCacheEntry)
 		if time.Since(entry.cachedAt) < vcsStatusCacheTTL {
+			// Shallow-copy before touching StatusAsOf — entry.status is a
+			// pointer shared with every other concurrent cache hit (and with
+			// the map itself); writing through it directly races with those
+			// readers instead of only reading from them.
+			respStatus := *entry.status
+			respStatus.StatusAsOf = entry.cachedAt
 			return connect.NewResponse(&sessionv1.GetVCSStatusResponse{
-				VcsStatus: vcsStatusToProto(entry.status),
+				VcsStatus: vcsStatusToProto(&respStatus),
 			}), nil
 		}
 	}
@@ -180,7 +187,36 @@ func (ws *WorkspaceService) GetVCSStatus(
 		}), nil
 	}
 
-	ws.vcsStatusCache.Store(workDir, vcsStatusCacheEntry{status: status, cachedAt: time.Now()})
+	// Commits/AggregateDiffStat are computed here (not inside GitProvider.GetStatus)
+	// because they need the session's recorded base SHA, an Instance-level concept the
+	// vc.VCSProvider abstraction doesn't have access to. Jujutsu has no equivalent base
+	// SHA concept, so this only runs for git sessions.
+	if _, isGit := provider.(*vc.GitProvider); isGit {
+		if baseSHA := instance.GetBaseCommitSHA(); baseSHA != "" {
+			if headSHA, headErr := git.GetHeadCommitSHA(workDir); headErr != nil {
+				log.Debug("GetVCSStatus: failed to resolve HEAD commit SHA", "workDir", workDir, "err", headErr)
+				status.CommitsUnavailable = true
+			} else if headSHA != baseSHA {
+				commits, truncated, listErr := git.ListShippedCommits(ctx, workDir, baseSHA, headSHA)
+				if listErr == nil {
+					status.Commits = commits
+					status.CommitsTruncated = truncated
+				} else {
+					log.Debug("GetVCSStatus: failed to list shipped commits", "workDir", workDir, "err", listErr)
+					status.CommitsUnavailable = true
+				}
+				if diffStat, diffErr := git.DiffStatBetween(ctx, workDir, baseSHA, headSHA); diffErr == nil {
+					status.AggregateDiffStat = &diffStat
+				} else {
+					log.Debug("GetVCSStatus: failed to compute aggregate diff stat", "workDir", workDir, "err", diffErr)
+				}
+			}
+		}
+	}
+
+	now := time.Now()
+	status.StatusAsOf = now
+	ws.vcsStatusCache.Store(workDir, vcsStatusCacheEntry{status: status, cachedAt: now})
 
 	return connect.NewResponse(&sessionv1.GetVCSStatusResponse{
 		VcsStatus: vcsStatusToProto(status),
@@ -442,6 +478,26 @@ func vcsStatusToProto(status *vc.VCSStatus) *sessionv1.VCSStatus {
 	}
 	for _, f := range status.ConflictFiles {
 		protoStatus.ConflictFiles = append(protoStatus.ConflictFiles, fileChangeToProto(f))
+	}
+
+	for _, c := range status.Commits {
+		commit := &sessionv1.ShippedCommit{Sha: c.SHA, Summary: c.Summary, AuthorName: c.AuthorName}
+		if !c.AuthorAt.IsZero() {
+			commit.AuthoredAt = timestamppb.New(c.AuthorAt)
+		}
+		protoStatus.Commits = append(protoStatus.Commits, commit)
+	}
+	protoStatus.CommitsTruncated = status.CommitsTruncated
+	protoStatus.CommitsUnavailable = status.CommitsUnavailable
+	if status.AggregateDiffStat != nil {
+		protoStatus.AggregateDiffStat = &sessionv1.AggregateDiffStat{
+			FilesChanged: int32(status.AggregateDiffStat.FilesChanged),
+			Additions:    int32(status.AggregateDiffStat.Additions),
+			Deletions:    int32(status.AggregateDiffStat.Deletions),
+		}
+	}
+	if !status.StatusAsOf.IsZero() {
+		protoStatus.StatusAsOf = timestamppb.New(status.StatusAsOf)
 	}
 
 	return protoStatus

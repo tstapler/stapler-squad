@@ -66,15 +66,16 @@ func ReviewItemToProto(item *session.ReviewItem, extraMetadata map[string]string
 		PatternName: item.PatternName,
 		Metadata:    metadata,
 		// Session details for rich display
-		Program:      item.Program,
-		Branch:       item.Branch,
-		Path:         item.Path,
-		WorkingDir:   item.WorkingDir,
-		Status:       StatusStringToProto(item.Status),
-		Tags:         item.Tags,
-		Category:     item.Category,
-		LastActivity: timestamppb.New(item.LastActivity),
-		SubStatus:    subStatusFromItem(item),
+		Program:         item.Program,
+		Branch:          item.Branch,
+		Path:            item.Path,
+		WorkingDir:      item.WorkingDir,
+		Status:          StatusStringToProto(item.Status),
+		Tags:            item.Tags,
+		Category:        item.Category,
+		LastActivity:    timestamppb.New(item.LastActivity),
+		SubStatus:       subStatusFromItem(item),
+		HasCommitsAhead: item.HasCommitsAhead,
 	}
 
 	// Add diff stats if available

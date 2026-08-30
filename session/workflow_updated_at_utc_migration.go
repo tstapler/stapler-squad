@@ -42,13 +42,13 @@ func runWorkflowUpdatedAtUTCBackfill(ctx context.Context, er *EntRepository) err
 		if _, saveErr := er.client.Workflow.UpdateOneID(wf.ID).
 			SetUpdatedAt(wf.UpdatedAt.UTC()).
 			Save(ctx); saveErr != nil {
-			log.WarningLog.Printf("[Migration] workflow updated_at UTC backfill: workflow=%s: %v", wf.ID, saveErr)
+			log.WarningLog().Printf("[Migration] workflow updated_at UTC backfill: workflow=%s: %v", wf.ID, saveErr)
 			continue
 		}
 		migrated++
 	}
 	if migrated > 0 {
-		log.InfoLog.Printf("[Migration] workflow updated_at UTC backfill: normalized %d row(s)", migrated)
+		log.InfoLog().Printf("[Migration] workflow updated_at UTC backfill: normalized %d row(s)", migrated)
 	}
 	return nil
 }

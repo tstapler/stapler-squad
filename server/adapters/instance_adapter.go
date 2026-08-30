@@ -2,6 +2,7 @@ package adapters
 
 import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/cdp"
 	"github.com/tstapler/stapler-squad/session/detection"
@@ -69,9 +70,14 @@ func InstanceToProto(inst *session.Instance, workflowNames map[string]string) *s
 		GithubApprovedCount:   int32(inst.GitHubApprovedCount),
 		GithubChangesReqCount: int32(inst.GitHubChangesReqCount),
 		GithubCheckConclusion: inst.GitHubCheckConclusion,
+		GithubChecks:          checksToProto(inst.GitHubChecks),
+		GithubReviewFeedback:  reviewFeedbackToProto(inst.GitHubReviewFeedback),
+		GithubMergeable:       inst.GitHubMergeable,
 		LastPrStatusCheck:     timestamppb.New(inst.LastPRStatusCheck),
 		WorkspaceKey:          inst.WorkspaceKey(),
 		LaunchCommand:         inst.LaunchCommand,
+		// Restart-from-session lineage (Story 2.3.1)
+		RestartedFromSessionId: snap.RestartedFromSessionID,
 	}
 
 	// Retry state (session-retry-backoff), fields 76-80. Read directly from
@@ -126,6 +132,9 @@ func InstanceToProto(inst *session.Instance, workflowNames map[string]string) *s
 		}
 	}
 
+	// Cached "has commits ahead of base" signal (AC6) — see Instance.UpdateDiffStats.
+	protoSession.HasCommitsAhead = inst.GetHasCommitsAhead()
+
 	// Convert Claude session data if available
 	if inst.GetClaudeSession() != nil {
 		cs := inst.GetClaudeSession()
@@ -138,6 +147,9 @@ func InstanceToProto(inst *session.Instance, workflowNames map[string]string) *s
 
 	// History file linkage — path to the Claude JSONL conversation file.
 	protoSession.HistoryFilePath = snap.HistoryFilePath
+
+	// Outcome of the most recent start/cold-restore decision.
+	protoSession.ReviveOutcome = reviveOutcomeToProto(snap.LastReviveOutcome)
 
 	// Creation progress message — only meaningful during Creating state.
 	if inst.IsCreating() {
@@ -214,6 +226,14 @@ func InstanceToProto(inst *session.Instance, workflowNames map[string]string) *s
 	}
 	if snap.ArchivedAt != nil {
 		protoSession.ArchivedAt = timestamppb.New(*snap.ArchivedAt)
+	}
+
+	// remote_name (field 76): host badge for a remote session (ssh-remote-workspaces
+	// Epic 6.2). Derived live from ExecutionTarget rather than a persisted field --
+	// see the proto field's doc comment for why (ExecutionTarget is `json:"-"`, not
+	// reconstructed across a restart). Empty (the zero value) for a LocalTarget.
+	if remoteTarget, ok := inst.GetExecutionTarget().(session.RemoteExecutionTarget); ok {
+		protoSession.RemoteName = remoteTarget.Target().Name
 	}
 
 	// Session goal summary — populated when a goal has been set via set_session_goal MCP tool.
@@ -391,6 +411,22 @@ func sessionTypeToProto(sessionType session.SessionType) sessionv1.SessionType {
 	}
 }
 
+// reviveOutcomeToProto converts session.ReviveOutcome to the proto ReviveOutcome enum.
+func reviveOutcomeToProto(outcome session.ReviveOutcome) sessionv1.ReviveOutcome {
+	switch outcome {
+	case session.ReviveOutcomeResumeLive:
+		return sessionv1.ReviveOutcome_REVIVE_OUTCOME_RESUME_LIVE
+	case session.ReviveOutcomeResumeRecovered:
+		return sessionv1.ReviveOutcome_REVIVE_OUTCOME_RESUME_RECOVERED
+	case session.ReviveOutcomeFreshExpected:
+		return sessionv1.ReviveOutcome_REVIVE_OUTCOME_FRESH_EXPECTED
+	case session.ReviveOutcomeFreshLostHistory:
+		return sessionv1.ReviveOutcome_REVIVE_OUTCOME_FRESH_LOST_HISTORY
+	default:
+		return sessionv1.ReviveOutcome_REVIVE_OUTCOME_UNSPECIFIED
+	}
+}
+
 // ProtoToStatus converts proto SessionStatus enum to session.Status.
 // Legacy wire values from older clients (READY=2, NEEDS_APPROVAL=5, LOADING=3) are
 // mapped to the appropriate new lifecycle states.
@@ -451,6 +487,24 @@ func instanceTypeToProto(instanceType session.InstanceType) sessionv1.InstanceTy
 	default:
 		return sessionv1.InstanceType_INSTANCE_TYPE_UNSPECIFIED
 	}
+}
+
+// checksToProto converts the itemized GitHub statusCheckRollup into proto GithubCheckItem messages.
+func checksToProto(checks []github.CheckItem) []*sessionv1.GithubCheckItem {
+	out := make([]*sessionv1.GithubCheckItem, len(checks))
+	for i, c := range checks {
+		out[i] = &sessionv1.GithubCheckItem{Name: c.Name, Context: c.Context, State: c.State, Status: c.Status, Conclusion: c.Conclusion}
+	}
+	return out
+}
+
+// reviewFeedbackToProto converts the itemized GitHub PR review list into proto GithubReviewFeedback messages.
+func reviewFeedbackToProto(reviews []github.ReviewItem) []*sessionv1.GithubReviewFeedback {
+	out := make([]*sessionv1.GithubReviewFeedback, len(reviews))
+	for i, r := range reviews {
+		out[i] = &sessionv1.GithubReviewFeedback{Author: r.Author, State: r.State, Body: r.Body}
+	}
+	return out
 }
 
 // externalMetadataToProto converts session.ExternalInstanceMetadata to proto ExternalInstanceMetadata.

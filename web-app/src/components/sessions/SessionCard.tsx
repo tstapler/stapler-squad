@@ -1,10 +1,12 @@
 "use client";
+// +feature: remote-host-badge
 
 import { useState, useRef, memo } from "react";
 import { Session, SessionStatus, SubStatus, ReviewItem, InstanceType, RateLimitState, CheckpointProto, DetectedStatus } from "@/gen/session/v1/types_pb";
 import { Tooltip } from "../ui/Tooltip";
 import { ReviewQueueBadge } from "./ReviewQueueBadge";
 import { RetryBadge } from "./RetryBadge";
+import { RevivedContextBadge } from "./RevivedContextBadge";
 import { StatusBadge } from "./StatusBadge";
 import { SubStatusChip } from "./SubStatusChip";
 import { GitHubBadge } from "@/components/shared/GitHubBadge";
@@ -16,6 +18,7 @@ import { SessionActionsOverflow } from "./SessionActionsOverflow";
 import { formatPauseReason } from "@/lib/sessions/formatPauseReason";
 import { isAutoApproveSupported } from "@/lib/sessions/autoApprove";
 import { getLastActivityTimestamp, isSessionStale } from "@/lib/session-staleness";
+import { RemoteConnectionIndicator } from "./RemoteConnectionIndicator";
 
 // The launch command always starts with the program string it was last launched
 // with (see Instance.buildLaunchCommand, session/instance_tmux.go). If it no longer
@@ -88,6 +91,7 @@ import {
   inlineTitleInput,
   badges,
   externalBadge,
+  hostBadge,
   muxIndicator,
   reviewInfo,
   reviewContext,
@@ -146,7 +150,9 @@ const IS_DEBUG_MODE =
   typeof window !== "undefined" &&
   new URLSearchParams(window.location.search).get("debug") === "1";
 
-interface SessionCardProps {
+// Exported so BoardCard (SessionBoard.tsx's per-card wrapper) can declare an identical
+// callback surface without duplicating this list.
+export interface SessionCardProps {
   session: Session;
   onClick?: () => void;
   onOpenInNewPane?: () => void;
@@ -162,11 +168,10 @@ interface SessionCardProps {
   onCreateCheckpoint?: (sessionId: string, label: string) => Promise<boolean>;
   onListCheckpoints?: (sessionId: string) => Promise<CheckpointProto[]>;
   onForkFromCheckpoint?: (sessionId: string, checkpointId: string, newTitle: string) => Promise<Session | null>;
-  onRunOneShot?: (sessionId: string) => Promise<void>;
   onSetRateLimitEnabled?: (sessionId: string, enabled: boolean) => void;
   onToggleAutonomousMode?: (sessionId: string, enabled: boolean) => void;
   onToggleAutoApprove?: (sessionId: string, enabled: boolean) => void;
-  onSteerAutonomousSession?: (sessionId: string, message: string) => void;
+  onSteerAutonomousSession?: (sessionId: string, message: string) => Promise<boolean> | void;
   onClearConversationState?: (sessionId: string) => Promise<boolean>;
   onHibernate?: () => void;
   onResumeFromHibernation?: () => void;
@@ -200,7 +205,6 @@ function SessionCardInner({
   onCreateCheckpoint,
   onListCheckpoints,
   onForkFromCheckpoint,
-  onRunOneShot,
   onSetRateLimitEnabled,
   onToggleAutonomousMode,
   onToggleAutoApprove,
@@ -559,6 +563,18 @@ function SessionCardInner({
                 {muxEnabled && <span className={muxIndicator} aria-hidden="true">✓</span>}
               </span>
             )}
+            {session.remoteName && (
+              <span
+                className={hostBadge}
+                role="img"
+                title={`Running on ${session.remoteName}`}
+                aria-label={`Running on ${session.remoteName}`}
+                data-testid="host-badge"
+              >
+                <span aria-hidden="true">🖥️</span> {session.remoteName}
+              </span>
+            )}
+            {session.remoteName && <RemoteConnectionIndicator remoteName={session.remoteName} />}
             <GitHubBadge
               prNumber={session.githubPrNumber}
               prUrl={session.githubPrUrl}
@@ -644,6 +660,7 @@ function SessionCardInner({
               (session.subStatus === SubStatus.UNSPECIFIED || session.subStatus === SubStatus.IDLE) && (
               <StatusBadge detectedStatus={detectedStatus} context={detectedContext} />
             )}
+            <RevivedContextBadge session={session} />
             {/* Sub-status chip from the proto sub_status field.
                 ACTIVE covers legacy RUNNING (same wire value via allow_alias).
                 Cast to number to bypass TS's duplicate-value narrowing for allow_alias enums. */}
@@ -1044,7 +1061,6 @@ function SessionCardInner({
           onOpenInNewPane={onOpenInNewPane}
           onNewWorkspace={onNewWorkspace}
           onCreateCheckpoint={onCreateCheckpoint}
-          onRunOneShot={onRunOneShot}
           onSetRateLimitEnabled={onSetRateLimitEnabled}
           onToggleAutonomousMode={onToggleAutonomousMode}
           onToggleAutoApprove={onToggleAutoApprove}

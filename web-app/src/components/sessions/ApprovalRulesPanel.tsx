@@ -3,6 +3,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useApprovalRules } from "@/lib/hooks/useApprovalRules";
+import { useNotifications } from "@/lib/contexts/NotificationContext";
 import { useApprovalAnalytics } from "@/lib/hooks/useApprovalAnalytics";
 import { useGenerateRule } from "@/lib/hooks/useGenerateRule";
 import { useExportRules } from "@/lib/hooks/useExportRules";
@@ -81,7 +82,9 @@ interface ApprovalRulesPanelProps {
  * create, edit, toggle, and delete custom rules via the structured rule builder.
  */
 export function ApprovalRulesPanel({ prefill }: ApprovalRulesPanelProps) {
-  const { rules, loading, error, upsertRule, deleteRule, refresh } = useApprovalRules();
+  const { rules, loading, error, upsertRule, deleteRule, refresh, reloadClaudeSettingsRules } = useApprovalRules();
+  const { showActionToast } = useNotifications();
+  const [reloadingClaudeSettings, setReloadingClaudeSettings] = useState(false);
   const { summary, loading: analyticsLoading } = useApprovalAnalytics({ windowDays: 7 });
   const { exportRules, loading: exporting, error: exportError } = useExportRules();
 
@@ -271,6 +274,24 @@ export function ApprovalRulesPanel({ prefill }: ApprovalRulesPanelProps) {
     }
   };
 
+  const handleReloadClaudeSettings = async () => {
+    if (reloadingClaudeSettings) return; // guards against a rapid double-click firing two RPCs
+    setReloadingClaudeSettings(true);
+    try {
+      const resp = await reloadClaudeSettingsRules();
+      showActionToast(
+        resp.message || (resp.success ? `Reloaded ${resp.ruleCount} claude-settings rule(s).` : "Failed to reload Claude settings rules — previous rules still active."),
+        resp.success ? "success" : "error",
+        "claude-settings-reload"
+      );
+    } catch (e) {
+      console.error("Failed to reload claude-settings rules:", e);
+      showActionToast("Could not reach the server to reload rules. Try again.", "error", "claude-settings-reload");
+    } finally {
+      setReloadingClaudeSettings(false);
+    }
+  };
+
   // ── Epic 3: handle suggestion cards ──────────────────────────────────────
 
   const [dismissedIndices, setDismissedIndices] = useState<Set<number>>(new Set());
@@ -455,6 +476,19 @@ export function ApprovalRulesPanel({ prefill }: ApprovalRulesPanelProps) {
       {sourceFilter === "config" && (
         <div className={configFileHint}>
           Stored in ~/.config/stapler-squad/shared_rules.yaml
+        </div>
+      )}
+      {/* ── Claude settings reload hint (shown when viewing claude-settings tab) ── */}
+      {sourceFilter === "claude-settings" && (
+        <div className={configFileHint}>
+          Loaded from ~/.claude/settings.json{" "}
+          <button
+            className={retryButton}
+            onClick={handleReloadClaudeSettings}
+            disabled={reloadingClaudeSettings}
+          >
+            {reloadingClaudeSettings ? "Reloading…" : "Reload rules"}
+          </button>
         </div>
       )}
 

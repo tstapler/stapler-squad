@@ -81,6 +81,38 @@ func TestStorage_UUID_PersistedThroughAddAndLoad(t *testing.T) {
 		"UUID must survive AddInstance → LoadInstances round-trip")
 }
 
+// TestStorage_Backend_PersistedThroughAddAndLoad is the real-persistence
+// regression test for Epic 5.1: Instance.Backend must survive a round trip
+// through the actual ent-backed repository (EntRepository.Create/Update and
+// sessionToInstanceData), not just the in-process ToInstanceData/
+// FromInstanceData conversion — session/storage.go's SaveInstances/
+// LoadInstances is what a real process restart actually goes through.
+func TestStorage_Backend_PersistedThroughAddAndLoad(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+
+	inst := &Instance{
+		Title:     "backend-roundtrip",
+		Path:      "/tmp/test",
+		Status:    Paused,
+		Program:   "claude",
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+		Backend:   BackendTymux,
+	}
+	inst.started.Store(true)
+
+	require.NoError(t, storage.AddInstance(inst))
+
+	loaded, err := storage.LoadInstances()
+	require.NoError(t, err)
+	require.Len(t, loaded, 1)
+
+	assert.Equal(t, BackendTymux, loaded[0].Backend,
+		"Backend must survive AddInstance → LoadInstances round-trip through the ent repository")
+}
+
 // TestStorage_UUID_StableAcrossMultipleLoads verifies that the UUID returned by
 // LoadInstances is deterministic across repeated calls (no re-generation).
 func TestStorage_UUID_StableAcrossMultipleLoads(t *testing.T) {
@@ -576,6 +608,88 @@ func TestStorage_ListInstanceData(t *testing.T) {
 	}
 	assert.True(t, titles["list-session-1"], "list-session-1 should be present")
 	assert.True(t, titles["list-session-2"], "list-session-2 should be present")
+}
+
+// TestStorage_ArchiveInstanceDataByID_should_setArchivedAt_When_SessionExistsInStorageOnly
+// is the regression test for the fix in server/services/session_service.go's
+// ArchiveSessionByUUID: a session that is not resident in the live in-memory
+// ReviewQueuePoller.instances list (e.g. after a server restart, before this fix existed)
+// must still be archivable via a direct storage read-modify-write.
+func TestStorage_ArchiveInstanceDataByID_should_setArchivedAt_When_SessionExistsInStorageOnly(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+
+	inst := newTestInstance("storage-only-session")
+	require.NoError(t, storage.AddInstance(inst))
+
+	archived, err := storage.ArchiveInstanceDataByID("storage-only-session", time.Now())
+	require.NoError(t, err)
+	assert.True(t, archived, "expected the session to be newly archived")
+
+	data, err := storage.FindInstanceDataByID("storage-only-session")
+	require.NoError(t, err)
+	require.NotNil(t, data.ArchivedAt, "ArchivedAt should be set after archiving")
+	assert.Equal(t, Stopped, data.Status, "Status should transition to Stopped")
+}
+
+// TestStorage_ArchiveInstanceDataByID_should_preserveOtherFields_When_Archiving guards the
+// doc comment's claim that this is a read-modify-write on the full row, not a partial
+// struct: a future refactor that built a bare InstanceData{ID, ArchivedAt, Status} instead
+// of mutating a fresh FindInstanceDataByID read would pass every other test here (they only
+// assert ArchivedAt/Status) while silently clobbering every other field via
+// EntRepository.Update's guarded-optional-field pattern (empty/zero fields get cleared).
+func TestStorage_ArchiveInstanceDataByID_should_preserveOtherFields_When_Archiving(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+
+	inst := newTestInstance("archive-preserves-fields")
+	inst.Note = "do not clobber me"
+	inst.Category = "preserve-category"
+	require.NoError(t, storage.AddInstance(inst))
+
+	archived, err := storage.ArchiveInstanceDataByID("archive-preserves-fields", time.Now())
+	require.NoError(t, err)
+	require.True(t, archived)
+
+	data, err := storage.FindInstanceDataByID("archive-preserves-fields")
+	require.NoError(t, err)
+	assert.Equal(t, "do not clobber me", data.Note, "archiving must not clobber unrelated fields")
+	assert.Equal(t, "preserve-category", data.Category, "archiving must not clobber unrelated fields")
+}
+
+// TestStorage_ArchiveInstanceDataByID_should_beIdempotent_When_AlreadyArchived matches
+// SetArchivedAtIfNilAndStop's CAS semantics: a second archive call on an already-archived
+// session is a no-op, not an error, and does not clobber the original ArchivedAt.
+func TestStorage_ArchiveInstanceDataByID_should_beIdempotent_When_AlreadyArchived(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+
+	inst := newTestInstance("already-archived-session")
+	require.NoError(t, storage.AddInstance(inst))
+
+	first, err := storage.ArchiveInstanceDataByID("already-archived-session", time.Now())
+	require.NoError(t, err)
+	require.True(t, first)
+
+	second, err := storage.ArchiveInstanceDataByID("already-archived-session", time.Now())
+	require.NoError(t, err)
+	assert.False(t, second, "a second archive call should be a no-op")
+}
+
+// TestStorage_ArchiveInstanceDataByID_should_returnFalse_When_SessionNotFound matches
+// ArchiveSessionByUUID's existing "unconditional sweep call" contract: archiving an
+// unknown ID is not an error.
+func TestStorage_ArchiveInstanceDataByID_should_returnFalse_When_SessionNotFound(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+
+	archived, err := storage.ArchiveInstanceDataByID("no-such-session", time.Now())
+	require.NoError(t, err)
+	assert.False(t, archived)
 }
 
 // TestStorage_DeleteAllInstances verifies that DeleteAllInstances removes every

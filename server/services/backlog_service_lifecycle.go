@@ -50,7 +50,7 @@ func resolveStuckOnManualTransition(ctx context.Context, storage *session.Storag
 	}
 	for _, reason := range reasons {
 		if _, err := storage.ResolveStuck(ctx, itemID, reason); err != nil {
-			log.WarningLog.Printf("[TransitionBacklogItemStatus] ResolveStuck(%s) item=%s: %v", reason, itemID, err)
+			log.WarningLog().Printf("[TransitionBacklogItemStatus] ResolveStuck(%s) item=%s: %v", reason, itemID, err)
 		}
 	}
 }
@@ -468,7 +468,7 @@ func (s *BacklogService) ArchiveBacklogItem(
 		s.commitAndPushItemWorktrees(ctx, sessions)
 	}
 
-	archived, err := s.storage.ArchiveBacklogItem(ctx, req.Msg.ItemId)
+	archived, err := s.storage.ArchiveBacklogItem(ctx, req.Msg.ItemId, nil, session.TriggeredByUser, "")
 	if err != nil {
 		if ent.IsNotFound(err) || errors.Is(err, session.ErrNotFound) {
 			return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("backlog item %q not found", req.Msg.ItemId))
@@ -596,7 +596,7 @@ func (s *BacklogService) AddBacklogItemDependency(
 func (s *BacklogService) resolveLatestWorkCommit(ctx context.Context, sessionUUID, repoPath string) string {
 	wt, err := s.storage.GetWorktreeDataBySessionUUID(ctx, sessionUUID)
 	if err != nil {
-		log.WarningLog.Printf("resolveLatestWorkCommit: no worktree data for session %s: %v", sessionUUID, err)
+		log.WarningLog().Printf("resolveLatestWorkCommit: no worktree data for session %s: %v", sessionUUID, err)
 		return ""
 	}
 	if wt.WorktreePath != "" {
@@ -613,7 +613,7 @@ func (s *BacklogService) resolveLatestWorkCommit(ctx context.Context, sessionUUI
 	cmd.Dir = repoPath
 	out, revErr := cmd.Output()
 	if revErr != nil {
-		log.WarningLog.Printf("resolveLatestWorkCommit: rev-parse %s in %s: %v", wt.BranchName, repoPath, revErr)
+		log.WarningLog().Printf("resolveLatestWorkCommit: rev-parse %s in %s: %v", wt.BranchName, repoPath, revErr)
 		return ""
 	}
 	return strings.TrimSpace(string(out))
@@ -637,7 +637,7 @@ func (s *BacklogService) resolveLatestWorkCommit(ctx context.Context, sessionUUI
 func (s *BacklogService) isCodeShippedToMain(ctx context.Context, itemID, repoPath, logPrefix string) bool {
 	itemSessions, err := s.storage.ListItemSessions(ctx, itemID)
 	if err != nil {
-		log.WarningLog.Printf("[%s] isCodeShippedToMain: failed to load item sessions for item %s: %v", logPrefix, itemID, err)
+		log.WarningLog().Printf("[%s] isCodeShippedToMain: failed to load item sessions for item %s: %v", logPrefix, itemID, err)
 		return false
 	}
 	var lastWorkSessionUUID string
@@ -657,7 +657,7 @@ func (s *BacklogService) isCodeShippedToMain(ctx context.Context, itemID, repoPa
 	}
 	onMain, mainErr := git.IsCommitOnMain(repoPath, prFixMainBranch, lastCommitSha)
 	if mainErr != nil {
-		log.WarningLog.Printf("[%s] isCodeShippedToMain: failed to verify commit %s on main for item %s: %v", logPrefix, lastCommitSha, itemID, mainErr)
+		log.WarningLog().Printf("[%s] isCodeShippedToMain: failed to verify commit %s on main for item %s: %v", logPrefix, lastCommitSha, itemID, mainErr)
 		return false
 	}
 	return onMain
@@ -695,7 +695,7 @@ func (s *BacklogService) TransitionBacklogItemStatus(
 	// review/pr_pending→ready guard (ErrVerdictClearRequiredForReady).
 	overallOutcome, verdictErr := s.storage.GetMostRecentReviewVerdictForItem(ctx, req.Msg.ItemId)
 	if verdictErr != nil {
-		log.WarningLog.Printf("[TransitionBacklogItemStatus] failed to load review verdict for item %s: %v", req.Msg.ItemId, verdictErr)
+		log.WarningLog().Printf("[TransitionBacklogItemStatus] failed to load review verdict for item %s: %v", req.Msg.ItemId, verdictErr)
 		// Non-fatal: proceed with empty outcome; TransitionGuard will block review→done if needed.
 	}
 
@@ -778,7 +778,7 @@ func (s *BacklogService) TransitionBacklogItemStatus(
 	if req.Msg.OverrideReason != "" {
 		note := fmt.Sprintf("Manually overridden by operator: %s -> %s (%s)", from, to, req.Msg.OverrideReason)
 		if noteErr := s.storage.AppendProgressNote(ctx, req.Msg.ItemId, -1, note, string(to)); noteErr != nil {
-			log.WarningLog.Printf("[TransitionBacklogItemStatus] failed to append override progress note for item %s: %v", req.Msg.ItemId, noteErr)
+			log.WarningLog().Printf("[TransitionBacklogItemStatus] failed to append override progress note for item %s: %v", req.Msg.ItemId, noteErr)
 		}
 		s.notifyManualOverride(updated.ID, updated.Title, fmt.Sprintf("status manually overridden %s -> %s: %s", from, to, req.Msg.OverrideReason))
 	}
@@ -807,7 +807,7 @@ func (s *BacklogService) TransitionBacklogItemStatus(
 			PlanRejectionReason: &rejectionReason,
 			ClearPlanRejectedAt: true,
 		}, nil); resetErr != nil {
-			log.WarningLog.Printf("[TransitionBacklogItemStatus] failed to reset planning state for item %s: %v", req.Msg.ItemId, resetErr)
+			log.WarningLog().Printf("[TransitionBacklogItemStatus] failed to reset planning state for item %s: %v", req.Msg.ItemId, resetErr)
 		} else {
 			updated = upd
 		}
@@ -1118,7 +1118,7 @@ func (s *BacklogService) OverrideVerdict(
 		}
 		updated, transErr := s.storage.TransitionBacklogItemStatus(ctx, itemID, toStatus, precondition, session.TriggeredByUser) //nolint:silenttransition the fallback reload a few lines below returns the item's true post-transition state in the RPC response, so the caller sees the failure implicitly rather than a false "success"
 		if transErr != nil {
-			log.ErrorLog.Printf("[OverrideVerdict] failed to transition item %s to %s: %v", itemID, toStatus, transErr)
+			log.ErrorLog().Printf("[OverrideVerdict] failed to transition item %s to %s: %v", itemID, toStatus, transErr)
 		} else {
 			updatedItem = updated
 		}
@@ -1214,7 +1214,7 @@ func (s *BacklogService) SubmitManualReview(
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save manual review verdict: %w", createErr))
 	}
 	if endErr := s.storage.UpdateItemSessionEnded(ctx, is.ID, now); endErr != nil { //nolint:silenttransition bookkeeping timestamp only; the PASS/done transition below (which does notify on failure) is what actually gates forward progress here
-		log.WarningLog.Printf("[SubmitManualReview] UpdateItemSessionEnded: %v", endErr)
+		log.WarningLog().Printf("[SubmitManualReview] UpdateItemSessionEnded: %v", endErr)
 	}
 
 	// If PASS, transition item to done (only from review status) — but only once
@@ -1227,11 +1227,11 @@ func (s *BacklogService) SubmitManualReview(
 	if overall == session.ReviewVerdictPass {
 		if item.Status == string(session.BacklogStatusReview) {
 			if !s.isCodeShippedToMain(ctx, req.Msg.ItemId, item.RepoPath, "SubmitManualReview") {
-				log.InfoLog.Printf("[SubmitManualReview] item=%s PASS verdict but code not verified on main — leaving in review for manual transition/override", req.Msg.ItemId)
+				log.InfoLog().Printf("[SubmitManualReview] item=%s PASS verdict but code not verified on main — leaving in review for manual transition/override", req.Msg.ItemId)
 			} else {
 				precondition := &session.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusReview)}
 				if _, transErr := s.storage.TransitionBacklogItemStatus(ctx, req.Msg.ItemId, session.BacklogStatusDone, precondition, session.TriggeredByUser); transErr != nil {
-					log.WarningLog.Printf("[SubmitManualReview] PASS but transition to done failed: %v", transErr)
+					log.WarningLog().Printf("[SubmitManualReview] PASS but transition to done failed: %v", transErr)
 					// Same shape as TriggerReReview's PASS->done path: code is
 					// confirmed shipped to main but the item is left stuck in review.
 					s.notifyTransitionFailed(req.Msg.ItemId, item.Title, "a manual PASS verdict was submitted and code was confirmed shipped to main, but the item's transition to done failed", transErr)

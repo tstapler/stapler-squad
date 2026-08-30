@@ -254,20 +254,50 @@ message Session {
   // Only meaningful when detected_status == DETECTED_STATUS_WAITING_FOR_AGENT; 0 otherwise.
   int32 subagent_count = 75;
 
+  // Name of the configured remote (session.v1.RemoteConfigProto.name, see
+  // remote.proto) this session's ExecutionTarget is running on. Empty for a
+  // local session. Derived live from the in-memory session.Instance.
+  // ExecutionTarget at read time (ssh-remote-workspaces Epic 6.2's
+  // SessionCard host badge) -- NOT persisted, so it reverts to empty across
+  // a server restart until the session is next resumed (ExecutionTarget
+  // itself is `json:"-"`, matching every other execution-target-derived
+  // read in this codebase; see session/execution_target.go).
+  string remote_name = 76;
+
+  // Cached signal for whether the branch has commits ahead of its base — used to
+  // pre-emptively disable the "Create PR" trigger (AC6), refreshed on the same
+  // cadence as diff_stats, not computed synchronously per-request.
+  bool has_commits_ahead = 77;
+
+  // Outcome of the most recent start/cold-restore decision. See ReviveOutcome.
+  ReviveOutcome revive_outcome = 78;
+
+  // Empty unless this session was created via Restart-with-Summary.
+  string restarted_from_session_id = 79;
+
+  // Itemized statusCheckRollup from the last successful PR-status poll.
+  repeated GithubCheckItem github_checks = 80;
+
+  // Itemized review list (author/state/body) from the last successful poll.
+  repeated GithubReviewFeedback github_review_feedback = 81;
+
+  // GitHub's own mergeable signal: "mergeable"/"conflicting"/"unknown".
+  string github_mergeable = 82;
+
   // Number of automated retry attempts consumed in the current failure
   // episode (session-retry-backoff). 0 means no retry has occurred yet.
-  int32 retry_attempt = 76;
+  int32 retry_attempt = 83;
   // The policy-resolved cap on retry_attempt, snapshotted at driver start.
-  int32 retry_max_attempts = 77;
+  int32 retry_max_attempts = 84;
   // Most recent automated-retry failure reason: "crashed", "stalled", or
   // "tmux_exited". Empty if no retry has occurred yet.
-  string last_failure_reason = 78;
+  string last_failure_reason = 85;
   // When the next backed-off automated restart is due. Unset if no retry is
   // currently pending.
-  google.protobuf.Timestamp next_retry_at = 79;
+  google.protobuf.Timestamp next_retry_at = 86;
   // Reason + timestamp per past automated or manual retry attempt, newest
   // last, capped at 10 entries.
-  repeated RetryAttemptRecord retry_history = 80;
+  repeated RetryAttemptRecord retry_history = 87;
 }
 
 // RetryAttemptRecord is one entry in Session.retry_history.
@@ -441,6 +471,24 @@ enum DetectedStatus {
   // Claude is actively compacting/summarizing conversation history (distinct
   // from the "N% until auto-compact" approaching indicator).
   DETECTED_STATUS_COMPACTING = 12;
+}
+
+// ReviveOutcome records the outcome of the most recent cold-restore decision
+// (session-revive-uuid-loss AC3): whether the session resumed its previous
+// conversation, and if not, whether that was expected (genuinely no prior
+// history) or an unexpected loss (a conversation existed but could not be
+// recovered from disk).
+enum ReviveOutcome {
+  REVIVE_OUTCOME_UNSPECIFIED = 0;
+  // Had a conversation UUID already in memory; no recovery needed.
+  REVIVE_OUTCOME_RESUME_LIVE = 1;
+  // No UUID in memory, but disk-based recovery found one before launch.
+  REVIVE_OUTCOME_RESUME_RECOVERED = 2;
+  // Started fresh with no prior conversation history to lose.
+  REVIVE_OUTCOME_FRESH_EXPECTED = 3;
+  // Started fresh even though this session previously had captured
+  // conversation history — recovery ran and found nothing.
+  REVIVE_OUTCOME_FRESH_LOST_HISTORY = 4;
 }
 
 // WorkingState represents the active-work status of a session for review queue filtering.
@@ -673,6 +721,11 @@ message ReviewItem {
   // was enqueued. Used by the frontend deriveWorkingState() utility to compute
   // the effective WorkingState without relying on the deprecated working_state field.
   SubStatus sub_status = 21;
+
+  // Cached signal for whether the branch has commits ahead of its base — used
+  // to pre-emptively disable the "Create PR" trigger in the review queue
+  // (mirrors Session.has_commits_ahead), not computed synchronously per-request.
+  bool has_commits_ahead = 22;
 }
 
 // Priority levels for review queue items (highest to lowest urgency).
@@ -763,6 +816,26 @@ message PRInfo {
 
   // PR last updated timestamp.
   google.protobuf.Timestamp updated_at = 16;
+}
+
+// GithubCheckItem is one itemized CI check from a PR's statusCheckRollup.
+// `state` is the legacy Commit Status API's value; `status`/`conclusion` come
+// from the newer Checks API and may be empty for a legacy-API item.
+message GithubCheckItem {
+  string name = 1;
+  string context = 2;
+  string state = 3;
+  string status = 4;
+  string conclusion = 5;
+}
+
+// GithubReviewFeedback is one PR review — the data github_approved_count/
+// github_changes_req_count (below) collapse into counts; this carries the
+// reviewer's stated reason (`body`) alongside who reviewed and their verdict.
+message GithubReviewFeedback {
+  string author = 1;
+  string state = 2;
+  string body = 3;
 }
 
 // PRComment represents a comment on a GitHub pull request.
@@ -928,6 +1001,26 @@ message FileChange {
   int32 deletions = 6;
 }
 
+// ShippedCommit is one commit. Shared by VCSStatus.commits (below — a live
+// session's unshipped-vs-base commits) and BacklogItemShipStatus.commits
+// (backlog.proto — confirmed-merged commits); relocated here so both share
+// one definition instead of two independently-maintained copies.
+message ShippedCommit {
+  string sha = 1;
+  string summary = 2; // first line of the commit message
+  string author_name = 3;
+  google.protobuf.Timestamp authored_at = 4;
+}
+
+// AggregateDiffStat is the files-changed/additions/deletions summary for a
+// branch's range vs. its base — a DiffShortstat-equivalent. Maps to
+// git.AggregateDiffStat in Go.
+message AggregateDiffStat {
+  int32 files_changed = 1;
+  int32 additions = 2;
+  int32 deletions = 3;
+}
+
 // VCSStatus represents the current status of the version control system
 message VCSStatus {
   // VCS type (git, jujutsu)
@@ -977,6 +1070,28 @@ message VCSStatus {
 
   // Conflict files list
   repeated FileChange conflict_files = 16;
+
+  // Commits lists the branch's commits not yet on its recorded base (newest first).
+  // Empty for Jujutsu sessions or when no base SHA is recorded.
+  repeated ShippedCommit commits = 17;
+
+  // True when `commits` was capped before reaching the branch's full unshipped
+  // commit count (see session/git.ListShippedCommits's cap).
+  bool commits_truncated = 18;
+
+  // When this VCSStatus was computed — the local-git-status cache's timestamp,
+  // independent of any GitHub PR-status staleness (see Session.last_pr_status_check).
+  google.protobuf.Timestamp status_as_of = 19;
+
+  // The branch's total change size vs. its recorded base (files/+/-), independent
+  // of the working-tree file lists above — populated even when the working tree is
+  // fully clean. Unset when no base SHA is recorded or the computation failed.
+  AggregateDiffStat aggregate_diff_stat = 20;
+
+  // True when a commit-list fetch was attempted but failed or timed out —
+  // distinguishes "computation failed" from "genuinely zero commits" so the
+  // frontend doesn't render a failure as a silent empty state.
+  bool commits_unavailable = 21;
 }
 
 // WorkspaceSwitchType defines the type of workspace switch operation

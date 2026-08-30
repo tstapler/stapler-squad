@@ -1,6 +1,7 @@
 import { configureStore } from "@reduxjs/toolkit";
 import backlogItemsReducer from "../backlogItemsSlice";
 import bulkSelectionReducer from "../bulkSelectionSlice";
+import remotesReducer from "../remotesSlice";
 import reviewQueueReducer from "../reviewQueueSlice";
 import { connectApi } from "@/lib/api/connectApi";
 import sessionsReducer, {
@@ -9,12 +10,14 @@ import sessionsReducer, {
   removeSession,
   setLoading,
   setError,
+  setErrorCode,
   selectAllSessions,
   selectSessionById,
   selectSessionIds,
   selectSessionsTotal,
   selectSessionsLoading,
   selectSessionsError,
+  selectSessionsErrorCode,
   selectDetectedStatusMap,
   removeDetectedStatus,
   selectActiveSessionsSortedByUpdatedAt,
@@ -24,7 +27,7 @@ import { create } from "@bufbuild/protobuf";
 
 function makeStore() {
   return configureStore({
-    reducer: { backlogItems: backlogItemsReducer, bulkSelection: bulkSelectionReducer, reviewQueue: reviewQueueReducer, sessions: sessionsReducer, [connectApi.reducerPath]: connectApi.reducer },
+    reducer: { backlogItems: backlogItemsReducer, bulkSelection: bulkSelectionReducer, remotes: remotesReducer, reviewQueue: reviewQueueReducer, sessions: sessionsReducer, [connectApi.reducerPath]: connectApi.reducer },
     middleware: (getDefault) => getDefault({ serializableCheck: false }).concat(connectApi.middleware),
   });
 }
@@ -251,6 +254,22 @@ describe("sessionsSlice", () => {
       expect(selectSessionsError(store.getState())).toBe("stream disconnected");
       store.dispatch(setError(null));
       expect(selectSessionsError(store.getState())).toBeNull();
+    });
+
+    it("sets an error code alongside the message via the sibling setErrorCode reducer", () => {
+      const store = makeStore();
+      store.dispatch(setError("failed precondition"));
+      store.dispatch(setErrorCode(9)); // Code.FailedPrecondition
+      expect(selectSessionsError(store.getState())).toBe("failed precondition");
+      expect(selectSessionsErrorCode(store.getState())).toBe(9);
+    });
+
+    it("clears the previous errorCode when a fresh setError fires without a follow-up setErrorCode", () => {
+      const store = makeStore();
+      store.dispatch(setError("first error"));
+      store.dispatch(setErrorCode(14)); // Code.Unavailable
+      store.dispatch(setError("second, unclassified error"));
+      expect(selectSessionsErrorCode(store.getState())).toBeUndefined();
     });
   });
 

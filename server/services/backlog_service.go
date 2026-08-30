@@ -84,6 +84,21 @@ type SessionStopper interface {
 	IsRetryPending(sessionUUID string) bool
 }
 
+// SessionSteerer allows BacklogService to inject a message into an already-
+// active session (e.g. a PR-fix problem description) instead of skipping a
+// respawn outright. It is nil-safe: BacklogService degrades gracefully when
+// not wired, mirroring SessionStopper.
+type SessionSteerer interface {
+	SessionProgram(sessionUUID string) (program string, ok bool)
+	// IsReadyForSteer reports whether sessionUUID's pane is confirmed idle
+	// and safe for an unattended PTY write. False — including when
+	// readiness can't be determined — means the caller must not steer (see
+	// *SessionService.IsReadyForSteer's doc comment for why "unknown" must
+	// never default to true here).
+	IsReadyForSteer(sessionUUID string) bool
+	SteerActiveSession(ctx context.Context, sessionUUID, message string) error
+}
+
 // RepoWatchRemover lets BacklogService tell the background unfinished-changes
 // scanner (session/unfinished.Scanner) to stop watching a repo path once its
 // worktree has been removed from disk — see BUG-034. Without this, the
@@ -109,6 +124,7 @@ type BacklogService struct {
 	sourceBackend     itemSourceBackend
 	sessionCreator    SessionCreator
 	sessionStopper    SessionStopper
+	sessionSteerer    SessionSteerer
 	autonomousStarter AutonomousDriverStarter
 	// repoWatchRemover tells the unfinished-changes scanner to stop watching a
 	// worktree path once it's removed from disk (BUG-034). nil-safe — wired via
@@ -170,6 +186,24 @@ type BacklogService struct {
 	// constraint was not needed. See SpawnSessionFromItem for the guarded
 	// section.
 	spawnInFlight sync.Map
+
+	// steerDedup maps itemID -> lastSteerReason, the most recently delivered
+	// PR-fix steer reason signature, when, and which session received it —
+	// suppresses an exact-repeat steer within steerCooldown, but only for the
+	// same session (a changed active work session is always treated as never
+	// delivered — architecture review concern). In-memory only (see plan.md's
+	// Pattern Decisions: bounded blast radius, no DB durability needed).
+	steerDedup sync.Map
+	// steerConflictDebounce maps itemID -> conflictDebounceState — the
+	// two-consecutive-tick confirmation gate for a newly-appearing merge
+	// conflict signal (pitfalls research §6, cli/cli#9583), also keyed by
+	// session identity via conflictDebounceState's own pendingConflict.sessionUUID.
+	steerConflictDebounce sync.Map
+	// steerInFlight maps itemID -> struct{}, guarding steerActiveSessionForPRFix
+	// against two overlapping reconcile ticks racing to steer the same item
+	// before steerDedup is updated. Mirrors spawnInFlight's self-cleaning
+	// LoadOrStore/defer-Delete idiom.
+	steerInFlight sync.Map
 
 	// headless triage pool and concurrency controls.
 	headlessPool   headless.PoolClient
@@ -406,7 +440,7 @@ func (s *BacklogService) claimantHostID() string {
 	}
 	id, err := s.cfg.GetOrCreateClaimantHostID()
 	if err != nil {
-		log.WarningLog.Printf("[claimantHostID] failed to resolve claimant host id: %v", err)
+		log.WarningLog().Printf("[claimantHostID] failed to resolve claimant host id: %v", err)
 		return ""
 	}
 	return id
@@ -472,6 +506,31 @@ func (s *BacklogService) Shutdown() {
 // SetSessionStopper wires the optional session stopper used to kill orphaned sessions on re-triage.
 func (s *BacklogService) SetSessionStopper(stopper SessionStopper) {
 	s.sessionStopper = stopper
+}
+
+// SetSessionSteerer wires the optional session steerer used to inject a
+// PR-fix problem description into an already-active session instead of
+// skipping the respawn outright.
+func (s *BacklogService) SetSessionSteerer(steerer SessionSteerer) {
+	s.sessionSteerer = steerer
+}
+
+// GetSessionSteerer returns the wired SessionSteerer, or nil if
+// SetSessionSteerer was never called. Exists so server-package tests can
+// assert real bootstrap wiring (dependencies.go) without exposing the
+// field directly — mirrors SessionService.GetBacklogLifecycleListener's
+// wiring-test-support role (pre-mortem.md P2 #5: this is the first such
+// getter for this pattern on BacklogService).
+func (s *BacklogService) GetSessionSteerer() SessionSteerer {
+	return s.sessionSteerer
+}
+
+// GetSessionStopper returns the wired SessionStopper, or nil. Added
+// alongside GetSessionSteerer since SetSessionStopper had the identical
+// untested-wiring gap (pre-mortem.md P2 #5) — fixing both costs one extra
+// assertion in the same test, not a second test file.
+func (s *BacklogService) GetSessionStopper() SessionStopper {
+	return s.sessionStopper
 }
 
 // SetRepoWatchRemover wires the optional unfinished-changes scanner hook used
@@ -604,7 +663,7 @@ func itemSessionToProto(is session.ItemSessionSummary, costFor func(tmuxUUID str
 	if is.TriageResult != "" {
 		var tr triageResultJSON
 		if jsonErr := json.Unmarshal([]byte(is.TriageResult), &tr); jsonErr != nil {
-			log.WarningLog.Printf("[itemSessionToProto] invalid triage_result JSON for session %s: %v", is.ID, jsonErr)
+			log.WarningLog().Printf("[itemSessionToProto] invalid triage_result JSON for session %s: %v", is.ID, jsonErr)
 		} else {
 			suggs := make([]*sessionv1.TriageSuggestion, len(tr.Suggestions))
 			for i, sg := range tr.Suggestions {
@@ -659,19 +718,20 @@ type triageResultJSON struct {
 // Used by ListBacklogItems to avoid over-hydrating description/plan fields.
 func backlogItemSummaryToProto(item *session.BacklogItemSummary, costFor func(tmuxUUID string) float64) *sessionv1.BacklogItem {
 	p := &sessionv1.BacklogItem{
-		Id:         item.ID,
-		PublicId:   item.PublicIDRaw,
-		Title:      item.Title,
-		Priority:   int32(item.Priority),
-		Status:     string(item.Status),
-		RepoPath:   item.RepoPath,
-		Notes:      item.Notes,
-		ExternalId: item.ExternalID,
-		Labels:     item.Labels,
-		PrUrl:      item.PrURL,
-		PrNumber:   int32(item.PrNumber),
-		CreatedAt:  timestamppb.New(item.CreatedAt),
-		UpdatedAt:  timestamppb.New(item.UpdatedAt),
+		Id:                 item.ID,
+		PublicId:           item.PublicIDRaw,
+		Title:              item.Title,
+		Priority:           int32(item.Priority),
+		Status:             string(item.Status),
+		RepoPath:           item.RepoPath,
+		Notes:              item.Notes,
+		ExternalId:         item.ExternalID,
+		Labels:             item.Labels,
+		PrUrl:              item.PrURL,
+		PrNumber:           int32(item.PrNumber),
+		CreatedAt:          timestamppb.New(item.CreatedAt),
+		UpdatedAt:          timestamppb.New(item.UpdatedAt),
+		AllowedTransitions: allowedTransitionStrings(item.Status),
 	}
 	if item.ExternalURL != "" {
 		p.ExternalUrl = &item.ExternalURL
@@ -881,10 +941,10 @@ func (s *BacklogService) commitAndPushItemWorktrees(ctx context.Context, session
 		g := git.NewGitWorktreeFromStorage(wt.RepoPath, wt.WorktreePath, wt.SessionName, wt.BranchName, wt.BaseCommitSHA)
 		commitMsg := fmt.Sprintf("[claudesquad] save work before done (session %s)", is.SessionUUID)
 		if commitErr := g.CommitChanges(commitMsg); commitErr != nil {
-			log.WarningLog.Printf("[commitAndPushItemWorktrees] commit failed path=%s: %v", wt.WorktreePath, commitErr)
+			log.WarningLog().Printf("[commitAndPushItemWorktrees] commit failed path=%s: %v", wt.WorktreePath, commitErr)
 		}
 		if pushErr := g.PushBranch(); pushErr != nil {
-			log.WarningLog.Printf("[commitAndPushItemWorktrees] push failed path=%s: %v", wt.WorktreePath, pushErr)
+			log.WarningLog().Printf("[commitAndPushItemWorktrees] push failed path=%s: %v", wt.WorktreePath, pushErr)
 		}
 	}
 }
@@ -924,7 +984,7 @@ func (s *BacklogService) cleanupItemWorktreesExcept(ctx context.Context, session
 		}
 		g := git.NewGitWorktreeFromStorage(wt.RepoPath, wt.WorktreePath, wt.SessionName, wt.BranchName, wt.BaseCommitSHA)
 		if cleanErr := g.Cleanup(); cleanErr != nil {
-			log.WarningLog.Printf("[cleanupItemWorktrees] failed to cleanup worktree path=%s: %v", wt.WorktreePath, cleanErr)
+			log.WarningLog().Printf("[cleanupItemWorktrees] failed to cleanup worktree path=%s: %v", wt.WorktreePath, cleanErr)
 			continue
 		}
 		// The worktree directory is gone — stop the unfinished-changes scanner
@@ -964,10 +1024,10 @@ func (s *BacklogService) archiveItemWorkSessions(ctx context.Context, sessions [
 			continue
 		}
 		if err := s.sessionStopper.ArchiveSessionByUUID(ctx, is.SessionUUID); err != nil {
-			log.WarningLog.Printf("[archiveItemWorkSessions] failed to archive session=%s: %v", is.SessionUUID, err)
+			log.WarningLog().Printf("[archiveItemWorkSessions] failed to archive session=%s: %v", is.SessionUUID, err)
 		}
 		if err := s.sessionStopper.KillTmuxPaneOnly(ctx, is.SessionUUID); err != nil {
-			log.WarningLog.Printf("[archiveItemWorkSessions] failed to kill tmux pane session=%s: %v", is.SessionUUID, err)
+			log.WarningLog().Printf("[archiveItemWorkSessions] failed to kill tmux pane session=%s: %v", is.SessionUUID, err)
 		}
 	}
 }

@@ -1,0 +1,16 @@
+{
+  "id": "handoff-summary:trigger",
+  "type": "backend",
+  "service": "HandoffSummaryService",
+  "method": "TriggerHandoffSummary",
+  "protoFile": "proto/session/v1/handoff_summary.proto",
+  "markerFound": true,
+  "handlerFile": "server/services/handoff_summary_service.go",
+  "tested": true,
+  "testIds": [
+    "TestTriggerHandoffSummary_ReturnsFailedPreconditionWhenDisabled",
+    "TestTriggerHandoffSummary_DispatchesAsyncAndReturnsGeneratingRow",
+    "TestTriggerHandoffSummary_SynthesizesPendingResponse_When_NoRowExistsYet"
+  ],
+  "lastModified": "2026-08-24T02:49:04.646013312-07:00"
+}

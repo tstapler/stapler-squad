@@ -56,7 +56,7 @@ func recordStatusEvent(ctx context.Context, evClient *ent.BacklogStatusEventClie
 		evCreate = evCreate.SetNote(note)
 	}
 	if _, err := evCreate.Save(ctx); err != nil {
-		log.ErrorLog.Printf("[recordStatusEvent] failed to record item=%s %s->%s triggeredBy=%s: %v", itemID, fromStatus, toStatus, triggeredBy, err)
+		log.ErrorLog().Printf("[recordStatusEvent] failed to record item=%s %s->%s triggeredBy=%s: %v", itemID, fromStatus, toStatus, triggeredBy, err)
 	}
 }
 
@@ -1151,8 +1151,15 @@ func updatedFieldsFromBacklogItemUpdate(update BacklogItemUpdate) []string {
 	return fields
 }
 
-// ArchiveBacklogItem sets the archived_at timestamp on a backlog item.
-func (r *EntRepository) ArchiveBacklogItem(ctx context.Context, id string) (*BacklogItemData, error) {
+// ArchiveBacklogItem sets the archived_at timestamp and status on a backlog
+// item. precondition may be nil (no CAS check — used by the pre-existing
+// UI-driven callers, which archive by explicit operator action and never
+// needed one). triggeredBy/note flow into the same BacklogStatusEvent audit
+// trail TransitionBacklogItemStatus writes, so a non-"user" trigger (e.g. an
+// agent auto-archiving a verified duplicate) is attributed correctly instead
+// of always showing as a manual action — see reportDuplicate's unclaimed-item
+// path in server/mcp/tools_backlog.go.
+func (r *EntRepository) ArchiveBacklogItem(ctx context.Context, id string, precondition *BacklogItemPrecondition, triggeredBy, note string) (*BacklogItemData, error) {
 	parsedID, err := r.resolveBacklogItemLookup(ctx, id)
 	if err != nil {
 		return nil, fmt.Errorf("%w: invalid id %q: %v", ErrNotFound, id, err)
@@ -1166,20 +1173,48 @@ func (r *EntRepository) ArchiveBacklogItem(ctx context.Context, id string) (*Bac
 		return nil, fmt.Errorf("failed to get backlog item %s: %w", id, err)
 	}
 
+	update := r.client.BacklogItem.Update().Where(backlogitem.ID(parsedID))
+	if precondition != nil {
+		if precondition.ExpectedStatus != "" {
+			update = update.Where(backlogitem.StatusEQ(precondition.ExpectedStatus))
+		}
+		if precondition.ExpectedUpdatedAt != nil {
+			update = update.Where(backlogitem.UpdatedAtEQ(*precondition.ExpectedUpdatedAt))
+		}
+	}
+
 	now := time.Now()
-	item, err := r.client.BacklogItem.UpdateOneID(parsedID).
+	affected, err := update.
 		SetArchivedAt(now).
 		SetStatus(string(BacklogStatusArchived)).
 		SetUserModifiedStatusAt(now).
 		Save(ctx)
 	if err != nil {
-		if ent.IsNotFound(err) {
-			return nil, fmt.Errorf("%w: backlog item %s", ErrNotFound, id)
-		}
 		return nil, fmt.Errorf("failed to archive backlog item %s: %w", id, err)
 	}
+	if affected == 0 {
+		// Same race disambiguation as TransitionBacklogItemStatus: re-fetch
+		// against fresh data to report whether the row vanished or the
+		// precondition no longer holds.
+		latest, getErr := r.client.BacklogItem.Get(ctx, parsedID)
+		if getErr != nil {
+			if ent.IsNotFound(getErr) {
+				return nil, fmt.Errorf("%w: backlog item %s", ErrNotFound, id)
+			}
+			return nil, fmt.Errorf("failed to get backlog item %s: %w", id, getErr)
+		}
+		if precondition != nil && precondition.ExpectedStatus != "" && latest.Status != precondition.ExpectedStatus {
+			return nil, fmt.Errorf("%w: expected status %q, got %q", ErrPreconditionFailed, precondition.ExpectedStatus, latest.Status)
+		}
+		return nil, fmt.Errorf("%w: updated_at mismatch", ErrPreconditionFailed)
+	}
 
-	recordStatusEvent(ctx, r.client.BacklogStatusEvent, parsedID, current.Status, string(BacklogStatusArchived), TriggeredByUser, "")
+	item, err := r.client.BacklogItem.Get(ctx, parsedID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to reload backlog item %s after archive: %w", id, err)
+	}
+
+	recordStatusEvent(ctx, r.client.BacklogStatusEvent, parsedID, current.Status, string(BacklogStatusArchived), triggeredBy, note)
 
 	result := backlogItemToData(item)
 
@@ -1546,7 +1581,7 @@ func (r *EntRepository) RevertChainFireClaim(ctx context.Context, id string) err
 // ListItemSessions (see server/mcp/tools_backlog.go's listItemSessionsFn doc
 // comment): EntRepository has no second real implementation to abstract
 // this over, so adding it to the interface would be pure speculation
-// (see .claude/rules/interface-pollution-checklist.md).
+// (see the `interface-pollution-checklist` skill).
 func (r *EntRepository) TransitionBacklogItemStatusWithPRFields(ctx context.Context, id string, toStatus BacklogStatus, prURL string, prNumber int, precondition *BacklogItemPrecondition, triggeredBy string) (*BacklogItemData, error) {
 	parsedID, err := r.resolveBacklogItemLookup(ctx, id)
 	if err != nil {
@@ -1661,7 +1696,7 @@ func (r *EntRepository) publishItemChangedSnapshot(item *BacklogItemData, change
 	}
 	defer func() {
 		if rec := recover(); rec != nil {
-			log.WarningLog.Printf("[EntRepository] itemChangePublisher.PublishItemChanged panicked (recovered): %v", rec)
+			log.WarningLog().Printf("[EntRepository] itemChangePublisher.PublishItemChanged panicked (recovered): %v", rec)
 		}
 	}()
 	r.itemChangePublisher.PublishItemChanged(item, change)
@@ -1690,7 +1725,7 @@ func (r *EntRepository) dispatchCallback(eventType string, payload any) {
 	}
 	defer func() {
 		if rec := recover(); rec != nil {
-			log.WarningLog.Printf("[EntRepository] callbackDispatcher.Dispatch panicked (recovered): %v", rec)
+			log.WarningLog().Printf("[EntRepository] callbackDispatcher.Dispatch panicked (recovered): %v", rec)
 		}
 	}()
 	r.callbackDispatcher.Dispatch(eventType, payload)
@@ -1725,7 +1760,7 @@ func (r *EntRepository) dispatchChainFire(item *BacklogItemData) {
 	}
 	defer func() {
 		if rec := recover(); rec != nil {
-			log.WarningLog.Printf("[EntRepository] chainFirer.Dispatch panicked (recovered): %v", rec)
+			log.WarningLog().Printf("[EntRepository] chainFirer.Dispatch panicked (recovered): %v", rec)
 		}
 	}()
 	r.chainFirer.Dispatch(item)
@@ -1761,7 +1796,7 @@ func (r *EntRepository) attachItemSessionsForPublish(ctx context.Context, data *
 	}
 	sessions, err := r.ListItemSessions(ctx, data.ID)
 	if err != nil {
-		log.WarningLog.Printf("[EntRepository] attachItemSessionsForPublish: failed to load item sessions for item %s: %v", data.ID, err)
+		log.WarningLog().Printf("[EntRepository] attachItemSessionsForPublish: failed to load item sessions for item %s: %v", data.ID, err)
 		return
 	}
 	data.ItemSessions = sessions

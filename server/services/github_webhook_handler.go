@@ -1,8 +1,11 @@
 package services
 
 import (
+	"context"
 	"net/http"
+	"slices"
 	"strings"
+	"sync"
 
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/log"
@@ -11,19 +14,47 @@ import (
 	"github.com/tstapler/stapler-squad/session/ent"
 )
 
-// GitHubWebhookHandler handles POST /webhooks/github: GitHub push-event deliveries
-// matched against enabled github_push-type Workflow rows. Concrete type, not an
-// interface — one implementation, per .claude/rules/interface-pollution-checklist.md.
-type GitHubWebhookHandler struct {
-	repo       session.WorkflowRepository
-	scheduler  *workflows.Scheduler
-	fireEvents session.TriggerFireEventRepository
-	cfg        *config.Config
+// PRFixEventRouter looks up and immediately reconciles a tracked pr_pending item for
+// a GitHub PR event. Satisfied by *session.BacklogLifecycleListener (its
+// TriggerPRFixForEvent method) — defined here, the consumer, per
+// the `interface-pollution-checklist` skill.
+type PRFixEventRouter interface {
+	TriggerPRFixForEvent(ctx context.Context, repoFullName string, prNumber int) (matched bool, err error)
 }
 
-// NewGitHubWebhookHandler constructs a GitHubWebhookHandler.
-func NewGitHubWebhookHandler(repo session.WorkflowRepository, scheduler *workflows.Scheduler, fireEvents session.TriggerFireEventRepository, cfg *config.Config) *GitHubWebhookHandler {
-	return &GitHubWebhookHandler{repo: repo, scheduler: scheduler, fireEvents: fireEvents, cfg: cfg}
+// GitHubWebhookHandler handles POST /webhooks/github: GitHub push-event deliveries
+// matched against enabled github_push-type Workflow rows, plus (Story 2.1.1)
+// check_run/workflow_run/pull_request_review/issue_comment deliveries routed to
+// handlePRFixEvent. Concrete type, not an interface — one implementation, per
+// the `interface-pollution-checklist` skill.
+type GitHubWebhookHandler struct {
+	repo        session.WorkflowRepository
+	scheduler   *workflows.Scheduler
+	fireEvents  session.TriggerFireEventRepository
+	cfg         *config.Config
+	prFixRouter PRFixEventRouter
+	selfLogin   *selfLoginCache
+
+	// firstPRFixDelivery logs once per event type on the first verified delivery of
+	// that type (see github-webhook-public-reachability.md). Read-only after
+	// construction, so safe for concurrent map reads.
+	firstPRFixDelivery map[string]*sync.Once
+}
+
+// NewGitHubWebhookHandler constructs a GitHubWebhookHandler. prFixRouter may be nil
+// (e.g. in tests that only exercise the push path, or if PR-fix wiring is
+// unavailable) — handlePRFixEvent treats a nil router as a wiring gap and persists
+// "fired_failed" rather than panicking.
+func NewGitHubWebhookHandler(repo session.WorkflowRepository, scheduler *workflows.Scheduler, fireEvents session.TriggerFireEventRepository, cfg *config.Config, prFixRouter PRFixEventRouter) *GitHubWebhookHandler {
+	firstPRFixDelivery := make(map[string]*sync.Once, len(prFixEventTypes))
+	for _, eventType := range prFixEventTypes {
+		firstPRFixDelivery[eventType] = &sync.Once{}
+	}
+	return &GitHubWebhookHandler{
+		repo: repo, scheduler: scheduler, fireEvents: fireEvents, cfg: cfg, prFixRouter: prFixRouter,
+		selfLogin:          newSelfLoginCache(),
+		firstPRFixDelivery: firstPRFixDelivery,
+	}
 }
 
 // RegisterRoutes registers the GitHub webhook endpoint on mux.
@@ -51,6 +82,22 @@ func (h *GitHubWebhookHandler) Handle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// X-GitHub-Event branching (Story 2.1.1): "" is kept as a synonym for "push" since
+	// the existing push-path tests don't set the header at all. Any of the 4 new
+	// PR-fix event types dispatch to handlePRFixEvent (server/services/github_webhook_pr_fix.go);
+	// anything else (e.g. GitHub's own "ping" delivery on webhook setup) needs no
+	// signature verification or persistence and just succeeds trivially.
+	switch eventType := r.Header.Get("X-GitHub-Event"); {
+	case eventType == "" || eventType == "push":
+		// existing logic below, unchanged.
+	case slices.Contains(prFixEventTypes, eventType):
+		h.handlePRFixEvent(w, r, payload, body, deliveryID, eventType)
+		return
+	default:
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
 	fullName, branch, ok := extractGitHubRepoAndBranch(payload)
 	if !ok {
 		persistTriggerFireEvent(ctx, h.fireEvents, session.TriggerFireEventInput{
@@ -60,21 +107,11 @@ func (h *GitHubWebhookHandler) Handle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	candidates, err := h.repo.ListByTriggerType(ctx, "github_push")
+	repoCandidates, err := h.repoCandidatesFor(ctx, fullName)
 	if err != nil {
 		log.Error("[GitHubWebhookHandler] failed to list github_push workflows", "err", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
-	}
-
-	// Narrow to enabled workflows watching this repo BEFORE decrypting any secret
-	// (Task 2.2.1b — avoid a linear decrypt-and-check over every workflow in the
-	// system).
-	var repoCandidates []*ent.Workflow
-	for _, wf := range candidates {
-		if wf.Enabled && wf.GithubRepo == fullName {
-			repoCandidates = append(repoCandidates, wf)
-		}
 	}
 
 	if len(repoCandidates) == 0 {
@@ -90,30 +127,20 @@ func (h *GitHubWebhookHandler) Handle(w http.ResponseWriter, r *http.Request) {
 	// workflow we know about and is rejected outright (AC1's "invalid signature"
 	// branch) — firing is never gated on a DIFFERENT workflow's secret than the one
 	// being fired.
-	var matched []*ent.Workflow
-	signatureVerifiedAny := false
-	for _, wf := range repoCandidates {
-		secret, err := decryptWorkflowSecret(h.cfg, wf)
-		if err != nil {
-			log.Warn("[GitHubWebhookHandler] failed to decrypt webhook secret", "slug", wf.Slug, "err", err)
-			continue
-		}
-		if !VerifyGitHubSignature(secret, body, sigHeader) {
-			continue
-		}
-		signatureVerifiedAny = true
-		if wf.GithubBranch != branch {
-			continue
-		}
-		matched = append(matched, wf)
-	}
-
-	if !signatureVerifiedAny {
+	verified := verifiedWorkflowCandidates(h.cfg, repoCandidates, body, sigHeader)
+	if len(verified) == 0 {
 		persistTriggerFireEvent(ctx, h.fireEvents, session.TriggerFireEventInput{
 			Outcome: "rejected", DeliveryID: deliveryID, ErrorMessage: "invalid signature",
 		})
 		http.Error(w, "invalid signature", http.StatusUnauthorized)
 		return
+	}
+
+	var matched []*ent.Workflow
+	for _, wf := range verified {
+		if wf.GithubBranch == branch {
+			matched = append(matched, wf)
+		}
 	}
 
 	if len(matched) == 0 {
@@ -127,6 +154,56 @@ func (h *GitHubWebhookHandler) Handle(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.WriteHeader(http.StatusOK)
+}
+
+// repoCandidatesFor lists the enabled github_push-type Workflow rows watching
+// fullName's repo — this instance's only secret-storage source for a GitHub
+// webhook. Shared by the push path (above) and the PR-fix event path
+// (verifySignatureForRepo, github_webhook_pr_fix.go).
+func (h *GitHubWebhookHandler) repoCandidatesFor(ctx context.Context, fullName string) ([]*ent.Workflow, error) {
+	candidates, err := h.repo.ListByTriggerType(ctx, "github_push")
+	if err != nil {
+		return nil, err
+	}
+	// Narrow to enabled workflows watching this repo BEFORE decrypting any secret —
+	// avoid a linear decrypt-and-check over every workflow in the system.
+	var repoCandidates []*ent.Workflow
+	for _, wf := range candidates {
+		if wf.Enabled && wf.GithubRepo == fullName {
+			repoCandidates = append(repoCandidates, wf)
+		}
+	}
+	return repoCandidates, nil
+}
+
+// verifiedWorkflowCandidates returns the subset of candidates whose own decrypted
+// secret verifies sigHeader against body. Shared by the push path and the PR-fix
+// event path so both use the identical per-candidate signature-verification loop.
+func verifiedWorkflowCandidates(cfg *config.Config, candidates []*ent.Workflow, body []byte, sigHeader string) []*ent.Workflow {
+	var verified []*ent.Workflow
+	for _, wf := range candidates {
+		secret, err := decryptWorkflowSecret(cfg, wf)
+		if err != nil {
+			log.Warn("[GitHubWebhookHandler] failed to decrypt webhook secret", "slug", wf.Slug, "err", err)
+			continue
+		}
+		if VerifyGitHubSignature(secret, body, sigHeader) {
+			verified = append(verified, wf)
+		}
+	}
+	return verified
+}
+
+// verifySignatureForRepo reports whether body/sigHeader verifies against ANY enabled
+// github_push-type Workflow row for fullName's repo (used by handlePRFixEvent — GitHub
+// signs every event type with the same secret). A non-nil error means the candidate
+// lookup itself failed (500), distinct from "no candidate verified" (401).
+func (h *GitHubWebhookHandler) verifySignatureForRepo(ctx context.Context, fullName string, body []byte, sigHeader string) (bool, error) {
+	candidates, err := h.repoCandidatesFor(ctx, fullName)
+	if err != nil {
+		return false, err
+	}
+	return len(verifiedWorkflowCandidates(h.cfg, candidates, body, sigHeader)) > 0, nil
 }
 
 // extractGitHubRepoAndBranch pulls repository.full_name and the branch name (ref with

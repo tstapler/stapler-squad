@@ -50,6 +50,12 @@ type ServerDependencies struct {
 	HistoryLinker           *session.HistoryLinker
 	ErrorRegistry           *services.ErrorRegistry
 
+	// ClaudeSettingsWatcher watches ~/.claude/settings.json (and project-level
+	// equivalents) for edits and hot-reloads their derived auto-approval rules. Started
+	// from wireDepsIntoServer with the server's lifecycle context so it stops cleanly
+	// on shutdown.
+	ClaudeSettingsWatcher *services.ClaudeSettingsWatcher
+
 	// SlackNotifier is the single shared Slack notifier instance, wired into
 	// both ReactiveQueueMgr (review-queue items) and ApprovalHandler (pending
 	// approvals) so GetDeliveryStatus reflects sends from both trigger points.
@@ -112,48 +118,62 @@ type ServerDependencies struct {
 	// dependencies are wired later via SetNotificationLister/SetTokenStore (see
 	// server.go's RunServer) — see the comment on SetNotificationLister for why.
 	SessionSummaryGenerator *session.SessionSummaryGenerator
+
+	// HandoffSummaryGenerator drives async restart-handoff-summary generation
+	// (Story 2.2.1). Nil when storage is not ent-backed, mirroring
+	// SessionSummaryGenerator.
+	HandoffSummaryGenerator *session.HandoffSummaryGenerator
+
+	// BacklogLifecycleListener drives backlog item state transitions and, via its
+	// TriggerPRFixForEvent method, satisfies services.PRFixEventRouter for the
+	// pr-event-webhooks feature (immediate PR-fix reconciliation on a GitHub
+	// webhook delivery, instead of waiting for PRStatusPoller's next tick).
+	BacklogLifecycleListener *session.BacklogLifecycleListener
 }
 
 // ToServerDeps converts RuntimeDeps to the flat ServerDependencies struct consumed
 // by NewServerWithDeps. This mirrors the projection done inside BuildDependencies.
 func (rt *RuntimeDeps) ToServerDeps() *ServerDependencies {
 	return &ServerDependencies{
-		SessionService:          rt.SessionService,
-		Storage:                 rt.Storage,
-		Instances:               rt.Instances,
-		EventBus:                rt.EventBus,
-		StatusManager:           rt.StatusManager,
-		ReviewQueue:             rt.ReviewQueue,
-		ReviewQueuePoller:       rt.ReviewQueuePoller,
-		PRStatusPoller:          rt.PRStatusPoller,
-		ReactiveQueueMgr:        rt.ReactiveQueueMgr,
-		ScrollbackManager:       rt.ScrollbackManager,
-		TmuxStreamerManager:     rt.TmuxStreamerManager,
-		ExternalDiscovery:       rt.ExternalDiscovery,
-		ExternalApprovalMonitor: rt.ExternalApprovalMonitor,
-		HistoryLinker:           rt.HistoryLinker,
-		ErrorRegistry:           rt.ErrorRegistry,
-		SlackNotifier:           rt.SlackNotifier,
-		UnfinishedScanner:       rt.UnfinishedScanner,
-		UnfinishedStateStore:    rt.UnfinishedStateStore,
-		UnfinishedWorkService:   rt.UnfinishedWorkService,
-		WorktreePRPoller:        rt.WorktreePRPoller,
-		UserPRCache:             rt.UserPRCache,
-		GitHubUserService:       rt.GitHubUserService,
-		InsightsService:         rt.InsightsService,
-		BacklogService:          rt.BacklogService,
-		QuotaGate:               rt.QuotaGate,
-		SyncLoop:                rt.SyncLoop,
-		BacklogEnabledCheck:     rt.BacklogEnabledCheck,
-		AnalyticsEntClient:      rt.AnalyticsEntClient,
-		VNCDeps:                 rt.VNCDeps,
-		CDPDeps:                 rt.CDPDeps,
-		HeadlessPool:            rt.HeadlessPool,
-		WorkflowRepo:            rt.WorkflowRepo,
-		WorkflowScheduler:       rt.WorkflowScheduler,
-		TriggerFireEventRepo:    rt.TriggerFireEventRepo,
-		Registry:                rt.Registry,
-		SessionSummaryGenerator: rt.SessionSummaryGenerator,
+		SessionService:           rt.SessionService,
+		Storage:                  rt.Storage,
+		Instances:                rt.Instances,
+		EventBus:                 rt.EventBus,
+		StatusManager:            rt.StatusManager,
+		ReviewQueue:              rt.ReviewQueue,
+		ReviewQueuePoller:        rt.ReviewQueuePoller,
+		PRStatusPoller:           rt.PRStatusPoller,
+		ReactiveQueueMgr:         rt.ReactiveQueueMgr,
+		ScrollbackManager:        rt.ScrollbackManager,
+		TmuxStreamerManager:      rt.TmuxStreamerManager,
+		ExternalDiscovery:        rt.ExternalDiscovery,
+		ExternalApprovalMonitor:  rt.ExternalApprovalMonitor,
+		HistoryLinker:            rt.HistoryLinker,
+		ErrorRegistry:            rt.ErrorRegistry,
+		ClaudeSettingsWatcher:    rt.ClaudeSettingsWatcher,
+		SlackNotifier:            rt.SlackNotifier,
+		UnfinishedScanner:        rt.UnfinishedScanner,
+		UnfinishedStateStore:     rt.UnfinishedStateStore,
+		UnfinishedWorkService:    rt.UnfinishedWorkService,
+		WorktreePRPoller:         rt.WorktreePRPoller,
+		UserPRCache:              rt.UserPRCache,
+		GitHubUserService:        rt.GitHubUserService,
+		InsightsService:          rt.InsightsService,
+		BacklogService:           rt.BacklogService,
+		QuotaGate:                rt.QuotaGate,
+		SyncLoop:                 rt.SyncLoop,
+		BacklogEnabledCheck:      rt.BacklogEnabledCheck,
+		AnalyticsEntClient:       rt.AnalyticsEntClient,
+		VNCDeps:                  rt.VNCDeps,
+		CDPDeps:                  rt.CDPDeps,
+		HeadlessPool:             rt.HeadlessPool,
+		WorkflowRepo:             rt.WorkflowRepo,
+		WorkflowScheduler:        rt.WorkflowScheduler,
+		TriggerFireEventRepo:     rt.TriggerFireEventRepo,
+		Registry:                 rt.Registry,
+		SessionSummaryGenerator:  rt.SessionSummaryGenerator,
+		HandoffSummaryGenerator:  rt.HandoffSummaryGenerator,
+		BacklogLifecycleListener: rt.BacklogLifecycleListener,
 	}
 }
 
@@ -406,6 +426,10 @@ type RuntimeDeps struct {
 	HistoryLinker           *session.HistoryLinker
 	ErrorRegistry           *services.ErrorRegistry
 
+	// ClaudeSettingsWatcher (see the identically-named field on ServerDependencies for
+	// its full doc comment).
+	ClaudeSettingsWatcher *services.ClaudeSettingsWatcher
+
 	// SlackNotifier is the single shared Slack notifier instance (see the
 	// identically-named field on ServerDependencies for its full doc comment).
 	SlackNotifier *services.SlackNotifier
@@ -464,6 +488,15 @@ type RuntimeDeps struct {
 	// SessionSummaryGenerator drives async session-completion-summary generation.
 	// Nil when storage is not ent-backed.
 	SessionSummaryGenerator *session.SessionSummaryGenerator
+
+	// HandoffSummaryGenerator drives async restart-handoff-summary generation
+	// (Story 2.2.1). Nil when storage is not ent-backed.
+	HandoffSummaryGenerator *session.HandoffSummaryGenerator
+
+	// BacklogLifecycleListener satisfies services.PRFixEventRouter for the
+	// pr-event-webhooks feature — see the identical field's doc comment on
+	// ServerDependencies above.
+	BacklogLifecycleListener *session.BacklogLifecycleListener
 }
 
 // reviewQueueLookupAdapter adapts session.Storage's ItemSession/ReviewVerdict
@@ -641,6 +674,18 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		log.Warn("session summary generation unavailable: storage is not ent-backed")
 	}
 
+	// HandoffSummaryGenerator (Story 2.2.1) — same construction/nil-guard shape
+	// as sessionSummaryGenerator just above. No SetSessionSummaryGenerator-style
+	// wiring onto sessionService needed: unlike SessionSummaryGenerator, nothing
+	// in the live-instance lifecycle dispatches handoff-summary generation —
+	// it's only triggered on demand via HandoffSummaryService's RPC handlers.
+	var handoffSummaryGenerator *session.HandoffSummaryGenerator
+	if entClient := storage.GetEntClient(); entClient != nil {
+		handoffSummaryGenerator = session.NewHandoffSummaryGenerator(entClient, headlessPool)
+	} else {
+		log.Warn("handoff summary generation unavailable: storage is not ent-backed")
+	}
+
 	// Backlog lifecycle listener — always created, enabled state set from config below.
 	// The pool is passed at construction time to close the race window that existed when
 	// SetHeadlessPool was called hundreds of lines after instance wiring.
@@ -710,7 +755,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
-				log.ErrorLog.Printf("[startup] panic in background init goroutine: %v", r)
+				log.ErrorLog().Printf("[startup] panic in background init goroutine: %v", r)
 			}
 		}()
 		// Step 6: start tmux sessions for loaded instances (non-fatal failures).
@@ -725,6 +770,9 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 					log.Error("failed to start loaded instance", "session", inst.Title, "err", err)
 				} else {
 					log.Info("started loaded instance", "session", inst.Title)
+					// Lets waitForInstanceStartedEvent (connectrpc_websocket.go) unblock a
+					// connection that raced this loop's stagger, instead of only polling.
+					eventBus.Publish(events.NewSessionUpdatedEvent(inst, []string{"status"}))
 				}
 			}
 		}
@@ -742,6 +790,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 					log.Warn("Reconcile: hot-restore failed", "session", inst.Title, "err", err)
 				} else {
 					log.Info("Reconcile: restored session (was Stopped, now Running)", "session", inst.Title)
+					eventBus.Publish(events.NewSessionUpdatedEvent(inst, []string{"status"}))
 				}
 			}
 		}
@@ -1064,30 +1113,20 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	var tokenStore *tokens.TokenStore
 	var historyDir string
 	if homeDirErr == nil {
-		historyDir = filepath.Join(homeDir, ".claude", "projects")
-		if config.IsIsolatedInstance() {
-			// An isolated test/demo instance (go test binary, named instance,
-			// or STAPLER_SQUAD_TEST_DIR harness) must not walk the real,
-			// unbounded ~/.claude/projects tree below via TokenStore.Start /
-			// ArtifactExtractor.Start — on a dev machine with a long Claude
-			// Code history this is thousands of real JSONL files, some large,
-			// which overflows TokenStore's bounded parse queue and made the
-			// walk+parse take 100s-1500s+ in CI, well past any reasonable
-			// test timeout. Same hazard class as IsIsolatedInstance's other
-			// documented case (shared tmux socket); here the isolated
-			// resource is the config dir, so point historyDir there instead
-			// — the directory starts empty, so TokenStore/ArtifactExtractor
-			// stay fully functional (against test fixtures) without ever
-			// touching real session data.
-			if configDir, cfgErr := config.GetConfigDir(); cfgErr == nil {
-				historyDir = filepath.Join(configDir, "claude-projects")
-			}
-		}
+		// Under test isolation this resolves inside the isolated config dir
+		// rather than the operator's real ~/.claude/projects, which
+		// TokenStore.Start / ArtifactExtractor.Start would otherwise walk in
+		// full. See config.ResolveClaudeHistoryDir for the full rationale;
+		// session.NewHistoryLinkerFromRealInspector's fsnotify watcher
+		// resolves the same directory through the same helper.
+		historyDir, homeDirErr = config.ResolveClaudeHistoryDir(homeDir, config.IsIsolatedInstance())
+	}
+	if homeDirErr == nil {
 		tokenStore = tokens.NewTokenStore(historyDir)
 		historyLinker.RegisterFileCallback(tokenStore.OnHistoryFileChanged)
 		tokenStore.Start(context.Background())
 	} else {
-		log.Warn("could not determine home dir for InsightsService token store", "err", homeDirErr)
+		log.Warn("could not resolve Claude history dir for InsightsService token store", "err", homeDirErr)
 	}
 
 	// Build the BacklogController and initialize its enabled state from config.
@@ -1152,6 +1191,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	backlogSvc := services.NewBacklogService(storage, sessionService, cfg, workflowEngine, pipelineEngine, pipelineModeRepo)
 	backlogSvc.SetEventBus(eventBus)
 	backlogSvc.SetSessionStopper(sessionService)
+	backlogSvc.SetSessionSteerer(sessionService)
 	backlogSvc.SetAutonomousDriverStarter(sessionService)
 	if unfinishedScanner != nil {
 		backlogSvc.SetRepoWatchRemover(unfinishedScanner)
@@ -1271,6 +1311,12 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	sessionService.SetResolveConversationUUID(storage.GetClaudeConversationUUIDBySessionUUID)
 	sessionService.SetFeatureController("backlog", backlogCtrl)
 	sessionService.SetStatusDetailProvider("backlog", quotaGate.StatusDetail)
+	// Read-only visibility for the restart-with-handoff-summary feature (see
+	// services.HandoffSummaryFeatureController's doc comment): lets the frontend
+	// discover config.json's handoff_summary.enabled up front via GetFeatureFlags,
+	// instead of only finding out disabled on the first TriggerHandoffSummary
+	// call's Code.FailedPrecondition.
+	sessionService.SetFeatureController("handoff-summary", services.HandoffSummaryFeatureController{})
 
 	// Check VNC dependencies once at startup so the server knows whether browser
 	// passthrough is available on this host. Non-fatal: Missing deps log a warning.
@@ -1452,38 +1498,41 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	}()
 
 	return &RuntimeDeps{
-		HeadlessPool:            headlessPool,
-		ServiceDeps:             svc,
-		Instances:               instances,
-		ReactiveQueueMgr:        reactiveQueueMgr,
-		ScrollbackManager:       scrollbackManager,
-		TmuxStreamerManager:     tmuxStreamerManager,
-		ExternalDiscovery:       externalDiscovery,
-		ExternalApprovalMonitor: externalApprovalMonitor,
-		PRStatusPoller:          svc.PRStatusPoller,
-		HistoryLinker:           historyLinker,
-		ErrorRegistry:           svc.ErrorRegistry,
-		SlackNotifier:           slackNotifier,
-		UnfinishedScanner:       unfinishedScanner,
-		UnfinishedStateStore:    unfinishedStateStore,
-		UnfinishedWorkService:   unfinishedWorkSvc,
-		WorktreePRPoller:        worktreePRPoller,
-		UserPRCache:             userPRCache,
-		GitHubUserService:       githubUserSvc,
-		InsightsService:         insightsSvc,
-		BacklogService:          backlogSvc,
-		QuotaGate:               quotaGate,
-		SyncLoop:                nil, // managed by BacklogController
-		BacklogEnabledCheck:     backlogCtrl.IsEnabled,
-		Config:                  cfg,
-		AnalyticsEntClient:      analyticsClient,
-		VNCDeps:                 vncDeps,
-		CDPDeps:                 cdpDeps,
-		WorkflowRepo:            workflowRepo,
-		WorkflowScheduler:       workflowScheduler,
-		TriggerFireEventRepo:    triggerFireEventRepo,
-		Registry:                svc.Registry,
-		SessionSummaryGenerator: sessionSummaryGenerator,
+		HeadlessPool:             headlessPool,
+		ServiceDeps:              svc,
+		Instances:                instances,
+		ReactiveQueueMgr:         reactiveQueueMgr,
+		ScrollbackManager:        scrollbackManager,
+		TmuxStreamerManager:      tmuxStreamerManager,
+		ExternalDiscovery:        externalDiscovery,
+		ExternalApprovalMonitor:  externalApprovalMonitor,
+		PRStatusPoller:           svc.PRStatusPoller,
+		HistoryLinker:            historyLinker,
+		ErrorRegistry:            svc.ErrorRegistry,
+		ClaudeSettingsWatcher:    sessionService.GetClaudeSettingsWatcher(),
+		SlackNotifier:            slackNotifier,
+		UnfinishedScanner:        unfinishedScanner,
+		UnfinishedStateStore:     unfinishedStateStore,
+		UnfinishedWorkService:    unfinishedWorkSvc,
+		WorktreePRPoller:         worktreePRPoller,
+		UserPRCache:              userPRCache,
+		GitHubUserService:        githubUserSvc,
+		InsightsService:          insightsSvc,
+		BacklogService:           backlogSvc,
+		QuotaGate:                quotaGate,
+		SyncLoop:                 nil, // managed by BacklogController
+		BacklogEnabledCheck:      backlogCtrl.IsEnabled,
+		Config:                   cfg,
+		AnalyticsEntClient:       analyticsClient,
+		VNCDeps:                  vncDeps,
+		CDPDeps:                  cdpDeps,
+		WorkflowRepo:             workflowRepo,
+		WorkflowScheduler:        workflowScheduler,
+		TriggerFireEventRepo:     triggerFireEventRepo,
+		Registry:                 svc.Registry,
+		SessionSummaryGenerator:  sessionSummaryGenerator,
+		HandoffSummaryGenerator:  handoffSummaryGenerator,
+		BacklogLifecycleListener: backlogLifecycleListener,
 	}, nil
 }
 
