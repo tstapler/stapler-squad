@@ -1,0 +1,15 @@
+{
+  "id": "RetrySession",
+  "type": "backend",
+  "service": "SessionService",
+  "method": "RetrySession",
+  "protoFile": "proto/session/v1/session.proto",
+  "markerFound": false,
+  "tested": true,
+  "testIds": [
+    "TestSessionService_RetrySession_should_ReturnInvalidArgument_When_IDEmpty",
+    "TestSessionService_RetrySession_should_ReturnNotFound_When_SessionDoesNotExist",
+    "TestSessionService_RetrySession_should_ReturnFailedPrecondition_When_RetryAlreadyInFlight"
+  ],
+  "lastModified": "2026-08-29T12:14:33.557295529-07:00"
+}

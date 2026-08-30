@@ -198,10 +198,18 @@ type mockSessionStopper struct {
 	// onSessionExited's already-ended guard has something to observe once
 	// the (real) tmux kill asynchronously fires the exit event).
 	onKillTmuxPaneOnly func(uuid string)
+	// retryPendingUUIDs maps a session UUID to the IsRetryPending result it
+	// should report. Absent (or false) means no retry pending — the default
+	// for every existing test, preserving prior behavior.
+	retryPendingUUIDs map[string]bool
 }
 
 func (m *mockSessionStopper) IsSessionLive(uuid string) bool {
 	return m.liveUUIDs[uuid]
+}
+
+func (m *mockSessionStopper) IsRetryPending(uuid string) bool {
+	return m.retryPendingUUIDs[uuid]
 }
 
 func (m *mockSessionStopper) TimeSinceLastMeaningfulOutput(uuid string) (time.Duration, bool) {
@@ -2031,6 +2039,49 @@ func TestRemediateStaleWorkSession_should_killTombstoneAndRespawn_When_ActiveWor
 	}
 	assert.True(t, staleEnded, "the stale session must be tombstoned (EndedAt set)")
 	assert.True(t, newOpen, "the newly-spawned work session must be open")
+}
+
+// TestRemediateStaleWorkSession_should_Defer_When_AutomatedRetryAlreadyPending
+// is the AC8 regression test for session-retry-backoff's double-remediation
+// fix: if the driver's own configurable retry policy already has a restart
+// claimed or scheduled for this exact session (IsRetryPending), remediation
+// must defer rather than killing the pane and respawning a second recovery
+// path racing the first.
+func TestRemediateStaleWorkSession_should_Defer_When_AutomatedRetryAlreadyPending(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	creator := &mockSessionCreator{}
+	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
+	stopper := &mockSessionStopper{
+		liveUUIDs:         map[string]bool{"stale-work-session-uuid": true},
+		retryPendingUUIDs: map[string]bool{"stale-work-session-uuid": true},
+	}
+	svc.SetSessionStopper(stopper)
+
+	repoPath := t.TempDir()
+	initGitRepoWithCommit(t, repoPath)
+
+	itemID := createReadyItemForSpawn(t, svc, repoPath, "item with a session already mid-automated-retry")
+
+	_, err := storage.CreateItemSession(t.Context(), session.ItemSessionData{
+		ItemID:      itemID,
+		SessionUUID: "stale-work-session-uuid",
+		SessionRole: session.SessionRoleWork,
+	})
+	require.NoError(t, err)
+	_, err = storage.TransitionBacklogItemStatus(t.Context(), itemID, session.BacklogStatusInProgress, nil, session.TriggeredBySystem)
+	require.NoError(t, err)
+
+	remediateErr := svc.RemediateStaleWorkSession(t.Context(), itemID)
+	require.NoError(t, remediateErr)
+
+	assert.Empty(t, stopper.killedPaneUUIDs, "must not kill the pane while an automated retry is already pending for it")
+	assert.Empty(t, creator.calls, "must not respawn a second work session while the driver's own retry is already recovering it")
+
+	sessions, err := storage.ListItemSessions(t.Context(), itemID)
+	require.NoError(t, err)
+	require.Len(t, sessions, 1)
+	assert.Nil(t, sessions[0].EndedAt, "the session must be left alone, not tombstoned")
 }
 
 // TestRemediateStaleWorkSession_should_EndSessionBeforeKillingPane_When_ActiveWorkSessionIsStale

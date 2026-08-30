@@ -33,7 +33,7 @@ export type PeerLifecycle = "active" | "stuck" | "gone";
  * its goal hasn't been touched in a while. Exported for direct unit testing.
  */
 export function peerLifecycle(peer: Session, nowMs: number): PeerLifecycle {
-  if (peer.status === SessionStatus.STOPPED) return "gone";
+  if (peer.status === SessionStatus.STOPPED || peer.status === SessionStatus.PERMANENTLY_FAILED) return "gone";
   const updatedAt = peer.goal?.updatedAt;
   if (updatedAt) {
     const updatedMs = Number(updatedAt.seconds) * 1000;

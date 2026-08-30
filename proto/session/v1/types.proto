@@ -253,6 +253,28 @@ message Session {
   // Count of active background agents/shells/monitors from the WaitingForAgent detector.
   // Only meaningful when detected_status == DETECTED_STATUS_WAITING_FOR_AGENT; 0 otherwise.
   int32 subagent_count = 75;
+
+  // Number of automated retry attempts consumed in the current failure
+  // episode (session-retry-backoff). 0 means no retry has occurred yet.
+  int32 retry_attempt = 76;
+  // The policy-resolved cap on retry_attempt, snapshotted at driver start.
+  int32 retry_max_attempts = 77;
+  // Most recent automated-retry failure reason: "crashed", "stalled", or
+  // "tmux_exited". Empty if no retry has occurred yet.
+  string last_failure_reason = 78;
+  // When the next backed-off automated restart is due. Unset if no retry is
+  // currently pending.
+  google.protobuf.Timestamp next_retry_at = 79;
+  // Reason + timestamp per past automated or manual retry attempt, newest
+  // last, capped at 10 entries.
+  repeated RetryAttemptRecord retry_history = 80;
+}
+
+// RetryAttemptRecord is one entry in Session.retry_history.
+message RetryAttemptRecord {
+  int32 attempt = 1;
+  string reason = 2;
+  google.protobuf.Timestamp timestamp = 3;
 }
 
 // SessionArtifacts holds structured artifacts extracted from the session's
@@ -369,6 +391,11 @@ enum SessionStatus {
   // completion. Not auto-recovered; requires an explicit resume (see
   // ResumeCrashedSession).
   SESSION_STATUS_CRASHED = 10;
+  // Session's configurable crash/stall retry policy (session-retry-backoff)
+  // exhausted its attempt budget, or the failure reason wasn't eligible for
+  // retry at all. Terminal state pending human action via "Retry now"
+  // (RetrySession RPC) — unlike STOPPED, not auto-revived by reconciliation.
+  SESSION_STATUS_PERMANENTLY_FAILED = 11;
 }
 
 // SessionType determines the session workflow.

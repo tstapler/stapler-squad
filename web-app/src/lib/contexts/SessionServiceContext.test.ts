@@ -49,6 +49,7 @@ describe("SessionServiceContext", () => {
       resumeHibernatedSession: jest.fn(),
       renameSession: jest.fn(),
       restartSession: jest.fn(),
+      retrySession: jest.fn(),
       clearConversationState: jest.fn(),
       acknowledgeSession: jest.fn(),
       createCheckpoint: jest.fn(),

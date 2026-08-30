@@ -664,6 +664,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	// Warren is designed for named scalar setters, not loop iterations. Left unwrapped.
 	for _, inst := range instances {
 		inst.SetReviewQueue(reviewQueue)
+		inst.SetNotifier(&services.EventBusNotifier{Bus: eventBus})
 		inst.SetStatusManager(statusManager)
 		backlogLifecycleListener.WireToInstance(inst)
 		if sessionSummaryGenerator != nil {
@@ -900,6 +901,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		}
 		// Wire dependencies so the external session appears in the review queue
 		instance.SetReviewQueue(reviewQueue)
+		instance.SetNotifier(&services.EventBusNotifier{Bus: eventBus})
 		instance.SetStatusManager(statusManager)
 		reviewQueuePoller.AddInstance(instance)
 		svc.PRStatusPoller.AddInstance(instance)

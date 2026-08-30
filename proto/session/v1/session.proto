@@ -104,6 +104,7 @@ service SessionService {
   // RestartSession restarts a session by killing and recreating the tmux session.
   // Optionally preserves terminal output for debugging purposes.
   rpc RestartSession(RestartSessionRequest) returns (RestartSessionResponse) {}
+  rpc RetrySession(RetrySessionRequest) returns (RetrySessionResponse) {}
 
   // GetWorkspaceInfo retrieves VCS and workspace information for a session.
   // Returns VCS type (Git/JJ), current branch, revision, and uncommitted changes status.
@@ -643,6 +644,10 @@ message CreateSessionRequest {
   // a selected launcher preset's argv[1:]; safe for elements containing spaces or shell
   // metacharacters (e.g. a remote-exec fragment like "cd ~/repo && exec claude").
   repeated string extra_args = 30;
+
+  // Optional: per-session override for the global default retry policy
+  // (session-retry-backoff). Unset fields inherit the resolved global value.
+  optional RetryPolicyConfig retry_policy_override = 31;
 }
 
 message CreateSessionResponse {
@@ -1304,6 +1309,26 @@ message RestartSessionResponse {
   string message = 3;
 }
 
+// RetrySessionRequest immediately restarts a session's configurable retry
+// policy (session-retry-backoff), bypassing any pending backoff delay —
+// including from SESSION_STATUS_PERMANENTLY_FAILED.
+message RetrySessionRequest {
+  // Session identifier (uses session title as ID).
+  string id = 1;
+}
+
+// RetrySessionResponse indicates whether the manual retry was accepted.
+message RetrySessionResponse {
+  // Retried session.
+  Session session = 1;
+
+  // Whether the retry was accepted.
+  bool success = 2;
+
+  // Human-readable message (error details if failed).
+  string message = 3;
+}
+
 // GetWorkspaceInfoRequest retrieves VCS information for a session.
 message GetWorkspaceInfoRequest {
   // Session identifier.
@@ -1847,6 +1872,21 @@ message SessionDefaultsConfig {
   int32 stale_session_threshold_minutes = 12;
   // Whether crossing the stale threshold also emits a notification.
   bool stale_session_notify_enabled = 13;
+  // Global default configurable crash/stall retry policy
+  // (session-retry-backoff). Always the resolved value in responses.
+  RetryPolicyConfig retry_policy = 14;
+}
+
+// RetryPolicyConfig describes the automated crash/stall retry policy: how
+// many attempts, what backoff, and which failure reasons are eligible.
+message RetryPolicyConfig {
+  bool enabled = 1;
+  int32 max_attempts = 2;
+  string backoff = 3;
+  int32 initial_delay_seconds = 4;
+  int32 max_delay_seconds = 5;
+  repeated string retry_on = 6;
+  bool stale_triggers_retry = 7;
 }
 
 // GetSessionDefaults
@@ -1910,6 +1950,10 @@ message UpdateGlobalDefaultsRequest {
   // 0 = use the server default. See SessionDefaultsConfig.stale_session_threshold_minutes.
   int32 stale_session_threshold_minutes = 10;
   bool stale_session_notify_enabled = 11;
+  // Global default configurable crash/stall retry policy
+  // (session-retry-backoff). Applies to newly-started retry episodes only —
+  // a session already mid-backoff keeps the policy it started with.
+  RetryPolicyConfig retry_policy = 12;
 }
 
 message UpdateGlobalDefaultsResponse {

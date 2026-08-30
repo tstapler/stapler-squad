@@ -371,6 +371,10 @@ type Config struct {
 	// StaleSession holds configuration for stale-session detection (inactivity threshold
 	// and notify-on-stale toggle).
 	StaleSession StaleSessionConfig `json:"stale_session,omitempty"`
+	// RetryPolicy holds the global default configurable crash/stall retry
+	// policy (attempts, backoff, eligible failure reasons). May be overridden
+	// per-session via session.Instance.RetryPolicyOverride.
+	RetryPolicy RetryPolicyConfig `json:"retry_policy,omitempty"`
 	// Callbacks holds the global singleton outbound-callback URLs (webhook-triggers
 	// Phase 5, FR7) fired by CallbackDispatcher on session-complete/session-stale/
 	// queue-item-created lifecycle events.
@@ -1056,6 +1060,11 @@ func LoadConfigFromPath(path string) (*Config, error) {
 		one := 1.0
 		cfg.EscapeAnalyticsSamplingRate = &one
 	}
+
+	// Normalize RetryPolicy.Backoff at load time: an illegal/typo'd value would
+	// otherwise silently behave identically to "exponential" forever with no
+	// signal that the field doesn't do anything.
+	cfg.RetryPolicy.Backoff = cfg.RetryPolicy.BackoffOrWarn()
 
 	// Unmarshaling produces a zero Config with no executor; initialize it now
 	// so GetClaudeCommand / GetAvailablePrograms don't panic on nil executor.

@@ -1989,6 +1989,17 @@ func (s *BacklogService) RemediateStaleWorkSession(ctx context.Context, itemID s
 		return s.AutoRespawnAutonomousWork(ctx, itemID)
 	}
 
+	// Defer to the driver's own automated retry machinery
+	// (session-retry-backoff) rather than racing it: if a retry is already
+	// claimed or scheduled for this exact session, its process-level recovery
+	// is already in progress — killing the pane and respawning here would be
+	// the double-remediation risk this AC exists to close, not a genuine
+	// second recovery path.
+	if s.sessionStopper != nil && s.sessionStopper.IsRetryPending(active.SessionUUID) {
+		log.InfoLog.Printf("[RemediateStaleWorkSession] item=%s session=%s: deferring — an automated retry is already in flight/scheduled for this session", itemID, active.SessionUUID)
+		return nil
+	}
+
 	// End the ItemSession row BEFORE killing the pane (BUG-064 — see doc
 	// comment above): this ordering is what lets onSessionExited's
 	// already-ended guard close the race with AutoRespawnAutonomousWork below.

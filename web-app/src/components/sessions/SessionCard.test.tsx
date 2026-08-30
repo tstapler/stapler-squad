@@ -156,3 +156,40 @@ describe("SessionCard — stale badge", () => {
     expect(badge).toHaveClass(String(staleBadge));
   });
 });
+
+describe("SessionCard — retry badge and permanently-failed status", () => {
+  it("SessionCard_should_NotRenderRetryBadge_When_RetryAttemptIsZero", () => {
+    const session = { ...minimalSession, retryAttempt: 0, retryMaxAttempts: 3 } as unknown as Session;
+    render(<SessionCard session={session} />);
+    expect(screen.queryByLabelText(/Retry attempt/)).toBeNull();
+  });
+
+  it("SessionCard_should_RenderRetryBadgeAfterReviewQueueBadge_When_RetryAttemptPositive", () => {
+    const session = { ...minimalSession, retryAttempt: 2, retryMaxAttempts: 3 } as unknown as Session;
+    render(<SessionCard session={session} />);
+    const badge = screen.getByLabelText("Retry attempt 2 of 3");
+    expect(badge).toBeInTheDocument();
+  });
+
+  it("SessionCard_should_ExposeFullSentenceAriaLabel_When_StatusIsPermanentlyFailed", () => {
+    const session = {
+      ...minimalSession,
+      status: SessionStatus.PERMANENTLY_FAILED,
+      retryMaxAttempts: 3,
+    } as unknown as Session;
+    render(<SessionCard session={session} />);
+    expect(screen.getByLabelText("Session status: Failed — gave up after 3 attempts")).toBeInTheDocument();
+  });
+
+  it("PermanentlyFailed with the default max_attempts=1 policy still shows both badges (attempt count is non-zero)", () => {
+    const session = {
+      ...minimalSession,
+      status: SessionStatus.PERMANENTLY_FAILED,
+      retryAttempt: 1,
+      retryMaxAttempts: 1,
+    } as unknown as Session;
+    render(<SessionCard session={session} />);
+    expect(screen.getByLabelText("Retry attempt 1 of 1")).toBeInTheDocument();
+    expect(screen.getByLabelText("Session status: Failed — gave up after 1 attempt")).toBeInTheDocument();
+  });
+});

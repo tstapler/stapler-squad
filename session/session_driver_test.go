@@ -362,7 +362,13 @@ func TestMarkSessionNeedsAttention_NilReviewQueue(t *testing.T) {
 	markSessionNeedsAttention(inst, "test reason")
 }
 
-// UT-17: TestSessionDriver_SecondFailure_MarksNeedsAttention — second failure adds to ReviewQueue.
+// UT-17: TestSessionDriver_SecondFailure_MarksNeedsAttention — a failure with
+// an already-exhausted retry budget transitions to PermanentlyFailed and adds
+// to the ReviewQueue (re-derived for the RetryState/RetryPolicy machinery per
+// .claude/rules/fix-flaky-tests-dont-defer.md's spirit: the equivalent
+// assertion, not a relaxed one — this test previously simulated "already
+// retried once" via a bare atomic.Bool; the same intent is now expressed as
+// RetryState already at its resolved cap).
 func TestSessionDriver_SecondFailure_MarksNeedsAttention(t *testing.T) {
 	t.Parallel()
 	rq := NewReviewQueue()
@@ -372,11 +378,15 @@ func TestSessionDriver_SecondFailure_MarksNeedsAttention(t *testing.T) {
 		reviewQueue: rq,
 		Status:      Stopped,
 	}
+	inst.RetryAttempt = 1
+	inst.RetryMaxAttempts = 1 // already at cap — next failure is exhausted
 
-	var retried atomic.Bool
-	retried.Store(true) // already retried once
+	policy := RetryPolicy{Enabled: true, MaxAttempts: 1, RetryOn: []string{"crashed", "stalled", "tmux_exited"}}
+	handleDriverFailure(inst, "/tmp", policy, "unexpected exit", make(chan struct{}))
 
-	handleDriverFailure(inst, "/tmp", &retried, "unexpected exit", make(chan struct{}))
+	if inst.Status != PermanentlyFailed {
+		t.Errorf("Status = %v, want PermanentlyFailed", inst.Status)
+	}
 
 	// ReviewQueue should have an entry for this session.
 	item, found := rq.Get(inst.UUID)
@@ -831,11 +841,11 @@ func TestSessionDriver_StuckDialogAnswersBoundedNotUnbounded(t *testing.T) {
 	}
 	inst.started.Store(true)
 
-	var retried atomic.Bool
+	policy := RetryPolicy{Enabled: true, MaxAttempts: 1, RetryOn: []string{"crashed", "stalled", "tmux_exited"}}
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		runSessionDriverWithPrompt(inst, "/tmp", driverInitialPrompt, &retried, make(chan struct{}))
+		runSessionDriverWithPrompt(inst, "/tmp", driverInitialPrompt, policy, make(chan struct{}))
 	}()
 
 	// 6 ticks — double Phase 0's original 3-tick window — to prove the count
@@ -890,11 +900,11 @@ func TestSessionDriver_TailSliceBoundsDialogMatchAndHash(t *testing.T) {
 	}
 	inst.started.Store(true)
 
-	var retried atomic.Bool
+	policy := RetryPolicy{Enabled: true, MaxAttempts: 1, RetryOn: []string{"crashed", "stalled", "tmux_exited"}}
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		runSessionDriverWithPrompt(inst, "/tmp", driverInitialPrompt, &retried, make(chan struct{}))
+		runSessionDriverWithPrompt(inst, "/tmp", driverInitialPrompt, policy, make(chan struct{}))
 	}()
 
 	time.Sleep(driverPollInterval*6 + 500*time.Millisecond)
@@ -1188,13 +1198,14 @@ func TestSessionDriver_DialogGaveUp_FallsThroughToInactivityEscalation(t *testin
 	}
 	inst.started.Store(true)
 
-	var retried atomic.Bool
-	retried.Store(true) // simulate "already retried once" so the second-failure path fires directly
+	inst.RetryAttempt = 1
+	inst.RetryMaxAttempts = 1 // already at cap — simulates "already retried once" so the second-failure path fires directly
+	policy := RetryPolicy{Enabled: true, MaxAttempts: 1, RetryOn: []string{"crashed", "stalled", "tmux_exited"}}
 
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		runSessionDriverWithPrompt(inst, "/tmp", driverInitialPrompt, &retried, make(chan struct{}))
+		runSessionDriverWithPrompt(inst, "/tmp", driverInitialPrompt, policy, make(chan struct{}))
 	}()
 	defer func() {
 		inst.mu.Lock()

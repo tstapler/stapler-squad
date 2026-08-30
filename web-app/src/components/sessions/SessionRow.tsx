@@ -49,6 +49,7 @@ interface SessionRowProps {
   onOpenInNewPane?: () => void;
   onNewWorkspace?: () => void;
   onRestart?: (sessionId: string) => Promise<boolean | void>;
+  onRetryNow?: (sessionId: string) => Promise<boolean | void>;
   onCreateCheckpoint?: (sessionId: string, label: string) => Promise<boolean>;
   onRunOneShot?: (sessionId: string) => Promise<void>;
   onSetRateLimitEnabled?: (sessionId: string, enabled: boolean) => void;
@@ -97,6 +98,8 @@ function getStatusDotValue(status: SessionStatus): string {
     case SessionStatus.HIBERNATED:
       return "hibernated";
     case SessionStatus.CRASHED:
+      return "crashed";
+    case SessionStatus.PERMANENTLY_FAILED:
       return "crashed";
     default:
       return "idle";
@@ -157,7 +160,7 @@ function SessionRowInner({
   session, onClick,
   onPause, onResume, onDelete,
   onClone, onOpenInNewPane, onNewWorkspace,
-  onRestart, onCreateCheckpoint, onRunOneShot,
+  onRestart, onRetryNow, onCreateCheckpoint, onRunOneShot,
   onSetRateLimitEnabled, onToggleAutonomousMode, onToggleAutoApprove, onSteerAutonomousSession, onClearConversationState, onUpdateTags,
   onHibernate, onResumeFromHibernation,
   suppressApprovalSubStatus = false,
@@ -433,6 +436,7 @@ function SessionRowInner({
           onOpenInNewPane={onOpenInNewPane}
           onNewWorkspace={onNewWorkspace}
           onRestart={onRestart}
+          onRetryNow={onRetryNow}
           onCreateCheckpoint={onCreateCheckpoint}
           onRunOneShot={onRunOneShot}
           onSetRateLimitEnabled={onSetRateLimitEnabled}

@@ -116,6 +116,7 @@ interface UseSessionServiceReturn {
   resumeCrashedSession: (id: string) => Promise<Session | null>;
   renameSession: (id: string, newTitle: string) => Promise<boolean>;
   restartSession: (id: string) => Promise<boolean>;
+  retrySession: (id: string) => Promise<boolean>;
   clearConversationState: (id: string) => Promise<boolean>;
   acknowledgeSession: (id: string) => Promise<boolean>;
   createCheckpoint: (sessionId: string, label: string) => Promise<boolean>;
@@ -503,6 +504,30 @@ export function useSessionService(
         return response.success;
       } catch (err) {
         dispatch(setError(err instanceof Error ? err.message : "Failed to restart session"));
+        return false;
+      }
+    },
+    [dispatch]
+  );
+
+  // Retry a session immediately, bypassing any pending backoff delay —
+  // including from PERMANENTLY_FAILED (session-retry-backoff, AC6).
+  const retrySession = useCallback(
+    async (id: string): Promise<boolean> => {
+      if (!clientRef.current) return false;
+
+      dispatch(setError(null));
+
+      try {
+        const response = await clientRef.current.retrySession({ id });
+
+        if (response.success && response.session) {
+          dispatch(upsertSession(response.session));
+        }
+
+        return response.success;
+      } catch (err) {
+        dispatch(setError(err instanceof Error ? err.message : "Failed to retry session"));
         return false;
       }
     },
@@ -1136,6 +1161,7 @@ export function useSessionService(
     resumeCrashedSession,
     renameSession,
     restartSession,
+    retrySession,
     clearConversationState,
     acknowledgeSession,
     createCheckpoint,

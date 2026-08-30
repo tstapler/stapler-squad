@@ -69,6 +69,7 @@ interface SessionListProps {
   onNewWorkspaceSession?: (sessionId: string) => void;
   onRenameSession?: (sessionId: string, newTitle: string) => Promise<boolean>;
   onRestartSession?: (sessionId: string) => Promise<boolean>;
+  onRetryNowSession?: (sessionId: string) => Promise<boolean>;
   onUpdateTags?: (sessionId: string, tags: string[]) => void;
   onNewSession?: () => void;
   onCreateCheckpoint?: (sessionId: string, label: string) => Promise<boolean>;
@@ -114,6 +115,7 @@ interface SessionRowHandlers {
   onCloneSession?: (id: string) => void;
   onNewWorkspaceSession?: (id: string) => void;
   onRestartSession?: (id: string) => Promise<boolean | void>;
+  onRetryNowSession?: (id: string) => Promise<boolean | void>;
   onCreateCheckpoint?: (sessionId: string, label: string) => Promise<boolean>;
   onRunOneShot?: (sessionId: string) => Promise<void>;
   onSetRateLimitEnabled?: (id: string, enabled: boolean) => void;
@@ -155,6 +157,7 @@ const SessionRowWrapper = React.memo(function SessionRowWrapper({
   onCloneSession,
   onNewWorkspaceSession,
   onRestartSession,
+  onRetryNowSession,
   onCreateCheckpoint,
   onRunOneShot,
   onSetRateLimitEnabled,
@@ -179,6 +182,7 @@ const SessionRowWrapper = React.memo(function SessionRowWrapper({
       onOpenInNewPane={onSessionOpenInNewPane ? () => onSessionOpenInNewPane(session) : undefined}
       onNewWorkspace={onNewWorkspaceSession ? () => onNewWorkspaceSession(id) : undefined}
       onRestart={onRestartSession}
+      onRetryNow={onRetryNowSession}
       onCreateCheckpoint={onCreateCheckpoint}
       onRunOneShot={onRunOneShot}
       onSetRateLimitEnabled={onSetRateLimitEnabled}
@@ -343,6 +347,7 @@ export function SessionList({
   onNewWorkspaceSession,
   onRenameSession,
   onRestartSession,
+  onRetryNowSession,
   onUpdateTags,
   onNewSession,
   onCreateCheckpoint,
@@ -1416,6 +1421,7 @@ export function SessionList({
                     onCloneSession={stableOnCloneSession}
                     onNewWorkspaceSession={stableOnNewWorkspaceSession}
                     onRestartSession={onRestartSession}
+                    onRetryNowSession={onRetryNowSession}
                     onCreateCheckpoint={onCreateCheckpoint}
                     onRunOneShot={onRunOneShot}
                     onSetRateLimitEnabled={onSetRateLimitEnabled}
@@ -1598,6 +1604,7 @@ export function SessionList({
                   onNewWorkspace={() => onNewWorkspaceSession?.(session.id)}
                   onRename={onRenameSession}
                   onRestart={onRestartSession}
+                  onRetryNow={onRetryNowSession}
                   onUpdateTags={onUpdateTags}
                   onCreateCheckpoint={onCreateCheckpoint}
                   onListCheckpoints={onListCheckpoints}

@@ -1,6 +1,11 @@
 package config
 
-import "time"
+import (
+	"slices"
+	"time"
+
+	"github.com/tstapler/stapler-squad/log"
+)
 
 // NotificationPrefs holds the user's notification delivery preferences.
 type NotificationPrefs struct {
@@ -150,6 +155,117 @@ func (c StaleSessionConfig) NotifyEnabledOrDefault() bool {
 		return true
 	}
 	return *c.NotifyEnabled
+}
+
+// defaultRetryMaxAttempts is used by MaxAttemptsOrDefault whenever
+// MaxAttempts is unset (<=0), including for configs saved before this field
+// existed. 1 preserves today's exact single-retry behavior (AC7).
+const defaultRetryMaxAttempts = 1
+
+// defaultRetryMaxDelaySeconds is used by MaxDelaySecondsOrDefault whenever
+// MaxDelaySeconds is unset (<=0).
+const defaultRetryMaxDelaySeconds = 300
+
+// validRetryOnReasons is the complete vocabulary RetryOnOrDefault accepts;
+// used both as the all-three fallback and to filter out typos.
+var validRetryOnReasons = []string{"crashed", "stalled", "tmux_exited"} //nolint:gochecknoglobals // read-only vocabulary, never mutated; callers only get defensive copies (see append([]string(nil), ...) below)
+
+// RetryPolicyConfig holds configuration for the automated crash/stall retry
+// policy: how many attempts, what backoff, and which failure reasons are
+// eligible. Global default in config.json; may be overridden per-session via
+// session.Instance.RetryPolicyOverride.
+type RetryPolicyConfig struct {
+	// Enabled controls whether automated retry runs at all. A pointer so a
+	// config saved before this field existed (nil) can be distinguished from
+	// an explicit false — nil defaults to enabled, matching
+	// SessionRetentionConfig's pattern.
+	Enabled *bool `json:"enabled,omitempty"`
+	// MaxAttempts is the number of automated retries before the session
+	// transitions to PermanentlyFailed. Default: 1 (preserves today's exact
+	// single-retry behavior — AC7).
+	MaxAttempts int `json:"max_attempts,omitempty"`
+	// Backoff selects the backoff strategy. Only "exponential" is implemented;
+	// see BackoffOrWarn.
+	Backoff string `json:"backoff,omitempty"`
+	// InitialDelaySeconds is the backoff formula's base delay. Default: 0
+	// (preserves today's immediate-restart behavior).
+	InitialDelaySeconds int `json:"initial_delay_seconds,omitempty"`
+	// MaxDelaySeconds caps the backoff formula's computed delay. Default: 300.
+	MaxDelaySeconds int `json:"max_delay_seconds,omitempty"`
+	// RetryOn is the subset of ["crashed","stalled","tmux_exited"] eligible
+	// for automated retry. Empty/nil defaults to all three.
+	RetryOn []string `json:"retry_on,omitempty"`
+	// StaleTriggersRetry is an opt-in flag that, once a stale-session
+	// notification's config (config.StaleSessionConfig) crosses its threshold,
+	// treats that as an additional "stalled"-classified trigger. Currently
+	// unconsumed — StaleSessionConfig (see StaleSessionConfig above) has no
+	// wiring into the retry driver yet; this field exists so a config can
+	// opt in ahead of that integration landing without a later schema change.
+	StaleTriggersRetry *bool `json:"stale_triggers_retry,omitempty"`
+}
+
+// EnabledOrDefault returns whether automated retry is enabled, defaulting to
+// true when unset.
+func (c RetryPolicyConfig) EnabledOrDefault() bool {
+	if c.Enabled == nil {
+		return true
+	}
+	return *c.Enabled
+}
+
+// MaxAttemptsOrDefault returns MaxAttempts, falling back to
+// defaultRetryMaxAttempts when unset (<=0) — a fat-fingered 0/negative value
+// must not silently disable retry.
+func (c RetryPolicyConfig) MaxAttemptsOrDefault() int {
+	if c.MaxAttempts <= 0 {
+		return defaultRetryMaxAttempts
+	}
+	return c.MaxAttempts
+}
+
+// MaxDelaySecondsOrDefault returns MaxDelaySeconds, falling back to
+// defaultRetryMaxDelaySeconds when unset (<=0).
+func (c RetryPolicyConfig) MaxDelaySecondsOrDefault() int {
+	if c.MaxDelaySeconds <= 0 {
+		return defaultRetryMaxDelaySeconds
+	}
+	return c.MaxDelaySeconds
+}
+
+// RetryOnOrDefault returns RetryOn, defaulting to all three known reasons
+// when empty, and dropping (with a logged warning, not a hard error) any
+// entry that isn't one of the three known reasons — a config typo like
+// "crashd" would otherwise silently produce a policy that never matches that
+// reason, with no error/warning/UI signal anywhere that the entry is being
+// ignored.
+func (c RetryPolicyConfig) RetryOnOrDefault() []string {
+	if len(c.RetryOn) == 0 {
+		return append([]string(nil), validRetryOnReasons...)
+	}
+	filtered := make([]string, 0, len(c.RetryOn))
+	for _, reason := range c.RetryOn {
+		if slices.Contains(validRetryOnReasons, reason) {
+			filtered = append(filtered, reason)
+		} else {
+			log.Warn("RetryPolicyConfig.RetryOn: ignoring unknown retry reason", "reason", reason)
+		}
+	}
+	if len(filtered) == 0 {
+		return append([]string(nil), validRetryOnReasons...)
+	}
+	return filtered
+}
+
+// BackoffOrWarn validates Backoff at config-load time: if it's set and isn't
+// "exponential" (the only implemented strategy), logs a warning and falls
+// back to "exponential" rather than silently accepting a value that has no
+// behavior behind it.
+func (c RetryPolicyConfig) BackoffOrWarn() string {
+	if c.Backoff == "" || c.Backoff == "exponential" {
+		return "exponential"
+	}
+	log.Warn("RetryPolicyConfig.Backoff: unknown strategy, falling back to exponential", "backoff", c.Backoff)
+	return "exponential"
 }
 
 // TmuxExecGateConfig bounds how many tmux subprocesses may run concurrently

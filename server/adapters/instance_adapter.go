@@ -74,6 +74,27 @@ func InstanceToProto(inst *session.Instance, workflowNames map[string]string) *s
 		LaunchCommand:         inst.LaunchCommand,
 	}
 
+	// Retry state (session-retry-backoff), fields 76-80. Read directly from
+	// the instance (not the InstanceSnapshot atomic pointer, which predates
+	// this feature) via RetrySnapshot's race-free copy.
+	rs := inst.RetrySnapshot()
+	protoSession.RetryAttempt = int32(rs.RetryAttempt)
+	protoSession.RetryMaxAttempts = int32(rs.RetryMaxAttempts)
+	protoSession.LastFailureReason = rs.LastFailureReason
+	if !rs.NextRetryAt.IsZero() {
+		protoSession.NextRetryAt = timestamppb.New(rs.NextRetryAt)
+	}
+	if len(rs.RetryHistory) > 0 {
+		protoSession.RetryHistory = make([]*sessionv1.RetryAttemptRecord, len(rs.RetryHistory))
+		for i, rec := range rs.RetryHistory {
+			protoSession.RetryHistory[i] = &sessionv1.RetryAttemptRecord{
+				Attempt:   int32(rec.Attempt),
+				Reason:    rec.Reason,
+				Timestamp: timestamppb.New(rec.Timestamp),
+			}
+		}
+	}
+
 	// Convert artifact data if available
 	if snap.Artifacts != nil {
 		a := snap.Artifacts
@@ -319,6 +340,8 @@ func StatusToProto(status session.Status) sessionv1.SessionStatus {
 		return sessionv1.SessionStatus_SESSION_STATUS_RESTORING
 	case session.Crashed:
 		return sessionv1.SessionStatus_SESSION_STATUS_CRASHED
+	case session.PermanentlyFailed:
+		return sessionv1.SessionStatus_SESSION_STATUS_PERMANENTLY_FAILED
 	default:
 		return sessionv1.SessionStatus_SESSION_STATUS_UNSPECIFIED
 	}
@@ -347,6 +370,8 @@ func StatusStringToProto(status string) sessionv1.SessionStatus {
 		return sessionv1.SessionStatus_SESSION_STATUS_HIBERNATED
 	case "Crashed":
 		return sessionv1.SessionStatus_SESSION_STATUS_CRASHED
+	case "PermanentlyFailed":
+		return sessionv1.SessionStatus_SESSION_STATUS_PERMANENTLY_FAILED
 	default:
 		return sessionv1.SessionStatus_SESSION_STATUS_UNSPECIFIED
 	}
@@ -390,6 +415,13 @@ func ProtoToStatus(status sessionv1.SessionStatus) session.Status {
 		return session.Hibernated
 	case sessionv1.SessionStatus_SESSION_STATUS_RESTORING:
 		return session.Restoring
+	case sessionv1.SessionStatus_SESSION_STATUS_CRASHED:
+		// Collateral fix: this case was missing before session-retry-backoff
+		// touched this switch — a round-tripped CRASHED session silently fell
+		// to the default: below and reopened as Creating.
+		return session.Crashed
+	case sessionv1.SessionStatus_SESSION_STATUS_PERMANENTLY_FAILED:
+		return session.PermanentlyFailed
 	default:
 		return session.Creating // Default to Creating for unknown statuses
 	}

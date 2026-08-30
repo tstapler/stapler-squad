@@ -49,6 +49,9 @@ export interface SessionActionsOverflowProps {
   onResumeFromHibernation?: () => void;
   onDelete?: () => Promise<void> | void;
   onRestart?: (sessionId: string) => Promise<boolean | void>;
+  /** Immediately restart a session's retry policy, bypassing any pending backoff
+   *  delay — including from PERMANENTLY_FAILED (session-retry-backoff, AC6). */
+  onRetryNow?: (sessionId: string) => Promise<boolean | void>;
   onClone?: () => void;
   onOpenInNewPane?: () => void;
   onNewWorkspace?: () => void;
@@ -82,6 +85,7 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
   onResumeFromHibernation,
   onDelete,
   onRestart,
+  onRetryNow,
   onClone,
   onOpenInNewPane,
   onNewWorkspace,
@@ -103,12 +107,22 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
   const isHibernated = session.status === SessionStatus.HIBERNATED;
   const isCreating = session.status === SessionStatus.CREATING;
   const isStopped = session.status === SessionStatus.STOPPED;
+  // session-retry-backoff: a terminal give-up state distinct from STOPPED —
+  // never eligible for Resume/Restart, only "Retry now" (AC6).
+  const isPermanentlyFailed = session.status === SessionStatus.PERMANENTLY_FAILED;
+  // A session mid-automated-backoff-wait (scheduled retry pending, not yet
+  // exhausted) — "Retry now" here skips the wait rather than reviving a
+  // terminal state.
+  const isMidBackoffWait = !isPermanentlyFailed && !!session.nextRetryAt;
 
   const [showOverflow, setShowOverflow] = useState(false);
   const [menuPos, setMenuPos] = useState({ top: 0, right: 0 });
   const [isRestartConfirmOpen, setIsRestartConfirmOpen] = useState(false);
   const [isRestarting, setIsRestarting] = useState(false);
   const [restartError, setRestartError] = useState("");
+  const [isRetryConfirmOpen, setIsRetryConfirmOpen] = useState(false);
+  const [isRetrying, setIsRetrying] = useState(false);
+  const [retryError, setRetryError] = useState("");
   const [isDeleteConfirmOpen, setIsDeleteConfirmOpen] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState("");
@@ -149,6 +163,7 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
   const overflowButtonRef = useRef<HTMLButtonElement>(null);
   const overflowMenuRef = useRef<HTMLDivElement>(null);
   const restartDialogRef = useRef<HTMLDivElement>(null);
+  const retryDialogRef = useRef<HTMLDivElement>(null);
   const deleteDialogRef = useRef<HTMLDivElement>(null);
   const checkpointDialogRef = useRef<HTMLDivElement>(null);
   const autonomousConfirmDialogRef = useRef<HTMLDivElement>(null);
@@ -166,6 +181,7 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
   // for the component's whole lifetime.
   useFocusTrap(overflowMenuRef, showOverflow, overflowButtonRef);
   useFocusTrap(restartDialogRef, isRestartConfirmOpen, overflowButtonRef);
+  useFocusTrap(retryDialogRef, isRetryConfirmOpen, overflowButtonRef);
   useFocusTrap(deleteDialogRef, isDeleteConfirmOpen, overflowButtonRef);
   useFocusTrap(checkpointDialogRef, isCheckpointOpen, overflowButtonRef);
   useFocusTrap(autonomousConfirmDialogRef, isAutonomousConfirmOpen, overflowButtonRef);
@@ -245,6 +261,26 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
     }
   };
 
+  const handleRetryConfirm = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setIsRetrying(true);
+    setRetryError("");
+    try {
+      await onRetryNow?.(session.id);
+      setIsRetryConfirmOpen(false);
+    } catch (err) {
+      // A concurrent retry already in flight (backend CAS guard) is not a
+      // failure — the automated path already has this covered.
+      if (err instanceof Error && /already in progress|failed_precondition/i.test(err.message)) {
+        setIsRetryConfirmOpen(false);
+      } else {
+        setRetryError(err instanceof Error ? err.message : "Failed to retry session.");
+      }
+    } finally {
+      setIsRetrying(false);
+    }
+  };
+
   const commitProgramChange = async (program: string) => {
     setIsSavingProgram(true);
     setProgramError("");
@@ -280,7 +316,7 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
 
   // Group visibility booleans — used to decide whether to render separators.
   const hasGroup1 = !!(
-    (!(isPaused || isReady) && !isStopped && onResume) ||
+    (!(isPaused || isReady) && !isStopped && !isPermanentlyFailed && onResume) ||
     (isRunning && !isCreating && onPause) ||
     (isRunning && onHibernate) ||
     (isHibernated && onResumeFromHibernation)
@@ -288,7 +324,7 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
   const hasGroup2 = !!(onRunOneShot || onCreateCheckpoint);
   const hasGroup3 = !!(onRenameRequest || onChangeProgram || onClone || onOpenInNewPane || onUpdateTags || onNewWorkspace || onWorkspaceSwitchRequest);
   const hasGroup4 = !!(onSetRateLimitEnabled || onToggleAutonomousMode || onToggleAutoApprove);
-  const hasGroup5 = !!(onClearConversationState || (onRestart && !isCreating) || onDelete);
+  const hasGroup5 = !!(onClearConversationState || (onRestart && !isCreating) || (onRetryNow && (isPermanentlyFailed || isMidBackoffWait)) || onDelete);
 
   return (
     <>
@@ -322,6 +358,37 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
                 {isRestarting ? "Restarting..." : "Restart"}
               </button>
               <button onClick={(e) => { e.stopPropagation(); setIsRestartConfirmOpen(false); setRestartError(""); }} disabled={isRestarting} className={cancelButton}>
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
+
+      {isRetryConfirmOpen && createPortal(
+        <div className={confirmDialog} onClick={(e) => { e.stopPropagation(); setIsRetryConfirmOpen(false); }}>
+          <div
+            ref={retryDialogRef}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="retryDialogTitle"
+            className={dialogContent}
+            onClick={(e) => e.stopPropagation()}
+            onKeyDown={(e) => { if (e.key === "Escape") setIsRetryConfirmOpen(false); }}
+          >
+            <h3 id="retryDialogTitle">Retry Session</h3>
+            <p>
+              {isPermanentlyFailed
+                ? `This session gave up after ${session.retryMaxAttempts} attempt${session.retryMaxAttempts === 1 ? "" : "s"} — retry anyway?`
+                : "Skip the wait and retry now?"}
+            </p>
+            {retryError && <p className={errorMessage}>{retryError}</p>}
+            <div className={dialogActions}>
+              <button onClick={handleRetryConfirm} disabled={isRetrying} className={submitButton}>
+                {isRetrying ? "Retrying..." : "Retry now"}
+              </button>
+              <button onClick={(e) => { e.stopPropagation(); setIsRetryConfirmOpen(false); setRetryError(""); }} disabled={isRetrying} className={cancelButton}>
                 Cancel
               </button>
             </div>
@@ -609,6 +676,18 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
             <span aria-hidden="true">🔄</span> Restart
           </button>
         )}
+        {/* session-retry-backoff AC6: primary Retry now button for PERMANENTLY_FAILED,
+            same slot the Restart button uses for isStopped above. */}
+        {showPrimaryAction && isPermanentlyFailed && onRetryNow && (
+          <button
+            className={actionButton}
+            onClick={(e) => { e.stopPropagation(); setIsRetryConfirmOpen(true); }}
+            aria-label={`Retry permanently-failed session ${session.title}`}
+            title="Session gave up after repeated failures — retry now"
+          >
+            <span aria-hidden="true">🔁</span> Retry now
+          </button>
+        )}
 
         <div ref={overflowContainerRef} className={overflowContainer}>
           <button
@@ -635,7 +714,7 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
               onKeyDown={(e) => { if (e.key === "Escape") setShowOverflow(false); }}
             >
               {/* Group 1: Session control */}
-              {!(isPaused || isReady) && !isStopped && onResume && (
+              {!(isPaused || isReady) && !isStopped && !isPermanentlyFailed && onResume && (
                 <button role="menuitem" className={overflowMenuItem}
                   onClick={(e) => { e.stopPropagation(); close(); onResume(); }}
                   aria-label={`Resume session ${session.title}`}
@@ -846,6 +925,16 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
                   aria-label={`Restart session ${session.title}`}
                 >
                   <span aria-hidden="true">🔄</span> Restart
+                </button>
+              )}
+              {onRetryNow && (isPermanentlyFailed || isMidBackoffWait) && (
+                <button
+                  role="menuitem"
+                  className={overflowMenuItem}
+                  onClick={(e) => { e.stopPropagation(); close(); setIsRetryConfirmOpen(true); }}
+                  aria-label={`Retry session ${session.title} now`}
+                >
+                  <span aria-hidden="true">🔁</span> Retry now
                 </button>
               )}
               {onDelete && (

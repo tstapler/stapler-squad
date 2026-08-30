@@ -585,6 +585,13 @@ func (rqp *ReviewQueuePoller) reconcileSessions() {
 					cancel()
 					inst.fireLifecycleEvent(EventStarted, "reconcile-session-crashed-but-alive")
 				}
+			case PermanentlyFailed:
+				// Deliberately not auto-revived even if tmux is alive, unlike
+				// Stopped/Hibernated/Crashed above — PermanentlyFailed means the
+				// configurable retry policy already exhausted its attempt budget
+				// for this failure episode; only an explicit RetryNow() call
+				// (the "Retry now" UI action / RetrySession RPC) should bring it
+				// back to Active. See ADR-001.
 			}
 		}
 	}
