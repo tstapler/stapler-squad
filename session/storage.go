@@ -769,6 +769,12 @@ func (s *Storage) GetBacklogItem(ctx context.Context, id string) (*BacklogItemDa
 	return s.repo.GetBacklogItem(ctx, id)
 }
 
+// GetBacklogItemByExternalURL retrieves a backlog item previously imported
+// from externalURL (e.g. a GitHub issue URL), or ErrNotFound if none exists.
+func (s *Storage) GetBacklogItemByExternalURL(ctx context.Context, externalURL string) (*BacklogItemData, error) {
+	return s.repo.GetBacklogItemByExternalURL(ctx, externalURL)
+}
+
 // ListBacklogItems returns backlog items with optional filtering.
 func (s *Storage) ListBacklogItems(ctx context.Context, filter BacklogItemFilter) ([]BacklogItemData, error) {
 	return s.repo.ListBacklogItems(ctx, filter)

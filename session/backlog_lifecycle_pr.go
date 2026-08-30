@@ -371,6 +371,15 @@ func (l *BacklogLifecycleListener) mostRecentWorkCommitShippedToMain(ctx context
 	return sha, onMain
 }
 
+// backlogItemLink returns a clickable deep link to itemID's detail view in
+// the web UI (see web-app/src/components/backlog/BacklogItemPanel.tsx's
+// `/backlog?item=` href), so a PR body can point a reviewer at the backlog
+// item instead of making them paste a bare UUID into a search box. baseURL
+// comes from BacklogLifecycleListener.getDashboardBaseURL().
+func backlogItemLink(baseURL, itemID string) string {
+	return baseURL + "/backlog?item=" + itemID
+}
+
 // buildFallbackPRBody composes a PR body from the backlog item's own data —
 // used when no headless pool is configured, GetGitDiff fails, or
 // headless.DraftPRDescription errors out. Previously this fallback was a bare
@@ -380,9 +389,9 @@ func (l *BacklogLifecycleListener) mostRecentWorkCommitShippedToMain(ctx context
 // item's own problem statement (the "why"); the item's acceptance criteria
 // double as a test plan checklist since they are the only verification steps
 // this code path has available without an LLM call.
-func buildFallbackPRBody(item *BacklogItemData) string {
+func buildFallbackPRBody(item *BacklogItemData, dashboardBaseURL string) string {
 	var sb strings.Builder
-	fmt.Fprintf(&sb, "## Summary\n%s\n\n(Backlog item: %s)\n", sanitizeField(item.Description, 1000), item.ID)
+	fmt.Fprintf(&sb, "## Summary\n%s\n\nBacklog item: %s\n", sanitizeField(item.Description, 1000), backlogItemLink(dashboardBaseURL, item.ID))
 
 	if criteria, _ := ParseAcCriteria(item.AcceptanceCriteria); len(criteria) > 0 {
 		sb.WriteString("\n## Test plan\n")
@@ -583,8 +592,9 @@ func (l *BacklogLifecycleListener) pushAndCreatePR(ctx context.Context, item *Ba
 			return
 		}
 
+		dashboardBaseURL := l.getDashboardBaseURL()
 		prTitle := item.Title
-		prBody := buildFallbackPRBody(item)
+		prBody := buildFallbackPRBody(item, dashboardBaseURL)
 		if pool := l.getHeadlessPool(); pool != nil {
 			diff, _, diffErr := GetGitDiff(ctx, wt.WorktreePath, wt.BaseCommitSHA)
 			if diffErr != nil {
@@ -599,7 +609,7 @@ func (l *BacklogLifecycleListener) pushAndCreatePR(ctx context.Context, item *Ba
 				if draftErr != nil {
 					log.WarningLog().Printf("[BacklogLifecycle] pushAndCreatePR DraftPRDescription item=%s: %v; using fallback body", item.ID, draftErr)
 				} else if drafted != "" {
-					prBody = drafted
+					prBody = strings.TrimRight(drafted, "\n") + "\n\nBacklog item: " + backlogItemLink(dashboardBaseURL, item.ID) + "\n"
 				}
 			}
 		}

@@ -302,6 +302,52 @@ func TestImportGitHubIssue_CreatesItemFromIssue(t *testing.T) {
 	assert.False(t, resp.Msg.TriageTriggered, "no headlessPool wired in test service, so triage should never fire")
 }
 
+// TestImportGitHubIssue_DedupsExistingImport guards the dedup check
+// ImportGitHubIssue runs against GetBacklogItemByExternalURL before creating
+// a new item: importing the same issue URL twice must return the
+// already-created item (AlreadyExisted=true, same item ID) rather than
+// creating a second backlog item or re-triggering triage.
+func TestImportGitHubIssue_DedupsExistingImport(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"number":   11,
+			"title":    "Duplicate import guard missing",
+			"body":     "Importing the same issue twice creates two backlog items.",
+			"state":    "open",
+			"html_url": "https://github.com/acme/widgets/issues/11",
+		})
+	}))
+	defer ts.Close()
+	defer resetGhBaseURL(ts)()
+	t.Setenv("GITHUB_TOKEN", "fake-token")
+
+	svc := newBacklogService(t)
+	req := connect.NewRequest(&sessionv1.ImportGitHubIssueRequest{
+		IssueUrl:     "https://github.com/acme/widgets/issues/11",
+		RepoPath:     "/tmp/local-widgets",
+		SkipPlanning: true,
+	})
+
+	first, err := svc.ImportGitHubIssue(context.Background(), req)
+	require.NoError(t, err)
+	require.NotNil(t, first.Msg.Item)
+	assert.False(t, first.Msg.AlreadyExisted, "first import should create a new item")
+	firstID := first.Msg.Item.Id
+
+	second, err := svc.ImportGitHubIssue(context.Background(), req)
+	require.NoError(t, err)
+	require.NotNil(t, second.Msg.Item)
+	assert.True(t, second.Msg.AlreadyExisted, "second import of the same issue URL should be flagged as a dup")
+	assert.Equal(t, firstID, second.Msg.Item.Id, "second import should return the same item ID as the first")
+	assert.False(t, second.Msg.TriageTriggered, "dedup path must not re-trigger triage")
+
+	items, err := svc.storage.ListBacklogItems(context.Background(), session.BacklogItemFilter{})
+	require.NoError(t, err)
+	require.Len(t, items, 1, "only one backlog item should exist after importing the same issue URL twice")
+	assert.Equal(t, firstID, items[0].ID)
+}
+
 func TestImportGitHubIssue_ResolvesRepoPathWhenNotProvided(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
