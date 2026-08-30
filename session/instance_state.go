@@ -316,14 +316,21 @@ func (i *Instance) Started() bool {
 	return i.started.Load()
 }
 
-// RecoverFromStopped resets a stale Stopped status to Creating so the instance can be
-// hot-restored via Start(false). Only call this during startup reconciliation when
-// the tmux session is confirmed alive; it bypasses the state machine intentionally.
+// RecoverFromStopped resets a stale Stopped or PermanentlyFailed status to
+// Creating so the instance can be hot-restored via Start(false). Only call
+// this during startup reconciliation (Stopped case) or from restartForRetry's
+// PermanentlyFailed/Stopped recovery branch when the tmux session is confirmed
+// alive or being cold-restored; it bypasses the state machine intentionally.
+// The PermanentlyFailed case backs RetryNow()'s manual "Retry now" recovery
+// (AC6) — without it, RecoverFromStopped silently no-op'd for a
+// PermanentlyFailed instance (it only ever checked Status == Stopped), and
+// startLocked's later `if i.Status != Active` transition would then be
+// attempted from PermanentlyFailed, which has no entry in transitionIndex.
 // Deprecated: prefer transitionTo(ctx, Active) on the Stopped→Active path.
 func (i *Instance) RecoverFromStopped() {
 	i.mu.Lock()
 	defer i.mu.Unlock()
-	if i.Status == Stopped {
+	if i.Status == Stopped || i.Status == PermanentlyFailed {
 		i.loadStatus(Creating)
 		i.started.Store(false)
 		i.snapshot.Store(buildSnapshot(i))

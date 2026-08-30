@@ -873,8 +873,19 @@ func handleDriverFailure(inst *Instance, allowedPath string, policy RetryPolicy,
 func markSessionPermanentlyFailed(inst *Instance, reason string) {
 	inst.mu.Lock()
 	alreadyFailed := inst.Status == PermanentlyFailed
+	var snap *InstanceSnapshot
 	if !alreadyFailed {
 		inst.Status = PermanentlyFailed
+		// Publish the transition to inst.snapshot (the atomic pointer
+		// GetEffectiveStatus()/Snapshot() actually read) — this write, unlike
+		// transitionToLocked's, doesn't route through the state machine (there
+		// is no PermanentlyFailed entry in transitionIndex), so nothing else
+		// republishes it. Without this, GetEffectiveStatus() kept returning
+		// the instance's pre-failure status (e.g. Active) until some unrelated
+		// mutator happened to rebuild the snapshot, which broke both the UI's
+		// status display and restartForRetry's branch decision for a manual
+		// RetryNow() on this instance.
+		snap = buildSnapshot(inst)
 	}
 	attempt := inst.RetryAttempt
 	maxAttempts := inst.RetryMaxAttempts
@@ -883,6 +894,7 @@ func markSessionPermanentlyFailed(inst *Instance, reason string) {
 	if alreadyFailed {
 		return
 	}
+	inst.snapshot.Store(snap)
 
 	log.Warn("SessionDriver: session exhausted retry budget; marking permanently failed",
 		"session", inst.Title, "reason", reason, "attempts", attempt, "max_attempts", maxAttempts,

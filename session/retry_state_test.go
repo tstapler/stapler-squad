@@ -259,17 +259,72 @@ func TestRetryNow_should_ResetRetryStateAndTransitionToActive_When_CalledFromPer
 	inst.RetryMaxAttempts = 3
 	inst.LastFailureReason = "crashed"
 
-	// Restart() on a bare Instance with no real tmux plumbing is expected to
-	// error (no session to restart) — RetryNow still resets state and
-	// attempts the restart; the resulting error is not this test's concern
-	// (restartForRetry's own failure handling is covered separately).
-	_ = inst.RetryNow("/tmp")
+	// A live (alive:true) process manager takes restartForRetry's cold-recovery
+	// branch's "restore existing tmux session" sub-path (RecoverFromStopped +
+	// StopController + Start(false), see TestRetryNow_should_TakeRecoverFromStoppedAndStartPath_...
+	// below for the branch-selection assertion itself); Start(false) on a bare
+	// Instance with a fake ProcessManager succeeds end-to-end.
+	err := inst.RetryNow("/tmp")
+	if err != nil {
+		t.Errorf("RetryNow() err = %v, want nil", err)
+	}
 
 	if inst.RetryAttempt != 0 {
 		t.Errorf("RetryAttempt = %d, want 0 after RetryNow", inst.RetryAttempt)
 	}
 	if !inst.NextRetryAt.IsZero() {
 		t.Error("NextRetryAt should be cleared after RetryNow")
+	}
+	if inst.Status != Active {
+		t.Errorf("Status = %v, want Active after a successful RetryNow", inst.Status)
+	}
+}
+
+// TestRetryNow_should_TakeRecoverFromStoppedAndStartPath_When_CalledFromPermanentlyFailedWithDeadSession
+// replaces a prior version of this test that sidestepped the actual bug: it
+// called RetryNow() from PermanentlyFailed and only asserted that RetryState
+// was reset, explicitly declining to check which restart path ran ("Restart()
+// ... is expected to error ... not this test's concern"). That let a real bug
+// go untested — RetryNow() used to set Status = Active BEFORE calling
+// restartForRetry, so restartForRetry's own GetEffectiveStatus() branch check
+// always saw Active and always took the Restart()-in-place path, never the
+// RecoverFromStopped()+Start() cold-recovery path meant for a
+// PermanentlyFailed/Stopped session with a dead pane (session/retry_state.go's
+// restartForRetry). This test proves the correct branch is taken by relying on
+// a real, observable divergence between the two: Restart() immediately returns
+// ErrCannotRestart when i.started is false (as it is here, simulating a
+// process that crashed and was never marked started again) without touching
+// Status at all, whereas RecoverFromStopped()+Start() resets Status to
+// Creating and then advances it to Active on success — regardless of
+// i.started's prior value.
+func TestRetryNow_should_TakeRecoverFromStoppedAndStartPath_When_CalledFromPermanentlyFailedWithDeadSession(t *testing.T) {
+	t.Parallel()
+	inst := &Instance{
+		Title:  "t",
+		Status: PermanentlyFailed,
+		// alive: false simulates a dead/no tmux session (the pane exited along
+		// with the crash that led to PermanentlyFailed).
+		processManager: &fakeLivenessProcessManager{alive: false},
+	}
+	inst.RetryAttempt = 3
+	inst.RetryMaxAttempts = 3
+	inst.LastFailureReason = "crashed"
+	// started is left at its zero value (false): if the bug regresses and
+	// Restart() is wrongly taken, Restart() bails out immediately with
+	// ErrCannotRestart and Status is left untouched at PermanentlyFailed.
+
+	err := inst.RetryNow("/tmp")
+	if errors.Is(err, ErrCannotRestart) {
+		t.Fatalf("RetryNow() err = %v: took the Restart()-in-place path instead of RecoverFromStopped()+Start() — the PermanentlyFailed/dead-session branch-selection bug has regressed", err)
+	}
+	if err != nil {
+		t.Fatalf("RetryNow() err = %v, want nil (cold-recovery Start() should succeed against the fake ProcessManager)", err)
+	}
+	if inst.Status != Active {
+		t.Errorf("Status = %v, want Active — RecoverFromStopped()+Start() should have advanced Creating→Active", inst.Status)
+	}
+	if !inst.Started() {
+		t.Error("Started() = false, want true after a successful cold-recovery Start()")
 	}
 }
 
@@ -332,6 +387,101 @@ func TestRestartForRetry_should_PreventConcurrentRestart_When_TwoCallersRaceRetr
 	}
 	if inFlightCount != 1 {
 		t.Errorf("expected exactly 1 of 2 concurrent restartForRetry calls to observe ErrRetryInFlight, got %d (other=%d)", inFlightCount, otherCount)
+	}
+}
+
+// TestSessionDriver_should_RetryThreeTimesWithIncreasingBackoffThenPermanentlyFail_When_SessionCrashesRepeatedly
+// is AC1's full-assembly test: the per-function unit tests above (evaluateSessionRetry,
+// backoffDelay, markSessionPermanentlyFailed) each pass in isolation, but nothing
+// previously drove handleDriverFailure end-to-end across a whole crash-loop episode with
+// a policy of max_attempts=3 to confirm the pieces compose correctly — that each
+// successive crash actually schedules a longer backoff than the last (not just that
+// backoffDelay(n) > backoffDelay(n-1) in the abstract), that the transition to
+// PermanentlyFailed happens exactly on the attempt after the cap, and that the resulting
+// notification fires exactly once even if the driver observes the already-failed session
+// again on a later tick.
+func TestSessionDriver_should_RetryThreeTimesWithIncreasingBackoffThenPermanentlyFail_When_SessionCrashesRepeatedly(t *testing.T) {
+	t.Parallel()
+	rq := NewReviewQueue()
+	notifier := &fakeNotifier{}
+	inst := &Instance{
+		Title:       "crash-loop",
+		UUID:        "test-uuid-crash-loop",
+		reviewQueue: rq,
+		Status:      Active,
+	}
+	inst.RetryMaxAttempts = 3
+	inst.SetNotifier(notifier)
+
+	policy := RetryPolicy{
+		Enabled:      true,
+		MaxAttempts:  3,
+		RetryOn:      []string{"crashed"},
+		InitialDelay: 30 * time.Second,
+		MaxDelay:     300 * time.Second,
+	}
+
+	var prevDelay time.Duration
+	for attempt := 1; attempt <= 3; attempt++ {
+		before := time.Now()
+		handleDriverFailure(inst, "/tmp", policy, "crashed", make(chan struct{}))
+
+		if inst.RetryAttempt != attempt {
+			t.Fatalf("after crash #%d: RetryAttempt = %d, want %d", attempt, inst.RetryAttempt, attempt)
+		}
+		if inst.Status == PermanentlyFailed {
+			t.Fatalf("after crash #%d: session marked PermanentlyFailed too early (max_attempts=3)", attempt)
+		}
+		if len(inst.RetryHistory) != attempt {
+			t.Fatalf("after crash #%d: len(RetryHistory) = %d, want %d", attempt, len(inst.RetryHistory), attempt)
+		}
+
+		delay := inst.NextRetryAt.Sub(before)
+		base := policy.InitialDelay * time.Duration(int64(1)<<uint(attempt-1))
+		if base > policy.MaxDelay {
+			base = policy.MaxDelay
+		}
+		// backoffDelay applies +/-10% jitter (defaultJitterFraction); allow a
+		// generous slop on top for wall-clock scheduling noise between
+		// `before` and handleDriverFailure's own now.
+		lower := time.Duration(float64(base)*0.9) - time.Second
+		upper := time.Duration(float64(base)*1.1) + time.Second
+		if delay < lower || delay > upper {
+			t.Errorf("after crash #%d: backoff delay = %v, want in [%v, %v] (base %v)", attempt, delay, lower, upper, base)
+		}
+		if attempt > 1 && delay <= prevDelay/2 {
+			t.Errorf("after crash #%d: backoff delay %v did not increase over previous attempt's %v", attempt, delay, prevDelay)
+		}
+		prevDelay = delay
+
+		// The real driver poll loop clears NextRetryAt once it consumes a
+		// pending retry and restarts the session (clearNextRetryAt, called
+		// from the restart path) — simulate that here so the next simulated
+		// crash starts from a clean pending-retry state.
+		inst.NextRetryAt = time.Time{}
+	}
+
+	// A 4th crash arrives with RetryAttempt already at the resolved cap (3):
+	// evaluateSessionRetry must now return retryDecisionExhausted rather than
+	// scheduling a 4th backoff.
+	handleDriverFailure(inst, "/tmp", policy, "crashed", make(chan struct{}))
+
+	if inst.Status != PermanentlyFailed {
+		t.Fatalf("Status = %v, want PermanentlyFailed after exhausting max_attempts", inst.Status)
+	}
+	if len(notifier.calls) != 1 {
+		t.Fatalf("notifier calls = %d, want exactly 1", len(notifier.calls))
+	}
+	if _, found := rq.Get(inst.UUID); !found {
+		t.Error("expected a ReviewQueue entry for the permanently-failed session")
+	}
+
+	// A later observation of the already-PermanentlyFailed session (e.g. the
+	// driver loop ticking again before it stops) must not re-fire the
+	// one-shot notification.
+	handleDriverFailure(inst, "/tmp", policy, "crashed", make(chan struct{}))
+	if len(notifier.calls) != 1 {
+		t.Errorf("notifier calls after redundant failure observation = %d, want still 1 (edge-triggered, no re-fire)", len(notifier.calls))
 	}
 }
 

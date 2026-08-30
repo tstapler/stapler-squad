@@ -406,15 +406,24 @@ func (i *Instance) IsRetryPending() bool {
 // manual "Retry now" UI action and the RetrySession RPC (AC6). Re-resolves
 // the retry policy fresh (rather than reusing a snapshot from a prior driver
 // run) since this always starts a brand-new failure episode.
+//
+// Deliberately does NOT set Status = Active here: restartForRetry branches on
+// GetEffectiveStatus() to decide between the RecoverFromStopped()+Start()
+// cold-recovery path (Stopped/PermanentlyFailed) and the in-place Restart()
+// path (everything else). Setting Status = Active before calling
+// restartForRetry made GetEffectiveStatus() always read Active, so the
+// cold-recovery branch was unreachable from a manual retry — even starting
+// from PermanentlyFailed — while the automated backoff-expiry and
+// restart-grace callers (which never pre-mutate Status) correctly took it.
+// Status is set to Active only as a side effect of whichever branch
+// restartForRetry actually takes (Start()'s Creating→Active transition, or
+// Restart()'s own handling), mirroring the automated entry points exactly.
 func (i *Instance) RetryNow(allowedPath string) error {
 	policy := resolveRetryPolicy(config.LoadConfig().RetryPolicy, i.RetryPolicyOverride)
 
 	i.mu.Lock()
 	i.reset()
 	i.RetryMaxAttempts = policy.MaxAttempts
-	if i.Status == PermanentlyFailed || i.Status == Stopped {
-		i.Status = Active
-	}
 	i.mu.Unlock()
 
 	prompt := buildRetryContinuationPrompt(i, "manual retry")
