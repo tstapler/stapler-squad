@@ -20,6 +20,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/git"
+	"github.com/tstapler/stapler-squad/session/headless"
 )
 
 // waitWithTimeout waits for the done channel to be closed or fails the test after 2 seconds.
@@ -2376,6 +2377,10 @@ type fakePRCreator struct {
 	pushCalled          bool
 	createCalled        bool
 	copilotReviewCalled bool
+	// createdBody records the PR body CreatePR was called with, so tests can
+	// assert on the drafted-body-plus-backlog-link composition without
+	// re-deriving it themselves.
+	createdBody string
 	// noCommitsAheadOfMain simulates a genuinely empty diff (BUG-063): the
 	// zero value (false) preserves every existing test's assumption that
 	// there ARE commits to ship, so only tests exercising the new zero-diff
@@ -2391,6 +2396,7 @@ func (f *fakePRCreator) PushBranch() error {
 }
 func (f *fakePRCreator) CreatePR(opts git.PRCreateOptions) (string, int, error) {
 	f.createCalled = true
+	f.createdBody = opts.Body
 	return f.createURL, f.createNumber, f.createErr
 }
 func (f *fakePRCreator) EnablePRAutoMerge(prNumber int) error { return f.autoMergeErr }
@@ -2765,6 +2771,75 @@ func TestPushAndCreatePR_should_SendWarningNotification_When_RequestCopilotRevie
 	require.NoError(t, err)
 	assert.Equal(t, string(BacklogStatusPRPending), fetched.Status, "the PR was created successfully — the item must still advance to pr_pending")
 	assert.Contains(t, notifier.titles(), "Copilot review not requested")
+}
+
+// TestPushAndCreatePR_AppendsBacklogLink_ToAgentDraftedBody verifies that when
+// a headless pool is wired and DraftPRDescription succeeds, pushAndCreatePR's
+// drafted-body path (not just buildFallbackPRBody's fallback path) still
+// appends the "Backlog item: <link>" deep link the reviewer needs — see the
+// `strings.TrimRight(drafted, "\n") + "\n\nBacklog item: " + backlogItemLink(...)`
+// composition in pushAndCreatePR. Drives a real headless.Pool against a
+// FakeRunner (session/headless/fake_runner.go) so DraftPRDescription's own
+// non-empty-diff precondition is exercised for real, using a small on-disk
+// git repo (newNonEmptyDiffGitRepo, review_gate_test.go) so GetGitDiff has
+// real commits to diff instead of erroring and forcing the fallback path.
+func TestPushAndCreatePR_AppendsBacklogLink_ToAgentDraftedBody(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+
+	repoDir := newNonEmptyDiffGitRepo(t)
+
+	item, err := storage.CreateBacklogItem(context.Background(), BacklogItemData{
+		Title:              "Drafted PR body gets a backlog link",
+		Description:        "The agent-drafted PR body must still point back at the backlog item.",
+		AcceptanceCriteria: `[]`,
+		Priority:           1,
+		Status:             string(BacklogStatusReview),
+		RepoPath:           repoDir,
+	})
+	require.NoError(t, err)
+
+	sessionUUID := uuid.New().String()
+	itemSession, err := storage.CreateItemSession(context.Background(), ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: sessionUUID,
+		SessionRole: SessionRoleWork,
+	})
+	require.NoError(t, err)
+
+	baseSHA := strings.TrimSpace(runGitOutputOrFail(t, repoDir, "rev-parse", "HEAD~1"))
+
+	inst := newTestInstance("push-pr-drafted-body-test")
+	inst.UUID = sessionUUID
+	inst.gitManager.worktree = git.NewGitWorktreeFromStorage(repoDir, repoDir, "push-pr-drafted-body-test", "backlog/push-pr-drafted-body-test", baseSHA)
+	require.NoError(t, storage.SaveInstances([]*Instance{inst}))
+	is := ItemSessionSummary{ID: itemSession.ID, SessionUUID: sessionUUID, BacklogItemID: item.ID}
+
+	const draftedBody = "## Summary\nThis change adds the missing dedup check.\n\n## Test plan\n- [x] Ran the new regression test\n"
+	runner := headless.NewFakeRunner(fmt.Sprintf(`{"session_id":"s1","result":%q,"cost_usd":0.001}`, draftedBody))
+	pool := headless.NewPoolWithRunner(headless.PoolConfig{}, runner)
+
+	listener := NewBacklogLifecycleListener(storage)
+	listener.SetHeadlessPool(pool)
+	fakeCreator := &fakePRCreator{
+		createURL:    "https://github.com/TylerStaplerAtFanatics/stapler-squad/pull/321",
+		createNumber: 321,
+	}
+	listener.SetPRCreatorFactory(func(repoPath, worktreePath, sessionName, branchName, baseCommitSHA string) prCreator {
+		return fakeCreator
+	})
+
+	listener.pushAndCreatePR(context.Background(), item, is)
+
+	require.True(t, fakeCreator.createCalled, "CreatePR must have been called")
+	wantLink := "Backlog item: " + backlogItemLink(listener.getDashboardBaseURL(), item.ID)
+	assert.Contains(t, fakeCreator.createdBody, "This change adds the missing dedup check.",
+		"the agent-drafted body content must be used, not the fallback body")
+	assert.Contains(t, fakeCreator.createdBody, wantLink,
+		"the drafted-body path must still append the backlog item deep link")
+	assert.True(t, strings.HasSuffix(fakeCreator.createdBody, wantLink+"\n"),
+		"the backlog link must be appended after the drafted body, not embedded mid-content")
 }
 
 // TestPushAndCreatePR_ReusesExistingPR_WhenAlreadySet verifies the "PR already

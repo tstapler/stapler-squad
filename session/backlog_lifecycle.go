@@ -88,6 +88,14 @@ type BacklogLifecycleListener struct {
 	dequeuerMu sync.RWMutex
 	dequeuer   QueueDequeuer
 
+	// dashboardBaseURLFnMu guards dashboardBaseURLFn for concurrent Set/get
+	// access. Resolves the base URL used to build a clickable deep link back
+	// to a backlog item from a PR body (see backlogItemLink in
+	// backlog_lifecycle_pr.go); defaults to localhost:8543 and is overridden
+	// at startup via SetDashboardBaseURLFn with the real bound address.
+	dashboardBaseURLFnMu sync.RWMutex
+	dashboardBaseURLFn   func() string
+
 	// oneShotShipRunnerMu guards oneShotShipRunner for concurrent Set/get access.
 	oneShotShipRunnerMu sync.RWMutex
 	// oneShotShipRunner runs the agent-driven ship flow (see agentShipPrompt)
@@ -205,6 +213,14 @@ func (l *BacklogLifecycleListener) SetHeadlessPool(p *headless.Pool) {
 	l.poolMu.Lock()
 	defer l.poolMu.Unlock()
 	l.headlessPool = p
+}
+
+// SetDashboardBaseURLFn overrides the base URL used by backlogItemLink to
+// build a deep link back to a backlog item in agent-created PR bodies.
+func (l *BacklogLifecycleListener) SetDashboardBaseURLFn(fn func() string) {
+	l.dashboardBaseURLFnMu.Lock()
+	defer l.dashboardBaseURLFnMu.Unlock()
+	l.dashboardBaseURLFn = fn
 }
 
 // SetAutoReopener wires in the spawner used to automatically reopen items for
@@ -563,6 +579,12 @@ func (l *BacklogLifecycleListener) getHeadlessPool() *headless.Pool {
 	return l.headlessPool
 }
 
+func (l *BacklogLifecycleListener) getDashboardBaseURL() string {
+	l.dashboardBaseURLFnMu.RLock()
+	defer l.dashboardBaseURLFnMu.RUnlock()
+	return l.dashboardBaseURLFn()
+}
+
 // Shutdown cancels in-flight review gate calls. Safe to call concurrently.
 func (l *BacklogLifecycleListener) Shutdown() {
 	if l.shutdownCancel != nil {
@@ -585,6 +607,7 @@ func newListenerBase(storage *Storage, pipelineEngine PipelineEngine) *BacklogLi
 		branchReconciler:        git.MergeMainIntoWorktree,
 		orphanedPRFinder:        defaultOrphanedPRFinder,
 		prByNumberFinder:        defaultPRByNumberFinder,
+		dashboardBaseURLFn:      func() string { return "http://localhost:8543" },
 	}
 	l.runner = NewReviewGateRunner(storage, l.getAutoReopener, l.getNotifier, l.getSessionCreator, pipelineEngine)
 	return l
