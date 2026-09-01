@@ -1,0 +1,18 @@
+{
+  "name": "sessions/8f3c2a91-4e5d-4b6a-9c1d-2e7f8a9b0c1d",
+  "id": "8f3c2a91-4e5d-4b6a-9c1d-2e7f8a9b0c1d",
+  "state": "COMPLETED",
+  "title": "Fix the flaky poller test",
+  "outputs": [
+    {
+      "pullRequest": {
+        "url": "https://github.com/tstapler/stapler-squad/pull/700",
+        "title": "Fix flaky poller test",
+        "description": "Jules diagnosed a race in the poller's tick loop and added a synchronization guard."
+      }
+    }
+  ],
+  "createTime": "2026-09-01T14:32:07Z",
+  "updateTime": "2026-09-01T14:47:52Z",
+  "url": "https://jules.google.com/session/8f3c2a91-4e5d-4b6a-9c1d-2e7f8a9b0c1d"
+}
