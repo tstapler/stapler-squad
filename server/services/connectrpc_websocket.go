@@ -1404,7 +1404,16 @@ func (h *ConnectRPCWebSocketHandler) streamViaControlMode(stream *connectWebSock
 				resizeDone := func() { resizeSettling.Store(false) }
 
 				if err := instance.SetWindowSize(r.cols, r.rows); err != nil {
-					log.Error("[streamViaControlMode] failed to resize", "err", err)
+					if errors.Is(err, streamhub.ErrSessionNotStarted) {
+						// Same transient cold-start window StreamHub's applyNegotiatedSize
+						// skips (session/streamhub/hub.go) -- the session actor hasn't
+						// finished installing its PTY yet. Not an error worth logging;
+						// the next resize event (or a client-side retry) will land once
+						// it has.
+						log.Info("[streamViaControlMode] session not started yet, skipping this resize", "session", sessionID)
+					} else {
+						log.Error("[streamViaControlMode] failed to resize", "err", err)
+					}
 					resizeDone()
 					continue
 				}

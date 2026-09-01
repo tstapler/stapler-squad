@@ -957,7 +957,22 @@ func (i *Instance) SetTmuxSession(session *tmux.TmuxSession) {
 
 // SetWindowSize propagates window size changes to the tmux session.
 // This enables proper terminal resizing in environments like IntelliJ where SIGWINCH doesn't work.
+//
+// Guards on i.started/i.Status the same way CapturePaneContent and its
+// siblings do, returning streamhub.ErrSessionNotStarted instead of falling
+// through to i.pm().SetWindowSize. HasSession() alone is not a readiness
+// signal: LoadInstances()'s reconciliation wires the *tmux.TmuxSession object
+// (instance_serialization.go) synchronously, well before the async
+// Start()/RestoreWithWorkDir() call that actually installs the PTY, so a
+// resize landing in that window used to reach tmux.TmuxSession.SetWindowSize
+// and fail with a raw "PTY is not initialized" error that
+// StreamHub.applyNegotiatedSize's errors.Is(err, ErrSessionNotStarted)
+// skip-and-retry branch (hub.go) couldn't recognize, plus logged a spurious
+// WARN on every restart.
 func (i *Instance) SetWindowSize(cols, rows int) error {
+	if !i.started.Load() || i.Status == Paused {
+		return streamhub.ErrSessionNotStarted
+	}
 	if i.pm().HasSession() {
 		return i.pm().SetWindowSize(cols, rows)
 	}
