@@ -365,12 +365,13 @@ test.describe('Accessibility — backlog live updates (WCAG 4.1.3 AA)', () => {
   });
 
   // BacklogFileBrowserModal, unlike ReviewChangesModal above: react-arborist's
-  // FileTree rewrites its own row tabindex on focus, which breaks a generic
-  // Tab-wrap assertion once focus enters the tree (a separate, pre-existing
-  // bug in FileTree's own focus bookkeeping, not a useFocusTrap regression —
-  // filed as backlog item 4a1f73c4-5558-41f8-9860-8508fb874fcc). This test
-  // only asserts what's in this fix's scope: activation moves focus to the
-  // dialog's first focusable element.
+  // FileTree rewrites its own row tabindex the instant it receives focus,
+  // which makes useFocusTrap's getFocusable() query miss the just-focused
+  // row and can let native Tab fall through past the container entirely
+  // (filed as backlog item 4a1f73c4-5558-41f8-9860-8508fb874fcc). useFocusTrap
+  // now carries a `focusin` safety net for exactly this case — assert both
+  // activation focus and that a Tab-loop through the tree never truly
+  // escapes the dialog.
   test('useFocusTrap moves focus to BacklogFileBrowserModal\'s first focusable element on activation (modal-focus-trap AC5)', async ({ page, request }) => {
     const title = `e2e-focus-trap-files-${Date.now()}`;
     await seedWorkSessionWithWorktreeDirect(request, { title, status: 'review' });
@@ -388,6 +389,36 @@ test.describe('Accessibility — backlog live updates (WCAG 4.1.3 AA)', () => {
     const terminalLink = page.getByRole('link', { name: /open in terminal/i });
     await expect(terminalLink).toBeFocused();
   });
+
+  test('Tab never escapes BacklogFileBrowserModal even through FileTree\'s tabindex churn (modal-focus-trap AC5)', async ({
+    page,
+    request,
+  }) => {
+    const title = `e2e-focus-trap-files-tabloop-${Date.now()}`;
+    await seedWorkSessionWithWorktreeDirect(request, { title, status: 'review' });
+
+    const backlogPage = new BacklogPage(page);
+    await backlogPage.goto();
+    await backlogPage.waitForPageLoad();
+    await backlogPage.openItemDetail(title);
+
+    await page.getByRole('button', { name: 'Browse files in this worktree' }).click();
+
+    const dialog = page.getByTestId('file-browser-modal');
+    await expect(dialog).toBeVisible();
+
+    // Doesn't assert a clean wrap-to-first like assertTabWrapsWithinDialog —
+    // FileTree's roving tabindex means the tree's own internal tab order is
+    // still a bit erratic (tracked by the filed FileTree item above) — only
+    // that the focusin safety net stops it from ever truly leaving the dialog.
+    for (let i = 0; i < 30; i++) {
+      await page.keyboard.press('Tab');
+      const stillInside = await dialog.evaluate(
+        (el) => !!document.activeElement && el.contains(document.activeElement)
+      );
+      expect(stillInside, `Tab press #${i + 1} moved focus outside the dialog`).toBe(true);
+    }
+  });
 });
 
 /**
@@ -403,17 +434,21 @@ async function assertTabWrapsWithinDialog(
   dialog: ReturnType<import('@playwright/test').Page['locator']>
 ) {
   const initial = await page.evaluateHandle(() => document.activeElement);
-  let wrapped = false;
-  for (let i = 0; i < 30; i++) {
-    await page.keyboard.press('Tab');
-    const stillInside = await dialog.evaluate((el) => !!document.activeElement && el.contains(document.activeElement));
-    expect(stillInside, `Tab press #${i + 1} moved focus outside the dialog`).toBe(true);
-    if (await page.evaluate((el) => el === document.activeElement, initial)) {
-      wrapped = true;
-      break;
+  try {
+    let wrapped = false;
+    for (let i = 0; i < 30; i++) {
+      await page.keyboard.press('Tab');
+      const stillInside = await dialog.evaluate((el) => !!document.activeElement && el.contains(document.activeElement));
+      expect(stillInside, `Tab press #${i + 1} moved focus outside the dialog`).toBe(true);
+      if (await page.evaluate((el) => el === document.activeElement, initial)) {
+        wrapped = true;
+        break;
+      }
     }
+    expect(wrapped, "Tab never wrapped back to the dialog's first focusable element").toBe(true);
+  } finally {
+    await initial.dispose();
   }
-  expect(wrapped, "Tab never wrapped back to the dialog's first focusable element").toBe(true);
 }
 
 // async-session-creation Epic 5.2 (SessionCard Failed-state rendering),
