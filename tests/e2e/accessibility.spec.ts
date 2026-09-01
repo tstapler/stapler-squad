@@ -26,6 +26,7 @@ import {
   seedWorkItemSessionDirect,
   seedWorkSessionWithWorktreeDirect,
 } from './pages/BacklogMutations';
+import { SessionClient } from './helpers/session-client';
 
 const BASE_URL = process.env.TEST_SERVER_URL || 'http://localhost:8544';
 
@@ -414,3 +415,169 @@ async function assertTabWrapsWithinDialog(
   }
   expect(wrapped, "Tab never wrapped back to the dialog's first focusable element").toBe(true);
 }
+
+// async-session-creation Epic 5.2 (SessionCard Failed-state rendering),
+// design/ux.md's "Summary of Cross-Cutting Accessibility Verification"
+// (Surface 3).
+//
+// KNOWN GAP (verified, not assumed): SessionCard.tsx's "card" view -- where
+// the FAILED-status pill, live region, and reduced-motion icon this section
+// tests all live -- has no reachable path in the running app.
+// SessionList.tsx defaults `viewMode` to `"row"` (SessionRow.tsx renders
+// instead), no call site in web-app/src passes `viewMode="card"`, and there
+// is no user-facing toggle. Confirmed empirically against a real running
+// instance with 10 sessions on screen: `[data-testid="session-card"]` count
+// was 0, `[data-testid="session-row"]` count was 10. SessionRow.tsx also has
+// no SessionStatus.FAILED case in its own status mapping (getStatusDotValue
+// falls through to "idle" for FAILED).
+//
+// The color-contrast check below still runs for real (it reads the actual
+// token values SessionCard.css.ts's statusCreationFailed applies, not the
+// rendered DOM, since there is no DOM to scan). The other three checks
+// (live-region reuse, reduced-motion, focus) fundamentally require a
+// mounted SessionCard and are covered instead by SessionCard.test.tsx's
+// Jest suite; here they document the precondition and skip with this same
+// explanation rather than asserting against a DOM node that cannot exist.
+// Fixing the underlying reachability gap (wiring FAILED into SessionRow, or
+// giving "card" view a live entry point) is a separate, out-of-scope change
+// -- neither file is "SessionCard component/styles".
+test.describe('Accessibility — SessionCard Failed-state (async-session-creation Epic 5.2)', () => {
+  test('Failed status pill meets WCAG AA contrast in both themes', async () => {
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const themeFile = path.resolve(__dirname, '../../web-app/src/styles/theme.css.ts');
+    const source = fs.readFileSync(themeFile, 'utf-8');
+
+    // statusCreationFailed (SessionCard.css.ts) applies vars.color.warningBg
+    // as background and vars.color.warningText as foreground -- extract every
+    // theme's actual hex values for that pair (they appear as adjacent
+    // lines in every theme block) rather than hardcoding a copy that could
+    // drift from the source of truth.
+    const bgMatches = [...source.matchAll(/warningBg:\s*"(#[0-9a-fA-F]{6})"/g)].map((m) => m[1]);
+    const textMatches = [...source.matchAll(/warningText:\s*"(#[0-9a-fA-F]{6})"/g)].map((m) => m[1]);
+    expect(bgMatches.length).toBeGreaterThan(0);
+    expect(bgMatches.length).toBe(textMatches.length);
+
+    function relativeLuminance(hex: string): number {
+      const [r, g, b] = [0, 2, 4].map((i) => parseInt(hex.slice(1 + i, 3 + i), 16) / 255);
+      const chan = (c: number) => (c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4);
+      const [rl, gl, bl] = [r, g, b].map(chan);
+      return 0.2126 * rl + 0.7152 * gl + 0.0722 * bl;
+    }
+    function contrastRatio(hexA: string, hexB: string): number {
+      const [l1, l2] = [relativeLuminance(hexA), relativeLuminance(hexB)].sort((a, b) => b - a);
+      return (l1 + 0.05) / (l2 + 0.05);
+    }
+
+    for (let i = 0; i < bgMatches.length; i++) {
+      const ratio = contrastRatio(bgMatches[i], textMatches[i]);
+      // WCAG AA, normal text: >= 4.5:1.
+      expect(ratio, `theme #${i} (bg=${bgMatches[i]}, text=${textMatches[i]})`).toBeGreaterThanOrEqual(4.5);
+    }
+  });
+
+  test('Failed transition reuses the single existing live region', async ({ page }) => {
+    await page.addInitScript(() => localStorage.setItem('stapler-squad:onboarded', 'true'));
+    await page.goto(BASE_URL, { waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('input[aria-label="Search sessions"]', { timeout: 15000 });
+
+    if ((await page.locator('[data-testid="session-card"]').count()) === 0) {
+      test.skip(true, 'SessionCard "card" view is unreachable in the live app (see describe-block doc comment) -- covered instead by SessionCard.test.tsx\'s "SessionCard_should_ReuseSameLiveRegionNode_When_TransitioningCreatingToFailed".');
+    }
+  });
+
+  test('Failed icon has no animation under prefers-reduced-motion', async ({ page }) => {
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    await page.addInitScript(() => localStorage.setItem('stapler-squad:onboarded', 'true'));
+    await page.goto(BASE_URL, { waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('input[aria-label="Search sessions"]', { timeout: 15000 });
+
+    if ((await page.locator('[data-testid="session-card"]').count()) === 0) {
+      test.skip(true, 'SessionCard "card" view is unreachable in the live app (see describe-block doc comment). The Failed icon (statusGlyphIcon/failureMessageIcon, SessionCard.css.ts) is statically styled with no animationName at all, so there is nothing for prefers-reduced-motion to guard -- verified by reading the exported styles, not eyeballed.');
+    }
+  });
+
+  test('focus stays on active element when a background card fails', async ({ page }) => {
+    await page.addInitScript(() => localStorage.setItem('stapler-squad:onboarded', 'true'));
+    await page.goto(BASE_URL, { waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('input[aria-label="Search sessions"]', { timeout: 15000 });
+
+    if ((await page.locator('[data-testid="session-card"]').count()) === 0) {
+      test.skip(true, 'SessionCard "card" view is unreachable in the live app (see describe-block doc comment) -- covered instead by inspection: SessionCard.tsx\'s Failed-state rendering (getFailureMessage/failureMessage block) has no focus()/autoFocus/useEffect side effect anywhere, so no code path exists that could steal focus on a background transition.');
+    }
+  });
+
+  // Epic 5.4 (Cancel/Retry buttons): drives real backend state via the same
+  // NONEXISTENT_GITHUB_URL technique session-creation-async.spec.ts's Epic
+  // 5.3/5.4 blocks use -- no test-mode hook exists to force a chosen
+  // status/failure_reason, and this repo's own finding (documented in that
+  // file) is that WS-mocking-based alternatives are unreliable here.
+  test('Cancel and Retry controls are keyboard-reachable buttons with distinct aria-labels', async ({ page }) => {
+    const client = new SessionClient(BASE_URL);
+    const failedTitle = `e2e-a11y-failed-${Date.now()}`;
+    const NONEXISTENT_GITHUB_URL = 'https://github.com/this-org-definitely-does-not-exist-e2e-test/nonexistent-repo-12345';
+
+    const failedSession = await client.createSession({ title: failedTitle, path: NONEXISTENT_GITHUB_URL });
+    void failedSession;
+
+    await page.addInitScript(() => localStorage.setItem('stapler-squad:onboarded', 'true'));
+
+    // Real DNS + TLS + HTTPS 404 round trips vary -- most of the time the
+    // pipeline's own GitHub-404 resolution (~1s, see
+    // session-creation-async.spec.ts's Epic 5.3 block for the full
+    // explanation) is comfortably slower than a fresh page load, but it can
+    // occasionally resolve before the page finishes hydrating -- an
+    // environmental race, not a UI bug. Retry with a brand-new Creating
+    // session on that specific precondition failure (session-creation-
+    // async.spec.ts's openFreshCreatingCard uses the identical pattern).
+    let creatingCard!: import('@playwright/test').Locator;
+    let cancelButton!: import('@playwright/test').Locator;
+    let found = false;
+    for (let attempt = 0; attempt < 5 && !found; attempt++) {
+      const creatingTitle = `e2e-a11y-creating-${Date.now()}-${attempt}`;
+      await client.createSession({ title: creatingTitle, path: NONEXISTENT_GITHUB_URL });
+      await page.goto(BASE_URL, { waitUntil: 'domcontentloaded' });
+
+      creatingCard = page.locator('[data-testid="session-card"], [data-testid="session-row"]').filter({ hasText: creatingTitle });
+      await expect(creatingCard).toBeVisible({ timeout: 10000 });
+
+      cancelButton = creatingCard.getByRole('button', { name: 'Cancel session creation' });
+      found = await cancelButton.isVisible().catch(() => false);
+    }
+    expect(found, 'Could not observe a Creating card with a Cancel button within 5 attempts').toBe(true);
+
+    const failedCard = page.locator('[data-testid="session-card"], [data-testid="session-row"]').filter({ hasText: failedTitle });
+    await expect(failedCard).toBeVisible({ timeout: 10000 });
+
+    // Give the second session's real GitHub-404 resolution time to land
+    // (same ~1s-to-30s budget as session-creation-async.spec.ts's Epic 5.3
+    // toast test).
+    const retryButton = failedCard.getByRole('button', { name: 'Retry creating session' });
+    await expect(retryButton).toBeVisible({ timeout: 30000 });
+
+    // Distinct aria-labels, and both exposed as ARIA role="button".
+    await expect(cancelButton).toHaveAccessibleName('Cancel session creation');
+    await expect(retryButton).toHaveAccessibleName('Retry creating session');
+    expect(await cancelButton.getAttribute('aria-label')).not.toBe(await retryButton.getAttribute('aria-label'));
+
+    // Keyboard-reachable: Tab from a known start point (the search input)
+    // must eventually focus each button without a mouse ever being used.
+    await page.locator('input[aria-label="Search sessions"]').focus();
+    const cancelHandle = await cancelButton.elementHandle();
+    const retryHandle = await retryButton.elementHandle();
+    let reachedRetry = false;
+    let reachedCancel = false;
+    for (let i = 0; i < 60 && !(reachedRetry && reachedCancel); i++) {
+      await page.keyboard.press('Tab');
+      const activeHandle = await page.evaluateHandle(() => document.activeElement);
+      if (await page.evaluate(([a, b]) => a === b, [activeHandle, cancelHandle])) {
+        reachedCancel = true;
+      }
+      if (await page.evaluate(([a, b]) => a === b, [activeHandle, retryHandle])) {
+        reachedRetry = true;
+      }
+    }
+    expect(reachedCancel, 'Tab order never reached the Cancel button').toBe(true);
+    expect(reachedRetry, 'Tab order never reached the Retry button').toBe(true);
+  });
+});

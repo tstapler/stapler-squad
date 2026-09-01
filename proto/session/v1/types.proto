@@ -298,6 +298,14 @@ message Session {
   // Reason + timestamp per past automated or manual retry attempt, newest
   // last, capped at 10 entries.
   repeated RetryAttemptRecord retry_history = 87;
+
+  // Human-readable reason the async creation pipeline (Background Resolution
+  // Pipeline) failed. Only meaningful when status == SESSION_STATUS_FAILED;
+  // empty otherwise. One of "GitHubResolutionError", "StartupError", "Stale",
+  // or "Cancelled" (see session.Instance.FailureReason and ADR-001) — the
+  // client maps these to reason-specific copy for the Failed-state card and
+  // failure toast rather than displaying the raw string.
+  string failure_reason = 88;
 }
 
 // RetryAttemptRecord is one entry in Session.retry_history.
@@ -426,6 +434,12 @@ enum SessionStatus {
   // retry at all. Terminal state pending human action via "Retry now"
   // (RetrySession RPC) — unlike STOPPED, not auto-revived by reconciliation.
   SESSION_STATUS_PERMANENTLY_FAILED = 11;
+  // Session's async creation pipeline (Background Resolution Pipeline) failed
+  // before the session ever reached ACTIVE. Non-terminal: distinct from
+  // CRASHED (a previously-ACTIVE session whose process later exited
+  // abnormally) — a FAILED session can be retried back to CREATING. See
+  // ADR-001.
+  SESSION_STATUS_FAILED = 12;
 }
 
 // SessionType determines the session workflow.

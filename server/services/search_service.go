@@ -160,7 +160,12 @@ func (ss *SearchService) liveSessionStatus(conversationID string) sessionv1.Sess
 	}
 	for _, inst := range ss.getInstances() {
 		if inst.GetConversationUUID() == conversationID {
-			return adapters.StatusToProto(inst.Status)
+			proto, err := adapters.StatusToProto(inst.Status)
+			if err != nil {
+				log.Error("liveSessionStatus: unrecognized session.Status", "status", int(inst.Status), "err", err)
+				return sessionv1.SessionStatus_SESSION_STATUS_UNSPECIFIED
+			}
+			return proto
 		}
 	}
 	return sessionv1.SessionStatus_SESSION_STATUS_UNSPECIFIED

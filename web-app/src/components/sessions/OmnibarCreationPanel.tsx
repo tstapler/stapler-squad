@@ -985,7 +985,11 @@ export function OmnibarCreationPanel({
       </div>
 
       {/* Error Message */}
-      {error && <div className={errorClass}>{error}</div>}
+      {error && (
+        <div className={errorClass} role="alert" data-testid="omnibar-create-error">
+          {error}
+        </div>
+      )}
 
       {/* Footer */}
       <div className={footer}>
