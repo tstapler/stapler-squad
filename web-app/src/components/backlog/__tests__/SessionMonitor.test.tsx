@@ -10,7 +10,8 @@
  */
 
 import React from "react";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, act } from "@testing-library/react";
+import { ConnectError, Code } from "@connectrpc/connect";
 import { SessionMonitor } from "../SessionMonitor";
 
 const getTerminalSnapshot = jest.fn();
@@ -76,6 +77,26 @@ describe("SessionMonitor", () => {
     expect(screen.queryByText("No conversation history yet…")).toBeNull();
   });
 
+  it("SessionMonitor_should_stripCodePrefix_When_getConversationMessagesRejectsWithConnectError", async () => {
+    getTerminalSnapshot.mockResolvedValue("");
+    getConversationMessages.mockRejectedValue(
+      new ConnectError("history entry not found", Code.NotFound)
+    );
+
+    render(<SessionMonitor sessionId="s1" isRunning={true} />);
+
+    fireEvent.click(screen.getByRole("button", { name: /history/i }));
+
+    await waitFor(() =>
+      expect(screen.getByTestId("session-monitor-conversation-error")).toBeInTheDocument()
+    );
+    // Must render ConnectError.rawMessage, not the "[code] message"-formatted
+    // .message — asserting against a real ConnectError (not a plain Error) is
+    // what actually exercises the getErrorMessage() prefix-stripping behavior.
+    expect(screen.getByText(/history entry not found/)).toBeInTheDocument();
+    expect(screen.queryByText(/\[not_found\]/i)).toBeNull();
+  });
+
   it("SessionMonitor_should_renderGenuineEmptyState_When_fetchesSucceedWithNoData", async () => {
     getTerminalSnapshot.mockResolvedValue("");
     getConversationMessages.mockResolvedValue([]);
@@ -85,5 +106,41 @@ describe("SessionMonitor", () => {
     await waitFor(() => expect(getTerminalSnapshot).toHaveBeenCalled());
     expect(screen.getByText("No output yet…")).toBeInTheDocument();
     expect(screen.queryByTestId("session-monitor-terminal-error")).toBeNull();
+  });
+
+  it("SessionMonitor_should_stopPolling_When_getConversationMessagesRejectsWithNotFound", async () => {
+    jest.useFakeTimers();
+    try {
+      getTerminalSnapshot.mockResolvedValue("");
+      getConversationMessages.mockRejectedValue(
+        new ConnectError("history entry not found", Code.NotFound)
+      );
+
+      render(<SessionMonitor sessionId="s1" isRunning={true} />);
+
+      // Initial mount-triggered fetch.
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(getConversationMessages).toHaveBeenCalledTimes(1);
+
+      // One interval tick still fires — the effect schedules setInterval
+      // synchronously before the NotFound rejection is observed — but every
+      // tick after that must be suppressed once stopPolling() has run.
+      await act(async () => {
+        jest.advanceTimersByTime(5000);
+        await Promise.resolve();
+      });
+      const callsAfterFirstTick = getConversationMessages.mock.calls.length;
+      expect(callsAfterFirstTick).toBeGreaterThanOrEqual(1);
+
+      await act(async () => {
+        jest.advanceTimersByTime(5000 * 5);
+        await Promise.resolve();
+      });
+      expect(getConversationMessages.mock.calls.length).toBe(callsAfterFirstTick);
+    } finally {
+      jest.useRealTimers();
+    }
   });
 });

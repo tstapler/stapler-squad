@@ -129,6 +129,26 @@ func (d *DefaultsService) UpdateGlobalDefaults(
 	cfg.NewProjectBaseDir = req.Msg.NewProjectBaseDir
 	cfg.MaxAutoReworkIterations = int(req.Msg.MaxAutoReworkIterations)
 	cfg.MaxConcurrentBacklogWorkItems = int(req.Msg.MaxConcurrentBacklogWorkItems)
+	cfg.StaleSession.ThresholdMinutes = int(req.Msg.StaleSessionThresholdMinutes)
+	notifyEnabled := req.Msg.StaleSessionNotifyEnabled
+	cfg.StaleSession.NotifyEnabled = &notifyEnabled
+	if rp := req.Msg.RetryPolicy; rp != nil {
+		enabled := rp.Enabled
+		staleTriggers := rp.StaleTriggersRetry
+		cfg.RetryPolicy = config.RetryPolicyConfig{
+			Enabled:             &enabled,
+			MaxAttempts:         int(rp.MaxAttempts),
+			Backoff:             rp.Backoff,
+			InitialDelaySeconds: int(rp.InitialDelaySeconds),
+			MaxDelaySeconds:     int(rp.MaxDelaySeconds),
+			RetryOn:             rp.RetryOn,
+			StaleTriggersRetry:  &staleTriggers,
+		}
+		// Normalize immediately, matching LoadConfigFromPath's boot-time
+		// normalization -- otherwise an invalid value persists un-normalized in
+		// config.json until the next restart.
+		cfg.RetryPolicy.Backoff = cfg.RetryPolicy.BackoffOrWarn()
+	}
 	if req.Msg.EnvVars != nil {
 		cfg.SessionDefaults.EnvVars = req.Msg.EnvVars
 	} else {
@@ -506,6 +526,16 @@ func sessionDefaultsToProto(cfg *config.Config) *sessionv1.SessionDefaultsConfig
 		OneOffBaseDir:                 cfg.OneOffBaseDir,
 		MaxAutoReworkIterations:       int32(cfg.MaxAutoReworkIterationsOrDefault()),
 		MaxConcurrentBacklogWorkItems: int32(cfg.MaxConcurrentBacklogWorkItemsOrDefault()),
+		StaleSessionThresholdMinutes:  int32(cfg.StaleSession.ThresholdMinutesOrDefault()),
+		StaleSessionNotifyEnabled:     cfg.StaleSession.NotifyEnabledOrDefault(),
+		RetryPolicy: &sessionv1.RetryPolicyConfig{
+			Enabled:             cfg.RetryPolicy.EnabledOrDefault(),
+			MaxAttempts:         int32(cfg.RetryPolicy.MaxAttemptsOrDefault()),
+			Backoff:             cfg.RetryPolicy.BackoffOrWarn(),
+			InitialDelaySeconds: int32(cfg.RetryPolicy.InitialDelaySeconds),
+			MaxDelaySeconds:     int32(cfg.RetryPolicy.MaxDelaySecondsOrDefault()),
+			RetryOn:             cfg.RetryPolicy.RetryOnOrDefault(),
+		},
 	}
 	// Use resolved defaults so the frontend receives ~/Projects rather than "" when unset.
 	if resolvedNewProjectDir, err := cfg.NewProjectBaseDirOrDefault(); err == nil {

@@ -1,12 +1,36 @@
 package config
 
-import "time"
+import (
+	"slices"
+	"time"
+
+	"github.com/tstapler/stapler-squad/log"
+)
 
 // NotificationPrefs holds the user's notification delivery preferences.
 type NotificationPrefs struct {
 	// PushEnabled controls whether web push notifications are sent.
 	// Default is false (opt-in).
 	PushEnabled bool `json:"push_enabled"`
+}
+
+// CallbackConfig holds the global singleton outbound-callback URLs fired by
+// server/services.CallbackDispatcher on the three lifecycle events FR7
+// covers. Never echoed back in plaintext by any RPC (see
+// sessionv1.CallbackConfigProto, which reports booleans only) — same
+// masked-boolean-not-value shape as the (unimplemented)
+// project_plans/slack-review-notifications design, applied fresh here since
+// that project has no shipped code to reuse.
+type CallbackConfig struct {
+	// OnSessionCompleteURL receives a POST when a backlog item transitions to
+	// BacklogStatusDone. Empty string means disabled.
+	OnSessionCompleteURL string `json:"on_session_complete_url,omitempty"`
+	// OnSessionStaleURL receives a POST the first time a work session is
+	// detected stale (StuckReasonStaleWork). Empty string means disabled.
+	OnSessionStaleURL string `json:"on_session_stale_url,omitempty"`
+	// OnQueueItemCreatedURL receives a POST when an item is added to the
+	// review queue. Empty string means disabled.
+	OnQueueItemCreatedURL string `json:"on_queue_item_created_url,omitempty"`
 }
 
 // HibernationConfig holds configuration for the session hibernation feature.
@@ -27,10 +51,49 @@ type HibernationConfig struct {
 	RetentionDays int `json:"retention_days"`
 }
 
+// SlackConfig holds configuration for the Slack review-queue notification
+// feature (Phase 1: notify-only; Phase 2: interactive approval buttons).
+//
+// WebhookURLEncrypted and SigningSecretEncrypted store ciphertext only, per
+// ADR-001 (project_plans/slack-review-notifications/decisions/ADR-001-slack-secret-storage-encryption.md):
+// both values are encrypted at rest with Config.GetOrCreateEncryptionKey() +
+// session.EncryptToken/DecryptToken, the same primitive already used for
+// backlog ItemSource tokens. The config package cannot decrypt them itself
+// (it would need to import session, which already imports config); decryption
+// happens in server/services, which imports both.
+type SlackConfig struct {
+	// WebhookURLEncrypted is the AES-256-GCM-encrypted Slack Incoming Webhook
+	// URL, or empty if not configured. Never store or log the plaintext value.
+	WebhookURLEncrypted string `json:"webhook_url_encrypted,omitempty"`
+	// SigningSecretEncrypted is the AES-256-GCM-encrypted Slack app signing
+	// secret (Phase 2, used to verify interactive-button callbacks), or empty
+	// if not configured. Never store or log the plaintext value.
+	SigningSecretEncrypted string `json:"signing_secret_encrypted,omitempty"`
+	// NotifyOnQueueItem controls whether a Slack message is sent when an item
+	// enters the review queue. Default: false (opt-in).
+	NotifyOnQueueItem bool `json:"notify_on_queue_item,omitempty"`
+	// QueueDepthThreshold is the review-queue depth at which a digest
+	// notification is sent (edge-triggered: one digest per burst). 0 disables
+	// depth-based notifications.
+	QueueDepthThreshold int `json:"queue_depth_threshold,omitempty"`
+	// ApprovalEnabled controls whether outbound Slack messages include
+	// interactive allow/deny buttons (Phase 2) and whether the interactive
+	// callback route is registered. Default: false.
+	ApprovalEnabled bool `json:"approval_enabled,omitempty"`
+	// DashboardBaseURL is the base URL used to build "view in dashboard" links
+	// in Slack messages. Empty string means links are omitted.
+	DashboardBaseURL string `json:"dashboard_base_url,omitempty"`
+}
+
 // defaultSessionRetentionDays is used by RetentionDaysOrDefault whenever
 // RetentionDays is unset (zero), including for configs saved before this field
 // existed.
 const defaultSessionRetentionDays = 14
+
+// defaultStaleSessionThresholdMinutes is used by ThresholdMinutesOrDefault
+// whenever ThresholdMinutes is unset (zero or negative), including for
+// configs saved before this field existed.
+const defaultStaleSessionThresholdMinutes = 30
 
 // SessionRetentionConfig holds configuration for the automatic session-retention
 // cleanup sweep, which deletes archived sessions past a retention window once they
@@ -62,6 +125,159 @@ func (c SessionRetentionConfig) RetentionDaysOrDefault() int {
 	return c.RetentionDays
 }
 
+// StaleSessionConfig holds configuration for stale-session detection: how long a
+// session may go without activity before it's flagged stale, and whether that
+// triggers a notification.
+type StaleSessionConfig struct {
+	// ThresholdMinutes is how many minutes of inactivity before a session is
+	// considered stale. Default: 30.
+	ThresholdMinutes int `json:"threshold_minutes,omitempty"`
+	// NotifyEnabled controls whether a notification is sent when a session goes
+	// stale. A pointer so a config saved before this field existed (nil) can be
+	// distinguished from an explicit `false` — nil defaults to enabled, matching
+	// SessionRetentionConfig.Enabled's pattern.
+	NotifyEnabled *bool `json:"notify_enabled,omitempty"`
+}
+
+// ThresholdMinutesOrDefault returns ThresholdMinutes, falling back to
+// defaultStaleSessionThresholdMinutes when unset (<=0).
+func (c StaleSessionConfig) ThresholdMinutesOrDefault() int {
+	if c.ThresholdMinutes <= 0 {
+		return defaultStaleSessionThresholdMinutes
+	}
+	return c.ThresholdMinutes
+}
+
+// NotifyEnabledOrDefault returns whether stale-session notifications are
+// enabled, defaulting to true when unset.
+func (c StaleSessionConfig) NotifyEnabledOrDefault() bool {
+	if c.NotifyEnabled == nil {
+		return true
+	}
+	return *c.NotifyEnabled
+}
+
+// defaultRetryMaxAttempts is used by MaxAttemptsOrDefault whenever
+// MaxAttempts is unset (<=0), including for configs saved before this field
+// existed. 1 preserves today's exact single-retry behavior (AC7).
+const defaultRetryMaxAttempts = 1
+
+// defaultRetryMaxDelaySeconds is used by MaxDelaySecondsOrDefault whenever
+// MaxDelaySeconds is unset (<=0).
+const defaultRetryMaxDelaySeconds = 300
+
+// validRetryOnReasons is the complete vocabulary RetryOnOrDefault accepts;
+// used both as the all-three fallback and to filter out typos.
+var validRetryOnReasons = []string{"crashed", "stalled", "tmux_exited"} //nolint:gochecknoglobals // read-only vocabulary, never mutated; callers only get defensive copies (see append([]string(nil), ...) below)
+
+// RetryPolicyConfig holds configuration for the automated crash/stall retry
+// policy: how many attempts, what backoff, and which failure reasons are
+// eligible. Global default in config.json; may be overridden per-session via
+// session.Instance.RetryPolicyOverride.
+type RetryPolicyConfig struct {
+	// Enabled controls whether automated retry runs at all. A pointer so a
+	// config saved before this field existed (nil) can be distinguished from
+	// an explicit false — nil defaults to enabled, matching
+	// SessionRetentionConfig's pattern.
+	Enabled *bool `json:"enabled,omitempty"`
+	// MaxAttempts is the number of automated retries before the session
+	// transitions to PermanentlyFailed. Default: 1 (preserves today's exact
+	// single-retry behavior — AC7).
+	MaxAttempts int `json:"max_attempts,omitempty"`
+	// Backoff selects the backoff strategy. Only "exponential" is implemented;
+	// see BackoffOrWarn.
+	Backoff string `json:"backoff,omitempty"`
+	// InitialDelaySeconds is the backoff formula's base delay. Default: 0
+	// (preserves today's immediate-restart behavior).
+	InitialDelaySeconds int `json:"initial_delay_seconds,omitempty"`
+	// MaxDelaySeconds caps the backoff formula's computed delay. Default: 300.
+	MaxDelaySeconds int `json:"max_delay_seconds,omitempty"`
+	// RetryOn is the subset of ["crashed","stalled","tmux_exited"] eligible
+	// for automated retry. Empty/nil defaults to all three.
+	RetryOn []string `json:"retry_on,omitempty"`
+	// StaleTriggersRetry is an opt-in flag that, once a stale-session
+	// notification's config (config.StaleSessionConfig) crosses its threshold,
+	// treats that as an additional "stalled"-classified trigger. Currently
+	// unconsumed — StaleSessionConfig (see StaleSessionConfig above) has no
+	// wiring into the retry driver yet; this field exists so a config can
+	// opt in ahead of that integration landing without a later schema change.
+	StaleTriggersRetry *bool `json:"stale_triggers_retry,omitempty"`
+}
+
+// EnabledOrDefault returns whether automated retry is enabled, defaulting to
+// true when unset.
+func (c RetryPolicyConfig) EnabledOrDefault() bool {
+	if c.Enabled == nil {
+		return true
+	}
+	return *c.Enabled
+}
+
+// MaxAttemptsOrDefault returns MaxAttempts, falling back to
+// defaultRetryMaxAttempts when unset (<=0) — a fat-fingered 0/negative value
+// must not silently disable retry.
+func (c RetryPolicyConfig) MaxAttemptsOrDefault() int {
+	if c.MaxAttempts <= 0 {
+		return defaultRetryMaxAttempts
+	}
+	return c.MaxAttempts
+}
+
+// MaxDelaySecondsOrDefault returns MaxDelaySeconds, falling back to
+// defaultRetryMaxDelaySeconds when unset (<=0).
+func (c RetryPolicyConfig) MaxDelaySecondsOrDefault() int {
+	if c.MaxDelaySeconds <= 0 {
+		return defaultRetryMaxDelaySeconds
+	}
+	return c.MaxDelaySeconds
+}
+
+// FilteredRetryOn returns RetryOn with any entry that isn't one of the three
+// known reasons dropped (with a logged warning, not a hard error) — a config
+// typo like "crashd" would otherwise silently produce a policy that never
+// matches that reason, with no error/warning/UI signal anywhere that the
+// entry is being ignored. Unlike RetryOnOrDefault, this does NOT widen an
+// empty result back to all three reasons: session.resolveRetryPolicy's
+// per-session override path needs the filtered result on its own, so an
+// override where every entry is a typo falls back to the already-resolved
+// *global* value instead of silently widening back to all three reasons.
+func (c RetryPolicyConfig) FilteredRetryOn() []string {
+	if len(c.RetryOn) == 0 {
+		return nil
+	}
+	filtered := make([]string, 0, len(c.RetryOn))
+	for _, reason := range c.RetryOn {
+		if slices.Contains(validRetryOnReasons, reason) {
+			filtered = append(filtered, reason)
+		} else {
+			log.Warn("RetryPolicyConfig.RetryOn: ignoring unknown retry reason", "reason", reason)
+		}
+	}
+	return filtered
+}
+
+// RetryOnOrDefault returns RetryOn, defaulting to all three known reasons
+// when empty or when every entry is unknown. See FilteredRetryOn for the
+// filtering-without-fallback variant used by the override-resolution path.
+func (c RetryPolicyConfig) RetryOnOrDefault() []string {
+	if filtered := c.FilteredRetryOn(); len(filtered) > 0 {
+		return filtered
+	}
+	return append([]string(nil), validRetryOnReasons...)
+}
+
+// BackoffOrWarn validates Backoff at config-load time: if it's set and isn't
+// "exponential" (the only implemented strategy), logs a warning and falls
+// back to "exponential" rather than silently accepting a value that has no
+// behavior behind it.
+func (c RetryPolicyConfig) BackoffOrWarn() string {
+	if c.Backoff == "" || c.Backoff == "exponential" {
+		return "exponential"
+	}
+	log.Warn("RetryPolicyConfig.Backoff: unknown strategy, falling back to exponential", "backoff", c.Backoff)
+	return "exponential"
+}
+
 // TmuxExecGateConfig bounds how many tmux subprocesses may run concurrently
 // against one tmux server, across every process on the machine (the main
 // daemon and every --mcp process) — tmux's server is single-threaded, so
@@ -70,11 +286,35 @@ type TmuxExecGateConfig struct {
 	// Slots is the number of concurrent tmux subprocess execution slots.
 	// Zero or unset means "use the default" — see SlotsOrDefault. Default: 8.
 	Slots int `json:"slots"`
+
+	// ResyncFastLaneSlots is the number of concurrent tmux subprocess execution
+	// slots reserved for terminal-resync traffic when the
+	// "terminal:resync-exec-gate-fast-lane" feature flag is on, so resync calls
+	// don't contend with other tmux exec traffic for the shared Slots pool.
+	// Zero or unset means "use the default" — see ResyncFastLaneSlotsOrDefault.
+	// Default: 4.
+	ResyncFastLaneSlots int `json:"resyncFastLaneSlots"`
+
+	// InputFastLaneSlots is the number of concurrent tmux subprocess execution
+	// slots reserved for keystroke input traffic (the legacy per-keystroke
+	// send-keys path used when STAPLER_SQUAD_USE_CONTROL_MODE=false), so a
+	// poller flooding the shared Slots pool with capture-pane calls never
+	// makes user keystrokes queue behind it. Zero or unset means "use the
+	// default" — see InputFastLaneSlotsOrDefault. Default: 4.
+	InputFastLaneSlots int `json:"inputFastLaneSlots"`
 }
 
 // defaultTmuxExecGateSlots is used whenever Slots is unset (zero), including
 // for configs saved before this field existed.
 const defaultTmuxExecGateSlots = 8
+
+// defaultResyncFastLaneSlots is used whenever ResyncFastLaneSlots is unset
+// (zero), including for configs saved before this field existed.
+const defaultResyncFastLaneSlots = 4
+
+// defaultInputFastLaneSlots is used whenever InputFastLaneSlots is unset
+// (zero), including for configs saved before this field existed.
+const defaultInputFastLaneSlots = 4
 
 // SlotsOrDefault returns Slots, falling back to defaultTmuxExecGateSlots when
 // unset (covers both a fresh zero-value struct and a config.json saved before
@@ -84,6 +324,28 @@ func (c TmuxExecGateConfig) SlotsOrDefault() int {
 		return defaultTmuxExecGateSlots
 	}
 	return c.Slots
+}
+
+// ResyncFastLaneSlotsOrDefault returns ResyncFastLaneSlots, falling back to
+// defaultResyncFastLaneSlots when unset (covers both a fresh zero-value
+// struct and a config.json saved before this field existed, which unmarshals
+// the same way).
+func (c TmuxExecGateConfig) ResyncFastLaneSlotsOrDefault() int {
+	if c.ResyncFastLaneSlots <= 0 {
+		return defaultResyncFastLaneSlots
+	}
+	return c.ResyncFastLaneSlots
+}
+
+// InputFastLaneSlotsOrDefault returns InputFastLaneSlots, falling back to
+// defaultInputFastLaneSlots when unset (covers both a fresh zero-value
+// struct and a config.json saved before this field existed, which unmarshals
+// the same way).
+func (c TmuxExecGateConfig) InputFastLaneSlotsOrDefault() int {
+	if c.InputFastLaneSlots <= 0 {
+		return defaultInputFastLaneSlots
+	}
+	return c.InputFastLaneSlots
 }
 
 // BrowserPassthroughCDPConfig holds tunable parameters for the Chrome DevTools
@@ -371,6 +633,43 @@ func (c QuotaConfig) QuotaConfigOrDefault() QuotaConfig {
 	return out
 }
 
+// RemoteConfig registers one SSH-reachable remote host that sessions can be
+// created against (ssh-remote-workspaces feature). It holds only connection
+// coordinates and a pointer to credential material — never the credential
+// material itself. See sshremote.KeyStore (Phase 3.2) for where the actual
+// SSH private key/passphrase bytes live (OS keychain), and
+// Config.RemoteByName for the lookup helper consumed by session creation
+// (Phase 4) and Settings UI validation (Phase 6).
+type RemoteConfig struct {
+	// Name is the unique, user-chosen identifier for this remote (e.g.
+	// "prod-box"), referenced by session-creation flows. Not a hostname and
+	// not required to resolve as one.
+	Name string `json:"name"`
+	// Host is the SSH-reachable hostname or address (e.g. "prod.example.com"
+	// or "10.0.0.5"). Not a full "user@host" string — see User for the
+	// login name — and not a URL (no scheme, no path, no port suffix; use a
+	// standard SSH config Host block for non-default ports).
+	Host string `json:"host"`
+	// User is the SSH login username on the remote host. Not a local
+	// username and not validated against the remote's actual user list at
+	// save time.
+	User string `json:"user"`
+	// BasePath is the absolute filesystem path on the remote host under
+	// which session worktrees/directories are created (e.g.
+	// "/srv/workspaces"). Not a local path and not created automatically by
+	// saving this config — it must already exist (or be creatable) on the
+	// remote.
+	BasePath string `json:"base_path"`
+	// IdentityRef is an opaque, non-secret pointer to the SSH identity
+	// (private key + optional passphrase) that authenticates to this
+	// remote, resolved at connection time via sshremote.KeyStore against the
+	// OS keychain. It is NOT a filesystem path to a key file, NOT the key's
+	// raw bytes, and NOT the passphrase itself — no key material is ever
+	// stored in config.json. An empty value means no identity has been
+	// registered yet for this remote.
+	IdentityRef string `json:"identity_ref"`
+}
+
 // CapacityConfigOrDefault returns a CapacityConfig with standard defaults applied to zero fields.
 func (c CapacityConfig) CapacityConfigOrDefault() CapacityConfig {
 	out := c
@@ -394,6 +693,40 @@ func (c CapacityConfig) CapacityConfigOrDefault() CapacityConfig {
 			{CLI: "agy", Model: "gemini-2.0-flash"},
 			{CLI: "claude", Model: "claude-3-5-sonnet-20241022"},
 		}
+	}
+	return out
+}
+
+// HandoffSummaryConfig holds configuration for the restart-with-handoff-summary feature.
+type HandoffSummaryConfig struct {
+	// Enabled toggles the feature. nil defaults to enabled, matching
+	// AutoSpawnReadyItems's pattern — see EnabledOrDefault. A plain `bool` here
+	// would make "explicitly false" indistinguishable from "key absent" (e.g. a
+	// config.json written before this feature existed), silently defaulting
+	// every pre-existing installation to disabled instead of the stated
+	// default of enabled.
+	Enabled *bool `json:"enabled,omitempty"`
+	// MaxMiddleExcerptTokens caps the proportional middle-transcript excerpt fed
+	// to the summarizer. Default: 12000.
+	MaxMiddleExcerptTokens int `json:"max_middle_excerpt_tokens,omitempty"`
+}
+
+// EnabledOrDefault reports whether the restart-with-handoff-summary feature is
+// enabled. Defaults to true (nil, or unset config.json key); pass explicit
+// false to disable.
+func (c HandoffSummaryConfig) EnabledOrDefault() bool {
+	if c.Enabled == nil {
+		return true
+	}
+	return *c.Enabled
+}
+
+// HandoffSummaryConfigOrDefault returns a HandoffSummaryConfig with standard
+// defaults applied to zero fields.
+func (c HandoffSummaryConfig) HandoffSummaryConfigOrDefault() HandoffSummaryConfig {
+	out := c
+	if out.MaxMiddleExcerptTokens <= 0 {
+		out.MaxMiddleExcerptTokens = 12000
 	}
 	return out
 }

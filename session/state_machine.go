@@ -72,8 +72,29 @@ func init() {
 	}
 }
 
+// lookupTransition returns the TransitionDef for the from->to edge, if one exists
+// in transitionDefs. This is the single source of truth for edge legality —
+// CanTransition, canTransitionLocked, and transitionToLocked all resolve through
+// it so they cannot drift apart.
+func lookupTransition(from, to Status) (TransitionDef, bool) {
+	def, ok := transitionIndex[transitionKey{from, to}]
+	return def, ok
+}
+
 // CanTransition returns true if transitioning from -> to is a valid state transition.
 func CanTransition(from, to Status) bool {
-	_, ok := transitionIndex[transitionKey{from, to}]
+	_, ok := lookupTransition(from, to)
 	return ok
+}
+
+// canTransitionLocked reports whether the instance's current status can legally
+// transition to `to`, without mutating any state. Must only be called from
+// within sendSyncErr/send/sendCtx closures (reads i.Status under i.mu.RLock,
+// matching transitionToLocked's read).
+func canTransitionLocked(s *instanceState, to Status) bool {
+	i := s.inst
+	i.mu.RLock()
+	status := i.Status
+	i.mu.RUnlock()
+	return CanTransition(status, to)
 }

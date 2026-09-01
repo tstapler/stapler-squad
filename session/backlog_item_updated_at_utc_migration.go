@@ -5,12 +5,13 @@ package session
 // fix in session/ent/schema/backlog_item.go (Default/UpdateDefault changed
 // from bare time.Now, which returns Local, to time.Now().UTC()).
 //
-// mattn/go-sqlite3 binds a time.Time by formatting it as TEXT in the
-// value's OWN Location (SQLiteTimestampFormats[0] =
-// "2006-01-02 15:04:05.999999999-07:00"), so pre-existing rows still carry
-// a Local offset suffix (e.g. "-07:00") while every row written after the
-// fix carries "+00:00". Two concrete problems this causes until every row
-// is touched at least once:
+// The SQLite driver (modernc.org/sqlite, formerly mattn/go-sqlite3) binds a
+// time.Time by formatting it as TEXT in the value's OWN Location (absent a
+// _time_format DSN override, both drivers fall back to time.Time.String(),
+// e.g. "2006-01-02 15:04:05.999999999 -0700 MST"), so pre-existing rows
+// still carry a Local offset suffix (e.g. "-0700") while every row written
+// after the fix carries "+0000". Two concrete problems this causes until
+// every row is touched at least once:
 //  1. BINARY-collated TEXT sort (ORDER BY updated_at, used by the default
 //     backlog list/queue sort) does not respect chronological order across
 //     mixed offset suffixes — an old row can sort out of place relative to
@@ -57,13 +58,13 @@ func runBacklogItemUpdatedAtUTCBackfill(ctx context.Context, er *EntRepository) 
 		if _, saveErr := er.client.BacklogItem.UpdateOneID(item.ID).
 			SetUpdatedAt(item.UpdatedAt.UTC()).
 			Save(ctx); saveErr != nil {
-			log.WarningLog.Printf("[Migration] backlog item updated_at UTC backfill: item=%s: %v", item.ID, saveErr)
+			log.WarningLog().Printf("[Migration] backlog item updated_at UTC backfill: item=%s: %v", item.ID, saveErr)
 			continue
 		}
 		migrated++
 	}
 	if migrated > 0 {
-		log.InfoLog.Printf("[Migration] backlog item updated_at UTC backfill: normalized %d row(s)", migrated)
+		log.InfoLog().Printf("[Migration] backlog item updated_at UTC backfill: normalized %d row(s)", migrated)
 	}
 	return nil
 }

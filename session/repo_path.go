@@ -10,6 +10,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/go-git/go-git/v5"
+	"github.com/go-git/go-git/v5/plumbing"
+
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/log"
@@ -62,6 +65,20 @@ type GitHubRef struct {
 	Branch   string
 	PRNumber int
 	Type     GitHubRefType
+}
+
+// PRURL returns the canonical URL of the PR this ref points at, or "" if
+// PRNumber is not set (e.g. a plain repo or branch ref). This is the single
+// source of truth for GitHub PR URL construction — session_service.go's
+// CreateSession handler and the github_pr_url_backfill.go migration both call
+// this instead of formatting the URL themselves, so a host-normalization or
+// URL-shape fix only has to be made once.
+func (r *GitHubRef) PRURL() string {
+	if r == nil || r.PRNumber <= 0 {
+		return ""
+	}
+	return fmt.Sprintf("https://%s/%s/%s/pull/%d",
+		github.NormalizeHost(r.Host), r.Owner, r.Repo, r.PRNumber)
 }
 
 // GitHubRefType indicates what kind of GitHub reference this is.
@@ -173,6 +190,33 @@ func repoHost(ref *GitHubRef) string {
 	return ref.Host
 }
 
+// hostFromClonedPath attempts to recover a GitHub host from a session's
+// persisted local path, for rows whose github_pr_url was never populated
+// (see runGitHubPRURLBackfill). Paths for GitHub-backed sessions follow the
+// GOPATH-style convention documented on RepoPathManager:
+// <baseDir>/<host>/<owner>/<repo>[/...]. Returns "" if path doesn't contain
+// an <owner>/<repo> segment pair immediately preceded by a host-shaped
+// segment (contains a "." or is "localhost") — guessing "github.com" for a
+// segment that isn't actually a hostname would produce an incorrect URL for
+// GitHub Enterprise rows.
+func hostFromClonedPath(path string, ref github.RepoRef) string {
+	if path == "" || !ref.IsValid() {
+		return ""
+	}
+	parts := strings.Split(filepath.ToSlash(path), "/")
+	for i := 0; i+2 < len(parts); i++ {
+		if parts[i+1] != ref.Owner() || parts[i+2] != ref.Repo() {
+			continue
+		}
+		host := parts[i]
+		if host != "localhost" && !strings.Contains(host, ".") {
+			continue
+		}
+		return host
+	}
+	return ""
+}
+
 // GetRepoPath returns the local path where a GitHub repo should be stored.
 // Format: ~/.stapler-squad/repos/<host>/owner/repo
 func (m *RepoPathManager) GetRepoPath(ref *GitHubRef) string {
@@ -205,6 +249,102 @@ func sanitizeCloneOutput(output []byte, cloneURL string) string {
 	return strings.ReplaceAll(string(output), cloneURL, redacted)
 }
 
+// isCorruptedClone reports whether repoPath's .git directory exists but HEAD
+// still points at the literal placeholder ref git's internal bootstrap phase
+// writes before a `git clone` completes ("ref: refs/heads/.invalid", see
+// builtin/clone.c's chicken-and-egg comment and refs.c's write_file call) —
+// the signature left behind when the clone subprocess is killed (timeout,
+// process kill, truncated network connection) in between. A directory in
+// this state passes a naive ".git exists" check forever, so EnsureRepoCloned
+// must detect it explicitly rather than trusting os.Stat.
+//
+// This deliberately checks the *raw* symbolic HEAD target rather than
+// whether HEAD resolves: a brand-new, zero-commit repo (`git init`, no
+// commits yet) also has an unresolvable HEAD — it symbolically points at
+// "refs/heads/main" (or whatever the default branch is), which simply
+// doesn't exist as a ref yet ("unborn branch"). That's a legitimate, healthy
+// repo state, not corruption, and must not be misdiagnosed as an interrupted
+// clone (which would then fail trying to read a nonexistent origin remote
+// for re-clone instead of letting normal "create an initial commit" handling
+// take over).
+// Uses go-git per the `prefer-go-git-over-subshells` skill.
+func isCorruptedClone(repoPath string) bool {
+	repo, err := git.PlainOpen(repoPath)
+	if err != nil {
+		return true
+	}
+	headRef, err := repo.Reference(plumbing.HEAD, false)
+	if err != nil {
+		return true
+	}
+	if headRef.Type() != plumbing.SymbolicReference {
+		return false
+	}
+	return headRef.Target() == plumbing.ReferenceName("refs/heads/.invalid")
+}
+
+// RepairCorruptedGitRepo detects and repairs the .invalid-HEAD clone corruption
+// (see isCorruptedClone) for repos reached via a plain on-disk path rather than
+// through RepoPathManager.EnsureRepoCloned — e.g. a backlog item's stored
+// RepoPath, which CreateBacklogWorktree resolves and hands straight to
+// ResolveSessionPath (pure path expansion, no corruption check) and then to
+// git.NewGitWorktreeFromCommitSHA/NewGitWorktreeWithBranch. Those never call
+// EnsureRepoCloned, so a repo corrupted the same way EnsureRepoCloned guards
+// against (an interrupted `git clone` leaving "ref: refs/heads/.invalid" as
+// HEAD forever) would otherwise fail worktree creation indefinitely with no
+// self-heal. If repoPath isn't a git repo at all, or its HEAD resolves fine,
+// this is a no-op. Repair re-clones from the corrupted repo's own origin remote.
+func RepairCorruptedGitRepo(repoPath string) error {
+	if _, err := os.Stat(filepath.Join(repoPath, ".git")); err != nil {
+		return nil
+	}
+	if !isCorruptedClone(repoPath) {
+		return nil
+	}
+	originURL, err := readOriginRemoteURL(repoPath)
+	if err != nil {
+		return fmt.Errorf("repo at %s has corrupted HEAD (interrupted clone) and its origin remote could not be read for re-clone: %w", repoPath, err)
+	}
+	log.Warn("repository is corrupted (unresolvable HEAD, likely from an interrupted clone); removing and re-cloning", "path", repoPath)
+	if err := os.RemoveAll(repoPath); err != nil {
+		return fmt.Errorf("failed to remove corrupted repository at %s: %w", repoPath, err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+	cmd := safeexec.CommandContext(ctx, "git", "clone", originURL, repoPath)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("failed to re-clone repository at %s: %w\nOutput: %s", repoPath, err, sanitizeCloneOutput(output, originURL))
+	}
+	if strings.Contains(originURL, "@") {
+		publicURL := strings.Replace(originURL, originURL[strings.Index(originURL, "://")+3:strings.Index(originURL, "@")+1], "", 1)
+		setURLCmd := safeexec.CommandContext(ctx, "git", "-C", repoPath, "remote", "set-url", "origin", publicURL)
+		if output, err := setURLCmd.CombinedOutput(); err != nil {
+			log.Warn("failed to strip credentials from remote url", "err", err, "output", string(output))
+		}
+	}
+	log.Info("successfully re-cloned previously corrupted repository", "path", repoPath)
+	return nil
+}
+
+// readOriginRemoteURL reads the origin remote's URL from an on-disk repo whose
+// HEAD may be unresolvable — repo.Remote reads only .git/config, so this works
+// even when isCorruptedClone(repoPath) is true.
+func readOriginRemoteURL(repoPath string) (string, error) {
+	repo, err := git.PlainOpen(repoPath)
+	if err != nil {
+		return "", fmt.Errorf("failed to open repo: %w", err)
+	}
+	remote, err := repo.Remote("origin")
+	if err != nil {
+		return "", fmt.Errorf("failed to read origin remote: %w", err)
+	}
+	urls := remote.Config().URLs
+	if len(urls) == 0 {
+		return "", fmt.Errorf("origin remote has no URL")
+	}
+	return urls[0], nil
+}
+
 // EnsureRepoCloned ensures the repository is cloned to the local path.
 // If already cloned, it fetches the latest changes.
 // Returns the path to the cloned repository.
@@ -217,26 +357,38 @@ func (m *RepoPathManager) EnsureRepoCloned(ctx context.Context, ref *GitHubRef) 
 
 	// Check if repo already exists
 	if _, err := os.Stat(filepath.Join(repoPath, ".git")); err == nil {
-		// Repo exists, fetch latest
-		log.Info("repository exists, fetching latest", "path", repoPath)
-		fetchCtx, fetchCancel := context.WithTimeout(ctx, 60*time.Second)
-		defer fetchCancel()
-		cmd := safeexec.CommandContext(fetchCtx, "git", "-C", repoPath, "fetch", "--all", "--prune")
-		if output, err := cmd.CombinedOutput(); err != nil {
-			// Only propagate when the caller's own ctx (not the local 60s
-			// fetchCtx timeout) is what killed the fetch — that means the
-			// caller's deadline was actually hit and callers like
-			// CreateSession need to see that as an error rather than
-			// silently proceeding with a possibly-stale repo. A fetch that
-			// merely fails on its own (network blip, no connectivity) still
-			// falls through to "existing repo is still usable" below.
-			if ctx.Err() != nil {
-				return "", fmt.Errorf("failed to fetch repository: %w", ctx.Err())
+		if isCorruptedClone(repoPath) {
+			// Left behind by a previously interrupted clone (see
+			// isCorruptedClone) — HEAD will never resolve on its own, and
+			// every future fetch against this directory would keep
+			// "succeeding" without ever fixing it. Remove and re-clone below
+			// rather than handing back a repo no worktree can be built from.
+			log.Warn("repository is corrupted (unresolvable HEAD, likely from an interrupted clone); removing and re-cloning", "path", repoPath)
+			if rmErr := os.RemoveAll(repoPath); rmErr != nil {
+				return "", fmt.Errorf("failed to remove corrupted repository at %s: %w", repoPath, rmErr)
 			}
-			log.Warn("failed to fetch repository", "err", err, "output", string(output))
-			// Don't fail - the existing repo is still usable
+		} else {
+			// Repo exists, fetch latest
+			log.Info("repository exists, fetching latest", "path", repoPath)
+			fetchCtx, fetchCancel := context.WithTimeout(ctx, 60*time.Second)
+			defer fetchCancel()
+			cmd := safeexec.CommandContext(fetchCtx, "git", "-C", repoPath, "fetch", "--all", "--prune")
+			if output, err := cmd.CombinedOutput(); err != nil {
+				// Only propagate when the caller's own ctx (not the local 60s
+				// fetchCtx timeout) is what killed the fetch — that means the
+				// caller's deadline was actually hit and callers like
+				// CreateSession need to see that as an error rather than
+				// silently proceeding with a possibly-stale repo. A fetch that
+				// merely fails on its own (network blip, no connectivity) still
+				// falls through to "existing repo is still usable" below.
+				if ctx.Err() != nil {
+					return "", fmt.Errorf("failed to fetch repository: %w", ctx.Err())
+				}
+				log.Warn("failed to fetch repository", "err", err, "output", string(output))
+				// Don't fail - the existing repo is still usable
+			}
+			return repoPath, nil
 		}
-		return repoPath, nil
 	}
 
 	// Create parent directory
@@ -255,6 +407,13 @@ func (m *RepoPathManager) EnsureRepoCloned(ctx context.Context, ref *GitHubRef) 
 	defer cloneCancel()
 	cmd := safeexec.CommandContext(cloneCtx, "git", "clone", cloneURL, repoPath)
 	if output, err := cmd.CombinedOutput(); err != nil {
+		// A killed/timed-out clone leaves a partially-initialized .git
+		// directory behind (see isCorruptedClone) — remove it so the next
+		// call re-clones from scratch instead of finding and reusing a
+		// broken repo forever.
+		if rmErr := os.RemoveAll(repoPath); rmErr != nil {
+			log.Warn("failed to remove partial clone directory after failed clone", "path", repoPath, "err", rmErr)
+		}
 		return "", fmt.Errorf("failed to clone repository: %w\nOutput: %s", err, sanitizeCloneOutput(output, cloneURL))
 	}
 

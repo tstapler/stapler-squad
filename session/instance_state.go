@@ -28,10 +28,18 @@ func (i *Instance) setStatus(status Status) {
 	i.loadStatus(status)
 }
 
+// touchUpdatedAt bumps UpdatedAt so an operational status change isn't mistaken
+// for a no-op by the frontend's upsertSession reducer (sessionsSlice.ts), which
+// skips an incoming Session whose UpdatedAt matches the cached copy. Must be
+// called with i.mu held.
+func (i *Instance) touchUpdatedAt() {
+	i.UpdatedAt = time.Now()
+}
+
 // transitionTo validates and executes a state transition using the TransitionDef table.
 // Must be called with i.mu held.
 func (i *Instance) transitionTo(ctx context.Context, to Status) error {
-	def, ok := transitionIndex[transitionKey{i.Status, to}]
+	def, ok := lookupTransition(i.Status, to)
 	if !ok {
 		return ErrInvalidTransition{From: i.Status, To: to}
 	}
@@ -41,6 +49,7 @@ func (i *Instance) transitionTo(ctx context.Context, to Status) error {
 		}
 	}
 	i.Status = to
+	i.touchUpdatedAt()
 	// Store before calling After: After hooks may spawn goroutines that race with
 	// a post-After snapshot read of the same fields.
 	// Caller already holds i.mu (see doc comment above), so buildSnapshot's
@@ -68,7 +77,7 @@ func transitionToLocked(s *instanceState, ctx context.Context, to Status) error 
 	i.mu.RLock()
 	status := i.Status
 	i.mu.RUnlock()
-	def, ok := transitionIndex[transitionKey{status, to}]
+	def, ok := lookupTransition(status, to)
 	if !ok {
 		return ErrInvalidTransition{From: status, To: to}
 	}
@@ -90,6 +99,7 @@ func transitionToLocked(s *instanceState, ctx context.Context, to Status) error 
 	i.mu.Lock()
 	from := i.Status
 	i.Status = to
+	i.touchUpdatedAt()
 	snap := buildSnapshot(i)
 	i.mu.Unlock()
 	i.snapshot.Store(snap)
@@ -316,15 +326,23 @@ func (i *Instance) Started() bool {
 	return i.started.Load()
 }
 
-// RecoverFromStopped resets a stale Stopped status to Creating so the instance can be
-// hot-restored via Start(false). Only call this during startup reconciliation when
-// the tmux session is confirmed alive; it bypasses the state machine intentionally.
+// RecoverFromStopped resets a stale Stopped or PermanentlyFailed status to
+// Creating so the instance can be hot-restored via Start(false). Only call
+// this during startup reconciliation (Stopped case) or from restartForRetry's
+// PermanentlyFailed/Stopped recovery branch when the tmux session is confirmed
+// alive or being cold-restored; it bypasses the state machine intentionally.
+// The PermanentlyFailed case backs RetryNow()'s manual "Retry now" recovery
+// (AC6) — without it, RecoverFromStopped silently no-op'd for a
+// PermanentlyFailed instance (it only ever checked Status == Stopped), and
+// startLocked's later `if i.Status != Active` transition would then be
+// attempted from PermanentlyFailed, which has no entry in transitionIndex.
 // Deprecated: prefer transitionTo(ctx, Active) on the Stopped→Active path.
 func (i *Instance) RecoverFromStopped() {
 	i.mu.Lock()
 	defer i.mu.Unlock()
-	if i.Status == Stopped {
+	if i.Status == Stopped || i.Status == PermanentlyFailed {
 		i.loadStatus(Creating)
+		i.touchUpdatedAt()
 		i.started.Store(false)
 		i.snapshot.Store(buildSnapshot(i))
 	}
@@ -357,6 +375,7 @@ func (i *Instance) ForceStatus(s Status) {
 	_ = i.sendCtx(context.Background(), func(_ *instanceState) {
 		i.mu.Lock()
 		i.loadStatus(s)
+		i.touchUpdatedAt()
 		snap := buildSnapshot(i)
 		i.mu.Unlock()
 		i.snapshot.Store(snap)

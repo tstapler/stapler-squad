@@ -118,14 +118,17 @@ func (r *RateLimiter) Update(resp *http.Response) {
 	}
 
 	// Primary rate limit exhausted: remaining == 0, use X-RateLimit-Reset for
-	// exact resume time rather than a fixed 60s pause.
+	// exact resume time rather than a fixed 60s pause. Unlike the Retry-After
+	// branch above, resetAt comes from GitHub itself (not a value a
+	// misbehaving/attacker-controlled server could stuff into a header to
+	// block us indefinitely), so maxRetryAfterSleep's cap does not apply here
+	// — an hour-scale primary-limit wait must be tracked as an hour, not
+	// silently truncated to 60s (see rateLimitTransport.RoundTrip, the only
+	// caller that turns this into an actual skip-the-request short-circuit).
 	if remaining == 0 && !resetAt.IsZero() {
 		wait := time.Until(resetAt) + 5*time.Second // small buffer past the reset window
 		if wait < time.Second {
 			wait = 60 * time.Second // reset is in the past, fallback
-		}
-		if wait > maxRetryAfterSleep {
-			wait = maxRetryAfterSleep
 		}
 		until := time.Now().Add(wait)
 		log.Warn("github API: primary rate limit exhausted",
@@ -168,5 +171,16 @@ func (r *RateLimiter) setLimitedUntil(t time.Time) {
 	if t.After(r.rateLimitedUntil) {
 		r.rateLimitedUntil = t
 	}
+	r.mu.Unlock()
+}
+
+// Reset clears any recorded rate-limit state. DefaultRateLimiter is a package-level
+// singleton shared by every caller of HTTPClient() (see http_client.go) — a test that
+// deliberately simulates a rate-limit response (e.g. to verify the fail-fast behavior
+// rateLimitTransport.RoundTrip added) leaves it limited for every later test in the same
+// binary otherwise, since RoundTrip's IsLimited() pre-check has no per-test scoping.
+func (r *RateLimiter) Reset() {
+	r.mu.Lock()
+	r.rateLimitedUntil = time.Time{}
 	r.mu.Unlock()
 }

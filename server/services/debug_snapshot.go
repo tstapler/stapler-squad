@@ -197,7 +197,7 @@ func collectSessionSnapshots(ctx context.Context, instances []*session.Instance)
 			if len(rawContent) > maxPaneContentBytes {
 				rawContent = rawContent[:maxPaneContentBytes]
 			}
-			ss.PaneContentRaw = rawContent
+			ss.PaneContentRaw = string(rawContent)
 		}
 
 		snapshots = append(snapshots, ss)
@@ -356,8 +356,14 @@ func tailFile(path string, n int) ([]string, error) {
 
 // WriteSnapshot serializes the snapshot to a JSON file in the given directory.
 // Returns the absolute path of the written file.
+//
+// The filename includes nanosecond precision, not just to-the-second, because two
+// concurrent CreateDebugSnapshot calls landing in the same wall-clock second would
+// otherwise both os.WriteFile the same path — one call's truncate-then-write can
+// interleave with another's, producing a transient zero-byte read
+// (TestCreateDebugSnapshot_Succeeds flaked on exactly this under t.Parallel()).
 func WriteSnapshot(snap *DebugSnapshot, dir string) (string, error) {
-	filename := fmt.Sprintf("debug-snapshot-%s.json", snap.Timestamp.Format("20060102-150405"))
+	filename := fmt.Sprintf("debug-snapshot-%s.json", snap.Timestamp.Format("20060102-150405.000000000"))
 	path := filepath.Join(dir, filename)
 
 	data, err := json.MarshalIndent(snap, "", "  ")

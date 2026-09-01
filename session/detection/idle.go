@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/detection/dtypes"
 )
 
 // IdleState represents the idle state of a Claude Code session.
@@ -25,6 +26,11 @@ type IdleDetectorConfig struct {
 	IdleThreshold time.Duration // Duration before considering session timed out
 	DebounceDelay time.Duration // Delay before changing state to prevent flickering
 	BufferSize    int           // Number of bytes to analyze from recent output
+
+	// OSCDebounceDelay gates OSC-derived transitions (DetectStateFromContentWithOSC)
+	// with a shorter window than DebounceDelay, sharing the same lastStateChange
+	// clock — see osc-status-signals ADR-002.
+	OSCDebounceDelay time.Duration
 }
 
 // DefaultIdleDetectorConfig returns sensible defaults for idle detection.
@@ -33,6 +39,11 @@ func DefaultIdleDetectorConfig() IdleDetectorConfig {
 		IdleThreshold: 5 * time.Second,        // 5-second idle threshold for immediate user notifications
 		DebounceDelay: 500 * time.Millisecond, // Reduced from 2s for faster response
 		BufferSize:    4096,                   // 4KB should capture recent status indicators
+
+		// ~3x faster than DebounceDelay — order-of-magnitude of a spinner
+		// redraw interval (see ADR-002). Revisable if real Claude Code CLI
+		// redraw-interval data suggests otherwise.
+		OSCDebounceDelay: 150 * time.Millisecond,
 	}
 }
 
@@ -151,7 +162,17 @@ func (id *IdleDetector) DetectState() IdleState {
 // DetectStateFromContent analyzes provided terminal content and returns the current idle state.
 // This method should be preferred over DetectState() as it allows the caller to provide
 // reliable terminal content (e.g., from tmux capture-pane) instead of using the PTY circular buffer.
+// Equivalent to DetectStateFromContentWithOSC(content, dtypes.OSCStatusNone).
 func (id *IdleDetector) DetectStateFromContent(content string) IdleState {
+	return id.DetectStateFromContentWithOSC(content, dtypes.OSCStatusNone)
+}
+
+// DetectStateFromContentWithOSC is DetectStateFromContent plus an OSC-derived
+// overlay (gated by IsOSCExecutingPromotable/IsOSCIdlePromotable, shared with
+// applyOSCStatusOverride's DetectedStatus side), resolved with exactly one
+// lock-protected write — see osc-status-signals architecture-review.md
+// BLOCKER 1 for why two sequential commits sharing lastStateChange is unsafe.
+func (id *IdleDetector) DetectStateFromContentWithOSC(content string, osc dtypes.OSCStatus) IdleState {
 	if content == "" {
 		id.mu.RLock()
 		s := id.currentState
@@ -165,14 +186,33 @@ func (id *IdleDetector) DetectStateFromContent(content string) IdleState {
 	// backwards so a fresh idle prompt on the last line (e.g. "? for shortcuts")
 	// takes priority over a stale "esc to interrupt" from an earlier turn.
 	lines := strings.Split(content, "\n")
-	status := id.statusDetector.DetectFromLines(lines)
+	textStatus := id.statusDetector.DetectFromLines(lines)
 
 	// Phase 2: state update under write lock (mapStatusToIdleState writes lastActivity).
 	id.mu.Lock()
 	defer id.mu.Unlock()
-	newState := id.mapStatusToIdleState(status)
+
+	newState := id.mapStatusToIdleState(textStatus)
+	debounce := id.config.DebounceDelay
+
+	switch {
+	case osc == dtypes.OSCStatusExecuting && IsOSCExecutingPromotable(textStatus):
+		id.lastActivity = id.timeNow()
+		id.lastActivityNs.Store(id.lastActivity.UnixNano())
+		newState = IdleStateActive
+		debounce = id.config.OSCDebounceDelay
+	case osc == dtypes.OSCStatusIdle && IsOSCIdlePromotable(textStatus):
+		idleDuration := id.timeNow().Sub(id.lastActivity)
+		if idleDuration > id.config.IdleThreshold {
+			newState = IdleStateTimeout
+		} else {
+			newState = IdleStateWaiting
+		}
+		debounce = id.config.OSCDebounceDelay
+	}
+
 	if newState != id.currentState {
-		if id.currentState == IdleStateUnknown || id.timeNow().Sub(id.lastStateChange) >= id.config.DebounceDelay {
+		if id.currentState == IdleStateUnknown || id.timeNow().Sub(id.lastStateChange) >= debounce {
 			id.currentState = newState
 			id.lastStateChange = id.timeNow()
 		}
@@ -184,20 +224,9 @@ func (id *IdleDetector) DetectStateFromContent(content string) IdleState {
 // Callers MUST hold id.mu for write — this method mutates id.lastActivity.
 func (id *IdleDetector) mapStatusToIdleState(status DetectedStatus) IdleState {
 	switch status {
-	case StatusExecuting:
-		// Actively executing commands - update activity timestamp
-		id.lastActivity = id.timeNow()
-		id.lastActivityNs.Store(id.lastActivity.UnixNano())
-		return IdleStateActive
-
-	case StatusProcessing:
-		// Processing but not showing active indicators - still consider active
-		id.lastActivity = id.timeNow()
-		id.lastActivityNs.Store(id.lastActivity.UnixNano())
-		return IdleStateActive
-
-	case StatusWaitingForAgent:
-		// Waiting for a background agent — still actively working, update activity timestamp
+	case StatusExecuting, StatusProcessing, StatusWaitingForAgent, StatusCompacting:
+		// Actively executing/processing, waiting for a background agent, or compacting
+		// — all still count as active work, so update the activity timestamp.
 		id.lastActivity = id.timeNow()
 		id.lastActivityNs.Store(id.lastActivity.UnixNano())
 		return IdleStateActive

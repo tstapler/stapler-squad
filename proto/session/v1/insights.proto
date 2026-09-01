@@ -84,10 +84,11 @@ message ModelBreakdown {
 
 // TopEntry is a generic name/value pair for top-N tables.
 message TopEntry {
+  reserved 4;
+  reserved "cost_usd"; // never populated: skills/tools carry no per-item cost data
   string name             = 1;
   int64  token_count      = 2;
   int32  activation_count = 3;
-  double cost_usd         = 4;
 }
 
 // GetInsightsSummaryRequest filters the summary response.

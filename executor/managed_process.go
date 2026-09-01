@@ -317,11 +317,13 @@ func (p *ManagedProcess) reap(redactIndices []int) {
 		err = nil
 	}
 
+	// Write the wait result once (buffered channel, capacity 1) before signaling
+	// exit, so a Wait() call unblocked by close(p.done) never races the
+	// non-blocking select on p.waitErr below and observes an empty channel.
+	p.waitErr <- err
+
 	// Signal that the process has exited.
 	close(p.done)
-
-	// Write the wait result once (buffered channel, capacity 1).
-	p.waitErr <- err
 
 	// Emit audit entry.
 	exitCode := 0

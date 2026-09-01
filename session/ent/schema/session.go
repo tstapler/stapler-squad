@@ -45,6 +45,9 @@ func (Session) Fields() []ent.Field {
 			UpdateDefault(time.Now),
 		field.Bool("auto_yes").
 			Default(false),
+		field.Bool("auto_approve").
+			Default(false).
+			Comment("Independent of auto_yes: injects a per-agent CLI flag (--dangerously-skip-permissions for Claude, --yes-always for Aider) that skips permission prompts entirely. See auto_yes for the separate TapEnter/daemon keystroke mechanism."),
 		field.Bool("autonomous_mode").
 			Default(false).
 			Comment("Crew autonomy mode — when true, the Fixer injects correction prompts without user confirmation."),
@@ -62,6 +65,10 @@ func (Session) Fields() []ent.Field {
 			Optional(),
 		field.String("tmux_prefix").
 			Optional(),
+		field.String("backend").
+			Optional().
+			Default("").
+			Comment("Per-session ProcessManager backend pin (e.g. \"tymux\"); empty means no pin, falls through to the process-wide default."),
 		field.Time("last_terminal_update").
 			Optional().
 			Nillable(),

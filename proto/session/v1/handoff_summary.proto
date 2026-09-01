@@ -1,0 +1,64 @@
+syntax = "proto3";
+
+package session.v1;
+
+import "google/protobuf/timestamp.proto";
+
+// HandoffSummaryService provides read and regenerate access to restart-handoff
+// summaries: a condensed briefing generated for a session so a new session can
+// be seeded from it (Restart-with-Summary), independent of SessionService's
+// live-instance machinery.
+service HandoffSummaryService {
+  // GetHandoffSummary returns the current handoff summary for a session, if one
+  // exists. The response's summary field is unset when no row exists yet.
+  rpc GetHandoffSummary(GetHandoffSummaryRequest) returns (GetHandoffSummaryResponse) {}
+
+  // TriggerHandoffSummary triggers generation of a session's handoff summary
+  // and returns the resulting summary.
+  rpc TriggerHandoffSummary(TriggerHandoffSummaryRequest) returns (TriggerHandoffSummaryResponse) {}
+}
+
+// HandoffSummaryStatus indicates the generation state of a session handoff summary.
+enum HandoffSummaryStatus {
+  HANDOFF_SUMMARY_STATUS_UNSPECIFIED = 0;
+  HANDOFF_SUMMARY_STATUS_PENDING     = 1;
+  HANDOFF_SUMMARY_STATUS_GENERATING  = 2;
+  HANDOFF_SUMMARY_STATUS_READY       = 3;
+  HANDOFF_SUMMARY_STATUS_ERROR       = 4;
+}
+
+// HandoffSummaryProto is the restart-handoff summary for a single session.
+message HandoffSummaryProto {
+  string session_id    = 1;
+  string session_title = 2;
+  HandoffSummaryStatus status = 3;
+
+  string active_task = 4;
+  string summary_text = 5;
+
+  int32 middle_messages_summarized = 6;
+
+  string error_message = 7;
+  string error_stage   = 8;
+
+  google.protobuf.Timestamp generated_at = 9;
+  // generation_started_at is set when the row enters GENERATING and is used
+  // to render "started Ns ago" for an in-flight row -- unset for a row that
+  // has never started generating.
+  google.protobuf.Timestamp generation_started_at = 10;
+}
+
+message GetHandoffSummaryRequest {
+  string session_id = 1;
+}
+message GetHandoffSummaryResponse {
+  // summary is unset/null when no row exists yet.
+  optional HandoffSummaryProto summary = 1;
+}
+
+message TriggerHandoffSummaryRequest {
+  string session_id = 1;
+}
+message TriggerHandoffSummaryResponse {
+  HandoffSummaryProto summary = 1;
+}

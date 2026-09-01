@@ -12,7 +12,16 @@ on:
     branches: [main]
 
 permissions:
+  contents: read
   pull-requests: write
+
+# Guards the delete-on-clean comment mutation against out-of-order runs. This
+# cancels the whole run (video recording included), not just the comment
+# step — safe here because a superseded PR run's videos are stale too, same
+# reasoning ux-analysis.yml uses for its single-job workflow.
+concurrency:
+  group: e2e-video-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
 
 # Feature specs recorded — excludes:
 #   terminal-flickering.spec.ts  (benchmarks/stress tests)
@@ -30,17 +39,26 @@ jobs:
   detect-feature-changes:
     name: Detect Feature Changes
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     outputs:
       record_features: ${{ steps.detect.outputs.record_features }}
     steps:
+      # Default (shallow) checkout: detect-feature-changes.sh greps the
+      # *content* of changed files, which a normal HEAD checkout already
+      # provides -- it doesn't need history at all once CHANGED_FILES is
+      # supplied below, so the `fetch-depth: 0` full-history clone this job
+      # used to do (this repo's .git pack is ~16GB, see build.yml's
+      # detect-changes job) was pure waste.
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
       - name: Detect feature-marked file changes
         id: detect
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set +e
+          CHANGED_FILES=$(gh api "repos/${{ github.repository }}/compare/${{ github.event.pull_request.base.sha }}...${{ github.event.pull_request.head.sha }}" --paginate --jq '.files[].filename')
+          export CHANGED_FILES
           ./tools/ci/detect-feature-changes.sh origin/main
           EXIT_CODE=$?
           if [ $EXIT_CODE -eq 0 ]; then
@@ -51,11 +69,60 @@ jobs:
             echo "No feature changes — skipping video recording"
           fi
 
+  # Generates protos/ent/web-UI exactly once per run (not once per shard) and
+  # shares the result as the `generated-files` artifact — see
+  # .github/workflows/_prepare.yml. Both build-binary and, indirectly, every
+  # e2e-video shard download that same artifact instead of re-running the
+  # pipeline.
+  # No timeout-minutes here: GitHub Actions rejects that key on a job that
+  # calls a reusable workflow via `uses:` (actionlint syntax-check confirms —
+  # only name/uses/with/secrets/needs/if/permissions are allowed). The 15m
+  # budget for this stage lives in _prepare.yml's own `prepare` job, out of
+  # this file's scope.
+  prepare:
+    name: Prepare (protos, ent, web UI)
+    needs: detect-feature-changes
+    if: needs.detect-feature-changes.outputs.record_features == 'true'
+    uses: ./.github/workflows/_prepare.yml
+
+  # Builds the stapler-squad binary once per run (not once per shard) from the
+  # shared `prepare` output, and shares it as the `e2e-video-binary` artifact.
+  build-binary:
+    name: Build Binary
+    runs-on: ubuntu-latest
+    needs: [detect-feature-changes, prepare]
+    if: needs.detect-feature-changes.outputs.record_features == 'true'
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: 'go.mod'
+          cache: true
+
+      - name: Download generated files
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.prepare.outputs.artifact-name }}
+
+      - name: Build binary
+        run: go build -o stapler-squad .
+
+      - name: Upload binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-video-binary
+          path: stapler-squad
+          retention-days: 1
+
   e2e-video:
     name: Record E2E Feature Videos (shard ${{ matrix.shard }}/2)
     runs-on: ubuntu-22.04  # Pinned to avoid VP8/VP9 codec surprises
-    needs: detect-feature-changes
+    needs: [detect-feature-changes, prepare, build-binary]
     if: needs.detect-feature-changes.outputs.record_features == 'true'
+    timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:
@@ -65,9 +132,9 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Set up Go
-        uses: actions/setup-go@v4
+        uses: actions/setup-go@v5
         with:
-          go-version: '1.25.0'
+          go-version-file: 'go.mod'
           cache: true
 
       - name: Set up pnpm
@@ -79,12 +146,27 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '20'
+          cache: 'pnpm'
+          cache-dependency-path: tests/e2e/pnpm-lock.yaml
 
-      - name: Generate protos and build web UI
-        uses: ./.github/actions/prepare
+      - name: Download generated files
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.prepare.outputs.artifact-name }}
 
-      - name: Build binary
-        run: go build -o stapler-squad .
+      - name: Download binary
+        uses: actions/download-artifact@v4
+        with:
+          name: e2e-video-binary
+
+      - name: Make binary executable
+        run: chmod +x stapler-squad
+
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('tests/e2e/pnpm-lock.yaml') }}
 
       - name: Install Playwright dependencies
         run: |
@@ -114,9 +196,21 @@ jobs:
           done
 
           cd tests/e2e
-          npx playwright test ${{ env.FEATURE_SPECS }} \
+          # Soft-timeout wrapper: fail fast at 20m (soft budget) rather than
+          # riding the job's 25m hard timeout-minutes to a SIGTERM with no
+          # diagnostic. keep this marker prefix in sync with
+          # ciBudgetExceededMarker in server/services/github_webhook_pr_fix.go
+          timeout 20m npx playwright test ${{ env.FEATURE_SPECS }} \
             --shard=${{ matrix.shard }}/2 \
-            --reporter=list || true
+            --reporter=list || {
+            EXIT_CODE=$?
+            if [ $EXIT_CODE -eq 124 ]; then
+              echo "::error::CI-BUDGET-EXCEEDED: 'e2e-video' exceeded its 20m budget"
+              echo "CI-BUDGET-EXCEEDED: 'e2e-video' exceeded its 20m budget" >> "$GITHUB_STEP_SUMMARY"
+              exit 1
+            fi
+            true
+          }
 
           kill $SERVER_PID 2>/dev/null || true
           rm -rf "$DEMO_DIR"
@@ -241,11 +335,21 @@ jobs:
     runs-on: ubuntu-latest
     needs: [detect-feature-changes, e2e-video]
     if: always() && github.event_name == 'pull_request' && needs.detect-feature-changes.outputs.record_features == 'true'
+    timeout-minutes: 5
     steps:
       - name: Post PR comment with artifact links
-        uses: actions/github-script@v7
+        continue-on-error: true # advisory comment; never fail the job if posting is denied
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
         with:
           script: |
+            // Inlined rather than require('./tools/ci-gates/video-anomaly.js'):
+            // this job has no checkout (pull-requests: write, and adding one
+            // just to require() a PR-branch-controlled file would mean
+            // executing fork-controlled JS inside a privileged step for a
+            // one-line check — see tools/ci-gates/video-anomaly.js, which
+            // stays the tested source of truth for this exact logic; keep
+            // both in sync if the definition ever changes.
+            const videoAnomaly = (artifacts) => artifacts.length === 0;
             const marker = '<!-- e2e-videos -->';
             const pr = context.issue.number;
             const runUrl = `https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
@@ -275,34 +379,47 @@ jobs:
               return parts.join(' · ');
             });
 
-            let lines;
-            if (videoArtifacts.length === 0) {
-              lines = [
-                '## ⚠️ E2E Video Recording',
-                '',
-                'No video artifacts were produced. Check the workflow run for details.',
-                '',
-                `[View workflow run](${runUrl})`,
-              ];
-            } else {
-              lines = [
-                '## 🎬 E2E Feature Demos',
-                '',
-                `**${videoArtifacts.length} shard(s)** recorded feature flows for this PR.`,
-                '',
+            // The normal (non-anomaly) case no longer gets a PR comment, but
+            // the demo-preview/recording links it used to carry are still
+            // written here so they aren't lost — just moved from "always a
+            // comment" to "always in the step summary" (Observability Plan).
+            require('fs').appendFileSync(
+              process.env.GITHUB_STEP_SUMMARY,
+              [
+                '## E2E Video Recording',
+                `${videoArtifacts.length} shard(s) produced video artifacts.`,
                 ...shardLinks,
                 '',
-                '_Demo preview opens directly in browser (single-file HTML). Raw WebM recordings in ZIP. Expires after 30 days._',
-              ];
-            }
+              ].join('\n'),
+            );
 
-            const body = [marker, ...lines].join('\n');
             const { data: comments } = await github.rest.issues.listComments({
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: pr,
             });
             const existing = comments.find(c => c.body.includes(marker));
+
+            if (!videoAnomaly(videoArtifacts)) {
+              if (existing) {
+                await github.rest.issues.deleteComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  comment_id: existing.id,
+                });
+              }
+              return;
+            }
+
+            const lines = [
+              '## ⚠️ E2E Video Recording',
+              '',
+              'No video artifacts were produced. Check the workflow run for details.',
+              '',
+              `[View workflow run](${runUrl})`,
+            ];
+
+            const body = [marker, ...lines].join('\n');
             if (existing) {
               await github.rest.issues.updateComment({
                 owner: context.repo.owner,

@@ -3,6 +3,7 @@
 import type { BacklogItem, LinkedSession } from "@/lib/hooks/useBacklogService";
 import { InlineNotice } from "@/components/common/InlineNotice";
 import { getAvailableActions } from "@/lib/backlog/itemActions";
+import { derivePlanReviewStatus } from "@/lib/backlog/planReviewStatus";
 import * as styles from "../BacklogItemDetail.css";
 import { ActionButtonLabel } from "./ActionButtonLabel";
 
@@ -67,7 +68,15 @@ export function ActionsSection({
   // just the ready-status check `actions.has("spawn_session_autonomous")`
   // already encodes.
   const canRunAutonomously = actions.has("spawn_session_autonomous");
-  const canSpawnSession = actions.has("spawn_session") && (item.skipPlanning || item.planApproved);
+  // Task 4.3.1c: reuse the single derivePlanReviewStatus source of truth
+  // (also used by PlanVerdictBox) instead of re-deriving the raw
+  // skipPlanning/planApproved check here — pure internal-logic refactor,
+  // behaviorally identical for every case that mattered before (a rejected
+  // plan was never approved, so it already blocked spawn; adding
+  // "changes_requested" as its own state doesn't loosen or tighten the gate).
+  const planStatus = derivePlanReviewStatus(item);
+  const canSpawnSession =
+    actions.has("spawn_session") && (planStatus === "skipped" || planStatus === "approved");
 
   // Self-service "Ship PR" action: only makes sense for an item sitting in
   // review with no PR yet — the exact gap this closes (see
@@ -83,14 +92,28 @@ export function ActionsSection({
       <h3 className={styles.sectionTitle}>Actions</h3>
       <div className={styles.actionsPanel} role="group" aria-label="Item actions">
         {terminalState ? (
-          <InlineNotice
-            message={
-              terminalState === "archived"
-                ? "This item was archived elsewhere."
-                : "This item was removed elsewhere."
-            }
-            data-testid="backlog-detail-terminal-notice"
-          />
+          <>
+            <InlineNotice
+              message={
+                terminalState === "archived"
+                  ? "This item was archived elsewhere."
+                  : "This item was removed elsewhere."
+              }
+              data-testid="backlog-detail-terminal-notice"
+            />
+            {terminalState === "archived" && (
+              <button
+                className={styles.actionButton}
+                onClick={() => onAction("unarchive")}
+                disabled={actionLoading !== null}
+                aria-busy={actionLoading === "unarchive"}
+                title="Restores the item to the Idea column. Its git worktree, if any, was deleted at archive time and cannot be recreated."
+                data-testid="backlog-action-unarchive"
+              >
+                <ActionButtonLabel pending={actionLoading === "unarchive"} label="Unarchive" />
+              </button>
+            )}
+          </>
         ) : (
           <>
         {actions.has("mark_ready") && (
@@ -341,6 +364,18 @@ export function ActionsSection({
             data-testid="backlog-action-reopen"
           >
             <ActionButtonLabel pending={actionLoading === "reopen"} label="Re-open to Review" />
+          </button>
+        )}
+        {actions.has("unarchive") && (
+          <button
+            className={styles.actionButton}
+            onClick={() => onAction("unarchive")}
+            disabled={actionLoading !== null}
+            aria-busy={actionLoading === "unarchive"}
+            title="Restores the item to the Idea column. Its git worktree, if any, was deleted at archive time and cannot be recreated."
+            data-testid="backlog-action-unarchive"
+          >
+            <ActionButtonLabel pending={actionLoading === "unarchive"} label="Unarchive" />
           </button>
         )}
 

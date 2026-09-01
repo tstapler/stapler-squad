@@ -65,12 +65,18 @@ func handleCheck() {
 	dbPath := checkCmd.String("db", "", "Path to SQLite database (defaults to workspace-specific database)")
 	geminiMode := checkCmd.Bool("gemini", false, "Translate Gemini TOOL_INPUT payload (exit-code output)")
 	agyMode := checkCmd.Bool("antigravity", false, "Translate Antigravity TOOL_INPUT payload (hooks.json format)")
+	opencodeMode := checkCmd.Bool("opencode", false, "Translate OpenCode tool.execute.before payload (exit-code output)")
 	checkCmd.Parse(os.Args[2:]) //nolint:errcheck
 
 	var payload classifier.PermissionRequestPayload
 	if *geminiMode || *agyMode {
 		payload = parseGeminiPayload()
 		// Gemini/agy payload typically lacks cwd; fall back to process working directory.
+		if payload.Cwd == "" {
+			payload.Cwd, _ = os.Getwd()
+		}
+	} else if *opencodeMode {
+		payload = parseOpenCodePayload()
 		if payload.Cwd == "" {
 			payload.Cwd, _ = os.Getwd()
 		}
@@ -106,6 +112,8 @@ func handleCheck() {
 		writeGeminiHookDecision(result)
 	} else if *agyMode {
 		writeAntigravityHookDecision(result)
+	} else if *opencodeMode {
+		writeOpenCodeHookDecision(result)
 	} else {
 		writeHookDecision(result)
 	}
@@ -211,6 +219,116 @@ func writeAntigravityHookDecision(result classifier.ClassificationResult) {
 	json.NewEncoder(os.Stdout).Encode(output)
 	// Antigravity hook scripts must always exit with 0 (even on deny).
 	os.Exit(0)
+}
+
+// writeOpenCodeHookDecision communicates the classification result to the generated OpenCode
+// plugin via exit code + stderr reason, mirroring writeGeminiHookDecision's contract.
+//
+// OpenCode plugin contract (@opencode-ai/plugin's Hooks.tool.execute.before, confirmed live —
+// see project_plans/opencode-native-hooks/live-verification-notes.md): the only channel a
+// plugin has to block a tool call is throwing inside the handler; there is no structured
+// decision field to write, unlike Claude/Antigravity's stdout-JSON adapters.
+//
+//	exit 0  — allow the tool call (the plugin does not throw)
+//	exit 1  — deny the tool call; the plugin throws with the stderr text as the error message
+//
+// Escalate maps to deny (fail-closed), not allow: tool.execute.before has no "ask the user"
+// fallback the way Claude Code, Gemini/agy, and Antigravity's own hooks do, and treating the
+// classifier's "no rule matched" catch-all as auto-allow would silently weaken the policy for
+// the plurality of commands that don't match an explicit rule. See
+// docs/adr/ADR-027-opencode-escalate-fail-closed.md for the full decision record.
+//
+// AutoAllow is the only explicit non-deny case, deliberately: cmd/ssq-hooks is excluded from
+// golangci-lint's exhaustive check (.golangci.yml), so nothing else guards against
+// classifier.ClassificationDecision growing a 4th value in the future. Routing every decision
+// except AutoAllow through the same fail-closed default means a future/unrecognized value
+// blocks (matching this function's own documented intent) instead of silently falling through
+// to allow, the way a `case Escalate: ...deny(); default: allow` shape would.
+func writeOpenCodeHookDecision(result classifier.ClassificationResult) {
+	switch result.Decision {
+	case classifier.AutoAllow:
+		// exit 0, no output — the plugin does not throw.
+	case classifier.AutoDeny:
+		reason := result.Reason
+		if result.Alternative != "" {
+			reason += " " + result.Alternative
+		}
+		ruleInfo := ""
+		if result.RuleID != "" {
+			ruleInfo = fmt.Sprintf(" [rule: %s]", result.RuleID)
+		}
+		fmt.Fprintf(os.Stderr, "SSQ-Hooks: blocked%s — %s\n", ruleInfo, reason)
+		os.Exit(1)
+	default:
+		// Escalate, and any future/unrecognized ClassificationDecision: fail closed.
+		fmt.Fprintln(os.Stderr, "SSQ-Hooks: requires manual review (no rule matched); OpenCode's "+
+			"tool.execute.before hook has no ask/dialog fallback, so this is blocked rather than "+
+			"silently allowed — approve manually via the review queue or add a classifier rule")
+		os.Exit(1)
+	}
+}
+
+// openCodePayload is the JSON shape the generated OpenCode plugin (see
+// openCodePluginContent) pipes to `ssq-hooks check --opencode` on stdin, assembled from
+// tool.execute.before's (input, output) pair plus the plugin's init-time PluginInput.directory.
+type openCodePayload struct {
+	ToolName  string                 `json:"tool_name"`
+	ToolInput map[string]interface{} `json:"tool_input"`
+	Cwd       string                 `json:"cwd"`
+	SessionID string                 `json:"session_id"`
+}
+
+// parseOpenCodePayload reads the OpenCode plugin's JSON payload from stdin and translates it
+// to a PermissionRequestPayload. Falls back gracefully to ToolName: "Unknown" on any parse
+// error or missing tool name — results in Escalate (blocked, per ADR-027), not a crash or a
+// silent allow, same defensive shape as parseGeminiPayload.
+func parseOpenCodePayload() classifier.PermissionRequestPayload {
+	raw, err := io.ReadAll(os.Stdin)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "SSQ-Hooks: error reading stdin: %v\n", err)
+		return classifier.PermissionRequestPayload{ToolName: "Unknown"}
+	}
+	if os.Getenv("STAPLER_DEBUG") == "1" {
+		fmt.Fprintf(os.Stderr, "SSQ-Hooks [debug] raw OpenCode payload: %s\n", string(raw))
+	}
+	var p openCodePayload
+	if err := json.Unmarshal(raw, &p); err != nil {
+		fmt.Fprintf(os.Stderr, "SSQ-Hooks: failed to parse OpenCode payload: %v\n", err)
+		return classifier.PermissionRequestPayload{ToolName: "Unknown"}
+	}
+	if p.ToolName == "" {
+		return classifier.PermissionRequestPayload{ToolName: "Unknown"}
+	}
+	normalizeOpenCodeToolInput(p.ToolInput)
+	return classifier.PermissionRequestPayload{
+		SessionID: p.SessionID,
+		Cwd:       p.Cwd,
+		ToolName:  p.ToolName,
+		ToolInput: p.ToolInput,
+	}
+}
+
+// normalizeOpenCodeToolInput adds a "file_path" key (Claude's convention, which
+// classifier.Classify's FilePattern rules match against — see pkg/classifier/classifier.go's
+// `payload.ToolInput["file_path"]` lookup) mirroring OpenCode's own "filePath" key, when the
+// latter is present and the former isn't. Confirmed live: OpenCode's write/edit tool args use
+// camelCase "filePath" (e.g. `{"content":"...","filePath":"/tmp/x/.env"}`), not "file_path" —
+// without this, .env/.git write-protection rules silently never matched a single OpenCode file
+// write, because the FilePattern lookup found an empty string every time. No other translation
+// exists for this gap: PermissionRequestPayload's ToolInput is passed through as an opaque
+// map[string]interface{}, so a mismatched key name fails silently (empty-string match), not
+// with an error — the mismatch was only found by an end-to-end live test hitting a real
+// AutoDeny rule, not by unit tests against synthetic payloads.
+func normalizeOpenCodeToolInput(toolInput map[string]interface{}) {
+	if toolInput == nil {
+		return
+	}
+	if _, hasSnake := toolInput["file_path"]; hasSnake {
+		return
+	}
+	if camel, ok := toolInput["filePath"]; ok {
+		toolInput["file_path"] = camel
+	}
 }
 
 // parseGeminiPayload reads the Gemini/agy $TOOL_INPUT JSON from stdin
@@ -1062,34 +1180,150 @@ func patchAntigravityHooks(hooksPath, binPath string) error {
 	return os.Rename(tmpPath, hooksPath)
 }
 
+// openCodePluginTemplate is the JS plugin installOpenCode() writes to opencode's global plugin
+// directory. It subscribes to @opencode-ai/plugin's Hooks.tool.execute.before, which fires
+// before a tool call executes; throwing inside the handler blocks the call (confirmed live —
+// see project_plans/opencode-native-hooks/live-verification-notes.md). tool.execute.before has
+// no structured decision channel, so the plugin shells out to `ssq-hooks check --opencode` and
+// interprets its exit code exactly like writeOpenCodeHookDecision's contract (exit 0 = allow,
+// non-zero = deny with the reason on stderr, thrown as the JS Error).
+//
+// Deliberately does not `import` anything from @opencode-ai/plugin: the Hooks/PluginInput
+// types are TypeScript-only and stripped at runtime, and importing the package would tie this
+// generated file to whichever version happens to be resolved on a given user's machine — this
+// dev machine alone has a declared/resolved version mismatch (opencode.json's package.json
+// declares 1.4.0, node_modules resolves 1.3.10; see research/stack.md §1/§4 and
+// live-verification-notes.md). Treating the (input, output) shape as a stable plain-JS runtime
+// contract, verified live rather than assumed from either version's types, sidesteps that drift
+// entirely instead of trying to detect and branch on it.
+const openCodePluginTemplate = `// Generated by ssq-hooks install open-code. Do not hand-edit — re-run the installer instead.
+import { execFileSync } from "node:child_process";
+
+export const StaplerSquad = async (ctx) => {
+  return {
+    "tool.execute.before": async (input, output) => {
+      const payload = JSON.stringify({
+        tool_name: input.tool,
+        tool_input: output.args,
+        session_id: input.sessionID,
+        cwd: ctx.directory,
+      });
+      try {
+        // timeout: a hang in ssq-hooks (contended lock, slow disk) must fail closed within a
+        // bounded window, not stall the OpenCode session indefinitely — a timed-out child is
+        // killed and throws, which the catch below already turns into a blocked tool call.
+        execFileSync(%s, ["check", "--opencode"], { input: payload, encoding: "utf8", timeout: 8000 });
+      } catch (err) {
+        throw new Error((err.stderr || "").trim() || "blocked by stapler-squad policy");
+      }
+    },
+  };
+};
+`
+
+// openCodePluginContent renders openCodePluginTemplate with ssqHooksPath embedded as a JS
+// string literal. Uses encoding/json (not fmt's %q, which is Go/strconv escaping — close to
+// but not identical to JS string-literal escaping, e.g. Go's \a has no JS equivalent) so the
+// embedding is safe by construction rather than by coincidence of the two escape tables mostly
+// agreeing.
+func openCodePluginContent(ssqHooksPath string) string {
+	quotedPath, err := json.Marshal(ssqHooksPath)
+	if err != nil {
+		quotedPath = []byte(`""`)
+	}
+	return fmt.Sprintf(openCodePluginTemplate, quotedPath)
+}
+
+// patchOpenCodeHooks writes the ssq-hooks OpenCode plugin to pluginPath. Safe to run multiple
+// times: the generated content is a pure function of ssqHooksPath, so re-running with the same
+// binary path produces byte-identical output (no explicit "already present" check needed, unlike
+// the JSON-config installers, since there's no third-party config structure to merge into).
+func patchOpenCodeHooks(pluginPath, ssqHooksPath string) error {
+	if err := os.MkdirAll(filepath.Dir(pluginPath), 0755); err != nil {
+		return err
+	}
+	content := openCodePluginContent(ssqHooksPath)
+	tmpPath := pluginPath + ".tmp"
+	if err := os.WriteFile(tmpPath, []byte(content), 0644); err != nil {
+		return err
+	}
+	return os.Rename(tmpPath, pluginPath)
+}
+
+// removeStaleOpenCodeWrapper deletes the old ~/.local/bin/open-code bash-wrapper proxy left
+// behind by installOpenCode()'s pre-plugin implementation, if present and if its content still
+// matches the old wrapper. No-ops if the file is absent or doesn't match (e.g. a user's own
+// unrelated open-code script) — mirrors removeAntigravityHookEntry's caution about not touching
+// content ssq-hooks didn't write.
+func removeStaleOpenCodeWrapper(path string) error {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil // absent — nothing to clean up
+	}
+	if !strings.Contains(string(raw), "proxy -- open-code") {
+		return nil // not our old wrapper — leave it alone
+	}
+	return os.Remove(path)
+}
+
+// installOpenCode copies the ssq-hooks binary to ~/.local/bin, writes the OpenCode plugin to
+// opencode's global plugin directory (~/.config/opencode/plugins/ — confirmed auto-loaded with
+// no opencode.json registration needed, see live-verification-notes.md), and removes any stale
+// ~/.local/bin/open-code wrapper from a prior install. Safe to run multiple times.
 func installOpenCode() {
-	home, _ := os.UserHomeDir()
+	home, err := os.UserHomeDir()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error resolving home directory: %v\n", err)
+		os.Exit(1)
+	}
+
+	// 1. Copy binary to ~/.local/bin/ssq-hooks.
 	binDir := filepath.Join(home, ".local", "bin")
 	if err := os.MkdirAll(binDir, 0755); err != nil {
-		fmt.Fprintf(os.Stderr, "Error creating directory %s: %v\n", binDir, err)
+		fmt.Fprintf(os.Stderr, "Error creating %s: %v\n", binDir, err)
 		os.Exit(1)
 	}
-
-	wrapperPath := filepath.Join(binDir, "open-code")
-	ssqPath, err := os.Executable()
+	destBin := filepath.Join(binDir, "ssq-hooks")
+	srcBin, err := os.Executable()
 	if err != nil {
-		ssqPath = "ssq-hooks"
-	}
-
-	content := fmt.Sprintf(`#!/usr/bin/env bash
-# Intercepts calls to open-code and routes them through ssq-hooks proxy
-set -euo pipefail
-CMD=$(%s proxy -- open-code "$@")
-eval "$CMD"
-`, ssqPath)
-
-	if err := os.WriteFile(wrapperPath, []byte(content), 0755); err != nil {
-		fmt.Fprintf(os.Stderr, "Error writing wrapper to %s: %v\n", wrapperPath, err)
+		fmt.Fprintf(os.Stderr, "Error resolving current binary: %v\n", err)
 		os.Exit(1)
 	}
+	if resolved, err := filepath.EvalSymlinks(srcBin); err == nil {
+		srcBin = resolved
+	}
+	if err := copyBinary(srcBin, destBin); err != nil {
+		fmt.Fprintf(os.Stderr, "Error copying binary to %s: %v\n", destBin, err)
+		os.Exit(1)
+	}
+	fmt.Printf("Installed binary: %s\n", destBin)
 
-	fmt.Fprintf(os.Stderr, "Successfully installed open-code wrapper to %s\n", wrapperPath)
-	fmt.Fprintf(os.Stderr, "Ensure %s is in your PATH.\n", binDir)
+	// 2. Write the plugin to opencode's global plugin directory.
+	pluginPath := filepath.Join(home, ".config", "opencode", "plugins", "ssq-hooks.js")
+	if err := patchOpenCodeHooks(pluginPath, destBin); err != nil {
+		fmt.Fprintf(os.Stderr, "Error writing plugin to %s: %v\n", pluginPath, err)
+		os.Exit(1)
+	}
+	fmt.Printf("Installed plugin: %s\n", pluginPath)
+
+	// 3. Clean up the old bash-wrapper proxy, if a prior install left one behind.
+	staleWrapper := filepath.Join(binDir, "open-code")
+	if err := removeStaleOpenCodeWrapper(staleWrapper); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: could not remove stale wrapper %s: %v\n", staleWrapper, err)
+	}
+
+	// Best-effort, informational only: report the detected opencode CLI version so a user can
+	// judge for themselves whether it's far from what this plugin shape was verified against
+	// (1.4.0). Deliberately not a hard version gate — the plugin template avoids depending on
+	// @opencode-ai/plugin's version at all (see openCodePluginTemplate's doc comment), so a
+	// mismatch here is not a reason to fail the install.
+	versionCtx, versionCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	if out, err := safeexec.CommandContext(versionCtx, "opencode", "--version").Output(); err == nil {
+		fmt.Printf("Detected opencode CLI version: %s", out)
+	}
+	versionCancel()
+
+	fmt.Println("Done. Restart OpenCode for the hook to take effect.")
 }
 
 func installService() {

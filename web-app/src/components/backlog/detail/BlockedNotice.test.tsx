@@ -80,3 +80,40 @@ describe("BlockedNotice_should_RenderNoSummaryRecordedFallback_When_ReviewVerdic
     expect(screen.getByText("No diagnostic data")).toBeInTheDocument();
   });
 });
+
+describe("BlockedNotice_should_RenderHeadlessFailureDetail_When_EndReasonIsPopulated", () => {
+  it("renders the classified failure reason and capture path instead of the generic fallback", () => {
+    render(
+      <BlockedNotice
+        kind="missing_diagnostic_data"
+        session={{ endReason: "timeout", failureCapturePath: "/home/user/.stapler-squad/headless-failures/headless-failure-abc.txt" }}
+      />
+    );
+
+    const notice = screen.getByRole("status");
+    expect(notice).toHaveTextContent("Headless call failed (timeout).");
+    expect(notice).toHaveTextContent("/home/user/.stapler-squad/headless-failures/headless-failure-abc.txt");
+    expect(screen.queryByText("No diagnostic data recorded.")).not.toBeInTheDocument();
+  });
+
+  it("renders the failure reason alone when no capture path was recorded", () => {
+    render(<BlockedNotice kind="missing_diagnostic_data" session={{ endReason: "claude_not_found" }} />);
+
+    expect(screen.getByRole("status")).toHaveTextContent("Headless call failed (claude_not_found).");
+  });
+
+  it("still prefers reviewVerdict.summary over endReason when both happen to be present", () => {
+    render(
+      <BlockedNotice
+        kind="blocked_guardrail"
+        session={{
+          reviewVerdict: { overallOutcome: "FAIL", summary: "Review blocked: explicit summary" },
+          endReason: "timeout",
+        }}
+      />
+    );
+
+    expect(screen.getByRole("status")).toHaveTextContent("Review blocked: explicit summary");
+    expect(screen.queryByText(/Headless call failed/)).not.toBeInTheDocument();
+  });
+});

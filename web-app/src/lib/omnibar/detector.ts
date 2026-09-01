@@ -5,6 +5,7 @@
 
 import { InputType, DetectionResult, GitHubRef } from "./types";
 import { CommandDetector } from "./detectors/CommandDetector";
+import { GitHubEnterpriseURLDetector } from "./detectors/GitHubEnterpriseURLDetector";
 import { toSessionSlug } from "./slugify";
 
 export interface Detector {
@@ -256,6 +257,32 @@ class LocalPathDetector implements Detector {
 }
 
 /**
+ * Chat Backlog Item detector — matches the "backlog:" trigger prefix for
+ * free-text backlog item creation via chat. Priority 15 places it after
+ * GitHubPR (10) but before GitHubBranch (20)/NewSession (35)/SessionSearch (200)
+ * so it never shadows those detectors and is never shadowed by them.
+ */
+class ChatBacklogItemDetector implements Detector {
+  name = "ChatBacklogItem";
+  priority = 15;
+
+  private readonly PREFIX_RE = /^backlog:\s*/i;
+
+  detect(input: string): DetectionResult | null {
+    const trimmed = input.trim();
+    if (!this.PREFIX_RE.test(trimmed)) return null;
+    const message = trimmed.replace(this.PREFIX_RE, "").trim();
+    if (!message) return null;
+    return {
+      type: InputType.ChatBacklogItem,
+      confidence: 1.0,
+      parsedValue: message,
+      suggestedName: message,
+    };
+  }
+}
+
+/**
  * New Session detector — matches the "new/" prefix shortcut.
  * Priority 35 places it before GitHubShorthand (40) so "new/foo" is always
  * treated as a new-session command, not a GitHub owner/repo shorthand.
@@ -324,6 +351,11 @@ export class DetectorRegistry {
     this.detectors = this.detectors.filter((d) => d !== detector);
   }
 
+  /** Look up a registered detector by name (e.g. to mutate its state in place). */
+  find(name: string): Detector | undefined {
+    return this.detectors.find((d) => d.name === name);
+  }
+
   detect(input: string): DetectionResult {
     for (const detector of this.detectors) {
       try {
@@ -367,6 +399,8 @@ export function createDefaultRegistry(): DetectorRegistry {
   const registry = new DetectorRegistry();
   registry.register(new CommandDetector());
   registry.register(new GitHubPRDetector());
+  registry.register(new GitHubEnterpriseURLDetector());
+  registry.register(new ChatBacklogItemDetector());
   registry.register(new GitHubBranchDetector());
   registry.register(new GitHubRepoDetector());
   registry.register(new NewSessionDetector());

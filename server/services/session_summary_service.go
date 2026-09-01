@@ -20,7 +20,7 @@ var _ sessionv1connect.SessionSummaryServiceHandler = (*SessionSummaryService)(n
 // liveInstanceFinder is the narrow interface RegenerateSessionSummary needs to check
 // whether a session is still live, so it can refresh diff/goal data straight from the
 // running Instance rather than stale persisted fields. Defined here, next to its
-// consumer, per .claude/rules/interface-pollution-checklist.md — *SessionService
+// consumer, per the `interface-pollution-checklist` skill — *SessionService
 // satisfies this structurally, and a trivial fake can stand in for tests without
 // constructing a full SessionService.
 type liveInstanceFinder interface {

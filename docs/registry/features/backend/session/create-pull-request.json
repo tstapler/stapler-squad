@@ -1,0 +1,23 @@
+{
+  "id": "session:create-pull-request",
+  "type": "backend",
+  "service": "SessionService",
+  "method": "CreatePullRequest",
+  "protoFile": "proto/session/v1/session.proto",
+  "markerFound": true,
+  "handlerFile": "server/services/pr_creation_service.go",
+  "tested": true,
+  "testIds": [
+    "TestCreatePullRequest_should_CallCreatePRDirectly_NotHeadlessPool",
+    "TestCreatePullRequest_should_PersistAndPublishEvent_When_CreateSucceeds",
+    "TestCreatePullRequest_should_ReturnPersistedFalse_When_SaveInstancesFails",
+    "TestCreatePullRequest_should_SurfaceSpecificError_When_GHNotAuthenticated",
+    "TestCreatePullRequest_should_SurfaceError_When_CommitFails",
+    "TestCreatePullRequest_should_SurfaceError_When_PushFails",
+    "TestCreatePullRequest_should_SetAlreadyExisted_When_SessionHasCachedPRUrl",
+    "TestCreatePullRequest_should_RejectConcurrentCall_When_AlreadyInFlight",
+    "TestCreatePullRequest_should_ReturnInternalError_When_PRNumberIsZero",
+    "TestCreatePullRequest_should_CallRecordPRCreatedOutOfBand_When_BacklogListenerPresent"
+  ],
+  "lastModified": "2026-08-21T00:00:00-07:00"
+}

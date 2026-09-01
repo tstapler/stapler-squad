@@ -49,6 +49,7 @@ func newValidSubscription(t *testing.T, endpoint string) PushSubscription {
 
 // UT-1.1 — Subscribe does not deadlock under concurrent calls [R1]
 func TestSubscribeConcurrent(t *testing.T) {
+	t.Parallel()
 	svc := newTestPushService(t)
 	var wg sync.WaitGroup
 	for i := 0; i < 10; i++ {
@@ -72,6 +73,7 @@ func TestSubscribeConcurrent(t *testing.T) {
 
 // UT-1.2 — Subscribe/Unsubscribe/GetSubscriptions use correct lock pairs [R1]
 func TestMutexSymmetry(t *testing.T) {
+	t.Parallel()
 	svc := newTestPushService(t)
 	svc.Subscribe(PushSubscription{Endpoint: "https://example.com/1"})
 	var wg sync.WaitGroup
@@ -85,6 +87,7 @@ func TestMutexSymmetry(t *testing.T) {
 
 // UT-1.3 — SendNotification removes subscription on HTTP 410 [R2]
 func TestSendNotification410RemovesSubscription(t *testing.T) {
+	t.Parallel()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusGone) // 410
 	}))
@@ -100,6 +103,7 @@ func TestSendNotification410RemovesSubscription(t *testing.T) {
 
 // UT-1.4 — SendNotification removes subscription on HTTP 404 [R2]
 func TestSendNotification404RemovesSubscription(t *testing.T) {
+	t.Parallel()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound) // 404
 	}))
@@ -115,6 +119,7 @@ func TestSendNotification404RemovesSubscription(t *testing.T) {
 
 // UT-1.5 — SendNotification closes response body on all status codes [R21]
 func TestSendNotificationClosesBody(t *testing.T) {
+	t.Parallel()
 	statuses := []int{201, 410, 404, 413, 429, 500}
 	for _, status := range statuses {
 		t.Run(fmt.Sprintf("status_%d", status), func(t *testing.T) {
@@ -133,6 +138,7 @@ func TestSendNotificationClosesBody(t *testing.T) {
 
 // UT-1.6 — SendNotification retains subscription on HTTP 201 [R2]
 func TestSendNotification201RetainsSubscription(t *testing.T) {
+	t.Parallel()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(201)
 	}))

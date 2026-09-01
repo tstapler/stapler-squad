@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"connectrpc.com/connect"
@@ -114,6 +115,46 @@ func recentReviewHadVerdict(sessions []session.ItemSessionSummary, n int) []bool
 	return out
 }
 
+// recentWorkSessionFileLists returns up to n changed-file lists (most recent
+// first), one per completed (EndedAt != nil) work-role ItemSession in
+// sessions — computed lazily via go-git tree comparison of each session's
+// BaseCommitSha/LastCommitSha (git.FileStatsBetween; no git subshell, see
+// the `prefer-go-git-over-subshells` skill). sessions must be ordered
+// oldest-first, as Storage.ListItemSessions returns (mirrors
+// recentReviewHadVerdict's contract above). Feeds
+// session.IsTestOnlyReworkCycle.
+//
+// Only completed sessions are considered — reading a still-in-progress
+// session's commit range risks racing an in-flight write to the same
+// worktree (see validation.md's async-race edge case). A session with a
+// git-diff error, or missing SHAs, still occupies a rework-cycle slot with
+// an empty file list rather than being skipped outright: IsTestOnlyReworkCycle
+// treats an empty list as "no signal, don't guess" for that attempt, which is
+// the correct behavior for an attempt whose file data genuinely couldn't be
+// computed — silently skipping it instead would let the cycle compare across
+// a gap it never actually observed.
+func recentWorkSessionFileLists(repoPath string, sessions []session.ItemSessionSummary, n int) [][]string {
+	out := make([][]string, 0, n)
+	for i := len(sessions) - 1; i >= 0 && len(out) < n; i-- {
+		is := sessions[i]
+		if is.Role != session.SessionRoleWork || is.EndedAt == nil {
+			continue
+		}
+		var files []string
+		if is.BaseCommitSha != "" && is.LastCommitSha != "" {
+			if stats, err := git.FileStatsBetween(repoPath, is.BaseCommitSha, is.LastCommitSha); err != nil {
+				log.WarningLog().Printf("[recentWorkSessionFileLists] session=%s FileStatsBetween: %v", is.ID, err)
+			} else {
+				for _, fs := range stats {
+					files = append(files, fs.Path)
+				}
+			}
+		}
+		out = append(out, files)
+	}
+	return out
+}
+
 // notifyReworkCapHit publishes an operator-facing notification when the auto-rework
 // loop (review→rework or PR-fix→rework) hits reworkCap (see effectiveReworkCap) and
 // leaves an item stranded for manual action. No-op if no event bus is wired.
@@ -129,10 +170,10 @@ func (s *BacklogService) notifyReworkCapHit(ctx context.Context, itemID, itemTit
 		applied, err := s.storage.MarkStuck(ctx, itemID, domain.StuckReasonReworkCap, currentStatus,
 			fmt.Sprintf("hit the %d-iteration rework cap %s. Increase the cap in Settings → Defaults, or click \"Reopen for Revision\" to try one more round manually.", reworkCap, capContext))
 		if err != nil {
-			log.WarningLog.Printf("[notifyReworkCapHit] MarkStuck item=%s: %v", itemID, err)
+			log.WarningLog().Printf("[notifyReworkCapHit] MarkStuck item=%s: %v", itemID, err)
 		} else if applied {
 			if _, notifyErr := s.storage.MarkStuckNotified(ctx, itemID, domain.StuckReasonReworkCap); notifyErr != nil {
-				log.WarningLog.Printf("[notifyReworkCapHit] MarkStuckNotified item=%s: %v", itemID, notifyErr)
+				log.WarningLog().Printf("[notifyReworkCapHit] MarkStuckNotified item=%s: %v", itemID, notifyErr)
 			}
 		}
 	}
@@ -167,10 +208,10 @@ func (s *BacklogService) notifyRepeatedFailure(ctx context.Context, itemID, item
 		applied, err := s.storage.MarkStuck(ctx, itemID, domain.StuckReasonBouncing, currentStatus,
 			fmt.Sprintf("stopped auto-rework — the last two attempts failed the same way: %q. Fix the underlying issue, then click \"Reopen for Revision\".", failureSummary))
 		if err != nil {
-			log.WarningLog.Printf("[notifyRepeatedFailure] MarkStuck item=%s: %v", itemID, err)
+			log.WarningLog().Printf("[notifyRepeatedFailure] MarkStuck item=%s: %v", itemID, err)
 		} else if applied {
 			if _, notifyErr := s.storage.MarkStuckNotified(ctx, itemID, domain.StuckReasonBouncing); notifyErr != nil {
-				log.WarningLog.Printf("[notifyRepeatedFailure] MarkStuckNotified item=%s: %v", itemID, notifyErr)
+				log.WarningLog().Printf("[notifyRepeatedFailure] MarkStuckNotified item=%s: %v", itemID, notifyErr)
 			}
 		}
 	}
@@ -189,6 +230,81 @@ func (s *BacklogService) notifyRepeatedFailure(ctx context.Context, itemID, item
 	))
 }
 
+// notifyLikelyFlaky writes a durable, purely-informational StuckReasonLikelyFlaky
+// row (session/domain/backlog.go) when session.IsFlakyVerdictFlipFlop or
+// session.IsTestOnlyReworkCycle matches this item's recent review history —
+// behavioral evidence the review outcome may be non-deterministic rather than a
+// real pass/fail signal (see plan.md's option (c): a UI/stuck-state hint, not a
+// gate). Unlike notifyRepeatedFailure/notifyReworkCapHit, this never stops the
+// caller and publishes no operator-facing notification — it's evaluated as a
+// side observation alongside whatever AutoReopenAfterFailedReview decides next,
+// specifically so a misfiring heuristic can never newly stall an item that would
+// otherwise proceed. A MarkStuck/MarkStuckNotified failure is only logged,
+// matching every other MarkStuck call site's own convention.
+func (s *BacklogService) notifyLikelyFlaky(ctx context.Context, itemID string, currentStatus session.BacklogStatus, recentVerdicts []session.ReviewVerdictSummary, sessions []session.ItemSessionSummary, repoPath string) {
+	if s.storage == nil {
+		return
+	}
+	flip := session.IsFlakyVerdictFlipFlop(recentVerdicts)
+	testOnly := false
+	if repoPath != "" {
+		testOnly = session.IsTestOnlyReworkCycle(recentWorkSessionFileLists(repoPath, sessions, session.TestOnlyReworkMinAttempts))
+	}
+	if !flip && !testOnly {
+		return
+	}
+
+	reason := "the last two review verdicts landed on different outcomes for what looks like the identical diff"
+	switch {
+	case testOnly && flip:
+		reason = "the last two review verdicts flip-flopped on an identical diff, and rework has been touching only test files"
+	case testOnly:
+		reason = "the last two rework attempts touched only test files — possibly chasing a flaky test rather than fixing the underlying code"
+	}
+
+	applied, err := s.storage.MarkStuck(ctx, itemID, domain.StuckReasonLikelyFlaky, currentStatus,
+		fmt.Sprintf("possibly flaky — verify before assuming: %s.", reason))
+	if err != nil {
+		log.WarningLog().Printf("[notifyLikelyFlaky] MarkStuck item=%s: %v", itemID, err)
+	} else if applied {
+		if _, notifyErr := s.storage.MarkStuckNotified(ctx, itemID, domain.StuckReasonLikelyFlaky); notifyErr != nil {
+			log.WarningLog().Printf("[notifyLikelyFlaky] MarkStuckNotified item=%s: %v", itemID, notifyErr)
+		}
+	}
+}
+
+// notifyBlockedByDependency writes a durable StuckReasonBlockedByDependency row
+// (session/domain/backlog.go) when DequeueNextQueuedItems finds an item still
+// has unresolved blockers (AC3) — purely informational, like notifyLikelyFlaky,
+// so the item detail view can render a BlockerChip instead of leaving the
+// operator to guess why a queued/ready item never gets claimed. A MarkStuck/
+// MarkStuckNotified failure is only logged, matching every other MarkStuck call
+// site's own convention.
+func (s *BacklogService) notifyBlockedByDependency(ctx context.Context, itemID string, currentStatus session.BacklogStatus) {
+	if s.storage == nil {
+		return
+	}
+	blockerIDs, err := s.storage.UnresolvedBlockerIDs(ctx, itemID)
+	if err != nil {
+		log.WarningLog().Printf("[notifyBlockedByDependency] UnresolvedBlockerIDs item=%s: %v", itemID, err)
+		return
+	}
+	if len(blockerIDs) == 0 {
+		// Blockers resolved between the batched check and here — nothing to report.
+		return
+	}
+
+	message := fmt.Sprintf("blocked by unresolved dependency: %s", strings.Join(blockerIDs, ", "))
+	applied, err := s.storage.MarkStuck(ctx, itemID, domain.StuckReasonBlockedByDependency, currentStatus, message)
+	if err != nil {
+		log.WarningLog().Printf("[notifyBlockedByDependency] MarkStuck item=%s: %v", itemID, err)
+	} else if applied {
+		if _, notifyErr := s.storage.MarkStuckNotified(ctx, itemID, domain.StuckReasonBlockedByDependency); notifyErr != nil {
+			log.WarningLog().Printf("[notifyBlockedByDependency] MarkStuckNotified item=%s: %v", itemID, notifyErr)
+		}
+	}
+}
+
 // notifySpawnAndRollbackFailed publishes an operator-facing notification and durable
 // BacklogStuckState row (StuckReasonSpawnFailed) when AutoReopenAfterFailedReview's
 // SpawnSessionFromItem call fails AND the subsequent scoped rollback to "review" also
@@ -201,10 +317,10 @@ func (s *BacklogService) notifySpawnAndRollbackFailed(ctx context.Context, itemI
 		applied, err := s.storage.MarkStuck(ctx, itemID, domain.StuckReasonSpawnFailed, session.BacklogStatusInProgress,
 			fmt.Sprintf("a rework session failed to spawn (%v) and the automatic rollback to review also failed (%v) — the item is in_progress with no active session. Click \"Reopen for Revision\" or \"Run Autonomously\" to retry.", spawnErr, rollbackErr))
 		if err != nil {
-			log.WarningLog.Printf("[notifySpawnAndRollbackFailed] MarkStuck item=%s: %v", itemID, err)
+			log.WarningLog().Printf("[notifySpawnAndRollbackFailed] MarkStuck item=%s: %v", itemID, err)
 		} else if applied {
 			if _, notifyErr := s.storage.MarkStuckNotified(ctx, itemID, domain.StuckReasonSpawnFailed); notifyErr != nil {
-				log.WarningLog.Printf("[notifySpawnAndRollbackFailed] MarkStuckNotified item=%s: %v", itemID, notifyErr)
+				log.WarningLog().Printf("[notifySpawnAndRollbackFailed] MarkStuckNotified item=%s: %v", itemID, notifyErr)
 			}
 		}
 	}
@@ -369,6 +485,28 @@ func slugify(s string) string {
 	return strings.Trim(b.String(), "-")
 }
 
+// sanitizeTriageTitle turns an LLM-supplied HeadlessTriageResult.Title into a
+// value safe to use as a filepath.Join path segment, a commit message
+// fragment, and branch-name input. ParseHeadlessTriageResult
+// (session/backlog_triage.go) unmarshals Title straight from the triage LLM's
+// JSON output and never sanitizes it — used raw, a crafted title such as
+// "../../../etc/passwd" resolves outside triageWorkDir when joined into
+// PlanArtifactsPath, which readPlanFile (session/backlog_review.go) later
+// opens: an arbitrary-file-read primitive if a backlog item's content can
+// steer the triage LLM's output (this repo already treats triage-time prompt
+// injection as a realistic threat, not hypothetical). slugify already strips
+// everything but lowercase alnum/hyphen, which rules out ".." and any path
+// separator, so it doubles as the sanitizer here; callers must use this
+// return value (not result.Title) everywhere the title reaches a path,
+// commit message, or branch name. Falls back to a short itemID-derived slug
+// when the title sanitizes away to nothing (empty, or all punctuation/symbols).
+func sanitizeTriageTitle(title, itemID string) string {
+	if s := slugify(title); s != "" {
+		return s
+	}
+	return "item-" + itemID[:min(len(itemID), 8)]
+}
+
 // triageShortTitle extracts the triage-suggested short title from the most recent
 // completed triage ItemSession, falling back to a truncated slug of itemTitle.
 func triageShortTitle(sessions []session.ItemSessionSummary, itemTitle string) string {
@@ -434,7 +572,7 @@ func retitleTriageWorktreeToFinalBranch(itemID, repoPath, title string, wt *git.
 	finalBranch := session.BacklogBranchPrefix + backlogWorkBranchSlug(repoPath, title)
 
 	if renameErr := wt.RenameBranch(finalBranch); renameErr != nil {
-		log.WarningLog.Printf("[TriggerTriage] failed to rename triage worktree branch for item=%s to %q: %v", itemID, finalBranch, renameErr)
+		log.WarningLog().Printf("[TriggerTriage] failed to rename triage worktree branch for item=%s to %q: %v", itemID, finalBranch, renameErr)
 	}
 }
 
@@ -449,7 +587,7 @@ func cleanupProvisionalTriageWorktree(itemID string, wt *git.GitWorktree) {
 		return
 	}
 	if cleanupErr := wt.Cleanup(); cleanupErr != nil {
-		log.WarningLog.Printf("[TriggerTriage] failed to clean up provisional triage worktree for item=%s: %v", itemID, cleanupErr)
+		log.WarningLog().Printf("[TriggerTriage] failed to clean up provisional triage worktree for item=%s: %v", itemID, cleanupErr)
 	}
 }
 
@@ -477,6 +615,17 @@ func (s *BacklogService) SpawnSessionFromItem(
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to get backlog item: %w", err))
 	}
 
+	// 1a. Repo path required. spawnSessionAfterGates (step 5 below) already rejects a
+	// missing repo_path on the direct-spawn path, but the WIP-cap gate (step 4) can
+	// queue this item via queueBacklogItem without ever reaching spawnSessionAfterGates
+	// until a later DequeueNextQueuedItems sweep -- without this earlier check, a
+	// repo_path-less item would occupy a WIP slot until that eventual, easy-to-miss
+	// failure instead of erroring immediately.
+	if item.RepoPath == "" {
+		return nil, connect.NewError(connect.CodeFailedPrecondition,
+			fmt.Errorf("set repo_path before spawning a session"))
+	}
+
 	// 1b. Atomic check-and-set: only one SpawnSessionFromItem call for this item may be
 	// in flight at a time. Without this, two concurrent calls (e.g. AutoReopenAfterFailedReview
 	// / AutoRespawnAutonomousWork / AutoReopenForPRFix all funnel here, and any of them can
@@ -487,7 +636,7 @@ func (s *BacklogService) SpawnSessionFromItem(
 	// closes. Released via defer so every return path (including early gate failures below)
 	// frees the item for the next attempt.
 	if _, alreadyInFlight := s.spawnInFlight.LoadOrStore(item.ID, struct{}{}); alreadyInFlight {
-		log.InfoLog.Printf("[SpawnSessionFromItem] spawn already in flight for item=%s; rejecting concurrent attempt", item.ID)
+		log.InfoLog().Printf("[SpawnSessionFromItem] spawn already in flight for item=%s; rejecting concurrent attempt", item.ID)
 		return nil, connect.NewError(connect.CodeAlreadyExists,
 			fmt.Errorf("a session spawn is already in progress for this item; wait for it to finish"))
 	}
@@ -509,7 +658,7 @@ func (s *BacklogService) SpawnSessionFromItem(
 	// 3. Validate status. Allow ready (first spawn) or in_progress (re-spawn after reopen).
 	isReopen := item.Status == string(session.BacklogStatusInProgress)
 	if item.Status != string(session.BacklogStatusReady) && !isReopen {
-		log.InfoLog.Printf("[SpawnSessionFromItem] status gate blocked spawn item=%s status=%s autonomous=%v", item.ID, item.Status, req.Msg.Autonomous)
+		log.InfoLog().Printf("[SpawnSessionFromItem] status gate blocked spawn item=%s status=%s autonomous=%v", item.ID, item.Status, req.Msg.Autonomous)
 		return nil, connect.NewError(connect.CodeFailedPrecondition,
 			fmt.Errorf("item must be in %q or %q status to spawn a session, got %q — use TriggerTriage to advance from %q",
 				session.BacklogStatusReady, session.BacklogStatusInProgress, item.Status, item.Status))
@@ -523,7 +672,7 @@ func (s *BacklogService) SpawnSessionFromItem(
 	// directly), so queueing an unapproved-plan item would let it reach a real
 	// spawned session with no planning check at all (PR #199 review F2/F3).
 	if !isReopen && !item.SkipPlanning && !item.PlanApproved && !req.Msg.Autonomous {
-		log.InfoLog.Printf("[SpawnSessionFromItem] planning gate blocked spawn item=%s status=%s autonomous=false", item.ID, item.Status)
+		log.InfoLog().Printf("[SpawnSessionFromItem] planning gate blocked spawn item=%s status=%s autonomous=false", item.ID, item.Status)
 		return nil, connect.NewError(connect.CodeFailedPrecondition,
 			fmt.Errorf("run TriggerTriage and approve the plan before spawning, or use 'Run Autonomously' to skip the planning gate"))
 	}
@@ -537,9 +686,9 @@ func (s *BacklogService) SpawnSessionFromItem(
 	if !isReopen {
 		liveCount, wipErr := s.countLiveBacklogWorkSessions(ctx)
 		if wipErr != nil {
-			log.WarningLog.Printf("[SpawnSessionFromItem] WIP count query failed item=%s: %v; allowing spawn", item.ID, wipErr)
+			log.WarningLog().Printf("[SpawnSessionFromItem] WIP count query failed item=%s: %v; allowing spawn", item.ID, wipErr)
 		} else if wipCap := s.maxConcurrentBacklogWorkItems(); liveCount >= wipCap {
-			log.InfoLog.Printf("[SpawnSessionFromItem] WIP limit hit item=%s live=%d cap=%d — queueing", item.ID, liveCount, wipCap)
+			log.InfoLog().Printf("[SpawnSessionFromItem] WIP limit hit item=%s live=%d cap=%d — queueing", item.ID, liveCount, wipCap)
 			if _, queueErr := s.queueBacklogItem(ctx, item, req.Msg.Autonomous); queueErr != nil {
 				return nil, queueErr
 			}
@@ -563,22 +712,41 @@ func (s *BacklogService) SpawnSessionFromItem(
 // site outside the generic RPC handler should route through this helper so a
 // future call site can't reintroduce the same bug class.
 //
+// hasUnresolvedBlockers is a per-item convenience wrapper around
+// storage.UnresolvedBlockerItemIDs for call sites transitioning a single item
+// (queueBacklogItem, TransitionBacklogItemStatus). DequeueNextQueuedItems
+// instead batches this lookup across all candidates up front to avoid an N+1
+// query per dequeue sweep — see its own call to UnresolvedBlockerItemIDs.
+func (s *BacklogService) hasUnresolvedBlockers(ctx context.Context, itemID string) (bool, error) {
+	unresolved, err := s.storage.UnresolvedBlockerItemIDs(ctx, []string{itemID})
+	if err != nil {
+		return false, err
+	}
+	return unresolved[itemID], nil
+}
+
 // Returns the same errors storage.TransitionBacklogItemStatus returns
 // (ErrPreconditionFailed, etc.) on success of the guard checks, or the raw
 // domain sentinel error (ErrPlanRequired, ErrACRequired, ...) if a guard
 // fails — un-wrapped in connect terms so each call site keeps doing its own
 // connect.NewError translation, matching this file's existing style.
-func (s *BacklogService) transitionWithGuard(ctx context.Context, item *session.BacklogItemData, to session.BacklogStatus, precondition *session.BacklogItemPrecondition, triggeredBy string) (*session.BacklogItemData, error) {
+//
+// hasUnresolvedBlockers is supplied by the caller rather than computed here
+// so DequeueNextQueuedItems can batch the underlying query once across all
+// candidates instead of once per claim (see its own call to
+// storage.UnresolvedBlockerItemIDs before the claim loop).
+func (s *BacklogService) transitionWithGuard(ctx context.Context, item *session.BacklogItemData, to session.BacklogStatus, precondition *session.BacklogItemPrecondition, triggeredBy string, hasUnresolvedBlockers bool) (*session.BacklogItemData, error) {
 	from := session.BacklogStatus(item.Status)
 	if !s.engine.CanTransition(from, to) {
 		return nil, fmt.Errorf("invalid transition from %q to %q", from, to)
 	}
 	guardInput := session.BacklogItemTransitionInput{
-		Status:            from,
-		AcCriteria:        item.AcceptanceCriteria,
-		PlanApproved:      item.PlanApproved,
-		SkipPlanning:      item.SkipPlanning,
-		PlanArtifactsPath: item.PlanArtifactsPath,
+		Status:                from,
+		AcCriteria:            item.AcceptanceCriteria,
+		PlanApproved:          item.PlanApproved,
+		SkipPlanning:          item.SkipPlanning,
+		PlanArtifactsPath:     item.PlanArtifactsPath,
+		HasUnresolvedBlockers: hasUnresolvedBlockers,
 	}
 	if guardErr := s.engine.ValidateGates(guardInput, to); guardErr != nil {
 		return nil, guardErr
@@ -605,7 +773,9 @@ func (s *BacklogService) queueBacklogItem(ctx context.Context, item *session.Bac
 		triggeredBy = session.TriggeredBySystem
 	}
 	precondition := &session.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusReady), Note: "WIP cap hit"}
-	updated, err := s.transitionWithGuard(ctx, item, session.BacklogStatusQueued, precondition, triggeredBy)
+	// Blocker guard only applies to the queued/ready -> in_progress transition, so
+	// queueing (-> Queued) always passes false rather than querying.
+	updated, err := s.transitionWithGuard(ctx, item, session.BacklogStatusQueued, precondition, triggeredBy, false)
 	if err != nil {
 		if errors.Is(err, session.ErrPreconditionFailed) {
 			return nil, connect.NewError(connect.CodeAborted, fmt.Errorf("item status changed concurrently — retry the spawn: %w", err))
@@ -686,6 +856,17 @@ func (s *BacklogService) DequeueNextQueuedItems(ctx context.Context) error {
 		return effectiveQueueTime(candidates[i]).Before(effectiveQueueTime(candidates[j]))
 	})
 
+	candidateIDs := make([]string, 0, len(candidates))
+	for _, item := range candidates {
+		candidateIDs = append(candidateIDs, item.ID)
+	}
+	// Batched once across all candidates (not per-claim) to avoid an N+1 query in
+	// this loop — see transitionWithGuard's doc comment.
+	unresolvedBlockers, err := s.storage.UnresolvedBlockerItemIDs(ctx, candidateIDs)
+	if err != nil {
+		return fmt.Errorf("check unresolved blockers: %w", err)
+	}
+
 	spawned := 0
 	for _, item := range candidates {
 		if spawned >= freeSlots {
@@ -695,12 +876,20 @@ func (s *BacklogService) DequeueNextQueuedItems(ctx context.Context) error {
 		claimed, claimErr := s.transitionWithGuard(ctx, &item,
 			session.BacklogStatusInProgress,
 			&session.BacklogItemPrecondition{ExpectedStatus: string(fromStatus), Note: "dequeued: WIP slot freed"},
-			session.TriggeredBySystem)
+			session.TriggeredBySystem,
+			unresolvedBlockers[item.ID])
 		if claimErr != nil {
 			switch {
 			case errors.Is(claimErr, session.ErrPreconditionFailed):
 				// Expected under concurrent claims (another process's dequeue
 				// sweep, or a manual un-queue) — not worth logging.
+			case errors.Is(claimErr, session.ErrUnresolvedBlockers):
+				// Expected steady state: item is legitimately blocked and will be
+				// retried on a later sweep once its blocker reaches done — not a
+				// bug, so not worth a warning-level log every sweep. Still surface
+				// it durably (AC3) so the item detail view can render a BlockerChip
+				// instead of leaving the operator to guess why it's stalled.
+				s.notifyBlockedByDependency(ctx, item.ID, fromStatus)
 			case errors.Is(claimErr, session.ErrPlanRequired), errors.Is(claimErr, session.ErrPlanArtifactsRequired):
 				// Defense-in-depth (PR #199 review F2/F3): should be unreachable
 				// now that SpawnSessionFromItem's planning gate runs before the
@@ -708,20 +897,20 @@ func (s *BacklogService) DequeueNextQueuedItems(ctx context.Context) error {
 				// spawning an unapproved item if this is ever hit (e.g. a future
 				// call site regression, or a pre-existing queued/ready row from
 				// before that ordering fix).
-				log.WarningLog.Printf("[DequeueNextQueuedItems] claim blocked by planning gate item=%s status=%s: %v — leaving as-is", item.ID, fromStatus, claimErr)
+				log.WarningLog().Printf("[DequeueNextQueuedItems] claim blocked by planning gate item=%s status=%s: %v — leaving as-is", item.ID, fromStatus, claimErr)
 			default:
-				log.WarningLog.Printf("[DequeueNextQueuedItems] claim failed item=%s status=%s: %v", item.ID, fromStatus, claimErr)
+				log.WarningLog().Printf("[DequeueNextQueuedItems] claim failed item=%s status=%s: %v", item.ID, fromStatus, claimErr)
 			}
 			continue
 		}
 
 		resp, spawnErr := s.spawnSessionAfterGates(ctx, claimed, true, item.QueuedAutonomous)
 		if spawnErr != nil {
-			log.WarningLog.Printf("[DequeueNextQueuedItems] spawn failed for dequeued item=%s: %v; rolling back to %s", item.ID, spawnErr, fromStatus)
+			log.WarningLog().Printf("[DequeueNextQueuedItems] spawn failed for dequeued item=%s: %v; rolling back to %s", item.ID, spawnErr, fromStatus)
 			if _, rbErr := s.storage.TransitionBacklogItemStatus(ctx, item.ID, fromStatus,
 				&session.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusInProgress), Note: "dequeue spawn failed"},
 				session.TriggeredBySystem); rbErr != nil {
-				log.ErrorLog.Printf("[DequeueNextQueuedItems] rollback to %s failed item=%s: %v", fromStatus, item.ID, rbErr)
+				log.ErrorLog().Printf("[DequeueNextQueuedItems] rollback to %s failed item=%s: %v", fromStatus, item.ID, rbErr)
 				// The same silent-stranding shape notifySpawnAndRollbackFailed was
 				// built for (BUG-030) — that fix only wired this helper into
 				// AutoReopenAfterFailedReview's own spawn+rollback path, missing this
@@ -732,7 +921,7 @@ func (s *BacklogService) DequeueNextQueuedItems(ctx context.Context) error {
 			continue
 		}
 		spawned++
-		log.InfoLog.Printf("[DequeueNextQueuedItems] dequeued and spawned item=%s (was %s, priority=%d) session=%s", item.ID, fromStatus, item.Priority, resp.Msg.SessionUuid)
+		log.InfoLog().Printf("[DequeueNextQueuedItems] dequeued and spawned item=%s (was %s, priority=%d) session=%s", item.ID, fromStatus, item.Priority, resp.Msg.SessionUuid)
 	}
 	return nil
 }
@@ -769,7 +958,7 @@ func (s *BacklogService) spawnSessionAfterGates(
 	// this matches SpawnSessionFromItem's own gate and means it never fires for
 	// AutoReopenAfterFailedReview/AutoReopenForPRFix, which always pass autonomous=true.
 	if !item.SkipPlanning && !item.PlanApproved && !autonomous {
-		log.InfoLog.Printf("[spawnSessionAfterGates] planning gate blocked spawn item=%s status=%s autonomous=false", item.ID, item.Status)
+		log.InfoLog().Printf("[spawnSessionAfterGates] planning gate blocked spawn item=%s status=%s autonomous=false", item.ID, item.Status)
 		return nil, connect.NewError(connect.CodeFailedPrecondition,
 			fmt.Errorf("run TriggerTriage and approve the plan before spawning, or use 'Run Autonomously' to skip the planning gate"))
 	}
@@ -793,7 +982,7 @@ func (s *BacklogService) spawnSessionAfterGates(
 	// 8. Load prior sessions for context.
 	priorSessions, err := s.storage.ListItemSessions(ctx, item.ID)
 	if err != nil {
-		log.WarningLog.Printf("[SpawnSessionFromItem] failed to load prior sessions for item %s: %v", item.ID, err)
+		log.WarningLog().Printf("[SpawnSessionFromItem] failed to load prior sessions for item %s: %v", item.ID, err)
 		priorSessions = nil
 	}
 
@@ -843,13 +1032,24 @@ func (s *BacklogService) spawnSessionAfterGates(
 	// worktree creation fails for any other reason — e.g. a bare clone, a detached
 	// HEAD, or disk quota hit).
 	// Files must be written to the session path BEFORE spawning.
-	// worktreeMu guards concurrent spawns from interleaving writes to the same path.
+	// worktreeMu guards concurrent spawns from interleaving writes to the same path. It
+	// also has to cover resolveSessionPath's check-then-create window: two concurrent
+	// spawns for the same backlog item compute the identical deterministic branch name
+	// (backlogWorkBranchSlug) and can otherwise both pass CreateBacklogWorktree's
+	// branch-existence check before either creates the branch, and the loser hits a
+	// "branch already exists" failure (session/git/worktree_ops.go's setupNewWorktree
+	// self-heals that specific error, but serializing here closes the race at the
+	// source instead of just recovering from it after the fact).
+	s.worktreeMu.Lock()
 	worktreePath, useWorktree, resolveErr := resolveSessionPath(item.RepoPath, backlogWorkBranchSlug(item.RepoPath, shortTitle))
 	if resolveErr != nil {
+		s.worktreeMu.Unlock()
 		return nil, resolveErr
 	}
 
-	if wErr := s.writeSessionFiles(item, priorSessions, worktreePath); wErr != nil {
+	wErr := s.writeSessionFilesLocked(item, priorSessions, worktreePath)
+	s.worktreeMu.Unlock()
+	if wErr != nil {
 		return nil, wErr
 	}
 
@@ -889,10 +1089,10 @@ func (s *BacklogService) spawnSessionAfterGates(
 	driftHook := []HookName{HookGitDriftCheck}
 	if autonomous {
 		if hookErr := InjectHooksConfig(inst.GetEffectiveRootDir(), inst.Title, driftHook); hookErr != nil {
-			log.WarningLog.Printf("[SpawnSessionFromItem] git-drift-check hook injection failed item=%s session=%s: %v", item.ID, inst.UUID, hookErr)
+			log.WarningLog().Printf("[SpawnSessionFromItem] git-drift-check hook injection failed item=%s session=%s: %v", item.ID, inst.UUID, hookErr)
 		}
 	} else if hookErr := RemoveHooksConfig(inst.GetEffectiveRootDir(), driftHook); hookErr != nil {
-		log.WarningLog.Printf("[SpawnSessionFromItem] git-drift-check hook removal failed item=%s session=%s: %v", item.ID, inst.UUID, hookErr)
+		log.WarningLog().Printf("[SpawnSessionFromItem] git-drift-check hook removal failed item=%s session=%s: %v", item.ID, inst.UUID, hookErr)
 	}
 
 	// Persist the instance (and its Worktree row, with BaseCommitSha) synchronously now
@@ -901,15 +1101,15 @@ func (s *BacklogService) spawnSessionAfterGates(
 	// spawned session; without this, a fast work session can request review before the
 	// worktree row exists, causing the review gate to fall back to an unreliable diff.
 	if saveErr := s.storage.SaveInstances([]*session.Instance{inst}); saveErr != nil {
-		log.WarningLog.Printf("[SpawnSessionFromItem] failed to persist instance immediately after spawn item=%s session=%s: %v", item.ID, inst.UUID, saveErr)
+		log.WarningLog().Printf("[SpawnSessionFromItem] failed to persist instance immediately after spawn item=%s session=%s: %v", item.ID, inst.UUID, saveErr)
 	}
 
 	if autonomous {
 		if s.autonomousStarter != nil {
-			log.InfoLog.Printf("[SpawnSessionFromItem] starting autonomous driver item=%s session=%s", item.ID, inst.UUID)
+			log.InfoLog().Printf("[SpawnSessionFromItem] starting autonomous driver item=%s session=%s", item.ID, inst.UUID)
 			s.autonomousStarter.StartAutonomousDriverForInstance(inst)
 		} else {
-			log.WarningLog.Printf("[SpawnSessionFromItem] autonomous=true but no driver starter wired item=%s session=%s — session will need manual approval", item.ID, inst.UUID)
+			log.WarningLog().Printf("[SpawnSessionFromItem] autonomous=true but no driver starter wired item=%s session=%s — session will need manual approval", item.ID, inst.UUID)
 		}
 	}
 
@@ -929,6 +1129,7 @@ func (s *BacklogService) spawnSessionAfterGates(
 		AcSnapshot:               acSnapshot,
 		PipelineModeSnapshot:     item.PipelineMode,
 		PipelineModeSnapshotHash: pipelineModeSnapshotHash,
+		ClaimantHostID:           s.claimantHostID(),
 	})
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to create item session: %w", err))
@@ -970,7 +1171,7 @@ func (s *BacklogService) spawnSessionAfterGates(
 			triggeredBy = session.TriggeredBySystem
 		}
 		if _, transErr := s.storage.TransitionBacklogItemStatus(ctx, item.ID, session.BacklogStatusInProgress, nil, triggeredBy); transErr != nil {
-			log.ErrorLog.Printf("[SpawnSessionFromItem] failed to transition item to in_progress: %v", transErr)
+			log.ErrorLog().Printf("[SpawnSessionFromItem] failed to transition item to in_progress: %v", transErr)
 			// The work session and worktree above are already created and
 			// persisted — a live session is now running for this item while its
 			// status still says otherwise (also invisible to
@@ -1039,7 +1240,7 @@ func (s *BacklogService) countLiveBacklogWorkSessions(ctx context.Context) (int,
 		// reuse makes invisible to a naive in_progress-only count).
 		sessions, sessErr := s.storage.ListItemSessions(ctx, item.ID)
 		if sessErr != nil {
-			log.WarningLog.Printf("[countLiveBacklogWorkSessions] list sessions failed item=%s: %v; assuming no active session", item.ID, sessErr)
+			log.WarningLog().Printf("[countLiveBacklogWorkSessions] list sessions failed item=%s: %v; assuming no active session", item.ID, sessErr)
 			continue
 		}
 		if hasActiveWorkSession(sessions) {
@@ -1144,7 +1345,7 @@ func (s *BacklogService) respawnBlockedActiveProgressSignal(activeSessionUUID st
 // notifyRespawnBlockedByActiveSession closes the audit-trail gap where
 // AutoRespawnAutonomousWork, AutoReopenForPRFix, and AutoRespawnReview's
 // findActiveWorkSession/findActiveReviewSession guards previously only
-// log.InfoLog.Printf'd the skip and returned nil — zero operator-visible
+// log.InfoLog().Printf'd the skip and returned nil — zero operator-visible
 // signal and no audit record, strictly worse than spawnSessionAfterGates' own
 // 8b guard (activeWorkSessionBlockedError), which at least returns a
 // progress-enriched error to its synchronous caller (see
@@ -1172,16 +1373,16 @@ func (s *BacklogService) respawnBlockedActiveProgressSignal(activeSessionUUID st
 // on a tight poll loop).
 func (s *BacklogService) notifyRespawnBlockedByActiveSession(ctx context.Context, caller, itemID, itemTitle string, currentStatus session.BacklogStatus, activeSessionUUID string) {
 	progress := s.respawnBlockedActiveProgressSignal(activeSessionUUID)
-	log.InfoLog.Printf("[%s] item %s already has an active session %s; skipping respawn — %s", caller, itemID, activeSessionUUID, progress)
+	log.InfoLog().Printf("[%s] item %s already has an active session %s; skipping respawn — %s", caller, itemID, activeSessionUUID, progress)
 
 	if s.storage != nil {
 		applied, err := s.storage.MarkStuck(ctx, itemID, domain.StuckReasonRespawnBlockedActive, currentStatus,
 			fmt.Sprintf("%s skipped auto-respawn — session %s already active (%s)", caller, activeSessionUUID, progress))
 		if err != nil {
-			log.WarningLog.Printf("[%s] MarkStuck(respawn_blocked_active) item=%s: %v", caller, itemID, err)
+			log.WarningLog().Printf("[%s] MarkStuck(respawn_blocked_active) item=%s: %v", caller, itemID, err)
 		} else if applied {
 			if _, notifyErr := s.storage.MarkStuckNotified(ctx, itemID, domain.StuckReasonRespawnBlockedActive); notifyErr != nil {
-				log.WarningLog.Printf("[%s] MarkStuckNotified(respawn_blocked_active) item=%s: %v", caller, itemID, notifyErr)
+				log.WarningLog().Printf("[%s] MarkStuckNotified(respawn_blocked_active) item=%s: %v", caller, itemID, notifyErr)
 			}
 		}
 	}
@@ -1217,7 +1418,20 @@ func (s *BacklogService) resolveRespawnBlockedActiveLogged(ctx context.Context, 
 		return
 	}
 	if _, err := s.storage.ResolveStuck(ctx, itemID, domain.StuckReasonRespawnBlockedActive); err != nil {
-		log.WarningLog.Printf("[%s] ResolveStuck(respawn_blocked_active) item=%s: %v", caller, itemID, err)
+		log.WarningLog().Printf("[%s] ResolveStuck(respawn_blocked_active) item=%s: %v", caller, itemID, err)
+	}
+}
+
+// resolveSteerFailedLogged clears an open StuckReasonSteerFailed row for
+// itemID, logging (not returning) any storage error. Mirrors
+// resolveRespawnBlockedActiveLogged for the opposite direction of "at most
+// one of {SteerFailed, RespawnBlockedActive} open at a time."
+func (s *BacklogService) resolveSteerFailedLogged(ctx context.Context, caller, itemID string) {
+	if s.storage == nil {
+		return
+	}
+	if _, err := s.storage.ResolveStuck(ctx, itemID, domain.StuckReasonSteerFailed); err != nil {
+		log.WarningLog().Printf("[%s] ResolveStuck(steer_failed) item=%s: %v", caller, itemID, err)
 	}
 }
 
@@ -1283,7 +1497,7 @@ func (s *BacklogService) notifyIfActiveWorkSessionStale(ctx context.Context, ite
 	if !stale {
 		return
 	}
-	log.WarningLog.Printf("[AutoReopenAfterFailedReview] item %s reopen blocked by active work session %s that is itself stale (%s since last meaningful output, threshold %s)",
+	log.WarningLog().Printf("[AutoReopenAfterFailedReview] item %s reopen blocked by active work session %s that is itself stale (%s since last meaningful output, threshold %s)",
 		itemID, active.SessionUUID, idle.Round(time.Second), maxReworkBlockStaleness)
 
 	// Durably mark the item, best-effort: a storage error or a status
@@ -1292,9 +1506,9 @@ func (s *BacklogService) notifyIfActiveWorkSessionStale(ctx context.Context, ite
 	// one pre-existing behavior this addition must not regress.
 	if applied, markErr := s.storage.MarkStuck(ctx, itemID, domain.StuckReasonReworkBlockedStale, session.BacklogStatusReview,
 		fmt.Sprintf("active work session %s idle %s since last meaningful output", active.SessionUUID, idle.Round(time.Second))); markErr != nil {
-		log.WarningLog.Printf("[AutoReopenAfterFailedReview] item %s MarkStuck(rework_blocked_stale) error: %v", itemID, markErr)
+		log.WarningLog().Printf("[AutoReopenAfterFailedReview] item %s MarkStuck(rework_blocked_stale) error: %v", itemID, markErr)
 	} else if !applied {
-		log.InfoLog.Printf("[AutoReopenAfterFailedReview] item %s MarkStuck(rework_blocked_stale) skipped — status precondition no longer holds", itemID)
+		log.InfoLog().Printf("[AutoReopenAfterFailedReview] item %s MarkStuck(rework_blocked_stale) skipped — status precondition no longer holds", itemID)
 	}
 
 	// itemID as sessionID — see comment in notifyReworkCapHit above.
@@ -1366,7 +1580,7 @@ func (s *BacklogService) ResolveReworkBlockedStaleIfRecovered(ctx context.Contex
 // abort the caller's reconcile tick.
 func (s *BacklogService) resolveReworkBlockedStaleLogged(ctx context.Context, itemID string) {
 	if _, resolveErr := s.storage.ResolveStuck(ctx, itemID, domain.StuckReasonReworkBlockedStale); resolveErr != nil {
-		log.WarningLog.Printf("[BacklogLifecycle] ResolveReworkBlockedStaleIfRecovered ResolveStuck item=%s: %v", itemID, resolveErr)
+		log.WarningLog().Printf("[BacklogLifecycle] ResolveReworkBlockedStaleIfRecovered ResolveStuck item=%s: %v", itemID, resolveErr)
 	}
 }
 
@@ -1435,22 +1649,29 @@ func resolveSessionPath(repoPath, slug string) (worktreePath string, useWorktree
 	}
 
 	if git.IsGitRepo(resolvedRepo) {
-		log.ErrorLog.Printf("[SpawnSessionFromItem] worktree creation failed for git-managed repo %s (%v)", resolvedRepo, wtErr)
+		// No special-case fallback for a zero-commit repo: findGitRepoRoot
+		// (session/git/util.go, called by both GitWorktree constructors before
+		// Setup runs) auto-creates an initial commit for exactly that case, so
+		// CreateBacklogWorktree already succeeds instead of erroring — see
+		// TestResolveSessionPath_should_CreateWorktree_When_RepoHasNoInitialCommit.
+		// Any other git-managed worktree failure must hard-fail per BUG-057, not
+		// silently fall back to an unscoped directory session.
+		log.ErrorLog().Printf("[SpawnSessionFromItem] worktree creation failed for git-managed repo %s (%v)", resolvedRepo, wtErr)
 		return "", false, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to create git worktree: %w", wtErr))
 	}
 
-	log.WarningLog.Printf("[SpawnSessionFromItem] %s is not git-managed, falling back to directory mode (%v)", resolvedRepo, wtErr)
+	log.WarningLog().Printf("[SpawnSessionFromItem] %s is not git-managed, falling back to directory mode (%v)", resolvedRepo, wtErr)
 	if dirErr := session.EnsureDirectorySessionPath(resolvedRepo); dirErr != nil {
 		return "", false, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to prepare session directory: %w", dirErr))
 	}
 	return resolvedRepo, false, nil
 }
 
-// writeSessionFiles writes the backlog slash-command files and context file to the session
-// directory. The write is serialized under worktreeMu to prevent concurrent write races.
-func (s *BacklogService) writeSessionFiles(item *session.BacklogItemData, priorSessions []session.ItemSessionSummary, worktreePath string) error {
-	s.worktreeMu.Lock()
-	defer s.worktreeMu.Unlock()
+// writeSessionFilesLocked writes the backlog slash-command files and context file to the
+// session directory. Callers must hold s.worktreeMu — see spawnSessionAfterGates, which
+// locks it around this call and the preceding resolveSessionPath to close the
+// check-then-create worktree race described there.
+func (s *BacklogService) writeSessionFilesLocked(item *session.BacklogItemData, priorSessions []session.ItemSessionSummary, worktreePath string) error {
 	if wErr := session.WriteSlashCommands(s.pipelineEngine, item, worktreePath); wErr != nil {
 		return connect.NewError(connect.CodeInternal, fmt.Errorf("WriteSlashCommands: %w", wErr))
 	}
@@ -1532,10 +1753,19 @@ func (s *BacklogService) AutoReopenAfterFailedReview(ctx context.Context, itemID
 	// fast-looping infrastructure fault (e.g. a broken worktree diff) can't spend
 	// the whole cap in minutes.
 	recentVerdicts, verdictErr := s.storage.GetRecentReviewVerdictSummaries(ctx, itemID, 2)
+
+	// Story 3.2.1: purely informational — evaluated unconditionally, on every
+	// call, regardless of whether a circuit breaker below trips and returns
+	// early. Never gates the reopen/park decision itself (see
+	// StuckReasonLikelyFlaky's doc comment); a likely_flaky row can and often
+	// will co-occur with e.g. a bouncing row on the same underlying evidence
+	// (see plan.md's correlated-signal note).
+	s.notifyLikelyFlaky(ctx, itemID, session.BacklogStatus(item.Status), recentVerdicts, sessions, item.RepoPath)
+
 	if verdictErr != nil {
-		log.WarningLog.Printf("[AutoReopenAfterFailedReview] item %s GetRecentReviewVerdictSummaries: %v", itemID, verdictErr)
+		log.WarningLog().Printf("[AutoReopenAfterFailedReview] item %s GetRecentReviewVerdictSummaries: %v", itemID, verdictErr)
 	} else if session.IsRepeatedFailure(recentVerdicts) {
-		log.InfoLog.Printf("[AutoReopenAfterFailedReview] item %s failed the same way twice in a row; leaving in review for remediation instead of reopening", itemID)
+		log.InfoLog().Printf("[AutoReopenAfterFailedReview] item %s failed the same way twice in a row; leaving in review for remediation instead of reopening", itemID)
 		s.notifyRepeatedFailure(ctx, itemID, item.Title, session.BacklogStatus(item.Status), recentVerdicts[0].Summary)
 		return nil
 	}
@@ -1551,7 +1781,7 @@ func (s *BacklogService) AutoReopenAfterFailedReview(ctx context.Context, itemID
 	// session.IsRepeatedNoVerdictFailure's doc comment for the live bounce
 	// loop (78 cycles in 24h) this closes.
 	if session.IsRepeatedNoVerdictFailure(recentReviewHadVerdict(sessions, 2)) {
-		log.InfoLog.Printf("[AutoReopenAfterFailedReview] item %s: the last two review sessions both exited without ever writing a verdict; leaving in review for remediation instead of reopening", itemID)
+		log.InfoLog().Printf("[AutoReopenAfterFailedReview] item %s: the last two review sessions both exited without ever writing a verdict; leaving in review for remediation instead of reopening", itemID)
 		s.notifyRepeatedFailure(ctx, itemID, item.Title, session.BacklogStatus(item.Status), "review session exited without ever writing a verdict")
 		return nil
 	}
@@ -1563,7 +1793,7 @@ func (s *BacklogService) AutoReopenAfterFailedReview(ctx context.Context, itemID
 		}
 	}
 	if reworkCap := s.effectiveReworkCap(item); workCount >= reworkCap {
-		log.InfoLog.Printf("[AutoReopenAfterFailedReview] item %s has %d work sessions (cap %d); leaving in review for manual action", itemID, workCount, reworkCap)
+		log.InfoLog().Printf("[AutoReopenAfterFailedReview] item %s has %d work sessions (cap %d); leaving in review for manual action", itemID, workCount, reworkCap)
 		s.notifyReworkCapHit(ctx, itemID, item.Title, session.BacklogStatus(item.Status), "after a failed review verdict", reworkCap)
 		return nil
 	}
@@ -1585,10 +1815,10 @@ func (s *BacklogService) AutoReopenAfterFailedReview(ctx context.Context, itemID
 	// or abandoned_review rows immediately (Task 2.1.5b) rather than waiting
 	// for the self-heal sweep's next tick.
 	if _, resolveErr := s.storage.ResolveStuck(ctx, itemID, domain.StuckReasonReworkCap); resolveErr != nil {
-		log.WarningLog.Printf("[AutoReopenAfterFailedReview] ResolveStuck(rework_cap) item=%s: %v", itemID, resolveErr)
+		log.WarningLog().Printf("[AutoReopenAfterFailedReview] ResolveStuck(rework_cap) item=%s: %v", itemID, resolveErr)
 	}
 	if _, resolveErr := s.storage.ResolveStuck(ctx, itemID, domain.StuckReasonAbandonedReview); resolveErr != nil {
-		log.WarningLog.Printf("[AutoReopenAfterFailedReview] ResolveStuck(abandoned_review) item=%s: %v", itemID, resolveErr)
+		log.WarningLog().Printf("[AutoReopenAfterFailedReview] ResolveStuck(abandoned_review) item=%s: %v", itemID, resolveErr)
 	}
 
 	if activeWork {
@@ -1598,7 +1828,7 @@ func (s *BacklogService) AutoReopenAfterFailedReview(ctx context.Context, itemID
 		// cache. The item is now back at in_progress, so that session's next
 		// request_review call succeeds instead of failing the precondition
 		// check forever.
-		log.InfoLog.Printf("[AutoReopenAfterFailedReview] item %s transitioned to in_progress; reusing its active work session instead of respawning", itemID)
+		log.InfoLog().Printf("[AutoReopenAfterFailedReview] item %s transitioned to in_progress; reusing its active work session instead of respawning", itemID)
 		return nil
 	}
 
@@ -1629,7 +1859,7 @@ func (s *BacklogService) AutoReopenAfterFailedReview(ctx context.Context, itemID
 			ExpectedUpdatedAt: &inProgress.UpdatedAt,
 		}
 		if _, rollbackErr := s.storage.TransitionBacklogItemStatus(ctx, itemID, session.BacklogStatusReview, rollbackPrecondition, session.TriggeredBySystem); rollbackErr != nil {
-			log.ErrorLog.Printf("[AutoReopenAfterFailedReview] rollback to review failed for item %s: %v", itemID, rollbackErr)
+			log.ErrorLog().Printf("[AutoReopenAfterFailedReview] rollback to review failed for item %s: %v", itemID, rollbackErr)
 			// The item is now stranded in_progress with no active session and no
 			// visible error anywhere else (BUG-030) — a log line nobody reads.
 			// Mark it durably stuck so the reconciliation sweep and the operator
@@ -1689,7 +1919,7 @@ func (s *BacklogService) AutoRespawnAutonomousWork(ctx context.Context, itemID s
 		}
 	}
 	if reworkCap := s.effectiveReworkCap(item); workCount >= reworkCap {
-		log.InfoLog.Printf("[AutoRespawnAutonomousWork] item %s has %d work sessions (cap %d); leaving in_progress for manual action", itemID, workCount, reworkCap)
+		log.InfoLog().Printf("[AutoRespawnAutonomousWork] item %s has %d work sessions (cap %d); leaving in_progress for manual action", itemID, workCount, reworkCap)
 		s.notifyReworkCapHit(ctx, itemID, item.Title, session.BacklogStatus(item.Status), "after repeatedly hitting the autonomous turn cap without finishing", reworkCap)
 		return nil
 	}
@@ -1701,7 +1931,7 @@ func (s *BacklogService) AutoRespawnAutonomousWork(ctx context.Context, itemID s
 	if spawnErr != nil {
 		return fmt.Errorf("spawn session: %w", spawnErr)
 	}
-	log.InfoLog.Printf("[AutoRespawnAutonomousWork] item %s respawned with a fresh turn budget", itemID)
+	log.InfoLog().Printf("[AutoRespawnAutonomousWork] item %s respawned with a fresh turn budget", itemID)
 	return nil
 }
 
@@ -1783,6 +2013,17 @@ func (s *BacklogService) RemediateStaleWorkSession(ctx context.Context, itemID s
 		return s.AutoRespawnAutonomousWork(ctx, itemID)
 	}
 
+	// Defer to the driver's own automated retry machinery
+	// (session-retry-backoff) rather than racing it: if a retry is already
+	// claimed or scheduled for this exact session, its process-level recovery
+	// is already in progress — killing the pane and respawning here would be
+	// the double-remediation risk this AC exists to close, not a genuine
+	// second recovery path.
+	if s.sessionStopper != nil && s.sessionStopper.IsRetryPending(active.SessionUUID) {
+		log.InfoLog().Printf("[RemediateStaleWorkSession] item=%s session=%s: deferring — an automated retry is already in flight/scheduled for this session", itemID, active.SessionUUID)
+		return nil
+	}
+
 	// End the ItemSession row BEFORE killing the pane (BUG-064 — see doc
 	// comment above): this ordering is what lets onSessionExited's
 	// already-ended guard close the race with AutoRespawnAutonomousWork below.
@@ -1798,18 +2039,51 @@ func (s *BacklogService) RemediateStaleWorkSession(ctx context.Context, itemID s
 	// below rather than leaving the item stranded on a pure kill failure.
 	if s.sessionStopper != nil {
 		if killErr := s.sessionStopper.KillTmuxPaneOnly(ctx, active.SessionUUID); killErr != nil {
-			log.WarningLog.Printf("[RemediateStaleWorkSession] item=%s session=%s: kill failed (continuing): %v", itemID, active.SessionUUID, killErr)
+			log.WarningLog().Printf("[RemediateStaleWorkSession] item=%s session=%s: kill failed (continuing): %v", itemID, active.SessionUUID, killErr)
 		}
 	}
-	log.InfoLog.Printf("[RemediateStaleWorkSession] item=%s ended stale work session=%s (session_uuid=%s), respawning", itemID, active.ID, active.SessionUUID)
+	log.InfoLog().Printf("[RemediateStaleWorkSession] item=%s ended stale work session=%s (session_uuid=%s), respawning", itemID, active.ID, active.SessionUUID)
 
 	return s.AutoRespawnAutonomousWork(ctx, itemID)
 }
 
-// AutoReopenForPRFix implements session.PRFixSpawner. It transitions the item
-// from pr_pending back to in_progress and spawns a new autonomous work session
-// pre-loaded with the CI/review failure context so the agent can fix and push.
+// HasActiveWorkSession implements session.PRFixSpawner's query half — a
+// side-effect-free check letting remediatePRFixWithBackoffGate decide
+// whether to bypass its backoff gate before calling
+// AutoReopenForPRFixWithKnownSession with the same resolved session. Does
+// not transition status or mark/notify anything.
+func (s *BacklogService) HasActiveWorkSession(ctx context.Context, itemID string) (*session.ItemSessionSummary, error) {
+	if s.storage == nil {
+		return nil, fmt.Errorf("storage not available")
+	}
+	sessions, err := s.storage.ListItemSessions(ctx, itemID)
+	if err != nil {
+		return nil, fmt.Errorf("list sessions: %w", err)
+	}
+	return findActiveWorkSession(sessions), nil
+}
+
+// AutoReopenForPRFix implements session.PRFixSpawner. When no work session is
+// active for the item, it transitions the item from pr_pending back to
+// in_progress and spawns a new autonomous work session pre-loaded with the
+// CI/review failure context so the agent can fix and push; when a work
+// session is already active, it instead steers that session with the same
+// fixContext (see steerActiveSessionForPRFix) rather than spawning a
+// duplicate.
 func (s *BacklogService) AutoReopenForPRFix(ctx context.Context, itemID string, fixContext string) error {
+	return s.autoReopenForPRFix(ctx, itemID, fixContext, nil)
+}
+
+// AutoReopenForPRFixWithKnownSession implements session.PRFixSpawner's
+// TOCTOU-safe variant: knownActive (from a prior HasActiveWorkSession call
+// in the same tick) is trusted as a floor on activity, so this call's
+// steer-vs-spawn decision can't diverge from the caller's already-decided
+// backoff bypass even if the session ended in between.
+func (s *BacklogService) AutoReopenForPRFixWithKnownSession(ctx context.Context, itemID, fixContext string, knownActive *session.ItemSessionSummary) error {
+	return s.autoReopenForPRFix(ctx, itemID, fixContext, knownActive)
+}
+
+func (s *BacklogService) autoReopenForPRFix(ctx context.Context, itemID string, fixContext string, knownActive *session.ItemSessionSummary) error {
 	if s.storage == nil {
 		return fmt.Errorf("storage not available")
 	}
@@ -1839,8 +2113,15 @@ func (s *BacklogService) AutoReopenForPRFix(ctx context.Context, itemID string, 
 	// progress while its 4-hour-old autonomous work session was, in fact, still active
 	// (see docs/tasks/backlog-feature-improvement.md).
 	s.tombstoneOrphanWorkSessions(ctx, itemID, sessions)
-	if active := findActiveWorkSession(sessions); active != nil {
-		s.notifyRespawnBlockedByActiveSession(ctx, "AutoReopenForPRFix", itemID, item.Title, session.BacklogStatus(item.Status), active.SessionUUID)
+	active := findActiveWorkSession(sessions)
+	if active == nil {
+		// Fall back to the caller's already-resolved session (same tick, one
+		// query earlier) so a session ending in this narrow window can't
+		// flip an already-decided backoff-bypass into an ungated spawn.
+		active = knownActive
+	}
+	if active != nil {
+		s.steerActiveSessionForPRFix(ctx, itemID, item.Title, session.BacklogStatus(item.Status), active.SessionUUID, fixContext)
 		return nil
 	}
 	s.resolveRespawnBlockedActiveLogged(ctx, "AutoReopenForPRFix", itemID)
@@ -1852,7 +2133,7 @@ func (s *BacklogService) AutoReopenForPRFix(ctx context.Context, itemID string, 
 		}
 	}
 	if reworkCap := s.effectiveReworkCap(item); workCount >= reworkCap {
-		log.InfoLog.Printf("[AutoReopenForPRFix] item %s has %d work sessions (cap %d); leaving in pr_pending for manual action", itemID, workCount, reworkCap)
+		log.InfoLog().Printf("[AutoReopenForPRFix] item %s has %d work sessions (cap %d); leaving in pr_pending for manual action", itemID, workCount, reworkCap)
 		s.notifyReworkCapHit(ctx, itemID, item.Title, session.BacklogStatus(item.Status), "while fixing PR #"+fmt.Sprint(item.PrNumber), reworkCap)
 		return nil
 	}
@@ -1872,7 +2153,7 @@ func (s *BacklogService) AutoReopenForPRFix(ctx context.Context, itemID string, 
 	// 2.1.5b) rather than waiting for the self-heal sweep's next tick.
 	for _, reason := range []domain.StuckReason{domain.StuckReasonReworkCap, domain.StuckReasonPRReadyUnmerged, domain.StuckReasonPushFailed} {
 		if _, resolveErr := s.storage.ResolveStuck(ctx, itemID, reason); resolveErr != nil {
-			log.WarningLog.Printf("[AutoReopenForPRFix] ResolveStuck(%s) item=%s: %v", reason, itemID, resolveErr)
+			log.WarningLog().Printf("[AutoReopenForPRFix] ResolveStuck(%s) item=%s: %v", reason, itemID, resolveErr)
 		}
 	}
 
@@ -1899,7 +2180,7 @@ func (s *BacklogService) AutoReopenForPRFix(ctx context.Context, itemID string, 
 	if _, noteErr := s.storage.UpdateBacklogItem(ctx, itemID, session.BacklogItemUpdate{
 		Notes: &combinedNotes,
 	}, nil); noteErr != nil {
-		log.WarningLog.Printf("[AutoReopenForPRFix] set fix notes item=%s: %v", itemID, noteErr)
+		log.WarningLog().Printf("[AutoReopenForPRFix] set fix notes item=%s: %v", itemID, noteErr)
 	}
 
 	_, spawnErr := s.SpawnSessionFromItem(ctx, connect.NewRequest(&sessionv1.SpawnSessionFromItemRequest{
@@ -1911,13 +2192,13 @@ func (s *BacklogService) AutoReopenForPRFix(ctx context.Context, itemID string, 
 	if _, noteErr := s.storage.UpdateBacklogItem(ctx, itemID, session.BacklogItemUpdate{
 		Notes: &originalNotes,
 	}, nil); noteErr != nil {
-		log.WarningLog.Printf("[AutoReopenForPRFix] restore notes item=%s: %v", itemID, noteErr)
+		log.WarningLog().Printf("[AutoReopenForPRFix] restore notes item=%s: %v", itemID, noteErr)
 	}
 
 	if spawnErr != nil {
 		// Roll back to pr_pending so the reconciler can retry.
 		if _, rollbackErr := s.storage.TransitionBacklogItemStatus(ctx, itemID, session.BacklogStatusPRPending, nil, session.TriggeredBySystem); rollbackErr != nil {
-			log.ErrorLog.Printf("[AutoReopenForPRFix] rollback to pr_pending failed for item %s: %v", itemID, rollbackErr)
+			log.ErrorLog().Printf("[AutoReopenForPRFix] rollback to pr_pending failed for item %s: %v", itemID, rollbackErr)
 			// The caller below only ever learns about spawnErr — a rollback
 			// failure here leaves the item stranded at in_progress with no work
 			// session, same shape notifySpawnAndRollbackFailed was built for
@@ -1927,7 +2208,7 @@ func (s *BacklogService) AutoReopenForPRFix(ctx context.Context, itemID string, 
 		return fmt.Errorf("spawn session: %w", spawnErr)
 	}
 
-	log.InfoLog.Printf("[AutoReopenForPRFix] item %s → in_progress for PR fix session", itemID)
+	log.InfoLog().Printf("[AutoReopenForPRFix] item %s → in_progress for PR fix session", itemID)
 	return nil
 }
 
@@ -2000,7 +2281,7 @@ func (s *BacklogService) AutoRespawnReview(ctx context.Context, itemID string) e
 		}
 	}
 	if reworkCap := s.effectiveReworkCap(item); reviewCount >= reworkCap {
-		log.InfoLog.Printf("[AutoRespawnReview] item %s has %d review sessions (cap %d); leaving in review for manual action", itemID, reviewCount, reworkCap)
+		log.InfoLog().Printf("[AutoRespawnReview] item %s has %d review sessions (cap %d); leaving in review for manual action", itemID, reviewCount, reworkCap)
 		s.notifyReworkCapHit(ctx, itemID, item.Title, session.BacklogStatus(item.Status), "while abandoned in review with no active session", reworkCap)
 		return nil
 	}
@@ -2008,7 +2289,7 @@ func (s *BacklogService) AutoRespawnReview(ctx context.Context, itemID string) e
 	if _, reviewErr := s.TriggerReReview(ctx, connect.NewRequest(&sessionv1.TriggerReReviewRequest{ItemId: itemID})); reviewErr != nil {
 		return fmt.Errorf("trigger re-review: %w", reviewErr)
 	}
-	log.InfoLog.Printf("[AutoRespawnReview] item %s re-review triggered", itemID)
+	log.InfoLog().Printf("[AutoRespawnReview] item %s re-review triggered", itemID)
 	return nil
 }
 
@@ -2063,7 +2344,7 @@ func (s *BacklogService) AutoRespawnTriage(ctx context.Context, itemID string) e
 	if _, triageErr := s.TriggerTriage(ctx, connect.NewRequest(&sessionv1.TriggerTriageRequest{ItemId: itemID})); triageErr != nil {
 		return fmt.Errorf("trigger triage: %w", triageErr)
 	}
-	log.InfoLog.Printf("[AutoRespawnTriage] item %s triage re-triggered", itemID)
+	log.InfoLog().Printf("[AutoRespawnTriage] item %s triage re-triggered", itemID)
 	return nil
 }
 
@@ -2094,25 +2375,25 @@ func (s *BacklogService) syncPRBranchWithMain(ctx context.Context, itemID string
 	}
 	wt, wtErr := s.storage.GetWorktreeDataBySessionUUID(ctx, workSession.SessionUUID)
 	if wtErr != nil || wt.WorktreePath == "" {
-		log.InfoLog.Printf("[AutoReopenForPRFix] syncPRBranchWithMain item=%s: no worktree to sync (%v)", itemID, wtErr)
+		log.InfoLog().Printf("[AutoReopenForPRFix] syncPRBranchWithMain item=%s: no worktree to sync (%v)", itemID, wtErr)
 		return ""
 	}
 
 	result, mergeErr := git.MergeMainIntoWorktree(wt.WorktreePath, prFixMainBranch)
 	if mergeErr != nil {
-		log.WarningLog.Printf("[AutoReopenForPRFix] merge %s into item=%s branch=%s: %v", prFixMainBranch, itemID, wt.BranchName, mergeErr)
+		log.WarningLog().Printf("[AutoReopenForPRFix] merge %s into item=%s branch=%s: %v", prFixMainBranch, itemID, wt.BranchName, mergeErr)
 		return ""
 	}
 
 	switch {
 	case result.Conflicted:
-		log.InfoLog.Printf("[AutoReopenForPRFix] item=%s: merging %s into %s produced conflicts in %v", itemID, prFixMainBranch, wt.BranchName, result.ConflictedFiles)
+		log.InfoLog().Printf("[AutoReopenForPRFix] item=%s: merging %s into %s produced conflicts in %v", itemID, prFixMainBranch, wt.BranchName, result.ConflictedFiles)
 		return fmt.Sprintf("[Branch sync] Merging %q into this PR's branch (%s) produced conflicts in:\n- %s\n\nThe merge was aborted so the worktree is clean; resolving these conflicts against %s is part of this fix.",
 			prFixMainBranch, wt.BranchName, strings.Join(result.ConflictedFiles, "\n- "), prFixMainBranch)
 	case result.Merged:
 		g := git.NewGitWorktreeFromStorage(wt.RepoPath, wt.WorktreePath, wt.SessionName, wt.BranchName, wt.BaseCommitSHA)
 		if pushErr := g.PushBranch(); pushErr != nil {
-			log.WarningLog.Printf("[AutoReopenForPRFix] push merged %s into item=%s branch=%s: %v", prFixMainBranch, itemID, wt.BranchName, pushErr)
+			log.WarningLog().Printf("[AutoReopenForPRFix] push merged %s into item=%s branch=%s: %v", prFixMainBranch, itemID, wt.BranchName, pushErr)
 			// The fix session that reads this note gets its own fresh worktree
 			// (SpawnSessionFromItem always creates a new one on reopen), not this
 			// one — so the note must be actionable from anywhere, not just "push
@@ -2123,7 +2404,7 @@ func (s *BacklogService) syncPRBranchWithMain(ctx context.Context, itemID string
 				"The merge commit is not lost — push it from the shared repo checkout before continuing: `git -C %s push origin %s`.",
 				prFixMainBranch, wt.BranchName, pushErr, wt.RepoPath, wt.BranchName)
 		}
-		log.InfoLog.Printf("[AutoReopenForPRFix] item=%s: merged and pushed %s into %s", itemID, prFixMainBranch, wt.BranchName)
+		log.InfoLog().Printf("[AutoReopenForPRFix] item=%s: merged and pushed %s into %s", itemID, prFixMainBranch, wt.BranchName)
 		return fmt.Sprintf("[Branch sync] Merged the latest %q into this PR's branch (%s) and pushed it — the branch is now up to date with %s.", prFixMainBranch, wt.BranchName, prFixMainBranch)
 	default: // UpToDate
 		return ""
@@ -2135,27 +2416,73 @@ func (s *BacklogService) syncPRBranchWithMain(ctx context.Context, itemID string
 // investigation) can answer "how often does each failure mode happen" from log history alone,
 // without re-deriving it by hand from raw error text and process timing.
 //
-//   - "timeout": ctx deadline exceeded, or elapsed is within 5s of the 30m TriggerTriage
-//     budget (covers a hang whose error got wrapped/lost before reaching context.DeadlineExceeded).
+//   - "timeout": ctx deadline exceeded, or elapsed is within 5s of budget (covers a
+//     hang whose error got wrapped/lost before reaching context.DeadlineExceeded).
 //   - "shutdown": server shutdown context cancelled mid-call, not a call failure.
-//   - "process_error": the claude subprocess ran and exited non-zero (bad prompt, LLM
-//     refusal, usage error) — see headless.ErrLLMError/ErrUsageError/ErrInterrupted.
 //   - "claude_not_found": the claude binary itself is missing from PATH — an environment
 //     problem, not a per-call one.
-//   - "other": anything else (e.g. a storage/DB error surfaced through the same path).
-func classifyHeadlessCallError(err error, elapsed time.Duration) string {
+//   - "subprocess_start_error": the claude subprocess itself failed to start (os.Pipe()
+//     or cmd.Start() failing — fd exhaustion, ENOMEM, ENOENT, EACCES) — see
+//     headless.ErrSubprocessStart. raw is always "" for this bucket: the failure happens
+//     before any output is produced, so there is nothing for captureHeadlessFailure to
+//     persist.
+//   - "other": anything else, including the claude subprocess running and exiting
+//     non-zero. There is deliberately no dedicated bucket for that today: the OS-level
+//     exit code is captured in the process audit log (executor/audit.go) but is never
+//     threaded back through ProcessRunner.Run/headless.Pool.call to the caller — the
+//     only per-call "failure" signal callBlocking's first-call path actually inspects is
+//     the CLI's own JSON is_error field, which is a distinct, app-level signal from the
+//     OS exit code. (An earlier version of this classifier had a "process_error" bucket
+//     matching headless.ErrLLMError/ErrUsageError/ErrInterrupted sentinels that no
+//     production code path ever constructed — dead code, removed. Wiring up real
+//     exit-code translation would require restructuring every error-return branch in
+//     Pool.call to consult the subprocess's actual exit status before sending; if that's
+//     ever worth doing, do it as its own change rather than reintroducing unused
+//     sentinels.)
+//
+// budget is the caller's own call timeout (e.g. triageCallBudget for TriggerTriage,
+// callTimeout for TriggerReReview) — the same classifier is shared across both headless
+// call sites, so it takes budget as a parameter rather than hardcoding one.
+func classifyHeadlessCallError(err error, elapsed, budget time.Duration) string {
 	switch {
-	case errors.Is(err, context.DeadlineExceeded), triageCallBudget-elapsed < 5*time.Second:
+	case errors.Is(err, context.DeadlineExceeded), budget-elapsed < 5*time.Second:
 		return "timeout"
 	case errors.Is(err, context.Canceled):
 		return "shutdown"
 	case errors.Is(err, headless.ErrClaudeNotFound):
 		return "claude_not_found"
-	case errors.Is(err, headless.ErrLLMError), errors.Is(err, headless.ErrUsageError), errors.Is(err, headless.ErrInterrupted):
-		return "process_error"
+	case errors.Is(err, headless.ErrSubprocessStart):
+		return "subprocess_start_error"
 	default:
 		return "other"
 	}
+}
+
+// captureHeadlessFailure best-effort writes raw (the accumulated stdout of a
+// headless triage/review call that errored or failed to parse) to a durable
+// file under s.cfg.HeadlessFailureCaptureDirOrDefault() and returns its
+// absolute path, or "" if there was nothing to capture or the write failed.
+// Deliberately swallow-and-log rather than propagate: a failure to persist
+// diagnostic data about a failure must never mask or block handling of the
+// original failure itself. See session.WriteHeadlessFailureCapture's doc
+// comment for why this exists (log rotation + the ~200-byte preview
+// previously logged on parse failure are not enough to diagnose a failed
+// call after the fact).
+func (s *BacklogService) captureHeadlessFailure(sessionUUID, raw string) string {
+	if raw == "" {
+		return ""
+	}
+	dir, dirErr := s.cfg.HeadlessFailureCaptureDirOrDefault()
+	if dirErr != nil {
+		log.WarningLog().Printf("[captureHeadlessFailure] resolve capture dir: %v", dirErr)
+		return ""
+	}
+	path, writeErr := session.WriteHeadlessFailureCapture(dir, sessionUUID, raw, session.DefaultHeadlessFailureCaptureMaxBytes)
+	if writeErr != nil {
+		log.WarningLog().Printf("[captureHeadlessFailure] write capture file session=%s: %v", sessionUUID, writeErr)
+		return ""
+	}
+	return path
 }
 
 // MaybeTriggerTriage is the single "should this newly created item get
@@ -2186,10 +2513,49 @@ func (s *BacklogService) MaybeTriggerTriage(ctx context.Context, itemID string, 
 	defer cancel()
 	_, err := s.TriggerTriage(triageCtx, connect.NewRequest(&sessionv1.TriggerTriageRequest{ItemId: itemID}))
 	if err != nil {
-		log.WarningLog.Printf("[MaybeTriggerTriage] auto-triage failed for item %s: %v", itemID, err)
+		log.WarningLog().Printf("[MaybeTriggerTriage] auto-triage failed for item %s: %v", itemID, err)
 		return false
 	}
 	return true
+}
+
+// testTriageCompleteHook, when non-nil, is invoked with the item's ID as the
+// last thing TriggerTriage's background goroutine does on every exit path.
+// Production code never sets this; it exists so tests can wait for the
+// goroutine to actually finish instead of polling item status, which flips
+// before the goroutine's trailing writes land. Callers must filter by item
+// ID themselves — this is one shared hook across all tests, and a leftover
+// goroutine from an unmigrated test can still fire it. Modeled on
+// backlog_service_events.go's testAfterSubscribeHook.
+//
+// WARNING: this is one package-level variable shared by the whole test
+// binary. Do not add t.Parallel() to a test that sets this hook unless it
+// also filters by item ID and tolerates callbacks from concurrently running
+// tests — see session_service_test.go's newRateLimitHiddenTestFixture for the
+// kind of cross-subtest crosstalk a shared-state test double can cause under
+// t.Parallel().
+var (
+	// testTriageCompleteHookMu guards concurrent read/write of the hook from
+	// a test goroutine (setter) and a still-running TriggerTriage goroutine
+	// (reader) — required under -race even though a stale read would often
+	// be harmless in practice.
+	testTriageCompleteHookMu sync.Mutex
+	testTriageCompleteHook   func(itemID string)
+)
+
+func setTestTriageCompleteHook(hook func(itemID string)) {
+	testTriageCompleteHookMu.Lock()
+	defer testTriageCompleteHookMu.Unlock()
+	testTriageCompleteHook = hook
+}
+
+func callTestTriageCompleteHook(itemID string) {
+	testTriageCompleteHookMu.Lock()
+	hook := testTriageCompleteHook
+	testTriageCompleteHookMu.Unlock()
+	if hook != nil {
+		hook(itemID)
+	}
 }
 
 // TriggerTriage kicks off a headless triage planning call for a backlog item.
@@ -2285,7 +2651,7 @@ func (s *BacklogService) TriggerTriage(
 		precondition := &session.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusReady)}
 		if _, transErr := s.storage.TransitionBacklogItemStatus(ctx, req.Msg.ItemId,
 			session.BacklogStatusIdea, precondition, session.TriggeredByUser); transErr != nil {
-			log.WarningLog.Printf("[TriggerTriage] item %s moved past ready before triage reset (race with work-session spawn); aborting re-triage", req.Msg.ItemId)
+			log.WarningLog().Printf("[TriggerTriage] item %s moved past ready before triage reset (race with work-session spawn); aborting re-triage", req.Msg.ItemId)
 			return nil, connect.NewError(connect.CodeFailedPrecondition,
 				fmt.Errorf("item %s was already moved past ready — a work session may have just started; retry after it completes", req.Msg.ItemId))
 		}
@@ -2331,12 +2697,16 @@ func (s *BacklogService) TriggerTriage(
 	// the engine (Epic 1.5, Story 1.5.3).
 	var triagePrompt string
 	if feedback != "" {
-		triagePrompt = session.BuildHeadlessRetriagePrompt(item, artifactAbsPath, priorResult, feedback)
+		if req.Msg.ChatMode {
+			triagePrompt = session.BuildHeadlessChatRetriagePrompt(item, artifactAbsPath, priorResult, feedback)
+		} else {
+			triagePrompt = session.BuildHeadlessRetriagePrompt(item, artifactAbsPath, priorResult, feedback)
+		}
 	} else {
 		triagePrompt = s.triagePromptFor(item, artifactAbsPath)
 	}
 
-	log.InfoLog.Printf("[PipelineEngine] item=%s stage=triage mode=%q", item.ID, session.ResolvedModeLabel(item.PipelineMode))
+	log.InfoLog().Printf("[PipelineEngine] item=%s stage=triage mode=%q", item.ID, session.ResolvedModeLabel(item.PipelineMode))
 
 	// 8. Create ItemSession synchronously before goroutine (prevents TOCTOU on orphan guard).
 	// Snapshot the resolved PipelineMode slug + content hash — see the comment on the
@@ -2358,7 +2728,7 @@ func (s *BacklogService) TriggerTriage(
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to create triage item session: %w", err))
 	}
 
-	log.InfoLog.Printf("[TriggerTriage] headless triage started item=%s session=%s path=%s", item.ID, triageSessionUUID, artifactAbsPath)
+	log.InfoLog().Printf("[TriggerTriage] headless triage started item=%s session=%s path=%s", item.ID, triageSessionUUID, artifactAbsPath)
 
 	// 9. Drive triage asynchronously so the RPC returns immediately.
 	itemID := item.ID
@@ -2367,6 +2737,11 @@ func (s *BacklogService) TriggerTriage(
 	iteration := nextIteration
 	triageStarted = true
 	go func() {
+		// Registered first so it runs last (defers are LIFO) — fires only after
+		// every other defer in this goroutine (semaphore release, cancel) has
+		// run, on every exit path. See testTriageCompleteHook's doc comment.
+		defer callTestTriageCompleteHook(itemID)
+
 		// Clears the triageInFlight entry set at 3a-i above no matter how this
 		// goroutine exits, so the item is never left permanently un-retriggerable.
 		defer s.triageInFlight.Delete(itemID)
@@ -2413,16 +2788,17 @@ func (s *BacklogService) TriggerTriage(
 		triageWorkDir := itemRepoPath
 		var triageWorktree *git.GitWorktree
 		if wt, _, wtErr := git.NewGitWorktree(itemRepoPath, "triage-"+itemID); wtErr != nil {
-			log.WarningLog.Printf("[TriggerTriage] failed to create isolated worktree for item=%s, running triage directly in repo_path: %v", itemID, wtErr)
+			log.WarningLog().Printf("[TriggerTriage] failed to create isolated worktree for item=%s, running triage directly in repo_path: %v", itemID, wtErr)
 		} else if setupErr := wt.Setup(); setupErr != nil {
-			log.WarningLog.Printf("[TriggerTriage] failed to set up isolated worktree for item=%s, running triage directly in repo_path: %v", itemID, setupErr)
+			log.WarningLog().Printf("[TriggerTriage] failed to set up isolated worktree for item=%s, running triage directly in repo_path: %v", itemID, setupErr)
 		} else {
 			triageWorktree = wt
 			triageWorkDir = wt.GetWorktreePath()
 		}
 
 		callStart := time.Now()
-		raw, _, callErr := s.headlessPool.CallBlocking(triageCtx,
+		var triageCostUSD float64
+		raw, callErr := s.headlessPool.CallBlocking(triageCtx,
 			headless.FeatureKeyTriage,
 			headless.HeadlessTriageSystemPrompt(),
 			triagePrompt,
@@ -2440,6 +2816,7 @@ func (s *BacklogService) TriggerTriage(
 			// without a fresh empirical repro, per ADR-001's own "don't trust
 			// unverified CLI-behavior assumptions" precedent.
 			headless.CallOptions{WorkDir: triageWorkDir},
+			func(usd float64) { triageCostUSD = usd },
 		)
 
 		// cleanupCtx outlives shutdownCtx so DB writes succeed even during graceful
@@ -2452,6 +2829,15 @@ func (s *BacklogService) TriggerTriage(
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), s.triageCleanupTimeout)
 		defer cleanupCancel()
 
+		// Persisted unconditionally, before the success/failure branches below: the
+		// LLM call already incurred this cost whether or not it errored or produced
+		// parseable output, so it must not be lost down either failure path.
+		if triageCostUSD > 0 {
+			if costErr := s.storage.UpdateItemSessionCost(cleanupCtx, isID, triageCostUSD); costErr != nil {
+				log.WarningLog().Printf("[TriggerTriage] failed to persist cost item=%s: %v", itemID, costErr)
+			}
+		}
+
 		callElapsed := time.Since(callStart)
 		if callErr != nil {
 			// elapsed=<duration> lets a future incident distinguish "died fast"
@@ -2462,43 +2848,80 @@ func (s *BacklogService) TriggerTriage(
 			// the 2026-07-24 stuck-triage incident. errType classifies the error
 			// into a few high-signal buckets so a grep over historical logs can
 			// answer "how often do we hit each failure mode" without parsing %v text.
-			errType := classifyHeadlessCallError(callErr, callElapsed)
-			log.ErrorLog.Printf("[TriggerTriage] headless triage failed item=%s elapsed=%s errType=%s: %v",
-				itemID, callElapsed.Round(time.Second), errType, callErr)
+			errType := classifyHeadlessCallError(callErr, callElapsed, triageCallBudget)
+			capturePath := s.captureHeadlessFailure(triageSessionUUID, raw)
+			log.ErrorLog().Printf("[TriggerTriage] headless triage failed item=%s elapsed=%s errType=%s capture=%s: %v",
+				itemID, callElapsed.Round(time.Second), errType, capturePath, callErr)
 			_ = s.storage.UpdateItemSessionEndedWithReason(cleanupCtx, isID, time.Now(), errType)
+			if capturePath != "" {
+				_ = s.storage.UpdateItemSessionFailureCapture(cleanupCtx, isID, capturePath)
+			}
 			cleanupProvisionalTriageWorktree(itemID, triageWorktree)
 			return
 		}
 
 		result, parseErr := session.ParseHeadlessTriageResult(raw)
 		if parseErr != nil {
-			log.ErrorLog.Printf("[TriggerTriage] parse result failed item=%s elapsed=%s rawLen=%d: %v",
-				itemID, callElapsed.Round(time.Second), len(raw), parseErr)
+			capturePath := s.captureHeadlessFailure(triageSessionUUID, raw)
+			log.ErrorLog().Printf("[TriggerTriage] parse result failed item=%s elapsed=%s rawLen=%d capture=%s: %v",
+				itemID, callElapsed.Round(time.Second), len(raw), capturePath, parseErr)
 			_ = s.storage.UpdateItemSessionEnded(cleanupCtx, isID, time.Now())
+			if capturePath != "" {
+				_ = s.storage.UpdateItemSessionFailureCapture(cleanupCtx, isID, capturePath)
+			}
 			cleanupProvisionalTriageWorktree(itemID, triageWorktree)
 			return
 		}
 		result.Iteration = iteration
 		result.Feedback = feedback
 
+		// result.Title is LLM-controlled (ParseHeadlessTriageResult never
+		// sanitizes it) and reaches a commit message, a branch name, and — below
+		// — a filepath.Join path segment (PlanArtifactsPath), so it must be
+		// sanitized once, up front, and every downstream use must go through
+		// sanitizedTitle rather than the raw field. See sanitizeTriageTitle's
+		// doc comment for the path-traversal primitive this closes.
+		//
+		// result.Title itself is overwritten with sanitizedTitle below, not just
+		// read from it: result is JSON-marshaled and persisted as the item's
+		// TriageResult a few lines down, and triageShortTitle/backlogWorkBranchSlug
+		// later read Title back out of that persisted JSON to recompute the
+		// work-session branch name. If the persisted Title stayed raw, that
+		// spawn-time branch computation would diverge from the sanitizedTitle
+		// already used above to create the worktree/branch here — reintroducing
+		// the worktree/branch drift regression backlogWorkBranchSlug's doc
+		// comment says was already fixed once.
+		sanitizedTitle := sanitizeTriageTitle(result.Title, itemID)
+		result.Title = sanitizedTitle
+
 		// Commit whatever the triage prompt wrote (project_plans/<name>/ for SDD
 		// mode; nothing for default mode, which writes to artifactAbsPath instead
 		// — CommitChanges no-ops when the worktree isn't dirty) so the docs
 		// survive past this goroutine instead of sitting uncommitted indefinitely
-		// (the exact gap .claude/rules/sdd-planning-artifacts-commit.md already
+		// (the exact gap docs/how-to/commit-sdd-planning-artifacts.md already
 		// names). Only when triageWorktree is non-nil — the itemRepoPath fallback
 		// path must never auto-commit into a repo this code didn't create.
 		if triageWorktree != nil {
-			if commitErr := triageWorktree.CommitChanges(fmt.Sprintf("chore(sdd): planning artifacts for %s", result.Title)); commitErr != nil {
-				log.WarningLog.Printf("[TriggerTriage] failed to commit triage artifacts item=%s worktree=%s: %v", itemID, triageWorkDir, commitErr)
+			if commitErr := triageWorktree.CommitChanges(fmt.Sprintf("chore(sdd): planning artifacts for %s", sanitizedTitle)); commitErr != nil {
+				log.WarningLog().Printf("[TriggerTriage] failed to commit triage artifacts item=%s worktree=%s: %v", itemID, triageWorkDir, commitErr)
 			}
-			retitleTriageWorktreeToFinalBranch(itemID, itemRepoPath, result.Title, triageWorktree)
+			retitleTriageWorktreeToFinalBranch(itemID, itemRepoPath, sanitizedTitle, triageWorktree)
 		}
+
+		// persistCtx gives post-git persistence writes their own fresh timeout
+		// budget, started after CommitChanges/retitle's ~30s-capable git
+		// subprocesses run rather than before — reusing cleanupCtx here produced
+		// an intermittent "expected: ready, actual: idea" flake under
+		// -race -count=5 when those git ops alone ate its budget. See
+		// TestBacklogFullLifecycle_SDDTriageWorktreeIsReusedBySpawnedWorkSession's
+		// "Second root cause" comment for the full history.
+		persistCtx, persistCancel := context.WithTimeout(context.Background(), s.triageCleanupTimeout)
+		defer persistCancel()
 
 		payloadJSON, marshalErr := json.Marshal(result)
 		if marshalErr != nil {
-			log.ErrorLog.Printf("[TriggerTriage] marshal triage result item=%s: %v", itemID, marshalErr)
-			_ = s.storage.UpdateItemSessionEnded(cleanupCtx, isID, time.Now())
+			log.ErrorLog().Printf("[TriggerTriage] marshal triage result item=%s: %v", itemID, marshalErr)
+			_ = s.storage.UpdateItemSessionEnded(persistCtx, isID, time.Now())
 			return
 		}
 		// persistFailures accumulates which of the post-triage persistence steps below
@@ -2507,8 +2930,8 @@ func (s *BacklogService) TriggerTriage(
 		// surfaces a single operator-facing notification so a failure here is never silent.
 		var persistFailures []string
 
-		if updateErr := s.storage.UpdateItemSessionTriageResult(cleanupCtx, isID, string(payloadJSON)); updateErr != nil {
-			log.ErrorLog.Printf("[TriggerTriage] persist triage result item=%s: %v", itemID, updateErr)
+		if updateErr := s.storage.UpdateItemSessionTriageResult(persistCtx, isID, string(payloadJSON)); updateErr != nil {
+			log.ErrorLog().Printf("[TriggerTriage] persist triage result item=%s: %v", itemID, updateErr)
 			persistFailures = append(persistFailures, "saving the triage result")
 		}
 
@@ -2524,27 +2947,49 @@ func (s *BacklogService) TriggerTriage(
 		// triageWorkDir == itemRepoPath — and still needs pap to find it there.
 		pap := artifactAbsPath
 		if item.PipelineMode == session.DefaultSDDPipelineModeSlug {
-			pap = filepath.Join(triageWorkDir, "project_plans", result.Title, "implementation")
+			pap = filepath.Join(triageWorkDir, "project_plans", sanitizedTitle, "implementation")
 		}
-		update := session.BacklogItemUpdate{PlanArtifactsPath: &pap}
+		approvalReset := false
+		clearedReason := ""
+		update := session.BacklogItemUpdate{
+			PlanArtifactsPath:   &pap,
+			PlanApproved:        &approvalReset,
+			PlanRejectionReason: &clearedReason,
+			ClearPlanRejectedAt: true,
+		}
 		applyTriageResultToUpdate(&result, &update)
-		if _, updateErr := s.storage.UpdateBacklogItem(cleanupCtx, itemID, update, nil); updateErr != nil {
-			log.ErrorLog.Printf("[TriggerTriage] update plan_artifacts_path item=%s: %v", itemID, updateErr)
+		if _, updateErr := s.storage.UpdateBacklogItem(persistCtx, itemID, update, nil); updateErr != nil {
+			log.ErrorLog().Printf("[TriggerTriage] update plan_artifacts_path item=%s: %v", itemID, updateErr)
 			persistFailures = append(persistFailures, "saving the plan artifacts path")
 		}
 
 		precondition := &session.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusIdea)}
 		statusAdvanced := true
-		if _, transErr := s.storage.TransitionBacklogItemStatus(cleanupCtx, itemID, //nolint:silenttransition surfaced a few lines below via notifyTriagePersistFailure once persistFailures is fully collected
+		if _, transErr := s.storage.TransitionBacklogItemStatus(persistCtx, itemID, //nolint:silenttransition surfaced a few lines below via notifyTriagePersistFailure once persistFailures is fully collected
 			session.BacklogStatusReady, precondition, session.TriggeredBySystem); transErr != nil {
-			log.ErrorLog.Printf("[TriggerTriage] status transition idea→ready item=%s: %v", itemID, transErr)
+			log.ErrorLog().Printf("[TriggerTriage] status transition idea→ready item=%s: %v", itemID, transErr)
 			persistFailures = append(persistFailures, "advancing the item to Ready")
 			statusAdvanced = false
 		}
 
 		if len(persistFailures) > 0 {
-			s.notifyTriagePersistFailure(cleanupCtx, itemID, item.Title, persistFailures, statusAdvanced)
+			s.notifyTriagePersistFailure(persistCtx, itemID, item.Title, persistFailures, statusAdvanced)
 		}
+
+		// Close out the ItemSession and release triageInFlight together, right here —
+		// not after the optional auto-spawn below. The item's status already flipped to
+		// Ready above, so a caller polling on status (or a human clicking "retry") can
+		// legitimately re-trigger triage now; leaving triageInFlight held through
+		// auto-spawn's own I/O (SpawnSessionFromItem creates a worktree, etc.) only
+		// stretched a window where a well-timed retry got a spurious AlreadyExists —
+		// exactly what made TestTriggerTriage_RefineWithFeedback flaky in CI. ended_at
+		// and triageInFlight are updated in the same spot deliberately: both are inputs
+		// to the orphan-liveness check (IsTriageLive / tombstoneOrphanTriageSessions
+		// above), so moving one without the other would let a concurrent reconciliation
+		// sweep see "ended_at nil, not live" and wrongly tombstone a session that's
+		// simply between here and its final log line.
+		_ = s.storage.UpdateItemSessionEnded(persistCtx, isID, time.Now())
+		s.triageInFlight.Delete(itemID)
 
 		// Opt-in: skip the manual "Spawn Session" click when the item is configured to
 		// auto-spawn. Autonomous: true bypasses the planning-approval gate the same way
@@ -2552,18 +2997,17 @@ func (s *BacklogService) TriggerTriage(
 		// first, which is the whole point of this toggle (default false; existing manual
 		// flow is unchanged unless explicitly opted in).
 		if statusAdvanced && item.AutoSpawnSession {
-			if _, spawnErr := s.SpawnSessionFromItem(cleanupCtx, connect.NewRequest(&sessionv1.SpawnSessionFromItemRequest{
+			if _, spawnErr := s.SpawnSessionFromItem(persistCtx, connect.NewRequest(&sessionv1.SpawnSessionFromItemRequest{
 				ItemId:     itemID,
 				Autonomous: true,
 			})); spawnErr != nil {
-				log.WarningLog.Printf("[TriggerTriage] auto-spawn session item=%s: %v", itemID, spawnErr)
+				log.WarningLog().Printf("[TriggerTriage] auto-spawn session item=%s: %v", itemID, spawnErr)
 			} else {
-				log.InfoLog.Printf("[TriggerTriage] auto-spawned work session item=%s (auto_spawn_session=true)", itemID)
+				log.InfoLog().Printf("[TriggerTriage] auto-spawned work session item=%s (auto_spawn_session=true)", itemID)
 			}
 		}
 
-		_ = s.storage.UpdateItemSessionEnded(cleanupCtx, isID, time.Now())
-		log.InfoLog.Printf("[TriggerTriage] headless triage complete item=%s elapsed=%s suggestions=%d tasks=%d",
+		log.InfoLog().Printf("[TriggerTriage] headless triage complete item=%s elapsed=%s suggestions=%d tasks=%d",
 			itemID, callElapsed.Round(time.Second), len(result.Suggestions), len(result.Tasks))
 	}()
 
@@ -2661,12 +3105,12 @@ func (s *BacklogService) TriggerReReview(
 	if mostRecentWorkSession != nil {
 		if wt, wtErr := s.storage.GetWorktreeDataBySessionUUID(ctx, mostRecentWorkSession.SessionUUID); wtErr == nil && wt.WorktreePath != "" && wt.BranchName != "" {
 			if ok, blockedSummary := git.EnsureBranchSyncedWithMain(wt.WorktreePath, wt.BranchName, prFixMainBranch, git.DefaultBranchDriftThreshold); !ok {
-				log.WarningLog.Printf("[TriggerReReview] branch drift blocked review item=%s branch=%s: %s", item.ID, wt.BranchName, blockedSummary)
+				log.WarningLog().Printf("[TriggerReReview] branch drift blocked review item=%s branch=%s: %s", item.ID, wt.BranchName, blockedSummary)
 				is, createErr := session.RecordDegradedReviewVerdict(s.storage, item.ID, session.AcCriteriaJSON(acSnapshotJSON), headlessReReviewUUIDPrefix, blockedSummary)
 				if createErr != nil {
 					return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save headless re-review branch-drift-blocked verdict: %w", createErr))
 				}
-				log.InfoLog.Printf("[TriggerReReview] branch drift blocked for item %s — verdict recorded (session %s)", item.ID, is.ID)
+				log.InfoLog().Printf("[TriggerReReview] branch drift blocked for item %s — verdict recorded (session %s)", item.ID, is.ID)
 				if s.eventBus != nil {
 					// itemID as sessionID — see comment in notifyReworkCapHit above.
 					s.eventBus.Publish(events.NewNotificationEvent(
@@ -2757,7 +3201,7 @@ Do not modify the code. Only write the review verdict.
 			if createErr != nil {
 				return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save headless re-review blocked verdict: %w", createErr))
 			}
-			log.ErrorLog.Printf("[TriggerReReview] codebase-read work dir %s does not exist for item %s — review blocked, UNVERIFIABLE verdict recorded (session %s)", codebaseWorkDir, item.ID, is.ID)
+			log.ErrorLog().Printf("[TriggerReReview] codebase-read work dir %s does not exist for item %s — review blocked, UNVERIFIABLE verdict recorded (session %s)", codebaseWorkDir, item.ID, is.ID)
 			if s.eventBus != nil {
 				// itemID as sessionID — see comment in notifyReworkCapHit above.
 				s.eventBus.Publish(events.NewNotificationEvent(
@@ -2799,7 +3243,7 @@ Do not modify the code. Only write the review verdict.
 			// ListItemSessions round trip.
 			extras.PriorSessions = sessions
 			if notes, notesErr := s.storage.ListProgressNotesForItem(ctx, item.ID); notesErr != nil {
-				log.WarningLog.Printf("[TriggerReReview] ListProgressNotesForItem (context extras) item=%s: %v", item.ID, notesErr)
+				log.WarningLog().Printf("[TriggerReReview] ListProgressNotesForItem (context extras) item=%s: %v", item.ID, notesErr)
 			} else {
 				extras.ProgressNotes = notes
 			}
@@ -2811,7 +3255,7 @@ Do not modify the code. Only write the review verdict.
 				relPath, cleanup, transcriptErr := session.WriteReviewTranscriptFile(sm, mostRecentWorkSession.SessionUUID, codebaseWorkDir, session.DefaultReviewTranscriptMaxBytes)
 				transcriptCleanup = cleanup
 				if transcriptErr != nil {
-					log.WarningLog.Printf("[TriggerReReview] WriteReviewTranscriptFile item=%s: %v", item.ID, transcriptErr)
+					log.WarningLog().Printf("[TriggerReReview] WriteReviewTranscriptFile item=%s: %v", item.ID, transcriptErr)
 				} else {
 					extras.TranscriptRelPath = relPath
 				}
@@ -2841,7 +3285,7 @@ Do not modify the code. Only write the review verdict.
 			if createErr != nil {
 				return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save headless re-review capability-self-check verdict: %w", createErr))
 			}
-			log.WarningLog.Printf("[TriggerReReview] headless re-review complete for item %s (outcome %s, path=%s, duration_ms=%d)", item.ID, session.ReviewVerdictUnverifiable, reviewPath, time.Since(callStart).Milliseconds())
+			log.WarningLog().Printf("[TriggerReReview] headless re-review complete for item %s (outcome %s, path=%s, duration_ms=%d)", item.ID, session.ReviewVerdictUnverifiable, reviewPath, time.Since(callStart).Milliseconds())
 			return connect.NewResponse(&sessionv1.TriggerReReviewResponse{
 				ItemSession: itemSessionToProto(is, s.buildCostLookup()),
 			}), nil
@@ -2850,8 +3294,10 @@ Do not modify the code. Only write the review verdict.
 		reviewCtx, reviewCancel := context.WithTimeout(ctx, callTimeout)
 		defer reviewCancel()
 
-		reviewResult, callCostUSD, callErr := s.headlessPool.CallBlocking(
+		var callCostUSD float64
+		reviewResult, callErr := s.headlessPool.CallBlocking(
 			reviewCtx, headless.FeatureKeyReview, systemPrompt, headlessPrompt, callOpts,
+			func(usd float64) { callCostUSD = usd },
 		)
 
 		// Explicit, immediate cleanup as soon as the transcript file is no longer
@@ -2874,11 +3320,35 @@ Do not modify the code. Only write the review verdict.
 				if createErr != nil {
 					return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save headless re-review timeout verdict: %w", createErr))
 				}
-				log.WarningLog.Printf("[TriggerReReview] headless re-review complete for item %s (outcome %s, path=%s, duration_ms=%d)", item.ID, session.ReviewVerdictUnverifiable, reviewPath, time.Since(callStart).Milliseconds())
+				log.WarningLog().Printf("[TriggerReReview] headless re-review complete for item %s (outcome %s, path=%s, duration_ms=%d)", item.ID, session.ReviewVerdictUnverifiable, reviewPath, time.Since(callStart).Milliseconds())
 				return connect.NewResponse(&sessionv1.TriggerReReviewResponse{
 					ItemSession: itemSessionToProto(is, s.buildCostLookup()),
 				}), nil
 			}
+			// Persist a best-effort audit record of the failed call before returning the
+			// RPC error: unlike TriggerTriage, no ItemSession exists yet for this attempt
+			// at this point (one is normally only created alongside the verdict below), so
+			// without this the failure would be visible only in the ephemeral log line —
+			// exactly the gap captureHeadlessFailure exists to close. Never blocks or
+			// changes the returned error: every step here is best-effort/log-and-continue.
+			errType := classifyHeadlessCallError(callErr, time.Since(callStart), callTimeout)
+			capturePath := s.captureHeadlessFailure(headlessReReviewUUIDPrefix+uuid.New().String(), reviewResult)
+			log.ErrorLog().Printf("[TriggerReReview] headless re-review call failed item=%s errType=%s capture=%s: %v", item.ID, errType, capturePath, callErr)
+			failCleanupCtx, failCleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
+			if failIS, failCreateErr := s.storage.CreateItemSession(failCleanupCtx, session.ItemSessionData{
+				ItemID:      item.ID,
+				SessionUUID: headlessReReviewUUIDPrefix + uuid.New().String(),
+				SessionRole: session.SessionRoleReview,
+				AcSnapshot:  session.AcCriteriaJSON(acSnapshotJSON),
+			}); failCreateErr != nil {
+				log.WarningLog().Printf("[TriggerReReview] failed to record audit ItemSession for failed call item=%s: %v", item.ID, failCreateErr)
+			} else {
+				_ = s.storage.UpdateItemSessionEndedWithReason(failCleanupCtx, failIS.ID, time.Now(), errType)
+				if capturePath != "" {
+					_ = s.storage.UpdateItemSessionFailureCapture(failCleanupCtx, failIS.ID, capturePath)
+				}
+			}
+			failCleanupCancel()
 			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("headless re-review call failed: %w", callErr))
 		}
 
@@ -2911,21 +3381,22 @@ Do not modify the code. Only write the review verdict.
 			OverallOutcome: overall,
 			PerCriterion:   string(perCriterionJSON),
 			Summary:        reviewSummary,
+			DiffHash:       s.storage.ComputeCurrentDiffHash(cleanupCtx, item.ID),
 		})
 		if createErr != nil {
 			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save headless re-review verdict: %w", createErr))
 		}
 		if endErr := s.storage.UpdateItemSessionEnded(cleanupCtx, is.ID, time.Now()); endErr != nil { //nolint:silenttransition bookkeeping timestamp only; the PASS/done transition a few lines below (which does notify on failure) is what actually gates forward progress here
-			log.WarningLog.Printf("[TriggerReReview] UpdateItemSessionEnded: %v", endErr)
+			log.WarningLog().Printf("[TriggerReReview] UpdateItemSessionEnded: %v", endErr)
 		}
 
-		log.InfoLog.Printf("[TriggerReReview] headless re-review complete for item %s (outcome %s, path=%s, duration_ms=%d)", item.ID, overall, reviewPath, time.Since(callStart).Milliseconds())
+		log.InfoLog().Printf("[TriggerReReview] headless re-review complete for item %s (outcome %s, path=%s, duration_ms=%d)", item.ID, overall, reviewPath, time.Since(callStart).Milliseconds())
 
 		// A fresh review verdict now exists — resolve any open abandoned_review
 		// row immediately (Task 2.1.5b) rather than waiting for the self-heal
 		// sweep's next tick.
 		if _, resolveErr := s.storage.ResolveStuck(ctx, item.ID, domain.StuckReasonAbandonedReview); resolveErr != nil {
-			log.WarningLog.Printf("[TriggerReReview] ResolveStuck(abandoned_review) item=%s: %v", item.ID, resolveErr)
+			log.WarningLog().Printf("[TriggerReReview] ResolveStuck(abandoned_review) item=%s: %v", item.ID, resolveErr)
 		}
 
 		// On PASS, auto-transition to done rather than leaving the item sitting in
@@ -2943,11 +3414,11 @@ Do not modify the code. Only write the review verdict.
 		// 2026-07-18 update).
 		if overall == session.ReviewVerdictPass {
 			if !s.isCodeShippedToMain(ctx, item.ID, item.RepoPath, "TriggerReReview") {
-				log.InfoLog.Printf("[TriggerReReview] item=%s PASS verdict but code not verified on main — leaving in review for manual transition/override", item.ID)
+				log.InfoLog().Printf("[TriggerReReview] item=%s PASS verdict but code not verified on main — leaving in review for manual transition/override", item.ID)
 			} else {
 				precondition := &session.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusReview)}
 				if _, transErr := s.storage.TransitionBacklogItemStatus(ctx, item.ID, session.BacklogStatusDone, precondition, session.TriggeredBySystem); transErr != nil {
-					log.WarningLog.Printf("[TriggerReReview] PASS but transition to done failed: %v", transErr)
+					log.WarningLog().Printf("[TriggerReReview] PASS but transition to done failed: %v", transErr)
 					// Code is confirmed shipped to main — the item is left stuck in
 					// review with nothing further to trigger a retry.
 					s.notifyTransitionFailed(item.ID, item.Title, "code was confirmed shipped to main but the item's transition to done failed", transErr)
@@ -2962,7 +3433,7 @@ Do not modify the code. Only write the review verdict.
 
 	// 10. Spawn re-review session — AutonomousDriver mode if available, oneShot fallback.
 	if s.sessionCreator == nil {
-		log.InfoLog.Printf("[TriggerReReview] triggered for item %s but no SessionCreator available", item.ID)
+		log.InfoLog().Printf("[TriggerReReview] triggered for item %s but no SessionCreator available", item.ID)
 		return connect.NewResponse(&sessionv1.TriggerReReviewResponse{
 			ItemSession: &sessionv1.ItemSession{
 				Id:          item.ID,
@@ -3008,13 +3479,13 @@ Do not modify the code. Only write the review verdict.
 		_ = s.storage.SetItemSessionBaseCommit(ctx, is.ID, baseSHA)
 	}
 
-	log.InfoLog.Printf("[TriggerReReview] spawned re-review session %s for item %s", inst.UUID, item.ID)
+	log.InfoLog().Printf("[TriggerReReview] spawned re-review session %s for item %s", inst.UUID, item.ID)
 
 	// A review session is active again — resolve any open abandoned_review row
 	// immediately (Task 2.1.5b) rather than waiting for the self-heal sweep's
 	// next tick.
 	if _, resolveErr := s.storage.ResolveStuck(ctx, item.ID, domain.StuckReasonAbandonedReview); resolveErr != nil {
-		log.WarningLog.Printf("[TriggerReReview] ResolveStuck(abandoned_review) item=%s: %v", item.ID, resolveErr)
+		log.WarningLog().Printf("[TriggerReReview] ResolveStuck(abandoned_review) item=%s: %v", item.ID, resolveErr)
 	}
 
 	return connect.NewResponse(&sessionv1.TriggerReReviewResponse{
@@ -3046,10 +3517,10 @@ func (s *BacklogService) tombstoneOrphanWorkSessions(ctx context.Context, itemID
 		}
 		now := time.Now()
 		if err := s.storage.UpdateItemSessionEnded(ctx, is.ID, now); err != nil { //nolint:silenttransition best-effort tombstone sweep; continue skips only this session, retried every call rather than silently proceeding as if it succeeded
-			log.WarningLog.Printf("[tombstoneOrphanWorkSessions] item=%s session=%s: %v", itemID, is.ID, err)
+			log.WarningLog().Printf("[tombstoneOrphanWorkSessions] item=%s session=%s: %v", itemID, is.ID, err)
 			continue
 		}
-		log.InfoLog.Printf("[tombstoneOrphanWorkSessions] item=%s tombstoned dead work session=%s (created %s)", itemID, is.ID, is.CreatedAt)
+		log.InfoLog().Printf("[tombstoneOrphanWorkSessions] item=%s tombstoned dead work session=%s (created %s)", itemID, is.ID, is.CreatedAt)
 		is.EndedAt = &now
 		freed = append(freed, *is)
 	}
@@ -3078,7 +3549,7 @@ func (s *BacklogService) killEndedWorkSessionPanes(ctx context.Context, sessions
 			continue
 		}
 		if err := s.sessionStopper.KillTmuxPaneOnly(ctx, is.SessionUUID); err != nil {
-			log.WarningLog.Printf("[killEndedWorkSessionPanes] session=%s: %v", is.SessionUUID, err)
+			log.WarningLog().Printf("[killEndedWorkSessionPanes] session=%s: %v", is.SessionUUID, err)
 		}
 	}
 }
@@ -3273,6 +3744,17 @@ func (s *BacklogService) resolveCodebaseWorkDir(ctx context.Context, repoPath st
 		// the shared main checkout's current, arbitrary working-tree state (BUG-045).
 		return repoPath, false
 	}
+	// Worktree-identity guard (backlog item e7664cbf): worktree paths are resolved by
+	// title-derived branch slug, not item/session UUID, so a recorded row can point at
+	// a directory that's since been reused/recreated for a different item — same
+	// hazard session.ReviewGateRunner.Run guards against before trusting a diff. A
+	// present-but-wrong-branch directory must not be handed to the reviewer as this
+	// session's own codebase; a missing directory is not itself a mismatch (mirrors
+	// the review-gate fallback), so it still reaches the exists-check below.
+	if mismatchReason := session.WorktreeIdentityMismatch(wt.WorktreePath, wt.BranchName); mismatchReason != "" {
+		log.WarningLog().Printf("[TriggerReReview] resolveCodebaseWorkDir worktree identity mismatch session=%s worktree=%s: %s", workSession.SessionUUID, wt.WorktreePath, mismatchReason)
+		return wt.WorktreePath, false
+	}
 	info, statErr := os.Stat(wt.WorktreePath)
 	return wt.WorktreePath, statErr == nil && info.IsDir()
 }
@@ -3288,7 +3770,22 @@ func (s *BacklogService) getWorkSessionDiff(ctx context.Context, repoPath string
 	diffBaseSHA := ""
 	diffHeadRef := ""
 	wt, wtErr := s.storage.GetWorktreeDataBySessionUUID(ctx, workSession.SessionUUID)
-	if wtErr == nil && wt.WorktreePath != "" {
+	haveWorktree := wtErr == nil && wt.WorktreePath != ""
+	// Worktree-identity guard (backlog item e7664cbf): same hazard and same check as
+	// resolveCodebaseWorkDir above and session.ReviewGateRunner.Run — a worktree row
+	// can point at a directory that's since been reused/recreated for a different
+	// item's branch. Route a mismatch through the same "worktree unusable" path as a
+	// gone directory (set base/head from the row, skip straight to the repoPath
+	// fallback below) rather than trusting GetGitDiff to diff the wrong checkout.
+	if haveWorktree {
+		if mismatchReason := session.WorktreeIdentityMismatch(wt.WorktreePath, wt.BranchName); mismatchReason != "" {
+			log.WarningLog().Printf("[TriggerReReview] getWorkSessionDiff worktree identity mismatch session=%s worktree=%s: %s", workSession.SessionUUID, wt.WorktreePath, mismatchReason)
+			haveWorktree = false
+			diffBaseSHA = wt.BaseCommitSHA
+			diffHeadRef = wt.BranchName
+		}
+	}
+	if haveWorktree {
 		// Try the dedicated worktree first.
 		diff, _, diffErr := session.GetGitDiff(ctx, wt.WorktreePath, wt.BaseCommitSHA)
 		if diffErr == nil {
@@ -3298,7 +3795,7 @@ func (s *BacklogService) getWorkSessionDiff(ctx context.Context, repoPath string
 		// and an explicit branch ref: repoPath's own checked-out HEAD is not the work
 		// branch's tip, so diffing against implicit HEAD would compare against whatever
 		// the shared main checkout happens to have, not the agent's actual work.
-		log.WarningLog.Printf("[TriggerReReview] GetGitDiff in worktree failed (path gone?): %v; falling back to repo", diffErr)
+		log.WarningLog().Printf("[TriggerReReview] GetGitDiff in worktree failed (path gone?): %v; falling back to repo", diffErr)
 		diffBaseSHA = wt.BaseCommitSHA
 		diffHeadRef = wt.BranchName
 	}
@@ -3314,27 +3811,41 @@ func (s *BacklogService) getWorkSessionDiff(ctx context.Context, repoPath string
 	if diffErr == nil {
 		return diff
 	}
-	log.WarningLog.Printf("[TriggerReReview] GetGitDiff fallback in %s failed: %v", diffDir, diffErr)
+	log.WarningLog().Printf("[TriggerReReview] GetGitDiff fallback in %s failed: %v", diffDir, diffErr)
 
 	// Auto-repair: mirror ReviewGateRunner.Run's recovery (session/review_gate.go) for a
 	// stale/corrupted base_commit_sha — the same failure mode found via manual QA on item
-	// ae1e2070 and fixed there first. Only attemptable when a branch ref is known; recompute
-	// the merge-base of repoPath's own checked-out HEAD against the branch and retry once
-	// before giving up on what may just be a recoverable infrastructure hiccup rather than
-	// "no changes were made".
+	// ae1e2070 and fixed there first. Only attemptable when a branch ref is known.
+	// RecoverBaseCommitSHA now compares branchName against explicit default-branch refs
+	// rather than implicit HEAD (backlog item e7664cbf — repoPath's ambient checked-out
+	// branch is unreliable, since a concurrent process can leave it on anything), so the
+	// directory it runs in no longer needs to be the branch's own checkout: prefer the
+	// session's own dedicated worktree when it still exists on disk, falling back to
+	// repoPath when it doesn't (e.g. a torn-down worktree — its commits remain reachable
+	// via the shared object store) rather than skipping repair entirely.
+	// haveWorktree is false both when there was never a worktree row and when
+	// WorktreeIdentityMismatch above rejected it — in the mismatch case wt.WorktreePath
+	// is still populated but must not be trusted for repair either, same as it wasn't
+	// trusted for the initial diff attempt.
+	recoverDir := diffDir
+	if haveWorktree && wt.WorktreePath != "" {
+		if info, statErr := os.Stat(wt.WorktreePath); statErr == nil && info.IsDir() {
+			recoverDir = wt.WorktreePath
+		}
+	}
 	if diffHeadRef != "" {
-		if recoveredSHA, recoverErr := session.RecoverBaseCommitSHA(ctx, diffDir, diffHeadRef); recoverErr != nil {
-			log.WarningLog.Printf("[TriggerReReview] RecoverBaseCommitSHA in %s ref=%s failed: %v", diffDir, diffHeadRef, recoverErr)
-		} else if recoveredDiff, _, retryErr := session.GetGitDiffRef(ctx, diffDir, recoveredSHA, diffHeadRef); retryErr != nil {
-			log.WarningLog.Printf("[TriggerReReview] retry with recovered base %s in %s failed: %v", recoveredSHA, diffDir, retryErr)
+		if recoveredSHA, recoverErr := session.RecoverBaseCommitSHA(ctx, recoverDir, diffHeadRef); recoverErr != nil {
+			log.WarningLog().Printf("[TriggerReReview] RecoverBaseCommitSHA in %s failed: %v", recoverDir, recoverErr)
+		} else if recoveredDiff, _, retryErr := session.GetGitDiffRef(ctx, recoverDir, recoveredSHA, diffHeadRef); retryErr != nil {
+			log.WarningLog().Printf("[TriggerReReview] retry with recovered base %s in %s failed: %v", recoveredSHA, recoverDir, retryErr)
 		} else if strings.TrimSpace(recoveredDiff) == "" {
 			// A recovered base that produces an empty diff is indistinguishable from
 			// "nothing changed" and just as unsafe to trust as the original failure — see
 			// the identical guard in ReviewGateRunner.Run. Fall through and return "" below
 			// rather than treating this as a successful repair.
-			log.WarningLog.Printf("[TriggerReReview] recovered base %s ref=%s produced an empty diff — not trusting it", recoveredSHA, diffHeadRef)
+			log.WarningLog().Printf("[TriggerReReview] recovered base %s ref=%s produced an empty diff — not trusting it", recoveredSHA, diffHeadRef)
 		} else {
-			log.InfoLog.Printf("[TriggerReReview] auto-repaired broken base commit ref=%s recovered=%s (recorded=%s)", diffHeadRef, recoveredSHA, diffBaseSHA)
+			log.InfoLog().Printf("[TriggerReReview] auto-repaired broken base commit ref=%s recovered=%s (recorded=%s)", diffHeadRef, recoveredSHA, diffBaseSHA)
 			return recoveredDiff
 		}
 	}

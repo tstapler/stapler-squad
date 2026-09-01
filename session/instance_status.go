@@ -18,6 +18,9 @@ type InstanceStatusInfo struct {
 	LastCommandStatus  string                   // Status of last command
 	IsControllerActive bool                     // Whether ClaudeController is running
 	IdleState          detection.IdleStateInfo  // NEW: Idle state information
+	// SubagentCount is the count of background agents/shells/monitors from the
+	// WaitingForAgent detector; 0 unless ClaudeStatus == detection.StatusWaitingForAgent.
+	SubagentCount int
 }
 
 // InstanceStatusManager manages status information for instances.
@@ -73,10 +76,11 @@ func (ism *InstanceStatusManager) GetStatus(instance *Instance) InstanceStatusIn
 
 	if info.IsControllerActive {
 		// Combined call: one hash + one cache read covers both status and idle state.
-		claudeStatus, statusContext, idleInfo := controller.GetStatusAndIdleInfo()
+		claudeStatus, statusContext, idleInfo, subagentCount := controller.GetStatusAndIdleInfo()
 		info.ClaudeStatus = claudeStatus
 		info.StatusContext = statusContext
 		info.IdleState = idleInfo
+		info.SubagentCount = subagentCount
 
 		info.QueuedCommands = controller.GetQueuedCommandsCount()
 
@@ -116,6 +120,8 @@ func (info InstanceStatusInfo) GetStatusIcon() string {
 		return "⌨" // Waiting for input
 	case detection.StatusWaitingForAgent:
 		return "⏳" // Waiting for background agent
+	case detection.StatusCompacting:
+		return "⟳" // Compacting context
 	case detection.StatusError:
 		return "✖" // Error
 	default:
@@ -137,6 +143,10 @@ func (info InstanceStatusInfo) GetStatusDescription() string {
 			return "Stopped"
 		case Hibernated:
 			return "Hibernated"
+		case Crashed:
+			return "Crashed"
+		case PermanentlyFailed:
+			return "Failed"
 		default:
 			return "Unknown"
 		}
@@ -160,6 +170,8 @@ func (info InstanceStatusInfo) GetStatusDescription() string {
 		desc = "Completed"
 	case detection.StatusWaitingForAgent:
 		desc = "Waiting for Agent"
+	case detection.StatusCompacting:
+		desc = "Compacting"
 	case detection.StatusTestsFailing:
 		desc = "Tests Failing"
 	case detection.StatusError:

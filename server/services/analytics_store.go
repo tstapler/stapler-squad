@@ -272,8 +272,8 @@ func analyticsDataToEntry(d session.AnalyticsData) AnalyticsEntry {
 
 // LoadWindow reads entries from DB with timestamps >= since.
 // Uses a DB-level WHERE clause via ListAnalyticsSince (AC-1).
-func (s *AnalyticsStore) LoadWindow(since time.Time) ([]AnalyticsEntry, error) {
-	data, err := s.storage.ListAnalyticsSince(context.Background(), since, 0)
+func (s *AnalyticsStore) LoadWindow(ctx context.Context, since time.Time) ([]AnalyticsEntry, error) {
+	data, err := s.storage.ListAnalyticsSince(ctx, since, 0)
 	if err != nil {
 		return nil, fmt.Errorf("list analytics since %s from DB: %w", since.Format(time.RFC3339), err)
 	}

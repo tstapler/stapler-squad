@@ -2,10 +2,12 @@ package scrollback
 
 import (
 	"bufio"
+	"bytes"
 	"compress/gzip"
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -64,6 +66,7 @@ func countLines(t *testing.T, path string) int {
 }
 
 func TestForkScrollback_SubsetCopied(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	src := filepath.Join(dir, "scrollback.jsonl")
 	dst := filepath.Join(dir, "fork", "scrollback.jsonl")
@@ -89,6 +92,7 @@ func TestForkScrollback_SubsetCopied(t *testing.T) {
 }
 
 func TestForkScrollback_UpToSeqZero_EmptyFile(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	src := filepath.Join(dir, "scrollback.jsonl")
 	dst := filepath.Join(dir, "fork", "scrollback.jsonl")
@@ -103,6 +107,7 @@ func TestForkScrollback_UpToSeqZero_EmptyFile(t *testing.T) {
 }
 
 func TestForkScrollback_UpToSeqExceedsMax_AllCopied(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	src := filepath.Join(dir, "scrollback.jsonl")
 	dst := filepath.Join(dir, "fork", "scrollback.jsonl")
@@ -115,6 +120,7 @@ func TestForkScrollback_UpToSeqExceedsMax_AllCopied(t *testing.T) {
 }
 
 func TestForkScrollback_MissingSrc_CreatesEmptyDst(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	dst := filepath.Join(dir, "fork", "scrollback.jsonl")
 
@@ -126,6 +132,7 @@ func TestForkScrollback_MissingSrc_CreatesEmptyDst(t *testing.T) {
 }
 
 func TestForkScrollback_GzipSource(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	src := filepath.Join(dir, "scrollback.jsonl.gz")
 	dst := filepath.Join(dir, "fork", "scrollback.jsonl")
@@ -135,4 +142,49 @@ func TestForkScrollback_GzipSource(t *testing.T) {
 	require.NoError(t, ForkScrollback(src, 4, dst))
 
 	assert.Equal(t, 4, countLines(t, dst))
+}
+
+// TestForkScrollback_ConcurrentCallsToSameDstPath_NeverProduceCorruptOutput is a
+// regression test for ForkScrollback's tmp-file write, now os.CreateTemp-based
+// (previously dstPath+".tmp"). Callers pass dstPath directly (see
+// session/instance_checkpoint.go), so unlike ForkClaudeConversation this can face a
+// genuine same-path race; verifies N concurrent callers targeting the identical
+// dstPath never interleave writes and rename a torn/corrupt result into place —
+// mirrors config_test.go's TestSaveConfig_ConcurrentWritesToSamePath pattern.
+func TestForkScrollback_ConcurrentCallsToSameDstPath_NeverProduceCorruptOutput(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	src := filepath.Join(dir, "scrollback.jsonl")
+	dst := filepath.Join(dir, "fork", "scrollback.jsonl")
+	writePlainJSONL(t, src, 5)
+
+	const n = 20
+	var wg sync.WaitGroup
+	errs := make([]error, n)
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			errs[i] = ForkScrollback(src, 5, dst)
+		}(i)
+	}
+	wg.Wait()
+
+	for _, err := range errs {
+		require.NoError(t, err, "ForkScrollback must not error under concurrent callers targeting the same dstPath")
+	}
+
+	// Every writer copies identical content from the same src, so a clean (non-torn)
+	// result must have exactly the expected line count, each a valid JSON entry.
+	assert.Equal(t, 5, countLines(t, dst), "dst must have exactly the expected line count, not a torn/partial write")
+	data, err := os.ReadFile(dst)
+	require.NoError(t, err)
+	scanner := bufio.NewScanner(bytes.NewReader(data))
+	for scanner.Scan() {
+		line := scanner.Bytes()
+		if len(line) == 0 {
+			continue
+		}
+		assert.True(t, json.Valid(line), "every line must be valid JSON, not torn/corrupt: %s", data)
+	}
 }

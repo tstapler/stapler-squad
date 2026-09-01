@@ -1,4 +1,4 @@
-import { Page, Locator } from '@playwright/test';
+import { Page, Locator, expect } from '@playwright/test';
 
 export class SessionsPage {
   readonly page: Page;
@@ -6,6 +6,7 @@ export class SessionsPage {
   readonly statusFilter: Locator;
   readonly groupBySelect: Locator;
   readonly newSessionButton: Locator;
+  readonly createSessionSubmitButton: Locator;
 
   constructor(page: Page) {
     this.page = page;
@@ -13,6 +14,7 @@ export class SessionsPage {
     this.statusFilter = page.locator('select[aria-label="Filter by status"]').first();
     this.groupBySelect = page.locator('select[aria-label="Group sessions by"]').first();
     this.newSessionButton = page.getByRole('button', { name: /new session/i }).first();
+    this.createSessionSubmitButton = page.getByTestId('omnibar-create-session-button');
   }
 
   async goto() {
@@ -36,5 +38,48 @@ export class SessionsPage {
 
   getSessionCards(): Locator {
     return this.page.locator('[data-testid="session-card"], [data-testid="session-row"]');
+  }
+
+  /**
+   * Creates a temporary (no-git) plain-shell session via the Omnibar and
+   * waits for the app to navigate to it. A plain "bash" program is used
+   * instead of a real AI CLI so the session is cheap and its lifecycle is
+   * fully controllable from the test — mirrors
+   * session-completion-summary.spec.ts's creation flow.
+   *
+   * Returns the new session's id, parsed out of the resulting
+   * `/?session=<id>` URL, so callers (e.g. connection-count-indicator.spec.ts)
+   * can open that same session from a second browser context/tab.
+   */
+  async createBashSession(namePrefix: string): Promise<string> {
+    // Explicit, generous timeout (default actionTimeout is 10s): shortly after
+    // first paint this button is still re-rendered once by a client-side nav
+    // hydration pass, which can detach-and-remount the exact DOM node
+    // Playwright resolved a moment earlier ("element was detached from the
+    // DOM, retrying" in the trace). Playwright already retries the click
+    // against the freshly-resolved locator when this happens, so the fix is
+    // budget, not logic — under load (slow CPU, cold JS parse/hydrate) a
+    // single retry cycle can itself take several seconds, and the default
+    // 10s window isn't always enough for the retry to land.
+    await this.newSessionButton.click({ timeout: 20000 });
+    await this.page.getByRole('radio', { name: /temporary \(no git\)/i }).click({ timeout: 15000 });
+
+    const sessionTitle = `${namePrefix}-${Date.now()}`;
+    await this.page.getByLabel('Session Name').fill(sessionTitle);
+
+    await this.page.getByText('Advanced Options').click();
+    await this.page.getByLabel('Program', { exact: true }).selectOption('bash');
+
+    const createRequest = this.page.waitForRequest(
+      (req) => req.url().includes('CreateSession') && req.method() === 'POST',
+    );
+    await this.createSessionSubmitButton.click();
+    await createRequest;
+
+    await this.page.waitForURL(/[?&]session=/, { timeout: 15000 });
+    const url = new URL(this.page.url());
+    const sessionId = url.searchParams.get('session');
+    expect(sessionId).not.toBeNull();
+    return sessionId!;
   }
 }

@@ -9,6 +9,67 @@ import (
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
+// TestWireDepsIntoServer_SharesSingleSlackNotifierInstance_AcrossReactiveQueueManagerApprovalHandlerAndSessionService
+// is the regression test for commit 13ad9c260, which fixed a split-brain bug
+// where SessionService's SlackConfigService constructed and used its own
+// private *services.SlackNotifier instead of the shared instance wired into
+// ReactiveQueueManager/ApprovalHandler (server.go's wireDepsIntoServer,
+// server/server.go:559/563: approvalHandler.SetSlackNotifier(deps.SlackNotifier)
+// / deps.SessionService.SetSlackNotifier(deps.SlackNotifier)). Left
+// unregression-tested, dropping either SetSlackNotifier call would silently
+// desync GetSlackConfig's last_delivery snapshot from the real review-queue/
+// approval send paths, with no compiler error to catch it.
+//
+// Exercises the real wireDepsIntoServer wiring via NewServerWithDeps (not just
+// BuildDependencies, which never constructs ApprovalHandler -- that only
+// happens inside wireDepsIntoServer). ApprovalHandler.SlackNotifierForTest and
+// SessionService.SlackNotifierForTest are minimal test-only accessors added
+// for exactly this assertion (server/services/approval_handler.go,
+// server/services/session_service.go) -- ReactiveQueueManager needs no such
+// accessor since it lives in this same package and its unexported
+// slackNotifier field is reachable directly from a same-package test.
+func TestWireDepsIntoServer_SharesSingleSlackNotifierInstance_AcrossReactiveQueueManagerApprovalHandlerAndSessionService(t *testing.T) {
+	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+
+	deps, err := BuildDependencies()
+	if err != nil {
+		t.Fatalf("BuildDependencies: %v", err)
+	}
+
+	srv := NewServerWithDeps("localhost:0", deps)
+	t.Cleanup(func() {
+		if err := srv.Shutdown(); err != nil {
+			t.Logf("srv.Shutdown: %v", err)
+		}
+	})
+
+	if deps.SlackNotifier == nil {
+		t.Fatal("expected ServerDependencies.SlackNotifier to be wired")
+	}
+	if deps.ReactiveQueueMgr == nil {
+		t.Fatal("expected ReactiveQueueMgr to be wired")
+	}
+	if srv.approvalHandler == nil {
+		t.Fatal("expected wireDepsIntoServer to have constructed and stored the ApprovalHandler")
+	}
+	if deps.SessionService == nil {
+		t.Fatal("expected SessionService to be wired")
+	}
+
+	if deps.ReactiveQueueMgr.slackNotifier != deps.SlackNotifier {
+		t.Errorf("ReactiveQueueManager.slackNotifier is not the same instance as deps.SlackNotifier: got %p, want %p",
+			deps.ReactiveQueueMgr.slackNotifier, deps.SlackNotifier)
+	}
+	if srv.approvalHandler.SlackNotifierForTest() != deps.SlackNotifier {
+		t.Errorf("ApprovalHandler's SlackNotifier is not the same instance as deps.SlackNotifier: got %p, want %p",
+			srv.approvalHandler.SlackNotifierForTest(), deps.SlackNotifier)
+	}
+	if deps.SessionService.SlackNotifierForTest() != deps.SlackNotifier {
+		t.Errorf("SessionService's SlackNotifier is not the same instance as deps.SlackNotifier (split-brain regression, commit 13ad9c260): got %p, want %p",
+			deps.SessionService.SlackNotifierForTest(), deps.SlackNotifier)
+	}
+}
+
 func TestBuildServiceDeps_RejectsNilCore(t *testing.T) {
 	_, err := BuildServiceDeps(nil)
 	if err == nil {
@@ -127,6 +188,58 @@ func TestBuildRuntimeDeps_should_ShareSinglePipelineEngineInstance_When_Construc
 
 	if backlogCaching != listenerCaching {
 		t.Fatalf("expected BacklogService and BacklogLifecycleListener to share the identical *session.CachingPipelineEngine instance, got distinct pointers %p vs %p", backlogCaching, listenerCaching)
+	}
+}
+
+// TestBuildRuntimeDeps_should_PopulateBacklogLifecycleListener_When_ServerBoots is the
+// dependency-wiring regression test for pr-event-webhooks Task 3.1.1: before this
+// feature, backlogLifecycleListener was only a local variable inside BuildRuntimeDeps,
+// unreachable from server.go's webhook-route-registration block — NewGitHubWebhookHandler
+// had no way to be given a real PRFixEventRouter. deps.BacklogLifecycleListener must be
+// the exact same instance SetPRFixSpawner/SetAutoReopener etc. were wired onto, not a
+// second, independently-constructed listener.
+func TestBuildRuntimeDeps_should_PopulateBacklogLifecycleListener_When_ServerBoots(t *testing.T) {
+	deps, err := BuildDependencies()
+	if err != nil {
+		t.Fatalf("BuildDependencies: %v", err)
+	}
+
+	if deps.BacklogLifecycleListener == nil {
+		t.Fatal("expected BacklogLifecycleListener to be wired")
+	}
+	if deps.SessionService == nil {
+		t.Fatal("expected SessionService to be wired")
+	}
+	listener := deps.SessionService.GetBacklogLifecycleListener()
+	if listener == nil {
+		t.Fatal("expected BacklogLifecycleListener to be wired onto SessionService")
+	}
+	if deps.BacklogLifecycleListener != listener {
+		t.Fatalf("expected deps.BacklogLifecycleListener to be the identical instance wired onto SessionService, got distinct pointers %p vs %p", deps.BacklogLifecycleListener, listener)
+	}
+}
+
+// TestBuildRuntimeDeps_should_WireSessionSteererAndSessionStopper_When_ServerBoots
+// is the pr-fix-steering Task 1.2.2d wiring-assertion test (pre-mortem.md P2 #5):
+// SetSessionSteerer/SetSessionStopper's wiring in BuildRuntimeDeps (one new line
+// each) had no test that would fail if either call were ever omitted or
+// misplaced — both fields' nil-safe degrade paths are, by design, externally
+// indistinguishable from today's shipped behavior, so a forgotten wiring line
+// compiles, passes make ci, and ships the feature silently inert. This is the
+// first such test for either setter — there is no prior instance to extend.
+func TestBuildRuntimeDeps_should_WireSessionSteererAndSessionStopper_When_ServerBoots(t *testing.T) {
+	deps, err := BuildDependencies()
+	if err != nil {
+		t.Fatalf("BuildDependencies: %v", err)
+	}
+	if deps.BacklogService.GetSessionSteerer() == nil {
+		t.Fatal("expected SessionSteerer to be wired onto BacklogService")
+	}
+	if deps.BacklogService.GetSessionSteerer() != deps.SessionService {
+		t.Fatal("expected the wired SessionSteerer to be the same *SessionService instance BuildDependencies constructs")
+	}
+	if deps.BacklogService.GetSessionStopper() == nil {
+		t.Fatal("expected SessionStopper to be wired onto BacklogService")
 	}
 }
 

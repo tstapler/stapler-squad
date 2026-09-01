@@ -45,6 +45,13 @@ type TmuxServerRegistry struct {
 	mu       sync.RWMutex
 	sessions map[string]bool
 
+	// closedAt pins a session as absent for closedPinWindow after an explicit
+	// close (NotifySessionClosed or a %session-closed event), so a
+	// syncSessionsLocked fetch that was already in flight when the close
+	// happened can't resurrect it by overwriting r.sessions with a stale
+	// "still exists" snapshot. See BUG-074.
+	closedAt map[string]time.Time
+
 	// subsMu guards subscribers. CRITICAL: never close(ch) while holding subsMu.
 	// Copy subscribers out under the lock, release the lock, then close outside.
 	subsMu      sync.Mutex
@@ -63,6 +70,11 @@ type TmuxServerRegistry struct {
 	// waitBackoffWithFastRecheck's ponytail: comment for why that matters.
 	syncMu sync.Mutex
 
+	// hookMu guards fastRecheckWaitStartHook, a test-only observability hook.
+	// See SetFastRecheckWaitStartHook.
+	hookMu                   sync.Mutex
+	fastRecheckWaitStartHook func(backoff time.Duration)
+
 	ctx    context.Context
 	cancel context.CancelFunc
 }
@@ -74,6 +86,7 @@ func NewTmuxServerRegistry(serverSocket string) *TmuxServerRegistry {
 	return &TmuxServerRegistry{
 		serverSocket: serverSocket,
 		sessions:     make(map[string]bool),
+		closedAt:     make(map[string]time.Time),
 		subscribers:  make(map[string][]*paneExitSub),
 		ctx:          ctx,
 		cancel:       cancel,
@@ -147,6 +160,33 @@ func (r *TmuxServerRegistry) ListSessions() map[string]bool {
 	return out
 }
 
+// SetFastRecheckWaitStartHook installs a callback invoked synchronously, on
+// reconnectLoop's own goroutine, at the moment a wait's backoff reaches
+// fastRecheckMinBackoff -- i.e. a wait that is about to run its fast-recheck
+// attempts. It exists so tests can deterministically synchronize with the
+// start of a fast-recheck window instead of estimating cycle timing; see
+// TestTmuxServerRegistry_PaneExitDetectedDespiteElevatedBackoff in
+// server_registry_integration_test.go for why the estimate approach was flaky.
+//
+// The hook must not block: it runs inline on reconnectLoop's goroutine and
+// delays the fast-recheck attempts themselves for as long as it runs. Pass
+// nil to remove the hook (the default; safe in production since nothing
+// else populates this field).
+func (r *TmuxServerRegistry) SetFastRecheckWaitStartHook(hook func(backoff time.Duration)) {
+	r.hookMu.Lock()
+	r.fastRecheckWaitStartHook = hook
+	r.hookMu.Unlock()
+}
+
+func (r *TmuxServerRegistry) fireFastRecheckWaitStartHook(backoff time.Duration) {
+	r.hookMu.Lock()
+	hook := r.fastRecheckWaitStartHook
+	r.hookMu.Unlock()
+	if hook != nil {
+		hook(backoff)
+	}
+}
+
 // IsHealthy implements SessionExistenceChecker and SessionLister.
 func (r *TmuxServerRegistry) IsHealthy() bool {
 	r.healthMu.RLock()
@@ -161,6 +201,20 @@ func (r *TmuxServerRegistry) IsHealthy() bool {
 func (r *TmuxServerRegistry) NotifySessionCreated(name string) {
 	r.mu.Lock()
 	r.sessions[name] = true
+	delete(r.closedAt, name)
+	r.mu.Unlock()
+}
+
+// NotifySessionClosed proactively marks a session as gone in the registry.
+// Called by TmuxSession.Close() right after a synchronous "kill-session"
+// subprocess confirms the session is dead, so DoesSessionExist()'s registry
+// fast path returns false immediately instead of trusting a stale "exists"
+// entry until the async %session-closed control-mode event is processed --
+// the symmetric counterpart of NotifySessionCreated's create-side fast path.
+func (r *TmuxServerRegistry) NotifySessionClosed(name string) {
+	r.mu.Lock()
+	delete(r.sessions, name)
+	r.closedAt[name] = time.Now()
 	r.mu.Unlock()
 }
 
@@ -221,6 +275,14 @@ func (r *TmuxServerRegistry) firePaneExit(sessionName string) {
 // fastRecheckSyncTimeout in waitBackoffWithFastRecheck).
 const defaultSyncTimeout = 10 * time.Second
 
+// closedPinWindow bounds how long a name recently marked closed (via
+// NotifySessionClosed or a %session-closed event) is protected from being
+// resurrected by a syncSessionsLocked swap. Needed because a list-sessions
+// fetch already in flight when the close happens can return a stale
+// "still exists" snapshot that would otherwise clobber the close. 2s comfortably
+// covers list-sessions' subprocess latency plus the 50ms debounce delay.
+const closedPinWindow = 2 * time.Second
+
 // syncSessions acquires syncMu and runs the fetch-diff-swap sequence. Used
 // by the 3 pre-existing callers with no tight latency budget (Start,
 // reconnectLoop's post-connect sync, the debounce callback). The
@@ -263,6 +325,17 @@ func (r *TmuxServerRegistry) syncSessionsLocked(ctx context.Context, timeout tim
 	// notified even when control-mode events were missed (e.g. in a
 	// headless environment where the control-mode connection is short-lived).
 	r.mu.Lock()
+	now := time.Now()
+	for name, closedAt := range r.closedAt {
+		if now.Sub(closedAt) < closedPinWindow {
+			// A close happened after (or concurrently with) this fetch was
+			// issued -- honor the more recent close rather than the stale
+			// "still exists" snapshot list-sessions may have captured.
+			delete(sessions, name)
+		} else {
+			delete(r.closedAt, name)
+		}
+	}
 	var disappeared []string
 	for name := range r.sessions {
 		if !sessions[name] {
@@ -454,29 +527,56 @@ func (r *TmuxServerRegistry) syncSessionsFastRecheck(ctx context.Context, timeou
 	return r.syncSessionsLocked(ctx, timeout)
 }
 
+// fastRecheckAttempts, fastRecheckSyncTimeout, and fastRecheckInterval are
+// package-level (rather than function-local to waitBackoffWithFastRecheck)
+// so other files in package tmux -- e.g. server_registry_test.go's
+// white-box tests -- can reference the real values directly instead of
+// keeping their own copies that could silently drift out of sync.
+//
+// ponytail: fastRecheckAttempts * (fastRecheckSyncTimeout + fastRecheckInterval)
+// = 700ms is a hard ceiling on fast-recheck's OWN polling delay during a
+// backoff sleep -- not a ceiling on total detection latency regardless of
+// what other callers are doing. Each attempt goes through
+// syncSessionsFastRecheck, which TryLocks syncMu and skips (does no work,
+// returns nil) rather than blocking if another caller (Start,
+// reconnectLoop's post-connect sync, or the debounce callback -- all of
+// which use the blocking syncSessions and can hold syncMu for up to
+// defaultSyncTimeout=10s) is already mid-sync. So a fast-recheck attempt
+// itself never waits on syncMu, and this loop's own elapsed time is
+// always bounded by this ceiling. In the specific case where an attempt
+// is skipped due to contention, the in-flight caller that holds the lock
+// will itself observe and fire the disappearance once it finishes --
+// just not necessarily within this 700ms window. backoff itself climbs
+// 100ms..30s (backoffBase..backoffCap) and is tuned to protect a
+// possibly-unhealthy tmux server from a reconnect fork-rate explosion
+// (see minStableConnection above) -- detection latency is a separate,
+// caller-facing guarantee (SubscribePaneExit) that must not inherit
+// backoff's slowness. Keep these decoupled: widen backoff freely, but
+// any change to these three constants must keep this ceiling accurate.
+const (
+	fastRecheckAttempts    = 2
+	fastRecheckSyncTimeout = 150 * time.Millisecond
+	fastRecheckInterval    = 200 * time.Millisecond
+)
+
 // waitBackoffWithFastRecheck blocks for up to backoff (or until r.ctx is
 // cancelled) — the same contract as a plain time.After(backoff) wait — but
 // also makes a small, bounded number of independent syncSessionsFastRecheck
 // calls while it waits, so a pane exit during a long backoff sleep is
 // detected quickly instead of only on the next successful reconnect.
 func (r *TmuxServerRegistry) waitBackoffWithFastRecheck(backoff time.Duration) {
-	const (
-		fastRecheckAttempts    = 2
-		fastRecheckSyncTimeout = 150 * time.Millisecond
-		fastRecheckInterval    = 200 * time.Millisecond
-		// fastRecheckMinBackoff gates fast-recheck to backoff waits that could
-		// plausibly outlast a caller's detection budget (e.g. the 3s deadline in
-		// TestTmuxServerRegistry_PaneExitChannel). Below this threshold the plain
-		// wait alone already leaves ample margin, so skip fast-recheck entirely --
-		// otherwise every early, short cycle (100/200/400/800ms) pays an extra
-		// list-sessions subprocess fork for zero detection benefit, adding fork
-		// pressure right during the reconnect-storm window. Added after this fix's
-		// own verification measured a real failure-rate regression without it; see
-		// requirements.md's "Post-implementation finding" for the evidence. Below
-		// this threshold, detection latency is NOT decoupled from backoff -- see
-		// that same section and plan.md Story 1.1.2 for the narrowed guarantee.
-		fastRecheckMinBackoff = 1600 * time.Millisecond
-	)
+	// fastRecheckMinBackoff gates fast-recheck to backoff waits that could
+	// plausibly outlast a caller's detection budget (e.g. the 3s deadline in
+	// TestTmuxServerRegistry_PaneExitChannel). Below this threshold the plain
+	// wait alone already leaves ample margin, so skip fast-recheck entirely --
+	// otherwise every early, short cycle (100/200/400/800ms) pays an extra
+	// list-sessions subprocess fork for zero detection benefit, adding fork
+	// pressure right during the reconnect-storm window. Added after this fix's
+	// own verification measured a real failure-rate regression without it; see
+	// requirements.md's "Post-implementation finding" for the evidence. Below
+	// this threshold, detection latency is NOT decoupled from backoff -- see
+	// that same section and plan.md Story 1.1.2 for the narrowed guarantee.
+	const fastRecheckMinBackoff = 1600 * time.Millisecond
 	if backoff < fastRecheckMinBackoff {
 		select {
 		case <-r.ctx.Done():
@@ -485,26 +585,16 @@ func (r *TmuxServerRegistry) waitBackoffWithFastRecheck(backoff time.Duration) {
 		return
 	}
 
-	// ponytail: fastRecheckAttempts * (fastRecheckSyncTimeout + fastRecheckInterval)
-	// = 700ms is a hard ceiling on fast-recheck's OWN polling delay during a
-	// backoff sleep -- not a ceiling on total detection latency regardless of
-	// what other callers are doing. Each attempt goes through
-	// syncSessionsFastRecheck, which TryLocks syncMu and skips (does no work,
-	// returns nil) rather than blocking if another caller (Start,
-	// reconnectLoop's post-connect sync, or the debounce callback -- all of
-	// which use the blocking syncSessions and can hold syncMu for up to
-	// defaultSyncTimeout=10s) is already mid-sync. So a fast-recheck attempt
-	// itself never waits on syncMu, and this loop's own elapsed time is
-	// always bounded by this ceiling. In the specific case where an attempt
-	// is skipped due to contention, the in-flight caller that holds the lock
-	// will itself observe and fire the disappearance once it finishes --
-	// just not necessarily within this 700ms window. backoff itself climbs
-	// 100ms..30s (backoffBase..backoffCap) and is tuned to protect a
-	// possibly-unhealthy tmux server from a reconnect fork-rate explosion
-	// (see minStableConnection above) -- detection latency is a separate,
-	// caller-facing guarantee (SubscribePaneExit) that must not inherit
-	// backoff's slowness. Keep these decoupled: widen backoff freely, but
-	// any change to these three constants must keep this ceiling accurate.
+	// Fire the test-observability hook (see SetFastRecheckWaitStartHook) right
+	// as this wait qualifies for fast-recheck, before the deadline timer and
+	// attempts loop below start -- this is the earliest point at which a test
+	// can act (e.g. kill a session) and be guaranteed the resulting change is
+	// still visible to this wait's own fast-recheck attempts.
+	r.fireFastRecheckWaitStartHook(backoff)
+
+	// See the ponytail: comment on the fastRecheckAttempts/fastRecheckSyncTimeout/
+	// fastRecheckInterval declaration above for the 700ms ceiling this loop
+	// enforces and why it's decoupled from backoff.
 	deadline := time.NewTimer(backoff)
 	defer deadline.Stop()
 
@@ -579,6 +669,7 @@ func (r *TmuxServerRegistry) handleEvent(line string) {
 			name := parts[2]
 			r.mu.Lock()
 			r.sessions[name] = true
+			delete(r.closedAt, name)
 			r.mu.Unlock()
 			log.Info("[registry] session created", "session", name)
 		}
@@ -590,6 +681,7 @@ func (r *TmuxServerRegistry) handleEvent(line string) {
 			name := parts[2]
 			r.mu.Lock()
 			delete(r.sessions, name)
+			r.closedAt[name] = time.Now()
 			r.mu.Unlock()
 			log.Info("[registry] session closed", "session", name)
 			r.firePaneExit(name)

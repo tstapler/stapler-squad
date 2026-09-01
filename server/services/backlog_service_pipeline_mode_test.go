@@ -25,15 +25,30 @@ import (
 	"github.com/tstapler/stapler-squad/session/ent"
 )
 
+// warningLogMu serializes swapWarningLog calls across this package's
+// t.Parallel() tests. SetWarningLogForTest reassigns the shared package-level
+// logger wholesale, so two parallel tests calling it concurrently would each
+// redirect the same global and race over whose buffer is "current" — this
+// mutex, held for the full swap-to-restore window, ensures only one test
+// owns the redirection at a time. Mirrors session/sync_buffer_test.go's
+// swapWarningLog, which mutates the logger in place instead; this package
+// uses SetWarningLogForTest directly since production code here never spawns
+// background goroutines that read log.WarningLog() after the owning test
+// returns.
+var warningLogMu sync.Mutex
+
 // swapWarningLog redirects tslog.WarningLog to a buffer for the duration of
-// the calling test, restoring the original on cleanup. Mirrors the
-// established pattern in session/pipeline_engine_test.go.
+// the calling test, restoring the original on cleanup via the atomic
+// SetWarningLogForTest setter.
 func swapWarningLog(t *testing.T) *bytes.Buffer {
 	t.Helper()
+	warningLogMu.Lock()
 	var buf bytes.Buffer
-	orig := tslog.WarningLog
-	tslog.WarningLog = stdlog.New(&buf, "WARNING: ", 0)
-	t.Cleanup(func() { tslog.WarningLog = orig })
+	orig := tslog.SetWarningLogForTest(stdlog.New(&buf, "WARNING: ", 0))
+	t.Cleanup(func() {
+		tslog.SetWarningLogForTest(orig)
+		warningLogMu.Unlock()
+	})
 	return &buf
 }
 
@@ -85,6 +100,7 @@ func newPipelineModeTestService(t *testing.T) (*BacklogService, session.Pipeline
 // proves content_hash is derived on read from the row's live 9
 // content-template fields (proto field 17), not left as "".
 func TestGetPipelineMode_should_ReturnDerivedContentHash_When_ModeHasNonEmptyTemplates(t *testing.T) {
+	t.Parallel()
 	svc, _, _ := newPipelineModeTestService(t)
 	ctx := t.Context()
 
@@ -119,6 +135,7 @@ func TestGetPipelineMode_should_ReturnDerivedContentHash_When_ModeHasNonEmptyTem
 // mode's TriagePromptFor (no restart, no explicit invalidate call from the
 // test) reflects the new mode's content.
 func TestCreatePipelineMode_should_PersistAndInvalidateCacheSynchronously_When_ValidInput(t *testing.T) {
+	t.Parallel()
 	svc, _, engine := newPipelineModeTestService(t)
 	ctx := t.Context()
 
@@ -147,6 +164,15 @@ func TestCreatePipelineMode_should_PersistAndInvalidateCacheSynchronously_When_V
 // success response containing the updated row's data, and log a
 // [PipelineEngine] Warn line naming the failure.
 func TestUpdatePipelineMode_should_ReturnSuccessWithWarnLog_When_CacheInvalidationFailsAfterSuccessfulDBWrite(t *testing.T) {
+	// Not t.Parallel(): swapWarningLog below redirects the package-level
+	// tslog.WarningLog var, which any other test's Warn call — including
+	// another t.Parallel() test in this same package — would also write to
+	// (or restore out from under) while this one is running. Go runs every
+	// non-parallel top-level test in a package to completion before the
+	// parallel ones start, so this ordering is what keeps the swap from
+	// racing a concurrent Warn call — same fix as
+	// TestResolveAndValidateCallbackHost_RejectsMixedSafetyResultSet's
+	// sibling comment in webhook_ssrf_test.go.
 	storage := createTestStorage(t)
 	realRepo := session.NewEntPipelineModeRepository(storage.GetEntClient())
 	// failAfter=2: call 1 is the engine's construction-time Load (must
@@ -191,6 +217,7 @@ func TestUpdatePipelineMode_should_ReturnSuccessWithWarnLog_When_CacheInvalidati
 // ListEnabled — the management UI must see disabled modes too (e.g. to
 // re-enable them), unlike PipelineEngine's cache.
 func TestListPipelineModes_should_IncludeDisabledModes_When_CalledForManagementUI(t *testing.T) {
+	t.Parallel()
 	svc, _, _ := newPipelineModeTestService(t)
 	ctx := t.Context()
 
@@ -225,6 +252,7 @@ func TestListPipelineModes_should_IncludeDisabledModes_When_CalledForManagementU
 // PipelineEngine's fail-closed resolution (Story 1.3.3) instead of
 // referential-integrity enforcement.
 func TestDeletePipelineMode_should_SucceedAndInvalidateCache_When_ModeStillReferencedByBacklogItem(t *testing.T) {
+	t.Parallel()
 	svc, repo, engine := newPipelineModeTestService(t)
 	ctx := t.Context()
 
@@ -264,6 +292,7 @@ func TestDeletePipelineMode_should_SucceedAndInvalidateCache_When_ModeStillRefer
 // invalidation instead of a test fixture: create mode -> select on item ->
 // delete mode -> trigger triage -> assert default-mode output + Warn log.
 func TestTriggerTriage_should_FallBackToDefaultWithWarnLog_When_ReferencedModeDeletedBeforeTriage(t *testing.T) {
+	// Not t.Parallel() — see TestUpdatePipelineMode_should_ReturnSuccessWithWarnLog_When_CacheInvalidationFailsAfterSuccessfulDBWrite.
 	svc, _, _ := newPipelineModeTestService(t)
 	ctx := t.Context()
 	pool := &fakeHeadlessPool{response: validTriageJSON()}
@@ -318,6 +347,7 @@ func TestTriggerTriage_should_FallBackToDefaultWithWarnLog_When_ReferencedModeDe
 // matches expected state, including that content_hash changes when a
 // content-template field is updated.
 func TestPipelineModeCRUD_should_RoundTripCreateGetUpdateDelete_When_CalledSequentially(t *testing.T) {
+	t.Parallel()
 	svc, _, _ := newPipelineModeTestService(t)
 	ctx := t.Context()
 
@@ -380,6 +410,7 @@ func TestPipelineModeCRUD_should_RoundTripCreateGetUpdateDelete_When_CalledSeque
 // called, Then it returns connect.CodeInvalidArgument with a message naming
 // the invalid field, and no row is written.
 func TestCreatePipelineMode_should_ReturnCodeInvalidArgumentNamingInvalidField_When_SlugInvalid(t *testing.T) {
+	t.Parallel()
 	svc, repo, _ := newPipelineModeTestService(t)
 	ctx := t.Context()
 
@@ -405,6 +436,7 @@ func TestCreatePipelineMode_should_ReturnCodeInvalidArgumentNamingInvalidField_W
 // connect.CodeInvalidArgument naming triage_prompt_template and the
 // unrecognized token made_up_placeholder, and no row is written.
 func TestCreatePipelineMode_should_ReturnCodeInvalidArgumentNamingFieldAndToken_When_UnrecognizedPlaceholderUsed(t *testing.T) {
+	t.Parallel()
 	svc, repo, _ := newPipelineModeTestService(t)
 	ctx := t.Context()
 
@@ -429,6 +461,7 @@ func TestCreatePipelineMode_should_ReturnCodeInvalidArgumentNamingFieldAndToken_
 // "Fix {{item_id}}: {{item_title}}.", ...} (all recognized placeholders),
 // When CreatePipelineMode is called, Then it succeeds.
 func TestCreatePipelineMode_should_Succeed_When_AllPlaceholdersAreRecognized(t *testing.T) {
+	t.Parallel()
 	svc, repo, _ := newPipelineModeTestService(t)
 	ctx := t.Context()
 

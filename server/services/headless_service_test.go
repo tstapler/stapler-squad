@@ -40,6 +40,7 @@ func newHeadlessTestServer(t *testing.T, pool *headless.Pool) (*httptest.Server,
 
 // TestHeadlessService_RunHeadlessCall_StreamsChunks verifies streaming of chunks.
 func TestHeadlessService_RunHeadlessCall_StreamsChunks(t *testing.T) {
+	t.Parallel()
 	runner := headless.NewFakeRunner(firstCallJSONHS("s1", "hello from LLM"))
 	pool := headless.NewPoolWithRunner(headless.PoolConfig{}, runner)
 
@@ -74,6 +75,7 @@ func TestHeadlessService_RunHeadlessCall_StreamsChunks(t *testing.T) {
 
 // TestHeadlessService_RunHeadlessCall_InvalidFeatureKey_ReturnsInvalidArgument verifies key validation.
 func TestHeadlessService_RunHeadlessCall_InvalidFeatureKey_ReturnsInvalidArgument(t *testing.T) {
+	t.Parallel()
 	runner := headless.NewFakeRunner()
 	pool := headless.NewPoolWithRunner(headless.PoolConfig{}, runner)
 
@@ -104,6 +106,7 @@ func TestHeadlessService_RunHeadlessCall_InvalidFeatureKey_ReturnsInvalidArgumen
 
 // TestHeadlessService_RunHeadlessCall_AllowedFeatureKeys verifies all allowed keys.
 func TestHeadlessService_RunHeadlessCall_AllowedFeatureKeys(t *testing.T) {
+	t.Parallel()
 	allowedKeys := []string{"review", "summarize", "acceptance-criteria", "pr-description", "commit-message", "custom"}
 
 	runner := headless.NewFakeRunner(
@@ -145,6 +148,7 @@ func TestHeadlessService_RunHeadlessCall_AllowedFeatureKeys(t *testing.T) {
 
 // TestHeadlessService_RunHeadlessCall_PoolNil_ReturnsUnavailable verifies nil pool handling.
 func TestHeadlessService_RunHeadlessCall_PoolNil_ReturnsUnavailable(t *testing.T) {
+	t.Parallel()
 	_, client := newHeadlessTestServer(t, nil) // nil pool
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -170,6 +174,7 @@ func TestHeadlessService_RunHeadlessCall_PoolNil_ReturnsUnavailable(t *testing.T
 // TestHeadlessService_RunHeadlessCall_ZeroTimeoutSeconds_UsesDefault verifies that
 // TimeoutSeconds=0 is accepted (uses default) and completes without error.
 func TestHeadlessService_RunHeadlessCall_ZeroTimeoutSeconds_UsesDefault(t *testing.T) {
+	t.Parallel()
 	runner := headless.NewFakeRunner(firstCallJSONHS("s1", "ok"))
 	pool := headless.NewPoolWithRunner(headless.PoolConfig{}, runner)
 	_, client := newHeadlessTestServer(t, pool)
@@ -192,6 +197,7 @@ func TestHeadlessService_RunHeadlessCall_ZeroTimeoutSeconds_UsesDefault(t *testi
 
 // TestHeadlessService_RunHeadlessCall_ContextCancel_StopsSubprocess verifies cancellation.
 func TestHeadlessService_RunHeadlessCall_ContextCancel_StopsSubprocess(t *testing.T) {
+	t.Parallel()
 	runner := headless.NewFakeRunner(firstCallJSONHS("s1", "ok"))
 	pool := headless.NewPoolWithRunner(headless.PoolConfig{}, runner)
 	_, client := newHeadlessTestServer(t, pool)
@@ -225,6 +231,7 @@ func TestHeadlessService_RunHeadlessCall_ContextCancel_StopsSubprocess(t *testin
 // TestHeadlessService_RunHeadlessCall_SystemPromptOverLimit_ReturnsInvalidArgument
 // verifies that system_prompt exceeding maxPromptBytes is rejected.
 func TestHeadlessService_RunHeadlessCall_SystemPromptOverLimit_ReturnsInvalidArgument(t *testing.T) {
+	t.Parallel()
 	runner := headless.NewFakeRunner()
 	pool := headless.NewPoolWithRunner(headless.PoolConfig{}, runner)
 	_, client := newHeadlessTestServer(t, pool)
@@ -253,6 +260,7 @@ func TestHeadlessService_RunHeadlessCall_SystemPromptOverLimit_ReturnsInvalidArg
 // TestHeadlessService_RunHeadlessCall_UserPromptOverLimit_ReturnsInvalidArgument
 // verifies that user_prompt exceeding maxPromptBytes is rejected.
 func TestHeadlessService_RunHeadlessCall_UserPromptOverLimit_ReturnsInvalidArgument(t *testing.T) {
+	t.Parallel()
 	runner := headless.NewFakeRunner()
 	pool := headless.NewPoolWithRunner(headless.PoolConfig{}, runner)
 	_, client := newHeadlessTestServer(t, pool)

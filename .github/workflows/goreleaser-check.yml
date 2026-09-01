@@ -16,17 +16,24 @@ on:
     paths:
       - '.goreleaser.yaml'
       - '.github/workflows/goreleaser-check.yml'
+      - '**.go'
+      - 'go.mod'
+      - 'go.sum'
   pull_request:
     branches: [ main ]
     paths:
       - '.goreleaser.yaml'
       - '.github/workflows/goreleaser-check.yml'
+      - '**.go'
+      - 'go.mod'
+      - 'go.sum'
   workflow_dispatch:
 
 jobs:
   check:
     name: goreleaser check
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - name: Check out code
         uses: actions/checkout@v4
@@ -62,3 +69,87 @@ jobs:
             exit 1
           fi
           echo "goreleaser check passed (deprecation warnings, if any, are pre-existing and tracked separately)"
+
+  build-smoke-test:
+    name: build + smoke test (CGO_ENABLED=0, matches release build)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # `goreleaser check` above only validates the config schema — it never
+    # compiles anything. .goreleaser.yaml pins CGO_ENABLED=0 for every
+    # release build, so a cgo-only dependency (e.g. mattn/go-sqlite3) can
+    # compile fine locally (cgo enabled by default) and in `go test`, yet
+    # still produce a released binary whose DB-backed commands panic or
+    # error at runtime. This job builds exactly one target the same way
+    # goreleaser does and exercises the two entry points that open the
+    # session database, so that regression is caught in CI instead of in a
+    # user's `brew install` after a tag is pushed.
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Generate protos and stub web UI
+        uses: ./.github/actions/prepare-stub
+
+      - name: Install GoReleaser
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          version: latest
+          install-only: true
+
+      - name: Build release binary (single target, CGO_ENABLED=0)
+        run: goreleaser build --snapshot --clean --single-target --id stapler-squad
+
+      - name: Locate built binary
+        id: locate
+        run: |
+          BIN=$(find dist -type f -name 'stapler-squad' | head -1)
+          if [ -z "$BIN" ]; then
+            echo "::error::goreleaser did not produce a stapler-squad binary under dist/"
+            exit 1
+          fi
+          chmod +x "$BIN"
+          echo "bin=$BIN" >> "$GITHUB_OUTPUT"
+
+      - name: "Smoke test: list (opens the session DB via ent/SQLite)"
+        env:
+          STAPLER_SQUAD_TEST_DIR: /tmp/ssq-smoke-test-list
+        run: |
+          BIN="${{ steps.locate.outputs.bin }}"
+          OUTPUT=$("$BIN" list 2>&1)
+          echo "$OUTPUT"
+          echo "$OUTPUT" | grep -qiE "no sessions found|sessions?:" || {
+            echo "::error::'list' did not produce expected output on a CGO_ENABLED=0 release binary — likely the cgo-only sqlite driver regression this job guards against"
+            exit 1
+          }
+
+      - name: "Smoke test: --mcp (initialize + tools/list JSON-RPC round trip, opens the session DB via buildMCPDeps fallback)"
+        env:
+          STAPLER_SQUAD_TEST_DIR: /tmp/ssq-smoke-test-mcp
+        run: |
+          BIN="${{ steps.locate.outputs.bin }}"
+          INIT_REQUEST='{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"smoke-test","version":"0.0.0"}}}'
+          LIST_REQUEST='{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}'
+          set +e
+          RESPONSE=$(printf '%s\n%s\n' "$INIT_REQUEST" "$LIST_REQUEST" | timeout 15 "$BIN" --mcp 2>/tmp/mcp-stderr.log)
+          STATUS=$?
+          set -e
+          echo "--- stdout ---"
+          echo "$RESPONSE"
+          echo "--- stderr ---"
+          cat /tmp/mcp-stderr.log
+          if [ "$STATUS" -ne 0 ] && [ "$STATUS" -ne 124 ]; then
+            echo "::error::--mcp exited with status $STATUS on a CGO_ENABLED=0 release binary"
+            exit 1
+          fi
+          INIT_RESPONSE=$(echo "$RESPONSE" | sed -n '1p')
+          LIST_RESPONSE=$(echo "$RESPONSE" | sed -n '2p')
+          echo "$INIT_RESPONSE" | grep -q '"result"' || {
+            echo "::error::initialize did not return a JSON-RPC result on a CGO_ENABLED=0 release binary — likely the cgo-only sqlite driver regression this job guards against"
+            exit 1
+          }
+          echo "$LIST_RESPONSE" | grep -q '"tools"' || {
+            echo "::error::tools/list did not return a tools array on a CGO_ENABLED=0 release binary — likely the cgo-only sqlite driver regression this job guards against"
+            exit 1
+          }

@@ -13,8 +13,10 @@ import (
 	"fmt"
 
 	"connectrpc.com/connect"
+	"github.com/google/uuid"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -55,6 +57,16 @@ func toProtoStuckReason(reason domain.StuckReason) sessionv1.StuckReason {
 		return sessionv1.StuckReason_STUCK_REASON_PR_NEEDS_FIX
 	case domain.StuckReasonRespawnBlockedActive:
 		return sessionv1.StuckReason_STUCK_REASON_RESPAWN_BLOCKED_ACTIVE
+	case domain.StuckReasonLikelyFlaky:
+		return sessionv1.StuckReason_STUCK_REASON_LIKELY_FLAKY
+	case domain.StuckReasonBlockedByDependency:
+		return sessionv1.StuckReason_STUCK_REASON_BLOCKED_BY_DEPENDENCY
+	case domain.StuckReasonMultipleReasons:
+		return sessionv1.StuckReason_STUCK_REASON_MULTIPLE_REASONS
+	case domain.StuckReasonBounceCapExhausted:
+		return sessionv1.StuckReason_STUCK_REASON_BOUNCE_CAP_EXHAUSTED
+	case domain.StuckReasonSteerFailed:
+		return sessionv1.StuckReason_STUCK_REASON_STEER_FAILED
 	default:
 		return sessionv1.StuckReason_STUCK_REASON_UNSPECIFIED
 	}
@@ -94,6 +106,16 @@ func fromProtoStuckReason(reason sessionv1.StuckReason) domain.StuckReason {
 		return domain.StuckReasonPRNeedsFix
 	case sessionv1.StuckReason_STUCK_REASON_RESPAWN_BLOCKED_ACTIVE:
 		return domain.StuckReasonRespawnBlockedActive
+	case sessionv1.StuckReason_STUCK_REASON_LIKELY_FLAKY:
+		return domain.StuckReasonLikelyFlaky
+	case sessionv1.StuckReason_STUCK_REASON_BLOCKED_BY_DEPENDENCY:
+		return domain.StuckReasonBlockedByDependency
+	case sessionv1.StuckReason_STUCK_REASON_MULTIPLE_REASONS:
+		return domain.StuckReasonMultipleReasons
+	case sessionv1.StuckReason_STUCK_REASON_BOUNCE_CAP_EXHAUSTED:
+		return domain.StuckReasonBounceCapExhausted
+	case sessionv1.StuckReason_STUCK_REASON_STEER_FAILED:
+		return domain.StuckReasonSteerFailed
 	default:
 		return ""
 	}
@@ -239,8 +261,48 @@ func (s *BacklogService) BulkResetStuckRemediation(
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to bulk reset stuck remediation: %w", err))
 	}
+	if n > 0 {
+		s.notifyBulkResetParked(reasonFilter, n)
+	}
 
 	return connect.NewResponse(&sessionv1.BulkResetStuckRemediationResponse{ResetCount: int32(n)}), nil
+}
+
+// notifyBulkResetParked publishes an operator-facing notification whenever a
+// bulk/reason-scoped parked-remediation reset actually changes rows, mirroring
+// the justParked one-time-notify pattern. sessionID is a synthetic
+// "bulk-reset:<scope>" key, never "" — see EventBusNotifier.Notify's doc
+// comment for the coalescing-collision bug that reintroduces. metadata["item_id"]
+// mirrors it so eventToRecord's title-clobbering fallback doesn't trigger.
+func (s *BacklogService) notifyBulkResetParked(reasonFilter *domain.StuckReason, resetCount int) {
+	if s.eventBus == nil {
+		return
+	}
+	scope := "every reason"
+	scopeKey := "all"
+	if reasonFilter != nil {
+		scope = string(*reasonFilter)
+		scopeKey = scope
+	}
+	sessionID := "bulk-reset:" + scopeKey
+	s.eventBus.Publish(events.NewNotificationEvent(
+		sessionID, "", uuid.New().String(),
+		int32(sessionv1.NotificationType_NOTIFICATION_TYPE_INFO),
+		int32(sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_LOW),
+		"Parked items reset",
+		fmt.Sprintf("Reset %d parked item%s (%s) — they'll get automated attempts again.",
+			resetCount, pluralSuffix(resetCount), scope),
+		map[string]string{"reason": scope, "reset_count": fmt.Sprintf("%d", resetCount), "item_id": sessionID},
+	))
+}
+
+// pluralSuffix returns "s" unless n == 1 — small formatting helper for
+// notifyBulkResetParked's message.
+func pluralSuffix(n int) string {
+	if n == 1 {
+		return ""
+	}
+	return "s"
 }
 
 // remediationActionByReason maps a stuck reason to the BacklogService method
@@ -251,6 +313,12 @@ func (s *BacklogService) BulkResetStuckRemediation(
 // StaleWorkRemediator). Wired reasons are the ones with a working respawn
 // action as of this Epic; every other reason returns
 // connect.CodeUnimplemented until a future phase adds it here.
+//
+// Known pre-existing gap, not a regression: domain.StuckReasonRespawnBlockedActive
+// and domain.StuckReasonSteerFailed both fall through to the default case, so
+// BlockerChip's "Retry now" affordance renders for them but this RPC returns
+// CodeUnimplemented on click — wiring automated remediation for either reason
+// is out of scope for pr-fix-steering (see its plan.md Epic 4.3 goal note).
 func (s *BacklogService) remediationActionByReason(reason domain.StuckReason) func(ctx context.Context, itemID string) error {
 	switch reason {
 	case domain.StuckReasonBouncing:
@@ -324,7 +392,7 @@ func (s *BacklogService) TriggerRemediationNow(
 	}
 
 	if justParked {
-		log.InfoLog.Printf("[BacklogService] TriggerRemediationNow item=%s reason=%s: this was the final attempt before parking", req.Msg.ItemId, reason)
+		log.InfoLog().Printf("[BacklogService] TriggerRemediationNow item=%s reason=%s: this was the final attempt before parking", req.Msg.ItemId, reason)
 	}
 
 	return connect.NewResponse(&sessionv1.TriggerRemediationNowResponse{Triggered: true}), nil

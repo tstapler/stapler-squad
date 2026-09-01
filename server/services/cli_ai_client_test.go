@@ -12,6 +12,7 @@ import (
 // prompt to the subprocess's stdin and returns trimmed stdout.
 // Uses `cat` as a stand-in AI binary: it echoes stdin to stdout.
 func TestCLIAIClient_Complete_UsesStdin(t *testing.T) {
+	t.Parallel()
 	catPath, err := exec.LookPath("cat")
 	if err != nil {
 		t.Skip("cat not available")
@@ -40,6 +41,7 @@ func TestCLIAIClient_Complete_UsesStdin(t *testing.T) {
 // TestCLIAIClient_Complete_CancelsOnCtxDone verifies that context cancellation
 // aborts the subprocess before it produces output.
 func TestCLIAIClient_Complete_CancelsOnCtxDone(t *testing.T) {
+	t.Parallel()
 	sleepPath, err := exec.LookPath("sleep")
 	if err != nil {
 		t.Skip("sleep not available")
@@ -70,6 +72,7 @@ func TestCLIAIClient_Complete_CancelsOnCtxDone(t *testing.T) {
 // TestNewCLIAIClient_ReturnsErrorWhenBinaryMissing verifies that a non-existent
 // binary returns an error rather than panicking.
 func TestNewCLIAIClient_ReturnsErrorWhenBinaryMissing(t *testing.T) {
+	t.Parallel()
 	_, err := NewCLIAIClient(CLIAgentSpec{
 		Name:   "no-such-ai-binary",
 		Binary: "no-such-ai-binary-xxxxxx",
@@ -84,6 +87,7 @@ func TestNewCLIAIClient_ReturnsErrorWhenBinaryMissing(t *testing.T) {
 // the factory returns (nil, "") when no API key is set and no known CLI is in PATH.
 // This test does NOT require any external tools.
 func TestNewBestAvailableAIClient_ReturnsNilWhenNothingAvailable(t *testing.T) {
+	t.Parallel()
 	c, backend := NewBestAvailableAIClient("", nil)
 	if c != nil {
 		t.Errorf("expected nil client, got %T (backend=%q)", c, backend)
@@ -96,6 +100,7 @@ func TestNewBestAvailableAIClient_ReturnsNilWhenNothingAvailable(t *testing.T) {
 // TestNewBestAvailableAIClient_FallsBackToAnthropicAPIWhenNoCLI verifies that when
 // no CLI agent is in PATH, a non-empty API key produces an AnthropicAIClient.
 func TestNewBestAvailableAIClient_FallsBackToAnthropicAPIWhenNoCLI(t *testing.T) {
+	t.Parallel()
 	c, backend := NewBestAvailableAIClient("sk-ant-test-key", nil) // nil = no CLI agents
 	if c == nil {
 		t.Fatal("expected non-nil client when API key is set and no CLI available")
@@ -112,6 +117,7 @@ func TestNewBestAvailableAIClient_FallsBackToAnthropicAPIWhenNoCLI(t *testing.T)
 // passes the combined prompt as a positional argument rather than via stdin.
 // Uses `echo` as a stand-in: it prints its argv to stdout.
 func TestCLIAgentSpec_PromptAsArg_appendsPromptToArgv(t *testing.T) {
+	t.Parallel()
 	echoPath, err := exec.LookPath("echo")
 	if err != nil {
 		t.Skip("echo not available")
@@ -136,6 +142,7 @@ func TestCLIAgentSpec_PromptAsArg_appendsPromptToArgv(t *testing.T) {
 
 // TestKnownCLIAgents_agy_hasCorrectSpec verifies agy is registered with PromptAsArg=true.
 func TestKnownCLIAgents_agy_hasCorrectSpec(t *testing.T) {
+	t.Parallel()
 	for _, spec := range knownCLIAgents {
 		if spec.Name == "agy" {
 			if !spec.PromptAsArg {
@@ -152,6 +159,7 @@ func TestKnownCLIAgents_agy_hasCorrectSpec(t *testing.T) {
 
 // TestKnownCLIAgents_opencode_hasPromptAsArg verifies opencode is registered with PromptAsArg=true.
 func TestKnownCLIAgents_opencode_hasPromptAsArg(t *testing.T) {
+	t.Parallel()
 	for _, spec := range knownCLIAgents {
 		if spec.Name == "opencode" {
 			if !spec.PromptAsArg {
@@ -170,6 +178,7 @@ func TestKnownCLIAgents_opencode_hasPromptAsArg(t *testing.T) {
 // the factory falls through to the first available CLI binary.
 // Only runs when the cat binary is available (used as a stand-in for a real AI CLI).
 func TestNewBestAvailableAIClient_FallsBackToCLIWhenNoKey(t *testing.T) {
+	t.Parallel()
 	_, err := exec.LookPath("cat")
 	if err != nil {
 		t.Skip("cat not in PATH")

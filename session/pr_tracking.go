@@ -88,6 +88,41 @@ func (i *Instance) PostComment(body string) error {
 	return nil
 }
 
+// SetCommitStatus posts a commit status to the PR's current head commit via the GitHub
+// Statuses API. It re-fetches PR info first so the status always lands on the current
+// HEAD SHA rather than a stale one cached before a force-push or rebase.
+// Returns an error if this is not a PR session or if the GitHub API call fails.
+func (i *Instance) SetCommitStatus(state github.CommitStatusState, statusContext, description string) error {
+	if !i.IsPRSession() {
+		return fmt.Errorf("instance '%s' is not a PR session", i.Title)
+	}
+
+	prInfo, err := i.RefreshPRInfo()
+	if err != nil {
+		return err
+	}
+
+	req, err := github.NewCommitStatusRequest(prInfo.HeadSHA, state, statusContext, description)
+	if err != nil {
+		return fmt.Errorf("invalid commit status request for instance '%s': %w", i.Title, err)
+	}
+
+	repo, err := github.NewRepoRef(i.GitHubOwner, i.GitHubRepo)
+	if err != nil {
+		return fmt.Errorf("invalid repo ref for instance '%s': %w", i.Title, err)
+	}
+
+	log.Info("setting commit status on PR", "pr", i.GitHubPRNumber, "session", i.Title, "sha", prInfo.HeadSHA, "state", state, "context", statusContext)
+
+	if err := github.SetCommitStatus(repo, req); err != nil {
+		return fmt.Errorf("failed to set commit status for instance '%s': %w", i.Title, err)
+	}
+
+	log.Info("successfully set commit status on PR", "pr", i.GitHubPRNumber, "session", i.Title, "sha", prInfo.HeadSHA, "state", state)
+
+	return nil
+}
+
 // MergePR merges the PR using the specified merge method
 // method can be: "merge", "squash", or "rebase"
 // Returns an error if this is not a PR session or if the GitHub API call fails

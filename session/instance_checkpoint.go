@@ -186,6 +186,7 @@ func (i *Instance) ForkFromCheckpoint(checkpointID, newTitle string, configDir s
 	}
 
 	// Build the new instance.
+	cfg := config.LoadConfig()
 	opts := InstanceOptions{
 		Title:      newTitle,
 		Path:       i.Path,
@@ -195,6 +196,10 @@ func (i *Instance) ForkFromCheckpoint(checkpointID, newTitle string, configDir s
 		Category:   i.Category,
 		Tags:       append([]string(nil), i.Tags...),
 		ResumeId:   newConvUUID,
+		// Backend consults the session-name override map (tymux-bundled-integration
+		// Epic 4.4.3) so a canary override applies through this restore-from-state
+		// path too; there's no per-request override concept here.
+		Backend: ResolveSessionBackendForTitle(cfg, newTitle, ""),
 	}
 
 	newInst, err := NewInstance(opts)

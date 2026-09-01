@@ -14,6 +14,7 @@ import (
 // TestSwitchProgram_SameValue_NoOp verifies that requesting the program the instance
 // already has is a no-op: no persist callback, no restart, changed=false.
 func TestSwitchProgram_SameValue_NoOp(t *testing.T) {
+	t.Parallel()
 	inst := minimalInstance(t)
 	inst.Program = "claude"
 
@@ -33,6 +34,7 @@ func TestSwitchProgram_SameValue_NoOp(t *testing.T) {
 // string ("System default") resolves to config.LoadConfig().DefaultProgram rather than
 // being stored as "" or silently dropped.
 func TestSwitchProgram_EmptyString_ResolvesToConfigDefault(t *testing.T) {
+	t.Parallel()
 	inst := minimalInstance(t)
 	inst.Program = "aider"
 
@@ -49,6 +51,7 @@ func TestSwitchProgram_EmptyString_ResolvesToConfigDefault(t *testing.T) {
 // treated as a no-op (regression guard for the capacity-monitor path, which previously
 // compared the raw "" against inst.Program instead of the resolved default first).
 func TestSwitchProgram_EmptyString_SameAsCurrentDefault_NoOp(t *testing.T) {
+	t.Parallel()
 	inst := minimalInstance(t)
 	_, defaultProgram, err := inst.SwitchProgram(context.Background(), "", nil)
 	require.NoError(t, err)
@@ -68,6 +71,7 @@ func TestSwitchProgram_EmptyString_SameAsCurrentDefault_NoOp(t *testing.T) {
 // TestSwitchProgram_Stopped_PersistsNoRestart verifies that a non-Active instance
 // persists the new program via the persist callback and never attempts a restart.
 func TestSwitchProgram_Stopped_PersistsNoRestart(t *testing.T) {
+	t.Parallel()
 	inst := minimalInstance(t)
 	inst.Program = "claude"
 	inst.Status = Stopped
@@ -91,6 +95,7 @@ func TestSwitchProgram_Stopped_PersistsNoRestart(t *testing.T) {
 // the already-applied program change. An empty Path deterministically fails Restart with
 // "no working directory configured" without touching a real tmux backend.
 func TestSwitchProgram_RestartError_PersistAlreadyRan(t *testing.T) {
+	t.Parallel()
 	inst := minimalInstance(t)
 	inst.Program = "claude"
 	inst.Status = Active
@@ -114,6 +119,7 @@ func TestSwitchProgram_RestartError_PersistAlreadyRan(t *testing.T) {
 // !i.started guard on Restart surfaces as a SwitchProgram error for an Active instance
 // that was loaded without being started (fallback load path).
 func TestSwitchProgram_ActiveStartedFalse_RestartErrorsCannotRestart(t *testing.T) {
+	t.Parallel()
 	inst := minimalInstance(t)
 	inst.Program = "claude"
 	inst.Status = Active
@@ -132,6 +138,7 @@ func TestSwitchProgram_ActiveStartedFalse_RestartErrorsCannotRestart(t *testing.
 // and history file path, so a later switch back doesn't attempt --resume with a stale
 // UUID captured under the old program.
 func TestSwitchProgram_LeavingClaudeFamily_ClearsConversationState(t *testing.T) {
+	t.Parallel()
 	inst := minimalInstance(t)
 	inst.Program = "claude"
 	inst.SetClaudeSession(&ClaudeSessionData{ConversationUUID: "abc-123"})
@@ -149,6 +156,7 @@ func TestSwitchProgram_LeavingClaudeFamily_ClearsConversationState(t *testing.T)
 // resurrect the UUID captured under the first claude session: leaving the family clears
 // it, and returning to claude from a non-family program never restores it.
 func TestSwitchProgram_RoundTrip_NoStaleResume(t *testing.T) {
+	t.Parallel()
 	inst := minimalInstance(t)
 	inst.Program = "claude"
 	inst.SetClaudeSession(&ClaudeSessionData{ConversationUUID: "stale-uuid"})
@@ -168,6 +176,7 @@ func TestSwitchProgram_RoundTrip_NoStaleResume(t *testing.T) {
 // (no clear), not PortSessionHistory's own Import/Export behavior, which performs real
 // file I/O against the adapters' backing stores and is out of scope here.
 func TestSwitchProgram_WithinClaudeAntigravityFamily_PreservesUUID(t *testing.T) {
+	t.Parallel()
 	assert.True(t, isClaudeAntigravityCrossSwitch("claude", "antigravity"))
 	assert.True(t, isClaudeAntigravityCrossSwitch("antigravity", "claude"))
 	assert.True(t, isClaudeAntigravityCrossSwitch("claude", "agy"))
@@ -187,6 +196,7 @@ func TestSwitchProgram_WithinClaudeAntigravityFamily_PreservesUUID(t *testing.T)
 // Gemini CLI's format. If either side of this check is ever widened to include gemini without
 // the other, this test catches the drift.
 func TestGeminiFamilyGate_ConsistentWithAdapterResolution(t *testing.T) {
+	t.Parallel()
 	assert.False(t, isClaudeAntigravityFamily("gemini"))
 	assert.False(t, isClaudeAntigravityCrossSwitch("claude", "gemini"))
 	assert.False(t, isClaudeAntigravityCrossSwitch("gemini", "claude"))
@@ -198,6 +208,7 @@ func TestGeminiFamilyGate_ConsistentWithAdapterResolution(t *testing.T) {
 // history-portable via AgyAdapter, it takes the leaving-the-family ClearConversationState()
 // branch — same as any other non-family program — rather than being dropped on the floor.
 func TestSwitchProgram_ClaudeToGemini_CleanlyClearsConversationState(t *testing.T) {
+	t.Parallel()
 	inst := minimalInstance(t)
 	inst.Program = "claude"
 	inst.SetClaudeSession(&ClaudeSessionData{ConversationUUID: "abc-123"})
@@ -215,6 +226,7 @@ func TestSwitchProgram_ClaudeToGemini_CleanlyClearsConversationState(t *testing.
 // currently makes the ErrNoHistoryAdapter branch reachable in production — this keeps the
 // selection logic itself verified as defense-in-depth against future drift.
 func TestPortHistoryFailureIsExpected(t *testing.T) {
+	t.Parallel()
 	assert.True(t, portHistoryFailureIsExpected(ErrNoHistoryAdapter))
 	assert.True(t, portHistoryFailureIsExpected(fmt.Errorf("wrapped: %w", ErrNoHistoryAdapter)))
 	assert.False(t, portHistoryFailureIsExpected(errors.New("disk full")))
@@ -224,9 +236,10 @@ func TestPortHistoryFailureIsExpected(t *testing.T) {
 // under `go test -race`, part of `make ci`'s test-race target) for AC3: two goroutines
 // calling SwitchProgram on the same instance concurrently — mimicking a manual
 // UpdateSession request racing an automatic capacity-monitor fallback — must serialize
-// through programSwitchMu rather than both reading the pre-change Program and both
+// through restartTriggerMu rather than both reading the pre-change Program and both
 // deciding independently, which is what would let them double-restart/double-port.
 func TestSwitchProgram_ConcurrentCalls_Serialize(t *testing.T) {
+	t.Parallel()
 	inst := minimalInstance(t)
 	inst.Program = "claude"
 

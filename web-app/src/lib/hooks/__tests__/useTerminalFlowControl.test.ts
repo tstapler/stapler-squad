@@ -36,6 +36,15 @@ jest.mock('@/gen/session/v1/events_pb', () => {
   };
 });
 
+// Epic 3.1 — requestFullResync's resync_id/stale_dimensions correlation is
+// gated on the terminal:resync-correlation-id feature flag. Mocked here
+// (default false, matching pre-Epic-3.1 behavior) so existing tests that
+// don't care about the flag aren't affected; individual tests below flip it.
+jest.mock('@/lib/contexts/FeatureFlagsContext', () => ({
+  useFeatureFlag: jest.fn().mockReturnValue(false),
+}));
+
+import { useFeatureFlag } from '@/lib/contexts/FeatureFlagsContext';
 import { useTerminalFlowControl, type UseTerminalFlowControlOptions } from '../useTerminalFlowControl';
 
 // Helper to create a test wrapper with refs
@@ -67,6 +76,7 @@ describe('useTerminalFlowControl', () => {
     jest.useFakeTimers();
     jest.spyOn(console, 'log').mockImplementation(() => {});
     jest.spyOn(console, 'warn').mockImplementation(() => {});
+    (useFeatureFlag as jest.Mock).mockReturnValue(false);
   });
 
   afterEach(() => {
@@ -329,6 +339,125 @@ describe('useTerminalFlowControl', () => {
 
       // Urgent resync should bypass throttle
       expect(pushMessageFn.mock.calls.length).toBeGreaterThan(afterFirst);
+    });
+
+    // Epic 3.1 (AC2), Task 3.1.1.2-4.
+    it('requestFullResync_should_GenerateResyncIdAndAttachToRequest_When_CorrelationFlagOn', () => {
+      (useFeatureFlag as jest.Mock).mockReturnValue(true);
+      const { options, pushMessageFn } = createTestOptions();
+      const { result } = renderHook(() => useTerminalFlowControl(options));
+
+      let returnedId: string | undefined;
+      act(() => {
+        returnedId = result.current.requestFullResync(true);
+      });
+
+      expect(returnedId).toBeTruthy();
+      expect(pushMessageFn).toHaveBeenCalledTimes(1);
+      const msg = pushMessageFn.mock.calls[0][0];
+      expect(msg.data.case).toBe('currentPaneRequest');
+      expect(msg.data.value.resyncId).toBe(returnedId);
+    });
+
+    it('requestFullResync_should_LeaveResyncIdEmptyAndReturnUndefined_When_CorrelationFlagOff', () => {
+      (useFeatureFlag as jest.Mock).mockReturnValue(false);
+      const { options, pushMessageFn } = createTestOptions();
+      const { result } = renderHook(() => useTerminalFlowControl(options));
+
+      let returnedId: string | undefined;
+      act(() => {
+        returnedId = result.current.requestFullResync(true);
+      });
+
+      expect(returnedId).toBeUndefined();
+      const msg = pushMessageFn.mock.calls[0][0];
+      expect(msg.data.value.resyncId).toBe('');
+    });
+
+    // Task 3.1.1.4d, pre-mortem P1 risk: stale_dimensions must NOT be
+    // unconditionally true on every visibility-triggered resync. A genuine
+    // resize while backgrounded (dimensions now differ from the last synced
+    // ones) must report stale_dimensions=false.
+    it('requestFullResync_should_ReportStaleDimensionsFalse_When_TerminalWasResizedWhileBackgrounded', () => {
+      (useFeatureFlag as jest.Mock).mockReturnValue(true);
+      const { options, pushMessageFn, mockTerminal } = createTestOptions();
+      const { result } = renderHook(() => useTerminalFlowControl(options));
+
+      // First resync establishes lastSyncedDimensionsRef via
+      // markPaneResponseReceived.
+      act(() => {
+        result.current.requestFullResync(true, true);
+      });
+      act(() => {
+        result.current.markPaneResponseReceived();
+      });
+
+      // Terminal is resized while backgrounded before the next resync.
+      mockTerminal.cols = 100;
+      mockTerminal.rows = 30;
+
+      act(() => {
+        jest.advanceTimersByTime(2100); // clear the 2s throttle
+      });
+
+      let msg: any;
+      act(() => {
+        result.current.requestFullResync(true, true);
+      });
+      msg = pushMessageFn.mock.calls[pushMessageFn.mock.calls.length - 1][0];
+
+      expect(msg.data.value.staleDimensions).toBe(false);
+    });
+
+    it('requestFullResync_should_ReportStaleDimensionsTrue_When_DimensionsUnchangedSinceLastSync', () => {
+      (useFeatureFlag as jest.Mock).mockReturnValue(true);
+      const { options, pushMessageFn } = createTestOptions();
+      const { result } = renderHook(() => useTerminalFlowControl(options));
+
+      act(() => {
+        result.current.requestFullResync(true, true);
+      });
+      act(() => {
+        result.current.markPaneResponseReceived();
+      });
+
+      act(() => {
+        jest.advanceTimersByTime(2100);
+      });
+
+      let msg: any;
+      act(() => {
+        result.current.requestFullResync(true, true);
+      });
+      msg = pushMessageFn.mock.calls[pushMessageFn.mock.calls.length - 1][0];
+
+      expect(msg.data.value.staleDimensions).toBe(true);
+    });
+
+    it('requestFullResync_should_ReportStaleDimensionsFalse_When_NotVisibilityTriggered', () => {
+      (useFeatureFlag as jest.Mock).mockReturnValue(true);
+      const { options, pushMessageFn } = createTestOptions();
+      const { result } = renderHook(() => useTerminalFlowControl(options));
+
+      act(() => {
+        result.current.requestFullResync(true, true);
+      });
+      act(() => {
+        result.current.markPaneResponseReceived();
+      });
+
+      act(() => {
+        jest.advanceTimersByTime(2100);
+      });
+
+      let msg: any;
+      act(() => {
+        // Not a visibility-triggered resync this time.
+        result.current.requestFullResync(true, false);
+      });
+      msg = pushMessageFn.mock.calls[pushMessageFn.mock.calls.length - 1][0];
+
+      expect(msg.data.value.staleDimensions).toBe(false);
     });
   });
 

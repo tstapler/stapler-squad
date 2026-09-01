@@ -25,6 +25,7 @@ func newTestStateStore(t *testing.T) (*StateStore, string) {
 // ---- UT-021: Dismiss persists across reload --------------------------------
 
 func TestStateDismissPersistsAcrossReload(t *testing.T) {
+	t.Parallel()
 	// Use a real directory so cleanupStaleEntries doesn't remove the entry.
 	repoDir := t.TempDir()
 	dir := t.TempDir()
@@ -45,6 +46,7 @@ func TestStateDismissPersistsAcrossReload(t *testing.T) {
 }
 
 func TestStateDismissIdempotent(t *testing.T) {
+	t.Parallel()
 	repoDir := t.TempDir()
 	store, _ := newTestStateStore(t)
 	require.NoError(t, store.Dismiss(repoDir, "main"))
@@ -61,6 +63,7 @@ func TestStateDismissIdempotent(t *testing.T) {
 }
 
 func TestStateUndismiss(t *testing.T) {
+	t.Parallel()
 	repoDir := t.TempDir()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "state.json")
@@ -80,6 +83,7 @@ func TestStateUndismiss(t *testing.T) {
 // ---- UT-022: Snooze auto-clears when SHA changes --------------------------
 
 func TestStateSnoozeAutoClears(t *testing.T) {
+	t.Parallel()
 	store, _ := newTestStateStore(t)
 
 	const sha1 = "abc123"
@@ -99,6 +103,7 @@ func TestStateSnoozeAutoClears(t *testing.T) {
 }
 
 func TestStateUnsnoozePersists(t *testing.T) {
+	t.Parallel()
 	repoDir := t.TempDir()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "state.json")
@@ -117,6 +122,7 @@ func TestStateUnsnoozePersists(t *testing.T) {
 // ---- UT-023: Cleanup removes stale dismissed/snoozed entries ---------------
 
 func TestStateCleanupRemovesStaleEntries(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "state.json")
 
@@ -149,6 +155,7 @@ func TestStateCleanupRemovesStaleEntries(t *testing.T) {
 // ---- UT-024: Atomic write (temp file + rename) ----------------------------
 
 func TestStateAtomicWrite(t *testing.T) {
+	t.Parallel()
 	store, path := newTestStateStore(t)
 	require.NoError(t, store.Dismiss("/repo/a", "main"))
 
@@ -165,6 +172,7 @@ func TestStateAtomicWrite(t *testing.T) {
 // ---- UT-025: AI summary cache round-trip and TTL --------------------------
 
 func TestStateAISummaryCacheRoundTrip(t *testing.T) {
+	t.Parallel()
 	store, path := newTestStateStore(t)
 
 	// Miss on empty cache.
@@ -190,6 +198,7 @@ func TestStateAISummaryCacheRoundTrip(t *testing.T) {
 }
 
 func TestStateAISummaryCacheEvictsExpired(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "state.json")
 
@@ -220,6 +229,7 @@ func TestStateAISummaryCacheEvictsExpired(t *testing.T) {
 // ---- UT-027: ComputeDiffHash — same diff produces same hash ----------------
 
 func TestComputeDiffHashSameOutput(t *testing.T) {
+	t.Parallel()
 	// Create a minimal git repo so `git diff HEAD` works.
 	dir := t.TempDir()
 
@@ -264,4 +274,38 @@ func runCmd(name string, args ...string) (string, error) {
 	cmd := safeexec.CommandContext(context.Background(), name, args...)
 	out, err := cmd.CombinedOutput()
 	return string(out), err
+}
+
+// ---- Scan result cache persistence (restart survival) ----------------------
+
+func TestStateScanCachePersistsAcrossReload(t *testing.T) {
+	t.Parallel()
+	store, path := newTestStateStore(t)
+
+	entries := []scanCacheEntry{
+		{
+			Result:   ScanResult{RepoPath: "/repo/a", Branch: "main", WorktreePath: "/repo/a", HasUncommitted: true},
+			ScanTime: time.Now(),
+		},
+	}
+	require.NoError(t, store.SaveScanCache(entries))
+
+	loaded := store.LoadScanCache()
+	require.Len(t, loaded, 1)
+	assert.Equal(t, "/repo/a", loaded[0].Result.WorktreePath)
+	assert.True(t, loaded[0].Result.HasUncommitted)
+
+	// Reload from disk in a fresh StateStore — this is what a restarted
+	// process sees.
+	store2, err := NewStateStore(path)
+	require.NoError(t, err)
+	loaded2 := store2.LoadScanCache()
+	require.Len(t, loaded2, 1, "scan cache should survive a reload from disk")
+	assert.Equal(t, "/repo/a", loaded2[0].Result.WorktreePath)
+}
+
+func TestStateScanCache_EmptyByDefault(t *testing.T) {
+	t.Parallel()
+	store, _ := newTestStateStore(t)
+	assert.Empty(t, store.LoadScanCache())
 }

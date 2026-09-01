@@ -102,6 +102,11 @@ func (s *InsightsService) GetInsightsSummary(
 
 	sessions := make([]*sessionv1.SessionTokenSummary, 0, len(results))
 
+	var sessionSnapshot []tokens.SessionRecord
+	if s.associator != nil {
+		sessionSnapshot = s.associator.Snapshot()
+	}
+
 	for _, r := range results {
 		if r == nil {
 			continue
@@ -128,7 +133,7 @@ func (s *InsightsService) GetInsightsSummary(
 		// Determine session ID and orphan status.
 		sessionID, isOrphan := "", true
 		if s.associator != nil {
-			sessionID, isOrphan = s.associator.Associate(r)
+			sessionID, isOrphan = s.associator.AssociateWithSnapshot(r, sessionSnapshot)
 		}
 
 		// Apply orphan filter.
@@ -362,6 +367,10 @@ func (s *InsightsService) ListSessionTokens(
 	// Build session summaries.
 	summaries := make([]*sessionv1.SessionTokenSummary, 0, len(results))
 	allUnpricedFamilies := make(map[string]bool) // union of unpriced families across all sessions in this call
+	var sessionSnapshot []tokens.SessionRecord
+	if s.associator != nil {
+		sessionSnapshot = s.associator.Snapshot()
+	}
 	for _, r := range results {
 		if r == nil {
 			continue
@@ -376,7 +385,7 @@ func (s *InsightsService) ListSessionTokens(
 
 		sessionID, isOrphan := "", true
 		if s.associator != nil {
-			sessionID, isOrphan = s.associator.Associate(r)
+			sessionID, isOrphan = s.associator.AssociateWithSnapshot(r, sessionSnapshot)
 		}
 
 		costUSD, unpriced := s.pricing.EstimateCost(r)
@@ -710,8 +719,8 @@ func buildTopToolEntries(toolCounts map[string]int64, limit int) []*sessionv1.To
 	result := make([]*sessionv1.TopEntry, 0, len(sorted))
 	for _, e := range sorted {
 		result = append(result, &sessionv1.TopEntry{
-			Name:       e.name,
-			TokenCount: e.count,
+			Name:            e.name,
+			ActivationCount: int32(e.count), //nolint:gosec
 		})
 	}
 	return result

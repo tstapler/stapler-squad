@@ -100,6 +100,14 @@ func (p *PRStatusPoller) PollInterval() time.Duration {
 	return p.config.PollInterval
 }
 
+// ETagCache returns the poller's shared *github.ETagCache, so other pollers
+// (e.g. WorktreePRPoller) reuse the same conditional-request cache instead of
+// each maintaining their own — per ADR-022, a separate cache would double
+// GitHub API call volume for repos both pollers hit.
+func (p *PRStatusPoller) ETagCache() *github.ETagCache {
+	return p.etagCache
+}
+
 // SetInstances replaces the full list of monitored instances.
 func (p *PRStatusPoller) SetInstances(instances []*Instance) {
 	p.mu.Lock()
@@ -389,22 +397,23 @@ func (p *PRStatusPoller) applyPRUpdate(inst *Instance, prInfo *github.PRInfo) {
 	priority := string(github.DerivePRPriority(prInfo))
 	terminal := github.IsTerminal(github.PRPriority(priority))
 
-	state, checkConclusion := "", ""
-	approvedCount, changesReqCount := 0, 0
-	isDraft := false
+	update := PRStatusUpdate{Priority: priority, Terminal: terminal}
 	if prInfo != nil {
-		state = prInfo.State
-		checkConclusion = prInfo.CheckConclusion
-		approvedCount = prInfo.ApprovedCount
-		changesReqCount = prInfo.ChangesRequestedCount
-		isDraft = prInfo.IsDraft
+		update.State = prInfo.State
+		update.CheckConclusion = prInfo.CheckConclusion
+		update.Mergeable = prInfo.Mergeable
+		update.ApprovedCount = prInfo.ApprovedCount
+		update.ChangesReqCount = prInfo.ChangesRequestedCount
+		update.IsDraft = prInfo.IsDraft
+		update.Checks = prInfo.Checks
+		update.Reviews = prInfo.Reviews
 	}
 
-	result := inst.UpdatePRStatus(state, priority, checkConclusion, approvedCount, changesReqCount, isDraft, terminal)
+	result := inst.UpdatePRStatus(update)
 
 	if p.storage != nil {
-		if err := p.storage.UpdateInstancePRStatus(inst.Title, state, priority, checkConclusion,
-			approvedCount, changesReqCount, isDraft, terminal); err != nil {
+		if err := p.storage.UpdateInstancePRStatus(inst.Title, update.State, priority, update.CheckConclusion,
+			update.ApprovedCount, update.ChangesReqCount, update.IsDraft, terminal); err != nil {
 			log.Warn("PR status poller: failed to persist PR status", "session", inst.Title, "err", err)
 		}
 	}
@@ -424,7 +433,7 @@ func (p *PRStatusPoller) applyPRUpdate(inst *Instance, prInfo *github.PRInfo) {
 			log.Info("PR status poller: PR priority changed", "session", inst.Title, "new", priority)
 		}
 		if result.CheckConclusionChanged {
-			log.Info("PR status poller: CI check conclusion changed", "session", inst.Title, "new", checkConclusion)
+			log.Info("PR status poller: CI check conclusion changed", "session", inst.Title, "new", update.CheckConclusion)
 		}
 	}
 }

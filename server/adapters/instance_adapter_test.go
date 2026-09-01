@@ -3,10 +3,14 @@ package adapters
 import (
 	"testing"
 
+	"golang.org/x/crypto/ssh"
+
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/detection"
 	"github.com/tstapler/stapler-squad/session/detection/ratelimit"
+	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
 func TestRateLimitStateToProto_AllStates(t *testing.T) {
@@ -30,6 +34,45 @@ func TestRateLimitStateToProto_AllStates(t *testing.T) {
 				t.Errorf("rateLimitStateToProto(%v) = %v, want %v", tc.input, got, tc.expected)
 			}
 		})
+	}
+}
+
+func TestReviveOutcomeToProto_AllOutcomes(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    session.ReviveOutcome
+		expected sessionv1.ReviveOutcome
+	}{
+		{"ResumeLive", session.ReviveOutcomeResumeLive, sessionv1.ReviveOutcome_REVIVE_OUTCOME_RESUME_LIVE},
+		{"ResumeRecovered", session.ReviveOutcomeResumeRecovered, sessionv1.ReviveOutcome_REVIVE_OUTCOME_RESUME_RECOVERED},
+		{"FreshExpected", session.ReviveOutcomeFreshExpected, sessionv1.ReviveOutcome_REVIVE_OUTCOME_FRESH_EXPECTED},
+		{"FreshLostHistory", session.ReviveOutcomeFreshLostHistory, sessionv1.ReviveOutcome_REVIVE_OUTCOME_FRESH_LOST_HISTORY},
+		{"Unspecified", session.ReviveOutcomeUnspecified, sessionv1.ReviveOutcome_REVIVE_OUTCOME_UNSPECIFIED},
+		{"Unknown value defaults to Unspecified", session.ReviveOutcome("bogus"), sessionv1.ReviveOutcome_REVIVE_OUTCOME_UNSPECIFIED},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := reviveOutcomeToProto(tc.input)
+			if got != tc.expected {
+				t.Errorf("reviveOutcomeToProto(%v) = %v, want %v", tc.input, got, tc.expected)
+			}
+		})
+	}
+}
+
+// TestInstanceToProto_ReviveOutcome verifies InstanceToProto wires
+// Instance.LastReviveOutcome through to protoSession.ReviveOutcome — the
+// wire-format boundary a swapped reviveOutcomeToProto case would silently
+// corrupt without failing any other test.
+func TestInstanceToProto_ReviveOutcome(t *testing.T) {
+	inst := &session.Instance{LastReviveOutcome: session.ReviveOutcomeFreshLostHistory}
+	proto := InstanceToProto(inst, nil)
+	if proto == nil {
+		t.Fatal("expected non-nil proto for non-nil instance")
+	}
+	if proto.ReviveOutcome != sessionv1.ReviveOutcome_REVIVE_OUTCOME_FRESH_LOST_HISTORY {
+		t.Errorf("expected ReviveOutcome=FRESH_LOST_HISTORY, got %v", proto.ReviveOutcome)
 	}
 }
 
@@ -64,6 +107,53 @@ func TestInstanceToProto_RateLimitEnabled_ExplicitFalse(t *testing.T) {
 	}
 	if proto.RateLimitEnabled {
 		t.Errorf("expected RateLimitEnabled=false when explicitly disabled, got true")
+	}
+}
+
+// TestInstanceToProto_SubagentCount_DefaultZero verifies that a fresh instance with no
+// registered status manager/controller (the common case: Active status but nothing
+// wired up yet) maps to SubagentCount=0 rather than leaving the proto field unset in a
+// way that would panic or read garbage — statusInfo is the zero-value InstanceStatusInfo
+// in that path (see the "set unconditionally" comment on the SubagentCount assignment).
+func TestInstanceToProto_SubagentCount_DefaultZero(t *testing.T) {
+	inst := &session.Instance{}
+	proto := InstanceToProto(inst, nil)
+	if proto == nil {
+		t.Fatal("expected non-nil proto for non-nil instance")
+	}
+	if proto.SubagentCount != 0 {
+		t.Errorf("SubagentCount = %d, want 0 for an instance with no status manager", proto.SubagentCount)
+	}
+}
+
+// TestInstanceToProto_RemoteName_EmptyForLocal verifies a plain (LocalTarget)
+// instance's RemoteName proto field stays empty -- a local session's card
+// must never show the Epic 6.2 host badge.
+func TestInstanceToProto_RemoteName_EmptyForLocal(t *testing.T) {
+	inst := &session.Instance{} // ExecutionTarget nil → defaults to LocalTarget{}
+	proto := InstanceToProto(inst, nil)
+	if proto == nil {
+		t.Fatal("expected non-nil proto for non-nil instance")
+	}
+	if proto.RemoteName != "" {
+		t.Errorf("RemoteName = %q, want empty for a local session", proto.RemoteName)
+	}
+}
+
+// TestInstanceToProto_RemoteName_SetForRemote verifies a session.Instance
+// whose ExecutionTarget is a RemoteExecutionTarget surfaces the remote's
+// name on the proto Session -- the data source for the SessionCard host
+// badge (ssh-remote-workspaces Epic 6.2).
+func TestInstanceToProto_RemoteName_SetForRemote(t *testing.T) {
+	runner := tmux.NewSSHRunner(tmux.SSHTarget{Name: "prod-box", Addr: "prod-box.example.com:22"}, ssh.ClientConfig{})
+	target := session.NewRemoteExecutionTarget(session.RemoteTarget{Name: "prod-box"}, runner)
+	inst := &session.Instance{ExecutionTarget: target}
+	proto := InstanceToProto(inst, nil)
+	if proto == nil {
+		t.Fatal("expected non-nil proto for non-nil instance")
+	}
+	if proto.RemoteName != "prod-box" {
+		t.Errorf("RemoteName = %q, want %q", proto.RemoteName, "prod-box")
 	}
 }
 
@@ -143,6 +233,52 @@ func TestToProtoSubStatus_WaitingForAgent(t *testing.T) {
 	}
 }
 
+// TestToProtoSubStatus_CoversAllDetectedStatusValues is a mandatory (not optional)
+// table-driven guard, added during Phase 4 pre-mortem repair (P1 #2): it iterates every
+// named detection.DetectedStatus value that has a defined SubStatus mapping and asserts
+// BOTH toProtoSubStatusFromInfo (instance_adapter.go, the live session list/watch RPC
+// path) and subStatusFromItem (review_queue_adapter.go) return a non-UNSPECIFIED value.
+// This is the actual RPC-facing pair — neither is exhaustive-lint-enforced (server/
+// adapters is excluded per .golangci.yml) — so this test is what catches one switch
+// being updated while the other is silently missed, a discrepancy that otherwise looks
+// like a frontend bug (backend detects the status; the browser never shows the chip).
+func TestToProtoSubStatus_CoversAllDetectedStatusValues(t *testing.T) {
+	statuses := []detection.DetectedStatus{
+		detection.StatusReady,
+		detection.StatusProcessing,
+		detection.StatusExecuting,
+		detection.StatusNeedsApproval,
+		detection.StatusInputRequired,
+		detection.StatusError,
+		detection.StatusTestsFailing,
+		detection.StatusIdle,
+		detection.StatusSuccess,
+		detection.StatusWaitingForAgent,
+		detection.StatusCompacting,
+	}
+
+	for _, status := range statuses {
+		t.Run(status.String(), func(t *testing.T) {
+			info := session.InstanceStatusInfo{IsControllerActive: true, ClaudeStatus: status}
+			gotInstance := toProtoSubStatusFromInfo(session.Active, 0, info)
+			if gotInstance == sessionv1.SubStatus_SUB_STATUS_UNSPECIFIED {
+				t.Errorf("toProtoSubStatusFromInfo(%s) = SUB_STATUS_UNSPECIFIED, want a defined mapping", status)
+			}
+
+			item := &session.ReviewItem{ClaudeStatus: status}
+			gotReviewQueue := subStatusFromItem(item)
+			if gotReviewQueue == sessionv1.SubStatus_SUB_STATUS_UNSPECIFIED {
+				t.Errorf("subStatusFromItem(%s) = SUB_STATUS_UNSPECIFIED, want a defined mapping", status)
+			}
+
+			if gotInstance != gotReviewQueue {
+				t.Errorf("toProtoSubStatusFromInfo(%s) = %v but subStatusFromItem(%s) = %v — the two adapters must agree",
+					status, gotInstance, status, gotReviewQueue)
+			}
+		})
+	}
+}
+
 // ─── U-GO-36: TestInstanceToProto_omitsGoalSummaryWhenNil ─────────────────────
 
 func TestStatusToProto_AllStates(t *testing.T) {
@@ -203,5 +339,83 @@ func TestInstanceToProto_omitsGoalSummaryWhenNil(t *testing.T) {
 	}
 	if proto.Goal != nil {
 		t.Errorf("expected Goal to be nil when inst.SessionGoal is nil, got %+v", proto.Goal)
+	}
+}
+
+// TestInstanceToProto_should_MapChecksAndReviewFeedback_When_Populated verifies
+// GithubChecks/GithubReviewFeedback/GithubMergeable populate field-for-field from
+// Instance.GitHubChecks/GitHubReviewFeedback/GitHubMergeable, matching the existing
+// sibling GitHub-status field GithubCheckConclusion.
+func TestInstanceToProto_should_MapChecksAndReviewFeedback_When_Populated(t *testing.T) {
+	inst := &session.Instance{
+		GitHubCheckConclusion: "success",
+		GitHubChecks: []github.CheckItem{
+			{Name: "build", Context: "ci/build", State: "SUCCESS", Status: "COMPLETED", Conclusion: "SUCCESS"},
+			{Name: "lint", Context: "ci/lint", State: "FAILURE", Status: "COMPLETED", Conclusion: "FAILURE"},
+		},
+		GitHubReviewFeedback: []github.ReviewItem{
+			{Author: "alice", State: "APPROVED", Body: "LGTM"},
+			{Author: "bob", State: "CHANGES_REQUESTED", Body: "please fix X"},
+		},
+		GitHubMergeable: "mergeable",
+	}
+
+	proto := InstanceToProto(inst, nil)
+	if proto == nil {
+		t.Fatal("expected non-nil proto")
+	}
+
+	if proto.GithubMergeable != "mergeable" {
+		t.Errorf("GithubMergeable = %q, want %q", proto.GithubMergeable, "mergeable")
+	}
+
+	if len(proto.GithubChecks) != 2 {
+		t.Fatalf("expected 2 GithubChecks, got %d", len(proto.GithubChecks))
+	}
+	wantChecks := []struct{ name, context, state, status, conclusion string }{
+		{"build", "ci/build", "SUCCESS", "COMPLETED", "SUCCESS"},
+		{"lint", "ci/lint", "FAILURE", "COMPLETED", "FAILURE"},
+	}
+	for i, want := range wantChecks {
+		got := proto.GithubChecks[i]
+		if got.Name != want.name || got.Context != want.context || got.State != want.state ||
+			got.Status != want.status || got.Conclusion != want.conclusion {
+			t.Errorf("GithubChecks[%d] = %+v, want %+v", i, got, want)
+		}
+	}
+
+	if len(proto.GithubReviewFeedback) != 2 {
+		t.Fatalf("expected 2 GithubReviewFeedback, got %d", len(proto.GithubReviewFeedback))
+	}
+	wantReviews := []struct{ author, state, body string }{
+		{"alice", "APPROVED", "LGTM"},
+		{"bob", "CHANGES_REQUESTED", "please fix X"},
+	}
+	for i, want := range wantReviews {
+		got := proto.GithubReviewFeedback[i]
+		if got.Author != want.author || got.State != want.state || got.Body != want.body {
+			t.Errorf("GithubReviewFeedback[%d] = %+v, want %+v", i, got, want)
+		}
+	}
+}
+
+// TestInstanceToProto_should_ProduceEmptySlices_When_ChecksAndReviewFeedbackNil verifies
+// the nil/empty case doesn't panic and produces empty (non-nil-required) slices.
+func TestInstanceToProto_should_ProduceEmptySlices_When_ChecksAndReviewFeedbackNil(t *testing.T) {
+	inst := &session.Instance{}
+
+	proto := InstanceToProto(inst, nil)
+	if proto == nil {
+		t.Fatal("expected non-nil proto")
+	}
+
+	if len(proto.GithubChecks) != 0 {
+		t.Errorf("expected empty GithubChecks, got %+v", proto.GithubChecks)
+	}
+	if len(proto.GithubReviewFeedback) != 0 {
+		t.Errorf("expected empty GithubReviewFeedback, got %+v", proto.GithubReviewFeedback)
+	}
+	if proto.GithubMergeable != "" {
+		t.Errorf("expected empty GithubMergeable, got %q", proto.GithubMergeable)
 	}
 }
