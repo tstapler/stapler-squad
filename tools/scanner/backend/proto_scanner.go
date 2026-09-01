@@ -56,6 +56,7 @@ var methodToID = map[string]string{ //nolint:gochecknoglobals
 	"FocusWindow":               "window:focus",
 	"RenameSession":             "session:rename",
 	"RestartSession":            "session:restart",
+	"RetrySession":              "session:retry",
 	"GetWorkspaceInfo":          "workspace:get-info",
 	"ListWorkspaceTargets":      "workspace:list-targets",
 	"SwitchWorkspace":           "workspace:switch",

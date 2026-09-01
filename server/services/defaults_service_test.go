@@ -314,6 +314,35 @@ func TestUpdateGlobalDefaults_PersistsExplicitStaleSessionOverride(t *testing.T)
 	assert.False(t, *persisted.StaleSession.NotifyEnabled)
 }
 
+// TestUpdateGlobalDefaults_NormalizesInvalidRetryBackoffBeforePersisting pins the
+// fix for an invalid RetryPolicy.Backoff value (e.g. a typo) persisting
+// un-normalized in config.json: LoadConfigFromPath normalizes via
+// BackoffOrWarn() at boot, but UpdateGlobalDefaults stored rp.Backoff
+// verbatim, so an invalid value would sit un-normalized until the next
+// restart. It must be normalized to "exponential" immediately, matching
+// boot-time behavior.
+func TestUpdateGlobalDefaults_NormalizesInvalidRetryBackoffBeforePersisting(t *testing.T) {
+	svc := newIsolatedDefaultsService(t)
+
+	resp, err := svc.UpdateGlobalDefaults(context.Background(), connect.NewRequest(&sessionv1.UpdateGlobalDefaultsRequest{
+		RetryPolicy: &sessionv1.RetryPolicyConfig{
+			Backoff: "not-a-real-strategy",
+		},
+	}))
+	require.NoError(t, err)
+	require.NotNil(t, resp.Msg.Defaults)
+	assert.Equal(t, "exponential", resp.Msg.Defaults.RetryPolicy.Backoff)
+
+	configDir, err := config.GetConfigDir()
+	require.NoError(t, err)
+	data, err := os.ReadFile(filepath.Join(configDir, config.ConfigFileName))
+	require.NoError(t, err)
+
+	var persisted config.Config
+	require.NoError(t, json.Unmarshal(data, &persisted))
+	assert.Equal(t, "exponential", persisted.RetryPolicy.Backoff)
+}
+
 // TestUpsertProfile_EmptyName verifies that UpsertProfile with an empty profile name
 // returns CodeInvalidArgument.
 func TestUpsertProfile_EmptyName(t *testing.T) {

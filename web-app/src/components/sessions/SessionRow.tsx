@@ -59,6 +59,7 @@ interface SessionRowProps {
   onOpenInNewPane?: () => void;
   onNewWorkspace?: () => void;
   onRestart?: (sessionId: string) => Promise<boolean | void>;
+  onRetryNow?: (sessionId: string) => Promise<boolean | void>;
   onCreateCheckpoint?: (sessionId: string, label: string) => Promise<boolean>;
   onSetRateLimitEnabled?: (sessionId: string, enabled: boolean) => void;
   onToggleAutonomousMode?: (sessionId: string, enabled: boolean) => void;
@@ -106,6 +107,8 @@ function getStatusDotValue(status: SessionStatus): string {
     case SessionStatus.HIBERNATED:
       return "hibernated";
     case SessionStatus.CRASHED:
+      return "crashed";
+    case SessionStatus.PERMANENTLY_FAILED:
       return "crashed";
     default:
       return "idle";
@@ -176,6 +179,7 @@ function SessionRowInner({
   onOpenInNewPane,
   onNewWorkspace,
   onRestart,
+  onRetryNow,
   onCreateCheckpoint,
   onSetRateLimitEnabled,
   onToggleAutonomousMode,
@@ -564,6 +568,7 @@ function SessionRowInner({
           onOpenInNewPane={onOpenInNewPane}
           onNewWorkspace={onNewWorkspace}
           onRestart={onRestart}
+          onRetryNow={onRetryNow}
           onCreateCheckpoint={onCreateCheckpoint}
           onSetRateLimitEnabled={onSetRateLimitEnabled}
           onToggleAutonomousMode={onToggleAutonomousMode}

@@ -1092,6 +1092,9 @@ message ImportGitHubIssueRequest {
 message ImportGitHubIssueResponse {
   BacklogItem item = 1;
   bool triage_triggered = 2;
+  // True when issue_url was already imported — `item` is the existing backlog
+  // item, not a newly-created one, and no new triage was triggered.
+  bool already_existed = 3;
 }
 
 message CancelTriageRequest {

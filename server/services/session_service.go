@@ -776,6 +776,7 @@ func (s *SessionService) loadInstancesWithWiring() ([]*session.Instance, error) 
 	// Wire up dependencies on loaded instances
 	for _, inst := range instances {
 		inst.SetReviewQueue(s.reviewQueueSvc.GetQueue())
+		inst.SetNotifier(&EventBusNotifier{Bus: s.eventBus})
 		if s.statusManager != nil {
 			inst.SetStatusManager(s.statusManager)
 		}
@@ -1028,6 +1029,18 @@ func (s *SessionService) TimeSinceLastMeaningfulOutput(sessionUUID string) (time
 		return 0, false
 	}
 	return inst.GetTimeSinceLastMeaningfulOutput(), true
+}
+
+// IsRetryPending satisfies the BacklogService.SessionStopper interface. It
+// reports whether sessionUUID's live Instance currently has a driver-managed
+// automated retry claimed or scheduled (session-retry-backoff AC8). Returns
+// false if the session isn't tracked live.
+func (s *SessionService) IsRetryPending(sessionUUID string) bool {
+	inst := s.FindLiveInstance(sessionUUID)
+	if inst == nil {
+		return false
+	}
+	return inst.IsRetryPending()
 }
 
 // KillTmuxPaneOnly satisfies the BacklogService.SessionStopper interface.
@@ -1302,6 +1315,7 @@ func (s *SessionService) SetRegistry(r *session.Registry) {
 // never on refcount++ hits, never on Register (CreateSession wires callbacks explicitly).
 func (s *SessionService) WireInstanceCallbacks(inst *session.LiveInstance) {
 	inst.SetReviewQueue(s.reviewQueueSvc.GetQueue())
+	inst.SetNotifier(&EventBusNotifier{Bus: s.eventBus})
 	if s.statusManager != nil {
 		inst.SetStatusManager(s.statusManager)
 	}
@@ -4486,6 +4500,62 @@ func (s *SessionService) RestartSession(
 	log.Info(message)
 
 	return connect.NewResponse(&sessionv1.RestartSessionResponse{
+		Session: adapters.InstanceToProto(instance, s.workflowNames()),
+		Success: true,
+		Message: message,
+	}), nil
+}
+
+// RetrySession immediately restarts a session's configurable retry policy
+// (session-retry-backoff), bypassing any pending backoff delay — including
+// from SESSION_STATUS_PERMANENTLY_FAILED. Clones RestartSession's
+// instance-lookup/persist/publish shape, calling inst.RetryNow() instead of
+// inst.Restart().
+// +api: session:retry
+func (s *SessionService) RetrySession(
+	ctx context.Context,
+	req *connect.Request[sessionv1.RetrySessionRequest],
+) (*connect.Response[sessionv1.RetrySessionResponse], error) {
+	if req.Msg.Id == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("session id is required"))
+	}
+
+	instance := s.FindLiveInstance(req.Msg.Id)
+	if instance == nil {
+		instances, err := s.loadInstancesWithWiring()
+		if err != nil {
+			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to load instances: %w", err))
+		}
+		for _, inst := range instances {
+			if inst.MatchesID(req.Msg.Id) {
+				instance = inst
+				break
+			}
+		}
+	}
+
+	if instance == nil {
+		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("session not found: %s", req.Msg.Id))
+	}
+
+	if err := instance.RetryNow(instance.GetEffectiveRootDir()); err != nil {
+		if errors.Is(err, session.ErrRetryInFlight) {
+			return nil, connect.NewError(connect.CodeFailedPrecondition, err)
+		}
+		log.Error("[RetrySession] failed to retry session", "session", instance.Title, "err", err)
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to retry session: %w", err))
+	}
+
+	if err := s.storage.SaveInstances([]*session.Instance{instance}); err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save retried instance: %w", err))
+	}
+
+	s.eventBus.Publish(events.NewSessionUpdatedEvent(instance, []string{"status", "updated_at", "retry_attempt"}))
+
+	message := fmt.Sprintf("Session '%s' retry started", instance.Title)
+	log.Info(message)
+
+	return connect.NewResponse(&sessionv1.RetrySessionResponse{
 		Session: adapters.InstanceToProto(instance, s.workflowNames()),
 		Success: true,
 		Message: message,

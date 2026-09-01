@@ -1,6 +1,7 @@
 package session
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -466,6 +467,60 @@ func TestHealthCheckerRecovery_PreExistingSessionAtRestart_StillRespawnsWithinGr
 	snap := inst.Snapshot()
 	if snap.Status == Crashed || snap.Status == Stopped {
 		t.Errorf("expected no user-visible status transition during the grace period, got %s", snap.Status)
+	}
+}
+
+// TestHealthCheckerRecovery_PermanentlyFailedInstance_SkippedNotAutoRestarted
+// pins ADR-001: PermanentlyFailed is a terminal state reached only via an
+// explicit user-initiated Retry now, not something the health checker may
+// silently resurrect. Before this fix, checkSingleSession's terminal-state
+// skip switch handled Stopped and Crashed but not PermanentlyFailed, so a
+// PermanentlyFailed instance fell through to the same "!TmuxAlive()" branch
+// as any other started-but-dead session and got auto-restarted via
+// instance.Start(false) once the debounce threshold was reached.
+func TestHealthCheckerRecovery_PermanentlyFailedInstance_SkippedNotAutoRestarted(t *testing.T) {
+	t.Parallel()
+	checker := NewSessionHealthChecker(nil)
+
+	mock := &mockTmuxManager{hasSessionReturn: false} // TmuxAlive() would be false
+	inst := &Instance{Title: "permanently-failed-test", Status: PermanentlyFailed}
+	inst.started.Store(true)
+	inst.processManager = NewTmuxBackend(mock)
+
+	// Call past the debounce threshold -- if the skip didn't fire, the second
+	// call would reach the recovery path and invoke Start().
+	for i := 0; i < 2; i++ {
+		result := checker.checkSingleSession(inst, nil)
+		if !result.IsHealthy {
+			t.Errorf("call %d: expected IsHealthy=true (session skipped, not failing)", i+1)
+		}
+		if result.RecoveryAttempted {
+			t.Errorf("call %d: expected RecoveryAttempted=false for a PermanentlyFailed instance", i+1)
+		}
+		found := false
+		for _, a := range result.Actions {
+			if strings.Contains(a, "permanently failed") {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("call %d: expected an Actions entry noting the skip, got %v", i+1, result.Actions)
+		}
+	}
+
+	if mock.startCalls != 0 {
+		t.Errorf("expected instance.Start to never be called for a PermanentlyFailed instance, got %d Start() calls", mock.startCalls)
+	}
+
+	checker.failureCountsMu.Lock()
+	count := checker.failureCounts[inst.Title]
+	checker.failureCountsMu.Unlock()
+	if count != 0 {
+		t.Errorf("expected failure count to stay 0 (skip returns before the debounce path is reached), got %d", count)
+	}
+
+	if inst.Snapshot().Status != PermanentlyFailed {
+		t.Errorf("expected Status to remain PermanentlyFailed, got %s", inst.Snapshot().Status)
 	}
 }
 

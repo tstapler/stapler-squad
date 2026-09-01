@@ -770,6 +770,25 @@ func TestV1ConfigLoadsWithNotificationDefaults(t *testing.T) {
 	assert.False(t, cfg.Notifications.PushEnabled, "default must be push disabled")
 }
 
+// TestLoadConfigFromPath_should_ResolveAC7Defaults_When_RetryPolicyKeyMissing
+// round-trips a config.json predating the session-retry-backoff feature (no
+// "retry_policy" key at all) and asserts it resolves to today's exact
+// single-retry, immediate-restart behavior — AC7.
+func TestLoadConfigFromPath_should_ResolveAC7Defaults_When_RetryPolicyKeyMissing(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	preFeatureJSON := `{"configVersion": 2, "session_defaults": {}}`
+	require.NoError(t, os.WriteFile(path, []byte(preFeatureJSON), 0600))
+
+	cfg, err := LoadConfigFromPath(path)
+	require.NoError(t, err)
+
+	assert.True(t, cfg.RetryPolicy.EnabledOrDefault(), "a pre-feature config.json must resolve to retry enabled")
+	assert.Equal(t, 1, cfg.RetryPolicy.MaxAttemptsOrDefault(), "must resolve to today's exact single-retry behavior")
+	assert.Equal(t, 0, cfg.RetryPolicy.InitialDelaySeconds, "must resolve to today's immediate-restart behavior")
+	assert.Equal(t, "exponential", cfg.RetryPolicy.Backoff, "load-time normalization must fill in the default strategy")
+}
+
 // UT-4.3 — PushEnabled=false is the zero-value default [R8]
 func TestNotificationPrefsDefault(t *testing.T) {
 	var prefs NotificationPrefs

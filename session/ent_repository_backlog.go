@@ -2346,6 +2346,29 @@ func (r *EntRepository) GetItemSourceByID(ctx context.Context, id string) (*ent.
 	return src, nil
 }
 
+// GetBacklogItemByExternalURL retrieves a BacklogItem by its external_url —
+// used by manual imports (e.g. ImportGitHubIssue) that have no ItemSource row
+// to scope an external_id lookup by (see GetBacklogItemByExternalID), so they
+// dedup on the issue/PR URL instead. external_url has no uniqueness
+// constraint at the schema level, and rows created before this dedup check
+// existed may already repeat one, so this uses First (oldest match) rather
+// than Only — which would hard-error on exactly the pre-existing-duplicate
+// data this lookup exists to stop compounding.
+func (r *EntRepository) GetBacklogItemByExternalURL(ctx context.Context, externalURL string) (*BacklogItemData, error) {
+	item, err := r.client.BacklogItem.Query().
+		Where(backlogitem.ExternalURL(externalURL)).
+		Order(ent.Asc(backlogitem.FieldCreatedAt)).
+		First(ctx)
+	if err != nil {
+		if ent.IsNotFound(err) {
+			return nil, ErrNotFound
+		}
+		return nil, fmt.Errorf("failed to query backlog item by external_url %q: %w", externalURL, err)
+	}
+	result := backlogItemToData(item)
+	return &result, nil
+}
+
 // GetBacklogItemByExternalID retrieves a BacklogItem by its external_id, scoped
 // to sourceID. External IDs (e.g. GitHub issue/PR numbers) are only unique
 // within their source, not globally — two different repos can both have an
