@@ -29,7 +29,12 @@ func TestAnthropicAIClient_Complete_CancelsOnCtxDone(t *testing.T) {
 		}
 		select {
 		case <-r.Context().Done():
-		case <-time.After(10 * time.Second):
+		// Safety net only: the test's own 100ms ctx timeout drives r.Context().Done()
+		// well before this fires. Capped at 2s (not sub-second) so it stays a true
+		// safety margin under CI scheduler jitter, not a tight race against it, and
+		// so srv.Close() finishes well under net/http/httptest's 5s hang-detector
+		// window if this branch were ever hit.
+		case <-time.After(2 * time.Second):
 		}
 	}))
 	defer func() {

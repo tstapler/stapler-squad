@@ -442,3 +442,26 @@ func TestAtomicLoggerConcurrentAccess(t *testing.T) {
 
 	wg.Wait()
 }
+
+// TestInitializeWithConfig_SlogDefaultAndSeamStayInSync verifies that
+// initializeWithConfig stores the exact same *slog.Logger instance into both
+// the real slog.Default() and the injectable slogDefault seam read by
+// logAt/ForSession — production logging behavior must not diverge between the
+// two, since only the seam is what server/services tests swap out.
+func TestInitializeWithConfig_SlogDefaultAndSeamStayInSync(t *testing.T) {
+	prevSlog := slog.Default()
+	prevSeam := slogDefault.Load()
+	t.Cleanup(func() {
+		slog.SetDefault(prevSlog)
+		slogDefault.Store(prevSeam)
+	})
+
+	cfg := DefaultLogConfig()
+	cfg.FileEnabled = false
+	cfg.ConsoleEnabled = false
+	initializeWithConfig(false, cfg)
+
+	if slog.Default() != slogDefault.Load() {
+		t.Error("slog.Default() and slogDefault.Load() must be the same *slog.Logger instance after initializeWithConfig")
+	}
+}

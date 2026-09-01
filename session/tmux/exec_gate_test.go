@@ -16,20 +16,20 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	ssqlog "github.com/tstapler/stapler-squad/log"
 )
 
-// captureDebugLog temporarily redirects the slog default logger to a buffer
-// (mirrors server/services/session_service_client_log_test.go's
+// captureDebugLog temporarily redirects the log package's injectable slog seam to a
+// buffer (mirrors server/services/session_service_client_log_test.go's
 // captureInfoLog) and returns a function that restores it and returns the
 // captured output.
 func captureDebugLog(t *testing.T) func() string {
 	t.Helper()
 	var buf bytes.Buffer
 	h := slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})
-	original := slog.Default()
-	slog.SetDefault(slog.New(h))
+	original := ssqlog.SetSlogDefaultForTest(slog.New(h))
 	return func() string {
-		slog.SetDefault(original)
+		ssqlog.SetSlogDefaultForTest(original)
 		return buf.String()
 	}
 }

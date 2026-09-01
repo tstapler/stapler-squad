@@ -19,6 +19,7 @@ import (
 	"golang.org/x/time/rate"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	ssqlog "github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/ent"
@@ -441,10 +442,9 @@ func TestFireTrigger_NeverSetsAutoApproveFlag(t *testing.T) {
 func captureWarnLog() func() string {
 	var buf bytes.Buffer
 	h := slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})
-	original := slog.Default()
-	slog.SetDefault(slog.New(h))
+	original := ssqlog.SetSlogDefaultForTest(slog.New(h))
 	return func() string {
-		slog.SetDefault(original)
+		ssqlog.SetSlogDefaultForTest(original)
 		return buf.String()
 	}
 }
