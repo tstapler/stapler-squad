@@ -3503,6 +3503,26 @@ Do not modify the code. Only write the review verdict.
 	}), nil
 }
 
+// workSessionRestartGraceWindow bounds how long after this process's boot an
+// apparently-dead work session is left alone rather than tombstoned as a
+// genuine orphan. Mirrors session.restartGraceWindow (session/retry_state.go)
+// — that constant governs whether session-retry-backoff resurrects an
+// Instance in place without consuming a retry attempt; this one gives that
+// resurrection time to happen before the backlog layer's own orphan sweep
+// concludes the work session is gone and frees the item for a duplicate spawn.
+const workSessionRestartGraceWindow = 60 * time.Second
+
+// shouldSkipWorkTombstoneForRestartGrace reports whether an apparently-dead
+// work session (createdAt) should be left alone rather than tombstoned,
+// because it predates this process's own boot (bootTime) and we're still
+// within workSessionRestartGraceWindow of booting — session-retry-backoff's
+// in-place restart may not have had time to reattach it yet. Pure and
+// side-effect-free so the decision table is directly testable, same
+// rationale as shouldAttributeTombstoneToShutdown above.
+func shouldSkipWorkTombstoneForRestartGrace(createdAt, bootTime, now time.Time) bool {
+	return createdAt.Before(bootTime) && now.Sub(bootTime) < workSessionRestartGraceWindow
+}
+
 // tombstoneOrphanWorkSessions marks any open (not-yet-ended) work-role ItemSession as
 // ended if it is confirmed dead (no live tracked session). Called before
 // hasActiveWorkSession's guard in SpawnSessionFromItem so a work session that never
@@ -3524,6 +3544,15 @@ func (s *BacklogService) tombstoneOrphanWorkSessions(ctx context.Context, itemID
 		}
 		if s.sessionStopper.IsSessionLive(is.SessionUUID) {
 			continue // genuinely still running
+		}
+		if shouldSkipWorkTombstoneForRestartGrace(is.CreatedAt, serverStartTime, time.Now()) {
+			// BUG-065's work-session counterpart: this session predates our own
+			// boot and still looks dead, but session-retry-backoff's in-place
+			// restart (session/retry_state.go's restartGraceWindow) hasn't had
+			// time to reattach it yet. Tombstoning now would free the item for a
+			// duplicate spawn while the original session is still recovering —
+			// wait out the grace window instead of guessing.
+			continue
 		}
 		now := time.Now()
 		if err := s.storage.UpdateItemSessionEnded(ctx, is.ID, now); err != nil { //nolint:silenttransition best-effort tombstone sweep; continue skips only this session, retried every call rather than silently proceeding as if it succeeded
