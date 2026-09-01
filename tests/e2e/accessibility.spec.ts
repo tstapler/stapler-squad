@@ -433,15 +433,19 @@ async function assertTabWrapsWithinDialog(
   dialog: ReturnType<import('@playwright/test').Page['locator']>
 ) {
   const initial = await page.evaluateHandle(() => document.activeElement);
-  let wrapped = false;
-  for (let i = 0; i < 30; i++) {
-    await page.keyboard.press('Tab');
-    const stillInside = await dialog.evaluate((el) => !!document.activeElement && el.contains(document.activeElement));
-    expect(stillInside, `Tab press #${i + 1} moved focus outside the dialog`).toBe(true);
-    if (await page.evaluate((el) => el === document.activeElement, initial)) {
-      wrapped = true;
-      break;
+  try {
+    let wrapped = false;
+    for (let i = 0; i < 30; i++) {
+      await page.keyboard.press('Tab');
+      const stillInside = await dialog.evaluate((el) => !!document.activeElement && el.contains(document.activeElement));
+      expect(stillInside, `Tab press #${i + 1} moved focus outside the dialog`).toBe(true);
+      if (await page.evaluate((el) => el === document.activeElement, initial)) {
+        wrapped = true;
+        break;
+      }
     }
+    expect(wrapped, "Tab never wrapped back to the dialog's first focusable element").toBe(true);
+  } finally {
+    await initial.dispose();
   }
-  expect(wrapped, "Tab never wrapped back to the dialog's first focusable element").toBe(true);
 }

@@ -223,17 +223,19 @@ describe("useFocusTrap", () => {
     // focusin safety net must catch that and snap focus back in.
     const outside = document.createElement("button");
     document.body.appendChild(outside);
+    try {
+      const { getByTestId } = render(<TrapHarness isActive />);
+      const first = getByTestId("first");
+      expect(document.activeElement).toBe(first);
 
-    const { getByTestId } = render(<TrapHarness isActive />);
-    const first = getByTestId("first");
-    expect(document.activeElement).toBe(first);
+      act(() => {
+        outside.focus();
+      });
 
-    act(() => {
-      outside.focus();
-    });
-
-    expect(document.activeElement).toBe(first);
-    outside.remove();
+      expect(document.activeElement).toBe(first);
+    } finally {
+      outside.remove();
+    }
   });
 
   it("useFocusTrap_should_NotPullFocusBack_When_FocusLandsOnOwnTriggerElement", () => {
@@ -242,17 +244,20 @@ describe("useFocusTrap", () => {
     // dialogs, so a still-active sibling trap must not fight that restore).
     const trigger = document.createElement("button");
     document.body.appendChild(trigger);
-    const triggerRef: RefObject<HTMLElement | null> = { current: trigger };
+    try {
+      const triggerRef: RefObject<HTMLElement | null> = { current: trigger };
 
-    const { getByTestId } = render(<TrapHarness isActive triggerRef={triggerRef} />);
-    expect(document.activeElement).toBe(getByTestId("first"));
+      const { getByTestId } = render(<TrapHarness isActive triggerRef={triggerRef} />);
+      expect(document.activeElement).toBe(getByTestId("first"));
 
-    act(() => {
-      trigger.focus();
-    });
+      act(() => {
+        trigger.focus();
+      });
 
-    expect(document.activeElement).toBe(trigger);
-    trigger.remove();
+      expect(document.activeElement).toBe(trigger);
+    } finally {
+      trigger.remove();
+    }
   });
 
   it("useFocusTrap_should_NotPullFocusBack_When_FocusLandsInsideAnotherDialog", () => {
@@ -264,16 +269,18 @@ describe("useFocusTrap", () => {
     const siblingButton = document.createElement("button");
     sibling.appendChild(siblingButton);
     document.body.appendChild(sibling);
+    try {
+      const { getByTestId } = render(<TrapHarness isActive />);
+      expect(document.activeElement).toBe(getByTestId("first"));
 
-    const { getByTestId } = render(<TrapHarness isActive />);
-    expect(document.activeElement).toBe(getByTestId("first"));
+      act(() => {
+        siblingButton.focus();
+      });
 
-    act(() => {
-      siblingButton.focus();
-    });
-
-    expect(document.activeElement).toBe(siblingButton);
-    sibling.remove();
+      expect(document.activeElement).toBe(siblingButton);
+    } finally {
+      sibling.remove();
+    }
   });
 
   it("useFocusTrap_should_KeepFocusOnSoleElement_When_OnlyOneFocusableElementExists", () => {

@@ -23,6 +23,12 @@ export function useFocusTrap(
     if (!isActive || !ref.current) return;
 
     const container = ref.current as HTMLElement;
+    // Ensure the "no focusable descendants" fallback below can actually
+    // move focus onto the container itself — a plain <div> without a
+    // tabindex silently no-ops .focus().
+    if (!container.hasAttribute("tabindex")) {
+      container.setAttribute("tabindex", "-1");
+    }
 
     // Computed fresh on every Tab press (not cached once at activation) so a
     // control that becomes disabled/enabled after the trap activates (e.g. a
