@@ -85,6 +85,36 @@ type SlackConfig struct {
 	DashboardBaseURL string `json:"dashboard_base_url,omitempty"`
 }
 
+// JulesConfig holds configuration for the Google Jules dispatch-and-poll
+// integration (config.Config.Jules). The API key is deliberately absent from
+// this struct — it lives in the OS keychain (jules.KeyringTokenSource,
+// ADR-003), never in config.json.
+type JulesConfig struct {
+	// Enabled gates the whole feature: even a resolvable API key and
+	// acknowledged repos are refused while this is false (Risk Control's
+	// three-part AND gate). Default: false (opt-in).
+	Enabled bool `json:"enabled,omitempty"`
+	// EgressAcknowledgedRepos is the list of local backlog-item RepoPath
+	// values the user has explicitly confirmed may leave the machine for
+	// Google's cloud VM. Entries are full local paths, not owner/repo —
+	// consent is granted per local checkout, since that is what is actually
+	// read from disk and sent. The only writer is ConfirmEgressConsent
+	// (Story 2.4.2); DispatchToJules's checkEgressConsent only ever reads
+	// this slice (pre-mortem P1 #3).
+	EgressAcknowledgedRepos []string `json:"egress_acknowledged_repos,omitempty"`
+	// MaxConcurrentJulesSessions caps how many jules_work ItemSessions may be
+	// open (not yet ended) at the same time. 0 = use the default (2). Values
+	// above maxConcurrentJulesSessionsHardCeiling are clamped to the ceiling.
+	MaxConcurrentJulesSessions int `json:"max_concurrent_jules_sessions,omitempty"`
+	// MaxJulesSessionsPerDay caps how many jules_work ItemSessions may be
+	// *created* in a trailing 24h window, bounding creation rate rather than
+	// concurrency (a retry-loop bug that always ends its sessions quickly
+	// would sail past a concurrency-only cap). 0 = use the default (15).
+	// Values above maxJulesSessionsPerDayHardCeiling are clamped to the
+	// ceiling.
+	MaxJulesSessionsPerDay int `json:"max_jules_sessions_per_day,omitempty"`
+}
+
 // defaultSessionRetentionDays is used by RetentionDaysOrDefault whenever
 // RetentionDays is unset (zero), including for configs saved before this field
 // existed.
