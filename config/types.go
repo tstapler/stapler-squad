@@ -278,6 +278,31 @@ func (c RetryPolicyConfig) BackoffOrWarn() string {
 	return "exponential"
 }
 
+// defaultCreationStaleThresholdMinutes is used by ThresholdMinutesOrDefault
+// whenever ThresholdMinutes is unset (zero or negative), including for
+// configs saved before this field existed.
+const defaultCreationStaleThresholdMinutes = 10
+
+// CreationStaleConfig holds configuration for the Stale-Creation Sweeper
+// (Epic 4.1): how long a session may sit in Creating status without a
+// progress update before it's automatically flipped to Failed/Stale.
+// Mirrors StaleSessionConfig's shape.
+type CreationStaleConfig struct {
+	// ThresholdMinutes is how many minutes a Creating instance may go without
+	// a creation-progress update before the sweeper flips it to Failed/Stale.
+	// Default: 10.
+	ThresholdMinutes int `json:"threshold_minutes,omitempty"`
+}
+
+// ThresholdMinutesOrDefault returns ThresholdMinutes, falling back to
+// defaultCreationStaleThresholdMinutes when unset (<=0).
+func (c CreationStaleConfig) ThresholdMinutesOrDefault() int {
+	if c.ThresholdMinutes <= 0 {
+		return defaultCreationStaleThresholdMinutes
+	}
+	return c.ThresholdMinutes
+}
+
 // TmuxExecGateConfig bounds how many tmux subprocesses may run concurrently
 // against one tmux server, across every process on the machine (the main
 // daemon and every --mcp process) — tmux's server is single-threaded, so

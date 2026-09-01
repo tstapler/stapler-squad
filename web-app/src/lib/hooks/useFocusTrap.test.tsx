@@ -63,6 +63,20 @@ function MutableSetHarness({
   );
 }
 
+// SoleElementHarness has exactly one focusable element — first === last —
+// the degenerate case the forward/backward wrap harnesses above never
+// exercise (they always have a distinct "first" and "last").
+function SoleElementHarness({ isActive }: { isActive: boolean }) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  useFocusTrap(containerRef, isActive);
+
+  return (
+    <div ref={containerRef} data-testid="container">
+      <button data-testid="only">Only</button>
+    </div>
+  );
+}
+
 describe("useFocusTrap", () => {
   it("useFocusTrap_should_RestoreFocusToTrigger_When_UnmountedWithTriggerRefSupplied", () => {
     const trigger = document.createElement("button");
@@ -77,6 +91,31 @@ describe("useFocusTrap", () => {
 
     expect(document.activeElement).toBe(trigger);
     trigger.remove();
+  });
+
+  it("useFocusTrap_should_RestoreFocusToTrigger_When_IsActiveTogglesFalseWithoutUnmount", () => {
+    const trigger = document.createElement("button");
+    document.body.appendChild(trigger);
+    const triggerRef = { current: trigger as HTMLElement | null };
+
+    try {
+      const { rerender, getByTestId } = render(<TrapHarness isActive triggerRef={triggerRef} />);
+      // Precondition: activation already moved focus to the first focusable
+      // child, not the trigger — proves the toggle below is a real focus
+      // transition rather than a vacuous check.
+      expect(document.activeElement).toBe(getByTestId("first"));
+
+      act(() => {
+        rerender(<TrapHarness isActive={false} triggerRef={triggerRef} />);
+      });
+
+      // Container is still mounted — only isActive flipped. React runs the
+      // same cleanup path on dep change as on unmount, so this pins that
+      // behavior explicitly rather than relying on it being incidental.
+      expect(document.activeElement).toBe(trigger);
+    } finally {
+      trigger.remove();
+    }
   });
 
   it("useFocusTrap_should_NotThrowAndDropFocusToBody_When_NoTriggerRefSupplied", () => {
@@ -198,5 +237,86 @@ describe("useFocusTrap", () => {
     getByTestId("second").focus();
     fireEvent.keyDown(document, { key: "Tab", shiftKey: true });
     expect(document.activeElement).toBe(getByTestId("third"));
+  });
+
+  it("useFocusTrap_should_PullFocusBackIn_When_FocusEscapesOutsideOfHandleKeyDown", () => {
+    // Mirrors react-arborist's FileTree: a child widget can move DOM focus
+    // to an element outside the trap's container without going through our
+    // Tab keydown handler at all (e.g. it rewrites tabindex and lets the
+    // browser's own Tab traversal fall through to something outside the
+    // container — backlog item 4a1f73c4-5558-41f8-9860-8508fb874fcc). The
+    // focusin safety net must catch that and snap focus back in.
+    const outside = document.createElement("button");
+    document.body.appendChild(outside);
+    try {
+      const { getByTestId } = render(<TrapHarness isActive />);
+      const first = getByTestId("first");
+      expect(document.activeElement).toBe(first);
+
+      act(() => {
+        outside.focus();
+      });
+
+      expect(document.activeElement).toBe(first);
+    } finally {
+      outside.remove();
+    }
+  });
+
+  it("useFocusTrap_should_NotPullFocusBack_When_FocusLandsOnOwnTriggerElement", () => {
+    // A trap's own cleanup deliberately restores focus to triggerRef on
+    // deactivation (SessionActionsOverflow shares one trigger across many
+    // dialogs, so a still-active sibling trap must not fight that restore).
+    const trigger = document.createElement("button");
+    document.body.appendChild(trigger);
+    try {
+      const triggerRef: RefObject<HTMLElement | null> = { current: trigger };
+
+      const { getByTestId } = render(<TrapHarness isActive triggerRef={triggerRef} />);
+      expect(document.activeElement).toBe(getByTestId("first"));
+
+      act(() => {
+        trigger.focus();
+      });
+
+      expect(document.activeElement).toBe(trigger);
+    } finally {
+      trigger.remove();
+    }
+  });
+
+  it("useFocusTrap_should_NotPullFocusBack_When_FocusLandsInsideAnotherDialog", () => {
+    // React's autoFocus can move focus into a freshly-portalled sibling
+    // dialog synchronously during commit, before that dialog's own
+    // useFocusTrap effect has registered its listener.
+    const sibling = document.createElement("div");
+    sibling.setAttribute("role", "dialog");
+    const siblingButton = document.createElement("button");
+    sibling.appendChild(siblingButton);
+    document.body.appendChild(sibling);
+    try {
+      const { getByTestId } = render(<TrapHarness isActive />);
+      expect(document.activeElement).toBe(getByTestId("first"));
+
+      act(() => {
+        siblingButton.focus();
+      });
+
+      expect(document.activeElement).toBe(siblingButton);
+    } finally {
+      sibling.remove();
+    }
+  });
+
+  it("useFocusTrap_should_KeepFocusOnSoleElement_When_OnlyOneFocusableElementExists", () => {
+    const { getByTestId } = render(<SoleElementHarness isActive />);
+    const only = getByTestId("only");
+    expect(document.activeElement).toBe(only);
+
+    fireEvent.keyDown(document, { key: "Tab" });
+    expect(document.activeElement).toBe(only);
+
+    fireEvent.keyDown(document, { key: "Tab", shiftKey: true });
+    expect(document.activeElement).toBe(only);
   });
 });

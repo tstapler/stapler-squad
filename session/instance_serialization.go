@@ -108,13 +108,14 @@ func (i *Instance) ToInstanceData() InstanceData {
 		// Backend is set once at construction and never mutated afterward — same
 		// as LaunchCommand below, it isn't in InstanceSnapshot, so read it
 		// directly off the Instance rather than adding it to the snapshot.
-		Backend:              i.Backend,
-		LastTerminalUpdate:   snap.LastTerminalUpdate,
-		LastMeaningfulOutput: snap.LastMeaningfulOutput,
-		LastOutputSignature:  snap.LastOutputSignature,
-		LastAddedToQueue:     snap.LastAddedToQueue,
-		LastViewed:           snap.LastViewed,
-		LastAcknowledged:     snap.LastAcknowledged,
+		Backend:                   i.Backend,
+		LastTerminalUpdate:        snap.LastTerminalUpdate,
+		LastMeaningfulOutput:      snap.LastMeaningfulOutput,
+		LastOutputSignature:       snap.LastOutputSignature,
+		LastAddedToQueue:          snap.LastAddedToQueue,
+		LastViewed:                snap.LastViewed,
+		LastAcknowledged:          snap.LastAcknowledged,
+		CreationProgressUpdatedAt: snap.CreationProgressUpdatedAt,
 		// Prompt detection and interaction tracking
 		LastPromptDetected:   snap.LastPromptDetected,
 		LastPromptSignature:  snap.LastPromptSignature,
@@ -346,6 +347,10 @@ func fromInstanceData(data InstanceData, deferStart bool) (*Instance, error) {
 		// Workflow linkage and archive state
 		WorkflowID: data.WorkflowID,
 		ArchivedAt: data.ArchivedAt,
+
+		// creationProgressUpdatedAt (Epic 1.1.4/4.1) — restored directly since it
+		// has no exported setter; see ToInstanceData's mirror-write.
+		creationProgressUpdatedAt: data.CreationProgressUpdatedAt,
 	}
 
 	// MIGRATION: Assign UUID to existing sessions that pre-date UUID assignment

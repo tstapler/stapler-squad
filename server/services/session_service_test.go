@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -15,12 +16,14 @@ import (
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/pkg/classifier"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/detection"
 	"github.com/tstapler/stapler-squad/session/detection/binaries"
+	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/tmux"
 	"go.uber.org/goleak"
 )
@@ -75,6 +78,163 @@ func addPausedSession(t *testing.T, fix *forkTestFixture, title string) {
 		}
 	}
 	t.Fatalf("addPausedSession: could not find %q after reload", title)
+}
+
+// --------------------------------------------------------------------------
+// CreateSession — Epic 2.1 (async-session-creation): synchronous-prefix
+// reordering. See project_plans/async-session-creation/implementation/
+// plan.md Epic 2.1 Story 2.1.1 and validation.md's "Epic 2.1" test mapping.
+// --------------------------------------------------------------------------
+
+// TestCreateSession_should_ReturnInvalidArgument_When_TitleIsEmpty verifies
+// that the empty-title fast-fail check stays synchronous and unchanged by the
+// Epic 2.1 reorder: no instance is created and the RPC returns
+// CodeInvalidArgument.
+func TestCreateSession_should_ReturnInvalidArgument_When_TitleIsEmpty(t *testing.T) {
+	t.Parallel()
+	fix := setupForkTestFixture(t)
+	t.Cleanup(fix.cleanup)
+
+	_, err := fix.svc.CreateSession(context.Background(), connect.NewRequest(&sessionv1.CreateSessionRequest{
+		Title: "",
+		Path:  "/tmp/test",
+	}))
+	require.Error(t, err)
+
+	var connectErr *connect.Error
+	require.ErrorAs(t, err, &connectErr)
+	assert.Equal(t, connect.CodeInvalidArgument, connectErr.Code())
+
+	data, listErr := fix.storage.ListInstanceData()
+	require.NoError(t, listErr)
+	assert.Empty(t, data, "no instance should be created when title is empty")
+}
+
+// TestCreateSession_should_ReturnAlreadyExists_When_TitleDuplicates verifies
+// that the duplicate-title fast-fail check stays synchronous and unchanged by
+// the Epic 2.1 reorder: no second instance is created and the RPC returns
+// CodeAlreadyExists.
+func TestCreateSession_should_ReturnAlreadyExists_When_TitleDuplicates(t *testing.T) {
+	t.Parallel()
+	fix := setupForkTestFixture(t)
+	t.Cleanup(fix.cleanup)
+
+	addPausedSession(t, fix, "epic21-existing-session")
+
+	_, err := fix.svc.CreateSession(context.Background(), connect.NewRequest(&sessionv1.CreateSessionRequest{
+		Title: "epic21-existing-session",
+		Path:  "/tmp/test",
+	}))
+	require.Error(t, err)
+
+	var connectErr *connect.Error
+	require.ErrorAs(t, err, &connectErr)
+	assert.Equal(t, connect.CodeAlreadyExists, connectErr.Code())
+
+	data, listErr := fix.storage.ListInstanceData()
+	require.NoError(t, listErr)
+	count := 0
+	for _, d := range data {
+		if d.Title == "epic21-existing-session" {
+			count++
+		}
+	}
+	assert.Equal(t, 1, count, "duplicate title must not create a second instance")
+}
+
+// TestCreateSession_should_ReturnWithinSLO_When_GithubURLResolutionIsSlow is
+// the anchor scenario for Epic 2.1 Story 2.1.1: instance
+// construction+save+publish must happen before the GitHub-URL clone runs, so
+// the RPC returns fast (well within createSessionTimeout's 150s budget --
+// this asserts a much tighter practical bound) with status=CREATING and a
+// non-empty creation_progress, even though the injected githubResolver won't
+// return for several seconds. It also confirms the deferred clone actually
+// completes in the background (SessionUpdatedEvent with the resolved path).
+func TestCreateSession_should_ReturnWithinSLO_When_GithubURLResolutionIsSlow(t *testing.T) {
+	t.Parallel()
+	fix := setupForkTestFixture(t)
+	t.Cleanup(fix.cleanup)
+
+	resolvedPath := t.TempDir()
+	const resolveDelay = 2 * time.Second
+	resolved := make(chan struct{})
+	fix.svc.githubResolver = func(ctx context.Context, input string, enterpriseHosts []string) (string, *session.GitHubRef, error) {
+		select {
+		case <-time.After(resolveDelay):
+		case <-ctx.Done():
+			return "", nil, ctx.Err()
+		}
+		defer close(resolved)
+		return resolvedPath, &session.GitHubRef{Owner: "acme", Repo: "widgets", Branch: "main"}, nil
+	}
+
+	start := time.Now()
+	resp, err := fix.svc.CreateSession(context.Background(), connect.NewRequest(&sessionv1.CreateSessionRequest{
+		Title: "epic21-slow-github-url",
+		Path:  "https://github.com/acme/widgets",
+	}))
+	elapsed := time.Since(start)
+	require.NoError(t, err)
+	t.Cleanup(func() { destroyCreatedSession(t, fix.svc, resp.Msg.Session.Id) })
+
+	assert.Less(t, elapsed, resolveDelay, "CreateSession must return well before the deferred GitHub resolution completes")
+	assert.Equal(t, sessionv1.SessionStatus_SESSION_STATUS_CREATING, resp.Msg.Session.Status)
+	assert.NotEmpty(t, resp.Msg.Session.CreationProgress, "creation_progress must be non-empty while resolution is pending")
+
+	select {
+	case <-resolved:
+	case <-time.After(resolveDelay + 5*time.Second):
+		t.Fatal("deferred GitHub URL resolution did not complete in the background")
+	}
+}
+
+// TestCreateSession_should_RejectSecondDuplicate_When_TwoRapidCallsShareTitle
+// verifies Task 2.1.1c: moving instance construction+save+publish earlier
+// must not weaken the title-uniqueness race property -- of two concurrent
+// CreateSession calls sharing a title, exactly one must succeed and the
+// other must fail (not silently overwrite the first's persisted row).
+func TestCreateSession_should_RejectSecondDuplicate_When_TwoRapidCallsShareTitle(t *testing.T) {
+	fix := setupForkTestFixture(t)
+	t.Cleanup(fix.cleanup)
+
+	const title = "epic21-rapid-duplicate"
+	results := make([]error, 2)
+	ids := make([]string, 2)
+	var wg sync.WaitGroup
+	for i := range 2 {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			resp, err := fix.svc.CreateSession(context.Background(), connect.NewRequest(&sessionv1.CreateSessionRequest{
+				Title: title,
+				Path:  t.TempDir(),
+			}))
+			results[i] = err
+			if err == nil {
+				ids[i] = resp.Msg.Session.Id
+			}
+		}(i)
+	}
+	wg.Wait()
+
+	successCount := 0
+	for i, err := range results {
+		if err == nil {
+			successCount++
+			t.Cleanup(func(id string) func() { return func() { destroyCreatedSession(t, fix.svc, id) } }(ids[i]))
+		}
+	}
+	assert.Equal(t, 1, successCount, "exactly one of two rapid same-title CreateSession calls must succeed")
+
+	data, listErr := fix.storage.ListInstanceData()
+	require.NoError(t, listErr)
+	count := 0
+	for _, d := range data {
+		if d.Title == title {
+			count++
+		}
+	}
+	assert.Equal(t, 1, count, "storage must contain exactly one instance with the shared title")
 }
 
 // --------------------------------------------------------------------------
@@ -374,6 +534,130 @@ func TestDeleteSession_DestroyFailureIsNonFatal(t *testing.T) {
 	for _, d := range data {
 		assert.NotEqual(t, "stubborn-session", d.Title)
 	}
+}
+
+// TestCleanupPartialCreation_should_ReturnNil_When_NoWorktreeOrTmuxExists covers
+// the degenerate case a creation pipeline leaves behind when it fails before
+// ever acquiring a worktree or starting tmux (e.g. validation/resolution
+// failure ahead of Instance.Start): cleanupPartialCreation must return nil
+// with no error about a missing directory or tmux session.
+func TestCleanupPartialCreation_should_ReturnNil_When_NoWorktreeOrTmuxExists(t *testing.T) {
+	t.Parallel()
+
+	inst := &session.Instance{Title: "cleanup-noop-test"}
+
+	err := cleanupPartialCreation(inst)
+
+	require.NoError(t, err)
+}
+
+// TestCleanupPartialCreation_should_RemoveWorktree_When_CreatedBeforeTmuxStartup
+// covers a pipeline that acquired a real worktree but never reached tmux
+// startup: cleanupPartialCreation must remove the worktree directory and must
+// not surface a tmux-related error (there is no tmux session to kill).
+func TestCleanupPartialCreation_should_RemoveWorktree_When_CreatedBeforeTmuxStartup(t *testing.T) {
+	t.Parallel()
+
+	repoDir := newDraftPRTestRepo(t)
+	wt, _, err := git.NewGitWorktree(repoDir, "cleanup-worktree-test")
+	require.NoError(t, err)
+	require.NoError(t, wt.Setup())
+
+	inst := &session.Instance{Title: "cleanup-worktree-test"}
+	inst.SetGitWorktree(wt) // also sets started=true — see SetGitWorktree's doc comment
+
+	err = cleanupPartialCreation(inst)
+
+	require.NoError(t, err)
+	_, statErr := os.Stat(wt.GetWorktreePath())
+	assert.True(t, os.IsNotExist(statErr), "expected worktree directory to be removed, stat err: %v", statErr)
+}
+
+// TestCleanupPartialCreation_should_BeIdempotent_When_CalledTwice covers Task
+// 3.1.1c: Cancel/Retry and DeleteSession can all reach cleanupPartialCreation
+// for the same instance (e.g. a slow first call racing a second), so a second
+// call after the resources are already gone must be a safe no-op rather than
+// erroring on "already removed" state.
+func TestCleanupPartialCreation_should_BeIdempotent_When_CalledTwice(t *testing.T) {
+	t.Parallel()
+
+	repoDir := newDraftPRTestRepo(t)
+	wt, _, err := git.NewGitWorktree(repoDir, "cleanup-idempotent-test")
+	require.NoError(t, err)
+	require.NoError(t, wt.Setup())
+
+	inst := &session.Instance{Title: "cleanup-idempotent-test"}
+	inst.SetGitWorktree(wt)
+
+	require.NoError(t, cleanupPartialCreation(inst))
+	err = cleanupPartialCreation(inst)
+
+	require.NoError(t, err, "second call must be a no-op, not an error, once resources are already gone")
+	_, statErr := os.Stat(wt.GetWorktreePath())
+	assert.True(t, os.IsNotExist(statErr))
+}
+
+// TestCleanupPartialCreation_should_NotDeleteWorktree_When_ItLooksAliveDespiteNotStartedStatus
+// covers Task 3.1.1e: the residual crash window Task 3.1.1d guards against is
+// a crash between Instance.Start() actually finishing worktree setup and its
+// i.started.Store(true) write (session/instance.go's startLocked) -- so
+// instance.Started() reports false, and a caller like Cancel/Retry reads a
+// persisted Status (Creating) that looks like "never got anywhere," even
+// though the worktree that came up is a genuinely healthy git clone.
+// RecoverFromStopped is the one exported, non-actor mutator that can flip
+// started back to false without also tearing down the resource it already
+// owns (SetGitWorktree/SetTmuxSession both intentionally set started=true as
+// part of attaching a resource for tests) -- it exists for real startup
+// reconciliation and documents itself as bypassing the state machine
+// intentionally, which is exactly the shape of state this test needs to
+// reproduce.
+func TestCleanupPartialCreation_should_NotDeleteWorktree_When_ItLooksAliveDespiteNotStartedStatus(t *testing.T) {
+	t.Parallel()
+
+	repoDir := newDraftPRTestRepo(t)
+	wt, _, err := git.NewGitWorktree(repoDir, "cleanup-alive-worktree-test")
+	require.NoError(t, err)
+	require.NoError(t, wt.Setup())
+
+	inst := &session.Instance{Title: "cleanup-alive-worktree-test", Status: session.Stopped}
+	inst.SetGitWorktree(wt) // sets started=true as a side effect -- see its doc comment
+	inst.RecoverFromStopped()
+	require.False(t, inst.Started(), "test setup must reproduce Started()==false with a live worktree still attached")
+	require.Equal(t, session.Creating, inst.Status, "RecoverFromStopped resets Stopped to Creating")
+
+	err = cleanupPartialCreation(inst)
+
+	require.NoError(t, err)
+	_, statErr := os.Stat(wt.GetWorktreePath())
+	assert.NoError(t, statErr, "worktree directory must NOT be removed: it looks alive/healthy, so the guard must skip the destructive CleanupWorktree call")
+}
+
+// TestCleanupPartialCreation_should_NotKillTmuxSession_When_ItLooksAliveDespiteNotStartedStatus
+// is TestCleanupPartialCreation_should_NotDeleteWorktree_...'s tmux-side twin: a
+// real, live tmux session attached via SetTmuxSession (which also sets
+// started=true, undone the same way via RecoverFromStopped) must survive
+// cleanupPartialCreation instead of being killed.
+func TestCleanupPartialCreation_should_NotKillTmuxSession_When_ItLooksAliveDespiteNotStartedStatus(t *testing.T) {
+	t.Parallel()
+
+	inst := &session.Instance{Title: "cleanup-alive-tmux-test", Status: session.Stopped, Program: "bash"}
+	sess := tmux.NewTmuxSessionWithPrefix(inst.Title, inst.Program, "ssq-cleanup-alive-tmux-test-")
+	require.NoError(t, sess.Start(t.TempDir()))
+	t.Cleanup(func() { _ = sess.Close() })
+
+	// SetTmuxSession only wires sess into inst's *TmuxBackend if one already
+	// exists (it type-asserts i.processManager, which is nil on a bare struct
+	// literal) -- GetTmuxSessionName() forces the lazy pm() construction first.
+	_ = inst.GetTmuxSessionName()
+	inst.SetTmuxSession(sess) // sets started=true as a side effect -- see its doc comment
+	inst.RecoverFromStopped()
+	require.False(t, inst.Started(), "test setup must reproduce Started()==false with a live tmux session still attached")
+	require.True(t, inst.TmuxSessionExists(), "test setup must have a genuinely alive tmux session")
+
+	err := cleanupPartialCreation(inst)
+
+	require.NoError(t, err)
+	assert.True(t, inst.TmuxSessionExists(), "tmux session must NOT be killed: it looks alive, so the guard must skip the destructive KillSession call")
 }
 
 // TestShutdown_WaitsForDeleteSessionCleanup_LiveInstanceNil verifies that
@@ -3692,4 +3976,523 @@ func TestClaudeSettingsWatcher_StartsWiredCallback_InitialPrimingReloadPublishes
 			}
 		})
 	}
+}
+
+// --------------------------------------------------------------------------
+// Epic 6.1 (async-session-creation): 7-touchpoint / 7-session-type
+// re-verification. See project_plans/async-session-creation/implementation/
+// plan.md Epic 6.1 Story 6.1.1 and validation.md's "Epic 6.1" test mapping.
+// --------------------------------------------------------------------------
+
+// TestCreateSession_should_ReachActiveViaPipeline is the table-driven proof
+// that all 7 session-creation modes registered in
+// .claude/docs/session-creation-registry.md (directory, one-off, restart,
+// fork, alias, autonomous, remote) go through CreateSession's synchronous
+// Creating-status prefix (Epic 2.1) and then the Background Resolution
+// Pipeline (Epic 2.2) to reach Active -- not just that each mode's own
+// narrower, pre-existing tests still pass. This is the plan's explicitly
+// named highest-risk mitigation: there is no feature flag, so a regression in
+// any single mode (e.g. restart, the least-frequently-tested one) must be
+// caught in the same CI run as the other 6, not discovered separately.
+//
+// Subtest names follow the "ModeIs<Mode>" convention so
+// `go test -run TestCreateSession_should_ReachActiveViaPipeline/ModeIsRestart`
+// isolates one mode, matching validation.md's
+// TestCreateSession_should_ReachActiveViaPipeline_When_ModeIs<...> naming.
+func TestCreateSession_should_ReachActiveViaPipeline(t *testing.T) {
+	const awaitTimeout = 30 * time.Second
+	const awaitPollInterval = 20 * time.Millisecond
+
+	t.Run("ModeIsDirectory", func(t *testing.T) {
+		fix := setupForkTestFixture(t)
+		t.Cleanup(fix.cleanup)
+		wireRegistryForActorSerialization(fix)
+
+		resp, err := fix.svc.CreateSession(context.Background(), connect.NewRequest(&sessionv1.CreateSessionRequest{
+			Title:       "epic61-directory",
+			Path:        t.TempDir(),
+			Program:     "sh",
+			SessionType: sessionv1.SessionType_SESSION_TYPE_DIRECTORY,
+		}))
+		require.NoError(t, err)
+		id := resp.Msg.Session.Id
+		t.Cleanup(func() { destroyCreatedSession(t, fix.svc, id) })
+
+		assertReachesActiveViaPipeline(t, fix.svc, resp.Msg.Session, awaitTimeout, awaitPollInterval)
+	})
+
+	t.Run("ModeIsOneOff", func(t *testing.T) {
+		fix := setupForkTestFixture(t)
+		t.Cleanup(fix.cleanup)
+		wireRegistryForActorSerialization(fix)
+		withFakeHome(t) // ~/oneoff resolves under here
+
+		resp, err := fix.svc.CreateSession(context.Background(), connect.NewRequest(&sessionv1.CreateSessionRequest{
+			Title:       "epic61-oneoff",
+			Program:     "sh",
+			SessionType: sessionv1.SessionType_SESSION_TYPE_ONE_OFF,
+		}))
+		require.NoError(t, err)
+		id := resp.Msg.Session.Id
+		t.Cleanup(func() { destroyCreatedSession(t, fix.svc, id) })
+
+		assertReachesActiveViaPipeline(t, fix.svc, resp.Msg.Session, awaitTimeout, awaitPollInterval)
+	})
+
+	// ModeIsRestart is the plan's own named highest-risk mode (the
+	// "least-frequently-tested" one called out in Story 6.1.1's rationale),
+	// so this is the one subtest that also asserts the Given/When/Then
+	// acceptance criterion verbatim: creation_progress must be observed
+	// transitioning at least once before Active.
+	t.Run("ModeIsRestart", func(t *testing.T) {
+		fix := setupForkTestFixture(t)
+		t.Cleanup(fix.cleanup)
+		wireRegistryForActorSerialization(fix)
+
+		sourcePath := t.TempDir()
+		require.NoError(t, fix.storage.AddInstance(&session.Instance{
+			Title:   "epic61-restart-source",
+			Path:    sourcePath,
+			Program: "sh",
+			Status:  session.Paused,
+		}))
+
+		// Phase text is captured via creationPhaseHook (the same test-only seam
+		// TestBackgroundResolutionPipeline_should_PublishProgressPerPhase_When_GithubURLSession
+		// uses), not by re-polling GetSession's creation_progress field: the
+		// pipeline's phases for a non-GitHub-URL session (restart included) run
+		// back-to-back with no I/O wait between them, faster than an external
+		// poller -- even a fast one -- can reliably observe more than one
+		// distinct value.
+		var mu sync.Mutex
+		var phases []string
+		fix.svc.creationPhaseHook = func(msg string) {
+			mu.Lock()
+			phases = append(phases, msg)
+			mu.Unlock()
+		}
+
+		resp, err := fix.svc.CreateSession(context.Background(), connect.NewRequest(&sessionv1.CreateSessionRequest{
+			Title:                "epic61-restart",
+			Program:              "sh",
+			RestartFromSessionId: "epic61-restart-source",
+		}))
+		require.NoError(t, err)
+		id := resp.Msg.Session.Id
+		t.Cleanup(func() { destroyCreatedSession(t, fix.svc, id) })
+
+		assertReachesActiveViaPipeline(t, fix.svc, resp.Msg.Session, awaitTimeout, awaitPollInterval)
+
+		mu.Lock()
+		defer mu.Unlock()
+		assert.GreaterOrEqual(t, len(phases), 2,
+			"creation_progress must be observed transitioning at least once before Active (Story 6.1.1's restart acceptance criterion); observed phases=%v", phases)
+	})
+
+	t.Run("ModeIsFork", func(t *testing.T) {
+		fix := setupForkTestFixture(t)
+		t.Cleanup(fix.cleanup)
+		wireRegistryForActorSerialization(fix)
+		home := withFakeHome(t) // FindConversationFilePath/ForkClaudeConversation both resolve under os.UserHomeDir()
+
+		const forkSourceID = "epic61-fork-source-session-id"
+		projDir := filepath.Join(home, ".claude", "projects", "epic61-proj")
+		require.NoError(t, os.MkdirAll(projDir, 0o755))
+		// FindConversationFilePath only needs sessionID as a substring within the
+		// first 5 lines of a .jsonl file whose basename doesn't contain "agent-";
+		// ForkAtMessage defaults to 0 (ForkClaudeConversation copies zero lines),
+		// so the source content itself is never read for validity.
+		convPath := filepath.Join(projDir, "epic61-conversation.jsonl")
+		require.NoError(t, os.WriteFile(convPath, []byte(`{"sessionId":"`+forkSourceID+`"}`+"\n"), 0o644))
+
+		resp, err := fix.svc.CreateSession(context.Background(), connect.NewRequest(&sessionv1.CreateSessionRequest{
+			Title:        "epic61-fork",
+			Path:         t.TempDir(),
+			Program:      "sh",
+			ForkSourceId: forkSourceID,
+		}))
+		require.NoError(t, err)
+		id := resp.Msg.Session.Id
+		t.Cleanup(func() { destroyCreatedSession(t, fix.svc, id) })
+
+		assertReachesActiveViaPipeline(t, fix.svc, resp.Msg.Session, awaitTimeout, awaitPollInterval)
+	})
+
+	t.Run("ModeIsAlias", func(t *testing.T) {
+		fix := setupForkTestFixture(t)
+		t.Cleanup(fix.cleanup)
+		wireRegistryForActorSerialization(fix)
+
+		t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+		aliasPath := t.TempDir()
+		cfg := config.DefaultConfig()
+		cfg.SessionDefaults.Aliases = []config.AliasConfig{
+			{Name: "epic61-alias", Path: aliasPath, Program: "sh"},
+		}
+		require.NoError(t, config.SaveConfig(cfg))
+
+		resp, err := fix.svc.CreateSession(context.Background(), connect.NewRequest(&sessionv1.CreateSessionRequest{
+			Title:     "epic61-alias-session",
+			AliasName: "epic61-alias",
+		}))
+		require.NoError(t, err)
+		id := resp.Msg.Session.Id
+		t.Cleanup(func() { destroyCreatedSession(t, fix.svc, id) })
+
+		assertReachesActiveViaPipeline(t, fix.svc, resp.Msg.Session, awaitTimeout, awaitPollInterval)
+	})
+
+	t.Run("ModeIsAutonomous", func(t *testing.T) {
+		fix := setupForkTestFixture(t)
+		t.Cleanup(fix.cleanup)
+		wireRegistryForActorSerialization(fix)
+
+		resp, err := fix.svc.CreateSession(context.Background(), connect.NewRequest(&sessionv1.CreateSessionRequest{
+			Title:          "epic61-autonomous",
+			Path:           t.TempDir(),
+			Program:        "sh",
+			SessionType:    sessionv1.SessionType_SESSION_TYPE_DIRECTORY,
+			AutonomousMode: true,
+		}))
+		require.NoError(t, err)
+		id := resp.Msg.Session.Id
+		t.Cleanup(func() { destroyCreatedSession(t, fix.svc, id) })
+
+		assertReachesActiveViaPipeline(t, fix.svc, resp.Msg.Session, awaitTimeout, awaitPollInterval)
+	})
+
+	t.Run("ModeIsRemote", func(t *testing.T) {
+		srv := startRemoteSessionTestSSHServer(t)
+		fix := newRemoteSessionFixture(t, srv)
+		wireRegistryForActorSerialization(fix.forkTestFixture)
+
+		plainDir := filepath.Join(fix.basePath, "epic61-remote-dir")
+		require.NoError(t, os.MkdirAll(plainDir, 0o755))
+
+		resp, err := fix.svc.CreateSession(context.Background(), connect.NewRequest(&sessionv1.CreateSessionRequest{
+			Title:       "epic61-remote",
+			Path:        plainDir,
+			Program:     "sh",
+			SessionType: sessionv1.SessionType_SESSION_TYPE_DIRECTORY,
+			Remote:      &sessionv1.RemoteTarget{RemoteName: "test-remote"},
+		}))
+		require.NoError(t, err)
+		id := resp.Msg.Session.Id
+		t.Cleanup(func() { destroyCreatedSession(t, fix.svc, id) })
+
+		assertReachesActiveViaPipeline(t, fix.svc, resp.Msg.Session, awaitTimeout, awaitPollInterval)
+	})
+}
+
+// wireRegistryForActorSerialization wires a *session.Registry into fix.svc if
+// one isn't already present -- mirroring newRetryTestInstance's doc comment
+// in session_retry_creation_test.go: CreateManagedInstance only wraps the new
+// instance in a session.LiveInstance (session/create_managed_instance.go)
+// "if params.Registry != nil", and without that actor goroutine, concurrent
+// access to the instance's status field (this test's AwaitCreationTerminal
+// poller reading concurrently with the Background Resolution Pipeline's
+// terminal write) has no serialization at all -- confirmed via `go test
+// -race`, which reported a genuine data race on session.Instance's status
+// field before this was added. setupForkTestFixture/newRemoteSessionFixture
+// deliberately leave registry nil for the many existing tests that construct
+// instances directly (bypassing the actor) rather than driving them through
+// the full async pipeline this test exercises, so this is wired per-subtest
+// here rather than changed in the shared fixture.
+func wireRegistryForActorSerialization(fix *forkTestFixture) {
+	if fix.svc.registry == nil {
+		fix.svc.SetRegistry(session.NewRegistry(fix.storage, nil))
+	}
+}
+
+// TestCreateSession_should_LeaveNoGoroutines_When_HammeredWithFailRetryCancelCycles
+// is Epic 6.2's Story 6.2.1 hammer test: repeated create/fail/retry/cancel
+// cycles must never pile up goroutines or trip -race, regardless of which RPC
+// wins each race. Run with `-race`; see the plan's Task 6.2.1b for the
+// `-count=N` CI wiring note.
+//
+// Three independent sub-hammers, each iterated, share one goleak baseline:
+//
+//  1. failThenRetryCycle: a GitHub-URL session whose githubResolver always
+//     fails reaches Failed, gets retried a few times, and a final Cancel
+//     attempt is made against it (almost always FailedPrecondition by then,
+//     since Cancel only applies to Creating -- exercised anyway so the RPC's
+//     error path is hammered too, per the plan's "hammer ... Cancel on it").
+//     Retry is deliberately NOT exercised against the ORIGINAL GitHub-URL
+//     failure path itself: RetrySessionCreation's own doc comment (see
+//     "Known limitation" in server/services/session_service.go) states a
+//     retry never re-derives deferredGitHubURL and always re-runs as a
+//     plain-path pipeline -- for an instance whose Path is still the raw
+//     (never-resolved) GitHub URL string, that drives Instance.Start() into
+//     real worktree/clone logic against a bogus remote, which was confirmed
+//     by manual probing to block for minutes rather than failing fast. That
+//     gap is explicitly out of scope for this story ("not covered by this
+//     story's tests"), so this sub-hammer instead forces Failed on an
+//     already-Active plain-directory instance via ForceStatus -- the same
+//     technique TestRetrySessionCreation_should_TransitionFailedToCreating_When_SameInstanceRetried
+//     uses -- to hammer the retry/re-terminal path without that landmine.
+//  2. cancelDuringCreatingCycle: create a GitHub-URL session with a
+//     deliberately failing (but not instant) resolver, and race a Cancel
+//     call against it immediately -- covering both "cancel wins" and
+//     "pipeline's Failed write wins" outcomes.
+//  3. cancelRacingSuccessCycle: create a fast-succeeding plain-directory
+//     session and race a Cancel call against it -- covering both "cancel
+//     wins" and "pipeline's Active write wins" outcomes (see
+//     TestCancelSessionCreation_should_ResolveDeterministically_When_RacingPipelineSuccess
+//     for the lower-level version of this same race).
+//
+// Every instance created here is torn down via destroyCreatedSession
+// regardless of which RPC "won" its race.
+//
+// This test caught a real bug on first run: DeleteSession and
+// CancelSessionCreation never released the creating instance's entry from
+// the SessionService-wide *session.Registry (Registry.ForceRelease was only
+// ever called from CreateManagedInstance's own register-then-fail-to-persist
+// rollback path), so every deleted/cancelled session leaked its runActor
+// goroutine (session/actor.go) for the life of the process. Confirmed via
+// `goleak.VerifyNone` reporting exactly one leaked `session.runActor` per
+// hammer iteration before the fix (server/services/session_service.go's
+// DeleteSession and CancelSessionCreation now call
+// `s.registry.ForceRelease(...)` once their synchronous/tracked cleanup for
+// that instance has fully finished). This test is what exercises that fix,
+// not a workaround for it -- no extra teardown of the registry is needed
+// here.
+func TestCreateSession_should_LeaveNoGoroutines_When_HammeredWithFailRetryCancelCycles(t *testing.T) {
+	// Not t.Parallel(): registered first so the goleak check runs LAST
+	// (t.Cleanup is LIFO), after every fixture teardown -- see
+	// TestCreateSession_StatusManagerWiredBeforeDriver's identical rationale.
+	baseline := goleak.IgnoreCurrent()
+	t.Cleanup(func() { goleak.VerifyNone(t, baseline) })
+
+	fix := setupForkTestFixture(t)
+	wireRegistryForActorSerialization(fix)
+
+	const (
+		iterations    = 20
+		retriesPerRun = 3
+		awaitTimeout  = 15 * time.Second
+		pollInterval  = 20 * time.Millisecond
+	)
+
+	failingResolver := func(ctx context.Context, input string, enterpriseHosts []string) (string, *session.GitHubRef, error) {
+		select {
+		case <-time.After(10 * time.Millisecond):
+		case <-ctx.Done():
+			return "", nil, ctx.Err()
+		}
+		return "", nil, fmt.Errorf("simulated resolution failure for %s", input)
+	}
+
+	failThenRetryCycle := func(i int) {
+		title := fmt.Sprintf("hammer-fail-retry-%d", i)
+		resp, err := fix.svc.CreateSession(context.Background(), connect.NewRequest(&sessionv1.CreateSessionRequest{
+			Title:       title,
+			Path:        t.TempDir(),
+			Program:     "sh",
+			SessionType: sessionv1.SessionType_SESSION_TYPE_DIRECTORY,
+		}))
+		require.NoError(t, err)
+		id := resp.Msg.Session.Id
+		defer destroyCreatedSession(t, fix.svc, id)
+
+		inst := fix.svc.FindLiveInstance(id)
+		require.NotNil(t, inst)
+		require.Eventually(t, func() bool {
+			return session.Status(inst.GetStatus()) == session.Active
+		}, awaitTimeout, pollInterval, "precondition: fixture instance must reach Active before being forced to Failed")
+
+		for r := 0; r < retriesPerRun; r++ {
+			inst.ForceStatus(session.Failed)
+			_, retryErr := fix.svc.RetrySessionCreation(context.Background(), connect.NewRequest(&sessionv1.RetrySessionCreationRequest{
+				Id: id,
+			}))
+			require.NoError(t, retryErr)
+			require.Eventually(t, func() bool {
+				status := session.Status(inst.GetStatus())
+				return status == session.Active || status == session.Failed
+			}, awaitTimeout, pollInterval, "retried pipeline must reach a terminal status")
+		}
+
+		// Final Cancel attempt: exercises the RPC's rejection path when the
+		// instance is no longer Creating (the common outcome here, since the
+		// retries above already reached a terminal status) without asserting
+		// a specific error -- this loop's point is "does not leak/panic/race",
+		// not re-testing Cancel's precondition logic (already covered by
+		// TestCancelSessionCreation_should_ReturnFailedPrecondition_When_StatusIsActive).
+		_, _ = fix.svc.CancelSessionCreation(context.Background(), connect.NewRequest(&sessionv1.CancelSessionCreationRequest{
+			Id: id,
+		}))
+	}
+
+	cancelDuringCreatingCycle := func(i int) {
+		title := fmt.Sprintf("hammer-cancel-creating-%d", i)
+		fix.svc.githubResolver = failingResolver
+		resp, err := fix.svc.CreateSession(context.Background(), connect.NewRequest(&sessionv1.CreateSessionRequest{
+			Title: title,
+			Path:  "https://github.com/this-org-definitely-does-not-exist-e2e-test/nonexistent-repo-12345",
+		}))
+		require.NoError(t, err)
+		id := resp.Msg.Session.Id
+		defer destroyCreatedSession(t, fix.svc, id)
+
+		_, cancelErr := fix.svc.CancelSessionCreation(context.Background(), connect.NewRequest(&sessionv1.CancelSessionCreationRequest{
+			Id: id,
+		}))
+		if cancelErr == nil {
+			// Cancel won: the instance is already gone from storage/pollers.
+			return
+		}
+		// The pipeline's Failed write won the race instead -- let it settle
+		// to a terminal status so destroyCreatedSession has something
+		// well-defined to clean up.
+		inst := fix.svc.FindLiveInstance(id)
+		if inst != nil {
+			require.Eventually(t, func() bool {
+				return session.Status(inst.GetStatus()) == session.Failed
+			}, awaitTimeout, pollInterval, "pipeline must still reach Failed after losing the cancel race")
+		}
+	}
+
+	cancelRacingSuccessCycle := func(i int) {
+		title := fmt.Sprintf("hammer-cancel-success-race-%d", i)
+		resp, err := fix.svc.CreateSession(context.Background(), connect.NewRequest(&sessionv1.CreateSessionRequest{
+			Title:       title,
+			Path:        t.TempDir(),
+			Program:     "sh",
+			SessionType: sessionv1.SessionType_SESSION_TYPE_DIRECTORY,
+		}))
+		require.NoError(t, err)
+		id := resp.Msg.Session.Id
+		defer destroyCreatedSession(t, fix.svc, id)
+
+		_, cancelErr := fix.svc.CancelSessionCreation(context.Background(), connect.NewRequest(&sessionv1.CancelSessionCreationRequest{
+			Id: id,
+		}))
+		if cancelErr == nil {
+			// Cancel won: the instance is already gone from storage/pollers.
+			return
+		}
+		// The pipeline's Active write won the race instead.
+		inst := fix.svc.FindLiveInstance(id)
+		if inst != nil {
+			require.Eventually(t, func() bool {
+				return session.Status(inst.GetStatus()) == session.Active
+			}, awaitTimeout, pollInterval, "pipeline must still reach Active after winning the cancel race")
+		}
+	}
+
+	for i := 0; i < iterations; i++ {
+		failThenRetryCycle(i)
+	}
+	for i := 0; i < iterations; i++ {
+		cancelDuringCreatingCycle(i)
+	}
+	for i := 0; i < iterations; i++ {
+		cancelRacingSuccessCycle(i)
+	}
+}
+
+// assertReachesActiveViaPipeline is the shared assertion body for
+// TestCreateSession_should_ReachActiveViaPipeline's 7 mode subtests. It
+// checks two things:
+//  1. The CreateSession response itself already reports status=Creating with
+//     a non-empty creation_progress -- the synchronous prefix (Epic 2.1).
+//  2. svc.AwaitCreationTerminal -- the same primitive the MCP tools and
+//     Cancel/RetrySessionCreation RPCs use (Epic 2.3), not a bespoke poll
+//     loop -- observes the instance reach a terminal status of Active, not
+//     Failed, before awaitTimeout elapses.
+func assertReachesActiveViaPipeline(t *testing.T, svc *SessionService, created *sessionv1.Session, awaitTimeout, pollInterval time.Duration) {
+	t.Helper()
+	require.Equal(t, sessionv1.SessionStatus_SESSION_STATUS_CREATING, created.Status,
+		"CreateSession's synchronous response must report Creating before the pipeline runs")
+	require.NotEmpty(t, created.CreationProgress,
+		"CreateSession's synchronous response must publish an initial creation_progress message")
+
+	outcome, err := svc.awaitCreationTerminal(context.Background(), created.Id, awaitTimeout, pollInterval)
+	require.NoError(t, err, "AwaitCreationTerminal must not error before the pipeline reaches a terminal status")
+	assert.Equal(t, session.Active, outcome.Status,
+		"session must reach Active via the Background Resolution Pipeline, not %v (failure_reason=%q)",
+		outcome.Status, outcome.FailureReason)
+}
+
+// TestCreateSession_should_PersistCreationProgressUpdatedAt_When_PhaseTransitionsBeforeStarted
+// is Epic 1.1 Story 1.1.4's test (validation.md's Requirement → Test Mapping
+// row): creation_progress_updated_at must be durably persisted to storage --
+// not just held on the in-memory Instance -- the moment a Creation Phase
+// transitions, before the instance ever reaches Started()==true. This drives
+// a REAL pipeline invocation (same "ModeIsRestart" technique as
+// TestCreateSession_should_ReachActiveViaPipeline above, which is the
+// plan's own named highest-risk mode) rather than hand-setting the field on
+// a fixture, so it actually exercises setPhase's storage.UpdateInstance
+// call in session_creation_pipeline.go.
+func TestCreateSession_should_PersistCreationProgressUpdatedAt_When_PhaseTransitionsBeforeStarted(t *testing.T) {
+	const awaitTimeout = 30 * time.Second
+	const awaitPollInterval = 20 * time.Millisecond
+
+	fix := setupForkTestFixture(t)
+	t.Cleanup(fix.cleanup)
+	wireRegistryForActorSerialization(fix)
+
+	sourcePath := t.TempDir()
+	require.NoError(t, fix.storage.AddInstance(&session.Instance{
+		Title:   "epic11-story114-restart-source",
+		Path:    sourcePath,
+		Program: "sh",
+		Status:  session.Paused,
+	}))
+
+	// Restart mode's first two phases ("Resolving defaults...", "Setting up
+	// worktree...") both run, and are both persisted via setPhase's
+	// storage.UpdateInstance call, before Start() -- which flips
+	// Started()==true -- is ever invoked (see
+	// session_creation_pipeline.go's phase ordering). Capturing phase count
+	// here (mirroring ModeIsRestart's own technique) proves at least one such
+	// pre-Started transition actually happened in this run, not just that
+	// the schema supports it.
+	var mu sync.Mutex
+	var phases []string
+	fix.svc.creationPhaseHook = func(msg string) {
+		mu.Lock()
+		phases = append(phases, msg)
+		mu.Unlock()
+	}
+
+	resp, err := fix.svc.CreateSession(context.Background(), connect.NewRequest(&sessionv1.CreateSessionRequest{
+		Title:                "epic11-story114-restart",
+		Program:              "sh",
+		RestartFromSessionId: "epic11-story114-restart-source",
+	}))
+	require.NoError(t, err)
+	id := resp.Msg.Session.Id
+	t.Cleanup(func() { destroyCreatedSession(t, fix.svc, id) })
+
+	assertReachesActiveViaPipeline(t, fix.svc, resp.Msg.Session, awaitTimeout, awaitPollInterval)
+
+	mu.Lock()
+	observedPhases := len(phases)
+	mu.Unlock()
+	require.GreaterOrEqual(t, observedPhases, 2,
+		"at least one phase transition must occur before Start() runs; observed phases=%v", phases)
+
+	// Reload directly from storage (not the in-memory Instance) to prove the
+	// field was actually durably persisted, not merely held in the actor's
+	// in-memory state. UpdateInstanceIfEpoch (the terminal Active write) only
+	// touches status/failure_reason/updated_at -- see storage.go's doc
+	// comment -- so the value setPhase wrote during the pre-Started phase
+	// transitions above survives to be read back here. Goes through
+	// ListInstanceData's domain-level InstanceData.CreationProgressUpdatedAt
+	// field (session/storage.go) rather than a raw session/ent/session query
+	// -- server/services must not import session/ent directly (see
+	// .golangci.yml's no_ent_in_services depguard rule).
+	all, err := fix.storage.ListInstanceData()
+	require.NoError(t, err)
+	var found bool
+	for _, data := range all {
+		if data.Title != resp.Msg.Session.Title {
+			continue
+		}
+		found = true
+		assert.False(t, data.CreationProgressUpdatedAt.IsZero(),
+			"creation_progress_updated_at must be persisted to storage, not left zero, once a phase transition has occurred")
+	}
+	require.True(t, found, "created instance must be present in storage")
 }

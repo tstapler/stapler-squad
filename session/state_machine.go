@@ -4,12 +4,13 @@ import "context"
 
 // State machine diagram (6-state model):
 //
-//	Creating      --> Active, Stopped
+//	Creating      --> Active, Stopped, Failed
 //	Active        --> Paused, Stopped, Hibernated, Crashed
 //	Paused        --> Active, Stopped
 //	Stopped       --> Active
 //	Hibernated    --> Active, Stopped
 //	Crashed       --> Active, Stopped
+//	Failed        --> Creating
 //
 // Design notes:
 //   - Creating is the initial state for newly constructed instances.
@@ -18,6 +19,10 @@ import "context"
 //   - Crashed sessions had their tmux pane exit abnormally (remain-on-exit dead pane,
 //     non-zero exit/signal) as detected by SessionHealthChecker (session/health.go).
 //     Unlike Hibernated, transitioning to Crashed is not operator-initiated.
+//   - Failed sessions had their async creation pipeline (Epic 2.2) fail before
+//     ever reaching Active. Stopped stays terminal — no Stopped→Failed edge is
+//     defined. Failed→Creating is the retry path (Epic 1.2); epoch gating for
+//     that transition happens one layer up (ADR-002), not in this table.
 //   - After hooks for Active→Hibernated and Hibernated→Active launch goroutines so
 //     that heavy I/O (checkpoint write, process kill, process start) does not block
 //     the caller while the state-machine mutex is held.
@@ -43,6 +48,8 @@ type TransitionDef struct {
 var transitionDefs = []TransitionDef{
 	{From: Creating, To: Active},
 	{From: Creating, To: Stopped},
+	{From: Creating, To: Failed},
+	{From: Failed, To: Creating},
 	{From: Active, To: Paused},
 	{From: Active, To: Stopped},
 	{From: Active, To: Hibernated, After: func(ctx context.Context, i *Instance) {

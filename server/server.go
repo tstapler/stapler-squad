@@ -673,6 +673,11 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	// InjectHookConfig's PermissionRequest URL and InjectHooksConfig's stop/pre-tool-use/
 	// post-tool-use/prompt-submit endpoints resolve through this single shared mechanism.
 	services.SetHookBaseURLFn(hookBaseURLFn)
+	// Same lazy base-URL resolver, wired into BacklogLifecycleListener so agent-created
+	// PR bodies can link back to the backlog item instead of embedding a bare UUID.
+	if deps.BacklogLifecycleListener != nil {
+		deps.BacklogLifecycleListener.SetDashboardBaseURLFn(hookBaseURLFn)
+	}
 	// Wire the review queue poller for immediate queue checks on new approvals (Story 3, Task 3.1)
 	approvalHandler.SetQueueChecker(deps.ReviewQueuePoller)
 	// Wire the classifier and analytics store for auto-approve/deny before manual review
@@ -905,7 +910,7 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	if os.Getenv("STAPLER_SQUAD_INSTANCE") == "e2e-local" && deps.Storage != nil {
 		backlogSeedHandler := services.NewBacklogDebugSeedHandler(deps.Storage)
 		backlogSeedHandler.RegisterRoutes(srv.mux)
-		log.Info("Registered backlog debug seed handlers at /api/debug/backlog/seed-stuck, /api/debug/backlog/seed-queued, and /api/debug/backlog/seed-headless-triage-session (e2e-local only)")
+		log.Info("Registered backlog debug seed handlers at /api/debug/backlog/seed-stuck, /api/debug/backlog/seed-queued, /api/debug/backlog/seed-headless-triage-session, /api/debug/backlog/seed-work-item-session, and /api/debug/backlog/seed-work-session-with-worktree (e2e-local only)")
 
 		// Registered for project_plans/backlog-event-driven-updates's Playwright
 		// e2e layer — lets tests mutate a backlog item directly through the
@@ -1061,6 +1066,16 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		log.Info("Stale session notifier started",
 			"threshold_minutes", cfg.StaleSession.ThresholdMinutesOrDefault(),
 			"notify_enabled", cfg.StaleSession.NotifyEnabledOrDefault())
+	}
+
+	// Start stale creation sweeper (flips a Creating session whose persisted
+	// creation-progress timestamp has exceeded the configured threshold to
+	// Failed/Stale -- see StaleCreationSweeper doc comment, Epic 4.1).
+	if deps.ReviewQueuePoller != nil && deps.Storage != nil {
+		staleCreationSweeper := services.NewStaleCreationSweeper(deps.ReviewQueuePoller, deps.Storage, deps.EventBus)
+		go staleCreationSweeper.Start(serverCtx)
+		log.Info("Stale creation sweeper started",
+			"threshold_minutes", cfg.CreationStale.ThresholdMinutesOrDefault())
 	}
 
 	// Start memory pressure notifier (fires an operator-facing notification the first time

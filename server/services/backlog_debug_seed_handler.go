@@ -26,6 +26,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	sessiongit "github.com/tstapler/stapler-squad/session/git"
 )
 
 // BacklogDebugSeedHandler seeds BacklogStuckState rows for the e2e suite.
@@ -45,6 +46,8 @@ func (h *BacklogDebugSeedHandler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/debug/backlog/seed-stuck", h.handleSeed)
 	mux.HandleFunc("/api/debug/backlog/seed-queued", h.handleSeedQueued)
 	mux.HandleFunc("/api/debug/backlog/seed-headless-triage-session", h.handleSeedHeadlessTriageSession)
+	mux.HandleFunc("/api/debug/backlog/seed-work-item-session", h.handleSeedWorkItemSession)
+	mux.HandleFunc("/api/debug/backlog/seed-work-session-with-worktree", h.handleSeedWorkSessionWithWorktree)
 }
 
 type seedQueuedItemRequest struct {
@@ -370,6 +373,214 @@ func (h *BacklogDebugSeedHandler) handleSeedHeadlessTriageSession(w http.Respons
 	if err := json.NewEncoder(w).Encode(seedHeadlessTriageSessionResponse{
 		ItemID:    item.ID,
 		SessionID: itemSession.SessionUUID,
+	}); err != nil {
+		log.Error("backlog debug seed: encode response failed", "err", err)
+	}
+}
+
+type seedWorkItemSessionRequest struct {
+	Title  string `json:"title"`
+	Status string `json:"status"` // defaults to "review" if empty
+}
+
+type seedWorkItemSessionResponse struct {
+	ItemID    string `json:"itemId"`
+	SessionID string `json:"sessionId"`
+}
+
+// handleSeedWorkItemSession creates a backlog item with a linked "work"
+// ItemSession but no backing Session/Worktree row — enough for
+// ReviewChangesModal's "View Changes" trigger (gated on a truthy work
+// session only), without a real worktree/tmux spin-up.
+func (h *BacklogDebugSeedHandler) handleSeedWorkItemSession(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if h.storage == nil {
+		http.Error(w, "storage not available", http.StatusServiceUnavailable)
+		return
+	}
+
+	var req seedWorkItemSessionRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request body: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if req.Title == "" {
+		http.Error(w, "title is required", http.StatusBadRequest)
+		return
+	}
+	status := req.Status
+	if status == "" {
+		status = string(session.BacklogStatusReview)
+	}
+
+	ctx := r.Context()
+	item, err := h.storage.CreateBacklogItem(ctx, session.BacklogItemData{
+		Title:  req.Title,
+		Status: status,
+	})
+	if err != nil {
+		log.Error("backlog debug seed: create item failed", "err", err)
+		http.Error(w, "failed to create backlog item: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	sessionUUID := "e2e-work-" + uuid.New().String()
+	itemSession, err := h.storage.CreateItemSession(ctx, session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: sessionUUID,
+		SessionRole: session.SessionRoleWork,
+	})
+	if err != nil {
+		log.Error("backlog debug seed: create work item session failed", "err", err)
+		http.Error(w, "failed to create item session: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(seedWorkItemSessionResponse{
+		ItemID:    item.ID,
+		SessionID: itemSession.SessionUUID,
+	}); err != nil {
+		log.Error("backlog debug seed: encode response failed", "err", err)
+	}
+}
+
+type seedWorkSessionWithWorktreeRequest struct {
+	Title  string `json:"title"`
+	Status string `json:"status"` // defaults to "review" if empty
+}
+
+type seedWorkSessionWithWorktreeResponse struct {
+	ItemID       string `json:"itemId"`
+	SessionID    string `json:"sessionId"`
+	WorktreePath string `json:"worktreePath"`
+}
+
+// handleSeedWorkSessionWithWorktree creates a backlog item with a "work"
+// ItemSession backed by a real Session+Worktree row over a git-init'd temp
+// dir — needed because BacklogFileBrowserModal's trigger is gated on a
+// truthy worktreePath, which only a real ent.Worktree join produces.
+func (h *BacklogDebugSeedHandler) handleSeedWorkSessionWithWorktree(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if h.storage == nil {
+		http.Error(w, "storage not available", http.StatusServiceUnavailable)
+		return
+	}
+
+	var req seedWorkSessionWithWorktreeRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request body: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if req.Title == "" {
+		http.Error(w, "title is required", http.StatusBadRequest)
+		return
+	}
+	status := req.Status
+	if status == "" {
+		status = string(session.BacklogStatusReview)
+	}
+
+	// Rooted under this instance's own isolated config/state dir
+	// (STAPLER_SQUAD_TEST_DIR, set by the e2e harness's global-setup.ts)
+	// rather than the shared os.TempDir() — same rationale as the HasPlan
+	// branch above: avoids a predictable, world-writable temp path
+	// (CWE-377/CWE-59 symlink-race risk) and gets cleaned up for free by
+	// the e2e harness's global-teardown.ts, which deletes the whole test
+	// dir when the run ends (a bare os.MkdirTemp here would leak one
+	// directory per test run on any long-lived dev/CI host, since nothing
+	// else cleans up outside STAPLER_SQUAD_TEST_DIR).
+	configDir, err := config.GetConfigDir()
+	if err != nil {
+		log.Error("backlog debug seed: resolve config dir failed", "err", err)
+		http.Error(w, "failed to resolve config dir: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	worktreePath := filepath.Join(configDir, "e2e-worktree-artifacts", uuid.New().String())
+	if err := os.MkdirAll(worktreePath, 0o755); err != nil {
+		log.Error("backlog debug seed: create worktree dir failed", "err", err)
+		http.Error(w, "failed to create worktree dir: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if err := os.WriteFile(filepath.Join(worktreePath, "README.md"), []byte("# e2e fixture\n"), 0o644); err != nil {
+		log.Error("backlog debug seed: write worktree fixture file failed", "err", err)
+		http.Error(w, "failed to write worktree fixture file: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	// A second file so the file tree has more than one row — needed for
+	// tests that navigate between rows (modal-focus-trap AC5's tabindex-churn
+	// e2e test requires react-arborist to move focus off one row and onto
+	// another to exercise its roving-tabindex behavior).
+	if err := os.WriteFile(filepath.Join(worktreePath, "NOTES.md"), []byte("# notes\n"), 0o644); err != nil {
+		log.Error("backlog debug seed: write second worktree fixture file failed", "err", err)
+		http.Error(w, "failed to write second worktree fixture file: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	// A real (tiny) git repo, not just a bare directory: GetVCSStatus (the
+	// backend behind the VcsWidget the "Browse Files" trigger lives in) 404s
+	// the widget entirely for a non-version-controlled directory.
+	if err := sessiongit.InitializeProjectDirectory(worktreePath); err != nil {
+		log.Error("backlog debug seed: git-init worktree dir failed", "err", err)
+		http.Error(w, "failed to git-init worktree dir: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	ctx := r.Context()
+	item, err := h.storage.CreateBacklogItem(ctx, session.BacklogItemData{
+		Title:  req.Title,
+		Status: status,
+	})
+	if err != nil {
+		log.Error("backlog debug seed: create item failed", "err", err)
+		http.Error(w, "failed to create backlog item: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	sessionUUID := "e2e-work-wt-" + uuid.New().String()
+	now := time.Now()
+	if err := h.storage.CreateInstanceData(ctx, session.InstanceData{
+		Title:       sessionUUID,
+		UUID:        sessionUUID,
+		Path:        worktreePath,
+		Program:     "claude",
+		Status:      session.Stopped,
+		SessionType: session.SessionTypeDirectory,
+		CreatedAt:   now,
+		UpdatedAt:   now,
+		Worktree: session.GitWorktreeData{
+			RepoPath:      worktreePath,
+			WorktreePath:  worktreePath,
+			SessionName:   sessionUUID,
+			BranchName:    "main",
+			BaseCommitSHA: "0000000000000000000000000000000000000000",
+		},
+	}); err != nil {
+		log.Error("backlog debug seed: create work session instance failed", "err", err)
+		http.Error(w, "failed to create work session: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	if _, err := h.storage.CreateItemSession(ctx, session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: sessionUUID,
+		SessionRole: session.SessionRoleWork,
+	}); err != nil {
+		log.Error("backlog debug seed: create work item session failed", "err", err)
+		http.Error(w, "failed to create item session: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(seedWorkSessionWithWorktreeResponse{
+		ItemID:       item.ID,
+		SessionID:    sessionUUID,
+		WorktreePath: worktreePath,
 	}); err != nil {
 		log.Error("backlog debug seed: encode response failed", "err", err)
 	}

@@ -1056,6 +1056,13 @@ type pumpTestController struct {
 	// resubscribeUpdates, when non-nil, is returned from the second
 	// SubscribeControlModeUpdates call onward instead of updates.
 	resubscribeUpdates chan []byte
+
+	// startControlModeCalls counts StartControlMode invocations —
+	// TestPumpControlModeOutputIntoHub_should_RestartControlMode_When_ResubscribingAfterCrash
+	// asserts the pump actually attempts to restart the dead process on every
+	// (re)subscribe, not just re-register a listener on it.
+	startControlModeCalls atomic.Int32
+	startControlModeErr   error
 }
 
 func (c *pumpTestController) SetWindowSizeContext(context.Context, int, int) error { return nil }
@@ -1065,6 +1072,10 @@ func (c *pumpTestController) CapturePaneContentRawContext(context.Context) (stre
 }
 func (c *pumpTestController) GetPaneCursorPosition() (x, y int, err error) {
 	return 0, 0, nil
+}
+func (c *pumpTestController) StartControlMode() error {
+	c.startControlModeCalls.Add(1)
+	return c.startControlModeErr
 }
 func (c *pumpTestController) StopControlMode() error               { return nil }
 func (c *pumpTestController) UnsubscribeControlModeUpdates(string) {}
@@ -1176,6 +1187,18 @@ func TestPumpControlModeOutputIntoHub_should_ResubscribeAndKeepDelivering_When_C
 	require.Eventually(t, func() bool {
 		return controller.subscribeCalls.Load() >= 2
 	}, time.Second, 5*time.Millisecond, "expected the pump to resubscribe after its channel closed instead of exiting for good")
+
+	// 2026-09-01 regression: resubscribing alone is not recovery.
+	// SubscribeControlModeUpdates only registers a listener on whatever
+	// control-mode process already exists (or, if it crashed, immediately
+	// returns a pre-closed channel forever) — it never starts a fresh one.
+	// Before this fix, this loop spun on pumpControlModeResubscribeDelay
+	// forever after a real crash, permanently starving the hub (see
+	// StartControlMode's doc comment on session_controller.go). The pump
+	// must call StartControlMode on every (re)subscribe attempt, not just
+	// the first.
+	require.GreaterOrEqual(t, controller.startControlModeCalls.Load(), int32(2),
+		"expected the pump to call StartControlMode on every (re)subscribe attempt, not just the first")
 
 	controller.resubscribeUpdates <- []byte("after-restart;")
 	require.Eventually(t, func() bool {
@@ -1292,7 +1315,7 @@ func TestStreamTerminal_should_RouteThroughHubWithNoLegacyResizeCall_When_PathHu
 	serverStream, _, cleanup := createTestWebSocketPair(t)
 	defer cleanup()
 
-	transport := NewWebSocketTransport(serverStream)
+	transport := NewWebSocketTransport(serverStream, "path-hub-owned-test")
 	id := hub.AttachSubscriber(transport, streamhub.SubscriberCapability{CanResize: true, CanWrite: true})
 	transport.BindSubscriber(hub, id)
 
@@ -3057,7 +3080,7 @@ func TestStreamTerminal_should_PopulateConnectionCount_When_SessionIsPathHubOwne
 	stop := make(chan struct{})
 	defer close(stop)
 
-	transport1 := NewWebSocketTransport(serverStream)
+	transport1 := NewWebSocketTransport(serverStream, "conn-count-test")
 	id1 := hub.AttachSubscriber(transport1, streamhub.SubscriberCapability{CanResize: true})
 	transport1.BindSubscriber(hub, id1)
 	defer hub.DetachSubscriber(id1)
@@ -3086,7 +3109,7 @@ func TestStreamTerminal_should_PopulateConnectionCount_When_SessionIsPathHubOwne
 	// tick) delivers the current count without waiting a full poll interval.
 	require.Equal(t, int32(1), readConnectionCount())
 
-	transport2 := NewWebSocketTransport(serverStream)
+	transport2 := NewWebSocketTransport(serverStream, "conn-count-test")
 	id2 := hub.AttachSubscriber(transport2, streamhub.SubscriberCapability{CanResize: true})
 	transport2.BindSubscriber(hub, id2)
 	defer hub.DetachSubscriber(id2)

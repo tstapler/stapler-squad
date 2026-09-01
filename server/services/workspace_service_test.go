@@ -538,7 +538,15 @@ func TestWorkspaceService_GetVCSStatus_WorktreeMode_PopulatesCommitsAndDiffStat(
 	require.NoError(t, err)
 	require.Empty(t, resp.Msg.Error)
 
-	cached, ok := fix.svc.vcsStatusCache.Load(dir)
+	// NewGitWorktreeFromStorage symlink-resolves worktreePath on construction
+	// (session/git/worktree.go's CanonicalizeWorktreePath, needed so worktree-reuse
+	// identity checks compare consistently), so the cache key GetVCSStatus stores
+	// under is the resolved path -- resolve dir the same way before looking it up,
+	// or this spuriously fails wherever TMPDIR itself is a symlink (e.g. macOS's
+	// /var -> /private/var).
+	resolvedDir, err := filepath.EvalSymlinks(dir)
+	require.NoError(t, err)
+	cached, ok := fix.svc.vcsStatusCache.Load(resolvedDir)
 	require.True(t, ok, "GetVCSStatus should have cached the computed status")
 	entry := cached.(vcsStatusCacheEntry)
 

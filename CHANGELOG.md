@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.50.0](https://github.com/tstapler/stapler-squad/compare/v1.49.0...v1.50.0) (2026-08-30)
+
+
+### Features
+
+* **backlog:** PR deep links and import dedup with progress ([#663](https://github.com/tstapler/stapler-squad/issues/663)) ([ccabdf0](https://github.com/tstapler/stapler-squad/commit/ccabdf05da0128ac99d37405272cb0dd5441e8dd))
+* **session:** configurable retry backoff for crashed/stalled sessions ([#664](https://github.com/tstapler/stapler-squad/issues/664)) ([b7eab44](https://github.com/tstapler/stapler-squad/commit/b7eab4476ea9604dca730e0dc032c3ac9410badb))
+
+
+### Bug Fixes
+
+* **backlog:** trap keyboard focus in modal dialogs ([#665](https://github.com/tstapler/stapler-squad/issues/665)) ([876c786](https://github.com/tstapler/stapler-squad/commit/876c7866b9c15311c89dc8dbc913ae794a2e3142))
+* **web-app:** stop flow-control-stress.test.ts full-suite timeout flake ([#660](https://github.com/tstapler/stapler-squad/issues/660)) ([6046f8c](https://github.com/tstapler/stapler-squad/commit/6046f8c02fcbfc11d3d80331b8c966a79d7640fa))
+
 ## [1.49.0](https://github.com/tstapler/stapler-squad/compare/v1.48.0...v1.49.0) (2026-08-29)
 
 

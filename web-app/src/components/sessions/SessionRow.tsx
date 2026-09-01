@@ -1,7 +1,7 @@
 "use client";
 // +feature: remote-host-badge
 
-import { useRef, memo } from "react";
+import { useRef, useState, useEffect, memo } from "react";
 import { useSessionActions } from "@/lib/hooks/useSessionActions";
 import { Session, SessionStatus, SubStatus } from "@/gen/session/v1/types_pb";
 import { Tooltip } from "../ui/Tooltip";
@@ -41,7 +41,9 @@ import {
   rowMemoryPressure,
   checkboxCell,
   checkboxButton,
+  failureMessageLine,
 } from "./SessionRow.css";
+import { failureMessageIcon } from "./SessionCard.css";
 import {
   ColumnKey,
   DEFAULT_VISIBLE_COLUMNS,
@@ -110,6 +112,8 @@ function getStatusDotValue(status: SessionStatus): string {
       return "crashed";
     case SessionStatus.PERMANENTLY_FAILED:
       return "crashed";
+    case SessionStatus.FAILED:
+      return "failed";
     default:
       return "idle";
   }
@@ -124,10 +128,30 @@ const STATUS_DOT_LABELS: Record<string, string> = {
   "needs-approval": "Needs Approval",
   hibernated: "Hibernated",
   crashed: "Crashed",
+  failed: "Failed",
 };
 
 function getStatusDotLabel(dotValue: string): string {
   return STATUS_DOT_LABELS[dotValue] ?? dotValue;
+}
+
+// Failure-reason-specific copy — byte-for-byte mirror of SessionCard.tsx's
+// getFailureMessage (async-session-creation Epic 5.2/plan.md Story 5.2.2 /
+// UX research §2/§4's "three different messages, not one generic Failed
+// card"). Duplicated rather than imported because SessionCard.tsx doesn't
+// export this helper; kept identical so the row and card views never show
+// conflicting copy for the same FailureReason.
+function getFailureMessage(failureReason: string): string {
+  switch (failureReason) {
+    case "GitHubResolutionError":
+      return "Failed to resolve GitHub URL.";
+    case "StartupError":
+      return "Failed to start session.";
+    case "Stale":
+      return "This session creation appears to have stalled.";
+    default:
+      return "Session creation failed.";
+  }
 }
 
 function formatElapsed(ts?: { seconds: bigint; nanos: number }): string {
@@ -205,8 +229,76 @@ function SessionRowInner({
   const isHibernated = session.status === SessionStatus.HIBERNATED;
   const isRunning = session.status === SessionStatus.ACTIVE;
   const isCreating = session.status === SessionStatus.CREATING;
-  // Sessions needing user attention always show their primary action
-  const actionsAlwaysVisible = isPaused || isNeedsApproval || isHibernated;
+  const isFailed = session.status === SessionStatus.FAILED;
+
+  // Cancel/Retry guards (Epic 5.4, async-session-creation) — same
+  // synchronous-ref + state pattern as Omnibar.tsx's isSubmittingRef and
+  // SessionCard.tsx's mirror of it: the ref blocks a second click before
+  // React re-renders with the disabled attribute, the state actually
+  // disables/re-enables the button. Reset once the stream carries the
+  // session past the in-flight status so a later cycle on the SAME row
+  // gets a fresh guard rather than staying disabled forever.
+  const cancelInFlightRef = useRef(false);
+  const [cancelDisabled, setCancelDisabled] = useState(false);
+  const retryInFlightRef = useRef(false);
+  const [retryDisabled, setRetryDisabled] = useState(false);
+
+  useEffect(() => {
+    if (!isCreating) {
+      cancelInFlightRef.current = false;
+      setCancelDisabled(false);
+    }
+  }, [isCreating]);
+
+  useEffect(() => {
+    if (isCreating) {
+      retryInFlightRef.current = false;
+      setRetryDisabled(false);
+    }
+  }, [isCreating]);
+
+  const handleCancelCreation = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (cancelInFlightRef.current) return;
+    cancelInFlightRef.current = true;
+    setCancelDisabled(true);
+    const result = await sessionActions.cancelCreation();
+    if (!result.success) {
+      cancelInFlightRef.current = false;
+      setCancelDisabled(false);
+    }
+  };
+
+  const handleRetryCreation = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (retryInFlightRef.current) return;
+    retryInFlightRef.current = true;
+    setRetryDisabled(true);
+    const ok = await sessionActions.retryCreation();
+    if (!ok) {
+      retryInFlightRef.current = false;
+      setRetryDisabled(false);
+    }
+  };
+  // Sessions needing user attention always show their primary action --
+  // Creating/Failed included so Cancel/Retry are clickable immediately
+  // without requiring a hover (Epic 5.4/Story 5.4.1's "clickable
+  // immediately when creation starts, not gated on any delay").
+  const actionsAlwaysVisible =
+    isPaused || isNeedsApproval || isHibernated || isCreating || isFailed;
+  // session.failureReason is on the wire today (types_pb.ts), unlike
+  // SessionCard.tsx's defensive cast (that comment predates this field
+  // landing) -- read it directly. Falls back to creation_progress, which the
+  // pipeline already sets to a detailed message for
+  // GitHubResolutionError/StartupError before the terminal write; Stale
+  // doesn't get a fresh setPhase call, so a Stale session without
+  // failureReason falls back to the generic message instead of whatever
+  // stale progress text it was last showing (same behavior as SessionCard).
+  const failureMessage = isFailed
+    ? session.failureReason
+      ? getFailureMessage(session.failureReason)
+      : session.creationProgress || getFailureMessage("")
+    : "";
   const lastActivity = getLastActivity(session);
   const elapsedText = formatElapsed(lastActivity ?? session.updatedAt);
   // Show branch separately if the branch column is visible; otherwise fold into displayName.
@@ -394,6 +486,20 @@ function SessionRowInner({
             </Tooltip>
           )}
         </span>
+        {/*
+          Persistent Failed-state message — row-layout equivalent of
+          SessionCard.tsx's failure-message row (design/ux.md Surface 3: the
+          toast in Epic 5.3 is transient, this line is not). Third line in
+          nameCell, under the name and path lines. Retry-button extension
+          point (Epic 5.4) is left for that epic, not built here -- same
+          scope boundary as SessionCard.tsx's equivalent block.
+        */}
+        {isFailed && (
+          <span className={failureMessageLine}>
+            <span className={failureMessageIcon} aria-hidden="true">⚠</span>
+            <span data-testid="failure-message">{failureMessage}</span>
+          </span>
+        )}
       </span>
 
       {/* Agent icon — optional column */}
@@ -553,6 +659,40 @@ function SessionRowInner({
               <span aria-hidden="true">⏸️</span> Pause
             </button>
           )}
+          {/*
+            Cancel button (Epic 5.4/Story 5.4.1) — clickable immediately,
+            not gated on any delay. On success the instance is deleted
+            server-side and the row is removed from the list; on a
+            lost-race FailedPrecondition the normal stream status update
+            takes over instead of a Cancelled flash.
+          */}
+          {isCreating && (
+            <button
+              className={inlineActionButton}
+              onClick={handleCancelCreation}
+              disabled={cancelDisabled}
+              aria-label="Cancel session creation"
+              data-testid="cancel-creation-button"
+            >
+              Cancel
+            </button>
+          )}
+          {/*
+            Retry button (Epic 5.4/Story 5.4.2) — transitions the SAME row
+            in place (Failed -> Creating), never a second row. Disabled
+            synchronously on click so a double-click only fires one RPC.
+          */}
+          {isFailed && (
+            <button
+              className={inlineActionButton}
+              onClick={handleRetryCreation}
+              disabled={retryDisabled}
+              aria-label="Retry creating session"
+              data-testid="retry-creation-button"
+            >
+              Retry
+            </button>
+          )}
         </span>
         <SessionActionsOverflow
           ref={overflowRef}
@@ -581,6 +721,27 @@ function SessionRowInner({
             if (!result) throw new Error("Failed to change program.");
           }}
         />
+      </span>
+      {/*
+        Persistent live region for creation progress AND Failed-state
+        announcements -- mirrors SessionCard.tsx's single reused role="status"
+        span (plan.md Story 5.2.2 / design/ux.md's "one live region, not
+        two"). aria-live flips polite (routine Creating progress) ->
+        assertive (a Failed transition is worth interrupting for) via
+        attribute mutation on this node, not a remount. Always in the DOM
+        (not conditionally mounted), visually hidden via the same
+        sr-only-style pattern as SessionCard.tsx's version (this file has no
+        shared sr-only class today). Absolutely positioned, so it does not
+        consume a grid track in this row's CSS grid layout.
+      */}
+      <span
+        role="status"
+        aria-live={isFailed ? "assertive" : "polite"}
+        id={`creation-status-${session.id}`}
+        data-testid="creation-live-region"
+        style={{ position: "absolute", width: 1, height: 1, overflow: "hidden", clipPath: "inset(50%)", whiteSpace: "nowrap" }}
+      >
+        {isFailed ? failureMessage : isCreating ? (session.creationProgress || "Starting session...") : ""}
       </span>
     </div>
   );

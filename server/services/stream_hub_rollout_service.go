@@ -7,6 +7,7 @@ import (
 	"connectrpc.com/connect"
 	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/session"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -25,11 +26,39 @@ import (
 // effective value be flipped live from the browser too, no restart
 // required, still subject to the same rollback-rehearsal gate
 // (config.ResolveGlobalStreamHubDefault) as the env var path.
-type StreamHubRolloutService struct{}
+type StreamHubRolloutService struct {
+	// findInstance looks up a live managed/external instance by title, the
+	// same lookup SessionService.findInstance provides. Used only to derive
+	// a per-session override's TmuxPrefix (custom prefixes are rare but
+	// possible); nil-safe (falls back to the default prefix) so tests and
+	// callers that never wire it still work for the overwhelmingly common
+	// default-prefix case.
+	findInstance func(title string) *session.Instance
+}
 
-// NewStreamHubRolloutService creates a StreamHubRolloutService.
-func NewStreamHubRolloutService() *StreamHubRolloutService {
-	return &StreamHubRolloutService{}
+// NewStreamHubRolloutService creates a StreamHubRolloutService. findInstance
+// resolves a session title to its live instance so SetStreamHubSessionOverride
+// can derive the session's actual TmuxPrefix; pass nil to always assume the
+// default prefix (fine for tests and any session that never customizes it).
+func NewStreamHubRolloutService(findInstance func(title string) *session.Instance) *StreamHubRolloutService {
+	return &StreamHubRolloutService{findInstance: findInstance}
+}
+
+// resolveSessionOverrideKey converts a human-supplied session title into the
+// tmux-prefixed key StreamOwnershipLock.Resolve actually queries with (see
+// streamHubSessionKey's doc comment for why this translation exists at all).
+// Looks up the live instance to honor a custom TmuxPrefix when one is
+// wired and the session is currently known; falls back to the default
+// prefix otherwise -- correct for the default-prefix case even when the
+// session doesn't exist yet (e.g. an override set in advance of a session
+// that will be (re)created with this exact title).
+func (s *StreamHubRolloutService) resolveSessionOverrideKey(title string) string {
+	if s.findInstance != nil {
+		if inst := s.findInstance(title); inst != nil {
+			return tmuxSessionNameForStreamPath(inst)
+		}
+	}
+	return streamHubSessionKey(title, "")
 }
 
 // status builds the current StreamHubRolloutStatus from live config plus the
@@ -89,7 +118,8 @@ func (s *StreamHubRolloutService) SetStreamHubSessionOverride(
 	req *connect.Request[sessionv1.SetStreamHubSessionOverrideRequest],
 ) (*connect.Response[sessionv1.StreamHubRolloutStatus], error) {
 	cfg := config.LoadConfig()
-	if err := cfg.SetStreamHubSessionOverride(req.Msg.GetSessionName(), req.Msg.ForceHub); err != nil {
+	key := s.resolveSessionOverrideKey(req.Msg.GetSessionName())
+	if err := cfg.SetStreamHubSessionOverride(key, req.Msg.ForceHub); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
 	return connect.NewResponse(s.status()), nil
