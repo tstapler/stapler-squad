@@ -203,10 +203,21 @@ func (s *SessionService) runBackgroundResolutionPipeline(rpcCtx context.Context,
 	// The actual alias/default-based defaults merge (config.ResolveAlias /
 	// config.ResolveDefaults post-existence-check work: env vars, CLI
 	// flags, path, program, autoyes, alias session type) already ran
-	// synchronously in CreateSession's prefix, ahead of instance
-	// construction -- see this epic's implementation report for the scoping
-	// note on why that merge itself was not relocated in this pass. This
-	// phase still exists, and still publishes progress + persists, so every
+	// synchronously in CreateSession's prefix (session_service.go, near the
+	// alias/default resolution block), ahead of instance construction --
+	// this deviates from Task 2.2.2b's spec, which called for that merge to
+	// move here. It stayed synchronous because the resolved path is needed
+	// synchronously anyway (Directory-mode's existence check and instance
+	// construction both read it before the pipeline goroutine spawns);
+	// moving the merge alone would require gating that path behind a
+	// placeholder-then-patch scheme like SetGitHubResolution, which is a
+	// much larger, riskier restructuring across every session-creation mode
+	// than this vestigial phase justifies. See the "Scope Deviations"
+	// section of project_plans/async-session-creation/implementation/plan.md
+	// (after Risk Control) for the full rationale, including why this is
+	// low-practical-risk (the merge is CPU-only: struct field copies and
+	// os.LookupEnv, no I/O). This phase still exists, and still publishes
+	// progress + persists, so every
 	// session type (GitHub-URL or plain) surfaces the same observable
 	// Creation Phase sequence from plan.md's glossary.
 	setPhase("Resolving defaults...")

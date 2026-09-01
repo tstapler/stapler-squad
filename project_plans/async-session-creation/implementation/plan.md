@@ -167,6 +167,58 @@ wire-compatible (additive) — no proto migration tooling needed, run
   entirely by pre-merge verification breadth (Phase 6, Epic 6.1) rather than
   a staged production rollout.
 
+## Scope Deviations
+
+- **Task 2.2.2b (Epic 2.2, Story 2.2.2) was not implemented as specified.**
+  The task called for moving the alias-based/default-based defaults merge
+  (`config.ResolveAlias`/`config.ResolveDefaults` post-existence-check work:
+  env vars, CLI flags, path, program, autoyes, alias session type) out of
+  `CreateSession`'s synchronous prefix and into the Background Resolution
+  Pipeline, leaving only the alias-*existence* check (`config.FindAlias`)
+  synchronous. As shipped, both `config.ResolveAlias`
+  (`server/services/session_service.go`, alias branch of the defaults-merge
+  block) and `config.ResolveDefaults` (same block, non-alias branch) still
+  run synchronously in `CreateSession`, before the pipeline goroutine is
+  spawned. `server/services/session_creation_pipeline.go`'s "Resolving
+  defaults..." phase is a no-op placeholder kept only so every session type
+  still surfaces the same observable Creation Phase sequence (per Story
+  2.2.2's acceptance criteria on phase-transition consistency); it performs
+  no actual resolution work.
+  - **Why**: the resolved `path` this merge produces is also needed
+    synchronously — it drives Directory-mode's synchronous existence check
+    and instance construction, both of which happen before the pipeline
+    dispatches. Relocating the merge alone, without also relocating path
+    resolution, would require gating instance construction behind a
+    placeholder-then-patch scheme analogous to the existing
+    `SetGitHubResolution` mechanism (construct with a provisional/empty
+    path, patch it in once the pipeline resolves it). That restructuring
+    would touch instance construction for every one of the 7
+    session-creation modes (directory, one-off, restart, fork, alias,
+    autonomous, remote), not just the alias/default-merge path — a
+    substantially larger and riskier change than the vestigial
+    "Resolving defaults..." phase it would replace, for a merge whose
+    synchronous cost is negligible (see below).
+  - **This is a deliberate scope-narrowing made during implementation, not
+    a minor detail** — it is exactly the kind of undocumented deviation
+    from the shared pre-branch skeleton that this project's Risk Control
+    section (above) asks reviewers to scrutinize adversarially, given the
+    lack of a feature flag. Flagging it here explicitly, rather than
+    leaving it implicit in the diff, is the intended remediation.
+  - **Practical risk is low because the merge is CPU-only**: verified by
+    reading `config/defaults.go`'s `ResolveAlias`, `ResolveDefaults`,
+    `FindAlias`, `mergeProfileInto`, and `ExpandEnvVars` — every one of
+    them operates purely on in-memory `*Config`/struct fields (field
+    copies, map merges, a `strings.EqualFold` scan over the in-memory
+    alias slice) plus `os.LookupEnv` for `${VAR}` expansion. None perform
+    file I/O, network calls, or subprocess execution. So while this merge
+    remaining synchronous does deviate from the plan, it does not
+    reintroduce the class of hang this project exists to fix (network
+    clones, worktree/tmux setup) — those still run exclusively in the
+    pipeline, unaffected by this deviation.
+  - See also the corresponding comment at
+    `server/services/session_creation_pipeline.go`'s "Resolving
+    defaults..." phase.
+
 ## Unresolved Questions
 
 - [ ] Exact copy/wording for each `FailureReason` variant's user-facing
