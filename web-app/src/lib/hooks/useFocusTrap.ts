@@ -64,27 +64,19 @@ export function useFocusTrap(
       }
     };
 
-    // Safety net for embedded widgets that rewrite their own tabindex the
-    // instant they receive focus (e.g. react-arborist's roving-tabindex
-    // FileTree sets the just-focused row back to tabindex="-1" on render,
-    // which makes getFocusable() miss it and lets a subsequent native Tab
-    // slip past handleKeyDown's first/last check entirely — confirmed via a
-    // real-browser regression, filed as backlog item
-    // 4a1f73c4-5558-41f8-9860-8508fb874fcc). If focus ever lands outside the
-    // container anyway, snap it back in — unless it landed on this trap's own
-    // trigger element (some callers, e.g. SessionActionsOverflow, keep an
-    // outer trap like its overflow menu active while an inner dialog opens on
-    // top and shares the same trigger; the inner dialog's own cleanup
-    // deliberately restores focus to that trigger on close, and the still-
-    // active outer trap must not fight that) or inside another dialog-role
-    // element (a sibling trap's own container, whose focus-trap effect may
-    // not have registered its listener yet, e.g. React's `autoFocus` moving
-    // focus into a freshly-portalled dialog synchronously during commit,
-    // before that dialog's own useEffect has run).
+    // Safety net for widgets that rewrite their own tabindex on focus (e.g.
+    // react-arborist's FileTree), which can let native Tab slip past
+    // handleKeyDown's first/last check entirely — backlog item
+    // 4a1f73c4-5558-41f8-9860-8508fb874fcc.
     const handleFocusIn = (e: FocusEvent) => {
       const target = e.target as Node | null;
       if (!target || container.contains(target)) return;
+      // A deliberate close-restore (e.g. a sibling trap sharing this trigger,
+      // like SessionActionsOverflow's Program Picker over its overflow menu),
+      // not an escape.
       if (target === triggerRef?.current) return;
+      // Focus moved into another legitimate dialog — e.g. React's autoFocus
+      // lands here before that dialog's own trap effect has registered.
       const targetEl = target as HTMLElement;
       if (targetEl.closest?.('[role="dialog"], [role="alertdialog"]')) return;
       (getFocusable()[0] ?? container).focus();
