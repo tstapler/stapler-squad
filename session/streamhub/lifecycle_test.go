@@ -45,6 +45,8 @@ func newFakeSessionController() *fakeSessionController {
 	return &fakeSessionController{updates: make(chan []byte, 16)}
 }
 
+func (f *fakeSessionController) StartControlMode() error { return nil }
+
 func (f *fakeSessionController) StopControlMode() error {
 	f.stopCalls.Add(1)
 	if f.stopFn != nil {

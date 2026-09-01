@@ -498,6 +498,23 @@ func pumpControlModeOutputIntoHub(hub *streamhub.StreamHub, controller streamhub
 			return
 		}
 
+		// Ensure a live control-mode process backs the subscription about to be
+		// made. A no-op when one is already running (StartControlMode's
+		// refcounted fast path); forks a fresh one when the previous process
+		// crashed, which is exactly the case SubscribeControlModeUpdates alone
+		// can never recover from — it only registers a listener on whatever
+		// process already exists (or immediately returns a pre-closed channel
+		// if none does), it never starts one. Without this call, a single
+		// control-mode crash left this loop spinning on
+		// pumpControlModeResubscribeDelay forever, permanently starving the hub
+		// of live output with no self-healing path (2026-09-01 regression: the
+		// per-session canary override's first real end-to-end exercise hit this
+		// on its very first control-mode hiccup — see docs/bugs, "streamhub
+		// silently never shows typed input after a control-mode crash").
+		if err := controller.StartControlMode(); err != nil {
+			log.Warn("streamhub raw-output pump: StartControlMode failed, will retry", "session", sessionName, "err", err)
+		}
+
 		_, updates := controller.SubscribeControlModeUpdates()
 		for data := range updates {
 			hub.OnRawOutput(data)
@@ -583,6 +600,26 @@ func init() {
 	})
 }
 
+// streamHubSessionKey computes the StreamOwnershipLock/HubRegistry key for a
+// session from its title and TmuxPrefix (empty meaning the default). Both
+// tmuxSessionNameForStreamPath (the live per-connection resolution below) and
+// StreamHubRolloutService.SetStreamHubSessionOverride (the config-write
+// boundary, stream_hub_rollout_service.go) must derive this identically, or
+// a canary override silently never matches the key Resolve actually queries
+// with -- exactly the bug this shared helper closes: the two call sites used
+// to duplicate this derivation independently, and the config-write side
+// stored per-session overrides keyed by the bare session title while
+// Resolve/AcquireOwnershipLock always queried by this tmux-prefixed form, so
+// every override ever set (by hand or otherwise) silently no-opped and
+// StreamHub never actually served a single connection despite the rollout
+// looking "on" (2026-09-01).
+func streamHubSessionKey(title, tmuxPrefix string) string {
+	if tmuxPrefix == "" {
+		tmuxPrefix = "staplersquad_"
+	}
+	return tmux.NewSessionName(title, tmuxPrefix).String()
+}
+
 // tmuxSessionNameForStreamPath computes the tmux session name StreamPath
 // resolution keys on for instance, mirroring streamViaHub's own derivation
 // (session title + tmux prefix, default "staplersquad_"). Resolution must
@@ -590,11 +627,7 @@ func init() {
 // hub lookup inside streamViaHub (HubRegistry.GetOrCreate) agree.
 func tmuxSessionNameForStreamPath(instance *session.Instance) string {
 	snap := instance.Snapshot()
-	tmuxPrefix := snap.TmuxPrefix
-	if tmuxPrefix == "" {
-		tmuxPrefix = "staplersquad_"
-	}
-	return tmux.NewSessionName(snap.Title, tmuxPrefix).String()
+	return streamHubSessionKey(snap.Title, snap.TmuxPrefix)
 }
 
 // waitForQuiescence waits until no updates arrive for quietFor duration, or timeout elapses.
@@ -1741,7 +1774,7 @@ func (h *ConnectRPCWebSocketHandler) streamViaHub(stream *connectWebSocketStream
 		return nil
 	}
 
-	transport := NewWebSocketTransport(stream)
+	transport := NewWebSocketTransport(stream, sessionID)
 	// StreamHub.AttachSubscriber now sends a CatchUpSnapshot to every
 	// Transport within the same call (Story 1.2.1's AC). Suppress that one
 	// send for the browser path specifically: it is a raw, unprepared
@@ -1786,19 +1819,32 @@ func (h *ConnectRPCWebSocketHandler) streamViaHub(stream *connectWebSocketStream
 	// bytes, and ansiSnapshotPrefix alone is non-empty, so an idle/empty
 	// session still reaches "connected, nothing to show" instead of spinning
 	// forever with no future event to ever clear it.
-	if content, err := instance.CapturePaneContentRaw(); err == nil {
-		fullContent := withCursorSync(ansiSnapshotPrefix+prepareSnapshotContent(content), instance)
-		initMsg := &sessionv1.TerminalData{
-			SessionId: sessionID,
-			Data: &sessionv1.TerminalData_Output{
-				Output: &sessionv1.TerminalOutput{Data: []byte(fullContent)},
-			},
-		}
-		if b, merr := proto.Marshal(initMsg); merr != nil {
-			log.Error("[streamViaHub] failed to marshal initial content", "err", merr)
-		} else if wsErr := stream.WriteMessage(websocket.BinaryMessage, protocol.CreateEnvelope(0, b)); wsErr != nil {
-			return fmt.Errorf("failed to send initial content: %w", wsErr)
-		}
+	content, captureErr := instance.CapturePaneContentRaw()
+	if captureErr != nil {
+		// A capture failure used to skip this send entirely, silently
+		// breaking the "even when content=='' " guarantee this block's own
+		// doc comment promises: the client's isLoadingInitialContent only
+		// ever clears on a received message, so skipping the send left it
+		// spinning forever with genuinely nothing to signal a way out — no
+		// error, no empty snapshot, nothing (2026-09-01, first real
+		// end-to-end exercise of this path). Log it and fall through to send
+		// an empty snapshot anyway: the live stream corrects the display
+		// once capture starts succeeding again, same as the empty-pane case
+		// this comment already documents.
+		log.Warn("[streamViaHub] failed to capture initial content, sending empty snapshot instead", "session", sessionID, "err", captureErr)
+		content = ""
+	}
+	fullContent := withCursorSync(ansiSnapshotPrefix+prepareSnapshotContent(content), instance)
+	initMsg := &sessionv1.TerminalData{
+		SessionId: sessionID,
+		Data: &sessionv1.TerminalData_Output{
+			Output: &sessionv1.TerminalOutput{Data: []byte(fullContent)},
+		},
+	}
+	if b, merr := proto.Marshal(initMsg); merr != nil {
+		log.Error("[streamViaHub] failed to marshal initial content", "err", merr)
+	} else if wsErr := stream.WriteMessage(websocket.BinaryMessage, protocol.CreateEnvelope(0, b)); wsErr != nil {
+		return fmt.Errorf("failed to send initial content: %w", wsErr)
 	}
 
 	doneChan := make(chan struct{})

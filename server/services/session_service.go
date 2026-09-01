@@ -735,7 +735,7 @@ func NewSessionServiceWithSearchEngine(storage session.InstanceStore, eventBus *
 		defaultsSvc:                 NewDefaultsService(),
 		slackConfigSvc:              NewSlackConfigService(NewSlackNotifier()),
 		callbackConfigSvc:           NewCallbackConfigService(),
-		streamHubRolloutSvc:         NewStreamHubRolloutService(),
+		streamHubRolloutSvc:         NewStreamHubRolloutService(nil),
 		launcherPresetsSvc:          NewLauncherPresetsService(),
 		projectSvc:                  NewProjectService(concStorage),
 		checkpointSvc:               NewCheckpointService(storage, eventBus),
@@ -776,6 +776,7 @@ func NewSessionServiceWithSearchEngine(storage session.InstanceStore, eventBus *
 	// (see the Set* wiring doc comment above NewSessionService), so they are nil
 	// here at construction time.
 	svc.prCreationSvc = NewPRCreationService(storage, eventBus, svc.headlessPool, svc.backlogLifecycleListener, svc.findInstance)
+	svc.streamHubRolloutSvc = NewStreamHubRolloutService(svc.findInstance)
 
 	// Wire the autonomous orchestration service with a storage getter closure.
 	autonomousSvc := NewAutonomousOrchestrationService(nil, eventBus)
