@@ -71,11 +71,23 @@ export function useFocusTrap(
     // slip past handleKeyDown's first/last check entirely — confirmed via a
     // real-browser regression, filed as backlog item
     // 4a1f73c4-5558-41f8-9860-8508fb874fcc). If focus ever lands outside the
-    // container anyway, snap it back in.
+    // container anyway, snap it back in — unless it landed on this trap's own
+    // trigger element (some callers, e.g. SessionActionsOverflow, keep an
+    // outer trap like its overflow menu active while an inner dialog opens on
+    // top and shares the same trigger; the inner dialog's own cleanup
+    // deliberately restores focus to that trigger on close, and the still-
+    // active outer trap must not fight that) or inside another dialog-role
+    // element (a sibling trap's own container, whose focus-trap effect may
+    // not have registered its listener yet, e.g. React's `autoFocus` moving
+    // focus into a freshly-portalled dialog synchronously during commit,
+    // before that dialog's own useEffect has run).
     const handleFocusIn = (e: FocusEvent) => {
-      if (!container.contains(e.target as Node)) {
-        (getFocusable()[0] ?? container).focus();
-      }
+      const target = e.target as Node | null;
+      if (!target || container.contains(target)) return;
+      if (target === triggerRef?.current) return;
+      const targetEl = target as HTMLElement;
+      if (targetEl.closest?.('[role="dialog"], [role="alertdialog"]')) return;
+      (getFocusable()[0] ?? container).focus();
     };
 
     document.addEventListener("keydown", handleKeyDown);
