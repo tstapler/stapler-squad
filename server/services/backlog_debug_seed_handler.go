@@ -513,6 +513,15 @@ func (h *BacklogDebugSeedHandler) handleSeedWorkSessionWithWorktree(w http.Respo
 		http.Error(w, "failed to write worktree fixture file: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
+	// A second file so the file tree has more than one row — needed for
+	// tests that navigate between rows (modal-focus-trap AC5's tabindex-churn
+	// e2e test requires react-arborist to move focus off one row and onto
+	// another to exercise its roving-tabindex behavior).
+	if err := os.WriteFile(filepath.Join(worktreePath, "NOTES.md"), []byte("# notes\n"), 0o644); err != nil {
+		log.Error("backlog debug seed: write second worktree fixture file failed", "err", err)
+		http.Error(w, "failed to write second worktree fixture file: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
 	// A real (tiny) git repo, not just a bare directory: GetVCSStatus (the
 	// backend behind the VcsWidget the "Browse Files" trigger lives in) 404s
 	// the widget entirely for a non-version-controlled directory.

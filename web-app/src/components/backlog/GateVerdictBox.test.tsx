@@ -315,23 +315,20 @@ describe("GateVerdictBox — skip gate", () => {
     expect(confirmBtn).toHaveFocus();
   });
 
-  it("GateVerdictBox_should_notThrow_When_EscapeClosesDialogWithTriggerButtonUnmounted", () => {
+  it("GateVerdictBox_should_RestoreFocusToSkipLink_When_EscapeClosesDialogWithTriggerButtonUnmounted", () => {
     render(<GateVerdictBox {...makeProps({ verdict: "PASS" })} />);
 
-    fireEvent.click(screen.getByRole("button", { name: /Skip gate and mark done without review/i }));
-    // The skip-link trigger button (skipLinkRef) is unmounted while the
-    // dialog is open (see the ternary in GateVerdictBox.tsx). Escape flips
-    // showSkipConfirm back to false, which is useFocusTrap's isActive dep —
-    // its cleanup (triggerEl?.focus()) then runs against that now-null ref
-    // and must no-op rather than throw. Confirming the dialog doesn't
-    // exercise this: handleSkipGateConfirm never sets showSkipConfirm(false)
-    // itself (the parent closes it via a status transition instead), so
-    // useFocusTrap's cleanup never runs on that path within this component.
-    expect(() => {
-      fireEvent.keyDown(screen.getByRole("alertdialog"), { key: "Escape" });
-    }).not.toThrow();
+    const skipLink = screen.getByRole("button", { name: /Skip gate and mark done without review/i });
+    fireEvent.click(skipLink);
+    // The skip-link trigger button (skipLinkRef) unmounts while the dialog
+    // is open (see the ternary in GateVerdictBox.tsx), so useFocusTrap is
+    // given a separate skipTriggerRef captured at click time — otherwise
+    // its cleanup would try to focus an already-null ref and silently fail
+    // to restore focus at all.
+    fireEvent.keyDown(screen.getByRole("alertdialog"), { key: "Escape" });
 
     expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Skip gate and mark done without review/i })).toHaveFocus();
   });
 });
 
