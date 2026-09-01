@@ -93,6 +93,24 @@ describe("useFocusTrap", () => {
     trigger.remove();
   });
 
+  it("useFocusTrap_should_RestoreFocusToTrigger_When_IsActiveTogglesFalseWithoutUnmount", () => {
+    const trigger = document.createElement("button");
+    document.body.appendChild(trigger);
+    const triggerRef = { current: trigger as HTMLElement | null };
+
+    const { rerender } = render(<TrapHarness isActive triggerRef={triggerRef} />);
+
+    act(() => {
+      rerender(<TrapHarness isActive={false} triggerRef={triggerRef} />);
+    });
+
+    // Container is still mounted — only isActive flipped. React runs the
+    // same cleanup path on dep change as on unmount, so this pins that
+    // behavior explicitly rather than relying on it being incidental.
+    expect(document.activeElement).toBe(trigger);
+    trigger.remove();
+  });
+
   it("useFocusTrap_should_NotThrowAndDropFocusToBody_When_NoTriggerRefSupplied", () => {
     const { unmount, getByTestId } = render(<TrapHarness isActive />);
     const first = getByTestId("first");
