@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/config"
+	"github.com/tstapler/stapler-squad/jules"
 	"github.com/tstapler/stapler-squad/log"
 )
 
@@ -107,9 +109,14 @@ type CredentialChain struct {
 //  3. Claude CLI OAuth file (~/.claude/.credentials.json)
 //  4. Antigravity OAuth file (~/.gemini/oauth_creds.json)
 //  5. gcloud Application Default Credentials
+//
+// JulesCredentialSource is registered immediately after EnvVarCredentialSource
+// so JULES_API_KEY still wins over the keychain for scripted/CI use, matching
+// this chain's existing env-first ordering.
 func NewDefaultChain(cfg *config.Config) *CredentialChain {
 	return &CredentialChain{sources: []CredentialSource{
 		&EnvVarCredentialSource{},
+		&JulesCredentialSource{tokens: jules.NewKeyringTokenSource()},
 		&ConfigFileCredentialSource{cfg: cfg},
 		&ClaudeOAuthCredentialSource{},
 		&AgyCredentialSource{},
@@ -154,6 +161,7 @@ var providerEnvVars = map[string][]string{
 	"anthropic": {"ANTHROPIC_API_KEY"},
 	"google":    {"GEMINI_API_KEY", "GOOGLE_API_KEY"},
 	"openai":    {"OPENAI_API_KEY"},
+	"jules":     {"JULES_API_KEY"},
 }
 
 // EnvVarCredentialSource reads API keys from environment variables.
@@ -397,5 +405,46 @@ func (s *AgyCredentialSource) resolveGcloudADC(path string) (Credential, bool, e
 		Provider: "google",
 		IsADC:    true, // caller must use google SDK, not manual Bearer header
 		Source:   "gcloud_adc:~/.config/gcloud/application_default_credentials.json",
+	}, true, nil
+}
+
+// ---------------------------------------------------------------------------
+// 5. JulesCredentialSource — reads the Jules API key from the OS keychain
+// ---------------------------------------------------------------------------
+
+// julesKeyringTokenSource is the subset of *jules.KeyringTokenSource this
+// package depends on, so tests can inject a stub without touching the real
+// OS keychain.
+type julesKeyringTokenSource interface {
+	APIKey(ctx context.Context) (jules.JulesAPIKey, error)
+}
+
+// JulesCredentialSource resolves the Jules API key for provider "jules" by
+// delegating to a jules.KeyringTokenSource (OS-keychain-backed, per
+// project_plans/google-jules-integration/implementation/plan.md Epic 1.2).
+// It is a no-op for every other provider.
+type JulesCredentialSource struct {
+	tokens julesKeyringTokenSource
+}
+
+func (s *JulesCredentialSource) Name() string { return "jules_keychain" }
+
+func (s *JulesCredentialSource) Resolve(ctx context.Context, provider string) (Credential, bool, error) {
+	if provider != "jules" {
+		return Credential{}, false, nil
+	}
+
+	key, err := s.tokens.APIKey(ctx)
+	if err != nil {
+		if errors.Is(err, jules.ErrJulesNotConfigured) {
+			return Credential{}, false, nil // feature off, not an error to surface
+		}
+		return Credential{}, false, fmt.Errorf("jules keychain: %w", err)
+	}
+
+	return Credential{
+		Provider: "jules",
+		APIKey:   string(key),
+		Source:   "jules_keychain",
 	}, true, nil
 }

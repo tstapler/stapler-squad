@@ -30,6 +30,14 @@ var (
 
 	// ErrJulesTransient indicates a 5xx response — safe to retry later.
 	ErrJulesTransient = errors.New("jules: transient server error")
+
+	// ErrJulesKeychainPaused indicates KeyringTokenSource's circuit breaker
+	// (jules/keychain.go) is open after a hung OS keychain read timed out,
+	// and this call was served the paused result immediately rather than
+	// blocking on another keyring probe. It wraps ErrJulesNotConfigured so
+	// all existing "feature off" handling (dispatch guard, poller skip)
+	// treats it identically without a new branch.
+	ErrJulesKeychainPaused = fmt.Errorf("jules: keychain paused after timeout: %w", ErrJulesNotConfigured)
 )
 
 // maxErrorBodyExcerpt bounds how much of a non-2xx response body is echoed
