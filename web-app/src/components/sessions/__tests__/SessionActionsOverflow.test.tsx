@@ -214,7 +214,7 @@ describe("SessionActionsOverflow", () => {
     });
 
     it("shows Retry now menu item mid-backoff-wait (nextRetryAt set, not yet permanently failed)", () => {
-      const session = makeSession({ nextRetryAt: { seconds: 1n, nanos: 0 } });
+      const session = makeSession({ nextRetryAt: { seconds: BigInt(Math.floor(Date.now() / 1000) + 60), nanos: 0 } });
       renderOverflow({ session, onRetryNow: jest.fn() });
       openMenu();
       expect(screen.getByRole("menuitem", { name: /retry.*now/i })).toBeInTheDocument();
