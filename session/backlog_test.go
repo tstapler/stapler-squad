@@ -34,6 +34,48 @@ func TestIsTmuxBackedSessionRole(t *testing.T) {
 	}
 }
 
+// TestIsTmuxBackedSessionRole_should_ReturnFalse_When_RoleIsJulesWork verifies a
+// Jules session (runs on Google's infrastructure, no local tmux pane) is excluded
+// from the tmux-cleanup predicate, while work/review remain included.
+func TestIsTmuxBackedSessionRole_should_ReturnFalse_When_RoleIsJulesWork(t *testing.T) {
+	t.Parallel()
+	if got := IsTmuxBackedSessionRole(SessionRoleJulesWork); got != false {
+		t.Errorf("IsTmuxBackedSessionRole(%q) = %v, want false", SessionRoleJulesWork, got)
+	}
+	if got := IsTmuxBackedSessionRole(SessionRoleWork); got != true {
+		t.Errorf("IsTmuxBackedSessionRole(%q) = %v, want true", SessionRoleWork, got)
+	}
+	if got := IsTmuxBackedSessionRole(SessionRoleReview); got != true {
+		t.Errorf("IsTmuxBackedSessionRole(%q) = %v, want true", SessionRoleReview, got)
+	}
+}
+
+// TestIsTmuxBackedSessionRole_should_CoverEveryDeclaredRole_When_RolesEnumerated
+// enumerates all four declared session role constants and asserts an exact expected
+// truth value for each, so a future role addition to the const block cannot silently
+// default into (or out of) the tmux-cleanup path without this table also growing.
+func TestIsTmuxBackedSessionRole_should_CoverEveryDeclaredRole_When_RolesEnumerated(t *testing.T) {
+	t.Parallel()
+	declaredRoles := map[string]bool{
+		SessionRoleWork:      true,
+		SessionRoleTriage:    false,
+		SessionRoleReview:    true,
+		SessionRoleJulesWork: false,
+	}
+	if len(declaredRoles) != 4 {
+		t.Fatalf("expected exactly 4 declared session role constants, got %d", len(declaredRoles))
+	}
+	for role, want := range declaredRoles {
+		role, want := role, want
+		t.Run(role, func(t *testing.T) {
+			t.Parallel()
+			if got := IsTmuxBackedSessionRole(role); got != want {
+				t.Errorf("IsTmuxBackedSessionRole(%q) = %v, want %v", role, got, want)
+			}
+		})
+	}
+}
+
 // UT-001: TestCanTransition_AllValidPaths verifies every permitted transition returns true.
 func TestCanTransition_AllValidPaths(t *testing.T) {
 	t.Parallel()
