@@ -93,6 +93,31 @@ describe("useFocusTrap", () => {
     trigger.remove();
   });
 
+  it("useFocusTrap_should_RestoreFocusToTrigger_When_IsActiveTogglesFalseWithoutUnmount", () => {
+    const trigger = document.createElement("button");
+    document.body.appendChild(trigger);
+    const triggerRef = { current: trigger as HTMLElement | null };
+
+    try {
+      const { rerender, getByTestId } = render(<TrapHarness isActive triggerRef={triggerRef} />);
+      // Precondition: activation already moved focus to the first focusable
+      // child, not the trigger — proves the toggle below is a real focus
+      // transition rather than a vacuous check.
+      expect(document.activeElement).toBe(getByTestId("first"));
+
+      act(() => {
+        rerender(<TrapHarness isActive={false} triggerRef={triggerRef} />);
+      });
+
+      // Container is still mounted — only isActive flipped. React runs the
+      // same cleanup path on dep change as on unmount, so this pins that
+      // behavior explicitly rather than relying on it being incidental.
+      expect(document.activeElement).toBe(trigger);
+    } finally {
+      trigger.remove();
+    }
+  });
+
   it("useFocusTrap_should_NotThrowAndDropFocusToBody_When_NoTriggerRefSupplied", () => {
     const { unmount, getByTestId } = render(<TrapHarness isActive />);
     const first = getByTestId("first");
