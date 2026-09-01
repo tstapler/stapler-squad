@@ -214,6 +214,28 @@ describe("useFocusTrap", () => {
     expect(document.activeElement).toBe(getByTestId("third"));
   });
 
+  it("useFocusTrap_should_PullFocusBackIn_When_FocusEscapesOutsideOfHandleKeyDown", () => {
+    // Mirrors react-arborist's FileTree: a child widget can move DOM focus
+    // to an element outside the trap's container without going through our
+    // Tab keydown handler at all (e.g. it rewrites tabindex and lets the
+    // browser's own Tab traversal fall through to something outside the
+    // container — backlog item 4a1f73c4-5558-41f8-9860-8508fb874fcc). The
+    // focusin safety net must catch that and snap focus back in.
+    const outside = document.createElement("button");
+    document.body.appendChild(outside);
+
+    const { getByTestId } = render(<TrapHarness isActive />);
+    const first = getByTestId("first");
+    expect(document.activeElement).toBe(first);
+
+    act(() => {
+      outside.focus();
+    });
+
+    expect(document.activeElement).toBe(first);
+    outside.remove();
+  });
+
   it("useFocusTrap_should_KeepFocusOnSoleElement_When_OnlyOneFocusableElementExists", () => {
     const { getByTestId } = render(<SoleElementHarness isActive />);
     const only = getByTestId("only");

@@ -64,11 +64,27 @@ export function useFocusTrap(
       }
     };
 
+    // Safety net for embedded widgets that rewrite their own tabindex the
+    // instant they receive focus (e.g. react-arborist's roving-tabindex
+    // FileTree sets the just-focused row back to tabindex="-1" on render,
+    // which makes getFocusable() miss it and lets a subsequent native Tab
+    // slip past handleKeyDown's first/last check entirely — confirmed via a
+    // real-browser regression, filed as backlog item
+    // 4a1f73c4-5558-41f8-9860-8508fb874fcc). If focus ever lands outside the
+    // container anyway, snap it back in.
+    const handleFocusIn = (e: FocusEvent) => {
+      if (!container.contains(e.target as Node)) {
+        (getFocusable()[0] ?? container).focus();
+      }
+    };
+
     document.addEventListener("keydown", handleKeyDown);
+    document.addEventListener("focusin", handleFocusIn);
 
     const triggerEl = triggerRef?.current;
     return () => {
       document.removeEventListener("keydown", handleKeyDown);
+      document.removeEventListener("focusin", handleFocusIn);
       // Return focus to the trigger element when the trap is deactivated
       triggerEl?.focus();
     };
