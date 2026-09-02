@@ -49,9 +49,9 @@ import { PullRequestSection } from "./detail/PullRequestSection";
 import { SourceSection } from "./detail/SourceSection";
 import { DescriptionSection } from "./detail/DescriptionSection";
 import { ActionsSection } from "./detail/ActionsSection";
-import type { JulesDispatchGate } from "./detail/ActionsSection";
 import { PlanVerdictBox } from "./PlanVerdictBox";
 import { derivePlanReviewStatus } from "@/lib/backlog/planReviewStatus";
+import { resolveJulesDispatchGate } from "@/lib/backlog/julesDispatchGate";
 import { PlanArtifactsSection } from "./detail/PlanArtifactsSection";
 import { VersionControlSection } from "./detail/VersionControlSection";
 import { SessionsSection } from "./detail/SessionsSection";
@@ -225,45 +225,11 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
   // only makes it visible via VcsWidgetHeader's "N active sessions" indicator.
   const activeWorkSessionCount = (item?.linkedSessions ?? []).filter((s) => s.role === "work" && !s.endedAt).length;
 
-  // Story 3.2.2: "Dispatch to Jules" gate, resolved entirely over
-  // GetJulesConfig + the item's already-loaded sessions — no new RPC field.
-  // Precedence order from ux.md §3.1 (only the first matching state
-  // applies): feature off (hidden) -> no key -> Jules session already open
-  // -> no known branch -> enabled. `branch` is the newest non-empty
-  // worktree_branch across the item's sessions, the same value
-  // SessionsSection's per-row branch badge reads (§4.1) — linkedSessions is
-  // in creation order, so `.at(-1)` on the filtered list is the newest.
-  const julesDispatchGate: JulesDispatchGate | undefined = (() => {
-    if (!julesConfig || !julesConfig.enabled) return { hidden: true, disabled: true, reason: null, branch: "" };
-    const sessions = item?.linkedSessions ?? [];
-    const branch = sessions.filter((s) => !!s.worktreeBranch).at(-1)?.worktreeBranch ?? "";
-    if (!julesConfig.hasApiKey) {
-      return {
-        hidden: false,
-        disabled: true,
-        reason: "Add a Jules API key in Settings to enable cloud sessions.",
-        branch,
-      };
-    }
-    const hasOpenJulesSession = sessions.some((s) => s.role === "jules_work" && !s.endedAt);
-    if (hasOpenJulesSession) {
-      return {
-        hidden: false,
-        disabled: true,
-        reason: "A Jules session is already running for this item.",
-        branch,
-      };
-    }
-    if (!branch) {
-      return {
-        hidden: false,
-        disabled: true,
-        reason: "This item has no branch yet — spawn a local session (or push a branch) before dispatching to Jules.",
-        branch,
-      };
-    }
-    return { hidden: false, disabled: false, reason: null, branch };
-  })();
+  // Story 3.2.2: "Dispatch to Jules" gate — see resolveJulesDispatchGate's
+  // own doc comment for the precedence order. Extracted to
+  // lib/backlog/julesDispatchGate.ts (mirrors derivePlanReviewStatus) so it
+  // is unit-testable without rendering this whole component.
+  const julesDispatchGate = resolveJulesDispatchGate(julesConfig, item?.linkedSessions ?? []);
 
   const { data: vcsStatus } = useVcsStatus(latestWorkSession?.sessionId ?? "", getApiBaseUrl());
   // Fallback for once the live session's worktree has been cleaned up (the normal

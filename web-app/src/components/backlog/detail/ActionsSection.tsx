@@ -5,26 +5,16 @@ import type { BacklogItem, LinkedSession } from "@/lib/hooks/useBacklogService";
 import { InlineNotice } from "@/components/common/InlineNotice";
 import { getAvailableActions } from "@/lib/backlog/itemActions";
 import { derivePlanReviewStatus } from "@/lib/backlog/planReviewStatus";
+import type { JulesDispatchGate } from "@/lib/backlog/julesDispatchGate";
 import * as styles from "../BacklogItemDetail.css";
 import { ActionButtonLabel } from "./ActionButtonLabel";
 
-/**
- * Story 3.2.2's Jules gating result, resolved by BacklogItemDetail.tsx over
- * GetJulesConfig + the item's already-loaded sessions (see its own
- * `resolveJulesDispatchGate` — no data-fetching lives in this
- * presentational component). `reason` is non-null exactly when `disabled`
- * is true and mirrors the precedence order in ux.md §3.1: no key -> Jules
- * session already open -> no known branch. `hidden` means the feature
- * itself is off (`GetJulesConfig.enabled === false`) — the button renders
- * nothing at all rather than a disabled affordance.
- */
-export interface JulesDispatchGate {
-  hidden: boolean;
-  disabled: boolean;
-  reason: string | null;
-  /** The branch JulesDispatchDialog should open pre-filled with. */
-  branch: string;
-}
+// Story 3.2.2's Jules gating result type — resolved by
+// lib/backlog/julesDispatchGate.ts's resolveJulesDispatchGate, called from
+// BacklogItemDetail.tsx (no data-fetching or gating computation lives in
+// this presentational component). Re-exported here so existing importers of
+// `./ActionsSection` don't need to know the type moved.
+export type { JulesDispatchGate };
 
 export interface ActionsSectionProps {
   item: BacklogItem;
