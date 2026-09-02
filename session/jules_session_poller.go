@@ -420,11 +420,7 @@ func (p *JulesSessionPoller) failJulesSession(ctx context.Context, entry ItemSes
 		log.Warn("jules poll failed", "jules_session", entry.SessionUUID, "error", err)
 	}
 	precondition := &BacklogItemPrecondition{ExpectedStatus: string(BacklogStatusInProgress), Note: note}
-	if _, err := p.storage.TransitionBacklogItemStatus(ctx, entry.ItemID, BacklogStatusReady, precondition, TriggeredBySystem); err != nil {
-		// Tolerated: an abandoned reservation's item may never have left
-		// "ready" in the first place (Epic 2.2's transition to in_progress
-		// happens only after CreateSession confirms) — in that case this is
-		// a harmless no-op, not a real failure.
+	if _, err := p.storage.TransitionBacklogItemStatus(ctx, entry.ItemID, BacklogStatusReady, precondition, TriggeredBySystem); err != nil { //nolint:silenttransition tolerated — an abandoned reservation's item may never have left "ready" in the first place (transition to in_progress happens only after CreateSession confirms), so this can be a harmless no-op rather than a real failure
 		log.Warn("jules poll failed", "jules_session", entry.SessionUUID, "error", err)
 	}
 	if err := p.storage.AppendProgressNote(ctx, entry.ItemID, -1, note, string(BacklogStatusReady)); err != nil {
@@ -494,6 +490,13 @@ func (p *JulesSessionPoller) noteStateChangeIfNeeded(ctx context.Context, entry 
 // request_review does for a local agent session, before either branch runs.
 func (p *JulesSessionPoller) applyCompletedState(ctx context.Context, entry ItemSessionBacklogEntry, row ItemSessionSummary, s *jules.JulesSession) error {
 	p.incSessionCompleted()
+	if len(s.Outputs) > 1 {
+		// Interim behavior for the still-open "does outputs[] ever carry more
+		// than one PR" question (plan.md Unresolved Questions): we take the
+		// first non-empty pullRequest.url and log so the assumption is
+		// observable rather than silent.
+		log.Warn("jules multiple pr outputs", "jules_session", entry.SessionUUID, "output_count", len(s.Outputs))
+	}
 	prURL := completedSessionPRURL(s)
 	now := p.now()
 
@@ -502,6 +505,7 @@ func (p *JulesSessionPoller) applyCompletedState(ctx context.Context, entry Item
 			return fmt.Errorf("end session (no pr): %w", err)
 		}
 		note := fmt.Sprintf("Jules finished this session but did not open a pull request. Check the session at %s.", julesSessionWebURL(s))
+		//nolint:silenttransition best-effort status advance — the progress note appended below still records the no-PR outcome on the item regardless of whether this transition succeeded, and UpdateItemSessionEndedWithReason above already closed the session row so no reconciliation sweep will retry it as still-open
 		if _, err := p.storage.TransitionBacklogItemStatus(ctx, entry.ItemID, BacklogStatusReview,
 			&BacklogItemPrecondition{ExpectedStatus: string(BacklogStatusInProgress), Note: note}, TriggeredBySystem); err != nil {
 			log.Warn("jules poll failed", "jules_session", entry.SessionUUID, "error", err)

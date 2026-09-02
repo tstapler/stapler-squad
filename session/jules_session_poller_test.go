@@ -420,6 +420,58 @@ func TestApplyJulesState_should_RecordPRAndHandOffToReconcilePRPending_When_Comp
 	assert.Equal(t, "jules_completed", endedRow.EndReason)
 }
 
+// TestApplyJulesState_should_LogMultiplePROutputsAtWarn_When_CompletedWithMoreThanOnePROutput
+// guards the interim behavior recorded in plan.md's Unresolved Questions for
+// "does Session.outputs[] ever contain more than one pull request": the first
+// non-empty pullRequest.url still wins, but len(outputs) > 1 must log
+// "jules multiple pr outputs" at Warn so the assumption is observable.
+func TestApplyJulesState_should_LogMultiplePROutputsAtWarn_When_CompletedWithMoreThanOnePROutput(t *testing.T) {
+	getLog := captureSlog(t)
+	client := newFakeJulesStatusClient()
+	storage := newFakeJulesPollerStorage()
+	p := NewJulesSessionPoller(client, storage, DefaultJulesSessionPollerConfig())
+
+	entry := testEntry("item-1", julesSessionUUIDPrefix+"sessions/a")
+	row := testRow("row-1", nil, time.Now())
+	s := newSession("sessions/a", jules.JulesStateCompleted)
+	s.Outputs = []jules.JulesSessionOutput{
+		{PullRequest: &jules.JulesPullRequestOutput{URL: "https://github.com/tstapler/stapler-squad/pull/1"}},
+		{PullRequest: &jules.JulesPullRequestOutput{URL: "https://github.com/tstapler/stapler-squad/pull/2"}},
+	}
+
+	require.NoError(t, p.applyJulesState(context.Background(), entry, row, s))
+
+	require.Len(t, storage.prRecorded, 1)
+	assert.Equal(t, "https://github.com/tstapler/stapler-squad/pull/1", storage.prRecorded[0].prURL, "must take the first non-empty pullRequest.url")
+
+	logOutput := getLog()
+	assert.Contains(t, logOutput, "jules multiple pr outputs")
+	assert.Contains(t, logOutput, "jules_session="+entry.SessionUUID)
+	assert.Contains(t, logOutput, "output_count=2")
+	assert.Contains(t, logOutput, "level=WARN")
+}
+
+// TestApplyJulesState_should_NotLogMultiplePROutputs_When_CompletedWithSinglePROutput
+// is the negative case for the same interim behavior: a single output must not
+// trip the "jules multiple pr outputs" warning.
+func TestApplyJulesState_should_NotLogMultiplePROutputs_When_CompletedWithSinglePROutput(t *testing.T) {
+	getLog := captureSlog(t)
+	client := newFakeJulesStatusClient()
+	storage := newFakeJulesPollerStorage()
+	p := NewJulesSessionPoller(client, storage, DefaultJulesSessionPollerConfig())
+
+	entry := testEntry("item-1", julesSessionUUIDPrefix+"sessions/a")
+	row := testRow("row-1", nil, time.Now())
+	s := newSession("sessions/a", jules.JulesStateCompleted)
+	s.Outputs = []jules.JulesSessionOutput{
+		{PullRequest: &jules.JulesPullRequestOutput{URL: "https://github.com/tstapler/stapler-squad/pull/1"}},
+	}
+
+	require.NoError(t, p.applyJulesState(context.Background(), entry, row, s))
+
+	assert.NotContains(t, getLog(), "jules multiple pr outputs")
+}
+
 // TestApplyJulesState_should_SurfaceMissingPR_When_CompletedWithEmptyOutputs guards
 // Story 2.3.2: COMPLETED with no PR output is surfaced, not silently treated as success.
 func TestApplyJulesState_should_SurfaceMissingPR_When_CompletedWithEmptyOutputs(t *testing.T) {
