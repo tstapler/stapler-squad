@@ -59,4 +59,23 @@ describe("PullRequestSection", () => {
     expect(screen.getByRole("link", { name: /View GitHub Pull Request #700/ })).toBeInTheDocument();
     expect(screen.queryByLabelText("Opened by Jules")).not.toBeInTheDocument();
   });
+
+  it("still shows Opened by Jules when a review session links after the jules_work session that produced the PR", () => {
+    // Regression test: a review-gate session links *after* the jules_work
+    // session it reviews (see julesDispatchGate.ts's skipReviewGate flow),
+    // so the most-recently-linked session is "review", not "jules_work".
+    // The badge must attribute the PR to the session that actually produced
+    // it, not simply the last-linked session.
+    const item = makeItem({
+      linkedSessions: [
+        makeSession({ sessionId: "jules-sessions/xyz", role: "jules_work" }),
+        makeSession({ sessionId: "review-session-abc", role: "review" }),
+      ],
+    });
+    render(<PullRequestSection item={item} actionLoading={null} onMarkDone={jest.fn()} />);
+
+    expect(screen.getByRole("link", { name: /View GitHub Pull Request #700/ })).toBeInTheDocument();
+    const marker = screen.getByLabelText("Opened by Jules");
+    expect(marker).toHaveTextContent("Jules");
+  });
 });
