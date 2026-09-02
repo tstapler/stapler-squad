@@ -20,6 +20,7 @@ import { useBacklogItemShipStatus } from "@/lib/hooks/useBacklogItemShipStatus";
 import { useWatchBacklogItems } from "@/lib/hooks/useWatchBacklogItems";
 import { getApiBaseUrl, createAuthInterceptor } from "@/lib/config";
 import { BacklogService } from "@/gen/session/v1/backlog_pb";
+import { SessionService } from "@/gen/session/v1/session_pb";
 import { useAppSelector } from "@/lib/store";
 import { store } from "@/lib/store/store";
 import { selectBacklogItemById } from "@/lib/store/backlogItemsSlice";
@@ -39,6 +40,7 @@ import { TriageReviewPanel } from "./TriageReviewPanel";
 import { ChatRefinementPanel } from "./ChatRefinementPanel";
 import { ReviewChangesModal } from "./ReviewChangesModal";
 import { BacklogFileBrowserModal } from "./BacklogFileBrowserModal";
+import { JulesDispatchDialog } from "./JulesDispatchDialog";
 import { LifecycleSummary } from "./detail/LifecycleSummary";
 import { PlanningSection } from "./detail/PlanningSection";
 import { ReviewingSection } from "./detail/ReviewingSection";
@@ -47,6 +49,7 @@ import { PullRequestSection } from "./detail/PullRequestSection";
 import { SourceSection } from "./detail/SourceSection";
 import { DescriptionSection } from "./detail/DescriptionSection";
 import { ActionsSection } from "./detail/ActionsSection";
+import type { JulesDispatchGate } from "./detail/ActionsSection";
 import { PlanVerdictBox } from "./PlanVerdictBox";
 import { derivePlanReviewStatus } from "@/lib/backlog/planReviewStatus";
 import { PlanArtifactsSection } from "./detail/PlanArtifactsSection";
@@ -178,6 +181,15 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
   const [showFileBrowser, setShowFileBrowser] = useState(false);
   const fileBrowserTriggerRef = useRef<HTMLElement | null>(null);
 
+  // Jules dispatch dialog (Story 3.2.2)
+  const [showJulesDispatch, setShowJulesDispatch] = useState(false);
+  const julesDispatchTriggerRef = useRef<HTMLElement | null>(null);
+  const [julesConfig, setJulesConfig] = useState<{
+    enabled: boolean;
+    hasApiKey: boolean;
+    egressAcknowledgedRepos: string[];
+  } | null>(null);
+
   // Manual review form
   const [showManualReview, setShowManualReview] = useState(false);
   const [manualReviewOutcome, setManualReviewOutcome] = useState("PASS");
@@ -205,6 +217,47 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
   // one work session is currently active — the heuristic above is unchanged, this
   // only makes it visible via VcsWidgetHeader's "N active sessions" indicator.
   const activeWorkSessionCount = (item?.linkedSessions ?? []).filter((s) => s.role === "work" && !s.endedAt).length;
+
+  // Story 3.2.2: "Dispatch to Jules" gate, resolved entirely over
+  // GetJulesConfig + the item's already-loaded sessions — no new RPC field.
+  // Precedence order from ux.md §3.1 (only the first matching state
+  // applies): feature off (hidden) -> no key -> Jules session already open
+  // -> no known branch -> enabled. `branch` is the newest non-empty
+  // worktree_branch across the item's sessions, the same value
+  // SessionsSection's per-row branch badge reads (§4.1) — linkedSessions is
+  // in creation order, so `.at(-1)` on the filtered list is the newest.
+  const julesDispatchGate: JulesDispatchGate | undefined = (() => {
+    if (!julesConfig || !julesConfig.enabled) return { hidden: true, disabled: true, reason: null, branch: "" };
+    const sessions = item?.linkedSessions ?? [];
+    const branch = sessions.filter((s) => !!s.worktreeBranch).at(-1)?.worktreeBranch ?? "";
+    if (!julesConfig.hasApiKey) {
+      return {
+        hidden: false,
+        disabled: true,
+        reason: "Add a Jules API key in Settings to enable cloud sessions.",
+        branch,
+      };
+    }
+    const hasOpenJulesSession = sessions.some((s) => s.role === "jules_work" && !s.endedAt);
+    if (hasOpenJulesSession) {
+      return {
+        hidden: false,
+        disabled: true,
+        reason: "A Jules session is already running for this item.",
+        branch,
+      };
+    }
+    if (!branch) {
+      return {
+        hidden: false,
+        disabled: true,
+        reason: "This item has no branch yet — spawn a local session (or push a branch) before dispatching to Jules.",
+        branch,
+      };
+    }
+    return { hidden: false, disabled: false, reason: null, branch };
+  })();
+
   const { data: vcsStatus } = useVcsStatus(latestWorkSession?.sessionId ?? "", getApiBaseUrl());
   // Fallback for once the live session's worktree has been cleaned up (the normal
   // state for a done item) — vcsStatus above comes back null in that case since
@@ -559,6 +612,46 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
       cancelled = true;
     };
   }, [listPipelineModes]);
+
+  // Story 3.2.2: fetch Jules config once, for the "Dispatch to Jules" gate
+  // below (ux.md §3.1's precedence order). Fetched here rather than reusing
+  // JulesSettings.tsx's own load (that panel isn't mounted on this page) —
+  // same raw createClient(SessionService, ...) pattern that file uses,
+  // since GetJulesConfig has no wrapper on useBacklogService/useSessionService.
+  // A fetch failure leaves julesConfig null, which resolveJulesDispatchGate
+  // below treats the same as "feature off" (button hidden) rather than
+  // surfacing a load error on an otherwise-unrelated page — deliberately
+  // silent (no console.warn), unlike listPipelineModes below, since this
+  // page's own test suites assert zero console.warn calls across a wide
+  // range of unrelated scenarios (BacklogItemDetail.test.tsx's Collapsible
+  // regression suite) and their `createClient` mocks predate this RPC.
+  // Wrapped in try/catch (not just .catch()) because such a mock throws
+  // synchronously when getJulesConfig doesn't exist on it, before a
+  // `.then/.catch` chain would ever attach.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const transport = createConnectTransport({
+          baseUrl: getApiBaseUrl(),
+          interceptors: [createAuthInterceptor()],
+        });
+        const client = createClient(SessionService, transport);
+        const resp = await client.getJulesConfig({});
+        if (cancelled || !resp.config) return;
+        setJulesConfig({
+          enabled: resp.config.enabled,
+          hasApiKey: resp.config.hasApiKey,
+          egressAcknowledgedRepos: resp.config.egressAcknowledgedRepos,
+        });
+      } catch {
+        // Silent — see comment above.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // Track triage progress: increment elapsed time while triageStatus === "running"
   useEffect(() => {
@@ -1461,6 +1554,19 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
           />
         )}
 
+        {showJulesDispatch && julesConfig && (
+          <JulesDispatchDialog
+            itemId={item.id}
+            itemTitle={item.title}
+            acCriteria={item.acCriteria}
+            repoPath={item.repoPath ?? ""}
+            initialBranch={julesDispatchGate?.branch ?? ""}
+            egressAcknowledged={julesConfig.egressAcknowledgedRepos.includes(item.repoPath ?? "")}
+            onClose={() => setShowJulesDispatch(false)}
+            triggerRef={julesDispatchTriggerRef}
+          />
+        )}
+
         {/* Acceptance Criteria */}
         <div className={styles.section}>
           <h3 className={styles.sectionTitle}>
@@ -1505,6 +1611,11 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
           onManualReviewSubmit={() => { void handleManualReviewSubmit(); }}
           onManualReviewCancel={() => { setShowManualReview(false); setManualReviewSummary(""); }}
           terminalState={terminalState}
+          julesDispatchGate={julesDispatchGate}
+          onDispatchToJulesClick={(event) => {
+            julesDispatchTriggerRef.current = event.currentTarget;
+            setShowJulesDispatch(true);
+          }}
         />
 
         {/* Secondary sections — sibling CollapsibleSections sharing one

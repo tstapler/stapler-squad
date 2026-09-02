@@ -1,11 +1,30 @@
 "use client";
 
+import type { MouseEvent } from "react";
 import type { BacklogItem, LinkedSession } from "@/lib/hooks/useBacklogService";
 import { InlineNotice } from "@/components/common/InlineNotice";
 import { getAvailableActions } from "@/lib/backlog/itemActions";
 import { derivePlanReviewStatus } from "@/lib/backlog/planReviewStatus";
 import * as styles from "../BacklogItemDetail.css";
 import { ActionButtonLabel } from "./ActionButtonLabel";
+
+/**
+ * Story 3.2.2's Jules gating result, resolved by BacklogItemDetail.tsx over
+ * GetJulesConfig + the item's already-loaded sessions (see its own
+ * `resolveJulesDispatchGate` — no data-fetching lives in this
+ * presentational component). `reason` is non-null exactly when `disabled`
+ * is true and mirrors the precedence order in ux.md §3.1: no key -> Jules
+ * session already open -> no known branch. `hidden` means the feature
+ * itself is off (`GetJulesConfig.enabled === false`) — the button renders
+ * nothing at all rather than a disabled affordance.
+ */
+export interface JulesDispatchGate {
+  hidden: boolean;
+  disabled: boolean;
+  reason: string | null;
+  /** The branch JulesDispatchDialog should open pre-filled with. */
+  branch: string;
+}
 
 export interface ActionsSectionProps {
   item: BacklogItem;
@@ -27,6 +46,14 @@ export interface ActionsSectionProps {
    * item is archived/removed elsewhere there is nothing left to act on.
    */
   terminalState: "archived" | "removed" | null;
+  /**
+   * Story 3.2.2: undefined (including simply omitted, so pre-existing
+   * ActionsSection callers/tests unrelated to Jules don't need to know
+   * about it) while GetJulesConfig hasn't resolved yet — treated the same
+   * as `hidden: true`.
+   */
+  julesDispatchGate?: JulesDispatchGate;
+  onDispatchToJulesClick?: (event: MouseEvent<HTMLButtonElement>) => void;
 }
 
 /**
@@ -53,6 +80,8 @@ export function ActionsSection({
   onManualReviewSubmit,
   onManualReviewCancel,
   terminalState,
+  julesDispatchGate,
+  onDispatchToJulesClick,
 }: ActionsSectionProps) {
   // getAvailableActions (web-app/src/lib/backlog/itemActions.ts) is the single
   // source of truth for which actions this item's current status + gate flags
@@ -178,6 +207,32 @@ export function ActionsSection({
           >
             <ActionButtonLabel pending={actionLoading === "spawn_session_autonomous"} label="Run Autonomously" />
           </button>
+        )}
+
+        {/* Dispatch to Jules (Story 3.2.2): gating precedence resolved by
+            BacklogItemDetail.tsx's resolveJulesDispatchGate over
+            GetJulesConfig + the item's already-loaded sessions (ux.md §3.1)
+            — feature off (hidden) -> no key -> Jules session already open
+            -> no known branch -> enabled. Never rendered at all when
+            hidden, matching the "no dead button" wireframe note. */}
+        {julesDispatchGate && !julesDispatchGate.hidden && (
+          <>
+            <button
+              className={styles.actionButton}
+              onClick={onDispatchToJulesClick}
+              disabled={actionLoading !== null || julesDispatchGate.disabled}
+              aria-describedby={julesDispatchGate.reason ? "jules-dispatch-gate-reason" : undefined}
+              title={julesDispatchGate.reason ?? undefined}
+              data-testid="dispatch-to-jules"
+            >
+              Dispatch to Jules
+            </button>
+            {julesDispatchGate.reason && (
+              <p id="jules-dispatch-gate-reason" className={styles.emptyText} data-testid="dispatch-to-jules-reason">
+                {julesDispatchGate.reason}
+              </p>
+            )}
+          </>
         )}
 
         {/* Approve Plan / Retry Triage: mutually exclusive, both driven by
