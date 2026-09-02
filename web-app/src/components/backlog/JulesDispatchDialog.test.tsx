@@ -13,12 +13,16 @@ import type { AcCriterion } from "@/lib/hooks/useBacklogService";
 const dispatchToJules = jest.fn();
 const confirmEgressConsent = jest.fn();
 
-jest.mock("@connectrpc/connect", () => ({
-  createClient: () => ({
-    dispatchToJules: (...args: unknown[]) => dispatchToJules(...args),
-    confirmEgressConsent: (...args: unknown[]) => confirmEgressConsent(...args),
-  }),
-}));
+jest.mock("@connectrpc/connect", () => {
+  const actual = jest.requireActual("@connectrpc/connect");
+  return {
+    ...actual,
+    createClient: () => ({
+      dispatchToJules: (...args: unknown[]) => dispatchToJules(...args),
+      confirmEgressConsent: (...args: unknown[]) => confirmEgressConsent(...args),
+    }),
+  };
+});
 jest.mock("@connectrpc/connect-web", () => ({
   createConnectTransport: jest.fn().mockReturnValue({}),
 }));
@@ -148,5 +152,125 @@ describe("JulesDispatchDialog", () => {
 
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
     expect(document.activeElement).toBe(screen.getByTestId("dispatch-opener"));
+  });
+
+  it("calls dispatchToJules with the trimmed payload and closes the dialog on success when egress is already acknowledged", async () => {
+    dispatchToJules.mockResolvedValue({});
+    const onClose = jest.fn();
+
+    render(
+      <JulesDispatchDialog
+        itemId="item-42"
+        itemTitle="Fix flaky poller test"
+        acCriteria={AC_CRITERIA}
+        repoPath={REPO_PATH}
+        initialBranch="backlog/fix-flaky-poller-test"
+        egressAcknowledged={true}
+        onClose={onClose}
+      />
+    );
+
+    fireEvent.change(screen.getByTestId("jules-dispatch-branch"), {
+      target: { value: "  backlog/fix-flaky-poller-test  " },
+    });
+    fireEvent.change(screen.getByTestId("jules-dispatch-prompt"), {
+      target: { value: "  Fix the flaky poller  " },
+    });
+
+    fireEvent.click(screen.getByTestId("jules-dispatch-submit"));
+
+    await waitFor(() =>
+      expect(dispatchToJules).toHaveBeenCalledWith({
+        itemId: "item-42",
+        branch: "backlog/fix-flaky-poller-test",
+        prompt: "Fix the flaky poller",
+      })
+    );
+    expect(confirmEgressConsent).not.toHaveBeenCalled();
+    await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
+  });
+
+  it("calls confirmEgressConsent before dispatchToJules when egress hasn't been acknowledged yet", async () => {
+    const callOrder: string[] = [];
+    confirmEgressConsent.mockImplementation(async () => {
+      callOrder.push("confirmEgressConsent");
+      return {};
+    });
+    dispatchToJules.mockImplementation(async () => {
+      callOrder.push("dispatchToJules");
+      return {};
+    });
+    const onClose = jest.fn();
+
+    render(
+      <JulesDispatchDialog
+        itemId="item-1"
+        itemTitle="Fix flaky poller test"
+        acCriteria={AC_CRITERIA}
+        repoPath={REPO_PATH}
+        initialBranch="backlog/fix-flaky-poller-test"
+        egressAcknowledged={false}
+        onClose={onClose}
+      />
+    );
+
+    fireEvent.click(screen.getByTestId("jules-dispatch-egress-checkbox"));
+    fireEvent.click(screen.getByTestId("jules-dispatch-submit"));
+
+    await waitFor(() => expect(dispatchToJules).toHaveBeenCalled());
+    expect(confirmEgressConsent).toHaveBeenCalledWith({ repoPath: REPO_PATH });
+    expect(callOrder).toEqual(["confirmEgressConsent", "dispatchToJules"]);
+  });
+
+  it("shows an error message and keeps the dialog open when dispatchToJules rejects", async () => {
+    dispatchToJules.mockRejectedValue(new Error("dispatch failed"));
+    const onClose = jest.fn();
+
+    render(
+      <JulesDispatchDialog
+        itemId="item-1"
+        itemTitle="Fix flaky poller test"
+        acCriteria={AC_CRITERIA}
+        repoPath={REPO_PATH}
+        initialBranch="backlog/fix-flaky-poller-test"
+        egressAcknowledged={true}
+        onClose={onClose}
+      />
+    );
+
+    fireEvent.click(screen.getByTestId("jules-dispatch-submit"));
+
+    await waitFor(() =>
+      expect(screen.getByTestId("jules-dispatch-error")).toHaveTextContent("dispatch failed")
+    );
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+  });
+
+  it("shows an error message and keeps the dialog open when confirmEgressConsent rejects", async () => {
+    confirmEgressConsent.mockRejectedValue(new Error("consent failed"));
+    const onClose = jest.fn();
+
+    render(
+      <JulesDispatchDialog
+        itemId="item-1"
+        itemTitle="Fix flaky poller test"
+        acCriteria={AC_CRITERIA}
+        repoPath={REPO_PATH}
+        initialBranch="backlog/fix-flaky-poller-test"
+        egressAcknowledged={false}
+        onClose={onClose}
+      />
+    );
+
+    fireEvent.click(screen.getByTestId("jules-dispatch-egress-checkbox"));
+    fireEvent.click(screen.getByTestId("jules-dispatch-submit"));
+
+    await waitFor(() =>
+      expect(screen.getByTestId("jules-dispatch-error")).toHaveTextContent("consent failed")
+    );
+    expect(dispatchToJules).not.toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
   });
 });
