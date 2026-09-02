@@ -368,3 +368,82 @@ func TestKeyringTokenSource_APIKey_should_ReopenForOneProbeAndCloseOnSuccess_Whe
 		t.Fatalf("underlying keyring Get invoked %d times after the cache should have served the second call, want exactly 1", got)
 	}
 }
+
+// TestKeyringTokenSource_APIKey_should_CoalesceSynchronousResolves_When_ManyGoroutinesRaceOnNeverTouchedSource
+// exercises the gap TestKeyringTokenSource_APIKey_should_BoundConcurrentHungKeychainProbesToOne_When_FiftyCallsRaceDuringOutage
+// (above) does not: that test deliberately runs one call synchronously first
+// to open the circuit before firing its 50 concurrent calls, so it only ever
+// exercises the already-open-circuit path (step 2 of APIKey). This test
+// fires N goroutines at APIKey concurrently against a brand-new
+// KeyringTokenSource -- no prior call, no circuit open -- so every goroutine
+// independently reaches the synchronous resolve path (step 3) at once. Before
+// the resolveSync singleflight fix, each such goroutine spawned its own
+// non-cancellable goroutine blocked in the real keyring call; this asserts
+// exactly one ever does.
+func TestKeyringTokenSource_APIKey_should_CoalesceSynchronousResolves_When_ManyGoroutinesRaceOnNeverTouchedSource(t *testing.T) {
+	var calls int32
+	block := make(chan struct{})
+	entered := make(chan struct{}, 1)
+
+	swapKeyringSeams(t,
+		func(string, string) (string, error) {
+			atomic.AddInt32(&calls, 1)
+			select {
+			case entered <- struct{}{}:
+			default:
+			}
+			<-block
+			return "coalesced-value", nil
+		},
+		nil, nil,
+	)
+
+	s := NewKeyringTokenSource(withCacheTTL(time.Hour))
+
+	const n = 50
+	var startWG, doneWG sync.WaitGroup
+	startWG.Add(n)
+	doneWG.Add(n)
+	start := make(chan struct{})
+	results := make([]JulesAPIKey, n)
+	errs := make([]error, n)
+	for i := 0; i < n; i++ {
+		go func(i int) {
+			defer doneWG.Done()
+			startWG.Done()
+			<-start
+			results[i], errs[i] = s.APIKey(context.Background())
+		}(i)
+	}
+
+	// Wait for every goroutine to be scheduled and parked at the start
+	// barrier before releasing them together, then wait for the one leader
+	// to actually enter keyringGet before unblocking it -- both narrow the
+	// window so all 50 goroutines call APIKey while the single underlying
+	// call is still in flight, rather than racing the test itself.
+	startWG.Wait()
+	close(start)
+	select {
+	case <-entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for the single keyringGet call to start")
+	}
+	// Give the other 49 goroutines a chance to reach the shared singleflight
+	// call before it completes.
+	time.Sleep(50 * time.Millisecond)
+	close(block)
+
+	doneWG.Wait()
+
+	if got := atomic.LoadInt32(&calls); got != 1 {
+		t.Fatalf("underlying keyring Get invoked %d times across %d goroutines racing a never-touched source, want exactly 1", got, n)
+	}
+	for i, err := range errs {
+		if err != nil {
+			t.Fatalf("goroutine %d: APIKey: %v", i, err)
+		}
+		if results[i] != JulesAPIKey("coalesced-value") {
+			t.Fatalf("goroutine %d: APIKey = %q, want %q", i, results[i], "coalesced-value")
+		}
+	}
+}

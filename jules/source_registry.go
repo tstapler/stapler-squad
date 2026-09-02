@@ -6,6 +6,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"golang.org/x/sync/singleflight"
 )
 
 // defaultSourceRegistryTTL is how long a resolved owner/repo -> JulesSourceName
@@ -45,9 +47,11 @@ type JulesSourceRegistry struct {
 
 	store sync.Map // key: "owner/repo" string, value: sourceRegistryEntry
 
-	// refetchMu serializes population so concurrent misses within the
-	// same refresh window make one ListSources call, not one per caller.
-	refetchMu sync.Mutex
+	// refetchGroup coalesces concurrent misses within the same refresh
+	// window into one ListSources call, not one per caller: every goroutine
+	// that calls refresh() while another is already in flight shares that
+	// call's result instead of issuing its own.
+	refetchGroup singleflight.Group
 }
 
 // NewJulesSourceRegistry creates a registry backed by client, with the
@@ -115,25 +119,29 @@ func (r *JulesSourceRegistry) lookup(key string) (sourceRegistryEntry, bool) {
 	return entry, true
 }
 
-// refresh calls ListSources and repopulates the cache from the result.
+// refresh calls ListSources and repopulates the cache from the result. It is
+// shared via refetchGroup across every goroutine that calls it concurrently:
+// only the first caller ("leader") actually invokes ListSources, and every
+// concurrent caller ("follower") blocks on that same call and receives its
+// result (or error), rather than each issuing its own ListSources call.
 func (r *JulesSourceRegistry) refresh(ctx context.Context) error {
-	r.refetchMu.Lock()
-	defer r.refetchMu.Unlock()
-
-	sources, err := r.client.ListSources(ctx)
-	if err != nil {
-		return fmt.Errorf("jules: listing sources: %w", err)
-	}
-
-	now := r.clock()
-	for _, s := range sources {
-		owner, repo, ok := parseGitHubSourceName(s.Name)
-		if !ok {
-			continue
+	_, err, _ := r.refetchGroup.Do("refresh", func() (any, error) {
+		sources, err := r.client.ListSources(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("jules: listing sources: %w", err)
 		}
-		r.store.Store(sourceRegistryKey(owner, repo), sourceRegistryEntry{name: s.Name, at: now})
-	}
-	return nil
+
+		now := r.clock()
+		for _, s := range sources {
+			owner, repo, ok := parseGitHubSourceName(s.Name)
+			if !ok {
+				continue
+			}
+			r.store.Store(sourceRegistryKey(owner, repo), sourceRegistryEntry{name: s.Name, at: now})
+		}
+		return struct{}{}, nil
+	})
+	return err
 }
 
 // githubSourceNamePrefix is the fixed portion of a GitHub-backed

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/zalando/go-keyring"
+	"golang.org/x/sync/singleflight"
 
 	"github.com/tstapler/stapler-squad/log"
 )
@@ -58,11 +59,14 @@ var (
 // Unlike session/sshremote/keystore.go's package-level keyringMu (which
 // serializes every future keyring call behind a single hung one, forever),
 // KeyringTokenSource pairs a short-TTL cache with a bounded single-probe
-// circuit breaker: at most one goroutine is ever blocked inside the
-// underlying keyring call at a time, regardless of call volume during an
-// outage. See project_plans/google-jules-integration/implementation/plan.md
-// Epic 1.2, Task 1.2.1a (pre-mortem P1 #4) for the incident this design
-// closes.
+// circuit breaker plus singleflight-coalesced synchronous reads: at most one
+// goroutine is ever blocked inside the underlying keyring call at a time --
+// whether that's the single background probe run while the circuit is open,
+// or the shared synchronous call that concurrent cache-miss callers (e.g. the
+// dispatch HTTP path and the poller racing right after the cache TTL
+// expires) fan into via sfGroup -- regardless of call volume. See
+// project_plans/google-jules-integration/implementation/plan.md Epic 1.2,
+// Task 1.2.1a (pre-mortem P1 #4) for the incident this design closes.
 type KeyringTokenSource struct {
 	timeout  time.Duration
 	cacheTTL time.Duration
@@ -77,6 +81,13 @@ type KeyringTokenSource struct {
 	// runtime.NumGoroutine(), which is flake-prone under -race/parallel
 	// tests.
 	onProbeStart func()
+
+	// sfGroup coalesces concurrent synchronous resolves (step (3) of APIKey)
+	// into a single in-flight keyring call: every caller that misses the
+	// cache at the same time shares one raceKeyringOp instead of each
+	// spawning its own. Keyed by keychainAccount (this package only ever
+	// resolves one account), so a single shared Group is fine.
+	sfGroup singleflight.Group
 
 	// stateMu guards only the four fields below -- cheap, never held across
 	// the actual keyring call.
@@ -162,28 +173,49 @@ func (s *KeyringTokenSource) APIKey(ctx context.Context) (JulesAPIKey, error) {
 	return s.resolveSync(ctx)
 }
 
-// resolveSync runs a single timeout-raced synchronous keyring read for the
-// calling goroutine, per step (3) of APIKey. On timeout it opens the
-// circuit and returns the timeout error to this caller only -- it does not
-// itself return ErrJulesKeychainPaused; that is reserved for calls made
-// while the circuit is already open.
+// syncResolveResult is the value type resolveSync's singleflight-shared
+// closure returns, since singleflight.Group.Do only carries a single
+// interface{} plus error -- timedOut needs to travel alongside val/err to
+// every waiter, not just the leader.
+type syncResolveResult struct {
+	val      string
+	err      error
+	timedOut bool
+}
+
+// resolveSync runs a single timeout-raced synchronous keyring read, per step
+// (3) of APIKey, shared via sfGroup across every goroutine that calls it
+// concurrently: only the first caller ("leader") actually invokes
+// raceKeyringOp, and every concurrent caller ("follower") blocks on that same
+// call and receives its result, rather than each spawning its own
+// non-cancellable goroutine against the keyring. On timeout it opens the
+// circuit and returns the timeout error to these callers only -- it does not
+// itself return ErrJulesKeychainPaused; that is reserved for calls made while
+// the circuit is already open. The follower's ctx is not honored (only the
+// leader's is, since the underlying call is already shared) -- acceptable
+// here because all callers share the same s.timeout budget regardless of ctx.
 func (s *KeyringTokenSource) resolveSync(ctx context.Context) (JulesAPIKey, error) {
-	val, err, timedOut := s.raceKeyringOp(ctx, func() (string, error) {
-		return keyringGet(keychainService, keychainAccount)
+	v, _, _ := s.sfGroup.Do(keychainAccount, func() (any, error) {
+		val, err, timedOut := s.raceKeyringOp(ctx, func() (string, error) {
+			return keyringGet(keychainService, keychainAccount)
+		})
+		return syncResolveResult{val: val, err: err, timedOut: timedOut}, nil
 	})
-	if timedOut {
+	res := v.(syncResolveResult) //nolint:errcheck // sfGroup.Do's own closure never returns a non-nil error, only res.err
+
+	if res.timedOut {
 		s.openCircuit()
 		log.Warn("jules keychain paused", "reason", "timeout")
-		return "", err
+		return "", res.err
 	}
-	if err != nil {
-		if errors.Is(err, keyring.ErrNotFound) {
+	if res.err != nil {
+		if errors.Is(res.err, keyring.ErrNotFound) {
 			return "", fmt.Errorf("jules: %w", ErrJulesNotConfigured)
 		}
-		return "", fmt.Errorf("jules: reading API key from keychain: %w", err)
+		return "", fmt.Errorf("jules: reading API key from keychain: %w", res.err)
 	}
 
-	key := JulesAPIKey(val)
+	key := JulesAPIKey(res.val)
 	s.stateMu.Lock()
 	s.cachedKey = key
 	s.cachedAt = s.now()

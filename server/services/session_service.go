@@ -161,6 +161,15 @@ type SessionService struct {
 	// (Task 2.4.4a), since Jules-enablement is only known after config load.
 	julesConfigSvc *JulesConfigService
 
+	// credChain resolves AI-provider credentials (Anthropic, Google, Jules)
+	// for capacityMonitor's limits clients. Its JulesCredentialSource starts
+	// with its own *jules.KeyringTokenSource (built by NewDefaultChain, which
+	// runs before server/dependencies.go has one to share); SetJulesKeyringTokenSource
+	// swaps that for the process-wide instance once dependencies.go builds it,
+	// so this chain never resolves the Jules OS-keychain entry through a
+	// second, independent cache/circuit-breaker.
+	credChain *CredentialChain
+
 	// callbackConfigSvc handles GetCallbackConfig/UpdateCallbackConfig RPCs
 	// (webhook-triggers Phase 5, FR7).
 	callbackConfigSvc *CallbackConfigService
@@ -720,6 +729,7 @@ func NewSessionServiceWithSearchEngine(storage session.InstanceStore, eventBus *
 		promptStore:                 newPromptStore(),
 		capacityMonitor:             capacityMonitor,
 		deleteSessionCleanupTimeout: defaultDeleteSessionCleanupTimeout,
+		credChain:                   credChain,
 	}
 	capacityMonitor.sessionSwitcher = svc
 	capacityMonitor.poller = svc
@@ -1697,6 +1707,19 @@ func (s *SessionService) SlackNotifierForTest() *SlackNotifier {
 // the poller was actually started.
 func (s *SessionService) SetJulesConfigDependencies(keys julesKeyManager, sources julesSourceResolver, poller julesAuthReconnectReporter) {
 	s.julesConfigSvc = NewJulesConfigService(keys, sources, poller)
+}
+
+// SetJulesKeyringTokenSource rewires credChain's JulesCredentialSource onto
+// the single process-wide *jules.KeyringTokenSource server/dependencies.go
+// constructs (the same instance passed to SetJulesConfigDependencies and
+// wired into the Jules client/poller), so credential-chain resolution never
+// spins up a second, independent cache/circuit-breaker/singleflight-group
+// over the same OS keychain entry. A no-op if credChain is nil (should not
+// happen outside tests that bypass NewSessionServiceWithSearchEngine).
+func (s *SessionService) SetJulesKeyringTokenSource(tokens julesKeyringTokenSource) {
+	if s.credChain != nil {
+		s.credChain.SetJulesTokenSource(tokens)
+	}
 }
 
 // SetJulesUsageCounter wires the process-wide *JulesUsageCounter (Task

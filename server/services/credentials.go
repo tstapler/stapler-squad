@@ -129,6 +129,23 @@ func NewChain(sources ...CredentialSource) *CredentialChain {
 	return &CredentialChain{sources: sources}
 }
 
+// SetJulesTokenSource rewires this chain's JulesCredentialSource onto tokens,
+// replacing whatever *jules.KeyringTokenSource NewDefaultChain constructed
+// for it. server/dependencies.go calls this once at startup so the chain
+// shares the single *jules.KeyringTokenSource wired into the Jules
+// client/poller quartet, rather than resolving the same OS keychain entry
+// through a second, independent cache/circuit-breaker/singleflight-group —
+// see jules/keychain.go's KeyringTokenSource doc comment for why only one
+// instance may exist per process. A no-op if no JulesCredentialSource is in
+// the chain (e.g. a test-built chain via NewChain).
+func (c *CredentialChain) SetJulesTokenSource(tokens julesKeyringTokenSource) {
+	for _, src := range c.sources {
+		if jcs, ok := src.(*JulesCredentialSource); ok {
+			jcs.tokens = tokens
+		}
+	}
+}
+
 // Resolve walks the chain and returns the first valid credential for provider.
 // Returns an error only when no source produced a valid credential.
 func (c *CredentialChain) Resolve(ctx context.Context, provider string) (Credential, error) {

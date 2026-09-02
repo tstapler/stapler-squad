@@ -1513,6 +1513,14 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	sessionService.SetJulesUsageCounter(julesUsage)
 
 	julesKeys := jules.NewKeyringTokenSource()
+	// Rewire SessionService's credChain (built during sessionService's own
+	// construction above, before julesKeys existed to share) onto this same
+	// instance -- otherwise CredentialChain's JulesCredentialSource holds a
+	// second, independent *jules.KeyringTokenSource over the same OS keychain
+	// entry, undermining the single-cache/circuit-breaker/singleflight-group
+	// invariant documented on jules.KeyringTokenSource. See
+	// server/services/credentials.go's SetJulesTokenSource.
+	sessionService.SetJulesKeyringTokenSource(julesKeys)
 	var julesSourceRegistry *jules.JulesSourceRegistry
 	var julesPoller *session.JulesSessionPoller
 	switch {
