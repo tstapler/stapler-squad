@@ -249,6 +249,27 @@ func StartSpan(ctx context.Context, name string, opts ...trace.SpanStartOption) 
 	return GetTracer().Start(ctx, name, opts...)
 }
 
+// StartLinkedBackgroundSpan starts a new-root span for work that outlives
+// its triggering request (e.g. a goroutine started from an RPC handler that
+// returns before the goroutine finishes), linked back to ctx's existing span
+// (if any) for correlation. See ADR-003
+// (project_plans/async-session-creation/decisions/ADR-003-linked-root-span-for-background-goroutine.md):
+// a plain child span risks rendering as a late/orphaned addition once some
+// APM backends (this repo's target is Datadog) consider the trace complete
+// after its root span closes. Any future "goroutine outlives its request"
+// instrumentation should use this helper rather than hand-rolling
+// trace.WithNewRoot()/trace.WithLinks() at each call site.
+//
+// GetTracer() already returns a working no-op tracer when telemetry is
+// disabled, so this is safe to call unconditionally — it never panics and
+// always returns a usable (context, span) pair.
+func StartLinkedBackgroundSpan(ctx context.Context, name string) (context.Context, trace.Span) {
+	return GetTracer().Start(ctx, name,
+		trace.WithNewRoot(),
+		trace.WithLinks(trace.LinkFromContext(ctx)),
+	)
+}
+
 // SpanFromContext returns the current span from context
 func SpanFromContext(ctx context.Context) trace.Span {
 	return trace.SpanFromContext(ctx)

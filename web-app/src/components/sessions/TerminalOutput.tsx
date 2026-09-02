@@ -562,6 +562,18 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
   const handleStreamError = useCallback((err: Error) => {
     console.error(`Terminal stream error (${isExternal ? 'external' : 'managed'}):`, err);
     setConnectionAttempts((prev) => prev + 1);
+    // A stream error (e.g. a malformed/aborted response while the initial
+    // content fetch was in flight) doesn't necessarily flip isConnected —
+    // Connect-Web's underlying WebSocket transport can stay nominally
+    // connected even though this specific RPC stream errored out. Without
+    // this, neither the wasConnected-&&-!isConnected disconnect handler nor
+    // the connectionAttempts>=5 fallback (both further down this file) ever
+    // fires for a lone error like this, leaving the user staring at an
+    // infinite "Loading terminal content..." spinner with no path to the
+    // reconnect banner/retry button. Clear it here too, same as the
+    // disconnect branch does, so a single early error still surfaces a
+    // recoverable state instead of a permanent stall.
+    setIsLoadingInitialContent(false);
   }, [isExternal]);
   // Story 2.3 — InputDropBadge: dropped-keystroke count + a monotonic
   // per-episode sequence number (so two consecutive episodes with an

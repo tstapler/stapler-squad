@@ -1,7 +1,7 @@
 "use client";
 // +feature: remote-host-badge
 
-import { useState, useRef, memo } from "react";
+import { useState, useRef, useEffect, memo } from "react";
 import { Session, SessionStatus, SubStatus, ReviewItem, InstanceType, RateLimitState, CheckpointProto, DetectedStatus } from "@/gen/session/v1/types_pb";
 import { Tooltip } from "../ui/Tooltip";
 import { ReviewQueueBadge } from "./ReviewQueueBadge";
@@ -104,6 +104,9 @@ import {
   statusNeedsApproval,
   statusUnknown,
   statusCrashed,
+  statusCreationFailed,
+  statusGlyphIcon,
+  failureMessageIcon,
   category,
   tagsContainer,
   tags,
@@ -238,7 +241,69 @@ function SessionCardInner({
   // SessionStatus.ACTIVE covers both ACTIVE and legacy RUNNING (same wire value = 1).
   const isSnapshotEnabled = session.status === SessionStatus.ACTIVE && isSnapshotOpen;
   const isCreating = session.status === SessionStatus.CREATING;
+  const isFailed = session.status === SessionStatus.FAILED;
   const isPaused = session.status === SessionStatus.PAUSED;
+
+  // Cancel/Retry guards (Epic 5.4, async-session-creation). Same
+  // synchronous-ref + state pattern as Omnibar.tsx's isSubmittingRef:
+  // the ref blocks a second click before React re-renders with the
+  // disabled attribute, the state actually disables/re-enables the button.
+  // Reset once the stream carries the session past the in-flight status
+  // (Creating after a successful Retry; anything other than Creating after
+  // a lost-race Cancel) so a later failure/creation cycle on the SAME card
+  // gets a fresh guard rather than staying disabled forever.
+  const cancelInFlightRef = useRef(false);
+  const [cancelDisabled, setCancelDisabled] = useState(false);
+  const retryInFlightRef = useRef(false);
+  const [retryDisabled, setRetryDisabled] = useState(false);
+
+  useEffect(() => {
+    if (!isCreating) {
+      cancelInFlightRef.current = false;
+      setCancelDisabled(false);
+    }
+  }, [isCreating]);
+
+  useEffect(() => {
+    if (isCreating) {
+      retryInFlightRef.current = false;
+      setRetryDisabled(false);
+    }
+  }, [isCreating]);
+
+  const handleCancelCreation = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (cancelInFlightRef.current) return;
+    cancelInFlightRef.current = true;
+    setCancelDisabled(true);
+    const result = await sessionActions.cancelCreation();
+    if (!result.success) {
+      // Either a lost-race FailedPrecondition or a transport error -- the
+      // card either already got its real status from the stream (lost
+      // race) or is still Creating (transport error), so re-enable Cancel.
+      cancelInFlightRef.current = false;
+      setCancelDisabled(false);
+    }
+    // On success the instance is deleted server-side; the card is removed
+    // from the store (dispatch(removeSession) in useSessionService) and
+    // this component unmounts, so no further local state update is needed.
+  };
+
+  const handleRetryCreation = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (retryInFlightRef.current) return;
+    retryInFlightRef.current = true;
+    setRetryDisabled(true);
+    const ok = await sessionActions.retryCreation();
+    if (!ok) {
+      // FailedPrecondition (no longer Failed) or transport error -- let the
+      // user try again rather than leaving Retry disabled indefinitely.
+      retryInFlightRef.current = false;
+      setRetryDisabled(false);
+    }
+    // On success the same instance flips Failed -> Creating server-side;
+    // the useEffect above clears the guard once that status arrives.
+  };
   const pendingProgramChange = hasPendingProgramChange(session);
   const pendingAutoApproveChange = hasPendingAutoApproveChange(session);
   // Gated on AutoApproveSupported-equivalent so the badge can never claim a session is
@@ -285,8 +350,25 @@ function SessionCardInner({
         // routine NeedsAttention reason (ReviewQueueBadge), which is the
         // ambiguity this status exists to eliminate (research/ux.md).
         return statusCrashed;
+      case SessionStatus.FAILED:
+        return statusCreationFailed;
       default:
         return statusUnknown;
+    }
+  };
+
+  // WCAG 1.4.1 (icon + color, not color alone): CRASHED and FAILED are the
+  // only two statuses that could otherwise be mistaken for one another by a
+  // colorblind user (both render as a red/amber pill), so both get a distinct
+  // glyph. Every other status is unambiguous from its label text alone.
+  const getStatusIcon = (sessionStatus: SessionStatus): string | null => {
+    switch (sessionStatus) {
+      case SessionStatus.CRASHED:
+        return "✕";
+      case SessionStatus.FAILED:
+        return "⚠";
+      default:
+        return null;
     }
   };
 
@@ -311,11 +393,57 @@ function SessionCardInner({
       case SessionStatus.CRASHED:
         return "Crashed";
       case SessionStatus.PERMANENTLY_FAILED:
+      case SessionStatus.FAILED:
         return "Failed";
       default:
         return "Unknown";
     }
   };
+
+  // Failure-reason categories are set verbatim by the async creation pipeline
+  // (server/services/session_creation_pipeline.go, stale_creation_sweeper.go)
+  // as session.instance_state.go's FailureReason() -- "GitHubResolutionError",
+  // "StartupError", "Stale". Three distinct messages per plan.md Story 5.2.2 /
+  // UX research §2/§4 (a stalled creation must never read as a user error).
+  //
+  // GAP (frontend-visible, not fixable from this file): proto/session/v1's
+  // Session message does not yet carry a failure_reason field end to end --
+  // confirmed via `git diff proto/session/v1/types.proto` (adds only the
+  // SESSION_STATUS_FAILED enum value) and instance_adapter.go (StatusToProto
+  // maps the status but no adapter path copies FailureReason() onto the proto
+  // message). getSessionFailureReason reads the field defensively so this
+  // component is ready the moment that plumbing lands; until then it falls
+  // back to the already-wired `creation_progress` text, which the pipeline
+  // already sets to a detailed message for GitHubResolutionError/StartupError
+  // (setPhase calls in session_creation_pipeline.go) before the terminal
+  // write -- Stale does not get a fresh setPhase call, so a Stale session
+  // without failureReason falls back to the generic message instead of
+  // whatever stale progress text it was last showing.
+  const getSessionFailureReason = (s: Session): string =>
+    (s as unknown as { failureReason?: string }).failureReason ?? "";
+
+  const getFailureMessage = (failureReason: string): string => {
+    switch (failureReason) {
+      case "GitHubResolutionError":
+        return "Failed to resolve GitHub URL.";
+      case "StartupError":
+        return "Failed to start session.";
+      case "Stale":
+        return "This session creation appears to have stalled.";
+      default:
+        return "Session creation failed.";
+    }
+  };
+
+  const failureReason = isFailed ? getSessionFailureReason(session) : "";
+  // Prefer the categorical mapping once failureReason is on the wire; until
+  // then fall back to the already-wired creation_progress detail text (see
+  // getSessionFailureReason's doc comment above for the gap this covers).
+  const failureMessage = isFailed
+    ? failureReason
+      ? getFailureMessage(failureReason)
+      : session.creationProgress || getFailureMessage("")
+    : "";
 
   const formatResetTime = (ts?: { seconds: bigint; nanos: number }): string => {
     if (!ts || ts.seconds === BigInt(0)) return "";
@@ -609,7 +737,11 @@ function SessionCardInner({
                   className={`${status} ${getStatusColor(session.status)}`}
                   role="img"
                   aria-label={`Session status: ${getStatusText(session.status)}`}
+                  data-testid="status-pill"
                 >
+                  {getStatusIcon(session.status) && (
+                    <span className={statusGlyphIcon} aria-hidden="true">{getStatusIcon(session.status)}</span>
+                  )}
                   {getStatusText(session.status)}
                 </span>
               </Tooltip>
@@ -631,7 +763,11 @@ function SessionCardInner({
                   className={`${status} ${getStatusColor(session.status)}`}
                   role="img"
                   aria-label={`Session status: ${getStatusText(session.status)} — ${session.creationProgress}`}
+                  data-testid="status-pill"
                 >
+                  {getStatusIcon(session.status) && (
+                    <span className={statusGlyphIcon} aria-hidden="true">{getStatusIcon(session.status)}</span>
+                  )}
                   {getStatusText(session.status)}
                 </span>
               </Tooltip>
@@ -640,7 +776,11 @@ function SessionCardInner({
                 className={`${status} ${getStatusColor(session.status)}`}
                 role="img"
                 aria-label={`Session status: ${getStatusText(session.status)}`}
+                data-testid="status-pill"
               >
+                {getStatusIcon(session.status) && (
+                  <span className={statusGlyphIcon} aria-hidden="true">{getStatusIcon(session.status)}</span>
+                )}
                 {getStatusText(session.status)}
               </span>
             )}
@@ -975,15 +1115,79 @@ function SessionCardInner({
           </div>
         )}
 
-        {/* Persistent live region for creation progress — always in DOM so NVDA announces on content change */}
-        <span role="status" aria-live="polite" id={`creation-status-${session.id}`} style={{ position: "absolute", width: 1, height: 1, overflow: "hidden", clipPath: "inset(50%)", whiteSpace: "nowrap" }}>
-          {isCreating ? (session.creationProgress || "Starting session...") : ""}
+        {/*
+          Persistent live region for creation progress AND Failed-state
+          announcements — the SAME node is reused for both (plan.md Story
+          5.2.2 / design/ux.md's "one live region, not two"), never a second
+          role="status" element. aria-live flips polite (routine Creating
+          progress) -> assertive (a Failed transition is worth interrupting
+          for) via attribute mutation on this node, not a remount, so NVDA/
+          VoiceOver reliably pick up the change. Always in the DOM (not
+          conditionally mounted) so content-only mutations are what triggers
+          the announcement.
+        */}
+        <span
+          role="status"
+          aria-live={isFailed ? "assertive" : "polite"}
+          id={`creation-status-${session.id}`}
+          data-testid="creation-live-region"
+          style={{ position: "absolute", width: 1, height: 1, overflow: "hidden", clipPath: "inset(50%)", whiteSpace: "nowrap" }}
+        >
+          {isFailed ? failureMessage : isCreating ? (session.creationProgress || "Starting session...") : ""}
         </span>
         {/* Creation progress spinner — only for Creating sessions */}
         {isCreating && (
-          <div style={{ display: "flex", alignItems: "center", gap: "8px", padding: "8px 0", color: "var(--text-secondary)", fontSize: "0.875rem" }}>
-            <span className={creationSpinner} aria-hidden="true" />
-            <span aria-hidden="true">{session.creationProgress || "Starting session..."}</span>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "8px", padding: "8px 0", color: "var(--text-secondary)", fontSize: "0.875rem" }}>
+            <span style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+              <span className={creationSpinner} aria-hidden="true" />
+              <span aria-hidden="true" data-testid="session-progress-text">{session.creationProgress || "Starting session..."}</span>
+            </span>
+            {/*
+              Cancel button (Epic 5.4/Story 5.4.1) — clickable immediately,
+              not gated on any delay. On success the instance is deleted
+              server-side and the card is removed from the list; on a
+              lost-race FailedPrecondition the normal stream status update
+              (Active/Failed) takes over instead of a Cancelled flash.
+            */}
+            <button
+              type="button"
+              onClick={handleCancelCreation}
+              disabled={cancelDisabled}
+              aria-label="Cancel session creation"
+              data-testid="cancel-creation-button"
+              style={{ padding: "4px 10px", fontSize: "0.8125rem", borderRadius: "4px", border: "1px solid var(--border)", background: "var(--surface)", color: "var(--text-primary)", cursor: cancelDisabled ? "default" : "pointer", opacity: cancelDisabled ? 0.6 : 1 }}
+            >
+              Cancel
+            </button>
+          </div>
+        )}
+        {/*
+          Persistent Failed-state message — the durable, always-visible
+          record of why creation failed (design/ux.md Surface 3: the toast in
+          Epic 5.3 is transient, this row is not).
+        */}
+        {isFailed && (
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "8px", padding: "8px 0", color: "var(--text-secondary)", fontSize: "0.875rem" }}>
+            <span style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+              <span className={failureMessageIcon} aria-hidden="true">⚠</span>
+              <span data-testid="failure-message">{failureMessage}</span>
+            </span>
+            {/*
+              Retry button (Epic 5.4/Story 5.4.2) — transitions the SAME
+              card in place (Failed -> Creating), never a second card.
+              Disabled synchronously on click (isSubmittingRef-style guard,
+              see Omnibar.tsx) so a double-click only fires one RPC.
+            */}
+            <button
+              type="button"
+              onClick={handleRetryCreation}
+              disabled={retryDisabled}
+              aria-label="Retry creating session"
+              data-testid="retry-creation-button"
+              style={{ padding: "4px 10px", fontSize: "0.8125rem", borderRadius: "4px", border: "1px solid var(--border)", background: "var(--surface)", color: "var(--text-primary)", cursor: retryDisabled ? "default" : "pointer", opacity: retryDisabled ? 0.6 : 1 }}
+            >
+              Retry
+            </button>
           </div>
         )}
 

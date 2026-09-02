@@ -144,6 +144,18 @@ func (Session) Fields() []ent.Field {
 			Default("").
 			MaxLen(10000).
 			Comment("User-authored free-form markdown note attached to this session. Capped at 10,000 bytes — see session.MaxNoteLength cross-reference in session/instance.go."),
+		field.Time("creation_progress_updated_at").
+			Optional().
+			Nillable().
+			Comment("Last time the async creation pipeline's progress message was updated (session.Instance.creationProgressUpdatedAt). Lets the Stale-Creation Sweeper (Epic 4.1) judge a Creating row's actual progress after a restart, not just its Creating-onset time."),
+		field.Uint64("creation_epoch").
+			Optional().
+			Default(0).
+			Comment("Fencing counter bumped exactly once per cancel/retry of the async creation pipeline (session.Instance.creationEpoch, Epic 1.2/ADR-002). UpdateInstanceIfEpoch conditions its UPDATE on this column so a stale background writer can never win a terminal status transition."),
+		field.String("failure_reason").
+			Optional().
+			Default("").
+			Comment("Human-readable reason the async creation pipeline failed (session.Instance.failureReason, Epic 1.2). Meaningful only when status == Failed."),
 	}
 }
 

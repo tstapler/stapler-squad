@@ -15,6 +15,29 @@ import { markAcknowledged } from "@/lib/utils/notificationStorage";
 
 export type { NotificationData, NotificationHistoryItem };
 
+/**
+ * Reason-specific toast copy for a session that transitioned to
+ * SESSION_STATUS_FAILED (async-session-creation Epic 5.3, Surface 4). Mirrors
+ * the FailureReason taxonomy set server-side by the Background Resolution
+ * Pipeline (session.Instance.FailureReason) — "GitHubResolutionError",
+ * "StartupError", "Stale", or "Cancelled". A reasonable default per
+ * plan.md's Unresolved Questions (exact copy is a pending product decision).
+ */
+export function getFailureReasonToastMessage(failureReason: string): string {
+  switch (failureReason) {
+    case "GitHubResolutionError":
+      return "Couldn't resolve the GitHub repository. Check the URL and try again.";
+    case "StartupError":
+      return "The session failed to start. See the session card for details.";
+    case "Stale":
+      return "Session creation timed out and was marked as failed.";
+    case "Cancelled":
+      return "Session creation was cancelled.";
+    default:
+      return "Session creation failed.";
+  }
+}
+
 interface NotificationContextValue {
   notifications: NotificationData[];
   notificationHistory: NotificationHistoryItem[];

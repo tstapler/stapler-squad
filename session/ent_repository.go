@@ -374,6 +374,9 @@ func (r *EntRepository) Create(ctx context.Context, data InstanceData) error {
 	if data.ArchivedAt != nil {
 		sessionCreate.SetArchivedAt(*data.ArchivedAt)
 	}
+	if !data.CreationProgressUpdatedAt.IsZero() {
+		sessionCreate.SetCreationProgressUpdatedAt(data.CreationProgressUpdatedAt)
+	}
 
 	// Link project if specified (look up by name)
 	if data.ProjectID != "" {
@@ -610,6 +613,9 @@ func (r *EntRepository) Update(ctx context.Context, data InstanceData) error {
 		sessionUpdate.SetArchivedAt(*data.ArchivedAt)
 	} else {
 		sessionUpdate.ClearArchivedAt()
+	}
+	if !data.CreationProgressUpdatedAt.IsZero() {
+		sessionUpdate.SetCreationProgressUpdatedAt(data.CreationProgressUpdatedAt)
 	}
 	if data.GitHubPRURL != "" {
 		sessionUpdate.SetGithubPrURL(data.GitHubPRURL)
@@ -1291,6 +1297,9 @@ func (r *EntRepository) sessionToInstanceData(sess *ent.Session) *InstanceData {
 	data.ExitReason = sess.ExitReason
 	data.WorkflowID = sess.WorkflowID
 	data.ArchivedAt = sess.ArchivedAt
+	if sess.CreationProgressUpdatedAt != nil {
+		data.CreationProgressUpdatedAt = *sess.CreationProgressUpdatedAt
+	}
 	data.GitHubPRURL = sess.GithubPrURL
 	data.GitHubPRNumber = sess.GithubPrNumber
 	data.GitHubOwner = sess.GithubOwner

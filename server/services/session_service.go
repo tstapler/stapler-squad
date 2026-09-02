@@ -52,14 +52,17 @@ var _ sessionv1connect.SessionServiceHandler = (*SessionService)(nil)
 var _ SessionSteerer = (*SessionService)(nil)
 
 // resumeIDRe validates the client-supplied resume_id field: must be a standard UUID.
-// createSessionTimeout bounds the synchronous portion of CreateSession (path
-// resolution, GitHub URL clone). It must stay comfortably above the slowest
-// known synchronous sub-operation — GitHub URL resolution can shell out to
-// `git clone`, which research puts at up to ~120s for large repos — so a
-// legitimate slow-but-successful create still completes. NOTE: this is
-// decoupled from the tmux startup poll (~10s), which runs in a background
-// goroutine *after* the RPC returns and is intentionally not bound by this
-// deadline; if that internal bound is retuned, revisit this value too.
+// createSessionTimeout bounds the synchronous portion of CreateSession (fast-fail
+// validation, config/remote/restart-source resolution, alias-existence check,
+// title-uniqueness check, and instance construction/persist/publish). As of
+// Epic 2.1 (async-session-creation), GitHub URL resolution (`git clone`, up to
+// ~120s for large repos per research) no longer runs on this synchronous path
+// -- it is deferred to the Background Resolution Pipeline (Epic 2.2, see
+// runBackgroundResolutionPipeline in session_creation_pipeline.go and its
+// own maxCreationResolutionTimeout), same as the tmux startup poll (~10s)
+// that already ran there. This value stays generous rather than being
+// tightened immediately, since other synchronous sub-operations (e.g. remote
+// SSH dial/worktree setup) can still be slow.
 const createSessionTimeout = 150 * time.Second
 
 var resumeIDRe = regexp.MustCompile(`(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
@@ -299,6 +302,36 @@ type SessionService struct {
 	// than a per-call-site change across the package's ~90 NewSessionService
 	// test call sites.
 	testTmuxServerSocket string
+
+	// githubResolver performs the actual GitHub-URL-to-local-clone resolution
+	// (network clone/fetch). Defaults to session.ResolveGitHubInputCtxWithHosts;
+	// overridable in tests to simulate a slow/instant resolution without
+	// depending on real network I/O (see
+	// TestCreateSession_should_ReturnWithinSLO_When_GithubURLResolutionIsSlow).
+	// Epic 2.1 (async-session-creation): CreateSession no longer calls this
+	// synchronously on the RPC path -- it runs in the trackCleanup-dispatched
+	// background goroutine, ahead of Start(). See project_plans/
+	// async-session-creation/implementation/plan.md Epic 2.1 Story 2.1.1.
+	githubResolver func(ctx context.Context, input string, enterpriseHosts []string) (localPath string, ref *session.GitHubRef, err error)
+
+	// creationResolutionTimeout bounds the Background Resolution Pipeline's
+	// (Epic 2.2) entire run end to end -- the Background Resolution
+	// Context is context.WithTimeout(context.WithoutCancel(rpcCtx),
+	// creationResolutionTimeout). Defaults to maxCreationResolutionTimeout;
+	// overridable directly in tests (same package, same pattern as
+	// githubResolver/testTmuxServerSocket above) to exercise the
+	// timeout-exceeded path without waiting the real 10 minutes.
+	creationResolutionTimeout time.Duration
+
+	// creationPhaseHook, when non-nil, is invoked synchronously by the
+	// Background Resolution Pipeline (Epic 2.2) with each Creation Phase's
+	// progress message, immediately before it is published/persisted. Test
+	// seam only (nil in production): lets a test observe the exact ordered
+	// phase sequence without racing the shared, mutable
+	// session.Instance.CreationProgress field against the pipeline's own
+	// goroutine advancing to a later phase before a slower test consumer
+	// (e.g. an eventBus subscriber) gets scheduled to read it.
+	creationPhaseHook func(msg string)
 
 	// testSSHClientPool, when non-nil, is shared by every tmux.SSHRunner and
 	// sshremote.RemoteApprovalRelay this service constructs for a remote
@@ -720,7 +753,7 @@ func NewSessionServiceWithSearchEngine(storage session.InstanceStore, eventBus *
 		slackConfigSvc:              NewSlackConfigService(NewSlackNotifier()),
 		julesConfigSvc:              NewJulesConfigService(nil, nil, nil),
 		callbackConfigSvc:           NewCallbackConfigService(),
-		streamHubRolloutSvc:         NewStreamHubRolloutService(),
+		streamHubRolloutSvc:         NewStreamHubRolloutService(nil),
 		launcherPresetsSvc:          NewLauncherPresetsService(),
 		projectSvc:                  NewProjectService(concStorage),
 		checkpointSvc:               NewCheckpointService(storage, eventBus),
@@ -730,6 +763,8 @@ func NewSessionServiceWithSearchEngine(storage session.InstanceStore, eventBus *
 		capacityMonitor:             capacityMonitor,
 		deleteSessionCleanupTimeout: defaultDeleteSessionCleanupTimeout,
 		credChain:                   credChain,
+		githubResolver:              session.ResolveGitHubInputCtxWithHosts,
+		creationResolutionTimeout:   maxCreationResolutionTimeout,
 	}
 	capacityMonitor.sessionSwitcher = svc
 	capacityMonitor.poller = svc
@@ -760,6 +795,7 @@ func NewSessionServiceWithSearchEngine(storage session.InstanceStore, eventBus *
 	// (see the Set* wiring doc comment above NewSessionService), so they are nil
 	// here at construction time.
 	svc.prCreationSvc = NewPRCreationService(storage, eventBus, svc.headlessPool, svc.backlogLifecycleListener, svc.findInstance)
+	svc.streamHubRolloutSvc = NewStreamHubRolloutService(svc.findInstance)
 
 	// Wire the autonomous orchestration service with a storage getter closure.
 	autonomousSvc := NewAutonomousOrchestrationService(nil, eventBus)
@@ -1773,7 +1809,12 @@ func (s *SessionService) ListSessions(
 		// once for the real output below) roughly doubles ListSessions' allocation cost
 		// whenever a status filter is applied.
 		if req.Msg.Status != nil && *req.Msg.Status != sessionv1.SessionStatus_SESSION_STATUS_UNSPECIFIED {
-			if adapters.StatusToProto(inst.GetEffectiveStatus()) != *req.Msg.Status {
+			effProto, err := adapters.StatusToProto(inst.GetEffectiveStatus())
+			if err != nil {
+				log.Error("ListSessions: unrecognized session.Status", "status", int(inst.GetEffectiveStatus()), "err", err)
+				continue
+			}
+			if effProto != *req.Msg.Status {
 				continue
 			}
 		}
@@ -2013,6 +2054,20 @@ func (s *SessionService) CreateSession(
 	// one-off path and the defaults/alias path further down.
 	cfg := config.LoadConfig()
 
+	// Alias *existence* check (Task 2.1.1a-2, Epic 2.1): kept synchronous and
+	// unchanged in behavior, ahead of everything else -- the same fast-fail
+	// category as duplicate title/missing path/bad resume_id/fork-source-not-
+	// found (requirements.md Constraints). This only checks that the alias
+	// exists; the full defaults merge (env vars, CLI flags, path, program,
+	// session type) that config.ResolveAlias also performs stays below,
+	// unchanged, further down the (now partly deferred) resolution section.
+	if req.Msg.AliasName != "" {
+		if config.FindAlias(cfg, req.Msg.AliasName) == nil {
+			return nil, connect.NewError(connect.CodeNotFound,
+				fmt.Errorf("alias %q not found: %w", req.Msg.AliasName, config.ErrAliasNotFound))
+		}
+	}
+
 	// resolveRemoteTarget is resolved here -- ahead of expandTildePath below, and well
 	// ahead of the Directory-mode os.Stat check and the mode-specific block further down
 	// -- because both of those, and tilde-expansion, must behave differently for a
@@ -2053,32 +2108,20 @@ func (s *SessionService) CreateSession(
 	// same enterprise URLs the omnibar's detector does.
 	enterpriseHosts := s.enterpriseHosts(cfg)
 
-	if session.IsGitHubURLWithHosts(req.Msg.Path, enterpriseHosts) {
-		log.Info("[CreateSession] detected GitHub URL", "path", req.Msg.Path)
-
-		// ResolveGitHubInputCtxWithHosts threads ctx down to the underlying git
-		// clone/fetch subprocess via safeexec.CommandContext, so the RPC's
-		// timeout genuinely cancels the subprocess instead of abandoning it
-		// to keep running in the background after the RPC returns. It also
-		// recognizes URLs against any configured GitHub Enterprise hosts, not
-		// just github.com.
-		localPath, ref, err := session.ResolveGitHubInputCtxWithHosts(ctx, req.Msg.Path, enterpriseHosts)
-		if err != nil {
-			if ctx.Err() != nil {
-				return nil, connect.NewError(connect.CodeDeadlineExceeded, fmt.Errorf("resolving GitHub URL timed out: %w", ctx.Err()))
-			}
-			return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("failed to resolve GitHub URL: %w", err))
-		}
-		resolvedPath = localPath
-		gitHubRef = ref
-		clonedRepoPath = localPath
-
-		// Use branch from GitHub URL if not explicitly provided
-		if branch == "" && gitHubRef.Branch != "" {
-			branch = gitHubRef.Branch
-		}
-
-		log.Info("[CreateSession] resolved to local path", "path", resolvedPath, "branch", branch)
+	// Epic 2.1 (async-session-creation): only the cheap, local detection
+	// (IsGitHubURLWithHosts, a string/regex check) runs synchronously here.
+	// The actual clone (ResolveGitHubInputCtxWithHosts, a network call that
+	// can take up to ~120s for large repos) is deferred to the trackCleanup
+	// background goroutine below, so it never blocks instance
+	// construction/save/publish or the RPC response. See plan.md Epic 2.1
+	// Story 2.1.1's SLO acceptance criterion. resolvedPath/branch are left as
+	// their pre-resolution values (the raw request path/branch) for now; the
+	// background goroutine patches them in via Instance.SetGitHubResolution
+	// once the clone completes, before Start() runs. Epic 2.2 will fold this
+	// into the full named Background Resolution Pipeline.
+	deferredGitHubURL := session.IsGitHubURLWithHosts(req.Msg.Path, enterpriseHosts)
+	if deferredGitHubURL {
+		log.Info("[CreateSession] detected GitHub URL, deferring resolution to background", "path", req.Msg.Path)
 	}
 
 	// One-off session: generate a fresh directory and override resolvedPath.
@@ -2178,6 +2221,17 @@ func (s *SessionService) CreateSession(
 	// One-off sessions run as directory sessions — the path was already generated above.
 	if sessionType == session.SessionTypeOneOff {
 		sessionType = session.SessionTypeDirectory
+	}
+
+	// A deferred GitHub URL has no resolved branch yet (that comes from the
+	// background clone, e.g. a PR ref's branch), so resolveSessionType above
+	// -- which falls back to SessionTypeDirectory when branch is empty --
+	// would otherwise misclassify the still-unresolved clone target as a
+	// plain directory. Force the common case (a fresh worktree from the
+	// clone) when the caller didn't explicitly ask for something else.
+	if deferredGitHubURL && req.Msg.SessionType == sessionv1.SessionType_SESSION_TYPE_UNSPECIFIED &&
+		req.Msg.ExistingWorktree == "" {
+		sessionType = session.SessionTypeNewWorktree
 	}
 
 	// For resume sessions, force DIRECTORY type — we must not create a new worktree
@@ -2479,6 +2533,13 @@ func (s *SessionService) CreateSession(
 		// keyed by (see config.Config.TymuxSessionOverrides's doc comment and
 		// tmuxSessionNameForStreamPath's identical derivation in connectrpc_websocket.go).
 		Backend: session.ResolveSessionBackendForTitle(cfg, req.Msg.Title, session.ProcessManagerBackend(req.Msg.GetBackendOverride())),
+		// Tags is a direct passthrough of req.Msg.Tags (Task 2.3.1c) -- set once, synchronously,
+		// at construction time, like Title/Path. This exists so MCP's create_session/
+		// create_session_for_pr can apply "source:mcp"/PR-derived tags before the async
+		// pipeline dispatches, instead of only after AwaitCreationTerminal succeeds -- a
+		// pipeline resolution that outlasts the caller's await timeout would otherwise
+		// silently never get its tags applied (see server/mcp/tools_lifecycle.go).
+		Tags: req.Msg.Tags,
 	}
 
 	// Add GitHub metadata if this was a GitHub URL
@@ -2510,8 +2571,15 @@ func (s *SessionService) CreateSession(
 			return nil, connect.NewError(connect.CodeNotFound, err)
 		case errors.Is(err, session.ErrInstanceConstructionFailed):
 			return nil, connect.NewError(connect.CodeInvalidArgument, err)
+		case errors.Is(err, session.ErrTitleConflict):
+			// A second, concurrent CreateSession call won the race against the
+			// synchronous ListInstanceData-based uniqueness check above (Task
+			// 2.1.1c) -- storage.AddInstance's own title-uniqueness guard is
+			// the backstop that turns that race into an error instead of
+			// silently overwriting the winner's row.
+			return nil, connect.NewError(connect.CodeAlreadyExists, err)
 		default:
-			// Covers ErrInstanceRegistrationFailed and ErrInstanceSaveFailed.
+			// Covers ErrInstanceRegistrationFailed and other ErrInstanceSaveFailed causes.
 			return nil, connect.NewError(connect.CodeInternal, err)
 		}
 	}
@@ -2534,10 +2602,21 @@ func (s *SessionService) CreateSession(
 	// Capture refs needed inside the goroutine (avoid capturing req.Msg which may be GC'd).
 	instanceTitle := instance.Title
 	instanceRootDir := instance.GetEffectiveRootDir()
+	// deferredGitHubSourceURL/deferredEnterpriseHosts feed the deferred GitHub
+	// resolution below (Epic 2.1) -- captured here rather than read from
+	// req.Msg inside the goroutine, same GC rationale as instanceTitle above.
+	deferredGitHubSourceURL := req.Msg.Path
+	deferredEnterpriseHosts := enterpriseHosts
 
 	// Pre-compute the Creating-state proto for the RPC response so the return
 	// statement below does not race with the goroutine's SetCreationProgress calls.
 	creatingProto := adapters.InstanceToProto(instance, s.workflowNames())
+
+	// Capture the fencing epoch once, before any phase of the Background
+	// Resolution Pipeline runs (Story 2.2.3) -- the only value the
+	// pipeline's terminal write presents back to commitTerminalStatus to
+	// win the race against a concurrent cancel/retry.
+	creationEpoch := instance.CreationEpoch()
 
 	// Perform the actual initialization asynchronously so the RPC returns within milliseconds.
 	// Tracked via trackCleanup (not a bare `go func()`) so Shutdown blocks until this
@@ -2547,90 +2626,15 @@ func (s *SessionService) CreateSession(
 	// closed" errors and the cross-iteration "directory not empty" flake in
 	// TestCreateSession_should_ComposeProfileCLIFlagsBeforePresetExtraArgs_When_BothPresent.
 	s.trackCleanup(func() {
-		// Wire callbacks before starting so rate-limit and status-change events fire.
-		s.wireCallbacks(instance)
-
-		instance.SetCreationProgress("Starting session...")
-		s.eventBus.Publish(events.NewSessionUpdatedEvent(instance, []string{"creation_progress"}))
-
-		// Start the session (initializes tmux + git worktree).
-		if startErr := instance.Start(true); startErr != nil {
-			log.Error("[CreateSession] async start failed", "session", instanceTitle, "err", startErr)
-			// Transition to Stopped on failure.
-			instance.SetCreationProgress(fmt.Sprintf("Startup failed: %s", startErr.Error()))
-			instance.ForceStatus(session.Stopped)
-			_ = s.storage.SaveInstances([]*session.Instance{instance})
-			s.eventBus.Publish(events.NewSessionUpdatedEvent(instance, []string{"status", "creation_progress"}))
-			return
-		}
-
-		// Clear progress message now that we are Active.
-		instance.SetCreationProgress("")
-
-		// Inject Claude Code HTTP hook config for remote approval from the web UI.
-		// Non-fatal: session is fully functional even without this config.
-		//
-		// Remote sessions (ssh-remote-workspaces Phase 5 correction) can't use
-		// InjectHookConfig at all: instanceRootDir is a path that only exists on
-		// the remote host, so os.ReadFile/os.WriteFile there would either fail
-		// outright or -- worse -- silently write to a local path nobody remote
-		// ever reads, exactly the bug this correction fixes (see ADR-003's
-		// addendum). setupRemoteApprovalHooks routes through a
-		// *sshremote.RemoteApprovalRelay + InjectHookConfigRemote instead.
-		if instance.IsRemote() {
-			if err := s.setupRemoteApprovalHooks(instance, instanceRootDir, instanceTitle); err != nil {
-				log.Warn("[CreateSession] failed to set up remote approval relay", "session", instanceTitle, "err", err)
-			}
-		} else if err := InjectHookConfig(instanceRootDir, instanceTitle); err != nil {
-			log.Warn("[CreateSession] failed to inject hook config", "session", instanceTitle, "err", err)
-		}
-
-		if s.backlogLifecycleListener != nil {
-			s.backlogLifecycleListener.WireToInstance(instance)
-		}
-		if s.sessionSummaryGenerator != nil {
-			session.WireSessionSummaryListener(s.sessionSummaryGenerator, instance)
-		}
-
-		// Wire the status manager and start the controller AFTER Start() returns so the
-		// tmux attach-session process has had time to fully initialize. Starting the
-		// controller inside Start() caused immediate PTY EIO because tmux hadn't
-		// stabilized yet. This mirrors the pattern used by loadInstancesWithWiring.
-		if s.statusManager != nil {
-			instance.SetStatusManager(s.statusManager)
-			if ctrlErr := instance.StartController(); ctrlErr != nil {
-				log.Warn("[CreateSession] failed to start controller after wiring", "session", instanceTitle, "err", ctrlErr)
-			}
-		}
-
-		// Start the session driver goroutine so UI-created sessions receive their
-		// initial prompt (typed into the session terminal once the session reaches Ready).
-		// StartSessionDriver is idempotent (CAS guard) — safe to call even if a driver
-		// was already started by another code path.
-		session.StartSessionDriver(instance, instanceRootDir)
-
-		if instance.AutonomousMode && s.headlessPool != nil {
-			costOpt := session.NoopDriverOption
-			if concreteStorage := s.GetStorage(); concreteStorage != nil {
-				costOpt = session.WithCostSink(session.CostSinkForSessionUUID(concreteStorage, instance.UUID))
-			}
-			driver := session.NewAutonomousDriver(instance, s.headlessPool, instance.Prompt, 0, costOpt)
-			driver.RegisterCompletionCallback(s.autonomousSvc.onAutonomousDriverComplete)
-			if driverErr := driver.Start(s.autonomousSvc.driverCtx()); driverErr != nil {
-				log.Warn("[CreateSession] failed to start autonomous driver", "session", instanceTitle, "err", driverErr)
-			} else {
-				s.autonomousSvc.registerDriver(instanceTitle, driver)
-			}
-		} else if instance.AutonomousMode {
-			log.Warn("[CreateSession] autonomous_mode requested but headlessPool is nil", "session", instanceTitle)
-		}
-
-		_ = s.storage.SaveInstances([]*session.Instance{instance})
-		s.eventBus.Publish(events.NewSessionUpdatedEvent(instance, []string{"status", "creation_progress"}))
-		log.Info("[CreateSession] async start complete", "session", instanceTitle)
-		if instance.RestartedFromSessionID != "" {
-			log.Info("[HandoffSummary] restart session created", "source_session", instance.RestartedFromSessionID, "new_session", instance.UUID)
-		}
+		s.runBackgroundResolutionPipeline(ctx, creationPipelineParams{
+			instance:                instance,
+			epoch:                   creationEpoch,
+			instanceTitle:           instanceTitle,
+			instanceRootDir:         instanceRootDir,
+			deferredGitHubURL:       deferredGitHubURL,
+			deferredGitHubSourceURL: deferredGitHubSourceURL,
+			deferredEnterpriseHosts: deferredEnterpriseHosts,
+		})
 	})
 
 	return connect.NewResponse(&sessionv1.CreateSessionResponse{
@@ -3387,6 +3391,97 @@ func (s *SessionService) ResumeCrashedSession(
 
 // DeleteSession stops and removes a session, cleaning up resources.
 // +api: session:delete
+// cleanupPartialCreation idempotently tears down whatever subset of
+// {tmux session, git worktree/clone directory} an instance has actually
+// acquired, and is a no-op (returns nil) for any resource that never came
+// into existence. It generalizes DeleteSession's original live-instance
+// cleanup (previously a direct instance.Destroy() call) so Cancel (Epic 3.2)
+// and Retry (Epic 3.3) can reuse the same already-solved edge cases instead
+// of re-deriving them.
+//
+// instance.Destroy() alone is insufficient here: Destroy() short-circuits
+// via its `!i.started.Load()` guard and returns nil without touching either
+// resource whenever the instance never reached a fully-started Active state
+// (session/instance.go's Destroy) — exactly the state a creation pipeline
+// leaves an instance in when it fails or is cancelled after acquiring a
+// worktree but before tmux startup completes. For a fully-started instance,
+// this defers to Destroy() so DeleteSession's existing guarantees (VNC/CDP
+// teardown, diff-stats capture, EventStopped, the destroyChainTimeout bound)
+// are preserved unchanged.
+//
+// Both KillSession() and CleanupWorktree() are independently idempotent —
+// they check HasSession()/HasWorktree() before doing anything — so calling
+// this twice, or on an instance with zero, one, or both resources present,
+// is always safe.
+//
+// Known accepted limitation (BUG-072, see plan.md's Domain Glossary): the
+// underlying cleanup work (git worktree remove) is not itself
+// context-bounded, so a hung removal can outlive a caller's timeout as an
+// untracked goroutine. Not fixed here — this helper inherits that property
+// from DeleteSession's existing chain rather than worsening it.
+func cleanupPartialCreation(instance *session.Instance) error {
+	if instance.Started() {
+		return instance.Destroy()
+	}
+
+	// Task 3.1.1d: defense-in-depth liveness guard. instance.Started() is
+	// only flipped true at the very end of Instance.Start() (session/instance.go's
+	// startLocked, i.started.Store(true)) -- well after the worktree is set up
+	// and the tmux session is actually launched (i.pm().Start(startPath)). A
+	// crash in that window leaves an instance that reports Started()==false
+	// (and whose persisted Status a caller like Cancel/Retry reads as
+	// Creating/Failed) even though both resources genuinely came up healthy.
+	// Re-check liveness immediately before each destructive step so that
+	// narrow window doesn't cost real, working session state -- see
+	// pre-mortem.md failure #2 (P1). This does not apply to the
+	// instance.Started() branch above (DeleteSession's normal path for a
+	// fully-started session): that branch must still unconditionally destroy
+	// a live session the user explicitly asked to delete.
+	var errs []error
+	if instance.TmuxSessionExists() {
+		log.Warn("cleanupPartialCreation: tmux session is alive despite instance.Started()==false; skipping kill (defense-in-depth guard)",
+			"session", instance.Title)
+	} else if err := instance.KillSession(); err != nil {
+		errs = append(errs, fmt.Errorf("failed to kill tmux session: %w", err))
+	}
+
+	if worktreePath := instance.GetEffectiveRootDir(); instance.HasGitWorktree() && worktreeLooksAlive(worktreePath) {
+		log.Warn("cleanupPartialCreation: worktree looks alive/healthy despite instance.Started()==false; skipping removal (defense-in-depth guard)",
+			"session", instance.Title, "path", worktreePath)
+	} else if err := instance.CleanupWorktree(); err != nil {
+		errs = append(errs, fmt.Errorf("failed to cleanup git worktree: %w", err))
+	}
+	return errors.Join(errs...)
+}
+
+// worktreeLooksAlive is the "cheap git-status check" backstop Task 3.1.1d
+// calls for: it confirms the directory exists and is a functioning git
+// checkout, mirroring session/git's own IsDirtyWithHint check
+// (`git status --porcelain`) rather than reinventing a second one.
+//
+// go-git was tried first per .claude/rules/prefer-go-git-over-subshells.md,
+// but PlainOpenWithOptions(path, {DetectDotGit: true}).Head() reliably
+// returns "reference not found" for a real `git worktree add` checkout
+// (verified against a fresh worktree: go-git resolves the linked .git file
+// and commondir correctly enough to open the repo, but not to resolve HEAD
+// through it) -- worktrees are exactly what every resource this guard checks
+// is. That's the specific, documented failure mode the fallback rule asks
+// for, so this shells out instead, scoped to a short timeout like every
+// other git subprocess call in this file (e.g. the origin/HEAD..HEAD count
+// below).
+func worktreeLooksAlive(path string) bool {
+	if path == "" {
+		return false
+	}
+	if info, err := os.Stat(path); err != nil || !info.IsDir() {
+		return false
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	cmd := safeexec.CommandContext(ctx, "git", "-C", path, "status", "--porcelain")
+	return cmd.Run() == nil
+}
+
 func (s *SessionService) DeleteSession(
 	ctx context.Context,
 	req *connect.Request[sessionv1.DeleteSessionRequest],
@@ -3444,11 +3539,27 @@ func (s *SessionService) DeleteSession(
 	// of letting them outlive the process/test — see deleteCleanupWG's doc comment.
 	if liveInst != nil {
 		s.trackCleanup(func() {
-			err := waitForDestroyLoggingSlowCleanup(liveInst.Destroy, s.deleteSessionCleanupTimeout, func() {
+			err := waitForDestroyLoggingSlowCleanup(func() error {
+				return cleanupPartialCreation(liveInst)
+			}, s.deleteSessionCleanupTimeout, func() {
 				log.Warn("session cleanup still running in background after timeout", "session", req.Msg.Id, "timeout", s.deleteSessionCleanupTimeout)
 			})
 			if err != nil {
 				log.Warn("failed to cleanup session resources", "session", req.Msg.Id, "err", err)
+			}
+			// Release this instance's actor from the SessionService-wide
+			// *session.Registry (Epic 6.2's goleak hammer test caught this
+			// missing entirely): Registry.Register (called from
+			// CreateManagedInstance for every CreateSession) has no
+			// corresponding release anywhere on the delete path, so every
+			// deleted session otherwise leaked its runActor goroutine for the
+			// life of the process. ForceRelease is a no-op if the registry
+			// has no entry for this ID (nil s.registry, or a session that
+			// predates registry wiring), and runs after cleanupPartialCreation
+			// above has fully finished so it never stops the actor out from
+			// under still-in-flight Destroy()/KillSession/CleanupWorktree work.
+			if s.registry != nil {
+				s.registry.ForceRelease(liveInst.GetStableID())
 			}
 		})
 	} else {
@@ -3459,6 +3570,14 @@ func (s *SessionService) DeleteSession(
 		s.trackCleanup(func() {
 			if err := s.KillTmuxSessionByTitle(context.Background(), sessionTitle); err != nil {
 				log.Warn("failed to kill tmux session for non-live instance", "session", req.Msg.Id, "err", err)
+			}
+			// See the liveInst-present branch's comment above: release any
+			// registry entry for this session even though it wasn't found in
+			// the poller (e.g. the poller and registry can disagree in edge
+			// cases -- FindLiveInstance only ever searches the poller). No-op
+			// if the registry has no entry for sessionUUID.
+			if s.registry != nil {
+				s.registry.ForceRelease(sessionUUID)
 			}
 		})
 	}
@@ -3482,6 +3601,178 @@ func (s *SessionService) DeleteSession(
 	return connect.NewResponse(&sessionv1.DeleteSessionResponse{
 		Success: true,
 		Message: fmt.Sprintf("Session '%s' deleted successfully", req.Msg.Id),
+	}), nil
+}
+
+// CancelSessionCreation cancels an in-progress (Status == Creating) session
+// creation (Epic 3.2, Story 3.2.1): it interrupts the Background Resolution
+// Pipeline goroutine (if one still exists in this process), cleans up any
+// partially-acquired resources via cleanupPartialCreation, and removes the
+// instance entirely — a cancelled creation is deleted outright, not left as
+// a Failed card (see the async-session-creation plan's Domain Glossary).
+//
+// Unlike DeleteSession, this does not publish a SessionDeletedEvent: per the
+// plan's Epic 3.2 "Known asymmetry" note, that's flagged as adjacent, optional
+// follow-up work (Task 3.2.1g), not a requirement of this RPC.
+//
+// +api: session:cancel-creation
+func (s *SessionService) CancelSessionCreation(
+	ctx context.Context,
+	req *connect.Request[sessionv1.CancelSessionCreationRequest],
+) (*connect.Response[sessionv1.CancelSessionCreationResponse], error) {
+	if req.Msg.Id == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("session id is required"))
+	}
+
+	inst := s.FindLiveInstance(req.Msg.Id)
+	if inst == nil {
+		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("session not found: %s", req.Msg.Id))
+	}
+
+	if status, _ := inst.StatusAndFailureReason(); status != session.Creating {
+		return nil, connect.NewError(connect.CodeFailedPrecondition,
+			fmt.Errorf("session %s is not in Creating status (current status=%s)", req.Msg.Id, status))
+	}
+
+	// Bump creationEpoch as its own actor mailbox round-trip BEFORE
+	// re-reading status (Task 3.2.1c): this is what lets the two racing
+	// writers -- this handler and the Background Resolution Pipeline's own
+	// commitTerminalStatus -- resolve deterministically to exactly one
+	// outcome. If the pipeline's TryForceStatusIfEpoch call executed inside
+	// the actor mailbox before this bump, it already won with the pre-bump
+	// epoch and the status read below observes Active; if it executes at or
+	// after this bump, it observes a stale epoch and no-ops, leaving Status
+	// == Creating for this handler to win instead. Skipping the bump (or
+	// combining it with the read into one command) would reopen the race
+	// ADR-002 closes.
+	inst.BumpCreationEpoch()
+	if status, _ := inst.StatusAndFailureReason(); status != session.Creating {
+		return nil, connect.NewError(connect.CodeFailedPrecondition,
+			fmt.Errorf("session %s is no longer Creating (status=%s); the session finished creating before cancellation could apply", req.Msg.Id, status))
+	}
+
+	// Nil-safe: a post-restart instance's pipeline goroutine (and its
+	// context.CancelFunc) is process-local and never persisted (ADR-002's
+	// Consequences), so a nil CancelFunc here means there is no live
+	// goroutine to interrupt in this process, not an error -- proceed
+	// straight to cleanup/removal exactly as the live-cancel-func case does.
+	if cancelFunc := inst.CreationCancelFunc(); cancelFunc != nil {
+		cancelFunc()
+	}
+
+	if err := cleanupPartialCreation(inst); err != nil {
+		log.Warn("CancelSessionCreation: failed to clean up partial creation resources", "session", req.Msg.Id, "err", err)
+	}
+
+	s.removeFromAllPollers(inst.Title)
+	if err := s.storage.DeleteInstance(inst.Title); err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to delete instance from storage: %w", err))
+	}
+
+	// Release this instance's actor from the SessionService-wide
+	// *session.Registry -- see DeleteSession's identical comment (Epic 6.2's
+	// goleak hammer test) for why this is required: without it, a cancelled
+	// creation leaks its runActor goroutine exactly like a deleted session
+	// did. cleanupPartialCreation above already ran synchronously (unlike
+	// DeleteSession's backgrounded version), so it's safe to release here
+	// immediately. No-op if s.registry has no entry for this ID.
+	if s.registry != nil {
+		s.registry.ForceRelease(inst.GetStableID())
+	}
+
+	RecordSessionCreationMetrics(ctx, "cancelled", time.Since(inst.CreatedAt))
+
+	return connect.NewResponse(&sessionv1.CancelSessionCreationResponse{
+		Success: true,
+		Message: fmt.Sprintf("session creation '%s' cancelled", req.Msg.Id),
+	}), nil
+}
+
+// RetrySessionCreation retries a Failed session creation in place (Epic 3.3,
+// Story 3.3.1): TryStartRetry is the single validate-Failed + bump-epoch +
+// reset-to-Creating operation, atomic inside one actor command (session/
+// instance_actor_setters.go). If it reports started == false, the instance
+// was no longer Failed by the time its command ran in the mailbox (a
+// concurrent retry beat this one, or the instance finished/changed status
+// on its own) -- this handler returns FailedPrecondition immediately,
+// before touching cleanup or spawning anything, exactly as Task 3.3.1's
+// double-click acceptance criterion requires.
+//
+// On started == true, this stops the outgoing attempt's pipeline goroutine
+// (nil-tolerant, same rationale as CancelSessionCreation above), cleans up
+// any partially-acquired resources via cleanupPartialCreation, then
+// re-spawns the Background Resolution Pipeline against the SAME instance
+// ID/storage row using the new epoch TryStartRetry returned. Only a
+// SessionUpdatedEvent is published here (and again from within the
+// pipeline as it progresses) -- never a second SessionCreatedEvent, so a
+// retried instance never produces a duplicate card.
+//
+// +api: session:retry-creation
+func (s *SessionService) RetrySessionCreation(
+	ctx context.Context,
+	req *connect.Request[sessionv1.RetrySessionCreationRequest],
+) (*connect.Response[sessionv1.RetrySessionCreationResponse], error) {
+	if req.Msg.Id == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("session id is required"))
+	}
+
+	inst := s.FindLiveInstance(req.Msg.Id)
+	if inst == nil {
+		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("session not found: %s", req.Msg.Id))
+	}
+
+	newEpoch, started := inst.TryStartRetry()
+	if !started {
+		status, _ := inst.StatusAndFailureReason()
+		return nil, connect.NewError(connect.CodeFailedPrecondition,
+			fmt.Errorf("session %s is not in Failed status (current status=%s)", req.Msg.Id, status))
+	}
+
+	// Nil-safe: a post-restart instance's pipeline goroutine (and its
+	// context.CancelFunc) is process-local and never persisted (ADR-002's
+	// Consequences), so a nil CancelFunc here means there is no live
+	// goroutine left to interrupt in this process -- proceed straight to
+	// cleanup exactly as CancelSessionCreation's equivalent guard does.
+	if cancelFunc := inst.CreationCancelFunc(); cancelFunc != nil {
+		cancelFunc()
+	}
+
+	if err := cleanupPartialCreation(inst); err != nil {
+		log.Warn("RetrySessionCreation: failed to clean up partial creation resources", "session", req.Msg.Id, "err", err)
+	}
+
+	s.eventBus.Publish(events.NewSessionUpdatedEvent(inst, []string{"status", "creation_progress"}))
+
+	instanceTitle := inst.Title
+	instanceRootDir := inst.GetEffectiveRootDir()
+
+	// Re-spawn the Background Resolution Pipeline against the same instance
+	// ID/storage row with the new fencing epoch, tracked via trackCleanup
+	// exactly like CreateSession's own goroutine dispatch above so Shutdown
+	// (and tests) block until it finishes.
+	//
+	// Known limitation: unlike CreateSession's synchronous prefix, this
+	// handler has no request message to re-derive deferredGitHubURL/
+	// deferredGitHubSourceURL/deferredEnterpriseHosts from -- those are not
+	// persisted on the instance (Story 3.3.1 is scoped to the RPC handler
+	// around TryStartRetry, not the pipeline's deferred-GitHub-URL plumbing).
+	// A retry therefore always re-runs as a non-deferred-GitHub-URL pipeline;
+	// retrying a session that originally failed during GitHub URL resolution
+	// itself (FailureReason == GitHubResolutionError, before any
+	// GitHubResolution was ever recorded on the instance) is a known gap, not
+	// covered by this story's tests.
+	s.trackCleanup(func() {
+		s.runBackgroundResolutionPipeline(ctx, creationPipelineParams{
+			instance:        inst,
+			epoch:           newEpoch,
+			instanceTitle:   instanceTitle,
+			instanceRootDir: instanceRootDir,
+		})
+	})
+
+	return connect.NewResponse(&sessionv1.RetrySessionCreationResponse{
+		Success: true,
+		Message: fmt.Sprintf("session creation '%s' retrying", req.Msg.Id),
 	}), nil
 }
 
@@ -3557,7 +3848,12 @@ func (s *SessionService) WatchSessions(
 				// inst.Status directly -- see reconcileSessions' identical fix
 				// (9fcded805) for why a raw field read here races with the actor's
 				// transitionToLocked write under -race.
-				if adapters.StatusToProto(session.Status(inst.GetStatus())) != *req.Msg.StatusFilter {
+				instProto, err := adapters.StatusToProto(session.Status(inst.GetStatus()))
+				if err != nil {
+					log.Error("WatchSessions: unrecognized session.Status", "status", inst.GetStatus(), "err", err)
+					continue
+				}
+				if instProto != *req.Msg.StatusFilter {
 					continue
 				}
 			}
@@ -3590,8 +3886,15 @@ func (s *SessionService) WatchSessions(
 			}
 
 			if req.Msg.StatusFilter != nil && *req.Msg.StatusFilter != sessionv1.SessionStatus_SESSION_STATUS_UNSPECIFIED {
-				if event.Session != nil && adapters.StatusToProto(session.Status(event.Session.GetStatus())) != *req.Msg.StatusFilter {
-					continue
+				if event.Session != nil {
+					evtProto, err := adapters.StatusToProto(session.Status(event.Session.GetStatus()))
+					if err != nil {
+						log.Error("WatchSessions: unrecognized session.Status on event", "status", event.Session.GetStatus(), "err", err)
+						continue
+					}
+					if evtProto != *req.Msg.StatusFilter {
+						continue
+					}
 				}
 			}
 

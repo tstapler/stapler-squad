@@ -1,7 +1,6 @@
 package services
 
 import (
-	"bytes"
 	"context"
 	"log/slog"
 	"testing"
@@ -11,6 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	ssqlog "github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
 )
 
@@ -135,13 +135,12 @@ func TestSearchClaudeHistory_LogsExcludedCountOnlyWhenSessionsActuallyExcluded(t
 	svc.SetInstanceProvider(func() []*session.Instance { return []*session.Instance{hiddenInst} })
 
 	// slogDefaultMu (declared in autonomous_orchestration_service_test.go) serializes this
-	// swap against every other slog.Default() swap in this package.
+	// swap against every other log.SetSlogDefaultForTest swap in this package.
 	slogDefaultMu.Lock()
-	var buf bytes.Buffer
-	prev := slog.Default()
-	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	buf := &syncLogBuffer{}
+	prev := ssqlog.SetSlogDefaultForTest(slog.New(slog.NewTextHandler(buf, nil)))
 	defer func() {
-		slog.SetDefault(prev)
+		ssqlog.SetSlogDefaultForTest(prev)
 		slogDefaultMu.Unlock()
 	}()
 

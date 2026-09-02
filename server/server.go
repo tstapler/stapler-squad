@@ -1077,6 +1077,16 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 			"notify_enabled", cfg.StaleSession.NotifyEnabledOrDefault())
 	}
 
+	// Start stale creation sweeper (flips a Creating session whose persisted
+	// creation-progress timestamp has exceeded the configured threshold to
+	// Failed/Stale -- see StaleCreationSweeper doc comment, Epic 4.1).
+	if deps.ReviewQueuePoller != nil && deps.Storage != nil {
+		staleCreationSweeper := services.NewStaleCreationSweeper(deps.ReviewQueuePoller, deps.Storage, deps.EventBus)
+		go staleCreationSweeper.Start(serverCtx)
+		log.Info("Stale creation sweeper started",
+			"threshold_minutes", cfg.CreationStale.ThresholdMinutesOrDefault())
+	}
+
 	// Start memory pressure notifier (fires an operator-facing notification the first time
 	// this process's own cgroup memory usage crosses its MemoryHigh ceiling — see
 	// MemoryPressureNotifier doc comment). No-ops on non-Linux (telemetry.CgroupMemoryUsageRatio

@@ -426,6 +426,10 @@ type Config struct {
 	// policy (attempts, backoff, eligible failure reasons). May be overridden
 	// per-session via session.Instance.RetryPolicyOverride.
 	RetryPolicy RetryPolicyConfig `json:"retry_policy,omitempty"`
+	// CreationStale holds configuration for the Stale-Creation Sweeper (Epic 4.1):
+	// how long a session may sit in Creating status without a progress update
+	// before it's automatically flipped to Failed/Stale.
+	CreationStale CreationStaleConfig `json:"creation_stale,omitempty"`
 	// Callbacks holds the global singleton outbound-callback URLs (webhook-triggers
 	// Phase 5, FR7) fired by CallbackDispatcher on session-complete/session-stale/
 	// queue-item-created lifecycle events.

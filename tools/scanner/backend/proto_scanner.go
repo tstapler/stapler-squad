@@ -207,6 +207,13 @@ var methodToID = map[string]string{ //nolint:gochecknoglobals
 	"ResumeHibernatedSession": "session:resume-hibernated",
 	"ResumeCrashedSession":    "session:resume-crashed",
 	"WriteToSession":          "session:write",
+	// Async session creation cancel/retry RPCs (async-session-creation Epic 6.3,
+	// Story 6.3.1) -- match the existing "// +api: session:cancel-creation" /
+	// "// +api: session:retry-creation" markers in session_service.go verbatim,
+	// or ScanProto's method-name fallback produces a second, non-marker-matching
+	// id/file (see the SearchGitHubRepos comment above for the failure mode).
+	"CancelSessionCreation": "session:cancel-creation",
+	"RetrySessionCreation":  "session:retry-creation",
 	// Shell RPCs
 	"SpawnShell":   "shell:spawn",
 	"DeleteShell":  "shell:delete",

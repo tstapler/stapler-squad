@@ -2990,6 +2990,31 @@ func (s *BacklogService) TriggerTriage(
 			persistFailures = append(persistFailures, "saving the plan artifacts path")
 		}
 
+		// Close out the ItemSession and release triageInFlight together, BEFORE the
+		// status transition to Ready below — not after it, and not after the optional
+		// auto-spawn further down. ended_at and triageInFlight are updated in the same
+		// spot deliberately: both are inputs to the orphan-liveness check (IsTriageLive
+		// / tombstoneOrphanTriageSessions above), so moving one without the other would
+		// let a concurrent reconciliation sweep see "ended_at nil, not live" and
+		// wrongly tombstone a session that's simply between here and its final log
+		// line.
+		//
+		// This pair used to run AFTER the status transition ("the item's status
+		// already flipped to Ready, so a caller polling on status can legitimately
+		// re-trigger triage now"), which was itself the fix for the original
+		// TestTriggerTriage_RefineWithFeedback CI flake (auto-spawn's I/O stretching
+		// the window). But that left a second, narrower window open: a caller polling
+		// storage directly (not through IsTriageLive) can observe Ready the instant
+		// TransitionBacklogItemStatus returns, race ahead of this goroutine's own next
+		// line, and hit a spurious AlreadyExists from the triageInFlight guard at 3a-i
+		// above -- confirmed as the root cause of a full-test-suite-only (never
+		// isolated) flake in TestTriggerTriage_RefineWithFeedback_ClearsRejectionReason,
+		// where DB lock contention under -p made that window wide enough to hit
+		// reliably. Clearing triageInFlight before the status write closes it: by the
+		// time Ready is observable to any caller, this item is already re-triggerable.
+		_ = s.storage.UpdateItemSessionEnded(persistCtx, isID, time.Now())
+		s.triageInFlight.Delete(itemID)
+
 		precondition := &session.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusIdea)}
 		statusAdvanced := true
 		if _, transErr := s.storage.TransitionBacklogItemStatus(persistCtx, itemID, //nolint:silenttransition surfaced a few lines below via notifyTriagePersistFailure once persistFailures is fully collected
@@ -3002,21 +3027,6 @@ func (s *BacklogService) TriggerTriage(
 		if len(persistFailures) > 0 {
 			s.notifyTriagePersistFailure(persistCtx, itemID, item.Title, persistFailures, statusAdvanced)
 		}
-
-		// Close out the ItemSession and release triageInFlight together, right here —
-		// not after the optional auto-spawn below. The item's status already flipped to
-		// Ready above, so a caller polling on status (or a human clicking "retry") can
-		// legitimately re-trigger triage now; leaving triageInFlight held through
-		// auto-spawn's own I/O (SpawnSessionFromItem creates a worktree, etc.) only
-		// stretched a window where a well-timed retry got a spurious AlreadyExists —
-		// exactly what made TestTriggerTriage_RefineWithFeedback flaky in CI. ended_at
-		// and triageInFlight are updated in the same spot deliberately: both are inputs
-		// to the orphan-liveness check (IsTriageLive / tombstoneOrphanTriageSessions
-		// above), so moving one without the other would let a concurrent reconciliation
-		// sweep see "ended_at nil, not live" and wrongly tombstone a session that's
-		// simply between here and its final log line.
-		_ = s.storage.UpdateItemSessionEnded(persistCtx, isID, time.Now())
-		s.triageInFlight.Delete(itemID)
 
 		// Opt-in: skip the manual "Spawn Session" click when the item is configured to
 		// auto-spawn. Autonomous: true bypasses the planning-approval gate the same way

@@ -1115,6 +1115,42 @@ func scutilNameservers() []string {
 	return servers
 }
 
+// forwardLookupViaKnownNameservers resolves hostname against every
+// nameserver scutil reports, the forward-lookup analog of
+// reverseDNSViaKnownNameservers below: a forward query is scoped by search
+// domain (e.g. "staplerhome.internal"), and an unscoped VPN resolver can take
+// priority over a LAN router's scoped resolver for that same domain, so
+// net.LookupHost's OS-chosen resolver order can return "no such host" from
+// the wrong resolver even though the LAN router would have answered.
+// Querying each known nameserver directly finds a LAN-only A record that
+// step would otherwise miss.
+func forwardLookupViaKnownNameservers(hostname string) []string {
+	seen := make(map[string]bool)
+	var ips []string
+	for _, server := range scutilNameservers() {
+		resolver := &net.Resolver{
+			PreferGo: true,
+			Dial: func(ctx context.Context, network, _ string) (net.Conn, error) {
+				d := net.Dialer{Timeout: 3 * time.Second}
+				return d.DialContext(ctx, network, net.JoinHostPort(server, "53"))
+			},
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		found, err := resolver.LookupHost(ctx, hostname)
+		cancel()
+		if err != nil {
+			continue
+		}
+		for _, ip := range found {
+			if !seen[ip] {
+				seen[ip] = true
+				ips = append(ips, ip)
+			}
+		}
+	}
+	return ips
+}
+
 // reverseDNSViaKnownNameservers performs a PTR lookup for lanIPStr against
 // every nameserver scutil reports, rather than relying on the OS's default
 // resolver selection. A PTR query carries no domain suffix, so per-domain
@@ -1274,10 +1310,13 @@ func startRemoteAccess(ctx context.Context, srv *server.Server, localAddr string
 	// an IP this machine actually owns, so a request can't claim an
 	// arbitrary hostname as its RPID.
 	hostnameValidator := func(hostname string) bool {
-		resolvedIPs, err := net.LookupHost(hostname)
-		if err != nil {
-			return false
-		}
+		resolvedIPs, _ := net.LookupHost(hostname)
+		// The OS's default resolver order can shadow a LAN-only search
+		// domain with an unscoped VPN resolver (see
+		// forwardLookupViaKnownNameservers) -- always also check every
+		// nameserver scutil knows about directly rather than only falling
+		// back to it when net.LookupHost errors.
+		resolvedIPs = append(resolvedIPs, forwardLookupViaKnownNameservers(hostname)...)
 		ownIPs := listNonLoopbackIPs()
 		for _, resolved := range resolvedIPs {
 			for _, own := range ownIPs {

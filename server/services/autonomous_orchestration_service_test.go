@@ -17,6 +17,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	ssqlog "github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
@@ -404,28 +405,50 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_DoesNotForceR
 	assert.Empty(t, trigger.calls, "no review session may be spawned off the orchestrator's inferred DONE signal")
 }
 
-// slogDefaultMu serializes every test in this package that swaps the process-global
-// slog.Default() logger. slog.Default() is stored in an unexported atomic pointer, so
-// -race never flags concurrent swaps, but two t.Parallel() tests both redirecting it
-// still race semantically: one test's log lines land in another test's capture buffer.
+// slogDefaultMu serializes every test in this package that swaps the injectable
+// log.SetSlogDefaultForTest seam (log/log.go). Swapping the seam is itself race-free
+// (it's an atomic pointer), but two t.Parallel() tests both redirecting it still race
+// semantically: one test's log lines would land in another test's capture buffer.
 // Every swap site in this package (captureLogs, captureInfoLog/captureErrorLog in
 // session_service_client_log_test.go, and the inline swaps in search_service_test.go
 // and slack_notifier_test.go) must hold this lock for the full swap-to-restore window.
 var slogDefaultMu sync.Mutex
 
+// syncLogBuffer is a mutex-guarded bytes.Buffer. Even after this package's tests stop
+// calling slog.SetDefault() directly, captureLogs's buffer can still legitimately be
+// written to by a background goroutine the test under exercise itself spawns (via
+// log.Warn/Info) concurrently with the owning test's String() read. A plain
+// bytes.Buffer would make that a genuine data race under -race; this makes the access
+// itself safe regardless of which code path writes to it.
+type syncLogBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncLogBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncLogBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
 // captureLogs swaps the default slog logger for one that writes to a buffer at Debug level,
 // restoring the previous logger via t.Cleanup. Returns the buffer to inspect after the call.
-func captureLogs(t *testing.T) *bytes.Buffer {
+func captureLogs(t *testing.T) *syncLogBuffer {
 	t.Helper()
 	slogDefaultMu.Lock()
-	var buf bytes.Buffer
-	prev := slog.Default()
-	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	buf := &syncLogBuffer{}
+	prev := ssqlog.SetSlogDefaultForTest(slog.New(slog.NewTextHandler(buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
 	t.Cleanup(func() {
-		slog.SetDefault(prev)
+		ssqlog.SetSlogDefaultForTest(prev)
 		slogDefaultMu.Unlock()
 	})
-	return &buf
+	return buf
 }
 
 // TestAutonomousOrchestrationService_OnAutonomousDriverComplete_LogsNotLinkedAtDebug verifies
@@ -433,10 +456,11 @@ func captureLogs(t *testing.T) *bytes.Buffer {
 // session (the common, expected case — most autonomous sessions are not backlog-linked), the
 // lookup "failure" must log at Debug, not escalate to Warn.
 func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_LogsNotLinkedAtDebug(t *testing.T) {
-	// Deliberately not t.Parallel(): captureLogs swaps the process-global
-	// slog.Default() logger. A parallel sibling logging during that window
-	// would write into this test's buffer from another goroutine — a real
-	// data race under -race — and could corrupt the assertions below.
+	// Deliberately not t.Parallel(): captureLogs swaps the log package's
+	// injectable slog seam (log.SetSlogDefaultForTest). A parallel sibling
+	// logging during that window would write into this test's buffer from
+	// another goroutine — a real data race under -race — and could corrupt
+	// the assertions below.
 	storage := createTestStorage(t)
 	eventBus := events.NewEventBus(4)
 	svc := NewSessionService(storage, eventBus)
@@ -465,7 +489,7 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_LogsNotLinked
 // the expected not-linked case above.
 func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_LogsRealLookupFailureAtWarn(t *testing.T) {
 	// Deliberately not t.Parallel(): see LogsNotLinkedAtDebug above — captureLogs
-	// swaps the process-global slog.Default() logger.
+	// swaps the log package's injectable slog seam (log.SetSlogDefaultForTest).
 	storage := createTestStorage(t)
 	ctx := context.Background()
 	eventBus := events.NewEventBus(4)
@@ -517,7 +541,7 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_LogsRealLooku
 // operator with zero signal that anything happened at all.
 func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_UnrecognizedRoleStillNotifies(t *testing.T) {
 	// Deliberately not t.Parallel(): see LogsNotLinkedAtDebug above — captureLogs
-	// swaps the process-global slog.Default() logger.
+	// swaps the log package's injectable slog seam (log.SetSlogDefaultForTest).
 	storage := createTestStorage(t)
 	ctx := context.Background()
 	eventBus := events.NewEventBus(4)
