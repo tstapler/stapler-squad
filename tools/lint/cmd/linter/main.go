@@ -13,11 +13,14 @@
 //   - tmuxsocketscope: detects tmux command construction that bypasses socket resolution
 //   - silenttransition: detects TransitionBacklogItemStatus/UpdateItemSessionEnded
 //     calls whose error is only logged, never surfaced or propagated
+//   - entfullscan: detects ent query .All(ctx) calls with no .Where(...) filter
+//     anywhere in the enclosing function — a full-table scan
 package main
 
 import (
 	"golang.org/x/tools/go/analysis/multichecker"
 
+	"github.com/tstapler/stapler-squad/tools/lint/entfullscan"
 	"github.com/tstapler/stapler-squad/tools/lint/hotpolllog"
 	"github.com/tstapler/stapler-squad/tools/lint/nocommandpattern"
 	"github.com/tstapler/stapler-squad/tools/lint/norawexec"
@@ -27,6 +30,7 @@ import (
 
 func main() {
 	multichecker.Main(
+		entfullscan.Analyzer,
 		hotpolllog.Analyzer,
 		nocommandpattern.Analyzer,
 		norawexec.Analyzer,

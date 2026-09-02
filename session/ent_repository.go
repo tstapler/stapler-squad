@@ -1418,8 +1418,33 @@ func (r *EntRepository) GetWithOptions(ctx context.Context, title string, option
 	return r.sessionToInstanceData(sess), nil
 }
 
+// FindByIDWithOptions retrieves a single session by stable UUID or title (mirroring
+// InstanceData.MatchesID's dual-key lookup) via an indexed WHERE clause, with
+// selective child data loading. Returns ErrInstanceDataNotFound when no match exists.
+//
+// Added to replace Storage.FindInstanceDataByID's previous ListInstanceData()-then-
+// linear-scan implementation, which loaded and column-scanned every session row on
+// every by-ID lookup. Profiling on 2026-09-02 found this was the single largest CPU
+// consumer in the live process (~25% of sampled CPU time) via
+// BacklogLifecycleListener.reconcileTerminalItemSessions calling ArchiveSessionByUUID
+// (and so FindInstanceDataByID) once per session on every terminal-backlog-item sweep.
+func (r *EntRepository) FindByIDWithOptions(ctx context.Context, id string, options LoadOptions) (*InstanceData, error) {
+	sess, err := applyLoadOptions(
+		r.client.Session.Query().Where(session.Or(session.Title(id), session.UUID(id))),
+		options,
+	).First(ctx)
+	if err != nil {
+		if ent.IsNotFound(err) {
+			return nil, ErrInstanceDataNotFound
+		}
+		return nil, fmt.Errorf("failed to query session by id %s: %w", id, err)
+	}
+	return r.sessionToInstanceData(sess), nil
+}
+
 // ListWithOptions retrieves all sessions with selective child data loading.
 func (r *EntRepository) ListWithOptions(ctx context.Context, options LoadOptions) ([]InstanceData, error) {
+	//nolint:entfullscan the base "list all sessions" query genuinely needs every row; callers select fields via LoadOptions, not row filtering.
 	sessions, err := applyLoadOptions(r.client.Session.Query(), options).All(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query sessions: %w", err)
@@ -1469,6 +1494,7 @@ func (r *EntRepository) ListByTagWithOptions(ctx context.Context, tagName string
 // --- Permissions & Analytics --------------------------------------------------
 
 func (r *EntRepository) AllRules(ctx context.Context) ([]ApprovalRuleData, error) {
+	//nolint:entfullscan approval rules are a small, admin-configured table; the whole set is needed to evaluate rule precedence.
 	rules, err := r.client.ApprovalRule.Query().
 		Order(ent.Asc(approvalrule.FieldPriority)).
 		All(ctx)
@@ -1608,6 +1634,7 @@ func (r *EntRepository) ListAnalytics(ctx context.Context, limit int) ([]Analyti
 		query = query.Limit(limit)
 	}
 
+	//nolint:entfullscan Order()+optional caller-supplied Limit(); no Where by design (returns most-recent-N analytics rows), acceptable for an analytics/debug endpoint.
 	entries, err := query.All(ctx)
 	if err != nil {
 		return nil, err
@@ -1791,6 +1818,7 @@ func (r *EntRepository) CreateProject(ctx context.Context, data ProjectData) (*P
 
 // ListProjects returns all projects.
 func (r *EntRepository) ListProjects(ctx context.Context) ([]ProjectData, error) {
+	//nolint:entfullscan small, bounded-by-nature table (one row per configured repo), intentionally returns all.
 	projects, err := r.client.Project.Query().All(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list projects: %w", err)

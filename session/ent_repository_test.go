@@ -349,6 +349,43 @@ func TestEntRepository_ListWithOptions_RespectsLoadDiffStats(t *testing.T) {
 	assert.Equal(t, session.DiffStats.Content, full[0].DiffStats.Content)
 }
 
+// TestEntRepository_FindByIDWithOptions covers the indexed by-UUID-or-title lookup
+// that replaced Storage.FindInstanceDataByID's previous ListInstanceData()-then-
+// linear-scan implementation (see FindByIDWithOptions's doc comment for the CPU
+// profiling finding that motivated this).
+func TestEntRepository_FindByIDWithOptions(t *testing.T) {
+	t.Parallel()
+	repo, cleanup := createTestEntRepository(t)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	session := createTestSession("find-by-id-title")
+	session.UUID = "find-by-id-uuid-123"
+	require.NoError(t, repo.Create(ctx, session))
+
+	t.Run("matches by title", func(t *testing.T) {
+		t.Parallel()
+		found, err := repo.FindByIDWithOptions(ctx, "find-by-id-title", LoadMinimal)
+		require.NoError(t, err)
+		assert.Equal(t, "find-by-id-title", found.Title)
+	})
+
+	t.Run("matches by UUID", func(t *testing.T) {
+		t.Parallel()
+		found, err := repo.FindByIDWithOptions(ctx, "find-by-id-uuid-123", LoadMinimal)
+		require.NoError(t, err)
+		assert.Equal(t, "find-by-id-title", found.Title)
+	})
+
+	t.Run("returns ErrInstanceDataNotFound when no match", func(t *testing.T) {
+		t.Parallel()
+		found, err := repo.FindByIDWithOptions(ctx, "no-such-session", LoadMinimal)
+		require.ErrorIs(t, err, ErrInstanceDataNotFound)
+		assert.Nil(t, found)
+	})
+}
+
 // TestEntRepository_ListWithOptions_RespectsLoadClaudeSession verifies that
 // ListWithOptions only loads Claude session data (and its metadata) when
 // LoadOptions.LoadClaudeSession is set.
