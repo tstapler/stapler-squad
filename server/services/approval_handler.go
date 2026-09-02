@@ -846,6 +846,9 @@ func InjectHookConfig(rootDir, sessionTitle string) error {
 	entry := hookEntry{Type: "command", Command: curlCmd, Timeout: hookTimeout}
 
 	// Read existing settings (if any).
+	// #nosec G304 -- settingsPath is rootDir/.claude/settings.local.json, where rootDir is
+	// the session's own worktree/directory (Instance.GetEffectiveRootDir()), established by
+	// this server's own session/worktree creation, never raw network/RPC input.
 	data, err := os.ReadFile(settingsPath)
 	if err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("read %s: %w", settingsPath, err)

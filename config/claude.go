@@ -125,13 +125,29 @@ func toValidUTF8(content []byte) string {
 	return strings.ToValidUTF8(string(content), "�")
 }
 
+// resolveConfigPath joins filename onto claudeDir and rejects any result that
+// escapes claudeDir (e.g. filename containing "../"). filename ultimately
+// comes from RPC requests (see server/services/config_service.go), so it must
+// not be trusted to stay within the Claude config directory.
+func resolveConfigPath(claudeDir, filename string) (string, error) {
+	base := filepath.Clean(claudeDir)
+	joined := filepath.Clean(filepath.Join(base, filename))
+	if !strings.HasPrefix(joined+string(filepath.Separator), base+string(filepath.Separator)) {
+		return "", fmt.Errorf("invalid filename: %q escapes the Claude config directory", filename)
+	}
+	return joined, nil
+}
+
 // GetConfig reads a specific Claude configuration file by name
 // Common file names include "CLAUDE.md", "settings.json", "agents.md"
 func (m *ClaudeConfigManager) GetConfig(filename string) (*ConfigFile, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	filePath := filepath.Join(m.claudeDir, filename)
+	filePath, err := resolveConfigPath(m.claudeDir, filename)
+	if err != nil {
+		return nil, err
+	}
 
 	// Check if file exists
 	info, err := os.Stat(filePath)
@@ -143,6 +159,8 @@ func (m *ClaudeConfigManager) GetConfig(filename string) (*ConfigFile, error) {
 	}
 
 	// Read file contents
+	// #nosec G304 -- filePath was already validated above via resolveConfigPath,
+	// which rejects any result escaping m.claudeDir.
 	content, err := os.ReadFile(filePath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read config file: %w", err)
@@ -189,6 +207,8 @@ func (m *ClaudeConfigManager) ListConfigs() ([]ConfigFile, error) {
 		}
 
 		filePath := filepath.Join(m.claudeDir, entry.Name())
+		// #nosec G304 -- filePath is built from entry.Name(), enumerated by os.ReadDir
+		// over m.claudeDir itself, not from caller-supplied input.
 		content, err := os.ReadFile(filePath)
 		if err != nil {
 			continue // Skip files we can't read
@@ -220,7 +240,10 @@ func (m *ClaudeConfigManager) UpdateConfig(filename string, content string) erro
 		}
 	}
 
-	filePath := filepath.Join(m.claudeDir, filename)
+	filePath, err := resolveConfigPath(m.claudeDir, filename)
+	if err != nil {
+		return err
+	}
 
 	// Create directory if it doesn't exist
 	if err := os.MkdirAll(m.claudeDir, 0755); err != nil {
@@ -253,6 +276,8 @@ func (m *ClaudeConfigManager) UpdateConfig(filename string, content string) erro
 
 // copyFile copies a file from src to dst
 func copyFile(src, dst string) error {
+	// #nosec G304 -- copyFile's only caller (UpdateConfig) passes filePath, which was
+	// already validated by resolveConfigPath to stay within m.claudeDir.
 	data, err := os.ReadFile(src)
 	if err != nil {
 		return fmt.Errorf("failed to read source file: %w", err)

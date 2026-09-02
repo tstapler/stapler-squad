@@ -893,6 +893,9 @@ func createRotatingWriter(logFilePath string, cfg *LogConfig) io.Writer {
 		}
 
 		// No rotation, use standard file
+		// #nosec G304 -- logFilePath comes from GetLogFilePath/GetLogDir, which resolve
+		// to config.GetConfigDir() (or an isolated test dir) plus fixed filenames, not
+		// caller/user-controlled input.
 		f, err := os.OpenFile(logFilePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
 		if err != nil {
 			panic(fmt.Sprintf("could not open log file: %s", err))

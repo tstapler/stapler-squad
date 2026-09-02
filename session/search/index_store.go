@@ -239,8 +239,10 @@ func (s *IndexStore) saveGob(filename string, data interface{}) error {
 	finalPath := filepath.Join(s.indexDir, filename)
 	tempPath := finalPath + ".tmp"
 
-	// Write to temp file
-	tempFile, err := os.Create(tempPath)
+	// Write to temp file. filename is always one of the package-level
+	// constants (invertedIndexFile/docStoreFile) passed by Save, never
+	// caller/user input.
+	tempFile, err := os.Create(tempPath) // #nosec G304 -- finalPath/tempPath are indexDir + a hardcoded filename constant
 	if err != nil {
 		return err
 	}
@@ -270,7 +272,7 @@ func (s *IndexStore) saveGob(filename string, data interface{}) error {
 func (s *IndexStore) loadGob(filename string, data interface{}) error {
 	path := filepath.Join(s.indexDir, filename)
 
-	file, err := os.Open(path)
+	file, err := os.Open(path) // #nosec G304 -- path is indexDir + a hardcoded filename constant, never caller/user input
 	if err != nil {
 		return err
 	}
@@ -301,7 +303,7 @@ func (s *IndexStore) saveVersion(version IndexVersion) error {
 func (s *IndexStore) loadVersion() (*IndexVersion, error) {
 	path := filepath.Join(s.indexDir, versionFile)
 
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(path) // #nosec G304 -- path is indexDir + the hardcoded versionFile constant, never caller/user input
 	if err != nil {
 		return nil, err
 	}
@@ -352,7 +354,7 @@ func (s *IndexStore) LoadSyncMetadata() (*IndexSyncMetadata, error) {
 
 	path := filepath.Join(s.indexDir, syncMetadataFile)
 
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(path) // #nosec G304 -- path is indexDir + the hardcoded syncMetadataFile constant, never caller/user input
 	if os.IsNotExist(err) {
 		return nil, ErrMetadataNotFound // No metadata yet, this is fine
 	}

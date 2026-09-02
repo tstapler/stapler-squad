@@ -213,6 +213,8 @@ func (s *State) loadFromDiskWithoutLocking() error {
 	}
 
 	statePath := filepath.Join(configDir, StateFileName)
+	// #nosec G304 -- statePath is GetConfigDir() plus the constant StateFileName,
+	// not caller/user-controlled input.
 	data, err := os.ReadFile(statePath)
 	if err != nil {
 		if os.IsNotExist(err) {

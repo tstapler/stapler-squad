@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -101,8 +102,19 @@ func (s *FileScrollbackStorage) getFileLock(sessionID string) *sync.Mutex {
 	return lock
 }
 
-// getFilePath returns the file path for the specified session.
-func (s *FileScrollbackStorage) getFilePath(sessionID string) string {
+// getFilePath returns the file path for the specified session, after
+// verifying that sessionID cannot escape s.basePath. sessionID is not always
+// the server-generated stable UUID: instance.MatchesID (session/instance_terminal.go)
+// also accepts the human-supplied session Title and the derived tmux session
+// name, both of which reach here unsanitized from RPC/MCP request fields
+// (e.g. CreateSessionRequest.Title, read_session_output's session_id). A
+// title containing ".." path segments would otherwise let a caller read or
+// write scrollback files outside basePath, so this rejects any sessionID
+// whose joined path does not stay under basePath — the same
+// filepath.Rel-based containment check used in
+// server/services/database_service.go and session/backlog_review.go's
+// readPlanFile.
+func (s *FileScrollbackStorage) getFilePath(sessionID string) (string, error) {
 	var filename string
 	switch s.compressionType {
 	case "zstd":
@@ -112,7 +124,14 @@ func (s *FileScrollbackStorage) getFilePath(sessionID string) string {
 	default:
 		filename = "scrollback.jsonl"
 	}
-	return filepath.Join(s.basePath, sessionID, filename)
+
+	sessionDir := filepath.Join(s.basePath, sessionID)
+	rel, err := filepath.Rel(s.basePath, sessionDir)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
+		return "", fmt.Errorf("scrollback: invalid session id %q: escapes base directory", sessionID)
+	}
+
+	return filepath.Join(sessionDir, filename), nil
 }
 
 // Write appends entries to the scrollback file.
@@ -125,15 +144,18 @@ func (s *FileScrollbackStorage) Write(sessionID string, entries []ScrollbackEntr
 	lock.Lock()
 	defer lock.Unlock()
 
-	filePath := s.getFilePath(sessionID)
+	filePath, err := s.getFilePath(sessionID)
+	if err != nil {
+		return err
+	}
 
 	// Ensure directory exists
 	if err := os.MkdirAll(filepath.Dir(filePath), 0755); err != nil {
 		return fmt.Errorf("failed to create scrollback directory: %w", err)
 	}
 
-	// Open file in append mode
-	file, err := os.OpenFile(filePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	// Open file in append mode.
+	file, err := os.OpenFile(filePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644) // #nosec G304 -- filePath is contained under s.basePath, verified in getFilePath
 	if err != nil {
 		return fmt.Errorf("failed to open scrollback file: %w", err)
 	}
@@ -189,9 +211,12 @@ func (s *FileScrollbackStorage) Read(sessionID string, fromSeq uint64, limit int
 	lock.Lock()
 	defer lock.Unlock()
 
-	filePath := s.getFilePath(sessionID)
+	filePath, err := s.getFilePath(sessionID)
+	if err != nil {
+		return nil, err
+	}
 
-	file, err := os.Open(filePath)
+	file, err := os.Open(filePath) // #nosec G304 -- filePath is contained under s.basePath, verified in getFilePath
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil // No scrollback yet
@@ -251,9 +276,12 @@ func (s *FileScrollbackStorage) ReadTail(sessionID string, bytes int64) ([]byte,
 	lock.Lock()
 	defer lock.Unlock()
 
-	filePath := s.getFilePath(sessionID)
+	filePath, err := s.getFilePath(sessionID)
+	if err != nil {
+		return nil, err
+	}
 
-	file, err := os.Open(filePath)
+	file, err := os.Open(filePath) // #nosec G304 -- filePath is contained under s.basePath, verified in getFilePath
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil
@@ -298,7 +326,10 @@ func (s *FileScrollbackStorage) Truncate(sessionID string, keepBytes int64) erro
 	lock.Lock()
 	defer lock.Unlock()
 
-	filePath := s.getFilePath(sessionID)
+	filePath, err := s.getFilePath(sessionID)
+	if err != nil {
+		return err
+	}
 
 	stat, err := os.Stat(filePath)
 	if err != nil {
@@ -312,8 +343,8 @@ func (s *FileScrollbackStorage) Truncate(sessionID string, keepBytes int64) erro
 		return nil // File is within limits
 	}
 
-	// Read entries, keep only recent ones
-	file, err := os.Open(filePath)
+	// Read entries, keep only recent ones.
+	file, err := os.Open(filePath) // #nosec G304 -- filePath is contained under s.basePath, verified in getFilePath
 	if err != nil {
 		return fmt.Errorf("failed to open file: %w", err)
 	}
@@ -365,7 +396,7 @@ func (s *FileScrollbackStorage) Truncate(sessionID string, keepBytes int64) erro
 
 	// Write truncated file
 	tempPath := filePath + ".tmp"
-	tempFile, err := os.OpenFile(tempPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
+	tempFile, err := os.OpenFile(tempPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644) // #nosec G304 -- tempPath derives from filePath, already contained under s.basePath
 	if err != nil {
 		return fmt.Errorf("failed to create temp file: %w", err)
 	}
@@ -415,9 +446,12 @@ func (s *FileScrollbackStorage) Delete(sessionID string) error {
 	lock.Lock()
 	defer lock.Unlock()
 
-	filePath := s.getFilePath(sessionID)
+	filePath, err := s.getFilePath(sessionID)
+	if err != nil {
+		return err
+	}
 
-	err := os.Remove(filePath)
+	err = os.Remove(filePath)
 	if err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("failed to delete scrollback file: %w", err)
 	}
@@ -427,7 +461,10 @@ func (s *FileScrollbackStorage) Delete(sessionID string) error {
 
 // Size returns the current size of the scrollback file.
 func (s *FileScrollbackStorage) Size(sessionID string) (int64, error) {
-	filePath := s.getFilePath(sessionID)
+	filePath, err := s.getFilePath(sessionID)
+	if err != nil {
+		return 0, err
+	}
 
 	stat, err := os.Stat(filePath)
 	if err != nil {

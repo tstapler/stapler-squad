@@ -334,6 +334,9 @@ func wantedHookSet(hooks []HookName) map[HookName]struct{} {
 // starting fresh, and returns both the full top-level settings map and its parsed "hooks" sub-map.
 func readExistingHooksSettings(settingsPath string) (raw map[string]json.RawMessage, hooksMap map[string]json.RawMessage, err error) {
 	raw = map[string]json.RawMessage{}
+	// #nosec G304 -- settingsPath is rootDir/.claude/settings.local.json, where rootDir is
+	// the session's own worktree/directory (Instance.GetEffectiveRootDir()), established by
+	// this server's own session/worktree creation, never raw network/RPC input.
 	data, readErr := os.ReadFile(settingsPath)
 	if readErr != nil && !os.IsNotExist(readErr) {
 		return nil, nil, fmt.Errorf("read %s: %w", settingsPath, readErr)
@@ -444,6 +447,9 @@ func RemoveHooksConfig(rootDir string, hooks []HookName) error {
 	// this closes.
 	defer lockSettingsPath(settingsPath)()
 
+	// #nosec G304 -- settingsPath is rootDir/.claude/settings.local.json, where rootDir is
+	// the session's own worktree/directory (Instance.GetEffectiveRootDir()), established by
+	// this server's own session/worktree creation, never raw network/RPC input.
 	data, err := os.ReadFile(settingsPath)
 	if err != nil {
 		if os.IsNotExist(err) {

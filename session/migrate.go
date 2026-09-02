@@ -176,7 +176,7 @@ func ValidateEntMigration(jsonPath, entDBPath string) error {
 	log.Info("validating Ent migration", "json_path", jsonPath, "db_path", entDBPath)
 
 	// Load JSON data
-	jsonData, err := os.ReadFile(jsonPath)
+	jsonData, err := os.ReadFile(jsonPath) // #nosec G304 -- jsonPath/entDBPath are operator-supplied CLI flags to the migrate_data/migrate_global admin commands (cmd/), not request input from a network-facing handler
 	if err != nil {
 		return fmt.Errorf("failed to read JSON file: %w", err)
 	}

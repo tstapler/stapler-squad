@@ -365,10 +365,10 @@ func addWorktreeExcludes(worktreePath string) {
 		return
 	}
 
-	existingBytes, _ := os.ReadFile(excludeFile)
+	existingBytes, _ := os.ReadFile(excludeFile) // #nosec G304 -- excludeFile is derived from `git rev-parse --git-common-dir` output for the session's own worktree, not external input
 	existing := string(existingBytes)
 
-	f, openErr := os.OpenFile(excludeFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	f, openErr := os.OpenFile(excludeFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644) // #nosec G304 -- same excludeFile as above, derived from git's own git-common-dir resolution
 	if openErr != nil {
 		log.WarningLog().Printf("[addWorktreeExcludes] open %s: %v", excludeFile, openErr)
 		return

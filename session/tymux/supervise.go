@@ -341,7 +341,7 @@ func StopTymuxd() error {
 	}
 
 	pidFile := filepath.Join(configDir, tymuxdPIDFileName)
-	data, err := os.ReadFile(pidFile)
+	data, err := os.ReadFile(pidFile) // #nosec G304 -- pidFile is configDir + the hardcoded tymuxdPIDFileName constant, not user input
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil

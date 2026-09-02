@@ -739,7 +739,9 @@ func (g *GoGitVCSReader) ListWorktrees(repoPath string) ([]WorktreeInfo, error) 
 		base := filepath.Join(worktreesDir, entry.Name())
 
 		// gitdir file contains the absolute path to the worktree's .git file.
-		gitdirData, err := os.ReadFile(filepath.Join(base, "gitdir"))
+		// base is built from entry.Name(), enumerated by os.ReadDir(worktreesDir)
+		// just above -- a trusted filesystem listing, not user input.
+		gitdirData, err := os.ReadFile(filepath.Join(base, "gitdir")) // #nosec G304 -- base comes from a trusted os.ReadDir listing, not user input
 		if err != nil {
 			continue
 		}
@@ -749,7 +751,7 @@ func (g *GoGitVCSReader) ListWorktrees(repoPath string) ([]WorktreeInfo, error) 
 		wt := WorktreeInfo{Path: wtPath}
 
 		// Read HEAD: either "ref: refs/heads/<branch>" or a bare SHA.
-		headData, err := os.ReadFile(filepath.Join(base, "HEAD"))
+		headData, err := os.ReadFile(filepath.Join(base, "HEAD")) // #nosec G304 -- base comes from a trusted os.ReadDir listing, not user input
 		if err == nil {
 			headStr := strings.TrimSpace(string(headData))
 			const refPrefix = "ref: refs/heads/"
@@ -1631,7 +1633,9 @@ func readFileIfSmall(path string) ([]byte, bool) {
 	if info.Size() > maxUntrackedFileSize {
 		return nil, false
 	}
-	data, err := os.ReadFile(path) //nolint:gosec
+	// path is walked from repoPath by walkUntrackedFiles (an internal directory
+	// walk over the session's own git worktree), not user/RPC input.
+	data, err := os.ReadFile(path) // #nosec G304 -- path comes from an internal directory walk over the worktree, not user input
 	if err != nil {
 		return nil, false
 	}
@@ -1834,7 +1838,10 @@ func walkUntrackedRec(dir string, indexed map[string]struct{}, matcher gitignore
 // index) always live here, never in the shared commondir.
 func worktreeGitDir(repoPath string) string {
 	gitPath := filepath.Join(repoPath, ".git")
-	data, err := os.ReadFile(gitPath)
+	// repoPath is the local repo/worktree directory this server itself
+	// manages for the session (Instance.Path), validated to exist at session
+	// creation -- not raw untrusted network/RPC input.
+	data, err := os.ReadFile(gitPath) // #nosec G304 -- repoPath is the session's own worktree directory, not user-supplied network input
 	if err != nil {
 		// .git is a directory (or missing).
 		return gitPath
@@ -1858,7 +1865,8 @@ func worktreeGitDir(repoPath string) string {
 // resolving through the .git file in linked worktrees.
 func gitCommonDir(repoPath string) string {
 	gitPath := filepath.Join(repoPath, ".git")
-	data, err := os.ReadFile(gitPath)
+	// repoPath is the session's own worktree directory (see worktreeGitDir above).
+	data, err := os.ReadFile(gitPath) // #nosec G304 -- repoPath is the session's own worktree directory, not user-supplied network input
 	if err != nil {
 		// .git is a directory (or missing).
 		return gitPath
@@ -1870,8 +1878,9 @@ func gitCommonDir(repoPath string) string {
 		return gitPath
 	}
 	wtGitDir := strings.TrimPrefix(line, prefix)
-	// Each per-worktree gitdir contains a "commondir" file pointing to the main .git.
-	if cdData, err := os.ReadFile(filepath.Join(wtGitDir, "commondir")); err == nil {
+	// wtGitDir is parsed from gitPath above, which is itself rooted at the
+	// trusted repoPath -- not user input.
+	if cdData, err := os.ReadFile(filepath.Join(wtGitDir, "commondir")); err == nil { // #nosec G304 -- wtGitDir derives from repoPath's own .git file, not user input
 		commondir := strings.TrimSpace(string(cdData))
 		if !filepath.IsAbs(commondir) {
 			commondir = filepath.Join(wtGitDir, commondir)

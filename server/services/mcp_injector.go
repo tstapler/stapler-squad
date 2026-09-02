@@ -56,6 +56,9 @@ func InjectMCPConfig(rootDir, binaryPath string) error {
 
 	// Read existing .mcp.json.
 	raw := map[string]json.RawMessage{}
+	// #nosec G304 -- mcpPath is rootDir/.mcp.json, where rootDir is the session's own
+	// worktree/directory (Instance.GetEffectiveRootDir()), established by this server's
+	// own session/worktree creation, never raw network/RPC input.
 	data, err := os.ReadFile(mcpPath)
 	if err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("read %s: %w", mcpPath, err)
@@ -115,6 +118,8 @@ func RemoveMCPConfig(rootDir string) error {
 	mcpPath := filepath.Join(rootDir, ".mcp.json")
 	defer lockSettingsPath(mcpPath)()
 
+	// #nosec G304 -- mcpPath is rootDir/.mcp.json, same trusted-internal rootDir
+	// construction as InjectMCPConfig above.
 	data, err := os.ReadFile(mcpPath)
 	if os.IsNotExist(err) {
 		return nil

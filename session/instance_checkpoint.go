@@ -12,6 +12,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/tstapler/stapler-squad/config"
@@ -55,10 +56,19 @@ func createCheckpointLocked(s *instanceState, label string, scrollbackSeq uint64
 		if turns, err := adapter.Import(context.Background(), i); err == nil {
 			canonicalTurnIndex = len(turns)
 			if configDir, err := config.GetConfigDir(); err == nil {
+				// i.Title is caller-controlled (CreateSession's request Title field
+				// flows into it with no character restrictions — see
+				// server/services/session_service.go), so it must be contained
+				// under configDir before use as a directory component: an
+				// unvalidated ".."-laden title could otherwise make cpDir resolve
+				// outside configDir entirely. Same baseDir-containment pattern as
+				// server/services/database_service.go.
 				cpDir := filepath.Join(configDir, i.Title, "checkpoints")
-				if err := os.MkdirAll(cpDir, 0700); err == nil {
+				if rel, relErr := filepath.Rel(configDir, cpDir); relErr != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
+					log.Warn("checkpoint: rejecting session title that escapes config dir", "session", i.Title)
+				} else if err := os.MkdirAll(cpDir, 0700); err == nil {
 					cpPath := filepath.Join(cpDir, cpID+".jsonl")
-					if f, err := os.Create(cpPath); err == nil {
+					if f, err := os.Create(cpPath); err == nil { // #nosec G304 -- cpDir verified contained under configDir above
 						for _, turn := range turns {
 							if b, err := json.Marshal(turn); err == nil {
 								f.Write(b)
@@ -178,10 +188,19 @@ func (i *Instance) ForkFromCheckpoint(checkpointID, newTitle string, configDir s
 		}
 	}
 
-	// Fork scrollback.
+	// Fork scrollback. i.Title and newTitle are session titles, which reach
+	// here from RPC request fields (CreateSessionRequest.Title,
+	// ForkSessionRequest.NewTitle) without a guarantee of path-separator-free
+	// content -- ForkSession's handler rejects ".."/path separators in
+	// newTitle, but i.Title belongs to a session created earlier through a
+	// path that doesn't enforce that, so both are re-validated here before
+	// they become path components, rather than relying on the caller.
 	srcScrollback := filepath.Join(configDir, i.Title, "scrollback.jsonl")
 	dstScrollback := filepath.Join(configDir, newTitle, "scrollback.jsonl")
-	if err := scrollback.ForkScrollback(srcScrollback, cp.ScrollbackSeq, dstScrollback); err != nil {
+	if !isPathUnderDir(srcScrollback, configDir) || !isPathUnderDir(dstScrollback, configDir) {
+		log.Warn("forkfromcheckpoint: skipping scrollback fork: title escapes config dir",
+			"src_title", i.Title, "new_title", newTitle)
+	} else if err := scrollback.ForkScrollback(srcScrollback, cp.ScrollbackSeq, dstScrollback); err != nil {
 		log.Warn("forkfromcheckpoint: skipping scrollback fork", "err", err)
 	}
 
@@ -241,6 +260,22 @@ func (i *Instance) ForkFromCheckpoint(checkpointID, newTitle string, configDir s
 	newInst.ForkedFromID = i.Title
 
 	return newInst, nil
+}
+
+// isPathUnderDir reports whether path is equal to, or a descendant of, dir.
+// Used to contain title-derived scrollback paths (see ForkFromCheckpoint)
+// within the trusted config directory before any file operation touches them.
+func isPathUnderDir(path, dir string) bool {
+	cleanPath := filepath.Clean(path)
+	cleanDir := filepath.Clean(dir)
+	if cleanPath == cleanDir {
+		return true
+	}
+	rel, err := filepath.Rel(cleanDir, cleanPath)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
+		return false
+	}
+	return true
 }
 
 // GetCheckpoints returns a snapshot copy of the checkpoint list, safe for

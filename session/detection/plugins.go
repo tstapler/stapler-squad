@@ -576,7 +576,7 @@ func loadPluginFile(fullPath string) (*pluginFile, dtypes.StatusPatterns, *Patte
 		}}
 	}
 
-	data, readErr := os.ReadFile(fullPath)
+	data, readErr := os.ReadFile(fullPath) // #nosec G304 -- fullPath is enumerated from os.ReadDir of the plugin directory with symlinks already rejected above, not externally supplied
 	if readErr != nil {
 		return nil, dtypes.StatusPatterns{}, nil, []PluginLoadError{{Path: fullPath, Field: "file", Err: readErr}}
 	}

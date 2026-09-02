@@ -82,7 +82,7 @@ func NewStatusDetectorFromFile(path string) (*StatusDetector, error) {
 	if err := validatePatternFilePath(path); err != nil {
 		return nil, err
 	}
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(path) // #nosec G304 -- validatePatternFilePath above rejects any ".." component; no production caller passes external/request-derived input here today
 	if err != nil {
 		return nil, fmt.Errorf("failed to read status patterns file: %w", err)
 	}
@@ -106,7 +106,7 @@ func (sd *StatusDetector) LoadPatterns(path string) error {
 	if err := validatePatternFilePath(path); err != nil {
 		return err
 	}
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(path) // #nosec G304 -- validatePatternFilePath above rejects any ".." component; no production caller passes external/request-derived input here today
 	if err != nil {
 		return fmt.Errorf("failed to read status patterns file: %w", err)
 	}
