@@ -13,6 +13,8 @@ import { GitHubBadge } from "@/components/shared/GitHubBadge";
 import { TagEditor } from "./TagEditor";
 import { useTerminalSnapshot } from "@/lib/hooks/useTerminalSnapshot";
 import { useSessionActions } from "@/lib/hooks/useSessionActions";
+import { useCreationLifecycleActions } from "@/lib/hooks/useCreationLifecycleActions";
+import { getFailureMessage } from "@/lib/utils/sessionFailure";
 import { DetectionEventsPanel } from "./DetectionEventsPanel";
 import { SessionActionsOverflow } from "./SessionActionsOverflow";
 import { formatPauseReason } from "@/lib/sessions/formatPauseReason";
@@ -146,6 +148,8 @@ import {
   noteBadge,
   staleBadge,
   creationSpinner,
+  actionButton,
+  actionButtonCompact,
 } from "./SessionCard.css";
 import { truncateGoal } from "@/lib/utils/string";
 
@@ -244,66 +248,10 @@ function SessionCardInner({
   const isFailed = session.status === SessionStatus.FAILED;
   const isPaused = session.status === SessionStatus.PAUSED;
 
-  // Cancel/Retry guards (Epic 5.4, async-session-creation). Same
-  // synchronous-ref + state pattern as Omnibar.tsx's isSubmittingRef:
-  // the ref blocks a second click before React re-renders with the
-  // disabled attribute, the state actually disables/re-enables the button.
-  // Reset once the stream carries the session past the in-flight status
-  // (Creating after a successful Retry; anything other than Creating after
-  // a lost-race Cancel) so a later failure/creation cycle on the SAME card
-  // gets a fresh guard rather than staying disabled forever.
-  const cancelInFlightRef = useRef(false);
-  const [cancelDisabled, setCancelDisabled] = useState(false);
-  const retryInFlightRef = useRef(false);
-  const [retryDisabled, setRetryDisabled] = useState(false);
-
-  useEffect(() => {
-    if (!isCreating) {
-      cancelInFlightRef.current = false;
-      setCancelDisabled(false);
-    }
-  }, [isCreating]);
-
-  useEffect(() => {
-    if (isCreating) {
-      retryInFlightRef.current = false;
-      setRetryDisabled(false);
-    }
-  }, [isCreating]);
-
-  const handleCancelCreation = async (e: React.MouseEvent) => {
-    e.stopPropagation();
-    if (cancelInFlightRef.current) return;
-    cancelInFlightRef.current = true;
-    setCancelDisabled(true);
-    const result = await sessionActions.cancelCreation();
-    if (!result.success) {
-      // Either a lost-race FailedPrecondition or a transport error -- the
-      // card either already got its real status from the stream (lost
-      // race) or is still Creating (transport error), so re-enable Cancel.
-      cancelInFlightRef.current = false;
-      setCancelDisabled(false);
-    }
-    // On success the instance is deleted server-side; the card is removed
-    // from the store (dispatch(removeSession) in useSessionService) and
-    // this component unmounts, so no further local state update is needed.
-  };
-
-  const handleRetryCreation = async (e: React.MouseEvent) => {
-    e.stopPropagation();
-    if (retryInFlightRef.current) return;
-    retryInFlightRef.current = true;
-    setRetryDisabled(true);
-    const ok = await sessionActions.retryCreation();
-    if (!ok) {
-      // FailedPrecondition (no longer Failed) or transport error -- let the
-      // user try again rather than leaving Retry disabled indefinitely.
-      retryInFlightRef.current = false;
-      setRetryDisabled(false);
-    }
-    // On success the same instance flips Failed -> Creating server-side;
-    // the useEffect above clears the guard once that status arrives.
-  };
+  // Cancel/Retry guards (Epic 5.4, async-session-creation) -- shared with
+  // SessionRow.tsx via useCreationLifecycleActions.
+  const { cancelDisabled, retryDisabled, handleCancelCreation, handleRetryCreation } =
+    useCreationLifecycleActions(session.id, isCreating);
   const pendingProgramChange = hasPendingProgramChange(session);
   const pendingAutoApproveChange = hasPendingAutoApproveChange(session);
   // Gated on AutoApproveSupported-equivalent so the badge can never claim a session is
@@ -405,43 +353,16 @@ function SessionCardInner({
   // as session.instance_state.go's FailureReason() -- "GitHubResolutionError",
   // "StartupError", "Stale". Three distinct messages per plan.md Story 5.2.2 /
   // UX research §2/§4 (a stalled creation must never read as a user error).
-  //
-  // GAP (frontend-visible, not fixable from this file): proto/session/v1's
-  // Session message does not yet carry a failure_reason field end to end --
-  // confirmed via `git diff proto/session/v1/types.proto` (adds only the
-  // SESSION_STATUS_FAILED enum value) and instance_adapter.go (StatusToProto
-  // maps the status but no adapter path copies FailureReason() onto the proto
-  // message). getSessionFailureReason reads the field defensively so this
-  // component is ready the moment that plumbing lands; until then it falls
-  // back to the already-wired `creation_progress` text, which the pipeline
-  // already sets to a detailed message for GitHubResolutionError/StartupError
-  // (setPhase calls in session_creation_pipeline.go) before the terminal
-  // write -- Stale does not get a fresh setPhase call, so a Stale session
-  // without failureReason falls back to the generic message instead of
-  // whatever stale progress text it was last showing.
-  const getSessionFailureReason = (s: Session): string =>
-    (s as unknown as { failureReason?: string }).failureReason ?? "";
-
-  const getFailureMessage = (failureReason: string): string => {
-    switch (failureReason) {
-      case "GitHubResolutionError":
-        return "Failed to resolve GitHub URL.";
-      case "StartupError":
-        return "Failed to start session.";
-      case "Stale":
-        return "This session creation appears to have stalled.";
-      default:
-        return "Session creation failed.";
-    }
-  };
-
-  const failureReason = isFailed ? getSessionFailureReason(session) : "";
-  // Prefer the categorical mapping once failureReason is on the wire; until
-  // then fall back to the already-wired creation_progress detail text (see
-  // getSessionFailureReason's doc comment above for the gap this covers).
+  // session.failureReason is on the wire (types_pb.ts), so read it directly;
+  // falls back to creation_progress, which the pipeline already sets to a
+  // detailed message for GitHubResolutionError/StartupError (setPhase calls
+  // in session_creation_pipeline.go) before the terminal write -- Stale does
+  // not get a fresh setPhase call, so a Stale session without failureReason
+  // falls back to the generic message instead of whatever stale progress
+  // text it was last showing.
   const failureMessage = isFailed
-    ? failureReason
-      ? getFailureMessage(failureReason)
+    ? session.failureReason
+      ? getFailureMessage(session.failureReason)
       : session.creationProgress || getFailureMessage("")
     : "";
 
@@ -1155,7 +1076,7 @@ function SessionCardInner({
               disabled={cancelDisabled}
               aria-label="Cancel session creation"
               data-testid="cancel-creation-button"
-              style={{ padding: "4px 10px", fontSize: "0.8125rem", borderRadius: "4px", border: "1px solid var(--border)", background: "var(--surface)", color: "var(--text-primary)", cursor: cancelDisabled ? "default" : "pointer", opacity: cancelDisabled ? 0.6 : 1 }}
+              className={`${actionButton} ${actionButtonCompact}`}
             >
               Cancel
             </button>
@@ -1184,7 +1105,7 @@ function SessionCardInner({
               disabled={retryDisabled}
               aria-label="Retry creating session"
               data-testid="retry-creation-button"
-              style={{ padding: "4px 10px", fontSize: "0.8125rem", borderRadius: "4px", border: "1px solid var(--border)", background: "var(--surface)", color: "var(--text-primary)", cursor: retryDisabled ? "default" : "pointer", opacity: retryDisabled ? 0.6 : 1 }}
+              className={`${actionButton} ${actionButtonCompact}`}
             >
               Retry
             </button>

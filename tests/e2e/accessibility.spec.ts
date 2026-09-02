@@ -4,8 +4,11 @@ const _features = [
   // FEATURE_CATALOG['ui-accessibility-gate'], // TODO: add to catalog
   FEATURE_CATALOG['backlog-list-items'],
   FEATURE_CATALOG['backlog-transition-status'],
+  FEATURE_CATALOG['session-create'],
+  // FEATURE_CATALOG['session-cancel-creation'], // TODO: add to catalog (see docs/registry/features/backend/session/cancel-creation.json's "session:cancel-creation")
+  // FEATURE_CATALOG['session-retry-creation'], // TODO: add to catalog (see docs/registry/features/backend/session/retry-creation.json's "session:retry-creation")
 ] as const;
-// @feature backlog:watch, backlog:list-page, backlog:board-page, backlog:item-detail, backlog:connection-indicator
+// @feature backlog:watch, backlog:list-page, backlog:board-page, backlog:item-detail, backlog:connection-indicator, session:create, session:cancel-creation, session:retry-creation
 // Story 5: UX Analysis Automation - Axe Core accessibility gate
 // This test file is the CI gate for WCAG 2.1 AA compliance.
 // critical + serious violations block merge.
@@ -542,44 +545,74 @@ test.describe('Accessibility — SessionCard Failed-state (async-session-creatio
     }
   });
 
-  // Epic 5.4 (Cancel/Retry buttons): drives real backend state via the same
-  // NONEXISTENT_GITHUB_URL technique session-creation-async.spec.ts's Epic
-  // 5.3/5.4 blocks use -- no test-mode hook exists to force a chosen
-  // status/failure_reason, and this repo's own finding (documented in that
-  // file) is that WS-mocking-based alternatives are unreliable here.
+  // Epic 5.4 (Cancel/Retry buttons): the Failed side drives real backend
+  // state via the same NONEXISTENT_GITHUB_URL technique
+  // session-creation-async.spec.ts's Epic 5.3/5.4 blocks use (no test-mode
+  // hook exists to force a chosen status/failure_reason). The Creating side
+  // does NOT rely on winning that race, though: empirically, in this
+  // environment the real GitHub-404 pipeline can resolve fast enough that
+  // it's already gone by the time even a SECOND round trip (an attribute
+  // read, an elementHandle grab) happens, let alone the ~60-keypress Tab
+  // loop below -- no amount of retrying-with-a-fresh-session survives that,
+  // because every single post-observation step is itself another race. So
+  // instead this pins the Creating session's status via a mocked
+  // ListSessions response (the same forceSessionSnapshot-style technique
+  // session-creation-async.spec.ts's Epic 5.2 block uses for the identical
+  // "no test-mode hook" problem) -- deterministic, not timing-dependent.
   test('Cancel and Retry controls are keyboard-reachable buttons with distinct aria-labels', async ({ page }) => {
     const client = new SessionClient(BASE_URL);
     const failedTitle = `e2e-a11y-failed-${Date.now()}`;
+    const creatingTitle = `e2e-a11y-creating-${Date.now()}`;
     const NONEXISTENT_GITHUB_URL = 'https://github.com/this-org-definitely-does-not-exist-e2e-test/nonexistent-repo-12345';
 
     const failedSession = await client.createSession({ title: failedTitle, path: NONEXISTENT_GITHUB_URL });
     void failedSession;
+    await client.createSession({ title: creatingTitle, path: NONEXISTENT_GITHUB_URL });
 
     await page.addInitScript(() => localStorage.setItem('stapler-squad:onboarded', 'true'));
 
-    // Real DNS + TLS + HTTPS 404 round trips vary -- most of the time the
-    // pipeline's own GitHub-404 resolution (~1s, see
-    // session-creation-async.spec.ts's Epic 5.3 block for the full
-    // explanation) is comfortably slower than a fresh page load, but it can
-    // occasionally resolve before the page finishes hydrating -- an
-    // environmental race, not a UI bug. Retry with a brand-new Creating
-    // session on that specific precondition failure (session-creation-
-    // async.spec.ts's openFreshCreatingCard uses the identical pattern).
-    let creatingCard!: import('@playwright/test').Locator;
-    let cancelButton!: import('@playwright/test').Locator;
-    let found = false;
-    for (let attempt = 0; attempt < 5 && !found; attempt++) {
-      const creatingTitle = `e2e-a11y-creating-${Date.now()}-${attempt}`;
-      await client.createSession({ title: creatingTitle, path: NONEXISTENT_GITHUB_URL });
-      await page.goto(BASE_URL, { waitUntil: 'domcontentloaded' });
+    // Force creatingTitle's status back to CREATING on every ListSessions
+    // response, regardless of what the real pipeline has already done to it
+    // by fetch time. Once the real pipeline transitions it (a one-time
+    // server-side event), WatchSessions has nothing further to push for
+    // this session, so this forced value holds for the rest of the test --
+    // the same reasoning session-creation-async.spec.ts's "cancel racing
+    // pipeline success" test relies on for its own post-reload mocked state.
+    await page.route('**/api/session.v1.SessionService/ListSessions', async (route) => {
+      const response = await route.fetch();
+      const json = await response.json();
+      const sessions = (json?.sessions ?? []) as Array<Record<string, unknown>>;
+      const target = sessions.find((s) => (s.title as string) === creatingTitle);
+      if (target) {
+        Object.assign(target, { status: 'SESSION_STATUS_CREATING', failureReason: '' });
+      }
+      await route.fulfill({ response, json });
+    });
 
-      creatingCard = page.locator('[data-testid="session-card"], [data-testid="session-row"]').filter({ hasText: creatingTitle });
-      await expect(creatingCard).toBeVisible({ timeout: 10000 });
+    await page.goto(BASE_URL, { waitUntil: 'domcontentloaded' });
 
-      cancelButton = creatingCard.getByRole('button', { name: 'Cancel session creation' });
-      found = await cancelButton.isVisible().catch(() => false);
+    const creatingCard = page.locator('[data-testid="session-card"], [data-testid="session-row"]').filter({ hasText: creatingTitle });
+    await expect(creatingCard).toBeVisible({ timeout: 10000 });
+    const cancelButton = creatingCard.getByRole('button', { name: 'Cancel session creation' });
+    await expect(cancelButton).toBeVisible({ timeout: 10000 });
+
+    await expect(cancelButton).toHaveAccessibleName('Cancel session creation');
+    const cancelAriaLabel = await cancelButton.getAttribute('aria-label');
+    const cancelHandle = await cancelButton.elementHandle();
+
+    // Keyboard-reachable: Tab from a known start point (the search input)
+    // must eventually focus the Cancel button without a mouse ever being
+    // used.
+    await page.locator('input[aria-label="Search sessions"]').focus();
+    let reachedCancel = false;
+    for (let i = 0; i < 60 && !reachedCancel; i++) {
+      await page.keyboard.press('Tab');
+      const activeHandle = await page.evaluateHandle(() => document.activeElement);
+      if (await page.evaluate(([a, b]) => a === b, [activeHandle, cancelHandle])) {
+        reachedCancel = true;
+      }
     }
-    expect(found, 'Could not observe a Creating card with a Cancel button within 5 attempts').toBe(true);
+    expect(reachedCancel, 'Tab order never reached the Cancel button').toBe(true);
 
     const failedCard = page.locator('[data-testid="session-card"], [data-testid="session-row"]').filter({ hasText: failedTitle });
     await expect(failedCard).toBeVisible({ timeout: 10000 });
@@ -591,28 +624,20 @@ test.describe('Accessibility — SessionCard Failed-state (async-session-creatio
     await expect(retryButton).toBeVisible({ timeout: 30000 });
 
     // Distinct aria-labels, and both exposed as ARIA role="button".
-    await expect(cancelButton).toHaveAccessibleName('Cancel session creation');
     await expect(retryButton).toHaveAccessibleName('Retry creating session');
-    expect(await cancelButton.getAttribute('aria-label')).not.toBe(await retryButton.getAttribute('aria-label'));
+    expect(cancelAriaLabel).not.toBe(await retryButton.getAttribute('aria-label'));
 
-    // Keyboard-reachable: Tab from a known start point (the search input)
-    // must eventually focus each button without a mouse ever being used.
+    // Keyboard-reachable: same Tab-from-search-input check, now for Retry.
     await page.locator('input[aria-label="Search sessions"]').focus();
-    const cancelHandle = await cancelButton.elementHandle();
     const retryHandle = await retryButton.elementHandle();
     let reachedRetry = false;
-    let reachedCancel = false;
-    for (let i = 0; i < 60 && !(reachedRetry && reachedCancel); i++) {
+    for (let i = 0; i < 60 && !reachedRetry; i++) {
       await page.keyboard.press('Tab');
       const activeHandle = await page.evaluateHandle(() => document.activeElement);
-      if (await page.evaluate(([a, b]) => a === b, [activeHandle, cancelHandle])) {
-        reachedCancel = true;
-      }
       if (await page.evaluate(([a, b]) => a === b, [activeHandle, retryHandle])) {
         reachedRetry = true;
       }
     }
-    expect(reachedCancel, 'Tab order never reached the Cancel button').toBe(true);
     expect(reachedRetry, 'Tab order never reached the Retry button').toBe(true);
   });
 });

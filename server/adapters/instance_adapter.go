@@ -350,7 +350,6 @@ func rateLimitStateToProto(state ratelimit.RateLimitState) sessionv1.RateLimitSt
 	}
 }
 
-// StatusToProto converts session.Status to proto SessionStatus enum.
 // StatusToProto converts a session.Status to its proto SessionStatus wire value.
 // Returns an explicit error for an unrecognized status instead of silently
 // falling back to UNSPECIFIED, so a future new session.Status value that isn't

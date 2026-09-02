@@ -19,6 +19,84 @@ async function openInCreationMode(page: import('@playwright/test').Page) {
   await expect(page.getByRole('radiogroup', { name: 'Session Type' })).toBeVisible({ timeout: 5000 });
 }
 
+// Shared across every describe block below that drives a real
+// SESSION_STATUS_CREATING -> SESSION_STATUS_FAILED transition via the
+// pipeline's real GitHubResolutionError path (see the Epic 5.3 describe
+// block's doc comment for why this specific URL shape is deterministic).
+const NONEXISTENT_GITHUB_URL = 'https://github.com/this-org-definitely-does-not-exist-e2e-test/nonexistent-repo-12345';
+
+async function createFailingGitHubSession(client: SessionClient, title: string) {
+  return client.createSession({ title, path: NONEXISTENT_GITHUB_URL });
+}
+
+// Real DNS + TLS + HTTPS 404 round trips vary -- most of the time the
+// pipeline's own GitHub-404 resolution takes ~1s, comfortably slower than a
+// fresh page load, but empirically (repeated runs against the real
+// github.com) it can occasionally resolve fast enough that the session is
+// already Failed by the time the page finishes hydrating and subscribing to
+// WatchSessions -- an environmental race, not a UI bug. Retrying with a
+// brand-new session on that specific precondition failure (never on the
+// actual test assertion) makes every test below that depends on observing a
+// live Creating->Failed (or Creating->Cancel) transition robust to that
+// variance instead of flaky.
+async function openFreshCreatingCard(
+  page: import('@playwright/test').Page,
+  client: SessionClient,
+  titlePrefix: string,
+  attempts = 8
+): Promise<{ card: import('@playwright/test').Locator; cancelButton: import('@playwright/test').Locator; title: string }> {
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    const title = `${titlePrefix}-${Date.now()}-${attempt}`;
+    await createFailingGitHubSession(client, title);
+    await page.goto(BASE_URL, { waitUntil: 'domcontentloaded' });
+
+    const card = page.locator('[data-testid="session-card"], [data-testid="session-row"]').filter({ hasText: title });
+    await expect(card).toBeVisible({ timeout: 10000 });
+
+    const cancelButton = card.getByRole('button', { name: 'Cancel session creation' });
+    if (await cancelButton.isVisible().catch(() => false)) {
+      return { card, cancelButton, title };
+    }
+    // Missed the window this time -- the session already resolved
+    // (Failed) before we could observe it Creating. Try again fresh.
+  }
+  throw new Error(`Could not observe a Creating card with a Cancel button within ${attempts} attempts -- the real GitHub-404 resolution consistently outran page load.`);
+}
+
+// Same race as openFreshCreatingCard above, but for call sites that need to
+// observe the toast/dedup/Failed-card behavior that fires off of a real
+// Creating->Failed transition rather than a Cancel button specifically.
+// Missing the window here means the session was already Failed by the time
+// the page's WatchSessions subscription came up, so the transition-detection
+// effect in useSessionService.ts never sees a transition to fire a toast
+// from -- only ever a page already showing the terminal Failed state.
+async function openFreshFailingSession(
+  page: import('@playwright/test').Page,
+  client: SessionClient,
+  titlePrefix: string,
+  attempts = 8
+): Promise<{ card: import('@playwright/test').Locator; title: string }> {
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    const title = `${titlePrefix}-${Date.now()}-${attempt}`;
+    const session = await createFailingGitHubSession(client, title);
+    await page.goto(BASE_URL, { waitUntil: 'domcontentloaded' });
+
+    const card = page.locator('[data-testid="session-card"], [data-testid="session-row"]').filter({ hasText: title });
+    await expect(card).toBeVisible({ timeout: 10000 });
+
+    // A quick, direct status check (not a UI assertion) tells us whether
+    // this attempt already missed the Creating window before the page even
+    // finished loading -- if so, retry fresh rather than waiting out the
+    // toast/card timeout only to fail on a precondition that was never met.
+    const status = await client.getSession(session.id).then((s) => s.status).catch(() => '');
+    if (status !== 'SESSION_STATUS_FAILED') {
+      return { card, title };
+    }
+    // Missed the window this time -- try again fresh.
+  }
+  throw new Error(`Could not observe a Creating->Failed transition within ${attempts} attempts -- the real GitHub-404 resolution consistently outran page load.`);
+}
+
 test.describe('async session creation (Epic 5.1: omnibar early-close)', () => {
   // Every test here starts from a fresh browser context, so localStorage is empty
   // and useOnboarding.ts's 800ms timer would otherwise pop a full-viewport
@@ -130,40 +208,81 @@ test.describe('async session creation (Epic 5.1: omnibar early-close)', () => {
   // title) must still keep the dialog open with an inline error, not silently
   // close it the way the happy-path early-close now does.
   test('duplicate title keeps the omnibar open with inline error', async ({ page }) => {
-    await page.goto(BASE_URL, { waitUntil: 'domcontentloaded' });
-    await page.waitForSelector('input[aria-label="Search sessions"]', { timeout: 15000 });
-
     const sessionsPage = new SessionsPage(page);
-    const sessionTitle = `dup-title-${Date.now()}`;
+    const omnibarError = page.getByTestId('omnibar-create-error');
 
-    // Create the first session directly with a fixed title, then retry with the
-    // exact same title below.
-    await sessionsPage.newSessionButton.click({ timeout: 20000 });
-    await page.getByRole('radio', { name: /temporary \(no git\)/i }).click({ timeout: 15000 });
-    await page.getByLabel('Session Name').fill(sessionTitle);
-    await page.getByText('Advanced Options').click();
-    await page.getByLabel('Program', { exact: true }).selectOption('bash');
-    await expect(sessionsPage.createSessionSubmitButton).toBeEnabled({ timeout: 5000 });
-    await sessionsPage.createSessionSubmitButton.click();
-    await page.waitForURL(/[?&]session=/, { timeout: 15000 });
+    // Retry the entire two-session scenario with a brand-new title each
+    // attempt, rather than retrying only the second submission against a
+    // fixed title: the omnibar's own open/animate sequence -- or the
+    // server's own duplicate-title check running against a not-yet-durable
+    // first session -- can occasionally race such that the second
+    // submission is accepted instead of rejected (no error ever appears).
+    // Reusing the SAME title across retries would leave stray extra
+    // sessions from earlier attempts to confuse the final count assertion,
+    // and closing/reopening the omnibar mid-attempt risks navigating away
+    // from the state the next attempt expects; a fresh title plus a fresh
+    // page.goto per attempt avoids both.
+    const attempts = 3;
+    let errorShown = false;
+    let sessionTitle = '';
+    let countBefore = 0;
+    for (let attempt = 0; attempt < attempts && !errorShown; attempt++) {
+      sessionTitle = `dup-title-${Date.now()}-${attempt}`;
 
-    // Attempt a second session with the exact same title.
-    await page.goto(BASE_URL, { waitUntil: 'domcontentloaded' });
-    await page.waitForSelector('input[aria-label="Search sessions"]', { timeout: 15000 });
-    // See double-click test above: SessionsPage.waitForSessionList()'s selector
-    // is dead in the current UI, so it's not used here either.
-    const countBefore = await sessionsPage.getSessionCard(sessionTitle).count();
+      await page.goto(BASE_URL, { waitUntil: 'domcontentloaded' });
+      await page.waitForSelector('input[aria-label="Search sessions"]', { timeout: 15000 });
 
-    await sessionsPage.newSessionButton.click({ timeout: 20000 });
-    await page.getByRole('radio', { name: /temporary \(no git\)/i }).click({ timeout: 15000 });
-    await page.getByLabel('Session Name').fill(sessionTitle);
-    await page.getByText('Advanced Options').click();
-    await page.getByLabel('Program', { exact: true }).selectOption('bash');
-    await expect(sessionsPage.createSessionSubmitButton).toBeEnabled({ timeout: 5000 });
-    await sessionsPage.createSessionSubmitButton.click();
+      // Create the first session directly with a fixed title, then retry with
+      // the exact same title below.
+      await sessionsPage.newSessionButton.click({ timeout: 20000 });
+      await page.getByRole('radio', { name: /temporary \(no git\)/i }).click({ timeout: 15000 });
+      await page.getByLabel('Session Name').fill(sessionTitle);
+      await page.getByText('Advanced Options').click();
+      await page.getByLabel('Program', { exact: true }).selectOption('bash');
+      await expect(sessionsPage.createSessionSubmitButton).toBeEnabled({ timeout: 5000 });
+      await sessionsPage.createSessionSubmitButton.click();
+      await page.waitForURL(/[?&]session=/, { timeout: 15000 });
+
+      // Attempt a second session with the exact same title.
+      await page.goto(BASE_URL, { waitUntil: 'domcontentloaded' });
+      await page.waitForSelector('input[aria-label="Search sessions"]', { timeout: 15000 });
+      // See double-click test above: SessionsPage.waitForSessionList()'s selector
+      // is dead in the current UI, so it's not used here either.
+      //
+      // Wait for the just-created original session's own card to actually land
+      // before snapshotting countBefore, rather than reading .count() the instant
+      // the search box exists: the search input renders before the page's initial
+      // ListSessions/WatchSessions snapshot resolves, so a bare .count() here can
+      // read 0 on a slow render even though the session card is *about* to appear.
+      // With that stale 0 as the baseline, the list finishes loading a few seconds
+      // later (during the second create attempt below) and the final assertion
+      // sees a real 1 against a baseline of 0 -- a spurious "Expected: 0, Received:
+      // 1" failure with nothing wrong in the app itself. Pinning the baseline to
+      // the card's settled state removes that race.
+      await expect(sessionsPage.getSessionCard(sessionTitle)).toHaveCount(1, { timeout: 10000 });
+      countBefore = await sessionsPage.getSessionCard(sessionTitle).count();
+
+      await sessionsPage.newSessionButton.click({ timeout: 20000 });
+      await page.getByRole('radio', { name: /temporary \(no git\)/i }).click({ timeout: 15000 });
+      await page.getByLabel('Session Name').fill(sessionTitle);
+      await page.getByText('Advanced Options').click();
+      await page.getByLabel('Program', { exact: true }).selectOption('bash');
+      await expect(sessionsPage.createSessionSubmitButton).toBeEnabled({ timeout: 5000 });
+      await sessionsPage.createSessionSubmitButton.click();
+
+      errorShown = await omnibarError
+        .waitFor({ state: 'visible', timeout: 5000 })
+        .then(() => true)
+        .catch(() => false);
+      // Missed the window this attempt (the duplicate check didn't fire) --
+      // the leftover session(s) from this attempt are harmless test cruft
+      // (this file's other tests already leave sessions behind), so just
+      // retry fresh with a new title rather than trying to clean up mid-test.
+    }
+    expect(errorShown, `Duplicate-title rejection never appeared within ${attempts} attempts`).toBe(true);
 
     await expect(page.getByTestId('omnibar')).toBeVisible();
-    await expect(page.getByTestId('omnibar-create-error')).toBeVisible({ timeout: 10000 });
+    await expect(omnibarError).toBeVisible();
     await expect(sessionsPage.getSessionCard(sessionTitle)).toHaveCount(countBefore);
   });
 });
@@ -192,23 +311,18 @@ test.describe('async session creation (Epic 5.3: failure toast)', () => {
    * mocking): the toast fires from the real useSessionService.ts
    * transition-detection effect observing a real Redux status transition
    * delivered by the real WatchSessions stream.
+   *
+   * Both tests below drive that transition through openFreshFailingSession
+   * (top of file), which retries with a brand-new session whenever the real
+   * GitHub-404 resolution outruns page load -- see that helper's doc comment
+   * for why the toast can never fire at all if the session is already
+   * Failed by the time the page's WatchSessions subscription comes up. This
+   * is what fixed the flakiness observed in these two tests specifically.
    */
-  const NONEXISTENT_GITHUB_URL = 'https://github.com/this-org-definitely-does-not-exist-e2e-test/nonexistent-repo-12345';
-
-  async function createFailingGitHubSession(client: SessionClient, title: string) {
-    return client.createSession({ title, path: NONEXISTENT_GITHUB_URL });
-  }
-
   test('failure toast fires exactly once with reason-specific copy', async ({ page }) => {
     const client = new SessionClient(BASE_URL);
-    const title = `e2e-failure-toast-${Date.now()}`;
-    const session = await createFailingGitHubSession(client, title);
-
     await page.addInitScript(() => localStorage.setItem('stapler-squad:onboarded', 'true'));
-    await page.goto(BASE_URL, { waitUntil: 'domcontentloaded' });
-
-    const card = page.locator('[data-testid="session-card"], [data-testid="session-row"]').filter({ hasText: title });
-    await expect(card).toBeVisible({ timeout: 10000 });
+    const { card, title } = await openFreshFailingSession(page, client, 'e2e-failure-toast');
 
     // Navigate to a different page via client-side routing (not page.goto,
     // which would tear down the SPA and reset the state this test relies on)
@@ -229,22 +343,17 @@ test.describe('async session creation (Epic 5.3: failure toast)', () => {
     await expect(myToast).toContainText("Couldn't resolve the GitHub repository");
 
     // Give any redundant/duplicate stream events a moment to (not) produce a
-    // second toast -- the dedup guard must hold across re-renders.
-    await page.waitForTimeout(500);
-    await expect(myToast).toHaveCount(1);
+    // second toast -- the dedup guard must hold across re-renders. Re-asserting
+    // toHaveCount(1) (rather than a fixed sleep) both waits on Playwright's own
+    // polling and fails immediately if a duplicate toast appears within the
+    // window, instead of blindly sleeping and hoping nothing changed.
+    await expect(myToast).toHaveCount(1, { timeout: 2000 });
   });
 
   test('dismissing the toast leaves the Failed card intact', async ({ page }) => {
     const client = new SessionClient(BASE_URL);
-    const title = `e2e-failure-toast-dismiss-${Date.now()}`;
-    const session = await createFailingGitHubSession(client, title);
-    void session;
-
     await page.addInitScript(() => localStorage.setItem('stapler-squad:onboarded', 'true'));
-    await page.goto(BASE_URL, { waitUntil: 'domcontentloaded' });
-
-    const card = page.locator('[data-testid="session-card"], [data-testid="session-row"]').filter({ hasText: title });
-    await expect(card).toBeVisible({ timeout: 10000 });
+    const { card, title } = await openFreshFailingSession(page, client, 'e2e-failure-toast-dismiss');
 
     // Scope to this session's toast -- see the previous test's comment on
     // why a bare 'toast' locator would also match unrelated demo toasts.
@@ -460,11 +569,12 @@ test.describe('async session creation (Epic 5.4: retry/cancel buttons)', () => {
   // approval-ci-block.spec.ts's mockResolveApproval already uses to
   // reproduce a specific connect error code deterministically -- it is not
   // WS/transport mocking and touches no other RPC.
-  const NONEXISTENT_GITHUB_URL = 'https://github.com/this-org-definitely-does-not-exist-e2e-test/nonexistent-repo-12345';
-
-  async function createFailingGitHubSession(client: SessionClient, title: string) {
-    return client.createSession({ title, path: NONEXISTENT_GITHUB_URL });
-  }
+  //
+  // NONEXISTENT_GITHUB_URL, createFailingGitHubSession, and
+  // openFreshCreatingCard are hoisted to module scope (top of file) so the
+  // Epic 5.3 describe block above can share the same retry-loop precondition
+  // handling for the toast tests, which raced against the identical
+  // GitHub-404-outruns-page-load timing.
 
   test.beforeEach(async ({ page }) => {
     await page.addInitScript(() => {
@@ -475,39 +585,6 @@ test.describe('async session creation (Epic 5.4: retry/cancel buttons)', () => {
       }
     });
   });
-
-  // Real DNS + TLS + HTTPS 404 round trips vary -- most of the time the
-  // pipeline's own GitHub-404 resolution takes ~1s (see the Epic 5.3 block's
-  // comment above), comfortably slower than a fresh page load + locating a
-  // button, but empirically (this session's own repeated runs against the
-  // real github.com) it can occasionally resolve fast enough that the card
-  // is already Failed by the time the page finishes hydrating -- an
-  // environmental race, not a UI bug (the button itself has no artificial
-  // delay; see the code it exercises). Retrying with a brand-new session on
-  // that specific precondition failure (never on the actual test assertion)
-  // makes the Cancel-window tests robust to that variance instead of flaky.
-  async function openFreshCreatingCard(
-    page: import('@playwright/test').Page,
-    client: SessionClient,
-    titlePrefix: string
-  ): Promise<{ card: import('@playwright/test').Locator; cancelButton: import('@playwright/test').Locator; title: string }> {
-    for (let attempt = 0; attempt < 5; attempt++) {
-      const title = `${titlePrefix}-${Date.now()}-${attempt}`;
-      await createFailingGitHubSession(client, title);
-      await page.goto(BASE_URL, { waitUntil: 'domcontentloaded' });
-
-      const card = page.locator('[data-testid="session-card"], [data-testid="session-row"]').filter({ hasText: title });
-      await expect(card).toBeVisible({ timeout: 10000 });
-
-      const cancelButton = card.getByRole('button', { name: 'Cancel session creation' });
-      if (await cancelButton.isVisible().catch(() => false)) {
-        return { card, cancelButton, title };
-      }
-      // Missed the window this time -- the session already resolved
-      // (Failed) before we could observe it Creating. Try again fresh.
-    }
-    throw new Error('Could not observe a Creating card with a Cancel button within 5 attempts -- the real GitHub-404 resolution consistently outran page load.');
-  }
 
   test('cancel button is clickable immediately after session creation starts', async ({ page }) => {
     const client = new SessionClient(BASE_URL);
@@ -531,54 +608,84 @@ test.describe('async session creation (Epic 5.4: retry/cancel buttons)', () => {
 
   test('cancel racing pipeline success shows Running not a cancelled flash', async ({ page }) => {
     const client = new SessionClient(BASE_URL);
-    const { card, title, cancelButton } = await openFreshCreatingCard(page, client, 'e2e-cancel-lost-race');
 
-    // Deterministically reproduce the lost-race outcome: intercept only the
-    // CancelSessionCreation call and answer with the exact connect error
-    // shape session_service.go's CancelSessionCreation returns when it
-    // loses the race (FailedPrecondition) -- same technique
-    // approval-ci-block.spec.ts's mockResolveApproval uses. The real
-    // backend instance is untouched by this route (it never reaches the
-    // server), so it is free to keep resolving for real underneath.
-    await page.route('**/api/session.v1.SessionService/CancelSessionCreation', async (route) => {
-      await route.fulfill({
-        status: 400,
-        contentType: 'application/json',
-        body: JSON.stringify({ code: 'failed_precondition', message: 'session is no longer creating' }),
-      });
-    });
+    // The whole scenario below -- not just the initial Creating-card
+    // precondition openFreshCreatingCard already retries -- races the real
+    // GitHub-404 pipeline: the click, the mocked-ACTIVE ListSessions
+    // response, and the reload all have to land before the pipeline's own
+    // real (and here always-Failed) resolution reaches the client, either
+    // by making the Cancel button disappear before it can be clicked, or by
+    // a real WatchSessions push correcting the faked ACTIVE status back to
+    // Failed right after reload. Retrying the entire scenario with a fresh
+    // session (never re-asserting on a stale one) makes it robust to that
+    // variance instead of flaky, the same shape as openFreshCreatingCard.
+    const attempts = 4;
+    let lastError: unknown;
+    for (let attempt = 0; attempt < attempts; attempt++) {
+      try {
+        const { card, title, cancelButton } = await openFreshCreatingCard(page, client, 'e2e-cancel-lost-race');
 
-    await cancelButton.click();
+        // Deterministically reproduce the lost-race outcome: intercept only
+        // the CancelSessionCreation call and answer with the exact connect
+        // error shape session_service.go's CancelSessionCreation returns
+        // when it loses the race (FailedPrecondition) -- same technique
+        // approval-ci-block.spec.ts's mockResolveApproval uses. The real
+        // backend instance is untouched by this route (it never reaches the
+        // server), so it is free to keep resolving for real underneath.
+        await page.unroute('**/api/session.v1.SessionService/CancelSessionCreation');
+        await page.route('**/api/session.v1.SessionService/CancelSessionCreation', async (route) => {
+          await route.fulfill({
+            status: 400,
+            contentType: 'application/json',
+            body: JSON.stringify({ code: 'failed_precondition', message: 'session is no longer creating' }),
+          });
+        });
 
-    // The card must NOT be removed (that would be the stale optimistic
-    // removal this behavior exists to prevent) and must never show a
-    // Failed/error state as a result of the cancel attempt itself.
-    await expect(card).toBeVisible();
-    await expect(card.getByTestId('failure-message')).toHaveCount(0);
+        await cancelButton.click({ timeout: 3000 });
 
-    // Simulate the real stream's status update landing (the pipeline
-    // actually did win the race) via the same forceSessionSnapshot-style
-    // mocked-ListSessions-plus-reload technique the Epic 5.2 block above
-    // uses -- a real WS reconnect is empirically unreliable in this app
-    // (see that block's extensive comment), a full navigation is not.
-    await page.unroute('**/api/session.v1.SessionService/ListSessions');
-    await page.route('**/api/session.v1.SessionService/ListSessions', async (route) => {
-      const response = await route.fetch();
-      const json = await response.json();
-      const sessions = (json?.sessions ?? []) as Array<Record<string, unknown>>;
-      const target = sessions.find((s) => (s.title as string) === title);
-      if (target) {
-        Object.assign(target, { status: 'SESSION_STATUS_ACTIVE', failureReason: '' });
+        // The card must NOT be removed (that would be the stale optimistic
+        // removal this behavior exists to prevent) and must never show a
+        // Failed/error state as a result of the cancel attempt itself.
+        await expect(card).toBeVisible();
+        await expect(card.getByTestId('failure-message')).toHaveCount(0);
+
+        // Simulate the real stream's status update landing (the pipeline
+        // actually did win the race) via the same forceSessionSnapshot-style
+        // mocked-ListSessions-plus-reload technique the Epic 5.2 block above
+        // uses -- a real WS reconnect is empirically unreliable in this app
+        // (see that block's extensive comment), a full navigation is not.
+        await page.unroute('**/api/session.v1.SessionService/ListSessions');
+        await page.route('**/api/session.v1.SessionService/ListSessions', async (route) => {
+          const response = await route.fetch();
+          const json = await response.json();
+          const sessions = (json?.sessions ?? []) as Array<Record<string, unknown>>;
+          const target = sessions.find((s) => (s.title as string) === title);
+          if (target) {
+            Object.assign(target, { status: 'SESSION_STATUS_ACTIVE', failureReason: '' });
+          }
+          await route.fulfill({ response, json });
+        });
+        await page.reload({ waitUntil: 'domcontentloaded' });
+
+        const reloadedCard = page.locator('[data-testid="session-card"], [data-testid="session-row"]').filter({ hasText: title });
+        await expect(reloadedCard).toBeVisible({ timeout: 10000 });
+        await expect(reloadedCard.getByTestId('session-status-running')).toHaveCount(1, { timeout: 5000 });
+        await expect(reloadedCard.getByTestId('failure-message')).toHaveCount(0);
+        await expect(reloadedCard.getByRole('button', { name: 'Cancel session creation' })).toHaveCount(0);
+        return;
+      } catch (err) {
+        lastError = err;
+        // Missed the window this attempt (button vanished before the click,
+        // or the real Failed status raced past our faked Active one after
+        // reload) -- clean up routes and retry fresh rather than compounding
+        // stale route handlers across attempts.
+        await page.unroute('**/api/session.v1.SessionService/CancelSessionCreation').catch(() => {});
+        await page.unroute('**/api/session.v1.SessionService/ListSessions').catch(() => {});
       }
-      await route.fulfill({ response, json });
-    });
-    await page.reload({ waitUntil: 'domcontentloaded' });
-
-    const reloadedCard = page.locator('[data-testid="session-card"], [data-testid="session-row"]').filter({ hasText: title });
-    await expect(reloadedCard).toBeVisible({ timeout: 10000 });
-    await expect(reloadedCard.locator('[data-status="running"]')).toHaveCount(1);
-    await expect(reloadedCard.getByTestId('failure-message')).toHaveCount(0);
-    await expect(reloadedCard.getByRole('button', { name: 'Cancel session creation' })).toHaveCount(0);
+    }
+    throw lastError instanceof Error
+      ? lastError
+      : new Error(`cancel-racing-pipeline-success scenario did not stabilize within ${attempts} attempts`);
   });
 
   test('retry transitions the same card in place with no duplicate', async ({ page }) => {
@@ -668,7 +775,9 @@ test.describe('async session creation (Epic 5.4: retry/cancel buttons)', () => {
     // Give any in-flight request a moment to land -- the disable must
     // happen synchronously on the first click, before either promise
     // resolves, so no amount of extra waiting should surface a second one.
-    await page.waitForTimeout(1000);
-    expect(retryRequestCount).toBe(1);
+    // Poll the counter instead of sleeping: it settles at 1 almost
+    // immediately, and expect.poll fails loudly if a second request ever
+    // lands within the window rather than silently racing a fixed timeout.
+    await expect.poll(() => retryRequestCount, { timeout: 3000 }).toBe(1);
   });
 });
