@@ -435,18 +435,38 @@ func TestFireTrigger_NeverSetsAutoApproveFlag(t *testing.T) {
 	assert.Equal(t, wf.ID.String(), req.GetWorkflowId(), "WorkflowId (attribution) is the intentional difference from a manual create")
 }
 
+// warnLogBuffer wraps bytes.Buffer with a mutex, matching the pattern already used in
+// executor/safeexec/safeexec_pg_test.go and server/services/autonomous_orchestration_service_test.go.
+type warnLogBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *warnLogBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *warnLogBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
 // captureWarnLog temporarily redirects the slog default logger (which log.Warn writes
 // through) to a buffer, mirroring server/services/session_service_client_log_test.go's
-// captureInfoLog. Returns a function that restores the original default logger and
-// returns everything captured.
-func captureWarnLog() func() string {
-	var buf bytes.Buffer
-	h := slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})
+// captureInfoLog. Restoration is registered via t.Cleanup rather than a returned closure
+// the caller must remember to invoke — a panic in the code under test would otherwise
+// leave the process-wide seam pointed at this stack-local buffer for the rest of the
+// test binary.
+func captureWarnLog(t *testing.T) *warnLogBuffer {
+	t.Helper()
+	buf := &warnLogBuffer{}
+	h := slog.NewTextHandler(buf, &slog.HandlerOptions{Level: slog.LevelDebug})
 	original := ssqlog.SetSlogDefaultForTest(slog.New(h))
-	return func() string {
-		ssqlog.SetSlogDefaultForTest(original)
-		return buf.String()
-	}
+	t.Cleanup(func() { ssqlog.SetSlogDefaultForTest(original) })
+	return buf
 }
 
 // TestCheckMissedCronFire_LogsWarning_When_LastFiredAtIsStale verifies Task 4.1.1c /
@@ -469,9 +489,9 @@ func TestCheckMissedCronFire_LogsWarning_When_LastFiredAtIsStale(t *testing.T) {
 		LastFiredAt:    &staleLastFired,
 	}
 
-	restore := captureWarnLog()
+	buf := captureWarnLog(t)
 	checkMissedCronFire(wf, now)
-	logged := restore()
+	logged := buf.String()
 
 	assert.Contains(t, logged, "missed cron fire")
 	assert.Contains(t, logged, "missed-fire-wf")
@@ -493,9 +513,9 @@ func TestCheckMissedCronFire_LogsWarning_When_LastFiredAtIsNil(t *testing.T) {
 		LastFiredAt:    nil,
 	}
 
-	restore := captureWarnLog()
+	buf := captureWarnLog(t)
 	checkMissedCronFire(wf, now)
-	logged := restore()
+	logged := buf.String()
 
 	assert.Contains(t, logged, "missed cron fire")
 	assert.Contains(t, logged, "never-fired-wf")
@@ -519,9 +539,9 @@ func TestCheckMissedCronFire_DoesNotLog_When_WorkflowIsFreshAndNeverFired(t *tes
 		LastFiredAt:    nil,
 	}
 
-	restore := captureWarnLog()
+	buf := captureWarnLog(t)
 	checkMissedCronFire(wf, now)
-	logged := restore()
+	logged := buf.String()
 
 	assert.NotContains(t, logged, "missed cron fire", "a workflow whose schedule has not come due since creation must not be flagged")
 }
@@ -543,9 +563,9 @@ func TestCheckMissedCronFire_DoesNotLog_When_FiredOnTime(t *testing.T) {
 		LastFiredAt:    &onTimeLastFired,
 	}
 
-	restore := captureWarnLog()
+	buf := captureWarnLog(t)
 	checkMissedCronFire(wf, now)
-	logged := restore()
+	logged := buf.String()
 
 	assert.NotContains(t, logged, "missed cron fire", "a workflow that fired on time must not be flagged")
 }

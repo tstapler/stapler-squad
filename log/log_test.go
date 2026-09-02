@@ -1,6 +1,7 @@
 package log
 
 import (
+	"bytes"
 	"io"
 	"log"
 	"log/slog"
@@ -460,8 +461,34 @@ func TestInitializeWithConfig_SlogDefaultAndSeamStayInSync(t *testing.T) {
 	cfg.FileEnabled = false
 	cfg.ConsoleEnabled = false
 	initializeWithConfig(false, cfg)
+	// initializeWithConfig starts a background drain goroutine (via AsyncHandler.StartDrain)
+	// with no way to reach it from outside except through the LogManager it just installed
+	// as defaultManager. Close() flushes that handler and stops the goroutine; without this,
+	// every run of this test leaks one goroutine for the life of the test binary.
+	t.Cleanup(Close)
 
 	if slog.Default() != slogDefault.Load() {
 		t.Error("slog.Default() and slogDefault.Load() must be the same *slog.Logger instance after initializeWithConfig")
+	}
+}
+
+// TestSetSlogDefaultForTest_LeavesSlogDefaultUntouched locks in the seam's core contract:
+// swapping it must redirect what log.Info/Warn/etc. write to (via logAt/ForSession's
+// slogDefault.Load()) without also touching the real slog.Default() — that's what let
+// tests stop calling slog.SetDefault() directly, which was also rewiring stdlib
+// log.Print process-wide and racing with concurrent tests' log-capture buffers.
+func TestSetSlogDefaultForTest_LeavesSlogDefaultUntouched(t *testing.T) {
+	realDefault := slog.Default()
+	var buf bytes.Buffer
+	prev := SetSlogDefaultForTest(slog.New(slog.NewTextHandler(&buf, nil)))
+	t.Cleanup(func() { SetSlogDefaultForTest(prev) })
+
+	Info("via seam")
+
+	if slog.Default() != realDefault {
+		t.Error("SetSlogDefaultForTest must not mutate slog.Default()")
+	}
+	if !strings.Contains(buf.String(), "via seam") {
+		t.Error("Info() must route through the seam installed by SetSlogDefaultForTest, not the real default")
 	}
 }

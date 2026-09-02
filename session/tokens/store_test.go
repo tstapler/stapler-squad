@@ -15,12 +15,40 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 )
 
+// syncBuffer wraps bytes.Buffer with a mutex, matching the pattern already used in
+// executor/safeexec/safeexec_pg_test.go and server/services/autonomous_orchestration_service_test.go.
+// A plain bytes.Buffer here would be a real -race hazard the moment a future test drives
+// concurrent writes through captureLogs (e.g. by calling Start()), even though today's
+// sole caller is synchronous.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+func (b *syncBuffer) Len() int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Len()
+}
+
 // captureLogs redirects slog's default logger to a JSON-lines buffer for the
 // duration of the test, restoring the previous default on cleanup. Not safe
 // to use from a t.Parallel() test — it mutates the process-wide slog default.
-func captureLogs(t *testing.T) *bytes.Buffer {
+func captureLogs(t *testing.T) *syncBuffer {
 	t.Helper()
-	buf := &bytes.Buffer{}
+	buf := &syncBuffer{}
 	prev := log.SetSlogDefaultForTest(slog.New(slog.NewJSONHandler(buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
 	t.Cleanup(func() { log.SetSlogDefaultForTest(prev) })
 	return buf

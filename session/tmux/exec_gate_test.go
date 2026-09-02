@@ -19,19 +19,38 @@ import (
 	ssqlog "github.com/tstapler/stapler-squad/log"
 )
 
+// debugLogBuffer wraps bytes.Buffer with a mutex, matching the pattern already used in
+// executor/safeexec/safeexec_pg_test.go and server/services/autonomous_orchestration_service_test.go.
+type debugLogBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *debugLogBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *debugLogBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
 // captureDebugLog temporarily redirects the log package's injectable slog seam to a
 // buffer (mirrors server/services/session_service_client_log_test.go's
-// captureInfoLog) and returns a function that restores it and returns the
-// captured output.
-func captureDebugLog(t *testing.T) func() string {
+// captureInfoLog). Restoration is registered via t.Cleanup rather than a returned
+// closure the caller must remember to invoke — a require.* failure between capture and
+// read would otherwise leave the process-wide seam pointed at this stack-local buffer
+// for the rest of the test binary.
+func captureDebugLog(t *testing.T) *debugLogBuffer {
 	t.Helper()
-	var buf bytes.Buffer
-	h := slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})
+	buf := &debugLogBuffer{}
+	h := slog.NewTextHandler(buf, &slog.HandlerOptions{Level: slog.LevelDebug})
 	original := ssqlog.SetSlogDefaultForTest(slog.New(h))
-	return func() string {
-		ssqlog.SetSlogDefaultForTest(original)
-		return buf.String()
-	}
+	t.Cleanup(func() { ssqlog.SetSlogDefaultForTest(original) })
+	return buf
 }
 
 // setupExecGateTestConfig points STAPLER_SQUAD_TEST_DIR at a fresh t.TempDir()
@@ -117,7 +136,7 @@ func TestAcquireResyncExecSlot_should_BlockUntilSlotAvailable_When_FastLanePoolE
 // reproducing contention interactively.
 func TestAcquireResyncExecSlot_should_LogWaitTimeInMilliseconds_When_SlotAcquiredAfterContention(t *testing.T) {
 	serverSocket := setupExecGateTestConfig(t, 4, 1)
-	restore := captureDebugLog(t)
+	buf := captureDebugLog(t)
 
 	releaseFirst, err := AcquireResyncExecSlot(context.Background(), serverSocket)
 	require.NoError(t, err)
@@ -133,7 +152,7 @@ func TestAcquireResyncExecSlot_should_LogWaitTimeInMilliseconds_When_SlotAcquire
 	require.NoError(t, err)
 	defer release2()
 
-	logOutput := restore()
+	logOutput := buf.String()
 	assert.Contains(t, logOutput, "acquired fast-lane slot")
 	assert.Regexp(t, `waitMs=[1-9]\d*`, logOutput, "should record a nonzero wait after contention, not a zero placeholder")
 }
