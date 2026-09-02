@@ -31,6 +31,7 @@ var slogLevel slog.LevelVar //nolint:gochecknoglobals
 func init() {
 	runtimeLevel.Store(int32(INFO))
 	slogLevel.Set(slog.LevelInfo)
+	slogDefault.Store(slog.Default())
 }
 
 // toSlogLevel maps our LogLevel enum to the closest slog.Level.
@@ -157,12 +158,33 @@ func (a *atomicLogger) Load() *log.Logger              { return a.ptr.Load() }
 func (a *atomicLogger) Store(l *log.Logger)            { a.ptr.Store(l) }
 func (a *atomicLogger) Swap(l *log.Logger) *log.Logger { return a.ptr.Swap(l) }
 
+// atomicSlogLogger holds a *slog.Logger behind an atomic.Pointer, mirroring
+// atomicLogger above but for the slog-backed logging path (logAt, ForSession).
+// A sibling type rather than a generic atomicLogger[T] to avoid touching the
+// already-correct, already-reviewed legacy-*log.Logger swap mechanism.
+type atomicSlogLogger struct {
+	ptr atomic.Pointer[slog.Logger]
+}
+
+func (a *atomicSlogLogger) Load() *slog.Logger               { return a.ptr.Load() }
+func (a *atomicSlogLogger) Store(l *slog.Logger)             { a.ptr.Store(l) }
+func (a *atomicSlogLogger) Swap(l *slog.Logger) *slog.Logger { return a.ptr.Swap(l) }
+
 //nolint:gochecknoglobals
 var (
 	warningLog atomicLogger
 	infoLog    atomicLogger
 	errorLog   atomicLogger
 	debugLog   atomicLogger
+
+	// slogDefault holds the *slog.Logger read by logAt/ForSession. It is kept in
+	// sync with the real slog.Default() by initializeWithConfig, but tests swap
+	// it via SetSlogDefaultForTest instead of calling slog.SetDefault() directly
+	// — slog.SetDefault also redirects stdlib log.Print process-wide, which is
+	// what let an unrelated httptest.Server's hang-detector log line land in a
+	// concurrent test's capture buffer under -race (see log_test.go and
+	// server/services's captureLogs helpers).
+	slogDefault atomicSlogLogger
 
 	// Global config reference
 	globalConfig *LogConfig
@@ -207,6 +229,14 @@ func DebugLog() *log.Logger { return debugLog.Load() }
 // previous value, so callers can restore it via t.Cleanup instead of racing a
 // bare package-var assignment against concurrent t.Parallel() reads.
 func SetWarningLogForTest(l *log.Logger) *log.Logger { return warningLog.Swap(l) }
+
+// SetSlogDefaultForTest atomically replaces the slog-backed default logger
+// (read by logAt/ForSession) and returns the previous value, so tests can
+// restore it via t.Cleanup instead of calling slog.SetDefault() — which
+// would also rewire stdlib log.Print process-wide and is the root cause of
+// the server/services capture-buffer race under -race this seam removes
+// tests from touching at all.
+func SetSlogDefaultForTest(l *slog.Logger) *slog.Logger { return slogDefault.Swap(l) }
 
 // SetInfoLogForTest atomically replaces the info logger and returns the previous
 // value, so callers can restore it via t.Cleanup.
@@ -641,7 +671,7 @@ type SessionLogger struct {
 // All calls route through the async slog handler — no stdlib mutex serialization.
 // Session-specific log files still receive the entry via LogForSession when needed.
 func ForSession(sessionID string) *slog.Logger {
-	return slog.Default().With("session", sessionID)
+	return slogDefault.Load().With("session", sessionID)
 }
 
 // ForSessionLegacy returns the old SessionLogger for callers that write to
@@ -674,7 +704,7 @@ func (sl *SessionLogger) Error(format string, v ...interface{}) {
 // Callers, logAt, Info/Warn/Error/Debug, caller).
 // See also: https://pkg.go.dev/log/slog#hdr-Wrapping_output_methods.
 func logAt(level slog.Level, msg string, args ...any) {
-	logger := slog.Default()
+	logger := slogDefault.Load()
 	ctx := context.Background()
 	if !logger.Enabled(ctx, level) {
 		return
@@ -1018,7 +1048,9 @@ func initializeWithConfig(daemon bool, cfg *LogConfig) {
 	asyncHandler := NewAsyncHandler(jsonHandler, defaultAsyncBufSize)
 	asyncHandler.StartDrain()
 	packageLevelHandler := NewPackageLevelHandler(asyncHandler)
-	slog.SetDefault(slog.New(NewTraceIDHandler(packageLevelHandler)))
+	prodLogger := slog.New(NewTraceIDHandler(packageLevelHandler))
+	slog.SetDefault(prodLogger)
+	slogDefault.Store(prodLogger)
 	LoadPackageLevelsFromEnv()
 
 	// Populate the default LogManager so package consumers can use it via dependency injection.
