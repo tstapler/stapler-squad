@@ -821,7 +821,9 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		// STAPLER_SQUAD_TEST_DIR invocation (also not caught by either IsTestMode() or
 		// IsNamedInstance() alone). See config.IsIsolatedInstance's doc comment.
 		if !config.IsIsolatedInstance() {
-			session.ReconcileOrphanedTmuxSessions(instances)
+			// minAge=0: safe only here, before any new session creation is possible
+			// in this startup sequence — see ReconcileOrphanedTmuxSessions' doc comment.
+			session.ReconcileOrphanedTmuxSessions(instances, 0)
 		}
 
 		// Step 6.5: Persist any auto-detected worktree info (must happen after Step 6)
