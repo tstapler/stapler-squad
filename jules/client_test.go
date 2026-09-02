@@ -7,10 +7,11 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"os/exec"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/tstapler/stapler-squad/executor/safeexec"
 )
 
 // fakeTokenSource is a JulesTokenSource test double returning a fixed key.
@@ -168,7 +169,7 @@ func TestJulesPackage_should_NotImportSessionOrServer_When_DepsListed(t *testing
 	// resolves correctly regardless of the test binary's working directory
 	// — "go test" runs with cwd set to this package's own source directory,
 	// where a relative "./jules" would not exist.
-	out, err := exec.Command("go", "list", "-deps", "github.com/tstapler/stapler-squad/jules").Output()
+	out, err := safeexec.CommandContext(context.Background(), "go", "list", "-deps", "github.com/tstapler/stapler-squad/jules").Output()
 	if err != nil {
 		t.Fatalf("go list -deps failed: %v", err)
 	}

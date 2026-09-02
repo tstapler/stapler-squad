@@ -46,9 +46,9 @@ const defaultCircuitCooldown = 5 * time.Minute
 // package-level github.com/zalando/go-keyring functions. Production code
 // never reassigns these.
 var (
-	keyringGet    = keyring.Get
-	keyringSet    = keyring.Set
-	keyringDelete = keyring.Delete
+	keyringGet    = keyring.Get    //nolint:gochecknoglobals // test seam, see doc comment above
+	keyringSet    = keyring.Set    //nolint:gochecknoglobals // test seam, see doc comment above
+	keyringDelete = keyring.Delete //nolint:gochecknoglobals // test seam, see doc comment above
 )
 
 // KeyringTokenSource resolves and stores the Jules API key in the OS

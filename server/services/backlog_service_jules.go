@@ -21,7 +21,6 @@ import (
 	"github.com/tstapler/stapler-squad/jules"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
-	"github.com/tstapler/stapler-squad/session/ent"
 )
 
 // SetJulesDispatcher wires the Jules dispatch backend used by DispatchToJules.
@@ -83,7 +82,7 @@ func (s *BacklogService) DispatchToJules(
 
 	item, err := s.storage.GetBacklogItem(ctx, req.Msg.ItemId)
 	if err != nil {
-		if ent.IsNotFound(err) || errors.Is(err, session.ErrNotFound) {
+		if errors.Is(err, session.ErrNotFound) {
 			return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("backlog item %q not found", req.Msg.ItemId))
 		}
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to get backlog item: %w", err))
