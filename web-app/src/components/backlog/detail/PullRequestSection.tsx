@@ -2,6 +2,7 @@
 
 import type { BacklogItem } from "@/lib/hooks/useBacklogService";
 import { CollapsibleSection } from "@/components/ui/Collapsible";
+import { GitHubBadge } from "@/components/shared/GitHubBadge";
 import * as styles from "../BacklogItemDetail.css";
 import { ActionButtonLabel } from "./ActionButtonLabel";
 
@@ -27,6 +28,12 @@ export interface PullRequestSectionProps {
  * `showPrLink={false}` when this section is also rendering.
  */
 export function PullRequestSection({ item, actionLoading, onMarkDone, readOnly = false }: PullRequestSectionProps) {
+  // Story 3.3.2, Task 3.3.2b: linkedSessions is in creation order (same
+  // convention BacklogItemDetail.tsx's Jules dispatch-gate branch prefill
+  // relies on), so `.at(-1)` is the newest session -- the one that actually
+  // produced this PR, if any.
+  const producedByJules = item.linkedSessions.at(-1)?.role === "jules_work";
+
   return (
     <CollapsibleSection sectionKey="pull-request" title="Pull Request" defaultExpanded={true}>
       <div className={styles.section}>
@@ -37,15 +44,14 @@ export function PullRequestSection({ item, actionLoading, onMarkDone, readOnly =
                 <span className={styles.reviewContextLabel}>
                   PR #{item.prNumber} — waiting for merge
                 </span>
-                <a
-                  className={styles.reviewContextSessionId}
-                  href={item.prUrl}
-                  target="_blank"
-                  rel="noreferrer"
-                  title="Open pull request on GitHub"
-                >
-                  {item.prUrl}
-                </a>
+                <div className={styles.sessionRowMain}>
+                  <GitHubBadge prNumber={item.prNumber} prUrl={item.prUrl} />
+                  {producedByJules && (
+                    <span className={styles.julesProvenanceMarker} aria-label="Opened by Jules">
+                      <span aria-hidden="true">☁</span> Jules
+                    </span>
+                  )}
+                </div>
               </>
             ) : (
               <span className={styles.reviewContextLabel}>

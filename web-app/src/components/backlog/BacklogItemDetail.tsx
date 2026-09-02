@@ -188,6 +188,13 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
     enabled: boolean;
     hasApiKey: boolean;
     egressAcknowledgedRepos: string[];
+    /**
+     * Story 3.3.2: mirrors GetJulesConfigResponse.config.auth_reconnect_required
+     * (JulesSessionPoller.AuthReconnectRequired()) — read by SessionsSection
+     * to override every open jules_work row's badge to "reconnect-required"
+     * account-wide, per ux.md §4.2 step 6.
+     */
+    authReconnectRequired: boolean;
   } | null>(null);
 
   // Manual review form
@@ -643,6 +650,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
           enabled: resp.config.enabled,
           hasApiKey: resp.config.hasApiKey,
           egressAcknowledgedRepos: resp.config.egressAcknowledgedRepos,
+          authReconnectRequired: resp.config.authReconnectRequired,
         });
       } catch {
         // Silent — see comment above.
@@ -1708,6 +1716,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
             onDeleteSession={handleDeleteSession}
             onSteerSession={handleSteerSession}
             steeringSessionId={steeringSessionId}
+            authReconnectRequired={julesConfig?.authReconnectRequired ?? false}
           />
 
           <WorkflowHistorySection item={item} defaultExpanded={workflowExpanded} />
