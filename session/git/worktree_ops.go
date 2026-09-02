@@ -127,7 +127,7 @@ func (g *GitWorktree) setupLocked() error {
 
 	// Goroutine for directory creation
 	go func() {
-		errChan <- os.MkdirAll(worktreesDir, 0755)
+		errChan <- os.MkdirAll(worktreesDir, 0750)
 	}()
 
 	// Goroutine for branch check
@@ -386,7 +386,7 @@ func (g *GitWorktree) findLiveWorktreeForBranch() (string, bool) {
 func (g *GitWorktree) setupNewWorktree() error {
 	// Ensure worktrees directory exists
 	worktreesDir := filepath.Join(g.repoPath, "worktrees")
-	if err := os.MkdirAll(worktreesDir, 0755); err != nil {
+	if err := os.MkdirAll(worktreesDir, 0750); err != nil {
 		return fmt.Errorf("failed to create worktrees directory: %w", err)
 	}
 

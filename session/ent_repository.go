@@ -107,7 +107,7 @@ func NewEntRepository(opts ...RepositoryOption) (*EntRepository, error) {
 	// "file:" URI DSN (e.g. a shared-cache in-memory database used by tests)
 	// rather than a real filesystem path.
 	if !strings.HasPrefix(expandedPath, "file:") {
-		if err := os.MkdirAll(filepath.Dir(expandedPath), 0755); err != nil {
+		if err := os.MkdirAll(filepath.Dir(expandedPath), 0750); err != nil {
 			return nil, fmt.Errorf("failed to create database directory: %w", err)
 		}
 	}

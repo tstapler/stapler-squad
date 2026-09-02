@@ -63,12 +63,12 @@ func WriteHeadlessFailureCapture(dir, sessionUUID, raw string, maxBytes int64) (
 		content = headlessFailureCaptureTruncationMarker + content[int64(len(content))-maxBytes:]
 	}
 
-	if mkErr := os.MkdirAll(dir, 0o755); mkErr != nil {
+	if mkErr := os.MkdirAll(dir, 0o750); mkErr != nil {
 		return "", fmt.Errorf("failed to create headless failure capture dir %s: %w", dir, mkErr)
 	}
 
 	absPath = filepath.Join(dir, headlessFailureCaptureFilePrefix+sessionUUID+".txt")
-	if writeErr := os.WriteFile(absPath, []byte(content), 0o644); writeErr != nil {
+	if writeErr := os.WriteFile(absPath, []byte(content), 0o600); writeErr != nil {
 		return "", fmt.Errorf("failed to write headless failure capture file: %w", writeErr)
 	}
 

@@ -109,7 +109,7 @@ func ResolveClaudeHistoryDir(homeDir string, isIsolated bool) (string, error) {
 		return "", fmt.Errorf("failed to resolve isolated config dir for Claude history: %w", err)
 	}
 	historyDir := filepath.Join(configDir, "claude-projects")
-	if err := os.MkdirAll(historyDir, 0755); err != nil {
+	if err := os.MkdirAll(historyDir, 0750); err != nil {
 		return "", fmt.Errorf("failed to create isolated Claude history dir %s: %w", historyDir, err)
 	}
 	return historyDir, nil
@@ -223,7 +223,7 @@ func (m *ClaudeConfigManager) UpdateConfig(filename string, content string) erro
 	filePath := filepath.Join(m.claudeDir, filename)
 
 	// Create directory if it doesn't exist
-	if err := os.MkdirAll(m.claudeDir, 0755); err != nil {
+	if err := os.MkdirAll(m.claudeDir, 0750); err != nil {
 		return fmt.Errorf("failed to create Claude directory: %w", err)
 	}
 
@@ -237,7 +237,7 @@ func (m *ClaudeConfigManager) UpdateConfig(filename string, content string) erro
 
 	// Write to temporary file first for atomicity
 	tmpPath := filePath + ".tmp"
-	if err := os.WriteFile(tmpPath, []byte(content), 0644); err != nil {
+	if err := os.WriteFile(tmpPath, []byte(content), 0600); err != nil {
 		return fmt.Errorf("failed to write temporary file: %w", err)
 	}
 
@@ -258,7 +258,7 @@ func copyFile(src, dst string) error {
 		return fmt.Errorf("failed to read source file: %w", err)
 	}
 
-	if err := os.WriteFile(dst, data, 0644); err != nil {
+	if err := os.WriteFile(dst, data, 0600); err != nil {
 		return fmt.Errorf("failed to write destination file: %w", err)
 	}
 

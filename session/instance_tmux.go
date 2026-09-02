@@ -303,7 +303,7 @@ func promptFileDir() string {
 		log.Warn("promptFileDir: failed to resolve prompt cache dir, using OS temp dir", "err", err)
 		return ""
 	}
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o750); err != nil {
 		log.Warn("promptFileDir: failed to create prompt cache dir, using OS temp dir", "dir", dir, "err", err)
 		return ""
 	}

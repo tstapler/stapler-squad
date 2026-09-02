@@ -455,7 +455,10 @@ func EnsurePluginDir() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	// 0755, not 0750: this directory holds user-authored detector plugin files the user is
+	// meant to browse/edit directly (see the seeded example.toml.sample below) -- it's a
+	// config-style directory, not sensitive storage, and Test_EnsurePluginDir asserts 0755.
+	if err := os.MkdirAll(dir, 0o755); err != nil { //nolint:gosec // see comment above
 		return "", fmt.Errorf("failed to create detector plugin directory %s: %w", dir, err)
 	}
 
@@ -464,7 +467,7 @@ func EnsurePluginDir() (string, error) {
 	case statErr == nil:
 		// Already present — never overwrite, so user edits survive.
 	case os.IsNotExist(statErr):
-		if writeErr := os.WriteFile(examplePath, []byte(examplePluginFile), 0o644); writeErr != nil {
+		if writeErr := os.WriteFile(examplePath, []byte(examplePluginFile), 0o600); writeErr != nil {
 			log.Warn("detector plugins: failed to write example seed file", "path", examplePath, "err", writeErr)
 		}
 	default:
