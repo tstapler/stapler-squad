@@ -3,7 +3,6 @@ package jules
 import (
 	"context"
 	"fmt"
-	"strings"
 	"sync"
 	"time"
 
@@ -22,10 +21,9 @@ type sourceLister interface {
 	ListSources(ctx context.Context) ([]JulesSource, error)
 }
 
-// sourceRegistryEntry is the cached value behind one "owner/repo" key.
+// sourceRegistryEntry is the cached value behind one JulesSourceName key.
 type sourceRegistryEntry struct {
-	name JulesSourceName
-	at   time.Time
+	at time.Time
 }
 
 // JulesSourceRegistry resolves an "owner/repo" pair to the JulesSourceName
@@ -45,7 +43,11 @@ type JulesSourceRegistry struct {
 	// now is the injected clock, overridable in tests.
 	now func() time.Time
 
-	store sync.Map // key: "owner/repo" string, value: sourceRegistryEntry
+	// store is keyed by the exact JulesSourceName string Jules returned
+	// (or, equivalently for a GitHub source, by githubSourceName(owner,
+	// repo)) so a hit never depends on reverse-parsing an ambiguous
+	// "owner-repo" concatenation -- see githubSourceName.
+	store sync.Map // key: JulesSourceName string, value: sourceRegistryEntry
 
 	// refetchGroup coalesces concurrent misses within the same refresh
 	// window into one ListSources call, not one per caller: every goroutine
@@ -78,26 +80,40 @@ func (r *JulesSourceRegistry) clock() time.Time {
 	return time.Now()
 }
 
-func sourceRegistryKey(owner, repo string) string {
-	return owner + "/" + repo
+// githubSourceNamePrefix is the fixed portion of a GitHub-backed
+// JulesSourceName: "sources/github-{owner}-{repo}".
+const githubSourceNamePrefix = "sources/github-"
+
+// githubSourceName builds the JulesSourceName Jules assigns to a GitHub
+// repo's source by construction, from an owner/repo pair the caller already
+// has. This deliberately replaces reverse-parsing a ListSources result's
+// "owner-repo" segment: GitHub org and repo names can each contain hyphens
+// (e.g. owner "my-org", repo "stapler-squad"), so splitting the
+// concatenation back into (owner, repo) is ambiguous and was silently
+// mis-parsing hyphenated names. Building the expected name from the known
+// owner/repo instead of decomposing an unknown one sidesteps the ambiguity
+// entirely.
+func githubSourceName(owner, repo string) JulesSourceName {
+	return JulesSourceName(githubSourceNamePrefix + owner + "-" + repo)
 }
 
 // Resolve returns the JulesSourceName for owner/repo, serving a live cache
 // entry without calling ListSources. On a cache miss (including an expired
 // entry) it re-lists sources once and re-checks before giving up.
 func (r *JulesSourceRegistry) Resolve(ctx context.Context, owner, repo string) (JulesSourceName, error) {
-	key := sourceRegistryKey(owner, repo)
+	name := githubSourceName(owner, repo)
+	key := string(name)
 
-	if entry, ok := r.lookup(key); ok {
-		return entry.name, nil
+	if _, ok := r.lookup(key); ok {
+		return name, nil
 	}
 
 	if err := r.refresh(ctx); err != nil {
 		return "", err
 	}
 
-	if entry, ok := r.lookup(key); ok {
-		return entry.name, nil
+	if _, ok := r.lookup(key); ok {
+		return name, nil
 	}
 
 	return "", fmt.Errorf(
@@ -124,6 +140,10 @@ func (r *JulesSourceRegistry) lookup(key string) (sourceRegistryEntry, bool) {
 // only the first caller ("leader") actually invokes ListSources, and every
 // concurrent caller ("follower") blocks on that same call and receives its
 // result (or error), rather than each issuing its own ListSources call.
+//
+// Each returned source is cached under its own exact name (s.Name) --
+// unparsed -- so a later Resolve only needs to check whether the name it
+// constructs from owner/repo is present, never to decompose one.
 func (r *JulesSourceRegistry) refresh(ctx context.Context) error {
 	_, err, _ := r.refetchGroup.Do("refresh", func() (any, error) {
 		sources, err := r.client.ListSources(ctx)
@@ -133,38 +153,9 @@ func (r *JulesSourceRegistry) refresh(ctx context.Context) error {
 
 		now := r.clock()
 		for _, s := range sources {
-			owner, repo, ok := parseGitHubSourceName(s.Name)
-			if !ok {
-				continue
-			}
-			r.store.Store(sourceRegistryKey(owner, repo), sourceRegistryEntry{name: s.Name, at: now})
+			r.store.Store(string(s.Name), sourceRegistryEntry{at: now})
 		}
 		return struct{}{}, nil
 	})
 	return err
-}
-
-// githubSourceNamePrefix is the fixed portion of a GitHub-backed
-// JulesSourceName: "sources/github-{owner}-{repo}".
-const githubSourceNamePrefix = "sources/github-"
-
-// parseGitHubSourceName splits a JulesSourceName of the form
-// "sources/github-{owner}-{repo}" back into owner and repo. GitHub repo
-// names may themselves contain hyphens (e.g. "stapler-squad"), so the split
-// point is the first hyphen after the prefix — everything before it is the
-// owner, everything after is the repo. This assumes the owner segment has
-// no hyphen of its own, true for the accounts this repo dispatches against;
-// a source name that doesn't fit the pattern is skipped rather than
-// mis-parsed.
-func parseGitHubSourceName(name JulesSourceName) (owner, repo string, ok bool) {
-	s := string(name)
-	if !strings.HasPrefix(s, githubSourceNamePrefix) {
-		return "", "", false
-	}
-	rest := s[len(githubSourceNamePrefix):]
-	idx := strings.Index(rest, "-")
-	if idx <= 0 || idx == len(rest)-1 {
-		return "", "", false
-	}
-	return rest[:idx], rest[idx+1:], true
 }

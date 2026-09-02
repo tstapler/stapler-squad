@@ -188,52 +188,86 @@ func TestJulesSourceRegistry_Resolve_should_CoalesceConcurrentMisses_When_ManyGo
 	}
 }
 
-func TestParseGitHubSourceName_should_SplitOwnerAndRepo_When_TableDriven(t *testing.T) {
+func TestGitHubSourceName_should_ConstructExpectedName_When_TableDriven(t *testing.T) {
 	tests := []struct {
-		name      string
-		source    JulesSourceName
-		wantOwner string
-		wantRepo  string
-		wantOK    bool
+		name  string
+		owner string
+		repo  string
+		want  JulesSourceName
 	}{
 		{
-			name:      "simple repo name",
-			source:    "sources/github-tstapler-dotfiles",
-			wantOwner: "tstapler",
-			wantRepo:  "dotfiles",
-			wantOK:    true,
+			name:  "simple owner and repo",
+			owner: "tstapler",
+			repo:  "dotfiles",
+			want:  "sources/github-tstapler-dotfiles",
 		},
 		{
-			name:      "hyphenated repo name",
-			source:    "sources/github-tstapler-stapler-squad",
-			wantOwner: "tstapler",
-			wantRepo:  "stapler-squad",
-			wantOK:    true,
+			name:  "hyphenated repo name",
+			owner: "tstapler",
+			repo:  "stapler-squad",
+			want:  "sources/github-tstapler-stapler-squad",
 		},
 		{
-			name:   "missing sources/github- prefix",
-			source: "sources/gitlab-tstapler-dotfiles",
-			wantOK: false,
-		},
-		{
-			name:   "no repo segment",
-			source: "sources/github-tstapler",
-			wantOK: false,
+			name:  "hyphenated owner name",
+			owner: "my-org",
+			repo:  "my-repo",
+			want:  "sources/github-my-org-my-repo",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			owner, repo, ok := parseGitHubSourceName(tt.source)
-			if ok != tt.wantOK {
-				t.Fatalf("parseGitHubSourceName(%q) ok = %v, want %v", tt.source, ok, tt.wantOK)
-			}
-			if !ok {
-				return
-			}
-			if owner != tt.wantOwner || repo != tt.wantRepo {
-				t.Errorf("parseGitHubSourceName(%q) = (%q, %q), want (%q, %q)", tt.source, owner, repo, tt.wantOwner, tt.wantRepo)
+			if got := githubSourceName(tt.owner, tt.repo); got != tt.want {
+				t.Errorf("githubSourceName(%q, %q) = %q, want %q", tt.owner, tt.repo, got, tt.want)
 			}
 		})
+	}
+}
+
+// TestJulesSourceRegistry_Resolve_should_ResolveHyphenatedOwnerAndRepo_When_BothSegmentsContainHyphens
+// is the regression case for the bug GitHub Copilot flagged on PR #674:
+// parseGitHubSourceName used to split a ListSources result's
+// "owner-repo" segment at the FIRST hyphen, so a source name like
+// "sources/github-my-org-my-repo" (owner "my-org", repo "my-repo") was
+// mis-decomposed into owner "my", repo "org-my-repo" and cached under the
+// wrong key -- a later Resolve(ctx, "my-org", "my-repo") would then miss
+// the cache and, after a re-list, still report ErrJulesSourceNotRegistered
+// even though the repo IS connected. The registry no longer decomposes
+// source names at all: it caches each source under its own exact name and
+// checks for the name it constructs from the known owner/repo.
+func TestJulesSourceRegistry_Resolve_should_ResolveHyphenatedOwnerAndRepo_When_BothSegmentsContainHyphens(t *testing.T) {
+	client := &fakeSourceLister{
+		sources: []JulesSource{
+			{Name: "sources/github-my-org-my-repo", ID: "github-my-org-my-repo"},
+		},
+	}
+	registry := NewJulesSourceRegistry(client)
+
+	got, err := registry.Resolve(context.Background(), "my-org", "my-repo")
+	if err != nil {
+		t.Fatalf("Resolve: unexpected error: %v", err)
+	}
+	if want := JulesSourceName("sources/github-my-org-my-repo"); got != want {
+		t.Errorf("Resolve(%q, %q) = %q, want %q", "my-org", "my-repo", got, want)
+	}
+}
+
+// TestJulesSourceRegistry_Resolve_should_ResolveMultiWordRepoName_When_OwnerHasNoHyphen
+// covers the other hyphenated-name shape Copilot named: a plain owner with a
+// multi-word (hyphenated) repo.
+func TestJulesSourceRegistry_Resolve_should_ResolveMultiWordRepoName_When_OwnerHasNoHyphen(t *testing.T) {
+	client := &fakeSourceLister{
+		sources: []JulesSource{
+			{Name: "sources/github-owner-multi-word-repo-name", ID: "github-owner-multi-word-repo-name"},
+		},
+	}
+	registry := NewJulesSourceRegistry(client)
+
+	got, err := registry.Resolve(context.Background(), "owner", "multi-word-repo-name")
+	if err != nil {
+		t.Fatalf("Resolve: unexpected error: %v", err)
+	}
+	if want := JulesSourceName("sources/github-owner-multi-word-repo-name"); got != want {
+		t.Errorf("Resolve(%q, %q) = %q, want %q", "owner", "multi-word-repo-name", got, want)
 	}
 }
