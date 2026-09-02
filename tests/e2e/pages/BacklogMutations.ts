@@ -169,16 +169,70 @@ export async function seedWorkItemSessionDirect(
  */
 export async function seedWorkSessionWithWorktreeDirect(
   request: APIRequestContext,
-  opts: { title: string; status?: string }
+  opts: { title: string; status?: string; repoPath?: string }
 ): Promise<{ itemId: string; sessionId: string; worktreePath: string }> {
   const resp = await request.post(`${BASE_URL}/api/debug/backlog/seed-work-session-with-worktree`, {
     headers: { "Content-Type": "application/json" },
-    data: { title: opts.title, status: opts.status ?? "review" },
+    data: { title: opts.title, status: opts.status ?? "review", repoPath: opts.repoPath ?? "" },
   });
   if (!resp.ok()) {
     throw new Error(`seedWorkSessionWithWorktreeDirect failed (${resp.status()}): ${await resp.text().catch(() => "")}`);
   }
   return (await resp.json()) as { itemId: string; sessionId: string; worktreePath: string };
+}
+
+/**
+ * Wraps `/api/debug/backlog/seed-jules-work-session` (server/services/
+ * backlog_debug_seed_handler.go's handleSeedJulesWorkSession) — creates a
+ * backlog item with a linked jules_work ItemSession (Story 3.3.2), directly
+ * through storage, no real Jules API dispatch/poll involved.
+ *
+ * `ended`/`endReason` select which of computeJulesPhase's (SessionsSection.tsx)
+ * two closed-row outcomes the badge resolves to: `endReason: "jules_completed"`
+ * (or `"jules_completed_no_pr"`) -> "done"; any other end reason (e.g.
+ * `"jules_failed"`) -> "failed". Leaving `ended` unset produces "running".
+ * "queued" and "needs-review" are not reachable through this real data path
+ * — computeJulesPhase only branches on open-vs-closed — and
+ * "reconnect-required" needs live JulesSessionPoller auth-failure state this
+ * debug endpoint does not simulate; see jules-status-badge.spec.ts's header
+ * comment for the full scope note.
+ *
+ * `itemId`, when set, attaches the seeded jules_work ItemSession to that
+ * already-existing item instead of creating a new one (title/status are then
+ * ignored) — used by jules-dispatch.spec.ts's §7.2 scenario to make the row
+ * BacklogItemDetail's real WatchBacklogItems live-update path renders appear
+ * on the exact item a `DispatchToJules` call (intercepted client-side to
+ * avoid a live billed Jules API round trip — no e2e-local credential can
+ * pass jules/source_registry.go's real ListSources check) was aimed at.
+ */
+export async function seedJulesWorkSessionDirect(
+  request: APIRequestContext,
+  opts: {
+    title: string;
+    status?: string;
+    ended?: boolean;
+    endReason?: string;
+    prNumber?: number;
+    prUrl?: string;
+    itemId?: string;
+  }
+): Promise<{ itemId: string; sessionId: string }> {
+  const resp = await request.post(`${BASE_URL}/api/debug/backlog/seed-jules-work-session`, {
+    headers: { "Content-Type": "application/json" },
+    data: {
+      title: opts.title,
+      status: opts.status ?? "review",
+      ended: opts.ended ?? false,
+      endReason: opts.endReason ?? "",
+      prNumber: opts.prNumber ?? 0,
+      prUrl: opts.prUrl ?? "",
+      itemId: opts.itemId ?? "",
+    },
+  });
+  if (!resp.ok()) {
+    throw new Error(`seedJulesWorkSessionDirect failed (${resp.status()}): ${await resp.text().catch(() => "")}`);
+  }
+  return (await resp.json()) as { itemId: string; sessionId: string };
 }
 
 export async function enableBacklogFeatureFlag(request: APIRequestContext): Promise<void> {
