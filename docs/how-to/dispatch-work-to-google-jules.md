@@ -52,6 +52,20 @@ tmux/PTY layer:
 | Jules: Failed | Jules reported a failure — the item returns to `ready` with the failure reason. |
 | Jules: Reconnect required | The stored API key was rejected (401/403) — update it in Settings. |
 
+## Pre-ship accessibility checklist
+
+Two `design/ux.md` §7 criteria genuinely need a human, not Playwright — run
+these once before shipping a change to the badge or dispatch dialog:
+
+- **§7.4 (half)**: with a grayscale/colorblind simulator (e.g. macOS
+  Accessibility → Display → Color Filters, or a browser extension), confirm
+  every `JulesStatusBadge` phase stays visually distinguishable with color
+  removed — icon + text shape alone must carry the meaning.
+- **§7.6**: with VoiceOver (macOS) or NVDA (Windows) running, drive a session
+  to `Failed` and confirm it interrupts (an assertive announcement); then
+  drive `Queued → Running` and confirm it does *not* interrupt (a polite
+  announcement only).
+
 ## Escape hatch
 
 If a session gets stuck, its badge goes stale, or Jules' own state seems
