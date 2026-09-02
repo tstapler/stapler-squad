@@ -32,6 +32,15 @@ type fakeJulesStatusClient struct {
 	sessions map[jules.JulesSessionName]*jules.JulesSession
 	errs     map[jules.JulesSessionName]error
 	calls    []jules.JulesSessionName
+
+	// blockUntilCtxDone, when set, makes GetSession ignore sessions/errs
+	// entirely and instead block on <-ctx.Done(), returning ctx.Err(). This
+	// lets a test observe whether the real GetSession call site's
+	// context.WithTimeout(ctx, CallTimeout) (jules_session_poller.go's
+	// processEntry) is actually enforced, and whether the resulting
+	// context.DeadlineExceeded is routed through handleGetSessionError's
+	// default log-and-swallow branch.
+	blockUntilCtxDone bool
 }
 
 func newFakeJulesStatusClient() *fakeJulesStatusClient {
@@ -47,10 +56,21 @@ func (f *fakeJulesStatusClient) IsLimited() bool {
 	return f.limited
 }
 
-func (f *fakeJulesStatusClient) GetSession(_ context.Context, name jules.JulesSessionName) (*jules.JulesSession, error) {
+func (f *fakeJulesStatusClient) GetSession(ctx context.Context, name jules.JulesSessionName) (*jules.JulesSession, error) {
+	f.mu.Lock()
+	f.calls = append(f.calls, name)
+	block := f.blockUntilCtxDone
+	f.mu.Unlock()
+
+	if block {
+		// Must not hold f.mu while blocking, or callCount()/other assertions
+		// on f would deadlock against this goroutine.
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.calls = append(f.calls, name)
 	if err, ok := f.errs[name]; ok {
 		return nil, err
 	}
@@ -303,6 +323,32 @@ func TestJulesSessionPoller_tick_should_ApplyRemainingSessions_When_OneSessionGe
 	assert.Contains(t, getLog(), "jules poll failed")
 }
 
+// TestJulesSessionPoller_tick_should_LogAndSwallow_When_GetSessionCallTimesOut guards
+// that processEntry's context.WithTimeout(ctx, CallTimeout) is actually enforced around
+// the real GetSession call, and that the resulting context.DeadlineExceeded is routed
+// through handleGetSessionError's default log-and-swallow branch: the session is neither
+// ended nor transitioned, matching how jules.ErrJulesTransient is already handled.
+func TestJulesSessionPoller_tick_should_LogAndSwallow_When_GetSessionCallTimesOut(t *testing.T) {
+	getLog := captureSlog(t)
+	client := newFakeJulesStatusClient()
+	client.blockUntilCtxDone = true
+	storage := newFakeJulesPollerStorage()
+	storage.addOpenSession(testEntry("item-1", julesSessionUUIDPrefix+"sessions/a"), testRow("row-1", nil, time.Now()))
+
+	cfg := DefaultJulesSessionPollerConfig()
+	cfg.CallTimeout = 10 * time.Millisecond
+	p := NewJulesSessionPoller(client, storage, cfg)
+
+	p.tick(context.Background())
+
+	assert.Equal(t, 1, client.callCount())
+	logOutput := getLog()
+	assert.Contains(t, logOutput, "jules poll failed")
+	assert.Contains(t, logOutput, context.DeadlineExceeded.Error())
+	assert.Empty(t, storage.ended, "a GetSession timeout must not end the session")
+	assert.Empty(t, storage.transitions, "a GetSession timeout must not transition the item")
+}
+
 // TestJulesSessionPoller_Start_should_ReturnWithinOneTickInterval_When_ContextCancelled
 // guards Story 2.3.1: cancelling ctx returns the goroutine within one tick interval,
 // and a second Start on the same instance is a no-op.
@@ -497,6 +543,68 @@ func TestApplyJulesState_should_SurfaceMissingPR_When_CompletedWithEmptyOutputs(
 	notes := storage.notesFor("item-1")
 	require.NotEmpty(t, notes)
 	assert.Contains(t, notes[len(notes)-1].note, s.URL, "note must point at the Jules web URL")
+}
+
+// TestJulesIsValidGitHubPRURL_should_AcceptOnlyGenuineGitHubPullURLs guards the
+// security-review fix: prNumberFromURLRe alone only anchors the trailing
+// "/pull/(\d+)/?" shape, with no start-anchor or scheme/host check, so a
+// value like "javascript:alert(1)//pull/1" satisfies it. isValidGitHubPRURL
+// must additionally require an https://github.com/ URL before the PR-URL
+// capture path accepts anything from the Jules API response.
+func TestJulesIsValidGitHubPRURL_should_AcceptOnlyGenuineGitHubPullURLs(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		url  string
+		want bool
+	}{
+		{"genuine github pr url", "https://github.com/tstapler/stapler-squad/pull/123", true},
+		{"genuine github pr url with trailing slash", "https://github.com/tstapler/stapler-squad/pull/123/", true},
+		{"javascript uri smuggled past trailing regex", "javascript:alert(1)//pull/1", false},
+		{"non-github host with pull path", "https://evil.com/x/pull/1", false},
+		{"http instead of https", "http://github.com/tstapler/stapler-squad/pull/123", false},
+		{"github host but no pull path", "https://github.com/tstapler/stapler-squad/issues/123", false},
+		{"empty string", "", false},
+		{"lookalike subdomain", "https://github.com.evil.com/x/pull/1", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.want, isValidGitHubPRURL(tt.url))
+		})
+	}
+}
+
+// TestApplyJulesState_should_RejectMaliciousPRURL_When_CompletedWithNonGitHubURL
+// guards the same fix end-to-end through applyJulesState: a PR output whose
+// URL isn't a genuine https://github.com/ URL must never reach
+// SetBacklogItemPRAndTransition (i.e. never become item.PrURL, which
+// GitHubBadge.tsx renders directly as an <a href>) and must fall back to the
+// existing "completed with no PR" path instead of failing loudly, so a
+// single malicious output doesn't wedge the whole session.
+func TestApplyJulesState_should_RejectMaliciousPRURL_When_CompletedWithNonGitHubURL(t *testing.T) {
+	getLog := captureSlog(t)
+	client := newFakeJulesStatusClient()
+	storage := newFakeJulesPollerStorage()
+	p := NewJulesSessionPoller(client, storage, DefaultJulesSessionPollerConfig())
+
+	entry := testEntry("item-1", julesSessionUUIDPrefix+"sessions/a")
+	row := testRow("row-1", nil, time.Now())
+	s := newSession("sessions/a", jules.JulesStateCompleted)
+	s.Outputs = []jules.JulesSessionOutput{
+		{PullRequest: &jules.JulesPullRequestOutput{URL: "javascript:alert(1)//pull/1"}},
+	}
+
+	require.NoError(t, p.applyJulesState(context.Background(), entry, row, s))
+
+	assert.Empty(t, storage.prRecorded, "an invalid PR URL must never reach SetBacklogItemPRAndTransition / item.PrURL")
+	require.Contains(t, storage.ended, "row-1")
+	assert.Equal(t, "jules_completed_no_pr", storage.ended["row-1"], "must fall back to the no-PR path, not error out")
+
+	logOutput := getLog()
+	assert.Contains(t, logOutput, "jules rejected invalid pr url")
+	assert.Contains(t, logOutput, "url=javascript:alert(1)//pull/1")
+	assert.Contains(t, logOutput, "level=WARN")
 }
 
 // TestApplyJulesState_should_LogUnknownStateAtError_When_StateIsUnrecognized guards

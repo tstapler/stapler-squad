@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -560,15 +561,40 @@ func (p *JulesSessionPoller) applyUnknownState(ctx context.Context, entry ItemSe
 	return nil
 }
 
-// completedSessionPRURL returns the first pull request URL in s.Outputs, or
-// "" if COMPLETED carried no PR output.
+// completedSessionPRURL returns the first pull request URL in s.Outputs that
+// passes isValidGitHubPRURL, or "" if COMPLETED carried no (valid) PR output.
+// The Jules API response is semi-trusted output (target-repo content the
+// session processed can influence it via prompt injection, per this
+// feature's egress-consent threat model), and prURL is persisted as
+// item.PrURL and rendered as an <a href> in GitHubBadge.tsx, so a value that
+// isn't actually an https://github.com/... URL is rejected here rather than
+// stored — a bare trailing-path regex match (e.g. "javascript:alert(1)//pull/1")
+// is not enough.
 func completedSessionPRURL(s *jules.JulesSession) string {
 	for _, out := range s.Outputs {
-		if out.PullRequest != nil && out.PullRequest.URL != "" {
-			return out.PullRequest.URL
+		if out.PullRequest == nil || out.PullRequest.URL == "" {
+			continue
 		}
+		if !isValidGitHubPRURL(out.PullRequest.URL) {
+			log.Warn("jules rejected invalid pr url", "jules_session", s.Name, "url", out.PullRequest.URL)
+			continue
+		}
+		return out.PullRequest.URL
 	}
 	return ""
+}
+
+// isValidGitHubPRURL reports whether rawURL is a genuine
+// https://github.com/.../pull/<n> URL — scheme and host anchored, not just
+// matched against the trailing /pull/(\d+)/? shape prNumberFromURLRe checks.
+// Anchoring only the suffix would accept e.g. "javascript:alert(1)//pull/1",
+// which prNumberFromURLRe alone matches.
+func isValidGitHubPRURL(rawURL string) bool {
+	u, err := url.Parse(rawURL)
+	if err != nil || u.Scheme != "https" || u.Host != "github.com" {
+		return false
+	}
+	return prNumberFromURLRe.MatchString(rawURL)
 }
 
 // julesSessionWebURL returns s.URL, or a generic pointer to the Jules web UI
