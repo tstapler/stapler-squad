@@ -161,7 +161,10 @@ func NewStatusDetectorFromFile(path string) (*StatusDetector, error) {
 	return sd, nil
 }
 
-// LoadPatterns loads patterns from a YAML file.
+// LoadPatterns loads patterns from a YAML file. Note: this does NOT cover the auto-mode
+// footer override (autoModeFooterRegex / applyFooterIdleOverride, above) — that check
+// always runs regardless of any custom pattern file loaded here, for the reasons given
+// in autoModeFooterRegex's doc comment.
 func (sd *StatusDetector) LoadPatterns(path string) error {
 	if err := validatePatternFilePath(path); err != nil {
 		return err
@@ -457,7 +460,9 @@ func (s DetectedStatus) String() string {
 	return "Unknown"
 }
 
-// ExportPatterns exports the current patterns to a YAML file.
+// ExportPatterns exports the current patterns to a YAML file. Note: the exported YAML
+// does not (and cannot) capture the auto-mode footer override — see LoadPatterns' doc
+// comment and autoModeFooterRegex, above.
 func (sd *StatusDetector) ExportPatterns(path string) error {
 	if err := validatePatternFilePath(path); err != nil {
 		return err
@@ -645,6 +650,16 @@ func (sd *StatusDetector) detectFromLines(lines []string) (DetectedStatus, strin
 	return bestStatus, bestDesc, bestCount
 }
 
+// detectFromLinesWithFooter runs detectFromLines and then applies the auto-mode footer
+// idle override in one place — the shared core for DetectFromLines,
+// DetectWithContextFromLines, and DetectWithContextAndCountFromLines below, all three of
+// which otherwise repeat the identical detectFromLines(...)+applyFooterIdleOverride(...)
+// call pair.
+func (sd *StatusDetector) detectFromLinesWithFooter(lines []string) (DetectedStatus, string, int) {
+	s, desc, count := sd.detectFromLines(lines)
+	return applyFooterIdleOverride(lines, s, desc, count)
+}
+
 // DetectFromLines analyzes multiple lines of output and returns the most relevant status.
 // Lines are processed in reverse order (most recent first) so the current terminal
 // state takes precedence over stale scrollback content.
@@ -655,8 +670,7 @@ func (sd *StatusDetector) detectFromLines(lines []string) (DetectedStatus, strin
 // status pattern on an earlier line. StatusReady is returned as a fallback if no more
 // specific status is found.
 func (sd *StatusDetector) DetectFromLines(lines []string) DetectedStatus {
-	s, desc, count := sd.detectFromLines(lines)
-	s, _, _ = applyFooterIdleOverride(lines, s, desc, count)
+	s, _, _ := sd.detectFromLinesWithFooter(lines)
 	return s
 }
 
@@ -672,8 +686,7 @@ func (sd *StatusDetector) DetectFromLines(lines []string) DetectedStatus {
 // Signature intentionally left unchanged (pinned by the TerminalDetector interface and its
 // callers) — see DetectWithContextAndCountFromLines for the count-aware sibling.
 func (sd *StatusDetector) DetectWithContextFromLines(lines []string) (DetectedStatus, string) {
-	s, desc, count := sd.detectFromLines(lines)
-	s, desc, _ = applyFooterIdleOverride(lines, s, desc, count)
+	s, desc, _ := sd.detectFromLinesWithFooter(lines)
 	return s, desc
 }
 
@@ -684,8 +697,7 @@ func (sd *StatusDetector) DetectWithContextFromLines(lines []string) (DetectedSt
 // the TerminalDetector interface and consumed by review_queue_determiner.go plus several
 // test files that don't need the count.
 func (sd *StatusDetector) DetectWithContextAndCountFromLines(lines []string) (DetectedStatus, string, int) {
-	s, desc, count := sd.detectFromLines(lines)
-	return applyFooterIdleOverride(lines, s, desc, count)
+	return sd.detectFromLinesWithFooter(lines)
 }
 
 // DetectRecent analyzes the most recent n bytes of output for status detection.

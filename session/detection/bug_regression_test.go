@@ -1182,3 +1182,69 @@ func TestBug_AutoModeFooter_DoesNotOverrideActiveTurn(t *testing.T) {
 		t.Errorf("DetectWithContextAndCountFromLines(active turn + auto-mode footer) = %s, want StatusExecuting — the footer must not override a genuinely active turn", status)
 	}
 }
+
+// TestBug_AutoModeFooter_SingularShell verifies footerAgentCount handles the singular
+// "1 shell" phrasing (no trailing "s") — the regex's `shells?` alternation.
+func TestBug_AutoModeFooter_SingularShell(t *testing.T) {
+	t.Parallel()
+	sd := NewStatusDetector()
+
+	lines := []string{
+		"❯ ",
+		"──────────────────────────────────────────────────────────────────────────────",
+		"  ⏵⏵ auto mode on · 1 shell · ← for agents · 1 feedback draft",
+	}
+
+	status, desc, count := sd.DetectWithContextAndCountFromLines(lines)
+	if status != StatusWaitingForAgent {
+		t.Fatalf("DetectWithContextAndCountFromLines(idle + singular '1 shell' footer) = %s, want StatusWaitingForAgent (desc=%q)", status, desc)
+	}
+	if count != 1 {
+		t.Errorf("DetectWithContextAndCountFromLines(idle + singular '1 shell' footer) count = %d, want 1", count)
+	}
+}
+
+// TestBug_AutoModeFooter_NoFooterLine_NotOverridden verifies that when no auto-mode
+// footer line is present at all, applyFooterIdleOverride leaves the status untouched
+// (footerAgentCount's ok=false branch) — the idle/unknown baseline is not overridden
+// to StatusWaitingForAgent.
+func TestBug_AutoModeFooter_NoFooterLine_NotOverridden(t *testing.T) {
+	t.Parallel()
+	sd := NewStatusDetector()
+
+	lines := []string{
+		"❯ ",
+		"──────────────────────────────────────────────────────────────────────────────",
+		"  ? for shortcuts",
+	}
+
+	status, _, count := sd.DetectWithContextAndCountFromLines(lines)
+	if status == StatusWaitingForAgent {
+		t.Errorf("DetectWithContextAndCountFromLines(no auto-mode footer line) = StatusWaitingForAgent, want unchanged idle/unknown baseline")
+	}
+	if count != 0 {
+		t.Errorf("DetectWithContextAndCountFromLines(no auto-mode footer line) count = %d, want 0", count)
+	}
+}
+
+// TestBug_AutoModeFooter_ZeroShells_NotOverridden verifies that an explicit "0 shells"
+// footer (footerAgentCount's total<=0 branch) does not override the idle/unknown status
+// to StatusWaitingForAgent — there is nothing to wait for.
+func TestBug_AutoModeFooter_ZeroShells_NotOverridden(t *testing.T) {
+	t.Parallel()
+	sd := NewStatusDetector()
+
+	lines := []string{
+		"❯ ",
+		"──────────────────────────────────────────────────────────────────────────────",
+		"  ⏵⏵ auto mode on · 0 shells · ← for agents",
+	}
+
+	status, _, count := sd.DetectWithContextAndCountFromLines(lines)
+	if status == StatusWaitingForAgent {
+		t.Errorf("DetectWithContextAndCountFromLines(idle + '0 shells' footer) = StatusWaitingForAgent, want unchanged idle/unknown baseline")
+	}
+	if count != 0 {
+		t.Errorf("DetectWithContextAndCountFromLines(idle + '0 shells' footer) count = %d, want 0", count)
+	}
+}
