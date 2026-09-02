@@ -112,12 +112,20 @@ func TestSessionService_RetrySession_should_RestartImmediately_When_SessionIsPer
 	// Active) — wait for it to settle before forcing a status transition,
 	// otherwise the pipeline's own later Active transition races the forced
 	// PermanentlyFailed below and the state machine (correctly) rejects it.
+	// GetStatus() (not the Status field directly) is the race-safe read: it
+	// goes through Snapshot(), the atomically-published value the pipeline's
+	// own actor-serialized writes publish to — a direct field read/write
+	// races with those writes, which don't take inst.mu at all (see
+	// GetStatus's doc comment; caught by -race in CI on PR #671).
 	require.Eventually(t, func() bool {
-		return inst.Status == session.Active
+		return session.Status(inst.GetStatus()) == session.Active
 	}, 2*time.Second, 10*time.Millisecond, "session should reach Active before the test forces PermanentlyFailed")
 	// Simulate a session that has exhausted its automated retries and is
 	// sitting in the terminal give-up state RetryNow must be able to revive.
-	inst.Status = session.PermanentlyFailed
+	// MarkPermanentlyFailedForTest routes through the same locked +
+	// snapshot-republish path the production code uses, rather than a bare
+	// field write.
+	inst.MarkPermanentlyFailedForTest()
 
 	retryResp, retryErr := svc.RetrySession(context.Background(), connect.NewRequest(&sessionv1.RetrySessionRequest{
 		Id: resp.Msg.Session.Id,

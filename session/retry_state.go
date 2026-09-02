@@ -385,6 +385,21 @@ func (i *Instance) SetRetryInFlightForTest(v bool) {
 	i.retryInFlight.Store(v)
 }
 
+// MarkPermanentlyFailedForTest forces a live instance into the terminal
+// PermanentlyFailed status, for tests outside this package that need to
+// simulate a session which has exhausted its automated retries (e.g.
+// asserting RetrySession's manual-recovery RPC). Routes through
+// markSessionPermanentlyFailed's existing locked + snapshot-republish path
+// rather than a bare `inst.Status = PermanentlyFailed` field write — a plain
+// field write races with CreateSession's async start pipeline, whose
+// transitionToLocked call publishes Status outside inst.mu entirely (see
+// GetStatus's doc comment). Callers must still wait for the instance to
+// reach Active (via GetStatus/Snapshot, not this field) before calling this,
+// so the pipeline's own transition has already landed.
+func (i *Instance) MarkPermanentlyFailedForTest() {
+	markSessionPermanentlyFailed(i, "test")
+}
+
 // IsRetryPending reports whether an automated restart is currently claimed
 // (retryInFlight) or scheduled (NextRetryAt set) for this instance. Used by
 // BacklogLifecycleListener's stale-work remediation gate (via
