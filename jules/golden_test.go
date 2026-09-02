@@ -73,10 +73,14 @@ func TestGoldenFixtures_should_DecodeIntoJulesSources_When_SourcesListed(t *test
 	}
 }
 
-// TestGoldenFixtures_should_RejectUnknownFields_When_SchemaDrifts proves the
-// drift-detection mechanism: a JulesSession payload carrying a field this
-// package's DTO does not know about fails loudly, naming the field, instead
-// of being silently dropped by json.Unmarshal's default lenient behavior.
+// TestGoldenFixtures_should_RejectUnknownFields_When_SchemaDrifts demonstrates
+// encoding/json's DisallowUnknownFields behavior in isolation, using a local
+// decoder this test builds itself. Production decoding in client.go does NOT
+// enable DisallowUnknownFields (verified: grep -rn DisallowUnknownFields
+// jules/ finds only this test) -- an unrecognized field from a Jules API
+// schema change is silently dropped there, not rejected. That is a
+// deliberate forward-compatibility choice for an evolving alpha API, not a
+// gap, but this test does not prove anything about production behavior.
 func TestGoldenFixtures_should_RejectUnknownFields_When_SchemaDrifts(t *testing.T) {
 	drifted := []byte(`{"name":"sessions/abc","state":"COMPLETED","unexpectedNewField":"surprise"}`)
 
