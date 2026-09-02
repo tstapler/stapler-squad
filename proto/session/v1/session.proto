@@ -313,6 +313,13 @@ service SessionService {
   // UI-originated action, never a side effect of DispatchToJules.
   rpc ConfirmEgressConsent(ConfirmEgressConsentRequest) returns (ConfirmEgressConsentResponse) {}
 
+  // RevokeEgressConsent is the ONLY RPC that may remove an entry from
+  // JulesConfig.EgressAcknowledgedRepos — the removal-side counterpart to
+  // ConfirmEgressConsent, called exclusively by JulesSettings.tsx's Revoke
+  // button. Removing a repo that isn't currently acknowledged is a no-op
+  // (idempotent, mirrors ConfirmEgressConsent's duplicate-add no-op).
+  rpc RevokeEgressConsent(RevokeEgressConsentRequest) returns (RevokeEgressConsentResponse) {}
+
   // UpsertProfile creates or updates a named profile.
   rpc UpsertProfile(UpsertProfileRequest) returns (UpsertProfileResponse) {}
 
@@ -2223,6 +2230,14 @@ message ConfirmEgressConsentRequest {
 }
 
 message ConfirmEgressConsentResponse {
+  repeated string egress_acknowledged_repos = 1;
+}
+
+message RevokeEgressConsentRequest {
+  string repo_path = 1;
+}
+
+message RevokeEgressConsentResponse {
   repeated string egress_acknowledged_repos = 1;
 }
 

@@ -263,6 +263,45 @@ func TestJulesConfigService_ConfirmEgressConsent_should_ReturnInvalidArgument_Wh
 	assert.Empty(t, cfg.Jules.EgressAcknowledgedRepos)
 }
 
+func TestJulesConfigService_RevokeEgressConsent_should_RemoveOnlyTargetRepo_When_MultipleRepoAcknowledged(t *testing.T) {
+	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	svc := NewJulesConfigService(nil, nil, nil)
+	const repoA = "/home/tstapler/code/github.com/tstapler/stapler-squad"
+	const repoB = "/home/tstapler/code/github.com/tstapler/dotfiles"
+
+	_, err := svc.ConfirmEgressConsent(context.Background(), connect.NewRequest(&sessionv1.ConfirmEgressConsentRequest{RepoPath: repoA}))
+	require.NoError(t, err)
+	_, err = svc.ConfirmEgressConsent(context.Background(), connect.NewRequest(&sessionv1.ConfirmEgressConsentRequest{RepoPath: repoB}))
+	require.NoError(t, err)
+
+	resp, err := svc.RevokeEgressConsent(context.Background(), connect.NewRequest(&sessionv1.RevokeEgressConsentRequest{RepoPath: repoA}))
+	require.NoError(t, err)
+	assert.Equal(t, []string{repoB}, resp.Msg.EgressAcknowledgedRepos, "only repoA should be removed")
+
+	cfg := config.LoadConfig()
+	assert.NotContains(t, cfg.Jules.EgressAcknowledgedRepos, repoA)
+	assert.Contains(t, cfg.Jules.EgressAcknowledgedRepos, repoB)
+}
+
+func TestJulesConfigService_RevokeEgressConsent_should_BeIdempotent_When_RepoNotAcknowledged(t *testing.T) {
+	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	svc := NewJulesConfigService(nil, nil, nil)
+	const repoPath = "/home/tstapler/code/github.com/tstapler/stapler-squad"
+
+	resp, err := svc.RevokeEgressConsent(context.Background(), connect.NewRequest(&sessionv1.RevokeEgressConsentRequest{RepoPath: repoPath}))
+	require.NoError(t, err)
+	assert.Empty(t, resp.Msg.EgressAcknowledgedRepos)
+}
+
+func TestJulesConfigService_RevokeEgressConsent_should_ReturnInvalidArgument_When_RepoPathEmpty(t *testing.T) {
+	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	svc := NewJulesConfigService(nil, nil, nil)
+
+	_, err := svc.RevokeEgressConsent(context.Background(), connect.NewRequest(&sessionv1.RevokeEgressConsentRequest{RepoPath: ""}))
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))
+}
+
 // TestJulesDispatchService_should_NeverCallConfirmEgressConsentMutation_When_SourceScanned
 // is Story 2.4.2's cannot-self-grant proof (mirrors Story 2.2.3's read-only
 // checkEgressConsent proof): a whole-file static scan of

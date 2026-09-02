@@ -243,6 +243,48 @@ func (s *JulesConfigService) ConfirmEgressConsent(
 	}), nil
 }
 
+// RevokeEgressConsent is the ONLY function in the codebase that removes an
+// entry from JulesConfig.EgressAcknowledgedRepos — the removal-side
+// counterpart to ConfirmEgressConsent above, both under cfgMu so the two
+// writers of Jules config state never race each other. Idempotent: revoking
+// a repo that isn't currently acknowledged is a no-op, not an error.
+// +api: jules:revoke-egress-consent
+func (s *JulesConfigService) RevokeEgressConsent(
+	ctx context.Context,
+	req *connect.Request[sessionv1.RevokeEgressConsentRequest],
+) (*connect.Response[sessionv1.RevokeEgressConsentResponse], error) {
+	if req.Msg.RepoPath == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("repo_path is required"))
+	}
+
+	s.cfgMu.Lock()
+	defer s.cfgMu.Unlock()
+
+	cfg := config.LoadConfig()
+	remaining := make([]string, 0, len(cfg.Jules.EgressAcknowledgedRepos))
+	for _, acked := range cfg.Jules.EgressAcknowledgedRepos {
+		if acked != req.Msg.RepoPath {
+			remaining = append(remaining, acked)
+		}
+	}
+
+	if len(remaining) == len(cfg.Jules.EgressAcknowledgedRepos) {
+		// Nothing to remove — return current state without a redundant save.
+		return connect.NewResponse(&sessionv1.RevokeEgressConsentResponse{
+			EgressAcknowledgedRepos: cfg.Jules.EgressAcknowledgedRepos,
+		}), nil
+	}
+
+	cfg.Jules.EgressAcknowledgedRepos = remaining
+	if err := config.SaveConfig(cfg); err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save config: %w", err))
+	}
+
+	return connect.NewResponse(&sessionv1.RevokeEgressConsentResponse{
+		EgressAcknowledgedRepos: cfg.Jules.EgressAcknowledgedRepos,
+	}), nil
+}
+
 // julesConfigToProto converts the config-layer JulesConfig plus live
 // has_api_key/auth_reconnect_required state into the masked proto
 // representation shared by GetJulesConfig and UpdateJulesConfig.

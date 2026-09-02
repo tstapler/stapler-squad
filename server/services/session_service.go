@@ -5017,6 +5017,13 @@ func (s *SessionService) ConfirmEgressConsent(ctx context.Context, req *connect.
 	return s.julesConfigSvc.ConfirmEgressConsent(ctx, req)
 }
 
+// RevokeEgressConsent is the only RPC that may remove Jules cloud-egress
+// consent for a repo — see JulesConfigService.RevokeEgressConsent's doc
+// comment.
+func (s *SessionService) RevokeEgressConsent(ctx context.Context, req *connect.Request[sessionv1.RevokeEgressConsentRequest]) (*connect.Response[sessionv1.RevokeEgressConsentResponse], error) {
+	return s.julesConfigSvc.RevokeEgressConsent(ctx, req)
+}
+
 // GetStreamHubRolloutStatus returns the current stream-hub rollout status.
 func (s *SessionService) GetStreamHubRolloutStatus(ctx context.Context, req *connect.Request[sessionv1.GetStreamHubRolloutStatusRequest]) (*connect.Response[sessionv1.StreamHubRolloutStatus], error) {
 	return s.streamHubRolloutSvc.GetStreamHubRolloutStatus(ctx, req)

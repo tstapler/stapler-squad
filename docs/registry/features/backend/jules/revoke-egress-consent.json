@@ -1,0 +1,12 @@
+{
+  "id": "jules:revoke-egress-consent",
+  "type": "backend",
+  "service": "SessionService",
+  "method": "RevokeEgressConsent",
+  "protoFile": "proto/session/v1/session.proto",
+  "markerFound": true,
+  "handlerFile": "server/services/jules_config_service.go",
+  "tested": false,
+  "testIds": [],
+  "lastModified": "2026-09-01T18:57:17.130705932-07:00"
+}

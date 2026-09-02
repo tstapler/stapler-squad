@@ -29,6 +29,7 @@ const mockGetJulesConfig = jest.fn();
 const mockUpdateJulesConfig = jest.fn();
 const mockTestJulesConnection = jest.fn();
 const mockConfirmEgressConsent = jest.fn();
+const mockRevokeEgressConsent = jest.fn();
 
 const REPO_PATH = "/home/tstapler/code/github.com/tstapler/stapler-squad";
 
@@ -39,6 +40,13 @@ const baseConfig = {
   maxConcurrentJulesSessions: 2,
   maxJulesSessionsPerDay: 15,
   authReconnectRequired: false,
+  usage: {
+    sessionDispatched: 0n,
+    sessionCompleted: 0n,
+    sessionFailed: 0n,
+    apiRateLimited: 0n,
+    apiError: 0n,
+  },
 };
 
 beforeEach(() => {
@@ -47,11 +55,13 @@ beforeEach(() => {
   mockUpdateJulesConfig.mockResolvedValue({ config: { ...baseConfig } });
   mockTestJulesConnection.mockResolvedValue({ ok: true, message: "" });
   mockConfirmEgressConsent.mockResolvedValue({ egressAcknowledgedRepos: [] });
+  mockRevokeEgressConsent.mockResolvedValue({ egressAcknowledgedRepos: [] });
   (createClient as jest.Mock).mockReturnValue({
     getJulesConfig: mockGetJulesConfig,
     updateJulesConfig: mockUpdateJulesConfig,
     testJulesConnection: mockTestJulesConnection,
     confirmEgressConsent: mockConfirmEgressConsent,
+    revokeEgressConsent: mockRevokeEgressConsent,
   });
   (createConnectTransport as jest.Mock).mockReturnValue({});
 });
@@ -98,10 +108,11 @@ describe("JulesSettings", () => {
     });
   });
 
-  it("calls UpdateJulesConfig without the repo when Revoke is clicked", async () => {
+  it("calls RevokeEgressConsent with the repo when Revoke is clicked, and a reload no longer shows it", async () => {
     mockGetJulesConfig.mockResolvedValue({
       config: { ...baseConfig, egressAcknowledgedRepos: [REPO_PATH] },
     });
+    mockRevokeEgressConsent.mockResolvedValue({ egressAcknowledgedRepos: [] });
     render(<JulesSettings />);
 
     const revokeButton = await screen.findByRole("button", {
@@ -114,8 +125,11 @@ describe("JulesSettings", () => {
     fireEvent.click(revokeButton);
 
     await waitFor(() => {
-      expect(mockUpdateJulesConfig).toHaveBeenCalled();
+      expect(mockRevokeEgressConsent).toHaveBeenCalledWith({
+        repoPath: REPO_PATH,
+      });
     });
+    expect(mockUpdateJulesConfig).not.toHaveBeenCalled();
     expect(
       screen.queryByRole("button", {
         name: "Revoke cloud-egress consent for tstapler/stapler-squad",
@@ -124,5 +138,38 @@ describe("JulesSettings", () => {
     expect(
       screen.queryByText("tstapler/stapler-squad"),
     ).not.toBeInTheDocument();
+
+    // Simulate a reload — subsequent GetJulesConfig calls reflect the
+    // persisted removal, proving the row isn't just local optimistic state.
+    mockGetJulesConfig.mockResolvedValue({
+      config: { ...baseConfig, egressAcknowledgedRepos: [] },
+    });
+    render(<JulesSettings />);
+    await waitFor(() => {
+      expect(mockGetJulesConfig).toHaveBeenCalledTimes(2);
+    });
+    expect(
+      screen.queryByText("tstapler/stapler-squad"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("renders real dispatch/completion/failure counts from GetJulesConfig's usage field", async () => {
+    mockGetJulesConfig.mockResolvedValue({
+      config: {
+        ...baseConfig,
+        usage: {
+          sessionDispatched: 7n,
+          sessionCompleted: 5n,
+          sessionFailed: 2n,
+          apiRateLimited: 0n,
+          apiError: 0n,
+        },
+      },
+    });
+    render(<JulesSettings />);
+
+    expect(
+      await screen.findByText("7 dispatched · 5 completed · 2 failed"),
+    ).toBeInTheDocument();
   });
 });

@@ -96,6 +96,12 @@ export function JulesSettings() {
   const [revokingRepo, setRevokingRepo] = useState<string | null>(null);
   const [revokedNoteRepo, setRevokedNoteRepo] = useState<string | null>(null);
 
+  const [usage, setUsage] = useState({
+    dispatched: 0,
+    completed: 0,
+    failed: 0,
+  });
+
   const clientRef = useRef<ReturnType<
     typeof createClient<typeof SessionService>
   > | null>(null);
@@ -117,6 +123,11 @@ export function JulesSettings() {
         setMaxJulesSessionsPerDay(
           cfg.maxJulesSessionsPerDay || MIN_SESSIONS_PER_DAY,
         );
+        setUsage({
+          dispatched: Number(cfg.usage?.sessionDispatched ?? 0),
+          completed: Number(cfg.usage?.sessionCompleted ?? 0),
+          failed: Number(cfg.usage?.sessionFailed ?? 0),
+        });
       }
     } catch {
       setLoadError("Couldn't load Jules settings.");
@@ -194,30 +205,20 @@ export function JulesSettings() {
     }
   }
 
-  // handleRevoke: there is deliberately no dedicated "remove egress
-  // acknowledgement" RPC — UpdateJulesConfigRequest carries only
-  // api_key/enabled/the two session caps (proto/session/v1/session.proto),
-  // and ConfirmEgressConsent only ever appends
-  // (server/services/jules_config_service.go). Revoke still calls
-  // UpdateJulesConfig (the mutating RPC this action is specified against,
-  // ux.md §2.2 step 5) and removes the row from local state so the user's
-  // action is reflected immediately; a page reload will show the repo
-  // again until a backend follow-up adds real removal support (tracked as
-  // a known gap — see this task's completion report).
+  // handleRevoke calls the dedicated RevokeEgressConsent RPC — the removal
+  // counterpart to ConfirmEgressConsent, and the only path that may remove
+  // an entry from EgressAcknowledgedRepos (server/services/
+  // jules_config_service.go). The row is only removed from local state once
+  // the RPC confirms the removal, so a page reload reflects it too.
   async function handleRevoke(repoPath: string) {
     if (!clientRef.current) return;
     setRevokingRepo(repoPath);
     setSaveError(null);
     try {
-      await clientRef.current.updateJulesConfig({
-        apiKey: "",
-        enabled,
-        maxConcurrentJulesSessions,
-        maxJulesSessionsPerDay,
+      const resp = await clientRef.current.revokeEgressConsent({
+        repoPath,
       });
-      setEgressAcknowledgedRepos((prev) =>
-        prev.filter((r) => r !== repoPath),
-      );
+      setEgressAcknowledgedRepos(resp.egressAcknowledgedRepos);
       setRevokedNoteRepo(repoPath);
     } catch (err) {
       setSaveError(err instanceof Error ? err.message : String(err));
@@ -440,8 +441,8 @@ export function JulesSettings() {
         <div className={field}>
           <span className={labelClass}>Usage</span>
           <p className={usageNote}>
-            Dispatch/completion counters aren&apos;t tracked yet — they
-            arrive with a follow-up story.
+            {usage.dispatched} dispatched · {usage.completed} completed ·{" "}
+            {usage.failed} failed
           </p>
         </div>
       </div>
