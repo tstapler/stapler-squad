@@ -188,10 +188,15 @@ type syncResolveResult struct {
 // concurrently: only the first caller ("leader") actually invokes
 // raceKeyringOp, and every concurrent caller ("follower") blocks on that same
 // call and receives its result, rather than each spawning its own
-// non-cancellable goroutine against the keyring. On timeout it opens the
-// circuit and returns the timeout error to these callers only -- it does not
-// itself return ErrJulesKeychainPaused; that is reserved for calls made while
-// the circuit is already open. The follower's ctx is not honored (only the
+// non-cancellable goroutine against the keyring. All post-processing side
+// effects (opening the circuit, the paused-warning log, and the cache write)
+// run inside the shared closure too, so they execute exactly once per
+// underlying keyring call -- not once per caller -- mirroring
+// source_registry.go's refresh(), which does its cache mutation inside its
+// own Do closure for the same reason. On timeout it opens the circuit and
+// returns the timeout error to these callers only -- it does not itself
+// return ErrJulesKeychainPaused; that is reserved for calls made while the
+// circuit is already open. The follower's ctx is not honored (only the
 // leader's is, since the underlying call is already shared) -- acceptable
 // here because all callers share the same s.timeout budget regardless of ctx.
 func (s *KeyringTokenSource) resolveSync(ctx context.Context) (JulesAPIKey, error) {
@@ -199,13 +204,29 @@ func (s *KeyringTokenSource) resolveSync(ctx context.Context) (JulesAPIKey, erro
 		val, err, timedOut := s.raceKeyringOp(ctx, func() (string, error) {
 			return keyringGet(keychainService, keychainAccount)
 		})
+
+		switch {
+		case timedOut:
+			s.openCircuit()
+			log.Warn("jules keychain paused", "reason", "timeout")
+		case err == nil:
+			s.stateMu.Lock()
+			s.cachedKey = JulesAPIKey(val)
+			s.cachedAt = s.now()
+			// Reset in case this call is the re-entry after a cooldown
+			// elapsed (circuitOpenUntil is already in the past by now and
+			// would never evaluate true again, but zeroing it makes "the
+			// circuit is closed" explicit rather than merely stale) --
+			// mirrors runProbe's success path.
+			s.circuitOpenUntil = time.Time{}
+			s.stateMu.Unlock()
+		}
+
 		return syncResolveResult{val: val, err: err, timedOut: timedOut}, nil
 	})
 	res := v.(syncResolveResult) //nolint:errcheck // sfGroup.Do's own closure never returns a non-nil error, only res.err
 
 	if res.timedOut {
-		s.openCircuit()
-		log.Warn("jules keychain paused", "reason", "timeout")
 		return "", res.err
 	}
 	if res.err != nil {
@@ -215,17 +236,7 @@ func (s *KeyringTokenSource) resolveSync(ctx context.Context) (JulesAPIKey, erro
 		return "", fmt.Errorf("jules: reading API key from keychain: %w", res.err)
 	}
 
-	key := JulesAPIKey(res.val)
-	s.stateMu.Lock()
-	s.cachedKey = key
-	s.cachedAt = s.now()
-	// Reset in case this call is the re-entry after a cooldown elapsed
-	// (circuitOpenUntil is already in the past by now and would never
-	// evaluate true again, but zeroing it makes "the circuit is closed"
-	// explicit rather than merely stale) -- mirrors runProbe's success path.
-	s.circuitOpenUntil = time.Time{}
-	s.stateMu.Unlock()
-	return key, nil
+	return JulesAPIKey(res.val), nil
 }
 
 // runProbe is the single background goroutine APIKey launches when the
