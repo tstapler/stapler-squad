@@ -1127,3 +1127,58 @@ func TestBug_BatchedToolCallSummary_WithContextFromLines(t *testing.T) {
 		t.Errorf("DetectWithContextFromLines(batched summary + esc-to-interrupt footer) = %s, want StatusExecuting", gotCtx)
 	}
 }
+
+// TestBug_AutoModeFooter_WaitingWhenIdleWithBackgroundShells reproduces a real observed
+// mismatch: the session list showed a stale/wrong "Waiting for 1 Task" chip for a session
+// whose live pane (verified via tmux capture-pane against the real running session) never
+// contains the WaitingForAgent glyph-marker patterns at all — Claude Code's current CLI
+// instead shows a persistent "⏵⏵ auto mode on · N shells[, M monitors] · ..." footer bar
+// pinned at the bottom of the pane, and per-agent "◯ general-purpose ..." rows, with no
+// aggregate count line in either the old spinner-marker or "N shells running" shape.
+//
+// Because the footer is present at all times (not just at turn-end), it must only override
+// the detected status when the rest of the scan already concluded the turn is idle — never
+// while "esc to interrupt"/a thinking verb is active. See autoModeFooterRegex.
+func TestBug_AutoModeFooter_WaitingWhenIdleWithBackgroundShells(t *testing.T) {
+	t.Parallel()
+	sd := NewStatusDetector()
+
+	lines := []string{
+		"❯ ",
+		"──────────────────────────────────────────────────────────────────────────────",
+		"  all tools: $237 MTD (as of 19h ago) · session: $75.62, 21h, 61 turns",
+		"  ⏵⏵ auto mode on · 2 shells, 1 monitor · ← for agents · 1 feedback draft",
+		"",
+		"  ⏺ main",
+		"  ◯ general-purpose  Checking server/services test FAIL output   38m 49s",
+	}
+
+	status, desc, count := sd.DetectWithContextAndCountFromLines(lines)
+	if status != StatusWaitingForAgent {
+		t.Fatalf("DetectWithContextAndCountFromLines(idle + auto-mode footer) = %s, want StatusWaitingForAgent (desc=%q)", status, desc)
+	}
+	if count != 3 {
+		t.Errorf("DetectWithContextAndCountFromLines(idle + auto-mode footer) count = %d, want 3 (2 shells + 1 monitor)", count)
+	}
+}
+
+// TestBug_AutoModeFooter_DoesNotOverrideActiveTurn ensures the auto-mode footer never
+// masks a genuinely active turn — the whole point of gating the override on idle/unknown.
+func TestBug_AutoModeFooter_DoesNotOverrideActiveTurn(t *testing.T) {
+	t.Parallel()
+	sd := NewStatusDetector()
+
+	lines := []string{
+		"✶ Deciphering… (5m 7s · ↓ 2.8k tokens)",
+		"  esc to interrupt · ↓ to manage  ● main",
+		"  ⏵⏵ auto mode on · 2 shells, 1 monitor · ← for agents · 1 feedback draft",
+		"",
+		"  ⏺ main",
+		"  ◯ general-purpose  Checking server/services test FAIL output   38m 49s",
+	}
+
+	status, _, _ := sd.DetectWithContextAndCountFromLines(lines)
+	if status != StatusExecuting {
+		t.Errorf("DetectWithContextAndCountFromLines(active turn + auto-mode footer) = %s, want StatusExecuting — the footer must not override a genuinely active turn", status)
+	}
+}

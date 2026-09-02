@@ -729,7 +729,7 @@ function SessionCardInner({
               session.subStatus !== SubStatus.UNSPECIFIED &&
               session.subStatus !== SubStatus.IDLE &&
               !(suppressApprovalSubStatus && (session.subStatus === SubStatus.NEEDS_APPROVAL || session.subStatus === SubStatus.INPUT_REQUIRED)) && (
-                <SubStatusChip subStatus={session.subStatus} />
+                <SubStatusChip subStatus={session.subStatus} subagentCount={session.subagentCount} />
               )}
             {isSessionStale(session, staleThresholdMinutes) && (
               <span
