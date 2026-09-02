@@ -103,7 +103,7 @@ func NewRegistryHostResolver(stateDir string, ttl time.Duration) *registryHostRe
 // (session.HostRegistry.Advertise) -- TLS here provides transport
 // encryption only, not peer identity.
 func peerTLSTransport() *http.Transport {
-	return &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}} //nolint:gosec // see doc comment: identity is verified at the application layer (Ed25519/TOFU), not via the TLS chain
+	return &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}} // #nosec G402 -- see doc comment: identity is verified at the application layer (Ed25519/TOFU), not via the TLS chain
 }
 
 // ResolveHost implements HostResolver.

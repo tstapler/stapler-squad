@@ -248,10 +248,19 @@ func mergeSessions(ctx context.Context, destDB, sourceDB string) (int, int, erro
 		src.Close()
 	}
 
-	// Run migration via ATTACH
-	mergeSQL := fmt.Sprintf(`
+	// ATTACH takes sourceDB (a client-controlled path from MergeDatabaseRequest.ConfigDir,
+	// only prefix-checked against baseDir above) as a bound parameter in its own statement,
+	// never interpolated into SQL text — sqlite's ATTACH DATABASE fully supports parameter
+	// binding for the filename argument, so this isn't a functionality trade-off, just the
+	// injection-safe way to pass it.
+	if _, err := db.ExecContext(ctx, "ATTACH DATABASE ? AS src", sourceDB); err != nil {
+		return 0, 0, fmt.Errorf("failed to attach source database: %w", err)
+	}
+	defer func() { _, _ = db.ExecContext(context.Background(), "DETACH src") }()
+
+	// Run migration. No interpolated values remain in this script.
+	mergeSQL := `
 PRAGMA foreign_keys = OFF;
-ATTACH '%s' AS src;
 
 BEGIN;
 
@@ -307,7 +316,7 @@ JOIN main.tags mt ON mt.name = lt.name;
 
 COMMIT;
 PRAGMA foreign_keys = ON;
-`, sourceDB)
+`
 
 	if _, err := db.ExecContext(ctx, mergeSQL); err != nil {
 		return 0, 0, fmt.Errorf("merge SQL failed: %w", err)
