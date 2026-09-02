@@ -214,7 +214,21 @@ function SessionListPaneBody({ pane, dispatch }: { pane: LeafPane; dispatch: Rea
   const { triggerPicker, triggerPickerForceNew } = usePaneContext();
   const { viewMode, setViewMode } = useSessionViewModeContext();
   if (loading) return viewMode === "board" ? <BoardColumnsSkeleton /> : <SessionListSkeleton count={4} />;
-  if (error) {
+  // `error` is useSessionServiceContext's single shared Redux field -- ANY
+  // session-mutating RPC (createSession, updateSession, cancelSessionCreation,
+  // etc., see useSessionService.ts's dispatch(setError(...)) call sites)
+  // writes to this same slot, not just the initial list fetch. Gating the
+  // full-pane "Failed to Load Sessions" fallback on `error` alone means an
+  // already-successfully-loaded, non-empty list gets replaced by that
+  // fallback the moment ANY later mutation fails -- e.g. a routine,
+  // client-visible rejection like Omnibar's duplicate-title create error
+  // (session-creation-async.spec.ts's "duplicate title keeps the omnibar
+  // open with inline error" regression test), which already has its own
+  // inline `omnibar-create-error` alert and needs no page-level fallback at
+  // all. Only show this fallback when there is nothing else to show --
+  // i.e. the list itself is empty because the fetch that would have
+  // populated it is what failed.
+  if (error && sessions.length === 0) {
     return (
       <ErrorState
         error={error}

@@ -521,9 +521,13 @@ export const actionButton = style({
   cursor: "pointer",
   transition: "all 0.2s ease",
   selectors: {
-    "&:hover": {
+    "&:hover:not(:disabled)": {
       background: vars.color.hoverBackground,
       borderColor: vars.color.borderHover,
+    },
+    "&:disabled": {
+      cursor: "default",
+      opacity: 0.6,
     },
   },
   "@media": {
