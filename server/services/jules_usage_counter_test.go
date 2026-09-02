@@ -28,6 +28,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/jules"
 	"github.com/tstapler/stapler-squad/session"
 )
@@ -215,7 +216,7 @@ func TestJulesFullCycle_should_LogNoSecretMaterial_When_DispatchPollCompleteCycl
 	creator := &fakeJulesSessionCreator{resultName: "sessions/full-cycle"}
 
 	usage := NewJulesUsageCounter()
-	dispatchSvc := NewJulesDispatchService(storage, guard, creator, newTestJulesSourceRegistry(), cfg)
+	dispatchSvc := NewJulesDispatchService(storage, guard, creator, newTestJulesSourceRegistry(), func() *config.Config { return cfg })
 	dispatchSvc.SetUsageCounter(usage)
 
 	// The prompt deliberately embeds the test API key: DispatchToJules must
@@ -298,7 +299,7 @@ func TestJulesUsageCounter_Snapshot_should_IncrementDispatchedAndAPIErrorExactly
 	creator := &fakeJulesSessionCreator{}
 
 	usage := NewJulesUsageCounter()
-	dispatchSvc := NewJulesDispatchService(storage, guard, creator, newTestJulesSourceRegistry(), cfg)
+	dispatchSvc := NewJulesDispatchService(storage, guard, creator, newTestJulesSourceRegistry(), func() *config.Config { return cfg })
 	dispatchSvc.SetUsageCounter(usage)
 
 	req, err := NewJulesDispatchRequest(item.ID, "backlog/e2e-1", "Fix the flaky poller test")

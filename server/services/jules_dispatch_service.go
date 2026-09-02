@@ -150,8 +150,17 @@ type JulesDispatchService struct {
 	transitionGuard julesTransitionGuard
 	client          julesSessionCreator
 	sources         *jules.JulesSourceRegistry
-	cfg             *config.Config
-	usage           julesUsageRecorder
+	// cfgFn is called fresh on every read (checkEgressConsent,
+	// checkSpendGuards) instead of holding a *config.Config captured once at
+	// construction time. config.LoadConfig() re-reads config.json from disk
+	// and returns a brand-new *Config allocation on every call, so a frozen
+	// pointer here would never observe a write made by
+	// JulesConfigService.ConfirmEgressConsent/UpdateJulesConfig/
+	// RevokeEgressConsent (which each call config.LoadConfig() fresh, mutate,
+	// and save) without a server restart. Mirrors the QuotaConfig accessor in
+	// server/dependencies.go (BuildRuntimeDeps' quotaGate construction).
+	cfgFn func() *config.Config
+	usage julesUsageRecorder
 
 	// itemLocks holds one *sync.Mutex per item ID, lazily created on first
 	// use — the in-process double-click guard (Task 2.2.1a). A per-item
@@ -164,14 +173,18 @@ type JulesDispatchService struct {
 // NewJulesDispatchService constructs a JulesDispatchService. transitionGuard
 // is passed as the already-constructed *BacklogService at the call site
 // (Task 2.4.4a) — no late-binding setter is needed, unlike
-// AutonomousStuckRespawner.
-func NewJulesDispatchService(storage *session.Storage, transitionGuard julesTransitionGuard, client julesSessionCreator, sources *jules.JulesSourceRegistry, cfg *config.Config) *JulesDispatchService {
+// AutonomousStuckRespawner. cfgFn is called fresh on every guard check — pass
+// config.LoadConfig itself (or an equivalent closure), never a
+// pre-loaded *config.Config value, or config edits (egress consent, spend
+// caps) will never be observed without a server restart. See the cfgFn field
+// doc comment.
+func NewJulesDispatchService(storage *session.Storage, transitionGuard julesTransitionGuard, client julesSessionCreator, sources *jules.JulesSourceRegistry, cfgFn func() *config.Config) *JulesDispatchService {
 	return &JulesDispatchService{
 		storage:         storage,
 		transitionGuard: transitionGuard,
 		client:          client,
 		sources:         sources,
-		cfg:             cfg,
+		cfgFn:           cfgFn,
 	}
 }
 
@@ -189,6 +202,21 @@ func (s *JulesDispatchService) itemMutex(itemID string) *sync.Mutex {
 func (s *JulesDispatchService) SetUsageCounter(usage julesUsageRecorder) {
 	s.usage = usage
 }
+
+// julesSpendGuardMu serializes the check-count-then-reserve window (Task
+// 2.2.1b steps 2-6's reservation write) across ALL items, not just the same
+// one. itemMutex (the per-item TryLock above) only serializes concurrent
+// dispatches to the *same* item; without this global lock, two *different*
+// items dispatched concurrently near MaxConcurrentJulesSessions/
+// MaxJulesSessionsPerDay can each independently observe a stale under-limit
+// open-session count and both proceed to CreateSession, overshooting the
+// hard ceiling ADR-004 promises to enforce
+// (project_plans/google-jules-integration/decisions/ADR-004-defensive-spend-controls.md).
+// Jules dispatch is not a hot path, so a single package-level lock here is
+// cheap. It is released right after the reservation row is durably written
+// (DispatchToJules) — before the billed client.CreateSession call — so a
+// slow Jules API response never blocks other items' dispatch checks.
+var julesSpendGuardMu sync.Mutex
 
 // logDispatchRejected emits the Observability Plan's "jules dispatch
 // rejected" line. reason is one of: not_configured, no_egress_ack,
@@ -213,6 +241,22 @@ func (s *JulesDispatchService) DispatchToJules(ctx context.Context, item *sessio
 		return "", fmt.Errorf("jules: dispatch already in flight for item %s: %w", item.ID, ErrJulesDispatchInFlight)
 	}
 	defer mu.Unlock()
+
+	// 1b. Global spend-guard lock (Bug fix, cross-item TOCTOU race): held from
+	// here through the reservation write in step 6 below, so no other item's
+	// dispatch can read a stale open-session count while this one is
+	// mid-check. Released explicitly, not deferred for the whole function, so
+	// it never spans the billed client.CreateSession call. See the
+	// julesSpendGuardMu doc comment.
+	julesSpendGuardMu.Lock()
+	spendGuardUnlocked := false
+	unlockSpendGuard := func() {
+		if !spendGuardUnlocked {
+			julesSpendGuardMu.Unlock()
+			spendGuardUnlocked = true
+		}
+	}
+	defer unlockSpendGuard()
 
 	// 2. Persisted-state duplicate check (Gap 3) — the guard that actually
 	// enforces "at most one open Jules session per item" against durable
@@ -285,6 +329,12 @@ func (s *JulesDispatchService) DispatchToJules(ctx context.Context, item *sessio
 	if err != nil {
 		return "", fmt.Errorf("jules: creating item session reservation: %w", err)
 	}
+
+	// The reservation row above is now durably visible to the next
+	// ListOpenJulesItemSessions call, so it's safe to let another item's
+	// dispatch proceed past the global lock now — the billed call below can
+	// be slow and must not serialize unrelated items' dispatch checks.
+	unlockSpendGuard()
 
 	julesSession, createErr := s.client.CreateSession(ctx, jules.CreateSessionRequest{
 		Prompt:         req.Prompt,
@@ -360,10 +410,14 @@ func (s *JulesDispatchService) endFailedReservation(ctx context.Context, itemSes
 // key surfaces from the real *jules.Client at the CreateSession call itself
 // (classifyJulesResponse maps a 401/403 to jules.ErrJulesNotConfigured).
 func (s *JulesDispatchService) checkEgressConsent(item *session.BacklogItemData) error {
-	if s.cfg == nil || !s.cfg.Jules.Enabled {
+	var cfg *config.Config
+	if s.cfgFn != nil {
+		cfg = s.cfgFn()
+	}
+	if cfg == nil || !cfg.Jules.Enabled {
 		return fmt.Errorf("jules dispatch is not enabled: %w", jules.ErrJulesNotConfigured)
 	}
-	for _, acked := range s.cfg.Jules.EgressAcknowledgedRepos {
+	for _, acked := range cfg.Jules.EgressAcknowledgedRepos {
 		if acked == item.RepoPath {
 			return nil
 		}
@@ -384,13 +438,17 @@ func (s *JulesDispatchService) checkEgressConsent(item *session.BacklogItemData)
 // reused here for the concurrency count instead of a second
 // ListOpenJulesItemSessions call.
 func (s *JulesDispatchService) checkSpendGuards(ctx context.Context, openSessions []session.ItemSessionBacklogEntry) error {
-	limit := s.cfg.MaxConcurrentJulesSessionsOrDefault()
+	var cfg *config.Config
+	if s.cfgFn != nil {
+		cfg = s.cfgFn()
+	}
+	limit := cfg.MaxConcurrentJulesSessionsOrDefault()
 	if len(openSessions) >= limit {
 		return connect.NewError(connect.CodeFailedPrecondition,
 			fmt.Errorf("%w: %d Jules sessions are already running (limit %d)", errJulesConcurrencyCapReached, len(openSessions), limit))
 	}
 
-	dailyLimit := s.cfg.MaxJulesSessionsPerDayOrDefault()
+	dailyLimit := cfg.MaxJulesSessionsPerDayOrDefault()
 	since := time.Now().Add(-24 * time.Hour)
 	count, err := s.storage.CountJulesItemSessionsSince(ctx, since)
 	if err != nil {

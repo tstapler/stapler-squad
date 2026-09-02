@@ -1532,7 +1532,15 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		} else {
 			julesClient := jules.NewClient(julesKeys)
 			julesSourceRegistry = jules.NewJulesSourceRegistry(julesClient)
-			julesDispatchSvc := services.NewJulesDispatchService(storage, backlogSvc, julesClient, julesSourceRegistry, cfg)
+			// config.LoadConfig() re-reads config.json from disk on every call
+			// (same pattern as quotaGate's QuotaConfig accessor above) — cfg here
+			// is the boot-time snapshot passed into BuildRuntimeDeps and is never
+			// refreshed, so passing it directly would freeze every Jules config
+			// field (egress consent, spend caps) at boot, meaning
+			// ConfirmEgressConsent/UpdateJulesConfig/RevokeEgressConsent's writes
+			// (jules_config_service.go) would never be observed without a
+			// restart.
+			julesDispatchSvc := services.NewJulesDispatchService(storage, backlogSvc, julesClient, julesSourceRegistry, config.LoadConfig)
 			julesDispatchSvc.SetUsageCounter(julesUsage)
 			backlogSvc.SetJulesDispatcher(julesDispatchSvc)
 			julesPoller = session.NewJulesSessionPoller(julesClient, storage, session.DefaultJulesSessionPollerConfig())
