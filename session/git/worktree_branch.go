@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
@@ -26,9 +27,28 @@ func (g *GitWorktree) cleanupExistingBranch(repo *git.Repository) error {
 	// now rejects it ("reference name escapes the reference storage"). Removing the
 	// directory directly is both more explicit and no longer dependent on that undocumented
 	// go-git behavior.
-	worktreeAdminDir := filepath.Join(g.repoPath, ".git", "worktrees", g.branchName)
-	if err := os.RemoveAll(worktreeAdminDir); err != nil {
-		return fmt.Errorf("failed to remove worktree reference for %s: %w", g.branchName, err)
+	//
+	// Two defensive guards before the os.RemoveAll, since this now touches the filesystem
+	// directly instead of going through go-git's ref-name validation:
+	//  - g.branchName can contain caller-supplied path segments (e.g. "../../etc") that were
+	//    never sanitized for this use — reject anything that would resolve outside
+	//    .git/worktrees/ rather than let RemoveAll delete an arbitrary directory.
+	//  - g.repoPath may itself be a linked worktree (its .git is a redirect *file*, not a
+	//    directory) if a caller reached here without first resolving to the main repo path.
+	//    Joining ".git"/"worktrees"/... onto a file produces a hard "not a directory" error
+	//    from RemoveAll where the old ref-API call would have just not found anything to
+	//    remove — skip the cleanup instead of failing Setup() over stale admin metadata that
+	//    isn't even reachable from this repoPath.
+	worktreesRoot := filepath.Join(g.repoPath, ".git", "worktrees")
+	if fi, err := os.Stat(filepath.Join(g.repoPath, ".git")); err != nil || !fi.IsDir() {
+		// .git missing or a redirect file (linked worktree) — nothing safely cleanable here.
+	} else {
+		worktreeAdminDir := filepath.Join(worktreesRoot, g.branchName)
+		if rel, err := filepath.Rel(worktreesRoot, worktreeAdminDir); err != nil || rel == "." || strings.HasPrefix(rel, "..") {
+			return fmt.Errorf("refusing to remove worktree reference for %s: resolves outside %s", g.branchName, worktreesRoot)
+		} else if err := os.RemoveAll(worktreeAdminDir); err != nil {
+			return fmt.Errorf("failed to remove worktree reference for %s: %w", g.branchName, err)
+		}
 	}
 
 	// Clean up configuration entries
