@@ -2,6 +2,8 @@ package git
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 
 	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
@@ -16,12 +18,16 @@ func (g *GitWorktree) cleanupExistingBranch(repo *git.Repository) error {
 		return fmt.Errorf("failed to remove branch reference %s: %w", g.branchName, err)
 	}
 
-	// Remove any worktree-specific references
-	worktreeRef := plumbing.NewReferenceFromStrings(
-		fmt.Sprintf("worktrees/%s/HEAD", g.branchName),
-		"",
-	)
-	if err := repo.Storer.RemoveReference(worktreeRef.Name()); err != nil && err != plumbing.ErrReferenceNotFound {
+	// Remove any stale linked-worktree admin metadata left under .git/worktrees/<branch>/
+	// (e.g. a HEAD file from a worktree removal that didn't fully clean up). This is a
+	// real filesystem path, not a git ref — go-git's Storer.RemoveReference used to accept
+	// "worktrees/<branch>/HEAD" as a loose-file path and quietly write/remove it there, but
+	// go-git v5.19+ validates ref names against refs/ and a fixed pseudo-ref allowlist and
+	// now rejects it ("reference name escapes the reference storage"). Removing the
+	// directory directly is both more explicit and no longer dependent on that undocumented
+	// go-git behavior.
+	worktreeAdminDir := filepath.Join(g.repoPath, ".git", "worktrees", g.branchName)
+	if err := os.RemoveAll(worktreeAdminDir); err != nil {
 		return fmt.Errorf("failed to remove worktree reference for %s: %w", g.branchName, err)
 	}
 
