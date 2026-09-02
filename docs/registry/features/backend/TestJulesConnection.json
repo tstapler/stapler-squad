@@ -1,0 +1,11 @@
+{
+  "id": "TestJulesConnection",
+  "type": "backend",
+  "service": "SessionService",
+  "method": "TestJulesConnection",
+  "protoFile": "proto/session/v1/session.proto",
+  "markerFound": false,
+  "tested": false,
+  "testIds": [],
+  "lastModified": "2026-09-01T17:03:29.449110726-07:00"
+}
