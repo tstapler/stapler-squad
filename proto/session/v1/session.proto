@@ -287,6 +287,32 @@ service SessionService {
   // whether the send succeeded, synchronously.
   rpc TestSlackWebhook(TestSlackWebhookRequest) returns (TestSlackWebhookResponse) {}
 
+  // Jules Config RPCs (google-jules-integration Epic 2.4)
+
+  // GetJulesConfig returns the current Jules dispatch-and-poll configuration.
+  // The API key itself (stored in the OS keychain, never config.json) is
+  // never returned — only has_api_key. auth_reconnect_required is read live
+  // from the running JulesSessionPoller, not persisted config.
+  rpc GetJulesConfig(GetJulesConfigRequest) returns (GetJulesConfigResponse) {}
+
+  // UpdateJulesConfig updates the Jules configuration. An empty api_key means
+  // "leave unchanged"; the sentinel "__clear__" deletes the stored key. The
+  // key is always routed to the OS keychain, never to config.json.
+  rpc UpdateJulesConfig(UpdateJulesConfigRequest) returns (UpdateJulesConfigResponse) {}
+
+  // TestJulesConnection checks whether repo_path's GitHub remote is
+  // registered as a Jules source, using the currently-configured API key.
+  // ok:false names the concrete prerequisite (e.g. "connect it at
+  // jules.google.com") rather than a generic failure.
+  rpc TestJulesConnection(TestJulesConnectionRequest) returns (TestJulesConnectionResponse) {}
+
+  // ConfirmEgressConsent is the ONLY RPC that may append to
+  // JulesConfig.EgressAcknowledgedRepos — called exclusively by
+  // JulesDispatchDialog's checkbox-confirm handler, so "this repo's code may
+  // leave my machine for Google's cloud VM" is always a deliberate,
+  // UI-originated action, never a side effect of DispatchToJules.
+  rpc ConfirmEgressConsent(ConfirmEgressConsentRequest) returns (ConfirmEgressConsentResponse) {}
+
   // UpsertProfile creates or updates a named profile.
   rpc UpsertProfile(UpsertProfileRequest) returns (UpsertProfileResponse) {}
 
@@ -2125,6 +2151,66 @@ message TestSlackWebhookResponse {
   // error is Slack's actual response text where available (e.g.
   // "slack returned 404: no_service"), not a generic failure message.
   string error = 2;
+}
+
+// Jules Config (google-jules-integration Epic 2.4)
+//
+// JulesConfigProto never carries the API key itself — has_api_key reports
+// presence only. Usage counters (JulesUsageCounter, Epic 4.1) are not yet
+// implemented in this codebase, so no counter fields exist here yet; they
+// will be added to this message once Epic 4.1 lands.
+
+message JulesConfigProto {
+  bool enabled = 1;
+  bool has_api_key = 2;
+  repeated string egress_acknowledged_repos = 3;
+  int32 max_concurrent_jules_sessions = 4;
+  int32 max_jules_sessions_per_day = 5;
+  // auth_reconnect_required reflects JulesSessionPoller.AuthReconnectRequired()
+  // at response-build time — process/runtime state, never persisted to
+  // config.json. Always false when the poller isn't running (feature
+  // disabled, or not yet started).
+  bool auth_reconnect_required = 6;
+}
+
+message GetJulesConfigRequest {}
+
+message GetJulesConfigResponse {
+  JulesConfigProto config = 1;
+}
+
+message UpdateJulesConfigRequest {
+  // Empty string means "leave the stored API key unchanged". The sentinel
+  // value "__clear__" deletes it from the OS keychain. Any other non-empty
+  // value replaces the stored key. Never written to config.json.
+  string api_key = 1;
+  bool enabled = 2;
+  int32 max_concurrent_jules_sessions = 3;
+  int32 max_jules_sessions_per_day = 4;
+}
+
+message UpdateJulesConfigResponse {
+  JulesConfigProto config = 1;
+}
+
+message TestJulesConnectionRequest {
+  string repo_path = 1;
+}
+
+message TestJulesConnectionResponse {
+  bool ok = 1;
+  // message names the concrete prerequisite on failure (e.g. which
+  // owner/repo needs to be connected at jules.google.com), not a generic
+  // error string.
+  string message = 2;
+}
+
+message ConfirmEgressConsentRequest {
+  string repo_path = 1;
+}
+
+message ConfirmEgressConsentResponse {
+  repeated string egress_acknowledged_repos = 1;
 }
 
 // Callback Config (webhook-triggers Phase 5, FR7)

@@ -12,6 +12,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/config"
 	githubpkg "github.com/tstapler/stapler-squad/github"
+	"github.com/tstapler/stapler-squad/jules"
 	"github.com/tstapler/stapler-squad/log"
 	warren "github.com/tstapler/stapler-squad/pkg/warren"
 	"github.com/tstapler/stapler-squad/server/analytics"
@@ -66,6 +67,11 @@ type ServerDependencies struct {
 	UnfinishedStateStore  *unfinished.StateStore
 	UnfinishedWorkService *services.UnfinishedWorkService
 	WorktreePRPoller      *session.WorktreePRPoller
+
+	// JulesSessionPoller polls open Jules sessions (google-jules-integration
+	// Epic 2.3/2.4). Nil unless config.Config.Jules.Enabled and the API key
+	// resolves at startup — see BuildRuntimeDeps' jules wiring block.
+	JulesSessionPoller *session.JulesSessionPoller
 
 	// GitHub user PR cache and service. Nil when no GitHub token is available.
 	UserPRCache       *githubpkg.UserPRCache
@@ -156,6 +162,7 @@ func (rt *RuntimeDeps) ToServerDeps() *ServerDependencies {
 		UnfinishedStateStore:     rt.UnfinishedStateStore,
 		UnfinishedWorkService:    rt.UnfinishedWorkService,
 		WorktreePRPoller:         rt.WorktreePRPoller,
+		JulesSessionPoller:       rt.JulesSessionPoller,
 		UserPRCache:              rt.UserPRCache,
 		GitHubUserService:        rt.GitHubUserService,
 		InsightsService:          rt.InsightsService,
@@ -439,6 +446,10 @@ type RuntimeDeps struct {
 	UnfinishedStateStore  *unfinished.StateStore
 	UnfinishedWorkService *services.UnfinishedWorkService
 	WorktreePRPoller      *session.WorktreePRPoller
+
+	// JulesSessionPoller (see the identically-named field on ServerDependencies
+	// for its full doc comment).
+	JulesSessionPoller *session.JulesSessionPoller
 
 	// GitHub user PR cache and service.
 	UserPRCache       *githubpkg.UserPRCache
@@ -1486,6 +1497,43 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		log.Warn("WorkflowScheduler disabled: no workflow repository available")
 	}
 
+	// Jules dispatch-and-poll integration (google-jules-integration Epic 2.4.4).
+	// julesKeys (the OS-keychain token source) is always constructed — cheap,
+	// no network I/O — so GetJulesConfig/UpdateJulesConfig work even before
+	// the feature is enabled (a user sets the key first, then flips Enabled).
+	// The client/source-registry/dispatch-service/poller quartet is only
+	// built once Enabled is true AND the key actually resolves at startup;
+	// any other outcome (disabled, or an unreadable keychain) degrades the
+	// feature, not the server — logged once at Info, everything else
+	// unaffected.
+	julesKeys := jules.NewKeyringTokenSource()
+	var julesSourceRegistry *jules.JulesSourceRegistry
+	var julesPoller *session.JulesSessionPoller
+	switch {
+	case !cfg.Jules.Enabled:
+		log.Info("jules disabled", "reason", "feature not enabled")
+	default:
+		if _, keyErr := julesKeys.APIKey(context.Background()); keyErr != nil {
+			log.Info("jules disabled", "reason", "api key not resolvable", "err", keyErr)
+		} else {
+			julesClient := jules.NewClient(julesKeys)
+			julesSourceRegistry = jules.NewJulesSourceRegistry(julesClient)
+			julesDispatchSvc := services.NewJulesDispatchService(storage, backlogSvc, julesClient, julesSourceRegistry, cfg)
+			backlogSvc.SetJulesDispatcher(julesDispatchSvc)
+			julesPoller = session.NewJulesSessionPoller(julesClient, storage, session.DefaultJulesSessionPollerConfig())
+		}
+	}
+	// Passed as separate nil literals (not the possibly-nil *jules.JulesSourceRegistry/
+	// *session.JulesSessionPoller pointers directly) when unconfigured, to avoid handing
+	// SetJulesConfigDependencies a non-nil interface wrapping a nil pointer — its own
+	// nil checks (julesConfigToProto, TestJulesConnection) compare the interface itself
+	// to nil, which a typed-nil pointer would defeat.
+	if julesSourceRegistry != nil {
+		sessionService.SetJulesConfigDependencies(julesKeys, julesSourceRegistry, julesPoller)
+	} else {
+		sessionService.SetJulesConfigDependencies(julesKeys, nil, nil)
+	}
+
 	// 30 min reaper: kill any tmux sessions still running for paused instances.
 	// Safety net for sessions paused before the kill-on-pause change, or where the
 	// initial kill attempt fell back to detach.
@@ -1515,6 +1563,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		UnfinishedStateStore:     unfinishedStateStore,
 		UnfinishedWorkService:    unfinishedWorkSvc,
 		WorktreePRPoller:         worktreePRPoller,
+		JulesSessionPoller:       julesPoller,
 		UserPRCache:              userPRCache,
 		GitHubUserService:        githubUserSvc,
 		InsightsService:          insightsSvc,

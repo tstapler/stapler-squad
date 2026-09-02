@@ -234,6 +234,15 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		log.Info("WorktreePRPoller started")
 	}
 
+	// Start JulesSessionPoller: nil unless config.Config.Jules.Enabled and the
+	// API key resolved at startup (server/dependencies.go's jules wiring
+	// block) — never started, and no "jules poll tick" line ever logged,
+	// when the feature is off.
+	if deps.JulesSessionPoller != nil {
+		deps.JulesSessionPoller.Start(serverCtx)
+		log.Info("JulesSessionPoller started")
+	}
+
 	// Register shutdown hook: capture pane working dirs and persist instance
 	// state so cold restore can find the right directory on next start.
 	// Uses HistoryLinker.Instances() (not the startup snapshot) so externally

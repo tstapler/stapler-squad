@@ -1,8 +1,10 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/http"
 	"strings"
@@ -10,9 +12,30 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"github.com/zalando/go-keyring"
+
+	"github.com/tstapler/stapler-squad/config"
+	"github.com/tstapler/stapler-squad/jules"
 	"github.com/tstapler/stapler-squad/session/tmux"
 	"go.uber.org/goleak"
 )
+
+// captureDefaultLog swaps slog's default handler for one that writes to a
+// buffer, restoring the original on test cleanup. Mirrors
+// log/package_level_external_test.go's TestInfo_AttributesToCallerNotLogPackage
+// setup — the only existing precedent in this codebase for asserting on
+// log.Info/Debug output.
+func captureDefaultLog(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	var buf bytes.Buffer
+	handler := slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})
+	origDefault := slog.Default()
+	slog.SetDefault(slog.New(handler))
+	t.Cleanup(func() { slog.SetDefault(origDefault) })
+	return &buf
+}
 
 // newTestServer builds a minimal Server (bypassing BuildDependencies),
 // suitable for exercising Start()'s listener behavior in isolation from the
@@ -553,4 +576,57 @@ func Test_runGoleakTolerant_should_RepanicUnrelatedPanics(t *testing.T) {
 	}()
 
 	runGoleakTolerant(t, func() { panic(unrelatedPanicMsg) })
+}
+
+// TestServer_should_LeaveJulesSessionPollerNil_When_JulesConfigDisabled covers
+// google-jules-integration Story 2.4.4: with Jules disabled (the zero-value
+// default), the server must start with deps.JulesSessionPoller nil and must
+// never log a "jules poll tick" line (which only the poller's own tick()
+// loop, never started, could produce).
+func TestServer_should_LeaveJulesSessionPollerNil_When_JulesConfigDisabled(t *testing.T) {
+	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	buf := captureDefaultLog(t)
+
+	deps, err := BuildDependencies()
+	require.NoError(t, err)
+
+	srv := NewServerWithDeps("localhost:0", deps)
+	t.Cleanup(func() {
+		if err := srv.Shutdown(); err != nil {
+			t.Logf("srv.Shutdown: %v", err)
+		}
+	})
+
+	assert.Nil(t, deps.JulesSessionPoller)
+	assert.NotContains(t, buf.String(), "jules poll tick")
+}
+
+// TestServer_should_LogJulesSessionPollerStarted_When_JulesEnabledAndKeyResolvable
+// covers Story 2.4.4: with Jules enabled and a resolvable API key at
+// startup, "JulesSessionPoller started" must be logged beside the existing
+// "WorktreePRPoller started" line (server.go's wireDepsIntoServer).
+func TestServer_should_LogJulesSessionPollerStarted_When_JulesEnabledAndKeyResolvable(t *testing.T) {
+	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	keyring.MockInit()
+	require.NoError(t, jules.NewKeyringTokenSource().SetJulesAPIKey(context.Background(), "AIzaSyD-TEST"))
+
+	cfg := config.LoadConfig()
+	cfg.Jules.Enabled = true
+	require.NoError(t, config.SaveConfig(cfg))
+
+	buf := captureDefaultLog(t)
+
+	deps, err := BuildDependencies()
+	require.NoError(t, err)
+
+	srv := NewServerWithDeps("localhost:0", deps)
+	t.Cleanup(func() {
+		if err := srv.Shutdown(); err != nil {
+			t.Logf("srv.Shutdown: %v", err)
+		}
+	})
+
+	require.NotNil(t, deps.JulesSessionPoller)
+	assert.Contains(t, buf.String(), "JulesSessionPoller started")
+	assert.Contains(t, buf.String(), "WorktreePRPoller started")
 }
