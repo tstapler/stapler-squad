@@ -48,6 +48,14 @@ const (
 // it is distinguishable in code, not by a second sentinel.
 var ErrJulesDispatchInFlight = errors.New("jules: dispatch already in flight for this item")
 
+// ErrJulesEgressNotAcknowledged indicates checkEgressConsent rejected a
+// dispatch because the item's repo isn't in cfg.Jules.EgressAcknowledgedRepos
+// yet. classifyJulesDispatchError (backlog_service_jules.go) matches this via
+// errors.Is rather than substring-matching the wrapped message, so the
+// message text below is free to change without silently reclassifying the
+// error as CodeInternal.
+var ErrJulesEgressNotAcknowledged = errors.New("egress consent not acknowledged for this repository")
+
 // errJulesConcurrencyCapReached / errJulesDailyCapReached let DispatchToJules
 // classify a checkSpendGuards failure into the right "jules dispatch
 // rejected" reason (concurrency_cap vs daily_cap) without checkSpendGuards
@@ -365,8 +373,8 @@ func (s *JulesDispatchService) checkEgressConsent(item *session.BacklogItemData)
 		display = ref.String()
 	}
 	return fmt.Errorf(
-		"the contents of %s have not been acknowledged for Jules dispatch — dispatching would send its contents to Google's cloud VM to run this session; confirm this in the Jules dispatch dialog before continuing",
-		display,
+		"the contents of %s have not been acknowledged for Jules dispatch — dispatching would send its contents to Google's cloud VM to run this session; confirm this in the Jules dispatch dialog before continuing: %w",
+		display, ErrJulesEgressNotAcknowledged,
 	)
 }
 

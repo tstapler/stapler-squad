@@ -436,6 +436,8 @@ func TestJulesDispatchService_DispatchToJules_should_RejectNamingRepo_When_Egres
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "tstapler/stapler-squad")
 	assert.Contains(t, err.Error(), "Google's cloud VM")
+	assert.ErrorIs(t, err, ErrJulesEgressNotAcknowledged,
+		"classifyJulesDispatchError (backlog_service_jules.go) keys off this sentinel, not the message text")
 	assert.Equal(t, 0, client.callCount())
 }
 

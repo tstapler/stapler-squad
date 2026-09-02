@@ -13,7 +13,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 
 	connect "connectrpc.com/connect"
 
@@ -38,16 +37,6 @@ func (s *BacklogService) SetJulesDispatcher(d JulesDispatcher) {
 // dispatcher itself reports ErrJulesNotConfigured — the two are
 // indistinguishable to a caller and should read the same way.
 const julesUnconfiguredMessage = "jules dispatch is not enabled — configure it in Settings → Jules"
-
-// julesEgressNotAcknowledgedSubstring is the fixed tail of
-// JulesDispatchService.checkEgressConsent's not-acknowledged error message
-// (jules_dispatch_service.go). Matched here, rather than duplicating a
-// sentinel error, to distinguish "repo not yet confirmed for cloud egress"
-// (FailedPrecondition, directs the user to the dispatch dialog) from a
-// genuine internal failure (Internal) without modifying that guard's
-// internals. Keep this string in sync with checkEgressConsent's message if
-// it ever changes.
-const julesEgressNotAcknowledgedSubstring = "confirm this in the Jules dispatch dialog"
 
 // DispatchToJules dispatches a ready backlog item to Google Jules — the one
 // guarded entry point the web UI (and later an MCP tool) uses. See
@@ -135,7 +124,7 @@ func classifyJulesDispatchError(err error) error {
 		return connect.NewError(connect.CodeFailedPrecondition, err)
 	case errors.Is(err, jules.ErrJulesRateLimited), errors.Is(err, jules.ErrJulesTransient):
 		return connect.NewError(connect.CodeUnavailable, err)
-	case strings.Contains(err.Error(), julesEgressNotAcknowledgedSubstring):
+	case errors.Is(err, ErrJulesEgressNotAcknowledged):
 		return connect.NewError(connect.CodeFailedPrecondition, err)
 	default:
 		return connect.NewError(connect.CodeInternal, err)
