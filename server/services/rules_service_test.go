@@ -182,7 +182,7 @@ func TestBuildPromptContext_IncludesRulesAndGaps(t *testing.T) {
 	}
 	// Wait for the async write to complete by polling LoadWindow until all 3 entries appear.
 	require.Eventually(t, func() bool {
-		entries, err := analyticsStore.LoadWindow(context.Background(), time.Now().Add(-1 * time.Hour))
+		entries, err := analyticsStore.LoadWindow(context.Background(), time.Now().Add(-1*time.Hour))
 		return err == nil && len(entries) >= 3
 	}, 2*time.Second, 10*time.Millisecond, "analytics entries must be persisted within 2s")
 
