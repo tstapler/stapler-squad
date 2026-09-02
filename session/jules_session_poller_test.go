@@ -5,6 +5,10 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"os"
+	"path/filepath"
+	"regexp"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -522,21 +526,63 @@ func TestApplyJulesState_should_LogUnknownStateAtError_When_StateIsUnrecognized(
 // produces a non-default effect. A future state added to jules/types.go without a row
 // added here will not fail to compile, but will fail this test's "seven known states"
 // count sentinel — a deliberate trip wire for whoever adds the new constant.
+// julesStateConstPattern matches one `JulesState<Name> JulesSessionState =
+// "..."` line inside jules/types.go's const block, capturing <Name> — used
+// to enumerate the type's actually-declared constants from source, since
+// JulesSessionState is a plain string type with no runtime reflection over
+// its const set (see its doc comment in jules/types.go).
+var julesStateConstPattern = regexp.MustCompile(`^\s*(JulesState\w+)\s+JulesSessionState\s*=`)
+
+// declaredJulesStateConstantNames reads jules/types.go directly (resolved
+// relative to this test file via runtime.Caller, so it works regardless of
+// `go test`'s working directory) and returns every `JulesState*` constant
+// name declared there. This is what makes
+// TestApplyJulesState_should_HandleEveryDeclaredState_When_StatesEnumerated
+// actually fail when a new state is added without a corresponding table
+// row, rather than relying on a human remembering to update a hardcoded
+// count.
+func declaredJulesStateConstantNames(t *testing.T) []string {
+	t.Helper()
+
+	_, thisFile, _, ok := runtime.Caller(0)
+	require.True(t, ok, "runtime.Caller(0) must resolve this test file's path")
+	typesPath := filepath.Join(filepath.Dir(thisFile), "..", "jules", "types.go")
+
+	src, err := os.ReadFile(typesPath)
+	require.NoError(t, err, "read %s", typesPath)
+
+	var names []string
+	for _, line := range strings.Split(string(src), "\n") {
+		if m := julesStateConstPattern.FindStringSubmatch(line); m != nil {
+			names = append(names, m[1])
+		}
+	}
+	require.NotEmpty(t, names, "found zero JulesState* constants in %s -- regex or file path is wrong", typesPath)
+	return names
+}
+
 func TestApplyJulesState_should_HandleEveryDeclaredState_When_StatesEnumerated(t *testing.T) {
 	t.Parallel()
 
-	allStates := []jules.JulesSessionState{
-		jules.JulesStateQueued,
-		jules.JulesStatePlanning,
-		jules.JulesStateAwaitingPlanApproval,
-		jules.JulesStateInProgress,
-		jules.JulesStateCompleted,
-		jules.JulesStateFailed,
-		jules.JulesStateUnknown,
+	namedStates := map[string]jules.JulesSessionState{
+		"JulesStateQueued":               jules.JulesStateQueued,
+		"JulesStatePlanning":             jules.JulesStatePlanning,
+		"JulesStateAwaitingPlanApproval": jules.JulesStateAwaitingPlanApproval,
+		"JulesStateInProgress":           jules.JulesStateInProgress,
+		"JulesStateCompleted":            jules.JulesStateCompleted,
+		"JulesStateFailed":               jules.JulesStateFailed,
+		"JulesStateUnknown":              jules.JulesStateUnknown,
 	}
-	require.Len(t, allStates, 7, "this table must be updated whenever jules.JulesSessionState gains a new constant")
 
-	for i, state := range allStates {
+	for _, name := range declaredJulesStateConstantNames(t) {
+		if _, ok := namedStates[name]; !ok {
+			t.Errorf("jules.%s is declared in jules/types.go but has no row in this test's namedStates table -- add one so its applyJulesState handling is exercised here", name)
+		}
+	}
+
+	i := 0
+	for _, state := range namedStates {
+		i++
 		state := state
 		t.Run(state.String(), func(t *testing.T) {
 			client := newFakeJulesStatusClient()
