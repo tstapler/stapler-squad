@@ -63,6 +63,19 @@ type julesStatusClient interface {
 // the whole time its session is open — Story 2.1.3 — so applyJulesState must
 // transition in_progress -> review itself before recording a PR, mirroring
 // what request_review does for a local agent session).
+// julesUsageRecorder is the narrow slice of *services.JulesUsageCounter
+// JulesSessionPoller needs (Task 4.1.1a) — declared locally, not imported,
+// since session cannot import server/services (import-direction constraint,
+// see julesSessionUUIDPrefix's doc comment above). *services.JulesUsageCounter
+// satisfies this structurally; server/dependencies.go passes it in via
+// SetUsageCounter after constructing both.
+type julesUsageRecorder interface {
+	IncSessionCompleted()
+	IncSessionFailed()
+	IncAPIRateLimited()
+	IncAPIError()
+}
+
 type julesPollerStorage interface {
 	ListOpenJulesItemSessions(ctx context.Context) ([]ItemSessionBacklogEntry, error)
 	GetItemSessionBySessionUUID(ctx context.Context, sessionUUID string) (ItemSessionSummary, error)
@@ -107,6 +120,14 @@ type JulesSessionPoller struct {
 	client  julesStatusClient
 	storage julesPollerStorage
 	config  JulesSessionPollerConfig
+
+	// usage (julesUsageRecorder, Task 4.1.1a) is nil until SetUsageCounter is
+	// called — server/dependencies.go wires the process-wide
+	// *services.JulesUsageCounter after constructing both. Every Inc call
+	// site below is nil-guarded via incSessionCompleted/incSessionFailed/
+	// incAPIRateLimited/incAPIError, so no existing test that never calls
+	// SetUsageCounter needs updating.
+	usage julesUsageRecorder
 
 	// nowFn is overridable in tests to drive the age-based sweeps
 	// (Story 2.3.3b) without sleeping.
@@ -154,6 +175,39 @@ func (p *JulesSessionPoller) now() time.Time {
 		return p.nowFn()
 	}
 	return time.Now()
+}
+
+// SetUsageCounter wires the process-wide *services.JulesUsageCounter
+// dependency post-construction (Task 4.1.1a) — needed because
+// server/dependencies.go constructs the counter alongside, not before, this
+// poller. nil (the zero value) is safe: every increment call site is
+// nil-guarded via the incXxx helpers below.
+func (p *JulesSessionPoller) SetUsageCounter(usage julesUsageRecorder) {
+	p.usage = usage
+}
+
+func (p *JulesSessionPoller) incSessionCompleted() {
+	if p.usage != nil {
+		p.usage.IncSessionCompleted()
+	}
+}
+
+func (p *JulesSessionPoller) incSessionFailed() {
+	if p.usage != nil {
+		p.usage.IncSessionFailed()
+	}
+}
+
+func (p *JulesSessionPoller) incAPIRateLimited() {
+	if p.usage != nil {
+		p.usage.IncAPIRateLimited()
+	}
+}
+
+func (p *JulesSessionPoller) incAPIError() {
+	if p.usage != nil {
+		p.usage.IncAPIError()
+	}
 }
 
 // AuthReconnectRequired reports whether the most recent poll observed a
@@ -291,17 +345,23 @@ func (p *JulesSessionPoller) processEntry(ctx context.Context, entry ItemSession
 // or the generic transient/logged-and-swallowed path.
 func (p *JulesSessionPoller) handleGetSessionError(ctx context.Context, entry ItemSessionBacklogEntry, row ItemSessionSummary, err error) {
 	switch {
+	case errors.Is(err, jules.ErrJulesRateLimited):
+		p.incAPIRateLimited()
+		log.Warn("jules poll failed", "jules_session", entry.SessionUUID, "error", err)
 	case errors.Is(err, jules.ErrJulesNotConfigured):
 		// Account-wide: the key itself is invalid, not this session
 		// specifically. Do not end the session, transition the item, or
 		// touch progress — a stale key is not evidence the task failed.
+		p.incAPIError()
 		p.authReconnectRequired.Store(true)
 		p.appendAuthBlockedNoteOnce(ctx, entry.ItemID)
 		log.Warn("jules session auth invalid", "jules_session", entry.SessionUUID, "item_id", entry.ItemID)
 	case errors.Is(err, jules.ErrJulesSessionNotFound):
+		p.incAPIError()
 		p.failJulesSession(ctx, entry, row.ID, "jules_session_missing",
 			"Jules no longer reports this session — it may have expired or been removed on Jules' side. Check jules.google.com, then retry from here if the work still needs doing.")
 	default:
+		p.incAPIError()
 		log.Warn("jules poll failed", "jules_session", entry.SessionUUID, "error", err)
 	}
 }
@@ -354,6 +414,7 @@ func (p *JulesSessionPoller) appendAuthBlockedNoteOnce(ctx context.Context, item
 // prevent the others from running, mirroring AppendProgressNote's own
 // best-effort discipline elsewhere in this package.
 func (p *JulesSessionPoller) failJulesSession(ctx context.Context, entry ItemSessionBacklogEntry, sessionID, reason, note string) {
+	p.incSessionFailed()
 	now := p.now()
 	if err := p.storage.UpdateItemSessionEndedWithReason(ctx, sessionID, now, reason); err != nil {
 		log.Warn("jules poll failed", "jules_session", entry.SessionUUID, "error", err)
@@ -432,6 +493,7 @@ func (p *JulesSessionPoller) noteStateChangeIfNeeded(ctx context.Context, entry 
 // 2.1.3 — is first moved in_progress -> review here, mirroring what
 // request_review does for a local agent session, before either branch runs.
 func (p *JulesSessionPoller) applyCompletedState(ctx context.Context, entry ItemSessionBacklogEntry, row ItemSessionSummary, s *jules.JulesSession) error {
+	p.incSessionCompleted()
 	prURL := completedSessionPRURL(s)
 	now := p.now()
 

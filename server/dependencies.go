@@ -1506,6 +1506,12 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	// any other outcome (disabled, or an unreadable keychain) degrades the
 	// feature, not the server — logged once at Info, everything else
 	// unaffected.
+	// julesUsage (JulesUsageCounter, Task 4.1.1a) is constructed unconditionally
+	// — cheap, no I/O — so GetJulesConfig always has a live (all-zero until
+	// something happens) usage snapshot to report, matching julesKeys above.
+	julesUsage := services.NewJulesUsageCounter()
+	sessionService.SetJulesUsageCounter(julesUsage)
+
 	julesKeys := jules.NewKeyringTokenSource()
 	var julesSourceRegistry *jules.JulesSourceRegistry
 	var julesPoller *session.JulesSessionPoller
@@ -1519,8 +1525,10 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 			julesClient := jules.NewClient(julesKeys)
 			julesSourceRegistry = jules.NewJulesSourceRegistry(julesClient)
 			julesDispatchSvc := services.NewJulesDispatchService(storage, backlogSvc, julesClient, julesSourceRegistry, cfg)
+			julesDispatchSvc.SetUsageCounter(julesUsage)
 			backlogSvc.SetJulesDispatcher(julesDispatchSvc)
 			julesPoller = session.NewJulesSessionPoller(julesClient, storage, session.DefaultJulesSessionPollerConfig())
+			julesPoller.SetUsageCounter(julesUsage)
 		}
 	}
 	// Passed as separate nil literals (not the possibly-nil *jules.JulesSourceRegistry/

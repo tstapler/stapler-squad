@@ -1699,6 +1699,15 @@ func (s *SessionService) SetJulesConfigDependencies(keys julesKeyManager, source
 	s.julesConfigSvc = NewJulesConfigService(keys, sources, poller)
 }
 
+// SetJulesUsageCounter wires the process-wide *JulesUsageCounter (Task
+// 4.1.1a) onto julesConfigSvc so GetJulesConfig's response carries a live
+// usage snapshot. Constructed unconditionally in server/dependencies.go
+// (cheap, no I/O) regardless of whether Jules itself is enabled, so this
+// should be called once at startup alongside SetJulesConfigDependencies.
+func (s *SessionService) SetJulesUsageCounter(usage julesUsageSnapshotter) {
+	s.julesConfigSvc.SetUsageCounter(usage)
+}
+
 // SetFeatureController wires a runtime controller for the named feature flag.
 // Delegates to FeatureFlagService which owns the controller registry.
 func (s *SessionService) SetFeatureController(name string, c FeatureController) {

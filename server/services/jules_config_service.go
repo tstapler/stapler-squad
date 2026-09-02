@@ -54,6 +54,15 @@ type julesAuthReconnectReporter interface {
 	AuthReconnectRequired() bool
 }
 
+// julesUsageSnapshotter is the narrow slice of *JulesUsageCounter
+// GetJulesConfig needs (Task 4.1.1a) — declared locally so a nil dependency
+// (feature off / counter not wired) is trivially representable and a test
+// can fake it without a real JulesUsageCounter. *JulesUsageCounter satisfies
+// this structurally.
+type julesUsageSnapshotter interface {
+	Snapshot() JulesUsageSnapshot
+}
+
 // JulesConfigService handles the GetJulesConfig/UpdateJulesConfig/
 // TestJulesConnection/ConfirmEgressConsent RPCs. keys and sources are
 // swapped by SetJulesDependencies once real Jules dependencies exist
@@ -68,6 +77,7 @@ type JulesConfigService struct {
 	keys    julesKeyManager
 	sources julesSourceResolver
 	poller  julesAuthReconnectReporter
+	usage   julesUsageSnapshotter
 }
 
 // NewJulesConfigService constructs a JulesConfigService. keys and sources
@@ -85,6 +95,15 @@ func NewJulesConfigService(keys julesKeyManager, sources julesSourceResolver, po
 // valid value (feature off).
 func (s *JulesConfigService) SetPoller(poller julesAuthReconnectReporter) {
 	s.poller = poller
+}
+
+// SetUsageCounter rewires the live *JulesUsageCounter dependency
+// post-construction (Task 4.1.1a), for the same reason SetPoller exists:
+// server/dependencies.go constructs the counter after JulesConfigService in
+// the dependency graph. nil is a valid value (feature off / not yet wired),
+// in which case GetJulesConfig's usage field reports all zeros.
+func (s *JulesConfigService) SetUsageCounter(usage julesUsageSnapshotter) {
+	s.usage = usage
 }
 
 // GetJulesConfig returns the current Jules configuration. The API key is
@@ -242,6 +261,11 @@ func (s *JulesConfigService) julesConfigToProto(ctx context.Context, cfg *config
 		authReconnectRequired = s.poller.AuthReconnectRequired()
 	}
 
+	var usage JulesUsageSnapshot
+	if s.usage != nil {
+		usage = s.usage.Snapshot()
+	}
+
 	return &sessionv1.JulesConfigProto{
 		Enabled:                    cfg.Jules.Enabled,
 		HasApiKey:                  hasKey,
@@ -249,5 +273,12 @@ func (s *JulesConfigService) julesConfigToProto(ctx context.Context, cfg *config
 		MaxConcurrentJulesSessions: int32(cfg.Jules.MaxConcurrentJulesSessions),
 		MaxJulesSessionsPerDay:     int32(cfg.Jules.MaxJulesSessionsPerDay),
 		AuthReconnectRequired:      authReconnectRequired,
+		Usage: &sessionv1.JulesUsageProto{
+			SessionDispatched: usage.SessionDispatched,
+			SessionCompleted:  usage.SessionCompleted,
+			SessionFailed:     usage.SessionFailed,
+			ApiRateLimited:    usage.APIRateLimited,
+			ApiError:          usage.APIError,
+		},
 	}
 }

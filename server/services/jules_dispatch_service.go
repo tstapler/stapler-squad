@@ -80,6 +80,17 @@ type julesTransitionGuard interface {
 	hasUnresolvedBlockers(ctx context.Context, itemID string) (bool, error)
 }
 
+// julesUsageRecorder is the narrow slice of *JulesUsageCounter
+// JulesDispatchService needs (Task 4.1.1a). Declared locally — same
+// consumer-owned-interface convention as julesSessionCreator above — so a
+// test needs no real JulesUsageCounter, and every existing test call site
+// that never calls SetUsageCounter keeps working with nil, no-op increments.
+type julesUsageRecorder interface {
+	IncSessionDispatched()
+	IncAPIRateLimited()
+	IncAPIError()
+}
+
 // JulesDispatchRequest is the dispatch input: ItemID, Branch, Prompt.
 // Validated once at construction (NewJulesDispatchRequest) — parse, don't
 // validate. Deliberately carries no EgressAcknowledged field (pre-mortem
@@ -121,18 +132,18 @@ type JulesDispatcher interface {
 // -> blocker check) -> reserve ItemSession -> CreateSession -> confirm ->
 // transitionWithGuard to in_progress.
 //
-// counters (JulesUsageCounter, Task 4.1.1a) is not yet wired — that type
-// belongs to Epic 4.1 (Observability), which has not landed as of this
-// service's construction. The Observability Plan's required log lines
-// (jules dispatch requested/rejected, jules session created) are emitted
-// unconditionally below; Epic 4.1 will add the counter increments alongside
-// them once JulesUsageCounter exists.
+// usage (julesUsageRecorder, Task 4.1.1a) is nil until SetUsageCounter is
+// called — server/dependencies.go wires the process-wide *JulesUsageCounter
+// after construction, mirroring SetPoller elsewhere in this package. Every
+// Inc call below is nil-safe, so no existing test that never calls
+// SetUsageCounter needs updating.
 type JulesDispatchService struct {
 	storage         *session.Storage
 	transitionGuard julesTransitionGuard
 	client          julesSessionCreator
 	sources         *jules.JulesSourceRegistry
 	cfg             *config.Config
+	usage           julesUsageRecorder
 
 	// itemLocks holds one *sync.Mutex per item ID, lazily created on first
 	// use — the in-process double-click guard (Task 2.2.1a). A per-item
@@ -163,6 +174,14 @@ func (s *JulesDispatchService) itemMutex(itemID string) *sync.Mutex {
 	return lockVal.(*sync.Mutex)
 }
 
+// SetUsageCounter wires the process-wide *JulesUsageCounter dependency
+// post-construction (Task 4.1.1a) — needed because server/dependencies.go
+// constructs the counter alongside, not before, this service. nil (the
+// zero value) is safe: every increment call site below is nil-guarded.
+func (s *JulesDispatchService) SetUsageCounter(usage julesUsageRecorder) {
+	s.usage = usage
+}
+
 // logDispatchRejected emits the Observability Plan's "jules dispatch
 // rejected" line. reason is one of: not_configured, no_egress_ack,
 // source_not_registered, in_flight, concurrency_cap, daily_cap, no_branch
@@ -170,7 +189,7 @@ func (s *JulesDispatchService) itemMutex(itemID string) *sync.Mutex {
 // unresolved_blockers. Logged at Info, not Error — these are expected
 // user-facing outcomes, not failures.
 func (s *JulesDispatchService) logDispatchRejected(itemID, reason string) {
-	log.InfoLog().Printf("jules dispatch rejected item_id=%s reason=%s", itemID, reason)
+	log.Info("jules dispatch rejected", "item_id", itemID, "reason", reason)
 }
 
 // DispatchToJules implements the reserve -> create -> confirm sequence
@@ -247,7 +266,7 @@ func (s *JulesDispatchService) DispatchToJules(ctx context.Context, item *sessio
 		return "", err
 	}
 
-	log.InfoLog().Printf("jules dispatch requested item_id=%s repo=%s branch=%s source_name=%s", item.ID, ref.String(), req.Branch, sourceName)
+	log.Info("jules dispatch requested", "item_id", item.ID, "repo", ref.String(), "branch", string(req.Branch), "source_name", string(sourceName))
 
 	reservationUUID := julesPendingUUIDPrefix + uuid.New().String()
 	reservation, err := s.storage.CreateItemSession(ctx, session.ItemSessionData{
@@ -266,6 +285,7 @@ func (s *JulesDispatchService) DispatchToJules(ctx context.Context, item *sessio
 	})
 	if createErr != nil {
 		s.endFailedReservation(ctx, reservation.ID, item.ID, createErr)
+		s.recordAPIFailure(createErr)
 		return "", fmt.Errorf("jules: creating session: %w", createErr)
 	}
 
@@ -274,7 +294,7 @@ func (s *JulesDispatchService) DispatchToJules(ctx context.Context, item *sessio
 		return "", fmt.Errorf("jules: recording session name: %w", err)
 	}
 
-	log.InfoLog().Printf("jules session created item_id=%s jules_session=%s item_session_id=%s", item.ID, julesSession.Name, reservation.ID)
+	log.Info("jules session created", "item_id", item.ID, "jules_session", string(julesSession.Name), "item_session_id", reservation.ID)
 
 	precondition := &session.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusReady)}
 	// hasBlockers is guaranteed false here — step 5 already returned early
@@ -284,7 +304,24 @@ func (s *JulesDispatchService) DispatchToJules(ctx context.Context, item *sessio
 		return "", fmt.Errorf("jules: transitioning item %s to in_progress: %w", item.ID, err)
 	}
 
+	if s.usage != nil {
+		s.usage.IncSessionDispatched()
+	}
 	return julesSession.Name, nil
+}
+
+// recordAPIFailure classifies a failed Jules API call (Task 4.1.1a) into
+// jules.api.rate_limited (429) vs jules.api.error (everything else), mirroring
+// the same classification session.JulesSessionPoller applies to poll errors.
+func (s *JulesDispatchService) recordAPIFailure(err error) {
+	if s.usage == nil {
+		return
+	}
+	if errors.Is(err, jules.ErrJulesRateLimited) {
+		s.usage.IncAPIRateLimited()
+		return
+	}
+	s.usage.IncAPIError()
 }
 
 // endFailedReservation ends a reservation row whose CreateSession call

@@ -2156,9 +2156,7 @@ message TestSlackWebhookResponse {
 // Jules Config (google-jules-integration Epic 2.4)
 //
 // JulesConfigProto never carries the API key itself — has_api_key reports
-// presence only. Usage counters (JulesUsageCounter, Epic 4.1) are not yet
-// implemented in this codebase, so no counter fields exist here yet; they
-// will be added to this message once Epic 4.1 lands.
+// presence only. usage (Epic 4.1) is a live JulesUsageCounter snapshot.
 
 message JulesConfigProto {
   bool enabled = 1;
@@ -2171,6 +2169,21 @@ message JulesConfigProto {
   // config.json. Always false when the poller isn't running (feature
   // disabled, or not yet started).
   bool auth_reconnect_required = 6;
+  // usage is a live snapshot of JulesUsageCounter (Epic 4.1) — process/
+  // runtime state, never persisted to config.json. Always all-zero when the
+  // counter dependency isn't wired (feature disabled, or not yet started).
+  JulesUsageProto usage = 7;
+}
+
+// JulesUsageProto mirrors JulesUsageCounter.Snapshot() (server/services/
+// jules_usage_counter.go) — the five counters named in the implementation
+// plan's Observability Plan section.
+message JulesUsageProto {
+  int64 session_dispatched = 1;
+  int64 session_completed = 2;
+  int64 session_failed = 3;
+  int64 api_rate_limited = 4;
+  int64 api_error = 5;
 }
 
 message GetJulesConfigRequest {}

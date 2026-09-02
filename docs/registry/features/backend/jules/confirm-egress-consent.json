@@ -1,0 +1,12 @@
+{
+  "id": "jules:confirm-egress-consent",
+  "type": "backend",
+  "service": "SessionService",
+  "method": "ConfirmEgressConsent",
+  "protoFile": "proto/session/v1/session.proto",
+  "markerFound": true,
+  "handlerFile": "server/services/jules_config_service.go",
+  "tested": false,
+  "testIds": [],
+  "lastModified": "2026-09-01T17:47:25.669912853-07:00"
+}
