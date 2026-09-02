@@ -754,6 +754,57 @@ func TestDiffStatBetween(t *testing.T) {
 	})
 }
 
+// TestDiffContentBetween covers the go-git replacement for
+// session/instance_worktree.go's computeDirDiffStats, which previously shelled
+// out to `git diff baseSHA..HEAD` (see the `prefer-go-git-over-subshells` skill).
+func TestDiffContentBetween(t *testing.T) {
+	t.Parallel()
+
+	t.Run("added and removed line counts match git diff semantics", func(t *testing.T) {
+		t.Parallel()
+		origin := setupTestRepo(t)
+		work := cloneTestRepo(t, origin)
+
+		require.NoError(t, os.WriteFile(filepath.Join(work, "bar.go"), []byte("line1\nline2\nline3\n"), 0o644))
+		runGit(t, work, "add", "bar.go")
+		runGit(t, work, "commit", "-m", "add bar.go")
+		baseSHA := strings.TrimSpace(runGit(t, work, "rev-parse", "HEAD"))
+
+		require.NoError(t, os.WriteFile(filepath.Join(work, "bar.go"), []byte("line1\nreplaced\n"), 0o644))
+		runGit(t, work, "add", "bar.go")
+		runGit(t, work, "commit", "-m", "edit bar.go")
+		headSHA := strings.TrimSpace(runGit(t, work, "rev-parse", "HEAD"))
+
+		stats, err := DiffContentBetween(work, baseSHA, headSHA)
+		require.NoError(t, err)
+		assert.Equal(t, 1, stats.Added)
+		assert.Equal(t, 2, stats.Removed)
+		assert.Contains(t, stats.Content, "bar.go")
+	})
+
+	t.Run("zero diff when base equals head", func(t *testing.T) {
+		t.Parallel()
+		origin := setupTestRepo(t)
+		work := cloneTestRepo(t, origin)
+		sha := strings.TrimSpace(runGit(t, work, "rev-parse", "HEAD"))
+
+		stats, err := DiffContentBetween(work, sha, sha)
+		require.NoError(t, err)
+		assert.True(t, stats.IsEmpty())
+	})
+
+	t.Run("error on invalid SHA", func(t *testing.T) {
+		t.Parallel()
+		origin := setupTestRepo(t)
+		work := cloneTestRepo(t, origin)
+		headSHA := strings.TrimSpace(runGit(t, work, "rev-parse", "HEAD"))
+
+		stats, err := DiffContentBetween(work, "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef", headSHA)
+		require.Error(t, err)
+		assert.Nil(t, stats)
+	})
+}
+
 // TestDiffHashBetween_ShouldReturnSameHash_WhenSameCommitRangeHashedTwice verifies the
 // core property IsFlakyVerdictFlipFlop depends on: hashing the identical base..head
 // range twice must be fully deterministic.

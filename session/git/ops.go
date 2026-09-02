@@ -465,6 +465,34 @@ func DiffStatBetween(ctx context.Context, repoPath, baseSHA, headSHA string) (Ag
 	return AggregateDiffStat{FilesChanged: len(stats), Additions: additions, Deletions: deletions}, nil
 }
 
+// DiffContentBetween returns the unified-diff text and added/removed line
+// counts between baseSHA and headSHA (both resolved as commits, not the
+// working tree — equivalent to `git diff baseSHA..headSHA`), using go-git's
+// typed diff API instead of a safeexec shell-out (the
+// `prefer-go-git-over-subshells` skill). Distinct from GitWorktree.Diff
+// (session/git/diff.go), which diffs the working tree against a single ref
+// (via `git add -N .` + `git diff <sha>`) and has no go-git equivalent —
+// see that function's doc comment for why the shell-out stays there.
+func DiffContentBetween(repoPath, baseSHA, headSHA string) (*DiffStats, error) {
+	if baseSHA == headSHA {
+		return &DiffStats{}, nil
+	}
+	patch, err := diffPatchBetween(repoPath, baseSHA, headSHA)
+	if err != nil {
+		return nil, err
+	}
+	content := patch.String()
+	stats := &DiffStats{Content: content}
+	for _, line := range strings.Split(content, "\n") {
+		if strings.HasPrefix(line, "+") && !strings.HasPrefix(line, "+++") {
+			stats.Added++
+		} else if strings.HasPrefix(line, "-") && !strings.HasPrefix(line, "---") {
+			stats.Removed++
+		}
+	}
+	return stats, nil
+}
+
 // FileStatsBetween returns the per-file diff-stat summary (path, status,
 // additions, deletions) for every file that changed between baseSHA and
 // headSHA in the repo at repoPath, using go-git's typed diff API — no
