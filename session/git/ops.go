@@ -34,14 +34,16 @@ func FetchBranch(repoPath, branchName string) error {
 	return nil
 }
 
-// candidateDefaultBranches are tried, in order, by ResolveDefaultBranchSHA when the
+// CandidateDefaultBranches are tried, in order, by ResolveDefaultBranchSHA when the
 // caller doesn't know the repo's actual default branch name. Mirrors the candidate list
 // session/unfinished's GoGitVCSReader.ResolveDefaultBranch already uses. "main" stays
-// first so the common case costs exactly one fetch.
-var candidateDefaultBranches = []string{"main", "master", "develop", "trunk"} //nolint:gochecknoglobals
+// first so the common case costs exactly one fetch. Exported so other packages needing
+// the same candidate list (session.RecoverBaseCommitSHA, GitWorktree.initBaseCommitSHA)
+// share one definition instead of re-declaring the literal.
+var CandidateDefaultBranches = []string{"main", "master", "develop", "trunk"} //nolint:gochecknoglobals
 
 // ResolveDefaultBranchSHA finds repoPath's real default branch and returns its freshly-
-// fetched origin tip SHA, trying candidateDefaultBranches in order via ResolveOriginBranchSHA
+// fetched origin tip SHA, trying CandidateDefaultBranches in order via ResolveOriginBranchSHA
 // until one exists on origin. Exists because a repo's default branch can be named anything
 // (this repo's own sibling dotfiles project uses "master", not "main") — a caller that
 // hardcodes "main" gets a fetch failure on every single call against such a repo, which used
@@ -51,14 +53,14 @@ var candidateDefaultBranches = []string{"main", "master", "develop", "trunk"} //
 // fetch step itself.
 func ResolveDefaultBranchSHA(repoPath string) (branch, sha string, err error) {
 	var errs []error
-	for _, candidate := range candidateDefaultBranches {
+	for _, candidate := range CandidateDefaultBranches {
 		if candidateSHA, fetchErr := ResolveOriginBranchSHA(repoPath, candidate); fetchErr == nil {
 			return candidate, candidateSHA, nil
 		} else {
 			errs = append(errs, fetchErr)
 		}
 	}
-	return "", "", fmt.Errorf("no candidate default branch (%v) exists on origin: %w", candidateDefaultBranches, errors.Join(errs...))
+	return "", "", fmt.Errorf("no candidate default branch (%v) exists on origin: %w", CandidateDefaultBranches, errors.Join(errs...))
 }
 
 // ResolveOriginBranchSHA fetches mainBranch from origin into repoPath and returns the
@@ -101,18 +103,18 @@ func ResolveLocalBranchSHA(repoPath, branchName string) (string, error) {
 }
 
 // ResolveDefaultLocalBranchSHA is ResolveDefaultBranchSHA's fully-offline counterpart:
-// tries candidateDefaultBranches against repoPath's own local refs (no fetch), for use
+// tries CandidateDefaultBranches against repoPath's own local refs (no fetch), for use
 // when every origin candidate fetch has already failed.
 func ResolveDefaultLocalBranchSHA(repoPath string) (branch, sha string, err error) {
 	var errs []error
-	for _, candidate := range candidateDefaultBranches {
+	for _, candidate := range CandidateDefaultBranches {
 		if candidateSHA, localErr := ResolveLocalBranchSHA(repoPath, candidate); localErr == nil {
 			return candidate, candidateSHA, nil
 		} else {
 			errs = append(errs, localErr)
 		}
 	}
-	return "", "", fmt.Errorf("no candidate default branch (%v) exists locally: %w", candidateDefaultBranches, errors.Join(errs...))
+	return "", "", fmt.Errorf("no candidate default branch (%v) exists locally: %w", CandidateDefaultBranches, errors.Join(errs...))
 }
 
 // IsUnbornRepo reports whether repoPath is a git repository with zero commits (HEAD
@@ -139,7 +141,7 @@ func IsUnbornRepo(repoPath string) bool {
 // opened), or simply wrong for a manually-merged branch.
 //
 // Uses go-git rather than shelling out (repo convention — see
-// .claude/rules/prefer-go-git-over-subshells.md). The origin fetch is best-effort: a
+// the `prefer-go-git-over-subshells` skill). The origin fetch is best-effort: a
 // failure (offline, no such remote, nothing new) does not fail the whole check, since
 // the local-main check alone still answers the "merged directly to main locally" case.
 func IsCommitOnMain(repoPath, mainBranch, sha string) (bool, error) {
@@ -334,7 +336,7 @@ type ShippedCommit struct {
 
 // CommitInfo returns the summary line, author and author timestamp for a single
 // resolved commit hash in the repo at repoPath, read via go-git — no subshell
-// (.claude/rules/prefer-go-git-over-subshells.md).
+// (the `prefer-go-git-over-subshells` skill).
 func CommitInfo(repoPath, sha string) (ShippedCommit, error) {
 	repo, err := git.PlainOpenWithOptions(repoPath, &git.PlainOpenOptions{DetectDotGit: true})
 	if err != nil {
@@ -364,30 +366,48 @@ const listShippedCommitsCap = 100
 // hashes (not branch names): the caller typically has these directly from
 // GitWorktreeData.BaseCommitSHA and the work session's LastCommitSha, which
 // remain valid even after the branch itself has been deleted post-merge.
-func ListShippedCommits(repoPath, baseSHA, headSHA string) ([]ShippedCommit, error) {
+// truncated reports whether the walk hit listShippedCommitsCap before
+// exhausting the range — the caller may want to surface that a longer list
+// exists than what's returned.
+func ListShippedCommits(ctx context.Context, repoPath, baseSHA, headSHA string) (commits []ShippedCommit, truncated bool, err error) {
+	return listShippedCommitsWithCap(ctx, repoPath, baseSHA, headSHA, listShippedCommitsCap)
+}
+
+// listShippedCommitsWithCap is ListShippedCommits' implementation with the
+// cap taken as a parameter rather than read from the package-level
+// listShippedCommitsCap constant, so a test can exercise the truncated==true
+// path against a small fixture (e.g. cap=3) instead of needing a 100+-commit
+// repo.
+func listShippedCommitsWithCap(ctx context.Context, repoPath, baseSHA, headSHA string, maxCommits int) ([]ShippedCommit, bool, error) {
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
 	repo, err := git.PlainOpenWithOptions(repoPath, &git.PlainOpenOptions{DetectDotGit: true})
 	if err != nil {
-		return nil, fmt.Errorf("failed to open git repo at %s: %w", repoPath, err)
+		return nil, false, fmt.Errorf("failed to open git repo at %s: %w", repoPath, err)
 	}
 
 	head, err := repo.CommitObject(plumbing.NewHash(headSHA))
 	if err != nil {
-		return nil, fmt.Errorf("failed to resolve commit %s: %w", headSHA, err)
+		return nil, false, fmt.Errorf("failed to resolve commit %s: %w", headSHA, err)
 	}
 	base, err := repo.CommitObject(plumbing.NewHash(baseSHA))
 	if err != nil {
-		return nil, fmt.Errorf("failed to resolve commit %s: %w", baseSHA, err)
+		return nil, false, fmt.Errorf("failed to resolve commit %s: %w", baseSHA, err)
 	}
 
 	var commits []ShippedCommit
 	seen := map[plumbing.Hash]bool{head.Hash: true}
 	queue := []*object.Commit{head}
-	for len(queue) > 0 && len(commits) < listShippedCommitsCap {
+	for len(queue) > 0 && len(commits) < maxCommits {
+		if err := ctx.Err(); err != nil {
+			return commits, len(commits) >= maxCommits, err
+		}
 		c := queue[0]
 		queue = queue[1:]
 		isAncestor, err := c.IsAncestor(base)
 		if err != nil {
-			return commits, err
+			return commits, len(commits) >= maxCommits, err
 		}
 		if isAncestor {
 			continue
@@ -406,16 +426,49 @@ func ListShippedCommits(repoPath, baseSHA, headSHA string) ([]ShippedCommit, err
 			}
 			return nil
 		}); err != nil {
-			return commits, err
+			return commits, len(commits) >= maxCommits, err
 		}
 	}
-	return commits, nil
+	return commits, len(commits) >= maxCommits, nil
+}
+
+// AggregateDiffStat is the files-changed/additions/deletions summary
+// returned by DiffStatBetween — a DiffShortstat-equivalent for a branch's
+// range vs. its base. Distinct from DiffStats (session/git/diff.go), which
+// holds working-tree diff content, not a committed-range summary.
+type AggregateDiffStat struct {
+	FilesChanged int
+	Additions    int
+	Deletions    int
+}
+
+// DiffStatBetween returns the aggregate files-changed/additions/deletions
+// between baseSHA and headSHA, summing FileStatsBetween's per-file counts.
+// ctx only guards against starting once the caller's deadline has passed —
+// FileStatsBetween's go-git patch computation takes no ctx, so this can't
+// bound a hang mid-computation.
+func DiffStatBetween(ctx context.Context, repoPath, baseSHA, headSHA string) (AggregateDiffStat, error) {
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	if err := ctx.Err(); err != nil {
+		return AggregateDiffStat{}, err
+	}
+	stats, err := FileStatsBetween(repoPath, baseSHA, headSHA)
+	if err != nil {
+		return AggregateDiffStat{}, err
+	}
+	var additions, deletions int
+	for _, s := range stats {
+		additions += s.Additions
+		deletions += s.Deletions
+	}
+	return AggregateDiffStat{FilesChanged: len(stats), Additions: additions, Deletions: deletions}, nil
 }
 
 // FileStatsBetween returns the per-file diff-stat summary (path, status,
 // additions, deletions) for every file that changed between baseSHA and
 // headSHA in the repo at repoPath, using go-git's typed diff API — no
-// safeexec shell-out (.claude/rules/prefer-go-git-over-subshells.md).
+// safeexec shell-out (the `prefer-go-git-over-subshells` skill).
 //
 // Renames are reported as a single entry keyed by the file's new path, not a
 // delete+add pair: go-git's FilePatch.Files() already exposes the from/to

@@ -16,6 +16,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/linkdata/deadlock"
 	"github.com/tstapler/stapler-squad/config"
+	"github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/artifacts"
 	"github.com/tstapler/stapler-squad/session/detection"
@@ -57,6 +58,21 @@ const (
 	// Unlike Stopped, a Crashed session is not auto-recovered by the health checker —
 	// it surfaces to the user/automation for an explicit resume (see ExitReason).
 	Crashed Status = 6
+	// PermanentlyFailed is a terminal state reached when the configurable retry
+	// policy's automated crash/stall recovery (session/retry_state.go) exhausts
+	// MaxAttempts, or a failure reason isn't in RetryOn at all. Unlike Stopped, it
+	// is not auto-revived by reconcileSessions even if tmux is alive — it's a
+	// deliberate terminal state pending human action via "Retry now"
+	// (Instance.RetryNow), not an incidental stop. See ADR-001.
+	PermanentlyFailed Status = 7
+	// Failed is a non-terminal state: the async creation pipeline (Background
+	// Resolution Pipeline, Epic 2.2) failed before the session ever reached
+	// Active. Distinct from Crashed (a previously-Active session whose process
+	// later exited abnormally): Failed→Creating is a legal transition, used by
+	// the retry path (Epic 1.2's TryStartRetry), while Crashed only recovers to
+	// Active. See ADR-001 and SESSION_STATUS_FAILED in
+	// proto/session/v1/types.proto.
+	Failed Status = 8
 
 	// Deprecated: use Active.
 	Running = Active
@@ -83,6 +99,10 @@ func (s Status) String() string {
 		return "Restoring"
 	case Crashed:
 		return "Crashed"
+	case PermanentlyFailed:
+		return "PermanentlyFailed"
+	case Failed:
+		return "Failed"
 	default:
 		return fmt.Sprintf("Status(%d)", int(s))
 	}
@@ -260,6 +280,13 @@ type Instance struct {
 	GitHubChangesReqCount int `json:"github_changes_req_count,omitempty"`
 	// GitHubCheckConclusion is the CI rollup: success/failure/pending/action_required/neutral/""
 	GitHubCheckConclusion string `json:"github_check_conclusion,omitempty"`
+	// GitHubChecks is the itemized statusCheckRollup from the last successful poll.
+	GitHubChecks []github.CheckItem `json:"github_checks,omitempty"`
+	// GitHubReviewFeedback is the itemized review list (author/state/body) from the
+	// last successful poll.
+	GitHubReviewFeedback []github.ReviewItem `json:"github_review_feedback,omitempty"`
+	// GitHubMergeable mirrors PRInfo.Mergeable: "mergeable"/"conflicting"/"unknown".
+	GitHubMergeable string `json:"github_mergeable,omitempty"`
 	// GitHubPRStatusTerminal is true when the PR is merged/closed and polling should stop
 	GitHubPRStatusTerminal bool `json:"github_pr_status_terminal,omitempty"`
 	// LastPRStatusCheck is when the PR status was last successfully fetched
@@ -323,6 +350,44 @@ type Instance struct {
 	// Set by the async creation goroutine; cleared once the session becomes Active.
 	// Not persisted to the database — only meaningful in-memory during startup.
 	CreationProgress string `json:"-"`
+
+	// creationProgressUpdatedAt records when CreationProgress was last set, so the
+	// Stale-Creation Sweeper (Epic 4.1) can judge how far a killed process actually
+	// got instead of only how long ago it entered Creating. Bumped by
+	// setCreationProgressLocked on every SetCreationProgress call, in the same
+	// actor command as the progress-text write. Unlike CreationProgress itself,
+	// this IS persisted (see session/ent/schema's creation_progress_updated_at)
+	// so it survives a process restart.
+	creationProgressUpdatedAt time.Time
+
+	// failureReason holds the human-readable reason the async creation pipeline
+	// failed. Meaningful only when Status == Failed; empty otherwise. Terminal-write
+	// metadata, not independently-settable progress text (contrast
+	// SetCreationProgress, which ADR-002 deliberately leaves ungated) — there is no
+	// public setter. Only setFailureReasonLocked may write it, called exclusively
+	// from within TryForceStatusIfEpoch's own command closure (Epic 1.2).
+	failureReason string
+
+	// creationEpoch is a fencing counter bumped exactly once per cancel/retry of
+	// the async creation pipeline (ADR-002). A background writer captures the
+	// epoch before starting work and must present it back to
+	// TryForceStatusIfEpoch/UpdateInstanceIfEpoch to win the terminal write —
+	// if the epoch has since moved (a cancel or retry raced ahead of it), the
+	// write is silently dropped instead of overwriting a newer outcome.
+	// Written only by bumpCreationEpoch, called only from cancel/retry code
+	// paths (Phase 3) and from within TryStartRetry's own command closure.
+	creationEpoch uint64
+
+	// creationCancelFunc is the context.CancelFunc for this instance's
+	// Background Resolution Context (Epic 2.2, Story 2.2.1), stored at
+	// pipeline-spawn time so the Cancel RPC (Epic 3.2) can stop an
+	// in-progress creation. Process-local by nature -- a context.CancelFunc
+	// cannot be persisted or reconstructed -- so an instance loaded from
+	// storage without a live pipeline goroutine spawned in the current
+	// process has this nil (Task 3.2.1b's documented nil-guard case, not an
+	// edge case to special-case away). Not part of InstanceSnapshot; like
+	// creationEpoch, actor-goroutine confinement alone serializes access.
+	creationCancelFunc context.CancelFunc
 
 	// LaunchCommand is the full command passed to tmux on session start, including
 	// any injected flags (--resume, --mcp-config, -y, initial prompt). Set once on
@@ -397,6 +462,24 @@ type Instance struct {
 	// Fields are embedded (promoted) so external code can still access inst.LastViewed etc.
 	// Protected by mu (via sendSyncErr / Snapshot).
 	ReviewState
+
+	// RetryState holds the automated crash/stall retry lifecycle (attempt
+	// count, resolved max, last failure reason, pending-retry timestamp,
+	// history) for the configurable retry policy (session-retry-backoff).
+	// Fields are embedded (promoted) so callers can access inst.RetryAttempt
+	// etc. directly, mirroring ReviewState. Protected by mu.
+	RetryState
+
+	// RetryPolicyOverride is a per-session override for the global
+	// RetryPolicyConfig default, resolved once (global (+) override) at
+	// StartSessionDriver via resolveRetryPolicy. Mirrors ReworkCapOverride's
+	// nil-means-inherit convention. Nil means "use the global default".
+	RetryPolicyOverride *config.RetryPolicyConfig `json:"retry_policy_override,omitempty"`
+
+	// notifier delivers proactive notifications (e.g. a session giving up after
+	// exhausting its retry budget) independent of the passive ReviewQueue.
+	// Set via SetNotifier, mirroring reviewQueue/SetReviewQueue.
+	notifier Notifier
 
 	// controllerManager owns the ClaudeController and InstanceStatusManager references.
 	controllerManager ControllerManager
@@ -473,6 +556,13 @@ type Instance struct {
 	// driverRunning tracks whether a SessionDriver goroutine is active for this instance.
 	// Guarded by CompareAndSwap — see StartSessionDriver.
 	driverRunning atomic.Bool
+	// retryInFlight guards every restart path (automated backoff-expiry,
+	// restart-grace, manual RetryNow) against running concurrently for the
+	// same instance. Claimed exclusively inside restartForRetry via CAS — no
+	// other function CASes it directly, so every restart path is guarded by
+	// construction rather than by each caller remembering to. See
+	// session/retry_state.go's restartForRetry.
+	retryInFlight atomic.Bool
 	// driverStopper carries the stop/done signaling pair for the current
 	// SessionDriver run, if one has ever been started. Set by StartSessionDriver,
 	// read by StopSessionDriver (called from Destroy) to signal and join the
@@ -585,7 +675,7 @@ type Instance struct {
 	// import cycle exists (session/sshremote no longer imports this package
 	// after Part A), and there is no second implementation on the horizon --
 	// introducing an interface purely for testability here is exactly the
-	// speculative abstraction .claude/rules/interface-pollution-checklist.md
+	// speculative abstraction the `interface-pollution-checklist` skill
 	// warns against.
 	remoteApprovalRelay   *sshremote.RemoteApprovalRelay
 	remoteApprovalRelayMu deadlock.Mutex
@@ -1979,6 +2069,73 @@ func (i *Instance) Resume() error {
 		// Continue - controller is optional functionality
 	}
 
+	return nil
+}
+
+// StopByUser transitions an Active, Paused, or Hibernated session to Stopped in
+// response to a direct user action (e.g. a board-view drag into "Complete").
+// Mirrors pauseLocked's cleanup (stop controller, commit-if-dirty, kill tmux, remove
+// worktree) but lands in Stopped instead of Paused.
+func (i *Instance) StopByUser() error {
+	return i.sendSyncErr(func(s *instanceState) error { return stopByUserLocked(s) })
+}
+
+// stopByUserLocked is the actor-safe body of StopByUser().
+func stopByUserLocked(s *instanceState) error {
+	i := s.inst
+	if !i.Permissions.CanPause {
+		return ErrPauseNotPermitted
+	}
+	if i.Status == Stopped {
+		return fmt.Errorf("instance is already stopped")
+	}
+	// Validate the transition before any destructive side effect (kill tmux, remove
+	// worktree) — canTransitionLocked is side-effect-free, so a rejected call leaves
+	// the tmux session and worktree untouched.
+	if !canTransitionLocked(s, Stopped) {
+		return ErrInvalidTransition{From: i.Status, To: Stopped}
+	}
+
+	stopControllerLocked(s)
+
+	var errs []error
+	if i.IsWorktree {
+		if dirty, err := i.gitManager.IsDirty(); err != nil {
+			errs = append(errs, fmt.Errorf("failed to check if worktree is dirty: %w", err))
+		} else if dirty {
+			commitMsg := fmt.Sprintf("[claudesquad] update from '%s' on %s (stopped)", i.Title, time.Now().Format(time.RFC822))
+			if err := i.gitManager.CommitChanges(commitMsg); err != nil {
+				return i.combineErrors(append(errs, fmt.Errorf("failed to commit changes: %w", err)))
+			}
+		}
+	}
+
+	if err := i.KillSession(); err != nil {
+		if detachErr := i.pm().DetachSafely(); detachErr != nil {
+			errs = append(errs, fmt.Errorf("failed to detach tmux session: %w", detachErr))
+		}
+	}
+
+	if i.IsWorktree {
+		if _, err := os.Stat(i.gitManager.GetWorktreePath()); err == nil {
+			if err := i.gitManager.Remove(); err != nil {
+				return i.combineErrors(append(errs, fmt.Errorf("failed to remove git worktree: %w", err)))
+			}
+			_ = i.gitManager.Prune()
+		}
+	}
+
+	if err := i.combineErrors(errs); err != nil {
+		return err
+	}
+
+	if err := transitionToLocked(s, context.Background(), Stopped); err != nil {
+		// Should not happen — canTransitionLocked already validated this above — but
+		// keep the check as defense-in-depth against the two functions' logic diverging.
+		return fmt.Errorf("failed to transition to Stopped: %w", err)
+	}
+	i.gitManager.InvalidateDirtyCache()
+	log.ForSession(i.Title).Info("session stopped by user")
 	return nil
 }
 

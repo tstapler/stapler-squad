@@ -631,7 +631,7 @@ interface UseBacklogServiceReturn {
   createBacklogItem: (data: BacklogItemInput) => Promise<{ item: BacklogItem; triageTriggered: boolean } | null>;
   /** One turn of chat-based backlog creation/refinement. Empty existingItemId creates a new item (delegates to createBacklogItem); a set existingItemId delegates to TriggerTriage's feedback-driven refine path. */
   createBacklogItemFromChat: (message: string, existingItemId?: string) => Promise<{ item: BacklogItem; triageTriggered: boolean } | null>;
-  importGitHubIssue: (issueUrl: string, options?: { repoPath?: string; skipPlanning?: boolean }) => Promise<{ item: BacklogItem; triageTriggered: boolean } | null>;
+  importGitHubIssue: (issueUrl: string, options?: { repoPath?: string; skipPlanning?: boolean }) => Promise<{ item: BacklogItem; triageTriggered: boolean; alreadyExisted: boolean } | null>;
   searchGitHubRepos: (query: string, limit?: number) => Promise<GitHubRepo[]>;
   listGitHubIssues: (owner: string, repo: string, options?: { state?: string; search?: string; limit?: number }) => Promise<GitHubIssue[]>;
   updateBacklogItem: (id: string, data: Partial<BacklogItemInput>) => Promise<BacklogItem | null>;
@@ -1144,7 +1144,7 @@ export function useBacklogService(): UseBacklogServiceReturn {
     async (
       issueUrl: string,
       options?: { repoPath?: string; skipPlanning?: boolean }
-    ): Promise<{ item: BacklogItem; triageTriggered: boolean } | null> => {
+    ): Promise<{ item: BacklogItem; triageTriggered: boolean; alreadyExisted: boolean } | null> => {
       if (!clientRef.current) return null;
       try {
         setLastError(null);
@@ -1154,7 +1154,11 @@ export function useBacklogService(): UseBacklogServiceReturn {
           skipPlanning: options?.skipPlanning ?? false,
         });
         return resp.item
-          ? { item: mapBacklogItem(resp.item), triageTriggered: resp.triageTriggered }
+          ? {
+              item: mapBacklogItem(resp.item),
+              triageTriggered: resp.triageTriggered,
+              alreadyExisted: resp.alreadyExisted,
+            }
           : null;
       } catch (err) {
         console.error("[useBacklogService] importGitHubIssue:", err);

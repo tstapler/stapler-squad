@@ -27,6 +27,7 @@ import type { ListSessionsResponse } from "@/gen/session/v1/session_pb";
 import { createRpcTimingInterceptor } from "@/lib/telemetry/rpcTiming";
 import { getErrorMessage } from "@/lib/utils/connectError";
 import { useAnalytics } from "@/lib/contexts/AnalyticsContext";
+import { useNotifications, getFailureReasonToastMessage } from "@/lib/contexts/NotificationContext";
 import { useAppDispatch, useAppSelector } from "@/lib/store";
 // NOTE (backlog #488, 2026-08-17): this file's other `dispatch(setError(...))`
 // sites are deliberately NOT converted to the getErrorMessage() helper
@@ -48,6 +49,7 @@ import {
   removeSession,
   setLoading,
   setError,
+  setErrorCode,
   setConnectionState,
   selectAllSessions,
   selectSessionsLoading,
@@ -135,6 +137,9 @@ interface UseSessionServiceReturn {
   resumeCrashedSession: (id: string) => Promise<Session | null>;
   renameSession: (id: string, newTitle: string) => Promise<boolean>;
   restartSession: (id: string) => Promise<boolean>;
+  retrySession: (id: string) => Promise<boolean>;
+  cancelSessionCreation: (id: string) => Promise<{ success: boolean; lostRace: boolean }>;
+  retrySessionCreation: (id: string) => Promise<boolean>;
   clearConversationState: (id: string) => Promise<boolean>;
   acknowledgeSession: (id: string) => Promise<boolean>;
   createCheckpoint: (sessionId: string, label: string) => Promise<boolean>;
@@ -196,11 +201,58 @@ export function useSessionService(
   }, [onSessionDeleted]);
 
   const dispatch = useAppDispatch();
+  const { addNotification } = useNotifications();
   const [systemMemoryPct, setSystemMemoryPct] = useState<number>(0);
   const [reconnectAttemptCount, setReconnectAttemptCount] = useState(0);
   const sessions = useAppSelector(autoWatch ? selectAllSessions : selectNoSessions);
   const loading = useAppSelector(selectSessionsLoading);
   const errorStr = useAppSelector(selectSessionsError);
+
+  // Async-session-creation Epic 5.3 (Surface 4): fire a global failure toast
+  // exactly once per Creating -> Failed transition, regardless of which
+  // page/session the user is currently viewing. This reads Redux `sessions`
+  // state (populated by both the WatchSessions stream and ListSessions
+  // snapshots via the same upsertSession/setSessions actions) rather than
+  // hooking the raw stream event directly, so it fires identically whichever
+  // path delivered the transition.
+  //
+  // `lastKnownStatusRef` is the dedup guard: a session's id is only ever
+  // recorded here on a render where it was already present with a
+  // *different* status, so (a) a session's first-ever appearance (including
+  // one that is already Failed on initial load, e.g. after a page refresh)
+  // never fires a toast, and (b) once fired, subsequent renders with the
+  // same Failed status never re-fire — a status transition notifies exactly
+  // once, not once per re-render or redundant stream event.
+  const lastKnownStatusRef = useRef<Map<string, SessionStatus>>(new Map());
+  useEffect(() => {
+    if (!enabled || !autoWatch) return;
+    const seen = lastKnownStatusRef.current;
+    for (const s of sessions) {
+      const prevStatus = seen.get(s.id);
+      if (
+        prevStatus !== undefined &&
+        prevStatus !== SessionStatus.FAILED &&
+        s.status === SessionStatus.FAILED
+      ) {
+        addNotification({
+          sessionId: s.id,
+          sessionName: s.title || s.id,
+          title: "Session creation failed",
+          message: getFailureReasonToastMessage(s.failureReason),
+          notificationType: "task_failed",
+          priority: "high",
+          metadata: { failure_reason: s.failureReason },
+        });
+      }
+      seen.set(s.id, s.status);
+    }
+    // Prune ids no longer present so a deleted-then-recreated session (same
+    // title reused) is treated as a fresh first-appearance, not a transition.
+    const currentIds = new Set(sessions.map((s) => s.id));
+    for (const id of seen.keys()) {
+      if (!currentIds.has(id)) seen.delete(id);
+    }
+  }, [sessions, enabled, autoWatch, addNotification]);
 
   const abortControllerRef = useRef<AbortController | null>(null);
   const clientRef = useRef<ReturnType<typeof createClient<typeof SessionService>> | null>(null);
@@ -351,7 +403,24 @@ export function useSessionService(
         return response.session ?? null;
       } catch (err) {
         const wrappedErr = err instanceof Error ? err : new Error("Failed to create session");
-        dispatch(setError(wrappedErr.message));
+        // Deliberately NOT dispatch(setError(...)) here: `sessions.error` is what
+        // PaneSplitRenderer's SessionListPaneBody checks to decide whether to render
+        // the whole session list or replace it with a full-screen "Failed to Load
+        // Sessions / Unable to connect to the server" state (see PaneSplitRenderer.tsx).
+        // That's meant for list-load/watch-stream connectivity failures (listSessions'
+        // and watchSessions' own catch blocks set it correctly). A createSession
+        // rejection -- including an expected, synchronous validation failure like a
+        // duplicate title -- is neither: the list loaded fine and the server is
+        // reachable, it just refused this one request. Setting the same flag here
+        // blanked the entire (already-populated) session list behind a misleading
+        // connectivity error for as long as nothing else happened to clear it, which
+        // is exactly what session-creation-async.spec.ts's "duplicate title keeps the
+        // omnibar open with inline error" test was hitting: the omnibar's own
+        // `omnibar-create-error` correctly showed the rejection, but the session card
+        // it was asserting on had vanished behind this unrelated global error state.
+        // The thrown error already reaches the caller (OmnibarContext/Omnibar.tsx),
+        // which surfaces it via its own local, create-scoped error state -- no need
+        // for a second, differently-scoped copy here.
         throw wrappedErr;
       }
     },
@@ -393,6 +462,12 @@ export function useSessionService(
       } catch (err) {
         console.error("[useSessionService] updateSession failed:", err);
         dispatch(setError(getErrorMessage(err, "Failed to update session")));
+        // Board drag-rejection reconciliation (SessionBoard's attemptColumnMove) needs the
+        // ConnectRPC code to distinguish a transport failure from a business-rule rejection —
+        // see sessionsSlice.ts's errorCode doc comment.
+        if (err instanceof ConnectError) {
+          dispatch(setErrorCode(err.code));
+        }
         return null;
       }
     },
@@ -475,6 +550,9 @@ export function useSessionService(
       } catch (err) {
         console.error("[useSessionService] resumeHibernatedSession failed:", err);
         dispatch(setError(err instanceof Error ? err.message : "Failed to resume hibernated session"));
+        if (err instanceof ConnectError) {
+          dispatch(setErrorCode(err.code));
+        }
         return null;
       }
     },
@@ -546,6 +624,90 @@ export function useSessionService(
         return response.success;
       } catch (err) {
         dispatch(setError(err instanceof Error ? err.message : "Failed to restart session"));
+        return false;
+      }
+    },
+    [dispatch]
+  );
+
+  // Retry a session immediately, bypassing any pending backoff delay —
+  // including from PERMANENTLY_FAILED (session-retry-backoff, AC6).
+  const retrySession = useCallback(
+    async (id: string): Promise<boolean> => {
+      if (!clientRef.current) return false;
+
+      dispatch(setError(null));
+
+      try {
+        const response = await clientRef.current.retrySession({ id });
+
+        if (response.success && response.session) {
+          dispatch(upsertSession(response.session));
+        }
+
+        return response.success;
+      } catch (err) {
+        dispatch(setError(err instanceof Error ? err.message : "Failed to retry session"));
+        return false;
+      }
+    },
+    [dispatch]
+  );
+
+  // Cancel an in-progress (Creating) session's creation pipeline. Epic 5.4
+  // (async-session-creation). Success means the instance was removed
+  // server-side (session_service.go's CancelSessionCreation deletes it) --
+  // the caller should remove the card from the list. A FailedPrecondition
+  // means cancel lost the race with the pipeline's own terminal write (the
+  // session is already Active/Failed); the normal watchSessions stream
+  // event already carries that real status, so this just reports the loss
+  // without touching the store -- no stale optimistic removal.
+  const cancelSessionCreation = useCallback(
+    async (id: string): Promise<{ success: boolean; lostRace: boolean }> => {
+      if (!clientRef.current) return { success: false, lostRace: false };
+
+      dispatch(setError(null));
+
+      try {
+        const response = await clientRef.current.cancelSessionCreation({ id });
+        if (response.success) {
+          dispatch(removeSession(id));
+        }
+        return { success: response.success, lostRace: false };
+      } catch (err) {
+        if (err instanceof ConnectError && err.code === Code.FailedPrecondition) {
+          // Pipeline won the race -- leave the store alone, the stream's
+          // own status update (Active/Failed) is already on its way.
+          return { success: false, lostRace: true };
+        }
+        dispatch(setError(err instanceof Error ? err.message : "Failed to cancel session creation"));
+        return { success: false, lostRace: false };
+      }
+    },
+    [dispatch]
+  );
+
+  // Retry a Failed session creation in place. Epic 5.4. The RPC itself only
+  // returns a bool -- the same instance's status flips Failed -> Creating
+  // server-side and the existing watchSessions stream delivers that update,
+  // so this wrapper doesn't need to (and must not) synthesize a session
+  // update itself. A FailedPrecondition means the instance was no longer
+  // Failed by the time the retry command ran (e.g. a concurrent retry already
+  // won); treated as a no-op failure, not an error toast.
+  const retrySessionCreation = useCallback(
+    async (id: string): Promise<boolean> => {
+      if (!clientRef.current) return false;
+
+      dispatch(setError(null));
+
+      try {
+        const response = await clientRef.current.retrySessionCreation({ id });
+        return response.success;
+      } catch (err) {
+        if (err instanceof ConnectError && err.code === Code.FailedPrecondition) {
+          return false;
+        }
+        dispatch(setError(err instanceof Error ? err.message : "Failed to retry session creation"));
         return false;
       }
     },
@@ -1262,6 +1424,9 @@ export function useSessionService(
     resumeCrashedSession,
     renameSession,
     restartSession,
+    retrySession,
+    cancelSessionCreation,
+    retrySessionCreation,
     clearConversationState,
     acknowledgeSession,
     createCheckpoint,

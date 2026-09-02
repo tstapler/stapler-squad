@@ -435,9 +435,10 @@ func TestListShippedCommits_should_ReturnNewestFirst_When_MultipleCommitsShipped
 	}
 	headSHA := shas[len(shas)-1]
 
-	commits, err := ListShippedCommits(work, baseSHA, headSHA)
+	commits, truncated, err := ListShippedCommits(context.Background(), work, baseSHA, headSHA)
 	require.NoError(t, err)
 	require.Len(t, commits, 3)
+	assert.False(t, truncated, "3 commits is well under the cap; must not report truncated")
 	assert.Equal(t, headSHA, commits[0].SHA, "newest commit must come first")
 	assert.Equal(t, "feature commit 2", commits[0].Summary)
 	assert.Equal(t, "feature commit 0", commits[2].Summary, "oldest of the three shipped commits must be last")
@@ -452,15 +453,66 @@ func TestListShippedCommits_should_ReturnEmpty_When_HeadEqualsBase(t *testing.T)
 	work := cloneTestRepo(t, origin)
 	sha := strings.TrimSpace(runGit(t, work, "rev-parse", "HEAD"))
 
-	commits, err := ListShippedCommits(work, sha, sha)
+	commits, truncated, err := ListShippedCommits(context.Background(), work, sha, sha)
 	require.NoError(t, err)
 	assert.Empty(t, commits)
+	assert.False(t, truncated)
+}
+
+// TestListShippedCommits_should_ReportTruncatedTrue_When_CommitCountExceedsCap verifies
+// truncated is exercisable in a unit test without a 100+-commit fixture: calling
+// listShippedCommitsWithCap directly with a small injected cap against a small fixture
+// repo must stop at the cap and report truncated == true.
+func TestListShippedCommits_should_ReportTruncatedTrue_When_CommitCountExceedsCap(t *testing.T) {
+	t.Parallel()
+	origin := setupTestRepo(t)
+	work := cloneTestRepo(t, origin)
+	baseSHA := strings.TrimSpace(runGit(t, work, "rev-parse", "HEAD"))
+
+	runGit(t, work, "checkout", "-b", "feature")
+	var headSHA string
+	for i := 0; i < 5; i++ {
+		fname := fmt.Sprintf("feature-%d.txt", i)
+		require.NoError(t, os.WriteFile(filepath.Join(work, fname), []byte("work\n"), 0o644))
+		runGit(t, work, "add", fname)
+		runGit(t, work, "commit", "-m", fmt.Sprintf("feature commit %d", i))
+		headSHA = strings.TrimSpace(runGit(t, work, "rev-parse", "HEAD"))
+	}
+
+	commits, truncated, err := listShippedCommitsWithCap(context.Background(), work, baseSHA, headSHA, 3)
+	require.NoError(t, err)
+	assert.Len(t, commits, 3)
+	assert.True(t, truncated, "5 commits against a cap of 3 must report truncated")
+}
+
+// TestListShippedCommits_should_ReturnContextError_When_ContextAlreadyCanceled
+// covers the new ctx.Err() check inside listShippedCommitsWithCap's walk
+// loop (added for the live-session VCS-tab call site) — previously
+// unexercised by any test, so a broken check (inverted condition, wrong
+// return arity) would compile and pass everything else.
+func TestListShippedCommits_should_ReturnContextError_When_ContextAlreadyCanceled(t *testing.T) {
+	t.Parallel()
+	origin := setupTestRepo(t)
+	work := cloneTestRepo(t, origin)
+	baseSHA := strings.TrimSpace(runGit(t, work, "rev-parse", "HEAD"))
+
+	runGit(t, work, "checkout", "-b", "feature")
+	require.NoError(t, os.WriteFile(filepath.Join(work, "feature.txt"), []byte("work\n"), 0o644))
+	runGit(t, work, "add", "feature.txt")
+	runGit(t, work, "commit", "-m", "feature commit")
+	headSHA := strings.TrimSpace(runGit(t, work, "rev-parse", "HEAD"))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, _, err := listShippedCommitsWithCap(ctx, work, baseSHA, headSHA, 100)
+	require.ErrorIs(t, err, context.Canceled)
 }
 
 // TestFileStatsBetween_ShouldReturnPerFileCounts_WhenCommitsAddAndDeleteLines
 // verifies the happy path (Story 3.2.1): a two-commit range that adds 5 lines to one
 // file and deletes 2 from another must report per-file addition/deletion counts with
-// no error, and without shelling out to git (.claude/rules/prefer-go-git-over-subshells.md).
+// no error, and without shelling out to git (the `prefer-go-git-over-subshells` skill).
 func TestFileStatsBetween_ShouldReturnPerFileCounts_WhenCommitsAddAndDeleteLines(t *testing.T) {
 	t.Parallel()
 	origin := setupTestRepo(t)
@@ -597,6 +649,109 @@ func TestFileStatsBetween_ShouldOmitBinaryFiles_WhenBinaryContentChanges(t *test
 	require.NoError(t, err, "a changed binary file must not cause an error")
 	require.Len(t, stats, 1, "the binary file must be omitted, leaving only notes.txt: got %+v", stats)
 	assert.Equal(t, "notes.txt", stats[0].Path)
+}
+
+// TestDiffStatBetween covers DiffStatBetween's summation of FileStatsBetween's
+// per-file counts into an aggregate AggregateDiffStat: additions-only, deletions-only,
+// mixed, zero-diff, and error passthrough from an invalid SHA.
+func TestDiffStatBetween(t *testing.T) {
+	t.Parallel()
+
+	t.Run("additions only", func(t *testing.T) {
+		t.Parallel()
+		origin := setupTestRepo(t)
+		work := cloneTestRepo(t, origin)
+		baseSHA := strings.TrimSpace(runGit(t, work, "rev-parse", "HEAD"))
+
+		require.NoError(t, os.WriteFile(filepath.Join(work, "foo.go"), []byte("a\nb\nc\n"), 0o644))
+		runGit(t, work, "add", "foo.go")
+		runGit(t, work, "commit", "-m", "add foo.go")
+		headSHA := strings.TrimSpace(runGit(t, work, "rev-parse", "HEAD"))
+
+		stat, err := DiffStatBetween(context.Background(), work, baseSHA, headSHA)
+		require.NoError(t, err)
+		assert.Equal(t, AggregateDiffStat{FilesChanged: 1, Additions: 3, Deletions: 0}, stat)
+	})
+
+	t.Run("deletions only", func(t *testing.T) {
+		t.Parallel()
+		origin := setupTestRepo(t)
+		work := cloneTestRepo(t, origin)
+
+		require.NoError(t, os.WriteFile(filepath.Join(work, "bar.go"), []byte("line1\nline2\nline3\n"), 0o644))
+		runGit(t, work, "add", "bar.go")
+		runGit(t, work, "commit", "-m", "add bar.go")
+		baseSHA := strings.TrimSpace(runGit(t, work, "rev-parse", "HEAD"))
+
+		require.NoError(t, os.WriteFile(filepath.Join(work, "bar.go"), []byte("line1\n"), 0o644))
+		runGit(t, work, "add", "bar.go")
+		runGit(t, work, "commit", "-m", "trim bar.go")
+		headSHA := strings.TrimSpace(runGit(t, work, "rev-parse", "HEAD"))
+
+		stat, err := DiffStatBetween(context.Background(), work, baseSHA, headSHA)
+		require.NoError(t, err)
+		assert.Equal(t, AggregateDiffStat{FilesChanged: 1, Additions: 0, Deletions: 2}, stat)
+	})
+
+	t.Run("mixed additions and deletions across files", func(t *testing.T) {
+		t.Parallel()
+		origin := setupTestRepo(t)
+		work := cloneTestRepo(t, origin)
+
+		require.NoError(t, os.WriteFile(filepath.Join(work, "bar.go"), []byte("line1\nline2\nline3\n"), 0o644))
+		runGit(t, work, "add", "bar.go")
+		runGit(t, work, "commit", "-m", "add bar.go")
+		baseSHA := strings.TrimSpace(runGit(t, work, "rev-parse", "HEAD"))
+
+		require.NoError(t, os.WriteFile(filepath.Join(work, "foo.go"), []byte("a\nb\nc\nd\ne\n"), 0o644))
+		runGit(t, work, "add", "foo.go")
+		require.NoError(t, os.WriteFile(filepath.Join(work, "bar.go"), []byte("line1\n"), 0o644))
+		runGit(t, work, "add", "bar.go")
+		runGit(t, work, "commit", "-m", "add foo.go, trim bar.go")
+		headSHA := strings.TrimSpace(runGit(t, work, "rev-parse", "HEAD"))
+
+		stat, err := DiffStatBetween(context.Background(), work, baseSHA, headSHA)
+		require.NoError(t, err)
+		assert.Equal(t, AggregateDiffStat{FilesChanged: 2, Additions: 5, Deletions: 2}, stat)
+	})
+
+	t.Run("zero diff when base equals head", func(t *testing.T) {
+		t.Parallel()
+		origin := setupTestRepo(t)
+		work := cloneTestRepo(t, origin)
+		sha := strings.TrimSpace(runGit(t, work, "rev-parse", "HEAD"))
+
+		stat, err := DiffStatBetween(context.Background(), work, sha, sha)
+		require.NoError(t, err)
+		assert.Equal(t, AggregateDiffStat{}, stat)
+	})
+
+	t.Run("FileStatsBetween error passthrough on invalid SHA", func(t *testing.T) {
+		t.Parallel()
+		origin := setupTestRepo(t)
+		work := cloneTestRepo(t, origin)
+		headSHA := strings.TrimSpace(runGit(t, work, "rev-parse", "HEAD"))
+
+		stat, err := DiffStatBetween(context.Background(), work, "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef", headSHA)
+		require.Error(t, err)
+		assert.Equal(t, AggregateDiffStat{}, stat)
+	})
+
+	t.Run("context already canceled", func(t *testing.T) {
+		// Covers the new ctx.Err() check added for the live-session VCS-tab
+		// call site — previously unexercised by any test.
+		t.Parallel()
+		origin := setupTestRepo(t)
+		work := cloneTestRepo(t, origin)
+		sha := strings.TrimSpace(runGit(t, work, "rev-parse", "HEAD"))
+
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+
+		stat, err := DiffStatBetween(ctx, work, sha, sha)
+		require.ErrorIs(t, err, context.Canceled)
+		assert.Equal(t, AggregateDiffStat{}, stat)
+	})
 }
 
 // TestDiffHashBetween_ShouldReturnSameHash_WhenSameCommitRangeHashedTwice verifies the

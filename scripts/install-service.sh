@@ -241,15 +241,28 @@ install_linux() {
     # (the 2026-07-12 OOM incident: 57/61GB used, swap exhausted) from taking down
     # the whole box — the kernel's cgroup-aware OOM killer instead picks a victim
     # from within this budget, leaving unrelated system processes alone.
-    # MemoryHigh (soft: throttle/reclaim, no kill) at 60% and MemoryMax (hard kill
-    # boundary) at 80% of total RAM, both computed from this machine's actual
+    # MemoryHigh (soft: throttle/reclaim, no kill) at 80% and MemoryMax (hard kill
+    # boundary) at 90% of total RAM, both computed from this machine's actual
     # /proc/meminfo rather than a hardcoded value so the same script is safe on a
     # small VM or a large workstation alike. Skipped entirely if detection fails.
+    #
+    # Raised from the original 60%/80% on 2026-08-25: telemetry/cgroup_linux.go's
+    # new cgroup_memory_* OTel metrics (see docs/how-to/enable-opentelemetry.md) showed
+    # usage chronically pinned at the 60% MemoryHigh ceiling — memory.events'
+    # "high" counter climbing continuously, PSI full avg10 nonzero (real task
+    # stalls, not just theoretical) — while `free -h` showed >20GiB genuinely
+    # free system-wide. The cap was throttling this service well before the host
+    # was actually under memory pressure, plausibly causing the intermittent
+    # terminal-input unresponsiveness this investigation started from (any
+    # subprocess/allocation landing over the ceiling gets forced into synchronous
+    # reclaim). Watch cgroup_memory_pressure_*_avg10/cgroup_memory_events_oom_kill
+    # in Grafana after this change — if OOM kills start happening instead of just
+    # throttling, that's the signal these percentages need to come back down.
     mem_total_kb=$(awk '/^MemTotal:/{print $2}' /proc/meminfo 2>/dev/null || true)
     memory_limit_lines=""
     if [ -n "$mem_total_kb" ]; then
-        mem_high_mb=$((mem_total_kb * 60 / 100 / 1024))
-        mem_max_mb=$((mem_total_kb * 80 / 100 / 1024))
+        mem_high_mb=$((mem_total_kb * 80 / 100 / 1024))
+        mem_max_mb=$((mem_total_kb * 90 / 100 / 1024))
         memory_limit_lines="MemoryHigh=${mem_high_mb}M
 MemoryMax=${mem_max_mb}M"
     else
@@ -271,6 +284,10 @@ StartLimitBurst=10
 
 [Service]
 Type=simple
+# tymuxd's equivalent flag, --tymuxd-keep-server, also defaults to true.
+# Do NOT add --tymuxd-keep-server=false here — that's the same class of
+# drift that made this line originally omit --tmux-keep-server and kill
+# every live tmux session on restart (docs/explanation/tmux-keep-server-on-restart.md).
 ExecStart=$bin_path --remote-access --tmux-keep-server$extra_flags
 WorkingDirectory=$HOME
 Restart=on-failure
@@ -498,6 +515,10 @@ install_macos() {
 
     # Build XML <string> entries for any extra flags (e.g. --profile --profile-port 6060).
     # We rely on the EnvironmentVariables PATH key above, so no shell wrapper is needed.
+    # tymuxd's equivalent flag, --tymuxd-keep-server, also defaults to true.
+    # Do NOT add --tymuxd-keep-server=false to ProgramArguments below — that's
+    # the same class of drift that once left this platform's tmux flag out of
+    # sync with the other's (docs/explanation/tmux-keep-server-on-restart.md).
     extra_args_xml=""
     for arg in $extra_flags; do
         extra_args_xml="$extra_args_xml

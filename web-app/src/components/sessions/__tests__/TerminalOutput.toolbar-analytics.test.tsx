@@ -238,7 +238,7 @@ describe("toolbar analytics", () => {
 
   it("fires track with button:log-stream state:on when Log Stream enabled", () => {
     renderTerminal();
-    fireEvent.click(screen.getByRole("button", { name: /enable verbose debug log streaming/i }));
+    fireEvent.click(screen.getByRole("button", { name: /enable verbose debug trace streaming/i }));
     expect(mockTrack).toHaveBeenCalledWith(expect.objectContaining({
       labels: expect.objectContaining({ button: "log-stream", state: "on" }),
     }));

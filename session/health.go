@@ -39,8 +39,8 @@ const failureThreshold = 2
 // before the checker started (see the sessionPredatesRestart check at its use
 // site below). A service restart can leave an orphaned pre-restart process
 // racing the new process over the same tmux server (see
-// .claude/rules/service-restart-orphan-process.md and
-// .claude/rules/tmux-keep-server-on-restart.md), which can surface as a spurious
+// docs/explanation/service-restart-orphan-process.md and
+// docs/explanation/tmux-keep-server-on-restart.md), which can surface as a spurious
 // dead-pane detection right after startup for one of those pre-existing
 // sessions. During the grace period, such dead panes are still self-healed via
 // the old kill+respawn behavior; only after it elapses does a dead pane surface
@@ -219,7 +219,9 @@ func paneDeadStatus(instance *Instance, batch map[string]tmux.PaneDeadStatus) (d
 // every naturally-completed session would hit recoverMissingSession and get
 // auto-restarted on the very next tick. Crashed sessions require an explicit
 // resume (see Instance.ResumeFromCrash / the ResumeCrashedSession RPC) and must
-// not be silently respawned either.
+// not be silently respawned either. PermanentlyFailed is likewise terminal
+// (ADR-001, session-retry-backoff) -- it requires an explicit Retry now, not
+// silent health-checker recovery.
 func healthCheckSkipReason(instance *Instance) (string, bool) {
 	if instance.Paused() {
 		return "Skipped (session is paused)", true
@@ -232,6 +234,8 @@ func healthCheckSkipReason(instance *Instance) (string, bool) {
 		return "Skipped (session is stopped)", true
 	case Crashed:
 		return "Skipped (session has crashed, awaiting resume)", true
+	case PermanentlyFailed:
+		return "Skipped (session is permanently failed, awaiting retry)", true
 	}
 	return "", false
 }

@@ -143,6 +143,10 @@ func (info InstanceStatusInfo) GetStatusDescription() string {
 			return "Stopped"
 		case Hibernated:
 			return "Hibernated"
+		case Crashed:
+			return "Crashed"
+		case PermanentlyFailed:
+			return "Failed"
 		default:
 			return "Unknown"
 		}

@@ -107,10 +107,15 @@ const defaultTymuxdAddr = "http://127.0.0.1:7419"
 
 // tymuxdAddr resolves the base URL for a real tymuxd connection: the
 // TYMUXD_ADDR environment variable when set, else defaultTymuxdAddr.
-// stapler-squad does not start or supervise tymuxd itself (Story 2.2.6's
-// documented scope decision — no ensureServerRunning-equivalent), so this
-// assumes an out-of-band, already-running daemon at a fixed, configurable
-// address rather than any service-discovery mechanism.
+// Story 2.2.6's "stapler-squad does not start or supervise tymuxd itself"
+// scope decision no longer holds — see
+// project_plans/tymux-bundled-integration/decisions/ADR-003-supersede-story-2-2-6-no-supervision.md.
+// stapler-squad now supervises tymuxd's lifecycle (start-if-not-running,
+// health-check) whenever the tymux backend is actually in use. This
+// resolution is still supervision-aware: TYMUXD_ADDR remains the override,
+// matching DaemonConfig.Addr's resolution in
+// session/tymux/daemon_config.go's ResolveDaemonConfig, which is the choke
+// point supervision call sites actually use.
 func tymuxdAddr() string {
 	if v := os.Getenv("TYMUXD_ADDR"); v != "" {
 		return v

@@ -15,9 +15,10 @@ import (
 	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/propagation"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+	"go.opentelemetry.io/otel/sdk/metric/exemplar"
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
-	semconv "go.opentelemetry.io/otel/semconv/v1.24.0"
+	semconv "go.opentelemetry.io/otel/semconv/v1.41.0"
 	"go.opentelemetry.io/otel/trace"
 )
 
@@ -103,10 +104,13 @@ func Initialize(ctx context.Context, cfg Config) (*Provider, error) {
 
 	log.Info("initializing OpenTelemetry", "endpoint", cfg.OTLPEndpoint, "env", cfg.Environment, "version", cfg.ServiceVersion)
 
-	// Create OTLP trace exporter
-	exporter, err := otlptracegrpc.New(ctx,
+	// Create OTLP trace exporter. gzip cuts payload size well below the
+	// receiver's default 4MiB max gRPC message size (see the metric exporter
+	// below for why that matters here).
+	traceExporter, err := otlptracegrpc.New(ctx,
 		otlptracegrpc.WithEndpoint(cfg.OTLPEndpoint),
 		otlptracegrpc.WithInsecure(), // Use insecure for localhost (Datadog Agent)
+		otlptracegrpc.WithCompressor("gzip"),
 	)
 	if err != nil {
 		return nil, err
@@ -115,11 +119,10 @@ func Initialize(ctx context.Context, cfg Config) (*Provider, error) {
 	// Create resource with service information
 	res, err := resource.Merge(
 		resource.Default(),
-		resource.NewWithAttributes(
-			semconv.SchemaURL,
+		resource.NewSchemaless(
 			semconv.ServiceName(ServiceName),
 			semconv.ServiceVersion(cfg.ServiceVersion),
-			semconv.DeploymentEnvironment(cfg.Environment),
+			semconv.DeploymentEnvironmentNameKey.String(cfg.Environment),
 		),
 	)
 	if err != nil {
@@ -128,7 +131,7 @@ func Initialize(ctx context.Context, cfg Config) (*Provider, error) {
 
 	// Create trace provider with batch processor
 	tp := sdktrace.NewTracerProvider(
-		sdktrace.WithBatcher(exporter,
+		sdktrace.WithBatcher(traceExporter,
 			sdktrace.WithBatchTimeout(5*time.Second),
 		),
 		sdktrace.WithResource(res),
@@ -145,10 +148,14 @@ func Initialize(ctx context.Context, cfg Config) (*Provider, error) {
 	))
 
 	// Create OTLP metric exporter, sharing the same OTLP endpoint/resource as
-	// tracing — one Datadog Agent/OTLP collector receives both.
+	// tracing — one Datadog Agent/OTLP collector receives both. gzip
+	// compression (~5-10x on this mostly-numeric/repetitive payload) is
+	// belt-and-suspenders on top of the exemplar fix below, not the fix
+	// itself.
 	metricExporter, err := otlpmetricgrpc.New(ctx,
 		otlpmetricgrpc.WithEndpoint(cfg.OTLPEndpoint),
 		otlpmetricgrpc.WithInsecure(),
+		otlpmetricgrpc.WithCompressor("gzip"),
 	)
 	if err != nil {
 		return nil, err
@@ -159,6 +166,12 @@ func Initialize(ctx context.Context, cfg Config) (*Provider, error) {
 		sdkmetric.WithReader(sdkmetric.NewPeriodicReader(metricExporter,
 			sdkmetric.WithInterval(15*time.Second),
 		)),
+		// The SDK's default TraceBasedFilter attaches an exemplar to every
+		// histogram bucket recorded inside a sampled span, and SampleRate
+		// above samples every span. Nothing reads exemplars, so disable them
+		// instead of paying for them. See commit 13a90ec31 for the incident
+		// this fixes.
+		sdkmetric.WithExemplarFilter(exemplar.AlwaysOffFilter),
 	)
 	otel.SetMeterProvider(mp)
 
@@ -234,6 +247,27 @@ func GetMeter() metric.Meter {
 // StartSpan creates a new span with the given name and options
 func StartSpan(ctx context.Context, name string, opts ...trace.SpanStartOption) (context.Context, trace.Span) {
 	return GetTracer().Start(ctx, name, opts...)
+}
+
+// StartLinkedBackgroundSpan starts a new-root span for work that outlives
+// its triggering request (e.g. a goroutine started from an RPC handler that
+// returns before the goroutine finishes), linked back to ctx's existing span
+// (if any) for correlation. See ADR-003
+// (project_plans/async-session-creation/decisions/ADR-003-linked-root-span-for-background-goroutine.md):
+// a plain child span risks rendering as a late/orphaned addition once some
+// APM backends (this repo's target is Datadog) consider the trace complete
+// after its root span closes. Any future "goroutine outlives its request"
+// instrumentation should use this helper rather than hand-rolling
+// trace.WithNewRoot()/trace.WithLinks() at each call site.
+//
+// GetTracer() already returns a working no-op tracer when telemetry is
+// disabled, so this is safe to call unconditionally — it never panics and
+// always returns a usable (context, span) pair.
+func StartLinkedBackgroundSpan(ctx context.Context, name string) (context.Context, trace.Span) {
+	return GetTracer().Start(ctx, name,
+		trace.WithNewRoot(),
+		trace.WithLinks(trace.LinkFromContext(ctx)),
+	)
 }
 
 // SpanFromContext returns the current span from context

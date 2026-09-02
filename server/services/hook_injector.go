@@ -117,7 +117,7 @@ func hookEndpoints(baseURLFn func() string) map[HookName]string {
 //
 // SocketPath and BearerToken are two independently meaningful strings a caller could
 // otherwise transpose at a call site with no compiler error -- exactly what
-// .claude/rules/primitive-obsession-checklist.md exists to catch -- so this is a named
+// the `primitive-obsession-checklist` skill exists to catch -- so this is a named
 // struct, not two positional string parameters threaded through InjectHooksConfig.
 //
 // PRODUCTION WIRING: the real session-creation call site (server/services/session_service.go's
@@ -267,6 +267,11 @@ func InjectHooksConfig(rootDir, sessionTitle string, hooks []HookName, opts ...I
 
 	claudeDir := filepath.Join(rootDir, ".claude")
 	settingsPath := filepath.Join(claudeDir, "settings.local.json")
+	// Serializes the read-merge-write sequence below against InjectHookConfig and
+	// RemoveHooksConfig, which independently read-modify-write the same settingsPath —
+	// see settingsFileLocks' doc comment in mcp_injector.go for the lost-update hazard
+	// this closes.
+	defer lockSettingsPath(settingsPath)()
 
 	wanted := wantedHookSet(hooks)
 
@@ -433,6 +438,11 @@ func RemoveHooksConfig(rootDir string, hooks []HookName) error {
 	}
 	claudeDir := filepath.Join(rootDir, ".claude")
 	settingsPath := filepath.Join(claudeDir, "settings.local.json")
+	// Serializes the read-merge-write sequence below against InjectHookConfig and
+	// InjectHooksConfig, which independently read-modify-write the same settingsPath —
+	// see settingsFileLocks' doc comment in mcp_injector.go for the lost-update hazard
+	// this closes.
+	defer lockSettingsPath(settingsPath)()
 
 	data, err := os.ReadFile(settingsPath)
 	if err != nil {

@@ -24,7 +24,9 @@
     "TestUpdateSession_SteerMessage_AutonomousSession_StillUsesController",
     "tests/e2e/backlog-session-steer.spec.ts",
     "TestUpdateSession_AutoApprove_StoppedSession_PersistsAcrossReload",
-    "TestUpdateSession_should_RejectAutoApprove_When_ProgramUnsupported"
+    "TestUpdateSession_should_RejectAutoApprove_When_ProgramUnsupported",
+    "TestUpdateSession_should_StopSession_When_TargetIsStoppedFromActive",
+    "TestUpdateSession_should_RejectStop_When_TransitionIsIllegal"
   ],
-  "lastModified": "2026-08-12T00:00:00Z"
+  "lastModified": "2026-08-27T00:00:00Z"
 }

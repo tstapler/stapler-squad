@@ -7,10 +7,12 @@ package session
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/user"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -18,6 +20,38 @@ import (
 	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
+
+// loggedMissingWorktree suppresses repeat "worktree directory missing"
+// warnings for a session whose on-disk status is never persisted back as
+// Paused (see fromInstanceData) — every health-check LoadInstances() tick
+// (session/health.go, ~15s) constructs a brand-new, throwaway Instance from
+// disk (see health.go's checkSingleSession comment) and re-detects the same
+// missing worktree, so an Instance-scoped flag can't dedupe across ticks the
+// way this package-level map does; it must outlive any single Instance
+// object. Keyed by session title, cleaned up by clearLoggedMissingWorktree
+// on session deletion (Storage.DeleteInstance/DeleteAllInstances) so it
+// doesn't grow unboundedly over the process's lifetime — the earlier version
+// of this map had no such cleanup, which was a real (if slow) leak.
+var loggedMissingWorktree sync.Map //nolint:gochecknoglobals
+
+// clearLoggedMissingWorktree removes title's dedup entry, if any. Called
+// when a session is deleted so the map doesn't retain an entry for a title
+// that no longer exists.
+func clearLoggedMissingWorktree(title string) {
+	loggedMissingWorktree.Delete(title)
+}
+
+// worktreeMissingLevel picks the level for the "worktree directory missing"
+// log line: Warn the first time a given session title has been seen, Debug
+// on any repeat (see loggedMissingWorktree). Returning a level rather than a
+// bound *slog.Logger method keeps this directly unit-testable — method
+// values aren't comparable.
+func worktreeMissingLevel(alreadyLogged bool) slog.Level {
+	if alreadyLogged {
+		return slog.LevelDebug
+	}
+	return slog.LevelWarn
+}
 
 // ToInstanceData converts an Instance to its serializable form
 //
@@ -49,34 +83,39 @@ func (i *Instance) ToInstanceData() InstanceData {
 	})
 
 	data := InstanceData{
-		Title:                snap.Title,
-		UUID:                 snap.UUID,
-		Path:                 snap.Path,
-		WorkingDir:           snap.WorkingDir,
-		Branch:               snap.Branch,
-		Status:               snap.Status,
-		Height:               snap.Height,
-		Width:                snap.Width,
-		CreatedAt:            snap.CreatedAt,
-		UpdatedAt:            time.Now(),
-		Program:              snap.Program,
-		AutoYes:              snap.AutoYes,
-		AutoApprove:          snap.AutoApprove,
-		Prompt:               snap.Prompt,
-		InitialPrompt:        snap.InitialPrompt,
-		Category:             snap.Category,
-		Note:                 snap.Note,
-		IsExpanded:           snap.IsExpanded,
-		Tags:                 snap.Tags, // Include tags in serialization
-		SessionType:          snap.SessionType,
-		TmuxPrefix:           snap.TmuxPrefix,
-		TmuxServerSocket:     snap.TmuxServerSocket,
-		LastTerminalUpdate:   snap.LastTerminalUpdate,
-		LastMeaningfulOutput: snap.LastMeaningfulOutput,
-		LastOutputSignature:  snap.LastOutputSignature,
-		LastAddedToQueue:     snap.LastAddedToQueue,
-		LastViewed:           snap.LastViewed,
-		LastAcknowledged:     snap.LastAcknowledged,
+		Title:            snap.Title,
+		UUID:             snap.UUID,
+		Path:             snap.Path,
+		WorkingDir:       snap.WorkingDir,
+		Branch:           snap.Branch,
+		Status:           snap.Status,
+		Height:           snap.Height,
+		Width:            snap.Width,
+		CreatedAt:        snap.CreatedAt,
+		UpdatedAt:        time.Now(),
+		Program:          snap.Program,
+		AutoYes:          snap.AutoYes,
+		AutoApprove:      snap.AutoApprove,
+		Prompt:           snap.Prompt,
+		InitialPrompt:    snap.InitialPrompt,
+		Category:         snap.Category,
+		Note:             snap.Note,
+		IsExpanded:       snap.IsExpanded,
+		Tags:             snap.Tags, // Include tags in serialization
+		SessionType:      snap.SessionType,
+		TmuxPrefix:       snap.TmuxPrefix,
+		TmuxServerSocket: snap.TmuxServerSocket,
+		// Backend is set once at construction and never mutated afterward — same
+		// as LaunchCommand below, it isn't in InstanceSnapshot, so read it
+		// directly off the Instance rather than adding it to the snapshot.
+		Backend:                   i.Backend,
+		LastTerminalUpdate:        snap.LastTerminalUpdate,
+		LastMeaningfulOutput:      snap.LastMeaningfulOutput,
+		LastOutputSignature:       snap.LastOutputSignature,
+		LastAddedToQueue:          snap.LastAddedToQueue,
+		LastViewed:                snap.LastViewed,
+		LastAcknowledged:          snap.LastAcknowledged,
+		CreationProgressUpdatedAt: snap.CreationProgressUpdatedAt,
 		// Prompt detection and interaction tracking
 		LastPromptDetected:   snap.LastPromptDetected,
 		LastPromptSignature:  snap.LastPromptSignature,
@@ -243,6 +282,7 @@ func fromInstanceData(data InstanceData, deferStart bool) (*Instance, error) {
 		SessionType:      data.SessionType,
 		TmuxPrefix:       data.TmuxPrefix,
 		TmuxServerSocket: data.TmuxServerSocket,
+		Backend:          data.Backend,
 		ReviewState: ReviewState{
 			LastTerminalUpdate:   data.LastTerminalUpdate,
 			LastMeaningfulOutput: data.LastMeaningfulOutput,
@@ -307,6 +347,10 @@ func fromInstanceData(data InstanceData, deferStart bool) (*Instance, error) {
 		// Workflow linkage and archive state
 		WorkflowID: data.WorkflowID,
 		ArchivedAt: data.ArchivedAt,
+
+		// creationProgressUpdatedAt (Epic 1.1.4/4.1) — restored directly since it
+		// has no exported setter; see ToInstanceData's mirror-write.
+		creationProgressUpdatedAt: data.CreationProgressUpdatedAt,
 	}
 
 	// MIGRATION: Assign UUID to existing sessions that pre-date UUID assignment
@@ -328,9 +372,14 @@ func fromInstanceData(data InstanceData, deferStart bool) (*Instance, error) {
 	// Initialize the process manager via the factory so selectedBackend is honored.
 	// The underlying session is wired below (for Paused/Stopped/Hibernated) or
 	// by initTmuxSession() when Start() is called (for Active sessions).
-	// instance.Backend is not currently persisted in InstanceData (out of Epic 2.1's
-	// scope — see plan.md Task 2.1.3c), so restored sessions fall back to the
-	// process-wide default here, same as before this field existed.
+	// instance.Backend now persists across restarts (Epic 5.1): it's set above
+	// from data.Backend, so a per-session pin (e.g. BackendTymux) survives a
+	// process restart instead of silently reverting to the process-wide default.
+	// Backward compatibility needs no migration code: an old sessions.json entry
+	// written before this field existed has no "backend" key, which the JSON
+	// decoder leaves as the Go zero value ("") on data.Backend — identical to
+	// today's pre-persistence behavior, it falls through to whatever
+	// NewProcessManager's process-wide default resolves to.
 	pm, err := NewProcessManager(context.Background(), BackendTmux, ProcessManagerOptions{Backend: instance.Backend})
 	if err != nil {
 		return nil, fmt.Errorf("session: construct process manager for restored instance %q: %w", instance.Title, err)
@@ -377,10 +426,14 @@ func fromInstanceData(data InstanceData, deferStart bool) (*Instance, error) {
 		worktreePath := instance.gitManager.GetWorktreePath()
 		if _, err := os.Stat(worktreePath); os.IsNotExist(err) {
 			// Worktree has been deleted — use transitionTo so the state machine is respected.
-			log.ForSession(instance.Title).Warn("worktree directory missing, marking as paused", "path", worktreePath)
+			_, alreadyLogged := loggedMissingWorktree.LoadOrStore(instance.Title, struct{}{})
+			level := worktreeMissingLevel(alreadyLogged)
+			logger := log.ForSession(instance.Title)
+			warnOrDebug := func(msg string, args ...any) { logger.Log(context.Background(), level, msg, args...) }
+			warnOrDebug("worktree directory missing, marking as paused", "path", worktreePath)
 			if err := instance.transitionTo(context.Background(), Paused); err != nil {
 				// If the transition is somehow invalid (e.g. already Stopped), fall back to loadStatus.
-				log.ForSession(instance.Title).Warn("could not transition to paused via state machine, using loadStatus", "err", err)
+				warnOrDebug("could not transition to paused via state machine, using loadStatus", "err", err)
 				instance.loadStatus(Paused)
 			}
 		}

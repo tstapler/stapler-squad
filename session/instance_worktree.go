@@ -232,6 +232,13 @@ const BacklogBranchPrefix = "backlog/"
 // resolve HEAD as a valid ref". Setup runs via wt.SetupLocked() rather than wt.Setup() here
 // because this goroutine already holds the (non-reentrant) lock.
 func CreateBacklogWorktree(repoPath, branchSuffix string) (string, error) {
+	if repoPath == "" {
+		// ResolveSessionPath("") silently resolves to the process's own cwd
+		// (the live server's own checkout) instead of erroring — a BacklogItem
+		// can reach here with RepoPath still "" (nothing upstream requires it;
+		// see SpawnSessionFromItem's own guard), so reject before that happens.
+		return "", fmt.Errorf("CreateBacklogWorktree: repoPath must not be empty")
+	}
 	resolvedRepo, err := ResolveSessionPath(repoPath)
 	if err != nil {
 		return "", fmt.Errorf("CreateBacklogWorktree: %w", err)
@@ -407,6 +414,18 @@ func (i *Instance) GetGitWorktree() (*git.GitWorktree, error) {
 // HasGitWorktree returns true if the instance has a git worktree.
 func (i *Instance) HasGitWorktree() bool {
 	return i.gitManager.HasWorktree()
+}
+
+// GetBaseCommitSHA returns the commit SHA this session's branch diverged
+// from, falling back to the directory-mode base SHA when there's no worktree
+// (SessionTypeDirectory, the default session type) — mirrors
+// computeDirDiffStats's HasWorktree()-gated pattern. Returns "" if neither is
+// set yet.
+func (i *Instance) GetBaseCommitSHA() string {
+	if i.gitManager.HasWorktree() {
+		return i.gitManager.GetBaseCommitSHA()
+	}
+	return i.gitManager.GetDirBaseSHA()
 }
 
 // SetGitWorktree sets the git worktree for testing purposes.

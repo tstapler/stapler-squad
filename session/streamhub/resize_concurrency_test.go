@@ -1,6 +1,7 @@
 package streamhub_test
 
 import (
+	"context"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -43,7 +44,7 @@ func (c *reentrancyTrackingController) exitPipeline() {
 	c.mu.Unlock()
 }
 
-func (c *reentrancyTrackingController) SetWindowSize(_, _ int) error {
+func (c *reentrancyTrackingController) SetWindowSizeContext(_ context.Context, _, _ int) error {
 	c.enterPipeline()
 	// Widen the race window: without resizeApplyMu serializing
 	// RequestResize end to end, this sleep gives a second concurrent
@@ -55,7 +56,7 @@ func (c *reentrancyTrackingController) SetWindowSize(_, _ int) error {
 
 func (c *reentrancyTrackingController) ResizePTY(_, _ int) error { return nil }
 
-func (c *reentrancyTrackingController) CapturePaneContentRaw() (streamhub.RawPaneContent, error) {
+func (c *reentrancyTrackingController) CapturePaneContentRawContext(_ context.Context) (streamhub.RawPaneContent, error) {
 	time.Sleep(2 * time.Millisecond)
 	c.pipelineRuns.Add(1)
 	c.exitPipeline()
@@ -66,7 +67,8 @@ func (c *reentrancyTrackingController) GetPaneCursorPosition() (x, y int, err er
 	return 0, 0, nil
 }
 
-func (c *reentrancyTrackingController) StopControlMode() error { return nil }
+func (c *reentrancyTrackingController) StartControlMode() error { return nil }
+func (c *reentrancyTrackingController) StopControlMode() error  { return nil }
 
 // SubscribeControlModeUpdates returns an already-closed channel so
 // waitForQuiescence returns immediately (its receive-from-closed-channel
@@ -137,7 +139,7 @@ func TestRequestResize_should_NeverRunApplyNegotiatedSizePipelineConcurrentlyWit
 				t.Errorf("NewTerminalSize(%d, %d) returned unexpected error: %v", cols, rows, err)
 				return
 			}
-			hub.RequestResize(id, size)
+			hub.RequestResize(context.Background(), id, size)
 		}()
 	}
 

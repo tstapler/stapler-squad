@@ -24,6 +24,22 @@ service SessionService {
   // DeleteSession stops and removes a session, cleaning up resources.
   rpc DeleteSession(DeleteSessionRequest) returns (DeleteSessionResponse) {}
 
+  // CancelSessionCreation cancels an in-progress (Status == Creating)
+  // session creation: it interrupts the Background Resolution Pipeline (if a
+  // live goroutine still exists in this process), cleans up any partially
+  // acquired resources, and removes the instance entirely. Unlike
+  // DeleteSession, a cancelled creation is removed outright rather than left
+  // as a Failed card, and no SessionDeletedEvent is published for it (see
+  // Epic 3.2's Known asymmetry note in the async-session-creation plan).
+  rpc CancelSessionCreation(CancelSessionCreationRequest) returns (CancelSessionCreationResponse) {}
+
+  // RetrySessionCreation retries a Failed session creation in place: the
+  // same instance ID and storage row transition Failed -> Creating and the
+  // Background Resolution Pipeline is re-spawned against a fresh fencing
+  // epoch. No SessionCreatedEvent is published for the retry (only
+  // SessionUpdatedEvent), so a client never sees a duplicate card.
+  rpc RetrySessionCreation(RetrySessionCreationRequest) returns (RetrySessionCreationResponse) {}
+
   // WatchSessions streams real-time session events (created/updated/deleted).
   // Server-streaming RPC for live updates without polling.
   rpc WatchSessions(WatchSessionsRequest) returns (stream SessionEvent) {}
@@ -104,6 +120,7 @@ service SessionService {
   // RestartSession restarts a session by killing and recreating the tmux session.
   // Optionally preserves terminal output for debugging purposes.
   rpc RestartSession(RestartSessionRequest) returns (RestartSessionResponse) {}
+  rpc RetrySession(RetrySessionRequest) returns (RetrySessionResponse) {}
 
   // GetWorkspaceInfo retrieves VCS and workspace information for a session.
   // Returns VCS type (Git/JJ), current branch, revision, and uncommitted changes status.
@@ -310,10 +327,12 @@ service SessionService {
   rpc UpdateCallbackConfig(UpdateCallbackConfigRequest) returns (UpdateCallbackConfigResponse) {}
 
   // Stream Hub Rollout RPCs (terminal-multi-connection-streaming Story 3.3).
-  // The global STAPLER_SQUAD_USE_STREAM_HUB default is env-var-gated and
-  // requires a process restart to change — none of these RPCs can flip it.
-  // What they control is config.json-backed and takes effect immediately:
-  // the rollback-rehearsal completion gate and per-session canary overrides.
+  // Everything these RPCs control is config.json-backed and takes effect
+  // immediately (for session connections resolved from that point on, not
+  // already-connected sessions): the rollback-rehearsal completion gate,
+  // per-session canary overrides, and — via SetStreamHubGlobalOverride — a
+  // live global override, so flipping the effective default no longer
+  // requires editing STAPLER_SQUAD_USE_STREAM_HUB and restarting the process.
 
   // GetStreamHubRolloutStatus reports the current rollout status: whether
   // the global env var is set in this process's environment right now,
@@ -332,6 +351,17 @@ service SessionService {
   // SetStreamHubSessionOverride sets or clears a per-session canary
   // override (Story 3.3.1), independent of the rollback rehearsal gate.
   rpc SetStreamHubSessionOverride(SetStreamHubSessionOverrideRequest) returns (StreamHubRolloutStatus) {}
+
+  // SetStreamHubGlobalOverride sets or clears a live, config.json-backed
+  // override of the global stream-hub default, taking effect immediately
+  // for every session connection resolved after this call — no process
+  // restart required. Forcing it on still goes through the same rollback
+  // rehearsal gate as the env var path (ResolveGlobalStreamHubDefault);
+  // clearing it (force_hub unset) reverts to the STAPLER_SQUAD_USE_STREAM_HUB
+  // env var default. Like all stream-hub resolution, this can only affect
+  // sessions whose ownership lock hasn't resolved yet — an already-connected
+  // session's resolution is cached for its lifetime and cannot be moved.
+  rpc SetStreamHubGlobalOverride(SetStreamHubGlobalOverrideRequest) returns (StreamHubRolloutStatus) {}
 
   // ListWorktrees returns the git worktrees for a given repository path.
   // Used by the Omnibar to populate the "Use Existing Worktree" dropdown.
@@ -698,6 +728,24 @@ message CreateSessionRequest {
 
   // Required to proceed when restart_from_session_id names a still-live source instance.
   bool confirm_restart_with_live_source = 33;
+
+  // Optional: force a specific ProcessManager backend for this session ("tmux", "tymux"),
+  // overriding both the per-session config override and the process-wide default. Empty
+  // means no per-request override — normal precedence applies (see
+  // session.ResolveSessionBackend).
+  optional string backend_override = 34;
+
+  // Optional: per-session override for the global default retry policy
+  // (session-retry-backoff). Unset fields inherit the resolved global value.
+  optional RetryPolicyConfig retry_policy_override = 35;
+
+  // Optional: tags applied to the instance at construction time (synchronously, before the
+  // Background Resolution Pipeline dispatches) -- e.g. MCP's always-appended "source:mcp" and
+  // PR-derived tags (async-session-creation Task 2.3.1c). Unlike a post-hoc SetTags call after
+  // AwaitCreationTerminal succeeds, tags set here are never lost if the pipeline's resolution
+  // runs past a caller's own await timeout: they're on the instance from the moment it's
+  // constructed, not applied only on a terminal-success path.
+  repeated string tags = 36;
 }
 
 // RemoteTarget names a previously-saved remote (by RemoteConfig.Name) that a
@@ -779,6 +827,38 @@ message DeleteSessionRequest {
 
 message DeleteSessionResponse {
   // Whether deletion was successful.
+  bool success = 1;
+
+  // Human-readable message.
+  string message = 2;
+}
+
+message CancelSessionCreationRequest {
+  // Session identifier (title or UUID).
+  string id = 1;
+}
+
+message CancelSessionCreationResponse {
+  // Whether cancellation succeeded. Always true on a non-error response —
+  // if cancellation lost the race with the pipeline's own terminal write,
+  // the RPC returns a FailedPrecondition error instead (see
+  // CancelSessionCreation's doc comment).
+  bool success = 1;
+
+  // Human-readable message.
+  string message = 2;
+}
+
+message RetrySessionCreationRequest {
+  // Session identifier (title or UUID).
+  string id = 1;
+}
+
+message RetrySessionCreationResponse {
+  // Whether the retry was accepted. Always true on a non-error response —
+  // if the instance was no longer Failed by the time TryStartRetry's
+  // command ran, the RPC returns a FailedPrecondition error instead (see
+  // RetrySessionCreation's doc comment).
   bool success = 1;
 
   // Human-readable message.
@@ -1370,6 +1450,26 @@ message RestartSessionResponse {
   string message = 3;
 }
 
+// RetrySessionRequest immediately restarts a session's configurable retry
+// policy (session-retry-backoff), bypassing any pending backoff delay —
+// including from SESSION_STATUS_PERMANENTLY_FAILED.
+message RetrySessionRequest {
+  // Session identifier (uses session title as ID).
+  string id = 1;
+}
+
+// RetrySessionResponse indicates whether the manual retry was accepted.
+message RetrySessionResponse {
+  // Retried session.
+  Session session = 1;
+
+  // Whether the retry was accepted.
+  bool success = 2;
+
+  // Human-readable message (error details if failed).
+  string message = 3;
+}
+
 // GetWorkspaceInfoRequest retrieves VCS information for a session.
 message GetWorkspaceInfoRequest {
   // Session identifier.
@@ -1921,6 +2021,21 @@ message SessionDefaultsConfig {
   int32 stale_session_threshold_minutes = 12;
   // Whether crossing the stale threshold also emits a notification.
   bool stale_session_notify_enabled = 13;
+  // Global default configurable crash/stall retry policy
+  // (session-retry-backoff). Always the resolved value in responses.
+  RetryPolicyConfig retry_policy = 14;
+}
+
+// RetryPolicyConfig describes the automated crash/stall retry policy: how
+// many attempts, what backoff, and which failure reasons are eligible.
+message RetryPolicyConfig {
+  bool enabled = 1;
+  int32 max_attempts = 2;
+  string backoff = 3;
+  int32 initial_delay_seconds = 4;
+  int32 max_delay_seconds = 5;
+  repeated string retry_on = 6;
+  bool stale_triggers_retry = 7;
 }
 
 // GetSessionDefaults
@@ -1984,6 +2099,10 @@ message UpdateGlobalDefaultsRequest {
   // 0 = use the server default. See SessionDefaultsConfig.stale_session_threshold_minutes.
   int32 stale_session_threshold_minutes = 10;
   bool stale_session_notify_enabled = 11;
+  // Global default configurable crash/stall retry policy
+  // (session-retry-backoff). Applies to newly-started retry episodes only —
+  // a session already mid-backoff keeps the policy it started with.
+  RetryPolicyConfig retry_policy = 12;
 }
 
 message UpdateGlobalDefaultsResponse {
@@ -2103,12 +2222,16 @@ message StreamHubSessionOverrideEntry {
 
 message StreamHubRolloutStatus {
   // Whether STAPLER_SQUAD_USE_STREAM_HUB=true is set in this process's
-  // environment right now. Purely informational: the global default can
-  // only be changed by setting the env var and restarting the process.
+  // environment right now. Purely informational — superseded by
+  // global_override when the latter is set.
   bool global_env_var_set = 1;
   // Unset when the rollback rehearsal has never been completed.
   google.protobuf.Timestamp rollback_rehearsal_completed_at = 2;
   repeated StreamHubSessionOverrideEntry session_overrides = 3;
+  // Live, config.json-backed override of the global default, settable via
+  // SetStreamHubGlobalOverride with no restart required. Unset means no
+  // override is active and the env var default applies.
+  optional bool global_override = 4;
 }
 
 message CompleteStreamHubRollbackRehearsalRequest {}
@@ -2120,6 +2243,14 @@ message SetStreamHubSessionOverrideRequest {
   // pins it onto the legacy path — either way, regardless of the global
   // default.
   optional bool force_hub = 2;
+}
+
+message SetStreamHubGlobalOverrideRequest {
+  // Unset clears the global override, reverting to the
+  // STAPLER_SQUAD_USE_STREAM_HUB env var default. true/false forces the
+  // global default for every session connection resolved from now on,
+  // still subject to the rollback rehearsal gate when forcing true.
+  optional bool force_hub = 1;
 }
 
 // UpsertProfile

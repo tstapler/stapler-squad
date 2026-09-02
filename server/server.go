@@ -470,6 +470,19 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		log.Info("Registered GitHubUserService handler", "path", ghAPIPath)
 	}
 
+	// Register TymuxRolloutService handler (tymux-bundled-integration Epic
+	// 3.3: operator-facing controls for the staged tymux rollout, mirroring
+	// StreamHubRolloutService's registration). Config-backed with no
+	// external deps, so it's constructed inline rather than threaded
+	// through ServerDependencies.
+	{
+		tymuxRolloutSvc := services.NewTymuxRolloutService()
+		tymuxRolloutPath, tymuxRolloutHandler := sessionv1connect.NewTymuxRolloutServiceHandler(tymuxRolloutSvc, ConnectOptions(deps.ErrorRegistry)...)
+		tymuxRolloutAPIPath := "/api" + tymuxRolloutPath
+		srv.RegisterConnectHandler(tymuxRolloutAPIPath, http.StripPrefix("/api", tymuxRolloutHandler))
+		log.Info("Registered TymuxRolloutService handler", "path", tymuxRolloutAPIPath)
+	}
+
 	// Register RemoteService handler (ssh-remote-workspaces Epic 3.3: TOFU
 	// host-key confirmation flow for configured SSH remotes). KnownHostsStore
 	// construction is the only fallible step (it touches disk under
@@ -660,6 +673,11 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	// InjectHookConfig's PermissionRequest URL and InjectHooksConfig's stop/pre-tool-use/
 	// post-tool-use/prompt-submit endpoints resolve through this single shared mechanism.
 	services.SetHookBaseURLFn(hookBaseURLFn)
+	// Same lazy base-URL resolver, wired into BacklogLifecycleListener so agent-created
+	// PR bodies can link back to the backlog item instead of embedding a bare UUID.
+	if deps.BacklogLifecycleListener != nil {
+		deps.BacklogLifecycleListener.SetDashboardBaseURLFn(hookBaseURLFn)
+	}
 	// Wire the review queue poller for immediate queue checks on new approvals (Story 3, Task 3.1)
 	approvalHandler.SetQueueChecker(deps.ReviewQueuePoller)
 	// Wire the classifier and analytics store for auto-approve/deny before manual review
@@ -732,7 +750,7 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	// unauthenticated prober scanning generic guessable webhook paths
 	// (plan.md Risk Control) — that rationale doesn't apply here:
 	// /api/hooks/slack-interactive is a single, fixed, already
-	// publicly-documented path (.claude/docs/slack-phase2-public-reachability.md),
+	// publicly-documented path (docs/how-to/expose-slack-interactive-endpoint.md),
 	// not a guessable pattern, so an explicit 404 leaks nothing a prober
 	// couldn't already find in the docs. Boot-time-only gate either way
 	// (flipping the flag requires a restart to take effect).
@@ -770,7 +788,15 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		// flag off requires a restart to stop serving these routes, same limitation the
 		// "backlog" flag already has for its own route-gated pieces.
 		if webhookCfg.GetFeatureFlag("webhook_triggers") {
-			githubWebhookHandler := services.NewGitHubWebhookHandler(deps.WorkflowRepo, deps.WorkflowScheduler, deps.TriggerFireEventRepo, webhookCfg)
+			// deps.BacklogLifecycleListener is nil-guarded (rather than passed directly)
+			// to avoid boxing a nil *session.BacklogLifecycleListener into a non-nil
+			// services.PRFixEventRouter interface value (a "typed nil" — handlePRFixEvent's
+			// `h.prFixRouter == nil` check would then never trip).
+			var prFixRouter services.PRFixEventRouter
+			if deps.BacklogLifecycleListener != nil {
+				prFixRouter = deps.BacklogLifecycleListener
+			}
+			githubWebhookHandler := services.NewGitHubWebhookHandler(deps.WorkflowRepo, deps.WorkflowScheduler, deps.TriggerFireEventRepo, webhookCfg, prFixRouter)
 			githubWebhookHandler.RegisterRoutes(srv.mux)
 			genericWebhookHandler := services.NewGenericWebhookHandler(deps.WorkflowRepo, deps.WorkflowScheduler, deps.TriggerFireEventRepo, webhookCfg)
 			genericWebhookHandler.RegisterRoutes(srv.mux)
@@ -783,6 +809,12 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 			// route). This log line at least makes the boot-time-only nature of the gate
 			// visible in the service log.
 			log.Info("webhook-trigger routes NOT registered (webhook_triggers flag off) — /webhooks/* will 404 until the flag is enabled and the service restarts")
+			if webhookCfg.GetFeatureFlag("pr_event_webhooks") {
+				// pr_event_webhooks has no effect unless webhook_triggers is also enabled
+				// (the route itself isn't registered above) — a silent-404 trap an
+				// operator could otherwise hit with zero signal.
+				log.Warn("pr_event_webhooks is enabled but webhook_triggers is not — /webhooks/github is not registered, PR-fix webhook events will silently 404")
+			}
 		}
 	}
 
@@ -878,7 +910,7 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	if os.Getenv("STAPLER_SQUAD_INSTANCE") == "e2e-local" && deps.Storage != nil {
 		backlogSeedHandler := services.NewBacklogDebugSeedHandler(deps.Storage)
 		backlogSeedHandler.RegisterRoutes(srv.mux)
-		log.Info("Registered backlog debug seed handlers at /api/debug/backlog/seed-stuck, /api/debug/backlog/seed-queued, and /api/debug/backlog/seed-headless-triage-session (e2e-local only)")
+		log.Info("Registered backlog debug seed handlers at /api/debug/backlog/seed-stuck, /api/debug/backlog/seed-queued, /api/debug/backlog/seed-headless-triage-session, /api/debug/backlog/seed-work-item-session, and /api/debug/backlog/seed-work-session-with-worktree (e2e-local only)")
 
 		// Registered for project_plans/backlog-event-driven-updates's Playwright
 		// e2e layer — lets tests mutate a backlog item directly through the
@@ -1034,6 +1066,26 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		log.Info("Stale session notifier started",
 			"threshold_minutes", cfg.StaleSession.ThresholdMinutesOrDefault(),
 			"notify_enabled", cfg.StaleSession.NotifyEnabledOrDefault())
+	}
+
+	// Start stale creation sweeper (flips a Creating session whose persisted
+	// creation-progress timestamp has exceeded the configured threshold to
+	// Failed/Stale -- see StaleCreationSweeper doc comment, Epic 4.1).
+	if deps.ReviewQueuePoller != nil && deps.Storage != nil {
+		staleCreationSweeper := services.NewStaleCreationSweeper(deps.ReviewQueuePoller, deps.Storage, deps.EventBus)
+		go staleCreationSweeper.Start(serverCtx)
+		log.Info("Stale creation sweeper started",
+			"threshold_minutes", cfg.CreationStale.ThresholdMinutesOrDefault())
+	}
+
+	// Start memory pressure notifier (fires an operator-facing notification the first time
+	// this process's own cgroup memory usage crosses its MemoryHigh ceiling — see
+	// MemoryPressureNotifier doc comment). No-ops on non-Linux (telemetry.CgroupMemoryUsageRatio
+	// always reports unavailable there).
+	if deps.ReviewQueuePoller != nil {
+		memNotifier := services.NewMemoryPressureNotifier(deps.ReviewQueuePoller, deps.EventBus)
+		go memNotifier.Start(serverCtx)
+		log.Info("Memory pressure notifier started")
 	}
 }
 

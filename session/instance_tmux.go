@@ -710,7 +710,7 @@ func (i *Instance) ResizePTY(cols, rows int) error {
 // with the terminal WebSocket handlers.
 func (i *Instance) CapturePaneContent() (string, error) {
 	if !i.started.Load() || i.Status == Paused {
-		return "", fmt.Errorf("session not started or paused")
+		return "", streamhub.ErrSessionNotStarted
 	}
 	return i.pm().CapturePaneContent()
 }
@@ -729,7 +729,7 @@ const terminalResyncExecGateFastLaneFlagName = "terminal:resync-exec-gate-fast-l
 // plain call is a correct, if unoptimized, behavior).
 func (i *Instance) CapturePaneContentPriority() (string, error) {
 	if !i.started.Load() || i.Status == Paused {
-		return "", fmt.Errorf("session not started or paused")
+		return "", streamhub.ErrSessionNotStarted
 	}
 	if tb, ok := i.processManager.(*TmuxBackend); ok {
 		return tb.TmuxManager().CapturePaneContentPriority()
@@ -743,12 +743,18 @@ func (i *Instance) CapturePaneContentPriority() (string, error) {
 // why a terminal-rendering caller needs this instead of the joined form. The
 // non-tmux fallback is CapturePaneContentRaw, not CapturePaneContent, for the
 // same reason.
-func (i *Instance) CapturePaneContentRawPriority() (streamhub.RawPaneContent, error) {
+//
+// ctx is caller-supplied, not manufactured here — see
+// session/tmux/exec_gate.go's runFastLaneSubprocess doc comment: a resync
+// operation calls this alongside RefreshTmuxClientPriority/
+// GetPaneDimensionsPriority in sequence, and all of them must share the same
+// overall deadline rather than each getting an independent fresh one.
+func (i *Instance) CapturePaneContentRawPriority(ctx context.Context) (streamhub.RawPaneContent, error) {
 	if !i.started.Load() || i.Status == Paused {
-		return "", fmt.Errorf("session not started or paused")
+		return "", streamhub.ErrSessionNotStarted
 	}
 	if tb, ok := i.processManager.(*TmuxBackend); ok {
-		content, err := tb.TmuxManager().CapturePaneContentRawPriority()
+		content, err := tb.TmuxManager().CapturePaneContentRawPriority(ctx)
 		return streamhub.RawPaneContent(content), err
 	}
 	i.logFastLaneAssertionFailure("CapturePaneContentRawPriority")
@@ -759,13 +765,27 @@ func (i *Instance) CapturePaneContentRawPriority() (streamhub.RawPaneContent, er
 // RefreshTmuxClientPriority forces the tmux client to refresh via the resync
 // exec-gate fast lane (Epic 4.2) when the instance is tmux-backed, falling
 // back to the plain RefreshTmuxClient() call otherwise. See
-// CapturePaneContentPriority's doc comment for the fallback rationale.
-func (i *Instance) RefreshTmuxClientPriority() error {
+// CapturePaneContentPriority's doc comment for the fallback rationale, and
+// CapturePaneContentRawPriority's for why ctx is caller-supplied.
+func (i *Instance) RefreshTmuxClientPriority(ctx context.Context) error {
 	if tb, ok := i.processManager.(*TmuxBackend); ok {
-		return tb.TmuxManager().RefreshClientPriority()
+		return tb.TmuxManager().RefreshClientPriority(ctx)
 	}
 	i.logFastLaneAssertionFailure("RefreshTmuxClientPriority")
 	return i.pm().RefreshClient()
+}
+
+// GetPaneDimensionsPriority mirrors GetPaneDimensions but routes its
+// subprocess fallback through the resync exec-gate fast lane when the
+// instance is tmux-backed — see TmuxSession.GetPaneDimensionsPriority's doc
+// comment. ctx is caller-supplied, for the same shared-deadline reason as
+// CapturePaneContentRawPriority.
+func (i *Instance) GetPaneDimensionsPriority(ctx context.Context) (width, height int, err error) {
+	if tb, ok := i.processManager.(*TmuxBackend); ok {
+		return tb.TmuxManager().GetPaneDimensionsPriority(ctx)
+	}
+	i.logFastLaneAssertionFailure("GetPaneDimensionsPriority")
+	return i.pm().GetPaneDimensions()
 }
 
 // logFastLaneAssertionFailure logs, at debug level, that a Priority() call
@@ -789,11 +809,21 @@ func (i *Instance) logFastLaneAssertionFailure(method string) {
 // Essential for hybrid streaming where cursor positioning codes must be preserved.
 func (i *Instance) CapturePaneContentRaw() (streamhub.RawPaneContent, error) {
 	if !i.started.Load() || i.Status == Paused {
-		return "", fmt.Errorf("session not started or paused")
+		return "", streamhub.ErrSessionNotStarted
 	}
 
 	content, err := i.pm().CapturePaneContentRaw()
 	return streamhub.RawPaneContent(content), err
+}
+
+// CapturePaneContentRawContext mirrors CapturePaneContentRaw but honors ctx:
+// it delegates to CapturePaneContentRawPriority, which already races the
+// underlying capture against ctx.Done() via the resync exec-gate fast lane
+// (session/tmux/exec_gate.go's runFastLaneSubprocess) for tmux-backed
+// instances. Satisfies streamhub.SessionController for
+// StreamHub.applyNegotiatedSize.
+func (i *Instance) CapturePaneContentRawContext(ctx context.Context) (streamhub.RawPaneContent, error) {
+	return i.CapturePaneContentRawPriority(ctx)
 }
 
 // GetCurrentPaneContent captures the current visible tmux pane content.
@@ -927,11 +957,45 @@ func (i *Instance) SetTmuxSession(session *tmux.TmuxSession) {
 
 // SetWindowSize propagates window size changes to the tmux session.
 // This enables proper terminal resizing in environments like IntelliJ where SIGWINCH doesn't work.
+//
+// Guards on i.started/i.Status the same way CapturePaneContent and its
+// siblings do, returning streamhub.ErrSessionNotStarted instead of falling
+// through to i.pm().SetWindowSize. HasSession() alone is not a readiness
+// signal: LoadInstances()'s reconciliation wires the *tmux.TmuxSession object
+// (instance_serialization.go) synchronously, well before the async
+// Start()/RestoreWithWorkDir() call that actually installs the PTY, so a
+// resize landing in that window used to reach tmux.TmuxSession.SetWindowSize
+// and fail with a raw "PTY is not initialized" error that
+// StreamHub.applyNegotiatedSize's errors.Is(err, ErrSessionNotStarted)
+// skip-and-retry branch (hub.go) couldn't recognize, plus logged a spurious
+// WARN on every restart.
 func (i *Instance) SetWindowSize(cols, rows int) error {
+	if !i.started.Load() || i.Status == Paused {
+		return streamhub.ErrSessionNotStarted
+	}
 	if i.pm().HasSession() {
 		return i.pm().SetWindowSize(cols, rows)
 	}
 	return nil
+}
+
+// SetWindowSizeContext mirrors SetWindowSize but returns as soon as ctx is
+// canceled or its deadline expires, instead of only ever waiting out
+// SetWindowSize's own internal fixed timeout — the underlying tmux command
+// path (session/tmux/tmux.go's cmCtx) has no caller-overridable context, so
+// this wraps the blocking call in a goroutine and races it against ctx,
+// following the same pattern as CapturePaneContentRawPriority for the
+// resync fast lane. StreamHub.applyNegotiatedSize is the sole caller, via
+// the streamhub.SessionController interface.
+func (i *Instance) SetWindowSizeContext(ctx context.Context, cols, rows int) error {
+	done := make(chan error, 1)
+	go func() { done <- i.SetWindowSize(cols, rows) }()
+	select {
+	case err := <-done:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 // RefreshTmuxClient forces the tmux client to refresh, triggering a redraw

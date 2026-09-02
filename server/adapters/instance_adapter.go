@@ -1,7 +1,11 @@
 package adapters
 
 import (
+	"fmt"
+
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/github"
+	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/cdp"
 	"github.com/tstapler/stapler-squad/session/detection"
@@ -69,11 +73,35 @@ func InstanceToProto(inst *session.Instance, workflowNames map[string]string) *s
 		GithubApprovedCount:   int32(inst.GitHubApprovedCount),
 		GithubChangesReqCount: int32(inst.GitHubChangesReqCount),
 		GithubCheckConclusion: inst.GitHubCheckConclusion,
+		GithubChecks:          checksToProto(inst.GitHubChecks),
+		GithubReviewFeedback:  reviewFeedbackToProto(inst.GitHubReviewFeedback),
+		GithubMergeable:       inst.GitHubMergeable,
 		LastPrStatusCheck:     timestamppb.New(inst.LastPRStatusCheck),
 		WorkspaceKey:          inst.WorkspaceKey(),
 		LaunchCommand:         inst.LaunchCommand,
 		// Restart-from-session lineage (Story 2.3.1)
 		RestartedFromSessionId: snap.RestartedFromSessionID,
+	}
+
+	// Retry state (session-retry-backoff), fields 76-80. Read directly from
+	// the instance (not the InstanceSnapshot atomic pointer, which predates
+	// this feature) via RetrySnapshot's race-free copy.
+	rs := inst.RetrySnapshot()
+	protoSession.RetryAttempt = int32(rs.RetryAttempt)
+	protoSession.RetryMaxAttempts = int32(rs.RetryMaxAttempts)
+	protoSession.LastFailureReason = rs.LastFailureReason
+	if !rs.NextRetryAt.IsZero() {
+		protoSession.NextRetryAt = timestamppb.New(rs.NextRetryAt)
+	}
+	if len(rs.RetryHistory) > 0 {
+		protoSession.RetryHistory = make([]*sessionv1.RetryAttemptRecord, len(rs.RetryHistory))
+		for i, rec := range rs.RetryHistory {
+			protoSession.RetryHistory[i] = &sessionv1.RetryAttemptRecord{
+				Attempt:   int32(rec.Attempt),
+				Reason:    rec.Reason,
+				Timestamp: timestamppb.New(rec.Timestamp),
+			}
+		}
 	}
 
 	// Convert artifact data if available
@@ -134,6 +162,10 @@ func InstanceToProto(inst *session.Instance, workflowNames map[string]string) *s
 			protoSession.CreationProgress = "Starting session..."
 		}
 	}
+
+	// Reason the async creation pipeline failed — only meaningful when the
+	// session is Failed. See session.Instance.FailureReason's doc comment.
+	protoSession.FailureReason = inst.FailureReason()
 
 	// Rate limit state propagation.
 	protoSession.RateLimitState = rateLimitStateToProto(ratelimit.RateLimitState(inst.GetRateLimitState()))
@@ -318,31 +350,50 @@ func rateLimitStateToProto(state ratelimit.RateLimitState) sessionv1.RateLimitSt
 	}
 }
 
-// StatusToProto converts session.Status to proto SessionStatus enum.
-func StatusToProto(status session.Status) sessionv1.SessionStatus {
+// StatusToProto converts a session.Status to its proto SessionStatus wire value.
+// Returns an explicit error for an unrecognized status instead of silently
+// falling back to UNSPECIFIED, so a future new session.Status value that isn't
+// added here fails loudly (see .golangci.yml's exhaustive-linter exclusion
+// comment for why this is enforced at the code level here rather than via the
+// linter, which is deliberately disabled repo-wide for iota-typed switches with
+// intentional default arms).
+func StatusToProto(status session.Status) (sessionv1.SessionStatus, error) {
 	switch status {
 	case session.Active:
-		return sessionv1.SessionStatus_SESSION_STATUS_ACTIVE // wire value 1 (same as legacy RUNNING)
+		return sessionv1.SessionStatus_SESSION_STATUS_ACTIVE, nil // wire value 1 (same as legacy RUNNING)
 	case session.Paused:
-		return sessionv1.SessionStatus_SESSION_STATUS_PAUSED
+		return sessionv1.SessionStatus_SESSION_STATUS_PAUSED, nil
 	case session.Creating:
-		return sessionv1.SessionStatus_SESSION_STATUS_CREATING
+		return sessionv1.SessionStatus_SESSION_STATUS_CREATING, nil
 	case session.Stopped:
-		return sessionv1.SessionStatus_SESSION_STATUS_STOPPED
+		return sessionv1.SessionStatus_SESSION_STATUS_STOPPED, nil
 	case session.Hibernated:
-		return sessionv1.SessionStatus_SESSION_STATUS_HIBERNATED
+		return sessionv1.SessionStatus_SESSION_STATUS_HIBERNATED, nil
 	case session.Restoring:
-		return sessionv1.SessionStatus_SESSION_STATUS_RESTORING
+		return sessionv1.SessionStatus_SESSION_STATUS_RESTORING, nil
 	case session.Crashed:
-		return sessionv1.SessionStatus_SESSION_STATUS_CRASHED
+		return sessionv1.SessionStatus_SESSION_STATUS_CRASHED, nil
+	case session.PermanentlyFailed:
+		return sessionv1.SessionStatus_SESSION_STATUS_PERMANENTLY_FAILED, nil
+	case session.Failed:
+		return sessionv1.SessionStatus_SESSION_STATUS_FAILED, nil
 	default:
-		return sessionv1.SessionStatus_SESSION_STATUS_UNSPECIFIED
+		return sessionv1.SessionStatus_SESSION_STATUS_UNSPECIFIED, fmt.Errorf("adapters.StatusToProto: unrecognized session.Status %d", int(status))
 	}
 }
 
-// statusToProto is kept for backward compatibility
+// statusToProto is kept for backward compatibility with callers that predate
+// StatusToProto's explicit-error signature. An unrecognized status is logged
+// (it should never happen — every session.Status value is handled above) and
+// mapped to UNSPECIFIED rather than propagated, matching this wrapper's
+// original no-error contract.
 func statusToProto(status session.Status) sessionv1.SessionStatus {
-	return StatusToProto(status)
+	proto, err := StatusToProto(status)
+	if err != nil {
+		log.Error("statusToProto: unrecognized session.Status", "status", int(status), "err", err)
+		return sessionv1.SessionStatus_SESSION_STATUS_UNSPECIFIED
+	}
+	return proto
 }
 
 // StatusStringToProto converts a status string (from session.Status.String()) to proto SessionStatus.
@@ -363,6 +414,8 @@ func StatusStringToProto(status string) sessionv1.SessionStatus {
 		return sessionv1.SessionStatus_SESSION_STATUS_HIBERNATED
 	case "Crashed":
 		return sessionv1.SessionStatus_SESSION_STATUS_CRASHED
+	case "PermanentlyFailed":
+		return sessionv1.SessionStatus_SESSION_STATUS_PERMANENTLY_FAILED
 	default:
 		return sessionv1.SessionStatus_SESSION_STATUS_UNSPECIFIED
 	}
@@ -422,6 +475,13 @@ func ProtoToStatus(status sessionv1.SessionStatus) session.Status {
 		return session.Hibernated
 	case sessionv1.SessionStatus_SESSION_STATUS_RESTORING:
 		return session.Restoring
+	case sessionv1.SessionStatus_SESSION_STATUS_CRASHED:
+		// Collateral fix: this case was missing before session-retry-backoff
+		// touched this switch — a round-tripped CRASHED session silently fell
+		// to the default: below and reopened as Creating.
+		return session.Crashed
+	case sessionv1.SessionStatus_SESSION_STATUS_PERMANENTLY_FAILED:
+		return session.PermanentlyFailed
 	default:
 		return session.Creating // Default to Creating for unknown statuses
 	}
@@ -451,6 +511,24 @@ func instanceTypeToProto(instanceType session.InstanceType) sessionv1.InstanceTy
 	default:
 		return sessionv1.InstanceType_INSTANCE_TYPE_UNSPECIFIED
 	}
+}
+
+// checksToProto converts the itemized GitHub statusCheckRollup into proto GithubCheckItem messages.
+func checksToProto(checks []github.CheckItem) []*sessionv1.GithubCheckItem {
+	out := make([]*sessionv1.GithubCheckItem, len(checks))
+	for i, c := range checks {
+		out[i] = &sessionv1.GithubCheckItem{Name: c.Name, Context: c.Context, State: c.State, Status: c.Status, Conclusion: c.Conclusion}
+	}
+	return out
+}
+
+// reviewFeedbackToProto converts the itemized GitHub PR review list into proto GithubReviewFeedback messages.
+func reviewFeedbackToProto(reviews []github.ReviewItem) []*sessionv1.GithubReviewFeedback {
+	out := make([]*sessionv1.GithubReviewFeedback, len(reviews))
+	for i, r := range reviews {
+		out[i] = &sessionv1.GithubReviewFeedback{Author: r.Author, State: r.State, Body: r.Body}
+	}
+	return out
 }
 
 // externalMetadataToProto converts session.ExternalInstanceMetadata to proto ExternalInstanceMetadata.

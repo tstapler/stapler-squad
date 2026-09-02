@@ -1,6 +1,10 @@
 package streamhub
 
-import "github.com/tstapler/stapler-squad/log"
+import (
+	"context"
+
+	"github.com/tstapler/stapler-squad/log"
+)
 
 // ResizeVote is a {SubscriberID, TerminalSize} tuple submitted by a
 // capability-eligible Subscriber toward the hub's NegotiatedSize (Task
@@ -25,7 +29,13 @@ func (h *StreamHub) NegotiatedSize() TerminalSize {
 // SubscriberCapability.CanResize == true (Task 1.3.1c) — a read-only sink's
 // vote is rejected and logged, never applied. Requesting resize for an
 // unknown SubscriberID is a no-op.
-func (h *StreamHub) RequestResize(id SubscriberID, size TerminalSize) {
+//
+// ctx should be scoped to the calling connection's lifetime (canceled when
+// that caller disconnects), not a fixed background timeout — it becomes the
+// deadline applyNegotiatedSize bounds its SetWindowSize/CapturePaneContentRaw
+// calls with, so an early disconnect stops those calls instead of always
+// waiting out a fixed ceiling.
+func (h *StreamHub) RequestResize(ctx context.Context, id SubscriberID, size TerminalSize) {
 	h.mu.Lock()
 	sub, ok := h.subscribers[id]
 	h.mu.Unlock()
@@ -66,7 +76,7 @@ func (h *StreamHub) RequestResize(id SubscriberID, size TerminalSize) {
 	recordResizeNegotiation(changed)
 
 	if changed {
-		h.applyNegotiatedSize(current)
+		h.applyNegotiatedSize(ctx, current)
 	}
 }
 

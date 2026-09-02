@@ -51,69 +51,17 @@ fi
 TEMP_BACKEND="${TMPDIR_WORK}/backend"
 mkdir -p "${TEMP_BACKEND}"
 echo "Scanning backend features..."
-if ! ./tools/scanner/backend/cmd/scanner \
-      proto/session/v1/session.proto \
-      server/services/ \
-      "${TEMP_BACKEND}" 2>&1; then
-  echo "ERROR: backend scanner failed (session.proto)" >&2
-  exit 2
-fi
-if ! ./tools/scanner/backend/cmd/scanner \
-      proto/session/v1/unfinished.proto \
-      server/services/ \
-      "${TEMP_BACKEND}" 2>&1; then
-  echo "ERROR: backend scanner failed (unfinished.proto)" >&2
-  exit 2
-fi
-if ! ./tools/scanner/backend/cmd/scanner \
-      proto/session/v1/backlog.proto \
-      server/services/ \
-      "${TEMP_BACKEND}" 2>&1; then
-  echo "ERROR: backend scanner failed (backlog.proto)" >&2
-  exit 2
-fi
-if ! ./tools/scanner/backend/cmd/scanner \
-      proto/session/v1/insights.proto \
-      server/services/ \
-      "${TEMP_BACKEND}" 2>&1; then
-  echo "ERROR: backend scanner failed (insights.proto)" >&2
-  exit 2
-fi
-if ! ./tools/scanner/backend/cmd/scanner \
-      proto/session/v1/import.proto \
-      server/services/ \
-      "${TEMP_BACKEND}" 2>&1; then
-  echo "ERROR: backend scanner failed (import.proto)" >&2
-  exit 2
-fi
-if ! ./tools/scanner/backend/cmd/scanner \
-      proto/session/v1/github_user.proto \
-      server/services/ \
-      "${TEMP_BACKEND}" 2>&1; then
-  echo "ERROR: backend scanner failed (github_user.proto)" >&2
-  exit 2
-fi
-if ! ./tools/scanner/backend/cmd/scanner \
-      proto/session/v1/session_summary.proto \
-      server/services/ \
-      "${TEMP_BACKEND}" 2>&1; then
-  echo "ERROR: backend scanner failed (session_summary.proto)" >&2
-  exit 2
-fi
-if ! ./tools/scanner/backend/cmd/scanner \
-      proto/session/v1/remote.proto \
-      server/services/ \
-      "${TEMP_BACKEND}" 2>&1; then
-  echo "ERROR: backend scanner failed (remote.proto)" >&2
-  exit 2
-fi
-if ! ./tools/scanner/backend/cmd/scanner \
-      proto/session/v1/handoff_summary.proto \
-      server/services/ \
-      "${TEMP_BACKEND}" 2>&1; then
-  echo "ERROR: backend scanner failed (handoff_summary.proto)" >&2
-  exit 2
-fi
+BACKEND_PROTOS_RAW="$("${SCRIPT_DIR}/list-backend-protos.sh")" || exit 2
+mapfile -t BACKEND_PROTOS <<< "${BACKEND_PROTOS_RAW}"
+for proto in "${BACKEND_PROTOS[@]}"; do
+  if ! ./tools/scanner/backend/cmd/scanner \
+        "${proto}" \
+        server/services/ \
+        "${TEMP_BACKEND}" 2>&1; then
+    echo "ERROR: backend scanner failed (${proto##*/})" >&2
+    exit 2
+  fi
+done
 
 list_ids() {
   local dir="$1"

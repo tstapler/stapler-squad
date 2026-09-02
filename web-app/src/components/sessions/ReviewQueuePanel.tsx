@@ -385,6 +385,7 @@ export function ReviewQueuePanel({
     oldestAgeSeconds,
     refresh,
     acknowledgeSession,
+    acknowledgeSessions,
   } = useReviewQueueContext();
 
   // ─── Snapshot-on-enter pattern ────────────────────────────────────────────
@@ -621,6 +622,62 @@ export function ReviewQueuePanel({
       }))
       .filter((g) => g.items.length > 0);
   }, [items, groupingStrategy, sessionByItemId]);
+
+  // Items eligible for bulk skip — approval requests are excluded because they need an
+  // explicit Approve/Deny decision, not a blanket dismissal (mirrors the single-item Skip
+  // button's own exclusion below).
+  const skippableItems = useMemo(
+    () => items.filter((it) => !it.metadata?.["pending_approval_id"]),
+    [items]
+  );
+  const [isBulkSkipping, setIsBulkSkipping] = useState(false);
+
+  // Single-item skip: routes through the onSkipSession prop override when given (e.g. the
+  // review page's own dismissal logic), otherwise the hook's acknowledgeSession. Shared by
+  // the per-row Skip button below so the onSkipSession-or-acknowledgeSession branch isn't
+  // copy-pasted at each call site.
+  const skipSession = useCallback(
+    (sessionId: string) =>
+      Promise.resolve(onSkipSession ? onSkipSession(sessionId) : acknowledgeSession(sessionId)).then(
+        () => onAcknowledged?.(sessionId)
+      ),
+    [onSkipSession, acknowledgeSession, onAcknowledged]
+  );
+
+  const handleSkipAllVisible = useCallback(async () => {
+    if (skippableItems.length === 0 || isBulkSkipping) return;
+    const count = skippableItems.length;
+    if (!window.confirm(`Skip all ${count} visible item${count === 1 ? "" : "s"}? This removes ${count === 1 ? "it" : "them"} from the review queue.`)) {
+      return;
+    }
+    setIsBulkSkipping(true);
+    try {
+      if (onSkipSession) {
+        // No hook-level bulk primitive exists for the prop-override path — fan out the
+        // override individually, but only report success for items that actually resolved.
+        const results = await Promise.allSettled(
+          skippableItems.map((it) => onSkipSession(it.sessionId))
+        );
+        results.forEach((result, i) => {
+          if (result.status === "fulfilled") {
+            onAcknowledged?.(skippableItems[i].sessionId);
+          }
+        });
+      } else {
+        // Single bulk RPC call — failures are collected instead of dispatching the queue's
+        // global error (which would otherwise blank the whole panel on one flaky request).
+        const { failed } = await acknowledgeSessions(skippableItems.map((it) => it.sessionId));
+        const failedIds = new Set(failed);
+        for (const it of skippableItems) {
+          if (!failedIds.has(it.sessionId)) {
+            onAcknowledged?.(it.sessionId);
+          }
+        }
+      }
+    } finally {
+      setIsBulkSkipping(false);
+    }
+  }, [skippableItems, isBulkSkipping, onSkipSession, acknowledgeSessions, onAcknowledged]);
 
   // Approval actions for APPROVAL_PENDING items
   const { approve: approveRequest, deny: denyRequest } = useApprovalsContext();
@@ -977,10 +1034,12 @@ export function ReviewQueuePanel({
               <span className={detailLabel}>Program:</span>
               <span className={detailValue}>{queueItem.program}</span>
             </div>
-            <div className={detailRow}>
-              <span className={detailLabel}>Branch:</span>
-              <span className={detailValue}>{queueItem.branch}</span>
-            </div>
+            {queueItem.branch && (
+              <div className={detailRow}>
+                <span className={detailLabel}>Branch:</span>
+                <span className={detailValue}>{queueItem.branch}</span>
+              </div>
+            )}
             <div className={detailRow}>
               <span className={detailLabel}>Path:</span>
               <span className={detailValue} title={queueItem.path}>{queueItem.path}</span>
@@ -1077,12 +1136,7 @@ export function ReviewQueuePanel({
             size="md"
             onClick={(e) => {
               e.stopPropagation();
-              if (onSkipSession) {
-                onSkipSession(queueItem.sessionId);
-              } else {
-                acknowledgeSession(queueItem.sessionId);
-              }
-              onAcknowledged?.(queueItem.sessionId);
+              void skipSession(queueItem.sessionId);
             }}
             title="Acknowledge session (remove from queue)"
             aria-label="Acknowledge session"
@@ -1245,6 +1299,19 @@ export function ReviewQueuePanel({
             >
               ✕ Clear
             </button>
+          )}
+          {(skippableItems.length > 0 || isBulkSkipping) && (
+            <Button
+              intent="ghost"
+              size="md"
+              onClick={handleSkipAllVisible}
+              disabled={isBulkSkipping || skippableItems.length === 0}
+              title={`Skip every item currently shown${hasActiveFilter ? " by the active filter" : ""} (excludes approval requests)`}
+              aria-label={`Skip all ${skippableItems.length} visible item${skippableItems.length === 1 ? "" : "s"}`}
+              data-testid="skip-all-visible"
+            >
+              {isBulkSkipping ? "Skipping…" : `⏭ Skip all (${skippableItems.length})`}
+            </Button>
           )}
         </div>
       )}

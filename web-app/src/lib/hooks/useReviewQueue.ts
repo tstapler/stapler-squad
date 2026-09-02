@@ -65,6 +65,7 @@ interface UseReviewQueueReturn extends AsyncResult {
   getByPriority: (priority: Priority) => Promise<ReviewQueue | null>;
   getByReason: (reason: AttentionReason) => Promise<ReviewQueue | null>;
   acknowledgeSession: (sessionId: string) => Promise<void>;
+  acknowledgeSessions: (sessionIds: string[]) => Promise<{ failed: string[] }>;
 }
 
 /**
@@ -443,6 +444,35 @@ export function useReviewQueue(
     [refresh, dispatch]
   );
 
+  // Acknowledges multiple sessions in parallel. Unlike acknowledgeSession, a per-item
+  // RPC failure does not dispatch the global queue error (which would blank the whole
+  // panel) — failures are collected and returned so the caller can show a scoped result
+  // instead.
+  const acknowledgeSessions = useCallback(
+    async (sessionIds: string[]): Promise<{ failed: string[] }> => {
+      if (!clientRef.current) return { failed: sessionIds };
+
+      sessionIds.forEach((id) => dispatch(removeItem(id)));
+
+      const results = await Promise.allSettled(
+        sessionIds.map((id) => {
+          const request = create(AcknowledgeSessionRequestSchema, { id });
+          return clientRef.current!.acknowledgeSession(request);
+        })
+      );
+
+      const failed = sessionIds.filter((_, i) => results[i].status === "rejected");
+      if (failed.length > 0) {
+        console.error(`Failed to acknowledge ${failed.length} of ${sessionIds.length} sessions`);
+        // Reconcile optimistic removals against real server state for the failed items.
+        await refresh();
+      }
+
+      return { failed };
+    },
+    [refresh, dispatch]
+  );
+
   // Extract statistics from review queue
   const statistics = {
     totalItems: reviewQueue?.totalItems ?? 0,
@@ -477,5 +507,6 @@ export function useReviewQueue(
     getByPriority,
     getByReason,
     acknowledgeSession,
+    acknowledgeSessions,
   };
 }

@@ -1,6 +1,7 @@
 package streamhub_test
 
 import (
+	"context"
 	"errors"
 	"sync"
 	"sync/atomic"
@@ -44,6 +45,8 @@ func newFakeSessionController() *fakeSessionController {
 	return &fakeSessionController{updates: make(chan []byte, 16)}
 }
 
+func (f *fakeSessionController) StartControlMode() error { return nil }
+
 func (f *fakeSessionController) StopControlMode() error {
 	f.stopCalls.Add(1)
 	if f.stopFn != nil {
@@ -52,7 +55,7 @@ func (f *fakeSessionController) StopControlMode() error {
 	return f.stopErr
 }
 
-func (f *fakeSessionController) SetWindowSize(cols, rows int) error {
+func (f *fakeSessionController) SetWindowSizeContext(_ context.Context, cols, rows int) error {
 	f.setWindowSizeCalls.Add(1)
 	f.mu.Lock()
 	f.lastResize = [2]int{cols, rows}
@@ -66,7 +69,7 @@ func (f *fakeSessionController) ResizePTY(_, _ int) error {
 	return nil
 }
 
-func (f *fakeSessionController) CapturePaneContentRaw() (streamhub.RawPaneContent, error) {
+func (f *fakeSessionController) CapturePaneContentRawContext(_ context.Context) (streamhub.RawPaneContent, error) {
 	f.captureCalls.Add(1)
 	return streamhub.RawPaneContent(f.captureContent), f.captureErr
 }

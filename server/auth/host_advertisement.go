@@ -19,7 +19,7 @@ import (
 // (DB + `tmux list-sessions`, no network transport). So the advertisement
 // endpoint is served here, as a sibling registration alongside RegisterRoutes
 // (not folded into it, to avoid growing that function's already-long
-// parameter list -- see .claude/rules/primitive-obsession-checklist.md),
+// parameter list -- see the `primitive-obsession-checklist` skill),
 // rather than a new listener or a piggyback on WorkspacePeer.
 //
 // advertiser may be nil (e.g. in tests exercising only accept/reject

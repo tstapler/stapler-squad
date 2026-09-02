@@ -1,6 +1,7 @@
 package streamhub_test
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -30,7 +31,7 @@ type tmuxSessionController struct {
 	session *tmux.TmuxSession
 }
 
-func (c *tmuxSessionController) SetWindowSize(cols, rows int) error {
+func (c *tmuxSessionController) SetWindowSizeContext(_ context.Context, cols, rows int) error {
 	return c.session.SetWindowSize(cols, rows)
 }
 
@@ -43,13 +44,17 @@ func (c *tmuxSessionController) ResizePTY(cols, rows int) error {
 	return c.session.SetWindowSize(cols, rows)
 }
 
-func (c *tmuxSessionController) CapturePaneContentRaw() (streamhub.RawPaneContent, error) {
+func (c *tmuxSessionController) CapturePaneContentRawContext(_ context.Context) (streamhub.RawPaneContent, error) {
 	content, err := c.session.CapturePaneContentRaw()
 	return streamhub.RawPaneContent(content), err
 }
 
 func (c *tmuxSessionController) GetPaneCursorPosition() (x, y int, err error) {
 	return c.session.GetCursorPosition()
+}
+
+func (c *tmuxSessionController) StartControlMode() error {
+	return c.session.StartControlMode()
 }
 
 func (c *tmuxSessionController) StopControlMode() error {
@@ -129,7 +134,7 @@ func newReconnectStormSession(t *testing.T, index int) *reconnectStormSession {
 	if err != nil {
 		t.Fatalf("NewTerminalSize: %v", err)
 	}
-	hub.RequestResize(id, size)
+	hub.RequestResize(context.Background(), id, size)
 
 	return &reconnectStormSession{
 		name:             name,
@@ -212,7 +217,7 @@ func TestMultiSessionReconnectStorm_should_NeverViolateOverlapInvariant_When_All
 				reconnectErrs[idx] = fmt.Errorf("session %s: NewTerminalSize: %w", s.name, err)
 				return
 			}
-			s.hub.RequestResize(freshID, size)
+			s.hub.RequestResize(context.Background(), freshID, size)
 
 			// OverlapInvariant is production-reachable on every hub
 			// lookup/creation; re-asserting it here for the reconnecting

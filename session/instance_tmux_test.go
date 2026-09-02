@@ -3,6 +3,7 @@ package session
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/executor/safeexec"
+	"github.com/tstapler/stapler-squad/session/streamhub"
 )
 
 // TestBuildSubmittableInput_UsesCarriageReturnNotNewline is a regression test
@@ -677,5 +679,64 @@ func TestClaudeMCPConfigArgs_HTTPFormat(t *testing.T) {
 	headers, _ := entry["headers"].(map[string]interface{})
 	if headers["X-Stapler-Session-UUID"] != "test-uuid-123" {
 		t.Errorf("X-Stapler-Session-UUID = %q, want test-uuid-123", headers["X-Stapler-Session-UUID"])
+	}
+}
+
+// fakeHasSessionProcessManager reports HasSession() true (the tmux session
+// object has been wired by LoadInstances()'s reconciliation) and records
+// SetWindowSize calls, without a real PTY behind it -- used to prove
+// Instance.SetWindowSize gates on i.started rather than on HasSession() alone.
+type fakeHasSessionProcessManager struct {
+	ProcessManager
+	resized bool
+}
+
+func (f *fakeHasSessionProcessManager) HasSession() bool { return true }
+func (f *fakeHasSessionProcessManager) SetWindowSize(cols, rows int) error {
+	f.resized = true
+	return nil
+}
+
+// TestInstance_SetWindowSize_should_ReturnErrSessionNotStarted_When_NotStarted
+// is a regression test for the "PTY is not initialized" race: right after
+// LoadInstances() reconciles a session back to Active (instance_serialization.go),
+// the *tmux.TmuxSession object is wired -- so HasSession() is already true --
+// well before the async Start()/RestoreWithWorkDir() call that installs the
+// PTY finishes. A resize landing in that window used to fall through to the
+// tmux layer and fail with a raw "PTY is not initialized" error that
+// StreamHub.applyNegotiatedSize's errors.Is(err, ErrSessionNotStarted)
+// skip-and-retry branch (session/streamhub/hub.go) could not recognize.
+// SetWindowSize must check i.started the same way its sibling
+// CapturePaneContent does and return the shared sentinel instead.
+func TestInstance_SetWindowSize_should_ReturnErrSessionNotStarted_When_NotStarted(t *testing.T) {
+	t.Parallel()
+	pm := &fakeHasSessionProcessManager{}
+	instance := &Instance{Title: "test", processManager: pm}
+	// started defaults to false (zero value) -- the reconciled-but-not-yet-attached window.
+
+	err := instance.SetWindowSize(100, 30)
+
+	if !errors.Is(err, streamhub.ErrSessionNotStarted) {
+		t.Fatalf("SetWindowSize() error = %v, want errors.Is(err, streamhub.ErrSessionNotStarted)", err)
+	}
+	if pm.resized {
+		t.Error("SetWindowSize must not delegate to the process manager before the instance has started")
+	}
+}
+
+// TestInstance_SetWindowSize_should_Delegate_When_Started is the positive
+// counterpart: once the actor has actually finished starting, SetWindowSize
+// must still reach the process manager as before.
+func TestInstance_SetWindowSize_should_Delegate_When_Started(t *testing.T) {
+	t.Parallel()
+	pm := &fakeHasSessionProcessManager{}
+	instance := &Instance{Title: "test", processManager: pm}
+	instance.started.Store(true)
+
+	if err := instance.SetWindowSize(100, 30); err != nil {
+		t.Fatalf("SetWindowSize() unexpected error: %v", err)
+	}
+	if !pm.resized {
+		t.Error("SetWindowSize should delegate to the process manager once started")
 	}
 }

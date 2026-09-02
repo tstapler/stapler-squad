@@ -3,6 +3,7 @@ package config
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -245,7 +246,7 @@ func TestDefaultConfig(t *testing.T) {
 func TestPruneStaleTestDirs(t *testing.T) {
 	testBaseDir := t.TempDir()
 
-	deadCmd := exec.Command("true")
+	deadCmd := safeexec.CommandContext(context.Background(), "true")
 	require.NoError(t, deadCmd.Run())
 	deadPID := deadCmd.Process.Pid
 
@@ -767,6 +768,25 @@ func TestV1ConfigLoadsWithNotificationDefaults(t *testing.T) {
 	cfg, err := LoadConfigFromPath(path)
 	require.NoError(t, err)
 	assert.False(t, cfg.Notifications.PushEnabled, "default must be push disabled")
+}
+
+// TestLoadConfigFromPath_should_ResolveAC7Defaults_When_RetryPolicyKeyMissing
+// round-trips a config.json predating the session-retry-backoff feature (no
+// "retry_policy" key at all) and asserts it resolves to today's exact
+// single-retry, immediate-restart behavior — AC7.
+func TestLoadConfigFromPath_should_ResolveAC7Defaults_When_RetryPolicyKeyMissing(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	preFeatureJSON := `{"configVersion": 2, "session_defaults": {}}`
+	require.NoError(t, os.WriteFile(path, []byte(preFeatureJSON), 0600))
+
+	cfg, err := LoadConfigFromPath(path)
+	require.NoError(t, err)
+
+	assert.True(t, cfg.RetryPolicy.EnabledOrDefault(), "a pre-feature config.json must resolve to retry enabled")
+	assert.Equal(t, 1, cfg.RetryPolicy.MaxAttemptsOrDefault(), "must resolve to today's exact single-retry behavior")
+	assert.Equal(t, 0, cfg.RetryPolicy.InitialDelaySeconds, "must resolve to today's immediate-restart behavior")
+	assert.Equal(t, "exponential", cfg.RetryPolicy.Backoff, "load-time normalization must fill in the default strategy")
 }
 
 // UT-4.3 — PushEnabled=false is the zero-value default [R8]
@@ -1383,4 +1403,205 @@ func TestLoadConfig_HandoffSummaryAbsentFromExistingConfig_DefaultsToEnabled(t *
 	require.NoError(t, err)
 	assert.True(t, cfg.HandoffSummary.EnabledOrDefault())
 	assert.Equal(t, 12000, cfg.HandoffSummary.MaxMiddleExcerptTokens)
+}
+
+// TestResolveGlobalTymuxDefault_AlwaysAllowsFalse verifies the gate never
+// blocks the safe direction: requesting the global tymux default be false is
+// always permitted, regardless of whether the tymux rollback rehearsal has
+// been recorded. Mirrors
+// TestResolveGlobalStreamHubDefault_should_ReturnFalseWithNoError_When_RequestedIsFalse
+// (config/stream_hub_rollout_test.go).
+func TestResolveGlobalTymuxDefault_AlwaysAllowsFalse(t *testing.T) {
+	cfg := &Config{} // TymuxRollbackRehearsalCompletedAt unset
+
+	got, err := ResolveGlobalTymuxDefault(cfg, false)
+	if err != nil {
+		t.Fatalf("expected no error requesting false, got %v", err)
+	}
+	if got != false {
+		t.Fatalf("expected false, got %v", got)
+	}
+}
+
+// TestResolveGlobalTymuxDefault_RefusesTrueWithoutRehearsal is ADR-002's
+// mechanical gate: with TymuxRollbackRehearsalCompletedAt unset, requesting
+// the global tymux default resolve to true must fail with an explicit error,
+// not silently fall back to false without signaling why. Mirrors
+// TestResolveGlobalStreamHubDefault_should_FailFast_When_RehearsalNotCompleted.
+func TestResolveGlobalTymuxDefault_RefusesTrueWithoutRehearsal(t *testing.T) {
+	cfg := &Config{} // TymuxRollbackRehearsalCompletedAt unset
+
+	got, err := ResolveGlobalTymuxDefault(cfg, true)
+	if !errors.Is(err, ErrTymuxRollbackRehearsalNotCompleted) {
+		t.Fatalf("expected ErrTymuxRollbackRehearsalNotCompleted, got %v", err)
+	}
+	if got != false {
+		t.Fatalf("expected false to be returned alongside the error, got %v", got)
+	}
+}
+
+// TestResolveGlobalTymuxDefault_AllowsTrueAfterRehearsal is the happy path:
+// once TymuxRollbackRehearsalCompletedAt is set to a valid, non-zero
+// timestamp, the same resolution that previously failed now succeeds and
+// permits the global tymux default to be true.
+func TestResolveGlobalTymuxDefault_AllowsTrueAfterRehearsal(t *testing.T) {
+	completedAt := time.Now()
+	cfg := &Config{TymuxRollbackRehearsalCompletedAt: &completedAt}
+
+	got, err := ResolveGlobalTymuxDefault(cfg, true)
+	if err != nil {
+		t.Fatalf("expected no error once rehearsal is recorded, got %v", err)
+	}
+	if got != true {
+		t.Fatalf("expected true, got %v", got)
+	}
+}
+
+// TestRecordTymuxRollbackRehearsalCompleted_PersistsTimestamp exercises
+// recording a completed tymux rehearsal end to end: it persists
+// TymuxRollbackRehearsalCompletedAt to disk, and a freshly reloaded config
+// subsequently permits ResolveGlobalTymuxDefault to return true where it
+// previously refused. Mirrors
+// TestRecordRollbackRehearsalCompleted_should_PersistTimestamp_And_UnblockResolution.
+func TestRecordTymuxRollbackRehearsalCompleted_PersistsTimestamp(t *testing.T) {
+	tempHome := t.TempDir()
+	origHome := os.Getenv("HOME")
+	origInstance := os.Getenv("STAPLER_SQUAD_INSTANCE")
+	os.Setenv("HOME", tempHome)
+	os.Setenv("STAPLER_SQUAD_INSTANCE", "shared")
+	defer func() {
+		os.Setenv("HOME", origHome)
+		if origInstance == "" {
+			os.Unsetenv("STAPLER_SQUAD_INSTANCE")
+		} else {
+			os.Setenv("STAPLER_SQUAD_INSTANCE", origInstance)
+		}
+	}()
+
+	cfg := &Config{}
+
+	// Before recording, the gate refuses.
+	if _, err := ResolveGlobalTymuxDefault(cfg, true); !errors.Is(err, ErrTymuxRollbackRehearsalNotCompleted) {
+		t.Fatalf("expected gate to refuse before rehearsal is recorded, got %v", err)
+	}
+
+	before := time.Now()
+	if err := cfg.RecordTymuxRollbackRehearsalCompleted(); err != nil {
+		t.Fatalf("RecordTymuxRollbackRehearsalCompleted returned error: %v", err)
+	}
+	after := time.Now()
+
+	if cfg.TymuxRollbackRehearsalCompletedAt == nil {
+		t.Fatal("expected TymuxRollbackRehearsalCompletedAt to be set in memory")
+	}
+	if cfg.TymuxRollbackRehearsalCompletedAt.Before(before) || cfg.TymuxRollbackRehearsalCompletedAt.After(after) {
+		t.Fatalf("expected TymuxRollbackRehearsalCompletedAt to be within [%v, %v], got %v", before, after, *cfg.TymuxRollbackRehearsalCompletedAt)
+	}
+
+	if _, err := ResolveGlobalTymuxDefault(cfg, true); err != nil {
+		t.Fatalf("expected gate to succeed after rehearsal is recorded, got %v", err)
+	}
+
+	configPath := filepath.Join(tempHome, ".stapler-squad", ConfigFileName)
+	reloaded, err := LoadConfigFromPath(configPath)
+	if err != nil {
+		t.Fatalf("LoadConfigFromPath after RecordTymuxRollbackRehearsalCompleted: %v", err)
+	}
+	if reloaded.TymuxRollbackRehearsalCompletedAt == nil {
+		t.Fatal("expected persisted config to carry TymuxRollbackRehearsalCompletedAt")
+	}
+	if _, err := ResolveGlobalTymuxDefault(reloaded, true); err != nil {
+		t.Fatalf("expected reloaded config's gate to succeed, got %v", err)
+	}
+}
+
+// TestGetTymuxSessionOverride_NilConfigIsNilSafe verifies the nil-safe
+// zero-value behavior mirroring GetStreamHubSessionOverride's shape: a nil
+// *Config and a config with a nil TymuxSessionOverrides map both report no
+// override rather than panicking.
+func TestGetTymuxSessionOverride_NilConfigIsNilSafe(t *testing.T) {
+	var nilCfg *Config
+	if _, ok := nilCfg.GetTymuxSessionOverride("canary-1"); ok {
+		t.Fatal("expected nil config to report no override")
+	}
+
+	cfg := &Config{} // TymuxSessionOverrides is nil
+	if _, ok := cfg.GetTymuxSessionOverride("canary-1"); ok {
+		t.Fatal("expected config with nil map to report no override")
+	}
+}
+
+// TestSetTymuxSessionOverride_ForceTrueThenForceFalse exercises Task
+// 4.1.1b's both-directions regression guard (plan.md Epic 4.1): setting the
+// same session name's override to true, then to false, must actually flip
+// the stored value both ways and persist each direction to disk. This is
+// the accessor-level proof that config storage carries no directional bias
+// toward true, unlike streamhub/ownership.go's resolveLocked (see
+// research/features.md (b).5), which only ever pushes toward true.
+func TestSetTymuxSessionOverride_ForceTrueThenForceFalse(t *testing.T) {
+	tempHome := t.TempDir()
+	origHome := os.Getenv("HOME")
+	origInstance := os.Getenv("STAPLER_SQUAD_INSTANCE")
+	os.Setenv("HOME", tempHome)
+	os.Setenv("STAPLER_SQUAD_INSTANCE", "shared")
+	defer func() {
+		os.Setenv("HOME", origHome)
+		if origInstance == "" {
+			os.Unsetenv("STAPLER_SQUAD_INSTANCE")
+		} else {
+			os.Setenv("STAPLER_SQUAD_INSTANCE", origInstance)
+		}
+	}()
+
+	configPath := filepath.Join(tempHome, ".stapler-squad", ConfigFileName)
+	cfg := &Config{}
+
+	// Direction 1: force tymux (true).
+	forceTymux := true
+	if err := cfg.SetTymuxSessionOverride("canary-1", &forceTymux); err != nil {
+		t.Fatalf("SetTymuxSessionOverride(true) returned error: %v", err)
+	}
+	if got, ok := cfg.GetTymuxSessionOverride("canary-1"); !ok || !got {
+		t.Fatalf("expected override to force tymux, got (%v, %v)", got, ok)
+	}
+	reloaded, err := LoadConfigFromPath(configPath)
+	if err != nil {
+		t.Fatalf("LoadConfigFromPath after forcing true: %v", err)
+	}
+	if got, ok := reloaded.GetTymuxSessionOverride("canary-1"); !ok || !got {
+		t.Fatalf("expected persisted override to force tymux, got (%v, %v)", got, ok)
+	}
+
+	// Direction 2: same session name, now force tmux (false). If the
+	// accessor had streamhub's resolveLocked bias, this would fail to move
+	// the effective value back to false.
+	forceTmux := false
+	if err := cfg.SetTymuxSessionOverride("canary-1", &forceTmux); err != nil {
+		t.Fatalf("SetTymuxSessionOverride(false) returned error: %v", err)
+	}
+	if got, ok := cfg.GetTymuxSessionOverride("canary-1"); !ok || got {
+		t.Fatalf("expected override to force tmux (false), got (%v, %v)", got, ok)
+	}
+	reloadedAfterFalse, err := LoadConfigFromPath(configPath)
+	if err != nil {
+		t.Fatalf("LoadConfigFromPath after forcing false: %v", err)
+	}
+	if got, ok := reloadedAfterFalse.GetTymuxSessionOverride("canary-1"); !ok || got {
+		t.Fatalf("expected persisted override to force tmux (false), got (%v, %v)", got, ok)
+	}
+
+	// nil clears the override entirely, falling back to the global default.
+	if err := cfg.SetTymuxSessionOverride("canary-1", nil); err != nil {
+		t.Fatalf("SetTymuxSessionOverride(nil) returned error: %v", err)
+	}
+	if _, ok := cfg.GetTymuxSessionOverride("canary-1"); ok {
+		t.Fatal("expected override to be cleared")
+	}
+	reloadedAfterClear, err := LoadConfigFromPath(configPath)
+	if err != nil {
+		t.Fatalf("LoadConfigFromPath after clear: %v", err)
+	}
+	if _, ok := reloadedAfterClear.GetTymuxSessionOverride("canary-1"); ok {
+		t.Fatal("expected persisted config to no longer have the override")
+	}
 }

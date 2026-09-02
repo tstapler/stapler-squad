@@ -17,10 +17,11 @@ export interface BrowserLogEntry {
 
 export interface UseBrowserLogStreamOptions {
   /**
-   * Whether verbose console output (log/warn/debug) streams to the server.
-   * console.error, window.onerror, and unhandledrejection always stream
-   * regardless of this flag, so crash diagnostics survive even when a user
-   * never opts into the noisy levels.
+   * Whether verbose console.debug output streams to the server. console.log,
+   * console.warn, console.error, window.onerror, and unhandledrejection
+   * always stream regardless of this flag (info-and-up, matching the
+   * server's own log-level convention) — this only gates the noisiest,
+   * per-frame debug tracing (e.g. per-WebSocket-message logs).
    */
   enabled: boolean;
   /** Optional session ID to tag entries. */
@@ -96,8 +97,9 @@ export function useBrowserLogStream(options: UseBrowserLogStreamOptions): void {
     }
 
     function enqueue(level: BrowserLogEntry["level"], args: unknown[]): void {
-      // log/warn/debug are opt-in only (noisy); only error always streams.
-      if (level !== "error" && !enabledRef.current) return;
+      // Only "debug" is opt-in (noisy, per-frame tracing); log/warn/error
+      // stream unconditionally, matching the server's info-and-up default.
+      if (level === "debug" && !enabledRef.current) return;
       if (intercepting) return; // reentrancy guard
       intercepting = true;
       try {

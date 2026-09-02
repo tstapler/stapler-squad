@@ -229,6 +229,7 @@ function getStatusDisplayName(status: number): string {
     case SessionStatus.STOPPED:        return "Stopped";  // 7
     case SessionStatus.HIBERNATED:     return "Hibernated"; // 8
     case SessionStatus.CRASHED:        return "Crashed";  // 10
+    case SessionStatus.PERMANENTLY_FAILED: return "Failed"; // 11
     default:                           return "Unknown";
   }
 }

@@ -119,7 +119,7 @@ func recentReviewHadVerdict(sessions []session.ItemSessionSummary, n int) []bool
 // first), one per completed (EndedAt != nil) work-role ItemSession in
 // sessions — computed lazily via go-git tree comparison of each session's
 // BaseCommitSha/LastCommitSha (git.FileStatsBetween; no git subshell, see
-// .claude/rules/prefer-go-git-over-subshells.md). sessions must be ordered
+// the `prefer-go-git-over-subshells` skill). sessions must be ordered
 // oldest-first, as Storage.ListItemSessions returns (mirrors
 // recentReviewHadVerdict's contract above). Feeds
 // session.IsTestOnlyReworkCycle.
@@ -613,6 +613,17 @@ func (s *BacklogService) SpawnSessionFromItem(
 			return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("backlog item %q not found", req.Msg.ItemId))
 		}
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to get backlog item: %w", err))
+	}
+
+	// 1a. Repo path required. spawnSessionAfterGates (step 5 below) already rejects a
+	// missing repo_path on the direct-spawn path, but the WIP-cap gate (step 4) can
+	// queue this item via queueBacklogItem without ever reaching spawnSessionAfterGates
+	// until a later DequeueNextQueuedItems sweep -- without this earlier check, a
+	// repo_path-less item would occupy a WIP slot until that eventual, easy-to-miss
+	// failure instead of erroring immediately.
+	if item.RepoPath == "" {
+		return nil, connect.NewError(connect.CodeFailedPrecondition,
+			fmt.Errorf("set repo_path before spawning a session"))
 	}
 
 	// 1b. Atomic check-and-set: only one SpawnSessionFromItem call for this item may be
@@ -1411,6 +1422,19 @@ func (s *BacklogService) resolveRespawnBlockedActiveLogged(ctx context.Context, 
 	}
 }
 
+// resolveSteerFailedLogged clears an open StuckReasonSteerFailed row for
+// itemID, logging (not returning) any storage error. Mirrors
+// resolveRespawnBlockedActiveLogged for the opposite direction of "at most
+// one of {SteerFailed, RespawnBlockedActive} open at a time."
+func (s *BacklogService) resolveSteerFailedLogged(ctx context.Context, caller, itemID string) {
+	if s.storage == nil {
+		return
+	}
+	if _, err := s.storage.ResolveStuck(ctx, itemID, domain.StuckReasonSteerFailed); err != nil {
+		log.WarningLog().Printf("[%s] ResolveStuck(steer_failed) item=%s: %v", caller, itemID, err)
+	}
+}
+
 // notifyIfActiveWorkSessionStale closes the "zero operator signal" half of a
 // live gap: AutoReopenAfterFailedReview's hasActiveWorkSession guard treats
 // any work session with EndedAt == nil as "in flight" and skips reopening
@@ -1989,6 +2013,17 @@ func (s *BacklogService) RemediateStaleWorkSession(ctx context.Context, itemID s
 		return s.AutoRespawnAutonomousWork(ctx, itemID)
 	}
 
+	// Defer to the driver's own automated retry machinery
+	// (session-retry-backoff) rather than racing it: if a retry is already
+	// claimed or scheduled for this exact session, its process-level recovery
+	// is already in progress — killing the pane and respawning here would be
+	// the double-remediation risk this AC exists to close, not a genuine
+	// second recovery path.
+	if s.sessionStopper != nil && s.sessionStopper.IsRetryPending(active.SessionUUID) {
+		log.InfoLog().Printf("[RemediateStaleWorkSession] item=%s session=%s: deferring — an automated retry is already in flight/scheduled for this session", itemID, active.SessionUUID)
+		return nil
+	}
+
 	// End the ItemSession row BEFORE killing the pane (BUG-064 — see doc
 	// comment above): this ordering is what lets onSessionExited's
 	// already-ended guard close the race with AutoRespawnAutonomousWork below.
@@ -2012,10 +2047,43 @@ func (s *BacklogService) RemediateStaleWorkSession(ctx context.Context, itemID s
 	return s.AutoRespawnAutonomousWork(ctx, itemID)
 }
 
-// AutoReopenForPRFix implements session.PRFixSpawner. It transitions the item
-// from pr_pending back to in_progress and spawns a new autonomous work session
-// pre-loaded with the CI/review failure context so the agent can fix and push.
+// HasActiveWorkSession implements session.PRFixSpawner's query half — a
+// side-effect-free check letting remediatePRFixWithBackoffGate decide
+// whether to bypass its backoff gate before calling
+// AutoReopenForPRFixWithKnownSession with the same resolved session. Does
+// not transition status or mark/notify anything.
+func (s *BacklogService) HasActiveWorkSession(ctx context.Context, itemID string) (*session.ItemSessionSummary, error) {
+	if s.storage == nil {
+		return nil, fmt.Errorf("storage not available")
+	}
+	sessions, err := s.storage.ListItemSessions(ctx, itemID)
+	if err != nil {
+		return nil, fmt.Errorf("list sessions: %w", err)
+	}
+	return findActiveWorkSession(sessions), nil
+}
+
+// AutoReopenForPRFix implements session.PRFixSpawner. When no work session is
+// active for the item, it transitions the item from pr_pending back to
+// in_progress and spawns a new autonomous work session pre-loaded with the
+// CI/review failure context so the agent can fix and push; when a work
+// session is already active, it instead steers that session with the same
+// fixContext (see steerActiveSessionForPRFix) rather than spawning a
+// duplicate.
 func (s *BacklogService) AutoReopenForPRFix(ctx context.Context, itemID string, fixContext string) error {
+	return s.autoReopenForPRFix(ctx, itemID, fixContext, nil)
+}
+
+// AutoReopenForPRFixWithKnownSession implements session.PRFixSpawner's
+// TOCTOU-safe variant: knownActive (from a prior HasActiveWorkSession call
+// in the same tick) is trusted as a floor on activity, so this call's
+// steer-vs-spawn decision can't diverge from the caller's already-decided
+// backoff bypass even if the session ended in between.
+func (s *BacklogService) AutoReopenForPRFixWithKnownSession(ctx context.Context, itemID, fixContext string, knownActive *session.ItemSessionSummary) error {
+	return s.autoReopenForPRFix(ctx, itemID, fixContext, knownActive)
+}
+
+func (s *BacklogService) autoReopenForPRFix(ctx context.Context, itemID string, fixContext string, knownActive *session.ItemSessionSummary) error {
 	if s.storage == nil {
 		return fmt.Errorf("storage not available")
 	}
@@ -2045,8 +2113,15 @@ func (s *BacklogService) AutoReopenForPRFix(ctx context.Context, itemID string, 
 	// progress while its 4-hour-old autonomous work session was, in fact, still active
 	// (see docs/tasks/backlog-feature-improvement.md).
 	s.tombstoneOrphanWorkSessions(ctx, itemID, sessions)
-	if active := findActiveWorkSession(sessions); active != nil {
-		s.notifyRespawnBlockedByActiveSession(ctx, "AutoReopenForPRFix", itemID, item.Title, session.BacklogStatus(item.Status), active.SessionUUID)
+	active := findActiveWorkSession(sessions)
+	if active == nil {
+		// Fall back to the caller's already-resolved session (same tick, one
+		// query earlier) so a session ending in this narrow window can't
+		// flip an already-decided backoff-bypass into an ungated spawn.
+		active = knownActive
+	}
+	if active != nil {
+		s.steerActiveSessionForPRFix(ctx, itemID, item.Title, session.BacklogStatus(item.Status), active.SessionUUID, fixContext)
 		return nil
 	}
 	s.resolveRespawnBlockedActiveLogged(ctx, "AutoReopenForPRFix", itemID)
@@ -2823,7 +2898,7 @@ func (s *BacklogService) TriggerTriage(
 		// mode; nothing for default mode, which writes to artifactAbsPath instead
 		// — CommitChanges no-ops when the worktree isn't dirty) so the docs
 		// survive past this goroutine instead of sitting uncommitted indefinitely
-		// (the exact gap .claude/rules/sdd-planning-artifacts-commit.md already
+		// (the exact gap docs/how-to/commit-sdd-planning-artifacts.md already
 		// names). Only when triageWorktree is non-nil — the itemRepoPath fallback
 		// path must never auto-commit into a repo this code didn't create.
 		if triageWorktree != nil {
@@ -2888,6 +2963,31 @@ func (s *BacklogService) TriggerTriage(
 			persistFailures = append(persistFailures, "saving the plan artifacts path")
 		}
 
+		// Close out the ItemSession and release triageInFlight together, BEFORE the
+		// status transition to Ready below — not after it, and not after the optional
+		// auto-spawn further down. ended_at and triageInFlight are updated in the same
+		// spot deliberately: both are inputs to the orphan-liveness check (IsTriageLive
+		// / tombstoneOrphanTriageSessions above), so moving one without the other would
+		// let a concurrent reconciliation sweep see "ended_at nil, not live" and
+		// wrongly tombstone a session that's simply between here and its final log
+		// line.
+		//
+		// This pair used to run AFTER the status transition ("the item's status
+		// already flipped to Ready, so a caller polling on status can legitimately
+		// re-trigger triage now"), which was itself the fix for the original
+		// TestTriggerTriage_RefineWithFeedback CI flake (auto-spawn's I/O stretching
+		// the window). But that left a second, narrower window open: a caller polling
+		// storage directly (not through IsTriageLive) can observe Ready the instant
+		// TransitionBacklogItemStatus returns, race ahead of this goroutine's own next
+		// line, and hit a spurious AlreadyExists from the triageInFlight guard at 3a-i
+		// above -- confirmed as the root cause of a full-test-suite-only (never
+		// isolated) flake in TestTriggerTriage_RefineWithFeedback_ClearsRejectionReason,
+		// where DB lock contention under -p made that window wide enough to hit
+		// reliably. Clearing triageInFlight before the status write closes it: by the
+		// time Ready is observable to any caller, this item is already re-triggerable.
+		_ = s.storage.UpdateItemSessionEnded(persistCtx, isID, time.Now())
+		s.triageInFlight.Delete(itemID)
+
 		precondition := &session.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusIdea)}
 		statusAdvanced := true
 		if _, transErr := s.storage.TransitionBacklogItemStatus(persistCtx, itemID, //nolint:silenttransition surfaced a few lines below via notifyTriagePersistFailure once persistFailures is fully collected
@@ -2900,21 +3000,6 @@ func (s *BacklogService) TriggerTriage(
 		if len(persistFailures) > 0 {
 			s.notifyTriagePersistFailure(persistCtx, itemID, item.Title, persistFailures, statusAdvanced)
 		}
-
-		// Close out the ItemSession and release triageInFlight together, right here —
-		// not after the optional auto-spawn below. The item's status already flipped to
-		// Ready above, so a caller polling on status (or a human clicking "retry") can
-		// legitimately re-trigger triage now; leaving triageInFlight held through
-		// auto-spawn's own I/O (SpawnSessionFromItem creates a worktree, etc.) only
-		// stretched a window where a well-timed retry got a spurious AlreadyExists —
-		// exactly what made TestTriggerTriage_RefineWithFeedback flaky in CI. ended_at
-		// and triageInFlight are updated in the same spot deliberately: both are inputs
-		// to the orphan-liveness check (IsTriageLive / tombstoneOrphanTriageSessions
-		// above), so moving one without the other would let a concurrent reconciliation
-		// sweep see "ended_at nil, not live" and wrongly tombstone a session that's
-		// simply between here and its final log line.
-		_ = s.storage.UpdateItemSessionEnded(persistCtx, isID, time.Now())
-		s.triageInFlight.Delete(itemID)
 
 		// Opt-in: skip the manual "Spawn Session" click when the item is configured to
 		// auto-spawn. Autonomous: true bypasses the planning-approval gate the same way
@@ -3669,6 +3754,17 @@ func (s *BacklogService) resolveCodebaseWorkDir(ctx context.Context, repoPath st
 		// the shared main checkout's current, arbitrary working-tree state (BUG-045).
 		return repoPath, false
 	}
+	// Worktree-identity guard (backlog item e7664cbf): worktree paths are resolved by
+	// title-derived branch slug, not item/session UUID, so a recorded row can point at
+	// a directory that's since been reused/recreated for a different item — same
+	// hazard session.ReviewGateRunner.Run guards against before trusting a diff. A
+	// present-but-wrong-branch directory must not be handed to the reviewer as this
+	// session's own codebase; a missing directory is not itself a mismatch (mirrors
+	// the review-gate fallback), so it still reaches the exists-check below.
+	if mismatchReason := session.WorktreeIdentityMismatch(wt.WorktreePath, wt.BranchName); mismatchReason != "" {
+		log.WarningLog().Printf("[TriggerReReview] resolveCodebaseWorkDir worktree identity mismatch session=%s worktree=%s: %s", workSession.SessionUUID, wt.WorktreePath, mismatchReason)
+		return wt.WorktreePath, false
+	}
 	info, statErr := os.Stat(wt.WorktreePath)
 	return wt.WorktreePath, statErr == nil && info.IsDir()
 }
@@ -3684,7 +3780,22 @@ func (s *BacklogService) getWorkSessionDiff(ctx context.Context, repoPath string
 	diffBaseSHA := ""
 	diffHeadRef := ""
 	wt, wtErr := s.storage.GetWorktreeDataBySessionUUID(ctx, workSession.SessionUUID)
-	if wtErr == nil && wt.WorktreePath != "" {
+	haveWorktree := wtErr == nil && wt.WorktreePath != ""
+	// Worktree-identity guard (backlog item e7664cbf): same hazard and same check as
+	// resolveCodebaseWorkDir above and session.ReviewGateRunner.Run — a worktree row
+	// can point at a directory that's since been reused/recreated for a different
+	// item's branch. Route a mismatch through the same "worktree unusable" path as a
+	// gone directory (set base/head from the row, skip straight to the repoPath
+	// fallback below) rather than trusting GetGitDiff to diff the wrong checkout.
+	if haveWorktree {
+		if mismatchReason := session.WorktreeIdentityMismatch(wt.WorktreePath, wt.BranchName); mismatchReason != "" {
+			log.WarningLog().Printf("[TriggerReReview] getWorkSessionDiff worktree identity mismatch session=%s worktree=%s: %s", workSession.SessionUUID, wt.WorktreePath, mismatchReason)
+			haveWorktree = false
+			diffBaseSHA = wt.BaseCommitSHA
+			diffHeadRef = wt.BranchName
+		}
+	}
+	if haveWorktree {
 		// Try the dedicated worktree first.
 		diff, _, diffErr := session.GetGitDiff(ctx, wt.WorktreePath, wt.BaseCommitSHA)
 		if diffErr == nil {
@@ -3714,15 +3825,29 @@ func (s *BacklogService) getWorkSessionDiff(ctx context.Context, repoPath string
 
 	// Auto-repair: mirror ReviewGateRunner.Run's recovery (session/review_gate.go) for a
 	// stale/corrupted base_commit_sha — the same failure mode found via manual QA on item
-	// ae1e2070 and fixed there first. Only attemptable when a branch ref is known; recompute
-	// the merge-base of repoPath's own checked-out HEAD against the branch and retry once
-	// before giving up on what may just be a recoverable infrastructure hiccup rather than
-	// "no changes were made".
+	// ae1e2070 and fixed there first. Only attemptable when a branch ref is known.
+	// RecoverBaseCommitSHA now compares branchName against explicit default-branch refs
+	// rather than implicit HEAD (backlog item e7664cbf — repoPath's ambient checked-out
+	// branch is unreliable, since a concurrent process can leave it on anything), so the
+	// directory it runs in no longer needs to be the branch's own checkout: prefer the
+	// session's own dedicated worktree when it still exists on disk, falling back to
+	// repoPath when it doesn't (e.g. a torn-down worktree — its commits remain reachable
+	// via the shared object store) rather than skipping repair entirely.
+	// haveWorktree is false both when there was never a worktree row and when
+	// WorktreeIdentityMismatch above rejected it — in the mismatch case wt.WorktreePath
+	// is still populated but must not be trusted for repair either, same as it wasn't
+	// trusted for the initial diff attempt.
+	recoverDir := diffDir
+	if haveWorktree && wt.WorktreePath != "" {
+		if info, statErr := os.Stat(wt.WorktreePath); statErr == nil && info.IsDir() {
+			recoverDir = wt.WorktreePath
+		}
+	}
 	if diffHeadRef != "" {
-		if recoveredSHA, recoverErr := session.RecoverBaseCommitSHA(ctx, diffDir, diffHeadRef); recoverErr != nil {
-			log.WarningLog().Printf("[TriggerReReview] RecoverBaseCommitSHA in %s ref=%s failed: %v", diffDir, diffHeadRef, recoverErr)
-		} else if recoveredDiff, _, retryErr := session.GetGitDiffRef(ctx, diffDir, recoveredSHA, diffHeadRef); retryErr != nil {
-			log.WarningLog().Printf("[TriggerReReview] retry with recovered base %s in %s failed: %v", recoveredSHA, diffDir, retryErr)
+		if recoveredSHA, recoverErr := session.RecoverBaseCommitSHA(ctx, recoverDir, diffHeadRef); recoverErr != nil {
+			log.WarningLog().Printf("[TriggerReReview] RecoverBaseCommitSHA in %s failed: %v", recoverDir, recoverErr)
+		} else if recoveredDiff, _, retryErr := session.GetGitDiffRef(ctx, recoverDir, recoveredSHA, diffHeadRef); retryErr != nil {
+			log.WarningLog().Printf("[TriggerReReview] retry with recovered base %s in %s failed: %v", recoveredSHA, recoverDir, retryErr)
 		} else if strings.TrimSpace(recoveredDiff) == "" {
 			// A recovered base that produces an empty diff is indistinguishable from
 			// "nothing changed" and just as unsafe to trust as the original failure — see

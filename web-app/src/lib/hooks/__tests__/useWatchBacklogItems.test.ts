@@ -144,7 +144,7 @@ describe("useWatchBacklogItems", () => {
   // full-suite parallel load (all 4 Jest projects + hundreds of test files
   // contending for CPU) that cost can exceed the default 5000ms real-time
   // timeout even though the test's actual work completes in well under 1s when
-  // run in isolation. See .claude/rules/fix-flaky-tests-dont-defer.md.
+  // run in isolation. See the `fix-flaky-tests-dont-defer` skill.
   it("retries with exponential backoff capped at 30s on stream error", async () => {
     jest.useFakeTimers();
     mockWatchBacklogItems.mockImplementation(() => {

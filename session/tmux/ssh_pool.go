@@ -14,7 +14,7 @@ import (
 // shared connection-pool entry by (corresponding to config.RemoteConfig.Name
 // once Phase 3 wires remote configuration), plus the "host:port" address
 // actually dialed over TCP. Bundled into one type rather than left as two
-// adjacent strings (see .claude/rules/primitive-obsession-checklist.md):
+// adjacent strings (see the `primitive-obsession-checklist` skill):
 // unlike CommandRunner's dir/name (which fail loudly and immediately at
 // exec time if swapped -- a directory path is never a valid program name),
 // swapping Name and Addr here compiles silently and both still "look like"

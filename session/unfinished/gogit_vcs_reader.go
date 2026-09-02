@@ -341,7 +341,7 @@ type cachedRepo struct {
 // cachedRepo wrapping them is evicted from repoCache — concretely,
 // *gogitstore.WorktreeStorer (see gogitstore/storer.go's Close method).
 // Declared here, in the consumer package, scoped to exactly the one method
-// this file needs — see .claude/rules/interface-pollution-checklist.md
+// this file needs — see the `interface-pollution-checklist` skill
 // (interfaces belong next to their consumer, not their implementer).
 type gogitstoreCloser interface {
 	Close() error
