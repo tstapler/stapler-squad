@@ -144,6 +144,30 @@ func (f *fakeUsageCycleClient) GetSession(_ context.Context, name jules.JulesSes
 	}, nil
 }
 
+// julesPollerStorageDoneSignal wraps a real *session.Storage so the
+// full-cycle test can synchronize on the poller's own goroutine actually
+// finishing its write, instead of polling storage from the test goroutine
+// with an arbitrary timeout (require.Eventually's prior flake: it polled
+// for status=="review", a write that applyCompletedState — jules_session_
+// poller.go — only holds for a moment before the very next statement in the
+// same tick moves it on to "pr_pending"; a 5ms poll interval could land
+// outside that sub-millisecond window on a loaded machine).
+// UpdateItemSessionEndedWithReason is the last storage call
+// applyCompletedState's PR-recorded branch makes, so closing done right
+// after delegating to it guarantees every earlier write in that call
+// (transition to review, then SetBacklogItemPRAndTransition to pr_pending)
+// has already landed by the time a receive on done unblocks.
+type julesPollerStorageDoneSignal struct {
+	*session.Storage
+	done chan struct{}
+}
+
+func (w *julesPollerStorageDoneSignal) UpdateItemSessionEndedWithReason(ctx context.Context, id string, endedAt time.Time, reason string) error {
+	err := w.Storage.UpdateItemSessionEndedWithReason(ctx, id, endedAt, reason)
+	close(w.done)
+	return err
+}
+
 // fakeUsagePollErrorClient's first GetSession call returns a transient
 // error (Task 4.1.1b's "one failed poll" scenario). Every call after that
 // blocks on ctx.Done() instead of returning a fixture — since the item
@@ -216,7 +240,8 @@ func TestJulesFullCycle_should_LogNoSecretMaterial_When_DispatchPollCompleteCycl
 	require.NoError(t, err)
 
 	pollClient := &fakeUsageCycleClient{}
-	poller := session.NewJulesSessionPoller(pollClient, storage, session.JulesSessionPollerConfig{
+	storageSpy := &julesPollerStorageDoneSignal{Storage: storage, done: make(chan struct{})}
+	poller := session.NewJulesSessionPoller(pollClient, storageSpy, session.JulesSessionPollerConfig{
 		PollInterval:  2 * time.Millisecond,
 		CallTimeout:   time.Second,
 		MaxSessionAge: time.Hour,
@@ -225,10 +250,30 @@ func TestJulesFullCycle_should_LogNoSecretMaterial_When_DispatchPollCompleteCycl
 	poller.Start(ctx)
 	t.Cleanup(poller.Stop)
 
-	require.Eventually(t, func() bool {
-		updated, err := storage.GetBacklogItem(ctx, item.ID)
-		return err == nil && updated != nil && updated.Status == string(session.BacklogStatusReview)
-	}, 2*time.Second, 5*time.Millisecond, "item must reach review once the poller observes Jules' COMPLETED state")
+	// Wait on storageSpy.done rather than polling storage for a status —
+	// see julesPollerStorageDoneSignal's doc comment. The 2s bound here only
+	// guards against the poller never reaching the COMPLETED branch at all
+	// (a real bug), not against ordinary scheduling jitter: once the signal
+	// fires, applyCompletedState's writes are already committed.
+	select {
+	case <-storageSpy.done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("poller never finished applying Jules' COMPLETED state")
+	}
+
+	updated, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	require.NotNil(t, updated)
+	// applyCompletedState (jules_session_poller.go) moves the item
+	// in_progress -> review and then immediately -> pr_pending in the same
+	// call (SetBacklogItemPRAndTransition records the PR and advances the
+	// item past "review" so ReconcilePRPending's existing sweep picks it up
+	// from there) — "review" is a transient intermediate write, not the
+	// resting state, so this asserts on pr_pending. An earlier version of
+	// this test asserted "review" via require.Eventually and was
+	// consequently flaky: it only passed when a 5ms poll happened to land
+	// inside the sub-millisecond window between the two writes.
+	assert.Equal(t, string(session.BacklogStatusPRPending), updated.Status)
 
 	messages := handler.messages()
 	assert.Contains(t, messages, "jules dispatch requested")
