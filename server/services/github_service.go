@@ -66,21 +66,27 @@ func (gs *GitHubService) GetPRInfo(
 
 	return connect.NewResponse(&sessionv1.GetPRInfoResponse{
 		PrInfo: &sessionv1.PRInfo{
-			Number:       int32(prInfo.Number),
-			Title:        prInfo.Title,
-			Body:         prInfo.Body,
-			HeadRef:      prInfo.HeadRef,
-			BaseRef:      prInfo.BaseRef,
-			State:        prInfo.State,
-			Author:       prInfo.Author,
-			Labels:       prInfo.Labels,
-			HtmlUrl:      prInfo.HTMLURL,
-			CreatedAt:    timestamppb.New(prInfo.CreatedAt),
-			UpdatedAt:    timestamppb.New(prInfo.UpdatedAt),
-			IsDraft:      prInfo.IsDraft,
-			Mergeable:    prInfo.Mergeable,
-			Additions:    int32(prInfo.Additions),
-			Deletions:    int32(prInfo.Deletions),
+			// #nosec G115 -- prInfo.Number is a GitHub PR number (currently under
+			// 8 digits across all of GitHub), far below int32 range.
+			Number:    int32(prInfo.Number),
+			Title:     prInfo.Title,
+			Body:      prInfo.Body,
+			HeadRef:   prInfo.HeadRef,
+			BaseRef:   prInfo.BaseRef,
+			State:     prInfo.State,
+			Author:    prInfo.Author,
+			Labels:    prInfo.Labels,
+			HtmlUrl:   prInfo.HTMLURL,
+			CreatedAt: timestamppb.New(prInfo.CreatedAt),
+			UpdatedAt: timestamppb.New(prInfo.UpdatedAt),
+			IsDraft:   prInfo.IsDraft,
+			Mergeable: prInfo.Mergeable,
+			// #nosec G115 -- gh CLI diff stat for a single PR the user owns;
+			// realistic diffs never approach int32 range.
+			Additions: int32(prInfo.Additions),
+			// #nosec G115 -- see Additions above.
+			Deletions: int32(prInfo.Deletions),
+			// #nosec G115 -- see Additions above.
 			ChangedFiles: int32(prInfo.ChangedFiles),
 		},
 	}), nil
@@ -112,6 +118,8 @@ func (gs *GitHubService) GetPRComments(
 	protoComments := make([]*sessionv1.PRComment, 0, len(comments))
 	for _, comment := range comments {
 		protoComment := &sessionv1.PRComment{
+			// #nosec G115 -- comment.ID is a GitHub comment ID (gh CLI JSON),
+			// far below int32 range for the foreseeable future.
 			Id:        int32(comment.ID),
 			Author:    comment.Author,
 			Body:      comment.Body,
@@ -122,6 +130,8 @@ func (gs *GitHubService) GetPRComments(
 			protoComment.Path = &comment.Path
 		}
 		if comment.Line != 0 {
+			// #nosec G115 -- comment.Line is a 1-based file line number from a
+			// PR review comment; bounded by the file's actual line count.
 			line := int32(comment.Line)
 			protoComment.Line = &line
 		}

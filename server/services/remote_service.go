@@ -418,6 +418,12 @@ func splitHostPort(host string) (string, int32) {
 	if err != nil {
 		return host, 0
 	}
+	// TCP ports are 16-bit (0-65535); anything else means the Host string's
+	// port component is bogus, so fall back the same way a parse error does
+	// rather than truncating/wrapping it through int32.
+	if portNum < 0 || portNum > 65535 {
+		return host, 0
+	}
 	return h, int32(portNum)
 }
 

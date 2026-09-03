@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"math/rand"
 	"sync"
 	"sync/atomic"
@@ -14,6 +15,21 @@ import (
 
 	"github.com/tstapler/stapler-squad/log"
 )
+
+// clampResizeDim clamps a terminal dimension (columns or rows) coming from
+// a resize request (ultimately client-controlled, e.g. a browser's terminal
+// widget) to the range representable by tymux's wire-format uint32 field
+// ([0, math.MaxUint32]), so a negative value can't silently wrap around
+// into a huge bogus terminal size.
+func clampResizeDim(v int) uint32 {
+	if v < 0 {
+		return 0
+	}
+	if v > math.MaxUint32 {
+		return math.MaxUint32
+	}
+	return uint32(v)
+}
 
 // reconnectMetrics backs tymux_attach_stream_reconnects_total (Task
 // 2.5.2c, Observability Plan) — a process-wide hand-rolled counter
@@ -264,8 +280,8 @@ func (s *tymuxGRPCSession) sendOnStream(req *v1.AttachRequest) error {
 func (s *tymuxGRPCSession) sendResize(cols, rows int) error {
 	return s.sendOnStream(&v1.AttachRequest{
 		Payload: &v1.AttachRequest_Resize{Resize: &v1.Resize{
-			Cols: uint32(cols),
-			Rows: uint32(rows),
+			Cols: clampResizeDim(cols),
+			Rows: clampResizeDim(rows),
 		}},
 	})
 }

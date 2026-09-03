@@ -66,6 +66,9 @@ func marshalProtoEnvelope(stream *connectWebSocketStream, flags byte, msg proto.
 		return err
 	}
 	buf[0] = flags
+	// #nosec G115 -- ConnectRPC/gRPC-Web wire framing mandates a 4-byte length
+	// prefix by protocol spec; marshaled TerminalData/session-event frames are
+	// terminal output chunks and control messages, far below the 4GiB uint32 range.
 	binary.BigEndian.PutUint32(buf[1:5], uint32(len(buf)-5))
 	wsErr := stream.WriteMessage(websocket.BinaryMessage, buf)
 	*bp = buf[:0]
@@ -1389,8 +1392,11 @@ func (h *ConnectRPCWebSocketHandler) streamViaControlMode(stream *connectWebSock
 				SessionId: sessionID,
 				Data: &sessionv1.TerminalData_ScrollbackResponse{
 					ScrollbackResponse: &sessionv1.ScrollbackResponse{
-						Chunks:         chunks,
-						HasMore:        hasMore,
+						Chunks:  chunks,
+						HasMore: hasMore,
+						// #nosec G115 -- MemoryLines is a non-negative in-memory scrollback
+						// line count (bounded by the scrollback buffer's configured capacity),
+						// never negative; widening int -> uint64 cannot overflow.
 						TotalLines:     uint64(sbStats.MemoryLines),
 						OldestSequence: oldestSeq,
 						NewestSequence: newestSeq,
@@ -1459,8 +1465,12 @@ func (h *ConnectRPCWebSocketHandler) streamViaControlMode(stream *connectWebSock
 						Data: &sessionv1.TerminalData_ResizeQuiescence{
 							ResizeQuiescence: &sessionv1.ResizeQuiescence{
 								Resizing: resizing,
-								Cols:     int32(r.cols),
-								Rows:     int32(r.rows),
+								// #nosec G115 -- r.cols originated as a proto int32 field
+								// (TerminalResize.Cols) narrowed to int only for local
+								// arithmetic; converting back to int32 cannot overflow.
+								Cols: int32(r.cols),
+								// #nosec G115 -- see Cols above; same reasoning for Rows.
+								Rows: int32(r.rows),
 							},
 						},
 					}
@@ -1619,6 +1629,9 @@ func sendConnectionCountUpdates(stream *connectWebSocketStream, hub *streamhub.S
 			return
 		}
 		lastSent = count
+		// #nosec G115 -- count is a websocket subscriber count for one session
+		// (StreamHub.SubscriberCount, an O(1) map length), bounded by the number
+		// of concurrent client connections, nowhere near int32 range.
 		countCopy := int32(count)
 		msg := &sessionv1.TerminalData{
 			SessionId: sessionID,
@@ -2131,8 +2144,12 @@ func (h *ConnectRPCWebSocketHandler) streamShellViaControlMode(stream *connectWe
 						Data: &sessionv1.TerminalData_ResizeQuiescence{
 							ResizeQuiescence: &sessionv1.ResizeQuiescence{
 								Resizing: resizing,
-								Cols:     int32(r.cols),
-								Rows:     int32(r.rows),
+								// #nosec G115 -- r.cols originated as a proto int32 field
+								// (TerminalResize.Cols) narrowed to int only for local
+								// arithmetic; converting back to int32 cannot overflow.
+								Cols: int32(r.cols),
+								// #nosec G115 -- see Cols above; same reasoning for Rows.
+								Rows: int32(r.rows),
 							},
 						},
 					}

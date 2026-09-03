@@ -65,11 +65,13 @@ func (ds *DatabaseService) ListDatabases(
 		}
 
 		databases = append(databases, &sessionv1.DatabaseInfo{
-			WorkspaceId:  ws.WorkspaceID,
-			Type:         ws.Type,
-			Cwd:          ws.CWD,
-			Name:         ws.Name,
-			ConfigDir:    ws.ConfigDir,
+			WorkspaceId: ws.WorkspaceID,
+			Type:        ws.Type,
+			Cwd:         ws.CWD,
+			Name:        ws.Name,
+			ConfigDir:   ws.ConfigDir,
+			// #nosec G115 -- sessionCount is a SQLite `SELECT COUNT(*) FROM sessions`
+			// result for one local workspace database, far below int32 range.
 			SessionCount: int32(sessionCount),
 			IsCurrent:    isCurrent,
 			LastUsed:     lastUsedProto,
@@ -112,11 +114,13 @@ func (ds *DatabaseService) GetCurrentDatabase(
 
 	return connect.NewResponse(&sessionv1.GetCurrentDatabaseResponse{
 		Database: &sessionv1.DatabaseInfo{
-			WorkspaceId:  meta.WorkspaceID,
-			Type:         meta.Type,
-			Cwd:          meta.CWD,
-			Name:         meta.Name,
-			ConfigDir:    meta.ConfigDir,
+			WorkspaceId: meta.WorkspaceID,
+			Type:        meta.Type,
+			Cwd:         meta.CWD,
+			Name:        meta.Name,
+			ConfigDir:   meta.ConfigDir,
+			// #nosec G115 -- sessionCount is a SQLite `SELECT COUNT(*) FROM sessions`
+			// result for one local workspace database, far below int32 range.
 			SessionCount: int32(sessionCount),
 			IsCurrent:    true,
 			LastUsed:     lastUsedProto,
@@ -215,10 +219,14 @@ func (ds *DatabaseService) MergeDatabase(
 	log.Info("MergeDatabase", "message", msg, "source", sourceDir)
 
 	return connect.NewResponse(&sessionv1.MergeDatabaseResponse{
-		Success:          true,
-		Message:          msg,
+		Success: true,
+		Message: msg,
+		// #nosec G115 -- imported/skipped are row counts accumulated while
+		// merging one local sessions.db into another, bounded by the source
+		// table's row count, far below int32 range.
 		SessionsImported: int32(imported),
-		SessionsSkipped:  int32(skipped),
+		// #nosec G115 -- see above; skipped is the same bounded row count.
+		SessionsSkipped: int32(skipped),
 	}), nil
 }
 

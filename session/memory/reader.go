@@ -165,6 +165,7 @@ func (s *processSnapshot) sumRSS(pid int32, seen map[int32]bool, depth int) int6
 	var rssKB int64
 	if proc, ok := s.byPID[pid]; ok {
 		if info, err := proc.MemoryInfo(); err == nil && info != nil {
+			// #nosec G115 -- info.RSS is bounded by actual physical/virtual memory in bytes; dividing by 1024 and converting to int64 would need ~8.4 exabytes of RSS to overflow, far beyond any real system
 			rssKB = int64(info.RSS / 1024)
 		}
 	}

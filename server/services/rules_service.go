@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"regexp"
 	"sort"
 	"strings"
@@ -207,7 +208,8 @@ func (rs *RulesService) ReloadClaudeSettingsRules(
 			len(failedPaths), strings.Join(failedPaths, ", "))
 		log.Warn("[RulesService] claude-settings reload had failures", "failed_paths", failedPaths, "rule_count", ruleCount)
 		return connect.NewResponse(&sessionv1.ReloadClaudeSettingsRulesResponse{
-			Success:   false,
+			Success: false,
+			// #nosec G115 -- count of rules parsed from local ~/.claude/settings.json files, bounded by realistic config file size
 			RuleCount: int32(ruleCount),
 			Message:   msg,
 		}), nil
@@ -215,7 +217,8 @@ func (rs *RulesService) ReloadClaudeSettingsRules(
 
 	log.Info("[RulesService] reloaded claude-settings rules", "rule_count", ruleCount)
 	return connect.NewResponse(&sessionv1.ReloadClaudeSettingsRulesResponse{
-		Success:   true,
+		Success: true,
+		// #nosec G115 -- count of rules parsed from local ~/.claude/settings.json files, bounded by realistic config file size
 		RuleCount: int32(ruleCount),
 		Message:   fmt.Sprintf("Reloaded %d claude-settings rule(s).", ruleCount),
 	}), nil
@@ -253,14 +256,17 @@ func (rs *RulesService) GetApprovalAnalytics(
 		DailyBuckets: make([]*sessionv1.DailyBucketProto, 0, len(buckets)),
 	}
 	for _, b := range buckets {
+		// Per-day decision counts derived from the local analytics decision log
+		// (window capped at 90 days) — bounded by realistic single-user daily
+		// tool-call volume, nowhere near int32 overflow.
 		protoResp.DailyBuckets = append(protoResp.DailyBuckets, &sessionv1.DailyBucketProto{
 			Date:        b.Date,
-			AutoAllow:   int32(b.AutoAllow),
-			AutoDeny:    int32(b.AutoDeny),
-			Escalate:    int32(b.Escalate),
-			ManualAllow: int32(b.ManualAllow),
-			ManualDeny:  int32(b.ManualDeny),
-			Total:       int32(b.Total),
+			AutoAllow:   int32(b.AutoAllow),   // #nosec G115
+			AutoDeny:    int32(b.AutoDeny),    // #nosec G115
+			Escalate:    int32(b.Escalate),    // #nosec G115
+			ManualAllow: int32(b.ManualAllow), // #nosec G115
+			ManualDeny:  int32(b.ManualDeny),  // #nosec G115
+			Total:       int32(b.Total),       // #nosec G115
 		})
 	}
 	return connect.NewResponse(protoResp), nil
@@ -354,14 +360,16 @@ func (rs *RulesService) GetProgramAnalytics(
 	// Build daily trend proto
 	trendProtos := make([]*sessionv1.DailyBucketProto, 0, len(dailyBuckets))
 	for _, b := range dailyBuckets {
+		// Same rationale as GetApprovalAnalytics above: per-day counts from the
+		// local analytics decision log, bounded by realistic single-user volume.
 		trendProtos = append(trendProtos, &sessionv1.DailyBucketProto{
 			Date:        b.Date,
-			AutoAllow:   int32(b.AutoAllow),
-			AutoDeny:    int32(b.AutoDeny),
-			Escalate:    int32(b.Escalate),
-			ManualAllow: int32(b.ManualAllow),
-			ManualDeny:  int32(b.ManualDeny),
-			Total:       int32(b.Total),
+			AutoAllow:   int32(b.AutoAllow),   // #nosec G115
+			AutoDeny:    int32(b.AutoDeny),    // #nosec G115
+			Escalate:    int32(b.Escalate),    // #nosec G115
+			ManualAllow: int32(b.ManualAllow), // #nosec G115
+			ManualDeny:  int32(b.ManualDeny),  // #nosec G115
+			Total:       int32(b.Total),       // #nosec G115
 		})
 	}
 
@@ -553,7 +561,7 @@ func specToProto(spec RuleSpec) *sessionv1.ApprovalRuleProto {
 		RiskLevel:      spec.RiskLevel,
 		Reason:         spec.Reason,
 		Alternative:    spec.Alternative,
-		Priority:       int32(spec.Priority),
+		Priority:       int32(spec.Priority), // #nosec G115 -- every write path into RuleSpec.Priority is already bounded: DB round-trips through an int32 proto field, and YAML import is range-checked in validateYAMLEntry
 		Enabled:        spec.Enabled,
 		Source:         spec.Source,
 
@@ -613,51 +621,55 @@ func ruleToSpec(r classifier.Rule) RuleSpec {
 	return spec
 }
 
+// summaryToProto converts an in-process AnalyticsSummary (built by aggregating
+// this single local user's decision-log entries — see analytics_store.go) into
+// its proto form. Every count/int field converted to int32 below is bounded by
+// realistic single-user decision-log volume, nowhere near int32 overflow.
 func summaryToProto(s AnalyticsSummary) *sessionv1.AnalyticsSummaryProto {
 	p := &sessionv1.AnalyticsSummaryProto{
-		TotalDecisions:   int32(s.TotalDecisions),
+		TotalDecisions:   int32(s.TotalDecisions), // #nosec G115
 		DecisionCounts:   make(map[string]int32, len(s.DecisionCounts)),
 		AutoApproveRate:  s.AutoApproveRate,
 		ManualReviewRate: s.ManualReviewRate,
 	}
 	for k, v := range s.DecisionCounts {
-		p.DecisionCounts[k] = int32(v)
+		p.DecisionCounts[k] = int32(v) // #nosec G115
 	}
 	for _, t := range s.TopTools {
-		p.TopTools = append(p.TopTools, &sessionv1.ToolStatProto{ToolName: t.ToolName, Count: int32(t.Count)})
+		p.TopTools = append(p.TopTools, &sessionv1.ToolStatProto{ToolName: t.ToolName, Count: int32(t.Count)}) // #nosec G115
 	}
 	for _, c := range s.TopDeniedCommands {
-		p.TopDeniedCommands = append(p.TopDeniedCommands, &sessionv1.CommandStatProto{Preview: c.Preview, ToolName: c.ToolName, Count: int32(c.Count)})
+		p.TopDeniedCommands = append(p.TopDeniedCommands, &sessionv1.CommandStatProto{Preview: c.Preview, ToolName: c.ToolName, Count: int32(c.Count)}) // #nosec G115
 	}
 	for _, r := range s.TopTriggeredRules {
-		p.TopTriggeredRules = append(p.TopTriggeredRules, &sessionv1.RuleStatProto{RuleId: r.RuleID, RuleName: r.RuleName, Count: int32(r.Count)})
+		p.TopTriggeredRules = append(p.TopTriggeredRules, &sessionv1.RuleStatProto{RuleId: r.RuleID, RuleName: r.RuleName, Count: int32(r.Count)}) // #nosec G115
 	}
 	for _, prog := range s.TopCommandPrograms {
 		p.TopCommandPrograms = append(p.TopCommandPrograms, &sessionv1.ProgramStatProto{
 			ProgramName: prog.Program,
 			Category:    prog.Category,
-			Count:       int32(prog.Count),
+			Count:       int32(prog.Count), // #nosec G115
 		})
 	}
 	for _, imp := range s.TopPythonImports {
 		p.TopPythonImports = append(p.TopPythonImports, &sessionv1.ImportStatProto{
 			Module: imp.Module,
-			Count:  int32(imp.Count),
+			Count:  int32(imp.Count), // #nosec G115
 		})
 	}
-	p.CoverageGapCount = int32(s.CoverageGapCount)
+	p.CoverageGapCount = int32(s.CoverageGapCount) // #nosec G115
 	p.CoverageGapRate = s.CoverageGapRate
 	for _, t := range s.TopUncoveredTools {
 		p.TopUncoveredTools = append(p.TopUncoveredTools, &sessionv1.ToolStatProto{
 			ToolName: t.ToolName,
-			Count:    int32(t.Count),
+			Count:    int32(t.Count), // #nosec G115
 		})
 	}
 	for _, prog := range s.TopUncoveredPrograms {
 		p.TopUncoveredPrograms = append(p.TopUncoveredPrograms, &sessionv1.ProgramStatProto{
 			ProgramName: prog.Program,
 			Category:    prog.Category,
-			Count:       int32(prog.Count),
+			Count:       int32(prog.Count), // #nosec G115
 		})
 	}
 	for _, s := range s.CommandSubcommandStats {
@@ -665,16 +677,16 @@ func summaryToProto(s AnalyticsSummary) *sessionv1.AnalyticsSummaryProto {
 			ProgramName: s.Program,
 			Subcommand:  s.Subcommand,
 			Category:    s.Category,
-			Count:       int32(s.Count),
+			Count:       int32(s.Count), // #nosec G115
 		})
 	}
 	p.EscalationReasonCounts = make(map[string]int32, len(s.EscalationReasonCounts))
 	for k, v := range s.EscalationReasonCounts {
-		p.EscalationReasonCounts[k] = int32(v)
+		p.EscalationReasonCounts[k] = int32(v) // #nosec G115
 	}
 	p.RiskLevelCounts = make(map[string]int32, len(s.RiskLevelCounts))
 	for k, v := range s.RiskLevelCounts {
-		p.RiskLevelCounts[k] = int32(v)
+		p.RiskLevelCounts[k] = int32(v) // #nosec G115
 	}
 	if !s.WindowStart.IsZero() {
 		p.WindowStart = timestamppb.New(s.WindowStart)
@@ -1138,10 +1150,20 @@ func validateYAMLEntry(e yamlRuleEntry) (*sessionv1.ApprovalRuleProto, []string)
 		}
 	}
 
+	// Priority comes straight from a user-uploaded YAML file with no schema-level
+	// bound (unlike the DB-backed approval_rule.priority column, which is at least
+	// typed but also unbounded) -- reject anything that would silently truncate or
+	// sign-flip through the int32 conversion below.
+	if e.Priority < 0 || e.Priority > math.MaxInt32 {
+		errs = append(errs, fmt.Sprintf("priority %d out of range: must be between 0 and %d", e.Priority, math.MaxInt32))
+	}
+
 	if len(errs) > 0 {
 		return nil, errs
 	}
 
+	// #nosec G115 -- range-checked against [0, math.MaxInt32] above; out-of-range
+	// values return a validation error before reaching this conversion.
 	priority := int32(e.Priority)
 	if priority == 0 {
 		priority = 10
