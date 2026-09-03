@@ -175,6 +175,68 @@ func NewPiEventReader(r io.Reader) *PiEventReader {
 	return &PiEventReader{scanner: scanner}
 }
 
+// piEventDecoders maps each known pi event `type` discriminator to a decode
+// function. Keeping this as a table (rather than a long switch in Next)
+// keeps Next's cognitive complexity low despite the large number of event
+// types.
+var piEventDecoders = map[string]func(line []byte) (any, error){
+	"session": func(line []byte) (any, error) {
+		var ev PiSessionEvent
+		err := json.Unmarshal(line, &ev)
+		return ev, err
+	},
+	"agent_start": func(line []byte) (any, error) {
+		var ev PiAgentStartEvent
+		err := json.Unmarshal(line, &ev)
+		return ev, err
+	},
+	"agent_settled": func(line []byte) (any, error) {
+		var ev PiAgentSettledEvent
+		err := json.Unmarshal(line, &ev)
+		return ev, err
+	},
+	"turn_start": func(line []byte) (any, error) {
+		var ev PiTurnStartEvent
+		err := json.Unmarshal(line, &ev)
+		return ev, err
+	},
+	"turn_end": func(line []byte) (any, error) {
+		var ev PiTurnEndEvent
+		err := json.Unmarshal(line, &ev)
+		return ev, err
+	},
+	"message_start": func(line []byte) (any, error) {
+		var ev PiMessageStartEvent
+		err := json.Unmarshal(line, &ev)
+		return ev, err
+	},
+	"message_end": func(line []byte) (any, error) {
+		var ev PiMessageEndEvent
+		err := json.Unmarshal(line, &ev)
+		return ev, err
+	},
+	"message_update": func(line []byte) (any, error) {
+		var ev PiMessageUpdateEvent
+		err := json.Unmarshal(line, &ev)
+		return ev, err
+	},
+	"tool_execution_start": func(line []byte) (any, error) {
+		var ev PiToolExecutionStartEvent
+		err := json.Unmarshal(line, &ev)
+		return ev, err
+	},
+	"tool_execution_end": func(line []byte) (any, error) {
+		var ev PiToolExecutionEndEvent
+		err := json.Unmarshal(line, &ev)
+		return ev, err
+	},
+	"agent_end": func(line []byte) (any, error) {
+		var ev PiAgentEndEvent
+		err := json.Unmarshal(line, &ev)
+		return ev, err
+	},
+}
+
 // Next reads and decodes the next event line. It returns io.EOF (wrapped by
 // nothing) when the underlying reader is exhausted. Blank lines are skipped.
 // A line whose `type` discriminator is unrecognized returns a nil event and
@@ -192,78 +254,17 @@ func (r *PiEventReader) Next() (event any, err error) {
 			return nil, fmt.Errorf("pi_adapter: failed to parse event line: %w", unmarshalErr)
 		}
 
-		lineCopy := append([]byte(nil), line...)
-
-		switch peek.Type {
-		case "session":
-			var ev PiSessionEvent
-			if decodeErr := json.Unmarshal(lineCopy, &ev); decodeErr != nil {
-				return nil, fmt.Errorf("pi_adapter: failed to decode session event: %w", decodeErr)
-			}
-			return ev, nil
-		case "agent_start":
-			var ev PiAgentStartEvent
-			if decodeErr := json.Unmarshal(lineCopy, &ev); decodeErr != nil {
-				return nil, fmt.Errorf("pi_adapter: failed to decode agent_start event: %w", decodeErr)
-			}
-			return ev, nil
-		case "agent_settled":
-			var ev PiAgentSettledEvent
-			if decodeErr := json.Unmarshal(lineCopy, &ev); decodeErr != nil {
-				return nil, fmt.Errorf("pi_adapter: failed to decode agent_settled event: %w", decodeErr)
-			}
-			return ev, nil
-		case "turn_start":
-			var ev PiTurnStartEvent
-			if decodeErr := json.Unmarshal(lineCopy, &ev); decodeErr != nil {
-				return nil, fmt.Errorf("pi_adapter: failed to decode turn_start event: %w", decodeErr)
-			}
-			return ev, nil
-		case "turn_end":
-			var ev PiTurnEndEvent
-			if decodeErr := json.Unmarshal(lineCopy, &ev); decodeErr != nil {
-				return nil, fmt.Errorf("pi_adapter: failed to decode turn_end event: %w", decodeErr)
-			}
-			return ev, nil
-		case "message_start":
-			var ev PiMessageStartEvent
-			if decodeErr := json.Unmarshal(lineCopy, &ev); decodeErr != nil {
-				return nil, fmt.Errorf("pi_adapter: failed to decode message_start event: %w", decodeErr)
-			}
-			return ev, nil
-		case "message_end":
-			var ev PiMessageEndEvent
-			if decodeErr := json.Unmarshal(lineCopy, &ev); decodeErr != nil {
-				return nil, fmt.Errorf("pi_adapter: failed to decode message_end event: %w", decodeErr)
-			}
-			return ev, nil
-		case "message_update":
-			var ev PiMessageUpdateEvent
-			if decodeErr := json.Unmarshal(lineCopy, &ev); decodeErr != nil {
-				return nil, fmt.Errorf("pi_adapter: failed to decode message_update event: %w", decodeErr)
-			}
-			return ev, nil
-		case "tool_execution_start":
-			var ev PiToolExecutionStartEvent
-			if decodeErr := json.Unmarshal(lineCopy, &ev); decodeErr != nil {
-				return nil, fmt.Errorf("pi_adapter: failed to decode tool_execution_start event: %w", decodeErr)
-			}
-			return ev, nil
-		case "tool_execution_end":
-			var ev PiToolExecutionEndEvent
-			if decodeErr := json.Unmarshal(lineCopy, &ev); decodeErr != nil {
-				return nil, fmt.Errorf("pi_adapter: failed to decode tool_execution_end event: %w", decodeErr)
-			}
-			return ev, nil
-		case "agent_end":
-			var ev PiAgentEndEvent
-			if decodeErr := json.Unmarshal(lineCopy, &ev); decodeErr != nil {
-				return nil, fmt.Errorf("pi_adapter: failed to decode agent_end event: %w", decodeErr)
-			}
-			return ev, nil
-		default:
+		decode, known := piEventDecoders[peek.Type]
+		if !known {
 			return nil, &piUnrecognizedTypeError{eventType: peek.Type}
 		}
+
+		lineCopy := append([]byte(nil), line...)
+		ev, decodeErr := decode(lineCopy)
+		if decodeErr != nil {
+			return nil, fmt.Errorf("pi_adapter: failed to decode %s event: %w", peek.Type, decodeErr)
+		}
+		return ev, nil
 	}
 
 	if scanErr := r.scanner.Err(); scanErr != nil {
