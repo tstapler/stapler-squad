@@ -133,7 +133,7 @@ export function useTerminalStream({
   // is a deliberate, internal fast-retry optimization, not a real failure the caller
   // should count toward its own attempt/error UI.
   const connectTimeoutAbortedRef = useRef(false);
-  const connectRef = useRef<(overrideCols?: number, overrideRows?: number) => Promise<void>>(async () => {});
+  const connectRef = useRef<(overrideCols?: number, overrideRows?: number, isAutoRetry?: boolean) => Promise<void>>(async () => {});
   const textDecoderRef = useRef(new TextDecoder());
   const scrollbackDecoderRef = useRef(new TextDecoder());
 
@@ -226,11 +226,21 @@ export function useTerminalStream({
   }, [onError]);
 
   // ---- Connect ----
-  const connect = useCallback(async (overrideCols?: number, overrideRows?: number) => {
+  // isAutoRetry is true only for the finally block's own scheduled retry
+  // (below) — every other caller (mount, manual reconnect, foreground
+  // transition, visibility/online) omits it and gets the pre-existing
+  // reset-on-connect behavior. Without this distinction, the automatic
+  // retry itself was wiping terminalBackoffRef's attempt counter back to 0
+  // on every cycle, so it could never reach the >=5 hard-fail check and the
+  // reconnect delay never escalated (see backlog item: "reconnect backoff
+  // never escalates — attempt counter always resets to 0").
+  const connect = useCallback(async (overrideCols?: number, overrideRows?: number, isAutoRetry = false) => {
     if (isConnectedRef.current || isConnectingRef.current || !sessionId) return;
     isConnectingRef.current = true;
     shouldReconnectRef.current = true;
-    terminalBackoffRef.current.reset();
+    if (!isAutoRetry) {
+      terminalBackoffRef.current.reset();
+    }
 
     let targetCols = overrideCols ?? initialCols;
     let targetRows = overrideRows ?? initialRows;
@@ -308,6 +318,14 @@ export function useTerminalStream({
             if (firstMessageRef.current) {
               clearConnectTimeout();
               isConnectingRef.current = false;
+              // Set synchronously alongside the ref-mirroring effect below —
+              // that effect only fires after React commits the setIsConnected
+              // state update, leaving a window where isConnectedRef.current is
+              // still false right after a successful connect. Investigated as
+              // part of the reconnect-backoff fix; shipped regardless of
+              // whether the race was independently reproduced, per that
+              // backlog item's AC.
+              isConnectedRef.current = true;
               setIsConnected(true);
               setScrollbackLoaded(true);
               setTerminalState('LOADING');
@@ -428,7 +446,20 @@ export function useTerminalStream({
           if (process.env.NEXT_PUBLIC_RECONNECT_V2 === "true"
               && shouldReconnectRef.current
               && !isDisconnectingRef.current) {
-            if (terminalBackoffRef.current.attempt >= 5) {
+            if (connectTimeoutAbortedRef.current) {
+              // A connect-timeout abort is our own fast-retry optimization, not a
+              // real connection failure — it must not consume the shared
+              // terminalBackoffRef attempt/hard-fail budget, or a healthy-but-slow
+              // (high-RTT/VPN) connection would eventually get hard-failed by its
+              // own retries. Retry right away; the separate per-foreground
+              // connectTimeoutMs schedule already escalates the timeout window.
+              reconnectTimerRef.current = setTimeout(() => {
+                reconnectTimerRef.current = null;
+                if (shouldReconnectRef.current && !isDisconnectingRef.current) {
+                  connectRef.current?.(undefined, undefined, true);
+                }
+              }, 0);
+            } else if (terminalBackoffRef.current.attempt >= 5) {
               shouldReconnectRef.current = false;
               isHardFailedRef.current = true;
               setIsHardFailed(true);
@@ -442,7 +473,7 @@ export function useTerminalStream({
               reconnectTimerRef.current = setTimeout(() => {
                 reconnectTimerRef.current = null;
                 if (shouldReconnectRef.current && !isDisconnectingRef.current) {
-                  connectRef.current?.();
+                  connectRef.current?.(undefined, undefined, true);
                 }
               }, delay);
             }
