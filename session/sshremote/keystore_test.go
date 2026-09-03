@@ -37,6 +37,19 @@ func configDirContainsBytes(t *testing.T, needle []byte) bool {
 	found := false
 	walkErr := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
+			// GetConfigDir() honors an ambient STAPLER_SQUAD_TEST_DIR override
+			// (config/config.go's GetConfigDirForDir) rather than always
+			// minting a fresh per-process directory -- when that env var is
+			// already set to a live, shared state dir (e.g. a real dev
+			// session's own test-mode dir, not a throwaway one this test
+			// owns exclusively), something else can delete a file or
+			// subdirectory between WalkDir listing it and stat-ing it here.
+			// That's a benign race for a best-effort "does this secret leak
+			// anywhere on disk" scan, not a real failure -- skip the missing
+			// entry and keep scanning instead of aborting the whole walk.
+			if os.IsNotExist(err) {
+				return nil
+			}
 			return err
 		}
 		if d.IsDir() {
