@@ -184,6 +184,7 @@ func TestGenerateAndPersist_DedupsConcurrentCallsForSameSession(t *testing.T) {
 		t.Fatalf("expected exactly 1 pool call, got %d", got)
 	}
 
+	//nolint:entfullscan test assertion over a test-scoped in-memory DB; verifies exactly one row exists.
 	rows, err := repo.client.HandoffSummary.Query().All(context.Background())
 	if err != nil {
 		t.Fatalf("failed to query handoff summary rows: %v", err)

@@ -199,6 +199,7 @@ func (Session) Edges() []ent.Edge {
 func (Session) Indexes() []ent.Index {
 	return []ent.Index{
 		index.Fields("title"),
+		index.Fields("uuid"),
 		index.Fields("status"),
 		index.Fields("category"),
 		index.Fields("last_meaningful_output"),

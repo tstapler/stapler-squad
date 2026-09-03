@@ -476,19 +476,12 @@ func (s *Storage) ArchiveInstanceDataByID(id string, at time.Time) (bool, error)
 	return true, nil
 }
 
-// FindInstanceDataByID finds the first InstanceData whose stable ID or title matches id.
-// Returns ErrInstanceDataNotFound when no match exists.
+// FindInstanceDataByID finds the InstanceData whose stable ID or title matches id, via
+// an indexed WHERE clause (EntRepository.FindByIDWithOptions) rather than loading and
+// linear-scanning every session row — see that method's doc comment for the CPU-profile
+// finding that motivated this. Returns ErrInstanceDataNotFound when no match exists.
 func (s *Storage) FindInstanceDataByID(id string) (*InstanceData, error) {
-	all, err := s.ListInstanceData()
-	if err != nil {
-		return nil, err
-	}
-	for i := range all {
-		if all[i].MatchesID(id) {
-			return &all[i], nil
-		}
-	}
-	return nil, ErrInstanceDataNotFound
+	return s.repo.FindByIDWithOptions(context.Background(), id, LoadMinimal)
 }
 
 // ListInstanceIDs returns the stable ID (UUID if set, else Title) for every stored

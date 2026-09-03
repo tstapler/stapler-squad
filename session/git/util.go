@@ -25,6 +25,25 @@ func isTraversalPathSegment(s string) bool {
 	return s == "." || s == ".."
 }
 
+// defaultPlainOpenOptions is the single source of truth for how this codebase opens a
+// git repository. In particular, EnableDotGitCommonDir must always be set: without it,
+// go-git silently resolves objects/refs for a linked worktree (`git worktree add`)
+// against the wrong gitdir — not an error, a real-but-wrong result (verified
+// empirically: HEAD resolved to a stale SHA from before the worktree was created).
+// Read-only after init, so sharing this one instance across every OpenRepo call is safe.
+var defaultPlainOpenOptions = &git.PlainOpenOptions{ //nolint:gochecknoglobals shared read-only options, not mutable state
+	DetectDotGit:          true,
+	EnableDotGitCommonDir: true,
+}
+
+// OpenRepo opens the git repository or worktree at path using defaultPlainOpenOptions.
+// Every git repository open in this codebase must go through this function rather than
+// a bare git.PlainOpen/PlainOpenWithOptions call — see tools/lint's norawgitopen
+// analyzer, which enforces this.
+func OpenRepo(path string) (*git.Repository, error) {
+	return git.PlainOpenWithOptions(path, defaultPlainOpenOptions) //nolint:norawgitopen this is the wrapper itself
+}
+
 // sanitizeBranchName transforms an arbitrary string into a Git branch name friendly string.
 // Note: Git branch names have several rules, so this function uses a simple approach
 // by allowing only a safe subset of characters.
@@ -163,7 +182,7 @@ func (g *GitWorktree) checkGHCLI() error {
 // IsGitRepo checks if the given path is within a git repository
 func IsGitRepo(path string) bool {
 	for {
-		_, err := git.PlainOpen(path)
+		_, err := OpenRepo(path)
 		if err == nil {
 			return true
 		}
@@ -198,7 +217,7 @@ func findGitRepoRoot(path string) (string, error) {
 	// Directory exists - find the git repo root
 	currentPath := path
 	for {
-		repo, err := git.PlainOpen(currentPath)
+		repo, err := OpenRepo(currentPath)
 		if err == nil {
 			// Found the repository root. A bare repo.Head() error is not reliable
 			// evidence the repo is unborn — go-git can transiently fail to resolve
@@ -266,7 +285,7 @@ func GetCurrentBranchName(path string) (string, error) {
 // getCurrentBranchName returns the current branch name for a git repository or worktree.
 // Uses go-git to read HEAD directly (file read, no subprocess).
 func getCurrentBranchName(path string) (string, error) {
-	repo, err := git.PlainOpenWithOptions(path, &git.PlainOpenOptions{DetectDotGit: true})
+	repo, err := OpenRepo(path)
 	if err != nil {
 		return "", fmt.Errorf("failed to open git repo at %s: %w", path, err)
 	}
@@ -312,11 +331,20 @@ const (
 // (repo.CommitObject, still no subprocess) before being trusted, and a Head() error is
 // treated the same as an invalid result; both retry briefly, and only after repeated
 // failures do we fall back to the git CLI, which is immune to both failure modes.
+//
+// Every PlainOpenWithOptions call in this package now also sets EnableDotGitCommonDir
+// (2026-09-02), fixing a third, distinct worktree bug: without it, go-git silently
+// resolves HEAD to a real-but-wrong commit object for a linked worktree (verified
+// against this repo's own worktree: HEAD read without the flag returned a stale SHA
+// from before the worktree was created, not a not-found or malformed result at all) —
+// see session/git/ops.go's diffPatchBetween for the code-review finding that surfaced
+// it. That fix is orthogonal to the retry/CLI-fallback above, which guards against the
+// two races described above and stays in place as defense-in-depth.
 func getHeadCommitSHA(path string) (string, error) {
 	// A failed open (path doesn't exist / isn't a git repo at all) is not retryable —
 	// only the subsequent Head() resolution and object-existence check are, since those
 	// are what were observed to fail transiently for worktrees.
-	if _, err := git.PlainOpenWithOptions(path, &git.PlainOpenOptions{DetectDotGit: true}); err != nil {
+	if _, err := OpenRepo(path); err != nil {
 		return "", fmt.Errorf("failed to open git repo at %s: %w", path, err)
 	}
 
@@ -327,7 +355,7 @@ func getHeadCommitSHA(path string) (string, error) {
 		}
 		// Re-open fresh each attempt in case go-git's failure originates in gitdir/ref
 		// parsing at open time, not just in the Repository object's later reads.
-		repo, err := git.PlainOpenWithOptions(path, &git.PlainOpenOptions{DetectDotGit: true})
+		repo, err := OpenRepo(path)
 		if err != nil {
 			lastErr = fmt.Errorf("failed to open git repo at %s: %w", path, err)
 			continue
@@ -354,7 +382,7 @@ func getHeadCommitSHA(path string) (string, error) {
 // repo, so counting it would always report true. Retry/CLI-fallback shape
 // mirrors getHeadCommitSHA (same underlying go-git flakiness class).
 func repoHasAnyRef(path string) (bool, error) {
-	if _, err := git.PlainOpenWithOptions(path, &git.PlainOpenOptions{DetectDotGit: true}); err != nil {
+	if _, err := OpenRepo(path); err != nil {
 		return false, fmt.Errorf("failed to open git repo at %s: %w", path, err)
 	}
 
@@ -363,7 +391,7 @@ func repoHasAnyRef(path string) (bool, error) {
 		if attempt > 0 {
 			time.Sleep(headSHARetryDelay)
 		}
-		repo, err := git.PlainOpenWithOptions(path, &git.PlainOpenOptions{DetectDotGit: true})
+		repo, err := OpenRepo(path)
 		if err != nil {
 			lastErr = fmt.Errorf("failed to open git repo at %s: %w", path, err)
 			continue
@@ -435,7 +463,7 @@ func getHeadCommitSHAViaCLI(path string) (string, error) {
 // the newly created directory. Logs a warning if rollback also fails.
 func InitializeProjectDirectory(path string) error {
 	// 1. Check if already a git repo (open succeeds) → no-op
-	if _, err := git.PlainOpen(path); err == nil {
+	if _, err := OpenRepo(path); err == nil {
 		return nil
 	}
 

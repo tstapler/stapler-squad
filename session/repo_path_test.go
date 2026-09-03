@@ -12,6 +12,7 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/tstapler/stapler-squad/github"
 	ssqlog "github.com/tstapler/stapler-squad/log"
+	gitutil "github.com/tstapler/stapler-squad/session/git"
 )
 
 // stapler-squad#152 security review: GitHub owner/repo regexes only exclude
@@ -403,7 +404,7 @@ func TestRepairCorruptedGitRepo_ReRepairs_When_HeadIsUnresolvable(t *testing.T) 
 	if isCorruptedClone(clonePath) {
 		t.Errorf("RepairCorruptedGitRepo(%q): repo still corrupted after repair", clonePath)
 	}
-	repairedRepo, err := git.PlainOpen(clonePath)
+	repairedRepo, err := gitutil.OpenRepo(clonePath)
 	if err != nil {
 		t.Fatalf("PlainOpen(repaired clone) failed: %v", err)
 	}

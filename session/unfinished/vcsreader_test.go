@@ -13,6 +13,7 @@ import (
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
+	gitutil "github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/unfinished"
 )
 
@@ -66,7 +67,7 @@ func addCommit(t *testing.T, repoPath, filename, message string) {
 	if err := os.WriteFile(filepath.Join(repoPath, filename), []byte(message), 0644); err != nil {
 		t.Fatal(err)
 	}
-	repo, err := git.PlainOpen(repoPath)
+	repo, err := gitutil.OpenRepo(repoPath)
 	if err != nil {
 		t.Fatalf("PlainOpen: %v", err)
 	}
@@ -378,7 +379,7 @@ func TestGoGitVCSReader_HasUncommitted_StagedChange(t *testing.T) {
 	}
 	// Uses go-git directly rather than shelling out — see
 	// the `prefer-go-git-over-subshells` skill.
-	repo2, err := git.PlainOpen(repo)
+	repo2, err := gitutil.OpenRepo(repo)
 	if err != nil {
 		t.Fatalf("PlainOpen: %v", err)
 	}
@@ -408,7 +409,7 @@ func TestGoGitVCSReader_HasUncommitted_StagedDeletion(t *testing.T) {
 	// Stage a deletion of the initial README.md.
 	// Uses go-git directly rather than shelling out — see
 	// the `prefer-go-git-over-subshells` skill.
-	repo2, err := git.PlainOpen(repo)
+	repo2, err := gitutil.OpenRepo(repo)
 	if err != nil {
 		t.Fatalf("PlainOpen: %v", err)
 	}
