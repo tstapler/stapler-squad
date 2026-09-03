@@ -129,6 +129,10 @@ func (Session) Fields() []ent.Field {
 			Optional().
 			Default(0).
 			Comment("GitHub PR number discovered by PRStatusPoller or extracted from push output. 0 = not yet discovered."),
+		field.Bool("github_pr_status_terminal").
+			Optional().
+			Default(false).
+			Comment("True once PRStatusPoller observes the PR merged/closed; polling then stops. Persisted so SessionRetentionSweeper's PR-safety check survives a restart instead of resetting to false and blocking deletion forever (session-retention-cleanup)."),
 		field.String("github_owner").
 			Optional().
 			Comment("GitHub repository owner (user or org) associated with this session."),
@@ -195,6 +199,7 @@ func (Session) Edges() []ent.Edge {
 func (Session) Indexes() []ent.Index {
 	return []ent.Index{
 		index.Fields("title"),
+		index.Fields("uuid"),
 		index.Fields("status"),
 		index.Fields("category"),
 		index.Fields("last_meaningful_output"),

@@ -837,7 +837,7 @@ func installClaude() {
 
 	// 1. Copy binary to ~/.local/bin/ssq-hooks.
 	binDir := filepath.Join(home, ".local", "bin")
-	if err := os.MkdirAll(binDir, 0755); err != nil {
+	if err := os.MkdirAll(binDir, 0750); err != nil {
 		fmt.Fprintf(os.Stderr, "Error creating %s: %v\n", binDir, err)
 		os.Exit(1)
 	}
@@ -935,7 +935,7 @@ func patchBeforeToolHook(settingsPath, hookCmd string) error {
 	}
 	// Atomic write (P-4: avoid partial-read race with running agy/Gemini process).
 	tmpPath := settingsPath + ".tmp"
-	if err := os.WriteFile(tmpPath, append(out, '\n'), 0644); err != nil {
+	if err := os.WriteFile(tmpPath, append(out, '\n'), 0600); err != nil {
 		return err
 	}
 	return os.Rename(tmpPath, settingsPath)
@@ -949,7 +949,7 @@ func installGemini() {
 	}
 	// 1. Copy binary to ~/.local/bin/ssq-hooks.
 	binDir := filepath.Join(home, ".local", "bin")
-	if err := os.MkdirAll(binDir, 0755); err != nil {
+	if err := os.MkdirAll(binDir, 0750); err != nil {
 		fmt.Fprintf(os.Stderr, "Error creating %s: %v\n", binDir, err)
 		os.Exit(1)
 	}
@@ -1001,7 +1001,7 @@ func installAgy() {
 	}
 	// 1. Copy binary to ~/.local/bin/ssq-hooks.
 	binDir := filepath.Join(home, ".local", "bin")
-	if err := os.MkdirAll(binDir, 0755); err != nil {
+	if err := os.MkdirAll(binDir, 0750); err != nil {
 		fmt.Fprintf(os.Stderr, "Error creating %s: %v\n", binDir, err)
 		os.Exit(1)
 	}
@@ -1101,7 +1101,7 @@ func removeAntigravityHookEntry(hooksPath string) error {
 		return err
 	}
 	tmpPath := hooksPath + ".tmp"
-	if err := os.WriteFile(tmpPath, append(out, '\n'), 0644); err != nil {
+	if err := os.WriteFile(tmpPath, append(out, '\n'), 0600); err != nil {
 		return err
 	}
 	return os.Rename(tmpPath, hooksPath)
@@ -1174,7 +1174,7 @@ func patchAntigravityHooks(hooksPath, binPath string) error {
 
 	// Atomic write
 	tmpPath := hooksPath + ".tmp"
-	if err := os.WriteFile(tmpPath, append(out, '\n'), 0644); err != nil {
+	if err := os.WriteFile(tmpPath, append(out, '\n'), 0600); err != nil {
 		return err
 	}
 	return os.Rename(tmpPath, hooksPath)
@@ -1239,12 +1239,12 @@ func openCodePluginContent(ssqHooksPath string) string {
 // binary path produces byte-identical output (no explicit "already present" check needed, unlike
 // the JSON-config installers, since there's no third-party config structure to merge into).
 func patchOpenCodeHooks(pluginPath, ssqHooksPath string) error {
-	if err := os.MkdirAll(filepath.Dir(pluginPath), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(pluginPath), 0750); err != nil {
 		return err
 	}
 	content := openCodePluginContent(ssqHooksPath)
 	tmpPath := pluginPath + ".tmp"
-	if err := os.WriteFile(tmpPath, []byte(content), 0644); err != nil {
+	if err := os.WriteFile(tmpPath, []byte(content), 0600); err != nil {
 		return err
 	}
 	return os.Rename(tmpPath, pluginPath)
@@ -1279,7 +1279,7 @@ func installOpenCode() {
 
 	// 1. Copy binary to ~/.local/bin/ssq-hooks.
 	binDir := filepath.Join(home, ".local", "bin")
-	if err := os.MkdirAll(binDir, 0755); err != nil {
+	if err := os.MkdirAll(binDir, 0750); err != nil {
 		fmt.Fprintf(os.Stderr, "Error creating %s: %v\n", binDir, err)
 		os.Exit(1)
 	}
@@ -1396,11 +1396,11 @@ func installServiceLinux(home, binPath, logDir, envPath string, uninstall bool) 
 		return
 	}
 
-	if err := os.MkdirAll(serviceDir, 0755); err != nil {
+	if err := os.MkdirAll(serviceDir, 0750); err != nil {
 		fmt.Fprintf(os.Stderr, "Error creating %s: %v\n", serviceDir, err)
 		os.Exit(1)
 	}
-	if err := os.MkdirAll(logDir, 0755); err != nil {
+	if err := os.MkdirAll(logDir, 0750); err != nil {
 		fmt.Fprintf(os.Stderr, "Error creating %s: %v\n", logDir, err)
 		os.Exit(1)
 	}
@@ -1426,7 +1426,7 @@ Environment=PATH=%s
 WantedBy=default.target
 `, binPath, home, serviceLog, serviceLog, home, envPath)
 
-	if err := os.WriteFile(serviceFile, []byte(content), 0644); err != nil {
+	if err := os.WriteFile(serviceFile, []byte(content), 0600); err != nil {
 		fmt.Fprintf(os.Stderr, "Error writing service file: %v\n", err)
 		os.Exit(1)
 	}
@@ -1466,11 +1466,11 @@ func installServiceMacOS(home, binPath, logDir, envPath string, uninstall bool) 
 		return
 	}
 
-	if err := os.MkdirAll(plistDir, 0755); err != nil {
+	if err := os.MkdirAll(plistDir, 0750); err != nil {
 		fmt.Fprintf(os.Stderr, "Error creating %s: %v\n", plistDir, err)
 		os.Exit(1)
 	}
-	if err := os.MkdirAll(logDir, 0755); err != nil {
+	if err := os.MkdirAll(logDir, 0750); err != nil {
 		fmt.Fprintf(os.Stderr, "Error creating %s: %v\n", logDir, err)
 		os.Exit(1)
 	}
@@ -1521,7 +1521,7 @@ func installServiceMacOS(home, binPath, logDir, envPath string, uninstall bool) 
 </plist>
 `, binPath, home, home, envPath, serviceLog, serviceLog)
 
-	if err := os.WriteFile(plistFile, []byte(content), 0644); err != nil {
+	if err := os.WriteFile(plistFile, []byte(content), 0600); err != nil {
 		fmt.Fprintf(os.Stderr, "Error writing plist: %v\n", err)
 		os.Exit(1)
 	}

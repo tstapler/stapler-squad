@@ -70,7 +70,7 @@ func NewIndexStore() (*IndexStore, error) {
 // NewIndexStoreWithDir creates an IndexStore with a custom directory.
 // Useful for testing.
 func NewIndexStoreWithDir(indexDir string) (*IndexStore, error) {
-	if err := os.MkdirAll(indexDir, 0755); err != nil {
+	if err := os.MkdirAll(indexDir, 0750); err != nil {
 		return nil, fmt.Errorf("failed to create index directory: %w", err)
 	}
 
@@ -290,7 +290,7 @@ func (s *IndexStore) saveVersion(version IndexVersion) error {
 		return err
 	}
 
-	if err := os.WriteFile(tempPath, data, 0644); err != nil {
+	if err := os.WriteFile(tempPath, data, 0600); err != nil {
 		return err
 	}
 
@@ -327,7 +327,7 @@ func (s *IndexStore) SaveSyncMetadata(meta *IndexSyncMetadata) error {
 		return fmt.Errorf("failed to marshal sync metadata: %w", err)
 	}
 
-	if err := os.WriteFile(tempPath, data, 0644); err != nil {
+	if err := os.WriteFile(tempPath, data, 0600); err != nil {
 		return fmt.Errorf("failed to write sync metadata temp file: %w", err)
 	}
 

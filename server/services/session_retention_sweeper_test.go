@@ -123,6 +123,29 @@ func TestSessionRetentionSweeper_SkipsOpenPR(t *testing.T) {
 		"expected session with an open/unmerged PR to be retained despite passing the retention window")
 }
 
+// TestSessionRetentionSweeper_DeletesTerminalPRAfterRestart is the regression test for
+// the session-retention-cleanup fix: GitHubPRStatusTerminal must round-trip through
+// storage (session/ent_repository.go's sessionToInstanceData / create+update paths),
+// not just live in memory, or every archived PR-linked session would be permanently
+// stuck behind SkipsOpenPR's check on every restart regardless of how old or merged the
+// PR actually is.
+func TestSessionRetentionSweeper_DeletesTerminalPRAfterRestart(t *testing.T) {
+	t.Parallel()
+	fix := setupForkTestFixture(t)
+	defer fix.cleanup()
+
+	addArchivedInstance(t, fix, "terminal-pr-archived", time.Now().AddDate(0, 0, -20), func(inst *session.Instance) {
+		inst.GitHubPRNumber = 42
+		inst.GitHubPRStatusTerminal = true
+	})
+
+	sweeper := NewSessionRetentionSweeper(fix.storage, config.DefaultConfig(), fix.svc)
+	sweeper.sweep(context.Background())
+
+	assert.False(t, hasStoredTitle(t, fix, "terminal-pr-archived"),
+		"expected session with a merged/closed PR (loaded fresh from storage) to be deleted once past the retention window")
+}
+
 func TestSessionRetentionSweeper_SkipsDirtyWorktree(t *testing.T) {
 	t.Parallel()
 	fix := setupForkTestFixture(t)

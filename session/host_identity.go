@@ -215,7 +215,7 @@ func LoadOrCreateHostIdentity(stateDir string) (HostIdentity, error) {
 	}
 	identity := HostIdentity{ID: id, PublicKey: pub, PrivateKey: priv}
 
-	if err := os.MkdirAll(stateDir, 0755); err != nil {
+	if err := os.MkdirAll(stateDir, 0750); err != nil {
 		return HostIdentity{}, fmt.Errorf("failed to create state directory: %w", err)
 	}
 	out, err := json.MarshalIndent(identity, "", "  ")

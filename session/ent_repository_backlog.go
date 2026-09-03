@@ -2262,6 +2262,7 @@ func (r *EntRepository) CreateItemSource(ctx context.Context, data ItemSourceDat
 
 // ListItemSources returns all registered item sources.
 func (r *EntRepository) ListItemSources(ctx context.Context) ([]ItemSourceData, error) {
+	//nolint:entfullscan small, bounded-by-nature table (one row per registered source), intentionally returns all.
 	sources, err := r.client.ItemSource.Query().All(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list item sources: %w", err)
@@ -2563,6 +2564,7 @@ func (r *EntRepository) FinishSourceSync(ctx context.Context, sourceID string, c
 // GetAllItemSessionsWithBacklogInfo returns all item sessions joined with their parent
 // backlog item's ID, title, and status. Used by the Insights dashboard index.
 func (r *EntRepository) GetAllItemSessionsWithBacklogInfo(ctx context.Context) ([]ItemSessionBacklogEntry, error) {
+	//nolint:entfullscan feeds the Insights dashboard, which needs the full join across all item sessions.
 	sessions, err := r.client.ItemSession.Query().
 		WithBacklogItem().
 		All(ctx)

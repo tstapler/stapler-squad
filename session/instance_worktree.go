@@ -12,7 +12,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/git"
 )
@@ -366,7 +365,15 @@ func (i *Instance) GetEffectiveRootDir() string {
 			return p
 		}
 	}
-	return i.Path
+	return i.GetPath()
+}
+
+// GetPath returns the instance's repository root path. Written under
+// i.mu by setGitHubResolutionLocked once deferred GitHub URL resolution
+// completes in the background, so reads must go through this lock-free
+// accessor (the published atomic Snapshot) rather than the bare i.Path field.
+func (i *Instance) GetPath() string {
+	return i.Snapshot().Path
 }
 
 // Workspace returns where this session is operating.
@@ -379,7 +386,7 @@ func (i *Instance) GetEffectiveRootDir() string {
 // to read a directory that's gone and surface a bare "directory not found: ."
 // with no indication why.
 func (i *Instance) Workspace() Workspace {
-	repoRoot := i.Path
+	repoRoot := i.GetPath()
 	effectivePath := i.GetEffectiveRootDir()
 	if effectivePath != repoRoot {
 		if _, err := os.Stat(effectivePath); err != nil {
@@ -550,24 +557,20 @@ func (i *Instance) SetDirBaseSHA(sha string) {
 	i.gitManager.SetDirBaseSHA(sha)
 }
 
-// computeDirDiffStats computes diff stats for a directory session by running
-// git diff against baseSHA. Returns nil on any error (diff is optional/cosmetic).
+// computeDirDiffStats computes diff stats for a directory session — the
+// committed-range equivalent of `git diff baseSHA..HEAD` — via go-git
+// (session/git.DiffContentBetween), avoiding a subshell on this poll-cadence
+// path (see the `prefer-go-git-over-subshells` skill; profiling on
+// 2026-09-02 found subshell ForkLock contention was 77% of all mutex-profile
+// delay). Returns nil on any error (diff is optional/cosmetic).
 func computeDirDiffStats(repoPath, baseSHA string) *git.DiffStats {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	cmd := safeexec.CommandContext(ctx, "git", "diff", baseSHA+"..HEAD")
-	cmd.Dir = repoPath
-	out, err := cmd.Output()
+	headSHA, err := git.GetHeadCommitSHA(repoPath)
 	if err != nil {
 		return nil
 	}
-	stats := &git.DiffStats{Content: string(out)}
-	for _, line := range strings.Split(stats.Content, "\n") {
-		if strings.HasPrefix(line, "+") && !strings.HasPrefix(line, "+++") {
-			stats.Added++
-		} else if strings.HasPrefix(line, "-") && !strings.HasPrefix(line, "---") {
-			stats.Removed++
-		}
+	stats, err := git.DiffContentBetween(repoPath, baseSHA, headSHA)
+	if err != nil {
+		return nil
 	}
 	return stats
 }
@@ -577,7 +580,7 @@ func (i *Instance) GetWorkingDirectory() string {
 	if i.gitManager.HasWorktree() {
 		return i.gitManager.GetWorktreePath()
 	}
-	return i.Path
+	return i.GetPath()
 }
 
 // DetectAndPopulateWorktreeInfo detects if the instance path is a worktree
