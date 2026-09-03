@@ -63,9 +63,11 @@ type launchCommandBuilder interface {
 	// buildLaunchCommand's claudeSessionID parameter passed through — only
 	// claudeLaunchBuilder uses it; piLaunchBuilder reads i.piSession instead.
 	Build(i *Instance, base, resumeSessionID string) string
-	// SuppressStderr reports whether to discard this program's stderr
-	// (append "2>/dev/null") instead of letting it reach the visible pane.
-	SuppressStderr() bool
+	// StderrRedirect returns the shell redirect suffix (e.g. " 2>>'<path>'")
+	// to append so this program's stderr doesn't reach the visible pane, or
+	// "" to leave stderr alone. Must redirect to a real file, never
+	// /dev/null -- see piLaunchBuilder.StderrRedirect's doc comment.
+	StderrRedirect(i *Instance) string
 }
 
 // launchBuilders is the ordered, stateless set of builders buildLaunchCommand
@@ -87,7 +89,7 @@ func (b *claudeLaunchBuilder) Build(i *Instance, base, resumeSessionID string) s
 	return i.buildClaudeCommand(base, resumeSessionID)
 }
 
-func (b *claudeLaunchBuilder) SuppressStderr() bool { return false }
+func (b *claudeLaunchBuilder) StderrRedirect(i *Instance) string { return "" }
 
 // piLaunchBuilder implements launchCommandBuilder for the pi binary.
 type piLaunchBuilder struct{}
@@ -104,13 +106,40 @@ func (b *piLaunchBuilder) Build(i *Instance, base, _ string) string {
 	return i.buildPiCommand(base, piSessionID)
 }
 
-// SuppressStderr returns true: pi writes a harmless per-project trust-gate
-// diagnostic straight to stderr on every launch (confirmed empirically —
-// the session still reaches "Working..." right after), and nothing else in
-// this pipeline distinguishes it from pi's real TUI output once it lands in
-// the pane. Mirrors piStatusCommandFactory's side-channel subprocess
-// (instance_pi_status.go), which already discards its own stderr the same way.
-func (b *piLaunchBuilder) SuppressStderr() bool { return true }
+// StderrRedirect keeps pi's stderr out of the visible pane -- pi writes a
+// harmless per-project trust-gate diagnostic there on every launch (confirmed
+// empirically: the session still reaches "Working..." right after) with
+// nothing else in this pipeline able to distinguish it from pi's real TUI
+// output. Redirects to a dedicated log file rather than /dev/null, so a
+// genuine crash or "command not found" remains discoverable instead of
+// silently vanishing. Returns "" (no redirect) if the log path can't be
+// resolved, since a resolution failure here means the whole app's logging is
+// already broken -- failing open to visibility, not silently to /dev/null.
+func (b *piLaunchBuilder) StderrRedirect(i *Instance) string {
+	path, err := piStderrLogPath(i)
+	if err != nil {
+		log.ForSession(i.Title).Warn("could not resolve pi stderr log path; leaving stderr unredirected", "err", err)
+		return ""
+	}
+	return " 2>>" + shellQuote(path)
+}
+
+// piStderrLogPath returns the path to a plain-text file (distinct from the
+// session_<id>.log the Logs tab reads, which is JSON-lines and would be
+// corrupted by pi's raw stderr text) that captures pi's launch-time stderr.
+func piStderrLogPath(i *Instance) (string, error) {
+	logDir, err := log.GetLogDir(log.ConfigToLogConfig(config.LoadConfig()))
+	if err != nil {
+		return "", err
+	}
+	safeTitle := strings.Map(func(r rune) rune {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_' {
+			return r
+		}
+		return '-'
+	}, i.Title)
+	return filepath.Join(logDir, fmt.Sprintf("pi-stderr_%s.log", safeTitle)), nil
+}
 
 // isClaude reports whether the program command invokes the claude binary.
 // It checks each whitespace-delimited token's basename to avoid false positives
@@ -247,15 +276,11 @@ func (i *Instance) buildLaunchCommand(claudeSessionID string) string {
 	for _, a := range i.ExtraArgs {
 		cmd = cmd + " " + shellQuote(a)
 	}
-	if matched != nil && matched.SuppressStderr() {
-		cmd = cmd + suppressStderrRedirect
+	if matched != nil {
+		cmd = cmd + matched.StderrRedirect(i)
 	}
 	return cmd
 }
-
-// suppressStderrRedirect is appended to a launch command when its builder's
-// SuppressStderr() returns true.
-const suppressStderrRedirect = " 2>/dev/null"
 
 // shellQuote POSIX-single-quotes s for safe interpolation into a shell command
 // string. tmux launches the assembled command through a shell, and Go's %q

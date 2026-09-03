@@ -143,11 +143,25 @@ func TestPiLaunchBuilder_Matches(t *testing.T) {
 	}
 }
 
+// wantPiStderrRedirect builds the exact " 2>>'<path>'" suffix
+// buildLaunchCommand appends for a pi instance titled title, using the same
+// piStderrLogPath helper production code calls -- so these tests assert on
+// behavior, not a hardcoded path that would drift from GetLogDir's real
+// resolution (test-mode dir, custom LogsDir, etc).
+func wantPiStderrRedirect(t *testing.T, inst *Instance) string {
+	t.Helper()
+	path, err := piStderrLogPath(inst)
+	if err != nil {
+		t.Fatalf("piStderrLogPath(%+v) failed: %v", inst, err)
+	}
+	return " 2>>" + shellQuote(path)
+}
+
 func TestBuildLaunchCommand_PiSessionResume(t *testing.T) {
 	t.Parallel()
 	inst := &Instance{Program: "pi", piExtension: piExtension{piSession: &PiSessionData{SessionID: "abc123"}}}
 	got := inst.buildLaunchCommand("")
-	want := "pi --session 'abc123' 2>/dev/null"
+	want := "pi --session 'abc123'" + wantPiStderrRedirect(t, inst)
 	if got != want {
 		t.Errorf("got %q, want %q", got, want)
 	}
@@ -157,17 +171,18 @@ func TestBuildLaunchCommand_PiNoSession_NoOp(t *testing.T) {
 	t.Parallel()
 	inst := &Instance{Program: "pi"}
 	got := inst.buildLaunchCommand("")
-	// The "2>/dev/null" suffix discards pi's own per-project trust-gate stderr
-	// diagnostics -- see piLaunchBuilder.SuppressStderr's doc comment.
-	if got != "pi 2>/dev/null" {
-		t.Errorf("got %q, want exactly %q (no-op aside from the pi stderr redirect)", got, "pi 2>/dev/null")
+	// The stderr-redirect suffix keeps pi's own per-project trust-gate
+	// diagnostics out of the pane -- see piLaunchBuilder.StderrRedirect.
+	want := "pi" + wantPiStderrRedirect(t, inst)
+	if got != want {
+		t.Errorf("got %q, want exactly %q (no-op aside from the pi stderr redirect)", got, want)
 	}
 }
 
 // TestBuildLaunchCommand_PiStderrRedirectComesAfterCLIFlagsAndExtraArgs guards
-// the suffix ordering: "2>/dev/null" must be the final token, after CLIFlags
-// and ExtraArgs, or it lands mid-command and no longer redirects the whole
-// pi invocation's stderr.
+// the suffix ordering: the stderr redirect must be the final token, after
+// CLIFlags and ExtraArgs, or it lands mid-command and no longer redirects the
+// whole pi invocation's stderr.
 func TestBuildLaunchCommand_PiStderrRedirectComesAfterCLIFlagsAndExtraArgs(t *testing.T) {
 	t.Parallel()
 	inst := &Instance{
@@ -176,9 +191,9 @@ func TestBuildLaunchCommand_PiStderrRedirectComesAfterCLIFlagsAndExtraArgs(t *te
 		ExtraArgs: []string{"--verbose"},
 	}
 	got := inst.buildLaunchCommand("")
-	want := "pi " + shellQuote("--model") + " " + shellQuote("x") + " " + shellQuote("--verbose") + " 2>/dev/null"
+	want := "pi " + shellQuote("--model") + " " + shellQuote("x") + " " + shellQuote("--verbose") + wantPiStderrRedirect(t, inst)
 	if got != want {
-		t.Errorf("got %q, want %q (2>/dev/null must be the final token)", got, want)
+		t.Errorf("got %q, want %q (stderr redirect must be the final token)", got, want)
 	}
 }
 

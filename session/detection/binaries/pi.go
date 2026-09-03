@@ -18,17 +18,9 @@ func (d *PiDetector) Name() string { return "pi" }
 // FilterContent returns content unchanged.
 func (d *PiDetector) FilterContent(content string) string { return content }
 
-// Patterns returns an empty pattern set -- see the type doc comment.
+// Patterns returns an empty pattern set -- see the type doc comment. The zero
+// value's nil slices behave identically to explicit empty ones for every
+// caller (len/range), so there's no need to allocate one per field.
 func (d *PiDetector) Patterns() dtypes.StatusPatterns {
-	return dtypes.StatusPatterns{
-		Ready:         []dtypes.StatusPattern{},
-		Processing:    []dtypes.StatusPattern{},
-		NeedsApproval: []dtypes.StatusPattern{},
-		InputRequired: []dtypes.StatusPattern{},
-		Error:         []dtypes.StatusPattern{},
-		TestsFailing:  []dtypes.StatusPattern{},
-		Idle:          []dtypes.StatusPattern{},
-		Active:        []dtypes.StatusPattern{},
-		Success:       []dtypes.StatusPattern{},
-	}
+	return dtypes.StatusPatterns{}
 }

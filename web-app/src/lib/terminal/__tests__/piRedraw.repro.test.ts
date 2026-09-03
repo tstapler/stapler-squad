@@ -16,7 +16,7 @@
  * as separate rows.
  */
 import { Terminal } from '@xterm/xterm';
-import { TerminalStreamManager } from '../TerminalStreamManager';
+import { TerminalStreamManager, type ITerminal } from '../TerminalStreamManager';
 
 // xterm.js's write() is asynchronous internally (queued, flushed on a later
 // microtask/animation frame) even though TerminalStreamManager's write()
@@ -44,7 +44,7 @@ describe('pi-tui line-redraw sequence (real xterm.js, no mocks)', () => {
 
   beforeEach(() => {
     term = new Terminal({ cols: 80, rows: 24, allowProposedApi: true });
-    manager = new TerminalStreamManager(term as unknown as import('../TerminalStreamManager').ITerminal, () => {});
+    manager = new TerminalStreamManager(term as unknown as ITerminal, () => {});
   });
 
   afterEach(() => {
