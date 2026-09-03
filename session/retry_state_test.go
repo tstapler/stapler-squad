@@ -2,11 +2,14 @@ package session
 
 import (
 	"errors"
+	"os"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/config"
+	"github.com/tstapler/stapler-squad/session/git"
 )
 
 // fakeLivenessProcessManager reuses stuckDialogProcessManager's full
@@ -326,6 +329,48 @@ func TestRetryNow_should_TakeRecoverFromStoppedAndStartPath_When_CalledFromPerma
 	if !inst.Started() {
 		t.Error("Started() = false, want true after a successful cold-recovery Start()")
 	}
+}
+
+// TestRestartForRetry_should_RecreateMissingWorktree_When_DirectoryWasDeleted
+// is the regression test for the "aimee crash loop" fix: a session whose git
+// worktree directory was deleted from disk (e.g. a pruned worktree) used to
+// fail identically forever on every "Retry now" click, since Start(false) —
+// the warm-restart path restartForRetry takes for PermanentlyFailed/Stopped
+// — never recreates a worktree the way first-time setup does. restartForRetry
+// must detect the missing directory and call GitWorktreeManager.Setup() to
+// recreate it before Start() runs.
+func TestRestartForRetry_should_RecreateMissingWorktree_When_DirectoryWasDeleted(t *testing.T) {
+	t.Parallel()
+	repoPath := setupTestRepository(t)
+
+	wt, _, err := git.NewGitWorktree(repoPath, "retry-worktree-recreate")
+	require.NoError(t, err)
+	require.NoError(t, wt.Setup())
+	worktreePath := wt.GetWorktreePath()
+
+	// Simulate a pruned/deleted worktree directory — the exact scenario
+	// tmux.ErrWorkDirMissing guards against.
+	require.NoError(t, os.RemoveAll(worktreePath))
+	if _, statErr := os.Stat(worktreePath); !os.IsNotExist(statErr) {
+		t.Fatalf("precondition failed: worktree directory still exists after RemoveAll: %v", statErr)
+	}
+
+	inst := &Instance{
+		Title:          "t",
+		Status:         PermanentlyFailed,
+		Path:           repoPath,
+		processManager: &fakeLivenessProcessManager{alive: false},
+	}
+	inst.gitManager.SetWorktree(wt)
+	inst.RetryAttempt = 3
+	inst.RetryMaxAttempts = 3
+	inst.LastFailureReason = "crashed"
+
+	retryErr := inst.RetryNow("/tmp")
+
+	require.NoError(t, retryErr)
+	_, statErr := os.Stat(worktreePath)
+	require.NoError(t, statErr, "restartForRetry should have recreated the missing worktree directory before Start()")
 }
 
 // TestRetryNow_should_BypassPendingBackoffDelay_When_CalledMidBackoffWait covers

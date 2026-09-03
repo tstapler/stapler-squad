@@ -89,14 +89,14 @@ export function getWsCloseCode(err: unknown): number | null {
  * throw at import time under those mocks even though the mocked test never
  * exercises this branch.
  *
- * Code.FailedPrecondition covers the WebSocket EndStream-error path
- * specifically (no ws-close-code header, since the connection wasn't
- * abnormally closed) — server/services/connectrpc_websocket.go's
- * sendEndStreamError uses it for a session whose backing tmux working
- * directory no longer exists (e.g. a pruned git worktree). Reconnecting
- * would just repeat the identical failure, so this is treated the same as
- * an auth failure or a gone session: stop retrying immediately instead of
- * burning the full reconnect budget.
+ * Deliberately does NOT include Code.FailedPrecondition: this helper is
+ * shared by the session-list "watch" stream (useSessionService.ts) as well
+ * as the terminal stream, and FailedPrecondition's one current meaning
+ * (see isWorktreeMissingError below) is specific to the terminal stream's
+ * missing-working-directory case. A future unrelated FailedPrecondition on
+ * the watch stream must not silently stop reconnecting there too — callers
+ * that need the worktree-missing behavior check isWorktreeMissingError
+ * explicitly alongside this function instead.
  */
 export function isNonRetriableConnectError(err: unknown): err is ConnectError {
   if (!(err instanceof ConnectError)) return false;
@@ -104,7 +104,7 @@ export function isNonRetriableConnectError(err: unknown): err is ConnectError {
   if (wsCode !== null) {
     return !isRetriableCloseCode(wsCode);
   }
-  return err.code === Code.Unauthenticated || err.code === Code.NotFound || err.code === Code.FailedPrecondition;
+  return err.code === Code.Unauthenticated || err.code === Code.NotFound;
 }
 
 /**

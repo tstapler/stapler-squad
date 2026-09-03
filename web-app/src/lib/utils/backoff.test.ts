@@ -168,13 +168,14 @@ describe("isNonRetriableConnectError", () => {
     expect(isNonRetriableConnectError(new Error("boom"))).toBe(false);
   });
 
-  it("isNonRetriableConnectError_should_returnTrue_When_codeIsFailedPrecondition", () => {
-    // server/services/connectrpc_websocket.go's sendEndStreamError uses this
-    // code specifically for a session whose working directory is missing
-    // (e.g. a pruned git worktree) — reconnecting can't fix that on its own.
+  it("isNonRetriableConnectError_should_returnFalse_When_codeIsFailedPrecondition", () => {
+    // Deliberately NOT non-retriable here: this helper is shared with the
+    // unrelated session-list watch stream, so FailedPrecondition's
+    // worktree-missing meaning must be checked separately via
+    // isWorktreeMissingError, not folded into this shared function.
     const err = new ConnectError("working directory missing", Code.FailedPrecondition);
     expect(getWsCloseCode(err)).toBeNull();
-    expect(isNonRetriableConnectError(err)).toBe(true);
+    expect(isNonRetriableConnectError(err)).toBe(false);
   });
 });
 

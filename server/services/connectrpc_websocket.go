@@ -17,6 +17,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"connectrpc.com/connect"
 	"github.com/gorilla/websocket"
 	"github.com/puzpuzpuz/xsync/v4"
 	"github.com/tstapler/stapler-squad/config"
@@ -3519,21 +3520,27 @@ func sendEndStreamSuccess(stream *connectWebSocketStream) {
 	}
 }
 
+// endStreamErrorCode picks the ConnectRPC error code string for an
+// EndStream error frame. FailedPrecondition for a missing working directory
+// (see handleTmuxRestoreFailure) is deliberately distinct from the default
+// Internal every other stream error gets: the frontend
+// (useTerminalStream.ts's isWorktreeMissingError) matches on this code to
+// stop retrying immediately instead of burning its whole reconnect budget
+// against a directory that won't reappear on its own. Extracted from
+// sendEndStreamError as a pure function so this selection is unit-testable
+// without a real WebSocket stream.
+func endStreamErrorCode(err error) string {
+	if errors.Is(err, tmux.ErrWorkDirMissing) {
+		return connect.CodeFailedPrecondition.String()
+	}
+	return connect.CodeInternal.String()
+}
+
 // sendEndStreamError sends an error EndStream message
 func sendEndStreamError(stream *connectWebSocketStream, err error) {
 	// ConnectRPC protocol requires JSON-encoded EndStream payload (not protobuf)
 	// Error EndStream uses the ConnectRPC error JSON format.
-	//
-	// "failed_precondition" for a missing working directory (see
-	// handleTmuxRestoreFailure) is deliberately distinct from the default
-	// "internal" every other stream error gets: the frontend
-	// (useTerminalStream.ts) matches on this code to stop retrying
-	// immediately instead of burning its whole reconnect budget against a
-	// directory that won't reappear on its own.
-	code := "internal"
-	if errors.Is(err, tmux.ErrWorkDirMissing) {
-		code = "failed_precondition"
-	}
+	code := endStreamErrorCode(err)
 	errMsg, _ := json.Marshal(err.Error())
 	dataBytes := fmt.Appendf(nil, `{"error":{"code":%q,"message":%s}}`, code, errMsg)
 

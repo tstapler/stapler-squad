@@ -60,6 +60,9 @@ import { useApprovalsContext } from "@/lib/contexts/ApprovalsContext";
 import { useViewport } from "@/components/providers/ViewportProvider";
 import { useInputModeOverride } from "@/lib/hooks/useInputModeOverride";
 import { isWorktreeMissingError } from "@/lib/utils/backoff";
+import { createClient } from "@connectrpc/connect";
+import { createConnectTransport } from "@connectrpc/connect-web";
+import { SessionService } from "@/gen/session/v1/session_pb";
 import * as styles from "./TerminalOutput.css";
 
 interface TerminalOutputProps {
@@ -626,6 +629,30 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
     foreground: isVisible,
     outstandingResyncIdsRef,
   });
+
+  // Lightweight, single-purpose RPC client for the worktree-missing hard-fail
+  // banner's "Retry now" button — mirrors the pattern used throughout this
+  // codebase (e.g. useLogViewer.ts) for a one-off unary call, rather than
+  // pulling in the full useSessionService hook (which sets up its own
+  // session-list watch stream and Redux wiring — too heavy to instantiate
+  // per open terminal pane).
+  const retrySessionClientRef = useRef<ReturnType<typeof createClient<typeof SessionService>> | null>(null);
+  if (!retrySessionClientRef.current) {
+    retrySessionClientRef.current = createClient(SessionService, createConnectTransport({ baseUrl }));
+  }
+  const [isRetryingSession, setIsRetryingSession] = useState(false);
+  const handleRetryNow = useCallback(async () => {
+    setIsRetryingSession(true);
+    try {
+      // Errors are surfaced to the user via the banner remaining visible
+      // (a fresh connect attempt below will just fail again) — no separate
+      // error UI needed for this action itself.
+      await retrySessionClientRef.current?.retrySession({ id: effectiveSessionId });
+    } finally {
+      setIsRetryingSession(false);
+      handleHookReconnect();
+    }
+  }, [effectiveSessionId, handleHookReconnect]);
 
   const { notifyResyncOutputReceived, resetStallWatchdog } = useVisibilityResync({
     sessionId: effectiveSessionId,
@@ -1864,7 +1891,13 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
         {showReconnectBanner && isHardFailed && (
           <div className={styles.hardFailedBanner} role="alert">
             {isWorktreeMissingError(error) ? (
-              "This session's working directory no longer exists (its git worktree may have been deleted). Use \"Retry now\" from the session menu to recreate it and restart."
+              <>
+                This session&apos;s working directory no longer exists (its git worktree may
+                have been deleted).{" "}
+                <button onClick={handleRetryNow} disabled={isRetryingSession}>
+                  {isRetryingSession ? "Retrying…" : "Retry now"}
+                </button>
+              </>
             ) : (
               <>Connection lost — <button onClick={handleHookReconnect}>Retry</button></>
             )}

@@ -258,12 +258,15 @@ func (us *UtilityService) GetLogs(
 	// log/log.go's ForSession), tagged with a "session" attribute rather
 	// than filed into separate per-session log files — no code path writes
 	// those anymore. Resolve a UUID session_id to the session's Title (the
-	// value entries are actually tagged with) so parseLogs' session filter
-	// below can match on it.
-	if sid := req.Msg.GetSessionId(); sid != "" && us.reviewQueuePoller != nil {
-		if inst := us.reviewQueuePoller.FindInstance(sid); inst != nil {
-			resolvedID := inst.Title
-			req.Msg.SessionId = &resolvedID
+	// value entries are actually tagged with) so the session filter below
+	// can match on it. Kept as a local variable rather than overwriting
+	// req.Msg.SessionId: the inbound request is the caller's own message,
+	// and rewriting it here would silently disagree with what the client
+	// actually sent for anything else that might inspect it later.
+	sessionFilter := req.Msg.GetSessionId()
+	if sessionFilter != "" && us.reviewQueuePoller != nil {
+		if inst := us.reviewQueuePoller.FindInstance(sessionFilter); inst != nil {
+			sessionFilter = inst.Title
 		}
 	}
 
@@ -289,7 +292,7 @@ func (us *UtilityService) GetLogs(
 	defer file.Close()
 
 	// Parse logs with filters
-	result, err := parseLogs(file, req.Msg)
+	result, err := parseLogs(file, req.Msg, sessionFilter)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to parse logs: %w", err))
 	}
@@ -507,8 +510,12 @@ type parseLogsResult struct {
 	HasMore    bool
 }
 
-// parseLogs reads log file and applies filters to return matching entries
-func parseLogs(reader io.Reader, req *sessionv1.GetLogsRequest) (*parseLogsResult, error) {
+// parseLogs reads log file and applies filters to return matching entries.
+// sessionFilter is the resolved session Title to restrict entries to (see
+// GetLogs), or "" for no session filtering — passed explicitly rather than
+// read off req, since the caller may need to resolve a UUID to a Title
+// first without mutating req itself.
+func parseLogs(reader io.Reader, req *sessionv1.GetLogsRequest, sessionFilter string) (*parseLogsResult, error) {
 	var entries []*sessionv1.LogEntry
 	scanner := bufio.NewScanner(reader)
 
@@ -542,8 +549,6 @@ func parseLogs(reader io.Reader, req *sessionv1.GetLogsRequest) (*parseLogsResul
 	} else if req.Level != nil && *req.Level != "" {
 		levelFilterSet = map[string]struct{}{strings.ToUpper(*req.Level): {}}
 	}
-
-	sessionFilter := req.GetSessionId()
 
 	var startTime, endTime *time.Time
 	if req.StartTime != nil {

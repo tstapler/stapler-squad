@@ -5,6 +5,7 @@ import (
 	"compress/gzip"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -1012,6 +1013,33 @@ func TestStreamViaHub_should_SendHubStartFailedError_When_HubCreationAndLegacyFa
 	errData := terminalData.GetError()
 	require.NotNil(t, errData, "expected a TerminalData_Error frame when both the hub path and legacy fallback fail")
 	require.Equal(t, HubStartFailedErrorCode, errData.Code)
+
+	// handleTmuxRestoreFailure's whole purpose is to move a session with a
+	// missing working directory to PermanentlyFailed (so "Retry now" is
+	// reachable) instead of leaving it Active with a terminal that can never
+	// reconnect — this scenario is exactly the ErrWorkDirMissing path
+	// (streamViaControlMode's fallback check above), so assert on it here
+	// rather than only on the unrelated HubStartFailedErrorCode frame.
+	require.Equal(t, session.PermanentlyFailed, inst.Snapshot().Status,
+		"handleTmuxRestoreFailure must mark the session PermanentlyFailed when its working directory is missing")
+}
+
+// TestEndStreamErrorCode_should_UseFailedPrecondition_When_ErrIsErrWorkDirMissing
+// and its sibling below cover endStreamErrorCode directly (extracted from
+// sendEndStreamError specifically so this selection is testable without a
+// real WebSocket stream) — the frontend's isWorktreeMissingError depends on
+// "failed_precondition" being emitted only for this specific failure.
+func TestEndStreamErrorCode_should_UseFailedPrecondition_When_ErrIsErrWorkDirMissing(t *testing.T) {
+	t.Parallel()
+	wrapped := fmt.Errorf("tmux session missing and restore failed: %w", tmux.ErrWorkDirMissing)
+
+	require.Equal(t, "failed_precondition", endStreamErrorCode(wrapped))
+}
+
+func TestEndStreamErrorCode_should_UseInternal_When_ErrIsUnrelated(t *testing.T) {
+	t.Parallel()
+
+	require.Equal(t, "internal", endStreamErrorCode(errors.New("boom")))
 }
 
 // TestHubRegistry_should_CallSubscribeControlModeUpdatesExactlyOnce_When_MultipleSubscribersAttach

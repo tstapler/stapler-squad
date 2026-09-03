@@ -327,7 +327,7 @@ func TestParseLogs_should_ParseMixedJSONAndLegacyLines_When_FileHasBothFormats(t
 		`{"time":"2026-08-25T11:02:00Z","level":"ERROR","msg":"json line three"}`,
 	}, "\n")
 
-	result, err := parseLogs(strings.NewReader(content), &sessionv1.GetLogsRequest{})
+	result, err := parseLogs(strings.NewReader(content), &sessionv1.GetLogsRequest{}, "")
 
 	require.NoError(t, err)
 	require.Len(t, result.Entries, 3, "the 3 valid lines must all parse; the garbage line is skipped")
@@ -350,7 +350,7 @@ func TestParseLogs_should_FilterByLevel_When_JSONLinesHaveDifferentLevels(t *tes
 
 	result, err := parseLogs(strings.NewReader(content), &sessionv1.GetLogsRequest{
 		Levels: []string{"ERROR"},
-	})
+	}, "")
 
 	require.NoError(t, err)
 	require.Len(t, result.Entries, 1)
@@ -387,9 +387,7 @@ func TestParseLogs_should_FilterBySession_When_SessionIdSet(t *testing.T) {
 		`{"time":"2026-08-25T11:02:00Z","level":"INFO","msg":"line with no session tag"}`,
 	}, "\n")
 
-	result, err := parseLogs(strings.NewReader(content), &sessionv1.GetLogsRequest{
-		SessionId: strPtr("session-a"),
-	})
+	result, err := parseLogs(strings.NewReader(content), &sessionv1.GetLogsRequest{}, "session-a")
 
 	require.NoError(t, err)
 	require.Len(t, result.Entries, 1)
