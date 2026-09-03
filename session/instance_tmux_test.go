@@ -88,31 +88,25 @@ func TestIsClaude(t *testing.T) {
 	}
 }
 
-func TestClassifyProgram(t *testing.T) {
+func TestClaudeLaunchBuilder_Matches(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
 		program string
-		want    string // "claude" or "plain"
+		want    bool
 	}{
-		{"claude", "claude"},
-		{"/usr/local/bin/claude", "claude"},
-		{"env -u PROXY claude", "claude"},
-		{"aider", "plain"},
-		{"claude-squad", "plain"},
-		{"", "plain"},
+		{"claude", true},
+		{"/usr/local/bin/claude", true},
+		{"env -u PROXY claude", true},
+		{"aider", false},
+		{"claude-squad", false},
+		{"", false},
 	}
+	b := &claudeLaunchBuilder{}
 	for _, tc := range cases {
 		t.Run(tc.program, func(t *testing.T) {
 			t.Parallel()
-			switch classifyProgram(tc.program).(type) {
-			case claudeProgram:
-				if tc.want != "claude" {
-					t.Errorf("classifyProgram(%q) = claudeProgram, want plainProgram", tc.program)
-				}
-			case plainProgram:
-				if tc.want != "plain" {
-					t.Errorf("classifyProgram(%q) = plainProgram, want claudeProgram", tc.program)
-				}
+			if got := b.Matches(tc.program); got != tc.want {
+				t.Errorf("claudeLaunchBuilder{}.Matches(%q) = %v, want %v", tc.program, got, tc.want)
 			}
 		})
 	}
@@ -142,21 +136,32 @@ func TestIsPi(t *testing.T) {
 	}
 }
 
-func TestClassifyProgram_Pi(t *testing.T) {
+func TestPiLaunchBuilder_Matches(t *testing.T) {
 	t.Parallel()
-	switch classifyProgram("pi").(type) {
-	case piProgram:
-		// expected
-	default:
-		t.Errorf("classifyProgram(%q) = %T, want piProgram", "pi", classifyProgram("pi"))
+	if !(&piLaunchBuilder{}).Matches("pi") {
+		t.Errorf("piLaunchBuilder{}.Matches(%q) = false, want true", "pi")
 	}
+}
+
+// wantPiStderrRedirect builds the exact " 2>>'<path>'" suffix
+// buildLaunchCommand appends for a pi instance titled title, using the same
+// piStderrLogPath helper production code calls -- so these tests assert on
+// behavior, not a hardcoded path that would drift from GetLogDir's real
+// resolution (test-mode dir, custom LogsDir, etc).
+func wantPiStderrRedirect(t *testing.T, inst *Instance) string {
+	t.Helper()
+	path, err := piStderrLogPath(inst)
+	if err != nil {
+		t.Fatalf("piStderrLogPath(%+v) failed: %v", inst, err)
+	}
+	return " 2>>" + shellQuote(path)
 }
 
 func TestBuildLaunchCommand_PiSessionResume(t *testing.T) {
 	t.Parallel()
 	inst := &Instance{Program: "pi", piExtension: piExtension{piSession: &PiSessionData{SessionID: "abc123"}}}
 	got := inst.buildLaunchCommand("")
-	want := "pi --session 'abc123'"
+	want := "pi --session 'abc123'" + wantPiStderrRedirect(t, inst)
 	if got != want {
 		t.Errorf("got %q, want %q", got, want)
 	}
@@ -166,8 +171,29 @@ func TestBuildLaunchCommand_PiNoSession_NoOp(t *testing.T) {
 	t.Parallel()
 	inst := &Instance{Program: "pi"}
 	got := inst.buildLaunchCommand("")
-	if got != "pi" {
-		t.Errorf("got %q, want exactly %q (no-op, matching claude's no-session behavior)", got, "pi")
+	// The stderr-redirect suffix keeps pi's own per-project trust-gate
+	// diagnostics out of the pane -- see piLaunchBuilder.StderrRedirect.
+	want := "pi" + wantPiStderrRedirect(t, inst)
+	if got != want {
+		t.Errorf("got %q, want exactly %q (no-op aside from the pi stderr redirect)", got, want)
+	}
+}
+
+// TestBuildLaunchCommand_PiStderrRedirectComesAfterCLIFlagsAndExtraArgs guards
+// the suffix ordering: the stderr redirect must be the final token, after
+// CLIFlags and ExtraArgs, or it lands mid-command and no longer redirects the
+// whole pi invocation's stderr.
+func TestBuildLaunchCommand_PiStderrRedirectComesAfterCLIFlagsAndExtraArgs(t *testing.T) {
+	t.Parallel()
+	inst := &Instance{
+		Program:   "pi",
+		CLIFlags:  "--model x",
+		ExtraArgs: []string{"--verbose"},
+	}
+	got := inst.buildLaunchCommand("")
+	want := "pi " + shellQuote("--model") + " " + shellQuote("x") + " " + shellQuote("--verbose") + wantPiStderrRedirect(t, inst)
+	if got != want {
+		t.Errorf("got %q, want %q (stderr redirect must be the final token)", got, want)
 	}
 }
 
