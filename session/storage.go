@@ -12,6 +12,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/artifacts"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/ent"
+	entsession "github.com/tstapler/stapler-squad/session/ent/session"
 	"github.com/tstapler/stapler-squad/session/ent/sessiongoal"
 	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/tokens"
@@ -104,6 +105,12 @@ type InstanceData struct {
 	// LastAcknowledged tracks when the user last dismissed this session from review queue
 	// Sessions acknowledged after their last update won't appear in the queue until they update again
 	LastAcknowledged time.Time `json:"last_acknowledged,omitempty"`
+
+	// CreationProgressUpdatedAt records when Instance.CreationProgress was last set
+	// (Instance.creationProgressUpdatedAt, Epic 1.1.4). Persisted so the
+	// Stale-Creation Sweeper (Epic 4.1) can judge a restored Creating row's actual
+	// last-progress time after a process restart, not just its Creating-onset time.
+	CreationProgressUpdatedAt time.Time `json:"creation_progress_updated_at,omitempty"`
 
 	// Prompt detection and interaction tracking for smart review queue behavior
 	LastPromptDetected   time.Time `json:"last_prompt_detected,omitempty"`
@@ -469,19 +476,12 @@ func (s *Storage) ArchiveInstanceDataByID(id string, at time.Time) (bool, error)
 	return true, nil
 }
 
-// FindInstanceDataByID finds the first InstanceData whose stable ID or title matches id.
-// Returns ErrInstanceDataNotFound when no match exists.
+// FindInstanceDataByID finds the InstanceData whose stable ID or title matches id, via
+// an indexed WHERE clause (EntRepository.FindByIDWithOptions) rather than loading and
+// linear-scanning every session row — see that method's doc comment for the CPU-profile
+// finding that motivated this. Returns ErrInstanceDataNotFound when no match exists.
 func (s *Storage) FindInstanceDataByID(id string) (*InstanceData, error) {
-	all, err := s.ListInstanceData()
-	if err != nil {
-		return nil, err
-	}
-	for i := range all {
-		if all[i].MatchesID(id) {
-			return &all[i], nil
-		}
-	}
-	return nil, ErrInstanceDataNotFound
+	return s.repo.FindByIDWithOptions(context.Background(), id, LoadMinimal)
 }
 
 // ListInstanceIDs returns the stable ID (UUID if set, else Title) for every stored
@@ -528,6 +528,11 @@ func (s *Storage) DeleteInstance(title string) error {
 	return err
 }
 
+// ErrTitleConflict is returned by AddInstance when the title's unique
+// constraint is violated by a genuinely different instance (see its doc
+// comment) rather than an idempotent re-save of the same one.
+var ErrTitleConflict = errors.New("session with this title already exists")
+
 // AddInstance adds a new instance to storage.
 // Unlike SaveInstances, this does not require instance.Started() to be true.
 func (s *Storage) AddInstance(instance *Instance) error {
@@ -537,7 +542,24 @@ func (s *Storage) AddInstance(instance *Instance) error {
 		if !ent.IsConstraintError(err) {
 			return fmt.Errorf("failed to persist session %q: %w", data.Title, err)
 		}
-		// Unique constraint violation → session already exists, update instead.
+		// Unique constraint violation on title. This is a legitimate
+		// idempotent re-save only when the existing row is the SAME session
+		// (matched by UUID, following the same convention as legacy rows
+		// persisted before the uuid field existed, which share the
+		// zero-value ""): a caller re-adding an Instance object it already
+		// owns. When the UUIDs are both non-empty and differ, a second,
+		// distinct instance (always freshly assigned a UUID by NewInstance)
+		// is racing to create a session under an already-taken title --
+		// updating in that case would silently steal/overwrite the first
+		// instance's persisted row with the second's data instead of
+		// failing. See
+		// TestCreateSession_should_RejectSecondDuplicate_When_TwoRapidCallsShareTitle
+		// (server/services/session_service_test.go), the regression this
+		// guards.
+		existingData, getErr := s.repo.Get(ctx, data.Title)
+		if getErr != nil || existingData.UUID != data.UUID {
+			return fmt.Errorf("%w: %q", ErrTitleConflict, data.Title)
+		}
 		if updateErr := s.repo.Update(ctx, data); updateErr != nil {
 			return updateErr
 		}
@@ -627,10 +649,17 @@ func (s *Storage) UpdateInstanceProcessingGrace(title string, processingGraceUnt
 }
 
 // UpdateInstancePRStatus updates the PR status fields for a specific instance.
-// PR fields are not stored in the ent schema — they live in memory and are re-populated by
-// PRStatusPoller on each poll cycle. No DB write is needed.
-func (s *Storage) UpdateInstancePRStatus(_, _, _, _ string, _, _ int, _, _ bool) error {
-	return nil
+// Most PR fields are not stored in the ent schema — they live in memory and are
+// re-populated by PRStatusPoller on each poll cycle, so no DB write is needed for
+// them. terminal is the one exception: SessionRetentionSweeper.baseSafeToDelete
+// reads it back from storage (not the live Instance) to decide whether a
+// PR-linked archived session is safe to delete, so it must survive a restart or
+// every such session is blocked from deletion forever (session-retention-cleanup).
+func (s *Storage) UpdateInstancePRStatus(title, _, _, _ string, _, _ int, _, terminal bool) error {
+	if !terminal {
+		return nil
+	}
+	return s.repo.UpdateGitHubPRStatusTerminal(context.Background(), title, terminal)
 }
 
 // UpdateInstancePRNumber persists the discovered PR number for a session so it
@@ -656,6 +685,38 @@ func (s *Storage) UpdateInstanceArtifacts(title string, blob string) error {
 // Returns ("", nil) if the session exists but has no artifacts yet.
 func (s *Storage) GetInstanceArtifacts(title string) (string, error) {
 	return s.repo.GetSessionArtifacts(context.Background(), title)
+}
+
+// UpdateInstanceIfEpoch performs a single ent bulk conditional UPDATE of status
+// and failure_reason, gated on the persisted row's creation_epoch still matching
+// capturedEpoch (Epic 1.2, ADR-002's "durable-first terminal write" addendum —
+// see commitTerminalStatus in server/services, which calls this before touching
+// any in-memory actor state). Returns applied = (affected rows == 1): false
+// means either no row matched id, or the row's creation_epoch had already moved
+// past capturedEpoch (a cancel or retry beat this caller to the database, at the
+// database's own authoritative view — not just the in-process actor's).
+//
+// id is matched against both uuid and title, mirroring InstanceData.MatchesID's
+// stable-ID-with-title-fallback convention used elsewhere in this file (e.g.
+// FindInstanceDataByID).
+func (s *Storage) UpdateInstanceIfEpoch(ctx context.Context, id string, capturedEpoch uint64, status Status, failureReason string) (bool, error) {
+	client := s.GetEntClient()
+	if client == nil {
+		return false, fmt.Errorf("UpdateInstanceIfEpoch not supported by this backend")
+	}
+	n, err := client.Session.Update().
+		Where(
+			entsession.Or(entsession.UUID(id), entsession.Title(id)),
+			entsession.CreationEpoch(capturedEpoch),
+		).
+		SetStatus(int(status)).
+		SetFailureReason(failureReason).
+		SetUpdatedAt(time.Now()).
+		Save(ctx)
+	if err != nil {
+		return false, fmt.Errorf("failed to conditionally update instance %s: %w", id, err)
+	}
+	return n == 1, nil
 }
 
 // GetAllInstanceArtifacts returns a map of title → raw artifacts JSON for all sessions

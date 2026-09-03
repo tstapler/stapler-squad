@@ -65,6 +65,14 @@ const (
 	// deliberate terminal state pending human action via "Retry now"
 	// (Instance.RetryNow), not an incidental stop. See ADR-001.
 	PermanentlyFailed Status = 7
+	// Failed is a non-terminal state: the async creation pipeline (Background
+	// Resolution Pipeline, Epic 2.2) failed before the session ever reached
+	// Active. Distinct from Crashed (a previously-Active session whose process
+	// later exited abnormally): Failed→Creating is a legal transition, used by
+	// the retry path (Epic 1.2's TryStartRetry), while Crashed only recovers to
+	// Active. See ADR-001 and SESSION_STATUS_FAILED in
+	// proto/session/v1/types.proto.
+	Failed Status = 8
 
 	// Deprecated: use Active.
 	Running = Active
@@ -93,6 +101,8 @@ func (s Status) String() string {
 		return "Crashed"
 	case PermanentlyFailed:
 		return "PermanentlyFailed"
+	case Failed:
+		return "Failed"
 	default:
 		return fmt.Sprintf("Status(%d)", int(s))
 	}
@@ -340,6 +350,44 @@ type Instance struct {
 	// Set by the async creation goroutine; cleared once the session becomes Active.
 	// Not persisted to the database — only meaningful in-memory during startup.
 	CreationProgress string `json:"-"`
+
+	// creationProgressUpdatedAt records when CreationProgress was last set, so the
+	// Stale-Creation Sweeper (Epic 4.1) can judge how far a killed process actually
+	// got instead of only how long ago it entered Creating. Bumped by
+	// setCreationProgressLocked on every SetCreationProgress call, in the same
+	// actor command as the progress-text write. Unlike CreationProgress itself,
+	// this IS persisted (see session/ent/schema's creation_progress_updated_at)
+	// so it survives a process restart.
+	creationProgressUpdatedAt time.Time
+
+	// failureReason holds the human-readable reason the async creation pipeline
+	// failed. Meaningful only when Status == Failed; empty otherwise. Terminal-write
+	// metadata, not independently-settable progress text (contrast
+	// SetCreationProgress, which ADR-002 deliberately leaves ungated) — there is no
+	// public setter. Only setFailureReasonLocked may write it, called exclusively
+	// from within TryForceStatusIfEpoch's own command closure (Epic 1.2).
+	failureReason string
+
+	// creationEpoch is a fencing counter bumped exactly once per cancel/retry of
+	// the async creation pipeline (ADR-002). A background writer captures the
+	// epoch before starting work and must present it back to
+	// TryForceStatusIfEpoch/UpdateInstanceIfEpoch to win the terminal write —
+	// if the epoch has since moved (a cancel or retry raced ahead of it), the
+	// write is silently dropped instead of overwriting a newer outcome.
+	// Written only by bumpCreationEpoch, called only from cancel/retry code
+	// paths (Phase 3) and from within TryStartRetry's own command closure.
+	creationEpoch uint64
+
+	// creationCancelFunc is the context.CancelFunc for this instance's
+	// Background Resolution Context (Epic 2.2, Story 2.2.1), stored at
+	// pipeline-spawn time so the Cancel RPC (Epic 3.2) can stop an
+	// in-progress creation. Process-local by nature -- a context.CancelFunc
+	// cannot be persisted or reconstructed -- so an instance loaded from
+	// storage without a live pipeline goroutine spawned in the current
+	// process has this nil (Task 3.2.1b's documented nil-guard case, not an
+	// edge case to special-case away). Not part of InstanceSnapshot; like
+	// creationEpoch, actor-goroutine confinement alone serializes access.
+	creationCancelFunc context.CancelFunc
 
 	// LaunchCommand is the full command passed to tmux on session start, including
 	// any injected flags (--resume, --mcp-config, -y, initial prompt). Set once on

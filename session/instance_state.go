@@ -165,6 +165,49 @@ func (i *Instance) GetLifecycleStatus() Status {
 	return i.Snapshot().Status
 }
 
+// FailureReason returns the human-readable reason the async creation pipeline
+// failed. Meaningful only when GetLifecycleStatus() == Failed; empty otherwise.
+// Read-only: there is no public setter (see failureReason's doc comment in
+// instance.go for why).
+func (i *Instance) FailureReason() string {
+	var reason string
+	_ = i.sendSyncErr(func(s *instanceState) error {
+		reason = s.inst.failureReason
+		return nil
+	})
+	return reason
+}
+
+// StatusAndFailureReason returns Status and FailureReason captured together in
+// one actor round-trip. Unlike calling GetLifecycleStatus() (a lock-free read
+// off the published snapshot) followed by a separate FailureReason() call (a
+// second, independent actor round-trip), this guarantees the pair cannot
+// straddle an intervening write (e.g. TryStartRetry resetting Status to
+// Creating between the two reads while leaving the prior attempt's
+// failureReason in place until TryForceStatusIfEpoch's next closure clears
+// it). Used by AwaitCreationTerminal (server/services/session_creation_await.go)
+// to build its CreationOutcome snapshot atomically.
+func (i *Instance) StatusAndFailureReason() (status Status, failureReason string) {
+	_ = i.sendSyncErr(func(s *instanceState) error {
+		status = s.inst.Status
+		failureReason = s.inst.failureReason
+		return nil
+	})
+	return status, failureReason
+}
+
+// CreationProgressUpdatedAt returns when CreationProgress was last set. Used by
+// the Stale-Creation Sweeper (Epic 4.1) to judge a Creating instance's actual
+// progress rather than only its Creating-onset time.
+func (i *Instance) CreationProgressUpdatedAt() time.Time {
+	var t time.Time
+	_ = i.sendSyncErr(func(s *instanceState) error {
+		t = s.inst.creationProgressUpdatedAt
+		return nil
+	})
+	return t
+}
+
 // GetCategoryPath returns the category path as a slice of strings for nested category support
 // Supports "Work/Frontend" syntax by splitting on "/" delimiter
 func (i *Instance) GetCategoryPath() []string {

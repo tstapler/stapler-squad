@@ -11,6 +11,8 @@ import (
 	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/tstapler/stapler-squad/github"
+	ssqlog "github.com/tstapler/stapler-squad/log"
+	gitutil "github.com/tstapler/stapler-squad/session/git"
 )
 
 // stapler-squad#152 security review: GitHub owner/repo regexes only exclude
@@ -402,7 +404,7 @@ func TestRepairCorruptedGitRepo_ReRepairs_When_HeadIsUnresolvable(t *testing.T) 
 	if isCorruptedClone(clonePath) {
 		t.Errorf("RepairCorruptedGitRepo(%q): repo still corrupted after repair", clonePath)
 	}
-	repairedRepo, err := git.PlainOpen(clonePath)
+	repairedRepo, err := gitutil.OpenRepo(clonePath)
 	if err != nil {
 		t.Fatalf("PlainOpen(repaired clone) failed: %v", err)
 	}
@@ -523,9 +525,9 @@ func TestGetMainRepoPath_ResolvesWorktreeToMainRepo(t *testing.T) {
 // branch tip, rather than erroring or misbehaving because GetMainRepoPath's resolution
 // wasn't wired in.
 func TestCreateBacklogWorktree_AnchorsAtMainRepo_When_RepoPathIsAWorktree(t *testing.T) {
-	// Not t.Parallel(): this test swaps the global slog default to capture
-	// CreateBacklogWorktree's log output, which would race other parallel tests'
-	// logging.
+	// Not t.Parallel(): this test swaps the log package's injectable slog seam
+	// to capture CreateBacklogWorktree's log output, which would race other
+	// parallel tests' logging.
 	origin := t.TempDir()
 	originRepo, err := git.PlainInit(origin, false)
 	if err != nil {
@@ -571,9 +573,8 @@ func TestCreateBacklogWorktree_AnchorsAtMainRepo_When_RepoPathIsAWorktree(t *tes
 	// because that fallback shells out to real git, not because the resolution was
 	// actually correct.
 	var logBuf bytes.Buffer
-	prevLogger := slog.Default()
-	slog.SetDefault(slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelDebug})))
-	defer slog.SetDefault(prevLogger)
+	prevLogger := ssqlog.SetSlogDefaultForTest(slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	defer ssqlog.SetSlogDefaultForTest(prevLogger)
 
 	childWorktree, err := CreateBacklogWorktree(anchorWorktree, "child-item")
 	if err != nil {

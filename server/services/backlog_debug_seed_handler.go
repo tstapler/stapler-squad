@@ -206,13 +206,13 @@ func (h *BacklogDebugSeedHandler) handleSeed(w http.ResponseWriter, r *http.Requ
 			return
 		}
 		planDir := filepath.Join(configDir, "e2e-plan-artifacts", item.ID)
-		if err := os.MkdirAll(planDir, 0o755); err != nil {
+		if err := os.MkdirAll(planDir, 0o750); err != nil {
 			log.Error("backlog debug seed: create plan dir failed", "err", err)
 			http.Error(w, "failed to create plan artifacts dir: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
 		planPath := filepath.Join(planDir, "plan.md")
-		if err := os.WriteFile(planPath, []byte("# Seeded e2e plan\n"), 0o644); err != nil {
+		if err := os.WriteFile(planPath, []byte("# Seeded e2e plan\n"), 0o600); err != nil {
 			log.Error("backlog debug seed: write plan file failed", "err", err)
 			http.Error(w, "failed to write plan artifacts file: "+err.Error(), http.StatusInternalServerError)
 			return
@@ -511,14 +511,23 @@ func (h *BacklogDebugSeedHandler) handleSeedWorkSessionWithWorktree(w http.Respo
 		return
 	}
 	worktreePath := filepath.Join(configDir, "e2e-worktree-artifacts", uuid.New().String())
-	if err := os.MkdirAll(worktreePath, 0o755); err != nil {
+	if err := os.MkdirAll(worktreePath, 0o750); err != nil {
 		log.Error("backlog debug seed: create worktree dir failed", "err", err)
 		http.Error(w, "failed to create worktree dir: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
-	if err := os.WriteFile(filepath.Join(worktreePath, "README.md"), []byte("# e2e fixture\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(worktreePath, "README.md"), []byte("# e2e fixture\n"), 0o600); err != nil {
 		log.Error("backlog debug seed: write worktree fixture file failed", "err", err)
 		http.Error(w, "failed to write worktree fixture file: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	// A second file so the file tree has more than one row — needed for
+	// tests that navigate between rows (modal-focus-trap AC5's tabindex-churn
+	// e2e test requires react-arborist to move focus off one row and onto
+	// another to exercise its roving-tabindex behavior).
+	if err := os.WriteFile(filepath.Join(worktreePath, "NOTES.md"), []byte("# notes\n"), 0o600); err != nil {
+		log.Error("backlog debug seed: write second worktree fixture file failed", "err", err)
+		http.Error(w, "failed to write second worktree fixture file: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 	// A real (tiny) git repo, not just a bare directory: GetVCSStatus (the

@@ -9,6 +9,15 @@ import (
 	"github.com/tstapler/stapler-squad/session/detection"
 )
 
+// waitingForAgentStuckThreshold bounds how long the no-controller path trusts
+// StatusWaitingForAgent as unconditional evidence of real background activity, before
+// treating it as a possibly-stuck/orphaned background shell and falling through to the
+// normal time-based idle re-add check instead. It's deliberately much larger than
+// basicIdleThreshold (below): the auto-mode footer count alone can't distinguish a
+// healthy long-running background task from one that's stalled, so this is a coarse
+// proxy — "background work has plausibly stalled" — not a precise stuck-detector.
+const waitingForAgentStuckThreshold = 30 * time.Minute
+
 // DetectionAction represents what the poller should do after status determination.
 type DetectionAction int
 
@@ -227,8 +236,20 @@ func (d *DefaultStatusDeterminer) Determine(
 				shouldAdd = true
 				ctx = effectiveCtx(statusContext, "Task completed successfully")
 				log.Debug("task complete (no controller)", "session", inst.Title)
-			case detection.StatusExecuting, detection.StatusProcessing, detection.StatusWaitingForAgent, detection.StatusCompacting:
+			case detection.StatusExecuting, detection.StatusProcessing, detection.StatusCompacting:
 				return DetectionResult{Action: DetectionActionRemove, ClaudeStatus: claudeStatus}
+			case detection.StatusWaitingForAgent:
+				// Unlike Executing/Processing/Compacting, WaitingForAgent is now reachable
+				// via the always-present auto-mode footer override (detection/detector.go's
+				// applyFooterIdleOverride) rather than only a genuinely-active spinner line —
+				// so it can no longer be trusted as unconditional evidence of real activity.
+				// A stuck/orphaned background shell that never decrements would otherwise
+				// exclude an actually-idle session from the review queue indefinitely. Only
+				// suppress it while recently updated; once stale, fall through to the normal
+				// time-based re-add check below.
+				if time.Since(inst.UpdatedAt) < waitingForAgentStuckThreshold {
+					return DetectionResult{Action: DetectionActionRemove, ClaudeStatus: claudeStatus}
+				}
 			}
 		}
 

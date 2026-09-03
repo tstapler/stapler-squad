@@ -23,10 +23,9 @@ import (
 func captureLogWarn(t *testing.T) *bytes.Buffer {
 	t.Helper()
 	var buf bytes.Buffer
-	prev := slog.Default()
-	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	prev := log.SetSlogDefaultForTest(slog.New(slog.NewTextHandler(&buf, nil)))
 	t.Cleanup(func() {
-		slog.SetDefault(prev)
+		log.SetSlogDefaultForTest(prev)
 	})
 	return &buf
 }

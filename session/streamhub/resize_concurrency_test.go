@@ -67,7 +67,8 @@ func (c *reentrancyTrackingController) GetPaneCursorPosition() (x, y int, err er
 	return 0, 0, nil
 }
 
-func (c *reentrancyTrackingController) StopControlMode() error { return nil }
+func (c *reentrancyTrackingController) StartControlMode() error { return nil }
+func (c *reentrancyTrackingController) StopControlMode() error  { return nil }
 
 // SubscribeControlModeUpdates returns an already-closed channel so
 // waitForQuiescence returns immediately (its receive-from-closed-channel

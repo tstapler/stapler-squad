@@ -640,7 +640,7 @@ func loadClassifier(storage *session.Storage) *classifier.RuleBasedClassifier {
 
 	// Also load config file rules from ~/.config/stapler-squad/shared_rules.yaml.
 	configPath := filepath.Join(os.Getenv("HOME"), ".config", "stapler-squad", "shared_rules.yaml")
-	if data, err := os.ReadFile(configPath); err == nil {
+	if data, err := os.ReadFile(configPath); err == nil { // #nosec G304 -- configPath is built from $HOME plus a fixed filename, not caller input.
 		var configFile struct {
 			Rules []struct {
 				Name           string   `yaml:"name"`
@@ -837,7 +837,7 @@ func installClaude() {
 
 	// 1. Copy binary to ~/.local/bin/ssq-hooks.
 	binDir := filepath.Join(home, ".local", "bin")
-	if err := os.MkdirAll(binDir, 0755); err != nil {
+	if err := os.MkdirAll(binDir, 0750); err != nil {
 		fmt.Fprintf(os.Stderr, "Error creating %s: %v\n", binDir, err)
 		os.Exit(1)
 	}
@@ -869,6 +869,8 @@ func installClaude() {
 
 // copyBinary copies src to dst as an executable file, replacing dst if it exists.
 func copyBinary(src, dst string) error {
+	// #nosec G304 -- src is always os.Executable() (this binary's own resolved path),
+	// not caller/user-supplied input.
 	in, err := os.Open(src)
 	if err != nil {
 		return err
@@ -877,6 +879,8 @@ func copyBinary(src, dst string) error {
 
 	// Write to a temp file first, then atomically rename to avoid partial writes.
 	tmp := dst + ".tmp"
+	// #nosec G304 -- tmp is dst+".tmp"; dst is always destBin, an installer-controlled
+	// path under ~/.local/bin, not caller/user-supplied input.
 	out, err := os.OpenFile(tmp, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0755)
 	if err != nil {
 		return err
@@ -899,6 +903,8 @@ func copyBinary(src, dst string) error {
 // (e.g. an array), it returns a descriptive error rather than silently overwriting.
 // The write is atomic: data is written to settingsPath+".tmp" then renamed.
 func patchBeforeToolHook(settingsPath, hookCmd string) error {
+	// #nosec G304 -- settingsPath is always one of two fixed candidates under
+	// ~/.gemini (installGemini's candidates slice), not caller/user-supplied input.
 	raw, err := os.ReadFile(settingsPath)
 	if err != nil {
 		if !os.IsNotExist(err) {
@@ -935,7 +941,7 @@ func patchBeforeToolHook(settingsPath, hookCmd string) error {
 	}
 	// Atomic write (P-4: avoid partial-read race with running agy/Gemini process).
 	tmpPath := settingsPath + ".tmp"
-	if err := os.WriteFile(tmpPath, append(out, '\n'), 0644); err != nil {
+	if err := os.WriteFile(tmpPath, append(out, '\n'), 0600); err != nil {
 		return err
 	}
 	return os.Rename(tmpPath, settingsPath)
@@ -949,7 +955,7 @@ func installGemini() {
 	}
 	// 1. Copy binary to ~/.local/bin/ssq-hooks.
 	binDir := filepath.Join(home, ".local", "bin")
-	if err := os.MkdirAll(binDir, 0755); err != nil {
+	if err := os.MkdirAll(binDir, 0750); err != nil {
 		fmt.Fprintf(os.Stderr, "Error creating %s: %v\n", binDir, err)
 		os.Exit(1)
 	}
@@ -1001,7 +1007,7 @@ func installAgy() {
 	}
 	// 1. Copy binary to ~/.local/bin/ssq-hooks.
 	binDir := filepath.Join(home, ".local", "bin")
-	if err := os.MkdirAll(binDir, 0755); err != nil {
+	if err := os.MkdirAll(binDir, 0750); err != nil {
 		fmt.Fprintf(os.Stderr, "Error creating %s: %v\n", binDir, err)
 		os.Exit(1)
 	}
@@ -1057,6 +1063,8 @@ func installAgy() {
 // contains any ssq-hooks check --antigravity command. No-ops if the file doesn't
 // exist, the key is absent, or no matching command is found.
 func removeAntigravityHookEntry(hooksPath string) error {
+	// #nosec G304 -- hooksPath is always one of two fixed candidates under ~/.gemini
+	// (installAgy's candidates slice), not caller/user-supplied input.
 	raw, err := os.ReadFile(hooksPath)
 	if err != nil {
 		return nil // file absent — nothing to clean up
@@ -1101,7 +1109,7 @@ func removeAntigravityHookEntry(hooksPath string) error {
 		return err
 	}
 	tmpPath := hooksPath + ".tmp"
-	if err := os.WriteFile(tmpPath, append(out, '\n'), 0644); err != nil {
+	if err := os.WriteFile(tmpPath, append(out, '\n'), 0600); err != nil {
 		return err
 	}
 	return os.Rename(tmpPath, hooksPath)
@@ -1112,6 +1120,8 @@ func patchAntigravityHooks(hooksPath, binPath string) error {
 	hookCmd := binPath + " check --antigravity"
 
 	// Read existing settings (create minimal file if absent).
+	// #nosec G304 -- hooksPath is always one of two fixed candidates under ~/.gemini
+	// (installAgy's candidates slice), not caller/user-supplied input.
 	raw, err := os.ReadFile(hooksPath)
 	if err != nil {
 		if !os.IsNotExist(err) {
@@ -1174,7 +1184,7 @@ func patchAntigravityHooks(hooksPath, binPath string) error {
 
 	// Atomic write
 	tmpPath := hooksPath + ".tmp"
-	if err := os.WriteFile(tmpPath, append(out, '\n'), 0644); err != nil {
+	if err := os.WriteFile(tmpPath, append(out, '\n'), 0600); err != nil {
 		return err
 	}
 	return os.Rename(tmpPath, hooksPath)
@@ -1239,12 +1249,12 @@ func openCodePluginContent(ssqHooksPath string) string {
 // binary path produces byte-identical output (no explicit "already present" check needed, unlike
 // the JSON-config installers, since there's no third-party config structure to merge into).
 func patchOpenCodeHooks(pluginPath, ssqHooksPath string) error {
-	if err := os.MkdirAll(filepath.Dir(pluginPath), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(pluginPath), 0750); err != nil {
 		return err
 	}
 	content := openCodePluginContent(ssqHooksPath)
 	tmpPath := pluginPath + ".tmp"
-	if err := os.WriteFile(tmpPath, []byte(content), 0644); err != nil {
+	if err := os.WriteFile(tmpPath, []byte(content), 0600); err != nil {
 		return err
 	}
 	return os.Rename(tmpPath, pluginPath)
@@ -1256,6 +1266,8 @@ func patchOpenCodeHooks(pluginPath, ssqHooksPath string) error {
 // unrelated open-code script) — mirrors removeAntigravityHookEntry's caution about not touching
 // content ssq-hooks didn't write.
 func removeStaleOpenCodeWrapper(path string) error {
+	// #nosec G304 -- path is always staleWrapper = filepath.Join(binDir, "open-code")
+	// in installOpenCode, a fixed installer-controlled path, not caller/user-supplied input.
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return nil // absent — nothing to clean up
@@ -1279,7 +1291,7 @@ func installOpenCode() {
 
 	// 1. Copy binary to ~/.local/bin/ssq-hooks.
 	binDir := filepath.Join(home, ".local", "bin")
-	if err := os.MkdirAll(binDir, 0755); err != nil {
+	if err := os.MkdirAll(binDir, 0750); err != nil {
 		fmt.Fprintf(os.Stderr, "Error creating %s: %v\n", binDir, err)
 		os.Exit(1)
 	}
@@ -1396,11 +1408,11 @@ func installServiceLinux(home, binPath, logDir, envPath string, uninstall bool) 
 		return
 	}
 
-	if err := os.MkdirAll(serviceDir, 0755); err != nil {
+	if err := os.MkdirAll(serviceDir, 0750); err != nil {
 		fmt.Fprintf(os.Stderr, "Error creating %s: %v\n", serviceDir, err)
 		os.Exit(1)
 	}
-	if err := os.MkdirAll(logDir, 0755); err != nil {
+	if err := os.MkdirAll(logDir, 0750); err != nil {
 		fmt.Fprintf(os.Stderr, "Error creating %s: %v\n", logDir, err)
 		os.Exit(1)
 	}
@@ -1426,7 +1438,7 @@ Environment=PATH=%s
 WantedBy=default.target
 `, binPath, home, serviceLog, serviceLog, home, envPath)
 
-	if err := os.WriteFile(serviceFile, []byte(content), 0644); err != nil {
+	if err := os.WriteFile(serviceFile, []byte(content), 0600); err != nil {
 		fmt.Fprintf(os.Stderr, "Error writing service file: %v\n", err)
 		os.Exit(1)
 	}
@@ -1466,11 +1478,11 @@ func installServiceMacOS(home, binPath, logDir, envPath string, uninstall bool) 
 		return
 	}
 
-	if err := os.MkdirAll(plistDir, 0755); err != nil {
+	if err := os.MkdirAll(plistDir, 0750); err != nil {
 		fmt.Fprintf(os.Stderr, "Error creating %s: %v\n", plistDir, err)
 		os.Exit(1)
 	}
-	if err := os.MkdirAll(logDir, 0755); err != nil {
+	if err := os.MkdirAll(logDir, 0750); err != nil {
 		fmt.Fprintf(os.Stderr, "Error creating %s: %v\n", logDir, err)
 		os.Exit(1)
 	}
@@ -1521,7 +1533,7 @@ func installServiceMacOS(home, binPath, logDir, envPath string, uninstall bool) 
 </plist>
 `, binPath, home, home, envPath, serviceLog, serviceLog)
 
-	if err := os.WriteFile(plistFile, []byte(content), 0644); err != nil {
+	if err := os.WriteFile(plistFile, []byte(content), 0600); err != nil {
 		fmt.Fprintf(os.Stderr, "Error writing plist: %v\n", err)
 		os.Exit(1)
 	}

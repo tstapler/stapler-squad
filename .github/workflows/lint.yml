@@ -238,7 +238,17 @@ jobs:
     needs: lint-prepare
     timeout-minutes: 20
     steps:
+      # fetch-depth: 0 (full history) so ESLint's file-scoped diff below can
+      # resolve github.event.before -- a shallow (default depth-1) checkout
+      # doesn't have that parent commit's object, so `git cat-file -e` on it
+      # always failed, BASE_SHA stayed empty, and the script silently fell
+      # through to an unscoped `npx next lint` full-repo scan every push to
+      # main. `next lint` exits 1 on ANY warning (not just errors), and the
+      # repo carries ~1450 pre-existing ones, so that fallback always failed
+      # -- this is why "Lint" had been red on main since at least 2026-08-28.
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up pnpm
         uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4

@@ -739,7 +739,7 @@ lint: ensure-tools proto-gen ent-gen server/web/dist lint-custom lint-shell ## R
 
 LINTER_BIN := $(CURDIR)/bin/linter
 
-lint-custom: $(LINTER_BIN) ## Run project-specific custom linters (hotpolllog, nocommandpattern, norawexec, tmuxsocketscope) in a single pass
+lint-custom: $(LINTER_BIN) ## Run project-specific custom linters (entfullscan, hotpolllog, nocommandpattern, norawexec, norawgitopen, silenttransition, tmuxsocketscope) in a single pass
 	@echo "Running custom lint..."
 	@$(LINTER_BIN) $(shell go list ./... | grep -v "^github.com/tstapler/stapler-squad$$")
 	@echo "custom lint: ok"

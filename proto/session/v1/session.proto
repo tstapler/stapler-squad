@@ -24,6 +24,22 @@ service SessionService {
   // DeleteSession stops and removes a session, cleaning up resources.
   rpc DeleteSession(DeleteSessionRequest) returns (DeleteSessionResponse) {}
 
+  // CancelSessionCreation cancels an in-progress (Status == Creating)
+  // session creation: it interrupts the Background Resolution Pipeline (if a
+  // live goroutine still exists in this process), cleans up any partially
+  // acquired resources, and removes the instance entirely. Unlike
+  // DeleteSession, a cancelled creation is removed outright rather than left
+  // as a Failed card, and no SessionDeletedEvent is published for it (see
+  // Epic 3.2's Known asymmetry note in the async-session-creation plan).
+  rpc CancelSessionCreation(CancelSessionCreationRequest) returns (CancelSessionCreationResponse) {}
+
+  // RetrySessionCreation retries a Failed session creation in place: the
+  // same instance ID and storage row transition Failed -> Creating and the
+  // Background Resolution Pipeline is re-spawned against a fresh fencing
+  // epoch. No SessionCreatedEvent is published for the retry (only
+  // SessionUpdatedEvent), so a client never sees a duplicate card.
+  rpc RetrySessionCreation(RetrySessionCreationRequest) returns (RetrySessionCreationResponse) {}
+
   // WatchSessions streams real-time session events (created/updated/deleted).
   // Server-streaming RPC for live updates without polling.
   rpc WatchSessions(WatchSessionsRequest) returns (stream SessionEvent) {}
@@ -755,6 +771,14 @@ message CreateSessionRequest {
   // Optional: per-session override for the global default retry policy
   // (session-retry-backoff). Unset fields inherit the resolved global value.
   optional RetryPolicyConfig retry_policy_override = 35;
+
+  // Optional: tags applied to the instance at construction time (synchronously, before the
+  // Background Resolution Pipeline dispatches) -- e.g. MCP's always-appended "source:mcp" and
+  // PR-derived tags (async-session-creation Task 2.3.1c). Unlike a post-hoc SetTags call after
+  // AwaitCreationTerminal succeeds, tags set here are never lost if the pipeline's resolution
+  // runs past a caller's own await timeout: they're on the instance from the moment it's
+  // constructed, not applied only on a terminal-success path.
+  repeated string tags = 36;
 }
 
 // RemoteTarget names a previously-saved remote (by RemoteConfig.Name) that a
@@ -836,6 +860,38 @@ message DeleteSessionRequest {
 
 message DeleteSessionResponse {
   // Whether deletion was successful.
+  bool success = 1;
+
+  // Human-readable message.
+  string message = 2;
+}
+
+message CancelSessionCreationRequest {
+  // Session identifier (title or UUID).
+  string id = 1;
+}
+
+message CancelSessionCreationResponse {
+  // Whether cancellation succeeded. Always true on a non-error response —
+  // if cancellation lost the race with the pipeline's own terminal write,
+  // the RPC returns a FailedPrecondition error instead (see
+  // CancelSessionCreation's doc comment).
+  bool success = 1;
+
+  // Human-readable message.
+  string message = 2;
+}
+
+message RetrySessionCreationRequest {
+  // Session identifier (title or UUID).
+  string id = 1;
+}
+
+message RetrySessionCreationResponse {
+  // Whether the retry was accepted. Always true on a non-error response —
+  // if the instance was no longer Failed by the time TryStartRetry's
+  // command ran, the RPC returns a FailedPrecondition error instead (see
+  // RetrySessionCreation's doc comment).
   bool success = 1;
 
   // Human-readable message.
