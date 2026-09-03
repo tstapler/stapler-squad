@@ -512,6 +512,85 @@ type parseLogsResult struct {
 	HasMore    bool
 }
 
+// logLineFilters holds all of parseLogs' pre-parsed filter criteria, so the
+// per-line matching logic can live in its own method (matches) instead of
+// inflating parseLogs' own cognitive complexity with one more nested
+// condition per filter.
+type logLineFilters struct {
+	// sessionFilter is the resolved session Title to restrict entries to
+	// (see GetLogs), or "" for no session filtering.
+	sessionFilter    string
+	levelFilterSet   map[string]struct{}
+	startTime        *time.Time
+	endTime          *time.Time
+	searchQueryLower string
+}
+
+// newLogLineFilters builds a logLineFilters from a GetLogsRequest and the
+// separately-resolved session filter (see parseLogs' doc comment for why
+// that isn't just req.GetSessionId()).
+func newLogLineFilters(req *sessionv1.GetLogsRequest, sessionFilter string) logLineFilters {
+	f := logLineFilters{sessionFilter: sessionFilter}
+
+	if req.SearchQuery != nil {
+		f.searchQueryLower = strings.ToLower(*req.SearchQuery)
+	}
+
+	// Build level filter set: prefer repeated Levels field; fall back to single Level for backward compat.
+	if len(req.Levels) > 0 {
+		f.levelFilterSet = make(map[string]struct{}, len(req.Levels))
+		for _, l := range req.Levels {
+			if l != "" {
+				f.levelFilterSet[strings.ToUpper(l)] = struct{}{}
+			}
+		}
+	} else if req.Level != nil && *req.Level != "" {
+		f.levelFilterSet = map[string]struct{}{strings.ToUpper(*req.Level): {}}
+	}
+
+	if req.StartTime != nil {
+		t := req.StartTime.AsTime()
+		f.startTime = &t
+	}
+	if req.EndTime != nil {
+		t := req.EndTime.AsTime()
+		f.endTime = &t
+	}
+
+	return f
+}
+
+// matches reports whether parsed satisfies every configured filter.
+func (f logLineFilters) matches(parsed parsedLogLine) bool {
+	// Entries are tagged with the owning session's Title via
+	// log.ForSession, not filed into a separate log file.
+	if f.sessionFilter != "" && parsed.Session != f.sessionFilter {
+		return false
+	}
+
+	if len(f.levelFilterSet) > 0 {
+		if _, ok := f.levelFilterSet[strings.ToUpper(parsed.Level)]; !ok {
+			return false
+		}
+	}
+
+	if f.startTime != nil && parsed.Timestamp.Before(*f.startTime) {
+		return false
+	}
+	if f.endTime != nil && parsed.Timestamp.After(*f.endTime) {
+		return false
+	}
+
+	if f.searchQueryLower != "" {
+		messageAndSource := strings.ToLower(parsed.Message + " " + parsed.Source)
+		if !strings.Contains(messageAndSource, f.searchQueryLower) {
+			return false
+		}
+	}
+
+	return true
+}
+
 // parseLogs reads log file and applies filters to return matching entries.
 // sessionFilter is the resolved session Title to restrict entries to (see
 // GetLogs), or "" for no session filtering — passed explicitly rather than
@@ -533,34 +612,7 @@ func parseLogs(reader io.Reader, req *sessionv1.GetLogsRequest, sessionFilter st
 		offset = int(*req.Offset)
 	}
 
-	// Parse filters
-	var searchQuery string
-	if req.SearchQuery != nil {
-		searchQuery = strings.ToLower(*req.SearchQuery)
-	}
-
-	// Build level filter set: prefer repeated Levels field; fall back to single Level for backward compat.
-	var levelFilterSet map[string]struct{}
-	if len(req.Levels) > 0 {
-		levelFilterSet = make(map[string]struct{}, len(req.Levels))
-		for _, l := range req.Levels {
-			if l != "" {
-				levelFilterSet[strings.ToUpper(l)] = struct{}{}
-			}
-		}
-	} else if req.Level != nil && *req.Level != "" {
-		levelFilterSet = map[string]struct{}{strings.ToUpper(*req.Level): {}}
-	}
-
-	var startTime, endTime *time.Time
-	if req.StartTime != nil {
-		t := req.StartTime.AsTime()
-		startTime = &t
-	}
-	if req.EndTime != nil {
-		t := req.EndTime.AsTime()
-		endTime = &t
-	}
+	filters := newLogLineFilters(req, sessionFilter)
 
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -572,33 +624,8 @@ func parseLogs(reader io.Reader, req *sessionv1.GetLogsRequest, sessionFilter st
 			continue
 		}
 
-		// Apply session filter — entries are tagged with the owning
-		// session's Title via log.ForSession, not a separate log file.
-		if sessionFilter != "" && parsed.Session != sessionFilter {
+		if !filters.matches(parsed) {
 			continue
-		}
-
-		// Apply level filter (OR logic across multi-level set)
-		if len(levelFilterSet) > 0 {
-			if _, ok := levelFilterSet[strings.ToUpper(parsed.Level)]; !ok {
-				continue
-			}
-		}
-
-		// Apply time range filters
-		if startTime != nil && parsed.Timestamp.Before(*startTime) {
-			continue
-		}
-		if endTime != nil && parsed.Timestamp.After(*endTime) {
-			continue
-		}
-
-		// Apply search query filter (case-insensitive, searches message and source)
-		if searchQuery != "" {
-			messageAndSource := strings.ToLower(parsed.Message + " " + parsed.Source)
-			if !strings.Contains(messageAndSource, searchQuery) {
-				continue
-			}
 		}
 
 		// Create log entry
