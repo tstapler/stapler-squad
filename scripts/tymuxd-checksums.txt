@@ -1,0 +1,11 @@
+# Pinned SHA-256 checksums for tstapler/tymux release tarballs, one line per
+# "<version> <target> <sha256>". Computed by downloading each v1.0.0 asset via
+# `gh release download v1.0.0 --repo tstapler/tymux --pattern 'tymux-*.tar.gz'`
+# and hashing with `sha256sum`. tstapler/tymux's release.yml does not publish
+# a per-asset .sha256 file today (a good follow-up for that repo, not filed
+# here) — this file is the hand-pinned substitute, verified by
+# scripts/fetch-tymuxd.sh before extracting.
+v1.0.0 aarch64-apple-darwin 3831c986e3fc1528f48ba28881d022ffac6326228eb47378df0420cd6b3617ca
+v1.0.0 x86_64-apple-darwin 0b9f578daee33536eb02877362cdd3591daf35a0f01fb799ed73dee7143b0a8a
+v1.0.0 x86_64-unknown-linux-musl c6d9ffad8786a1ee7f4e1713a4c3283f45051e31be5f36e7c0099b9099ae144b
+v1.0.0 aarch64-unknown-linux-musl 03cb9ae69f6c9cb5b55a2353a5466902bc2b5afb310f937ee4cdef84e87938a7

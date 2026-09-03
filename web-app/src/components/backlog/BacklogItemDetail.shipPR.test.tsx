@@ -17,23 +17,15 @@ import type { BacklogItem, LinkedSession } from "@/lib/hooks/useBacklogService";
 
 // Heavy children pull their own hooks/timers; stub them out so this test is
 // focused on BacklogItemDetail's own Actions-panel render behavior.
-jest.mock("./SessionMonitor", () => ({ SessionMonitor: () => null }));
-jest.mock("./GateVerdictBox", () => ({ GateVerdictBox: () => null }));
-jest.mock("./TriageReviewPanel", () => ({ TriageReviewPanel: () => null }));
-jest.mock("./TriageLoadingIndicator", () => ({ TriageLoadingIndicator: () => null }));
+jest.mock("./SessionMonitor", () => require("./backlogItemDetailTestFixtures").sessionMonitorMock());
+jest.mock("./GateVerdictBox", () => require("./backlogItemDetailTestFixtures").gateVerdictBoxMock());
+jest.mock("./TriageReviewPanel", () => require("./backlogItemDetailTestFixtures").triageReviewPanelMock());
+jest.mock("./TriageLoadingIndicator", () => require("./backlogItemDetailTestFixtures").triageLoadingIndicatorMock());
 
-jest.mock("@/lib/hooks/useSessionRepoPaths", () => ({
-  useSessionRepoPaths: () => [],
-}));
-jest.mock("@/lib/hooks/usePathCompletions", () => ({
-  usePathCompletions: () => ({ entries: [], isLoading: false }),
-}));
-jest.mock("@/lib/hooks/useSessionService", () => ({
-  useSessionService: () => ({ deleteSession: jest.fn() }),
-}));
-jest.mock("@/lib/analytics", () => ({
-  useAnalytics: () => ({ track: jest.fn() }),
-}));
+jest.mock("@/lib/hooks/useSessionRepoPaths", () => require("./backlogItemDetailTestFixtures").useSessionRepoPathsMock());
+jest.mock("@/lib/hooks/usePathCompletions", () => require("./backlogItemDetailTestFixtures").usePathCompletionsMock());
+jest.mock("@/lib/hooks/useSessionService", () => require("./backlogItemDetailTestFixtures").useSessionServiceMock());
+jest.mock("@/lib/analytics", () => require("./backlogItemDetailTestFixtures").analyticsMock());
 
 // Epic 5.3 (backlog-event-driven-updates): BacklogItemDetail now also
 // subscribes via useWatchBacklogItems + a Redux selector, and opens its own
@@ -41,28 +33,15 @@ jest.mock("@/lib/analytics", () => ({
 // (Task 5.3.1b/5.3.1c). None of these tests exercise that live-update path,
 // so everything is stubbed inert: no live item ever arrives, and the raw
 // terminal stream yields no events.
-jest.mock("@/lib/hooks/useWatchBacklogItems", () => ({
-  useWatchBacklogItems: () => ({ items: [], connectionState: "live" }),
-}));
-jest.mock("@/lib/store", () => ({
-  useAppSelector: () => undefined,
-}));
-jest.mock("@connectrpc/connect", () => ({
-  ...jest.requireActual("@connectrpc/connect"),
-  createClient: () => ({
-    watchBacklogItems: () => (async function* () {})(),
-  }),
-}));
-jest.mock("@connectrpc/connect-web", () => ({
-  createConnectTransport: jest.fn().mockReturnValue({}),
-}));
+jest.mock("@/lib/hooks/useWatchBacklogItems", () => require("./backlogItemDetailTestFixtures").useWatchBacklogItemsMock());
+jest.mock("@/lib/store", () => require("./backlogItemDetailTestFixtures").storeMock());
+jest.mock("@connectrpc/connect", () => require("./backlogItemDetailTestFixtures").connectMockWithActual());
+jest.mock("@connectrpc/connect-web", () => require("./backlogItemDetailTestFixtures").connectWebMock());
 
 // BacklogItemDetail calls useStuckBacklogItems() once and passes the
 // resolved StuckBacklogItem down to LifecycleSummary as a prop — stub it so
 // this suite never attempts a real ConnectRPC call.
-jest.mock("@/lib/hooks/useStuckBacklogItems", () => ({
-  useStuckBacklogItems: () => ({ items: [], isLoading: false, error: null }),
-}));
+jest.mock("@/lib/hooks/useStuckBacklogItems", () => require("./backlogItemDetailTestFixtures").useStuckBacklogItemsMock());
 
 
 const getBacklogItem = jest.fn();
@@ -132,6 +111,7 @@ function makeReviewItem(overrides: Partial<BacklogItem> = {}): BacklogItem {
     updatedAt: "2026-07-12T14:02:00Z",
     statusEvents: [],
     progressNotes: [],
+    activityNotes: [],
     totalEstimatedCostUsd: 0,
     gateVerdict: "PASS",
     gateVerdictSummary: "All criteria verified",

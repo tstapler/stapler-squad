@@ -49,6 +49,7 @@ function makeWorkflow(overrides: Partial<WorkflowProto> = {}): WorkflowProto {
     name: "Triage tickets",
     triggerType: "webhook",
     cronEnabled: true,
+    enabled: true,
     githubRepo: "",
     githubBranch: "",
     webhookSlug: "jira-ticket",
@@ -105,23 +106,54 @@ describe("TriggersPanel", () => {
   });
 
   it("TriggersPanel_should_showRowDisabled_When_triggerNotEnabled", () => {
-    mockWorkflows = [makeWorkflow({ cronEnabled: false })];
+    mockWorkflows = [makeWorkflow({ enabled: false })];
     render(<TriggersPanel />);
     expect(screen.getByTestId(`trigger-toggle-wf-1`)).toHaveTextContent("OFF");
   });
 
-  it("TriggersPanel_should_callUpdateWorkflowWithInvertedCronEnabled_When_toggleClicked", async () => {
-    mockWorkflows = [makeWorkflow({ id: "wf-1", cronEnabled: true })];
+  it("TriggersPanel_should_callUpdateWorkflowWithInvertedEnabled_When_toggleClicked", async () => {
+    mockWorkflows = [makeWorkflow({ id: "wf-1", triggerType: "webhook", enabled: true })];
     render(<TriggersPanel />);
 
     fireEvent.click(screen.getByTestId("trigger-toggle-wf-1"));
 
     await waitFor(() => expect(mockUpdateWorkflow).toHaveBeenCalledTimes(1));
-    expect(mockUpdateWorkflow).toHaveBeenCalledWith("wf-1", { cronEnabled: false });
+    // A webhook-type row's toggle only needs to flip `enabled` — cronEnabled is
+    // vestigial for this trigger type and left alone.
+    expect(mockUpdateWorkflow).toHaveBeenCalledWith("wf-1", { enabled: false });
+  });
+
+  // Regression test for a CRITICAL finding from sdd:6-verify: the toggle button omitted
+  // expectedUpdatedAt entirely, meaning the CAS precondition this PR adds (AC9) was
+  // never exercised by the toggle — only the edit form used it. The prior test above
+  // passes even without this one because the fixture's default updatedAt is undefined,
+  // which Jest's toHaveBeenCalledWith treats as equivalent to the key being absent —
+  // this test uses a REAL timestamp so a regression would actually be caught.
+  it("TriggersPanel_should_includeExpectedUpdatedAt_When_toggleClicked", async () => {
+    const updatedAt = { seconds: 1n, nanos: 0 } as unknown as WorkflowProto["updatedAt"];
+    mockWorkflows = [makeWorkflow({ id: "wf-1", triggerType: "webhook", enabled: true, updatedAt })];
+    render(<TriggersPanel />);
+
+    fireEvent.click(screen.getByTestId("trigger-toggle-wf-1"));
+
+    await waitFor(() => expect(mockUpdateWorkflow).toHaveBeenCalledTimes(1));
+    expect(mockUpdateWorkflow).toHaveBeenCalledWith("wf-1", { enabled: false, expectedUpdatedAt: updatedAt });
+  });
+
+  it("TriggersPanel_should_callUpdateWorkflowWithBothFields_When_toggleClickedOnCronTrigger", async () => {
+    // Scheduler.addCronEntry only ever reads cronEnabled, never enabled — the toggle
+    // must keep both fields in lockstep for a cron-type row or it becomes a no-op.
+    mockWorkflows = [makeWorkflow({ id: "wf-1", triggerType: "cron", enabled: true, cronEnabled: true })];
+    render(<TriggersPanel />);
+
+    fireEvent.click(screen.getByTestId("trigger-toggle-wf-1"));
+
+    await waitFor(() => expect(mockUpdateWorkflow).toHaveBeenCalledTimes(1));
+    expect(mockUpdateWorkflow).toHaveBeenCalledWith("wf-1", { enabled: false, cronEnabled: false });
   });
 
   it("TriggersPanel_should_showVisibleError_When_toggleFails", async () => {
-    mockWorkflows = [makeWorkflow({ id: "wf-1", cronEnabled: true })];
+    mockWorkflows = [makeWorkflow({ id: "wf-1", enabled: true })];
     mockUpdateWorkflow.mockRejectedValueOnce(new Error("network error"));
     render(<TriggersPanel />);
 

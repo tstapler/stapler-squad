@@ -52,6 +52,42 @@ export async function createBacklogItemDirect(
   return body.itemId;
 }
 
+/**
+ * Like createBacklogItemDirect, but also returns the item's publicId
+ * (BacklogItemID, e.g. "bl_01J...") minted at creation time (Story 1.1 AC,
+ * session/ent_repository_backlog.go's CreateBacklogItem) -- needed by tests
+ * that assert against the UI's displayed/copied ID, which prefers publicId
+ * over the raw UUID (Story 2.3, web-app/src/components/backlog/BacklogItemDetail.tsx).
+ */
+export async function createBacklogItemDirectWithPublicId(
+  request: APIRequestContext,
+  opts: {
+    title: string;
+    description?: string;
+    status?: string;
+    priority?: number;
+    repoPath?: string;
+    acCriteria?: string[];
+  }
+): Promise<{ itemId: string; publicId: string }> {
+  const resp = await request.post(`${BASE_URL}/api/debug/backlog/mutate-create`, {
+    headers: { "Content-Type": "application/json" },
+    data: {
+      title: opts.title,
+      description: opts.description ?? "",
+      status: opts.status ?? "idea",
+      priority: opts.priority ?? 3,
+      repoPath: opts.repoPath ?? "",
+      acCriteria: opts.acCriteria ?? [],
+    },
+  });
+  if (!resp.ok()) {
+    throw new Error(`createBacklogItemDirectWithPublicId failed (${resp.status()}): ${await resp.text().catch(() => "")}`);
+  }
+  const body = (await resp.json()) as { itemId: string; publicId: string };
+  return { itemId: body.itemId, publicId: body.publicId };
+}
+
 export async function transitionBacklogItemDirect(
   request: APIRequestContext,
   itemId: string,
@@ -98,6 +134,51 @@ export async function deleteBacklogItemDirect(request: APIRequestContext, itemId
   if (!resp.ok()) {
     throw new Error(`deleteBacklogItemDirect failed (${resp.status()}): ${await resp.text().catch(() => "")}`);
   }
+}
+
+/**
+ * Wraps `/api/debug/backlog/seed-work-item-session` (server/services/
+ * backlog_debug_seed_handler.go's handleSeedWorkItemSession) — creates a
+ * backlog item with a linked "work" ItemSession (no backing Session/Worktree
+ * row) so a Playwright test can reach ReviewChangesModal's real "View
+ * Changes" trigger (gated only on a truthy work session, not a worktreePath)
+ * without a real git worktree/tmux session spin-up.
+ */
+export async function seedWorkItemSessionDirect(
+  request: APIRequestContext,
+  opts: { title: string; status?: string }
+): Promise<{ itemId: string; sessionId: string }> {
+  const resp = await request.post(`${BASE_URL}/api/debug/backlog/seed-work-item-session`, {
+    headers: { "Content-Type": "application/json" },
+    data: { title: opts.title, status: opts.status ?? "review" },
+  });
+  if (!resp.ok()) {
+    throw new Error(`seedWorkItemSessionDirect failed (${resp.status()}): ${await resp.text().catch(() => "")}`);
+  }
+  return (await resp.json()) as { itemId: string; sessionId: string };
+}
+
+/**
+ * Wraps `/api/debug/backlog/seed-work-session-with-worktree` (server/
+ * services/backlog_debug_seed_handler.go's handleSeedWorkSessionWithWorktree)
+ * — creates a backlog item with a real (DB-only, no live tmux) work session
+ * backed by a real Session+Worktree row pointing at a real temp directory,
+ * so a Playwright test can reach BacklogFileBrowserModal's real "Browse
+ * files in this worktree" trigger, which is gated on a truthy worktreePath
+ * (unlike ReviewChangesModal's trigger — see seedWorkItemSessionDirect).
+ */
+export async function seedWorkSessionWithWorktreeDirect(
+  request: APIRequestContext,
+  opts: { title: string; status?: string }
+): Promise<{ itemId: string; sessionId: string; worktreePath: string }> {
+  const resp = await request.post(`${BASE_URL}/api/debug/backlog/seed-work-session-with-worktree`, {
+    headers: { "Content-Type": "application/json" },
+    data: { title: opts.title, status: opts.status ?? "review" },
+  });
+  if (!resp.ok()) {
+    throw new Error(`seedWorkSessionWithWorktreeDirect failed (${resp.status()}): ${await resp.text().catch(() => "")}`);
+  }
+  return (await resp.json()) as { itemId: string; sessionId: string; worktreePath: string };
 }
 
 export async function enableBacklogFeatureFlag(request: APIRequestContext): Promise<void> {

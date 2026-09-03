@@ -71,8 +71,25 @@ jobs:
       - name: Install benchstat
         run: go install golang.org/x/perf/cmd/benchstat@v0.0.0-20260312031701-16a31bc5fbd0
 
+      - name: Install buf
+        run: |
+          curl -sSL "https://github.com/bufbuild/buf/releases/download/v1.41.0/buf-Linux-x86_64" \
+            -o /usr/local/bin/buf && chmod +x /usr/local/bin/buf
+
+      - name: Generate protobuf code
+        # Go-only template: this job never installs pnpm/node (it doesn't need
+        # a web UI build), so the default buf.gen.yaml's local protoc-gen-es
+        # plugin (web-app/node_modules/.bin/protoc-gen-es) isn't present and
+        # `buf generate proto` would fail outright. buf.gen.go-only.yaml
+        # generates only the Go/ConnectRPC output these target packages need.
+        run: buf generate proto --template buf.gen.go-only.yaml
+
+      - name: Generate ent ORM code
+        run: go run -mod=mod entgo.io/ent/cmd/ent generate --feature sql/upsert ./session/ent/schema
+
       - name: Run Tier 1 benchmarks
         run: |
+          set -o pipefail
           go test \
             -bench='BenchmarkEventBus|BenchmarkDeltaGenerat|BenchmarkCircularBuffer|BenchmarkGetTimeSinceLastMeaningfulOutput|BenchmarkStripANSI|BenchmarkStripANSICodes|BenchmarkIsBanner|BenchmarkProcessOutput|BenchmarkDiffShortstat|BenchmarkReviewQueue|BenchmarkDetectCommandsInText|BenchmarkTokenParser' \
             -run='^$' \
@@ -259,6 +276,18 @@ jobs:
       - name: Generate protobuf code
         run: buf generate proto
 
+      # Same pattern as .github/actions/prepare/action.yml's "Cache Next.js
+      # build cache" step — see its comment for why the key includes both the
+      # lockfile and src hash, with restore-keys fallbacks.
+      - name: Cache Next.js build cache
+        uses: actions/cache@v4
+        with:
+          path: web-app/.next/cache
+          key: nextjs-bundle-${{ runner.os }}-${{ hashFiles('web-app/pnpm-lock.yaml') }}-${{ hashFiles('web-app/src/**') }}
+          restore-keys: |
+            nextjs-bundle-${{ runner.os }}-${{ hashFiles('web-app/pnpm-lock.yaml') }}-
+            nextjs-bundle-${{ runner.os }}-
+
       - name: Build Next.js app
         run: cd web-app && pnpm run build
 
@@ -274,7 +303,7 @@ jobs:
   frontend-throughput:
     name: Frontend Terminal Throughput
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     needs: frontend-bundle
     permissions:
       contents: read
@@ -307,8 +336,35 @@ jobs:
       - name: Generate protobuf code
         run: buf generate proto
 
+      # Same pattern as .github/actions/prepare/action.yml's "Cache Next.js
+      # build cache" step — see its comment for why the key includes both the
+      # lockfile and src hash, with restore-keys fallbacks.
+      - name: Cache Next.js build cache
+        uses: actions/cache@v4
+        with:
+          path: web-app/.next/cache
+          key: nextjs-throughput-${{ runner.os }}-${{ hashFiles('web-app/pnpm-lock.yaml') }}-${{ hashFiles('web-app/src/**') }}
+          restore-keys: |
+            nextjs-throughput-${{ runner.os }}-${{ hashFiles('web-app/pnpm-lock.yaml') }}-
+            nextjs-throughput-${{ runner.os }}-
+
       - name: Install Playwright browsers
-        run: cd web-app && npx playwright install --with-deps chromium
+        # apt-get update (invoked internally by --with-deps) has stalled for
+        # ~29 minutes against Ubuntu archive mirrors before now — a transient
+        # CI network flake unrelated to this repo. Bound each attempt so a
+        # stall fails fast and retries against a fresh mirror connection
+        # instead of eating the whole job timeout.
+        run: |
+          cd web-app
+          for attempt in 1 2 3; do
+            if timeout 8m npx playwright install --with-deps chromium; then
+              exit 0
+            fi
+            echo "Playwright install attempt $attempt failed or timed out; retrying..."
+            sleep 10
+          done
+          echo "Playwright install failed after 3 attempts" >&2
+          exit 1
 
       - name: Build Next.js app
         run: cd web-app && pnpm run build
@@ -466,6 +522,18 @@ jobs:
       - name: Generate protobuf code
         run: buf generate proto
 
+      # Same pattern as .github/actions/prepare/action.yml's "Cache Next.js
+      # build cache" step — see its comment for why the key includes both the
+      # lockfile and src hash, with restore-keys fallbacks.
+      - name: Cache Next.js build cache
+        uses: actions/cache@v4
+        with:
+          path: web-app/.next/cache
+          key: nextjs-lighthouse-${{ runner.os }}-${{ hashFiles('web-app/pnpm-lock.yaml') }}-${{ hashFiles('web-app/src/**') }}
+          restore-keys: |
+            nextjs-lighthouse-${{ runner.os }}-${{ hashFiles('web-app/pnpm-lock.yaml') }}-
+            nextjs-lighthouse-${{ runner.os }}-
+
       - name: Build Next.js app
         run: cd web-app && pnpm run build
 
@@ -490,7 +558,7 @@ jobs:
   e2e-latency:
     name: E2E RPC Latency
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 40
     needs: frontend-bundle
     permissions:
       contents: read
@@ -532,6 +600,18 @@ jobs:
       - name: Generate ent ORM code
         run: go run -mod=mod entgo.io/ent/cmd/ent generate --feature sql/upsert ./session/ent/schema
 
+      # Same pattern as .github/actions/prepare/action.yml's "Cache Next.js
+      # build cache" step — see its comment for why the key includes both the
+      # lockfile and src hash, with restore-keys fallbacks.
+      - name: Cache Next.js build cache
+        uses: actions/cache@v4
+        with:
+          path: web-app/.next/cache
+          key: nextjs-e2e-latency-${{ runner.os }}-${{ hashFiles('web-app/pnpm-lock.yaml') }}-${{ hashFiles('web-app/src/**') }}
+          restore-keys: |
+            nextjs-e2e-latency-${{ runner.os }}-${{ hashFiles('web-app/pnpm-lock.yaml') }}-
+            nextjs-e2e-latency-${{ runner.os }}-
+
       - name: Build Next.js app
         run: pnpm run build
         working-directory: web-app
@@ -540,7 +620,22 @@ jobs:
         run: cp -r web-app/out server/web/dist
 
       - name: Install Playwright browsers
-        run: cd web-app && npx playwright install --with-deps chromium
+        # apt-get update (invoked internally by --with-deps) has stalled for
+        # ~29 minutes against Ubuntu archive mirrors before now — a transient
+        # CI network flake unrelated to this repo. Bound each attempt so a
+        # stall fails fast and retries against a fresh mirror connection
+        # instead of eating the whole job timeout.
+        run: |
+          cd web-app
+          for attempt in 1 2 3; do
+            if timeout 8m npx playwright install --with-deps chromium; then
+              exit 0
+            fi
+            echo "Playwright install attempt $attempt failed or timed out; retrying..."
+            sleep 10
+          done
+          echo "Playwright install failed after 3 attempts" >&2
+          exit 1
 
       - name: Build Go binary
         run: go build -o stapler-squad .

@@ -40,17 +40,38 @@ type backlogItemEventSender interface {
 	Send(*sessionv1.BacklogItemEvent) error
 }
 
-// testAfterSubscribeHook, when non-nil, is invoked immediately after
-// s.eventBus.Subscribe(ctx) below, before the after_seq branch's
-// EventsSince(afterSeq) read. Production code never sets this — it exists
-// solely so Epic 3.2's tests can deterministically land a Publish() call
-// inside the narrow race window between Subscribe() and EventsSince()
-// described in the forceIsSnapshot call site's comment (pre-mortem P2 #4):
-// without a seam here, reproducing that specific interleaving depends on
-// non-deterministic goroutine scheduling, which cannot be turned into a
-// reliable regression test. See backlog_service_events_test.go's
-// race-window test for the only caller.
-var testAfterSubscribeHook func()
+// testAfterSubscribeHookKey is the context key under which a test-only
+// after-Subscribe hook (see withTestAfterSubscribeHook) is stashed. Using
+// ctx instead of a package-global var/mutex means each watchBacklogItems
+// call only ever sees the hook its own caller attached — a global slot
+// (this package's earlier design, and the still-live pattern in
+// backlog_service_triage.go's testTriageCompleteHook) is read by every
+// t.Parallel() test's watchBacklogItems call, not just the one that set it,
+// so an unrelated concurrently-running test's Subscribe() can trigger
+// another test's hook and double-publish its race-marker event. Scoping the
+// hook to ctx makes that cross-test collision structurally impossible: a
+// context created by one test can never be visible to another's call.
+type testAfterSubscribeHookKey struct{}
+
+// withTestAfterSubscribeHook returns a copy of ctx carrying hook, to be
+// invoked immediately after s.eventBus.Subscribe(ctx) below, before the
+// after_seq branch's EventsSince(afterSeq) read. Production code never uses
+// this — it exists solely so Epic 3.2's tests can deterministically land a
+// Publish() call inside the narrow race window between Subscribe() and
+// EventsSince() described in the forceIsSnapshot call site's comment
+// (pre-mortem P2 #4): without a seam here, reproducing that specific
+// interleaving depends on non-deterministic goroutine scheduling, which
+// cannot be turned into a reliable regression test. See
+// backlog_service_events_test.go's race-window test for the only caller.
+func withTestAfterSubscribeHook(ctx context.Context, hook func()) context.Context {
+	return context.WithValue(ctx, testAfterSubscribeHookKey{}, hook)
+}
+
+func callTestAfterSubscribeHook(ctx context.Context) {
+	if hook, ok := ctx.Value(testAfterSubscribeHookKey{}).(func()); ok && hook != nil {
+		hook()
+	}
+}
 
 // WatchBacklogItems streams real-time backlog item events. Sends an initial
 // snapshot (or, on reconnect via after_seq, a replay of buffered events)
@@ -83,9 +104,7 @@ func (s *BacklogService) watchBacklogItems(
 	eventCh, subID := s.eventBus.Subscribe(ctx)
 	defer s.eventBus.Unsubscribe(subID)
 
-	if testAfterSubscribeHook != nil {
-		testAfterSubscribeHook()
-	}
+	callTestAfterSubscribeHook(ctx)
 
 	costFor := s.buildCostLookup()
 
@@ -295,6 +314,16 @@ func convertEventToBacklogItemEvent(evt *events.Event, costFor func(tmuxUUID str
 			},
 		}
 
+	case events.BacklogChangeActivityNoteAdded:
+		// Deliberately never touches protoItem (ADR-002): this event's payload
+		// carries only the new note, never a full item snapshot.
+		out.Event = &sessionv1.BacklogItemEvent_ActivityNoteAdded{
+			ActivityNoteAdded: &sessionv1.BacklogItemActivityNoteAddedEvent{
+				ItemId: itemID,
+				Note:   activityNoteDataToProto(payload.ActivityNote),
+			},
+		}
+
 	case events.BacklogChangeItemArchived:
 		archived := &sessionv1.BacklogItemArchivedEvent{
 			ItemId:     itemID,
@@ -331,6 +360,25 @@ func backlogItemToProtoOrNil(item *session.BacklogItemData, costFor func(tmuxUUI
 	return backlogItemToProto(item, costFor)
 }
 
+// activityNoteDataToProto converts a session.ActivityNoteData (the payload
+// carried by BacklogChangeActivityNoteAdded) to the wire
+// sessionv1.BacklogActivityNote. Nil-safe: BacklogItemChange.ActivityNote is
+// only guaranteed non-nil when Kind == ChangeActivityNoteAdded, but this is
+// called unconditionally from that switch case, so a defensive nil check
+// still guards against a caller bug rather than trusting the invariant.
+func activityNoteDataToProto(n *session.ActivityNoteData) *sessionv1.BacklogActivityNote {
+	if n == nil {
+		return nil
+	}
+	return &sessionv1.BacklogActivityNote{
+		Id:                 n.ID,
+		Message:            n.Message,
+		AuthorSessionUuid:  n.AuthorSessionUUID,
+		AuthorSessionTitle: n.AuthorSessionTitle,
+		CreatedAt:          timestamppb.New(n.CreatedAt),
+	}
+}
+
 // reviewVerdictDataToProto converts a session.ReviewVerdictData (the payload
 // carried by BacklogChangeVerdictRecorded) to the wire sessionv1.ReviewVerdict.
 // ReviewVerdictData has no Id/CreatedAt of its own (it is a save-input DTO,
@@ -344,6 +392,8 @@ func reviewVerdictDataToProto(v *session.ReviewVerdictData, occurredAt time.Time
 	p := &sessionv1.ReviewVerdict{
 		OverallOutcome: string(v.OverallOutcome),
 		Summary:        v.Summary,
+		// #nosec G115 -- a token count for one review's diff; bounded by realistic
+		// diff/LLM-context sizes, nowhere near int32 range.
 		DiffTokenCount: int32(v.DiffTokenCount),
 		DiffTruncated:  v.DiffTruncated,
 		OverrideBy:     v.OverrideBy,
@@ -359,6 +409,8 @@ func reviewVerdictDataToProto(v *session.ReviewVerdictData, occurredAt time.Time
 			p.PerCriterion = make([]*sessionv1.CriterionVerdict, len(cvs))
 			for i, cv := range cvs {
 				p.PerCriterion[i] = &sessionv1.CriterionVerdict{
+					// #nosec G115 -- index into one backlog item's acceptance-criteria
+					// list, bounded by realistic AC list length (a handful of entries).
 					CriterionIndex: int32(cv.CriterionIndex),
 					Outcome:        string(cv.Outcome),
 					Evidence:       cv.Evidence,

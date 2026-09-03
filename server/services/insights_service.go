@@ -102,6 +102,11 @@ func (s *InsightsService) GetInsightsSummary(
 
 	sessions := make([]*sessionv1.SessionTokenSummary, 0, len(results))
 
+	var sessionSnapshot []tokens.SessionRecord
+	if s.associator != nil {
+		sessionSnapshot = s.associator.Snapshot()
+	}
+
 	for _, r := range results {
 		if r == nil {
 			continue
@@ -128,7 +133,7 @@ func (s *InsightsService) GetInsightsSummary(
 		// Determine session ID and orphan status.
 		sessionID, isOrphan := "", true
 		if s.associator != nil {
-			sessionID, isOrphan = s.associator.Associate(r)
+			sessionID, isOrphan = s.associator.AssociateWithSnapshot(r, sessionSnapshot)
 		}
 
 		// Apply orphan filter.
@@ -172,11 +177,12 @@ func (s *InsightsService) GetInsightsSummary(
 			CacheReadTokens:     r.CacheRead,
 			EstimatedCostUsd:    costUSD,
 			CacheHitRate:        cacheHitRate,
-			MessageCount:        int32(r.MessageCount), //nolint:gosec
-			IsOrphan:            isOrphan,
-			SkillActivations:    skillNames,
-			TopTools:            topTools,
-			UnpricedModels:      unpriced,
+			// #nosec G115 -- r.MessageCount is a per-session Claude message count, far below int32 range.
+			MessageCount:     int32(r.MessageCount),
+			IsOrphan:         isOrphan,
+			SkillActivations: skillNames,
+			TopTools:         topTools,
+			UnpricedModels:   unpriced,
 		}
 		if !firstTs.IsZero() {
 			summary.FirstMessageAt = timestamppb.New(firstTs)
@@ -362,6 +368,10 @@ func (s *InsightsService) ListSessionTokens(
 	// Build session summaries.
 	summaries := make([]*sessionv1.SessionTokenSummary, 0, len(results))
 	allUnpricedFamilies := make(map[string]bool) // union of unpriced families across all sessions in this call
+	var sessionSnapshot []tokens.SessionRecord
+	if s.associator != nil {
+		sessionSnapshot = s.associator.Snapshot()
+	}
 	for _, r := range results {
 		if r == nil {
 			continue
@@ -376,7 +386,7 @@ func (s *InsightsService) ListSessionTokens(
 
 		sessionID, isOrphan := "", true
 		if s.associator != nil {
-			sessionID, isOrphan = s.associator.Associate(r)
+			sessionID, isOrphan = s.associator.AssociateWithSnapshot(r, sessionSnapshot)
 		}
 
 		costUSD, unpriced := s.pricing.EstimateCost(r)
@@ -402,11 +412,12 @@ func (s *InsightsService) ListSessionTokens(
 			CacheReadTokens:     r.CacheRead,
 			EstimatedCostUsd:    costUSD,
 			CacheHitRate:        cacheHitRate,
-			MessageCount:        int32(r.MessageCount), //nolint:gosec
-			IsOrphan:            isOrphan,
-			SkillActivations:    skillNames,
-			TopTools:            topTools,
-			UnpricedModels:      unpriced,
+			// #nosec G115 -- r.MessageCount is a per-session Claude message count, far below int32 range.
+			MessageCount:     int32(r.MessageCount),
+			IsOrphan:         isOrphan,
+			SkillActivations: skillNames,
+			TopTools:         topTools,
+			UnpricedModels:   unpriced,
 		}
 		if !firstTs.IsZero() {
 			summary.FirstMessageAt = timestamppb.New(firstTs)
@@ -453,7 +464,8 @@ func (s *InsightsService) ListSessionTokens(
 	})
 
 	// Pagination.
-	totalCount := int32(len(summaries)) //nolint:gosec
+	// #nosec G115 -- len(summaries) is the in-memory session summary count, far below int32 range.
+	totalCount := int32(len(summaries))
 	pageSize := int(msg.PageSize)
 	if pageSize <= 0 {
 		pageSize = 50
@@ -632,8 +644,9 @@ func sessionTopTools(r *tokens.ParseResult) []*sessionv1.TopToolEntry {
 	entries := make([]entry, 0, len(r.ToolUsage))
 	for _, stat := range r.ToolUsage {
 		entries = append(entries, entry{
-			name:      stat.ToolName,
-			callCount: int32(stat.CallCount), //nolint:gosec
+			name: stat.ToolName,
+			// #nosec G115 -- stat.CallCount is a per-session tool-call count, far below int32 range.
+			callCount: int32(stat.CallCount),
 			mcpServer: stat.MCPServer,
 		})
 	}
@@ -710,8 +723,9 @@ func buildTopToolEntries(toolCounts map[string]int64, limit int) []*sessionv1.To
 	result := make([]*sessionv1.TopEntry, 0, len(sorted))
 	for _, e := range sorted {
 		result = append(result, &sessionv1.TopEntry{
-			Name:       e.name,
-			TokenCount: e.count,
+			Name: e.name,
+			// #nosec G115 -- e.count is an aggregated skill-activation count, far below int32 range.
+			ActivationCount: int32(e.count),
 		})
 	}
 	return result

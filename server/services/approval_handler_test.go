@@ -6,7 +6,12 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 	"unicode/utf8"
@@ -14,6 +19,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/pkg/classifier"
 	"github.com/tstapler/stapler-squad/server/events"
+	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/testutil"
 )
 
@@ -27,14 +33,24 @@ import (
 // must reflect whatever baseURLFn() returns at *their* point of use -- never a
 // value snapshotted once at ApprovalHandler construction time.
 func TestApprovalHandler_should_UseBaseURLFnValueAtCallTime_When_ThreeUsageSitesInvoked(t *testing.T) {
-	// hookApprovalURL() delegates to hook_injector.go's shared hookBaseURLFn (set via
-	// SetHookBaseURLFn) -- the same mechanism InjectHooksConfig uses -- rather than a
-	// separate ApprovalHandler-owned mechanism. Save/restore it so this test's
-	// deliberately-unstable stub base URL doesn't leak into other tests in this
-	// package that call hookApprovalURL()/InjectHookConfig and expect the stable
-	// default.
-	original := hookBaseURLFn
-	t.Cleanup(func() { hookBaseURLFn = original })
+	// Deliberately NOT t.Parallel(): this test overwrites the package-level hookBaseURLFn
+	// (hook_injector.go) with a stub whose return value changes on every invocation, and
+	// hookBaseURLFn's own accessors are only mutex-guarded against torn reads/writes of the
+	// closure value itself -- they don't protect against a *different* test's goroutine
+	// invoking whatever closure happens to be installed. Any other parallel test that calls
+	// hookApprovalURL()/InjectHooksConfig while this test's stub is installed would (a) get a
+	// non-default URL it doesn't expect, and (b) drive unsynchronized increments of this
+	// test's own `calls` counter from a foreign goroutine -- a genuine data race on `calls`
+	// caught by `-race`, which is exactly the flake this comment documents. Running this test
+	// non-parallel guarantees Go's test runner finishes it (including the t.Cleanup restore
+	// below) before any t.Parallel() tests in this package start, so the shared global is
+	// never observed mid-mutation. See the `fix-flaky-tests-dont-defer` skill.
+	//
+	// Save/restore hookBaseURLFn so this test's deliberately-unstable stub base URL doesn't
+	// leak into other tests in this package that call hookApprovalURL()/InjectHookConfig and
+	// expect the stable default.
+	original := getHookBaseURLFn()
+	t.Cleanup(func() { SetHookBaseURLFn(original) })
 
 	calls := 0
 	nextAddr := func() string {
@@ -179,6 +195,7 @@ func waitForFirstApprovalThenResolve(t *testing.T, store *ApprovalStore, capture
 // with the static fallback sentence and EscalationCategory "no-match" (plan.md Task
 // 5.1.1b, validation.md AC1 "end-to-end capture at source" row).
 func TestHandlePermissionRequest_EscalationReason_NoMatch(t *testing.T) {
+	t.Parallel()
 	h, store := newTestHandler(5 * time.Second)
 	h.SetClassifier(classifier.NewRuleBasedClassifier())
 
@@ -201,6 +218,7 @@ func TestHandlePermissionRequest_EscalationReason_NoMatch(t *testing.T) {
 // Reason text verbatim and EscalationCategory "explicit-rule" (plan.md Story 2.1.2's
 // example, validation.md AC1 row).
 func TestHandlePermissionRequest_EscalationReason_ExplicitRule(t *testing.T) {
+	t.Parallel()
 	h, store := newTestHandler(5 * time.Second)
 	h.SetClassifier(classifier.NewRuleBasedClassifier())
 
@@ -242,6 +260,7 @@ func (f *fakeRDAPTransport) RoundTrip(_ *http.Request) (*http.Response, error) {
 // worked example, validation.md AC1 row). This path short-circuits via `goto
 // createApproval` before the classifier ever runs, so no classifier is configured here.
 func TestHandlePermissionRequest_EscalationReason_DomainAge(t *testing.T) {
+	t.Parallel()
 	h, store := newTestHandler(5 * time.Second)
 
 	checker := NewDomainAgeChecker(true)
@@ -285,6 +304,7 @@ func (fakeCriticalEscalateClassifier) BuildContext(_ string) classifier.Classifi
 // covers plan.md Task 1.1.1/1.1.2: a classified Escalate result's RiskLevel must be threaded
 // onto PendingApproval.RiskLevel via riskLevelString, not dropped.
 func TestCreateApproval_should_SetRiskLevelFromClassifier_When_EscalationMatchesRiskCriticalRule(t *testing.T) {
+	t.Parallel()
 	h, store := newTestHandler(5 * time.Second)
 	h.SetClassifier(fakeCriticalEscalateClassifier{})
 
@@ -303,6 +323,7 @@ func TestCreateApproval_should_SetRiskLevelFromClassifier_When_EscalationMatches
 // seed-escalate-git-push, an Escalate+RiskHigh rule, so RiskLevel must be "high", mirroring
 // the existing EscalationReason_ExplicitRule test's structure.
 func TestCreateApproval_should_SetRiskLevelFromClassifier_When_EscalationMatchesSeedRule(t *testing.T) {
+	t.Parallel()
 	h, store := newTestHandler(5 * time.Second)
 	h.SetClassifier(classifier.NewRuleBasedClassifier())
 
@@ -322,6 +343,7 @@ func TestCreateApproval_should_SetRiskLevelFromClassifier_When_EscalationMatches
 // naively return "low" (RiskLow is the Go zero value), silently mislabeling an unclassified
 // request as genuinely safe. RiskLevel must be "" (not recorded), never "low".
 func TestCreateApproval_should_SetEmptyRiskLevel_When_ClassifierIsNilAtCreation(t *testing.T) {
+	t.Parallel()
 	h, store := newTestHandler(5 * time.Second)
 	// Deliberately no h.SetClassifier(...) call -- h.classifier stays nil.
 
@@ -340,6 +362,7 @@ func TestCreateApproval_should_SetEmptyRiskLevel_When_ClassifierIsNilAtCreation(
 // EscalationReasonText routinely produces strings containing multi-byte UTF-8 (e.g. the
 // em dash "—" in the no-match/domain-age sentences) and the result is persisted to disk.
 func TestTruncateEscalationReason(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name string
 		in   string
@@ -371,6 +394,7 @@ func TestTruncateEscalationReason(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			got := truncateEscalationReason(tt.in)
 			if !utf8.ValidString(got) {
 				t.Fatalf("truncateEscalationReason(%d runes) produced invalid UTF-8: %q", len([]rune(tt.in)), got)
@@ -405,6 +429,7 @@ func (fakeUnrecognizedDecisionClassifier) BuildContext(_ string) classifier.Clas
 // bucketed as "no-match" in the Escalation Reasons table while the review-queue card correctly
 // showed "unexpected" for the same request.
 func TestHandlePermissionRequest_EscalationReason_UnexpectedDecision(t *testing.T) {
+	t.Parallel()
 	storage := createTestStorage(t)
 	analyticsStore := NewAnalyticsStore(storage)
 	analyticsStore.Start(context.Background())
@@ -432,7 +457,7 @@ func TestHandlePermissionRequest_EscalationReason_UnexpectedDecision(t *testing.
 	var entries []AnalyticsEntry
 	require.Eventually(t, func() bool {
 		var err error
-		entries, err = analyticsStore.LoadWindow(time.Now().Add(-1 * time.Hour))
+		entries, err = analyticsStore.LoadWindow(context.Background(), time.Now().Add(-1*time.Hour))
 		return err == nil && len(entries) >= 1
 	}, 2*time.Second, 10*time.Millisecond, "analytics entry must persist within 2s")
 
@@ -443,4 +468,168 @@ func TestHandlePermissionRequest_EscalationReason_UnexpectedDecision(t *testing.
 	if got := summary.EscalationReasonCounts["no-match"]; got != 0 {
 		t.Errorf("EscalationReasonCounts[\"no-match\"] = %d, want 0 — analytics must not disagree with the review-queue card's \"unexpected\" category", got)
 	}
+}
+
+// TestHandlePermissionRequest_SessionIdleMinutes_PopulatedFromLiveInstance verifies that
+// when a live instance is found, ClassificationContext.SessionIdleMinutes is populated from
+// Instance.GetTimeSinceLastMeaningfulOutput(), converted to whole minutes. Population happens
+// unconditionally inside the liveFinder nil-guard (not nested under the GitHubPRNumber > 0
+// check next to it) because idle time is independent of whether the session has an open PR.
+func TestHandlePermissionRequest_SessionIdleMinutes_PopulatedFromLiveInstance(t *testing.T) {
+	t.Parallel()
+	h, storage := newHandlerWithStorage(t)
+	cc := &capturingClassifier{}
+	h.SetClassifier(cc)
+	h.timeout = 100 * time.Millisecond // short so the Escalate fallthrough times out fast
+
+	const uuid = "eeeeeeee-1111-2222-3333-ffffffffffff"
+	now := time.Now()
+	inst := &session.Instance{
+		Title:     "idle-session",
+		UUID:      uuid,
+		Path:      "/projects/idle",
+		Status:    session.Paused,
+		Program:   "claude",
+		CreatedAt: now.Add(-75 * time.Minute), // no meaningful output recorded — falls back to time since creation
+		UpdatedAt: now,
+	}
+	require.NoError(t, storage.AddInstance(inst))
+	h.SetLiveInstanceFinder(&fakeApprovalLiveInstanceFinder{inst: inst})
+
+	postPermissionRequestWithCommand(t, h, uuid, "Bash", "npm test")
+
+	require.Equal(t, 75, cc.lastCtx.SessionIdleMinutes,
+		"a live instance idle for 75 minutes must populate SessionIdleMinutes=75")
+}
+
+// TestHandlePermissionRequest_SessionIdleMinutes_ZeroValue_When_NoLiveInstance verifies the
+// fail-closed contract documented on ClassificationContext.SessionIdleMinutes: when no live
+// instance is found for the session, the field is left at its Go zero value (0) rather than
+// set to a sentinel "unknown"/"infinite" value, so it can never accidentally satisfy a
+// MinSessionIdleMinutes > 0 rule condition.
+func TestHandlePermissionRequest_SessionIdleMinutes_ZeroValue_When_NoLiveInstance(t *testing.T) {
+	t.Parallel()
+	h, _ := newHandlerWithStorage(t)
+	cc := &capturingClassifier{}
+	h.SetClassifier(cc)
+	h.timeout = 100 * time.Millisecond
+	h.SetLiveInstanceFinder(&fakeApprovalLiveInstanceFinder{inst: nil}) // FindLiveInstance always returns nil
+
+	postPermissionRequestWithCommand(t, h, "unknown-session-id", "Bash", "npm test")
+
+	require.Equal(t, 0, cc.lastCtx.SessionIdleMinutes,
+		"no live instance found must leave SessionIdleMinutes at the Go zero value, never a sentinel")
+}
+
+// --------------------------------------------------------------------------
+// Slack notification wiring (Epic 1.3, Story 1.3.2)
+// --------------------------------------------------------------------------
+
+// TestBroadcastApprovalNotification_InvokesNotifyApprovalPending_When_SlackNotifierWired
+// is the happy-path REQ-10 test (plan.md Story 1.3.2 AC1): a wired
+// *SlackNotifier, pointed (via SLACK_WEBHOOK_URL) at an httptest.Server, sees
+// exactly one webhook POST when broadcastApprovalNotification runs — proving
+// NotifyApprovalPending was invoked (it dispatches its own POST internally,
+// per Story 1.2.3's ownership model).
+func TestBroadcastApprovalNotification_InvokesNotifyApprovalPending_When_SlackNotifierWired(t *testing.T) {
+	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+
+	var requestCount atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestCount.Add(1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+	t.Setenv("SLACK_WEBHOOK_URL", srv.URL)
+
+	bus := events.NewEventBus(4)
+	defer bus.Close()
+	h := NewApprovalHandler(NewApprovalStore(""), nil, bus)
+	h.SetSlackNotifier(NewSlackNotifier())
+
+	approval := &PendingApproval{
+		ID:        "appr-1",
+		SessionID: "sess-1",
+		ToolName:  "Bash",
+		ToolInput: map[string]interface{}{},
+	}
+	h.broadcastApprovalNotification("sess-1", approval)
+
+	require.Eventually(t, func() bool {
+		return requestCount.Load() >= 1
+	}, 3*time.Second, 10*time.Millisecond, "expected NotifyApprovalPending to POST to the configured webhook")
+
+	// Give any accidental second dispatch a moment to land, then assert the
+	// count settled at exactly one call.
+	time.Sleep(100 * time.Millisecond)
+	require.EqualValues(t, 1, requestCount.Load(), "NotifyApprovalPending should be invoked exactly once")
+}
+
+// TestBroadcastApprovalNotification_NoPanic_When_SlackNotifierNil is the
+// error/edge-path REQ-10 test (plan.md Story 1.3.2 AC2): an ApprovalHandler
+// that never calls SetSlackNotifier (h.slackNotifier == nil, e.g. every other
+// existing unit test in this file) must behave identically to the pre-feature
+// baseline — no panic, and the existing eventBus.Publish notification still
+// fires normally.
+func TestBroadcastApprovalNotification_NoPanic_When_SlackNotifierNil(t *testing.T) {
+	t.Parallel()
+	bus := events.NewEventBus(4)
+	defer bus.Close()
+	h := NewApprovalHandler(NewApprovalStore(""), nil, bus)
+	// Deliberately never call h.SetSlackNotifier — h.slackNotifier stays nil.
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	eventCh, _ := bus.Subscribe(ctx)
+
+	approval := &PendingApproval{
+		ID:        "appr-2",
+		SessionID: "sess-2",
+		ToolName:  "Bash",
+		ToolInput: map[string]interface{}{},
+	}
+
+	require.NotPanics(t, func() {
+		h.broadcastApprovalNotification("sess-2", approval)
+	})
+
+	select {
+	case ev := <-eventCh:
+		require.Equal(t, events.EventNotification, ev.Type, "baseline eventBus notification must still fire when slackNotifier is nil")
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for baseline eventBus notification")
+	}
+}
+
+// TestInjectHookConfig_ConcurrentWritesToSameRootDir_NeverProduceCorruptJSON is a
+// regression test for the fixed-tmp-filename write race InjectHookConfig used to have
+// (writing settingsPath+".tmp" directly via os.WriteFile instead of the hardened
+// writeSettingsAtomic) — concurrent InjectHookConfig calls against the same rootDir
+// must never interleave writes and rename a torn/corrupt settings.local.json into
+// place. Mirrors config_test.go's TestSaveConfig_ConcurrentWritesToSamePath.
+func TestInjectHookConfig_ConcurrentWritesToSameRootDir_NeverProduceCorruptJSON(t *testing.T) {
+	rootDir := t.TempDir()
+
+	const n = 20
+	var wg sync.WaitGroup
+	errCh := make(chan error, n)
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			errCh <- InjectHookConfig(rootDir, fmt.Sprintf("session-%d", i))
+		}(i)
+	}
+	wg.Wait()
+	close(errCh)
+
+	for err := range errCh {
+		require.NoError(t, err, "InjectHookConfig must not error under concurrent callers targeting the same rootDir")
+	}
+
+	data, err := os.ReadFile(filepath.Join(rootDir, ".claude", "settings.local.json"))
+	require.NoError(t, err, "settings.local.json must exist after concurrent InjectHookConfig calls")
+
+	var parsed map[string]json.RawMessage
+	require.NoError(t, json.Unmarshal(data, &parsed), "settings.local.json must be valid JSON after concurrent writes, not torn/corrupt: %s", data)
 }

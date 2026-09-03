@@ -1,0 +1,20 @@
+{
+  "id": "headless:run-call",
+  "type": "backend",
+  "service": "HeadlessService",
+  "method": "RunHeadlessCall",
+  "protoFile": "proto/session/v1/headless.proto",
+  "markerFound": false,
+  "tested": true,
+  "testIds": [
+    "TestHeadlessService_RunHeadlessCall_StreamsChunks",
+    "TestHeadlessService_RunHeadlessCall_InvalidFeatureKey_ReturnsInvalidArgument",
+    "TestHeadlessService_RunHeadlessCall_AllowedFeatureKeys",
+    "TestHeadlessService_RunHeadlessCall_PoolNil_ReturnsUnavailable",
+    "TestHeadlessService_RunHeadlessCall_ZeroTimeoutSeconds_UsesDefault",
+    "TestHeadlessService_RunHeadlessCall_ContextCancel_StopsSubprocess",
+    "TestHeadlessService_RunHeadlessCall_SystemPromptOverLimit_ReturnsInvalidArgument",
+    "TestHeadlessService_RunHeadlessCall_UserPromptOverLimit_ReturnsInvalidArgument"
+  ],
+  "lastModified": "2026-08-24T04:50:10.703677238-07:00"
+}

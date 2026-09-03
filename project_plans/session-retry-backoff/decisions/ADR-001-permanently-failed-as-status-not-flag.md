@@ -54,10 +54,21 @@ gain a `case PermanentlyFailed:` (confirmed via
 - `session/review_queue_poller.go:460` (`reconcileSessions`)
 - `session/instance.go:58` (`Status.String()`)
 
-All three have a `default:` fallback, so a missed case degrades to a wrong label
-("Unknown"/`Status(6)`) rather than a crash or corrupted state — the blast radius
-is real but bounded and safe-by-default, which is why this ADR accepts it rather
-than treating architecture.md's "wide blast radius" concern as disqualifying.
+**Correction (architecture-review.md Concerns, 2026-08-29)**: only 2 of the 3 have a real
+`default:` fallback (`GetStatusDescription` → `"Unknown"`, `Status.String()` → `Status(%d)`).
+`reconcileSessions` (`session/review_queue_poller.go:442`) has **no `default:` clause at all** —
+it's a bare `case Active:`/`case Stopped:`/`case Hibernated:` switch; an unhandled status
+(including `PermanentlyFailed`, if Task 2.5.1d were ever skipped) matches no case and the switch
+is a silent no-op. That happens to be the *correct* behavior here (Task 2.5.1d's own reasoning:
+don't auto-revive a permanently-failed session) — but it's safe by coincidence, not by a uniform
+`default:` guarantee. A future status addition that actually *needs* a `reconcileSessions` branch
+could reasonably skip auditing it if this ADR is read as "all three degrade safely by
+construction" — it isn't; two do via `default:`, one does via no-op fallthrough that happens to
+be correct today. Re-verify with a qualified grep
+(`grep -rn 'case \(session\.\)\?Stopped\b' session/ server/`, not the unqualified literal — see
+`implementation/plan.md` Task 2.5.1f's correction, which also caught 3 *additional* wire-boundary
+switches this count originally missed) before trusting a count like this for the next status
+value added after this one.
 Frontend `SessionStatus` consumers (`web-app/src/components/sessions/SessionCard.tsx`,
 `SessionActionsOverflow.tsx`, `SessionRow.tsx`, `SessionDetailView.tsx`,
 `SessionList.tsx`, `WorkspacePeersPanel.tsx`, `web-app/src/lib/grouping/strategies.ts`,

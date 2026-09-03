@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
@@ -31,8 +32,9 @@ func corruptPackedRefs(t *testing.T, repoDir string) {
 }
 
 func TestBranchRefExists_ReturnsFalseNil_When_BranchAbsent(t *testing.T) {
+	t.Parallel()
 	repoDir := setupTestRepo(t)
-	repo, err := git.PlainOpen(repoDir)
+	repo, err := OpenRepo(repoDir)
 	require.NoError(t, err)
 
 	exists, err := branchRefExists(repo, plumbing.NewBranchReferenceName("does-not-exist"))
@@ -41,12 +43,13 @@ func TestBranchRefExists_ReturnsFalseNil_When_BranchAbsent(t *testing.T) {
 }
 
 func TestBranchRefExists_ReturnsTrueNil_When_BranchExists(t *testing.T) {
+	t.Parallel()
 	repoDir := setupTestRepo(t)
 	cmd := safeexec.CommandContext(context.Background(), "git", "branch", "existing-feature")
 	cmd.Dir = repoDir
 	require.NoError(t, cmd.Run())
 
-	repo, err := git.PlainOpen(repoDir)
+	repo, err := OpenRepo(repoDir)
 	require.NoError(t, err)
 
 	exists, err := branchRefExists(repo, plumbing.NewBranchReferenceName("existing-feature"))
@@ -55,10 +58,11 @@ func TestBranchRefExists_ReturnsTrueNil_When_BranchExists(t *testing.T) {
 }
 
 func TestBranchRefExists_ReturnsError_When_PackedRefsCorrupted(t *testing.T) {
+	t.Parallel()
 	repoDir := setupTestRepo(t)
 	corruptPackedRefs(t, repoDir)
 
-	repo, err := git.PlainOpen(repoDir)
+	repo, err := OpenRepo(repoDir)
 	require.NoError(t, err)
 
 	exists, err := branchRefExists(repo, plumbing.NewBranchReferenceName("backlog/fix-typo-abc123"))
@@ -78,6 +82,7 @@ func TestBranchRefExists_ReturnsError_When_PackedRefsCorrupted(t *testing.T) {
 // sentinel check is what actually pins this test to branchRefExists's own classification
 // rather than to whichever call site happens to fail first on this fixture.
 func TestSetup_SurfacesError_When_BranchRefIsMalformed(t *testing.T) {
+	t.Parallel()
 	repoDir := setupTestRepo(t)
 
 	branchName := "backlog/fix-typo-abc123"
@@ -115,6 +120,7 @@ func TestSetup_SurfacesError_When_BranchRefIsMalformed(t *testing.T) {
 // proves, via a fault injected below the packed-refs layer, that a real branch ref actually
 // still resolves after the classification helper both call sites share returns this error.
 func TestSetupNewWorktree_SurfacesError_When_BranchRefIsMalformed(t *testing.T) {
+	t.Parallel()
 	repoDir := setupTestRepo(t)
 
 	branchName := "backlog/fix-typo-abc123"
@@ -170,6 +176,7 @@ func (s *refFailStorer) Reference(name plumbing.ReferenceName) (*plumbing.Refere
 // independently verifiable: a freshly-opened, unwrapped repo confirms the branch ref still
 // resolves to its original commit after the forced error.
 func TestBranchRefExists_LeavesRealRefIntact_When_UnderlyingReadFails(t *testing.T) {
+	t.Parallel()
 	repoDir := setupTestRepo(t)
 
 	branchName := "existing-feature-fault-injected"
@@ -177,7 +184,7 @@ func TestBranchRefExists_LeavesRealRefIntact_When_UnderlyingReadFails(t *testing
 	cmd.Dir = repoDir
 	require.NoError(t, cmd.Run())
 
-	realRepo, err := git.PlainOpen(repoDir)
+	realRepo, err := OpenRepo(repoDir)
 	require.NoError(t, err)
 
 	branchRef := plumbing.NewBranchReferenceName(branchName)
@@ -199,7 +206,7 @@ func TestBranchRefExists_LeavesRealRefIntact_When_UnderlyingReadFails(t *testing
 
 	// Prove the branch ref genuinely still exists and resolves to the same commit, via a
 	// completely independent, freshly-opened repo untouched by the fault injection above.
-	freshRepo, err := git.PlainOpen(repoDir)
+	freshRepo, err := OpenRepo(repoDir)
 	require.NoError(t, err)
 	afterRef, err := freshRepo.Reference(branchRef, false)
 	require.NoError(t, err, "branch ref must still exist and resolve after a ref-check error")
@@ -213,6 +220,7 @@ func TestBranchRefExists_LeavesRealRefIntact_When_UnderlyingReadFails(t *testing
 // resolving origin/main's fetched tip). This asserts the worktree is branched from the
 // pre-set commit even though repoPath's own HEAD has since moved past it.
 func TestSetupNewWorktree_RespectsPreSetBaseCommitSHA(t *testing.T) {
+	t.Parallel()
 	repoDir := setupTestRepo(t)
 
 	firstCommit, err := safeexec.CommandContext(context.Background(), "git", "-C", repoDir, "rev-parse", "HEAD").CombinedOutput()
@@ -251,11 +259,70 @@ func TestSetupNewWorktree_RespectsPreSetBaseCommitSHA(t *testing.T) {
 	assert.True(t, os.IsNotExist(statErr), "worktree must not contain changes made after the pre-set base commit")
 }
 
+// TestInitBaseCommitSHA_UsesWorktreePath_NotRepoPathAmbientCheckout is a direct
+// regression test for backlog item e7664cbf: initBaseCommitSHA used to run
+// `git merge-base HEAD <candidate>` with cwd=g.repoPath, so "HEAD" resolved to
+// whatever branch the shared parent repoPath's checkout happened to be on —
+// not this worktree's own branch — making the computed base wrong (or, for an
+// orphan branch, unresolvable) whenever repoPath had drifted. This constructs a
+// GitWorktree pointing at a real, separate worktree directory (not repoPath
+// itself) with "feature" checked out, deliberately leaves repoPath on an
+// unrelated orphan branch sharing no history with "feature", and confirms
+// initBaseCommitSHA still computes the correct merge-base with main by running
+// inside the worktree — mirroring the already-correct sibling
+// resolveBaseCommitSHA (session/git/diff.go), which this fix now matches.
+func TestInitBaseCommitSHA_UsesWorktreePath_NotRepoPathAmbientCheckout(t *testing.T) {
+	t.Parallel()
+	repoDir := setupTestRepo(t)
+
+	mainSHA, err := safeexec.CommandContext(context.Background(), "git", "-C", repoDir, "rev-parse", "main").CombinedOutput()
+	require.NoError(t, err)
+	expectedBaseSHA := strings.TrimSpace(string(mainSHA))
+
+	worktreeDir := t.TempDir()
+	for _, args := range [][]string{
+		{"-C", repoDir, "worktree", "add", "-b", "feature", worktreeDir, "main"},
+		{"-C", worktreeDir, "config", "user.email", "test@example.com"},
+		{"-C", worktreeDir, "config", "user.name", "Test"},
+	} {
+		out, cmdErr := safeexec.CommandContext(context.Background(), "git", args...).CombinedOutput()
+		require.NoError(t, cmdErr, "git %v failed: %s", args, out)
+	}
+	require.NoError(t, os.WriteFile(filepath.Join(worktreeDir, "feature.txt"), []byte("real work"), 0644))
+	for _, args := range [][]string{
+		{"-C", worktreeDir, "add", "."},
+		{"-C", worktreeDir, "commit", "-m", "real fix"},
+	} {
+		out, cmdErr := safeexec.CommandContext(context.Background(), "git", args...).CombinedOutput()
+		require.NoError(t, cmdErr, "git %v failed: %s", args, out)
+	}
+
+	// Simulate a concurrent process leaving the shared repoPath on an unrelated
+	// orphan branch with no common history with "feature" — the worst case for the
+	// old repoPath-cwd implementation (would fail outright with "no merge base").
+	for _, args := range [][]string{
+		{"-C", repoDir, "checkout", "--orphan", "unrelated"},
+		{"-C", repoDir, "commit", "--allow-empty", "-m", "unrelated history"},
+	} {
+		out, cmdErr := safeexec.CommandContext(context.Background(), "git", args...).CombinedOutput()
+		require.NoError(t, cmdErr, "git %v failed: %s", args, out)
+	}
+
+	wt := NewGitWorktreeFromStorage(repoDir, worktreeDir, "test-init-base-sha", "feature", "")
+	require.NotNil(t, wt)
+
+	wt.initBaseCommitSHA()
+
+	assert.Equal(t, expectedBaseSHA, wt.GetBaseCommitSHA(),
+		"initBaseCommitSHA must find feature's real merge-base with main by running inside the worktree, unaffected by repoPath's ambient checkout")
+}
+
 // TestSetupNewWorktree_UsesExistingBranch_When_BranchRefExists covers setupNewWorktree()'s
 // own reuse path directly, independent of Setup()'s upfront goroutine (which would normally
 // short-circuit straight to setupFromExistingBranch and never reach setupNewWorktree() at
 // all when the branch already exists).
 func TestSetupNewWorktree_UsesExistingBranch_When_BranchRefExists(t *testing.T) {
+	t.Parallel()
 	repoDir := setupTestRepo(t)
 
 	branchName := "existing-feature-direct"
@@ -275,6 +342,36 @@ func TestSetupNewWorktree_UsesExistingBranch_When_BranchRefExists(t *testing.T) 
 	out, statErr := safeexec.CommandContext(context.Background(), "git", "-C", repoDir, "branch", "--list", branchName).CombinedOutput()
 	require.NoError(t, statErr)
 	assert.True(t, strings.Contains(string(out), branchName), "branch must still exist after reuse")
+}
+
+// TestWorktreeAlreadyRegisteredForBranch_MatchesRawAgainstCanonicalPath verifies AC3: when
+// g.worktreePath holds a raw, not-yet-canonicalized spelling of the same directory git
+// reports (realpath'd) via 'worktree list --porcelain', the two must still be recognized as
+// the same worktree rather than spuriously mismatching and triggering an unnecessary
+// remove+recreate.
+func TestWorktreeAlreadyRegisteredForBranch_MatchesRawAgainstCanonicalPath(t *testing.T) {
+	t.Parallel()
+	repoDir := setupTestRepo(t)
+
+	branchName := "already-registered-raw-vs-canonical"
+	wt, _, err := NewGitWorktreeWithBranch(repoDir, "test-raw-vs-canonical", branchName)
+	require.NoError(t, err)
+	require.NoError(t, wt.setupNewWorktree())
+	defer func() { _ = wt.Cleanup() }()
+
+	// Build a symlink alias to the real worktree directory and point g.worktreePath at
+	// the alias (the "raw" spelling) instead of the canonical path setupNewWorktree
+	// actually created on disk. git itself only ever knows about the real directory, so
+	// 'worktree list --porcelain' will report the canonical path — exercising exactly the
+	// raw-vs-canonicalized mismatch this fix must tolerate.
+	rawAlias := filepath.Join(t.TempDir(), "raw-alias-to-worktree")
+	if err := os.Symlink(wt.worktreePath, rawAlias); err != nil {
+		t.Skipf("symlinks not supported on this platform: %v", err)
+	}
+	wt.worktreePath = rawAlias
+
+	assert.True(t, wt.worktreeAlreadyRegisteredForBranch(),
+		"raw alias path %q for the same worktree as git's canonical report must still match", rawAlias)
 }
 
 // TestSetupNewWorktree_SelfHeals_When_ConcurrentSpawnsRaceOnBranchCreate is the regression
@@ -298,6 +395,7 @@ func TestSetupNewWorktree_UsesExistingBranch_When_BranchRefExists(t *testing.T) 
 // self-healed — only on the invariant the fix guarantees: neither concurrent caller may
 // hard-fail.
 func TestSetupNewWorktree_SelfHeals_When_ConcurrentSpawnsRaceOnBranchCreate(t *testing.T) {
+	t.Parallel()
 	repoDir := setupTestRepo(t)
 	branchName := "backlog/concurrent-race-fixture"
 
@@ -333,6 +431,223 @@ func TestSetupNewWorktree_SelfHeals_When_ConcurrentSpawnsRaceOnBranchCreate(t *t
 	assert.True(t, strings.Contains(string(out), branchName), "branch must exist once the race resolves")
 }
 
+// isWorktreeAddDashBCall reports whether a recorded gitSpyRunCall is setupNewWorktree's
+// "git worktree add -b <branch> <path> <commit>" call, as opposed to the unconditional
+// "worktree remove -f" cleanup call or a "rev-parse HEAD" call that also route through the
+// same spy.
+func isWorktreeAddDashBCall(call gitSpyRunCall) bool {
+	return len(call.args) >= 3 && call.args[0] == "worktree" && call.args[1] == "add" && call.args[2] == "-b"
+}
+
+// TestSetupNewWorktree_SelfHeals_When_WorktreeAddFailsWithUnrecognizedError is the
+// deterministic regression test for Ground-Truth Re-Query (ADR-001) at setupNewWorktree's
+// layer: an error string the old strings.Contains("already exists") check would NOT have
+// matched (git's real "signal: killed" message for a timeout-killed subprocess, confirmed
+// in research/features.md) must still self-heal when the branch was actually created by a
+// race winner at that exact moment — proving the self-heal decision no longer depends on
+// err.Error() content at all.
+func TestSetupNewWorktree_SelfHeals_When_WorktreeAddFailsWithUnrecognizedError(t *testing.T) {
+	t.Parallel()
+	repoDir := setupTestRepo(t)
+	branchName := "backlog/unrecognized-error-layer1"
+
+	spy := &gitSpyCommandRunner{}
+	spy.runFunc = func() ([]byte, error) {
+		call := spy.runCalls[len(spy.runCalls)-1]
+		if !isWorktreeAddDashBCall(call) {
+			return nil, nil
+		}
+		// Simulate the race winner completing at the exact instant our "subprocess"
+		// would have run.
+		cmd := safeexec.CommandContext(context.Background(), "git", "-C", repoDir, "branch", branchName)
+		require.NoError(t, cmd.Run())
+		return nil, errors.New("signal: killed")
+	}
+
+	wt, _, err := NewGitWorktreeWithBranch(repoDir, "test-unrecognized-error-layer1", branchName, WithCommandRunner(spy))
+	require.NoError(t, err)
+
+	err = wt.setupNewWorktree()
+	require.NoError(t, err, "must self-heal on an error string neither old literal matched, since the branch now exists")
+	defer func() { _ = wt.Cleanup() }()
+}
+
+// TestSetupNewWorktree_SelfHeals_When_BranchCreatedByDelayedRaceWinner is the pre-mortem
+// Failure #5 addendum: the happy-path test above creates the branch synchronously before
+// returning the error, so branchExistsAfterAddFailure's very first check already succeeds
+// and the retry loop's actual looping/backoff behavior is never exercised. This test delays
+// branch creation until after the loop's first two checks would have observed "not found",
+// so it only passes if the loop genuinely retries rather than checking once.
+func TestSetupNewWorktree_SelfHeals_When_BranchCreatedByDelayedRaceWinner(t *testing.T) {
+	t.Parallel()
+	repoDir := setupTestRepo(t)
+	branchName := "backlog/delayed-race-winner-layer1"
+
+	spy := &gitSpyCommandRunner{}
+	spy.runFunc = func() ([]byte, error) {
+		call := spy.runCalls[len(spy.runCalls)-1]
+		if !isWorktreeAddDashBCall(call) {
+			return nil, nil
+		}
+		go func() {
+			// Past the loop's first two checks (attempt 0 has no pre-sleep; attempt 1
+			// sleeps once) but well within its total budget.
+			time.Sleep(2 * worktreeAddRetryDelay)
+			cmd := safeexec.CommandContext(context.Background(), "git", "-C", repoDir, "branch", branchName)
+			_ = cmd.Run()
+		}()
+		return nil, errors.New("signal: killed")
+	}
+
+	wt, _, err := NewGitWorktreeWithBranch(repoDir, "test-delayed-race-winner-layer1", branchName, WithCommandRunner(spy))
+	require.NoError(t, err)
+
+	err = wt.setupNewWorktree()
+	require.NoError(t, err, "must self-heal once the delayed race winner's branch appears within the retry window")
+	defer func() { _ = wt.Cleanup() }()
+}
+
+// TestSetupNewWorktree_HardFails_When_WorktreeAddErrorsAndBranchStillDoesNotExist is Story
+// 1.1.1's negative case: Ground-Truth Re-Query must not spuriously mask a genuine failure
+// (disk full, permissions) by self-healing when the branch never actually appears.
+func TestSetupNewWorktree_HardFails_When_WorktreeAddErrorsAndBranchStillDoesNotExist(t *testing.T) {
+	t.Parallel()
+	repoDir := setupTestRepo(t)
+	branchName := "backlog/never-created-layer1"
+
+	spy := &gitSpyCommandRunner{}
+	spy.runFunc = func() ([]byte, error) {
+		call := spy.runCalls[len(spy.runCalls)-1]
+		if !isWorktreeAddDashBCall(call) {
+			return nil, nil
+		}
+		return nil, errors.New("signal: killed")
+	}
+
+	wt, _, err := NewGitWorktreeWithBranch(repoDir, "test-never-created-layer1", branchName, WithCommandRunner(spy))
+	require.NoError(t, err)
+
+	err = wt.setupNewWorktree()
+	require.Error(t, err, "must not self-heal when the branch genuinely never appears")
+	assert.Contains(t, err.Error(), "failed to create worktree from commit")
+}
+
+// isWorktreeAddNoBranchCall reports whether a recorded gitSpyRunCall is
+// setupFromExistingBranch's "git worktree add <path> <branch>" call (no "-b"), as opposed
+// to the "worktree unlock"/"worktree remove -f" cleanup calls or a "worktree list
+// --porcelain" call that also route through the same spy.
+func isWorktreeAddNoBranchCall(call gitSpyRunCall) bool {
+	return len(call.args) == 4 && call.args[0] == "worktree" && call.args[1] == "add"
+}
+
+func isWorktreeListCall(call gitSpyRunCall) bool {
+	return len(call.args) >= 2 && call.args[0] == "worktree" && call.args[1] == "list"
+}
+
+// worktreeListPorcelainFor synthesizes a 'git worktree list --porcelain' response
+// reporting branchName checked out at path.
+func worktreeListPorcelainFor(path, branchName string) []byte {
+	return []byte(fmt.Sprintf("worktree %s\nHEAD 0000000000000000000000000000000000000000\nbranch refs/heads/%s\n", path, branchName))
+}
+
+// TestSetupFromExistingBranch_SelfHeals_When_WorktreeAddFailsWithUnrecognizedError is the
+// deterministic regression test for Ground-Truth Re-Query (ADR-001) at
+// setupFromExistingBranch's layer: an error string neither of the old
+// "already checked out"/"already used by worktree" literals would have matched must still
+// self-heal by adopting the winner's worktree path once 'worktree list --porcelain' reports
+// it registered there.
+func TestSetupFromExistingBranch_SelfHeals_When_WorktreeAddFailsWithUnrecognizedError(t *testing.T) {
+	t.Parallel()
+	repoDir := setupTestRepo(t)
+	branchName := "backlog/unrecognized-error-layer2"
+	winnerPath := CanonicalizeWorktreePath(t.TempDir())
+
+	spy := &gitSpyCommandRunner{}
+	spy.runFunc = func() ([]byte, error) {
+		call := spy.runCalls[len(spy.runCalls)-1]
+		switch {
+		case isWorktreeAddNoBranchCall(call):
+			return nil, errors.New("signal: killed")
+		case isWorktreeListCall(call):
+			return worktreeListPorcelainFor(winnerPath, branchName), nil
+		default:
+			return nil, nil
+		}
+	}
+
+	wt := NewGitWorktreeFromStorageWithExecutor(repoDir, filepath.Join(t.TempDir(), "loser-worktree"), "test-unrecognized-error-layer2", branchName, "", WithCommandRunner(spy))
+
+	err := wt.setupFromExistingBranch()
+	require.NoError(t, err, "must self-heal by adopting the winner's registered worktree path")
+	assert.Equal(t, winnerPath, wt.worktreePath)
+}
+
+// TestSetupFromExistingBranch_SelfHeals_When_WorktreeRegisteredByDelayedRaceWinner is the
+// pre-mortem Failure #5 addendum for layer 2: the happy-path test above reports the winner
+// registered on the very first 'worktree list --porcelain' call, so
+// findLiveWorktreeForBranch's retry loop is never actually exercised. This test reports
+// "not found" for the first two calls and only registers the winner on the third, so it
+// only passes if the loop genuinely retries.
+func TestSetupFromExistingBranch_SelfHeals_When_WorktreeRegisteredByDelayedRaceWinner(t *testing.T) {
+	t.Parallel()
+	repoDir := setupTestRepo(t)
+	branchName := "backlog/delayed-race-winner-layer2"
+	winnerPath := CanonicalizeWorktreePath(t.TempDir())
+
+	spy := &gitSpyCommandRunner{}
+	listCalls := 0
+	spy.runFunc = func() ([]byte, error) {
+		call := spy.runCalls[len(spy.runCalls)-1]
+		switch {
+		case isWorktreeAddNoBranchCall(call):
+			return nil, errors.New("signal: killed")
+		case isWorktreeListCall(call):
+			listCalls++
+			if listCalls < 3 {
+				return []byte(""), nil
+			}
+			return worktreeListPorcelainFor(winnerPath, branchName), nil
+		default:
+			return nil, nil
+		}
+	}
+
+	wt := NewGitWorktreeFromStorageWithExecutor(repoDir, filepath.Join(t.TempDir(), "loser-worktree"), "test-delayed-race-winner-layer2", branchName, "", WithCommandRunner(spy))
+
+	err := wt.setupFromExistingBranch()
+	require.NoError(t, err, "must self-heal once the delayed race winner's registration appears within the retry window")
+	assert.Equal(t, winnerPath, wt.worktreePath)
+	assert.GreaterOrEqual(t, listCalls, 3, "must have actually retried, not just checked once")
+}
+
+// TestSetupFromExistingBranch_HardFails_When_WorktreeAddErrorsAndBranchNotFoundAnywhere is
+// Story 1.1.2's negative case: the unconditional re-query must still correctly hard-fail
+// when the branch genuinely isn't registered to any worktree.
+func TestSetupFromExistingBranch_HardFails_When_WorktreeAddErrorsAndBranchNotFoundAnywhere(t *testing.T) {
+	t.Parallel()
+	repoDir := setupTestRepo(t)
+	branchName := "backlog/never-registered-layer2"
+
+	spy := &gitSpyCommandRunner{}
+	spy.runFunc = func() ([]byte, error) {
+		call := spy.runCalls[len(spy.runCalls)-1]
+		switch {
+		case isWorktreeAddNoBranchCall(call):
+			return nil, errors.New("signal: killed")
+		case isWorktreeListCall(call):
+			return []byte(""), nil
+		default:
+			return nil, nil
+		}
+	}
+
+	wt := NewGitWorktreeFromStorageWithExecutor(repoDir, filepath.Join(t.TempDir(), "loser-worktree"), "test-never-registered-layer2", branchName, "", WithCommandRunner(spy))
+
+	err := wt.setupFromExistingBranch()
+	require.Error(t, err, "must not self-heal when the branch is genuinely registered nowhere")
+	assert.Contains(t, err.Error(), "failed to create worktree from branch")
+}
+
 // TestSetup_SerializesConcurrentWorktreeCreation_When_MultipleGoroutinesRaceOnSameRepo models the
 // real-world failure this fix addresses: several independent worktree creations (e.g. multiple
 // backlog-triage spawns, or duplicate server processes) hitting the same repo's shared
@@ -342,6 +657,7 @@ func TestSetupNewWorktree_SelfHeals_When_ConcurrentSpawnsRaceOnBranchCreate(t *t
 // the public, now-lock-wrapped Setup() to verify WithRepoWorktreeLock actually prevents the
 // metadata race rather than merely tolerating one branch-create collision.
 func TestSetup_SerializesConcurrentWorktreeCreation_When_MultipleGoroutinesRaceOnSameRepo(t *testing.T) {
+	t.Parallel()
 	repoDir := setupTestRepo(t)
 	const n = 8
 

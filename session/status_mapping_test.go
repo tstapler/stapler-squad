@@ -8,6 +8,7 @@ import (
 
 // TestAttentionReasonFromDetected verifies every DetectedStatus maps to the expected reason.
 func TestAttentionReasonFromDetected(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		detected detection.DetectedStatus
 		want     AttentionReason
@@ -28,6 +29,7 @@ func TestAttentionReasonFromDetected(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.detected.String(), func(t *testing.T) {
+			t.Parallel()
 			got := AttentionReasonFromDetected(tt.detected)
 			if got != tt.want {
 				t.Errorf("AttentionReasonFromDetected(%s) = %q, want %q",
@@ -42,6 +44,7 @@ func TestAttentionReasonFromDetected(t *testing.T) {
 // NeedsApproval, InputRequired, Error, etc. are sub-status signals that do
 // not change the lifecycle state.
 func TestStatusFromDetected(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		detected detection.DetectedStatus
 		want     Status
@@ -60,6 +63,7 @@ func TestStatusFromDetected(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.detected.String(), func(t *testing.T) {
+			t.Parallel()
 			got := StatusFromDetected(tt.detected)
 			if got != tt.want {
 				t.Errorf("StatusFromDetected(%s) = %v, want %v",

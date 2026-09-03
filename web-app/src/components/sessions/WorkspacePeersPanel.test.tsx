@@ -1,5 +1,5 @@
 import React from "react";
-import { render, screen } from "@testing-library/react";
+import { render, screen, fireEvent } from "@testing-library/react";
 import { Provider } from "react-redux";
 import { configureStore } from "@reduxjs/toolkit";
 import { WorkspacePeersPanel, peerLifecycle, GOAL_STALE_THRESHOLD_MS } from "./WorkspacePeersPanel";
@@ -14,7 +14,7 @@ function makeSession(overrides: Partial<Session>): Session {
     id: "id",
     title: "title",
     status: SessionStatus.ACTIVE,
-    workspaceKey: "gh:acme/widgets",
+    path: "/home/user/repo",
     ...overrides,
   } as unknown as Session;
 }
@@ -53,8 +53,12 @@ function renderWithStore(session: Session, peers: Session[]) {
 }
 
 describe("WorkspacePeersPanel", () => {
-  it("renders nothing when the session has no workspace key", () => {
-    const self = makeSession({ id: "self", workspaceKey: "" });
+  beforeEach(() => {
+    localStorage.clear();
+  });
+
+  it("renders nothing when the session has no path", () => {
+    const self = makeSession({ id: "self", path: "" });
     renderWithStore(self, []);
     expect(screen.queryByTestId("workspace-peers-panel")).toBeNull();
   });
@@ -65,11 +69,11 @@ describe("WorkspacePeersPanel", () => {
     expect(screen.queryByTestId("workspace-peers-panel")).toBeNull();
   });
 
-  it("excludes the caller's own session and sessions on other workspaces", () => {
+  it("excludes the caller's own session and sessions in a different directory (e.g. another worktree)", () => {
     const self = makeSession({ id: "self" });
     const samePeer = makeSession({ id: "peer-1", title: "peer one" });
-    const otherRepo = makeSession({ id: "peer-2", workspaceKey: "gh:other/repo" });
-    renderWithStore(self, [self, samePeer, otherRepo]);
+    const otherWorktree = makeSession({ id: "peer-2", path: "/home/user/repo-worktree" });
+    renderWithStore(self, [self, samePeer, otherWorktree]);
     const items = screen.getAllByTestId("workspace-peer-item");
     expect(items).toHaveLength(1);
     expect(screen.getByText("peer one")).toBeInTheDocument();
@@ -83,6 +87,18 @@ describe("WorkspacePeersPanel", () => {
     });
     renderWithStore(self, [self, peer]);
     expect(screen.getByText("fix the bug")).toBeInTheDocument();
+  });
+
+  it("hides itself when dismissed, and remembers the dismissal for this session", () => {
+    const self = makeSession({ id: "self" });
+    const peer = makeSession({ id: "peer-1" });
+    const { unmount } = renderWithStore(self, [self, peer]);
+    fireEvent.click(screen.getByTestId("workspace-peers-dismiss"));
+    expect(screen.queryByTestId("workspace-peers-panel")).toBeNull();
+    unmount();
+
+    renderWithStore(self, [self, peer]);
+    expect(screen.queryByTestId("workspace-peers-panel")).toBeNull();
   });
 });
 

@@ -4,6 +4,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { AcCriterion, TriageSuggestion } from "@/lib/hooks/useBacklogService";
 import { composeQuestionAnswerFeedback } from "@/lib/backlog/composeQuestionAnswerFeedback";
+import { getErrorMessage } from "@/lib/utils/connectError";
 import { InlineError } from "./InlineError";
 import * as styles from "./TriageDiffSection.css";
 
@@ -90,9 +91,8 @@ export function TriageDiffSection({ currentCriteria, suggestedSuggestions, onAns
       setAnsweredIndices((prev) => new Set(prev).add(i));
       setOpenIndex(null);
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
       setErrorIndex(i);
-      setErrorMessage(msg || "Failed to submit answer. Please try again.");
+      setErrorMessage(getErrorMessage(err, "Failed to submit answer. Please try again."));
     } finally {
       setSubmittingIndex(null);
     }

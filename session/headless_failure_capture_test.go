@@ -15,6 +15,7 @@ import (
 // ever logged a ~200-byte preview of the raw LLM output — the full text was
 // discarded. This asserts the full raw text survives to disk, not a preview.
 func TestWriteHeadlessFailureCapture_should_WriteFullRawOutput_When_UnderMaxBytes(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	raw := strings.Repeat("x", 500) + "\nnot valid json at all"
 
@@ -34,6 +35,7 @@ func TestWriteHeadlessFailureCapture_should_WriteFullRawOutput_When_UnderMaxByte
 // truncation must drop the head and keep the tail — the opposite would silently
 // discard exactly the bytes a human needs to diagnose the failure.
 func TestWriteHeadlessFailureCapture_should_KeepTail_When_ExceedsMaxBytes(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	raw := strings.Repeat("A", 100) + strings.Repeat("B", 100)
 
@@ -50,6 +52,7 @@ func TestWriteHeadlessFailureCapture_should_KeepTail_When_ExceedsMaxBytes(t *tes
 // TestWriteHeadlessFailureCapture_should_ReturnNoop_When_RawIsEmpty asserts an empty
 // capture is a deliberate no-op (nothing useful to persist), not an error.
 func TestWriteHeadlessFailureCapture_should_ReturnNoop_When_RawIsEmpty(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	path, err := WriteHeadlessFailureCapture(dir, "session-empty", "", DefaultHeadlessFailureCaptureMaxBytes)
 	require.NoError(t, err)
@@ -65,6 +68,7 @@ func TestWriteHeadlessFailureCapture_should_ReturnNoop_When_RawIsEmpty(t *testin
 // MkdirAll precedent) and that the file survives being read multiple times (durable,
 // not cleaned up like WriteReviewTranscriptFile's ephemeral repo-checkout file).
 func TestWriteHeadlessFailureCapture_should_CreateDir_When_MissingAndPersistAcrossReads(t *testing.T) {
+	t.Parallel()
 	base := t.TempDir()
 	dir := filepath.Join(base, "nested", "headless-failures")
 

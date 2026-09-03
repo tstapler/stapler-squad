@@ -65,6 +65,10 @@ func (Session) Fields() []ent.Field {
 			Optional(),
 		field.String("tmux_prefix").
 			Optional(),
+		field.String("backend").
+			Optional().
+			Default("").
+			Comment("Per-session ProcessManager backend pin (e.g. \"tymux\"); empty means no pin, falls through to the process-wide default."),
 		field.Time("last_terminal_update").
 			Optional().
 			Nillable(),
@@ -125,6 +129,10 @@ func (Session) Fields() []ent.Field {
 			Optional().
 			Default(0).
 			Comment("GitHub PR number discovered by PRStatusPoller or extracted from push output. 0 = not yet discovered."),
+		field.Bool("github_pr_status_terminal").
+			Optional().
+			Default(false).
+			Comment("True once PRStatusPoller observes the PR merged/closed; polling then stops. Persisted so SessionRetentionSweeper's PR-safety check survives a restart instead of resetting to false and blocking deletion forever (session-retention-cleanup)."),
 		field.String("github_owner").
 			Optional().
 			Comment("GitHub repository owner (user or org) associated with this session."),
@@ -140,6 +148,18 @@ func (Session) Fields() []ent.Field {
 			Default("").
 			MaxLen(10000).
 			Comment("User-authored free-form markdown note attached to this session. Capped at 10,000 bytes — see session.MaxNoteLength cross-reference in session/instance.go."),
+		field.Time("creation_progress_updated_at").
+			Optional().
+			Nillable().
+			Comment("Last time the async creation pipeline's progress message was updated (session.Instance.creationProgressUpdatedAt). Lets the Stale-Creation Sweeper (Epic 4.1) judge a Creating row's actual progress after a restart, not just its Creating-onset time."),
+		field.Uint64("creation_epoch").
+			Optional().
+			Default(0).
+			Comment("Fencing counter bumped exactly once per cancel/retry of the async creation pipeline (session.Instance.creationEpoch, Epic 1.2/ADR-002). UpdateInstanceIfEpoch conditions its UPDATE on this column so a stale background writer can never win a terminal status transition."),
+		field.String("failure_reason").
+			Optional().
+			Default("").
+			Comment("Human-readable reason the async creation pipeline failed (session.Instance.failureReason, Epic 1.2). Meaningful only when status == Failed."),
 	}
 }
 
@@ -179,6 +199,7 @@ func (Session) Edges() []ent.Edge {
 func (Session) Indexes() []ent.Index {
 	return []ent.Index{
 		index.Fields("title"),
+		index.Fields("uuid"),
 		index.Fields("status"),
 		index.Fields("category"),
 		index.Fields("last_meaningful_output"),

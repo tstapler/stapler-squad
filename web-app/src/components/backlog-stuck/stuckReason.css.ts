@@ -173,6 +173,19 @@ export const chipEscalated = style([
   },
 ]);
 
+// steer_failed: a steer attempt was actively made and its delivery failed —
+// mirrors chipPushFailed's error styling (a strictly worse outcome than the
+// warning-styled chipRespawnBlockedActive "skipped" chips above; see
+// ADR-002 in project_plans/pr-fix-steering/decisions/).
+export const chipSteerFailed = style([
+  chip,
+  {
+    background: vars.color.errorBg,
+    color: vars.color.errorText,
+    border: `1px solid ${vars.color.error}`,
+  },
+]);
+
 export const chipUnknown = style([
   chip,
   {

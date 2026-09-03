@@ -18,6 +18,7 @@ export const pill = recipe({
       ready_to_merge: { color: vars.color.success, background: vars.color.successBg },
       draft: { color: vars.color.textSecondary, background: vars.color.surfaceMuted },
       conflicted: { color: vars.color.errorText, background: vars.color.errorBg },
+      diverged: { color: vars.color.errorText, background: vars.color.errorBg },
       changes_requested: { color: vars.color.warningText, background: vars.color.warningBg },
       ci_failing: { color: vars.color.errorText, background: vars.color.errorBg },
       ci_pending: { color: vars.color.warningText, background: vars.color.warningBg },

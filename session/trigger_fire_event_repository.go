@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/tstapler/stapler-squad/session/ent"
@@ -45,6 +46,24 @@ type TriggerFireEventRepository interface {
 	// "pending" row to "fired_success"/"fired_failed" after the fire attempt completes.
 	// Returns an error if no row matches the key.
 	UpdateOutcome(ctx context.Context, workflowID uuid.UUID, deliveryID, outcome, sessionID, errMsg string) error
+	// ExistsByDeliveryID reports whether ANY row already exists for deliveryID,
+	// regardless of workflow_id. Used by handlePRFixEvent (the check_run/workflow_run/
+	// pull_request_review/issue_comment path) for redelivery dedup: those rows are
+	// persisted with WorkflowID: nil (Migration Plan), so the (workflow_id,
+	// delivery_id) unique index Create/ErrDuplicateDelivery rely on cannot dedup them —
+	// NULL is never equal to NULL in that index, so two nil-workflow rows sharing a
+	// delivery_id would never collide. This is an application-level existence check
+	// (a narrow TOCTOU window under concurrent duplicate deliveries), not Create's
+	// atomic DB-constraint claim — a unique index on delivery_id alone isn't viable
+	// here since one delivery legitimately produces multiple rows sharing a
+	// delivery_id (one per PR number in a check_run's pull_requests array). The race
+	// is bounded, not just assumed benign: AutoReopenForPRFix's own CAS-guarded
+	// TransitionBacklogItemStatus (exercised by TestTransitionBacklogItemStatus_
+	// should_letExactlyOneWinnerThrough_When_TwoWritersRaceConcurrently) is what
+	// actually prevents a duplicate *spawn* if two racing deliveries both pass this
+	// check — the worst case here is a duplicate audit row and a redundant
+	// GetPRStatus/IsPRMerged call, not a duplicate fix session.
+	ExistsByDeliveryID(ctx context.Context, deliveryID string) (bool, error)
 }
 
 // EntTriggerFireEventRepository implements TriggerFireEventRepository using the ent ORM.
@@ -76,12 +95,39 @@ func (r *EntTriggerFireEventRepository) Create(ctx context.Context, input Trigge
 	}
 
 	if _, err := c.Save(ctx); err != nil {
-		if ent.IsConstraintError(err) {
+		if isDuplicateDeliveryConstraintError(err) {
 			return fmt.Errorf("%w: workflow_id=%v delivery_id=%q", ErrDuplicateDelivery, input.WorkflowID, input.DeliveryID)
 		}
 		return fmt.Errorf("create trigger fire event: %w", err)
 	}
 	return nil
+}
+
+// duplicateDeliveryIndexColumns are the two columns of the unique index ent generates
+// for index.Fields("workflow_id", "delivery_id").Unique() (schema/trigger_fire_event.go)
+// — the only constraint on this table today that legitimately means "duplicate
+// delivery." SQLite's constraint-failure message names "table.column" pairs (e.g.
+// "UNIQUE constraint failed: trigger_fire_events.workflow_id,
+// trigger_fire_events.delivery_id"), not the ent-generated index name, so both column
+// references are checked rather than the index identifier itself.
+var duplicateDeliveryIndexColumns = []string{"trigger_fire_events.workflow_id", "trigger_fire_events.delivery_id"}
+
+// isDuplicateDeliveryConstraintError reports whether err is specifically the
+// (workflow_id, delivery_id) unique index violation, not just any constraint failure —
+// ent.IsConstraintError also matches FK and CHECK violations, which would otherwise be
+// silently mis-reported as ErrDuplicateDelivery if such a constraint is ever added to
+// this table in the future.
+func isDuplicateDeliveryConstraintError(err error) bool {
+	if !ent.IsConstraintError(err) {
+		return false
+	}
+	msg := err.Error()
+	for _, col := range duplicateDeliveryIndexColumns {
+		if !strings.Contains(msg, col) {
+			return false
+		}
+	}
+	return true
 }
 
 // ListByWorkflow returns the most recent TriggerFireEvent rows for workflowID, newest
@@ -125,4 +171,17 @@ func (r *EntTriggerFireEventRepository) UpdateOutcome(ctx context.Context, workf
 		return fmt.Errorf("update trigger fire event outcome: no row found for workflow_id=%s delivery_id=%q", workflowID, deliveryID)
 	}
 	return nil
+}
+
+// ExistsByDeliveryID reports whether any row already exists for deliveryID, across
+// all workflow_id values (including nil). See the interface doc comment for why this
+// exists as a separate, non-unique-index-backed check.
+func (r *EntTriggerFireEventRepository) ExistsByDeliveryID(ctx context.Context, deliveryID string) (bool, error) {
+	exists, err := r.client.TriggerFireEvent.Query().
+		Where(triggerfireevent.DeliveryID(deliveryID)).
+		Exist(ctx)
+	if err != nil {
+		return false, fmt.Errorf("check trigger fire event exists for delivery_id=%q: %w", deliveryID, err)
+	}
+	return exists, nil
 }

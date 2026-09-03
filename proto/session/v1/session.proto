@@ -24,6 +24,22 @@ service SessionService {
   // DeleteSession stops and removes a session, cleaning up resources.
   rpc DeleteSession(DeleteSessionRequest) returns (DeleteSessionResponse) {}
 
+  // CancelSessionCreation cancels an in-progress (Status == Creating)
+  // session creation: it interrupts the Background Resolution Pipeline (if a
+  // live goroutine still exists in this process), cleans up any partially
+  // acquired resources, and removes the instance entirely. Unlike
+  // DeleteSession, a cancelled creation is removed outright rather than left
+  // as a Failed card, and no SessionDeletedEvent is published for it (see
+  // Epic 3.2's Known asymmetry note in the async-session-creation plan).
+  rpc CancelSessionCreation(CancelSessionCreationRequest) returns (CancelSessionCreationResponse) {}
+
+  // RetrySessionCreation retries a Failed session creation in place: the
+  // same instance ID and storage row transition Failed -> Creating and the
+  // Background Resolution Pipeline is re-spawned against a fresh fencing
+  // epoch. No SessionCreatedEvent is published for the retry (only
+  // SessionUpdatedEvent), so a client never sees a duplicate card.
+  rpc RetrySessionCreation(RetrySessionCreationRequest) returns (RetrySessionCreationResponse) {}
+
   // WatchSessions streams real-time session events (created/updated/deleted).
   // Server-streaming RPC for live updates without polling.
   rpc WatchSessions(WatchSessionsRequest) returns (stream SessionEvent) {}
@@ -104,6 +120,7 @@ service SessionService {
   // RestartSession restarts a session by killing and recreating the tmux session.
   // Optionally preserves terminal output for debugging purposes.
   rpc RestartSession(RestartSessionRequest) returns (RestartSessionResponse) {}
+  rpc RetrySession(RetrySessionRequest) returns (RetrySessionResponse) {}
 
   // GetWorkspaceInfo retrieves VCS and workspace information for a session.
   // Returns VCS type (Git/JJ), current branch, revision, and uncommitted changes status.
@@ -150,6 +167,12 @@ service SessionService {
 
   // DeleteApprovalRule removes a user-defined auto-approval rule by ID.
   rpc DeleteApprovalRule(DeleteApprovalRuleRequest) returns (DeleteApprovalRuleResponse) {}
+
+  // ReloadClaudeSettingsRules re-parses ~/.claude/settings.json (and project-level
+  // equivalents) and hot-swaps the resulting claude-settings-sourced rules into the live
+  // classifier. Malformed files are skipped; previously loaded rules for that file are
+  // retained.
+  rpc ReloadClaudeSettingsRules(ReloadClaudeSettingsRulesRequest) returns (ReloadClaudeSettingsRulesResponse) {}
 
   // GetApprovalAnalytics returns aggregated analytics for classification decisions.
   rpc GetApprovalAnalytics(GetApprovalAnalyticsRequest) returns (GetApprovalAnalyticsResponse) {}
@@ -263,6 +286,23 @@ service SessionService {
   // UpdateGlobalDefaults replaces the global default fields.
   rpc UpdateGlobalDefaults(UpdateGlobalDefaultsRequest) returns (UpdateGlobalDefaultsResponse) {}
 
+  // GetSlackConfig returns the current Slack notification configuration.
+  // Secret fields (webhook URL, signing secret) are never returned in
+  // plaintext or ciphertext — only booleans reporting whether each is
+  // configured.
+  rpc GetSlackConfig(GetSlackConfigRequest) returns (GetSlackConfigResponse) {}
+
+  // UpdateSlackConfig updates the Slack notification configuration. Empty
+  // string on webhook_url/signing_secret means "leave unchanged"; the
+  // corresponding clear_webhook_url/clear_signing_secret bool means
+  // "explicitly remove this secret".
+  rpc UpdateSlackConfig(UpdateSlackConfigRequest) returns (UpdateSlackConfigResponse) {}
+
+  // TestSlackWebhook sends a canned test message to the given webhook URL
+  // (or, if webhook_url is empty, the currently-saved one) and reports
+  // whether the send succeeded, synchronously.
+  rpc TestSlackWebhook(TestSlackWebhookRequest) returns (TestSlackWebhookResponse) {}
+
   // UpsertProfile creates or updates a named profile.
   rpc UpsertProfile(UpsertProfileRequest) returns (UpsertProfileResponse) {}
 
@@ -286,6 +326,43 @@ service SessionService {
   // that URL unchanged.
   rpc UpdateCallbackConfig(UpdateCallbackConfigRequest) returns (UpdateCallbackConfigResponse) {}
 
+  // Stream Hub Rollout RPCs (terminal-multi-connection-streaming Story 3.3).
+  // Everything these RPCs control is config.json-backed and takes effect
+  // immediately (for session connections resolved from that point on, not
+  // already-connected sessions): the rollback-rehearsal completion gate,
+  // per-session canary overrides, and — via SetStreamHubGlobalOverride — a
+  // live global override, so flipping the effective default no longer
+  // requires editing STAPLER_SQUAD_USE_STREAM_HUB and restarting the process.
+
+  // GetStreamHubRolloutStatus reports the current rollout status: whether
+  // the global env var is set in this process's environment right now,
+  // whether the rollback rehearsal has been completed, and the current
+  // per-session canary overrides.
+  rpc GetStreamHubRolloutStatus(GetStreamHubRolloutStatusRequest) returns (StreamHubRolloutStatus) {}
+
+  // CompleteStreamHubRollbackRehearsal records that Story 3.3.2's rollback
+  // rehearsal has been performed, unblocking the global
+  // STAPLER_SQUAD_USE_STREAM_HUB default from resolving to true. Intended
+  // to be called only after manually verifying the rehearsal (flip a
+  // per-session override on, use it briefly, remove it, confirm a clean
+  // reconnect under the legacy path) against a real disposable session.
+  rpc CompleteStreamHubRollbackRehearsal(CompleteStreamHubRollbackRehearsalRequest) returns (StreamHubRolloutStatus) {}
+
+  // SetStreamHubSessionOverride sets or clears a per-session canary
+  // override (Story 3.3.1), independent of the rollback rehearsal gate.
+  rpc SetStreamHubSessionOverride(SetStreamHubSessionOverrideRequest) returns (StreamHubRolloutStatus) {}
+
+  // SetStreamHubGlobalOverride sets or clears a live, config.json-backed
+  // override of the global stream-hub default, taking effect immediately
+  // for every session connection resolved after this call — no process
+  // restart required. Forcing it on still goes through the same rollback
+  // rehearsal gate as the env var path (ResolveGlobalStreamHubDefault);
+  // clearing it (force_hub unset) reverts to the STAPLER_SQUAD_USE_STREAM_HUB
+  // env var default. Like all stream-hub resolution, this can only affect
+  // sessions whose ownership lock hasn't resolved yet — an already-connected
+  // session's resolution is cached for its lifetime and cannot be moved.
+  rpc SetStreamHubGlobalOverride(SetStreamHubGlobalOverrideRequest) returns (StreamHubRolloutStatus) {}
+
   // ListWorktrees returns the git worktrees for a given repository path.
   // Used by the Omnibar to populate the "Use Existing Worktree" dropdown.
   rpc ListWorktrees(ListWorktreesRequest) returns (ListWorktreesResponse) {}
@@ -299,6 +376,11 @@ service SessionService {
 
   // One-shot PR creation (S3)
   rpc RunOneShot(RunOneShotRequest) returns (RunOneShotResponse) {}
+
+  // Mechanical (non-agentic) PR creation, replacing the RunOneShot-driven
+  // dashboard button (S5).
+  rpc DraftPullRequest(DraftPullRequestRequest) returns (DraftPullRequestResponse) {}
+  rpc CreatePullRequest(CreatePullRequestRequest) returns (CreatePullRequestResponse) {}
 
   // Project CRUD (S4)
   rpc CreateProject(CreateProjectRequest) returns (CreateProjectResponse) {}
@@ -626,6 +708,55 @@ message CreateSessionRequest {
   // a selected launcher preset's argv[1:]; safe for elements containing spaces or shell
   // metacharacters (e.g. a remote-exec fragment like "cd ~/repo && exec claude").
   repeated string extra_args = 30;
+
+  // remote, when set, names an already-saved RemoteConfig (see RemoteService,
+  // proto/session/v1/remote.proto) that the session's worktree/tmux setup should run on over
+  // SSH instead of locally. Orthogonal to session_type (ADR-001,
+  // project_plans/ssh-remote-workspaces/decisions/ADR-001-remote-as-orthogonal-flag.md):
+  // every SessionType value is still meaningful on a remote host, so this composes with
+  // session_type rather than requiring a parallel SESSION_TYPE_REMOTE_* enum -- mirroring how
+  // autonomous_mode (field 23) layers onto whichever session_type was chosen. Unset (nil)
+  // means "run locally," the existing behavior.
+  RemoteTarget remote = 31;
+
+  // Optional: source session this restart is seeded from. Derives the resolved
+  // path from that session (relaxing the path-required validation above) and
+  // can reject the request with CodeFailedPrecondition if the source is still
+  // live and confirm_restart_with_live_source is not also set — see
+  // resolveRestartSource in server/services/session_service.go.
+  string restart_from_session_id = 32;
+
+  // Required to proceed when restart_from_session_id names a still-live source instance.
+  bool confirm_restart_with_live_source = 33;
+
+  // Optional: force a specific ProcessManager backend for this session ("tmux", "tymux"),
+  // overriding both the per-session config override and the process-wide default. Empty
+  // means no per-request override — normal precedence applies (see
+  // session.ResolveSessionBackend).
+  optional string backend_override = 34;
+
+  // Optional: per-session override for the global default retry policy
+  // (session-retry-backoff). Unset fields inherit the resolved global value.
+  optional RetryPolicyConfig retry_policy_override = 35;
+
+  // Optional: tags applied to the instance at construction time (synchronously, before the
+  // Background Resolution Pipeline dispatches) -- e.g. MCP's always-appended "source:mcp" and
+  // PR-derived tags (async-session-creation Task 2.3.1c). Unlike a post-hoc SetTags call after
+  // AwaitCreationTerminal succeeds, tags set here are never lost if the pipeline's resolution
+  // runs past a caller's own await timeout: they're on the instance from the moment it's
+  // constructed, not applied only on a terminal-success path.
+  repeated string tags = 36;
+}
+
+// RemoteTarget names a previously-saved remote (by RemoteConfig.Name) that a
+// CreateSessionRequest's worktree/tmux setup should be created on instead of locally. It
+// references the remote by name rather than carrying host/user/key inline -- those live only
+// in the server-side RemoteConfig, resolved at request-handling time.
+message RemoteTarget {
+  // remote_name is the RemoteConfig.Name of an already-saved remote (see
+  // config.Config.RemoteByName), the same identifier used by
+  // TestRemoteConnectionRequest/TrustRemoteHostKeyRequest in remote.proto.
+  string remote_name = 1;
 }
 
 message CreateSessionResponse {
@@ -696,6 +827,38 @@ message DeleteSessionRequest {
 
 message DeleteSessionResponse {
   // Whether deletion was successful.
+  bool success = 1;
+
+  // Human-readable message.
+  string message = 2;
+}
+
+message CancelSessionCreationRequest {
+  // Session identifier (title or UUID).
+  string id = 1;
+}
+
+message CancelSessionCreationResponse {
+  // Whether cancellation succeeded. Always true on a non-error response —
+  // if cancellation lost the race with the pipeline's own terminal write,
+  // the RPC returns a FailedPrecondition error instead (see
+  // CancelSessionCreation's doc comment).
+  bool success = 1;
+
+  // Human-readable message.
+  string message = 2;
+}
+
+message RetrySessionCreationRequest {
+  // Session identifier (title or UUID).
+  string id = 1;
+}
+
+message RetrySessionCreationResponse {
+  // Whether the retry was accepted. Always true on a non-error response —
+  // if the instance was no longer Failed by the time TryStartRetry's
+  // command ran, the RPC returns a FailedPrecondition error instead (see
+  // RetrySessionCreation's doc comment).
   bool success = 1;
 
   // Human-readable message.
@@ -1287,6 +1450,26 @@ message RestartSessionResponse {
   string message = 3;
 }
 
+// RetrySessionRequest immediately restarts a session's configurable retry
+// policy (session-retry-backoff), bypassing any pending backoff delay —
+// including from SESSION_STATUS_PERMANENTLY_FAILED.
+message RetrySessionRequest {
+  // Session identifier (uses session title as ID).
+  string id = 1;
+}
+
+// RetrySessionResponse indicates whether the manual retry was accepted.
+message RetrySessionResponse {
+  // Retried session.
+  Session session = 1;
+
+  // Whether the retry was accepted.
+  bool success = 2;
+
+  // Human-readable message (error details if failed).
+  string message = 3;
+}
+
 // GetWorkspaceInfoRequest retrieves VCS information for a session.
 message GetWorkspaceInfoRequest {
   // Session identifier.
@@ -1516,6 +1699,14 @@ message DeleteApprovalRuleRequest {
 message DeleteApprovalRuleResponse {
   bool success = 1;
   string message = 2;
+}
+
+message ReloadClaudeSettingsRulesRequest {}
+
+message ReloadClaudeSettingsRulesResponse {
+  bool success = 1;
+  int32 rule_count = 2;
+  string message = 3;
 }
 
 message GetApprovalAnalyticsRequest {
@@ -1825,6 +2016,26 @@ message SessionDefaultsConfig {
   // Max backlog items that may be in_progress at once. 0 in a request means
   // "use the server default (2)"; the response always echoes the resolved value.
   int32 max_concurrent_backlog_work_items = 11;
+  // Minutes of no meaningful output before a main-list session is flagged stale.
+  // Always the resolved value (never 0) in responses.
+  int32 stale_session_threshold_minutes = 12;
+  // Whether crossing the stale threshold also emits a notification.
+  bool stale_session_notify_enabled = 13;
+  // Global default configurable crash/stall retry policy
+  // (session-retry-backoff). Always the resolved value in responses.
+  RetryPolicyConfig retry_policy = 14;
+}
+
+// RetryPolicyConfig describes the automated crash/stall retry policy: how
+// many attempts, what backoff, and which failure reasons are eligible.
+message RetryPolicyConfig {
+  bool enabled = 1;
+  int32 max_attempts = 2;
+  string backoff = 3;
+  int32 initial_delay_seconds = 4;
+  int32 max_delay_seconds = 5;
+  repeated string retry_on = 6;
+  bool stale_triggers_retry = 7;
 }
 
 // GetSessionDefaults
@@ -1885,10 +2096,91 @@ message UpdateGlobalDefaultsRequest {
   int32 max_auto_rework_iterations = 8;
   // 0 = use the server default (2). See SessionDefaultsConfig.max_concurrent_backlog_work_items.
   int32 max_concurrent_backlog_work_items = 9;
+  // 0 = use the server default. See SessionDefaultsConfig.stale_session_threshold_minutes.
+  int32 stale_session_threshold_minutes = 10;
+  bool stale_session_notify_enabled = 11;
+  // Global default configurable crash/stall retry policy
+  // (session-retry-backoff). Applies to newly-started retry episodes only —
+  // a session already mid-backoff keeps the policy it started with.
+  RetryPolicyConfig retry_policy = 12;
 }
 
 message UpdateGlobalDefaultsResponse {
   SessionDefaultsConfig defaults = 1;
+}
+
+// ─── Slack Notification Config Messages ─────────────────────────────────────
+//
+// SlackConfigProto reports booleans only for secret fields — the webhook URL
+// and signing secret are never echoed back in plaintext or ciphertext by any
+// RPC, matching CallbackConfigProto's masked-boolean-not-value convention
+// above.
+
+// SlackDeliveryStatus is the notifier's most recent send outcome, surfaced
+// passively on the settings panel so a silently-failing webhook is
+// discoverable without sending a fresh test message.
+message SlackDeliveryStatus {
+  // attempted is false until the first send has ever completed.
+  bool attempted = 1;
+  bool success = 2;
+  // error is the sanitized failure message (never contains the webhook URL).
+  string error = 3;
+  google.protobuf.Timestamp attempted_at = 4;
+}
+
+message SlackConfigProto {
+  bool webhook_configured = 1;
+  bool signing_secret_configured = 2;
+  bool notify_on_queue_item = 3;
+  int32 queue_depth_threshold = 4;
+  bool approval_enabled = 5;
+  string dashboard_base_url = 6;
+  SlackDeliveryStatus last_delivery = 7;
+}
+
+message GetSlackConfigRequest {}
+
+message GetSlackConfigResponse {
+  SlackConfigProto config = 1;
+}
+
+message UpdateSlackConfigRequest {
+  // Empty string means "leave the stored webhook unchanged"; set
+  // clear_webhook_url to explicitly remove it instead.
+  string webhook_url = 1;
+  // Empty string means "leave the stored signing secret unchanged"; set
+  // clear_signing_secret to explicitly remove it instead.
+  string signing_secret = 2;
+  bool notify_on_queue_item = 3;
+  int32 queue_depth_threshold = 4;
+  bool approval_enabled = 5;
+  string dashboard_base_url = 6;
+  // Explicitly clears the stored webhook URL, regardless of webhook_url's
+  // content. Distinct from leaving webhook_url empty (which means
+  // "unchanged") — this is the only way to reach the "cleared" state.
+  bool clear_webhook_url = 7;
+  // Explicitly clears the stored signing secret, regardless of
+  // signing_secret's content. Same "unchanged" vs "cleared" distinction as
+  // clear_webhook_url.
+  bool clear_signing_secret = 8;
+}
+
+message UpdateSlackConfigResponse {
+  SlackConfigProto config = 1;
+}
+
+message TestSlackWebhookRequest {
+  // The webhook URL currently typed in the settings form — tested as-is,
+  // even if not yet saved. Empty string falls back to testing the
+  // already-saved (decrypted) webhook URL.
+  string webhook_url = 1;
+}
+
+message TestSlackWebhookResponse {
+  bool success = 1;
+  // error is Slack's actual response text where available (e.g.
+  // "slack returned 404: no_service"), not a generic failure message.
+  string error = 2;
 }
 
 // Callback Config (webhook-triggers Phase 5, FR7)
@@ -1919,6 +2211,46 @@ message UpdateCallbackConfigRequest {
 
 message UpdateCallbackConfigResponse {
   CallbackConfigProto config = 1;
+}
+
+message GetStreamHubRolloutStatusRequest {}
+
+message StreamHubSessionOverrideEntry {
+  string session_name = 1;
+  bool force_hub = 2;
+}
+
+message StreamHubRolloutStatus {
+  // Whether STAPLER_SQUAD_USE_STREAM_HUB=true is set in this process's
+  // environment right now. Purely informational — superseded by
+  // global_override when the latter is set.
+  bool global_env_var_set = 1;
+  // Unset when the rollback rehearsal has never been completed.
+  google.protobuf.Timestamp rollback_rehearsal_completed_at = 2;
+  repeated StreamHubSessionOverrideEntry session_overrides = 3;
+  // Live, config.json-backed override of the global default, settable via
+  // SetStreamHubGlobalOverride with no restart required. Unset means no
+  // override is active and the env var default applies.
+  optional bool global_override = 4;
+}
+
+message CompleteStreamHubRollbackRehearsalRequest {}
+
+message SetStreamHubSessionOverrideRequest {
+  string session_name = 1;
+  // Unset clears any existing override for session_name (falls back to the
+  // global default). true pins the session onto the hub-owned path; false
+  // pins it onto the legacy path — either way, regardless of the global
+  // default.
+  optional bool force_hub = 2;
+}
+
+message SetStreamHubGlobalOverrideRequest {
+  // Unset clears the global override, reverting to the
+  // STAPLER_SQUAD_USE_STREAM_HUB env var default. true/false forces the
+  // global default for every session connection resolved from now on,
+  // still subject to the rollback rehearsal gate when forcing true.
+  optional bool force_hub = 1;
 }
 
 // UpsertProfile
@@ -2120,6 +2452,45 @@ message RunOneShotResponse {
   int32 exit_code = 3;
   string pr_url = 4;
   bool branch_diverged_from_base = 5;
+}
+
+// ============================================================================
+// S5: Mechanical Pull Request Creation Messages
+// ============================================================================
+
+message DraftPullRequestRequest {
+  string session_id = 1;
+}
+
+message DraftPullRequestResponse {
+  string title = 1;
+  string body = 2;
+  string base_branch = 3;
+  bool has_commits_ahead = 4;
+  // Non-empty when the session already has a PR — the client should show
+  // a "View PR" state instead of the editable create form (AC4).
+  string existing_pr_url = 5;
+  int32 existing_pr_number = 6;
+}
+
+message CreatePullRequestRequest {
+  string session_id = 1;
+  string title = 2;
+  string body = 3;
+  string base_branch = 4;
+}
+
+message CreatePullRequestResponse {
+  string pr_url = 1;
+  int32 pr_number = 2;
+  // True when CreatePR returned a pre-existing PR instead of creating one.
+  bool already_existed = 3;
+  // False when the PR was created on GitHub but the session record failed
+  // to save it — the RPC still returns success (the PR is real); the
+  // client should surface persist_error as a distinct warning, not a
+  // create-failed error (see plan.md's Pattern Decisions).
+  bool persisted = 4;
+  string persist_error = 5;
 }
 
 // ============================================================================
@@ -2656,6 +3027,10 @@ message WorkflowProto {
   string prompt_template = 23;
   // Last time this trigger successfully fired a session. Unset if never fired.
   optional google.protobuf.Timestamp last_fired_at = 24;
+  // enabled is the generic per-trigger-type "is this trigger active" gate, read by
+  // both webhook handlers and written by TriggersPanel.tsx's toggle — distinct from
+  // cron_enabled, which is the literal cron-schedule flag only.
+  bool enabled = 25;
 }
 
 message CreateWorkflowRequest {
@@ -2694,6 +3069,10 @@ message CreateWorkflowRequest {
   // reject every delivery until one is set. Never echoed back by any RPC, matching
   // WorkflowProto.trigger_type's doc comment on webhook_secret_encrypted above.
   string webhook_secret = 21;
+  // enabled gates whether this trigger fires (see WorkflowProto.enabled). optional so
+  // an unset request defaults to the schema default (true), matching the create-time
+  // "enabled unless explicitly disabled" convention.
+  optional bool enabled = 22;
 }
 
 message CreateWorkflowResponse {
@@ -2735,6 +3114,14 @@ message UpdateWorkflowRequest {
   // never-cleared-implicitly fields). Only a non-empty value rotates the stored
   // secret. See CreateWorkflowRequest.webhook_secret's doc comment.
   string webhook_secret = 21;
+  // enabled gates whether this trigger fires (see WorkflowProto.enabled).
+  optional bool enabled = 22;
+  // Optimistic-concurrency precondition (CAS): when set, the update is rejected with
+  // CodeAborted unless the row's current updated_at exactly matches this value —
+  // mirrors ClaimChainFire's SQL-level CAS (ent_repository_backlog.go). Left unset,
+  // there is no precondition and the write always applies, preserving prior
+  // single-writer callers' behavior during rollout.
+  optional google.protobuf.Timestamp expected_updated_at = 23;
 }
 
 message UpdateWorkflowResponse {

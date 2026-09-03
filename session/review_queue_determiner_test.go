@@ -10,6 +10,7 @@ import (
 // TestDefaultStatusDeterminer_Determine verifies the pure detection logic of DefaultStatusDeterminer.
 // These tests run without a real tmux session: all inputs are constructed in-memory.
 func TestDefaultStatusDeterminer_Determine(t *testing.T) {
+	t.Parallel()
 	detector := detection.NewStatusDetector()
 	determiner := NewDefaultStatusDeterminer(DefaultReviewQueuePollerConfig())
 
@@ -306,6 +307,7 @@ func TestDefaultStatusDeterminer_Determine(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			inst := &Instance{
 				Title:  "test-session",
 				UUID:   "test-uuid",
@@ -350,6 +352,7 @@ func TestDefaultStatusDeterminer_Determine(t *testing.T) {
 // that when a controller reports StatusNeedsApproval AND IdleStateActive simultaneously,
 // the approval wins (idle-active is only checked when no status-based condition is set).
 func TestDefaultStatusDeterminer_ControllerStatusTakesPriorityOverIdleActive(t *testing.T) {
+	t.Parallel()
 	detector := detection.NewStatusDetector()
 	determiner := NewDefaultStatusDeterminer(DefaultReviewQueuePollerConfig())
 
@@ -377,6 +380,7 @@ func TestDefaultStatusDeterminer_ControllerStatusTakesPriorityOverIdleActive(t *
 // TestDefaultStatusDeterminer_StatusContextPassedThrough verifies that the StatusContext
 // from InstanceStatusInfo is used as the queue item context when non-empty.
 func TestDefaultStatusDeterminer_StatusContextPassedThrough(t *testing.T) {
+	t.Parallel()
 	detector := detection.NewStatusDetector()
 	determiner := NewDefaultStatusDeterminer(DefaultReviewQueuePollerConfig())
 
@@ -402,6 +406,7 @@ func TestDefaultStatusDeterminer_StatusContextPassedThrough(t *testing.T) {
 // TestDefaultStatusDeterminer_NeedsApprovalDefaultContext verifies that when StatusContext
 // is empty, a non-empty default context is used.
 func TestDefaultStatusDeterminer_NeedsApprovalDefaultContext(t *testing.T) {
+	t.Parallel()
 	detector := detection.NewStatusDetector()
 	determiner := NewDefaultStatusDeterminer(DefaultReviewQueuePollerConfig())
 
@@ -425,6 +430,7 @@ func TestDefaultStatusDeterminer_NeedsApprovalDefaultContext(t *testing.T) {
 
 // TestDefaultStatusDeterminer_InputRequired verifies StatusInputRequired mapping.
 func TestDefaultStatusDeterminer_InputRequired(t *testing.T) {
+	t.Parallel()
 	detector := detection.NewStatusDetector()
 	determiner := NewDefaultStatusDeterminer(DefaultReviewQueuePollerConfig())
 
@@ -453,6 +459,7 @@ func TestDefaultStatusDeterminer_InputRequired(t *testing.T) {
 
 // TestDefaultStatusDeterminer_Error verifies StatusError mapping.
 func TestDefaultStatusDeterminer_Error(t *testing.T) {
+	t.Parallel()
 	detector := detection.NewStatusDetector()
 	determiner := NewDefaultStatusDeterminer(DefaultReviewQueuePollerConfig())
 
@@ -482,6 +489,7 @@ func TestDefaultStatusDeterminer_Error(t *testing.T) {
 // TestDefaultStatusDeterminer_UnknownStatusWithNoIdleStateSkips verifies that
 // StatusUnknown with no idle-state information and a fresh session results in Skip.
 func TestDefaultStatusDeterminer_UnknownStatusWithNoIdleStateSkips(t *testing.T) {
+	t.Parallel()
 	detector := detection.NewStatusDetector()
 	determiner := NewDefaultStatusDeterminer(DefaultReviewQueuePollerConfig())
 
@@ -510,6 +518,7 @@ func TestDefaultStatusDeterminer_UnknownStatusWithNoIdleStateSkips(t *testing.T)
 // narrowing must NOT suppress ReasonErrorState/ReasonTestsFailing — no other durable
 // detector watches a still-alive, stuck-in-error Hidden review session.
 func TestDetermine_ReturnsSkip_When_InstanceHiddenAndReasonIsTaskCompleteIdleOrStale(t *testing.T) {
+	t.Parallel()
 	detector := detection.NewStatusDetector()
 	determiner := NewDefaultStatusDeterminer(DefaultReviewQueuePollerConfig())
 
@@ -525,6 +534,7 @@ func TestDetermine_ReturnsSkip_When_InstanceHiddenAndReasonIsTaskCompleteIdleOrS
 	}
 
 	t.Run("task_complete_suppressed", func(t *testing.T) {
+		t.Parallel()
 		inst := newHiddenInstance()
 		inst.LastMeaningfulOutput = time.Now().Add(-1 * time.Second)
 		inst.SyncAtomicTimestamps()
@@ -542,6 +552,7 @@ func TestDetermine_ReturnsSkip_When_InstanceHiddenAndReasonIsTaskCompleteIdleOrS
 	})
 
 	t.Run("idle_suppressed", func(t *testing.T) {
+		t.Parallel()
 		inst := newHiddenInstance()
 		inst.LastMeaningfulOutput = time.Now().Add(-1 * time.Second)
 		inst.SyncAtomicTimestamps()
@@ -560,6 +571,7 @@ func TestDetermine_ReturnsSkip_When_InstanceHiddenAndReasonIsTaskCompleteIdleOrS
 	})
 
 	t.Run("stale_suppressed", func(t *testing.T) {
+		t.Parallel()
 		inst := newHiddenInstance()
 		// Beyond StalenessThreshold (5m) so the staleness path fires ReasonStale.
 		inst.LastMeaningfulOutput = time.Now().Add(-10 * time.Minute)
@@ -580,6 +592,7 @@ func TestDetermine_ReturnsSkip_When_InstanceHiddenAndReasonIsTaskCompleteIdleOrS
 	// Safety-net cases: the narrowing must not over-suppress ReasonErrorState or
 	// ReasonTestsFailing — these must still produce DetectionActionAdd even when Hidden.
 	t.Run("error_state_not_suppressed", func(t *testing.T) {
+		t.Parallel()
 		inst := newHiddenInstance()
 		inst.LastMeaningfulOutput = time.Now().Add(-1 * time.Second)
 		inst.SyncAtomicTimestamps()
@@ -600,6 +613,7 @@ func TestDetermine_ReturnsSkip_When_InstanceHiddenAndReasonIsTaskCompleteIdleOrS
 	})
 
 	t.Run("tests_failing_not_suppressed", func(t *testing.T) {
+		t.Parallel()
 		inst := newHiddenInstance()
 		inst.LastMeaningfulOutput = time.Now().Add(-1 * time.Second)
 		inst.SyncAtomicTimestamps()
@@ -624,6 +638,7 @@ func TestDetermine_ReturnsSkip_When_InstanceHiddenAndReasonIsTaskCompleteIdleOrS
 // of the regression test for the bug: approval content in terminal must be detected even
 // without a controller.
 func TestDefaultStatusDeterminer_NoControllerApprovalInTerminal(t *testing.T) {
+	t.Parallel()
 	detector := detection.NewStatusDetector()
 	determiner := NewDefaultStatusDeterminer(DefaultReviewQueuePollerConfig())
 
@@ -647,5 +662,72 @@ func TestDefaultStatusDeterminer_NoControllerApprovalInTerminal(t *testing.T) {
 	}
 	if result.Priority != PriorityHigh {
 		t.Errorf("expected PriorityHigh, got %v", result.Priority)
+	}
+}
+
+// waitingForAgentFooterContent is terminal content that the real StatusDetector
+// classifies as StatusWaitingForAgent via the auto-mode footer override (the rest of
+// the scan concludes idle, then applyFooterIdleOverride promotes it — see
+// session/detection/detector.go's autoModeFooterRegex).
+const waitingForAgentFooterContent = "❯ \n──────────────────────────────────────────────────────────────────────────────\n  ⏵⏵ auto mode on · 2 shells · ← for agents"
+
+// TestDefaultStatusDeterminer_NoControllerWaitingForAgent_RecentlyUpdated_StillRemoved
+// verifies that a session detected as StatusWaitingForAgent via the no-controller path
+// is still removed from the review queue (matching pre-existing behavior) when it was
+// updated recently — i.e. within waitingForAgentStuckThreshold.
+func TestDefaultStatusDeterminer_NoControllerWaitingForAgent_RecentlyUpdated_StillRemoved(t *testing.T) {
+	t.Parallel()
+	detector := detection.NewStatusDetector()
+	determiner := NewDefaultStatusDeterminer(DefaultReviewQueuePollerConfig())
+
+	inst := &Instance{Title: "test", UUID: "uuid", Status: Running}
+	inst.started.Store(true)
+	inst.LastMeaningfulOutput = time.Now().Add(-1 * time.Second)
+	inst.UpdatedAt = time.Now().Add(-1 * time.Second)
+	inst.SyncAtomicTimestamps()
+
+	statusInfo := InstanceStatusInfo{IsControllerActive: false}
+	result := determiner.Determine(inst, waitingForAgentFooterContent, statusInfo, detector)
+
+	if result.ClaudeStatus != detection.StatusWaitingForAgent {
+		t.Fatalf("test content did not detect as StatusWaitingForAgent, got %v — fixture content is stale", result.ClaudeStatus)
+	}
+	if result.Action != DetectionActionRemove {
+		t.Errorf("expected Remove for recently-updated WaitingForAgent session, got %v", result.Action)
+	}
+}
+
+// TestDefaultStatusDeterminer_NoControllerWaitingForAgent_Stale_FallsThroughToTimeBasedAdd
+// verifies that a session detected as StatusWaitingForAgent, but last updated long
+// before waitingForAgentStuckThreshold, is NOT unconditionally removed — it falls
+// through to the normal time-based idle re-add check and gets added back to the queue.
+// This guards against a stuck/orphaned background shell (footer count never hits 0)
+// hiding a genuinely idle session from the review queue indefinitely.
+func TestDefaultStatusDeterminer_NoControllerWaitingForAgent_Stale_FallsThroughToTimeBasedAdd(t *testing.T) {
+	t.Parallel()
+	detector := detection.NewStatusDetector()
+	determiner := NewDefaultStatusDeterminer(DefaultReviewQueuePollerConfig())
+
+	inst := &Instance{Title: "test", UUID: "uuid", Status: Running}
+	inst.started.Store(true)
+	inst.LastMeaningfulOutput = time.Now().Add(-waitingForAgentStuckThreshold - time.Minute)
+	inst.UpdatedAt = time.Now().Add(-waitingForAgentStuckThreshold - time.Minute)
+	inst.SyncAtomicTimestamps()
+
+	statusInfo := InstanceStatusInfo{IsControllerActive: false}
+	result := determiner.Determine(inst, waitingForAgentFooterContent, statusInfo, detector)
+
+	if result.ClaudeStatus != detection.StatusWaitingForAgent {
+		t.Fatalf("test content did not detect as StatusWaitingForAgent, got %v — fixture content is stale", result.ClaudeStatus)
+	}
+	if result.Action != DetectionActionAdd {
+		t.Errorf("expected Add (time-based idle fallback) for stale WaitingForAgent session, got %v", result.Action)
+	}
+	// Reason is ReasonStale rather than ReasonIdle here because UpdatedAt/LastMeaningfulOutput
+	// are old enough to also cross the separate terminal-staleness threshold (5m default,
+	// checked later in Determine) — either reason confirms the fix: the session fell through
+	// to a time-based add instead of being unconditionally removed.
+	if result.Reason != ReasonIdle && result.Reason != ReasonStale {
+		t.Errorf("expected ReasonIdle or ReasonStale from the time-based fallback, got %v", result.Reason)
 	}
 }

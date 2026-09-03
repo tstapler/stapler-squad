@@ -1,12 +1,26 @@
 import React from "react";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, act } from "@testing-library/react";
 import { timestampFromDate } from "@bufbuild/protobuf/wkt";
 import { StuckReason, type StuckBacklogItem } from "@/gen/session/v1/backlog_pb";
 
 const mockUseStuckBacklogItems = jest.fn();
+const mockGetBacklogItem = jest.fn();
 
 jest.mock("@/lib/hooks/useStuckBacklogItems", () => ({
   useStuckBacklogItems: () => mockUseStuckBacklogItems(),
+}));
+
+// Only getBacklogItem is exercised by this file's tests (the fetch-on-expand
+// mechanism that resolves currentReworkCapOverride) — the other methods are
+// stubbed no-ops since no existing test path invokes them.
+jest.mock("@/lib/hooks/useBacklogService", () => ({
+  useBacklogService: () => ({
+    getBacklogItem: mockGetBacklogItem,
+    updateBacklogItem: jest.fn(),
+    approvePlan: jest.fn(),
+    spawnSessionFromItem: jest.fn(),
+    transitionStatus: jest.fn(),
+  }),
 }));
 
 import { StuckItemsSection } from "./StuckItemsSection";
@@ -375,6 +389,313 @@ describe("StuckItemsSection", () => {
       fireEvent.click(screen.getByTestId("stuck-items-reset-parked"));
       const message = await screen.findByTestId("stuck-items-reset-parked-message");
       expect(message.textContent).toMatch(/network down/);
+    });
+  });
+
+  describe("StuckItemsSection_should_offerPerReasonBulkReset_When_AGroupHasParkedItems", () => {
+    it("hides a group's reset-parked button when none of its items have hit the attempt cap", () => {
+      mockUseStuckBacklogItems.mockReturnValue(
+        baseHookReturn({ items: [makeItem({ remediationAttempts: 1 })] })
+      );
+      render(<StuckItemsSection />);
+      expect(
+        screen.queryByTestId(`stuck-group-reset-parked-${StuckReason.PR_READY_UNMERGED}`)
+      ).not.toBeInTheDocument();
+    });
+
+    it("shows a group's reset-parked button with only that group's parked count", () => {
+      mockUseStuckBacklogItems.mockReturnValue(
+        baseHookReturn({
+          items: [
+            makeItem({ remediationAttempts: 5, reason: StuckReason.PR_READY_UNMERGED }),
+            makeItem({
+              itemId: "second",
+              remediationAttempts: 5,
+              reason: StuckReason.STALE_WORK,
+            }),
+            makeItem({
+              itemId: "third",
+              remediationAttempts: 1,
+              reason: StuckReason.STALE_WORK,
+            }),
+          ],
+        })
+      );
+      render(<StuckItemsSection />);
+      expect(
+        screen.getByTestId(`stuck-group-reset-parked-${StuckReason.PR_READY_UNMERGED}`).textContent
+      ).toMatch(/Reset parked \(1\)/);
+      expect(
+        screen.getByTestId(`stuck-group-reset-parked-${StuckReason.STALE_WORK}`).textContent
+      ).toMatch(/Reset parked \(1\)/);
+    });
+
+    it("calls bulkResetParkedRemediation scoped to just that reason and reports the count", async () => {
+      const bulkResetParkedRemediation = jest.fn().mockResolvedValue(2);
+      mockUseStuckBacklogItems.mockReturnValue(
+        baseHookReturn({
+          items: [
+            makeItem({ remediationAttempts: 5, reason: StuckReason.PR_READY_UNMERGED }),
+            makeItem({
+              itemId: "second",
+              remediationAttempts: 5,
+              reason: StuckReason.STALE_WORK,
+            }),
+          ],
+          bulkResetParkedRemediation,
+        })
+      );
+      render(<StuckItemsSection />);
+      fireEvent.click(screen.getByTestId(`stuck-group-reset-parked-${StuckReason.STALE_WORK}`));
+      expect(bulkResetParkedRemediation).toHaveBeenCalledTimes(1);
+      expect(bulkResetParkedRemediation).toHaveBeenCalledWith(StuckReason.STALE_WORK);
+      await screen.findByText(/Reset 2 parked items in/);
+    });
+
+    it("leaves the global 'Reset all parked' button working unchanged alongside per-reason buttons", async () => {
+      const bulkResetParkedRemediation = jest.fn().mockResolvedValue(3);
+      mockUseStuckBacklogItems.mockReturnValue(
+        baseHookReturn({
+          items: [
+            makeItem({ remediationAttempts: 5, reason: StuckReason.PR_READY_UNMERGED }),
+            makeItem({
+              itemId: "second",
+              remediationAttempts: 5,
+              reason: StuckReason.STALE_WORK,
+            }),
+          ],
+          bulkResetParkedRemediation,
+        })
+      );
+      render(<StuckItemsSection />);
+      expect(screen.getByTestId("stuck-items-reset-parked").textContent).toMatch(/Reset all parked \(2\)/);
+      fireEvent.click(screen.getByTestId("stuck-items-reset-parked"));
+      expect(bulkResetParkedRemediation).toHaveBeenCalledWith(undefined);
+      await screen.findByText(/Reset 3 parked items\./);
+    });
+
+    it("disables the global button and every other per-reason button while one per-reason reset is in flight", async () => {
+      let resolveReset: (n: number) => void = () => {};
+      const bulkResetParkedRemediation = jest.fn(
+        () =>
+          new Promise<number>((res) => {
+            resolveReset = res;
+          })
+      );
+      mockUseStuckBacklogItems.mockReturnValue(
+        baseHookReturn({
+          items: [
+            makeItem({ remediationAttempts: 5, reason: StuckReason.PR_READY_UNMERGED }),
+            makeItem({
+              itemId: "second",
+              remediationAttempts: 5,
+              reason: StuckReason.STALE_WORK,
+            }),
+          ],
+          bulkResetParkedRemediation,
+        })
+      );
+      render(<StuckItemsSection />);
+
+      fireEvent.click(screen.getByTestId(`stuck-group-reset-parked-${StuckReason.STALE_WORK}`));
+
+      expect(screen.getByTestId(`stuck-group-reset-parked-${StuckReason.STALE_WORK}`)).toHaveTextContent(
+        "Resetting…"
+      );
+      expect(screen.getByTestId(`stuck-group-reset-parked-${StuckReason.STALE_WORK}`)).toBeDisabled();
+      expect(screen.getByTestId(`stuck-group-reset-parked-${StuckReason.PR_READY_UNMERGED}`)).toBeDisabled();
+      expect(screen.getByTestId("stuck-items-reset-parked")).toBeDisabled();
+
+      await act(async () => resolveReset(1));
+
+      expect(screen.getByTestId(`stuck-group-reset-parked-${StuckReason.PR_READY_UNMERGED}`)).not.toBeDisabled();
+      expect(screen.getByTestId("stuck-items-reset-parked")).not.toBeDisabled();
+    });
+  });
+
+  // reworkCapOverride-current-value-display: StuckBacklogItem (this file's
+  // makeItem()) doesn't carry reworkCapOverride, so on expand the section
+  // fetches the full BacklogItem via getBacklogItem() and threads the result
+  // down as StuckItemDetail's currentReworkCapOverride prop.
+  describe("StuckItemsSection_should_FetchAndDisplayCurrentReworkCapOverride_When_ReworkCapItemIsExpanded", () => {
+    beforeEach(() => {
+      mockGetBacklogItem.mockReset();
+    });
+
+    it("fetches the item and displays its current override once expanded", async () => {
+      mockGetBacklogItem.mockResolvedValue({ id: "item-1", reworkCapOverride: 7 });
+      mockUseStuckBacklogItems.mockReturnValue(
+        baseHookReturn({
+          items: [makeItem({ itemId: "item-1", reason: StuckReason.REWORK_CAP, prNumber: 0, prUrl: "" })],
+        })
+      );
+      render(<StuckItemsSection />);
+
+      const card = screen
+        .getAllByTestId("stuck-item")
+        .find((c) => c.getAttribute("data-reason") === String(StuckReason.REWORK_CAP));
+      expect(card).toBeDefined();
+      fireEvent.click(card!);
+
+      expect(mockGetBacklogItem).toHaveBeenCalledWith("item-1");
+      const current = await screen.findByTestId("stuck-item-rework-cap-current");
+      expect(current.textContent).toBe("7 rounds");
+    });
+
+    it("shows 'No override set' when the fetched item has no override", async () => {
+      mockGetBacklogItem.mockResolvedValue({ id: "item-2", reworkCapOverride: undefined });
+      mockUseStuckBacklogItems.mockReturnValue(
+        baseHookReturn({
+          items: [makeItem({ itemId: "item-2", reason: StuckReason.REWORK_CAP, prNumber: 0, prUrl: "" })],
+        })
+      );
+      render(<StuckItemsSection />);
+
+      const card = screen
+        .getAllByTestId("stuck-item")
+        .find((c) => c.getAttribute("data-reason") === String(StuckReason.REWORK_CAP));
+      fireEvent.click(card!);
+
+      expect(mockGetBacklogItem).toHaveBeenCalledWith("item-2");
+      const current = await screen.findByTestId("stuck-item-rework-cap-current");
+      expect(current.textContent).toBe("No override set (using global default)");
+    });
+
+    it("shows 'Unlimited' when the fetched item has an explicit override of 0", async () => {
+      mockGetBacklogItem.mockResolvedValue({ id: "item-2", reworkCapOverride: 0 });
+      mockUseStuckBacklogItems.mockReturnValue(
+        baseHookReturn({
+          items: [makeItem({ itemId: "item-2", reason: StuckReason.REWORK_CAP, prNumber: 0, prUrl: "" })],
+        })
+      );
+      render(<StuckItemsSection />);
+
+      const card = screen
+        .getAllByTestId("stuck-item")
+        .find((c) => c.getAttribute("data-reason") === String(StuckReason.REWORK_CAP));
+      fireEvent.click(card!);
+
+      expect(mockGetBacklogItem).toHaveBeenCalledWith("item-2");
+      const current = await screen.findByTestId("stuck-item-rework-cap-current");
+      await waitFor(() => expect(current.textContent).toBe("Unlimited"));
+    });
+
+    // Regression test for issue 2: getBacklogItem swallows RPC errors and
+    // resolves to null (useBacklogService.ts's getBacklogItem) — a failed
+    // fetch must not be permanently cached as "confirmed no override", or a
+    // transient network blip would forever render the confident-but-false
+    // "No override set" line. Asserting the retry (not a distinct loading
+    // string, since StuckItemDetail renders the same fallback copy for
+    // "not yet fetched" as for "confirmed unset") is what actually proves
+    // the failure wasn't cached as a resolved value.
+    it("does not permanently cache a failed fetch as 'no override' — retries on re-expand", async () => {
+      mockGetBacklogItem.mockResolvedValueOnce(null);
+      mockUseStuckBacklogItems.mockReturnValue(
+        baseHookReturn({
+          items: [makeItem({ itemId: "item-3", reason: StuckReason.REWORK_CAP, prNumber: 0, prUrl: "" })],
+        })
+      );
+      render(<StuckItemsSection />);
+
+      const card = screen
+        .getAllByTestId("stuck-item")
+        .find((c) => c.getAttribute("data-reason") === String(StuckReason.REWORK_CAP));
+      expect(card).toBeDefined();
+
+      // Expand: fetch fails (resolves null). A failed fetch must not be
+      // permanently cached as a resolved value — the retry-count assertions
+      // below are what actually prove that (the loading-state copy shown
+      // meanwhile is identical to the pre-fetch state, so asserting it here
+      // would be tautological).
+      fireEvent.click(card!);
+      await waitFor(() => expect(mockGetBacklogItem).toHaveBeenCalledTimes(1));
+
+      // Collapse and re-expand: a genuinely-cached "no override" would never
+      // call getBacklogItem again (see the caching test above) — a failed
+      // fetch must retry instead.
+      mockGetBacklogItem.mockResolvedValueOnce({ id: "item-3", reworkCapOverride: 9 });
+      fireEvent.click(card!);
+      fireEvent.click(card!);
+
+      await waitFor(() => expect(mockGetBacklogItem).toHaveBeenCalledTimes(2));
+      const retried = await screen.findByTestId("stuck-item-rework-cap-current");
+      expect(retried.textContent).toBe("9 rounds");
+    });
+  });
+
+  // Regression test for issue 4: StuckItemsSection.tsx:207-210 documents that
+  // an already-fetched item must not be re-fetched on collapse/re-expand.
+  describe("StuckItemsSection_should_NotRefetchReworkCapOverride_When_ItemIsCollapsedThenReExpanded", () => {
+    beforeEach(() => {
+      mockGetBacklogItem.mockReset();
+    });
+
+    it("fetches getBacklogItem exactly once across collapse + re-expand", async () => {
+      mockGetBacklogItem.mockResolvedValue({ id: "item-4", reworkCapOverride: 4 });
+      mockUseStuckBacklogItems.mockReturnValue(
+        baseHookReturn({
+          items: [makeItem({ itemId: "item-4", reason: StuckReason.REWORK_CAP, prNumber: 0, prUrl: "" })],
+        })
+      );
+      render(<StuckItemsSection />);
+
+      const card = screen
+        .getAllByTestId("stuck-item")
+        .find((c) => c.getAttribute("data-reason") === String(StuckReason.REWORK_CAP));
+      expect(card).toBeDefined();
+
+      fireEvent.click(card!); // expand — fetches
+      await screen.findByTestId("stuck-item-rework-cap-current");
+      fireEvent.click(card!); // collapse
+      fireEvent.click(card!); // re-expand — must not re-fetch
+
+      await screen.findByTestId("stuck-item-rework-cap-current");
+      expect(mockGetBacklogItem).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  // Regression guard for a bug caught by adversarial review of PR #510:
+  // useStuckBacklogItems() hands back a new `items` array reference on every
+  // ~60s poll tick regardless of whether the data changed, and `focusItemId`
+  // never clears itself from the URL. An effect keyed on `items` (rather than
+  // gated by an "already applied for this focusItemId" ref) would re-run on
+  // every poll and silently re-expand a card the user had just manually
+  // collapsed.
+  describe("focusItemId deep link (apply once per id)", () => {
+    const originalScrollIntoView = Element.prototype.scrollIntoView;
+
+    beforeEach(() => {
+      // jsdom doesn't implement scrollIntoView; the auto-expand-on-focus effect calls it.
+      Element.prototype.scrollIntoView = jest.fn();
+    });
+
+    afterEach(() => {
+      Element.prototype.scrollIntoView = originalScrollIntoView;
+    });
+
+    it("expands the matching card once, and does not re-expand it after the user collapses it and a poll tick returns a new items array", async () => {
+      const target = makeItem({ itemId: "target-item", reason: StuckReason.STALE_WORK });
+      const firstItems = [target];
+      mockUseStuckBacklogItems.mockReturnValue(baseHookReturn({ items: firstItems }));
+
+      const { rerender } = render(<StuckItemsSection focusItemId="target-item" />);
+
+      const findTargetCard = () =>
+        screen.getAllByTestId("stuck-item").find((c) => c.getAttribute("data-item-id") === "target-item")!;
+
+      await waitFor(() => expect(findTargetCard()).toHaveAttribute("aria-expanded", "true"));
+
+      // User manually collapses the deep-linked card.
+      fireEvent.click(findTargetCard());
+      expect(findTargetCard()).toHaveAttribute("aria-expanded", "false");
+
+      // Simulate a poll tick: same data, but a fresh array reference and a
+      // fresh item object, and focusItemId is still on the URL.
+      const polledItems = [makeItem({ itemId: "target-item", reason: StuckReason.STALE_WORK })];
+      mockUseStuckBacklogItems.mockReturnValue(baseHookReturn({ items: polledItems }));
+      rerender(<StuckItemsSection focusItemId="target-item" />);
+
+      expect(findTargetCard()).toHaveAttribute("aria-expanded", "false");
     });
   });
 });

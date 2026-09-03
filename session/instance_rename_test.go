@@ -6,6 +6,7 @@ import (
 )
 
 func TestInstanceRename(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name         string
 		currentTitle string
@@ -43,6 +44,7 @@ func TestInstanceRename(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			// Create a new instance
 			inst := &Instance{
 				Title: tt.currentTitle,
@@ -72,6 +74,7 @@ func TestInstanceRename(t *testing.T) {
 }
 
 func TestInstanceRestart(t *testing.T) {
+	t.Parallel()
 	// Note: This is a placeholder test. Full testing would require mocking tmux.TmuxSession
 	// and other dependencies, which is beyond the scope of this basic implementation.
 
@@ -106,6 +109,7 @@ func TestInstanceRestart(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			// Create instance with test state
 			inst := &Instance{
 				Title:  "test-session",

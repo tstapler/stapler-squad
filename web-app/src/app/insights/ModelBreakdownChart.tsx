@@ -24,7 +24,7 @@ import {
   unpricedLabel,
   cacheHitLabel,
 } from "./ModelBreakdownChart.css";
-import { fmtPct, computeCacheHitRate } from "./insightsFormatters";
+import { fmtCost, fmtPct, computeCacheHitRate } from "./insightsFormatters";
 
 interface Props {
   models: ModelBreakdown[];
@@ -62,10 +62,6 @@ function toDataPoints(models: ModelBreakdown[]): DataPoint[] {
     }));
 }
 
-function fmtDollar(v: number): string {
-  return `$${v.toFixed(3)}`;
-}
-
 export function ModelBreakdownChart({ models }: Props) {
   const data = useMemo(() => toDataPoints(models), [models]);
 
@@ -92,14 +88,14 @@ export function ModelBreakdownChart({ models }: Props) {
               axisLine={false}
             />
             <YAxis
-              tickFormatter={fmtDollar}
+              tickFormatter={fmtCost}
               tick={{ fontSize: 11 }}
               tickLine={false}
               axisLine={false}
               width={56}
             />
             <Tooltip
-              formatter={(v: unknown) => [fmtDollar(Number(v)), "Cost"]}
+              formatter={(v: unknown) => [fmtCost(Number(v)), "Cost"]}
               contentStyle={{ fontSize: "12px" }}
             />
             <Bar dataKey="cost" radius={[4, 4, 0, 0]}>

@@ -74,6 +74,18 @@ jobs:
       - name: Generate protobuf code
         run: buf generate
 
+      # Same pattern as .github/actions/prepare/action.yml's "Cache Next.js
+      # build cache" step — see its comment for why the key includes both the
+      # lockfile and src hash, with restore-keys fallbacks.
+      - name: Cache Next.js build cache
+        uses: actions/cache@v4
+        with:
+          path: web-app/.next/cache
+          key: nextjs-release-${{ runner.os }}-${{ hashFiles('web-app/pnpm-lock.yaml') }}-${{ hashFiles('web-app/src/**') }}
+          restore-keys: |
+            nextjs-release-${{ runner.os }}-${{ hashFiles('web-app/pnpm-lock.yaml') }}-
+            nextjs-release-${{ runner.os }}-
+
       - name: Build web UI
         working-directory: web-app
         run: pnpm run build
@@ -84,7 +96,7 @@ jobs:
       - name: Set up Go 1.23.0
         uses: actions/setup-go@v5
         with:
-          go-version: '1.25.0'
+          go-version-file: 'go.mod'
           cache: true
 
       - name: Run GoReleaser

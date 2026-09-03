@@ -155,7 +155,7 @@ func setupStateFileWatcher() (*fsnotify.Watcher, error) {
 
 	// Make sure the config directory exists before watching it
 	if _, err := os.Stat(configDir); os.IsNotExist(err) {
-		if err := os.MkdirAll(configDir, 0755); err != nil {
+		if err := os.MkdirAll(configDir, 0750); err != nil {
 			return nil, fmt.Errorf("failed to create config directory: %w", err)
 		}
 	}
@@ -388,6 +388,8 @@ func StopDaemon() error {
 	}
 
 	pidFile := filepath.Join(pidDir, "daemon.pid")
+	// #nosec G304 -- pidFile is GetConfigDir() plus the constant "daemon.pid",
+	// not caller/user-controlled input.
 	data, err := os.ReadFile(pidFile)
 	if err != nil {
 		if os.IsNotExist(err) {

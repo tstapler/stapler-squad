@@ -8,9 +8,11 @@ import (
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/session/ent"
 )
 
 func TestEntTriggerFireEventRepository_Create_should_PersistAndRoundTrip_When_ValidInput(t *testing.T) {
+	t.Parallel()
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 
@@ -47,6 +49,7 @@ func TestEntTriggerFireEventRepository_Create_should_PersistAndRoundTrip_When_Va
 // delivery_id) pair fails with the typed ErrDuplicateDelivery via the composite
 // unique index, not a silent duplicate insert.
 func TestEntTriggerFireEventRepository_Create_should_ReturnErrDuplicateDelivery_When_SameWorkflowAndDeliveryIDRepeats(t *testing.T) {
+	t.Parallel()
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 
@@ -82,6 +85,7 @@ func TestEntTriggerFireEventRepository_Create_should_ReturnErrDuplicateDelivery_
 // watching main) must each be able to record their own fire event — a bare global
 // unique index on delivery_id alone would incorrectly collide here.
 func TestEntTriggerFireEventRepository_Create_should_AllowSameDeliveryIDAcrossDifferentWorkflows(t *testing.T) {
+	t.Parallel()
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 
@@ -117,6 +121,7 @@ func TestEntTriggerFireEventRepository_Create_should_AllowSameDeliveryIDAcrossDi
 // with each other — delivery_id is left unset (NULL), and SQL treats distinct NULLs as
 // non-colliding under the composite unique index.
 func TestEntTriggerFireEventRepository_Create_should_AllowMultipleRowsWithNoDeliveryID(t *testing.T) {
+	t.Parallel()
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 
@@ -144,6 +149,7 @@ func TestEntTriggerFireEventRepository_Create_should_AllowMultipleRowsWithNoDeli
 // concurrently — the scenario the unique index (not a pre-check-then-insert) exists to
 // make safe: exactly one of the two racing Create calls must succeed.
 func TestEntTriggerFireEventRepository_Create_should_RejectExactlyOneConcurrentDuplicate(t *testing.T) {
+	t.Parallel()
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 
@@ -191,6 +197,7 @@ func TestEntTriggerFireEventRepository_Create_should_RejectExactlyOneConcurrentD
 // verifies a rejected webhook request (e.g. unknown slug) can still be recorded with no
 // resolved Workflow.
 func TestEntTriggerFireEventRepository_Create_should_AllowNilWorkflowID_When_RejectedBeforeResolution(t *testing.T) {
+	t.Parallel()
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 
@@ -204,6 +211,7 @@ func TestEntTriggerFireEventRepository_Create_should_AllowNilWorkflowID_When_Rej
 	// Not fetchable via ListByWorkflow (no workflow_id) — just confirm it inserted
 	// without error and without a WorkflowID.
 	client := storage.GetEntClient()
+	//nolint:entfullscan test assertion over a test-scoped in-memory DB; verifies exactly one row exists.
 	all, err := client.TriggerFireEvent.Query().All(t.Context())
 	require.NoError(t, err)
 	require.Len(t, all, 1)
@@ -211,9 +219,45 @@ func TestEntTriggerFireEventRepository_Create_should_AllowNilWorkflowID_When_Rej
 	assert.Equal(t, "rejected", all[0].Outcome)
 }
 
+// TestIsDuplicateDeliveryConstraintError_should_ReturnFalse_When_ConstraintErrorIsNotTheDeliveryIndex
+// proves Create's constraint-error mapping is narrowed to the specific
+// (workflow_id, delivery_id) unique index, not "any constraint error" — a genuine,
+// differently-shaped ent.ConstraintError (here: Workflow.Slug's own unique index) must
+// not be mis-reported as ErrDuplicateDelivery. Exercises a real *ent.ConstraintError
+// from the generated client (unexported fields prevent constructing one directly) via
+// an unrelated unique-index collision on Workflow.slug.
+func TestIsDuplicateDeliveryConstraintError_should_ReturnFalse_When_ConstraintErrorIsNotTheDeliveryIndex(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+
+	client := storage.GetEntClient()
+	ctx := t.Context()
+
+	require.NoError(t, client.Workflow.Create().
+		SetSlug("dup-slug-wf").
+		SetName("Dup Slug WF").
+		SetCommand("cmd").
+		SetTargetDirectory("/tmp/test").
+		Exec(ctx))
+
+	err := client.Workflow.Create().
+		SetSlug("dup-slug-wf").
+		SetName("Dup Slug WF 2").
+		SetCommand("cmd").
+		SetTargetDirectory("/tmp/test").
+		Exec(ctx)
+	require.Error(t, err)
+	require.True(t, ent.IsConstraintError(err), "expected the Workflow.slug collision to be a real ent.ConstraintError")
+
+	assert.False(t, isDuplicateDeliveryConstraintError(err),
+		"a constraint error from an unrelated index must not be mapped to ErrDuplicateDelivery")
+}
+
 // TestEntTriggerFireEventRepository_ListByWorkflow_should_DefaultLimitAndOrderNewestFirst
 // verifies the default limit (100) and newest-first ordering.
 func TestEntTriggerFireEventRepository_ListByWorkflow_should_DefaultLimitAndOrderNewestFirst(t *testing.T) {
+	t.Parallel()
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 
@@ -238,4 +282,42 @@ func TestEntTriggerFireEventRepository_ListByWorkflow_should_DefaultLimitAndOrde
 	for i := 1; i < len(events); i++ {
 		assert.True(t, !events[i-1].CreatedAt.Before(events[i].CreatedAt), "events must be ordered newest first")
 	}
+}
+
+// TestEntTriggerFireEventRepository_ExistsByDeliveryID_should_FindNilWorkflowRows
+// is the regression test for the gap pr-event-webhooks' review verdict flagged: the
+// (workflow_id, delivery_id) unique index Create/ErrDuplicateDelivery rely on never
+// dedups two WorkflowID:nil rows sharing a delivery_id (NULL != NULL in a SQL unique
+// index), so a naive reuse of that mechanism for the PR-fix webhook path (which
+// always persists WorkflowID: nil) would silently provide zero dedup. Confirms
+// ExistsByDeliveryID finds a nil-workflow row by delivery_id alone.
+func TestEntTriggerFireEventRepository_ExistsByDeliveryID_should_FindNilWorkflowRows(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+
+	repo := NewEntTriggerFireEventRepository(storage.GetEntClient())
+
+	exists, err := repo.ExistsByDeliveryID(t.Context(), "pr-fix-delivery-1")
+	require.NoError(t, err)
+	assert.False(t, exists, "no row exists yet")
+
+	require.NoError(t, repo.Create(t.Context(), TriggerFireEventInput{
+		WorkflowID: nil,
+		Outcome:    "fired_success",
+		DeliveryID: "pr-fix-delivery-1",
+	}))
+
+	exists, err = repo.ExistsByDeliveryID(t.Context(), "pr-fix-delivery-1")
+	require.NoError(t, err)
+	assert.True(t, exists, "ExistsByDeliveryID must find a nil-workflow row by delivery_id alone")
+
+	// A second nil-workflow row sharing the same delivery_id must NOT violate the
+	// (workflow_id, delivery_id) unique index — proving that index alone cannot dedup
+	// this shape, and ExistsByDeliveryID is the actual dedup mechanism.
+	require.NoError(t, repo.Create(t.Context(), TriggerFireEventInput{
+		WorkflowID: nil,
+		Outcome:    "no_match",
+		DeliveryID: "pr-fix-delivery-1",
+	}), "two nil-workflow rows sharing a delivery_id must not collide on the unique index (NULL != NULL)")
 }

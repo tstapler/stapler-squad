@@ -5,11 +5,35 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 
 	"github.com/tstapler/stapler-squad/log"
 )
 
 const mcpServerName = "stapler-squad"
+
+// settingsFileLocks serializes the read-merge-write sequence each of InjectHookConfig,
+// InjectHooksConfig, RemoveHooksConfig, InjectMCPConfig, and RemoveMCPConfig performs
+// against a given settings file (settings.local.json or .mcp.json), keyed by absolute
+// path. writeSettingsAtomic's unique-tmp-filename write only prevents two concurrent
+// writers from tearing/corrupting the file on rename; it does nothing to stop a classic
+// lost update, where both callers read the same pre-image, merge independently, and the
+// second writer's rename silently clobbers the first caller's change. Confirmed real
+// overlapping callers on the same rootDir's settings.local.json:
+// backlog_service_triage.go's sync InjectHooksConfig/RemoveHooksConfig during session
+// spawn, and session_service.go's async InjectHookConfig in that same spawn flow's
+// trackCleanup callback. An in-process sync.Mutex is sufficient — no cross-process
+// locking is needed, since all callers run within one stapler-squad server process.
+var settingsFileLocks sync.Map // map[string]*sync.Mutex
+
+// lockSettingsPath acquires (creating if needed) the mutex for path and returns a
+// function that unlocks it — call via `defer lockSettingsPath(settingsPath)()`.
+func lockSettingsPath(path string) func() {
+	v, _ := settingsFileLocks.LoadOrStore(path, &sync.Mutex{})
+	mu := v.(*sync.Mutex)
+	mu.Lock()
+	return mu.Unlock
+}
 
 // InjectMCPConfig writes (or updates) the stapler-squad MCP server entry into
 // <rootDir>/.mcp.json (the Claude Code project-scope MCP file).
@@ -28,9 +52,13 @@ const mcpServerName = "stapler-squad"
 // MCP tools_lifecycle inject_mcp_config tool).
 func InjectMCPConfig(rootDir, binaryPath string) error {
 	mcpPath := filepath.Join(rootDir, ".mcp.json")
+	defer lockSettingsPath(mcpPath)()
 
 	// Read existing .mcp.json.
 	raw := map[string]json.RawMessage{}
+	// #nosec G304 -- mcpPath is rootDir/.mcp.json, where rootDir is the session's own
+	// worktree/directory (Instance.GetEffectiveRootDir()), established by this server's
+	// own session/worktree creation, never raw network/RPC input.
 	data, err := os.ReadFile(mcpPath)
 	if err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("read %s: %w", mcpPath, err)
@@ -88,7 +116,10 @@ func InjectMCPConfig(rootDir, binaryPath string) error {
 // If the file is missing or has no entry for stapler-squad, it is a no-op.
 func RemoveMCPConfig(rootDir string) error {
 	mcpPath := filepath.Join(rootDir, ".mcp.json")
+	defer lockSettingsPath(mcpPath)()
 
+	// #nosec G304 -- mcpPath is rootDir/.mcp.json, same trusted-internal rootDir
+	// construction as InjectMCPConfig above.
 	data, err := os.ReadFile(mcpPath)
 	if os.IsNotExist(err) {
 		return nil
@@ -131,7 +162,7 @@ func writeSettingsAtomic(settingsPath, claudeDir string, raw map[string]json.Raw
 	if err != nil {
 		return fmt.Errorf("marshal settings: %w", err)
 	}
-	if err := os.MkdirAll(claudeDir, 0o755); err != nil {
+	if err := os.MkdirAll(claudeDir, 0o750); err != nil {
 		return fmt.Errorf("create dir: %w", err)
 	}
 	// Unique temp file (not settingsPath+".tmp") so two concurrent writers targeting
@@ -153,12 +184,14 @@ func writeSettingsAtomic(settingsPath, claudeDir string, raw map[string]json.Raw
 	if err := tmp.Close(); err != nil {
 		return fmt.Errorf("close temp %s: %w", tmpPath, err)
 	}
-	if err := os.Chmod(tmpPath, 0o644); err != nil {
+	if err := os.Chmod(tmpPath, 0o600); err != nil {
 		return fmt.Errorf("chmod temp %s: %w", tmpPath, err)
 	}
 	if err := os.Rename(tmpPath, settingsPath); err != nil {
 		return fmt.Errorf("rename %s: %w", tmpPath, err)
 	}
-	log.Info("[InjectMCPConfig] wrote settings", "path", settingsPath)
+	// Shared by InjectMCPConfig, RemoveMCPConfig, InjectHooksConfig, RemoveHooksConfig,
+	// and InjectHookConfig — no single caller-specific tag applies, so this stays generic.
+	log.Info("[writeSettingsAtomic] wrote settings", "path", settingsPath)
 	return nil
 }

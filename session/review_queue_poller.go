@@ -585,6 +585,13 @@ func (rqp *ReviewQueuePoller) reconcileSessions() {
 					cancel()
 					inst.fireLifecycleEvent(EventStarted, "reconcile-session-crashed-but-alive")
 				}
+			case PermanentlyFailed:
+				// Deliberately not auto-revived even if tmux is alive, unlike
+				// Stopped/Hibernated/Crashed above — PermanentlyFailed means the
+				// configurable retry policy already exhausted its attempt budget
+				// for this failure episode; only an explicit RetryNow() call
+				// (the "Retry now" UI action / RetrySession RPC) should bring it
+				// back to Active. See ADR-001.
 			}
 		}
 	}
@@ -897,15 +904,16 @@ func (rqp *ReviewQueuePoller) checkSession(inst *Instance, paneActivity map[stri
 			DetectedAt:  detectedAt,
 			Context:     context,
 			// Populate session details for rich display
-			Program:      snap.Program,
-			Branch:       snap.Branch,
-			Path:         snap.Path,
-			WorkingDir:   snap.WorkingDir,
-			Status:       snap.Status.String(),
-			Tags:         snap.Tags,
-			Category:     snap.Category,
-			DiffStats:    inst.GetDiffStats(),
-			LastActivity: lastActivity,
+			Program:         snap.Program,
+			Branch:          snap.Branch,
+			Path:            snap.Path,
+			WorkingDir:      snap.WorkingDir,
+			Status:          snap.Status.String(),
+			Tags:            snap.Tags,
+			Category:        snap.Category,
+			DiffStats:       inst.GetDiffStats(),
+			LastActivity:    lastActivity,
+			HasCommitsAhead: inst.GetHasCommitsAhead(),
 			// Populate idle state and raw detected status for WorkingState mapping.
 			IdleState:    statusInfo.IdleState.State,
 			ClaudeStatus: claudeStatus,

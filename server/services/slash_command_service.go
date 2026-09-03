@@ -9,6 +9,7 @@ import (
 
 	"connectrpc.com/connect"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/log"
 )
 
 // builtinClaudeCommands lists hardcoded Claude Code CLI built-ins that are always shown.
@@ -53,18 +54,25 @@ func (s *SlashCommandService) ListSlashCommands(
 		}
 	}()
 
-	// Project commands take highest precedence.
+	// Project commands take highest precedence. target_directory is an RPC-supplied field
+	// with no other upstream containment, so it goes through the same
+	// validateTargetDirectory check CreateWorkflow/UpdateWorkflow apply to the identical
+	// field (workflow_service.go) before it's ever joined into a filesystem path.
 	if targetDir != "" {
 		expanded, err := expandTilde(targetDir)
 		if err == nil {
-			projectDir := filepath.Join(expanded, ".claude", "commands")
-			if real, err := filepath.EvalSymlinks(projectDir); err == nil {
-				projectDir = real
-			}
-			for _, c := range walkCommandDir(projectDir, "project") {
-				if !seen[c.Name] {
-					commands = append(commands, c)
-					seen[c.Name] = true
+			if valErr := validateTargetDirectory(expanded); valErr != nil {
+				log.Warn("[ListSlashCommands] rejected target_directory", "target_directory", targetDir, "err", valErr)
+			} else {
+				projectDir := filepath.Join(expanded, ".claude", "commands")
+				if real, err := filepath.EvalSymlinks(projectDir); err == nil {
+					projectDir = real
+				}
+				for _, c := range walkCommandDir(projectDir, "project") {
+					if !seen[c.Name] {
+						commands = append(commands, c)
+						seen[c.Name] = true
+					}
 				}
 			}
 		}
@@ -133,6 +141,10 @@ func relPathToCommandName(rel string) string {
 // parseCommandFrontmatter extracts title and description from YAML frontmatter.
 // Frontmatter is delimited by "---" lines at the top of the file.
 func parseCommandFrontmatter(path string) (title, description string) {
+	// #nosec G304 -- path is enumerated by filepath.WalkDir in walkCommandDir over a
+	// directory that's either the trusted ~/.claude/commands, or target_directory after
+	// ListSlashCommands validated it with validateTargetDirectory (absolute, no
+	// traversal components); never opened from a raw, unvalidated RPC string.
 	f, err := os.Open(path)
 	if err != nil {
 		return "", ""

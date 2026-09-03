@@ -12,13 +12,32 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 )
+
+// reapOverallBudget bounds the total wall time ReapLeakedTestServers may
+// spend killing leaked sockets, regardless of how many are found. Without
+// this, a machine that has accumulated thousands of leaked sockets (each
+// kill-server call costs one subprocess fork/exec, ~20-250ms even against a
+// dead socket) can make the reap loop itself run for minutes, which SIGQUITs
+// the test binary while it's still inside TestMain setup — before a single
+// test ever runs. See docs/bugs or the flaky-test backlog item this fixes
+// for the empirical timing that produced this number: 50 sockets took ~13s
+// serially, i.e. thousands of leaked sockets (observed: 5,386 on one dev
+// machine) would take tens of minutes serially. reapMaxConcurrent trades
+// that out for parallelism instead of just capping coverage.
+const reapOverallBudget = 20 * time.Second
+
+// reapMaxConcurrent bounds how many kill-server subprocesses run at once,
+// so a large backlog is reaped in parallel instead of one at a time.
+const reapMaxConcurrent = 32
 
 // testSocketPrefixes lists every socket-name prefix created by tests across
 // the whole module (session, session/mux, session/tmux). Exported via
@@ -56,6 +75,14 @@ func ReapLeakedTestServers() {
 	if err != nil {
 		return
 	}
+
+	overallCtx, cancel := context.WithTimeout(context.Background(), reapOverallBudget)
+	defer cancel()
+
+	sem := make(chan struct{}, reapMaxConcurrent)
+	var wg sync.WaitGroup
+	skipped := 0
+
 	for _, entry := range entries {
 		name := entry.Name()
 		if !isTestSocketName(name) {
@@ -70,9 +97,38 @@ func ReapLeakedTestServers() {
 				continue // another live test runner — don't interfere
 			}
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		_ = safeexec.CommandContext(ctx, tmuxBinary(), "-L", name, "kill-server").Run()
-		cancel()
+
+		select {
+		case <-overallCtx.Done():
+			// Ran out of budget: leave the remaining sockets for the next
+			// run's reap pass rather than blocking TestMain indefinitely.
+			skipped++
+			continue
+		case sem <- struct{}{}:
+		}
+
+		wg.Add(1)
+		go func(name string) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			ctx, cancel := context.WithTimeout(overallCtx, 5*time.Second)
+			defer cancel()
+			_ = safeexec.CommandContext(ctx, tmuxBinary(), "-L", name, "kill-server").Run()
+			// kill-server only unlinks the socket when it actually stops a
+			// live server. Most leaked sockets here have no server behind
+			// them at all (the owning tmux process already exited on its
+			// own) — kill-server reports "no server running" and leaves the
+			// file in place, which is why this directory accumulates
+			// indefinitely otherwise. Safe to remove unconditionally: we've
+			// already confirmed the owning test PID is dead, and any server
+			// kill-server did stop has already unlinked its own socket.
+			_ = os.Remove(filepath.Join(socketDir, name))
+		}(name)
+	}
+	wg.Wait()
+
+	if skipped > 0 {
+		fmt.Fprintf(os.Stderr, "tmuxreap: hit %s budget with %d leaked socket(s) still unreaped; will retry on next run\n", reapOverallBudget, skipped)
 	}
 }
 
@@ -149,7 +205,7 @@ if [ -d "$SOCKDIR" ]; then
 fi
 rm -f "$0"
 `, ownerPID, uid, ownerPID)
-	if err := os.WriteFile(scriptPath, []byte(script), 0700); err != nil {
+	if err := os.WriteFile(scriptPath, []byte(script), 0600); err != nil {
 		return // best-effort; normal t.Cleanup handles the happy path
 	}
 	cmd := exec.CommandContext(context.Background(), "sh", scriptPath) //nolint:norawexec long-running cmd.Start() process; lifecycle managed by caller

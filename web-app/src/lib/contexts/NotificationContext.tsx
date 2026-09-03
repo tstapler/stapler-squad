@@ -12,8 +12,40 @@ import { mapNotificationType, mapPriority } from "@/lib/utils/notificationMappin
 import { TOAST_STALE_MS, ACTIONABLE_TOAST_STALE_MS, isActionable } from "@/lib/notification-policy";
 import { createNotificationSyncChannel } from "@/lib/utils/broadcastChannel";
 import { markAcknowledged } from "@/lib/utils/notificationStorage";
+import type { FailureReason } from "@/lib/utils/sessionFailure";
 
 export type { NotificationData, NotificationHistoryItem };
+
+/**
+ * Reason-specific toast copy for a session that transitioned to
+ * SESSION_STATUS_FAILED (async-session-creation Epic 5.3, Surface 4). Mirrors
+ * the FailureReason taxonomy set server-side by the Background Resolution
+ * Pipeline (session.Instance.FailureReason) — "GitHubResolutionError",
+ * "StartupError", "Stale", or "Cancelled". A reasonable default per
+ * plan.md's Unresolved Questions (exact copy is a pending product decision).
+ *
+ * Deliberately different wording than SessionCard.tsx/SessionRow.tsx's
+ * persistent card/row copy (lib/utils/sessionFailure.ts's getFailureMessage)
+ * — toast copy is transient and can afford to be more conversational, while
+ * the card/row copy is a durable record. The `FailureReason` type import
+ * (rather than a bare `string` param) only guarantees the *set* of reasons
+ * this switch handles stays in sync with the card/row's; it does not force
+ * the wording to match.
+ */
+export function getFailureReasonToastMessage(failureReason: string): string {
+  switch (failureReason as FailureReason) {
+    case "GitHubResolutionError":
+      return "Couldn't resolve the GitHub repository. Check the URL and try again.";
+    case "StartupError":
+      return "The session failed to start. See the session card for details.";
+    case "Stale":
+      return "Session creation timed out and was marked as failed.";
+    case "Cancelled":
+      return "Session creation was cancelled.";
+    default:
+      return "Session creation failed.";
+  }
+}
 
 interface NotificationContextValue {
   notifications: NotificationData[];

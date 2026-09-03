@@ -4,39 +4,44 @@ import (
 	"context"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
+	gogit "github.com/go-git/go-git/v5"
+	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
-	"github.com/tstapler/stapler-squad/executor/safeexec"
+	gitutil "github.com/tstapler/stapler-squad/session/git"
 )
 
-// runGitForDiffHashTest and setupDiffHashTestRepo are self-contained test fixtures
-// (not a shared helper import from session/git's test file, which is package-private
-// to session/git) — this test only needs a minimal on-disk repo, not the fuller
-// clone/branch fixtures ops_test.go uses.
-func runGitForDiffHashTest(t *testing.T, dir string, args ...string) string {
+// setupDiffHashTestRepo and the addCommitForDiffHashTest helper are self-contained
+// test fixtures (not a shared helper import from session/git's test file, which is
+// package-private to session/git) — this test only needs a minimal on-disk repo,
+// not the fuller clone/branch fixtures ops_test.go uses.
+//
+// Uses go-git directly rather than shelling out — see
+// the `prefer-go-git-over-subshells` skill.
+func addCommitForDiffHashTest(t *testing.T, repo *gogit.Repository, path, message string) string {
 	t.Helper()
-	cmd := safeexec.CommandContext(context.Background(), "git", args...)
-	cmd.Dir = dir
-	out, err := cmd.CombinedOutput()
-	require.NoError(t, err, "git %v failed: %s", args, out)
-	return strings.TrimSpace(string(out))
+	wt, err := repo.Worktree()
+	require.NoError(t, err)
+	_, err = wt.Add(path)
+	require.NoError(t, err)
+	hash, err := wt.Commit(message, &gogit.CommitOptions{
+		Author: &object.Signature{Name: "Test", Email: "test@example.com", When: time.Now()},
+	})
+	require.NoError(t, err)
+	return hash.String()
 }
 
 func setupDiffHashTestRepo(t *testing.T) (repoPath string, baseSHA string) {
 	t.Helper()
 	dir := t.TempDir()
-	runGitForDiffHashTest(t, dir, "init")
-	runGitForDiffHashTest(t, dir, "config", "user.email", "test@example.com")
-	runGitForDiffHashTest(t, dir, "config", "user.name", "Test")
+	repo, err := gogit.PlainInit(dir, false)
+	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "README.md"), []byte("init\n"), 0o644))
-	runGitForDiffHashTest(t, dir, "add", "README.md")
-	runGitForDiffHashTest(t, dir, "commit", "-m", "init")
-	return dir, runGitForDiffHashTest(t, dir, "rev-parse", "HEAD")
+	sha := addCommitForDiffHashTest(t, repo, "README.md", "init")
+	return dir, sha
 }
 
 // TestComputeCurrentDiffHash_should_returnNonEmptyHash_When_CompletedWorkSessionHasValidCommitRange
@@ -44,6 +49,7 @@ func setupDiffHashTestRepo(t *testing.T) (repoPath string, baseSHA string) {
 // commit range must produce a non-empty DiffHash, computed via go-git
 // (git.DiffHashBetween), not a git subshell.
 func TestComputeCurrentDiffHash_should_returnNonEmptyHash_When_CompletedWorkSessionHasValidCommitRange(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := createTestEntRepository(t)
 	defer cleanup()
 	storage, err := NewStorageWithRepository(repo)
@@ -52,9 +58,9 @@ func TestComputeCurrentDiffHash_should_returnNonEmptyHash_When_CompletedWorkSess
 
 	repoPath, baseSHA := setupDiffHashTestRepo(t)
 	require.NoError(t, os.WriteFile(filepath.Join(repoPath, "foo.go"), []byte("package foo\n"), 0o644))
-	runGitForDiffHashTest(t, repoPath, "add", "foo.go")
-	runGitForDiffHashTest(t, repoPath, "commit", "-m", "add foo.go")
-	headSHA := runGitForDiffHashTest(t, repoPath, "rev-parse", "HEAD")
+	gitRepo, err := gitutil.OpenRepo(repoPath)
+	require.NoError(t, err)
+	headSHA := addCommitForDiffHashTest(t, gitRepo, "foo.go", "add foo.go")
 
 	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{Title: "diffhash item", RepoPath: repoPath})
 	require.NoError(t, err)
@@ -73,6 +79,7 @@ func TestComputeCurrentDiffHash_should_returnNonEmptyHash_When_CompletedWorkSess
 // the best-effort fallback: no completed work session at all must return "" rather than
 // erroring or panicking, so it never blocks the review-verdict write it's attached to.
 func TestComputeCurrentDiffHash_should_returnEmptyString_When_NoCompletedWorkSession(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := createTestEntRepository(t)
 	defer cleanup()
 	storage, err := NewStorageWithRepository(repo)
@@ -92,6 +99,7 @@ func TestComputeCurrentDiffHash_should_returnEmptyString_When_NoCompletedWorkSes
 // GetRecentReviewVerdictSummaries — IsFlakyVerdictFlipFlop reads it straight off this
 // query's result with no separate lookup.
 func TestGetRecentReviewVerdictSummaries_should_roundTripDiffHash_When_VerdictSaved(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := createTestEntRepository(t)
 	defer cleanup()
 	storage, err := NewStorageWithRepository(repo)

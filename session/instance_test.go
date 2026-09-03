@@ -1,7 +1,9 @@
 package session
 
 import (
+	"errors"
 	"github.com/tstapler/stapler-squad/session/git"
+	"github.com/tstapler/stapler-squad/session/tymux"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,6 +12,7 @@ import (
 )
 
 func TestFromInstanceDataWithMissingWorktree(t *testing.T) {
+	t.Parallel()
 	// Create a temporary directory to simulate a worktree path
 	tempDir, err := os.MkdirTemp("", "stapler-squad-test-*")
 	if err != nil {
@@ -108,6 +111,7 @@ func checkInstanceStatus(t *testing.T, instance *Instance, worktreePath string, 
 }
 
 func TestStatusEnumValues(t *testing.T) {
+	t.Parallel()
 	// Test that all status values match the new 5-state model:
 	// Creating=0, Active=1, Paused=2, Stopped=3, Hibernated=4
 	tests := []struct {
@@ -141,6 +145,7 @@ func TestStatusEnumValues(t *testing.T) {
 }
 
 func TestTildeExpansionInNewInstance(t *testing.T) {
+	t.Parallel()
 	// Get home directory for comparison
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
@@ -175,6 +180,7 @@ func TestTildeExpansionInNewInstance(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			instance, err := NewInstance(InstanceOptions{
 				Title:   "Test Session",
 				Path:    tt.inputPath,
@@ -208,6 +214,7 @@ func TestTildeExpansionInNewInstance(t *testing.T) {
 }
 
 func TestMigrationOfCorruptedPaths(t *testing.T) {
+	t.Parallel()
 	// Get home directory for comparison
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
@@ -242,6 +249,7 @@ func TestMigrationOfCorruptedPaths(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			// Create instance data with potentially corrupted path
 			data := InstanceData{
 				Title:   "Test Session",
@@ -281,6 +289,7 @@ func TestMigrationOfCorruptedPaths(t *testing.T) {
 }
 
 func TestNewInstance_PopulatesEnvVars_WhenPassedInOptions(t *testing.T) {
+	t.Parallel()
 	opts := InstanceOptions{
 		Title:       "test",
 		Path:        t.TempDir(),
@@ -297,6 +306,7 @@ func TestNewInstance_PopulatesEnvVars_WhenPassedInOptions(t *testing.T) {
 }
 
 func TestNewInstance_PopulatesCLIFlags_WhenPassedInOptions(t *testing.T) {
+	t.Parallel()
 	opts := InstanceOptions{
 		Title:       "test",
 		Path:        t.TempDir(),
@@ -313,6 +323,7 @@ func TestNewInstance_PopulatesCLIFlags_WhenPassedInOptions(t *testing.T) {
 }
 
 func TestNewInstance_should_PreserveExtraArgsExactly_When_OptionsIncludeExtraArgs(t *testing.T) {
+	t.Parallel()
 	opts := InstanceOptions{
 		Title:       "test",
 		Path:        t.TempDir(),
@@ -335,6 +346,7 @@ func TestNewInstance_should_PreserveExtraArgsExactly_When_OptionsIncludeExtraArg
 }
 
 func TestNewInstance_should_LeaveExtraArgsNil_When_OptionsOmitExtraArgs(t *testing.T) {
+	t.Parallel()
 	opts := InstanceOptions{
 		Title:       "test",
 		Path:        t.TempDir(),
@@ -359,6 +371,7 @@ func TestNewInstance_should_LeaveExtraArgsNil_When_OptionsOmitExtraArgs(t *testi
 // hasLifecycleListeners in instance_controller.go) — this test verifies the
 // ordering that still applies for instances that DO have a listener.
 func TestDestroy_should_CaptureDiffStatsBeforeCleanupWorktree_When_UpdateDiffStatsRunsFirst(t *testing.T) {
+	t.Parallel()
 	repoDir := setupTestRepository(t)
 
 	wt, _, err := git.NewGitWorktree(repoDir, "diff-capture-test")
@@ -405,6 +418,7 @@ func TestDestroy_should_CaptureDiffStatsBeforeCleanupWorktree_When_UpdateDiffSta
 // SessionSummaryGenerator was never wired) must not pay for the git-diff
 // subprocess on every Destroy() — nothing would consume the result anyway.
 func TestDestroy_should_SkipDiffStatsCapture_When_NoLifecycleListenerRegistered(t *testing.T) {
+	t.Parallel()
 	repoDir := setupTestRepository(t)
 
 	wt, _, err := git.NewGitWorktree(repoDir, "diff-skip-test")
@@ -434,6 +448,115 @@ func TestDestroy_should_SkipDiffStatsCapture_When_NoLifecycleListenerRegistered(
 	}
 }
 
+// TestInstance_UpdateDiffStats_should_SetHasCommitsAhead_When_BranchHasNewCommits
+// covers AC6's cached-signal path: UpdateDiffStats computes HasCommitsAhead
+// alongside the diff stats (both outside the lock), so GetHasCommitsAhead can
+// answer synchronously afterward. Uses setupTestGitRepo (not setupTestRepository)
+// because it fixes the repo's default branch at "main" — the same bounceMainBranch
+// constant UpdateDiffStats passes to HasCommitsAheadOfMain — so the assertion
+// actually exercises the ahead-count computation rather than HasCommitsAheadOfMain's
+// fail-open default (which would also return true if "main" didn't resolve).
+func TestInstance_UpdateDiffStats_should_SetHasCommitsAhead_When_BranchHasNewCommits(t *testing.T) {
+	t.Parallel()
+	repoDir := setupTestGitRepo(t)
+
+	wt, _, err := git.NewGitWorktree(repoDir, "has-commits-ahead-test")
+	if err != nil {
+		t.Fatalf("NewGitWorktree: %v", err)
+	}
+	if err := wt.Setup(); err != nil {
+		t.Fatalf("wt.Setup(): %v", err)
+	}
+
+	// Add a real commit on the worktree's branch so it's genuinely ahead of main,
+	// not just dirty — HasCommitsAheadOfMain counts commits, not working-tree diffs.
+	if err := os.WriteFile(filepath.Join(wt.GetWorktreePath(), "new-file.txt"), []byte("hello\n"), 0644); err != nil {
+		t.Fatalf("failed to write new file: %v", err)
+	}
+	if err := wt.CommitChanges("Add new-file.txt"); err != nil {
+		t.Fatalf("CommitChanges(): %v", err)
+	}
+
+	inst := &Instance{Title: "has-commits-ahead-test", UUID: "sess-has-commits-ahead", Status: Ready}
+	inst.SetGitWorktree(wt) // also sets started=true
+
+	if err := inst.UpdateDiffStats(); err != nil {
+		t.Fatalf("UpdateDiffStats(): %v", err)
+	}
+
+	if got := inst.GetHasCommitsAhead(); !got {
+		t.Fatalf("expected GetHasCommitsAhead() to be true after committing on top of main, got %v", got)
+	}
+}
+
+// TestInstance_GetHasCommitsAhead_should_ReturnFalse_When_NoWorktree covers a
+// directory session (no git worktree, per Instance.HasGitWorktree/gitManager) —
+// AC6's cached signal has no meaningful "ahead of base" concept there, the same
+// scoping DraftPullRequest already limits itself to worktree-backed instances, so
+// it must stay at its false zero value through a real UpdateDiffStats pass.
+func TestInstance_GetHasCommitsAhead_should_ReturnFalse_When_NoWorktree(t *testing.T) {
+	t.Parallel()
+	inst := &Instance{Title: "dir-session-no-worktree-test", UUID: "sess-dir-no-worktree", Status: Ready, Path: t.TempDir()}
+	inst.started.Store(true)
+
+	if err := inst.UpdateDiffStats(); err != nil {
+		t.Fatalf("UpdateDiffStats(): %v", err)
+	}
+
+	if got := inst.GetHasCommitsAhead(); got {
+		t.Fatalf("expected GetHasCommitsAhead() to remain false for a directory session with no worktree, got %v", got)
+	}
+}
+
+// TestInstance_GetBaseCommitSHA_should_ReturnWorktreeBaseSHA_When_WorktreeModeSession
+// covers GetBaseCommitSHA's worktree-mode branch (session/instance_worktree.go):
+// with a worktree set via SetGitWorktree, it must delegate to
+// GitWorktreeManager.GetBaseCommitSHA() rather than the directory-mode
+// GetDirBaseSHA() fallback. Uses NewGitWorktreeFromStorage (plain struct
+// construction, no real git repo needed) since this only exercises the
+// delegation, not actual git plumbing.
+func TestInstance_GetBaseCommitSHA_should_ReturnWorktreeBaseSHA_When_WorktreeModeSession(t *testing.T) {
+	t.Parallel()
+	const wantSHA = "abc123worktreebase"
+	wt := git.NewGitWorktreeFromStorage("/fake/repo", "/fake/worktree", "worktree-base-sha-test", "feature-branch", wantSHA)
+
+	inst := &Instance{Title: "worktree-base-sha-test", UUID: "sess-worktree-base-sha"}
+	inst.SetGitWorktree(wt) // also sets started=true
+
+	if got := inst.GetBaseCommitSHA(); got != wantSHA {
+		t.Fatalf("GetBaseCommitSHA() = %q, want %q (worktree mode)", got, wantSHA)
+	}
+}
+
+// TestInstance_GetBaseCommitSHA_should_ReturnDirBaseSHA_When_DirectoryModeSession
+// covers the directory-mode fallback a prior review found untested: no worktree
+// set, only SetDirBaseSHA — GetBaseCommitSHA must fall through to
+// GitWorktreeManager.GetDirBaseSHA() rather than returning "" just because
+// HasWorktree() is false.
+func TestInstance_GetBaseCommitSHA_should_ReturnDirBaseSHA_When_DirectoryModeSession(t *testing.T) {
+	t.Parallel()
+	const wantSHA = "def456dirbase"
+	inst := &Instance{Title: "dir-base-sha-test", UUID: "sess-dir-base-sha", Path: t.TempDir()}
+	inst.SetDirBaseSHA(wantSHA)
+
+	if got := inst.GetBaseCommitSHA(); got != wantSHA {
+		t.Fatalf("GetBaseCommitSHA() = %q, want %q (directory mode)", got, wantSHA)
+	}
+}
+
+// TestInstance_GetBaseCommitSHA_should_ReturnEmptyString_When_NeitherWorktreeNorDirBaseSet
+// covers the "not yet resolved" case named in GetBaseCommitSHA's doc comment: no
+// worktree and no dir base SHA set at all, so both delegate paths' zero values
+// should surface as "", not a panic or a placeholder.
+func TestInstance_GetBaseCommitSHA_should_ReturnEmptyString_When_NeitherWorktreeNorDirBaseSet(t *testing.T) {
+	t.Parallel()
+	inst := &Instance{Title: "no-base-sha-test", UUID: "sess-no-base-sha"}
+
+	if got := inst.GetBaseCommitSHA(); got != "" {
+		t.Fatalf("GetBaseCommitSHA() = %q, want empty string when neither worktree nor dir base SHA is set", got)
+	}
+}
+
 // Destroy_should_FireEventStoppedWithEmptyDiff_When_InstanceNeverStarted verifies
 // Task 1.1.1a's confirmed-correct-behavior note: Destroy() on an instance that never
 // reached a state where a worktree/diff would exist still fires EventStopped
@@ -442,6 +565,7 @@ func TestDestroy_should_SkipDiffStatsCapture_When_NoLifecycleListenerRegistered(
 // GetDiffStats() correctly returns an empty snapshot rather than an error — an
 // accurate "this session never did anything," not a missed capture.
 func TestDestroy_should_FireEventStoppedWithEmptyDiff_When_InstanceNeverStarted(t *testing.T) {
+	t.Parallel()
 	inst := &Instance{Title: "never-started-test", UUID: "sess-never-started"}
 
 	var gotEvent LifecycleEvent
@@ -472,6 +596,7 @@ func TestDestroy_should_FireEventStoppedWithEmptyDiff_When_InstanceNeverStarted(
 // checklist): Instance.Note set via SetNote must survive ToInstanceData() ->
 // FromInstanceData() unchanged.
 func TestInstance_Note_RoundTripsThroughSerialization(t *testing.T) {
+	t.Parallel()
 	inst := &Instance{
 		Title:     "note-round-trip-test",
 		UUID:      "sess-note-round-trip",
@@ -510,6 +635,7 @@ func TestInstance_Note_RoundTripsThroughSerialization(t *testing.T) {
 // always uses deferStart=true) comes back with Started()==true, so Step 6
 // skips it.
 func TestFromInstanceData_CrashedSession_StaysStartedTrue_NoAutoResume(t *testing.T) {
+	t.Parallel()
 	data := InstanceData{
 		Title:      "crashed-restore-test",
 		Path:       "/tmp/crashed-restore-test",
@@ -535,12 +661,48 @@ func TestFromInstanceData_CrashedSession_StaysStartedTrue_NoAutoResume(t *testin
 	}
 }
 
+// TestFromInstanceData_ArchivedStoppedSession_StaysStopped_NoAliveProbe is a
+// regression guard for the fork-pressure fix: an archived session's tmux pane
+// is already deliberately killed at archive time (archiveItemWorkSessions),
+// so fromInstanceData must not attempt to "recover" it back to Active via the
+// IsAlive()/PaneExitStatus() tmux subprocess probe every restored Stopped
+// session used to pay on every single LoadInstances() call. This pins the
+// observable postcondition (stays Stopped, Started()=true); the underlying
+// subprocess-avoidance isn't directly assertable here since fromInstanceData
+// always wires a real TmuxBackend with no injection point for a fake.
+func TestFromInstanceData_ArchivedStoppedSession_StaysStopped_NoAliveProbe(t *testing.T) {
+	t.Parallel()
+	archivedAt := time.Now()
+	data := InstanceData{
+		Title:      "archived-stopped-restore-test",
+		Path:       "/tmp/archived-stopped-restore-test",
+		Status:     Stopped,
+		Program:    "claude",
+		CreatedAt:  time.Now(),
+		UpdatedAt:  time.Now(),
+		ArchivedAt: &archivedAt,
+	}
+
+	instance, err := fromInstanceData(data, true /* deferStart, matches LoadInstances() */)
+	if err != nil {
+		t.Fatalf("fromInstanceData returned error: %v", err)
+	}
+
+	if instance.Status != Stopped {
+		t.Fatalf("expected Status=Stopped (archived sessions must never be revived to Active), got %v", instance.Status)
+	}
+	if !instance.Started() {
+		t.Fatal("expected Started()=true for a restored archived Stopped instance")
+	}
+}
+
 // TestFromInstanceData_RestoresAutoYesAndAutoApprove is a regression guard for a bug
 // found while adding AutoApprove: fromInstanceData's Instance{} literal never copied
 // AutoYes from the persisted InstanceData at all, silently losing it on every server
 // restart (LoadInstances always calls fromInstanceData). Fixed alongside wiring
 // AutoApprove through the same literal -- this pins both fields survive the round trip.
 func TestFromInstanceData_RestoresAutoYesAndAutoApprove(t *testing.T) {
+	t.Parallel()
 	data := InstanceData{
 		Title:       "auto-yes-approve-restore-test",
 		Path:        "/tmp/auto-yes-approve-restore-test",
@@ -562,5 +724,29 @@ func TestFromInstanceData_RestoresAutoYesAndAutoApprove(t *testing.T) {
 	}
 	if !instance.AutoApprove {
 		t.Error("expected AutoApprove=true restored from InstanceData, got false")
+	}
+}
+
+func TestLogPTYUnavailableIfUnexpected_should_SkipLogging_when_TymuxBackendUnsupported(t *testing.T) {
+	buf := captureLogInfo(t)
+
+	logPTYUnavailableIfUnexpected("cold-restored session: pty attach failed, controller and sendkeys unavailable",
+		"sess-1", tymux.ErrNotSupportedOnTymuxBackend)
+
+	if strings.Contains(buf.String(), "pty attach failed") {
+		t.Fatalf("expected no log output for ErrNotSupportedOnTymuxBackend, got: %s", buf.String())
+	}
+}
+
+func TestLogPTYUnavailableIfUnexpected_should_LogError_when_GenuinePTYFailure(t *testing.T) {
+	buf := captureLogInfo(t)
+	wantErr := errors.New("ptmx: device busy")
+
+	logPTYUnavailableIfUnexpected("new session: pty attach failed after retries, controller and sendkeys unavailable",
+		"sess-2", wantErr)
+
+	got := buf.String()
+	if !strings.Contains(got, "sess-2") || !strings.Contains(got, "device busy") {
+		t.Fatalf("expected ERROR log with session and err, got: %s", got)
 	}
 }

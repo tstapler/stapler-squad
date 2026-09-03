@@ -82,6 +82,7 @@ func TestCreateTestStorage_SecondConnectionSeesSameData(t *testing.T) {
 // AddInstance is returned unchanged by LoadInstances, i.e. it survives the
 // full storage round-trip through the Ent SQLite backend.
 func TestStorage_UUID_PersistedThroughAddAndLoad(t *testing.T) {
+	t.Parallel()
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 
@@ -108,9 +109,42 @@ func TestStorage_UUID_PersistedThroughAddAndLoad(t *testing.T) {
 		"UUID must survive AddInstance → LoadInstances round-trip")
 }
 
+// TestStorage_Backend_PersistedThroughAddAndLoad is the real-persistence
+// regression test for Epic 5.1: Instance.Backend must survive a round trip
+// through the actual ent-backed repository (EntRepository.Create/Update and
+// sessionToInstanceData), not just the in-process ToInstanceData/
+// FromInstanceData conversion — session/storage.go's SaveInstances/
+// LoadInstances is what a real process restart actually goes through.
+func TestStorage_Backend_PersistedThroughAddAndLoad(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+
+	inst := &Instance{
+		Title:     "backend-roundtrip",
+		Path:      "/tmp/test",
+		Status:    Paused,
+		Program:   "claude",
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+		Backend:   BackendTymux,
+	}
+	inst.started.Store(true)
+
+	require.NoError(t, storage.AddInstance(inst))
+
+	loaded, err := storage.LoadInstances()
+	require.NoError(t, err)
+	require.Len(t, loaded, 1)
+
+	assert.Equal(t, BackendTymux, loaded[0].Backend,
+		"Backend must survive AddInstance → LoadInstances round-trip through the ent repository")
+}
+
 // TestStorage_UUID_StableAcrossMultipleLoads verifies that the UUID returned by
 // LoadInstances is deterministic across repeated calls (no re-generation).
 func TestStorage_UUID_StableAcrossMultipleLoads(t *testing.T) {
+	t.Parallel()
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 
@@ -144,6 +178,7 @@ func TestStorage_UUID_StableAcrossMultipleLoads(t *testing.T) {
 // back by the caller (as happens in the startup background goroutine), and
 // the second LoadInstances should return the same UUID.
 func TestStorage_UUID_MigrationAssignsAndPersists(t *testing.T) {
+	t.Parallel()
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 
@@ -184,6 +219,7 @@ func TestStorage_UUID_MigrationAssignsAndPersists(t *testing.T) {
 // session by its UUID (the path used by WebSocket stream reconnections).
 // This is the specific lookup that was failing with "session not found" after restart.
 func TestReviewQueuePoller_FindInstanceByUUID(t *testing.T) {
+	t.Parallel()
 	queue := NewReviewQueue()
 	statusMgr := NewInstanceStatusManager()
 	poller := NewReviewQueuePoller(queue, statusMgr, nil)
@@ -206,6 +242,7 @@ func TestReviewQueuePoller_FindInstanceByUUID(t *testing.T) {
 // by CreateSession) makes the new session findable by UUID without replacing
 // pre-existing instances.
 func TestReviewQueuePoller_AddInstanceByUUID(t *testing.T) {
+	t.Parallel()
 	queue := NewReviewQueue()
 	statusMgr := NewInstanceStatusManager()
 	poller := NewReviewQueuePoller(queue, statusMgr, nil)
@@ -239,6 +276,7 @@ func TestReviewQueuePoller_AddInstanceByUUID(t *testing.T) {
 // is excluded from JSON serialization to reduce state file size.
 // This is the fix for BUG-003: Large State File Size.
 func TestDiffStatsDataSerializationExcludesContent(t *testing.T) {
+	t.Parallel()
 	// Create DiffStatsData with content
 	stats := DiffStatsData{
 		Added:   10,
@@ -269,6 +307,7 @@ func TestDiffStatsDataSerializationExcludesContent(t *testing.T) {
 // diff_stats.content field can still be loaded correctly.
 // The content field will be silently ignored during deserialization.
 func TestDiffStatsDataBackwardCompatibility(t *testing.T) {
+	t.Parallel()
 	// Simulate old state file JSON with content field
 	oldJSON := `{
 		"added": 10,
@@ -292,6 +331,7 @@ func TestDiffStatsDataBackwardCompatibility(t *testing.T) {
 // TestInstanceDataSaveExcludesDiffContent verifies that when an Instance
 // is converted to InstanceData for serialization, the diff content is excluded.
 func TestInstanceDataSaveExcludesDiffContent(t *testing.T) {
+	t.Parallel()
 	// Create InstanceData with diff stats including content
 	data := InstanceData{
 		Title: "test-session",
@@ -329,6 +369,7 @@ func TestInstanceDataSaveExcludesDiffContent(t *testing.T) {
 // TestInstanceDataLoadWithDiffContent verifies backward compatibility when
 // loading old state files that contain diff_stats.content.
 func TestInstanceDataLoadWithDiffContent(t *testing.T) {
+	t.Parallel()
 	// Simulate old state file JSON with diff content
 	oldJSON := `{
 		"title": "legacy-session",
@@ -393,6 +434,7 @@ func newTestInstance(title string) *Instance {
 // UpdateInstanceTimestampsOnly persists the terminal timestamps and optionally
 // LastViewed to the underlying repository.
 func TestStorage_UpdateInstanceTimestampsOnly(t *testing.T) {
+	t.Parallel()
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 
@@ -419,6 +461,7 @@ func TestStorage_UpdateInstanceTimestampsOnly(t *testing.T) {
 // TestStorage_UpdateInstanceTimestampsOnly_ZeroLastViewed verifies that
 // passing a zero LastViewed does NOT overwrite the existing value.
 func TestStorage_UpdateInstanceTimestampsOnly_ZeroLastViewed(t *testing.T) {
+	t.Parallel()
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 
@@ -443,6 +486,7 @@ func TestStorage_UpdateInstanceTimestampsOnly_ZeroLastViewed(t *testing.T) {
 // TestStorage_UpdateInstanceLastAddedToQueue verifies the partial-field update
 // for LastAddedToQueue.
 func TestStorage_UpdateInstanceLastAddedToQueue(t *testing.T) {
+	t.Parallel()
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 
@@ -469,6 +513,7 @@ func TestStorage_UpdateInstanceLastAddedToQueue(t *testing.T) {
 // level). Persistence will be enabled once the Ent schema is extended with
 // this column.
 func TestStorage_UpdateInstanceLastUserResponse(t *testing.T) {
+	t.Parallel()
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 
@@ -489,6 +534,7 @@ func TestStorage_UpdateInstanceLastUserResponse(t *testing.T) {
 // TestStorage_UpdateInstanceAcknowledged verifies that UpdateInstanceAcknowledged
 // sets LastAcknowledged to a non-zero time.
 func TestStorage_UpdateInstanceAcknowledged(t *testing.T) {
+	t.Parallel()
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 
@@ -523,6 +569,7 @@ func TestStorage_UpdateInstanceAcknowledged(t *testing.T) {
 // level). Persistence will be enabled once the Ent schema is extended with
 // this column.
 func TestStorage_UpdateInstanceProcessingGrace(t *testing.T) {
+	t.Parallel()
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 
@@ -543,6 +590,7 @@ func TestStorage_UpdateInstanceProcessingGrace(t *testing.T) {
 // TestStorage_UpdateInstance verifies that UpdateInstance replaces all fields
 // (not a partial update) for an existing instance.
 func TestStorage_UpdateInstance(t *testing.T) {
+	t.Parallel()
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 
@@ -556,16 +604,20 @@ func TestStorage_UpdateInstance(t *testing.T) {
 	err := storage.UpdateInstance(inst)
 	require.NoError(t, err)
 
-	rows, err := storage.ListInstanceData()
+	// ListInstanceData uses LoadMinimal, which intentionally skips the Tags
+	// edge (see LoadOptions.LoadTags doc comment) — read back via LoadInstances
+	// instead, which eager-loads tags, to verify persistence.
+	instances, err := storage.LoadInstances()
 	require.NoError(t, err)
-	require.Len(t, rows, 1)
-	assert.Equal(t, []string{"alpha", "beta"}, rows[0].Tags, "Tags should be persisted by UpdateInstance")
-	assert.Equal(t, "refactor-tests", rows[0].Category, "Category should be persisted by UpdateInstance")
+	require.Len(t, instances, 1)
+	assert.Equal(t, []string{"alpha", "beta"}, instances[0].Tags, "Tags should be persisted by UpdateInstance")
+	assert.Equal(t, "refactor-tests", instances[0].Category, "Category should be persisted by UpdateInstance")
 }
 
 // TestStorage_ListInstanceData verifies that ListInstanceData returns raw
 // InstanceData entries without constructing Instance objects.
 func TestStorage_ListInstanceData(t *testing.T) {
+	t.Parallel()
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 
@@ -586,9 +638,92 @@ func TestStorage_ListInstanceData(t *testing.T) {
 	assert.True(t, titles["list-session-2"], "list-session-2 should be present")
 }
 
+// TestStorage_ArchiveInstanceDataByID_should_setArchivedAt_When_SessionExistsInStorageOnly
+// is the regression test for the fix in server/services/session_service.go's
+// ArchiveSessionByUUID: a session that is not resident in the live in-memory
+// ReviewQueuePoller.instances list (e.g. after a server restart, before this fix existed)
+// must still be archivable via a direct storage read-modify-write.
+func TestStorage_ArchiveInstanceDataByID_should_setArchivedAt_When_SessionExistsInStorageOnly(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+
+	inst := newTestInstance("storage-only-session")
+	require.NoError(t, storage.AddInstance(inst))
+
+	archived, err := storage.ArchiveInstanceDataByID("storage-only-session", time.Now())
+	require.NoError(t, err)
+	assert.True(t, archived, "expected the session to be newly archived")
+
+	data, err := storage.FindInstanceDataByID("storage-only-session")
+	require.NoError(t, err)
+	require.NotNil(t, data.ArchivedAt, "ArchivedAt should be set after archiving")
+	assert.Equal(t, Stopped, data.Status, "Status should transition to Stopped")
+}
+
+// TestStorage_ArchiveInstanceDataByID_should_preserveOtherFields_When_Archiving guards the
+// doc comment's claim that this is a read-modify-write on the full row, not a partial
+// struct: a future refactor that built a bare InstanceData{ID, ArchivedAt, Status} instead
+// of mutating a fresh FindInstanceDataByID read would pass every other test here (they only
+// assert ArchivedAt/Status) while silently clobbering every other field via
+// EntRepository.Update's guarded-optional-field pattern (empty/zero fields get cleared).
+func TestStorage_ArchiveInstanceDataByID_should_preserveOtherFields_When_Archiving(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+
+	inst := newTestInstance("archive-preserves-fields")
+	inst.Note = "do not clobber me"
+	inst.Category = "preserve-category"
+	require.NoError(t, storage.AddInstance(inst))
+
+	archived, err := storage.ArchiveInstanceDataByID("archive-preserves-fields", time.Now())
+	require.NoError(t, err)
+	require.True(t, archived)
+
+	data, err := storage.FindInstanceDataByID("archive-preserves-fields")
+	require.NoError(t, err)
+	assert.Equal(t, "do not clobber me", data.Note, "archiving must not clobber unrelated fields")
+	assert.Equal(t, "preserve-category", data.Category, "archiving must not clobber unrelated fields")
+}
+
+// TestStorage_ArchiveInstanceDataByID_should_beIdempotent_When_AlreadyArchived matches
+// SetArchivedAtIfNilAndStop's CAS semantics: a second archive call on an already-archived
+// session is a no-op, not an error, and does not clobber the original ArchivedAt.
+func TestStorage_ArchiveInstanceDataByID_should_beIdempotent_When_AlreadyArchived(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+
+	inst := newTestInstance("already-archived-session")
+	require.NoError(t, storage.AddInstance(inst))
+
+	first, err := storage.ArchiveInstanceDataByID("already-archived-session", time.Now())
+	require.NoError(t, err)
+	require.True(t, first)
+
+	second, err := storage.ArchiveInstanceDataByID("already-archived-session", time.Now())
+	require.NoError(t, err)
+	assert.False(t, second, "a second archive call should be a no-op")
+}
+
+// TestStorage_ArchiveInstanceDataByID_should_returnFalse_When_SessionNotFound matches
+// ArchiveSessionByUUID's existing "unconditional sweep call" contract: archiving an
+// unknown ID is not an error.
+func TestStorage_ArchiveInstanceDataByID_should_returnFalse_When_SessionNotFound(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+
+	archived, err := storage.ArchiveInstanceDataByID("no-such-session", time.Now())
+	require.NoError(t, err)
+	assert.False(t, archived)
+}
+
 // TestStorage_DeleteAllInstances verifies that DeleteAllInstances removes every
 // stored instance, leaving an empty repository.
 func TestStorage_DeleteAllInstances(t *testing.T) {
+	t.Parallel()
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 
@@ -610,6 +745,7 @@ func TestStorage_DeleteAllInstances(t *testing.T) {
 // TestStorage_SaveInstancesSync verifies that SaveInstancesSync persists
 // mutated instance state to the repository synchronously.
 func TestStorage_SaveInstancesSync(t *testing.T) {
+	t.Parallel()
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 
@@ -622,11 +758,14 @@ func TestStorage_SaveInstancesSync(t *testing.T) {
 	err := storage.SaveInstancesSync([]*Instance{inst})
 	require.NoError(t, err)
 
-	rows, err := storage.ListInstanceData()
+	// ListInstanceData uses LoadMinimal, which intentionally skips the Tags
+	// edge (see LoadOptions.LoadTags doc comment) — read back via LoadInstances
+	// instead, which eager-loads tags, to verify persistence.
+	instances, err := storage.LoadInstances()
 	require.NoError(t, err)
-	require.Len(t, rows, 1)
-	assert.Equal(t, []string{"sync-tag"}, rows[0].Tags, "Tags should be persisted by SaveInstancesSync")
-	assert.Equal(t, "sync-category", rows[0].Category, "Category should be persisted by SaveInstancesSync")
+	require.Len(t, instances, 1)
+	assert.Equal(t, []string{"sync-tag"}, instances[0].Tags, "Tags should be persisted by SaveInstancesSync")
+	assert.Equal(t, "sync-category", instances[0].Category, "Category should be persisted by SaveInstancesSync")
 }
 
 // TestSaveInstances_WorktreeDataQueryableImmediately is a regression test for the
@@ -639,6 +778,7 @@ func TestStorage_SaveInstancesSync(t *testing.T) {
 // started, worktree-backed instance must be immediately queryable by UUID with no
 // delay and no intervening periodic save.
 func TestSaveInstances_WorktreeDataQueryableImmediately(t *testing.T) {
+	t.Parallel()
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 
@@ -661,6 +801,7 @@ func TestSaveInstances_WorktreeDataQueryableImmediately(t *testing.T) {
 // any instance where Started() is false, so a caller cannot rely on a freshly
 // constructed (but not yet started) Instance being persisted.
 func TestSaveInstances_SkipsNotYetStartedInstance(t *testing.T) {
+	t.Parallel()
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 
@@ -679,6 +820,7 @@ func TestSaveInstances_SkipsNotYetStartedInstance(t *testing.T) {
 // TestDiffStatsDataRoundTrip verifies that save/load cycle preserves metadata
 // but excludes content (the desired behavior for BUG-003 fix).
 func TestDiffStatsDataRoundTrip(t *testing.T) {
+	t.Parallel()
 	// Original data with content
 	original := DiffStatsData{
 		Added:   42,
@@ -707,6 +849,7 @@ func TestDiffStatsDataRoundTrip(t *testing.T) {
 // verifies the happy path of the shared primary-write path used by both
 // report_pr_created (Epic 3.1) and the reconciliation backstop (Epic 3.2).
 func TestSetBacklogItemPRAndTransition_should_TransitionAndPersistPR_When_ItemInReview(t *testing.T) {
+	t.Parallel()
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -730,6 +873,7 @@ func TestSetBacklogItemPRAndTransition_should_TransitionAndPersistPR_When_ItemIn
 // TestSetBacklogItemPRAndTransition_should_NoOp_When_AlreadyPRPendingSamePR
 // verifies the idempotency contract directly at the storage layer.
 func TestSetBacklogItemPRAndTransition_should_NoOp_When_AlreadyPRPendingSamePR(t *testing.T) {
+	t.Parallel()
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -782,6 +926,7 @@ func TestSetBacklogItemPRAndTransition_should_ReturnError_When_StorageWriteFails
 // verifies the invalid-starting-status guard directly at the storage layer:
 // only "review" or "pr_pending" are ever accepted, regardless of caller.
 func TestSetBacklogItemPRAndTransition_should_RejectPrecondition_When_ObservedStatusInvalid(t *testing.T) {
+	t.Parallel()
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -807,6 +952,7 @@ func TestSetBacklogItemPRAndTransition_should_RejectPrecondition_When_ObservedSt
 // exercises: a caller's observed snapshot must fail the write once it's
 // stale, even for an unrelated field change that only bumped updated_at.
 func TestSetBacklogItemPRAndTransition_should_RejectStaleObserved_When_ConcurrentWriteWon(t *testing.T) {
+	t.Parallel()
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -832,4 +978,66 @@ func TestSetBacklogItemPRAndTransition_should_RejectStaleObserved_When_Concurren
 	require.NoError(t, err)
 	assert.Equal(t, string(BacklogStatusReview), fetched.Status, "a stale observed snapshot must never win the CAS")
 	assert.Equal(t, 0, fetched.PrNumber)
+}
+
+// TestUpdateInstanceIfEpoch_should_ApplyWrite_When_EpochMatches covers Task
+// 1.2.4a's happy path: a freshly-added row's creation_epoch defaults to 0, so a
+// caller presenting capturedEpoch=0 wins the conditional UPDATE.
+func TestUpdateInstanceIfEpoch_should_ApplyWrite_When_EpochMatches(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+
+	inst := &Instance{
+		Title:     "epoch-match",
+		UUID:      "uuid-epoch-match",
+		Path:      "/tmp/test",
+		Status:    Creating,
+		Program:   "claude",
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	}
+	require.NoError(t, storage.AddInstance(inst))
+
+	applied, err := storage.UpdateInstanceIfEpoch(context.Background(), "uuid-epoch-match", 0, Active, "")
+	require.NoError(t, err)
+	assert.True(t, applied)
+
+	loaded, err := storage.LoadInstances()
+	require.NoError(t, err)
+	require.Len(t, loaded, 1)
+	assert.Equal(t, Active, loaded[0].Status, "the persisted row must now read Active")
+}
+
+// TestUpdateInstanceIfEpoch_should_ReturnFalse_When_EpochIsStale covers Task
+// 1.2.4a's fencing guarantee: a captured epoch that no longer matches the
+// persisted row's creation_epoch (already bumped past it by a cancel/retry) is
+// rejected and the row is left unchanged.
+func TestUpdateInstanceIfEpoch_should_ReturnFalse_When_EpochIsStale(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+
+	inst := &Instance{
+		Title:     "epoch-stale",
+		UUID:      "uuid-epoch-stale",
+		Path:      "/tmp/test",
+		Status:    Creating,
+		Program:   "claude",
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	}
+	require.NoError(t, storage.AddInstance(inst))
+
+	// The persisted row's creation_epoch defaults to 0; present a stale
+	// captured value of 2 (as if a cancel had already bumped it past this
+	// caller's captured value).
+	applied, err := storage.UpdateInstanceIfEpoch(context.Background(), "uuid-epoch-stale", 2, Active, "")
+	require.NoError(t, err)
+	assert.False(t, applied)
+
+	loaded, err := storage.LoadInstances()
+	require.NoError(t, err)
+	require.Len(t, loaded, 1)
+	assert.Equal(t, Creating, loaded[0].Status, "the persisted row must be unchanged when epochs mismatch")
 }

@@ -16,6 +16,7 @@ func (f *fakeAliveChecker) IsAlive(pid int32, expectedCreateTimeMs int64) bool {
 }
 
 func TestKillExternalOriginalProcess_ReturnsAlreadyGone_When_CheckerReportsNotAlive(t *testing.T) {
+	t.Parallel()
 	checker := &fakeAliveChecker{alive: false}
 
 	outcome := KillExternalOriginalProcess(checker, 99999, 12345, "some-tmux-session")
@@ -29,6 +30,7 @@ func TestKillExternalOriginalProcess_ReturnsAlreadyGone_When_CheckerReportsNotAl
 }
 
 func TestKillExternalOriginalProcess_ReturnsFailed_When_TmuxSessionDoesNotExist(t *testing.T) {
+	t.Parallel()
 	checker := &fakeAliveChecker{alive: true}
 
 	// A tmux session name that can't possibly exist -- KillExternalSession on

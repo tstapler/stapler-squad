@@ -178,6 +178,7 @@ func TestRebuildSnapshot_should_publishPartialSet_When_fileCountCapExceeded(t *t
 // the cutover to the atomic detectorSnapshot: the built-in claude
 // "esc to interrupt" pattern still resolves to StatusExecuting.
 func TestDetectForProgram_should_matchBuiltinPattern_When_noPluginsLoaded(t *testing.T) {
+	t.Parallel()
 	sd := NewStatusDetector()
 	status := sd.DetectForProgram([]byte("esc to interrupt"), "claude")
 	if status != StatusExecuting {
@@ -190,6 +191,7 @@ func TestDetectForProgram_should_matchBuiltinPattern_When_noPluginsLoaded(t *tes
 // provenance value, and that mutating the returned map cannot affect the
 // live snapshot (defensive copy).
 func TestDetectorProvenance_should_returnBuiltinsOnlyMap_When_noPluginsLoaded(t *testing.T) {
+	t.Parallel()
 	prov := DetectorProvenance()
 
 	wantNames := []string{"claude", "gemini", "aider", "opencode", "agy"}
@@ -224,6 +226,7 @@ func TestDetectorProvenance_should_returnBuiltinsOnlyMap_When_noPluginsLoaded(t 
 // direct unit test of the accessor DetectForProgram now uses in place of the
 // old package-level built-in-detectors map index.
 func TestLookupBinaryDetector_should_findBuiltins_When_noPluginsLoaded(t *testing.T) {
+	t.Parallel()
 	for _, name := range []string{"claude", "gemini", "aider", "opencode", "agy"} {
 		if _, ok := lookupBinaryDetector(name); !ok {
 			t.Errorf("lookupBinaryDetector(%q) = _, false; want true", name)
@@ -238,6 +241,7 @@ func TestLookupBinaryDetector_should_findBuiltins_When_noPluginsLoaded(t *testin
 // direct unit test of the exported wrapper session.ClaudeController.Start
 // uses in place of the old unconditional NewStatusDetector() call.
 func TestDetectorForProgram_should_returnDetector_When_programRegistered(t *testing.T) {
+	t.Parallel()
 	sd, ok := ResolveDetectorForProgram("claude")
 	if !ok {
 		t.Fatal(`ResolveDetectorForProgram("claude") = _, false; want true`)
@@ -255,6 +259,7 @@ func TestDetectorForProgram_should_returnDetector_When_programRegistered(t *test
 // the fallback signal callers (ClaudeController.Start) depend on to know
 // when to construct NewStatusDetector() instead.
 func TestDetectorForProgram_should_returnMiss_When_programUnregistered(t *testing.T) {
+	t.Parallel()
 	if sd, ok := ResolveDetectorForProgram("not-a-real-binary"); ok || sd != nil {
 		t.Errorf(`ResolveDetectorForProgram("not-a-real-binary") = %v, %v; want nil, false`, sd, ok)
 	}
@@ -268,6 +273,7 @@ func TestDetectorForProgram_should_returnMiss_When_programUnregistered(t *testin
 // they'd be mutating the exact same shared object. Each call must return an
 // independent detector instance.
 func TestDetectorForProgram_should_returnIndependentDetector_When_calledTwice(t *testing.T) {
+	t.Parallel()
 	sd1, ok := ResolveDetectorForProgram("claude")
 	if !ok {
 		t.Fatal(`ResolveDetectorForProgram("claude") = _, false; want true`)
@@ -303,6 +309,7 @@ func TestDetectorForProgram_should_returnIndependentDetector_When_calledTwice(t 
 // entry for both shapes, falling back to the (formerly-identical, now-guaranteed
 // worse if this regresses) generic detector.
 func TestResolveDetectorForProgram_should_normalizeToBinaryName_When_programIsFullCommandOrPath(t *testing.T) {
+	t.Parallel()
 	cases := []string{
 		"claude",
 		"/usr/local/bin/claude",
@@ -325,6 +332,7 @@ func TestResolveDetectorForProgram_should_normalizeToBinaryName_When_programIsFu
 // TestProgramBinaryName_should_extractBareName_When_programHasArgsOrIsAbsolutePath
 // is a direct unit test of the normalization helper.
 func TestProgramBinaryName_should_extractBareName_When_programHasArgsOrIsAbsolutePath(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		program string
 		want    string
@@ -352,6 +360,7 @@ func TestProgramBinaryName_should_extractBareName_When_programHasArgsOrIsAbsolut
 // previously missing, plus an aggregate pattern count so any future drift
 // (in either direction) fails loudly instead of silently.
 func TestClaudeBuiltinDetector_should_matchGetDefaultPatterns_When_resolvedFromSnapshot(t *testing.T) {
+	t.Parallel()
 	sd, ok := ResolveDetectorForProgram("claude")
 	if !ok {
 		t.Fatal(`ResolveDetectorForProgram("claude") = _, false; want true`)
@@ -394,8 +403,9 @@ func TestClaudeBuiltinDetector_should_matchGetDefaultPatterns_When_resolvedFromS
 // whole snapshot if a name in reg.Names() somehow fails reg.Lookup (can't
 // happen via the public DetectorRegistry API today, but the nil-guard shape
 // in buildSnapshot/lookupBinaryDetector is exactly what NilAway flags as
-// required — see .claude/rules/interface-pollution-checklist.md).
+// required — see the `interface-pollution-checklist` skill).
 func TestBuildSnapshot_should_produceUsableSnapshot_When_givenDefaultRegistry(t *testing.T) {
+	t.Parallel()
 	snap := buildSnapshot(DefaultRegistry(), nil)
 	if len(snap.byBinary) != 5 {
 		t.Errorf("buildSnapshot(DefaultRegistry(), nil) produced %d detectors, want 5", len(snap.byBinary))

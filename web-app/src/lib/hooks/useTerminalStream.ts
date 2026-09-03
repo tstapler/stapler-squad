@@ -44,7 +44,20 @@ interface UseTerminalStreamOptions {
   scrollbackLines?: number; // Number of lines to request from scrollback
   onError?: (error: Error) => void;
   onScrollbackReceived?: (scrollback: string, metadata?: ScrollbackMetadata) => void; // Callback when scrollback is received
-  onOutput?: (output: string) => void; // Callback when new output is received (bypass React state)
+  /**
+   * Callback when new output is received (bypass React state). `resyncId`
+   * echoes CurrentPaneRequest.resync_id (Epic 3.1, AC2) when this output is
+   * the reply to a correlation-ID-tagged resync request; empty/undefined
+   * otherwise.
+   */
+  onOutput?: (output: string, resyncId?: string) => void;
+  /**
+   * Shared with useVisibilityResync.ts (Epic 3.1, Task 3.1.2.1) — forwarded
+   * to useTerminalFlowControl so both visibility- and resize-triggered
+   * resync requests register their resync_id here, letting either flow's
+   * stall watchdog be reset when a match arrives on ANY tracked request.
+   */
+  outstandingResyncIdsRef?: React.MutableRefObject<Map<string, number>>;
   autoConnect?: boolean; // If false, requires manual connect() call (default: true)
   initialCols?: number; // Initial terminal columns (prevents size mismatch on first load)
   initialRows?: number; // Initial terminal rows (prevents size mismatch on first load)
@@ -78,9 +91,17 @@ interface TerminalStreamResult {
   terminalState: TerminalState;
   isHardFailed: boolean;
   handleManualReconnect: () => void;
-  requestFullResync: (urgent?: boolean) => void;
+  requestFullResync: (urgent?: boolean, isVisibilityTriggered?: boolean) => string | undefined;
   markResyncComplete: () => void;
   markPaneResponseReceived: () => void;
+  /**
+   * Number of transports attached to this session's StreamHub (Epic 4.2,
+   * Story 4.2.1). undefined when unavailable — either no message carrying it
+   * has arrived yet, or this is a PathLegacyPerConnection session, which
+   * never reports it (see events.proto's TerminalOutput.connection_count doc
+   * comment for why that value must never be fabricated).
+   */
+  connectionCount: number | undefined;
 }
 
 export function useTerminalStream({
@@ -98,6 +119,7 @@ export function useTerminalStream({
   initialRows,
   onInputDropped,
   foreground = false,
+  outstandingResyncIdsRef,
 }: UseTerminalStreamOptions): TerminalStreamResult {
   // ---- Connection state ----
   const [isConnected, setIsConnected] = useState(false);
@@ -106,6 +128,10 @@ export function useTerminalStream({
   // Task 4.1.1 — Terminal state machine (R1.4)
   const [terminalState, setTerminalState] = useState<TerminalState>('DISCONNECTED');
   const [isHardFailed, setIsHardFailed] = useState(false);
+  // Epic 4.2, Story 4.2.1 — undefined until a PathHubOwned session's first
+  // connection_count-carrying message arrives; never fabricated for
+  // PathLegacyPerConnection sessions (proto field is absent there).
+  const [connectionCount, setConnectionCount] = useState<number | undefined>(undefined);
 
   const messageQueueRef = useRef<MessageQueue | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
@@ -222,6 +248,7 @@ export function useTerminalStream({
     pushMessageRef,
     isConnectedRef,
     onError,
+    outstandingResyncIdsRef,
   });
 
   const metrics = useTerminalMetrics({ onOutput });
@@ -235,6 +262,12 @@ export function useTerminalStream({
 
   // ---- Connect ----
   const connect = useCallback(async (overrideCols?: number, overrideRows?: number) => {
+    // Refuse to reconnect through a hard failure. The only sanctioned way back
+    // in is handleManualReconnect below, which clears isHardFailedRef.current
+    // to false *before* calling connect() — so this check never blocks Retry,
+    // only callers (resize handlers, visibility/focus fallbacks, stale mount
+    // effects) that invoke connect() directly without going through Retry.
+    if (isHardFailedRef.current) return;
     if (isConnectedRef.current || isConnectingRef.current || !sessionId) return;
     isConnectingRef.current = true;
     shouldReconnectRef.current = true;
@@ -377,8 +410,21 @@ export function useTerminalStream({
             }
 
             if (msg.data.case === "output") {
+              // Task 4.2.1c (Epic 4.2) — connection_count rides on TerminalOutput,
+              // including on side-channel messages the server sends with no `data`
+              // (server/services/connectrpc_websocket.go's sendConnectionCountUpdates).
+              // Only ever present for PathHubOwned sessions; undefined otherwise —
+              // never fabricated (plan.md Story 4.2.1 AC2).
+              if (msg.data.value.connectionCount !== undefined) {
+                setConnectionCount(msg.data.value.connectionCount);
+              }
+
               // Handle raw output
               const decodedData = msg.data.value.data;
+              if (decodedData.length === 0) {
+                // Connection-count-only side-channel message — nothing to render.
+                continue;
+              }
               const text = textDecoderRef.current.decode(decodedData, { stream: true });
 
               // Record message if recording is active
@@ -395,7 +441,7 @@ export function useTerminalStream({
 
               // Use callback if provided, otherwise batch via RAF
               if (onOutput) {
-                onOutput(text);
+                onOutput(text, msg.data.value.resyncId);
               } else {
                 metrics.scheduleOutputUpdate(text);
               }
@@ -433,6 +479,20 @@ export function useTerminalStream({
               const err = new Error(msg.data.value.message);
               setError(err);
               onError?.(err);
+              // design/ux.md Surface 2 — HUB_START_FAILED means the hub-owned
+              // path failed to start AND its server-side legacy fallback also
+              // failed (server/services/connectrpc_websocket.go's streamViaHub),
+              // so this connection has no working path at all. Reconnecting
+              // would hit the same failure, so skip the usual 5-attempt
+              // backoff-exhaustion path and surface TerminalOutput.tsx's
+              // existing hardFailedBanner immediately — the same treatment
+              // already given to non-retriable ws-close-codes below.
+              if (msg.data.value.code === "HUB_START_FAILED") {
+                shouldReconnectRef.current = false;
+                isHardFailedRef.current = true;
+                setIsHardFailed(true);
+                console.warn(`[reconnect] stream=terminal trigger=hub-start-failed, giving up`);
+              }
             }
           }
         } catch (err) {
@@ -464,6 +524,9 @@ export function useTerminalStream({
             isConnectingRef.current = false;
             setIsConnected(false);
             setTerminalState('DISCONNECTED');
+            // A stale count from the just-closed connection must not linger
+            // and imply this session still has extra viewers attached.
+            setConnectionCount(undefined);
             // Reset decoders so stale {stream:true} buffered state from a server-closed
             // connection does not corrupt the next connect() call.
             textDecoderRef.current = new TextDecoder();
@@ -648,5 +711,6 @@ export function useTerminalStream({
     requestFullResync: flowControl.requestFullResync,
     markResyncComplete: flowControl.markResyncComplete,
     markPaneResponseReceived: flowControl.markPaneResponseReceived,
+    connectionCount,
   };
 }

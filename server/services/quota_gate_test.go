@@ -57,6 +57,7 @@ func newTestQuotaGate(cfg config.QuotaConfig, store *fakeTokenStore, poller *moc
 // ---------------------------------------------------------------------------
 
 func TestRateLimitAggregate_should_ReportRecent_When_EventWithinWindow(t *testing.T) {
+	t.Parallel()
 	now := time.Now()
 	agg := RateLimitAggregate{}
 	agg.recordRateLimitEvent(now.Add(-10 * time.Minute))
@@ -70,6 +71,7 @@ func TestRateLimitAggregate_should_ReportRecent_When_EventWithinWindow(t *testin
 }
 
 func TestRateLimitAggregate_should_ReportNotRecent_When_NoEventRecorded(t *testing.T) {
+	t.Parallel()
 	agg := RateLimitAggregate{}
 	if agg.hasRecentRateLimitEvent(time.Now(), 30*time.Minute) {
 		t.Error("hasRecentRateLimitEvent = true, want false (no event ever recorded)")
@@ -81,6 +83,7 @@ func TestRateLimitAggregate_should_ReportNotRecent_When_NoEventRecorded(t *testi
 // ---------------------------------------------------------------------------
 
 func TestNewQuotaGate_should_ReturnZeroStateGate_When_Constructed(t *testing.T) {
+	t.Parallel()
 	store := &fakeTokenStore{}
 	poller := &mockInstancePoller{}
 	ctrl := &countingFeatureController{}
@@ -98,6 +101,7 @@ func TestNewQuotaGate_should_ReturnZeroStateGate_When_Constructed(t *testing.T) 
 // ---------------------------------------------------------------------------
 
 func TestReconcile_should_DisableBacklogImmediately_When_HardSignalActive(t *testing.T) {
+	t.Parallel()
 	store := &fakeTokenStore{}
 	poller := &mockInstancePoller{}
 	ctrl := &countingFeatureController{enabled: true}
@@ -119,6 +123,7 @@ func TestReconcile_should_DisableBacklogImmediately_When_HardSignalActive(t *tes
 }
 
 func TestReconcile_should_RequireConsecutiveTicksBeforePausingOrResuming_When_SoftThresholdCrossed(t *testing.T) {
+	t.Parallel()
 	store := &fakeTokenStore{results: nil} // no usage data; budget below drives PctRemaining via computeHeadroom
 	poller := &mockInstancePoller{}
 	ctrl := &countingFeatureController{enabled: true}
@@ -145,6 +150,7 @@ func TestReconcile_should_RequireConsecutiveTicksBeforePausingOrResuming_When_So
 }
 
 func TestReconcile_should_ResumeAfterConsecutiveTicksAboveMargin_When_PausedByQuota(t *testing.T) {
+	t.Parallel()
 	poller := &mockInstancePoller{}
 	ctrl := &countingFeatureController{enabled: false}
 	bus := events.NewEventBus(10)
@@ -175,6 +181,7 @@ func TestReconcile_should_ResumeAfterConsecutiveTicksAboveMargin_When_PausedByQu
 }
 
 func TestReconcile_should_NeverCallEnable_When_HardSignalStillActiveAcrossMultipleResumeEligibleTicks(t *testing.T) {
+	t.Parallel()
 	poller := &mockInstancePoller{}
 	ctrl := &countingFeatureController{enabled: false}
 	bus := events.NewEventBus(10)
@@ -215,6 +222,7 @@ func TestReconcile_should_NeverCallEnable_When_HardSignalStillActiveAcrossMultip
 }
 
 func TestReconcile_should_NeverAutoResume_When_BacklogWasManuallyDisabled(t *testing.T) {
+	t.Parallel()
 	poller := &mockInstancePoller{}
 	ctrl := &countingFeatureController{enabled: false} // manually disabled, pausedByQuota stays false
 	bus := events.NewEventBus(10)
@@ -235,6 +243,7 @@ func TestReconcile_should_NeverAutoResume_When_BacklogWasManuallyDisabled(t *tes
 }
 
 func TestReconcile_should_RepauseAndBypassCooldown_When_ManuallyReenabledWhileQuotaStillLow(t *testing.T) {
+	t.Parallel()
 	poller := &mockInstancePoller{}
 	ctrl := &countingFeatureController{enabled: false}
 	bus := events.NewEventBus(10)
@@ -272,6 +281,7 @@ func TestReconcile_should_RepauseAndBypassCooldown_When_ManuallyReenabledWhileQu
 // ---------------------------------------------------------------------------
 
 func TestForegroundSessionActive_should_ReturnTrue_When_NonBacklogSessionIsActive(t *testing.T) {
+	t.Parallel()
 	instances := []*session.Instance{
 		{Category: "", Status: session.Active},
 	}
@@ -281,6 +291,7 @@ func TestForegroundSessionActive_should_ReturnTrue_When_NonBacklogSessionIsActiv
 }
 
 func TestForegroundSessionActive_should_ReturnFalse_When_OnlyBacklogOwnedSessionsAreActive(t *testing.T) {
+	t.Parallel()
 	instances := []*session.Instance{
 		{Category: session.CategoryBacklog, Status: session.Active},
 		{Category: session.CategoryBacklog, Status: session.Active},
@@ -292,6 +303,7 @@ func TestForegroundSessionActive_should_ReturnFalse_When_OnlyBacklogOwnedSession
 }
 
 func TestShouldThrottleForeground_should_ExpireAfterDelay_When_NoForegroundActivityObservedForFullWindow(t *testing.T) {
+	t.Parallel()
 	poller := &mockInstancePoller{instances: []*session.Instance{
 		{Category: "", Status: session.Active},
 	}}
@@ -327,6 +339,7 @@ func TestShouldThrottleForeground_should_ExpireAfterDelay_When_NoForegroundActiv
 // ---------------------------------------------------------------------------
 
 func TestNotifyPaused_should_IncludeObservedAndThresholdValues_When_SoftThresholdPauseFires(t *testing.T) {
+	t.Parallel()
 	bus := events.NewEventBus(10)
 	subCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -356,6 +369,7 @@ func TestNotifyPaused_should_IncludeObservedAndThresholdValues_When_SoftThreshol
 }
 
 func TestNotifyPaused_should_SuppressRepeatedNotification_When_AlreadyPausedWithinCooldownAndNoManualOverride(t *testing.T) {
+	t.Parallel()
 	bus := events.NewEventBus(10)
 	subCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -378,6 +392,7 @@ func TestNotifyPaused_should_SuppressRepeatedNotification_When_AlreadyPausedWith
 }
 
 func TestNotifyResumed_should_NeverIncludeETAOrCountdown_When_ResumeTransitionFires(t *testing.T) {
+	t.Parallel()
 	bus := events.NewEventBus(10)
 	subCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -411,6 +426,7 @@ func TestNotifyResumed_should_NeverIncludeETAOrCountdown_When_ResumeTransitionFi
 }
 
 func TestQuotaGate_should_PublishNotificationOnRealEventBus_When_TransitionOccurs(t *testing.T) {
+	t.Parallel()
 	bus := events.NewEventBus(10)
 	subCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -454,6 +470,7 @@ func TestQuotaGate_should_PublishNotificationOnRealEventBus_When_TransitionOccur
 // forecloses it, so this test only needs to pin the one real, checkable
 // behavior: Disable() fires exactly once per pause.
 func TestReconcile_should_OnlyCallFeatureControllerDisable_When_PausingForQuota(t *testing.T) {
+	t.Parallel()
 	poller := &mockInstancePoller{instances: []*session.Instance{
 		{Category: "", Status: session.Active},
 	}}
@@ -481,6 +498,7 @@ func TestReconcile_should_OnlyCallFeatureControllerDisable_When_PausingForQuota(
 // re-pause on the very first tick after a later manual re-enable, instead of
 // requiring a fresh ConsecutiveTicksToPause run.
 func TestReconcile_should_ResetHysteresisCounters_When_HardOverrideFires(t *testing.T) {
+	t.Parallel()
 	poller := &mockInstancePoller{}
 	ctrl := &countingFeatureController{enabled: true}
 	bus := events.NewEventBus(10)
@@ -523,6 +541,7 @@ func TestReconcile_should_ResetHysteresisCounters_When_HardOverrideFires(t *test
 // ---------------------------------------------------------------------------
 
 func TestStatusDetail_should_ReturnEmpty_When_HealthyAndCalibrated(t *testing.T) {
+	t.Parallel()
 	cfg := config.QuotaConfig{}.QuotaConfigOrDefault()
 	cfg.Enabled = true
 	cfg.AssumedWindowTokenBudget = 1000 // calibrated, so no "reactive-only mode" text either
@@ -534,6 +553,7 @@ func TestStatusDetail_should_ReturnEmpty_When_HealthyAndCalibrated(t *testing.T)
 }
 
 func TestStatusDetail_should_MentionHardOverrideReason_When_PausedByHardSignal(t *testing.T) {
+	t.Parallel()
 	cfg := config.QuotaConfig{}.QuotaConfigOrDefault()
 	cfg.Enabled = true
 	cfg.RateLimitWindowMinutes = 30
@@ -548,6 +568,7 @@ func TestStatusDetail_should_MentionHardOverrideReason_When_PausedByHardSignal(t
 }
 
 func TestStatusDetail_should_IncludeObservedAndThresholdPct_When_PausedBySoftThreshold(t *testing.T) {
+	t.Parallel()
 	cfg := config.QuotaConfig{}.QuotaConfigOrDefault()
 	cfg.Enabled = true
 	cfg.PauseBelowHeadroomPct = 20.0
@@ -563,6 +584,7 @@ func TestStatusDetail_should_IncludeObservedAndThresholdPct_When_PausedBySoftThr
 }
 
 func TestStatusDetail_should_MentionThrottled_When_ForegroundThrottleActive(t *testing.T) {
+	t.Parallel()
 	cfg := config.QuotaConfig{}.QuotaConfigOrDefault()
 	cfg.Enabled = true
 	qg := newTestQuotaGate(cfg, &fakeTokenStore{}, &mockInstancePoller{}, &countingFeatureController{}, events.NewEventBus(1))
@@ -575,6 +597,7 @@ func TestStatusDetail_should_MentionThrottled_When_ForegroundThrottleActive(t *t
 }
 
 func TestStatusDetail_should_MentionUncalibrated_When_EnabledWithZeroBudget(t *testing.T) {
+	t.Parallel()
 	cfg := config.QuotaConfig{}.QuotaConfigOrDefault()
 	cfg.Enabled = true
 	cfg.AssumedWindowTokenBudget = 0 // the shipped default
@@ -591,6 +614,7 @@ func TestStatusDetail_should_MentionUncalibrated_When_EnabledWithZeroBudget(t *t
 // ---------------------------------------------------------------------------
 
 func TestReconcile_should_NeverActOrTouchHysteresis_When_Uncalibrated(t *testing.T) {
+	t.Parallel()
 	poller := &mockInstancePoller{}
 	ctrl := &countingFeatureController{enabled: true}
 	bus := events.NewEventBus(10)
@@ -618,6 +642,7 @@ func TestReconcile_should_NeverActOrTouchHysteresis_When_Uncalibrated(t *testing
 }
 
 func TestReconcile_should_NeverActOrTouchHysteresis_When_TokenStoreIsLoading(t *testing.T) {
+	t.Parallel()
 	poller := &mockInstancePoller{}
 	ctrl := &countingFeatureController{enabled: true}
 	bus := events.NewEventBus(10)
@@ -648,6 +673,7 @@ func TestReconcile_should_NeverActOrTouchHysteresis_When_TokenStoreIsLoading(t *
 // ---------------------------------------------------------------------------
 
 func TestReconcile_should_DetectManualOverrideOnlyOnce_When_ExternalStateStaysChangedAcrossMultipleTicks(t *testing.T) {
+	t.Parallel()
 	poller := &mockInstancePoller{}
 	ctrl := &countingFeatureController{enabled: false}
 	bus := events.NewEventBus(10)

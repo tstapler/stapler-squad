@@ -93,7 +93,7 @@ message ItemSession {
   string pipeline_mode_snapshot = 16;
   string pipeline_mode_snapshot_hash = 17;
   // end_reason is set alongside ended_at for a headless (triage/review) call:
-  // classifyHeadlessCallError's bucket ("shutdown", "timeout", "process_error",
+  // classifyHeadlessCallError's bucket ("shutdown", "timeout", "subprocess_start_error",
   // "claude_not_found", "other"), or empty for a successful end. Already captured
   // durably (session.ItemSessionSummary.EndReason) but previously never surfaced
   // over the wire.
@@ -143,6 +143,20 @@ message BacklogProgressNote {
   int32 criterion_index = 2;
   string note = 3;
   string status = 4; // "pending", "in_progress", "done", "fail"
+  google.protobuf.Timestamp created_at = 5;
+}
+
+// BacklogActivityNote records a single free-form, timestamped, attributed
+// note posted via post_backlog_update — the ungated sibling log to
+// BacklogProgressNote (see ADR-001: sibling table, not extending
+// BacklogProgressNote). Unlike BacklogProgressNote, it is never role/item-
+// gated and carries no criterion index or status: it's an informal comment,
+// not an official progress or review signal.
+message BacklogActivityNote {
+  string id = 1;
+  string message = 2;
+  string author_session_uuid = 3;
+  string author_session_title = 4;
   google.protobuf.Timestamp created_at = 5;
 }
 
@@ -202,6 +216,14 @@ message BacklogItem {
   // "no outstanding rejection".
   string plan_rejection_reason = 33;
   google.protobuf.Timestamp plan_rejected_at = 34;
+  // activity_notes is the ungated post_backlog_update log — eagerly loaded
+  // alongside progress_notes (see GetBacklogItem).
+  repeated BacklogActivityNote activity_notes = 35;
+  // public_id is the externally-shareable identifier (a "bl_"-prefixed
+  // BacklogItemID), used by ssq:// deep links and the UI's Copy Link/Copy ID
+  // affordances instead of the internal UUID `id`. Empty for rows that
+  // predate the public_id backfill — callers must fall back to `id`.
+  string public_id = 36;
 }
 
 // ItemSource represents an external plugin source that syncs items into the
@@ -365,14 +387,6 @@ message BacklogItemShipStatus {
   bool snapshot_capture_failed = 18;
 }
 
-// ShippedCommit is one commit in a BacklogItemShipStatus's shipped range.
-message ShippedCommit {
-  string sha = 1;
-  string summary = 2; // first line of the commit message
-  string author_name = 3;
-  google.protobuf.Timestamp authored_at = 4;
-}
-
 // ShippedFileStat is one file's durable per-file diff-stat snapshot,
 // captured at ship time via FileStatsBetween. Mirrors FileChange's field
 // shape so the proto<->ent mapping stays mechanical.
@@ -456,6 +470,14 @@ message ArchiveBacklogItemRequest {
 }
 
 message ArchiveBacklogItemResponse {
+  BacklogItem item = 1;
+}
+
+message UnarchiveBacklogItemRequest {
+  string item_id = 1;
+}
+
+message UnarchiveBacklogItemResponse {
   BacklogItem item = 1;
 }
 
@@ -763,6 +785,9 @@ message BacklogItemEvent {
     // useWatchBacklogItems.ts's handling (falls through to a no-op case) and
     // backlog_service_events.go's watchBacklogItems doc comment.
     BacklogSnapshotCompleteEvent snapshot_complete = 9;
+    // Field 8 is seq (message-level, not part of this oneof); 9 is
+    // snapshot_complete above, so 10 is next.
+    BacklogItemActivityNoteAddedEvent activity_note_added = 10;
   }
 
   // Monotonically-increasing sequence number assigned by pkg/events.EventBus
@@ -817,6 +842,16 @@ message BacklogItemUpdatedEvent {
   repeated string updated_fields = 2;
   BacklogItem item = 3;
   bool is_snapshot = 4;
+}
+
+// BacklogItemActivityNoteAddedEvent is emitted when post_backlog_update
+// appends a new BacklogActivityNote. Deliberately has no item/is_snapshot
+// field (see ADR-002): every post is a genuine live event — there is no
+// snapshot-replay concept for this kind, since the full log already rides
+// GetBacklogItem's activity_notes.
+message BacklogItemActivityNoteAddedEvent {
+  string item_id = 1;
+  BacklogActivityNote note = 2;
 }
 
 // BacklogItemArchivedEvent is emitted when an item is soft-deleted via
@@ -883,6 +918,12 @@ service BacklogService {
 
   // ArchiveBacklogItem soft-deletes an item by setting its archived_at timestamp.
   rpc ArchiveBacklogItem(ArchiveBacklogItemRequest) returns (ArchiveBacklogItemResponse) {}
+
+  // UnarchiveBacklogItem restores a previously archived item to the "idea"
+  // status and clears archived_at. It does not restore any prior status
+  // history, nor recreate a deleted git worktree/session — the item simply
+  // re-enters the idea column needing a fresh session.
+  rpc UnarchiveBacklogItem(UnarchiveBacklogItemRequest) returns (UnarchiveBacklogItemResponse) {}
 
   // DeleteBacklogItem permanently removes an item and all its child records.
   rpc DeleteBacklogItem(DeleteBacklogItemRequest) returns (DeleteBacklogItemResponse) {}
@@ -1051,6 +1092,9 @@ message ImportGitHubIssueRequest {
 message ImportGitHubIssueResponse {
   BacklogItem item = 1;
   bool triage_triggered = 2;
+  // True when issue_url was already imported — `item` is the existing backlog
+  // item, not a newly-created one, and no new triage was triggered.
+  bool already_existed = 3;
 }
 
 message CancelTriageRequest {
@@ -1210,6 +1254,12 @@ enum StuckReason {
   // skipped this item because at least one of its blocker items has not yet
   // reached a resolved status (done or archived).
   STUCK_REASON_BLOCKED_BY_DEPENDENCY = 18;
+  // STUCK_REASON_STEER_FAILED: see domain.StuckReasonSteerFailed
+  // (session/domain/backlog.go) — AutoReopenForPRFix attempted to steer an
+  // already-active session with a PR-fix problem description and the
+  // delivery itself failed. Distinct from STUCK_REASON_RESPAWN_BLOCKED_ACTIVE,
+  // which covers the degrade paths where a steer was never attempted at all.
+  STUCK_REASON_STEER_FAILED = 19;
 }
 
 // StuckBacklogItem is a single open (unresolved, un-snoozed) BacklogStuckState

@@ -60,6 +60,7 @@ func makeStartedInstance(title string) *Instance {
 // This is the end-to-end regression for AC-1: startup scan detects approval without
 // user navigation.
 func TestStartupScanner_Scan_AddsSessionWithApprovalPrompt(t *testing.T) {
+	t.Parallel()
 	inst := makeStartedInstance("session-with-approval")
 	approvalContent := "Do you want to allow reading /etc/hosts?\nYes, allow once\nNo"
 
@@ -90,6 +91,7 @@ func TestStartupScanner_Scan_AddsSessionWithApprovalPrompt(t *testing.T) {
 // session (no approval prompt, no idle/stale threshold) is NOT added to the review queue.
 // UpdatedAt and LastMeaningfulOutput are set to now to prevent idle/staleness triggers.
 func TestStartupScanner_Scan_SkipsSessionWithNoApproval(t *testing.T) {
+	t.Parallel()
 	inst := makeStartedInstance("active-session-no-approval")
 	now := time.Now()
 	inst.UpdatedAt = now            // prevents idle threshold (5s)
@@ -118,6 +120,7 @@ func TestStartupScanner_Scan_SkipsSessionWithNoApproval(t *testing.T) {
 // TestStartupScanner_Scan_SkipsPausedInstances verifies that paused sessions
 // are not evaluated during startup scan.
 func TestStartupScanner_Scan_SkipsPausedInstances(t *testing.T) {
+	t.Parallel()
 	inst := &Instance{
 		Title:  "paused-session",
 		Status: Paused,
@@ -142,6 +145,7 @@ func TestStartupScanner_Scan_SkipsPausedInstances(t *testing.T) {
 // TestStartupScanner_Scan_ControllerActiveWithApproval verifies that a session
 // whose active controller reports StatusNeedsApproval is added to the queue.
 func TestStartupScanner_Scan_ControllerActiveWithApproval(t *testing.T) {
+	t.Parallel()
 	inst := makeStartedInstance("controller-approval-session")
 
 	statusProvider := newFakeStatusProvider(map[string]InstanceStatusInfo{
@@ -174,6 +178,7 @@ func TestStartupScanner_Scan_ControllerActiveWithApproval(t *testing.T) {
 // partitions a mixed set of instances: sessions with approval prompts are added,
 // recently-active sessions with no prompts are not.
 func TestStartupScanner_Scan_MultipleSessionsMixedState(t *testing.T) {
+	t.Parallel()
 	needsApproval := makeStartedInstance("needs-approval")
 	// activeSession has fresh timestamps so idle/staleness thresholds won't trigger.
 	activeSession := makeStartedInstance("active-no-prompt")
@@ -216,7 +221,9 @@ func TestStartupScanner_Scan_MultipleSessionsMixedState(t *testing.T) {
 // still be added (added == 1) — the deliberate safety-net narrowing: no other durable detector
 // watches a still-alive, stuck-in-error Hidden review session.
 func TestScan_SkipsHiddenInstance_ForSuppressedReasonsOnly(t *testing.T) {
+	t.Parallel()
 	t.Run("task_complete_suppressed_for_hidden", func(t *testing.T) {
+		t.Parallel()
 		inst := makeStartedInstance("hidden-task-complete")
 		inst.Hidden = true
 
@@ -243,6 +250,7 @@ func TestScan_SkipsHiddenInstance_ForSuppressedReasonsOnly(t *testing.T) {
 	})
 
 	t.Run("error_state_not_suppressed_for_hidden", func(t *testing.T) {
+		t.Parallel()
 		inst := makeStartedInstance("hidden-error-state")
 		inst.Hidden = true
 
@@ -275,6 +283,7 @@ func TestScan_SkipsHiddenInstance_ForSuppressedReasonsOnly(t *testing.T) {
 
 // TestStartupScanner_Scan_EmptyInstanceList verifies graceful handling of an empty list.
 func TestStartupScanner_Scan_EmptyInstanceList(t *testing.T) {
+	t.Parallel()
 	statusProvider := newFakeStatusProvider(map[string]InstanceStatusInfo{})
 	contentProvider := newFakeContentProvider(map[string]string{})
 

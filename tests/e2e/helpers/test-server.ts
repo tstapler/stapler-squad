@@ -38,7 +38,11 @@ export class TestServer {
     this.config = {
       port,
       testDir: config.testDir || process.env.TEST_SERVER_DIR || `/tmp/stapler-squad-test-${pid}`,
-      buildPath: config.buildPath || path.join(__dirname, '../../../stapler-squad'),
+      // TEST_SERVER_BINARY: additive override for Story 2.3.2's woven-binary
+      // parity leg (project_plans/go-auto-instrumentation) — e.g.
+      // TEST_SERVER_BINARY=$(pwd)/../../stapler-squad-otel npm test. A no-op
+      // when unset: falls through to the existing default, unchanged.
+      buildPath: config.buildPath || process.env.TEST_SERVER_BINARY || path.join(__dirname, '../../../stapler-squad'),
       seedSessions: config.seedSessions ?? 6,
       liveSeedSessions: config.liveSeedSessions ?? 3,
     };

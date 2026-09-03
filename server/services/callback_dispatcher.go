@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"net"
 	"net/http"
 	"sync"
 	"time"
@@ -37,7 +38,7 @@ const callbackRetryBackoff = 500 * time.Millisecond
 // fresh from stdlib net/http — same shape as the (unimplemented) SlackNotifier
 // design from project_plans/slack-review-notifications, which has no shipped code
 // to reuse (0 matches repo-wide, verified). Concrete type, not an interface — one
-// implementation, per .claude/rules/interface-pollution-checklist.md; the
+// implementation, per the `interface-pollution-checklist` skill; the
 // session package's CallbackDispatcher interface (session/callback_dispatcher.go)
 // exists only because session cannot import this package.
 //
@@ -67,14 +68,16 @@ type CallbackDispatcher struct {
 
 	inFlight chan struct{}
 
-	// validateURL performs the send-time SSRF check (Task 5.2.1f). Always
-	// ValidateCallbackURL in production (set by NewCallbackDispatcher); tests in
-	// this package construct a CallbackDispatcher literal directly with a
+	// validateURL performs the send-time SSRF check (Task 5.2.1f) and returns the
+	// validated IP so attempt can pin its dial to it (AC8 — closes the DNS-rebinding
+	// window between validation and the actual dial). Always
+	// resolveAndValidateCallbackHost in production (set by NewCallbackDispatcher);
+	// tests in this package construct a CallbackDispatcher literal directly with a
 	// permissive stub here so they can exercise real delivery/retry/redaction
 	// behavior against an httptest.Server, whose address is necessarily loopback
 	// and would otherwise always fail the real check — ValidateCallbackURL itself
 	// is exercised directly and exhaustively in webhook_ssrf_test.go.
-	validateURL func(ctx context.Context, rawURL string) error
+	validateURL func(ctx context.Context, rawURL string) (net.IP, error)
 }
 
 // NewCallbackDispatcher creates a CallbackDispatcher reading callback URLs and the
@@ -101,7 +104,7 @@ func NewCallbackDispatcher(cfg *config.Config) *CallbackDispatcher {
 		},
 		cfg:         cfg,
 		inFlight:    make(chan struct{}, maxInFlightCallbacks),
-		validateURL: ValidateCallbackURL,
+		validateURL: resolveAndValidateCallbackHost,
 	}
 }
 
@@ -185,13 +188,18 @@ func (d *CallbackDispatcher) deliver(eventType, url string, payload any) {
 		// delivery entirely (no further retries) — retrying against a target
 		// that just failed an SSRF check would only give a DNS-rebinding
 		// attacker more attempts to land the malicious answer.
-		if err := d.validateURL(ctx, url); err != nil {
+		validIP, err := d.validateURL(ctx, url)
+		if err != nil {
 			cancel()
 			log.Warn("[CallbackDispatcher] callback URL failed SSRF validation, aborting delivery", "event", eventType, "attempt", attempt, "err", err)
 			return
 		}
 
-		ok := d.attempt(ctx, url, body)
+		// AC8: dial exactly the IP just validated, not whatever the default
+		// resolver returns when the request is actually sent — closes the window
+		// between this LookupIPAddr call and the dial a rebinding attacker could
+		// otherwise exploit.
+		ok := d.attempt(ctx, url, body, validIP)
 		cancel()
 		if ok {
 			return
@@ -205,14 +213,38 @@ func (d *CallbackDispatcher) deliver(eventType, url string, payload any) {
 // (2xx response). Never returns the response body or any part of url to the
 // caller — attempt itself must not log (its callers decide what to log, and
 // must never log url).
-func (d *CallbackDispatcher) attempt(ctx context.Context, url string, body []byte) bool {
+//
+// Dials validIP directly via a per-attempt Transport (AC8), rather than letting the
+// request resolve url's host again — the exact address validateURL just checked is
+// the exact address this attempt connects to, with no re-resolution gap in between. A
+// fresh Transport per attempt (not one shared on d) means a pinned IP for one host can
+// never leak onto a different host's connection via pooled keep-alives.
+//
+// The pinned Transport clones d.client's real Transport (falling back to
+// http.DefaultTransport) rather than a bare &http.Transport{}, so proxy settings
+// (Proxy: http.ProxyFromEnvironment), TLS handshake timeout, and any other tuning
+// survive the pin instead of being silently dropped. DisableKeepAlives is forced on:
+// this Transport is discarded after exactly one request, so a pooled idle connection
+// waiting to be reused would just leak a goroutine and an open socket for the rest of
+// the process's life (there is no later request that could ever reuse it).
+//
+// The pin only applies when d.client is using the real network Transport (nil, or an
+// explicit *http.Transport) — a custom http.RoundTripper (as this package's own tests
+// inject to intercept requests before any DNS/dial happens, e.g.
+// callback_config_service_test.go's recordingRoundTripper) has no dial step to pin in
+// the first place, so it's used unmodified. The real pinned-dial path is exercised
+// directly against a live server by
+// TestCallbackDispatcher_Attempt_DialsThePinnedIP_NotTheURLHost.
+func (d *CallbackDispatcher) attempt(ctx context.Context, url string, body []byte, validIP net.IP) bool {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
 		return false
 	}
 	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := d.client.Do(req)
+	client := pinnedClientFor(d.client, validIP)
+
+	resp, err := client.Do(req)
 	if err != nil {
 		return false
 	}
@@ -220,4 +252,30 @@ func (d *CallbackDispatcher) attempt(ctx context.Context, url string, body []byt
 	_, _ = io.Copy(io.Discard, resp.Body)
 
 	return resp.StatusCode >= 200 && resp.StatusCode < 300
+}
+
+// pinnedClientFor returns a client that dials validIP directly for every connection,
+// or base unmodified if base.Transport isn't a real network Transport (see attempt's
+// doc comment for why — a custom RoundTripper has no dial step to pin). The returned
+// Transport, when built, clones base.Transport (falling back to http.DefaultTransport)
+// so proxy/TLS settings survive, and forces DisableKeepAlives since it's discarded
+// after exactly one request — pooling would only leak the idle connection.
+func pinnedClientFor(base *http.Client, validIP net.IP) *http.Client {
+	realBase, usesRealTransport := base.Transport.(*http.Transport)
+	if !usesRealTransport && base.Transport != nil {
+		return base
+	}
+	if realBase == nil {
+		realBase = http.DefaultTransport.(*http.Transport)
+	}
+	pinnedTransport := realBase.Clone()
+	pinnedTransport.DisableKeepAlives = true
+	pinnedTransport.DialContext = func(dialCtx context.Context, network, addr string) (net.Conn, error) {
+		_, port, err := net.SplitHostPort(addr)
+		if err != nil {
+			return nil, err
+		}
+		return (&net.Dialer{}).DialContext(dialCtx, network, net.JoinHostPort(validIP.String(), port))
+	}
+	return &http.Client{Transport: pinnedTransport, CheckRedirect: base.CheckRedirect}
 }

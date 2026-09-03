@@ -15,7 +15,7 @@
 
 import React from "react";
 import { render, screen, act, fireEvent, within, waitFor } from "@testing-library/react";
-import { create } from "@bufbuild/protobuf";
+import { create, type MessageInitShape } from "@bufbuild/protobuf";
 import { timestampFromDate } from "@bufbuild/protobuf/wkt";
 import { BacklogItemDetail } from "./BacklogItemDetail";
 import type { BacklogItem, LinkedSession, PipelineMode } from "@/lib/hooks/useBacklogService";
@@ -104,6 +104,16 @@ jest.mock("@/lib/analytics", () => ({
   useAnalytics: () => ({ track: jest.fn() }),
 }));
 
+// Story 2.3 (backlog-deep-linking): the Copy ID/Copy Link buttons call
+// copyToClipboard, which falls back to document.execCommand("copy") — jsdom
+// doesn't implement either navigator.clipboard.writeText or execCommand, so
+// mock the module directly rather than trying to stand up a working
+// clipboard in jsdom.
+const copyToClipboard = jest.fn().mockResolvedValue(true);
+jest.mock("@/lib/clipboard", () => ({
+  copyToClipboard: (...args: unknown[]) => copyToClipboard(...args),
+}));
+
 const getBacklogItem = jest.fn();
 const listPipelineModes = jest.fn();
 // Hoisted to module scope (unlike the other jest.fn()s below, which are
@@ -122,6 +132,12 @@ const triggerTriage = jest.fn().mockResolvedValue(undefined);
 // integration test can assert on the exact call made when PlanVerdictBox's
 // Request Changes form is submitted.
 const rejectPlan = jest.fn();
+// Hoisted (PR #499 code review follow-up) so the archive-confirm-guard and
+// unarchive-button-click tests can assert on the exact call made — an
+// inline `jest.fn()` in the mock factory below would be a fresh instance
+// per render, unobservable from the test body.
+const archiveBacklogItem = jest.fn().mockResolvedValue(undefined);
+const unarchiveBacklogItem = jest.fn().mockResolvedValue(undefined);
 
 jest.mock("@/lib/hooks/useBacklogService", () => ({
   // mapBacklogItem is a real (unmocked) named export — BacklogItemDetail's
@@ -140,7 +156,8 @@ jest.mock("@/lib/hooks/useBacklogService", () => ({
     triggerReReview: jest.fn(),
     triggerShipPR: jest.fn(),
     submitManualReview: jest.fn(),
-    archiveBacklogItem: jest.fn(),
+    archiveBacklogItem,
+    unarchiveBacklogItem,
     deleteBacklogItem: jest.fn(),
     updateBacklogItem,
     listPipelineModes,
@@ -203,6 +220,9 @@ beforeEach(() => {
   overrideVerdict.mockReset();
   triggerTriage.mockClear().mockResolvedValue(undefined);
   rejectPlan.mockReset().mockResolvedValue(null);
+  archiveBacklogItem.mockClear().mockResolvedValue(undefined);
+  unarchiveBacklogItem.mockClear().mockResolvedValue(undefined);
+  copyToClipboard.mockClear().mockResolvedValue(true);
   // Story 3.1.4's per-section expand state (useSectionExpandState) and
   // "Show N more" state (useShowMore) both persist to localStorage keyed
   // by itemId — clear between tests so one test's expand/collapse
@@ -243,6 +263,20 @@ function makeSession(overrides: Partial<LinkedSession> = {}): LinkedSession {
   };
 }
 
+function makeShippedSnapshot(overrides: MessageInitShape<typeof BacklogItemShipStatusSchema> = {}) {
+  return create(BacklogItemShipStatusSchema, {
+    shipped: true,
+    shippedVia: "pr",
+    branchName: "feature/foo",
+    branchExists: false,
+    prUrl: "https://github.com/tstapler/stapler-squad/pull/999",
+    shippedCheckConclusion: "success",
+    shippedApprovedCount: 2,
+    shippedChangesReqCount: 1,
+    ...overrides,
+  });
+}
+
 function makeItem(linkedSessions: LinkedSession[]): BacklogItem {
   return {
     id: "item-1",
@@ -263,6 +297,7 @@ function makeItem(linkedSessions: LinkedSession[]): BacklogItem {
     updatedAt: "2026-07-12T14:02:00Z",
     statusEvents: [],
     progressNotes: [],
+    activityNotes: [],
     totalEstimatedCostUsd: 0,
   };
 }
@@ -464,6 +499,57 @@ describe("BacklogItemDetail — Story 2.2.3: VcsWidget wiring", () => {
     fireEvent.click(screen.getByRole("button", { name: "Browse files in this worktree" }));
 
     expect(screen.getByTestId("file-browser-modal-stub")).toBeInTheDocument();
+  });
+
+  it("BacklogItemDetail_should_RenderShippedCiConclusionAndReviewCounts_When_ShipStatusHasSnapshot", async () => {
+    useVcsStatusMock.mockReturnValue({ data: null, loading: false, error: null, refetch: jest.fn() });
+    useBacklogItemShipStatusMock.mockReturnValue({
+      data: makeShippedSnapshot({
+        snapshotAt: timestampFromDate(new Date("2026-07-17T10:00:00Z")),
+        snapshotCaptureFailed: false,
+      }),
+      loading: false,
+      refetch: jest.fn(),
+    });
+
+    const session = makeSession({ role: "work", worktreePath: "/tmp/repo-wt" });
+    getBacklogItem.mockReset().mockResolvedValue(makeItem([session]));
+    listPipelineModes.mockReset().mockResolvedValue([]);
+
+    render(<BacklogItemDetail itemId="item-1" />);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    fireEvent.click(screen.getByTestId("collapsible-header-version-control"));
+
+    expect(screen.getByText("CI: success")).toBeInTheDocument();
+    expect(screen.getByLabelText("2 approved")).toBeInTheDocument();
+    expect(screen.getByLabelText("1 changes requested")).toBeInTheDocument();
+  });
+
+  it("BacklogItemDetail_should_RenderCaptureFailedCopy_When_ShipStatusSnapshotCaptureFailedTrue", async () => {
+    useVcsStatusMock.mockReturnValue({ data: null, loading: false, error: null, refetch: jest.fn() });
+    useBacklogItemShipStatusMock.mockReturnValue({
+      data: makeShippedSnapshot({ snapshotCaptureFailed: true }),
+      loading: false,
+      refetch: jest.fn(),
+    });
+
+    const session = makeSession({ role: "work", worktreePath: "/tmp/repo-wt" });
+    getBacklogItem.mockReset().mockResolvedValue(makeItem([session]));
+    listPipelineModes.mockReset().mockResolvedValue([]);
+
+    render(<BacklogItemDetail itemId="item-1" />);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    fireEvent.click(screen.getByTestId("collapsible-header-version-control"));
+
+    expect(screen.getByText("Couldn't capture PR status at ship time")).toBeInTheDocument();
   });
 });
 
@@ -926,6 +1012,43 @@ describe("BacklogItemDetail — Story 2.1.4: LifecycleSummary replaces the old s
 
     expect(screen.queryByTestId("blocker-chip")).not.toBeInTheDocument();
   });
+
+  it("BacklogItemDetail_should_InvokeTriggerRemediationNowFromUseStuckBacklogItems_When_RetryButtonClicked", async () => {
+    // Regression guard: BacklogItemDetail must thread the actual
+    // triggerRemediationNow returned by its own useStuckBacklogItems() call
+    // into LifecycleSummary's onTriggerRemediationNow prop, not a stub —
+    // LifecycleSummary.test.tsx only verifies the prop is invoked when
+    // directly supplied, it can't catch a wiring regression at this level.
+    const stuckItem: StuckBacklogItem = {
+      itemId: "item-1",
+      title: "Refactor auth middleware",
+      status: "in_progress",
+      reason: StuckReason.STALE_WORK,
+      firstDetectedAt: timestampFromDate(new Date(Date.now() - 4 * 60 * 60 * 1000)),
+      lastCheckedAt: timestampFromDate(new Date()),
+      prNumber: 0,
+      prUrl: "",
+      context: "",
+    } as StuckBacklogItem;
+    const triggerRemediationNow = jest.fn().mockResolvedValue(undefined);
+    useStuckBacklogItemsMock.mockReturnValue({ items: [stuckItem], isLoading: false, error: null, triggerRemediationNow });
+    getBacklogItem.mockReset().mockResolvedValue(makeItem([]));
+    listPipelineModes.mockReset().mockResolvedValue([]);
+
+    render(<BacklogItemDetail itemId="item-1" />);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    fireEvent.click(screen.getByTestId("blocker-chip-retry"));
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(triggerRemediationNow).toHaveBeenCalledTimes(1);
+    expect(triggerRemediationNow).toHaveBeenCalledWith("item-1", StuckReason.STALE_WORK);
+  });
 });
 
 describe("BacklogItemDetail — Story 3.1.3: polling suspends for manual-review + in-flight actions", () => {
@@ -1370,5 +1493,161 @@ describe("BacklogItemDetail — Epic 4.3: plan review wiring", () => {
     });
     expect(screen.getByText("Please split this into two smaller tasks.")).toBeInTheDocument();
     expect(screen.getByTestId("backlog-action-regenerate-plan")).toBeInTheDocument();
+  });
+});
+
+// PR #499 code review, CRITICAL finding: the useBacklogService() mock above
+// used to omit unarchiveBacklogItem entirely, so any test that reached the
+// Unarchive button's onClick would throw `unarchiveBacklogItem is not a
+// function` (BacklogItemDetail.tsx destructures it at the top of the
+// component and calls it from the "unarchive" case in handleAction).
+describe("BacklogItemDetail — Unarchive action", () => {
+  function makeArchivedItem(overrides: Partial<BacklogItem> = {}): BacklogItem {
+    return {
+      ...makeItem([]),
+      status: "archived",
+      ...overrides,
+    };
+  }
+
+  it("BacklogItemDetail_should_CallUnarchiveBacklogItemWithItemId_When_UnarchiveButtonClicked", async () => {
+    getBacklogItem.mockReset().mockResolvedValue(makeArchivedItem());
+    listPipelineModes.mockReset().mockResolvedValue([]);
+
+    render(<BacklogItemDetail itemId="item-1" />);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    fireEvent.click(screen.getByTestId("backlog-action-unarchive"));
+
+    await waitFor(() => {
+      expect(unarchiveBacklogItem).toHaveBeenCalledWith("item-1");
+    });
+  });
+});
+
+// PR #499 code review, MAJOR finding: the confirm() guard added around the
+// archive action (BacklogItemDetail.tsx's handleAction "archive" case) had
+// zero test coverage of either branch. `status: "done"` is used because
+// itemActions.ts only exposes the "archive" action for a done item.
+describe("BacklogItemDetail — Archive action confirm() guard", () => {
+  function makeDoneItem(overrides: Partial<BacklogItem> = {}): BacklogItem {
+    return {
+      ...makeItem([]),
+      status: "done",
+      ...overrides,
+    };
+  }
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  it("BacklogItemDetail_should_CallArchiveBacklogItem_When_ConfirmReturnsTrue", async () => {
+    jest.spyOn(window, "confirm").mockReturnValue(true);
+    getBacklogItem.mockReset().mockResolvedValue(makeDoneItem());
+    listPipelineModes.mockReset().mockResolvedValue([]);
+
+    render(<BacklogItemDetail itemId="item-1" />);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    fireEvent.click(screen.getByTestId("backlog-action-archive"));
+
+    await waitFor(() => {
+      expect(archiveBacklogItem).toHaveBeenCalledWith("item-1");
+    });
+  });
+
+  it("BacklogItemDetail_should_NotCallArchiveBacklogItem_When_ConfirmReturnsFalse", async () => {
+    jest.spyOn(window, "confirm").mockReturnValue(false);
+    getBacklogItem.mockReset().mockResolvedValue(makeDoneItem());
+    listPipelineModes.mockReset().mockResolvedValue([]);
+
+    render(<BacklogItemDetail itemId="item-1" />);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    fireEvent.click(screen.getByTestId("backlog-action-archive"));
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(archiveBacklogItem).not.toHaveBeenCalled();
+  });
+});
+
+// Story 2.3 (project_plans/backlog-deep-linking/implementation/plan.md):
+// upgrades the existing Copy Link/Copy ID affordances to the new ssq://
+// deep-link format and to prefer the externally-shareable public_id over
+// the internal UUID, per ADR-001.
+describe("BacklogItemDetail — Copy ID/Copy Link (backlog-deep-linking Story 2.3)", () => {
+  async function renderItem(overrides: Partial<BacklogItem> = {}) {
+    getBacklogItem.mockReset().mockResolvedValue({ ...makeItem([]), ...overrides });
+    listPipelineModes.mockReset().mockResolvedValue([]);
+
+    render(<BacklogItemDetail itemId="item-1" />);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+  }
+
+  it("handleCopy_should_BuildSsqUrlWithPublicId_When_CopyLinkClicked", async () => {
+    await renderItem({ id: "item-1", publicId: "bl_01J0000000000000000000" });
+
+    fireEvent.click(screen.getByTestId("copy-item-link-button"));
+
+    await waitFor(() => {
+      expect(copyToClipboard).toHaveBeenCalledWith(
+        `ssq://${window.location.host}/backlog/v1/bl_01J0000000000000000000`
+      );
+    });
+  });
+
+  it("handleCopy_should_FallBackToUUID_When_PublicIdAbsent", async () => {
+    await renderItem({ id: "item-1", publicId: undefined });
+
+    fireEvent.click(screen.getByTestId("copy-item-link-button"));
+
+    await waitFor(() => {
+      expect(copyToClipboard).toHaveBeenCalledWith(`ssq://${window.location.host}/backlog/v1/item-1`);
+    });
+
+    fireEvent.click(screen.getByTestId("copy-item-id-button"));
+    await waitFor(() => {
+      expect(copyToClipboard).toHaveBeenLastCalledWith("item-1");
+    });
+  });
+
+  it("BacklogItemDetail_should_DisplayAndCopyPublicId_When_PublicIdPresent", async () => {
+    await renderItem({ id: "item-1", publicId: "bl_01J0000000000000000000" });
+
+    expect(screen.getByTestId("backlog-item-id")).toHaveTextContent("bl_01J0000000000000000000");
+
+    fireEvent.click(screen.getByTestId("copy-item-id-button"));
+    await waitFor(() => {
+      expect(copyToClipboard).toHaveBeenCalledWith("bl_01J0000000000000000000");
+    });
+  });
+
+  it("BacklogItemDetail_should_AnnounceCopyConfirmation_When_CopyLinkClicked", async () => {
+    await renderItem({ id: "item-1", publicId: "bl_01J0000000000000000000" });
+
+    const copyLinkButton = screen.getByTestId("copy-item-link-button");
+    expect(copyLinkButton).toHaveAttribute("aria-label", "Copy shareable link");
+
+    fireEvent.click(copyLinkButton);
+
+    await waitFor(() => {
+      expect(copyLinkButton).toHaveAttribute("aria-label", "Copied link to clipboard");
+    });
+    expect(screen.getByTestId("copy-status-announcement")).toHaveTextContent("Link copied to clipboard");
   });
 });

@@ -19,7 +19,7 @@ const (
 // TriggerRateLimiter enforces a per-Workflow rate limit on trigger fires (webhook-
 // triggers Epic 2.4.2), guarding against a noisy or malicious webhook source spawning
 // unbounded sessions. Concrete type, not an interface — one implementation, per
-// .claude/rules/interface-pollution-checklist.md. server/workflows.Scheduler consumes
+// the `interface-pollution-checklist` skill. server/workflows.Scheduler consumes
 // it through its own narrow triggerRateLimiterGate interface (defined in
 // scheduler.go), to avoid a server/workflows -> server/services import.
 type TriggerRateLimiter struct {
@@ -44,6 +44,16 @@ func NewTriggerRateLimiter() *TriggerRateLimiter {
 // token bucket, created lazily on first use.
 func (t *TriggerRateLimiter) Allow(workflowID uuid.UUID) bool {
 	t.mu.Lock()
+	// ponytail: guards the zero-value case (var t TriggerRateLimiter) where limiters is
+	// nil — the only real construction path is NewTriggerRateLimiter, which already
+	// initializes both fields, so this is a no-op there.
+	if t.limiters == nil {
+		t.limiters = make(map[uuid.UUID]*rate.Limiter)
+	}
+	if t.limit == 0 {
+		t.limit = defaultTriggerRateLimit
+		t.burst = defaultTriggerRateBurst
+	}
 	lim, ok := t.limiters[workflowID]
 	if !ok {
 		lim = rate.NewLimiter(t.limit, t.burst)

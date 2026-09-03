@@ -135,7 +135,7 @@ const (
 	// server/services/backlog_service_triage.go) was skipped because the item
 	// already has an active work or review session, per
 	// findActiveWorkSession/findActiveReviewSession. Before this reason
-	// existed, all three call sites only log.InfoLog.Printf'd the skip —
+	// existed, all three call sites only log.InfoLog().Printf'd the skip —
 	// zero operator-visible signal and no audit record, strictly worse than
 	// spawnSessionAfterGates' own 8b guard (activeWorkSessionBlockedError),
 	// which at least returns a progress-enriched error to its synchronous
@@ -196,6 +196,19 @@ const (
 	// meta/aggregate signal with no independent remediation action of its
 	// own.
 	StuckReasonBounceCapExhausted StuckReason = "bounce_cap_exhausted"
+	// StuckReasonSteerFailed: AutoReopenForPRFix attempted to steer an
+	// already-active session with a PR-fix problem description
+	// (SessionSteerer.SteerActiveSession) and the delivery itself failed —
+	// distinct from StuckReasonRespawnBlockedActive, which covers the
+	// degrade paths where a steer was never attempted at all (nil-safe
+	// SessionSteerer, session not live, or dedup/debounce suppression). See
+	// ADR-002 (project_plans/pr-fix-steering/decisions/): reusing
+	// RespawnBlockedActive here would render BlockerChip's fixed "Auto-
+	// respawn skipped" label for a strictly worse outcome (attempted and
+	// failed). Set/resolved by notifyActiveSessionSteered
+	// (server/services/backlog_service_pr_fix_steer.go); the two reasons are
+	// mutually exclusive per item — each path resolves the other.
+	StuckReasonSteerFailed StuckReason = "steer_failed"
 )
 
 // AllStuckReasons lists every valid StuckReason constant.
@@ -218,6 +231,7 @@ var AllStuckReasons = []StuckReason{
 	StuckReasonBlockedByDependency,
 	StuckReasonMultipleReasons,
 	StuckReasonBounceCapExhausted,
+	StuckReasonSteerFailed,
 }
 
 // IsValid reports whether r is a known stuck reason value.
@@ -228,7 +242,7 @@ func (r StuckReason) IsValid() bool {
 		StuckReasonAutonomousStuck, StuckReasonSpawnFailed, StuckReasonPlanNotApproved,
 		StuckReasonPRPendingNoPR, StuckReasonReworkBlockedStale, StuckReasonPRNeedsFix,
 		StuckReasonRespawnBlockedActive, StuckReasonLikelyFlaky, StuckReasonBlockedByDependency,
-		StuckReasonMultipleReasons, StuckReasonBounceCapExhausted:
+		StuckReasonMultipleReasons, StuckReasonBounceCapExhausted, StuckReasonSteerFailed:
 		return true
 	}
 	return false

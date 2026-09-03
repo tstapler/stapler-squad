@@ -127,6 +127,44 @@ describe("TriggerFormModal", () => {
     await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
   });
 
+  // Regression test for a CRITICAL finding from sdd:6-verify: this PR's flagship CAS
+  // feature (AC9) relies on expectedUpdatedAt reaching the save call when editing an
+  // existing trigger, but no test exercised it — the existing tests above use
+  // expect.objectContaining, which wouldn't fail if this were silently dropped.
+  it("TriggerFormModal_should_includeExpectedUpdatedAt_When_editingExistingTrigger", async () => {
+    const updatedAt = { seconds: 42n, nanos: 0 } as unknown as WorkflowProto["updatedAt"];
+    const existing = makeWorkflow({ triggerType: "webhook", updatedAt });
+    const onSave = jest.fn().mockResolvedValue(undefined);
+    render(<TriggerFormModal open={true} editTrigger={existing} onSave={onSave} onClose={jest.fn()} />);
+
+    fireEvent.click(screen.getByTestId("trigger-form-submit"));
+
+    await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+    expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ expectedUpdatedAt: updatedAt }));
+  });
+
+  // Regression test for the "Enabled (controlled by the schedule below)" checkbox
+  // behavior: selecting cron must force enabled=true in the submitted data even
+  // though the checkbox is disabled+unreadable by the user for that trigger type.
+  it("TriggerFormModal_should_forceEnabledTrue_When_triggerTypeIsCron", async () => {
+    const onSave = jest.fn().mockResolvedValue(undefined);
+    render(<TriggerFormModal open={true} onSave={onSave} onClose={jest.fn()} />);
+
+    fireEvent.click(screen.getByTestId("trigger-type-cron"));
+    fireEvent.change(screen.getByTestId("trigger-slug-input"), { target: { value: "cron-trigger" } });
+    fireEvent.change(screen.getByTestId("trigger-name-input"), { target: { value: "Cron Trigger" } });
+    fireEvent.change(screen.getByTestId("trigger-target-directory-input"), { target: { value: "/repo" } });
+    fireEvent.change(screen.getByTestId("trigger-command-input"), { target: { value: "Do the thing" } });
+    fireEvent.change(screen.getByTestId("trigger-cron-expression-input"), { target: { value: "0 9 * * 1" } });
+
+    fireEvent.click(screen.getByTestId("trigger-form-submit"));
+
+    await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+    expect(onSave).toHaveBeenCalledWith(
+      expect.objectContaining({ enabled: true, cronEnabled: true, triggerType: "cron" })
+    );
+  });
+
   it("TriggerFormModal_should_blockSubmit_When_requiredTypeSpecificFieldMissing", async () => {
     const onSave = jest.fn();
     render(<TriggerFormModal open={true} onSave={onSave} onClose={jest.fn()} />);

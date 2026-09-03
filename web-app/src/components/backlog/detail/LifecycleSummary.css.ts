@@ -14,6 +14,13 @@ export const container = style({
   padding: `${vars.space["2"]} 0`,
 });
 
+/** Deep link from the detail page's BlockerChip to the pre-filtered /unfinished tab. */
+export const unfinishedLink = style({
+  fontSize: vars.fontSize.xs,
+  color: vars.color.primary,
+  whiteSpace: "nowrap",
+});
+
 /** D6 fix (Task 3.1.4g): compact "Pipeline: <name>" badge next to the tracker. */
 export const pipelineBadge = style({
   display: "inline-flex",

@@ -1,19 +1,26 @@
 "use client";
+// +feature: remote-host-badge
 
-import { useState, useRef, memo } from "react";
+import { useState, useRef, useEffect, memo } from "react";
 import { Session, SessionStatus, SubStatus, ReviewItem, InstanceType, RateLimitState, CheckpointProto, DetectedStatus } from "@/gen/session/v1/types_pb";
 import { Tooltip } from "../ui/Tooltip";
 import { ReviewQueueBadge } from "./ReviewQueueBadge";
+import { RetryBadge } from "./RetryBadge";
+import { RevivedContextBadge } from "./RevivedContextBadge";
 import { StatusBadge } from "./StatusBadge";
 import { SubStatusChip } from "./SubStatusChip";
 import { GitHubBadge } from "@/components/shared/GitHubBadge";
 import { TagEditor } from "./TagEditor";
 import { useTerminalSnapshot } from "@/lib/hooks/useTerminalSnapshot";
 import { useSessionActions } from "@/lib/hooks/useSessionActions";
+import { useCreationLifecycleActions } from "@/lib/hooks/useCreationLifecycleActions";
+import { getFailureMessage } from "@/lib/utils/sessionFailure";
 import { DetectionEventsPanel } from "./DetectionEventsPanel";
 import { SessionActionsOverflow } from "./SessionActionsOverflow";
 import { formatPauseReason } from "@/lib/sessions/formatPauseReason";
 import { isAutoApproveSupported } from "@/lib/sessions/autoApprove";
+import { getLastActivityTimestamp, isSessionStale } from "@/lib/session-staleness";
+import { RemoteConnectionIndicator } from "./RemoteConnectionIndicator";
 
 // The launch command always starts with the program string it was last launched
 // with (see Instance.buildLaunchCommand, session/instance_tmux.go). If it no longer
@@ -86,6 +93,7 @@ import {
   inlineTitleInput,
   badges,
   externalBadge,
+  hostBadge,
   muxIndicator,
   reviewInfo,
   reviewContext,
@@ -98,6 +106,9 @@ import {
   statusNeedsApproval,
   statusUnknown,
   statusCrashed,
+  statusCreationFailed,
+  statusGlyphIcon,
+  failureMessageIcon,
   category,
   tagsContainer,
   tags,
@@ -135,7 +146,10 @@ import {
   autoApproveBadge,
   autoApprovePendingBadge,
   noteBadge,
+  staleBadge,
   creationSpinner,
+  actionButton,
+  actionButtonCompact,
 } from "./SessionCard.css";
 import { truncateGoal } from "@/lib/utils/string";
 
@@ -143,7 +157,9 @@ const IS_DEBUG_MODE =
   typeof window !== "undefined" &&
   new URLSearchParams(window.location.search).get("debug") === "1";
 
-interface SessionCardProps {
+// Exported so BoardCard (SessionBoard.tsx's per-card wrapper) can declare an identical
+// callback surface without duplicating this list.
+export interface SessionCardProps {
   session: Session;
   onClick?: () => void;
   onOpenInNewPane?: () => void;
@@ -154,15 +170,15 @@ interface SessionCardProps {
   onNewWorkspace?: () => void;
   onRename?: (sessionId: string, newTitle: string) => Promise<boolean>;
   onRestart?: (sessionId: string) => Promise<boolean>;
+  onRetryNow?: (sessionId: string) => Promise<boolean>;
   onUpdateTags?: (sessionId: string, tags: string[]) => void;
   onCreateCheckpoint?: (sessionId: string, label: string) => Promise<boolean>;
   onListCheckpoints?: (sessionId: string) => Promise<CheckpointProto[]>;
   onForkFromCheckpoint?: (sessionId: string, checkpointId: string, newTitle: string) => Promise<Session | null>;
-  onRunOneShot?: (sessionId: string) => Promise<void>;
   onSetRateLimitEnabled?: (sessionId: string, enabled: boolean) => void;
   onToggleAutonomousMode?: (sessionId: string, enabled: boolean) => void;
   onToggleAutoApprove?: (sessionId: string, enabled: boolean) => void;
-  onSteerAutonomousSession?: (sessionId: string, message: string) => void;
+  onSteerAutonomousSession?: (sessionId: string, message: string) => Promise<boolean> | void;
   onClearConversationState?: (sessionId: string) => Promise<boolean>;
   onHibernate?: () => void;
   onResumeFromHibernation?: () => void;
@@ -173,6 +189,11 @@ interface SessionCardProps {
   detectedStatus?: DetectedStatus; // Terminal-detected status from pattern analysis
   detectedContext?: string; // Context string for the detected status
   suppressApprovalSubStatus?: boolean; // When true, hides Needs Approval chip/badge during optimistic clear
+  // Minutes of inactivity after which an ACTIVE session is flagged "Stale" (see
+  // lib/session-staleness.ts's isSessionStale). Optional/defaulted so existing call
+  // sites and tests that don't thread it through keep compiling; SessionList passes
+  // the resolved value from useStaleSessionConfig().
+  staleThresholdMinutes?: number;
 }
 
 function SessionCardInner({
@@ -186,11 +207,11 @@ function SessionCardInner({
   onNewWorkspace,
   onRename,
   onRestart,
+  onRetryNow,
   onUpdateTags,
   onCreateCheckpoint,
   onListCheckpoints,
   onForkFromCheckpoint,
-  onRunOneShot,
   onSetRateLimitEnabled,
   onToggleAutonomousMode,
   onToggleAutoApprove,
@@ -205,6 +226,7 @@ function SessionCardInner({
   detectedStatus,
   detectedContext,
   suppressApprovalSubStatus = false,
+  staleThresholdMinutes = 30,
 }: SessionCardProps) {
   const sessionActions = useSessionActions(session.id);
   const [isTagEditorOpen, setIsTagEditorOpen] = useState(false);
@@ -216,13 +238,20 @@ function SessionCardInner({
   const keyboardCommitRef = useRef(false);
   const cardRef = useRef<HTMLDivElement>(null);
   const snapshotToggleRef = useRef<HTMLButtonElement>(null);
+  const tagEditorTriggerRef = useRef<HTMLElement | null>(null);
   const [isSnapshotOpen, setIsSnapshotOpen] = useState(false);
 
   // Only fetch snapshot for active sessions (creating/paused/loading sessions have stale output).
   // SessionStatus.ACTIVE covers both ACTIVE and legacy RUNNING (same wire value = 1).
   const isSnapshotEnabled = session.status === SessionStatus.ACTIVE && isSnapshotOpen;
   const isCreating = session.status === SessionStatus.CREATING;
+  const isFailed = session.status === SessionStatus.FAILED;
   const isPaused = session.status === SessionStatus.PAUSED;
+
+  // Cancel/Retry guards (Epic 5.4, async-session-creation) -- shared with
+  // SessionRow.tsx via useCreationLifecycleActions.
+  const { cancelDisabled, retryDisabled, handleCancelCreation, handleRetryCreation } =
+    useCreationLifecycleActions(session.id, isCreating);
   const pendingProgramChange = hasPendingProgramChange(session);
   const pendingAutoApproveChange = hasPendingAutoApproveChange(session);
   // Gated on AutoApproveSupported-equivalent so the badge can never claim a session is
@@ -264,8 +293,30 @@ function SessionCardInner({
         return statusPaused;  // no distinct style yet; reuses paused (session is idle/stopped)
       case SessionStatus.CRASHED:
         return statusCrashed;
+      case SessionStatus.PERMANENTLY_FAILED:
+        // Reuses CRASHED's error palette — never the same slot/style as a
+        // routine NeedsAttention reason (ReviewQueueBadge), which is the
+        // ambiguity this status exists to eliminate (research/ux.md).
+        return statusCrashed;
+      case SessionStatus.FAILED:
+        return statusCreationFailed;
       default:
         return statusUnknown;
+    }
+  };
+
+  // WCAG 1.4.1 (icon + color, not color alone): CRASHED and FAILED are the
+  // only two statuses that could otherwise be mistaken for one another by a
+  // colorblind user (both render as a red/amber pill), so both get a distinct
+  // glyph. Every other status is unambiguous from its label text alone.
+  const getStatusIcon = (sessionStatus: SessionStatus): string | null => {
+    switch (sessionStatus) {
+      case SessionStatus.CRASHED:
+        return "✕";
+      case SessionStatus.FAILED:
+        return "⚠";
+      default:
+        return null;
     }
   };
 
@@ -289,10 +340,31 @@ function SessionCardInner({
         return "Hibernated";
       case SessionStatus.CRASHED:
         return "Crashed";
+      case SessionStatus.PERMANENTLY_FAILED:
+      case SessionStatus.FAILED:
+        return "Failed";
       default:
         return "Unknown";
     }
   };
+
+  // Failure-reason categories are set verbatim by the async creation pipeline
+  // (server/services/session_creation_pipeline.go, stale_creation_sweeper.go)
+  // as session.instance_state.go's FailureReason() -- "GitHubResolutionError",
+  // "StartupError", "Stale". Three distinct messages per plan.md Story 5.2.2 /
+  // UX research §2/§4 (a stalled creation must never read as a user error).
+  // session.failureReason is on the wire (types_pb.ts), so read it directly;
+  // falls back to creation_progress, which the pipeline already sets to a
+  // detailed message for GitHubResolutionError/StartupError (setPhase calls
+  // in session_creation_pipeline.go) before the terminal write -- Stale does
+  // not get a fresh setPhase call, so a Stale session without failureReason
+  // falls back to the generic message instead of whatever stale progress
+  // text it was last showing.
+  const failureMessage = isFailed
+    ? session.failureReason
+      ? getFailureMessage(session.failureReason)
+      : session.creationProgress || getFailureMessage("")
+    : "";
 
   const formatResetTime = (ts?: { seconds: bigint; nanos: number }): string => {
     if (!ts || ts.seconds === BigInt(0)) return "";
@@ -395,6 +467,7 @@ function SessionCardInner({
 
   const handleEditTags = (e: React.MouseEvent) => {
     e.stopPropagation();
+    tagEditorTriggerRef.current = e.currentTarget as HTMLElement;
     setIsTagEditorOpen(true);
   };
 
@@ -458,6 +531,7 @@ function SessionCardInner({
           tags={session.tags || []}
           onSave={(newTags) => { onUpdateTags(session.id, newTags); setIsTagEditorOpen(false); }}
           onCancel={() => setIsTagEditorOpen(false)}
+          triggerRef={tagEditorTriggerRef}
           sessionTitle={session.title}
         />
       )}
@@ -538,6 +612,18 @@ function SessionCardInner({
                 {muxEnabled && <span className={muxIndicator} aria-hidden="true">✓</span>}
               </span>
             )}
+            {session.remoteName && (
+              <span
+                className={hostBadge}
+                role="img"
+                title={`Running on ${session.remoteName}`}
+                aria-label={`Running on ${session.remoteName}`}
+                data-testid="host-badge"
+              >
+                <span aria-hidden="true">🖥️</span> {session.remoteName}
+              </span>
+            )}
+            {session.remoteName && <RemoteConnectionIndicator remoteName={session.remoteName} />}
             <GitHubBadge
               prNumber={session.githubPrNumber}
               prUrl={session.githubPrUrl}
@@ -559,16 +645,35 @@ function SessionCardInner({
                 compact={true}
               />
             )}
+            {session.retryAttempt > 0 && (
+              <RetryBadge
+                retryAttempt={session.retryAttempt}
+                retryMaxAttempts={session.retryMaxAttempts}
+                compact={true}
+              />
+            )}
             {isPaused && session.pauseReason ? (
               <Tooltip label={formatPauseReason(session.pauseReason)} side="top">
                 <span
                   className={`${status} ${getStatusColor(session.status)}`}
                   role="img"
                   aria-label={`Session status: ${getStatusText(session.status)}`}
+                  data-testid="status-pill"
                 >
+                  {getStatusIcon(session.status) && (
+                    <span className={statusGlyphIcon} aria-hidden="true">{getStatusIcon(session.status)}</span>
+                  )}
                   {getStatusText(session.status)}
                 </span>
               </Tooltip>
+            ) : session.status === SessionStatus.PERMANENTLY_FAILED ? (
+              <span
+                className={`${status} ${getStatusColor(session.status)}`}
+                role="img"
+                aria-label={`Session status: Failed — gave up after ${session.retryMaxAttempts} attempt${session.retryMaxAttempts === 1 ? "" : "s"}`}
+              >
+                {getStatusText(session.status)}
+              </span>
             ) : session.status === SessionStatus.STOPPED && session.creationProgress ? (
               // ponytail: reuses creationProgress — the field is only cleared on a
               // successful start, so a startup/reconnect failure written here (see
@@ -579,7 +684,11 @@ function SessionCardInner({
                   className={`${status} ${getStatusColor(session.status)}`}
                   role="img"
                   aria-label={`Session status: ${getStatusText(session.status)} — ${session.creationProgress}`}
+                  data-testid="status-pill"
                 >
+                  {getStatusIcon(session.status) && (
+                    <span className={statusGlyphIcon} aria-hidden="true">{getStatusIcon(session.status)}</span>
+                  )}
                   {getStatusText(session.status)}
                 </span>
               </Tooltip>
@@ -588,7 +697,11 @@ function SessionCardInner({
                 className={`${status} ${getStatusColor(session.status)}`}
                 role="img"
                 aria-label={`Session status: ${getStatusText(session.status)}`}
+                data-testid="status-pill"
               >
+                {getStatusIcon(session.status) && (
+                  <span className={statusGlyphIcon} aria-hidden="true">{getStatusIcon(session.status)}</span>
+                )}
                 {getStatusText(session.status)}
               </span>
             )}
@@ -608,6 +721,7 @@ function SessionCardInner({
               (session.subStatus === SubStatus.UNSPECIFIED || session.subStatus === SubStatus.IDLE) && (
               <StatusBadge detectedStatus={detectedStatus} context={detectedContext} />
             )}
+            <RevivedContextBadge session={session} />
             {/* Sub-status chip from the proto sub_status field.
                 ACTIVE covers legacy RUNNING (same wire value via allow_alias).
                 Cast to number to bypass TS's duplicate-value narrowing for allow_alias enums. */}
@@ -615,8 +729,17 @@ function SessionCardInner({
               session.subStatus !== SubStatus.UNSPECIFIED &&
               session.subStatus !== SubStatus.IDLE &&
               !(suppressApprovalSubStatus && (session.subStatus === SubStatus.NEEDS_APPROVAL || session.subStatus === SubStatus.INPUT_REQUIRED)) && (
-                <SubStatusChip subStatus={session.subStatus} />
+                <SubStatusChip subStatus={session.subStatus} subagentCount={session.subagentCount} />
               )}
+            {isSessionStale(session, staleThresholdMinutes) && (
+              <span
+                role="img"
+                aria-label={`Stale — no output for over ${staleThresholdMinutes} minutes`}
+                className={`${staleBadge}`}
+              >
+                🟠 Stale
+              </span>
+            )}
             {(() => {
               const mb = Number(session.memoryRssMb ?? 0n);
               if (mb <= 0) return null;
@@ -803,11 +926,7 @@ function SessionCardInner({
         )}
         {/* Last Activity — Tier 1 always-visible in header */}
         {(() => {
-          const moSecs = session.lastMeaningfulOutput?.seconds ?? BigInt(0);
-          const tuSecs = session.lastTerminalUpdate?.seconds ?? BigInt(0);
-          const lastActivity = moSecs === BigInt(0) && tuSecs === BigInt(0)
-            ? undefined
-            : moSecs >= tuSecs ? session.lastMeaningfulOutput : session.lastTerminalUpdate;
+          const lastActivity = getLastActivityTimestamp(session);
           return lastActivity ? (
             <div className={lastActivityRow}>
               <span className={lastActivityLabel}>Active</span>
@@ -917,15 +1036,79 @@ function SessionCardInner({
           </div>
         )}
 
-        {/* Persistent live region for creation progress — always in DOM so NVDA announces on content change */}
-        <span role="status" aria-live="polite" id={`creation-status-${session.id}`} style={{ position: "absolute", width: 1, height: 1, overflow: "hidden", clipPath: "inset(50%)", whiteSpace: "nowrap" }}>
-          {isCreating ? (session.creationProgress || "Starting session...") : ""}
+        {/*
+          Persistent live region for creation progress AND Failed-state
+          announcements — the SAME node is reused for both (plan.md Story
+          5.2.2 / design/ux.md's "one live region, not two"), never a second
+          role="status" element. aria-live flips polite (routine Creating
+          progress) -> assertive (a Failed transition is worth interrupting
+          for) via attribute mutation on this node, not a remount, so NVDA/
+          VoiceOver reliably pick up the change. Always in the DOM (not
+          conditionally mounted) so content-only mutations are what triggers
+          the announcement.
+        */}
+        <span
+          role="status"
+          aria-live={isFailed ? "assertive" : "polite"}
+          id={`creation-status-${session.id}`}
+          data-testid="creation-live-region"
+          style={{ position: "absolute", width: 1, height: 1, overflow: "hidden", clipPath: "inset(50%)", whiteSpace: "nowrap" }}
+        >
+          {isFailed ? failureMessage : isCreating ? (session.creationProgress || "Starting session...") : ""}
         </span>
         {/* Creation progress spinner — only for Creating sessions */}
         {isCreating && (
-          <div style={{ display: "flex", alignItems: "center", gap: "8px", padding: "8px 0", color: "var(--text-secondary)", fontSize: "0.875rem" }}>
-            <span className={creationSpinner} aria-hidden="true" />
-            <span aria-hidden="true">{session.creationProgress || "Starting session..."}</span>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "8px", padding: "8px 0", color: "var(--text-secondary)", fontSize: "0.875rem" }}>
+            <span style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+              <span className={creationSpinner} aria-hidden="true" />
+              <span aria-hidden="true" data-testid="session-progress-text">{session.creationProgress || "Starting session..."}</span>
+            </span>
+            {/*
+              Cancel button (Epic 5.4/Story 5.4.1) — clickable immediately,
+              not gated on any delay. On success the instance is deleted
+              server-side and the card is removed from the list; on a
+              lost-race FailedPrecondition the normal stream status update
+              (Active/Failed) takes over instead of a Cancelled flash.
+            */}
+            <button
+              type="button"
+              onClick={handleCancelCreation}
+              disabled={cancelDisabled}
+              aria-label="Cancel session creation"
+              data-testid="cancel-creation-button"
+              className={`${actionButton} ${actionButtonCompact}`}
+            >
+              Cancel
+            </button>
+          </div>
+        )}
+        {/*
+          Persistent Failed-state message — the durable, always-visible
+          record of why creation failed (design/ux.md Surface 3: the toast in
+          Epic 5.3 is transient, this row is not).
+        */}
+        {isFailed && (
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "8px", padding: "8px 0", color: "var(--text-secondary)", fontSize: "0.875rem" }}>
+            <span style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+              <span className={failureMessageIcon} aria-hidden="true">⚠</span>
+              <span data-testid="failure-message">{failureMessage}</span>
+            </span>
+            {/*
+              Retry button (Epic 5.4/Story 5.4.2) — transitions the SAME
+              card in place (Failed -> Creating), never a second card.
+              Disabled synchronously on click (isSubmittingRef-style guard,
+              see Omnibar.tsx) so a double-click only fires one RPC.
+            */}
+            <button
+              type="button"
+              onClick={handleRetryCreation}
+              disabled={retryDisabled}
+              aria-label="Retry creating session"
+              data-testid="retry-creation-button"
+              className={`${actionButton} ${actionButtonCompact}`}
+            >
+              Retry
+            </button>
           </div>
         )}
 
@@ -998,11 +1181,11 @@ function SessionCardInner({
             try { await onDelete?.(); } finally { setIsDeleting(false); }
           }}
           onRestart={onRestart}
+          onRetryNow={onRetryNow}
           onClone={onClone}
           onOpenInNewPane={onOpenInNewPane}
           onNewWorkspace={onNewWorkspace}
           onCreateCheckpoint={onCreateCheckpoint}
-          onRunOneShot={onRunOneShot}
           onSetRateLimitEnabled={onSetRateLimitEnabled}
           onToggleAutonomousMode={onToggleAutonomousMode}
           onToggleAutoApprove={onToggleAutoApprove}

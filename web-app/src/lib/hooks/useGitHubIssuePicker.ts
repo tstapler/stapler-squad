@@ -2,8 +2,8 @@
 
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useSelector } from "react-redux";
+import { createSelector } from "@reduxjs/toolkit";
 import { selectAllSessions } from "@/lib/store/sessionsSlice";
-import type { RootState } from "@/lib/store/store";
 import { GitHubAuthError, type GitHubRepo, type GitHubIssue } from "./useBacklogService";
 import {
   getCachedRepos,
@@ -57,6 +57,36 @@ export interface UseGitHubIssuePickerReturn {
 
 const ISSUE_DEBOUNCE_MS = 150;
 
+// Derives local-path repos from the session list. Memoized with createSelector
+// (module-level, not inline in the hook — an inline selector would rebuild the
+// memoization cache every render, defeating the point): selectAllSessions's
+// result only changes reference when the sessions slice actually changes, so
+// this only recomputes then, returning the SAME array reference on every other
+// render instead of a fresh one. An inline `useSelector((state) => { ... build
+// a new array ... })` — the previous shape — returns a new array reference on
+// every invocation regardless of whether the input changed, which is the
+// classic react-redux anti-pattern that produces the "The result of
+// getSnapshot should be cached" class of bug: useSyncExternalStore treats each
+// new reference as a genuine store change and can loop re-rendering trying to
+// reach a stable snapshot, intermittently manifesting as a crash under CPU
+// contention (jsdom + React 19's stricter consistency checks) without ever
+// reproducing reliably in isolation — see useGitHubIssuePicker.multiselect.test.ts.
+const selectLocalRepos = createSelector([selectAllSessions], (sessions) => {
+  const seen = new Set<string>();
+  const results: GitHubRepo[] = [];
+  for (const s of sessions) {
+    if (!s.path) continue;
+    const parts = s.path.split("/");
+    const repo = parts[parts.length - 1] ?? "";
+    const owner = parts[parts.length - 2] ?? "";
+    const key = `${owner}/${repo}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    results.push({ owner, repo, isLocal: true, localPath: s.path, description: s.title ?? "" });
+  }
+  return results;
+});
+
 export function useGitHubIssuePicker({
   searchGitHubRepos,
   listGitHubIssues,
@@ -78,22 +108,7 @@ export function useGitHubIssuePicker({
   const issueGenRef = useRef(0);
 
   // Pull local-path repos from Redux session list for the "local repos" tier.
-  const localRepos = useSelector((state: RootState) => {
-    const sessions = selectAllSessions(state);
-    const seen = new Set<string>();
-    const results: GitHubRepo[] = [];
-    for (const s of sessions) {
-      if (!s.path) continue;
-      const parts = s.path.split("/");
-      const repo = parts[parts.length - 1] ?? "";
-      const owner = parts[parts.length - 2] ?? "";
-      const key = `${owner}/${repo}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      results.push({ owner, repo, isLocal: true, localPath: s.path, description: s.title ?? "" });
-    }
-    return results;
-  });
+  const localRepos = useSelector(selectLocalRepos);
 
   // ─── Repo phase: one-time eager fetch, then filter client-side ─────────────
 

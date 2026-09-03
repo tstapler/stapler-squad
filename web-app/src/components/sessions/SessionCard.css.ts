@@ -146,6 +146,24 @@ export const externalBadge = style({
   border: `1px solid ${vars.color.primaryDark}`,
 });
 
+// hostBadge shows which SSH remote a session is running on (ssh-remote-workspaces
+// Epic 6.2, Story 6.2.1). Mirrors externalBadge's shape (same shell) but uses
+// the neutral surface tokens rather than the primary-color pill -- a host
+// badge is informational, not a call-to-action the way externalBadge's
+// "this is a mux-attached external session" signal is.
+export const hostBadge = style({
+  display: "inline-flex",
+  alignItems: "center",
+  gap: vars.space["1"],
+  padding: `${vars.space["1"]} 10px`,
+  background: vars.color.surfaceSubtle,
+  color: vars.color.textSecondary,
+  borderRadius: vars.radii.full,
+  fontSize: vars.fontSize.sm,
+  fontWeight: 600,
+  border: `1px solid ${vars.color.borderColor}`,
+});
+
 export const muxIndicator = style({
   fontSize: "0.625rem",
   background: "rgba(255, 255, 255, 0.3)", // intentional: translucent white overlay on colored badge bg
@@ -232,6 +250,38 @@ export const statusCrashed = style({
   background: vars.color.errorBg,
   color: vars.color.errorText,
   border: `1px solid ${vars.color.error}`,
+});
+
+/** Distinct style for FAILED (async creation pipeline failure) sessions.
+ *  Deliberately a NEW token, not a reuse of statusCrashed -- plan.md's Pattern
+ *  Decisions table ("Failed-state visual token"): a failed-before-running
+ *  session and a crashed-after-running session are different enough states
+ *  that conflating their color token would make a future visual split harder
+ *  to discover later. Uses the warning palette (vs. statusCrashed's error
+ *  palette) so the two are also visually distinguishable, not just
+ *  differently-named -- contrast against warningBg verified >=4.5:1 (WCAG AA)
+ *  in every theme.css.ts variant (light 6.37:1, dark variants 5.43-14.99:1). */
+export const statusCreationFailed = style({
+  background: vars.color.warningBg,
+  color: vars.color.warningText,
+  border: `1px solid ${vars.color.warning}`,
+});
+
+/** Warning-glyph icon shown inside the CRASHED/FAILED status pills so the
+ *  two states are distinguishable by more than color alone (WCAG 1.4.1).
+ *  Static/no animation by design -- satisfies the reduced-motion requirement
+ *  for the Failed icon without needing an explicit prefers-reduced-motion
+ *  media query (there is no motion to guard in the first place). */
+export const statusGlyphIcon = style({
+  marginRight: "4px",
+});
+
+/** Icon for the persistent Failed-state message row (distinct from the
+ *  status-pill glyph above, which sits inside the pill itself). Static, no
+ *  animation -- see statusGlyphIcon's comment for why that alone satisfies
+ *  the reduced-motion requirement. */
+export const failureMessageIcon = style({
+  color: vars.color.warningText,
 });
 
 export const category = style({
@@ -471,9 +521,13 @@ export const actionButton = style({
   cursor: "pointer",
   transition: "all 0.2s ease",
   selectors: {
-    "&:hover": {
+    "&:hover:not(:disabled)": {
       background: vars.color.hoverBackground,
       borderColor: vars.color.borderHover,
+    },
+    "&:disabled": {
+      cursor: "default",
+      opacity: 0.6,
     },
   },
   "@media": {
@@ -485,6 +539,17 @@ export const actionButton = style({
       textAlign: "center",
     },
   },
+});
+
+// Size-override modifier for actionButton: the Cancel/Retry creation-lifecycle
+// buttons (Epic 5.4, async-session-creation) sit in a tight inline row next
+// to the creation-progress spinner / failure message, not actionsBar's
+// spacious button grid, so they need a visually smaller resting size. Applied
+// together with actionButton (not standalone) so the WCAG 2.5.5 44px
+// min-height touch-target rule and hover states below 768px still apply.
+export const actionButtonCompact = style({
+  padding: "4px 10px",
+  fontSize: "0.8125rem",
 });
 
 export const deleteButton = style({
@@ -877,6 +942,22 @@ export const noteBadge = style({
   border: `1px solid ${vars.color.borderColor}`,
   fontSize: vars.fontSize.xs,
   fontWeight: vars.fontWeight.medium,
+  whiteSpace: "nowrap",
+});
+
+// Reuses the same warning tokens as backlog-stuck/stuckReason.css.ts's chipStaleWork
+// — both flag "no recent activity" states, so they share one visual language.
+export const staleBadge = style({
+  display: "inline-flex",
+  alignItems: "center",
+  gap: vars.space["1"],
+  padding: `${vars.space["1"]} ${vars.space["2"]}`,
+  borderRadius: vars.radii.sm,
+  background: vars.color.warningBg,
+  color: vars.color.warningText,
+  border: `1px solid ${vars.color.warning}`,
+  fontSize: vars.fontSize.xs,
+  fontWeight: 600,
   whiteSpace: "nowrap",
 });
 

@@ -81,6 +81,40 @@ func GetClaudeDir() (string, error) {
 	return filepath.Join(home, ".claude"), nil
 }
 
+// ResolveClaudeHistoryDir returns the directory holding Claude Code's JSONL
+// session-history files, which two independent consumers walk and watch:
+// server's TokenStore/ArtifactExtractor (BuildRuntimeDeps) and session's
+// HistoryLinker fsnotify watcher.
+//
+// In production (isIsolated=false) that is the real ~/.claude/projects. An
+// isolated test/demo instance must not touch it: on a dev machine with a long
+// Claude Code history that tree is thousands of real JSONL files, some large,
+// which overflows the consumers' bounded parse/scan queues and made the
+// walk+parse take 100s-1500s+ in CI, well past any reasonable test timeout.
+// Under isolation this returns (and creates) a per-instance directory inside
+// the isolated config dir instead — it starts empty, so both consumers stay
+// fully functional against test fixtures without ever reading real session
+// data. Same hazard class as IsIsolatedInstance's other documented case (the
+// shared tmux socket); here the isolated resource is the config dir.
+//
+// isIsolated is a parameter rather than an internal IsIsolatedInstance() call
+// so both branches are directly unit-testable — every test exercising this is
+// itself a go test binary, where IsIsolatedInstance() is unconditionally true.
+func ResolveClaudeHistoryDir(homeDir string, isIsolated bool) (string, error) {
+	if !isIsolated {
+		return filepath.Join(homeDir, ".claude", "projects"), nil
+	}
+	configDir, err := GetConfigDir()
+	if err != nil {
+		return "", fmt.Errorf("failed to resolve isolated config dir for Claude history: %w", err)
+	}
+	historyDir := filepath.Join(configDir, "claude-projects")
+	if err := os.MkdirAll(historyDir, 0750); err != nil {
+		return "", fmt.Errorf("failed to create isolated Claude history dir %s: %w", historyDir, err)
+	}
+	return historyDir, nil
+}
+
 // toValidUTF8 ensures the content is valid UTF-8 for protobuf marshaling.
 // Invalid UTF-8 sequences are replaced with the Unicode replacement character.
 func toValidUTF8(content []byte) string {
@@ -91,13 +125,29 @@ func toValidUTF8(content []byte) string {
 	return strings.ToValidUTF8(string(content), "�")
 }
 
+// resolveConfigPath joins filename onto claudeDir and rejects any result that
+// escapes claudeDir (e.g. filename containing "../"). filename ultimately
+// comes from RPC requests (see server/services/config_service.go), so it must
+// not be trusted to stay within the Claude config directory.
+func resolveConfigPath(claudeDir, filename string) (string, error) {
+	base := filepath.Clean(claudeDir)
+	joined := filepath.Clean(filepath.Join(base, filename))
+	if !strings.HasPrefix(joined+string(filepath.Separator), base+string(filepath.Separator)) {
+		return "", fmt.Errorf("invalid filename: %q escapes the Claude config directory", filename)
+	}
+	return joined, nil
+}
+
 // GetConfig reads a specific Claude configuration file by name
 // Common file names include "CLAUDE.md", "settings.json", "agents.md"
 func (m *ClaudeConfigManager) GetConfig(filename string) (*ConfigFile, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	filePath := filepath.Join(m.claudeDir, filename)
+	filePath, err := resolveConfigPath(m.claudeDir, filename)
+	if err != nil {
+		return nil, err
+	}
 
 	// Check if file exists
 	info, err := os.Stat(filePath)
@@ -109,6 +159,8 @@ func (m *ClaudeConfigManager) GetConfig(filename string) (*ConfigFile, error) {
 	}
 
 	// Read file contents
+	// #nosec G304 -- filePath was already validated above via resolveConfigPath,
+	// which rejects any result escaping m.claudeDir.
 	content, err := os.ReadFile(filePath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read config file: %w", err)
@@ -155,6 +207,8 @@ func (m *ClaudeConfigManager) ListConfigs() ([]ConfigFile, error) {
 		}
 
 		filePath := filepath.Join(m.claudeDir, entry.Name())
+		// #nosec G304 -- filePath is built from entry.Name(), enumerated by os.ReadDir
+		// over m.claudeDir itself, not from caller-supplied input.
 		content, err := os.ReadFile(filePath)
 		if err != nil {
 			continue // Skip files we can't read
@@ -186,10 +240,13 @@ func (m *ClaudeConfigManager) UpdateConfig(filename string, content string) erro
 		}
 	}
 
-	filePath := filepath.Join(m.claudeDir, filename)
+	filePath, err := resolveConfigPath(m.claudeDir, filename)
+	if err != nil {
+		return err
+	}
 
 	// Create directory if it doesn't exist
-	if err := os.MkdirAll(m.claudeDir, 0755); err != nil {
+	if err := os.MkdirAll(m.claudeDir, 0750); err != nil {
 		return fmt.Errorf("failed to create Claude directory: %w", err)
 	}
 
@@ -203,7 +260,7 @@ func (m *ClaudeConfigManager) UpdateConfig(filename string, content string) erro
 
 	// Write to temporary file first for atomicity
 	tmpPath := filePath + ".tmp"
-	if err := os.WriteFile(tmpPath, []byte(content), 0644); err != nil {
+	if err := os.WriteFile(tmpPath, []byte(content), 0600); err != nil {
 		return fmt.Errorf("failed to write temporary file: %w", err)
 	}
 
@@ -219,12 +276,14 @@ func (m *ClaudeConfigManager) UpdateConfig(filename string, content string) erro
 
 // copyFile copies a file from src to dst
 func copyFile(src, dst string) error {
+	// #nosec G304 -- copyFile's only caller (UpdateConfig) passes filePath, which was
+	// already validated by resolveConfigPath to stay within m.claudeDir.
 	data, err := os.ReadFile(src)
 	if err != nil {
 		return fmt.Errorf("failed to read source file: %w", err)
 	}
 
-	if err := os.WriteFile(dst, data, 0644); err != nil {
+	if err := os.WriteFile(dst, data, 0600); err != nil {
 		return fmt.Errorf("failed to write destination file: %w", err)
 	}
 
