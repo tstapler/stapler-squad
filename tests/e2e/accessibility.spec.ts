@@ -30,33 +30,9 @@ import {
   seedWorkSessionWithWorktreeDirect,
 } from './pages/BacklogMutations';
 import { SessionClient } from './helpers/session-client';
+import { dismissNotificationInterference } from './pages/NotificationPanel';
 
 const BASE_URL = process.env.TEST_SERVER_URL || 'http://localhost:8544';
-
-// dismissNotificationInterference closes anything that can steal or trap
-// keyboard focus outside the main session list: the persistent Notification
-// Panel (if a prior toast auto-opened it) and any currently-visible toast
-// alert (role="alert"). Both are triggered by the SAME "session creation
-// failed" event this file's Cancel/Retry a11y test deliberately provokes, and
-// either one intercepting a Tab-key walk mid-test makes the walk land inside
-// the panel/toast instead of ever reaching the session list -- observed in
-// CI as "Tab order never reached the Retry button" (BUG-097) even though the
-// session list itself is fully keyboard-reachable. Call this immediately
-// before any Tab-key walk in this file that exercises the session list.
-async function dismissNotificationInterference(page: import('@playwright/test').Page): Promise<void> {
-  const panelClose = page.getByRole('button', { name: 'Close notification panel' });
-  if (await panelClose.isVisible().catch(() => false)) {
-    await panelClose.click().catch(() => {});
-  }
-  // Toasts can stack; dismiss all currently visible ones. Bounded loop, not
-  // a while(true), so a stuck/reappearing toast can't hang the test.
-  for (let i = 0; i < 5; i++) {
-    const dismissButtons = page.getByRole('alert').getByRole('button', { name: /Dismiss|Close notification/ });
-    const count = await dismissButtons.count().catch(() => 0);
-    if (count === 0) break;
-    await dismissButtons.first().click().catch(() => {});
-  }
-}
 
 test.describe('Accessibility (WCAG 2.1 AA)', () => {
   // Axe scans are CPU-heavy; give each test 2 minutes to avoid browser-crash flakes.
@@ -505,15 +481,11 @@ async function assertTabWrapsWithinDialog(
 // giving "card" view a live entry point) is a separate, out-of-scope change
 // -- neither file is "SessionCard component/styles".
 test.describe('Accessibility — SessionCard Failed-state (async-session-creation Epic 5.2)', () => {
-  // Unlike this file's other two describe blocks (both explicitly set to
-  // 120s), this one had no override -- silently running at Playwright's
-  // default per-test timeout (30s). The Cancel/Retry a11y test below does
-  // real GitHub-404 resolution, up to 5 create-session retry attempts, two
-  // full page navigations, and two 60-press Tab walks (each a real CDP round
-  // trip): comfortably slow enough under any CI load to exceed 30s outright,
-  // which manifested as "Tab order never reached the Retry button" rather
-  // than an explicit timeout error when the cutoff landed mid-walk. See
-  // BUG-097.
+  // The other two describe blocks already override to 120s; this one didn't,
+  // so the Cancel/Retry test below (5 retry attempts, 2 navigations, 2x
+  // 60-press Tab walks) was silently timing out at Playwright's 30s default
+  // mid-Tab-walk, surfacing as "Tab order never reached the Retry button"
+  // rather than a timeout error. See BUG-097.
   test.setTimeout(120_000);
 
   test('Failed status pill meets WCAG AA contrast in both themes', async () => {
@@ -625,131 +597,134 @@ test.describe('Accessibility — SessionCard Failed-state (async-session-creatio
     //    Cancel unmounting BEFORE its turn in tab order, which is retried
     //    against a fresh Creating session below, with a much narrower
     //    window now that the walk itself no longer contributes to it.
-    // Each retry below leaves its Creating/Failed session in the list --
-    // deleted as soon as we're done needing it (see the `continue`/catch
-    // paths and the cleanup right after the reachedCancel assertions) so
-    // this test's own attempts don't inflate the tab-order distance to the
-    // Retry button checked further down. See BUG-097: a fixed 60-Tab budget
-    // combined with unbounded leftover cards from this loop was observed
-    // failing "Tab order never reached the Retry button" in CI.
+    // Delete each attempt's Creating/Failed session once we're done with it,
+    // so leftovers don't inflate the Retry button's tab-order distance below
+    // (BUG-097). Tracked in a set and swept in `finally` too, so an
+    // unexpected assertion failure mid-test can't leak a session into
+    // subsequent runs.
+    const pendingSessionIds = new Set<string>();
+    async function cleanupSession(id: string): Promise<void> {
+      await client.deleteSession(id, true).catch((e) => console.warn(`[a11y] failed to delete session ${id}:`, e));
+      pendingSessionIds.delete(id);
+    }
+
     let reachedCancel = false;
     let verified = false;
     let cancelAriaLabel: string | null = null;
-    let verifiedSessionId: string | null = null;
-    for (let attempt = 0; attempt < 5 && !verified; attempt++) {
-      const creatingTitle = `e2e-a11y-creating-${Date.now()}-${attempt}`;
-      const creatingSession = await client.createSession({ title: creatingTitle, path: NONEXISTENT_GITHUB_URL });
+    try {
+      for (let attempt = 0; attempt < 5 && !verified; attempt++) {
+        const creatingTitle = `e2e-a11y-creating-${Date.now()}-${attempt}`;
+        const creatingSession = await client.createSession({ title: creatingTitle, path: NONEXISTENT_GITHUB_URL });
+        pendingSessionIds.add(creatingSession.id);
 
-      await page.unroute('**/api/session.v1.SessionService/ListSessions').catch(() => {});
-      await page.route('**/api/session.v1.SessionService/ListSessions', async (route) => {
-        const response = await route.fetch();
-        const json = await response.json();
-        const sessions = (json?.sessions ?? []) as Array<Record<string, unknown>>;
-        const target = sessions.find((s) => (s.title as string) === creatingTitle);
-        if (target) {
-          Object.assign(target, { status: 'SESSION_STATUS_CREATING', failureReason: '' });
+        await page.unroute('**/api/session.v1.SessionService/ListSessions').catch(() => {});
+        await page.route('**/api/session.v1.SessionService/ListSessions', async (route) => {
+          const response = await route.fetch();
+          const json = await response.json();
+          const sessions = (json?.sessions ?? []) as Array<Record<string, unknown>>;
+          const target = sessions.find((s) => (s.title as string) === creatingTitle);
+          if (target) {
+            Object.assign(target, { status: 'SESSION_STATUS_CREATING', failureReason: '' });
+          }
+          await route.fulfill({ response, json });
+        });
+
+        await page.goto(BASE_URL, { waitUntil: 'domcontentloaded' });
+
+        const creatingCard = page.locator('[data-testid="session-card"], [data-testid="session-row"]').filter({ hasText: creatingTitle });
+        await expect(creatingCard).toBeVisible({ timeout: 10000 });
+
+        const cancelButton = creatingCard.getByRole('button', { name: 'Cancel session creation' });
+        if (!(await cancelButton.isVisible().catch(() => false))) {
+          await cleanupSession(creatingSession.id);
+          continue; // already resolved to Failed -- try again with a fresh session
         }
-        await route.fulfill({ response, json });
-      });
 
+        try {
+          const cancelHandle = await cancelButton.elementHandle({ timeout: 2000 });
+          await page.evaluate(() => {
+            (window as unknown as { __focusLog: EventTarget[] }).__focusLog = [];
+            document.addEventListener(
+              'focusin',
+              (e) => (window as unknown as { __focusLog: EventTarget[] }).__focusLog.push(e.target as EventTarget),
+              true,
+            );
+          });
+          await dismissNotificationInterference(page);
+          await page.locator('input[aria-label="Search sessions"]').focus();
+          for (let i = 0; i < 60; i++) {
+            await page.keyboard.press('Tab');
+          }
+          reachedCancel = await page.evaluate(
+            (c) => (window as unknown as { __focusLog: EventTarget[] }).__focusLog.includes(c as unknown as EventTarget),
+            cancelHandle,
+          );
+          if (!reachedCancel) {
+            await cleanupSession(creatingSession.id);
+            continue; // didn't survive the tab walk -- retry with a fresh session
+          }
+
+          await expect(cancelButton).toHaveAccessibleName('Cancel session creation', { timeout: 2000 });
+          cancelAriaLabel = await cancelButton.getAttribute('aria-label');
+          verified = true;
+        } catch {
+          // cancelButton vanished mid-check (session resolved) -- fall
+          // through and retry with a fresh Creating session.
+          await cleanupSession(creatingSession.id);
+        }
+      }
+      expect(verified, 'Could not keep a Creating card with a stable, keyboard-reachable Cancel button within 5 attempts').toBe(true);
+      expect(reachedCancel, 'Tab order never reached the Cancel button').toBe(true);
+
+      // Done needing the verified Cancel session's card -- delete it now so
+      // it doesn't add to the tab-order distance to the Retry button below.
+      for (const id of pendingSessionIds) {
+        await cleanupSession(id);
+      }
+
+      // NOW create the Failed-bound session -- doing this AFTER the Cancel
+      // check (rather than before, as an earlier version of this test did)
+      // means none of the time spent creating/verifying Cancel above needs to
+      // race against this session's own resolution; it has its own generous
+      // up-to-30s budget below with nothing else competing for it.
+      const failedTitle = `e2e-a11y-failed-${Date.now()}`;
+      const failedSession = await client.createSession({ title: failedTitle, path: NONEXISTENT_GITHUB_URL });
+      pendingSessionIds.add(failedSession.id);
       await page.goto(BASE_URL, { waitUntil: 'domcontentloaded' });
 
-      const creatingCard = page.locator('[data-testid="session-card"], [data-testid="session-row"]').filter({ hasText: creatingTitle });
-      await expect(creatingCard).toBeVisible({ timeout: 10000 });
+      const failedCard = page.locator('[data-testid="session-card"], [data-testid="session-row"]').filter({ hasText: failedTitle });
+      await expect(failedCard).toBeVisible({ timeout: 10000 });
+      const retryButton = failedCard.getByRole('button', { name: 'Retry creating session' });
+      await expect(retryButton).toBeVisible({ timeout: 30000 });
 
-      const cancelButton = creatingCard.getByRole('button', { name: 'Cancel session creation' });
-      if (!(await cancelButton.isVisible().catch(() => false))) {
-        await client.deleteSession(creatingSession.id, true).catch(() => {});
-        continue; // already resolved to Failed -- try again with a fresh session
-      }
+      // Distinct aria-labels, and both exposed as ARIA role="button".
+      await expect(retryButton).toHaveAccessibleName('Retry creating session');
+      expect(cancelAriaLabel).not.toBe(await retryButton.getAttribute('aria-label'));
 
-      try {
-        const cancelHandle = await cancelButton.elementHandle({ timeout: 2000 });
-        await page.evaluate(() => {
-          (window as unknown as { __focusLog: EventTarget[] }).__focusLog = [];
-          document.addEventListener(
-            'focusin',
-            (e) => (window as unknown as { __focusLog: EventTarget[] }).__focusLog.push(e.target as EventTarget),
-            true,
-          );
-        });
-        await dismissNotificationInterference(page);
-        await page.locator('input[aria-label="Search sessions"]').focus();
-        for (let i = 0; i < 60; i++) {
-          await page.keyboard.press('Tab');
+      // The Failed session is terminal, but its own "creation failed"
+      // notification can still land (toast/panel) after retryButton becomes
+      // visible, independent of the ListSessions poll above -- clear it
+      // again right before tabbing, and periodically during the walk itself
+      // in case it lands mid-walk (BUG-097).
+      await dismissNotificationInterference(page);
+      await page.evaluate(() => {
+        (window as unknown as { __focusLog: EventTarget[] }).__focusLog = [];
+      });
+      await page.locator('input[aria-label="Search sessions"]').focus();
+      const retryHandle = await retryButton.elementHandle();
+      for (let i = 0; i < 60; i++) {
+        if (i > 0 && i % 15 === 0) {
+          await dismissNotificationInterference(page);
         }
-        reachedCancel = await page.evaluate(
-          (c) => (window as unknown as { __focusLog: EventTarget[] }).__focusLog.includes(c as unknown as EventTarget),
-          cancelHandle,
-        );
-        if (!reachedCancel) {
-          await client.deleteSession(creatingSession.id, true).catch(() => {});
-          continue; // didn't survive the tab walk -- retry with a fresh session
-        }
-
-        await expect(cancelButton).toHaveAccessibleName('Cancel session creation', { timeout: 2000 });
-        cancelAriaLabel = await cancelButton.getAttribute('aria-label');
-        verified = true;
-        verifiedSessionId = creatingSession.id;
-      } catch {
-        // cancelButton vanished mid-check (session resolved) -- fall
-        // through and retry with a fresh Creating session.
-        await client.deleteSession(creatingSession.id, true).catch(() => {});
+        await page.keyboard.press('Tab');
       }
+      const reachedRetry = await page.evaluate(
+        (r) => (window as unknown as { __focusLog: EventTarget[] }).__focusLog.includes(r as unknown as EventTarget),
+        retryHandle,
+      );
+      expect(reachedRetry, 'Tab order never reached the Retry button').toBe(true);
+    } finally {
+      await Promise.all([...pendingSessionIds].map((id) => cleanupSession(id)));
     }
-    expect(verified, 'Could not keep a Creating card with a stable, keyboard-reachable Cancel button within 5 attempts').toBe(true);
-    expect(reachedCancel, 'Tab order never reached the Cancel button').toBe(true);
-
-    // Done needing the verified Cancel session's card -- delete it now so it
-    // doesn't add to the tab-order distance to the Retry button below (see
-    // BUG-097).
-    if (verifiedSessionId) {
-      await client.deleteSession(verifiedSessionId, true).catch(() => {});
-    }
-
-    // NOW create the Failed-bound session -- doing this AFTER the Cancel
-    // check (rather than before, as an earlier version of this test did)
-    // means none of the time spent creating/verifying Cancel above needs to
-    // race against this session's own resolution; it has its own generous
-    // up-to-30s budget below with nothing else competing for it.
-    const failedTitle = `e2e-a11y-failed-${Date.now()}`;
-    const failedSession = await client.createSession({ title: failedTitle, path: NONEXISTENT_GITHUB_URL });
-    await page.goto(BASE_URL, { waitUntil: 'domcontentloaded' });
-
-    const failedCard = page.locator('[data-testid="session-card"], [data-testid="session-row"]').filter({ hasText: failedTitle });
-    await expect(failedCard).toBeVisible({ timeout: 10000 });
-    const retryButton = failedCard.getByRole('button', { name: 'Retry creating session' });
-    await expect(retryButton).toBeVisible({ timeout: 30000 });
-
-    // Distinct aria-labels, and both exposed as ARIA role="button".
-    await expect(retryButton).toHaveAccessibleName('Retry creating session');
-    expect(cancelAriaLabel).not.toBe(await retryButton.getAttribute('aria-label'));
-
-    // Keyboard-reachable: same focusin-log technique, now for Retry. The
-    // session itself is already terminal by this point (Failed doesn't
-    // transition further on its own), but its "creation failed" WebSocket
-    // notification can still arrive and pop a toast (or auto-open the
-    // Notification Panel) AFTER retryButton becomes visible -- that event is
-    // independent of the ListSessions poll this test's own visibility check
-    // above relies on. Either one intercepts a plain Tab walk before it ever
-    // reaches the session list (see BUG-097 and dismissNotificationInterference's
-    // doc comment), so clear both immediately before tabbing, not just once
-    // at the top of the test.
-    await dismissNotificationInterference(page);
-    await page.evaluate(() => {
-      (window as unknown as { __focusLog: EventTarget[] }).__focusLog = [];
-    });
-    await page.locator('input[aria-label="Search sessions"]').focus();
-    const retryHandle = await retryButton.elementHandle();
-    for (let i = 0; i < 60; i++) {
-      await page.keyboard.press('Tab');
-    }
-    const reachedRetry = await page.evaluate(
-      (r) => (window as unknown as { __focusLog: EventTarget[] }).__focusLog.includes(r as unknown as EventTarget),
-      retryHandle,
-    );
-    expect(reachedRetry, 'Tab order never reached the Retry button').toBe(true);
-
-    await client.deleteSession(failedSession.id, true).catch(() => {});
   });
 });
