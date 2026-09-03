@@ -608,6 +608,18 @@ for the remaining two sweeps instead of leaving them as dead-on-arrival config
 (`DefaultLivenessEngine`'s Shape B/C entries from Epic 1.2 already compute correct values; nothing
 calls them for these two sweeps until this story). Reuses the `livenessEngine LivenessEngine` field
 Task 1.4.1a already added to `BacklogLifecycleListener` — no new field.
+
+**Plan correction (made during Phase 5 implementation, before this story started, 2026-09-03):**
+Epic 1.2's landed `DefaultLivenessEngine` (`session/liveness_engine.go`, commit `ca2f7ee4c`) keys the
+Shape-C bouncing definition to `BacklogStatusReview`, not `BacklogStatusInProgress` — `BacklogStatusInProgress`
+is already occupied by the Shape-B stale-work definition, and since `LivenessDefinition` is a tagged
+union with exactly one `Kind` per stored `(stage_slug, pipeline_mode)` row (`UNIQUE` constraint,
+Story 1.1.2), the two shapes cannot share one stage key. The original text below (and Task 1.4.3c)
+said `LivenessFor(BacklogStatusInProgress, ...)` "same stage key as stale_work" for the bouncing
+lookup — that was wrong on inspection; every `("in_progress", <mode>)` reference in this story's ACs
+and Task 1.4.3c for the **bouncing/Shape-C** lookup specifically (not the stale-work/Shape-B lookup,
+which correctly stays keyed to `in_progress`) is corrected to `("review", <mode>)` below, matching the
+already-committed `DefaultLivenessEngine` table exactly.
 **Acceptance Criteria**:
 - With no `("in_progress", <mode>)` liveness override configured, `reconcileStaleWorkSessions`'s
   stuck decision and notify-message text are unchanged from today (2h, verbatim `maxWorkSessionStaleness`
@@ -623,13 +635,13 @@ Task 1.4.1a already added to `BacklogLifecycleListener` — no new field.
     `StuckReasonStaleWork`, and the `[BacklogLifecycle] item %s work session %s stale` notify body
     interpolates the resolved `3h`, not the bare `maxWorkSessionStaleness` constant, when the item
     does eventually cross it.
-- With no `("in_progress", <mode>)` Shape-C override configured, `reconcileBouncingItems`'s
+- With no `("review", <mode>)` Shape-C override configured, `reconcileBouncingItems`'s
   `since` window and bounce-count decision are unchanged from today (`bounceThreshold=3`,
   `bounceLookback=24h`).
   - *Given* an item with 3 in_progress→review cycles in the last 24h and no PASS verdict, and no
     liveness override row exists, *When* `reconcileBouncingItems` runs, *Then* the item is marked
     `StuckReasonBouncing` (unchanged from today's `bounceThreshold=3`/`bounceLookback=24h`).
-- With an `("in_progress", "sdd")` Shape-C override of `CycleThreshold=5, CycleLookback=48h`
+- With a `("review", "sdd")` Shape-C override of `CycleThreshold=5, CycleLookback=48h`
   configured, an sdd-mode item with 3 cycles in the last 24h is **not** flagged (today's constants
   would also not flag it at 3 cycles, so use a cycle count past the *old* threshold to show the fix
   applies per-item, not globally).
@@ -666,8 +678,10 @@ Task 1.4.1a already added to `BacklogLifecycleListener` — no new field.
   && !hasPass }`. In `reconcileBouncingItems`, `since := time.Now().Add(-bounceLookback)`
   (`session/backlog_lifecycle.go:1562`) currently computed once before the loop must move inside the
   per-item loop (`session/backlog_lifecycle.go:1563-1629`), resolved per item via
-  `l.livenessEngine.LivenessFor(BacklogStatusInProgress, PipelineMode(item.PipelineMode))` (same stage
-  key as `stale_work`, since both sweeps scan the item's `in_progress` cycle-origin status), since a
+  `l.livenessEngine.LivenessFor(BacklogStatusReview, PipelineMode(item.PipelineMode))` — **corrected
+  key, see this story's "Plan correction" note above**: `BacklogStatusInProgress` is already occupied
+  by the Shape-B stale-work definition in `DefaultLivenessEngine`'s table (Epic 1.2, commit
+  `ca2f7ee4c`), so bouncing's Shape-C lookup uses `BacklogStatusReview` instead, since a
   per-mode override means `CycleLookback` — and therefore the window passed to
   `CountReviewCyclesSince` at line 1631 — can now legitimately differ between items in the same tick.
   Nil-guard identically to Task 1.4.3b, falling back to the literal `bounceThreshold`/`bounceLookback`
