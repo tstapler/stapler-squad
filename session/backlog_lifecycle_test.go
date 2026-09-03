@@ -4179,7 +4179,7 @@ func TestBacklogLifecycleListener_HeadlessPoolAlone_NoLongerTriggersReviewGateSp
 	// NewBacklogLifecycleListenerWithPool wires a headless pool but no session
 	// creator — the pool is still used elsewhere (PR description drafting), but
 	// must no longer be treated as "a review mechanism is configured".
-	listener := NewBacklogLifecycleListenerWithPool(storage, nil, nil)
+	listener := NewBacklogLifecycleListenerWithPool(storage, nil, nil, nil)
 
 	done := make(chan struct{})
 	go func() {

@@ -203,7 +203,15 @@ func (l *BacklogLifecycleListener) reconcileOrphanedTriageItems(ctx context.Cont
 			isHeadless := strings.HasPrefix(latestTriage.SessionUUID, headlessTriageSessionUUIDPrefix)
 			staleness := maxWorkSessionStaleness
 			if isHeadless {
+				// Shape A (LivenessKindDurationBudget), keyed BacklogStatusIdea — Epic 1.4,
+				// Story 1.4.1. Nil-guarded: an unwired/unresolvable engine falls back to the
+				// literal maxHeadlessTriageSessionStaleness constant, unchanged from before.
 				staleness = maxHeadlessTriageSessionStaleness
+				if l.livenessEngine != nil {
+					if def, defErr := l.livenessEngine.LivenessFor(BacklogStatusIdea, PipelineMode(item.PipelineMode)); defErr == nil && !def.IsNoTimeout() {
+						staleness = def.StalenessThreshold()
+					}
+				}
 			}
 			if time.Since(latestTriage.CreatedAt) <= staleness {
 				continue // still plausibly running

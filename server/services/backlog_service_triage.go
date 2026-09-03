@@ -2767,7 +2767,24 @@ func (s *BacklogService) TriggerTriage(
 		}
 		defer func() { <-s.triageSem }()
 
-		triageCtx, cancel := context.WithTimeout(s.shutdownCtx, triageCallBudget)
+		// Shape A (session.LivenessKindDurationBudget), keyed session.BacklogStatusIdea —
+		// the same key reconcileOrphanedTriageItems' staleness gate resolves against
+		// (session/backlog_lifecycle_triage.go), so ExpectedDuration and StalenessThreshold
+		// can never independently drift apart for the same item (BUG-055's actual
+		// invariant — Epic 1.4, Story 1.4.2). BacklogStatusIdea is used rather than
+		// item.Status directly: by this point item.Status may still hold its pre-3b-transition
+		// value ("ready") in this closure's captured struct even though the item's real status
+		// is idea for the duration of this call — an unresolved "ready" key would fall through
+		// to NoTimeoutLiveness (0 ExpectedDuration), an immediate-timeout regression. Nil-guarded:
+		// an unwired/unresolvable engine falls back to the literal triageCallBudget constant,
+		// byte-for-byte unchanged from before.
+		callBudget := triageCallBudget
+		if s.livenessEngine != nil {
+			if def, defErr := s.livenessEngine.LivenessFor(session.BacklogStatusIdea, session.PipelineMode(item.PipelineMode)); defErr == nil && !def.IsNoTimeout() {
+				callBudget = def.ExpectedDuration
+			}
+		}
+		triageCtx, cancel := context.WithTimeout(s.shutdownCtx, callBudget)
 		defer cancel()
 
 		// Run triage in a dedicated worktree, not itemRepoPath directly. SDD-mode

@@ -162,6 +162,36 @@ func TestNewLivenessDefinition_should_RejectMismatchedFields_When_KindAndFieldsD
 	}
 }
 
+// TestLivenessDefinition_should_HaveStalenessThresholdGreaterThanExpectedDuration_When_KindIsDurationBudget
+// ports TestMaxHeadlessTriageSessionStaleness_should_ExceedRealTriageCallBudgetWithMargin's intent
+// (session/backlog_lifecycle_stuck_test.go, BUG-055) onto the derived-threshold model Epic 1.4 wires
+// into the real call sites: rather than asserting the relationship between two hardcoded constants,
+// this asserts it structurally for every LivenessKindDurationBudget row DefaultLivenessEngine
+// resolves, so a future misconfigured override (ExpectedDuration >= StalenessThreshold) would be
+// caught the same way the original two-constant regression was.
+func TestLivenessDefinition_should_HaveStalenessThresholdGreaterThanExpectedDuration_When_KindIsDurationBudget(t *testing.T) {
+	engine := NewDefaultLivenessEngine()
+	stages := []BacklogStatus{BacklogStatusIdea, BacklogStatusInProgress, BacklogStatusReview}
+
+	checked := 0
+	for _, stage := range stages {
+		def, err := engine.LivenessFor(stage, PipelineModeDefault)
+		if err != nil {
+			t.Fatalf("LivenessFor(%q) unexpected error: %v", stage, err)
+		}
+		if def.Kind != LivenessKindDurationBudget {
+			continue // this stage's row is a different shape (or NoTimeout) — not this test's concern
+		}
+		checked++
+		if got := def.StalenessThreshold(); got <= def.ExpectedDuration {
+			t.Fatalf("stage %q: StalenessThreshold() = %v, want strictly greater than ExpectedDuration = %v", stage, got, def.ExpectedDuration)
+		}
+	}
+	if checked == 0 {
+		t.Fatal("no LivenessKindDurationBudget row found in DefaultLivenessEngine's table — test fixture drifted from the engine's table")
+	}
+}
+
 func TestNewLivenessDefinition_should_RejectUnknownKind_When_KindIsNotOneOfTheThree(t *testing.T) {
 	_, err := NewLivenessDefinition(LivenessKind("bogus"))
 	if err == nil {

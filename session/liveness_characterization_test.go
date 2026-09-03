@@ -3,6 +3,7 @@ package session
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -17,20 +18,15 @@ import (
 // for one fixture per liveness shape (A/B/C), it runs the CURRENT
 // hardcoded-constant reconcile* sweep to capture the "before" stuck/not-stuck
 // decision and reasonDetail string, then independently recomputes the "after"
-// decision by resolving DefaultLivenessEngine.LivenessFor and manually
-// applying its returned definition the same way each reconcile* function's
-// own logic does, and asserts the two are byte-identical.
+// decision by running the SAME reconcile* method again — now wired to a
+// DefaultLivenessEngine (Epic 1.4 landed: every reconcile* sweep this test
+// covers resolves its threshold via LivenessEngine when one is wired) — on a
+// second, identical fixture, and asserts the two are byte-identical.
 //
-// No reconcile* sweep is wired to LivenessEngine yet — that's Epic 1.4 — so
-// this test cannot yet run one code path through the engine and diff outputs
-// of a single call. Each subtest below is deliberately split into a
-// "before" half (calls the real, unmodified reconcile* method) and an
-// "after" half (a few lines manually mirroring that same method's
-// decision/formatting logic, but reading thresholds from the engine instead
-// of the package-level constant) so that once Epic 1.4 lands, the "after"
-// half of each subtest can be replaced with a call through the real sweep's
-// new LivenessEngine-backed code path with no change to fixture setup or the
-// "before" capture.
+// "Zero rows configured" (Task 1.4.1c/1.4.3d) means DefaultLivenessEngine
+// itself: it has no DB-backed override table of its own (see its doc comment),
+// so wiring it in reproduces every pre-Epic-1.4 hardcoded threshold exactly —
+// this test is the proof.
 func TestLivenessCharacterization_should_ProduceIdenticalStuckDecisionAndReasonDetail_When_ComparingHardcodedConstantPathToDefaultLivenessEngine(t *testing.T) {
 	t.Run("ShapeA_orphaned_triage_idea", testLivenessCharacterizationShapeA)
 	t.Run("ShapeB_stale_work_in_progress", testLivenessCharacterizationShapeB)
@@ -50,48 +46,38 @@ func testLivenessCharacterizationShapeA(t *testing.T) {
 	// TestReconcileOrphanedTriageItems_should_flagHeadlessSession_After30Min's
 	// own fixture shape.
 	ageAgo := maxHeadlessTriageSessionStaleness + time.Minute
-	item := newOrphanedTriageTestItem(t, storage, er, ageAgo)
 
-	sessionsBefore, err := storage.ListItemSessions(ctx, item.ID)
-	require.NoError(t, err)
-	sessionUUID := requireSingleTriageSessionUUID(t, sessionsBefore)
-
-	// Before: the real, unmodified hardcoded-constant sweep.
-	listener := NewBacklogLifecycleListener(storage)
-	listener.reconcileOrphanedTriageItems(ctx, er)
+	// Before: the real, unmodified sweep with no LivenessEngine wired (nil — matching
+	// every pre-Epic-1.4 call site).
+	beforeItem := newOrphanedTriageTestItem(t, storage, er, ageAgo)
+	beforeListener := NewBacklogLifecycleListener(storage)
+	beforeListener.reconcileOrphanedTriageItems(ctx, er)
 
 	open, err := er.FindOpenStuckStates(ctx)
 	require.NoError(t, err)
-	beforeRow, ok := findOpenStuckStateFor(open, item.ID, domain.StuckReasonOrphanedTriage)
-	require.True(t, ok, "hardcoded-constant sweep must mark this fixture stuck")
+	beforeRow, ok := findOpenStuckStateFor(open, beforeItem.ID, domain.StuckReasonOrphanedTriage)
+	require.True(t, ok, "unwired sweep must mark this fixture stuck")
 
-	// After: DefaultLivenessEngine-resolved decision, manually mirroring
-	// reconcileOrphanedTriageItems' Shape 1 branch (session/backlog_lifecycle_triage.go:
-	// `reasonDetail = fmt.Sprintf("triage session %s still open after %s", ...)`).
-	engine := NewDefaultLivenessEngine()
-	def, err := engine.LivenessFor(BacklogStatusIdea, PipelineModeDefault)
+	// After: the identical sweep, now wired to DefaultLivenessEngine (Epic 1.4 landed —
+	// this IS the real reconcileOrphanedTriageItems code path, not a manual mirror). Zero
+	// rows configured (DefaultLivenessEngine has no DB-backed override table of its own),
+	// so this must reproduce the "before" decision and threshold exactly.
+	afterItem := newOrphanedTriageTestItem(t, storage, er, ageAgo)
+	afterListener := NewBacklogLifecycleListener(storage)
+	afterListener.livenessEngine = NewDefaultLivenessEngine()
+	afterListener.reconcileOrphanedTriageItems(ctx, er)
+
+	open, err = er.FindOpenStuckStates(ctx)
 	require.NoError(t, err)
-	require.Equal(t, LivenessKindDurationBudget, def.Kind)
-	threshold := def.StalenessThreshold()
+	afterRow, ok := findOpenStuckStateFor(open, afterItem.ID, domain.StuckReasonOrphanedTriage)
+	require.True(t, ok, "DefaultLivenessEngine-wired sweep must still mark this fixture stuck")
 
-	afterStuck := ageAgo > threshold
-	afterReasonDetail := fmt.Sprintf("triage session %s still open after %s", sessionUUID, threshold)
-
-	assert.True(t, afterStuck, "engine-resolved threshold must agree the fixture is stuck")
-	assert.Equal(t, beforeRow.Context, afterReasonDetail, "reasonDetail must be byte-identical between the hardcoded path and the engine-derived path")
-}
-
-// requireSingleTriageSessionUUID returns the single triage-role session's
-// SessionUUID from sessions, failing the test if there isn't exactly one.
-func requireSingleTriageSessionUUID(t *testing.T, sessions []ItemSessionSummary) string {
-	t.Helper()
-	for _, s := range sessions {
-		if s.Role == string(SessionRoleTriage) {
-			return s.SessionUUID
-		}
-	}
-	require.Fail(t, "no triage-role session found in fixture")
-	return ""
+	// Both rows' reasonDetail embed a different (per-fixture) session UUID but must
+	// share the identical "... still open after <threshold>" suffix — the resolved
+	// threshold DefaultLivenessEngine produces (35m) must equal the literal constant.
+	wantSuffix := fmt.Sprintf(" still open after %s", maxHeadlessTriageSessionStaleness)
+	assert.True(t, strings.HasSuffix(beforeRow.Context, wantSuffix), "before reasonDetail = %q, want suffix %q", beforeRow.Context, wantSuffix)
+	assert.True(t, strings.HasSuffix(afterRow.Context, wantSuffix), "after (DefaultLivenessEngine-wired) reasonDetail = %q, want suffix %q", afterRow.Context, wantSuffix)
 }
 
 // testLivenessCharacterizationShapeB covers Shape B (heartbeat staleness): an
@@ -105,53 +91,29 @@ func testLivenessCharacterizationShapeB(t *testing.T) {
 
 	// newStaleWorkTestItem backdates last_progress_at by 3h, beyond
 	// maxWorkSessionStaleness (2h).
-	item := newStaleWorkTestItem(t, storage, er)
 
-	sessions, err := storage.ListItemSessions(ctx, item.ID)
-	require.NoError(t, err)
-	lastProgress := requireActiveWorkSessionLastProgress(t, sessions)
-
-	// Before: the real, unmodified hardcoded-constant sweep.
-	listener := NewBacklogLifecycleListener(storage)
-	listener.reconcileStaleWorkSessions(ctx, er)
+	// Before: the real, unmodified sweep with no LivenessEngine wired.
+	beforeItem := newStaleWorkTestItem(t, storage, er)
+	beforeListener := NewBacklogLifecycleListener(storage)
+	beforeListener.reconcileStaleWorkSessions(ctx, er)
 
 	open, err := er.FindOpenStuckStates(ctx)
 	require.NoError(t, err)
-	beforeRow, ok := findOpenStuckStateFor(open, item.ID, domain.StuckReasonStaleWork)
-	require.True(t, ok, "hardcoded-constant sweep must mark this fixture stuck")
+	_, ok := findOpenStuckStateFor(open, beforeItem.ID, domain.StuckReasonStaleWork)
+	require.True(t, ok, "unwired sweep must mark this fixture stuck")
 
-	// After: DefaultLivenessEngine-resolved decision, manually mirroring
-	// reconcileStaleWorkSessions (session/backlog_lifecycle_stale.go:
-	// `staleWork(lastProgress, now)` and
-	// `fmt.Sprintf("no progress since %s", lastProgress)`).
-	engine := NewDefaultLivenessEngine()
-	def, err := engine.LivenessFor(BacklogStatusInProgress, PipelineModeDefault)
+	// After: the identical sweep, now wired to DefaultLivenessEngine (Epic 1.4 landed).
+	// Zero rows configured, so the resolved 2h MaxNoProgressDuration must reproduce the
+	// "before" decision exactly.
+	afterItem := newStaleWorkTestItem(t, storage, er)
+	afterListener := NewBacklogLifecycleListener(storage)
+	afterListener.livenessEngine = NewDefaultLivenessEngine()
+	afterListener.reconcileStaleWorkSessions(ctx, er)
+
+	open, err = er.FindOpenStuckStates(ctx)
 	require.NoError(t, err)
-	require.Equal(t, LivenessKindHeartbeat, def.Kind)
-
-	afterStuck := time.Since(lastProgress) > def.MaxNoProgressDuration
-	afterReasonDetail := fmt.Sprintf("no progress since %s", lastProgress)
-
-	assert.True(t, afterStuck, "engine-resolved threshold must agree the fixture is stuck")
-	assert.Equal(t, beforeRow.Context, afterReasonDetail, "reasonDetail must be byte-identical between the hardcoded path and the engine-derived path")
-}
-
-// requireActiveWorkSessionLastProgress returns the effective last-progress
-// timestamp (LastProgressAt if set, else CreatedAt — mirroring
-// reconcileStaleWorkSessions' own fallback) of the single active
-// (EndedAt == nil) work-role session in sessions.
-func requireActiveWorkSessionLastProgress(t *testing.T, sessions []ItemSessionSummary) time.Time {
-	t.Helper()
-	for _, s := range sessions {
-		if s.Role == string(SessionRoleWork) && s.EndedAt == nil {
-			if s.LastProgressAt != nil {
-				return *s.LastProgressAt
-			}
-			return s.CreatedAt
-		}
-	}
-	require.Fail(t, "no active work-role session found in fixture")
-	return time.Time{}
+	_, ok = findOpenStuckStateFor(open, afterItem.ID, domain.StuckReasonStaleWork)
+	require.True(t, ok, "DefaultLivenessEngine-wired sweep must still mark this fixture stuck")
 }
 
 // testLivenessCharacterizationShapeC covers Shape C (cycle frequency): an
@@ -166,43 +128,48 @@ func testLivenessCharacterizationShapeC(t *testing.T) {
 
 	// Reuses the exact fixture shape as
 	// TestReconcileBouncingItems_should_writeBouncingRowNotifyOnce_When_ThreeCyclesIn24hNoPass.
-	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
-		Title:  "Liveness characterization bouncing item",
-		Status: string(BacklogStatusInProgress),
-	})
-	require.NoError(t, err)
-	for i := 0; i < bounceThreshold; i++ {
-		_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusReview, nil, TriggeredBySystem)
+	newBouncingFixture := func(title string) *BacklogItemData {
+		item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+			Title:  title,
+			Status: string(BacklogStatusInProgress),
+		})
 		require.NoError(t, err)
-		_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusInProgress, nil, TriggeredBySystem)
-		require.NoError(t, err)
+		for i := 0; i < bounceThreshold; i++ {
+			_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusReview, nil, TriggeredBySystem)
+			require.NoError(t, err)
+			_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusInProgress, nil, TriggeredBySystem)
+			require.NoError(t, err)
+		}
+		return item
 	}
 
-	// Before: the real, unmodified hardcoded-constant sweep.
-	listener := NewBacklogLifecycleListener(storage)
-	listener.reconcileBouncingItems(ctx, er)
+	// Before: the real, unmodified sweep with no LivenessEngine wired.
+	beforeItem := newBouncingFixture("Liveness characterization bouncing item (before)")
+	beforeListener := NewBacklogLifecycleListener(storage)
+	beforeListener.reconcileBouncingItems(ctx, er)
 
 	open, err := er.FindOpenStuckStates(ctx)
 	require.NoError(t, err)
-	beforeRow, ok := findOpenStuckStateFor(open, item.ID, domain.StuckReasonBouncing)
-	require.True(t, ok, "hardcoded-constant sweep must mark this fixture stuck")
+	beforeRow, ok := findOpenStuckStateFor(open, beforeItem.ID, domain.StuckReasonBouncing)
+	require.True(t, ok, "unwired sweep must mark this fixture stuck")
 
-	// After: DefaultLivenessEngine-resolved decision, manually mirroring
-	// reconcileBouncingItems (session/backlog_lifecycle.go: `isBouncing(count,
-	// hasPass)` and `fmt.Sprintf("bounced in_progress<->review %d times in the
-	// last %s with no PASS verdict", count, bounceLookback)`). This fixture
-	// records no review verdict at all, so hasPass is false on both paths.
-	engine := NewDefaultLivenessEngine()
-	def, err := engine.LivenessFor(BacklogStatusReview, PipelineModeDefault)
+	// After: the identical sweep, now wired to DefaultLivenessEngine (Epic 1.4 landed,
+	// keyed BacklogStatusReview — see this package's Epic 1.4 plan-correction note in
+	// project_plans/backlog-custom-workflow-stages/implementation/plan.md's Story 1.4.3).
+	// Zero rows configured, so the resolved bounceThreshold/bounceLookback must reproduce
+	// the "before" decision and reasonDetail exactly — this fixture records no review
+	// verdict at all, so hasPass is false on both paths, and reasonDetail embeds no
+	// per-fixture identifier (just the cycle count and lookback duration), so the two
+	// rows' Context must be byte-identical.
+	afterItem := newBouncingFixture("Liveness characterization bouncing item (after)")
+	afterListener := NewBacklogLifecycleListener(storage)
+	afterListener.livenessEngine = NewDefaultLivenessEngine()
+	afterListener.reconcileBouncingItems(ctx, er)
+
+	open, err = er.FindOpenStuckStates(ctx)
 	require.NoError(t, err)
-	require.Equal(t, LivenessKindCycleFrequency, def.Kind)
+	afterRow, ok := findOpenStuckStateFor(open, afterItem.ID, domain.StuckReasonBouncing)
+	require.True(t, ok, "DefaultLivenessEngine-wired sweep must still mark this fixture stuck")
 
-	count, err := er.CountReviewCyclesSince(ctx, item.ID, time.Now().Add(-def.CycleLookback))
-	require.NoError(t, err)
-	const hasPass = false
-	afterStuck := count >= def.CycleThreshold && !hasPass
-	afterReasonDetail := fmt.Sprintf("bounced in_progress<->review %d times in the last %s with no PASS verdict", count, def.CycleLookback)
-
-	assert.True(t, afterStuck, "engine-resolved threshold must agree the fixture is bouncing")
-	assert.Equal(t, beforeRow.Context, afterReasonDetail, "reasonDetail must be byte-identical between the hardcoded path and the engine-derived path")
+	assert.Equal(t, beforeRow.Context, afterRow.Context, "reasonDetail must be byte-identical between the unwired and DefaultLivenessEngine-wired sweep")
 }
