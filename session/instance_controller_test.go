@@ -208,8 +208,10 @@ func TestStartController_PiStatusSourceNoDoubleStart(t *testing.T) {
 			}
 
 			// Give the (at most one) spawned subprocess a moment to record its
-			// PID before counting.
-			deadline := time.Now().Add(2 * time.Second)
+			// PID before counting. 5s (not 2s) margin for shared-machine load
+			// in this repo's dev/CI environments (see
+			// docs/how-to's timing-budget precedent for the same reasoning).
+			deadline := time.Now().Add(5 * time.Second)
 			var pidLines []string
 			for time.Now().Before(deadline) {
 				data, readErr := os.ReadFile(pidLogFile)
