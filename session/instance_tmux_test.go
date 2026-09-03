@@ -158,10 +158,27 @@ func TestBuildLaunchCommand_PiNoSession_NoOp(t *testing.T) {
 	inst := &Instance{Program: "pi"}
 	got := inst.buildLaunchCommand("")
 	// The "2>/dev/null" suffix discards pi's own per-project trust-gate stderr
-	// diagnostics (e.g. "Path not found: <project>/.pi") -- see
-	// buildLaunchCommand's isPiProgram branch doc comment.
+	// diagnostics -- see piLaunchBuilder.SuppressStderr's doc comment.
 	if got != "pi 2>/dev/null" {
 		t.Errorf("got %q, want exactly %q (no-op aside from the pi stderr redirect)", got, "pi 2>/dev/null")
+	}
+}
+
+// TestBuildLaunchCommand_PiStderrRedirectComesAfterCLIFlagsAndExtraArgs guards
+// the suffix ordering: "2>/dev/null" must be the final token, after CLIFlags
+// and ExtraArgs, or it lands mid-command and no longer redirects the whole
+// pi invocation's stderr.
+func TestBuildLaunchCommand_PiStderrRedirectComesAfterCLIFlagsAndExtraArgs(t *testing.T) {
+	t.Parallel()
+	inst := &Instance{
+		Program:   "pi",
+		CLIFlags:  "--model x",
+		ExtraArgs: []string{"--verbose"},
+	}
+	got := inst.buildLaunchCommand("")
+	want := "pi " + shellQuote("--model") + " " + shellQuote("x") + " " + shellQuote("--verbose") + " 2>/dev/null"
+	if got != want {
+		t.Errorf("got %q, want %q (2>/dev/null must be the final token)", got, want)
 	}
 }
 

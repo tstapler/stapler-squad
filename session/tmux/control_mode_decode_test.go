@@ -30,22 +30,27 @@ func piRedrawBytes(text string) []byte {
 }
 
 func TestDecodeControlModeOutput_RoundTripsPiTuiRedrawSequence(t *testing.T) {
+	t.Parallel()
 	words := []string{"w", "wh", "whe", "when", "wheni", "wheni'", "wheni'm"}
-	sess := &TmuxSession{}
 
 	for _, w := range words {
-		raw := piRedrawBytes(w)
-		encoded := tmuxEncode(raw)
-		decoded := sess.decodeControlModeOutput(encoded)
+		t.Run(w, func(t *testing.T) {
+			t.Parallel()
+			sess := &TmuxSession{}
+			raw := piRedrawBytes(w)
+			encoded := tmuxEncode(raw)
+			decoded := sess.decodeControlModeOutput(encoded)
 
-		if string(decoded) != string(raw) {
-			t.Fatalf("decodeControlModeOutput mismatch for %q:\n  encoded: %q\n  want:    %q\n  got:     %q",
-				w, encoded, raw, decoded)
-		}
+			if string(decoded) != string(raw) {
+				t.Fatalf("decodeControlModeOutput mismatch:\n  encoded: %q\n  want:    %q\n  got:     %q",
+					encoded, raw, decoded)
+			}
+		})
 	}
 }
 
 func TestDecodeControlModeOutput_RoundTripsLiteralBackslashAndControlBytes(t *testing.T) {
+	t.Parallel()
 	// tmux escapes a literal backslash the same way as any other <32 byte --
 	// exercised separately since it's the one printable-range character that
 	// still needs escaping (decodeControlModeOutput's \ooo branch is keyed off
@@ -62,6 +67,7 @@ func TestDecodeControlModeOutput_RoundTripsLiteralBackslashAndControlBytes(t *te
 }
 
 func TestHandleOutputBytes_BroadcastsDecodedPiTuiRedrawToSubscriber(t *testing.T) {
+	t.Parallel()
 	// End-to-end through the real production entry point (handleOutputBytes),
 	// not just the inner decode helper -- covers the "%output %PANE_ID " prefix
 	// stripping and the subscriber broadcast, matching what readControlModeOutput

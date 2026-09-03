@@ -52,33 +52,27 @@ const maxInlinePromptBytes = 4096
 const defaultPromptFileCleanupDelay = 30 * time.Second
 
 // launchCommandBuilder builds the tmux launch command for one recognized
-// coding-agent program. Adding support for a new program means adding a new
-// implementation and appending it to launchCommandBuilders() below — never
-// editing buildLaunchCommand itself (mirrors programExtension in
-// instance_controller.go, whose doc comment already describes this as the
-// intended shape for this exact spot).
+// coding-agent program. A new program gets a new implementation appended to
+// launchBuilders below, never a new case in buildLaunchCommand itself —
+// mirrors programExtension in instance_controller.go.
 type launchCommandBuilder interface {
 	// Matches reports whether program (whitespace-tokenized, basename-matched)
 	// is handled by this builder.
 	Matches(program string) bool
 	// Build returns the full launch command for i. resumeSessionID is
-	// buildLaunchCommand's own claudeSessionID parameter, passed through
-	// unchanged — only claudeLaunchBuilder uses it; piLaunchBuilder ignores it
-	// and reads i.piSession itself, since pi's resume ID lives on a different
-	// field (see piLaunchBuilder.Build's comment).
+	// buildLaunchCommand's claudeSessionID parameter passed through — only
+	// claudeLaunchBuilder uses it; piLaunchBuilder reads i.piSession instead.
 	Build(i *Instance, base, resumeSessionID string) string
-	// SuppressStderr reports whether this program's stderr should be
-	// discarded (appending "2>/dev/null") rather than left to flow into the
-	// visible tmux pane -- see piLaunchBuilder.SuppressStderr's doc comment
-	// for why pi needs this and claude doesn't.
+	// SuppressStderr reports whether to discard this program's stderr
+	// (append "2>/dev/null") instead of letting it reach the visible pane.
 	SuppressStderr() bool
 }
 
-// launchCommandBuilders returns the ordered set of builders buildLaunchCommand
+// launchBuilders is the ordered, stateless set of builders buildLaunchCommand
 // checks before falling back to the default (shell-quote-and-run-as-is) path.
-func launchCommandBuilders() []launchCommandBuilder {
-	return []launchCommandBuilder{&claudeLaunchBuilder{}, &piLaunchBuilder{}}
-}
+// A future program's builder is appended here, never a new case in
+// buildLaunchCommand itself.
+var launchBuilders = []launchCommandBuilder{&claudeLaunchBuilder{}, &piLaunchBuilder{}}
 
 // claudeLaunchBuilder implements launchCommandBuilder for the claude binary.
 type claudeLaunchBuilder struct{}
@@ -110,16 +104,12 @@ func (b *piLaunchBuilder) Build(i *Instance, base, _ string) string {
 	return i.buildPiCommand(base, piSessionID)
 }
 
-// SuppressStderr returns true: pi prints its own per-project trust-gate
-// diagnostics (e.g. "Path not found: <project>/.pi") straight to stderr on
-// every launch when the project has no .pi trust directory yet -- harmless
-// (pi continues normally either way, confirmed empirically: the session
-// still reaches its "Working..." state right after), but with nothing else
-// in this pipeline distinguishing pi's own diagnostics from its actual TUI
-// output, it lands verbatim in the visible tmux pane on every session start.
-// Discarding it here mirrors piStatusCommandFactory's side-channel pi
-// subprocess (instance_pi_status.go), which already leaves cmd.Stderr nil
-// (discarded) for the exact same reason.
+// SuppressStderr returns true: pi writes a harmless per-project trust-gate
+// diagnostic straight to stderr on every launch (confirmed empirically —
+// the session still reaches "Working..." right after), and nothing else in
+// this pipeline distinguishes it from pi's real TUI output once it lands in
+// the pane. Mirrors piStatusCommandFactory's side-channel subprocess
+// (instance_pi_status.go), which already discards its own stderr the same way.
 func (b *piLaunchBuilder) SuppressStderr() bool { return true }
 
 // isClaude reports whether the program command invokes the claude binary.
@@ -217,27 +207,33 @@ func (i *Instance) GetTmuxSessionName() string {
 // type's doc comment); a program none of them recognizes is shell-quoted and
 // run as-is, with AutoApprove's yolo-flag lookup as the only adjustment.
 func (i *Instance) buildLaunchCommand(claudeSessionID string) string {
+	// Single read, reused below for both Matches and Build -- see
+	// .claude/rules/instance-lock-free-reads.md: i.Program is mutated by
+	// SetProgram under i.mu.Lock(), so reading the field twice here could
+	// observe two different values if a mutation lands in between.
+	program := i.Program
+
 	var cmd string
 	var matched launchCommandBuilder
-	for _, b := range launchCommandBuilders() {
-		if b.Matches(i.Program) {
+	for _, b := range launchBuilders {
+		if b.Matches(program) {
 			matched = b
 			break
 		}
 	}
 	switch {
 	case matched != nil:
-		cmd = matched.Build(i, i.Program, claudeSessionID)
+		cmd = matched.Build(i, program, claudeSessionID)
 	default:
 		// shellQuoteFields (not one whole-string shellQuote) preserves legitimate multi-word
 		// Program values like "sleep 300" that rely on shell word-splitting, while still
 		// preventing a metacharacter-bearing token -- e.g. a preset's argv[0] of "true; touch
 		// /tmp/pwned" -- from terminating the command and injecting a second one.
-		cmd = shellQuoteFields(i.Program)
+		cmd = shellQuoteFields(program)
 		if i.AutoApprove {
-			if flag := yoloFlagFor(i.Program); flag != "" {
+			if flag := yoloFlagFor(program); flag != "" {
 				cmd = cmd + " " + flag
-				log.ForSession(i.Title).Debug("auto-approve flag injected", "program", i.Program, "flag", flag)
+				log.ForSession(i.Title).Debug("auto-approve flag injected", "program", program, "flag", flag)
 			}
 		}
 	}
@@ -252,10 +248,14 @@ func (i *Instance) buildLaunchCommand(claudeSessionID string) string {
 		cmd = cmd + " " + shellQuote(a)
 	}
 	if matched != nil && matched.SuppressStderr() {
-		cmd = cmd + " 2>/dev/null"
+		cmd = cmd + suppressStderrRedirect
 	}
 	return cmd
 }
+
+// suppressStderrRedirect is appended to a launch command when its builder's
+// SuppressStderr() returns true.
+const suppressStderrRedirect = " 2>/dev/null"
 
 // shellQuote POSIX-single-quotes s for safe interpolation into a shell command
 // string. tmux launches the assembled command through a shell, and Go's %q

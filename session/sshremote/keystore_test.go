@@ -19,10 +19,11 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 )
 
-// configDirContainsBytes walks the application's config directory (isolated
-// per-test-process by config.GetConfigDir()'s test-mode auto-detection, see
-// config/config.go's GetConfigDirForDir) and reports whether any file under
-// it contains needle. If the directory doesn't exist yet, nothing was
+// configDirContainsBytes walks config.GetConfigDir()'s directory and reports
+// whether any file under it contains needle. Not necessarily test-exclusive:
+// GetConfigDirForDir honors an ambient STAPLER_SQUAD_TEST_DIR override, which
+// can point at a directory another process is also using -- see the WalkDir
+// callback's ENOENT handling below. A missing directory means nothing was
 // written there, so the answer is trivially false.
 func configDirContainsBytes(t *testing.T, needle []byte) bool {
 	t.Helper()
@@ -37,16 +38,10 @@ func configDirContainsBytes(t *testing.T, needle []byte) bool {
 	found := false
 	walkErr := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
-			// GetConfigDir() honors an ambient STAPLER_SQUAD_TEST_DIR override
-			// (config/config.go's GetConfigDirForDir) rather than always
-			// minting a fresh per-process directory -- when that env var is
-			// already set to a live, shared state dir (e.g. a real dev
-			// session's own test-mode dir, not a throwaway one this test
-			// owns exclusively), something else can delete a file or
-			// subdirectory between WalkDir listing it and stat-ing it here.
-			// That's a benign race for a best-effort "does this secret leak
-			// anywhere on disk" scan, not a real failure -- skip the missing
-			// entry and keep scanning instead of aborting the whole walk.
+			// STAPLER_SQUAD_TEST_DIR can point at a live, shared state dir
+			// (config.GetConfigDirForDir honors it), so a file can vanish
+			// between WalkDir listing it and stat-ing it here. Benign race
+			// for this best-effort scan -- skip it, don't abort the walk.
 			if os.IsNotExist(err) {
 				return nil
 			}
