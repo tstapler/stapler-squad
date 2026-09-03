@@ -391,8 +391,14 @@ func TestReadLastNMessages_MatchesForwardRead(t *testing.T) {
 // --- GetMessagesFromConversationFile (via real session history) ---------------
 
 func TestGetMessagesFromConversationFile_NotFound(t *testing.T) {
-	// Use a directory that doesn't exist as the projects dir.
-	// We can't easily inject the path, so test via findConversationFilePath directly.
+	// findConversationFilePath resolves its search root via os.UserHomeDir(),
+	// which reads $HOME — repoint it at an empty temp dir so this test doesn't
+	// walk the real ~/.claude/projects. That real directory is Claude Code's
+	// own transcript log: it can (and did) end up containing this test's
+	// sentinel session ID in a past run's logged source/tool-output, making
+	// the walk find a false match and return a nil error non-deterministically
+	// depending on what's accumulated on the machine running the test.
+	t.Setenv("HOME", t.TempDir())
 	_, err := findConversationFilePath("nonexistent-session-id-xyz")
 	if err == nil {
 		t.Fatal("expected error for non-existent session")
