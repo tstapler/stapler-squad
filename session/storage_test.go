@@ -63,7 +63,17 @@ func TestCreateTestStorage_SecondConnectionSeesSameData(t *testing.T) {
 
 	er := storage.repo
 
+	// newTestInstance alone (bare directory-mode, no gitManager.worktree) never
+	// produces a worktrees table row -- SaveInstances only persists a worktree
+	// row when the instance actually carries one. A GitWorktree reconstructed
+	// via NewGitWorktreeFromStorage (as forceEmptyBranchNameViaRawSQL's callers
+	// do, review_gate_test.go) is enough to trigger that row without touching
+	// disk, since it returns non-nil whenever any of repoPath/worktreePath/
+	// branchName is non-empty.
 	inst := newTestInstance("shared-cache-visibility-test")
+	inst.gitManager.worktree = git.NewGitWorktreeFromStorage(
+		"/tmp/test", "/tmp/test", "shared-cache-visibility-test", "placeholder-branch",
+		"deadbeefdeadbeefdeadbeefdeadbeefdeadbeef")
 	require.NoError(t, storage.SaveInstances([]*Instance{inst}))
 
 	db, err := sql.Open("sqlite", er.dbPath)
