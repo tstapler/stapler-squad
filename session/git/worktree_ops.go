@@ -74,7 +74,7 @@ func (g *GitWorktree) branchExistsAfterAddFailure(branchRef plumbing.ReferenceNa
 		if attempt > 0 {
 			time.Sleep(worktreeAddRetryDelay)
 		}
-		repo, err := git.PlainOpen(g.repoPath)
+		repo, err := OpenRepo(g.repoPath)
 		if err != nil {
 			log.Warn("branchExistsAfterAddFailure: failed to open repository, retrying", "repoPath", g.repoPath, "attempt", attempt, "err", err)
 			continue
@@ -127,12 +127,12 @@ func (g *GitWorktree) setupLocked() error {
 
 	// Goroutine for directory creation
 	go func() {
-		errChan <- os.MkdirAll(worktreesDir, 0755)
+		errChan <- os.MkdirAll(worktreesDir, 0750)
 	}()
 
 	// Goroutine for branch check
 	go func() {
-		repo, err := git.PlainOpen(g.repoPath)
+		repo, err := OpenRepo(g.repoPath)
 		if err != nil {
 			errChan <- fmt.Errorf("failed to open repository: %w", err)
 			return
@@ -386,7 +386,7 @@ func (g *GitWorktree) findLiveWorktreeForBranch() (string, bool) {
 func (g *GitWorktree) setupNewWorktree() error {
 	// Ensure worktrees directory exists
 	worktreesDir := filepath.Join(g.repoPath, "worktrees")
-	if err := os.MkdirAll(worktreesDir, 0755); err != nil {
+	if err := os.MkdirAll(worktreesDir, 0750); err != nil {
 		return fmt.Errorf("failed to create worktrees directory: %w", err)
 	}
 
@@ -394,7 +394,7 @@ func (g *GitWorktree) setupNewWorktree() error {
 	_, _ = g.runGitCommand(g.repoPath, "worktree", "remove", "-f", g.worktreePath) // Ignore error if worktree doesn't exist
 
 	// Open the repository
-	repo, err := git.PlainOpen(g.repoPath)
+	repo, err := OpenRepo(g.repoPath)
 	if err != nil {
 		return fmt.Errorf("failed to open repository: %w", err)
 	}

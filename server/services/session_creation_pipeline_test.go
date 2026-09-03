@@ -188,7 +188,11 @@ func TestBackgroundResolutionPipeline_should_CompleteWithoutNetworkIO_When_Plain
 	elapsed := time.Since(start)
 
 	assert.False(t, resolverCalled.Load(), "githubResolver must never be invoked for a plain directory session")
-	assert.Less(t, elapsed, 500*time.Millisecond, "a plain directory session's pipeline must complete with no network I/O latency")
+	// 3s (not the network-I/O-absent case's realistic sub-100ms) tolerates CPU
+	// scheduling contention on a heavily loaded shared dev machine while still
+	// catching a genuine network-I/O regression, which would push this into the
+	// 10s+ range from a real DNS/TLS attempt. See BUG-092.
+	assert.Less(t, elapsed, 3*time.Second, "a plain directory session's pipeline must complete with no network I/O latency")
 }
 
 // TestBackgroundResolutionPipeline_should_WriteFailedAndNotCrashProcess_When_PhaseFuncPanics

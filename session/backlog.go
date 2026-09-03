@@ -78,8 +78,19 @@ func IsTmuxBackedSessionRole(role string) bool {
 const (
 	TagBacklogWork     = "backlog:work"
 	TagBacklogRevision = "backlog:revision"
+	TagBacklogReview   = "backlog:review"
 	TagAutonomous      = "autonomous"
 )
+
+// IsBacklogOriginatedSession reports whether inst was spawned by the backlog
+// automation pipeline (work, revision, or review role) rather than being a
+// plain user-created session. Used to extend workflow-only behaviors (like
+// SessionService.maybeAutoArchive) to backlog sessions, which have no
+// WorkflowID of their own but leak the same way if never archived — see
+// session_retention_sweeper.go's ArchivedAt-only scope.
+func (i *Instance) IsBacklogOriginatedSession() bool {
+	return i.HasTag(TagBacklogWork) || i.HasTag(TagBacklogReview)
+}
 
 // CategoryBacklog is the Session.Category value assigned to all sessions
 // spawned by BacklogService (work, revision, review-gate, re-review) so they

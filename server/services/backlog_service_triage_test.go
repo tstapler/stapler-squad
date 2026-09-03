@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"connectrpc.com/connect"
-	"github.com/go-git/go-git/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/config"
@@ -23,6 +22,7 @@ import (
 	"github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	gitutil "github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/headless"
 )
 
@@ -4338,7 +4338,7 @@ func TestTriggerReReview_should_BlockOnBranchDriftInsteadOfMisleadingFailVerdict
 
 	// Main diverges on the same line AND drifts well past the default threshold — the
 	// exact shape that made 693c2700's diff unreviewable.
-	originRepo, err := git.PlainOpen(origin)
+	originRepo, err := gitutil.OpenRepo(origin)
 	require.NoError(t, err)
 	commitFileForTest(t, originRepo, origin, "README.md", "# Main Edit\n", "main: unrelated edit")
 	for i := 0; i < 55; i++ {

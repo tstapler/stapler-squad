@@ -4,8 +4,11 @@ const _features = [
   // FEATURE_CATALOG['ui-accessibility-gate'], // TODO: add to catalog
   FEATURE_CATALOG['backlog-list-items'],
   FEATURE_CATALOG['backlog-transition-status'],
+  FEATURE_CATALOG['session-create'],
+  // FEATURE_CATALOG['session-cancel-creation'], // TODO: add to catalog (see docs/registry/features/backend/session/cancel-creation.json's "session:cancel-creation")
+  // FEATURE_CATALOG['session-retry-creation'], // TODO: add to catalog (see docs/registry/features/backend/session/retry-creation.json's "session:retry-creation")
 ] as const;
-// @feature backlog:watch, backlog:list-page, backlog:board-page, backlog:item-detail, backlog:connection-indicator
+// @feature backlog:watch, backlog:list-page, backlog:board-page, backlog:item-detail, backlog:connection-indicator, session:create, session:cancel-creation, session:retry-creation
 // Story 5: UX Analysis Automation - Axe Core accessibility gate
 // This test file is the CI gate for WCAG 2.1 AA compliance.
 // critical + serious violations block merge.
@@ -542,77 +545,146 @@ test.describe('Accessibility — SessionCard Failed-state (async-session-creatio
     }
   });
 
-  // Epic 5.4 (Cancel/Retry buttons): drives real backend state via the same
-  // NONEXISTENT_GITHUB_URL technique session-creation-async.spec.ts's Epic
-  // 5.3/5.4 blocks use -- no test-mode hook exists to force a chosen
-  // status/failure_reason, and this repo's own finding (documented in that
-  // file) is that WS-mocking-based alternatives are unreliable here.
+  // Epic 5.4 (Cancel/Retry buttons): the Failed side drives real backend
+  // state via the same NONEXISTENT_GITHUB_URL technique
+  // session-creation-async.spec.ts's Epic 5.3/5.4 blocks use (no test-mode
+  // hook exists to force a chosen status/failure_reason). The Creating side
+  // does NOT rely on winning that race, though: empirically, in this
+  // environment the real GitHub-404 pipeline can resolve fast enough that
+  // it's already gone by the time even a SECOND round trip (an attribute
+  // read, an elementHandle grab) happens, let alone the ~60-keypress Tab
+  // loop below -- no amount of retrying-with-a-fresh-session survives that,
+  // because every single post-observation step is itself another race. So
+  // instead this pins the Creating session's status via a mocked
+  // ListSessions response (the same forceSessionSnapshot-style technique
+  // session-creation-async.spec.ts's Epic 5.2 block uses for the identical
+  // "no test-mode hook" problem) -- deterministic, not timing-dependent.
   test('Cancel and Retry controls are keyboard-reachable buttons with distinct aria-labels', async ({ page }) => {
     const client = new SessionClient(BASE_URL);
-    const failedTitle = `e2e-a11y-failed-${Date.now()}`;
     const NONEXISTENT_GITHUB_URL = 'https://github.com/this-org-definitely-does-not-exist-e2e-test/nonexistent-repo-12345';
-
-    const failedSession = await client.createSession({ title: failedTitle, path: NONEXISTENT_GITHUB_URL });
-    void failedSession;
 
     await page.addInitScript(() => localStorage.setItem('stapler-squad:onboarded', 'true'));
 
-    // Real DNS + TLS + HTTPS 404 round trips vary -- most of the time the
-    // pipeline's own GitHub-404 resolution (~1s, see
-    // session-creation-async.spec.ts's Epic 5.3 block for the full
-    // explanation) is comfortably slower than a fresh page load, but it can
-    // occasionally resolve before the page finishes hydrating -- an
-    // environmental race, not a UI bug. Retry with a brand-new Creating
-    // session on that specific precondition failure (session-creation-
-    // async.spec.ts's openFreshCreatingCard uses the identical pattern).
-    let creatingCard!: import('@playwright/test').Locator;
-    let cancelButton!: import('@playwright/test').Locator;
-    let found = false;
-    for (let attempt = 0; attempt < 5 && !found; attempt++) {
+    // Real GitHub-404 resolution for NONEXISTENT_GITHUB_URL has proven, by
+    // repeated repro in this environment, to sometimes complete in well
+    // under a second -- faster than 60 sequential real Tab presses (each a
+    // CDP round trip) can run, which raced the Creating session to Failed
+    // mid-walk. Two layers of defense, addressing two different points where
+    // that race can land:
+    //
+    // 1. Force the session's status back to CREATING on every ListSessions
+    //    response (the same forceSessionSnapshot-style technique
+    //    session-creation-async.spec.ts's Epic 5.2 block uses for the
+    //    identical "no test-mode hook" problem), so the session starts in
+    //    the right state even if the real pipeline already resolved it by
+    //    the time this test's own initial ListSessions request lands. This
+    //    does NOT cover a real WatchSessions push landing mid-walk, though
+    //    -- that stream is separate from ListSessions and isn't mocked here.
+    // 2. For that remaining mid-walk window, record every focus event via a
+    //    `focusin` listener installed BEFORE the Tab walk starts, then press
+    //    Tab up to 60 times back to back (no per-iteration JS round trip),
+    //    and check the recorded history once at the end -- immune to the
+    //    Cancel button unmounting AFTER receiving focus, unlike polling
+    //    `document.activeElement` per press. The only remaining race is
+    //    Cancel unmounting BEFORE its turn in tab order, which is retried
+    //    against a fresh Creating session below, with a much narrower
+    //    window now that the walk itself no longer contributes to it.
+    let reachedCancel = false;
+    let verified = false;
+    let cancelAriaLabel: string | null = null;
+    for (let attempt = 0; attempt < 5 && !verified; attempt++) {
       const creatingTitle = `e2e-a11y-creating-${Date.now()}-${attempt}`;
       await client.createSession({ title: creatingTitle, path: NONEXISTENT_GITHUB_URL });
+
+      await page.unroute('**/api/session.v1.SessionService/ListSessions').catch(() => {});
+      await page.route('**/api/session.v1.SessionService/ListSessions', async (route) => {
+        const response = await route.fetch();
+        const json = await response.json();
+        const sessions = (json?.sessions ?? []) as Array<Record<string, unknown>>;
+        const target = sessions.find((s) => (s.title as string) === creatingTitle);
+        if (target) {
+          Object.assign(target, { status: 'SESSION_STATUS_CREATING', failureReason: '' });
+        }
+        await route.fulfill({ response, json });
+      });
+
       await page.goto(BASE_URL, { waitUntil: 'domcontentloaded' });
 
-      creatingCard = page.locator('[data-testid="session-card"], [data-testid="session-row"]').filter({ hasText: creatingTitle });
+      const creatingCard = page.locator('[data-testid="session-card"], [data-testid="session-row"]').filter({ hasText: creatingTitle });
       await expect(creatingCard).toBeVisible({ timeout: 10000 });
 
-      cancelButton = creatingCard.getByRole('button', { name: 'Cancel session creation' });
-      found = await cancelButton.isVisible().catch(() => false);
+      const cancelButton = creatingCard.getByRole('button', { name: 'Cancel session creation' });
+      if (!(await cancelButton.isVisible().catch(() => false))) {
+        continue; // already resolved to Failed -- try again with a fresh session
+      }
+
+      try {
+        const cancelHandle = await cancelButton.elementHandle({ timeout: 2000 });
+        await page.evaluate(() => {
+          (window as unknown as { __focusLog: EventTarget[] }).__focusLog = [];
+          document.addEventListener(
+            'focusin',
+            (e) => (window as unknown as { __focusLog: EventTarget[] }).__focusLog.push(e.target as EventTarget),
+            true,
+          );
+        });
+        await page.locator('input[aria-label="Search sessions"]').focus();
+        for (let i = 0; i < 60; i++) {
+          await page.keyboard.press('Tab');
+        }
+        reachedCancel = await page.evaluate(
+          (c) => (window as unknown as { __focusLog: EventTarget[] }).__focusLog.includes(c as unknown as EventTarget),
+          cancelHandle,
+        );
+        if (!reachedCancel) {
+          continue; // didn't survive the tab walk -- retry with a fresh session
+        }
+
+        await expect(cancelButton).toHaveAccessibleName('Cancel session creation', { timeout: 2000 });
+        cancelAriaLabel = await cancelButton.getAttribute('aria-label');
+        verified = true;
+      } catch {
+        // cancelButton vanished mid-check (session resolved) -- fall
+        // through and retry with a fresh Creating session.
+      }
     }
-    expect(found, 'Could not observe a Creating card with a Cancel button within 5 attempts').toBe(true);
+    expect(verified, 'Could not keep a Creating card with a stable, keyboard-reachable Cancel button within 5 attempts').toBe(true);
+    expect(reachedCancel, 'Tab order never reached the Cancel button').toBe(true);
+
+    // NOW create the Failed-bound session -- doing this AFTER the Cancel
+    // check (rather than before, as an earlier version of this test did)
+    // means none of the time spent creating/verifying Cancel above needs to
+    // race against this session's own resolution; it has its own generous
+    // up-to-30s budget below with nothing else competing for it.
+    const failedTitle = `e2e-a11y-failed-${Date.now()}`;
+    await client.createSession({ title: failedTitle, path: NONEXISTENT_GITHUB_URL });
+    await page.goto(BASE_URL, { waitUntil: 'domcontentloaded' });
 
     const failedCard = page.locator('[data-testid="session-card"], [data-testid="session-row"]').filter({ hasText: failedTitle });
     await expect(failedCard).toBeVisible({ timeout: 10000 });
-
-    // Give the second session's real GitHub-404 resolution time to land
-    // (same ~1s-to-30s budget as session-creation-async.spec.ts's Epic 5.3
-    // toast test).
     const retryButton = failedCard.getByRole('button', { name: 'Retry creating session' });
     await expect(retryButton).toBeVisible({ timeout: 30000 });
 
     // Distinct aria-labels, and both exposed as ARIA role="button".
-    await expect(cancelButton).toHaveAccessibleName('Cancel session creation');
     await expect(retryButton).toHaveAccessibleName('Retry creating session');
-    expect(await cancelButton.getAttribute('aria-label')).not.toBe(await retryButton.getAttribute('aria-label'));
+    expect(cancelAriaLabel).not.toBe(await retryButton.getAttribute('aria-label'));
 
-    // Keyboard-reachable: Tab from a known start point (the search input)
-    // must eventually focus each button without a mouse ever being used.
+    // Keyboard-reachable: same focusin-log technique, now for Retry. No
+    // race here -- the Failed session is already terminal (Failed doesn't
+    // transition further on its own), so a plain Tab walk would suffice,
+    // but reusing the log keeps both checks structurally identical.
+    await page.evaluate(() => {
+      (window as unknown as { __focusLog: EventTarget[] }).__focusLog = [];
+    });
     await page.locator('input[aria-label="Search sessions"]').focus();
-    const cancelHandle = await cancelButton.elementHandle();
     const retryHandle = await retryButton.elementHandle();
-    let reachedRetry = false;
-    let reachedCancel = false;
-    for (let i = 0; i < 60 && !(reachedRetry && reachedCancel); i++) {
+    for (let i = 0; i < 60; i++) {
       await page.keyboard.press('Tab');
-      const activeHandle = await page.evaluateHandle(() => document.activeElement);
-      if (await page.evaluate(([a, b]) => a === b, [activeHandle, cancelHandle])) {
-        reachedCancel = true;
-      }
-      if (await page.evaluate(([a, b]) => a === b, [activeHandle, retryHandle])) {
-        reachedRetry = true;
-      }
     }
-    expect(reachedCancel, 'Tab order never reached the Cancel button').toBe(true);
+    const reachedRetry = await page.evaluate(
+      (r) => (window as unknown as { __focusLog: EventTarget[] }).__focusLog.includes(r as unknown as EventTarget),
+      retryHandle,
+    );
     expect(reachedRetry, 'Tab order never reached the Retry button').toBe(true);
   });
 });

@@ -36,7 +36,10 @@ func DefaultModelFamilies() map[string]string {
 func LoadModelFamilyOverride(configPath string) (map[string]string, error) {
 	families := DefaultModelFamilies()
 
-	data, err := os.ReadFile(configPath) //nolint:gosec
+	// #nosec G304 -- configPath is always configDir+"model_family_overrides.json" (see
+	// dependencies.go), built from the internal config dir and a literal filename; never
+	// network/RPC input.
+	data, err := os.ReadFile(configPath)
 	if err != nil {
 		return nil, err
 	}

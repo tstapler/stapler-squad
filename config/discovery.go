@@ -72,6 +72,8 @@ func LoadDiscoveryConfig() *DiscoveryConfig {
 	}
 
 	configPath := filepath.Join(configDir, DiscoveryConfigFileName)
+	// #nosec G304 -- configPath is GetConfigDir() plus the constant DiscoveryConfigFileName,
+	// not caller/user-controlled input.
 	data, err := os.ReadFile(configPath)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -117,7 +119,7 @@ func SaveDiscoveryConfig(config *DiscoveryConfig) error {
 		return err
 	}
 
-	return os.WriteFile(configPath, data, 0644)
+	return os.WriteFile(configPath, data, 0600)
 }
 
 // IsExternalDiscoveryEnabled returns true if external instance discovery is enabled

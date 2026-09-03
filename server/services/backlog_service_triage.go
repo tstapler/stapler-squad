@@ -2678,7 +2678,7 @@ func (s *BacklogService) TriggerTriage(
 	artifactAbsPath := filepath.Join(triageBase, item.ID)
 
 	// 5. Create artifact dir.
-	if mkErr := os.MkdirAll(artifactAbsPath, 0o755); mkErr != nil {
+	if mkErr := os.MkdirAll(artifactAbsPath, 0o750); mkErr != nil {
 		return nil, connect.NewError(connect.CodeInternal,
 			fmt.Errorf("failed to create artifact dir %s: %w", artifactAbsPath, mkErr))
 	}

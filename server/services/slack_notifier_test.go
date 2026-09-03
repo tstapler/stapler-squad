@@ -1,7 +1,6 @@
 package services
 
 import (
-	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -20,6 +19,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tstapler/stapler-squad/config"
+	ssqlog "github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/git"
 )
@@ -534,17 +534,16 @@ func (h *signalingLogHandler) Handle(ctx context.Context, r slog.Record) error {
 func TestSlackNotifier_RecoversFromPanic_And_LogsError(t *testing.T) {
 	t.Parallel()
 	// slogDefaultMu (declared in autonomous_orchestration_service_test.go) serializes this
-	// swap against every other slog.Default() swap in this package.
+	// swap against every other log.SetSlogDefaultForTest swap in this package.
 	slogDefaultMu.Lock()
-	var buf bytes.Buffer
+	buf := &syncLogBuffer{}
 	sigCh := make(chan struct{}, 1)
-	prev := slog.Default()
-	slog.SetDefault(slog.New(&signalingLogHandler{
-		Handler: slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}),
+	prev := ssqlog.SetSlogDefaultForTest(slog.New(&signalingLogHandler{
+		Handler: slog.NewTextHandler(buf, &slog.HandlerOptions{Level: slog.LevelDebug}),
 		sigCh:   sigCh,
 	}))
 	t.Cleanup(func() {
-		slog.SetDefault(prev)
+		ssqlog.SetSlogDefaultForTest(prev)
 		slogDefaultMu.Unlock()
 	})
 

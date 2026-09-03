@@ -46,6 +46,9 @@ func ListCLIHosts() ([]CLIHost, error) {
 	if err != nil {
 		return nil, err
 	}
+	// #nosec G304 -- dir is resolved by ghConfigDir() from GH_CONFIG_DIR/XDG_CONFIG_HOME/
+	// $HOME env vars plus a fixed "gh" subdir; the joined filename is the constant
+	// "hosts.yml" — not RPC/user-request-controlled input.
 	data, err := os.ReadFile(filepath.Join(dir, "hosts.yml"))
 	if err != nil {
 		if os.IsNotExist(err) {

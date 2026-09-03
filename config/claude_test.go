@@ -126,6 +126,70 @@ func TestGetConfig(t *testing.T) {
 	}
 }
 
+// TestGetConfig_RejectsPathTraversal verifies resolveConfigPath's containment
+// check: a filename crafted to escape claudeDir must be rejected by
+// GetConfig with an error, and must never read the file it points at outside
+// claudeDir. filename ultimately comes from RPC requests
+// (server/services/config_service.go), so untrusted "../" segments are the
+// realistic attack shape.
+func TestGetConfig_RejectsPathTraversal(t *testing.T) {
+	claudeDir := t.TempDir()
+
+	// A file outside claudeDir that a broken containment check might still serve.
+	secretDir := t.TempDir()
+	secretFile := filepath.Join(secretDir, "passwd")
+	if err := os.WriteFile(secretFile, []byte("root:x:0:0"), 0644); err != nil {
+		t.Fatalf("Failed to create secret file: %v", err)
+	}
+
+	rel, err := filepath.Rel(claudeDir, secretFile)
+	if err != nil {
+		t.Fatalf("filepath.Rel() error = %v", err)
+	}
+
+	mgr := &ClaudeConfigManager{claudeDir: claudeDir}
+
+	_, err = mgr.GetConfig(rel)
+	if err == nil {
+		t.Fatalf("GetConfig(%q) should reject a filename that escapes claudeDir", rel)
+	}
+}
+
+// TestResolveConfigPath covers resolveConfigPath directly: a legitimate
+// filename resolves under claudeDir, while a "../"-laden filename is
+// rejected regardless of whether the escape target exists.
+func TestResolveConfigPath(t *testing.T) {
+	claudeDir := t.TempDir()
+
+	t.Run("legitimate filename", func(t *testing.T) {
+		got, err := resolveConfigPath(claudeDir, "settings.json")
+		if err != nil {
+			t.Fatalf("resolveConfigPath() error = %v", err)
+		}
+		want := filepath.Join(claudeDir, "settings.json")
+		if got != want {
+			t.Errorf("resolveConfigPath() = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("traversal escaping claudeDir", func(t *testing.T) {
+		_, err := resolveConfigPath(claudeDir, "../../../etc/passwd")
+		if err == nil {
+			t.Error("resolveConfigPath() should reject a filename escaping claudeDir")
+		}
+	})
+
+	t.Run("sibling directory sharing a string prefix", func(t *testing.T) {
+		// claudeDir="/tmp/foo", filename constructed so the joined path is
+		// "/tmp/foobar/x" -- foobar is NOT under foo even though the raw
+		// strings share a prefix.
+		_, err := resolveConfigPath(claudeDir, filepath.Join("..", filepath.Base(claudeDir)+"bar", "x"))
+		if err == nil {
+			t.Error("resolveConfigPath() should reject a path resolving to a sibling directory sharing a string prefix")
+		}
+	})
+}
+
 func TestListConfigs(t *testing.T) {
 	// Create a temporary directory for testing
 	tmpDir := t.TempDir()

@@ -1,8 +1,10 @@
 "use client";
 // +feature: remote-host-badge
 
-import { useRef, useState, useEffect, memo } from "react";
+import { useRef, memo } from "react";
 import { useSessionActions } from "@/lib/hooks/useSessionActions";
+import { useCreationLifecycleActions } from "@/lib/hooks/useCreationLifecycleActions";
+import { getFailureMessage } from "@/lib/utils/sessionFailure";
 import { Session, SessionStatus, SubStatus } from "@/gen/session/v1/types_pb";
 import { Tooltip } from "../ui/Tooltip";
 import {
@@ -135,25 +137,6 @@ function getStatusDotLabel(dotValue: string): string {
   return STATUS_DOT_LABELS[dotValue] ?? dotValue;
 }
 
-// Failure-reason-specific copy — byte-for-byte mirror of SessionCard.tsx's
-// getFailureMessage (async-session-creation Epic 5.2/plan.md Story 5.2.2 /
-// UX research §2/§4's "three different messages, not one generic Failed
-// card"). Duplicated rather than imported because SessionCard.tsx doesn't
-// export this helper; kept identical so the row and card views never show
-// conflicting copy for the same FailureReason.
-function getFailureMessage(failureReason: string): string {
-  switch (failureReason) {
-    case "GitHubResolutionError":
-      return "Failed to resolve GitHub URL.";
-    case "StartupError":
-      return "Failed to start session.";
-    case "Stale":
-      return "This session creation appears to have stalled.";
-    default:
-      return "Session creation failed.";
-  }
-}
-
 function formatElapsed(ts?: { seconds: bigint; nanos: number }): string {
   if (!ts || ts.seconds === BIGINT_ZERO) return "";
   const now = Date.now();
@@ -231,69 +214,23 @@ function SessionRowInner({
   const isCreating = session.status === SessionStatus.CREATING;
   const isFailed = session.status === SessionStatus.FAILED;
 
-  // Cancel/Retry guards (Epic 5.4, async-session-creation) — same
-  // synchronous-ref + state pattern as Omnibar.tsx's isSubmittingRef and
-  // SessionCard.tsx's mirror of it: the ref blocks a second click before
-  // React re-renders with the disabled attribute, the state actually
-  // disables/re-enables the button. Reset once the stream carries the
-  // session past the in-flight status so a later cycle on the SAME row
-  // gets a fresh guard rather than staying disabled forever.
-  const cancelInFlightRef = useRef(false);
-  const [cancelDisabled, setCancelDisabled] = useState(false);
-  const retryInFlightRef = useRef(false);
-  const [retryDisabled, setRetryDisabled] = useState(false);
-
-  useEffect(() => {
-    if (!isCreating) {
-      cancelInFlightRef.current = false;
-      setCancelDisabled(false);
-    }
-  }, [isCreating]);
-
-  useEffect(() => {
-    if (isCreating) {
-      retryInFlightRef.current = false;
-      setRetryDisabled(false);
-    }
-  }, [isCreating]);
-
-  const handleCancelCreation = async (e: React.MouseEvent) => {
-    e.stopPropagation();
-    if (cancelInFlightRef.current) return;
-    cancelInFlightRef.current = true;
-    setCancelDisabled(true);
-    const result = await sessionActions.cancelCreation();
-    if (!result.success) {
-      cancelInFlightRef.current = false;
-      setCancelDisabled(false);
-    }
-  };
-
-  const handleRetryCreation = async (e: React.MouseEvent) => {
-    e.stopPropagation();
-    if (retryInFlightRef.current) return;
-    retryInFlightRef.current = true;
-    setRetryDisabled(true);
-    const ok = await sessionActions.retryCreation();
-    if (!ok) {
-      retryInFlightRef.current = false;
-      setRetryDisabled(false);
-    }
-  };
+  // Cancel/Retry guards (Epic 5.4, async-session-creation) -- shared with
+  // SessionCard.tsx via useCreationLifecycleActions.
+  const { cancelDisabled, retryDisabled, handleCancelCreation, handleRetryCreation } =
+    useCreationLifecycleActions(session.id, isCreating);
   // Sessions needing user attention always show their primary action --
   // Creating/Failed included so Cancel/Retry are clickable immediately
   // without requiring a hover (Epic 5.4/Story 5.4.1's "clickable
   // immediately when creation starts, not gated on any delay").
   const actionsAlwaysVisible =
     isPaused || isNeedsApproval || isHibernated || isCreating || isFailed;
-  // session.failureReason is on the wire today (types_pb.ts), unlike
-  // SessionCard.tsx's defensive cast (that comment predates this field
-  // landing) -- read it directly. Falls back to creation_progress, which the
-  // pipeline already sets to a detailed message for
-  // GitHubResolutionError/StartupError before the terminal write; Stale
-  // doesn't get a fresh setPhase call, so a Stale session without
-  // failureReason falls back to the generic message instead of whatever
-  // stale progress text it was last showing (same behavior as SessionCard).
+  // session.failureReason is on the wire (types_pb.ts) -- read it directly.
+  // Falls back to creation_progress, which the pipeline already sets to a
+  // detailed message for GitHubResolutionError/StartupError before the
+  // terminal write; Stale doesn't get a fresh setPhase call, so a Stale
+  // session without failureReason falls back to the generic message instead
+  // of whatever stale progress text it was last showing (same behavior as
+  // SessionCard.tsx, which shares this mapping via lib/utils/sessionFailure).
   const failureMessage = isFailed
     ? session.failureReason
       ? getFailureMessage(session.failureReason)
@@ -387,6 +324,7 @@ function SessionRowInner({
         <span
           className={statusDot}
           data-status={dotStatus}
+          data-testid={`session-status-${dotStatus}`}
           aria-hidden="true"
         />
       </Tooltip>
