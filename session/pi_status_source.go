@@ -119,6 +119,35 @@ type PiStatusSource struct {
 	stopCh  chan struct{}
 	stopped atomic.Bool
 	wg      sync.WaitGroup
+
+	// lifecycleMu serializes launch() (called from Start() and from the
+	// relaunch timer callback in handleProcessExit, including that
+	// callback's stopped.Load() check) against Stop()'s
+	// "snapshot p.cmd -> kill -> wg.Wait()" sequence.
+	//
+	// Without this, Stop() and a just-fired relaunch callback can interleave
+	// so that Stop() snapshots and kills the OLD (already-dead) p.cmd before
+	// the callback's own stopped.Load() check runs, sees stopped == false
+	// (Stop()'s CompareAndSwap on p.stopped races the callback's read), and
+	// proceeds to launch() a NEW subprocess + reader/wait goroutine pair
+	// AFTER Stop() has already taken its kill snapshot. Stop()'s wg.Wait()
+	// then blocks until those new goroutines exit on their own -- i.e. until
+	// the orphaned new subprocess exits naturally, since nothing kills it.
+	//
+	// Holding lifecycleMu across "check stopped -> launch()" in the
+	// callback and across "snapshot cmd -> kill" in Stop() makes whichever
+	// side acquires the mutex first fully determine the outcome: if Stop()
+	// wins, the callback's later stopped.Load() (now true, since the
+	// CompareAndSwap in Stop() happens-before the lock acquisition) sees
+	// stopped and returns without launching anything. If the callback wins,
+	// it may launch() a new subprocess before releasing the mutex; Stop()
+	// then acquires it, snapshots the NOW-current p.cmd (the new one), and
+	// kills that one correctly. Either way nothing is orphaned. wg.Wait()
+	// itself stays OUTSIDE the mutex in Stop() -- holding it during Wait()
+	// would deadlock against a callback blocked trying to acquire
+	// lifecycleMu (whose own deferred wg.Done() only fires after it returns
+	// from launch()/the callback body).
+	lifecycleMu sync.Mutex
 }
 
 // NewPiStatusSource constructs a PiStatusSource for the given instance
@@ -270,6 +299,8 @@ func (p *PiStatusSource) handleEvent(event any) {
 // event stream. Safe to call once; relaunches after a detected crash are
 // handled internally (see handleProcessExit).
 func (p *PiStatusSource) Start() error {
+	p.lifecycleMu.Lock()
+	defer p.lifecycleMu.Unlock()
 	return p.launch()
 }
 
@@ -405,7 +436,17 @@ func (p *PiStatusSource) handleProcessExit() {
 	// WaitGroup" race described in the review finding.
 	p.wg.Add(1)
 	timer := time.AfterFunc(backoff, func() {
+		// lifecycleMu (Blocker 1 fix): hold it across both the stopped.Load()
+		// check AND the launch() call so this callback and a concurrent
+		// Stop() can never interleave into "Stop() kills the old process,
+		// then this callback launches a new, unkilled one" -- see
+		// lifecycleMu's doc comment on the struct. wg.Done() is deferred
+		// outermost so it still fires exactly once on every return path, but
+		// after lifecycleMu is released (defers run LIFO).
 		defer p.wg.Done()
+		p.lifecycleMu.Lock()
+		defer p.lifecycleMu.Unlock()
+
 		if p.stopped.Load() {
 			return
 		}
@@ -431,6 +472,14 @@ func (p *PiStatusSource) Stop() {
 	p.cancelIdleTimer()
 	p.cancelRelaunchTimer()
 
+	// lifecycleMu (Blocker 1 fix): hold it across the snapshot-and-kill
+	// sequence so it can never interleave with a concurrent relaunch
+	// callback's own stopped.Load()-check-then-launch() sequence -- see
+	// lifecycleMu's doc comment on the struct for the two possible
+	// orderings and why both are safe. wg.Wait() is deliberately OUTSIDE
+	// the lock: holding lifecycleMu during Wait() would deadlock against a
+	// callback blocked trying to acquire it.
+	p.lifecycleMu.Lock()
 	p.cmdMu.Lock()
 	cmd := p.cmd
 	p.cmdMu.Unlock()
@@ -438,6 +487,8 @@ func (p *PiStatusSource) Stop() {
 	if cmd != nil && cmd.Process != nil {
 		_ = cmd.Process.Kill()
 	}
+	p.lifecycleMu.Unlock()
+
 	p.wg.Wait()
 }
 

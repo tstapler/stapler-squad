@@ -465,6 +465,19 @@ type Instance struct {
 	// concurrent GetController-style reads.
 	piStatusSrc atomic.Pointer[PiStatusSource]
 
+	// piStatusStartMu serializes startPiStatusSource's check-then-act
+	// sequence (load piStatusSrc, and if nil construct+Start()+Store() a new
+	// PiStatusSource). Without it, two concurrent StartController calls for
+	// the same pi-backed instance can both observe a nil piStatusSrc, both
+	// spawn a subprocess+goroutine pair, and the loser's PiStatusSource is
+	// silently overwritten by the winner's Store() with no Stop() ever
+	// called on it -- a leaked subprocess and reader/wait goroutines for the
+	// life of the process. Mirrors StartController's Claude-controller
+	// branch (i.mu held across its own check-then-act + double-check), but
+	// kept as a separate, narrower mutex since the pi branch deliberately
+	// doesn't share i.mu's broader scope.
+	piStatusStartMu sync.Mutex
+
 	// conversationClearedAt records when ClearConversationState() last ran, so
 	// tryExtractConversationUUID's DetectByPath fallback won't resurrect a JSONL
 	// predating an explicit "start fresh" request. In-memory only — does not
@@ -1812,6 +1825,17 @@ func (i *Instance) Destroy() error {
 	// (session_driver.go) polls this every driverPollInterval and exits on
 	// seeing it, rather than continuing until its own 25-minute deadline.
 	i.destroyed.Store(true)
+
+	// Evict this session's entry from PiExtensionHealthTracker (pi-support
+	// Epic 4.2 MAJOR 1 fix) so the tracker's map doesn't grow unboundedly for
+	// the life of the process. Gated on isPi to avoid a no-op resolver call on
+	// every single non-pi session's destroy; nil-checked since not every
+	// deployment wires SetPiExtensionHealthForgetter (e.g. tests).
+	if isPi(i.Program) {
+		if forgetter := getPiExtensionHealthForgetter(); forgetter != nil {
+			forgetter(i.GetStableID())
+		}
+	}
 
 	defer i.fireLifecycleEvent(EventStopped, "operator-destroy")
 	defer i.cleanupPromptFile()

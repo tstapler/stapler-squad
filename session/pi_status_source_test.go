@@ -5,6 +5,7 @@ import (
 	"os/exec"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -334,4 +335,86 @@ func TestPiStatusSource_ExhaustedRetriesReportUnavailable(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 	t.Errorf("subprocess never reported unavailable after exhausting %d retries (retryCount=%d)", piMaxRelaunchAttempts, src.retryCount.Load())
+}
+
+// TestPiStatusSource_StopConcurrentWithRelaunchStress is a stress/fuzz-style
+// substitute for a fully deterministic reproduction of Blocker 1's narrow
+// race (independent review pass on PR #685): the relaunch timer callback's
+// stopped.Load() check racing Stop()'s CompareAndSwap on the same flag, such
+// that Stop() could snapshot-and-kill the OLD subprocess while the callback
+// was still inside launch() spawning a NEW one that nothing then kills.
+// Forcing that exact interleaving deterministically would need a test-only
+// hook inside the callback, which doesn't exist -- a fully deterministic
+// repro is impractical here, so this instead forces a subprocess crash and
+// immediately races Stop() against the resulting relaunch attempt (with no
+// synchronization between the two) across many iterations under -race,
+// giving the scheduler repeated chances to hit both possible
+// lifecycleMu-acquisition orderings.
+//
+// It asserts two things any leaked subprocess would violate: (1) Stop()
+// always returns promptly rather than hanging on wg.Wait() for an orphaned
+// process that nothing killed, and (2) every subprocess the factory ever
+// spawned has actually exited (verified via signal(0)) by the time all
+// iterations finish -- a leaked "sleep 100" would still be alive and
+// answer signal(0) successfully.
+func TestPiStatusSource_StopConcurrentWithRelaunchStress(t *testing.T) {
+	const iterations = 200
+
+	var mu sync.Mutex
+	var spawned []*exec.Cmd
+
+	for iter := 0; iter < iterations; iter++ {
+		factory := func() *exec.Cmd {
+			cmd := safeexec.CommandContext(context.Background(), "sleep", "5")
+			mu.Lock()
+			spawned = append(spawned, cmd)
+			mu.Unlock()
+			return cmd
+		}
+
+		src := NewPiStatusSource("test-session", factory)
+		if err := src.Start(); err != nil {
+			t.Fatalf("iteration %d: Start() failed: %v", iter, err)
+		}
+
+		src.cmdMu.Lock()
+		proc := src.cmd.Process
+		src.cmdMu.Unlock()
+		if err := proc.Kill(); err != nil {
+			t.Fatalf("iteration %d: failed to kill subprocess: %v", iter, err)
+		}
+
+		// Race Stop() against handleProcessExit's relaunch timer callback
+		// with no synchronization -- whichever of Stop()'s
+		// CompareAndSwap-then-lifecycleMu sequence and the callback's
+		// lifecycleMu-then-stopped.Load() sequence gets there first should
+		// still leave nothing orphaned (see lifecycleMu's doc comment on
+		// the PiStatusSource struct).
+		done := make(chan struct{})
+		go func() {
+			src.Stop()
+			close(done)
+		}()
+
+		select {
+		case <-done:
+		case <-time.After(3 * time.Second):
+			t.Fatalf("iteration %d: Stop() did not return within 3s -- suspected hang on a leaked relaunch", iter)
+		}
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	for i, cmd := range spawned {
+		if cmd.Process == nil {
+			continue
+		}
+		// signal(0) succeeds iff the process still exists. A process
+		// already reaped by its own PiStatusSource waitLoop's cmd.Wait()
+		// call returns ESRCH here, so this only flags a subprocess that is
+		// genuinely still running and unaccounted for.
+		if err := cmd.Process.Signal(syscall.Signal(0)); err == nil {
+			t.Errorf("spawned process %d (pid %d) still appears to exist after all Stop() calls returned -- leaked subprocess", i, cmd.Process.Pid)
+		}
+	}
 }

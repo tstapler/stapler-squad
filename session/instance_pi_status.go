@@ -33,7 +33,14 @@ func (i *Instance) piStatusSupported() bool {
 // and registers it with the status manager, if one is set. A no-op if a
 // source is already registered (mirrors StartController's
 // "don't recreate if already exists" guard).
+//
+// piStatusStartMu is held for the entire check-then-act sequence (load,
+// then construct+Start()+Store()) -- see the field's doc comment on
+// instance.go for the double-start race this closes.
 func (i *Instance) startPiStatusSource() error {
+	i.piStatusStartMu.Lock()
+	defer i.piStatusStartMu.Unlock()
+
 	if i.piStatusSrc.Load() != nil {
 		log.Debug("pi status source already exists for instance", "session", i.Title)
 		return nil

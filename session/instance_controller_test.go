@@ -1,12 +1,17 @@
 package session
 
 import (
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/config"
 )
 
 // TestStartController_DoesNotRaceWithDestroy is the regression guard for the
@@ -132,5 +137,105 @@ func TestStopController_StopsLivePiStatusSourceRegardlessOfProgramOrFlag(t *test
 	case <-done:
 	case <-time.After(2 * time.Second):
 		t.Fatal("src.Stop() did not return promptly -- PiStatusSource's goroutines were not actually stopped by StopController")
+	}
+}
+
+// writeFakePiBinary writes an executable script named exactly "pi" (so
+// isPi(i.Program) resolves true) that records its own PID to pidLogFile
+// (via the inherited PID_LOG_FILE env var, set by the caller) before
+// sleeping, so a test can count how many real OS subprocesses a
+// StartController race actually spawned.
+func writeFakePiBinary(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "pi")
+	script := "#!/bin/sh\necho $$ >> \"$PID_LOG_FILE\"\nexec sleep 100\n"
+	require.NoError(t, os.WriteFile(path, []byte(script), 0o755))
+	return path
+}
+
+// TestStartController_PiStatusSourceNoDoubleStart is the regression guard
+// for Blocker 2 (independent review pass on PR #685): startPiStatusSource's
+// check-then-act on i.piStatusSrc.Load() used to have no lock, so two
+// concurrent StartController() calls on the same pi-backed instance could
+// both observe a nil piStatusSrc, both spawn a subprocess + reader/wait
+// goroutine pair via src.Start(), and have the loser's *PiStatusSource
+// silently discarded by the winner's Store() -- its subprocess and
+// goroutines never Stop()-ed, leaking for the life of the process.
+//
+// This proves the fix (piStatusStartMu held across the whole check-then-act
+// sequence) by actually counting real OS subprocesses spawned by a fake
+// "pi" binary that records its own PID on launch: with the fix in place,
+// racing two StartController() calls can only ever result in exactly one
+// subprocess -- there is no "second, unlinked" subprocess to separately
+// Stop(), which is a stronger guarantee than merely stopping a leak after
+// the fact. Runs many iterations so the goroutine scheduler gets repeated
+// chances at both possible orderings.
+func TestStartController_PiStatusSourceNoDoubleStart(t *testing.T) {
+	origFlag := config.LoadConfig().GetFeatureFlag(config.FeaturePiSupport)
+	require.NoError(t, config.LoadConfig().SetFeatureFlag(config.FeaturePiSupport, true))
+	defer func() {
+		_ = config.LoadConfig().SetFeatureFlag(config.FeaturePiSupport, origFlag)
+	}()
+
+	const iterations = 20
+	for iter := 0; iter < iterations; iter++ {
+		iter := iter
+		t.Run(fmt.Sprintf("iter-%d", iter), func(t *testing.T) {
+			fakePi := writeFakePiBinary(t)
+			pidLogFile := filepath.Join(t.TempDir(), "pids.log")
+			require.NoError(t, os.Setenv("PID_LOG_FILE", pidLogFile))
+			defer func() { _ = os.Unsetenv("PID_LOG_FILE") }()
+
+			inst := &Instance{Title: fmt.Sprintf("pi-start-race-%d", iter), Program: fakePi}
+			inst.SetStatusManager(NewInstanceStatusManager())
+			inst.started.Store(true)
+			require.True(t, inst.piStatusSupported(), "test setup: piStatusSupported() must be true to exercise the race")
+
+			var wg sync.WaitGroup
+			wg.Add(2)
+			errs := make(chan error, 2)
+			for range 2 {
+				go func() {
+					defer wg.Done()
+					errs <- inst.StartController()
+				}()
+			}
+			wg.Wait()
+			close(errs)
+			for err := range errs {
+				assert.NoError(t, err, "StartController() should not error")
+			}
+
+			// Give the (at most one) spawned subprocess a moment to record its
+			// PID before counting.
+			deadline := time.Now().Add(2 * time.Second)
+			var pidLines []string
+			for time.Now().Before(deadline) {
+				data, readErr := os.ReadFile(pidLogFile)
+				if readErr == nil && len(strings.TrimSpace(string(data))) > 0 {
+					pidLines = strings.Fields(strings.TrimSpace(string(data)))
+					break
+				}
+				time.Sleep(20 * time.Millisecond)
+			}
+
+			assert.Len(t, pidLines, 1, "exactly one real subprocess should have been spawned across both concurrent StartController() calls, got PIDs: %v", pidLines)
+			assert.NotNil(t, inst.piStatusSrc.Load(), "a PiStatusSource must be registered after StartController()")
+
+			// Cleanup: stop the registered source, then forcibly kill any PID
+			// this iteration recorded (belt-and-suspenders in case the
+			// assertion above already failed and left an extra process
+			// running).
+			inst.StopController()
+			for _, pidStr := range pidLines {
+				var pid int
+				if _, scanErr := fmt.Sscanf(pidStr, "%d", &pid); scanErr == nil {
+					if proc, findErr := os.FindProcess(pid); findErr == nil {
+						_ = proc.Kill()
+					}
+				}
+			}
+		})
 	}
 }
