@@ -61,13 +61,12 @@ func TestCreateTestStorage_SecondConnectionSeesSameData(t *testing.T) {
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 
-	er, ok := storage.repo.(*EntRepository)
-	require.True(t, ok, "createTestStorage must back Storage with an EntRepository")
+	er := storage.repo
 
 	inst := newTestInstance("shared-cache-visibility-test")
 	require.NoError(t, storage.SaveInstances([]*Instance{inst}))
 
-	db, err := sql.Open("sqlite3", er.dbPath)
+	db, err := sql.Open("sqlite", er.dbPath)
 	require.NoError(t, err)
 	defer db.Close()
 
