@@ -22,6 +22,7 @@ import { formatPauseReason } from "@/lib/sessions/formatPauseReason";
 import { isAutoApproveSupported, isApprovalExtensionSupported } from "@/lib/sessions/autoApprove";
 import { getLastActivityTimestamp, isSessionStale } from "@/lib/session-staleness";
 import { RemoteConnectionIndicator } from "./RemoteConnectionIndicator";
+import { PI_SUPPORT_FLAG_NAME } from "@/lib/constants/programs";
 
 // The launch command always starts with the program string it was last launched
 // with (see Instance.buildLaunchCommand, session/instance_tmux.go). If it no longer
@@ -301,7 +302,7 @@ function SessionCardInner({
   // it) as well as for a pi session before InstanceToProto's resolver is wired -- both cases
   // correctly fall through to piHealthBadgeInfo's "unknown" default if this guard is somehow
   // bypassed, but the guard itself is what keeps the badge from appearing on non-pi cards at all.
-  const piSupportEnabled = useFeatureFlag("pi-support");
+  const piSupportEnabled = useFeatureFlag(PI_SUPPORT_FLAG_NAME);
   const showPiHealthBadge = piSupportEnabled && isApprovalExtensionSupported(session.program);
   // AC11, explicit product decision (scoped out, not a silent gap): backlog automation's
   // headless review sessions (session/backlog_review.go, PermissionMode:

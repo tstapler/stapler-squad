@@ -140,6 +140,30 @@ describe("FeaturesPage — pi-support disable warning", () => {
     expect(screen.queryByTestId("pi-disable-warning-overlay")).not.toBeInTheDocument();
   });
 
+  it("should show the mandatory warning (fail closed) when the status check returns a non-2xx response", async () => {
+    const setFlag = jest.fn();
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: false,
+      status: 500,
+      json: async () => ({}),
+    }) as unknown as typeof fetch;
+
+    mockUseFeatureFlags.mockReturnValue({
+      flags: { "pi-support": true },
+      flagList: [makeFlag({ name: "pi-support", enabled: true, description: "pi coding agent support" })],
+      isLoading: false,
+      error: null,
+      setFlag,
+    });
+
+    render(<FeaturesPage />);
+
+    fireEvent.click(screen.getByRole("button", { name: /disable pi coding agent/i }));
+
+    await waitFor(() => expect(screen.getByTestId("pi-disable-warning-overlay")).toBeInTheDocument());
+    expect(setFlag).not.toHaveBeenCalled();
+  });
+
   it("should never persist the toggle when Cancel is clicked instead of I understand", async () => {
     const setFlag = jest.fn();
     global.fetch = jest.fn().mockResolvedValue({

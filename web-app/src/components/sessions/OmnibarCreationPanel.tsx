@@ -8,6 +8,7 @@ import { SessionService } from "@/gen/session/v1/session_pb";
 import type { WorktreeEntry } from "@/gen/session/v1/session_pb";
 import type { OmnibarFormState } from "./Omnibar";
 import { useAvailablePrograms } from "@/lib/hooks/useAvailablePrograms";
+import { PI_SUPPORT_FLAG_NAME, getPickerPrograms } from "@/lib/constants/programs";
 import { getConnectTransport } from "@/lib/api/transport";
 import { isAutoApproveSupported, isApprovalExtensionSupported } from "@/lib/sessions/autoApprove";
 import { useFeatureFlag } from "@/lib/contexts/FeatureFlagsContext";
@@ -193,11 +194,6 @@ export interface OmnibarCreationPanelProps {
   piApprovalExtensionFailed?: boolean;
 }
 
-// pi-support's flag name (mirrors config.FeaturePiSupport / feature_flag_service.go's
-// piSupportFlagName — kept as a plain string here since the frontend has no shared
-// import path to those Go constants; same convention as app/settings/features/page.tsx).
-const PI_SUPPORT_FLAG_NAME = "pi-support";
-
 // Helper: file → base64 string (strips data URL prefix).
 function fileToBase64(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -328,12 +324,9 @@ export function OmnibarCreationPanel({
   const piSupportEnabled = useFeatureFlag(PI_SUPPORT_FLAG_NAME);
   // Story 3.1.1: "pi" is only offered in the rendered picker options when pi-support is on —
   // opt-in invisibility. availablePrograms (not the raw PROGRAMS constant) is the base list
-  // here since it may also include extra programs detected on the host; getPickerPrograms's
-  // filter rule (exclude value === "pi" when the flag is off) is mirrored inline rather than
-  // called directly, since that helper operates on PROGRAMS itself, not this derived list.
-  const pickerPrograms = piSupportEnabled
-    ? availablePrograms
-    : availablePrograms.filter((p) => p.value !== "pi");
+  // here since it may also include extra programs detected on the host; getPickerPrograms
+  // takes that list as a parameter so this call site and programs.ts share one filter rule.
+  const pickerPrograms = getPickerPrograms(availablePrograms, piSupportEnabled);
   // Story 3.1.2: the capability warning is only even eligible to show for a program the pi
   // approval extension covers, and only while pi-support itself is on.
   const showPiApprovalWarning =

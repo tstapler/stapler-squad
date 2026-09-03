@@ -24,13 +24,22 @@ describe("isKnownProgram", () => {
 
 describe("getPickerPrograms", () => {
   it("excludes pi when the flag is off", () => {
-    const options = getPickerPrograms(false);
+    const options = getPickerPrograms(PROGRAMS, false);
     expect(options.some((p) => p.value === "pi")).toBe(false);
   });
 
   it("includes pi at its PROGRAMS position when the flag is on", () => {
-    const options = getPickerPrograms(true);
+    const options = getPickerPrograms(PROGRAMS, true);
     expect(options).toEqual(PROGRAMS);
     expect(options.some((p) => p.value === "pi")).toBe(true);
+  });
+
+  it("filters pi out of an arbitrary program list, not just PROGRAMS", () => {
+    const custom = [
+      { value: "pi", label: "pi" },
+      { value: "custom-agent", label: "Custom Agent" },
+    ];
+    const options = getPickerPrograms(custom, false);
+    expect(options).toEqual([{ value: "custom-agent", label: "Custom Agent" }]);
   });
 });

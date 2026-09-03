@@ -4,6 +4,12 @@ export interface ProgramOption {
   description?: string;
 }
 
+// pi-support's flag name (mirrors config.FeaturePiSupport / feature_flag_service.go's
+// piSupportFlagName — kept as a plain string constant here since the frontend has no
+// shared import path to those Go constants). Single source of truth for the frontend;
+// import this everywhere instead of redeclaring the literal.
+export const PI_SUPPORT_FLAG_NAME = "pi-support";
+
 export const PROGRAMS: ProgramOption[] = [
   { value: "", label: "System default", description: "Use default_program from config (default: claude)" },
   { value: "claude", label: "Claude Code", description: "Anthropic's CLI assistant" },
@@ -66,13 +72,18 @@ export function isKnownProgram(program: string): boolean {
 }
 
 /**
- * Programs to offer in the creation-panel picker. `PROGRAMS` itself stays
- * unconditional (getProgramDisplay/isKnownProgram must recognize "pi" even
- * with the flag off, for sessions that already have program: "pi" set from
- * before pi-support was disabled) -- this helper filters only the rendered
- * option list, per pi-support's "opt-in invisibility" requirement.
+ * Programs to offer in the creation-panel picker, filtered from whichever program
+ * list the caller has (usually `PROGRAMS`, but the creation panel derives its own
+ * list via useAvailablePrograms() to include extra programs detected on the host).
+ * `PROGRAMS` itself stays unconditional (getProgramDisplay/isKnownProgram must
+ * recognize "pi" even with the flag off, for sessions that already have
+ * program: "pi" set from before pi-support was disabled) -- this helper filters
+ * only the rendered option list, per pi-support's "opt-in invisibility" requirement.
  */
-export function getPickerPrograms(piSupportEnabled: boolean): ProgramOption[] {
-  if (piSupportEnabled) return PROGRAMS;
-  return PROGRAMS.filter((p) => p.value !== "pi");
+export function getPickerPrograms(
+  programs: ProgramOption[],
+  piSupportEnabled: boolean,
+): ProgramOption[] {
+  if (piSupportEnabled) return programs;
+  return programs.filter((p) => p.value !== "pi");
 }
