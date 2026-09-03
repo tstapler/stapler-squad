@@ -1,16 +1,20 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"io"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/pkg/classifier"
 )
 
@@ -765,6 +769,36 @@ func TestPatchPiExtension_Idempotent(t *testing.T) {
 	content2, err := os.ReadFile(extPath)
 	require.NoError(t, err)
 	assert.Equal(t, string(content1), string(content2))
+}
+
+// patchPiExtension_should_logErrorWithTargetPathAndUnderlyingError_When_writeFails
+func TestPatchPiExtension_LogsErrorWithTargetPath_WhenWriteFails(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("directory permission bits do not restrict writes the same way on windows")
+	}
+	if os.Geteuid() == 0 {
+		t.Skip("running as root: directory permission bits do not restrict writes, so this failure cannot be simulated")
+	}
+
+	dir := t.TempDir()
+	roDir := filepath.Join(dir, "extensions")
+	require.NoError(t, os.MkdirAll(roDir, 0o755))
+	extPath := filepath.Join(roDir, "ssq-approval.ts")
+	// Strip the write bit so os.WriteFile's temp-file creation fails.
+	require.NoError(t, os.Chmod(roDir, 0o555))
+	t.Cleanup(func() { _ = os.Chmod(roDir, 0o755) })
+
+	var buf bytes.Buffer
+	prev := log.SetSlogDefaultForTest(slog.New(slog.NewTextHandler(&buf, nil)))
+	t.Cleanup(func() { log.SetSlogDefaultForTest(prev) })
+
+	err := patchPiExtension(extPath, "http://localhost:8543/api/hooks/permission-request", "http://localhost:8543/api/hooks/pi-extension-loaded")
+	require.Error(t, err)
+
+	logged := buf.String()
+	assert.Contains(t, logged, "level=ERROR")
+	assert.Contains(t, logged, extPath)
+	assert.Contains(t, logged, err.Error())
 }
 
 // ── installPi integration tests ───────────────────────────────────────────────

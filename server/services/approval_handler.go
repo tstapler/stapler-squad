@@ -577,6 +577,8 @@ type piExtensionHealthPingPayload struct {
 // handler always responds 200 regardless of whether the session could be
 // resolved or the tracker recorded anything, so a malformed/unresolvable ping
 // never surfaces as an error to the extension.
+//
+// +http: POST /api/hooks/pi-extension-loaded hooks:pi-extension-loaded
 func (h *ApprovalHandler) HandlePiExtensionLoaded(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)

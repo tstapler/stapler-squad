@@ -19,6 +19,7 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/internal/claudehooks"
+	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/pkg/classifier"
 	"github.com/tstapler/stapler-squad/session"
 	"gopkg.in/yaml.v3"
@@ -1490,14 +1491,20 @@ func ssqApprovalExtensionContent(permissionURL, healthURL string) string {
 // patchOpenCodeHooks's doc comment above. The write is atomic (temp file + rename).
 func patchPiExtension(extensionPath, permissionURL, healthURL string) error {
 	if err := os.MkdirAll(filepath.Dir(extensionPath), 0755); err != nil {
+		log.Error("failed to write pi approval extension", "path", extensionPath, "error", err)
 		return err
 	}
 	content := ssqApprovalExtensionContent(permissionURL, healthURL)
 	tmpPath := extensionPath + ".tmp"
 	if err := os.WriteFile(tmpPath, []byte(content), 0644); err != nil {
+		log.Error("failed to write pi approval extension", "path", extensionPath, "error", err)
 		return err
 	}
-	return os.Rename(tmpPath, extensionPath)
+	if err := os.Rename(tmpPath, extensionPath); err != nil {
+		log.Error("failed to write pi approval extension", "path", extensionPath, "error", err)
+		return err
+	}
+	return nil
 }
 
 // installPi copies the ssq-hooks binary to ~/.local/bin and writes the pi approval extension

@@ -1,5 +1,5 @@
 "use client";
-// +feature: session-image-attach
+// +feature: session-image-attach pi-support
 
 import { useState, useRef, useCallback, useEffect } from "react";
 import type { KeyboardEvent } from "react";

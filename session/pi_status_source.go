@@ -250,8 +250,11 @@ func (p *PiStatusSource) launch() error {
 // readLoop consumes decoded events from the subprocess's stdout until EOF or
 // a fatal read error, dispatching each to handleEvent. An unrecognized event
 // type is logged and skipped (per PiEventReader.Next's contract) rather than
-// treated as fatal -- Epic 6.1's structured metrics point is out of scope
-// for this file.
+// treated as fatal. Every event -- recognized or not -- increments
+// pi_status_source_events_total{type} (session/pi_status_source_metrics.go,
+// Epic 6.1 Story 6.1.1) before it's dispatched, so the counter observes
+// throughput even for events handleEvent's own default case would otherwise
+// treat identically to a recognized "processing" event.
 func (p *PiStatusSource) readLoop(stdout io.ReadCloser) {
 	defer p.wg.Done()
 	reader := NewPiEventReader(stdout)
@@ -261,6 +264,7 @@ func (p *PiStatusSource) readLoop(stdout io.ReadCloser) {
 			if err != io.EOF {
 				var unrecognized *piUnrecognizedTypeError
 				if ok := isPiUnrecognizedTypeError(err, &unrecognized); ok {
+					recordPiStatusSourceEvent(piEventTypeUnrecognized)
 					log.Warn("pi status subprocess emitted unrecognized event type", "session", p.sessionTitle, "err", err)
 					continue
 				}
@@ -268,7 +272,40 @@ func (p *PiStatusSource) readLoop(stdout io.ReadCloser) {
 			}
 			return
 		}
+		recordPiStatusSourceEvent(piEventType(event))
 		p.handleEvent(event)
+	}
+}
+
+// piEventType returns the JSON "type" discriminator carried by a decoded pi
+// event, for pi_status_source_events_total's label only -- it is not part of
+// handleEvent's status-inference dispatch.
+func piEventType(event any) string {
+	switch ev := event.(type) {
+	case PiSessionEvent:
+		return ev.Type
+	case PiAgentStartEvent:
+		return ev.Type
+	case PiAgentSettledEvent:
+		return ev.Type
+	case PiTurnStartEvent:
+		return ev.Type
+	case PiTurnEndEvent:
+		return ev.Type
+	case PiMessageStartEvent:
+		return ev.Type
+	case PiMessageEndEvent:
+		return ev.Type
+	case PiMessageUpdateEvent:
+		return ev.Type
+	case PiToolExecutionStartEvent:
+		return ev.Type
+	case PiToolExecutionEndEvent:
+		return ev.Type
+	case PiAgentEndEvent:
+		return ev.Type
+	default:
+		return piEventTypeUnrecognized
 	}
 }
 
