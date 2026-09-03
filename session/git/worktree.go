@@ -9,7 +9,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/go-git/go-git/v5"
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/log"
@@ -347,7 +346,7 @@ func findExistingGitRepoRootReadOnly(path string) (string, error) {
 
 	currentPath := path
 	for {
-		if _, err := git.PlainOpen(currentPath); err == nil {
+		if _, err := OpenRepo(currentPath); err == nil {
 			return currentPath, nil
 		}
 

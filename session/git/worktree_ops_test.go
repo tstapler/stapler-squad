@@ -34,7 +34,7 @@ func corruptPackedRefs(t *testing.T, repoDir string) {
 func TestBranchRefExists_ReturnsFalseNil_When_BranchAbsent(t *testing.T) {
 	t.Parallel()
 	repoDir := setupTestRepo(t)
-	repo, err := git.PlainOpen(repoDir)
+	repo, err := OpenRepo(repoDir)
 	require.NoError(t, err)
 
 	exists, err := branchRefExists(repo, plumbing.NewBranchReferenceName("does-not-exist"))
@@ -49,7 +49,7 @@ func TestBranchRefExists_ReturnsTrueNil_When_BranchExists(t *testing.T) {
 	cmd.Dir = repoDir
 	require.NoError(t, cmd.Run())
 
-	repo, err := git.PlainOpen(repoDir)
+	repo, err := OpenRepo(repoDir)
 	require.NoError(t, err)
 
 	exists, err := branchRefExists(repo, plumbing.NewBranchReferenceName("existing-feature"))
@@ -62,7 +62,7 @@ func TestBranchRefExists_ReturnsError_When_PackedRefsCorrupted(t *testing.T) {
 	repoDir := setupTestRepo(t)
 	corruptPackedRefs(t, repoDir)
 
-	repo, err := git.PlainOpen(repoDir)
+	repo, err := OpenRepo(repoDir)
 	require.NoError(t, err)
 
 	exists, err := branchRefExists(repo, plumbing.NewBranchReferenceName("backlog/fix-typo-abc123"))
@@ -184,7 +184,7 @@ func TestBranchRefExists_LeavesRealRefIntact_When_UnderlyingReadFails(t *testing
 	cmd.Dir = repoDir
 	require.NoError(t, cmd.Run())
 
-	realRepo, err := git.PlainOpen(repoDir)
+	realRepo, err := OpenRepo(repoDir)
 	require.NoError(t, err)
 
 	branchRef := plumbing.NewBranchReferenceName(branchName)
@@ -206,7 +206,7 @@ func TestBranchRefExists_LeavesRealRefIntact_When_UnderlyingReadFails(t *testing
 
 	// Prove the branch ref genuinely still exists and resolves to the same commit, via a
 	// completely independent, freshly-opened repo untouched by the fault injection above.
-	freshRepo, err := git.PlainOpen(repoDir)
+	freshRepo, err := OpenRepo(repoDir)
 	require.NoError(t, err)
 	afterRef, err := freshRepo.Reference(branchRef, false)
 	require.NoError(t, err, "branch ref must still exist and resolve after a ref-check error")

@@ -15,6 +15,8 @@
 //     calls whose error is only logged, never surfaced or propagated
 //   - entfullscan: detects ent query .All(ctx) calls with no .Where(...) filter
 //     anywhere in the enclosing function — a full-table scan
+//   - norawgitopen: detects direct go-git PlainOpen/PlainOpenWithOptions calls
+//     outside session/git.OpenRepo, the approved wrapper
 package main
 
 import (
@@ -24,6 +26,7 @@ import (
 	"github.com/tstapler/stapler-squad/tools/lint/hotpolllog"
 	"github.com/tstapler/stapler-squad/tools/lint/nocommandpattern"
 	"github.com/tstapler/stapler-squad/tools/lint/norawexec"
+	"github.com/tstapler/stapler-squad/tools/lint/norawgitopen"
 	"github.com/tstapler/stapler-squad/tools/lint/silenttransition"
 	"github.com/tstapler/stapler-squad/tools/lint/tmuxsocketscope"
 )
@@ -34,6 +37,7 @@ func main() {
 		hotpolllog.Analyzer,
 		nocommandpattern.Analyzer,
 		norawexec.Analyzer,
+		norawgitopen.Analyzer,
 		silenttransition.Analyzer,
 		tmuxsocketscope.Analyzer,
 	)

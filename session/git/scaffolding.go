@@ -4,8 +4,6 @@ import (
 	"fmt"
 	"strings"
 	"sync"
-
-	"github.com/go-git/go-git/v5"
 )
 
 // untrackMu serializes UntrackScaffolding's index read-modify-write per worktree
@@ -51,7 +49,7 @@ func UntrackScaffolding(worktreePath string, patterns []string) ([]string, error
 	mu.Lock()
 	defer mu.Unlock()
 
-	repo, err := git.PlainOpenWithOptions(worktreePath, &git.PlainOpenOptions{DetectDotGit: true})
+	repo, err := OpenRepo(worktreePath)
 	if err != nil {
 		return nil, nil
 	}
