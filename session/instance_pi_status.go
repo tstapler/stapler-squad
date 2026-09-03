@@ -8,6 +8,8 @@ package session
 import (
 	"context"
 	"os/exec"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/tstapler/stapler-squad/config"
@@ -15,33 +17,82 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 )
 
-// piStatusSupported reports whether this instance should get a NEW
-// status-only pi subprocess started: the program must resolve to pi and the
-// pi-support feature flag must be enabled. Checked only at StartController
-// (Bug 2 fix) -- StopController/stopControllerLocked instead route on
-// i.piStatusSrc's live registration state, so a running PiStatusSource
+// piExtension holds pi-coding-agent controller and session state, and
+// implements programExtension (instance_controller.go) so
+// StartController/StopController dispatch to it instead of growing another
+// if-branch when isPi(i.Program) and config.FeaturePiSupport is enabled --
+// see StartController's doc comment for why the two are mutually exclusive
+// per instance rather than layered.
+//
+// Embedded anonymously into Instance so every existing i.piSession /
+// i.piSessionMu / i.piStatusSrc / i.piStatusStartMu access site (this
+// package and its tests) keeps working unchanged via Go's field promotion,
+// mirroring claudeExtension's own rationale.
+type piExtension struct {
+	// piSession holds pi-coding-agent session information for
+	// resume-on-restart (see buildPiCommand). Populated only when
+	// isPi(i.Program) and the config.FeaturePiSupport flag is enabled -- see
+	// the capture in Restart. Guarded by piSessionMu, not i.mu.
+	piSession *PiSessionData
+	// piSessionMu protects piSession. Separate from i.mu: SetPiSessionID is
+	// called from PiStatusSource's reader goroutine (via the onSessionID
+	// callback) and Restart touches piSession too, so a dedicated lock makes
+	// both access points structurally safe without relying on the (fragile,
+	// and broken by Bug 2) argument that stopController always finishes
+	// joining the writer goroutine before Restart reads/writes piSession.
+	piSessionMu sync.Mutex
+
+	// piStatusSrc holds the status-only `pi --mode json` subprocess (Epic
+	// 5.2) for this instance. Set by startController, cleared by
+	// stopController. atomic.Pointer since StartController/StopController
+	// can race concurrent GetController-style reads.
+	piStatusSrc atomic.Pointer[PiStatusSource]
+
+	// piStatusStartMu serializes startController's check-then-act sequence
+	// (load piStatusSrc, and if nil construct+Start()+Store() a new
+	// PiStatusSource). Without it, two concurrent StartController calls for
+	// the same pi-backed instance can both observe a nil piStatusSrc, both
+	// spawn a subprocess+goroutine pair, and the loser's PiStatusSource is
+	// silently overwritten by the winner's Store() with no Stop() ever
+	// called on it -- a leaked subprocess and reader/wait goroutines for the
+	// life of the process.
+	piStatusStartMu sync.Mutex
+}
+
+var _ programExtension = (*piExtension)(nil)
+
+// supported reports whether i's current Program/config should route through
+// this extension for a NEW StartController call: the program must resolve to
+// pi and the pi-support feature flag must be enabled. Checked only at
+// StartController (Bug 2 fix) -- StopController/stopControllerLocked instead
+// route on running() (live registration state), so a running PiStatusSource
 // always gets stopped regardless of a mid-flight flag flip. Re-checking this
 // flag at stop time was the bug: disabling pi-support while a pi session's
 // PiStatusSource was still running left it un-Stop()-ed, leaking its
-// subprocess/goroutines and racing Restart's unsynchronized i.piSession
+// subprocess/goroutines and racing Restart's unsynchronized piSession
 // access (see SetPiSessionID's doc comment).
-func (i *Instance) piStatusSupported() bool {
+func (e *piExtension) supported(i *Instance) bool {
 	return isPi(i.Program) && config.LoadConfig().GetFeatureFlag(config.FeaturePiSupport)
 }
 
-// startPiStatusSource launches the status-only `pi --mode json` subprocess
-// and registers it with the status manager, if one is set. A no-op if a
-// source is already registered (mirrors StartController's
-// "don't recreate if already exists" guard).
+// running reports whether a PiStatusSource is currently registered.
+func (e *piExtension) running() bool {
+	return e.piStatusSrc.Load() != nil
+}
+
+// startController launches the status-only `pi --mode json` subprocess and
+// registers it with the status manager, if one is set. A no-op if a source
+// is already registered (mirrors StartController's "don't recreate if
+// already exists" guard).
 //
 // piStatusStartMu is held for the entire check-then-act sequence (load,
-// then construct+Start()+Store()) -- see the field's doc comment on
-// instance.go for the double-start race this closes.
-func (i *Instance) startPiStatusSource() error {
-	i.piStatusStartMu.Lock()
-	defer i.piStatusStartMu.Unlock()
+// then construct+Start()+Store()) -- see the field's doc comment for the
+// double-start race this closes.
+func (e *piExtension) startController(i *Instance) error {
+	e.piStatusStartMu.Lock()
+	defer e.piStatusStartMu.Unlock()
 
-	if i.piStatusSrc.Load() != nil {
+	if e.piStatusSrc.Load() != nil {
 		log.Debug("pi status source already exists for instance", "session", i.Title)
 		return nil
 	}
@@ -62,18 +113,18 @@ func (i *Instance) startPiStatusSource() error {
 		return err
 	}
 
-	i.piStatusSrc.Store(src)
+	e.piStatusSrc.Store(src)
 	statusMgr.RegisterPiStatusSource(i.Title, src)
 
 	log.Info("started pi status source for instance", "session", i.Title)
 	return nil
 }
 
-// stopPiStatusSource stops and unregisters the status-only pi subprocess,
-// if one is running. Safe to call unconditionally (e.g. from a generic
+// stopController stops and unregisters the status-only pi subprocess, if
+// one is running. Safe to call unconditionally (e.g. from a generic
 // StopController path) even when no source was ever started.
-func (i *Instance) stopPiStatusSource() {
-	src := i.piStatusSrc.Swap(nil)
+func (e *piExtension) stopController(i *Instance) {
+	src := e.piStatusSrc.Swap(nil)
 	if src == nil {
 		return
 	}
@@ -84,6 +135,13 @@ func (i *Instance) stopPiStatusSource() {
 	src.Stop()
 
 	log.Info("stopped pi status source for instance", "session", i.Title)
+}
+
+// piStatusSupported is a thin Instance-level alias for the promoted
+// piExtension.supported method, kept because this package's tests exercise
+// the Bug 2 fix directly by this name.
+func (i *Instance) piStatusSupported() bool {
+	return i.supported(i)
 }
 
 // piStatusCommandFactory builds the piCommandFactory used to (re)launch the

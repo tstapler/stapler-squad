@@ -154,7 +154,7 @@ func TestClassifyProgram_Pi(t *testing.T) {
 
 func TestBuildLaunchCommand_PiSessionResume(t *testing.T) {
 	t.Parallel()
-	inst := &Instance{Program: "pi", piSession: &PiSessionData{SessionID: "abc123"}}
+	inst := &Instance{Program: "pi", piExtension: piExtension{piSession: &PiSessionData{SessionID: "abc123"}}}
 	got := inst.buildLaunchCommand("")
 	want := "pi --session 'abc123'"
 	if got != want {

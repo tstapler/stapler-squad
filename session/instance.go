@@ -440,55 +440,21 @@ type Instance struct {
 	// ArchivedAt is set when the session is archived. Nil means not archived.
 	ArchivedAt *time.Time `json:"archived_at,omitempty"`
 
-	// Claude Code session information for persistence and re-attachment
-	claudeSession *ClaudeSessionData
+	// claudeExtension holds Claude Code conversation-resume session state
+	// (claudeSession/claudeSessionMu/conversationClearedAt), embedded
+	// anonymously so those fields stay accessible as i.claudeSession etc.
+	// See claudeExtension's doc comment (instance_claude.go) for why this is
+	// always populated regardless of Program, unlike piExtension below.
+	claudeExtension
 
-	// piSession holds pi-coding-agent session information for resume-on-restart
-	// (see buildPiCommand). Populated only when isPi(i.Program) and the
-	// config.FeaturePiSupport flag is enabled — see the capture in Restart.
-	// Guarded by piSessionMu, not i.mu.
-	piSession *PiSessionData
-
-	// piSessionMu protects piSession. Separate from i.mu, mirroring
-	// claudeSessionMu's rationale for claudeSession: SetPiSessionID is called
-	// from PiStatusSource's reader goroutine (via the onSessionID callback)
-	// and Restart touches piSession too, so a dedicated lock makes both
-	// access points structurally safe without relying on the (fragile, and
-	// broken by Bug 2) argument that Stop() always finishes joining the
-	// writer goroutine before Restart reads/writes piSession.
-	piSessionMu sync.Mutex
-
-	// piStatusSrc holds the status-only `pi --mode json` subprocess (Epic
-	// 5.2) for this instance, when isPi(i.Program) and config.FeaturePiSupport
-	// is enabled. Set by startPiStatusSource, cleared by stopPiStatusSource.
-	// atomic.Pointer since StartController/StopController can race
-	// concurrent GetController-style reads.
-	piStatusSrc atomic.Pointer[PiStatusSource]
-
-	// piStatusStartMu serializes startPiStatusSource's check-then-act
-	// sequence (load piStatusSrc, and if nil construct+Start()+Store() a new
-	// PiStatusSource). Without it, two concurrent StartController calls for
-	// the same pi-backed instance can both observe a nil piStatusSrc, both
-	// spawn a subprocess+goroutine pair, and the loser's PiStatusSource is
-	// silently overwritten by the winner's Store() with no Stop() ever
-	// called on it -- a leaked subprocess and reader/wait goroutines for the
-	// life of the process. Mirrors StartController's Claude-controller
-	// branch (i.mu held across its own check-then-act + double-check), but
-	// kept as a separate, narrower mutex since the pi branch deliberately
-	// doesn't share i.mu's broader scope.
-	piStatusStartMu sync.Mutex
-
-	// conversationClearedAt records when ClearConversationState() last ran, so
-	// tryExtractConversationUUID's DetectByPath fallback won't resurrect a JSONL
-	// predating an explicit "start fresh" request. In-memory only — does not
-	// survive a process restart (see ADR-001, Consequences). Guarded by
-	// claudeSessionMu, not i.mu.
-	conversationClearedAt time.Time
-
-	// claudeSessionMu protects claudeSession, conversationClearedAt, and
-	// claudeSessionIDSavedCallback.
-	// Separate from mu to avoid holding the instance write lock during persistence I/O.
-	claudeSessionMu sync.RWMutex
+	// piExtension holds pi-coding-agent controller and session state
+	// (piSession/piSessionMu/piStatusSrc/piStatusStartMu), embedded
+	// anonymously so those fields stay accessible as i.piSession etc. See
+	// piExtension's doc comment (instance_pi_status.go) -- it implements
+	// programExtension so StartController/StopController
+	// (instance_controller.go) dispatch to it instead of growing another
+	// if-branch.
+	piExtension
 
 	// Review queue integration for tracking sessions needing attention
 	reviewQueue *ReviewQueue
