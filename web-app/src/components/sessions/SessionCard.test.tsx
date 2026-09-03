@@ -1,7 +1,7 @@
 import React from "react";
 import { render, screen } from "@testing-library/react";
 import { SessionCard } from "./SessionCard";
-import { ReviveOutcome, SessionStatus } from "@/gen/session/v1/types_pb";
+import { ReviveOutcome, SessionStatus, SubStatus } from "@/gen/session/v1/types_pb";
 import type { Session } from "@/gen/session/v1/types_pb";
 import { staleBadge, statusCreationFailed } from "./SessionCard.css";
 
@@ -291,5 +291,19 @@ describe("SessionCard — Creating/Failed live region (single node, no remount)"
     const progressTextAfter = screen.getByTestId("session-progress-text");
     expect(progressTextAfter).toBe(progressTextBefore); // same node, updated in place
     expect(progressTextAfter.textContent).toBe("Cloning repository...");
+  });
+});
+
+describe("SessionCard — sub-status chip subagentCount", () => {
+  it("SessionCard_should_PassSubagentCountToSubStatusChip_When_SubStatusIsWaitingForAgent", () => {
+    const session = {
+      ...minimalSession,
+      status: SessionStatus.ACTIVE,
+      subStatus: SubStatus.WAITING_FOR_AGENT,
+      subagentCount: 3,
+    } as unknown as Session;
+    render(<SessionCard session={session} />);
+    const chip = screen.getByRole("status", { name: "Waiting for agents" });
+    expect(chip.textContent).toContain("3");
   });
 });

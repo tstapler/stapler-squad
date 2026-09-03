@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"unsafe"
@@ -14,6 +15,65 @@ import (
 	"github.com/tstapler/stapler-squad/session/detection/dtypes"
 	"gopkg.in/yaml.v3"
 )
+
+// autoModeFooterRegex matches Claude Code's persistent auto-mode footer bar, e.g.
+// "⏵⏵ auto mode on · 2 shells, 1 monitor · ← for agents · 1 feedback draft" — verified
+// against a live pane capture (tmux capture-pane) of a real session. This is NOT the same
+// text as the WaitingForAgent glyph-marker patterns in binaries.ClaudeDetector.Patterns()
+// (e.g. "✻ Waiting for N background agent(s) to finish", "N shells still running"): those
+// describe a mid-turn spinner line that appears above the "esc to interrupt" bar and
+// disappears once the turn ends. This footer, by contrast, is pinned at the bottom of the
+// pane at ALL times — active or idle — whenever any background shell/monitor exists.
+//
+// Because it's always present, it must never enter MatchLines' per-line priority chain: on
+// its own line, nothing else would match, so it would win the backward scan in
+// detectFromLines immediately and mask "Thinking…"/Active status for the entire remaining
+// duration of any background shell/monitor. It's deliberately kept out of PatternSet/
+// StatusPatterns for the same reason, and is instead consulted only as a post-hoc override —
+// see footerAgentCount and applyFooterIdleOverride — applied only once the rest of the scan
+// already concluded the main turn is idle/unknown, never overriding a genuinely active turn.
+var autoModeFooterRegex = regexp.MustCompile(`auto mode on\s*·\s*(\d+)\s+shells?(?:,\s*(\d+)\s+monitors?)?`)
+
+// footerAgentCount scans lines (most recent first) for the auto-mode footer bar and, if
+// found, returns the combined shell+monitor count. ok is false if the footer isn't present
+// or reports zero shells/monitors (nothing to wait for).
+func footerAgentCount(lines []string) (count int, desc string, ok bool) {
+	for i := len(lines) - 1; i >= 0; i-- {
+		m := autoModeFooterRegex.FindStringSubmatch(lines[i])
+		if m == nil {
+			continue
+		}
+		total := 0
+		if n, err := strconv.Atoi(m[1]); err == nil {
+			total += n
+		}
+		if len(m) > 2 && m[2] != "" {
+			if n, err := strconv.Atoi(m[2]); err == nil {
+				total += n
+			}
+		}
+		if total <= 0 {
+			return 0, "", false
+		}
+		return total, "Claude is idle at the prompt, but background shells/monitors are still running", true
+	}
+	return 0, "", false
+}
+
+// applyFooterIdleOverride re-checks the auto-mode footer bar when the per-line scan
+// concluded the main turn is idle or produced no specific match (StatusIdle/StatusUnknown).
+// It never overrides a more specific or more urgent status (Error, NeedsApproval, Executing,
+// etc.) — see autoModeFooterRegex's doc comment for why the footer can't be folded into the
+// per-line priority chain instead.
+func applyFooterIdleOverride(lines []string, status DetectedStatus, desc string, count int) (DetectedStatus, string, int) {
+	if status != StatusIdle && status != StatusUnknown {
+		return status, desc, count
+	}
+	if fc, fdesc, ok := footerAgentCount(lines); ok {
+		return StatusWaitingForAgent, fdesc, fc
+	}
+	return status, desc, count
+}
 
 // Status represents the current status of a Claude instance based on PTY output analysis.
 // This extends the existing Status type in instance.go with additional detection capabilities.
@@ -101,7 +161,10 @@ func NewStatusDetectorFromFile(path string) (*StatusDetector, error) {
 	return sd, nil
 }
 
-// LoadPatterns loads patterns from a YAML file.
+// LoadPatterns loads patterns from a YAML file. Note: this does NOT cover the auto-mode
+// footer override (autoModeFooterRegex / applyFooterIdleOverride, above) — that check
+// always runs regardless of any custom pattern file loaded here, for the reasons given
+// in autoModeFooterRegex's doc comment.
 func (sd *StatusDetector) LoadPatterns(path string) error {
 	if err := validatePatternFilePath(path); err != nil {
 		return err
@@ -397,7 +460,9 @@ func (s DetectedStatus) String() string {
 	return "Unknown"
 }
 
-// ExportPatterns exports the current patterns to a YAML file.
+// ExportPatterns exports the current patterns to a YAML file. Note: the exported YAML
+// does not (and cannot) capture the auto-mode footer override — see LoadPatterns' doc
+// comment and autoModeFooterRegex, above.
 func (sd *StatusDetector) ExportPatterns(path string) error {
 	if err := validatePatternFilePath(path); err != nil {
 		return err
@@ -585,6 +650,16 @@ func (sd *StatusDetector) detectFromLines(lines []string) (DetectedStatus, strin
 	return bestStatus, bestDesc, bestCount
 }
 
+// detectFromLinesWithFooter runs detectFromLines and then applies the auto-mode footer
+// idle override in one place — the shared core for DetectFromLines,
+// DetectWithContextFromLines, and DetectWithContextAndCountFromLines below, all three of
+// which otherwise repeat the identical detectFromLines(...)+applyFooterIdleOverride(...)
+// call pair.
+func (sd *StatusDetector) detectFromLinesWithFooter(lines []string) (DetectedStatus, string, int) {
+	s, desc, count := sd.detectFromLines(lines)
+	return applyFooterIdleOverride(lines, s, desc, count)
+}
+
 // DetectFromLines analyzes multiple lines of output and returns the most relevant status.
 // Lines are processed in reverse order (most recent first) so the current terminal
 // state takes precedence over stale scrollback content.
@@ -595,7 +670,7 @@ func (sd *StatusDetector) detectFromLines(lines []string) (DetectedStatus, strin
 // status pattern on an earlier line. StatusReady is returned as a fallback if no more
 // specific status is found.
 func (sd *StatusDetector) DetectFromLines(lines []string) DetectedStatus {
-	s, _, _ := sd.detectFromLines(lines)
+	s, _, _ := sd.detectFromLinesWithFooter(lines)
 	return s
 }
 
@@ -611,7 +686,7 @@ func (sd *StatusDetector) DetectFromLines(lines []string) DetectedStatus {
 // Signature intentionally left unchanged (pinned by the TerminalDetector interface and its
 // callers) — see DetectWithContextAndCountFromLines for the count-aware sibling.
 func (sd *StatusDetector) DetectWithContextFromLines(lines []string) (DetectedStatus, string) {
-	s, desc, _ := sd.detectFromLines(lines)
+	s, desc, _ := sd.detectFromLinesWithFooter(lines)
 	return s, desc
 }
 
@@ -622,7 +697,7 @@ func (sd *StatusDetector) DetectWithContextFromLines(lines []string) (DetectedSt
 // the TerminalDetector interface and consumed by review_queue_determiner.go plus several
 // test files that don't need the count.
 func (sd *StatusDetector) DetectWithContextAndCountFromLines(lines []string) (DetectedStatus, string, int) {
-	return sd.detectFromLines(lines)
+	return sd.detectFromLinesWithFooter(lines)
 }
 
 // DetectRecent analyzes the most recent n bytes of output for status detection.
