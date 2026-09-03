@@ -92,7 +92,7 @@ func (c *livenessCache) refresh(ctx context.Context, repo LivenessRepository) er
 	}
 
 	c.ptr.Store(&next)
-	log.DebugLog().Printf("[LivenessEngine] cache refreshed: %d enabled liveness definitions", len(next))
+	log.DebugLog().Printf("[LivenessEngine] cache refreshed: %d liveness rows", len(next))
 	return nil
 }
 

@@ -142,11 +142,22 @@ func NewDefaultLivenessEngine() *DefaultLivenessEngine {
 // NoTimeoutLiveness, never an error: an unresolvable stage must fail closed to
 // "no timeout enforced," not to a zero/infinite threshold or a hard error that
 // would abort a reconcile* sweep tick.
-func (e *DefaultLivenessEngine) LivenessFor(stage BacklogStatus, _ PipelineMode) (LivenessDefinition, error) {
+func (e *DefaultLivenessEngine) LivenessFor(stage BacklogStatus, mode PipelineMode) (LivenessDefinition, error) {
+	def := e.resolve(stage)
+	log.InfoLog().Printf("[LivenessEngine] resolved liveness for stage=%s mode=%s kind=%s", stage, ResolvedModeLabel(string(mode)), def.Kind)
+	return def, nil
+}
+
+// resolve is LivenessFor's unexported, non-logging core: the built-in-table
+// lookup itself. Split out so CachingLivenessEngine's fallback path (below)
+// can reuse it without triggering this type's own Info log line a second
+// time — CachingLivenessEngine.LivenessFor logs its own single Info line for
+// the resolution it ultimately returns, whichever engine supplied it.
+func (e *DefaultLivenessEngine) resolve(stage BacklogStatus) LivenessDefinition {
 	if def, ok := e.table[stage]; ok {
-		return def, nil
+		return def
 	}
-	return NoTimeoutLiveness, nil
+	return NoTimeoutLiveness
 }
 
 // CachingLivenessEngine is the DB-backed LivenessEngine implementation
@@ -202,10 +213,18 @@ func (e *CachingLivenessEngine) InvalidateCache(ctx context.Context) error {
 // LivenessFor implements LivenessEngine, applying the two-level fallback
 // described in this type's doc comment.
 func (e *CachingLivenessEngine) LivenessFor(stage BacklogStatus, mode PipelineMode) (LivenessDefinition, error) {
+	modeLabel := ResolvedModeLabel(string(mode))
+
 	if rd, ok := e.cache.Get(string(stage), mode); ok {
+		log.InfoLog().Printf("[LivenessEngine] resolved liveness for stage=%s mode=%s kind=%s", stage, modeLabel, rd.Kind)
 		return rd.LivenessDefinition, nil
 	}
 
-	log.WarningLog().Printf("[LivenessEngine] no override configured for stage=%q pipeline_mode=%q — falling back to DefaultLivenessEngine", stage, ResolvedModeLabel(string(mode)))
-	return e.embeddedDefault.LivenessFor(stage, mode)
+	// e.embeddedDefault.resolve (not .LivenessFor) is called deliberately: it
+	// skips DefaultLivenessEngine's own Info log line so exactly one Info line
+	// is emitted per LivenessFor call, not two, whichever branch resolves it.
+	def := e.embeddedDefault.resolve(stage)
+	log.WarningLog().Printf("[LivenessEngine] stage=%s mode=%s liveness config unresolved, falling back to default (%s)", stage, modeLabel, def.Kind)
+	log.InfoLog().Printf("[LivenessEngine] resolved liveness for stage=%s mode=%s kind=%s", stage, modeLabel, def.Kind)
+	return def, nil
 }

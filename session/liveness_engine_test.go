@@ -1,11 +1,15 @@
 package session
 
 import (
+	"bytes"
+	stdlog "log"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	tslog "github.com/tstapler/stapler-squad/log"
 )
 
 // TestDefaultLivenessEngine_should_ReturnThirtyFiveMinuteThreshold_When_StageIsIdeaDefaultMode
@@ -99,4 +103,75 @@ func TestDefaultLivenessEngine_should_IgnorePipelineMode_When_NoOverrideTableExi
 	require.NoError(t, err)
 
 	assert.Equal(t, defDefault, defSDD)
+}
+
+// countNonEmptyLines counts non-empty newline-delimited lines in a captured
+// log buffer — the same idiom liveness_cache_test.go uses to assert "exactly
+// one Warn line," extracted here so both Story 1.6.1 tests below can share it.
+func countNonEmptyLines(s string) int {
+	if s == "" {
+		return 0
+	}
+	lines := 0
+	for _, line := range bytes.Split(bytes.TrimRight([]byte(s), "\n"), []byte("\n")) {
+		if len(line) > 0 {
+			lines++
+		}
+	}
+	return lines
+}
+
+// TestLivenessFor_should_EmitExactlyOneWarnLine_When_FallingBackToDefaultEngine
+// is Story 1.6.1's named happy-path observability test: a single
+// CachingLivenessEngine.LivenessFor call for a stage/mode with neither an
+// exact nor a mode-less cache row emits exactly one [LivenessEngine] Warn
+// line (not zero — the fallback must be visible — and not more than one).
+func TestLivenessFor_should_EmitExactlyOneWarnLine_When_FallingBackToDefaultEngine(t *testing.T) {
+	engine := &CachingLivenessEngine{
+		repo:            nil, // never touched: cache is deliberately empty, no Load/Invalidate call
+		cache:           &livenessCache{},
+		embeddedDefault: NewDefaultLivenessEngine(),
+	}
+
+	var buf bytes.Buffer
+	orig := tslog.SetWarningLogForTest(stdlog.New(&buf, "WARNING: ", 0))
+	t.Cleanup(func() { tslog.SetWarningLogForTest(orig) })
+
+	got, err := engine.LivenessFor(BacklogStatusIdea, PipelineMode("sdd"))
+
+	require.NoError(t, err)
+	assert.Equal(t, LivenessKindDurationBudget, got.Kind)
+	logged := buf.String()
+	assert.Equal(t, 1, countNonEmptyLines(logged), "expected exactly one Warn line, got: %q", logged)
+	assert.Contains(t, logged, "[LivenessEngine]")
+	assert.Contains(t, logged, "stage=idea")
+	assert.Contains(t, logged, "mode=sdd")
+}
+
+// TestLivenessFor_should_NotEmitDuplicateWarnLines_When_CalledRepeatedlyForSameUnresolvedStageAndMode
+// is Story 1.6.1's named error-path observability test: LivenessFor has no
+// internal retry loop around its cache-miss fallback, so N repeated calls for
+// the identical unresolved (stage, mode) pair must log exactly N Warn lines —
+// one per call, never a multiple of N (no hidden internal retry re-logging)
+// and never fewer (no first-call-only de-duplication silently swallowing
+// later fallbacks).
+func TestLivenessFor_should_NotEmitDuplicateWarnLines_When_CalledRepeatedlyForSameUnresolvedStageAndMode(t *testing.T) {
+	engine := &CachingLivenessEngine{
+		repo:            nil, // never touched: cache is deliberately empty, no Load/Invalidate call
+		cache:           &livenessCache{},
+		embeddedDefault: NewDefaultLivenessEngine(),
+	}
+
+	var buf bytes.Buffer
+	orig := tslog.SetWarningLogForTest(stdlog.New(&buf, "WARNING: ", 0))
+	t.Cleanup(func() { tslog.SetWarningLogForTest(orig) })
+
+	const calls = 3
+	for i := 0; i < calls; i++ {
+		_, err := engine.LivenessFor(BacklogStatusIdea, PipelineMode("sdd"))
+		require.NoError(t, err)
+	}
+
+	logged := buf.String()
+	assert.Equal(t, calls, countNonEmptyLines(logged), "expected exactly one Warn line per call, got: %q", logged)
 }
