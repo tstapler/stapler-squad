@@ -1,4 +1,4 @@
-# BUG-094: a11y test "Retry button" tab-walk uses a fixed 60-Tab budget that doesn't scale with list length [SEVERITY: Low]
+# BUG-097: a11y test "Retry button" tab-walk uses a fixed 60-Tab budget that doesn't scale with list length [SEVERITY: Low]
 
 **Status**: 🐛 Open
 **Discovered**: 2026-09-02
