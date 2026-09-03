@@ -334,15 +334,37 @@ func TestSessionRetentionSweeper_ConvergesWhenAllSiblingsBecomeEligible(t *testi
 	// is gone moments later, so it converges on the very next tick). Re-invoking sweep()
 	// here models exactly that next tick, rather than asserting a stronger "always
 	// single-pass" guarantee this fix doesn't need to make.
+	// Inlined rather than calling hasStoredTitle(t, ...): that helper's
+	// require.NoError is safe at every OTHER call site in this file (all
+	// synchronous, single-shot assertions) but not here -- assert.Eventually
+	// runs this func on its own ticker goroutine, and does not wait for an
+	// in-flight tick to return before giving up at the deadline. If a tick's
+	// sweep(ctx) (real worktree/git + DB work) is still running when the 5s
+	// ceiling passes, Eventually returns and the test finishes, t.Cleanup
+	// closes fix.storage's DB, and the still-running stale tick then hits
+	// "sql: database is closed" -- require.NoError on a *testing.T that has
+	// already completed panics with "Fail in goroutine after test has
+	// completed" instead of just being one more false-y tick (confirmed:
+	// this exact panic, this exact test, session_service_fork_test.go's
+	// forkTestFixture doc comment already names it as a known recurrence).
+	// A query error here just means "not converged yet" -- return false and
+	// let the next tick (or the timeout) decide, never fail the test from
+	// this goroutine.
 	assert.Eventually(t, func() bool {
 		sweeper.sweep(ctx)
-		for _, title := range roundTitles {
-			if hasStoredTitle(t, fix, title) {
-				return false
+		data, err := fix.storage.ListInstanceData()
+		if err != nil {
+			return false
+		}
+		for _, d := range data {
+			for _, title := range roundTitles {
+				if d.Title == title {
+					return false
+				}
 			}
 		}
 		_, statErr := os.Stat(worktreeDir)
 		return os.IsNotExist(statErr)
-	}, 5*time.Second, 100*time.Millisecond,
+	}, 15*time.Second, 100*time.Millisecond,
 		"expected every sibling round's DB row and the shared worktree directory to eventually be reclaimed once the whole group became independently eligible")
 }
