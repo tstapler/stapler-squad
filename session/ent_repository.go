@@ -1420,15 +1420,13 @@ func (r *EntRepository) GetWithOptions(ctx context.Context, title string, option
 
 // FindByIDWithOptions retrieves a single session by stable UUID or title (mirroring
 // InstanceData.MatchesID's dual-key lookup) via an indexed WHERE clause, with
-// selective child data loading. Returns ErrInstanceDataNotFound when no match exists.
-//
-// Added to replace Storage.FindInstanceDataByID's previous ListInstanceData()-then-
-// linear-scan implementation, which loaded and column-scanned every session row on
-// every by-ID lookup. Profiling on 2026-09-02 found this was the single largest CPU
-// consumer in the live process (~25% of sampled CPU time) via
-// BacklogLifecycleListener.reconcileTerminalItemSessions calling ArchiveSessionByUUID
-// (and so FindInstanceDataByID) once per session on every terminal-backlog-item sweep.
+// selective child data loading. Returns ErrInstanceDataNotFound when no match exists,
+// including for id == "" — uuid has no uniqueness constraint, so an empty id would
+// otherwise match every session that has never had a UUID assigned.
 func (r *EntRepository) FindByIDWithOptions(ctx context.Context, id string, options LoadOptions) (*InstanceData, error) {
+	if id == "" {
+		return nil, ErrInstanceDataNotFound
+	}
 	sess, err := applyLoadOptions(
 		r.client.Session.Query().Where(session.Or(session.Title(id), session.UUID(id))),
 		options,

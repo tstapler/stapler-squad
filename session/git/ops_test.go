@@ -803,6 +803,58 @@ func TestDiffContentBetween(t *testing.T) {
 		require.Error(t, err)
 		assert.Nil(t, stats)
 	})
+
+	// Regression test for a code-review finding: without EnableDotGitCommonDir, go-git
+	// silently resolves objects against the wrong gitdir for a linked worktree (`git
+	// worktree add`), returning a real-but-wrong result rather than an error — see
+	// getHeadCommitSHA's doc comment in util.go.
+	t.Run("resolves commits correctly against a linked worktree, not the main checkout", func(t *testing.T) {
+		t.Parallel()
+		origin := setupTestRepo(t)
+		baseSHA := strings.TrimSpace(runGit(t, origin, "rev-parse", "HEAD"))
+
+		worktreePath := filepath.Join(t.TempDir(), "linked-worktree")
+		runGit(t, origin, "worktree", "add", "-b", "wt-branch", worktreePath, "main")
+
+		require.NoError(t, os.WriteFile(filepath.Join(worktreePath, "wt.go"), []byte("in worktree\n"), 0o644))
+		runGit(t, worktreePath, "add", "wt.go")
+		runGit(t, worktreePath, "commit", "-m", "commit made in the linked worktree")
+		wantHeadSHA := strings.TrimSpace(runGit(t, worktreePath, "rev-parse", "HEAD"))
+		require.NotEqual(t, baseSHA, wantHeadSHA)
+
+		gotHeadSHA, err := GetHeadCommitSHA(worktreePath)
+		require.NoError(t, err)
+		assert.Equal(t, wantHeadSHA, gotHeadSHA, "GetHeadCommitSHA must resolve HEAD against the worktree's own history, not the main checkout's")
+
+		stats, err := DiffContentBetween(worktreePath, baseSHA, gotHeadSHA)
+		require.NoError(t, err)
+		assert.Equal(t, 1, stats.Added)
+		assert.Contains(t, stats.Content, "wt.go")
+	})
+
+	// Regression test for a code-review finding: prefix-scanning patch.String() for
+	// "+"/"-" misclassifies a content line that itself starts with "++"/"--" as a diff
+	// header line and silently drops it from the count.
+	t.Run("counts a content line starting with -- or ++ correctly", func(t *testing.T) {
+		t.Parallel()
+		origin := setupTestRepo(t)
+		work := cloneTestRepo(t, origin)
+
+		require.NoError(t, os.WriteFile(filepath.Join(work, "script.lua"), []byte("-- old comment\nkeep\n"), 0o644))
+		runGit(t, work, "add", "script.lua")
+		runGit(t, work, "commit", "-m", "add script.lua")
+		baseSHA := strings.TrimSpace(runGit(t, work, "rev-parse", "HEAD"))
+
+		require.NoError(t, os.WriteFile(filepath.Join(work, "script.lua"), []byte("keep\n++i;\n"), 0o644))
+		runGit(t, work, "add", "script.lua")
+		runGit(t, work, "commit", "-m", "edit script.lua")
+		headSHA := strings.TrimSpace(runGit(t, work, "rev-parse", "HEAD"))
+
+		stats, err := DiffContentBetween(work, baseSHA, headSHA)
+		require.NoError(t, err)
+		assert.Equal(t, 1, stats.Removed, "the '-- old comment' line must count as removed, not be mistaken for a diff file header")
+		assert.Equal(t, 1, stats.Added, "the '++i;' line must count as added, not be mistaken for a diff file header")
+	})
 }
 
 // TestDiffHashBetween_ShouldReturnSameHash_WhenSameCommitRangeHashedTwice verifies the

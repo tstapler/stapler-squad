@@ -384,6 +384,16 @@ func TestEntRepository_FindByIDWithOptions(t *testing.T) {
 		require.ErrorIs(t, err, ErrInstanceDataNotFound)
 		assert.Nil(t, found)
 	})
+
+	// uuid has no uniqueness constraint (Optional().Default("")), so an empty id must
+	// be rejected explicitly rather than falling through to session.UUID("") and
+	// matching an arbitrary row that has never been assigned a UUID.
+	t.Run("returns ErrInstanceDataNotFound for empty id rather than matching an unassigned-UUID row", func(t *testing.T) {
+		t.Parallel()
+		found, err := repo.FindByIDWithOptions(ctx, "", LoadMinimal)
+		require.ErrorIs(t, err, ErrInstanceDataNotFound)
+		assert.Nil(t, found)
+	})
 }
 
 // TestEntRepository_ListWithOptions_RespectsLoadClaudeSession verifies that
