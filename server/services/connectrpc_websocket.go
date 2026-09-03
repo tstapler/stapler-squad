@@ -29,6 +29,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/protocol"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/resize"
 	"github.com/tstapler/stapler-squad/session/scrollback"
 	"github.com/tstapler/stapler-squad/session/streamhub"
 	"github.com/tstapler/stapler-squad/session/tmux"
@@ -1317,14 +1318,9 @@ func (h *ConnectRPCWebSocketHandler) streamViaControlMode(stream *connectWebSock
 		// from two different wrap widths, duplicated table rows and stray glyphs.
 		h.invalidateSnapshot(sessionID)
 
-		// Nudge to (cols-1) so tmux always sends SIGWINCH regardless of current size
-		if targetCols > 1 {
-			if resizeErr := instance.ResizePTY(targetCols-1, targetRows); resizeErr != nil {
-				log.Warn("[streamViaControlMode] pre-nudge resize failed", "err", resizeErr)
-			}
-		}
-
-		if err := instance.ResizePTY(targetCols, targetRows); err != nil {
+		// resize.WithForcedRedraw nudges to (cols-1) first so tmux always sends
+		// SIGWINCH regardless of current size — see its doc comment.
+		if err := resize.WithForcedRedraw(instance.ResizePTY, targetCols, targetRows); err != nil {
 			log.Error("[streamViaControlMode] failed to resize", "err", err)
 		} else {
 			// Wait for the TUI to complete its full redraw before capturing. The
@@ -2083,13 +2079,7 @@ func (h *ConnectRPCWebSocketHandler) streamShellViaControlMode(stream *connectWe
 
 		log.Info("[streamShellViaControlMode] handshake dimensions, forcing redraw via nudge", "cols", targetCols, "rows", targetRows)
 
-		if targetCols > 1 {
-			if resizeErr := shellSess.SetWindowSize(targetCols-1, targetRows); resizeErr != nil {
-				log.Warn("[streamShellViaControlMode] pre-nudge resize failed", "err", resizeErr)
-			}
-		}
-
-		if err := shellSess.SetWindowSize(targetCols, targetRows); err != nil {
+		if err := resize.WithForcedRedraw(shellSess.SetWindowSize, targetCols, targetRows); err != nil {
 			log.Error("[streamShellViaControlMode] failed to resize", "err", err)
 		} else {
 			// Output-forwarding goroutine above is already subscribed, so quiescenceCh

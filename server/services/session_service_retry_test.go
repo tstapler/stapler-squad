@@ -117,9 +117,15 @@ func TestSessionService_RetrySession_should_RestartImmediately_When_SessionIsPer
 	// own actor-serialized writes publish to — a direct field read/write
 	// races with those writes, which don't take inst.mu at all (see
 	// GetStatus's doc comment; caught by -race in CI on PR #671).
+	// 10s, not 2s: this spawns a real tmux session as part of the pipeline, so
+	// completion time depends on OS process-scheduling latency, not just
+	// in-process work -- flaked under concurrent test-suite load with a
+	// tighter window even though the pipeline always eventually converges
+	// (see pipelineEventuallyTimeout's doc comment in
+	// session_creation_pipeline_test.go for the same pattern/root cause).
 	require.Eventually(t, func() bool {
 		return session.Status(inst.GetStatus()) == session.Active
-	}, 2*time.Second, 10*time.Millisecond, "session should reach Active before the test forces PermanentlyFailed")
+	}, 10*time.Second, 10*time.Millisecond, "session should reach Active before the test forces PermanentlyFailed")
 	// Simulate a session that has exhausted its automated retries and is
 	// sitting in the terminal give-up state RetryNow must be able to revive.
 	// MarkPermanentlyFailedForTest routes through the same locked +
