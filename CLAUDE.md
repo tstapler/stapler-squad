@@ -283,17 +283,22 @@ General project documentation goes under `docs/` in a Diataxis-style hierarchy
 for the full layout), never under `.claude/docs/`. That directory no longer
 exists — it was migrated wholesale in 2026-08.
 
-AI-authorship code-review checklists and guardrails (the kind of thing that
-used to live in `.claude/rules/*.md`) become project skills under
-`.claude/skills/<slug>/SKILL.md` instead, never a new `.claude/rules/` file —
-that directory no longer exists either. The reason is context cost, not
-organization: a `.claude/rules/*.md` file's entire content loads into context
-every time something references it (including this file's own references),
-while a skill's full body only loads when actually invoked via the Skill
-tool — the skill list itself shows just a one-line description the rest of
-the time. See the `interface-pollution-checklist`, `primitive-obsession-checklist`,
+AI-authorship code-review checklists and guardrails that apply broadly (the
+kind of thing that used to live in `.claude/rules/*.md`) become project
+skills under `.claude/skills/<slug>/SKILL.md` instead. The reason is context
+cost, not organization: an always-loaded `.claude/rules/*.md` file's entire
+content loads into every session regardless of relevance, while a skill's
+full body only loads when actually invoked via the Skill tool — the skill
+list itself shows just a one-line description the rest of the time. See the
+`interface-pollution-checklist`, `primitive-obsession-checklist`,
 `e2e-test-conventions`, `prefer-go-git-over-subshells`, and
 `fix-flaky-tests-dont-defer` skills for the converted examples.
+
+`.claude/rules/*.md` **does** exist again for the narrower case a skill can't
+cover: a guardrail scoped to specific file paths via glob frontmatter
+(`globs: ["session/instance*.go"]`), auto-loaded only when Claude touches a
+matching path rather than every session — the context-cost objection above
+doesn't apply since it isn't always-loaded. See `instance-lock-free-reads.md`.
 
 ## Reference Documents Index
 
@@ -325,6 +330,7 @@ the time. See the `interface-pollution-checklist`, `primitive-obsession-checklis
 | Package manager: always pnpm in web-app/, never npm/yarn | `docs/how-to/use-pnpm-in-web-app.md` |
 | macOS restart can leave orphaned processes racing over tmux/session state | `docs/explanation/service-restart-orphan-process.md` |
 | Fix flaky tests when found, don't just re-defer as "known pre-existing" | `fix-flaky-tests-dont-defer` skill |
+| Read *Instance fields via Snapshot(), not the raw field (avoids actor-write races) | `.claude/rules/instance-lock-free-reads.md` (glob-scoped to `session/instance*.go`) |
 | Slack Phase 2 interactive-approvals public reachability (scoping a tunnel to one path) | `docs/how-to/expose-slack-interactive-endpoint.md` |
 | GitHub webhook (`/webhooks/github`, incl. PR-fix events) public reachability | `docs/how-to/expose-github-webhook-endpoint.md` |
 | Log debugging: file locations, global/per-package log levels, reducing log volume, pattern-clustering tool | `docs/how-to/debug-with-logs.md` |
