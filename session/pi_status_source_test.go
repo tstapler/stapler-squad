@@ -1,12 +1,14 @@
 package session
 
 import (
+	"context"
 	"os/exec"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/session/detection"
 )
 
@@ -112,7 +114,7 @@ func TestPiStatusSource_NewEventCancelsPendingIdleTransition(t *testing.T) {
 // be forced deterministically via cmd.Process.Kill().
 func sleeperCmd() piCommandFactory {
 	return func() *exec.Cmd {
-		return exec.Command("sleep", "100")
+		return safeexec.CommandContext(context.Background(), "sleep", "100")
 	}
 }
 
@@ -122,7 +124,7 @@ func sleeperCmd() piCommandFactory {
 // depending on a real pi binary.
 func echoOneEventThenSleepCmd() piCommandFactory {
 	return func() *exec.Cmd {
-		return exec.Command("/bin/sh", "-c", `echo '{"type":"agent_start"}'; sleep 100`)
+		return safeexec.CommandContext(context.Background(), "/bin/sh", "-c", `echo '{"type":"agent_start"}'; sleep 100`)
 	}
 }
 
@@ -158,10 +160,10 @@ func TestPiStatusSource_SuccessfulRelaunchResumesAndResetsRetryCounter(t *testin
 		attempt++
 		if attempt == 1 {
 			// First launch: die immediately (empty command exits fast).
-			return exec.Command("/bin/sh", "-c", "exit 1")
+			return safeexec.CommandContext(context.Background(), "/bin/sh", "-c", "exit 1")
 		}
 		// Every subsequent launch: emit an event and stay alive.
-		return exec.Command("/bin/sh", "-c", `echo '{"type":"agent_start"}'; sleep 100`)
+		return safeexec.CommandContext(context.Background(), "/bin/sh", "-c", `echo '{"type":"agent_start"}'; sleep 100`)
 	}
 
 	src := NewPiStatusSource("test-session", factory)
@@ -276,7 +278,7 @@ func TestPiStatusSource_StopWaitsOutPendingRelaunchAndPreventsIt(t *testing.T) {
 	var launches atomic.Int32
 	factory := func() *exec.Cmd {
 		launches.Add(1)
-		return exec.Command("sleep", "100")
+		return safeexec.CommandContext(context.Background(), "sleep", "100")
 	}
 
 	src := NewPiStatusSource("test-session", factory)
@@ -319,7 +321,7 @@ func TestPiStatusSource_StopWaitsOutPendingRelaunchAndPreventsIt(t *testing.T) {
 func TestPiStatusSource_ExhaustedRetriesReportUnavailable(t *testing.T) {
 	factory := func() *exec.Cmd {
 		// Every launch dies immediately -- retries never succeed.
-		return exec.Command("/bin/sh", "-c", "exit 1")
+		return safeexec.CommandContext(context.Background(), "/bin/sh", "-c", "exit 1")
 	}
 
 	src := NewPiStatusSource("test-session", factory)

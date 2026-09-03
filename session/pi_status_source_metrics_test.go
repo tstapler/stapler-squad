@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
@@ -75,7 +76,7 @@ func TestPiStatusSource_ShouldIncrementEventCounter_ForEveryEventIncludingUnreco
 	baselineUnknown := sumForEventType(t, before, piEventTypeUnrecognized)
 
 	factory := func() *exec.Cmd {
-		return exec.Command("/bin/sh", "-c",
+		return safeexec.CommandContext(context.Background(), "/bin/sh", "-c",
 			`echo '{"type":"agent_start"}'; echo '{"type":"totally_unknown_type"}'; sleep 100`)
 	}
 	src := NewPiStatusSource("test-session", factory)

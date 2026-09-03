@@ -6,10 +6,12 @@ package session
 // piSources parallel map (session/instance_status.go), not the controllers map.
 
 import (
+	"context"
 	"os/exec"
 	"time"
 
 	"github.com/tstapler/stapler-squad/config"
+	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/log"
 )
 
@@ -105,7 +107,11 @@ func (i *Instance) piStatusCommandFactory() piCommandFactory {
 		if piSessionID != "" {
 			args = append(args, "--session", piSessionID)
 		}
-		cmd := exec.Command(base, args...) //nolint:gosec // base is the operator-configured program command, same trust boundary as the tmux-launched invocation (buildPiCommand)
+		// context.Background(): this subprocess outlives any single request
+		// and is torn down by PiStatusSource.Stop() calling cmd.Process.Kill()
+		// directly (not via context cancellation) -- same convention as
+		// session/native_process_manager.go's managed subprocess.
+		cmd := safeexec.CommandContext(context.Background(), base, args...) //nolint:gosec // base is the operator-configured program command, same trust boundary as the tmux-launched invocation (buildPiCommand)
 		if path != "" {
 			cmd.Dir = path
 		}
