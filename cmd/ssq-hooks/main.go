@@ -56,7 +56,7 @@ func printUsage() {
 	fmt.Fprintln(os.Stderr, "  check   - Classify a single request from JSON on stdin")
 	fmt.Fprintln(os.Stderr, "  serve   - Start an HTTP server for remote classification")
 	fmt.Fprintln(os.Stderr, "  proxy   - Check permissions before executing a command")
-	fmt.Fprintln(os.Stderr, "  install - Install binary and register hooks (targets: claude, gemini, agy, open-code, service)")
+	fmt.Fprintln(os.Stderr, "  install - Install binary and register hooks (targets: claude, gemini, agy, open-code, pi, service)")
 	fmt.Fprintln(os.Stderr, "  version - Print version information")
 }
 
@@ -818,6 +818,8 @@ func handleInstall() {
 		installAgy()
 	case "open-code":
 		installOpenCode()
+	case "pi":
+		installPi()
 	case "service":
 		installService()
 	default:
@@ -825,6 +827,15 @@ func handleInstall() {
 		os.Exit(1)
 	}
 }
+
+// defaultSsqHooksBaseURL is stapler-squad's well-known local listen address (see top-level
+// CLAUDE.md: "web server on localhost:8543"), mirroring server/services/hook_injector.go's
+// hookBaseURLFn default. cmd/ssq-hooks is a standalone CLI that never runs inside the server
+// process, so it cannot read the server's real (possibly PORT=0-resolved) listen address the
+// way hookEndpoints() does — it hardcodes the documented default instead. If the server is
+// ever run on a non-default port, a user must currently re-run `ssq-hooks install pi` by hand
+// with that in mind; there is no dynamic port-discovery mechanism for this installer today.
+const defaultSsqHooksBaseURL = "http://localhost:8543"
 
 // installClaude copies the ssq-hooks binary to ~/.local/bin and registers it as
 // a PreToolUse hook in ~/.claude/settings.json. Safe to run multiple times.
@@ -1324,6 +1335,196 @@ func installOpenCode() {
 	versionCancel()
 
 	fmt.Println("Done. Restart OpenCode for the hook to take effect.")
+}
+
+// ssqApprovalExtensionTemplate is the TypeScript pi extension installPi() writes to pi's
+// global extension directory (~/.pi/agent/extensions/ssq-approval.ts, per ADR-002 — see
+// project_plans/pi-support/decisions/ADR-002-approval-extension-shipped-as-global-not-project-local.md).
+//
+// Verified against pi 0.84.4 (@earendil-works/pi-coding-agent) on 2026-09-02 — see
+// project_plans/pi-support/implementation/plan.md's "Phase 1 spike RESULTS": pi.on("tool_call",
+// handler) fires after tool_execution_start, before the tool actually executes. handler's
+// signature is (event, ctx) => ..., with event.toolName, event.toolCallId, and event.input
+// (mutable) confirmed available. Returning { block: true, reason } genuinely blocks the tool
+// call — live-verified: tool_execution_end's result carries the reason text with isError:true,
+// and the underlying tool never runs. The same spike also confirmed a global extension loads
+// and fires with zero trust-prompt friction on the very first invocation in a brand-new
+// directory, confirming ADR-002's premise rather than leaving it doc-derived.
+//
+// Per ADR-001, the handler calls fetch() directly against the running server's
+// /api/hooks/permission-request endpoint — never `ssq-hooks check --pi` — so classification
+// runs against the server's live, hot-reloadable RulesService instead of a disk-reloaded
+// snapshot (see cmd/ssq-hooks/main.go's handleCheck()/loadClassifier(), which do use a fresh
+// on-disk snapshot and are deliberately NOT reused here). The POST body matches
+// classifier.PermissionRequestPayload's JSON shape (pkg/classifier/classifier.go); the
+// response is parsed per ApprovalHandler.writeDecision's shape
+// (server/services/approval_handler.go): {hookSpecificOutput:{decision:{behavior,message}}}.
+//
+// Per ADR-003, a network error, non-2xx response, or any other unexpected fault is treated as
+// deny (fail closed), with a generous ~4.5-minute timeout so a real pending human-review wait
+// isn't mistaken for a dead connection (mirrors remoteApprovalHookAttemptTimeoutSeconds's
+// reasoning in server/services/hook_injector.go — this must cover a real human decision, not
+// just a connectivity probe, unlike openCodePluginTemplate's short 8-second timeout above).
+//
+// The entire handler body is wrapped in try/catch, and the catch block explicitly returns a
+// blocking decision with a stable reason string. This is required per plan.md Task 4.1.1a and
+// ADR-003's residual-risk note, but per the same spike it is defense-in-depth/clarity, not the
+// only thing standing between a template bug and fail-open: an UNCAUGHT exception thrown from
+// inside a pi.on("tool_call", ...) handler was independently confirmed to also fail closed by
+// default (pi's own framework surfaces the raw exception message as the tool's blocked result).
+// The try/catch here exists so a bug in this generated template produces a deliberate,
+// readable deny instead of relying on that implicit default.
+//
+// healthURL targets Epic 4.2's health-ping endpoint (/api/hooks/pi-extension-loaded), which is
+// not implemented server-side yet as of this story — the ping is fire-and-forget and its
+// failure is deliberately swallowed so a missing/unimplemented endpoint never blocks extension
+// load or any tool call.
+const ssqApprovalExtensionTemplate = `// Generated by ssq-hooks install pi. Do not hand-edit — re-run the installer instead.
+export default function ssqApproval(pi) {
+  const permissionURL = %s;
+  const healthURL = %s;
+
+  // Best-effort health ping (Epic 4.2, server side not yet implemented) — fire-and-forget,
+  // must never block extension load.
+  try {
+    fetch(healthURL, { method: "POST" }).catch(() => {});
+  } catch {
+    // ignore — health signal is best-effort only
+  }
+
+  pi.on("tool_call", async (event, ctx) => {
+    try {
+      const controller = new AbortController();
+      // 270s: covers ApprovalHandler.approvalTimeout()'s 4-minute default manual-review wait
+      // plus margin, per ADR-003 — not a short connectivity-probe timeout.
+      const timeoutId = setTimeout(() => controller.abort(), 270000);
+      let response;
+      try {
+        response = await fetch(permissionURL, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            session_id: (ctx && ctx.sessionId) || "",
+            transcript_path: "",
+            cwd: (ctx && ctx.cwd) || "",
+            permission_mode: "",
+            hook_event_name: "PermissionRequest",
+            tool_name: event.toolName,
+            tool_input: event.input || {},
+          }),
+          signal: controller.signal,
+        });
+      } finally {
+        clearTimeout(timeoutId);
+      }
+
+      if (!response.ok) {
+        // Non-2xx: fail closed per ADR-003.
+        return { block: true, reason: "stapler-squad approval request failed (HTTP " + response.status + ")" };
+      }
+
+      const data = await response.json();
+      const decision = data && data.hookSpecificOutput && data.hookSpecificOutput.decision;
+      if (decision && decision.behavior === "deny") {
+        return { block: true, reason: decision.message || "denied by stapler-squad policy" };
+      }
+      return { block: false };
+    } catch (err) {
+      // Network error, timeout, or any other unexpected fault: fail closed per ADR-003. This
+      // catch is defense-in-depth (see doc comment above) — pi's own framework already fails
+      // closed on an uncaught exception, but a deliberate, readable reason here is required by
+      // plan.md Task 4.1.1a.
+      return { block: true, reason: "stapler-squad approval check failed: " + ((err && err.message) || String(err)) };
+    }
+  });
+}
+`
+
+// ssqApprovalExtensionContent renders ssqApprovalExtensionTemplate with permissionURL and
+// healthURL embedded as JS string literals. Uses encoding/json (not fmt's %q, which is
+// Go/strconv escaping — close to but not identical to JS string-literal escaping) so the
+// embedding is safe by construction, mirroring openCodePluginContent's rationale above.
+func ssqApprovalExtensionContent(permissionURL, healthURL string) string {
+	quotedPermissionURL, err := json.Marshal(permissionURL)
+	if err != nil {
+		quotedPermissionURL = []byte(`""`)
+	}
+	quotedHealthURL, err := json.Marshal(healthURL)
+	if err != nil {
+		quotedHealthURL = []byte(`""`)
+	}
+	return fmt.Sprintf(ssqApprovalExtensionTemplate, quotedPermissionURL, quotedHealthURL)
+}
+
+// patchPiExtension writes the ssq-hooks pi approval extension to extensionPath. Safe to run
+// multiple times: the generated content is a pure function of permissionURL/healthURL, so
+// re-running with the same values produces byte-identical output — same reasoning as
+// patchOpenCodeHooks's doc comment above. The write is atomic (temp file + rename).
+func patchPiExtension(extensionPath, permissionURL, healthURL string) error {
+	if err := os.MkdirAll(filepath.Dir(extensionPath), 0755); err != nil {
+		return err
+	}
+	content := ssqApprovalExtensionContent(permissionURL, healthURL)
+	tmpPath := extensionPath + ".tmp"
+	if err := os.WriteFile(tmpPath, []byte(content), 0644); err != nil {
+		return err
+	}
+	return os.Rename(tmpPath, extensionPath)
+}
+
+// installPi copies the ssq-hooks binary to ~/.local/bin and writes the pi approval extension
+// to pi's GLOBAL extension directory (~/.pi/agent/extensions/ssq-approval.ts), per ADR-002 —
+// deliberately not a project-local `.pi/extensions/` write, since pi's per-directory trust
+// gate would otherwise silently disable enforcement on every new stapler-squad worktree until
+// manually trusted (see ADR-002's rejected alternatives). Safe to run multiple times.
+func installPi() {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error resolving home directory: %v\n", err)
+		os.Exit(1)
+	}
+
+	// 1. Copy binary to ~/.local/bin/ssq-hooks.
+	binDir := filepath.Join(home, ".local", "bin")
+	if err := os.MkdirAll(binDir, 0755); err != nil {
+		fmt.Fprintf(os.Stderr, "Error creating %s: %v\n", binDir, err)
+		os.Exit(1)
+	}
+	destBin := filepath.Join(binDir, "ssq-hooks")
+	srcBin, err := os.Executable()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error resolving current binary: %v\n", err)
+		os.Exit(1)
+	}
+	if resolved, err := filepath.EvalSymlinks(srcBin); err == nil {
+		srcBin = resolved
+	}
+	if err := copyBinary(srcBin, destBin); err != nil {
+		fmt.Fprintf(os.Stderr, "Error copying binary to %s: %v\n", destBin, err)
+		os.Exit(1)
+	}
+	fmt.Printf("Installed binary: %s\n", destBin)
+
+	// 2. Write the extension to pi's global extension directory.
+	extensionPath := filepath.Join(home, ".pi", "agent", "extensions", "ssq-approval.ts")
+	permissionURL := defaultSsqHooksBaseURL + "/api/hooks/permission-request"
+	healthURL := defaultSsqHooksBaseURL + "/api/hooks/pi-extension-loaded"
+	if err := patchPiExtension(extensionPath, permissionURL, healthURL); err != nil {
+		fmt.Fprintf(os.Stderr, "Error writing extension to %s: %v\n", extensionPath, err)
+		os.Exit(1)
+	}
+	fmt.Printf("Installed extension: %s\n", extensionPath)
+
+	// Best-effort, informational only: report the detected pi CLI version so a user can judge
+	// for themselves whether it's far from what this extension shape was verified against
+	// (0.84.4). Deliberately not a hard version gate.
+	versionCtx, versionCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	if out, err := safeexec.CommandContext(versionCtx, "pi", "--version").Output(); err == nil {
+		fmt.Printf("Detected pi CLI version: %s", out)
+	}
+	versionCancel()
+
+	fmt.Println("Done. Restart pi for the extension to take effect.")
 }
 
 func installService() {

@@ -680,6 +680,106 @@ func TestRemoveStaleOpenCodeWrapper_NoopWhenAbsent(t *testing.T) {
 	require.NoError(t, removeStaleOpenCodeWrapper(path))
 }
 
+// ── ssqApprovalExtensionContent unit tests ────────────────────────────────────
+
+// ssqApprovalExtensionContent_should_safelyEmbedBothURLs_When_rendered
+func TestSsqApprovalExtensionContent_EmbedsBothURLs(t *testing.T) {
+	content := ssqApprovalExtensionContent("http://localhost:8543/api/hooks/permission-request", "http://localhost:8543/api/hooks/pi-extension-loaded")
+	assert.Contains(t, content, `pi.on("tool_call"`)
+	assert.Contains(t, content, `const permissionURL = "http://localhost:8543/api/hooks/permission-request";`)
+	assert.Contains(t, content, `const healthURL = "http://localhost:8543/api/hooks/pi-extension-loaded";`)
+	assert.Contains(t, content, "block: true")
+	assert.Contains(t, content, "block: false")
+
+	// Substring assertions above don't catch a template edit that breaks JS syntax — verify
+	// the generated file actually parses as JS when a Node runtime is available, mirroring
+	// TestPatchOpenCodeHooks_NewFile's node --check approach.
+	if nodePath, err := exec.LookPath("node"); err == nil {
+		dir := t.TempDir()
+		extPath := filepath.Join(dir, "ssq-approval.ts")
+		require.NoError(t, os.WriteFile(extPath, []byte(content), 0644))
+		out, err := exec.Command(nodePath, "--check", extPath).CombinedOutput() //nolint:forbidigo,norawexec // test-only JS syntax check
+		assert.NoErrorf(t, err, "generated extension is not valid JS: %s", out)
+	}
+}
+
+// ssqApprovalExtensionContent_should_safelyEscapeURLsContainingQuotesOrSpecialChars_When_rendered
+func TestSsqApprovalExtensionContent_SafelyEscapesSpecialCharacters(t *testing.T) {
+	// A URL containing a double quote and backslash would break naive string interpolation
+	// (e.g. fmt's %q or a raw Sprintf) but must survive json.Marshal's escaping intact.
+	// encoding/json's default HTML-safe escaping additionally renders '<'/'>' as </>
+	// in the output text — still valid, safely-embedded JS, just not the literal input bytes,
+	// so the assertions below match that actual rendering rather than the raw input.
+	content := ssqApprovalExtensionContent(`http://localhost:8543/"quote`, `http://localhost:8543/back\slash`)
+	assert.Contains(t, content, `const permissionURL = "http://localhost:8543/\"quote";`)
+	assert.Contains(t, content, `const healthURL = "http://localhost:8543/back\\slash";`)
+}
+
+// ── patchPiExtension unit tests ───────────────────────────────────────────────
+
+// patchPiExtension_should_writeExtensionFileWithBothURLs_When_fileAbsent
+func TestPatchPiExtension_NewFile(t *testing.T) {
+	dir := t.TempDir()
+	extPath := filepath.Join(dir, "extensions", "ssq-approval.ts")
+	err := patchPiExtension(extPath, "http://localhost:8543/api/hooks/permission-request", "http://localhost:8543/api/hooks/pi-extension-loaded")
+	require.NoError(t, err)
+	raw, err := os.ReadFile(extPath)
+	require.NoError(t, err)
+	content := string(raw)
+	assert.Contains(t, content, "permission-request")
+	assert.Contains(t, content, "pi-extension-loaded")
+	assert.Contains(t, content, `pi.on("tool_call"`)
+}
+
+// patchPiExtension_should_produceByteIdenticalOutput_When_runTwice
+func TestPatchPiExtension_Idempotent(t *testing.T) {
+	dir := t.TempDir()
+	extPath := filepath.Join(dir, "extensions", "ssq-approval.ts")
+	require.NoError(t, patchPiExtension(extPath, "http://localhost:8543/api/hooks/permission-request", "http://localhost:8543/api/hooks/pi-extension-loaded"))
+	content1, err := os.ReadFile(extPath)
+	require.NoError(t, err)
+	require.NoError(t, patchPiExtension(extPath, "http://localhost:8543/api/hooks/permission-request", "http://localhost:8543/api/hooks/pi-extension-loaded"))
+	content2, err := os.ReadFile(extPath)
+	require.NoError(t, err)
+	assert.Equal(t, string(content1), string(content2))
+}
+
+// ── installPi integration tests ───────────────────────────────────────────────
+
+// installPi_should_installBinaryAndGlobalExtension_When_freshInstall
+func TestInstallPi_FreshInstall(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	// No `pi` binary resolvable — keeps installPi's best-effort version probe a no-op instead
+	// of shelling out to whatever's actually on the host machine's PATH.
+	t.Setenv("PATH", t.TempDir())
+	installPi()
+	destBin := filepath.Join(home, ".local", "bin", "ssq-hooks")
+	assert.FileExists(t, destBin)
+	// Per ADR-002: global scope (~/.pi/agent/extensions/), not project-local.
+	extPath := filepath.Join(home, ".pi", "agent", "extensions", "ssq-approval.ts")
+	raw, err := os.ReadFile(extPath)
+	require.NoError(t, err)
+	assert.Contains(t, string(raw), "permission-request")
+}
+
+// installPi_should_produceByteIdenticalExtension_When_runTwice
+func TestInstallPi_Idempotent(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("PATH", t.TempDir())
+	extPath := filepath.Join(home, ".pi", "agent", "extensions", "ssq-approval.ts")
+
+	installPi()
+	content1, err := os.ReadFile(extPath)
+	require.NoError(t, err)
+
+	installPi()
+	content2, err := os.ReadFile(extPath)
+	require.NoError(t, err)
+	assert.Equal(t, string(content1), string(content2))
+}
+
 // ── parseOpenCodePayload unit tests ───────────────────────────────────────────
 
 func callParseOpenCodePayloadWithStdin(t *testing.T, input string) classifier.PermissionRequestPayload {

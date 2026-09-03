@@ -1,10 +1,12 @@
 // +feature: settings-features
 "use client";
 
+import { useCallback, useState } from "react";
 import { useFeatureFlags } from "@/lib/contexts/FeatureFlagsContext";
 import { usePageView } from "@/lib/analytics";
 import { vars } from "@/styles/theme.css";
 import { StreamHubRolloutPanel } from "@/components/settings/StreamHubRolloutPanel";
+import { PiDisableWarningDialog } from "@/components/settings/PiDisableWarningDialog";
 import {
   container,
   title,
@@ -22,8 +24,14 @@ import {
   emptyMessage,
 } from "./page.css";
 
+// pi-support's flag name (mirrors config.FeaturePiSupport / feature_flag_service.go's
+// piSupportFlagName — kept as a plain string here since the frontend has no shared
+// import path to those Go constants).
+const PI_SUPPORT_FLAG_NAME = "pi-support";
+
 const FEATURE_META: Record<string, { label: string }> = {
   backlog: { label: "Backlog" },
+  "pi-support": { label: "pi coding agent" },
   "backlog:sdd-default-pipeline": { label: "Backlog: default new items to SDD pipeline" },
   "review:block-approval-on-ci-failure": { label: "Block Approve when CI is failing" },
   "terminal:resync-visibility-scope": { label: "Terminal resync: scope to visible terminal" },
@@ -40,6 +48,47 @@ const FEATURE_META: Record<string, { label: string }> = {
 export default function FeaturesPage() {
   usePageView();
   const { flagList, isLoading, error, setFlag } = useFeatureFlags();
+  const [pendingPiDisable, setPendingPiDisable] = useState(false);
+
+  // Story 2.1.2: toggling pi-support off is gated on a mandatory warning ONLY
+  // when the global pi approval extension is actually installed on disk —
+  // otherwise this behaves exactly like toggling any other flag. The check
+  // runs server-side (~/.pi is on the server's filesystem, not the browser's)
+  // via GET /api/pi-extension-status.
+  const handleToggle = useCallback(
+    async (name: string, currentEnabled: boolean) => {
+      const disablingPiSupport = name === PI_SUPPORT_FLAG_NAME && currentEnabled;
+      if (!disablingPiSupport) {
+        setFlag(name, !currentEnabled);
+        return;
+      }
+      try {
+        const res = await fetch("/api/pi-extension-status");
+        const data: { installed?: boolean } = await res.json();
+        if (data.installed) {
+          setPendingPiDisable(true);
+          return;
+        }
+      } catch {
+        // Fail closed: if the status check itself fails, show the warning
+        // rather than silently disabling — matches this feature's fail-closed
+        // posture elsewhere (ADR-003) rather than assuming "not installed".
+        setPendingPiDisable(true);
+        return;
+      }
+      setFlag(name, false);
+    },
+    [setFlag],
+  );
+
+  const confirmPiDisable = useCallback(() => {
+    setPendingPiDisable(false);
+    setFlag(PI_SUPPORT_FLAG_NAME, false);
+  }, [setFlag]);
+
+  const cancelPiDisable = useCallback(() => {
+    setPendingPiDisable(false);
+  }, []);
 
   return (
     <main id="main-content" className={container}>
@@ -86,7 +135,7 @@ export default function FeaturesPage() {
                 }}
                 aria-label={`${enabled ? "Disable" : "Enable"} ${label}`}
                 aria-pressed={enabled}
-                onClick={() => setFlag(name, !enabled)}
+                onClick={() => handleToggle(name, enabled)}
               >
                 <span
                   className={toggleThumb}
@@ -99,6 +148,10 @@ export default function FeaturesPage() {
       )}
 
       <StreamHubRolloutPanel />
+
+      {pendingPiDisable && (
+        <PiDisableWarningDialog onAcknowledge={confirmPiDisable} onCancel={cancelPiDisable} />
+      )}
     </main>
   );
 }
