@@ -373,6 +373,25 @@ func TestParseJSONLogLine_should_ExtractSessionAttribute_When_LinePresent(t *tes
 	assert.Equal(t, "session started", parsed.Message, "session must not also appear folded into Message")
 }
 
+// TestParseJSONLogLine_should_ExcludeSessionFromMessage_When_ValueIsEmptyOrNonString
+// covers the edge case an all-or-nothing "consume iff non-empty" check would
+// miss: an empty-string or non-string "session" attribute must still be
+// treated as structural (excluded from the message fold), not leak through
+// as a noisy "session=" suffix in Message.
+func TestParseJSONLogLine_should_ExcludeSessionFromMessage_When_ValueIsEmptyOrNonString(t *testing.T) {
+	t.Parallel()
+	for _, line := range []string{
+		`{"time":"2026-08-25T11:00:00Z","level":"INFO","msg":"m","session":""}`,
+		`{"time":"2026-08-25T11:00:00Z","level":"INFO","msg":"m","session":123}`,
+	} {
+		parsed, ok := parseJSONLogLine(line)
+
+		require.True(t, ok, "line %q must parse", line)
+		assert.Empty(t, parsed.Session)
+		assert.Equal(t, "m", parsed.Message, "line %q: session must not leak into Message", line)
+	}
+}
+
 // TestParseLogs_should_FilterBySession_When_SessionIdSet is the regression
 // test for the "Logs tab is always empty" bug: entries are written to the
 // single global log file tagged with a "session" attribute (see

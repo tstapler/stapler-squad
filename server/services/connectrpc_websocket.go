@@ -3536,12 +3536,25 @@ func endStreamErrorCode(err error) string {
 	return connect.CodeInternal.String()
 }
 
+// endStreamErrorMessage returns the text to send to the browser for an
+// EndStream error frame. A missing-working-directory error's full text
+// (via tmux's ValidateWorkDir/RestoreWithWorkDir) embeds the session's local
+// filesystem path — useful server-side (the caller already logs the full
+// error before calling sendEndStreamError), but not something to hand a
+// browser tab.
+func endStreamErrorMessage(err error) string {
+	if errors.Is(err, tmux.ErrWorkDirMissing) {
+		return "session working directory no longer exists"
+	}
+	return err.Error()
+}
+
 // sendEndStreamError sends an error EndStream message
 func sendEndStreamError(stream *connectWebSocketStream, err error) {
 	// ConnectRPC protocol requires JSON-encoded EndStream payload (not protobuf)
 	// Error EndStream uses the ConnectRPC error JSON format.
 	code := endStreamErrorCode(err)
-	errMsg, _ := json.Marshal(err.Error())
+	errMsg, _ := json.Marshal(endStreamErrorMessage(err))
 	dataBytes := fmt.Appendf(nil, `{"error":{"code":%q,"message":%s}}`, code, errMsg)
 
 	envelope := protocol.CreateEnvelope(protocol.EndStreamFlag, dataBytes)

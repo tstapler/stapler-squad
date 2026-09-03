@@ -10,6 +10,7 @@ package session
 
 import (
 	"errors"
+	"fmt"
 	"math/rand"
 	"os"
 	"slices"
@@ -342,21 +343,28 @@ func restartForRetry(inst *Instance, allowedPath, continuationPrompt string, pol
 		// create-or-reuse-in-place logic first-time setup uses, so calling
 		// it again here is safe even if the directory turns out to still
 		// exist.
+		//
+		// A Setup() failure fails the retry immediately instead of still
+		// calling Start(false): that would just repeat the identical
+		// ErrWorkDirMissing failure this whole branch exists to recover
+		// from, making "Retry now" look like it silently did nothing.
+		var setupErr error
 		if inst.gitManager.HasWorktree() {
 			if workDir := inst.GetEffectiveRootDir(); workDir != "" {
 				if _, statErr := os.Stat(workDir); errors.Is(statErr, os.ErrNotExist) {
-					if setupErr := inst.gitManager.Setup(); setupErr != nil {
-						log.Warn("SessionDriver: failed to recreate missing worktree before retry",
-							"session", inst.Title, "err", setupErr)
-					} else {
+					if setupErr = inst.gitManager.Setup(); setupErr == nil {
 						log.Info("SessionDriver: recreated missing worktree before retry", "session", inst.Title, "path", workDir)
 					}
 				}
 			}
 		}
-		// Clear the old (possibly dead) controller so StartController below creates a fresh one.
-		inst.StopController()
-		restartErr = inst.Start(false)
+		if setupErr != nil {
+			restartErr = fmt.Errorf("failed to recreate missing worktree before retry: %w", setupErr)
+		} else {
+			// Clear the old (possibly dead) controller so StartController below creates a fresh one.
+			inst.StopController()
+			restartErr = inst.Start(false)
+		}
 		if restartErr == nil {
 			if ctrlErr := inst.StartController(); ctrlErr != nil {
 				log.Warn("SessionDriver: failed to restart controller after retry restart",

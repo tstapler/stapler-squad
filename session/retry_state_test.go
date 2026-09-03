@@ -3,6 +3,7 @@ package session
 import (
 	"errors"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -371,6 +372,38 @@ func TestRestartForRetry_should_RecreateMissingWorktree_When_DirectoryWasDeleted
 	require.NoError(t, retryErr)
 	_, statErr := os.Stat(worktreePath)
 	require.NoError(t, statErr, "restartForRetry should have recreated the missing worktree directory before Start()")
+}
+
+// TestRestartForRetry_should_FailFast_When_WorktreeRecreationFails covers the
+// converse of the test above: if GitWorktreeManager.Setup() itself fails
+// (e.g. the repo backing the worktree is gone too), restartForRetry must
+// fail immediately rather than still calling Start(false) against a
+// directory it just failed to recreate — that would just repeat the
+// identical ErrWorkDirMissing failure and make "Retry now" look like it
+// silently did nothing.
+func TestRestartForRetry_should_FailFast_When_WorktreeRecreationFails(t *testing.T) {
+	t.Parallel()
+	// Not a real git repository — Setup() fails at OpenRepo before ever
+	// reaching Start(false).
+	repoPath := t.TempDir()
+	worktreePath := filepath.Join(t.TempDir(), "nonexistent-worktree")
+	wt := newTestGitWorktree(repoPath, worktreePath)
+
+	inst := &Instance{
+		Title:          "t",
+		Status:         PermanentlyFailed,
+		Path:           repoPath,
+		processManager: &fakeLivenessProcessManager{alive: false},
+	}
+	inst.gitManager.SetWorktree(wt)
+	inst.RetryAttempt = 3
+	inst.RetryMaxAttempts = 3
+	inst.LastFailureReason = "crashed"
+
+	retryErr := inst.RetryNow("/tmp")
+
+	require.Error(t, retryErr, "RetryNow must fail when worktree recreation fails, not silently proceed to a doomed Start()")
+	require.NotEqual(t, Active, inst.Status, "a failed worktree recreation must not be reported as a successful restart")
 }
 
 // TestRetryNow_should_BypassPendingBackoffDelay_When_CalledMidBackoffWait covers

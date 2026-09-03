@@ -108,9 +108,11 @@ func parseJSONLogLine(line string) (parsedLogLine, bool) {
 				continue // already consumed as the structural AddSource object
 			}
 		case "session":
-			if session != "" {
-				continue // already consumed into parsedLogLine.Session
-			}
+			// Always structural, regardless of value: an empty or
+			// non-string "session" attribute must still be excluded from
+			// the message fold, not leak through as a noisy "session="
+			// suffix — parsed.Session is simply left "" in that case.
+			continue
 		}
 		extraKeys = append(extraKeys, k)
 	}
