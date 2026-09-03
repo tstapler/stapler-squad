@@ -84,21 +84,27 @@ func NewEntRepository(opts ...RepositoryOption) (*EntRepository, error) {
 		expandedPath = filepath.Join(homeDir, expandedPath[2:])
 	}
 
+	// A "file:" URI DSN (e.g. a shared-cache in-memory database used by tests)
+	// is not a real filesystem path, and already carries its own query
+	// string that a second "?" would corrupt. Use one predicate for both
+	// decisions below instead of two different heuristics — a real on-disk
+	// path is the only case that gets MkdirAll and a "?"-prefixed pragma
+	// string.
+	isURIDSN := strings.HasPrefix(expandedPath, "file:")
+
 	// Create parent directory if it doesn't exist, unless expandedPath is a
-	// "file:" URI DSN (e.g. a shared-cache in-memory database used by tests)
-	// rather than a real filesystem path.
-	if !strings.HasPrefix(expandedPath, "file:") {
+	// URI DSN rather than a real filesystem path.
+	if !isURIDSN {
 		if err := os.MkdirAll(filepath.Dir(expandedPath), 0755); err != nil {
 			return nil, fmt.Errorf("failed to create database directory: %w", err)
 		}
 	}
 
 	// Open database connection. WAL mode is appended for on-disk databases for
-	// better concurrency; it's skipped for URI-style DSNs (e.g. shared-cache
-	// in-memory databases), which don't support WAL and already carry their
-	// own query string that a second "?" would corrupt.
+	// better concurrency; it's skipped for URI DSNs (e.g. shared-cache
+	// in-memory databases), which don't support WAL.
 	dbPath := expandedPath + "?_journal_mode=WAL&_timeout=5000&_fk=1"
-	if strings.Contains(expandedPath, "?") {
+	if isURIDSN {
 		dbPath = expandedPath + "&_timeout=5000&_fk=1"
 	}
 	db, err := sql.Open("sqlite3", dbPath)
