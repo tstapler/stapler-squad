@@ -538,19 +538,30 @@ Reply with APPROVE: <reason> if safe, or DENY: <reason> if risky.`
 		log.ForSession(sessionID).Info("[ApprovalHandler] approval resolved", "approval_id", approvalID, "behavior", decision.Behavior)
 	case <-time.After(h.approvalTimeout()):
 		// Server-side timeout (before the hook's 5-minute timeout).
-		// Return an empty HTTP response so the hook script gets no hookSpecificOutput
-		// and Claude Code falls back to its native terminal permission dialog.
-		// This lets the user still approve/deny in the terminal rather than being
-		// silently allowed or denied.
 		h.store.Remove(approvalID)
 		h.stampResolved(approvalID, sessionID, "timeout")
-		log.ForSession(sessionID).Info("[ApprovalHandler] approval timed out — returning empty response (native dialog fallback)", "approval_id", approvalID)
+		log.ForSession(sessionID).Info("[ApprovalHandler] approval timed out", "approval_id", approvalID, "source", source)
+		if source == "pi" {
+			// Fail closed, deliberately (pi-support MAJOR 3): unlike Claude's
+			// curl hook, pi's ssq-approval.ts extension has no native terminal
+			// permission dialog to fall back to, so an empty 200 here would
+			// leave the tool call in limbo at the mercy of the extension's own
+			// fetch()-throws-on-empty-body behavior — an accident of the
+			// client, not a contract. Deny explicitly instead.
+			h.writeDecision(w, "deny", "stapler-squad approval timed out")
+			return
+		}
+		// Claude: return an empty HTTP response so the hook script gets no
+		// hookSpecificOutput and Claude Code falls back to its native terminal
+		// permission dialog. This lets the user still approve/deny in the
+		// terminal rather than being silently allowed or denied.
 		w.WriteHeader(http.StatusOK)
 		return
 	case <-r.Context().Done():
-		// Claude Code disconnected (e.g., stapler-squad restarted, network issue)
+		// Claude Code disconnected (e.g., stapler-squad restarted, network issue).
+		// The client is already gone, so there is no response to write for
+		// either source — decision is intentionally left unset/unused here.
 		h.store.Remove(approvalID)
-		decision = ApprovalDecision{Behavior: "allow", Message: ""}
 		h.stampResolved(approvalID, sessionID, "canceled")
 		log.ForSession(sessionID).Info("[ApprovalHandler] approval context canceled", "approval_id", approvalID)
 		return // Don't write to disconnected client

@@ -121,29 +121,48 @@ func (t *PiExtensionHealthTracker) nowFn() time.Time {
 	return time.Now()
 }
 
+// Forget removes sessionID's tracked state, e.g. when its Instance is
+// destroyed (session.Instance.Destroy(), via SetPiExtensionHealthForgetter).
+// Without this, the tracker's map grows unboundedly for the life of the
+// process — nothing else ever evicts an entry.
+func (t *PiExtensionHealthTracker) Forget(sessionID string) {
+	if sessionID == "" {
+		return
+	}
+	t.sessions.Delete(sessionID)
+}
+
 // RecordPing marks sessionID as having just successfully pinged the health
 // endpoint. A late ping arriving after the state already flipped to Failed
 // still flips it back to Loaded — per plan.md Task 4.2.1e's decision, a
 // late-but-successful load is still real enforcement, and the badge should
 // reflect current truth, not the worst historical state (design/ux.md's
 // edge-case table makes the same call explicitly).
+//
+// Uses xsync.Map's atomic Compute (read-modify-write under a single bucket
+// lock) rather than a separate Load then Store: the previous two-step version
+// let a concurrent RecordPing/HealthFor for the same sessionID interleave
+// between the Load and the Store, losing whichever update landed second and
+// sometimes double-logging the same transition.
 func (t *PiExtensionHealthTracker) RecordPing(sessionID string) {
 	if sessionID == "" {
 		return
 	}
 	now := t.nowFn()
-	prev, existed := t.sessions.Load(sessionID)
-	wasNotLoaded := !existed || prev.state != PiExtensionHealthLoaded
-	firstObservedAt := now
-	if existed {
-		firstObservedAt = prev.firstObservedAt
-	}
-	t.sessions.Store(sessionID, &piExtensionHealthEntry{
-		state:           PiExtensionHealthLoaded,
-		firstObservedAt: firstObservedAt,
-		lastPingAt:      now,
+	var transitionedToLoaded bool
+	t.sessions.Compute(sessionID, func(prev *piExtensionHealthEntry, existed bool) (*piExtensionHealthEntry, xsync.ComputeOp) {
+		transitionedToLoaded = !existed || prev.state != PiExtensionHealthLoaded
+		firstObservedAt := now
+		if existed {
+			firstObservedAt = prev.firstObservedAt
+		}
+		return &piExtensionHealthEntry{
+			state:           PiExtensionHealthLoaded,
+			firstObservedAt: firstObservedAt,
+			lastPingAt:      now,
+		}, xsync.UpdateOp
 	})
-	if wasNotLoaded {
+	if transitionedToLoaded {
 		log.Info("[PiExtensionHealthTracker] transitioned to loaded", "session_id", sessionID)
 	}
 }
@@ -154,47 +173,54 @@ func (t *PiExtensionHealthTracker) RecordPing(sessionID string) {
 // Subsequent calls after the grace window elapses with no ping return Failed,
 // logging the Unknown->Failed or Loaded->Failed transition exactly once
 // (Surface 6 AC1/AC3) rather than once per call.
+//
+// Uses xsync.Map's atomic Compute instead of a separate Load then
+// Load-or-Store-then-conditional-Store: the previous version raced a
+// concurrent RecordPing/HealthFor for the same sessionID between its Load and
+// its Store, which could lose an update or log the same transition twice.
 func (t *PiExtensionHealthTracker) HealthFor(sessionID string) PiExtensionHealth {
 	if sessionID == "" {
 		return PiExtensionHealthUnknown
 	}
 	now := t.nowFn()
-	entry, existed := t.sessions.Load(sessionID)
-	if !existed {
-		entry = &piExtensionHealthEntry{state: PiExtensionHealthUnknown, firstObservedAt: now}
-		// LoadOrStore, not Store: a concurrent RecordPing may have just created
-		// (and should win over) this session's entry.
-		entry, _ = t.sessions.LoadOrStore(sessionID, entry)
-	}
-
-	sinceReference := now.Sub(entry.firstObservedAt)
-	if !entry.lastPingAt.IsZero() {
-		sinceReference = now.Sub(entry.lastPingAt)
-	}
-
-	computed := entry.state
-	switch entry.state {
-	case PiExtensionHealthLoaded:
-		if sinceReference > t.graceWindowOrDefault() {
-			computed = PiExtensionHealthFailed
+	var transitionedToFailed bool
+	actual, _ := t.sessions.Compute(sessionID, func(prev *piExtensionHealthEntry, existed bool) (*piExtensionHealthEntry, xsync.ComputeOp) {
+		entry := prev
+		if !existed {
+			entry = &piExtensionHealthEntry{state: PiExtensionHealthUnknown, firstObservedAt: now}
 		}
-	case PiExtensionHealthUnknown:
-		if sinceReference > t.graceWindowOrDefault() {
-			computed = PiExtensionHealthFailed
-		}
-	case PiExtensionHealthFailed:
-		// Stays Failed until a ping arrives via RecordPing — HealthFor never
-		// transitions a session back to Loaded on its own.
-	}
 
-	if computed != entry.state {
+		sinceReference := now.Sub(entry.firstObservedAt)
+		if !entry.lastPingAt.IsZero() {
+			sinceReference = now.Sub(entry.lastPingAt)
+		}
+
+		computed := entry.state
+		switch entry.state {
+		case PiExtensionHealthLoaded, PiExtensionHealthUnknown:
+			if sinceReference > t.graceWindowOrDefault() {
+				computed = PiExtensionHealthFailed
+			}
+		case PiExtensionHealthFailed:
+			// Stays Failed until a ping arrives via RecordPing — HealthFor never
+			// transitions a session back to Loaded on its own.
+		}
+
+		if existed && computed == entry.state {
+			// Nothing changed: cancel the write rather than churning the map
+			// entry (and its atomic pointer) on every no-op poll.
+			return entry, xsync.CancelOp
+		}
+		transitionedToFailed = computed != entry.state && computed == PiExtensionHealthFailed
 		updated := *entry
 		updated.state = computed
-		t.sessions.Store(sessionID, &updated)
+		return &updated, xsync.UpdateOp
+	})
+	if transitionedToFailed {
 		log.Warn("[PiExtensionHealthTracker] transitioned to failed",
 			"session_id", sessionID,
 			"grace_window_s", int(t.graceWindowOrDefault().Seconds()),
 		)
 	}
-	return computed
+	return actual.state
 }

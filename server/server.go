@@ -752,6 +752,15 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 			return sessionv1.PiExtensionHealth_PI_EXTENSION_HEALTH_UNKNOWN
 		}
 	})
+	// Evict a destroyed session's tracker entry (pi-support Epic 4.2 MAJOR 1
+	// fix) -- session cannot import server/services directly (services
+	// already imports session), so this is the mirror-image of the resolver
+	// wiring just above: session.Instance.Destroy() calls this closure via
+	// session.SetPiExtensionHealthForgetter, and server.go is the one place
+	// that can wire the two packages together.
+	session.SetPiExtensionHealthForgetter(func(sessionID string) {
+		piHealthTracker.Forget(sessionID)
+	})
 	// Wire the same ApprovalHandler as the PermissionRequestHandler every
 	// remote session's RemoteApprovalRelay drives its requests through
 	// (ssh-remote-workspaces Phase 5 correction, ADR-003's addendum) --

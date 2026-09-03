@@ -102,6 +102,42 @@ func TestPiExtensionHealthTracker_ShouldNotAffectUnrelatedSessions(t *testing.T)
 	assert.Equal(t, PiExtensionHealthUnknown, tracker.HealthFor("sess-2"))
 }
 
+// TestPiExtensionHealthTracker_Forget_EvictsTheEntry covers MAJOR 1: without
+// Forget, nothing ever removes a session's entry and the tracker's map grows
+// unboundedly for the life of the process. After Forget, HealthFor treats the
+// session as never-before-observed (Unknown, with a freshly-started grace
+// window) rather than remembering its prior Loaded/Failed state.
+func TestPiExtensionHealthTracker_Forget_EvictsTheEntry(t *testing.T) {
+	tracker, clock := newTestPiExtensionHealthTracker(time.Minute)
+	tracker.RecordPing("sess-1")
+	require.Equal(t, PiExtensionHealthLoaded, tracker.HealthFor("sess-1"))
+
+	tracker.Forget("sess-1")
+
+	// Re-observing after Forget starts a brand new grace window: advancing by
+	// exactly the grace window (relative to the old lastPingAt) would have
+	// reported Failed if the old entry had survived, but a re-observed session
+	// starts fresh and must read Unknown immediately after Forget.
+	assert.Equal(t, PiExtensionHealthUnknown, tracker.HealthFor("sess-1"))
+	clock.Advance(2 * time.Minute)
+	assert.Equal(t, PiExtensionHealthFailed, tracker.HealthFor("sess-1"))
+}
+
+// TestPiExtensionHealthTracker_Forget_EmptySessionID_NoPanic guards the same
+// empty-string no-op convention RecordPing/HealthFor already follow.
+func TestPiExtensionHealthTracker_Forget_EmptySessionID_NoPanic(t *testing.T) {
+	tracker, _ := newTestPiExtensionHealthTracker(time.Minute)
+	require.NotPanics(t, func() { tracker.Forget("") })
+}
+
+// TestPiExtensionHealthTracker_Forget_UnknownSessionID_NoPanic covers
+// forgetting a session that was never observed (e.g. a race between an
+// instance being destroyed and its first health ping).
+func TestPiExtensionHealthTracker_Forget_UnknownSessionID_NoPanic(t *testing.T) {
+	tracker, _ := newTestPiExtensionHealthTracker(time.Minute)
+	require.NotPanics(t, func() { tracker.Forget("never-seen") })
+}
+
 func TestPiExtensionHealth_String(t *testing.T) {
 	assert.Equal(t, "unknown", PiExtensionHealthUnknown.String())
 	assert.Equal(t, "loaded", PiExtensionHealthLoaded.String())
