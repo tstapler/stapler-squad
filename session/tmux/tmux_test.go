@@ -1921,3 +1921,30 @@ func TestValidateWorkDir(t *testing.T) {
 
 	require.NoError(t, ValidateWorkDir(t.TempDir()))
 }
+
+// TestClampWinsizeDim is the regression test for the gosec G115 fix: window
+// dimensions are clamped to [1, 65535] (the tmux/pty winsize field range)
+// before the narrowing conversion to uint16, rather than truncating or
+// wrapping a value outside that range.
+func TestClampWinsizeDim(t *testing.T) {
+	tests := []struct {
+		name string
+		in   int
+		want uint16
+	}{
+		{name: "negative clamps to 1", in: -5, want: 1},
+		{name: "zero clamps to 1", in: 0, want: 1},
+		{name: "one is the lower boundary and passes through", in: 1, want: 1},
+		{name: "normal cols value passes through", in: 80, want: 80},
+		{name: "normal rows value passes through", in: 24, want: 24},
+		{name: "65535 is the upper boundary and passes through", in: 65535, want: 65535},
+		{name: "above 65535 clamps to 65535", in: 70000, want: 65535},
+		{name: "far above 65535 clamps to 65535", in: 1 << 20, want: 65535},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, ClampWinsizeDim(tt.in))
+		})
+	}
+}

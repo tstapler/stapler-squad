@@ -2094,7 +2094,11 @@ func (s *SessionService) CreateSession(
 			return nil, connect.NewError(connect.CodeNotFound,
 				fmt.Errorf("fork source conversation not found: %w", findErr))
 		}
-		lineCount := uint64(req.Msg.ForkAtMessage) //nolint:gosec // bounded by int32
+		if req.Msg.ForkAtMessage < 0 {
+			return nil, connect.NewError(connect.CodeInvalidArgument,
+				errors.New("fork_at_message must not be negative"))
+		}
+		lineCount := uint64(req.Msg.ForkAtMessage) //#nosec G115 -- validated non-negative above
 		newUUID, forkErr := session.ForkClaudeConversation(srcPath, lineCount, filepath.Dir(srcPath))
 		if forkErr != nil {
 			return nil, connect.NewError(connect.CodeInternal,
@@ -4608,8 +4612,8 @@ func (s *SessionService) GetSessionDiff(
 
 	return connect.NewResponse(&sessionv1.GetSessionDiffResponse{
 		DiffStats: &sessionv1.DiffStats{
-			Added:   int32(diffStats.Added),
-			Removed: int32(diffStats.Removed),
+			Added:   int32(diffStats.Added),   //#nosec G115 -- diff line count, bounded well under int32 max
+			Removed: int32(diffStats.Removed), //#nosec G115 -- diff line count, bounded well under int32 max
 			Content: diffStats.Content,
 		},
 	}), nil
@@ -5533,7 +5537,7 @@ func (s *SessionService) ListPromptHistory(
 			Id:        e.ID,
 			Text:      e.Text,
 			Label:     e.Label,
-			UsedCount: int32(e.UsedCount),
+			UsedCount: int32(e.UsedCount), //#nosec G115 -- prompt reuse count, bounded well under int32 max
 			LastUsed:  timestamppb.New(e.LastUsed),
 		}
 	}
@@ -6225,7 +6229,7 @@ func (s *SessionService) ListErrors(
 			Message:         e.Message,
 			StackTrace:      e.StackTrace,
 			RpcProcedure:    e.RPCProcedure,
-			OccurrenceCount: int32(e.OccurrenceCount),
+			OccurrenceCount: int32(e.OccurrenceCount), //#nosec G115 -- error occurrence count, bounded well under int32 max
 			Acknowledged:    e.Acknowledged,
 		}
 		if !e.FirstSeen.IsZero() {
@@ -6412,7 +6416,7 @@ func (s *SessionService) GetDetectionEvents(ctx context.Context, req *connect.Re
 			Timestamp:       timestamppb.New(e.Timestamp),
 			MatchedPattern:  e.MatchedPattern,
 			MatchedCategory: e.MatchedCategory,
-			ResultStatus:    int32(e.ResultStatus),
+			ResultStatus:    int32(e.ResultStatus), //#nosec G115 -- small enum value (DetectedStatus)
 		})
 	}
 	return connect.NewResponse(&sessionv1.GetDetectionEventsResponse{Events: protoEvents}), nil
@@ -6597,14 +6601,14 @@ func (s *SessionService) GetProviderLimits(
 	protoLimits := &sessionv1.ProviderLimitsProto{
 		Provider:            limits.Provider,
 		Model:               limits.Model,
-		RequestsLimit:       int32(limits.RequestsLimit),
-		RequestsRemaining:   int32(limits.RequestsRemaining),
-		TokensLimit:         int32(limits.TokensLimit),
-		TokensRemaining:     int32(limits.TokensRemaining),
-		ContextTokensUsed:   int32(limits.ContextTokensUsed),
-		ContextTokensMax:    int32(limits.ContextTokensMax),
-		SessionInputTokens:  int32(limits.SessionInputTokens),
-		SessionOutputTokens: int32(limits.SessionOutputTokens),
+		RequestsLimit:       int32(limits.RequestsLimit),       //#nosec G115 -- provider rate-limit header value, realistic range is far below int32 max
+		RequestsRemaining:   int32(limits.RequestsRemaining),   //#nosec G115 -- provider rate-limit header value, realistic range is far below int32 max
+		TokensLimit:         int32(limits.TokensLimit),         //#nosec G115 -- provider token-limit header value, realistic range is far below int32 max
+		TokensRemaining:     int32(limits.TokensRemaining),     //#nosec G115 -- provider token-limit header value, realistic range is far below int32 max
+		ContextTokensUsed:   int32(limits.ContextTokensUsed),   //#nosec G115 -- model context window size, realistic range is far below int32 max
+		ContextTokensMax:    int32(limits.ContextTokensMax),    //#nosec G115 -- model context window size, realistic range is far below int32 max
+		SessionInputTokens:  int32(limits.SessionInputTokens),  //#nosec G115 -- per-session token count, realistic range is far below int32 max
+		SessionOutputTokens: int32(limits.SessionOutputTokens), //#nosec G115 -- per-session token count, realistic range is far below int32 max
 		EstimatedCostUsd:    limits.EstimatedCostUSD,
 		Available:           limits.Available,
 		LastErrorCode:       limits.LastErrorCode,

@@ -114,7 +114,7 @@ function VcsWidgetCommentsBody({
   return (
     <ul className={styles.list}>
       {comments.map((comment) => (
-        <li key={comment.id} className={styles.comment}>
+        <li key={comment.id.toString()} className={styles.comment}>
           <div className={styles.commentMeta}>
             <span className={styles.author}>{comment.author}</span>
             {comment.createdAt && (

@@ -288,6 +288,8 @@ func (us *UtilityService) GetLogs(
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to parse logs: %w", err))
 	}
 
+	// #nosec G115 -- result.TotalCount is a parsed log-line count from one
+	// local session log file, far below int32 range.
 	return connect.NewResponse(&sessionv1.GetLogsResponse{
 		Entries:    result.Entries,
 		TotalCount: int32(result.TotalCount),

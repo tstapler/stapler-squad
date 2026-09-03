@@ -159,7 +159,9 @@ func (a *AutonomousOrchestrationService) buildTurnCallback(inst *session.Instanc
 	return func(turn, maxTurns int, prompt string) {
 		if a.instanceFinder != nil {
 			if liveInst := a.instanceFinder(inst.Title); liveInst != nil {
+				// #nosec G115 -- autonomous-driver loop iteration counter, far below int32 range.
 				liveInst.AutonomousTurn = int32(turn)
+				// #nosec G115 -- see AutonomousTurn above.
 				liveInst.AutonomousMaxTurns = int32(maxTurns)
 				a.bus.Publish(events.NewSessionUpdatedEvent(liveInst, []string{"autonomous_turn"}))
 			}

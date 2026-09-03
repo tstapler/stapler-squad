@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"os/exec"
 	"regexp"
@@ -1729,7 +1730,9 @@ func (t *TmuxSession) RestoreWithWorkDir(workDir string) error {
 			// produces a 0×0 PTY; tmux reads that size at client startup and immediately
 			// disconnects, causing EIO within ~1ms of the response stream starting.
 			ws := &pty.Winsize{
+				// #nosec G115 -- lastKnownRows/Cols are only ever written via clampWinsizeDim (or the defaultAttachRows/Cols constants), so Load() is always in [0, 65535]
 				Rows: uint16(t.lastKnownRows.Load()),
+				// #nosec G115 -- see justification above
 				Cols: uint16(t.lastKnownCols.Load()),
 			}
 			ptmx, attachCmd, err := t.ptyFactory.StartWithSize(t.buildAttachCommand(), ws)
@@ -2395,6 +2398,25 @@ func (t *TmuxSession) SetDetachedSize(width, height int) error {
 	return t.updateWindowSize(width, height)
 }
 
+// ClampWinsizeDim clamps a terminal dimension (columns or rows) coming from
+// a resize request (ultimately client-controlled, e.g. a browser's terminal
+// widget) to the range representable by pty.Winsize's uint16 fields
+// ([1, 65535]) before the narrowing int->uint16 conversion, so an
+// out-of-range or negative value can't silently wrap around into a bogus
+// terminal size. Exported so session/instance_tmux.go and
+// session/native_process_manager.go (which build pty.Winsize themselves,
+// outside this package) share one implementation instead of duplicating it.
+func ClampWinsizeDim(v int) uint16 {
+	switch {
+	case v < 1:
+		return 1
+	case v > math.MaxUint16:
+		return math.MaxUint16
+	default:
+		return uint16(v)
+	}
+}
+
 // updateWindowSize updates the window size of the PTY.
 func (t *TmuxSession) updateWindowSize(cols, rows int) error {
 	// Check if PTY is valid before attempting to resize
@@ -2419,8 +2441,8 @@ func (t *TmuxSession) updateWindowSize(cols, rows int) error {
 	}
 
 	return pty.Setsize(file, &pty.Winsize{
-		Rows: uint16(rows),
-		Cols: uint16(cols),
+		Rows: ClampWinsizeDim(rows),
+		Cols: ClampWinsizeDim(cols),
 		X:    0,
 		Y:    0,
 	})
@@ -2444,8 +2466,9 @@ func (t *TmuxSession) SetWindowSize(cols, rows int) error {
 		if _, cmErr := t.sendCMCommand(ctx,
 			"resize-window", "-t", t.sanitizedName, "-x", colsStr, "-y", rowsStr); cmErr == nil {
 			// Store requested dimensions for future PTY attach connections (via attach-session -x/-y).
-			t.lastKnownCols.Store(int32(cols))
-			t.lastKnownRows.Store(int32(rows))
+			// Widened from the already-clamped uint16 dimension, so this always fits int32.
+			t.lastKnownCols.Store(int32(ClampWinsizeDim(cols)))
+			t.lastKnownRows.Store(int32(ClampWinsizeDim(rows)))
 			return nil
 		} else {
 			log.Debug("SetWindowSize CM path failed, falling back", "session", t.sanitizedName, "err", cmErr)
@@ -2476,8 +2499,9 @@ func (t *TmuxSession) SetWindowSize(cols, rows int) error {
 	}
 
 	// Store requested dimensions for future PTY attach connections (via attach-session -x/-y).
-	t.lastKnownCols.Store(int32(cols))
-	t.lastKnownRows.Store(int32(rows))
+	// Widened from the already-clamped uint16 dimension, so this always fits int32.
+	t.lastKnownCols.Store(int32(ClampWinsizeDim(cols)))
+	t.lastKnownRows.Store(int32(ClampWinsizeDim(rows)))
 	return nil
 }
 

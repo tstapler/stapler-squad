@@ -47,8 +47,8 @@ func shellToProto(sh *session.Shell) *sessionv1.Shell {
 		Command:    sh.Command,
 		WorkingDir: sh.WorkingDir,
 		Status:     goShellStatusToProto(sh.Status),
-		ExitCode:   int32(sh.ExitCode),
-		OrderIndex: int32(sh.OrderIndex),
+		ExitCode:   int32(sh.ExitCode),   //#nosec G115 -- POSIX process exit code, always small
+		OrderIndex: int32(sh.OrderIndex), //#nosec G115 -- position within a session's shell list, always small
 	}
 	if !sh.StartedAt.IsZero() {
 		p.StartedAt = timestamppb.New(sh.StartedAt)

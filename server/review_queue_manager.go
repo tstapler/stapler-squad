@@ -634,7 +634,7 @@ func (rqm *ReactiveQueueManager) OnQueueUpdated(items []*session.ReviewItem) {
 		Timestamp: timestamppb.Now(),
 		Event: &sessionv1.ReviewQueueEvent_Statistics{
 			Statistics: &sessionv1.ReviewQueueStatisticsEvent{
-				TotalItems:   int32(stats.TotalItems),
+				TotalItems:   int32(stats.TotalItems), //#nosec G115 -- review-queue item count, bounded by live session count
 				ByPriority:   rqm.priorityMapToProto(stats.ByPriority),
 				ByReason:     rqm.reasonMapToProto(stats.ByReason),
 				AverageAgeMs: stats.AverageAge.Milliseconds(),
@@ -852,7 +852,7 @@ func (rqm *ReactiveQueueManager) sendInitialSnapshot(client *reviewQueueStreamCl
 			Timestamp: timestamppb.Now(),
 			Event: &sessionv1.ReviewQueueEvent_Statistics{
 				Statistics: &sessionv1.ReviewQueueStatisticsEvent{
-					TotalItems:   int32(stats.TotalItems),
+					TotalItems:   int32(stats.TotalItems), //#nosec G115 -- review-queue item count, bounded by live session count
 					ByPriority:   rqm.priorityMapToProto(stats.ByPriority),
 					ByReason:     rqm.reasonMapToProto(stats.ByReason),
 					AverageAgeMs: stats.AverageAge.Milliseconds(),
@@ -926,7 +926,7 @@ func (rqm *ReactiveQueueManager) reasonToProto(r session.AttentionReason) sessio
 func (rqm *ReactiveQueueManager) priorityMapToProto(m map[session.Priority]int) map[int32]int32 {
 	result := make(map[int32]int32)
 	for k, v := range m {
-		result[int32(rqm.priorityToProto(k))] = int32(v)
+		result[int32(rqm.priorityToProto(k))] = int32(v) //#nosec G115 -- review-queue item count, bounded by live session count
 	}
 	return result
 }
@@ -934,7 +934,7 @@ func (rqm *ReactiveQueueManager) priorityMapToProto(m map[session.Priority]int) 
 func (rqm *ReactiveQueueManager) reasonMapToProto(m map[session.AttentionReason]int) map[int32]int32 {
 	result := make(map[int32]int32)
 	for k, v := range m {
-		result[int32(rqm.reasonToProto(k))] = int32(v)
+		result[int32(rqm.reasonToProto(k))] = int32(v) //#nosec G115 -- review-queue item count, bounded by live session count
 	}
 	return result
 }

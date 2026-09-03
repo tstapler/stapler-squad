@@ -135,11 +135,13 @@ func toHandoffSummaryProto(row *session.HandoffSummary) *sessionv1.HandoffSummar
 	}
 
 	p := &sessionv1.HandoffSummaryProto{
-		SessionId:                row.SessionID,
-		SessionTitle:             row.SessionTitle,
-		Status:                   toHandoffSummaryStatusProto(row.Status),
-		ActiveTask:               row.ActiveTask,
-		SummaryText:              row.SummaryText,
+		SessionId:    row.SessionID,
+		SessionTitle: row.SessionTitle,
+		Status:       toHandoffSummaryStatusProto(row.Status),
+		ActiveTask:   row.ActiveTask,
+		SummaryText:  row.SummaryText,
+		// #nosec G115 -- MiddleMessagesSummarized is a per-conversation
+		// message count, far below int32 range.
 		MiddleMessagesSummarized: int32(row.MiddleMessagesSummarized),
 		ErrorMessage:             row.ErrorMessage,
 		ErrorStage:               row.ErrorStage,

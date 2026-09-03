@@ -4932,6 +4932,43 @@ func TestShouldAttributeTombstoneToShutdown_should_MatchOnlyPreBootNonStaleNotLi
 	}
 }
 
+// TestShouldSkipWorkTombstoneForRestartGrace_should_OnlySkipPreBootSessionsWithinGraceWindow
+// is a regression test for the duplicate-work-session bug this fix addresses:
+// tombstoneOrphanWorkSessions used to free an item for respawn the instant a
+// work session's tmux liveness check failed, even immediately after this
+// process's own restart — before session-retry-backoff's in-place restart
+// (session/retry_state.go's restartGraceWindow) had a chance to reattach the
+// original session. That produced a second, duplicate work session for an
+// item whose original session (and PR) may already have completed. Table-driven
+// against the extracted pure decision function, same rationale as
+// TestShouldAttributeTombstoneToShutdown above: ItemSession.created_at is
+// Immutable() in the ent schema, so no session created during a test can ever
+// actually predate the process's own boot time.
+func TestShouldSkipWorkTombstoneForRestartGrace_should_OnlySkipPreBootSessionsWithinGraceWindow(t *testing.T) {
+	t.Parallel()
+	boot := time.Now()
+	before := boot.Add(-time.Hour)
+	after := boot.Add(time.Hour)
+
+	tests := []struct {
+		name      string
+		createdAt time.Time
+		now       time.Time
+		want      bool
+	}{
+		{"predates boot, still within grace window -> skip", before, boot.Add(10 * time.Second), true},
+		{"predates boot, grace window elapsed -> don't skip (genuine orphan)", before, boot.Add(2 * time.Minute), false},
+		{"created after boot -> don't skip (not our restart's doing)", after, boot.Add(10 * time.Second), false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := shouldSkipWorkTombstoneForRestartGrace(tt.createdAt, boot, tt.now)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
 // TestBacklogWorkBranchSlug_TwoItemsWithCollidingTitles_ShareOneWorktree is a
 // regression/documentation test for backlog item e7664cbf's worktree-identity root
 // cause: worktree identity is resolved by title-derived branch name

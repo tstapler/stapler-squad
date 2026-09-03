@@ -854,8 +854,10 @@ message GithubReviewFeedback {
 
 // PRComment represents a comment on a GitHub pull request.
 message PRComment {
-  // Comment ID.
-  int32 id = 1;
+  // Comment ID. int64, not int32: GitHub's own comment IDs already exceed
+  // int32 range in practice (observed values over 5 billion as of 2026-09),
+  // so int32 here would silently truncate/wrap a real ID.
+  int64 id = 1;
 
   // Comment author username.
   string author = 2;

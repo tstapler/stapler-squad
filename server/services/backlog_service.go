@@ -612,9 +612,11 @@ func (s *BacklogService) resolveRepoPathInput(input string) (string, error) {
 // costFor, if non-nil, is called with the tmux session UUID to populate EstimatedCostUsd.
 func itemSessionToProto(is session.ItemSessionSummary, costFor func(tmuxUUID string) float64) *sessionv1.ItemSession {
 	p := &sessionv1.ItemSession{
-		Id:                       is.ID,
-		SessionUuid:              is.SessionUUID,
-		SessionRole:              is.Role,
+		Id:          is.ID,
+		SessionUuid: is.SessionUUID,
+		SessionRole: is.Role,
+		// #nosec G115 -- git commit count for a single session's worktree, bounded
+		// by realistic repo activity during one session's lifetime.
 		CommitCountSinceSpawn:    int32(is.CommitCountSinceSpawn),
 		LastCommitMessage:        is.LastCommitMessage,
 		CreatedAt:                timestamppb.New(is.CreatedAt),
@@ -642,6 +644,8 @@ func itemSessionToProto(is session.ItemSessionSummary, costFor func(tmuxUUID str
 			Id:             rv.ID,
 			OverallOutcome: rv.OverallOutcome,
 			Summary:        rv.Summary,
+			// #nosec G115 -- token count for one review's diff, bounded by realistic
+			// diff/LLM-context sizes, nowhere near int32 range.
 			DiffTokenCount: int32(rv.DiffTokenCount),
 			DiffTruncated:  rv.DiffTruncated,
 			OverrideBy:     rv.OverrideBy,
@@ -658,6 +662,8 @@ func itemSessionToProto(is session.ItemSessionSummary, costFor func(tmuxUUID str
 				p.ReviewVerdict.PerCriterion = make([]*sessionv1.CriterionVerdict, len(cvs))
 				for i, cv := range cvs {
 					p.ReviewVerdict.PerCriterion[i] = &sessionv1.CriterionVerdict{
+						// #nosec G115 -- index into one backlog item's acceptance-criteria
+						// list, bounded by realistic AC list length (a handful of entries).
 						CriterionIndex: int32(cv.CriterionIndex),
 						Outcome:        string(cv.Outcome),
 						Evidence:       cv.Evidence,
@@ -694,8 +700,10 @@ func itemSessionToProto(is session.ItemSessionSummary, costFor func(tmuxUUID str
 				Suggestions:         suggs,
 				ClarifyingQuestions: clarifying,
 				Tasks:               tasks,
-				Iteration:           int32(tr.Iteration),
-				Feedback:            tr.Feedback,
+				// #nosec G115 -- triage rework iteration counter, bounded by the small
+				// configurable rework cap (config.MaxAutoReworkIterationsOrDefault, default 3).
+				Iteration: int32(tr.Iteration),
+				Feedback:  tr.Feedback,
 			}
 		}
 	}
@@ -725,16 +733,19 @@ type triageResultJSON struct {
 // Used by ListBacklogItems to avoid over-hydrating description/plan fields.
 func backlogItemSummaryToProto(item *session.BacklogItemSummary, costFor func(tmuxUUID string) float64) *sessionv1.BacklogItem {
 	p := &sessionv1.BacklogItem{
-		Id:                 item.ID,
-		PublicId:           item.PublicIDRaw,
-		Title:              item.Title,
-		Priority:           int32(item.Priority),
-		Status:             string(item.Status),
-		RepoPath:           item.RepoPath,
-		Notes:              item.Notes,
-		ExternalId:         item.ExternalID,
-		Labels:             item.Labels,
-		PrUrl:              item.PrURL,
+		Id:       item.ID,
+		PublicId: item.PublicIDRaw,
+		Title:    item.Title,
+		// #nosec G115 -- ent schema enforces priority in [1,5] (field.Int("priority").Min(1).Max(5))
+		Priority:   int32(item.Priority),
+		Status:     string(item.Status),
+		RepoPath:   item.RepoPath,
+		Notes:      item.Notes,
+		ExternalId: item.ExternalID,
+		Labels:     item.Labels,
+		PrUrl:      item.PrURL,
+		// #nosec G115 -- pr_number is a GitHub PR number; production writers store it
+		// from a *int32 RPC field, structurally bounded well under int32 range.
 		PrNumber:           int32(item.PrNumber),
 		CreatedAt:          timestamppb.New(item.CreatedAt),
 		UpdatedAt:          timestamppb.New(item.UpdatedAt),
@@ -752,6 +763,8 @@ func backlogItemSummaryToProto(item *session.BacklogItemSummary, costFor func(tm
 			protoAC := make([]*sessionv1.AcCriterion, len(criteria))
 			for i, c := range criteria {
 				protoAC[i] = &sessionv1.AcCriterion{
+					// #nosec G115 -- index into one backlog item's acceptance-criteria
+					// list, bounded by realistic AC list length (a handful of entries).
 					Index:  int32(c.Index),
 					Text:   c.Text,
 					Status: string(c.Status),
@@ -796,9 +809,10 @@ func allowedTransitionStrings(from session.BacklogStatus) []string {
 // backlogItemToProto maps a BacklogItemData to the proto BacklogItem message.
 func backlogItemToProto(item *session.BacklogItemData, costFor func(tmuxUUID string) float64) *sessionv1.BacklogItem {
 	p := &sessionv1.BacklogItem{
-		Id:                  item.ID,
-		Title:               item.Title,
-		Description:         item.Description,
+		Id:          item.ID,
+		Title:       item.Title,
+		Description: item.Description,
+		// #nosec G115 -- ent schema enforces priority in [1,5] (field.Int("priority").Min(1).Max(5))
 		Priority:            int32(item.Priority),
 		Status:              item.Status,
 		RepoPath:            item.RepoPath,
@@ -816,11 +830,13 @@ func backlogItemToProto(item *session.BacklogItemData, costFor func(tmuxUUID str
 		Labels:              item.Labels,
 		SourceId:            item.SourceID,
 		PrUrl:               item.PrURL,
-		PrNumber:            int32(item.PrNumber),
-		CreatedAt:           timestamppb.New(item.CreatedAt),
-		UpdatedAt:           timestamppb.New(item.UpdatedAt),
-		AllowedTransitions:  allowedTransitionStrings(session.BacklogStatus(item.Status)),
-		PublicId:            item.PublicIDRaw,
+		// #nosec G115 -- pr_number is a GitHub PR number; production writers store it
+		// from a *int32 RPC field, structurally bounded well under int32 range.
+		PrNumber:           int32(item.PrNumber),
+		CreatedAt:          timestamppb.New(item.CreatedAt),
+		UpdatedAt:          timestamppb.New(item.UpdatedAt),
+		AllowedTransitions: allowedTransitionStrings(session.BacklogStatus(item.Status)),
+		PublicId:           item.PublicIDRaw,
 	}
 	if item.ExternalURL != "" {
 		p.ExternalUrl = &item.ExternalURL
@@ -835,6 +851,9 @@ func backlogItemToProto(item *session.BacklogItemData, costFor func(tmuxUUID str
 		p.ArchivedAt = timestamppb.New(*item.ArchivedAt)
 	}
 	if item.ReworkCapOverride != nil {
+		// #nosec G115 -- rework_cap_override is only ever set from a *int32 RPC field
+		// (backlog_service_lifecycle.go's int(*req.Msg.ReworkCapOverride)), so this
+		// int -> int32 round trip cannot lose information.
 		override := int32(*item.ReworkCapOverride)
 		p.ReworkCapOverride = &override
 	}
@@ -846,6 +865,8 @@ func backlogItemToProto(item *session.BacklogItemData, costFor func(tmuxUUID str
 			protoAC := make([]*sessionv1.AcCriterion, len(criteria))
 			for i, c := range criteria {
 				protoAC[i] = &sessionv1.AcCriterion{
+					// #nosec G115 -- index into one backlog item's acceptance-criteria
+					// list, bounded by realistic AC list length (a handful of entries).
 					Index:  int32(c.Index),
 					Text:   c.Text,
 					Status: string(c.Status),
@@ -890,7 +911,9 @@ func backlogItemToProto(item *session.BacklogItemData, costFor func(tmuxUUID str
 		protoNotes := make([]*sessionv1.BacklogProgressNote, len(item.ProgressNotes))
 		for i, n := range item.ProgressNotes {
 			protoNotes[i] = &sessionv1.BacklogProgressNote{
-				Id:             n.ID,
+				Id: n.ID,
+				// #nosec G115 -- index into one backlog item's acceptance-criteria
+				// list, bounded by realistic AC list length (a handful of entries).
 				CriterionIndex: int32(n.CriterionIndex),
 				Note:           n.Note,
 				Status:         n.Status,

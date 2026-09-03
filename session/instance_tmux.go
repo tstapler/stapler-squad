@@ -664,7 +664,7 @@ func (i *Instance) GetPTYSession(ctx context.Context, cols, rows int) (tmux.PtyS
 	// sensitive to a stale/absent $TERM (it renders the pane directly,
 	// unlike control mode's structured text protocol).
 	runName, runArgs := tmux.WrapRemoteCommand(tmux.Binary(), tmuxSession.AttachArgs())
-	ws := &ptyPkg.Winsize{Rows: uint16(rows), Cols: uint16(cols)}
+	ws := &ptyPkg.Winsize{Rows: tmux.ClampWinsizeDim(rows), Cols: tmux.ClampWinsizeDim(cols)}
 	return factory.StartPty(ctx, ws, "", runName, runArgs...)
 }
 
@@ -679,8 +679,8 @@ type localPTYSession struct {
 
 func (l *localPTYSession) Resize(cols, rows int) error {
 	return ptyPkg.Setsize(l.File, &ptyPkg.Winsize{
-		Rows: uint16(rows),
-		Cols: uint16(cols),
+		Rows: tmux.ClampWinsizeDim(rows),
+		Cols: tmux.ClampWinsizeDim(cols),
 	})
 }
 
