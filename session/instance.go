@@ -2244,7 +2244,7 @@ func (i *Instance) Restart(preserveOutput bool) error {
 	// that goroutine alive). The lock makes this safe structurally instead.
 	i.piSessionMu.Lock()
 	restorePiSession := i.piSession
-	if !(isPi(i.Program) && config.LoadConfig().GetFeatureFlag(config.FeaturePiSupport)) {
+	if !isPi(i.Program) || !config.LoadConfig().GetFeatureFlag(config.FeaturePiSupport) {
 		i.piSession = nil
 	}
 	i.piSessionMu.Unlock()

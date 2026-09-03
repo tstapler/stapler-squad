@@ -118,16 +118,6 @@ func sleeperCmd() piCommandFactory {
 	}
 }
 
-// echoOneEventThenSleepCmd returns a piCommandFactory whose subprocess
-// emits exactly one valid pi JSONL event on stdout and then sleeps, so
-// PiStatusSource's real readLoop/waitLoop machinery can be exercised without
-// depending on a real pi binary.
-func echoOneEventThenSleepCmd() piCommandFactory {
-	return func() *exec.Cmd {
-		return safeexec.CommandContext(context.Background(), "/bin/sh", "-c", `echo '{"type":"agent_start"}'; sleep 100`)
-	}
-}
-
 func TestPiStatusSource_DetectsSubprocessDeath(t *testing.T) {
 	src := NewPiStatusSource("test-session", sleeperCmd())
 	if err := src.Start(); err != nil {
