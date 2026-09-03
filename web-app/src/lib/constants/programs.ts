@@ -8,6 +8,7 @@ export const PROGRAMS: ProgramOption[] = [
   { value: "", label: "System default", description: "Use default_program from config (default: claude)" },
   { value: "claude", label: "Claude Code", description: "Anthropic's CLI assistant" },
   { value: "env -u CLAUDE_CODE_USE_BEDROCK ANTHROPIC_BASE_URL=http://localhost:47000 claude", label: "Claude Code (Proxy via localhost:47000)", description: "Via local proxy" },
+  { value: "pi", label: "pi", description: "@earendil-works/pi-coding-agent — TypeScript-extensible CLI" },
   { value: "aider", label: "Aider", description: "AI pair programming with git" },
   { value: "aider --model ollama_chat/gemma3:1b", label: "Aider (Ollama Gemma 1B)", description: "Local model" },
   { value: "opencode", label: "OpenCode", description: "OpenCode CLI assistant" },
@@ -62,4 +63,16 @@ export function getProgramDisplay(program?: string): string {
 
 export function isKnownProgram(program: string): boolean {
   return PROGRAMS.some((p) => p.value === program) || program.startsWith("aider --model");
+}
+
+/**
+ * Programs to offer in the creation-panel picker. `PROGRAMS` itself stays
+ * unconditional (getProgramDisplay/isKnownProgram must recognize "pi" even
+ * with the flag off, for sessions that already have program: "pi" set from
+ * before pi-support was disabled) -- this helper filters only the rendered
+ * option list, per pi-support's "opt-in invisibility" requirement.
+ */
+export function getPickerPrograms(piSupportEnabled: boolean): ProgramOption[] {
+  if (piSupportEnabled) return PROGRAMS;
+  return PROGRAMS.filter((p) => p.value !== "pi");
 }

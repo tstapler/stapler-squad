@@ -715,6 +715,29 @@ func TestSsqApprovalExtensionContent_SafelyEscapesSpecialCharacters(t *testing.T
 	assert.Contains(t, content, `const healthURL = "http://localhost:8543/back\\slash";`)
 }
 
+// TestSsqApprovalExtensionContent_SetsSourcePi verifies pi-support Epic 4.3's
+// Story 4.3.1c: the permission-request body identifies its source as "pi" so
+// audit/analytics records can distinguish pi from Claude's unmodified curl
+// hook (which never sends the field at all).
+func TestSsqApprovalExtensionContent_SetsSourcePi(t *testing.T) {
+	content := ssqApprovalExtensionContent("http://localhost:8543/api/hooks/permission-request", "http://localhost:8543/api/hooks/pi-extension-loaded")
+	assert.Contains(t, content, `source: "pi"`)
+}
+
+// TestSsqApprovalExtensionContent_ReSendsHealthPingPeriodically verifies
+// pi-support Story 4.2.3: the health ping is scheduled via setInterval, not
+// just sent once at load, so a server restart doesn't permanently strand a
+// live session's health badge at Unknown.
+func TestSsqApprovalExtensionContent_ReSendsHealthPingPeriodically(t *testing.T) {
+	content := ssqApprovalExtensionContent("http://localhost:8543/api/hooks/permission-request", "http://localhost:8543/api/hooks/pi-extension-loaded")
+	assert.Contains(t, content, "setInterval(sendHealthPing")
+	// The re-ping interval must be well inside the tracker's grace window
+	// (piExtensionHealthGraceWindow = 2x piExtensionRepingInterval, per
+	// server/services/pi_extension_health.go) — sanity-check the literal here
+	// so a future edit to one side can't silently desync from the other.
+	assert.Contains(t, content, "healthRepingIntervalMs = 120000")
+}
+
 // ── patchPiExtension unit tests ───────────────────────────────────────────────
 
 // patchPiExtension_should_writeExtensionFileWithBothURLs_When_fileAbsent

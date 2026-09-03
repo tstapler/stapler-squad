@@ -443,6 +443,11 @@ type Instance struct {
 	// Claude Code session information for persistence and re-attachment
 	claudeSession *ClaudeSessionData
 
+	// piSession holds pi-coding-agent session information for resume-on-restart
+	// (see buildPiCommand). Populated only when isPi(i.Program) and the
+	// config.FeaturePiSupport flag is enabled — see the capture in Restart.
+	piSession *PiSessionData
+
 	// conversationClearedAt records when ClearConversationState() last ran, so
 	// tryExtractConversationUUID's DetectByPath fallback won't resurrect a JSONL
 	// predating an explicit "start fresh" request. In-memory only — does not
@@ -2207,7 +2212,19 @@ func (i *Instance) Restart(preserveOutput bool) error {
 		return fmt.Errorf("cannot restart session '%s': no working directory configured", i.Title)
 	}
 
+	// Suppress pi's --session resume injection (buildLaunchCommand reads
+	// i.piSession directly for piProgram, unlike claude's explicit
+	// claudeSessionID param) unless both isPi(i.Program) and the pi-support
+	// feature flag are true — mirroring the claudeSessionID capture above's
+	// gating intent. The field itself is restored afterward rather than
+	// cleared outright, so a stale piSession isn't lost if the flag is later
+	// re-enabled.
+	restorePiSession := i.piSession
+	if !(isPi(i.Program) && config.LoadConfig().GetFeatureFlag(config.FeaturePiSupport)) {
+		i.piSession = nil
+	}
 	program := i.buildLaunchCommand(claudeSessionID)
+	i.piSession = restorePiSession
 
 	// Create a new tmux session
 	// Use configurable prefix or default

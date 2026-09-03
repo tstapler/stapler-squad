@@ -105,6 +105,16 @@ export const attachError = style({
   color: vars.color.error,
 });
 
+// Story 3.1.2: capability warning shown when the selected program's approval
+// extension is known to be unhealthy. Mirrors attachError's contrast-verified
+// vars.color.error, per design/ux.md Surface 2 AC4.
+export const piApprovalWarning = style({
+  display: "block",
+  fontSize: vars.fontSize.xs,
+  color: vars.color.error,
+  marginTop: 4,
+});
+
 // ─────────────────────────────────────────────────────────────────────────────
 
 export const advancedSection = style({

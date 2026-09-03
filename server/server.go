@@ -12,6 +12,7 @@ import (
 	"github.com/tstapler/stapler-squad/internal/syncutil"
 	"github.com/tstapler/stapler-squad/log"
 	pkganalytics "github.com/tstapler/stapler-squad/pkg/analytics"
+	"github.com/tstapler/stapler-squad/server/adapters"
 	"github.com/tstapler/stapler-squad/server/analytics"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/handlers"
@@ -723,6 +724,32 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	srv.mux.HandleFunc("/api/hooks/permission-request", approvalHandler.HandlePermissionRequest)
 	log.Info("Registered Claude Code hook approval handler at /api/hooks/permission-request")
 	srv.approvalHandler = approvalHandler
+
+	// pi approval-extension health tracking (pi-support Epic 4.2). Registered
+	// unconditionally (mirroring every other /api/hooks/* route above) — the
+	// endpoint and tracker are harmless no-ops for installs that never enable
+	// the pi-support feature flag or never run pi, since nothing ever pings it.
+	piHealthTracker := services.NewPiExtensionHealthTracker()
+	approvalHandler.SetPiExtensionHealthTracker(piHealthTracker)
+	srv.mux.HandleFunc("/api/hooks/pi-extension-loaded", approvalHandler.HandlePiExtensionLoaded)
+	log.Info("Registered pi approval-extension health-ping handler at /api/hooks/pi-extension-loaded")
+	// Feed the tracker into InstanceToProto (server/adapters/instance_adapter.go)
+	// via the same package-level-resolver pattern hookBaseURLFn uses above --
+	// adapters can't import services directly (services already imports
+	// adapters), so server.go is the one place that can wire the two together.
+	adapters.SetPiExtensionHealthResolver(func(sessionID, program string) sessionv1.PiExtensionHealth {
+		if !config.LoadConfig().GetFeatureFlag(config.FeaturePiSupport) || !session.IsPi(program) {
+			return sessionv1.PiExtensionHealth_PI_EXTENSION_HEALTH_UNSPECIFIED
+		}
+		switch piHealthTracker.HealthFor(sessionID) {
+		case services.PiExtensionHealthLoaded:
+			return sessionv1.PiExtensionHealth_PI_EXTENSION_HEALTH_LOADED
+		case services.PiExtensionHealthFailed:
+			return sessionv1.PiExtensionHealth_PI_EXTENSION_HEALTH_FAILED
+		default:
+			return sessionv1.PiExtensionHealth_PI_EXTENSION_HEALTH_UNKNOWN
+		}
+	})
 	// Wire the same ApprovalHandler as the PermissionRequestHandler every
 	// remote session's RemoteApprovalRelay drives its requests through
 	// (ssh-remote-workspaces Phase 5 correction, ADR-003's addendum) --

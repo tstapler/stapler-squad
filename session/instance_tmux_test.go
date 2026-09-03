@@ -118,6 +118,59 @@ func TestClassifyProgram(t *testing.T) {
 	}
 }
 
+func TestIsPi(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		program string
+		want    bool
+	}{
+		{"pi", true},
+		{"/usr/local/bin/pi", true},
+		{"pi --model x", true},
+		{"pipenv run pi-helper", false}, // basename of first token is "pipenv", not "pi"
+		{"mypi", false},
+		{"", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.program, func(t *testing.T) {
+			t.Parallel()
+			got := isPi(tc.program)
+			if got != tc.want {
+				t.Errorf("isPi(%q) = %v, want %v", tc.program, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestClassifyProgram_Pi(t *testing.T) {
+	t.Parallel()
+	switch classifyProgram("pi").(type) {
+	case piProgram:
+		// expected
+	default:
+		t.Errorf("classifyProgram(%q) = %T, want piProgram", "pi", classifyProgram("pi"))
+	}
+}
+
+func TestBuildLaunchCommand_PiSessionResume(t *testing.T) {
+	t.Parallel()
+	inst := &Instance{Program: "pi", piSession: &PiSessionData{SessionID: "abc123"}}
+	got := inst.buildLaunchCommand("")
+	want := "pi --session 'abc123'"
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestBuildLaunchCommand_PiNoSession_NoOp(t *testing.T) {
+	t.Parallel()
+	inst := &Instance{Program: "pi"}
+	got := inst.buildLaunchCommand("")
+	if got != "pi" {
+		t.Errorf("got %q, want exactly %q (no-op, matching claude's no-session behavior)", got, "pi")
+	}
+}
+
 func TestBuildLaunchCommand_NonClaudeProgramUnmodified(t *testing.T) {
 	t.Parallel()
 	inst := &Instance{

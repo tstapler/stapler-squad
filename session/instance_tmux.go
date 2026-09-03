@@ -57,9 +57,11 @@ const defaultPromptFileCleanupDelay = 30 * time.Second
 type programKind interface{ sealedProgramKind() }
 
 type claudeProgram struct{ base string }
+type piProgram struct{ base string }
 type plainProgram struct{ cmd string }
 
 func (claudeProgram) sealedProgramKind() {}
+func (piProgram) sealedProgramKind()     {}
 func (plainProgram) sealedProgramKind()  {}
 
 // classifyProgram parses a raw program string into its kind.
@@ -67,6 +69,9 @@ func (plainProgram) sealedProgramKind()  {}
 func classifyProgram(program string) programKind {
 	if isClaude(program) {
 		return claudeProgram{base: program}
+	}
+	if isPi(program) {
+		return piProgram{base: program}
 	}
 	return plainProgram{cmd: program}
 }
@@ -78,6 +83,20 @@ func classifyProgram(program string) programKind {
 func isClaude(program string) bool {
 	for _, token := range strings.Fields(program) {
 		if filepath.Base(token) == "claude" {
+			return true
+		}
+	}
+	return false
+}
+
+// isPi reports whether the program command invokes the pi binary. Mirrors
+// isClaude: it checks each whitespace-delimited token's basename, so it
+// matches bare ("pi") and path-qualified ("/usr/local/bin/pi") invocations
+// while rejecting lookalikes like "pipenv" or "mypi" whose basename isn't
+// exactly "pi".
+func isPi(program string) bool {
+	for _, token := range strings.Fields(program) {
+		if filepath.Base(token) == "pi" {
 			return true
 		}
 	}
@@ -159,6 +178,12 @@ func (i *Instance) buildLaunchCommand(claudeSessionID string) string {
 		// why appending it here (after the separator) would be silently
 		// swallowed as inert positional text instead of a real flag.
 		cmd = i.buildClaudeCommand(p.base, claudeSessionID)
+	case piProgram:
+		var piSessionID string
+		if i.piSession != nil {
+			piSessionID = i.piSession.SessionID
+		}
+		cmd = i.buildPiCommand(p.base, piSessionID)
 	case plainProgram:
 		// shellQuoteFields (not one whole-string shellQuote) preserves legitimate multi-word
 		// Program values like "sleep 300" that rely on shell word-splitting, while still
@@ -258,6 +283,23 @@ func (i *Instance) buildClaudeCommand(base, claudeSessionID string) string {
 		// "--" stops claude from parsing a prompt that begins with "--" (e.g. the
 		// backlog prompt's "--- BACKLOG ITEM DATA ---") as CLI flags.
 		parts = append(parts, "--", i.promptArg())
+	}
+	return strings.Join(parts, " ")
+}
+
+// buildPiCommand assembles the pi invocation, injecting the resume flag when a
+// prior pi session ID is known. Mirrors buildClaudeCommand's resume-flag
+// shape: --session <id> was confirmed against a real pi 0.84.4 install (see
+// plan.md's Phase 1 spike RESULTS) to resume a prior session's conversation
+// context. When piSessionID is empty this is a no-op — base is returned
+// unmodified, matching buildClaudeCommand's "no session data means no flag"
+// behavior — not an error.
+func (i *Instance) buildPiCommand(base, piSessionID string) string {
+	parts := []string{base}
+	if piSessionID != "" {
+		// piSessionID traces back to persisted PiSessionData with no format
+		// validation, so it needs the same shell-quoting as claudeSessionID.
+		parts = append(parts, "--session", shellQuote(piSessionID))
 	}
 	return strings.Join(parts, " ")
 }

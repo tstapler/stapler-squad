@@ -85,6 +85,7 @@ type ApprovalHandler struct {
 	liveFinder          LiveInstanceFinder          // optional: resolves live in-memory Instance for CI status (not persisted — see PRStatusPoller)
 	slackNotifier       *SlackNotifier              // optional: notifies a configured Slack webhook about new pending approvals; concrete type (no interface) since both live in this package
 	dashboardBaseURLFn  func() string               // optional: lazily-read fallback for the Slack dashboard-link base URL, used only when cfg.Slack.DashboardBaseURL is unset. Mirrors ReactiveQueueManager.dashboardBaseURLFn exactly (server.go wires the same hookBaseURLFn into both).
+	piHealthTracker     *PiExtensionHealthTracker   // optional: records pi approval-extension health pings (pi-support Epic 4.2)
 }
 
 // NewApprovalHandler creates a new ApprovalHandler.
@@ -149,6 +150,12 @@ func (h *ApprovalHandler) SetClassifier(c classifier.Classifier) {
 // SetAnalyticsStore injects an AnalyticsStore for recording classification decisions.
 func (h *ApprovalHandler) SetAnalyticsStore(a *AnalyticsStore) {
 	h.analyticsStore = a
+}
+
+// SetPiExtensionHealthTracker injects a PiExtensionHealthTracker so
+// HandlePiExtensionLoaded has somewhere to record pings (pi-support Epic 4.2).
+func (h *ApprovalHandler) SetPiExtensionHealthTracker(t *PiExtensionHealthTracker) {
+	h.piHealthTracker = t
 }
 
 // SetDomainChecker injects a DomainAgeChecker for escalating requests to newly-registered domains.
@@ -252,6 +259,16 @@ func (h *ApprovalHandler) HandlePermissionRequest(w http.ResponseWriter, r *http
 		sessionID = "unknown"
 	}
 
+	// source identifies which agent's hook produced this request, for audit/analytics
+	// distinguishability (pi-support Epic 4.3). Defaulted to "claude" here, at the
+	// recording boundary only — payload itself is never mutated, since Claude's
+	// existing curl hook omits the field entirely and that omission is the expected,
+	// backward-compatible shape of its wire payload.
+	source := payload.Source
+	if source == "" {
+		source = "claude"
+	}
+
 	// Secret scan: auto-deny any command that appears to contain a plaintext secret.
 	// Runs on the full command text (before any truncation) so it catches long secrets.
 	if cmd, ok := payload.ToolInput["command"].(string); ok && cmd != "" {
@@ -275,7 +292,7 @@ func (h *ApprovalHandler) HandlePermissionRequest(w http.ResponseWriter, r *http
 					RuleID:    classifier.RuleIDSecretScan,
 					RuleName:  "Plaintext Secret Detection",
 					Reason:    msg,
-				}, sessionID, "", 0)
+				}, sessionID, "", 0, source)
 			}
 			h.writeDecision(w, "deny", msg)
 			return
@@ -321,7 +338,7 @@ func (h *ApprovalHandler) HandlePermissionRequest(w http.ResponseWriter, r *http
 						Reason:    reason,
 					}
 					if h.analyticsStore != nil {
-						h.analyticsStore.RecordFromResult(payload, domainEscalation, sessionID, "", 0)
+						h.analyticsStore.RecordFromResult(payload, domainEscalation, sessionID, "", 0, source)
 					}
 					// Fall through to manual review queue (do NOT return here).
 					escalation = domainEscalation
@@ -382,7 +399,7 @@ func (h *ApprovalHandler) HandlePermissionRequest(w http.ResponseWriter, r *http
 			if result.Decision != classifier.AutoAllow && result.Decision != classifier.AutoDeny && result.Decision != classifier.Escalate {
 				recordResult.RuleID = classifier.RuleIDUnexpectedDecision
 			}
-			h.analyticsStore.RecordFromResult(payload, recordResult, sessionID, "", durationMs)
+			h.analyticsStore.RecordFromResult(payload, recordResult, sessionID, "", durationMs, source)
 		}
 
 		switch result.Decision {
@@ -540,6 +557,43 @@ Reply with APPROVE: <reason> if safe, or DENY: <reason> if risky.`
 	}
 
 	h.writeDecision(w, decision.Behavior, decision.Message)
+}
+
+// piExtensionHealthPingPayload is the JSON body ssqApprovalExtensionTemplate
+// (cmd/ssq-hooks/main.go) POSTs to /api/hooks/pi-extension-loaded, both at
+// extension-load time and on every periodic re-ping (Story 4.2.3). Cwd is the
+// only field: the ping fires before any tool_call handler runs, so there is no
+// event/ctx object carrying a session ID the way HandlePermissionRequest's
+// payload does — cwd-prefix matching (the same fallback resolveSessionID
+// already uses for a missing/unmatched X-CS-Session-ID header) is the only
+// session-identifying signal available at that point.
+type piExtensionHealthPingPayload struct {
+	Cwd string `json:"cwd"`
+}
+
+// HandlePiExtensionLoaded records one pi approval-extension health ping
+// (pi-support Epic 4.2). The ping is best-effort and fire-and-forget from the
+// extension's side (see ssqApprovalExtensionTemplate's doc comment) — this
+// handler always responds 200 regardless of whether the session could be
+// resolved or the tracker recorded anything, so a malformed/unresolvable ping
+// never surfaces as an error to the extension.
+func (h *ApprovalHandler) HandlePiExtensionLoaded(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var payload piExtensionHealthPingPayload
+	_ = json.NewDecoder(r.Body).Decode(&payload) // best-effort; a malformed body still gets a 200
+
+	if h.piHealthTracker != nil {
+		sessionID := h.resolveSessionID(r.Header.Get("X-CS-Session-ID"), payload.Cwd)
+		if sessionID != "" {
+			h.piHealthTracker.RecordPing(sessionID)
+		}
+	}
+
+	w.WriteHeader(http.StatusOK)
 }
 
 // resolveSessionName returns the human-readable title for sessionID using the
