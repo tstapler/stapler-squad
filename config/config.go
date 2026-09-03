@@ -168,7 +168,7 @@ func GetConfigDirForDir(dir string) (string, error) {
 	// Priority 1: Test directory override (from --test-mode flag)
 	if testDir := os.Getenv("STAPLER_SQUAD_TEST_DIR"); testDir != "" {
 		// Create the test directory if it doesn't exist
-		if err := os.MkdirAll(testDir, 0755); err != nil {
+		if err := os.MkdirAll(testDir, 0750); err != nil {
 			return "", fmt.Errorf("failed to create test directory: %w", err)
 		}
 		return testDir, nil
@@ -1204,7 +1204,7 @@ func saveConfig(config *Config, paths ...string) error {
 		if err != nil {
 			return fmt.Errorf("failed to get config directory: %w", err)
 		}
-		if err := os.MkdirAll(configDir, 0755); err != nil {
+		if err := os.MkdirAll(configDir, 0750); err != nil {
 			return fmt.Errorf("failed to create config directory: %w", err)
 		}
 		configPath = filepath.Join(configDir, ConfigFileName)
@@ -1272,6 +1272,8 @@ func SaveConfig(config *Config) error {
 // LoadConfigFromPath loads and parses a config file from an explicit path.
 // Returns the config and any error encountered.
 func LoadConfigFromPath(path string) (*Config, error) {
+	// #nosec G304 -- all callers pass paths built from config.GetConfigDir() plus a
+	// fixed "config.json" filename, not caller/user-controlled input.
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err

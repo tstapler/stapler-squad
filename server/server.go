@@ -1048,6 +1048,17 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 			"idle_timeout_minutes", cfg.Hibernation.IdleTimeoutMinutes)
 	}
 
+	// Start orphaned-tmux sweeper (periodic counterpart to the one-time startup
+	// orphan sweep in BuildRuntimeDeps step 6d — see OrphanedTmuxSweeper doc comment).
+	// Guarded the same way as the startup call: skip entirely for an isolated
+	// instance (OrphanedTmuxSweeper.Start re-checks this itself; ReviewQueuePoller
+	// nil-check here just avoids starting a sweeper that could never sweep).
+	if deps.ReviewQueuePoller != nil {
+		orphanSweeper := session.NewOrphanedTmuxSweeper()
+		orphanSweeper.SetLiveProvider(deps.ReviewQueuePoller)
+		go orphanSweeper.Start(serverCtx)
+	}
+
 	// Start session retention sweeper (deletes archived sessions past the retention
 	// window once they pass safety checks — see SessionRetentionSweeper doc comment).
 	if cfg.SessionRetention.EnabledOrDefault() {

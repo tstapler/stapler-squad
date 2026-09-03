@@ -209,9 +209,14 @@ func stopControllerLocked(s *instanceState) {
 }
 
 // GetController returns the ClaudeController if one exists.
+//
+// Deliberately does not take i.mu: controllerManager stores the controller in an
+// atomic.Pointer specifically so reads never need to serialize with the mutex-guarded
+// Register/Unregister paths (StartController/StopController) — see ControllerManager's
+// doc comment. Profiling on 2026-09-02 showed StopController's i.mu.Lock() blocking a
+// large fraction of concurrent GetController callers (status polling, streaming) even
+// though GetController never touched any i.mu-protected field.
 func (i *Instance) GetController() *ClaudeController {
-	i.mu.RLock()
-	defer i.mu.RUnlock()
 	return i.controllerManager.GetController()
 }
 

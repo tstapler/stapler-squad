@@ -23,16 +23,20 @@ import (
 // If upToSeq exceeds the maximum sequence in src, all entries are copied.
 func ForkScrollback(srcPath string, upToSeq uint64, dstPath string) error {
 	// Ensure destination directory exists.
-	if err := os.MkdirAll(filepath.Dir(dstPath), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(dstPath), 0750); err != nil {
 		return fmt.Errorf("fork scrollback: create dst dir: %w", err)
 	}
 
 	// Open source (handle missing gracefully — create empty dst).
-	srcFile, err := os.Open(srcPath)
+	// srcPath/dstPath are caller-constructed from session titles; the only
+	// caller (Instance.ForkFromCheckpoint, session/instance_checkpoint.go)
+	// verifies both stay under the trusted config directory via
+	// isPathUnderDir before ever calling this function.
+	srcFile, err := os.Open(srcPath) // #nosec G304 -- caller validates containment under configDir before calling (see ForkFromCheckpoint)
 	if err != nil {
 		if os.IsNotExist(err) {
 			// Create an empty destination file.
-			f, createErr := os.OpenFile(dstPath, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0600)
+			f, createErr := os.OpenFile(dstPath, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0600) // #nosec G304 -- caller validates containment under configDir before calling (see ForkFromCheckpoint)
 			if createErr != nil {
 				return fmt.Errorf("fork scrollback: create empty dst: %w", createErr)
 			}

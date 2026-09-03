@@ -248,6 +248,8 @@ func (s *ClaudeOAuthCredentialSource) Resolve(_ context.Context, provider string
 	}
 
 	path := filepath.Join(home, ".claude", ".credentials.json")
+	// #nosec G304 -- path is home dir (os.UserHomeDir, or a test-only override) plus a
+	// literal well-known suffix; never derived from network/RPC input.
 	data, err := os.ReadFile(path)
 	if os.IsNotExist(err) {
 		return Credential{}, false, nil // not installed / not logged in
@@ -344,6 +346,8 @@ func (s *AgyCredentialSource) Resolve(_ context.Context, provider string) (Crede
 }
 
 func (s *AgyCredentialSource) resolveAgyOAuth(path string) (Credential, bool, error) {
+	// #nosec G304 -- path is always agyPath from Resolve() above: home dir plus a literal
+	// well-known suffix, never derived from network/RPC input.
 	data, err := os.ReadFile(path)
 	if os.IsNotExist(err) {
 		return Credential{}, false, nil
@@ -376,6 +380,8 @@ func (s *AgyCredentialSource) resolveAgyOAuth(path string) (Credential, bool, er
 }
 
 func (s *AgyCredentialSource) resolveGcloudADC(path string) (Credential, bool, error) {
+	// #nosec G304 -- path is always adcPath from Resolve() above: home dir plus a literal
+	// well-known suffix, never derived from network/RPC input.
 	data, err := os.ReadFile(path)
 	if os.IsNotExist(err) {
 		return Credential{}, false, nil

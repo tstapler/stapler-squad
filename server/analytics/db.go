@@ -23,7 +23,7 @@ import (
 // SQLite's single-writer semantics and avoid "database is locked" errors.
 // The caller is responsible for calling client.Close() on shutdown.
 func OpenAnalyticsDB(ctx context.Context, dataDir string) (*ent.Client, error) {
-	if err := os.MkdirAll(dataDir, 0755); err != nil {
+	if err := os.MkdirAll(dataDir, 0750); err != nil {
 		return nil, fmt.Errorf("analytics db: create data dir: %w", err)
 	}
 

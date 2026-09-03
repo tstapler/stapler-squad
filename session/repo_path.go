@@ -10,12 +10,12 @@ import (
 	"sync"
 	"time"
 
-	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
 
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/log"
+	gitutil "github.com/tstapler/stapler-squad/session/git"
 )
 
 const detectWorktreeCacheTTL = 5 * time.Minute
@@ -269,7 +269,7 @@ func sanitizeCloneOutput(output []byte, cloneURL string) string {
 // take over).
 // Uses go-git per the `prefer-go-git-over-subshells` skill.
 func isCorruptedClone(repoPath string) bool {
-	repo, err := git.PlainOpen(repoPath)
+	repo, err := gitutil.OpenRepo(repoPath)
 	if err != nil {
 		return true
 	}
@@ -330,7 +330,7 @@ func RepairCorruptedGitRepo(repoPath string) error {
 // HEAD may be unresolvable — repo.Remote reads only .git/config, so this works
 // even when isCorruptedClone(repoPath) is true.
 func readOriginRemoteURL(repoPath string) (string, error) {
-	repo, err := git.PlainOpen(repoPath)
+	repo, err := gitutil.OpenRepo(repoPath)
 	if err != nil {
 		return "", fmt.Errorf("failed to open repo: %w", err)
 	}
@@ -393,7 +393,7 @@ func (m *RepoPathManager) EnsureRepoCloned(ctx context.Context, ref *GitHubRef) 
 
 	// Create parent directory
 	parentDir := filepath.Dir(repoPath)
-	if err := os.MkdirAll(parentDir, 0755); err != nil {
+	if err := os.MkdirAll(parentDir, 0750); err != nil {
 		return "", fmt.Errorf("failed to create directory %s: %w", parentDir, err)
 	}
 
@@ -559,7 +559,7 @@ func detectWorktreeUncached(path string) (*WorktreeInfo, error) {
 		info.IsWorktree = true
 
 		// Read the .git file to get the gitdir path
-		content, err := os.ReadFile(gitPath)
+		content, err := os.ReadFile(gitPath) // #nosec G304 -- gitPath is <path>/.git where path is the caller-chosen working directory itself (session's own repo/worktree path), the deliberate target of the operation, not an untrusted component joined onto a base the caller shouldn't control
 		if err != nil {
 			return info, fmt.Errorf("failed to read .git file: %w", err)
 		}

@@ -92,6 +92,15 @@ full-suite runs must not reproduce the `TempDir RemoveAll cleanup` failure for t
 
 ## Related
 
+- **2026-09-02 sighting**: the identical `TempDir RemoveAll cleanup: unlinkat ... directory not empty`
+  symptom recurred on a *different* test, `TestCreateSession_Autonomous_ExplicitPath_DoesNotGenerateScratchDir`
+  (`server/services`), during a full `./session/... ./server/services/...` run — passed 3/3 in isolation
+  immediately after. Confirms this failure family isn't specific to
+  `TestNewSessionService_ClaudeSettingsWatcherWiredAndReachable`'s construction path; it's a broader
+  "something outlives test teardown and still touches the TempDir" gap, strengthening the case for
+  root-causing the shared mechanism (whatever `Shutdown()`/cleanup fails to join) rather than patching
+  per-test. Observed while verifying an unrelated perf-fix branch's test suite; not investigated further
+  here (out of scope for that work).
 - `.claude/rules/fix-flaky-tests-dont-defer.md` — this repo's standing rule against re-excusing a known
   flake without root-causing or filing it; this bug is that filing for the instance discovered during
   the `async-session-creation` spec-compliance sweep.
