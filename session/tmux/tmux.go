@@ -2398,13 +2398,15 @@ func (t *TmuxSession) SetDetachedSize(width, height int) error {
 	return t.updateWindowSize(width, height)
 }
 
-// clampWinsizeDim clamps a terminal dimension (columns or rows) coming from
+// ClampWinsizeDim clamps a terminal dimension (columns or rows) coming from
 // a resize request (ultimately client-controlled, e.g. a browser's terminal
 // widget) to the range representable by pty.Winsize's uint16 fields
 // ([1, 65535]) before the narrowing int->uint16 conversion, so an
 // out-of-range or negative value can't silently wrap around into a bogus
-// terminal size.
-func clampWinsizeDim(v int) uint16 {
+// terminal size. Exported so session/instance_tmux.go and
+// session/native_process_manager.go (which build pty.Winsize themselves,
+// outside this package) share one implementation instead of duplicating it.
+func ClampWinsizeDim(v int) uint16 {
 	switch {
 	case v < 1:
 		return 1
@@ -2439,8 +2441,8 @@ func (t *TmuxSession) updateWindowSize(cols, rows int) error {
 	}
 
 	return pty.Setsize(file, &pty.Winsize{
-		Rows: clampWinsizeDim(rows),
-		Cols: clampWinsizeDim(cols),
+		Rows: ClampWinsizeDim(rows),
+		Cols: ClampWinsizeDim(cols),
 		X:    0,
 		Y:    0,
 	})
@@ -2465,8 +2467,8 @@ func (t *TmuxSession) SetWindowSize(cols, rows int) error {
 			"resize-window", "-t", t.sanitizedName, "-x", colsStr, "-y", rowsStr); cmErr == nil {
 			// Store requested dimensions for future PTY attach connections (via attach-session -x/-y).
 			// Widened from the already-clamped uint16 dimension, so this always fits int32.
-			t.lastKnownCols.Store(int32(clampWinsizeDim(cols)))
-			t.lastKnownRows.Store(int32(clampWinsizeDim(rows)))
+			t.lastKnownCols.Store(int32(ClampWinsizeDim(cols)))
+			t.lastKnownRows.Store(int32(ClampWinsizeDim(rows)))
 			return nil
 		} else {
 			log.Debug("SetWindowSize CM path failed, falling back", "session", t.sanitizedName, "err", cmErr)
@@ -2498,8 +2500,8 @@ func (t *TmuxSession) SetWindowSize(cols, rows int) error {
 
 	// Store requested dimensions for future PTY attach connections (via attach-session -x/-y).
 	// Widened from the already-clamped uint16 dimension, so this always fits int32.
-	t.lastKnownCols.Store(int32(clampWinsizeDim(cols)))
-	t.lastKnownRows.Store(int32(clampWinsizeDim(rows)))
+	t.lastKnownCols.Store(int32(ClampWinsizeDim(cols)))
+	t.lastKnownRows.Store(int32(ClampWinsizeDim(rows)))
 	return nil
 }
 

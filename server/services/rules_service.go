@@ -261,12 +261,12 @@ func (rs *RulesService) GetApprovalAnalytics(
 		// tool-call volume, nowhere near int32 overflow.
 		protoResp.DailyBuckets = append(protoResp.DailyBuckets, &sessionv1.DailyBucketProto{
 			Date:        b.Date,
-			AutoAllow:   int32(b.AutoAllow),   // #nosec G115
-			AutoDeny:    int32(b.AutoDeny),    // #nosec G115
-			Escalate:    int32(b.Escalate),    // #nosec G115
-			ManualAllow: int32(b.ManualAllow), // #nosec G115
-			ManualDeny:  int32(b.ManualDeny),  // #nosec G115
-			Total:       int32(b.Total),       // #nosec G115
+			AutoAllow:   int32(b.AutoAllow),   // #nosec G115 -- rule-decision/analytics count, bounded by realistic session/command volume for a local dev tool, never attacker-inflated
+			AutoDeny:    int32(b.AutoDeny),    // #nosec G115 -- rule-decision/analytics count, bounded by realistic session/command volume for a local dev tool, never attacker-inflated
+			Escalate:    int32(b.Escalate),    // #nosec G115 -- rule-decision/analytics count, bounded by realistic session/command volume for a local dev tool, never attacker-inflated
+			ManualAllow: int32(b.ManualAllow), // #nosec G115 -- rule-decision/analytics count, bounded by realistic session/command volume for a local dev tool, never attacker-inflated
+			ManualDeny:  int32(b.ManualDeny),  // #nosec G115 -- rule-decision/analytics count, bounded by realistic session/command volume for a local dev tool, never attacker-inflated
+			Total:       int32(b.Total),       // #nosec G115 -- rule-decision/analytics count, bounded by realistic session/command volume for a local dev tool, never attacker-inflated
 		})
 	}
 	return connect.NewResponse(protoResp), nil
@@ -364,12 +364,12 @@ func (rs *RulesService) GetProgramAnalytics(
 		// local analytics decision log, bounded by realistic single-user volume.
 		trendProtos = append(trendProtos, &sessionv1.DailyBucketProto{
 			Date:        b.Date,
-			AutoAllow:   int32(b.AutoAllow),   // #nosec G115
-			AutoDeny:    int32(b.AutoDeny),    // #nosec G115
-			Escalate:    int32(b.Escalate),    // #nosec G115
-			ManualAllow: int32(b.ManualAllow), // #nosec G115
-			ManualDeny:  int32(b.ManualDeny),  // #nosec G115
-			Total:       int32(b.Total),       // #nosec G115
+			AutoAllow:   int32(b.AutoAllow),   // #nosec G115 -- rule-decision/analytics count, bounded by realistic session/command volume for a local dev tool, never attacker-inflated
+			AutoDeny:    int32(b.AutoDeny),    // #nosec G115 -- rule-decision/analytics count, bounded by realistic session/command volume for a local dev tool, never attacker-inflated
+			Escalate:    int32(b.Escalate),    // #nosec G115 -- rule-decision/analytics count, bounded by realistic session/command volume for a local dev tool, never attacker-inflated
+			ManualAllow: int32(b.ManualAllow), // #nosec G115 -- rule-decision/analytics count, bounded by realistic session/command volume for a local dev tool, never attacker-inflated
+			ManualDeny:  int32(b.ManualDeny),  // #nosec G115 -- rule-decision/analytics count, bounded by realistic session/command volume for a local dev tool, never attacker-inflated
+			Total:       int32(b.Total),       // #nosec G115 -- rule-decision/analytics count, bounded by realistic session/command volume for a local dev tool, never attacker-inflated
 		})
 	}
 
@@ -627,49 +627,49 @@ func ruleToSpec(r classifier.Rule) RuleSpec {
 // realistic single-user decision-log volume, nowhere near int32 overflow.
 func summaryToProto(s AnalyticsSummary) *sessionv1.AnalyticsSummaryProto {
 	p := &sessionv1.AnalyticsSummaryProto{
-		TotalDecisions:   int32(s.TotalDecisions), // #nosec G115
+		TotalDecisions:   int32(s.TotalDecisions), // #nosec G115 -- rule-decision/analytics count, bounded by realistic session/command volume for a local dev tool, never attacker-inflated
 		DecisionCounts:   make(map[string]int32, len(s.DecisionCounts)),
 		AutoApproveRate:  s.AutoApproveRate,
 		ManualReviewRate: s.ManualReviewRate,
 	}
 	for k, v := range s.DecisionCounts {
-		p.DecisionCounts[k] = int32(v) // #nosec G115
+		p.DecisionCounts[k] = int32(v) // #nosec G115 -- rule-decision/analytics count, bounded by realistic session/command volume for a local dev tool, never attacker-inflated
 	}
 	for _, t := range s.TopTools {
-		p.TopTools = append(p.TopTools, &sessionv1.ToolStatProto{ToolName: t.ToolName, Count: int32(t.Count)}) // #nosec G115
+		p.TopTools = append(p.TopTools, &sessionv1.ToolStatProto{ToolName: t.ToolName, Count: int32(t.Count)}) // #nosec G115 -- rule-decision/analytics count, bounded by realistic session/command volume for a local dev tool, never attacker-inflated
 	}
 	for _, c := range s.TopDeniedCommands {
-		p.TopDeniedCommands = append(p.TopDeniedCommands, &sessionv1.CommandStatProto{Preview: c.Preview, ToolName: c.ToolName, Count: int32(c.Count)}) // #nosec G115
+		p.TopDeniedCommands = append(p.TopDeniedCommands, &sessionv1.CommandStatProto{Preview: c.Preview, ToolName: c.ToolName, Count: int32(c.Count)}) // #nosec G115 -- rule-decision/analytics count, bounded by realistic session/command volume for a local dev tool, never attacker-inflated
 	}
 	for _, r := range s.TopTriggeredRules {
-		p.TopTriggeredRules = append(p.TopTriggeredRules, &sessionv1.RuleStatProto{RuleId: r.RuleID, RuleName: r.RuleName, Count: int32(r.Count)}) // #nosec G115
+		p.TopTriggeredRules = append(p.TopTriggeredRules, &sessionv1.RuleStatProto{RuleId: r.RuleID, RuleName: r.RuleName, Count: int32(r.Count)}) // #nosec G115 -- rule-decision/analytics count, bounded by realistic session/command volume for a local dev tool, never attacker-inflated
 	}
 	for _, prog := range s.TopCommandPrograms {
 		p.TopCommandPrograms = append(p.TopCommandPrograms, &sessionv1.ProgramStatProto{
 			ProgramName: prog.Program,
 			Category:    prog.Category,
-			Count:       int32(prog.Count), // #nosec G115
+			Count:       int32(prog.Count), // #nosec G115 -- rule-decision/analytics count, bounded by realistic session/command volume for a local dev tool, never attacker-inflated
 		})
 	}
 	for _, imp := range s.TopPythonImports {
 		p.TopPythonImports = append(p.TopPythonImports, &sessionv1.ImportStatProto{
 			Module: imp.Module,
-			Count:  int32(imp.Count), // #nosec G115
+			Count:  int32(imp.Count), // #nosec G115 -- rule-decision/analytics count, bounded by realistic session/command volume for a local dev tool, never attacker-inflated
 		})
 	}
-	p.CoverageGapCount = int32(s.CoverageGapCount) // #nosec G115
+	p.CoverageGapCount = int32(s.CoverageGapCount) // #nosec G115 -- rule-decision/analytics count, bounded by realistic session/command volume for a local dev tool, never attacker-inflated
 	p.CoverageGapRate = s.CoverageGapRate
 	for _, t := range s.TopUncoveredTools {
 		p.TopUncoveredTools = append(p.TopUncoveredTools, &sessionv1.ToolStatProto{
 			ToolName: t.ToolName,
-			Count:    int32(t.Count), // #nosec G115
+			Count:    int32(t.Count), // #nosec G115 -- rule-decision/analytics count, bounded by realistic session/command volume for a local dev tool, never attacker-inflated
 		})
 	}
 	for _, prog := range s.TopUncoveredPrograms {
 		p.TopUncoveredPrograms = append(p.TopUncoveredPrograms, &sessionv1.ProgramStatProto{
 			ProgramName: prog.Program,
 			Category:    prog.Category,
-			Count:       int32(prog.Count), // #nosec G115
+			Count:       int32(prog.Count), // #nosec G115 -- rule-decision/analytics count, bounded by realistic session/command volume for a local dev tool, never attacker-inflated
 		})
 	}
 	for _, s := range s.CommandSubcommandStats {
@@ -677,16 +677,16 @@ func summaryToProto(s AnalyticsSummary) *sessionv1.AnalyticsSummaryProto {
 			ProgramName: s.Program,
 			Subcommand:  s.Subcommand,
 			Category:    s.Category,
-			Count:       int32(s.Count), // #nosec G115
+			Count:       int32(s.Count), // #nosec G115 -- rule-decision/analytics count, bounded by realistic session/command volume for a local dev tool, never attacker-inflated
 		})
 	}
 	p.EscalationReasonCounts = make(map[string]int32, len(s.EscalationReasonCounts))
 	for k, v := range s.EscalationReasonCounts {
-		p.EscalationReasonCounts[k] = int32(v) // #nosec G115
+		p.EscalationReasonCounts[k] = int32(v) // #nosec G115 -- rule-decision/analytics count, bounded by realistic session/command volume for a local dev tool, never attacker-inflated
 	}
 	p.RiskLevelCounts = make(map[string]int32, len(s.RiskLevelCounts))
 	for k, v := range s.RiskLevelCounts {
-		p.RiskLevelCounts[k] = int32(v) // #nosec G115
+		p.RiskLevelCounts[k] = int32(v) // #nosec G115 -- rule-decision/analytics count, bounded by realistic session/command volume for a local dev tool, never attacker-inflated
 	}
 	if !s.WindowStart.IsZero() {
 		p.WindowStart = timestamppb.New(s.WindowStart)

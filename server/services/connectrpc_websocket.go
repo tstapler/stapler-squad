@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"net/http"
 	"net/url"
 	"os"
@@ -66,10 +67,20 @@ func marshalProtoEnvelope(stream *connectWebSocketStream, flags byte, msg proto.
 		return err
 	}
 	buf[0] = flags
-	// #nosec G115 -- ConnectRPC/gRPC-Web wire framing mandates a 4-byte length
-	// prefix by protocol spec; marshaled TerminalData/session-event frames are
-	// terminal output chunks and control messages, far below the 4GiB uint32 range.
-	binary.BigEndian.PutUint32(buf[1:5], uint32(len(buf)-5))
+	frameLen := len(buf) - 5
+	if frameLen > math.MaxUint32 {
+		// Mirrors server/protocol/envelope.go's CreateEnvelope: in practice
+		// unreachable (no marshaled TerminalData/session-event frame this
+		// server produces approaches 4 GiB), but truncating the length
+		// header here would desync the receiver's framing, so fail loudly
+		// via this function's existing error return rather than silently
+		// corrupt the wire protocol.
+		*bp = buf[:0]
+		envelopeBufPool.Put(bp)
+		return fmt.Errorf("marshalProtoEnvelope: frame too large to encode: %d bytes", frameLen)
+	}
+	// #nosec G115 -- bounds-checked above: the frameLen > math.MaxUint32 guard guarantees this fits in uint32
+	binary.BigEndian.PutUint32(buf[1:5], uint32(frameLen))
 	wsErr := stream.WriteMessage(websocket.BinaryMessage, buf)
 	*bp = buf[:0]
 	envelopeBufPool.Put(bp)

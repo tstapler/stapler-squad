@@ -534,3 +534,55 @@ func TestDeleteRemote_NeitherConfigNorIdentityExists_ReturnsNotFound(t *testing.
 	require.Error(t, err)
 	require.Equal(t, connect.CodeNotFound, connect.CodeOf(err))
 }
+
+// TestSplitHostPort covers the gosec G115 fix in splitHostPort: an
+// out-of-range parsed port number (negative, or above the 16-bit TCP port
+// ceiling) must fall back the same way a parse error does -- (host, 0) --
+// rather than being narrowed into int32 with wraparound/sign-flip.
+func TestSplitHostPort(t *testing.T) {
+	tests := []struct {
+		name     string
+		host     string
+		wantHost string
+		wantPort int32
+	}{
+		{
+			name:     "valid port",
+			host:     "example.com:2222",
+			wantHost: "example.com",
+			wantPort: 2222,
+		},
+		{
+			name:     "negative port falls back to zero",
+			host:     "example.com:-1",
+			wantHost: "example.com:-1",
+			wantPort: 0,
+		},
+		{
+			name:     "port above 65535 falls back to zero",
+			host:     "example.com:70000",
+			wantHost: "example.com:70000",
+			wantPort: 0,
+		},
+		{
+			name:     "port exactly at 65535 boundary is accepted",
+			host:     "example.com:65535",
+			wantHost: "example.com",
+			wantPort: 65535,
+		},
+		{
+			name:     "no port at all falls back to zero",
+			host:     "example.com",
+			wantHost: "example.com",
+			wantPort: 0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotHost, gotPort := splitHostPort(tt.host)
+			require.Equal(t, tt.wantHost, gotHost)
+			require.Equal(t, tt.wantPort, gotPort)
+		})
+	}
+}

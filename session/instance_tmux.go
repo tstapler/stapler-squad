@@ -6,7 +6,6 @@ package session
 import (
 	"context"
 	"fmt"
-	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -19,23 +18,6 @@ import (
 	"github.com/tstapler/stapler-squad/session/streamhub"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
-
-// clampWinsizeDim clamps a terminal dimension (columns or rows) coming from
-// a resize request (ultimately client-controlled, e.g. a browser's terminal
-// widget) to the range representable by pty.Winsize's uint16 fields
-// ([1, 65535]) before the narrowing int->uint16 conversion, so an
-// out-of-range or negative value can't silently wrap around into a bogus
-// terminal size.
-func clampWinsizeDim(v int) uint16 {
-	switch {
-	case v < 1:
-		return 1
-	case v > math.MaxUint16:
-		return math.MaxUint16
-	default:
-		return uint16(v)
-	}
-}
 
 // maxInlinePromptBytes bounds how large i.Prompt can be before it is embedded
 // directly (shell-quoted) into the tmux new-session command string, versus
@@ -682,7 +664,7 @@ func (i *Instance) GetPTYSession(ctx context.Context, cols, rows int) (tmux.PtyS
 	// sensitive to a stale/absent $TERM (it renders the pane directly,
 	// unlike control mode's structured text protocol).
 	runName, runArgs := tmux.WrapRemoteCommand(tmux.Binary(), tmuxSession.AttachArgs())
-	ws := &ptyPkg.Winsize{Rows: clampWinsizeDim(rows), Cols: clampWinsizeDim(cols)}
+	ws := &ptyPkg.Winsize{Rows: tmux.ClampWinsizeDim(rows), Cols: tmux.ClampWinsizeDim(cols)}
 	return factory.StartPty(ctx, ws, "", runName, runArgs...)
 }
 
@@ -697,8 +679,8 @@ type localPTYSession struct {
 
 func (l *localPTYSession) Resize(cols, rows int) error {
 	return ptyPkg.Setsize(l.File, &ptyPkg.Winsize{
-		Rows: clampWinsizeDim(rows),
-		Cols: clampWinsizeDim(cols),
+		Rows: tmux.ClampWinsizeDim(rows),
+		Cols: tmux.ClampWinsizeDim(cols),
 	})
 }
 

@@ -903,6 +903,67 @@ func TestValidateRules_DefaultPriority(t *testing.T) {
 	assert.Equal(t, int32(5), resp.Msg.Results[1].Rule.Priority)
 }
 
+// ── Priority out-of-range (gosec G115 fix) ─────────────────────────────────────
+
+func TestValidateRules_PriorityOutOfRange_Rejected(t *testing.T) {
+	t.Parallel()
+	svc := newSimpleRulesService(t)
+	yaml := `rules:
+- name: Priority overflow
+  tool: Bash
+  decision: allow
+  priority: 2147483648
+`
+	resp, err := svc.ValidateRules(context.Background(), connect.NewRequest(&sessionv1.ValidateRulesRequest{
+		YamlContent: yaml,
+	}))
+	require.NoError(t, err)
+	assert.Equal(t, int32(0), resp.Msg.ValidCount)
+	assert.Equal(t, int32(1), resp.Msg.ErrorCount)
+	assert.False(t, resp.Msg.Results[0].Valid)
+	assert.Contains(t, resp.Msg.Results[0].Errors[0], "priority")
+	assert.Contains(t, resp.Msg.Results[0].Errors[0], "out of range")
+}
+
+func TestValidateRules_PriorityNegative_Rejected(t *testing.T) {
+	t.Parallel()
+	svc := newSimpleRulesService(t)
+	yaml := `rules:
+- name: Negative priority
+  tool: Bash
+  decision: allow
+  priority: -1
+`
+	resp, err := svc.ValidateRules(context.Background(), connect.NewRequest(&sessionv1.ValidateRulesRequest{
+		YamlContent: yaml,
+	}))
+	require.NoError(t, err)
+	assert.Equal(t, int32(0), resp.Msg.ValidCount)
+	assert.Equal(t, int32(1), resp.Msg.ErrorCount)
+	assert.False(t, resp.Msg.Results[0].Valid)
+	assert.Contains(t, resp.Msg.Results[0].Errors[0], "priority")
+	assert.Contains(t, resp.Msg.Results[0].Errors[0], "out of range")
+}
+
+func TestValidateRules_PriorityAtMaxInt32_Accepted(t *testing.T) {
+	t.Parallel()
+	svc := newSimpleRulesService(t)
+	yaml := `rules:
+- name: Priority at boundary
+  tool: Bash
+  decision: allow
+  priority: 2147483647
+`
+	resp, err := svc.ValidateRules(context.Background(), connect.NewRequest(&sessionv1.ValidateRulesRequest{
+		YamlContent: yaml,
+	}))
+	require.NoError(t, err)
+	assert.Equal(t, int32(1), resp.Msg.ValidCount)
+	assert.Equal(t, int32(0), resp.Msg.ErrorCount)
+	require.True(t, resp.Msg.Results[0].Valid)
+	assert.Equal(t, int32(2147483647), resp.Msg.Results[0].Rule.Priority)
+}
+
 // ── UT-BE-13: Default enabled ─────────────────────────────────────────────────
 
 func TestValidateRules_DefaultEnabled(t *testing.T) {

@@ -14,6 +14,7 @@ import (
 	"github.com/creack/pty"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
 // NativeProcessManager implements ProcessManager using a raw PTY and process supervision.
@@ -295,7 +296,7 @@ func (n *NativeProcessManager) SendInputViaControlMode(_ context.Context, data [
 func (n *NativeProcessManager) SetWindowSize(cols, rows int) error {
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	size := &pty.Winsize{Rows: clampWinsizeDim(rows), Cols: clampWinsizeDim(cols)}
+	size := &pty.Winsize{Rows: tmux.ClampWinsizeDim(rows), Cols: tmux.ClampWinsizeDim(cols)}
 	n.lastSize = size
 	if n.ptm == nil {
 		return nil // Store size for application on next Start().

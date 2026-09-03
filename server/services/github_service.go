@@ -118,9 +118,11 @@ func (gs *GitHubService) GetPRComments(
 	protoComments := make([]*sessionv1.PRComment, 0, len(comments))
 	for _, comment := range comments {
 		protoComment := &sessionv1.PRComment{
-			// #nosec G115 -- comment.ID is a GitHub comment ID (gh CLI JSON),
-			// far below int32 range for the foreseeable future.
-			Id:        int32(comment.ID),
+			// GitHub comment IDs already exceed int32 range in practice
+			// (observed values over 5 billion as of 2026-09) -- PRComment.id
+			// is int64 in the proto for exactly this reason, so no G115
+			// conversion happens here.
+			Id:        int64(comment.ID),
 			Author:    comment.Author,
 			Body:      comment.Body,
 			CreatedAt: timestamppb.New(comment.CreatedAt),

@@ -28,10 +28,10 @@ func sourceSyncEventToProto(ev session.SourceSyncEventData) *sessionv1.SourceSyn
 	p := &sessionv1.SourceSyncEvent{
 		Id:           ev.ID,
 		StartedAt:    timestamppb.New(ev.StartedAt),
-		ItemsCreated: int32(ev.ItemsCreated), // #nosec G115
-		ItemsUpdated: int32(ev.ItemsUpdated), // #nosec G115
-		ItemsSkipped: int32(ev.ItemsSkipped), // #nosec G115
-		ItemsErrored: int32(ev.ItemsErrored), // #nosec G115
+		ItemsCreated: int32(ev.ItemsCreated), // #nosec G115 -- GitHub sync item count for one sync operation, bounded by realistic repo/backlog scale, never attacker-inflated
+		ItemsUpdated: int32(ev.ItemsUpdated), // #nosec G115 -- GitHub sync item count for one sync operation, bounded by realistic repo/backlog scale, never attacker-inflated
+		ItemsSkipped: int32(ev.ItemsSkipped), // #nosec G115 -- GitHub sync item count for one sync operation, bounded by realistic repo/backlog scale, never attacker-inflated
+		ItemsErrored: int32(ev.ItemsErrored), // #nosec G115 -- GitHub sync item count for one sync operation, bounded by realistic repo/backlog scale, never attacker-inflated
 		ErrorMessage: ev.ErrorMessage,
 	}
 	if ev.FinishedAt != nil {
