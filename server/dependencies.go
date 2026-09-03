@@ -632,6 +632,31 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		log.Warn("pipelineEngine unavailable: storage is not ent-backed; continuing with the default pipeline for all backlog items")
 	}
 
+	// LivenessEngine resolves a backlog stage's stuck-detection threshold
+	// (Epic 1.3 of backlog-custom-workflow-stages). Same non-fatal-fallback
+	// posture as pipelineEngine immediately above: construction never aborts
+	// boot, and a nil livenessEngine/livenessRepo (non-ent-backed storage, or
+	// construction failure) makes every consumer fall back to
+	// DefaultLivenessEngine's hardcoded constants — behavior identical to
+	// pre-Epic-1.3 today. livenessRepo is wired into BacklogService via a
+	// post-construction setter (SetLivenessRepository/SetLivenessEngine
+	// below, near backlogSvc's construction) rather than as a
+	// NewBacklogService constructor parameter, to avoid touching every
+	// existing NewBacklogService test call site for a dependency this epic
+	// introduces.
+	var livenessRepo session.LivenessRepository
+	var livenessEngine session.LivenessEngine
+	if entClient := storage.GetEntClient(); entClient != nil {
+		livenessRepo = session.NewEntLivenessRepository(entClient)
+		if cachingLivenessEngine, err := session.NewCachingLivenessEngine(livenessRepo); err != nil {
+			log.Warn("livenessEngine construction failed; continuing with DefaultLivenessEngine's built-in thresholds", "err", err)
+		} else {
+			livenessEngine = cachingLivenessEngine
+		}
+	} else {
+		log.Warn("livenessEngine unavailable: storage is not ent-backed; continuing with DefaultLivenessEngine's built-in thresholds")
+	}
+
 	// Construct the headless LLM pool early so the lifecycle listener can receive it
 	// via constructor (eliminating the post-construction wiring race). Non-fatal if
 	// the claude binary is not found.
@@ -1191,6 +1216,8 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	}()
 
 	backlogSvc := services.NewBacklogService(storage, sessionService, cfg, workflowEngine, pipelineEngine, pipelineModeRepo)
+	backlogSvc.SetLivenessRepository(livenessRepo)
+	backlogSvc.SetLivenessEngine(livenessEngine)
 	backlogSvc.SetEventBus(eventBus)
 	backlogSvc.SetSessionStopper(sessionService)
 	backlogSvc.SetSessionSteerer(sessionService)

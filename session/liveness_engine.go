@@ -1,8 +1,11 @@
 package session
 
 import (
+	"context"
 	"fmt"
 	"time"
+
+	"github.com/tstapler/stapler-squad/log"
 )
 
 // LivenessEngine resolves the LivenessDefinition (session/liveness_definition.go,
@@ -144,4 +147,65 @@ func (e *DefaultLivenessEngine) LivenessFor(stage BacklogStatus, _ PipelineMode)
 		return def, nil
 	}
 	return NoTimeoutLiveness, nil
+}
+
+// CachingLivenessEngine is the DB-backed LivenessEngine implementation
+// (Epic 1.3) backed by a LivenessRepository + livenessCache. It resolves a
+// (stage, mode) pair through a two-level fallback:
+//
+//  1. An exact (stage, mode) row, if configured.
+//  2. A mode-less (stage, nil) override row, if configured — resolved by
+//     livenessCache.Get, the single owner of this fallback (see that type's
+//     doc comment). Not a failure: no Warn is logged.
+//  3. embeddedDefault (a DefaultLivenessEngine), when neither row exists —
+//     this IS the failure case this project's fail-closed posture requires
+//     logging: exactly one Warn line is emitted here, naming the
+//     unresolved stage and mode, before delegating.
+type CachingLivenessEngine struct {
+	repo            LivenessRepository
+	cache           *livenessCache
+	embeddedDefault *DefaultLivenessEngine
+}
+
+var _ LivenessEngine = (*CachingLivenessEngine)(nil)
+
+// NewCachingLivenessEngine constructs a CachingLivenessEngine backed by repo,
+// doing one synchronous cache.Load at construction time.
+//
+// Mirrors NewPipelineEngine's non-fatal-startup posture (session/pipeline_engine.go):
+// a cache.Load failure here never aborts construction — it is logged at Warn
+// and NewCachingLivenessEngine returns a valid, usable engine backed by an
+// empty cache, which resolves every (stage, mode) pair via
+// DefaultLivenessEngine until the next successful Load/Invalidate. The
+// signature still returns an error for future-proofing, but this
+// implementation never returns a non-nil error for a cache.Load failure
+// specifically.
+func NewCachingLivenessEngine(repo LivenessRepository) (*CachingLivenessEngine, error) {
+	e := &CachingLivenessEngine{
+		repo:            repo,
+		cache:           &livenessCache{},
+		embeddedDefault: NewDefaultLivenessEngine(),
+	}
+	if err := e.cache.Load(context.Background(), repo); err != nil {
+		log.WarningLog().Printf("[LivenessEngine] cache.Load failed at startup, continuing with an empty cache: %v", err)
+	}
+	return e, nil
+}
+
+// InvalidateCache re-fetches liveness definitions from the repository and
+// swaps the cache wholesale. Called by the CRUD RPC write handlers (Story
+// 1.3.2) after every successful Create/Update/Delete.
+func (e *CachingLivenessEngine) InvalidateCache(ctx context.Context) error {
+	return e.cache.Invalidate(ctx, e.repo)
+}
+
+// LivenessFor implements LivenessEngine, applying the two-level fallback
+// described in this type's doc comment.
+func (e *CachingLivenessEngine) LivenessFor(stage BacklogStatus, mode PipelineMode) (LivenessDefinition, error) {
+	if rd, ok := e.cache.Get(string(stage), mode); ok {
+		return rd.LivenessDefinition, nil
+	}
+
+	log.WarningLog().Printf("[LivenessEngine] no override configured for stage=%q pipeline_mode=%q — falling back to DefaultLivenessEngine", stage, ResolvedModeLabel(string(mode)))
+	return e.embeddedDefault.LivenessFor(stage, mode)
 }

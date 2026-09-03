@@ -269,6 +269,38 @@ message PipelineMode {
   string content_hash = 17;
 }
 
+// LivenessDefinition is the proto representation of session.LivenessDefinition
+// (Epic 1.1 of backlog-custom-workflow-stages) — a named,
+// (stage_slug, pipeline_mode)-addressed override for how long a given backlog
+// stage may go without progress before a reconcile* stuck-detection sweep
+// treats an item as stuck. Mirrors PipelineMode's CRUD shape. No UI consumes
+// this in Phase 1 — operator-callable only, via the 5 RPCs below.
+message LivenessDefinition {
+  string id = 1;
+  string stage_slug = 2;
+  // pipeline_mode is unset for a mode-less row (applies to all pipeline
+  // modes absent a more specific override) — see CachingLivenessEngine's
+  // (stage, mode) -> (stage, nil) fallback.
+  optional string pipeline_mode = 3;
+  // kind is one of "duration_budget", "heartbeat", "cycle_frequency" —
+  // mirrors session.LivenessKind's 3 string values exactly.
+  string kind = 4;
+  // Shape A ("duration_budget") fields, in milliseconds. Zero when kind is
+  // not "duration_budget".
+  int64 expected_duration_ms = 5;
+  int64 staleness_margin_ms = 6;
+  // Shape B ("heartbeat") field, in milliseconds. Zero when kind is not
+  // "heartbeat".
+  int64 max_no_progress_duration_ms = 7;
+  // Shape C ("cycle_frequency") fields. Zero when kind is not
+  // "cycle_frequency".
+  int32 cycle_threshold = 8;
+  int64 cycle_lookback_ms = 9;
+  bool enabled = 10;
+  google.protobuf.Timestamp created_at = 11;
+  google.protobuf.Timestamp updated_at = 12;
+}
+
 // SourceSyncEvent records the result of a single sync run for an ItemSource.
 message SourceSyncEvent {
   string id = 1;
@@ -751,6 +783,58 @@ message ListPipelineModesResponse {
   repeated PipelineMode items = 1;
 }
 
+message CreateLivenessDefinitionRequest {
+  string stage_slug = 1;
+  // pipeline_mode unset means a mode-less row (applies to all pipeline modes).
+  optional string pipeline_mode = 2;
+  string kind = 3;
+  int64 expected_duration_ms = 4;
+  int64 staleness_margin_ms = 5;
+  int64 max_no_progress_duration_ms = 6;
+  int32 cycle_threshold = 7;
+  int64 cycle_lookback_ms = 8;
+  bool enabled = 9;
+}
+
+message CreateLivenessDefinitionResponse {
+  LivenessDefinition item = 1;
+}
+
+message UpdateLivenessDefinitionRequest {
+  string id = 1;
+  optional int64 expected_duration_ms = 2;
+  optional int64 staleness_margin_ms = 3;
+  optional int64 max_no_progress_duration_ms = 4;
+  optional int32 cycle_threshold = 5;
+  optional int64 cycle_lookback_ms = 6;
+  optional bool enabled = 7;
+}
+
+message UpdateLivenessDefinitionResponse {
+  LivenessDefinition item = 1;
+}
+
+message DeleteLivenessDefinitionRequest {
+  string id = 1;
+}
+
+message DeleteLivenessDefinitionResponse {}
+
+message GetLivenessDefinitionRequest {
+  string stage_slug = 1;
+  optional string pipeline_mode = 2;
+}
+
+message GetLivenessDefinitionResponse {
+  LivenessDefinition item = 1;
+}
+
+message ListLivenessDefinitionsRequest {}
+
+message ListLivenessDefinitionsResponse {
+  repeated LivenessDefinition items = 1;
+}
+
 // ============================================================================
 // Backlog Item Events (for WatchBacklogItems streaming)
 // ============================================================================
@@ -1005,6 +1089,27 @@ service BacklogService {
 
   // ListPipelineModes returns all pipeline modes, including disabled ones.
   rpc ListPipelineModes(ListPipelineModesRequest) returns (ListPipelineModesResponse) {}
+
+  // CreateLivenessDefinition registers a new stage/pipeline-mode liveness
+  // override. Rejects a request whose (stage_slug, pipeline_mode) pair
+  // already has an enabled row with CodeAlreadyExists.
+  rpc CreateLivenessDefinition(CreateLivenessDefinitionRequest) returns (CreateLivenessDefinitionResponse) {}
+
+  // UpdateLivenessDefinition modifies an existing liveness definition's
+  // fields via partial update, invalidating the in-process liveness cache
+  // synchronously on success.
+  rpc UpdateLivenessDefinition(UpdateLivenessDefinitionRequest) returns (UpdateLivenessDefinitionResponse) {}
+
+  // DeleteLivenessDefinition removes a liveness definition override.
+  rpc DeleteLivenessDefinition(DeleteLivenessDefinitionRequest) returns (DeleteLivenessDefinitionResponse) {}
+
+  // GetLivenessDefinition retrieves a single liveness definition by
+  // (stage_slug, pipeline_mode) exact match.
+  rpc GetLivenessDefinition(GetLivenessDefinitionRequest) returns (GetLivenessDefinitionResponse) {}
+
+  // ListLivenessDefinitions returns all liveness definitions, including
+  // disabled ones.
+  rpc ListLivenessDefinitions(ListLivenessDefinitionsRequest) returns (ListLivenessDefinitionsResponse) {}
 
   // ImportGitHubIssue creates a backlog item pre-populated from a GitHub issue.
   rpc ImportGitHubIssue(ImportGitHubIssueRequest) returns (ImportGitHubIssueResponse) {}

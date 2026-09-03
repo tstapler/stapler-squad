@@ -304,6 +304,39 @@ type BacklogService struct {
 	// uses to construct pipelineEngine (Epic 1.5.1a). May be nil in tests
 	// that don't pass one; handlers nil-check and return CodeUnavailable.
 	pipelineModeRepo session.PipelineModeRepository
+
+	// livenessRepo backs the LivenessDefinition CRUD RPCs (Epic 1.3 of
+	// backlog-custom-workflow-stages): CreateLivenessDefinition/
+	// UpdateLivenessDefinition/DeleteLivenessDefinition/GetLivenessDefinition/
+	// ListLivenessDefinitions. Wired post-construction via
+	// SetLivenessRepository — not a NewBacklogService constructor parameter,
+	// unlike pipelineModeRepo above, to avoid touching every one of this
+	// struct's existing test call sites for a dependency Epic 1.3 introduces;
+	// Epic 1.4 may fold this into the constructor once its own
+	// livenessEngine-in-sweeps wiring needs to. May be nil; handlers nil-check
+	// and return CodeUnavailable.
+	livenessRepo session.LivenessRepository
+	// livenessEngine is the LivenessEngine (session.CachingLivenessEngine in
+	// production) whose in-process cache the CRUD RPC write handlers
+	// invalidate on Create/Update/Delete. Wired post-construction via
+	// SetLivenessEngine, same rationale as livenessRepo above. May be nil;
+	// cache invalidation is then a no-op (matching invalidatePipelineCache's
+	// duck-typed no-op-if-unwired shape for pipelineEngine).
+	livenessEngine session.LivenessEngine
+}
+
+// SetLivenessRepository wires the repository backing the LivenessDefinition
+// CRUD RPCs. nil (the default) makes those RPCs return CodeUnavailable,
+// mirroring pipelineModeRepo's nil-guard shape.
+func (s *BacklogService) SetLivenessRepository(repo session.LivenessRepository) {
+	s.livenessRepo = repo
+}
+
+// SetLivenessEngine wires the LivenessEngine whose cache the LivenessDefinition
+// CRUD RPC write handlers invalidate on success. nil (the default) makes
+// cache invalidation a no-op.
+func (s *BacklogService) SetLivenessEngine(engine session.LivenessEngine) {
+	s.livenessEngine = engine
 }
 
 // PipelineEngine returns the PipelineEngine injected at construction (nil if none was
