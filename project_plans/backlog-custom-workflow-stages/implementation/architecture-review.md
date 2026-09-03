@@ -1,6 +1,10 @@
 # Architecture Review: backlog-custom-workflow-stages
 **Date**: 2026-09-03
-**Verdict**: CONCERNS
+**Verdict**: CONCERNS (superseded 2026-09-03 — all 4 concerns below were subsequently addressed in
+plan.md during Phase 4's Product Triad Review repair loop: duplicate fallback ownership, gate-config
+validation timing, the StageSlug/BacklogStatus type-boundary decision, and the graph-validate/persist
+transaction. See plan.md's Domain Glossary, Epic 2.1's Decision subsection, and Epic 2.7 for the
+resulting design. Left this file's original findings unedited below as the historical record.)
 
 ## Constitution Check
 

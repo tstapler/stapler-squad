@@ -53,6 +53,17 @@ This project also generalizes *that* — which human-review, automated-review, s
 custom/pluggable checks must pass before a given transition (built-in or custom) is allowed — as a
 configurable property of the transition, alongside its liveness definition.
 
+**A concrete, plausible Milestone 2 example, grounded in this repo's own workflow (not a hypothetical
+"a user might want X")**: this repo's `CLAUDE.md` already documents `make security` (a gosec scan) and
+a standalone `security-review` skill, and its Ansible roles include security-sensitive surfaces
+(`bootstrap/roles/secrets/`, `bootstrap/roles/sudo-mfa/`) — but nothing today *structurally* requires
+that review to happen before a security-sensitive change ships; it's an ad hoc, easy-to-skip manual
+step. A custom `security-review` stage inserted between `review` and `done`, gated on a human-approval
+check, and triggered whenever an item's diff touches one of those paths (or trips a `gosec` finding),
+would give Tyler — this repo's single operator — the same explicit, un-skippable sign-off gate that
+`OverrideVerdict`'s existing human-approval action gives the review→pr_pending step today, for the one
+class of change where skipping it has the highest cost.
+
 ## Actors for Transition Gates
 
 - **Human reviewer**: approves/rejects a transition explicitly (generalizes today's "Approve Plan" /
@@ -139,6 +150,37 @@ schema/migration, `ConfiguredWorkflowEngine`, per-stage liveness, and a manageme
 defining/editing custom stages and transitions, mirroring `backlog-configurable-pipeline`'s
 pipeline-mode CRUD UI), not a backend-only cut.
 
+### Prioritization
+
+**ICE score**: Impact 8/10 (fixes a currently-live production bug — 12 items parked in
+`STUCK_REASON_ORPHANED_TRIAGE` today — and closes a recurring hardcoded-constant-drift failure class;
+BUG-055 already documents a first instance of this exact bug shape). Confidence 6/10 — pulled down by
+Milestone 2 specifically (see the asymmetry note below), not by Milestone 1, which is well-scoped and
+low-risk. Ease 3/10 (Large appetite: DB schema across two engines, a new tagged-union liveness model,
+a typed transition-gate model, an open-ended custom-check execution boundary, and a from-scratch
+graph-editor UI). **ICE ≈ 5.7/10** — a mid-pack score, not an obvious slam dunk, which is the honest
+signal: this project earns a Large appetite from Impact and from Milestone 1's own confidence, not
+from a uniformly high score across the whole project.
+
+**Alternative considered and rejected**: ship Milestone 1 only now, and gate Milestone 2 (the
+custom-stage/transition/gate-definition UI) as its own separately-prioritized follow-up project,
+re-evaluated once Milestone 1's real-world usage is observed. This is a genuinely reasonable
+alternative — Milestone 1 alone fully fixes the motivating live bug (see Success Metrics), and
+Milestone 2 carries markedly lower confidence (see Risk Control). It doesn't change the recommendation
+here, for two reasons that hold up under scrutiny rather than merely rationalizing the existing plan:
+(1) ADR-013 already proposed this exact Phase 2 scope over a year ago and it was never built — treating
+Milestone 2 as a someday-project again repeats the precise "ship the urgent part, defer the rest
+indefinitely" pattern that produced today's live incident in the first place (see Alternatives
+Considered's rejection of a third one-off constant patch); (2) Milestone 1's own interface
+(`LivenessEngine`'s tagged-union shape, the `(stage, mode)` sparse-override model) is deliberately
+designed to also serve Milestone 2's custom-check liveness needs (Rabbit Holes) — planning both
+together lets that interface get designed once, correctly, instead of risking a second
+interface-widening rework if Milestone 2 is greenlit later as a separate project. Because both
+milestones are still planned, built, and merged as fully independent, separately-deployable units
+(per the Milestone sequencing decision below), the actual cost of "committing to both now" is planning
+overhead, not a deployment or rollback risk — which is what makes the combined commitment worth
+carrying despite Milestone 2's lower confidence, rather than papering over it.
+
 **Milestone sequencing (explicit user decision)**: the per-stage liveness/timeout piece — which
 subsumes the motivating sdd-triage-timeout bug — is pulled forward as an early, independently
 shippable milestone (Milestone 1) inside this project, ahead of the full custom-stage/transition
@@ -215,10 +257,13 @@ deploys, without needing a synchronized "ship the whole project, then manually r
 - ent schema + migration for the new stage/transition/liveness config tables, proto changes, and
   RPCs mirroring `WorkflowRepository`'s (or `backlog-configurable-pipeline`'s pipeline-mode
   repository's) CRUD surface.
-- UI: a management surface for defining/editing/enabling/disabling custom stages, their transitions,
-  and their liveness parameters (Milestone 2+, per the appetite decision), plus updating
-  `BacklogBoard.tsx`'s `COLUMNS` and `useBacklogService.ts`'s transition table to render whatever
-  stage set is actually configured instead of a fixed list.
+- UI: a management surface for defining/editing/enabling/disabling custom stages and their
+  transitions (Milestone 2+, per the appetite decision), plus updating `BacklogBoard.tsx`'s
+  `COLUMNS` and `useBacklogService.ts`'s transition table to render whatever stage set is actually
+  configured instead of a fixed list. Liveness-parameter *values* remain configured via the Phase 1
+  CRUD RPCs (Epic 1.3) in this project, not a dedicated UI form — this mirrors Phase 1's own
+  RPC-only precedent for `LivenessEngine` config, and a liveness-editing UI is deferred (not
+  silently dropped) to a future milestone.
 - A new or updated ADR: either implement ADR-013 Phase 2 as originally proposed and mark it
   Accepted/Implemented, or record where this project's design diverges from that proposal and why.
 
@@ -335,6 +380,12 @@ for "zero regression for the current single-pipeline behavior" above.
 **Milestone 1 (per the Appetite section's explicit sequencing decision)**: the per-stage-×-pipeline-mode
 liveness fix for the "idea"/triage case ships and can be deployed independently of Milestone 2+ (the
 custom-stage-definition UI), so live relief for the 12 parked items does not wait on the full project.
+**Confidence asymmetry between the two milestones is explicit, not accidental**: Milestone 2 carries
+markedly lower confidence than Milestone 1 (open Unresolved Questions, unresolved pre-mortem P2 items)
+while consuming the large majority of the project's effort — the mitigation is exactly this
+sequencing: Milestone 1 ships and is independently valuable regardless of whether Milestone 2 proceeds
+at all, so the lower-confidence, higher-effort work is appropriately ordered *after* the
+higher-confidence, higher-certainty fix, never blocking it.
 An unresolvable/malformed custom stage or liveness definition on a live item must fail closed to the
 default built-in behavior with a loud Warn log (per Observability above), never a silent no-op or a
 crash — same risk-control mechanism the sibling `PipelineEngine` project already established for its

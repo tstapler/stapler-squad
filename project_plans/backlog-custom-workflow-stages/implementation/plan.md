@@ -10,6 +10,18 @@ state machine and per-`StuckReason` timing constants (ADR-013 Phase 2).
 - `project_plans/backlog-custom-workflow-stages/decisions/ADR-002-configured-workflow-engine-and-gates.md`
 - `project_plans/backlog-custom-workflow-stages/decisions/ADR-003-custom-gate-check-execution-bound.md`
 
+**Task-sizing convention**: every task below carries an approximate LLM-agent-session sizing unit
+(e.g. "~5 min"), not a wall-clock human-engineer estimate — per `subagent-driven-development`'s
+per-task-dispatch model, the figure reflects roughly how much work fits in one fresh-subagent
+dispatch, not calendar time. Relative implementation risk is signaled by the review docs
+(architecture-review.md, adversarial-review.md, pre-mortem.md); the seven tasks those reviews
+originally flagged as 10-40 min outliers (2.4.3b, 2.4.4b, 2.6.1b, 2.6.1g, 2.7.2g, 2.7.2h, 2.8.2c) were
+decomposed at round-2 plan-repair (2026-09-03) into genuinely atomic sub-tasks each — see those
+stories directly. All but one sub-task landed at ~5 min; Task 2.6.1g2 (the cross-transaction assertion
+harness) is ~10 min because splitting it further would separate the harness from the single invariant
+it verifies. No task-level range wider than ~10 min remains anywhere below; risk on the decomposed
+areas is signaled by the parent story's narrative text and the review docs, not a wide time range.
+
 ---
 
 ## Milestone Structure (read this first)
@@ -37,7 +49,7 @@ explicit sequencing decision:
 ```
 Phase 1 (Milestone 1, independently shippable)          Phase 2 (Milestone 2+)
 ┌─────────────────────────────────────┐                 ┌─────────────────────────────────────┐
-│ Epic 1.1 Liveness domain + ent       │                 │ Epic 2.1 Bypass-callsite audit (blocking)│
+│ Epic 1.1 Liveness domain + ent       │                 │ Epic 2.1 Repo-wide bypass/whitelist audit│
 │ Epic 1.2 DefaultLivenessEngine +     │                 │ Epic 2.2 Stage/transition/gate ent  │
 │           characterization tests     │                 │ Epic 2.3 ConfiguredWorkflowEngine   │
 │ Epic 1.3 Repo + cache + CRUD RPCs    │                 │ Epic 2.4 Gate evaluation + custom-  │
@@ -62,8 +74,8 @@ must be used identically in code, tests, comments, and proto.)*
 
 | Term | Definition | Notes |
 |------|-----------|-------|
-| `StageSlug` | The addressable string key for a workflow stage, built-in or custom (e.g. `"idea"`, `"design-review"`). | Newtype-in-spirit: a Go `string` type alias documented as "never a raw string," mirrors `PipelineMode`'s own slug-as-string convention. |
-| `LivenessEngine` | New sibling interface (to `WorkflowEngine`) resolving the `LivenessDefinition` for a `(StageSlug, PipelineMode)` pair. | Consumed by the `reconcile*` sweeps and `TriggerTriage`'s call-budget selection — never by `TransitionBacklogItemStatus`. |
+| `StageSlug` | **Not a distinct Go type. Decision (round-2 plan-repair, 2026-09-03): `BacklogStatus` itself is formally widened to be the open type** — "one of 9 built-in values" becomes "one of 9 built-in values, or any operator-configured custom stage slug." "StageSlug" is an informal/aspirational label for that widened role, never a second type engineers convert between. | **Resolves architecture-review Concern 3 for real** (round 1's "same type, not distinct" wording restated the conflation without deciding anything; this is the actual decision). Chose widen-`BacklogStatus` (option b) over a distinct-`StageSlug`-with-conversion-boundary (option a) on verified evidence, not preference: (1) every current switch/case site over `BacklogStatus` already carries a `default:` branch with fail-safe behavior for an unrecognized value — `session/backlog_sync.go:533-540` (`default: return "", false`), `server/services/backlog_service_lifecycle.go:38-50` (`default: return`), `server/services/backlog_service_triage.go:2329-2342` (`default: return nil`), `server/mcp/tools_backlog.go:1391-1397` (`default:` rejects), `session/domain/backlog.go:541-614`'s `TransitionGuard` (`default:` at :611 — "no additional guards"), `server/services/autonomous_orchestration_service.go:460-473` (switch-true with its own default) — none assume/require 9-value closure; (2) `.golangci.yml:181-194` scopes the `exhaustive` linter to `session/detection/`'s `DetectedStatus` only, with an explicit comment "All other packages use iota types with intentional default: clauses" — no compiler/lint mechanism anywhere treats `BacklogStatus` as closed today; (3) Epic 2.3.1's own AC already passes a custom value (`"design-review"`) directly as a `BacklogStatus` argument with zero conversion — the epics as written already assume option (b), so option (a) would contradict already-written stories, not just be extra work. `BacklogStatus`'s 9 named constants remain the built-in subset; `LivenessEngine.LivenessFor`/`WorkflowEngine.CanTransition`/`AllowedTransitions`/`PendingGates` keep their existing, already-`Accepted` `BacklogStatus`-typed signatures unchanged (ADR-001/ADR-002) — option (b) requires no signature change to either. See Epic 2.1's new "Decision: `BacklogStatus` becomes the open stage-slug type" subsection and Story 2.1.3's extended scope for the follow-through audit. (`BacklogStatus`/`PipelineMode` remain defined types, not `type X = string` aliases, per `session/domain/backlog.go:13`/`session/pipeline_engine.go:36` — that part of round 1's wording was already correct.) |
+| `LivenessEngine` | New sibling interface (to `WorkflowEngine`) resolving the `LivenessDefinition` for a `(BacklogStatus, PipelineMode)` pair — see `StageSlug`'s row above for why this is `BacklogStatus`, not a separate `StageSlug`-typed parameter. | Consumed by the `reconcile*` sweeps and `TriggerTriage`'s call-budget selection — never by `TransitionBacklogItemStatus`. |
 | `DefaultLivenessEngine` | In-memory `LivenessEngine` reproducing every hardcoded `StuckReason` threshold surveyed in `research/architecture.md` §1, verbatim. | The zero-regression baseline; Phase 1's characterization tests assert against this. |
 | `CachingLivenessEngine` | DB-backed `LivenessEngine` implementation: cache-first read, falls back to `DefaultLivenessEngine` on any miss/error with a Warn log. | Mirrors `CachingPipelineEngine` exactly. |
 | `LivenessDefinition` | Tagged-union value type: a `LivenessKind` discriminator plus kind-specific fields (never one flat schema). | The single most important new type in Phase 1 — see Pattern Decisions. |
@@ -214,19 +226,30 @@ must be used identically in code, tests, comments, and proto.)*
 - [x] ~~Liveness granularity — (stage), (stage×mode), or finer?~~ Resolved: (stage) with a sparse
   (stage×mode) nullable-mode override, `UNIQUE(stage_slug, pipeline_mode)` (architecture.md §2,
   adopted verbatim).
-- [ ] **Should the existing `StuckReason` enum be replaced by stage-derived reasons, or kept
-  separate?** — Still genuinely open per requirements.md's own Open Questions section. Blocks Epic
-  2.4's design of how a custom-stage/custom-gate timeout is reported (a new generic `StuckReason`
-  value like `StuckReasonGateTimeout`, vs. extending the enum per gate type). **Owner: resolve at the
-  start of Epic 2.4 planning, before writing `InvokeCustomGateCheck`'s stuck-marking code** — default
-  recommendation if not otherwise decided: keep `StuckReason` a closed enum and add exactly one new
-  generic value (`StuckReasonGateTimeout`) for all custom-transition liveness timeouts, since
-  `research/architecture.md` already treats liveness classification as a sibling layer to
-  remediation, and a closed enum keeps `RemediationDue`'s per-reason backoff logic exhaustive.
+- [x] ~~Should the existing `StuckReason` enum be replaced by stage-derived reasons, or kept
+  separate?~~ **RESOLVED** at Epic 2.4's new "Decision: `StuckReasonGateTimeout`" subsection (start of
+  Epic 2.4): `StuckReason` stays a closed enum with exactly one new generic value,
+  `StuckReasonGateTimeout`, for all custom-transition/custom-gate liveness timeouts. Decided up front,
+  not left to whoever implements Task 2.4.4c.
 - [ ] **Per-item liveness "snooze" override** (features.md §6) — a real, named gap but explicitly
   **deferred past this project's scope**: no story below implements it. Flagged here so it isn't
   silently forgotten; owner: reconsider as a follow-up project once Phase 2 ships and operator
   feedback confirms the need in practice.
+- [ ] **Known, deliberately-deferred (pre-mortem P2 #3)**: `GateSatisfactionRecord` carries no
+  config-version stamp, so a recorded gate satisfaction could later be read against an edited gate
+  config — deferred because Epic 2.5's `StageConfigSnapshot` already gives audit-trail-*rendering*
+  immunity, and gate-evaluation-*input* immunity is additional scope this Large project doesn't need
+  until real gate-config edit frequency is observed in practice.
+- [ ] **Known, deliberately-deferred (pre-mortem P3 #4)**: the three independently-invalidating caches
+  (`pipelineModeCache`/`livenessCache`/`stageConfigCache`) have no cross-cache torn-read test for a
+  multi-entity edit (e.g. a stage + its transitions + a gate edited in one Epic 2.8.2 form submit) —
+  deferred because the single-operator threat model makes the race window practically negligible, not
+  because the risk is unreal.
+- [ ] **Known, deliberately-deferred (pre-mortem P2 #5)**: `ConfiguredWorkflowEngine`'s cutover has no
+  shadow-mode validation against real production `backlog_items` before the one-line
+  `server/dependencies.go` swap — deferred because the existing one-line revert kill switch already
+  bounds a bad cutover to "revert and redeploy," not data loss, and a shadow-mode comparison harness is
+  scope this plan doesn't otherwise need.
 
 ## Dependency Visualization
 
@@ -252,7 +275,7 @@ Epic 1.1 (ent schema, LivenessDefinition type)
 
 Phase 2 (Milestone 2+) — depends on Phase 1's LivenessEngine (Epic 2.4 only), not on Phase 1 shipping
 ────────────────────────────────────────────────────────────────────────────────────────────────────
-Epic 2.1 (bypass-callsite audit — BLOCKING, do first, no other Epic 2.x dependency)
+Epic 2.1 (repo-wide BacklogStatus-literal audit — BLOCKING, do first, no other Epic 2.x dependency)
    │
    ▼
 Epic 2.2 (stage/transition/gate ent schema + seed migration)
@@ -335,8 +358,12 @@ query.
     *Then* ent returns a constraint-violation error, not a silent duplicate row.
 - `pipeline_mode` is nullable and a `NULL` row is distinguishable from an empty-string row.
   - *Given* a row with `pipeline_mode: nil`, *When* read back via `GetByStageAndMode("idea", "sdd")`
-    and no `("idea","sdd")` row exists, *Then* the repository falls back to the `("idea", nil)` row
-    (see Story 1.3.1) rather than returning not-found.
+    and no `("idea","sdd")` row exists, *Then* `GetByStageAndMode` returns not-found — it is a dumb
+    exact-match query only. The `(stage, mode) → (stage, nil)` mode-less fallback is owned exclusively
+    by `livenessCache.Get` (Story 1.3.1); it is not re-implemented here. (Resolves architecture-review
+    Concern 1: the fallback was previously specified at both this layer and the cache layer with no
+    stated owner — the cache layer is now the single owner, matching `pipelineModeCache`'s precedent
+    of doing resolution at the cache/engine layer.)
 **Files**: `session/ent/schema/stage_liveness_definition.go` (new)
 
 ##### Task 1.1.2a: Write the ent schema file with all fields, indexes, unique constraint (~5 min)
@@ -424,6 +451,10 @@ UI in Phase 1, per the Milestone Structure note above).
 ### Story 1.3.1: `LivenessRepository` + `livenessCache`
 **As a** backend engineer, **I want** a cached, fail-closed repository for `LivenessDefinition` rows,
 **so that** resolving a stage's liveness never adds an uncached DB read to a hot path.
+**`livenessCache.Get` is the single owner of the `(stage, mode) → (stage, nil)` sparse-override
+fallback in this plan** — `EntLivenessRepository.GetByStageAndMode` (this story's own repository,
+Task 1.3.1b) performs only an exact-match lookup, per Story 1.1.2's corrected AC. The fallback logic
+exists in exactly one place, not two.
 **Acceptance Criteria**:
 - `livenessCache.Get("idea", "sdd")` is lock-free (never touches `writeMu`) and returns a miss when
   no `("idea","sdd")` row and no `("idea", nil)` row exist.
@@ -757,12 +788,51 @@ tests pass together, **so that** Milestone 1 can be merged and deployed independ
 
 # Phase 2: Milestone 2+ — Custom Stages, Transition Gates, Management UI
 
-## Epic 2.1: Bypass-callsite audit (BLOCKING — do before any `ConfiguredWorkflowEngine` code)
+## Epic 2.1: Repo-wide `BacklogStatus`-literal audit (BLOCKING — do before any `ConfiguredWorkflowEngine` code)
 
 **Goal**: Close the two confirmed `session.CanTransitionBacklog`-bypass call sites
 (`server/services/backlog_service_lifecycle.go:1105`, `server/services/backlog_service_sync.go:151`)
 before `ConfiguredWorkflowEngine` ships, per pitfalls.md's explicit instruction — otherwise a custom
-transition's gates are silently bypassable through these two paths on day one.
+transition's gates are silently bypassable through these two paths on day one. **Rescoped per
+pre-mortem P1 #1**: those two call sites are `CanTransitionBacklog`-specific, but they are not the
+only place the codebase hardcodes assumptions about the closed 9-`BacklogStatus` set. This epic now
+also runs a repo-wide sweep for every literal `BacklogStatus` comparison/switch/whitelist outside the
+transition table itself (`session/backlog.go`'s `validTransitions`/`TransitionGuard`,
+`session/domain/backlog.go`'s `CanTransitionBacklog`) — explicitly including
+`server/mcp/tools_backlog.go`, named in requirements.md's own Open Questions but absent from this
+epic's original task list — with each finding becoming its own blocking re-routing task, not an
+unscoped "audit it later."
+
+**Verification performed at plan-repair time (2026-09-03)**, via `grep -rn "BacklogStatus" ...` and
+targeted reads across `session/`, `server/services/`, and `server/mcp/` (excluding generated
+`session/ent/*` and the domain enum definition itself): confirms (a) `CanTransitionBacklog` has
+exactly the two known direct callers outside `session/backlog.go`/`domain/backlog.go` — no new
+`CanTransitionBacklog`-bypass site exists beyond Stories 2.1.1/2.1.2 — and (b) two distinct classes of
+literal-`BacklogStatus` logic exist outside any `CanTransitionBacklog` call at all, seeded as Stories
+2.1.3 and 2.1.4 below. This is a snapshot, not a substitute for the sweep itself — line numbers will
+have moved by the time Epic 2.1 is implemented (see the adversarial review's Minor #2 on exactly this
+staleness risk), so Task 2.1.3a re-runs the sweep against then-current source rather than trusting
+this list verbatim.
+
+### Decision: `BacklogStatus` becomes the open stage-slug type (resolved here, not left as a glossary footnote)
+
+**Decision**: `BacklogStatus` is formally widened, going forward, from "one of 9 built-in values" to
+"one of 9 built-in values, or any operator-configured custom stage slug" — no distinct `StageSlug` Go
+type is introduced, and no conversion boundary is added between "built-in" and "custom" call sites.
+See the Domain Glossary's `StageSlug` entry for the full rationale; in summary: every current
+switch/case site over `BacklogStatus` already fails safe via a `default:` branch (verified at
+plan-repair time, 2026-09-03 — see the glossary entry for the six file:line citations), the
+`exhaustive` linter is deliberately scoped away from `BacklogStatus` (`.golangci.yml:181-194`), and
+Epic 2.3.1's own AC already passes a custom value as a bare `BacklogStatus` argument. This was
+previously left as reworded-but-unresolved conflation in the glossary (round-2 triad review's
+Engineering-lens finding); it is decided here, before Epic 2.1's audit work starts, so Story 2.1.3
+below has a settled target to audit against rather than each finding being triaged against an
+undecided question.
+
+**Consequence for this epic**: Story 2.1.3's sweep task now also confirms each already-`default:`-
+guarded switch site's fail-safe behavior is the *semantically correct* one for a custom stage (not
+merely non-crashing), and updates `BacklogStatus`'s doc comment to state the type is open. See Task
+2.1.3e below.
 
 ### Story 2.1.1: Re-route `OverrideVerdict`'s direct `CanTransitionBacklog` call through the injected engine
 **As a** backend engineer, **I want** `OverrideVerdict`'s transition check to go through
@@ -800,6 +870,88 @@ configured transition rule.
 
 ##### Task 2.1.2b: Regression test mirroring 2.1.1b for this call site (~5 min)
 - Files: `server/services/backlog_service_sync_test.go`
+
+### Story 2.1.3: Repo-wide sweep + terminal-status literal-comparison consolidation
+**As a** backend engineer, **I want** a documented, repo-wide sweep for every literal
+`BacklogStatus` comparison/switch/whitelist outside the transition table, **so that** a custom stage
+doesn't silently break or get mis-bucketed at a site nobody thought to check.
+**Acceptance Criteria**:
+- The sweep (`grep -rn "BacklogStatus[A-Z][a-zA-Z]*" --include="*.go" session server/services
+  server/mcp`, excluding `session/ent/*`, `*_test.go`, `session/domain/backlog.go`'s enum
+  definition, and `session/backlog.go`'s `CanTransitionBacklog`/`validTransitions` re-export) is
+  re-run against current source, and every finding is triaged into exactly one of: (1) a blocking
+  re-routing task added to this epic, (2) a documented "reviewed, benign" note inline in this story
+  (e.g. constructing a literal status value when creating a new item, which is not affected by a
+  custom stage set), or (3) a documented, explicit scope-boundary note citing requirements.md's
+  "does not automatically inherit" resolution (e.g. MCP self-resolve target-status hardcoding — see
+  Story 2.1.4's boundary note). No finding is silently left untriaged.
+  - *Given* the sweep's output, *When* every line is triaged, *Then* the PR description lists the
+    full triage table (site → category), not just the sites that got a code change.
+- The **terminal-status check** (`status == BacklogStatusDone || status == BacklogStatusArchived`,
+  confirmed today at `session/backlog_lifecycle.go:1781`, `session/backlog_lifecycle_pr.go:834`,
+  `session/ent_repository_backlog.go:579,606,628-631`, `server/services/backlog_service_lifecycle.go:43,791`,
+  `server/services/deep_link_resolver.go:276`, and `server/mcp/tools_backlog.go:630,663,678`) is
+  consolidated behind one `IsTerminalStatus`-shaped check that a custom terminal stage satisfies too,
+  not a literal two-value OR repeated at every call site.
+  - *Given* a custom stage `"legal-review"` marked `IsTerminal: true`, *When* an item reaches that
+    stage and `wait_for_backlog_event`'s `buildMatchedWaitResult`/`currentStateWaitResult`
+    (`server/mcp/tools_backlog.go:630`/`:663`) evaluate it, *Then* `IsTerminal` in the returned result
+    is `true` — not `false`, which is what the literal `Done`/`Archived` OR would (incorrectly)
+    return today for a custom terminal stage.
+**Files**: `session/graph_validator.go` or a new `session/terminal_status.go` — Task 2.1.3a's triage
+table decides which, based on whether `ConfiguredWorkflowEngine` or a narrower helper is the right
+owner — plus every call site listed above.
+
+##### Task 2.1.3a: Re-run the sweep against current source and produce the full triage table (~5 min)
+- Files: none (produces the PR-description table the AC above requires)
+
+##### Task 2.1.3b: Define a single `IsTerminalStatus`-equivalent check (built-in constant fallback when no `ConfiguredWorkflowEngine`/`StageDefinition` is wired, `StageDefinition.IsTerminal` lookup when it is) (~5 min)
+- Files: `session/graph_validator.go` (or `session/terminal_status.go`, per 2.1.3a's finding)
+
+##### Task 2.1.3c: Re-route every confirmed terminal-check call site (session/backlog_lifecycle.go, session/backlog_lifecycle_pr.go, session/ent_repository_backlog.go, server/services/backlog_service_lifecycle.go, server/services/deep_link_resolver.go, server/mcp/tools_backlog.go) to the new check, one call site at a time (~5 min each, ~8 call sites confirmed today — re-verify count via 2.1.3a)
+- Files: as listed above
+
+##### Task 2.1.3d: Regression tests: built-in Done/Archived behavior is unchanged; a custom `IsTerminal` stage is recognized at every re-routed call site (~5 min)
+- Files: `server/mcp/tools_backlog_test.go`, plus a test alongside each re-routed call site
+
+##### Task 2.1.3e: Per this epic's new "Decision: `BacklogStatus` becomes the open stage-slug type" subsection — audit the six already-`default:`-guarded `BacklogStatus` switch sites confirmed at plan-repair time (`session/backlog_sync.go:533`, `server/services/backlog_service_lifecycle.go:38`, `server/services/backlog_service_triage.go:2329`, `server/mcp/tools_backlog.go:1391`, `session/domain/backlog.go:541` `TransitionGuard`, `server/services/autonomous_orchestration_service.go:460`), confirming each `default:` branch's behavior is the intentional, correct one for a custom stage value (not merely non-crashing) and adding a one-line comment at each citing this decision; update `BacklogStatus`'s doc comment (`session/domain/backlog.go:12`) to state the 9 constants are the built-in subset of an otherwise-open type (~5 min)
+- Files: `session/backlog_sync.go`, `server/services/backlog_service_lifecycle.go`, `server/services/backlog_service_triage.go`, `server/mcp/tools_backlog.go`, `session/domain/backlog.go`, `server/services/autonomous_orchestration_service.go`
+
+### Story 2.1.4: `server/mcp/tools_backlog.go`'s status whitelists — re-route or document as an explicit scope boundary
+**As a** backend engineer, **I want** each of `tools_backlog.go`'s four hardcoded `BacklogStatus`
+whitelist maps/slices resolved one by one, **so that** the ones that should recognize custom stages do,
+and the ones that intentionally don't are a documented decision, not a silent gap.
+**Acceptance Criteria**:
+- `validBacklogStatuses` (`server/mcp/tools_backlog.go:147`, backing `list_backlog_items`'s status
+  filter validation) is sourced from `ConfiguredWorkflowEngine`'s live stage list, not a fixed
+  9-entry slice — a valid custom stage slug must be an accepted filter value.
+  - *Given* a configured custom stage `"legal-review"`, *When* `list_backlog_items` is called with
+    `status_filter=["legal-review"]`, *Then* it does not reject the filter as invalid (today's fixed
+    `validBacklogStatuses` slice would reject it).
+- `allowedSelfResolveSourceStatuses` (`:210`), `unclaimedDuplicateSourceStatuses` (`:225`), and
+  `reportPRCreatedAllowedSourceStatuses` (`:237`), plus `validateSelfResolveSource`'s hardcoded switch
+  (`:1391-1392`) and `request_review`/`report_blocked`'s hardcoded target statuses (`:1261-1263`,
+  `:1401-1403`), are each explicitly documented — in a code comment at the declaration site and in
+  this story's own text — as an intentional scope boundary: per requirements.md's resolved Open
+  Question, a custom stage is a full transition/liveness graph citizen but does **not**
+  automatically inherit MCP self-resolve eligibility (`report_progress`/`request_review`/
+  `report_blocked`/`report_duplicate`/`report_pr_created`'s built-in-status-keyed source/target
+  logic) — that requires an explicit gate-model attachment, which is out of this project's scope. No
+  code change is required for these five sites; the requirement is a docstring making the boundary
+  explicit at the exact place a future reader would otherwise assume it was an oversight (mirroring
+  this same plan's own new note on `useBacklogService.ts` needing no change, near Epic 2.9).
+  - *Given* the four maps/switch/hardcoded-target sites above, *When* reviewed, *Then* each carries a
+    comment citing requirements.md's "does not automatically inherit" resolution and this story's ID.
+**Files**: `server/mcp/tools_backlog.go`
+
+##### Task 2.1.4a: Re-route `validBacklogStatuses` to source from `ConfiguredWorkflowEngine`'s stage list (falling back to the current fixed 9-entry list when no engine is wired, matching this project's fail-closed-to-built-in convention) (~5 min)
+- Files: `server/mcp/tools_backlog.go`
+
+##### Task 2.1.4b: Add the scope-boundary doc comment to `allowedSelfResolveSourceStatuses`, `unclaimedDuplicateSourceStatuses`, `reportPRCreatedAllowedSourceStatuses`, `validateSelfResolveSource`, and the `request_review`/`report_blocked` hardcoded-target-status sites (~5 min)
+- Files: `server/mcp/tools_backlog.go`
+
+##### Task 2.1.4c: Test: `list_backlog_items` accepts a configured custom stage as a status filter value; existing 9 built-in filter values are unaffected (~5 min)
+- Files: `server/mcp/tools_backlog_test.go`
 
 ---
 
@@ -929,6 +1081,20 @@ immediately without a redeploy.
 **Goal**: Make each of the four `GateKind`s actually evaluable, reusing existing machinery per
 Rabbit Holes' explicit instruction (extend, don't parallel-build).
 
+### Decision: `StuckReasonGateTimeout` (resolved here, not deferred to Task 2.4.4c)
+
+**Decision**: keep `StuckReason` a closed enum and add exactly one new generic value,
+`StuckReasonGateTimeout`, covering every custom-transition/custom-gate liveness timeout — not a new
+value per gate kind or per individual gate. **Rationale**: `research/architecture.md` already treats
+liveness classification as a layer sibling to remediation (see this doc's own Pattern Decisions), and
+a closed enum keeps `RemediationDue`'s per-reason backoff-schedule switch exhaustive — a
+compiler-enforced property an open/string-typed reason would give up for no correctness benefit at
+this scale (dozens of gates, one operator). This was previously left implicit inside Task 2.4.4c's
+~5-minute coding task (flagged as a planning gap by the adversarial review); it is decided here
+instead, before any Epic 2.4 code is written, so `reconcileCustomGateChecks` (Task 2.4.4c) and
+`RemediationDue`'s backoff switch are both written against a settled value from the start, not
+whatever the task's implementer happens to pick.
+
 ### Story 2.4.1: Human-approval gate (`GateSatisfactionRecord`, one-shot)
 **As the** single operator, **I want** a human-approval gate satisfied by one explicit action,
 **so that** a custom transition can require my sign-off the same way "Approve Plan" works today.
@@ -996,7 +1162,13 @@ in the current file — re-verify exact line number before editing)
 ##### Task 2.4.3a: Add `gateContext` parameter (`GateID`, `TargetTransition`, `RequiresDiff`) to `ReviewGateRunner.Run` (~5 min)
 - Files: `session/review_gate.go`
 
-##### Task 2.4.3b: Make the diff/worktree/branch-drift pre-checks conditional on `RequiresDiff` (~5 min)
+##### Task 2.4.3b1: Extract `Run`'s existing worktree-identity/branch-drift/diff-computation block (`session/review_gate.go:136`-`~260`: fetch worktree → identity-mismatch check → branch-drift sync → dirty check → diff compute) into a new private helper `runDiffPreChecks(ctx, item, is) (diff string, truncated bool, uncommittedWarning string, blocked bool)`, preserving every existing early-return/terminal-verdict branch verbatim — pure Extract Method, no new conditional logic (~5 min)
+- Files: `session/review_gate.go`
+
+##### Task 2.4.3b2: Call `runDiffPreChecks` from `Run` only when `gateContext.RequiresDiff` is true; when false, skip it entirely and leave `diff`/`truncated`/`uncommittedWarning` at their zero values with no worktree/git calls made (~5 min)
+- Files: `session/review_gate.go`
+
+##### Task 2.4.3b3: Adjust `reviewPromptFor`'s diff-section rendering so a `RequiresDiff: false` run produces an explicit "no diff expected for this gate" prompt section instead of an empty-diff rendering that reads as a bug (~5 min)
 - Files: `session/review_gate.go`
 
 ##### Task 2.4.3c: Replace the hardcoded `toStatus == BacklogStatusReview` spawn condition with "does this transition have an automated-review gate attached" (~5 min)
@@ -1011,32 +1183,56 @@ in the current file — re-verify exact line number before editing)
 ### Story 2.4.4: Custom/pluggable check gate via `InvokeCustomGateCheck`
 **As a** backend engineer, **I want** a custom-check gate to invoke a named, pre-registered skill/
 slash-command bounded by a `LivenessDefinition`, **so that** it can never run arbitrary code or hang
-without being caught by the existing liveness sweep.
+without being caught by the existing liveness sweep. Its config arrives already parsed and validated
+by Task 2.7.2g's `ParseGateConfig` at save time — `InvokeCustomGateCheck` consumes a typed
+`CustomCheckConfig`, never raw JSON.
 **Acceptance Criteria**:
 - `InvokeCustomGateCheck` rejects a gate config naming a skill/slash-command not in the pre-registered
   allowlist.
   - *Given* a `GateDefinition{Kind: GateKindCustom, Config: {"skill": "not-a-real-skill"}}`, *When*
     the gate fires, *Then* it returns an error and the transition is blocked (fail-closed for gates,
     per Pattern Decisions), never silently passing.
+- `InvokeCustomGateCheck` blocks the transition and logs Warn when the skill/slash-command invocation
+  errors synchronously (crash, missing runtime dependency, malformed environment) rather than timing
+  out — a distinct, immediate failure path from the sweep-driven timeout path below.
+  - *Given* a `GateKindCustom` invocation whose spawn returns a synchronous error (e.g. the process
+    exits non-zero immediately, or a required runtime dependency is missing) rather than hanging,
+    *When* `InvokeCustomGateCheck` observes the error, *Then* it blocks the transition, logs one Warn
+    line naming the spawn failure, and does **not** wait for or rely on the liveness sweep to detect
+    it (per the plan's fail-closed-for-gates rule).
 - A custom check bounded by `LivenessDefinition{Kind: LivenessKindDurationBudget, ExpectedDuration:
   10m, StalenessMargin: 5m}` that exceeds 15m is picked up by the **same** stuck-detection sweep
   used for `orphaned_triage`, not a new detector.
   - *Given* a custom-check invocation still open after 16m, *When* the periodic `reconcile*` sweep
     runs, *Then* it marks the item stuck using `LivenessEngine.LivenessFor` resolution for that gate's
     liveness config, going through the identical code path Epic 1.4 built.
-**Files**: `session/gate_custom_check.go` (new)
+**Files**: `session/gate_custom_check.go` (new), `session/backlog_lifecycle_gates.go` (new)
 
 ##### Task 2.4.4a: Define the pre-registered skill/slash-command allowlist mechanism (~5 min)
 - Files: `session/gate_custom_check.go`
 
-##### Task 2.4.4b: Implement `InvokeCustomGateCheck` (spawn, bound by `LivenessDefinition`, record `ReviewOutcome`-shaped verdict) (~5 min)
+##### Task 2.4.4b1: Implement the spawn call against Task 2.4.4a's allowlist, returning a blocking error immediately (not a bare timeout) when the spawn itself fails synchronously (non-zero exit, missing runtime dependency, malformed environment) — the synchronous-failure path, logged as Warn (~5 min)
 - Files: `session/gate_custom_check.go`
 
-##### Task 2.4.4c: Wire the sweep's stuck-marking for an overdue custom check through `LivenessEngine` (resolve the open Unresolved Question on `StuckReasonGateTimeout` first) (~5 min)
-- Files: `session/backlog_lifecycle.go` (new `reconcileCustomGateChecks` function)
+##### Task 2.4.4b2: Bind a successful spawn to the gate's `LivenessDefinition` (Shape A) — thread `ExpectedDuration`/`StalenessMargin` through the invocation the same way `TriggerTriage`'s call budget does (Epic 1.4's pattern), without yet implementing sweep-side stuck detection (that's Task 2.4.4c) (~5 min)
+- Files: `session/gate_custom_check.go`
+
+##### Task 2.4.4b3: On successful invocation completion, parse and record the `ReviewOutcome`-shaped verdict against the gate's `GateSatisfactionRecord`, mirroring `recordTerminalReviewVerdict`'s shape (~5 min)
+- Files: `session/gate_custom_check.go`
+
+##### Task 2.4.4b4: Assemble `InvokeCustomGateCheck` from Tasks 2.4.4b1-b3's pieces in the correct order (allowlist-checked spawn → liveness-bound tracking → verdict recording) and confirm `go build ./...` passes (~5 min)
+- Files: `session/gate_custom_check.go`
+
+##### Task 2.4.4c: Wire the sweep's stuck-marking for an overdue custom check through `LivenessEngine`, using the `StuckReasonGateTimeout` value decided in this epic's Decision subsection above (~5 min)
+- Files: `session/backlog_lifecycle_gates.go` (new — houses the new `reconcileCustomGateChecks`
+  function; per architecture-review/adversarial-review's file-growth concern, deliberately not added
+  to the already-large `session/backlog_lifecycle.go`)
 
 ##### Task 2.4.4d: Tests: allowlist rejection, liveness-bounded timeout detection reusing the sweep (~5 min)
 - Files: `session/gate_custom_check_test.go` (new)
+
+##### Task 2.4.4e: Test: a synchronous (non-timeout) spawn failure blocks the transition and logs Warn, distinct from the timeout-detection path covered by Task 2.4.4d (~5 min)
+- Files: `session/gate_custom_check_test.go`
 
 ---
 
@@ -1111,12 +1307,31 @@ can ever enter or leave.
 - Saving a stage with no incoming transition from any reachable-from-an-entry-stage node is rejected.
   - *Given* a graph where every existing entry stage's transitively-reachable set excludes the new
     stage, *When* validation runs, *Then* it returns an error naming the stage unreachable.
+- **Disabling an existing transition edge is rejected when doing so leaves any live item's current
+  stage with zero enabled outgoing transitions** — not only checked at stage/transition *creation*
+  time as originally written. This closes pre-mortem Failure #2: the static graph shape can stay
+  valid while a *dynamic*, item-distribution-dependent edge removal strands live work.
+  - *Given* a custom stage `"design-review"` whose only enabled outgoing transition is
+    `design-review -> ready`, and one live item currently at status `"design-review"`, *When*
+    `UpdateStageTransition` is called to set `design-review -> ready`'s `enabled` to `false`, *Then*
+    the graph validator rejects the call with an error naming both the stage and the affected live-item
+    count (e.g. `"Disabling 'design-review -> ready' would leave 1 live item on 'design-review' with
+    no legal outgoing transition"`), and the edge remains enabled in the persisted graph.
+  - *Given* the same `"design-review"` stage additionally has a second enabled outgoing transition,
+    `design-review -> legal-review`, *When* `design-review -> ready` is disabled, *Then* the validator
+    allows it, since the stage still has ≥1 enabled outgoing transition available to the live item.
 **Files**: `session/graph_validator.go` (new)
 
 ##### Task 2.6.1a: Decide and document the validation trigger point (on every mutating RPC vs. an explicit "validate" RPC) (~5 min)
 - Files: `session/graph_validator.go` (doc comment)
 
-##### Task 2.6.1b: Implement DFS-based reachability check from all `IsEntry` stages (~5 min)
+##### Task 2.6.1b1: Define the adjacency-building helper `buildAdjacency(stages []StageDefinition, transitions []TransitionDefinition) map[string][]string` — plain data-shaping, no traversal logic yet (~5 min)
+- Files: `session/graph_validator.go`
+
+##### Task 2.6.1b2: Implement the DFS traversal `reachableFrom(entryStages []string, adjacency map[string][]string) map[string]bool`, marking every stage reachable from any `IsEntry` stage (~5 min)
+- Files: `session/graph_validator.go`
+
+##### Task 2.6.1b3: Wire the reachability result into the validator's "unreachable stage" rejection path, covering both this story's ACs (zero-outgoing non-terminal stage, and zero-incoming-from-an-entry-stage) (~5 min)
 - Files: `session/graph_validator.go`
 
 ##### Task 2.6.1c: Implement the "non-terminal stage has ≥1 outgoing transition" check (~3 min)
@@ -1124,6 +1339,23 @@ can ever enter or leave.
 
 ##### Task 2.6.1d: Adversarial tests: self-loop, multi-node cycle, disconnected component, valid graph passes (~5 min)
 - Files: `session/graph_validator_test.go` (new)
+
+##### Task 2.6.1g1: Build the two-concurrent-caller fixture — a pre-mutation graph state plus two candidate `CreateStageTransition` requests that are each individually valid but would jointly produce an invalid graph, synchronized via a barrier (e.g. a `WaitGroup`/channel) so both calls' validation reads happen before either call's write commits (~5 min)
+- Files: `server/services/backlog_service_transitions_test.go`
+
+##### Task 2.6.1g2: Write the assertion harness confirming the persisted graph never reaches the jointly-invalid state — exactly one call's transition is committed, the other serializes and re-validates against the post-commit graph under Task 2.7.2h's transaction wrapper (~10 min)
+- Closes architecture-review Concern 4: a TOCTOU race between graph validation and the persist write
+  that would otherwise defeat this epic's whole guarantee.
+- Files: `server/services/backlog_service_transitions_test.go`
+
+##### Task 2.6.1e: Implement the live-item-aware disable check — given a candidate `(fromStage, toStage, enabled=false)` update and a live-item-count-per-stage query, reject if `fromStage`'s remaining-enabled-outgoing-edge count would drop to zero while its live-item count is >0 (~5 min)
+- This is a distinct check from Task 2.6.1c's static "non-terminal stage has ≥1 outgoing transition"
+  rule: a stage can validly have zero outgoing edges at *creation* time (nothing depends on it yet)
+  but must not be allowed to reach zero once items are actually sitting on it.
+- Files: `session/graph_validator.go`
+
+##### Task 2.6.1f: Tests: disabling the last enabled outgoing edge for a stage with ≥1 live item is rejected; disabling one of several enabled edges remains allowed; disabling any edge for a stage with zero live items is always allowed (~5 min)
+- Files: `session/graph_validator_test.go`
 
 ### Story 2.6.2: Cycle-with-no-escape lint warning
 **As the** single operator, **I want** a warning (not necessarily a hard block) when a cycle has no
@@ -1137,7 +1369,7 @@ loop in forever.
     response includes a `warnings` field naming the cycle, and the save still succeeds.
 **Files**: `session/graph_validator.go`
 
-##### Task 2.6.2a: Implement cycle detection (reuse the DFS from 2.6.1b) + "any edge in cycle has a gate" check (~5 min)
+##### Task 2.6.2a: Implement cycle detection (reuse the DFS traversal from Task 2.6.1b2) + "any edge in cycle has a gate" check (~5 min)
 - Files: `session/graph_validator.go`
 
 ##### Task 2.6.2b: Add a `warnings []string` field to the save RPC response proto (~3 min)
@@ -1182,7 +1414,27 @@ loop in forever.
 - `CreateStageTransition` invokes the Epic 2.6 graph validator before committing.
   - *Given* a `CreateStageTransition` request that would create an unreachable stage, *When* called,
     *Then* it returns a validation error and the transition is not persisted.
-**Files**: `proto/session/v1/backlog.proto`, `server/services/backlog_service_transitions.go` (new)
+- `UpdateStageTransition(enabled=false)` invokes Task 2.6.1e's live-item-aware disable check, not only
+  `CreateStageTransition`'s static reachability check.
+  - *Given* the `"design-review"`-with-one-enabled-edge scenario from Story 2.6.1's new AC, with 1 live
+    item currently on `"design-review"`, *When* `UpdateStageTransition` is called to disable
+    `design-review -> ready`, *Then* it returns `connect.CodeFailedPrecondition` naming the stage and
+    the live-item count, and a follow-up `ListStages`/transition-list call confirms the edge is still
+    enabled (no partial write).
+- Graph validation and the transition-persist write happen inside one DB transaction, so a concurrent
+  edit can't defeat the validator's guarantee (architecture-review Concern 4).
+  - *Given* two concurrent `CreateStageTransition` calls that would each individually pass validation
+    but jointly produce an invalid graph, *When* both attempt to commit, *Then* they serialize under
+    Task 2.7.2h's transaction wrapper — the second call's validation re-runs against the first call's
+    already-committed state — and the graph never reaches a state that violates Epic 2.6's guarantee.
+- A `GateKindCustom` config payload naming any key other than the allowlisted skill identifier, or
+  naming a skill not in Story 2.4.4's pre-registered allowlist, is rejected by the gate-save RPC
+  itself, not merely at invocation time (architecture-review Concern 2 / adversarial-review Concern 1).
+  - *Given* a gate-attach request with `TransitionGate{Kind: GateKindCustom, Config: {"skill":
+    "review-feasibility", "extra_flag": "..."}}`, *When* the RPC is called, *Then* it returns
+    `connect.CodeInvalidArgument` naming `extra_flag` as an unrecognized key, and no row is persisted.
+**Files**: `proto/session/v1/backlog.proto`, `server/services/backlog_service_transitions.go` (new),
+`session/gate_config.go` (new)
 
 ##### Task 2.7.2a: Add `StageTransition`/`TransitionGate` messages + RPCs (~5 min)
 - Files: `proto/session/v1/backlog.proto`
@@ -1196,12 +1448,50 @@ loop in forever.
 ##### Task 2.7.2d: Handler tests (~5 min)
 - Files: `server/services/backlog_service_transitions_test.go` (new)
 
+##### Task 2.7.2e: Wire `UpdateStageTransition`'s `enabled=false` path to query live-item-count-per-stage (via the storage layer) and invoke Task 2.6.1e's check before persisting (~5 min)
+- Files: `server/services/backlog_service_transitions.go`
+
+##### Task 2.7.2f: Handler test: disabling the last enabled edge for a stage with live items returns `CodeFailedPrecondition` and persists nothing (~5 min)
+- Files: `server/services/backlog_service_transitions_test.go`
+
+##### Task 2.7.2g1: Define the `GateConfig` sum type — `HumanApprovalConfig`, `AutomatedReviewConfig{PipelineMode, RequiresDiff}`, `StructuralConfig{CheckID}`, `CustomCheckConfig{SkillID}` — as the four kind-specific structs plus a `GateConfig` marker interface (~5 min)
+- Files: `session/gate_config.go` (new)
+
+##### Task 2.7.2g2: Implement `ParseGateConfig(kind GateKind, raw json.RawMessage) (GateConfig, error)`, rejecting any JSON key outside the kind's allowlisted field set and validating `CustomCheckConfig.SkillID` against Story 2.4.4's pre-registered allowlist (~5 min)
+- Files: `session/gate_config.go`
+
+##### Task 2.7.2g3: Call `ParseGateConfig` in the gate-save RPC handler before persisting, returning `connect.CodeInvalidArgument` naming the offending key/skill on failure — not only at `InvokeCustomGateCheck`'s invocation time (~5 min)
+- Closes architecture-review Concern 2 and adversarial-review's Concern 1: config validation moves
+  from invocation-time-only to save-time, structurally, per both reviews' own stated recommendation.
+  `PendingGates`'s dispatch and `InvokeCustomGateCheck` (Story 2.4.4) consume this already-typed value,
+  never raw JSON.
+- Files: `server/services/backlog_service_transitions.go`
+
+##### Task 2.7.2g4: Tests: unknown-key rejection per gate kind, unregistered-skill rejection, valid configs for all four kinds round-trip correctly (~5 min)
+- Files: `session/gate_config_test.go` (new)
+
+##### Task 2.7.2h1: Wrap Task 2.7.2c's `CreateStageTransition` validate-then-persist sequence in a single ent transaction (`WithTx`), re-running the Epic 2.6 validator against the transaction's own read view rather than a pre-transaction snapshot (~5 min)
+- Files: `server/services/backlog_service_transitions.go`
+
+##### Task 2.7.2h2: Apply the identical `WithTx` wrapping to Task 2.7.2e's `UpdateStageTransition` validate-then-persist sequence, including the live-item-aware disable check (~5 min)
+- Files: `server/services/backlog_service_transitions.go`
+
+##### Task 2.7.2h3: Confirm a failed re-validation inside either transaction rolls back with no partial write; run the existing handler tests plus Task 2.6.1g's concurrency test against the wrapped handlers (~5 min)
+- Closes architecture-review Concern 4's TOCTOU race between Epic 2.6's validator and the persist
+  write. Task 2.6.1g's tests exercise this.
+- Files: `server/services/backlog_service_transitions.go`, `server/services/backlog_service_transitions_test.go`
+
 ---
 
 ## Epic 2.8: "Backlog Stages" settings UI
 
 **Goal**: A list-based CRUD UI mirroring `PipelineModeForm.tsx`, per the naming-collision finding
 ("Stages"/"Pipeline Stages," never "Workflow(s)") and the list-not-canvas UX recommendation.
+
+**Scope decision**: this UI covers stages, transitions, and gates only — it does **not** include a
+liveness-parameter editor, per requirements.md's Scope section (updated to make this explicit) and
+`design/ux.md`'s "Scope note on liveness UI." Liveness values stay RPC-only (Epic 1.3.2), consistent
+with Phase 1 having zero UI of its own; a liveness editor is deferred, not an oversight.
 
 ### Story 2.8.1: Stages list page
 **As the** single operator, **I want** a `/settings/backlog-stages` page listing all stages with an
@@ -1248,7 +1538,16 @@ a separate canvas to define the graph.
 ##### Task 2.8.2b: Build the "Outgoing transitions" sub-list (add/remove rows, target-stage `<select>`) (~5 min)
 - Files: `web-app/src/app/settings/backlog-stages/StageForm.tsx`
 
-##### Task 2.8.2c: Build the gate checkbox-group with progressive-disclosure per-kind fields (~5 min)
+##### Task 2.8.2c1: Build the base checkbox-group markup — one checkbox per `GateKind` (human approval, automated review, structural, custom) attached to a transition row, with no conditional fields yet (~5 min)
+- Files: `web-app/src/app/settings/backlog-stages/StageForm.tsx`
+
+##### Task 2.8.2c2: Add the automated-review kind's progressive-disclosure fields (pipeline-mode `<select>`, `RequiresDiff` toggle), appearing only when its checkbox is checked and clearing/hiding on uncheck (~5 min)
+- Files: `web-app/src/app/settings/backlog-stages/StageForm.tsx`
+
+##### Task 2.8.2c3: Add the structural and custom-check kinds' progressive-disclosure fields (structural check-ID `<select>` from Task 2.4.2a's closed set; custom-check skill-ID `<select>` from Story 2.4.4's allowlist) (~5 min)
+- Files: `web-app/src/app/settings/backlog-stages/StageForm.tsx`
+
+##### Task 2.8.2c4: Wire keyboard operability for the progressive-disclosure interaction (tab order, checkbox/field association via `<label>`/`aria-describedby`), feeding Task 2.8.2e's accessibility test (~5 min)
 - Files: `web-app/src/app/settings/backlog-stages/StageForm.tsx`
 
 ##### Task 2.8.2d: Build `StageGraphDiagram.tsx` (SVG or mermaid) + `sr-only` text-equivalent table (~5 min)
@@ -1264,6 +1563,14 @@ a separate canvas to define the graph.
 **Goal**: `BacklogBoard.tsx`'s `COLUMNS` and `StageTracker.tsx`'s `deriveStageDisplay` render whatever
 stage set is actually configured, including an "Unrecognized stage" fallback for a stage ID present
 on a live item but absent from the fetched config (never silently drop the item, per BUG-037).
+
+**`useBacklogService.ts` needs no changes**: requirements.md names this hook's "frontend transition
+table" as needing updates, but source inspection (`web-app/src/lib/hooks/useBacklogService.ts:195-201`)
+confirms it already exposes a server-authoritative `allowedTransitions?: string[]` field per item
+rather than a hardcoded table — verified independently in this project's adversarial review
+(Minor #1) and again during plan repair (2026-09-03): no hardcoded transition table exists anywhere
+in the file. It's absent from the epics below because it's already correct, not because it was
+missed.
 
 ### Story 2.9.1: `BacklogBoard.tsx` fetches live stage config
 **As the** single operator, **I want** the board's columns to reflect the actual configured stage set,

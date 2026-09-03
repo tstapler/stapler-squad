@@ -45,8 +45,9 @@ is added to it.
 ## Rationale
 
 - **Disjoint consumers**: `LivenessEngine` is consulted by the periodic `reconcile*` stuck-detection
-  sweeps (`session/backlog_lifecycle_stale.go`, `backlog_lifecycle_triage.go`) and by
-  `TriggerTriage`'s call-budget selection (`server/services/backlog_service_triage.go`).
+  sweeps (`session/backlog_lifecycle_stale.go`, `backlog_lifecycle_triage.go`, and — per Story 1.4.3 —
+  `reconcileBouncingItems` in `session/backlog_lifecycle.go`) and by `TriggerTriage`'s call-budget
+  selection (`server/services/backlog_service_triage.go`).
   `WorkflowEngine.CanTransition`/`ValidateGates` are consulted by the synchronous
   `TransitionBacklogItemStatus` request path. Different call sites, different triggering clocks (a
   ~60s periodic tick vs. a synchronous RPC).

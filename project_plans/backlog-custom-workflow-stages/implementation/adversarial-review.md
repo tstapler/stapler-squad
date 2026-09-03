@@ -1,7 +1,9 @@
 # Adversarial Review: backlog-custom-workflow-stages
 
 **Date**: 2026-09-03
-**Verdict**: CONCERNS
+**Verdict**: CONCERNS (superseded 2026-09-03 — the 5 concerns and the InvokeCustomGateCheck/file-growth
+minors below were subsequently addressed in plan.md during Phase 4's Product Triad Review repair loop.
+Left this file's original findings unedited below as the historical record.)
 
 ## Blockers
 
