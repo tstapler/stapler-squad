@@ -8,6 +8,7 @@
  *    renders as "loaded" before a signal arrives (defaults to Unknown).
  */
 
+import "./sessionCardMockSetup";
 import React from "react";
 import { render, screen } from "@testing-library/react";
 import { piHealthBadgeInfo, SessionCard } from "../SessionCard";
@@ -61,18 +62,6 @@ describe("piHealthBadgeInfo", () => {
 // ---------------------------------------------------------------------------
 // Full-render visibility gating (flag on/off, program pi/non-pi)
 // ---------------------------------------------------------------------------
-
-jest.mock("@connectrpc/connect", () => require("./sessionCardTestFixtures").mockConnect());
-jest.mock("@connectrpc/connect-web", () => require("./sessionCardTestFixtures").mockConnectWeb());
-jest.mock("@/lib/contexts/ReviewQueueContext", () => require("./sessionCardTestFixtures").mockReviewQueueContext());
-jest.mock("@/lib/contexts/SessionServiceContext", () => require("./sessionCardTestFixtures").mockSessionServiceContext());
-jest.mock("@/lib/store", () => require("./sessionCardTestFixtures").mockStore());
-jest.mock("@/lib/store/sessionsSlice", () => require("./sessionCardTestFixtures").mockSessionsSlice());
-jest.mock("@/lib/hooks/useTerminalSnapshot", () => require("./sessionCardTestFixtures").mockUseTerminalSnapshot());
-jest.mock("@/lib/hooks/useFocusTrap", () => require("./sessionCardTestFixtures").mockUseFocusTrap());
-jest.mock("@/components/ui/AppLink", () => require("./sessionCardTestFixtures").mockAppLink());
-jest.mock("@/components/ui/Modal", () => require("./sessionCardTestFixtures").mockModal());
-jest.mock("@/lib/hooks/useSessionActions", () => require("./sessionCardTestFixtures").mockUseSessionActions());
 
 let piSupportEnabled = false;
 jest.mock("@/lib/contexts/FeatureFlagsContext", () => ({
