@@ -100,13 +100,13 @@ func EnsureNetworkTLSCerts(networks map[string][]string) (caFile string, certs m
 		if genErr != nil {
 			return "", nil, fmt.Errorf("generate cert for network %s: %w", key, genErr)
 		}
-		if err := os.WriteFile(certFile, certPEM, 0644); err != nil {
+		if err := os.WriteFile(certFile, certPEM, 0600); err != nil {
 			return "", nil, fmt.Errorf("write cert for network %s: %w", key, err)
 		}
 		if err := os.WriteFile(keyFile, keyPEM, 0600); err != nil {
 			return "", nil, fmt.Errorf("write key for network %s: %w", key, err)
 		}
-		if err := os.WriteFile(hashFile, []byte(want), 0644); err != nil {
+		if err := os.WriteFile(hashFile, []byte(want), 0600); err != nil {
 			return "", nil, fmt.Errorf("write cert hash for network %s: %w", key, err)
 		}
 
@@ -169,7 +169,7 @@ func ensureCA(caFile string) (caKey *ecdsa.PrivateKey, caCert *x509.Certificate,
 	if err != nil {
 		return nil, nil, false, err
 	}
-	if err := os.WriteFile(caFile, caCertPEM, 0644); err != nil {
+	if err := os.WriteFile(caFile, caCertPEM, 0600); err != nil {
 		return nil, nil, false, fmt.Errorf("write CA cert: %w", err)
 	}
 

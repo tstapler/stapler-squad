@@ -157,7 +157,7 @@ func writeSettingsAtomic(settingsPath, claudeDir string, raw map[string]json.Raw
 	if err != nil {
 		return fmt.Errorf("marshal settings: %w", err)
 	}
-	if err := os.MkdirAll(claudeDir, 0o755); err != nil {
+	if err := os.MkdirAll(claudeDir, 0o750); err != nil {
 		return fmt.Errorf("create dir: %w", err)
 	}
 	// Unique temp file (not settingsPath+".tmp") so two concurrent writers targeting
@@ -179,7 +179,7 @@ func writeSettingsAtomic(settingsPath, claudeDir string, raw map[string]json.Raw
 	if err := tmp.Close(); err != nil {
 		return fmt.Errorf("close temp %s: %w", tmpPath, err)
 	}
-	if err := os.Chmod(tmpPath, 0o644); err != nil {
+	if err := os.Chmod(tmpPath, 0o600); err != nil {
 		return fmt.Errorf("chmod temp %s: %w", tmpPath, err)
 	}
 	if err := os.Rename(tmpPath, settingsPath); err != nil {

@@ -43,7 +43,7 @@ func NewWriter(checkpointDir string) *Writer {
 // If srcScrollbackPath is empty the scrollback copy step is skipped silently.
 func (w *Writer) Write(ctx context.Context, c Checkpoint, srcScrollbackPath string) error {
 	dir := filepath.Join(w.checkpointDir, c.SessionID)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return fmt.Errorf("hibernation: create checkpoint dir: %w", err)
 	}
 
@@ -53,7 +53,7 @@ func (w *Writer) Write(ctx context.Context, c Checkpoint, srcScrollbackPath stri
 		return fmt.Errorf("hibernation: marshal checkpoint: %w", err)
 	}
 	checkpointPath := filepath.Join(dir, "checkpoint.json")
-	if err := os.WriteFile(checkpointPath, data, 0o644); err != nil {
+	if err := os.WriteFile(checkpointPath, data, 0o600); err != nil {
 		return fmt.Errorf("hibernation: write checkpoint.json: %w", err)
 	}
 

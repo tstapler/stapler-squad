@@ -130,7 +130,7 @@ func DefaultState() *State {
 // This prevents tests from loading or interfering with production data
 func NewTestState(testDir string) *State {
 	// Create the test directory if it doesn't exist
-	if err := os.MkdirAll(testDir, 0755); err != nil {
+	if err := os.MkdirAll(testDir, 0750); err != nil {
 		log.Warn("failed to create test directory", "err", err)
 		// Return a minimal state without locking if we can't create the test dir
 		return &State{
@@ -280,7 +280,7 @@ func (s *State) saveToDiskWithoutLocking() error {
 		return fmt.Errorf("failed to get config directory: %w", err)
 	}
 
-	if err := os.MkdirAll(configDir, 0755); err != nil {
+	if err := os.MkdirAll(configDir, 0750); err != nil {
 		return fmt.Errorf("failed to create config directory: %w", err)
 	}
 
@@ -292,7 +292,7 @@ func (s *State) saveToDiskWithoutLocking() error {
 
 	// Write to a temporary file first to ensure atomicity
 	tmpPath := statePath + ".tmp"
-	if err := os.WriteFile(tmpPath, data, 0644); err != nil {
+	if err := os.WriteFile(tmpPath, data, 0600); err != nil {
 		return fmt.Errorf("failed to write temporary state file: %w", err)
 	}
 
