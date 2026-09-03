@@ -179,10 +179,12 @@ func (i *Instance) buildLaunchCommand(claudeSessionID string) string {
 		// swallowed as inert positional text instead of a real flag.
 		cmd = i.buildClaudeCommand(p.base, claudeSessionID)
 	case piProgram:
+		i.piSessionMu.Lock()
 		var piSessionID string
 		if i.piSession != nil {
 			piSessionID = i.piSession.SessionID
 		}
+		i.piSessionMu.Unlock()
 		cmd = i.buildPiCommand(p.base, piSessionID)
 	case plainProgram:
 		// shellQuoteFields (not one whole-string shellQuote) preserves legitimate multi-word

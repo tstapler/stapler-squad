@@ -3,6 +3,7 @@ package session
 import (
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -79,4 +80,57 @@ func TestStartController_RefusesAfterDestroy(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.False(t, inst.controllerManager.HasController(), "StartController must not register a controller once the instance is destroyed")
+}
+
+// TestStopController_StopsLivePiStatusSourceRegardlessOfProgramOrFlag is the
+// regression guard for Bug 2 (architecture + idiom review, BLOCKER): routing
+// in StopController/stopControllerLocked used to re-evaluate
+// piStatusSupported() -- isPi(i.Program) && the live pi-support feature
+// flag -- instead of checking whether a PiStatusSource was actually
+// registered. That meant a mid-flight flag disable (or, as exercised here, a
+// program value that no longer resolves via isPi) could route to the
+// Claude-controller branch and skip stopPiStatusSource entirely, leaking the
+// still-running PiStatusSource's subprocess/goroutines and breaking
+// SetPiSessionID's documented invariant that Restart's i.piSession access is
+// safe because Stop() already joined the only writer goroutine.
+//
+// This test registers a real, running PiStatusSource directly on
+// i.piStatusSrc (bypassing StartController/piStatusSupported entirely, so
+// the test result cannot depend on the current value of isPi(i.Program) or
+// the feature flag) and asserts StopController() still calls Stop() on it --
+// observed via the subprocess actually being killed and the reader/wait
+// goroutines joining (src.Stop() returning, which blocks on p.wg.Wait()).
+func TestStopController_StopsLivePiStatusSourceRegardlessOfProgramOrFlag(t *testing.T) {
+	t.Parallel()
+
+	inst := &Instance{Title: "stop-controller-live-pi-source-test", Program: "not-pi-and-flag-irrelevant"}
+	inst.SetStatusManager(NewInstanceStatusManager())
+
+	src := NewPiStatusSource(inst.Title, sleeperCmd())
+	require.NoError(t, src.Start())
+	inst.piStatusSrc.Store(src)
+
+	// Sanity check: piStatusSupported() is false here (Program doesn't
+	// resolve via isPi), which is exactly the condition that used to make
+	// StopController skip stopPiStatusSource.
+	require.False(t, inst.piStatusSupported(), "test setup: piStatusSupported() must be false to exercise the Bug 2 routing gap")
+
+	inst.StopController()
+
+	assert.Nil(t, inst.piStatusSrc.Load(), "StopController must clear the live PiStatusSource even when piStatusSupported() is false")
+
+	// src.Stop() is idempotent and blocks on p.wg.Wait(); calling it again
+	// here should return immediately (already stopped) rather than hang,
+	// confirming the reader/wait goroutines were actually joined by
+	// StopController's call, not left running.
+	done := make(chan struct{})
+	go func() {
+		src.Stop()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("src.Stop() did not return promptly -- PiStatusSource's goroutines were not actually stopped by StopController")
+	}
 }

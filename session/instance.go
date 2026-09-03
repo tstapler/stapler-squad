@@ -446,7 +446,17 @@ type Instance struct {
 	// piSession holds pi-coding-agent session information for resume-on-restart
 	// (see buildPiCommand). Populated only when isPi(i.Program) and the
 	// config.FeaturePiSupport flag is enabled — see the capture in Restart.
+	// Guarded by piSessionMu, not i.mu.
 	piSession *PiSessionData
+
+	// piSessionMu protects piSession. Separate from i.mu, mirroring
+	// claudeSessionMu's rationale for claudeSession: SetPiSessionID is called
+	// from PiStatusSource's reader goroutine (via the onSessionID callback)
+	// and Restart touches piSession too, so a dedicated lock makes both
+	// access points structurally safe without relying on the (fragile, and
+	// broken by Bug 2) argument that Stop() always finishes joining the
+	// writer goroutine before Restart reads/writes piSession.
+	piSessionMu sync.Mutex
 
 	// piStatusSrc holds the status-only `pi --mode json` subprocess (Epic
 	// 5.2) for this instance, when isPi(i.Program) and config.FeaturePiSupport
@@ -2226,12 +2236,22 @@ func (i *Instance) Restart(preserveOutput bool) error {
 	// gating intent. The field itself is restored afterward rather than
 	// cleared outright, so a stale piSession isn't lost if the flag is later
 	// re-enabled.
+	//
+	// Guarded by piSessionMu (not i.mu), mirroring claudeSessionMu's usage:
+	// this used to rely on Stop() always having joined SetPiSessionID's only
+	// writer goroutine before Restart reached this code, an argument Bug 2
+	// broke (a disabled flag could skip stopPiStatusSource entirely, leaving
+	// that goroutine alive). The lock makes this safe structurally instead.
+	i.piSessionMu.Lock()
 	restorePiSession := i.piSession
 	if !(isPi(i.Program) && config.LoadConfig().GetFeatureFlag(config.FeaturePiSupport)) {
 		i.piSession = nil
 	}
+	i.piSessionMu.Unlock()
 	program := i.buildLaunchCommand(claudeSessionID)
+	i.piSessionMu.Lock()
 	i.piSession = restorePiSession
+	i.piSessionMu.Unlock()
 
 	// Create a new tmux session
 	// Use configurable prefix or default

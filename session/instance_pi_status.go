@@ -13,10 +13,16 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 )
 
-// piStatusSupported reports whether this instance should get a status-only
-// pi subprocess: the program must resolve to pi and the pi-support feature
-// flag must be enabled. Checked at both StartController and StopController
-// so a mid-flight flag flip can't leave one side out of sync with the other.
+// piStatusSupported reports whether this instance should get a NEW
+// status-only pi subprocess started: the program must resolve to pi and the
+// pi-support feature flag must be enabled. Checked only at StartController
+// (Bug 2 fix) -- StopController/stopControllerLocked instead route on
+// i.piStatusSrc's live registration state, so a running PiStatusSource
+// always gets stopped regardless of a mid-flight flag flip. Re-checking this
+// flag at stop time was the bug: disabling pi-support while a pi session's
+// PiStatusSource was still running left it un-Stop()-ed, leaking its
+// subprocess/goroutines and racing Restart's unsynchronized i.piSession
+// access (see SetPiSessionID's doc comment).
 func (i *Instance) piStatusSupported() bool {
 	return isPi(i.Program) && config.LoadConfig().GetFeatureFlag(config.FeaturePiSupport)
 }
@@ -87,10 +93,12 @@ func (i *Instance) stopPiStatusSource() {
 func (i *Instance) piStatusCommandFactory() piCommandFactory {
 	base := i.Program
 	path := i.Path
+	i.piSessionMu.Lock()
 	var piSessionID string
 	if i.piSession != nil {
 		piSessionID = i.piSession.SessionID
 	}
+	i.piSessionMu.Unlock()
 
 	return func() *exec.Cmd {
 		args := []string{"--mode", "json"}
@@ -109,24 +117,22 @@ func (i *Instance) piStatusCommandFactory() piCommandFactory {
 // status-only pi subprocess's "session" header event (Task 2.2.1e), so a
 // later Restart's buildLaunchCommand call injects --session <id> and the pi
 // conversation actually resumes across a restart. Mirrors
-// SetClaudeConversationUUID's shape (instance_claude.go): guarded by the
-// same lock other Instance fields use (i.mu), and a no-op if id is empty or
-// unchanged.
+// SetClaudeConversationUUID's shape (instance_claude.go), but guarded by the
+// dedicated piSessionMu rather than i.mu -- mirroring claudeSessionMu's
+// rationale for claudeSession.
 //
 // Concurrency note: this is set from PiStatusSource's reader goroutine via
 // the onSessionID callback. Restart's own piSession suppression/restore
-// block (session/instance.go) reads/writes i.piSession without taking i.mu,
-// but that is safe in practice, not just by omission: Restart always calls
-// StopController first, and stopPiStatusSource's Stop() blocks
-// (sync.WaitGroup) until the reader goroutine -- the only caller of this
-// method -- has exited, so no call to SetPiSessionID can be in flight by
-// the time Restart reaches its piSession block.
+// block (session/instance.go) also takes piSessionMu around its reads/writes
+// of i.piSession, so this is safe structurally now -- not by relying on the
+// (fragile, and broken by Bug 2's flag-flip leak) argument that Stop()
+// always finishes joining the reader goroutine before Restart runs.
 func (i *Instance) SetPiSessionID(id string) {
 	if id == "" {
 		return
 	}
-	i.mu.Lock()
-	defer i.mu.Unlock()
+	i.piSessionMu.Lock()
+	defer i.piSessionMu.Unlock()
 	if i.piSession != nil && i.piSession.SessionID == id {
 		return
 	}

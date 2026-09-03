@@ -3,6 +3,7 @@ package session
 import (
 	"os/exec"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -243,15 +244,75 @@ func TestPiStatusSource_SessionEventPropagatesToInstance(t *testing.T) {
 
 	src.handleEvent(PiSessionEvent{Type: "session", ID: "real-pi-uuid-1", Version: 1})
 
-	inst.mu.Lock()
+	inst.piSessionMu.Lock()
 	got := inst.piSession
-	inst.mu.Unlock()
+	inst.piSessionMu.Unlock()
 
 	if got == nil || got.SessionID != "real-pi-uuid-1" {
 		t.Fatalf("inst.piSession = %+v, want SessionID %q", got, "real-pi-uuid-1")
 	}
 	if got.LastAttached.IsZero() {
 		t.Errorf("inst.piSession.LastAttached was not set")
+	}
+}
+
+// TestPiStatusSource_StopWaitsOutPendingRelaunchAndPreventsIt is a regression
+// test for the BLOCKER finding that Stop() didn't wait for or cancel a
+// pending relaunch timer: handleProcessExit's time.AfterFunc was never added
+// to p.wg (so Stop()'s wg.Wait() could return before it fired) and never
+// stored anywhere Stop() could cancel, so a relaunch racing a concurrent
+// Stop() could call launch() -- and its p.wg.Add(2) -- after Stop()'s Wait()
+// already returned, leaking a subprocess/goroutines nothing would ever stop
+// again.
+//
+// This test kills the subprocess to force handleProcessExit to schedule a
+// relaunch, then immediately calls Stop() (racing the pending backoff timer)
+// and asserts that launch() (observed via the counting factory) is never
+// called again after Stop() returns -- true whether Stop() won the race
+// (cancelled the timer) or the timer had already fired and lost to the
+// stopped flag, because Stop()'s wg.Wait() now blocks until that resolution
+// either way.
+func TestPiStatusSource_StopWaitsOutPendingRelaunchAndPreventsIt(t *testing.T) {
+	var launches atomic.Int32
+	factory := func() *exec.Cmd {
+		launches.Add(1)
+		return exec.Command("sleep", "100")
+	}
+
+	src := NewPiStatusSource("test-session", factory)
+	if err := src.Start(); err != nil {
+		t.Fatalf("Start() failed: %v", err)
+	}
+
+	src.cmdMu.Lock()
+	proc := src.cmd.Process
+	src.cmdMu.Unlock()
+	if err := proc.Kill(); err != nil {
+		t.Fatalf("failed to kill subprocess: %v", err)
+	}
+
+	// Wait for handleProcessExit to observe the exit and schedule the
+	// relaunch timer (retryCount bumps synchronously with scheduling).
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) && src.retryCount.Load() == 0 {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if src.retryCount.Load() == 0 {
+		t.Fatal("relaunch was never scheduled after killing the subprocess")
+	}
+
+	launchesBeforeStop := launches.Load()
+
+	// Race the pending backoff timer: Stop() must block until the relaunch
+	// attempt (whether cancelled or already in flight) has fully resolved.
+	src.Stop()
+
+	// Give any would-be leaked relaunch (the pre-fix bug) time to fire --
+	// well past the backoff and then some margin.
+	time.Sleep(piRelaunchBackoff*time.Duration(piMaxRelaunchAttempts) + 500*time.Millisecond)
+
+	if got := launches.Load(); got != launchesBeforeStop {
+		t.Errorf("launch() was called again after Stop() returned (launches before=%d, after=%d) -- pending relaunch timer was not cancelled/joined by Stop()", launchesBeforeStop, got)
 	}
 }
 

@@ -86,12 +86,23 @@ type PiStatusSource struct {
 	// (the int32 zero value is detection.StatusUnknown, not StatusReady).
 	status atomic.Int32
 
-	// mu guards pendingTools and idleTimer, both touched only from
-	// handleEvent (single reader goroutine per subprocess generation, but
-	// Stop() can race a relaunch's idle-timer cancellation).
+	// mu guards pendingTools, idleTimer, and relaunchTimer, all touched only
+	// from handleEvent/handleProcessExit (single reader/wait goroutine pair
+	// per subprocess generation, but Stop() can race a relaunch's idle-timer
+	// or relaunch-timer cancellation).
 	mu           sync.Mutex
 	pendingTools map[string]struct{}
 	idleTimer    *time.Timer
+	// relaunchTimer holds the pending time.AfterFunc scheduled by
+	// handleProcessExit to retry a dead subprocess, so Stop() can proactively
+	// cancel it (an optimization -- avoids waiting out the full backoff on a
+	// clean shutdown). The correctness guarantee against the Bug 1 race
+	// (Stop()'s wg.Wait() returning before a scheduled relaunch fires and
+	// calls launch(), which would Add to an already-Wait()-ed WaitGroup) does
+	// NOT come from this field -- it comes from wg.Add(1)/Done() bracketing
+	// the timer callback below, so wg.Wait() always blocks until any pending
+	// relaunch attempt has resolved one way or another.
+	relaunchTimer *time.Timer
 
 	// unavailable is true only once relaunch retries are exhausted --
 	// confirmed-dead, per Story 5.2.3's three-state rigor (known-good /
@@ -385,7 +396,16 @@ func (p *PiStatusSource) handleProcessExit() {
 	backoff := piRelaunchBackoff * time.Duration(attempt)
 	log.Warn("pi status subprocess died; scheduling relaunch", "session", p.sessionTitle, "attempt", attempt, "max_attempts", piMaxRelaunchAttempts, "backoff", backoff)
 
-	time.AfterFunc(backoff, func() {
+	// Bug 1 fix: Add(1) now, Done() inside the callback no matter which
+	// branch it takes (relaunch, no-op because Stop() won, or a failed
+	// relaunch that recurses into handleProcessExit again). This makes
+	// Stop()'s existing wg.Wait() block until this pending relaunch attempt
+	// has fully resolved, closing the "Wait() returns zero, then the timer
+	// fires and calls launch(), which Add()s to an already-waited-on
+	// WaitGroup" race described in the review finding.
+	p.wg.Add(1)
+	timer := time.AfterFunc(backoff, func() {
+		defer p.wg.Done()
 		if p.stopped.Load() {
 			return
 		}
@@ -394,6 +414,10 @@ func (p *PiStatusSource) handleProcessExit() {
 			p.handleProcessExit()
 		}
 	})
+
+	p.mu.Lock()
+	p.relaunchTimer = timer
+	p.mu.Unlock()
 }
 
 // Stop terminates the subprocess (if running), cancels any pending idle
@@ -405,6 +429,7 @@ func (p *PiStatusSource) Stop() {
 	}
 	close(p.stopCh)
 	p.cancelIdleTimer()
+	p.cancelRelaunchTimer()
 
 	p.cmdMu.Lock()
 	cmd := p.cmd
@@ -414,6 +439,30 @@ func (p *PiStatusSource) Stop() {
 		_ = cmd.Process.Kill()
 	}
 	p.wg.Wait()
+}
+
+// cancelRelaunchTimer proactively cancels a pending relaunch timer scheduled
+// by handleProcessExit, if one exists. This is purely an optimization (avoids
+// Stop() waiting out the full backoff on a clean shutdown) -- the actual
+// correctness guarantee is the wg.Add(1)/Done() pairing around the timer
+// callback in handleProcessExit. If timer.Stop() successfully cancels the
+// timer (it returns true), the callback will never run and its deferred
+// wg.Done() will never fire, so this must call wg.Done() itself to balance
+// the Add(1). If Stop() returns false, the callback has already fired or is
+// already running concurrently -- it will call wg.Done() itself, so this must
+// NOT double-Done.
+func (p *PiStatusSource) cancelRelaunchTimer() {
+	p.mu.Lock()
+	timer := p.relaunchTimer
+	p.relaunchTimer = nil
+	p.mu.Unlock()
+
+	if timer == nil {
+		return
+	}
+	if timer.Stop() {
+		p.wg.Done()
+	}
 }
 
 // isPiUnrecognizedTypeError is a small errors.As wrapper kept local to this
