@@ -4,6 +4,11 @@ import {
   BackoffState,
   isRetriableCloseCode,
   getWsCloseCode,
+  isNonRetriableConnectError,
+  connectTimeoutMs,
+  FOREGROUND_CONNECT_TIMEOUT_MS,
+  CONNECT_TIMEOUT_MS,
+  FOREGROUND_FAST_ATTEMPTS,
 } from "@/lib/utils/backoff";
 
 describe("jitteredDelay", () => {
@@ -116,5 +121,65 @@ describe("getWsCloseCode", () => {
   it("should return null when ConnectError has no ws-close-code header", () => {
     const err = new ConnectError("some error", Code.Unavailable);
     expect(getWsCloseCode(err)).toBeNull();
+  });
+});
+
+describe("isNonRetriableConnectError", () => {
+  it("isNonRetriableConnectError_should_returnTrue_When_wsCloseCodeHeaderIsNonRetriable", () => {
+    const err = new ConnectError(
+      "WebSocket closed",
+      Code.Unavailable,
+      new Headers({ "ws-close-code": "4001" })
+    );
+    expect(isNonRetriableConnectError(err)).toBe(true);
+  });
+
+  it("isNonRetriableConnectError_should_returnFalse_When_wsCloseCodeHeaderIsRetriable", () => {
+    const err = new ConnectError(
+      "WebSocket closed",
+      Code.Unavailable,
+      new Headers({ "ws-close-code": "1006" })
+    );
+    expect(isNonRetriableConnectError(err)).toBe(false);
+  });
+
+  it("isNonRetriableConnectError_should_returnTrue_When_nativeTransportErrorCodeIsUnauthenticated", () => {
+    // createConnectTransport never sets a ws-close-code header — this is the
+    // native-transport equivalent of ws-close-code 4001 (auth failure).
+    const err = new ConnectError("unauthenticated", Code.Unauthenticated);
+    expect(getWsCloseCode(err)).toBeNull();
+    expect(isNonRetriableConnectError(err)).toBe(true);
+  });
+
+  it("isNonRetriableConnectError_should_returnTrue_When_nativeTransportErrorCodeIsNotFound", () => {
+    // Native-transport equivalent of ws-close-code 4004 (session not found).
+    const err = new ConnectError("session not found", Code.NotFound);
+    expect(getWsCloseCode(err)).toBeNull();
+    expect(isNonRetriableConnectError(err)).toBe(true);
+  });
+
+  it("isNonRetriableConnectError_should_returnFalse_When_nativeTransportErrorCodeIsRetriable", () => {
+    const err = new ConnectError("unavailable", Code.Unavailable);
+    expect(isNonRetriableConnectError(err)).toBe(false);
+  });
+
+  it("isNonRetriableConnectError_should_returnFalse_When_errorIsNotAConnectError", () => {
+    expect(isNonRetriableConnectError(new Error("boom"))).toBe(false);
+  });
+});
+
+describe("connectTimeoutMs", () => {
+  it("connectTimeoutMs_should_returnForegroundTimeout_When_foregroundTrueAndAttemptZero", () => {
+    expect(connectTimeoutMs(true, 0)).toBe(FOREGROUND_CONNECT_TIMEOUT_MS);
+  });
+  it("connectTimeoutMs_should_returnForegroundTimeout_When_foregroundTrueAndAttemptOne", () => {
+    expect(connectTimeoutMs(true, 1)).toBe(FOREGROUND_CONNECT_TIMEOUT_MS);
+  });
+  it("connectTimeoutMs_should_returnNormalTimeout_When_foregroundTrueAndAttemptEqualsFastAttempts", () => {
+    expect(connectTimeoutMs(true, FOREGROUND_FAST_ATTEMPTS)).toBe(CONNECT_TIMEOUT_MS);
+  });
+  it("connectTimeoutMs_should_returnNormalTimeout_When_foregroundFalseRegardlessOfAttempt", () => {
+    expect(connectTimeoutMs(false, 0)).toBe(CONNECT_TIMEOUT_MS);
+    expect(connectTimeoutMs(false, 5)).toBe(CONNECT_TIMEOUT_MS);
   });
 });

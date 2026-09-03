@@ -1,3 +1,4 @@
+// +feature: approval-rule-min-session-idle-minutes
 "use client";
 
 import { useState, useEffect, useLayoutEffect, useRef } from "react";
@@ -106,6 +107,8 @@ export function RuleBuilderForm({ editRule, prefill, templateSeed, onSave, onSav
   const [requiredFlagPrefixes, setRequiredFlagPrefixes] = useState<string[]>([]);
   const [pythonModes, setPythonModes] = useState<string[]>([]);
   const [safePythonImportsOnly, setSafePythonImportsOnly] = useState(false);
+  const [requireCiPassing, setRequireCiPassing] = useState(false);
+  const [minSessionIdleMinutes, setMinSessionIdleMinutes] = useState(0);
   const [commandPattern, setCommandPattern] = useState("");
   const [filePattern, setFilePattern] = useState("");
   const [decision, setDecision] = useState<AutoDecision>(AutoDecision.ALLOW);
@@ -159,6 +162,7 @@ export function RuleBuilderForm({ editRule, prefill, templateSeed, onSave, onSav
     setForbiddenFlags(templateSeed.forbiddenFlags ?? []);
     setPythonModes(templateSeed.pythonModes ?? []);
     setSafePythonImportsOnly(templateSeed.safePythonImportsOnly ?? false);
+    setRequireCiPassing(templateSeed.requireCiPassing ?? false);
     setDecision(templateSeed.decision);
     setRiskLevel(templateSeed.riskLevel);
     setPriority(templateSeed.priority);
@@ -224,6 +228,8 @@ export function RuleBuilderForm({ editRule, prefill, templateSeed, onSave, onSav
     setRequiredFlagPrefixes(editRule.requiredFlagPrefixes ?? []);
     setPythonModes(editRule.pythonModes ?? []);
     setSafePythonImportsOnly(editRule.safePythonImportsOnly ?? false);
+    setRequireCiPassing(editRule.requireCiPassing ?? false);
+    setMinSessionIdleMinutes(editRule.minSessionIdleMinutes ?? 0);
     setCommandPattern(editRule.commandPattern ?? "");
     setFilePattern(editRule.filePattern ?? "");
     setDecision(editRule.decision ?? AutoDecision.ESCALATE);
@@ -313,6 +319,8 @@ export function RuleBuilderForm({ editRule, prefill, templateSeed, onSave, onSav
         requiredFlagPrefixes: mode === "structured" ? requiredFlagPrefixes : [],
         pythonModes: mode === "structured" ? pythonModes : [],
         safePythonImportsOnly: mode === "structured" ? safePythonImportsOnly : false,
+        requireCiPassing,
+        minSessionIdleMinutes,
       };
       if (destination === "config" && onSaveToConfig && !editRule) {
         await onSaveToConfig(rulePayload);
@@ -556,6 +564,27 @@ export function RuleBuilderForm({ editRule, prefill, templateSeed, onSave, onSav
           <label className={checkboxRow}>
             <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />
             Rule enabled
+          </label>
+          <label className={checkboxRow} data-testid="require-ci-passing-checkbox">
+            <input type="checkbox" checked={requireCiPassing} onChange={(e) => setRequireCiPassing(e.target.checked)} />
+            Require CI passing on this branch
+          </label>
+          <label className={fieldLabel} htmlFor="rule-min-session-idle-minutes-input">
+            Min. session idle minutes
+            <input
+              id="rule-min-session-idle-minutes-input"
+              className={fieldInput}
+              data-testid="min-session-idle-minutes-input"
+              type="number"
+              min={0}
+              value={minSessionIdleMinutes}
+              onChange={(e) => setMinSessionIdleMinutes(Math.max(0, Number(e.target.value) || 0))}
+            />
+            <span className={priorityHint}>
+              0 = not applied. Otherwise requires the session to have been idle at least this
+              many minutes to match; sessions with unknown idle time never match a nonzero
+              value here (fails closed).
+            </span>
           </label>
         </div>
       </div>

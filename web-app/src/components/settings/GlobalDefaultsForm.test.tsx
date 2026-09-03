@@ -5,6 +5,7 @@
  *  1. Renders the Max Concurrent Backlog Work Items input with the loaded value
  *  2. Submitting includes maxConcurrentBacklogWorkItems in the update payload
  *  3. Editing the field updates the submitted payload
+ *  4. Stale session threshold/notify fields load, save, and survive a failed save
  */
 
 import React from "react";
@@ -36,6 +37,8 @@ const sampleDefaults = {
   cliFlags: "",
   maxAutoReworkIterations: 3,
   maxConcurrentBacklogWorkItems: 2,
+  staleSessionThresholdMinutes: 30,
+  staleSessionNotifyEnabled: true,
 };
 
 beforeEach(() => {
@@ -81,5 +84,57 @@ describe("GlobalDefaultsForm", () => {
         expect.objectContaining({ maxConcurrentBacklogWorkItems: 5 })
       );
     });
+  });
+
+  it("pre-fills the stale session threshold and notify controls from loaded defaults", async () => {
+    render(<GlobalDefaultsForm />);
+
+    const thresholdInput = await screen.findByTestId("stale-session-threshold-input");
+    expect(thresholdInput).toHaveValue(30);
+
+    const notifyCheckbox = screen.getByTestId("stale-session-notify-checkbox");
+    expect(notifyCheckbox).toBeChecked();
+  });
+
+  it("submits edited stale session threshold and notify values on save", async () => {
+    render(<GlobalDefaultsForm />);
+
+    const thresholdInput = await screen.findByTestId("stale-session-threshold-input");
+    const notifyCheckbox = screen.getByTestId("stale-session-notify-checkbox");
+
+    fireEvent.change(thresholdInput, { target: { value: "45" } });
+    fireEvent.click(notifyCheckbox);
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() => {
+      expect(mockUpdateGlobalDefaults).toHaveBeenCalledWith(
+        expect.objectContaining({
+          staleSessionThresholdMinutes: 45,
+          staleSessionNotifyEnabled: false,
+        })
+      );
+    });
+  });
+
+  it("preserves typed stale session values and keeps Save clickable when the save fails", async () => {
+    mockUpdateGlobalDefaults.mockRejectedValue(new Error("network error"));
+
+    render(<GlobalDefaultsForm />);
+
+    const thresholdInput = await screen.findByTestId("stale-session-threshold-input");
+    const notifyCheckbox = screen.getByTestId("stale-session-notify-checkbox");
+    const saveButton = screen.getByRole("button", { name: "Save" });
+
+    fireEvent.change(thresholdInput, { target: { value: "60" } });
+    fireEvent.click(notifyCheckbox);
+    fireEvent.click(saveButton);
+
+    await waitFor(() => {
+      expect(mockUpdateGlobalDefaults).toHaveBeenCalled();
+    });
+
+    expect(thresholdInput).toHaveValue(60);
+    expect(notifyCheckbox).not.toBeChecked();
+    expect(saveButton).not.toBeDisabled();
   });
 });

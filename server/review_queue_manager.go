@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/adapters"
 	"github.com/tstapler/stapler-squad/server/events"
+	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/detection"
 	"sync"
@@ -23,6 +25,14 @@ import (
 // satisfies it via RunOneShotForSession.
 type OneShotPRCreator interface {
 	RunOneShotForSession(ctx context.Context, sessionID, prompt string, timeoutSeconds int32) (string, error)
+}
+
+// SlackNotifierWiring is the narrow subset of *services.SlackNotifier that
+// ReactiveQueueManager needs. Defined here — the consumer — per this repo's
+// anti-interface-pollution convention (mirrors OneShotPRCreator above).
+type SlackNotifierWiring interface {
+	NotifyReviewQueueItem(ctx context.Context, cfg *config.Config, item *session.ReviewItem, dashboardURL string)
+	MaybeNotifyQueueDepthThreshold(ctx context.Context, cfg *config.Config, depth, threshold int, dashboardURL string) bool
 }
 
 // autoCreatePRPrompt is the default one-shot prompt used when a backlog item's
@@ -70,6 +80,27 @@ type ReactiveQueueManager struct {
 	// policy (see maybeAutoCreatePR). nil disables the feature entirely — safe
 	// default for tests and any wiring path that doesn't call the setter.
 	oneShotRunner OneShotPRCreator
+
+	// callbackDispatcher is set via SetCallbackDispatcher and fires the
+	// on_queue_item_created outbound callback (webhook-triggers Phase 5). nil
+	// disables the feature entirely (Dispatch is also nil-receiver-safe, but
+	// OnItemAdded nil-checks first to avoid the call entirely) — safe default
+	// for tests and any wiring path that doesn't call the setter.
+	callbackDispatcher *services.CallbackDispatcher
+
+	// slackNotifier is set via SetSlackNotifier and drives Slack notifications
+	// for new review-queue items (see OnItemAdded). nil disables the feature
+	// entirely — safe default for tests and any wiring path that doesn't call
+	// the setter.
+	slackNotifier SlackNotifierWiring
+
+	// dashboardBaseURLFn is a lazily-read fallback for the dashboard base URL
+	// used to build "view in dashboard" links in Slack messages, used only when
+	// cfg.Slack.DashboardBaseURL is unset. Mirrors server.go's hookBaseURLFn
+	// shape/lazy-read rationale exactly: read at notify time, not snapshotted
+	// before Start() binds the real listen address. nil-safe — OnItemAdded
+	// nil-checks before calling.
+	dashboardBaseURLFn func() string
 
 	// autoCreatePRInFlight tracks sessions with an in-progress AutoCreatePR
 	// one-shot run, keyed by stable session UUID. Prevents a second concurrent
@@ -146,6 +177,31 @@ func NewReactiveQueueManager(
 // elsewhere in this file's wiring to break a construction-order cycle.
 func (rqm *ReactiveQueueManager) SetOneShotRunner(r OneShotPRCreator) {
 	rqm.oneShotRunner = r
+}
+
+// SetCallbackDispatcher wires the outbound-callback dispatcher used to fire
+// on_queue_item_created (see OnItemAdded, webhook-triggers Phase 5). Called
+// post-construction from server/dependencies.go, same setter-injection pattern
+// as SetOneShotRunner above.
+func (rqm *ReactiveQueueManager) SetCallbackDispatcher(d *services.CallbackDispatcher) {
+	rqm.callbackDispatcher = d
+}
+
+// SetSlackNotifier wires the Slack notifier used to notify a configured
+// webhook about new review-queue items (see OnItemAdded). Called
+// post-construction from server/dependencies.go, same setter-injection
+// pattern as SetOneShotRunner/SetCallbackDispatcher above.
+func (rqm *ReactiveQueueManager) SetSlackNotifier(n SlackNotifierWiring) {
+	rqm.slackNotifier = n
+}
+
+// SetDashboardBaseURLFn wires the lazily-read dashboard-base-URL fallback
+// (see dashboardBaseURLFn's doc comment). Called post-construction from
+// server.go once Server itself exists — ReactiveQueueManager is built before
+// Server in the dependency graph, so this can't be a constructor argument,
+// exactly like server.go's own hookBaseURLFn wiring.
+func (rqm *ReactiveQueueManager) SetDashboardBaseURLFn(fn func() string) {
+	rqm.dashboardBaseURLFn = fn
 }
 
 // Start initializes the reactive queue manager and subscribes to events.
@@ -248,8 +304,11 @@ func (rqm *ReactiveQueueManager) signalActivity() {
 func (rqm *ReactiveQueueManager) OnControllerStatusChange(inst *session.Instance, _ detection.DetectedStatus) {
 	rqm.signalActivity()
 	go func() {
+		// baseContext(), not rqm.ctx directly: a controller can report a status
+		// change before Start() has run (e.g. constructed directly in a test
+		// fixture), and rqm.ctx.Done() on a nil rqm.ctx panics.
 		select {
-		case <-rqm.ctx.Done():
+		case <-rqm.baseContext().Done():
 			return
 		default:
 		}
@@ -409,6 +468,22 @@ func (rqm *ReactiveQueueManager) OnItemAdded(item *session.ReviewItem) {
 			metadata,
 		)
 		rqm.eventBus.Publish(notifEvent)
+
+		// Slack notification (Epic 1.3, Story 1.3.1): under the same reason
+		// guard as the eventBus.Publish above — a threshold-crossing digest
+		// suppresses the per-item send on the same call (Unresolved Questions
+		// default, plan.md's Epic 1.2.4).
+		if rqm.slackNotifier != nil {
+			cfg := config.LoadConfig()
+			dashboardURL := cfg.Slack.DashboardBaseURL
+			if dashboardURL == "" && rqm.dashboardBaseURLFn != nil {
+				dashboardURL = rqm.dashboardBaseURLFn()
+			}
+			fired := rqm.slackNotifier.MaybeNotifyQueueDepthThreshold(rqm.baseContext(), cfg, rqm.queue.GetStatistics().TotalItems, cfg.Slack.QueueDepthThreshold, dashboardURL)
+			if !fired && cfg.Slack.NotifyOnQueueItem {
+				rqm.slackNotifier.NotifyReviewQueueItem(rqm.baseContext(), cfg, item, dashboardURL)
+			}
+		}
 	}
 
 	// Opt-in AutoCreatePR policy: if the backlog item behind this session has
@@ -416,6 +491,22 @@ func (rqm *ReactiveQueueManager) OnItemAdded(item *session.ReviewItem) {
 	// would otherwise have to click "Create PR" + "Run" for manually. Runs async
 	// so a slow/failing LLM call never blocks queue-add notification delivery.
 	rqm.maybeAutoCreatePR(item)
+
+	// AC4-shaped on_queue_item_created callback (webhook-triggers Phase 5, FR7):
+	// Dispatch is itself non-blocking (bounded semaphore + go), so this adds no
+	// latency here. rqm.callbackDispatcher is nil-checked rather than relying on
+	// a nil *services.CallbackDispatcher receiver, matching this file's existing
+	// nil-safety convention (e.g. oneShotRunner in maybeAutoCreatePR).
+	if rqm.callbackDispatcher != nil {
+		rqm.callbackDispatcher.Dispatch("queue_item_created", map[string]any{
+			"event":       "queue_item_created",
+			"session_id":  resolvedID,
+			"session":     item.SessionName,
+			"reason":      item.Reason.String(),
+			"item_id":     linkedItemID,
+			"occurred_at": time.Now(),
+		})
+	}
 }
 
 // maybeAutoCreatePR implements the opt-in "auto-create PR on Complete" policy
@@ -543,7 +634,7 @@ func (rqm *ReactiveQueueManager) OnQueueUpdated(items []*session.ReviewItem) {
 		Timestamp: timestamppb.Now(),
 		Event: &sessionv1.ReviewQueueEvent_Statistics{
 			Statistics: &sessionv1.ReviewQueueStatisticsEvent{
-				TotalItems:   int32(stats.TotalItems),
+				TotalItems:   int32(stats.TotalItems), //#nosec G115 -- review-queue item count, bounded by live session count
 				ByPriority:   rqm.priorityMapToProto(stats.ByPriority),
 				ByReason:     rqm.reasonMapToProto(stats.ByReason),
 				AverageAgeMs: stats.AverageAge.Milliseconds(),
@@ -761,7 +852,7 @@ func (rqm *ReactiveQueueManager) sendInitialSnapshot(client *reviewQueueStreamCl
 			Timestamp: timestamppb.Now(),
 			Event: &sessionv1.ReviewQueueEvent_Statistics{
 				Statistics: &sessionv1.ReviewQueueStatisticsEvent{
-					TotalItems:   int32(stats.TotalItems),
+					TotalItems:   int32(stats.TotalItems), //#nosec G115 -- review-queue item count, bounded by live session count
 					ByPriority:   rqm.priorityMapToProto(stats.ByPriority),
 					ByReason:     rqm.reasonMapToProto(stats.ByReason),
 					AverageAgeMs: stats.AverageAge.Milliseconds(),
@@ -835,7 +926,7 @@ func (rqm *ReactiveQueueManager) reasonToProto(r session.AttentionReason) sessio
 func (rqm *ReactiveQueueManager) priorityMapToProto(m map[session.Priority]int) map[int32]int32 {
 	result := make(map[int32]int32)
 	for k, v := range m {
-		result[int32(rqm.priorityToProto(k))] = int32(v)
+		result[int32(rqm.priorityToProto(k))] = int32(v) //#nosec G115 -- review-queue item count, bounded by live session count
 	}
 	return result
 }
@@ -843,7 +934,7 @@ func (rqm *ReactiveQueueManager) priorityMapToProto(m map[session.Priority]int) 
 func (rqm *ReactiveQueueManager) reasonMapToProto(m map[session.AttentionReason]int) map[int32]int32 {
 	result := make(map[int32]int32)
 	for k, v := range m {
-		result[int32(rqm.reasonToProto(k))] = int32(v)
+		result[int32(rqm.reasonToProto(k))] = int32(v) //#nosec G115 -- review-queue item count, bounded by live session count
 	}
 	return result
 }

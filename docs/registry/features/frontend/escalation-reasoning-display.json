@@ -1,0 +1,19 @@
+{
+  "id": "escalation-reasoning-display",
+  "type": "frontend",
+  "name": "Escalation reason text with category-driven emoji prefix in the review queue",
+  "component": "ReviewQueuePanel",
+  "path": "web-app/src/components/sessions/ReviewQueuePanel.tsx",
+  "filePath": "web-app/src/components/sessions/ReviewQueuePanel.tsx",
+  "markerLine": 0,
+  "tested": true,
+  "testIds": [
+    "escalation reason > renders the reason text with the category-driven emoji prefix (no-match)",
+    "escalation reason > renders backend text verbatim with a different emoji for a different category (explicit-rule)",
+    "escalation reason > shows the orphaned-approval fallback copy when escalation_reason is absent",
+    "escalation reason > applies the bounded escalationReasonText class (not bare itemContext) for a long reason",
+    "escalation reason > renders create-rule button with intent=secondary when category is no-match",
+    "escalation reason > omits create-rule button when category is domain-age"
+  ],
+  "lastModified": "2026-08-02T00:00:00Z"
+}

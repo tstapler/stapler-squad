@@ -184,6 +184,7 @@ func TestUpdateItemSourceEncryptsToken(t *testing.T) {
 
 // TestCreateItemSourceWithoutConfigDoesNotEncrypt verifies backward compatibility
 func TestCreateItemSourceWithoutConfigDoesNotEncrypt(t *testing.T) {
+	t.Parallel()
 	// Service without config should store tokens unencrypted
 	storage := &testStorageRecorder{}
 	svc := newTestEncryptionService(storage, nil)
@@ -289,6 +290,7 @@ func TestCreateItemSourceEncryptionRoundTrip(t *testing.T) {
 
 // TestSyncLoopDecryptsToken verifies SyncLoop decrypts tokens before passing to plugins
 func TestSyncLoopDecryptsToken(t *testing.T) {
+	t.Parallel()
 	// Generate encryption key
 	key := make([]byte, 32)
 	if _, err := io.ReadFull(rand.Reader, key); err != nil {
@@ -316,7 +318,7 @@ func TestSyncLoopDecryptsToken(t *testing.T) {
 	})
 
 	// Test decryption
-	decrypted, err := syncLoop.TestDecryptConfigToken(string(encryptedConfigJSON))
+	decrypted, err := syncLoop.DecryptConfigToken(string(encryptedConfigJSON))
 	if err != nil {
 		t.Fatalf("decryptConfigToken: %v", err)
 	}

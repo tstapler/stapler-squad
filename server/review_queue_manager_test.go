@@ -3,34 +3,55 @@ package server
 import (
 	"context"
 	"fmt"
-	"os"
-	"path/filepath"
+	"net/http"
+	"net/http/httptest"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/detection"
 	"github.com/tstapler/stapler-squad/testutil"
 )
 
+// TestOnControllerStatusChange_NilContextBeforeStart_DoesNotPanic is the regression test
+// for a nil-pointer panic: a ReactiveQueueManager constructed but never Start()ed has a nil
+// rqm.ctx. A controller can report a status change before Start() runs (e.g. in a test
+// fixture, or a race during startup), and OnControllerStatusChange used to read rqm.ctx.Done()
+// directly instead of the baseContext() helper already used elsewhere in this file to guard
+// exactly this case.
+func TestOnControllerStatusChange_NilContextBeforeStart_DoesNotPanic(t *testing.T) {
+	queue := session.NewReviewQueue()
+	statusManager := session.NewInstanceStatusManager()
+	poller := session.NewReviewQueuePoller(queue, statusManager, nil)
+	eventBus := events.NewEventBus(10)
+	t.Cleanup(eventBus.Close)
+
+	rqm := NewReactiveQueueManager(queue, poller, eventBus, statusManager, nil)
+	// rqm.ctx is intentionally nil here — Start() is never called.
+
+	require.NotPanics(t, func() {
+		rqm.OnControllerStatusChange(&session.Instance{Title: "never-started"}, detection.DetectedStatus(0))
+	})
+
+	// OnControllerStatusChange dispatches to a background goroutine; give it a moment to
+	// run so a reintroduced nil-pointer panic surfaces in this test rather than crashing
+	// the process asynchronously during an unrelated later test.
+	time.Sleep(50 * time.Millisecond)
+}
+
 // TestReactiveQueueManagerIntegration tests the full reactive queue workflow
 func TestReactiveQueueManagerIntegration(t *testing.T) {
-	// Setup test directory
-	testDir := filepath.Join(os.TempDir(), "stapler-squad-test-reactive-queue")
-	defer os.RemoveAll(testDir)
-
 	// Setup components
 	queue := session.NewReviewQueue()
 	statusManager := session.NewInstanceStatusManager()
 	reviewQueuePoller := session.NewReviewQueuePoller(queue, statusManager, nil)
 	eventBus := events.NewEventBus(10)
-	repo, err := session.NewEntRepository(session.WithDatabasePath(filepath.Join(testDir, "sessions.db")))
-	if err != nil {
-		t.Fatalf("Failed to create repository: %v", err)
-	}
-	defer repo.Close()
+	repo := session.NewTestEntRepository(t)
 	storage, err := session.NewStorageWithRepository(repo)
 	if err != nil {
 		t.Fatalf("Failed to create storage: %v", err)
@@ -270,20 +291,12 @@ func drainEvents(ch <-chan *sessionv1.ReviewQueueEvent, timeout time.Duration) {
 
 // TestReactiveQueueManagerMultipleClients tests multiple concurrent clients
 func TestReactiveQueueManagerMultipleClients(t *testing.T) {
-	// Setup test directory
-	testDir := filepath.Join(os.TempDir(), "stapler-squad-test-multiple-clients")
-	defer os.RemoveAll(testDir)
-
 	// Setup
 	queue := session.NewReviewQueue()
 	statusManager := session.NewInstanceStatusManager()
 	reviewQueuePoller := session.NewReviewQueuePoller(queue, statusManager, nil)
 	eventBus := events.NewEventBus(10)
-	repo, err := session.NewEntRepository(session.WithDatabasePath(filepath.Join(testDir, "sessions.db")))
-	if err != nil {
-		t.Fatalf("Failed to create repository: %v", err)
-	}
-	defer repo.Close()
+	repo := session.NewTestEntRepository(t)
 	storage, err := session.NewStorageWithRepository(repo)
 	if err != nil {
 		t.Fatalf("Failed to create storage: %v", err)
@@ -369,20 +382,12 @@ func TestReactiveQueueManagerMultipleClients(t *testing.T) {
 
 // TestReactiveQueueManagerFiltering tests client-side filtering
 func TestReactiveQueueManagerFiltering(t *testing.T) {
-	// Setup test directory
-	testDir := filepath.Join(os.TempDir(), "stapler-squad-test-filtering")
-	defer os.RemoveAll(testDir)
-
 	// Setup
 	queue := session.NewReviewQueue()
 	statusManager := session.NewInstanceStatusManager()
 	reviewQueuePoller := session.NewReviewQueuePoller(queue, statusManager, nil)
 	eventBus := events.NewEventBus(10)
-	repo, err := session.NewEntRepository(session.WithDatabasePath(filepath.Join(testDir, "sessions.db")))
-	if err != nil {
-		t.Fatalf("Failed to create repository: %v", err)
-	}
-	defer repo.Close()
+	repo := session.NewTestEntRepository(t)
 	storage, err := session.NewStorageWithRepository(repo)
 	if err != nil {
 		t.Fatalf("Failed to create storage: %v", err)
@@ -456,20 +461,12 @@ func TestReactiveQueueManagerFiltering(t *testing.T) {
 
 // TestReactiveQueueManagerEventTypes tests all event types
 func TestReactiveQueueManagerEventTypes(t *testing.T) {
-	// Setup test directory
-	testDir := filepath.Join(os.TempDir(), "stapler-squad-test-event-types")
-	defer os.RemoveAll(testDir)
-
 	// Setup
 	queue := session.NewReviewQueue()
 	statusManager := session.NewInstanceStatusManager()
 	reviewQueuePoller := session.NewReviewQueuePoller(queue, statusManager, nil)
 	eventBus := events.NewEventBus(10)
-	repo, err := session.NewEntRepository(session.WithDatabasePath(filepath.Join(testDir, "sessions.db")))
-	if err != nil {
-		t.Fatalf("Failed to create repository: %v", err)
-	}
-	defer repo.Close()
+	repo := session.NewTestEntRepository(t)
 	storage, err := session.NewStorageWithRepository(repo)
 	if err != nil {
 		t.Fatalf("Failed to create storage: %v", err)
@@ -546,10 +543,6 @@ func waitForEvent(t *testing.T, eventCh <-chan *sessionv1.ReviewQueueEvent, even
 
 // BenchmarkReactiveQueueManagerThroughput measures event processing throughput
 func BenchmarkReactiveQueueManagerThroughput(b *testing.B) {
-	// Use b.TempDir() so each benchmark calibration call gets an isolated directory
-	// and automatic cleanup — avoids path conflicts between successive b.N runs.
-	testDir := b.TempDir()
-
 	// Setup
 	queue := session.NewReviewQueue()
 	statusManager := session.NewInstanceStatusManager()
@@ -559,11 +552,7 @@ func BenchmarkReactiveQueueManagerThroughput(b *testing.B) {
 	benchPollerCfg.SlowPollInterval = 10 * time.Millisecond
 	reviewQueuePoller := session.NewReviewQueuePollerWithConfig(queue, statusManager, nil, benchPollerCfg)
 	eventBus := events.NewEventBus(100)
-	repo, err := session.NewEntRepository(session.WithDatabasePath(filepath.Join(testDir, "sessions.db")))
-	if err != nil {
-		b.Fatalf("Failed to create repository: %v", err)
-	}
-	defer repo.Close()
+	repo := session.NewTestEntRepository(b)
 	storage, err := session.NewStorageWithRepository(repo)
 	if err != nil {
 		b.Fatalf("Failed to create storage: %v", err)
@@ -642,12 +631,7 @@ drainLoop:
 // and event bus, returning both for use in tests.
 func newReactiveQueueTestSetup(t *testing.T) (*ReactiveQueueManager, *session.ReviewQueuePoller, *events.EventBus) {
 	t.Helper()
-	testDir := t.TempDir()
-	repo, err := session.NewEntRepository(session.WithDatabasePath(filepath.Join(testDir, "sessions.db")))
-	if err != nil {
-		t.Fatalf("newReactiveQueueTestSetup: create repo: %v", err)
-	}
-	t.Cleanup(func() { repo.Close() })
+	repo := session.NewTestEntRepository(t)
 	storage, err := session.NewStorageWithRepository(repo)
 	if err != nil {
 		t.Fatalf("newReactiveQueueTestSetup: create storage: %v", err)
@@ -777,12 +761,7 @@ func (f *fakeOneShotPRCreator) callCount() int {
 // items / item sessions to exercise maybeAutoCreatePR's storage lookups.
 func newReactiveQueueTestSetupWithStorage(t *testing.T) (*ReactiveQueueManager, *session.ReviewQueuePoller, *session.Storage) {
 	t.Helper()
-	testDir := t.TempDir()
-	repo, err := session.NewEntRepository(session.WithDatabasePath(filepath.Join(testDir, "sessions.db")))
-	if err != nil {
-		t.Fatalf("newReactiveQueueTestSetupWithStorage: create repo: %v", err)
-	}
-	t.Cleanup(func() { repo.Close() })
+	repo := session.NewTestEntRepository(t)
 	storage, err := session.NewStorageWithRepository(repo)
 	if err != nil {
 		t.Fatalf("newReactiveQueueTestSetupWithStorage: create storage: %v", err)
@@ -1369,5 +1348,211 @@ func TestOnItemAdded_PublishesNotification_When_SessionHidden_AndReasonIsErrorSt
 				t.Errorf("expected EventNotification for Hidden session's %s, got none (timeout)", tc.name)
 			}
 		})
+	}
+}
+
+// --------------------------------------------------------------------------
+// Slack notification wiring (Epic 1.3, Story 1.3.1)
+// --------------------------------------------------------------------------
+
+// fakeSlackNotifierWiring is a test double for SlackNotifierWiring that records
+// every call so OnItemAdded's Slack-wiring behavior can be asserted without a
+// real *services.SlackNotifier or network access.
+type fakeSlackNotifierWiring struct {
+	mu                                  sync.Mutex
+	notifyReviewQueueItemCalls          int
+	maybeNotifyQueueDepthThresholdCalls int
+	thresholdFires                      bool // return value for MaybeNotifyQueueDepthThreshold
+	gotDepth, gotThreshold              int
+}
+
+func (f *fakeSlackNotifierWiring) NotifyReviewQueueItem(ctx context.Context, cfg *config.Config, item *session.ReviewItem, dashboardURL string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.notifyReviewQueueItemCalls++
+}
+
+func (f *fakeSlackNotifierWiring) MaybeNotifyQueueDepthThreshold(ctx context.Context, cfg *config.Config, depth, threshold int, dashboardURL string) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.maybeNotifyQueueDepthThresholdCalls++
+	f.gotDepth = depth
+	f.gotThreshold = threshold
+	return f.thresholdFires
+}
+
+func (f *fakeSlackNotifierWiring) counts() (notify, maybeThreshold int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.notifyReviewQueueItemCalls, f.maybeNotifyQueueDepthThresholdCalls
+}
+
+// setTestSlackConfig points config.LoadConfig()/config.SaveConfig() at a fresh
+// per-test temp directory (mirrors dependencies_test.go's
+// TestBuildRuntimeDeps_should_ReadLiveConfigOnEveryCfgFnCall_When_ConfigJSONChangesAfterBoot
+// pattern) and persists the given Slack settings so OnItemAdded's own
+// config.LoadConfig() call sees them.
+func setTestSlackConfig(t *testing.T, notifyOnQueueItem bool, queueDepthThreshold int) {
+	t.Helper()
+	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	cfg := config.LoadConfig()
+	cfg.Slack.NotifyOnQueueItem = notifyOnQueueItem
+	cfg.Slack.QueueDepthThreshold = queueDepthThreshold
+	if err := config.SaveConfig(cfg); err != nil {
+		t.Fatalf("SaveConfig: %v", err)
+	}
+}
+
+// TestOnItemAdded_InvokesNotifyReviewQueueItem_When_SlackNotifierWired is the
+// happy-path REQ-9 test (plan.md Story 1.3.1 AC1): a wired SlackNotifierWiring
+// with NotifyOnQueueItem enabled and the depth threshold disabled (0) receives
+// exactly one NotifyReviewQueueItem call for a ReasonTestsFailing item.
+func TestOnItemAdded_InvokesNotifyReviewQueueItem_When_SlackNotifierWired(t *testing.T) {
+	setTestSlackConfig(t, true, 0)
+
+	mgr, _, _ := newReactiveQueueTestSetup(t)
+	fake := &fakeSlackNotifierWiring{}
+	mgr.SetSlackNotifier(fake)
+
+	mgr.OnItemAdded(&session.ReviewItem{
+		SessionID:   "sess-1",
+		SessionName: "sess-1",
+		Reason:      session.ReasonTestsFailing,
+		Priority:    session.PriorityHigh,
+		DetectedAt:  time.Now(),
+	})
+
+	notify, maybeThreshold := fake.counts()
+	if notify != 1 {
+		t.Errorf("NotifyReviewQueueItem calls = %d, want 1", notify)
+	}
+	if maybeThreshold != 1 {
+		t.Errorf("MaybeNotifyQueueDepthThreshold calls = %d, want 1 (always called under the wired guard, threshold=0 makes it a no-op internally)", maybeThreshold)
+	}
+}
+
+// TestOnItemAdded_SkipsSlackNotifier_When_ReasonIsApprovalPending is the
+// error/edge-path REQ-9 test (plan.md Story 1.3.1 AC2): a ReasonApprovalPending
+// item never reaches the Slack notifier, avoiding the duplicate-card problem
+// the existing eventBus.Publish guard already documents.
+func TestOnItemAdded_SkipsSlackNotifier_When_ReasonIsApprovalPending(t *testing.T) {
+	setTestSlackConfig(t, true, 5)
+
+	mgr, _, _ := newReactiveQueueTestSetup(t)
+	fake := &fakeSlackNotifierWiring{}
+	mgr.SetSlackNotifier(fake)
+
+	mgr.OnItemAdded(&session.ReviewItem{
+		SessionID:   "sess-2",
+		SessionName: "sess-2",
+		Reason:      session.ReasonApprovalPending,
+		Priority:    session.PriorityHigh,
+		DetectedAt:  time.Now(),
+	})
+
+	notify, maybeThreshold := fake.counts()
+	if notify != 0 {
+		t.Errorf("NotifyReviewQueueItem calls = %d, want 0 for ReasonApprovalPending", notify)
+	}
+	if maybeThreshold != 0 {
+		t.Errorf("MaybeNotifyQueueDepthThreshold calls = %d, want 0 for ReasonApprovalPending", maybeThreshold)
+	}
+}
+
+// recordingSlackNotifierWiring is a SlackNotifierWiring test double whose
+// methods make a real (headers-only) HTTP request against an httptest.Server
+// in addition to recording call counts, giving
+// TestOnItemAdded_Integration_DigestSuppressesPerItemNotification_When_BothWouldFire
+// its "backed by httptest.Server" integration flavor (REQ-9's third row in
+// validation.md) rather than a purely in-memory fake.
+type recordingSlackNotifierWiring struct {
+	mu                                  sync.Mutex
+	notifyReviewQueueItemCalls          int
+	maybeNotifyQueueDepthThresholdCalls int
+	thresholdFires                      bool
+	serverURL                           string
+	requestPaths                        []string
+}
+
+func (f *recordingSlackNotifierWiring) ping(path string) {
+	if f.serverURL == "" {
+		return
+	}
+	resp, err := http.Get(f.serverURL + path)
+	if err == nil {
+		resp.Body.Close()
+	}
+	f.requestPaths = append(f.requestPaths, path)
+}
+
+func (f *recordingSlackNotifierWiring) NotifyReviewQueueItem(ctx context.Context, cfg *config.Config, item *session.ReviewItem, dashboardURL string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.notifyReviewQueueItemCalls++
+	f.ping("/per-item")
+}
+
+func (f *recordingSlackNotifierWiring) MaybeNotifyQueueDepthThreshold(ctx context.Context, cfg *config.Config, depth, threshold int, dashboardURL string) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.maybeNotifyQueueDepthThresholdCalls++
+	f.ping("/digest")
+	return f.thresholdFires
+}
+
+// TestOnItemAdded_Integration_DigestSuppressesPerItemNotification_When_BothWouldFire
+// is the integration-path REQ-9 test (Task 1.3.1b): a real ReactiveQueueManager
+// backed by a real session.ReviewQueue, with a fake SlackNotifierWiring backed by
+// an httptest.Server, proves that when a threshold crossing would also fire a
+// per-item notification on the same OnItemAdded call, only the digest fires —
+// the plan's Unresolved Questions default.
+func TestOnItemAdded_Integration_DigestSuppressesPerItemNotification_When_BothWouldFire(t *testing.T) {
+	const threshold = 3
+	setTestSlackConfig(t, true, threshold)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	mgr, _, _ := newReactiveQueueTestSetup(t)
+	fake := &recordingSlackNotifierWiring{serverURL: srv.URL, thresholdFires: true}
+	mgr.SetSlackNotifier(fake)
+
+	// Populate the real queue up to (threshold - 1) items first, without going
+	// through OnItemAdded (mirrors this file's other integration test's direct
+	// mgr.queue usage) — GetStatistics().TotalItems must reflect true queue
+	// depth when the crossing item's own OnItemAdded call reads it.
+	for i := 0; i < threshold-1; i++ {
+		mgr.queue.Add(&session.ReviewItem{
+			SessionID:   fmt.Sprintf("filler-%d", i),
+			SessionName: fmt.Sprintf("filler-%d", i),
+			Reason:      session.ReasonTestsFailing,
+			Priority:    session.PriorityMedium,
+			DetectedAt:  time.Now(),
+		})
+	}
+
+	// The crossing item: queue depth becomes exactly `threshold` once added.
+	crossingItem := &session.ReviewItem{
+		SessionID:   "crossing-item",
+		SessionName: "crossing-item",
+		Reason:      session.ReasonTestsFailing,
+		Priority:    session.PriorityHigh,
+		DetectedAt:  time.Now(),
+	}
+	mgr.queue.Add(crossingItem)
+	mgr.OnItemAdded(crossingItem)
+
+	fake.mu.Lock()
+	notify := fake.notifyReviewQueueItemCalls
+	maybeThreshold := fake.maybeNotifyQueueDepthThresholdCalls
+	fake.mu.Unlock()
+
+	if maybeThreshold != 1 {
+		t.Errorf("MaybeNotifyQueueDepthThreshold calls = %d, want 1", maybeThreshold)
+	}
+	if notify != 0 {
+		t.Errorf("NotifyReviewQueueItem calls = %d, want 0 (suppressed by the digest firing on the same call)", notify)
 	}
 }

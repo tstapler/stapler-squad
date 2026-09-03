@@ -58,7 +58,23 @@ func (s *BacklogService) GetBacklogItemShipStatus(
 			lastWork = &itemSessions[i]
 		}
 	}
-	if lastWork == nil || lastWork.LastCommitSha == "" {
+	if lastWork == nil {
+		return connect.NewResponse(&sessionv1.GetBacklogItemShipStatusResponse{
+			Status: &sessionv1.BacklogItemShipStatus{Error: "no work session ever committed code for this item"},
+		}), nil
+	}
+
+	// Resolve the session's real current tip rather than trusting the stored
+	// field, and never answer "shipped" from the pre-work base commit — it is
+	// always an ancestor of main by construction, so it would make this RPC (and
+	// the Ship PR button it backs) report every item as already shipped. Same
+	// BUG-047 trust boundary closeIfSupersededByMain now enforces; see
+	// resolveLatestWorkCommit's doc comment.
+	lastCommitSha := s.resolveLatestWorkCommit(ctx, lastWork.SessionUUID, item.RepoPath)
+	if lastCommitSha == "" {
+		lastCommitSha = lastWork.LastCommitSha
+	}
+	if lastCommitSha == "" || lastCommitSha == lastWork.BaseCommitSha {
 		return connect.NewResponse(&sessionv1.GetBacklogItemShipStatusResponse{
 			Status: &sessionv1.BacklogItemShipStatus{Error: "no work session ever committed code for this item"},
 		}), nil
@@ -66,14 +82,25 @@ func (s *BacklogService) GetBacklogItemShipStatus(
 
 	status := &sessionv1.BacklogItemShipStatus{
 		PrUrl:             item.PrURL,
-		LastCommitSha:     lastWork.LastCommitSha,
+		LastCommitSha:     lastCommitSha,
 		LastCommitMessage: lastWork.LastCommitMessage,
 	}
 	if lastWork.LastCommitAt != nil {
 		status.LastCommitAt = timestamppb.New(*lastWork.LastCommitAt)
 	}
+	// The SHA above is resolved live, but the message/timestamp beside it come
+	// from a row only refreshed on a reconciler tick. Between a new commit and
+	// the next tick those disagree — a new SHA captioned with the *previous*
+	// commit's message. Read them from the commit itself so the three always
+	// describe one commit.
+	if lastCommitSha != lastWork.LastCommitSha {
+		if info, infoErr := git.CommitInfo(item.RepoPath, lastCommitSha); infoErr == nil {
+			status.LastCommitMessage = info.Summary
+			status.LastCommitAt = timestamppb.New(info.AuthorAt)
+		}
+	}
 
-	onMain, mainErr := git.IsCommitOnMain(item.RepoPath, prFixMainBranch, lastWork.LastCommitSha)
+	onMain, mainErr := git.IsCommitOnMain(item.RepoPath, prFixMainBranch, lastCommitSha)
 	if mainErr != nil {
 		status.Error = fmt.Sprintf("failed to verify commit on main: %v", mainErr)
 		return connect.NewResponse(&sessionv1.GetBacklogItemShipStatusResponse{Status: status}), nil
@@ -101,7 +128,7 @@ func (s *BacklogService) GetBacklogItemShipStatus(
 	}
 
 	if wtErr == nil && wt.BaseCommitSHA != "" {
-		shipped, commitsErr := git.ListShippedCommits(item.RepoPath, wt.BaseCommitSHA, lastWork.LastCommitSha)
+		shipped, _, commitsErr := git.ListShippedCommits(ctx, item.RepoPath, wt.BaseCommitSHA, lastCommitSha)
 		if commitsErr != nil {
 			// Non-fatal: the badge/branch info above is still valid even if the
 			// commit list itself can't be resolved (e.g. the base SHA has since
@@ -138,7 +165,7 @@ func (s *BacklogService) GetBacklogItemShipStatus(
 				// Degrade gracefully: a corrupt/truncated snapshot blob must not
 				// fail the whole RPC — every other populated field above is still
 				// valid and useful on its own.
-				log.WarningLog.Printf("[BacklogService] GetBacklogItemShipStatus item=%s: failed to decode ShippedFileStats: %v", item.ID, unmarshalErr)
+				log.WarningLog().Printf("[BacklogService] GetBacklogItemShipStatus item=%s: failed to decode ShippedFileStats: %v", item.ID, unmarshalErr)
 			} else {
 				for _, fs := range decoded {
 					status.FileStats = append(status.FileStats, &sessionv1.ShippedFileStat{

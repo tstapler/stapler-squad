@@ -53,7 +53,8 @@ export function HistoryEntryCard({
   const branch = entry.branch || (isSelected && enrichedEntry ? enrichedEntry.vcsStatus?.branch : undefined);
   const hasLiveStatus =
     entry.sessionStatus !== SessionStatus.UNSPECIFIED &&
-    entry.sessionStatus !== SessionStatus.STOPPED;
+    entry.sessionStatus !== SessionStatus.STOPPED &&
+    entry.sessionStatus !== SessionStatus.PERMANENTLY_FAILED;
   const label = statusLabel(entry.sessionStatus);
   const variant = statusVariant(entry.sessionStatus);
 

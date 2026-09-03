@@ -6,6 +6,7 @@ import (
 
 // TestClaudeCommandBuilder_Build tests the Build() method with various scenarios
 func TestClaudeCommandBuilder_Build(t *testing.T) {
+	t.Parallel()
 	validSessionID := "550e8400-e29b-41d4-a716-446655440000"
 	invalidSessionID := "not-a-uuid"
 
@@ -106,6 +107,7 @@ func TestClaudeCommandBuilder_Build(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			builder := NewClaudeCommandBuilder(tt.baseProgram, tt.claudeSession)
 			result := builder.Build()
 
@@ -118,6 +120,7 @@ func TestClaudeCommandBuilder_Build(t *testing.T) {
 
 // TestClaudeCommandBuilder_isClaudeCommand tests Claude command detection
 func TestClaudeCommandBuilder_isClaudeCommand(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name        string
 		baseProgram string
@@ -176,6 +179,7 @@ func TestClaudeCommandBuilder_isClaudeCommand(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			builder := NewClaudeCommandBuilder(tt.baseProgram, nil)
 			result := builder.isClaudeCommand()
 
@@ -188,6 +192,7 @@ func TestClaudeCommandBuilder_isClaudeCommand(t *testing.T) {
 
 // TestIsValidUUID tests UUID validation
 func TestIsValidUUID(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name        string
 		uuid        string
@@ -246,6 +251,7 @@ func TestIsValidUUID(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			result := isValidUUID(tt.uuid)
 
 			if result != tt.expected {

@@ -12,7 +12,8 @@ import (
 	"strings"
 	"time"
 
-	_ "github.com/mattn/go-sqlite3"
+	"github.com/tstapler/stapler-squad/internal/sqlitedsn"
+	_ "modernc.org/sqlite" // Pure Go SQLite driver
 )
 
 type AgyAdapter struct{}
@@ -27,7 +28,10 @@ func (a *AgyAdapter) Name() string {
 
 func (a *AgyAdapter) CanHandle(program string) bool {
 	p := strings.ToLower(program)
-	return strings.Contains(p, "agy") || strings.Contains(p, "antigravity") || strings.Contains(p, "gemini")
+	// "gemini" is intentionally excluded: it names the standalone Gemini CLI, whose
+	// history format differs from Antigravity's own ~/.gemini/antigravity-cli/... storage
+	// that this adapter reads and writes.
+	return strings.Contains(p, "agy") || strings.Contains(p, "antigravity")
 }
 
 type rawAgyStep struct {
@@ -59,7 +63,7 @@ func (a *AgyAdapter) Import(ctx context.Context, inst *Instance) ([]CanonicalTur
 	if uuidStr == "" {
 		// Look up in history.jsonl
 		agyHistoryPath := filepath.Join(home, ".gemini", "antigravity-cli", "history.jsonl")
-		if f, err := os.Open(agyHistoryPath); err == nil {
+		if f, err := os.Open(agyHistoryPath); err == nil { // #nosec G304 -- agyHistoryPath is home dir + hardcoded constant components, no variable path segment
 			defer f.Close()
 			scanner := bufio.NewScanner(f)
 			for scanner.Scan() {
@@ -97,7 +101,7 @@ func (a *AgyAdapter) Import(ctx context.Context, inst *Instance) ([]CanonicalTur
 		}
 	}
 
-	file, err := os.Open(agyLogPath)
+	file, err := os.Open(agyLogPath) // #nosec G304 -- agyLogPath is home dir + constants + uuidStr, which is either internal instance state (GetClaudeConversationUUID) or a conversationId this same app wrote into its own history.jsonl, never raw external input
 	if err != nil {
 		return nil, err
 	}
@@ -206,7 +210,7 @@ func (a *AgyAdapter) Export(ctx context.Context, turns []CanonicalTurn, inst *In
 	transcriptFullPath := filepath.Join(agyBrainDir, "transcript_full.jsonl")
 
 	for _, p := range []string{transcriptPath, transcriptFullPath} {
-		f, err := os.Create(p)
+		f, err := os.Create(p) // #nosec G304 -- p is one of two fixed filenames joined onto agyBrainDir (home + constants + internal uuidStr), not externally controlled
 		if err != nil {
 			return err
 		}
@@ -287,7 +291,7 @@ func (a *AgyAdapter) Export(ctx context.Context, turns []CanonicalTurn, inst *In
 		return err
 	}
 
-	db, err := sql.Open("sqlite3", dbPath)
+	db, err := sql.Open("sqlite", sqlitedsn.New(dbPath).Build())
 	if err != nil {
 		return err
 	}

@@ -1,14 +1,13 @@
 /**
- * Tests for ReviewQueuePanel — feature: review-queue-pr-creation (S3-3)
+ * Tests for ReviewQueuePanel — feature: review-queue-pr-creation
  *                            + feature: rules:create-from-review-queue (Epic 4)
  *
  * Covers:
- *  - "Create PR" button visible for TASK_COMPLETE items without a PR URL
- *  - "Create PR" button hidden when item already has a githubPrUrl
- *  - "Create PR" button hidden when onRunOneShot prop is not provided
- *  - Clicking "Create PR" opens the confirmation modal
- *  - Cancel button closes the modal without calling onRunOneShot
- *  - Confirm button calls onRunOneShot with the session ID and default prompt
+ *  - "Create PR" trigger visible (enabled) for TASK_COMPLETE items with commits ahead
+ *  - "Create PR" trigger disabled when there are no commits ahead (State B)
+ *  - "View PR" link shown instead of the trigger when item already has a githubPrUrl (State C)
+ *  - "Create PR" trigger hidden for non-TASK_COMPLETE items
+ *  - Clicking the trigger opens the shared CreatePullRequestModal (Epic 2.4)
  *  - Empty queue renders "all caught up" empty state
  *  - "Create Rule" button visible for APPROVAL_PENDING items with a command
  *  - Clicking "Create Rule" opens the rule modal with loading state
@@ -16,7 +15,7 @@
 
 import React from "react";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
-import { ReviewQueuePanel } from "../ReviewQueuePanel";
+import { ReviewQueuePanel, isCreateRuleEligibleCategory } from "../ReviewQueuePanel";
 import { AttentionReason, Priority, SubStatus, SuggestionSource } from "@/gen/session/v1/types_pb";
 import type { ReviewItem } from "@/gen/session/v1/types_pb";
 
@@ -30,6 +29,7 @@ afterEach(() => {
 
 const mockRefresh = jest.fn();
 const mockAcknowledge = jest.fn().mockResolvedValue(undefined);
+const mockAcknowledgeSessions = jest.fn().mockResolvedValue({ failed: [] });
 
 // Overrides the global next/navigation stub (jest.setup.js) so URL-persisted filter
 // state (useFilterState) can be seeded and asserted on.
@@ -56,6 +56,38 @@ jest.mock("@/lib/contexts/ApprovalsContext", () => ({
     clearForSession: jest.fn(),
     clearedSessions: new Set(),
   }),
+}));
+
+// Epic 2.4: ReviewQueuePanel now resolves draftPullRequest/createPullRequest straight from
+// SessionServiceContext (mirrors SessionActionsOverflow.tsx's Epic 2.3 wiring).
+const mockDraftPullRequest = jest.fn();
+const mockCreatePullRequest = jest.fn();
+
+jest.mock("@/lib/contexts/SessionServiceContext", () => ({
+  useSessionServiceContext: () => ({
+    draftPullRequest: mockDraftPullRequest,
+    createPullRequest: mockCreatePullRequest,
+  }),
+}));
+
+// CreatePullRequestModal has its own dedicated test suite (CreatePullRequestModal.test.tsx) —
+// stub it here so these tests verify wiring (trigger -> open/close) without duplicating that
+// coverage or dealing with the modal's own async draft-fetch lifecycle.
+jest.mock("../CreatePullRequestModal", () => ({
+  CreatePullRequestModal: ({
+    session,
+    isOpen,
+    onClose,
+  }: {
+    session: { id: string };
+    isOpen: boolean;
+    onClose: () => void;
+  }) =>
+    isOpen ? (
+      <div data-testid="create-pr-modal" data-session-id={session.id}>
+        <button onClick={onClose}>Close</button>
+      </div>
+    ) : null,
 }));
 
 jest.mock("@/lib/hooks/useReviewQueueNavigation", () => ({
@@ -122,8 +154,9 @@ function makeReviewItem(overrides: Partial<ReviewItem> = {}): ReviewItem {
     branch: "",
     category: "",
     tags: [],
-    diffAdded: 0,
-    diffRemoved: 0,
+    diffStats: undefined,
+    // false is the "no commits ahead" (State B) signal the Create PR trigger disables on.
+    hasCommitsAhead: false,
     branchDivergedFromBase: false,
     githubPrUrl: "",
     ...overrides,
@@ -151,6 +184,7 @@ function makeContextValue(items: ReviewItem[] = []) {
     oldestAgeSeconds: 0,
     refresh: mockRefresh,
     acknowledgeSession: mockAcknowledge,
+    acknowledgeSessions: mockAcknowledgeSessions,
   };
 }
 
@@ -175,111 +209,234 @@ describe("ReviewQueuePanel — empty state", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Create PR button visibility
+// Bulk skip — "Skip all (N)" acts on every currently-visible non-approval item
 // ---------------------------------------------------------------------------
 
-describe("ReviewQueuePanel — Create PR button", () => {
-  const onRunOneShot = jest.fn().mockResolvedValue({ prUrl: "https://github.com/org/repo/pull/1" });
+describe("ReviewQueuePanel — bulk skip", () => {
+  let confirmSpy: jest.SpyInstance;
 
+  beforeEach(() => {
+    jest.clearAllMocks();
+    confirmSpy = jest.spyOn(window, "confirm");
+  });
+
+  afterEach(() => {
+    confirmSpy.mockRestore();
+  });
+
+  it("counts only non-approval items in the Skip all label", () => {
+    const items = [
+      makeReviewItem({ sessionId: "s1" }),
+      makeReviewItem({ sessionId: "s2" }),
+      makeApprovalItem({ sessionId: "s3" }),
+    ];
+    mockUseReviewQueueContext.mockReturnValue(makeContextValue(items));
+
+    renderPanel();
+
+    expect(screen.getByTestId("skip-all-visible")).toHaveTextContent("Skip all (2)");
+  });
+
+  it("is not rendered when every visible item is an approval request", () => {
+    mockUseReviewQueueContext.mockReturnValue(
+      makeContextValue([makeApprovalItem({ sessionId: "s1" })])
+    );
+
+    renderPanel();
+
+    expect(screen.queryByTestId("skip-all-visible")).not.toBeInTheDocument();
+  });
+
+  it("does nothing when the user cancels the confirmation", async () => {
+    confirmSpy.mockReturnValue(false);
+    mockUseReviewQueueContext.mockReturnValue(
+      makeContextValue([makeReviewItem({ sessionId: "s1" })])
+    );
+
+    renderPanel();
+    fireEvent.click(screen.getByTestId("skip-all-visible"));
+
+    expect(confirmSpy).toHaveBeenCalled();
+    await waitFor(() => expect(mockAcknowledgeSessions).not.toHaveBeenCalled());
+  });
+
+  it("acknowledges every visible non-approval item in a single bulk call, skipping approval requests, once confirmed", async () => {
+    confirmSpy.mockReturnValue(true);
+    const items = [
+      makeReviewItem({ sessionId: "s1" }),
+      makeReviewItem({ sessionId: "s2" }),
+      makeApprovalItem({ sessionId: "s3" }),
+    ];
+    mockUseReviewQueueContext.mockReturnValue(makeContextValue(items));
+
+    renderPanel();
+    fireEvent.click(screen.getByTestId("skip-all-visible"));
+
+    await waitFor(() => expect(mockAcknowledgeSessions).toHaveBeenCalledTimes(1));
+    expect(mockAcknowledgeSessions).toHaveBeenCalledWith(["s1", "s2"]);
+  });
+
+  it("calls acknowledgeSessions once with the full id array and only reports success for ids not in the returned failed list", async () => {
+    confirmSpy.mockReturnValue(true);
+    mockAcknowledgeSessions.mockResolvedValueOnce({ failed: ["s2"] });
+    const items = [
+      makeReviewItem({ sessionId: "s1" }),
+      makeReviewItem({ sessionId: "s2" }),
+    ];
+    const mockOnAcknowledged = jest.fn();
+    mockUseReviewQueueContext.mockReturnValue(makeContextValue(items));
+
+    renderPanel({ onAcknowledged: mockOnAcknowledged });
+    fireEvent.click(screen.getByTestId("skip-all-visible"));
+
+    await waitFor(() => expect(mockAcknowledgeSessions).toHaveBeenCalledTimes(1));
+    expect(mockAcknowledgeSessions).toHaveBeenCalledWith(["s1", "s2"]);
+    await waitFor(() => expect(mockOnAcknowledged).toHaveBeenCalledWith("s1"));
+    expect(mockOnAcknowledged).not.toHaveBeenCalledWith("s2");
+  });
+
+  it("routes through the onSkipSession prop override instead of acknowledgeSessions when provided", async () => {
+    confirmSpy.mockReturnValue(true);
+    const mockOnSkipSession = jest.fn().mockResolvedValue(undefined);
+    const items = [
+      makeReviewItem({ sessionId: "s1" }),
+      makeReviewItem({ sessionId: "s2" }),
+    ];
+    mockUseReviewQueueContext.mockReturnValue(makeContextValue(items));
+
+    renderPanel({ onSkipSession: mockOnSkipSession });
+    fireEvent.click(screen.getByTestId("skip-all-visible"));
+
+    await waitFor(() => expect(mockOnSkipSession).toHaveBeenCalledTimes(2));
+    expect(mockOnSkipSession).toHaveBeenCalledWith("s1");
+    expect(mockOnSkipSession).toHaveBeenCalledWith("s2");
+    expect(mockAcknowledgeSessions).not.toHaveBeenCalled();
+  });
+
+  it("pluralizes the aria-label correctly for a single skippable item", () => {
+    mockUseReviewQueueContext.mockReturnValue(
+      makeContextValue([makeReviewItem({ sessionId: "s1" })])
+    );
+
+    renderPanel();
+
+    expect(screen.getByTestId("skip-all-visible")).toHaveAccessibleName("Skip all 1 visible item");
+  });
+
+  it("hides the Branch row when branch is empty and shows it with the correct text when set", () => {
+    const withoutBranch = makeReviewItem({ sessionId: "s1", branch: "" });
+    mockUseReviewQueueContext.mockReturnValue(makeContextValue([withoutBranch]));
+    const { unmount } = renderPanel();
+    expect(screen.queryByText("Branch:")).not.toBeInTheDocument();
+    unmount();
+
+    const withBranch = makeReviewItem({ sessionId: "s2", branch: "feat/x" });
+    mockUseReviewQueueContext.mockReturnValue(makeContextValue([withBranch]));
+    renderPanel();
+    expect(screen.getByText("Branch:")).toBeInTheDocument();
+    expect(screen.getByText("feat/x")).toBeInTheDocument();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Create PR trigger visibility (three states — ux.md Surface 1 & 2)
+// ---------------------------------------------------------------------------
+
+describe("ReviewQueuePanel — Create PR trigger", () => {
   beforeEach(() => {
     jest.clearAllMocks();
   });
 
-  it("shows Create PR button for TASK_COMPLETE item with no existing PR URL", () => {
+  it("shows an enabled Create PR trigger for a TASK_COMPLETE item with commits ahead (State A)", () => {
     const item = makeReviewItem({
       reason: AttentionReason.TASK_COMPLETE,
       githubPrUrl: "",
+      hasCommitsAhead: true,
     });
     mockUseReviewQueueContext.mockReturnValue(makeContextValue([item]));
 
-    renderPanel({ onRunOneShot });
+    renderPanel();
 
-    expect(screen.getByTestId("create-pr-session-abc")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /create pr/i })).toBeInTheDocument();
+    const trigger = screen.getByTestId("create-pr-trigger-session-abc");
+    expect(trigger).toBeInTheDocument();
+    expect(trigger).not.toBeDisabled();
   });
 
-  it("hides Create PR button when item already has a PR URL", () => {
+  it("shows a disabled Create PR trigger when there are no commits ahead (State B)", () => {
+    const item = makeReviewItem({
+      reason: AttentionReason.TASK_COMPLETE,
+      githubPrUrl: "",
+      diffStats: undefined,
+    });
+    mockUseReviewQueueContext.mockReturnValue(makeContextValue([item]));
+
+    renderPanel();
+
+    const trigger = screen.getByTestId("create-pr-trigger-session-abc");
+    expect(trigger).toBeDisabled();
+    expect(trigger).toHaveAttribute("title", "No commits ahead of main yet");
+  });
+
+  it("shows a View PR link instead of the trigger when item already has a PR URL (State C)", () => {
     const item = makeReviewItem({
       reason: AttentionReason.TASK_COMPLETE,
       githubPrUrl: "https://github.com/org/repo/pull/99",
     });
     mockUseReviewQueueContext.mockReturnValue(makeContextValue([item]));
 
-    renderPanel({ onRunOneShot });
+    renderPanel();
 
-    expect(screen.queryByRole("button", { name: /create pr/i })).not.toBeInTheDocument();
+    expect(screen.queryByTestId("create-pr-trigger-session-abc")).not.toBeInTheDocument();
+    const link = screen.getByTestId("github-pr-link");
+    expect(link).toHaveAttribute("href", "https://github.com/org/repo/pull/99");
+    expect(link).toHaveTextContent("#99");
   });
 
-  it("hides Create PR button when onRunOneShot prop is not provided", () => {
-    const item = makeReviewItem({
-      reason: AttentionReason.TASK_COMPLETE,
-      githubPrUrl: "",
-    });
-    mockUseReviewQueueContext.mockReturnValue(makeContextValue([item]));
-
-    renderPanel(); // no onRunOneShot
-
-    expect(screen.queryByRole("button", { name: /create pr/i })).not.toBeInTheDocument();
-  });
-
-  it("hides Create PR button for non-TASK_COMPLETE items", () => {
+  it("hides the Create PR trigger area for non-TASK_COMPLETE items", () => {
     const item = makeReviewItem({
       reason: AttentionReason.APPROVAL_PENDING,
       githubPrUrl: "",
     });
     mockUseReviewQueueContext.mockReturnValue(makeContextValue([item]));
 
-    renderPanel({ onRunOneShot });
+    renderPanel();
 
-    expect(screen.queryByRole("button", { name: /create pr/i })).not.toBeInTheDocument();
+    expect(screen.queryByTestId("create-pr-trigger-session-abc")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("github-pr-link")).not.toBeInTheDocument();
   });
 });
 
 // ---------------------------------------------------------------------------
-// Create PR modal behaviour
+// Create PR modal wiring — the modal itself is unit-tested in
+// CreatePullRequestModal.test.tsx; these tests only cover trigger -> open/close.
 // ---------------------------------------------------------------------------
 
-describe("ReviewQueuePanel — Create PR modal", () => {
-  const onRunOneShot = jest.fn().mockResolvedValue({ prUrl: "https://github.com/org/repo/pull/42" });
-
+describe("ReviewQueuePanel — Create PR modal wiring", () => {
   beforeEach(() => {
     jest.clearAllMocks();
     const item = makeReviewItem({
       reason: AttentionReason.TASK_COMPLETE,
       githubPrUrl: "",
+      hasCommitsAhead: true,
     });
     mockUseReviewQueueContext.mockReturnValue(makeContextValue([item]));
   });
 
-  it("opens the modal when Create PR is clicked", () => {
-    renderPanel({ onRunOneShot });
-    fireEvent.click(screen.getByRole("button", { name: /create pr/i }));
-    expect(screen.getByRole("button", { name: /cancel/i })).toBeInTheDocument();
+  it("opens the shared CreatePullRequestModal for the clicked session when the trigger is clicked", () => {
+    renderPanel();
+    fireEvent.click(screen.getByTestId("create-pr-trigger-session-abc"));
+
+    const modal = screen.getByTestId("create-pr-modal");
+    expect(modal).toBeInTheDocument();
+    expect(modal).toHaveAttribute("data-session-id", "session-abc");
   });
 
-  it("closes the modal when Cancel is clicked without calling onRunOneShot", () => {
-    renderPanel({ onRunOneShot });
-    fireEvent.click(screen.getByRole("button", { name: /create pr/i }));
-    fireEvent.click(screen.getByRole("button", { name: /cancel/i }));
+  it("closes the modal when the modal's onClose fires", () => {
+    renderPanel();
+    fireEvent.click(screen.getByTestId("create-pr-trigger-session-abc"));
+    fireEvent.click(screen.getByRole("button", { name: /close/i }));
 
-    expect(screen.queryByRole("button", { name: /cancel/i })).not.toBeInTheDocument();
-    expect(onRunOneShot).not.toHaveBeenCalled();
-  });
-
-  it("calls onRunOneShot with session ID when confirmed", async () => {
-    renderPanel({ onRunOneShot });
-    fireEvent.click(screen.getByRole("button", { name: /create pr/i }));
-
-    // Find the confirm button (not the cancel)
-    const confirmBtn = screen.getByRole("button", { name: /^run$/i });
-    fireEvent.click(confirmBtn);
-
-    await waitFor(() => {
-      expect(onRunOneShot).toHaveBeenCalledWith(
-        "session-abc",
-        expect.stringContaining("pull request")
-      );
-    });
+    expect(screen.queryByTestId("create-pr-modal")).not.toBeInTheDocument();
   });
 });
 
@@ -303,6 +460,7 @@ function makeApprovalItem(overrides: Partial<ReviewItem> = {}): ReviewItem {
       pending_approval_id: "approval-123",
       tool_input_command: "git push origin main",
       tool_name: "Bash",
+      escalation_reason_category: "no-match",
     },
     subStatus: SubStatus.UNSPECIFIED,
     ...overrides,
@@ -760,6 +918,431 @@ describe("ReviewQueuePanel — combinable filters", () => {
   });
 });
 
+describe("ReviewQueuePanel — exclude filters", () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  function openFilters() {
+    fireEvent.click(screen.getByRole("button", { name: /^Filter/ }));
+  }
+
+  it("cycles a priority pill through neutral -> include -> exclude -> neutral", () => {
+    const urgent = makeReviewItem({ sessionId: "s-urgent", sessionName: "Urgent Item", priority: Priority.URGENT });
+    const low = makeReviewItem({ sessionId: "s-low", sessionName: "Low Item", priority: Priority.LOW });
+    mockUseReviewQueueContext.mockReturnValue(makeContextValue([urgent, low]));
+
+    renderPanel();
+    openFilters();
+
+    const pill = () => screen.getByRole("button", { name: /Urgent \(1\)/ });
+
+    // neutral -> include
+    fireEvent.click(pill());
+    expect(pill()).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByTestId("review-item-s-urgent")).toBeInTheDocument();
+    expect(screen.queryByTestId("review-item-s-low")).not.toBeInTheDocument();
+
+    // include -> exclude
+    fireEvent.click(pill());
+    expect(pill()).toHaveAttribute("aria-pressed", "false");
+    expect(pill()).toHaveTextContent("🚫");
+    expect(screen.queryByTestId("review-item-s-urgent")).not.toBeInTheDocument();
+    expect(screen.getByTestId("review-item-s-low")).toBeInTheDocument();
+
+    // exclude -> neutral
+    fireEvent.click(pill());
+    expect(pill()).toHaveAttribute("aria-pressed", "false");
+    expect(pill()).not.toHaveTextContent("🚫");
+    expect(screen.getByTestId("review-item-s-urgent")).toBeInTheDocument();
+    expect(screen.getByTestId("review-item-s-low")).toBeInTheDocument();
+  });
+
+  it("excludes items by program when a program pill is clicked twice", () => {
+    const claude = makeReviewItem({ sessionId: "s1", sessionName: "First Item", program: "claude" });
+    const aider = makeReviewItem({ sessionId: "s2", sessionName: "Second Item", program: "aider" });
+    mockUseReviewQueueContext.mockReturnValue(makeContextValue([claude, aider]));
+
+    renderPanel();
+    openFilters();
+
+    const pill = screen.getByRole("button", { name: /aider \(1\)/ });
+    fireEvent.click(pill); // include
+    fireEvent.click(pill); // exclude
+
+    expect(screen.getByTestId("review-item-s1")).toBeInTheDocument();
+    expect(screen.queryByTestId("review-item-s2")).not.toBeInTheDocument();
+  });
+
+  it("excludes items by category when a category pill is clicked twice", () => {
+    const bugfix = makeReviewItem({ sessionId: "s1", sessionName: "First Item", category: "bugfix" });
+    const feature = makeReviewItem({ sessionId: "s2", sessionName: "Second Item", category: "feature" });
+    mockUseReviewQueueContext.mockReturnValue(makeContextValue([bugfix, feature]));
+
+    renderPanel();
+    openFilters();
+
+    const pill = screen.getByRole("button", { name: /feature \(1\)/ });
+    fireEvent.click(pill); // include
+    fireEvent.click(pill); // exclude
+
+    expect(screen.getByTestId("review-item-s1")).toBeInTheDocument();
+    expect(screen.queryByTestId("review-item-s2")).not.toBeInTheDocument();
+  });
+
+  it("counts excluded values toward the active filter count and clear-all resets them", () => {
+    const urgent = makeReviewItem({ sessionId: "s1", sessionName: "S1", priority: Priority.URGENT });
+    const low = makeReviewItem({ sessionId: "s2", sessionName: "S2", priority: Priority.LOW });
+    mockUseReviewQueueContext.mockReturnValue(makeContextValue([urgent, low]));
+
+    renderPanel();
+    openFilters();
+
+    const pill = screen.getByRole("button", { name: /Urgent \(1\)/ });
+    fireEvent.click(pill); // include
+    fireEvent.click(pill); // exclude
+
+    expect(screen.queryByTestId("review-item-s1")).not.toBeInTheDocument();
+    expect(screen.getByTestId("review-item-s2")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /clear active filter/i }));
+
+    expect(screen.getByTestId("review-item-s1")).toBeInTheDocument();
+    expect(screen.getByTestId("review-item-s2")).toBeInTheDocument();
+    expect(pill).not.toHaveTextContent("🚫");
+  });
+
+  it("persists an excluded priority to the URL and hydrates it back on mount", () => {
+    const urgent = makeReviewItem({ sessionId: "s1", sessionName: "S1", priority: Priority.URGENT });
+    mockUseReviewQueueContext.mockReturnValue(makeContextValue([urgent]));
+
+    renderPanel();
+    openFilters();
+
+    const pill = screen.getByRole("button", { name: /Urgent \(1\)/ });
+    fireEvent.click(pill); // include
+    fireEvent.click(pill); // exclude
+
+    expect(mockReplace).toHaveBeenCalledWith(
+      expect.stringContaining(`priorityExclude=${Priority.URGENT}`),
+      expect.objectContaining({ scroll: false })
+    );
+
+    mockSearchParams = new URLSearchParams({ priorityExclude: String(Priority.URGENT) });
+    renderPanel();
+    fireEvent.click(screen.getAllByRole("button", { name: /^Filter/ })[1]);
+
+    const rehydrated = screen.getAllByRole("button", { name: /Urgent \(1\)/ })[1];
+    expect(rehydrated).toHaveAttribute("aria-pressed", "false");
+    expect(rehydrated).toHaveTextContent("🚫");
+  });
+
+  it("cycles a reason pill through neutral -> include -> exclude -> neutral", () => {
+    const errorItem = makeReviewItem({ sessionId: "s-error", sessionName: "Error Item", reason: AttentionReason.ERROR_STATE });
+    const idleItem = makeReviewItem({ sessionId: "s-idle", sessionName: "Idle Item", reason: AttentionReason.IDLE });
+    mockUseReviewQueueContext.mockReturnValue(makeContextValue([errorItem, idleItem]));
+
+    renderPanel();
+    openFilters();
+
+    const pill = () => screen.getByRole("button", { name: /Error \(1\)/ });
+
+    // neutral -> include
+    fireEvent.click(pill());
+    expect(pill()).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByTestId("review-item-s-error")).toBeInTheDocument();
+    expect(screen.queryByTestId("review-item-s-idle")).not.toBeInTheDocument();
+
+    // include -> exclude
+    fireEvent.click(pill());
+    expect(pill()).toHaveAttribute("aria-pressed", "false");
+    expect(pill()).toHaveTextContent("🚫");
+    expect(screen.queryByTestId("review-item-s-error")).not.toBeInTheDocument();
+    expect(screen.getByTestId("review-item-s-idle")).toBeInTheDocument();
+
+    // exclude -> neutral
+    fireEvent.click(pill());
+    expect(pill()).toHaveAttribute("aria-pressed", "false");
+    expect(pill()).not.toHaveTextContent("🚫");
+    expect(screen.getByTestId("review-item-s-error")).toBeInTheDocument();
+    expect(screen.getByTestId("review-item-s-idle")).toBeInTheDocument();
+  });
+
+  it("persists an excluded reason to the URL and hydrates it back on mount", () => {
+    const errorItem = makeReviewItem({ sessionId: "s1", sessionName: "S1", reason: AttentionReason.ERROR_STATE });
+    mockUseReviewQueueContext.mockReturnValue(makeContextValue([errorItem]));
+
+    renderPanel();
+    openFilters();
+
+    const pill = screen.getByRole("button", { name: /Error \(1\)/ });
+    fireEvent.click(pill); // include
+    fireEvent.click(pill); // exclude
+
+    expect(mockReplace).toHaveBeenCalledWith(
+      expect.stringContaining(`reasonExclude=${AttentionReason.ERROR_STATE}`),
+      expect.objectContaining({ scroll: false })
+    );
+
+    mockSearchParams = new URLSearchParams({ reasonExclude: String(AttentionReason.ERROR_STATE) });
+    renderPanel();
+    fireEvent.click(screen.getAllByRole("button", { name: /^Filter/ })[1]);
+
+    const rehydrated = screen.getAllByRole("button", { name: /Error \(1\)/ })[1];
+    expect(rehydrated).toHaveAttribute("aria-pressed", "false");
+    expect(rehydrated).toHaveTextContent("🚫");
+  });
+
+  it("cycles a severity pill through neutral -> include -> exclude -> neutral", () => {
+    const critical = makeReviewItem({
+      sessionId: "s-critical",
+      sessionName: "Critical Item",
+      reason: AttentionReason.APPROVAL_PENDING,
+      metadata: { pending_approval_id: "appr-1", risk_level: "critical" },
+    } as Partial<ReviewItem>);
+    const low = makeReviewItem({
+      sessionId: "s-low",
+      sessionName: "Low Item",
+      reason: AttentionReason.APPROVAL_PENDING,
+      metadata: { pending_approval_id: "appr-2", risk_level: "low" },
+    } as Partial<ReviewItem>);
+    mockUseReviewQueueContext.mockReturnValue(makeContextValue([critical, low]));
+
+    renderPanel();
+    openFilters();
+
+    const pill = () => screen.getByRole("button", { name: /Critical \(1\)/ });
+
+    // neutral -> include
+    fireEvent.click(pill());
+    expect(pill()).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByTestId("review-item-s-critical")).toBeInTheDocument();
+    expect(screen.queryByTestId("review-item-s-low")).not.toBeInTheDocument();
+
+    // include -> exclude
+    fireEvent.click(pill());
+    expect(pill()).toHaveAttribute("aria-pressed", "false");
+    expect(pill()).toHaveTextContent("🚫");
+    expect(screen.queryByTestId("review-item-s-critical")).not.toBeInTheDocument();
+    expect(screen.getByTestId("review-item-s-low")).toBeInTheDocument();
+
+    // exclude -> neutral
+    fireEvent.click(pill());
+    expect(pill()).toHaveAttribute("aria-pressed", "false");
+    expect(pill()).not.toHaveTextContent("🚫");
+    expect(screen.getByTestId("review-item-s-critical")).toBeInTheDocument();
+    expect(screen.getByTestId("review-item-s-low")).toBeInTheDocument();
+  });
+
+  it("persists an excluded severity to the URL and hydrates it back on mount", () => {
+    const critical = makeReviewItem({
+      sessionId: "s1",
+      sessionName: "S1",
+      reason: AttentionReason.APPROVAL_PENDING,
+      metadata: { pending_approval_id: "appr-1", risk_level: "critical" },
+    } as Partial<ReviewItem>);
+    mockUseReviewQueueContext.mockReturnValue(makeContextValue([critical]));
+
+    renderPanel();
+    openFilters();
+
+    const pill = screen.getByRole("button", { name: /Critical \(1\)/ });
+    fireEvent.click(pill); // include
+    fireEvent.click(pill); // exclude
+
+    expect(mockReplace).toHaveBeenCalledWith(
+      expect.stringContaining("severityExclude=critical"),
+      expect.objectContaining({ scroll: false })
+    );
+
+    mockSearchParams = new URLSearchParams({ severityExclude: "critical" });
+    renderPanel();
+    fireEvent.click(screen.getAllByRole("button", { name: /^Filter/ })[1]);
+
+    const rehydrated = screen.getAllByRole("button", { name: /Critical \(1\)/ })[1];
+    expect(rehydrated).toHaveAttribute("aria-pressed", "false");
+    expect(rehydrated).toHaveTextContent("🚫");
+  });
+
+  it("cycles a tag pill through neutral -> include -> exclude -> neutral", () => {
+    const backend = makeReviewItem({ sessionId: "s-backend", sessionName: "Backend Item", tags: ["backend"] });
+    const frontend = makeReviewItem({ sessionId: "s-frontend", sessionName: "Frontend Item", tags: ["frontend"] });
+    mockUseReviewQueueContext.mockReturnValue(makeContextValue([backend, frontend]));
+
+    renderPanel();
+    openFilters();
+
+    const pill = () => screen.getByRole("button", { name: /backend \(1\)/ });
+
+    // neutral -> include
+    fireEvent.click(pill());
+    expect(pill()).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByTestId("review-item-s-backend")).toBeInTheDocument();
+    expect(screen.queryByTestId("review-item-s-frontend")).not.toBeInTheDocument();
+
+    // include -> exclude
+    fireEvent.click(pill());
+    expect(pill()).toHaveAttribute("aria-pressed", "false");
+    expect(pill()).toHaveTextContent("🚫");
+    expect(screen.queryByTestId("review-item-s-backend")).not.toBeInTheDocument();
+    expect(screen.getByTestId("review-item-s-frontend")).toBeInTheDocument();
+
+    // exclude -> neutral
+    fireEvent.click(pill());
+    expect(pill()).toHaveAttribute("aria-pressed", "false");
+    expect(pill()).not.toHaveTextContent("🚫");
+    expect(screen.getByTestId("review-item-s-backend")).toBeInTheDocument();
+    expect(screen.getByTestId("review-item-s-frontend")).toBeInTheDocument();
+  });
+
+  it("persists an excluded tag to the URL and hydrates it back on mount", () => {
+    const backend = makeReviewItem({ sessionId: "s1", sessionName: "S1", tags: ["backend"] });
+    mockUseReviewQueueContext.mockReturnValue(makeContextValue([backend]));
+
+    renderPanel();
+    openFilters();
+
+    const pill = screen.getByRole("button", { name: /backend \(1\)/ });
+    fireEvent.click(pill); // include
+    fireEvent.click(pill); // exclude
+
+    expect(mockReplace).toHaveBeenCalledWith(
+      expect.stringContaining("tagExclude=backend"),
+      expect.objectContaining({ scroll: false })
+    );
+
+    mockSearchParams = new URLSearchParams({ tagExclude: "backend" });
+    renderPanel();
+    fireEvent.click(screen.getAllByRole("button", { name: /^Filter/ })[1]);
+
+    const rehydrated = screen.getAllByRole("button", { name: /backend \(1\)/ })[1];
+    expect(rehydrated).toHaveAttribute("aria-pressed", "false");
+    expect(rehydrated).toHaveTextContent("🚫");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Severity (review-queue-severity Epic 6)
+// ---------------------------------------------------------------------------
+
+describe("ReviewQueuePanel — severity", () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  function openFilters() {
+    fireEvent.click(screen.getByRole("button", { name: /^Filter/ }));
+  }
+
+  function makeApprovalItem(overrides: Partial<ReviewItem> & { riskLevel?: string } = {}): ReviewItem {
+    const { riskLevel, ...rest } = overrides;
+    const metadata: Record<string, string> = { pending_approval_id: "appr-1" };
+    if (riskLevel !== undefined) metadata["risk_level"] = riskLevel;
+    return makeReviewItem({
+      reason: AttentionReason.APPROVAL_PENDING,
+      metadata,
+      ...rest,
+    } as Partial<ReviewItem>);
+  }
+
+  it("ReviewQueuePanel_should_SortItemsBySeverityDescending_When_DefaultSortFieldIsSeverity", () => {
+    const low = makeApprovalItem({ sessionId: "s-low", sessionName: "Low Item", riskLevel: "low" });
+    const critical = makeApprovalItem({ sessionId: "s-critical", sessionName: "Critical Item", riskLevel: "critical" });
+    const medium = makeApprovalItem({ sessionId: "s-medium", sessionName: "Medium Item", riskLevel: "medium" });
+    mockUseReviewQueueContext.mockReturnValue(makeContextValue([low, critical, medium]));
+
+    renderPanel();
+
+    const ids = Array.from(document.querySelectorAll("[data-session-id]")).map((el) =>
+      el.getAttribute("data-session-id")
+    );
+    expect(ids).toEqual(["s-critical", "s-medium", "s-low"]);
+  });
+
+  it("ReviewQueuePanel_should_RankUnrecordedBetweenCriticalAndMedium_When_DefaultSortApplied", () => {
+    const critical = makeApprovalItem({ sessionId: "s-critical", sessionName: "Critical Item", riskLevel: "critical" });
+    const unrecorded = makeApprovalItem({ sessionId: "s-unrecorded", sessionName: "Unrecorded Item" });
+    const medium = makeApprovalItem({ sessionId: "s-medium", sessionName: "Medium Item", riskLevel: "medium" });
+    mockUseReviewQueueContext.mockReturnValue(makeContextValue([medium, unrecorded, critical]));
+
+    renderPanel();
+
+    const ids = Array.from(document.querySelectorAll("[data-session-id]")).map((el) =>
+      el.getAttribute("data-session-id")
+    );
+    expect(ids).toEqual(["s-critical", "s-unrecorded", "s-medium"]);
+  });
+
+  it("ReviewQueuePanel_should_ShowOnlyCriticalItems_When_CriticalSeverityChipClicked", () => {
+    const critical = makeApprovalItem({ sessionId: "s-critical", sessionName: "Critical Item", riskLevel: "critical" });
+    const low = makeApprovalItem({ sessionId: "s-low", sessionName: "Low Item", riskLevel: "low" });
+    mockUseReviewQueueContext.mockReturnValue(makeContextValue([critical, low]));
+
+    renderPanel();
+    openFilters();
+
+    const criticalChip = screen.getByRole("button", { name: /Critical \(1\)/ });
+    fireEvent.click(criticalChip);
+
+    expect(criticalChip).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByTestId("review-item-s-critical")).toBeInTheDocument();
+    expect(screen.queryByTestId("review-item-s-low")).not.toBeInTheDocument();
+  });
+
+  it("ReviewQueuePanel_should_ShowSharedEmptyState_When_SeverityFilterMatchesZeroItems", () => {
+    // Low-severity approval-pending item, plus an unrelated Idle-reason item with no
+    // risk_level metadata at all. Low (severity dim) AND Idle (reason dim) each individually
+    // match one item, but their combination (AND across dimensions) matches zero.
+    const low = makeApprovalItem({ sessionId: "s-low", sessionName: "Low Item", riskLevel: "low" });
+    const idle = makeReviewItem({ sessionId: "s-idle", sessionName: "Idle Item", reason: AttentionReason.IDLE });
+    mockUseReviewQueueContext.mockReturnValue(makeContextValue([low, idle]));
+
+    renderPanel();
+    openFilters();
+
+    fireEvent.click(screen.getByRole("button", { name: /Low \(1\)/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Idle \(1\)/ }));
+
+    expect(screen.queryByTestId("review-item-s-low")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("review-item-s-idle")).not.toBeInTheDocument();
+    expect(screen.getByText(/No items match the current filter/i)).toBeInTheDocument();
+  });
+
+  it("ReviewQueuePanel_should_RenderCompactSeverityBadgeNextToEscalationReason_When_ApprovalPendingItemRenders", () => {
+    const item = makeApprovalItem({ sessionId: "s-1", sessionName: "S1", riskLevel: "critical" });
+    mockUseReviewQueueContext.mockReturnValue(makeContextValue([item]));
+
+    renderPanel();
+
+    expect(screen.getByTestId("severity-badge-critical")).toHaveAttribute("aria-label", "Critical risk");
+  });
+
+  it("ReviewQueuePanel_should_RenderNotRecordedBadgeState_When_RiskLevelMetadataKeyIsAbsent", () => {
+    const item = makeApprovalItem({ sessionId: "s-1", sessionName: "S1" });
+    mockUseReviewQueueContext.mockReturnValue(makeContextValue([item]));
+
+    renderPanel();
+
+    expect(screen.getByTestId("severity-badge-unrecorded")).toHaveAttribute("aria-label", "Severity not recorded");
+  });
+
+  it("ReviewQueuePanel_should_BucketUnrecognizedRiskLevel_When_FilteringByNotRecorded", () => {
+    // PR #411 review finding: an unrecognized future risk_level value must still be
+    // reachable via the "Not recorded" chip, not become its own unfilterable key.
+    const unrecognized = makeApprovalItem({ sessionId: "s-future", sessionName: "Future Item", riskLevel: "extreme" });
+    mockUseReviewQueueContext.mockReturnValue(makeContextValue([unrecognized]));
+
+    renderPanel();
+    openFilters();
+
+    const notRecordedChip = screen.getByRole("button", { name: /Not recorded \(1\)/ });
+    fireEvent.click(notRecordedChip);
+
+    expect(notRecordedChip).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByTestId("review-item-s-future")).toBeInTheDocument();
+  });
+});
+
 // ---------------------------------------------------------------------------
 // Group by (reuses groupSessions()) + URL-persisted filter state (reuses useFilterState)
 // ---------------------------------------------------------------------------
@@ -797,7 +1380,6 @@ describe("ReviewQueuePanel — group by", () => {
   });
 
   it("keeps action buttons and current-item highlighting intact when items are grouped", () => {
-    const onRunOneShot = jest.fn();
     const first = makeReviewItem({
       sessionId: "s1",
       sessionName: "First Item",
@@ -814,7 +1396,7 @@ describe("ReviewQueuePanel — group by", () => {
     });
     mockUseReviewQueueContext.mockReturnValue(makeContextValue([first, second]));
 
-    renderPanel({ onRunOneShot });
+    renderPanel();
     fireEvent.click(screen.getByRole("button", { name: /^Filter/ }));
     fireEvent.change(screen.getByLabelText(/group by/i), { target: { value: "program" } });
 
@@ -822,8 +1404,8 @@ describe("ReviewQueuePanel — group by", () => {
     expect(screen.getByTestId("review-group-aider")).toBeInTheDocument();
 
     // Action buttons (Create PR) render correctly for both items despite grouping.
-    expect(screen.getByTestId("create-pr-s1")).toBeInTheDocument();
-    expect(screen.getByTestId("create-pr-s2")).toBeInTheDocument();
+    expect(screen.getByTestId("create-pr-trigger-s1")).toBeInTheDocument();
+    expect(screen.getByTestId("create-pr-trigger-s2")).toBeInTheDocument();
 
     // useReviewQueueNavigation is mocked with currentIndex: 0, which maps to the first
     // item in the (pre-group) flat items array — "s1" here. Its wrapper must still be
@@ -928,5 +1510,208 @@ describe("ReviewQueuePanel — URL-persisted filter state", () => {
     expect(screen.getByTestId("review-item-s1")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: /^Filter/ }));
     expect(screen.getByRole("button", { name: "Urgent (1)" })).toHaveAttribute("aria-pressed", "false");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Epic 3.1 (escalation-reasoning): reason line rendering
+// ---------------------------------------------------------------------------
+
+import { escalationReasonText } from "../ReviewQueuePanel.css";
+import { button } from "@/components/ui/Button.css";
+
+describe("escalation reason", () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockUseGenerateRule.mockReturnValue({
+      suggestions: [],
+      loading: false,
+      error: null,
+      generate: mockGenerate,
+      cancel: jest.fn(),
+      clear: mockClear,
+    });
+  });
+
+  it("renders the reason text with the category-driven emoji prefix (no-match)", () => {
+    const item = makeApprovalItem({
+      metadata: {
+        pending_approval_id: "approval-123",
+        tool_input_command: "rm -rf /tmp/foo",
+        escalation_reason: "No matching rule; escalated for manual review.",
+        escalation_reason_category: "no-match",
+      },
+    });
+    mockUseReviewQueueContext.mockReturnValue(makeContextValue([item]));
+
+    renderPanel();
+
+    expect(
+      screen.getByText("❓ No matching rule; escalated for manual review.")
+    ).toBeInTheDocument();
+  });
+
+  it("renders backend text verbatim with a different emoji for a different category (explicit-rule)", () => {
+    const item = makeApprovalItem({
+      metadata: {
+        pending_approval_id: "approval-123",
+        tool_input_command: "git branch -D main",
+        escalation_reason: "Branch deletion modifies repository structure and should be reviewed.",
+        escalation_reason_category: "explicit-rule",
+      },
+    });
+    mockUseReviewQueueContext.mockReturnValue(makeContextValue([item]));
+
+    renderPanel();
+
+    expect(
+      screen.getByText("🛑 Branch deletion modifies repository structure and should be reviewed.")
+    ).toBeInTheDocument();
+  });
+
+  it("shows the orphaned-approval fallback copy when escalation_reason is absent", () => {
+    const item = makeApprovalItem({
+      metadata: {
+        pending_approval_id: "approval-123",
+        tool_input_command: "git push origin main",
+        // no escalation_reason / escalation_reason_category — pre-feature approval
+      },
+    });
+    mockUseReviewQueueContext.mockReturnValue(makeContextValue([item]));
+
+    renderPanel();
+
+    expect(
+      screen.getByText("Reason not recorded — this request predates escalation-reason tracking.")
+    ).toBeInTheDocument();
+  });
+
+  it("applies the bounded escalationReasonText class (not bare itemContext) for a long reason", () => {
+    const longReason = "x".repeat(600);
+    const item = makeApprovalItem({
+      metadata: {
+        pending_approval_id: "approval-123",
+        tool_input_command: "rm -rf /tmp/foo",
+        escalation_reason: longReason,
+        escalation_reason_category: "no-match",
+      },
+    });
+    mockUseReviewQueueContext.mockReturnValue(makeContextValue([item]));
+
+    renderPanel();
+
+    const reasonEl = screen.getByText(`❓ ${longReason}`);
+    expect(reasonEl).toHaveClass(String(escalationReasonText));
+  });
+
+  it("renders create-rule button with intent=secondary when category is no-match", () => {
+    const item = makeApprovalItem({
+      metadata: {
+        pending_approval_id: "approval-123",
+        tool_input_command: "rm -rf /tmp/foo",
+        tool_name: "Bash",
+        escalation_reason: "No matching rule; escalated for manual review.",
+        escalation_reason_category: "no-match",
+      },
+    });
+    mockUseReviewQueueContext.mockReturnValue(makeContextValue([item]));
+
+    renderPanel();
+
+    const createRuleButton = screen.getByTestId("create-rule-session-approval");
+    expect(createRuleButton).toBeInTheDocument();
+    expect(createRuleButton).toHaveClass(
+      String(button({ intent: "secondary", size: "md" }))
+    );
+  });
+
+  it("omits create-rule button when category is domain-age", () => {
+    const item = makeApprovalItem({
+      metadata: {
+        pending_approval_id: "approval-123",
+        tool_input_command: "curl https://newly-registered-domain.example/install.sh",
+        tool_name: "Bash",
+        escalation_reason: "Domain registered 3 days ago.",
+        escalation_reason_category: "domain-age",
+      },
+    });
+    mockUseReviewQueueContext.mockReturnValue(makeContextValue([item]));
+
+    renderPanel();
+
+    expect(screen.queryByTestId("create-rule-session-approval")).not.toBeInTheDocument();
+  });
+
+  it("ReviewQueue_should_showCreateRuleButton_On_OrphanedApprovalMissingCategory", () => {
+    const item = makeApprovalItem({
+      metadata: {
+        pending_approval_id: "approval-123",
+        tool_input_command: "git push origin main",
+        tool_name: "Bash",
+        // no escalation_reason / escalation_reason_category — orphaned pre-deploy approval
+      },
+    });
+    mockUseReviewQueueContext.mockReturnValue(makeContextValue([item]));
+
+    renderPanel();
+
+    expect(screen.getByTestId("create-rule-session-approval")).toBeInTheDocument();
+  });
+
+  it.each(["explicit-rule", "secret-scan", "unclassifiable", "unexpected"])(
+    "omits create-rule button when category is %s",
+    (category) => {
+      const item = makeApprovalItem({
+        metadata: {
+          pending_approval_id: "approval-123",
+          tool_input_command: "rm -rf /tmp/foo",
+          tool_name: "Bash",
+          escalation_reason: "test reason",
+          escalation_reason_category: category,
+        },
+      });
+      mockUseReviewQueueContext.mockReturnValue(makeContextValue([item]));
+
+      renderPanel();
+
+      expect(screen.queryByTestId("create-rule-session-approval")).not.toBeInTheDocument();
+    }
+  );
+
+  it("shows create-rule button for an unrecognized/future category (fail-open by design)", () => {
+    const item = makeApprovalItem({
+      metadata: {
+        pending_approval_id: "approval-123",
+        tool_input_command: "git push origin main",
+        tool_name: "Bash",
+        escalation_reason_category: "some-future-category",
+      },
+    });
+    mockUseReviewQueueContext.mockReturnValue(makeContextValue([item]));
+
+    renderPanel();
+
+    expect(screen.getByTestId("create-rule-session-approval")).toBeInTheDocument();
+  });
+
+  describe("isCreateRuleEligibleCategory", () => {
+    it("returns true for an orphaned approval (category undefined)", () => {
+      expect(isCreateRuleEligibleCategory(undefined)).toBe(true);
+    });
+
+    it("returns true for no-match", () => {
+      expect(isCreateRuleEligibleCategory("no-match")).toBe(true);
+    });
+
+    it.each(["explicit-rule", "domain-age", "secret-scan", "unclassifiable", "unexpected"])(
+      "returns false for %s (ties this guard to the 5 known non-no-match EscalationCategory constants)",
+      (category) => {
+        expect(isCreateRuleEligibleCategory(category)).toBe(false);
+      }
+    );
+
+    it("returns true for an unrecognized/future category (fail-open by design)", () => {
+      expect(isCreateRuleEligibleCategory("some-future-category")).toBe(true);
+    });
   });
 });

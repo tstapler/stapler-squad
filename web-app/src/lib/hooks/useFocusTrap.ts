@@ -23,22 +23,40 @@ export function useFocusTrap(
     if (!isActive || !ref.current) return;
 
     const container = ref.current as HTMLElement;
-    const focusable = Array.from(
-      container.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTORS)
-    ).filter((el) => !el.closest("[aria-hidden='true']"));
+    // Ensure the "no focusable descendants" fallback below can actually
+    // move focus onto the container itself — a plain <div> without a
+    // tabindex silently no-ops .focus().
+    if (!container.hasAttribute("tabindex")) {
+      container.setAttribute("tabindex", "-1");
+    }
 
-    const first = focusable[0];
-    const last = focusable[focusable.length - 1];
+    // Computed fresh on every Tab press (not cached once at activation) so a
+    // control that becomes disabled/enabled after the trap activates (e.g. a
+    // dialog's input+Send disabled while its own async action is in flight)
+    // doesn't leave a stale "first"/"last" pointing at an element that's no
+    // longer in the tab order — chasing a stale pointer would fail to
+    // preventDefault, letting Tab/Shift+Tab escape the container to whatever
+    // real browser tab order finds next (confirmed via a real-browser
+    // regression: SessionActionsOverflow's "Give Direction" dialog disables
+    // its input/Send while steering, and a stale snapshot let Shift+Tab from
+    // the still-enabled Cancel button escape the dialog entirely).
+    const getFocusable = () =>
+      Array.from(container.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTORS)).filter(
+        (el) => !el.closest("[aria-hidden='true']")
+      );
 
     // Move focus into the container
-    first?.focus();
+    getFocusable()[0]?.focus();
 
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key !== "Tab") return;
+      const focusable = getFocusable();
       if (focusable.length === 0) {
         e.preventDefault();
         return;
       }
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
       if (e.shiftKey) {
         if (document.activeElement === first) {
           e.preventDefault();
@@ -52,11 +70,31 @@ export function useFocusTrap(
       }
     };
 
+    // Safety net for widgets that rewrite their own tabindex on focus (e.g.
+    // react-arborist's FileTree), which can let native Tab slip past
+    // handleKeyDown's first/last check entirely — backlog item
+    // 4a1f73c4-5558-41f8-9860-8508fb874fcc.
+    const handleFocusIn = (e: FocusEvent) => {
+      const target = e.target as Node | null;
+      if (!target || container.contains(target)) return;
+      // A deliberate close-restore (e.g. a sibling trap sharing this trigger,
+      // like SessionActionsOverflow's Program Picker over its overflow menu),
+      // not an escape.
+      if (target === triggerRef?.current) return;
+      // Focus moved into another legitimate dialog — e.g. React's autoFocus
+      // lands here before that dialog's own trap effect has registered.
+      const targetEl = target as HTMLElement;
+      if (targetEl.closest?.('[role="dialog"], [role="alertdialog"]')) return;
+      (getFocusable()[0] ?? container).focus();
+    };
+
     document.addEventListener("keydown", handleKeyDown);
+    document.addEventListener("focusin", handleFocusIn);
 
     const triggerEl = triggerRef?.current;
     return () => {
       document.removeEventListener("keydown", handleKeyDown);
+      document.removeEventListener("focusin", handleFocusIn);
       // Return focus to the trigger element when the trap is deactivated
       triggerEl?.focus();
     };

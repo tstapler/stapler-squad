@@ -3,6 +3,12 @@
 .claude/settings.local.json
 stapler-squad
 stapler-squad.prev
+stapler-squad-otel
+# otelc setup's per-checkout generated scaffolding (scripts/otel-auto-build.sh
+# removes these on exit, but ignore them too in case of an interrupted run)
+.otelc-build/
+otel.instrumentation.go
+otelc.runtime.go
 claude-squad
 claude-mux
 ssq-hooks
@@ -15,7 +21,13 @@ stapler-squad-test
 !web-app/src/**/logs/
 !web-app/src/**/logs/**
 
-# Generated protocol buffer code
+# Generated protocol buffer code — regenerate with: make proto-gen (or buf generate proto).
+# NEVER force-add (git add -f) files under these paths, even to "fix" a build. Every
+# make target that consumes generated code (build, test, lint) already depends on
+# proto-gen; CI generates fresh before every consuming step. Committing these files
+# has caused real breakage twice: once by force-adding a stale/incomplete generation,
+# once by a CI workflow step ordering bug that only "worked" because these were
+# force-added in the first place (see PR #445 and CI job "no-checked-in-generated-protos").
 gen/
 web/src/gen/
 web-app/src/gen/
@@ -35,6 +47,7 @@ session/ent/*/
 /web-app/.env.local
 /server/web/dist/
 /.playwright-mcp
+/tools/ci-gates/node_modules/
 
 # worktrees
 worktrees/
@@ -61,11 +74,14 @@ tests/e2e/playwright-report-dev-mode/
 tests/e2e/test-results/
 tests/e2e/node_modules/
 tests/e2e/test-results-dev-mode/
+tests/e2e/fixtures/*-theme.json
+tests/e2e/.bin/
 
 # Scratch benchmark output files (not the committed baselines in benchmarks/go/)
 bench-current.txt
 bench-diff.txt
 benchmark_results.txt
+bench-otel-*.txt
 /web-app/out/
 /server/web/dist/
 
@@ -75,6 +91,10 @@ build/
 # Pinned tmux build stamp (third_party/tmux itself is a real git submodule now,
 # so its contents don't need ignore rules).
 .tmux-build.stamp
+
+# Pinned tymuxd fetch stamp (records the last-fetched TYMUX_VERSION; see
+# scripts/fetch-tymuxd.sh and ADR-001).
+.tymuxd-fetch.stamp
 
 # Scanner build artifacts
 tools/scanner/cmd
@@ -103,3 +123,6 @@ benchmarks/
 # Backlog context files injected into worktrees — never source files
 .backlog-context.md
 .claude/commands/backlog/
+
+# Runtime session-data artifacts leaked into the repo root by local dev runs
+/session/*/scrollback.jsonl.zst

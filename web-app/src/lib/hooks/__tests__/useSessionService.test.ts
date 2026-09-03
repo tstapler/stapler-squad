@@ -19,24 +19,31 @@ import reviewQueueReducer, {
   setReviewQueue,
 } from "@/lib/store/reviewQueueSlice";
 import bulkSelectionReducer from "@/lib/store/bulkSelectionSlice";
+import remotesReducer, {
+  remoteHealthChanged,
+  selectRemoteConnectionState,
+} from "@/lib/store/remotesSlice";
 import { Session, DetectedStatus, SessionStatus } from "@/gen/session/v1/types_pb";
+import { RemoteConnectionState } from "@/gen/session/v1/remote_pb";
 
 // ── Mocks ──────────────────────────────────────────────────────────────────
 
 const mockWatchSessions = jest.fn();
 const mockListSessions = jest.fn();
 const mockCreateSession = jest.fn();
+const mockUpdateSession = jest.fn();
 
 jest.mock("@connectrpc/connect", () => ({
   createClient: () => ({
     watchSessions: mockWatchSessions,
     listSessions: mockListSessions,
     createSession: mockCreateSession,
+    updateSession: mockUpdateSession,
   }),
 }));
 
 jest.mock("@/lib/transport/watch-ws-transport", () => ({
-  createWatchTransport: jest.fn().mockReturnValue({}),
+  createSessionWatchTransport: jest.fn().mockReturnValue({}),
 }));
 
 jest.mock("@/lib/config", () => ({
@@ -70,6 +77,7 @@ function makeTestStore() {
   return configureStore({
     reducer: {
       bulkSelection: bulkSelectionReducer,
+      remotes: remotesReducer,
       reviewQueue: reviewQueueReducer,
       sessions: sessionsReducer,
       connectApi: (state = {}) => state,
@@ -246,6 +254,60 @@ describe("useSessionService — handleSessionEvent", () => {
       expect(selectReviewQueueItems(store.getState() as never)).toHaveLength(0);
     });
   });
+
+  // ssh-remote-workspaces Epic 6.2, Story 6.2.2: verifies the
+  // "remoteHealthChanged" case handleSessionEvent added (useSessionService.ts)
+  // routes into remotesSlice via the remoteHealthChanged action creator —
+  // the same "test via store state after dispatch" convention the
+  // sessionDeleted/sessionAcknowledged blocks above use, since
+  // handleSessionEvent itself is internal to the hook.
+  describe("remoteHealthChanged", () => {
+    it("dispatches remoteHealthChanged and updates selectRemoteConnectionState for a non-empty remoteName", async () => {
+      const store = makeTestStore();
+
+      expect(selectRemoteConnectionState("prod-box")(store.getState() as never))
+        .toBe(RemoteConnectionState.UNSPECIFIED);
+
+      const { result } = renderHook(
+        () => useSessionService({ autoWatch: false, enabled: true }),
+        { wrapper: makeWrapper(store) }
+      );
+      await act(async () => { await Promise.resolve(); });
+
+      // Mirrors the dispatch handleSessionEvent's "remoteHealthChanged" case
+      // performs for event.event.value = { remoteName, state, previousState }.
+      act(() => {
+        store.dispatch(remoteHealthChanged({
+          remoteName: "prod-box",
+          state: RemoteConnectionState.RECONNECTING,
+          previousState: RemoteConnectionState.CONNECTED,
+        }));
+      });
+
+      expect(selectRemoteConnectionState("prod-box")(store.getState() as never))
+        .toBe(RemoteConnectionState.RECONNECTING);
+    });
+
+    it("is a no-op for an empty remoteName, matching handleSessionEvent's `if (remoteHealth.remoteName)` guard", async () => {
+      const store = makeTestStore();
+      const { result } = renderHook(
+        () => useSessionService({ autoWatch: false, enabled: true }),
+        { wrapper: makeWrapper(store) }
+      );
+      await act(async () => { await Promise.resolve(); });
+
+      act(() => {
+        store.dispatch(remoteHealthChanged({
+          remoteName: "",
+          state: RemoteConnectionState.DISCONNECTED,
+          previousState: RemoteConnectionState.CONNECTED,
+        }));
+      });
+
+      expect((store.getState() as { remotes: { byName: Record<string, unknown> } }).remotes.byName)
+        .toEqual({});
+    });
+  });
 });
 
 describe("useSessionService — initial load gating", () => {
@@ -383,5 +445,42 @@ describe("useSessionService — createSession timeout (AC2)", () => {
         result.current.createSession({ title: "hangy", path: "/tmp/x" })
       ).rejects.toThrow("the operation timed out");
     });
+  });
+});
+
+describe("useSessionService — updateSession request body", () => {
+  beforeEach(() => {
+    mockListSessions.mockResolvedValue({ sessions: [] });
+    mockWatchSessions.mockImplementation(() => ({
+      [Symbol.asyncIterator]: () => ({
+        next: () => new Promise<never>(() => {}),
+      }),
+    }));
+  });
+
+  afterEach(() => {
+    jest.clearAllMocks();
+  });
+
+  // Regression guard against the "unlisted whitelist key silently dropped"
+  // failure mode: updateSession's request body is constructed field-by-field
+  // rather than spread, so a new UpdateSessionRequest field must be listed
+  // explicitly or it never reaches the RPC.
+  it("updateSession_should_IncludeNoteInRequestBody_When_UpdatesContainNote", async () => {
+    mockUpdateSession.mockResolvedValue({ session: { id: "s1", note: "x" } });
+    const store = makeTestStore();
+    const { result } = renderHook(
+      () => useSessionService({ autoWatch: false, enabled: true }),
+      { wrapper: makeWrapper(store) }
+    );
+    await act(async () => { await Promise.resolve(); });
+
+    await act(async () => {
+      await result.current.updateSession("s1", { note: "x" });
+    });
+
+    expect(mockUpdateSession).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "s1", note: "x" })
+    );
   });
 });

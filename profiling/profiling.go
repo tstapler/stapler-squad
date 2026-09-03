@@ -60,6 +60,9 @@ func StartProfiling(cfg Config) (func(), error) {
 		if traceFile == "" {
 			traceFile = fmt.Sprintf("/tmp/stapler-squad-trace-%d.out", os.Getpid())
 		}
+		// #nosec G304 -- traceFile is either the fixed /tmp/stapler-squad-trace-<pid>.out
+		// default above or cfg.TraceFile, which is only ever set to "" by main.go (a
+		// compile-time constant); not derived from RPC/network/user request input.
 		f, err := os.Create(traceFile)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create trace file: %w", err)

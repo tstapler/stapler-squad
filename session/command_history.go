@@ -367,7 +367,7 @@ func (ch *CommandHistory) saveSnapshot(entries []*HistoryEntry) error {
 
 	// Create directory if it doesn't exist
 	dir := filepath.Dir(ch.persistPath)
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	if err := os.MkdirAll(dir, 0750); err != nil {
 		return fmt.Errorf("failed to create persist directory: %w", err)
 	}
 
@@ -391,7 +391,7 @@ func (ch *CommandHistory) saveSnapshot(entries []*HistoryEntry) error {
 
 	// Write to file atomically
 	tempPath := ch.persistPath + ".tmp"
-	if err := os.WriteFile(tempPath, jsonData, 0644); err != nil {
+	if err := os.WriteFile(tempPath, jsonData, 0600); err != nil {
 		return fmt.Errorf("failed to write history data: %w", err)
 	}
 

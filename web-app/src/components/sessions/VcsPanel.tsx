@@ -1,5 +1,6 @@
 "use client";
 
+import type { MouseEvent } from "react";
 import type { Session } from "@/gen/session/v1/types_pb";
 import { useSessionVcsContext } from "@/lib/contexts/SessionVcsContext";
 import { useAnalytics } from "@/lib/contexts/AnalyticsContext";
@@ -12,9 +13,13 @@ interface VcsPanelProps {
   onNavigateToFile?: (path: string) => void;
   /** Session object for displaying GitHub PR/repo info. */
   session?: Session;
+  /** Receives the click event so the caller can capture `event.currentTarget`
+   * as the focus-restoration trigger (mirrors VersionControlSection's
+   * onBrowseFiles) — typically switches to the Files tab. */
+  onBrowseFiles?: (event: MouseEvent<HTMLButtonElement>) => void;
 }
 
-export function VcsPanel({ onNavigateToFile, session }: VcsPanelProps) {
+export function VcsPanel({ onNavigateToFile, session, onBrowseFiles }: VcsPanelProps) {
   const { status, statusLoading, error, refresh } = useSessionVcsContext();
   const { track } = useAnalytics();
 
@@ -66,6 +71,9 @@ export function VcsPanel({ onNavigateToFile, session }: VcsPanelProps) {
         mode="full"
         onNavigateToFile={onNavigateToFile}
         onRefresh={refresh}
+        worktreePath={session?.gitWorktree?.worktreePath}
+        onBrowseFiles={onBrowseFiles}
+        sessionId={session?.id}
       />
     </div>
   );

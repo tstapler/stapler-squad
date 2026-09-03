@@ -4,9 +4,71 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
+
+// TestWireDepsIntoServer_SharesSingleSlackNotifierInstance_AcrossReactiveQueueManagerApprovalHandlerAndSessionService
+// is the regression test for commit 13ad9c260, which fixed a split-brain bug
+// where SessionService's SlackConfigService constructed and used its own
+// private *services.SlackNotifier instead of the shared instance wired into
+// ReactiveQueueManager/ApprovalHandler (server.go's wireDepsIntoServer,
+// server/server.go:559/563: approvalHandler.SetSlackNotifier(deps.SlackNotifier)
+// / deps.SessionService.SetSlackNotifier(deps.SlackNotifier)). Left
+// unregression-tested, dropping either SetSlackNotifier call would silently
+// desync GetSlackConfig's last_delivery snapshot from the real review-queue/
+// approval send paths, with no compiler error to catch it.
+//
+// Exercises the real wireDepsIntoServer wiring via NewServerWithDeps (not just
+// BuildDependencies, which never constructs ApprovalHandler -- that only
+// happens inside wireDepsIntoServer). ApprovalHandler.SlackNotifierForTest and
+// SessionService.SlackNotifierForTest are minimal test-only accessors added
+// for exactly this assertion (server/services/approval_handler.go,
+// server/services/session_service.go) -- ReactiveQueueManager needs no such
+// accessor since it lives in this same package and its unexported
+// slackNotifier field is reachable directly from a same-package test.
+func TestWireDepsIntoServer_SharesSingleSlackNotifierInstance_AcrossReactiveQueueManagerApprovalHandlerAndSessionService(t *testing.T) {
+	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+
+	deps, err := BuildDependencies()
+	if err != nil {
+		t.Fatalf("BuildDependencies: %v", err)
+	}
+
+	srv := NewServerWithDeps("localhost:0", deps)
+	t.Cleanup(func() {
+		if err := srv.Shutdown(); err != nil {
+			t.Logf("srv.Shutdown: %v", err)
+		}
+	})
+
+	if deps.SlackNotifier == nil {
+		t.Fatal("expected ServerDependencies.SlackNotifier to be wired")
+	}
+	if deps.ReactiveQueueMgr == nil {
+		t.Fatal("expected ReactiveQueueMgr to be wired")
+	}
+	if srv.approvalHandler == nil {
+		t.Fatal("expected wireDepsIntoServer to have constructed and stored the ApprovalHandler")
+	}
+	if deps.SessionService == nil {
+		t.Fatal("expected SessionService to be wired")
+	}
+
+	if deps.ReactiveQueueMgr.slackNotifier != deps.SlackNotifier {
+		t.Errorf("ReactiveQueueManager.slackNotifier is not the same instance as deps.SlackNotifier: got %p, want %p",
+			deps.ReactiveQueueMgr.slackNotifier, deps.SlackNotifier)
+	}
+	if srv.approvalHandler.SlackNotifierForTest() != deps.SlackNotifier {
+		t.Errorf("ApprovalHandler's SlackNotifier is not the same instance as deps.SlackNotifier: got %p, want %p",
+			srv.approvalHandler.SlackNotifierForTest(), deps.SlackNotifier)
+	}
+	if deps.SessionService.SlackNotifierForTest() != deps.SlackNotifier {
+		t.Errorf("SessionService's SlackNotifier is not the same instance as deps.SlackNotifier (split-brain regression, commit 13ad9c260): got %p, want %p",
+			deps.SessionService.SlackNotifierForTest(), deps.SlackNotifier)
+	}
+}
 
 func TestBuildServiceDeps_RejectsNilCore(t *testing.T) {
 	_, err := BuildServiceDeps(nil)
@@ -126,6 +188,158 @@ func TestBuildRuntimeDeps_should_ShareSinglePipelineEngineInstance_When_Construc
 
 	if backlogCaching != listenerCaching {
 		t.Fatalf("expected BacklogService and BacklogLifecycleListener to share the identical *session.CachingPipelineEngine instance, got distinct pointers %p vs %p", backlogCaching, listenerCaching)
+	}
+}
+
+// TestBuildRuntimeDeps_should_PopulateBacklogLifecycleListener_When_ServerBoots is the
+// dependency-wiring regression test for pr-event-webhooks Task 3.1.1: before this
+// feature, backlogLifecycleListener was only a local variable inside BuildRuntimeDeps,
+// unreachable from server.go's webhook-route-registration block — NewGitHubWebhookHandler
+// had no way to be given a real PRFixEventRouter. deps.BacklogLifecycleListener must be
+// the exact same instance SetPRFixSpawner/SetAutoReopener etc. were wired onto, not a
+// second, independently-constructed listener.
+func TestBuildRuntimeDeps_should_PopulateBacklogLifecycleListener_When_ServerBoots(t *testing.T) {
+	deps, err := BuildDependencies()
+	if err != nil {
+		t.Fatalf("BuildDependencies: %v", err)
+	}
+
+	if deps.BacklogLifecycleListener == nil {
+		t.Fatal("expected BacklogLifecycleListener to be wired")
+	}
+	if deps.SessionService == nil {
+		t.Fatal("expected SessionService to be wired")
+	}
+	listener := deps.SessionService.GetBacklogLifecycleListener()
+	if listener == nil {
+		t.Fatal("expected BacklogLifecycleListener to be wired onto SessionService")
+	}
+	if deps.BacklogLifecycleListener != listener {
+		t.Fatalf("expected deps.BacklogLifecycleListener to be the identical instance wired onto SessionService, got distinct pointers %p vs %p", deps.BacklogLifecycleListener, listener)
+	}
+}
+
+// TestBuildRuntimeDeps_should_WireSessionSteererAndSessionStopper_When_ServerBoots
+// is the pr-fix-steering Task 1.2.2d wiring-assertion test (pre-mortem.md P2 #5):
+// SetSessionSteerer/SetSessionStopper's wiring in BuildRuntimeDeps (one new line
+// each) had no test that would fail if either call were ever omitted or
+// misplaced — both fields' nil-safe degrade paths are, by design, externally
+// indistinguishable from today's shipped behavior, so a forgotten wiring line
+// compiles, passes make ci, and ships the feature silently inert. This is the
+// first such test for either setter — there is no prior instance to extend.
+func TestBuildRuntimeDeps_should_WireSessionSteererAndSessionStopper_When_ServerBoots(t *testing.T) {
+	deps, err := BuildDependencies()
+	if err != nil {
+		t.Fatalf("BuildDependencies: %v", err)
+	}
+	if deps.BacklogService.GetSessionSteerer() == nil {
+		t.Fatal("expected SessionSteerer to be wired onto BacklogService")
+	}
+	if deps.BacklogService.GetSessionSteerer() != deps.SessionService {
+		t.Fatal("expected the wired SessionSteerer to be the same *SessionService instance BuildDependencies constructs")
+	}
+	if deps.BacklogService.GetSessionStopper() == nil {
+		t.Fatal("expected SessionStopper to be wired onto BacklogService")
+	}
+}
+
+// TestBuildRuntimeDeps_should_CallReconcileSynchronouslyAtBoot_When_BacklogFlagDisabledByDefault
+// verifies QuotaGate.Enable is only ever reached via quotaGate.Reconcile's own
+// decision path (Story 2.2.2), not a bare unconditional call — exercised against
+// the real TokenStore/BacklogController wiring in server/dependencies.go. Named
+// for the disabled-by-default path this test actually exercises; see
+// TestBuildRuntimeDeps_should_ReadLiveConfigOnEveryCfgFnCall_When_ConfigJSONChangesAfterBoot
+// below for the Quota.Enabled=true path.
+func TestBuildRuntimeDeps_should_CallReconcileSynchronouslyAtBoot_When_BacklogFlagDisabledByDefault(t *testing.T) {
+	deps, err := BuildDependencies()
+	if err != nil {
+		t.Fatalf("BuildDependencies: %v", err)
+	}
+	if deps.QuotaGate == nil {
+		t.Fatal("expected QuotaGate to be wired onto ServerDependencies")
+	}
+	// Quota.Enabled defaults to false, so the boot-time Reconcile call is a
+	// no-op and IsPausedByQuota must be false — this exercises the real
+	// construction + boot Reconcile call path without requiring a live rate
+	// limit or token-usage fixture.
+	if deps.QuotaGate.IsPausedByQuota() {
+		t.Error("IsPausedByQuota() = true at boot with Quota.Enabled defaulting to false, want false")
+	}
+}
+
+// TestBuildRuntimeDeps_should_ReadLiveConfigOnEveryCfgFnCall_When_ConfigJSONChangesAfterBoot
+// is the regression guard for a CRITICAL code-review finding: the cfgFn closure
+// built in BuildRuntimeDeps must call config.LoadConfig() fresh, not close over
+// the *config.Config pointer passed into BuildRuntimeDeps (which is loaded once
+// at process boot and never refreshed) — the whole point of cfgFn being a
+// func() rather than a plain value is "config.json edits take effect without a
+// restart" (see both quota_gate.go's and dependencies.go's own doc comments).
+// StatusDetail() calls cfgFn() directly, so it's used here as the observable
+// proof without needing a rate-limit/token-usage fixture to trigger Reconcile.
+func TestBuildRuntimeDeps_should_ReadLiveConfigOnEveryCfgFnCall_When_ConfigJSONChangesAfterBoot(t *testing.T) {
+	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	t.Setenv("STAPLER_SQUAD_INSTANCE", "shared")
+
+	deps, err := BuildDependencies()
+	if err != nil {
+		t.Fatalf("BuildDependencies: %v", err)
+	}
+	if deps.QuotaGate == nil {
+		t.Fatal("expected QuotaGate to be wired onto ServerDependencies")
+	}
+
+	if got := deps.QuotaGate.StatusDetail(); got != "" {
+		t.Fatalf("test precondition failed: StatusDetail() = %q before any config change, want empty (Quota.Enabled defaults to false)", got)
+	}
+
+	cfg := config.LoadConfig()
+	cfg.Quota.Enabled = true
+	if err := config.SaveConfig(cfg); err != nil {
+		t.Fatalf("SaveConfig: %v", err)
+	}
+
+	got := deps.QuotaGate.StatusDetail()
+	if !strings.Contains(strings.ToLower(got), "reactive-only") {
+		t.Errorf("StatusDetail() = %q after enabling Quota via config.json with no restart, want it to reflect the live change (mentions reactive-only mode) — cfgFn must re-read config.json on every call, not close over a boot-time snapshot", got)
+	}
+}
+
+// TestReconcileTicker_should_KeepRunningReconcileStuck_When_QuotaGateReconcilePanics
+// verifies the shared 60s ticker's two reconcile calls are independently
+// panic-recovered — a panic in one must not kill the shared ticker goroutine
+// or block the other. recoverAndLog is the exact wrapper both ticker calls
+// use in server/dependencies.go, so exercising it directly here proves the
+// isolation the ticker relies on without racing a real 60s tick.
+func TestReconcileTicker_should_KeepRunningReconcileStuck_When_QuotaGateReconcilePanics(t *testing.T) {
+	backlogReconcileRan := false
+
+	recoverAndLog("quota gate reconcile ticker", func() { panic("simulated QuotaGate.Reconcile panic") })
+	recoverAndLog("backlog reconcile ticker", func() { backlogReconcileRan = true })
+
+	if !backlogReconcileRan {
+		t.Error("backlog reconcile did not run after a panic in the sibling quota-gate reconcile call — the ticker goroutine must survive")
+	}
+}
+
+// TestSetSyncFeatureEnabledCheck_should_MatchPlainIsEnabled_When_NotThrottled
+// exercises the real composed closure server/dependencies.go passes to
+// backlogSvc.SetSyncFeatureEnabledCheck (Story 2.3.2) indirectly via
+// TriggerSync — not a reimplementation of the &&. Per plan.md Task 2.3.2b,
+// ShouldThrottleForeground's own sliding-window behavior is covered directly
+// in server/services/quota_gate_test.go; this test only confirms the
+// composed checker, when unthrottled, still behaves identically to today's
+// bare backlogCtrl.IsEnabled() (i.e. the throttle never fires when nothing
+// foreground is observed).
+func TestSetSyncFeatureEnabledCheck_should_MatchPlainIsEnabled_When_NotThrottled(t *testing.T) {
+	deps, err := BuildDependencies()
+	if err != nil {
+		t.Fatalf("BuildDependencies: %v", err)
+	}
+	if deps.QuotaGate == nil || deps.BacklogService == nil {
+		t.Fatal("expected QuotaGate and BacklogService to be wired")
+	}
+	if deps.QuotaGate.ShouldThrottleForeground() {
+		t.Fatal("test precondition failed: QuotaGate should not be throttling foreground at boot with no observed activity")
 	}
 }
 

@@ -1,0 +1,15 @@
+{
+  "id": "session:resume-crashed",
+  "type": "backend",
+  "service": "SessionService",
+  "method": "ResumeCrashedSession",
+  "protoFile": "proto/session/v1/session.proto",
+  "markerFound": false,
+  "tested": true,
+  "testIds": [
+    "TestResumeCrashedSession_EmptyId",
+    "TestResumeCrashedSession_NotFound",
+    "TestResumeCrashedSession_TransitionsCrashedToActive"
+  ],
+  "lastModified": "2026-08-09T23:51:00.136741573-07:00"
+}

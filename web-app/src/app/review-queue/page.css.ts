@@ -206,6 +206,69 @@ export const helpOverlayHeader = style({
   marginBottom: "1.25rem",
 });
 
+export const inlineSection = style({
+  flexShrink: 0,
+  border: `1px solid ${vars.color.borderColor}`,
+  borderRadius: "0.5rem",
+  background: vars.color.cardBackground,
+  padding: "0.75rem 1rem",
+});
+
+export const inlineSectionTitle = style({
+  margin: 0,
+  fontSize: "0.9375rem",
+  fontWeight: 600,
+  color: vars.color.textPrimary,
+  display: "flex",
+  alignItems: "center",
+  gap: "0.5rem",
+});
+
+export const inlineSectionCount = style({
+  fontSize: "0.75rem",
+  fontWeight: 500,
+  color: vars.color.textSecondary,
+  background: vars.color.hoverBackground,
+  borderRadius: "999px",
+  padding: "0.0625rem 0.5rem",
+});
+
+export const inlineSectionList = style({
+  display: "flex",
+  flexDirection: "column",
+  gap: "0.25rem",
+  marginTop: "0.5rem",
+  maxHeight: "9rem",
+  overflowY: "auto",
+});
+
+export const inlineSectionRow = style({
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "space-between",
+  gap: "0.75rem",
+  padding: "0.375rem 0.5rem",
+  borderRadius: "0.375rem",
+  cursor: "pointer",
+  background: "none",
+  border: "none",
+  width: "100%",
+  textAlign: "left",
+  font: "inherit",
+  color: vars.color.textPrimary,
+  selectors: {
+    "&:hover": {
+      background: vars.color.hoverBackground,
+    },
+  },
+});
+
+export const inlineSectionRowMeta = style({
+  fontSize: "0.75rem",
+  color: vars.color.textSecondary,
+  whiteSpace: "nowrap",
+});
+
 export const helpOverlayCloseButton = style({
   background: "transparent",
   border: "none",

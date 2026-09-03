@@ -64,7 +64,7 @@ func ResolvedModeLabel(mode string) string {
 // mechanism and has a genuine, independently-verified caller elsewhere in the
 // codebase (see plan.md's Pattern Decisions row on method count) — splitting
 // them into multiple interfaces would be exactly the kind of speculative
-// interface-pollution .claude/rules/interface-pollution-checklist.md warns
+// interface-pollution the `interface-pollution-checklist` skill warns
 // against, not less of it.
 type PipelineEngine interface {
 	// SlashCommandSet returns the filename→rendered-content map that
@@ -197,7 +197,7 @@ func (c *pipelineModeCache) refresh(ctx context.Context, repo PipelineModeReposi
 	}
 
 	c.ptr.Store(&next)
-	log.DebugLog.Printf("[PipelineEngine] cache refreshed: %d enabled modes", len(modes))
+	log.DebugLog().Printf("[PipelineEngine] cache refreshed: %d enabled modes", len(modes))
 	return nil
 }
 
@@ -318,7 +318,7 @@ var _ PipelineEngine = (*CachingPipelineEngine)(nil)
 func NewPipelineEngine(repo PipelineModeRepository) (*CachingPipelineEngine, error) {
 	e := &CachingPipelineEngine{repo: repo, cache: &pipelineModeCache{}}
 	if err := e.cache.Load(context.Background(), repo); err != nil {
-		log.WarningLog.Printf("[PipelineEngine] cache.Load failed at startup, continuing with an empty cache: %v", err)
+		log.WarningLog().Printf("[PipelineEngine] cache.Load failed at startup, continuing with an empty cache: %v", err)
 	}
 	return e, nil
 }
@@ -341,7 +341,7 @@ func (e *CachingPipelineEngine) SlashCommandSet(item *BacklogItemData) (map[stri
 
 	rm, ok := e.cache.Get(string(mode))
 	if !ok {
-		log.WarningLog.Printf("[PipelineEngine] unresolved pipeline_mode=%q item=%s — falling back to default", mode, item.ID)
+		log.WarningLog().Printf("[PipelineEngine] unresolved pipeline_mode=%q item=%s — falling back to default", mode, item.ID)
 		return buildDefaultSlashCommandSet(item)
 	}
 
@@ -383,7 +383,7 @@ func (e *CachingPipelineEngine) TriagePromptFor(item *BacklogItemData, artifactA
 
 	rm, ok := e.cache.Get(string(mode))
 	if !ok {
-		log.WarningLog.Printf("[PipelineEngine] unresolved pipeline_mode=%q item=%s — falling back to default", mode, item.ID)
+		log.WarningLog().Printf("[PipelineEngine] unresolved pipeline_mode=%q item=%s — falling back to default", mode, item.ID)
 		return BuildHeadlessTriagePrompt(item, artifactAbsPath)
 	}
 
@@ -407,7 +407,7 @@ func (e *CachingPipelineEngine) ReviewPromptFor(item *BacklogItemData, acSnapsho
 
 	rm, ok := e.cache.Get(string(mode))
 	if !ok {
-		log.WarningLog.Printf("[PipelineEngine] unresolved pipeline_mode=%q item=%s — falling back to default", mode, item.ID)
+		log.WarningLog().Printf("[PipelineEngine] unresolved pipeline_mode=%q item=%s — falling back to default", mode, item.ID)
 		return BuildHeadlessReviewPrompt(item, acSnapshot, diff, diffTruncated, verificationNotes, extras)
 	}
 
@@ -435,7 +435,7 @@ func (e *CachingPipelineEngine) InteractiveReviewPromptFor(item *BacklogItemData
 
 	rm, ok := e.cache.Get(string(mode))
 	if !ok {
-		log.WarningLog.Printf("[PipelineEngine] unresolved pipeline_mode=%q item=%s — falling back to default", mode, item.ID)
+		log.WarningLog().Printf("[PipelineEngine] unresolved pipeline_mode=%q item=%s — falling back to default", mode, item.ID)
 		return BuildReviewPrompt(item, acSnapshot, diff, diffTruncated, itemSessionID, verificationNotes)
 	}
 
@@ -453,7 +453,7 @@ func (e *CachingPipelineEngine) InitialPromptFor(item *BacklogItemData, priorSes
 
 	rm, ok := e.cache.Get(string(mode))
 	if !ok {
-		log.WarningLog.Printf("[PipelineEngine] unresolved pipeline_mode=%q item=%s — falling back to default", mode, item.ID)
+		log.WarningLog().Printf("[PipelineEngine] unresolved pipeline_mode=%q item=%s — falling back to default", mode, item.ID)
 		return BuildTokenBudgetedPrompt(item, priorSessions)
 	}
 

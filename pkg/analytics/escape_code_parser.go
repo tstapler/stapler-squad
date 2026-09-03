@@ -179,7 +179,7 @@ func (p *EscapeCodeParser) Parse(data []byte, sessionSeq int64) []byte {
 	}
 
 	// Extract all escape sequences
-	codes := p.extractEscapeSequences(parseData)
+	codes, trailingIncomplete := p.extractEscapeSequences(parseData)
 
 	// Record each code to the store and emit events
 	sessionID := p.currentSessionID()
@@ -188,10 +188,15 @@ func (p *EscapeCodeParser) Parse(data []byte, sessionSeq int64) []byte {
 		p.emitEvent(code, sessionSeq)
 	}
 
-	// Check if data ends with a partial escape sequence
-	partial := p.findPartialEscapeAtEnd(parseData)
-	if len(partial) > 0 {
-		p.partialBuffer = partial
+	// If data ends with a still-incomplete escape sequence, buffer it so the
+	// next chunk can complete it — regardless of how far from the end of
+	// parseData it starts (long OSC/DCS payloads can exceed any fixed window).
+	if trailingIncomplete >= 0 {
+		p.partialBuffer = parseData[trailingIncomplete:]
+		// Cap to prevent unbounded growth from malformed sequences that never terminate.
+		if len(p.partialBuffer) > 4096 {
+			p.partialBuffer = nil
+		}
 	}
 
 	return data
@@ -209,7 +214,7 @@ func (p *EscapeCodeParser) ParseStage2(data []byte, sessionSeq int64) {
 
 	p.stage2ChunkSeqNum++
 
-	codes := p.extractEscapeSequences(data)
+	codes, _ := p.extractEscapeSequences(data)
 	for _, code := range codes {
 		p.emitEventWithStageAndSeq(code, sessionSeq, StageTransport, p.stage2ChunkSeqNum)
 	}
@@ -325,10 +330,15 @@ func extractOSCCommand(rawBytes []byte) string {
 	return string(content[:end])
 }
 
-// extractEscapeSequences finds all escape sequences in the data
-func (p *EscapeCodeParser) extractEscapeSequences(data []byte) []ParsedEscapeCode {
+// extractEscapeSequences finds all escape sequences in the data.
+// It also returns the offset of a trailing ESC byte that did not resolve to a
+// complete sequence by the end of data (or -1 if none) — this is the position
+// a subsequent chunk's data must be prepended to via partialBuffer, since the
+// sequence may simply have been split across a PTY read boundary.
+func (p *EscapeCodeParser) extractEscapeSequences(data []byte) ([]ParsedEscapeCode, int) {
 	var codes []ParsedEscapeCode
 	i := 0
+	trailingIncomplete := -1
 
 	for i < len(data) {
 		// Look for ESC character (0x1b)
@@ -342,13 +352,16 @@ func (p *EscapeCodeParser) extractEscapeSequences(data []byte) []ParsedEscapeCod
 		if consumed > 0 {
 			codes = append(codes, code)
 			i += consumed
+			trailingIncomplete = -1
 		} else {
-			// Not a valid sequence or incomplete, skip the ESC
+			// Not a valid sequence (yet) - track it as a candidate trailing
+			// partial and move past just the ESC byte to keep scanning.
+			trailingIncomplete = i
 			i++
 		}
 	}
 
-	return codes
+	return codes, trailingIncomplete
 }
 
 // parseSequenceAt attempts to parse an escape sequence starting at offset.
@@ -770,38 +783,4 @@ func (p *EscapeCodeParser) formatParams(params string) string {
 		return ""
 	}
 	return " (" + params + ")"
-}
-
-// findPartialEscapeAtEnd checks if data ends with a partial escape sequence
-func (p *EscapeCodeParser) findPartialEscapeAtEnd(data []byte) []byte {
-	// Cap partial buffer to prevent unbounded growth from malformed sequences
-	if len(p.partialBuffer) > 4096 {
-		p.partialBuffer = nil
-	}
-
-	if len(data) == 0 {
-		return nil
-	}
-
-	// Look for ESC in the last 50 bytes (escape sequences rarely exceed this)
-	scanLen := 50
-	if len(data) < scanLen {
-		scanLen = len(data)
-	}
-
-	for i := len(data) - 1; i >= len(data)-scanLen; i-- {
-		if data[i] == 0x1b {
-			// Found an ESC - check if sequence is complete
-			remaining := data[i:]
-			_, consumed := p.parseSequenceAt(remaining, 0)
-			if consumed == 0 {
-				// Sequence is incomplete - buffer it
-				return remaining
-			}
-			// Sequence is complete
-			return nil
-		}
-	}
-
-	return nil
 }

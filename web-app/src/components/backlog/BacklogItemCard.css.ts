@@ -110,6 +110,34 @@ export const statusLabel = style({
   letterSpacing: "0.05em",
 });
 
+// Provenance badge (Epic 4.1, backlog-github-two-way-sync): "imported from
+// GitHub" indicator + link. Neutral surface/text/border tokens, not a
+// GitHub-brand color — ux.md flags brand colors here as unaudited for
+// contrast in both themes.
+export const provenanceBadge = style({
+  display: "inline-flex",
+  alignItems: "center",
+  gap: vars.space["1"],
+  borderRadius: vars.radii.sm,
+  padding: `0 ${vars.space["1"]}`,
+  fontSize: vars.fontSize.xs,
+  fontWeight: vars.fontWeight.medium,
+  height: "20px",
+  background: vars.color.surfaceMuted,
+  // textMuted on surfaceMuted fails WCAG AA in the dark theme (2.99:1) and
+  // clean theme (was 3.10:1, and textSecondary itself was marginal at
+  // 4.02:1 before the theme.css.ts fix) — textSecondary now clears 4.5:1
+  // against surfaceMuted in every theme.
+  color: vars.color.textSecondary,
+  border: `1px solid ${vars.color.borderMuted}`,
+  textDecoration: "none",
+  flexShrink: 0,
+  ":hover": {
+    color: vars.color.textPrimary,
+    borderColor: vars.color.borderHover,
+  },
+});
+
 export const cardFooter = style({
   display: "flex",
   alignItems: "center",
@@ -118,11 +146,50 @@ export const cardFooter = style({
   gap: vars.space["2"],
 });
 
+export const footerLeft = style({
+  display: "flex",
+  alignItems: "center",
+  gap: vars.space["2"],
+  minWidth: 0,
+});
+
 export const acSummary = style({
   fontSize: vars.fontSize.xs,
   color: vars.color.textMuted,
   fontFamily: vars.font.mono,
 });
+
+const verdictBadgeBase = style({
+  display: "inline-flex",
+  alignItems: "center",
+  borderRadius: vars.radii.sm,
+  padding: `0 ${vars.space["1"]}`,
+  fontSize: vars.fontSize.xs,
+  fontWeight: vars.fontWeight.bold,
+  fontFamily: vars.font.mono,
+  height: "20px",
+  border: "1px solid transparent",
+});
+
+export const verdictBadgePass = style([
+  verdictBadgeBase,
+  { color: vars.color.success, background: vars.color.successBg, borderColor: vars.color.success },
+]);
+
+export const verdictBadgePartial = style([
+  verdictBadgeBase,
+  { color: vars.color.warning, background: vars.color.warningBg, borderColor: vars.color.warning },
+]);
+
+export const verdictBadgeFail = style([
+  verdictBadgeBase,
+  { color: vars.color.errorText, background: vars.color.errorBg, borderColor: vars.color.error },
+]);
+
+export const verdictBadgeUnverifiable = style([
+  verdictBadgeBase,
+  { color: vars.color.textMuted, background: vars.color.cardBackground, borderColor: vars.color.borderMuted },
+]);
 
 export const actionButton = style({
   display: "inline-flex",
@@ -145,6 +212,11 @@ export const actionButton = style({
     opacity: 0.4,
     cursor: "not-allowed",
   },
+});
+
+export const disabledReason = style({
+  fontSize: vars.fontSize.xs,
+  color: vars.color.textMuted,
 });
 
 export const actionButtonDone = style({

@@ -142,6 +142,7 @@ func TestSessionStartInWorktreeWithMCP(t *testing.T) {
 // TestRestartFromPausedUsesWorktreeDir verifies that Instance.Restart() on a
 // Paused session recreates the worktree and starts tmux in the correct directory.
 func TestRestartFromPausedUsesWorktreeDir(t *testing.T) {
+	t.Parallel()
 	if _, err := exec.LookPath("tmux"); err != nil {
 		t.Skip("tmux not in PATH")
 	}

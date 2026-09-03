@@ -1,6 +1,6 @@
 /* eslint-disable no-restricted-syntax -- this file defines the literal hex values behind
  * vars.color.* for every theme (see theme-contract.css.ts); consuming .css.ts files must
- * use vars.color.* tokens instead of hex literals per .claude/rules/css-architecture.md. */
+ * use vars.color.* tokens instead of hex literals per docs/reference/css-architecture.md. */
 import { createTheme } from "@vanilla-extract/css";
 import { vars } from "./theme-contract.css";
 
@@ -104,6 +104,9 @@ export const lightTheme = createTheme(vars, {
     errorBg: "#fee2e2",
     errorText: "#991b1b",
     errorDark: "#b91c1c",
+    critical: "#be185d",
+    criticalBg: "#fce7f3",
+    criticalText: "#831843", /* critical on criticalBg = 8.21:1 */
 
     accentBg: "rgba(0, 112, 243, 0.08)",
     accentHover: "rgba(0, 112, 243, 0.16)",
@@ -208,6 +211,9 @@ export const darkTheme = createTheme(vars, {
     errorBg: "#7f1d1d",
     errorText: "#fca5a5",
     errorDark: "#ef4444",
+    critical: "#ec4899",
+    criticalBg: "#831843",
+    criticalText: "#fbcfe8", /* critical on criticalBg = 6.98:1 */
 
     accentBg: "rgba(45, 156, 219, 0.1)",
     accentHover: "rgba(45, 156, 219, 0.2)",
@@ -313,6 +319,9 @@ export const matrixTheme = createTheme(vars, {
     errorBg: "#1a0010",
     errorText: "#ff6688",
     errorDark: "#cc0033",
+    critical: "#e619e6",
+    criticalBg: "#1a0010",
+    criticalText: "#ff66ff", /* critical on criticalBg = 8.18:1 */
 
     accentBg: "rgba(0,255,65,0.1)",
     accentHover: "rgba(0,255,65,0.2)",
@@ -425,6 +434,9 @@ export const cyberpunk77Theme = createTheme(vars, {
     errorBg: "#1a0010",
     errorText: "#ff88aa",
     errorDark: "#cc2460",
+    critical: "#9333ea",
+    criticalBg: "#1a0010",
+    criticalText: "#c084fc", /* critical on criticalBg = 7.56:1 */
 
     accentBg: "rgba(255,45,120,0.1)",
     accentHover: "rgba(255,45,120,0.2)",
@@ -537,6 +549,9 @@ export const wh40kTheme = createTheme(vars, {
     errorBg: "#1a0808",
     errorText: "#c45050",
     errorDark: "#6b1010",
+    critical: "#6b3d8b",
+    criticalBg: "#1a0808",
+    criticalText: "#b088c9", /* critical on criticalBg = 6.66:1 */
 
     accentBg: "rgba(192,160,32,0.1)",
     accentHover: "rgba(192,160,32,0.2)",
@@ -609,7 +624,7 @@ export const wh40kTheme = createTheme(vars, {
 export const cleanTheme = createTheme(vars, {
   color: {
     textPrimary: "#e2e8f0",
-    textSecondary: "#94a3b8",
+    textSecondary: "#a0aec0", /* was #94a3b8 — 4.02:1 on surfaceMuted fails WCAG AA; #a0aec0 = 4.57:1 ✅ */
     textMuted: "#7d8ea8",
     textDisabled: "#475569",
     textTertiary: "#808080",
@@ -628,12 +643,13 @@ export const cleanTheme = createTheme(vars, {
     borderSubtle: "#1a2232",
     borderMuted: "#35354a",
     borderStrong: "#6b7280",
+    // borderHover: hardcoded independently of `primary` — now diverges in hue from it (was matched pre-fix).
     borderHover: "#6366f1",
     modalBorder: "#1e293b",
     inputBorder: "#35354a",
     inputFocusBorder: "#818cf8",
 
-    primary: "#6366f1",
+    primary: "#5457ef", /* was #6366f1 — #fff on #6366f1 = 4.46:1 fails WCAG AA; #5457ef = 5.27:1 ✅ */
     primaryHover: "#818cf8",
     primaryActive: "#4f46e5",
     primaryDark: "#3730a3",
@@ -650,7 +666,13 @@ export const cleanTheme = createTheme(vars, {
     errorBg: "#7f1d1d",
     errorText: "#fca5a5",
     errorDark: "#ef4444",
+    critical: "#ec4899",
+    criticalBg: "#831843",
+    criticalText: "#fbcfe8", /* critical on criticalBg = 6.98:1 */
 
+    // accentBg: hardcoded rgba of the pre-fix primary, doesn't track `primary` — composited under
+    // ReviewQueuePanel.css.ts's border usage this is below the WCAG 1.4.11 3:1 floor (2.97:1).
+    // Tracked as backlog item c86119dd-22b6-400d-a0d0-f2308cef1d6e, not fixed here.
     accentBg: "rgba(99,102,241,0.1)",
     accentHover: "rgba(99,102,241,0.2)",
     // accentText: unchanged from pre-fix behavior (same as primary) — not in scope for this fix.

@@ -8,12 +8,13 @@ import (
 	"strings"
 
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/scanbuf"
 )
 
 func (ae *ArtifactExtractor) scanFile(filePath string) {
 	defer ae.inflight.Delete(filePath)
 
-	f, err := os.Open(filePath)
+	f, err := os.Open(filePath) // #nosec G304 -- filePath comes from HistoryLinker's filesystem watch of ~/.claude/projects, an enumerated existing conversation file path, not external request input
 	if err != nil {
 		return // file may have been deleted
 	}
@@ -33,8 +34,10 @@ func (ae *ArtifactExtractor) scanFile(filePath string) {
 	var newPRURLs, newCommitSHAs, newExternalURLs []string
 	var newCommands []CommandArtifact
 	scanner := bufio.NewScanner(f)
-	// 10 MB buffer — matches tokens/parser.go; handles large base64 tool outputs.
-	scanner.Buffer(make([]byte, maxScannerTokenSize), maxScannerTokenSize)
+	// Pooled 10 MB buffer — matches tokens/parser.go; handles large base64 tool outputs.
+	bufPtr := scanbuf.Get()
+	defer scanbuf.Put(bufPtr)
+	scanner.Buffer(*bufPtr, maxScannerTokenSize)
 
 	for scanner.Scan() {
 		line := scanner.Bytes()

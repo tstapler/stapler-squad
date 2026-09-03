@@ -6,6 +6,57 @@ import (
 	"testing"
 )
 
+// TestResolveClaudeHistoryDir_should_ReturnConfigDirSubpath_When_IsolatedInstance
+// is the regression test for both consumers of this path previously
+// hard-coding os.UserHomeDir()+"/.claude/projects" with no isolation check:
+// server/dependencies.go's TokenStore/ArtifactExtractor and
+// session/history_linker.go's fsnotify watcher. Either one made a test that
+// boots a real server walk and watch the operator's real, large
+// ~/.claude/projects tree. STAPLER_SQUAD_TEST_DIR pins GetConfigDir()'s
+// return value so the expected path is deterministic.
+func TestResolveClaudeHistoryDir_should_ReturnConfigDirSubpath_When_IsolatedInstance(t *testing.T) {
+	homeDir := t.TempDir()
+	configDir := t.TempDir()
+	t.Setenv("STAPLER_SQUAD_TEST_DIR", configDir)
+
+	got, err := ResolveClaudeHistoryDir(homeDir, true)
+	if err != nil {
+		t.Fatalf("ResolveClaudeHistoryDir() error = %v", err)
+	}
+
+	want := filepath.Join(configDir, "claude-projects")
+	if got != want {
+		t.Errorf("ResolveClaudeHistoryDir() = %q, want %q", got, want)
+	}
+	info, statErr := os.Stat(got)
+	if statErr != nil {
+		t.Fatalf("ResolveClaudeHistoryDir() = %q was not created: %v", got, statErr)
+	}
+	if !info.IsDir() {
+		t.Errorf("ResolveClaudeHistoryDir() = %q exists but is not a directory", got)
+	}
+}
+
+// TestResolveClaudeHistoryDir_should_ReturnRealHomeDir_When_NotIsolated guards
+// the production fallback: with isIsolated=false the real ~/.claude/projects
+// path must come back byte-identical regardless of what GetConfigDir() would
+// otherwise resolve to, so production behavior is unaffected by the isolation
+// branch above.
+func TestResolveClaudeHistoryDir_should_ReturnRealHomeDir_When_NotIsolated(t *testing.T) {
+	homeDir := t.TempDir()
+	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+
+	got, err := ResolveClaudeHistoryDir(homeDir, false)
+	if err != nil {
+		t.Fatalf("ResolveClaudeHistoryDir() error = %v", err)
+	}
+
+	want := filepath.Join(homeDir, ".claude", "projects")
+	if got != want {
+		t.Errorf("ResolveClaudeHistoryDir() = %q, want %q", got, want)
+	}
+}
+
 func TestNewClaudeConfigManager(t *testing.T) {
 	mgr, err := NewClaudeConfigManager()
 	if err != nil {
@@ -73,6 +124,70 @@ func TestGetConfig(t *testing.T) {
 	if err == nil {
 		t.Error("GetConfig() with non-existent file should return error")
 	}
+}
+
+// TestGetConfig_RejectsPathTraversal verifies resolveConfigPath's containment
+// check: a filename crafted to escape claudeDir must be rejected by
+// GetConfig with an error, and must never read the file it points at outside
+// claudeDir. filename ultimately comes from RPC requests
+// (server/services/config_service.go), so untrusted "../" segments are the
+// realistic attack shape.
+func TestGetConfig_RejectsPathTraversal(t *testing.T) {
+	claudeDir := t.TempDir()
+
+	// A file outside claudeDir that a broken containment check might still serve.
+	secretDir := t.TempDir()
+	secretFile := filepath.Join(secretDir, "passwd")
+	if err := os.WriteFile(secretFile, []byte("root:x:0:0"), 0644); err != nil {
+		t.Fatalf("Failed to create secret file: %v", err)
+	}
+
+	rel, err := filepath.Rel(claudeDir, secretFile)
+	if err != nil {
+		t.Fatalf("filepath.Rel() error = %v", err)
+	}
+
+	mgr := &ClaudeConfigManager{claudeDir: claudeDir}
+
+	_, err = mgr.GetConfig(rel)
+	if err == nil {
+		t.Fatalf("GetConfig(%q) should reject a filename that escapes claudeDir", rel)
+	}
+}
+
+// TestResolveConfigPath covers resolveConfigPath directly: a legitimate
+// filename resolves under claudeDir, while a "../"-laden filename is
+// rejected regardless of whether the escape target exists.
+func TestResolveConfigPath(t *testing.T) {
+	claudeDir := t.TempDir()
+
+	t.Run("legitimate filename", func(t *testing.T) {
+		got, err := resolveConfigPath(claudeDir, "settings.json")
+		if err != nil {
+			t.Fatalf("resolveConfigPath() error = %v", err)
+		}
+		want := filepath.Join(claudeDir, "settings.json")
+		if got != want {
+			t.Errorf("resolveConfigPath() = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("traversal escaping claudeDir", func(t *testing.T) {
+		_, err := resolveConfigPath(claudeDir, "../../../etc/passwd")
+		if err == nil {
+			t.Error("resolveConfigPath() should reject a filename escaping claudeDir")
+		}
+	})
+
+	t.Run("sibling directory sharing a string prefix", func(t *testing.T) {
+		// claudeDir="/tmp/foo", filename constructed so the joined path is
+		// "/tmp/foobar/x" -- foobar is NOT under foo even though the raw
+		// strings share a prefix.
+		_, err := resolveConfigPath(claudeDir, filepath.Join("..", filepath.Base(claudeDir)+"bar", "x"))
+		if err == nil {
+			t.Error("resolveConfigPath() should reject a path resolving to a sibling directory sharing a string prefix")
+		}
+	})
 }
 
 func TestListConfigs(t *testing.T) {

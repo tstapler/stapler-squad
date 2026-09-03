@@ -45,6 +45,11 @@ export const commitButton = style({
   },
 });
 
+export const headCommitButton = style({
+  fontWeight: vars.fontWeight.bold,
+  color: vars.color.primary,
+});
+
 export const summaryCollapsed = style({
   display: "block",
   overflow: "hidden",
@@ -75,4 +80,9 @@ export const showAllButton = style({
   color: vars.color.primary,
   fontSize: vars.fontSize.sm,
   cursor: "pointer",
+});
+
+export const neutralNotice = style({
+  fontSize: vars.fontSize.sm,
+  color: vars.color.textSecondary,
 });

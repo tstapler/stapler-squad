@@ -4,6 +4,7 @@ import "github.com/linkdata/deadlock"
 
 import (
 	"context"
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -146,6 +147,10 @@ var forkMonitor = struct {
 	lastAlertFailureCount int64
 	lastAlertLevel        ForkPressureLevel
 	alertFns              []AlertFunc
+	// alertWG tracks in-flight alert-dispatch goroutines spawned by checkPressure,
+	// so tests can deterministically wait for them to finish (see
+	// waitForPendingAlerts in fork_metrics_test.go) instead of sleeping.
+	alertWG sync.WaitGroup
 }{
 	spawnRing:   newTimestampRing(int(forkPressureWindow/time.Second) * 5),
 	failureRing: newTimestampRing(256),
@@ -166,8 +171,15 @@ func ForkPressureSnapshot() ForkPressureStats {
 }
 
 // StartForkPressureLogger starts a background goroutine that logs fork pressure stats periodically.
-func StartForkPressureLogger(ctx context.Context, interval time.Duration, logFn func(string, ...any)) {
+//
+// wg is joined by server.Server.Shutdown() (backlog item
+// 81e82fee-9528-4dc9-a513-1040b4dee2ec) so shutdown blocks until this
+// goroutine has fully exited, not just been signaled via ctx.Done() — see
+// the join at server/server.go's Shutdown().
+func StartForkPressureLogger(ctx context.Context, interval time.Duration, logFn func(string, ...any), wg *sync.WaitGroup) {
+	wg.Add(1)
 	go func() {
+		defer wg.Done()
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
 		for {
@@ -290,7 +302,9 @@ func checkPressure(now time.Time) {
 	fns := forkMonitor.alertFns
 	forkMonitor.alertMu.Unlock()
 
+	forkMonitor.alertWG.Add(1)
 	go func() {
+		defer forkMonitor.alertWG.Done()
 		for _, fn := range fns {
 			fn(stats.Level, stats)
 		}

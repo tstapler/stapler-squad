@@ -1,19 +1,26 @@
 "use client";
 // +feature: review-queue-pr-creation
+// +feature: review-queue-severity-sort-filter
 
 import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { createPortal } from "react-dom";
 import { create } from "@bufbuild/protobuf";
 import { useReviewQueueContext } from "@/lib/contexts/ReviewQueueContext";
 import { useApprovalsContext } from "@/lib/contexts/ApprovalsContext";
+import { useSessionServiceContext } from "@/lib/contexts/SessionServiceContext";
 import { useReviewQueueNavigation } from "@/lib/hooks/useReviewQueueNavigation";
 import { useGenerateRule } from "@/lib/hooks/useGenerateRule";
 import { useFilterState } from "@/lib/hooks/useFilterState";
 import { GroupingStrategy, GroupingStrategyLabels, groupSessions } from "@/lib/grouping/strategies";
+import { parseGitHubRef } from "@/lib/github/urlParser";
 import { ReviewQueueBadge } from "./ReviewQueueBadge";
 import { SuggestedRuleCard } from "./SuggestedRuleCard";
+import { CreatePullRequestModal } from "./CreatePullRequestModal";
 import { Priority, AttentionReason, ReviewItem, WorkingState, SuggestionSource, Session, SessionSchema } from "@/gen/session/v1/types_pb";
 import { deriveWorkingState } from "@/lib/utils/deriveWorkingState";
+import type { EscalationCategory } from "@/lib/sessions/escalationCategory";
+import { riskLevelRank } from "@/lib/sessions/riskLevel";
+import { SeverityBadge, getRiskLevelInfo } from "./SeverityBadge";
 import {
   panel,
   header,
@@ -29,6 +36,7 @@ import {
   filterButtons,
   filterButton,
   filterButtonActive,
+  filterButtonExcluded,
   items as itemsClass,
   item,
   itemClickable,
@@ -38,6 +46,7 @@ import {
   itemTitle,
   itemBody,
   itemContext,
+  escalationReasonText,
   commandPreview,
   expiredBadge,
   itemPattern,
@@ -69,7 +78,6 @@ import {
   autoAdvanceToggle,
   savedIndicator,
   modalOverlay,
-  modalContent,
   ruleModalContent,
   divergedBadge,
   searchInput,
@@ -87,7 +95,6 @@ interface ReviewQueuePanelProps {
   refreshInterval?: number;
   onItemsChange?: (items: ReviewItem[]) => void; // Callback to expose queue items for navigation
   onAcknowledged?: (sessionId: string) => void; // Notifies parent when a session is acknowledged (for auto-advance)
-  onRunOneShot?: (sessionId: string, prompt: string) => Promise<{ prUrl?: string; error?: string } | null>; // S3-3
   autoAdvance?: boolean;
   onAutoAdvanceChange?: (value: boolean) => void;
 }
@@ -109,17 +116,31 @@ interface ReviewQueuePanelProps {
  * />
  * ```
  */
-// Mirrors autoCreatePRPrompt (server/review_queue_manager.go) and shipPRPrompt
-// (server/services/backlog_service_ship.go) — kept in sync manually; see
-// autoCreatePRPrompt's doc comment for why the format is spelled out
-// explicitly rather than left to the agent's judgment.
-const DEFAULT_PR_PROMPT =
-  "Create a pull request for the changes in this session. Title: use Conventional Commits format (fix:, feat:, etc.). Body: structure as ## Summary (1-3 sentences on why this change was made, tied to the backlog item's problem statement in .backlog-context.md if present), ## What Changed (a short bullet list, not a line-by-line diff restatement), and ## Test plan (a checklist of concrete verification steps such as specific commands or manual checks — not an unqualified claim that tests pass). Keep it concise, no scratch notes.";
 
-type SortField = "default" | "priority" | "age" | "diffSize" | "name";
+type SortField = "default" | "severity" | "priority" | "age" | "diffSize" | "name";
 
 // URL query param keys, persisted/restored via useFilterState for shareable/bookmarkable filter state.
-const FILTER_URL_KEYS = ["priority", "reason", "program", "category", "tag", "pr", "diverged", "q", "sort", "dir", "group"] as const;
+// The `*Exclude` keys hold the exclude side of each dimension's include/exclude/neutral cycle.
+const FILTER_URL_KEYS = [
+  "priority",
+  "priorityExclude",
+  "reason",
+  "reasonExclude",
+  "severity",
+  "severityExclude",
+  "program",
+  "programExclude",
+  "category",
+  "categoryExclude",
+  "tag",
+  "tagExclude",
+  "pr",
+  "diverged",
+  "q",
+  "sort",
+  "dir",
+  "group",
+] as const;
 
 // Grouping strategies that map onto fields ReviewItem actually carries (no project/workflow/session-type data).
 const REVIEW_GROUPING_STRATEGIES = [
@@ -131,7 +152,72 @@ const REVIEW_GROUPING_STRATEGIES = [
   GroupingStrategy.Status,
 ];
 
-const SORT_FIELDS: SortField[] = ["priority", "age", "diffSize", "name"];
+const SORT_FIELDS: SortField[] = ["severity", "priority", "age", "diffSize", "name"];
+
+// The baseline default sort (AC3: severity-first). Referenced everywhere "severity is the
+// no-filter-applied sort" matters (initial state fallback, URL suppression, clear-all reset,
+// active-filter-count exemption) so a future change to the default only needs one edit.
+const DEFAULT_SORT_FIELD: SortField = "severity";
+
+// Sentinel Set/URL member for "risk_level metadata key absent" — kept distinct from the
+// literal empty string since parseStrSet/joinSet drop empty strings on the comma-joined
+// URL round trip. Never confused with a real RiskLevel value.
+const UNRECORDED_SEVERITY = "unrecorded";
+
+// The 4 known RiskLevel values plus UNRECORDED_SEVERITY, in default-sort-order — drives the
+// severity filter chip set. Unrecorded gets its own chip (design/ux.md Surface 3) rather than
+// being omitted, since an unrecorded-severity item must still be reachable via the filter UI.
+const SEVERITY_FILTER_VALUES = ["critical", "high", "medium", "low", UNRECORDED_SEVERITY] as const;
+
+// The known, filterable RiskLevel values (SEVERITY_FILTER_VALUES minus the sentinel) —
+// derived once so severityFilterKey and SEVERITY_FILTER_VALUES can't drift apart.
+const KNOWN_RISK_LEVELS = new Set<string>(SEVERITY_FILTER_VALUES.filter((v) => v !== UNRECORDED_SEVERITY));
+
+// Buckets any value outside the known RiskLevel set (absent, "", or an unrecognized future
+// value) into UNRECORDED_SEVERITY, so every item is always reachable through one of the
+// SEVERITY_FILTER_VALUES chips — a future/unrecognized risk_level can't become its own
+// unfilterable key (PR #411 review finding).
+function severityFilterKey(riskLevel: string | undefined): string {
+  return riskLevel && KNOWN_RISK_LEVELS.has(riskLevel) ? riskLevel : UNRECORDED_SEVERITY;
+}
+
+// Category -> emoji prefix for the escalation reason line (WCAG 1.4.1 — not color-only).
+// No "secret-scan" entry: that category never reaches a ReviewItem (requirements.md
+// out-of-scope note). An unrecognized/missing category falls through to no emoji via `?? ""`.
+const ESCALATION_REASON_EMOJI: Partial<Record<EscalationCategory, string>> = {
+  "no-match": "❓",
+  "explicit-rule": "🛑",
+  "domain-age": "🌐",
+  "unclassifiable": "⚙️",
+  "unexpected": "⚠️",
+};
+
+// Which EscalationCategory values (PR #315) disqualify the Create Rule button — a Record,
+// not a Set, so TypeScript forces every member of the union to be listed here; adding a 6th
+// category to EscalationCategory (web-app/src/lib/sessions/escalationCategory.ts, which mirrors
+// pkg/classifier/escalation.go) without updating this map is a compile error, not a silent
+// fail-open drift. An orphaned pre-deploy approval (escalation_reason_category key entirely
+// absent because it predates this field) and any wholly unrecognized string are both treated as
+// eligible (fail-open by design) — see backlog 5fb93d9d.
+const CREATE_RULE_INELIGIBLE_CATEGORIES: Record<EscalationCategory, boolean> = {
+  "no-match": false,
+  "explicit-rule": true,
+  "domain-age": true,
+  "secret-scan": true,
+  "unclassifiable": true,
+  "unexpected": true,
+};
+
+function isKnownEscalationCategory(value: string): value is EscalationCategory {
+  return Object.prototype.hasOwnProperty.call(CREATE_RULE_INELIGIBLE_CATEGORIES, value);
+}
+
+export function isCreateRuleEligibleCategory(category: string | undefined): boolean {
+  if (category === undefined || !isKnownEscalationCategory(category)) {
+    return true;
+  }
+  return !CREATE_RULE_INELIGIBLE_CATEGORIES[category];
+}
 
 function joinSet(set: Set<string> | Set<number>): string | undefined {
   return set.size > 0 ? [...set].join(",") : undefined;
@@ -151,6 +237,16 @@ function parseNumSet(v: string | undefined): Set<number> {
 
 function parseStrSet(v: string | undefined): Set<string> {
   return new Set(v ? v.split(",").filter(Boolean) : []);
+}
+
+// Resolves the initial sortField from the URL. "default" (natural queue order) is a valid,
+// explicitly-selectable SortField that SORT_FIELDS deliberately excludes (it's the pre-AC3
+// baseline this feature replaced) — checked first so an old bookmarked `?sort=default` URL
+// still round-trips. Any other missing/unrecognized value falls back to DEFAULT_SORT_FIELD.
+function resolveInitialSortField(urlSort: string | undefined): SortField {
+  if (urlSort === "default") return "default";
+  if (urlSort && (SORT_FIELDS as string[]).includes(urlSort)) return urlSort as SortField;
+  return DEFAULT_SORT_FIELD;
 }
 
 // Minimal Session shape for groupSessions() — only the fields grouping strategies read.
@@ -177,6 +273,27 @@ function toggleInSet<T>(set: Set<T>, value: T): Set<T> {
   return next;
 }
 
+// Cycles a single value through neutral -> include -> exclude -> neutral across a paired
+// include/exclude Set for one filter dimension. Each Set stays mutually exclusive for any
+// given value (a value is never in both at once).
+function cycleFilterValue<T>(
+  include: Set<T>,
+  exclude: Set<T>,
+  value: T
+): { include: Set<T>; exclude: Set<T> } {
+  const nextInclude = new Set(include);
+  const nextExclude = new Set(exclude);
+  if (include.has(value)) {
+    nextInclude.delete(value);
+    nextExclude.add(value);
+  } else if (exclude.has(value)) {
+    nextExclude.delete(value);
+  } else {
+    nextInclude.add(value);
+  }
+  return { include: nextInclude, exclude: nextExclude };
+}
+
 // Counts distinct non-empty values of `pick(item)` (string or string[]) across items, sorted by frequency desc.
 function countByField(items: ReviewItem[], pick: (item: ReviewItem) => string | string[]): [string, number][] {
   const counts = new Map<string, number>();
@@ -197,14 +314,15 @@ export function ReviewQueuePanel({
   refreshInterval = 5000,
   onItemsChange,
   onAcknowledged,
-  onRunOneShot,
   autoAdvance,
   onAutoAdvanceChange,
 }: ReviewQueuePanelProps) {
-  // S3-3: PR creation modal state
-  const [prModal, setPrModal] = useState<{ sessionId: string; prompt: string } | null>(null);
-  const [prRunning, setPrRunning] = useState(false);
-  const [prResult, setPrResult] = useState<{ prUrl?: string; error?: string } | null>(null);
+  // Epic 2.4: Create PR modal state — holds the sessionId whose modal is open (null = closed),
+  // mirroring SessionActionsOverflow.tsx's isCreatePrOpen/createPrTriggerRef pattern (Epic 2.3)
+  // so both entry points open the identical shared CreatePullRequestModal (ux.md Surface 1 & 2).
+  const [isCreatePrOpen, setIsCreatePrOpen] = useState<string | null>(null);
+  const createPrTriggerRef = useRef<HTMLElement | null>(null);
+  const { draftPullRequest, createPullRequest } = useSessionServiceContext();
 
   // Epic 4: Create Rule modal state
   // activeRuleItemId tracks which item's "Create Rule" modal is currently open.
@@ -216,19 +334,29 @@ export function ReviewQueuePanel({
   const { filterState: urlFilters, setFilter: setUrlFilter, clearFilters: clearUrlFilters } = useFilterState(FILTER_URL_KEYS);
 
   // Combinable multi-select filters — each dimension is a Set; empty Set = "no filter applied".
+  // Each also has a paired `*Exclude` Set (neutral -> include -> exclude -> neutral cycle,
+  // see cycleFilterValue) so a value can be explicitly hidden rather than only included.
   const [priorityFilter, setPriorityFilter] = useState<Set<Priority>>(() => parseNumSet(urlFilters.priority) as Set<Priority>);
+  const [priorityExcludeFilter, setPriorityExcludeFilter] = useState<Set<Priority>>(() => parseNumSet(urlFilters.priorityExclude) as Set<Priority>);
   const [reasonFilter, setReasonFilter] = useState<Set<AttentionReason>>(() => parseNumSet(urlFilters.reason) as Set<AttentionReason>);
+  const [reasonExcludeFilter, setReasonExcludeFilter] = useState<Set<AttentionReason>>(() => parseNumSet(urlFilters.reasonExclude) as Set<AttentionReason>);
+  const [severityFilter, setSeverityFilter] = useState<Set<string>>(() => parseStrSet(urlFilters.severity));
+  const [severityExcludeFilter, setSeverityExcludeFilter] = useState<Set<string>>(() => parseStrSet(urlFilters.severityExclude));
   const [programFilter, setProgramFilter] = useState<Set<string>>(() => parseStrSet(urlFilters.program));
+  const [programExcludeFilter, setProgramExcludeFilter] = useState<Set<string>>(() => parseStrSet(urlFilters.programExclude));
   const [categoryFilter, setCategoryFilter] = useState<Set<string>>(() => parseStrSet(urlFilters.category));
+  const [categoryExcludeFilter, setCategoryExcludeFilter] = useState<Set<string>>(() => parseStrSet(urlFilters.categoryExclude));
   const [tagFilter, setTagFilter] = useState<Set<string>>(() => parseStrSet(urlFilters.tag));
+  const [tagExcludeFilter, setTagExcludeFilter] = useState<Set<string>>(() => parseStrSet(urlFilters.tagExclude));
   const [prFilter, setPrFilter] = useState<"all" | "has-pr" | "no-pr">(() =>
     urlFilters.pr === "has-pr" || urlFilters.pr === "no-pr" ? urlFilters.pr : "all"
   );
   const [divergedOnly, setDivergedOnly] = useState(() => urlFilters.diverged === "1");
   const [searchText, setSearchText] = useState(() => urlFilters.q ?? "");
-  const [sortField, setSortField] = useState<SortField>(() =>
-    urlFilters.sort && (SORT_FIELDS as string[]).includes(urlFilters.sort) ? (urlFilters.sort as SortField) : "default"
-  );
+  // Default sort is "severity" (highest risk first, AC3) — "default" (natural
+  // server/queue order) remains a selectable option but is no longer the fallback when no
+  // sort param is present in the URL.
+  const [sortField, setSortField] = useState<SortField>(() => resolveInitialSortField(urlFilters.sort));
   const [sortDirection, setSortDirection] = useState<"asc" | "desc">(() => (urlFilters.dir === "desc" ? "desc" : "asc"));
   const [groupingStrategy, setGroupingStrategy] = useState<GroupingStrategy>(() =>
     urlFilters.group && REVIEW_GROUPING_STRATEGIES.includes(urlFilters.group as GroupingStrategy)
@@ -257,6 +385,7 @@ export function ReviewQueuePanel({
     oldestAgeSeconds,
     refresh,
     acknowledgeSession,
+    acknowledgeSessions,
   } = useReviewQueueContext();
 
   // ─── Snapshot-on-enter pattern ────────────────────────────────────────────
@@ -328,17 +457,38 @@ export function ReviewQueuePanel({
     if (priorityFilter.size > 0) {
       filtered = filtered.filter((item) => priorityFilter.has(item.priority));
     }
+    if (priorityExcludeFilter.size > 0) {
+      filtered = filtered.filter((item) => !priorityExcludeFilter.has(item.priority));
+    }
     if (reasonFilter.size > 0) {
       filtered = filtered.filter((item) => reasonFilter.has(item.reason));
+    }
+    if (reasonExcludeFilter.size > 0) {
+      filtered = filtered.filter((item) => !reasonExcludeFilter.has(item.reason));
+    }
+    if (severityFilter.size > 0) {
+      filtered = filtered.filter((item) => severityFilter.has(severityFilterKey(item.metadata?.["risk_level"])));
+    }
+    if (severityExcludeFilter.size > 0) {
+      filtered = filtered.filter((item) => !severityExcludeFilter.has(severityFilterKey(item.metadata?.["risk_level"])));
     }
     if (programFilter.size > 0) {
       filtered = filtered.filter((item) => programFilter.has(item.program));
     }
+    if (programExcludeFilter.size > 0) {
+      filtered = filtered.filter((item) => !programExcludeFilter.has(item.program));
+    }
     if (categoryFilter.size > 0) {
       filtered = filtered.filter((item) => categoryFilter.has(item.category));
     }
+    if (categoryExcludeFilter.size > 0) {
+      filtered = filtered.filter((item) => !categoryExcludeFilter.has(item.category));
+    }
     if (tagFilter.size > 0) {
       filtered = filtered.filter((item) => item.tags.some((t) => tagFilter.has(t)));
+    }
+    if (tagExcludeFilter.size > 0) {
+      filtered = filtered.filter((item) => !item.tags.some((t) => tagExcludeFilter.has(t)));
     }
     if (prFilter === "has-pr") {
       filtered = filtered.filter((item) => !!item.githubPrUrl);
@@ -360,6 +510,14 @@ export function ReviewQueuePanel({
       const dir = sortDirection === "asc" ? 1 : -1;
       filtered = [...filtered].sort((a, b) => {
         switch (sortField) {
+          // ponytail: no snapshot-order-freeze needed here (unlike this file's general
+          // reviewingIdsSnapshot pattern) — risk_level is captured once at approval
+          // creation and never re-derived (server/services/approval_store.go), so an
+          // already-visible item's severity rank cannot change mid-review. Membership in
+          // `items` is still frozen to the snapshot as usual; only a genuinely new item
+          // (excluded until the snapshot is manually refreshed) could shift severity order.
+          case "severity":
+            return (riskLevelRank(b.metadata?.["risk_level"] ?? "") - riskLevelRank(a.metadata?.["risk_level"] ?? "")) * dir;
           case "priority":
             return (a.priority - b.priority) * dir;
           case "age":
@@ -381,10 +539,17 @@ export function ReviewQueuePanel({
   }, [
     allItems,
     priorityFilter,
+    priorityExcludeFilter,
     reasonFilter,
+    reasonExcludeFilter,
+    severityFilter,
+    severityExcludeFilter,
     programFilter,
+    programExcludeFilter,
     categoryFilter,
+    categoryExcludeFilter,
     tagFilter,
+    tagExcludeFilter,
     prFilter,
     divergedOnly,
     searchText,
@@ -394,6 +559,17 @@ export function ReviewQueuePanel({
 
   // Distinct values available for the Program/Category/Tag multi-select filters,
   // with counts computed from the full (unfiltered) queue.
+  // Per-severity-value counts (including the UNRECORDED_SEVERITY bucket) for the filter
+  // chip counts — computed client-side from the unfiltered queue, mirroring availablePrograms.
+  const bySeverity = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const item of allItems) {
+      const key = severityFilterKey(item.metadata?.["risk_level"]);
+      counts.set(key, (counts.get(key) ?? 0) + 1);
+    }
+    return counts;
+  }, [allItems]);
+
   const availablePrograms = useMemo(() => countByField(allItems, (i) => i.program), [allItems]);
   const availableCategories = useMemo(() => countByField(allItems, (i) => i.category), [allItems]);
   const availableTags = useMemo(() => countByField(allItems, (i) => i.tags), [allItems]);
@@ -426,6 +602,11 @@ export function ReviewQueuePanel({
     return map;
   }, [allItems]);
 
+  // Resolves the ReviewItem behind isCreatePrOpen into the full-enough Session object
+  // CreatePullRequestModal requires — reuses the same reviewItemToSession bridge the
+  // grouping strategies already rely on above, rather than building a second lookup.
+  const activePrSession = isCreatePrOpen ? sessionByItemId.get(isCreatePrOpen) : undefined;
+
   // Reuses groupSessions() (the same grouping engine SessionList uses) by bridging each
   // ReviewItem to a minimal Session — avoids building a parallel grouping implementation.
   const groupedItems = useMemo(() => {
@@ -441,6 +622,62 @@ export function ReviewQueuePanel({
       }))
       .filter((g) => g.items.length > 0);
   }, [items, groupingStrategy, sessionByItemId]);
+
+  // Items eligible for bulk skip — approval requests are excluded because they need an
+  // explicit Approve/Deny decision, not a blanket dismissal (mirrors the single-item Skip
+  // button's own exclusion below).
+  const skippableItems = useMemo(
+    () => items.filter((it) => !it.metadata?.["pending_approval_id"]),
+    [items]
+  );
+  const [isBulkSkipping, setIsBulkSkipping] = useState(false);
+
+  // Single-item skip: routes through the onSkipSession prop override when given (e.g. the
+  // review page's own dismissal logic), otherwise the hook's acknowledgeSession. Shared by
+  // the per-row Skip button below so the onSkipSession-or-acknowledgeSession branch isn't
+  // copy-pasted at each call site.
+  const skipSession = useCallback(
+    (sessionId: string) =>
+      Promise.resolve(onSkipSession ? onSkipSession(sessionId) : acknowledgeSession(sessionId)).then(
+        () => onAcknowledged?.(sessionId)
+      ),
+    [onSkipSession, acknowledgeSession, onAcknowledged]
+  );
+
+  const handleSkipAllVisible = useCallback(async () => {
+    if (skippableItems.length === 0 || isBulkSkipping) return;
+    const count = skippableItems.length;
+    if (!window.confirm(`Skip all ${count} visible item${count === 1 ? "" : "s"}? This removes ${count === 1 ? "it" : "them"} from the review queue.`)) {
+      return;
+    }
+    setIsBulkSkipping(true);
+    try {
+      if (onSkipSession) {
+        // No hook-level bulk primitive exists for the prop-override path — fan out the
+        // override individually, but only report success for items that actually resolved.
+        const results = await Promise.allSettled(
+          skippableItems.map((it) => onSkipSession(it.sessionId))
+        );
+        results.forEach((result, i) => {
+          if (result.status === "fulfilled") {
+            onAcknowledged?.(skippableItems[i].sessionId);
+          }
+        });
+      } else {
+        // Single bulk RPC call — failures are collected instead of dispatching the queue's
+        // global error (which would otherwise blank the whole panel on one flaky request).
+        const { failed } = await acknowledgeSessions(skippableItems.map((it) => it.sessionId));
+        const failedIds = new Set(failed);
+        for (const it of skippableItems) {
+          if (!failedIds.has(it.sessionId)) {
+            onAcknowledged?.(it.sessionId);
+          }
+        }
+      }
+    } finally {
+      setIsBulkSkipping(false);
+    }
+  }, [skippableItems, isBulkSkipping, onSkipSession, acknowledgeSessions, onAcknowledged]);
 
   // Approval actions for APPROVAL_PENDING items
   const { approve: approveRequest, deny: denyRequest } = useApprovalsContext();
@@ -547,35 +784,52 @@ export function ReviewQueuePanel({
     }
   };
 
-  const handleFilterByPriority = (priority: Priority) => {
-    const next = toggleInSet(priorityFilter, priority);
-    setPriorityFilter(next);
-    setUrlFilter("priority", joinSet(next));
-  };
+  // Six filter dimensions (priority/reason/severity/program/category/tag) each need an
+  // identical include/exclude/neutral cycle handler: cycle the value via cycleFilterValue,
+  // write both resulting Sets to state, and persist both to the URL. Factored into one
+  // generic builder — called once per dimension below — instead of six near-identical
+  // hand-written handlers (interface-pollution-checklist.md smell #5 doesn't apply here:
+  // this generic has 6 real call sites, not 1).
+  function makeFilterCycleHandler<T extends string | number>(
+    include: Set<T>,
+    exclude: Set<T>,
+    setInclude: (s: Set<T>) => void,
+    setExclude: (s: Set<T>) => void,
+    includeKey: (typeof FILTER_URL_KEYS)[number],
+    excludeKey: (typeof FILTER_URL_KEYS)[number]
+  ): (value: T) => void {
+    return (value: T) => {
+      const next = cycleFilterValue(include, exclude, value);
+      setInclude(next.include);
+      setExclude(next.exclude);
+      setUrlFilter(includeKey, joinSet(next.include as Set<string> | Set<number>));
+      setUrlFilter(excludeKey, joinSet(next.exclude as Set<string> | Set<number>));
+    };
+  }
 
-  const handleFilterByReason = (reason: AttentionReason) => {
-    const next = toggleInSet(reasonFilter, reason);
-    setReasonFilter(next);
-    setUrlFilter("reason", joinSet(next));
-  };
+  const handleFilterByPriority = makeFilterCycleHandler(
+    priorityFilter, priorityExcludeFilter, setPriorityFilter, setPriorityExcludeFilter, "priority", "priorityExclude"
+  );
 
-  const handleFilterByProgram = (program: string) => {
-    const next = toggleInSet(programFilter, program);
-    setProgramFilter(next);
-    setUrlFilter("program", joinSet(next));
-  };
+  const handleFilterByReason = makeFilterCycleHandler(
+    reasonFilter, reasonExcludeFilter, setReasonFilter, setReasonExcludeFilter, "reason", "reasonExclude"
+  );
 
-  const handleFilterByCategory = (category: string) => {
-    const next = toggleInSet(categoryFilter, category);
-    setCategoryFilter(next);
-    setUrlFilter("category", joinSet(next));
-  };
+  const handleFilterBySeverity = makeFilterCycleHandler(
+    severityFilter, severityExcludeFilter, setSeverityFilter, setSeverityExcludeFilter, "severity", "severityExclude"
+  );
 
-  const handleFilterByTag = (tagValue: string) => {
-    const next = toggleInSet(tagFilter, tagValue);
-    setTagFilter(next);
-    setUrlFilter("tag", joinSet(next));
-  };
+  const handleFilterByProgram = makeFilterCycleHandler(
+    programFilter, programExcludeFilter, setProgramFilter, setProgramExcludeFilter, "program", "programExclude"
+  );
+
+  const handleFilterByCategory = makeFilterCycleHandler(
+    categoryFilter, categoryExcludeFilter, setCategoryFilter, setCategoryExcludeFilter, "category", "categoryExclude"
+  );
+
+  const handleFilterByTag = makeFilterCycleHandler(
+    tagFilter, tagExcludeFilter, setTagFilter, setTagExcludeFilter, "tag", "tagExclude"
+  );
 
   const handlePrFilterChange = (value: "all" | "has-pr" | "no-pr") => {
     setPrFilter(value);
@@ -612,7 +866,9 @@ export function ReviewQueuePanel({
 
   const handleSortFieldChange = (value: SortField) => {
     setSortField(value);
-    setUrlFilter("sort", value === "default" ? undefined : value);
+    // DEFAULT_SORT_FIELD is omitted from the URL like "default" used to be, so a plain/
+    // no-param URL still resolves to severity sort via resolveInitialSortField's fallback.
+    setUrlFilter("sort", value === DEFAULT_SORT_FIELD ? undefined : value);
   };
 
   const handleSortDirectionChange = (value: "asc" | "desc") => {
@@ -631,14 +887,21 @@ export function ReviewQueuePanel({
       searchDebounceRef.current = null;
     }
     setPriorityFilter(new Set());
+    setPriorityExcludeFilter(new Set());
     setReasonFilter(new Set());
+    setReasonExcludeFilter(new Set());
+    setSeverityFilter(new Set());
+    setSeverityExcludeFilter(new Set());
     setProgramFilter(new Set());
+    setProgramExcludeFilter(new Set());
     setCategoryFilter(new Set());
+    setCategoryExcludeFilter(new Set());
     setTagFilter(new Set());
+    setTagExcludeFilter(new Set());
     setPrFilter("all");
     setDivergedOnly(false);
     setSearchText("");
-    setSortField("default");
+    setSortField(DEFAULT_SORT_FIELD);
     setSortDirection("asc");
     setGroupingStrategy(GroupingStrategy.None);
     clearUrlFilters();
@@ -666,14 +929,23 @@ export function ReviewQueuePanel({
 
   const activeFilterCount =
     priorityFilter.size +
+    priorityExcludeFilter.size +
     reasonFilter.size +
+    reasonExcludeFilter.size +
+    severityFilter.size +
+    severityExcludeFilter.size +
     programFilter.size +
+    programExcludeFilter.size +
     categoryFilter.size +
+    categoryExcludeFilter.size +
     tagFilter.size +
+    tagExcludeFilter.size +
     (prFilter !== "all" ? 1 : 0) +
     (divergedOnly ? 1 : 0) +
     (searchText.trim() ? 1 : 0) +
-    (sortField !== "default" ? 1 : 0) +
+    // Only count as an active filter when the user has deviated from DEFAULT_SORT_FIELD
+    // (mirrors "default"'s old exemption before this feature).
+    (sortField !== DEFAULT_SORT_FIELD ? 1 : 0) +
     (groupingStrategy !== GroupingStrategy.None ? 1 : 0);
 
   const activeFilterLabel = activeFilterCount > 0 ? `Filter (${activeFilterCount})` : "Filter";
@@ -700,6 +972,11 @@ export function ReviewQueuePanel({
         tabIndex={0}
         data-testid={`review-item-${queueItem.sessionId}`}
         data-current={index === currentIndex ? "true" : undefined}
+        aria-describedby={
+          queueItem.metadata?.["pending_approval_id"]
+            ? `escalation-reason-${queueItem.sessionId}`
+            : undefined
+        }
       >
         <div className={itemHeader}>
           <h3 className={itemTitle}>{queueItem.sessionName}</h3>
@@ -725,6 +1002,16 @@ export function ReviewQueuePanel({
           )}
           {queueItem.metadata?.["pending_approval_id"] && (
             <>
+              <SeverityBadge riskLevel={queueItem.metadata["risk_level"] ?? ""} compact />
+              <p
+                className={`${escalationReasonText}`}
+                id={`escalation-reason-${queueItem.sessionId}`}
+                data-testid={`escalation-reason-${queueItem.sessionId}`}
+              >
+                {queueItem.metadata["escalation_reason"]
+                  ? `${ESCALATION_REASON_EMOJI[queueItem.metadata["escalation_reason_category"] as EscalationCategory] ?? ""} ${queueItem.metadata["escalation_reason"]}`.trim()
+                  : "Reason not recorded — this request predates escalation-reason tracking."}
+              </p>
               {(queueItem.metadata["tool_input_command"] || queueItem.metadata["tool_input_file"]) && (
                 <pre className={commandPreview}>
                   {queueItem.metadata["tool_input_command"] || queueItem.metadata["tool_input_file"]}
@@ -747,10 +1034,12 @@ export function ReviewQueuePanel({
               <span className={detailLabel}>Program:</span>
               <span className={detailValue}>{queueItem.program}</span>
             </div>
-            <div className={detailRow}>
-              <span className={detailLabel}>Branch:</span>
-              <span className={detailValue}>{queueItem.branch}</span>
-            </div>
+            {queueItem.branch && (
+              <div className={detailRow}>
+                <span className={detailLabel}>Branch:</span>
+                <span className={detailValue}>{queueItem.branch}</span>
+              </div>
+            )}
             <div className={detailRow}>
               <span className={detailLabel}>Path:</span>
               <span className={detailValue} title={queueItem.path}>{queueItem.path}</span>
@@ -815,9 +1104,10 @@ export function ReviewQueuePanel({
             >
               ✗ Deny
             </Button>
-            {queueItem.metadata?.["tool_input_command"] && (
+            {queueItem.metadata?.["tool_input_command"] &&
+              isCreateRuleEligibleCategory(queueItem.metadata?.["escalation_reason_category"]) && (
               <Button
-                intent="ghost"
+                intent="secondary"
                 size="md"
                 onClick={(e) => {
                   e.stopPropagation();
@@ -846,12 +1136,7 @@ export function ReviewQueuePanel({
             size="md"
             onClick={(e) => {
               e.stopPropagation();
-              if (onSkipSession) {
-                onSkipSession(queueItem.sessionId);
-              } else {
-                acknowledgeSession(queueItem.sessionId);
-              }
-              onAcknowledged?.(queueItem.sessionId);
+              void skipSession(queueItem.sessionId);
             }}
             title="Acknowledge session (remove from queue)"
             aria-label="Acknowledge session"
@@ -860,32 +1145,50 @@ export function ReviewQueuePanel({
             ⏭ Skip
           </Button>
         )}
-        {/* S3-3: Create PR button — only for TASK_COMPLETE items without an existing PR URL */}
-        {queueItem.reason === AttentionReason.TASK_COMPLETE &&
-          !queueItem.githubPrUrl &&
-          onRunOneShot && (
+        {/* Epic 2.4: Create PR trigger — same 3-state machine as SessionActionsOverflow.tsx's
+            (ux.md Surface 1 & 2): State A (enabled, opens CreatePullRequestModal), State B
+            (disabled, no commits ahead), State C (existing PR — link, never reopens the modal). */}
+        {queueItem.reason === AttentionReason.TASK_COMPLETE && (() => {
+          const hasCommitsAhead = queueItem.hasCommitsAhead;
+          const prNumber = queueItem.githubPrUrl ? parseGitHubRef(queueItem.githubPrUrl)?.prNumber : undefined;
+          return (
             <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
               {queueItem.branchDivergedFromBase && (
                 <span className={divergedBadge}>
                   ⚠ Diverged from main
                 </span>
               )}
-              <Button
-                intent="primary"
-                size="md"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setPrResult(null);
-                  setPrModal({ sessionId: queueItem.sessionId, prompt: DEFAULT_PR_PROMPT });
-                }}
-                title="Create a pull request for this session"
-                aria-label="Create PR"
-                data-testid={`create-pr-${queueItem.sessionId}`}
-              >
-                🔀 Create PR
-              </Button>
+              {queueItem.githubPrUrl ? (
+                <a
+                  href={queueItem.githubPrUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  onClick={(e) => e.stopPropagation()}
+                  aria-label={prNumber ? `PR #${prNumber}: ${queueItem.sessionName}` : `View PR: ${queueItem.sessionName}`}
+                  data-testid="github-pr-link"
+                >
+                  {prNumber ? `✅ View PR #${prNumber}` : "✅ View PR"}
+                </a>
+              ) : (
+                <Button
+                  intent="primary"
+                  size="md"
+                  disabled={!hasCommitsAhead}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    createPrTriggerRef.current = e.currentTarget;
+                    setIsCreatePrOpen(queueItem.sessionId);
+                  }}
+                  title={hasCommitsAhead ? "Create a pull request for this session" : "No commits ahead of main yet"}
+                  aria-label="Create PR"
+                  data-testid={`create-pr-trigger-${queueItem.sessionId}`}
+                >
+                  🔀 Create PR
+                </Button>
+              )}
             </div>
-          )}
+          );
+        })()}
       </div>
     </div>
   );
@@ -903,6 +1206,10 @@ export function ReviewQueuePanel({
 
   return (
     <div className={panel} data-testid="review-queue">
+      {/* Signals the initial fetch has resolved, independent of whether the
+          queue ended up empty — tests and other consumers use this to know
+          when it's safe to make assertions about queue contents. */}
+      {!loading && <div data-testid="review-queue-loaded" aria-hidden="true" />}
       {/* Screen reader live region for queue count changes */}
       <div aria-live="polite" aria-atomic="true" className={visuallyHidden}>
         {liveAnnouncement}
@@ -993,6 +1300,19 @@ export function ReviewQueuePanel({
               ✕ Clear
             </button>
           )}
+          {(skippableItems.length > 0 || isBulkSkipping) && (
+            <Button
+              intent="ghost"
+              size="md"
+              onClick={handleSkipAllVisible}
+              disabled={isBulkSkipping || skippableItems.length === 0}
+              title={`Skip every item currently shown${hasActiveFilter ? " by the active filter" : ""} (excludes approval requests)`}
+              aria-label={`Skip all ${skippableItems.length} visible item${skippableItems.length === 1 ? "" : "s"}`}
+              data-testid="skip-all-visible"
+            >
+              {isBulkSkipping ? "Skipping…" : `⏭ Skip all (${skippableItems.length})`}
+            </Button>
+          )}
         </div>
       )}
 
@@ -1017,14 +1337,17 @@ export function ReviewQueuePanel({
               {[Priority.URGENT, Priority.HIGH, Priority.MEDIUM, Priority.LOW].map(
                 (priority) => {
                   const priorityCount = byPriority.get(priority) ?? 0;
+                  const isExcluded = priorityExcludeFilter.has(priority);
                   return (
                     <button
                       key={priority}
-                      className={`${filterButton} ${priorityFilter.has(priority) ? filterButtonActive : ""}`}
+                      className={`${filterButton} ${priorityFilter.has(priority) ? filterButtonActive : isExcluded ? filterButtonExcluded : ""}`}
                       onClick={() => handleFilterByPriority(priority)}
                       disabled={priorityCount === 0}
                       aria-pressed={priorityFilter.has(priority)}
+                      title={isExcluded ? "Excluded — click to clear" : "Click to include, click again to exclude"}
                     >
+                      {isExcluded ? "🚫 " : ""}
                       {getPriorityLabel(priority)} ({priorityCount})
                     </button>
                   );
@@ -1050,15 +1373,42 @@ export function ReviewQueuePanel({
                 const reasonCount = byReason.get(reason) ?? 0;
                 // Hide TESTS_FAILING when count is 0 (detection may be disabled)
                 if (reason === AttentionReason.TESTS_FAILING && reasonCount === 0) return null;
+                const isExcluded = reasonExcludeFilter.has(reason);
                 return (
                   <button
                     key={reason}
-                    className={`${filterButton} ${reasonFilter.has(reason) ? filterButtonActive : ""}`}
+                    className={`${filterButton} ${reasonFilter.has(reason) ? filterButtonActive : isExcluded ? filterButtonExcluded : ""}`}
                     onClick={() => handleFilterByReason(reason)}
                     disabled={reasonCount === 0}
                     aria-pressed={reasonFilter.has(reason)}
+                    title={isExcluded ? "Excluded — click to clear" : "Click to include, click again to exclude"}
                   >
+                    {isExcluded ? "🚫 " : ""}
                     {getReasonLabel(reason)} ({reasonCount})
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          <div className={filterGroup}>
+            <label className={filterLabel}>Severity (any):</label>
+            <div className={filterButtons}>
+              {SEVERITY_FILTER_VALUES.map((severity) => {
+                const severityCount = bySeverity.get(severity) ?? 0;
+                const label = severity === UNRECORDED_SEVERITY ? "Not recorded" : getRiskLevelInfo(severity).label;
+                const isExcluded = severityExcludeFilter.has(severity);
+                return (
+                  <button
+                    key={severity}
+                    className={`${filterButton} ${severityFilter.has(severity) ? filterButtonActive : isExcluded ? filterButtonExcluded : ""}`}
+                    onClick={() => handleFilterBySeverity(severity)}
+                    disabled={severityCount === 0}
+                    aria-pressed={severityFilter.has(severity)}
+                    title={isExcluded ? "Excluded — click to clear" : "Click to include, click again to exclude"}
+                  >
+                    {isExcluded ? "🚫 " : ""}
+                    {label} ({severityCount})
                   </button>
                 );
               })}
@@ -1069,16 +1419,21 @@ export function ReviewQueuePanel({
             <div className={filterGroup}>
               <label className={filterLabel}>Program (any):</label>
               <div className={filterButtons}>
-                {availablePrograms.map(([program, n]) => (
-                  <button
-                    key={program}
-                    className={`${filterButton} ${programFilter.has(program) ? filterButtonActive : ""}`}
-                    onClick={() => handleFilterByProgram(program)}
-                    aria-pressed={programFilter.has(program)}
-                  >
-                    {program} ({n})
-                  </button>
-                ))}
+                {availablePrograms.map(([program, n]) => {
+                  const isExcluded = programExcludeFilter.has(program);
+                  return (
+                    <button
+                      key={program}
+                      className={`${filterButton} ${programFilter.has(program) ? filterButtonActive : isExcluded ? filterButtonExcluded : ""}`}
+                      onClick={() => handleFilterByProgram(program)}
+                      aria-pressed={programFilter.has(program)}
+                      title={isExcluded ? "Excluded — click to clear" : "Click to include, click again to exclude"}
+                    >
+                      {isExcluded ? "🚫 " : ""}
+                      {program} ({n})
+                    </button>
+                  );
+                })}
               </div>
             </div>
           )}
@@ -1087,16 +1442,21 @@ export function ReviewQueuePanel({
             <div className={filterGroup}>
               <label className={filterLabel}>Category (any):</label>
               <div className={filterButtons}>
-                {availableCategories.map(([category, n]) => (
-                  <button
-                    key={category}
-                    className={`${filterButton} ${categoryFilter.has(category) ? filterButtonActive : ""}`}
-                    onClick={() => handleFilterByCategory(category)}
-                    aria-pressed={categoryFilter.has(category)}
-                  >
-                    {category} ({n})
-                  </button>
-                ))}
+                {availableCategories.map(([category, n]) => {
+                  const isExcluded = categoryExcludeFilter.has(category);
+                  return (
+                    <button
+                      key={category}
+                      className={`${filterButton} ${categoryFilter.has(category) ? filterButtonActive : isExcluded ? filterButtonExcluded : ""}`}
+                      onClick={() => handleFilterByCategory(category)}
+                      aria-pressed={categoryFilter.has(category)}
+                      title={isExcluded ? "Excluded — click to clear" : "Click to include, click again to exclude"}
+                    >
+                      {isExcluded ? "🚫 " : ""}
+                      {category} ({n})
+                    </button>
+                  );
+                })}
               </div>
             </div>
           )}
@@ -1105,16 +1465,21 @@ export function ReviewQueuePanel({
             <div className={filterGroup}>
               <label className={filterLabel}>Tags (any):</label>
               <div className={filterButtons}>
-                {availableTags.map(([t, n]) => (
-                  <button
-                    key={t}
-                    className={`${filterButton} ${tagFilter.has(t) ? filterButtonActive : ""}`}
-                    onClick={() => handleFilterByTag(t)}
-                    aria-pressed={tagFilter.has(t)}
-                  >
-                    {t} ({n})
-                  </button>
-                ))}
+                {availableTags.map(([t, n]) => {
+                  const isExcluded = tagExcludeFilter.has(t);
+                  return (
+                    <button
+                      key={t}
+                      className={`${filterButton} ${tagFilter.has(t) ? filterButtonActive : isExcluded ? filterButtonExcluded : ""}`}
+                      onClick={() => handleFilterByTag(t)}
+                      aria-pressed={tagFilter.has(t)}
+                      title={isExcluded ? "Excluded — click to clear" : "Click to include, click again to exclude"}
+                    >
+                      {isExcluded ? "🚫 " : ""}
+                      {t} ({n})
+                    </button>
+                  );
+                })}
               </div>
             </div>
           )}
@@ -1151,6 +1516,7 @@ export function ReviewQueuePanel({
                 value={sortField}
                 onChange={(e) => handleSortFieldChange(e.target.value as SortField)}
               >
+                <option value="severity">Severity</option>
                 <option value="default">Queue order</option>
                 <option value="priority">Priority</option>
                 <option value="age">Last activity</option>
@@ -1223,7 +1589,6 @@ export function ReviewQueuePanel({
           )
         ) : (
           <>
-            {!loading && <div data-testid="review-queue-loaded" aria-hidden="true" />}
             {groupedItems ? (
               groupedItems.map((group) => (
                 <div key={group.groupKey} className={groupSection} data-testid={`review-group-${group.groupKey}`}>
@@ -1242,103 +1607,17 @@ export function ReviewQueuePanel({
         )}
       </div>
 
-      {/* S3-3: Create PR confirmation modal */}
-      {prModal && createPortal(
-        <div
-          className={modalOverlay}
-          onClick={() => {
-            if (!prRunning) {
-              setPrModal(null);
-              setPrResult(null);
-            }
-          }}
-        >
-          <div
-            className={modalContent}
-            onClick={(e) => e.stopPropagation()}
-            role="dialog"
-            aria-modal="true"
-            aria-label="Create Pull Request"
-          >
-            <h3 style={{ margin: 0, fontSize: "1.125rem", fontWeight: 600, color: "var(--text-primary)" }}>
-              Create Pull Request
-            </h3>
-            <p style={{ margin: 0, fontSize: "0.875rem", color: "var(--text-secondary)" }}>
-              Review and edit the prompt that will be used to create the PR. This may take up to 30 seconds.
-            </p>
-            <textarea
-              value={prModal.prompt}
-              onChange={(e) => setPrModal((m) => m ? { ...m, prompt: e.target.value } : null)}
-              disabled={prRunning}
-              rows={5}
-              style={{
-                padding: "0.625rem 0.875rem",
-                border: "1px solid var(--modal-border)",
-                borderRadius: "6px",
-                fontSize: "0.875rem",
-                resize: "vertical",
-                background: "var(--input-background)",
-                color: "var(--text-primary)",
-                fontFamily: "inherit",
-              }}
-            />
-            {prRunning && (
-              <p style={{ margin: 0, fontSize: "0.875rem", color: "var(--text-secondary)", fontStyle: "italic" }}>
-                ⏳ Creating PR, this may take up to 30 seconds…
-              </p>
-            )}
-            {prResult?.prUrl && (
-              <p style={{ margin: 0, fontSize: "0.875rem", color: "var(--success)" }}>
-                ✓ PR created:{" "}
-                <a href={prResult.prUrl} target="_blank" rel="noopener noreferrer" style={{ color: "var(--primary)" }}>
-                  {prResult.prUrl}
-                </a>
-              </p>
-            )}
-            {prResult?.error && (
-              <p style={{ margin: 0, fontSize: "0.875rem", color: "var(--error)" }}>
-                ✗ {prResult.error}
-              </p>
-            )}
-            <div style={{ display: "flex", justifyContent: "flex-end", gap: "0.75rem" }}>
-              <Button
-                intent="secondary"
-                size="md"
-                onClick={() => { setPrModal(null); setPrResult(null); }}
-                disabled={prRunning}
-              >
-                {prResult?.prUrl ? "Close" : "Cancel"}
-              </Button>
-              {!prResult?.prUrl && (
-                <Button
-                  intent="primary"
-                  size="md"
-                  disabled={prRunning || !prModal.prompt.trim()}
-                  onClick={async () => {
-                    if (!onRunOneShot) return;
-                    setPrRunning(true);
-                    setPrResult(null);
-                    try {
-                      const result = await onRunOneShot(prModal.sessionId, prModal.prompt);
-                      if (result?.prUrl) {
-                        setPrResult({ prUrl: result.prUrl });
-                      } else {
-                        setPrResult({ error: result?.error || "No PR URL found in output. The command may have failed." });
-                      }
-                    } catch (err) {
-                      setPrResult({ error: err instanceof Error ? err.message : "An unexpected error occurred." });
-                    } finally {
-                      setPrRunning(false);
-                    }
-                  }}
-                >
-                  {prRunning ? "Creating…" : "Run"}
-                </Button>
-              )}
-            </div>
-          </div>
-        </div>,
-        document.body
+      {/* Epic 2.4: shared Create Pull Request modal — same component + behavior as
+          SessionActionsOverflow.tsx's entry point (ux.md Surface 1 & 2, AC7). */}
+      {activePrSession && (
+        <CreatePullRequestModal
+          session={activePrSession}
+          isOpen={!!isCreatePrOpen}
+          onClose={() => setIsCreatePrOpen(null)}
+          draftPullRequest={draftPullRequest}
+          createPullRequest={createPullRequest}
+          triggerRef={createPrTriggerRef}
+        />
       )}
 
       {/* Epic 4: Create Rule modal */}

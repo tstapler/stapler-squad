@@ -14,6 +14,9 @@ function makeGithub(overrides: Partial<GithubSummary> = {}): GithubSummary {
     checkConclusion: "success",
     approvedCount: 0,
     changesReqCount: 0,
+    mergeable: "unknown",
+    checks: [],
+    reviewFeedback: [],
     ...overrides,
   };
 }

@@ -22,9 +22,11 @@ import (
 // TestRestartSession_EmptyID verifies that an empty session id returns
 // CodeInvalidArgument without touching storage.
 func TestRestartSession_EmptyID(t *testing.T) {
+	t.Parallel()
 	storage := createTestStorage(t)
 	eventBus := events.NewEventBus(100)
 	svc := NewSessionService(storage, eventBus)
+	t.Cleanup(func() { svc.Shutdown() })
 
 	_, err := svc.RestartSession(context.Background(), connect.NewRequest(&sessionv1.RestartSessionRequest{
 		Id: "",
@@ -38,9 +40,11 @@ func TestRestartSession_EmptyID(t *testing.T) {
 // TestRestartSession_SessionNotFound verifies that a non-existent session id
 // returns CodeNotFound.
 func TestRestartSession_SessionNotFound(t *testing.T) {
+	t.Parallel()
 	storage := createTestStorage(t)
 	eventBus := events.NewEventBus(100)
 	svc := NewSessionService(storage, eventBus)
+	t.Cleanup(func() { svc.Shutdown() })
 
 	_, err := svc.RestartSession(context.Background(), connect.NewRequest(&sessionv1.RestartSessionRequest{
 		Id: "does-not-exist",
@@ -58,9 +62,11 @@ func TestRestartSession_SessionNotFound(t *testing.T) {
 // TestClearConversationState_EmptyID verifies that an empty id returns
 // CodeInvalidArgument.
 func TestClearConversationState_EmptyID(t *testing.T) {
+	t.Parallel()
 	storage := createTestStorage(t)
 	eventBus := events.NewEventBus(100)
 	svc := NewSessionService(storage, eventBus)
+	t.Cleanup(func() { svc.Shutdown() })
 
 	_, err := svc.ClearConversationState(context.Background(), connect.NewRequest(&sessionv1.ClearConversationStateRequest{
 		Id: "",
@@ -74,9 +80,11 @@ func TestClearConversationState_EmptyID(t *testing.T) {
 // TestClearConversationState_SessionNotFound verifies that a non-existent id
 // returns CodeNotFound.
 func TestClearConversationState_SessionNotFound(t *testing.T) {
+	t.Parallel()
 	storage := createTestStorage(t)
 	eventBus := events.NewEventBus(100)
 	svc := NewSessionService(storage, eventBus)
+	t.Cleanup(func() { svc.Shutdown() })
 
 	_, err := svc.ClearConversationState(context.Background(), connect.NewRequest(&sessionv1.ClearConversationStateRequest{
 		Id: "ghost-session",
@@ -91,6 +99,7 @@ func TestClearConversationState_SessionNotFound(t *testing.T) {
 // the ReviewQueuePoller (so FindLiveInstance resolves it), then calls
 // ClearConversationState and expects success=true.
 func TestClearConversationState_Success(t *testing.T) {
+	t.Parallel()
 	fix := setupForkTestFixture(t)
 	t.Cleanup(fix.cleanup)
 
@@ -119,9 +128,11 @@ func TestClearConversationState_Success(t *testing.T) {
 // TestListBranches_EmptyPath verifies that an empty repo_path returns
 // CodeInvalidArgument.
 func TestListBranches_EmptyPath(t *testing.T) {
+	t.Parallel()
 	storage := createTestStorage(t)
 	eventBus := events.NewEventBus(100)
 	svc := NewSessionService(storage, eventBus)
+	t.Cleanup(func() { svc.Shutdown() })
 
 	_, err := svc.ListBranches(context.Background(), connect.NewRequest(&sessionv1.ListBranchesRequest{
 		RepoPath: "",
@@ -135,9 +146,11 @@ func TestListBranches_EmptyPath(t *testing.T) {
 // TestListBranches_PathOutsideHome verifies that a path outside the user's
 // home directory is rejected with CodeInvalidArgument.
 func TestListBranches_PathOutsideHome(t *testing.T) {
+	t.Parallel()
 	storage := createTestStorage(t)
 	eventBus := events.NewEventBus(100)
 	svc := NewSessionService(storage, eventBus)
+	t.Cleanup(func() { svc.Shutdown() })
 
 	// /proc exists on Linux but is never inside the user home directory.
 	_, err := svc.ListBranches(context.Background(), connect.NewRequest(&sessionv1.ListBranchesRequest{
@@ -152,9 +165,11 @@ func TestListBranches_PathOutsideHome(t *testing.T) {
 // TestListBranches_NonExistentPath verifies that a path that does not exist
 // (but is within the home tree) returns CodeInvalidArgument.
 func TestListBranches_NonExistentPath(t *testing.T) {
+	t.Parallel()
 	storage := createTestStorage(t)
 	eventBus := events.NewEventBus(100)
 	svc := NewSessionService(storage, eventBus)
+	t.Cleanup(func() { svc.Shutdown() })
 
 	homeDir, err := os.UserHomeDir()
 	require.NoError(t, err)
@@ -176,9 +191,11 @@ func TestListBranches_NonExistentPath(t *testing.T) {
 // TestGetTerminalSnapshot_EmptyID verifies that an empty session_id returns
 // CodeInvalidArgument.
 func TestGetTerminalSnapshot_EmptyID(t *testing.T) {
+	t.Parallel()
 	storage := createTestStorage(t)
 	eventBus := events.NewEventBus(100)
 	svc := NewSessionService(storage, eventBus)
+	t.Cleanup(func() { svc.Shutdown() })
 
 	_, err := svc.GetTerminalSnapshot(context.Background(), connect.NewRequest(&sessionv1.GetTerminalSnapshotRequest{
 		SessionId: "",
@@ -192,9 +209,11 @@ func TestGetTerminalSnapshot_EmptyID(t *testing.T) {
 // TestGetTerminalSnapshot_SessionNotFound verifies that a non-existent session
 // id returns CodeNotFound (both poller and externalDiscovery are nil).
 func TestGetTerminalSnapshot_SessionNotFound(t *testing.T) {
+	t.Parallel()
 	storage := createTestStorage(t)
 	eventBus := events.NewEventBus(100)
 	svc := NewSessionService(storage, eventBus)
+	t.Cleanup(func() { svc.Shutdown() })
 
 	_, err := svc.GetTerminalSnapshot(context.Background(), connect.NewRequest(&sessionv1.GetTerminalSnapshotRequest{
 		SessionId: "no-such-session",
@@ -226,6 +245,7 @@ func newMinimalUnfinishedWorkService(t *testing.T) *UnfinishedWorkService {
 // yields CodeNotFound (the scanner returns !ok, which the handler maps to
 // CodeNotFound — the handler has no explicit empty-field validation).
 func TestGetWorktreeDiff_EmptyRepoPath(t *testing.T) {
+	t.Parallel()
 	svc := newMinimalUnfinishedWorkService(t)
 
 	_, err := svc.GetWorktreeDiff(context.Background(), connect.NewRequest(&sessionv1.GetWorktreeDiffRequest{
@@ -241,6 +261,7 @@ func TestGetWorktreeDiff_EmptyRepoPath(t *testing.T) {
 // TestGetWorktreeDiff_SessionNotFound verifies that a repo+branch pair that
 // has not been scanned returns CodeNotFound.
 func TestGetWorktreeDiff_SessionNotFound(t *testing.T) {
+	t.Parallel()
 	svc := newMinimalUnfinishedWorkService(t)
 
 	_, err := svc.GetWorktreeDiff(context.Background(), connect.NewRequest(&sessionv1.GetWorktreeDiffRequest{
@@ -258,6 +279,7 @@ func TestGetWorktreeDiff_SessionNotFound(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestExpandTildePath(t *testing.T) {
+	t.Parallel()
 	home, err := os.UserHomeDir()
 	require.NoError(t, err, "os.UserHomeDir() must succeed for tilde expansion tests")
 
@@ -314,10 +336,28 @@ func TestExpandTildePath(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := expandTildePath(tc.input)
+			t.Parallel()
+			got, err := expandTildePath(tc.input, false)
+			require.NoError(t, err)
 			tc.check(t, got)
 		})
 	}
+}
+
+// TestExpandTildePath_RemoteRejectsTilde proves the pre-ship review fix: a
+// `~`-prefixed path must be rejected for a remote-targeted session rather than
+// silently expanded against this server process's own local home directory
+// (which names a location on the wrong host entirely).
+func TestExpandTildePath_RemoteRejectsTilde(t *testing.T) {
+	t.Parallel()
+	for _, input := range []string{"~", "~/foo/bar"} {
+		_, err := expandTildePath(input, true)
+		require.Error(t, err, "expandTildePath(%q, remote=true) must reject tilde expansion", input)
+	}
+	// An absolute path is unaffected by the remote flag.
+	got, err := expandTildePath("/absolute/path", true)
+	require.NoError(t, err)
+	assert.Equal(t, "/absolute/path", got)
 }
 
 // TestExpandTildePath_AliasPathCallSite documents the tilde expansion that
@@ -325,17 +365,20 @@ func TestExpandTildePath(t *testing.T) {
 // contain tilde-prefixed paths. This test ensures that if the call site is
 // accidentally removed, this scenario will fail explicitly.
 func TestExpandTildePath_AliasPathCallSite(t *testing.T) {
+	t.Parallel()
 	home, err := os.UserHomeDir()
 	require.NoError(t, err)
 
 	// Simulate the pattern at CreateSession:1083-1084:
 	//   if resolvedPath == "" && resolved.Path != "" {
-	//       resolvedPath = expandTildePath(resolved.Path)
+	//       resolvedPath, err = expandTildePath(resolved.Path, remoteRequested)
 	//   }
 	aliasPath := "~/projects/myrepo"
 	var resolvedPath string
 	if resolvedPath == "" && aliasPath != "" {
-		resolvedPath = expandTildePath(aliasPath)
+		expanded, expandErr := expandTildePath(aliasPath, false)
+		require.NoError(t, expandErr)
+		resolvedPath = expanded
 	}
 	assert.Equal(t, home+"/projects/myrepo", resolvedPath,
 		"alias path with tilde prefix must be expanded when resolvedPath is initially empty")

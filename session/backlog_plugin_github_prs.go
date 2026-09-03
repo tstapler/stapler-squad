@@ -7,8 +7,8 @@ import (
 	"io"
 	"net/http"
 	"strconv"
-	"time"
 
+	"github.com/tstapler/stapler-squad/github"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -71,6 +71,12 @@ func (g *GitHubPRsPlugin) Fetch(ctx context.Context, config PluginConfig, cursor
 		}
 	}
 
+	// Prefer the shared keychain (one credential per host, managed in Settings)
+	// over a per-source config token; fall back to cfg.Token for sources
+	// configured before the migration to shared, host-keyed credentials.
+	if token := github.GetKeychainTokenForHost(cfg.Host); token != "" {
+		cfg.Token = token
+	}
 	if cfg.Token == "" {
 		return nil, cursor, nil
 	}
@@ -87,8 +93,7 @@ func (g *GitHubPRsPlugin) Fetch(ctx context.Context, config PluginConfig, cursor
 	req.Header.Set("Authorization", "token "+cfg.Token)
 	req.Header.Set("Accept", "application/vnd.github.v3+json")
 
-	client := &http.Client{Timeout: 30 * time.Second}
-	resp, err := client.Do(req)
+	resp, err := github.HTTPClient().Do(req)
 	if err != nil {
 		return nil, cursor, fmt.Errorf("github_prs: request failed: %w", err)
 	}
@@ -167,8 +172,7 @@ func (g *GitHubPRsPlugin) fetchCILabel(ctx context.Context, cfg githubPRPluginCo
 	req.Header.Set("Authorization", "token "+cfg.Token)
 	req.Header.Set("Accept", "application/vnd.github.v3+json")
 
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Do(req)
+	resp, err := github.HTTPClient().Do(req)
 	if err != nil || resp.StatusCode != http.StatusOK {
 		if resp != nil {
 			resp.Body.Close()

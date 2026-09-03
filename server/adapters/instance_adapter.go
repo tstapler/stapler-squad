@@ -1,7 +1,11 @@
 package adapters
 
 import (
+	"fmt"
+
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/github"
+	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/cdp"
 	"github.com/tstapler/stapler-squad/session/detection"
@@ -31,11 +35,12 @@ func InstanceToProto(inst *session.Instance, workflowNames map[string]string) *s
 		Branch:             snap.Branch,
 		Status:             statusToProto(inst.GetEffectiveStatus()),
 		Program:            snap.Program,
-		Height:             int32(snap.Height),
-		Width:              int32(snap.Width),
+		Height:             int32(snap.Height), //#nosec G115 -- terminal row count, bounded well under int32 max
+		Width:              int32(snap.Width),  //#nosec G115 -- terminal column count, bounded well under int32 max
 		CreatedAt:          timestamppb.New(snap.CreatedAt),
 		UpdatedAt:          timestamppb.New(snap.UpdatedAt),
 		AutoYes:            snap.AutoYes,
+		AutoApprove:        snap.AutoApprove,
 		AutonomousMode:     snap.Autonomous.AutonomousMode,
 		AutonomousTurn:     snap.Autonomous.AutonomousTurn,
 		AutonomousMaxTurns: snap.Autonomous.AutonomousMaxTurns,
@@ -43,6 +48,7 @@ func InstanceToProto(inst *session.Instance, workflowNames map[string]string) *s
 		Prompt:             snap.Prompt,
 		InitialPrompt:      snap.InitialPrompt,
 		Category:           snap.Category,
+		Note:               snap.Note,
 		IsExpanded:         snap.IsExpanded,
 		SessionType:        sessionTypeToProto(snap.SessionType),
 		TmuxPrefix:         snap.TmuxPrefix,
@@ -51,7 +57,7 @@ func InstanceToProto(inst *session.Instance, workflowNames map[string]string) *s
 		LastTerminalUpdate:   timestamppb.New(snap.LastTerminalUpdate),
 		LastMeaningfulOutput: timestamppb.New(snap.LastMeaningfulOutput),
 		// GitHub integration fields
-		GithubPrNumber:  int32(snap.GitHub.GitHubPRNumber),
+		GithubPrNumber:  int32(snap.GitHub.GitHubPRNumber), //#nosec G115 -- GitHub PR numbers are far below int32 max
 		GithubPrUrl:     snap.GitHub.GitHubPRURL,
 		GithubOwner:     snap.GitHub.GitHubOwner,
 		GithubRepo:      snap.GitHub.GitHubRepo,
@@ -64,12 +70,38 @@ func InstanceToProto(inst *session.Instance, workflowNames map[string]string) *s
 		GithubPrState:         inst.GitHubPRState,
 		GithubPrIsDraft:       inst.GitHubPRIsDraft,
 		GithubPrPriority:      inst.GitHubPRPriority,
-		GithubApprovedCount:   int32(inst.GitHubApprovedCount),
-		GithubChangesReqCount: int32(inst.GitHubChangesReqCount),
+		GithubApprovedCount:   int32(inst.GitHubApprovedCount),   //#nosec G115 -- PR review count, always small
+		GithubChangesReqCount: int32(inst.GitHubChangesReqCount), //#nosec G115 -- PR review count, always small
 		GithubCheckConclusion: inst.GitHubCheckConclusion,
+		GithubChecks:          checksToProto(inst.GitHubChecks),
+		GithubReviewFeedback:  reviewFeedbackToProto(inst.GitHubReviewFeedback),
+		GithubMergeable:       inst.GitHubMergeable,
 		LastPrStatusCheck:     timestamppb.New(inst.LastPRStatusCheck),
 		WorkspaceKey:          inst.WorkspaceKey(),
 		LaunchCommand:         inst.LaunchCommand,
+		// Restart-from-session lineage (Story 2.3.1)
+		RestartedFromSessionId: snap.RestartedFromSessionID,
+	}
+
+	// Retry state (session-retry-backoff), fields 76-80. Read directly from
+	// the instance (not the InstanceSnapshot atomic pointer, which predates
+	// this feature) via RetrySnapshot's race-free copy.
+	rs := inst.RetrySnapshot()
+	protoSession.RetryAttempt = int32(rs.RetryAttempt)         //#nosec G115 -- retry attempt count, capped by policy
+	protoSession.RetryMaxAttempts = int32(rs.RetryMaxAttempts) //#nosec G115 -- retry attempt cap, always small
+	protoSession.LastFailureReason = rs.LastFailureReason
+	if !rs.NextRetryAt.IsZero() {
+		protoSession.NextRetryAt = timestamppb.New(rs.NextRetryAt)
+	}
+	if len(rs.RetryHistory) > 0 {
+		protoSession.RetryHistory = make([]*sessionv1.RetryAttemptRecord, len(rs.RetryHistory))
+		for i, rec := range rs.RetryHistory {
+			protoSession.RetryHistory[i] = &sessionv1.RetryAttemptRecord{
+				Attempt:   int32(rec.Attempt), //#nosec G115 -- retry attempt count, capped by policy
+				Reason:    rec.Reason,
+				Timestamp: timestamppb.New(rec.Timestamp),
+			}
+		}
 	}
 
 	// Convert artifact data if available
@@ -98,10 +130,13 @@ func InstanceToProto(inst *session.Instance, workflowNames map[string]string) *s
 	if inst.GetDiffStats() != nil {
 		stats := inst.GetDiffStats()
 		protoSession.DiffStats = &sessionv1.DiffStats{
-			Added:   int32(stats.Added),
-			Removed: int32(stats.Removed),
+			Added:   int32(stats.Added),   //#nosec G115 -- diff line count, bounded well under int32 max
+			Removed: int32(stats.Removed), //#nosec G115 -- diff line count, bounded well under int32 max
 		}
 	}
+
+	// Cached "has commits ahead of base" signal (AC6) — see Instance.UpdateDiffStats.
+	protoSession.HasCommitsAhead = inst.GetHasCommitsAhead()
 
 	// Convert Claude session data if available
 	if inst.GetClaudeSession() != nil {
@@ -116,6 +151,9 @@ func InstanceToProto(inst *session.Instance, workflowNames map[string]string) *s
 	// History file linkage — path to the Claude JSONL conversation file.
 	protoSession.HistoryFilePath = snap.HistoryFilePath
 
+	// Outcome of the most recent start/cold-restore decision.
+	protoSession.ReviveOutcome = reviveOutcomeToProto(snap.LastReviveOutcome)
+
 	// Creation progress message — only meaningful during Creating state.
 	if inst.IsCreating() {
 		if inst.CreationProgress != "" {
@@ -124,6 +162,10 @@ func InstanceToProto(inst *session.Instance, workflowNames map[string]string) *s
 			protoSession.CreationProgress = "Starting session..."
 		}
 	}
+
+	// Reason the async creation pipeline failed — only meaningful when the
+	// session is Failed. See session.Instance.FailureReason's doc comment.
+	protoSession.FailureReason = inst.FailureReason()
 
 	// Rate limit state propagation.
 	protoSession.RateLimitState = rateLimitStateToProto(ratelimit.RateLimitState(inst.GetRateLimitState()))
@@ -135,12 +177,15 @@ func InstanceToProto(inst *session.Instance, workflowNames map[string]string) *s
 	// Pause reason — empty for sessions that have never been paused.
 	protoSession.PauseReason = snap.PauseReason
 
+	// Exit reason — only meaningful when status == SESSION_STATUS_CRASHED.
+	protoSession.ExitReason = snap.ExitReason
+
 	// VNC / browser-passthrough state.
 	if vncMgr := inst.VNCManager(); vncMgr != nil {
 		vncState := vncMgr.State()
 		protoSession.VncState = &sessionv1.VNCState{
 			Status:                mapVNCStatus(vncState.Status),
-			DisplayNumber:         int32(vncState.DisplayNumber),
+			DisplayNumber:         int32(vncState.DisplayNumber), //#nosec G115 -- X11 display number, always small
 			BrowserWindowDetected: vncState.BrowserWindowDetected,
 			// VncPassword intentionally omitted in list/watch paths — only exposed by GetSession.
 		}
@@ -172,6 +217,12 @@ func InstanceToProto(inst *session.Instance, workflowNames map[string]string) *s
 		protoSession.DetectedContext = statusInfo.StatusContext
 	}
 
+	// SubagentCount (field 75): count of background agents/shells/monitors from the
+	// WaitingForAgent detector. Set unconditionally — InstanceStatusInfo.SubagentCount is
+	// already 0 by construction when the controller is inactive or status isn't
+	// WaitingForAgent, so a guard here would be a no-op.
+	protoSession.SubagentCount = int32(statusInfo.SubagentCount) //#nosec G115 -- detector-derived count of a handful of shells/monitors, always small
+
 	// Hidden flag — system/background sessions excluded from default list/review queue.
 	protoSession.Hidden = snap.Hidden
 
@@ -184,14 +235,22 @@ func InstanceToProto(inst *session.Instance, workflowNames map[string]string) *s
 		protoSession.ArchivedAt = timestamppb.New(*snap.ArchivedAt)
 	}
 
+	// remote_name (field 76): host badge for a remote session (ssh-remote-workspaces
+	// Epic 6.2). Derived live from ExecutionTarget rather than a persisted field --
+	// see the proto field's doc comment for why (ExecutionTarget is `json:"-"`, not
+	// reconstructed across a restart). Empty (the zero value) for a LocalTarget.
+	if remoteTarget, ok := inst.GetExecutionTarget().(session.RemoteExecutionTarget); ok {
+		protoSession.RemoteName = remoteTarget.Target().Name
+	}
+
 	// Session goal summary — populated when a goal has been set via set_session_goal MCP tool.
 	if g := inst.GetSessionGoal(); g != nil {
 		tasksJSON, _ := session.EncodeTasks(g.Tasks) // empty string on error is safe
 		protoSession.Goal = &sessionv1.SessionGoalSummary{
 			GoalText:   g.Goal,
 			Status:     g.Status,
-			TasksTotal: int32(g.TasksTotal()),
-			TasksDone:  int32(g.TasksDone()),
+			TasksTotal: int32(g.TasksTotal()), //#nosec G115 -- task list length, always small
+			TasksDone:  int32(g.TasksDone()),  //#nosec G115 -- task list length, always small
 			TasksJson:  tasksJSON,
 			UpdatedAt:  timestamppb.New(g.UpdatedAt),
 		}
@@ -248,6 +307,8 @@ func toProtoSubStatusFromInfo(basicStatus session.Status, rateLimitState int, in
 	switch info.ClaudeStatus {
 	case detection.StatusWaitingForAgent:
 		return sessionv1.SubStatus_SUB_STATUS_WAITING_FOR_AGENT
+	case detection.StatusCompacting:
+		return sessionv1.SubStatus_SUB_STATUS_COMPACTING
 	case detection.StatusProcessing, detection.StatusExecuting:
 		return sessionv1.SubStatus_SUB_STATUS_PROCESSING
 	case detection.StatusNeedsApproval:
@@ -289,29 +350,50 @@ func rateLimitStateToProto(state ratelimit.RateLimitState) sessionv1.RateLimitSt
 	}
 }
 
-// StatusToProto converts session.Status to proto SessionStatus enum.
-func StatusToProto(status session.Status) sessionv1.SessionStatus {
+// StatusToProto converts a session.Status to its proto SessionStatus wire value.
+// Returns an explicit error for an unrecognized status instead of silently
+// falling back to UNSPECIFIED, so a future new session.Status value that isn't
+// added here fails loudly (see .golangci.yml's exhaustive-linter exclusion
+// comment for why this is enforced at the code level here rather than via the
+// linter, which is deliberately disabled repo-wide for iota-typed switches with
+// intentional default arms).
+func StatusToProto(status session.Status) (sessionv1.SessionStatus, error) {
 	switch status {
 	case session.Active:
-		return sessionv1.SessionStatus_SESSION_STATUS_ACTIVE // wire value 1 (same as legacy RUNNING)
+		return sessionv1.SessionStatus_SESSION_STATUS_ACTIVE, nil // wire value 1 (same as legacy RUNNING)
 	case session.Paused:
-		return sessionv1.SessionStatus_SESSION_STATUS_PAUSED
+		return sessionv1.SessionStatus_SESSION_STATUS_PAUSED, nil
 	case session.Creating:
-		return sessionv1.SessionStatus_SESSION_STATUS_CREATING
+		return sessionv1.SessionStatus_SESSION_STATUS_CREATING, nil
 	case session.Stopped:
-		return sessionv1.SessionStatus_SESSION_STATUS_STOPPED
+		return sessionv1.SessionStatus_SESSION_STATUS_STOPPED, nil
 	case session.Hibernated:
-		return sessionv1.SessionStatus_SESSION_STATUS_HIBERNATED
+		return sessionv1.SessionStatus_SESSION_STATUS_HIBERNATED, nil
 	case session.Restoring:
-		return sessionv1.SessionStatus_SESSION_STATUS_RESTORING
+		return sessionv1.SessionStatus_SESSION_STATUS_RESTORING, nil
+	case session.Crashed:
+		return sessionv1.SessionStatus_SESSION_STATUS_CRASHED, nil
+	case session.PermanentlyFailed:
+		return sessionv1.SessionStatus_SESSION_STATUS_PERMANENTLY_FAILED, nil
+	case session.Failed:
+		return sessionv1.SessionStatus_SESSION_STATUS_FAILED, nil
 	default:
-		return sessionv1.SessionStatus_SESSION_STATUS_UNSPECIFIED
+		return sessionv1.SessionStatus_SESSION_STATUS_UNSPECIFIED, fmt.Errorf("adapters.StatusToProto: unrecognized session.Status %d", int(status))
 	}
 }
 
-// statusToProto is kept for backward compatibility
+// statusToProto is kept for backward compatibility with callers that predate
+// StatusToProto's explicit-error signature. An unrecognized status is logged
+// (it should never happen — every session.Status value is handled above) and
+// mapped to UNSPECIFIED rather than propagated, matching this wrapper's
+// original no-error contract.
 func statusToProto(status session.Status) sessionv1.SessionStatus {
-	return StatusToProto(status)
+	proto, err := StatusToProto(status)
+	if err != nil {
+		log.Error("statusToProto: unrecognized session.Status", "status", int(status), "err", err)
+		return sessionv1.SessionStatus_SESSION_STATUS_UNSPECIFIED
+	}
+	return proto
 }
 
 // StatusStringToProto converts a status string (from session.Status.String()) to proto SessionStatus.
@@ -328,6 +410,12 @@ func StatusStringToProto(status string) sessionv1.SessionStatus {
 		return sessionv1.SessionStatus_SESSION_STATUS_CREATING
 	case "Stopped":
 		return sessionv1.SessionStatus_SESSION_STATUS_STOPPED
+	case "Hibernated":
+		return sessionv1.SessionStatus_SESSION_STATUS_HIBERNATED
+	case "Crashed":
+		return sessionv1.SessionStatus_SESSION_STATUS_CRASHED
+	case "PermanentlyFailed":
+		return sessionv1.SessionStatus_SESSION_STATUS_PERMANENTLY_FAILED
 	default:
 		return sessionv1.SessionStatus_SESSION_STATUS_UNSPECIFIED
 	}
@@ -344,6 +432,22 @@ func sessionTypeToProto(sessionType session.SessionType) sessionv1.SessionType {
 		return sessionv1.SessionType_SESSION_TYPE_EXISTING_WORKTREE
 	default:
 		return sessionv1.SessionType_SESSION_TYPE_UNSPECIFIED
+	}
+}
+
+// reviveOutcomeToProto converts session.ReviveOutcome to the proto ReviveOutcome enum.
+func reviveOutcomeToProto(outcome session.ReviveOutcome) sessionv1.ReviveOutcome {
+	switch outcome {
+	case session.ReviveOutcomeResumeLive:
+		return sessionv1.ReviveOutcome_REVIVE_OUTCOME_RESUME_LIVE
+	case session.ReviveOutcomeResumeRecovered:
+		return sessionv1.ReviveOutcome_REVIVE_OUTCOME_RESUME_RECOVERED
+	case session.ReviveOutcomeFreshExpected:
+		return sessionv1.ReviveOutcome_REVIVE_OUTCOME_FRESH_EXPECTED
+	case session.ReviveOutcomeFreshLostHistory:
+		return sessionv1.ReviveOutcome_REVIVE_OUTCOME_FRESH_LOST_HISTORY
+	default:
+		return sessionv1.ReviveOutcome_REVIVE_OUTCOME_UNSPECIFIED
 	}
 }
 
@@ -371,6 +475,13 @@ func ProtoToStatus(status sessionv1.SessionStatus) session.Status {
 		return session.Hibernated
 	case sessionv1.SessionStatus_SESSION_STATUS_RESTORING:
 		return session.Restoring
+	case sessionv1.SessionStatus_SESSION_STATUS_CRASHED:
+		// Collateral fix: this case was missing before session-retry-backoff
+		// touched this switch — a round-tripped CRASHED session silently fell
+		// to the default: below and reopened as Creating.
+		return session.Crashed
+	case sessionv1.SessionStatus_SESSION_STATUS_PERMANENTLY_FAILED:
+		return session.PermanentlyFailed
 	default:
 		return session.Creating // Default to Creating for unknown statuses
 	}
@@ -402,6 +513,24 @@ func instanceTypeToProto(instanceType session.InstanceType) sessionv1.InstanceTy
 	}
 }
 
+// checksToProto converts the itemized GitHub statusCheckRollup into proto GithubCheckItem messages.
+func checksToProto(checks []github.CheckItem) []*sessionv1.GithubCheckItem {
+	out := make([]*sessionv1.GithubCheckItem, len(checks))
+	for i, c := range checks {
+		out[i] = &sessionv1.GithubCheckItem{Name: c.Name, Context: c.Context, State: c.State, Status: c.Status, Conclusion: c.Conclusion}
+	}
+	return out
+}
+
+// reviewFeedbackToProto converts the itemized GitHub PR review list into proto GithubReviewFeedback messages.
+func reviewFeedbackToProto(reviews []github.ReviewItem) []*sessionv1.GithubReviewFeedback {
+	out := make([]*sessionv1.GithubReviewFeedback, len(reviews))
+	for i, r := range reviews {
+		out[i] = &sessionv1.GithubReviewFeedback{Author: r.Author, State: r.State, Body: r.Body}
+	}
+	return out
+}
+
 // externalMetadataToProto converts session.ExternalInstanceMetadata to proto ExternalInstanceMetadata.
 func externalMetadataToProto(metadata *session.ExternalInstanceMetadata) *sessionv1.ExternalInstanceMetadata {
 	if metadata == nil {
@@ -413,7 +542,7 @@ func externalMetadataToProto(metadata *session.ExternalInstanceMetadata) *sessio
 		TmuxSessionName: metadata.TmuxSessionName,
 		DiscoveredAt:    timestamppb.New(metadata.DiscoveredAt),
 		LastSeen:        timestamppb.New(metadata.LastSeen),
-		OriginalPid:     int32(metadata.OriginalPID),
+		OriginalPid:     int32(metadata.OriginalPID), //#nosec G115 -- OS PIDs are bounded well under int32 max
 		MuxSocketPath:   metadata.MuxSocketPath,
 		MuxEnabled:      metadata.MuxEnabled,
 		SourceTerminal:  metadata.SourceTerminal,

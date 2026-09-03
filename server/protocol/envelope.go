@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"math"
 )
 
 // Envelope represents a ConnectRPC envelope message with flags and data.
@@ -46,8 +47,18 @@ func ParseEnvelope(data []byte) (*Envelope, []byte, error) {
 
 // CreateEnvelope creates an envelope with the given flags and data.
 func CreateEnvelope(flags byte, data []byte) []byte {
+	if len(data) > math.MaxUint32 {
+		// In practice unreachable: no PTY output chunk, RPC response body, or
+		// session snapshot this server produces approaches 4 GiB. Silently
+		// truncating the uint32 length header while writing all of data
+		// would desync the receiver's framing (Length would no longer match
+		// Data), so failing loudly beats corrupting the wire protocol.
+		panic(fmt.Sprintf("protocol: envelope data too large to encode: %d bytes", len(data)))
+	}
+
 	envelope := make([]byte, 5+len(data))
 	envelope[0] = flags
+	// #nosec G115 -- bounds-checked above: the len(data) > math.MaxUint32 guard guarantees this fits in uint32
 	binary.BigEndian.PutUint32(envelope[1:5], uint32(len(data)))
 	copy(envelope[5:], data)
 	return envelope

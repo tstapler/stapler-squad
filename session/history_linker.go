@@ -4,10 +4,10 @@ import (
 	"context"
 	"math"
 	"os"
-	"path/filepath"
 	"time"
 
 	"github.com/linkdata/deadlock"
+	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/log"
 )
 
@@ -48,7 +48,8 @@ type HistoryLinker struct {
 }
 
 // NewHistoryLinkerFromRealInspector creates a HistoryLinker backed by the real
-// gopsutil-based process inspector and an fsnotify watcher on ~/.claude/projects/.
+// gopsutil-based process inspector and an fsnotify watcher on ~/.claude/projects/
+// (redirected into the isolated config dir under test isolation).
 // This is the production constructor; use NewHistoryLinker in tests.
 func NewHistoryLinkerFromRealInspector() *HistoryLinker {
 	detector := NewHistoryFileDetectorWithRealInspector()
@@ -62,7 +63,20 @@ func NewHistoryLinkerFromRealInspector() *HistoryLinker {
 			backoffs:  make(map[string]*sessionBackoff),
 		}
 	}
-	watchDir := filepath.Join(homeDir, ".claude", "projects")
+	// Under test isolation this resolves inside the isolated config dir rather
+	// than the operator's real ~/.claude/projects, so booting a real server in
+	// a test doesn't recursively watch that large tree. Same helper (and same
+	// directory) as the TokenStore/ArtifactExtractor side in
+	// server.BuildRuntimeDeps.
+	watchDir, err := config.ResolveClaudeHistoryDir(homeDir, config.IsIsolatedInstance())
+	if err != nil {
+		log.Warn("HistoryLinker: failed to resolve history watch dir, watcher disabled", "err", err)
+		return &HistoryLinker{
+			detector:  detector,
+			instances: make([]*Instance, 0),
+			backoffs:  make(map[string]*sessionBackoff),
+		}
+	}
 
 	// Build the linker first so the watcher callback can close over it.
 	hl := &HistoryLinker{
@@ -120,10 +134,20 @@ func (hl *HistoryLinker) SetInstances(instances []*Instance) {
 	hl.instances = instances
 }
 
-// AddInstance adds a single instance for monitoring.
+// AddInstance adds a single instance for monitoring. A no-op if an instance
+// with the same ID is already registered: callers may legitimately invoke
+// this more than once for the same instance (e.g. wireCallbacks runs on every
+// loadInstancesWithWiring call, including the ListSessions fallback), and an
+// unguarded append would leave duplicate entries in hl.instances, causing
+// correlateSession to run twice per poll tick for the same session.
 func (hl *HistoryLinker) AddInstance(instance *Instance) {
 	hl.mu.Lock()
 	defer hl.mu.Unlock()
+	for _, existing := range hl.instances {
+		if existing.MatchesID(instance.Title) {
+			return
+		}
+	}
 	hl.instances = append(hl.instances, instance)
 }
 
@@ -291,18 +315,21 @@ func (hl *HistoryLinker) correlateSession(inst *Instance, force bool) {
 	}
 
 	// SetHistoryInfo is idempotent: if UUID and path already match it returns early.
-	// Log only when we are actually updating a linked session's UUID (e.g., after /clear).
+	// Log only when we are actually updating a linked session's UUID (e.g., after /clear) —
+	// correlateSession runs on every poll/force-rescan, so an unconditional log here would
+	// re-announce the same unchanged link on every tick for every already-linked session.
 	if alreadyLinked {
 		cs := inst.GetClaudeSession()
 		if cs != nil && cs.ConversationUUID != info.ConversationUUID {
 			log.Info("HistoryLinker: updating session UUID after conversation change",
 				"session", inst.Title, "old_uuid", cs.ConversationUUID, "new_uuid", info.ConversationUUID)
+			log.ForSession(inst.Title).Info("UUID linked by HistoryLinker", "conv_uuid", info.ConversationUUID, "path", info.HistoryFilePath)
 		}
 	} else {
 		log.Info("HistoryLinker: linked session to conversation UUID",
 			"session", inst.Title, "conv_uuid", info.ConversationUUID)
+		log.ForSession(inst.Title).Info("UUID linked by HistoryLinker", "conv_uuid", info.ConversationUUID, "path", info.HistoryFilePath)
 	}
-	log.ForSession(inst.Title).Info("UUID linked by HistoryLinker", "conv_uuid", info.ConversationUUID, "path", info.HistoryFilePath)
 	inst.SetHistoryInfo(info.ConversationUUID, info.HistoryFilePath)
 }
 

@@ -5,12 +5,15 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/pkg/classifier"
@@ -59,7 +62,7 @@ type autoApprovalLogger interface {
 
 // headlessPoolApprover is the narrow interface ApprovalHandler needs from the headless pool.
 type headlessPoolApprover interface {
-	CallBlocking(ctx context.Context, key headless.FeatureKey, systemPrompt string, userPrompt string, opts headless.CallOptions) (string, float64, error)
+	CallBlocking(ctx context.Context, key headless.FeatureKey, systemPrompt string, userPrompt string, opts headless.CallOptions, sink headless.CostSink) (string, error)
 }
 
 // ApprovalHandler handles Claude Code HTTP hooks for PermissionRequest events.
@@ -78,11 +81,31 @@ type ApprovalHandler struct {
 	timeout             time.Duration               // default 4m; overridable in tests
 	headlessPool        headlessPoolApprover        // optional: LLM approval for autonomous sessions
 	autonomousChecker   func(string) bool           // optional: returns true if sessionID is an autonomous session
+	pollInterval        time.Duration               // PRStatusPoller's configured interval; used to bound CI-status staleness. Zero value (bypassing NewApprovalHandler) makes every CI status read as stale — always construct via NewApprovalHandler.
+	liveFinder          LiveInstanceFinder          // optional: resolves live in-memory Instance for CI status (not persisted — see PRStatusPoller)
+	slackNotifier       *SlackNotifier              // optional: notifies a configured Slack webhook about new pending approvals; concrete type (no interface) since both live in this package
+	dashboardBaseURLFn  func() string               // optional: lazily-read fallback for the Slack dashboard-link base URL, used only when cfg.Slack.DashboardBaseURL is unset. Mirrors ReactiveQueueManager.dashboardBaseURLFn exactly (server.go wires the same hookBaseURLFn into both).
 }
 
 // NewApprovalHandler creates a new ApprovalHandler.
 func NewApprovalHandler(store *ApprovalStore, storage *session.Storage, eventBus *events.EventBus) *ApprovalHandler {
-	return &ApprovalHandler{store: store, storage: storage, eventBus: eventBus, timeout: 4 * time.Minute}
+	return &ApprovalHandler{store: store, storage: storage, eventBus: eventBus, timeout: 4 * time.Minute, pollInterval: session.DefaultPRStatusPollerConfig().PollInterval}
+}
+
+// SetPollInterval overrides the interval used to bound CI-status staleness (Task 1.1.2b).
+// Callers should pass the live PRStatusPoller's configured interval so the guard can't
+// silently desync from the poller if it's ever tuned.
+func (h *ApprovalHandler) SetPollInterval(d time.Duration) {
+	h.pollInterval = d
+}
+
+// SetLiveInstanceFinder wires the live in-memory instance lookup used to populate
+// ClassificationContext.CIStatus. GitHubCheckConclusion/LastPRStatusCheck are not
+// persisted in the ent schema (see Storage.UpdateInstancePRStatus) — they only live on
+// the in-memory Instance the PRStatusPoller keeps fresh — so a *session.Storage lookup
+// cannot see them; this must be the live registry (typically *SessionService).
+func (h *ApprovalHandler) SetLiveInstanceFinder(f LiveInstanceFinder) {
+	h.liveFinder = f
 }
 
 // approvalTimeout returns the configured timeout, falling back to 4 minutes.
@@ -154,6 +177,33 @@ func (h *ApprovalHandler) SetHeadlessPool(pool headlessPoolApprover) {
 	h.headlessPool = pool
 }
 
+// SetSlackNotifier injects the Slack notifier used to notify a configured
+// webhook about new pending approvals (see broadcastApprovalNotification).
+// nil-safe: when never called, h.slackNotifier stays nil and Slack
+// notification is silently skipped — matching every other optional Set*
+// dependency in this file.
+func (h *ApprovalHandler) SetSlackNotifier(n *SlackNotifier) {
+	h.slackNotifier = n
+}
+
+// SetDashboardBaseURLFn wires the lazily-read dashboard-base-URL fallback
+// (see dashboardBaseURLFn's doc comment) used when building Slack "view in
+// dashboard" links for approval-pending notifications. nil-safe: when never
+// called, broadcastApprovalNotification falls back to whatever
+// cfg.Slack.DashboardBaseURL is (possibly empty, omitting the link).
+func (h *ApprovalHandler) SetDashboardBaseURLFn(fn func() string) {
+	h.dashboardBaseURLFn = fn
+}
+
+// SlackNotifierForTest returns the wired SlackNotifier instance. Exported
+// only so cross-package wiring regression tests (server package) can assert
+// pointer identity against the other consumers (ReactiveQueueManager,
+// SessionService) without restructuring production code — not intended for
+// any non-test caller.
+func (h *ApprovalHandler) SlackNotifierForTest() *SlackNotifier {
+	return h.slackNotifier
+}
+
 // SetAutonomousChecker injects a function that returns true when the given session ID is an
 // autonomous session. Injected from server.go to avoid a construction-time circular dependency.
 func (h *ApprovalHandler) SetAutonomousChecker(fn func(string) bool) {
@@ -222,7 +272,7 @@ func (h *ApprovalHandler) HandlePermissionRequest(w http.ResponseWriter, r *http
 				h.analyticsStore.RecordFromResult(sanitizedPayload, classifier.ClassificationResult{
 					Decision:  classifier.AutoDeny,
 					RiskLevel: classifier.RiskCritical,
-					RuleID:    "secret-scan",
+					RuleID:    classifier.RuleIDSecretScan,
 					RuleName:  "Plaintext Secret Detection",
 					Reason:    msg,
 				}, sessionID, "", 0)
@@ -232,6 +282,18 @@ func (h *ApprovalHandler) HandlePermissionRequest(w http.ResponseWriter, r *http
 		}
 	}
 
+	// escalation captures the classification result (or its domain-age synthetic equivalent)
+	// that led to this request being queued for manual review. Zero-valued (no-match) unless
+	// set below.
+	var escalation classifier.ClassificationResult
+
+	// classified is true only when escalation was genuinely assigned below (domain-age or a
+	// real classifier result). RiskLevel must never be read from escalation unless classified
+	// is true — escalation's zero value (classifier.RiskLow) is indistinguishable from a real
+	// Low risk, and reading it unconditionally would silently mislabel an unclassified/degraded
+	// request (e.g. h.classifier == nil) as safe. See pre-mortem.md Failure #1.
+	var classified bool
+
 	// Domain age check: if a Bash command is contacting a newly-registered domain,
 	// escalate immediately regardless of other rules.
 	if h.domainChecker != nil {
@@ -240,25 +302,30 @@ func (h *ApprovalHandler) HandlePermissionRequest(w http.ResponseWriter, r *http
 			for _, domain := range domains {
 				isNew, err := h.domainChecker.IsNewlyRegistered(r.Context(), domain)
 				if err != nil {
+					// Silenced on purpose: a single domain's check failing doesn't abort the
+					// whole request. But it means the reviewer sees whatever the classifier
+					// decides afterward (no-match/explicit-rule) with no indication a domain
+					// check was attempted and came back inconclusive for this domain.
 					log.Warn("[ApprovalHandler] domain age check error", "domain", domain, "err", err)
 					continue
 				}
 				if isNew {
 					threshDays := int(h.domainChecker.NewDomainThreshold().Hours() / 24)
 					reason := fmt.Sprintf("Domain %q was registered within the last %d days — possible phishing or supply-chain risk.", domain, threshDays)
-					log.ForSession(sessionID).Info("[ApprovalHandler] escalating — newly-registered domain", "tool", payload.ToolName, "domain", domain)
+					log.ForSession(sessionID).Info("[ApprovalHandler] escalating — newly-registered domain", "tool", payload.ToolName, "domain", domain, "escalation_category", "domain-age")
+					domainEscalation := classifier.ClassificationResult{
+						Decision:  classifier.Escalate,
+						RiskLevel: classifier.RiskHigh,
+						RuleID:    classifier.RuleIDNewDomainCheck,
+						RuleName:  "New Domain Check",
+						Reason:    reason,
+					}
 					if h.analyticsStore != nil {
-						h.analyticsStore.RecordFromResult(payload, classifier.ClassificationResult{
-							Decision:  classifier.Escalate,
-							RiskLevel: classifier.RiskHigh,
-							RuleID:    "new-domain-check",
-							RuleName:  "New Domain Check",
-							Reason:    reason,
-						}, sessionID, "", 0)
+						h.analyticsStore.RecordFromResult(payload, domainEscalation, sessionID, "", 0)
 					}
 					// Fall through to manual review queue (do NOT return here).
-					// The domain reason will appear in the pending approval context.
-					_ = reason // will be surfaced when the approval is shown in review queue
+					escalation = domainEscalation
+					classified = true
 					goto createApproval
 				}
 			}
@@ -280,11 +347,42 @@ func (h *ApprovalHandler) HandlePermissionRequest(w http.ResponseWriter, r *http
 	if h.classifier != nil {
 		start := time.Now()
 		classCtx := h.classifier.BuildContext(payload.Cwd)
+		if h.liveFinder != nil {
+			if inst := h.liveFinder.FindLiveInstance(sessionID); inst != nil {
+				// Read via Snapshot(), not raw fields: PRStatusPoller mutates these same
+				// fields on its own goroutine under inst.mu (session/instance.go's mu
+				// doc comment mandates Snapshot() for reads outside the actor).
+				ghInfo := inst.Snapshot().GitHub
+				if ghInfo.GitHubPRNumber > 0 {
+					classCtx.CIStatus = ghInfo.GitHubCheckConclusion
+					// Staleness guard (Task 1.1.2b): a cached conclusion older than 2x the
+					// poller's configured interval may no longer reflect the branch's real CI
+					// state. Treat it as unknown rather than risk gating an irreversible
+					// auto-approve (RequireCIPassing) on stale data.
+					if time.Since(ghInfo.LastPRStatusCheck) > 2*h.pollInterval {
+						classCtx.CIStatus = ""
+					}
+				}
+				// Independent of PR/CI state — populate whenever a live instance is
+				// found so MinSessionIdleMinutes rules can evaluate. Left at the Go
+				// zero value (0) when no live instance is found (fail-closed contract,
+				// see ClassificationContext.SessionIdleMinutes's doc comment).
+				classCtx.SessionIdleMinutes = int(inst.GetTimeSinceLastMeaningfulOutput().Minutes())
+			}
+		}
 		result := h.classifier.Classify(payload, classCtx)
 		durationMs := time.Since(start).Milliseconds()
 
 		if h.analyticsStore != nil {
-			h.analyticsStore.RecordFromResult(payload, result, sessionID, "", durationMs)
+			// Normalize RuleID the same way the default: branch below does before recording,
+			// so the analytics breakdown and the review-queue card agree on category for an
+			// unrecognized decision — result.RuleID is "" here (no rule lookup occurred), which
+			// would otherwise bucket as EscalationNoMatch instead of EscalationUnexpected.
+			recordResult := result
+			if result.Decision != classifier.AutoAllow && result.Decision != classifier.AutoDeny && result.Decision != classifier.Escalate {
+				recordResult.RuleID = classifier.RuleIDUnexpectedDecision
+			}
+			h.analyticsStore.RecordFromResult(payload, recordResult, sessionID, "", durationMs)
 		}
 
 		switch result.Decision {
@@ -308,7 +406,25 @@ func (h *ApprovalHandler) HandlePermissionRequest(w http.ResponseWriter, r *http
 			}
 			h.writeDecision(w, "deny", msg)
 			return
-			// Escalate: fall through to manual review queue
+		case classifier.Escalate:
+			escalation = result
+			classified = true
+			// Fall through to manual review queue (createApproval label below).
+		default:
+			// Unrecognized classifier.ClassificationDecision (e.g. a future 4th value). Fail safe
+			// toward manual review rather than silently falling through with escalation unset —
+			// this switch's missing-case behavior is exactly the bug this feature fixes; guard
+			// against it recurring for any future decision value.
+			log.Warn("[ApprovalHandler] unrecognized classifier decision, escalating for manual review", "decision", result.Decision)
+			// Pre-mortem P3: route through the synthetic RuleIDUnexpectedDecision sentinel so
+			// CategorizeEscalationRuleID buckets this as EscalationUnexpected, not EscalationNoMatch
+			// (result.RuleID is almost certainly "" here, since no rule lookup occurred) — an internal
+			// classifier bug must not silently render normal "no rule matched" copy or offer the
+			// Create Rule CTA as if this were a real coverage gap. Override RuleID before the
+			// assignment (not after) so escalation is never observably set without it.
+			result.RuleID = classifier.RuleIDUnexpectedDecision
+			escalation = result
+			classified = true
 		}
 	}
 
@@ -327,12 +443,13 @@ createApproval:
 		const approvalSystemPrompt = `You are a security reviewer for an autonomous coding session.
 Evaluate the requested tool call and decide if it is safe to approve.
 Reply with APPROVE: <reason> if safe, or DENY: <reason> if risky.`
-		resp, _, llmErr := h.headlessPool.CallBlocking(
+		resp, llmErr := h.headlessPool.CallBlocking(
 			r.Context(),
 			headless.FeatureKeyAutonomousApproval,
 			approvalSystemPrompt,
 			query,
 			headless.CallOptions{WorkDir: payload.Cwd},
+			session.CostSinkForSessionUUID(h.storage, sessionID),
 		)
 		if llmErr == nil {
 			resp = strings.TrimSpace(resp)
@@ -355,15 +472,22 @@ Reply with APPROVE: <reason> if safe, or DENY: <reason> if risky.`
 
 	// Create a pending approval record
 	approvalID := uuid.New().String()
+	riskLevel := ""
+	if classified {
+		riskLevel = riskLevelString(escalation.RiskLevel)
+	}
 	approval := &PendingApproval{
-		ID:              approvalID,
-		SessionID:       sessionID,
-		ClaudeSessionID: payload.SessionID,
-		ToolName:        payload.ToolName,
-		ToolInput:       payload.ToolInput,
-		Cwd:             payload.Cwd,
-		PermissionMode:  payload.PermissionMode,
-		CreatedAt:       time.Now(),
+		ID:                 approvalID,
+		SessionID:          sessionID,
+		ClaudeSessionID:    payload.SessionID,
+		ToolName:           payload.ToolName,
+		ToolInput:          payload.ToolInput,
+		Cwd:                payload.Cwd,
+		PermissionMode:     payload.PermissionMode,
+		CreatedAt:          time.Now(),
+		EscalationReason:   truncateEscalationReason(classifier.EscalationReasonText(escalation)),
+		EscalationCategory: string(classifier.CategorizeEscalationRuleID(escalation.RuleID)),
+		RiskLevel:          riskLevel,
 		// Use the configured timeout (default 4 minutes), strictly less than the 5-minute hook timeout.
 		ExpiresAt: time.Now().Add(h.approvalTimeout()),
 	}
@@ -464,6 +588,19 @@ func (h *ApprovalHandler) broadcastApprovalNotification(sessionID string, approv
 		metadata,
 	)
 	h.eventBus.Publish(event)
+
+	// Slack notification (Epic 1.3, Story 1.3.2): nil-guarded, matching every
+	// other optional Set* dependency in this file. NotifyApprovalPending
+	// performs its own dispatchAsync wrapping internally (Story 1.2.3's
+	// ownership model) — no separate goroutine needed at this call site.
+	if h.slackNotifier != nil {
+		cfg := config.LoadConfig()
+		dashboardURL := cfg.Slack.DashboardBaseURL
+		if dashboardURL == "" && h.dashboardBaseURLFn != nil {
+			dashboardURL = h.dashboardBaseURLFn()
+		}
+		h.slackNotifier.NotifyApprovalPending(context.Background(), cfg, approval, h.resolveSessionName(sessionID), dashboardURL)
+	}
 }
 
 // maxNotificationMessageLen is the maximum number of runes to include in a
@@ -500,6 +637,19 @@ func truncateString(s string, maxRunes int) string {
 		return s
 	}
 	return string(r[:maxRunes]) + "..."
+}
+
+// maxEscalationReasonLen bounds PendingApproval.EscalationReason. An explicit
+// rule's Reason is free text a rule author can set to any length, and
+// persistToDiskLocked re-marshals and writes ALL pending approvals to disk on
+// every single Create/Resolve while holding the write lock — an unbounded
+// string here would scale that cost with rule-author verbosity, not just
+// entry count.
+const maxEscalationReasonLen = 500
+
+// truncateEscalationReason caps s at maxEscalationReasonLen runes.
+func truncateEscalationReason(s string) string {
+	return truncateString(s, maxEscalationReasonLen)
 }
 
 // sanitizeNotificationText strips newlines and non-printable characters from
@@ -660,7 +810,7 @@ const (
 // InjectHookConfig below reflect whatever base URL is current at their point of use rather
 // than a value baked in at server- or package-construction time.
 func hookApprovalURL() string {
-	return hookEndpoints(hookBaseURLFn)[HookPermissionApproval]
+	return hookEndpoints(getHookBaseURLFn())[HookPermissionApproval]
 }
 
 // InjectHookConfig writes (or merges) the stapler-squad PermissionRequest HTTP hook
@@ -669,128 +819,298 @@ func hookApprovalURL() string {
 // If the file already contains a hook pointing to hookApprovalURL(), it is left unchanged.
 // If the file exists but lacks our hook, the hook is prepended to PermissionRequest.
 // If the file does not exist, it is created with just our hook config.
+//
+// Local-only: rootDir must be a path on THIS host (os.ReadFile/os.WriteFile).
+// For a remote session's rootDir (a path that only exists on the remote
+// host), use InjectHookConfigRemote instead -- calling this on a remote
+// path silently produces no hook at all (os.ReadFile treats the missing
+// local path as "file doesn't exist" and this then writes a settings file
+// nobody remote will ever read), which was the ssh-remote-workspaces Phase
+// 5 bug this pair of functions exists to fix. See ADR-003's addendum.
 func InjectHookConfig(rootDir, sessionTitle string) error {
 	claudeDir := filepath.Join(rootDir, ".claude")
 	settingsPath := filepath.Join(claudeDir, "settings.local.json")
+	// Serializes the read-merge-write sequence below against InjectHooksConfig and
+	// RemoveHooksConfig, which independently read-modify-write the same settingsPath —
+	// see settingsFileLocks' doc comment in mcp_injector.go for the lost-update hazard
+	// this closes.
+	defer lockSettingsPath(settingsPath)()
 
+	url := hookApprovalURL()
 	// Desired hook entry for this session.
 	// settings.local.json only supports "command" type hooks; use curl to POST to the approval URL.
 	curlCmd := fmt.Sprintf(
 		"curl -s --max-time %d -X POST '%s' -H 'Content-Type: application/json' -H 'X-CS-Session-ID: %s' -d @-",
-		hookTimeout, hookApprovalURL(), sessionTitle,
+		hookTimeout, url, sessionTitle,
 	)
-	entry := hookEntry{
-		Type:    "command",
-		Command: curlCmd,
-		Timeout: hookTimeout,
-	}
-	group := hookMatcherGroup{Hooks: []hookEntry{entry}}
+	entry := hookEntry{Type: "command", Command: curlCmd, Timeout: hookTimeout}
 
 	// Read existing settings (if any).
-	raw := map[string]json.RawMessage{}
+	// #nosec G304 -- settingsPath is rootDir/.claude/settings.local.json, where rootDir is
+	// the session's own worktree/directory (Instance.GetEffectiveRootDir()), established by
+	// this server's own session/worktree creation, never raw network/RPC input.
 	data, err := os.ReadFile(settingsPath)
 	if err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("read %s: %w", settingsPath, err)
 	}
-	if len(data) > 0 {
-		if err := json.Unmarshal(data, &raw); err != nil {
-			// Malformed JSON — attempt targeted repair before falling back to a fresh config.
-			log.Warn("[InjectHookConfig] invalid JSON, attempting repair", "path", settingsPath, "err", err)
-			repaired, repairErr := repairSettingsJSON(data)
-			if repairErr == nil {
-				log.Info("[InjectHookConfig] repaired settings file", "path", settingsPath)
-				_ = json.Unmarshal(repaired, &raw) // best-effort; raw may still be partial
-			} else {
-				log.Warn("[InjectHookConfig] could not repair settings, resetting to minimal config", "path", settingsPath, "err", repairErr)
-				raw = map[string]json.RawMessage{}
-			}
-		}
+
+	out, alreadyPresent, err := mergeHookEntryIntoSettings(data, entry, func(command string) bool {
+		return hookCommandReferencesURL(command, url)
+	})
+	if err != nil {
+		return err
+	}
+	if alreadyPresent {
+		log.Debug("[InjectHookConfig] hook already present", "path", settingsPath)
+		return nil
 	}
 
-	// Check whether our command-type hook is already present.
-	if hooksRaw, ok := raw["hooks"]; ok {
-		var hooks map[string]json.RawMessage
-		if err := json.Unmarshal(hooksRaw, &hooks); err == nil {
-			if prRaw, ok := hooks["PermissionRequest"]; ok {
-				var groups []hookMatcherGroup
-				if err := json.Unmarshal(prRaw, &groups); err == nil {
-					for _, g := range groups {
-						for _, h := range g.Hooks {
-							if h.Type == "command" && strings.Contains(h.Command, hookApprovalURL()) {
-								log.Debug("[InjectHookConfig] hook already present", "path", settingsPath)
-								return nil
-							}
-						}
-					}
-				}
-			}
-		}
+	// Re-parse out back into a raw map so this shares writeSettingsAtomic's
+	// unique-tmp-filename write with hook_injector.go's settings.local.json
+	// writers, instead of the fixed settingsPath+".tmp" name this used to write via a
+	// direct os.WriteFile: two concurrent writers of the same rootDir's settings.local.json
+	// (e.g. this and InjectHooksConfig racing on session creation) could
+	// clobber each other's temp file mid-write and rename in a corrupt result. See
+	// writeSettingsAtomic's doc comment for the identical hazard it already fixes.
+	raw := map[string]json.RawMessage{}
+	if err := json.Unmarshal(out, &raw); err != nil {
+		return fmt.Errorf("re-parse merged settings: %w", err)
+	}
+	if err := writeSettingsAtomic(settingsPath, claudeDir, raw); err != nil {
+		return err
+	}
+	log.Info("[InjectHookConfig] wrote hook config", "path", settingsPath, "session", sessionTitle)
+	return nil
+}
+
+// mergeHookEntryIntoSettings computes the merged settings.local.json bytes
+// for a single PermissionRequest hook entry, given existingData (the raw
+// bytes currently on disk/remote-host, or nil/empty if the file doesn't
+// exist yet) and the pre-built entry to inject. alreadyPresentFn decides
+// whether an existing command-type hook already matches entry -- callers
+// pass a URL-based match (hookCommandReferencesURL) for the local HTTP path
+// or a socket-based match (hookCommandTargetsSocket) for the remote path,
+// since the two paths generate differently-shaped commands for the same
+// logical hook.
+//
+// Extracted out of InjectHookConfig so InjectHookConfig (local, writes via
+// os.WriteFile) and InjectHookConfigRemote (writes via a piped `sh -c` over
+// tmux.CommandRunner) share exactly ONE implementation of the merge/repair
+// logic rather than two that could silently drift -- ssh-remote-workspaces
+// Phase 5 correction, see ADR-003's addendum.
+//
+// Returns the final, fully-marshaled settings JSON (ready to write
+// verbatim) and whether entry's hook was already present (in which case out
+// is nil and the caller should skip writing anything).
+func mergeHookEntryIntoSettings(existingData []byte, entry hookEntry, alreadyPresentFn func(command string) bool) (out []byte, alreadyPresent bool, err error) {
+	raw := parseSettingsWithRepair(existingData, "mergeHookEntryIntoSettings")
+
+	existingGroups := permissionRequestGroupsFromSettings(raw)
+	if hookAlreadyPresentInGroups(existingGroups, alreadyPresentFn) {
+		return nil, true, nil
 	}
 
-	// Merge: prepend our group to PermissionRequest hooks.
-	// Also remove any old http-type entries pointing to our URL (migration from old format).
-	var prGroups []hookMatcherGroup
-	if hooksRaw, ok := raw["hooks"]; ok {
-		var hooks map[string]json.RawMessage
-		if err := json.Unmarshal(hooksRaw, &hooks); err == nil {
-			if prRaw, ok := hooks["PermissionRequest"]; ok {
-				var existingGroups []hookMatcherGroup
-				if err := json.Unmarshal(prRaw, &existingGroups); err == nil {
-					for _, g := range existingGroups {
-						// Strip out any old http-type hooks pointing to our URL.
-						filtered := g.Hooks[:0]
-						for _, h := range g.Hooks {
-							if h.URL != hookApprovalURL() {
-								filtered = append(filtered, h)
-							}
-						}
-						if len(filtered) > 0 {
-							g.Hooks = filtered
-							prGroups = append(prGroups, g)
-						}
-					}
-				}
-			}
-		}
-	}
-	prGroups = append([]hookMatcherGroup{group}, prGroups...)
+	prGroups := mergePermissionRequestGroups(existingGroups, entry)
 
-	// Rebuild hooks object.
 	hooksMap := map[string]json.RawMessage{}
 	if hooksRaw, ok := raw["hooks"]; ok {
 		_ = json.Unmarshal(hooksRaw, &hooksMap)
 	}
 	prJSON, err := json.Marshal(prGroups)
 	if err != nil {
-		return fmt.Errorf("marshal PermissionRequest hooks: %w", err)
+		return nil, false, fmt.Errorf("marshal PermissionRequest hooks: %w", err)
 	}
 	hooksMap["PermissionRequest"] = json.RawMessage(prJSON)
 
 	hooksJSON, err := json.Marshal(hooksMap)
 	if err != nil {
-		return fmt.Errorf("marshal hooks map: %w", err)
+		return nil, false, fmt.Errorf("marshal hooks map: %w", err)
 	}
 	raw["hooks"] = json.RawMessage(hooksJSON)
 
-	// Write back with indentation.
-	out, err := json.MarshalIndent(raw, "", "  ")
+	out, err = json.MarshalIndent(raw, "", "  ")
 	if err != nil {
-		return fmt.Errorf("marshal settings: %w", err)
+		return nil, false, fmt.Errorf("marshal settings: %w", err)
 	}
-	if err := os.MkdirAll(claudeDir, 0o755); err != nil {
-		return fmt.Errorf("create .claude dir: %w", err)
+	return out, false, nil
+}
+
+// parseSettingsWithRepair unmarshals existingData as a settings.local.json top-level map,
+// attempting repairSettingsJSON's targeted fix for common corruption before falling back to a
+// fresh, empty config. logPrefix names the caller in the resulting log lines (mirrors
+// InjectHooksConfig's own identical repair step in hook_injector.go's
+// readExistingHooksSettings -- kept as two call sites, not a shared helper, since one operates
+// on a file path and the other on already-read bytes from a remote host).
+func parseSettingsWithRepair(existingData []byte, logPrefix string) map[string]json.RawMessage {
+	raw := map[string]json.RawMessage{}
+	if len(existingData) == 0 {
+		return raw
 	}
-	// Write atomically via temp file to avoid partial writes corrupting the file.
-	tmpPath := settingsPath + ".tmp"
-	if err := os.WriteFile(tmpPath, out, 0o644); err != nil {
-		return fmt.Errorf("write temp %s: %w", tmpPath, err)
+	if err := json.Unmarshal(existingData, &raw); err != nil {
+		log.Warn("["+logPrefix+"] invalid JSON, attempting repair", "err", err)
+		repaired, repairErr := repairSettingsJSON(existingData)
+		if repairErr != nil {
+			log.Warn("["+logPrefix+"] could not repair settings, resetting to minimal config", "err", repairErr)
+			return map[string]json.RawMessage{}
+		}
+		log.Info("[" + logPrefix + "] repaired settings file")
+		_ = json.Unmarshal(repaired, &raw) // best-effort; raw may still be partial
 	}
-	if err := os.Rename(tmpPath, settingsPath); err != nil {
-		os.Remove(tmpPath)
-		return fmt.Errorf("rename %s: %w", tmpPath, err)
+	return raw
+}
+
+// permissionRequestGroupsFromSettings extracts raw's "hooks" -> "PermissionRequest"
+// hookMatcherGroup list, returning nil (not an error) if either level is absent or malformed --
+// every caller already treats "no existing entries" and "couldn't parse existing entries"
+// identically.
+func permissionRequestGroupsFromSettings(raw map[string]json.RawMessage) []hookMatcherGroup {
+	hooksRaw, ok := raw["hooks"]
+	if !ok {
+		return nil
 	}
-	log.Info("[InjectHookConfig] wrote hook config", "path", settingsPath, "session", sessionTitle)
+	var hooks map[string]json.RawMessage
+	if err := json.Unmarshal(hooksRaw, &hooks); err != nil {
+		return nil
+	}
+	prRaw, ok := hooks["PermissionRequest"]
+	if !ok {
+		return nil
+	}
+	var groups []hookMatcherGroup
+	_ = json.Unmarshal(prRaw, &groups)
+	return groups
+}
+
+// hookAlreadyPresentInGroups reports whether any command-type hook in groups matches
+// alreadyPresentFn.
+func hookAlreadyPresentInGroups(groups []hookMatcherGroup, alreadyPresentFn func(command string) bool) bool {
+	for _, g := range groups {
+		for _, h := range g.Hooks {
+			if h.Type == "command" && alreadyPresentFn(h.Command) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// mergePermissionRequestGroups prepends a group containing entry ahead of existingGroups, while
+// migrating away old http-type entries that point at our own URL (hookApprovalURL()) -- a group
+// left with zero hooks after that filtering is dropped entirely rather than kept empty.
+func mergePermissionRequestGroups(existingGroups []hookMatcherGroup, entry hookEntry) []hookMatcherGroup {
+	group := hookMatcherGroup{Hooks: []hookEntry{entry}}
+	var kept []hookMatcherGroup
+	for _, g := range existingGroups {
+		filtered := g.Hooks[:0]
+		for _, h := range g.Hooks {
+			if h.URL != hookApprovalURL() {
+				filtered = append(filtered, h)
+			}
+		}
+		if len(filtered) > 0 {
+			g.Hooks = filtered
+			kept = append(kept, g)
+		}
+	}
+	return append([]hookMatcherGroup{group}, kept...)
+}
+
+// InjectHookConfigRemote is InjectHookConfig's remote-host counterpart
+// (ssh-remote-workspaces Phase 5, ADR-003): it reads, merges, and writes
+// back <rootDir>/.claude/settings.local.json on the OTHER end of runner
+// instead of this process's local filesystem, and routes the generated
+// PermissionRequest hook at target's Unix socket (via
+// remoteApprovalHookCommand's socat pipeline, the same mechanism
+// InjectHooksConfig's WithRemoteHookTarget option already builds for the
+// plural entry point) instead of hookApprovalURL()'s HTTP endpoint --
+// curl-over-HTTP can never reach this process from a different host the way
+// it can from rootDir on this same machine.
+//
+// rootDir is the session's remote-host working-directory root (its
+// worktree path on the remote host, e.g. instance.GetEffectiveRootDir());
+// sessionID is used only for log messages here (the X-CS-Session-ID value
+// actually delivered to ApprovalHandler comes from RemoteApprovalRelayTarget.
+// StableSessionID, embedded by the relay itself, not from this function).
+func InjectHookConfigRemote(ctx context.Context, runner tmux.CommandRunner, rootDir, sessionID string, target RemoteHookTarget) error {
+	claudeDir := path.Join(rootDir, ".claude")
+	settingsPath := path.Join(claudeDir, "settings.local.json")
+
+	// Read existing settings: empty output, no error, if the file doesn't exist yet (mirrors
+	// os.ReadFile+os.IsNotExist's "missing means empty" semantics) -- but unlike an
+	// unconditional `cat ... 2>/dev/null || true`, a file that DOES exist but can't be read
+	// (permission denied, etc.) still surfaces as a real error here rather than being silently
+	// treated as empty and then clobbered by the write below. `[ -e path ]` gates whether cat
+	// runs at all; if it does, cat's own exit code is the script's exit code (the last command
+	// in an `sh -c` script determines its overall status), which runner.Run reports as err.
+	readScript := "if [ -e " + posixShellQuoteRemote(settingsPath) + " ]; then cat " + posixShellQuoteRemote(settingsPath) + "; fi"
+	data, err := runner.Run(ctx, "", "sh", "-c", readScript)
+	if err != nil {
+		return fmt.Errorf("read remote %s: %w", settingsPath, err)
+	}
+
+	curlCmd := remoteApprovalHookCommand(target)
+	entry := hookEntry{Type: "command", Command: curlCmd, Timeout: hookTimeout}
+
+	out, alreadyPresent, err := mergeHookEntryIntoSettings(data, entry, func(command string) bool {
+		return hookCommandTargetsSocket(command, target.SocketPath)
+	})
+	if err != nil {
+		return err
+	}
+	if alreadyPresent {
+		log.Debug("[InjectHookConfigRemote] hook already present", "path", settingsPath, "session", sessionID)
+		return nil
+	}
+
+	writeScript := "mkdir -p " + posixShellQuoteRemote(claudeDir) + " && cat > " + posixShellQuoteRemote(settingsPath)
+	stdin, stdout, wait, err := runner.Start(ctx, "", "sh", "-c", writeScript)
+	if err != nil {
+		return fmt.Errorf("start remote write for %s: %w", settingsPath, err)
+	}
+	// wait() must run on every exit path once Start has succeeded -- per
+	// SSHRunner.Start's doc comment, skipping it leaks the connection pool's
+	// reference count (acquire/Release never balance) and leaves the remote
+	// session/channel open. waited tracks whether the explicit call below
+	// (the happy path, which also surfaces the remote script's real exit
+	// error) already ran it, so this deferred call is purely a safety net
+	// for an earlier return -- a stdin.Write/Close failure -- and never
+	// double-invokes wait() on the same path.
+	waited := false
+	defer func() {
+		if !waited {
+			_ = wait()
+		}
+	}()
+	if _, err := stdin.Write(out); err != nil {
+		_ = stdin.Close()
+		return fmt.Errorf("write remote settings %s: %w", settingsPath, err)
+	}
+	if err := stdin.Close(); err != nil {
+		return fmt.Errorf("close remote settings stdin for %s: %w", settingsPath, err)
+	}
+	if stdout != nil {
+		_, _ = io.Copy(io.Discard, stdout) // drain, best-effort; the script has no meaningful stdout
+	}
+	waited = true
+	if err := wait(); err != nil {
+		return fmt.Errorf("remote write %s failed: %w", settingsPath, err)
+	}
+	log.Info("[InjectHookConfigRemote] wrote hook config", "path", settingsPath, "session", sessionID)
 	return nil
+}
+
+// posixShellQuoteRemote POSIX-single-quotes s so it survives the remote
+// `sh -c` scripts InjectHookConfigRemote builds, unmodified regardless of
+// embedded spaces or shell metacharacters. Package-local rather than
+// exporting session/git's equivalent posixShellQuote (a different package)
+// or session/tmux's unexported shellQuote (also a different package, and
+// itself unexported there) -- same three-line escaping strategy (close
+// quote, literal quote, reopen quote), independently duplicated because
+// it's not worth promoting to a shared export for one caller on each side,
+// per session/git/remote_worktree.go's own posixShellQuote doc comment
+// making the identical call.
+func posixShellQuoteRemote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'"'"'`) + "'"
 }
 
 // repairSettingsJSON attempts to fix common JSON syntax errors in Claude settings files.

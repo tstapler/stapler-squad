@@ -206,3 +206,22 @@ export function createWatchTransport(opt: ConnectTransportOptions): Transport {
     },
   };
 }
+
+/**
+ * Selects the transport used by the three session/review-queue watch hooks.
+ *
+ * Native ConnectRPC streaming only helps over a real HTTP/2 connection —
+ * that's the TLS remote-access listener (:8444) only. No shipping browser
+ * supports cleartext HTTP/2, so on the plain :8543 dev listener native
+ * streaming would silently stay on HTTP/1.1 and hold a long-lived fetch()
+ * open, reintroducing the exact browser connection-slot problem
+ * StreamingWSBridge exists to avoid. Gate on baseUrl, not just the flag.
+ */
+export function createSessionWatchTransport(opt: ConnectTransportOptions): Transport {
+  const nativeStreamingEnabled =
+    process.env.NEXT_PUBLIC_CONNECTRPC_NATIVE_STREAMING === "true";
+  if (nativeStreamingEnabled && opt.baseUrl.startsWith("https://")) {
+    return createConnectTransport(opt);
+  }
+  return createWatchTransport(opt);
+}

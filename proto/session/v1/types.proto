@@ -237,6 +237,82 @@ message Session {
   // when there's no GitHub remote). Sessions sharing this key are workspace peers. Empty
   // when neither GitHub info nor a repo path could be determined (e.g. a bare one-off session).
   string workspace_key = 71;
+
+  // Reason the session's pane crashed. Only meaningful when status ==
+  // SESSION_STATUS_CRASHED. Empty when the session has never crashed.
+  string exit_reason = 72;
+
+  // User-authored free-form markdown note attached to this session.
+  string note = 73;
+
+  // auto_approve injects a per-agent CLI flag that skips permission/approval
+  // prompts entirely (e.g. --dangerously-skip-permissions for Claude Code).
+  // Independent of auto_yes — see auto_yes's own comment for the distinction.
+  bool auto_approve = 74;
+
+  // Count of active background agents/shells/monitors from the WaitingForAgent detector.
+  // Only meaningful when detected_status == DETECTED_STATUS_WAITING_FOR_AGENT; 0 otherwise.
+  int32 subagent_count = 75;
+
+  // Name of the configured remote (session.v1.RemoteConfigProto.name, see
+  // remote.proto) this session's ExecutionTarget is running on. Empty for a
+  // local session. Derived live from the in-memory session.Instance.
+  // ExecutionTarget at read time (ssh-remote-workspaces Epic 6.2's
+  // SessionCard host badge) -- NOT persisted, so it reverts to empty across
+  // a server restart until the session is next resumed (ExecutionTarget
+  // itself is `json:"-"`, matching every other execution-target-derived
+  // read in this codebase; see session/execution_target.go).
+  string remote_name = 76;
+
+  // Cached signal for whether the branch has commits ahead of its base — used to
+  // pre-emptively disable the "Create PR" trigger (AC6), refreshed on the same
+  // cadence as diff_stats, not computed synchronously per-request.
+  bool has_commits_ahead = 77;
+
+  // Outcome of the most recent start/cold-restore decision. See ReviveOutcome.
+  ReviveOutcome revive_outcome = 78;
+
+  // Empty unless this session was created via Restart-with-Summary.
+  string restarted_from_session_id = 79;
+
+  // Itemized statusCheckRollup from the last successful PR-status poll.
+  repeated GithubCheckItem github_checks = 80;
+
+  // Itemized review list (author/state/body) from the last successful poll.
+  repeated GithubReviewFeedback github_review_feedback = 81;
+
+  // GitHub's own mergeable signal: "mergeable"/"conflicting"/"unknown".
+  string github_mergeable = 82;
+
+  // Number of automated retry attempts consumed in the current failure
+  // episode (session-retry-backoff). 0 means no retry has occurred yet.
+  int32 retry_attempt = 83;
+  // The policy-resolved cap on retry_attempt, snapshotted at driver start.
+  int32 retry_max_attempts = 84;
+  // Most recent automated-retry failure reason: "crashed", "stalled", or
+  // "tmux_exited". Empty if no retry has occurred yet.
+  string last_failure_reason = 85;
+  // When the next backed-off automated restart is due. Unset if no retry is
+  // currently pending.
+  google.protobuf.Timestamp next_retry_at = 86;
+  // Reason + timestamp per past automated or manual retry attempt, newest
+  // last, capped at 10 entries.
+  repeated RetryAttemptRecord retry_history = 87;
+
+  // Human-readable reason the async creation pipeline (Background Resolution
+  // Pipeline) failed. Only meaningful when status == SESSION_STATUS_FAILED;
+  // empty otherwise. One of "GitHubResolutionError", "StartupError", "Stale",
+  // or "Cancelled" (see session.Instance.FailureReason and ADR-001) — the
+  // client maps these to reason-specific copy for the Failed-state card and
+  // failure toast rather than displaying the raw string.
+  string failure_reason = 88;
+}
+
+// RetryAttemptRecord is one entry in Session.retry_history.
+message RetryAttemptRecord {
+  int32 attempt = 1;
+  string reason = 2;
+  google.protobuf.Timestamp timestamp = 3;
 }
 
 // SessionArtifacts holds structured artifacts extracted from the session's
@@ -348,6 +424,22 @@ enum SessionStatus {
   // Session is being restored from a previous run (transient startup state).
   // Never persisted to the database. Transitions to ACTIVE or CREATING on completion.
   SESSION_STATUS_RESTORING = 9;
+  // Session's tmux pane exited abnormally (non-zero exit code or signal) and was
+  // detected via remain-on-exit polling, distinct from a normal STOPPED
+  // completion. Not auto-recovered; requires an explicit resume (see
+  // ResumeCrashedSession).
+  SESSION_STATUS_CRASHED = 10;
+  // Session's configurable crash/stall retry policy (session-retry-backoff)
+  // exhausted its attempt budget, or the failure reason wasn't eligible for
+  // retry at all. Terminal state pending human action via "Retry now"
+  // (RetrySession RPC) — unlike STOPPED, not auto-revived by reconciliation.
+  SESSION_STATUS_PERMANENTLY_FAILED = 11;
+  // Session's async creation pipeline (Background Resolution Pipeline) failed
+  // before the session ever reached ACTIVE. Non-terminal: distinct from
+  // CRASHED (a previously-ACTIVE session whose process later exited
+  // abnormally) — a FAILED session can be retried back to CREATING. See
+  // ADR-001.
+  SESSION_STATUS_FAILED = 12;
 }
 
 // SessionType determines the session workflow.
@@ -390,6 +482,27 @@ enum DetectedStatus {
   DETECTED_STATUS_UNKNOWN           = 9;
   DETECTED_STATUS_READY             = 10;
   DETECTED_STATUS_WAITING_FOR_AGENT = 11;
+  // Claude is actively compacting/summarizing conversation history (distinct
+  // from the "N% until auto-compact" approaching indicator).
+  DETECTED_STATUS_COMPACTING = 12;
+}
+
+// ReviveOutcome records the outcome of the most recent cold-restore decision
+// (session-revive-uuid-loss AC3): whether the session resumed its previous
+// conversation, and if not, whether that was expected (genuinely no prior
+// history) or an unexpected loss (a conversation existed but could not be
+// recovered from disk).
+enum ReviveOutcome {
+  REVIVE_OUTCOME_UNSPECIFIED = 0;
+  // Had a conversation UUID already in memory; no recovery needed.
+  REVIVE_OUTCOME_RESUME_LIVE = 1;
+  // No UUID in memory, but disk-based recovery found one before launch.
+  REVIVE_OUTCOME_RESUME_RECOVERED = 2;
+  // Started fresh with no prior conversation history to lose.
+  REVIVE_OUTCOME_FRESH_EXPECTED = 3;
+  // Started fresh even though this session previously had captured
+  // conversation history — recovery ran and found nothing.
+  REVIVE_OUTCOME_FRESH_LOST_HISTORY = 4;
 }
 
 // WorkingState represents the active-work status of a session for review queue filtering.
@@ -431,6 +544,9 @@ enum SubStatus {
   SUB_STATUS_SUCCESS = 9;
   // Claude is waiting for one or more background agents to finish (e.g. "✻ Waiting for 2 background agents").
   SUB_STATUS_WAITING_FOR_AGENT = 10;
+  // Claude is actively compacting/summarizing conversation history (distinct
+  // from the "N% until auto-compact" approaching indicator).
+  SUB_STATUS_COMPACTING = 11;
 }
 
 // RateLimitState indicates whether the session is experiencing rate limiting.
@@ -619,6 +735,11 @@ message ReviewItem {
   // was enqueued. Used by the frontend deriveWorkingState() utility to compute
   // the effective WorkingState without relying on the deprecated working_state field.
   SubStatus sub_status = 21;
+
+  // Cached signal for whether the branch has commits ahead of its base — used
+  // to pre-emptively disable the "Create PR" trigger in the review queue
+  // (mirrors Session.has_commits_ahead), not computed synchronously per-request.
+  bool has_commits_ahead = 22;
 }
 
 // Priority levels for review queue items (highest to lowest urgency).
@@ -711,10 +832,32 @@ message PRInfo {
   google.protobuf.Timestamp updated_at = 16;
 }
 
+// GithubCheckItem is one itemized CI check from a PR's statusCheckRollup.
+// `state` is the legacy Commit Status API's value; `status`/`conclusion` come
+// from the newer Checks API and may be empty for a legacy-API item.
+message GithubCheckItem {
+  string name = 1;
+  string context = 2;
+  string state = 3;
+  string status = 4;
+  string conclusion = 5;
+}
+
+// GithubReviewFeedback is one PR review — the data github_approved_count/
+// github_changes_req_count (below) collapse into counts; this carries the
+// reviewer's stated reason (`body`) alongside who reviewed and their verdict.
+message GithubReviewFeedback {
+  string author = 1;
+  string state = 2;
+  string body = 3;
+}
+
 // PRComment represents a comment on a GitHub pull request.
 message PRComment {
-  // Comment ID.
-  int32 id = 1;
+  // Comment ID. int64, not int32: GitHub's own comment IDs already exceed
+  // int32 range in practice (observed values over 5 billion as of 2026-09),
+  // so int32 here would silently truncate/wrap a real ID.
+  int64 id = 1;
 
   // Comment author username.
   string author = 2;
@@ -874,6 +1017,26 @@ message FileChange {
   int32 deletions = 6;
 }
 
+// ShippedCommit is one commit. Shared by VCSStatus.commits (below — a live
+// session's unshipped-vs-base commits) and BacklogItemShipStatus.commits
+// (backlog.proto — confirmed-merged commits); relocated here so both share
+// one definition instead of two independently-maintained copies.
+message ShippedCommit {
+  string sha = 1;
+  string summary = 2; // first line of the commit message
+  string author_name = 3;
+  google.protobuf.Timestamp authored_at = 4;
+}
+
+// AggregateDiffStat is the files-changed/additions/deletions summary for a
+// branch's range vs. its base — a DiffShortstat-equivalent. Maps to
+// git.AggregateDiffStat in Go.
+message AggregateDiffStat {
+  int32 files_changed = 1;
+  int32 additions = 2;
+  int32 deletions = 3;
+}
+
 // VCSStatus represents the current status of the version control system
 message VCSStatus {
   // VCS type (git, jujutsu)
@@ -923,6 +1086,28 @@ message VCSStatus {
 
   // Conflict files list
   repeated FileChange conflict_files = 16;
+
+  // Commits lists the branch's commits not yet on its recorded base (newest first).
+  // Empty for Jujutsu sessions or when no base SHA is recorded.
+  repeated ShippedCommit commits = 17;
+
+  // True when `commits` was capped before reaching the branch's full unshipped
+  // commit count (see session/git.ListShippedCommits's cap).
+  bool commits_truncated = 18;
+
+  // When this VCSStatus was computed — the local-git-status cache's timestamp,
+  // independent of any GitHub PR-status staleness (see Session.last_pr_status_check).
+  google.protobuf.Timestamp status_as_of = 19;
+
+  // The branch's total change size vs. its recorded base (files/+/-), independent
+  // of the working-tree file lists above — populated even when the working tree is
+  // fully clean. Unset when no base SHA is recorded or the computation failed.
+  AggregateDiffStat aggregate_diff_stat = 20;
+
+  // True when a commit-list fetch was attempted but failed or timed out —
+  // distinguishes "computation failed" from "genuinely zero commits" so the
+  // frontend doesn't render a failure as a silent empty state.
+  bool commits_unavailable = 21;
 }
 
 // WorkspaceSwitchType defines the type of workspace switch operation
@@ -1058,6 +1243,10 @@ message PendingApprovalProto {
 
   // Seconds remaining before expiry (convenience field for countdown timers).
   int32 seconds_remaining = 9;
+
+  // Classifier-assigned risk level ("low"/"medium"/"high"/"critical"), captured once at
+  // creation time. Empty for approvals that predate this field.
+  string risk_level = 10;
 }
 
 // ============================================================================
@@ -1102,6 +1291,13 @@ message ApprovalRuleProto {
   // tool_category matches against classifier.CategorizeToolName() result.
   // Use one of: "builtin", "builtin-agent", "mcp", "mcp-read", "mcp-write".
   string          tool_category           = 28;
+  // require_ci_passing, when true, only matches when the requesting session's GitHub
+  // CI check conclusion is "success". Combinable (AND) with all other conditions.
+  bool            require_ci_passing      = 29;
+  // min_session_idle_minutes, when > 0, only matches if the requesting session has
+  // been idle >= N minutes since its last meaningful output. 0 = condition not
+  // applied. Combinable (AND) with all other conditions.
+  int32 min_session_idle_minutes = 30;
 }
 
 // AnalyticsSummaryProto aggregates classification decisions over a time window.
@@ -1131,6 +1327,13 @@ message AnalyticsSummaryProto {
   // Full (program, subcommand) distribution for drill-down analysis.
   // Not truncated to top-N — use to investigate specific programs like "gh" or "sed".
   repeated SubcommandStatProto command_subcommand_stats = 16;
+  // Escalation-reason breakdown: counts per category ("no-match", "explicit-rule",
+  // "domain-age", "secret-scan", "unclassifiable") — see classifier.EscalationCategory.
+  map<string, int32> escalation_reason_counts = 17;
+  // Risk-level breakdown: counts per classifier.RiskLevel string ("low"/"medium"/"high"/
+  // "critical"), scoped to escalated decisions only (matching escalation_reason_counts'
+  // scope) so both tables share the same denominator.
+  map<string, int32> risk_level_counts = 18;
 }
 
 message ToolStatProto {
@@ -1321,6 +1524,15 @@ enum ScanStatus {
   SCAN_STATUS_TIMEOUT     = 2;
   SCAN_STATUS_PERMISSION  = 3;
   SCAN_STATUS_ERROR       = 4;
+}
+
+// SessionSummaryStatus indicates the generation state of a session completion summary.
+enum SessionSummaryStatus {
+  SESSION_SUMMARY_STATUS_UNSPECIFIED = 0;
+  SESSION_SUMMARY_STATUS_PENDING     = 1;
+  SESSION_SUMMARY_STATUS_GENERATING  = 2;
+  SESSION_SUMMARY_STATUS_READY       = 3;
+  SESSION_SUMMARY_STATUS_ERROR       = 4;
 }
 
 // UnfinishedWorktree represents a single git worktree that has unfinished work.

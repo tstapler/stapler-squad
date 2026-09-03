@@ -90,8 +90,8 @@ export function ApprovalPanel({ sessionId, sessionTitle, onResolved }: ApprovalP
             <ApprovalCard
               key={approval.id}
               approval={approval}
-              onApprove={() => approve(approval.id)}
-              onDeny={() => deny(approval.id)}
+              onApprove={() => { approve(approval.id).catch(console.error); }}
+              onDeny={() => { deny(approval.id).catch(console.error); }}
               sessionTitle={sessionTitle}
             />
           ))
