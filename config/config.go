@@ -1495,6 +1495,11 @@ func (c *Config) SlackSigningSecretOverride() string {
 	return c.slackSigningSecretOverride
 }
 
+// FeaturePiSupport gates pi-coding-agent-specific surfaces (program picker entry,
+// resume-flag injection, approval-extension parity) behind an explicit opt-in.
+// See project_plans/pi-support/implementation/plan.md, Epic 2.1.
+const FeaturePiSupport = "pi-support"
+
 // GetFeatureFlag returns the persisted enabled state of the named feature flag.
 // Absent key returns false — all feature flags default to disabled.
 // Currently recognized flags:
@@ -1506,6 +1511,7 @@ func (c *Config) SlackSigningSecretOverride() string {
 //	  item, instead of waiting for PRStatusPoller's next tick. Independently toggleable from
 //	  "webhook_triggers", but has no effect unless "webhook_triggers" is also enabled (that
 //	  flag gates whether the route is registered at all).
+//	"pi-support" (FeaturePiSupport) — pi-coding-agent support, off by default.
 func (c *Config) GetFeatureFlag(name string) bool {
 	if c == nil || c.FeatureFlags == nil {
 		return false

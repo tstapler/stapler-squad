@@ -443,6 +443,41 @@ type Instance struct {
 	// Claude Code session information for persistence and re-attachment
 	claudeSession *ClaudeSessionData
 
+	// piSession holds pi-coding-agent session information for resume-on-restart
+	// (see buildPiCommand). Populated only when isPi(i.Program) and the
+	// config.FeaturePiSupport flag is enabled — see the capture in Restart.
+	// Guarded by piSessionMu, not i.mu.
+	piSession *PiSessionData
+
+	// piSessionMu protects piSession. Separate from i.mu, mirroring
+	// claudeSessionMu's rationale for claudeSession: SetPiSessionID is called
+	// from PiStatusSource's reader goroutine (via the onSessionID callback)
+	// and Restart touches piSession too, so a dedicated lock makes both
+	// access points structurally safe without relying on the (fragile, and
+	// broken by Bug 2) argument that Stop() always finishes joining the
+	// writer goroutine before Restart reads/writes piSession.
+	piSessionMu sync.Mutex
+
+	// piStatusSrc holds the status-only `pi --mode json` subprocess (Epic
+	// 5.2) for this instance, when isPi(i.Program) and config.FeaturePiSupport
+	// is enabled. Set by startPiStatusSource, cleared by stopPiStatusSource.
+	// atomic.Pointer since StartController/StopController can race
+	// concurrent GetController-style reads.
+	piStatusSrc atomic.Pointer[PiStatusSource]
+
+	// piStatusStartMu serializes startPiStatusSource's check-then-act
+	// sequence (load piStatusSrc, and if nil construct+Start()+Store() a new
+	// PiStatusSource). Without it, two concurrent StartController calls for
+	// the same pi-backed instance can both observe a nil piStatusSrc, both
+	// spawn a subprocess+goroutine pair, and the loser's PiStatusSource is
+	// silently overwritten by the winner's Store() with no Stop() ever
+	// called on it -- a leaked subprocess and reader/wait goroutines for the
+	// life of the process. Mirrors StartController's Claude-controller
+	// branch (i.mu held across its own check-then-act + double-check), but
+	// kept as a separate, narrower mutex since the pi branch deliberately
+	// doesn't share i.mu's broader scope.
+	piStatusStartMu sync.Mutex
+
 	// conversationClearedAt records when ClearConversationState() last ran, so
 	// tryExtractConversationUUID's DetectByPath fallback won't resurrect a JSONL
 	// predating an explicit "start fresh" request. In-memory only — does not
@@ -1791,6 +1826,17 @@ func (i *Instance) Destroy() error {
 	// seeing it, rather than continuing until its own 25-minute deadline.
 	i.destroyed.Store(true)
 
+	// Evict this session's entry from PiExtensionHealthTracker (pi-support
+	// Epic 4.2 MAJOR 1 fix) so the tracker's map doesn't grow unboundedly for
+	// the life of the process. Gated on isPi to avoid a no-op resolver call on
+	// every single non-pi session's destroy; nil-checked since not every
+	// deployment wires SetPiExtensionHealthForgetter (e.g. tests).
+	if isPi(i.Program) {
+		if forgetter := getPiExtensionHealthForgetter(); forgetter != nil {
+			forgetter(i.GetStableID())
+		}
+	}
+
 	defer i.fireLifecycleEvent(EventStopped, "operator-destroy")
 	defer i.cleanupPromptFile()
 
@@ -2207,7 +2253,29 @@ func (i *Instance) Restart(preserveOutput bool) error {
 		return fmt.Errorf("cannot restart session '%s': no working directory configured", i.Title)
 	}
 
+	// Suppress pi's --session resume injection (buildLaunchCommand reads
+	// i.piSession directly for piProgram, unlike claude's explicit
+	// claudeSessionID param) unless both isPi(i.Program) and the pi-support
+	// feature flag are true — mirroring the claudeSessionID capture above's
+	// gating intent. The field itself is restored afterward rather than
+	// cleared outright, so a stale piSession isn't lost if the flag is later
+	// re-enabled.
+	//
+	// Guarded by piSessionMu (not i.mu), mirroring claudeSessionMu's usage:
+	// this used to rely on Stop() always having joined SetPiSessionID's only
+	// writer goroutine before Restart reached this code, an argument Bug 2
+	// broke (a disabled flag could skip stopPiStatusSource entirely, leaving
+	// that goroutine alive). The lock makes this safe structurally instead.
+	i.piSessionMu.Lock()
+	restorePiSession := i.piSession
+	if !isPi(i.Program) || !config.LoadConfig().GetFeatureFlag(config.FeaturePiSupport) {
+		i.piSession = nil
+	}
+	i.piSessionMu.Unlock()
 	program := i.buildLaunchCommand(claudeSessionID)
+	i.piSessionMu.Lock()
+	i.piSession = restorePiSession
+	i.piSessionMu.Unlock()
 
 	// Create a new tmux session
 	// Use configurable prefix or default

@@ -14,9 +14,17 @@ import (
 	"github.com/tstapler/stapler-squad/session/detection/ratelimit"
 )
 
-// StartController creates and starts a ClaudeController for this instance.
+// StartController creates and starts a ClaudeController for this instance,
+// UNLESS this is a pi-support-enabled pi session, in which case it starts a
+// PiStatusSource instead (Epic 5.2) — pi has no PTY output for
+// ClaudeController's regex-based detector to scrape, so the two are
+// mutually exclusive per instance, not layered.
 // The controller enables automated idle detection and queue management.
 func (i *Instance) StartController() error {
+	if i.piStatusSupported() {
+		return i.startPiStatusSource()
+	}
+
 	// Check preconditions under lock
 	i.mu.Lock()
 
@@ -184,8 +192,28 @@ func (i *Instance) SetControllerForTest(c *ClaudeController) {
 	i.controllerManager.SetController(c)
 }
 
-// StopController stops and cleans up the ClaudeController for this instance.
+// StopController stops and cleans up the ClaudeController for this
+// instance, or the PiStatusSource for a pi-support-enabled pi session — see
+// StartController's doc comment.
+//
+// Routing is gated on actual live registration state (i.piStatusSrc), not on
+// re-evaluating piStatusSupported() (Bug 2 fix): the pi-support feature flag
+// is mutable at runtime (Story 2.1.2's disable-warning dialog), and
+// piStatusSupported() re-checks it live. If a user disables the flag while a
+// pi session's PiStatusSource is still running, re-checking the flag here
+// would route to the Claude-controller branch instead and never call
+// Stop() on the still-live PiStatusSource — a goroutine/subprocess leak, and
+// a violation of SetPiSessionID's documented invariant that Restart's
+// unlocked i.piSession access is safe because Stop() has already joined the
+// only writer goroutine. The flag should only gate whether a NEW
+// PiStatusSource gets started (StartController); an already-running one must
+// always be stoppable regardless of the flag's current value.
 func (i *Instance) StopController() {
+	if i.piStatusSrc.Load() != nil {
+		i.stopPiStatusSource()
+		return
+	}
+
 	i.mu.Lock()
 	defer i.mu.Unlock()
 
@@ -198,9 +226,17 @@ func (i *Instance) StopController() {
 	log.Info("stopped claudecontroller for instance", "session", i.Title)
 }
 
-// stopControllerLocked stops the ClaudeController from within an actor command.
+// stopControllerLocked stops the ClaudeController (or PiStatusSource, for a
+// pi-support-enabled pi session — see StartController's doc comment) from
+// within an actor command. See StopController's doc comment for why routing
+// is gated on i.piStatusSrc (live registration state) rather than
+// piStatusSupported() (Bug 2 fix).
 func stopControllerLocked(s *instanceState) {
 	i := s.inst
+	if i.piStatusSrc.Load() != nil {
+		i.stopPiStatusSource()
+		return
+	}
 	if !i.controllerManager.HasController() {
 		return
 	}

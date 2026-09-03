@@ -196,6 +196,17 @@ type ClaudeSessionData struct {
 	Metadata         map[string]string `json:"metadata,omitempty"`         // Additional session metadata
 }
 
+// PiSessionData represents pi-coding-agent session information needed to
+// resume a prior conversation via `pi --session <id>` (see buildPiCommand).
+// Unlike ClaudeSessionData's ConversationUUID, SessionID's format is not
+// validated here — pi 0.84.4 reports it as a standard dashed UUID in the
+// JSONL "session" header event's "id" field (see plan.md's Phase 1 spike
+// RESULTS), but this struct only requires it be non-empty to be usable.
+type PiSessionData struct {
+	SessionID    string    `json:"session_id,omitempty"`
+	LastAttached time.Time `json:"last_attached,omitempty"`
+}
+
 // UnmarshalJSON keeps backward compatibility with persisted state written
 // before SquadSessionID was renamed from ConversationID. The legacy
 // "conversation_id" key is read as a fallback when "squad_session_id" is
