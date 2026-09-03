@@ -58,6 +58,7 @@ func printUsage() {
 	fmt.Fprintln(os.Stderr, "  serve   - Start an HTTP server for remote classification")
 	fmt.Fprintln(os.Stderr, "  proxy   - Check permissions before executing a command")
 	fmt.Fprintln(os.Stderr, "  install - Install binary and register hooks (targets: claude, gemini, agy, open-code, pi, service)")
+	fmt.Fprintln(os.Stderr, "            'install pi --uninstall' and 'install service --uninstall' remove what was installed instead")
 	fmt.Fprintln(os.Stderr, "  version - Print version information")
 }
 
@@ -820,7 +821,7 @@ func handleInstall() {
 	case "open-code":
 		installOpenCode()
 	case "pi":
-		installPi()
+		installOrUninstallPi()
 	case "service":
 		installService()
 	default:
@@ -1507,6 +1508,20 @@ func patchPiExtension(extensionPath, permissionURL, healthURL string) error {
 	return nil
 }
 
+// installOrUninstallPi parses the "pi" install target's flags and dispatches to installPi or
+// uninstallPi, mirroring installService's --uninstall flag pattern (main.go's installService).
+func installOrUninstallPi() {
+	installCmd := flag.NewFlagSet("pi", flag.ExitOnError)
+	uninstall := installCmd.Bool("uninstall", false, "Remove the pi approval extension")
+	installCmd.Parse(os.Args[3:]) //nolint:errcheck
+
+	if *uninstall {
+		uninstallPi()
+		return
+	}
+	installPi()
+}
+
 // installPi copies the ssq-hooks binary to ~/.local/bin and writes the pi approval extension
 // to pi's GLOBAL extension directory (~/.pi/agent/extensions/ssq-approval.ts), per ADR-002 —
 // deliberately not a project-local `.pi/extensions/` write, since pi's per-directory trust
@@ -1560,6 +1575,31 @@ func installPi() {
 	versionCancel()
 
 	fmt.Println("Done. Restart pi for the extension to take effect.")
+}
+
+// uninstallPi removes the pi approval extension file (~/.pi/agent/extensions/ssq-approval.ts)
+// written by installPi. It deliberately leaves the shared ssq-hooks binary copy under
+// ~/.local/bin alone — that copy is shared across every install target (claude, gemini, agy,
+// open-code, pi), not pi-specific, so removing pi's extension must not disable the others.
+// Idempotent: removing an already-absent extension is reported, not an error.
+func uninstallPi() {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error resolving home directory: %v\n", err)
+		os.Exit(1)
+	}
+
+	extensionPath := filepath.Join(home, ".pi", "agent", "extensions", "ssq-approval.ts")
+	if err := os.Remove(extensionPath); err != nil {
+		if os.IsNotExist(err) {
+			fmt.Printf("Extension not found (already removed?): %s\n", extensionPath)
+			return
+		}
+		fmt.Fprintf(os.Stderr, "Error removing %s: %v\n", extensionPath, err)
+		os.Exit(1)
+	}
+	fmt.Printf("Removed: %s\n", extensionPath)
+	fmt.Println("pi will no longer send permission requests to stapler-squad after it is restarted.")
 }
 
 func installService() {

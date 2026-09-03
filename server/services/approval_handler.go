@@ -578,10 +578,23 @@ type piExtensionHealthPingPayload struct {
 // resolved or the tracker recorded anything, so a malformed/unresolvable ping
 // never surfaces as an error to the extension.
 //
+// Feature-flag gate as the handler's first line (same idiom as
+// GitHubWebhookHandler.Handle / GenericWebhookHandler.Handle): with
+// pi-support off, this never touches piHealthTracker's in-memory map — that
+// mirrors every other pi surface (resume injection, UI preset, status
+// source, extension injection/enforcement), which all check the flag before
+// acting (see project_plans/pi-support/implementation/plan.md's Risk
+// Control section).
+//
 // +http: POST /api/hooks/pi-extension-loaded hooks:pi-extension-loaded
 func (h *ApprovalHandler) HandlePiExtensionLoaded(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	if !config.LoadConfig().GetFeatureFlag(config.FeaturePiSupport) {
+		http.NotFound(w, r)
 		return
 	}
 

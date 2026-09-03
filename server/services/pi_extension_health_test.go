@@ -9,6 +9,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/server/events"
 )
 
@@ -110,7 +111,9 @@ func TestPiExtensionHealth_String(t *testing.T) {
 // ── HandlePiExtensionLoaded HTTP handler tests ──────────────────────────────
 
 func TestHandlePiExtensionLoaded_RecordsPing_ViaSessionIDHeader(t *testing.T) {
-	t.Parallel()
+	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	require.NoError(t, config.LoadConfig().SetFeatureFlag(config.FeaturePiSupport, true))
+
 	bus := events.NewEventBus(1)
 	defer bus.Close()
 	h := NewApprovalHandler(NewApprovalStore(""), nil, bus)
@@ -128,7 +131,9 @@ func TestHandlePiExtensionLoaded_RecordsPing_ViaSessionIDHeader(t *testing.T) {
 }
 
 func TestHandlePiExtensionLoaded_NoTracker_StillReturns200(t *testing.T) {
-	t.Parallel()
+	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	require.NoError(t, config.LoadConfig().SetFeatureFlag(config.FeaturePiSupport, true))
+
 	bus := events.NewEventBus(1)
 	defer bus.Close()
 	h := NewApprovalHandler(NewApprovalStore(""), nil, bus)
@@ -142,7 +147,9 @@ func TestHandlePiExtensionLoaded_NoTracker_StillReturns200(t *testing.T) {
 }
 
 func TestHandlePiExtensionLoaded_RejectsNonPost(t *testing.T) {
-	t.Parallel()
+	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	require.NoError(t, config.LoadConfig().SetFeatureFlag(config.FeaturePiSupport, true))
+
 	bus := events.NewEventBus(1)
 	defer bus.Close()
 	h := NewApprovalHandler(NewApprovalStore(""), nil, bus)
@@ -157,7 +164,9 @@ func TestHandlePiExtensionLoaded_RejectsNonPost(t *testing.T) {
 }
 
 func TestHandlePiExtensionLoaded_MalformedBody_StillReturns200(t *testing.T) {
-	t.Parallel()
+	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	require.NoError(t, config.LoadConfig().SetFeatureFlag(config.FeaturePiSupport, true))
+
 	bus := events.NewEventBus(1)
 	defer bus.Close()
 	h := NewApprovalHandler(NewApprovalStore(""), nil, bus)
@@ -168,4 +177,30 @@ func TestHandlePiExtensionLoaded_MalformedBody_StillReturns200(t *testing.T) {
 
 	require.NotPanics(t, func() { h.HandlePiExtensionLoaded(rec, req) })
 	assert.Equal(t, http.StatusOK, rec.Code)
+}
+
+// TestHandlePiExtensionLoaded_ShouldNotRecord_WhenPiSupportFlagIsOff covers the
+// spec-compliance gap this fix closes: with pi-support off, the handler must
+// not write into the tracker's in-memory map for any POST it receives (every
+// other pi surface already checks the flag before acting — see plan.md's Risk
+// Control section). The isolated STAPLER_SQUAD_TEST_DIR config starts with all
+// flags off by default, so this test deliberately does not call SetFeatureFlag.
+func TestHandlePiExtensionLoaded_ShouldNotRecord_WhenPiSupportFlagIsOff(t *testing.T) {
+	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	require.False(t, config.LoadConfig().GetFeatureFlag(config.FeaturePiSupport))
+
+	bus := events.NewEventBus(1)
+	defer bus.Close()
+	h := NewApprovalHandler(NewApprovalStore(""), nil, bus)
+	tracker := NewPiExtensionHealthTracker()
+	h.SetPiExtensionHealthTracker(tracker)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/hooks/pi-extension-loaded", strings.NewReader(`{}`))
+	req.Header.Set("X-CS-Session-ID", "sess-1")
+	rec := httptest.NewRecorder()
+
+	h.HandlePiExtensionLoaded(rec, req)
+
+	assert.Equal(t, http.StatusNotFound, rec.Code)
+	assert.Equal(t, PiExtensionHealthUnknown, tracker.HealthFor("sess-1"))
 }

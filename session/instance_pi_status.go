@@ -7,6 +7,7 @@ package session
 
 import (
 	"os/exec"
+	"time"
 
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/log"
@@ -37,6 +38,11 @@ func (i *Instance) startPiStatusSource() error {
 	}
 
 	src := NewPiStatusSource(i.Title, i.piStatusCommandFactory())
+	// Wire the "session" header event's ID back to this Instance (Task
+	// 2.2.1e) so a later Restart's buildLaunchCommand call can inject
+	// --session <id> and actually resume. Must be set before Start() --
+	// see SetOnSessionIDCallback's doc comment.
+	src.SetOnSessionIDCallback(i.SetPiSessionID)
 	if err := src.Start(); err != nil {
 		return err
 	}
@@ -97,4 +103,36 @@ func (i *Instance) piStatusCommandFactory() piCommandFactory {
 		}
 		return cmd
 	}
+}
+
+// SetPiSessionID records the real pi session UUID observed from the
+// status-only pi subprocess's "session" header event (Task 2.2.1e), so a
+// later Restart's buildLaunchCommand call injects --session <id> and the pi
+// conversation actually resumes across a restart. Mirrors
+// SetClaudeConversationUUID's shape (instance_claude.go): guarded by the
+// same lock other Instance fields use (i.mu), and a no-op if id is empty or
+// unchanged.
+//
+// Concurrency note: this is set from PiStatusSource's reader goroutine via
+// the onSessionID callback. Restart's own piSession suppression/restore
+// block (session/instance.go) reads/writes i.piSession without taking i.mu,
+// but that is safe in practice, not just by omission: Restart always calls
+// StopController first, and stopPiStatusSource's Stop() blocks
+// (sync.WaitGroup) until the reader goroutine -- the only caller of this
+// method -- has exited, so no call to SetPiSessionID can be in flight by
+// the time Restart reaches its piSession block.
+func (i *Instance) SetPiSessionID(id string) {
+	if id == "" {
+		return
+	}
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	if i.piSession != nil && i.piSession.SessionID == id {
+		return
+	}
+	if i.piSession == nil {
+		i.piSession = &PiSessionData{}
+	}
+	i.piSession.SessionID = id
+	i.piSession.LastAttached = time.Now()
 }

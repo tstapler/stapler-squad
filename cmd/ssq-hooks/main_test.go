@@ -837,6 +837,51 @@ func TestInstallPi_Idempotent(t *testing.T) {
 	assert.Equal(t, string(content1), string(content2))
 }
 
+// ── uninstallPi unit tests ─────────────────────────────────────────────────────
+
+// uninstallPi_should_removeExtensionFile_When_present
+func TestUninstallPi_RemovesExistingExtension(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("PATH", t.TempDir())
+
+	installPi()
+	extPath := filepath.Join(home, ".pi", "agent", "extensions", "ssq-approval.ts")
+	require.FileExists(t, extPath)
+
+	uninstallPi()
+	assert.NoFileExists(t, extPath)
+}
+
+// uninstallPi_should_notError_When_extensionAlreadyAbsent
+func TestUninstallPi_NoOpWhenAlreadyAbsent(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	extPath := filepath.Join(home, ".pi", "agent", "extensions", "ssq-approval.ts")
+	require.NoFileExists(t, extPath)
+
+	// uninstallPi must not exit/error just because the extension was never installed.
+	uninstallPi()
+	assert.NoFileExists(t, extPath)
+}
+
+// uninstallPi_should_leaveSharedBinaryUntouched_When_removingExtension
+func TestUninstallPi_DoesNotTouchSharedBinary(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("PATH", t.TempDir())
+
+	installPi()
+	destBin := filepath.Join(home, ".local", "bin", "ssq-hooks")
+	require.FileExists(t, destBin)
+
+	uninstallPi()
+	// The ssq-hooks binary copy is shared across all install targets (claude, gemini, agy,
+	// open-code, pi) — removing pi's extension must not remove it.
+	assert.FileExists(t, destBin)
+}
+
 // ── parseOpenCodePayload unit tests ───────────────────────────────────────────
 
 func callParseOpenCodePayloadWithStdin(t *testing.T, input string) classifier.PermissionRequestPayload {

@@ -2,6 +2,7 @@ package session
 
 import (
 	"os/exec"
+	"sync"
 	"testing"
 	"time"
 
@@ -179,6 +180,79 @@ func TestPiStatusSource_SuccessfulRelaunchResumesAndResetsRetryCounter(t *testin
 		time.Sleep(20 * time.Millisecond)
 	}
 	t.Errorf("relaunch did not resume normal inference / reset retry counter in time (attempts=%d, retryCount=%d, unavailable=%v, status=%v)", attempt, src.retryCount.Load(), src.unavailable.Load(), src.CurrentStatus())
+}
+
+// --- Task 2.2.1e: propagating the real pi session ID back to the owning Instance ---
+
+// TestPiStatusSource_SessionEventFiresOnSessionIDCallbackOnce verifies that
+// observing a "session" header event invokes the onSessionID callback with
+// the event's ID, and that a repeated event carrying the same ID does not
+// fire the callback again (handleEvent dedupes against lastSessionID).
+func TestPiStatusSource_SessionEventFiresOnSessionIDCallbackOnce(t *testing.T) {
+	src := NewPiStatusSource("test-session", nil)
+
+	var mu sync.Mutex
+	var gotIDs []string
+	src.SetOnSessionIDCallback(func(id string) {
+		mu.Lock()
+		defer mu.Unlock()
+		gotIDs = append(gotIDs, id)
+	})
+
+	src.handleEvent(PiSessionEvent{Type: "session", ID: "abc-123", Version: 1})
+	// A duplicate of the same header (e.g. re-sent after a relaunch) must
+	// not fire the callback again.
+	src.handleEvent(PiSessionEvent{Type: "session", ID: "abc-123", Version: 1})
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(gotIDs) != 1 {
+		t.Fatalf("onSessionID called %d times, want exactly 1: %v", len(gotIDs), gotIDs)
+	}
+	if gotIDs[0] != "abc-123" {
+		t.Errorf("onSessionID called with %q, want %q", gotIDs[0], "abc-123")
+	}
+}
+
+// TestPiStatusSource_SessionEventWithEmptyIDDoesNotFireCallback verifies a
+// "session" event with no ID (shouldn't happen per the pi protocol, but
+// defensively) never invokes the callback.
+func TestPiStatusSource_SessionEventWithEmptyIDDoesNotFireCallback(t *testing.T) {
+	src := NewPiStatusSource("test-session", nil)
+
+	called := false
+	src.SetOnSessionIDCallback(func(id string) { called = true })
+
+	src.handleEvent(PiSessionEvent{Type: "session", ID: "", Version: 1})
+
+	if called {
+		t.Errorf("onSessionID fired for an empty session ID, want no-op")
+	}
+}
+
+// TestPiStatusSource_SessionEventPropagatesToInstance is the Instance-level
+// companion to the callback tests above: it wires PiStatusSource's
+// onSessionID callback to a real Instance.SetPiSessionID (as
+// startPiStatusSource does in instance_pi_status.go) and asserts the
+// Instance's piSession.SessionID reflects the observed ID.
+func TestPiStatusSource_SessionEventPropagatesToInstance(t *testing.T) {
+	inst := &Instance{Title: "pi-session-propagation-test", UUID: "sess-pi-session-propagation"}
+
+	src := NewPiStatusSource(inst.Title, nil)
+	src.SetOnSessionIDCallback(inst.SetPiSessionID)
+
+	src.handleEvent(PiSessionEvent{Type: "session", ID: "real-pi-uuid-1", Version: 1})
+
+	inst.mu.Lock()
+	got := inst.piSession
+	inst.mu.Unlock()
+
+	if got == nil || got.SessionID != "real-pi-uuid-1" {
+		t.Fatalf("inst.piSession = %+v, want SessionID %q", got, "real-pi-uuid-1")
+	}
+	if got.LastAttached.IsZero() {
+		t.Errorf("inst.piSession.LastAttached was not set")
+	}
 }
 
 func TestPiStatusSource_ExhaustedRetriesReportUnavailable(t *testing.T) {

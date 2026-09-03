@@ -65,6 +65,21 @@ type PiStatusSource struct {
 	sessionTitle string
 	newCmd       piCommandFactory
 
+	// onSessionID, if set via SetOnSessionIDCallback before Start(), is
+	// invoked with the real pi session UUID the first time it is observed in
+	// a "session" header event (Task 2.2.1e) -- this is how the owning
+	// Instance's piSession field gets populated from a live pi run, so a
+	// later Restart's buildLaunchCommand call can inject `--session <id>`
+	// and actually resume the conversation. A callback (rather than an
+	// *Instance back-reference) keeps PiStatusSource testable in isolation
+	// and avoids a circular session <-> PiStatusSource dependency.
+	onSessionID func(id string)
+	// lastSessionID is the most recently observed non-empty session ID,
+	// guarded by mu. Deduplicates onSessionID calls: a repeated "session"
+	// event carrying the same ID (e.g. a relaunch re-sending its header)
+	// fires the callback only once, not once per event.
+	lastSessionID string
+
 	// status is the currently-inferred detection.DetectedStatus, stored as
 	// int32 so CurrentStatus() -- called from the hot GetStatus() path --
 	// needs no lock. Defaults to detection.StatusReady in the constructor
@@ -109,6 +124,15 @@ func NewPiStatusSource(sessionTitle string, newCmd piCommandFactory) *PiStatusSo
 	}
 	p.status.Store(int32(detection.StatusReady))
 	return p
+}
+
+// SetOnSessionIDCallback registers fn to be invoked (with the real pi
+// session UUID) the first time a "session" header event with a non-empty ID
+// is observed. Must be called before Start() -- handleEvent reads
+// p.onSessionID without a lock, on the assumption that it is only ever
+// written during construction/wiring, before the reader goroutine starts.
+func (p *PiStatusSource) SetOnSessionIDCallback(fn func(id string)) {
+	p.onSessionID = fn
 }
 
 // CurrentStatus returns the currently-inferred status. Once the subprocess
@@ -206,9 +230,23 @@ func (p *PiStatusSource) handleEvent(event any) {
 		// last inferred until the timer fires.
 		p.startIdleTimer()
 	case PiSessionEvent:
-		// Session header: informational only (log the protocol version),
-		// no status change.
+		// Session header: no status change, but the ID is the real pi
+		// session UUID (Task 2.2.1e) -- propagate it to the owning Instance
+		// via onSessionID so a later restart can resume with --session.
+		// Deduped against lastSessionID so a repeated header (e.g. after a
+		// relaunch) fires the callback once, not every time.
 		log.Debug("pi status subprocess session header", "session", p.sessionTitle, "pi_session_id", ev.ID, "version", ev.Version)
+		if ev.ID != "" {
+			p.mu.Lock()
+			changed := ev.ID != p.lastSessionID
+			if changed {
+				p.lastSessionID = ev.ID
+			}
+			p.mu.Unlock()
+			if changed && p.onSessionID != nil {
+				p.onSessionID(ev.ID)
+			}
+		}
 	default:
 		// agent_start, agent_settled, turn_start, turn_end, message_start,
 		// message_end, message_update: all indicate the agent is actively

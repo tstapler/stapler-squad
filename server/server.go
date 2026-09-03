@@ -725,10 +725,12 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	log.Info("Registered Claude Code hook approval handler at /api/hooks/permission-request")
 	srv.approvalHandler = approvalHandler
 
-	// pi approval-extension health tracking (pi-support Epic 4.2). Registered
-	// unconditionally (mirroring every other /api/hooks/* route above) — the
-	// endpoint and tracker are harmless no-ops for installs that never enable
-	// the pi-support feature flag or never run pi, since nothing ever pings it.
+	// pi approval-extension health tracking (pi-support Epic 4.2). The route
+	// itself is registered unconditionally (mirroring every other
+	// /api/hooks/* route above), but HandlePiExtensionLoaded gates on
+	// config.FeaturePiSupport as its first line and 404s when the flag is
+	// off — so with the flag off this never records into piHealthTracker's
+	// in-memory map, matching every other pi surface.
 	piHealthTracker := services.NewPiExtensionHealthTracker()
 	approvalHandler.SetPiExtensionHealthTracker(piHealthTracker)
 	srv.mux.HandleFunc("/api/hooks/pi-extension-loaded", approvalHandler.HandlePiExtensionLoaded)
