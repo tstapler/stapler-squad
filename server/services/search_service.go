@@ -322,12 +322,14 @@ func (ss *SearchService) ListClaudeHistory(
 	protoEntries := make([]*sessionv1.ClaudeHistoryEntry, 0, len(entries))
 	for _, entry := range entries {
 		protoEntries = append(protoEntries, &sessionv1.ClaudeHistoryEntry{
-			Id:            entry.ID,
-			Name:          entry.Name,
-			Project:       entry.Project,
-			CreatedAt:     timestamppb.New(entry.CreatedAt),
-			UpdatedAt:     timestamppb.New(entry.UpdatedAt),
-			Model:         entry.Model,
+			Id:        entry.ID,
+			Name:      entry.Name,
+			Project:   entry.Project,
+			CreatedAt: timestamppb.New(entry.CreatedAt),
+			UpdatedAt: timestamppb.New(entry.UpdatedAt),
+			Model:     entry.Model,
+			// #nosec G115 -- entry.MessageCount is a per-conversation message
+			// count, far below int32 range.
 			MessageCount:  int32(entry.MessageCount),
 			Branch:        ss.cachedBranch(ctx, entry.Project),
 			SessionStatus: ss.liveSessionStatus(entry.ID),
@@ -335,7 +337,9 @@ func (ss *SearchService) ListClaudeHistory(
 	}
 
 	return connect.NewResponse(&sessionv1.ListClaudeHistoryResponse{
-		Entries:       protoEntries,
+		Entries: protoEntries,
+		// #nosec G115 -- totalCount is the number of matching Claude history
+		// entries on disk, far below int32 range.
 		TotalCount:    int32(totalCount),
 		NextPageToken: nextPageToken,
 	}), nil
@@ -393,12 +397,14 @@ func (ss *SearchService) GetClaudeHistoryDetail(
 	}
 
 	protoEntry := &sessionv1.ClaudeHistoryEntry{
-		Id:           entry.ID,
-		Name:         entry.Name,
-		Project:      entry.Project,
-		CreatedAt:    timestamppb.New(entry.CreatedAt),
-		UpdatedAt:    timestamppb.New(entry.UpdatedAt),
-		Model:        entry.Model,
+		Id:        entry.ID,
+		Name:      entry.Name,
+		Project:   entry.Project,
+		CreatedAt: timestamppb.New(entry.CreatedAt),
+		UpdatedAt: timestamppb.New(entry.UpdatedAt),
+		Model:     entry.Model,
+		// #nosec G115 -- entry.MessageCount is a per-conversation message
+		// count, far below int32 range.
 		MessageCount: int32(entry.MessageCount),
 	}
 
@@ -495,7 +501,9 @@ func (ss *SearchService) GetClaudeHistoryMessages(
 	protoMessages := toProtoClaudeMessages(messages)
 
 	return connect.NewResponse(&sessionv1.GetClaudeHistoryMessagesResponse{
-		Messages:   protoMessages,
+		Messages: protoMessages,
+		// #nosec G115 -- totalCount is the message count in one conversation,
+		// far below int32 range.
 		TotalCount: int32(totalCount),
 	}), nil
 }
@@ -629,8 +637,10 @@ func (ss *SearchService) SearchClaudeHistory(
 			highlightRanges := make([]*sessionv1.HighlightRange, 0, len(snippet.HighlightRanges))
 			for _, hr := range snippet.HighlightRanges {
 				highlightRanges = append(highlightRanges, &sessionv1.HighlightRange{
+					// #nosec G115 -- Start is a byte offset within one search snippet's text, far below int32 range.
 					Start: int32(hr.Start),
-					End:   int32(hr.End),
+					// #nosec G115 -- see Start above.
+					End: int32(hr.End),
 				})
 			}
 			protoSnippets = append(protoSnippets, &sessionv1.SearchSnippet{
@@ -653,9 +663,11 @@ func (ss *SearchService) SearchClaudeHistory(
 		}
 
 		protoResults = append(protoResults, &sessionv1.SearchResult{
-			SessionId:    result.SessionID,
-			SessionName:  sessionName,
-			Project:      project,
+			SessionId:   result.SessionID,
+			SessionName: sessionName,
+			Project:     project,
+			// #nosec G115 -- MessageIndex is a position within one conversation's
+			// message list, far below int32 range.
 			MessageIndex: int32(result.MessageIndex),
 			Score:        float32(result.Score),
 			Snippets:     protoSnippets,
@@ -671,7 +683,9 @@ func (ss *SearchService) SearchClaudeHistory(
 	protoResults = ss.applyResultPostProcessing(protoResults, req.Msg, hist, requestedLimit, needsPostProcessing)
 
 	return connect.NewResponse(&sessionv1.SearchClaudeHistoryResponse{
-		Results:      protoResults,
+		Results: protoResults,
+		// #nosec G115 -- TotalMatches is the number of search hits across local
+		// Claude history, far below int32 range.
 		TotalMatches: int32(searchResults.TotalMatches),
 		QueryTimeMs:  searchResults.QueryTime.Milliseconds(),
 		HasMore:      searchResults.TotalMatches > offset+len(protoResults),

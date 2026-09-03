@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"strconv"
 	"strings"
@@ -576,6 +577,9 @@ func parseScrollbackOffset(v string) uint32 {
 	n, err := strconv.Atoi(v)
 	if err != nil || n < 0 {
 		return 0
+	}
+	if n > math.MaxUint32 {
+		return math.MaxUint32
 	}
 	return uint32(n)
 }

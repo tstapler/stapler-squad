@@ -516,25 +516,33 @@ func (d *DefaultsService) DeleteDirectoryRule(
 func sessionDefaultsToProto(cfg *config.Config) *sessionv1.SessionDefaultsConfig {
 	sd := cfg.SessionDefaults
 	proto := &sessionv1.SessionDefaultsConfig{
-		Program:                       sd.Program,
-		AutoYes:                       sd.AutoYes,
-		Tags:                          sd.Tags,
-		EnvVars:                       sd.EnvVars,
-		CliFlags:                      sd.CLIFlags,
-		Profiles:                      make(map[string]*sessionv1.ProfileDefaultsProto),
-		DirectoryRules:                make([]*sessionv1.DirectoryRuleProto, 0, len(sd.DirectoryRules)),
-		OneOffBaseDir:                 cfg.OneOffBaseDir,
-		MaxAutoReworkIterations:       int32(cfg.MaxAutoReworkIterationsOrDefault()),
+		Program:        sd.Program,
+		AutoYes:        sd.AutoYes,
+		Tags:           sd.Tags,
+		EnvVars:        sd.EnvVars,
+		CliFlags:       sd.CLIFlags,
+		Profiles:       make(map[string]*sessionv1.ProfileDefaultsProto),
+		DirectoryRules: make([]*sessionv1.DirectoryRuleProto, 0, len(sd.DirectoryRules)),
+		OneOffBaseDir:  cfg.OneOffBaseDir,
+		// #nosec G115 -- small local config knobs (rework/backlog iteration
+		// limits, minutes), far below int32 range.
+		MaxAutoReworkIterations: int32(cfg.MaxAutoReworkIterationsOrDefault()),
+		// #nosec G115 -- see MaxAutoReworkIterations above.
 		MaxConcurrentBacklogWorkItems: int32(cfg.MaxConcurrentBacklogWorkItemsOrDefault()),
-		StaleSessionThresholdMinutes:  int32(cfg.StaleSession.ThresholdMinutesOrDefault()),
-		StaleSessionNotifyEnabled:     cfg.StaleSession.NotifyEnabledOrDefault(),
+		// #nosec G115 -- see MaxAutoReworkIterations above.
+		StaleSessionThresholdMinutes: int32(cfg.StaleSession.ThresholdMinutesOrDefault()),
+		StaleSessionNotifyEnabled:    cfg.StaleSession.NotifyEnabledOrDefault(),
 		RetryPolicy: &sessionv1.RetryPolicyConfig{
-			Enabled:             cfg.RetryPolicy.EnabledOrDefault(),
-			MaxAttempts:         int32(cfg.RetryPolicy.MaxAttemptsOrDefault()),
-			Backoff:             cfg.RetryPolicy.BackoffOrWarn(),
+			Enabled: cfg.RetryPolicy.EnabledOrDefault(),
+			// #nosec G115 -- small local retry-policy config knobs (attempt
+			// counts, delay seconds), far below int32 range.
+			MaxAttempts: int32(cfg.RetryPolicy.MaxAttemptsOrDefault()),
+			Backoff:     cfg.RetryPolicy.BackoffOrWarn(),
+			// #nosec G115 -- see MaxAttempts above.
 			InitialDelaySeconds: int32(cfg.RetryPolicy.InitialDelaySeconds),
-			MaxDelaySeconds:     int32(cfg.RetryPolicy.MaxDelaySecondsOrDefault()),
-			RetryOn:             cfg.RetryPolicy.RetryOnOrDefault(),
+			// #nosec G115 -- see MaxAttempts above.
+			MaxDelaySeconds: int32(cfg.RetryPolicy.MaxDelaySecondsOrDefault()),
+			RetryOn:         cfg.RetryPolicy.RetryOnOrDefault(),
 		},
 	}
 	// Use resolved defaults so the frontend receives ~/Projects rather than "" when unset.

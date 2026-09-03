@@ -53,6 +53,7 @@ func toSlogLevel(level LogLevel) slog.Level {
 // SetRuntimeLevel changes the minimum log level for all output streams immediately.
 // Safe to call from any goroutine. Takes effect on the next log call.
 func SetRuntimeLevel(level LogLevel) {
+	// #nosec G115 -- LogLevel is a small internal enum (DEBUG..FATAL, iota-based), nowhere near int32's range
 	runtimeLevel.Store(int32(level))
 	slogLevel.Set(toSlogLevel(level))
 }
@@ -934,6 +935,7 @@ func initializeWithConfig(daemon bool, cfg *LogConfig) {
 	if cfg.ConsoleLevel < configLevel {
 		configLevel = cfg.ConsoleLevel
 	}
+	// #nosec G115 -- configLevel is a LogLevel enum (DEBUG..FATAL, iota-based), nowhere near int32's range
 	runtimeLevel.Store(int32(configLevel))
 
 	// Set log format to include timestamp and file/line number

@@ -3,6 +3,7 @@ package tymux
 import (
 	"context"
 	"errors"
+	"math"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
@@ -698,5 +699,33 @@ func TestBackendTymux_ShouldRoundTripStartSendKeysCapture_WhenDrivenWithAgentSha
 		assert.Equal(t, "exited: code=0", reason)
 	case <-time.After(time.Second):
 		t.Fatal("exit callback never fired for a clean agent exit")
+	}
+}
+
+// TestParseScrollbackOffset covers parseScrollbackOffset end to end: the
+// pre-existing non-numeric-input and lower-bound (n < 0) fallbacks to 0, plus
+// the gosec G115 fix's new upper-bound clamp at math.MaxUint32 for a
+// client-supplied capture-pane -S argument that would otherwise wrap through
+// the uint32 conversion.
+func TestParseScrollbackOffset(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want uint32
+	}{
+		{name: "not a number falls back to zero", in: "not-a-number", want: 0},
+		{name: "empty string falls back to zero", in: "", want: 0},
+		{name: "negative falls back to zero", in: "-1", want: 0},
+		{name: "zero passes through", in: "0", want: 0},
+		{name: "normal value passes through", in: "42", want: 42},
+		{name: "MaxUint32 boundary passes through", in: "4294967295", want: math.MaxUint32},
+		{name: "above MaxUint32 clamps to MaxUint32", in: "4294967296", want: math.MaxUint32},
+		{name: "far above MaxUint32 clamps to MaxUint32", in: "99999999999", want: math.MaxUint32},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, parseScrollbackOffset(tt.in))
+		})
 	}
 }

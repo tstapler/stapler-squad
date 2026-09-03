@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"math"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -639,4 +640,30 @@ func TestReconnectLoop_OrdinaryDrop_DoesNotSetBackendRestarted(t *testing.T) {
 	concrete := sess.(*tymuxGRPCSession)
 	restarted, _ := concrete.BackendRestarted()
 	assert.False(t, restarted, "an ordinary transport blip must not be surfaced as a daemon restart")
+}
+
+// TestClampResizeDim is the regression test for the gosec G115 fix.
+// clampResizeDim floors negative input at 0 (unlike
+// session/tmux.ClampWinsizeDim, which floors at 1 -- a resize dimension of 0
+// is a legitimate signal here, not an invalid pty size) and caps at
+// math.MaxUint32 rather than wrapping through the int -> uint32 narrowing
+// conversion.
+func TestClampResizeDim(t *testing.T) {
+	tests := []struct {
+		name string
+		in   int
+		want uint32
+	}{
+		{name: "negative floors to zero, not one", in: -5, want: 0},
+		{name: "zero passes through", in: 0, want: 0},
+		{name: "normal value passes through", in: 80, want: 80},
+		{name: "MaxUint32 boundary passes through", in: math.MaxUint32, want: math.MaxUint32},
+		{name: "above MaxUint32 clamps to MaxUint32", in: math.MaxUint32 + 1, want: math.MaxUint32},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, clampResizeDim(tt.in))
+		})
+	}
 }

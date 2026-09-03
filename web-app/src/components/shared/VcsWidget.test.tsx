@@ -392,8 +392,8 @@ describe("VcsWidget", () => {
     // to session-2's PR left session-1's cached comments on screen with no refetch.
     mockGetPRComments.mockClear();
     mockGetPRComments
-      .mockResolvedValueOnce({ comments: [{ id: 1, author: "octocat", body: "PR one", isReview: false }] })
-      .mockResolvedValueOnce({ comments: [{ id: 2, author: "hubot", body: "PR two", isReview: false }] });
+      .mockResolvedValueOnce({ comments: [{ id: 1n, author: "octocat", body: "PR one", isReview: false }] })
+      .mockResolvedValueOnce({ comments: [{ id: 2n, author: "hubot", body: "PR two", isReview: false }] });
 
     const githubFor = (prNumber: number) => ({
       owner: "acme",

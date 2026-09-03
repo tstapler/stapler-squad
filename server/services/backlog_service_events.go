@@ -392,6 +392,8 @@ func reviewVerdictDataToProto(v *session.ReviewVerdictData, occurredAt time.Time
 	p := &sessionv1.ReviewVerdict{
 		OverallOutcome: string(v.OverallOutcome),
 		Summary:        v.Summary,
+		// #nosec G115 -- a token count for one review's diff; bounded by realistic
+		// diff/LLM-context sizes, nowhere near int32 range.
 		DiffTokenCount: int32(v.DiffTokenCount),
 		DiffTruncated:  v.DiffTruncated,
 		OverrideBy:     v.OverrideBy,
@@ -407,6 +409,8 @@ func reviewVerdictDataToProto(v *session.ReviewVerdictData, occurredAt time.Time
 			p.PerCriterion = make([]*sessionv1.CriterionVerdict, len(cvs))
 			for i, cv := range cvs {
 				p.PerCriterion[i] = &sessionv1.CriterionVerdict{
+					// #nosec G115 -- index into one backlog item's acceptance-criteria
+					// list, bounded by realistic AC list length (a handful of entries).
 					CriterionIndex: int32(cv.CriterionIndex),
 					Outcome:        string(cv.Outcome),
 					Evidence:       cv.Evidence,
