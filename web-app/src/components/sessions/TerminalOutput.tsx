@@ -59,6 +59,7 @@ import { useAnalytics } from "@/lib/contexts/AnalyticsContext";
 import { useApprovalsContext } from "@/lib/contexts/ApprovalsContext";
 import { useViewport } from "@/components/providers/ViewportProvider";
 import { useInputModeOverride } from "@/lib/hooks/useInputModeOverride";
+import { isWorktreeMissingError } from "@/lib/utils/backoff";
 import * as styles from "./TerminalOutput.css";
 
 interface TerminalOutputProps {
@@ -1862,7 +1863,11 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
         )}
         {showReconnectBanner && isHardFailed && (
           <div className={styles.hardFailedBanner} role="alert">
-            Connection lost — <button onClick={handleHookReconnect}>Retry</button>
+            {isWorktreeMissingError(error) ? (
+              "This session's working directory no longer exists (its git worktree may have been deleted). Use \"Retry now\" from the session menu to recreate it and restart."
+            ) : (
+              <>Connection lost — <button onClick={handleHookReconnect}>Retry</button></>
+            )}
           </div>
         )}
         {isVisible !== false && isLoadingInitialContent && (

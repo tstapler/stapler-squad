@@ -11,6 +11,7 @@ package session
 import (
 	"errors"
 	"math/rand"
+	"os"
 	"slices"
 	"time"
 
@@ -332,6 +333,27 @@ func restartForRetry(inst *Instance, allowedPath, continuationPrompt string, pol
 	var restartErr error
 	if st == Stopped || st == PermanentlyFailed {
 		inst.RecoverFromStopped()
+		// A prior failure may have been the session's worktree directory
+		// vanishing from disk (e.g. a pruned/deleted git worktree — see
+		// tmux.ErrWorkDirMissing). Start(false) below is the warm-restart
+		// path and, unlike first-time session setup, never re-creates the
+		// worktree on its own — so without this, "Retry now" would fail
+		// identically forever. GitWorktreeManager.Setup() is the same
+		// create-or-reuse-in-place logic first-time setup uses, so calling
+		// it again here is safe even if the directory turns out to still
+		// exist.
+		if inst.gitManager.HasWorktree() {
+			if workDir := inst.GetEffectiveRootDir(); workDir != "" {
+				if _, statErr := os.Stat(workDir); errors.Is(statErr, os.ErrNotExist) {
+					if setupErr := inst.gitManager.Setup(); setupErr != nil {
+						log.Warn("SessionDriver: failed to recreate missing worktree before retry",
+							"session", inst.Title, "err", setupErr)
+					} else {
+						log.Info("SessionDriver: recreated missing worktree before retry", "session", inst.Title, "path", workDir)
+					}
+				}
+			}
+		}
 		// Clear the old (possibly dead) controller so StartController below creates a fresh one.
 		inst.StopController()
 		restartErr = inst.Start(false)

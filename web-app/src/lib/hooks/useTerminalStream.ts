@@ -7,7 +7,7 @@ import { create } from "@bufbuild/protobuf";
 import { createWebsocketBasedTransport } from "@/lib/transport/websocket-transport";
 import { createAuthInterceptor } from "@/lib/config";
 import { useEffect, useRef, useState, useCallback } from "react";
-import { BackoffState, connectTimeoutMs, getWsCloseCode, isRetriableCloseCode } from "@/lib/utils/backoff";
+import { BackoffState, connectTimeoutMs, isNonRetriableConnectError } from "@/lib/utils/backoff";
 import { MessageQueue } from "@/lib/terminal/MessageQueue";
 import { useTerminalFlowControl } from "./useTerminalFlowControl";
 import { useTerminalMetrics } from "./useTerminalMetrics";
@@ -501,12 +501,11 @@ export function useTerminalStream({
           // refs included — a stale, aborted generation's close should not
           // affect the currently-live generation's reconnect fate).
           if (myGeneration === connectionGenerationRef.current) {
-            const wsCode = getWsCloseCode(err);
-            if (wsCode !== null && !isRetriableCloseCode(wsCode)) {
+            if (isNonRetriableConnectError(err)) {
               shouldReconnectRef.current = false;
               isHardFailedRef.current = true;
               setIsHardFailed(true);
-              console.warn(`[reconnect] stream=terminal non-retriable ws-close-code=${wsCode}, giving up`);
+              console.warn(`[reconnect] stream=terminal non-retriable error code=${err.code}, giving up`);
             }
             // A connect-timeout abort is our own deliberate fast-retry optimization, not
             // a real failure — don't surface it via onError/setError, or callers that

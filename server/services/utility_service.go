@@ -40,6 +40,13 @@ type parsedLogLine struct {
 	Level     string
 	Message   string
 	Source    string
+	// Session is the value of the JSON line's "session" attribute (see
+	// log.ForSession), i.e. the owning session's Title — empty for
+	// non-session-scoped entries and for legacy plain-text lines, which
+	// never carry one. Used to filter the single global log file down to
+	// one session's entries (see GetLogs) since entries are no longer
+	// written to separate per-session files.
+	Session string
 }
 
 // sensitiveLogAttributeKeys are folded into Message as "key=<redacted>"
@@ -89,6 +96,7 @@ func parseJSONLogLine(line string) (parsedLogLine, bool) {
 	}
 
 	source := slogAddSourceLocation(raw["source"])
+	session, _ := raw["session"].(string)
 
 	extraKeys := make([]string, 0, len(raw))
 	for k := range raw {
@@ -98,6 +106,10 @@ func parseJSONLogLine(line string) (parsedLogLine, bool) {
 		case "source":
 			if source != "" {
 				continue // already consumed as the structural AddSource object
+			}
+		case "session":
+			if session != "" {
+				continue // already consumed into parsedLogLine.Session
 			}
 		}
 		extraKeys = append(extraKeys, k)
@@ -121,7 +133,7 @@ func parseJSONLogLine(line string) (parsedLogLine, bool) {
 		level = "INFO"
 	}
 
-	return parsedLogLine{Timestamp: timestamp, Level: level, Message: message, Source: source}, true
+	return parsedLogLine{Timestamp: timestamp, Level: level, Message: message, Source: source, Session: session}, true
 }
 
 // slogAddSourceLocation extracts "file:line" from a "source" attribute
@@ -242,33 +254,27 @@ func (us *UtilityService) GetLogs(
 	ctx context.Context,
 	req *connect.Request[sessionv1.GetLogsRequest],
 ) (*connect.Response[sessionv1.GetLogsResponse], error) {
-	// Get log file path from config
-	cfg := log.ConfigToLogConfig(config.LoadConfig())
-	var logFilePath string
-	var err error
-	if sid := req.Msg.GetSessionId(); sid != "" {
-		// Log files are written using inst.Title as the key (not UUID).
-		// Resolve the incoming ID (which may be a UUID) to the session Title
-		// before constructing the log file path.
-		resolvedID := sid
-		if us.reviewQueuePoller != nil {
-			if inst := us.reviewQueuePoller.FindInstance(sid); inst != nil {
-				resolvedID = inst.Title
-			}
+	// Log entries are written to the single global log file (see
+	// log/log.go's ForSession), tagged with a "session" attribute rather
+	// than filed into separate per-session log files — no code path writes
+	// those anymore. Resolve a UUID session_id to the session's Title (the
+	// value entries are actually tagged with) so parseLogs' session filter
+	// below can match on it.
+	if sid := req.Msg.GetSessionId(); sid != "" && us.reviewQueuePoller != nil {
+		if inst := us.reviewQueuePoller.FindInstance(sid); inst != nil {
+			resolvedID := inst.Title
+			req.Msg.SessionId = &resolvedID
 		}
-		logFilePath, err = log.GetSessionLogFilePath(cfg, resolvedID)
-	} else {
-		logFilePath, err = log.GetLogFilePath(cfg)
 	}
+
+	cfg := log.ConfigToLogConfig(config.LoadConfig())
+	logFilePath, err := log.GetLogFilePath(cfg)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to get log file path: %w", err))
 	}
 
 	// Read log file
-	// #nosec G304 -- logFilePath is either log.GetLogFilePath(cfg) (fully internal) or
-	// log.GetSessionLogFilePath(cfg, resolvedID); the latter's sessionID component is
-	// sanitized to [A-Za-z0-9_-] by GetSessionLogFilePath itself, so even an unresolved
-	// RPC-supplied session_id cannot escape the log directory.
+	// #nosec G304 -- logFilePath is log.GetLogFilePath(cfg), fully internal.
 	file, err := os.Open(logFilePath)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -537,6 +543,8 @@ func parseLogs(reader io.Reader, req *sessionv1.GetLogsRequest) (*parseLogsResul
 		levelFilterSet = map[string]struct{}{strings.ToUpper(*req.Level): {}}
 	}
 
+	sessionFilter := req.GetSessionId()
+
 	var startTime, endTime *time.Time
 	if req.StartTime != nil {
 		t := req.StartTime.AsTime()
@@ -554,6 +562,12 @@ func parseLogs(reader io.Reader, req *sessionv1.GetLogsRequest) (*parseLogsResul
 		if !ok {
 			// Skip lines that don't match either known format (e.g. a
 			// stray non-log line, or one truncated mid-write).
+			continue
+		}
+
+		// Apply session filter — entries are tagged with the owning
+		// session's Title via log.ForSession, not a separate log file.
+		if sessionFilter != "" && parsed.Session != sessionFilter {
 			continue
 		}
 

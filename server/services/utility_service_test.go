@@ -356,3 +356,42 @@ func TestParseLogs_should_FilterByLevel_When_JSONLinesHaveDifferentLevels(t *tes
 	require.Len(t, result.Entries, 1)
 	assert.Equal(t, "error line", result.Entries[0].Message)
 }
+
+// TestParseJSONLogLine_should_ExtractSessionAttribute_When_LinePresent covers
+// the "session" attribute log.ForSession tags every session-scoped entry
+// with — it must be extracted into parsedLogLine.Session, not folded into
+// Message like an arbitrary attribute (GetLogs' session filter reads this
+// field, not the message text).
+func TestParseJSONLogLine_should_ExtractSessionAttribute_When_LinePresent(t *testing.T) {
+	t.Parallel()
+	line := `{"time":"2026-08-25T11:00:00Z","level":"INFO","msg":"session started","session":"my-session"}`
+
+	parsed, ok := parseJSONLogLine(line)
+
+	require.True(t, ok)
+	assert.Equal(t, "my-session", parsed.Session)
+	assert.Equal(t, "session started", parsed.Message, "session must not also appear folded into Message")
+}
+
+// TestParseLogs_should_FilterBySession_When_SessionIdSet is the regression
+// test for the "Logs tab is always empty" bug: entries are written to the
+// single global log file tagged with a "session" attribute (see
+// log.ForSession), not to separate per-session log files, so GetLogs must
+// filter the global file's entries by that attribute rather than trying to
+// open a file that nothing ever writes.
+func TestParseLogs_should_FilterBySession_When_SessionIdSet(t *testing.T) {
+	t.Parallel()
+	content := strings.Join([]string{
+		`{"time":"2026-08-25T11:00:00Z","level":"INFO","msg":"line for session A","session":"session-a"}`,
+		`{"time":"2026-08-25T11:01:00Z","level":"INFO","msg":"line for session B","session":"session-b"}`,
+		`{"time":"2026-08-25T11:02:00Z","level":"INFO","msg":"line with no session tag"}`,
+	}, "\n")
+
+	result, err := parseLogs(strings.NewReader(content), &sessionv1.GetLogsRequest{
+		SessionId: strPtr("session-a"),
+	})
+
+	require.NoError(t, err)
+	require.Len(t, result.Entries, 1)
+	assert.Equal(t, "line for session A", result.Entries[0].Message)
+}
