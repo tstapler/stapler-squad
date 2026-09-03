@@ -1,5 +1,44 @@
 # Changelog
 
+## [1.51.0](https://github.com/tstapler/stapler-squad/compare/v1.50.0...v1.51.0) (2026-09-03)
+
+
+### Features
+
+* **orphan-sweep:** make orphaned-tmux reconciliation periodic, not startup-only ([326d285](https://github.com/tstapler/stapler-squad/commit/326d285e06bc0f54cdec71c4ff36746fd69084b3))
+* **session/unfinished:** add gitCmd read-only command helper ([0e580cb](https://github.com/tstapler/stapler-squad/commit/0e580cb483e4605a1734b16083016c0f22827980))
+
+
+### Bug Fixes
+
+* **async-session-creation:** close /sdd:6-verify review findings ([c7229dc](https://github.com/tstapler/stapler-squad/commit/c7229dc5f4da179808a65e95f3eea7d9beefeb73))
+* **async-session-creation:** stop the whole session list from hiding on a mutation error, fix flaky Cancel-button a11y test ([522cd06](https://github.com/tstapler/stapler-squad/commit/522cd0673520a43c0cb07077d77dc89b7e225d08))
+* **auth:** resolve passkey rpID hostnames via known nameservers directly ([0d798f8](https://github.com/tstapler/stapler-squad/commit/0d798f85003c9a66512c9e1e802e6280dabb3623))
+* **backlog:** give restarted work sessions a grace window before tombstoning ([46d1bd5](https://github.com/tstapler/stapler-squad/commit/46d1bd56563e21d863ed228c54b3dddecff4af96))
+* **backlog:** stop Sessions list from disappearing on live updates ([#681](https://github.com/tstapler/stapler-squad/issues/681)) ([81e6b17](https://github.com/tstapler/stapler-squad/commit/81e6b17a60aef219eb7b92e336ac409459508833))
+* **ci:** give web-lint job full checkout history so file-scoped diff works ([0daa822](https://github.com/tstapler/stapler-squad/commit/0daa82240f96aae38180882f95d31e3786fd25c7))
+* **deps:** bump go-git/go-billy/grpc/Go toolchain to close 20 reachable vulns ([#675](https://github.com/tstapler/stapler-squad/issues/675)) ([bbe294d](https://github.com/tstapler/stapler-squad/commit/bbe294df031e0a1b6273b28ce29da3f4d52a5de1))
+* **detection:** recognize current auto-mode footer for WaitingForAgent ([#678](https://github.com/tstapler/stapler-squad/issues/678)) ([7335c2d](https://github.com/tstapler/stapler-squad/commit/7335c2d7629ed8a06cf30c52956745ef159b5a89))
+* **e2e:** stop notification interference and missing timeout flaking BUG-097 a11y test ([#683](https://github.com/tstapler/stapler-squad/issues/683)) ([477ea7d](https://github.com/tstapler/stapler-squad/commit/477ea7db6ad1ba2e6c12c2739424d5f509df130d))
+* **log:** add injectable slog seam to stop test log-buffer races ([#672](https://github.com/tstapler/stapler-squad/issues/672)) ([a4cae21](https://github.com/tstapler/stapler-squad/commit/a4cae21aa59a315d9264ce84ff21581bff78a44d))
+* **omnibar:** make footer reachable via scroll when Advanced Options expanded ([#632](https://github.com/tstapler/stapler-squad/issues/632)) ([b6df198](https://github.com/tstapler/stapler-squad/commit/b6df198dd7152dbf1e64a6a29f217426d3b335a7))
+* **security:** resolve 8 critical/high-severity gosec findings ([#676](https://github.com/tstapler/stapler-squad/issues/676)) ([5e0ef86](https://github.com/tstapler/stapler-squad/commit/5e0ef86bfec1d3249ab21376c06db9beb52d2dc4))
+* **security:** resolve gosec G115 integer-overflow findings (211 sites) ([#682](https://github.com/tstapler/stapler-squad/issues/682)) ([bf8afc7](https://github.com/tstapler/stapler-squad/commit/bf8afc7438e913500967d0053642f676a5891f6a))
+* **security:** resolve gosec G304 path-traversal findings (96 sites) ([#679](https://github.com/tstapler/stapler-squad/issues/679)) ([10f8dff](https://github.com/tstapler/stapler-squad/commit/10f8dffc484bd158412dbb24205e0cc41767499c))
+* **security:** tighten gosec G301/G302/G306 file-permission findings ([#677](https://github.com/tstapler/stapler-squad/issues/677)) ([c6395b4](https://github.com/tstapler/stapler-squad/commit/c6395b430640fa7adb3db1d35c4c8cb2dad4971b))
+* **session-retention:** stop archived/backlog sessions from leaking forever ([25cf4e1](https://github.com/tstapler/stapler-squad/commit/25cf4e17d4ada7efceb4a9c3b399a40e30cfa81b))
+* **session:** check err before changed in PR-discovery pollers ([#673](https://github.com/tstapler/stapler-squad/issues/673)) ([7fe0e70](https://github.com/tstapler/stapler-squad/commit/7fe0e703f64357a5963878ef3640a4e2211ee27e))
+* **session:** read Instance.Path via lock-free Snapshot(), not the raw field ([e0fa72c](https://github.com/tstapler/stapler-squad/commit/e0fa72c6be7e1d643e886e2e2a3f5efae953bee3))
+* **session:** route SetWindowSize through the started-actor readiness gate ([ec75f70](https://github.com/tstapler/stapler-squad/commit/ec75f707d0cc58cabf25b037c19f463fc70d025e))
+* **streamhub:** fix input-not-showing bugs — actor readiness gate, control-mode restart, override key, and wire framing ([bdf3ad6](https://github.com/tstapler/stapler-squad/commit/bdf3ad6259072a7c59661db5a2aac6aa59345311))
+* **terminal:** clear loading-content spinner on stream error ([9062479](https://github.com/tstapler/stapler-squad/commit/9062479dc4c3843b02e0004b049b386847b9c813))
+* **ui:** wrap long path names in PathCompletionDropdown instead of truncating ([4e04a3c](https://github.com/tstapler/stapler-squad/commit/4e04a3c7a2299d6c95bc720856c3de5d23bf23bc))
+
+
+### Performance Improvements
+
+* fix CPU/allocation hotspots from live profiling + entfullscan static check ([#680](https://github.com/tstapler/stapler-squad/issues/680)) ([d04c184](https://github.com/tstapler/stapler-squad/commit/d04c1846969673c3974895ba7718dc61e8e05ce6))
+
 ## [1.50.0](https://github.com/tstapler/stapler-squad/compare/v1.49.0...v1.50.0) (2026-08-30)
 
 
