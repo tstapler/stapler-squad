@@ -51,30 +51,76 @@ const maxInlinePromptBytes = 4096
 // requirement, so tests may shrink it (per-instance) to avoid a real sleep.
 const defaultPromptFileCleanupDelay = 30 * time.Second
 
-// programKind is a sealed sum type over the kinds of launchable programs.
-// Holding a claudeProgram is proof that isClaude() returned true — downstream
-// code needs no further guards. Parse once at the boundary, trust internally.
-type programKind interface{ sealedProgramKind() }
-
-type claudeProgram struct{ base string }
-type piProgram struct{ base string }
-type plainProgram struct{ cmd string }
-
-func (claudeProgram) sealedProgramKind() {}
-func (piProgram) sealedProgramKind()     {}
-func (plainProgram) sealedProgramKind()  {}
-
-// classifyProgram parses a raw program string into its kind.
-// Call this once; pass the result where program type matters.
-func classifyProgram(program string) programKind {
-	if isClaude(program) {
-		return claudeProgram{base: program}
-	}
-	if isPi(program) {
-		return piProgram{base: program}
-	}
-	return plainProgram{cmd: program}
+// launchCommandBuilder builds the tmux launch command for one recognized
+// coding-agent program. Adding support for a new program means adding a new
+// implementation and appending it to launchCommandBuilders() below — never
+// editing buildLaunchCommand itself (mirrors programExtension in
+// instance_controller.go, whose doc comment already describes this as the
+// intended shape for this exact spot).
+type launchCommandBuilder interface {
+	// Matches reports whether program (whitespace-tokenized, basename-matched)
+	// is handled by this builder.
+	Matches(program string) bool
+	// Build returns the full launch command for i. resumeSessionID is
+	// buildLaunchCommand's own claudeSessionID parameter, passed through
+	// unchanged — only claudeLaunchBuilder uses it; piLaunchBuilder ignores it
+	// and reads i.piSession itself, since pi's resume ID lives on a different
+	// field (see piLaunchBuilder.Build's comment).
+	Build(i *Instance, base, resumeSessionID string) string
+	// SuppressStderr reports whether this program's stderr should be
+	// discarded (appending "2>/dev/null") rather than left to flow into the
+	// visible tmux pane -- see piLaunchBuilder.SuppressStderr's doc comment
+	// for why pi needs this and claude doesn't.
+	SuppressStderr() bool
 }
+
+// launchCommandBuilders returns the ordered set of builders buildLaunchCommand
+// checks before falling back to the default (shell-quote-and-run-as-is) path.
+func launchCommandBuilders() []launchCommandBuilder {
+	return []launchCommandBuilder{&claudeLaunchBuilder{}, &piLaunchBuilder{}}
+}
+
+// claudeLaunchBuilder implements launchCommandBuilder for the claude binary.
+type claudeLaunchBuilder struct{}
+
+func (b *claudeLaunchBuilder) Matches(program string) bool { return isClaude(program) }
+
+func (b *claudeLaunchBuilder) Build(i *Instance, base, resumeSessionID string) string {
+	// AutoApprove is injected inside buildClaudeCommand, before the trailing
+	// "--" prompt separator -- see that function's comment for why appending
+	// it here (after the separator) would be silently swallowed as inert
+	// positional text instead of a real flag.
+	return i.buildClaudeCommand(base, resumeSessionID)
+}
+
+func (b *claudeLaunchBuilder) SuppressStderr() bool { return false }
+
+// piLaunchBuilder implements launchCommandBuilder for the pi binary.
+type piLaunchBuilder struct{}
+
+func (b *piLaunchBuilder) Matches(program string) bool { return isPi(program) }
+
+func (b *piLaunchBuilder) Build(i *Instance, base, _ string) string {
+	i.piSessionMu.Lock()
+	var piSessionID string
+	if i.piSession != nil {
+		piSessionID = i.piSession.SessionID
+	}
+	i.piSessionMu.Unlock()
+	return i.buildPiCommand(base, piSessionID)
+}
+
+// SuppressStderr returns true: pi prints its own per-project trust-gate
+// diagnostics (e.g. "Path not found: <project>/.pi") straight to stderr on
+// every launch when the project has no .pi trust directory yet -- harmless
+// (pi continues normally either way, confirmed empirically: the session
+// still reaches its "Working..." state right after), but with nothing else
+// in this pipeline distinguishing pi's own diagnostics from its actual TUI
+// output, it lands verbatim in the visible tmux pane on every session start.
+// Discarding it here mirrors piStatusCommandFactory's side-channel pi
+// subprocess (instance_pi_status.go), which already leaves cmd.Stderr nil
+// (discarded) for the exact same reason.
+func (b *piLaunchBuilder) SuppressStderr() bool { return true }
 
 // isClaude reports whether the program command invokes the claude binary.
 // It checks each whitespace-delimited token's basename to avoid false positives
@@ -167,39 +213,33 @@ func (i *Instance) GetTmuxSessionName() string {
 }
 
 // buildLaunchCommand constructs the final command string used to launch the program
-// in tmux. It parses the program once into a programKind sum type and delegates:
-// non-claude programs are returned unchanged; claude programs get flag injection.
+// in tmux. It checks each registered launchCommandBuilder in turn (see that
+// type's doc comment); a program none of them recognizes is shell-quoted and
+// run as-is, with AutoApprove's yolo-flag lookup as the only adjustment.
 func (i *Instance) buildLaunchCommand(claudeSessionID string) string {
 	var cmd string
-	switch p := classifyProgram(i.Program).(type) {
-	case claudeProgram:
-		// AutoApprove is injected inside buildClaudeCommand, before the
-		// trailing "--" prompt separator -- see that function's comment for
-		// why appending it here (after the separator) would be silently
-		// swallowed as inert positional text instead of a real flag.
-		cmd = i.buildClaudeCommand(p.base, claudeSessionID)
-	case piProgram:
-		i.piSessionMu.Lock()
-		var piSessionID string
-		if i.piSession != nil {
-			piSessionID = i.piSession.SessionID
+	var matched launchCommandBuilder
+	for _, b := range launchCommandBuilders() {
+		if b.Matches(i.Program) {
+			matched = b
+			break
 		}
-		i.piSessionMu.Unlock()
-		cmd = i.buildPiCommand(p.base, piSessionID)
-	case plainProgram:
+	}
+	switch {
+	case matched != nil:
+		cmd = matched.Build(i, i.Program, claudeSessionID)
+	default:
 		// shellQuoteFields (not one whole-string shellQuote) preserves legitimate multi-word
 		// Program values like "sleep 300" that rely on shell word-splitting, while still
 		// preventing a metacharacter-bearing token -- e.g. a preset's argv[0] of "true; touch
 		// /tmp/pwned" -- from terminating the command and injecting a second one.
-		cmd = shellQuoteFields(p.cmd)
+		cmd = shellQuoteFields(i.Program)
 		if i.AutoApprove {
 			if flag := yoloFlagFor(i.Program); flag != "" {
 				cmd = cmd + " " + flag
 				log.ForSession(i.Title).Debug("auto-approve flag injected", "program", i.Program, "flag", flag)
 			}
 		}
-	default:
-		panic(fmt.Sprintf("unknown programKind %T", p))
 	}
 	if flags := shellQuoteFields(i.CLIFlags); flags != "" {
 		cmd = cmd + " " + flags
@@ -210,6 +250,9 @@ func (i *Instance) buildLaunchCommand(claudeSessionID string) string {
 	// argv positions.
 	for _, a := range i.ExtraArgs {
 		cmd = cmd + " " + shellQuote(a)
+	}
+	if matched != nil && matched.SuppressStderr() {
+		cmd = cmd + " 2>/dev/null"
 	}
 	return cmd
 }
@@ -238,8 +281,8 @@ func shellQuoteFields(s string) string {
 }
 
 // buildClaudeCommand assembles the full claude invocation with all instance flags.
-// It is only called when the program is proven to be claude (via programKind),
-// so no isClaude guards are needed here.
+// It is only called via claudeLaunchBuilder.Build, which already proved the
+// program is claude (Matches), so no isClaude guard is needed here.
 func (i *Instance) buildClaudeCommand(base, claudeSessionID string) string {
 	parts := []string{base}
 	if claudeSessionID != "" {

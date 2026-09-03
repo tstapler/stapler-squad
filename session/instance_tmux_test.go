@@ -88,31 +88,25 @@ func TestIsClaude(t *testing.T) {
 	}
 }
 
-func TestClassifyProgram(t *testing.T) {
+func TestClaudeLaunchBuilder_Matches(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
 		program string
-		want    string // "claude" or "plain"
+		want    bool
 	}{
-		{"claude", "claude"},
-		{"/usr/local/bin/claude", "claude"},
-		{"env -u PROXY claude", "claude"},
-		{"aider", "plain"},
-		{"claude-squad", "plain"},
-		{"", "plain"},
+		{"claude", true},
+		{"/usr/local/bin/claude", true},
+		{"env -u PROXY claude", true},
+		{"aider", false},
+		{"claude-squad", false},
+		{"", false},
 	}
+	b := &claudeLaunchBuilder{}
 	for _, tc := range cases {
 		t.Run(tc.program, func(t *testing.T) {
 			t.Parallel()
-			switch classifyProgram(tc.program).(type) {
-			case claudeProgram:
-				if tc.want != "claude" {
-					t.Errorf("classifyProgram(%q) = claudeProgram, want plainProgram", tc.program)
-				}
-			case plainProgram:
-				if tc.want != "plain" {
-					t.Errorf("classifyProgram(%q) = plainProgram, want claudeProgram", tc.program)
-				}
+			if got := b.Matches(tc.program); got != tc.want {
+				t.Errorf("claudeLaunchBuilder{}.Matches(%q) = %v, want %v", tc.program, got, tc.want)
 			}
 		})
 	}
@@ -142,13 +136,10 @@ func TestIsPi(t *testing.T) {
 	}
 }
 
-func TestClassifyProgram_Pi(t *testing.T) {
+func TestPiLaunchBuilder_Matches(t *testing.T) {
 	t.Parallel()
-	switch classifyProgram("pi").(type) {
-	case piProgram:
-		// expected
-	default:
-		t.Errorf("classifyProgram(%q) = %T, want piProgram", "pi", classifyProgram("pi"))
+	if !(&piLaunchBuilder{}).Matches("pi") {
+		t.Errorf("piLaunchBuilder{}.Matches(%q) = false, want true", "pi")
 	}
 }
 
@@ -156,7 +147,7 @@ func TestBuildLaunchCommand_PiSessionResume(t *testing.T) {
 	t.Parallel()
 	inst := &Instance{Program: "pi", piExtension: piExtension{piSession: &PiSessionData{SessionID: "abc123"}}}
 	got := inst.buildLaunchCommand("")
-	want := "pi --session 'abc123'"
+	want := "pi --session 'abc123' 2>/dev/null"
 	if got != want {
 		t.Errorf("got %q, want %q", got, want)
 	}
@@ -166,8 +157,11 @@ func TestBuildLaunchCommand_PiNoSession_NoOp(t *testing.T) {
 	t.Parallel()
 	inst := &Instance{Program: "pi"}
 	got := inst.buildLaunchCommand("")
-	if got != "pi" {
-		t.Errorf("got %q, want exactly %q (no-op, matching claude's no-session behavior)", got, "pi")
+	// The "2>/dev/null" suffix discards pi's own per-project trust-gate stderr
+	// diagnostics (e.g. "Path not found: <project>/.pi") -- see
+	// buildLaunchCommand's isPiProgram branch doc comment.
+	if got != "pi 2>/dev/null" {
+		t.Errorf("got %q, want exactly %q (no-op aside from the pi stderr redirect)", got, "pi 2>/dev/null")
 	}
 }
 
