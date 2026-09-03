@@ -141,7 +141,7 @@ func mutate(settingsPath string, fn func(hooks map[string]interface{})) error {
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	if err := os.Chmod(tmpName, 0o644); err != nil {
+	if err := os.Chmod(tmpName, 0o600); err != nil {
 		return err
 	}
 	return os.Rename(tmpName, settingsPath)
@@ -149,6 +149,8 @@ func mutate(settingsPath string, fn func(hooks map[string]interface{})) error {
 
 // readSettings parses settingsPath into a map. A missing file yields an empty map.
 func readSettings(settingsPath string) (map[string]interface{}, error) {
+	// #nosec G304 -- every caller passes DefaultGlobalSettingsPath() (~/.claude/settings.json,
+	// a fixed path) or that same value threaded through, not caller/user-controlled input.
 	raw, err := os.ReadFile(settingsPath)
 	if err != nil {
 		if os.IsNotExist(err) {

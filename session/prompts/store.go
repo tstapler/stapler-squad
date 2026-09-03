@@ -72,7 +72,7 @@ func (s *PromptStore) Save(entries []PromptEntry) error {
 
 // save is the internal (unlocked) implementation of Save.
 func (s *PromptStore) save(entries []PromptEntry) error {
-	if err := os.MkdirAll(filepath.Dir(s.filePath), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(s.filePath), 0o750); err != nil {
 		return fmt.Errorf("prompts: mkdir %s: %w", filepath.Dir(s.filePath), err)
 	}
 

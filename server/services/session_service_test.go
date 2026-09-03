@@ -194,6 +194,18 @@ func TestCreateSession_should_ReturnWithinSLO_When_GithubURLResolutionIsSlow(t *
 // CreateSession calls sharing a title, exactly one must succeed and the
 // other must fail (not silently overwrite the first's persisted row).
 func TestCreateSession_should_RejectSecondDuplicate_When_TwoRapidCallsShareTitle(t *testing.T) {
+	// Force a hermetic config dir for this test's config.LoadConfig() calls.
+	// Without this, an ambient STAPLER_SQUAD_TEST_DIR/STAPLER_SQUAD_INSTANCE
+	// left set in the environment (e.g. by a live e2e/demo instance run from
+	// the same shell) wins over IsTestMode()'s own per-PID isolation in
+	// GetConfigDirForDir's priority order, so LoadConfig() silently reads
+	// that other process's config.json instead of getting a fresh
+	// testModeSentinelProgram default -- an empty/real DefaultProgram there
+	// fails Session.program's NotEmpty validator. Matches the same
+	// t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir()) pattern used elsewhere
+	// in this file (e.g. the "ModeIsAlias" subtest) for the identical reason.
+	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+
 	fix := setupForkTestFixture(t)
 	t.Cleanup(fix.cleanup)
 
@@ -4262,6 +4274,15 @@ func TestCreateSession_should_LeaveNoGoroutines_When_HammeredWithFailRetryCancel
 	// TestCreateSession_StatusManagerWiredBeforeDriver's identical rationale.
 	baseline := goleak.IgnoreCurrent()
 	t.Cleanup(func() { goleak.VerifyNone(t, baseline) })
+
+	// Force a hermetic config dir -- see the identical rationale on
+	// TestCreateSession_should_RejectSecondDuplicate_When_TwoRapidCallsShareTitle.
+	// This test's cycles create sessions without an explicit Program, relying
+	// on config.LoadConfig()'s test-mode sentinel default; an ambient
+	// STAPLER_SQUAD_TEST_DIR/STAPLER_SQUAD_INSTANCE leaking in from elsewhere
+	// (e.g. a live e2e/demo run in the same shell) would otherwise make this
+	// test read that other process's config.json instead.
+	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
 
 	fix := setupForkTestFixture(t)
 	wireRegistryForActorSerialization(fix)

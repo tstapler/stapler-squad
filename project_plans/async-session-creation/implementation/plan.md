@@ -785,6 +785,10 @@ a fast, in-dialog RPC error — moves here.
 - The alias-existence check (`config.FindAlias(cfg, req.Msg.AliasName) != nil`) does **not** move — it already ran synchronously in the RPC prefix (Task 2.1.1a-2) and must stay there; moving it here would surface an invalid alias as an async `Failed` card instead of the synchronous `NotFound` RPC error requirements.md's Constraints and design/ux.md's Surface 1 both mandate. Only the downstream merge (today's `config.ResolveAlias`/`config.ResolveDefaults` post-existence work: env vars, CLI flags, path, program, autoyes, alias session type) moves into this pipeline phase — none of that work ever needs to fail visibly enough to justify a synchronous RPC error, so `FailureReason = StartupError` on failure is sufficient. Locate the exact current call sites (between old L1938 and instance construction — confirm exact lines while editing) and relocate as their own phase functions with progress messages.
 - Files: `server/services/session_service.go`
 
+> This deviation is tracked in this document's top-level "Scope Deviations"
+> section (after Risk Control) — see there for the full rationale, rather
+> than duplicating it here.
+
 ##### Task 2.2.2b-2: Regression test — invalid alias returns a synchronous RPC error, never an async Failed card (~4 min)
 - *Given* a `CreateSessionRequest` with an `alias_name` that doesn't exist, *When* `CreateSession` is called, *Then* it returns synchronously with `connect.CodeNotFound` and no `Instance`/session card is ever created — assert no `SessionCreatedEvent` fires and no card subsequently appears as `Failed`. This is the regression test for the cross-artifact consistency gap between this plan and requirements.md/design/ux.md.
 - Files: `server/services/session_service_test.go`

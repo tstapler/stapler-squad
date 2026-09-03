@@ -403,7 +403,24 @@ export function useSessionService(
         return response.session ?? null;
       } catch (err) {
         const wrappedErr = err instanceof Error ? err : new Error("Failed to create session");
-        dispatch(setError(wrappedErr.message));
+        // Deliberately NOT dispatch(setError(...)) here: `sessions.error` is what
+        // PaneSplitRenderer's SessionListPaneBody checks to decide whether to render
+        // the whole session list or replace it with a full-screen "Failed to Load
+        // Sessions / Unable to connect to the server" state (see PaneSplitRenderer.tsx).
+        // That's meant for list-load/watch-stream connectivity failures (listSessions'
+        // and watchSessions' own catch blocks set it correctly). A createSession
+        // rejection -- including an expected, synchronous validation failure like a
+        // duplicate title -- is neither: the list loaded fine and the server is
+        // reachable, it just refused this one request. Setting the same flag here
+        // blanked the entire (already-populated) session list behind a misleading
+        // connectivity error for as long as nothing else happened to clear it, which
+        // is exactly what session-creation-async.spec.ts's "duplicate title keeps the
+        // omnibar open with inline error" test was hitting: the omnibar's own
+        // `omnibar-create-error` correctly showed the rejection, but the session card
+        // it was asserting on had vanished behind this unrelated global error state.
+        // The thrown error already reaches the caller (OmnibarContext/Omnibar.tsx),
+        // which surfaces it via its own local, create-scoped error state -- no need
+        // for a second, differently-scoped copy here.
         throw wrappedErr;
       }
     },

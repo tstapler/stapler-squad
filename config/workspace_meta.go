@@ -47,7 +47,7 @@ func writeWorkspaceMetaErr(configDir, cwd, wsType string) error {
 		LastUsed:    time.Now(),
 	}
 
-	if err := os.MkdirAll(configDir, 0755); err != nil {
+	if err := os.MkdirAll(configDir, 0750); err != nil {
 		return err
 	}
 
@@ -75,7 +75,7 @@ func writeWorkspaceMetaErr(configDir, cwd, wsType string) error {
 		_ = os.Remove(tmpPath)
 		return closeErr
 	}
-	if err := os.Chmod(tmpPath, 0644); err != nil {
+	if err := os.Chmod(tmpPath, 0600); err != nil {
 		_ = os.Remove(tmpPath)
 		return err
 	}
@@ -87,6 +87,9 @@ func writeWorkspaceMetaErr(configDir, cwd, wsType string) error {
 
 // ReadWorkspaceMeta reads workspace metadata from the given config directory.
 func ReadWorkspaceMeta(configDir string) (WorkspaceMeta, error) {
+	// #nosec G304 -- configDir comes from config.GetConfigDir() or a baseDir built
+	// from os.UserHomeDir() plus fixed subdirectory names (see ListAvailableWorkspaces,
+	// scanMetaSubdirs, and server/services/database_service.go); never RPC/user input.
 	data, err := os.ReadFile(filepath.Join(configDir, workspaceMetaFileName))
 	if err != nil {
 		return WorkspaceMeta{}, fmt.Errorf("failed to read workspace meta: %w", err)
@@ -128,7 +131,7 @@ func SetPreferredWorkspace(baseDir, configDir string) error {
 		_ = os.Remove(tmpPath)
 		return fmt.Errorf("failed to write preferred workspace: %w", closeErr)
 	}
-	if err := os.Chmod(tmpPath, 0644); err != nil {
+	if err := os.Chmod(tmpPath, 0600); err != nil {
 		_ = os.Remove(tmpPath)
 		return fmt.Errorf("failed to chmod temp preferred workspace file: %w", err)
 	}

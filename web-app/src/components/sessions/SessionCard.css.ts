@@ -521,9 +521,13 @@ export const actionButton = style({
   cursor: "pointer",
   transition: "all 0.2s ease",
   selectors: {
-    "&:hover": {
+    "&:hover:not(:disabled)": {
       background: vars.color.hoverBackground,
       borderColor: vars.color.borderHover,
+    },
+    "&:disabled": {
+      cursor: "default",
+      opacity: 0.6,
     },
   },
   "@media": {
@@ -535,6 +539,17 @@ export const actionButton = style({
       textAlign: "center",
     },
   },
+});
+
+// Size-override modifier for actionButton: the Cancel/Retry creation-lifecycle
+// buttons (Epic 5.4, async-session-creation) sit in a tight inline row next
+// to the creation-progress spinner / failure message, not actionsBar's
+// spacious button grid, so they need a visually smaller resting size. Applied
+// together with actionButton (not standalone) so the WCAG 2.5.5 44px
+// min-height touch-target rule and hover states below 768px still apply.
+export const actionButtonCompact = style({
+  padding: "4px 10px",
+  fontSize: "0.8125rem",
 });
 
 export const deleteButton = style({
