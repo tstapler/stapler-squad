@@ -19,6 +19,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tstapler/stapler-squad/jules"
+	ssqlog "github.com/tstapler/stapler-squad/log"
 )
 
 // --- fakes ---
@@ -231,16 +232,17 @@ func testRow(id string, startedAt *time.Time, createdAt time.Time) ItemSessionSu
 	}
 }
 
-// captureSlog temporarily redirects the slog default logger to a buffer, at
-// Debug level so every one of this poller's log lines is captured. Not
-// t.Parallel()-safe — mirrors session/repo_path_test.go's existing pattern of
-// swapping the process-global slog.Default().
+// captureSlog temporarily redirects the injectable slog seam
+// (ssqlog.SetSlogDefaultForTest) log.Warn/log.Info actually read from — not
+// slog.SetDefault, which log/log.go's logAt no longer consults — to a
+// buffer, at Debug level so every one of this poller's log lines is
+// captured. Not t.Parallel()-safe — mirrors session/repo_path_test.go's
+// existing pattern.
 func captureSlog(t *testing.T) func() string {
 	t.Helper()
 	var buf bytes.Buffer
-	prev := slog.Default()
-	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
-	t.Cleanup(func() { slog.SetDefault(prev) })
+	prev := ssqlog.SetSlogDefaultForTest(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() { ssqlog.SetSlogDefaultForTest(prev) })
 	return buf.String
 }
 

@@ -30,6 +30,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/jules"
+	ssqlog "github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
 )
 
@@ -202,10 +203,18 @@ func (f *fakeUsagePollErrorClient) GetSession(ctx context.Context, _ jules.Jules
 func TestJulesFullCycle_should_LogNoSecretMaterial_When_DispatchPollCompleteCycleRunsAgainstFakes(t *testing.T) {
 	const testAPIKey = "AIzaSyD-EXAMPLE"
 
+	// slogDefaultMu (declared in autonomous_orchestration_service_test.go)
+	// serializes this swap against every other log.SetSlogDefaultForTest
+	// swap in this package -- log/log.go's logAt no longer consults
+	// slog.SetDefault, so this must use the injectable seam to actually
+	// capture log.Info/log.Warn output.
+	slogDefaultMu.Lock()
 	handler := &capturingSlogHandler{}
-	origDefault := slog.Default()
-	slog.SetDefault(slog.New(handler))
-	t.Cleanup(func() { slog.SetDefault(origDefault) })
+	prevDefault := ssqlog.SetSlogDefaultForTest(slog.New(handler))
+	t.Cleanup(func() {
+		ssqlog.SetSlogDefaultForTest(prevDefault)
+		slogDefaultMu.Unlock()
+	})
 
 	storage := createTestStorage(t)
 	ctx := t.Context()

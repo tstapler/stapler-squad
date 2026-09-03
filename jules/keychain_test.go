@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/zalando/go-keyring"
+
+	"github.com/tstapler/stapler-squad/log"
 )
 
 // swapKeyringSeams overrides the package-level keyringGet/Set/Delete test
@@ -63,14 +65,17 @@ func (h *warnHandler) Count() int {
 	return h.count
 }
 
-// installWarnHandler installs a warnHandler as the slog default for the
+// installWarnHandler installs a warnHandler as the injectable slog seam
+// (log.SetSlogDefaultForTest) log.Warn/log.Info actually read from -- not
+// slog.SetDefault, which log/log.go's logAt no longer consults -- for the
 // duration of the calling test, restoring the prior default via t.Cleanup.
+// No mutex needed: this file's tests never run in parallel (see the package
+// doc comment on swapKeyringSeams above).
 func installWarnHandler(t *testing.T, message string) *warnHandler {
 	t.Helper()
 	h := &warnHandler{message: message}
-	prev := slog.Default()
-	slog.SetDefault(slog.New(h))
-	t.Cleanup(func() { slog.SetDefault(prev) })
+	prev := log.SetSlogDefaultForTest(slog.New(h))
+	t.Cleanup(func() { log.SetSlogDefaultForTest(prev) })
 	return h
 }
 
