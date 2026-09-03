@@ -322,6 +322,8 @@ func collectRecentLogs(lineCount int) RecentLogsSnapshot {
 
 // tailFile returns the last n lines of a file efficiently.
 func tailFile(path string, n int) ([]string, error) {
+	// #nosec G304 -- path is always logFilePath from log.GetLogFilePath(cfg), the
+	// server's own configured log path; never network/RPC input.
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, err

@@ -265,6 +265,10 @@ func (us *UtilityService) GetLogs(
 	}
 
 	// Read log file
+	// #nosec G304 -- logFilePath is either log.GetLogFilePath(cfg) (fully internal) or
+	// log.GetSessionLogFilePath(cfg, resolvedID); the latter's sessionID component is
+	// sanitized to [A-Za-z0-9_-] by GetSessionLogFilePath itself, so even an unresolved
+	// RPC-supplied session_id cannot escape the log directory.
 	file, err := os.Open(logFilePath)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {

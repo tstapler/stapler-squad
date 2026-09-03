@@ -130,7 +130,10 @@ func LoadPricingOverride(configPath string) (*PricingTable, error) {
 	table := DefaultPricingTable()
 	table.ConfigPath = configPath
 
-	data, err := os.ReadFile(configPath) //nolint:gosec
+	// configPath's only caller (server/dependencies.go) builds it from
+	// config.GetConfigDir() plus the hardcoded "pricing_overrides.json" name,
+	// never from user/RPC input.
+	data, err := os.ReadFile(configPath) // #nosec G304 -- configPath is configDir + a hardcoded filename, not user input
 	if err != nil {
 		return nil, err
 	}

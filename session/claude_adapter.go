@@ -93,7 +93,7 @@ func ReadCanonicalTurnsFromFile(path string) ([]CanonicalTurn, error) {
 		return nil, fmt.Errorf("claude transcript file not found at %s: %w", path, err)
 	}
 
-	file, err := os.Open(path)
+	file, err := os.Open(path) // #nosec G304 -- every caller builds path from ClaudeProjectDirName (strips all non-alphanumeric chars, no traversal possible) plus a UUID already validated by directory enumeration (HistoryFileDetector) or internal instance state, never raw request input
 	if err != nil {
 		return nil, err
 	}
@@ -231,7 +231,7 @@ func (a *ClaudeAdapter) Export(ctx context.Context, turns []CanonicalTurn, inst 
 	}
 
 	claudeLogPath := filepath.Join(claudeProjectDir, uuidStr+".jsonl")
-	f, err := os.Create(claudeLogPath)
+	f, err := os.Create(claudeLogPath) // #nosec G304 -- claudeProjectDir is sanitized via ClaudeProjectDirName (non-alphanumeric -> '-'), uuidStr is internal instance state (GetClaudeConversationUUID), not external input
 	if err != nil {
 		return err
 	}

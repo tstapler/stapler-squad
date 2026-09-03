@@ -458,7 +458,7 @@ func EnsurePluginDir() (string, error) {
 	// 0755, not 0750: this directory holds user-authored detector plugin files the user is
 	// meant to browse/edit directly (see the seeded example.toml.sample below) -- it's a
 	// config-style directory, not sensitive storage, and Test_EnsurePluginDir asserts 0755.
-	if err := os.MkdirAll(dir, 0o755); err != nil { //nolint:gosec // see comment above
+	if err := os.MkdirAll(dir, 0o755); err != nil { // #nosec G301 -- see comment above
 		return "", fmt.Errorf("failed to create detector plugin directory %s: %w", dir, err)
 	}
 
@@ -579,7 +579,7 @@ func loadPluginFile(fullPath string) (*pluginFile, dtypes.StatusPatterns, *Patte
 		}}
 	}
 
-	data, readErr := os.ReadFile(fullPath)
+	data, readErr := os.ReadFile(fullPath) // #nosec G304 -- fullPath is enumerated from os.ReadDir of the plugin directory with symlinks already rejected above, not externally supplied
 	if readErr != nil {
 		return nil, dtypes.StatusPatterns{}, nil, []PluginLoadError{{Path: fullPath, Field: "file", Err: readErr}}
 	}

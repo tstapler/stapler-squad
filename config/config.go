@@ -1272,6 +1272,8 @@ func SaveConfig(config *Config) error {
 // LoadConfigFromPath loads and parses a config file from an explicit path.
 // Returns the config and any error encountered.
 func LoadConfigFromPath(path string) (*Config, error) {
+	// #nosec G304 -- all callers pass paths built from config.GetConfigDir() plus a
+	// fixed "config.json" filename, not caller/user-controlled input.
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err

@@ -581,6 +581,8 @@ func (s *NotificationHistoryStore) saveToDisk() error {
 
 	// Atomic write: write to temp file, sync, rename
 	tmpPath := s.filePath + ".tmp"
+	// #nosec G304 -- s.filePath is configDir/notifications.json (see server.go), built from
+	// the internal config dir and a literal filename; never network/RPC input.
 	f, err := os.OpenFile(tmpPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
 	if err != nil {
 		return fmt.Errorf("create temp file: %w", err)

@@ -1332,6 +1332,8 @@ func maybeAutoMigrateToEnt(repo *session.EntRepository) error {
 	type stateFileFormat struct {
 		Instances []session.InstanceData `json:"instances"`
 	}
+	// #nosec G304 -- stateJSONPath is configDir+"/state.json", built from the internal
+	// config dir and a literal filename; never network/RPC input.
 	rawData, readErr := os.ReadFile(stateJSONPath)
 	if readErr != nil {
 		return fmt.Errorf("failed to read state.json: %w", readErr)

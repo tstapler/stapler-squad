@@ -388,6 +388,8 @@ func StopDaemon() error {
 	}
 
 	pidFile := filepath.Join(pidDir, "daemon.pid")
+	// #nosec G304 -- pidFile is GetConfigDir() plus the constant "daemon.pid",
+	// not caller/user-controlled input.
 	data, err := os.ReadFile(pidFile)
 	if err != nil {
 		if os.IsNotExist(err) {

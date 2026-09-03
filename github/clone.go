@@ -46,6 +46,13 @@ func GetClonePath(owner, repo string) string {
 func FindExistingClone(owner, repo string) (string, bool) {
 	clonePath := GetClonePath(owner, repo)
 
+	// Reject owner/repo values that make clonePath escape the clone base
+	// directory (e.g. owner="..", repo="../../etc") before touching disk.
+	base := expandPath(DefaultCloneBase)
+	if !isSubPath(base, clonePath) {
+		return "", false
+	}
+
 	// Check if .git directory exists (indicating a git repository)
 	gitDir := filepath.Join(clonePath, ".git")
 	if info, err := os.Stat(gitDir); err == nil && info.IsDir() {
@@ -91,6 +98,13 @@ func GetOrCloneRepository(opts CloneOptions) (*CloneResult, error) {
 
 	// Need to clone the repository
 	clonePath := GetClonePath(opts.Owner, opts.Repo)
+
+	// Reject owner/repo values that make clonePath escape the clone base
+	// directory (e.g. owner="..", repo="../../etc") before touching disk.
+	base := expandPath(DefaultCloneBase)
+	if !isSubPath(base, clonePath) {
+		return nil, fmt.Errorf("invalid owner/repo: resulting clone path escapes clone directory")
+	}
 
 	// Ensure parent directory exists
 	parentDir := filepath.Dir(clonePath)
@@ -240,6 +254,9 @@ func startsWith(s, prefix string) bool {
 func getCurrentBranch(repoPath string) (string, error) {
 	// Read HEAD to determine current branch
 	headPath := filepath.Join(repoPath, ".git", "HEAD")
+	// #nosec G304 -- repoPath is always clonePath/existingPath from GetOrCloneRepository,
+	// which validates via isSubPath that it stays within the clone base directory before
+	// calling getCurrentBranch.
 	data, err := os.ReadFile(headPath)
 	if err != nil {
 		return "", err

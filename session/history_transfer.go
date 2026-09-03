@@ -96,7 +96,7 @@ func PortSessionHistory(ctx context.Context, oldProgram, newProgram string, i *I
 				log.Warn("PortSessionHistory: failed to marshal agy history entry", "error", marshalErr)
 				return marshalErr
 			}
-			if f, err := os.OpenFile(agyHistoryPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600); err == nil {
+			if f, err := os.OpenFile(agyHistoryPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600); err == nil { // #nosec G304 -- agyHistoryPath is home dir + hardcoded constant components only
 				if _, werr := f.Write(historyData); werr != nil {
 					f.Close()
 					log.Warn("PortSessionHistory: failed to write agy history data", "error", werr)
@@ -126,7 +126,7 @@ func PortSessionHistory(ctx context.Context, oldProgram, newProgram string, i *I
 				log.Warn("PortSessionHistory: failed to marshal claude history entry", "error", marshalErr)
 				return marshalErr
 			}
-			if hf, err := os.OpenFile(claudeHistoryPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600); err == nil {
+			if hf, err := os.OpenFile(claudeHistoryPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600); err == nil { // #nosec G304 -- claudeHistoryPath is home dir + hardcoded constant components only
 				if _, werr := hf.Write(historyData); werr != nil {
 					hf.Close()
 					log.Warn("PortSessionHistory: failed to write claude history data", "error", werr)
