@@ -166,9 +166,10 @@ export const hostBadge = style({
 
 // piHealthBadge shows the pi approval-extension's health state (loaded/failed/
 // unknown, pi-support Epic 4.2). Mirrors hostBadge's neutral pill shape; the
-// per-state color/text lives on piHealthBadgeLoaded/Failed/Unknown below --
-// color is never the only signal (design/ux.md AC3), the label text itself
-// differs per state too.
+// per-state color lives on piHealthBadgeLoaded/Failed/Unknown below -- color
+// is never the only signal (design/ux.md AC3), the icon and aria-label also
+// differ per state (piHealthBadgeInfo() keeps the visible label text "pi"
+// constant across all three states).
 export const piHealthBadge = style({
   display: "inline-flex",
   alignItems: "center",

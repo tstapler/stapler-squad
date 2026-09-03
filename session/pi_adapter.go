@@ -177,10 +177,9 @@ func NewPiEventReader(r io.Reader) *PiEventReader {
 
 // Next reads and decodes the next event line. It returns io.EOF (wrapped by
 // nothing) when the underlying reader is exhausted. Blank lines are skipped.
-// A line whose `type` discriminator is unrecognized returns a
-// *piUnrecognizedTypeError alongside the raw line bytes as the decoded
-// value's type is unknown; callers can use errors.As to detect and count
-// this case rather than treating it as fatal.
+// A line whose `type` discriminator is unrecognized returns a nil event and
+// a *piUnrecognizedTypeError (the raw line is not retained); callers can use
+// errors.As to detect and count this case rather than treating it as fatal.
 func (r *PiEventReader) Next() (event any, err error) {
 	for r.scanner.Scan() {
 		line := r.scanner.Bytes()

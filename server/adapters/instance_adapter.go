@@ -16,9 +16,13 @@ import (
 )
 
 // piExtensionHealthResolverMu guards concurrent read/write of
-// piExtensionHealthResolver. Mirrors hook_injector.go's hookBaseURLFnMu.
+// piExtensionHealthResolver. RWMutex rather than hook_injector.go's plain
+// hookBaseURLFnMu: InstanceToProto's resolver read is on the session-listing
+// hot path (called once per session per poll) while the write happens at
+// most once at server startup, so concurrent readers should not serialize
+// against each other.
 var (
-	piExtensionHealthResolverMu sync.Mutex
+	piExtensionHealthResolverMu sync.RWMutex
 	piExtensionHealthResolver   func(sessionID, program string) sessionv1.PiExtensionHealth
 )
 
@@ -37,8 +41,8 @@ func SetPiExtensionHealthResolver(fn func(sessionID, program string) sessionv1.P
 }
 
 func getPiExtensionHealthResolver() func(sessionID, program string) sessionv1.PiExtensionHealth {
-	piExtensionHealthResolverMu.Lock()
-	defer piExtensionHealthResolverMu.Unlock()
+	piExtensionHealthResolverMu.RLock()
+	defer piExtensionHealthResolverMu.RUnlock()
 	return piExtensionHealthResolver
 }
 
