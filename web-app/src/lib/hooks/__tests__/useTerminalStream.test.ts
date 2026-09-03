@@ -544,6 +544,54 @@ describe('useTerminalStream — auto-reconnect (NEXT_PUBLIC_RECONNECT_V2)', () =
     await waitFor(() => expect(callCount).toBeGreaterThanOrEqual(2));
   });
 
+  it('reconnect_should_hardFail_When_sixConsecutiveAutomaticReconnectsFail', async () => {
+    // Regression test for "reconnect backoff never escalates — attempt
+    // counter always resets to 0": connect() used to call
+    // terminalBackoffRef.reset() unconditionally, including when invoked by
+    // the finally block's own automatic retry — so the >=5 hard-fail check
+    // could never see a non-zero attempt count. Each cycle below is driven
+    // exclusively by that automatic retry path (never a manual connect()
+    // call), so if the reset bug regresses, isHardFailed will never flip.
+    let callCount = 0;
+    const streams: ReturnType<typeof makePushStream<object>>[] = [];
+    mockStreamTerminal.mockImplementation(() => {
+      callCount++;
+      const s = makePushStream<object>();
+      streams.push(s);
+      return s.iterable;
+    });
+
+    const { result } = renderHook(() => useTerminalStream(RECONNECT_OPTIONS));
+
+    await act(async () => { result.current.connect(); });
+    await waitFor(() => expect(streams.length).toBe(1));
+
+    // Fail the stream 6 times in a row, each time reaching a first message
+    // (which clears the unrelated connect-timeout path — see AC6/the
+    // "foreground connect-timeout" describe block below — so this test
+    // isolates the real-failure backoff path) before the stream closes.
+    // The 6th failure is the one that observes attempt>=5 and hard-fails
+    // instead of scheduling a 7th attempt.
+    for (let i = 0; i < 6; i++) {
+      const s = streams[streams.length - 1];
+      await act(async () => { s.push(makeOutputMsg()); });
+      await waitFor(() => expect(result.current.isConnected).toBe(true));
+      await act(async () => { s.end(); });
+      await waitFor(() => expect(result.current.isConnected).toBe(false));
+      // Fire only the scheduled reconnect timer (not any subsequently-created
+      // connection's own connect-timeout) so the next iteration's push()
+      // reaches the new stream before that connect-timeout could fire and
+      // muddy this test with the unrelated connect-timeout retry path.
+      await act(async () => { await jest.advanceTimersToNextTimerAsync(); });
+      if (i < 5) {
+        await waitFor(() => expect(streams.length).toBe(i + 2));
+      }
+    }
+
+    await waitFor(() => expect(result.current.isHardFailed).toBe(true));
+    expect(callCount).toBe(6); // no 7th attempt after hard-fail
+  });
+
   it('connect_should_notReconnect_When_disconnectCalledDuringBackoffSleep', async () => {
     let callCount = 0;
     const streams: ReturnType<typeof makePushStream<object>>[] = [];
@@ -1159,9 +1207,13 @@ describe('useTerminalStream — foreground connect-timeout', () => {
   });
 
   it('connect_should_abortAndRetry_When_foregroundTrueAndFirstAttemptExceedsFastTimeout', async () => {
-    let capturedSignal: AbortSignal | undefined;
+    // Captures every attempt's signal (not just the latest) — AC6 retries a
+    // connect-timeout abort immediately (no additional backoff delay), so by
+    // the time this test can observe DISCONNECTED, a second attempt may
+    // already be under way and have overwritten a single captured signal.
+    const capturedSignals: (AbortSignal | undefined)[] = [];
     mockStreamTerminal.mockImplementation((_msg: unknown, opts?: { signal?: AbortSignal }) => {
-      capturedSignal = opts?.signal;
+      capturedSignals.push(opts?.signal);
       return makePushStream(opts?.signal).iterable;
     });
 
@@ -1170,13 +1222,14 @@ describe('useTerminalStream — foreground connect-timeout', () => {
     );
 
     await act(async () => { result.current.connect(); });
-    expect(capturedSignal?.aborted).toBe(false);
+    expect(capturedSignals[0]?.aborted).toBe(false);
 
     await act(async () => { jest.advanceTimersByTime(FOREGROUND_CONNECT_TIMEOUT_MS); });
     await waitFor(() => expect(result.current.terminalState).toBe('DISCONNECTED'));
-    expect(capturedSignal?.aborted).toBe(true);
+    expect(capturedSignals[0]?.aborted).toBe(true);
 
-    // Not stuck in CONNECTING: the backoff-scheduled retry reaches CONNECTING again.
+    // Not stuck in DISCONNECTED: the immediate connect-timeout retry (AC6 — no
+    // backoff delay for this path) reaches CONNECTING again.
     await act(async () => { jest.advanceTimersByTime(1000); });
     await waitFor(() => expect(result.current.terminalState).toBe('CONNECTING'));
   });
@@ -1426,6 +1479,33 @@ describe('useTerminalStream — foreground connect-timeout', () => {
     await waitFor(() => expect(result.current.terminalState).toBe('DISCONNECTED'));
 
     expect(onError).not.toHaveBeenCalled();
+  });
+
+  it('reconnect_should_notHardFail_When_manyConsecutiveConnectTimeoutAbortsOccur', async () => {
+    // AC6 regression test: a connect-timeout abort is our own fast-retry
+    // optimization, not a real connection failure — it must never consume
+    // the shared terminalBackoffRef attempt/hard-fail budget, or a
+    // healthy-but-slow (high-RTT/VPN) connection that only ever hits its own
+    // connect-timeout would eventually get hard-failed by its own retries.
+    let callCount = 0;
+    mockStreamTerminal.mockImplementation((_msg: unknown, opts?: { signal?: AbortSignal }) => {
+      callCount++;
+      return makePushStream(opts?.signal).iterable; // never pushes a message — always times out
+    });
+
+    const { result } = renderHook(() =>
+      useTerminalStream({ ...RECONNECT_OPTIONS, foreground: false })
+    );
+
+    await act(async () => { result.current.connect(); });
+
+    // Trigger far more than 5 consecutive connect-timeout aborts.
+    for (let i = 0; i < 10; i++) {
+      await act(async () => { jest.advanceTimersByTime(CONNECT_TIMEOUT_MS); });
+    }
+
+    expect(callCount).toBeGreaterThan(5);
+    expect(result.current.isHardFailed).toBe(false);
   });
 
   it('connect_should_callOnError_When_streamErrorsForARealNonTimeoutReason', async () => {
