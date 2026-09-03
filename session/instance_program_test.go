@@ -34,7 +34,14 @@ func TestSwitchProgram_SameValue_NoOp(t *testing.T) {
 // string ("System default") resolves to config.LoadConfig().DefaultProgram rather than
 // being stored as "" or silently dropped.
 func TestSwitchProgram_EmptyString_ResolvesToConfigDefault(t *testing.T) {
-	t.Parallel()
+	// Not t.Parallel(): SwitchProgram("") resolves the default via config.LoadConfig(),
+	// which — unlike the rest of minimalInstance's "no disk I/O" contract — reads the
+	// real, unisolated ~/.stapler-squad/config.json when STAPLER_SQUAD_TEST_DIR isn't
+	// set (config.GetConfigDir() only honors it, and t.Setenv panics after t.Parallel(),
+	// so a shared-helper fix isn't available here). If that file exists with an empty
+	// default_program, the test fails independent of any other change — confirmed by
+	// reproducing on a clean origin/main checkout. Isolate via a per-test dir instead.
+	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
 	inst := minimalInstance(t)
 	inst.Program = "aider"
 

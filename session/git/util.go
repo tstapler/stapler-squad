@@ -447,7 +447,7 @@ func InitializeProjectDirectory(path string) error {
 	// 3. Track whether we created the directory so we can roll back on failure
 	dirCreated := false
 	if _, err := os.Stat(path); os.IsNotExist(err) {
-		if err := os.MkdirAll(path, 0755); err != nil {
+		if err := os.MkdirAll(path, 0750); err != nil {
 			return fmt.Errorf("failed to create directory: %w", err)
 		}
 		dirCreated = true
@@ -499,7 +499,7 @@ func createInitialCommit(repo *git.Repository, repoPath string) error {
 	// Create a .gitignore file as the initial commit content
 	gitignorePath := filepath.Join(repoPath, ".gitignore")
 	gitignoreContent := []byte("# Project gitignore\n")
-	if err := os.WriteFile(gitignorePath, gitignoreContent, 0644); err != nil {
+	if err := os.WriteFile(gitignorePath, gitignoreContent, 0600); err != nil {
 		return fmt.Errorf("failed to create .gitignore: %w", err)
 	}
 

@@ -204,7 +204,7 @@ func (s *SuspendedProcessStore) readWithoutLocking() (suspendedProcessFile, erro
 }
 
 func (s *SuspendedProcessStore) writeWithoutLocking(file suspendedProcessFile) error {
-	if err := os.MkdirAll(s.configDir, 0755); err != nil {
+	if err := os.MkdirAll(s.configDir, 0750); err != nil {
 		return fmt.Errorf("failed to create config directory: %w", err)
 	}
 	data, err := json.MarshalIndent(file, "", "  ")
@@ -213,7 +213,7 @@ func (s *SuspendedProcessStore) writeWithoutLocking(file suspendedProcessFile) e
 	}
 	targetPath := s.path()
 	tmpPath := targetPath + ".tmp"
-	if err := os.WriteFile(tmpPath, data, 0644); err != nil {
+	if err := os.WriteFile(tmpPath, data, 0600); err != nil {
 		return fmt.Errorf("failed to write temporary suspended process file: %w", err)
 	}
 	if err := os.Rename(tmpPath, targetPath); err != nil {

@@ -119,7 +119,7 @@ func SaveDiscoveryConfig(config *DiscoveryConfig) error {
 		return err
 	}
 
-	return os.WriteFile(configPath, data, 0644)
+	return os.WriteFile(configPath, data, 0600)
 }
 
 // IsExternalDiscoveryEnabled returns true if external instance discovery is enabled

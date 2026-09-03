@@ -108,7 +108,7 @@ func GetOrCloneRepository(opts CloneOptions) (*CloneResult, error) {
 
 	// Ensure parent directory exists
 	parentDir := filepath.Dir(clonePath)
-	if err := os.MkdirAll(parentDir, 0755); err != nil {
+	if err := os.MkdirAll(parentDir, 0750); err != nil {
 		return nil, fmt.Errorf("failed to create directory '%s': %w", parentDir, err)
 	}
 
@@ -154,7 +154,7 @@ func GetOrCloneRepository(opts CloneOptions) (*CloneResult, error) {
 // EnsureCloneDirectory ensures the base clone directory exists
 func EnsureCloneDirectory() error {
 	base := expandPath(DefaultCloneBase)
-	return os.MkdirAll(base, 0755)
+	return os.MkdirAll(base, 0750)
 }
 
 // CleanupClone removes a cloned repository

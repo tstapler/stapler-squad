@@ -23,7 +23,7 @@ import (
 // If upToSeq exceeds the maximum sequence in src, all entries are copied.
 func ForkScrollback(srcPath string, upToSeq uint64, dstPath string) error {
 	// Ensure destination directory exists.
-	if err := os.MkdirAll(filepath.Dir(dstPath), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(dstPath), 0750); err != nil {
 		return fmt.Errorf("fork scrollback: create dst dir: %w", err)
 	}
 

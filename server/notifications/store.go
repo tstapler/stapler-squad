@@ -100,7 +100,7 @@ const orphanPruneInterval = 1 * time.Minute
 func NewNotificationHistoryStore(filePath string) (*NotificationHistoryStore, error) {
 	// Ensure the parent directory exists
 	dir := filepath.Dir(filePath)
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	if err := os.MkdirAll(dir, 0750); err != nil {
 		return nil, fmt.Errorf("create notifications directory: %w", err)
 	}
 
@@ -583,7 +583,7 @@ func (s *NotificationHistoryStore) saveToDisk() error {
 	tmpPath := s.filePath + ".tmp"
 	// #nosec G304 -- s.filePath is configDir/notifications.json (see server.go), built from
 	// the internal config dir and a literal filename; never network/RPC input.
-	f, err := os.OpenFile(tmpPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0644)
+	f, err := os.OpenFile(tmpPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
 	if err != nil {
 		return fmt.Errorf("create temp file: %w", err)
 	}

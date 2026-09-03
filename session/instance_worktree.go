@@ -366,7 +366,15 @@ func (i *Instance) GetEffectiveRootDir() string {
 			return p
 		}
 	}
-	return i.Path
+	return i.GetPath()
+}
+
+// GetPath returns the instance's repository root path. Written under
+// i.mu by setGitHubResolutionLocked once deferred GitHub URL resolution
+// completes in the background, so reads must go through this lock-free
+// accessor (the published atomic Snapshot) rather than the bare i.Path field.
+func (i *Instance) GetPath() string {
+	return i.Snapshot().Path
 }
 
 // Workspace returns where this session is operating.
@@ -379,7 +387,7 @@ func (i *Instance) GetEffectiveRootDir() string {
 // to read a directory that's gone and surface a bare "directory not found: ."
 // with no indication why.
 func (i *Instance) Workspace() Workspace {
-	repoRoot := i.Path
+	repoRoot := i.GetPath()
 	effectivePath := i.GetEffectiveRootDir()
 	if effectivePath != repoRoot {
 		if _, err := os.Stat(effectivePath); err != nil {
@@ -577,7 +585,7 @@ func (i *Instance) GetWorkingDirectory() string {
 	if i.gitManager.HasWorktree() {
 		return i.gitManager.GetWorktreePath()
 	}
-	return i.Path
+	return i.GetPath()
 }
 
 // DetectAndPopulateWorktreeInfo detects if the instance path is a worktree

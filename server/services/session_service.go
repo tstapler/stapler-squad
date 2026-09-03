@@ -5853,9 +5853,17 @@ func (s *SessionService) LogClientEvents(
 }
 
 // wireAutoArchiveCallback registers a lifecycle listener that auto-archives a
-// workflow-spawned session when it exits.
+// workflow-spawned or backlog-spawned session when it exits. Backlog sessions are
+// included because BacklogService's own archiveItemWorkSessions only fires when
+// the owning item reaches a terminal status or gets reworked — a session whose
+// item never reaches either (stuck, orphaned, or manually abandoned) would
+// otherwise never get ArchivedAt set and would accumulate forever, since
+// SessionRetentionSweeper only ever considers archived sessions.
 func (s *SessionService) wireAutoArchiveCallback(inst *session.Instance) {
-	if inst == nil || inst.WorkflowID == "" {
+	if inst == nil {
+		return
+	}
+	if inst.WorkflowID == "" && !inst.IsBacklogOriginatedSession() {
 		return
 	}
 	inst.RegisterLifecycleListener(&autoArchiveListener{svc: s, inst: inst})
@@ -6400,22 +6408,33 @@ func (s *SessionService) DeleteWorkflowFailedSessions(
 	return s.workflowSvc.DeleteWorkflowFailedSessions(ctx, req)
 }
 
-// maybeAutoArchive archives a workflow session that has just stopped.
-// Called in the status-update path whenever a session transitions to Stopped.
-// Only archives sessions spawned by a workflow (WorkflowID != "").
+// maybeAutoArchive archives a workflow- or backlog-spawned session that has just
+// stopped. Called in the status-update path whenever a session transitions to
+// Stopped. Only archives sessions spawned by a workflow (WorkflowID != "") or by
+// the backlog automation pipeline (see IsBacklogOriginatedSession) — this is a
+// fallback safety net for backlog sessions specifically, since
+// BacklogService.archiveItemWorkSessions is the primary archival path for those
+// but only fires on the owning item's terminal/rework transitions, not on the
+// session's own exit.
 // If the workflow has archive_after_hours > 0, the retention enforcer handles
-// time-delayed archival, so we skip immediate archival here (ADR-4).
+// time-delayed archival, so we skip immediate archival here (ADR-4). Backlog
+// sessions have no such delayed-archival config, so that check is workflow-only.
 func (s *SessionService) maybeAutoArchive(inst *session.Instance) {
-	if inst == nil || inst.WorkflowID == "" {
+	if inst == nil {
 		return
 	}
-	// Check if this workflow uses delayed archival via the retention enforcer.
-	s.workflowMetaMu.RLock()
-	meta, ok := s.workflowMetaCache[inst.WorkflowID]
-	s.workflowMetaMu.RUnlock()
-	if ok && meta.archiveAfterHours > 0 {
-		// Retention enforcer will archive this after the configured delay.
+	if inst.WorkflowID == "" && !inst.IsBacklogOriginatedSession() {
 		return
+	}
+	if inst.WorkflowID != "" {
+		// Check if this workflow uses delayed archival via the retention enforcer.
+		s.workflowMetaMu.RLock()
+		meta, ok := s.workflowMetaCache[inst.WorkflowID]
+		s.workflowMetaMu.RUnlock()
+		if ok && meta.archiveAfterHours > 0 {
+			// Retention enforcer will archive this after the configured delay.
+			return
+		}
 	}
 	now := time.Now()
 	// CAS: set ArchivedAt only if still nil. Prevents double-archive from concurrent EventExited fires.

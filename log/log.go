@@ -435,7 +435,7 @@ func (sl *StructuredLogger) Fatal(message string, fields ...map[string]interface
 func GetConfigDir() (string, error) {
 	// Priority 1: Test directory override (from --test-mode flag) wins outright.
 	if testDir := os.Getenv(envTestDir); testDir != "" {
-		if err := os.MkdirAll(testDir, 0755); err != nil {
+		if err := os.MkdirAll(testDir, 0750); err != nil {
 			return "", fmt.Errorf("failed to create test directory: %w", err)
 		}
 		return testDir, nil
@@ -483,7 +483,7 @@ func GetLogDir(cfg *LogConfig) (string, error) {
 
 	logDir := filepath.Join(configDir, "logs")
 	// Create the log directory if it doesn't exist
-	if err := os.MkdirAll(logDir, 0755); err != nil {
+	if err := os.MkdirAll(logDir, 0750); err != nil {
 		return os.TempDir(), fmt.Errorf("failed to create log directory: %w", err)
 	}
 
@@ -500,7 +500,7 @@ func GetTestLogDir() (string, error) {
 
 	testLogDir := filepath.Join(configDir, "logs", "test")
 	// Create the test log directory if it doesn't exist
-	if err := os.MkdirAll(testLogDir, 0755); err != nil {
+	if err := os.MkdirAll(testLogDir, 0750); err != nil {
 		return os.TempDir(), fmt.Errorf("failed to create test log directory: %w", err)
 	}
 
@@ -888,7 +888,7 @@ func createRotatingWriter(logFilePath string, cfg *LogConfig) io.Writer {
 	if cfg == nil || cfg.LogMaxSize <= 0 {
 		// Create log directory if it doesn't exist
 		logDir := filepath.Dir(logFilePath)
-		if err := os.MkdirAll(logDir, 0755); err != nil {
+		if err := os.MkdirAll(logDir, 0750); err != nil {
 			panic(fmt.Sprintf("could not create log directory: %s", err))
 		}
 
@@ -896,7 +896,7 @@ func createRotatingWriter(logFilePath string, cfg *LogConfig) io.Writer {
 		// #nosec G304 -- logFilePath comes from GetLogFilePath/GetLogDir, which resolve
 		// to config.GetConfigDir() (or an isolated test dir) plus fixed filenames, not
 		// caller/user-controlled input.
-		f, err := os.OpenFile(logFilePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
+		f, err := os.OpenFile(logFilePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
 		if err != nil {
 			panic(fmt.Sprintf("could not open log file: %s", err))
 		}

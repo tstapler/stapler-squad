@@ -85,7 +85,7 @@ func MigrateJSONToEnt(opts MigrationOptions) (*MigrationResult, error) {
 			backupPath = filepath.Join(dir, fmt.Sprintf("%s.backup_%s.json", base, timestamp))
 		}
 
-		if err := os.WriteFile(backupPath, jsonData, 0644); err != nil {
+		if err := os.WriteFile(backupPath, jsonData, 0600); err != nil {
 			return nil, fmt.Errorf("failed to create backup: %w", err)
 		}
 
@@ -118,7 +118,7 @@ func MigrateJSONToEnt(opts MigrationOptions) (*MigrationResult, error) {
 	} else {
 		// Ensure directory exists
 		dbDir := filepath.Dir(opts.SQLitePath)
-		if err := os.MkdirAll(dbDir, 0755); err != nil {
+		if err := os.MkdirAll(dbDir, 0750); err != nil {
 			return nil, fmt.Errorf("failed to create database directory: %w", err)
 		}
 

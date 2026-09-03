@@ -224,7 +224,7 @@ func writeTymuxdPIDFile(pid int) error {
 		return fmt.Errorf("failed to get config directory: %w", err)
 	}
 	pidFile := filepath.Join(configDir, tymuxdPIDFileName)
-	if err := os.WriteFile(pidFile, []byte(strconv.Itoa(pid)), 0644); err != nil {
+	if err := os.WriteFile(pidFile, []byte(strconv.Itoa(pid)), 0600); err != nil {
 		return fmt.Errorf("failed to write PID file: %w", err)
 	}
 	return nil

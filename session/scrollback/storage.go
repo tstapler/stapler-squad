@@ -150,12 +150,12 @@ func (s *FileScrollbackStorage) Write(sessionID string, entries []ScrollbackEntr
 	}
 
 	// Ensure directory exists
-	if err := os.MkdirAll(filepath.Dir(filePath), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(filePath), 0750); err != nil {
 		return fmt.Errorf("failed to create scrollback directory: %w", err)
 	}
 
 	// Open file in append mode.
-	file, err := os.OpenFile(filePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644) // #nosec G304 -- filePath is contained under s.basePath, verified in getFilePath
+	file, err := os.OpenFile(filePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600) // #nosec G304 -- filePath is contained under s.basePath, verified in getFilePath
 	if err != nil {
 		return fmt.Errorf("failed to open scrollback file: %w", err)
 	}
@@ -396,7 +396,7 @@ func (s *FileScrollbackStorage) Truncate(sessionID string, keepBytes int64) erro
 
 	// Write truncated file
 	tempPath := filePath + ".tmp"
-	tempFile, err := os.OpenFile(tempPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644) // #nosec G304 -- tempPath derives from filePath, already contained under s.basePath
+	tempFile, err := os.OpenFile(tempPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600) // #nosec G304 -- tempPath derives from filePath, already contained under s.basePath
 	if err != nil {
 		return fmt.Errorf("failed to create temp file: %w", err)
 	}

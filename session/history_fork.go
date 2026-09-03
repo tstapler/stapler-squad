@@ -21,7 +21,7 @@ func ForkClaudeConversation(srcConvPath string, lineCount uint64, dstDir string)
 	newUUID := uuid.New().String()
 	dstPath := filepath.Join(dstDir, newUUID+".jsonl")
 
-	if err := os.MkdirAll(dstDir, 0755); err != nil {
+	if err := os.MkdirAll(dstDir, 0750); err != nil {
 		return "", fmt.Errorf("fork claude conversation: create dst dir: %w", err)
 	}
 
