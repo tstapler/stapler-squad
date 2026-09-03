@@ -448,6 +448,13 @@ type Instance struct {
 	// config.FeaturePiSupport flag is enabled — see the capture in Restart.
 	piSession *PiSessionData
 
+	// piStatusSrc holds the status-only `pi --mode json` subprocess (Epic
+	// 5.2) for this instance, when isPi(i.Program) and config.FeaturePiSupport
+	// is enabled. Set by startPiStatusSource, cleared by stopPiStatusSource.
+	// atomic.Pointer since StartController/StopController can race
+	// concurrent GetController-style reads.
+	piStatusSrc atomic.Pointer[PiStatusSource]
+
 	// conversationClearedAt records when ClearConversationState() last ran, so
 	// tryExtractConversationUUID's DetectByPath fallback won't resurrect a JSONL
 	// predating an explicit "start fresh" request. In-memory only — does not

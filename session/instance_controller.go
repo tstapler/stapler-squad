@@ -14,9 +14,17 @@ import (
 	"github.com/tstapler/stapler-squad/session/detection/ratelimit"
 )
 
-// StartController creates and starts a ClaudeController for this instance.
+// StartController creates and starts a ClaudeController for this instance,
+// UNLESS this is a pi-support-enabled pi session, in which case it starts a
+// PiStatusSource instead (Epic 5.2) — pi has no PTY output for
+// ClaudeController's regex-based detector to scrape, so the two are
+// mutually exclusive per instance, not layered.
 // The controller enables automated idle detection and queue management.
 func (i *Instance) StartController() error {
+	if i.piStatusSupported() {
+		return i.startPiStatusSource()
+	}
+
 	// Check preconditions under lock
 	i.mu.Lock()
 
@@ -184,8 +192,15 @@ func (i *Instance) SetControllerForTest(c *ClaudeController) {
 	i.controllerManager.SetController(c)
 }
 
-// StopController stops and cleans up the ClaudeController for this instance.
+// StopController stops and cleans up the ClaudeController for this
+// instance, or the PiStatusSource for a pi-support-enabled pi session — see
+// StartController's doc comment.
 func (i *Instance) StopController() {
+	if i.piStatusSupported() {
+		i.stopPiStatusSource()
+		return
+	}
+
 	i.mu.Lock()
 	defer i.mu.Unlock()
 
@@ -198,9 +213,15 @@ func (i *Instance) StopController() {
 	log.Info("stopped claudecontroller for instance", "session", i.Title)
 }
 
-// stopControllerLocked stops the ClaudeController from within an actor command.
+// stopControllerLocked stops the ClaudeController (or PiStatusSource, for a
+// pi-support-enabled pi session — see StartController's doc comment) from
+// within an actor command.
 func stopControllerLocked(s *instanceState) {
 	i := s.inst
+	if i.piStatusSupported() {
+		i.stopPiStatusSource()
+		return
+	}
 	if !i.controllerManager.HasController() {
 		return
 	}
