@@ -29,9 +29,8 @@ var aiSemaphore = make(chan struct{}, 2)
 // instanceIndexTTL bounds how long the worktree-path and PR indexes built from
 // session.Storage are reused before being rebuilt from a fresh ListInstanceData scan.
 // EventUnfinishedWorkUpdated/Removed events can fire in bursts (one per changed
-// worktree during a scan sweep); without this cache each event triggered its own
-// full ent/sqlite session scan, accounting for 45% of the app's total allocation
-// (see perf profiling 2026-09-02, EntRepository.ListWithOptions).
+// worktree during a scan sweep); without this cache each event triggers its own
+// full ent/sqlite session scan.
 const instanceIndexTTL = 2 * time.Second
 
 // instanceIndexCache holds the last-built sessionPathIndex/instancePRIndex pair,

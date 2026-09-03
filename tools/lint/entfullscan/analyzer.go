@@ -1,24 +1,14 @@
 // Package entfullscan defines a go/analysis pass that detects ent query builder
 // call chains ending in .All(ctx) with no .Where(...) filter anywhere in the
-// same function — a full-table scan.
+// same function — a full-table scan that should be filtered, replaced with an
+// indexed lookup, or explicitly allowlisted.
 //
-// Background: session/storage.go's FindInstanceDataByID used to call
-// ListInstanceData(), an unfiltered ent query (EntRepository.ListWithOptions),
-// and then linear-scan the result for one ID match. It was called once per
-// session inside BacklogLifecycleListener.reconcileTerminalItemSessions, a
-// 60-second-cadence reconciliation loop. A CPU profile on 2026-09-02 found
-// this consuming ~25% of the live process's CPU. Fixed by adding
-// EntRepository.FindByIDWithOptions, an indexed WHERE query (see its doc
-// comment in session/ent_repository.go).
-//
-// This analyzer targets the other half of that bug class: a *new* raw ent
-// query introduced without a WHERE filter should require the same explicit
-// "yes, this really needs every row" sign-off that review should have caught
-// here. It does not (and structurally cannot) catch the original bug's exact
-// shape — calling an existing, already-reviewed full-scan helper function from
-// a single-lookup call site — that is a call-graph-shaped problem, not a
-// syntactic one; see tstapler/kibitzer#30 for a proposed check aimed at that
-// half instead.
+// This catches a *new* raw ent query introduced without a WHERE filter. It
+// does not (and structurally cannot) catch reuse of an existing,
+// already-reviewed full-scan helper from a single-lookup call site — that is
+// a call-graph-shaped problem, not a syntactic one; see
+// docs/bugs/open/BUG-096-entfullscan-cannot-catch-reused-helper-misuse.md and
+// tstapler/kibitzer#30 for a proposed check aimed at that half instead.
 //
 // Detection: a call `X.All(ctx)` is flagged when X's static type is an ent
 // generated query builder (a named type whose name ends in "Query", matching

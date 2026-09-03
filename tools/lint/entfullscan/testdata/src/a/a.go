@@ -67,6 +67,28 @@ func good6(ctx context.Context) {
 	_, _ = q.All(ctx)
 }
 
+// GOOD7: Where applied inside a for loop — a loop-nested variant of the
+// cross-statement case (GOOD3/GOOD4).
+func good7(ctx context.Context, filters []string) {
+	q := newQuery()
+	for _, f := range filters {
+		q = q.Where(f)
+	}
+	_, _ = q.All(ctx)
+}
+
+// BAD3: a shadowed inner q (declared via := inside a nested block) gets a
+// Where, but that's a distinct variable scoped to the block — it never
+// filters the outer q used by .All(ctx), which must still be flagged.
+func bad3(ctx context.Context, cond bool) {
+	q := newQuery()
+	if cond {
+		q := q.Where("status = 1")
+		_ = q
+	}
+	_, _ = q.All(ctx) // want `ent query \.All\(ctx\) with no \.Where`
+}
+
 // notFlagged: .All is called on a type that isn't a *Query — the check only
 // applies to ent-shaped query builders.
 type FakeList struct{}
