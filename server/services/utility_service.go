@@ -265,6 +265,10 @@ func (us *UtilityService) GetLogs(
 	}
 
 	// Read log file
+	// #nosec G304 -- logFilePath is either log.GetLogFilePath(cfg) (fully internal) or
+	// log.GetSessionLogFilePath(cfg, resolvedID); the latter's sessionID component is
+	// sanitized to [A-Za-z0-9_-] by GetSessionLogFilePath itself, so even an unresolved
+	// RPC-supplied session_id cannot escape the log directory.
 	file, err := os.Open(logFilePath)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -284,6 +288,8 @@ func (us *UtilityService) GetLogs(
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to parse logs: %w", err))
 	}
 
+	// #nosec G115 -- result.TotalCount is a parsed log-line count from one
+	// local session log file, far below int32 range.
 	return connect.NewResponse(&sessionv1.GetLogsResponse{
 		Entries:    result.Entries,
 		TotalCount: int32(result.TotalCount),

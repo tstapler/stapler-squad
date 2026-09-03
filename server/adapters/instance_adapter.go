@@ -2,6 +2,7 @@ package adapters
 
 import (
 	"fmt"
+	"sync"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/github"
@@ -13,6 +14,37 @@ import (
 	"github.com/tstapler/stapler-squad/session/vnc"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
+
+// piExtensionHealthResolverMu guards concurrent read/write of
+// piExtensionHealthResolver. RWMutex rather than hook_injector.go's plain
+// hookBaseURLFnMu: InstanceToProto's resolver read is on the session-listing
+// hot path (called once per session per poll) while the write happens at
+// most once at server startup, so concurrent readers should not serialize
+// against each other.
+var (
+	piExtensionHealthResolverMu sync.RWMutex
+	piExtensionHealthResolver   func(sessionID, program string) sessionv1.PiExtensionHealth
+)
+
+// SetPiExtensionHealthResolver wires server/services.PiExtensionHealthTracker
+// (pi-support Epic 4.2) into InstanceToProto. adapters cannot import
+// server/services directly (services already imports adapters), so server.go's
+// wireDepsIntoServer supplies this closure during real server wiring, exactly
+// like hook_injector.go's SetHookBaseURLFn. Passing nil is a no-op — every
+// session's pi_extension_health field stays PI_EXTENSION_HEALTH_UNSPECIFIED
+// (the zero value) until wired, which is the correct default for tests and
+// any caller that never sets this up.
+func SetPiExtensionHealthResolver(fn func(sessionID, program string) sessionv1.PiExtensionHealth) {
+	piExtensionHealthResolverMu.Lock()
+	defer piExtensionHealthResolverMu.Unlock()
+	piExtensionHealthResolver = fn
+}
+
+func getPiExtensionHealthResolver() func(sessionID, program string) sessionv1.PiExtensionHealth {
+	piExtensionHealthResolverMu.RLock()
+	defer piExtensionHealthResolverMu.RUnlock()
+	return piExtensionHealthResolver
+}
 
 // InstanceToProto converts a session.Instance to a proto Session message.
 // workflowNames is an optional map from workflow UUID to workflow name; pass nil to omit workflow_name.
@@ -35,8 +67,8 @@ func InstanceToProto(inst *session.Instance, workflowNames map[string]string) *s
 		Branch:             snap.Branch,
 		Status:             statusToProto(inst.GetEffectiveStatus()),
 		Program:            snap.Program,
-		Height:             int32(snap.Height),
-		Width:              int32(snap.Width),
+		Height:             int32(snap.Height), //#nosec G115 -- terminal row count, bounded well under int32 max
+		Width:              int32(snap.Width),  //#nosec G115 -- terminal column count, bounded well under int32 max
 		CreatedAt:          timestamppb.New(snap.CreatedAt),
 		UpdatedAt:          timestamppb.New(snap.UpdatedAt),
 		AutoYes:            snap.AutoYes,
@@ -57,7 +89,7 @@ func InstanceToProto(inst *session.Instance, workflowNames map[string]string) *s
 		LastTerminalUpdate:   timestamppb.New(snap.LastTerminalUpdate),
 		LastMeaningfulOutput: timestamppb.New(snap.LastMeaningfulOutput),
 		// GitHub integration fields
-		GithubPrNumber:  int32(snap.GitHub.GitHubPRNumber),
+		GithubPrNumber:  int32(snap.GitHub.GitHubPRNumber), //#nosec G115 -- GitHub PR numbers are far below int32 max
 		GithubPrUrl:     snap.GitHub.GitHubPRURL,
 		GithubOwner:     snap.GitHub.GitHubOwner,
 		GithubRepo:      snap.GitHub.GitHubRepo,
@@ -70,8 +102,8 @@ func InstanceToProto(inst *session.Instance, workflowNames map[string]string) *s
 		GithubPrState:         inst.GitHubPRState,
 		GithubPrIsDraft:       inst.GitHubPRIsDraft,
 		GithubPrPriority:      inst.GitHubPRPriority,
-		GithubApprovedCount:   int32(inst.GitHubApprovedCount),
-		GithubChangesReqCount: int32(inst.GitHubChangesReqCount),
+		GithubApprovedCount:   int32(inst.GitHubApprovedCount),   //#nosec G115 -- PR review count, always small
+		GithubChangesReqCount: int32(inst.GitHubChangesReqCount), //#nosec G115 -- PR review count, always small
 		GithubCheckConclusion: inst.GitHubCheckConclusion,
 		GithubChecks:          checksToProto(inst.GitHubChecks),
 		GithubReviewFeedback:  reviewFeedbackToProto(inst.GitHubReviewFeedback),
@@ -87,8 +119,8 @@ func InstanceToProto(inst *session.Instance, workflowNames map[string]string) *s
 	// the instance (not the InstanceSnapshot atomic pointer, which predates
 	// this feature) via RetrySnapshot's race-free copy.
 	rs := inst.RetrySnapshot()
-	protoSession.RetryAttempt = int32(rs.RetryAttempt)
-	protoSession.RetryMaxAttempts = int32(rs.RetryMaxAttempts)
+	protoSession.RetryAttempt = int32(rs.RetryAttempt)         //#nosec G115 -- retry attempt count, capped by policy
+	protoSession.RetryMaxAttempts = int32(rs.RetryMaxAttempts) //#nosec G115 -- retry attempt cap, always small
 	protoSession.LastFailureReason = rs.LastFailureReason
 	if !rs.NextRetryAt.IsZero() {
 		protoSession.NextRetryAt = timestamppb.New(rs.NextRetryAt)
@@ -97,7 +129,7 @@ func InstanceToProto(inst *session.Instance, workflowNames map[string]string) *s
 		protoSession.RetryHistory = make([]*sessionv1.RetryAttemptRecord, len(rs.RetryHistory))
 		for i, rec := range rs.RetryHistory {
 			protoSession.RetryHistory[i] = &sessionv1.RetryAttemptRecord{
-				Attempt:   int32(rec.Attempt),
+				Attempt:   int32(rec.Attempt), //#nosec G115 -- retry attempt count, capped by policy
 				Reason:    rec.Reason,
 				Timestamp: timestamppb.New(rec.Timestamp),
 			}
@@ -130,8 +162,8 @@ func InstanceToProto(inst *session.Instance, workflowNames map[string]string) *s
 	if inst.GetDiffStats() != nil {
 		stats := inst.GetDiffStats()
 		protoSession.DiffStats = &sessionv1.DiffStats{
-			Added:   int32(stats.Added),
-			Removed: int32(stats.Removed),
+			Added:   int32(stats.Added),   //#nosec G115 -- diff line count, bounded well under int32 max
+			Removed: int32(stats.Removed), //#nosec G115 -- diff line count, bounded well under int32 max
 		}
 	}
 
@@ -185,7 +217,7 @@ func InstanceToProto(inst *session.Instance, workflowNames map[string]string) *s
 		vncState := vncMgr.State()
 		protoSession.VncState = &sessionv1.VNCState{
 			Status:                mapVNCStatus(vncState.Status),
-			DisplayNumber:         int32(vncState.DisplayNumber),
+			DisplayNumber:         int32(vncState.DisplayNumber), //#nosec G115 -- X11 display number, always small
 			BrowserWindowDetected: vncState.BrowserWindowDetected,
 			// VncPassword intentionally omitted in list/watch paths — only exposed by GetSession.
 		}
@@ -221,7 +253,7 @@ func InstanceToProto(inst *session.Instance, workflowNames map[string]string) *s
 	// WaitingForAgent detector. Set unconditionally — InstanceStatusInfo.SubagentCount is
 	// already 0 by construction when the controller is inactive or status isn't
 	// WaitingForAgent, so a guard here would be a no-op.
-	protoSession.SubagentCount = int32(statusInfo.SubagentCount)
+	protoSession.SubagentCount = int32(statusInfo.SubagentCount) //#nosec G115 -- detector-derived count of a handful of shells/monitors, always small
 
 	// Hidden flag — system/background sessions excluded from default list/review queue.
 	protoSession.Hidden = snap.Hidden
@@ -243,14 +275,22 @@ func InstanceToProto(inst *session.Instance, workflowNames map[string]string) *s
 		protoSession.RemoteName = remoteTarget.Target().Name
 	}
 
+	// pi approval-extension health (pi-support Epic 4.2) — derived live at read
+	// time via the injected resolver, never persisted. Left at the zero value
+	// (PI_EXTENSION_HEALTH_UNSPECIFIED) when unwired (e.g. tests) or when the
+	// resolver itself determines this isn't a pi session / the flag is off.
+	if resolver := getPiExtensionHealthResolver(); resolver != nil {
+		protoSession.PiExtensionHealth = resolver(protoSession.Id, snap.Program)
+	}
+
 	// Session goal summary — populated when a goal has been set via set_session_goal MCP tool.
 	if g := inst.GetSessionGoal(); g != nil {
 		tasksJSON, _ := session.EncodeTasks(g.Tasks) // empty string on error is safe
 		protoSession.Goal = &sessionv1.SessionGoalSummary{
 			GoalText:   g.Goal,
 			Status:     g.Status,
-			TasksTotal: int32(g.TasksTotal()),
-			TasksDone:  int32(g.TasksDone()),
+			TasksTotal: int32(g.TasksTotal()), //#nosec G115 -- task list length, always small
+			TasksDone:  int32(g.TasksDone()),  //#nosec G115 -- task list length, always small
 			TasksJson:  tasksJSON,
 			UpdatedAt:  timestamppb.New(g.UpdatedAt),
 		}
@@ -542,7 +582,7 @@ func externalMetadataToProto(metadata *session.ExternalInstanceMetadata) *sessio
 		TmuxSessionName: metadata.TmuxSessionName,
 		DiscoveredAt:    timestamppb.New(metadata.DiscoveredAt),
 		LastSeen:        timestamppb.New(metadata.LastSeen),
-		OriginalPid:     int32(metadata.OriginalPID),
+		OriginalPid:     int32(metadata.OriginalPID), //#nosec G115 -- OS PIDs are bounded well under int32 max
 		MuxSocketPath:   metadata.MuxSocketPath,
 		MuxEnabled:      metadata.MuxEnabled,
 		SourceTerminal:  metadata.SourceTerminal,

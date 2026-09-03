@@ -121,7 +121,11 @@ type AnalyticsData struct {
 	CommandCategory    string
 	CommandSubcategory string
 	PythonImports      []string
-	CreatedAt          time.Time
+	// Source identifies which agent's hook produced this request ("claude" or
+	// "pi"). Defaulted to "claude" at the recording boundary when empty — see
+	// pi-support Epic 4.3 / PermissionRequestPayload.Source.
+	Source    string
+	CreatedAt time.Time
 }
 
 // ProjectData is the domain model for a project that groups sessions.

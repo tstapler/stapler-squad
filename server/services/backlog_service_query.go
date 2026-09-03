@@ -22,13 +22,16 @@ import (
 
 // sourceSyncEventToProto converts a SourceSyncEventData to its proto representation.
 func sourceSyncEventToProto(ev session.SourceSyncEventData) *sessionv1.SourceSyncEvent {
+	// Counts below are per-sync-run tallies of GitHub issues processed in a single
+	// SyncGitHubIssues call, bounded by that run's result-page size — nowhere near
+	// int32 overflow.
 	p := &sessionv1.SourceSyncEvent{
 		Id:           ev.ID,
 		StartedAt:    timestamppb.New(ev.StartedAt),
-		ItemsCreated: int32(ev.ItemsCreated),
-		ItemsUpdated: int32(ev.ItemsUpdated),
-		ItemsSkipped: int32(ev.ItemsSkipped),
-		ItemsErrored: int32(ev.ItemsErrored),
+		ItemsCreated: int32(ev.ItemsCreated), // #nosec G115 -- GitHub sync item count for one sync operation, bounded by realistic repo/backlog scale, never attacker-inflated
+		ItemsUpdated: int32(ev.ItemsUpdated), // #nosec G115 -- GitHub sync item count for one sync operation, bounded by realistic repo/backlog scale, never attacker-inflated
+		ItemsSkipped: int32(ev.ItemsSkipped), // #nosec G115 -- GitHub sync item count for one sync operation, bounded by realistic repo/backlog scale, never attacker-inflated
+		ItemsErrored: int32(ev.ItemsErrored), // #nosec G115 -- GitHub sync item count for one sync operation, bounded by realistic repo/backlog scale, never attacker-inflated
 		ErrorMessage: ev.ErrorMessage,
 	}
 	if ev.FinishedAt != nil {
@@ -282,6 +285,8 @@ func (s *BacklogService) ListGitHubIssues(ctx context.Context, req *connect.Requ
 	entries := make([]*sessionv1.GitHubIssueEntry, 0, len(results))
 	for _, r := range results {
 		entry := &sessionv1.GitHubIssueEntry{
+			// #nosec G115 -- r.Number is a GitHub issue/PR number, structurally bounded
+			// by GitHub's own per-repo numbering scheme, nowhere near int32 range.
 			Number: int32(r.Number),
 			Title:  r.Title,
 			Body:   r.Body,

@@ -63,7 +63,7 @@ func (a *AgyAdapter) Import(ctx context.Context, inst *Instance) ([]CanonicalTur
 	if uuidStr == "" {
 		// Look up in history.jsonl
 		agyHistoryPath := filepath.Join(home, ".gemini", "antigravity-cli", "history.jsonl")
-		if f, err := os.Open(agyHistoryPath); err == nil {
+		if f, err := os.Open(agyHistoryPath); err == nil { // #nosec G304 -- agyHistoryPath is home dir + hardcoded constant components, no variable path segment
 			defer f.Close()
 			scanner := bufio.NewScanner(f)
 			for scanner.Scan() {
@@ -101,7 +101,7 @@ func (a *AgyAdapter) Import(ctx context.Context, inst *Instance) ([]CanonicalTur
 		}
 	}
 
-	file, err := os.Open(agyLogPath)
+	file, err := os.Open(agyLogPath) // #nosec G304 -- agyLogPath is home dir + constants + uuidStr, which is either internal instance state (GetClaudeConversationUUID) or a conversationId this same app wrote into its own history.jsonl, never raw external input
 	if err != nil {
 		return nil, err
 	}
@@ -210,7 +210,7 @@ func (a *AgyAdapter) Export(ctx context.Context, turns []CanonicalTurn, inst *In
 	transcriptFullPath := filepath.Join(agyBrainDir, "transcript_full.jsonl")
 
 	for _, p := range []string{transcriptPath, transcriptFullPath} {
-		f, err := os.Create(p)
+		f, err := os.Create(p) // #nosec G304 -- p is one of two fixed filenames joined onto agyBrainDir (home + constants + internal uuidStr), not externally controlled
 		if err != nil {
 			return err
 		}

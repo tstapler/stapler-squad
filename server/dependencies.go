@@ -397,6 +397,10 @@ func BuildServiceDeps(core *CoreDeps) (*ServiceDeps, error) {
 
 	w := warren.NewWire("ServiceDeps")
 	warren.Set(w, "ApprovalProvider", reviewQueuePoller.SetApprovalProvider, session.ApprovalMetadataProvider(core.ApprovalStore))
+	// Story 5.3.1: the same provider wired into StatusManager.GetStatus()'s
+	// pi-fallback branch, so a pi session actually blocked on a pending
+	// approval reports NeedsApproval instead of a stale Idle.
+	warren.Set(w, "StatusManagerApprovalProvider", statusManager.SetApprovalProvider, session.ApprovalMetadataProvider(core.ApprovalStore))
 	warren.Set(w, "StatusManager", core.SessionService.SetStatusManager, statusManager)
 	warren.Set(w, "ReviewQueuePoller", core.SessionService.SetReviewQueuePoller, reviewQueuePoller)
 	if err := w.Validate(); err != nil {
@@ -821,7 +825,9 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		// STAPLER_SQUAD_TEST_DIR invocation (also not caught by either IsTestMode() or
 		// IsNamedInstance() alone). See config.IsIsolatedInstance's doc comment.
 		if !config.IsIsolatedInstance() {
-			session.ReconcileOrphanedTmuxSessions(instances)
+			// minAge=0: safe only here, before any new session creation is possible
+			// in this startup sequence — see ReconcileOrphanedTmuxSessions' doc comment.
+			session.ReconcileOrphanedTmuxSessions(instances, 0)
 		}
 
 		// Step 6.5: Persist any auto-detected worktree info (must happen after Step 6)

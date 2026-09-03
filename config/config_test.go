@@ -1197,6 +1197,39 @@ func TestGetFeatureFlag_knownKeyReturnsValue(t *testing.T) {
 	assert.True(t, cfg.GetFeatureFlag("backlog"))
 }
 
+// TestFeatureFlag_PiSupport_DefaultsFalseAndPersists covers pi-support's two
+// Story 2.1.1 acceptance criteria: it defaults to false on a config with no
+// explicit setting, and SetFeatureFlag round-trips it through the on-disk
+// config.json's feature_flags object.
+func TestFeatureFlag_PiSupport_DefaultsFalseAndPersists(t *testing.T) {
+	t.Run("defaults false on a config with no explicit setting", func(t *testing.T) {
+		cfg := &Config{FeatureFlags: nil}
+		assert.False(t, cfg.GetFeatureFlag(FeaturePiSupport))
+	})
+
+	t.Run("SetFeatureFlag persists and is re-readable, including on disk", func(t *testing.T) {
+		t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+
+		cfg := LoadConfig()
+		require.NoError(t, cfg.SetFeatureFlag(FeaturePiSupport, true))
+		assert.True(t, cfg.GetFeatureFlag(FeaturePiSupport))
+
+		configDir, err := GetConfigDir()
+		require.NoError(t, err)
+		data, err := os.ReadFile(filepath.Join(configDir, ConfigFileName))
+		require.NoError(t, err)
+
+		var onDisk struct {
+			FeatureFlags map[string]bool `json:"feature_flags"`
+		}
+		require.NoError(t, json.Unmarshal(data, &onDisk))
+		assert.True(t, onDisk.FeatureFlags[FeaturePiSupport], "feature_flags.%q must be persisted true on disk", FeaturePiSupport)
+
+		reloaded := LoadConfig()
+		assert.True(t, reloaded.GetFeatureFlag(FeaturePiSupport))
+	})
+}
+
 // ─── IsNamedInstance ────────────────────────────────────────────────────────
 
 // TestIsNamedInstance_should_ReturnFalse_When_InstanceEnvVarUnset covers the

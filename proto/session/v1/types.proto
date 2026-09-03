@@ -306,6 +306,31 @@ message Session {
   // client maps these to reason-specific copy for the Failed-state card and
   // failure toast rather than displaying the raw string.
   string failure_reason = 88;
+
+  // pi approval-extension health (pi-support Epic 4.2). Only meaningful when
+  // program == "pi" and the pi-support feature flag is on; UNSPECIFIED for
+  // every other session. Derived live at read time from
+  // PiExtensionHealthTracker.HealthFor(sessionID) -- never persisted, since a
+  // server restart legitimately resets it back to Unknown until the extension's
+  // periodic re-ping (Story 4.2.3) re-arms it.
+  PiExtensionHealth pi_extension_health = 89;
+}
+
+// PiExtensionHealth mirrors server/services.PiExtensionHealth: whether a pi
+// session's globally-installed ssq-approval.ts extension has confirmed it
+// loaded and is enforcing approval rules. Three states, not a bool -- see
+// project_plans/pi-support/implementation/plan.md's Domain Glossary entry:
+// "unknown" must be visually distinct from a confirmed failure, and must
+// never be presented to the user as "loaded" before a signal arrives.
+enum PiExtensionHealth {
+  // Not a pi session, or pi-support is off -- the badge this feeds is not shown at all.
+  PI_EXTENSION_HEALTH_UNSPECIFIED = 0;
+  // No health ping received yet, and the grace window has not elapsed -- default state.
+  PI_EXTENSION_HEALTH_UNKNOWN = 1;
+  // At least one health ping has been received within the grace window.
+  PI_EXTENSION_HEALTH_LOADED = 2;
+  // The grace window elapsed with no ping -- tool calls are unenforced.
+  PI_EXTENSION_HEALTH_FAILED = 3;
 }
 
 // RetryAttemptRecord is one entry in Session.retry_history.
@@ -854,8 +879,10 @@ message GithubReviewFeedback {
 
 // PRComment represents a comment on a GitHub pull request.
 message PRComment {
-  // Comment ID.
-  int32 id = 1;
+  // Comment ID. int64, not int32: GitHub's own comment IDs already exceed
+  // int32 range in practice (observed values over 5 billion as of 2026-09),
+  // so int32 here would silently truncate/wrap a real ID.
+  int64 id = 1;
 
   // Comment author username.
   string author = 2;

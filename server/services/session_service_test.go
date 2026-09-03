@@ -4130,6 +4130,35 @@ func TestCreateSession_should_ReachActiveViaPipeline(t *testing.T) {
 		assertReachesActiveViaPipeline(t, fix.svc, resp.Msg.Session, awaitTimeout, awaitPollInterval)
 	})
 
+	t.Run("ForkAtMessageNegative_RejectedBeforeFork", func(t *testing.T) {
+		// Regression test for the gosec G115 fix: a negative fork_at_message
+		// must be rejected with CodeInvalidArgument before it reaches the
+		// uint64 conversion at CreateSession's `lineCount :=
+		// uint64(req.Msg.ForkAtMessage)` line, which would otherwise wrap a
+		// negative int64 into a huge uint64.
+		fix := setupForkTestFixture(t)
+		t.Cleanup(fix.cleanup)
+		wireRegistryForActorSerialization(fix)
+		home := withFakeHome(t) // FindConversationFilePath/ForkClaudeConversation both resolve under os.UserHomeDir()
+
+		const forkSourceID = "epic61-fork-negative-source-session-id"
+		projDir := filepath.Join(home, ".claude", "projects", "epic61-proj-negative")
+		require.NoError(t, os.MkdirAll(projDir, 0o755))
+		convPath := filepath.Join(projDir, "epic61-conversation.jsonl")
+		require.NoError(t, os.WriteFile(convPath, []byte(`{"sessionId":"`+forkSourceID+`"}`+"\n"), 0o644))
+
+		resp, err := fix.svc.CreateSession(context.Background(), connect.NewRequest(&sessionv1.CreateSessionRequest{
+			Title:         "epic61-fork-negative",
+			Path:          t.TempDir(),
+			Program:       "sh",
+			ForkSourceId:  forkSourceID,
+			ForkAtMessage: -1,
+		}))
+		require.Error(t, err)
+		assert.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))
+		assert.Nil(t, resp)
+	})
+
 	t.Run("ModeIsAlias", func(t *testing.T) {
 		fix := setupForkTestFixture(t)
 		t.Cleanup(fix.cleanup)

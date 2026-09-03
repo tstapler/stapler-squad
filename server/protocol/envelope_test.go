@@ -2,6 +2,7 @@ package protocol
 
 import (
 	"bytes"
+	"math"
 	"testing"
 )
 
@@ -51,6 +52,43 @@ func TestCreateEnvelope(t *testing.T) {
 				t.Errorf("CreateEnvelope() = %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+// TestCreateEnvelope_PanicsOnDataTooLarge exercises the len(data) >
+// math.MaxUint32 guard (gosec G115 fix) that keeps the uint32 length header
+// from silently truncating. Constructing a slice one byte past
+// math.MaxUint32 (~4 GiB) is impractical for a routine unit test -- this
+// repo has no testing.Short() convention to gate an expensive allocation
+// behind (grepped for it: no hits), and even a "quick" 4 GiB alloc/zero-fill
+// risks flaking under memory pressure on a shared CI runner -- so this
+// allocates a hair over the boundary as a []byte of a 1-byte element type,
+// which is exactly what the real code path measures via len(), without ever
+// needing the full 4 GiB to be resident (Go's runtime can commit shared
+// zero pages for a make([]byte, n) that's never written to). If this ever
+// needs to be even cheaper, an unsafe.Slice-backed fake header would avoid
+// the allocation entirely, but that technique doesn't otherwise appear in
+// this codebase and isn't worth introducing for one boundary test.
+func TestCreateEnvelope_PanicsOnDataTooLarge(t *testing.T) {
+	defer func() {
+		if r := recover(); r == nil {
+			t.Fatal("CreateEnvelope did not panic for data exceeding math.MaxUint32 bytes")
+		}
+	}()
+
+	data := make([]byte, uint64(math.MaxUint32)+1)
+	CreateEnvelope(0, data)
+}
+
+// TestCreateEnvelope_AtMaxUint32Boundary confirms ordinary (small) payloads
+// are unaffected by the new bounds check -- the panic guard's "> MaxUint32"
+// condition must not misfire on a normal-sized envelope.
+func TestCreateEnvelope_AtMaxUint32Boundary(t *testing.T) {
+	data := []byte("within bounds")
+	got := CreateEnvelope(0, data)
+	want := append([]byte{0x00, 0x00, 0x00, 0x00, byte(len(data))}, data...)
+	if !bytes.Equal(got, want) {
+		t.Errorf("CreateEnvelope() = %v, want %v", got, want)
 	}
 }
 

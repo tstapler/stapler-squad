@@ -339,6 +339,13 @@ func (d *ClaudeDetector) Patterns() dtypes.StatusPatterns {
 				Priority:    26,
 			},
 		},
+		// The three patterns below are confirmed dead against Claude Code's current CLI
+		// output (verified via live tmux capture-pane during the auto-mode-footer
+		// investigation, session/detection/detector.go's autoModeFooterRegex) — the
+		// current CLI never emits "Waiting for N background agent(s)"/"N shells running"
+		// text, using the persistent "auto mode on · N shells[, M monitors]" footer bar
+		// instead. Kept (not deleted) for older CLI versions and as documentation of the
+		// historical format; do not treat these as reachable against a live modern session.
 		WaitingForAgent: []dtypes.StatusPattern{
 			{
 				Name: "waiting_for_background_agent",

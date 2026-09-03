@@ -328,6 +328,36 @@ func TestRetryNow_should_TakeRecoverFromStoppedAndStartPath_When_CalledFromPerma
 	}
 }
 
+// TestRetryNow_should_BypassPendingBackoffDelay_When_CalledMidBackoffWait covers
+// AC6's actual "ignoring the current backoff delay" case: a session between
+// automated attempts (NextRetryAt scheduled minutes in the future, not yet
+// PermanentlyFailed) should restart immediately when RetryNow is called,
+// rather than waiting for NextRetryAt to elapse. The prior tests in this file
+// only exercised the PermanentlyFailed (exhausted) starting state.
+func TestRetryNow_should_BypassPendingBackoffDelay_When_CalledMidBackoffWait(t *testing.T) {
+	t.Parallel()
+	inst := &Instance{
+		Title:          "t",
+		Status:         Stopped,
+		processManager: &fakeLivenessProcessManager{alive: true},
+	}
+	inst.RetryAttempt = 1
+	inst.RetryMaxAttempts = 3
+	inst.LastFailureReason = "crashed"
+	inst.NextRetryAt = time.Now().Add(5 * time.Minute)
+
+	err := inst.RetryNow("/tmp")
+	if err != nil {
+		t.Fatalf("RetryNow() err = %v, want nil", err)
+	}
+	if !inst.NextRetryAt.IsZero() {
+		t.Error("NextRetryAt should be cleared immediately by RetryNow, not left pending — the whole point of AC6 is bypassing the wait")
+	}
+	if inst.Status != Active {
+		t.Errorf("Status = %v, want Active — RetryNow should restart immediately rather than waiting out NextRetryAt", inst.Status)
+	}
+}
+
 func TestRetryNow_should_ReturnErrRetryInFlight_When_RetryInFlightAlreadyClaimed(t *testing.T) {
 	t.Parallel()
 	inst := &Instance{

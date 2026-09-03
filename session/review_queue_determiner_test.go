@@ -664,3 +664,70 @@ func TestDefaultStatusDeterminer_NoControllerApprovalInTerminal(t *testing.T) {
 		t.Errorf("expected PriorityHigh, got %v", result.Priority)
 	}
 }
+
+// waitingForAgentFooterContent is terminal content that the real StatusDetector
+// classifies as StatusWaitingForAgent via the auto-mode footer override (the rest of
+// the scan concludes idle, then applyFooterIdleOverride promotes it — see
+// session/detection/detector.go's autoModeFooterRegex).
+const waitingForAgentFooterContent = "❯ \n──────────────────────────────────────────────────────────────────────────────\n  ⏵⏵ auto mode on · 2 shells · ← for agents"
+
+// TestDefaultStatusDeterminer_NoControllerWaitingForAgent_RecentlyUpdated_StillRemoved
+// verifies that a session detected as StatusWaitingForAgent via the no-controller path
+// is still removed from the review queue (matching pre-existing behavior) when it was
+// updated recently — i.e. within waitingForAgentStuckThreshold.
+func TestDefaultStatusDeterminer_NoControllerWaitingForAgent_RecentlyUpdated_StillRemoved(t *testing.T) {
+	t.Parallel()
+	detector := detection.NewStatusDetector()
+	determiner := NewDefaultStatusDeterminer(DefaultReviewQueuePollerConfig())
+
+	inst := &Instance{Title: "test", UUID: "uuid", Status: Running}
+	inst.started.Store(true)
+	inst.LastMeaningfulOutput = time.Now().Add(-1 * time.Second)
+	inst.UpdatedAt = time.Now().Add(-1 * time.Second)
+	inst.SyncAtomicTimestamps()
+
+	statusInfo := InstanceStatusInfo{IsControllerActive: false}
+	result := determiner.Determine(inst, waitingForAgentFooterContent, statusInfo, detector)
+
+	if result.ClaudeStatus != detection.StatusWaitingForAgent {
+		t.Fatalf("test content did not detect as StatusWaitingForAgent, got %v — fixture content is stale", result.ClaudeStatus)
+	}
+	if result.Action != DetectionActionRemove {
+		t.Errorf("expected Remove for recently-updated WaitingForAgent session, got %v", result.Action)
+	}
+}
+
+// TestDefaultStatusDeterminer_NoControllerWaitingForAgent_Stale_FallsThroughToTimeBasedAdd
+// verifies that a session detected as StatusWaitingForAgent, but last updated long
+// before waitingForAgentStuckThreshold, is NOT unconditionally removed — it falls
+// through to the normal time-based idle re-add check and gets added back to the queue.
+// This guards against a stuck/orphaned background shell (footer count never hits 0)
+// hiding a genuinely idle session from the review queue indefinitely.
+func TestDefaultStatusDeterminer_NoControllerWaitingForAgent_Stale_FallsThroughToTimeBasedAdd(t *testing.T) {
+	t.Parallel()
+	detector := detection.NewStatusDetector()
+	determiner := NewDefaultStatusDeterminer(DefaultReviewQueuePollerConfig())
+
+	inst := &Instance{Title: "test", UUID: "uuid", Status: Running}
+	inst.started.Store(true)
+	inst.LastMeaningfulOutput = time.Now().Add(-waitingForAgentStuckThreshold - time.Minute)
+	inst.UpdatedAt = time.Now().Add(-waitingForAgentStuckThreshold - time.Minute)
+	inst.SyncAtomicTimestamps()
+
+	statusInfo := InstanceStatusInfo{IsControllerActive: false}
+	result := determiner.Determine(inst, waitingForAgentFooterContent, statusInfo, detector)
+
+	if result.ClaudeStatus != detection.StatusWaitingForAgent {
+		t.Fatalf("test content did not detect as StatusWaitingForAgent, got %v — fixture content is stale", result.ClaudeStatus)
+	}
+	if result.Action != DetectionActionAdd {
+		t.Errorf("expected Add (time-based idle fallback) for stale WaitingForAgent session, got %v", result.Action)
+	}
+	// Reason is ReasonStale rather than ReasonIdle here because UpdatedAt/LastMeaningfulOutput
+	// are old enough to also cross the separate terminal-staleness threshold (5m default,
+	// checked later in Determine) — either reason confirms the fix: the session fell through
+	// to a time-based add instead of being unconditionally removed.
+	if result.Reason != ReasonIdle && result.Reason != ReasonStale {
+		t.Errorf("expected ReasonIdle or ReasonStale from the time-based fallback, got %v", result.Reason)
+	}
+}

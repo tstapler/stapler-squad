@@ -107,7 +107,7 @@ func NewEntRepository(opts ...RepositoryOption) (*EntRepository, error) {
 	// "file:" URI DSN (e.g. a shared-cache in-memory database used by tests)
 	// rather than a real filesystem path.
 	if !strings.HasPrefix(expandedPath, "file:") {
-		if err := os.MkdirAll(filepath.Dir(expandedPath), 0755); err != nil {
+		if err := os.MkdirAll(filepath.Dir(expandedPath), 0750); err != nil {
 			return nil, fmt.Errorf("failed to create database directory: %w", err)
 		}
 	}
@@ -364,6 +364,9 @@ func (r *EntRepository) Create(ctx context.Context, data InstanceData) error {
 	}
 	if data.GitHubPRNumber > 0 {
 		sessionCreate.SetGithubPrNumber(data.GitHubPRNumber)
+	}
+	if data.GitHubPRStatusTerminal {
+		sessionCreate.SetGithubPrStatusTerminal(true)
 	}
 	if data.GitHubOwner != "" {
 		sessionCreate.SetGithubOwner(data.GitHubOwner)
@@ -622,6 +625,9 @@ func (r *EntRepository) Update(ctx context.Context, data InstanceData) error {
 	}
 	if data.GitHubPRNumber > 0 {
 		sessionUpdate.SetGithubPrNumber(data.GitHubPRNumber)
+	}
+	if data.GitHubPRStatusTerminal {
+		sessionUpdate.SetGithubPrStatusTerminal(true)
 	}
 	if data.GitHubOwner != "" {
 		sessionUpdate.SetGithubOwner(data.GitHubOwner)
@@ -1003,6 +1009,24 @@ func (r *EntRepository) UpdateGitHubPRNumber(ctx context.Context, title string, 
 	return nil
 }
 
+// UpdateGitHubPRStatusTerminal persists whether a session's PR has reached a
+// terminal (merged/closed) state. Called by PRStatusPoller on every poll so the
+// flag survives a restart — see SessionRetentionSweeper.baseSafeToDelete, which
+// reads it back from storage rather than the in-memory Instance.
+func (r *EntRepository) UpdateGitHubPRStatusTerminal(ctx context.Context, title string, terminal bool) error {
+	n, err := r.client.Session.Update().
+		Where(session.Title(title)).
+		SetGithubPrStatusTerminal(terminal).
+		Save(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to update github_pr_status_terminal: %w", err)
+	}
+	if n == 0 {
+		return fmt.Errorf("session not found: %s", title)
+	}
+	return nil
+}
+
 // UpdateSessionArtifacts persists the JSON-encoded artifact blob for a session.
 // Wrapped in a transaction for correctness under concurrent writes (M-6 fix).
 // The per-title mutex in ArtifactExtractor (C-1) serializes calls at the application
@@ -1302,6 +1326,7 @@ func (r *EntRepository) sessionToInstanceData(sess *ent.Session) *InstanceData {
 	}
 	data.GitHubPRURL = sess.GithubPrURL
 	data.GitHubPRNumber = sess.GithubPrNumber
+	data.GitHubPRStatusTerminal = sess.GithubPrStatusTerminal
 	data.GitHubOwner = sess.GithubOwner
 	data.GitHubRepo = sess.GithubRepo
 
@@ -1620,6 +1645,7 @@ func (r *EntRepository) RecordAnalytics(ctx context.Context, data AnalyticsData)
 		SetCommandCategory(data.CommandCategory).
 		SetCommandSubcategory(data.CommandSubcategory).
 		SetPythonImports(data.PythonImports).
+		SetSource(data.Source).
 		SetCreatedAt(data.CreatedAt).
 		Exec(ctx)
 }
@@ -1661,6 +1687,7 @@ func convertAnalyticsEntry(e *ent.ClassificationAnalytics) AnalyticsData {
 		CommandCategory:    e.CommandCategory,
 		CommandSubcategory: e.CommandSubcategory,
 		PythonImports:      e.PythonImports,
+		Source:             e.Source,
 		CreatedAt:          e.CreatedAt,
 	}
 }

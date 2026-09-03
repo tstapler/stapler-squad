@@ -393,7 +393,7 @@ func (m *RepoPathManager) EnsureRepoCloned(ctx context.Context, ref *GitHubRef) 
 
 	// Create parent directory
 	parentDir := filepath.Dir(repoPath)
-	if err := os.MkdirAll(parentDir, 0755); err != nil {
+	if err := os.MkdirAll(parentDir, 0750); err != nil {
 		return "", fmt.Errorf("failed to create directory %s: %w", parentDir, err)
 	}
 
@@ -559,7 +559,7 @@ func detectWorktreeUncached(path string) (*WorktreeInfo, error) {
 		info.IsWorktree = true
 
 		// Read the .git file to get the gitdir path
-		content, err := os.ReadFile(gitPath)
+		content, err := os.ReadFile(gitPath) // #nosec G304 -- gitPath is <path>/.git where path is the caller-chosen working directory itself (session's own repo/worktree path), the deliberate target of the operation, not an untrusted component joined onto a base the caller shouldn't control
 		if err != nil {
 			return info, fmt.Errorf("failed to read .git file: %w", err)
 		}

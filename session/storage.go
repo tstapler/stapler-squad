@@ -196,6 +196,17 @@ type ClaudeSessionData struct {
 	Metadata         map[string]string `json:"metadata,omitempty"`         // Additional session metadata
 }
 
+// PiSessionData represents pi-coding-agent session information needed to
+// resume a prior conversation via `pi --session <id>` (see buildPiCommand).
+// Unlike ClaudeSessionData's ConversationUUID, SessionID's format is not
+// validated here — pi 0.84.4 reports it as a standard dashed UUID in the
+// JSONL "session" header event's "id" field (see plan.md's Phase 1 spike
+// RESULTS), but this struct only requires it be non-empty to be usable.
+type PiSessionData struct {
+	SessionID    string    `json:"session_id,omitempty"`
+	LastAttached time.Time `json:"last_attached,omitempty"`
+}
+
 // UnmarshalJSON keeps backward compatibility with persisted state written
 // before SquadSessionID was renamed from ConversationID. The legacy
 // "conversation_id" key is read as a fallback when "squad_session_id" is
@@ -649,10 +660,17 @@ func (s *Storage) UpdateInstanceProcessingGrace(title string, processingGraceUnt
 }
 
 // UpdateInstancePRStatus updates the PR status fields for a specific instance.
-// PR fields are not stored in the ent schema — they live in memory and are re-populated by
-// PRStatusPoller on each poll cycle. No DB write is needed.
-func (s *Storage) UpdateInstancePRStatus(_, _, _, _ string, _, _ int, _, _ bool) error {
-	return nil
+// Most PR fields are not stored in the ent schema — they live in memory and are
+// re-populated by PRStatusPoller on each poll cycle, so no DB write is needed for
+// them. terminal is the one exception: SessionRetentionSweeper.baseSafeToDelete
+// reads it back from storage (not the live Instance) to decide whether a
+// PR-linked archived session is safe to delete, so it must survive a restart or
+// every such session is blocked from deletion forever (session-retention-cleanup).
+func (s *Storage) UpdateInstancePRStatus(title, _, _, _ string, _, _ int, _, terminal bool) error {
+	if !terminal {
+		return nil
+	}
+	return s.repo.UpdateGitHubPRStatusTerminal(context.Background(), title, terminal)
 }
 
 // UpdateInstancePRNumber persists the discovered PR number for a session so it

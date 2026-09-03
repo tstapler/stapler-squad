@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"net/http"
 	"net/url"
 	"os"
@@ -66,7 +67,20 @@ func marshalProtoEnvelope(stream *connectWebSocketStream, flags byte, msg proto.
 		return err
 	}
 	buf[0] = flags
-	binary.BigEndian.PutUint32(buf[1:5], uint32(len(buf)-5))
+	frameLen := len(buf) - 5
+	if frameLen > math.MaxUint32 {
+		// Mirrors server/protocol/envelope.go's CreateEnvelope: in practice
+		// unreachable (no marshaled TerminalData/session-event frame this
+		// server produces approaches 4 GiB), but truncating the length
+		// header here would desync the receiver's framing, so fail loudly
+		// via this function's existing error return rather than silently
+		// corrupt the wire protocol.
+		*bp = buf[:0]
+		envelopeBufPool.Put(bp)
+		return fmt.Errorf("marshalProtoEnvelope: frame too large to encode: %d bytes", frameLen)
+	}
+	// #nosec G115 -- bounds-checked above: the frameLen > math.MaxUint32 guard guarantees this fits in uint32
+	binary.BigEndian.PutUint32(buf[1:5], uint32(frameLen))
 	wsErr := stream.WriteMessage(websocket.BinaryMessage, buf)
 	*bp = buf[:0]
 	envelopeBufPool.Put(bp)
@@ -1389,8 +1403,11 @@ func (h *ConnectRPCWebSocketHandler) streamViaControlMode(stream *connectWebSock
 				SessionId: sessionID,
 				Data: &sessionv1.TerminalData_ScrollbackResponse{
 					ScrollbackResponse: &sessionv1.ScrollbackResponse{
-						Chunks:         chunks,
-						HasMore:        hasMore,
+						Chunks:  chunks,
+						HasMore: hasMore,
+						// #nosec G115 -- MemoryLines is a non-negative in-memory scrollback
+						// line count (bounded by the scrollback buffer's configured capacity),
+						// never negative; widening int -> uint64 cannot overflow.
 						TotalLines:     uint64(sbStats.MemoryLines),
 						OldestSequence: oldestSeq,
 						NewestSequence: newestSeq,
@@ -1459,8 +1476,12 @@ func (h *ConnectRPCWebSocketHandler) streamViaControlMode(stream *connectWebSock
 						Data: &sessionv1.TerminalData_ResizeQuiescence{
 							ResizeQuiescence: &sessionv1.ResizeQuiescence{
 								Resizing: resizing,
-								Cols:     int32(r.cols),
-								Rows:     int32(r.rows),
+								// #nosec G115 -- r.cols originated as a proto int32 field
+								// (TerminalResize.Cols) narrowed to int only for local
+								// arithmetic; converting back to int32 cannot overflow.
+								Cols: int32(r.cols),
+								// #nosec G115 -- see Cols above; same reasoning for Rows.
+								Rows: int32(r.rows),
 							},
 						},
 					}
@@ -1619,6 +1640,9 @@ func sendConnectionCountUpdates(stream *connectWebSocketStream, hub *streamhub.S
 			return
 		}
 		lastSent = count
+		// #nosec G115 -- count is a websocket subscriber count for one session
+		// (StreamHub.SubscriberCount, an O(1) map length), bounded by the number
+		// of concurrent client connections, nowhere near int32 range.
 		countCopy := int32(count)
 		msg := &sessionv1.TerminalData{
 			SessionId: sessionID,
@@ -2131,8 +2155,12 @@ func (h *ConnectRPCWebSocketHandler) streamShellViaControlMode(stream *connectWe
 						Data: &sessionv1.TerminalData_ResizeQuiescence{
 							ResizeQuiescence: &sessionv1.ResizeQuiescence{
 								Resizing: resizing,
-								Cols:     int32(r.cols),
-								Rows:     int32(r.rows),
+								// #nosec G115 -- r.cols originated as a proto int32 field
+								// (TerminalResize.Cols) narrowed to int only for local
+								// arithmetic; converting back to int32 cannot overflow.
+								Cols: int32(r.cols),
+								// #nosec G115 -- see Cols above; same reasoning for Rows.
+								Rows: int32(r.rows),
 							},
 						},
 					}

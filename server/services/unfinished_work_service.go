@@ -583,25 +583,31 @@ func (s *UnfinishedWorkService) UpdateUnfinishedWorkConfig(
 
 func scanResultToProto(r unfinished.ScanResult, pr worktreePRInfo) *sessionv1.UnfinishedWorktree {
 	wt := &sessionv1.UnfinishedWorktree{
-		RepoPath:            r.RepoPath,
-		Branch:              r.Branch,
-		WorktreePath:        r.WorktreePath,
-		RepoName:            r.RepoName,
-		DisplayPath:         r.DisplayPath,
-		HasUncommitted:      r.HasUncommitted,
-		CommitsAhead:        int32(r.AheadCount),
-		CommitsBehind:       int32(r.BehindCount),
-		DefaultBranch:       r.DefaultBranch,
-		ChangedFiles:        int32(r.ChangedFiles),
-		LinesAdded:          int32(r.LinesAdded),
+		RepoPath:       r.RepoPath,
+		Branch:         r.Branch,
+		WorktreePath:   r.WorktreePath,
+		RepoName:       r.RepoName,
+		DisplayPath:    r.DisplayPath,
+		HasUncommitted: r.HasUncommitted,
+		// #nosec G115 -- ahead/behind commit counts for one local worktree, far below int32 range.
+		CommitsAhead: int32(r.AheadCount),
+		// #nosec G115 -- see CommitsAhead above.
+		CommitsBehind: int32(r.BehindCount),
+		DefaultBranch: r.DefaultBranch,
+		// #nosec G115 -- git diff stats for one local worktree, far below int32 range.
+		ChangedFiles: int32(r.ChangedFiles),
+		// #nosec G115 -- see ChangedFiles above.
+		LinesAdded: int32(r.LinesAdded),
+		// #nosec G115 -- see ChangedFiles above.
 		LinesRemoved:        int32(r.LinesRemoved),
 		AheadCommitMessages: r.AheadMessages,
 		IsDismissed:         r.Status == unfinished.ScanResultStatusError, // used below
 		SessionIds:          r.SessionIDs,
-		GithubPrNumber:      int32(pr.Number),
-		GithubPrUrl:         pr.URL,
-		GithubPrState:       pr.State,
-		GithubPrPriority:    pr.Priority,
+		// #nosec G115 -- pr.Number is a GitHub PR number, far below int32 range.
+		GithubPrNumber:   int32(pr.Number),
+		GithubPrUrl:      pr.URL,
+		GithubPrState:    pr.State,
+		GithubPrPriority: pr.Priority,
 	}
 
 	// Correct the is_dismissed field (ScanResult doesn't carry this).

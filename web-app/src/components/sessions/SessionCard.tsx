@@ -2,7 +2,8 @@
 // +feature: remote-host-badge
 
 import { useState, useRef, useEffect, memo } from "react";
-import { Session, SessionStatus, SubStatus, ReviewItem, InstanceType, RateLimitState, CheckpointProto, DetectedStatus } from "@/gen/session/v1/types_pb";
+import { Session, SessionStatus, SubStatus, ReviewItem, InstanceType, RateLimitState, CheckpointProto, DetectedStatus, PiExtensionHealth } from "@/gen/session/v1/types_pb";
+import { useFeatureFlag } from "@/lib/contexts/FeatureFlagsContext";
 import { Tooltip } from "../ui/Tooltip";
 import { ReviewQueueBadge } from "./ReviewQueueBadge";
 import { RetryBadge } from "./RetryBadge";
@@ -18,9 +19,10 @@ import { getFailureMessage } from "@/lib/utils/sessionFailure";
 import { DetectionEventsPanel } from "./DetectionEventsPanel";
 import { SessionActionsOverflow } from "./SessionActionsOverflow";
 import { formatPauseReason } from "@/lib/sessions/formatPauseReason";
-import { isAutoApproveSupported } from "@/lib/sessions/autoApprove";
+import { isAutoApproveSupported, isApprovalExtensionSupported } from "@/lib/sessions/autoApprove";
 import { getLastActivityTimestamp, isSessionStale } from "@/lib/session-staleness";
 import { RemoteConnectionIndicator } from "./RemoteConnectionIndicator";
+import { PI_SUPPORT_FLAG_NAME } from "@/lib/constants/programs";
 
 // The launch command always starts with the program string it was last launched
 // with (see Instance.buildLaunchCommand, session/instance_tmux.go). If it no longer
@@ -67,6 +69,38 @@ function isPathRedundantWithTitle(pathValue: string, title: string): boolean {
   return isRedundantWithTitle(basenameOf(pathValue), title);
 }
 
+// piHealthBadgeInfo (pi-support Epic 4.2, Story 4.2.2) maps the three-state
+// PiExtensionHealth enum to the exact icon/label/aria-label design/ux.md §
+// "Badge component design" pins for each state. Never render Loaded's text
+// before a real ping arrives — UNSPECIFIED/UNKNOWN both fall through to the
+// "unknown" branch below (UNSPECIFIED is the pre-any-signal wire default and
+// must read identically to an explicit Unknown, never as Loaded).
+export function piHealthBadgeInfo(healthValue: PiExtensionHealth): { icon: string; label: string; ariaLabel: string; className: string } {
+  switch (healthValue) {
+    case PiExtensionHealth.LOADED:
+      return {
+        icon: "\u{1F6E1}️", // shield
+        label: "pi",
+        ariaLabel: "pi approval extension: loaded — tool calls are enforced",
+        className: piHealthBadgeLoaded,
+      };
+    case PiExtensionHealth.FAILED:
+      return {
+        icon: "⚠️", // warning triangle
+        label: "pi",
+        ariaLabel: "pi approval extension: not loaded — tool calls are unenforced",
+        className: piHealthBadgeFailed,
+      };
+    default:
+      return {
+        icon: "◌", // dotted circle
+        label: "pi",
+        ariaLabel: "pi approval extension: status unknown",
+        className: piHealthBadgeUnknown,
+      };
+  }
+}
+
 const AUTO_APPROVE_FLAG_LITERALS = ["--dangerously-skip-permissions", "--yes-always"];
 
 // Mirrors hasPendingProgramChange's shape: true when the persisted autoApprove value
@@ -94,6 +128,10 @@ import {
   badges,
   externalBadge,
   hostBadge,
+  piHealthBadge,
+  piHealthBadgeLoaded,
+  piHealthBadgeFailed,
+  piHealthBadgeUnknown,
   muxIndicator,
   reviewInfo,
   reviewContext,
@@ -258,6 +296,14 @@ function SessionCardInner({
   // unguarded when the agent doesn't actually support the injected flag (AC4 / pre-mortem
   // #4) -- e.g. autoApprove=true persisted for a since-unsupported program.
   const autoApproveFlagInjectable = session.autoApprove && isAutoApproveSupported(session.program);
+  // pi approval-extension health badge (pi-support Epic 4.2, Story 4.2.2): shown only when
+  // pi-support is on AND the session's program is one the extension actually covers.
+  // session.piExtensionHealth is UNSPECIFIED for every other session (server never populates
+  // it) as well as for a pi session before InstanceToProto's resolver is wired -- both cases
+  // correctly fall through to piHealthBadgeInfo's "unknown" default if this guard is somehow
+  // bypassed, but the guard itself is what keeps the badge from appearing on non-pi cards at all.
+  const piSupportEnabled = useFeatureFlag(PI_SUPPORT_FLAG_NAME);
+  const showPiHealthBadge = piSupportEnabled && isApprovalExtensionSupported(session.program);
   // AC11, explicit product decision (scoped out, not a silent gap): backlog automation's
   // headless review sessions (session/backlog_review.go, PermissionMode:
   // PermissionModeBypassPermissions) and any auto_yes-driven preset also bypass prompts,
@@ -624,6 +670,20 @@ function SessionCardInner({
               </span>
             )}
             {session.remoteName && <RemoteConnectionIndicator remoteName={session.remoteName} />}
+            {showPiHealthBadge && (() => {
+              const { icon, label, ariaLabel, className } = piHealthBadgeInfo(session.piExtensionHealth);
+              return (
+                <span
+                  className={`${piHealthBadge} ${className}`}
+                  role="img"
+                  title={ariaLabel}
+                  aria-label={ariaLabel}
+                  data-testid="pi-health-badge"
+                >
+                  <span aria-hidden="true">{icon}</span> {label}
+                </span>
+              );
+            })()}
             <GitHubBadge
               prNumber={session.githubPrNumber}
               prUrl={session.githubPrUrl}
@@ -729,7 +789,7 @@ function SessionCardInner({
               session.subStatus !== SubStatus.UNSPECIFIED &&
               session.subStatus !== SubStatus.IDLE &&
               !(suppressApprovalSubStatus && (session.subStatus === SubStatus.NEEDS_APPROVAL || session.subStatus === SubStatus.INPUT_REQUIRED)) && (
-                <SubStatusChip subStatus={session.subStatus} />
+                <SubStatusChip subStatus={session.subStatus} subagentCount={session.subagentCount} />
               )}
             {isSessionStale(session, staleThresholdMinutes) && (
               <span

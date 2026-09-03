@@ -56,6 +56,7 @@ func NewCandidateFromDiscovered(ds *mux.DiscoveredSession) ExternalSessionCandid
 	if ds.Metadata != nil {
 		candidate.Path = ds.Metadata.Cwd
 		candidate.Program = ds.Metadata.Command
+		// #nosec G115 -- OS PIDs fit comfortably in int32 (Linux pid_max < 2^22, macOS/BSD < 2^20)
 		candidate.PID = int32(ds.Metadata.PID)
 		candidate.TmuxSession = ds.Metadata.TmuxSession
 	}

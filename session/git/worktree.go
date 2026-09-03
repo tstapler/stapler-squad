@@ -32,7 +32,7 @@ func getWorktreeDirectory() (string, error) {
 	}
 
 	dir := filepath.Join(configDir, "worktrees")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return "", fmt.Errorf("failed to create worktree base directory %s: %w", dir, err)
 	}
 	resolved, err := filepath.EvalSymlinks(dir)
