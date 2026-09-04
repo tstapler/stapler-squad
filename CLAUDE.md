@@ -133,7 +133,7 @@ State and logs live in `~/.stapler-squad/`:
 
 **Key log patterns:** `Starting tmux session`, `timed out waiting for tmux session`, `DoesSessionExist()` polling
 
-State isolation (workspace-based by default): `docs/reference/state-isolation.md`
+State isolation (workspace mode is opt-in, not default): `docs/reference/state-isolation.md`
 External session monitoring (ssq-mux for IDE terminals): `docs/how-to/monitor-external-terminal-sessions.md`
 
 ## Architecture Overview
