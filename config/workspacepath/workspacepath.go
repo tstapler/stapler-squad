@@ -1,9 +1,6 @@
-// Package workspacepath implements the cwd/preference-file-driven directory
-// resolution shared by config.GetConfigDirForDir (Priorities 3-5) and
-// log.GetConfigDirForDir. It exists to prevent the two callers from drifting,
-// as they did before this package existed — see log/log.go's GetConfigDir doc
-// comment. Stdlib-only so both config (which imports log) and log can import
-// it without a cycle.
+// Package workspacepath implements the shared cwd/preference-file directory
+// resolution used by config.GetConfigDirForDir and log.GetConfigDirForDir
+// (Priorities 3-5), kept dependency-free so both can import it without a cycle.
 package workspacepath
 
 import (
@@ -11,7 +8,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"syscall"
 )
 
 // IsTestMode detects if the current process is a go test/benchmark binary, by
@@ -26,6 +25,41 @@ func IsTestMode() bool {
 		}
 	}
 	return false
+}
+
+// PruneStaleTestDirs removes test-<pid> directories under testBaseDir whose
+// owning process is no longer running, so per-process test state dirs (left
+// on disk on purpose for post-mortem debugging) don't accumulate forever.
+// Shared by config and log's Priority 3 branches so neither leaks these.
+func PruneStaleTestDirs(testBaseDir string) {
+	entries, err := os.ReadDir(testBaseDir)
+	if err != nil {
+		return
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		pidStr, ok := strings.CutPrefix(entry.Name(), "test-")
+		if !ok {
+			continue
+		}
+		pid, err := strconv.Atoi(pidStr)
+		if err != nil || isProcessAlive(pid) {
+			continue
+		}
+		_ = os.RemoveAll(filepath.Join(testBaseDir, entry.Name()))
+	}
+}
+
+// isProcessAlive reports whether pid is a running process, via the null
+// signal (no-op existence check, doesn't actually signal the process).
+func isProcessAlive(pid int) bool {
+	proc, err := os.FindProcess(pid)
+	if err != nil {
+		return false
+	}
+	return proc.Signal(syscall.Signal(0)) == nil
 }
 
 // PreferredWorkspaceFile returns the path to the preferred-workspace
@@ -110,12 +144,10 @@ type ResolveDefaultDirResult struct {
 	GetwdErr error
 }
 
-// ResolveDefaultDir implements Priority 4-6 of GetConfigDirForDir — preferred
-// workspace file, opt-in per-directory workspace isolation, then shared
-// state — as the single implementation shared by config.GetConfigDirForDir
-// and log.GetConfigDirForDir, so the two can't drift the way they did before
-// this package existed (see log/log.go's GetConfigDir doc comment). dir is
-// the caller-supplied cwd override; empty uses os.Getwd() internally.
+// ResolveDefaultDir implements Priority 4-6 of GetConfigDirForDir: preferred
+// workspace file, opt-in per-directory isolation, then shared state. Shared by
+// config and log so they can't drift. dir is the caller-supplied cwd override;
+// empty uses os.Getwd() internally.
 func ResolveDefaultDir(dir, baseDir string) ResolveDefaultDirResult {
 	// Priority 4: Preferred workspace from preference file (SwitchDatabase RPC).
 	if prefDir, ok := PreferredWorkspaceDir(baseDir); ok {

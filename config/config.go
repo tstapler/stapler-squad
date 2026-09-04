@@ -14,10 +14,8 @@ import (
 	"os/user"
 	"path/filepath"
 	"regexp"
-	"strconv"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 )
 
@@ -94,45 +92,6 @@ func IsIsolatedInstance() bool {
 	return IsTestMode() || IsNamedInstance() || os.Getenv("STAPLER_SQUAD_TEST_DIR") != ""
 }
 
-// pruneStaleTestDirs removes test-<pid> directories under testBaseDir whose
-// owning process is no longer running. Every go-test binary gets its own
-// isolated state dir here (see the IsTestMode branch below), but nothing else
-// ever deletes it — unlike t.TempDir(), this survives the test run on
-// purpose, for post-mortem debugging. Left unswept, that accumulates forever:
-// found 13,530 orphaned dirs (6.1G) going back to March 2026, which
-// contributed to the disk filling up. Checking the pid instead of an mtime
-// cutoff means this is safe to run even mid a legitimately slow test run.
-func pruneStaleTestDirs(testBaseDir string) {
-	entries, err := os.ReadDir(testBaseDir)
-	if err != nil {
-		return
-	}
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
-		pidStr, ok := strings.CutPrefix(entry.Name(), "test-")
-		if !ok {
-			continue
-		}
-		pid, err := strconv.Atoi(pidStr)
-		if err != nil || isProcessAlive(pid) {
-			continue
-		}
-		_ = os.RemoveAll(filepath.Join(testBaseDir, entry.Name()))
-	}
-}
-
-// isProcessAlive reports whether pid is a running process, via the null
-// signal (no-op existence check, doesn't actually signal the process).
-func isProcessAlive(pid int) bool {
-	proc, err := os.FindProcess(pid)
-	if err != nil {
-		return false
-	}
-	return proc.Signal(syscall.Signal(0)) == nil
-}
-
 // GetConfigDir returns the path to the application's configuration directory
 // with hierarchical isolation for safe multi-instance and test execution.
 //
@@ -191,7 +150,7 @@ func GetConfigDirForDir(dir string) (string, error) {
 	if IsTestMode() {
 		// Each test/benchmark process gets its own isolated state
 		testBaseDir := filepath.Join(baseDir, "test")
-		pruneStaleTestDirs(testBaseDir)
+		workspacepath.PruneStaleTestDirs(testBaseDir)
 		pid := os.Getpid()
 		return filepath.Join(testBaseDir, fmt.Sprintf("test-%d", pid)), nil
 	}

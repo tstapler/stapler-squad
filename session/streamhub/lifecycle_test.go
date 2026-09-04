@@ -144,16 +144,12 @@ func TestStreamHub_should_ScheduleTeardownAfterGracePeriod_When_LastSubscriberDe
 		t.Fatalf("expected StopControlMode not yet called, got %d calls", calls)
 	}
 
-	// Wait on stopCalls, not hub.State(): ForceTeardown flips state to
-	// HubTornDown *before* calling StopControlMode (session/streamhub/hub.go),
-	// so polling State() alone can observe HubTornDown while StopControlMode
-	// is still in flight, making this assertion flaky under CPU contention
-	// (observed in CI: "expected StopControlMode called exactly once, got 0
-	// calls" despite a 5s wait on State()). stopCalls==1 is the actual
-	// condition under test and, once observed, guarantees (via the atomic
-	// Add's happens-before edge back through the mutex-protected state write
-	// that precedes it in ForceTeardown) that State() already reads
-	// HubTornDown too.
+	// Wait on stopCalls, not hub.State(): ForceTeardown calls StopControlMode
+	// and only then flips state to HubTornDown (session/streamhub/hub.go), so
+	// polling State() alone can catch it mid-call, still HubDraining, making
+	// this assertion flaky under CPU contention (observed in CI: "expected
+	// StopControlMode called exactly once, got 0 calls" despite a 5s wait on
+	// State()). stopCalls==1 is the actual condition under test.
 	if !waitFor(t, 5*time.Second, func() bool { return controller.stopCalls.Load() == 1 }) {
 		t.Fatalf("expected StopControlMode called exactly once within grace period, got %d calls (hub state: %v)", controller.stopCalls.Load(), hub.State())
 	}

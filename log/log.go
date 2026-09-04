@@ -430,10 +430,9 @@ func (sl *StructuredLogger) Fatal(message string, fields ...map[string]interface
 
 // GetConfigDir returns the path to the application's configuration directory,
 // mirroring config.GetConfigDirForDir("")'s full 6-priority precedence so log
-// paths never drift from where DB/session state lands. Duplicated (via the
-// shared config/workspacepath leaf package) rather than imported directly
-// because config already imports log, and importing back would create a
-// cycle.
+// paths never drift from where DB/session state lands (via the shared
+// config/workspacepath leaf package — config already imports log, so log
+// can't import config back without a cycle).
 func GetConfigDir() (string, error) {
 	return GetConfigDirForDir("")
 }

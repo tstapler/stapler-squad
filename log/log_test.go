@@ -45,6 +45,7 @@ func withCleanEnv(t *testing.T) {
 // would otherwise assert the pre-fix (wrong) behavior.
 func TestGetConfigDir_UsesTestModeIsolation_WhenNoOverrideSet(t *testing.T) {
 	withCleanEnv(t)
+	t.Setenv("HOME", t.TempDir()) // keep the real-homedir fallback off the developer's actual ~/.stapler-squad
 
 	dir, err := GetConfigDir()
 	if err != nil {
