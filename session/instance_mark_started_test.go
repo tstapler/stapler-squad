@@ -155,11 +155,11 @@ func TestMarkStartedIfTmuxAlive_should_SerializeWithConcurrentStart_When_BothCal
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		_ = li.Instance.Start(true)
+		_ = li.Start(true)
 	}()
 	go func() {
 		defer wg.Done()
-		li.Instance.MarkStartedIfTmuxAlive()
+		li.MarkStartedIfTmuxAlive()
 	}()
 	wg.Wait()
 
@@ -168,7 +168,7 @@ func TestMarkStartedIfTmuxAlive_should_SerializeWithConcurrentStart_When_BothCal
 	// a started instance must land on Active, never a status the self-heal
 	// method itself would have refused to produce, and never a torn
 	// combination where one write only partially applied.
-	if li.Instance.Started() {
-		assert.Equal(t, Active, li.Instance.GetLifecycleStatus(), "a started instance must land on Active, not a torn or refused Status")
+	if li.Started() {
+		assert.Equal(t, Active, li.GetLifecycleStatus(), "a started instance must land on Active, not a torn or refused Status")
 	}
 }
