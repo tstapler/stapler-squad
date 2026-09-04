@@ -437,6 +437,11 @@ type Config struct {
 	// Slack holds configuration for the Slack review-queue notification
 	// feature. Secret fields are ciphertext only — see ADR-001.
 	Slack SlackConfig `json:"slack,omitempty"`
+	// Jules holds configuration for the Google Jules dispatch-and-poll
+	// integration. The API key itself is never stored here — it lives in the
+	// OS keychain (see jules.KeyringTokenSource) — this struct only holds the
+	// opt-in flag, per-repo egress acknowledgements, and spend guard caps.
+	Jules JulesConfig `json:"jules,omitempty"`
 
 	// Escape analytics configuration
 
@@ -969,6 +974,50 @@ func (c *Config) MaxConcurrentBacklogWorkItemsOrDefault() int {
 		return maxConcurrentBacklogWorkItemsHardCeiling
 	}
 	return c.MaxConcurrentBacklogWorkItems
+}
+
+// maxConcurrentJulesSessionsDefault is used when JulesConfig.MaxConcurrentJulesSessions
+// is unset (<=0). maxConcurrentJulesSessionsHardCeiling caps how high the setting can
+// go even via a modified frontend request — the blast-radius guard from Risk Control
+// (ADR-004): a retry-loop bug costs at most this many concurrent billed sessions.
+const (
+	maxConcurrentJulesSessionsDefault     = 2
+	maxConcurrentJulesSessionsHardCeiling = 10
+)
+
+// MaxConcurrentJulesSessionsOrDefault returns the configured Jules concurrency
+// cap, clamped to [1, maxConcurrentJulesSessionsHardCeiling]. Falls back to the
+// default (2) if unset (<=0) or c is nil.
+func (c *Config) MaxConcurrentJulesSessionsOrDefault() int {
+	if c == nil || c.Jules.MaxConcurrentJulesSessions <= 0 {
+		return maxConcurrentJulesSessionsDefault
+	}
+	if c.Jules.MaxConcurrentJulesSessions > maxConcurrentJulesSessionsHardCeiling {
+		return maxConcurrentJulesSessionsHardCeiling
+	}
+	return c.Jules.MaxConcurrentJulesSessions
+}
+
+// maxJulesSessionsPerDayDefault is used when JulesConfig.MaxJulesSessionsPerDay is
+// unset (<=0). maxJulesSessionsPerDayHardCeiling is the same blast-radius guard as
+// maxConcurrentJulesSessionsHardCeiling, applied to creation rate instead of
+// concurrency (ADR-004).
+const (
+	maxJulesSessionsPerDayDefault     = 15
+	maxJulesSessionsPerDayHardCeiling = 300
+)
+
+// MaxJulesSessionsPerDayOrDefault returns the configured Jules daily-dispatch
+// cap, clamped to [1, maxJulesSessionsPerDayHardCeiling]. Falls back to the
+// default (15) if unset (<=0) or c is nil.
+func (c *Config) MaxJulesSessionsPerDayOrDefault() int {
+	if c == nil || c.Jules.MaxJulesSessionsPerDay <= 0 {
+		return maxJulesSessionsPerDayDefault
+	}
+	if c.Jules.MaxJulesSessionsPerDay > maxJulesSessionsPerDayHardCeiling {
+		return maxJulesSessionsPerDayHardCeiling
+	}
+	return c.Jules.MaxJulesSessionsPerDay
 }
 
 // AutoSpawnReadyItemsOrDefault reports whether "ready" items should be automatically

@@ -176,6 +176,13 @@ var methodToID = map[string]string{ //nolint:gochecknoglobals
 	"GetPipelineMode":             "backlog:get-pipeline-mode",
 	"ListPipelineModes":           "backlog:list-pipeline-modes",
 	"AddBacklogItemDependency":    "backlog:add-item-dependency",
+	"DispatchToJules":             "backlog:dispatch-to-jules",
+	// Jules config RPCs (google-jules-integration Epic 2.4)
+	"GetJulesConfig":       "jules:get-config",
+	"UpdateJulesConfig":    "jules:update-config",
+	"TestJulesConnection":  "jules:test-connection",
+	"ConfirmEgressConsent": "jules:confirm-egress-consent",
+	"RevokeEgressConsent":  "jules:revoke-egress-consent",
 	// GitHub issue import RPCs (BacklogService) - mapped to the method name
 	// itself, not a kebab-case backlog:* id: origin/main already has
 	// committed registry files under docs/registry/features/backend/{method

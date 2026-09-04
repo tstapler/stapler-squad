@@ -618,3 +618,50 @@ func TestCreateBacklogWorktree_should_Error_When_RepoPathIsEmpty(t *testing.T) {
 		t.Errorf("CreateBacklogWorktree(\"\", ...) error = %q, want it to mention repoPath must not be empty", err.Error())
 	}
 }
+
+// TestEnsureRepoCloned_GitSubprocesses_should_SetGitTerminalPromptDisabled
+// guards against a real CI hang: without GIT_TERMINAL_PROMPT=0, a git
+// clone/fetch that can't auto-authenticate (a nonexistent or private repo,
+// or an ambient credential.helper/http.extraheader left over from another
+// checkout in the same environment) blocks on a credential prompt with no
+// TTY to answer it, silently consuming the full per-operation context
+// timeout instead of failing fast — observed in this repo's own CI as a
+// single nonexistent-repo clone attempt in an e2e test eating the entire
+// job budget (tests/e2e/accessibility.spec.ts's "Cancel and Retry controls"
+// test). Not reproducible hermetically (it depends on real network/auth
+// conditions), so this is a source-scan regression guard instead, matching
+// this repo's existing convention (e.g. jules/secrets_guard_test.go) for
+// invariants a unit test can't otherwise pin down.
+func TestEnsureRepoCloned_GitSubprocesses_should_SetGitTerminalPromptDisabled(t *testing.T) {
+	src, err := os.ReadFile("repo_path.go")
+	if err != nil {
+		t.Fatalf("reading repo_path.go: %v", err)
+	}
+	text := string(src)
+
+	for _, marker := range []string{
+		`"git", "-C", repoPath, "fetch", "--all", "--prune"`,
+		`"git", "clone", cloneURL, repoPath`,
+	} {
+		idx := strings.Index(text, marker)
+		if idx < 0 {
+			t.Fatalf("expected to find git subprocess construction %q in repo_path.go", marker)
+		}
+		// The env-setting line is expected on the very next statement after
+		// the cmd := safeexec.CommandContext(...) line containing marker.
+		rest := text[idx:]
+		nextNewline := strings.Index(rest, "\n")
+		if nextNewline < 0 {
+			t.Fatalf("malformed source around %q", marker)
+		}
+		afterCmdLine := rest[nextNewline+1:]
+		nextLineEnd := strings.Index(afterCmdLine, "\n")
+		if nextLineEnd < 0 {
+			nextLineEnd = len(afterCmdLine)
+		}
+		nextLine := afterCmdLine[:nextLineEnd]
+		if !strings.Contains(nextLine, `GIT_TERMINAL_PROMPT=0`) {
+			t.Errorf("git subprocess %q: expected the very next line to set GIT_TERMINAL_PROMPT=0 on cmd.Env, got: %q", marker, strings.TrimSpace(nextLine))
+		}
+	}
+}

@@ -157,6 +157,23 @@ type SessionService struct {
 	// slackConfigSvc handles GetSlackConfig/UpdateSlackConfig/TestSlackWebhook RPCs.
 	slackConfigSvc *SlackConfigService
 
+	// julesConfigSvc handles GetJulesConfig/UpdateJulesConfig/
+	// TestJulesConnection/ConfirmEgressConsent RPCs (google-jules-integration
+	// Epic 2.4). Constructed with nil dependencies here — real ones (keychain,
+	// source registry, poller) are wired post-construction via
+	// SetJulesConfigDependencies once server/dependencies.go builds them
+	// (Task 2.4.4a), since Jules-enablement is only known after config load.
+	julesConfigSvc *JulesConfigService
+
+	// credChain resolves AI-provider credentials (Anthropic, Google, Jules)
+	// for capacityMonitor's limits clients. Its JulesCredentialSource starts
+	// with its own *jules.KeyringTokenSource (built by NewDefaultChain, which
+	// runs before server/dependencies.go has one to share); SetJulesKeyringTokenSource
+	// swaps that for the process-wide instance once dependencies.go builds it,
+	// so this chain never resolves the Jules OS-keychain entry through a
+	// second, independent cache/circuit-breaker.
+	credChain *CredentialChain
+
 	// callbackConfigSvc handles GetCallbackConfig/UpdateCallbackConfig RPCs
 	// (webhook-triggers Phase 5, FR7).
 	callbackConfigSvc *CallbackConfigService
@@ -788,6 +805,7 @@ func NewSessionServiceWithSearchEngine(storage session.InstanceStore, eventBus *
 		slashCommandSvc:             NewSlashCommandService(),
 		defaultsSvc:                 NewDefaultsService(),
 		slackConfigSvc:              NewSlackConfigService(NewSlackNotifier()),
+		julesConfigSvc:              NewJulesConfigService(nil, nil, nil),
 		callbackConfigSvc:           NewCallbackConfigService(),
 		streamHubRolloutSvc:         NewStreamHubRolloutService(nil),
 		launcherPresetsSvc:          NewLauncherPresetsService(),
@@ -798,6 +816,7 @@ func NewSessionServiceWithSearchEngine(storage session.InstanceStore, eventBus *
 		promptStore:                 newPromptStore(),
 		capacityMonitor:             capacityMonitor,
 		deleteSessionCleanupTimeout: defaultDeleteSessionCleanupTimeout,
+		credChain:                   credChain,
 		githubResolver:              testModeGitHubResolver(),
 		creationResolutionTimeout:   maxCreationResolutionTimeout,
 	}
@@ -1769,6 +1788,39 @@ func (s *SessionService) SetSlackNotifier(n *SlackNotifier) {
 // production code — not intended for any non-test caller.
 func (s *SessionService) SlackNotifierForTest() *SlackNotifier {
 	return s.slackConfigSvc.slackNotifier
+}
+
+// SetJulesConfigDependencies rewires julesConfigSvc onto the real Jules
+// keychain/source-registry/poller dependencies once server/dependencies.go
+// has constructed them (Task 2.4.4a). keys and sources are nil when Jules
+// is disabled or its key is unresolvable at startup — julesConfigSvc stays
+// nil-safe for both (UpdateJulesConfig's api_key path and TestJulesConnection
+// then return CodeUnavailable rather than panicking). poller is nil unless
+// the poller was actually started.
+func (s *SessionService) SetJulesConfigDependencies(keys julesKeyManager, sources julesSourceResolver, poller julesAuthReconnectReporter) {
+	s.julesConfigSvc = NewJulesConfigService(keys, sources, poller)
+}
+
+// SetJulesKeyringTokenSource rewires credChain's JulesCredentialSource onto
+// the single process-wide *jules.KeyringTokenSource server/dependencies.go
+// constructs (the same instance passed to SetJulesConfigDependencies and
+// wired into the Jules client/poller), so credential-chain resolution never
+// spins up a second, independent cache/circuit-breaker/singleflight-group
+// over the same OS keychain entry. A no-op if credChain is nil (should not
+// happen outside tests that bypass NewSessionServiceWithSearchEngine).
+func (s *SessionService) SetJulesKeyringTokenSource(tokens julesKeyringTokenSource) {
+	if s.credChain != nil {
+		s.credChain.SetJulesTokenSource(tokens)
+	}
+}
+
+// SetJulesUsageCounter wires the process-wide *JulesUsageCounter (Task
+// 4.1.1a) onto julesConfigSvc so GetJulesConfig's response carries a live
+// usage snapshot. Constructed unconditionally in server/dependencies.go
+// (cheap, no I/O) regardless of whether Jules itself is enabled, so this
+// should be called once at startup alongside SetJulesConfigDependencies.
+func (s *SessionService) SetJulesUsageCounter(usage julesUsageSnapshotter) {
+	s.julesConfigSvc.SetUsageCounter(usage)
 }
 
 // SetFeatureController wires a runtime controller for the named feature flag.
@@ -5327,6 +5379,35 @@ func (s *SessionService) UpdateSlackConfig(ctx context.Context, req *connect.Req
 // TestSlackWebhook sends a synchronous test message and reports the outcome.
 func (s *SessionService) TestSlackWebhook(ctx context.Context, req *connect.Request[sessionv1.TestSlackWebhookRequest]) (*connect.Response[sessionv1.TestSlackWebhookResponse], error) {
 	return s.slackConfigSvc.TestSlackWebhook(ctx, req)
+}
+
+// GetJulesConfig returns the current Jules dispatch-and-poll configuration.
+func (s *SessionService) GetJulesConfig(ctx context.Context, req *connect.Request[sessionv1.GetJulesConfigRequest]) (*connect.Response[sessionv1.GetJulesConfigResponse], error) {
+	return s.julesConfigSvc.GetJulesConfig(ctx, req)
+}
+
+// UpdateJulesConfig updates the Jules configuration.
+func (s *SessionService) UpdateJulesConfig(ctx context.Context, req *connect.Request[sessionv1.UpdateJulesConfigRequest]) (*connect.Response[sessionv1.UpdateJulesConfigResponse], error) {
+	return s.julesConfigSvc.UpdateJulesConfig(ctx, req)
+}
+
+// TestJulesConnection checks whether a repo is registered as a Jules source.
+func (s *SessionService) TestJulesConnection(ctx context.Context, req *connect.Request[sessionv1.TestJulesConnectionRequest]) (*connect.Response[sessionv1.TestJulesConnectionResponse], error) {
+	return s.julesConfigSvc.TestJulesConnection(ctx, req)
+}
+
+// ConfirmEgressConsent is the only RPC that may grant Jules cloud-egress
+// consent for a repo — see JulesConfigService.ConfirmEgressConsent's doc
+// comment.
+func (s *SessionService) ConfirmEgressConsent(ctx context.Context, req *connect.Request[sessionv1.ConfirmEgressConsentRequest]) (*connect.Response[sessionv1.ConfirmEgressConsentResponse], error) {
+	return s.julesConfigSvc.ConfirmEgressConsent(ctx, req)
+}
+
+// RevokeEgressConsent is the only RPC that may remove Jules cloud-egress
+// consent for a repo — see JulesConfigService.RevokeEgressConsent's doc
+// comment.
+func (s *SessionService) RevokeEgressConsent(ctx context.Context, req *connect.Request[sessionv1.RevokeEgressConsentRequest]) (*connect.Response[sessionv1.RevokeEgressConsentResponse], error) {
+	return s.julesConfigSvc.RevokeEgressConsent(ctx, req)
 }
 
 // GetStreamHubRolloutStatus returns the current stream-hub rollout status.
