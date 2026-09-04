@@ -384,34 +384,41 @@ func TestCreateSessionTimeout_ComfortablyAboveGitCloneBound(t *testing.T) {
 	assert.Greater(t, createSessionTimeout, 120*time.Second)
 }
 
-// TestCreateSession_GitHubURLResolution_BoundedByContext verifies that
-// CreateSession's GitHub URL resolution step (the one known synchronous
-// sub-operation that can block for up to ~120s on a real clone) is bound to
-// the request context rather than able to hang the RPC forever. An
-// already-expired context is threaded all the way down to
-// safeexec.CommandContext for the underlying `git clone` subprocess, so the
-// subprocess itself should be killed at/near start rather than merely having
-// the RPC give up while a clone keeps running in the background. This makes
-// the test deterministic and fast: ctx.Done() is already closed before the
-// subprocess can do any meaningful network I/O.
-func TestCreateSession_GitHubURLResolution_BoundedByContext(t *testing.T) {
+// TestCreateSession_GitHubURLResolution_NotBoundByRequestContext supersedes
+// the pre-Epic-2.1 TestCreateSession_GitHubURLResolution_BoundedByContext:
+// GitHub URL resolution (the one known synchronous sub-operation that used to
+// block for up to ~120s on a real clone) is no longer part of CreateSession's
+// synchronous path at all (project_plans/async-session-creation/
+// implementation/plan.md Epic 2.1 Story 2.1.1) -- it runs in the
+// trackCleanup-dispatched background goroutine, against its own detached,
+// independently-timed-out context (backgroundGitHubResolutionTimeout), not
+// the RPC's ctx. So an already-expired RPC context must NOT cause
+// CreateSession to fail for a GitHub URL path: nothing on the synchronous
+// path threads ctx down to the clone anymore.
+func TestCreateSession_GitHubURLResolution_NotBoundByRequestContext(t *testing.T) {
 	t.Parallel()
 	storage := createTestStorage(t)
 	svc := newCreateTestService(t, storage)
+
+	resolvedPath := t.TempDir()
+	svc.githubResolver = func(_ context.Context, _ string, _ []string) (string, *session.GitHubRef, error) {
+		return resolvedPath, &session.GitHubRef{Owner: "octocat", Repo: "Hello-World"}, nil
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // already expired before CreateSession even starts
 
 	start := time.Now()
-	_, err := svc.CreateSession(ctx, connect.NewRequest(&sessionv1.CreateSessionRequest{
+	resp, err := svc.CreateSession(ctx, connect.NewRequest(&sessionv1.CreateSessionRequest{
 		Title: "github-timeout-test",
 		Path:  "https://github.com/octocat/Hello-World",
 	}))
 	elapsed := time.Since(start)
 
-	require.Error(t, err)
-	assertConnectCode(t, err, connect.CodeDeadlineExceeded)
-	assert.Less(t, elapsed, 2*time.Second, "CreateSession must fail fast on an expired context, not hang on GitHub resolution")
+	require.NoError(t, err, "an expired RPC context must not fail CreateSession for a GitHub URL -- resolution is deferred to the background")
+	t.Cleanup(func() { destroyCreatedSession(t, svc, resp.Msg.Session.Id) })
+	assert.Less(t, elapsed, 2*time.Second, "CreateSession must return fast, not wait on GitHub resolution")
+	assert.Equal(t, sessionv1.SessionStatus_SESSION_STATUS_CREATING, resp.Msg.Session.Status)
 }
 
 // ---------------------------------------------------------------------------

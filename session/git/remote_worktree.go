@@ -47,7 +47,7 @@ func NewRemoteWorktreeOps(runner tmux.CommandRunner) *RemoteWorktreeOps {
 // RemoveWorktree. RepoPath and WorktreePath are bundled into this single value
 // object rather than passed as separate positional string parameters so a caller
 // can't silently transpose them at the call site
-// (.claude/rules/primitive-obsession-checklist.md).
+// (the `primitive-obsession-checklist` skill).
 type RemoteWorktree struct {
 	// RepoPath is the existing repository on the remote host that `git worktree
 	// add`/`remove` runs against (the CommandRunner.Run "dir" argument).
@@ -145,6 +145,10 @@ func (r *RemoteWorktreeOps) RemoveWorktree(ctx context.Context, w RemoteWorktree
 // a partially-initialized directory behind for a caller/operator to inspect or
 // retry against.
 func (r *RemoteWorktreeOps) InitializeProjectDirectory(ctx context.Context, projectPath string) error {
+	// The `git rev-parse --verify -q HEAD` check right before the destructive
+	// .gitignore write/commit is a self-defending guard, not the primary gate
+	// (`[ -e .git ]` above already prevents the normal re-run case) — mirrors
+	// createInitialCommit's repoHasAnyRef guard in util.go.
 	script := fmt.Sprintf(`set -e
 mkdir -p %[1]s
 cd %[1]s
@@ -152,6 +156,10 @@ if [ -e .git ]; then
   exit 0
 fi
 git init .
+if git rev-parse --verify -q HEAD >/dev/null 2>&1; then
+  echo "refusing to create initial commit: repository already has existing refs" >&2
+  exit 1
+fi
 printf '%%s' '# Project gitignore
 ' > .gitignore
 git add .gitignore

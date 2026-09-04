@@ -27,7 +27,7 @@ type backlogItemGetter interface {
 // HostResolver resolves a deep link's hostname to either a live remote
 // host's advertised address or a reason it can't be reached, via the
 // Workspace Host Registry (Epic 3). Defined narrowly here (consumer-side,
-// per .claude/rules/interface-pollution-checklist.md) so Epic 3's Story 3.3
+// per the `interface-pollution-checklist` skill) so Epic 3's Story 3.3
 // can implement it against session.HostRegistry independently of this file.
 type HostResolver interface {
 	// ResolveHost looks up hostname in the registry. ok is false when the
@@ -35,7 +35,7 @@ type HostResolver interface {
 	// true but reachable is false, the entry exists but the liveness check
 	// failed ("unreachable"). advertisedAddress and lastSeenAt are
 	// best-effort and may be empty even when ok is true.
-	ResolveHost(hostname string) (advertisedAddress string, lastSeenAt string, reachable bool, ok bool)
+	ResolveHost(ctx context.Context, hostname string) (advertisedAddress string, lastSeenAt string, reachable bool, ok bool)
 }
 
 // unimplementedHostResolver is the Story 2.2 placeholder for the
@@ -44,7 +44,7 @@ type HostResolver interface {
 // fallback in NewDeepLinkResolver.
 type unimplementedHostResolver struct{}
 
-func (unimplementedHostResolver) ResolveHost(hostname string) (string, string, bool, bool) {
+func (unimplementedHostResolver) ResolveHost(_ context.Context, hostname string) (string, string, bool, bool) {
 	return "", "", false, false
 }
 
@@ -103,11 +103,11 @@ func NewRegistryHostResolver(stateDir string, ttl time.Duration) *registryHostRe
 // (session.HostRegistry.Advertise) -- TLS here provides transport
 // encryption only, not peer identity.
 func peerTLSTransport() *http.Transport {
-	return &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}} //nolint:gosec // see doc comment: identity is verified at the application layer (Ed25519/TOFU), not via the TLS chain
+	return &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}} // #nosec G402 -- see doc comment: identity is verified at the application layer (Ed25519/TOFU), not via the TLS chain
 }
 
 // ResolveHost implements HostResolver.
-func (r *registryHostResolver) ResolveHost(hostname string) (advertisedAddress string, lastSeenAt string, reachable bool, ok bool) {
+func (r *registryHostResolver) ResolveHost(ctx context.Context, hostname string) (advertisedAddress string, lastSeenAt string, reachable bool, ok bool) {
 	registry, err := session.NewHostRegistry(r.stateDir, r.registryTTL)
 	if err != nil {
 		log.Warn("deep_link.host_registry_open_failed", "err", err)
@@ -123,7 +123,7 @@ func (r *registryHostResolver) ResolveHost(hostname string) (advertisedAddress s
 		advertisedAddress = entry.AdvertisedAddress[0]
 	}
 	lastSeenAt = entry.LastSeenAt.Format(time.RFC3339)
-	reachable = r.checkLiveness(advertisedAddress)
+	reachable = r.checkLiveness(ctx, advertisedAddress)
 	return advertisedAddress, lastSeenAt, reachable, true
 }
 
@@ -132,11 +132,15 @@ func (r *registryHostResolver) ResolveHost(hostname string) (advertisedAddress s
 // server/server.go). Any error (timeout, connection refused, non-2xx) is
 // treated as unreachable — the distinction this resolver reports is only
 // ever "reachable" vs. "unreachable," never a more granular network error.
-func (r *registryHostResolver) checkLiveness(address string) bool {
+// ctx is the resolving HTTP request's own context (HandleResolve's
+// r.Context()), not context.Background() — a client that navigates away
+// mid-check cancels this probe immediately instead of it running to its own
+// fixed ceiling regardless.
+func (r *registryHostResolver) checkLiveness(ctx context.Context, address string) bool {
 	if address == "" {
 		return false
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), r.livenessTimeout)
+	ctx, cancel := context.WithTimeout(ctx, r.livenessTimeout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://"+address+"/health", nil)
 	if err != nil {
@@ -228,7 +232,7 @@ func (d *DeepLinkResolver) HandleResolve(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	advertisedAddress, lastSeenAt, reachable, ok := d.hostResolver.ResolveHost(link.Hostname)
+	advertisedAddress, lastSeenAt, reachable, ok := d.hostResolver.ResolveHost(r.Context(), link.Hostname)
 	if !ok {
 		log.Warn("deep_link.resolve_failed", "host", link.Hostname, "reason", "not-registered")
 		writeJSON(w, http.StatusConflict, deepLinkUnreachableResponse{Kind: "unreachable", Reason: "not-registered"})

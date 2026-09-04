@@ -211,6 +211,7 @@ func TestEntTriggerFireEventRepository_Create_should_AllowNilWorkflowID_When_Rej
 	// Not fetchable via ListByWorkflow (no workflow_id) — just confirm it inserted
 	// without error and without a WorkflowID.
 	client := storage.GetEntClient()
+	//nolint:entfullscan test assertion over a test-scoped in-memory DB; verifies exactly one row exists.
 	all, err := client.TriggerFireEvent.Query().All(t.Context())
 	require.NoError(t, err)
 	require.Len(t, all, 1)
@@ -281,4 +282,42 @@ func TestEntTriggerFireEventRepository_ListByWorkflow_should_DefaultLimitAndOrde
 	for i := 1; i < len(events); i++ {
 		assert.True(t, !events[i-1].CreatedAt.Before(events[i].CreatedAt), "events must be ordered newest first")
 	}
+}
+
+// TestEntTriggerFireEventRepository_ExistsByDeliveryID_should_FindNilWorkflowRows
+// is the regression test for the gap pr-event-webhooks' review verdict flagged: the
+// (workflow_id, delivery_id) unique index Create/ErrDuplicateDelivery rely on never
+// dedups two WorkflowID:nil rows sharing a delivery_id (NULL != NULL in a SQL unique
+// index), so a naive reuse of that mechanism for the PR-fix webhook path (which
+// always persists WorkflowID: nil) would silently provide zero dedup. Confirms
+// ExistsByDeliveryID finds a nil-workflow row by delivery_id alone.
+func TestEntTriggerFireEventRepository_ExistsByDeliveryID_should_FindNilWorkflowRows(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+
+	repo := NewEntTriggerFireEventRepository(storage.GetEntClient())
+
+	exists, err := repo.ExistsByDeliveryID(t.Context(), "pr-fix-delivery-1")
+	require.NoError(t, err)
+	assert.False(t, exists, "no row exists yet")
+
+	require.NoError(t, repo.Create(t.Context(), TriggerFireEventInput{
+		WorkflowID: nil,
+		Outcome:    "fired_success",
+		DeliveryID: "pr-fix-delivery-1",
+	}))
+
+	exists, err = repo.ExistsByDeliveryID(t.Context(), "pr-fix-delivery-1")
+	require.NoError(t, err)
+	assert.True(t, exists, "ExistsByDeliveryID must find a nil-workflow row by delivery_id alone")
+
+	// A second nil-workflow row sharing the same delivery_id must NOT violate the
+	// (workflow_id, delivery_id) unique index — proving that index alone cannot dedup
+	// this shape, and ExistsByDeliveryID is the actual dedup mechanism.
+	require.NoError(t, repo.Create(t.Context(), TriggerFireEventInput{
+		WorkflowID: nil,
+		Outcome:    "no_match",
+		DeliveryID: "pr-fix-delivery-1",
+	}), "two nil-workflow rows sharing a delivery_id must not collide on the unique index (NULL != NULL)")
 }

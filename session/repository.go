@@ -53,7 +53,7 @@ var ErrDependencyCycle = errors.New("backlog item dependency would create a cycl
 
 // BacklogItemDependencyEdge names a blocker/blocked pair explicitly so the
 // two bare ID strings can't be silently swapped at a call site — see
-// .claude/rules/primitive-obsession-checklist.md.
+// the `primitive-obsession-checklist` skill.
 type BacklogItemDependencyEdge struct {
 	// BlockerID is the item that must reach a resolved status (done or
 	// archived) before BlockedID is eligible for dequeue/start.
@@ -121,7 +121,11 @@ type AnalyticsData struct {
 	CommandCategory    string
 	CommandSubcategory string
 	PythonImports      []string
-	CreatedAt          time.Time
+	// Source identifies which agent's hook produced this request ("claude" or
+	// "pi"). Defaulted to "claude" at the recording boundary when empty — see
+	// pi-support Epic 4.3 / PermissionRequestPayload.Source.
+	Source    string
+	CreatedAt time.Time
 }
 
 // ProjectData is the domain model for a project that groups sessions.

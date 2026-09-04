@@ -1,6 +1,9 @@
 package streamhub_test
 
 import (
+	"bytes"
+	"context"
+	"runtime"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -12,28 +15,50 @@ import (
 	"github.com/tstapler/stapler-squad/session/streamhub"
 )
 
+// goroutineID extracts the calling goroutine's numeric ID from
+// runtime.Stack's header line ("goroutine 123 [running]:...") — a
+// well-known test-only trick, never appropriate in production code. Used
+// below purely to distinguish "the same pipeline invocation calling
+// SetWindowSizeContext twice in a row" from "two different goroutines'
+// pipelines genuinely overlapping."
+func goroutineID() uint64 {
+	buf := make([]byte, 64)
+	buf = buf[:runtime.Stack(buf, false)]
+	buf = bytes.TrimPrefix(buf, []byte("goroutine "))
+	buf = buf[:bytes.IndexByte(buf, ' ')]
+	id, _ := strconv.ParseUint(string(buf), 10, 64)
+	return id
+}
+
 // reentrancyTrackingController is a SessionController double built to catch
 // the specific race this test targets: two RequestResize callers each
 // independently deciding "the negotiated size changed" and both driving
 // applyNegotiatedSize's SetWindowSize -> quiescence-wait -> CapturePaneContent
 // pipeline at the same time. inPipeline is set for the pipeline's full
 // duration (SetWindowSize entry through CapturePaneContent return) so a
-// second, overlapping call is caught even though each individual method call
-// is short.
+// second, overlapping call from a DIFFERENT goroutine is caught even though
+// each individual method call is short. applyNegotiatedSize's own ±1
+// resize-nudge (hub.go, guarding against tmux's resize-window no-op when
+// already at the target size) calls SetWindowSizeContext twice per pipeline
+// from the SAME goroutine — enterPipeline tracks the owning goroutine ID so
+// that legitimate repeat call is not itself flagged as reentrancy.
 type reentrancyTrackingController struct {
 	mu         sync.Mutex
 	inPipeline bool
+	owner      uint64
 
 	reentered    atomic.Bool
 	pipelineRuns atomic.Int64
 }
 
 func (c *reentrancyTrackingController) enterPipeline() {
+	gid := goroutineID()
 	c.mu.Lock()
-	if c.inPipeline {
+	if c.inPipeline && c.owner != gid {
 		c.reentered.Store(true)
 	}
 	c.inPipeline = true
+	c.owner = gid
 	c.mu.Unlock()
 }
 
@@ -43,7 +68,7 @@ func (c *reentrancyTrackingController) exitPipeline() {
 	c.mu.Unlock()
 }
 
-func (c *reentrancyTrackingController) SetWindowSize(_, _ int) error {
+func (c *reentrancyTrackingController) SetWindowSizeContext(_ context.Context, _, _ int) error {
 	c.enterPipeline()
 	// Widen the race window: without resizeApplyMu serializing
 	// RequestResize end to end, this sleep gives a second concurrent
@@ -55,14 +80,19 @@ func (c *reentrancyTrackingController) SetWindowSize(_, _ int) error {
 
 func (c *reentrancyTrackingController) ResizePTY(_, _ int) error { return nil }
 
-func (c *reentrancyTrackingController) CapturePaneContent() (string, error) {
+func (c *reentrancyTrackingController) CapturePaneContentRawContext(_ context.Context) (streamhub.RawPaneContent, error) {
 	time.Sleep(2 * time.Millisecond)
 	c.pipelineRuns.Add(1)
 	c.exitPipeline()
 	return "snapshot", nil
 }
 
-func (c *reentrancyTrackingController) StopControlMode() error { return nil }
+func (c *reentrancyTrackingController) GetPaneCursorPosition() (x, y int, err error) {
+	return 0, 0, nil
+}
+
+func (c *reentrancyTrackingController) StartControlMode() error { return nil }
+func (c *reentrancyTrackingController) StopControlMode() error  { return nil }
 
 // SubscribeControlModeUpdates returns an already-closed channel so
 // waitForQuiescence returns immediately (its receive-from-closed-channel
@@ -133,7 +163,7 @@ func TestRequestResize_should_NeverRunApplyNegotiatedSizePipelineConcurrentlyWit
 				t.Errorf("NewTerminalSize(%d, %d) returned unexpected error: %v", cols, rows, err)
 				return
 			}
-			hub.RequestResize(id, size)
+			hub.RequestResize(context.Background(), id, size)
 		}()
 	}
 

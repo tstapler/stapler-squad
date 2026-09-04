@@ -14,9 +14,53 @@ import (
 	"github.com/tstapler/stapler-squad/session/detection/ratelimit"
 )
 
-// StartController creates and starts a ClaudeController for this instance.
+// programExtension is implemented by a per-coding-agent-program controller
+// lifecycle manager, so StartController/StopController dispatch through one
+// interface instead of growing an if-branch per new program (mirroring
+// instance_tmux.go's programKind sum type for command building). Currently
+// only *piExtension implements this: the default (Claude/plain) path below
+// isn't itself an "extension" -- ClaudeController's lifecycle is separate
+// business logic that happens to also be named "claude" (claudeExtension,
+// by contrast, only holds resume-session data unrelated to controller
+// lifecycle -- see its doc comment in instance_claude.go).
+type programExtension interface {
+	// supported reports whether i's current Program/config should route
+	// through this extension for a NEW StartController call.
+	supported(i *Instance) bool
+	// running reports whether this extension currently owns live
+	// controller-lifecycle state for i, independent of supported() -- see
+	// StopController's Bug 2 fix doc comment for why StopController routes
+	// on this instead of re-evaluating supported().
+	running() bool
+	// startController starts this extension's controller-equivalent
+	// lifecycle for i.
+	startController(i *Instance) error
+	// stopController stops it. Safe to call even if nothing was ever started.
+	stopController(i *Instance)
+}
+
+// controllerExtensions returns the ordered set of program extensions
+// StartController/StopController check before falling back to the default
+// Claude-controller path below. A future program gets a new programExtension
+// implementation appended to this slice instead of a new if-branch in either
+// method.
+func (i *Instance) controllerExtensions() []programExtension {
+	return []programExtension{&i.piExtension}
+}
+
+// StartController creates and starts a ClaudeController for this instance,
+// UNLESS a programExtension (currently: a pi-support-enabled pi session) is
+// supported, in which case it starts that extension instead (Epic 5.2) — pi
+// has no PTY output for ClaudeController's regex-based detector to scrape,
+// so the two are mutually exclusive per instance, not layered.
 // The controller enables automated idle detection and queue management.
 func (i *Instance) StartController() error {
+	for _, ext := range i.controllerExtensions() {
+		if ext.supported(i) {
+			return ext.startController(i)
+		}
+	}
+
 	// Check preconditions under lock
 	i.mu.Lock()
 
@@ -171,8 +215,43 @@ func (i *Instance) FireLifecycleEventForTest(event LifecycleEvent, reason string
 	i.fireLifecycleEvent(event, reason)
 }
 
-// StopController stops and cleans up the ClaudeController for this instance.
+// SetControllerForTest wires c as this instance's controller, bypassing
+// StartController's normal preconditions (status manager wiring, a live PTY
+// subprocess). Exported exclusively for cross-package tests (e.g.
+// server/services' steerInstance autonomous-branch error/timeout tests) that
+// need a real, pipe-backed *ClaudeController (session.NewClaudeController +
+// Start against an os.Pipe()-backed InstanceContext, mirroring
+// TestClaudeController_Start_TagsEscapeAnalyticsWithStableID's approach)
+// without spinning up a full session. Mirrors FireLifecycleEventForTest's
+// "exported for test" pattern.
+func (i *Instance) SetControllerForTest(c *ClaudeController) {
+	i.controllerManager.SetController(c)
+}
+
+// StopController stops and cleans up the ClaudeController for this
+// instance, or the running programExtension (currently: the PiStatusSource
+// for a pi-support-enabled pi session) — see StartController's doc comment.
+//
+// Routing is gated on actual live registration state (ext.running()), not on
+// re-evaluating ext.supported() (Bug 2 fix): the pi-support feature flag is
+// mutable at runtime (Story 2.1.2's disable-warning dialog), and
+// supported() re-checks it live. If a user disables the flag while a pi
+// session's PiStatusSource is still running, re-checking the flag here
+// would route to the Claude-controller branch instead and never call
+// Stop() on the still-live PiStatusSource — a goroutine/subprocess leak, and
+// a violation of SetPiSessionID's documented invariant that Restart's
+// unlocked i.piSession access is safe because Stop() has already joined the
+// only writer goroutine. The flag should only gate whether a NEW
+// PiStatusSource gets started (StartController); an already-running one must
+// always be stoppable regardless of the flag's current value.
 func (i *Instance) StopController() {
+	for _, ext := range i.controllerExtensions() {
+		if ext.running() {
+			ext.stopController(i)
+			return
+		}
+	}
+
 	i.mu.Lock()
 	defer i.mu.Unlock()
 
@@ -185,9 +264,20 @@ func (i *Instance) StopController() {
 	log.Info("stopped claudecontroller for instance", "session", i.Title)
 }
 
-// stopControllerLocked stops the ClaudeController from within an actor command.
+// stopControllerLocked stops the ClaudeController (or the running
+// programExtension, e.g. PiStatusSource for a pi-support-enabled pi
+// session — see StartController's doc comment) from within an actor
+// command. See StopController's doc comment for why routing is gated on
+// ext.running() (live registration state) rather than ext.supported()
+// (Bug 2 fix).
 func stopControllerLocked(s *instanceState) {
 	i := s.inst
+	for _, ext := range i.controllerExtensions() {
+		if ext.running() {
+			ext.stopController(i)
+			return
+		}
+	}
 	if !i.controllerManager.HasController() {
 		return
 	}
@@ -196,9 +286,14 @@ func stopControllerLocked(s *instanceState) {
 }
 
 // GetController returns the ClaudeController if one exists.
+//
+// Deliberately does not take i.mu: controllerManager stores the controller in an
+// atomic.Pointer specifically so reads never need to serialize with the mutex-guarded
+// Register/Unregister paths (StartController/StopController) — see ControllerManager's
+// doc comment. Profiling on 2026-09-02 showed StopController's i.mu.Lock() blocking a
+// large fraction of concurrent GetController callers (status polling, streaming) even
+// though GetController never touched any i.mu-protected field.
 func (i *Instance) GetController() *ClaudeController {
-	i.mu.RLock()
-	defer i.mu.RUnlock()
 	return i.controllerManager.GetController()
 }
 

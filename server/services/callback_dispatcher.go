@@ -38,7 +38,7 @@ const callbackRetryBackoff = 500 * time.Millisecond
 // fresh from stdlib net/http — same shape as the (unimplemented) SlackNotifier
 // design from project_plans/slack-review-notifications, which has no shipped code
 // to reuse (0 matches repo-wide, verified). Concrete type, not an interface — one
-// implementation, per .claude/rules/interface-pollution-checklist.md; the
+// implementation, per the `interface-pollution-checklist` skill; the
 // session package's CallbackDispatcher interface (session/callback_dispatcher.go)
 // exists only because session cannot import this package.
 //

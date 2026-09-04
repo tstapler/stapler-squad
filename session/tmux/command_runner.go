@@ -33,7 +33,7 @@ import (
 // (every git/gh call in worktree_git.go sets cmd.Dir to the worktree path)
 // and is a no-op ("") for session/tmux's server-level commands, which have
 // no meaningful working directory. dir and name are adjacent same-typed
-// strings (see .claude/rules/primitive-obsession-checklist.md), but are left
+// strings (see the `primitive-obsession-checklist` skill), but are left
 // as plain positional parameters rather than wrapped in a newtype: unlike
 // e.g. RepoRef's owner/repo (where a swap silently produces a different,
 // still-valid repo), swapping dir and name here fails loudly and immediately

@@ -25,7 +25,7 @@ const slackTestMessageText = "stapler-squad test message — if you can see this
 // TestSlackWebhook RPCs. Delegated to from SessionService exactly like
 // DefaultsService/CallbackConfigService — a config-backed handler with no
 // second implementation, so a concrete type per
-// .claude/rules/interface-pollution-checklist.md.
+// the `interface-pollution-checklist` skill.
 type SlackConfigService struct {
 	slackNotifier *SlackNotifier
 }
@@ -168,9 +168,10 @@ func (s *SlackConfigService) slackConfigToProto(cfg *config.Config) *sessionv1.S
 		WebhookConfigured:       cfg.Slack.WebhookURLEncrypted != "" || cfg.SlackWebhookURLOverride() != "",
 		SigningSecretConfigured: cfg.Slack.SigningSecretEncrypted != "" || cfg.SlackSigningSecretOverride() != "",
 		NotifyOnQueueItem:       cfg.Slack.NotifyOnQueueItem,
-		QueueDepthThreshold:     int32(cfg.Slack.QueueDepthThreshold),
-		ApprovalEnabled:         cfg.Slack.ApprovalEnabled,
-		DashboardBaseUrl:        cfg.Slack.DashboardBaseURL,
+		// #nosec G115 -- QueueDepthThreshold is a small local config knob, far below int32 range.
+		QueueDepthThreshold: int32(cfg.Slack.QueueDepthThreshold),
+		ApprovalEnabled:     cfg.Slack.ApprovalEnabled,
+		DashboardBaseUrl:    cfg.Slack.DashboardBaseURL,
 	}
 
 	if s.slackNotifier != nil {

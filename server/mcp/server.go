@@ -78,7 +78,7 @@ func NewCore(
 		registerGoalTools(s, &goalHandlers{storage: storage, store: store, eventBus: eventBus, enabledCheck: backlogEnabled})
 	}
 	if prCache != nil {
-		registerGitHubTools(s, &githubHandlers{cache: prCache, store: store})
+		registerGitHubTools(s, &githubHandlers{cache: prCache, store: store, svc: svc})
 	}
 	return s
 }

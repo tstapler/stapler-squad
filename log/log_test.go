@@ -1,8 +1,10 @@
 package log
 
 import (
+	"bytes"
 	"io"
 	"log"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -38,7 +40,9 @@ func withCleanEnv(t *testing.T) {
 // itself triggers test-mode auto-detection (see config_test.go's "uses test
 // mode isolation for tests" case for the equivalent config-package guard),
 // so this now lands in a pid-scoped test dir rather than the bare shared
-// baseDir.
+// baseDir. This supersedes TestGetConfigDir's former "unset instance returns
+// unchanged base dir" case below, which predates Priority 3-6 support and
+// would otherwise assert the pre-fix (wrong) behavior.
 func TestGetConfigDir_UsesTestModeIsolation_WhenNoOverrideSet(t *testing.T) {
 	withCleanEnv(t)
 
@@ -52,49 +56,75 @@ func TestGetConfigDir_UsesTestModeIsolation_WhenNoOverrideSet(t *testing.T) {
 	}
 }
 
-func TestGetConfigDir_ReturnsBaseDir_WhenSTAPLER_SQUAD_INSTANCEIsShared(t *testing.T) {
-	withCleanEnv(t)
-	os.Setenv("STAPLER_SQUAD_INSTANCE", "shared")
+func TestGetConfigDir(t *testing.T) {
+	tests := []struct {
+		name            string
+		instance        string // "" = leave STAPLER_SQUAD_INSTANCE unset
+		wantSuffix      string
+		wantNoInstances bool // dir must not contain "instances"
+	}{
+		{
+			name:            "shared instance returns unchanged base dir",
+			instance:        "shared",
+			wantSuffix:      ".stapler-squad",
+			wantNoInstances: true,
+		},
+		{
+			name:       "named instance returns instance-scoped path",
+			instance:   "alpha",
+			wantSuffix: filepath.Join(".stapler-squad", "instances", "alpha"),
+		},
+	}
 
-	dir, err := GetConfigDir()
-	if err != nil {
-		t.Fatalf("GetConfigDir failed: %v", err)
-	}
-	if !strings.HasSuffix(dir, ".stapler-squad") || strings.Contains(dir, "instances") {
-		t.Errorf("expected shared instance to use unchanged ~/.stapler-squad path, got %s", dir)
-	}
-}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			withCleanEnv(t)
+			t.Setenv("HOME", t.TempDir()) // keep the real-homedir fallback off the developer's actual ~/.stapler-squad
+			if tt.instance != "" {
+				os.Setenv("STAPLER_SQUAD_INSTANCE", tt.instance)
+			}
 
-func TestGetConfigDir_ReturnsInstanceScopedPath_WhenSTAPLER_SQUAD_INSTANCESet(t *testing.T) {
-	withCleanEnv(t)
-	os.Setenv("STAPLER_SQUAD_INSTANCE", "alpha")
+			dir, err := GetConfigDir()
+			if err != nil {
+				t.Fatalf("GetConfigDir failed: %v", err)
+			}
+			if !strings.HasSuffix(dir, tt.wantSuffix) {
+				t.Errorf("expected path ending in %s, got %s", tt.wantSuffix, dir)
+			}
+			if tt.wantNoInstances && strings.Contains(dir, "instances") {
+				t.Errorf("expected no instances/ segment, got %s", dir)
+			}
+		})
+	}
 
-	dir, err := GetConfigDir()
-	if err != nil {
-		t.Fatalf("GetConfigDir failed: %v", err)
-	}
-	wantSuffix := filepath.Join(".stapler-squad", "instances", "alpha")
-	if !strings.HasSuffix(dir, wantSuffix) {
-		t.Errorf("expected path ending in %s, got %s", wantSuffix, dir)
-	}
-}
+	t.Run("STAPLER_SQUAD_TEST_DIR wins outright over STAPLER_SQUAD_INSTANCE", func(t *testing.T) {
+		withCleanEnv(t)
+		testDir := filepath.Join(t.TempDir(), "custom-test-dir")
+		os.Setenv("STAPLER_SQUAD_TEST_DIR", testDir)
+		os.Setenv("STAPLER_SQUAD_INSTANCE", "alpha")
 
-func TestGetConfigDir_ReturnsTestDir_WhenSTAPLER_SQUAD_TEST_DIRSet(t *testing.T) {
-	withCleanEnv(t)
-	testDir := filepath.Join(t.TempDir(), "custom-test-dir")
-	os.Setenv("STAPLER_SQUAD_TEST_DIR", testDir)
-	// STAPLER_SQUAD_TEST_DIR must win outright even with an instance also set.
-	os.Setenv("STAPLER_SQUAD_INSTANCE", "alpha")
+		dir, err := GetConfigDir()
+		if err != nil {
+			t.Fatalf("GetConfigDir failed: %v", err)
+		}
+		if dir != testDir {
+			t.Errorf("expected STAPLER_SQUAD_TEST_DIR to win, got %s want %s", dir, testDir)
+		}
+		if info, statErr := os.Stat(testDir); statErr != nil || !info.IsDir() {
+			t.Errorf("expected GetConfigDir to create %s via MkdirAll", testDir)
+		}
+	})
 
-	dir, err := GetConfigDir()
-	if err != nil {
-		t.Fatalf("GetConfigDir failed: %v", err)
-	}
-	if dir != testDir {
-		t.Errorf("expected STAPLER_SQUAD_TEST_DIR to win, got %s want %s", dir, testDir)
-	}
-	if info, err := os.Stat(testDir); err != nil || !info.IsDir() {
-		t.Errorf("expected GetConfigDir to create %s via MkdirAll", testDir)
+	for _, bad := range []string{"../escape", "a/../../etc", "nested/segment", `back\slash`} {
+		t.Run("rejects instance ID "+bad, func(t *testing.T) {
+			withCleanEnv(t)
+			t.Setenv("HOME", t.TempDir())
+			os.Setenv("STAPLER_SQUAD_INSTANCE", bad)
+
+			if _, err := GetConfigDir(); err == nil {
+				t.Errorf("expected error for STAPLER_SQUAD_INSTANCE=%q, got nil", bad)
+			}
+		})
 	}
 }
 
@@ -155,6 +185,7 @@ func TestGetLogDir(t *testing.T) {
 
 func TestGetLogDir_NamedInstance_CreatesNestedInstanceLogsDir(t *testing.T) {
 	withCleanEnv(t)
+	t.Setenv("HOME", t.TempDir()) // GetLogDir's MkdirAll must not land in the real ~/.stapler-squad
 	os.Setenv("STAPLER_SQUAD_INSTANCE", "alpha")
 
 	dir, err := GetLogDir(&LogConfig{LogsEnabled: true})
@@ -214,6 +245,7 @@ func TestGetLogFilePath(t *testing.T) {
 
 func TestGetLogFilePath_NamedInstance_DivergesFromDefaultInstance(t *testing.T) {
 	withCleanEnv(t)
+	t.Setenv("HOME", t.TempDir()) // GetLogFilePath's underlying MkdirAll must not land in the real ~/.stapler-squad
 
 	cfg := &LogConfig{LogsEnabled: true}
 
@@ -377,6 +409,24 @@ func NewDummyLogger(w io.Writer, prefix string) *log.Logger {
 // another set concurrently loads and uses it. Before atomicLogger, the
 // equivalent bare package-var reassignment raced with these reads; this test
 // guards against that regression reappearing.
+// TestSetRuntimeLevel_UpdatesSlogLevel guards against the bug this fixes: the
+// slog-based Debug/Info/Warn/Error logger was wired to a hardcoded
+// slog.LevelDebug and never consulted SetRuntimeLevel, so Debug() always
+// emitted regardless of the configured runtime level.
+func TestSetRuntimeLevel_UpdatesSlogLevel(t *testing.T) {
+	t.Cleanup(func() { SetRuntimeLevel(INFO) })
+
+	SetRuntimeLevel(WARNING)
+	if got := slogLevel.Level(); got != slog.LevelWarn {
+		t.Errorf("slogLevel = %v, want %v", got, slog.LevelWarn)
+	}
+
+	SetRuntimeLevel(DEBUG)
+	if got := slogLevel.Level(); got != slog.LevelDebug {
+		t.Errorf("slogLevel = %v, want %v", got, slog.LevelDebug)
+	}
+}
+
 func TestAtomicLoggerConcurrentAccess(t *testing.T) {
 	orig := SetWarningLogForTest(NewDummyLogger(io.Discard, "WARNING: "))
 	defer SetWarningLogForTest(orig)
@@ -412,4 +462,53 @@ func TestAtomicLoggerConcurrentAccess(t *testing.T) {
 	}
 
 	wg.Wait()
+}
+
+// TestInitializeWithConfig_SlogDefaultAndSeamStayInSync verifies that
+// initializeWithConfig stores the exact same *slog.Logger instance into both
+// the real slog.Default() and the injectable slogDefault seam read by
+// logAt/ForSession — production logging behavior must not diverge between the
+// two, since only the seam is what server/services tests swap out.
+func TestInitializeWithConfig_SlogDefaultAndSeamStayInSync(t *testing.T) {
+	prevSlog := slog.Default()
+	prevSeam := slogDefault.Load()
+	t.Cleanup(func() {
+		slog.SetDefault(prevSlog)
+		slogDefault.Store(prevSeam)
+	})
+
+	cfg := DefaultLogConfig()
+	cfg.FileEnabled = false
+	cfg.ConsoleEnabled = false
+	initializeWithConfig(false, cfg)
+	// initializeWithConfig starts a background drain goroutine (via AsyncHandler.StartDrain)
+	// with no way to reach it from outside except through the LogManager it just installed
+	// as defaultManager. Close() flushes that handler and stops the goroutine; without this,
+	// every run of this test leaks one goroutine for the life of the test binary.
+	t.Cleanup(Close)
+
+	if slog.Default() != slogDefault.Load() {
+		t.Error("slog.Default() and slogDefault.Load() must be the same *slog.Logger instance after initializeWithConfig")
+	}
+}
+
+// TestSetSlogDefaultForTest_LeavesSlogDefaultUntouched locks in the seam's core contract:
+// swapping it must redirect what log.Info/Warn/etc. write to (via logAt/ForSession's
+// slogDefault.Load()) without also touching the real slog.Default() — that's what let
+// tests stop calling slog.SetDefault() directly, which was also rewiring stdlib
+// log.Print process-wide and racing with concurrent tests' log-capture buffers.
+func TestSetSlogDefaultForTest_LeavesSlogDefaultUntouched(t *testing.T) {
+	realDefault := slog.Default()
+	var buf bytes.Buffer
+	prev := SetSlogDefaultForTest(slog.New(slog.NewTextHandler(&buf, nil)))
+	t.Cleanup(func() { SetSlogDefaultForTest(prev) })
+
+	Info("via seam")
+
+	if slog.Default() != realDefault {
+		t.Error("SetSlogDefaultForTest must not mutate slog.Default()")
+	}
+	if !strings.Contains(buf.String(), "via seam") {
+		t.Error("Info() must route through the seam installed by SetSlogDefaultForTest, not the real default")
+	}
 }

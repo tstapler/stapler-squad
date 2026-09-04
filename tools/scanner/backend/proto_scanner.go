@@ -25,7 +25,7 @@ type BackendFeature struct {
 }
 
 // methodToID maps proto RPC method names to their canonical feature IDs.
-var methodToID = map[string]string{
+var methodToID = map[string]string{ //nolint:gochecknoglobals
 	"CreateSession":             "session:create",
 	"GetSession":                "session:get",
 	"UpdateSession":             "session:update",
@@ -56,6 +56,7 @@ var methodToID = map[string]string{
 	"FocusWindow":               "window:focus",
 	"RenameSession":             "session:rename",
 	"RestartSession":            "session:restart",
+	"RetrySession":              "session:retry",
 	"GetWorkspaceInfo":          "workspace:get-info",
 	"ListWorkspaceTargets":      "workspace:list-targets",
 	"SwitchWorkspace":           "workspace:switch",
@@ -199,6 +200,13 @@ var methodToID = map[string]string{
 	"ResumeHibernatedSession": "session:resume-hibernated",
 	"ResumeCrashedSession":    "session:resume-crashed",
 	"WriteToSession":          "session:write",
+	// Async session creation cancel/retry RPCs (async-session-creation Epic 6.3,
+	// Story 6.3.1) -- match the existing "// +api: session:cancel-creation" /
+	// "// +api: session:retry-creation" markers in session_service.go verbatim,
+	// or ScanProto's method-name fallback produces a second, non-marker-matching
+	// id/file (see the SearchGitHubRepos comment above for the failure mode).
+	"CancelSessionCreation": "session:cancel-creation",
+	"RetrySessionCreation":  "session:retry-creation",
 	// Shell RPCs
 	"SpawnShell":   "shell:spawn",
 	"DeleteShell":  "shell:delete",
@@ -218,6 +226,15 @@ var methodToID = map[string]string{
 	// Outbound callback config RPCs (webhook-triggers Phase 5, FR7)
 	"GetCallbackConfig":    "callback-config:get",
 	"UpdateCallbackConfig": "callback-config:update",
+	// Stream Hub Rollout RPCs (terminal-multi-connection-streaming Story 3.3)
+	"GetStreamHubRolloutStatus":          "stream-hub-rollout:get",
+	"CompleteStreamHubRollbackRehearsal": "stream-hub-rollout:complete-rehearsal",
+	"SetStreamHubSessionOverride":        "stream-hub-rollout:set-session-override",
+	"SetStreamHubGlobalOverride":         "stream-hub-rollout:set-global-override",
+	// Tymux Rollout RPCs (tymux-bundled-integration Epic 3.3)
+	"GetTymuxRolloutStatus":          "tymux-rollout:get",
+	"CompleteTymuxRollbackRehearsal": "tymux-rollout:complete-rehearsal",
+	"SetTymuxSessionOverride":        "tymux-rollout:set-session-override",
 	// Approval rules RPCs
 	"BulkUpsertRules":       "approval:bulk-upsert-rules",
 	"ExportRules":           "approval:export-rules",
@@ -281,12 +298,18 @@ var methodToID = map[string]string{
 	// hardcoded proto enumeration in this repo (Makefile's registry-generate-backend,
 	// prune-stale-backend.sh, validate-registry.sh, AND this test's own old list), the same
 	// bug class ssh-remote-workspaces Phase 6 Epic 6.3 found and fixed for remote.proto.
-	// Only the methodToID mapping is added here (this map is what
-	// TestMethodToIDCompleteness checks); wiring headless.proto into the Makefile/
-	// prune-stale-backend.sh/validate-registry.sh's own scan enumerations so it actually
-	// gets a generated per-feature file is a separate, larger followup (a new feature's
-	// registry entries + testIds, not a completeness-test fix) -- out of scope here.
+	// The other three enumerations now glob proto/session/v1/*.proto via
+	// tools/scanner/list-backend-protos.sh instead of hand-enumerating, so headless.proto
+	// (and any future service-bearing proto) is picked up automatically.
 	"RunHeadlessCall": "headless:run-call",
+	// Handoff summary RPCs (HandoffSummaryService in handoff_summary.proto,
+	// added by #612 without a methodToID entry or a registry-generate-backend
+	// Makefile enumeration — the same hardcoded-proto-list bug class as
+	// remote.proto/headless.proto above, caught by TestMethodToIDCompleteness's
+	// glob. Wired fully (map entry + Makefile enumeration) like remote.proto,
+	// not left as a followup like headless.proto, since it was cheap here.
+	"GetHandoffSummary":     "handoff-summary:get",
+	"TriggerHandoffSummary": "handoff-summary:trigger",
 }
 
 // rpcPattern matches lines like:   rpc MethodName(  (indented or not)

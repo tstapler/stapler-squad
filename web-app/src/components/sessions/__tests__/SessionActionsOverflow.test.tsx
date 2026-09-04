@@ -199,6 +199,63 @@ describe("SessionActionsOverflow", () => {
     });
   });
 
+  describe("retry now flow (AC6)", () => {
+    it("omits Retry now menu item for a running session with no pending retry", () => {
+      renderOverflow({ onRetryNow: jest.fn() });
+      openMenu();
+      expect(screen.queryByRole("menuitem", { name: /retry.*now/i })).not.toBeInTheDocument();
+    });
+
+    it("shows Retry now menu item when session is PERMANENTLY_FAILED", () => {
+      const session = makeSession({ status: SessionStatus.PERMANENTLY_FAILED });
+      renderOverflow({ session, onRetryNow: jest.fn() });
+      openMenu();
+      expect(screen.getByRole("menuitem", { name: /retry.*now/i })).toBeInTheDocument();
+    });
+
+    it("shows Retry now menu item mid-backoff-wait (nextRetryAt set, not yet permanently failed)", () => {
+      const session = makeSession({ nextRetryAt: { seconds: BigInt(Math.floor(Date.now() / 1000) + 60), nanos: 0 } });
+      renderOverflow({ session, onRetryNow: jest.fn() });
+      openMenu();
+      expect(screen.getByRole("menuitem", { name: /retry.*now/i })).toBeInTheDocument();
+    });
+
+    it("shows primary Retry now button when showPrimaryAction=true and session is PERMANENTLY_FAILED", () => {
+      const session = makeSession({ status: SessionStatus.PERMANENTLY_FAILED });
+      renderOverflow({ session, showPrimaryAction: true, onRetryNow: jest.fn() });
+      expect(screen.getByRole("button", { name: /retry permanently-failed session/i })).toBeInTheDocument();
+    });
+
+    it("shows retry confirmation dialog when Retry now clicked", () => {
+      const session = makeSession({ status: SessionStatus.PERMANENTLY_FAILED });
+      renderOverflow({ session, onRetryNow: jest.fn() });
+      openMenu();
+      fireEvent.click(screen.getByRole("menuitem", { name: /retry.*now/i }));
+      expect(screen.getByRole("dialog", { name: /retry session/i })).toBeInTheDocument();
+    });
+
+    it("calls onRetryNow with session id when confirmed, including from PERMANENTLY_FAILED", async () => {
+      const session = makeSession({ status: SessionStatus.PERMANENTLY_FAILED });
+      const onRetryNow = jest.fn().mockResolvedValue(true);
+      renderOverflow({ session, onRetryNow });
+      openMenu();
+      fireEvent.click(screen.getByRole("menuitem", { name: /retry.*now/i }));
+      fireEvent.click(screen.getByRole("button", { name: /^retry now$/i }));
+      await waitFor(() => expect(onRetryNow).toHaveBeenCalledWith("session-1"));
+    });
+
+    it("surfaces an error and keeps the dialog open when onRetryNow resolves false", async () => {
+      const session = makeSession({ status: SessionStatus.PERMANENTLY_FAILED });
+      const onRetryNow = jest.fn().mockResolvedValue(false);
+      renderOverflow({ session, onRetryNow });
+      openMenu();
+      fireEvent.click(screen.getByRole("menuitem", { name: /retry.*now/i }));
+      fireEvent.click(screen.getByRole("button", { name: /^retry now$/i }));
+      await waitFor(() => expect(screen.getByText(/failed to retry session/i)).toBeInTheDocument());
+      expect(screen.getByRole("dialog", { name: /retry session/i })).toBeInTheDocument();
+    });
+  });
+
   describe("clear conversation", () => {
     it("calls onClearConversationState with session id when clicked", () => {
       const onClear = jest.fn().mockResolvedValue(true);
@@ -410,6 +467,97 @@ describe("SessionActionsOverflow", () => {
       fireEvent.click(screen.getByRole("button", { name: /close/i }));
 
       expect(screen.queryByTestId("create-pr-modal")).not.toBeInTheDocument();
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Give Direction / steer dialog (pr-fix-steering Story 1.1.3): the dialog
+  // must check the steer RPC's result instead of unconditionally closing —
+  // see plan.md's Task 1.1.3c.
+  // -------------------------------------------------------------------------
+  describe("give direction (steer) dialog", () => {
+    function openSteerDialog(onSteerAutonomousSession: jest.Mock) {
+      const session = makeSession({ autonomousMode: true });
+      renderOverflow({ session, onSteerAutonomousSession });
+      openMenu();
+      fireEvent.click(screen.getByRole("menuitem", { name: /give direction/i }));
+      const input = screen.getByPlaceholderText(/focus on the ui tests first/i);
+      fireEvent.change(input, { target: { value: "fix the bug" } });
+      return input;
+    }
+
+    it("keeps the dialog open and preserves the message when the steer call resolves false", async () => {
+      const onSteerAutonomousSession = jest.fn().mockResolvedValue(false);
+      const input = openSteerDialog(onSteerAutonomousSession);
+
+      fireEvent.keyDown(input, { key: "Enter" });
+      await waitFor(() => expect(onSteerAutonomousSession).toHaveBeenCalledWith("session-1", "fix the bug"));
+
+      expect(screen.getByRole("dialog", { name: /give direction/i })).toBeInTheDocument();
+      expect(screen.getByDisplayValue("fix the bug")).toBeInTheDocument();
+    });
+
+    it("closes the dialog and clears the message when the steer call resolves true", async () => {
+      const onSteerAutonomousSession = jest.fn().mockResolvedValue(true);
+      const input = openSteerDialog(onSteerAutonomousSession);
+
+      fireEvent.keyDown(input, { key: "Enter" });
+      await waitFor(() =>
+        expect(screen.queryByRole("dialog", { name: /give direction/i })).not.toBeInTheDocument()
+      );
+    });
+
+    it("disables the Send button and input while the steer call is pending, and ignores a second click", async () => {
+      let resolveSteer: (ok: boolean) => void = () => {};
+      const pending = new Promise<boolean>((resolve) => {
+        resolveSteer = resolve;
+      });
+      const onSteerAutonomousSession = jest.fn().mockReturnValue(pending);
+      openSteerDialog(onSteerAutonomousSession);
+
+      const sendButton = screen.getByRole("button", { name: /send/i });
+      fireEvent.click(sendButton);
+
+      await waitFor(() => expect(sendButton).toBeDisabled());
+      expect(screen.getByPlaceholderText(/focus on the ui tests first/i)).toBeDisabled();
+
+      // A second click while the RPC is in flight must not fire a duplicate call.
+      fireEvent.click(sendButton);
+      expect(onSteerAutonomousSession).toHaveBeenCalledTimes(1);
+
+      await act(async () => {
+        resolveSteer(true);
+        await pending;
+      });
+
+      await waitFor(() =>
+        expect(screen.queryByRole("dialog", { name: /give direction/i })).not.toBeInTheDocument()
+      );
+    });
+
+    it("keeps Cancel enabled and Escape working while the steer call is pending", async () => {
+      let resolveSteer: (ok: boolean) => void = () => {};
+      const pending = new Promise<boolean>((resolve) => {
+        resolveSteer = resolve;
+      });
+      const onSteerAutonomousSession = jest.fn().mockReturnValue(pending);
+      const input = openSteerDialog(onSteerAutonomousSession);
+
+      fireEvent.keyDown(input, { key: "Enter" });
+      await waitFor(() => expect(onSteerAutonomousSession).toHaveBeenCalledTimes(1));
+
+      const cancelButton = screen.getByRole("button", { name: /^cancel$/i });
+      expect(cancelButton).not.toBeDisabled();
+
+      const dialog = screen.getByRole("dialog", { name: /give direction/i });
+      fireEvent.keyDown(dialog, { key: "Escape" });
+      expect(screen.queryByRole("dialog", { name: /give direction/i })).not.toBeInTheDocument();
+
+      // Avoid an unhandled-rejection/act warning from the now-orphaned promise.
+      resolveSteer(true);
+      await act(async () => {
+        await pending;
+      });
     });
   });
 });

@@ -63,7 +63,7 @@ const chainFireTimeout = 5 * time.Minute
 // (server/workflows already imports session for WorkflowRepository,
 // TriggerFireEventRepository, etc. — see server/workflows/scheduler.go).
 // Satisfied by *workflows.Scheduler's FireTriggerChained method — per
-// .claude/rules/interface-pollution-checklist.md, this is a genuine
+// the `interface-pollution-checklist` skill, this is a genuine
 // cross-package boundary (unlike ChainFirer's other collaborators below,
 // which live in this same package and are referenced by concrete type).
 type TriggerFirer interface {
@@ -86,7 +86,7 @@ type TriggerFirer interface {
 // Concrete type, not an interface — repo/workflows/fireEvents are this
 // package's own types (EntRepository, WorkflowRepository,
 // TriggerFireEventRepository), referenced directly per
-// .claude/rules/interface-pollution-checklist.md; only firer crosses a real
+// the `interface-pollution-checklist` skill; only firer crosses a real
 // package boundary and needs one (TriggerFirer, above).
 type ChainFirer struct {
 	repo       *EntRepository
@@ -231,7 +231,8 @@ func (c *ChainFirer) Fire(ctx context.Context, item *BacklogItemData) (fired boo
 		}
 	}
 	priorItemSummary := BuildSessionInitialPrompt(item, priorSessions)
-	chainDepth := int32(item.TriggeredByChainDepth + 1) //nolint:gosec // bounded by maxChainDepth above
+	// #nosec G115 -- item.TriggeredByChainDepth is checked against maxChainDepth above, so +1 stays far below int32's range
+	chainDepth := int32(item.TriggeredByChainDepth + 1)
 
 	// Claim BEFORE firing (see doc comment above) — must happen after the
 	// depth/expiry checks (which read item fields only) but before the one

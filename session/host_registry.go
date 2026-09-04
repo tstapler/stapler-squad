@@ -45,7 +45,7 @@ const DefaultHostRegistryTTL = 3 * DefaultHostAdvertisementInterval
 
 // Clock abstracts time.Now for injectable-fake-clock testing (TTL/prune
 // logic must not depend on wall-clock sleep, per
-// .claude/rules/fix-flaky-tests-dont-defer.md). Defined locally rather than
+// the `fix-flaky-tests-dont-defer` skill). Defined locally rather than
 // reusing executor.Clock to avoid a session -> executor dependency for what
 // is otherwise just time.Now(); mirrors executor/circuit_breaker.go's Clock
 // interface shape.
@@ -397,7 +397,7 @@ func (r *HostRegistry) persistLocked() error {
 		for _, entry := range r.entries {
 			file.Entries = append(file.Entries, entry)
 		}
-		if err := os.MkdirAll(r.stateDir, 0755); err != nil {
+		if err := os.MkdirAll(r.stateDir, 0750); err != nil {
 			return fmt.Errorf("failed to create state directory: %w", err)
 		}
 		data, err := json.MarshalIndent(file, "", "  ")
@@ -405,7 +405,7 @@ func (r *HostRegistry) persistLocked() error {
 			return fmt.Errorf("failed to marshal host registry: %w", err)
 		}
 		tmpPath := r.path() + ".tmp"
-		if err := os.WriteFile(tmpPath, data, 0644); err != nil {
+		if err := os.WriteFile(tmpPath, data, 0600); err != nil {
 			return fmt.Errorf("failed to write temporary host registry file: %w", err)
 		}
 		if err := os.Rename(tmpPath, r.path()); err != nil {

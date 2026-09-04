@@ -59,6 +59,10 @@ import { useAnalytics } from "@/lib/contexts/AnalyticsContext";
 import { useApprovalsContext } from "@/lib/contexts/ApprovalsContext";
 import { useViewport } from "@/components/providers/ViewportProvider";
 import { useInputModeOverride } from "@/lib/hooks/useInputModeOverride";
+import { isWorktreeMissingError } from "@/lib/utils/backoff";
+import { createClient } from "@connectrpc/connect";
+import { createConnectTransport } from "@connectrpc/connect-web";
+import { SessionService } from "@/gen/session/v1/session_pb";
 import * as styles from "./TerminalOutput.css";
 
 interface TerminalOutputProps {
@@ -362,6 +366,35 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
   // the surrounding chrome stayed dark.
   const theme = "dark" as const;
 
+  // Paging state for on-demand scrollback loading (Task 2.3.1 / 2.3.2)
+  const isFetchingScrollbackRef = useRef(false);
+  const hasMoreScrollbackRef = useRef(false);
+  const oldestSequenceReceivedRef = useRef(0);
+
+  // Resets scrollback paging so a subsequent scroll-up re-fetches history fresh from
+  // the server (which re-derives it width-agnostically via `tmux capture-pane -J`,
+  // see handleScrollbackRequest in connectrpc_websocket.go) instead of assuming
+  // whatever paging cursor was left over from before the terminal was last cleared.
+  // Registered as TerminalStreamManager's onFullSnapshot callback below — the manager
+  // itself owns detecting a full-pane replacement snapshot and clearing the xterm
+  // buffer for it (ANSI_SNAPSHOT_PREFIX in TerminalStreamManager.ts); this only resets
+  // the paging refs the manager doesn't know about.
+  const resetScrollbackPaging = useCallback(() => {
+    hasMoreScrollbackRef.current = true;
+    oldestSequenceReceivedRef.current = 0;
+    isFetchingScrollbackRef.current = false;
+  }, []);
+
+  // Proactively clears the terminal and resets scrollback paging before a resize RPC
+  // is sent — used only by the resize triggers below (auto-fit and the manual Resize
+  // button), so the screen goes blank immediately rather than showing stale,
+  // differently-wrapped content for the ~100-400ms round trip until the server's
+  // post-resize snapshot arrives and TerminalStreamManager clears it again anyway.
+  const clearBufferBeforeResize = useCallback(() => {
+    xtermRef.current?.clear();
+    resetScrollbackPaging();
+  }, [resetScrollbackPaging]);
+
   // Lazily create or get the TerminalStreamManager
   const getOrCreateStreamManager = useCallback((): TerminalStreamManager | null => {
     if (streamManagerRef.current) return streamManagerRef.current;
@@ -373,6 +406,11 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
       terminal,
       (paused, watermark) => sendFlowControlRef.current?.(paused, watermark)
     );
+
+    // Detect + clear on a full-pane replacement snapshot (ANSI_SNAPSHOT_PREFIX) — the
+    // single spot this is handled; every write() call site (live output, the RESIZING
+    // queue flush) benefits without needing its own check.
+    manager.setOnFullSnapshot(resetScrollbackPaging);
 
     // Inject SerializeAddon so prependScrollbackBatch can serialize the current buffer
     // before clearing it (enables correct history order without losing live content).
@@ -401,14 +439,10 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
 
     streamManagerRef.current = manager;
     return manager;
-  }, [logTerminalMetrics, sessionId, track]);
+  }, [logTerminalMetrics, sessionId, track, resetScrollbackPaging]);
 
   // Ref to track whether the initial scrollback has been written (Task 2.3.2)
   const isInitialScrollbackDoneRef = useRef(false);
-  // Paging state for on-demand scrollback loading (Task 2.3.1 / 2.3.2)
-  const isFetchingScrollbackRef = useRef(false);
-  const hasMoreScrollbackRef = useRef(false);
-  const oldestSequenceReceivedRef = useRef(0);
 
   // Callback to write initial pane content to terminal.
   // Metadata guard removed (R2.7): all scrollback — both initial and historical —
@@ -515,6 +549,9 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
       return;
     }
 
+    // TerminalStreamManager.write() itself detects a full-pane replacement snapshot
+    // (ANSI_SNAPSHOT_PREFIX) and clears the buffer for it — see setOnFullSnapshot in
+    // getOrCreateStreamManager above.
     const manager = getOrCreateStreamManager();
     if (manager) {
       manager.write(output);
@@ -529,6 +566,18 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
   const handleStreamError = useCallback((err: Error) => {
     console.error(`Terminal stream error (${isExternal ? 'external' : 'managed'}):`, err);
     setConnectionAttempts((prev) => prev + 1);
+    // A stream error (e.g. a malformed/aborted response while the initial
+    // content fetch was in flight) doesn't necessarily flip isConnected —
+    // Connect-Web's underlying WebSocket transport can stay nominally
+    // connected even though this specific RPC stream errored out. Without
+    // this, neither the wasConnected-&&-!isConnected disconnect handler nor
+    // the connectionAttempts>=5 fallback (both further down this file) ever
+    // fires for a lone error like this, leaving the user staring at an
+    // infinite "Loading terminal content..." spinner with no path to the
+    // reconnect banner/retry button. Clear it here too, same as the
+    // disconnect branch does, so a single early error still surfaces a
+    // recoverable state instead of a permanent stall.
+    setIsLoadingInitialContent(false);
   }, [isExternal]);
   // Story 2.3 — InputDropBadge: dropped-keystroke count + a monotonic
   // per-episode sequence number (so two consecutive episodes with an
@@ -581,6 +630,30 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
     outstandingResyncIdsRef,
   });
 
+  // Lightweight, single-purpose RPC client for the worktree-missing hard-fail
+  // banner's "Retry now" button — mirrors the pattern used throughout this
+  // codebase (e.g. useLogViewer.ts) for a one-off unary call, rather than
+  // pulling in the full useSessionService hook (which sets up its own
+  // session-list watch stream and Redux wiring — too heavy to instantiate
+  // per open terminal pane).
+  const retrySessionClientRef = useRef<ReturnType<typeof createClient<typeof SessionService>> | null>(null);
+  if (!retrySessionClientRef.current) {
+    retrySessionClientRef.current = createClient(SessionService, createConnectTransport({ baseUrl }));
+  }
+  const [isRetryingSession, setIsRetryingSession] = useState(false);
+  const handleRetryNow = useCallback(async () => {
+    setIsRetryingSession(true);
+    try {
+      // Errors are surfaced to the user via the banner remaining visible
+      // (a fresh connect attempt below will just fail again) — no separate
+      // error UI needed for this action itself.
+      await retrySessionClientRef.current?.retrySession({ id: effectiveSessionId });
+    } finally {
+      setIsRetryingSession(false);
+      handleHookReconnect();
+    }
+  }, [effectiveSessionId, handleHookReconnect]);
+
   const { notifyResyncOutputReceived, resetStallWatchdog } = useVisibilityResync({
     sessionId: effectiveSessionId,
     // TerminalOutputProps.isVisible is optional (external callers may omit
@@ -623,6 +696,8 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
       const manager = streamManagerRef.current;
       if (manager) {
         const pending = pendingOutputDuringResizeRef.current.splice(0);
+        // manager.write() itself detects and clears for a full-pane snapshot — see
+        // setOnFullSnapshot in getOrCreateStreamManager above.
         for (const chunk of pending) {
           manager.write(chunk);
         }
@@ -831,8 +906,9 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
     }
 
     console.log(`[TerminalOutput] Sending resize: ${cols}x${rows} (prev: ${lastResize?.cols || 'none'}x${lastResize?.rows || 'none'})`);
+    clearBufferBeforeResize();
     resize(cols, rows);
-  }, [isConnected, resize, connect, error, sessionId]);
+  }, [isConnected, resize, connect, error, sessionId, clearBufferBeforeResize]);
 
   // Monitor connection state changes
   useEffect(() => {
@@ -1442,6 +1518,7 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
         if (isConnected) {
           console.log(`[TerminalOutput] Forcing resize message to backend: ${cols}x${rows}`);
           lastResizeRef.current = { cols, rows };
+          clearBufferBeforeResize();
           resize(cols, rows, true);
         }
       }
@@ -1730,11 +1807,11 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
                         track({ name: "toolbar_button_click", category: "user_action", sessionId, component: "TerminalOutput", labels: { button: "log-stream", state: logStreamEnabled ? "off" : "on" } });
                         handleToggleLogStream();
                       }}
-                      title={logStreamEnabled ? "Stop forwarding verbose debug logs to server (errors always stream)" : "Also forward verbose debug logs to server (errors always stream automatically)"}
-                      aria-label={logStreamEnabled ? "Disable verbose debug log streaming" : "Enable verbose debug log streaming"}
+                      title={logStreamEnabled ? "Stop forwarding verbose per-frame debug traces to server (info/warn/error always stream)" : "Also forward verbose per-frame debug traces to server (info/warn/error always stream automatically)"}
+                      aria-label={logStreamEnabled ? "Disable verbose debug trace streaming" : "Enable verbose debug trace streaming"}
                       style={logStreamEnabled ? { backgroundColor: '#2a4', color: 'white', fontWeight: 'bold' } : {}}
                     >
-                      📡 {logStreamEnabled ? 'Debug Log Stream ON' : 'Debug Log Stream'}
+                      📡 {logStreamEnabled ? 'Debug Traces ON' : 'Debug Traces'}
                     </button>
                     <button
                       className={`${styles.toolbarButton} ${styles.devOnly}`}
@@ -1813,7 +1890,17 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
         )}
         {showReconnectBanner && isHardFailed && (
           <div className={styles.hardFailedBanner} role="alert">
-            Connection lost — <button onClick={handleHookReconnect}>Retry</button>
+            {isWorktreeMissingError(error) ? (
+              <>
+                This session&apos;s working directory no longer exists (its git worktree may
+                have been deleted).{" "}
+                <button onClick={handleRetryNow} disabled={isRetryingSession}>
+                  {isRetryingSession ? "Retrying…" : "Retry now"}
+                </button>
+              </>
+            ) : (
+              <>Connection lost — <button onClick={handleHookReconnect}>Retry</button></>
+            )}
           </div>
         )}
         {isVisible !== false && isLoadingInitialContent && (

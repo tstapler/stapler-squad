@@ -57,7 +57,7 @@ endif
 		touch $(ASDF_STAMP); \
 	fi
 
-.PHONY: help ports build test benchmark install-tools lint lint-custom actor-lint analyze nil-safety security format fmt-check check-deps clean all proto-gen proto-lint proto-build ent-gen web-build web-dev restart-web restart-web-profile qr demo-video demo-post-process demo-gif benchmark-baseline benchmark-compare benchmark-tier1 profile-goroutines profile-block profile-mutex profile-trace build-mux install-mux install-service install-hooks rollback backup-binary uninstall-service setup-codesign _codesign-binary verify-codesign tcc-reset preview dev-stack coverage-func coverage-gaps coverage-pkg coverage-refactor registry-generate-backend registry-generate-frontend registry-generate registry-diff e2e-report e2e-lighthouse build-tmux build-tmux-embed build-embedded clean-tmux init-submodules test-with-pinned-tmux test-trace test-profile vet-architecture vet-rpc-markers coverage-integration actor-field-guard ptmx-field-guard checklocks
+.PHONY: help ports build test benchmark install-tools lint lint-custom actor-lint analyze nil-safety security format fmt-check check-deps clean all proto-gen proto-lint proto-build ent-gen web-build web-dev restart-web restart-web-profile qr demo-video demo-post-process demo-gif benchmark-baseline benchmark-compare benchmark-tier1 profile-goroutines profile-block profile-mutex profile-trace build-mux install-mux install-service install-hooks rollback backup-binary uninstall-service setup-codesign _codesign-binary verify-codesign tcc-reset preview dev-stack coverage-func coverage-gaps coverage-pkg coverage-refactor registry-generate-backend registry-generate-frontend registry-generate registry-diff e2e-report e2e-lighthouse build-tmux build-tmux-embed build-embedded build-embedded-tymux clean-tmux init-submodules fetch-tymuxd build-tymuxd-embed test-with-pinned-tmux test-trace test-profile vet-architecture vet-rpc-markers coverage-integration actor-field-guard ptmx-field-guard checklocks build-otel-auto build-otel-auto-embedded otel-auto-isolation-guard otel-auto-isolation-guard-selftest otel-auto-smoke otel-auto-smoke-suppression otel-auto-test
 
 # Default target
 help: ## Show this help message
@@ -90,14 +90,10 @@ registry-generate-backend: ## Scan proto+markers → write per-feature files und
 	@echo "Building backend scanner..."
 	@cd tools/scanner && go build -o backend/cmd/scanner ./backend/cmd/
 	@echo "Scanning backend features..."
-	@./$(BACKEND_SCANNER_BIN) proto/session/v1/session.proto server/services/ $(BACKEND_FEATURES_DIR)
-	@./$(BACKEND_SCANNER_BIN) proto/session/v1/unfinished.proto server/services/ $(BACKEND_FEATURES_DIR)
-	@./$(BACKEND_SCANNER_BIN) proto/session/v1/backlog.proto server/services/ $(BACKEND_FEATURES_DIR)
-	@./$(BACKEND_SCANNER_BIN) proto/session/v1/insights.proto server/services/ $(BACKEND_FEATURES_DIR)
-	@./$(BACKEND_SCANNER_BIN) proto/session/v1/github_user.proto server/services/ $(BACKEND_FEATURES_DIR)
-	@./$(BACKEND_SCANNER_BIN) proto/session/v1/import.proto server/services/ $(BACKEND_FEATURES_DIR)
-	@./$(BACKEND_SCANNER_BIN) proto/session/v1/session_summary.proto server/services/ $(BACKEND_FEATURES_DIR)
-	@./$(BACKEND_SCANNER_BIN) proto/session/v1/remote.proto server/services/ $(BACKEND_FEATURES_DIR)
+	@protos="$$(tools/scanner/list-backend-protos.sh)" || exit 1; \
+	for proto in $$protos; do \
+		./$(BACKEND_SCANNER_BIN) "$$proto" server/services/ $(BACKEND_FEATURES_DIR) || exit 1; \
+	done
 	@# Generation is additive; prune files whose RPC no longer exists so the
 	@# committed set stays in sync with the proto (avoids registry-validation drift).
 	@bash tools/scanner/prune-stale-backend.sh $(BACKEND_FEATURES_DIR)
@@ -275,6 +271,38 @@ build-tmux-embed: build-tmux ## Copy built tmux into the embed dir for go build 
 	@cp $(BIN_TMUX) session/tmux/embed/tmux
 	@echo "✅ session/tmux/embed/tmux ready ($(shell $(BIN_TMUX) -V 2>/dev/null || echo unknown))"
 
+# ── Pinned tymuxd binary (fetched, not compiled — see ADR-001) ─────────────
+# Fetches a prebuilt tymuxd release binary from github.com/tstapler/tymux
+# instead of requiring a cargo/rustc toolchain anywhere in this repo.
+
+# Bump this and the github.com/tstapler/tymux/clients/go/gen/tymux/v1 require
+# in go.mod together — nothing enforces this automatically; see ADR-001
+# (project_plans/tymux-bundled-integration/decisions/ADR-001-prebuilt-tymuxd-binary-download.md).
+TYMUX_VERSION ?= v1.0.0
+BIN_TYMUXD        := session/tymux/embed/tymuxd
+TYMUXD_FETCH_STAMP := .tymuxd-fetch.stamp
+
+# Stamp-file approach: only re-fetch when TYMUX_VERSION changes. Unlike
+# TMUX_BUILD_STAMP (gated on submodule source files changing), the fetch
+# input here is a variable, not a file, so the stamp records the last-fetched
+# version and FORCE re-evaluates that comparison on every invocation.
+$(BIN_TYMUXD): $(TYMUXD_FETCH_STAMP)
+	@true
+
+$(TYMUXD_FETCH_STAMP): FORCE
+	@if [ ! -f $(BIN_TYMUXD) ] || [ "$$(cat $@ 2>/dev/null)" != "$(TYMUX_VERSION)" ]; then \
+		TYMUX_VERSION=$(TYMUX_VERSION) ./scripts/fetch-tymuxd.sh && \
+		echo "$(TYMUX_VERSION)" > $@; \
+	fi
+
+.PHONY: FORCE
+FORCE:
+
+fetch-tymuxd: $(BIN_TYMUXD) ## Fetch pinned tymuxd release binary (no cargo/rustc required)
+
+build-tymuxd-embed: fetch-tymuxd ## Confirm tymuxd is present in the embed dir for go build -tags embed_tymux
+	@echo "✅ session/tymux/embed/tymuxd ready ($(shell du -h $(BIN_TYMUXD) 2>/dev/null | cut -f1 || echo unknown))"
+
 build-embedded: build-tmux-embed ## Build stapler-squad with tmux bundled inside the binary
 ifeq ($(UNAME_S),Darwin)
 	CGO_LDFLAGS="-sectcreate __TEXT __info_plist $(CURDIR)/macos/Info.plist" \
@@ -285,6 +313,68 @@ else
 	go build -tags embed_tmux -ldflags "$(LDFLAGS)" -o stapler-squad .
 endif
 	@echo "✅ stapler-squad built with embedded tmux"
+
+# build-embedded-tymux: kept separate from build-embedded (tags "embed_tmux
+# embed_tymux" instead of changing build-embedded's tag set) so existing
+# CI/release artifacts depending on -tags embed_tmux alone are unaffected.
+# Darwin CGO_LDFLAGS/Info.plist branch mirrors build-embedded unchanged —
+# tymuxd embedding doesn't touch TCC entitlement plumbing.
+build-embedded-tymux: build-tmux-embed build-tymuxd-embed ## Build stapler-squad with tmux AND tymuxd bundled inside the binary
+ifeq ($(UNAME_S),Darwin)
+	CGO_LDFLAGS="-sectcreate __TEXT __info_plist $(CURDIR)/macos/Info.plist" \
+		go build -tags "embed_tmux embed_tymux" -ldflags "$(LDFLAGS)" -o stapler-squad .
+	@otool -s __TEXT __info_plist "$(CURDIR)/stapler-squad" | grep -q "Contents of" || \
+		(echo "ERROR: Info.plist was not embedded in embedded build." && exit 1)
+else
+	go build -tags "embed_tmux embed_tymux" -ldflags "$(LDFLAGS)" -o stapler-squad .
+endif
+	@echo "✅ stapler-squad built with embedded tmux + tymuxd"
+
+# build-otel-auto: opt-in, structurally isolated build path (go-auto-instrumentation
+# project, project_plans/go-auto-instrumentation/). Never a prerequisite of build,
+# ci, ready, quick-check, pre-commit, or install-service — see otel-auto-isolation-guard
+# below, which fails ci if that ever changes. -tags embed_tmux is supported here
+# (Spike A passed for -tags; see spike-verdicts.md) via build-otel-auto-embedded.
+# No macOS CGO_LDFLAGS/Info.plist branch yet — deferred, see plan.md Unresolved
+# Question 6.
+build-otel-auto: ensure-tools proto-gen ent-gen server/web/dist ## Build stapler-squad-otel with otelc compile-time auto-instrumentation (opt-in — see project_plans/go-auto-instrumentation)
+	@which otelc >/dev/null 2>&1 || (echo "❌ otelc not found on PATH. Install it from https://github.com/open-telemetry/opentelemetry-go-compile-instrumentation (see project_plans/go-auto-instrumentation/implementation/spike-verdicts.md for the exact install command used in this repo)." && exit 1)
+	./scripts/otel-auto-build.sh go build -ldflags "$(LDFLAGS)" -o stapler-squad-otel .
+	@echo "✅ stapler-squad built with otelc auto-instrumentation → ./stapler-squad-otel"
+
+build-otel-auto-embedded: ensure-tools proto-gen ent-gen server/web/dist build-tmux-embed ## Build stapler-squad-otel with tmux bundled + otelc auto-instrumentation (opt-in)
+	@which otelc >/dev/null 2>&1 || (echo "❌ otelc not found on PATH. Install it from https://github.com/open-telemetry/opentelemetry-go-compile-instrumentation (see project_plans/go-auto-instrumentation/implementation/spike-verdicts.md for the exact install command used in this repo)." && exit 1)
+	./scripts/otel-auto-build.sh go build -tags embed_tmux -ldflags "$(LDFLAGS)" -o stapler-squad-otel .
+	@echo "✅ stapler-squad built with embedded tmux + otelc auto-instrumentation → ./stapler-squad-otel"
+
+otel-auto-isolation-guard: ## Prove build-otel-auto is unreachable from ci/ready/quick-check/pre-commit/install-service (Story 2.1.3)
+	@./scripts/otel-auto-isolation-guard.sh
+
+otel-auto-isolation-guard-selftest: ## Prove the Isolation Guard's own detection logic actually fires (injects a deliberate leak into a temp Makefile copy)
+	@./scripts/otel-auto-isolation-guard.sh --self-test
+
+otel-auto-smoke: ## Verify stapler-squad-otel actually emits a db.system span (Collector Smoke Test; needs a local OTLP collector on :4317)
+	@./scripts/otel-auto-smoke.sh
+
+otel-auto-smoke-suppression: ## Verify stapler-squad-otel emits nothing when OTEL_ENABLED=false (Suppression Smoke Test; needs a local OTLP collector on :4317)
+	@./scripts/otel-auto-smoke.sh --suppression
+
+# otel-auto-test: the only repeatable way to run
+# instrumentation/otelc/safeexec's hook_test.go, since that package is gated
+# behind the otelcauto build tag AND requires the transient `otelc setup`
+# scaffolding hook.go's go.opentelemetry.io/otelc/pkg/hook import depends on
+# (see hook.go's package doc). Mirrors (rather than directly shells out to)
+# otel-auto-build.sh's module-backup/GOFLAGS/cleanup lifecycle via
+# scripts/otel-auto-test.sh — see that script's header comment for why it
+# can't just call otel-auto-build.sh with the test packages directly (a
+# genuine `otelc setup` chicken-and-egg failure when the rule-implementation
+# package itself is a setup target). go.mod/go.sum end up byte-identical to
+# HEAD afterward, same as build-otel-auto. Never a prerequisite of
+# ci/ready/quick-check/pre-commit/install-service — see
+# otel-auto-isolation-guard, which fails ci if that ever changes.
+otel-auto-test: ensure-tools ## Run instrumentation/otelc/safeexec + telemetry tests under the otelcauto build tag (opt-in — see project_plans/go-auto-instrumentation)
+	@./scripts/otel-auto-test.sh
+	@echo "✅ otelc auto-instrumentation hook tests passed"
 
 clean-tmux: ## Remove the built tmux binary and submodule build artifacts
 	@./scripts/build-tmux.sh --clean
@@ -610,6 +700,7 @@ install-tools: ensure-tools ## Install all development and analysis tools
 	go install golang.org/x/tools/cmd/deadcode@latest
 	go install golang.org/x/perf/cmd/benchstat@latest
 	go install gvisor.dev/gvisor/tools/checklocks/cmd/checklocks@latest
+	go install github.com/mibk/dupl@latest
 	@echo "All tools installed successfully!"
 
 # Code quality and analysis
@@ -648,7 +739,7 @@ lint: ensure-tools proto-gen ent-gen server/web/dist lint-custom lint-shell ## R
 
 LINTER_BIN := $(CURDIR)/bin/linter
 
-lint-custom: $(LINTER_BIN) ## Run project-specific custom linters (hotpolllog, nocommandpattern, norawexec, tmuxsocketscope) in a single pass
+lint-custom: $(LINTER_BIN) ## Run project-specific custom linters (entfullscan, hotpolllog, nocommandpattern, norawexec, norawgitopen, silenttransition, tmuxsocketscope) in a single pass
 	@echo "Running custom lint..."
 	@$(LINTER_BIN) $(shell go list ./... | grep -v "^github.com/tstapler/stapler-squad$$")
 	@echo "custom lint: ok"
@@ -795,7 +886,7 @@ dev-setup: install-tools ## Set up development environment
 	@echo "Development environment setup complete!"
 	@echo "Run 'make help' to see available commands"
 
-ci: build $(BIN_TMUX) test test-race vet lint lint-css-tokens test-integration fmt-check registry-generate actor-field-guard ptmx-field-guard ## Full CI pipeline: proto→web→build→tests→lint→fmt→registry
+ci: build $(BIN_TMUX) test test-race vet lint lint-css-tokens test-integration fmt-check registry-generate actor-field-guard ptmx-field-guard otel-auto-isolation-guard ## Full CI pipeline: proto→web→build→tests→lint→fmt→registry
 
 # ready: everything `make ci` runs, plus the CI-only checks that have no local
 # equivalent yet — .github/workflows/lint.yml's complexity gate (gocyclo/
@@ -804,14 +895,14 @@ ci: build $(BIN_TMUX) test test-race vet lint lint-css-tokens test-integration f
 # local equivalent (the external go-test-coverage action, the E2E-coverage PR
 # comment) — those only run in CI. `--new-from-rev=origin/main` requires a
 # reachable origin/main; `git fetch origin main` first if it's stale.
-ready: ci ready-complexity-gate ## Local approximation of every required PR check (make ci + complexity gate + web-app lint/scanner suites)
+ready: ci ready-complexity-gate ready-duplication-gate-web ## Local approximation of every required PR check (make ci + complexity/duplication gates + web-app lint/scanner suites)
 	cd web-app && npx next lint
 	cd web-app && pnpm run lint:css && pnpm run lint:css-vars
 	cd tools/scanner && go test ./...
 	cd tools/ci-gates && pnpm install --silent && pnpm test
 	@echo "✅ ready: local approximation of PR checks complete"
 
-ready-complexity-gate: ensure-tools ## New-code-only gocyclo/gocognit/funlen/revive gate, mirroring lint.yml's PR-only complexity check
+ready-complexity-gate: ensure-tools ## New-code-only gocyclo/gocognit/funlen/revive/dupl gate, mirroring lint.yml's PR-only complexity/duplication check
 	@GOBIN=$$(go env GOBIN); \
 	if [ -z "$$GOBIN" ]; then GOBIN=$$(go env GOPATH)/bin; fi; \
 	if ! which golangci-lint >/dev/null 2>&1; then \
@@ -819,7 +910,21 @@ ready-complexity-gate: ensure-tools ## New-code-only gocyclo/gocognit/funlen/rev
 		go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest; \
 	fi; \
 	golangci-lint run --timeout=5m --max-issues-per-linter=0 --max-same-issues=0 \
-		--enable=gocyclo,gocognit,funlen,revive --new-from-rev=origin/main
+		--enable=gocyclo,gocognit,funlen,revive,dupl --new-from-rev=origin/main
+
+# Blocking (2026-08-24): web-app/.jscpd.json sets minLines/minTokens to a precision-tuned
+# 20/200 (empirically verified: every finding at that size was real, actionable duplication —
+# not test-boilerplate/token noise) and a 0.1% threshold. jscpd exits non-zero via its own
+# --threshold flag when duplication exceeds that. The threshold is a RATCHET, not zero-tolerance:
+# jscpd has no git-diff scoping like golangci-lint's --new-from-rev (kibitzer is the intended
+# long-term fix for that gap, tstapler/kibitzer#28), so blocking on literal zero would fail
+# every PR the moment two Jest files legitimately need the same set of jest.mock(...)
+# registrations (those calls can't be extracted into a shared function — babel-jest hoists them
+# per-file — so a small amount of that specific duplication is irreducible, ~0.09% today).
+# 0.1% leaves a small buffer above that irreducible baseline while still failing on any
+# meaningfully-sized new duplication.
+ready-duplication-gate-web: ## Blocking web-app duplication gate (jscpd, see web-app/.jscpd.json)
+	cd web-app && pnpm run lint:duplicates
 
 # Quick development workflows
 quick-check: build $(BIN_TMUX) test-coverage test-race lint lint-css-tokens registry-diff ## Quick development validation

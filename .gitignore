@@ -3,6 +3,12 @@
 .claude/settings.local.json
 stapler-squad
 stapler-squad.prev
+stapler-squad-otel
+# otelc setup's per-checkout generated scaffolding (scripts/otel-auto-build.sh
+# removes these on exit, but ignore them too in case of an interrupted run)
+.otelc-build/
+otel.instrumentation.go
+otelc.runtime.go
 claude-squad
 claude-mux
 ssq-hooks
@@ -75,6 +81,7 @@ tests/e2e/.bin/
 bench-current.txt
 bench-diff.txt
 benchmark_results.txt
+bench-otel-*.txt
 /web-app/out/
 /server/web/dist/
 
@@ -84,6 +91,10 @@ build/
 # Pinned tmux build stamp (third_party/tmux itself is a real git submodule now,
 # so its contents don't need ignore rules).
 .tmux-build.stamp
+
+# Pinned tymuxd fetch stamp (records the last-fetched TYMUX_VERSION; see
+# scripts/fetch-tymuxd.sh and ADR-001).
+.tymuxd-fetch.stamp
 
 # Scanner build artifacts
 tools/scanner/cmd

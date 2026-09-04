@@ -1,7 +1,12 @@
 // Package binaries provides per-binary BinaryDetector implementations.
 package binaries
 
-import "github.com/tstapler/stapler-squad/session/detection/dtypes"
+import (
+	"regexp"
+	"strings"
+
+	"github.com/tstapler/stapler-squad/session/detection/dtypes"
+)
 
 // ClaudeDetector implements dtypes.BinaryDetector for the Claude Code CLI.
 type ClaudeDetector struct{}
@@ -334,6 +339,13 @@ func (d *ClaudeDetector) Patterns() dtypes.StatusPatterns {
 				Priority:    26,
 			},
 		},
+		// The three patterns below are confirmed dead against Claude Code's current CLI
+		// output (verified via live tmux capture-pane during the auto-mode-footer
+		// investigation, session/detection/detector.go's autoModeFooterRegex) — the
+		// current CLI never emits "Waiting for N background agent(s)"/"N shells running"
+		// text, using the persistent "auto mode on · N shells[, M monitors]" footer bar
+		// instead. Kept (not deleted) for older CLI versions and as documentation of the
+		// historical format; do not treat these as reachable against a live modern session.
 		WaitingForAgent: []dtypes.StatusPattern{
 			{
 				Name: "waiting_for_background_agent",
@@ -403,4 +415,33 @@ func (d *ClaudeDetector) Patterns() dtypes.StatusPatterns {
 			},
 		},
 	}
+}
+
+// oscBrailleSpinnerRegex matches any Braille Pattern character (U+2800-U+28FF),
+// the full block deliberately broader than the hand-listed frame sets used for
+// screen-text matching above — OSC titles are short, so the false-positive
+// risk is low.
+var oscBrailleSpinnerRegex = regexp.MustCompile(`[\x{2800}-\x{28FF}]`)
+
+// oscIdleGlyph is the exact glyph (U+2733 EIGHT SPOKED ASTERISK) Claude Code's
+// OSC window title uses to signal idle/done — NOT the visually similar ✻
+// (U+273B) or ✽ (U+273D) used elsewhere in this file's screen-text patterns.
+const oscIdleGlyph = '✳'
+
+// ClassifyOSCTitle inspects a Claude Code OSC window-title payload (already
+// extracted via pkg/ansi.ExtractLastOSC) and returns a definitive OSC-derived
+// status, or ok=false for an unrecognized title (callers fall back to
+// text-pattern detection). Spinner is checked before the idle glyph: treating
+// an ambiguous title as "still executing" is the lower-cost mistake.
+func ClassifyOSCTitle(title string) (dtypes.OSCStatus, bool) {
+	if title == "" {
+		return dtypes.OSCStatusNone, false
+	}
+	if oscBrailleSpinnerRegex.MatchString(title) {
+		return dtypes.OSCStatusExecuting, true
+	}
+	if strings.ContainsRune(title, oscIdleGlyph) {
+		return dtypes.OSCStatusIdle, true
+	}
+	return dtypes.OSCStatusNone, false
 }

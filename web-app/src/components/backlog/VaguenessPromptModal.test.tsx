@@ -9,6 +9,13 @@ import React from "react";
 import { render, screen, fireEvent } from "@testing-library/react";
 import { VaguenessPromptModal } from "./VaguenessPromptModal";
 
+// useFocusTrap.ts's own Tab-wrap behavior has its own dedicated suite
+// (useFocusTrap.test.tsx) run against the real hook — mocked here so this
+// file only asserts what's actually this component's responsibility: that
+// it wires the hook onto its dialog ref with the trap active.
+const useFocusTrapSpy = jest.fn();
+jest.mock("@/lib/hooks/useFocusTrap", () => ({ useFocusTrap: (...args: unknown[]) => useFocusTrapSpy(...args) }));
+
 // ---------------------------------------------------------------------------
 // Test 1: Modal renders when description is short and no AC present
 // (The actual vagueness check lives in BacklogItemForm; here we just verify the
@@ -114,7 +121,7 @@ describe("VaguenessPromptModal_calls_onProceed_when_proceed_clicked", () => {
 // ---------------------------------------------------------------------------
 
 describe("VaguenessPromptModal_has_no_escape_dismiss", () => {
-  it("does not call onRefine or onProceed when Escape is pressed", () => {
+  it("VaguenessPromptModal_should_remainOpen_When_EscapePressed", () => {
     const onRefine = jest.fn();
     const onProceed = jest.fn();
 
@@ -126,10 +133,30 @@ describe("VaguenessPromptModal_has_no_escape_dismiss", () => {
       />
     );
 
-    const dialog = screen.getByRole("dialog");
-    fireEvent.keyDown(dialog, { key: "Escape", code: "Escape" });
+    fireEvent.keyDown(document, { key: "Escape", code: "Escape" });
 
     expect(onRefine).not.toHaveBeenCalled();
     expect(onProceed).not.toHaveBeenCalled();
+    expect(screen.getByTestId("vagueness-prompt-modal")).toBeInTheDocument();
+  });
+});
+
+describe("VaguenessPromptModal_traps_focus_via_useFocusTrap", () => {
+  beforeEach(() => useFocusTrapSpy.mockReset());
+
+  it("VaguenessPromptModal_should_activateFocusTrapOnItsDialogRef", () => {
+    render(
+      <VaguenessPromptModal
+        itemTitle="Vague item"
+        onRefine={jest.fn()}
+        onProceed={jest.fn()}
+      />
+    );
+
+    expect(useFocusTrapSpy).toHaveBeenCalled();
+    const [refArg, isActiveArg] = useFocusTrapSpy.mock.calls[0];
+    expect(refArg.current).toBeInstanceOf(HTMLElement);
+    expect(refArg.current?.getAttribute("role")).toBe("dialog");
+    expect(isActiveArg).toBe(true);
   });
 });

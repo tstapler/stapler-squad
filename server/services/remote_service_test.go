@@ -65,6 +65,26 @@ func newRemoteTestKey(t *testing.T) ssh.PublicKey {
 	return sshPub
 }
 
+// uniqueRemoteName returns a remote name scoped to t, so that tests dialing
+// through TestRemoteConnection/TrustRemoteHostKey never collide on
+// tmux.SSHTarget.Name -- the key tmux's process-wide default SSH client
+// pool (session/tmux/ssh_runner.go's defaultSSHClientPool) shares
+// connections by. That pool never tears a client down on its last Release
+// (by design, so a live connection outlives any one caller); a dead
+// connection is only evicted asynchronously once its background
+// Client.Wait() watcher notices. Two tests sharing a literal name like
+// "test-remote" can therefore race that eviction: a client pooled by an
+// earlier test that successfully dialed can still be "live" from the
+// pool's point of view when a later test calls Dial() for its own,
+// different SSH server, hitting the pool's already-connected fast path and
+// skipping HostKeyCallback (and the mismatch check it performs) entirely
+// for that later test's target. Giving every test its own name means no
+// two tests ever share a pool entry, so this doesn't come up.
+func uniqueRemoteName(t *testing.T) string {
+	t.Helper()
+	return "remote-" + t.Name()
+}
+
 // newTestRemoteService builds a RemoteService backed by a real
 // KnownHostsStore/KeyStore (both test-isolated: KnownHostsStore via a
 // per-test STAPLER_SQUAD_TEST_DIR, KeyStore via go-keyring's mock backend)
@@ -94,14 +114,15 @@ func newTestRemoteService(t *testing.T, cfg *config.Config) (*RemoteService, *ss
 }
 
 func TestTestRemoteConnection_ReturnsHostKeyUnknown_When_NeverSeen(t *testing.T) {
+	remoteName := uniqueRemoteName(t)
 	addr, hostKey := startRemoteTestSSHServer(t)
 	cfg := &config.Config{Remotes: []config.RemoteConfig{
-		{Name: "test-remote", Host: addr, User: "testuser"},
+		{Name: remoteName, Host: addr, User: "testuser"},
 	}}
 	svc, _, _ := newTestRemoteService(t, cfg)
 
 	resp, err := svc.TestRemoteConnection(context.Background(), connect.NewRequest(&sessionv1.TestRemoteConnectionRequest{
-		RemoteName: "test-remote",
+		RemoteName: remoteName,
 	}))
 	require.NoError(t, err)
 
@@ -112,20 +133,21 @@ func TestTestRemoteConnection_ReturnsHostKeyUnknown_When_NeverSeen(t *testing.T)
 }
 
 func TestTrustRemoteHostKey_Then_TestRemoteConnection_RoundTripSucceeds(t *testing.T) {
+	remoteName := uniqueRemoteName(t)
 	addr, hostKey := startRemoteTestSSHServer(t)
 	cfg := &config.Config{Remotes: []config.RemoteConfig{
-		{Name: "test-remote", Host: addr, User: "testuser", IdentityRef: "test-remote"},
+		{Name: remoteName, Host: addr, User: "testuser", IdentityRef: remoteName},
 	}}
 	svc, knownHosts, keyStore := newTestRemoteService(t, cfg)
 
 	// Register an identity so the post-trust round trip can fully
 	// authenticate (the test server's PublicKeyHandler accepts any key).
-	_, err := keyStore.GenerateAndStoreIdentity(context.Background(), "test-remote")
+	_, err := keyStore.GenerateAndStoreIdentity(context.Background(), remoteName)
 	require.NoError(t, err)
 
 	// 1. First attempt: host key unknown.
 	first, err := svc.TestRemoteConnection(context.Background(), connect.NewRequest(&sessionv1.TestRemoteConnectionRequest{
-		RemoteName: "test-remote",
+		RemoteName: remoteName,
 	}))
 	require.NoError(t, err)
 	require.True(t, first.Msg.HostKeyUnknown)
@@ -134,7 +156,7 @@ func TestTrustRemoteHostKey_Then_TestRemoteConnection_RoundTripSucceeds(t *testi
 
 	// 2. Trust it.
 	trustResp, err := svc.TrustRemoteHostKey(context.Background(), connect.NewRequest(&sessionv1.TrustRemoteHostKeyRequest{
-		RemoteName:  "test-remote",
+		RemoteName:  remoteName,
 		Fingerprint: fingerprint,
 	}))
 	require.NoError(t, err)
@@ -147,7 +169,7 @@ func TestTrustRemoteHostKey_Then_TestRemoteConnection_RoundTripSucceeds(t *testi
 	// 3. Second attempt: fully succeeds (host key trusted + auth via the
 	// stored identity).
 	second, err := svc.TestRemoteConnection(context.Background(), connect.NewRequest(&sessionv1.TestRemoteConnectionRequest{
-		RemoteName: "test-remote",
+		RemoteName: remoteName,
 	}))
 	require.NoError(t, err)
 	require.False(t, second.Msg.HostKeyUnknown)
@@ -156,14 +178,15 @@ func TestTrustRemoteHostKey_Then_TestRemoteConnection_RoundTripSucceeds(t *testi
 }
 
 func TestTrustRemoteHostKey_RejectsMismatchedFingerprint(t *testing.T) {
+	remoteName := uniqueRemoteName(t)
 	addr, _ := startRemoteTestSSHServer(t)
 	cfg := &config.Config{Remotes: []config.RemoteConfig{
-		{Name: "test-remote", Host: addr, User: "testuser"},
+		{Name: remoteName, Host: addr, User: "testuser"},
 	}}
 	svc, knownHosts, _ := newTestRemoteService(t, cfg)
 
 	resp, err := svc.TrustRemoteHostKey(context.Background(), connect.NewRequest(&sessionv1.TrustRemoteHostKeyRequest{
-		RemoteName:  "test-remote",
+		RemoteName:  remoteName,
 		Fingerprint: "SHA256:not-the-real-fingerprint-at-all",
 	}))
 	require.NoError(t, err)
@@ -179,9 +202,10 @@ func TestTrustRemoteHostKey_RejectsMismatchedFingerprint(t *testing.T) {
 }
 
 func TestTestRemoteConnection_ReportsMismatch_NotHostKeyUnknown_When_TrustedKeyChanged(t *testing.T) {
+	remoteName := uniqueRemoteName(t)
 	addr, realHostKey := startRemoteTestSSHServer(t)
 	cfg := &config.Config{Remotes: []config.RemoteConfig{
-		{Name: "test-remote", Host: addr, User: "testuser"},
+		{Name: remoteName, Host: addr, User: "testuser"},
 	}}
 	svc, knownHosts, _ := newTestRemoteService(t, cfg)
 
@@ -193,7 +217,7 @@ func TestTestRemoteConnection_ReportsMismatch_NotHostKeyUnknown_When_TrustedKeyC
 	require.NoError(t, knownHosts.Trust(addr, staleKey))
 
 	resp, err := svc.TestRemoteConnection(context.Background(), connect.NewRequest(&sessionv1.TestRemoteConnectionRequest{
-		RemoteName: "test-remote",
+		RemoteName: remoteName,
 	}))
 	require.NoError(t, err)
 
@@ -300,11 +324,12 @@ func TestTrustRemoteHostKey_UnknownRemote_ReturnsNotFound(t *testing.T) {
 // as opposed to the `remote_name` path exercised above.
 
 func TestTestRemoteConnection_Draft_ReturnsHostKeyUnknown_When_NeverSeen(t *testing.T) {
+	remoteName := uniqueRemoteName(t)
 	addr, hostKey := startRemoteTestSSHServer(t)
 	svc, _, _ := newTestRemoteService(t, &config.Config{})
 
 	resp, err := svc.TestRemoteConnection(context.Background(), connect.NewRequest(&sessionv1.TestRemoteConnectionRequest{
-		Draft: &sessionv1.DraftRemoteTarget{Name: "draft-remote", Host: addr, User: "testuser"},
+		Draft: &sessionv1.DraftRemoteTarget{Name: remoteName, Host: addr, User: "testuser"},
 	}))
 	require.NoError(t, err)
 
@@ -314,6 +339,7 @@ func TestTestRemoteConnection_Draft_ReturnsHostKeyUnknown_When_NeverSeen(t *test
 }
 
 func TestDraftFlow_GenerateIdentity_TrustHostKey_Then_CreateRemote_RoundTripSucceeds(t *testing.T) {
+	remoteName := uniqueRemoteName(t)
 	addr, hostKey := startRemoteTestSSHServer(t)
 	cfg := &config.Config{}
 	svc, knownHosts, keyStore := newTestRemoteService(t, cfg)
@@ -321,18 +347,18 @@ func TestDraftFlow_GenerateIdentity_TrustHostKey_Then_CreateRemote_RoundTripSucc
 
 	// 1. Generate the identity the Add Remote form would show as the
 	// authorized_keys line -- BEFORE anything is saved to config.
-	genResp, err := svc.GenerateRemoteIdentity(ctx, connect.NewRequest(&sessionv1.GenerateRemoteIdentityRequest{Name: "draft-remote"}))
+	genResp, err := svc.GenerateRemoteIdentity(ctx, connect.NewRequest(&sessionv1.GenerateRemoteIdentityRequest{Name: remoteName}))
 	require.NoError(t, err)
 	require.NotEmpty(t, genResp.Msg.PublicKeyText)
 	require.Contains(t, genResp.Msg.AuthorizedKeysLine, genResp.Msg.PublicKeyText)
 
-	draft := &sessionv1.DraftRemoteTarget{Name: "draft-remote", Host: addr, User: "testuser"}
+	draft := &sessionv1.DraftRemoteTarget{Name: remoteName, Host: addr, User: "testuser"}
 
 	// 2. First test attempt: host key unknown, remote still not in config.
 	testResp, err := svc.TestRemoteConnection(ctx, connect.NewRequest(&sessionv1.TestRemoteConnectionRequest{Draft: draft}))
 	require.NoError(t, err)
 	require.True(t, testResp.Msg.HostKeyUnknown)
-	_, stillUnsaved := cfg.RemoteByName("draft-remote")
+	_, stillUnsaved := cfg.RemoteByName(remoteName)
 	require.False(t, stillUnsaved, "remote must not be persisted before Trust and connect")
 
 	// 3. Trust and connect.
@@ -343,34 +369,34 @@ func TestDraftFlow_GenerateIdentity_TrustHostKey_Then_CreateRemote_RoundTripSucc
 	require.NoError(t, err)
 	require.True(t, trustResp.Msg.Success, "TrustRemoteHostKey error: %s", trustResp.Msg.ErrorMessage)
 	require.NoError(t, knownHosts.Verify(addr, hostKey))
-	_, stillUnsavedAfterTrust := cfg.RemoteByName("draft-remote")
+	_, stillUnsavedAfterTrust := cfg.RemoteByName(remoteName)
 	require.False(t, stillUnsavedAfterTrust, "TrustRemoteHostKey alone must not persist the remote -- CreateRemote does")
 
 	// 4. Only now does the frontend persist it.
 	createResp, err := svc.CreateRemote(ctx, connect.NewRequest(&sessionv1.CreateRemoteRequest{
-		Name:     "draft-remote",
+		Name:     remoteName,
 		Host:     addr,
 		User:     "testuser",
 		BasePath: "/srv/workspaces",
 	}))
 	require.NoError(t, err)
-	require.Equal(t, "draft-remote", createResp.Msg.Remote.Name)
+	require.Equal(t, remoteName, createResp.Msg.Remote.Name)
 	require.True(t, createResp.Msg.Remote.HasIdentity)
 
-	saved, ok := cfg.RemoteByName("draft-remote")
+	saved, ok := cfg.RemoteByName(remoteName)
 	require.True(t, ok)
-	require.Equal(t, "draft-remote", saved.IdentityRef)
+	require.Equal(t, remoteName, saved.IdentityRef)
 
 	// 5. The identity used for CreateRemote must be the SAME one shown in
 	// step 1 -- not silently rotated.
-	_, privKey, err := keyStore.GetIdentity(ctx, "draft-remote")
+	_, privKey, err := keyStore.GetIdentity(ctx, remoteName)
 	require.NoError(t, err)
 	signer, err := ssh.ParsePrivateKey(privKey)
 	require.NoError(t, err)
 	require.Equal(t, genResp.Msg.PublicKeyText, strings.TrimSuffix(string(ssh.MarshalAuthorizedKey(signer.PublicKey())), "\n"))
 
 	// 6. Saved remote can now fully connect (host trusted + identity registered).
-	final, err := svc.TestRemoteConnection(ctx, connect.NewRequest(&sessionv1.TestRemoteConnectionRequest{RemoteName: "draft-remote"}))
+	final, err := svc.TestRemoteConnection(ctx, connect.NewRequest(&sessionv1.TestRemoteConnectionRequest{RemoteName: remoteName}))
 	require.NoError(t, err)
 	require.True(t, final.Msg.Success, "final TestRemoteConnection error: %s", final.Msg.ErrorMessage)
 }
@@ -507,4 +533,56 @@ func TestDeleteRemote_NeitherConfigNorIdentityExists_ReturnsNotFound(t *testing.
 	_, err := svc.DeleteRemote(context.Background(), connect.NewRequest(&sessionv1.DeleteRemoteRequest{Name: "does-not-exist"}))
 	require.Error(t, err)
 	require.Equal(t, connect.CodeNotFound, connect.CodeOf(err))
+}
+
+// TestSplitHostPort covers the gosec G115 fix in splitHostPort: an
+// out-of-range parsed port number (negative, or above the 16-bit TCP port
+// ceiling) must fall back the same way a parse error does -- (host, 0) --
+// rather than being narrowed into int32 with wraparound/sign-flip.
+func TestSplitHostPort(t *testing.T) {
+	tests := []struct {
+		name     string
+		host     string
+		wantHost string
+		wantPort int32
+	}{
+		{
+			name:     "valid port",
+			host:     "example.com:2222",
+			wantHost: "example.com",
+			wantPort: 2222,
+		},
+		{
+			name:     "negative port falls back to zero",
+			host:     "example.com:-1",
+			wantHost: "example.com:-1",
+			wantPort: 0,
+		},
+		{
+			name:     "port above 65535 falls back to zero",
+			host:     "example.com:70000",
+			wantHost: "example.com:70000",
+			wantPort: 0,
+		},
+		{
+			name:     "port exactly at 65535 boundary is accepted",
+			host:     "example.com:65535",
+			wantHost: "example.com",
+			wantPort: 65535,
+		},
+		{
+			name:     "no port at all falls back to zero",
+			host:     "example.com",
+			wantHost: "example.com",
+			wantPort: 0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotHost, gotPort := splitHostPort(tt.host)
+			require.Equal(t, tt.wantHost, gotHost)
+			require.Equal(t, tt.wantPort, gotPort)
+		})
+	}
 }

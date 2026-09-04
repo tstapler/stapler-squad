@@ -107,7 +107,7 @@ func NewEntRepository(opts ...RepositoryOption) (*EntRepository, error) {
 	// "file:" URI DSN (e.g. a shared-cache in-memory database used by tests)
 	// rather than a real filesystem path.
 	if !strings.HasPrefix(expandedPath, "file:") {
-		if err := os.MkdirAll(filepath.Dir(expandedPath), 0755); err != nil {
+		if err := os.MkdirAll(filepath.Dir(expandedPath), 0750); err != nil {
 			return nil, fmt.Errorf("failed to create database directory: %w", err)
 		}
 	}
@@ -320,6 +320,15 @@ func (r *EntRepository) Create(ctx context.Context, data InstanceData) error {
 	if data.TmuxPrefix != "" {
 		sessionCreate.SetTmuxPrefix(data.TmuxPrefix)
 	}
+	// Backend is write-once per instance today (set at construction via
+	// session.ResolveSessionBackend, never reset to "" afterward) -- this guard
+	// intentionally only ever sets a non-empty value, mirroring TmuxPrefix above,
+	// not clearing an explicit unset like PauseReason/ExitReason do. If a future
+	// feature ever needs to unpin an instance's backend back to "", this needs an
+	// explicit ClearBackend() branch too, or the clear will silently no-op here.
+	if data.Backend != "" {
+		sessionCreate.SetBackend(string(data.Backend))
+	}
 	if !data.LastTerminalUpdate.IsZero() {
 		sessionCreate.SetLastTerminalUpdate(data.LastTerminalUpdate)
 	}
@@ -356,6 +365,9 @@ func (r *EntRepository) Create(ctx context.Context, data InstanceData) error {
 	if data.GitHubPRNumber > 0 {
 		sessionCreate.SetGithubPrNumber(data.GitHubPRNumber)
 	}
+	if data.GitHubPRStatusTerminal {
+		sessionCreate.SetGithubPrStatusTerminal(true)
+	}
 	if data.GitHubOwner != "" {
 		sessionCreate.SetGithubOwner(data.GitHubOwner)
 	}
@@ -364,6 +376,9 @@ func (r *EntRepository) Create(ctx context.Context, data InstanceData) error {
 	}
 	if data.ArchivedAt != nil {
 		sessionCreate.SetArchivedAt(*data.ArchivedAt)
+	}
+	if !data.CreationProgressUpdatedAt.IsZero() {
+		sessionCreate.SetCreationProgressUpdatedAt(data.CreationProgressUpdatedAt)
 	}
 
 	// Link project if specified (look up by name)
@@ -537,6 +552,11 @@ func (r *EntRepository) Update(ctx context.Context, data InstanceData) error {
 	if data.TmuxPrefix != "" {
 		sessionUpdate.SetTmuxPrefix(data.TmuxPrefix)
 	}
+	// See the matching comment in Create above: Backend is write-once per
+	// instance today, so this guard is intentionally set-only, never clear.
+	if data.Backend != "" {
+		sessionUpdate.SetBackend(string(data.Backend))
+	}
 	if !data.LastTerminalUpdate.IsZero() {
 		sessionUpdate.SetLastTerminalUpdate(data.LastTerminalUpdate)
 	}
@@ -597,11 +617,17 @@ func (r *EntRepository) Update(ctx context.Context, data InstanceData) error {
 	} else {
 		sessionUpdate.ClearArchivedAt()
 	}
+	if !data.CreationProgressUpdatedAt.IsZero() {
+		sessionUpdate.SetCreationProgressUpdatedAt(data.CreationProgressUpdatedAt)
+	}
 	if data.GitHubPRURL != "" {
 		sessionUpdate.SetGithubPrURL(data.GitHubPRURL)
 	}
 	if data.GitHubPRNumber > 0 {
 		sessionUpdate.SetGithubPrNumber(data.GitHubPRNumber)
+	}
+	if data.GitHubPRStatusTerminal {
+		sessionUpdate.SetGithubPrStatusTerminal(true)
 	}
 	if data.GitHubOwner != "" {
 		sessionUpdate.SetGithubOwner(data.GitHubOwner)
@@ -983,6 +1009,24 @@ func (r *EntRepository) UpdateGitHubPRNumber(ctx context.Context, title string, 
 	return nil
 }
 
+// UpdateGitHubPRStatusTerminal persists whether a session's PR has reached a
+// terminal (merged/closed) state. Called by PRStatusPoller on every poll so the
+// flag survives a restart — see SessionRetentionSweeper.baseSafeToDelete, which
+// reads it back from storage rather than the in-memory Instance.
+func (r *EntRepository) UpdateGitHubPRStatusTerminal(ctx context.Context, title string, terminal bool) error {
+	n, err := r.client.Session.Update().
+		Where(session.Title(title)).
+		SetGithubPrStatusTerminal(terminal).
+		Save(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to update github_pr_status_terminal: %w", err)
+	}
+	if n == 0 {
+		return fmt.Errorf("session not found: %s", title)
+	}
+	return nil
+}
+
 // UpdateSessionArtifacts persists the JSON-encoded artifact blob for a session.
 // Wrapped in a transaction for correctness under concurrent writes (M-6 fix).
 // The per-title mutex in ArtifactExtractor (C-1) serializes calls at the application
@@ -1240,6 +1284,7 @@ func (r *EntRepository) sessionToInstanceData(sess *ent.Session) *InstanceData {
 		Note:                sess.Note,
 		IsExpanded:          sess.IsExpanded,
 		TmuxPrefix:          sess.TmuxPrefix,
+		Backend:             ProcessManagerBackend(sess.Backend),
 		LastOutputSignature: sess.LastOutputSignature,
 		MCPServerURL:        sess.McpServerURL,
 		OneShot:             sess.OneShot,
@@ -1276,8 +1321,12 @@ func (r *EntRepository) sessionToInstanceData(sess *ent.Session) *InstanceData {
 	data.ExitReason = sess.ExitReason
 	data.WorkflowID = sess.WorkflowID
 	data.ArchivedAt = sess.ArchivedAt
+	if sess.CreationProgressUpdatedAt != nil {
+		data.CreationProgressUpdatedAt = *sess.CreationProgressUpdatedAt
+	}
 	data.GitHubPRURL = sess.GithubPrURL
 	data.GitHubPRNumber = sess.GithubPrNumber
+	data.GitHubPRStatusTerminal = sess.GithubPrStatusTerminal
 	data.GitHubOwner = sess.GithubOwner
 	data.GitHubRepo = sess.GithubRepo
 
@@ -1394,8 +1443,31 @@ func (r *EntRepository) GetWithOptions(ctx context.Context, title string, option
 	return r.sessionToInstanceData(sess), nil
 }
 
+// FindByIDWithOptions retrieves a single session by stable UUID or title (mirroring
+// InstanceData.MatchesID's dual-key lookup) via an indexed WHERE clause, with
+// selective child data loading. Returns ErrInstanceDataNotFound when no match exists,
+// including for id == "" — uuid has no uniqueness constraint, so an empty id would
+// otherwise match every session that has never had a UUID assigned.
+func (r *EntRepository) FindByIDWithOptions(ctx context.Context, id string, options LoadOptions) (*InstanceData, error) {
+	if id == "" {
+		return nil, ErrInstanceDataNotFound
+	}
+	sess, err := applyLoadOptions(
+		r.client.Session.Query().Where(session.Or(session.Title(id), session.UUID(id))),
+		options,
+	).First(ctx)
+	if err != nil {
+		if ent.IsNotFound(err) {
+			return nil, ErrInstanceDataNotFound
+		}
+		return nil, fmt.Errorf("failed to query session by id %s: %w", id, err)
+	}
+	return r.sessionToInstanceData(sess), nil
+}
+
 // ListWithOptions retrieves all sessions with selective child data loading.
 func (r *EntRepository) ListWithOptions(ctx context.Context, options LoadOptions) ([]InstanceData, error) {
+	//nolint:entfullscan the base "list all sessions" query genuinely needs every row; callers select fields via LoadOptions, not row filtering.
 	sessions, err := applyLoadOptions(r.client.Session.Query(), options).All(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query sessions: %w", err)
@@ -1445,6 +1517,7 @@ func (r *EntRepository) ListByTagWithOptions(ctx context.Context, tagName string
 // --- Permissions & Analytics --------------------------------------------------
 
 func (r *EntRepository) AllRules(ctx context.Context) ([]ApprovalRuleData, error) {
+	//nolint:entfullscan approval rules are a small, admin-configured table; the whole set is needed to evaluate rule precedence.
 	rules, err := r.client.ApprovalRule.Query().
 		Order(ent.Asc(approvalrule.FieldPriority)).
 		All(ctx)
@@ -1572,6 +1645,7 @@ func (r *EntRepository) RecordAnalytics(ctx context.Context, data AnalyticsData)
 		SetCommandCategory(data.CommandCategory).
 		SetCommandSubcategory(data.CommandSubcategory).
 		SetPythonImports(data.PythonImports).
+		SetSource(data.Source).
 		SetCreatedAt(data.CreatedAt).
 		Exec(ctx)
 }
@@ -1584,6 +1658,7 @@ func (r *EntRepository) ListAnalytics(ctx context.Context, limit int) ([]Analyti
 		query = query.Limit(limit)
 	}
 
+	//nolint:entfullscan Order()+optional caller-supplied Limit(); no Where by design (returns most-recent-N analytics rows), acceptable for an analytics/debug endpoint.
 	entries, err := query.All(ctx)
 	if err != nil {
 		return nil, err
@@ -1612,6 +1687,7 @@ func convertAnalyticsEntry(e *ent.ClassificationAnalytics) AnalyticsData {
 		CommandCategory:    e.CommandCategory,
 		CommandSubcategory: e.CommandSubcategory,
 		PythonImports:      e.PythonImports,
+		Source:             e.Source,
 		CreatedAt:          e.CreatedAt,
 	}
 }
@@ -1767,6 +1843,7 @@ func (r *EntRepository) CreateProject(ctx context.Context, data ProjectData) (*P
 
 // ListProjects returns all projects.
 func (r *EntRepository) ListProjects(ctx context.Context) ([]ProjectData, error) {
+	//nolint:entfullscan small, bounded-by-nature table (one row per configured repo), intentionally returns all.
 	projects, err := r.client.Project.Query().All(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list projects: %w", err)

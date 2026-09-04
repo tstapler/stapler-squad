@@ -24,8 +24,15 @@ type WorkspaceMeta struct {
 
 // writeWorkspaceMeta writes metadata for a workspace to disk.
 // Uses atomic temp-file + rename to avoid partial writes.
-// Errors are silently ignored — this is best-effort metadata.
+// Errors are silently ignored — this is best-effort metadata. See
+// writeWorkspaceMetaErr for the error-returning core (used directly by tests
+// that need to assert on failure).
 func writeWorkspaceMeta(configDir, cwd, wsType string) {
+	_ = writeWorkspaceMetaErr(configDir, cwd, wsType)
+}
+
+// writeWorkspaceMetaErr is writeWorkspaceMeta's error-returning core.
+func writeWorkspaceMetaErr(configDir, cwd, wsType string) error {
 	name := filepath.Base(cwd)
 	if wsType == "shared" || cwd == "" {
 		name = "Default"
@@ -41,25 +48,49 @@ func writeWorkspaceMeta(configDir, cwd, wsType string) {
 		LastUsed:    time.Now(),
 	}
 
-	if err := os.MkdirAll(configDir, 0755); err != nil {
-		return
+	if err := os.MkdirAll(configDir, 0750); err != nil {
+		return err
 	}
 
 	data, err := json.MarshalIndent(meta, "", "  ")
 	if err != nil {
-		return
+		return err
 	}
 
-	// Atomic write via temp file + rename
-	tmpPath := filepath.Join(configDir, workspaceMetaFileName+".tmp")
-	if err := os.WriteFile(tmpPath, data, 0644); err != nil {
-		return
+	// Atomic write via unique temp file + rename (not a fixed ".tmp" suffix): two
+	// concurrent writers targeting the same configDir could otherwise interleave
+	// writes and rename a torn file into place. Mirrors config.go's saveConfigLocked
+	// fix for the identical hazard.
+	tmpFile, err := os.CreateTemp(configDir, workspaceMetaFileName+".*.tmp")
+	if err != nil {
+		return err
 	}
-	_ = os.Rename(tmpPath, filepath.Join(configDir, workspaceMetaFileName))
+	tmpPath := tmpFile.Name()
+	_, writeErr := tmpFile.Write(data)
+	closeErr := tmpFile.Close()
+	if writeErr != nil {
+		_ = os.Remove(tmpPath)
+		return writeErr
+	}
+	if closeErr != nil {
+		_ = os.Remove(tmpPath)
+		return closeErr
+	}
+	if err := os.Chmod(tmpPath, 0600); err != nil {
+		_ = os.Remove(tmpPath)
+		return err
+	}
+	if err := os.Rename(tmpPath, filepath.Join(configDir, workspaceMetaFileName)); err != nil {
+		return err
+	}
+	return nil
 }
 
 // ReadWorkspaceMeta reads workspace metadata from the given config directory.
 func ReadWorkspaceMeta(configDir string) (WorkspaceMeta, error) {
+	// #nosec G304 -- configDir comes from config.GetConfigDir() or a baseDir built
+	// from os.UserHomeDir() plus fixed subdirectory names (see ListAvailableWorkspaces,
+	// scanMetaSubdirs, and server/services/database_service.go); never RPC/user input.
 	data, err := os.ReadFile(filepath.Join(configDir, workspaceMetaFileName))
 	if err != nil {
 		return WorkspaceMeta{}, fmt.Errorf("failed to read workspace meta: %w", err)
@@ -83,11 +114,33 @@ func SetPreferredWorkspace(baseDir, configDir string) error {
 	if configDir == "" {
 		return os.Remove(prefFile)
 	}
-	tmpFile := prefFile + ".tmp"
-	if err := os.WriteFile(tmpFile, []byte(configDir), 0644); err != nil {
-		return fmt.Errorf("failed to write preferred workspace: %w", err)
+	// Unique temp name (not prefFile+".tmp") for the same reason writeWorkspaceMeta
+	// above uses one — avoids two concurrent SetPreferredWorkspace callers clobbering
+	// each other's in-progress write.
+	tmpFile, err := os.CreateTemp(baseDir, filepath.Base(prefFile)+".*.tmp")
+	if err != nil {
+		return fmt.Errorf("failed to create temp preferred workspace file: %w", err)
 	}
-	return os.Rename(tmpFile, prefFile)
+	tmpPath := tmpFile.Name()
+	_, writeErr := tmpFile.Write([]byte(configDir))
+	closeErr := tmpFile.Close()
+	if writeErr != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("failed to write preferred workspace: %w", writeErr)
+	}
+	if closeErr != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("failed to write preferred workspace: %w", closeErr)
+	}
+	if err := os.Chmod(tmpPath, 0600); err != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("failed to chmod temp preferred workspace file: %w", err)
+	}
+	if err := os.Rename(tmpPath, prefFile); err != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("failed to rename preferred workspace: %w", err)
+	}
+	return nil
 }
 
 // ListAvailableWorkspaces discovers all known workspaces by scanning workspace and instance subdirs.

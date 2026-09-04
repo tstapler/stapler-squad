@@ -65,11 +65,13 @@ func (ds *DatabaseService) ListDatabases(
 		}
 
 		databases = append(databases, &sessionv1.DatabaseInfo{
-			WorkspaceId:  ws.WorkspaceID,
-			Type:         ws.Type,
-			Cwd:          ws.CWD,
-			Name:         ws.Name,
-			ConfigDir:    ws.ConfigDir,
+			WorkspaceId: ws.WorkspaceID,
+			Type:        ws.Type,
+			Cwd:         ws.CWD,
+			Name:        ws.Name,
+			ConfigDir:   ws.ConfigDir,
+			// #nosec G115 -- sessionCount is a SQLite `SELECT COUNT(*) FROM sessions`
+			// result for one local workspace database, far below int32 range.
 			SessionCount: int32(sessionCount),
 			IsCurrent:    isCurrent,
 			LastUsed:     lastUsedProto,
@@ -112,11 +114,13 @@ func (ds *DatabaseService) GetCurrentDatabase(
 
 	return connect.NewResponse(&sessionv1.GetCurrentDatabaseResponse{
 		Database: &sessionv1.DatabaseInfo{
-			WorkspaceId:  meta.WorkspaceID,
-			Type:         meta.Type,
-			Cwd:          meta.CWD,
-			Name:         meta.Name,
-			ConfigDir:    meta.ConfigDir,
+			WorkspaceId: meta.WorkspaceID,
+			Type:        meta.Type,
+			Cwd:         meta.CWD,
+			Name:        meta.Name,
+			ConfigDir:   meta.ConfigDir,
+			// #nosec G115 -- sessionCount is a SQLite `SELECT COUNT(*) FROM sessions`
+			// result for one local workspace database, far below int32 range.
 			SessionCount: int32(sessionCount),
 			IsCurrent:    true,
 			LastUsed:     lastUsedProto,
@@ -215,10 +219,14 @@ func (ds *DatabaseService) MergeDatabase(
 	log.Info("MergeDatabase", "message", msg, "source", sourceDir)
 
 	return connect.NewResponse(&sessionv1.MergeDatabaseResponse{
-		Success:          true,
-		Message:          msg,
+		Success: true,
+		Message: msg,
+		// #nosec G115 -- imported/skipped are row counts accumulated while
+		// merging one local sessions.db into another, bounded by the source
+		// table's row count, far below int32 range.
 		SessionsImported: int32(imported),
-		SessionsSkipped:  int32(skipped),
+		// #nosec G115 -- see above; skipped is the same bounded row count.
+		SessionsSkipped: int32(skipped),
 	}), nil
 }
 
@@ -248,10 +256,30 @@ func mergeSessions(ctx context.Context, destDB, sourceDB string) (int, int, erro
 		src.Close()
 	}
 
-	// Run migration via ATTACH
-	mergeSQL := fmt.Sprintf(`
+	// ATTACH is scoped to a single physical connection in SQLite, and this *sql.DB has no
+	// SetMaxOpenConns(1) — separate ExecContext calls on db are not guaranteed to reuse the
+	// same pooled connection, so ATTACH here and the merge exec below must share one pinned
+	// *sql.Conn or the merge could silently run against a connection where src was never
+	// attached ("no such table: src.sessions").
+	conn, err := db.Conn(ctx)
+	if err != nil {
+		return 0, 0, fmt.Errorf("failed to acquire database connection: %w", err)
+	}
+	defer conn.Close()
+
+	// ATTACH takes sourceDB (a client-controlled path from MergeDatabaseRequest.ConfigDir,
+	// only prefix-checked against baseDir above) as a bound parameter in its own statement,
+	// never interpolated into SQL text — sqlite's ATTACH DATABASE fully supports parameter
+	// binding for the filename argument, so this isn't a functionality trade-off, just the
+	// injection-safe way to pass it.
+	if _, err := conn.ExecContext(ctx, "ATTACH DATABASE ? AS src", sourceDB); err != nil {
+		return 0, 0, fmt.Errorf("failed to attach source database: %w", err)
+	}
+	defer func() { _, _ = conn.ExecContext(context.Background(), "DETACH src") }()
+
+	// Run migration. No interpolated values remain in this script.
+	mergeSQL := `
 PRAGMA foreign_keys = OFF;
-ATTACH '%s' AS src;
 
 BEGIN;
 
@@ -307,9 +335,9 @@ JOIN main.tags mt ON mt.name = lt.name;
 
 COMMIT;
 PRAGMA foreign_keys = ON;
-`, sourceDB)
+`
 
-	if _, err := db.ExecContext(ctx, mergeSQL); err != nil {
+	if _, err := conn.ExecContext(ctx, mergeSQL); err != nil {
 		return 0, 0, fmt.Errorf("merge SQL failed: %w", err)
 	}
 

@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"os/exec"
 	"regexp"
@@ -1193,11 +1194,11 @@ func (t *TmuxSession) setRemainOnExit() {
 // failed with a clear status, not silently retried against a guessed directory.
 var ErrWorkDirMissing = errors.New("session working directory missing")
 
-// validateWorkDir rejects an empty or nonexistent working directory instead of
-// letting a caller silently fall back to a guessed directory (e.g. os.Getwd(),
-// which for a long-running server process is often $HOME) — see start() and
-// RestoreWithWorkDir()'s recreate path.
-func validateWorkDir(workDir string) error {
+// ValidateWorkDir rejects an empty or nonexistent working directory instead
+// of letting a caller silently fall back to a guessed one (e.g. os.Getwd(),
+// often $HOME for a long-running server). Exported for reuse by
+// session/tymux's validateWorkDir wrapper.
+func ValidateWorkDir(workDir string) error {
 	if workDir == "" {
 		return fmt.Errorf("working directory not set: %w", ErrWorkDirMissing)
 	}
@@ -1237,17 +1238,41 @@ func validateWorkDir(workDir string) error {
 // distinct argv elements), not a shell operator -- no shell is involved via
 // exec.Cmd, so no escaping is needed or applicable.
 //
-// Best-effort: log and continue on failure, matching every other
-// non-essential tmux option set in start() (history-limit,
-// setRemainOnExit itself) -- a failure here degrades to the pre-existing
-// (racy) behavior, not a hard Start() failure.
-func (t *TmuxSession) preconfigureServerBeforeSession() {
+// Retried with the same backoff schedule as EnsureServerRunning
+// (serverStartAttempts/serverStartBackoffStart/serverStartBackoffMax): this
+// chain's own "start-server" sub-command can transiently fail with "server
+// exited unexpectedly" under the same concurrent-spawn contention documented
+// there, and returning that failure to the caller (rather than logging and
+// continuing) matters here because -- unlike every other non-essential
+// option this method used to lump itself in with (history-limit,
+// setRemainOnExit) -- a failed start-server here means no server exists at
+// all, so the new-session call start() makes right after this returns is
+// guaranteed to fail too, just with a more confusing "error starting tmux
+// session" message instead of surfacing the real cause.
+//
+// Known accepted gap: startServerSucceededDespiteError only checks "is a
+// server running", so if start-server succeeds but a trailing set-option in
+// this chain fails (exit-empty/remain-on-exit are built-in global options on
+// a live server, so this is not expected in practice), the retry treats it
+// as success with no log at all -- silently leaving the session unprotected
+// against the exact fast-exit race this method exists to close. Splitting
+// the chain to detect this precisely was rejected: a separate start-server
+// then set-option invocation reintroduces the race PR #445 fixed (a
+// zero-session server can exit before the second call reaches it).
+func (t *TmuxSession) preconfigureServerBeforeSession() error {
 	preconfigureCmd := t.buildTmuxCommand("start-server", ";", "set-option", "-g", "exit-empty", "off", ";", "set-option", "-g", "remain-on-exit", "on")
-	if err := runGatedErr(context.Background(), t.serverSocket, func() error {
-		return t.cmdExec.Run(preconfigureCmd)
-	}); err != nil {
-		log.Warn("failed to pre-configure tmux server before session creation", "session", t.sanitizedName, "serverSocket", t.serverSocket, "err", err)
+	run := func() ([]byte, error) {
+		runCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		return runGated(runCtx, t.serverSocket, func() ([]byte, error) {
+			return nil, t.cmdExec.Run(preconfigureCmd)
+		})
 	}
+	_, err := ensureServerRunningWithRetry(run, func() bool { return checkServerNotRunning(t.serverSocket) }, serverStartAttempts, serverStartBackoffStart, serverStartBackoffMax)
+	if err != nil {
+		return fmt.Errorf("failed to pre-configure tmux server before session creation: %w", err)
+	}
+	return nil
 }
 
 // start is the internal implementation for Start and StartWithCleanup
@@ -1285,11 +1310,13 @@ func (t *TmuxSession) start(workDir string, setupCleanup bool, cleanup *CleanupF
 		return nil
 	}
 
-	if err := validateWorkDir(workDir); err != nil {
+	if err := ValidateWorkDir(workDir); err != nil {
 		return fmt.Errorf("cannot start tmux session %s: %w", t.sanitizedName, err)
 	}
 
-	t.preconfigureServerBeforeSession()
+	if err := t.preconfigureServerBeforeSession(); err != nil {
+		return fmt.Errorf("cannot start tmux session %s: %w", t.sanitizedName, err)
+	}
 
 	// Create a new detached tmux session and start the program in it.
 	// Pass -e CLAUDECODE= to unset CLAUDECODE in the child environment so that
@@ -1515,15 +1542,15 @@ func (t *TmuxSession) EnsureRemoteSession(ctx context.Context, workDir string) e
 	}
 	log.Info("remote tmux session not found, will create", "session", t.sanitizedName)
 
-	// NOT validateWorkDir: that helper's os.Stat(workDir) checks THIS PROCESS's
+	// NOT ValidateWorkDir: that helper's os.Stat(workDir) checks THIS PROCESS's
 	// local filesystem, which is the right check for the local start() path
-	// (validateWorkDir's other two call sites) but wrong here -- workDir is a
+	// (ValidateWorkDir's other two call sites) but wrong here -- workDir is a
 	// path on the remote host, which this process cannot os.Stat at all. A
 	// remote path that happens to also exist locally (e.g. this package's own
 	// tests, whose "remote" is a co-located test sshd exec'ing against the real
 	// local filesystem) would pass either check, silently masking the bug for
 	// every test written against that pattern; a genuinely different remote
-	// path would always fail validateWorkDir's local stat regardless of whether
+	// path would always fail ValidateWorkDir's local stat regardless of whether
 	// it exists on the actual remote host. Checked via the runner instead,
 	// mirroring RemoteWorktreeOps.CreateWorktree's own remote `test -d`
 	// base_path check (session/git/remote_worktree.go).
@@ -1625,7 +1652,7 @@ func (t *TmuxSession) RestoreWithWorkDir(workDir string) error {
 			// long-running server process is often $HOME) — a wrong guess silently
 			// reconnects the session to the wrong workspace. Fail loudly instead so
 			// the caller can surface a clear status to the user.
-			if err := validateWorkDir(workDir); err != nil {
+			if err := ValidateWorkDir(workDir); err != nil {
 				return fmt.Errorf("cannot recreate tmux session %s: %w", t.sanitizedName, err)
 			}
 
@@ -1703,7 +1730,9 @@ func (t *TmuxSession) RestoreWithWorkDir(workDir string) error {
 			// produces a 0×0 PTY; tmux reads that size at client startup and immediately
 			// disconnects, causing EIO within ~1ms of the response stream starting.
 			ws := &pty.Winsize{
+				// #nosec G115 -- lastKnownRows/Cols are only ever written via clampWinsizeDim (or the defaultAttachRows/Cols constants), so Load() is always in [0, 65535]
 				Rows: uint16(t.lastKnownRows.Load()),
+				// #nosec G115 -- see justification above
 				Cols: uint16(t.lastKnownCols.Load()),
 			}
 			ptmx, attachCmd, err := t.ptyFactory.StartWithSize(t.buildAttachCommand(), ws)
@@ -2320,7 +2349,7 @@ func (t *TmuxSession) Close() error {
 		}
 		t.waitForSessionGone(killSessionConfirmTimeout)
 	} else {
-		log.Info("tmux session doesn't exist, no need to kill", "session", t.sanitizedName)
+		log.Debug("tmux session doesn't exist, no need to kill", "session", t.sanitizedName)
 	}
 
 	// Unregister circuit breaker from global registry to prevent stale entries
@@ -2369,6 +2398,25 @@ func (t *TmuxSession) SetDetachedSize(width, height int) error {
 	return t.updateWindowSize(width, height)
 }
 
+// ClampWinsizeDim clamps a terminal dimension (columns or rows) coming from
+// a resize request (ultimately client-controlled, e.g. a browser's terminal
+// widget) to the range representable by pty.Winsize's uint16 fields
+// ([1, 65535]) before the narrowing int->uint16 conversion, so an
+// out-of-range or negative value can't silently wrap around into a bogus
+// terminal size. Exported so session/instance_tmux.go and
+// session/native_process_manager.go (which build pty.Winsize themselves,
+// outside this package) share one implementation instead of duplicating it.
+func ClampWinsizeDim(v int) uint16 {
+	switch {
+	case v < 1:
+		return 1
+	case v > math.MaxUint16:
+		return math.MaxUint16
+	default:
+		return uint16(v)
+	}
+}
+
 // updateWindowSize updates the window size of the PTY.
 func (t *TmuxSession) updateWindowSize(cols, rows int) error {
 	// Check if PTY is valid before attempting to resize
@@ -2393,8 +2441,8 @@ func (t *TmuxSession) updateWindowSize(cols, rows int) error {
 	}
 
 	return pty.Setsize(file, &pty.Winsize{
-		Rows: uint16(rows),
-		Cols: uint16(cols),
+		Rows: ClampWinsizeDim(rows),
+		Cols: ClampWinsizeDim(cols),
 		X:    0,
 		Y:    0,
 	})
@@ -2418,8 +2466,9 @@ func (t *TmuxSession) SetWindowSize(cols, rows int) error {
 		if _, cmErr := t.sendCMCommand(ctx,
 			"resize-window", "-t", t.sanitizedName, "-x", colsStr, "-y", rowsStr); cmErr == nil {
 			// Store requested dimensions for future PTY attach connections (via attach-session -x/-y).
-			t.lastKnownCols.Store(int32(cols))
-			t.lastKnownRows.Store(int32(rows))
+			// Widened from the already-clamped uint16 dimension, so this always fits int32.
+			t.lastKnownCols.Store(int32(ClampWinsizeDim(cols)))
+			t.lastKnownRows.Store(int32(ClampWinsizeDim(rows)))
 			return nil
 		} else {
 			log.Debug("SetWindowSize CM path failed, falling back", "session", t.sanitizedName, "err", cmErr)
@@ -2450,8 +2499,9 @@ func (t *TmuxSession) SetWindowSize(cols, rows int) error {
 	}
 
 	// Store requested dimensions for future PTY attach connections (via attach-session -x/-y).
-	t.lastKnownCols.Store(int32(cols))
-	t.lastKnownRows.Store(int32(rows))
+	// Widened from the already-clamped uint16 dimension, so this always fits int32.
+	t.lastKnownCols.Store(int32(ClampWinsizeDim(cols)))
+	t.lastKnownRows.Store(int32(ClampWinsizeDim(rows)))
 	return nil
 }
 
@@ -2838,11 +2888,15 @@ func (t *TmuxSession) CapturePaneContentContext(ctx context.Context) (string, er
 // isolation the subprocess gate provides, and control mode has no gate to
 // isolate against.
 func (t *TmuxSession) CapturePaneContentPriority() (string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), defaultCapturePaneTimeout)
+	// No caller currently chains this with other fast-lane calls in one
+	// operation, so a fresh, self-contained deadline is correct here — see
+	// CapturePaneContentRawPriority's doc comment for the case where that
+	// wouldn't be true.
+	ctx, cancel := context.WithTimeout(context.Background(), ResyncFastLaneTimeout)
 	defer cancel()
-	cmd := t.buildTmuxCommandContext(ctx, "capture-pane", "-p", "-e", "-J", "-t", t.sanitizedName)
 	recordSpawn(time.Now())
-	output, err := runGatedFastLane(ctx, t.serverSocket, func() ([]byte, error) {
+	output, err := runFastLaneSubprocess(ctx, t.serverSocket, func(ctx context.Context) ([]byte, error) {
+		cmd := t.buildTmuxCommandContext(ctx, "capture-pane", "-p", "-e", "-J", "-t", t.sanitizedName)
 		return t.cmdExec.Output(cmd)
 	})
 	if err != nil {
@@ -2859,15 +2913,51 @@ func (t *TmuxSession) CapturePaneContentPriority() (string, error) {
 	return sanitizeUTF8String(output), nil
 }
 
+// CapturePaneContentRawPriority mirrors CapturePaneContentPriority but
+// without -J, for the same reason CapturePaneContentRaw omits it from
+// CapturePaneContent (see its doc comment): a fast-lane caller that will
+// replay the result into a live terminal emulator needs tmux's own wrap
+// points and cursor-positioning codes intact, not joined/stripped by -J.
+//
+// ctx is caller-supplied — see runFastLaneSubprocess's doc comment: this is
+// typically the last of several fast-lane calls handleCurrentPaneRequest
+// makes for one resync (refresh-client x3, a dimension verify, then this),
+// so it must share the same overall deadline as its siblings rather than get
+// its own fresh ResyncFastLaneTimeout allowance.
+func (t *TmuxSession) CapturePaneContentRawPriority(ctx context.Context) (string, error) {
+	recordSpawn(time.Now())
+	output, err := runFastLaneSubprocess(ctx, t.serverSocket, func(ctx context.Context) ([]byte, error) {
+		cmd := t.buildTmuxCommandContext(ctx, "capture-pane", "-p", "-e", "-t", t.sanitizedName)
+		return t.cmdExec.Output(cmd)
+	})
+	if err != nil {
+		recordFailure(time.Now())
+		t.invalidateExistsCache()
+		logArgs := []any{"session", t.sanitizedName, "err", err}
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) && len(exitErr.Stderr) > 0 {
+			logArgs = append(logArgs, "stderr", strings.TrimSpace(string(exitErr.Stderr)))
+		}
+		log.Warn("failed to capture raw pane content for session (fast lane)", logArgs...)
+		return "", fmt.Errorf("error capturing raw pane content for session '%s': %v", t.sanitizedName, err)
+	}
+	return sanitizeUTF8String(output), nil
+}
+
 // RefreshClientPriority mirrors RefreshClient's Method 1 subprocess path but
 // routes through the resync exec-gate fast lane (runGatedFastLane) instead of
 // the default pool (Epic 4.2). Unlike RefreshClient, it does not attempt the
 // control-mode path or the SIGWINCH fallback (Method 2) — resync's priority
 // caller wants a bounded, fast-lane-only refresh, not the full fallback
 // chain.
-func (t *TmuxSession) RefreshClientPriority() error {
-	cmd := t.buildTmuxCommand("refresh-client", "-t", t.sanitizedName)
-	return runGatedErrFastLane(context.Background(), t.serverSocket, func() error {
+//
+// ctx is caller-supplied — see CapturePaneContentRawPriority's doc comment:
+// handleCurrentPaneRequest calls this up to 3 times per resync, and all 3
+// must share one overall deadline rather than each getting its own fresh
+// ResyncFastLaneTimeout allowance.
+func (t *TmuxSession) RefreshClientPriority(ctx context.Context) error {
+	return runFastLaneSubprocessErr(ctx, t.serverSocket, func(ctx context.Context) error {
+		cmd := t.buildTmuxCommandContext(ctx, "refresh-client", "-t", t.sanitizedName)
 		return t.cmdExec.Run(cmd)
 	})
 }
@@ -3017,6 +3107,49 @@ func (t *TmuxSession) GetPaneDimensions() (width, height int, err error) {
 	}
 
 	// Parse "width height" format
+	var paneWidth, paneHeight int
+	_, err = fmt.Sscanf(strings.TrimSpace(string(output)), "%d %d", &paneWidth, &paneHeight)
+	if err != nil {
+		return 0, 0, fmt.Errorf("failed to parse pane dimensions '%s': %w", string(output), err)
+	}
+
+	return paneWidth, paneHeight, nil
+}
+
+// GetPaneDimensionsPriority mirrors GetPaneDimensions' control-mode-first
+// behavior, but routes its subprocess fallback through the resync exec-gate
+// fast lane (with a caller-supplied, shared ctx — see
+// CapturePaneContentRawPriority's doc comment) instead of the default pool
+// with no subprocess-level bound at all. handleCurrentPaneRequest's
+// resize-through-verify path calls GetPaneDimensions twice per resync (an
+// initial check, then a post-resize verify); when control mode isn't
+// available and it falls through to a subprocess, that call needs the same
+// fast-lane isolation and shared deadline as the refresh/capture calls
+// around it, not the unbounded default-pool path.
+func (t *TmuxSession) GetPaneDimensionsPriority(ctx context.Context) (width, height int, err error) {
+	if t.cmEnabledForBackground() {
+		cmCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+		defer cancel()
+		body, cmErr := t.sendCMCommand(cmCtx,
+			"display-message", "-p", "-t", t.sanitizedName, "'#{pane_width} #{pane_height}'")
+		if cmErr == nil {
+			var paneWidth, paneHeight int
+			if _, parseErr := fmt.Sscanf(strings.TrimSpace(body), "%d %d", &paneWidth, &paneHeight); parseErr == nil {
+				return paneWidth, paneHeight, nil
+			}
+		}
+		log.Debug("GetPaneDimensionsPriority CM path failed, falling back to subprocess", "session", t.sanitizedName, "err", cmErr)
+	}
+
+	output, err := runFastLaneSubprocess(ctx, t.serverSocket, func(ctx context.Context) ([]byte, error) {
+		cmd := t.buildTmuxCommandContext(ctx, "display-message", "-p", "-t", t.sanitizedName,
+			"#{pane_width} #{pane_height}")
+		return t.cmdExec.Output(cmd)
+	})
+	if err != nil {
+		return 0, 0, fmt.Errorf("failed to get pane dimensions for session '%s' (fast lane): %w", t.sanitizedName, err)
+	}
+
 	var paneWidth, paneHeight int
 	_, err = fmt.Sscanf(strings.TrimSpace(string(output)), "%d %d", &paneWidth, &paneHeight)
 	if err != nil {

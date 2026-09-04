@@ -12,6 +12,7 @@ import (
 	"github.com/tstapler/stapler-squad/internal/syncutil"
 	"github.com/tstapler/stapler-squad/log"
 	pkganalytics "github.com/tstapler/stapler-squad/pkg/analytics"
+	"github.com/tstapler/stapler-squad/server/adapters"
 	"github.com/tstapler/stapler-squad/server/analytics"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/handlers"
@@ -445,6 +446,15 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		log.Info("Registered SessionSummaryService handler", "path", ssAPIPath)
 	}
 
+	// Register HandoffSummaryService handler (Story 2.2.1).
+	if deps.HandoffSummaryGenerator != nil {
+		handoffSummaryService := services.NewHandoffSummaryService(deps.HandoffSummaryGenerator)
+		hsPath, hsHandler := sessionv1connect.NewHandoffSummaryServiceHandler(handoffSummaryService, ConnectOptions(deps.ErrorRegistry)...)
+		hsAPIPath := "/api" + hsPath
+		srv.RegisterConnectHandler(hsAPIPath, http.StripPrefix("/api", hsHandler))
+		log.Info("Registered HandoffSummaryService handler", "path", hsAPIPath)
+	}
+
 	// Register InsightsService handler for token usage analytics.
 	if deps.InsightsService != nil {
 		insightsPath, insightsHandler := sessionv1connect.NewInsightsServiceHandler(deps.InsightsService, ConnectOptions(deps.ErrorRegistry)...)
@@ -459,6 +469,19 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		ghAPIPath := "/api" + ghPath
 		srv.RegisterConnectHandler(ghAPIPath, http.StripPrefix("/api", ghHandler))
 		log.Info("Registered GitHubUserService handler", "path", ghAPIPath)
+	}
+
+	// Register TymuxRolloutService handler (tymux-bundled-integration Epic
+	// 3.3: operator-facing controls for the staged tymux rollout, mirroring
+	// StreamHubRolloutService's registration). Config-backed with no
+	// external deps, so it's constructed inline rather than threaded
+	// through ServerDependencies.
+	{
+		tymuxRolloutSvc := services.NewTymuxRolloutService()
+		tymuxRolloutPath, tymuxRolloutHandler := sessionv1connect.NewTymuxRolloutServiceHandler(tymuxRolloutSvc, ConnectOptions(deps.ErrorRegistry)...)
+		tymuxRolloutAPIPath := "/api" + tymuxRolloutPath
+		srv.RegisterConnectHandler(tymuxRolloutAPIPath, http.StripPrefix("/api", tymuxRolloutHandler))
+		log.Info("Registered TymuxRolloutService handler", "path", tymuxRolloutAPIPath)
 	}
 
 	// Register RemoteService handler (ssh-remote-workspaces Epic 3.3: TOFU
@@ -651,6 +674,11 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	// InjectHookConfig's PermissionRequest URL and InjectHooksConfig's stop/pre-tool-use/
 	// post-tool-use/prompt-submit endpoints resolve through this single shared mechanism.
 	services.SetHookBaseURLFn(hookBaseURLFn)
+	// Same lazy base-URL resolver, wired into BacklogLifecycleListener so agent-created
+	// PR bodies can link back to the backlog item instead of embedding a bare UUID.
+	if deps.BacklogLifecycleListener != nil {
+		deps.BacklogLifecycleListener.SetDashboardBaseURLFn(hookBaseURLFn)
+	}
 	// Wire the review queue poller for immediate queue checks on new approvals (Story 3, Task 3.1)
 	approvalHandler.SetQueueChecker(deps.ReviewQueuePoller)
 	// Wire the classifier and analytics store for auto-approve/deny before manual review
@@ -696,6 +724,43 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	srv.mux.HandleFunc("/api/hooks/permission-request", approvalHandler.HandlePermissionRequest)
 	log.Info("Registered Claude Code hook approval handler at /api/hooks/permission-request")
 	srv.approvalHandler = approvalHandler
+
+	// pi approval-extension health tracking (pi-support Epic 4.2). The route
+	// itself is registered unconditionally (mirroring every other
+	// /api/hooks/* route above), but HandlePiExtensionLoaded gates on
+	// config.FeaturePiSupport as its first line and 404s when the flag is
+	// off — so with the flag off this never records into piHealthTracker's
+	// in-memory map, matching every other pi surface.
+	piHealthTracker := services.NewPiExtensionHealthTracker()
+	approvalHandler.SetPiExtensionHealthTracker(piHealthTracker)
+	srv.mux.HandleFunc("/api/hooks/pi-extension-loaded", approvalHandler.HandlePiExtensionLoaded)
+	log.Info("Registered pi approval-extension health-ping handler at /api/hooks/pi-extension-loaded")
+	// Feed the tracker into InstanceToProto (server/adapters/instance_adapter.go)
+	// via the same package-level-resolver pattern hookBaseURLFn uses above --
+	// adapters can't import services directly (services already imports
+	// adapters), so server.go is the one place that can wire the two together.
+	adapters.SetPiExtensionHealthResolver(func(sessionID, program string) sessionv1.PiExtensionHealth {
+		if !config.LoadConfig().GetFeatureFlag(config.FeaturePiSupport) || !session.IsPi(program) {
+			return sessionv1.PiExtensionHealth_PI_EXTENSION_HEALTH_UNSPECIFIED
+		}
+		switch piHealthTracker.HealthFor(sessionID) {
+		case services.PiExtensionHealthLoaded:
+			return sessionv1.PiExtensionHealth_PI_EXTENSION_HEALTH_LOADED
+		case services.PiExtensionHealthFailed:
+			return sessionv1.PiExtensionHealth_PI_EXTENSION_HEALTH_FAILED
+		default:
+			return sessionv1.PiExtensionHealth_PI_EXTENSION_HEALTH_UNKNOWN
+		}
+	})
+	// Evict a destroyed session's tracker entry (pi-support Epic 4.2 MAJOR 1
+	// fix) -- session cannot import server/services directly (services
+	// already imports session), so this is the mirror-image of the resolver
+	// wiring just above: session.Instance.Destroy() calls this closure via
+	// session.SetPiExtensionHealthForgetter, and server.go is the one place
+	// that can wire the two packages together.
+	session.SetPiExtensionHealthForgetter(func(sessionID string) {
+		piHealthTracker.Forget(sessionID)
+	})
 	// Wire the same ApprovalHandler as the PermissionRequestHandler every
 	// remote session's RemoteApprovalRelay drives its requests through
 	// (ssh-remote-workspaces Phase 5 correction, ADR-003's addendum) --
@@ -723,7 +788,7 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	// unauthenticated prober scanning generic guessable webhook paths
 	// (plan.md Risk Control) — that rationale doesn't apply here:
 	// /api/hooks/slack-interactive is a single, fixed, already
-	// publicly-documented path (.claude/docs/slack-phase2-public-reachability.md),
+	// publicly-documented path (docs/how-to/expose-slack-interactive-endpoint.md),
 	// not a guessable pattern, so an explicit 404 leaks nothing a prober
 	// couldn't already find in the docs. Boot-time-only gate either way
 	// (flipping the flag requires a restart to take effect).
@@ -761,7 +826,15 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		// flag off requires a restart to stop serving these routes, same limitation the
 		// "backlog" flag already has for its own route-gated pieces.
 		if webhookCfg.GetFeatureFlag("webhook_triggers") {
-			githubWebhookHandler := services.NewGitHubWebhookHandler(deps.WorkflowRepo, deps.WorkflowScheduler, deps.TriggerFireEventRepo, webhookCfg)
+			// deps.BacklogLifecycleListener is nil-guarded (rather than passed directly)
+			// to avoid boxing a nil *session.BacklogLifecycleListener into a non-nil
+			// services.PRFixEventRouter interface value (a "typed nil" — handlePRFixEvent's
+			// `h.prFixRouter == nil` check would then never trip).
+			var prFixRouter services.PRFixEventRouter
+			if deps.BacklogLifecycleListener != nil {
+				prFixRouter = deps.BacklogLifecycleListener
+			}
+			githubWebhookHandler := services.NewGitHubWebhookHandler(deps.WorkflowRepo, deps.WorkflowScheduler, deps.TriggerFireEventRepo, webhookCfg, prFixRouter)
 			githubWebhookHandler.RegisterRoutes(srv.mux)
 			genericWebhookHandler := services.NewGenericWebhookHandler(deps.WorkflowRepo, deps.WorkflowScheduler, deps.TriggerFireEventRepo, webhookCfg)
 			genericWebhookHandler.RegisterRoutes(srv.mux)
@@ -774,6 +847,12 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 			// route). This log line at least makes the boot-time-only nature of the gate
 			// visible in the service log.
 			log.Info("webhook-trigger routes NOT registered (webhook_triggers flag off) — /webhooks/* will 404 until the flag is enabled and the service restarts")
+			if webhookCfg.GetFeatureFlag("pr_event_webhooks") {
+				// pr_event_webhooks has no effect unless webhook_triggers is also enabled
+				// (the route itself isn't registered above) — a silent-404 trap an
+				// operator could otherwise hit with zero signal.
+				log.Warn("pr_event_webhooks is enabled but webhook_triggers is not — /webhooks/github is not registered, PR-fix webhook events will silently 404")
+			}
 		}
 	}
 
@@ -869,7 +948,7 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	if os.Getenv("STAPLER_SQUAD_INSTANCE") == "e2e-local" && deps.Storage != nil {
 		backlogSeedHandler := services.NewBacklogDebugSeedHandler(deps.Storage)
 		backlogSeedHandler.RegisterRoutes(srv.mux)
-		log.Info("Registered backlog debug seed handlers at /api/debug/backlog/seed-stuck, /api/debug/backlog/seed-queued, and /api/debug/backlog/seed-headless-triage-session (e2e-local only)")
+		log.Info("Registered backlog debug seed handlers at /api/debug/backlog/seed-stuck, /api/debug/backlog/seed-queued, /api/debug/backlog/seed-headless-triage-session, /api/debug/backlog/seed-work-item-session, and /api/debug/backlog/seed-work-session-with-worktree (e2e-local only)")
 
 		// Registered for project_plans/backlog-event-driven-updates's Playwright
 		// e2e layer — lets tests mutate a backlog item directly through the
@@ -956,6 +1035,11 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	srv.mux.Handle("/api/local/serve/", http.StripPrefix("/api/local/serve", http.HandlerFunc(localFileSvc.ServeLocalFile)))
 	log.Info("Registered local file browser at /api/local/files/list and /api/local/serve/")
 
+	// pi-support (Epic 2.1, Story 2.1.2): reports whether the global pi approval
+	// extension is installed, so the settings UI can gate its disable-flag warning.
+	piExtensionStatusSvc := services.NewPiExtensionStatusService()
+	srv.mux.HandleFunc("/api/pi-extension-status", piExtensionStatusSvc.HandlePiExtensionStatus)
+
 	// Register backlog attachment upload endpoint — durable image attachments
 	// for backlog item descriptions, served back via /api/local/serve/.
 	if backlogAttachmentDir, err := cfg.BacklogAttachmentDirOrDefault(); err != nil {
@@ -1007,6 +1091,17 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 			"idle_timeout_minutes", cfg.Hibernation.IdleTimeoutMinutes)
 	}
 
+	// Start orphaned-tmux sweeper (periodic counterpart to the one-time startup
+	// orphan sweep in BuildRuntimeDeps step 6d — see OrphanedTmuxSweeper doc comment).
+	// Guarded the same way as the startup call: skip entirely for an isolated
+	// instance (OrphanedTmuxSweeper.Start re-checks this itself; ReviewQueuePoller
+	// nil-check here just avoids starting a sweeper that could never sweep).
+	if deps.ReviewQueuePoller != nil {
+		orphanSweeper := session.NewOrphanedTmuxSweeper()
+		orphanSweeper.SetLiveProvider(deps.ReviewQueuePoller)
+		go orphanSweeper.Start(serverCtx)
+	}
+
 	// Start session retention sweeper (deletes archived sessions past the retention
 	// window once they pass safety checks — see SessionRetentionSweeper doc comment).
 	if cfg.SessionRetention.EnabledOrDefault() {
@@ -1025,6 +1120,26 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		log.Info("Stale session notifier started",
 			"threshold_minutes", cfg.StaleSession.ThresholdMinutesOrDefault(),
 			"notify_enabled", cfg.StaleSession.NotifyEnabledOrDefault())
+	}
+
+	// Start stale creation sweeper (flips a Creating session whose persisted
+	// creation-progress timestamp has exceeded the configured threshold to
+	// Failed/Stale -- see StaleCreationSweeper doc comment, Epic 4.1).
+	if deps.ReviewQueuePoller != nil && deps.Storage != nil {
+		staleCreationSweeper := services.NewStaleCreationSweeper(deps.ReviewQueuePoller, deps.Storage, deps.EventBus)
+		go staleCreationSweeper.Start(serverCtx)
+		log.Info("Stale creation sweeper started",
+			"threshold_minutes", cfg.CreationStale.ThresholdMinutesOrDefault())
+	}
+
+	// Start memory pressure notifier (fires an operator-facing notification the first time
+	// this process's own cgroup memory usage crosses its MemoryHigh ceiling — see
+	// MemoryPressureNotifier doc comment). No-ops on non-Linux (telemetry.CgroupMemoryUsageRatio
+	// always reports unavailable there).
+	if deps.ReviewQueuePoller != nil {
+		memNotifier := services.NewMemoryPressureNotifier(deps.ReviewQueuePoller, deps.EventBus)
+		go memNotifier.Start(serverCtx)
+		log.Info("Memory pressure notifier started")
 	}
 }
 

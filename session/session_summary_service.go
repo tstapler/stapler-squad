@@ -76,7 +76,7 @@ type SessionSummaryGenerator struct {
 
 // compile-time check that *SessionSummaryGenerator satisfies summaryGenerator
 // (session/session_summary_listener.go) structurally — no explicit "implements"
-// declaration needed, per .claude/rules/interface-pollution-checklist.md.
+// declaration needed, per the `interface-pollution-checklist` skill.
 var _ summaryGenerator = (*SessionSummaryGenerator)(nil)
 
 // NewSessionSummaryGenerator creates a SessionSummaryGenerator. notifLister and

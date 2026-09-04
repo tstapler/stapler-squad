@@ -20,7 +20,7 @@ import (
 // user identity. It returns the repo directory path and a cleanup function.
 //
 // Uses go-git directly rather than shelling out — see
-// .claude/rules/prefer-go-git-over-subshells.md.
+// the `prefer-go-git-over-subshells` skill.
 func setupTestRepo(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -42,6 +42,23 @@ func setupTestRepo(t *testing.T) string {
 	require.NoError(t, err)
 
 	return dir
+}
+
+// TestNewGitWorktreeWithBranch_should_Error_When_RepoPathIsEmpty guards against a
+// zero-value repoPath falling through to filepath.Abs("") (resolves to cwd).
+func TestNewGitWorktreeWithBranch_should_Error_When_RepoPathIsEmpty(t *testing.T) {
+	_, _, err := NewGitWorktreeWithBranch("", "test-empty-path", "")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "repoPath must not be empty")
+}
+
+// TestNewGitWorktreeFromCommitSHA_should_Error_When_RepoPathIsEmpty mirrors
+// TestNewGitWorktreeWithBranch_should_Error_When_RepoPathIsEmpty for
+// NewGitWorktreeFromCommitSHA, the other findGitRepoRoot-reaching constructor.
+func TestNewGitWorktreeFromCommitSHA_should_Error_When_RepoPathIsEmpty(t *testing.T) {
+	_, _, err := NewGitWorktreeFromCommitSHA("", "test-empty-path", "branch", "deadbeef")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "repoPath must not be empty")
 }
 
 // TestNewWorktreeSetup_SetsBaseCommitSHA verifies that Setup() on a brand-new worktree

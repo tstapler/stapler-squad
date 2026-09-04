@@ -21,8 +21,11 @@ SCANNER="tools/scanner/backend/cmd/scanner"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
-for p in session unfinished backlog insights github_user import session_summary remote; do
-  "$SCANNER" "proto/session/v1/$p.proto" server/services/ "$TMP" >/dev/null
+protos_raw="$("$SCRIPT_DIR/list-backend-protos.sh")"
+mapfile -t protos <<< "$protos_raw"
+
+for proto in "${protos[@]}"; do
+  "$SCANNER" "$proto" server/services/ "$TMP" >/dev/null
 done
 
 python3 - "$TMP" "$COMMITTED" <<'PY'

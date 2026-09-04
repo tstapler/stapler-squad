@@ -309,15 +309,6 @@ func (p *PRStatusPoller) fetchAndUpdatePRStatus(inst *Instance) {
 		if newEtag != "" {
 			p.listEtags.Store(listKey, newEtag)
 		}
-		if !changed {
-			// 304: branch list unchanged, still no PR — re-arm backoff to avoid constant polling.
-			if p.config.NoPRBackoff > 0 {
-				p.mu.Lock()
-				p.noPRPollAfter[inst.Title] = time.Now().Add(p.config.NoPRBackoff)
-				p.mu.Unlock()
-			}
-			return
-		}
 		if err != nil {
 			if errors.Is(err, github.ErrNoPR) {
 				p.applyNoPR(inst)
@@ -327,6 +318,15 @@ func (p *PRStatusPoller) fetchAndUpdatePRStatus(inst *Instance) {
 				return
 			}
 			log.Warn("PR status poller: PR discovery failed", "session", inst.Title, "owner", owner, "repo", repo, "branch", branch, "err", err)
+			return
+		}
+		if !changed {
+			// 304: branch list unchanged, still no PR — re-arm backoff to avoid constant polling.
+			if p.config.NoPRBackoff > 0 {
+				p.mu.Lock()
+				p.noPRPollAfter[inst.Title] = time.Now().Add(p.config.NoPRBackoff)
+				p.mu.Unlock()
+			}
 			return
 		}
 		// Persist discovered PR number and clear no-PR backoff.
@@ -397,22 +397,23 @@ func (p *PRStatusPoller) applyPRUpdate(inst *Instance, prInfo *github.PRInfo) {
 	priority := string(github.DerivePRPriority(prInfo))
 	terminal := github.IsTerminal(github.PRPriority(priority))
 
-	state, checkConclusion := "", ""
-	approvedCount, changesReqCount := 0, 0
-	isDraft := false
+	update := PRStatusUpdate{Priority: priority, Terminal: terminal}
 	if prInfo != nil {
-		state = prInfo.State
-		checkConclusion = prInfo.CheckConclusion
-		approvedCount = prInfo.ApprovedCount
-		changesReqCount = prInfo.ChangesRequestedCount
-		isDraft = prInfo.IsDraft
+		update.State = prInfo.State
+		update.CheckConclusion = prInfo.CheckConclusion
+		update.Mergeable = prInfo.Mergeable
+		update.ApprovedCount = prInfo.ApprovedCount
+		update.ChangesReqCount = prInfo.ChangesRequestedCount
+		update.IsDraft = prInfo.IsDraft
+		update.Checks = prInfo.Checks
+		update.Reviews = prInfo.Reviews
 	}
 
-	result := inst.UpdatePRStatus(state, priority, checkConclusion, approvedCount, changesReqCount, isDraft, terminal)
+	result := inst.UpdatePRStatus(update)
 
 	if p.storage != nil {
-		if err := p.storage.UpdateInstancePRStatus(inst.Title, state, priority, checkConclusion,
-			approvedCount, changesReqCount, isDraft, terminal); err != nil {
+		if err := p.storage.UpdateInstancePRStatus(inst.Title, update.State, priority, update.CheckConclusion,
+			update.ApprovedCount, update.ChangesReqCount, update.IsDraft, terminal); err != nil {
 			log.Warn("PR status poller: failed to persist PR status", "session", inst.Title, "err", err)
 		}
 	}
@@ -432,7 +433,7 @@ func (p *PRStatusPoller) applyPRUpdate(inst *Instance, prInfo *github.PRInfo) {
 			log.Info("PR status poller: PR priority changed", "session", inst.Title, "new", priority)
 		}
 		if result.CheckConclusionChanged {
-			log.Info("PR status poller: CI check conclusion changed", "session", inst.Title, "new", checkConclusion)
+			log.Info("PR status poller: CI check conclusion changed", "session", inst.Title, "new", update.CheckConclusion)
 		}
 	}
 }

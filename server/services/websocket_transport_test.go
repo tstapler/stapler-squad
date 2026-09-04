@@ -1,12 +1,16 @@
 package services
 
 import (
+	"context"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/proto"
 
+	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/server/protocol"
 	"github.com/tstapler/stapler-squad/session/streamhub"
 )
 
@@ -24,9 +28,15 @@ type fakeSessionController struct {
 	subscribeCalls int32
 }
 
-func (f *fakeSessionController) SetWindowSize(int, int) error        { return nil }
-func (f *fakeSessionController) ResizePTY(int, int) error            { return nil }
-func (f *fakeSessionController) CapturePaneContent() (string, error) { return "", nil }
+func (f *fakeSessionController) SetWindowSizeContext(context.Context, int, int) error { return nil }
+func (f *fakeSessionController) ResizePTY(int, int) error                             { return nil }
+func (f *fakeSessionController) CapturePaneContentRawContext(context.Context) (streamhub.RawPaneContent, error) {
+	return "", nil
+}
+func (f *fakeSessionController) GetPaneCursorPosition() (x, y int, err error) {
+	return 0, 0, nil
+}
+func (f *fakeSessionController) StartControlMode() error { return nil }
 func (f *fakeSessionController) StopControlMode() error {
 	f.stopControlModeCalls++
 	return nil
@@ -42,20 +52,30 @@ func (f *fakeSessionController) UnsubscribeControlModeUpdates(string) {}
 // TestWebSocketTransport_should_WriteViaMutexGuardedWriteMessage_When_SendCalledOnLiveConnection
 // is REQ-2 from validation.md: Send must go through connectWebSocketStream's
 // existing mutex-guarded WriteMessage, reusing that concurrency-safety fix
-// rather than duplicating it (Story 2.2.1's AC).
+// rather than duplicating it (Story 2.2.1's AC). It also covers the
+// 2026-09-01 regression: Send must wrap raw tmux bytes in the same
+// envelope-and-TerminalData_Output framing streamViaControlMode's sendData
+// applies -- forwarding them unwrapped (the pre-fix behavior) is silently
+// undecodable by the real browser client, which always protobuf-decodes an
+// envelope expecting a TerminalData message.
 func TestWebSocketTransport_should_WriteViaMutexGuardedWriteMessage_When_SendCalledOnLiveConnection(t *testing.T) {
 	serverStream, clientConn, cleanup := createTestWebSocketPair(t)
 	defer cleanup()
 
-	transport := NewWebSocketTransport(serverStream)
+	transport := NewWebSocketTransport(serverStream, "test-session")
 
 	payload := []byte("hello from the hub")
 	require.NoError(t, transport.Send(payload))
 
 	clientConn.SetReadDeadline(time.Now().Add(2 * time.Second))
-	_, got, err := clientConn.ReadMessage()
+	_, msg, err := clientConn.ReadMessage()
 	require.NoError(t, err)
-	require.Equal(t, payload, got)
+	env, _, err := protocol.ParseEnvelope(msg)
+	require.NoError(t, err)
+	var data sessionv1.TerminalData
+	require.NoError(t, proto.Unmarshal(env.Data, &data))
+	require.Equal(t, "test-session", data.SessionId)
+	require.Equal(t, payload, data.GetOutput().GetData())
 }
 
 // TestWebSocketTransport_should_DetachSubscriberExactlyOnce_When_CloseCalledAfterAttach
@@ -69,7 +89,7 @@ func TestWebSocketTransport_should_DetachSubscriberExactlyOnce_When_CloseCalledA
 	controller := &fakeSessionController{}
 	hub := streamhub.NewStreamHub("ws-transport-test", controller, streamhub.WithTeardownGrace(0))
 
-	transport := NewWebSocketTransport(serverStream)
+	transport := NewWebSocketTransport(serverStream, "ws-transport-test")
 	id := hub.AttachSubscriber(transport, streamhub.SubscriberCapability{CanResize: true, CanWrite: true})
 	transport.BindSubscriber(hub, id)
 
@@ -96,7 +116,7 @@ func TestWebSocketTransport_should_NotDeadlock_When_HubDetachesFirst(t *testing.
 	controller := &fakeSessionController{}
 	hub := streamhub.NewStreamHub("ws-transport-test-2", controller, streamhub.WithTeardownGrace(0))
 
-	transport := NewWebSocketTransport(serverStream)
+	transport := NewWebSocketTransport(serverStream, "ws-transport-test")
 	id := hub.AttachSubscriber(transport, streamhub.SubscriberCapability{CanResize: true, CanWrite: true})
 	transport.BindSubscriber(hub, id)
 
@@ -124,7 +144,7 @@ func TestWebSocketTransport_should_ReturnSendError_When_ConnectionIsClosed(t *te
 	serverStream, clientConn, cleanup := createTestWebSocketPair(t)
 	defer cleanup()
 
-	transport := NewWebSocketTransport(serverStream)
+	transport := NewWebSocketTransport(serverStream, "ws-transport-test")
 
 	clientConn.Close()
 	serverStream.conn.Close()

@@ -362,7 +362,13 @@ func TestMarkSessionNeedsAttention_NilReviewQueue(t *testing.T) {
 	markSessionNeedsAttention(inst, "test reason")
 }
 
-// UT-17: TestSessionDriver_SecondFailure_MarksNeedsAttention — second failure adds to ReviewQueue.
+// UT-17: TestSessionDriver_SecondFailure_MarksNeedsAttention — a failure with
+// an already-exhausted retry budget transitions to PermanentlyFailed and adds
+// to the ReviewQueue (re-derived for the RetryState/RetryPolicy machinery per
+// .claude/rules/fix-flaky-tests-dont-defer.md's spirit: the equivalent
+// assertion, not a relaxed one — this test previously simulated "already
+// retried once" via a bare atomic.Bool; the same intent is now expressed as
+// RetryState already at its resolved cap).
 func TestSessionDriver_SecondFailure_MarksNeedsAttention(t *testing.T) {
 	t.Parallel()
 	rq := NewReviewQueue()
@@ -372,11 +378,15 @@ func TestSessionDriver_SecondFailure_MarksNeedsAttention(t *testing.T) {
 		reviewQueue: rq,
 		Status:      Stopped,
 	}
+	inst.RetryAttempt = 1
+	inst.RetryMaxAttempts = 1 // already at cap — next failure is exhausted
 
-	var retried atomic.Bool
-	retried.Store(true) // already retried once
+	policy := RetryPolicy{Enabled: true, MaxAttempts: 1, RetryOn: []string{"crashed", "stalled", "tmux_exited"}}
+	handleDriverFailure(inst, "/tmp", policy, "unexpected exit", make(chan struct{}))
 
-	handleDriverFailure(inst, "/tmp", &retried, "unexpected exit", make(chan struct{}))
+	if inst.Status != PermanentlyFailed {
+		t.Errorf("Status = %v, want PermanentlyFailed", inst.Status)
+	}
 
 	// ReviewQueue should have an entry for this session.
 	item, found := rq.Get(inst.UUID)
@@ -1148,14 +1158,14 @@ func TestAnswerDialogOnce(t *testing.T) {
 // the *later* of LastMeaningfulOutput and initialPromptSentAt as the
 // inactivity reference — specifically to avoid false inactivity fires right
 // startSessionDriverForTest replicates StartSessionDriver's goroutine/WaitGroup
-// wiring exactly, but calls runSessionDriverWithPrompt with a pre-seeded
-// retried value instead of runSessionDriver's fresh, always-false one.
-// StartSessionDriver's public API intentionally can't express a pre-seeded
-// retried value (see TestSessionDriver_DialogGaveUp_FallsThroughToInactivityEscalation's
+// wiring exactly, but calls runSessionDriverWithPrompt with a caller-supplied
+// RetryPolicy instead of runSessionDriver's config-resolved one.
+// StartSessionDriver's public API intentionally can't express a pre-resolved
+// policy (see TestSessionDriver_DialogGaveUp_FallsThroughToInactivityEscalation's
 // doc comment for why) — this test-only, package-private helper exists so
 // callers that need one can still clean up via the real StopSessionDriver,
 // rather than hand-rolling stop/done channels outside the Start/Stop wrapper.
-func startSessionDriverForTest(inst *Instance, allowedPath, initialPrompt string, retried bool) {
+func startSessionDriverForTest(inst *Instance, allowedPath, initialPrompt string, policy RetryPolicy) {
 	inst.driverMu.Lock()
 	if inst.driverDestroyed {
 		inst.driverMu.Unlock()
@@ -1169,12 +1179,10 @@ func startSessionDriverForTest(inst *Instance, allowedPath, initialPrompt string
 	inst.driverWG.Add(1)
 	inst.driverStopper.Store(stopper)
 	inst.driverMu.Unlock()
-	var retriedFlag atomic.Bool
-	retriedFlag.Store(retried)
 	go func() {
 		defer inst.driverWG.Done()
 		defer inst.driverRunning.Store(false)
-		runSessionDriverWithPrompt(inst, allowedPath, initialPrompt, &retriedFlag, stopper.stop)
+		runSessionDriverWithPrompt(inst, allowedPath, initialPrompt, policy, stopper.stop)
 	}()
 }
 
@@ -1222,22 +1230,26 @@ func TestSessionDriver_DialogGaveUp_FallsThroughToInactivityEscalation(t *testin
 	}
 	inst.started.Store(true)
 
-	// This test needs retried=true pre-seeded (simulating "already retried
-	// once" so the second-failure path fires directly), a precondition
-	// StartSessionDriver cannot express through its public API — its wrapper
-	// always allocates a fresh, zero-value atomic.Bool internally, and
-	// extending its signature to accept one for a single test call site
-	// would leak an implementation detail into production code for no other
-	// caller's benefit.
+	inst.RetryAttempt = 1
+	inst.RetryMaxAttempts = 1 // already at cap — simulates "already retried once" so the second-failure path fires directly
+	policy := RetryPolicy{Enabled: true, MaxAttempts: 1, RetryOn: []string{"crashed", "stalled", "tmux_exited"}}
+
+	// This test needs the "already retried once" precondition pre-seeded
+	// above (RetryAttempt already at RetryMaxAttempts, so the second-failure
+	// path fires directly) — a precondition StartSessionDriver cannot express
+	// through its public API — its wrapper always resolves the policy fresh
+	// from config, and extending its signature to accept a pre-seeded
+	// RetryPolicy for a single test call site would leak an implementation
+	// detail into production code for no other caller's benefit.
 	//
-	// Considered and rejected: driving retried=true organically through
-	// StartSessionDriver by forcing one real failure/restart cycle first.
-	// handleDriverFailure's first call (retried==false, session_driver.go)
-	// doesn't just flip the flag — it restarts the whole session and spawns
-	// a fresh driver goroutine for the continuation. Routing through that
-	// path here would conflate two independent mechanisms under one test
-	// (the dialogGaveUp fall-through this test exists to prove, and the
-	// separate failure-restart machinery covered by
+	// Considered and rejected: driving the "already retried once" state
+	// organically through StartSessionDriver by forcing one real
+	// failure/restart cycle first. handleDriverFailure's first call
+	// (session_driver.go) doesn't just bump RetryAttempt — it restarts the
+	// whole session and spawns a fresh driver goroutine for the continuation.
+	// Routing through that path here would conflate two independent
+	// mechanisms under one test (the dialogGaveUp fall-through this test
+	// exists to prove, and the separate failure-restart machinery covered by
 	// TestSessionDriver_SecondFailure_MarksNeedsAttention), doubling the
 	// real wall-clock cost and adding a second independent timing-flakiness
 	// surface on top of the driverReadyTimeout margin already documented
@@ -1245,13 +1257,13 @@ func TestSessionDriver_DialogGaveUp_FallsThroughToInactivityEscalation(t *testin
 	//
 	// Instead this test uses startSessionDriverForTest (below), a test-only
 	// helper that replicates StartSessionDriver's exact goroutine/WaitGroup
-	// wiring but accepts a pre-seeded retried value — so cleanup goes
+	// wiring but accepts a pre-resolved RetryPolicy — so cleanup goes
 	// through the real StopSessionDriver, identically to every other
 	// SessionDriver test, rather than a bespoke stop/done channel pair.
 	baseline := goleak.IgnoreCurrent()
 	defer goleak.VerifyNone(t, append(knownBackgroundGoroutines, baseline)...)
 
-	startSessionDriverForTest(inst, "/tmp", driverInitialPrompt, true /* retried */)
+	startSessionDriverForTest(inst, "/tmp", driverInitialPrompt, policy)
 	defer StopSessionDriver(inst)
 
 	// maxDialogAnswerAttempts failed dialog-answer sends drive the latch to

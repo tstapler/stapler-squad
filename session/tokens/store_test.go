@@ -1,14 +1,58 @@
 package tokens
 
 import (
+	"bytes"
 	"context"
+	"fmt"
+	"log/slog"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/log"
 )
+
+// syncBuffer wraps bytes.Buffer with a mutex, matching the pattern already used in
+// executor/safeexec/safeexec_pg_test.go and server/services/autonomous_orchestration_service_test.go.
+// A plain bytes.Buffer here would be a real -race hazard the moment a future test drives
+// concurrent writes through captureLogs (e.g. by calling Start()), even though today's
+// sole caller is synchronous.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+func (b *syncBuffer) Len() int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Len()
+}
+
+// captureLogs redirects slog's default logger to a JSON-lines buffer for the
+// duration of the test, restoring the previous default on cleanup. Not safe
+// to use from a t.Parallel() test — it mutates the process-wide slog default.
+func captureLogs(t *testing.T) *syncBuffer {
+	t.Helper()
+	buf := &syncBuffer{}
+	prev := log.SetSlogDefaultForTest(slog.New(slog.NewJSONHandler(buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() { log.SetSlogDefaultForTest(prev) })
+	return buf
+}
 
 func TestTokenStore_WhenFileNotCached_ExpectParseOnGetAll(t *testing.T) {
 	t.Parallel()
@@ -147,5 +191,38 @@ func TestTokenStore_Subscribe_WhenStoreUpdated_ExpectNotification(t *testing.T) 
 		// Notification received.
 	case <-time.After(5 * time.Second):
 		t.Fatal("expected subscription notification within 5 seconds")
+	}
+}
+
+// TestEnqueue_RateLimitsQueueFullWarnings guards the drop-log rate limiting
+// that motivated this package's log.DropCounter: without it, sustained
+// backpressure logs a Warn line for every single dropped file, which under
+// real load fired thousands of times per hour. Not t.Parallel(): it captures
+// the process-wide slog default.
+func TestEnqueue_RateLimitsQueueFullWarnings(t *testing.T) {
+	store := NewTokenStore("") // Start() deliberately not called — nothing drains parseQueue.
+
+	// Saturate the queue so every subsequent enqueue takes the drop path.
+	for i := 0; i < parseQueueSize; i++ {
+		store.enqueue(fmt.Sprintf("testdata/fill-%d.jsonl", i))
+	}
+
+	buf := captureLogs(t)
+
+	const drops = log.DropLogInterval + 5 // 105: crosses one rate-limit boundary
+	for i := 0; i < drops; i++ {
+		store.enqueue(fmt.Sprintf("testdata/drop-%d.jsonl", i))
+	}
+
+	lines := strings.Count(strings.TrimRight(buf.String(), "\n"), "\n") + 1
+	if buf.Len() == 0 {
+		lines = 0
+	}
+	// The counter logs on drop #1 and again on drop #101 (n%DropLogInterval==1),
+	// so 105 drops produce 2 log lines — far fewer than 105, which is the
+	// property under test.
+	const wantLines = 2
+	if lines != wantLines {
+		t.Fatalf("got %d log lines for %d drops, want %d (rate limiting not applied): %s", lines, drops, wantLines, buf.String())
 	}
 }

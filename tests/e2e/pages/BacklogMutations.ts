@@ -136,6 +136,51 @@ export async function deleteBacklogItemDirect(request: APIRequestContext, itemId
   }
 }
 
+/**
+ * Wraps `/api/debug/backlog/seed-work-item-session` (server/services/
+ * backlog_debug_seed_handler.go's handleSeedWorkItemSession) — creates a
+ * backlog item with a linked "work" ItemSession (no backing Session/Worktree
+ * row) so a Playwright test can reach ReviewChangesModal's real "View
+ * Changes" trigger (gated only on a truthy work session, not a worktreePath)
+ * without a real git worktree/tmux session spin-up.
+ */
+export async function seedWorkItemSessionDirect(
+  request: APIRequestContext,
+  opts: { title: string; status?: string }
+): Promise<{ itemId: string; sessionId: string }> {
+  const resp = await request.post(`${BASE_URL}/api/debug/backlog/seed-work-item-session`, {
+    headers: { "Content-Type": "application/json" },
+    data: { title: opts.title, status: opts.status ?? "review" },
+  });
+  if (!resp.ok()) {
+    throw new Error(`seedWorkItemSessionDirect failed (${resp.status()}): ${await resp.text().catch(() => "")}`);
+  }
+  return (await resp.json()) as { itemId: string; sessionId: string };
+}
+
+/**
+ * Wraps `/api/debug/backlog/seed-work-session-with-worktree` (server/
+ * services/backlog_debug_seed_handler.go's handleSeedWorkSessionWithWorktree)
+ * — creates a backlog item with a real (DB-only, no live tmux) work session
+ * backed by a real Session+Worktree row pointing at a real temp directory,
+ * so a Playwright test can reach BacklogFileBrowserModal's real "Browse
+ * files in this worktree" trigger, which is gated on a truthy worktreePath
+ * (unlike ReviewChangesModal's trigger — see seedWorkItemSessionDirect).
+ */
+export async function seedWorkSessionWithWorktreeDirect(
+  request: APIRequestContext,
+  opts: { title: string; status?: string }
+): Promise<{ itemId: string; sessionId: string; worktreePath: string }> {
+  const resp = await request.post(`${BASE_URL}/api/debug/backlog/seed-work-session-with-worktree`, {
+    headers: { "Content-Type": "application/json" },
+    data: { title: opts.title, status: opts.status ?? "review" },
+  });
+  if (!resp.ok()) {
+    throw new Error(`seedWorkSessionWithWorktreeDirect failed (${resp.status()}): ${await resp.text().catch(() => "")}`);
+  }
+  return (await resp.json()) as { itemId: string; sessionId: string; worktreePath: string };
+}
+
 export async function enableBacklogFeatureFlag(request: APIRequestContext): Promise<void> {
   await request.post(`${BASE_URL}/api/session.v1.SessionService/UpdateFeatureFlag`, {
     headers: { "Content-Type": "application/json" },

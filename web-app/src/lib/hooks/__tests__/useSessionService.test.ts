@@ -43,7 +43,7 @@ jest.mock("@connectrpc/connect", () => ({
 }));
 
 jest.mock("@/lib/transport/watch-ws-transport", () => ({
-  createWatchTransport: jest.fn().mockReturnValue({}),
+  createSessionWatchTransport: jest.fn().mockReturnValue({}),
 }));
 
 jest.mock("@/lib/config", () => ({

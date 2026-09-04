@@ -1043,3 +1043,131 @@ func TestGetWorktreeDirtyPaths_NonGitDirectory_ReturnsNilNil(t *testing.T) {
 	require.NoError(t, err)
 	assert.Nil(t, paths)
 }
+
+// TestRecoverBaseCommitSHA_UsesExplicitBranchRef_NotAmbientHEAD is a regression test
+// for backlog item e7664cbf: RecoverBaseCommitSHA used to compute
+// `git merge-base HEAD <branch>`, so its result depended on whatever branch a
+// concurrent process happened to leave the cwd's repo checked out to — unreliable
+// when cwd is the shared parent repoPath, since a concurrent process can leave it on
+// anything. This reproduces that exact hazard by deliberately checking repoDir out to
+// an orphan branch sharing no history at all with the work branch, then confirms the
+// fixed implementation — which compares branchName against each candidate default
+// branch via explicit refs, never implicit HEAD — still recovers the correct
+// merge-base with "main" when run *even in repoDir itself*, entirely unaffected by
+// its ambient checkout.
+func TestRecoverBaseCommitSHA_UsesExplicitBranchRef_NotAmbientHEAD(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	repoDir := t.TempDir()
+	runGitOrFail(t, repoDir, "init", "-b", "main")
+	runGitOrFail(t, repoDir, "config", "user.email", "test@example.com")
+	runGitOrFail(t, repoDir, "config", "user.name", "Test")
+	require.NoError(t, os.WriteFile(repoDir+"/README.md", []byte("base\n"), 0o644))
+	runGitOrFail(t, repoDir, "add", "README.md")
+	runGitOrFail(t, repoDir, "commit", "-m", "initial")
+	mainSHA := strings.TrimSpace(runGitCapture(t, repoDir, "rev-parse", "main"))
+
+	// The session's own dedicated worktree, branched from main, with real committed work.
+	worktreeDir := t.TempDir()
+	runGitOrFail(t, repoDir, "worktree", "add", "-b", "feature", worktreeDir, "main")
+	require.NoError(t, os.WriteFile(worktreeDir+"/feature.txt", []byte("real work\n"), 0o644))
+	runGitOrFail(t, worktreeDir, "add", "feature.txt")
+	runGitOrFail(t, worktreeDir, "commit", "-m", "real fix")
+
+	// Simulate a concurrent process leaving the shared repoPath on an unrelated branch
+	// with no common history with "feature" — the exact shape that made the old
+	// implicit-HEAD implementation unreliable (and, for an orphan branch, would make it
+	// fail outright with "no merge base" rather than merely returning a wrong answer).
+	runGitOrFail(t, repoDir, "checkout", "--orphan", "unrelated")
+	runGitOrFail(t, repoDir, "commit", "--allow-empty", "-m", "unrelated history")
+
+	// Called with dir=repoDir (not worktreeDir) — the worst case for the old ambient-HEAD
+	// implementation — to prove the fix no longer depends on which directory it runs in.
+	recoveredSHA, err := RecoverBaseCommitSHA(ctx, repoDir, "feature")
+	require.NoError(t, err)
+	assert.Equal(t, mainSHA, recoveredSHA, "recovery must find feature's real merge-base with main via explicit refs, unaffected by repoDir's ambient checkout")
+
+	// Also confirm it works from the worktree itself (the preferred cwd in production).
+	recoveredFromWorktree, err := RecoverBaseCommitSHA(ctx, worktreeDir, "feature")
+	require.NoError(t, err)
+	assert.Equal(t, mainSHA, recoveredFromWorktree)
+}
+
+// TestRecoverBaseCommitSHA_MissingDirOrBranch_Errors verifies the guard against an
+// empty directory or branch name errors immediately rather than running a git command
+// against an invalid cwd or ref.
+func TestRecoverBaseCommitSHA_MissingDirOrBranch_Errors(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	_, err := RecoverBaseCommitSHA(ctx, "", "feature")
+	require.Error(t, err)
+
+	_, err = RecoverBaseCommitSHA(ctx, t.TempDir(), "")
+	require.Error(t, err)
+}
+
+// TestIsPathUnderAnyRoot covers the containment logic readPlanFile relies on to
+// reject a PlanArtifactsPath that escapes every allowlisted root -- including
+// the classic prefix-check-without-separator bug class ("/tmp/foo" vs
+// "/tmp/foobar" must NOT be treated as "foobar is under foo").
+func TestIsPathUnderAnyRoot(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	roots := []string{root}
+
+	t.Run("exact root match", func(t *testing.T) {
+		assert.True(t, isPathUnderAnyRoot(filepath.Clean(root), roots))
+	})
+
+	t.Run("legitimate descendant", func(t *testing.T) {
+		descendant := filepath.Join(root, "sub", "dir")
+		assert.True(t, isPathUnderAnyRoot(filepath.Clean(descendant), roots))
+	})
+
+	t.Run("dot-dot escape attempt", func(t *testing.T) {
+		escape := filepath.Join(root, "..", "escaped")
+		assert.False(t, isPathUnderAnyRoot(filepath.Clean(escape), roots))
+	})
+
+	t.Run("sibling directory sharing a string prefix with the root", func(t *testing.T) {
+		// root="/tmp/foo", candidate="/tmp/foobar" -- foobar is NOT under foo,
+		// even though the raw strings share a prefix.
+		siblingWithSharedPrefix := filepath.Clean(root) + "bar"
+		assert.False(t, isPathUnderAnyRoot(siblingWithSharedPrefix, roots))
+	})
+}
+
+// TestReadPlanFile_RejectsPathEscapingAllowedRoots verifies that an
+// artifactsDir outside every root returned by planArtifactsAllowedRoots
+// (repoPath, the worktrees dir, and the triage-artifacts dir) is rejected
+// before any file is read -- readPlanFile must return "" rather than the
+// content of a plan.md that happens to live outside the sandbox.
+func TestReadPlanFile_RejectsPathEscapingAllowedRoots(t *testing.T) {
+	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	repoPath := t.TempDir()
+
+	// A directory entirely unrelated to repoPath, the worktrees dir, or the
+	// triage-artifacts dir -- but which DOES contain a plan.md a broken
+	// containment check might still serve.
+	maliciousDir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(maliciousDir, "plan.md"), []byte("SECRET ESCAPED CONTENT"), 0o644))
+
+	got := readPlanFile(maliciousDir, repoPath)
+	assert.Equal(t, "", got, "readPlanFile must reject an artifactsDir outside every allowed root")
+}
+
+// TestReadPlanFile_AllowsPathUnderRepoPath verifies the legitimate case still
+// works: an artifactsDir under repoPath (one of planArtifactsAllowedRoots)
+// is read normally.
+func TestReadPlanFile_AllowsPathUnderRepoPath(t *testing.T) {
+	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	repoPath := t.TempDir()
+	artifactsDir := filepath.Join(repoPath, "triage-artifacts")
+	require.NoError(t, os.MkdirAll(artifactsDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(artifactsDir, "plan.md"), []byte("legit plan content"), 0o644))
+
+	got := readPlanFile(artifactsDir, repoPath)
+	assert.Equal(t, "legit plan content", got)
+}

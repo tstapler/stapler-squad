@@ -17,11 +17,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// getTestTmuxSocket returns a unique tmux socket name for test isolation
-func getTestTmuxSocket(t *testing.T) string {
-	return "test_" + strings.ReplaceAll(t.Name(), "/", "_")
-}
-
 // mockTmuxExecutor implements executor.Executor for testing tmux commands
 type mockTmuxExecutor struct {
 	sessionsCreated map[string]bool
@@ -143,8 +138,8 @@ func NewTestInstance(t *testing.T, title string) *TestInstanceBuilder {
 			Path:             t.TempDir(),                              // Each test gets its own temp directory
 			Program:          "bash -c 'echo test session; exec bash'", // Safe default program
 			SessionType:      SessionTypeDirectory,
-			AutoYes:          true,                 // Tests shouldn't prompt for input
-			TmuxServerSocket: getTestTmuxSocket(t), // Isolated tmux server per test
+			AutoYes:          true,              // Tests shouldn't prompt for input
+			TmuxServerSocket: testTmuxSocket(t), // Isolated tmux server per test
 		},
 	}
 }

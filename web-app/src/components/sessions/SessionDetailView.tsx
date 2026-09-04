@@ -15,6 +15,7 @@ import { FilesTab } from "./FilesTab";
 import { BrowserTab } from "./BrowserTab";
 import { ArtifactsTab } from "./ArtifactsTab";
 import { SessionSummaryPanel } from "./SessionSummaryPanel";
+import { RetryHistoryList } from "./RetryHistoryList";
 import { VNCStatus } from "@/gen/session/v1/types_pb";
 import { ActionBar } from "@/components/ui/ActionBar";
 import { useSessionActions } from "@/lib/hooks/useSessionActions";
@@ -28,12 +29,14 @@ import { BacklogItemPanel } from "@/components/backlog/BacklogItemPanel";
 import { GoalPanel } from "./GoalPanel";
 import { NotePanel } from "./NotePanel";
 import { WorkspacePeersPanel } from "./WorkspacePeersPanel";
+import { HandoffSummarySection } from "./HandoffSummarySection";
 import { useShells } from "@/lib/hooks/useShells";
 import { useNotifications } from "@/lib/contexts/NotificationContext";
 import { ShellTabLabel } from "./ShellTab";
 import { NewShellDialog } from "./NewShellDialog";
 import { useWorkflows } from "@/lib/hooks/useWorkflows";
 import { attributionBadge } from "./TriggersPanel.css";
+import { routes } from "@/lib/routes";
 import * as styles from "./SessionDetail.css";
 import {
   diffAdded,
@@ -43,6 +46,7 @@ import {
   pausedOverlayReason,
   pausedOverlayButton,
   crashedOverlayIcon,
+  restartedFromLink,
 } from "./SessionDetailView.css";
 import { tabDisabled } from "./SessionDetail.css";
 import { formatPauseReason } from "@/lib/sessions/formatPauseReason";
@@ -316,7 +320,10 @@ export interface SessionDetailViewProps {
 // (terminal state, cannot transition further)." Used to gate the Summary
 // tab, which only has content once the session has ended.
 function isSessionTerminal(status: SessionStatus): boolean {
-  return status === SessionStatus.STOPPED;
+  // PermanentlyFailed is terminal-like (session-retry-backoff): the retry
+  // policy has given up for this episode, so the Summary tab's content is
+  // just as final as a plain Stopped session's, until "Retry now" re-arms it.
+  return status === SessionStatus.STOPPED || status === SessionStatus.PERMANENTLY_FAILED;
 }
 
 function getStatusLabel(status: SessionStatus): string {
@@ -328,6 +335,7 @@ function getStatusLabel(status: SessionStatus): string {
     case SessionStatus.NEEDS_APPROVAL: return "Needs Approval";
     case SessionStatus.CREATING: return "Creating";
     case SessionStatus.STOPPED: return "Stopped";
+    case SessionStatus.PERMANENTLY_FAILED: return "Failed";
     default: return "Unknown";
   }
 }
@@ -411,6 +419,16 @@ export function SessionDetailView({
     : undefined;
   const isAutomatedTrigger = !!triggerWorkflow &&
     ["cron", "github_push", "webhook"].includes(triggerWorkflow.triggerType);
+
+  // Restart lineage (context-compression, UX acceptance criterion #10): resolve
+  // session.restartedFromSessionId against the live session list so the "Restarted
+  // from:" row can link to the source session by title when it's still around, and
+  // gracefully fall back to a plain, non-clickable "(no longer available)" label when
+  // it's been archived/deleted since the restart — mirrors the trigger-attribution
+  // lookup above.
+  const restartSourceSession = session.restartedFromSessionId
+    ? allSessions.find((s) => s.id === session.restartedFromSessionId)
+    : undefined;
 
   // Shell tabs
   const { shells, spawnShell, stopShell, restartShell, deleteShell, updateShellStatus } = useShells(session.id);
@@ -1150,6 +1168,7 @@ export function SessionDetailView({
                 setFilesSelectedPath(path);
                 handleTabChange("files");
               }}
+              onBrowseFiles={() => handleTabChange("files")}
             />
           </div>
         )}
@@ -1195,6 +1214,29 @@ export function SessionDetailView({
                 <div className={styles.infoItem}>
                   <span className={styles.infoLabel}>Instance Type:</span>
                   <span className={styles.infoValue}>External</span>
+                </div>
+              )}
+              {/* Restart lineage (context-compression UX AC#10) — only rendered when this
+                  session was created via "Restart with summary"; gracefully degrades to
+                  plain text (no dead link) when the source session is gone. */}
+              {session.restartedFromSessionId && (
+                <div className={styles.infoItem} data-testid="restarted-from-row">
+                  <span className={styles.infoLabel}>Restarted from:</span>
+                  <span className={styles.infoValue}>
+                    {restartSourceSession ? (
+                      <a
+                        href={routes.sessionDetail(restartSourceSession.id)}
+                        className={restartedFromLink}
+                        data-testid="restarted-from-link"
+                      >
+                        ↗ {restartSourceSession.title}
+                      </a>
+                    ) : (
+                      <span data-testid="restarted-from-unavailable">
+                        {session.restartedFromSessionId} (no longer available)
+                      </span>
+                    )}
+                  </span>
                 </div>
               )}
               {/* Timestamps */}
@@ -1611,6 +1653,9 @@ export function SessionDetailView({
             />
             {/* Other sessions sharing this workspace — shown when peers exist */}
             <WorkspacePeersPanel session={session} />
+            {/* Restart-handoff summary record (Story 3.3.1) — always rendered,
+                explicit empty state when no HandoffSummary row exists yet. */}
+            <HandoffSummarySection sessionId={session.id} />
           </div>
         )}
         {activeTab === "artifacts" && (
@@ -1621,6 +1666,7 @@ export function SessionDetailView({
         {activeTab === "summary" && (
           <div className={styles.tabContent} role="tabpanel" aria-labelledby="tab-summary">
             <SessionSummaryPanel sessionId={session.id} />
+            <RetryHistoryList history={session.retryHistory} />
           </div>
         )}
       </div>

@@ -39,7 +39,7 @@ func (i *Instance) touchUpdatedAt() {
 // transitionTo validates and executes a state transition using the TransitionDef table.
 // Must be called with i.mu held.
 func (i *Instance) transitionTo(ctx context.Context, to Status) error {
-	def, ok := transitionIndex[transitionKey{i.Status, to}]
+	def, ok := lookupTransition(i.Status, to)
 	if !ok {
 		return ErrInvalidTransition{From: i.Status, To: to}
 	}
@@ -77,7 +77,7 @@ func transitionToLocked(s *instanceState, ctx context.Context, to Status) error 
 	i.mu.RLock()
 	status := i.Status
 	i.mu.RUnlock()
-	def, ok := transitionIndex[transitionKey{status, to}]
+	def, ok := lookupTransition(status, to)
 	if !ok {
 		return ErrInvalidTransition{From: status, To: to}
 	}
@@ -163,6 +163,49 @@ func (i *Instance) IsHibernated() bool {
 // GetLifecycleStatus returns the current lifecycle status as a typed Status value.
 func (i *Instance) GetLifecycleStatus() Status {
 	return i.Snapshot().Status
+}
+
+// FailureReason returns the human-readable reason the async creation pipeline
+// failed. Meaningful only when GetLifecycleStatus() == Failed; empty otherwise.
+// Read-only: there is no public setter (see failureReason's doc comment in
+// instance.go for why).
+func (i *Instance) FailureReason() string {
+	var reason string
+	_ = i.sendSyncErr(func(s *instanceState) error {
+		reason = s.inst.failureReason
+		return nil
+	})
+	return reason
+}
+
+// StatusAndFailureReason returns Status and FailureReason captured together in
+// one actor round-trip. Unlike calling GetLifecycleStatus() (a lock-free read
+// off the published snapshot) followed by a separate FailureReason() call (a
+// second, independent actor round-trip), this guarantees the pair cannot
+// straddle an intervening write (e.g. TryStartRetry resetting Status to
+// Creating between the two reads while leaving the prior attempt's
+// failureReason in place until TryForceStatusIfEpoch's next closure clears
+// it). Used by AwaitCreationTerminal (server/services/session_creation_await.go)
+// to build its CreationOutcome snapshot atomically.
+func (i *Instance) StatusAndFailureReason() (status Status, failureReason string) {
+	_ = i.sendSyncErr(func(s *instanceState) error {
+		status = s.inst.Status
+		failureReason = s.inst.failureReason
+		return nil
+	})
+	return status, failureReason
+}
+
+// CreationProgressUpdatedAt returns when CreationProgress was last set. Used by
+// the Stale-Creation Sweeper (Epic 4.1) to judge a Creating instance's actual
+// progress rather than only its Creating-onset time.
+func (i *Instance) CreationProgressUpdatedAt() time.Time {
+	var t time.Time
+	_ = i.sendSyncErr(func(s *instanceState) error {
+		t = s.inst.creationProgressUpdatedAt
+		return nil
+	})
+	return t
 }
 
 // GetCategoryPath returns the category path as a slice of strings for nested category support
@@ -326,14 +369,21 @@ func (i *Instance) Started() bool {
 	return i.started.Load()
 }
 
-// RecoverFromStopped resets a stale Stopped status to Creating so the instance can be
-// hot-restored via Start(false). Only call this during startup reconciliation when
-// the tmux session is confirmed alive; it bypasses the state machine intentionally.
+// RecoverFromStopped resets a stale Stopped or PermanentlyFailed status to
+// Creating so the instance can be hot-restored via Start(false). Only call
+// this during startup reconciliation (Stopped case) or from restartForRetry's
+// PermanentlyFailed/Stopped recovery branch when the tmux session is confirmed
+// alive or being cold-restored; it bypasses the state machine intentionally.
+// The PermanentlyFailed case backs RetryNow()'s manual "Retry now" recovery
+// (AC6) — without it, RecoverFromStopped silently no-op'd for a
+// PermanentlyFailed instance (it only ever checked Status == Stopped), and
+// startLocked's later `if i.Status != Active` transition would then be
+// attempted from PermanentlyFailed, which has no entry in transitionIndex.
 // Deprecated: prefer transitionTo(ctx, Active) on the Stopped→Active path.
 func (i *Instance) RecoverFromStopped() {
 	i.mu.Lock()
 	defer i.mu.Unlock()
-	if i.Status == Stopped {
+	if i.Status == Stopped || i.Status == PermanentlyFailed {
 		i.loadStatus(Creating)
 		i.touchUpdatedAt()
 		i.started.Store(false)

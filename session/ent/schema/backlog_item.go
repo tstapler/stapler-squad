@@ -234,6 +234,7 @@ func (BacklogItem) Indexes() []ent.Index {
 		index.Fields("status", "updated_at"),
 		index.Fields("status", "queued_at"),
 		index.Fields("external_id"),
+		index.Fields("external_url"),
 		index.Fields("status"),
 		index.Fields("status", "chain_fired"),
 	}

@@ -193,6 +193,7 @@ func (l *PostgresAdvisoryLock) hashResource(resource string) int64 {
 	hash := h.Sum64()
 
 	// Combine with namespace (XOR to preserve distribution)
+	// #nosec G115 -- full-width uint64->int64 bit-pattern reinterpretation for use as an opaque hash key; no truncation occurs and sign has no semantic meaning here
 	return int64(hash) ^ l.namespace
 }
 

@@ -1581,7 +1581,7 @@ func (r *EntRepository) RevertChainFireClaim(ctx context.Context, id string) err
 // ListItemSessions (see server/mcp/tools_backlog.go's listItemSessionsFn doc
 // comment): EntRepository has no second real implementation to abstract
 // this over, so adding it to the interface would be pure speculation
-// (see .claude/rules/interface-pollution-checklist.md).
+// (see the `interface-pollution-checklist` skill).
 func (r *EntRepository) TransitionBacklogItemStatusWithPRFields(ctx context.Context, id string, toStatus BacklogStatus, prURL string, prNumber int, precondition *BacklogItemPrecondition, triggeredBy string) (*BacklogItemData, error) {
 	parsedID, err := r.resolveBacklogItemLookup(ctx, id)
 	if err != nil {
@@ -2262,6 +2262,7 @@ func (r *EntRepository) CreateItemSource(ctx context.Context, data ItemSourceDat
 
 // ListItemSources returns all registered item sources.
 func (r *EntRepository) ListItemSources(ctx context.Context) ([]ItemSourceData, error) {
+	//nolint:entfullscan small, bounded-by-nature table (one row per registered source), intentionally returns all.
 	sources, err := r.client.ItemSource.Query().All(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list item sources: %w", err)
@@ -2344,6 +2345,29 @@ func (r *EntRepository) GetItemSourceByID(ctx context.Context, id string) (*ent.
 		return nil, fmt.Errorf("failed to get item source %s: %w", id, err)
 	}
 	return src, nil
+}
+
+// GetBacklogItemByExternalURL retrieves a BacklogItem by its external_url —
+// used by manual imports (e.g. ImportGitHubIssue) that have no ItemSource row
+// to scope an external_id lookup by (see GetBacklogItemByExternalID), so they
+// dedup on the issue/PR URL instead. external_url has no uniqueness
+// constraint at the schema level, and rows created before this dedup check
+// existed may already repeat one, so this uses First (oldest match) rather
+// than Only — which would hard-error on exactly the pre-existing-duplicate
+// data this lookup exists to stop compounding.
+func (r *EntRepository) GetBacklogItemByExternalURL(ctx context.Context, externalURL string) (*BacklogItemData, error) {
+	item, err := r.client.BacklogItem.Query().
+		Where(backlogitem.ExternalURL(externalURL)).
+		Order(ent.Asc(backlogitem.FieldCreatedAt)).
+		First(ctx)
+	if err != nil {
+		if ent.IsNotFound(err) {
+			return nil, ErrNotFound
+		}
+		return nil, fmt.Errorf("failed to query backlog item by external_url %q: %w", externalURL, err)
+	}
+	result := backlogItemToData(item)
+	return &result, nil
 }
 
 // GetBacklogItemByExternalID retrieves a BacklogItem by its external_id, scoped
@@ -2540,6 +2564,7 @@ func (r *EntRepository) FinishSourceSync(ctx context.Context, sourceID string, c
 // GetAllItemSessionsWithBacklogInfo returns all item sessions joined with their parent
 // backlog item's ID, title, and status. Used by the Insights dashboard index.
 func (r *EntRepository) GetAllItemSessionsWithBacklogInfo(ctx context.Context) ([]ItemSessionBacklogEntry, error) {
+	//nolint:entfullscan feeds the Insights dashboard, which needs the full join across all item sessions.
 	sessions, err := r.client.ItemSession.Query().
 		WithBacklogItem().
 		All(ctx)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"strconv"
 	"strings"
@@ -196,21 +197,12 @@ func NewTymuxGRPCSession(transport rpcTransport) TymuxManager {
 // --- Lifecycle ---
 
 // validateWorkDir rejects an empty or nonexistent working directory before
-// ever reaching tymuxd, mirroring session/tmux/tmux.go's own
-// validateWorkDir (tmux.go:1196-1212) check-shape exactly (Task 2.2.1a). It
-// reuses tmux.ErrWorkDirMissing (rather than inventing a second sentinel)
-// so a caller-side errors.Is(err, tmux.ErrWorkDirMissing) check behaves
-// identically regardless of which backend is in play.
+// reaching tymuxd. Delegates to tmux.ValidateWorkDir and adds a "tymux: "
+// prefix; errors.Is(err, tmux.ErrWorkDirMissing) still works through the
+// extra %w layer.
 func validateWorkDir(workDir string) error {
-	if workDir == "" {
-		return fmt.Errorf("tymux: working directory not set: %w", tmux.ErrWorkDirMissing)
-	}
-	info, err := os.Stat(workDir)
-	if err != nil {
-		return fmt.Errorf("tymux: working directory %q is not accessible: %w: %w", workDir, tmux.ErrWorkDirMissing, err)
-	}
-	if !info.IsDir() {
-		return fmt.Errorf("tymux: working directory %q is not a directory: %w", workDir, tmux.ErrWorkDirMissing)
+	if err := tmux.ValidateWorkDir(workDir); err != nil {
+		return fmt.Errorf("tymux: %w", err)
 	}
 	return nil
 }
@@ -585,6 +577,9 @@ func parseScrollbackOffset(v string) uint32 {
 	n, err := strconv.Atoi(v)
 	if err != nil || n < 0 {
 		return 0
+	}
+	if n > math.MaxUint32 {
+		return math.MaxUint32
 	}
 	return uint32(n)
 }

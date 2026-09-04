@@ -324,12 +324,14 @@ type cachedRepo struct {
 
 	// untrackedMatcherBuilt/untrackedMatcher cache the compiled gitignore
 	// matcher used by the untracked-file walk in diffShortstatUncached.
-	// Rebuilt only when HEAD moves (resolveHeadTreeHashes clears
-	// untrackedMatcherBuilt on a HEAD change) — the same invalidation signal
-	// used for headTreeCache/blobCache above. This means a .gitignore edit
-	// made between HEAD moves can be stale for up to one poll cycle, an
-	// acceptable trade-off matching this file's other TTL-based staleness
-	// tolerances (e.g. diffStatCacheTTL). Guarded by mu, same as the fields above.
+	// Rebuilt only when HEAD moves AND a .gitignore file actually changed
+	// (resolveHeadTreeHashes clears untrackedMatcherBuilt in that case,
+	// checked via gitignoreEntriesChanged) — most commits don't touch
+	// .gitignore, so this avoids paying gitignore.ReadPatterns' recursive
+	// filesystem walk on every commit. A .gitignore edit made between HEAD
+	// moves can still be stale for up to one poll cycle, an acceptable
+	// trade-off matching this file's other TTL-based staleness tolerances
+	// (e.g. diffStatCacheTTL). Guarded by mu, same as the fields above.
 	untrackedMatcherBuilt bool
 	untrackedMatcher      gitignore.Matcher
 }
@@ -339,7 +341,7 @@ type cachedRepo struct {
 // cachedRepo wrapping them is evicted from repoCache — concretely,
 // *gogitstore.WorktreeStorer (see gogitstore/storer.go's Close method).
 // Declared here, in the consumer package, scoped to exactly the one method
-// this file needs — see .claude/rules/interface-pollution-checklist.md
+// this file needs — see the `interface-pollution-checklist` skill
 // (interfaces belong next to their consumer, not their implementer).
 type gogitstoreCloser interface {
 	Close() error
@@ -737,7 +739,9 @@ func (g *GoGitVCSReader) ListWorktrees(repoPath string) ([]WorktreeInfo, error) 
 		base := filepath.Join(worktreesDir, entry.Name())
 
 		// gitdir file contains the absolute path to the worktree's .git file.
-		gitdirData, err := os.ReadFile(filepath.Join(base, "gitdir"))
+		// base is built from entry.Name(), enumerated by os.ReadDir(worktreesDir)
+		// just above -- a trusted filesystem listing, not user input.
+		gitdirData, err := os.ReadFile(filepath.Join(base, "gitdir")) // #nosec G304 -- base comes from a trusted os.ReadDir listing, not user input
 		if err != nil {
 			continue
 		}
@@ -747,7 +751,7 @@ func (g *GoGitVCSReader) ListWorktrees(repoPath string) ([]WorktreeInfo, error) 
 		wt := WorktreeInfo{Path: wtPath}
 
 		// Read HEAD: either "ref: refs/heads/<branch>" or a bare SHA.
-		headData, err := os.ReadFile(filepath.Join(base, "HEAD"))
+		headData, err := os.ReadFile(filepath.Join(base, "HEAD")) // #nosec G304 -- base comes from a trusted os.ReadDir listing, not user input
 		if err == nil {
 			headStr := strings.TrimSpace(string(headData))
 			const refPrefix = "ref: refs/heads/"
@@ -859,18 +863,58 @@ func resolveHeadTreeHashes(g *GoGitVCSReader, entry *cachedRepo, repo *git.Repos
 		// mapping above is stale, but blobCache is keyed by content hash, not
 		// by name/HEAD, so it stays valid and is intentionally left alone
 		// (see the blobCache field comment — PerfFix-1).
-		entry.untrackedMatcherBuilt = false // F6: force a gitignore matcher rebuild too.
-		if entry.headTreeCache != nil {
-			// Only count an invalidation once the matcher has actually been
-			// built at least once (headTreeCache != nil implies a prior
-			// populate) — the first-ever build below isn't "invalidated by
-			// a HEAD move," it's just startup.
-			atomic.AddInt64(&g.gitignoreMatcherInvalidations, 1)
+		//
+		// The gitignore matcher only needs rebuilding if a .gitignore file's
+		// content actually changed -- most commits don't touch one, but
+		// unconditionally invalidating on every HEAD move forced a full
+		// gitignore.ReadPatterns recursive filesystem walk per commit
+		// regardless (profiled at 55-82% of a CPU core on a machine with
+		// frequent commit activity across many worktrees). headTreeCache
+		// (old) and headHashes (new) already have every tracked file's path
+		// and blob hash from the walk above, so checking just the
+		// .gitignore-named entries for a real change is free by comparison.
+		if entry.headTreeCache == nil || gitignoreEntriesChanged(entry.headTreeCache, headHashes) {
+			entry.untrackedMatcherBuilt = false // F6: force a gitignore matcher rebuild too.
+			if entry.headTreeCache != nil {
+				// Only count an invalidation once the matcher has actually been
+				// built at least once (headTreeCache != nil implies a prior
+				// populate) — the first-ever build below isn't "invalidated by
+				// a HEAD move," it's just startup.
+				atomic.AddInt64(&g.gitignoreMatcherInvalidations, 1)
+			}
 		}
 	}
 	entry.headTreeHash = headHash
 	entry.headTreeCache = headHashes
 	return headHashes, nil
+}
+
+// gitignoreEntriesChanged reports whether any ".gitignore" blob (at any
+// directory depth) was added, removed, or modified between old and new
+// head-tree snapshots. Both maps come from resolveHeadTreeHashes's tree walk,
+// so this is an O(tracked-file-count) in-memory map comparison, not a
+// filesystem walk — still orders of magnitude cheaper than
+// gitignore.ReadPatterns' recursive I/O.
+func gitignoreEntriesChanged(old, newer map[string]plumbing.Hash) bool {
+	isGitignore := func(name string) bool {
+		return name == ".gitignore" || strings.HasSuffix(name, "/.gitignore")
+	}
+	for name, hash := range newer {
+		if !isGitignore(name) {
+			continue
+		}
+		if oldHash, ok := old[name]; !ok || oldHash != hash {
+			return true
+		}
+	}
+	for name := range old {
+		if isGitignore(name) {
+			if _, ok := newer[name]; !ok {
+				return true // a .gitignore file was removed
+			}
+		}
+	}
+	return false
 }
 
 // getOrBuildUntrackedMatcher returns the cached gitignore matcher for entry,
@@ -1589,7 +1633,9 @@ func readFileIfSmall(path string) ([]byte, bool) {
 	if info.Size() > maxUntrackedFileSize {
 		return nil, false
 	}
-	data, err := os.ReadFile(path) //nolint:gosec
+	// path is walked from repoPath by walkUntrackedFiles (an internal directory
+	// walk over the session's own git worktree), not user/RPC input.
+	data, err := os.ReadFile(path) // #nosec G304 -- path comes from an internal directory walk over the worktree, not user input
 	if err != nil {
 		return nil, false
 	}
@@ -1792,7 +1838,10 @@ func walkUntrackedRec(dir string, indexed map[string]struct{}, matcher gitignore
 // index) always live here, never in the shared commondir.
 func worktreeGitDir(repoPath string) string {
 	gitPath := filepath.Join(repoPath, ".git")
-	data, err := os.ReadFile(gitPath)
+	// repoPath is the local repo/worktree directory this server itself
+	// manages for the session (Instance.Path), validated to exist at session
+	// creation -- not raw untrusted network/RPC input.
+	data, err := os.ReadFile(gitPath) // #nosec G304 -- repoPath is the session's own worktree directory, not user-supplied network input
 	if err != nil {
 		// .git is a directory (or missing).
 		return gitPath
@@ -1816,7 +1865,8 @@ func worktreeGitDir(repoPath string) string {
 // resolving through the .git file in linked worktrees.
 func gitCommonDir(repoPath string) string {
 	gitPath := filepath.Join(repoPath, ".git")
-	data, err := os.ReadFile(gitPath)
+	// repoPath is the session's own worktree directory (see worktreeGitDir above).
+	data, err := os.ReadFile(gitPath) // #nosec G304 -- repoPath is the session's own worktree directory, not user-supplied network input
 	if err != nil {
 		// .git is a directory (or missing).
 		return gitPath
@@ -1828,8 +1878,9 @@ func gitCommonDir(repoPath string) string {
 		return gitPath
 	}
 	wtGitDir := strings.TrimPrefix(line, prefix)
-	// Each per-worktree gitdir contains a "commondir" file pointing to the main .git.
-	if cdData, err := os.ReadFile(filepath.Join(wtGitDir, "commondir")); err == nil {
+	// wtGitDir is parsed from gitPath above, which is itself rooted at the
+	// trusted repoPath -- not user input.
+	if cdData, err := os.ReadFile(filepath.Join(wtGitDir, "commondir")); err == nil { // #nosec G304 -- wtGitDir derives from repoPath's own .git file, not user input
 		commondir := strings.TrimSpace(string(cdData))
 		if !filepath.IsAbs(commondir) {
 			commondir = filepath.Join(wtGitDir, commondir)

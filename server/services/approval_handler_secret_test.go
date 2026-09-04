@@ -71,7 +71,7 @@ func TestApprovalHandler_SecretNotPersistedToAnalytics(t *testing.T) {
 
 	// Wait for the async analytics write to complete.
 	require.Eventually(t, func() bool {
-		entries, err := analyticsStore.LoadWindow(time.Now().Add(-1 * time.Hour))
+		entries, err := analyticsStore.LoadWindow(context.Background(), time.Now().Add(-1*time.Hour))
 		if err != nil {
 			return false
 		}
@@ -84,7 +84,7 @@ func TestApprovalHandler_SecretNotPersistedToAnalytics(t *testing.T) {
 	}, 2*time.Second, 10*time.Millisecond, "analytics entry for session-1 must be persisted within 2s")
 
 	// Load all analytics entries from the window.
-	entries, err := analyticsStore.LoadWindow(time.Now().Add(-1 * time.Hour))
+	entries, err := analyticsStore.LoadWindow(context.Background(), time.Now().Add(-1*time.Hour))
 	require.NoError(t, err)
 
 	// Find the entry from this test.
@@ -112,7 +112,7 @@ func TestApprovalHandler_LoadWindow_ContainsNoSecret(t *testing.T) {
 
 	// Wait for the async analytics write to complete.
 	require.Eventually(t, func() bool {
-		entries, err := analyticsStore.LoadWindow(time.Now().Add(-1 * time.Hour))
+		entries, err := analyticsStore.LoadWindow(context.Background(), time.Now().Add(-1*time.Hour))
 		if err != nil {
 			return false
 		}
@@ -124,7 +124,7 @@ func TestApprovalHandler_LoadWindow_ContainsNoSecret(t *testing.T) {
 		return false
 	}, 2*time.Second, 10*time.Millisecond, "analytics entry for session-2 must be persisted within 2s")
 
-	entries, err := analyticsStore.LoadWindow(time.Now().Add(-1 * time.Hour))
+	entries, err := analyticsStore.LoadWindow(context.Background(), time.Now().Add(-1*time.Hour))
 	require.NoError(t, err)
 
 	for _, e := range entries {

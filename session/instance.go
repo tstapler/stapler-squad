@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/user"
@@ -15,12 +16,25 @@ import (
 	"github.com/google/uuid"
 	"github.com/linkdata/deadlock"
 	"github.com/tstapler/stapler-squad/config"
+	"github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/artifacts"
 	"github.com/tstapler/stapler-squad/session/detection"
 	"github.com/tstapler/stapler-squad/session/sshremote"
 	"github.com/tstapler/stapler-squad/session/tmux"
+	"github.com/tstapler/stapler-squad/session/tymux"
 )
+
+// logPTYUnavailableIfUnexpected logs a GetPTY() failure as ERROR unless it's
+// tymux.ErrNotSupportedOnTymuxBackend, which every TymuxBackend session
+// returns as a matter of course (see that error's own doc comment) —
+// logging it there would be spurious noise, not a real failure signal.
+func logPTYUnavailableIfUnexpected(msg, sessionTitle string, ptyErr error) {
+	if errors.Is(ptyErr, tymux.ErrNotSupportedOnTymuxBackend) {
+		return
+	}
+	log.Error(msg, "session", sessionTitle, "err", ptyErr)
+}
 
 type Status int
 
@@ -44,6 +58,21 @@ const (
 	// Unlike Stopped, a Crashed session is not auto-recovered by the health checker —
 	// it surfaces to the user/automation for an explicit resume (see ExitReason).
 	Crashed Status = 6
+	// PermanentlyFailed is a terminal state reached when the configurable retry
+	// policy's automated crash/stall recovery (session/retry_state.go) exhausts
+	// MaxAttempts, or a failure reason isn't in RetryOn at all. Unlike Stopped, it
+	// is not auto-revived by reconcileSessions even if tmux is alive — it's a
+	// deliberate terminal state pending human action via "Retry now"
+	// (Instance.RetryNow), not an incidental stop. See ADR-001.
+	PermanentlyFailed Status = 7
+	// Failed is a non-terminal state: the async creation pipeline (Background
+	// Resolution Pipeline, Epic 2.2) failed before the session ever reached
+	// Active. Distinct from Crashed (a previously-Active session whose process
+	// later exited abnormally): Failed→Creating is a legal transition, used by
+	// the retry path (Epic 1.2's TryStartRetry), while Crashed only recovers to
+	// Active. See ADR-001 and SESSION_STATUS_FAILED in
+	// proto/session/v1/types.proto.
+	Failed Status = 8
 
 	// Deprecated: use Active.
 	Running = Active
@@ -70,6 +99,10 @@ func (s Status) String() string {
 		return "Restoring"
 	case Crashed:
 		return "Crashed"
+	case PermanentlyFailed:
+		return "PermanentlyFailed"
+	case Failed:
+		return "Failed"
 	default:
 		return fmt.Sprintf("Status(%d)", int(s))
 	}
@@ -95,6 +128,12 @@ const (
 	// both.
 	EventStopped
 )
+
+// ReasonColdRestoreLostHistory is passed to fireLifecycleEvent(EventStarted, ...)
+// when a cold restore was forced fresh after recoverConversationBeforeLaunch's
+// recovery attempt found nothing, despite EverHadConversationHistory being true
+// (session-revive-uuid-loss AC3).
+const ReasonColdRestoreLostHistory = "cold-restore-fresh-lost-history"
 
 // LifecycleListener is implemented by any component that wants to receive Instance
 // lifecycle notifications. Implementations must be non-blocking; use a goroutine
@@ -241,6 +280,13 @@ type Instance struct {
 	GitHubChangesReqCount int `json:"github_changes_req_count,omitempty"`
 	// GitHubCheckConclusion is the CI rollup: success/failure/pending/action_required/neutral/""
 	GitHubCheckConclusion string `json:"github_check_conclusion,omitempty"`
+	// GitHubChecks is the itemized statusCheckRollup from the last successful poll.
+	GitHubChecks []github.CheckItem `json:"github_checks,omitempty"`
+	// GitHubReviewFeedback is the itemized review list (author/state/body) from the
+	// last successful poll.
+	GitHubReviewFeedback []github.ReviewItem `json:"github_review_feedback,omitempty"`
+	// GitHubMergeable mirrors PRInfo.Mergeable: "mergeable"/"conflicting"/"unknown".
+	GitHubMergeable string `json:"github_mergeable,omitempty"`
 	// GitHubPRStatusTerminal is true when the PR is merged/closed and polling should stop
 	GitHubPRStatusTerminal bool `json:"github_pr_status_terminal,omitempty"`
 	// LastPRStatusCheck is when the PR status was last successfully fetched
@@ -249,6 +295,13 @@ type Instance struct {
 	Checkpoints      CheckpointList
 	ActiveCheckpoint string
 	ForkedFromID     string
+	// RestartedFromSessionID is the ID of the source session this session was
+	// restarted from (CreateSessionRequest.restart_from_session_id), empty for
+	// normally-created sessions. Distinct from ForkedFromID, which records
+	// checkpoint-based forking -- this lineage comes from Story 2.3.1's
+	// restart-from-session-id flow (CreateSession's restart-source resolution
+	// block in server/services/session_service.go).
+	RestartedFromSessionID string
 
 	// OneShot runs claude in -p mode; the session exits after the task completes.
 	OneShot bool
@@ -264,6 +317,15 @@ type Instance struct {
 	// HistoryFilePath is the path to the Claude conversation JSONL history file.
 	// Set by HistoryLinker when it correlates this session to an open JSONL file.
 	HistoryFilePath string
+
+	// EverHadConversationHistory is true once a conversation UUID has ever been
+	// captured for this instance; reset to false only by ClearConversationState().
+	// Guarded by claudeSessionMu, same lock order as HistoryFilePath.
+	EverHadConversationHistory bool
+
+	// LastReviveOutcome records the outcome of the most recent start/cold-restore
+	// decision. Guarded by claudeSessionMu, same lock order as HistoryFilePath.
+	LastReviveOutcome ReviveOutcome
 
 	// MCPServerURL is the URL of the stapler-squad HTTP MCP endpoint.
 	// When set, passed as --mcp-config to claude on session start so no
@@ -288,6 +350,44 @@ type Instance struct {
 	// Set by the async creation goroutine; cleared once the session becomes Active.
 	// Not persisted to the database — only meaningful in-memory during startup.
 	CreationProgress string `json:"-"`
+
+	// creationProgressUpdatedAt records when CreationProgress was last set, so the
+	// Stale-Creation Sweeper (Epic 4.1) can judge how far a killed process actually
+	// got instead of only how long ago it entered Creating. Bumped by
+	// setCreationProgressLocked on every SetCreationProgress call, in the same
+	// actor command as the progress-text write. Unlike CreationProgress itself,
+	// this IS persisted (see session/ent/schema's creation_progress_updated_at)
+	// so it survives a process restart.
+	creationProgressUpdatedAt time.Time
+
+	// failureReason holds the human-readable reason the async creation pipeline
+	// failed. Meaningful only when Status == Failed; empty otherwise. Terminal-write
+	// metadata, not independently-settable progress text (contrast
+	// SetCreationProgress, which ADR-002 deliberately leaves ungated) — there is no
+	// public setter. Only setFailureReasonLocked may write it, called exclusively
+	// from within TryForceStatusIfEpoch's own command closure (Epic 1.2).
+	failureReason string
+
+	// creationEpoch is a fencing counter bumped exactly once per cancel/retry of
+	// the async creation pipeline (ADR-002). A background writer captures the
+	// epoch before starting work and must present it back to
+	// TryForceStatusIfEpoch/UpdateInstanceIfEpoch to win the terminal write —
+	// if the epoch has since moved (a cancel or retry raced ahead of it), the
+	// write is silently dropped instead of overwriting a newer outcome.
+	// Written only by bumpCreationEpoch, called only from cancel/retry code
+	// paths (Phase 3) and from within TryStartRetry's own command closure.
+	creationEpoch uint64
+
+	// creationCancelFunc is the context.CancelFunc for this instance's
+	// Background Resolution Context (Epic 2.2, Story 2.2.1), stored at
+	// pipeline-spawn time so the Cancel RPC (Epic 3.2) can stop an
+	// in-progress creation. Process-local by nature -- a context.CancelFunc
+	// cannot be persisted or reconstructed -- so an instance loaded from
+	// storage without a live pipeline goroutine spawned in the current
+	// process has this nil (Task 3.2.1b's documented nil-guard case, not an
+	// edge case to special-case away). Not part of InstanceSnapshot; like
+	// creationEpoch, actor-goroutine confinement alone serializes access.
+	creationCancelFunc context.CancelFunc
 
 	// LaunchCommand is the full command passed to tmux on session start, including
 	// any injected flags (--resume, --mcp-config, -y, initial prompt). Set once on
@@ -340,20 +440,21 @@ type Instance struct {
 	// ArchivedAt is set when the session is archived. Nil means not archived.
 	ArchivedAt *time.Time `json:"archived_at,omitempty"`
 
-	// Claude Code session information for persistence and re-attachment
-	claudeSession *ClaudeSessionData
+	// claudeExtension holds Claude Code conversation-resume session state
+	// (claudeSession/claudeSessionMu/conversationClearedAt), embedded
+	// anonymously so those fields stay accessible as i.claudeSession etc.
+	// See claudeExtension's doc comment (instance_claude.go) for why this is
+	// always populated regardless of Program, unlike piExtension below.
+	claudeExtension
 
-	// conversationClearedAt records when ClearConversationState() last ran, so
-	// tryExtractConversationUUID's DetectByPath fallback won't resurrect a JSONL
-	// predating an explicit "start fresh" request. In-memory only — does not
-	// survive a process restart (see ADR-001, Consequences). Guarded by
-	// claudeSessionMu, not i.mu.
-	conversationClearedAt time.Time
-
-	// claudeSessionMu protects claudeSession, conversationClearedAt, and
-	// claudeSessionIDSavedCallback.
-	// Separate from mu to avoid holding the instance write lock during persistence I/O.
-	claudeSessionMu sync.RWMutex
+	// piExtension holds pi-coding-agent controller and session state
+	// (piSession/piSessionMu/piStatusSrc/piStatusStartMu), embedded
+	// anonymously so those fields stay accessible as i.piSession etc. See
+	// piExtension's doc comment (instance_pi_status.go) -- it implements
+	// programExtension so StartController/StopController
+	// (instance_controller.go) dispatch to it instead of growing another
+	// if-branch.
+	piExtension
 
 	// Review queue integration for tracking sessions needing attention
 	reviewQueue *ReviewQueue
@@ -362,6 +463,24 @@ type Instance struct {
 	// Fields are embedded (promoted) so external code can still access inst.LastViewed etc.
 	// Protected by mu (via sendSyncErr / Snapshot).
 	ReviewState
+
+	// RetryState holds the automated crash/stall retry lifecycle (attempt
+	// count, resolved max, last failure reason, pending-retry timestamp,
+	// history) for the configurable retry policy (session-retry-backoff).
+	// Fields are embedded (promoted) so callers can access inst.RetryAttempt
+	// etc. directly, mirroring ReviewState. Protected by mu.
+	RetryState
+
+	// RetryPolicyOverride is a per-session override for the global
+	// RetryPolicyConfig default, resolved once (global (+) override) at
+	// StartSessionDriver via resolveRetryPolicy. Mirrors ReworkCapOverride's
+	// nil-means-inherit convention. Nil means "use the global default".
+	RetryPolicyOverride *config.RetryPolicyConfig `json:"retry_policy_override,omitempty"`
+
+	// notifier delivers proactive notifications (e.g. a session giving up after
+	// exhausting its retry budget) independent of the passive ReviewQueue.
+	// Set via SetNotifier, mirroring reviewQueue/SetReviewQueue.
+	notifier Notifier
 
 	// controllerManager owns the ClaudeController and InstanceStatusManager references.
 	controllerManager ControllerManager
@@ -438,6 +557,13 @@ type Instance struct {
 	// driverRunning tracks whether a SessionDriver goroutine is active for this instance.
 	// Guarded by CompareAndSwap — see StartSessionDriver.
 	driverRunning atomic.Bool
+	// retryInFlight guards every restart path (automated backoff-expiry,
+	// restart-grace, manual RetryNow) against running concurrently for the
+	// same instance. Claimed exclusively inside restartForRetry via CAS — no
+	// other function CASes it directly, so every restart path is guarded by
+	// construction rather than by each caller remembering to. See
+	// session/retry_state.go's restartForRetry.
+	retryInFlight atomic.Bool
 	// driverStopper carries the stop/done signaling pair for the current
 	// SessionDriver run, if one has ever been started. Set by StartSessionDriver,
 	// read by StopSessionDriver (called from Destroy) to signal and join the
@@ -550,7 +676,7 @@ type Instance struct {
 	// import cycle exists (session/sshremote no longer imports this package
 	// after Part A), and there is no second implementation on the horizon --
 	// introducing an interface purely for testability here is exactly the
-	// speculative abstraction .claude/rules/interface-pollution-checklist.md
+	// speculative abstraction the `interface-pollution-checklist` skill
 	// warns against.
 	remoteApprovalRelay   *sshremote.RemoteApprovalRelay
 	remoteApprovalRelayMu deadlock.Mutex
@@ -694,6 +820,14 @@ type InstanceOptions struct {
 	// ResumeId is the Claude conversation ID to resume (from history browser).
 	// When set, the session will start with --resume <id> flag.
 	ResumeId string
+
+	// RestartedFromSessionID is the ID of the source session this instance is
+	// being restarted from (CreateSessionRequest.restart_from_session_id).
+	// Recorded as lineage metadata only -- path derivation and the still-live
+	// guard are resolved by the CreateSession RPC handler before NewInstance
+	// is called; this field just carries the already-validated source ID
+	// through to the constructed Instance.
+	RestartedFromSessionID string
 
 	// OneShot runs claude in -p mode; the session exits after the task completes.
 	OneShot bool
@@ -852,6 +986,8 @@ func NewInstance(opts InstanceOptions) (*Instance, error) {
 		CLIFlags:        opts.CLIFlags,
 		ExtraArgs:       opts.ExtraArgs,
 		ExecutionTarget: opts.ExecutionTarget,
+		// Restart-from-session lineage (Story 2.3.1)
+		RestartedFromSessionID: opts.RestartedFromSessionID,
 	}
 	if instance.ExecutionTarget == nil {
 		instance.ExecutionTarget = LocalTarget{}
@@ -1079,6 +1215,34 @@ func (i *Instance) recoverConversationBeforeLaunch(firstTimeSetup bool) {
 	i.tryExtractConversationUUID()
 }
 
+// reasonForReviveOutcome returns the fireLifecycleEvent(EventStarted, ...)
+// reason for outcome — non-empty only for ReviveOutcomeFreshLostHistory, so
+// the notification listener in server/services/session_service.go can filter
+// on the reason string alone (session-revive-uuid-loss AC3).
+func reasonForReviveOutcome(outcome ReviveOutcome) string {
+	if outcome == ReviveOutcomeFreshLostHistory {
+		return ReasonColdRestoreLostHistory
+	}
+	return ""
+}
+
+// reviveOutcomeForColdRestore derives the ColdRestore branch's ReviveOutcome
+// (session-revive-uuid-loss AC3) from its three decision inputs. Pure and
+// side-effect-free so startLocked/start share one definition instead of
+// duplicating the branch logic.
+func reviveOutcomeForColdRestore(hadUUIDBeforeRecovery, hasClaudeSession, everHadHistory bool) ReviveOutcome {
+	if hasClaudeSession {
+		if hadUUIDBeforeRecovery {
+			return ReviveOutcomeResumeLive
+		}
+		return ReviveOutcomeResumeRecovered
+	}
+	if everHadHistory {
+		return ReviveOutcomeFreshLostHistory
+	}
+	return ReviveOutcomeFreshExpected
+}
+
 // startLocked is the actor-safe body of Start(). Called only from within
 // sendSyncErr/send closures. The param is named actorState (not s) to make
 // actor-only ownership visually distinct and prevent future edits from treating
@@ -1103,7 +1267,17 @@ func startLocked(actorState *instanceState, firstTimeSetup bool) error {
 		return fmt.Errorf("instance title cannot be empty")
 	}
 
+	// Captured before recoverConversationBeforeLaunch so the cold-restore decision
+	// below can distinguish "already had a UUID, no recovery needed" (ResumeLive)
+	// from "recovery just found one" (ResumeRecovered) — session-revive-uuid-loss AC3.
+	hadUUIDBeforeRecovery := i.HasClaudeSession()
 	i.recoverConversationBeforeLaunch(firstTimeSetup)
+
+	// Set in every branch below (ColdRestore, HotRestore, firstTimeSetup) so
+	// LastReviveOutcome never goes stale across a later cycle that doesn't
+	// enter the ColdRestore branch — session-revive-uuid-loss AC3. Written
+	// once, under lock, at this function's existing final buildSnapshot call.
+	var reviveOutcome ReviveOutcome
 
 	i.pm().ResetExitOnce()
 	i.pm().SetOnExitCallback(instanceOnExitCallback(i))
@@ -1133,11 +1307,16 @@ func startLocked(actorState *instanceState, firstTimeSetup bool) error {
 	if !firstTimeSetup {
 		if !i.pm().IsAlive() {
 			startPath := i.resolveStartPath(i.GetEffectiveRootDir())
-			if i.HasClaudeSession() {
+			hasClaudeSession := i.HasClaudeSession()
+			if hasClaudeSession {
 				log.Info("cold restoring with --resume", "session", i.Title, "uuid", i.claudeSession.ConversationUUID, "path", startPath)
 			} else {
 				log.Warn("cold start: tmux dead, no conversation UUID, starting fresh", "session", i.Title, "path", startPath)
 			}
+			i.claudeSessionMu.RLock()
+			everHadHistory := i.EverHadConversationHistory
+			i.claudeSessionMu.RUnlock()
+			reviveOutcome = reviveOutcomeForColdRestore(hadUUIDBeforeRecovery, hasClaudeSession, everHadHistory)
 			i.startVNCDisplay(context.Background())
 			i.allocateCDPPort()
 			if displayEnv := i.VNCDisplayEnv(); displayEnv != "" {
@@ -1160,7 +1339,7 @@ func startLocked(actorState *instanceState, firstTimeSetup bool) error {
 			}
 			_ = i.pm().RestoreWithWorkDir(startPath)
 			if _, ptyErr := i.pm().GetPTY(); ptyErr != nil {
-				log.Error("cold-restored session: pty attach failed, controller and sendkeys unavailable", "session", i.Title, "err", ptyErr)
+				logPTYUnavailableIfUnexpected("cold-restored session: pty attach failed, controller and sendkeys unavailable", i.Title, ptyErr)
 			}
 			if i.claudeSession != nil {
 				i.claudeSession.ConversationUUID = ""
@@ -1175,6 +1354,8 @@ func startLocked(actorState *instanceState, firstTimeSetup bool) error {
 			// right there to detect from.
 			i.tryExtractConversationUUID()
 		} else {
+			// HotRestore: tmux never died, so nothing was ever at risk of loss.
+			reviveOutcome = ReviveOutcomeResumeLive
 			i.startVNCDisplay(context.Background())
 			i.allocateCDPPort()
 			workDir := i.Path
@@ -1189,6 +1370,8 @@ func startLocked(actorState *instanceState, firstTimeSetup bool) error {
 			log.Info("successfully restored tmux session", "session", i.Title)
 		}
 	} else {
+		// firstTimeSetup: a brand new instance can never have prior history to lose.
+		reviveOutcome = ReviveOutcomeFreshExpected
 		basePath := i.Path
 		if i.gitManager.HasWorktree() {
 			// ExistingWorktree sessions have a pre-created worktree; Setup() would tear it down.
@@ -1266,7 +1449,7 @@ func startLocked(actorState *instanceState, firstTimeSetup bool) error {
 			}
 			_ = i.pm().RestoreWithWorkDir(startPath)
 			if _, ptyErr := i.pm().GetPTY(); ptyErr != nil {
-				log.Error("new session: pty attach failed after retries, controller and sendkeys unavailable", "session", i.Title, "err", ptyErr)
+				logPTYUnavailableIfUnexpected("new session: pty attach failed after retries, controller and sendkeys unavailable", i.Title, ptyErr)
 			}
 		}
 	}
@@ -1283,12 +1466,17 @@ func startLocked(actorState *instanceState, firstTimeSetup bool) error {
 	// runs inside an actor command with no OTHER actor writers to worry about)
 	// because legacy setters (MarkViewed & co.) mutate fields directly under
 	// i.mu.Lock() from outside the actor — see runActor's doc comment in
-	// actor.go for the full explanation.
+	// actor.go for the full explanation. claudeSessionMu nests outside i.mu
+	// around the LastReviveOutcome write too, matching SetHistoryInfo/
+	// ClearConversationState/tryExtractConversationUUID's lock order.
+	i.claudeSessionMu.Lock()
 	i.mu.Lock()
+	i.LastReviveOutcome = reviveOutcome
 	snap := buildSnapshot(i)
 	i.mu.Unlock()
+	i.claudeSessionMu.Unlock()
 	i.snapshot.Store(snap)
-	i.fireLifecycleEvent(EventStarted, "")
+	i.fireLifecycleEvent(EventStarted, reasonForReviveOutcome(reviveOutcome))
 
 	i.startVNCServer(context.Background())
 	i.startCDP(context.Background())
@@ -1329,7 +1517,17 @@ func (i *Instance) start(firstTimeSetup bool, setupCleanup bool, cleanup *tmux.C
 		return fmt.Errorf("instance title cannot be empty")
 	}
 
+	// Captured before recoverConversationBeforeLaunch so the cold-restore decision
+	// below can distinguish "already had a UUID, no recovery needed" (ResumeLive)
+	// from "recovery just found one" (ResumeRecovered) — session-revive-uuid-loss AC3.
+	hadUUIDBeforeRecovery := i.HasClaudeSession()
 	i.recoverConversationBeforeLaunch(firstTimeSetup)
+
+	// Set in every branch below (ColdRestore, HotRestore, firstTimeSetup) so
+	// LastReviveOutcome never goes stale across a later cycle that doesn't
+	// enter the ColdRestore branch — session-revive-uuid-loss AC3. Written
+	// once, under lock, at this function's existing final buildSnapshot call.
+	var reviveOutcome ReviveOutcome
 
 	// Wire the exit callback so control-mode %exit / PTY EOF fires our handler.
 	// ResetExitOnce is called first so repeated start() calls (restarts) allow
@@ -1368,7 +1566,8 @@ func (i *Instance) start(firstTimeSetup bool, setupCleanup bool, cleanup *tmux.C
 		if !i.pm().IsAlive() {
 			// tmux session is dead (machine reboot, tmux kill-server, etc.)
 			startPath := i.resolveStartPath(i.GetEffectiveRootDir())
-			if i.HasClaudeSession() {
+			hasClaudeSession := i.HasClaudeSession()
+			if hasClaudeSession {
 				// Cold restore: we have a conversation UUID — relaunch with --resume.
 				// initTmuxSession() (called above) already built the program command
 				// with --resume via ClaudeCommandBuilder, so Start() uses it directly.
@@ -1377,6 +1576,10 @@ func (i *Instance) start(firstTimeSetup bool, setupCleanup bool, cleanup *tmux.C
 				// Dead tmux, no UUID — start a fresh session without --resume.
 				log.Warn("cold start: tmux dead, no conversation UUID, starting fresh", "session", i.Title, "path", startPath)
 			}
+			i.claudeSessionMu.RLock()
+			everHadHistory := i.EverHadConversationHistory
+			i.claudeSessionMu.RUnlock()
+			reviveOutcome = reviveOutcomeForColdRestore(hadUUIDBeforeRecovery, hasClaudeSession, everHadHistory)
 			// Phase 1: Allocate X display before creating the tmux session so DISPLAY
 			// can be injected via ExtraEnv at new-session time.
 			// context.Background() is safe here: the VNC manager creates its own internal
@@ -1406,7 +1609,7 @@ func (i *Instance) start(firstTimeSetup bool, setupCleanup bool, cleanup *tmux.C
 			// Attach PTY — same pattern as firstTimeSetup path (lines 867-870).
 			_ = i.pm().RestoreWithWorkDir(startPath)
 			if _, ptyErr := i.pm().GetPTY(); ptyErr != nil {
-				log.Error("cold-restored session: pty attach failed, controller and sendkeys unavailable", "session", i.Title, "err", ptyErr)
+				logPTYUnavailableIfUnexpected("cold-restored session: pty attach failed, controller and sendkeys unavailable", i.Title, ptyErr)
 			}
 			// Clear the stored session ID so HistoryLinker re-detects the actual
 			// UUID from the running process's open files. The --resume flag was
@@ -1425,7 +1628,9 @@ func (i *Instance) start(firstTimeSetup bool, setupCleanup bool, cleanup *tmux.C
 			// process/jsonl file is right there to detect from right now.
 			i.tryExtractConversationUUID()
 		} else {
-			// Hot restore: tmux session is alive — attach to it.
+			// Hot restore: tmux session is alive — attach to it. Never died, so
+			// nothing was ever at risk of loss.
+			reviveOutcome = ReviveOutcomeResumeLive
 			// Phase 1 (display) runs here too so VNC is available for the browser tab.
 			// DISPLAY injection via ExtraEnv is not possible for an already-running
 			// session, but x11vnc still needs to start so the browser passthrough works.
@@ -1447,6 +1652,8 @@ func (i *Instance) start(firstTimeSetup bool, setupCleanup bool, cleanup *tmux.C
 			log.Info("successfully restored tmux session", "session", i.Title)
 		}
 	} else {
+		// firstTimeSetup: a brand new instance can never have prior history to lose.
+		reviveOutcome = ReviveOutcomeFreshExpected
 		basePath := i.Path
 		if i.gitManager.HasWorktree() {
 			// ExistingWorktree sessions have a pre-created worktree; Setup() would tear it down.
@@ -1507,16 +1714,21 @@ func (i *Instance) start(firstTimeSetup bool, setupCleanup bool, cleanup *tmux.C
 		// Note: RestoreWithWorkDir always returns nil even on PTY failure; check GetPTY() to confirm.
 		_ = i.pm().RestoreWithWorkDir(startPath)
 		if _, ptyErr := i.pm().GetPTY(); ptyErr != nil {
-			log.Error("new session: pty attach failed after retries, controller and sendkeys unavailable", "session", i.Title, "err", ptyErr)
+			logPTYUnavailableIfUnexpected("new session: pty attach failed after retries, controller and sendkeys unavailable", i.Title, ptyErr)
 		}
 	}
 
+	// claudeSessionMu nests outside i.mu around the LastReviveOutcome write too,
+	// matching SetHistoryInfo/ClearConversationState/tryExtractConversationUUID's
+	// lock order.
+	i.claudeSessionMu.Lock()
 	i.mu.Lock()
 	// Only transition if not already Active (e.g., recovery/restart after KillSession
 	// preserves the Active status).
 	if i.Status != Active {
 		if err := i.transitionTo(context.Background(), Active); err != nil {
 			i.mu.Unlock()
+			i.claudeSessionMu.Unlock()
 			setupErr = fmt.Errorf("failed to transition to Active: %w", err)
 			return setupErr
 		}
@@ -1526,9 +1738,11 @@ func (i *Instance) start(firstTimeSetup bool, setupCleanup bool, cleanup *tmux.C
 	// follow-up) so Started() stays race-free even for callers that don't go
 	// through Snapshot().
 	i.started.Store(true)
+	i.LastReviveOutcome = reviveOutcome
 	i.snapshot.Store(buildSnapshot(i))
 	i.mu.Unlock()
-	i.fireLifecycleEvent(EventStarted, "")
+	i.claudeSessionMu.Unlock()
+	i.fireLifecycleEvent(EventStarted, reasonForReviveOutcome(reviveOutcome))
 
 	// Phase 2: Start x11vnc and window tracker now that the tmux session is live.
 	// Run unconditionally (not gated on firstTimeSetup) so hot-restores also get VNC.
@@ -1577,6 +1791,17 @@ func (i *Instance) Destroy() error {
 	// (session_driver.go) polls this every driverPollInterval and exits on
 	// seeing it, rather than continuing until its own 25-minute deadline.
 	i.destroyed.Store(true)
+
+	// Evict this session's entry from PiExtensionHealthTracker (pi-support
+	// Epic 4.2 MAJOR 1 fix) so the tracker's map doesn't grow unboundedly for
+	// the life of the process. Gated on isPi to avoid a no-op resolver call on
+	// every single non-pi session's destroy; nil-checked since not every
+	// deployment wires SetPiExtensionHealthForgetter (e.g. tests).
+	if isPi(i.Program) {
+		if forgetter := getPiExtensionHealthForgetter(); forgetter != nil {
+			forgetter(i.GetStableID())
+		}
+	}
 
 	defer i.fireLifecycleEvent(EventStopped, "operator-destroy")
 	defer i.cleanupPromptFile()
@@ -1859,6 +2084,73 @@ func (i *Instance) Resume() error {
 	return nil
 }
 
+// StopByUser transitions an Active, Paused, or Hibernated session to Stopped in
+// response to a direct user action (e.g. a board-view drag into "Complete").
+// Mirrors pauseLocked's cleanup (stop controller, commit-if-dirty, kill tmux, remove
+// worktree) but lands in Stopped instead of Paused.
+func (i *Instance) StopByUser() error {
+	return i.sendSyncErr(func(s *instanceState) error { return stopByUserLocked(s) })
+}
+
+// stopByUserLocked is the actor-safe body of StopByUser().
+func stopByUserLocked(s *instanceState) error {
+	i := s.inst
+	if !i.Permissions.CanPause {
+		return ErrPauseNotPermitted
+	}
+	if i.Status == Stopped {
+		return fmt.Errorf("instance is already stopped")
+	}
+	// Validate the transition before any destructive side effect (kill tmux, remove
+	// worktree) — canTransitionLocked is side-effect-free, so a rejected call leaves
+	// the tmux session and worktree untouched.
+	if !canTransitionLocked(s, Stopped) {
+		return ErrInvalidTransition{From: i.Status, To: Stopped}
+	}
+
+	stopControllerLocked(s)
+
+	var errs []error
+	if i.IsWorktree {
+		if dirty, err := i.gitManager.IsDirty(); err != nil {
+			errs = append(errs, fmt.Errorf("failed to check if worktree is dirty: %w", err))
+		} else if dirty {
+			commitMsg := fmt.Sprintf("[claudesquad] update from '%s' on %s (stopped)", i.Title, time.Now().Format(time.RFC822))
+			if err := i.gitManager.CommitChanges(commitMsg); err != nil {
+				return i.combineErrors(append(errs, fmt.Errorf("failed to commit changes: %w", err)))
+			}
+		}
+	}
+
+	if err := i.KillSession(); err != nil {
+		if detachErr := i.pm().DetachSafely(); detachErr != nil {
+			errs = append(errs, fmt.Errorf("failed to detach tmux session: %w", detachErr))
+		}
+	}
+
+	if i.IsWorktree {
+		if _, err := os.Stat(i.gitManager.GetWorktreePath()); err == nil {
+			if err := i.gitManager.Remove(); err != nil {
+				return i.combineErrors(append(errs, fmt.Errorf("failed to remove git worktree: %w", err)))
+			}
+			_ = i.gitManager.Prune()
+		}
+	}
+
+	if err := i.combineErrors(errs); err != nil {
+		return err
+	}
+
+	if err := transitionToLocked(s, context.Background(), Stopped); err != nil {
+		// Should not happen — canTransitionLocked already validated this above — but
+		// keep the check as defense-in-depth against the two functions' logic diverging.
+		return fmt.Errorf("failed to transition to Stopped: %w", err)
+	}
+	i.gitManager.InvalidateDirtyCache()
+	log.ForSession(i.Title).Info("session stopped by user")
+	return nil
+}
+
 // Restart restarts the session by killing and recreating the tmux session.
 // The git worktree is preserved during restart.
 // If preserveOutput is true, captures terminal output before killing the session.
@@ -1927,7 +2219,29 @@ func (i *Instance) Restart(preserveOutput bool) error {
 		return fmt.Errorf("cannot restart session '%s': no working directory configured", i.Title)
 	}
 
+	// Suppress pi's --session resume injection (buildLaunchCommand reads
+	// i.piSession directly for piProgram, unlike claude's explicit
+	// claudeSessionID param) unless both isPi(i.Program) and the pi-support
+	// feature flag are true — mirroring the claudeSessionID capture above's
+	// gating intent. The field itself is restored afterward rather than
+	// cleared outright, so a stale piSession isn't lost if the flag is later
+	// re-enabled.
+	//
+	// Guarded by piSessionMu (not i.mu), mirroring claudeSessionMu's usage:
+	// this used to rely on Stop() always having joined SetPiSessionID's only
+	// writer goroutine before Restart reached this code, an argument Bug 2
+	// broke (a disabled flag could skip stopPiStatusSource entirely, leaving
+	// that goroutine alive). The lock makes this safe structurally instead.
+	i.piSessionMu.Lock()
+	restorePiSession := i.piSession
+	if !isPi(i.Program) || !config.LoadConfig().GetFeatureFlag(config.FeaturePiSupport) {
+		i.piSession = nil
+	}
+	i.piSessionMu.Unlock()
 	program := i.buildLaunchCommand(claudeSessionID)
+	i.piSessionMu.Lock()
+	i.piSession = restorePiSession
+	i.piSessionMu.Unlock()
 
 	// Create a new tmux session
 	// Use configurable prefix or default

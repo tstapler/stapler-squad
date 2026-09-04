@@ -9,7 +9,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/go-git/go-git/v5"
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/log"
@@ -33,7 +32,7 @@ func getWorktreeDirectory() (string, error) {
 	}
 
 	dir := filepath.Join(configDir, "worktrees")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return "", fmt.Errorf("failed to create worktree base directory %s: %w", dir, err)
 	}
 	resolved, err := filepath.EvalSymlinks(dir)
@@ -127,6 +126,12 @@ func WithCommandRunner(r tmux.CommandRunner) GitWorktreeOption {
 func NewGitWorktreeFromCommitSHA(repoPath, sessionName, branchName, commitSHA string, opts ...GitWorktreeOption) (*GitWorktree, string, error) {
 	if commitSHA == "" {
 		return nil, "", fmt.Errorf("commitSHA must not be empty")
+	}
+	if repoPath == "" {
+		// filepath.Abs("") below would otherwise silently resolve to the
+		// process's own cwd instead of erroring — reject up front so a caller
+		// that failed to resolve a real path fails loudly here.
+		return nil, "", fmt.Errorf("repoPath must not be empty")
 	}
 
 	absPath, err := filepath.Abs(repoPath)
@@ -225,6 +230,11 @@ func NewGitWorktreeWithBranch(repoPath string, sessionName string, customBranch 
 // NewGitWorktreeFromStorageWithExecutor's doc comment; use WithCommandRunner to
 // override how this worktree's subprocesses run.
 func NewGitWorktreeWithBranchAndExecutor(repoPath string, sessionName string, customBranch string, opts ...GitWorktreeOption) (tree *GitWorktree, branchname string, err error) {
+	if repoPath == "" {
+		// See NewGitWorktreeFromCommitSHA's identical check.
+		return nil, "", fmt.Errorf("repoPath must not be empty")
+	}
+
 	cfg := config.LoadConfig()
 
 	var branchName string
@@ -336,7 +346,7 @@ func findExistingGitRepoRootReadOnly(path string) (string, error) {
 
 	currentPath := path
 	for {
-		if _, err := git.PlainOpen(currentPath); err == nil {
+		if _, err := OpenRepo(currentPath); err == nil {
 			return currentPath, nil
 		}
 

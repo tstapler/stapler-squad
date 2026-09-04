@@ -2,6 +2,7 @@ package streamhub_test
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"log/slog"
 	"strings"
@@ -9,22 +10,24 @@ import (
 	"testing"
 	"time"
 
+	ssqlog "github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/streamhub"
 )
 
 // Story 3.2.2: structured logging & metrics for hub lifecycle events.
 
-// syncLogBuffer is a mutex-guarded bytes.Buffer. slog.Default() is
-// process-global, so a hub created by an *earlier* test with a short
-// WithTeardownGrace (e.g. TestStreamHub_should_ScheduleTeardownAfterGracePeriod_When_LastSubscriberDetaches)
+// syncLogBuffer is a mutex-guarded bytes.Buffer. The log package's injectable
+// slog seam (log.SetSlogDefaultForTest) is process-global, so a hub created by
+// an *earlier* test with a short WithTeardownGrace (e.g.
+// TestStreamHub_should_ScheduleTeardownAfterGracePeriod_When_LastSubscriberDetaches)
 // can still fire its teardown timer and log through whatever the current
-// default logger happens to be at that moment — including a later test's
-// captureLogs buffer, concurrently with that later test's own String() read.
-// A plain *bytes.Buffer makes that a genuine data race (caught under
-// -race); wrapping every access in a mutex doesn't remove the cross-test log
-// interleaving (harmless — logMessages only checks that the wanted messages
-// appear in order, not that no other messages appear), it just makes the
-// concurrent access itself safe.
+// seam-installed logger happens to be at that moment — including a later
+// test's captureLogs buffer, concurrently with that later test's own
+// String() read. A plain *bytes.Buffer makes that a genuine data race
+// (caught under -race); wrapping every access in a mutex doesn't remove the
+// cross-test log interleaving (harmless — logMessages only checks that the
+// wanted messages appear in order, not that no other messages appear), it
+// just makes the concurrent access itself safe.
 type syncLogBuffer struct {
 	mu  sync.Mutex
 	buf bytes.Buffer
@@ -42,18 +45,20 @@ func (b *syncLogBuffer) String() string {
 	return b.buf.String()
 }
 
-// captureLogs redirects slog's default logger to a JSON-lines buffer for the
-// duration of the test, restoring the previous default on cleanup.
-// log.Info/Warn/Error (github.com/tstapler/stapler-squad/log) delegate
-// straight to slog's package-level default logger, so this is the seam
-// available to assert on structured log output without a bespoke logging
-// abstraction.
+// captureLogs redirects the log package's injectable slog seam to a
+// JSON-lines buffer for the duration of the test, restoring the previous
+// default on cleanup. log.Info/Warn/Error (github.com/tstapler/stapler-squad/log)
+// read that seam, so this is the hook available to assert on structured log
+// output without a bespoke logging abstraction.
 func captureLogs(t *testing.T) *syncLogBuffer {
 	t.Helper()
 	buf := &syncLogBuffer{}
-	prev := slog.Default()
-	slog.SetDefault(slog.New(slog.NewJSONHandler(buf, nil)))
-	t.Cleanup(func() { slog.SetDefault(prev) })
+	// Level: Debug — some assertions below (e.g. the batch-flush event) are
+	// intentionally logged at Debug rather than Info to avoid per-flush
+	// noise on the default-visible path (see session/streamhub/hub.go's
+	// onBatchFlush doc comment); capturing at Info here would silently miss them.
+	prev := ssqlog.SetSlogDefaultForTest(slog.New(slog.NewJSONHandler(buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() { ssqlog.SetSlogDefaultForTest(prev) })
 	return buf
 }
 
@@ -92,7 +97,7 @@ func TestStreamHub_should_LogHubCreatedAttachResizeAndDetach_InOrder(t *testing.
 	id := hub.AttachSubscriber(mt, streamhub.SubscriberCapability{CanResize: true})
 
 	size := mustSize(t, 80, 24)
-	hub.RequestResize(id, size)
+	hub.RequestResize(context.Background(), id, size)
 
 	hub.DetachSubscriber(id)
 
@@ -212,7 +217,7 @@ func TestStreamHubMetrics_should_IncrementResizeNegotiationsTotal_When_ResizeReq
 	defer func() { _ = hub.ForceTeardown() }()
 
 	id := hub.AttachSubscriber(streamhub.NewMemoryTransport(), streamhub.SubscriberCapability{CanResize: true})
-	hub.RequestResize(id, mustSize(t, 80, 24))
+	hub.RequestResize(context.Background(), id, mustSize(t, 80, 24))
 
 	if got := streamhub.ResizeNegotiationsTotal(); got != before+1 {
 		t.Fatalf("expected ResizeNegotiationsTotal() to increment by 1 after RequestResize, got %d -> %d", before, got)

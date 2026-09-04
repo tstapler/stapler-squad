@@ -8,6 +8,7 @@ import (
 	connect "connectrpc.com/connect"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/events"
 )
@@ -78,26 +79,30 @@ func TestGetFeatureFlags_ReturnsKnownFlags(t *testing.T) {
 	assert.NotEmpty(t, backlogFlag.Description, "backlog flag should have a non-empty description")
 }
 
-// GetFeatureFlags_should_ReturnAllSevenResyncFlagsDefaultingFalse_When_RegistryQueried
-// is the test named in project_plans/terminal-resync-reliability/implementation/validation.md's
-// AC7 row: all 7 terminal-resync feature flags must be present in the
-// GetFeatureFlags response and default to disabled (no controller wired, no
-// config.json override).
-func TestGetFeatureFlags_should_ReturnAllSevenResyncFlagsDefaultingFalse_When_RegistryQueried(t *testing.T) {
+// TestGetFeatureFlags_should_ReturnAllSevenResyncFlagsWithCorrectDefaults_When_RegistryQueried
+// covers project_plans/terminal-resync-reliability/implementation/validation.md's AC7 row:
+// all 7 terminal-resync feature flags must be present in the GetFeatureFlags response with
+// no controller wired and no config.json override. Originally all 7 defaulted to disabled;
+// terminal:resync-exec-gate-fast-lane graduated to default-on 2026-08-25 (see
+// featureFlagDefault's doc comment), so this now checks each flag against its own expected
+// default instead of asserting a single shared value.
+func TestGetFeatureFlags_should_ReturnAllSevenResyncFlagsWithCorrectDefaults_When_RegistryQueried(t *testing.T) {
 	svc := newFeatureFlagService(t)
 
 	resp, err := svc.GetFeatureFlags(context.Background(), connect.NewRequest(&sessionv1.GetFeatureFlagsRequest{}))
 	require.NoError(t, err)
 	require.NotNil(t, resp.Msg)
 
-	wantFlags := []string{
-		"terminal:resync-visibility-scope",
-		"terminal:resync-correlation-id",
-		"terminal:resync-skip-stale-dimension-slowpath",
-		"terminal:resync-exec-gate-fast-lane",
-		"terminal:resync-stagger",
-		"terminal:resync-compression",
-		"terminal:resync-batching",
+	// terminal:resync-exec-gate-fast-lane graduated to default-on 2026-08-25 (see
+	// featureFlagDefault's doc comment) — every other resync flag still defaults off.
+	wantDefault := map[string]bool{
+		"terminal:resync-visibility-scope":              false,
+		"terminal:resync-correlation-id":                false,
+		"terminal:resync-skip-stale-dimension-slowpath": false,
+		"terminal:resync-exec-gate-fast-lane":           true,
+		"terminal:resync-stagger":                       false,
+		"terminal:resync-compression":                   false,
+		"terminal:resync-batching":                      false,
 	}
 
 	byName := make(map[string]*sessionv1.FeatureFlag, len(resp.Msg.Flags))
@@ -105,10 +110,10 @@ func TestGetFeatureFlags_should_ReturnAllSevenResyncFlagsDefaultingFalse_When_Re
 		byName[f.Name] = f
 	}
 
-	for _, name := range wantFlags {
+	for name, want := range wantDefault {
 		flag, ok := byName[name]
 		require.Truef(t, ok, "expected %q flag in GetFeatureFlags response", name)
-		assert.Falsef(t, flag.Enabled, "%q should default to disabled", name)
+		assert.Equalf(t, want, flag.Enabled, "%q default mismatch", name)
 		assert.NotEmptyf(t, flag.Description, "%q should have a non-empty description", name)
 	}
 }
@@ -174,6 +179,70 @@ func TestGetFeatureFlags_should_ReturnEmptyStatusDetail_When_ProviderReturnsEmpt
 	}
 	require.NotNil(t, backlogFlag)
 	assert.Empty(t, backlogFlag.StatusDetail)
+}
+
+// TestGetFeatureFlags_should_ReflectHandoffSummaryConfigState_When_QueriedEnabledOrDisabled
+// verifies the "handoff-summary" flag added for Finding 2 (backlog review of
+// the restart-with-summary feature) surfaces config.HandoffSummaryConfig's
+// real, config.json-backed EnabledOrDefault() state through the generic
+// GetFeatureFlags registry -- not the separate feature_flags map -- covering
+// both the enabled and explicitly-disabled cases.
+func TestGetFeatureFlags_should_ReflectHandoffSummaryConfigState_When_QueriedEnabledOrDisabled(t *testing.T) {
+	svc := newFeatureFlagService(t)
+	svc.SetFeatureController("handoff-summary", HandoffSummaryFeatureController{})
+
+	findFlag := func(t *testing.T) *sessionv1.FeatureFlag {
+		t.Helper()
+		resp, err := svc.GetFeatureFlags(context.Background(), connect.NewRequest(&sessionv1.GetFeatureFlagsRequest{}))
+		require.NoError(t, err)
+		for _, f := range resp.Msg.Flags {
+			if f.Name == "handoff-summary" {
+				return f
+			}
+		}
+		t.Fatal("expected 'handoff-summary' flag in GetFeatureFlags response")
+		return nil
+	}
+
+	// Default (no config.json override yet): enabled.
+	flag := findFlag(t)
+	assert.True(t, flag.Enabled, "handoff-summary should default to enabled")
+	assert.NotEmpty(t, flag.Description)
+
+	// Explicitly disabled via config.HandoffSummary, not the generic flags map.
+	disabled := false
+	cfg := config.LoadConfig()
+	cfg.HandoffSummary.Enabled = &disabled
+	require.NoError(t, config.SaveConfig(cfg))
+
+	flag = findFlag(t)
+	assert.False(t, flag.Enabled, "handoff-summary should reflect config.HandoffSummary.Enabled=false")
+
+	// Re-enabled.
+	enabled := true
+	cfg = config.LoadConfig()
+	cfg.HandoffSummary.Enabled = &enabled
+	require.NoError(t, config.SaveConfig(cfg))
+
+	flag = findFlag(t)
+	assert.True(t, flag.Enabled, "handoff-summary should reflect config.HandoffSummary.Enabled=true")
+}
+
+// TestHandoffSummaryFeatureController_EnableAndDisable_should_ReturnClearError
+// verifies UpdateFeatureFlag-style toggling of "handoff-summary" is refused
+// with a clear, actionable error rather than silently no-op'ing -- the real
+// toggle lives at config.json's handoff_summary.enabled key, not the generic
+// feature-flags map UpdateFeatureFlag persists to.
+func TestHandoffSummaryFeatureController_EnableAndDisable_should_ReturnClearError(t *testing.T) {
+	ctrl := HandoffSummaryFeatureController{}
+
+	err := ctrl.Enable(context.Background())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "handoff_summary.enabled")
+
+	err = ctrl.Disable()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "handoff_summary.enabled")
 }
 
 // --------------------------------------------------------------------------

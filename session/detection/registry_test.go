@@ -55,14 +55,14 @@ func TestDetectorRegistry_Len_should_reflectRegisteredCount(t *testing.T) {
 	}
 }
 
-func TestDefaultRegistry_should_have5Entries(t *testing.T) {
+func TestDefaultRegistry_should_have6Entries(t *testing.T) {
 	t.Parallel()
 	r := DefaultRegistry()
-	const want = 5
+	const want = 6
 	if r.Len() != want {
 		t.Errorf("DefaultRegistry().Len() = %d, want %d", r.Len(), want)
 	}
-	for _, name := range []string{"claude", "gemini", "aider", "opencode", "agy"} {
+	for _, name := range []string{"claude", "gemini", "aider", "opencode", "agy", "pi"} {
 		if _, ok := r.Lookup(name); !ok {
 			t.Errorf("DefaultRegistry() missing detector for %q", name)
 		}
@@ -122,8 +122,8 @@ func TestMergedRegistry_should_overrideBuiltinAndNotGrow_When_pluginNameMatchesB
 
 	merged := MergedRegistry(builtins, []BinaryDetector{override})
 
-	if merged.Len() != 5 {
-		t.Errorf("MergedRegistry().Len() = %d, want 5 (override should replace, not add)", merged.Len())
+	if merged.Len() != 6 {
+		t.Errorf("MergedRegistry().Len() = %d, want 6 (override should replace, not add)", merged.Len())
 	}
 	d, ok := merged.Lookup("claude")
 	if !ok {
@@ -141,8 +141,8 @@ func TestMergedRegistry_should_addEntry_When_pluginNameIsNew(t *testing.T) {
 
 	merged := MergedRegistry(builtins, []BinaryDetector{fresh})
 
-	if merged.Len() != 6 {
-		t.Errorf("MergedRegistry().Len() = %d, want 6 (5 built-ins + 1 new plugin)", merged.Len())
+	if merged.Len() != 7 {
+		t.Errorf("MergedRegistry().Len() = %d, want 7 (6 built-ins + 1 new plugin)", merged.Len())
 	}
 	if _, ok := merged.Lookup("my-agent"); !ok {
 		t.Error("Lookup(\"my-agent\") returned false, want true")
@@ -163,7 +163,7 @@ func TestMergedRegistry_should_notMutateInputRegistry_When_pluginOverridesBuilti
 	if _, isBuiltinType := d.(*binaries.ClaudeDetector); !isBuiltinType {
 		t.Errorf("builtins.Lookup(\"claude\") = %T, want *binaries.ClaudeDetector (original built-in, unmutated)", d)
 	}
-	if builtins.Len() != 5 {
-		t.Errorf("builtins.Len() = %d, want 5 (input registry must not grow either)", builtins.Len())
+	if builtins.Len() != 6 {
+		t.Errorf("builtins.Len() = %d, want 6 (input registry must not grow either)", builtins.Len())
 	}
 }

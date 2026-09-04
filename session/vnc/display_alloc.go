@@ -49,7 +49,7 @@ func (d *DisplayAllocator) Allocate(sessionID string) (int, error) {
 		}
 
 		path := lockPath(n)
-		f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0644)
+		f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0644) // #nosec G304 -- path is the standard X11 lock file "/tmp/.X<N>-lock" for an internally-computed int n, not user input
 		if err != nil {
 			// Lock file already exists (either we didn't create it, or another
 			// process holds it). Skip this display number.
@@ -93,7 +93,7 @@ func (d *DisplayAllocator) CleanupStaleDisplays() {
 		}
 
 		path := lockPath(n)
-		data, err := os.ReadFile(path)
+		data, err := os.ReadFile(path) // #nosec G304 -- path is the standard X11 lock file "/tmp/.X<N>-lock" for an internally-computed int n, not user input
 		if err != nil {
 			// File doesn't exist or unreadable — nothing to clean up.
 			continue

@@ -66,7 +66,7 @@ describe("useBrowserLogStream", () => {
   });
 
   // UT-F-01
-  it("disabled_should_still_patch_console_but_gate_log_warn_debug_forwarding", async () => {
+  it("disabled_should_still_patch_console_but_gate_only_debug_forwarding", async () => {
     const origLogRef = console.log;
     const origWarnRef = console.warn;
     const origErrorRef = console.error;
@@ -76,15 +76,16 @@ describe("useBrowserLogStream", () => {
       useBrowserLogStream({ enabled: false, sessionId: "sess-1" })
     );
 
-    // Interceptors always install — but only console.error forwards while
-    // disabled; log/warn/debug are gated behind `enabled`.
+    // Interceptors always install — log/warn/error forward unconditionally
+    // (info-and-up, matching the server's own log-level default); only
+    // console.debug is gated behind `enabled`.
     expect(console.log).not.toBe(origLogRef);
     expect(console.warn).not.toBe(origWarnRef);
     expect(console.error).not.toBe(origErrorRef);
     expect(console.debug).not.toBe(origDebugRef);
 
-    console.log("log should not forward while disabled");
-    console.warn("warn should not forward while disabled");
+    console.log("log should forward while disabled");
+    console.warn("warn should forward while disabled");
     console.debug("debug should not forward while disabled");
     console.error("error should forward while disabled");
 
@@ -97,8 +98,8 @@ describe("useBrowserLogStream", () => {
 
     expect(mockLogClientEvents).toHaveBeenCalled();
     const entries = mockLogClientEvents.mock.calls[0][0].entries as Array<{ message: string }>;
-    expect(entries.some((e) => e.message.includes("log should not forward"))).toBe(false);
-    expect(entries.some((e) => e.message.includes("warn should not forward"))).toBe(false);
+    expect(entries.some((e) => e.message.includes("log should forward"))).toBe(true);
+    expect(entries.some((e) => e.message.includes("warn should forward"))).toBe(true);
     expect(entries.some((e) => e.message.includes("debug should not forward"))).toBe(false);
     expect(entries.some((e) => e.message.includes("error should forward"))).toBe(true);
 
@@ -572,8 +573,8 @@ describe("useBrowserLogStream", () => {
       useBrowserLogStream({ enabled: false, sessionId: "sess-1" })
     );
 
-    // log/warn/debug are gated by `enabled`; making no calls at all here
-    // means no flush should happen.
+    console.debug("debug should not forward while disabled");
+
     act(() => {
       jest.advanceTimersByTime(10000);
     });

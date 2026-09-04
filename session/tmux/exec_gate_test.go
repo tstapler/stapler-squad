@@ -16,22 +16,41 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	ssqlog "github.com/tstapler/stapler-squad/log"
 )
 
-// captureDebugLog temporarily redirects the slog default logger to a buffer
-// (mirrors server/services/session_service_client_log_test.go's
-// captureInfoLog) and returns a function that restores it and returns the
-// captured output.
-func captureDebugLog(t *testing.T) func() string {
+// debugLogBuffer wraps bytes.Buffer with a mutex, matching the pattern already used in
+// executor/safeexec/safeexec_pg_test.go and server/services/autonomous_orchestration_service_test.go.
+type debugLogBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *debugLogBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *debugLogBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+// captureDebugLog temporarily redirects the log package's injectable slog seam to a
+// buffer (mirrors server/services/session_service_client_log_test.go's
+// captureInfoLog). Restoration is registered via t.Cleanup rather than a returned
+// closure the caller must remember to invoke — a require.* failure between capture and
+// read would otherwise leave the process-wide seam pointed at this stack-local buffer
+// for the rest of the test binary.
+func captureDebugLog(t *testing.T) *debugLogBuffer {
 	t.Helper()
-	var buf bytes.Buffer
-	h := slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})
-	original := slog.Default()
-	slog.SetDefault(slog.New(h))
-	return func() string {
-		slog.SetDefault(original)
-		return buf.String()
-	}
+	buf := &debugLogBuffer{}
+	h := slog.NewTextHandler(buf, &slog.HandlerOptions{Level: slog.LevelDebug})
+	original := ssqlog.SetSlogDefaultForTest(slog.New(h))
+	t.Cleanup(func() { ssqlog.SetSlogDefaultForTest(original) })
+	return buf
 }
 
 // setupExecGateTestConfig points STAPLER_SQUAD_TEST_DIR at a fresh t.TempDir()
@@ -117,7 +136,7 @@ func TestAcquireResyncExecSlot_should_BlockUntilSlotAvailable_When_FastLanePoolE
 // reproducing contention interactively.
 func TestAcquireResyncExecSlot_should_LogWaitTimeInMilliseconds_When_SlotAcquiredAfterContention(t *testing.T) {
 	serverSocket := setupExecGateTestConfig(t, 4, 1)
-	restore := captureDebugLog(t)
+	buf := captureDebugLog(t)
 
 	releaseFirst, err := AcquireResyncExecSlot(context.Background(), serverSocket)
 	require.NoError(t, err)
@@ -133,7 +152,7 @@ func TestAcquireResyncExecSlot_should_LogWaitTimeInMilliseconds_When_SlotAcquire
 	require.NoError(t, err)
 	defer release2()
 
-	logOutput := restore()
+	logOutput := buf.String()
 	assert.Contains(t, logOutput, "acquired fast-lane slot")
 	assert.Regexp(t, `waitMs=[1-9]\d*`, logOutput, "should record a nonzero wait after contention, not a zero placeholder")
 }
@@ -388,7 +407,15 @@ func TestExecGate_CrossProcess(t *testing.T) {
 	markerDir := t.TempDir()
 	const n = 2
 	const numProcs = 5
-	const holdMS = 150
+	// holdMS must be generous relative to OS process-start scheduling jitter:
+	// each helper is a full re-exec of this test binary, and under heavy
+	// concurrent load (e.g. running the whole package suite in parallel) two
+	// helpers' 150ms hold windows could fail to overlap in wall-clock time
+	// even though the gate itself correctly saturates at n — a timing flake,
+	// not a gate bug (root-caused via `go test -run TestExecGate_CrossProcess
+	// -count=3`, which passed 3/3 in isolation with low contention). 1500ms
+	// gives enough margin to observe the overlap reliably under load.
+	const holdMS = 1500
 
 	procs := make([]*exec.Cmd, numProcs)
 	for i := range procs {
@@ -430,4 +457,62 @@ poll:
 	assert.Empty(t, entries, "all marker files should be cleaned up after every helper exits")
 	assert.LessOrEqual(t, maxHeld, n, "more than n separate processes held the gate simultaneously")
 	assert.Equal(t, n, maxHeld, "gate should reach full saturation across processes at some point during the test")
+}
+
+// TestRunFastLaneSubprocess_should_ForwardCallerCtxUnchanged_When_Called is the
+// regression test for two incidents (see ResyncFastLaneTimeout's doc comment):
+// (1) CapturePaneContentPriority/CapturePaneContentRawPriority each hand-built their own
+// context.WithTimeout(..., defaultCapturePaneTimeout) — 10s, sized for the unrelated
+// default pool — and RefreshClientPriority had no bound on its subprocess call at all
+// (context.Background()); (2) even after each individual call was bounded, several fast-lane
+// calls in one resync each minting an independent fresh ResyncFastLaneTimeout budget could
+// still add up to far more real wall-clock time than the client's stall watchdog allows.
+// runFastLaneSubprocess no longer manufactures its own timeout at all — the caller
+// constructs one shared ctx per whole operation and passes it in — so this test asserts fn
+// receives exactly the ctx the caller supplied (same deadline, not a fresh unrelated one),
+// proving the helper is a pure pass-through rather than silently creating a second budget.
+func TestRunFastLaneSubprocess_should_ForwardCallerCtxUnchanged_When_Called(t *testing.T) {
+	serverSocket := setupExecGateTestConfig(t, 4, 4)
+
+	callerCtx, cancel := context.WithTimeout(context.Background(), ResyncFastLaneTimeout)
+	defer cancel()
+	wantDeadline, ok := callerCtx.Deadline()
+	require.True(t, ok)
+
+	var observedDeadline time.Time
+	var hadDeadline bool
+	_, err := runFastLaneSubprocess(callerCtx, serverSocket, func(ctx context.Context) (struct{}, error) {
+		observedDeadline, hadDeadline = ctx.Deadline()
+		return struct{}{}, nil
+	})
+
+	require.NoError(t, err)
+	require.True(t, hadDeadline, "fn's ctx must carry a deadline — an unbounded context.Background() is exactly the RefreshClientPriority regression")
+	assert.Equal(t, wantDeadline, observedDeadline,
+		"fn should receive exactly the caller's ctx, not a fresh independently-timed one")
+}
+
+// TestRunFastLaneSubprocessErr_should_ForwardCallerCtxUnchanged_When_Called is
+// runFastLaneSubprocessErr's sibling coverage — RefreshClientPriority uses the Err-returning
+// variant, so this asserts the same pass-through on that specific path rather than relying
+// only on the shared implementation this delegates to.
+func TestRunFastLaneSubprocessErr_should_ForwardCallerCtxUnchanged_When_Called(t *testing.T) {
+	serverSocket := setupExecGateTestConfig(t, 4, 4)
+
+	callerCtx, cancel := context.WithTimeout(context.Background(), ResyncFastLaneTimeout)
+	defer cancel()
+	wantDeadline, ok := callerCtx.Deadline()
+	require.True(t, ok)
+
+	var observedDeadline time.Time
+	var hadDeadline bool
+	err := runFastLaneSubprocessErr(callerCtx, serverSocket, func(ctx context.Context) error {
+		observedDeadline, hadDeadline = ctx.Deadline()
+		return nil
+	})
+
+	require.NoError(t, err)
+	require.True(t, hadDeadline, "fn's ctx must carry a deadline")
+	assert.Equal(t, wantDeadline, observedDeadline,
+		"fn should receive exactly the caller's ctx, not a fresh independently-timed one")
 }

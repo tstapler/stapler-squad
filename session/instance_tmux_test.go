@@ -3,6 +3,7 @@ package session
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/executor/safeexec"
+	"github.com/tstapler/stapler-squad/session/streamhub"
 )
 
 // TestBuildSubmittableInput_UsesCarriageReturnNotNewline is a regression test
@@ -86,33 +88,112 @@ func TestIsClaude(t *testing.T) {
 	}
 }
 
-func TestClassifyProgram(t *testing.T) {
+func TestClaudeLaunchBuilder_Matches(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
 		program string
-		want    string // "claude" or "plain"
+		want    bool
 	}{
-		{"claude", "claude"},
-		{"/usr/local/bin/claude", "claude"},
-		{"env -u PROXY claude", "claude"},
-		{"aider", "plain"},
-		{"claude-squad", "plain"},
-		{"", "plain"},
+		{"claude", true},
+		{"/usr/local/bin/claude", true},
+		{"env -u PROXY claude", true},
+		{"aider", false},
+		{"claude-squad", false},
+		{"", false},
+	}
+	b := &claudeLaunchBuilder{}
+	for _, tc := range cases {
+		t.Run(tc.program, func(t *testing.T) {
+			t.Parallel()
+			if got := b.Matches(tc.program); got != tc.want {
+				t.Errorf("claudeLaunchBuilder{}.Matches(%q) = %v, want %v", tc.program, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestIsPi(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		program string
+		want    bool
+	}{
+		{"pi", true},
+		{"/usr/local/bin/pi", true},
+		{"pi --model x", true},
+		{"pipenv run pi-helper", false}, // basename of first token is "pipenv", not "pi"
+		{"mypi", false},
+		{"", false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.program, func(t *testing.T) {
 			t.Parallel()
-			switch classifyProgram(tc.program).(type) {
-			case claudeProgram:
-				if tc.want != "claude" {
-					t.Errorf("classifyProgram(%q) = claudeProgram, want plainProgram", tc.program)
-				}
-			case plainProgram:
-				if tc.want != "plain" {
-					t.Errorf("classifyProgram(%q) = plainProgram, want claudeProgram", tc.program)
-				}
+			got := isPi(tc.program)
+			if got != tc.want {
+				t.Errorf("isPi(%q) = %v, want %v", tc.program, got, tc.want)
 			}
 		})
+	}
+}
+
+func TestPiLaunchBuilder_Matches(t *testing.T) {
+	t.Parallel()
+	if !(&piLaunchBuilder{}).Matches("pi") {
+		t.Errorf("piLaunchBuilder{}.Matches(%q) = false, want true", "pi")
+	}
+}
+
+// wantPiStderrRedirect builds the exact " 2>>'<path>'" suffix
+// buildLaunchCommand appends for a pi instance titled title, using the same
+// piStderrLogPath helper production code calls -- so these tests assert on
+// behavior, not a hardcoded path that would drift from GetLogDir's real
+// resolution (test-mode dir, custom LogsDir, etc).
+func wantPiStderrRedirect(t *testing.T, inst *Instance) string {
+	t.Helper()
+	path, err := piStderrLogPath(inst)
+	if err != nil {
+		t.Fatalf("piStderrLogPath(%+v) failed: %v", inst, err)
+	}
+	return " 2>>" + shellQuote(path)
+}
+
+func TestBuildLaunchCommand_PiSessionResume(t *testing.T) {
+	t.Parallel()
+	inst := &Instance{Program: "pi", piExtension: piExtension{piSession: &PiSessionData{SessionID: "abc123"}}}
+	got := inst.buildLaunchCommand("")
+	want := "pi --session 'abc123'" + wantPiStderrRedirect(t, inst)
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestBuildLaunchCommand_PiNoSession_NoOp(t *testing.T) {
+	t.Parallel()
+	inst := &Instance{Program: "pi"}
+	got := inst.buildLaunchCommand("")
+	// The stderr-redirect suffix keeps pi's own per-project trust-gate
+	// diagnostics out of the pane -- see piLaunchBuilder.StderrRedirect.
+	want := "pi" + wantPiStderrRedirect(t, inst)
+	if got != want {
+		t.Errorf("got %q, want exactly %q (no-op aside from the pi stderr redirect)", got, want)
+	}
+}
+
+// TestBuildLaunchCommand_PiStderrRedirectComesAfterCLIFlagsAndExtraArgs guards
+// the suffix ordering: the stderr redirect must be the final token, after
+// CLIFlags and ExtraArgs, or it lands mid-command and no longer redirects the
+// whole pi invocation's stderr.
+func TestBuildLaunchCommand_PiStderrRedirectComesAfterCLIFlagsAndExtraArgs(t *testing.T) {
+	t.Parallel()
+	inst := &Instance{
+		Program:   "pi",
+		CLIFlags:  "--model x",
+		ExtraArgs: []string{"--verbose"},
+	}
+	got := inst.buildLaunchCommand("")
+	want := "pi " + shellQuote("--model") + " " + shellQuote("x") + " " + shellQuote("--verbose") + wantPiStderrRedirect(t, inst)
+	if got != want {
+		t.Errorf("got %q, want %q (stderr redirect must be the final token)", got, want)
 	}
 }
 
@@ -518,7 +599,18 @@ func TestBuildClaudeCommand_LargePromptUsesTempFileNotInline(t *testing.T) {
 		t.Fatalf("test setup bug: prompt (%d bytes) should exceed the ~16KB tmux command-length limit this regression test guards against", len(prompt))
 	}
 
-	inst := &Instance{Program: "claude", OneShot: true, Prompt: prompt, promptFileCleanupDelayOverride: shortPromptFileCleanupDelay}
+	// This test only checks routing/content, not cleanup timing (that's
+	// TestBuildClaudeCommand_LargePromptTempFileIsCleanedUpAfterDelay's job),
+	// so it deliberately leaves promptFileCleanupDelayOverride unset and gets
+	// the real defaultPromptFileCleanupDelay (30s). Overriding it to
+	// shortPromptFileCleanupDelay here previously raced this test's own
+	// os.ReadFile below against promptArg's background cleanup goroutine: under
+	// this package's t.Parallel() fan-out (or with -p 1 removed and sibling
+	// packages' tests also contending for CPU), the test goroutine can be
+	// descheduled for more than 10ms before reaching os.ReadFile, so the
+	// cleanup goroutine deletes the file first and the read fails with "no
+	// such file or directory".
+	inst := &Instance{Program: "claude", OneShot: true, Prompt: prompt}
 	got := inst.buildLaunchCommand("")
 
 	// The whole point of the fix: the assembled command handed to tmux must
@@ -666,5 +758,64 @@ func TestClaudeMCPConfigArgs_HTTPFormat(t *testing.T) {
 	headers, _ := entry["headers"].(map[string]interface{})
 	if headers["X-Stapler-Session-UUID"] != "test-uuid-123" {
 		t.Errorf("X-Stapler-Session-UUID = %q, want test-uuid-123", headers["X-Stapler-Session-UUID"])
+	}
+}
+
+// fakeHasSessionProcessManager reports HasSession() true (the tmux session
+// object has been wired by LoadInstances()'s reconciliation) and records
+// SetWindowSize calls, without a real PTY behind it -- used to prove
+// Instance.SetWindowSize gates on i.started rather than on HasSession() alone.
+type fakeHasSessionProcessManager struct {
+	ProcessManager
+	resized bool
+}
+
+func (f *fakeHasSessionProcessManager) HasSession() bool { return true }
+func (f *fakeHasSessionProcessManager) SetWindowSize(cols, rows int) error {
+	f.resized = true
+	return nil
+}
+
+// TestInstance_SetWindowSize_should_ReturnErrSessionNotStarted_When_NotStarted
+// is a regression test for the "PTY is not initialized" race: right after
+// LoadInstances() reconciles a session back to Active (instance_serialization.go),
+// the *tmux.TmuxSession object is wired -- so HasSession() is already true --
+// well before the async Start()/RestoreWithWorkDir() call that installs the
+// PTY finishes. A resize landing in that window used to fall through to the
+// tmux layer and fail with a raw "PTY is not initialized" error that
+// StreamHub.applyNegotiatedSize's errors.Is(err, ErrSessionNotStarted)
+// skip-and-retry branch (session/streamhub/hub.go) could not recognize.
+// SetWindowSize must check i.started the same way its sibling
+// CapturePaneContent does and return the shared sentinel instead.
+func TestInstance_SetWindowSize_should_ReturnErrSessionNotStarted_When_NotStarted(t *testing.T) {
+	t.Parallel()
+	pm := &fakeHasSessionProcessManager{}
+	instance := &Instance{Title: "test", processManager: pm}
+	// started defaults to false (zero value) -- the reconciled-but-not-yet-attached window.
+
+	err := instance.SetWindowSize(100, 30)
+
+	if !errors.Is(err, streamhub.ErrSessionNotStarted) {
+		t.Fatalf("SetWindowSize() error = %v, want errors.Is(err, streamhub.ErrSessionNotStarted)", err)
+	}
+	if pm.resized {
+		t.Error("SetWindowSize must not delegate to the process manager before the instance has started")
+	}
+}
+
+// TestInstance_SetWindowSize_should_Delegate_When_Started is the positive
+// counterpart: once the actor has actually finished starting, SetWindowSize
+// must still reach the process manager as before.
+func TestInstance_SetWindowSize_should_Delegate_When_Started(t *testing.T) {
+	t.Parallel()
+	pm := &fakeHasSessionProcessManager{}
+	instance := &Instance{Title: "test", processManager: pm}
+	instance.started.Store(true)
+
+	if err := instance.SetWindowSize(100, 30); err != nil {
+		t.Fatalf("SetWindowSize() unexpected error: %v", err)
+	}
+	if !pm.resized {
+		t.Error("SetWindowSize should delegate to the process manager once started")
 	}
 }

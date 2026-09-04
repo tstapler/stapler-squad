@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/git"
@@ -249,7 +250,7 @@ func BuildReviewPrompt(item *BacklogItemData, acSnapshot []AcCriterion, diff str
 
 	// Implementation plan (if available).
 	if item.PlanArtifactsPath != "" {
-		if planContent := readPlanFile(item.PlanArtifactsPath); planContent != "" {
+		if planContent := readPlanFile(item.PlanArtifactsPath, item.RepoPath); planContent != "" {
 			sb.WriteString("## Implementation Plan\n")
 			sb.WriteString(sanitizeField(planContent, 8000))
 			sb.WriteString("\n\n")
@@ -267,16 +268,18 @@ func BuildReviewPrompt(item *BacklogItemData, acSnapshot []AcCriterion, diff str
 	// --- diff ---
 	sb.WriteString("## Git Diff\n")
 	if diff == "" {
-		// Defensive only: ReviewGateRunner.Run (review_gate.go), the sole caller that
-		// reaches this function via reviewPromptFor, already blocks on committedDiffEmpty
-		// before calling reviewPromptFor at all, recording a synthetic FAIL verdict
-		// instead. This branch is not known to be reachable in production — unlike
-		// BuildHeadlessReviewPrompt's diff=="" branch, which the sdd-mode headless
-		// TriggerReReview path (backlog_service_triage.go's reviewPromptFor) does reach
-		// live and which carries ReviewContextExtras for that reason. Kept as a fallback
-		// so this function degrades gracefully if a future caller ever skips that guard,
-		// rather than as a currently-exercised path — do not add ReviewContextExtras
-		// plumbing here without first confirming a real caller needs it.
+		// ReviewGateRunner.Run (review_gate.go), the sole caller that reaches this
+		// function via reviewPromptFor, blocks on committedDiffEmpty with a synthetic
+		// FAIL verdict for every empty-diff session EXCEPT one: a report_duplicate
+		// claim, which carries a duplicate_ref= marker in VerificationNotes and is
+		// deliberately let through with an empty diff so a real reviewer can confirm
+		// the claim (backlog item e2373931) — that is the one live-reachable path here
+		// today. Every other empty-diff session still hits the FAIL guard and never
+		// reaches this branch. Unlike BuildHeadlessReviewPrompt's diff=="" branch,
+		// which the sdd-mode headless TriggerReReview path
+		// (backlog_service_triage.go's reviewPromptFor) also reaches and which carries
+		// ReviewContextExtras for that reason, this branch has no such extras — do not
+		// add that plumbing here without first confirming this caller needs it too.
 		sb.WriteString("(no diff available — no committed code changes were found for this session)\n\n")
 		sb.WriteString("## No-Diff Verification\n")
 		sb.WriteString("This can mean the criteria were already satisfied before this session started, or that no work happened. Check each criterion against the CURRENT codebase yourself using your available tools before verdicting; do not rely on the work session's note or verification evidence alone.\n\n")
@@ -342,7 +345,7 @@ func BuildHeadlessReviewPrompt(item *BacklogItemData, acSnapshot []AcCriterion, 
 
 	// Implementation plan (if available).
 	if item.PlanArtifactsPath != "" {
-		if planContent := readPlanFile(item.PlanArtifactsPath); planContent != "" {
+		if planContent := readPlanFile(item.PlanArtifactsPath, item.RepoPath); planContent != "" {
 			sb.WriteString("## Implementation Plan\n")
 			sb.WriteString(sanitizeField(planContent, 8000))
 			sb.WriteString("\n\n")
@@ -765,33 +768,97 @@ func GetGitDiffRef(ctx context.Context, dir string, baseSHA string, headRef stri
 // worktrees.base_commit_sha was a stale/corrupted 40-char SHA unreachable from
 // any ref, causing every review attempt to see an empty diff and return a
 // false UNVERIFIABLE verdict even though real, complete work was committed on
-// the branch. Recomputes the merge-base of headRef against repoPath's own
-// checked-out HEAD, which is reachable from any worktree of the same repo
-// (worktrees share one object store). Returns an error if headRef itself
-// doesn't resolve either (e.g. the branch was deleted) — that case is not
-// recoverable here and must surface to a human.
-func RecoverBaseCommitSHA(ctx context.Context, repoPath, headRef string) (string, error) {
-	if headRef == "" {
-		return "", fmt.Errorf("cannot recover a base commit without a branch/ref to compare against")
+// the branch.
+//
+// Recomputes the merge-base of branchName against each candidate default branch in
+// turn, entirely via explicit refs — never implicit HEAD. The old implementation
+// compared HEAD (ambient in whatever directory it ran in) against branchName; when
+// run in the shared parent repoPath, that made the result depend on whatever branch
+// a concurrent process happened to leave repoPath checked out to (backlog item
+// e7664cbf). Naming both refs explicitly removes that dependency entirely: dir only
+// needs to be *some* valid git checkout of the same repo (worktrees share one object
+// store, so branch refs resolve identically from any of them) — callers should pass
+// the session's own dedicated worktree path when it still exists on disk, falling
+// back to the shared repoPath when it doesn't (e.g. a torn-down worktree whose
+// commits remain reachable via the shared object store). Returns an error if no
+// candidate resolves — that case is not recoverable here and must surface to a
+// human.
+func RecoverBaseCommitSHA(ctx context.Context, dir, branchName string) (string, error) {
+	if dir == "" || branchName == "" {
+		return "", fmt.Errorf("cannot recover a base commit without both a directory and a branch to compare against")
 	}
-	cmd := safeexec.CommandContext(ctx, "git", "merge-base", "HEAD", headRef)
-	cmd.Dir = repoPath
-	out, err := cmd.Output()
-	if err != nil {
-		return "", fmt.Errorf("git merge-base HEAD %s in %s: %w", headRef, repoPath, err)
+	var errs []error
+	for _, candidate := range git.CandidateDefaultBranches {
+		cmd := safeexec.CommandContext(ctx, "git", "merge-base", branchName, candidate)
+		cmd.Dir = dir
+		out, err := cmd.Output()
+		if err != nil {
+			errs = append(errs, fmt.Errorf("git merge-base %s %s in %s: %w", branchName, candidate, dir, err))
+			continue
+		}
+		if sha := strings.TrimSpace(string(out)); sha != "" {
+			return sha, nil
+		}
 	}
-	sha := strings.TrimSpace(string(out))
-	if sha == "" {
-		return "", fmt.Errorf("git merge-base HEAD %s in %s returned empty output", headRef, repoPath)
+	return "", fmt.Errorf("no merge-base found for %s against any default branch (%s) in %s: %w", branchName, strings.Join(git.CandidateDefaultBranches, "/"), dir, errors.Join(errs...))
+}
+
+// planArtifactsAllowedRoots returns the set of directories a legitimate
+// PlanArtifactsPath may live under: the item's own repo checkout, the
+// dedicated worktree base directory (session/git's getWorktreeDirectory,
+// config.GetConfigDir()+"/worktrees"), and the default triage-artifacts
+// directory (config.TriageArtifactDirOrDefault, "~/.stapler-squad/triage-artifacts").
+// Errors resolving any individual root are swallowed — an unresolvable root
+// just isn't added to the allowlist, it never widens it.
+func planArtifactsAllowedRoots(repoPath string) []string {
+	var roots []string
+	if repoPath != "" {
+		roots = append(roots, repoPath)
 	}
-	return sha, nil
+	if configDir, err := config.GetConfigDir(); err == nil {
+		roots = append(roots, filepath.Join(configDir, "worktrees"))
+	}
+	if home, err := os.UserHomeDir(); err == nil {
+		roots = append(roots, filepath.Join(home, ".stapler-squad", "triage-artifacts"))
+	}
+	return roots
+}
+
+// isPathUnderAnyRoot reports whether cleanPath (already filepath.Clean'd) is
+// equal to, or a descendant of, one of roots.
+func isPathUnderAnyRoot(cleanPath string, roots []string) bool {
+	for _, root := range roots {
+		cleanRoot := filepath.Clean(root)
+		if cleanPath == cleanRoot {
+			return true
+		}
+		rel, err := filepath.Rel(cleanRoot, cleanPath)
+		if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
+			continue
+		}
+		return true
+	}
+	return false
 }
 
 // readPlanFile reads plan.md from the given artifacts directory.
-// Returns "" on any error (plan is best-effort context, not required).
-func readPlanFile(artifactsDir string) string {
-	planPath := filepath.Join(artifactsDir, "plan.md")
-	b, err := os.ReadFile(planPath)
+// artifactsDir originates from BacklogItemData.PlanArtifactsPath, which can be
+// set directly from untrusted MCP tool input (server/mcp/tools_backlog.go's
+// submit_triage_result "plan_artifact_path" argument) — so this enforces
+// containment under one of planArtifactsAllowedRoots(repoPath) before ever
+// touching disk, the same baseDir-prefix pattern used in
+// server/services/database_service.go and server/services/file_service.go.
+// Returns "" on any error, including a containment rejection (plan is
+// best-effort context, not required).
+func readPlanFile(artifactsDir, repoPath string) string {
+	cleanDir := filepath.Clean(artifactsDir)
+	if !isPathUnderAnyRoot(cleanDir, planArtifactsAllowedRoots(repoPath)) {
+		log.WarningLog().Printf("[readPlanFile] rejecting plan_artifacts_path %q: outside all allowed roots", artifactsDir)
+		return ""
+	}
+
+	planPath := filepath.Join(cleanDir, "plan.md")
+	b, err := os.ReadFile(planPath) // #nosec G304 -- planPath is contained under an allowlisted root, verified above
 	if err != nil {
 		return ""
 	}

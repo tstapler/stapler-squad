@@ -1,6 +1,7 @@
 package log
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -8,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -21,14 +23,40 @@ import (
 // Both the file and console streams honour this value via levelFilterWriter.
 var runtimeLevel atomic.Int32 //nolint:gochecknoglobals
 
+// slogLevel mirrors runtimeLevel for the slog-based logger (the Debug/Info/Warn/Error
+// package functions). It exists because slog.HandlerOptions.Level takes a slog.Leveler,
+// not our LogLevel type — SetRuntimeLevel keeps the two in sync so both logging paths
+// (legacy log.New-based DebugLog/InfoLog/etc. and slog) honour the same runtime level.
+var slogLevel slog.LevelVar //nolint:gochecknoglobals
+
 func init() {
 	runtimeLevel.Store(int32(INFO))
+	slogLevel.Set(slog.LevelInfo)
+	slogDefault.Store(slog.Default())
+}
+
+// toSlogLevel maps our LogLevel enum to the closest slog.Level.
+func toSlogLevel(level LogLevel) slog.Level {
+	switch level {
+	case DEBUG:
+		return slog.LevelDebug
+	case INFO:
+		return slog.LevelInfo
+	case WARNING:
+		return slog.LevelWarn
+	case ERROR, FATAL:
+		return slog.LevelError
+	default:
+		return slog.LevelInfo
+	}
 }
 
 // SetRuntimeLevel changes the minimum log level for all output streams immediately.
 // Safe to call from any goroutine. Takes effect on the next log call.
 func SetRuntimeLevel(level LogLevel) {
+	// #nosec G115 -- LogLevel is a small internal enum (DEBUG..FATAL, iota-based), nowhere near int32's range
 	runtimeLevel.Store(int32(level))
+	slogLevel.Set(toSlogLevel(level))
 }
 
 // GetRuntimeLevel returns the current minimum log level.
@@ -42,11 +70,21 @@ func IsDebugEnabled() bool {
 	return LogLevel(runtimeLevel.Load()) <= DEBUG
 }
 
+// Env var names and sentinel values shared by getInstanceIdentifier and GetConfigDir.
+// Mirrors the identical literals in config/config.go (GetConfigDirForDir, IsNamedInstance)
+// which this package can't import directly (see GetConfigDir's doc comment) — named here
+// so the two copies can't silently drift apart on a typo.
+const (
+	envInstanceID    = "STAPLER_SQUAD_INSTANCE"
+	envTestDir       = "STAPLER_SQUAD_TEST_DIR"
+	sharedInstanceID = "shared"
+)
+
 // getInstanceIdentifier returns a unique identifier for this process instance
 // This helps differentiate log messages when multiple instances are running
 func getInstanceIdentifier() string {
 	// Priority 1: Use explicit instance ID from environment
-	if instanceID := os.Getenv("STAPLER_SQUAD_INSTANCE"); instanceID != "" {
+	if instanceID := os.Getenv(envInstanceID); instanceID != "" {
 		return instanceID
 	}
 
@@ -122,12 +160,33 @@ func (a *atomicLogger) Load() *log.Logger              { return a.ptr.Load() }
 func (a *atomicLogger) Store(l *log.Logger)            { a.ptr.Store(l) }
 func (a *atomicLogger) Swap(l *log.Logger) *log.Logger { return a.ptr.Swap(l) }
 
+// atomicSlogLogger holds a *slog.Logger behind an atomic.Pointer, mirroring
+// atomicLogger above but for the slog-backed logging path (logAt, ForSession).
+// A sibling type rather than a generic atomicLogger[T] to avoid touching the
+// already-correct, already-reviewed legacy-*log.Logger swap mechanism.
+type atomicSlogLogger struct {
+	ptr atomic.Pointer[slog.Logger]
+}
+
+func (a *atomicSlogLogger) Load() *slog.Logger               { return a.ptr.Load() }
+func (a *atomicSlogLogger) Store(l *slog.Logger)             { a.ptr.Store(l) }
+func (a *atomicSlogLogger) Swap(l *slog.Logger) *slog.Logger { return a.ptr.Swap(l) }
+
 //nolint:gochecknoglobals
 var (
 	warningLog atomicLogger
 	infoLog    atomicLogger
 	errorLog   atomicLogger
 	debugLog   atomicLogger
+
+	// slogDefault holds the *slog.Logger read by logAt/ForSession. It is kept in
+	// sync with the real slog.Default() by initializeWithConfig, but tests swap
+	// it via SetSlogDefaultForTest instead of calling slog.SetDefault() directly
+	// — slog.SetDefault also redirects stdlib log.Print process-wide, which is
+	// what let an unrelated httptest.Server's hang-detector log line land in a
+	// concurrent test's capture buffer under -race (see log_test.go and
+	// server/services's captureLogs helpers).
+	slogDefault atomicSlogLogger
 
 	// Global config reference
 	globalConfig *LogConfig
@@ -172,6 +231,14 @@ func DebugLog() *log.Logger { return debugLog.Load() }
 // previous value, so callers can restore it via t.Cleanup instead of racing a
 // bare package-var assignment against concurrent t.Parallel() reads.
 func SetWarningLogForTest(l *log.Logger) *log.Logger { return warningLog.Swap(l) }
+
+// SetSlogDefaultForTest atomically replaces the slog-backed default logger
+// (read by logAt/ForSession) and returns the previous value, so tests can
+// restore it via t.Cleanup instead of calling slog.SetDefault() — which
+// would also rewire stdlib log.Print process-wide and is the root cause of
+// the server/services capture-buffer race under -race this seam removes
+// tests from touching at all.
+func SetSlogDefaultForTest(l *slog.Logger) *slog.Logger { return slogDefault.Swap(l) }
 
 // SetInfoLogForTest atomically replaces the info logger and returns the previous
 // value, so callers can restore it via t.Cleanup.
@@ -377,8 +444,8 @@ func GetConfigDir() (string, error) {
 // plumbing.
 func GetConfigDirForDir(dir string) (string, error) {
 	// Priority 1: Test directory override (from --test-mode flag) wins outright.
-	if testDir := os.Getenv("STAPLER_SQUAD_TEST_DIR"); testDir != "" {
-		if err := os.MkdirAll(testDir, 0755); err != nil {
+	if testDir := os.Getenv(envTestDir); testDir != "" {
+		if err := os.MkdirAll(testDir, 0750); err != nil {
 			return "", fmt.Errorf("failed to create test directory: %w", err)
 		}
 		return testDir, nil
@@ -390,11 +457,22 @@ func GetConfigDirForDir(dir string) (string, error) {
 	}
 	baseDir := filepath.Join(homeDir, ".stapler-squad")
 
-	// Priority 2: Explicit instance ID (tests, named instances, backward compat).
-	if instanceID := os.Getenv("STAPLER_SQUAD_INSTANCE"); instanceID != "" {
-		// Special value "shared" maintains backward compatibility.
-		if instanceID == "shared" {
+	// Priority 2: Explicit instance ID (tests, named instances, backward
+	// compat). "shared" short-circuits straight to baseDir — same as
+	// config.GetConfigDirForDir — rather than falling through to Priority 3-6;
+	// it must NOT be treated as "unset", since that would silently land
+	// test/workspace-mode/preferred-workspace logic on a directory the caller
+	// explicitly opted out of.
+	if instanceID := os.Getenv(envInstanceID); instanceID != "" {
+		if instanceID == sharedInstanceID {
 			return baseDir, nil
+		}
+		// Reject path separators/".." so a stray or malicious instance ID can't
+		// escape baseDir via filepath.Join's lexical Clean() — same gap as
+		// config.GetConfigDirForDir, closed here first since this is the one
+		// touching this precedence logic today.
+		if strings.ContainsAny(instanceID, `/\`) || strings.Contains(instanceID, "..") {
+			return "", fmt.Errorf("invalid STAPLER_SQUAD_INSTANCE %q: must not contain path separators or \"..\"", instanceID)
 		}
 		return filepath.Join(baseDir, "instances", instanceID), nil
 	}
@@ -446,7 +524,7 @@ func GetLogDir(cfg *LogConfig) (string, error) {
 
 	logDir := filepath.Join(configDir, "logs")
 	// Create the log directory if it doesn't exist
-	if err := os.MkdirAll(logDir, 0755); err != nil {
+	if err := os.MkdirAll(logDir, 0750); err != nil {
 		return os.TempDir(), fmt.Errorf("failed to create log directory: %w", err)
 	}
 
@@ -463,7 +541,7 @@ func GetTestLogDir() (string, error) {
 
 	testLogDir := filepath.Join(configDir, "logs", "test")
 	// Create the test log directory if it doesn't exist
-	if err := os.MkdirAll(testLogDir, 0755); err != nil {
+	if err := os.MkdirAll(testLogDir, 0750); err != nil {
 		return os.TempDir(), fmt.Errorf("failed to create test log directory: %w", err)
 	}
 
@@ -634,7 +712,7 @@ type SessionLogger struct {
 // All calls route through the async slog handler — no stdlib mutex serialization.
 // Session-specific log files still receive the entry via LogForSession when needed.
 func ForSession(sessionID string) *slog.Logger {
-	return slog.Default().With("session", sessionID)
+	return slogDefault.Load().With("session", sessionID)
 }
 
 // ForSessionLegacy returns the old SessionLogger for callers that write to
@@ -661,20 +739,38 @@ func (sl *SessionLogger) Error(format string, v ...interface{}) {
 	LogForSession(sl.sessionID, "error", format, v...)
 }
 
+// logAt builds and emits a slog.Record with the PC of Info/Warn/Error/Debug's
+// caller (not this function, and not Info/Warn/etc. themselves) so
+// PackageLevelHandler can resolve per-package overrides correctly (skip=3:
+// Callers, logAt, Info/Warn/Error/Debug, caller).
+// See also: https://pkg.go.dev/log/slog#hdr-Wrapping_output_methods.
+func logAt(level slog.Level, msg string, args ...any) {
+	logger := slogDefault.Load()
+	ctx := context.Background()
+	if !logger.Enabled(ctx, level) {
+		return
+	}
+	var pcs [1]uintptr
+	runtime.Callers(3, pcs[:])
+	r := slog.NewRecord(time.Now(), level, msg, pcs[0])
+	r.Add(args...)
+	_ = logger.Handler().Handle(ctx, r)
+}
+
 // Info logs an info-level message through the default slog handler (async, no mutex hold).
 // args are alternating key-value pairs: log.Info("msg", "key", val, "key2", val2)
-func Info(msg string, args ...any) { slog.Info(msg, args...) }
+func Info(msg string, args ...any) { logAt(slog.LevelInfo, msg, args...) }
 
 // Warn logs a warning-level message through the default slog handler.
-func Warn(msg string, args ...any) { slog.Warn(msg, args...) }
+func Warn(msg string, args ...any) { logAt(slog.LevelWarn, msg, args...) }
 
 // Error logs an error-level message through the default slog handler.
-func Error(msg string, args ...any) { slog.Error(msg, args...) }
+func Error(msg string, args ...any) { logAt(slog.LevelError, msg, args...) }
 
 // Debug logs a debug-level message through the default slog handler.
 // The handler drops debug records when the runtime level is above DEBUG, so
 // this is safe to call without an IsDebugEnabled() guard.
-func Debug(msg string, args ...any) { slog.Debug(msg, args...) }
+func Debug(msg string, args ...any) { logAt(slog.LevelDebug, msg, args...) }
 
 // Global convenience functions for structured logging (legacy — prefer Info/Warn/Error/Debug)
 
@@ -755,7 +851,11 @@ func init() {
 // Initialize should be called once at the beginning of the program to set up logging.
 // defer Close() after calling this function. It sets the go log output to the file in
 // the configured log directory (default: ~/.stapler-squad/logs/).
-
+//
+// Must run after config.LoadConfig() in any real entry point: GetConfigDir (used
+// internally here) doesn't perform config.GetConfigDirForDir's legacy ~/.claude-squad
+// migration, so calling this first would create ~/.stapler-squad ahead of migration
+// and cause config's migration guard to skip it.
 func Initialize(daemon bool) {
 	// Use default config
 	cfg := DefaultLogConfig()
@@ -829,12 +929,15 @@ func createRotatingWriter(logFilePath string, cfg *LogConfig) io.Writer {
 	if cfg == nil || cfg.LogMaxSize <= 0 {
 		// Create log directory if it doesn't exist
 		logDir := filepath.Dir(logFilePath)
-		if err := os.MkdirAll(logDir, 0755); err != nil {
+		if err := os.MkdirAll(logDir, 0750); err != nil {
 			panic(fmt.Sprintf("could not create log directory: %s", err))
 		}
 
 		// No rotation, use standard file
-		f, err := os.OpenFile(logFilePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
+		// #nosec G304 -- logFilePath comes from GetLogFilePath/GetLogDir, which resolve
+		// to config.GetConfigDir() (or an isolated test dir) plus fixed filenames, not
+		// caller/user-controlled input.
+		f, err := os.OpenFile(logFilePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
 		if err != nil {
 			panic(fmt.Sprintf("could not open log file: %s", err))
 		}
@@ -872,6 +975,7 @@ func initializeWithConfig(daemon bool, cfg *LogConfig) {
 	if cfg.ConsoleLevel < configLevel {
 		configLevel = cfg.ConsoleLevel
 	}
+	// #nosec G115 -- configLevel is a LogLevel enum (DEBUG..FATAL, iota-based), nowhere near int32's range
 	runtimeLevel.Store(int32(configLevel))
 
 	// Set log format to include timestamp and file/line number
@@ -982,12 +1086,17 @@ func initializeWithConfig(daemon bool, cfg *LogConfig) {
 
 	// Install async slog bridge so log.Printf calls route through slog.
 	// Handler ordering: TraceIDHandler (outermost, captures trace IDs at call time)
+	// → PackageLevelHandler (per-package level overrides, see log/package_level.go)
 	// → AsyncHandler → JSONHandler (innermost, writes to combinedWriter).
 	// TraceIDHandler is a no-op identity handler until E2-S2 adds the real implementation.
 	jsonHandler := slog.NewJSONHandler(combinedWriter, &slog.HandlerOptions{Level: slog.LevelDebug})
 	asyncHandler := NewAsyncHandler(jsonHandler, defaultAsyncBufSize)
 	asyncHandler.StartDrain()
-	slog.SetDefault(slog.New(NewTraceIDHandler(asyncHandler)))
+	packageLevelHandler := NewPackageLevelHandler(asyncHandler)
+	prodLogger := slog.New(NewTraceIDHandler(packageLevelHandler))
+	slog.SetDefault(prodLogger)
+	slogDefault.Store(prodLogger)
+	LoadPackageLevelsFromEnv()
 
 	// Populate the default LogManager so package consumers can use it via dependency injection.
 	defaultManager = newLogManager(cfg, InfoLog(), WarningLog(), ErrorLog(), DebugLog(), globalLogFile, structuredLogger, asyncHandler, asyncLogFileWriter, asyncLogConsoleWriter)

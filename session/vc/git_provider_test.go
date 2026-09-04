@@ -1204,7 +1204,7 @@ func configureGitUser(t *testing.T, dir string) {
 
 // initGitRepoWithCommit initialises a git repo on branch "main" with one commit.
 // Uses go-git directly rather than shelling out — see
-// .claude/rules/prefer-go-git-over-subshells.md.
+// the `prefer-go-git-over-subshells` skill.
 func initGitRepoWithCommit(t *testing.T, dir string) {
 	t.Helper()
 

@@ -360,11 +360,15 @@ func TestBroadcastControlModeUpdate_KeepsBurstySubscriberOpen_When_ConsumerCatch
 		sess.broadcastControlModeUpdate([]byte("x"))
 	}
 
-	// Simulate the consumer catching up shortly after — well within
-	// controlModeSlowSubscriberGrace — rather than being fully drained beforehand, so this
-	// exercises the actual race: room must open up mid-wait for the send below.
+	// Simulate the consumer catching up concurrently rather than being fully drained
+	// beforehand, so this exercises the actual race: room must open up mid-wait for the send
+	// below. No artificial delay before draining — whenever the goroutine actually gets
+	// scheduled, broadcastControlModeUpdate's 250ms grace period only needs it to land one
+	// drain within that window, so this holds regardless of scheduler contention. (An earlier
+	// version slept 10ms before draining; under heavy CPU contention across a full -race test
+	// run, that fixed delay left far less margin than draining immediately does, and caused a
+	// rare flake.)
 	go func() {
-		time.Sleep(10 * time.Millisecond)
 		for i := 0; i < 100; i++ {
 			<-ch
 		}
