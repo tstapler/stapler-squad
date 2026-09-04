@@ -1165,6 +1165,114 @@ func TestOverrideVerdict_should_TransitionSuccessfully_When_CalledOnce(t *testin
 	assert.Equal(t, string(session.BacklogStatusInProgress), final.StatusEvents[0].ToStatus)
 }
 
+// disabledEdgeWorkflowEngine wraps the default WorkflowEngine but forces
+// CanTransition to return false for exactly one from/to edge regardless of
+// what the static validTransitions map says, simulating a
+// ConfiguredWorkflowEngine (Epic 2.3) whose custom transition graph has had
+// that edge removed. Shared by Story 2.1.1/2.1.2 (Epic 2.1) regression tests
+// across this file and backlog_service_sync_test.go — both call sites must
+// consult the injected engine, not session.CanTransitionBacklog directly.
+type disabledEdgeWorkflowEngine struct {
+	session.WorkflowEngine
+	deniedFrom, deniedTo session.BacklogStatus
+}
+
+func (e disabledEdgeWorkflowEngine) CanTransition(from, to session.BacklogStatus) bool {
+	if from == e.deniedFrom && to == e.deniedTo {
+		return false
+	}
+	return e.WorkflowEngine.CanTransition(from, to)
+}
+
+// alwaysAllowWorkflowEngine allows every transition, including ones the
+// static validTransitions map forbids. Used to prove a call site reads the
+// injected engine rather than session.CanTransitionBacklog (Story 2.1.1).
+type alwaysAllowWorkflowEngine struct{}
+
+func (alwaysAllowWorkflowEngine) CanTransition(_, _ session.BacklogStatus) bool { return true }
+
+func (alwaysAllowWorkflowEngine) ValidateGates(_ session.BacklogItemTransitionInput, _ session.BacklogStatus) error {
+	return nil
+}
+
+func (alwaysAllowWorkflowEngine) AllowedTransitions(_ session.BacklogStatus) []session.BacklogStatus {
+	return nil
+}
+
+// TestOverrideVerdict_should_RefuseTransition_When_ConfiguredWorkflowEngineHasDisabledTheEdge
+// is the Story 2.1.1 regression test: OverrideVerdict must refuse a
+// transition the injected engine refuses, even though the static
+// domain.CanTransitionBacklog map would allow review->done.
+func TestOverrideVerdict_should_RefuseTransition_When_ConfiguredWorkflowEngineHasDisabledTheEdge(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	engine := disabledEdgeWorkflowEngine{
+		WorkflowEngine: session.NewDefaultWorkflowEngine(),
+		deniedFrom:     session.BacklogStatusReview,
+		deniedTo:       session.BacklogStatusDone,
+	}
+	svc := NewBacklogService(storage, nil, nil, engine, nil, nil)
+
+	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+		Title:  "item with review->done disabled by the configured engine",
+		Status: string(session.BacklogStatusReview),
+	})
+	require.NoError(t, err)
+
+	is, err := storage.CreateItemSession(t.Context(), session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: "review-session-disabled-edge",
+		SessionRole: session.SessionRoleReview,
+	})
+	require.NoError(t, err)
+
+	_, err = svc.OverrideVerdict(t.Context(), connect.NewRequest(&sessionv1.OverrideVerdictRequest{
+		ItemSessionId:  is.ID,
+		ToStatus:       string(session.BacklogStatusDone),
+		OverrideReason: "should be refused by the configured engine",
+	}))
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))
+
+	final, err := storage.GetBacklogItem(t.Context(), item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, string(session.BacklogStatusReview), final.Status, "item must stay at its original status when the engine refuses the transition")
+}
+
+// TestOverrideVerdict_should_AllowTransition_When_StaticMapWouldRefuseButEngineAllows
+// is the inverse of the above: it confirms the call site reads
+// s.engine.CanTransition and not session.CanTransitionBacklog directly, by
+// using a transition (review->queued) the static map forbids but the
+// injected engine allows.
+func TestOverrideVerdict_should_AllowTransition_When_StaticMapWouldRefuseButEngineAllows(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	require.False(t, session.CanTransitionBacklog(session.BacklogStatusReview, session.BacklogStatusQueued),
+		"precondition: the static map must forbid review->queued for this test to prove anything")
+	svc := NewBacklogService(storage, nil, nil, alwaysAllowWorkflowEngine{}, nil, nil)
+
+	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+		Title:  "item exercising an engine-only-allowed transition",
+		Status: string(session.BacklogStatusReview),
+	})
+	require.NoError(t, err)
+
+	is, err := storage.CreateItemSession(t.Context(), session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: "review-session-engine-allows",
+		SessionRole: session.SessionRoleReview,
+	})
+	require.NoError(t, err)
+
+	resp, err := svc.OverrideVerdict(t.Context(), connect.NewRequest(&sessionv1.OverrideVerdictRequest{
+		ItemSessionId:  is.ID,
+		ToStatus:       string(session.BacklogStatusQueued),
+		OverrideReason: "allowed only because the injected engine permits it",
+	}))
+	require.NoError(t, err)
+	assert.Equal(t, string(session.BacklogStatusQueued), resp.Msg.Item.Status)
+}
+
 // ─── AddBacklogItemDependency RPC handler ──────────────────────────────────────
 
 // TestAddBacklogItemDependency_should_PersistEdge_When_ItemsExistAndNoCycle is

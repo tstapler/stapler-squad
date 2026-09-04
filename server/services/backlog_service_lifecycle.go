@@ -1102,7 +1102,7 @@ func (s *BacklogService) OverrideVerdict(
 			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to load item for transition: %w", currentErr))
 		}
 		from := session.BacklogStatus(currentItem.Status)
-		if !session.CanTransitionBacklog(from, toStatus) {
+		if !s.engine.CanTransition(from, toStatus) {
 			return nil, connect.NewError(connect.CodeInvalidArgument,
 				fmt.Errorf("cannot transition item from %q to %q", from, toStatus))
 		}
