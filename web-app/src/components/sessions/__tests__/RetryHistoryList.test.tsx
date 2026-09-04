@@ -45,4 +45,17 @@ describe("RetryHistoryList", () => {
     expect(screen.getAllByRole("listitem")).toHaveLength(10);
     expect(screen.getByText("Show all (12)")).toBeInTheDocument();
   });
+
+  it("RetryHistoryList_should_RenderReasonAndRelativeTimestamp_When_RecordHasThem", () => {
+    const nowSeconds = Math.floor(Date.now() / 1000);
+    render(<RetryHistoryList history={[record(1, "tmux_exited", nowSeconds - 90)]} />);
+    const item = screen.getByRole("listitem");
+    expect(within(item).getByText("tmux_exited")).toBeInTheDocument();
+    expect(within(item).getByText("1m ago")).toBeInTheDocument();
+  });
+
+  it("RetryHistoryList_should_ShowUnknownTime_When_TimestampIsZeroOrMissing", () => {
+    render(<RetryHistoryList history={[record(1, "crashed", 0)]} />);
+    expect(screen.getByText("Unknown time")).toBeInTheDocument();
+  });
 });

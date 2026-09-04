@@ -309,15 +309,6 @@ func (p *PRStatusPoller) fetchAndUpdatePRStatus(inst *Instance) {
 		if newEtag != "" {
 			p.listEtags.Store(listKey, newEtag)
 		}
-		if !changed {
-			// 304: branch list unchanged, still no PR — re-arm backoff to avoid constant polling.
-			if p.config.NoPRBackoff > 0 {
-				p.mu.Lock()
-				p.noPRPollAfter[inst.Title] = time.Now().Add(p.config.NoPRBackoff)
-				p.mu.Unlock()
-			}
-			return
-		}
 		if err != nil {
 			if errors.Is(err, github.ErrNoPR) {
 				p.applyNoPR(inst)
@@ -327,6 +318,15 @@ func (p *PRStatusPoller) fetchAndUpdatePRStatus(inst *Instance) {
 				return
 			}
 			log.Warn("PR status poller: PR discovery failed", "session", inst.Title, "owner", owner, "repo", repo, "branch", branch, "err", err)
+			return
+		}
+		if !changed {
+			// 304: branch list unchanged, still no PR — re-arm backoff to avoid constant polling.
+			if p.config.NoPRBackoff > 0 {
+				p.mu.Lock()
+				p.noPRPollAfter[inst.Title] = time.Now().Add(p.config.NoPRBackoff)
+				p.mu.Unlock()
+			}
 			return
 		}
 		// Persist discovered PR number and clear no-PR backoff.

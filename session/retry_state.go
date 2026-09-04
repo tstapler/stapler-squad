@@ -10,7 +10,9 @@ package session
 
 import (
 	"errors"
+	"fmt"
 	"math/rand"
+	"os"
 	"slices"
 	"time"
 
@@ -332,9 +334,37 @@ func restartForRetry(inst *Instance, allowedPath, continuationPrompt string, pol
 	var restartErr error
 	if st == Stopped || st == PermanentlyFailed {
 		inst.RecoverFromStopped()
-		// Clear the old (possibly dead) controller so StartController below creates a fresh one.
-		inst.StopController()
-		restartErr = inst.Start(false)
+		// A prior failure may have been the session's worktree directory
+		// vanishing from disk (e.g. a pruned/deleted git worktree — see
+		// tmux.ErrWorkDirMissing). Start(false) below is the warm-restart
+		// path and, unlike first-time session setup, never re-creates the
+		// worktree on its own — so without this, "Retry now" would fail
+		// identically forever. GitWorktreeManager.Setup() is the same
+		// create-or-reuse-in-place logic first-time setup uses, so calling
+		// it again here is safe even if the directory turns out to still
+		// exist.
+		//
+		// A Setup() failure fails the retry immediately instead of still
+		// calling Start(false): that would just repeat the identical
+		// ErrWorkDirMissing failure this whole branch exists to recover
+		// from, making "Retry now" look like it silently did nothing.
+		var setupErr error
+		if inst.gitManager.HasWorktree() {
+			if workDir := inst.GetEffectiveRootDir(); workDir != "" {
+				if _, statErr := os.Stat(workDir); errors.Is(statErr, os.ErrNotExist) {
+					if setupErr = inst.gitManager.Setup(); setupErr == nil {
+						log.Info("SessionDriver: recreated missing worktree before retry", "session", inst.Title, "path", workDir)
+					}
+				}
+			}
+		}
+		if setupErr != nil {
+			restartErr = fmt.Errorf("failed to recreate missing worktree before retry: %w", setupErr)
+		} else {
+			// Clear the old (possibly dead) controller so StartController below creates a fresh one.
+			inst.StopController()
+			restartErr = inst.Start(false)
+		}
 		if restartErr == nil {
 			if ctrlErr := inst.StartController(); ctrlErr != nil {
 				log.Warn("SessionDriver: failed to restart controller after retry restart",
@@ -383,6 +413,21 @@ func restartForRetry(inst *Instance, allowedPath, continuationPrompt string, pol
 // goroutines.
 func (i *Instance) SetRetryInFlightForTest(v bool) {
 	i.retryInFlight.Store(v)
+}
+
+// MarkPermanentlyFailedForTest forces a live instance into the terminal
+// PermanentlyFailed status, for tests outside this package that need to
+// simulate a session which has exhausted its automated retries (e.g.
+// asserting RetrySession's manual-recovery RPC). Routes through
+// markSessionPermanentlyFailed's existing locked + snapshot-republish path
+// rather than a bare `inst.Status = PermanentlyFailed` field write — a plain
+// field write races with CreateSession's async start pipeline, whose
+// transitionToLocked call publishes Status outside inst.mu entirely (see
+// GetStatus's doc comment). Callers must still wait for the instance to
+// reach Active (via GetStatus/Snapshot, not this field) before calling this,
+// so the pipeline's own transition has already landed.
+func (i *Instance) MarkPermanentlyFailedForTest() {
+	markSessionPermanentlyFailed(i, "test")
 }
 
 // IsRetryPending reports whether an automated restart is currently claimed

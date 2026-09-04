@@ -5102,3 +5102,158 @@ func TestBacklogWorkBranchSlug_TwoItemsWithCollidingTitles_ShareOneWorktree(t *t
 	assert.Equal(t, pathA, pathB,
 		"colliding title slugs currently resolve to the exact same worktree — a known, tracked limitation, not fixed by this bug fix")
 }
+
+// --- Story 2.1.3: an open Jules session blocks local respawn/reopen the same
+// way an open work session does ---
+
+// TestSpawnSessionAfterGates_should_ReturnAlreadyExistsNamingJulesSession_When_OpenJulesSessionPresent
+// guards the 8b duplicate-spawn guard: an item with an open jules_work
+// ItemSession and no work session must reject a fresh local spawn with
+// CodeAlreadyExists naming a Jules session, and the local tmux creation path
+// must never be invoked.
+func TestSpawnSessionAfterGates_should_ReturnAlreadyExistsNamingJulesSession_When_OpenJulesSessionPresent(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	creator := &mockSessionCreator{}
+	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
+
+	repoPath := t.TempDir()
+	initGitRepoWithCommit(t, repoPath)
+
+	itemID := createReadyItemForSpawn(t, svc, repoPath, "item with an open jules session")
+	_, err := storage.CreateItemSession(t.Context(), session.ItemSessionData{
+		ItemID:      itemID,
+		SessionUUID: "jules-sessions/spawn-guard",
+		SessionRole: session.SessionRoleJulesWork,
+	})
+	require.NoError(t, err)
+
+	_, err = svc.SpawnSessionFromItem(t.Context(), connect.NewRequest(&sessionv1.SpawnSessionFromItemRequest{ItemId: itemID}))
+	require.Error(t, err)
+	connectErr := new(connect.Error)
+	require.ErrorAs(t, err, &connectErr)
+	assert.Equal(t, connect.CodeAlreadyExists, connectErr.Code())
+	assert.Contains(t, connectErr.Message(), "Jules session", "error must name a Jules session, distinguishing it from the ordinary active-work-session block")
+	assert.Empty(t, creator.calls, "the local tmux creation path must never be invoked while a Jules session is active")
+}
+
+// TestAutoRespawnAutonomousWork_should_SkipRespawn_When_OpenJulesSessionPresent
+// guards the default-on autonomous sweep (reachable with no user action via
+// autoSpawnReadyItemsEnabled): it must not start a competing local session
+// while a Jules session is already open for the item.
+func TestAutoRespawnAutonomousWork_should_SkipRespawn_When_OpenJulesSessionPresent(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	svc := NewBacklogService(storage, &mockSessionCreator{}, nil, nil, nil, nil)
+
+	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+		Title:  "in_progress item with an open jules session",
+		Status: string(session.BacklogStatusInProgress),
+	})
+	require.NoError(t, err)
+	_, err = storage.CreateItemSession(t.Context(), session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: "jules-sessions/autonomous-guard",
+		SessionRole: session.SessionRoleJulesWork,
+	})
+	require.NoError(t, err)
+
+	require.NoError(t, svc.AutoRespawnAutonomousWork(t.Context(), item.ID))
+
+	sessions, err := storage.ListItemSessions(t.Context(), item.ID)
+	require.NoError(t, err)
+	require.Len(t, sessions, 1, "no new ItemSession row must be created while the Jules session is active")
+	assert.Equal(t, session.SessionRoleJulesWork, sessions[0].Role)
+}
+
+// TestAutoRespawnReview_should_SkipRespawn_When_OpenJulesSessionPresent guards
+// AutoRespawnReview's abandoned-review respawn path: it must not spawn a new
+// review session while a Jules session is already open for the item, mirroring
+// the existing findActiveWorkSession/findActiveReviewSession block.
+func TestAutoRespawnReview_should_SkipRespawn_When_OpenJulesSessionPresent(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	svc := NewBacklogService(storage, &mockSessionCreator{}, nil, nil, nil, nil)
+
+	repoPath := t.TempDir()
+	initGitRepoWithCommit(t, repoPath)
+
+	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+		Title:    "review item with an open jules session",
+		RepoPath: repoPath,
+		Status:   string(session.BacklogStatusReview),
+	})
+	require.NoError(t, err)
+	_, err = storage.CreateItemSession(t.Context(), session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: "jules-sessions/review-guard",
+		SessionRole: session.SessionRoleJulesWork,
+	})
+	require.NoError(t, err)
+
+	require.NoError(t, svc.AutoRespawnReview(t.Context(), item.ID))
+
+	sessions, err := storage.ListItemSessions(t.Context(), item.ID)
+	require.NoError(t, err)
+	for _, is := range sessions {
+		assert.NotEqual(t, session.SessionRoleReview, is.Role, "no review session must be spawned while a Jules session is active")
+	}
+}
+
+// TestSteerActiveSessionForPRFix_should_LogErrorAndSkipTmuxWrite_When_ActiveSessionIsJulesWork
+// guards Story 2.1.3's steering exception: findActiveWorkSession never matches a
+// jules_work row, so AutoReopenForPRFix cannot naturally reach this branch with
+// one today (the poller ends the Jules session before pr_pending) — this test
+// constructs the violation directly to prove the defensive guard fires instead
+// of silently attempting a tmux write to a session that has no pane.
+func TestSteerActiveSessionForPRFix_should_LogErrorAndSkipTmuxWrite_When_ActiveSessionIsJulesWork(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	svc := NewBacklogService(storage, &mockSessionCreator{}, nil, nil, nil, nil)
+	steerer := &mockSessionSteerer{
+		programs: map[string]string{"jules-sessions/invariant-violation": "claude"},
+		steerErr: map[string]error{},
+	}
+	svc.SetSessionSteerer(steerer)
+
+	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+		Title:  "invariant-violation test item",
+		Status: string(session.BacklogStatusPRPending),
+	})
+	require.NoError(t, err)
+
+	active := &session.ItemSessionSummary{
+		SessionUUID: "jules-sessions/invariant-violation",
+		Role:        session.SessionRoleJulesWork,
+	}
+
+	svc.steerActiveSessionForPRFix(t.Context(), item.ID, item.Title, session.BacklogStatusPRPending, active, "some fix context")
+
+	assert.Empty(t, steerer.calls(), "a jules_work session must never receive a tmux write, even though SessionProgram/IsReadyForSteer would otherwise report it ready")
+}
+
+// TestCountLiveBacklogWorkSessions_should_ExcludeJulesWorkRows_When_MixedRolesPresent
+// documents the explicit out-of-scope carve-out: countLiveBacklogWorkSessions feeds
+// MaxConcurrentBacklogWorkItems, a separate WIP pool from MaxConcurrentJulesSessions
+// (Story 2.2.2) — an open jules_work row alone must not shrink local capacity.
+func TestCountLiveBacklogWorkSessions_should_ExcludeJulesWorkRows_When_MixedRolesPresent(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	svc := NewBacklogService(storage, &mockSessionCreator{}, nil, nil, nil, nil)
+
+	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+		Title:  "review item with only an open jules session",
+		Status: string(session.BacklogStatusReview),
+	})
+	require.NoError(t, err)
+	_, err = storage.CreateItemSession(t.Context(), session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: "jules-sessions/wip-carveout",
+		SessionRole: session.SessionRoleJulesWork,
+	})
+	require.NoError(t, err)
+
+	count, err := svc.countLiveBacklogWorkSessions(t.Context())
+	require.NoError(t, err)
+	assert.Equal(t, 0, count, "an open jules_work row alone must not count toward MaxConcurrentBacklogWorkItems")
+}

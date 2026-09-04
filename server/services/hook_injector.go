@@ -31,6 +31,15 @@ const (
 	// autonomous session notices and can self-correct immediately instead of only
 	// learning about drift from a review verdict hours or days later.
 	HookGitDriftCheck HookName = "git_drift_check" // maps to PostToolUse event
+
+	// HookExtensionHealth maps to the pi approval extension's health-ping endpoint
+	// (/api/hooks/pi-extension-loaded, pi-support Epic 4.2). Unlike the HookNames
+	// above, this one is never passed to InjectHooksConfig/RemoveHooksConfig — the
+	// pi extension reads this URL from a value baked into ssqApprovalExtensionTemplate
+	// at render time (cmd/ssq-hooks/main.go), not from a session's injected hooks.json.
+	// It's added to this registry anyway for consistency: one place that knows every
+	// hook-shaped URL this server serves, per hookEndpoints' own doc comment.
+	HookExtensionHealth HookName = "pi_extension_health" // maps to the pi extension's load-confirmation ping
 )
 
 // hookEventName maps a HookName to the Claude Code hooks.* key.
@@ -106,6 +115,7 @@ func hookEndpoints(baseURLFn func() string) map[HookName]string {
 		HookPostToolLogging:    base + "/api/hooks/post-tool-use",
 		HookPromptSubmit:       base + "/api/hooks/prompt-submit",
 		HookGitDriftCheck:      base + "/api/hooks/post-tool-use-drift-check",
+		HookExtensionHealth:    base + "/api/hooks/pi-extension-loaded",
 	}
 }
 

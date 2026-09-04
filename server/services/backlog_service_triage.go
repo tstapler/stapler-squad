@@ -1007,6 +1007,12 @@ func (s *BacklogService) spawnSessionAfterGates(
 	if active := findActiveWorkSession(priorSessions); active != nil {
 		return nil, connect.NewError(connect.CodeAlreadyExists, s.activeWorkSessionBlockedError(active))
 	}
+	// 8b (Jules). Guard against starting a competing local session while a Jules
+	// session for this item is already running on Google's infrastructure — see
+	// session.HasActiveJulesSession's doc comment.
+	if activeJules := findActiveJulesSession(priorSessions); activeJules != nil {
+		return nil, connect.NewError(connect.CodeAlreadyExists, fmt.Errorf("a Jules session (%s) is already running for this item; wait for it to finish before starting a local session", activeJules.SessionUUID))
+	}
 
 	// 8. Build agent prompt. Routed through PipelineEngine (Epic 1.5, Story 1.5.5) so a
 	// non-default PipelineMode changes what inst.Prompt / AutonomousDriver's goal sees.
@@ -1264,6 +1270,20 @@ func hasActiveWorkSession(priorSessions []session.ItemSessionSummary) bool {
 func findActiveWorkSession(priorSessions []session.ItemSessionSummary) *session.ItemSessionSummary {
 	for i := range priorSessions {
 		if priorSessions[i].Role == session.SessionRoleWork && priorSessions[i].EndedAt == nil {
+			return &priorSessions[i]
+		}
+	}
+	return nil
+}
+
+// findActiveJulesSession returns the open (not yet ended) jules_work-role
+// ItemSession, if any — the Jules-specific counterpart to findActiveWorkSession,
+// used alongside it (not instead of it — see Story 2.1.3's design note on why
+// findActiveWorkSession itself is left unwidened) so a caller can log/notify with
+// the actual session UUID rather than a bare "already active."
+func findActiveJulesSession(priorSessions []session.ItemSessionSummary) *session.ItemSessionSummary {
+	for i := range priorSessions {
+		if priorSessions[i].Role == session.SessionRoleJulesWork && priorSessions[i].EndedAt == nil {
 			return &priorSessions[i]
 		}
 	}
@@ -1910,6 +1930,10 @@ func (s *BacklogService) AutoRespawnAutonomousWork(ctx context.Context, itemID s
 		s.notifyRespawnBlockedByActiveSession(ctx, "AutoRespawnAutonomousWork", itemID, item.Title, session.BacklogStatus(item.Status), active.SessionUUID)
 		return nil
 	}
+	if activeJules := findActiveJulesSession(sessions); activeJules != nil {
+		s.notifyRespawnBlockedByActiveSession(ctx, "AutoRespawnAutonomousWork", itemID, item.Title, session.BacklogStatus(item.Status), activeJules.SessionUUID)
+		return nil
+	}
 	s.resolveRespawnBlockedActiveLogged(ctx, "AutoRespawnAutonomousWork", itemID)
 
 	workCount := 0
@@ -2121,7 +2145,7 @@ func (s *BacklogService) autoReopenForPRFix(ctx context.Context, itemID string, 
 		active = knownActive
 	}
 	if active != nil {
-		s.steerActiveSessionForPRFix(ctx, itemID, item.Title, session.BacklogStatus(item.Status), active.SessionUUID, fixContext)
+		s.steerActiveSessionForPRFix(ctx, itemID, item.Title, session.BacklogStatus(item.Status), active, fixContext)
 		return nil
 	}
 	s.resolveRespawnBlockedActiveLogged(ctx, "AutoReopenForPRFix", itemID)
@@ -2260,6 +2284,9 @@ func (s *BacklogService) AutoRespawnReview(ctx context.Context, itemID string) e
 	active := findActiveWorkSession(sessions)
 	if active == nil {
 		active = findActiveReviewSession(sessions)
+	}
+	if active == nil {
+		active = findActiveJulesSession(sessions)
 	}
 	if active != nil {
 		s.notifyRespawnBlockedByActiveSession(ctx, "AutoRespawnReview", itemID, item.Title, session.BacklogStatus(item.Status), active.SessionUUID)

@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -47,6 +48,42 @@ func createTestStorage(t *testing.T) (*Storage, func()) {
 		repo.Close()
 	}
 	return storage, cleanup
+}
+
+// TestCreateTestStorage_SecondConnectionSeesSameData pins the invariant
+// createTestStorage's shared-cache DSN exists for: a second, independent
+// *sql.DB opened against the same DSN (as forceEmptyBranchNameViaRawSQL does
+// in review_gate_test.go) must see rows written through the first connection.
+// A bare ":memory:" DSN would fail this — each independent sql.Open gets its
+// own private, unmigrated database — so this test would catch a regression
+// that silently reintroduced that DSN shape.
+func TestCreateTestStorage_SecondConnectionSeesSameData(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+
+	er := storage.repo
+
+	// newTestInstance alone (bare directory-mode, no gitManager.worktree) never
+	// produces a worktrees table row -- SaveInstances only persists a worktree
+	// row when the instance actually carries one. A GitWorktree reconstructed
+	// via NewGitWorktreeFromStorage (as forceEmptyBranchNameViaRawSQL's callers
+	// do, review_gate_test.go) is enough to trigger that row without touching
+	// disk, since it returns non-nil whenever any of repoPath/worktreePath/
+	// branchName is non-empty.
+	inst := newTestInstance("shared-cache-visibility-test")
+	inst.gitManager.worktree = git.NewGitWorktreeFromStorage(
+		"/tmp/test", "/tmp/test", "shared-cache-visibility-test", "placeholder-branch",
+		"deadbeefdeadbeefdeadbeefdeadbeefdeadbeef")
+	require.NoError(t, storage.SaveInstances([]*Instance{inst}))
+
+	db, err := sql.Open("sqlite", er.dbPath)
+	require.NoError(t, err)
+	defer db.Close()
+
+	var count int
+	err = db.QueryRow("SELECT COUNT(*) FROM worktrees WHERE session_name = ?", "shared-cache-visibility-test").Scan(&count)
+	require.NoError(t, err)
+	assert.Equal(t, 1, count, "second connection against the same DSN must see the row written via the first")
 }
 
 // TestStorage_UUID_PersistedThroughAddAndLoad is the primary regression test for

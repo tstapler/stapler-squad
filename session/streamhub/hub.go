@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/resize"
 )
 
 // errSlowSubscriberEvicted is the eviction reason logged when a subscriber's
@@ -680,7 +681,18 @@ func (h *StreamHub) applyNegotiatedSize(ctx context.Context, size TerminalSize) 
 		h.resizeMu.Unlock()
 	}()
 
-	if err := h.controller.SetWindowSizeContext(ctx, size.cols, size.rows); err != nil {
+	// resize.WithForcedRedraw nudges to (cols-1, rows) before the real size —
+	// see its doc comment for why: tmux's resize-window is a no-op (no
+	// SIGWINCH) when the pane is already at the requested size, which is
+	// exactly what happens on the first reconnect after a service restart
+	// with --tmux-keep-server, leaving the pane blank until enough
+	// keystrokes force a repaint. This is the same helper
+	// server/services/connectrpc_websocket.go's streamViaControlMode and
+	// streamShellViaControlMode use, consolidated so every tmux-resizing
+	// call site gets the fix instead of hand-rolling it separately.
+	if err := resize.WithForcedRedraw(func(cols, rows int) error {
+		return h.controller.SetWindowSizeContext(ctx, cols, rows)
+	}, size.cols, size.rows); err != nil {
 		if errors.Is(err, ErrSessionNotStarted) {
 			log.Info("streamhub: session not started yet, skipping this resize (will retry on the next negotiated size)", "session", h.sessionName)
 			return

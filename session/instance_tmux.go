@@ -51,24 +51,94 @@ const maxInlinePromptBytes = 4096
 // requirement, so tests may shrink it (per-instance) to avoid a real sleep.
 const defaultPromptFileCleanupDelay = 30 * time.Second
 
-// programKind is a sealed sum type over the kinds of launchable programs.
-// Holding a claudeProgram is proof that isClaude() returned true — downstream
-// code needs no further guards. Parse once at the boundary, trust internally.
-type programKind interface{ sealedProgramKind() }
+// launchCommandBuilder builds the tmux launch command for one recognized
+// coding-agent program. A new program gets a new implementation appended to
+// launchBuilders below, never a new case in buildLaunchCommand itself —
+// mirrors programExtension in instance_controller.go.
+type launchCommandBuilder interface {
+	// Matches reports whether program (whitespace-tokenized, basename-matched)
+	// is handled by this builder.
+	Matches(program string) bool
+	// Build returns the full launch command for i. resumeSessionID is
+	// buildLaunchCommand's claudeSessionID parameter passed through — only
+	// claudeLaunchBuilder uses it; piLaunchBuilder reads i.piSession instead.
+	Build(i *Instance, base, resumeSessionID string) string
+	// StderrRedirect returns the shell redirect suffix (e.g. " 2>>'<path>'")
+	// to append so this program's stderr doesn't reach the visible pane, or
+	// "" to leave stderr alone. Must redirect to a real file, never
+	// /dev/null -- see piLaunchBuilder.StderrRedirect's doc comment.
+	StderrRedirect(i *Instance) string
+}
 
-type claudeProgram struct{ base string }
-type plainProgram struct{ cmd string }
+// launchBuilders is the ordered, stateless set of builders buildLaunchCommand
+// checks before falling back to the default (shell-quote-and-run-as-is) path.
+// A future program's builder is appended here, never a new case in
+// buildLaunchCommand itself.
+var launchBuilders = []launchCommandBuilder{&claudeLaunchBuilder{}, &piLaunchBuilder{}}
 
-func (claudeProgram) sealedProgramKind() {}
-func (plainProgram) sealedProgramKind()  {}
+// claudeLaunchBuilder implements launchCommandBuilder for the claude binary.
+type claudeLaunchBuilder struct{}
 
-// classifyProgram parses a raw program string into its kind.
-// Call this once; pass the result where program type matters.
-func classifyProgram(program string) programKind {
-	if isClaude(program) {
-		return claudeProgram{base: program}
+func (b *claudeLaunchBuilder) Matches(program string) bool { return isClaude(program) }
+
+func (b *claudeLaunchBuilder) Build(i *Instance, base, resumeSessionID string) string {
+	// AutoApprove is injected inside buildClaudeCommand, before the trailing
+	// "--" prompt separator -- see that function's comment for why appending
+	// it here (after the separator) would be silently swallowed as inert
+	// positional text instead of a real flag.
+	return i.buildClaudeCommand(base, resumeSessionID)
+}
+
+func (b *claudeLaunchBuilder) StderrRedirect(i *Instance) string { return "" }
+
+// piLaunchBuilder implements launchCommandBuilder for the pi binary.
+type piLaunchBuilder struct{}
+
+func (b *piLaunchBuilder) Matches(program string) bool { return isPi(program) }
+
+func (b *piLaunchBuilder) Build(i *Instance, base, _ string) string {
+	i.piSessionMu.Lock()
+	var piSessionID string
+	if i.piSession != nil {
+		piSessionID = i.piSession.SessionID
 	}
-	return plainProgram{cmd: program}
+	i.piSessionMu.Unlock()
+	return i.buildPiCommand(base, piSessionID)
+}
+
+// StderrRedirect keeps pi's stderr out of the visible pane -- pi writes a
+// harmless per-project trust-gate diagnostic there on every launch (confirmed
+// empirically: the session still reaches "Working..." right after) with
+// nothing else in this pipeline able to distinguish it from pi's real TUI
+// output. Redirects to a dedicated log file rather than /dev/null, so a
+// genuine crash or "command not found" remains discoverable instead of
+// silently vanishing. Returns "" (no redirect) if the log path can't be
+// resolved, since a resolution failure here means the whole app's logging is
+// already broken -- failing open to visibility, not silently to /dev/null.
+func (b *piLaunchBuilder) StderrRedirect(i *Instance) string {
+	path, err := piStderrLogPath(i)
+	if err != nil {
+		log.ForSession(i.Title).Warn("could not resolve pi stderr log path; leaving stderr unredirected", "err", err)
+		return ""
+	}
+	return " 2>>" + shellQuote(path)
+}
+
+// piStderrLogPath returns the path to a plain-text file (distinct from the
+// session_<id>.log the Logs tab reads, which is JSON-lines and would be
+// corrupted by pi's raw stderr text) that captures pi's launch-time stderr.
+func piStderrLogPath(i *Instance) (string, error) {
+	logDir, err := log.GetLogDir(log.ConfigToLogConfig(config.LoadConfig()))
+	if err != nil {
+		return "", err
+	}
+	safeTitle := strings.Map(func(r rune) rune {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_' {
+			return r
+		}
+		return '-'
+	}, i.Title)
+	return filepath.Join(logDir, fmt.Sprintf("pi-stderr_%s.log", safeTitle)), nil
 }
 
 // isClaude reports whether the program command invokes the claude binary.
@@ -78,6 +148,20 @@ func classifyProgram(program string) programKind {
 func isClaude(program string) bool {
 	for _, token := range strings.Fields(program) {
 		if filepath.Base(token) == "claude" {
+			return true
+		}
+	}
+	return false
+}
+
+// isPi reports whether the program command invokes the pi binary. Mirrors
+// isClaude: it checks each whitespace-delimited token's basename, so it
+// matches bare ("pi") and path-qualified ("/usr/local/bin/pi") invocations
+// while rejecting lookalikes like "pipenv" or "mypi" whose basename isn't
+// exactly "pi".
+func isPi(program string) bool {
+	for _, token := range strings.Fields(program) {
+		if filepath.Base(token) == "pi" {
 			return true
 		}
 	}
@@ -148,31 +232,39 @@ func (i *Instance) GetTmuxSessionName() string {
 }
 
 // buildLaunchCommand constructs the final command string used to launch the program
-// in tmux. It parses the program once into a programKind sum type and delegates:
-// non-claude programs are returned unchanged; claude programs get flag injection.
+// in tmux. It checks each registered launchCommandBuilder in turn (see that
+// type's doc comment); a program none of them recognizes is shell-quoted and
+// run as-is, with AutoApprove's yolo-flag lookup as the only adjustment.
 func (i *Instance) buildLaunchCommand(claudeSessionID string) string {
+	// Single read, reused below for both Matches and Build -- see
+	// .claude/rules/instance-lock-free-reads.md: i.Program is mutated by
+	// SetProgram under i.mu.Lock(), so reading the field twice here could
+	// observe two different values if a mutation lands in between.
+	program := i.Program
+
 	var cmd string
-	switch p := classifyProgram(i.Program).(type) {
-	case claudeProgram:
-		// AutoApprove is injected inside buildClaudeCommand, before the
-		// trailing "--" prompt separator -- see that function's comment for
-		// why appending it here (after the separator) would be silently
-		// swallowed as inert positional text instead of a real flag.
-		cmd = i.buildClaudeCommand(p.base, claudeSessionID)
-	case plainProgram:
+	var matched launchCommandBuilder
+	for _, b := range launchBuilders {
+		if b.Matches(program) {
+			matched = b
+			break
+		}
+	}
+	switch {
+	case matched != nil:
+		cmd = matched.Build(i, program, claudeSessionID)
+	default:
 		// shellQuoteFields (not one whole-string shellQuote) preserves legitimate multi-word
 		// Program values like "sleep 300" that rely on shell word-splitting, while still
 		// preventing a metacharacter-bearing token -- e.g. a preset's argv[0] of "true; touch
 		// /tmp/pwned" -- from terminating the command and injecting a second one.
-		cmd = shellQuoteFields(p.cmd)
+		cmd = shellQuoteFields(program)
 		if i.AutoApprove {
-			if flag := yoloFlagFor(i.Program); flag != "" {
+			if flag := yoloFlagFor(program); flag != "" {
 				cmd = cmd + " " + flag
-				log.ForSession(i.Title).Debug("auto-approve flag injected", "program", i.Program, "flag", flag)
+				log.ForSession(i.Title).Debug("auto-approve flag injected", "program", program, "flag", flag)
 			}
 		}
-	default:
-		panic(fmt.Sprintf("unknown programKind %T", p))
 	}
 	if flags := shellQuoteFields(i.CLIFlags); flags != "" {
 		cmd = cmd + " " + flags
@@ -183,6 +275,9 @@ func (i *Instance) buildLaunchCommand(claudeSessionID string) string {
 	// argv positions.
 	for _, a := range i.ExtraArgs {
 		cmd = cmd + " " + shellQuote(a)
+	}
+	if matched != nil {
+		cmd = cmd + matched.StderrRedirect(i)
 	}
 	return cmd
 }
@@ -211,8 +306,8 @@ func shellQuoteFields(s string) string {
 }
 
 // buildClaudeCommand assembles the full claude invocation with all instance flags.
-// It is only called when the program is proven to be claude (via programKind),
-// so no isClaude guards are needed here.
+// It is only called via claudeLaunchBuilder.Build, which already proved the
+// program is claude (Matches), so no isClaude guard is needed here.
 func (i *Instance) buildClaudeCommand(base, claudeSessionID string) string {
 	parts := []string{base}
 	if claudeSessionID != "" {
@@ -258,6 +353,23 @@ func (i *Instance) buildClaudeCommand(base, claudeSessionID string) string {
 		// "--" stops claude from parsing a prompt that begins with "--" (e.g. the
 		// backlog prompt's "--- BACKLOG ITEM DATA ---") as CLI flags.
 		parts = append(parts, "--", i.promptArg())
+	}
+	return strings.Join(parts, " ")
+}
+
+// buildPiCommand assembles the pi invocation, injecting the resume flag when a
+// prior pi session ID is known. Mirrors buildClaudeCommand's resume-flag
+// shape: --session <id> was confirmed against a real pi 0.84.4 install (see
+// plan.md's Phase 1 spike RESULTS) to resume a prior session's conversation
+// context. When piSessionID is empty this is a no-op — base is returned
+// unmodified, matching buildClaudeCommand's "no session data means no flag"
+// behavior — not an error.
+func (i *Instance) buildPiCommand(base, piSessionID string) string {
+	parts := []string{base}
+	if piSessionID != "" {
+		// piSessionID traces back to persisted PiSessionData with no format
+		// validation, so it needs the same shell-quoting as claudeSessionID.
+		parts = append(parts, "--session", shellQuote(piSessionID))
 	}
 	return strings.Join(parts, " ")
 }

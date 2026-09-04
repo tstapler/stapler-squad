@@ -184,7 +184,7 @@ func NewEntRepository(opts ...RepositoryOption) (*EntRepository, error) {
 	err = client.Schema.Create(context.Background())
 	EntSchemaCreateMu.Unlock()
 	if err != nil {
-		client.Close()
+		_ = client.Close() // best-effort cleanup; we're already returning the real startup error
 		return nil, fmt.Errorf("failed to create schema: %w", err)
 	}
 
@@ -194,7 +194,7 @@ func NewEntRepository(opts ...RepositoryOption) (*EntRepository, error) {
 	// Values 0–6 on disk (old) must be remapped to the new scheme.
 	// Only run if the database has any legacy-range status values (>4 indicates old Stopped=6).
 	if err := runStatusRemap(db); err != nil {
-		client.Close()
+		_ = client.Close() // best-effort cleanup; we're already returning the real startup error
 		return nil, fmt.Errorf("failed to remap status values: %w", err)
 	}
 
@@ -207,7 +207,7 @@ func NewEntRepository(opts ...RepositoryOption) (*EntRepository, error) {
 	// built from a protobuf Timestamp (always UTC) until each row is
 	// touched once.
 	if err := runBacklogItemUpdatedAtUTCBackfill(context.Background(), repo); err != nil {
-		client.Close()
+		_ = client.Close() // best-effort cleanup; we're already returning the real startup error
 		return nil, fmt.Errorf("failed to backfill backlog item updated_at to UTC: %w", err)
 	}
 
@@ -216,7 +216,7 @@ func NewEntRepository(opts ...RepositoryOption) (*EntRepository, error) {
 	// (webhook-triggers verify follow-ups AC9) is the same protobuf-Timestamp-derived
 	// CAS precondition class as TransitionBacklogItemStatusRequest's.
 	if err := runWorkflowUpdatedAtUTCBackfill(context.Background(), repo); err != nil {
-		client.Close()
+		_ = client.Close() // best-effort cleanup; we're already returning the real startup error
 		return nil, fmt.Errorf("failed to backfill workflow updated_at to UTC: %w", err)
 	}
 
@@ -233,7 +233,7 @@ func NewEntRepository(opts ...RepositoryOption) (*EntRepository, error) {
 	// building the URL itself (idempotent) — see
 	// github_pr_url_backfill.go.
 	if err := runGitHubPRURLBackfill(context.Background(), repo); err != nil {
-		client.Close()
+		_ = client.Close() // best-effort cleanup; we're already returning the real startup error
 		return nil, fmt.Errorf("failed to backfill github pr url: %w", err)
 	}
 
@@ -245,7 +245,7 @@ func NewEntRepository(opts ...RepositoryOption) (*EntRepository, error) {
 	// race between two processes could assign two different ids to the same
 	// row.
 	if err := repo.BackfillBacklogItemPublicIDs(context.Background()); err != nil {
-		client.Close()
+		_ = client.Close() // best-effort cleanup; we're already returning the real startup error
 		return nil, fmt.Errorf("failed to backfill backlog item public id: %w", err)
 	}
 
@@ -1645,6 +1645,7 @@ func (r *EntRepository) RecordAnalytics(ctx context.Context, data AnalyticsData)
 		SetCommandCategory(data.CommandCategory).
 		SetCommandSubcategory(data.CommandSubcategory).
 		SetPythonImports(data.PythonImports).
+		SetSource(data.Source).
 		SetCreatedAt(data.CreatedAt).
 		Exec(ctx)
 }
@@ -1686,6 +1687,7 @@ func convertAnalyticsEntry(e *ent.ClassificationAnalytics) AnalyticsData {
 		CommandCategory:    e.CommandCategory,
 		CommandSubcategory: e.CommandSubcategory,
 		PythonImports:      e.PythonImports,
+		Source:             e.Source,
 		CreatedAt:          e.CreatedAt,
 	}
 }

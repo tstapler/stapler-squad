@@ -1,0 +1,16 @@
+{
+  "id": "jules:confirm-egress-consent",
+  "type": "backend",
+  "service": "SessionService",
+  "method": "ConfirmEgressConsent",
+  "protoFile": "proto/session/v1/session.proto",
+  "markerFound": true,
+  "handlerFile": "server/services/jules_config_service.go",
+  "tested": true,
+  "testIds": [
+    "TestJulesConfigService_ConfirmEgressConsent_should_AppendAndPersistRepo_When_RepoNotAlreadyAcknowledged",
+    "TestJulesConfigService_ConfirmEgressConsent_should_AvoidDuplicateEntry_When_RepoAlreadyAcknowledged",
+    "TestJulesConfigService_ConfirmEgressConsent_should_ReturnInvalidArgument_When_RepoPathEmpty"
+  ],
+  "lastModified": "2026-09-01T23:20:39-07:00"
+}

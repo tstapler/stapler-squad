@@ -2,6 +2,7 @@ package adapters
 
 import (
 	"fmt"
+	"sync"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/github"
@@ -13,6 +14,37 @@ import (
 	"github.com/tstapler/stapler-squad/session/vnc"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
+
+// piExtensionHealthResolverMu guards concurrent read/write of
+// piExtensionHealthResolver. RWMutex rather than hook_injector.go's plain
+// hookBaseURLFnMu: InstanceToProto's resolver read is on the session-listing
+// hot path (called once per session per poll) while the write happens at
+// most once at server startup, so concurrent readers should not serialize
+// against each other.
+var (
+	piExtensionHealthResolverMu sync.RWMutex
+	piExtensionHealthResolver   func(sessionID, program string) sessionv1.PiExtensionHealth
+)
+
+// SetPiExtensionHealthResolver wires server/services.PiExtensionHealthTracker
+// (pi-support Epic 4.2) into InstanceToProto. adapters cannot import
+// server/services directly (services already imports adapters), so server.go's
+// wireDepsIntoServer supplies this closure during real server wiring, exactly
+// like hook_injector.go's SetHookBaseURLFn. Passing nil is a no-op — every
+// session's pi_extension_health field stays PI_EXTENSION_HEALTH_UNSPECIFIED
+// (the zero value) until wired, which is the correct default for tests and
+// any caller that never sets this up.
+func SetPiExtensionHealthResolver(fn func(sessionID, program string) sessionv1.PiExtensionHealth) {
+	piExtensionHealthResolverMu.Lock()
+	defer piExtensionHealthResolverMu.Unlock()
+	piExtensionHealthResolver = fn
+}
+
+func getPiExtensionHealthResolver() func(sessionID, program string) sessionv1.PiExtensionHealth {
+	piExtensionHealthResolverMu.RLock()
+	defer piExtensionHealthResolverMu.RUnlock()
+	return piExtensionHealthResolver
+}
 
 // InstanceToProto converts a session.Instance to a proto Session message.
 // workflowNames is an optional map from workflow UUID to workflow name; pass nil to omit workflow_name.
@@ -241,6 +273,14 @@ func InstanceToProto(inst *session.Instance, workflowNames map[string]string) *s
 	// reconstructed across a restart). Empty (the zero value) for a LocalTarget.
 	if remoteTarget, ok := inst.GetExecutionTarget().(session.RemoteExecutionTarget); ok {
 		protoSession.RemoteName = remoteTarget.Target().Name
+	}
+
+	// pi approval-extension health (pi-support Epic 4.2) — derived live at read
+	// time via the injected resolver, never persisted. Left at the zero value
+	// (PI_EXTENSION_HEALTH_UNSPECIFIED) when unwired (e.g. tests) or when the
+	// resolver itself determines this isn't a pi session / the flag is off.
+	if resolver := getPiExtensionHealthResolver(); resolver != nil {
+		protoSession.PiExtensionHealth = resolver(protoSession.Id, snap.Program)
 	}
 
 	// Session goal summary — populated when a goal has been set via set_session_goal MCP tool.

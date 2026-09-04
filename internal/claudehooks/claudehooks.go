@@ -135,7 +135,7 @@ func mutate(settingsPath string, fn func(hooks map[string]interface{})) error {
 	tmpName := tmp.Name()
 	defer os.Remove(tmpName) //nolint:errcheck // best-effort cleanup if rename fails
 	if _, err := tmp.Write(append(out, '\n')); err != nil {
-		tmp.Close() //nolint:errcheck
+		_ = tmp.Close() // best-effort; the write error above is what's returned
 		return err
 	}
 	if err := tmp.Close(); err != nil {
