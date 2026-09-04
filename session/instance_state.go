@@ -369,6 +369,20 @@ func (i *Instance) Started() bool {
 	return i.started.Load()
 }
 
+// MarkStartedIfTmuxAlive flips started to true outside the normal
+// Start()/Resume()/Restart() actor flow, for a caller that has already
+// confirmed the underlying tmux session is alive by other means (e.g.
+// streamViaHub's DoesSessionExistNoCache check). Instance.Start() never
+// running for an instance — a panicking sibling in the boot-time restart
+// loop, a HotRestore error, or a slow multi-second stagger — otherwise
+// wedges started at false forever: every capture/resize call on the hub
+// streaming path checks Started() directly and returns
+// streamhub.ErrSessionNotStarted on every single frame, indefinitely, even
+// though the session the viewer is looking at is fully functional.
+func (i *Instance) MarkStartedIfTmuxAlive() {
+	i.started.Store(true)
+}
+
 // RecoverFromStopped resets a stale Stopped or PermanentlyFailed status to
 // Creating so the instance can be hot-restored via Start(false). Only call
 // this during startup reconciliation (Stopped case) or from restartForRetry's

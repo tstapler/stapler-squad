@@ -1737,12 +1737,14 @@ func (h *ConnectRPCWebSocketHandler) streamViaHub(stream *connectWebSocketStream
 	}
 
 	tmuxSession := instance.GetTmuxSession()
-	if tmuxSession != nil && !tmuxSession.DoesSessionExistNoCache() {
+	tmuxAlive := tmuxSession != nil && tmuxSession.DoesSessionExistNoCache()
+	if tmuxSession != nil && !tmuxAlive {
 		log.Info("[streamViaHub] session not in tmux, restoring before control mode", "session", sessionID)
 		workDir := instance.GetWorkingDirectory()
 		if restoreErr := tmuxSession.RestoreWithWorkDir(workDir); restoreErr != nil {
 			return handleTmuxRestoreFailure(instance, restoreErr)
 		}
+		tmuxAlive = true
 	}
 
 	// The tmux-session check above doesn't cover a concurrent Instance.Start() (e.g.
@@ -1751,7 +1753,18 @@ func (h *ConnectRPCWebSocketHandler) streamViaHub(stream *connectWebSocketStream
 	if !instance.Started() {
 		log.Info("[streamViaHub] instance not started yet, waiting briefly before attaching", "session", sessionID)
 		if !waitForInstanceStartedEvent(h.sessionService.GetEventBus(), instance, startupWaitTimeout) {
-			log.Warn("[streamViaHub] instance still not started after waiting, proceeding anyway", "session", sessionID, "waited", startupWaitTimeout)
+			if tmuxAlive {
+				// Instance.Start() never ran for this instance (or raced/failed in
+				// server/dependencies.go's boot-time restart loop) even though tmux
+				// itself is confirmed alive. Self-heal instead of leaving Started()
+				// wedged at false: see MarkStartedIfTmuxAlive's doc comment for why
+				// "proceeding anyway" here previously meant an endless
+				// ErrSessionNotStarted retry loop on every capture/resize.
+				log.Warn("[streamViaHub] instance not started but tmux is alive, marking started", "session", sessionID, "waited", startupWaitTimeout)
+				instance.MarkStartedIfTmuxAlive()
+			} else {
+				log.Warn("[streamViaHub] instance still not started after waiting, proceeding anyway", "session", sessionID, "waited", startupWaitTimeout)
+			}
 		}
 	}
 
