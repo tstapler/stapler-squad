@@ -83,6 +83,16 @@ describe("TymuxRolloutPanel", () => {
     });
   });
 
+  it("sanitizes punctuation and leading/trailing whitespace, not just internal spaces", async () => {
+    mockClient.getTymuxRolloutStatus.mockResolvedValue(emptyStatus());
+    render(<TymuxRolloutPanel />);
+
+    await waitFor(() => screen.getByTestId("tymux-override-input"));
+    fireEvent.change(screen.getByTestId("tymux-override-input"), { target: { value: "  A:B.C  " } });
+
+    expect(screen.getByText("staplersquad_A_B_C")).toBeInTheDocument();
+  });
+
   it("removes a session override", async () => {
     mockClient.getTymuxRolloutStatus.mockResolvedValue({
       globalEnvVarSet: false,

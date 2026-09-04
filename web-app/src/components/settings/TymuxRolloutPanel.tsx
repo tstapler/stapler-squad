@@ -5,7 +5,7 @@ import { useState, useEffect, useCallback, useMemo } from "react";
 import { createClient } from "@connectrpc/connect";
 import { TymuxRolloutService } from "@/gen/session/v1/tymux_rollout_pb";
 import { SessionService } from "@/gen/session/v1/session_pb";
-import type { Timestamp } from "@bufbuild/protobuf/wkt";
+import { timestampDate, type Timestamp } from "@bufbuild/protobuf/wkt";
 import { getConnectTransport } from "@/lib/api/transport";
 import { useAnalytics } from "@/lib/analytics";
 // ponytail: reuses StreamHubRolloutPanel's stylesheet — the class names
@@ -37,8 +37,9 @@ function toStaplerSquadSessionName(title: string): string {
  */
 export function TymuxRolloutPanel() {
   const { track } = useAnalytics();
-  const client = useMemo(() => createClient(TymuxRolloutService, getConnectTransport()), []);
-  const sessionClient = useMemo(() => createClient(SessionService, getConnectTransport()), []);
+  const transport = useMemo(() => getConnectTransport(), []);
+  const client = useMemo(() => createClient(TymuxRolloutService, transport), [transport]);
+  const sessionClient = useMemo(() => createClient(SessionService, transport), [transport]);
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -56,7 +57,7 @@ export function TymuxRolloutPanel() {
   }) => {
     setGlobalEnvVarSet(status.globalEnvVarSet);
     const ts = status.rollbackRehearsalCompletedAt;
-    setRehearsalCompletedAt(ts ? new Date(Number(ts.seconds) * 1000) : null);
+    setRehearsalCompletedAt(ts ? timestampDate(ts) : null);
     setOverrides(status.sessionOverrides);
   }, []);
 
@@ -72,12 +73,17 @@ export function TymuxRolloutPanel() {
   }, [client, applyStatus]);
 
   useEffect(() => {
+    let cancelled = false;
     void load();
     sessionClient.listSessions({}).then((res) => {
+      if (cancelled) return;
       setSessionNames(res.sessions.map((s) => s.title).filter(Boolean));
     }).catch(() => {
       // Non-fatal — the override input still works as free text.
     });
+    return () => {
+      cancelled = true;
+    };
   }, [load, sessionClient]);
 
   const completeRehearsal = useCallback(async () => {
@@ -201,6 +207,7 @@ export function TymuxRolloutPanel() {
           className={styles.input}
           list="tymux-session-names"
           placeholder="Session title (existing or one you're about to create)"
+          aria-label="Session title"
           value={newOverrideName}
           onChange={(e) => setNewOverrideName(e.target.value)}
           data-testid="tymux-override-input"
