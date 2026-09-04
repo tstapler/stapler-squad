@@ -19,6 +19,14 @@ type resolvedGate struct {
 	ID       uuid.UUID
 	Kind     GateKind
 	Stateful bool
+	// Config mirrors the persisted TransitionGate.Config column verbatim
+	// (map[string]interface{}) — added for Epic 2.4's structural-gate
+	// evaluation (session/gate_structural.go), which needs the gate's
+	// configured check_id at evaluation time. Already validated at save time
+	// by session.ParseGateConfig (Task 2.7.2g3); evaluators here read it
+	// directly rather than re-running that validation on every PendingGates
+	// call.
+	Config map[string]interface{}
 }
 
 // resolvedTransitionEdge is a deep-copied-at-load-time snapshot of one legal,
@@ -109,6 +117,7 @@ func (c *stageConfigCache) refresh(ctx context.Context, repo StageConfigReposito
 				ID:       g.ID,
 				Kind:     GateKind(g.Kind),
 				Stateful: g.Stateful,
+				Config:   g.Config,
 			})
 			gateCount++
 		}

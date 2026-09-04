@@ -692,10 +692,13 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	// posture as pipelineEngine/livenessEngine above.
 	var stageCRUDRepo session.StageCRUDRepository
 	var stageConfigEngine *session.ConfiguredWorkflowEngine
+	var gateSatisfactionRepo session.GateSatisfactionRepository
 	if entClient := storage.GetEntClient(); entClient != nil {
 		entStageRepo := session.NewEntStageConfigRepository(entClient)
 		stageCRUDRepo = entStageRepo
-		if engine, err := session.NewConfiguredWorkflowEngine(entStageRepo); err != nil {
+		entGateSatisfactionRepo := session.NewEntGateSatisfactionRepository(entClient)
+		gateSatisfactionRepo = entGateSatisfactionRepo
+		if engine, err := session.NewConfiguredWorkflowEngine(entStageRepo, entGateSatisfactionRepo); err != nil {
 			log.Warn("stageConfigEngine construction failed; stage/transition/gate CRUD writes will not invalidate a cache", "err", err)
 		} else {
 			stageConfigEngine = engine
@@ -1266,6 +1269,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	backlogSvc.SetLivenessRepository(livenessRepo)
 	backlogSvc.SetLivenessEngine(livenessEngine)
 	backlogSvc.SetStageCRUDRepository(stageCRUDRepo)
+	backlogSvc.SetGateSatisfactionRepository(gateSatisfactionRepo)
 	// Guarded rather than an unconditional Set: stageConfigEngine is a
 	// *session.ConfiguredWorkflowEngine, and passing a nil one straight into
 	// SetStageConfigEngine's interface parameter would box it as a
@@ -1307,6 +1311,10 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	backlogLifecycleListener.SetAutoReopener(backlogSvc)
 	backlogLifecycleListener.SetPRFixSpawner(backlogSvc)
 	backlogLifecycleListener.SetReviewRespawner(backlogSvc)
+	// Wires reconcileCustomGateChecks' scan for overdue custom-check
+	// invocations (Epic 2.4, Task 2.4.4c) — same gateSatisfactionRepo instance
+	// already wired into backlogSvc above, guarded nil-safe by both consumers.
+	backlogLifecycleListener.SetGateSatisfactionRepository(gateSatisfactionRepo)
 	// Wire the orphaned_triage respawner so an idea-status item whose triage
 	// session orphaned (crashed, was killed, or a server restart happened
 	// mid-triage) gets triage automatically re-triggered instead of sitting

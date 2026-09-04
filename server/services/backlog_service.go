@@ -343,6 +343,11 @@ type BacklogService struct {
 	// Wired post-construction via SetStageConfigEngine. May be nil; cache
 	// invalidation is then a no-op, mirroring livenessEngine above.
 	stageConfigEngine stageConfigCacheInvalidator
+	// gateSatisfactionRepo backs the RecordGateApproval RPC (Epic 2.4, Story
+	// 2.4.1). Wired post-construction via SetGateSatisfactionRepository, same
+	// rationale as stageCRUDRepo above. May be nil; the handler nil-checks and
+	// returns CodeUnavailable.
+	gateSatisfactionRepo session.GateSatisfactionRepository
 }
 
 // stageConfigCacheInvalidator is a narrow, consumer-defined interface (see
@@ -380,6 +385,13 @@ func (s *BacklogService) invalidateStageConfigCache(ctx context.Context, id stri
 	if err := s.stageConfigEngine.InvalidateCache(ctx); err != nil {
 		log.WarningLog().Printf("[ConfiguredWorkflowEngine] cache invalidation failed after successful write id=%s: %v — cache may be stale until next successful invalidation", id, err)
 	}
+}
+
+// SetGateSatisfactionRepository wires the repository backing the
+// RecordGateApproval RPC. nil (the default) makes that RPC return
+// CodeUnavailable, mirroring stageCRUDRepo's nil-guard shape.
+func (s *BacklogService) SetGateSatisfactionRepository(repo session.GateSatisfactionRepository) {
+	s.gateSatisfactionRepo = repo
 }
 
 // SetLivenessRepository wires the repository backing the LivenessDefinition

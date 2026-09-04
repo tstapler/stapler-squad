@@ -1059,6 +1059,35 @@ message ListTransitionGatesResponse {
   repeated TransitionGate items = 1;
 }
 
+// GateSatisfactionRecord is the proto representation of a persisted one-shot
+// gate outcome (Epic 2.4, session.GateSatisfactionData), keyed by
+// (item_id, gate_id).
+message GateSatisfactionRecord {
+  string id = 1;
+  string item_id = 2;
+  string gate_id = 3;
+  bool satisfied = 4;
+  string satisfied_by = 5;
+  google.protobuf.Timestamp satisfied_at = 6;
+  google.protobuf.Timestamp created_at = 7;
+}
+
+// RecordGateApprovalRequest records one explicit human-approval action for a
+// human_approval-kind gate (Story 2.4.1). One-shot: a second call for the
+// same (item_id, gate_id) pair is rejected (connect.CodeAlreadyExists) by the
+// schema's UNIQUE(item_id, gate_id) index, not silently overwritten.
+message RecordGateApprovalRequest {
+  string item_id = 1;
+  string gate_id = 2;
+  // satisfied_by identifies the approving actor (e.g. a username) — optional,
+  // purely for audit display.
+  string satisfied_by = 3;
+}
+
+message RecordGateApprovalResponse {
+  GateSatisfactionRecord record = 1;
+}
+
 // ============================================================================
 // Backlog Item Events (for WatchBacklogItems streaming)
 // ============================================================================
@@ -1395,6 +1424,11 @@ service BacklogService {
 
   // ListTransitionGates returns gates, optionally filtered by transition_id.
   rpc ListTransitionGates(ListTransitionGatesRequest) returns (ListTransitionGatesResponse) {}
+
+  // RecordGateApproval records one explicit human-approval action for a
+  // human_approval-kind gate (Epic 2.4, Story 2.4.1) — one-shot, not
+  // re-askable once recorded.
+  rpc RecordGateApproval(RecordGateApprovalRequest) returns (RecordGateApprovalResponse) {}
 
   // ImportGitHubIssue creates a backlog item pre-populated from a GitHub issue.
   rpc ImportGitHubIssue(ImportGitHubIssueRequest) returns (ImportGitHubIssueResponse) {}

@@ -4203,6 +4203,75 @@ func TestBacklogLifecycleListener_HeadlessPoolAlone_NoLongerTriggersReviewGateSp
 	}
 }
 
+// TestReviewGateSpawn_should_FireForReviewToPrPending_When_AutomatedReviewGateAttachedMatchingTodaysBehavior
+// is Task 2.4.3d's regression test: onSessionExited's generalized review-gate
+// spawn condition (transitionHasAutomatedReviewGate, session/backlog_lifecycle.go
+// — replacing the old hardcoded `toStatus == BacklogStatusReview` literal)
+// must still fire a review session for the built-in in_progress -> review
+// transition exactly as before, with no workflowEngine wired (matching
+// today's production wiring — server/dependencies.go does not yet call
+// SetWorkflowEngine): l.transitionHasAutomatedReviewGate short-circuits to
+// true on `to == BacklogStatusReview` unconditionally, so this is unaffected
+// by the ConfiguredWorkflowEngine generalization landing.
+func TestReviewGateSpawn_should_FireForReviewToPrPending_When_AutomatedReviewGateAttachedMatchingTodaysBehavior(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	createdItem, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:              "Built-in review gate still fires",
+		AcceptanceCriteria: `[]`,
+		Priority:           1,
+		Status:             string(BacklogStatusInProgress),
+		RepoPath:           newNonEmptyDiffGitRepo(t),
+	})
+	require.NoError(t, err)
+
+	sessionUUID := uuid.New().String()
+	_, err = storage.CreateItemSession(ctx, ItemSessionData{
+		ItemID:      createdItem.ID,
+		SessionUUID: sessionUUID,
+		SessionRole: SessionRoleWork,
+	})
+	require.NoError(t, err)
+
+	reviewInstance := &Instance{UUID: uuid.New().String()}
+	spawner := &mockReviewGateSpawner{instance: reviewInstance}
+	listener := NewBacklogLifecycleListenerWithSpawner(storage, spawner)
+	// Explicitly confirm the nil-workflowEngine default this test relies on —
+	// transitionHasAutomatedReviewGate's literal `to == BacklogStatusReview`
+	// branch must fire the review gate with zero ConfiguredWorkflowEngine
+	// wiring, matching production today.
+	require.Nil(t, listener.getWorkflowEngine())
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		listener.onSessionExited(sessionUUID)
+	}()
+	waitWithTimeout(t, done)
+
+	require.Eventually(t, func() bool {
+		return spawner.getCallCount() == 1
+	}, 2*time.Second, 20*time.Millisecond, "the built-in review->pr_pending gate must still spawn a review session")
+
+	fetchedItem, err := storage.GetBacklogItem(ctx, createdItem.ID)
+	require.NoError(t, err)
+	require.Equal(t, string(BacklogStatusReview), fetchedItem.Status)
+
+	sessions, err := storage.ListItemSessions(ctx, createdItem.ID)
+	require.NoError(t, err)
+	var reviewEntry *ItemSessionSummary
+	for i := range sessions {
+		if sessions[i].Role == SessionRoleReview {
+			reviewEntry = &sessions[i]
+		}
+	}
+	require.NotNil(t, reviewEntry, "a review ItemSession must be created")
+	assert.Equal(t, reviewInstance.UUID, reviewEntry.SessionUUID)
+}
+
 // --- Story 3.3.1: CaptureShipSnapshot ---
 
 // runGitTestCmd runs `git <args...>` in dir, failing the test on error. Test-only

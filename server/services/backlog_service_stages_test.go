@@ -29,7 +29,8 @@ func newStageCRUDTestService(t *testing.T) (*BacklogService, session.StageCRUDRe
 	require.NoError(t, session.EnsureBuiltInWorkflowStages(ctx, storage.GetEntClient()))
 
 	repo := session.NewEntStageConfigRepository(storage.GetEntClient())
-	engine, err := session.NewConfiguredWorkflowEngine(repo)
+	gateSatisfactionRepo := session.NewEntGateSatisfactionRepository(storage.GetEntClient())
+	engine, err := session.NewConfiguredWorkflowEngine(repo, gateSatisfactionRepo)
 	require.NoError(t, err)
 
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)

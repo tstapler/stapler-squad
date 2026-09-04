@@ -83,15 +83,65 @@ func parseDuplicateRef(notes string) (ref string, ok bool) {
 	return rest, rest != ""
 }
 
+// GateContext identifies which gate/transition a ReviewGateRunner.Run
+// invocation is evaluating (Epic 2.4, Story 2.4.3). It generalizes Run beyond
+// the single built-in review -> pr_pending call site so a custom transition's
+// automated-review gate (e.g. idea -> ready) can reuse the same verdict
+// machinery without inheriting review->pr_pending's diff/worktree/branch-drift
+// pre-checks, which only make sense when the gate is reviewing a code change.
+type GateContext struct {
+	// GateID identifies the persisted TransitionGate driving this run, or ""
+	// for the built-in review->pr_pending call site (no persisted gate row
+	// backs it — see backlog_lifecycle.go's spawnReviewGate call site).
+	GateID string
+	// TargetTransition names the to-status this review verdict, once
+	// recorded, unblocks. Purely descriptive/for logging today.
+	TargetTransition BacklogStatus
+	// RequiresDiff, true for the built-in review gate, means Run computes and
+	// hands the reviewer a real diff via runDiffPreChecks (worktree lookup,
+	// identity/branch-drift checks, diff computation). false skips all of
+	// that entirely — no worktree/git calls are made — for a gate whose
+	// check has nothing to do with a code diff (e.g. an idea-feasibility
+	// review).
+	RequiresDiff bool
+}
+
+// noDiffAvailableSection and noDiffExpectedSection mirror BuildReviewPrompt's
+// diff=="" rendering (session/backlog_review.go) verbatim. reviewPromptFor
+// substitutes the former for the latter on a RequiresDiff:false run — see its
+// own doc comment for why a plain empty diff would otherwise read as a bug.
+const (
+	noDiffAvailableSection = "(no diff available — no committed code changes were found for this session)\n\n" +
+		"## No-Diff Verification\n" +
+		"This can mean the criteria were already satisfied before this session started, or that no work happened. Check each criterion against the CURRENT codebase yourself using your available tools before verdicting; do not rely on the work session's note or verification evidence alone.\n\n"
+	noDiffExpectedSection = "(no diff expected for this gate — this check does not evaluate a code diff)\n\n"
+)
+
 // reviewPromptFor returns r.pipelineEngine.InteractiveReviewPromptFor(...) when
 // pipelineEngine is wired, or the default BuildReviewPrompt otherwise — mirrors
 // BacklogService.reviewPromptFor's identical nil-safe fallback pattern
 // (server/services/backlog_service_triage.go) for the headless-review seam.
-func (r *ReviewGateRunner) reviewPromptFor(item *BacklogItemData, acSnapshot []AcCriterion, diff string, diffTruncated bool, itemSessionID string, verificationNotes string) string {
+//
+// When gateContext.RequiresDiff is false, the rendered diff=="" section (which
+// BuildReviewPrompt phrases as "no committed code changes were found" — a
+// message written for the review->pr_pending case, where an empty diff is a
+// bug) is swapped for an explicit "no diff expected for this gate" section
+// instead, via a plain string substitution rather than a BuildReviewPrompt
+// signature change (that function, and InteractiveReviewPromptFor, are shared
+// by other callers — server/services/backlog_service_triage.go's headless
+// review path in particular — that this Epic does not touch). A no-op when
+// the substring isn't present, e.g. a custom PipelineMode's own template.
+func (r *ReviewGateRunner) reviewPromptFor(gateContext GateContext, item *BacklogItemData, acSnapshot []AcCriterion, diff string, diffTruncated bool, itemSessionID string, verificationNotes string) string {
+	var prompt string
 	if r.pipelineEngine == nil {
-		return BuildReviewPrompt(item, acSnapshot, diff, diffTruncated, itemSessionID, verificationNotes)
+		prompt = BuildReviewPrompt(item, acSnapshot, diff, diffTruncated, itemSessionID, verificationNotes)
+	} else {
+		prompt = r.pipelineEngine.InteractiveReviewPromptFor(item, acSnapshot, diff, diffTruncated, itemSessionID, verificationNotes)
 	}
-	return r.pipelineEngine.InteractiveReviewPromptFor(item, acSnapshot, diff, diffTruncated, itemSessionID, verificationNotes)
+	if !gateContext.RequiresDiff {
+		prompt = strings.Replace(prompt, noDiffAvailableSection, noDiffExpectedSection, 1)
+	}
+	return prompt
 }
 
 // Run executes the review gate for a backlog item session.
@@ -105,6 +155,7 @@ func (r *ReviewGateRunner) reviewPromptFor(item *BacklogItemData, acSnapshot []A
 // BacklogLifecycleListener.handleReviewSessionExited, not here.
 func (r *ReviewGateRunner) Run(
 	ctx context.Context,
+	gateContext GateContext,
 	item *BacklogItemData,
 	is ItemSessionSummary,
 	onPass func(ctx context.Context, item *BacklogItemData, is ItemSessionSummary),
@@ -122,11 +173,206 @@ func (r *ReviewGateRunner) Run(
 
 	log.InfoLog().Printf("[PipelineEngine] item=%s stage=review mode=%q", item.ID, ResolvedModeLabel(item.PipelineMode))
 
-	// Get the committed diff from the session's dedicated worktree (preferred)
-	// or fall back to the item's repo path (directory-mode / worktree gone).
+	// Get the committed diff from the session's dedicated worktree (preferred) or
+	// fall back to the item's repo path (directory-mode / worktree gone) — but
+	// only when this gate actually reviews a diff (Story 2.4.3): a
+	// RequiresDiff:false gate (e.g. an idea-feasibility review) makes no
+	// worktree/git calls at all, and diff/truncated/uncommittedWarning stay at
+	// their zero values.
 	var diff string
 	var truncated bool
 	var uncommittedWarning string
+	if gateContext.RequiresDiff {
+		var blocked bool
+		diff, truncated, uncommittedWarning, blocked = r.runDiffPreChecks(ctx, item, is)
+		if blocked {
+			return
+		}
+	}
+
+	// Captured before uncommittedWarning is prepended below, so this reflects only
+	// the actual committed diff rather than the warning banner text. Always false
+	// when !gateContext.RequiresDiff — there is no diff to be empty.
+	committedDiffEmpty := gateContext.RequiresDiff && strings.TrimSpace(diff) == ""
+
+	if uncommittedWarning != "" {
+		diff = uncommittedWarning + diff
+	}
+
+	// An empty committed diff is indistinguishable from "no real work happened" — the
+	// same failure shape as the worktreeDiffErr case handled inside runDiffPreChecks,
+	// but for a diff that computed successfully rather than one that errored. Without
+	// this check, a no-op session (crashed before committing, or promoted to review by
+	// ReconcileStuckItems purely because its work sessions ended, with zero commits)
+	// would reach a real review session with nothing to review, risking a false
+	// PASS/UNVERIFIABLE verdict that marks the item done despite no work having
+	// shipped — see BUG-047/BUG-065 in backlog_lifecycle.go and
+	// backlog_lifecycle_pr.go for the same class of bug in sibling reconciliation
+	// paths. Blocking here, with the same FAIL-verdict + auto-reopen handling used
+	// for every other guardrail in this function, routes a no-work item back
+	// through AutoReopenAfterFailedReview to in_progress instead of letting it
+	// silently pass review.
+	//
+	// Exception: report_duplicate (server/mcp/tools_backlog.go) deliberately routes an
+	// item to review with zero committed diff — a duplicate claim has nothing to
+	// commit by design — and writes a duplicate_ref= marker into VerificationNotes
+	// before triggering this gate specifically so a real reviewer can confirm it
+	// (backlog item e2373931). Without this carve-out, every report_duplicate call hit
+	// this guard's hardcoded FAIL, and two calls in a row tripped IsRepeatedFailure and
+	// permanently parked the item in review with no reviewer ever consulted. Detecting
+	// the marker here and falling through to the normal SpawnReviewSession path below
+	// is what fixes that: the reviewer's prompt already carries the duplicate_ref line
+	// (writeVerificationEvidenceSection in backlog_review.go), and BuildReviewPrompt's
+	// diff=="" branch already tells the reviewer to check the codebase itself. A
+	// session with no duplicate_ref marker — the genuinely abandoned case this guard
+	// exists for — is unaffected: isDup is false and the FAIL below still fires
+	// exactly as before.
+	_, isDup := parseDuplicateRef(is.VerificationNotes)
+	if committedDiffEmpty && !isDup {
+		summary := "Review blocked: no committed changes were found for this session. " +
+			"There is nothing to review — the work session ended without shipping any commits."
+		emptyDiffIS, createErr := recordTerminalReviewVerdict(r.storage, item.ID, is.AcSnapshot, "empty-diff-"+uuid.New().String(), ReviewVerdictFail, summary)
+		if createErr != nil {
+			log.ErrorLog().Printf("[BacklogLifecycle] spawnReviewGate CreateItemSessionWithVerdict (empty diff) item=%s: %v", item.ID, createErr)
+			return
+		}
+		log.WarningLog().Printf("[BacklogLifecycle] spawnReviewGate empty diff for item %s — FAIL verdict recorded (session %s)", item.ID, emptyDiffIS.ID)
+		if r.getNotifier != nil {
+			if n := r.getNotifier(); n != nil {
+				n.Notify(item.ID,
+					"Review blocked — no changes to review",
+					fmt.Sprintf("%s — the work session ended without any committed changes.", item.Title),
+					7, // sessionv1.NotificationType_NOTIFICATION_TYPE_ERROR
+					3, // sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_HIGH
+				)
+			}
+		}
+		if reopener := r.getAutoReopener(); reopener != nil {
+			go func() {
+				if err := reopener.AutoReopenAfterFailedReview(ctx, item.ID); err != nil {
+					log.ErrorLog().Printf("[BacklogLifecycle] spawnReviewGate AutoReopenAfterFailedReview (empty diff) item=%s: %v", item.ID, err)
+				}
+			}()
+		}
+		return
+	}
+
+	// Security check — block if secrets detected.
+	//
+	// Same as runDiffPreChecks' diff-error block: this records a synthetic,
+	// non-Instance-backed terminal verdict directly — it's a pre-flight
+	// guardrail, not the review call itself.
+	if secErr := RunPreGateSecurityCheck(diff); secErr != nil {
+		log.ErrorLog().Printf("[BacklogLifecycle] spawnReviewGate security check blocked item=%s: %v", item.ID, secErr)
+		// Record a failed review ItemSession with a FAIL verdict so the gate verdict
+		// is visible in the UI and operators can act (override or re-review).
+		summary := fmt.Sprintf("Review blocked by security check: %v. Override required to proceed.", secErr)
+		secIS, secCreateErr := recordTerminalReviewVerdict(r.storage, item.ID, is.AcSnapshot, "review-blocked-"+uuid.New().String(), ReviewVerdictFail, summary)
+		if secCreateErr != nil {
+			log.ErrorLog().Printf("[BacklogLifecycle] spawnReviewGate CreateItemSessionWithVerdict (security block) item=%s: %v", item.ID, secCreateErr)
+			return
+		}
+		log.InfoLog().Printf("[BacklogLifecycle] spawnReviewGate security check blocked for item %s — FAIL verdict recorded (session %s)", item.ID, secIS.ID)
+		if r.getNotifier != nil {
+			if n := r.getNotifier(); n != nil {
+				n.Notify(item.ID,
+					"Review blocked by security check",
+					fmt.Sprintf("%s — override required to proceed.", item.Title),
+					7, // sessionv1.NotificationType_NOTIFICATION_TYPE_ERROR
+					3, // sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_HIGH
+				)
+			}
+		}
+		// Feed into the same auto-reopen/cap-and-notify machinery every other
+		// terminal FAIL/UNVERIFIABLE verdict block in this function uses (see the
+		// diff-computation-blocked block inside runDiffPreChecks) — a secret left
+		// behind by a rework session is exactly the kind of thing a subsequent
+		// rework attempt can fix, and the maxAutoReworkIterations cap still
+		// protects against an unfixable case looping silently forever.
+		if reopener := r.getAutoReopener(); reopener != nil {
+			go func() {
+				if err := reopener.AutoReopenAfterFailedReview(ctx, item.ID); err != nil {
+					log.ErrorLog().Printf("[BacklogLifecycle] spawnReviewGate AutoReopenAfterFailedReview (security block) item=%s: %v", item.ID, err)
+				}
+			}()
+		}
+		return
+	}
+
+	// Deserialize AC snapshot, overlaying any live Note/Status written by
+	// report_progress after the ItemSession's AcSnapshot was captured at spawn
+	// time — otherwise the reviewer sees a stale snapshot missing self-reported
+	// progress notes. See MergeLiveCriterionNotes.
+	acSnapshot, _ := ParseAcCriteria(is.AcSnapshot)
+	liveAC, _ := ParseAcCriteria(item.AcceptanceCriteria)
+	if len(acSnapshot) == 0 {
+		acSnapshot = liveAC
+	} else {
+		acSnapshot = MergeLiveCriterionNotes(acSnapshot, liveAC)
+	}
+
+	prompt := r.reviewPromptFor(gateContext, item, acSnapshot, diff, truncated, is.ID, is.VerificationNotes)
+
+	// Spawn a real, hidden, tagged review session.Instance so the review
+	// participates in the same visibility/attention mechanism (idle/error/approval
+	// detection) as every other session — see SpawnReviewSession. The verdict is
+	// no longer computed synchronously here: the spawned session calls the
+	// submit_review_verdict MCP tool, and BacklogLifecycleListener.
+	// handleReviewSessionExited processes the outcome once that session exits.
+	//
+	// Note: prompt is built via reviewPromptFor, which routes through
+	// PipelineEngine.InteractiveReviewPromptFor (tool-call/submit_review_verdict
+	// style) rather than ReviewPromptFor/BuildHeadlessReviewPrompt. The latter
+	// pair asks for a bare JSON object on stdout — correct for the still-headless
+	// callers that use it (TriggerReReview in
+	// server/services/backlog_service_triage.go), but wrong here: this session is
+	// a real, tool-using Claude Code agent that must call the submit_review_verdict
+	// MCP tool, not print JSON, so handleReviewSessionExited has a verdict to read
+	// once it exits. PipelineModeDefault (or a nil pipelineEngine) still renders
+	// BuildReviewPrompt directly, so this is behavior-preserving for every item
+	// that hasn't opted into a custom PipelineMode.
+	sessionCreator := r.getSessionCreator()
+	if sessionCreator == nil {
+		log.ErrorLog().Printf("[BacklogLifecycle] spawnReviewGate item=%s: no review mechanism configured", item.ID)
+		return
+	}
+
+	reviewInst, spawnErr := sessionCreator.SpawnReviewSession(ctx, item, is.ID, prompt)
+	if spawnErr != nil {
+		log.ErrorLog().Printf("[BacklogLifecycle] spawnReviewGate SpawnReviewSession item=%s: %v", item.ID, spawnErr)
+		return
+	}
+
+	// Create ItemSession linking the new review session to the backlog item.
+	if _, createErr := r.storage.CreateItemSession(ctx, ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: reviewInst.UUID,
+		SessionRole: SessionRoleReview,
+		AcSnapshot:  is.AcSnapshot,
+	}); createErr != nil {
+		log.ErrorLog().Printf("[BacklogLifecycle] spawnReviewGate CreateItemSession item=%s review=%s: %v", item.ID, reviewInst.UUID, createErr)
+		return
+	}
+
+	log.InfoLog().Printf("[BacklogLifecycle] spawnReviewGate spawned review session %s for item %s", reviewInst.UUID, item.ID)
+}
+
+// runDiffPreChecks implements Story 2.4.3b1's extraction of Run's original
+// worktree-identity/branch-drift/diff-computation block (unchanged logic —
+// pure Extract Method): fetch the session's worktree data, verify its
+// identity and branch-drift status, compute the committed diff (worktree
+// preferred, item.RepoPath fallback), and auto-repair a broken base_commit_sha
+// once. Only called when gateContext.RequiresDiff is true (Run nil-skips it
+// otherwise — Task 2.4.3b2).
+//
+// Every early-return/terminal-verdict branch from the original inline code is
+// preserved verbatim, just expressed as blocked=true instead of an early
+// `return` from Run directly — including the "diff computation failed"
+// terminal block, which the caller no longer needs the specific
+// worktreeDiffErr for: blocked=true is sufficient, since Run's own
+// committedDiffEmpty check can never fire on this path (diff is always ""
+// when this returns blocked=true).
+func (r *ReviewGateRunner) runDiffPreChecks(ctx context.Context, item *BacklogItemData, is ItemSessionSummary) (diff string, truncated bool, uncommittedWarning string, blocked bool) {
 	// worktreeDiffErr is set only when we positively know a worktree/base-commit exists
 	// for this session but the diff still couldn't be computed (e.g. a stale/corrupted
 	// base_commit_sha pointing at a pruned or otherwise nonexistent git object). That is
@@ -159,7 +405,7 @@ func (r *ReviewGateRunner) Run(
 			mismatchIS, createErr := recordTerminalReviewVerdict(r.storage, item.ID, is.AcSnapshot, "worktree-identity-"+uuid.New().String(), ReviewVerdictFail, summary)
 			if createErr != nil {
 				log.ErrorLog().Printf("[BacklogLifecycle] spawnReviewGate CreateItemSessionWithVerdict (worktree identity) item=%s: %v", item.ID, createErr)
-				return
+				return "", false, "", true
 			}
 			log.WarningLog().Printf("[BacklogLifecycle] spawnReviewGate worktree identity mismatch blocked review for item %s — FAIL verdict recorded (session %s)", item.ID, mismatchIS.ID)
 			if r.getNotifier != nil {
@@ -184,7 +430,7 @@ func (r *ReviewGateRunner) Run(
 					}
 				}()
 			}
-			return
+			return "", false, "", true
 		}
 		// Precondition of review, not a best-effort side effect of the reactive PR-fix
 		// path (BUG-044): a branch left to drift unbounded from main eventually produces
@@ -199,7 +445,7 @@ func (r *ReviewGateRunner) Run(
 			driftIS, createErr := recordTerminalReviewVerdict(r.storage, item.ID, is.AcSnapshot, "branch-drift-"+uuid.New().String(), ReviewVerdictFail, blockedSummary)
 			if createErr != nil {
 				log.ErrorLog().Printf("[BacklogLifecycle] spawnReviewGate CreateItemSessionWithVerdict (branch drift) item=%s: %v", item.ID, createErr)
-				return
+				return "", false, "", true
 			}
 			log.InfoLog().Printf("[BacklogLifecycle] spawnReviewGate branch drift blocked for item %s — FAIL verdict recorded (session %s)", item.ID, driftIS.ID)
 			if r.getNotifier != nil {
@@ -223,7 +469,7 @@ func (r *ReviewGateRunner) Run(
 					}
 				}()
 			}
-			return
+			return "", false, "", true
 		}
 	}
 	if wtErr == nil && wt.WorktreePath != "" {
@@ -314,71 +560,6 @@ func (r *ReviewGateRunner) Run(
 			}
 		}
 	}
-	// Captured before uncommittedWarning is prepended below, so this reflects only
-	// the actual committed diff rather than the warning banner text.
-	committedDiffEmpty := worktreeDiffErr == nil && strings.TrimSpace(diff) == ""
-
-	if uncommittedWarning != "" {
-		diff = uncommittedWarning + diff
-	}
-
-	// An empty committed diff is indistinguishable from "no real work happened" — the
-	// same failure shape as the worktreeDiffErr case below, but for a diff that
-	// computed successfully rather than one that errored. Without this check, a
-	// no-op session (crashed before committing, or promoted to review by
-	// ReconcileStuckItems purely because its work sessions ended, with zero commits)
-	// would reach a real review session with nothing to review, risking a false
-	// PASS/UNVERIFIABLE verdict that marks the item done despite no work having
-	// shipped — see BUG-047/BUG-065 in backlog_lifecycle.go and
-	// backlog_lifecycle_pr.go for the same class of bug in sibling reconciliation
-	// paths. Blocking here, with the same FAIL-verdict + auto-reopen handling used
-	// for every other guardrail in this function, routes a no-work item back
-	// through AutoReopenAfterFailedReview to in_progress instead of letting it
-	// silently pass review.
-	//
-	// Exception: report_duplicate (server/mcp/tools_backlog.go) deliberately routes an
-	// item to review with zero committed diff — a duplicate claim has nothing to
-	// commit by design — and writes a duplicate_ref= marker into VerificationNotes
-	// before triggering this gate specifically so a real reviewer can confirm it
-	// (backlog item e2373931). Without this carve-out, every report_duplicate call hit
-	// this guard's hardcoded FAIL, and two calls in a row tripped IsRepeatedFailure and
-	// permanently parked the item in review with no reviewer ever consulted. Detecting
-	// the marker here and falling through to the normal SpawnReviewSession path below
-	// is what fixes that: the reviewer's prompt already carries the duplicate_ref line
-	// (writeVerificationEvidenceSection in backlog_review.go), and BuildReviewPrompt's
-	// diff=="" branch already tells the reviewer to check the codebase itself. A
-	// session with no duplicate_ref marker — the genuinely abandoned case this guard
-	// exists for — is unaffected: isDup is false and the FAIL below still fires
-	// exactly as before.
-	_, isDup := parseDuplicateRef(is.VerificationNotes)
-	if committedDiffEmpty && !isDup {
-		summary := "Review blocked: no committed changes were found for this session. " +
-			"There is nothing to review — the work session ended without shipping any commits."
-		emptyDiffIS, createErr := recordTerminalReviewVerdict(r.storage, item.ID, is.AcSnapshot, "empty-diff-"+uuid.New().String(), ReviewVerdictFail, summary)
-		if createErr != nil {
-			log.ErrorLog().Printf("[BacklogLifecycle] spawnReviewGate CreateItemSessionWithVerdict (empty diff) item=%s: %v", item.ID, createErr)
-			return
-		}
-		log.WarningLog().Printf("[BacklogLifecycle] spawnReviewGate empty diff for item %s — FAIL verdict recorded (session %s)", item.ID, emptyDiffIS.ID)
-		if r.getNotifier != nil {
-			if n := r.getNotifier(); n != nil {
-				n.Notify(item.ID,
-					"Review blocked — no changes to review",
-					fmt.Sprintf("%s — the work session ended without any committed changes.", item.Title),
-					7, // sessionv1.NotificationType_NOTIFICATION_TYPE_ERROR
-					3, // sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_HIGH
-				)
-			}
-		}
-		if reopener := r.getAutoReopener(); reopener != nil {
-			go func() {
-				if err := reopener.AutoReopenAfterFailedReview(ctx, item.ID); err != nil {
-					log.ErrorLog().Printf("[BacklogLifecycle] spawnReviewGate AutoReopenAfterFailedReview (empty diff) item=%s: %v", item.ID, err)
-				}
-			}()
-		}
-		return
-	}
 
 	// A worktree/base-commit was recorded for this session but the diff could not be
 	// computed against it even after the repo-fallback attempt AND the auto-repair
@@ -399,7 +580,7 @@ func (r *ReviewGateRunner) Run(
 		diffFailIS, createErr := recordTerminalReviewVerdict(r.storage, item.ID, is.AcSnapshot, "diff-error-"+uuid.New().String(), ReviewVerdictFail, summary)
 		if createErr != nil {
 			log.ErrorLog().Printf("[BacklogLifecycle] spawnReviewGate CreateItemSessionWithVerdict (diff error) item=%s: %v", item.ID, createErr)
-			return
+			return "", false, "", true
 		}
 		log.ErrorLog().Printf("[BacklogLifecycle] spawnReviewGate diff computation failed for item %s — review blocked, FAIL verdict recorded (session %s)", item.ID, diffFailIS.ID)
 		if r.getNotifier != nil {
@@ -422,106 +603,10 @@ func (r *ReviewGateRunner) Run(
 				}
 			}()
 		}
-		return
+		return "", false, "", true
 	}
 
-	// Security check — block if secrets detected.
-	//
-	// Same as the diff-error block above: this records a synthetic, non-Instance-backed
-	// terminal verdict directly — it's a pre-flight guardrail, not the review call itself.
-	if secErr := RunPreGateSecurityCheck(diff); secErr != nil {
-		log.ErrorLog().Printf("[BacklogLifecycle] spawnReviewGate security check blocked item=%s: %v", item.ID, secErr)
-		// Record a failed review ItemSession with a FAIL verdict so the gate verdict
-		// is visible in the UI and operators can act (override or re-review).
-		summary := fmt.Sprintf("Review blocked by security check: %v. Override required to proceed.", secErr)
-		secIS, secCreateErr := recordTerminalReviewVerdict(r.storage, item.ID, is.AcSnapshot, "review-blocked-"+uuid.New().String(), ReviewVerdictFail, summary)
-		if secCreateErr != nil {
-			log.ErrorLog().Printf("[BacklogLifecycle] spawnReviewGate CreateItemSessionWithVerdict (security block) item=%s: %v", item.ID, secCreateErr)
-			return
-		}
-		log.InfoLog().Printf("[BacklogLifecycle] spawnReviewGate security check blocked for item %s — FAIL verdict recorded (session %s)", item.ID, secIS.ID)
-		if r.getNotifier != nil {
-			if n := r.getNotifier(); n != nil {
-				n.Notify(item.ID,
-					"Review blocked by security check",
-					fmt.Sprintf("%s — override required to proceed.", item.Title),
-					7, // sessionv1.NotificationType_NOTIFICATION_TYPE_ERROR
-					3, // sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_HIGH
-				)
-			}
-		}
-		// Feed into the same auto-reopen/cap-and-notify machinery every other
-		// terminal FAIL/UNVERIFIABLE verdict block in this function uses (see the
-		// diff-computation-blocked block above) — a secret left behind by a rework
-		// session is exactly the kind of thing a subsequent rework attempt can fix,
-		// and the maxAutoReworkIterations cap still protects against an unfixable
-		// case looping silently forever.
-		if reopener := r.getAutoReopener(); reopener != nil {
-			go func() {
-				if err := reopener.AutoReopenAfterFailedReview(ctx, item.ID); err != nil {
-					log.ErrorLog().Printf("[BacklogLifecycle] spawnReviewGate AutoReopenAfterFailedReview (security block) item=%s: %v", item.ID, err)
-				}
-			}()
-		}
-		return
-	}
-
-	// Deserialize AC snapshot, overlaying any live Note/Status written by
-	// report_progress after the ItemSession's AcSnapshot was captured at spawn
-	// time — otherwise the reviewer sees a stale snapshot missing self-reported
-	// progress notes. See MergeLiveCriterionNotes.
-	acSnapshot, _ := ParseAcCriteria(is.AcSnapshot)
-	liveAC, _ := ParseAcCriteria(item.AcceptanceCriteria)
-	if len(acSnapshot) == 0 {
-		acSnapshot = liveAC
-	} else {
-		acSnapshot = MergeLiveCriterionNotes(acSnapshot, liveAC)
-	}
-
-	prompt := r.reviewPromptFor(item, acSnapshot, diff, truncated, is.ID, is.VerificationNotes)
-
-	// Spawn a real, hidden, tagged review session.Instance so the review
-	// participates in the same visibility/attention mechanism (idle/error/approval
-	// detection) as every other session — see SpawnReviewSession. The verdict is
-	// no longer computed synchronously here: the spawned session calls the
-	// submit_review_verdict MCP tool, and BacklogLifecycleListener.
-	// handleReviewSessionExited processes the outcome once that session exits.
-	//
-	// Note: prompt is built via reviewPromptFor, which routes through
-	// PipelineEngine.InteractiveReviewPromptFor (tool-call/submit_review_verdict
-	// style) rather than ReviewPromptFor/BuildHeadlessReviewPrompt. The latter
-	// pair asks for a bare JSON object on stdout — correct for the still-headless
-	// callers that use it (TriggerReReview in
-	// server/services/backlog_service_triage.go), but wrong here: this session is
-	// a real, tool-using Claude Code agent that must call the submit_review_verdict
-	// MCP tool, not print JSON, so handleReviewSessionExited has a verdict to read
-	// once it exits. PipelineModeDefault (or a nil pipelineEngine) still renders
-	// BuildReviewPrompt directly, so this is behavior-preserving for every item
-	// that hasn't opted into a custom PipelineMode.
-	sessionCreator := r.getSessionCreator()
-	if sessionCreator == nil {
-		log.ErrorLog().Printf("[BacklogLifecycle] spawnReviewGate item=%s: no review mechanism configured", item.ID)
-		return
-	}
-
-	reviewInst, spawnErr := sessionCreator.SpawnReviewSession(ctx, item, is.ID, prompt)
-	if spawnErr != nil {
-		log.ErrorLog().Printf("[BacklogLifecycle] spawnReviewGate SpawnReviewSession item=%s: %v", item.ID, spawnErr)
-		return
-	}
-
-	// Create ItemSession linking the new review session to the backlog item.
-	if _, createErr := r.storage.CreateItemSession(ctx, ItemSessionData{
-		ItemID:      item.ID,
-		SessionUUID: reviewInst.UUID,
-		SessionRole: SessionRoleReview,
-		AcSnapshot:  is.AcSnapshot,
-	}); createErr != nil {
-		log.ErrorLog().Printf("[BacklogLifecycle] spawnReviewGate CreateItemSession item=%s review=%s: %v", item.ID, reviewInst.UUID, createErr)
-		return
-	}
-
-	log.InfoLog().Printf("[BacklogLifecycle] spawnReviewGate spawned review session %s for item %s", reviewInst.UUID, item.ID)
+	return diff, truncated, uncommittedWarning, false
 }
 
 // WorktreeIdentityMismatch reports why worktreePath does not actually belong to

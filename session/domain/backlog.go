@@ -216,6 +216,18 @@ const (
 	// (server/services/backlog_service_pr_fix_steer.go); the two reasons are
 	// mutually exclusive per item — each path resolves the other.
 	StuckReasonSteerFailed StuckReason = "steer_failed"
+	// StuckReasonGateTimeout: a custom-transition gate check (any GateKind, not
+	// only GateKindCustom) exceeded its bound LivenessDefinition's
+	// StalenessThreshold — e.g. a GateKindCustom invocation (Epic 2.4.4's
+	// InvokeCustomGateCheck) still open past ExpectedDuration+StalenessMargin.
+	// Deliberately one generic reason for every custom-transition/custom-gate
+	// liveness timeout, not a value per gate kind or per individual gate — see
+	// project_plans/backlog-custom-workflow-stages/implementation/plan.md's
+	// "Decision: StuckReasonGateTimeout" (Epic 2.4), which keeps StuckReason a
+	// closed, exhaustively-switchable enum. Set by reconcileCustomGateChecks
+	// (session/backlog_lifecycle_gates.go), mirroring
+	// reconcileOrphanedTriageItems' LivenessEngine-consulting sweep pattern.
+	StuckReasonGateTimeout StuckReason = "gate_timeout"
 )
 
 // AllStuckReasons lists every valid StuckReason constant.
@@ -239,6 +251,7 @@ var AllStuckReasons = []StuckReason{
 	StuckReasonMultipleReasons,
 	StuckReasonBounceCapExhausted,
 	StuckReasonSteerFailed,
+	StuckReasonGateTimeout,
 }
 
 // IsValid reports whether r is a known stuck reason value.
@@ -249,7 +262,8 @@ func (r StuckReason) IsValid() bool {
 		StuckReasonAutonomousStuck, StuckReasonSpawnFailed, StuckReasonPlanNotApproved,
 		StuckReasonPRPendingNoPR, StuckReasonReworkBlockedStale, StuckReasonPRNeedsFix,
 		StuckReasonRespawnBlockedActive, StuckReasonLikelyFlaky, StuckReasonBlockedByDependency,
-		StuckReasonMultipleReasons, StuckReasonBounceCapExhausted, StuckReasonSteerFailed:
+		StuckReasonMultipleReasons, StuckReasonBounceCapExhausted, StuckReasonSteerFailed,
+		StuckReasonGateTimeout:
 		return true
 	}
 	return false
@@ -518,6 +532,13 @@ var (
 
 // BacklogItemTransitionInput carries the fields needed by TransitionGuard.
 type BacklogItemTransitionInput struct {
+	// ItemID is the BacklogItem's own ID (string form, matching
+	// session.BacklogItemData.ID). Added for Epic 2.4's
+	// ConfiguredWorkflowEngine.PendingGates, which must look up a stateful
+	// gate's persisted GateSatisfactionRecord by (item, gate) — TransitionGuard
+	// itself never reads this field. Zero value ("") is safe for every
+	// existing caller that only exercises TransitionGuard/DefaultWorkflowEngine.
+	ItemID            string
 	Status            BacklogStatus
 	AcCriteria        AcCriteriaJSON // serialized acceptance criteria
 	PlanApproved      bool

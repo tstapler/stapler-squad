@@ -201,7 +201,61 @@ type BacklogLifecycleListener struct {
 	// via SetChainReconciler.
 	chainReconciler *TriggerChainReconciler
 
+	// gateSatisfactionRepoMu guards gateSatisfactionRepo for concurrent Set/get access.
+	gateSatisfactionRepoMu sync.RWMutex
+	// gateSatisfactionRepo backs reconcileCustomGateChecks' scan for in-flight
+	// custom-check invocations (Epic 2.4, Task 2.4.4c). nil (the default)
+	// makes that sweep a no-op — matches every other optional-dependency
+	// detector's nil-safe convention in this file. Wired via
+	// SetGateSatisfactionRepository.
+	gateSatisfactionRepo GateSatisfactionRepository
+
+	// workflowEngineMu guards workflowEngine for concurrent Set/get access.
+	workflowEngineMu sync.RWMutex
+	// workflowEngine is consulted by transitionHasAutomatedReviewGate (Epic
+	// 2.4, Story 2.4.3) to detect a custom transition's attached
+	// GateKindAutomatedReview gate, generalizing the review-gate spawn
+	// condition beyond the built-in review status literal. nil (the default —
+	// server/dependencies.go does not wire a ConfiguredWorkflowEngine in here
+	// yet) makes transitionHasAutomatedReviewGate degrade to that literal
+	// comparison only, unchanged from pre-Epic-2.4 behavior. Wired via
+	// SetWorkflowEngine.
+	workflowEngine WorkflowEngine
+
 	enabled atomic.Bool
+}
+
+// SetWorkflowEngine wires the WorkflowEngine transitionHasAutomatedReviewGate
+// consults for a custom transition's automated-review gate. nil (the
+// default) is safe — see the field's doc comment.
+func (l *BacklogLifecycleListener) SetWorkflowEngine(engine WorkflowEngine) {
+	l.workflowEngineMu.Lock()
+	defer l.workflowEngineMu.Unlock()
+	l.workflowEngine = engine
+}
+
+// getWorkflowEngine returns the currently-wired WorkflowEngine (nil if none).
+func (l *BacklogLifecycleListener) getWorkflowEngine() WorkflowEngine {
+	l.workflowEngineMu.RLock()
+	defer l.workflowEngineMu.RUnlock()
+	return l.workflowEngine
+}
+
+// SetGateSatisfactionRepository wires the repository reconcileCustomGateChecks
+// (session/backlog_lifecycle_gates.go) scans for in-flight custom-check
+// invocations. nil (the default) is safe — see the field's doc comment.
+func (l *BacklogLifecycleListener) SetGateSatisfactionRepository(repo GateSatisfactionRepository) {
+	l.gateSatisfactionRepoMu.Lock()
+	defer l.gateSatisfactionRepoMu.Unlock()
+	l.gateSatisfactionRepo = repo
+}
+
+// getGateSatisfactionRepo returns the currently-wired GateSatisfactionRepository
+// (nil if none).
+func (l *BacklogLifecycleListener) getGateSatisfactionRepo() GateSatisfactionRepository {
+	l.gateSatisfactionRepoMu.RLock()
+	defer l.gateSatisfactionRepoMu.RUnlock()
+	return l.gateSatisfactionRepo
 }
 
 // PipelineEngine returns the PipelineEngine injected at construction (nil if none was
@@ -808,7 +862,7 @@ func (l *BacklogLifecycleListener) onSessionExited(sessionUUID string) {
 	go l.triggerDequeue(context.Background())
 
 	// Spawn review gate if the item moved to review and a review mechanism is configured.
-	if toStatus == BacklogStatusReview && !item.SkipReviewGate && l.getSessionCreator() != nil {
+	if l.transitionHasAutomatedReviewGate(BacklogStatusInProgress, toStatus) && !item.SkipReviewGate && l.getSessionCreator() != nil {
 		go func() {
 			// Acquire the bounded semaphore to prevent unbounded goroutine fan-out
 			// when many sessions exit simultaneously.
@@ -818,9 +872,57 @@ func (l *BacklogLifecycleListener) onSessionExited(sessionUUID string) {
 				return
 			}
 			defer func() { <-l.reviewSem }()
-			l.spawnReviewGate(item, is)
+			l.spawnReviewGate(builtInReviewGateContext, item, is)
 		}()
 	}
+}
+
+// builtInReviewGateContext is the GateContext (session/review_gate.go) passed
+// to every review-gate spawn for the built-in review->pr_pending transition:
+// no persisted TransitionGate backs it (GateID ""), and it always reviews a
+// code diff (RequiresDiff: true) — the same behavior review_gate.go's Run had
+// unconditionally before Story 2.4.3 generalized it to accept a GateContext.
+var builtInReviewGateContext = GateContext{
+	GateID:           "",
+	TargetTransition: BacklogStatusReview,
+	RequiresDiff:     true,
+}
+
+// transitionHasAutomatedReviewGate reports whether transitioning from `from`
+// to `to` should fire the review gate (Epic 2.4, Story 2.4.3's
+// generalization of this call site's old hardcoded `toStatus ==
+// BacklogStatusReview` literal). The built-in review status always qualifies
+// — unconditionally, not gated behind any persisted TransitionGate row, since
+// the built-in workflow-stage seed migration (Epic 2.2) does not itself seed
+// an automated_review gate for this edge, and requiring one here would
+// silently stop the review gate from firing for every install that hasn't
+// separately configured a custom graph. Additionally (not instead), if
+// l.workflowEngine is wired and reports a GateKindAutomatedReview gate
+// attached to this exact (from,to) edge, that also qualifies — the seam a
+// custom-transition automated-review gate (e.g. idea -> ready) needs to
+// eventually fire through this same call site. l.workflowEngine is nil in
+// today's production wiring (server/dependencies.go does not yet call
+// SetWorkflowEngine), so in practice this degrades to the literal
+// `to == BacklogStatusReview` check — zero behavior change until a future
+// change wires a ConfiguredWorkflowEngine in here.
+func (l *BacklogLifecycleListener) transitionHasAutomatedReviewGate(from, to BacklogStatus) bool {
+	if to == BacklogStatusReview {
+		return true
+	}
+	engine := l.getWorkflowEngine()
+	if engine == nil {
+		return false
+	}
+	gates, err := engine.PendingGates(BacklogItemTransitionInput{Status: from}, to)
+	if err != nil {
+		return false
+	}
+	for _, g := range gates {
+		if g.Kind == GateKindAutomatedReview {
+			return true
+		}
+	}
+	return false
 }
 
 // BackfillStuckStates seeds durable BacklogStuckState rows for items that are
@@ -996,7 +1098,7 @@ func (l *BacklogLifecycleListener) ReconcileStuck(ctx context.Context) {
 						return
 					}
 					defer func() { <-l.reviewSem }()
-					l.spawnReviewGate(itemCopy, isCopy)
+					l.spawnReviewGate(builtInReviewGateContext, itemCopy, isCopy)
 				}(&itemData, isCopy)
 			}
 		}
@@ -1113,6 +1215,15 @@ func (l *BacklogLifecycleListener) ReconcileStuck(ctx context.Context) {
 	// sent.
 	l.runStuckDetector("orphaned_triage_remediation", &okNames, &panickedNames, func() {
 		l.reconcileOrphanedTriageRemediation(ctx, er)
+	})
+
+	// Flag a custom-transition gate check (Epic 2.4, Task 2.4.4c) whose
+	// invocation has been open longer than its bound LivenessDefinition's
+	// StalenessThreshold — the same LivenessEngine-consulting sweep pattern as
+	// reconcileOrphanedTriageItems above, applied to InvokeCustomGateCheck's
+	// in-flight GateSatisfactionRecord rows instead of ItemSession rows.
+	l.runStuckDetector("gate_timeout", &okNames, &panickedNames, func() {
+		l.reconcileCustomGateChecks(ctx, er)
 	})
 
 	// Flag queued items DequeueNextQueuedItems' planning gate refuses to ever

@@ -151,7 +151,8 @@ func newSeededConfiguredWorkflowEngine(t *testing.T) (*ConfiguredWorkflowEngine,
 	require.NoError(t, EnsureBuiltInWorkflowStages(ctx, client))
 
 	stageRepo := NewEntStageConfigRepository(client)
-	engine, err := NewConfiguredWorkflowEngine(stageRepo)
+	gateSatisfactionRepo := NewEntGateSatisfactionRepository(client)
+	engine, err := NewConfiguredWorkflowEngine(stageRepo, gateSatisfactionRepo)
 	require.NoError(t, err)
 	return engine, client
 }
@@ -290,13 +291,21 @@ func newCustomTransitionWithGates(t *testing.T, client *ent.Client, engine *Conf
 	require.NoError(t, err)
 
 	for i, kind := range kinds {
-		_, err := client.TransitionGate.Create().
+		c := client.TransitionGate.Create().
 			SetTransitionID(transition.ID).
 			SetKind(string(kind)).
 			SetStateful(stateful[i]).
 			SetOrderIndex(i).
-			SetEnabled(true).
-			Save(ctx)
+			SetEnabled(true)
+		// A GateKindStructural fixture needs a configured check_id (Story
+		// 2.4.2's config-driven dispatch, session/gate_structural.go) or
+		// evaluateStructuralGate fails closed with "unrecognized structural
+		// check id" — every existing caller of this helper wants the
+		// pre-Epic-2.4.2 "all AC done" semantics, so default to ac_complete.
+		if kind == GateKindStructural {
+			c = c.SetConfig(map[string]interface{}{"check_id": StructuralCheckACComplete})
+		}
+		_, err := c.Save(ctx)
 		require.NoError(t, err)
 	}
 
