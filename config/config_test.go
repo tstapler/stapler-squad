@@ -16,6 +16,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/config/workspacepath"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/log"
 )
@@ -259,7 +260,7 @@ func TestPruneStaleTestDirs(t *testing.T) {
 	require.NoError(t, os.MkdirAll(aliveDir, 0755))
 	require.NoError(t, os.MkdirAll(junkDir, 0755))
 
-	pruneStaleTestDirs(testBaseDir)
+	workspacepath.PruneStaleTestDirs(testBaseDir)
 
 	assert.NoDirExists(t, deadDir, "dead process's test dir should be pruned")
 	assert.DirExists(t, aliveDir, "live process's test dir must survive")

@@ -782,12 +782,12 @@ lint-css-tokens: ## Fail if any component .css.ts file uses hardcoded hex colors
 	  ! -name 'ThemePicker.css.ts' \
 	  ! -path '*/debug/escape-codes/page.css.ts' \
 	  | while read f; do \
-	    if grep '#[0-9a-fA-F]\{3,8\}' "$$f" 2>/dev/null | grep -qv '//.*#[0-9a-fA-F]\{3,8\}'; then echo "$$f"; fi; \
+	    if grep '#[0-9a-fA-F]\{3,8\}' "$$f" 2>/dev/null | grep -v '^[[:space:]]*\*' | grep -qv '//.*#[0-9a-fA-F]\{3,8\}'; then echo "$$f"; fi; \
 	  done); \
 	if [ -n "$$violations" ]; then \
 	  echo "❌ Hardcoded hex colors found in component .css.ts files (use vars.color.* instead):"; \
 	  for f in $$violations; do \
-	    grep -n '#[0-9a-fA-F]\{3,8\}' "$$f" | grep -v '//.*#[0-9a-fA-F]\{3,8\}' | head -3 | sed "s|^|  $$f line |"; \
+	    grep -n '#[0-9a-fA-F]\{3,8\}' "$$f" | grep -v '^[0-9]*:[[:space:]]*\*' | grep -v '//.*#[0-9a-fA-F]\{3,8\}' | head -3 | sed "s|^|  $$f line |"; \
 	  done; \
 	  exit 1; \
 	fi

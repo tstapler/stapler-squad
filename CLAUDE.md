@@ -120,13 +120,20 @@ Subtle patterns (double-checked locking, etc.): `docs/explanation/concurrency-pa
 ## Application Data
 
 State and logs live in `~/.stapler-squad/`:
-- `logs/staplersquad.log` — main log (JSON-lines, one `slog` record per line); check here for session creation issues. `logs/service.log` is a different file — raw systemd stdout/stderr (startup banners, panics before logging init) — see `docs/how-to/debug-with-logs.md` for the full file breakdown, log-level controls, and volume-reduction guidance. With `STAPLER_SQUAD_INSTANCE=<name>` set, an instance logs to `instances/<name>/logs/staplersquad.log` instead (unset or `shared` uses the path above, unchanged)
+- `logs/staplersquad.log` — main log (JSON-lines, one `slog` record per line); check here for session creation issues. `logs/service.log` is a different file — raw systemd stdout/stderr (startup banners, panics before logging init) — see `docs/how-to/debug-with-logs.md` for the full file breakdown, log-level controls, and volume-reduction guidance.
+  Logs always land next to config/session state — `log.GetConfigDir()` mirrors
+  `config.GetConfigDir()`'s full priority list, so `STAPLER_SQUAD_INSTANCE=<name>`
+  logs to `instances/<name>/logs/staplersquad.log`, an opted-in
+  `STAPLER_SQUAD_WORKSPACE_MODE=true` or a `SwitchDatabase`-set workspace
+  preference logs to `workspaces/<hash-or-name>/logs/staplersquad.log`, and
+  unset/`shared` uses the path above, unchanged. See
+  `docs/reference/state-isolation.md` for the full priority list.
 - `worktrees/` — git worktrees for isolated sessions
 - `config.json`, `sessions.json`
 
 **Key log patterns:** `Starting tmux session`, `timed out waiting for tmux session`, `DoesSessionExist()` polling
 
-State isolation (workspace-based by default): `docs/reference/state-isolation.md`
+State isolation (workspace mode is opt-in, not default): `docs/reference/state-isolation.md`
 External session monitoring (ssq-mux for IDE terminals): `docs/how-to/monitor-external-terminal-sessions.md`
 
 ## Architecture Overview
