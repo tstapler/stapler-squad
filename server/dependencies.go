@@ -611,6 +611,16 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	var pipelineEngine session.PipelineEngine
 	var pipelineModeRepo session.PipelineModeRepository
 	if entClient := storage.GetEntClient(); entClient != nil {
+		// Seed the built-in 9-stage/edge workflow graph (backlog_stages +
+		// stage_transitions rows) so ConfiguredWorkflowEngine (Epic 2.3) has
+		// real rows to load from day one once it's wired in. Create-if-missing
+		// only — never touches rows once any backlog_stages row exists — and
+		// never aborts boot on failure, matching the "sdd" pipeline mode seed's
+		// posture immediately below (project_plans/backlog-custom-workflow-stages/
+		// implementation/plan.md Epic 2.2).
+		if seedErr := session.EnsureBuiltInWorkflowStages(context.Background(), entClient); seedErr != nil {
+			log.Warn("failed to seed built-in workflow stages, continuing without them", "err", seedErr)
+		}
 		pipelineModeRepo = session.NewEntPipelineModeRepository(entClient)
 		// Seed the "sdd" pipeline mode before the engine's first cache Load
 		// below, so that Load already sees the seeded row in one pass rather
