@@ -53,3 +53,13 @@ func runWorkflowUpdatedAtUTCBackfill(ctx context.Context, er *EntRepository) err
 	}
 	return nil
 }
+
+// workflowUpdatedAtUTCMigration adapts runWorkflowUpdatedAtUTCBackfill to the
+// Migration interface (session/ent_repository_migrations.go).
+type workflowUpdatedAtUTCMigration struct{}
+
+func (workflowUpdatedAtUTCMigration) Name() string { return "workflow updated_at UTC backfill" }
+
+func (workflowUpdatedAtUTCMigration) Run(ctx context.Context, er *EntRepository) error {
+	return runWorkflowUpdatedAtUTCBackfill(ctx, er)
+}

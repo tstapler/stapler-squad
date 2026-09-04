@@ -191,6 +191,11 @@ func (s *BacklogService) CreateBacklogItem(
 		return nil, connect.NewError(connect.CodeInvalidArgument, err)
 	}
 
+	var baseBranch string
+	if req.Msg.BaseBranch != nil {
+		baseBranch = *req.Msg.BaseBranch
+	}
+
 	data := session.BacklogItemData{
 		Title:              req.Msg.Title,
 		Description:        req.Msg.Description,
@@ -198,6 +203,7 @@ func (s *BacklogService) CreateBacklogItem(
 		Priority:           priority,
 		Status:             string(session.BacklogStatusIdea),
 		RepoPath:           repoPath,
+		BaseBranch:         baseBranch,
 		SkipReviewGate:     req.Msg.SkipReviewGate,
 		SkipPlanning:       req.Msg.SkipPlanning,
 		AutoSpawnSession:   req.Msg.AutoSpawnSession,
@@ -322,6 +328,12 @@ func (s *BacklogService) UpdateBacklogItem(
 			return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("invalid category %q", *req.Msg.Category))
 		}
 		update.Category = req.Msg.Category
+	}
+	// BaseBranch is presence-gated the same way as Category above: only set
+	// update.BaseBranch when the field was explicitly present on the request,
+	// so an omitted base_branch never clobbers the item's existing override.
+	if req.Msg.BaseBranch != nil {
+		update.BaseBranch = req.Msg.BaseBranch
 	}
 	// ReworkCapOverride is presence-gated the same way as PipelineMode above:
 	// only set when the client explicitly sent it, so an omitted field never

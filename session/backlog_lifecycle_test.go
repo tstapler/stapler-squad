@@ -13,6 +13,8 @@ import (
 	"testing"
 	"time"
 
+	gogit "github.com/go-git/go-git/v5"
+	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -4730,4 +4732,72 @@ func TestHasActiveSession_should_PreserveWorkAndReviewGating_When_JulesRoleAdded
 			assert.False(t, got, "an ended row can never be active, regardless of role %q", tc.role)
 		})
 	}
+}
+
+// TestCreateBacklogItem_BaseBranch_RoundTripsThroughGetBacklogItem verifies
+// the explicit base_branch override (the opt-in escape hatch from the
+// default-branch-only behavior) persists end to end through Storage, and
+// that UpdateBacklogItem can change it afterward.
+func TestCreateBacklogItem_BaseBranch_RoundTripsThroughGetBacklogItem(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	created, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:      "item with an explicit base_branch override",
+		BaseBranch: "release-2.0",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "release-2.0", created.BaseBranch)
+
+	fetched, err := storage.GetBacklogItem(ctx, created.ID)
+	require.NoError(t, err)
+	assert.Equal(t, "release-2.0", fetched.BaseBranch)
+
+	newBranch := "release-2.1"
+	updated, err := storage.UpdateBacklogItem(ctx, created.ID, BacklogItemUpdate{BaseBranch: &newBranch}, nil)
+	require.NoError(t, err)
+	assert.Equal(t, "release-2.1", updated.BaseBranch)
+}
+
+// TestCreateBacklogItem_CanonicalizesRepoPathToMainRepo verifies
+// Storage.CreateBacklogItem redirects a linked-worktree RepoPath to its main
+// repo root at creation time. Every creation path (create_backlog_item,
+// import_github_issue, the web UI's RPCs) funnels through this one function,
+// so this is the single point that keeps two items targeting the same repo —
+// one filed against the main checkout, another by an agent that passed its
+// own in-progress worktree as repo_path — from ending up with two different
+// RepoPath strings and fragmenting the web UI's "group by repository" view.
+func TestCreateBacklogItem_CanonicalizesRepoPathToMainRepo(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	mainDir := t.TempDir()
+	repo, err := gogit.PlainInit(mainDir, false)
+	require.NoError(t, err)
+	wt, err := repo.Worktree()
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(mainDir, "f.txt"), []byte("x"), 0644))
+	_, err = wt.Add("f.txt")
+	require.NoError(t, err)
+	_, err = wt.Commit("init", &gogit.CommitOptions{Author: &object.Signature{Name: "t", Email: "t@example.com"}})
+	require.NoError(t, err)
+
+	worktreeDir := filepath.Join(t.TempDir(), "agent-worktree")
+	runGitOrFail(t, mainDir, "worktree", "add", "-b", "agent-branch", worktreeDir)
+
+	created, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:    "item filed from an agent's own worktree",
+		RepoPath: worktreeDir,
+	})
+	require.NoError(t, err)
+
+	wantMain, err := filepath.EvalSymlinks(mainDir)
+	require.NoError(t, err)
+	gotRepoPath, err := filepath.EvalSymlinks(created.RepoPath)
+	require.NoError(t, err)
+	assert.Equal(t, wantMain, gotRepoPath, "RepoPath must be canonicalized to the main repo, not stored as the filing agent's worktree")
 }

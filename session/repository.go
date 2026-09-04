@@ -260,6 +260,11 @@ type BacklogItemData struct {
 	Priority           int
 	Status             string
 	RepoPath           string
+	// BaseBranch is an explicit opt-in override for the branch new worktrees
+	// (triage's isolated worktree, and the eventual work session) fork from.
+	// Empty means the default: origin's default branch tip (see
+	// git.ResolveWorktreeBaseCommit), not RepoPath's own ambient HEAD.
+	BaseBranch         string
 	SkipReviewGate     bool
 	SkipPlanning       bool
 	AutoSpawnSession   bool
@@ -476,6 +481,10 @@ type BacklogItemUpdate struct {
 	AcceptanceCriteria *AcCriteriaJSON
 	Priority           *int
 	RepoPath           *string
+	// BaseBranch follows the same partial-update-presence convention as
+	// Category: nil means "leave untouched", a non-nil pointer (including one
+	// pointing at "") explicitly sets/clears it. See BacklogItemData.BaseBranch.
+	BaseBranch         *string
 	SkipReviewGate     *bool
 	SkipPlanning       *bool
 	AutoSpawnSession   *bool

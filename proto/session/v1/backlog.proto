@@ -224,6 +224,11 @@ message BacklogItem {
   // affordances instead of the internal UUID `id`. Empty for rows that
   // predate the public_id backfill — callers must fall back to `id`.
   string public_id = 36;
+  // base_branch is an explicit opt-in override for the branch new worktrees
+  // (triage's isolated worktree, and the eventual work session) fork from.
+  // Unset means the default: origin's default branch tip, not repo_path's
+  // own ambient HEAD (see git.ResolveWorktreeBaseCommit).
+  optional string base_branch = 37;
 }
 
 // ItemSource represents an external plugin source that syncs items into the
@@ -380,6 +385,10 @@ message CreateBacklogItemRequest {
   // category is a coarse classification (bugfix/feature/chore/refactor).
   // Unset means uncategorized.
   optional string category = 13;
+  // base_branch is an explicit opt-in override for the branch new worktrees
+  // fork from — see BacklogItem.base_branch. Unset means the default
+  // (origin's default branch tip), not repo_path's own ambient HEAD.
+  optional string base_branch = 14;
 }
 
 message CreateBacklogItemResponse {
@@ -540,6 +549,10 @@ message UpdateBacklogItemRequest {
   // (requires the item to currently be in "review" status).
   optional string pr_url = 17;
   optional int32 pr_number = 18;
+  // base_branch is presence-gated like category: unset leaves the item's
+  // stored override untouched, a non-nil pointer (including one pointing at
+  // "") explicitly sets/clears it. See BacklogItem.base_branch.
+  optional string base_branch = 19;
 }
 
 message UpdateBacklogItemResponse {

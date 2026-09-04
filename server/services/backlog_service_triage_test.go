@@ -275,7 +275,7 @@ func TestResolveSessionPath_should_ErrorNotFallBackToRepoPath_When_GitManagedWor
 	t.Setenv("STAPLER_SQUAD_TEST_DIR", testDir)
 	require.NoError(t, os.WriteFile(filepath.Join(testDir, "worktrees"), []byte("not a directory"), 0o644))
 
-	path, useWorktree, err := resolveSessionPath(repoPath, "test-slug")
+	path, useWorktree, err := resolveSessionPath(repoPath, "test-slug", "")
 
 	require.Error(t, err)
 	assert.False(t, useWorktree)
@@ -289,7 +289,7 @@ func TestResolveSessionPath_should_FallBackToDirectory_When_RepoIsNotGitManaged(
 	t.Parallel()
 	repoPath := t.TempDir()
 
-	path, useWorktree, err := resolveSessionPath(repoPath, "test-slug")
+	path, useWorktree, err := resolveSessionPath(repoPath, "test-slug", "")
 
 	require.NoError(t, err)
 	assert.False(t, useWorktree)
@@ -310,7 +310,7 @@ func TestResolveSessionPath_should_CreateWorktree_When_RepoHasNoInitialCommit(t 
 	repoPath := t.TempDir()
 	initGitRepoForTest(t, repoPath) // git-initialized, but zero commits
 
-	path, useWorktree, err := resolveSessionPath(repoPath, "test-slug")
+	path, useWorktree, err := resolveSessionPath(repoPath, "test-slug", "")
 
 	require.NoError(t, err)
 	assert.True(t, useWorktree)
@@ -5093,10 +5093,10 @@ func TestBacklogWorkBranchSlug_TwoItemsWithCollidingTitles_ShareOneWorktree(t *t
 	slugB := backlogWorkBranchSlug(repoDir, titleB)
 	require.Equal(t, slugA, slugB, "fixture requires titleA/titleB to collide on the same slug")
 
-	pathA, err := session.CreateBacklogWorktree(repoDir, slugA)
+	pathA, err := session.CreateBacklogWorktree(repoDir, slugA, "")
 	require.NoError(t, err)
 
-	pathB, err := session.CreateBacklogWorktree(repoDir, slugB)
+	pathB, err := session.CreateBacklogWorktree(repoDir, slugB, "")
 	require.NoError(t, err)
 
 	assert.Equal(t, pathA, pathB,

@@ -2200,6 +2200,7 @@ func (h *backlogHandlers) createBacklogItem(ctx context.Context, req mcpgo.CallT
 
 	description, _ := args["description"].(string)
 	repoPath, _ := args["repo_path"].(string)
+	baseBranch, _ := args["base_branch"].(string)
 	notes, _ := args["notes"].(string)
 	category, _ := args["category"].(string)
 	if category != "" && !session.IsValidBacklogCategory(category) {
@@ -2235,6 +2236,7 @@ func (h *backlogHandlers) createBacklogItem(ctx context.Context, req mcpgo.CallT
 		Priority:           priority,
 		Status:             string(session.BacklogStatusIdea),
 		RepoPath:           repoPath,
+		BaseBranch:         baseBranch,
 		Category:           category,
 		Notes:              notes,
 	})
@@ -3092,6 +3094,9 @@ func registerBacklogTools(s *mcpserver.MCPServer, h *backlogHandlers) {
 			),
 			mcpgo.WithString("repo_path",
 				mcpgo.Description("Absolute local filesystem path this item targets, e.g. /home/user/Programming/my-repo — NOT a bare repo name or owner/repo shorthand (triage will reject those with a clear error). Omit for a repo-less item."),
+			),
+			mcpgo.WithString("base_branch",
+				mcpgo.Description("Explicit opt-in override for the branch triage's isolated worktree and the eventual work session fork from, e.g. \"release-2.0\". Omit for the default: origin's default branch tip (main/master/etc) — NOT your own current branch, even if repo_path happens to be your own in-progress worktree. Only set this when you deliberately want new work to build on top of a specific non-default branch."),
 			),
 			mcpgo.WithString("notes",
 				mcpgo.Description("Freeform operator notes, e.g. where this request came from."),

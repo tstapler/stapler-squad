@@ -936,6 +936,9 @@ func backlogItemToProto(item *session.BacklogItemData, costFor func(tmuxUUID str
 	if item.ExternalURL != "" {
 		p.ExternalUrl = &item.ExternalURL
 	}
+	if item.BaseBranch != "" {
+		p.BaseBranch = &item.BaseBranch
+	}
 	if item.PlanApprovedAt != nil {
 		p.PlanApprovedAt = timestamppb.New(*item.PlanApprovedAt)
 	}

@@ -197,6 +197,7 @@ func backlogItemToData(item *ent.BacklogItem) BacklogItemData {
 		Priority:                     item.Priority,
 		Status:                       item.Status,
 		RepoPath:                     item.RepoPath,
+		BaseBranch:                   item.BaseBranch,
 		SkipReviewGate:               item.SkipReviewGate,
 		SkipPlanning:                 item.SkipPlanning,
 		AutoSpawnSession:             item.AutoSpawnSession,
@@ -326,6 +327,7 @@ func (r *EntRepository) CreateBacklogItem(ctx context.Context, data BacklogItemD
 		SetPriority(priority).
 		SetStatus(status).
 		SetNillableRepoPath(&data.RepoPath).
+		SetNillableBaseBranch(&data.BaseBranch).
 		SetSkipReviewGate(data.SkipReviewGate).
 		SetSkipPlanning(data.SkipPlanning).
 		SetAutoSpawnSession(data.AutoSpawnSession).
@@ -911,6 +913,9 @@ func (r *EntRepository) UpdateBacklogItem(ctx context.Context, id string, update
 	if update.RepoPath != nil {
 		u.SetRepoPath(*update.RepoPath)
 	}
+	if update.BaseBranch != nil {
+		u.SetBaseBranch(*update.BaseBranch)
+	}
 	if update.SkipReviewGate != nil {
 		u.SetSkipReviewGate(*update.SkipReviewGate)
 	}
@@ -1055,6 +1060,9 @@ func updatedFieldsFromBacklogItemUpdate(update BacklogItemUpdate) []string {
 	}
 	if update.RepoPath != nil {
 		fields = append(fields, "repoPath")
+	}
+	if update.BaseBranch != nil {
+		fields = append(fields, "baseBranch")
 	}
 	if update.SkipReviewGate != nil {
 		fields = append(fields, "skipReviewGate")

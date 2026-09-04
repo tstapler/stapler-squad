@@ -117,6 +117,50 @@ func ResolveDefaultLocalBranchSHA(repoPath string) (branch, sha string, err erro
 	return "", "", fmt.Errorf("no candidate default branch (%v) exists locally: %w", CandidateDefaultBranches, errors.Join(errs...))
 }
 
+// ResolveWorktreeBaseCommit resolves the commit new backlog-item worktrees
+// should fork from: origin's default branch tip, falling back to a local
+// default branch when the origin fetch fails (offline, no origin remote).
+// baseSHA == "" (with err == nil) means repoPath has no commits yet
+// (IsUnbornRepo) — the only case it's safe for a caller to fall back to
+// branching from ambient HEAD, since no other branch can exist to
+// accidentally fork from instead. Any other resolution failure is returned
+// as an error rather than silently falling back to ambient HEAD, which is
+// what let new work fork from whatever branch repoPath's checkout happened
+// to be sitting on (e.g. an agent's own in-progress feature branch) instead
+// of main. Shared by session.CreateBacklogWorktree and TriggerTriage's
+// isolated triage worktree (server/services/backlog_service_triage.go).
+func ResolveWorktreeBaseCommit(repoPath string) (defaultBranch, baseSHA string, err error) {
+	defaultBranch, baseSHA, fetchErr := ResolveDefaultBranchSHA(repoPath)
+	if fetchErr == nil {
+		return defaultBranch, baseSHA, nil
+	}
+	defaultBranch, baseSHA, localErr := ResolveDefaultLocalBranchSHA(repoPath)
+	if localErr == nil {
+		return defaultBranch, baseSHA, nil
+	}
+	if IsUnbornRepo(repoPath) {
+		return "", "", nil
+	}
+	return "", "", fmt.Errorf("resolve default branch (origin fetch failed: %w, local lookup failed: %v)", fetchErr, localErr)
+}
+
+// ResolveExplicitBranchSHA resolves branchName's tip commit SHA for a caller
+// that deliberately opted out of the default-branch behavior (BacklogItem.
+// BaseBranch) — origin's copy first (fresh fetch), falling back to a local
+// branch of the same name when the origin fetch fails (offline, no origin
+// remote). Unlike ResolveWorktreeBaseCommit, there is no unborn-repo/ambient-
+// HEAD fallback here: an explicitly requested branch that doesn't exist
+// anywhere is always a hard error, never silently substituted.
+func ResolveExplicitBranchSHA(repoPath, branchName string) (string, error) {
+	if sha, err := ResolveOriginBranchSHA(repoPath, branchName); err == nil {
+		return sha, nil
+	} else if sha, localErr := ResolveLocalBranchSHA(repoPath, branchName); localErr == nil {
+		return sha, nil
+	} else {
+		return "", fmt.Errorf("resolve branch %q (origin fetch failed: %w, local lookup failed: %v)", branchName, err, localErr)
+	}
+}
+
 // IsUnbornRepo reports whether repoPath is a git repository with zero commits (HEAD
 // points at a branch ref that doesn't exist yet, e.g. right after `git init`). Distinct
 // from "no candidate default branch found": that can also mean a repo with real commit

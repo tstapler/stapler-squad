@@ -18,6 +18,7 @@ import (
 
 	"connectrpc.com/connect"
 	"github.com/google/uuid"
+	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/pkg/events"
@@ -1047,7 +1048,7 @@ func (s *BacklogService) spawnSessionAfterGates(
 	// self-heals that specific error, but serializing here closes the race at the
 	// source instead of just recovering from it after the fact).
 	s.worktreeMu.Lock()
-	worktreePath, useWorktree, resolveErr := resolveSessionPath(item.RepoPath, backlogWorkBranchSlug(item.RepoPath, shortTitle))
+	worktreePath, useWorktree, resolveErr := resolveSessionPath(item.RepoPath, backlogWorkBranchSlug(item.RepoPath, shortTitle), item.BaseBranch)
 	if resolveErr != nil {
 		s.worktreeMu.Unlock()
 		return nil, resolveErr
@@ -1657,8 +1658,8 @@ func buildRevisionTitle(baseTitle string, isReopen bool, priorSessions []session
 // included — instead of failing loudly. Confirmed: this is the shape that
 // left session-resume-fix work committed directly on stapler-squad's own
 // main branch outside a worktree.
-func resolveSessionPath(repoPath, slug string) (worktreePath string, useWorktree bool, err error) {
-	wt, wtErr := session.CreateBacklogWorktree(repoPath, slug)
+func resolveSessionPath(repoPath, slug, baseBranch string) (worktreePath string, useWorktree bool, err error) {
+	wt, wtErr := session.CreateBacklogWorktree(repoPath, slug, baseBranch)
 	if wtErr == nil {
 		return wt, true, nil
 	}
@@ -2835,7 +2836,40 @@ func (s *BacklogService) TriggerTriage(
 		// legitimately target a plain directory).
 		triageWorkDir := itemRepoPath
 		var triageWorktree *git.GitWorktree
-		if wt, _, wtErr := git.NewGitWorktree(itemRepoPath, "triage-"+itemID); wtErr != nil {
+		// Anchor to the main repo root and branch from its default branch tip,
+		// exactly like session.CreateBacklogWorktree does for the real work
+		// session — not from itemRepoPath's ambient HEAD. Without this, an item
+		// filed by an agent that passed its own in-progress worktree as repo_path
+		// forked triage (and, via retitleTriageWorktreeToFinalBranch below, the
+		// item's eventual work branch too) from that agent's feature branch
+		// instead of main. item.BaseBranch is the deliberate opt-out of that
+		// default: when set, triage forks from that named branch instead (still
+		// origin-first, falling back to local). Best-effort at every step: any
+		// resolution failure falls back to the pre-fix behavior (branch from
+		// ambient HEAD), and any worktree-creation failure falls back to running
+		// triage directly in itemRepoPath, both unchanged from before — a bad
+		// BaseBranch is still caught loudly later, when the real work session is
+		// spawned via CreateBacklogWorktree, which hard-errors instead.
+		triageRepoRoot, mainRepoErr := session.ResolveMainRepoRoot(itemRepoPath)
+		if mainRepoErr != nil {
+			triageRepoRoot = itemRepoPath
+		}
+		triageBranchName := config.LoadConfig().BranchPrefix + git.SanitizeBranchName("triage-"+itemID)
+		var triageBaseSHA string
+		var baseErr error
+		if item.BaseBranch != "" {
+			triageBaseSHA, baseErr = git.ResolveExplicitBranchSHA(triageRepoRoot, item.BaseBranch)
+		} else {
+			_, triageBaseSHA, baseErr = git.ResolveWorktreeBaseCommit(triageRepoRoot)
+		}
+		var wt *git.GitWorktree
+		var wtErr error
+		if baseErr == nil && triageBaseSHA != "" {
+			wt, _, wtErr = git.NewGitWorktreeFromCommitSHA(triageRepoRoot, "triage-"+itemID, triageBranchName, triageBaseSHA)
+		} else {
+			wt, _, wtErr = git.NewGitWorktree(triageRepoRoot, "triage-"+itemID)
+		}
+		if wtErr != nil {
 			log.WarningLog().Printf("[TriggerTriage] failed to create isolated worktree for item=%s, running triage directly in repo_path: %v", itemID, wtErr)
 		} else if setupErr := wt.Setup(); setupErr != nil {
 			log.WarningLog().Printf("[TriggerTriage] failed to set up isolated worktree for item=%s, running triage directly in repo_path: %v", itemID, setupErr)
