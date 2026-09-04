@@ -112,22 +112,22 @@ func (t *TmuxSession) StartControlMode() error {
 
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
-		stdout.Close()
+		_ = stdout.Close()
 		return fmt.Errorf("failed to create stdin pipe for control mode: %w", err)
 	}
 
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
-		stdout.Close()
-		stdin.Close()
+		_ = stdout.Close()
+		_ = stdin.Close()
 		return fmt.Errorf("failed to create stderr pipe for control mode: %w", err)
 	}
 
 	// Start the control mode process
 	if err := cmd.Start(); err != nil {
-		stdout.Close()
-		stdin.Close()
-		stderr.Close()
+		_ = stdout.Close()
+		_ = stdin.Close()
+		_ = stderr.Close()
 		return fmt.Errorf("failed to start control mode for session '%s': %w", t.sanitizedName, err)
 	}
 	TrackChildPID(cmd.Process.Pid, "tmux control-mode session="+t.sanitizedName)
@@ -285,10 +285,14 @@ func (t *TmuxSession) StopControlMode() error {
 	t.normPriSendCh = nil
 	t.controlModeSubMu.Unlock()
 
-	// Close stdin to signal tmux to exit.
+	// Close stdin to signal tmux to exit. A failure here is not fatal: the
+	// wait/kill logic below falls back to a hard kill after a 2s timeout if
+	// tmux never sees EOF and exits on its own.
 	t.cmdSendMu.Lock()
 	if t.controlModeStdin != nil {
-		t.controlModeStdin.Close()
+		if err := t.controlModeStdin.Close(); err != nil {
+			log.Warn("failed to close control mode stdin", "session", t.sanitizedName, "err", err)
+		}
 		t.controlModeStdin = nil
 	}
 	t.cmdSendMu.Unlock()
@@ -327,9 +331,10 @@ func (t *TmuxSession) StopControlMode() error {
 		<-done // Wait for kill to complete
 	}
 
-	// Close stdout
+	// Close stdout. The process has already exited or been killed above, so
+	// any close error here is inconsequential cleanup.
 	if t.controlModeStdout != nil {
-		t.controlModeStdout.Close()
+		_ = t.controlModeStdout.Close()
 		t.controlModeStdout = nil
 	}
 

@@ -89,8 +89,8 @@ func StartExpectSession(t *testing.T, config ExpectSessionConfig) (*TUISession, 
 		expect.WithCloser(ptyFile),
 	)
 	if err != nil {
-		ptyFile.Close()
-		cmd.Process.Kill()
+		_ = ptyFile.Close()
+		_ = cmd.Process.Kill()
 		return nil, fmt.Errorf("failed to create expect console: %w", err)
 	}
 
@@ -103,7 +103,9 @@ func StartExpectSession(t *testing.T, config ExpectSessionConfig) (*TUISession, 
 
 	// Register cleanup
 	t.Cleanup(func() {
-		session.Close()
+		if err := session.Close(); err != nil {
+			t.Logf("TUISession cleanup: failed to close session: %v", err)
+		}
 	})
 
 	return session, nil
@@ -350,8 +352,8 @@ func (s *TUISession) GetOutput() (string, error) {
 	s.t.Helper()
 
 	// Set read deadline to avoid blocking
-	s.pty.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
-	defer s.pty.SetReadDeadline(time.Time{})
+	_ = s.pty.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
+	defer func() { _ = s.pty.SetReadDeadline(time.Time{}) }()
 
 	buf := make([]byte, 8192)
 	n, err := s.pty.Read(buf)

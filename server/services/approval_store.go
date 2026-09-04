@@ -352,7 +352,7 @@ func (s *ApprovalStore) persistToDiskLocked() {
 		return
 	}
 	if err := os.Rename(tmpPath, s.filePath); err != nil {
-		os.Remove(tmpPath)
+		_ = os.Remove(tmpPath)
 		log.Error("[ApprovalPersistence] failed to rename temp file", "dest", s.filePath, "err", err)
 		return
 	}

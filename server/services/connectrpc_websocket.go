@@ -824,9 +824,9 @@ func (h *ConnectRPCWebSocketHandler) HandleWebSocket(w http.ResponseWriter, r *h
 
 	// Read headers from first message (text format: "key: value\r\nkey: value\r\n\r\n")
 	// 30s deadline: a client that never sends headers should not hold the connection open.
-	conn.SetReadDeadline(time.Now().Add(30 * time.Second)) //nolint:errcheck
+	_ = conn.SetReadDeadline(time.Now().Add(30 * time.Second))
 	_, headersBytes, err := conn.ReadMessage()
-	conn.SetReadDeadline(time.Time{}) //nolint:errcheck // clear deadline for subsequent reads
+	_ = conn.SetReadDeadline(time.Time{}) // clear deadline for subsequent reads
 	if err != nil {
 		log.Error("failed to read headers", "err", err)
 		return
@@ -836,9 +836,9 @@ func (h *ConnectRPCWebSocketHandler) HandleWebSocket(w http.ResponseWriter, r *h
 	log.Info("received headers", "headers", headers)
 
 	// Read enveloped request body
-	conn.SetReadDeadline(time.Now().Add(30 * time.Second)) //nolint:errcheck
+	_ = conn.SetReadDeadline(time.Now().Add(30 * time.Second))
 	_, bodyBytes, err := conn.ReadMessage()
-	conn.SetReadDeadline(time.Time{}) //nolint:errcheck
+	_ = conn.SetReadDeadline(time.Time{})
 	if err != nil {
 		log.Error("failed to read request body", "err", err)
 		return

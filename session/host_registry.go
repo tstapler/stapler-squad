@@ -409,7 +409,7 @@ func (r *HostRegistry) persistLocked() error {
 			return fmt.Errorf("failed to write temporary host registry file: %w", err)
 		}
 		if err := os.Rename(tmpPath, r.path()); err != nil {
-			os.Remove(tmpPath)
+			_ = os.Remove(tmpPath)
 			return fmt.Errorf("failed to atomically write host registry file: %w", err)
 		}
 		return nil

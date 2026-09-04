@@ -159,7 +159,9 @@ var (
 					testDir = fmt.Sprintf("/tmp/stapler-squad-test-%d", os.Getpid())
 				}
 				// Set environment variable for config package to use
-				os.Setenv("STAPLER_SQUAD_TEST_DIR", testDir)
+				if err := os.Setenv("STAPLER_SQUAD_TEST_DIR", testDir); err != nil {
+					log.Warn("Failed to set STAPLER_SQUAD_TEST_DIR; test mode may use the wrong data directory", "err", err)
+				}
 				log.Info("Test mode enabled: using isolated data directory", "dir", testDir)
 			}
 

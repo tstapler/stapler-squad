@@ -228,7 +228,7 @@ func LoadOrCreateHostIdentity(stateDir string) (HostIdentity, error) {
 		return HostIdentity{}, fmt.Errorf("failed to write temporary host identity file: %w", err)
 	}
 	if err := os.Rename(tmpPath, path); err != nil {
-		os.Remove(tmpPath)
+		_ = os.Remove(tmpPath)
 		return HostIdentity{}, fmt.Errorf("failed to atomically write host identity file: %w", err)
 	}
 	log.Info("host_identity.generated", "host_id", identity.ID.String(), "state_dir", stateDir)

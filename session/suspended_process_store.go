@@ -217,7 +217,7 @@ func (s *SuspendedProcessStore) writeWithoutLocking(file suspendedProcessFile) e
 		return fmt.Errorf("failed to write temporary suspended process file: %w", err)
 	}
 	if err := os.Rename(tmpPath, targetPath); err != nil {
-		os.Remove(tmpPath)
+		_ = os.Remove(tmpPath)
 		return fmt.Errorf("failed to atomically update suspended process file: %w", err)
 	}
 	return nil
