@@ -1024,6 +1024,148 @@ func TestStreamViaHub_should_SendHubStartFailedError_When_HubCreationAndLegacyFa
 		"handleTmuxRestoreFailure must mark the session PermanentlyFailed when its working directory is missing")
 }
 
+// TestStreamViaHub_should_SelfHealAndStreamSuccessfully_When_StartedFalseButTmuxAlive
+// is the PR #693 review's requested regression test for streamViaHub's other
+// new branch alongside the failure test above: Instance.Started()==false
+// (e.g. Instance.Start() never ran, or raced/failed in
+// server/dependencies.go's boot-time restart loop) while the underlying tmux
+// session is genuinely alive. Before commits 787a61165/69a43aa92, this left
+// Started() wedged at false forever, so every subsequent capture/resize on
+// the hub streaming path returned streamhub.ErrSessionNotStarted
+// indefinitely (see MarkStartedIfTmuxAlive's doc comment). This test drives
+// streamViaHub itself (not just MarkStartedIfTmuxAlive in isolation, which
+// session/instance_mark_started_test.go already covers) through that branch
+// and asserts streaming actually proceeds: the connection reaches a
+// successful attach (no HubStartFailedErrorCode frame), Started() flips
+// true, and a direct capture call no longer reports ErrSessionNotStarted.
+func TestStreamViaHub_should_SelfHealAndStreamSuccessfully_When_StartedFalseButTmuxAlive(t *testing.T) {
+	// Instance.StartControlMode() (session/instance_tmux.go) resolves this
+	// session's StreamOwnershipLock via its own effectiveStreamHubFlag()
+	// read, before streamViaHub ever reaches HubRegistry.GetOrCreate's own
+	// AcquireAndResolveExpecting(true, PathHubOwned, ...) call. Without the
+	// global default resolving true here (same rollback-rehearsal +
+	// env var gate as TestStreamTerminal_should_RouteThroughHubWithNoLegacyResizeCall_...),
+	// StartControlMode resolves ownership to PathLegacyPerConnection first,
+	// and GetOrCreate's later PathHubOwned expectation then conflicts with
+	// it — sending this connection down the legacy fallback instead of the
+	// hub-owned path this test means to exercise.
+	recordRollbackRehearsalCompletedForTest(t)
+	t.Setenv("STAPLER_SQUAD_USE_STREAM_HUB", "true")
+	require.True(t, useStreamHub(), "flag must resolve PathHubOwned for this test's premise to hold")
+
+	dir := t.TempDir()
+
+	inst, err := session.NewInstance(session.InstanceOptions{
+		Title: "hub-self-heal-" + t.Name(),
+		Path:  dir,
+	})
+	require.NoError(t, err)
+
+	snap := inst.Snapshot()
+	tmuxPrefix := snap.TmuxPrefix
+	if tmuxPrefix == "" {
+		tmuxPrefix = "staplersquad_"
+	}
+	tmuxSessionName := tmux.NewSessionName(snap.Title, tmuxPrefix).String()
+
+	// Same fake-executor setup as
+	// TestStreamViaHub_should_SendHubStartFailedError_...: existsName makes
+	// DoesSessionExistNoCache() report the session alive on the first call
+	// (streamViaHub's own tmux-alive check), which is all this test needs —
+	// it never reaches a second call.
+	_ = inst.GetTmuxSessionName()
+	fakeExec := &listSessionsFakeExecutor{existsName: tmuxSessionName}
+	inst.SetTmuxSession(tmux.NewTmuxSessionWithDeps(snap.Title, "true", tmux.MakePtyFactory(), fakeExec))
+
+	// SetTmuxSession's own side effect (session/instance_tmux.go, "for
+	// testing purposes") flips started true purely because it was handed a
+	// non-nil session — that's not this test's premise. Force the instance
+	// back to "tmux attached but Instance.Start() never completed", using
+	// the same exported recovery path production code already relies on for
+	// a stale instance (RecoverFromStopped's doc comment): flip Status to
+	// Stopped (a plain exported-field write, bypassing the state machine,
+	// same as the session-level self-heal tests' bare &Instance{} literals)
+	// and let RecoverFromStopped reset it to Creating with started=false.
+	inst.Status = session.Stopped
+	inst.RecoverFromStopped()
+	require.False(t, inst.Started(), "test premise requires Started()==false before streamViaHub runs")
+	require.Equal(t, session.Creating, inst.Snapshot().Status)
+
+	serverStream, clientConn, cleanup := createTestWebSocketPair(t)
+	defer cleanup()
+
+	// No TargetCols/TargetRows, matching the sibling failure test above —
+	// this keeps the handshake from also exercising RequestResize, which is
+	// unrelated to the self-heal branch under test here.
+	handshake := &sessionv1.TerminalData{
+		Data: &sessionv1.TerminalData_CurrentPaneRequest{
+			CurrentPaneRequest: &sessionv1.CurrentPaneRequest{},
+		},
+	}
+	handshakeBytes, err := proto.Marshal(handshake)
+	require.NoError(t, err)
+	serverStream.requestMsg = handshakeBytes
+
+	// Unlike the sibling failure test above, this test's instance genuinely
+	// has Started()==false when streamViaHub runs, so it takes the
+	// waitForInstanceStartedEvent branch (connectrpc_websocket.go:1765),
+	// which calls h.sessionService.GetEventBus() unconditionally — a nil
+	// *SessionService (as the sibling test passes) panics there. A real,
+	// bare SessionService with no listener wired to this hand-built instance
+	// is enough: no EventSessionUpdated for it will ever arrive, so the wait
+	// simply runs out its startupWaitTimeout and falls through to the
+	// Started()-direct-check fallback, exactly like a nil event bus would,
+	// just after a real (bounded) wait instead of returning instantly.
+	storage := createTestStorage(t)
+	bus := events.NewEventBus(16)
+	t.Cleanup(bus.Close)
+	svc := NewSessionService(storage, bus)
+	t.Cleanup(func() { svc.Shutdown() })
+	h := NewConnectRPCWebSocketHandler(svc, nil, nil)
+
+	streamErrCh := make(chan error, 1)
+	go func() { streamErrCh <- h.streamViaHub(serverStream, inst) }()
+
+	// The hub-owned path's initial-snapshot send (line ~1897) is the first
+	// frame this connection ever receives, so successfully reading it proves
+	// streamViaHub got past the self-heal branch, StartControlMode, and
+	// HubRegistry.GetOrCreate instead of getting stuck retrying
+	// ErrSessionNotStarted or bailing out with a HubStartFailedErrorCode
+	// frame (the sibling failure test's assertion).
+	// startupWaitTimeout (2s) elapses before the self-heal branch runs, so
+	// this deadline needs headroom beyond that.
+	require.NoError(t, clientConn.SetReadDeadline(time.Now().Add(10*time.Second)))
+	env := readEnvelopeFromClient(t, clientConn)
+	var terminalData sessionv1.TerminalData
+	require.NoError(t, proto.Unmarshal(env.Data, &terminalData))
+	require.Nil(t, terminalData.GetError(), "must not surface a hub-start-failed error frame")
+
+	require.True(t, inst.Started(), "self-heal must flip Started() to true before streaming proceeds")
+	require.Equal(t, session.Active, inst.Snapshot().Status)
+
+	// The regression this test guards: before the self-heal branch existed,
+	// Started() stayed false forever, so every capture/resize call returned
+	// streamhub.ErrSessionNotStarted on every single attempt (see
+	// MarkStartedIfTmuxAlive's doc comment). It's not ErrSessionNotStarted
+	// any more — the fake executor's Output/Run methods are otherwise
+	// unimplemented (listSessionsFakeExecutor's doc comment), so this
+	// specific error is expected in this fixture, but it proves the call was
+	// actually attempted rather than short-circuited by the stale started
+	// flag.
+	_, captureErr := inst.CapturePaneContentRaw()
+	require.Error(t, captureErr, "expected the fake executor's Output to fail (not a real tmux server), just not with ErrSessionNotStarted")
+	require.NotErrorIs(t, captureErr, streamhub.ErrSessionNotStarted,
+		"capture must no longer report ErrSessionNotStarted once self-heal has run")
+
+	require.NoError(t, clientConn.Close())
+
+	select {
+	case <-streamErrCh:
+	case <-time.After(5 * time.Second):
+		t.Fatal("streamViaHub did not return after client disconnect")
+	}
+}
+
 // TestEndStreamErrorCode_should_UseFailedPrecondition_When_ErrIsErrWorkDirMissing
 // and its sibling below cover endStreamErrorCode directly (extracted from
 // sendEndStreamError specifically so this selection is testable without a
