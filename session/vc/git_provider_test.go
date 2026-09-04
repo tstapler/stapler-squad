@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -857,6 +858,8 @@ func TestGitProviderGetStatus(t *testing.T) {
 	// calls -- otherwise a clean repo spawns them unconditionally on every
 	// poll, defeating this PR's own subprocess-reduction goal.
 	t.Run("clean repository skips numstat spawns", func(t *testing.T) {
+		skipOnWindows(t)
+
 		tmpDir := t.TempDir()
 		initGitRepoWithCommit(t, tmpDir)
 
@@ -865,29 +868,15 @@ func TestGitProviderGetStatus(t *testing.T) {
 			t.Fatalf("NewGitProvider() error = %v", err)
 		}
 
-		realGit, err := exec.LookPath("git")
-		if err != nil {
-			t.Fatalf("LookPath(git) error = %v", err)
-		}
-		fakeDir := t.TempDir()
-		logPath := filepath.Join(fakeDir, "calls.log")
-		script := "#!/bin/sh\necho \"$@\" >> " + shellQuote(logPath) + "\nexec " + shellQuote(realGit) + " \"$@\"\n"
-		if err := os.WriteFile(filepath.Join(fakeDir, "git"), []byte(script), 0o755); err != nil {
-			t.Fatalf("Failed to write git shim: %v", err)
-		}
-		t.Setenv("PATH", fakeDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+		logPath := writeGitCallLogShim(t)
 
 		if _, err := provider.GetStatus(); err != nil {
 			t.Fatalf("GetStatus() error = %v", err)
 		}
 
-		data, err := os.ReadFile(logPath)
-		if err != nil {
-			t.Fatalf("Failed to read call log: %v", err)
-		}
-		for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
-			if strings.Contains(line, "diff") && strings.Contains(line, "numstat") {
-				t.Errorf("clean repo spawned a numstat call it should have skipped: %q\nfull call log:\n%s", line, data)
+		for _, call := range readGitCallLog(t, logPath) {
+			if strings.Contains(call, "diff") && strings.Contains(call, "numstat") {
+				t.Errorf("clean repo spawned a numstat call it should have skipped: %q", call)
 			}
 		}
 	})
@@ -1416,6 +1405,8 @@ func TestGitProviderGetStatus_UpstreamAndAheadBehind(t *testing.T) {
 // of silently reintroducing the syscall.ForkLock mutex contention the fix
 // was written to eliminate.
 func TestGitProviderGetStatus_SubprocessSpawnCount(t *testing.T) {
+	skipOnWindows(t) // PATH-shim mechanism below relies on a /bin/sh script
+
 	tmpDir := t.TempDir()
 	initGitRepoWithCommit(t, tmpDir)
 
@@ -1423,6 +1414,39 @@ func TestGitProviderGetStatus_SubprocessSpawnCount(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewGitProvider() error = %v", err)
 	}
+
+	logPath := writeGitCallLogShim(t)
+
+	const wantMaxSpawns = 4 // status(+branch), log, diff --numstat, diff --numstat --cached
+	if _, err := provider.GetStatus(); err != nil {
+		t.Fatalf("GetStatus() error = %v", err)
+	}
+
+	calls := readGitCallLog(t, logPath)
+	if len(calls) > wantMaxSpawns {
+		t.Errorf("GetStatus() spawned %d git subprocesses, want <= %d: %v", len(calls), wantMaxSpawns, calls)
+	}
+}
+
+// skipOnWindows skips t when running on Windows: the PATH-shim helpers below
+// write a `#!/bin/sh` script and rely on POSIX executable bits, which have
+// no equivalent through a bare os.WriteFile on Windows (would need a
+// separate .bat/.exe shim strategy). This repo has no Windows CI runner
+// today (no matching entries in .github/workflows/*.yml), but the skip
+// keeps these tests from breaking silently if that ever changes.
+func skipOnWindows(t *testing.T) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("PATH-shim git-call-logging mechanism is POSIX-only (/bin/sh script)")
+	}
+}
+
+// writeGitCallLogShim puts a fake `git` first on PATH (via t.Setenv, scoped
+// to this test) that appends its args to a log file and then execs the real
+// git, and returns the log file's path. Every git subprocess spawn made for
+// the rest of the test is recorded there.
+func writeGitCallLogShim(t *testing.T) string {
+	t.Helper()
 
 	realGit, err := exec.LookPath("git")
 	if err != nil {
@@ -1437,19 +1461,26 @@ func TestGitProviderGetStatus_SubprocessSpawnCount(t *testing.T) {
 	}
 	t.Setenv("PATH", fakeDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 
-	const wantMaxSpawns = 4 // status(+branch), log, diff --numstat, diff --numstat --cached
-	if _, err := provider.GetStatus(); err != nil {
-		t.Fatalf("GetStatus() error = %v", err)
-	}
+	return logPath
+}
+
+// readGitCallLog reads logPath (written by writeGitCallLogShim) and returns
+// one entry per logged git invocation. Returns an empty (not one-element)
+// slice when the log is empty or whitespace-only -- strings.Split on an
+// empty string returns []string{""}, which would otherwise silently miscount
+// zero spawns as one.
+func readGitCallLog(t *testing.T, logPath string) []string {
+	t.Helper()
 
 	data, err := os.ReadFile(logPath)
 	if err != nil {
 		t.Fatalf("Failed to read call log: %v", err)
 	}
-	calls := strings.Split(strings.TrimSpace(string(data)), "\n")
-	if len(calls) > wantMaxSpawns {
-		t.Errorf("GetStatus() spawned %d git subprocesses, want <= %d:\n%s", len(calls), wantMaxSpawns, data)
+	trimmed := strings.TrimSpace(string(data))
+	if trimmed == "" {
+		return nil
 	}
+	return strings.Split(trimmed, "\n")
 }
 
 // shellQuote wraps s in single quotes for embedding in a /bin/sh script,
