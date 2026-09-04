@@ -1744,7 +1744,17 @@ func (h *ConnectRPCWebSocketHandler) streamViaHub(stream *connectWebSocketStream
 		if restoreErr := tmuxSession.RestoreWithWorkDir(workDir); restoreErr != nil {
 			return handleTmuxRestoreFailure(instance, restoreErr)
 		}
-		tmuxAlive = true
+		// RestoreWithWorkDir always returns nil even on PTY attach failure
+		// (see the identical comment on session/instance.go's own
+		// RestoreWithWorkDir call site) — a nil error alone does not prove the
+		// tmux session is genuinely ready to serve capture/resize traffic.
+		// Confirm a real PTY attached before treating it (and, below, the
+		// self-heal decision that depends on it) as alive.
+		if _, ptyErr := tmuxSession.GetPTY(); ptyErr != nil {
+			log.Warn("[streamViaHub] restored tmux session but PTY attach failed, not treating as alive", "session", sessionID, "err", ptyErr)
+		} else {
+			tmuxAlive = true
+		}
 	}
 
 	// The tmux-session check above doesn't cover a concurrent Instance.Start() (e.g.
