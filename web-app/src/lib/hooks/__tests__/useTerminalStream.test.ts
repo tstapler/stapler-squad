@@ -1662,4 +1662,56 @@ describe('useTerminalStream — foreground connect-timeout', () => {
     expect(result.current.isHardFailed).toBe(false);
     expect(signals.length).toBe(totalAbortsToDrive + 1); // kept retrying past 7 aborts, never gave up
   });
+
+  it('connect_should_preserveEscalatedBackoff_When_aConnectTimeoutRetryInterleavesWithRealCloses', async () => {
+    // Code-review finding: the connect-timeout-abort retry and the real-failure
+    // retry each pass { isAutoRetry: true } at separate call sites (lines 574
+    // and 587) — nothing but these two nearly-identical call sites proves the
+    // connect-timeout one actually matters. If it were ever dropped there, a
+    // connect-timeout excursion between two real closes would silently reset
+    // an already-escalated backoff sequence. Neither
+    // connect_should_escalateDelayAndEventuallyHardFail... (never times out)
+    // nor connectTimeoutAbort_should_NotConsumeHardFailBudget... (never closes
+    // normally, so terminalBackoffRef.attempt never leaves 0) can catch that.
+    jest.spyOn(Math, 'random').mockReturnValue(1);
+    const streams: ReturnType<typeof makePushStream<object>>[] = [];
+    mockStreamTerminal.mockImplementation((_msg: unknown, opts?: { signal?: AbortSignal }) => {
+      const s = makePushStream<object>(opts?.signal);
+      streams.push(s);
+      return s.iterable;
+    });
+
+    const { result } = renderHook(() =>
+      useTerminalStream({ ...RECONNECT_OPTIONS, foreground: true })
+    );
+
+    // Real close #1 escalates attempt 0 -> 1 (ceiling 1000ms was this close's
+    // own delay; attempt is already 1 by the time the retry below fires).
+    await act(async () => { result.current.connect(); });
+    await waitFor(() => expect(streams.length).toBe(1));
+    await act(async () => { streams[0].push(makeOutputMsg()); });
+    await waitFor(() => expect(result.current.isConnected).toBe(true));
+    await act(async () => { streams[0].end(); });
+    await act(async () => { jest.advanceTimersByTime(1000); });
+    await waitFor(() => expect(streams.length).toBe(2));
+
+    // The retry (streams[1], still within the foreground fast-timeout window)
+    // hits a connect-timeout instead of closing normally — this is the
+    // connect-timeout-abort retry path (line 574), not the real-failure one.
+    await act(async () => { jest.advanceTimersByTime(FOREGROUND_CONNECT_TIMEOUT_MS); });
+    await waitFor(() => expect(streams.length).toBe(3));
+
+    // Real close #2: if line 574 correctly preserved attempt=1 across the
+    // connect-timeout excursion, this close's delay is ceiling[1]=2000ms — not
+    // a reset ceiling[0]=1000ms, which is what a dropped isAutoRetry:true at
+    // line 574 would silently produce.
+    await act(async () => { streams[2].push(makeOutputMsg()); });
+    await waitFor(() => expect(result.current.isConnected).toBe(true));
+    await act(async () => { streams[2].end(); });
+
+    await act(async () => { jest.advanceTimersByTime(1999); });
+    expect(streams.length).toBe(3);
+    await act(async () => { jest.advanceTimersByTime(1); });
+    await waitFor(() => expect(streams.length).toBe(4));
+  });
 });
