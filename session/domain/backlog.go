@@ -9,7 +9,14 @@ import (
 	"errors"
 )
 
-// BacklogStatus represents the lifecycle state of a backlog item.
+// BacklogStatus represents the lifecycle state of a backlog item. The type
+// is open, not a closed enum: the 9 constants below are its built-in subset,
+// but an operator-configured custom workflow stage (Epic 2.3's
+// ConfiguredWorkflowEngine) is also a valid BacklogStatus value — no
+// distinct "custom stage slug" type exists, and none is planned. See the
+// "BacklogStatus becomes the open stage-slug type" decision
+// (project_plans/backlog-custom-workflow-stages/implementation/plan.md,
+// Epic 2.1) for the full rationale.
 type BacklogStatus string
 
 const (
@@ -609,7 +616,13 @@ func TransitionGuard(item BacklogItemTransitionInput, to BacklogStatus) error {
 		return nil
 
 	default:
-		// All other permitted transitions have no additional guards.
+		// All other permitted transitions have no additional guards. This
+		// also covers every edge into/out of a custom stage: per the
+		// "BacklogStatus becomes the open stage-slug type" decision (Epic
+		// 2.1, Story 2.1.3e), a custom stage does not automatically inherit
+		// any of the built-in guards above — an edge-specific guard for a
+		// custom stage is an explicit opt-in a future epic would add as its
+		// own case, not something this default should infer.
 		return nil
 	}
 }

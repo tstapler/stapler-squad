@@ -2338,6 +2338,10 @@ func (s *BacklogService) AutoRespawnTriage(ctx context.Context, itemID string) e
 		// Already moved on by the time this async call runs (e.g. a human already
 		// re-triggered triage manually, or the item was otherwise resolved) —
 		// nothing to do. Mirrors AutoRespawnReview's identical staleness guard.
+		// Also correctly covers a custom stage: this function only knows how to
+		// retriage from idea/queued, so a custom-status item falling here and
+		// no-oping is intentional, not merely non-crashing (Epic 2.1, Story
+		// 2.1.3e's "BacklogStatus becomes the open stage-slug type" decision).
 		return nil
 	}
 

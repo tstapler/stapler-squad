@@ -3998,6 +3998,42 @@ func TestSelfHealSweep_should_resolveAnyReasonRow_When_ItemReachesTerminalStatus
 	}
 }
 
+// TestSelfHealSweep_should_ResolveAnyReasonRow_When_ItemReachesConfiguredCustomTerminalStage
+// is the Story 2.1.3 (Task 2.1.3d) regression test for selfHealStuck's
+// re-route to session.IsTerminalStatus: an operator-configured custom stage
+// marked IsTerminal (simulated here via SetTerminalStatusChecker, standing in
+// for Epic 2.3's not-yet-built ConfiguredWorkflowEngine) must trigger the
+// same blanket terminal rule as built-in done/archived.
+func TestSelfHealSweep_should_ResolveAnyReasonRow_When_ItemReachesConfiguredCustomTerminalStage(t *testing.T) {
+	const customTerminal = BacklogStatus("legal-review")
+	SetTerminalStatusChecker(func(s BacklogStatus) bool { return s == customTerminal })
+	t.Cleanup(func() { SetTerminalStatusChecker(nil) })
+
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:  "Terminal blanket-rule item: custom stage",
+		Status: string(BacklogStatusInProgress),
+	})
+	require.NoError(t, err)
+	applied, err := er.MarkStuck(ctx, item.ID, domain.StuckReasonStaleWork, BacklogStatusInProgress, "test-marked stuck")
+	require.NoError(t, err)
+	require.True(t, applied)
+
+	_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, customTerminal, nil, TriggeredBySystem)
+	require.NoError(t, err)
+
+	listener := NewBacklogLifecycleListener(storage)
+	listener.selfHealStuck(ctx, er)
+
+	open, err := er.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, open, "stuck row must resolve once the item reaches a configured custom terminal stage, via the blanket terminal rule")
+}
+
 // TestSelfHealSweep_should_resolveReworkCapRow_When_ItemReachesDone is the
 // direct, narrow regression test for the bug this PR closes: rework_cap was
 // the one StuckReason still sitting in the "event-shaped, continue" trap that

@@ -46,6 +46,12 @@ func resolveStuckOnManualTransition(ctx context.Context, storage *session.Storag
 	case session.BacklogStatusPRPending:
 		reasons = []domain.StuckReason{domain.StuckReasonAbandonedReview, domain.StuckReasonStaleWork}
 	default:
+		// A custom stage (or any other built-in not listed above) falls here:
+		// no stuck reasons are known to be obsolete for it, so none are
+		// cleared — correct fail-safe per the "BacklogStatus becomes the open
+		// stage-slug type" decision (Epic 2.1, Story 2.1.3e), not merely
+		// non-crashing. A future reason<->stage mapping for custom stages is
+		// an explicit opt-in, not something this default should guess at.
 		return
 	}
 	for _, reason := range reasons {
@@ -788,7 +794,7 @@ func (s *BacklogService) TransitionBacklogItemStatus(
 	// their item is done/archived (see docs/tasks/workflow-history-and-archiving.md
 	// — this reuses that epic's ArchivedAt mechanism, extended to backlog work
 	// sessions which it originally excluded).
-	if to == session.BacklogStatusDone || to == session.BacklogStatusArchived {
+	if session.IsTerminalStatus(to) {
 		if sessions, lsErr := s.storage.ListItemSessions(ctx, req.Msg.ItemId); lsErr == nil {
 			s.cleanupItemWorktrees(ctx, sessions)
 			s.archiveItemWorkSessions(ctx, sessions)

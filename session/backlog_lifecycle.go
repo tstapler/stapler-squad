@@ -1808,7 +1808,7 @@ func (l *BacklogLifecycleListener) selfHealStuck(ctx context.Context, er *EntRep
 		return
 	}
 	for _, row := range open {
-		if row.ItemStatus == BacklogStatusDone || row.ItemStatus == BacklogStatusArchived {
+		if IsTerminalStatus(row.ItemStatus) {
 			// Blanket terminal rule — see doc comment above. An item that has
 			// truly finished has nothing left needing operator attention,
 			// regardless of which reason its stuck row is for.
