@@ -835,6 +835,118 @@ describe('useTerminalStream — auto-reconnect (NEXT_PUBLIC_RECONNECT_V2)', () =
     const visibilityRemoves = removeEventSpy.mock.calls.filter(c => c[0] === 'visibilitychange').length;
     expect(visibilityRemoves).toBeGreaterThanOrEqual(1);
   });
+
+  // ---------------------------------------------------------------------------
+  // reconnect-backoff-escalation fix: terminalBackoffRef.reset() at the top of
+  // connect() used to fire unconditionally, including from the automatic-retry
+  // call the finally block below makes to itself — so `.attempt` was always 0
+  // when the hard-fail check ran, and the delay never escalated past
+  // uniform(0, 1000ms). connect() now only resets when NOT called with
+  // { isAutoRetry: true }, which only the automatic-retry call site passes.
+  // ---------------------------------------------------------------------------
+
+  it('connect_should_escalateDelayAndEventuallyHardFail_When_streamKeepsClosingCleanly', async () => {
+    // Full-jitter delay is Math.random() * ceiling — pin Math.random() to 1 (the
+    // supremum) so each cycle's delay is deterministically the per-attempt
+    // ceiling (1000/2000/4000/8000/16000ms) instead of anywhere in [0, ceiling),
+    // making the escalation boundaries below exact rather than flaky.
+    jest.spyOn(Math, 'random').mockReturnValue(1);
+    const ceilings = [1000, 2000, 4000, 8000, 16000];
+    const streams: ReturnType<typeof makePushStream<object>>[] = [];
+    mockStreamTerminal.mockImplementation(() => {
+      const s = makePushStream<object>();
+      streams.push(s);
+      return s.iterable;
+    });
+
+    const { result } = renderHook(() => useTerminalStream(RECONNECT_OPTIONS));
+
+    await act(async () => { result.current.connect(); });
+    await waitFor(() => expect(streams.length).toBe(1));
+    await act(async () => { streams[0].push(makeOutputMsg()); });
+    await waitFor(() => expect(result.current.isConnected).toBe(true));
+
+    for (let i = 0; i < ceilings.length; i++) {
+      const ceiling = ceilings[i];
+      await act(async () => { streams[i].end(); });
+      await waitFor(() => expect(result.current.isConnected).toBe(false));
+
+      // AC #1: delay must not fire before this attempt's escalated ceiling —
+      // if the reset bug were still present, every ceiling would be 1000ms and
+      // this would already have retried by `ceiling - 1` for every i > 0.
+      await act(async () => { jest.advanceTimersByTime(ceiling - 1); });
+      expect(streams.length).toBe(i + 1);
+
+      // Reaching the ceiling fires the retry — except after the 5th escalation
+      // (attempt now at 5), which hard-fails instead of scheduling a 6th delay.
+      await act(async () => { jest.advanceTimersByTime(1); });
+      if (i < ceilings.length - 1) {
+        await waitFor(() => expect(streams.length).toBe(i + 2));
+        await act(async () => { streams[i + 1].push(makeOutputMsg()); });
+        await waitFor(() => expect(result.current.isConnected).toBe(true));
+      }
+    }
+
+    // AC #0: the 6th consecutive close (attempt === 5) hard-fails instead of
+    // retrying forever.
+    await act(async () => { streams[5].end(); });
+    await waitFor(() => expect(result.current.isHardFailed).toBe(true));
+
+    const streamCountAtHardFail = streams.length;
+    await act(async () => { jest.advanceTimersByTime(60_000); });
+    expect(streams.length).toBe(streamCountAtHardFail);
+  });
+
+  it('connect_should_resetBackoffSequence_When_calledDirectlyMidAutomaticRetrySequence', async () => {
+    // AC #2 / AC #4: useVisibilityResync.ts's two reconnect call sites (the 4s
+    // stall-watchdog forced reconnect and the visibility/focus-regained
+    // fallback) call this exact bare connect() — no options, no wrapper —
+    // since TerminalOutput.tsx passes useTerminalStream's connect straight
+    // through unwrapped. Proving a fresh sequence here proves both callers
+    // without duplicating backoff machinery into useVisibilityResync's own
+    // (fully mocked) tests.
+    jest.spyOn(Math, 'random').mockReturnValue(1);
+    const streams: ReturnType<typeof makePushStream<object>>[] = [];
+    mockStreamTerminal.mockImplementation(() => {
+      const s = makePushStream<object>();
+      streams.push(s);
+      return s.iterable;
+    });
+
+    const { result } = renderHook(() => useTerminalStream(RECONNECT_OPTIONS));
+
+    await act(async () => { result.current.connect(); });
+    await waitFor(() => expect(streams.length).toBe(1));
+    await act(async () => { streams[0].push(makeOutputMsg()); });
+    await waitFor(() => expect(result.current.isConnected).toBe(true));
+
+    // First automatic retry escalates the sequence to attempt=1 (next ceiling
+    // 2000ms).
+    await act(async () => { streams[0].end(); });
+    await waitFor(() => expect(result.current.isConnected).toBe(false));
+    await act(async () => { jest.advanceTimersByTime(1000); });
+    await waitFor(() => expect(streams.length).toBe(2));
+    await act(async () => { streams[1].push(makeOutputMsg()); });
+    await waitFor(() => expect(result.current.isConnected).toBe(true));
+    await act(async () => { streams[1].end(); });
+    await waitFor(() => expect(result.current.isConnected).toBe(false));
+
+    // Sequence is now mid-backoff (waiting up to a 2000ms ceiling for the 3rd
+    // attempt). Call connect() directly — the same call useVisibilityResync's
+    // reconnect paths make — before that delay elapses.
+    await act(async () => { result.current.connect(); });
+    await waitFor(() => expect(streams.length).toBe(3));
+    await act(async () => { streams[2].push(makeOutputMsg()); });
+    await waitFor(() => expect(result.current.isConnected).toBe(true));
+
+    // If connect() reset the sequence (as it must), the next automatic retry's
+    // delay is back to the attempt-0 ceiling (1000ms) — not the stale 2000ms it
+    // would still be if reset() were skipped for a direct call like this one.
+    await act(async () => { streams[2].end(); });
+    await waitFor(() => expect(result.current.isConnected).toBe(false));
+    await act(async () => { jest.advanceTimersByTime(1000); });
+    await waitFor(() => expect(streams.length).toBe(4));
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -1159,9 +1271,14 @@ describe('useTerminalStream — foreground connect-timeout', () => {
   });
 
   it('connect_should_abortAndRetry_When_foregroundTrueAndFirstAttemptExceedsFastTimeout', async () => {
-    let capturedSignal: AbortSignal | undefined;
+    // A connect-timeout abort is excluded from the backoff budget (see the
+    // reconnect-backoff-escalation fix) and retries immediately, so the retry
+    // fires within the same timer advance that fires the abort — track every
+    // attempt's signal rather than a single shared variable, which the second
+    // attempt would silently overwrite before this test could assert on the first.
+    const signals: (AbortSignal | undefined)[] = [];
     mockStreamTerminal.mockImplementation((_msg: unknown, opts?: { signal?: AbortSignal }) => {
-      capturedSignal = opts?.signal;
+      signals.push(opts?.signal);
       return makePushStream(opts?.signal).iterable;
     });
 
@@ -1170,15 +1287,16 @@ describe('useTerminalStream — foreground connect-timeout', () => {
     );
 
     await act(async () => { result.current.connect(); });
-    expect(capturedSignal?.aborted).toBe(false);
+    expect(signals[0]?.aborted).toBe(false);
 
     await act(async () => { jest.advanceTimersByTime(FOREGROUND_CONNECT_TIMEOUT_MS); });
-    await waitFor(() => expect(result.current.terminalState).toBe('DISCONNECTED'));
-    expect(capturedSignal?.aborted).toBe(true);
+    expect(signals[0]?.aborted).toBe(true);
 
-    // Not stuck in CONNECTING: the backoff-scheduled retry reaches CONNECTING again.
-    await act(async () => { jest.advanceTimersByTime(1000); });
+    // Not stuck in DISCONNECTED: the immediate connect-timeout retry reaches
+    // CONNECTING again (a fresh, unaborted signal) without any further advance.
     await waitFor(() => expect(result.current.terminalState).toBe('CONNECTING'));
+    expect(signals.length).toBe(2);
+    expect(signals[1]?.aborted).toBe(false);
   });
 
   it('connect_should_notAbort_When_notForegroundAndOnlyFastTimeoutElapsed', async () => {
@@ -1471,5 +1589,77 @@ describe('useTerminalStream — foreground connect-timeout', () => {
     });
 
     expect(callCount).toBe(1);
+  });
+
+  it('connect_should_beNoOp_When_calledImmediatelyAfterFirstMessageProcessed', async () => {
+    // AC #3: isConnectedRef must be set synchronously in the same microtask
+    // that processes the first message (mirrors the existing disconnect-path
+    // precedent for isConnectedRef in the finally block), not only once React
+    // flushes setIsConnected(true) — otherwise a same-tick second connect()
+    // call (e.g. two visibility/focus-triggered reconnect paths racing for the
+    // same session) could slip past the guard and start a second live
+    // connection. Deliberately stays microtask-only (no timer advance) so no
+    // React effect commit can have happened yet — only the synchronous ref
+    // write this fix adds can make the guard below see it in time.
+    let callCount = 0;
+    const stream = makePushStream<object>();
+    mockStreamTerminal.mockImplementation(() => {
+      callCount++;
+      return stream.iterable;
+    });
+
+    const { result } = renderHook(() =>
+      useTerminalStream({ ...RECONNECT_OPTIONS, foreground: true })
+    );
+
+    await act(async () => { result.current.connect(); });
+
+    await act(async () => {
+      stream.push(makeOutputMsg());
+      for (let i = 0; i < 5; i++) {
+        await Promise.resolve();
+      }
+      result.current.connect();
+    });
+
+    await waitFor(() => expect(result.current.isConnected).toBe(true));
+    expect(callCount).toBe(1);
+  });
+
+  it('connectTimeoutAbort_should_NotConsumeHardFailBudget_When_itRecursPastFiveAttempts', async () => {
+    // AC #5, isolated from the reconnectTimerRef-based backoff-escalation test
+    // (pitfalls.md's guidance against mixing the connectTimeoutRef and
+    // reconnectTimerRef timer systems in one test). A connect-timeout abort is
+    // a deliberate internal fast-retry optimization, not a real stream failure
+    // — it must never count toward the 5-attempt hard-fail budget, or a
+    // genuinely slow-but-healthy (e.g. high-RTT/VPN) connection would
+    // eventually be hard-failed by connect-timeouts alone, which is worse than
+    // the unlimited patience such a connection had before the per-attempt
+    // connect-timeout existed.
+    const signals: (AbortSignal | undefined)[] = [];
+    mockStreamTerminal.mockImplementation((_msg: unknown, opts?: { signal?: AbortSignal }) => {
+      signals.push(opts?.signal);
+      return makePushStream(opts?.signal).iterable; // never delivers a first message
+    });
+
+    const { result } = renderHook(() =>
+      useTerminalStream({ ...RECONNECT_OPTIONS, foreground: true })
+    );
+
+    await act(async () => { result.current.connect(); });
+
+    // Drive 7 consecutive connect-timeout aborts — more than the 5-attempt
+    // hard-fail budget. Each abort's immediate (0ms) retry fires within the
+    // same advance, so signals[i+1] is already populated by the time we check
+    // signals[i]'s abort.
+    const totalAbortsToDrive = 7;
+    for (let i = 0; i < totalAbortsToDrive; i++) {
+      const timeoutForThisAttempt = i < FOREGROUND_FAST_ATTEMPTS ? FOREGROUND_CONNECT_TIMEOUT_MS : CONNECT_TIMEOUT_MS;
+      await act(async () => { jest.advanceTimersByTime(timeoutForThisAttempt); });
+      await waitFor(() => expect(signals[i]?.aborted).toBe(true));
+    }
+
+    expect(result.current.isHardFailed).toBe(false);
+    expect(signals.length).toBe(totalAbortsToDrive + 1); // kept retrying past 7 aborts, never gave up
   });
 });
