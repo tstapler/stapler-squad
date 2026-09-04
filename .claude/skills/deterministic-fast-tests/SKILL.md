@@ -11,7 +11,7 @@ When writing a new test (or touching one), default to a fast, deterministic desi
 
 An audit of `server/services`'s test suite (2026-09-04, investigating a CI budget failure on PR #693) found the dominant cost wasn't flaky logic — it was structural:
 
-- **Real timeouts baked into test bodies.** `TestListWorktrees_TimesOutOnHungGitCommand` deliberately waits ~20s for a `pathCompletionTimeout` to fire (BUG-077 raised it from 5s to tolerate CI host contention — a real, considered tradeoff, not an oversight).
+- **Real timeouts baked into test bodies.** `TestListWorktrees_TimesOutOnHungGitCommand` deliberately waits ~20s for `listWorktreesTimeout` to fire (BUG-077 raised it from 5s to tolerate CI host contention — a real, considered tradeoff, not an oversight).
 - **Real I/O at scale.** `TestListFiles_NodeCap` writes `maxDirEntries+1` real files to disk — already `t.Parallel()`, but the wall-clock cost is inherent to the fixture, not serialization.
 - **`t.Setenv`-based fixtures** (`withFakeHome`, PATH-prepending fake-git tests) that are structurally incompatible with `t.Parallel()` — Go's testing package forbids combining them, since `t.Setenv` mutates the whole process's environment, which every concurrently-running parallel test's goroutine shares.
 
