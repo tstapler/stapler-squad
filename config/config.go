@@ -2,12 +2,12 @@ package config
 
 import (
 	"crypto/rand"
-	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"github.com/google/uuid"
+	"github.com/tstapler/stapler-squad/config/workspacepath"
 	"github.com/tstapler/stapler-squad/log"
 	"io"
 	"os"
@@ -47,27 +47,12 @@ const (
 // ~/.stapler-squad/workspaces/.../worktrees/...) hashes to a workspace distinct from
 // the one normally used from the project/home directory.
 func isWithinStateDir(workDir, baseDir string) bool {
-	if workDir == "" || baseDir == "" {
-		return false
-	}
-	workDir = filepath.Clean(workDir)
-	baseDir = filepath.Clean(baseDir)
-	return workDir == baseDir || strings.HasPrefix(workDir, baseDir+string(filepath.Separator))
+	return workspacepath.IsWithinStateDir(workDir, baseDir)
 }
 
 // IsTestMode detects if the application is running in test/benchmark mode
 func IsTestMode() bool {
-
-	// Check command line arguments for test/benchmark indicators
-	for _, arg := range os.Args {
-		if strings.Contains(arg, ".test") ||
-			strings.Contains(arg, "-test.") ||
-			strings.HasSuffix(arg, ".test.exe") ||
-			strings.Contains(arg, "-bench") {
-			return true
-		}
-	}
-	return false
+	return workspacepath.IsTestMode()
 }
 
 // IsNamedInstance reports whether this process is running as an explicitly
@@ -177,55 +162,21 @@ func GetConfigDirForDir(dir string) (string, error) {
 // (test mode auto-detection) is always true inside a `go test` binary, which
 // would otherwise make this logic unreachable in tests.
 func resolveDefaultConfigDir(dir, baseDir string) (string, error) {
-	// Priority 4: Preferred workspace from preference file
-	// Written by SwitchDatabase RPC; cleared automatically on removal.
-	// Skipped in test mode (above) so tests always get isolated state.
-	if data, err := os.ReadFile(GetPreferredWorkspaceFile(baseDir)); err == nil {
-		prefDir := strings.TrimSpace(string(data))
-		if filepath.IsAbs(prefDir) &&
-			(prefDir == baseDir || strings.HasPrefix(prefDir, baseDir+string(filepath.Separator))) {
-			if _, statErr := os.Stat(prefDir); statErr == nil {
-				return prefDir, nil
-			}
-		}
+	result := workspacepath.ResolveDefaultDir(dir, baseDir)
+	if result.WithinStateDir {
+		// Running with a cwd inside stapler-squad's own state directory (e.g. a
+		// session worktree) hashes to a workspace distinct from the one the user
+		// normally works from, silently landing on an empty database that looks
+		// like all sessions vanished. Almost always means the binary was started
+		// manually from within a worktree instead of via the installed service.
+		log.Warn("cwd is inside stapler-squad state directory; this process will use a different workspace than usual and may appear to have no sessions",
+			"cwd", result.WorkDir, "state_dir", baseDir)
 	}
-
-	// Priority 5: Per-directory workspace isolation — opt-in only.
-	// A single shared workspace is the default; per-cwd auto-isolation must be
-	// explicitly enabled with STAPLER_SQUAD_WORKSPACE_MODE=true. Switching between
-	// workspaces is meant to be an explicit user action (see SwitchDatabase RPC /
-	// the workspace switcher UI), not an automatic side effect of the cwd a process
-	// happens to be started from — the latter is what caused sessions to silently
-	// "disappear" when the binary was started from inside a worktree.
-	if os.Getenv("STAPLER_SQUAD_WORKSPACE_MODE") == "true" {
-		workDir := dir
-		var err error
-		if workDir == "" {
-			workDir, err = os.Getwd()
-		}
-		if err == nil && workDir != "" {
-			if isWithinStateDir(workDir, baseDir) {
-				// Running with a cwd inside stapler-squad's own state directory (e.g. a
-				// session worktree) hashes to a workspace distinct from the one the user
-				// normally works from, silently landing on an empty database that looks
-				// like all sessions vanished. Almost always means the binary was started
-				// manually from within a worktree instead of via the installed service.
-				log.Warn("cwd is inside stapler-squad state directory; this process will use a different workspace than usual and may appear to have no sessions",
-					"cwd", workDir, "state_dir", baseDir)
-			}
-			// Hash the workspace path for a stable, filesystem-safe identifier
-			hash := sha256.Sum256([]byte(workDir))
-			workspaceID := fmt.Sprintf("%x", hash[:8])
-			return filepath.Join(baseDir, "workspaces", workspaceID), nil
-		}
-		if err != nil {
-			// If we can't get working directory, fall through to shared state
-			log.Warn("failed to get working directory for workspace isolation", "err", err)
-		}
+	if result.GetwdErr != nil {
+		// If we can't get working directory, fall through to shared state
+		log.Warn("failed to get working directory for workspace isolation", "err", result.GetwdErr)
 	}
-
-	// Priority 6: Global shared state (default)
-	return baseDir, nil
+	return result.Dir, nil
 }
 
 // Config represents the application configuration

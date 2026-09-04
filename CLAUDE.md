@@ -90,9 +90,13 @@ Subtle patterns (double-checked locking, etc.): `.claude/docs/concurrency-patter
 
 State and logs live in `~/.stapler-squad/`:
 - `logs/staplersquad.log` — main log; check here for session creation issues.
-  With `STAPLER_SQUAD_INSTANCE=<name>` set, an instance logs to
-  `instances/<name>/logs/staplersquad.log` instead (unset or `shared` uses the
-  path above, unchanged)
+  Logs always land next to config/session state — `log.GetConfigDir()` mirrors
+  `config.GetConfigDir()`'s full priority list, so `STAPLER_SQUAD_INSTANCE=<name>`
+  logs to `instances/<name>/logs/staplersquad.log`, an opted-in
+  `STAPLER_SQUAD_WORKSPACE_MODE=true` or a `SwitchDatabase`-set workspace
+  preference logs to `workspaces/<hash-or-name>/logs/staplersquad.log`, and
+  unset/`shared` uses the path above, unchanged. See
+  `.claude/docs/state-isolation.md` for the full priority list.
 - `worktrees/` — git worktrees for isolated sessions
 - `config.json`, `sessions.json`
 

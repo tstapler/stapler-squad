@@ -33,15 +33,22 @@ func withCleanEnv(t *testing.T) {
 	})
 }
 
-func TestGetConfigDir_ReturnsBaseDir_WhenSTAPLER_SQUAD_INSTANCEUnset(t *testing.T) {
+// TestGetConfigDir_UsesTestModeIsolation_WhenNoOverrideSet guards Priority 3
+// parity with config.GetConfigDirForDir: running inside a `go test` binary
+// itself triggers test-mode auto-detection (see config_test.go's "uses test
+// mode isolation for tests" case for the equivalent config-package guard),
+// so this now lands in a pid-scoped test dir rather than the bare shared
+// baseDir.
+func TestGetConfigDir_UsesTestModeIsolation_WhenNoOverrideSet(t *testing.T) {
 	withCleanEnv(t)
 
 	dir, err := GetConfigDir()
 	if err != nil {
 		t.Fatalf("GetConfigDir failed: %v", err)
 	}
-	if !strings.HasSuffix(dir, ".stapler-squad") || strings.Contains(dir, "instances") {
-		t.Errorf("expected unchanged ~/.stapler-squad path, got %s", dir)
+	wantSubstr := filepath.Join(".stapler-squad", "test", "test-")
+	if !strings.Contains(dir, wantSubstr) {
+		t.Errorf("expected test-mode isolated path containing %q, got %s", wantSubstr, dir)
 	}
 }
 
@@ -136,9 +143,13 @@ func TestGetLogDir(t *testing.T) {
 		t.Errorf("GetLogDir failed with default log dir: %v", err)
 	}
 
-	// Should contain .stapler-squad/logs
-	if !strings.Contains(dir, ".stapler-squad"+string(filepath.Separator)+"logs") {
-		t.Errorf("GetLogDir should return default log dir, got %s", dir)
+	// Should be under .stapler-squad, and end in logs. Not a bare
+	// ".stapler-squad/logs" suffix: running inside `go test` itself now
+	// triggers Priority 3 test-mode auto-detection (parity with
+	// config.GetConfigDirForDir), so the actual path is
+	// .stapler-squad/test/test-<pid>/logs.
+	if !strings.Contains(dir, ".stapler-squad") || !strings.HasSuffix(dir, string(filepath.Separator)+"logs") {
+		t.Errorf("GetLogDir should return a default log dir under .stapler-squad, got %s", dir)
 	}
 }
 
