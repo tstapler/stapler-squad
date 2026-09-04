@@ -47,6 +47,19 @@ func TestEffectiveCacheBudgetBytes_should_floorToFiveRepos_When_SeverePressure(t
 	}
 }
 
+// TestRepoCacheMemoryBudgetBytes_should_haveHeadroom_BelowHighPressureThreshold
+// guards against the exact bug review caught: repoCacheMemoryBudgetBytes
+// was once numerically equal to highMemoryPressureThreshold (both 3 GB), so
+// the cache filling toward its own full budget crossed into the
+// high-pressure tier as normal operation, halved the budget, forced
+// eviction, then refilled and crossed again -- an oscillating grow/evict
+// loop. This must never collide again.
+func TestRepoCacheMemoryBudgetBytes_should_haveHeadroom_BelowHighPressureThreshold(t *testing.T) {
+	if repoCacheMemoryBudgetBytes >= highMemoryPressureThreshold {
+		t.Errorf("repoCacheMemoryBudgetBytes (%d) must stay strictly below highMemoryPressureThreshold (%d) -- filling the cache to its own budget must never itself trigger the pressure tier", repoCacheMemoryBudgetBytes, highMemoryPressureThreshold)
+	}
+}
+
 func TestEffectiveCacheMaxEntries_should_shrink_When_PressureIncreases(t *testing.T) {
 	withHeapInUse(t, 1*1024*1024*1024)
 	normal := effectiveCacheMaxEntries()

@@ -247,12 +247,22 @@ const approxBytesPerCachedRepo = 96 * 1024 * 1024
 const repoCacheMemoryBudgetBytes = 3072 * 1024 * 1024
 
 // highMemoryPressureThreshold/severeMemoryPressureThreshold gate
-// effectiveCacheBudgetBytes' tiered response. Measured against the Go
-// runtime's own HeapInuse (this process's heap, not host-wide memory) so the
-// signal is specific to this process's contribution to memory pressure.
+// effectiveCacheBudgetBytes' tiered response, measured against the Go
+// runtime's own HeapInuse (this process's heap, not host-wide memory).
+//
+// Both are derived from repoCacheMemoryBudgetBytes rather than independent
+// constants, specifically so normal cache growth toward its own budget can
+// never itself cross into a pressure tier: an earlier version set
+// highMemoryPressureThreshold to a flat 3 GB, identical to the budget it
+// gates, so filling the cache to its own full budget triggered the
+// high-pressure branch, which halved the budget and forced eviction --
+// heap then dropped back below 3 GB, the budget rose back to 3 GB, and the
+// cache refilled toward 3 GB again, an oscillating grow/evict loop that
+// re-created the exact cache-thrashing symptom repoCacheMemoryBudgetBytes'
+// own doc comment describes fixing.
 const (
-	highMemoryPressureThreshold   = 3 * 1024 * 1024 * 1024 // 3 GB heap in-use: halve the budget
-	severeMemoryPressureThreshold = 6 * 1024 * 1024 * 1024 // 6 GB heap in-use: floor to a handful of repos
+	highMemoryPressureThreshold   = repoCacheMemoryBudgetBytes + repoCacheMemoryBudgetBytes/2 // 1.5x budget: 4.5 GB
+	severeMemoryPressureThreshold = repoCacheMemoryBudgetBytes * 2                             // 2x budget: 6 GB
 )
 
 // readHeapInUse returns the process's current in-use heap bytes. Declared as

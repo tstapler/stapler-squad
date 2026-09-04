@@ -781,6 +781,116 @@ func TestGitProviderGetStatus(t *testing.T) {
 			t.Errorf("status.UntrackedFiles has %d items, want 1", len(status.UntrackedFiles))
 		}
 	})
+
+	// Regression coverage for applyBranchHeader: mutation testing during
+	// review showed removing its truncation/detached-format/"(initial)"
+	// logic entirely left every prior test passing silently, because no
+	// test drove GetStatus() through these branches and asserted on the
+	// exact resulting string.
+	t.Run("detached HEAD truncates and formats HeadCommit", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		initGitRepoWithCommit(t, tmpDir)
+
+		cmd := safeexec.CommandContext(context.Background(), "git", "rev-parse", "HEAD")
+		cmd.Dir = tmpDir
+		out, err := cmd.Output()
+		if err != nil {
+			t.Fatalf("rev-parse HEAD: %v", err)
+		}
+		fullSHA := strings.TrimSpace(string(out))
+
+		cmd = safeexec.CommandContext(context.Background(), "git", "checkout", "--detach", "HEAD")
+		cmd.Dir = tmpDir
+		if err := cmd.Run(); err != nil {
+			t.Fatalf("checkout --detach: %v", err)
+		}
+
+		provider, err := NewGitProvider(tmpDir)
+		if err != nil {
+			t.Fatalf("NewGitProvider() error = %v", err)
+		}
+		status, err := provider.GetStatus()
+		if err != nil {
+			t.Fatalf("GetStatus() error = %v", err)
+		}
+
+		wantShort := fullSHA[:shortHashLen]
+		wantBranch := "(detached: " + wantShort + ")"
+		if status.Branch != wantBranch {
+			t.Errorf("status.Branch = %q, want %q", status.Branch, wantBranch)
+		}
+		if status.HeadCommit != wantShort {
+			t.Errorf("status.HeadCommit = %q (len %d), want %q (len %d)", status.HeadCommit, len(status.HeadCommit), wantShort, shortHashLen)
+		}
+	})
+
+	t.Run("no commits yet leaves HeadCommit empty", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		cmd := safeexec.CommandContext(context.Background(), "git", "init", "-b", "main")
+		cmd.Dir = tmpDir
+		if err := cmd.Run(); err != nil {
+			t.Fatalf("git init: %v", err)
+		}
+
+		provider, err := NewGitProvider(tmpDir)
+		if err != nil {
+			t.Fatalf("NewGitProvider() error = %v", err)
+		}
+		status, err := provider.GetStatus()
+		if err != nil {
+			t.Fatalf("GetStatus() error = %v", err)
+		}
+
+		if status.HeadCommit != "" {
+			t.Errorf("status.HeadCommit = %q, want empty before the initial commit", status.HeadCommit)
+		}
+		if status.Branch != "main" {
+			t.Errorf("status.Branch = %q, want %q", status.Branch, "main")
+		}
+	})
+
+	// Regression coverage for the clean-repo fast path: with --branch in
+	// gitStatusPorcelainArgs, the raw status output is never empty (the
+	// "# branch.*" header lines are always present), so
+	// changedFilesFromTokens must check the PARSED file list, not the raw
+	// output string, before deciding whether to spawn the two numstat
+	// calls -- otherwise a clean repo spawns them unconditionally on every
+	// poll, defeating this PR's own subprocess-reduction goal.
+	t.Run("clean repository skips numstat spawns", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		initGitRepoWithCommit(t, tmpDir)
+
+		provider, err := NewGitProvider(tmpDir)
+		if err != nil {
+			t.Fatalf("NewGitProvider() error = %v", err)
+		}
+
+		realGit, err := exec.LookPath("git")
+		if err != nil {
+			t.Fatalf("LookPath(git) error = %v", err)
+		}
+		fakeDir := t.TempDir()
+		logPath := filepath.Join(fakeDir, "calls.log")
+		script := "#!/bin/sh\necho \"$@\" >> " + shellQuote(logPath) + "\nexec " + shellQuote(realGit) + " \"$@\"\n"
+		if err := os.WriteFile(filepath.Join(fakeDir, "git"), []byte(script), 0o755); err != nil {
+			t.Fatalf("Failed to write git shim: %v", err)
+		}
+		t.Setenv("PATH", fakeDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+		if _, err := provider.GetStatus(); err != nil {
+			t.Fatalf("GetStatus() error = %v", err)
+		}
+
+		data, err := os.ReadFile(logPath)
+		if err != nil {
+			t.Fatalf("Failed to read call log: %v", err)
+		}
+		for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+			if strings.Contains(line, "diff") && strings.Contains(line, "numstat") {
+				t.Errorf("clean repo spawned a numstat call it should have skipped: %q\nfull call log:\n%s", line, data)
+			}
+		}
+	})
 }
 
 func TestGitProviderGetDiff(t *testing.T) {

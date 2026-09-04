@@ -64,24 +64,28 @@ func (g *GitProvider) runGit(args ...string) (string, error) {
 }
 
 // shortHashLen is how many leading hex characters of a full commit OID are
-// shown as the "short" SHA in status/display output. This mirrors `git
-// rev-parse --short`'s common-case output (core.abbrev defaults to a
-// disambiguated length that is 7 for the overwhelming majority of repos) but
-// is a fixed prefix rather than git's actual disambiguation algorithm --
-// acceptable here because HeadCommit is a display-only field (see its
-// doc comment), not used to look up objects.
+// shown as the "short" SHA in status/display output -- a fixed prefix rather
+// than git's own core.abbrev=auto disambiguation, acceptable since
+// HeadCommit is display-only, never used to look up objects.
 const shortHashLen = 7
 
-// GetStatus reports the working tree's full status in a single `git status`
-// subprocess spawn plus one `git log` (for the commit description) and the
-// two `git diff --numstat` calls GetChangedFiles already needs -- down from
-// 8 separate git spawns. Branch name, HEAD commit, upstream, and ahead/behind
-// counts all come from the "# branch.*" header that `--branch` adds to
-// porcelain v2 output (see parseBranchHeader), rather than four dedicated
-// `git branch`/`rev-parse`/`rev-list` calls: each spawn takes the runtime's
-// global syscall.ForkLock (a sync.RWMutex), so with many sessions polling
-// status concurrently this call count directly drove measured mutex
-// contention (~7s cum in a profiled run) and CPU spent on process fork/exec.
+// truncateHash returns oid's leading shortHashLen characters, or oid
+// unchanged if it's already that short or shorter.
+func truncateHash(oid string) string {
+	if len(oid) > shortHashLen {
+		return oid[:shortHashLen]
+	}
+	return oid
+}
+
+// GetStatus reports the working tree's full status in 4 git spawns (down
+// from 8): one `git status --branch`, one `git log` for the commit
+// description, and the two `git diff --numstat` calls GetChangedFiles
+// already needs. Branch/HEAD/upstream/ahead-behind come from the
+// "# branch.*" header --branch adds to porcelain v2 output (parseBranchHeader)
+// instead of four separate branch/rev-parse/rev-list spawns -- each spawn
+// takes the runtime's global syscall.ForkLock, so this count directly drove
+// measured mutex contention under concurrent session polling.
 func (g *GitProvider) GetStatus() (*VCSStatus, error) {
 	status := &VCSStatus{
 		Type: VCSGit,
@@ -91,17 +95,28 @@ func (g *GitProvider) GetStatus() (*VCSStatus, error) {
 	if err != nil {
 		return status, err
 	}
+	tokens := strings.Split(output, "\x00")
 
-	g.applyBranchHeader(status, parseBranchHeader(strings.Split(output, "\x00")))
+	header := parseBranchHeader(tokens)
+	if header.headBranch == "" && header.headOID == "" {
+		// --branch header missing or unparseable (unexpected git version/
+		// locale) -- fall back to GetBranch's own dedicated call rather than
+		// silently leaving status.Branch empty.
+		if branch, err := g.GetBranch(); err == nil {
+			status.Branch = branch
+		}
+	} else {
+		g.applyBranchHeader(status, header)
+	}
 
 	// Get last commit message
 	if desc, err := g.runGit("log", "-1", "--format=%s"); err == nil {
 		status.Description = desc
 	}
 
-	// Get changed files from the status output already fetched above --
+	// Get changed files from the status tokens already fetched above --
 	// avoids a second `git status` spawn.
-	files, err := g.changedFilesFromStatusOutput(output)
+	files, err := g.changedFilesFromTokens(tokens)
 	if err != nil {
 		return status, err
 	}
@@ -138,16 +153,21 @@ func (g *GitProvider) GetBranch() (string, error) {
 	}
 	output, err := g.runGit("branch", "--show-current")
 	if err != nil {
-		// Might be in detached HEAD state
-		if output, err := g.runGit("rev-parse", "--short", "HEAD"); err == nil {
-			return "(detached: " + output + ")", nil
+		// Might be in detached HEAD state. Use the full OID + truncateHash
+		// (not `rev-parse --short`) so this matches applyBranchHeader's
+		// fixed-length format exactly -- both write into the same
+		// branchCache, and a mismatched hash length between them would make
+		// the cached detached-HEAD label's length change depending on which
+		// call happened to populate the cache last.
+		if output, err := g.runGit("rev-parse", "HEAD"); err == nil {
+			return "(detached: " + truncateHash(output) + ")", nil
 		}
 		return "", err
 	}
 	if output == "" {
 		// Detached HEAD
-		if output, err := g.runGit("rev-parse", "--short", "HEAD"); err == nil {
-			output = "(detached: " + output + ")"
+		if output, err := g.runGit("rev-parse", "HEAD"); err == nil {
+			output = "(detached: " + truncateHash(output) + ")"
 			g.branchCache.Store(&branchCacheEntry{output, time.Now().Add(branchCacheTTL).UnixNano()})
 			return output, nil
 		}
@@ -181,16 +201,25 @@ func (g *GitProvider) GetChangedFiles() ([]FileChange, error) {
 	if err != nil {
 		return nil, err
 	}
-	return g.changedFilesFromStatusOutput(output)
+	return g.changedFilesFromTokens(strings.Split(output, "\x00"))
 }
 
-// changedFilesFromStatusOutput parses already-fetched porcelain v2 status
-// output into FileChange entries with numstat counts merged in. Split out
-// from GetChangedFiles so GetStatus can reuse the output of the single
+// changedFilesFromTokens parses already-fetched, already-split porcelain v2
+// status tokens into FileChange entries with numstat counts merged in. Split
+// out from GetChangedFiles so GetStatus can reuse the tokens from the single
 // status spawn it already made instead of running `git status` a second
 // time.
-func (g *GitProvider) changedFilesFromStatusOutput(output string) ([]FileChange, error) {
-	if output == "" {
+//
+// Files are parsed BEFORE the numstat spawns, and numstat is skipped
+// entirely when there are none: with --branch in gitStatusPorcelainArgs, the
+// "# branch.*" header lines mean the raw output string is never empty even
+// on a clean repo, so an output=="" check here would no longer short-circuit
+// -- it would spawn both `git diff --numstat` calls unconditionally on every
+// clean-repo poll, exactly the extra-subprocess cost this file's other
+// changes exist to eliminate.
+func (g *GitProvider) changedFilesFromTokens(tokens []string) ([]FileChange, error) {
+	files := parsePorcelainV2ZTokens(tokens)
+	if len(files) == 0 {
 		return nil, nil
 	}
 
@@ -204,7 +233,6 @@ func (g *GitProvider) changedFilesFromStatusOutput(output string) ([]FileChange,
 		stagedStats = stats
 	}
 
-	files := parsePorcelainV2Z(output)
 	return mergeNumstat(files, unstagedStats, stagedStats), nil
 }
 
@@ -260,11 +288,7 @@ func parseBranchHeader(tokens []string) branchHeaderInfo {
 func (g *GitProvider) applyBranchHeader(status *VCSStatus, header branchHeaderInfo) {
 	branch := header.headBranch
 	if branch == "(detached)" {
-		short := header.headOID
-		if len(short) > shortHashLen {
-			short = short[:shortHashLen]
-		}
-		branch = "(detached: " + short + ")"
+		branch = "(detached: " + truncateHash(header.headOID) + ")"
 	}
 	status.Branch = branch
 	if branch != "" {
@@ -272,11 +296,7 @@ func (g *GitProvider) applyBranchHeader(status *VCSStatus, header branchHeaderIn
 	}
 
 	if header.headOID != "" && header.headOID != "(initial)" {
-		if len(header.headOID) > shortHashLen {
-			status.HeadCommit = header.headOID[:shortHashLen]
-		} else {
-			status.HeadCommit = header.headOID
-		}
+		status.HeadCommit = truncateHash(header.headOID)
 	}
 
 	status.Upstream = header.upstream
@@ -306,7 +326,14 @@ func (g *GitProvider) applyBranchHeader(status *VCSStatus, header branchHeaderIn
 // own, so the loop must consume it explicitly as part of the preceding "2 "
 // record rather than mistaking it for the next record.
 func parsePorcelainV2Z(output string) []FileChange {
-	tokens := strings.Split(output, "\x00")
+	return parsePorcelainV2ZTokens(strings.Split(output, "\x00"))
+}
+
+// parsePorcelainV2ZTokens is parsePorcelainV2Z's token-based core, split out
+// so GetStatus/GetChangedFiles's callers can pass an already-split token
+// slice (they need it for parseBranchHeader too) instead of paying for a
+// second strings.Split of the same output.
+func parsePorcelainV2ZTokens(tokens []string) []FileChange {
 
 	var files []FileChange
 	for i := 0; i < len(tokens); i++ {
