@@ -323,6 +323,56 @@ type BacklogService struct {
 	// cache invalidation is then a no-op (matching invalidatePipelineCache's
 	// duck-typed no-op-if-unwired shape for pipelineEngine).
 	livenessEngine session.LivenessEngine
+
+	// stageCRUDRepo backs the Stage/StageTransition/TransitionGate CRUD RPCs
+	// (Epic 2.7 of backlog-custom-workflow-stages):
+	// CreateStage/UpdateStage/DeleteStage/GetStage/ListStages and their
+	// transition/gate siblings. Wired post-construction via
+	// SetStageCRUDRepository, same rationale as livenessRepo above. May be
+	// nil; handlers nil-check and return CodeUnavailable.
+	stageCRUDRepo session.StageCRUDRepository
+	// stageConfigEngine is the ConfiguredWorkflowEngine whose stageConfigCache
+	// the stage/transition/gate CRUD write handlers invalidate on success.
+	// Wired post-construction via SetStageConfigEngine. May be nil; cache
+	// invalidation is then a no-op, mirroring livenessEngine above.
+	stageConfigEngine stageConfigCacheInvalidator
+}
+
+// stageConfigCacheInvalidator is a narrow, consumer-defined interface (see
+// pipelineCacheInvalidator's identical rationale in
+// backlog_service_pipeline_mode.go) matched via duck typing against
+// s.stageConfigEngine. *session.ConfiguredWorkflowEngine satisfies it.
+type stageConfigCacheInvalidator interface {
+	InvalidateCache(ctx context.Context) error
+}
+
+// SetStageCRUDRepository wires the repository backing the Stage/
+// StageTransition/TransitionGate CRUD RPCs. nil (the default) makes those
+// RPCs return CodeUnavailable, mirroring pipelineModeRepo's nil-guard shape.
+func (s *BacklogService) SetStageCRUDRepository(repo session.StageCRUDRepository) {
+	s.stageCRUDRepo = repo
+}
+
+// SetStageConfigEngine wires the engine whose stageConfigCache the stage/
+// transition/gate CRUD write handlers invalidate on success. nil (the
+// default) makes cache invalidation a no-op.
+func (s *BacklogService) SetStageConfigEngine(engine stageConfigCacheInvalidator) {
+	s.stageConfigEngine = engine
+}
+
+// invalidateStageConfigCache re-fetches the enabled stage/transition graph
+// into s.stageConfigEngine's cache after a successful stage/transition/gate
+// write. id is used only for the Warn log line if invalidation fails.
+// No-op (silently) if stageConfigEngine is unwired. Deliberately returns
+// nothing — mirrors invalidatePipelineCache's rationale: a cache-invalidation
+// failure after a successful DB write must never fail the RPC.
+func (s *BacklogService) invalidateStageConfigCache(ctx context.Context, id string) {
+	if s.stageConfigEngine == nil {
+		return
+	}
+	if err := s.stageConfigEngine.InvalidateCache(ctx); err != nil {
+		log.WarningLog().Printf("[ConfiguredWorkflowEngine] cache invalidation failed after successful write id=%s: %v — cache may be stale until next successful invalidation", id, err)
+	}
 }
 
 // SetLivenessRepository wires the repository backing the LivenessDefinition

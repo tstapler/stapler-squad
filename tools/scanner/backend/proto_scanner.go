@@ -310,6 +310,40 @@ var methodToID = map[string]string{ //nolint:gochecknoglobals
 	// not left as a followup like headless.proto, since it was cheap here.
 	"GetHandoffSummary":     "handoff-summary:get",
 	"TriggerHandoffSummary": "handoff-summary:trigger",
+	// LivenessDefinition CRUD RPCs (Epic 1.3 of backlog-custom-workflow-stages)
+	// -- pre-existing collateral debt found by TestMethodToIDCompleteness
+	// while wiring Epic 2.7's own methodToID entries below: these markers
+	// (server/services/backlog_service_liveness.go) existed since Epic 1.3
+	// but were never added here, so ScanProto's method-name fallback had
+	// been producing flat, non-marker-matching files (CreateLivenessDefinition.json
+	// etc.) instead of docs/registry/features/backend/backlog/*.json --
+	// same bug class as the SearchGitHubRepos comment above documents.
+	"CreateLivenessDefinition": "backlog:create-liveness-definition",
+	"UpdateLivenessDefinition": "backlog:update-liveness-definition",
+	"DeleteLivenessDefinition": "backlog:delete-liveness-definition",
+	"GetLivenessDefinition":    "backlog:get-liveness-definition",
+	"ListLivenessDefinitions":  "backlog:list-liveness-definitions",
+	// Stage/StageTransition/TransitionGate CRUD RPCs (Epic 2.7 of
+	// backlog-custom-workflow-stages) -- must match the "// +api:
+	// backlog:*" markers in server/services/backlog_service_stages.go and
+	// backlog_service_transitions.go verbatim, or ScanProto's method-name
+	// fallback produces a second, non-marker-matching id and file (see the
+	// SearchGitHubRepos comment above for the failure mode).
+	"CreateStage":           "backlog:create-stage",
+	"UpdateStage":           "backlog:update-stage",
+	"DeleteStage":           "backlog:delete-stage",
+	"GetStage":              "backlog:get-stage",
+	"ListStages":            "backlog:list-stages",
+	"CreateStageTransition": "backlog:create-stage-transition",
+	"UpdateStageTransition": "backlog:update-stage-transition",
+	"DeleteStageTransition": "backlog:delete-stage-transition",
+	"GetStageTransition":    "backlog:get-stage-transition",
+	"ListStageTransitions":  "backlog:list-stage-transitions",
+	"CreateTransitionGate":  "backlog:create-transition-gate",
+	"UpdateTransitionGate":  "backlog:update-transition-gate",
+	"DeleteTransitionGate":  "backlog:delete-transition-gate",
+	"GetTransitionGate":     "backlog:get-transition-gate",
+	"ListTransitionGates":   "backlog:list-transition-gates",
 }
 
 // rpcPattern matches lines like:   rpc MethodName(  (indented or not)

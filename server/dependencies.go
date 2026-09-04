@@ -667,6 +667,28 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		log.Warn("livenessEngine unavailable: storage is not ent-backed; continuing with DefaultLivenessEngine's built-in thresholds")
 	}
 
+	// stageCRUDRepo/stageConfigEngine back the Stage/StageTransition/
+	// TransitionGate CRUD RPCs (Epic 2.7 of backlog-custom-workflow-stages).
+	// stageConfigEngine here is used only for its InvalidateCache method —
+	// those write handlers' downstream cache-invalidation target — not as
+	// the active session.WorkflowEngine (workflowEngine above still is);
+	// switching runtime transition/gate evaluation over to
+	// ConfiguredWorkflowEngine is a later epic's job. Same non-fatal-fallback
+	// posture as pipelineEngine/livenessEngine above.
+	var stageCRUDRepo session.StageCRUDRepository
+	var stageConfigEngine *session.ConfiguredWorkflowEngine
+	if entClient := storage.GetEntClient(); entClient != nil {
+		entStageRepo := session.NewEntStageConfigRepository(entClient)
+		stageCRUDRepo = entStageRepo
+		if engine, err := session.NewConfiguredWorkflowEngine(entStageRepo); err != nil {
+			log.Warn("stageConfigEngine construction failed; stage/transition/gate CRUD writes will not invalidate a cache", "err", err)
+		} else {
+			stageConfigEngine = engine
+		}
+	} else {
+		log.Warn("stageCRUDRepo unavailable: storage is not ent-backed; Stage/StageTransition/TransitionGate CRUD RPCs will return CodeUnavailable")
+	}
+
 	// Construct the headless LLM pool early so the lifecycle listener can receive it
 	// via constructor (eliminating the post-construction wiring race). Non-fatal if
 	// the claude binary is not found.
@@ -1228,6 +1250,16 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	backlogSvc := services.NewBacklogService(storage, sessionService, cfg, workflowEngine, pipelineEngine, pipelineModeRepo)
 	backlogSvc.SetLivenessRepository(livenessRepo)
 	backlogSvc.SetLivenessEngine(livenessEngine)
+	backlogSvc.SetStageCRUDRepository(stageCRUDRepo)
+	// Guarded rather than an unconditional Set: stageConfigEngine is a
+	// *session.ConfiguredWorkflowEngine, and passing a nil one straight into
+	// SetStageConfigEngine's interface parameter would box it as a
+	// non-nil-interface-wrapping-nil-pointer — breaking every
+	// s.stageConfigEngine == nil guard downstream (same typed-nil pitfall
+	// pipelineEngine's doc comment above describes).
+	if stageConfigEngine != nil {
+		backlogSvc.SetStageConfigEngine(stageConfigEngine)
+	}
 	backlogSvc.SetEventBus(eventBus)
 	backlogSvc.SetSessionStopper(sessionService)
 	backlogSvc.SetSessionSteerer(sessionService)
