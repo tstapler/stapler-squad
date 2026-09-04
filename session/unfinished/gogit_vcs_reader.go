@@ -262,7 +262,7 @@ const repoCacheMemoryBudgetBytes = 3072 * 1024 * 1024
 // own doc comment describes fixing.
 const (
 	highMemoryPressureThreshold   = repoCacheMemoryBudgetBytes + repoCacheMemoryBudgetBytes/2 // 1.5x budget: 4.5 GB
-	severeMemoryPressureThreshold = repoCacheMemoryBudgetBytes * 2                             // 2x budget: 6 GB
+	severeMemoryPressureThreshold = repoCacheMemoryBudgetBytes * 2                            // 2x budget: 6 GB
 )
 
 // readHeapInUse returns the process's current in-use heap bytes. Declared as
