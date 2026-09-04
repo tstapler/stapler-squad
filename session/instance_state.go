@@ -379,8 +379,17 @@ func (i *Instance) Started() bool {
 // streaming path checks Started() directly and returns
 // streamhub.ErrSessionNotStarted on every single frame, indefinitely, even
 // though the session the viewer is looking at is fully functional.
+//
+// Takes i.mu, same as the normal Start() path, so the store and the
+// Snapshot() republish are atomic with respect to concurrent Status
+// transitions — see the comment at Start()'s own i.started.Store call for
+// why an unguarded store isn't enough even though started is itself
+// atomic.Bool.
 func (i *Instance) MarkStartedIfTmuxAlive() {
+	i.mu.Lock()
+	defer i.mu.Unlock()
 	i.started.Store(true)
+	i.snapshot.Store(buildSnapshot(i))
 }
 
 // RecoverFromStopped resets a stale Stopped or PermanentlyFailed status to

@@ -18,23 +18,26 @@
 # Usage: wait_for_port_release PORT [PORT...]
 # Ports that are empty/unset are skipped. Proceeds with a warning on
 # timeout (10s) rather than blocking forever — a genuinely stuck old
-# process needs a human, not a longer sleep.
+# process needs a human, not a longer sleep. Always returns 0 (even on
+# timeout) so callers running under `set -e` don't abort on the very
+# "proceed anyway" path this function documents — a bare timeout is not
+# a caller error.
 wait_for_port_release() {
-    max_ticks=20  # 20 * 0.5s = 10s
-    tick=0
-    while [ "$tick" -lt "$max_ticks" ]; do
-        busy=0
-        for port in "$@"; do
-            [ -n "$port" ] || continue
-            if lsof -nP -iTCP:"$port" -sTCP:LISTEN >/dev/null 2>&1; then
-                busy=1
+    wfpr_max_ticks=20  # 20 * 0.5s = 10s
+    wfpr_tick=0
+    while [ "$wfpr_tick" -lt "$wfpr_max_ticks" ]; do
+        wfpr_busy=0
+        for wfpr_port in "$@"; do
+            [ -n "$wfpr_port" ] || continue
+            if lsof -nP -iTCP:"$wfpr_port" -sTCP:LISTEN >/dev/null 2>&1; then
+                wfpr_busy=1
                 break
             fi
         done
-        [ "$busy" = "0" ] && return 0
+        [ "$wfpr_busy" = "0" ] && return 0
         sleep 0.5
-        tick=$((tick + 1))
+        wfpr_tick=$((wfpr_tick + 1))
     done
-    echo "Old process still holding a port after $((max_ticks / 2))s — starting anyway." >&2
-    return 1
+    echo "Old process still holding a port after $((wfpr_max_ticks / 2))s — starting anyway." >&2
+    return 0
 }

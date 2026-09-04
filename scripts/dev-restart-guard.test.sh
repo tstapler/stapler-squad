@@ -81,3 +81,30 @@ if [ "$ok" = "0" ]; then
 fi
 
 echo "PASS: dev-restart-guard.sh excludes the launchd service PID ($SERVICE_PID) and kills dev PIDs ($DEV_PID_1, $DEV_PID_2)"
+
+# Second scenario: launchctl exists but reports no PID for our label (e.g. a
+# transient parsing gap). Must fail safe — skip the kill loop entirely rather
+# than treat "no PID found" as "nothing to exclude" and kill everything,
+# including a possibly-live service this script just failed to identify.
+sleep 300 & SERVICE_PID2=$!
+sleep 300 & DEV_PID2_1=$!
+trap 'rm -rf "$TMP_BIN"; kill "$SERVICE_PID" "$DEV_PID_1" "$DEV_PID_2" "$SERVICE_PID2" "$DEV_PID2_1" 2>/dev/null || true' EXIT
+
+cat > "$TMP_BIN/launchctl" <<'EOF'
+#!/bin/sh
+echo "-	0	com.other-service"
+EOF
+
+cat > "$TMP_BIN/pgrep" <<EOF
+#!/bin/sh
+printf '%s\n%s\n' "$SERVICE_PID2" "$DEV_PID2_1"
+EOF
+
+PATH="$TMP_BIN:$PATH" sh "$SCRIPT_DIR/dev-restart-guard.sh" 8543 8444
+
+if ! alive "$SERVICE_PID2" || ! alive "$DEV_PID2_1"; then
+    echo "FAIL: dev-restart-guard.sh killed processes despite launchctl reporting no PID for com.stapler-squad (should fail safe and skip cleanup)" >&2
+    exit 1
+fi
+
+echo "PASS: dev-restart-guard.sh fails safe (skips cleanup) when launchctl reports no PID for com.stapler-squad"

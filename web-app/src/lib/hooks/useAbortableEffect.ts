@@ -42,7 +42,10 @@ export function useAbortableEffect(
 
   useEffect(() => {
     const signal = start();
-    effect(signal);
+    // effect() is documented to handle its own errors; this catch only
+    // guards against a caller that doesn't, so a stray rejection doesn't
+    // surface as an unhandled promise rejection.
+    void effect(signal).catch(() => {});
   // effect and start are intentionally excluded: callers list their own
   // fetch dependencies in `deps`, same convention as every hook this
   // replaces (e.g. useSessionVcs.ts's fetchStatus effect).
