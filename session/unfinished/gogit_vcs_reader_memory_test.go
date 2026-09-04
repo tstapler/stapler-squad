@@ -68,6 +68,22 @@ func TestEffectiveCacheMaxEntries_should_shrink_When_PressureIncreases(t *testin
 	}
 }
 
+// TestEffectiveCacheMaxEntries_should_coverAtLeast32Repos_When_NoPressure is
+// the enforcement gate for PerfFix-2: repoCacheMemoryBudgetBytes was doubled
+// (16 -> 32 repos) after live /debug/blob-cache stats showed a 0.07% hit
+// rate caused by cache thrashing -- more actively-scanned repos than the old
+// budget had room for, so every poll cycle evicted and reopened a cold repo
+// before its blobCache could ever be reused. A regression back toward the
+// old budget would silently reintroduce that thrashing, so pin the floor
+// here rather than relying on the doc comment alone.
+func TestEffectiveCacheMaxEntries_should_coverAtLeast32Repos_When_NoPressure(t *testing.T) {
+	withHeapInUse(t, 1*1024*1024*1024) // 1 GB — below highMemoryPressureThreshold
+	got := effectiveCacheMaxEntries()
+	if got < 32 {
+		t.Errorf("effectiveCacheMaxEntries() = %d, want >= 32 (repoCacheMemoryBudgetBytes must cover at least 32 concurrently-hot repos)", got)
+	}
+}
+
 func TestUnderSeverePressure_should_reportTrue_When_HeapAtOrAboveSevereThreshold(t *testing.T) {
 	g := &GoGitVCSReader{}
 

@@ -3,6 +3,7 @@ package vc
 import (
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -1182,6 +1183,169 @@ func TestGitProviderGetChangedFiles_PathWithSpace(t *testing.T) {
 	if files[0].Status != FileModified {
 		t.Errorf("files[0].Status = %v, want %v", files[0].Status, FileModified)
 	}
+}
+
+func TestParseBranchHeader(t *testing.T) {
+	tests := []struct {
+		name   string
+		tokens []string
+		want   branchHeaderInfo
+	}{
+		{
+			name:   "branch with upstream and ahead/behind",
+			tokens: []string{"# branch.oid abc123def456", "# branch.head main", "# branch.upstream origin/main", "# branch.ab +2 -3"},
+			want:   branchHeaderInfo{headOID: "abc123def456", headBranch: "main", upstream: "origin/main", aheadBy: 2, behindBy: 3, hasAheadBehind: true},
+		},
+		{
+			name:   "detached HEAD, no upstream",
+			tokens: []string{"# branch.oid abc123def456", "# branch.head (detached)"},
+			want:   branchHeaderInfo{headOID: "abc123def456", headBranch: "(detached)"},
+		},
+		{
+			name:   "initial commit, no HEAD yet",
+			tokens: []string{"# branch.oid (initial)", "# branch.head main"},
+			want:   branchHeaderInfo{headOID: "(initial)", headBranch: "main"},
+		},
+		{
+			name:   "file records mixed in are ignored",
+			tokens: []string{"# branch.oid abc123", "# branch.head main", "1 M. N... 100644 100644 100644 hash1 hash2 file.txt"},
+			want:   branchHeaderInfo{headOID: "abc123", headBranch: "main"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := parseBranchHeader(tt.tokens)
+			if got != tt.want {
+				t.Errorf("parseBranchHeader() = %+v, want %+v", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestGitProviderGetStatus_UpstreamAndAheadBehind is the regression test for
+// PerfFix-1: GetStatus must still report branch/HEAD/upstream/ahead-behind
+// correctly now that they come from one `git status --branch` spawn's
+// header instead of four separate branch/rev-parse/rev-list calls.
+func TestGitProviderGetStatus_UpstreamAndAheadBehind(t *testing.T) {
+	remoteDir := t.TempDir()
+	cmd := safeexec.CommandContext(context.Background(), "git", "init", "--bare", remoteDir)
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("Failed to init bare remote: %v", err)
+	}
+
+	localDir := t.TempDir()
+	initGitRepoWithCommit(t, localDir)
+	configureGitUser(t, localDir)
+
+	for _, args := range [][]string{
+		{"remote", "add", "origin", remoteDir},
+		{"push", "-u", "origin", "main"},
+	} {
+		cmd := safeexec.CommandContext(context.Background(), "git", args...)
+		cmd.Dir = localDir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v failed: %v: %s", args, err, out)
+		}
+	}
+
+	// Diverge: one local commit ahead of the pushed upstream.
+	if err := os.WriteFile(filepath.Join(localDir, "extra.txt"), []byte("extra"), 0644); err != nil {
+		t.Fatalf("Failed to create extra file: %v", err)
+	}
+	for _, args := range [][]string{
+		{"add", "extra.txt"},
+		{"commit", "-m", "second commit"},
+	} {
+		cmd := safeexec.CommandContext(context.Background(), "git", args...)
+		cmd.Dir = localDir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v failed: %v: %s", args, err, out)
+		}
+	}
+
+	provider, err := NewGitProvider(localDir)
+	if err != nil {
+		t.Fatalf("NewGitProvider() error = %v", err)
+	}
+
+	status, err := provider.GetStatus()
+	if err != nil {
+		t.Fatalf("GetStatus() error = %v", err)
+	}
+
+	if status.Branch != "main" {
+		t.Errorf("status.Branch = %q, want %q", status.Branch, "main")
+	}
+	if status.Upstream != "origin/main" {
+		t.Errorf("status.Upstream = %q, want %q", status.Upstream, "origin/main")
+	}
+	if status.AheadBy != 1 {
+		t.Errorf("status.AheadBy = %d, want 1", status.AheadBy)
+	}
+	if status.BehindBy != 0 {
+		t.Errorf("status.BehindBy = %d, want 0", status.BehindBy)
+	}
+	if status.HeadCommit == "" {
+		t.Error("status.HeadCommit is empty, want a short SHA")
+	}
+	if status.Description != "second commit" {
+		t.Errorf("status.Description = %q, want %q", status.Description, "second commit")
+	}
+
+	// GetBranch should now be a cache hit populated by GetStatus, not a
+	// fresh subprocess spawn.
+	if branch, err := provider.GetBranch(); err != nil || branch != "main" {
+		t.Errorf("GetBranch() = (%q, %v), want (%q, nil)", branch, err, "main")
+	}
+}
+
+// TestGitProviderGetStatus_SubprocessSpawnCount is the enforcement gate for
+// PerfFix-1: shims `git` on PATH to log every invocation, so a regression
+// back to GetStatus's pre-fix 8-subprocess-spawn shape fails loudly instead
+// of silently reintroducing the syscall.ForkLock mutex contention the fix
+// was written to eliminate.
+func TestGitProviderGetStatus_SubprocessSpawnCount(t *testing.T) {
+	tmpDir := t.TempDir()
+	initGitRepoWithCommit(t, tmpDir)
+
+	provider, err := NewGitProvider(tmpDir)
+	if err != nil {
+		t.Fatalf("NewGitProvider() error = %v", err)
+	}
+
+	realGit, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatalf("LookPath(git) error = %v", err)
+	}
+
+	fakeDir := t.TempDir()
+	logPath := filepath.Join(fakeDir, "calls.log")
+	script := "#!/bin/sh\necho \"$@\" >> " + shellQuote(logPath) + "\nexec " + shellQuote(realGit) + " \"$@\"\n"
+	if err := os.WriteFile(filepath.Join(fakeDir, "git"), []byte(script), 0o755); err != nil {
+		t.Fatalf("Failed to write git shim: %v", err)
+	}
+	t.Setenv("PATH", fakeDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	const wantMaxSpawns = 4 // status(+branch), log, diff --numstat, diff --numstat --cached
+	if _, err := provider.GetStatus(); err != nil {
+		t.Fatalf("GetStatus() error = %v", err)
+	}
+
+	data, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("Failed to read call log: %v", err)
+	}
+	calls := strings.Split(strings.TrimSpace(string(data)), "\n")
+	if len(calls) > wantMaxSpawns {
+		t.Errorf("GetStatus() spawned %d git subprocesses, want <= %d:\n%s", len(calls), wantMaxSpawns, data)
+	}
+}
+
+// shellQuote wraps s in single quotes for embedding in a /bin/sh script,
+// escaping any literal single quotes it contains.
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
 // Helper functions

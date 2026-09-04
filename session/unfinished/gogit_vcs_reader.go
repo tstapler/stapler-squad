@@ -232,9 +232,19 @@ const approxBytesPerCachedRepo = 96 * 1024 * 1024
 // repoCacheMaxEntries*approxBytesPerCachedRepo ceiling (~9.6 GB): this process
 // runs alongside many other memory-hungry tools on a single host, and a
 // scanner cache has no business claiming multiple GB of that budget on its
-// own. 1.5 GB covers roughly 16 simultaneously "hot" repos at the ~96 MB
-// estimate, which comfortably covers realistic concurrent-viewing workloads.
-const repoCacheMemoryBudgetBytes = 1536 * 1024 * 1024
+// own.
+//
+// 3 GB covers roughly 32 simultaneously "hot" repos at the ~96 MB estimate --
+// doubled from an original 1.5 GB/16-repo budget after live /debug/blob-cache
+// stats on a host running dozens of concurrent sessions showed a 0.07% hit
+// rate (77 hits / 117330 misses): with more actively-scanned repos than the
+// cache had room for, every poll cycle evicted and reopened a cold repo,
+// wiping its per-repo blobCache before the next poll could ever hit it. This
+// is a size trade-off, not a fix for unbounded growth -- the
+// high/severeMemoryPressureThreshold tiers below still shrink this budget
+// under real process memory pressure, so a host that can't afford the extra
+// headroom degrades gracefully rather than OOMing.
+const repoCacheMemoryBudgetBytes = 3072 * 1024 * 1024
 
 // highMemoryPressureThreshold/severeMemoryPressureThreshold gate
 // effectiveCacheBudgetBytes' tiered response. Measured against the Go
