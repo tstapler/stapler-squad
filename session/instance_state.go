@@ -369,7 +369,7 @@ func (i *Instance) Started() bool {
 	return i.started.Load()
 }
 
-// MarkStartedIfTmuxAlive flips started to true outside the normal
+// MarkStartedAssumingTmuxAlive flips started to true outside the normal
 // Start()/Resume()/Restart() actor flow, for a caller that has already
 // confirmed the underlying tmux session is alive by other means (e.g.
 // streamViaHub's DoesSessionExistNoCache check). Instance.Start() never
@@ -385,7 +385,7 @@ func (i *Instance) Started() bool {
 // transitions — see the comment at Start()'s own i.started.Store call for
 // why an unguarded store isn't enough even though started is itself
 // atomic.Bool.
-func (i *Instance) MarkStartedIfTmuxAlive() {
+func (i *Instance) MarkStartedAssumingTmuxAlive() {
 	i.mu.Lock()
 	defer i.mu.Unlock()
 	i.started.Store(true)

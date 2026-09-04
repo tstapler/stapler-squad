@@ -1,5 +1,5 @@
 #!/bin/sh
-# shellcheck shell=bash
+# shellcheck shell=sh
 #
 # dev-restart-guard.test.sh — regression test for dev-restart-guard.sh's
 # core property: it must NEVER kill the launchd-managed stapler-squad

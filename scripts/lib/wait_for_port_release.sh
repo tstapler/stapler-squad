@@ -1,5 +1,5 @@
 #!/bin/sh
-# shellcheck shell=bash
+# shellcheck shell=sh
 #
 # wait_for_port_release — the single implementation of "poll until these TCP
 # ports have no LISTENer", sourced by both scripts/install-service.sh and

@@ -1,5 +1,5 @@
 #!/bin/sh
-# shellcheck shell=bash
+# shellcheck shell=sh
 #
 # dev-restart-guard.sh — stop stapler-squad dev processes without touching
 # the launchd-managed service, then wait for the ports they held to

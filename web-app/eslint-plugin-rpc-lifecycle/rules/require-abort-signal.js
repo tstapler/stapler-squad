@@ -64,7 +64,10 @@ module.exports = {
   },
 
   create(context) {
-    const filename = context.getFilename();
+    // Normalized to forward slashes: context.getFilename() returns
+    // backslash-separated paths on Windows, which the regex below wouldn't
+    // match.
+    const filename = context.getFilename().replace(/\\/g, "/");
     if (!/\/lib\/(hooks|contexts)\//.test(filename)) return {};
     if (/\.(test|spec)\.[tj]sx?$/.test(filename)) return {};
 
