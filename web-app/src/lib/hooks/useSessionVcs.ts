@@ -8,6 +8,7 @@ import { VCSStatus } from "@/gen/session/v1/types_pb";
 import { useAppSelector } from "@/lib/store";
 import { selectAllSessions } from "@/lib/store/sessionsSlice";
 import type { AsyncResult } from "@/lib/types/asyncResult";
+import { useAbortableRequest } from "@/lib/hooks/useAbortableRequest";
 
 /** Parsed diff stats returned by getSessionDiff. */
 export interface SessionDiff {
@@ -65,13 +66,24 @@ export function useSessionVcs(sessionId: string, baseUrl: string): SessionVcsSta
     return clientRef.current;
   }, []);
 
+  // Cancel the in-flight status/diff request on the next call or on unmount —
+  // this hook is instantiated per-SessionDetail, so switching sessions rapidly
+  // without cancellation left every prior request's promise (and its closure
+  // over sessionId/setState) alive until it resolved or hit its deadline,
+  // growing heap under fast session switching (measured: ~44MB -> ~154MB
+  // used JS heap over 138 switches in a profiling run).
+  const startStatus = useAbortableRequest();
+  const startDiff = useAbortableRequest();
+
   const fetchStatus = useCallback(async () => {
     if (stoppedRef.current) {
       setStatusLoading(false);
       return;
     }
+    const signal = startStatus();
     try {
-      const response = await getClient().getVCSStatus({ id: sessionId });
+      const response = await getClient().getVCSStatus({ id: sessionId }, { signal });
+      if (signal.aborted) return;
       if (response.error) {
         setError(new Error(response.error));
         setStatus(null);
@@ -80,6 +92,7 @@ export function useSessionVcs(sessionId: string, baseUrl: string): SessionVcsSta
         setError(null);
       }
     } catch (err) {
+      if (signal.aborted) return;
       if (err instanceof ConnectError && err.code === Code.NotFound) {
         stoppedRef.current = true;
         setError(err);
@@ -88,18 +101,20 @@ export function useSessionVcs(sessionId: string, baseUrl: string): SessionVcsSta
       }
       setError(err instanceof Error ? err : new Error("Failed to load VCS status"));
     } finally {
-      setStatusLoading(false);
+      if (!signal.aborted) setStatusLoading(false);
     }
-  }, [sessionId, getClient]);
+  }, [sessionId, getClient, startStatus]);
 
   const fetchDiff = useCallback(async () => {
     if (stoppedRef.current) {
       setDiffLoading(false);
       return;
     }
+    const signal = startDiff();
     setDiffLoading(true);
     try {
-      const response = await getClient().getSessionDiff({ id: sessionId });
+      const response = await getClient().getSessionDiff({ id: sessionId }, { signal });
+      if (signal.aborted) return;
       if (response.diffStats) {
         setDiff({
           content: response.diffStats.content,
@@ -110,15 +125,16 @@ export function useSessionVcs(sessionId: string, baseUrl: string): SessionVcsSta
         setDiff(null);
       }
     } catch (err) {
+      if (signal.aborted) return;
       if (err instanceof ConnectError && err.code === Code.NotFound) {
         stoppedRef.current = true;
       }
       // Diff errors are non-fatal — status error is the primary signal.
       console.error("useSessionVcs: failed to load diff:", err);
     } finally {
-      setDiffLoading(false);
+      if (!signal.aborted) setDiffLoading(false);
     }
-  }, [sessionId, getClient]);
+  }, [sessionId, getClient, startDiff]);
 
   const refresh = useCallback(() => {
     fetchStatus();
@@ -155,6 +171,7 @@ export function useSessionVcs(sessionId: string, baseUrl: string): SessionVcsSta
   }, [fetchStatus, sessionStatus, sessionUpdatedAt]);
 
   // Diff: fetch once on mount; consumers call refreshDiff() when needed.
+  // Cancellation on unmount/re-run is handled by startDiff's useAbortableRequest.
   useEffect(() => {
     fetchDiff();
   }, [fetchDiff]);
