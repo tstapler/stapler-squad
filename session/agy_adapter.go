@@ -270,19 +270,24 @@ func (a *AgyAdapter) Export(ctx context.Context, turns []CanonicalTurn, inst *In
 
 			data, err := json.Marshal(step)
 			if err != nil {
-				f.Close()
+				_ = f.Close()
 				return err
 			}
 			if _, werr := f.Write(data); werr != nil {
-				f.Close()
+				_ = f.Close()
 				return fmt.Errorf("failed to write step to %s: %w", p, werr)
 			}
 			if _, werr := f.Write([]byte("\n")); werr != nil {
-				f.Close()
+				_ = f.Close()
 				return fmt.Errorf("failed to write newline to %s: %w", p, werr)
 			}
 		}
-		f.Close()
+		// A failed Close here can mean the last buffered writes never made
+		// it to disk, so the transcript file would silently be incomplete —
+		// surface it instead of discarding.
+		if err := f.Close(); err != nil {
+			return fmt.Errorf("failed to close transcript file %s: %w", p, err)
+		}
 	}
 
 	// Create SQLite DB

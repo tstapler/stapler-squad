@@ -1097,7 +1097,7 @@ func (i *Instance) HasGitHubPR() bool {
 
 // SetArtifacts atomically updates the in-memory Artifacts cache.
 func (i *Instance) SetArtifacts(blob *artifacts.SessionArtifactsBlob) {
-	i.sendSyncErr(func(s *instanceState) error { //nolint:errcheck
+	_ = i.sendSyncErr(func(s *instanceState) error {
 		s.inst.Artifacts = blob
 		return nil
 	})

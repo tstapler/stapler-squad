@@ -2601,7 +2601,9 @@ func (s *SessionService) CreateSession(
 	// Record initial_prompt (typed into the session terminal once the session reaches Ready state)
 	// in prompt history so it appears in the recent-prompts dropdown.
 	if req.Msg.InitialPrompt != "" {
-		s.promptStore.RecordUsage(req.Msg.InitialPrompt)
+		if _, err := s.promptStore.RecordUsage(req.Msg.InitialPrompt); err != nil {
+			log.Warn("failed to record initial prompt usage", "err", err)
+		}
 	}
 
 	// Publish SessionCreated event so watchers see the Creating-status session immediately.

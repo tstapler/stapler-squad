@@ -68,7 +68,7 @@ func handleCheck() {
 	geminiMode := checkCmd.Bool("gemini", false, "Translate Gemini TOOL_INPUT payload (exit-code output)")
 	agyMode := checkCmd.Bool("antigravity", false, "Translate Antigravity TOOL_INPUT payload (hooks.json format)")
 	opencodeMode := checkCmd.Bool("opencode", false, "Translate OpenCode tool.execute.before payload (exit-code output)")
-	checkCmd.Parse(os.Args[2:]) //nolint:errcheck
+	_ = checkCmd.Parse(os.Args[2:]) // flag.ExitOnError already exits the process on a parse failure
 
 	var payload classifier.PermissionRequestPayload
 	if *geminiMode || *agyMode {
@@ -141,25 +141,29 @@ func writeHookDecision(result classifier.ClassificationResult) {
 		if result.RuleName != "" {
 			reason = result.RuleName + ": " + reason
 		}
-		json.NewEncoder(os.Stdout).Encode(hookOutput{
+		if err := json.NewEncoder(os.Stdout).Encode(hookOutput{
 			HookSpecificOutput: hookSpecificOutput{
 				HookEventName:            "PreToolUse",
 				PermissionDecision:       "allow",
 				PermissionDecisionReason: reason,
 			},
-		})
+		}); err != nil {
+			log.Warn("Failed to write allow hook decision to stdout", "err", err)
+		}
 	case classifier.AutoDeny:
 		reason := result.Reason
 		if result.Alternative != "" {
 			reason += " " + result.Alternative
 		}
-		json.NewEncoder(os.Stdout).Encode(hookOutput{
+		if err := json.NewEncoder(os.Stdout).Encode(hookOutput{
 			HookSpecificOutput: hookSpecificOutput{
 				HookEventName:            "PreToolUse",
 				PermissionDecision:       "deny",
 				PermissionDecisionReason: reason,
 			},
-		})
+		}); err != nil {
+			log.Warn("Failed to write deny hook decision to stdout", "err", err)
+		}
 	default:
 		// Escalate: write nothing; Claude Code shows its own permission prompt.
 	}
@@ -218,7 +222,9 @@ func writeAntigravityHookDecision(result classifier.ClassificationResult) {
 	default:
 		output.Decision = "ask"
 	}
-	json.NewEncoder(os.Stdout).Encode(output)
+	if err := json.NewEncoder(os.Stdout).Encode(output); err != nil {
+		log.Warn("Failed to write Antigravity hook decision to stdout", "err", err)
+	}
 	// Antigravity hook scripts must always exit with 0 (even on deny).
 	os.Exit(0)
 }
@@ -459,7 +465,7 @@ func handleServe() {
 	serveCmd := flag.NewFlagSet("serve", flag.ExitOnError)
 	port := serveCmd.Int("port", 8544, "Port to listen on")
 	dbPath := serveCmd.String("db", getDefaultDBPath(), "Path to SQLite database")
-	serveCmd.Parse(os.Args[2:])
+	_ = serveCmd.Parse(os.Args[2:]) // flag.ExitOnError already exits the process on a parse failure
 
 	storage := loadStorage(*dbPath)
 	defer storage.Close()
@@ -487,7 +493,9 @@ func handleServe() {
 		recordResult(storage, payload, result, durationMs)
 
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(result)
+		if err := json.NewEncoder(w).Encode(result); err != nil {
+			log.Warn("Failed to write /classify response", "err", err)
+		}
 	})
 
 	fmt.Fprintf(os.Stderr, "SSQ-Hooks server starting on port %d (DB: %s)...\n", *port, *dbPath)
@@ -898,10 +906,10 @@ func copyBinary(src, dst string) error {
 	if err != nil {
 		return err
 	}
-	defer func() { os.Remove(tmp) }() //nolint:errcheck
+	defer func() { _ = os.Remove(tmp) }() // best-effort; harmless if the rename below already succeeded
 
 	if _, err := out.ReadFrom(in); err != nil {
-		out.Close()
+		_ = out.Close() // the ReadFrom error above is what's returned
 		return err
 	}
 	if err := out.Close(); err != nil {
@@ -1525,7 +1533,7 @@ func patchPiExtension(extensionPath, permissionURL, healthURL string) error {
 func installOrUninstallPi() {
 	installCmd := flag.NewFlagSet("pi", flag.ExitOnError)
 	uninstall := installCmd.Bool("uninstall", false, "Remove the pi approval extension")
-	installCmd.Parse(os.Args[3:]) //nolint:errcheck
+	_ = installCmd.Parse(os.Args[3:]) // flag.ExitOnError already exits the process on a parse failure
 
 	if *uninstall {
 		uninstallPi()
@@ -1617,7 +1625,7 @@ func uninstallPi() {
 func installService() {
 	installCmd := flag.NewFlagSet("service", flag.ExitOnError)
 	uninstall := installCmd.Bool("uninstall", false, "Remove the service and disable auto-start")
-	installCmd.Parse(os.Args[3:])
+	_ = installCmd.Parse(os.Args[3:]) // flag.ExitOnError already exits the process on a parse failure
 
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -1664,17 +1672,17 @@ func installServiceLinux(home, binPath, logDir, envPath string, uninstall bool) 
 		stopCtx, stopCancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer stopCancel()
 		stopCmd := safeexec.CommandContext(stopCtx, "systemctl", "--user", "stop", "stapler-squad")
-		stopCmd.Run() //nolint:errcheck
+		_ = stopCmd.Run() // best-effort; service may already be stopped
 		disableCtx, disableCancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer disableCancel()
 		disableCmd := safeexec.CommandContext(disableCtx, "systemctl", "--user", "disable", "stapler-squad")
-		disableCmd.Run() //nolint:errcheck
+		_ = disableCmd.Run() // best-effort; service may already be disabled
 		if _, err := os.Stat(serviceFile); err == nil {
-			os.Remove(serviceFile) //nolint:errcheck
+			_ = os.Remove(serviceFile) // best-effort cleanup of the unit file
 			reloadCtx, reloadCancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer reloadCancel()
 			reloadCmd := safeexec.CommandContext(reloadCtx, "systemctl", "--user", "daemon-reload")
-			reloadCmd.Run() //nolint:errcheck
+			_ = reloadCmd.Run() // best-effort; a stale unit cache is harmless after removal above
 			fmt.Printf("Removed: %s\n", serviceFile)
 		} else {
 			fmt.Printf("Service file not found (already removed?): %s\n", serviceFile)
@@ -1742,9 +1750,9 @@ func installServiceMacOS(home, binPath, logDir, envPath string, uninstall bool) 
 		unloadCtx, unloadCancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer unloadCancel()
 		unloadCmd := safeexec.CommandContext(unloadCtx, "launchctl", "unload", plistFile)
-		unloadCmd.Run() //nolint:errcheck
+		_ = unloadCmd.Run() // best-effort; agent may already be unloaded
 		if _, err := os.Stat(plistFile); err == nil {
-			os.Remove(plistFile) //nolint:errcheck
+			_ = os.Remove(plistFile) // best-effort cleanup of the plist file
 			fmt.Printf("Removed: %s\n", plistFile)
 		} else {
 			fmt.Printf("Plist not found (already removed?): %s\n", plistFile)
