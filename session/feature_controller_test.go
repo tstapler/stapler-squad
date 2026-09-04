@@ -23,6 +23,7 @@ func newTestBacklogController(t *testing.T) (*BacklogController, func()) {
 // TestBacklogController_EnableIdempotent verifies that calling Enable twice does not
 // start a second goroutine — the controller stays enabled and has exactly one syncLoop.
 func TestBacklogController_EnableIdempotent(t *testing.T) {
+	t.Parallel()
 	ctrl, cleanup := newTestBacklogController(t)
 	defer cleanup()
 
@@ -56,6 +57,7 @@ func TestBacklogController_EnableIdempotent(t *testing.T) {
 // TestBacklogController_DisableIdempotent verifies that calling Disable on an already-disabled
 // controller does not panic or return an error.
 func TestBacklogController_DisableIdempotent(t *testing.T) {
+	t.Parallel()
 	ctrl, cleanup := newTestBacklogController(t)
 	defer cleanup()
 
@@ -76,6 +78,7 @@ func TestBacklogController_DisableIdempotent(t *testing.T) {
 // TestBacklogController_EnableThenDisable verifies a full round-trip:
 // Enable sets state to active, Disable brings it back to inactive.
 func TestBacklogController_EnableThenDisable(t *testing.T) {
+	t.Parallel()
 	ctrl, cleanup := newTestBacklogController(t)
 	defer cleanup()
 
@@ -105,6 +108,7 @@ func TestBacklogController_EnableThenDisable(t *testing.T) {
 // TestBacklogController_EnableAfterDisable verifies that re-enabling after a disable
 // creates a fresh syncLoop and correctly reports IsEnabled as true.
 func TestBacklogController_EnableAfterDisable(t *testing.T) {
+	t.Parallel()
 	ctrl, cleanup := newTestBacklogController(t)
 	defer cleanup()
 
@@ -137,6 +141,7 @@ func TestBacklogController_EnableAfterDisable(t *testing.T) {
 // TestBacklogController_IsEnabled_ReflectsListenerState verifies that IsEnabled reads
 // directly from the listener's atomic bool, so Enable/Disable are immediately visible.
 func TestBacklogController_IsEnabled_ReflectsListenerState(t *testing.T) {
+	t.Parallel()
 	ctrl, cleanup := newTestBacklogController(t)
 	defer cleanup()
 

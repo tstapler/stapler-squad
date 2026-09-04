@@ -54,6 +54,7 @@ func attachWorkSessionWithRange(t *testing.T, storage *session.Storage, repo *se
 // still reflect what actually shipped — not an empty/wrong diff computed against
 // whatever happens to be checked out in item.RepoPath.
 func TestGetBacklogItemDiff_should_ComputeCorrectDiff_When_WorktreeDirectoryNoLongerExists(t *testing.T) {
+	t.Parallel()
 	_, repoPath := setupPRFixSyncRepo(t)
 	baseSHA := strings.TrimSpace(runGitTestCmd(t, repoPath, "rev-parse", "HEAD"))
 
@@ -92,6 +93,7 @@ func TestGetBacklogItemDiff_should_ComputeCorrectDiff_When_WorktreeDirectoryNoLo
 // baseline: the live-worktree case (item still in progress/review) must keep working
 // exactly as before this fix.
 func TestGetBacklogItemDiff_should_ComputeCorrectDiff_When_WorktreeStillExists(t *testing.T) {
+	t.Parallel()
 	_, repoPath := setupPRFixSyncRepo(t)
 	baseSHA := strings.TrimSpace(runGitTestCmd(t, repoPath, "rev-parse", "HEAD"))
 
@@ -129,6 +131,7 @@ func TestGetBacklogItemDiff_should_ComputeCorrectDiff_When_WorktreeStillExists(t
 // Gate Verdict against real diff content. The fix prefers the branch's actual tip
 // (wt.BranchName) over the stale LastCommitSha.
 func TestGetBacklogItemDiff_should_ShowRealChanges_When_LastCommitShaNeverRefreshed(t *testing.T) {
+	t.Parallel()
 	_, repoPath := setupPRFixSyncRepo(t)
 	baseSHA := strings.TrimSpace(runGitTestCmd(t, repoPath, "rev-parse", "HEAD"))
 
@@ -173,6 +176,7 @@ func TestGetBacklogItemDiff_should_ShowRealChanges_When_LastCommitShaNeverRefres
 // de6d7878-9d6e-4081-acfa-02ff545c87b4 ("Add Queued State To Backlog Items"): session 1
 // did the real implementation, session 2 was a reopen that made no new commits.
 func TestGetBacklogItemDiff_should_ShowEarlierSessionWork_When_LatestReworkSessionMadeNoCommits(t *testing.T) {
+	t.Parallel()
 	_, repoPath := setupPRFixSyncRepo(t)
 	baseSHA := strings.TrimSpace(runGitTestCmd(t, repoPath, "rev-parse", "HEAD"))
 

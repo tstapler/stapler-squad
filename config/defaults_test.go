@@ -226,6 +226,42 @@ func TestMaxConcurrentBacklogWorkItemsOrDefault_ClampsInvalidValues(t *testing.T
 	})
 }
 
+// TestAutoSpawnReadyItemsOrDefault_should_DefaultTrue_When_Unset guards the "software
+// factory" default switch: an unset (nil) config value — or a nil *Config entirely —
+// must default to true (auto-spawn "ready" items), not false. A plain bool zero value
+// couldn't distinguish "explicitly disabled" from "never configured" here, which is
+// why this field is a *bool rather than following MaxConcurrentBacklogWorkItems'
+// int-zero-means-unset convention.
+func TestAutoSpawnReadyItemsOrDefault_should_DefaultTrue_When_Unset(t *testing.T) {
+	cfg := &Config{}
+	if got := cfg.AutoSpawnReadyItemsOrDefault(); !got {
+		t.Errorf("unset config: got %v, want true", got)
+	}
+
+	t.Run("nil config", func(t *testing.T) {
+		var nilCfg *Config
+		if got := nilCfg.AutoSpawnReadyItemsOrDefault(); !got {
+			t.Errorf("nil config: got %v, want true", got)
+		}
+	})
+
+	t.Run("explicit false", func(t *testing.T) {
+		disabled := false
+		cfg := &Config{AutoSpawnReadyItems: &disabled}
+		if got := cfg.AutoSpawnReadyItemsOrDefault(); got {
+			t.Errorf("explicit false: got %v, want false", got)
+		}
+	})
+
+	t.Run("explicit true", func(t *testing.T) {
+		enabled := true
+		cfg := &Config{AutoSpawnReadyItems: &enabled}
+		if got := cfg.AutoSpawnReadyItemsOrDefault(); !got {
+			t.Errorf("explicit true: got %v, want true", got)
+		}
+	})
+}
+
 func TestUnionTags(t *testing.T) {
 	result := unionTags([]string{"a", "b"}, []string{"b", "c"})
 	if len(result) != 3 {

@@ -1,9 +1,9 @@
 package session
 
 // worktree_pr_poller_discovery_test.go covers the same discovery-path
-// ordering bug as pr_status_poller_test.go: a real GetPRForBranchConditional
-// error must not be misread as a 304 "still no PR yet" and silently re-arm
-// the no-PR backoff via the stale listCacheEntry.noPR flag.
+// ordering bug as pr_status_poller_discovery_test.go: a real
+// GetPRForBranchConditional error must not be misread as a 304 "still no
+// PR yet" and silently re-arm the no-PR backoff via the stale listCacheEntry.noPR flag.
 
 import (
 	"context"

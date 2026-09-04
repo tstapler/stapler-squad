@@ -5,12 +5,29 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
+
+// tmuxTestMu serializes this package's tmux subprocess calls in tests that talk
+// to a live tmux server. All `t.Parallel()` tests in this package share ONE
+// tmux server for the life of the test binary (tmux.ResolveSocket resolves to
+// a single process-wide "test-isolated-<pid>" socket via sync.OnceValue — see
+// tmux.testSocketOnce), so under `-race -count=N` with N test iterations all
+// running in parallel, dozens of tmux subprocesses (new-session/set-option/
+// show-options/kill-session) queue against that one server at once. That
+// causes some calls to stall long enough to blow past safeexec's WaitDelay
+// grace period after context cancellation ("exec: WaitDelay expired before
+// I/O complete") — a genuine unbounded-queueing race, not a case of the
+// timeout margin merely being too tight. Widening the per-call timeout
+// (previously tried: 5s->10s, 10s->20s) does not fix this because the queue
+// depth grows with -count, so no fixed timeout is safe. Serializing access
+// here removes the contention at its source instead of racing it.
+var tmuxTestMu sync.Mutex
 
 // hasTmux reports whether tmux is available in PATH.
 // Tests that require a live tmux session are skipped when it's absent.
@@ -22,6 +39,17 @@ func hasTmux() bool {
 // TestScanByUserOptions_NoSessions verifies that ScanByUserOptions returns
 // an empty slice (not an error) when tmux is unavailable or has no sessions.
 func TestScanByUserOptions_NoSessions(t *testing.T) {
+	// ScanByUserOptions shells out to the same shared, process-wide isolated
+	// tmux socket as TestWriteReadUserOptions and
+	// TestScanFromUserOptions_RegistersSession below (see tmuxTestMu's doc
+	// comment). Without this lock, -count=N runs dozens of unserialized
+	// list-sessions calls concurrently with those tests' locked
+	// new-session/set-option/kill-session sequences, which was enough
+	// contention on the single tmux server to blow safeexec's WaitDelay even
+	// on the serialized calls.
+	tmuxTestMu.Lock()
+	defer tmuxTestMu.Unlock()
+
 	sessions, err := ScanByUserOptions()
 	if err != nil {
 		t.Fatalf("ScanByUserOptions: unexpected error: %v", err)
@@ -34,6 +62,7 @@ func TestScanByUserOptions_NoSessions(t *testing.T) {
 // TestScanByUserOptions_ParsesFields verifies the tab-separated parsing
 // logic using the same field splitting used in ScanByUserOptions.
 func TestScanByUserOptions_ParsesFields(t *testing.T) {
+	t.Parallel()
 	// Simulate the output of `tmux list-sessions -F ...` for two sessions:
 	// one ssq-mux session and one without options.
 	lines := []string{
@@ -108,6 +137,11 @@ func TestWriteReadUserOptions(t *testing.T) {
 
 	sessionName := "cs-test-useropts"
 
+	// Serialize against every other tmux-touching test in this package — see
+	// tmuxTestMu's doc comment for why.
+	tmuxTestMu.Lock()
+	defer tmuxTestMu.Unlock()
+
 	// Created via the same isolated socket that WriteSessionUserOptions resolves to
 	// inside a `go test` binary -- see prependIsolatedSocket.
 	create := safeexec.CommandContext(context.Background(), tmux.Binary(),
@@ -115,12 +149,20 @@ func TestWriteReadUserOptions(t *testing.T) {
 	if err := create.Run(); err != nil {
 		t.Fatalf("create tmux session: %v", err)
 	}
-	t.Cleanup(func() {
+	// Deliberately a `defer`, not t.Cleanup: t.Cleanup funcs run only after all
+	// of the test function's own deferred statements have already fired, which
+	// would run this after tmuxTestMu.Unlock() above. That let the next queued
+	// -count=N iteration re-acquire the mutex and `new-session -s sessionName`
+	// while this session was still being torn down, colliding on the same name
+	// and stalling the shared tmux server long enough to trip safeexec's
+	// WaitDelay. A defer registered after the Unlock defer runs first (LIFO),
+	// so the kill happens while the lock is still held.
+	defer func() {
 		killCtx, killCancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer killCancel()
 		_ = safeexec.CommandContext(killCtx, tmux.Binary(),
 			prependIsolatedSocket([]string{"kill-session", "-t", sessionName})...).Run()
-	})
+	}()
 
 	socketPath := "/tmp/ssq-mux-test-99999.sock"
 	cwd := "/tmp/test-cwd"
@@ -170,6 +212,12 @@ func TestScanFromUserOptions_RegistersSession(t *testing.T) {
 	}
 
 	sessionName := "cs-test-scanfromopts"
+
+	// Serialize against every other tmux-touching test in this package — see
+	// tmuxTestMu's doc comment for why.
+	tmuxTestMu.Lock()
+	defer tmuxTestMu.Unlock()
+
 	// Created via the same isolated socket that WriteSessionUserOptions and
 	// ScanByUserOptions resolve to inside a `go test` binary -- see prependIsolatedSocket.
 	create := safeexec.CommandContext(context.Background(), tmux.Binary(),
@@ -177,12 +225,16 @@ func TestScanFromUserOptions_RegistersSession(t *testing.T) {
 	if err := create.Run(); err != nil {
 		t.Fatalf("create tmux session: %v", err)
 	}
-	t.Cleanup(func() {
+	// See the matching comment in TestWriteReadUserOptions: this must be a
+	// `defer` (runs before tmuxTestMu.Unlock() above, LIFO), not t.Cleanup
+	// (which would run after Unlock and let the next -count=N iteration
+	// collide on this session name).
+	defer func() {
 		killCtx2, killCancel2 := context.WithTimeout(context.Background(), 10*time.Second)
 		defer killCancel2()
 		_ = safeexec.CommandContext(killCtx2, tmux.Binary(),
 			prependIsolatedSocket([]string{"kill-session", "-t", sessionName})...).Run()
-	})
+	}()
 
 	socketPath := "/tmp/ssq-mux-test-88888.sock"
 	if err := WriteSessionUserOptions(sessionName, socketPath, "/tmp", "claude", 88888, time.Now().Unix()); err != nil {

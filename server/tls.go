@@ -12,6 +12,7 @@ import (
 	"encoding/pem"
 	"fmt"
 	"math/big"
+	"net"
 	"os"
 	"path/filepath"
 	"sort"
@@ -22,82 +23,122 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 )
 
-const (
-	certFileName     = "tls-cert.pem"
-	keyFileName      = "tls-key.pem"
-	caFileName       = "tls-ca.pem"
-	certHashFileName = "tls-cert.hash"
-)
+const caFileName = "tls-ca.pem"
 
-// TLSPaths holds the file paths for the generated TLS certificate set.
-type TLSPaths struct {
-	CertFile string
-	KeyFile  string
-	CAFile   string
+// NetworkCert is one leaf certificate scoped to a single network (e.g. the
+// loopback interface or a single LAN IP), signed by the shared local CA.
+type NetworkCert struct {
+	Key  string // stable identifier for this network, e.g. "192.168.1.135"
+	SANs []string
+	Cert tls.Certificate
 }
 
-// EnsureTLSCerts ensures a stable CA exists and issues/reissues a server
-// certificate when the SAN list changes or the server cert nears expiry.
+func networkCertFileName(key string) string { return "tls-cert-" + sanitizeKey(key) + ".pem" }
+func networkKeyFileName(key string) string  { return "tls-key-" + sanitizeKey(key) + ".pem" }
+func networkHashFileName(key string) string { return "tls-cert-" + sanitizeKey(key) + ".hash" }
+
+// sanitizeKey makes a network key safe to use as a filename component (IPv6
+// addresses contain ':', which is not valid in a path segment).
+func sanitizeKey(key string) string {
+	return strings.NewReplacer(":", "_", "/", "_").Replace(key)
+}
+
+// EnsureNetworkTLSCerts ensures a stable CA exists and issues/reissues one
+// leaf certificate per network, keyed by the map key (typically the IP the
+// server listens on for that network). Each leaf cert's SAN list contains
+// only that network's own hostnames/IP — never another network's — so
+// adding, removing, or renaming one network never forces regeneration of
+// another network's cert.
 //
 // The CA is intentionally kept stable across SAN changes so that phones only
-// need to import it once. Only the server cert (signed by the stable CA) is
-// replaced when hostnames change — the CA file on disk is never overwritten
-// unless it is missing or within 30 days of expiry.
-func EnsureTLSCerts(hostnames []string) (*TLSPaths, error) {
+// need to import it once. Leaf certs (signed by the stable CA) are replaced
+// only when their own network's SANs change or they near expiry — the CA
+// file on disk is never overwritten unless it is missing or within 30 days
+// of expiry.
+func EnsureNetworkTLSCerts(networks map[string][]string) (caFile string, certs map[string]*NetworkCert, err error) {
 	configDir, err := config.GetConfigDir()
 	if err != nil {
-		return nil, fmt.Errorf("get config dir: %w", err)
+		return "", nil, fmt.Errorf("get config dir: %w", err)
 	}
-
 	if err := os.MkdirAll(configDir, 0700); err != nil {
-		return nil, fmt.Errorf("create config dir: %w", err)
+		return "", nil, fmt.Errorf("create config dir: %w", err)
 	}
-
-	paths := &TLSPaths{
-		CertFile: filepath.Join(configDir, certFileName),
-		KeyFile:  filepath.Join(configDir, keyFileName),
-		CAFile:   filepath.Join(configDir, caFileName),
-	}
-	hashFile := filepath.Join(configDir, certHashFileName)
+	caFile = filepath.Join(configDir, caFileName)
 
 	// Step 1: ensure a stable CA (only regenerate if absent or near expiry).
-	caKey, caCert, caChanged, err := ensureCA(paths.CAFile)
+	caKey, caCert, caChanged, err := ensureCA(caFile)
 	if err != nil {
-		return nil, fmt.Errorf("ensure CA: %w", err)
+		return "", nil, fmt.Errorf("ensure CA: %w", err)
 	}
 
-	// Step 2: reuse the server cert if SANs and expiry are still valid AND the CA
-	// has not been rotated. If the CA changed, the existing server cert is no longer
-	// trusted by clients that imported the new CA, so force regeneration.
-	if caChanged {
-		_ = os.Remove(hashFile) // invalidate cached SAN hash so certCurrent returns false
-		log.Info("tls: CA rotated, forcing server certificate regeneration")
-	}
-	want := sanHash(hostnames)
-	if certCurrent(paths.CertFile, hashFile, want) {
-		log.Info("tls: reusing existing certificate", "cert", paths.CertFile)
-		return paths, nil
+	certs = make(map[string]*NetworkCert, len(networks))
+	for key, sans := range networks {
+		certFile := filepath.Join(configDir, networkCertFileName(key))
+		keyFile := filepath.Join(configDir, networkKeyFileName(key))
+		hashFile := filepath.Join(configDir, networkHashFileName(key))
+
+		// If the CA was rotated, every leaf cert is now untrusted by clients
+		// that imported the new CA, so force regeneration of each network's cert.
+		if caChanged {
+			_ = os.Remove(hashFile)
+		}
+
+		want := sanHash(sans)
+		if certCurrent(certFile, hashFile, want) {
+			log.Info("tls: reusing existing certificate", "network", key, "cert", certFile)
+			cert, loadErr := tls.LoadX509KeyPair(certFile, keyFile)
+			if loadErr != nil {
+				return "", nil, fmt.Errorf("load cert for network %s: %w", key, loadErr)
+			}
+			certs[key] = &NetworkCert{Key: key, SANs: sans, Cert: cert}
+			continue
+		}
+
+		log.Info("tls: (re)issuing certificate for network", "network", key, "sans", sans)
+
+		certPEM, keyPEM, genErr := generateServerCert(caKey, caCert, sans)
+		if genErr != nil {
+			return "", nil, fmt.Errorf("generate cert for network %s: %w", key, genErr)
+		}
+		if err := os.WriteFile(certFile, certPEM, 0600); err != nil {
+			return "", nil, fmt.Errorf("write cert for network %s: %w", key, err)
+		}
+		if err := os.WriteFile(keyFile, keyPEM, 0600); err != nil {
+			return "", nil, fmt.Errorf("write key for network %s: %w", key, err)
+		}
+		if err := os.WriteFile(hashFile, []byte(want), 0600); err != nil {
+			return "", nil, fmt.Errorf("write cert hash for network %s: %w", key, err)
+		}
+
+		cert, pairErr := tls.X509KeyPair(certPEM, keyPEM)
+		if pairErr != nil {
+			return "", nil, fmt.Errorf("parse generated cert for network %s: %w", key, pairErr)
+		}
+		certs[key] = &NetworkCert{Key: key, SANs: sans, Cert: cert}
 	}
 
-	log.Info("tls: (re)issuing server certificate", "hostnames", hostnames)
+	log.Info("tls: CA certificate (import once on phones)", "ca", caFile)
+	return caFile, certs, nil
+}
 
-	certPEM, keyPEM, err := generateServerCert(caKey, caCert, hostnames)
-	if err != nil {
-		return nil, fmt.Errorf("generate server cert: %w", err)
+// GetCertificateByLocalAddr returns a tls.Config.GetCertificate callback that
+// selects the leaf certificate matching the local IP a connection was
+// accepted on. The server binds one listener across all interfaces, but each
+// network still only ever presents the certificate scoped to it.
+func GetCertificateByLocalAddr(certs map[string]*NetworkCert) func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
+	return func(chi *tls.ClientHelloInfo) (*tls.Certificate, error) {
+		if chi.Conn != nil {
+			if host, _, err := net.SplitHostPort(chi.Conn.LocalAddr().String()); err == nil {
+				if nc, ok := certs[host]; ok {
+					return &nc.Cert, nil
+				}
+			}
+		}
+		for _, nc := range certs {
+			return &nc.Cert, nil
+		}
+		return nil, fmt.Errorf("no TLS certificate available")
 	}
-	if err := os.WriteFile(paths.CertFile, certPEM, 0644); err != nil {
-		return nil, fmt.Errorf("write cert: %w", err)
-	}
-	if err := os.WriteFile(paths.KeyFile, keyPEM, 0600); err != nil {
-		return nil, fmt.Errorf("write key: %w", err)
-	}
-	if err := os.WriteFile(hashFile, []byte(want), 0644); err != nil {
-		return nil, fmt.Errorf("write cert hash: %w", err)
-	}
-
-	log.Info("tls: certificate written", "cert", paths.CertFile)
-	log.Info("tls: CA certificate (import once on phones)", "ca", paths.CAFile)
-	return paths, nil
 }
 
 // ensureCA loads the CA from disk if it exists and is not nearing expiry.
@@ -128,7 +169,7 @@ func ensureCA(caFile string) (caKey *ecdsa.PrivateKey, caCert *x509.Certificate,
 	if err != nil {
 		return nil, nil, false, err
 	}
-	if err := os.WriteFile(caFile, caCertPEM, 0644); err != nil {
+	if err := os.WriteFile(caFile, caCertPEM, 0600); err != nil {
 		return nil, nil, false, fmt.Errorf("write CA cert: %w", err)
 	}
 
@@ -146,6 +187,8 @@ func ensureCA(caFile string) (caKey *ecdsa.PrivateKey, caCert *x509.Certificate,
 
 // loadCA reads the CA cert and key from disk. Returns (nil, nil, false) on any error.
 func loadCA(caFile, caKeyFile string) (*ecdsa.PrivateKey, *x509.Certificate, bool) {
+	// #nosec G304 -- caFile is configDir+caFileName, built from config.GetConfigDir() and a
+	// package constant; never derived from network/RPC input.
 	certData, err := os.ReadFile(caFile)
 	if err != nil {
 		return nil, nil, false
@@ -159,6 +202,8 @@ func loadCA(caFile, caKeyFile string) (*ecdsa.PrivateKey, *x509.Certificate, boo
 		return nil, nil, false
 	}
 
+	// #nosec G304 -- caKeyFile is configDir+caKeyFileName, same trusted-internal-path
+	// construction as caFile above.
 	keyData, err := os.ReadFile(caKeyFile)
 	if err != nil {
 		return nil, nil, false
@@ -175,18 +220,6 @@ func loadCA(caFile, caKeyFile string) (*ecdsa.PrivateKey, *x509.Certificate, boo
 	return caKey, caCert, true
 }
 
-// LoadTLSConfig returns a *tls.Config from the given certificate files.
-func LoadTLSConfig(certFile, keyFile string) (*tls.Config, error) {
-	cert, err := tls.LoadX509KeyPair(certFile, keyFile)
-	if err != nil {
-		return nil, fmt.Errorf("load key pair: %w", err)
-	}
-	return &tls.Config{
-		Certificates: []tls.Certificate{cert},
-		MinVersion:   tls.VersionTLS12,
-	}, nil
-}
-
 // sanHash returns a stable hex hash of the sorted hostname list. Any change to
 // the set of hostnames produces a different hash, triggering regeneration.
 func sanHash(hostnames []string) string {
@@ -201,12 +234,17 @@ func sanHash(hostnames []string) string {
 // the stored SAN hash matches want.
 func certCurrent(certFile, hashFile, want string) bool {
 	// Check stored hash first — cheapest test.
+	// #nosec G304 -- hashFile is configDir+networkHashFileName(key); key is a
+	// locally-detected LAN IP from detectLANIPs() in main.go, never network/RPC input,
+	// and is filename-sanitized by sanitizeKey before use.
 	stored, err := os.ReadFile(hashFile)
 	if err != nil || strings.TrimSpace(string(stored)) != want {
 		return false
 	}
 
 	// Check cert expiry.
+	// #nosec G304 -- certFile is configDir+networkCertFileName(key), same trusted,
+	// sanitized-key construction as hashFile above.
 	data, err := os.ReadFile(certFile)
 	if err != nil {
 		return false
@@ -261,6 +299,21 @@ func generateServerCert(caKey *ecdsa.PrivateKey, caCert *x509.Certificate, hostn
 		return nil, nil, genErr
 	}
 
+	// RFC 6125 / browser hostname validation matches a literal IP address
+	// against the certificate's iPAddress SAN entries only, never its dNSName
+	// entries -- a dotted-decimal string stuffed into DNSNames (as this used
+	// to do for every entry) is silently ignored when the client connects by
+	// IP, causing a hostname-mismatch error.
+	var dnsNames []string
+	var ipAddrs []net.IP
+	for _, h := range hostnames {
+		if ip := net.ParseIP(h); ip != nil {
+			ipAddrs = append(ipAddrs, ip)
+		} else {
+			dnsNames = append(dnsNames, h)
+		}
+	}
+
 	tmpl := &x509.Certificate{
 		SerialNumber: newSerial(),
 		Subject: pkix.Name{
@@ -270,7 +323,8 @@ func generateServerCert(caKey *ecdsa.PrivateKey, caCert *x509.Certificate, hostn
 		NotBefore:   time.Now().Add(-time.Hour),
 		NotAfter:    time.Now().Add(2 * 365 * 24 * time.Hour),
 		KeyUsage:    x509.KeyUsageDigitalSignature,
-		DNSNames:    hostnames,
+		DNSNames:    dnsNames,
+		IPAddresses: ipAddrs,
 		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 	}
 

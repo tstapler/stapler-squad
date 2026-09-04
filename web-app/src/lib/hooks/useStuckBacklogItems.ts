@@ -1,6 +1,16 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  createContext,
+  createElement,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import { createClient } from "@connectrpc/connect";
 import { create } from "@bufbuild/protobuf";
 import { timestampFromDate } from "@bufbuild/protobuf/wkt";
@@ -28,8 +38,13 @@ export interface UseStuckBacklogItemsReturn {
   snooze: (itemId: string, reason: StuckReason, until: Date) => Promise<boolean>;
   /** Clears remediation_attempts/next_remediation_at/notified_at on a single open row. */
   resetRemediation: (itemId: string, reason: StuckReason) => Promise<boolean>;
-  /** Resets every open row hitting the attempt cap (parked); returns the count reset. */
-  bulkResetParkedRemediation: () => Promise<number>;
+  /**
+   * Resets every open row hitting the attempt cap (parked); returns the
+   * count reset. An optional `reason` scopes the reset to just that
+   * StuckReason's parked rows, leaving every other reason's parked rows
+   * untouched — omit it for the existing "every reason" behavior.
+   */
+  bulkResetParkedRemediation: (reason?: StuckReason) => Promise<number>;
   /**
    * Immediately runs the reason's remediation action, bypassing only the
    * backoff timer — still subject to the 5-attempt cap and the wrapped
@@ -51,9 +66,17 @@ export interface UseStuckBacklogItemsReturn {
  * On a fetch error, the previous `items` are retained (never blanked) and
  * `error` is populated so the UI can show a "may be out of date" banner
  * rather than a false-confidence empty list (design/ux.md Surface 6).
+ *
+ * `enabled=false` skips the fetch+poll effect entirely (state stays at its
+ * initial empty/loading values) — used by the public `useStuckBacklogItems`
+ * hook below to disable this instance's own polling when a
+ * `StuckBacklogItemsProvider` ancestor already owns the single shared poll
+ * (research/pitfalls.md #5: StuckItemsSection and StuckNavBadge previously
+ * ran two independent 60s pollers that could disagree for up to a minute).
  */
-export function useStuckBacklogItems(
-  pollIntervalMs: number = DEFAULT_POLL_INTERVAL_MS
+function useStuckBacklogItemsImpl(
+  pollIntervalMs: number,
+  enabled: boolean
 ): UseStuckBacklogItemsReturn {
   const [items, setItems] = useState<StuckBacklogItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -88,12 +111,13 @@ export function useStuckBacklogItems(
   }, [client]);
 
   useEffect(() => {
+    if (!enabled) return;
     fetchItems();
     const interval = setInterval(() => {
       if (!document.hidden) fetchItems();
     }, pollIntervalMs);
     return () => clearInterval(interval);
-  }, [fetchItems, pollIntervalMs]);
+  }, [enabled, fetchItems, pollIntervalMs]);
 
   const snooze = useCallback(
     async (itemId: string, reason: StuckReason, until: Date): Promise<boolean> => {
@@ -133,11 +157,12 @@ export function useStuckBacklogItems(
     [client, fetchItems]
   );
 
-  const bulkResetParkedRemediation = useCallback(async (): Promise<number> => {
+  const bulkResetParkedRemediation = useCallback(async (reason?: StuckReason): Promise<number> => {
     try {
       const req = create(BulkResetStuckRemediationRequestSchema, {
         onlyParked: true,
         onlyParkedExplicitlySet: true,
+        ...(reason !== undefined ? { reason } : {}),
       });
       const res = await client.bulkResetStuckRemediation(req);
       if (res.resetCount > 0) {
@@ -173,4 +198,34 @@ export function useStuckBacklogItems(
     bulkResetParkedRemediation,
     triggerRemediationNow,
   };
+}
+
+const StuckBacklogItemsContext = createContext<UseStuckBacklogItemsReturn | null>(null);
+
+/**
+ * Mount once, high in the tree (Providers.tsx) — every descendant calling
+ * `useStuckBacklogItems()` then shares this single poll instead of each
+ * mounting its own, closing the "two independently-polled copies can
+ * disagree for up to a minute" gap (research/pitfalls.md #5).
+ */
+export function StuckBacklogItemsProvider({ children }: { children: ReactNode }) {
+  const value = useStuckBacklogItemsImpl(DEFAULT_POLL_INTERVAL_MS, true);
+  return createElement(StuckBacklogItemsContext.Provider, { value }, children);
+}
+
+/**
+ * Public hook — unchanged name/shape so every existing call site and every
+ * existing `jest.mock("@/lib/hooks/useStuckBacklogItems", ...)` keeps working
+ * unmodified. When called under a `StuckBacklogItemsProvider`, returns the
+ * shared polled value; otherwise falls back to running its own standalone
+ * poll (e.g. a test rendering a consumer with no provider wrapper).
+ */
+export function useStuckBacklogItems(
+  pollIntervalMs: number = DEFAULT_POLL_INTERVAL_MS
+): UseStuckBacklogItemsReturn {
+  const ctx = useContext(StuckBacklogItemsContext);
+  // Always called (Rules of Hooks) — `enabled: ctx === null` just stops it
+  // from fetching/polling once a provider ancestor already owns that.
+  const standalone = useStuckBacklogItemsImpl(pollIntervalMs, ctx === null);
+  return ctx ?? standalone;
 }

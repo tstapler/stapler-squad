@@ -2,13 +2,12 @@ package session
 
 import (
 	"context"
-	"fmt"
-	"os"
 	"path/filepath"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -17,6 +16,7 @@ import (
 
 // TestEntRepository_CreateAndGet tests basic create and get operations
 func TestEntRepository_CreateAndGet(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := createTestEntRepository(t)
 	defer cleanup()
 
@@ -44,6 +44,7 @@ func TestEntRepository_CreateAndGet(t *testing.T) {
 
 // TestEntRepository_CreateDuplicate tests duplicate title handling
 func TestEntRepository_CreateDuplicate(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := createTestEntRepository(t)
 	defer cleanup()
 
@@ -62,6 +63,7 @@ func TestEntRepository_CreateDuplicate(t *testing.T) {
 
 // TestEntRepository_Update tests updating an existing session
 func TestEntRepository_Update(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := createTestEntRepository(t)
 	defer cleanup()
 
@@ -91,6 +93,7 @@ func TestEntRepository_Update(t *testing.T) {
 
 // TestEntRepository_Delete tests session deletion
 func TestEntRepository_Delete(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := createTestEntRepository(t)
 	defer cleanup()
 
@@ -110,8 +113,38 @@ func TestEntRepository_Delete(t *testing.T) {
 	assert.Error(t, err)
 }
 
+func TestEntRepository_Delete_WithShells(t *testing.T) {
+	t.Parallel()
+	repo, cleanup := createTestEntRepository(t)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	session := createTestSession("delete-with-shells-test")
+	err := repo.Create(ctx, session)
+	require.NoError(t, err)
+
+	_, err = repo.CreateShell(ctx, session.Title, ShellData{
+		ID:              uuid.NewString(),
+		Name:            "shell-1",
+		Command:         "bash",
+		TmuxSessionName: "delete-with-shells-test-shell-1",
+		OrderIndex:      0,
+	})
+	require.NoError(t, err)
+
+	// Delete session — must not fail with a FOREIGN KEY constraint error even
+	// though a Shell row (Shell.session edge is Required()) still references it.
+	err = repo.Delete(ctx, session.Title)
+	require.NoError(t, err)
+
+	_, err = repo.Get(ctx, session.Title)
+	assert.Error(t, err)
+}
+
 // TestEntRepository_List tests listing all sessions
 func TestEntRepository_List(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := createTestEntRepository(t)
 	defer cleanup()
 
@@ -134,6 +167,7 @@ func TestEntRepository_List(t *testing.T) {
 
 // TestEntRepository_ListByStatus tests filtering sessions by status
 func TestEntRepository_ListByStatus(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := createTestEntRepository(t)
 	defer cleanup()
 
@@ -165,6 +199,7 @@ func TestEntRepository_ListByStatus(t *testing.T) {
 
 // TestEntRepository_Tags tests tag operations
 func TestEntRepository_Tags(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := createTestEntRepository(t)
 	defer cleanup()
 
@@ -191,6 +226,7 @@ func TestEntRepository_Tags(t *testing.T) {
 
 // TestEntRepository_Worktree tests worktree persistence
 func TestEntRepository_Worktree(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := createTestEntRepository(t)
 	defer cleanup()
 
@@ -217,8 +253,192 @@ func TestEntRepository_Worktree(t *testing.T) {
 	assert.Equal(t, session.Worktree.BranchName, retrieved.Worktree.BranchName)
 }
 
+// TestEntRepository_ListWithOptions_RespectsLoadWorktree verifies that
+// ListWithOptions honors LoadOptions.LoadWorktree instead of always
+// eager-loading every edge regardless of the requested options.
+func TestEntRepository_ListWithOptions_RespectsLoadWorktree(t *testing.T) {
+	t.Parallel()
+	repo, cleanup := createTestEntRepository(t)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	session := createTestSession("list-with-options-worktree")
+	session.Worktree = GitWorktreeData{
+		RepoPath:      "/path/to/repo",
+		WorktreePath:  "/path/to/worktree",
+		SessionName:   "test-session",
+		BranchName:    "feature-branch",
+		BaseCommitSHA: "abc123",
+	}
+
+	err := repo.Create(ctx, session)
+	require.NoError(t, err)
+
+	// LoadMinimal should skip worktree loading entirely.
+	minimal, err := repo.ListWithOptions(ctx, LoadMinimal)
+	require.NoError(t, err)
+	require.Len(t, minimal, 1)
+	assert.Equal(t, GitWorktreeData{}, minimal[0].Worktree)
+
+	// LoadOptions{LoadWorktree: true} should load it.
+	full, err := repo.ListWithOptions(ctx, LoadOptions{LoadWorktree: true})
+	require.NoError(t, err)
+	require.Len(t, full, 1)
+	assert.Equal(t, session.Worktree.RepoPath, full[0].Worktree.RepoPath)
+	assert.Equal(t, session.Worktree.WorktreePath, full[0].Worktree.WorktreePath)
+	assert.Equal(t, session.Worktree.BranchName, full[0].Worktree.BranchName)
+}
+
+// TestEntRepository_ListWithOptions_RespectsLoadTags verifies that
+// ListWithOptions only loads session tags when LoadOptions.LoadTags is set.
+func TestEntRepository_ListWithOptions_RespectsLoadTags(t *testing.T) {
+	t.Parallel()
+	repo, cleanup := createTestEntRepository(t)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	session := createTestSession("list-with-options-tags")
+	session.Tags = []string{"backend", "urgent"}
+
+	err := repo.Create(ctx, session)
+	require.NoError(t, err)
+
+	minimal, err := repo.ListWithOptions(ctx, LoadMinimal)
+	require.NoError(t, err)
+	require.Len(t, minimal, 1)
+	assert.Empty(t, minimal[0].Tags)
+
+	full, err := repo.ListWithOptions(ctx, LoadOptions{LoadTags: true})
+	require.NoError(t, err)
+	require.Len(t, full, 1)
+	assert.ElementsMatch(t, session.Tags, full[0].Tags)
+}
+
+// TestEntRepository_ListWithOptions_RespectsLoadDiffStats verifies that
+// ListWithOptions only loads diff stats when LoadOptions.LoadDiffStats (or
+// LoadDiffContent) is set.
+func TestEntRepository_ListWithOptions_RespectsLoadDiffStats(t *testing.T) {
+	t.Parallel()
+	repo, cleanup := createTestEntRepository(t)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	session := createTestSession("list-with-options-diffstats")
+	session.DiffStats = DiffStatsData{
+		Added:   100,
+		Removed: 50,
+		Content: "diff content here",
+	}
+
+	err := repo.Create(ctx, session)
+	require.NoError(t, err)
+
+	minimal, err := repo.ListWithOptions(ctx, LoadMinimal)
+	require.NoError(t, err)
+	require.Len(t, minimal, 1)
+	assert.Equal(t, DiffStatsData{}, minimal[0].DiffStats)
+
+	full, err := repo.ListWithOptions(ctx, LoadOptions{LoadDiffStats: true})
+	require.NoError(t, err)
+	require.Len(t, full, 1)
+	assert.Equal(t, session.DiffStats.Added, full[0].DiffStats.Added)
+	assert.Equal(t, session.DiffStats.Removed, full[0].DiffStats.Removed)
+	assert.Equal(t, session.DiffStats.Content, full[0].DiffStats.Content)
+}
+
+// TestEntRepository_FindByIDWithOptions covers the indexed by-UUID-or-title lookup
+// that replaced Storage.FindInstanceDataByID's previous ListInstanceData()-then-
+// linear-scan implementation (see FindByIDWithOptions's doc comment for the CPU
+// profiling finding that motivated this).
+func TestEntRepository_FindByIDWithOptions(t *testing.T) {
+	t.Parallel()
+	repo, cleanup := createTestEntRepository(t)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	session := createTestSession("find-by-id-title")
+	session.UUID = "find-by-id-uuid-123"
+	require.NoError(t, repo.Create(ctx, session))
+
+	t.Run("matches by title", func(t *testing.T) {
+		t.Parallel()
+		found, err := repo.FindByIDWithOptions(ctx, "find-by-id-title", LoadMinimal)
+		require.NoError(t, err)
+		assert.Equal(t, "find-by-id-title", found.Title)
+	})
+
+	t.Run("matches by UUID", func(t *testing.T) {
+		t.Parallel()
+		found, err := repo.FindByIDWithOptions(ctx, "find-by-id-uuid-123", LoadMinimal)
+		require.NoError(t, err)
+		assert.Equal(t, "find-by-id-title", found.Title)
+	})
+
+	t.Run("returns ErrInstanceDataNotFound when no match", func(t *testing.T) {
+		t.Parallel()
+		found, err := repo.FindByIDWithOptions(ctx, "no-such-session", LoadMinimal)
+		require.ErrorIs(t, err, ErrInstanceDataNotFound)
+		assert.Nil(t, found)
+	})
+
+	// uuid has no uniqueness constraint (Optional().Default("")), so an empty id must
+	// be rejected explicitly rather than falling through to session.UUID("") and
+	// matching an arbitrary row that has never been assigned a UUID.
+	t.Run("returns ErrInstanceDataNotFound for empty id rather than matching an unassigned-UUID row", func(t *testing.T) {
+		t.Parallel()
+		found, err := repo.FindByIDWithOptions(ctx, "", LoadMinimal)
+		require.ErrorIs(t, err, ErrInstanceDataNotFound)
+		assert.Nil(t, found)
+	})
+}
+
+// TestEntRepository_ListWithOptions_RespectsLoadClaudeSession verifies that
+// ListWithOptions only loads Claude session data (and its metadata) when
+// LoadOptions.LoadClaudeSession is set.
+func TestEntRepository_ListWithOptions_RespectsLoadClaudeSession(t *testing.T) {
+	t.Parallel()
+	repo, cleanup := createTestEntRepository(t)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	session := createTestSession("list-with-options-claude-session")
+	session.ClaudeSession = ClaudeSessionData{
+		ConversationUUID: "claude-123",
+		SquadSessionID:   "conv-456",
+		ProjectName:      "test-project",
+		LastAttached:     time.Now(),
+		Settings: ClaudeSettings{
+			AutoReattach: true,
+		},
+		Metadata: map[string]string{
+			"key1": "value1",
+		},
+	}
+
+	err := repo.Create(ctx, session)
+	require.NoError(t, err)
+
+	minimal, err := repo.ListWithOptions(ctx, LoadMinimal)
+	require.NoError(t, err)
+	require.Len(t, minimal, 1)
+	assert.Empty(t, minimal[0].ClaudeSession.ConversationUUID)
+
+	full, err := repo.ListWithOptions(ctx, LoadOptions{LoadClaudeSession: true})
+	require.NoError(t, err)
+	require.Len(t, full, 1)
+	assert.Equal(t, session.ClaudeSession.ConversationUUID, full[0].ClaudeSession.ConversationUUID)
+	assert.Equal(t, session.ClaudeSession.SquadSessionID, full[0].ClaudeSession.SquadSessionID)
+	assert.Equal(t, session.ClaudeSession.Metadata["key1"], full[0].ClaudeSession.Metadata["key1"])
+}
+
 // TestEntRepository_DiffStats tests diff stats persistence
 func TestEntRepository_DiffStats(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := createTestEntRepository(t)
 	defer cleanup()
 
@@ -245,6 +465,7 @@ func TestEntRepository_DiffStats(t *testing.T) {
 
 // TestEntRepository_ClaudeSession tests Claude session persistence
 func TestEntRepository_ClaudeSession(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := createTestEntRepository(t)
 	defer cleanup()
 
@@ -284,6 +505,7 @@ func TestEntRepository_ClaudeSession(t *testing.T) {
 
 // TestEntRepository_UpdateTimestamps tests efficient timestamp updates
 func TestEntRepository_UpdateTimestamps(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := createTestEntRepository(t)
 	defer cleanup()
 
@@ -313,6 +535,7 @@ func TestEntRepository_UpdateTimestamps(t *testing.T) {
 // TestEntRepository_UpdateTimestamps_NotFound verifies that UpdateTimestamps returns an
 // error when the session title does not exist (n==0 from the direct UPDATE).
 func TestEntRepository_UpdateTimestamps_NotFound(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := createTestEntRepository(t)
 	defer cleanup()
 
@@ -327,6 +550,7 @@ func TestEntRepository_UpdateTimestamps_NotFound(t *testing.T) {
 // restart" bug: the Ent schema previously had no uuid column, so every restart
 // assigned a new random UUID, invalidating all client-stored session IDs.
 func TestEntRepository_UUID_PersistAndLoad(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := createTestEntRepository(t)
 	defer cleanup()
 
@@ -345,6 +569,7 @@ func TestEntRepository_UUID_PersistAndLoad(t *testing.T) {
 // TestEntRepository_UUID_UpdatePreservesUUID verifies that updating a session
 // preserves (or overwrites) the UUID field correctly.
 func TestEntRepository_UUID_UpdatePreservesUUID(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := createTestEntRepository(t)
 	defer cleanup()
 
@@ -399,6 +624,7 @@ func TestEntRepository_UUID_SurvivesDBReopen(t *testing.T) {
 // created without a UUID (legacy rows that pre-date UUID assignment) are
 // listed correctly with an empty UUID rather than causing errors.
 func TestEntRepository_UUID_EmptyDefaultDoesNotBreakList(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := createTestEntRepository(t)
 	defer cleanup()
 
@@ -433,6 +659,7 @@ func TestEntRepository_UUID_EmptyDefaultDoesNotBreakList(t *testing.T) {
 // 2026-05-30 profiling session). An ent query interceptor counts any SELECT fired
 // against the Session table; the count must be 0 after the call.
 func TestUpdateReviewQueueState_SingleStatement(t *testing.T) {
+	t.Parallel()
 	repo, cleanup := createTestEntRepository(t)
 	defer cleanup()
 
@@ -464,32 +691,123 @@ func TestUpdateReviewQueueState_SingleStatement(t *testing.T) {
 	assert.False(t, updated.LastPromptDetected.IsZero())
 }
 
-func createTestEntRepository(t *testing.T) (*EntRepository, func()) {
-	// Create temporary database file with unique name using timestamp to avoid conflicts
-	tmpDir := t.TempDir()
-	// Use nanosecond timestamp to ensure uniqueness even for rapidly running tests
-	uniqueName := fmt.Sprintf("test-%d.db", time.Now().UnixNano())
-	dbPath := filepath.Join(tmpDir, uniqueName)
+// TestUpdateSessionMetadata_SingleStatement enforces that UpdateSessionMetadata issues a
+// single direct UPDATE and does NOT perform a SELECT first, and that it does not create a
+// worktree/diffstats/tags/claude_session row as a side effect (unlike the full Update path).
+func TestUpdateSessionMetadata_SingleStatement(t *testing.T) {
+	t.Parallel()
+	repo, cleanup := createTestEntRepository(t)
+	defer cleanup()
 
-	t.Logf("Creating test repository with database at: %s", dbPath)
+	ctx := context.Background()
+	sess := createTestSession("metadata-test")
+	require.NoError(t, repo.Create(ctx, sess))
 
-	repo, err := NewEntRepository(WithDatabasePath(dbPath))
+	var selectCount int32
+	repo.client.Intercept(ssent.InterceptFunc(func(next ssent.Querier) ssent.Querier {
+		return ssent.QuerierFunc(func(ctx context.Context, q ssent.Query) (ssent.Value, error) {
+			atomic.AddInt32(&selectCount, 1)
+			return next.Query(ctx, q)
+		})
+	}))
+
+	newTitle := "metadata-test-renamed"
+	category := "urgent"
+	note := "left this waiting on CI"
+	workingDir := "/tmp/new-workdir"
+	err := repo.UpdateSessionMetadata(ctx, sess.Title, &newTitle, &category, &note, &workingDir)
 	require.NoError(t, err)
 
-	// Verify database is empty
+	got := atomic.LoadInt32(&selectCount)
+	require.Equal(t, int32(0), got,
+		"UpdateSessionMetadata must issue a single UPDATE, not SELECT+UPDATE (got %d SELECT queries)", got)
+
+	updated, err := repo.Get(ctx, newTitle)
+	require.NoError(t, err)
+	assert.Equal(t, newTitle, updated.Title)
+	assert.Equal(t, category, updated.Category)
+	assert.Equal(t, note, updated.Note)
+	assert.Equal(t, workingDir, updated.WorkingDir)
+	assert.Empty(t, updated.Worktree.RepoPath, "narrow metadata update must not create a worktree row")
+	assert.Zero(t, updated.DiffStats.Added+updated.DiffStats.Removed, "narrow metadata update must not touch diff stats")
+	assert.Empty(t, updated.Tags, "narrow metadata update must not touch tags")
+	assert.Empty(t, updated.ClaudeSession.ConversationUUID, "narrow metadata update must not create a claude_session row")
+}
+
+// TestUpdateSessionMetadata_ClearsNoteToEmpty verifies that passing a non-nil empty-string
+// note clears the stored note rather than being skipped as "unset" — matching Update's
+// unconditional SetNote(data.Note) semantics for the same reason (an empty note is a
+// meaningful cleared state).
+func TestUpdateSessionMetadata_ClearsNoteToEmpty(t *testing.T) {
+	t.Parallel()
+	repo, cleanup := createTestEntRepository(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	sess := createTestSession("note-clear-test")
+	sess.Note = "stale reminder"
+	require.NoError(t, repo.Create(ctx, sess))
+
+	empty := ""
+	err := repo.UpdateSessionMetadata(ctx, sess.Title, nil, nil, &empty, nil)
+	require.NoError(t, err)
+
+	updated, err := repo.Get(ctx, sess.Title)
+	require.NoError(t, err)
+	assert.Equal(t, "", updated.Note, "note must be cleared to empty, not left stale")
+}
+
+// TestUpdateSessionMetadata_NilFieldsLeaveExistingValuesUntouched verifies that a nil
+// pointer for category/workingDir leaves the existing DB value untouched — the guarded
+// "not provided" semantics the four sibling narrow-update methods all share.
+func TestUpdateSessionMetadata_NilFieldsLeaveExistingValuesUntouched(t *testing.T) {
+	t.Parallel()
+	repo, cleanup := createTestEntRepository(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	sess := createTestSession("guarded-fields-test")
+	sess.Category = "original-category"
+	sess.WorkingDir = "/original/workdir"
+	require.NoError(t, repo.Create(ctx, sess))
+
+	note := "only the note changed"
+	err := repo.UpdateSessionMetadata(ctx, sess.Title, nil, nil, &note, nil)
+	require.NoError(t, err)
+
+	updated, err := repo.Get(ctx, sess.Title)
+	require.NoError(t, err)
+	assert.Equal(t, note, updated.Note)
+	assert.Equal(t, "original-category", updated.Category, "category must be untouched when not part of the request")
+	assert.Equal(t, "/original/workdir", updated.WorkingDir, "working_dir must be untouched when not part of the request")
+}
+
+// TestUpdateSessionMetadata_SessionNotFound verifies the same not-found error shape as its
+// sibling narrow-update methods when the row doesn't exist.
+func TestUpdateSessionMetadata_SessionNotFound(t *testing.T) {
+	t.Parallel()
+	repo, cleanup := createTestEntRepository(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	note := "irrelevant"
+	err := repo.UpdateSessionMetadata(ctx, "does-not-exist", nil, nil, &note, nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "session not found")
+}
+
+// createTestEntRepository is a thin wrapper around NewTestEntRepository
+// (testing.go) kept so the ~90 existing `repo, cleanup := createTestEntRepository(t)`
+// call sites in this package don't need touching. NewTestEntRepository
+// already registers its own t.Cleanup, so the returned cleanup func is a
+// no-op retained only for call-site compatibility.
+func createTestEntRepository(t *testing.T) (*EntRepository, func()) {
+	repo := NewTestEntRepository(t)
+
 	ctx := context.Background()
 	sessions, err := repo.List(ctx)
 	require.NoError(t, err, "Failed to list sessions")
 	require.Empty(t, sessions, "Database should be empty but has %d sessions", len(sessions))
 
-	cleanup := func() {
-		// Close the database connection
-		repo.Close()
-		// Remove all SQLite files (main db + WAL files)
-		os.Remove(dbPath)
-		os.Remove(dbPath + "-wal")
-		os.Remove(dbPath + "-shm")
-	}
-
-	return repo, cleanup
+	return repo, func() {}
 }

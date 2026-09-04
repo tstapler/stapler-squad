@@ -2,112 +2,52 @@ import React from "react";
 import { render, screen, fireEvent } from "@testing-library/react";
 import { SessionList } from "../SessionList";
 import type { Session } from "@/gen/session/v1/types_pb";
-import type { Timestamp } from "@bufbuild/protobuf/wkt";
 import { timestampNow } from "@bufbuild/protobuf/wkt";
+import { makeSession } from "./sessionListTestFixtures";
 
 // Heavy dependency mocks for SessionList — mirrors SessionList.mobile.test.tsx, except
 // ActionBar renders its children (the mobile test mocks it to null, which hides the
 // "Show Archived" checkbox under test here since it lives inside ActionBar).
 
 jest.mock("@connectrpc/connect", () => ({
-  createClient: jest.fn(() => ({})),
+  createClient: jest.fn(() => ({
+    getInsightsSummary: jest.fn(async () => ({ sessions: [] })),
+    watchInsights: async function* () {},
+  })),
 }));
 
-jest.mock("@connectrpc/connect-web", () => ({
-  createConnectTransport: jest.fn(() => ({ unary: jest.fn(), stream: jest.fn() })),
-}));
+jest.mock("@connectrpc/connect-web", () => require("./sessionListTestFixtures").mockConnectWeb());
 
-jest.mock("@/lib/contexts/ReviewQueueContext", () => ({
-  useReviewQueueContext: () => ({ items: [] }),
-}));
+jest.mock("@/lib/contexts/ReviewQueueContext", () => require("./sessionListTestFixtures").mockReviewQueueContext());
 
-jest.mock("@/lib/contexts/NotificationContext", () => ({
-  useNotifications: () => ({
-    showUndoToast: jest.fn(() => "toast-id"),
-    removeNotification: jest.fn(),
-    addNotification: jest.fn(),
-  }),
-}));
+jest.mock("@/lib/contexts/NotificationContext", () => require("./sessionListTestFixtures").mockNotificationContext());
 
-jest.mock("@/lib/store", () => ({
-  useAppSelector: jest.fn(() => ({})),
-}));
+jest.mock("@/lib/store", () => require("./sessionListTestFixtures").mockStore());
 
-jest.mock("@/lib/store/sessionsSlice", () => ({
-  selectDetectedStatusMap: jest.fn(),
-}));
+jest.mock("@/lib/store/sessionsSlice", () => require("./sessionListTestFixtures").mockSessionsSlice());
 
-jest.mock("../SessionCard", () => ({
-  SessionCard: ({ session }: { session: { title: string } }) => (
-    <div data-testid="session-card">{session.title}</div>
-  ),
-}));
+jest.mock("../SessionCard", () => require("./sessionListTestFixtures").mockSessionCard());
 
-jest.mock("../SessionRow", () => ({
-  SessionRow: ({ session }: { session: { title: string } }) => (
-    <div data-testid="session-row">{session.title}</div>
-  ),
-}));
+jest.mock("../SessionRow", () => require("./sessionListTestFixtures").mockSessionRow());
 
-jest.mock("../BulkActions", () => ({
-  BulkActions: () => null,
-}));
+jest.mock("../BulkActions", () => require("./sessionListTestFixtures").mockBulkActions());
 
-jest.mock("../TagEditor", () => ({
-  TagEditor: () => null,
-}));
+jest.mock("../TagEditor", () => require("./sessionListTestFixtures").mockTagEditor());
 
-jest.mock("@/components/ui/ActionBar", () => ({
-  ActionBar: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
-}));
+jest.mock("@/components/ui/ActionBar", () => require("./sessionListTestFixtures").mockActionBarPassthrough());
 
-jest.mock("@/components/ui/Modal", () => ({
-  Modal: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
-  ModalContent: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
-  ModalTitle: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
-  ModalFooter: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
-}));
+jest.mock("@/components/ui/Modal", () => require("./sessionListTestFixtures").mockModal());
 
-jest.mock("@/components/ui/AppLink", () => ({
-  AppLink: ({ href, children, ...rest }: React.AnchorHTMLAttributes<HTMLAnchorElement> & { href: string }) => (
-    <a href={href} {...rest}>{children}</a>
-  ),
-}));
+jest.mock("@/components/ui/AppLink", () => require("./sessionListTestFixtures").mockAppLink());
 
-jest.mock("@/lib/contexts/ApprovalsContext", () => ({
-  useApprovalsContext: () => ({ clearedSessions: new Set() }),
-}));
+jest.mock("@/lib/contexts/ApprovalsContext", () => require("./sessionListTestFixtures").mockApprovalsContext());
 
 // SessionList's row mode virtualizes with @tanstack/react-virtual, which measures a
 // real scroll container to decide the visible range — jsdom's zero-size layout means
 // it never renders any row. Replace it with a non-virtualized stand-in that renders
 // every item, matching the shape SessionList actually consumes (getTotalSize,
 // getVirtualItems, measureElement).
-jest.mock("@tanstack/react-virtual", () => ({
-  useVirtualizer: (opts: { count: number }) => ({
-    getTotalSize: () => opts.count * 50,
-    getVirtualItems: () =>
-      Array.from({ length: opts.count }, (_, index) => ({
-        index,
-        key: index,
-        start: index * 50,
-        size: 50,
-      })),
-    measureElement: () => undefined,
-  }),
-}));
-
-const makeSession = (id: string, title: string, archivedAt?: Timestamp): Partial<Session> => ({
-  id,
-  title,
-  status: 1 as Session["status"],
-  tags: [],
-  category: "",
-  path: "/tmp/session",
-  branch: "",
-  program: "claude",
-  archivedAt,
-});
+jest.mock("@tanstack/react-virtual", () => require("./sessionListTestFixtures").mockReactVirtual());
 
 beforeEach(() => {
   window.localStorage.clear();
@@ -117,7 +57,7 @@ describe("SessionList — show archived toggle", () => {
   it("SessionList_should_hideArchivedSessions_When_showArchivedIsOff", () => {
     const sessions = [
       makeSession("s1", "Active Session") as Session,
-      makeSession("s2", "Archived Session", timestampNow()) as Session,
+      makeSession("s2", "Archived Session", { archivedAt: timestampNow() }) as Session,
     ];
     render(<SessionList sessions={sessions} />);
 
@@ -128,7 +68,7 @@ describe("SessionList — show archived toggle", () => {
   it("SessionList_should_showArchivedSessions_When_toggleEnabled", () => {
     const sessions = [
       makeSession("s1", "Active Session") as Session,
-      makeSession("s2", "Archived Session", timestampNow()) as Session,
+      makeSession("s2", "Archived Session", { archivedAt: timestampNow() }) as Session,
     ];
     render(<SessionList sessions={sessions} />);
 

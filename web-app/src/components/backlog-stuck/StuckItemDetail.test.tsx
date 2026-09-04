@@ -15,6 +15,7 @@ function makeItem(overrides: Partial<StuckBacklogItem> = {}): StuckBacklogItem {
     prNumber: 148,
     prUrl: "https://github.com/tstapler/stapler-squad/pull/148",
     context: "PR #148 green & mergeable, unmerged for 3 days",
+    planArtifactsPath: "",
     ...overrides,
   } as StuckBacklogItem;
 }
@@ -126,6 +127,89 @@ describe("StuckItemDetail", () => {
     });
   });
 
+  describe("StuckItemDetail_should_showCurrentReworkCapOverride_When_ReasonIsReworkCap", () => {
+    it("shows 'Checking current override…' when reworkCapOverrideLoaded is false, even though currentReworkCapOverride is undefined", () => {
+      render(
+        <StuckItemDetail
+          item={makeItem({ reason: StuckReason.REWORK_CAP })}
+          currentReworkCapOverride={undefined}
+          reworkCapOverrideLoaded={false}
+        />
+      );
+      expect(screen.getByTestId("stuck-item-rework-cap-current").textContent).toBe(
+        "Checking current override…"
+      );
+    });
+
+    it("shows 'No override set (using global default)' when currentReworkCapOverride is undefined and reworkCapOverrideLoaded is true", () => {
+      render(
+        <StuckItemDetail
+          item={makeItem({ reason: StuckReason.REWORK_CAP })}
+          currentReworkCapOverride={undefined}
+          reworkCapOverrideLoaded={true}
+        />
+      );
+      expect(screen.getByTestId("stuck-item-rework-cap-current").textContent).toBe(
+        "No override set (using global default)"
+      );
+    });
+
+    it("shows 'Unlimited' when currentReworkCapOverride is explicitly 0 and loaded", () => {
+      render(
+        <StuckItemDetail
+          item={makeItem({ reason: StuckReason.REWORK_CAP })}
+          currentReworkCapOverride={0}
+          reworkCapOverrideLoaded={true}
+        />
+      );
+      expect(screen.getByTestId("stuck-item-rework-cap-current").textContent).toBe("Unlimited");
+    });
+
+    it("shows the explicit cap value when currentReworkCapOverride is a positive number and loaded", () => {
+      render(
+        <StuckItemDetail
+          item={makeItem({ reason: StuckReason.REWORK_CAP })}
+          currentReworkCapOverride={5}
+          reworkCapOverrideLoaded={true}
+        />
+      );
+      expect(screen.getByTestId("stuck-item-rework-cap-current").textContent).toBe("5 rounds");
+    });
+
+    it("pre-fills the rounds input with the current override when one is set", () => {
+      render(
+        <StuckItemDetail
+          item={makeItem({ reason: StuckReason.REWORK_CAP })}
+          onReworkCapOverride={jest.fn()}
+          currentReworkCapOverride={5}
+        />
+      );
+      expect(screen.getByTestId("stuck-item-rework-cap-rounds-input")).toHaveValue(5);
+    });
+
+    it("falls back to the default '3' pre-fill when currentReworkCapOverride is 0 (unlimited)", () => {
+      render(
+        <StuckItemDetail
+          item={makeItem({ reason: StuckReason.REWORK_CAP })}
+          onReworkCapOverride={jest.fn()}
+          currentReworkCapOverride={0}
+        />
+      );
+      expect(screen.getByTestId("stuck-item-rework-cap-rounds-input")).toHaveValue(3);
+    });
+
+    it("falls back to the default '3' pre-fill when currentReworkCapOverride is undefined", () => {
+      render(
+        <StuckItemDetail
+          item={makeItem({ reason: StuckReason.REWORK_CAP })}
+          onReworkCapOverride={jest.fn()}
+          currentReworkCapOverride={undefined}
+        />
+      );
+      expect(screen.getByTestId("stuck-item-rework-cap-rounds-input")).toHaveValue(3);
+    });
+  });
+
   describe("StuckItemDetail_should_offerOverrideControl_When_ReasonIsReworkCapAndHandlerProvided", () => {
     it("does not render the override form when no handler is provided", () => {
       render(<StuckItemDetail item={makeItem({ reason: StuckReason.REWORK_CAP })} />);
@@ -171,6 +255,59 @@ describe("StuckItemDetail", () => {
       fireEvent.click(screen.getByTestId("stuck-item-rework-cap-unlimited"));
 
       await waitFor(() => expect(screen.getByRole("alert")).toBeInTheDocument());
+    });
+  });
+
+  // CRITICAL #2 regression: currentReworkCapOverride is fetched by the
+  // parent (StuckItemsSection) *after* this component has already mounted —
+  // it resolves via a `rerender` with a new prop value, not at mount time.
+  // None of the tests above exercise that transition (they all mount with
+  // the value already resolved), so they never actually ran the sync effect
+  // in StuckItemDetail.tsx.
+  describe("StuckItemDetail_should_syncInputToResolvedOverride_When_ParentFetchResolvesAfterMount", () => {
+    it("re-syncs the input when currentReworkCapOverride transitions from undefined to a resolved positive value", () => {
+      const { rerender } = render(
+        <StuckItemDetail
+          item={makeItem({ reason: StuckReason.REWORK_CAP })}
+          onReworkCapOverride={jest.fn()}
+          currentReworkCapOverride={undefined}
+        />
+      );
+      expect(screen.getByTestId("stuck-item-rework-cap-rounds-input")).toHaveValue(3);
+
+      rerender(
+        <StuckItemDetail
+          item={makeItem({ reason: StuckReason.REWORK_CAP })}
+          onReworkCapOverride={jest.fn()}
+          currentReworkCapOverride={5}
+        />
+      );
+
+      expect(screen.getByTestId("stuck-item-rework-cap-rounds-input")).toHaveValue(5);
+    });
+
+    it("does not clobber a value the user already typed before the fetch resolves", () => {
+      const { rerender } = render(
+        <StuckItemDetail
+          item={makeItem({ reason: StuckReason.REWORK_CAP })}
+          onReworkCapOverride={jest.fn()}
+          currentReworkCapOverride={undefined}
+        />
+      );
+      const input = screen.getByTestId("stuck-item-rework-cap-rounds-input");
+      fireEvent.change(input, { target: { value: "10" } });
+      expect(input).toHaveValue(10);
+
+      // The parent's fetch resolves after the user has already edited the field.
+      rerender(
+        <StuckItemDetail
+          item={makeItem({ reason: StuckReason.REWORK_CAP })}
+          onReworkCapOverride={jest.fn()}
+          currentReworkCapOverride={5}
+        />
+      );
+
+      expect(screen.getByTestId("stuck-item-rework-cap-rounds-input")).toHaveValue(10);
     });
   });
 
@@ -228,8 +365,8 @@ describe("StuckItemDetail", () => {
     });
   });
 
-  describe("StuckItemDetail_should_offerApprovePlanControl_When_ReasonIsPlanNotApproved", () => {
-    it("renders explanatory copy for plan_not_approved", () => {
+  describe("StuckItemDetail_should_offerApprovePlanControl_When_ReasonIsPlanNotApprovedAndPlanExists", () => {
+    it("renders explanatory copy for plan_not_approved when a plan exists", () => {
       render(
         <StuckItemDetail
           item={makeItem({
@@ -237,6 +374,7 @@ describe("StuckItemDetail", () => {
             prNumber: 0,
             prUrl: "",
             context: "queued item blocked by DequeueNextQueuedItems' planning gate",
+            planArtifactsPath: "project_plans/foo/plan.md",
           })}
         />
       );
@@ -249,15 +387,23 @@ describe("StuckItemDetail", () => {
     });
 
     it("does not render the approve button when no handler is provided", () => {
-      render(<StuckItemDetail item={makeItem({ reason: StuckReason.PLAN_NOT_APPROVED })} />);
+      render(
+        <StuckItemDetail
+          item={makeItem({ reason: StuckReason.PLAN_NOT_APPROVED, planArtifactsPath: "plan.md" })}
+        />
+      );
       expect(screen.queryByTestId("stuck-item-approve-plan-form")).not.toBeInTheDocument();
     });
 
     it("calls onApprovePlan with the item id when 'Approve Plan' is clicked", async () => {
-      const onApprovePlan = jest.fn().mockResolvedValue(true);
+      const onApprovePlan = jest.fn().mockResolvedValue(undefined);
       render(
         <StuckItemDetail
-          item={makeItem({ reason: StuckReason.PLAN_NOT_APPROVED, itemId: "item-plan-1" })}
+          item={makeItem({
+            reason: StuckReason.PLAN_NOT_APPROVED,
+            itemId: "item-plan-1",
+            planArtifactsPath: "plan.md",
+          })}
           onApprovePlan={onApprovePlan}
         />
       );
@@ -266,17 +412,46 @@ describe("StuckItemDetail", () => {
       await waitFor(() => expect(onApprovePlan).toHaveBeenCalledWith("item-plan-1"));
     });
 
-    it("shows an error message when the approve call fails", async () => {
-      const onApprovePlan = jest.fn().mockResolvedValue(false);
+    it("shows the real backend error message when the approve call rejects", async () => {
+      const onApprovePlan = jest
+        .fn()
+        .mockRejectedValue(new Error("no plan artifacts found — run TriggerTriage first"));
       render(
         <StuckItemDetail
-          item={makeItem({ reason: StuckReason.PLAN_NOT_APPROVED })}
+          item={makeItem({ reason: StuckReason.PLAN_NOT_APPROVED, planArtifactsPath: "plan.md" })}
           onApprovePlan={onApprovePlan}
         />
       );
       fireEvent.click(screen.getByTestId("stuck-item-approve-plan"));
 
-      await waitFor(() => expect(screen.getByRole("alert")).toBeInTheDocument());
+      await waitFor(() =>
+        expect(screen.getByTestId("stuck-item-approve-plan-error").textContent).toBe(
+          "no plan artifacts found — run TriggerTriage first"
+        )
+      );
+    });
+  });
+
+  describe("StuckItemDetail_should_hideApproveAffordance_When_ReasonIsPlanNotApprovedButNoPlanExists", () => {
+    it("does not render the Approve Plan button or form when planArtifactsPath is empty", () => {
+      const onApprovePlan = jest.fn().mockResolvedValue(undefined);
+      render(
+        <StuckItemDetail
+          item={makeItem({ reason: StuckReason.PLAN_NOT_APPROVED, planArtifactsPath: "" })}
+          onApprovePlan={onApprovePlan}
+        />
+      );
+      expect(screen.queryByTestId("stuck-item-approve-plan-form")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("stuck-item-plan-not-approved-copy")).not.toBeInTheDocument();
+    });
+
+    it("renders a non-actionable explanatory message instead", () => {
+      render(
+        <StuckItemDetail
+          item={makeItem({ reason: StuckReason.PLAN_NOT_APPROVED, planArtifactsPath: "" })}
+        />
+      );
+      expect(screen.getByTestId("stuck-item-no-action-copy")).toBeInTheDocument();
     });
   });
 });

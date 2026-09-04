@@ -6,12 +6,22 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
+	"time"
 
 	"connectrpc.com/connect"
+	"github.com/tstapler/stapler-squad/executor/safeexec"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/internal/claudehooks"
 	"github.com/tstapler/stapler-squad/log"
 )
+
+// installHooksSubprocessTimeout bounds each `ssq-hooks install <target>`
+// subprocess spawned by InstallHooks. These are quick, local file-writing
+// operations (editing settings.json files) with no network I/O, so a
+// generous but bounded timeout prevents a hung subprocess from blocking the
+// RPC indefinitely.
+const installHooksSubprocessTimeout = 15 * time.Second
 
 // resolveSsqHooksBin returns the path to the ssq-hooks binary and whether it exists.
 // Preference: ~/.local/bin/ssq-hooks (where `make install` puts it), then $PATH.
@@ -55,6 +65,46 @@ func isExecutableFile(path string) bool {
 	return err == nil && !info.IsDir() && info.Mode()&0o111 != 0
 }
 
+func detectAgyStatus() bool {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return false
+	}
+	candidates := []string{
+		filepath.Join(home, ".gemini", "antigravity-cli", "hooks.json"),
+		filepath.Join(home, ".gemini", "config", "hooks.json"),
+	}
+	for _, c := range candidates {
+		// #nosec G304 -- c is one of a fixed, hardcoded set of home-dir-relative
+		// candidate paths above; never derived from network/RPC input.
+		raw, err := os.ReadFile(c)
+		if err == nil && strings.Contains(string(raw), "check --antigravity") {
+			return true
+		}
+	}
+	return false
+}
+
+func detectGeminiStatus() bool {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return false
+	}
+	candidates := []string{
+		filepath.Join(home, ".gemini", "settings.json"),
+		filepath.Join(home, ".gemini", "config.json"),
+	}
+	for _, c := range candidates {
+		// #nosec G304 -- c is one of a fixed, hardcoded set of home-dir-relative
+		// candidate paths above; never derived from network/RPC input.
+		raw, err := os.ReadFile(c)
+		if err == nil && strings.Contains(string(raw), "check --gemini") {
+			return true
+		}
+	}
+	return false
+}
+
 // hookStatus builds a GetHookStatusResponse from the global settings file and the
 // availability of the underlying binaries.
 func hookStatus() (*sessionv1.GetHookStatusResponse, error) {
@@ -73,6 +123,8 @@ func hookStatus() (*sessionv1.GetHookStatusResponse, error) {
 		NotificationsInstalled: st.NotificationsInstalled,
 		RulesAvailable:         rulesAvail,
 		NotificationsAvailable: notifyAvail,
+		AgyRulesInstalled:      detectAgyStatus(),
+		GeminiRulesInstalled:   detectGeminiStatus(),
 	}, nil
 }
 
@@ -91,11 +143,11 @@ func (s *SessionService) GetHookStatus(
 }
 
 // +api: hooks:install
-// InstallHooks installs the requested global hooks into ~/.claude/settings.json.
+// InstallHooks installs the requested global hooks into Claude, Antigravity, and Gemini settings.
 // A requested hook whose binary is unavailable is reported in messages with a
 // manual fallback rather than failing the whole call.
 func (s *SessionService) InstallHooks(
-	_ context.Context,
+	ctx context.Context,
 	req *connect.Request[sessionv1.InstallHooksRequest],
 ) (*connect.Response[sessionv1.InstallHooksResponse], error) {
 	settingsPath, err := claudehooks.DefaultGlobalSettingsPath()
@@ -111,9 +163,41 @@ func (s *SessionService) InstallHooks(
 				return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("install rules hook: %w", err))
 			}
 			log.Info("[InstallHooks] installed rules hook", "bin", bin)
-			messages = append(messages, "Rule enforcement hook installed.")
+			messages = append(messages, "Claude Code rule enforcement hook installed.")
 		} else {
 			messages = append(messages, "ssq-hooks binary not found — run `make install` first, then `ssq-hooks install claude`.")
+		}
+	}
+
+	if req.Msg.InstallAgyRules {
+		if bin, ok := resolveSsqHooksBin(); ok {
+			installCtx, cancel := context.WithTimeout(ctx, installHooksSubprocessTimeout)
+			defer cancel()
+			cmd := safeexec.CommandContext(installCtx, bin, "install", "agy")
+			output, err := cmd.CombinedOutput()
+			if err != nil {
+				return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("install agy hook: %w (%s)", err, strings.TrimSpace(string(output))))
+			}
+			log.Info("[InstallHooks] installed Antigravity CLI rules hook", "bin", bin)
+			messages = append(messages, "Antigravity CLI rule enforcement hook installed.")
+		} else {
+			messages = append(messages, "ssq-hooks binary not found — run `make install` first, then `ssq-hooks install agy`.")
+		}
+	}
+
+	if req.Msg.InstallGeminiRules {
+		if bin, ok := resolveSsqHooksBin(); ok {
+			installCtx, cancel := context.WithTimeout(ctx, installHooksSubprocessTimeout)
+			defer cancel()
+			cmd := safeexec.CommandContext(installCtx, bin, "install", "gemini")
+			output, err := cmd.CombinedOutput()
+			if err != nil {
+				return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("install gemini hook: %w (%s)", err, strings.TrimSpace(string(output))))
+			}
+			log.Info("[InstallHooks] installed Gemini CLI rules hook", "bin", bin)
+			messages = append(messages, "Gemini CLI rule enforcement hook installed.")
+		} else {
+			messages = append(messages, "ssq-hooks binary not found — run `make install` first, then `ssq-hooks install gemini`.")
 		}
 	}
 

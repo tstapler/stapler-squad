@@ -4,8 +4,20 @@ import { useRef, useEffect } from "react";
 import type { Session } from "@/gen/session/v1/types_pb";
 import { SessionDetail } from "@/components/sessions/SessionDetail";
 import { SessionList } from "@/components/sessions/SessionList";
+import { SessionBoard } from "@/components/sessions/SessionBoard";
 import { SessionListSkeleton } from "@/components/sessions/SessionListSkeleton";
+import {
+  skeletonRow,
+  dot,
+  nameBar,
+  agentPlaceholder,
+  pathBar,
+  timeBar,
+  actionsSpacer,
+} from "@/components/sessions/SessionListSkeleton.css";
 import { ErrorState } from "@/components/ui/ErrorState";
+import { useSessionViewModeContext } from "@/lib/contexts/SessionViewModeContext";
+import { BOARD_COLUMNS } from "@/lib/board/columns";
 import type { PaneNode, LeafPane, SplitPane, PaneState, PaneAction, PaneId, SessionDetailTab, PaneViewKind } from "@/lib/pane/paneTypes";
 import { getAllLeaves } from "@/lib/pane/paneReducer";
 import { useCockpitActions } from "@/lib/contexts/CockpitActionsContext";
@@ -25,6 +37,8 @@ import {
   sessionListScroll,
   resetLayoutBar,
   resetLayoutButton,
+  viewModeToggleBar,
+  viewModeToggleButton,
   rendererRoot,
   rendererContent,
 } from "@/styles/pane/paneSplit.css";
@@ -35,6 +49,47 @@ function getPickerLetter(root: PaneNode, paneId: string): string | null {
   const eligible = allLeaves.filter((l) => l.viewKind !== "session-list");
   const idx = eligible.findIndex((l) => l.id === paneId);
   return idx >= 0 && idx < 26 ? "ABCDEFGHIJKLMNOPQRSTUVWXYZ"[idx] : null;
+}
+
+const BOARD_SKELETON_ROWS_PER_COLUMN = 3;
+
+// Board-shaped loading placeholder — 4 column shells with shimmer rows, shown instead of
+// the flat SessionListSkeleton while in board view, so first-load never looks identical to
+// a genuinely empty board (ux.md "Loading state", AC31). Reuses SessionListSkeleton's
+// shimmer row pieces rather than BoardColumn's own markup/CSS, since BoardColumn.tsx is
+// owned by the concurrent Phase 3 work.
+function BoardColumnsSkeleton() {
+  return (
+    <div
+      role="status"
+      aria-busy="true"
+      aria-label="Loading sessions…"
+      data-testid="board-columns-skeleton"
+      style={{ display: "flex", gap: 16, padding: 16, flex: 1, overflowX: "auto", minHeight: 0 }}
+    >
+      {BOARD_COLUMNS.map((col) => (
+        <div
+          key={col.key}
+          data-testid={`board-column-skeleton-${col.key}`}
+          style={{ width: 320, flexShrink: 0 }}
+        >
+          <div style={{ fontSize: 12, fontWeight: 600, opacity: 0.6, marginBottom: 8, textTransform: "uppercase" }}>
+            {col.label}
+          </div>
+          {Array.from({ length: BOARD_SKELETON_ROWS_PER_COLUMN }, (_, i) => (
+            <div key={i} className={skeletonRow} aria-hidden="true" style={{ marginBottom: 8 }}>
+              <div className={dot} />
+              <div className={nameBar} />
+              <div className={agentPlaceholder} />
+              <div className={pathBar} />
+              <div className={timeBar} />
+              <div className={actionsSpacer} />
+            </div>
+          ))}
+        </div>
+      ))}
+    </div>
+  );
 }
 
 interface PaneSplitRendererProps {
@@ -60,6 +115,7 @@ function PaneNodeComponent({ node, state, dispatch, sessions, isMobile, hasSplit
         state={state}
         dispatch={dispatch}
         sessions={sessions}
+        isMobile={isMobile}
         hasSplits={hasSplits}
       />
     );
@@ -120,13 +176,17 @@ function PaneSplitComponent({ pane, state, dispatch, sessions, isMobile, hasSpli
         isMobile={isMobile}
         hasSplits={hasSplits}
       />
-      <ResizeHandle
-        splitId={pane.id}
-        direction={pane.direction}
-        onResize={(splitId: PaneId, ratio: number) =>
-          dispatch({ type: "RESIZE_PANE", splitId, ratio })
-        }
-      />
+      {/* Draggable resize is a desktop affordance — touch dragging a 6px divider is
+          impractical, and mobile horizontal splits use a fixed 50/50 ratio instead. */}
+      {!isMobile && (
+        <ResizeHandle
+          splitId={pane.id}
+          direction={pane.direction}
+          onResize={(splitId: PaneId, ratio: number) =>
+            dispatch({ type: "RESIZE_PANE", splitId, ratio })
+          }
+        />
+      )}
       <PaneNodeComponent
         node={pane.second}
         state={state}
@@ -144,6 +204,7 @@ interface PaneLeafProps {
   state: PaneState;
   dispatch: React.Dispatch<PaneAction>;
   sessions: Session[];
+  isMobile: boolean;
   hasSplits: boolean;
 }
 
@@ -151,8 +212,23 @@ function SessionListPaneBody({ pane, dispatch }: { pane: LeafPane; dispatch: Rea
   const actions = useCockpitActions();
   const { sessions, loading, error, listSessions, hibernateSession, resumeHibernatedSession } = useSessionServiceContext();
   const { triggerPicker, triggerPickerForceNew } = usePaneContext();
-  if (loading) return <SessionListSkeleton count={4} />;
-  if (error) {
+  const { viewMode, setViewMode } = useSessionViewModeContext();
+  if (loading) return viewMode === "board" ? <BoardColumnsSkeleton /> : <SessionListSkeleton count={4} />;
+  // `error` is useSessionServiceContext's single shared Redux field -- ANY
+  // session-mutating RPC (createSession, updateSession, cancelSessionCreation,
+  // etc., see useSessionService.ts's dispatch(setError(...)) call sites)
+  // writes to this same slot, not just the initial list fetch. Gating the
+  // full-pane "Failed to Load Sessions" fallback on `error` alone means an
+  // already-successfully-loaded, non-empty list gets replaced by that
+  // fallback the moment ANY later mutation fails -- e.g. a routine,
+  // client-visible rejection like Omnibar's duplicate-title create error
+  // (session-creation-async.spec.ts's "duplicate title keeps the omnibar
+  // open with inline error" regression test), which already has its own
+  // inline `omnibar-create-error` alert and needs no page-level fallback at
+  // all. Only show this fallback when there is nothing else to show --
+  // i.e. the list itself is empty because the fetch that would have
+  // populated it is what failed.
+  if (error && sessions.length === 0) {
     return (
       <ErrorState
         error={error}
@@ -162,40 +238,79 @@ function SessionListPaneBody({ pane, dispatch }: { pane: LeafPane; dispatch: Rea
       />
     );
   }
+
+  const sharedProps = {
+    sessions,
+    onSessionClick: triggerPicker,
+    onSessionOpenInNewPane: triggerPickerForceNew,
+    onDeleteSession: actions.onDeleteSession,
+    onPauseSession: actions.onPauseSession,
+    onResumeSession: actions.onResumeSession,
+    onDirectResumeSession: actions.onDirectResumeSession,
+    onCloneSession: actions.onCloneSession,
+    onNewWorkspaceSession: actions.onNewWorkspaceSession,
+    onRenameSession: actions.onRenameSession,
+    onRestartSession: actions.onRestartSession,
+    onUpdateTags: actions.onUpdateTags,
+    onNewSession: actions.onNewSession,
+    onCreateCheckpoint: actions.onCreateCheckpoint,
+    onListCheckpoints: actions.onListCheckpoints,
+    onForkFromCheckpoint: actions.onForkFromCheckpoint,
+    onSetRateLimitEnabled: actions.onSetRateLimitEnabled,
+    onToggleAutonomousMode: actions.onToggleAutonomousMode,
+    onToggleAutoApprove: actions.onToggleAutoApprove,
+    onSteerAutonomousSession: actions.onSteerAutonomousSession,
+    onClearConversationState: actions.onClearConversationState,
+    onHibernateSession: hibernateSession ? (id: string) => void hibernateSession(id) : undefined,
+    onResumeHibernatedSession: resumeHibernatedSession ? (id: string) => void resumeHibernatedSession(id) : undefined,
+    onFetchArchivedSessions: (includeArchived: boolean) => /* analytics-exempt */ void listSessions({ includeArchived }),
+    storageKeyPrefix: `pane-${pane.id}.`,
+  };
+
   return (
-    <div className={sessionListScroll} data-testid="session-list-scroll">
-      <SessionList
-        sessions={sessions}
-        onSessionClick={triggerPicker}
-        onSessionOpenInNewPane={triggerPickerForceNew}
-        onDeleteSession={actions.onDeleteSession}
-        onPauseSession={actions.onPauseSession}
-        onResumeSession={actions.onResumeSession}
-        onDirectResumeSession={actions.onDirectResumeSession}
-        onCloneSession={actions.onCloneSession}
-        onNewWorkspaceSession={actions.onNewWorkspaceSession}
-        onRenameSession={actions.onRenameSession}
-        onRestartSession={actions.onRestartSession}
-        onUpdateTags={actions.onUpdateTags}
-        onNewSession={actions.onNewSession}
-        onCreateCheckpoint={actions.onCreateCheckpoint}
-        onListCheckpoints={actions.onListCheckpoints}
-        onForkFromCheckpoint={actions.onForkFromCheckpoint}
-        onRunOneShot={actions.onRunOneShot}
-        onSetRateLimitEnabled={actions.onSetRateLimitEnabled}
-        onToggleAutonomousMode={actions.onToggleAutonomousMode}
-        onSteerAutonomousSession={actions.onSteerAutonomousSession}
-        onClearConversationState={actions.onClearConversationState}
-        onHibernateSession={hibernateSession ? (id) => void hibernateSession(id) : undefined}
-        onResumeHibernatedSession={resumeHibernatedSession ? (id) => void resumeHibernatedSession(id) : undefined}
-        onFetchArchivedSessions={(includeArchived) => /* analytics-exempt */ void listSessions({ includeArchived })}
-        storageKeyPrefix={`pane-${pane.id}.`}
-      />
-    </div>
+    <>
+      <div className={viewModeToggleBar} role="group" aria-label="Session view">
+        <button
+          type="button"
+          data-testid="session-view-mode-list"
+          className={viewModeToggleButton({ active: viewMode === "list" })}
+          aria-pressed={viewMode === "list"}
+          onClick={() => setViewMode("list")}
+        >
+          List
+        </button>
+        <button
+          type="button"
+          data-testid="session-view-mode-board"
+          className={viewModeToggleButton({ active: viewMode === "board" })}
+          aria-pressed={viewMode === "board"}
+          onClick={() => setViewMode("board")}
+        >
+          Board
+        </button>
+      </div>
+      {/* Announces the view switch to screen-reader users, who otherwise get no
+          feedback that the toggle buttons above changed anything. */}
+      <div
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+        style={{ position: "absolute", width: 1, height: 1, overflow: "hidden", clip: "rect(0,0,0,0)" }}
+      >
+        {viewMode === "board" ? `Board view, showing ${sessions.length} sessions` : `List view, showing ${sessions.length} sessions`}
+      </div>
+      <div className={sessionListScroll} data-testid="session-list-scroll">
+        {viewMode === "board" ? (
+          <SessionBoard {...sharedProps} />
+        ) : (
+          <SessionList {...sharedProps} />
+        )}
+      </div>
+    </>
   );
 }
 
-function PaneLeafComponent({ pane, state, dispatch, sessions, hasSplits }: PaneLeafProps) {
+function PaneLeafComponent({ pane, state, dispatch, sessions, isMobile, hasSplits }: PaneLeafProps) {
   const { pickerPendingSession, cancelPicker } = usePaneContext();
   const isFocused = state.focusedPaneId === pane.id;
   const isZoomed = state.zoomedPaneId === pane.id;
@@ -254,7 +369,7 @@ function PaneLeafComponent({ pane, state, dispatch, sessions, hasSplits }: PaneL
         onFocus={handleFocus}
         onZoom={handleZoom}
         onSetView={handleSetView}
-        splitButtonVisible={true}
+        splitButtonVisible={!isMobile}
         onSplitVertical={handleSplitVertical}
         onSplitHorizontal={handleSplitHorizontal}
       />
@@ -340,8 +455,10 @@ export function PaneSplitRenderer({ state, dispatch, sessions }: PaneSplitRender
       className={rendererRoot}
       data-context="cockpit"
     >
-      {/* Reset layout button — only shown when there is a split layout */}
-      {hasMultiplePanes && (
+      {/* Reset layout button — desktop window-management chrome; on mobile the
+          MobilePaneTabStrip + per-pane close buttons cover the same need without
+          eating scarce header space. */}
+      {hasMultiplePanes && !isNarrow && (
         <div className={resetLayoutBar}>
           <button
             data-testid="reset-layout-btn"

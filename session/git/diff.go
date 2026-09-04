@@ -106,7 +106,11 @@ func (g *GitWorktree) Diff() *DiffStats {
 			stats.Removed++
 		}
 	}
-	stats.Content = content
+	// git diff output is raw bytes and can contain byte sequences that aren't valid
+	// UTF-8 (e.g. a tracked file encoded as Latin-1). Content ultimately crosses into
+	// a proto3 string field (DiffStats.content), which rejects invalid UTF-8 at
+	// marshal time, so sanitize here at the source.
+	stats.Content = strings.ToValidUTF8(content, "�")
 
 	return stats
 }

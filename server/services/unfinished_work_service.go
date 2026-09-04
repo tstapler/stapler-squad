@@ -26,6 +26,22 @@ var _ sessionv1connect.UnfinishedWorkServiceHandler = (*UnfinishedWorkService)(n
 // aiSemaphore limits concurrent Claude AI subprocess calls globally.
 var aiSemaphore = make(chan struct{}, 2)
 
+// instanceIndexTTL bounds how long the worktree-path and PR indexes built from
+// session.Storage are reused before being rebuilt from a fresh ListInstanceData scan.
+// EventUnfinishedWorkUpdated/Removed events can fire in bursts (one per changed
+// worktree during a scan sweep); without this cache each event triggers its own
+// full ent/sqlite session scan.
+const instanceIndexTTL = 2 * time.Second
+
+// instanceIndexCache holds the last-built sessionPathIndex/instancePRIndex pair,
+// invalidated by instanceIndexTTL rather than rebuilt on every call.
+type instanceIndexCache struct {
+	mu      sync.Mutex
+	builtAt time.Time
+	pathIdx map[string][]string
+	prIdx   map[string]worktreePRInfo
+}
+
 // UnfinishedWorkService implements the ConnectRPC UnfinishedWorkServiceHandler.
 type UnfinishedWorkService struct {
 	scanner    *unfinished.Scanner
@@ -35,6 +51,8 @@ type UnfinishedWorkService struct {
 
 	// perWorktreeMu prevents duplicate AI summary generation for the same worktree.
 	aiMu sync.Map // map[string]*sync.Mutex  key = repoPath+"|"+branch
+
+	idxCache instanceIndexCache
 }
 
 // NewUnfinishedWorkService creates a new service instance.
@@ -52,25 +70,6 @@ func NewUnfinishedWorkService(
 	}
 }
 
-// sessionPathIndex builds a worktreePath → []sessionUUID map from all loaded instances.
-// Multiple sessions can target the same worktree path.
-func (s *UnfinishedWorkService) sessionPathIndex() map[string][]string {
-	if s.storage == nil {
-		return map[string][]string{}
-	}
-	data, err := s.storage.ListInstanceData()
-	if err != nil {
-		return map[string][]string{}
-	}
-	index := make(map[string][]string, len(data))
-	for _, d := range data {
-		if d.Path != "" && d.UUID != "" {
-			index[d.Path] = append(index[d.Path], d.UUID)
-		}
-	}
-	return index
-}
-
 // worktreePRInfo holds the best available PR information for an unfinished worktree,
 // derived from active session instances whose Path matches the worktree path.
 type worktreePRInfo struct {
@@ -80,24 +79,44 @@ type worktreePRInfo struct {
 	Priority string
 }
 
-// instancePRIndex builds a worktreePath → worktreePRInfo map from session instances
-// that have GitHub PR data from the PRStatusPoller.
-func (s *UnfinishedWorkService) instancePRIndex() map[string]worktreePRInfo {
+// instanceIndexes returns the worktreePath → []sessionUUID and worktreePath →
+// worktreePRInfo indexes built from all loaded instances, reusing the cached copy
+// when it's younger than instanceIndexTTL instead of re-scanning session.Storage.
+// A single ListInstanceData scan builds both indexes together (previously each had
+// its own scan, doubling the cost).
+func (s *UnfinishedWorkService) instanceIndexes() (map[string][]string, map[string]worktreePRInfo) {
 	if s.storage == nil {
-		return map[string]worktreePRInfo{}
+		return map[string][]string{}, map[string]worktreePRInfo{}
 	}
+
+	s.idxCache.mu.Lock()
+	defer s.idxCache.mu.Unlock()
+
+	if time.Since(s.idxCache.builtAt) < instanceIndexTTL && s.idxCache.pathIdx != nil {
+		return s.idxCache.pathIdx, s.idxCache.prIdx
+	}
+
 	data, err := s.storage.ListInstanceData()
 	if err != nil {
-		return map[string]worktreePRInfo{}
+		if s.idxCache.pathIdx != nil {
+			// Serve the stale cache rather than an empty index on a transient error.
+			return s.idxCache.pathIdx, s.idxCache.prIdx
+		}
+		return map[string][]string{}, map[string]worktreePRInfo{}
 	}
-	index := make(map[string]worktreePRInfo, len(data))
+
+	pathIdx := make(map[string][]string, len(data))
+	prIdx := make(map[string]worktreePRInfo, len(data))
 	for _, d := range data {
+		if d.Path != "" && d.UUID != "" {
+			pathIdx[d.Path] = append(pathIdx[d.Path], d.UUID)
+		}
 		if d.Path == "" || d.GitHubPRNumber == 0 {
 			continue
 		}
 		// Prefer the first (or best-priority) PR we find for a given path.
-		if _, exists := index[d.Path]; !exists {
-			index[d.Path] = worktreePRInfo{
+		if _, exists := prIdx[d.Path]; !exists {
+			prIdx[d.Path] = worktreePRInfo{
 				Number:   d.GitHubPRNumber,
 				URL:      d.GitHubPRURL,
 				State:    d.GitHubPRState,
@@ -105,7 +124,11 @@ func (s *UnfinishedWorkService) instancePRIndex() map[string]worktreePRInfo {
 			}
 		}
 	}
-	return index
+
+	s.idxCache.pathIdx = pathIdx
+	s.idxCache.prIdx = prIdx
+	s.idxCache.builtAt = time.Now()
+	return pathIdx, prIdx
 }
 
 // ListUnfinishedWork returns the current snapshot of all unfinished worktrees.
@@ -114,8 +137,7 @@ func (s *UnfinishedWorkService) ListUnfinishedWork(
 	_ *connect.Request[sessionv1.ListUnfinishedWorkRequest],
 ) (*connect.Response[sessionv1.ListUnfinishedWorkResponse], error) {
 	results := s.scanner.GetAllResults()
-	pathIndex := s.sessionPathIndex()
-	prIndex := s.instancePRIndex()
+	pathIndex, prIndex := s.instanceIndexes()
 	worktrees := make([]*sessionv1.UnfinishedWorktree, 0, len(results))
 	for _, r := range results {
 		r.SessionIDs = pathIndex[r.WorktreePath]
@@ -136,8 +158,7 @@ func (s *UnfinishedWorkService) WatchUnfinishedWork(
 ) error {
 	// 1. Send initial snapshot.
 	results := s.scanner.GetAllResults()
-	pathIndex := s.sessionPathIndex()
-	prIndex := s.instancePRIndex()
+	pathIndex, prIndex := s.instanceIndexes()
 	for _, r := range results {
 		r.SessionIDs = pathIndex[r.WorktreePath]
 		evt := &sessionv1.UnfinishedWorkEvent{
@@ -187,8 +208,9 @@ func (s *UnfinishedWorkService) convertUnfinishedEvent(evt *events.Event) *sessi
 		if !ok {
 			return nil
 		}
-		r.SessionIDs = s.sessionPathIndex()[r.WorktreePath]
-		prInfo := s.instancePRIndex()[r.WorktreePath]
+		pathIdx, prIdx := s.instanceIndexes()
+		r.SessionIDs = pathIdx[r.WorktreePath]
+		prInfo := prIdx[r.WorktreePath]
 		return &sessionv1.UnfinishedWorkEvent{
 			Payload: &sessionv1.UnfinishedWorkEvent_WorktreeUpdated{
 				WorktreeUpdated: scanResultToProto(r, prInfo),
@@ -259,7 +281,7 @@ func (s *UnfinishedWorkService) UndismissWorktree(
 
 // SnoozeWorktree hides a worktree until the next HEAD SHA change.
 func (s *UnfinishedWorkService) SnoozeWorktree(
-	_ context.Context,
+	ctx context.Context,
 	req *connect.Request[sessionv1.SnoozeWorktreeRequest],
 ) (*connect.Response[sessionv1.SnoozeWorktreeResponse], error) {
 	// Get current HEAD SHA from the stored scan result.
@@ -267,7 +289,7 @@ func (s *UnfinishedWorkService) SnoozeWorktree(
 	var headSHA string
 	if ok {
 		// Run git rev-parse HEAD in the worktree to get current SHA.
-		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 		defer cancel()
 		cmd := safeexec.CommandContext(ctx, "git", "-C", r.WorktreePath, "rev-parse", "HEAD")
 		out, err := cmd.Output()
@@ -374,7 +396,7 @@ func (s *UnfinishedWorkService) GetWorktreeAISummary(
 
 // QuickCommitPush stages all changes, commits, and pushes.
 func (s *UnfinishedWorkService) QuickCommitPush(
-	_ context.Context,
+	ctx context.Context,
 	req *connect.Request[sessionv1.QuickCommitPushRequest],
 ) (*connect.Response[sessionv1.QuickCommitPushResponse], error) {
 	if strings.TrimSpace(req.Msg.CommitMessage) == "" {
@@ -411,7 +433,7 @@ func (s *UnfinishedWorkService) QuickCommitPush(
 
 	if hasStaged {
 		// git commit -m <message>
-		commitCtx, commitCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		commitCtx, commitCancel := context.WithTimeout(ctx, 30*time.Second)
 		defer commitCancel()
 		commitCmd := safeexec.CommandContext(commitCtx, "git", "-C", worktreePath, "commit", "-m", req.Msg.CommitMessage)
 		commitCmd.WaitDelay = 2 * time.Second
@@ -424,7 +446,7 @@ func (s *UnfinishedWorkService) QuickCommitPush(
 	}
 
 	// git push -u origin <branch> (60s timeout)
-	pushCtx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	pushCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
 	pushCmd := safeexec.CommandContext(pushCtx, "git", "-C", worktreePath, "push", "-u", "origin", req.Msg.Branch)
 	if out, err := pushCmd.CombinedOutput(); err != nil {
@@ -501,7 +523,10 @@ func (s *UnfinishedWorkService) GetWorktreeDiff(
 
 	return connect.NewResponse(&sessionv1.GetWorktreeDiffResponse{
 		DiffStats: &sessionv1.DiffStats{
-			Content: content,
+			// git diff output is raw bytes and can contain sequences that aren't valid
+			// UTF-8; DiffStats.content is a proto3 string field, which rejects those at
+			// marshal time, so sanitize here at the source.
+			Content: strings.ToValidUTF8(content, "�"),
 			Added:   int32(added),
 			Removed: int32(removed),
 		},
@@ -558,25 +583,31 @@ func (s *UnfinishedWorkService) UpdateUnfinishedWorkConfig(
 
 func scanResultToProto(r unfinished.ScanResult, pr worktreePRInfo) *sessionv1.UnfinishedWorktree {
 	wt := &sessionv1.UnfinishedWorktree{
-		RepoPath:            r.RepoPath,
-		Branch:              r.Branch,
-		WorktreePath:        r.WorktreePath,
-		RepoName:            r.RepoName,
-		DisplayPath:         r.DisplayPath,
-		HasUncommitted:      r.HasUncommitted,
-		CommitsAhead:        int32(r.AheadCount),
-		CommitsBehind:       int32(r.BehindCount),
-		DefaultBranch:       r.DefaultBranch,
-		ChangedFiles:        int32(r.ChangedFiles),
-		LinesAdded:          int32(r.LinesAdded),
+		RepoPath:       r.RepoPath,
+		Branch:         r.Branch,
+		WorktreePath:   r.WorktreePath,
+		RepoName:       r.RepoName,
+		DisplayPath:    r.DisplayPath,
+		HasUncommitted: r.HasUncommitted,
+		// #nosec G115 -- ahead/behind commit counts for one local worktree, far below int32 range.
+		CommitsAhead: int32(r.AheadCount),
+		// #nosec G115 -- see CommitsAhead above.
+		CommitsBehind: int32(r.BehindCount),
+		DefaultBranch: r.DefaultBranch,
+		// #nosec G115 -- git diff stats for one local worktree, far below int32 range.
+		ChangedFiles: int32(r.ChangedFiles),
+		// #nosec G115 -- see ChangedFiles above.
+		LinesAdded: int32(r.LinesAdded),
+		// #nosec G115 -- see ChangedFiles above.
 		LinesRemoved:        int32(r.LinesRemoved),
 		AheadCommitMessages: r.AheadMessages,
 		IsDismissed:         r.Status == unfinished.ScanResultStatusError, // used below
 		SessionIds:          r.SessionIDs,
-		GithubPrNumber:      int32(pr.Number),
-		GithubPrUrl:         pr.URL,
-		GithubPrState:       pr.State,
-		GithubPrPriority:    pr.Priority,
+		// #nosec G115 -- pr.Number is a GitHub PR number, far below int32 range.
+		GithubPrNumber:   int32(pr.Number),
+		GithubPrUrl:      pr.URL,
+		GithubPrState:    pr.State,
+		GithubPrPriority: pr.Priority,
 	}
 
 	// Correct the is_dismissed field (ScanResult doesn't carry this).

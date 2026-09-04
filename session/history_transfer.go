@@ -3,6 +3,7 @@ package session
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -10,6 +11,13 @@ import (
 
 	"github.com/tstapler/stapler-squad/log"
 )
+
+// ErrNoHistoryAdapter indicates PortSessionHistory was asked to port history for a program
+// pair where no registered HistoryAdapter claims one (or both) sides — e.g. opencode, aider,
+// bash, or gemini (the real Gemini CLI, distinct from Antigravity's own storage format — see
+// AgyAdapter.CanHandle), none of which have a canonical history format to port. Callers should
+// treat this as an expected, low-severity no-op (log and continue), not a hard failure.
+var ErrNoHistoryAdapter = errors.New("no history adapter resolves for this program")
 
 // ConversationID represents a validated Claude/Antigravity conversation UUID.
 type ConversationID string
@@ -39,24 +47,13 @@ func NewWorkspacePath(s string) (WorkspacePath, error) {
 
 // PortSessionHistory translates and syncs history between Claude Code and Antigravity CLI.
 func PortSessionHistory(ctx context.Context, oldProgram, newProgram string, i *Instance) error {
-	var srcAdapter, dstAdapter HistoryAdapter
+	srcAdapter := resolveHistoryAdapter(oldProgram)
+	dstAdapter := resolveHistoryAdapter(newProgram)
 
-	claude := NewClaudeAdapter()
-	agy := NewAgyAdapter()
-
-	if claude.CanHandle(oldProgram) {
-		srcAdapter = claude
-	} else if agy.CanHandle(oldProgram) {
-		srcAdapter = agy
+	if srcAdapter == nil || dstAdapter == nil {
+		return ErrNoHistoryAdapter
 	}
-
-	if claude.CanHandle(newProgram) {
-		dstAdapter = claude
-	} else if agy.CanHandle(newProgram) {
-		dstAdapter = agy
-	}
-
-	if srcAdapter == nil || dstAdapter == nil || srcAdapter.Name() == dstAdapter.Name() {
+	if srcAdapter.Name() == dstAdapter.Name() {
 		return nil
 	}
 
@@ -66,12 +63,16 @@ func PortSessionHistory(ctx context.Context, oldProgram, newProgram string, i *I
 		return fmt.Errorf("failed to import session history from %s: %w", srcAdapter.Name(), err)
 	}
 
-	// 2. Export turns in target adapter format
-	if err := dstAdapter.Export(ctx, turns, i); err != nil {
+	// 2. Apply Stapler Squad Inhibition Engine to redact secrets
+	inhibition := NewInhibitionEngine()
+	sanitizedTurns := inhibition.SanitizeTurns(turns)
+
+	// 3. Export sanitized turns in target adapter format
+	if err := dstAdapter.Export(ctx, sanitizedTurns, i); err != nil {
 		return fmt.Errorf("failed to export session history to %s: %w", dstAdapter.Name(), err)
 	}
 
-	// 3. Perform post-switch steps like history.jsonl mapping
+	// 4. Perform post-switch steps like history.jsonl mapping
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return err
@@ -95,7 +96,7 @@ func PortSessionHistory(ctx context.Context, oldProgram, newProgram string, i *I
 				log.Warn("PortSessionHistory: failed to marshal agy history entry", "error", marshalErr)
 				return marshalErr
 			}
-			if f, err := os.OpenFile(agyHistoryPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644); err == nil {
+			if f, err := os.OpenFile(agyHistoryPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600); err == nil { // #nosec G304 -- agyHistoryPath is home dir + hardcoded constant components only
 				if _, werr := f.Write(historyData); werr != nil {
 					f.Close()
 					log.Warn("PortSessionHistory: failed to write agy history data", "error", werr)
@@ -125,7 +126,7 @@ func PortSessionHistory(ctx context.Context, oldProgram, newProgram string, i *I
 				log.Warn("PortSessionHistory: failed to marshal claude history entry", "error", marshalErr)
 				return marshalErr
 			}
-			if hf, err := os.OpenFile(claudeHistoryPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644); err == nil {
+			if hf, err := os.OpenFile(claudeHistoryPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600); err == nil { // #nosec G304 -- claudeHistoryPath is home dir + hardcoded constant components only
 				if _, werr := hf.Write(historyData); werr != nil {
 					hf.Close()
 					log.Warn("PortSessionHistory: failed to write claude history data", "error", werr)

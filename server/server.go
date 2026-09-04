@@ -9,8 +9,10 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/gen/proto/go/session/v1/sessionv1connect"
+	"github.com/tstapler/stapler-squad/internal/syncutil"
 	"github.com/tstapler/stapler-squad/log"
 	pkganalytics "github.com/tstapler/stapler-squad/pkg/analytics"
+	"github.com/tstapler/stapler-squad/server/adapters"
 	"github.com/tstapler/stapler-squad/server/analytics"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/handlers"
@@ -24,6 +26,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/workflows"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/memory"
+	"github.com/tstapler/stapler-squad/session/sshremote"
 	"github.com/tstapler/stapler-squad/session/tmux"
 
 	"github.com/google/uuid"
@@ -46,18 +49,52 @@ type Server struct {
 	// "localhost:0") and is overwritten with the real OS-assigned address once
 	// Start()'s listener goroutine binds — read via GetAddr() from other
 	// goroutines (lazy hook/MCP URL closures, tests), so it must be atomic.
-	addr              atomic.Pointer[string]
-	httpServer        *http.Server
-	mux               *http.ServeMux
-	tlsConfig         *tls.Config                     // non-nil when TLS is enabled
-	authMiddleware    func(http.Handler) http.Handler // nil when auth is disabled
-	httpsURL          string                          // set when remote access is enabled
-	hostnames         []string                        // detected LAN hostnames
-	origins           []string                        // allowed CORS origins
-	shutdownHooks     []func()                        // called before HTTP server stops
-	connCtxCancel     context.CancelFunc              // cancels BaseContext → closes active streams on shutdown
-	availablePrograms []string                        // cached once at startup; programs change only on system changes
-	startedAt         time.Time                       // set once in newServerBase; used to gate orphan notification pruning until instance data has had time to load
+	addr                       atomic.Pointer[string]
+	httpServer                 *http.Server
+	mux                        *http.ServeMux
+	tlsConfig                  *tls.Config                     // non-nil when TLS is enabled
+	authMiddleware             func(http.Handler) http.Handler // nil when auth is disabled
+	httpsURL                   string                          // set when remote access is enabled
+	hostnames                  []string                        // detected LAN hostnames
+	origins                    []string                        // allowed CORS origins
+	shutdownHooks              []func()                        // called before HTTP server stops
+	connCtxCancel              context.CancelFunc              // cancels BaseContext → closes active streams on shutdown
+	availablePrograms          []string                        // cached once at startup; programs change only on system changes
+	startedAt                  time.Time                       // set once in newServerBase; used to gate orphan notification pruning until instance data has had time to load
+	approvalHandler            *services.ApprovalHandler       // set in wireDepsIntoServer; exposed only for wiring regression tests (same-package field access, e.g. TestWireDepsIntoServer_SharesSingleSlackNotifierInstance...)
+	slackInteractiveDisabled   bool                            // set in wireDepsIntoServer; see ServeHTTP's doc comment for why this can't be expressed as an s.mux registration
+	backgroundTasksWG          sync.WaitGroup                  // joined by Shutdown() — fork-pressure logger, zombie watcher, zombie reaper
+	backgroundTasksJoinTimeout time.Duration                   // bounds Shutdown's join of backgroundTasksWG; defaults to defaultBackgroundTasksJoinTimeout, overridable in tests
+}
+
+// ServeHTTP makes *Server an http.Handler wrapping s.mux. Beyond delegating,
+// it intercepts the Slack interactive-approvals path pre-mux when disabled,
+// so s.mux itself has zero registration for it (registering even a 404
+// handler on s.mux wouldn't do — this app's SPA catch-all at "/" would
+// otherwise turn a genuinely-unregistered path into a 200, not a 404).
+func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if s.slackInteractiveDisabled && r.URL.Path == "/api/hooks/slack-interactive" {
+		http.NotFound(w, r)
+		return
+	}
+	s.mux.ServeHTTP(w, r)
+}
+
+// healthEventPublisherFunc adapts a plain func to
+// sshremote.HealthEventPublisher -- RemoteHealthProber needs an interface
+// value (session/sshremote/health_prober.go can't import pkg/events itself;
+// see that file's doc comment for the import-cycle reason), while this
+// file's existing EventBus-publish callbacks (tmux.RegisterForkPressureAlert
+// / SetServerRecoveryCallback in wireDepsIntoServer) are plain funcs -- this
+// is the same "closure straight into deps.EventBus.Publish" pattern, just
+// wrapped to satisfy the one-method interface RemoteHealthProber's
+// constructor requires. Must be a package-level type (not declared inside a
+// function) since Go doesn't allow methods on function-local types.
+type healthEventPublisherFunc func(remoteName string, state, previousState sshremote.RemoteConnectionState)
+
+// PublishRemoteHealthChanged implements sshremote.HealthEventPublisher.
+func (f healthEventPublisherFunc) PublishRemoteHealthChanged(remoteName string, state, previousState sshremote.RemoteConnectionState) {
+	f(remoteName, state, previousState)
 }
 
 // newServerBase creates the base Server struct and returns it alongside the
@@ -67,8 +104,9 @@ func newServerBase(addr string) (*Server, context.Context) {
 	mux := http.NewServeMux()
 	connCtx, connCtxCancel := context.WithCancel(context.Background())
 	srv := &Server{
-		mux:           mux,
-		connCtxCancel: connCtxCancel,
+		mux:                        mux,
+		connCtxCancel:              connCtxCancel,
+		backgroundTasksJoinTimeout: defaultBackgroundTasksJoinTimeout,
 		httpServer: &http.Server{
 			Addr:         addr,
 			Handler:      nil, // Set in Start() after middleware chain is built
@@ -133,6 +171,11 @@ func NewServerWithDeps(addr string, deps *ServerDependencies) *Server {
 	return srv
 }
 
+// sessionHealthCheckInterval is how often SessionHealthChecker polls for dead
+// tmux panes and stale sessions. With failureThreshold (session/health.go) at 2
+// consecutive misses, a dead pane surfaces within ~2x this interval.
+const sessionHealthCheckInterval = 15 * time.Second
+
 // wireDepsIntoServer wires pre-built ServerDependencies into srv: starts background
 // components, registers shutdown hooks, and mounts all ConnectRPC/HTTP handlers.
 // serverCtx (== connCtx from newServerBase) is cancelled by Shutdown() to signal
@@ -145,6 +188,23 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	deps.PRStatusPoller.Start(serverCtx)
 	log.Info("PRStatusPoller started")
 
+	// Start SessionHealthChecker: polls for dead tmux panes (remain-on-exit
+	// placeholders left after the wrapped program exits) and stale
+	// started-but-tmux-missing instances, marking dead panes Crashed/Stopped so
+	// the UI can surface a banner instead of raw pane text. Previously this
+	// checker was constructed only in tests and never actually started in
+	// production -- see session/health.go.
+	if deps.Storage != nil {
+		healthChecker := session.NewSessionHealthChecker(deps.Storage)
+		healthCheckerStop := make(chan struct{})
+		go func() {
+			<-serverCtx.Done()
+			close(healthCheckerStop)
+		}()
+		go healthChecker.ScheduledHealthCheck(sessionHealthCheckInterval, healthCheckerStop)
+		log.Info("SessionHealthChecker started", "interval", sessionHealthCheckInterval)
+	}
+
 	// Start HistoryLinker: detects Claude JSONL files and links conversation
 	// UUIDs to sessions so cold restore can use --resume on restart.
 	// Known startup race: the initial ScanAll in Start fires before the
@@ -153,6 +213,15 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	// safety net for sessions that slip through.
 	go deps.HistoryLinker.Start(serverCtx)
 	log.Info("HistoryLinker started")
+
+	// Start ClaudeSettingsWatcher: hot-reloads auto-approval rules derived from
+	// ~/.claude/settings.json (and project-level equivalents) on edit. serverCtx
+	// cancellation on Shutdown() is what stops its goroutine cleanly — no separate
+	// shutdown hook needed.
+	if deps.ClaudeSettingsWatcher != nil {
+		go deps.ClaudeSettingsWatcher.Start(serverCtx)
+		log.Info("ClaudeSettingsWatcher started")
+	}
 
 	// Start UnfinishedWork scanner.
 	if deps.UnfinishedScanner != nil {
@@ -218,6 +287,15 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 			// orphan-pruning sweep (enforceRetention → pruneOrphanedRecords).
 			// See buildSessionExistenceLookup for the uptime-gate rationale.
 			notifStore.SetSessionExistenceLookup(buildSessionExistenceLookup(storage, srv.startedAt))
+
+			// Wire the notification decision lister into SessionSummaryGenerator now
+			// that notifStore exists — session/session_summary_service.go's
+			// SetNotificationLister doc comment explains why this is late-bound rather
+			// than passed at construction (dependencies.go builds the generator before
+			// notifStore exists).
+			if deps.SessionSummaryGenerator != nil {
+				deps.SessionSummaryGenerator.SetNotificationLister(&notificationDecisionListerAdapter{store: notifStore})
+			}
 		}
 	}
 
@@ -266,7 +344,7 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	// Start fork pressure logger (logs stats every 30s when activity > 0).
 	tmux.StartForkPressureLogger(serverCtx, 30*time.Second, func(format string, args ...any) {
 		log.Info(fmt.Sprintf(format, args...))
-	})
+	}, &srv.backgroundTasksWG)
 
 	// Become the subreaper for our process tree so that tmux's zombie children
 	// get reparented to us (not init) when tmux hasn't yet reaped them.
@@ -280,13 +358,13 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	// Start zombie watcher (scans for zombie child processes every 30s).
 	tmux.StartZombieWatcher(serverCtx, 30*time.Second, func(format string, args ...any) {
 		log.Warn(fmt.Sprintf(format, args...))
-	})
+	}, &srv.backgroundTasksWG)
 
 	// Start zombie reaper (calls waitpid(-1, WNOHANG) every 60s to reap any
 	// zombie children left by cmd.Start() paths that skipped cmd.Wait()).
 	tmux.StartZombieReaper(serverCtx, 60*time.Second, func(format string, args ...any) {
 		log.Info(fmt.Sprintf(format, args...))
-	})
+	}, &srv.backgroundTasksWG)
 
 	// Wire tmux server recovery → web UI toast notification.
 	tmux.SetServerRecoveryCallback(func() {
@@ -359,6 +437,24 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		log.Info("Registered UnfinishedWorkService handler", "path", uwAPIPath)
 	}
 
+	// Register SessionSummaryService handler.
+	if deps.SessionSummaryGenerator != nil {
+		sessionSummaryService := services.NewSessionSummaryService(deps.SessionSummaryGenerator, deps.SessionService)
+		ssPath, ssHandler := sessionv1connect.NewSessionSummaryServiceHandler(sessionSummaryService, ConnectOptions(deps.ErrorRegistry)...)
+		ssAPIPath := "/api" + ssPath
+		srv.RegisterConnectHandler(ssAPIPath, http.StripPrefix("/api", ssHandler))
+		log.Info("Registered SessionSummaryService handler", "path", ssAPIPath)
+	}
+
+	// Register HandoffSummaryService handler (Story 2.2.1).
+	if deps.HandoffSummaryGenerator != nil {
+		handoffSummaryService := services.NewHandoffSummaryService(deps.HandoffSummaryGenerator)
+		hsPath, hsHandler := sessionv1connect.NewHandoffSummaryServiceHandler(handoffSummaryService, ConnectOptions(deps.ErrorRegistry)...)
+		hsAPIPath := "/api" + hsPath
+		srv.RegisterConnectHandler(hsAPIPath, http.StripPrefix("/api", hsHandler))
+		log.Info("Registered HandoffSummaryService handler", "path", hsAPIPath)
+	}
+
 	// Register InsightsService handler for token usage analytics.
 	if deps.InsightsService != nil {
 		insightsPath, insightsHandler := sessionv1connect.NewInsightsServiceHandler(deps.InsightsService, ConnectOptions(deps.ErrorRegistry)...)
@@ -375,6 +471,78 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		log.Info("Registered GitHubUserService handler", "path", ghAPIPath)
 	}
 
+	// Register TymuxRolloutService handler (tymux-bundled-integration Epic
+	// 3.3: operator-facing controls for the staged tymux rollout, mirroring
+	// StreamHubRolloutService's registration). Config-backed with no
+	// external deps, so it's constructed inline rather than threaded
+	// through ServerDependencies.
+	{
+		tymuxRolloutSvc := services.NewTymuxRolloutService()
+		tymuxRolloutPath, tymuxRolloutHandler := sessionv1connect.NewTymuxRolloutServiceHandler(tymuxRolloutSvc, ConnectOptions(deps.ErrorRegistry)...)
+		tymuxRolloutAPIPath := "/api" + tymuxRolloutPath
+		srv.RegisterConnectHandler(tymuxRolloutAPIPath, http.StripPrefix("/api", tymuxRolloutHandler))
+		log.Info("Registered TymuxRolloutService handler", "path", tymuxRolloutAPIPath)
+	}
+
+	// Register RemoteService handler (ssh-remote-workspaces Epic 3.3: TOFU
+	// host-key confirmation flow for configured SSH remotes). KnownHostsStore
+	// construction is the only fallible step (it touches disk under
+	// config.GetConfigDir()); on failure, RemoteService is skipped entirely
+	// rather than registered half-working -- Settings' "Test connection" UI
+	// simply won't be reachable until the next restart, matching the
+	// suspended-process-store/backlog-attachment-handler degradation pattern
+	// used elsewhere in this function.
+	if knownHosts, khErr := sshremote.NewKnownHostsStore(); khErr != nil {
+		log.Error("Failed to create known_hosts store, RemoteService disabled", "err", khErr)
+	} else {
+		keyStore := sshremote.NewKeyStore()
+		remoteSvc := services.NewRemoteService(knownHosts, keyStore, config.LoadConfig)
+		remotePath, remoteHandler := sessionv1connect.NewRemoteServiceHandler(remoteSvc, ConnectOptions(deps.ErrorRegistry)...)
+		remoteAPIPath := "/api" + remotePath
+		srv.RegisterConnectHandler(remoteAPIPath, http.StripPrefix("/api", remoteHandler))
+		log.Info("Registered RemoteService handler", "path", remoteAPIPath)
+
+		// Share the same identity/host-key stores with SessionService so
+		// CreateSession's remote-target mode-specific block (ssh-remote-workspaces
+		// Phase 4, Epic 4.2) can dial with the identity/trust decisions made via
+		// this RemoteService's TOFU flow, with no separate wiring step.
+		if deps.SessionService != nil {
+			deps.SessionService.SetRemoteDeps(keyStore, knownHosts)
+		}
+
+		// Start one RemoteHealthProber per configured remote (ssh-remote-workspaces
+		// Epic 6.4, Task 6.4.1c), closing the loop for Epic 6.2's connection
+		// indicator: each prober shares tmux.DefaultSSHClientPool() -- the SAME
+		// process-wide pool a session's own SSHRunner/RemoteApprovalRelay for
+		// that remote already uses -- so this never opens a dedicated connection
+		// of its own (BuildRemoteHealthProber's doc comment). healthPublisher is
+		// a single shared adapter (defined below) wrapping deps.EventBus.Publish,
+		// reused across every remote since HealthEventPublisher.
+		// PublishRemoteHealthChanged already takes remoteName per call, mirroring
+		// the one-callback-many-callers shape of tmux.RegisterForkPressureAlert/
+		// SetServerRecoveryCallback elsewhere in this function.
+		//
+		// Only remotes present in config AT SERVER START are wired here --
+		// dynamically starting/stopping a prober when a remote is added/removed
+		// later via the Settings UI (Phase 6 Epic 6.1, not yet built) is out of
+		// scope for this task and left as a follow-up for whoever builds that UI.
+		healthPublisher := healthEventPublisherFunc(func(remoteName string, state, previousState sshremote.RemoteConnectionState) {
+			deps.EventBus.Publish(events.NewRemoteHealthChangedEvent(remoteName, state, previousState))
+		})
+		remotesCfg := config.LoadConfig().Remotes
+		for i := range remotesCfg {
+			remote := &remotesCfg[i]
+			prober, proberErr := services.BuildRemoteHealthProber(serverCtx, remote, tmux.DefaultSSHClientPool(), knownHosts, keyStore, healthPublisher)
+			if proberErr != nil {
+				log.Error("failed to build RemoteHealthProber, connection indicator will not update live for this remote", "remote", remote.Name, "err", proberErr)
+				continue
+			}
+			prober.Start(serverCtx)
+			srv.shutdownHooks = append(srv.shutdownHooks, prober.Stop)
+			log.Info("RemoteHealthProber started", "remote", remote.Name)
+		}
+	}
+
 	// Register BacklogService handler.
 	// The feature-flag interceptor is added on top of the standard options so that
 	// all BacklogService RPCs return CodeNotFound when the "backlog" flag is off.
@@ -389,7 +557,7 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		blPath, blHandler := sessionv1connect.NewBacklogServiceHandler(deps.BacklogService, blOpts...)
 		blAPIPath := "/api" + blPath
 		srv.RegisterConnectHandler(blAPIPath, http.StripPrefix("/api", blHandler))
-		log.InfoLog.Printf("Registered BacklogService handler at %s", blAPIPath)
+		log.InfoLog().Printf("Registered BacklogService handler at %s", blAPIPath)
 	}
 
 	// Start UserPRCache and register GitHubUserService handler.
@@ -429,6 +597,40 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		log.Info("Registered HeadlessService handler", "path", hlAPIPath)
 	}
 
+	// Register ImportService handler (import-external-session, Phase 1).
+	// Gated behind STAPLER_SQUAD_ENABLE_SESSION_IMPORT: only the three
+	// mutating RPCs (CommitImportExternalSession, ConfirmKillExternalSession,
+	// CancelPendingKill) return CodeUnimplemented when the flag is off, per
+	// Story 1.3.2 / plan.md Task 0. PreviewImportExternalSession is
+	// read-only (no persistence, no signaling) and must always be reachable
+	// regardless of flag state, so it is deliberately excluded from the
+	// gated method list -- gating the whole handler (as
+	// NewFeatureFlagInterceptor would) incorrectly blocks Preview too. Uses
+	// CodeUnimplemented rather than the CodeNotFound used by the
+	// config-persisted "backlog" flag, since this is an unshipped/opt-in
+	// capability rather than a togglable UI feature.
+	suspendedStore, err := session.NewSuspendedProcessStore()
+	if err != nil {
+		log.Error("failed to create suspended process store, import-external-session disabled", "error", err)
+	} else if err := session.ReconcileSuspendedProcesses(serverCtx, suspendedStore, deps.Storage); err != nil {
+		log.Error("failed to reconcile suspended processes from a prior server incarnation", "error", err)
+	}
+	importSvc := services.NewImportServiceWithRealInspector(deps.Storage, deps.Registry, deps.HistoryLinker, suspendedStore)
+	importOpts := append(
+		ConnectOptions(deps.ErrorRegistry),
+		connect.WithInterceptors(interceptors.NewScopedFeatureFlagInterceptor(
+			"session_import",
+			func() bool { return config.ImportSessionEnabled() },
+			"CommitImportExternalSession",
+			"ConfirmKillExternalSession",
+			"CancelPendingKill",
+		)),
+	)
+	importPath, importHandler := sessionv1connect.NewImportServiceHandler(importSvc, importOpts...)
+	importAPIPath := "/api" + importPath
+	srv.RegisterConnectHandler(importAPIPath, http.StripPrefix("/api", importHandler))
+	log.Info("Registered ImportService handler", "path", importAPIPath)
+
 	// Wire external session support into the unified WebSocket handler
 	wsHandler.SetExternalSessionSupport(deps.ExternalDiscovery)
 	log.Info("Unified WebSocket handler configured for external session support")
@@ -451,6 +653,17 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	// pattern below (srv.GetAddr(), Task 1.1.1c).
 	hookBaseURLFn := func() string { return "http://" + srv.GetAddr() }
 
+	// Wire the same lazy base-URL resolver into ReactiveQueueManager as the
+	// dashboard-link fallback for Slack review-queue notifications (Epic 1.3,
+	// Story 1.3.1, Task 1.3.1c) — only used when cfg.Slack.DashboardBaseURL is
+	// unset. ReactiveQueueManager is built before Server in the dependency
+	// graph (server/dependencies.go), so this is a late-bound setter here
+	// rather than a constructor argument, exactly like hookBaseURLFn's own
+	// wiring above.
+	if deps.ReactiveQueueMgr != nil {
+		deps.ReactiveQueueMgr.SetDashboardBaseURLFn(hookBaseURLFn)
+	}
+
 	// Register Claude Code HTTP hook approval endpoint
 	approvalHandler := services.NewApprovalHandler(
 		deps.SessionService.GetApprovalStore(),
@@ -461,6 +674,11 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	// InjectHookConfig's PermissionRequest URL and InjectHooksConfig's stop/pre-tool-use/
 	// post-tool-use/prompt-submit endpoints resolve through this single shared mechanism.
 	services.SetHookBaseURLFn(hookBaseURLFn)
+	// Same lazy base-URL resolver, wired into BacklogLifecycleListener so agent-created
+	// PR bodies can link back to the backlog item instead of embedding a bare UUID.
+	if deps.BacklogLifecycleListener != nil {
+		deps.BacklogLifecycleListener.SetDashboardBaseURLFn(hookBaseURLFn)
+	}
 	// Wire the review queue poller for immediate queue checks on new approvals (Story 3, Task 3.1)
 	approvalHandler.SetQueueChecker(deps.ReviewQueuePoller)
 	// Wire the classifier and analytics store for auto-approve/deny before manual review
@@ -468,6 +686,19 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	approvalHandler.SetAnalyticsStore(deps.SessionService.GetAnalyticsStore())
 	// Wire the domain age checker (enabled by default) for newly-registered domain escalation
 	approvalHandler.SetDomainChecker(services.NewDomainAgeChecker(true))
+	// Wire the shared Slack notifier (Epic 1.3, Story 1.3.2) — the same instance
+	// deps.SlackNotifier constructed and wired into ReactiveQueueMgr, so
+	// GetDeliveryStatus() reflects sends from both trigger points.
+	approvalHandler.SetSlackNotifier(deps.SlackNotifier)
+	// Same dashboard-link fallback as ReactiveQueueMgr above (Task 1.3.1c) —
+	// approval-pending Slack messages were silently dropping their "View X"
+	// link whenever cfg.Slack.DashboardBaseURL was unset, since ApprovalHandler
+	// never got this wired despite ReactiveQueueManager getting it.
+	approvalHandler.SetDashboardBaseURLFn(hookBaseURLFn)
+	// Wire the same shared instance into SessionService's SlackConfigService so
+	// GetSlackConfig's last_delivery reflects real review-queue/approval sends,
+	// not just TestSlackWebhook calls against SessionService's own private notifier.
+	deps.SessionService.SetSlackNotifier(deps.SlackNotifier)
 	// Wire the notification stamper so approval outcomes persist across page refreshes
 	if notifStore != nil {
 		approvalHandler.SetNotificationStamper(notifStore)
@@ -481,8 +712,62 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		inst := deps.SessionService.FindLiveInstance(sessionID)
 		return inst != nil && inst.AutonomousMode
 	})
+	// Thread the poller's live-configured interval into the CI-status staleness guard
+	// (Task 1.1.2b) so it can't silently desync from the real poll interval.
+	if deps.PRStatusPoller != nil {
+		approvalHandler.SetPollInterval(deps.PRStatusPoller.PollInterval())
+	}
+	// CI status (GitHubCheckConclusion/LastPRStatusCheck) is not persisted — it only
+	// lives on the poller's in-memory Instance — so the classifier's ci_passing
+	// condition (Task 1.1.2a) must read through the live registry, not deps.Storage.
+	approvalHandler.SetLiveInstanceFinder(deps.SessionService)
 	srv.mux.HandleFunc("/api/hooks/permission-request", approvalHandler.HandlePermissionRequest)
 	log.Info("Registered Claude Code hook approval handler at /api/hooks/permission-request")
+	srv.approvalHandler = approvalHandler
+
+	// pi approval-extension health tracking (pi-support Epic 4.2). The route
+	// itself is registered unconditionally (mirroring every other
+	// /api/hooks/* route above), but HandlePiExtensionLoaded gates on
+	// config.FeaturePiSupport as its first line and 404s when the flag is
+	// off — so with the flag off this never records into piHealthTracker's
+	// in-memory map, matching every other pi surface.
+	piHealthTracker := services.NewPiExtensionHealthTracker()
+	approvalHandler.SetPiExtensionHealthTracker(piHealthTracker)
+	srv.mux.HandleFunc("/api/hooks/pi-extension-loaded", approvalHandler.HandlePiExtensionLoaded)
+	log.Info("Registered pi approval-extension health-ping handler at /api/hooks/pi-extension-loaded")
+	// Feed the tracker into InstanceToProto (server/adapters/instance_adapter.go)
+	// via the same package-level-resolver pattern hookBaseURLFn uses above --
+	// adapters can't import services directly (services already imports
+	// adapters), so server.go is the one place that can wire the two together.
+	adapters.SetPiExtensionHealthResolver(func(sessionID, program string) sessionv1.PiExtensionHealth {
+		if !config.LoadConfig().GetFeatureFlag(config.FeaturePiSupport) || !session.IsPi(program) {
+			return sessionv1.PiExtensionHealth_PI_EXTENSION_HEALTH_UNSPECIFIED
+		}
+		switch piHealthTracker.HealthFor(sessionID) {
+		case services.PiExtensionHealthLoaded:
+			return sessionv1.PiExtensionHealth_PI_EXTENSION_HEALTH_LOADED
+		case services.PiExtensionHealthFailed:
+			return sessionv1.PiExtensionHealth_PI_EXTENSION_HEALTH_FAILED
+		default:
+			return sessionv1.PiExtensionHealth_PI_EXTENSION_HEALTH_UNKNOWN
+		}
+	})
+	// Evict a destroyed session's tracker entry (pi-support Epic 4.2 MAJOR 1
+	// fix) -- session cannot import server/services directly (services
+	// already imports session), so this is the mirror-image of the resolver
+	// wiring just above: session.Instance.Destroy() calls this closure via
+	// session.SetPiExtensionHealthForgetter, and server.go is the one place
+	// that can wire the two packages together.
+	session.SetPiExtensionHealthForgetter(func(sessionID string) {
+		piHealthTracker.Forget(sessionID)
+	})
+	// Wire the same ApprovalHandler as the PermissionRequestHandler every
+	// remote session's RemoteApprovalRelay drives its requests through
+	// (ssh-remote-workspaces Phase 5 correction, ADR-003's addendum) --
+	// mirrors SetRemoteDeps's existing pattern of injecting a server.go-
+	// constructed dependency into SessionService rather than SessionService
+	// owning a second instance of its own.
+	deps.SessionService.SetPermissionRequestHandler(approvalHandler)
 
 	// Register non-approval hook receivers (stop, pre/post-tool-use, prompt-submit,
 	// post-tool-use-drift-check — the BUG-044 follow-up steering hook, wired only
@@ -490,6 +775,86 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	hookReceiver := services.NewHookReceiver()
 	hookReceiver.RegisterRoutes(srv.mux)
 	log.Info("Registered Claude Code hook receivers at /api/hooks/{stop,pre-tool-use,post-tool-use,prompt-submit,post-tool-use-drift-check}")
+
+	// Register the inbound Slack interactive-approvals endpoint (Phase 2,
+	// Epic 2.1, Story 2.1.3) — gated on ApprovalEnabled so an unconfigured
+	// instance exposes zero additional attack surface. When the flag is off,
+	// nothing is registered on srv.mux for this path at all — Server.ServeHTTP
+	// (see its doc comment) intercepts it before the mux ever sees it, so the
+	// route is both genuinely unregistered AND still answers a real 404, not
+	// the SPA catch-all's 200. This deliberately differs from the
+	// webhook_triggers gate just below, which leaves its paths unbound so a
+	// disabled route is indistinguishable from a never-existed one to an
+	// unauthenticated prober scanning generic guessable webhook paths
+	// (plan.md Risk Control) — that rationale doesn't apply here:
+	// /api/hooks/slack-interactive is a single, fixed, already
+	// publicly-documented path (docs/how-to/expose-slack-interactive-endpoint.md),
+	// not a guessable pattern, so an explicit 404 leaks nothing a prober
+	// couldn't already find in the docs. Boot-time-only gate either way
+	// (flipping the flag requires a restart to take effect).
+	// SlackInteractiveHandler resolves the signing secret live from
+	// config.LoadConfig() on every request (see its constructor doc comment),
+	// so only the route's presence/absence is decided here at boot.
+	if config.LoadConfig().Slack.ApprovalEnabled {
+		slackInteractiveHandler := services.NewSlackInteractiveHandler(deps.SessionService)
+		srv.mux.HandleFunc("/api/hooks/slack-interactive", slackInteractiveHandler.Handle)
+		log.Info("Registered Slack interactive-approvals handler at /api/hooks/slack-interactive")
+	} else {
+		srv.slackInteractiveDisabled = true
+		log.Info("Slack interactive-approvals route left unregistered (Slack.ApprovalEnabled is false) — Server.ServeHTTP answers 404 for this path directly; the interactive handler itself is never invoked until enabled and the service restarts")
+	}
+
+	// Register inbound webhook-trigger receivers (webhook-triggers Epic 2.2/2.3) — like
+	// the hook receivers just above, these are external-POST, verify-signature-first,
+	// trust-boundary-adjacent routes, registered near /api/hooks/permission-request per
+	// Task 2.2.1e. Both handlers self-gate on the "webhook_triggers" feature flag as
+	// their own first line (defense in depth); nil-guarded here too so route
+	// registration itself is skipped entirely when there's no workflow repository to
+	// back it, mirroring WorkflowScheduler's own nil guard above.
+	if deps.WorkflowRepo != nil && deps.TriggerFireEventRepo != nil {
+		// config.LoadConfig() (not a threaded deps.Config — ServerDependencies has no
+		// such field) matches this function's own established pattern for feature-flag
+		// reads elsewhere (see the "backlog" flag check above and cfg := config.LoadConfig()
+		// further down in this function).
+		webhookCfg := config.LoadConfig()
+		// Route registration itself is flag-gated (not just each handler's internal
+		// first-line check) so that when webhook_triggers is off, /webhooks/* falls
+		// through to the same catch-all behavior as any other undefined path, rather
+		// than deterministically 404ing from a registered-but-disabled handler — the
+		// latter is a discoverable "feature exists but disabled" signal to an
+		// unauthenticated prober (plan.md Risk Control). This does mean flipping the
+		// flag off requires a restart to stop serving these routes, same limitation the
+		// "backlog" flag already has for its own route-gated pieces.
+		if webhookCfg.GetFeatureFlag("webhook_triggers") {
+			// deps.BacklogLifecycleListener is nil-guarded (rather than passed directly)
+			// to avoid boxing a nil *session.BacklogLifecycleListener into a non-nil
+			// services.PRFixEventRouter interface value (a "typed nil" — handlePRFixEvent's
+			// `h.prFixRouter == nil` check would then never trip).
+			var prFixRouter services.PRFixEventRouter
+			if deps.BacklogLifecycleListener != nil {
+				prFixRouter = deps.BacklogLifecycleListener
+			}
+			githubWebhookHandler := services.NewGitHubWebhookHandler(deps.WorkflowRepo, deps.WorkflowScheduler, deps.TriggerFireEventRepo, webhookCfg, prFixRouter)
+			githubWebhookHandler.RegisterRoutes(srv.mux)
+			genericWebhookHandler := services.NewGenericWebhookHandler(deps.WorkflowRepo, deps.WorkflowScheduler, deps.TriggerFireEventRepo, webhookCfg)
+			genericWebhookHandler.RegisterRoutes(srv.mux)
+			log.Info("Registered webhook-trigger receivers at POST /webhooks/{github,{slug}}")
+		} else {
+			// Pre-mortem P2 #4: route registration is boot-time only, so an operator who
+			// flips this flag on expecting /webhooks/* to work immediately otherwise gets
+			// silent 404s from the mux with zero signal anywhere in the app (no
+			// TriggerFireEvent row is ever created for a request to an unregistered
+			// route). This log line at least makes the boot-time-only nature of the gate
+			// visible in the service log.
+			log.Info("webhook-trigger routes NOT registered (webhook_triggers flag off) — /webhooks/* will 404 until the flag is enabled and the service restarts")
+			if webhookCfg.GetFeatureFlag("pr_event_webhooks") {
+				// pr_event_webhooks has no effect unless webhook_triggers is also enabled
+				// (the route itself isn't registered above) — a silent-404 trap an
+				// operator could otherwise hit with zero signal.
+				log.Warn("pr_event_webhooks is enabled but webhook_triggers is not — /webhooks/github is not registered, PR-fix webhook events will silently 404")
+			}
+		}
+	}
 
 	// Register session-aware image upload endpoint (multipart/form-data, saves to worktree).
 	sessionUploadHandler := services.NewSessionImageUploadHandler(deps.Storage, deps.ReviewQueuePoller)
@@ -499,7 +864,28 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	// Register MCP HTTP transport at /mcp so Claude sessions can connect
 	// without spawning a subprocess. The URL is passed via --mcp-server to
 	// claude when creating new sessions (no settings-file injection needed).
-	mcpHTTPHandler := servermcp.NewHTTPHandler(deps.Storage, deps.SessionService, deps.ScrollbackManager, deps.Storage, deps.EventBus, deps.UserPRCache, deps.BacklogEnabledCheck)
+	//
+	// deps.BacklogService is nil-guarded here (mirroring the other three
+	// nil-checks on this same field in this function) rather than passed
+	// directly: boxing a nil *services.BacklogService straight into the
+	// session.AutoReopenSpawner interface parameter would produce a non-nil
+	// interface value around a nil pointer — submitReviewVerdict's own
+	// `h.autoReopener != nil` guard would then read true, and calling
+	// AutoReopenAfterFailedReview would panic on the nil receiver instead of
+	// being skipped.
+	var autoReopener session.AutoReopenSpawner
+	if deps.BacklogService != nil {
+		autoReopener = deps.BacklogService
+	}
+	// Reuses the same liveness primitive wired onto BacklogLifecycleListener
+	// (see newSessionLivenessChecker's doc comment in dependencies.go) so
+	// link_session_to_item's exclusivity check doesn't trust a stale
+	// EndedAt==nil row for a crashed/killed session.
+	var mcpLiveCheck func(sessionUUID string) bool
+	if deps.Registry != nil {
+		mcpLiveCheck = newSessionLivenessChecker(deps.SessionService.FindLiveInstance, deps.Registry)
+	}
+	mcpHTTPHandler := servermcp.NewHTTPHandler(deps.Storage, deps.SessionService, deps.ScrollbackManager, deps.Storage, deps.EventBus, deps.UserPRCache, deps.BacklogEnabledCheck, autoReopener, deps.BacklogService, mcpLiveCheck)
 	// Wrap with middleware that injects session UUID from X-Stapler-Session-UUID header.
 	mcpWithUUID := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if uuid := r.Header.Get("X-Stapler-Session-UUID"); uuid != "" {
@@ -514,6 +900,10 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 
 	// Bind server lifecycle context so autonomous driver goroutines exit on shutdown.
 	deps.SessionService.SetLifecycleContext(serverCtx)
+
+	// Register SessionService shutdown so the AnalyticsStore flush goroutine
+	// exits cleanly instead of leaking for the life of the process.
+	srv.shutdownHooks = append(srv.shutdownHooks, deps.SessionService.Shutdown)
 
 	// Start background expiration cleanup for pending approvals
 	services.StartExpirationCleanup(context.Background(), deps.SessionService.GetApprovalStore())
@@ -533,6 +923,23 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	cbHandler.RegisterRoutes(srv.mux)
 	log.Info("Registered Circuit Breaker debug handler at /api/debug/circuit-breakers")
 
+	// Register the ssq:// deep-link resolver (project_plans/backlog-deep-linking
+	// Epic 2 Story 2.2, Epic 3 Story 3.3). hostResolver is backed by the
+	// Workspace Host Registry persisted under configDir — falls back to nil
+	// (every cross-host lookup reports "not-registered") only if configDir
+	// couldn't be determined.
+	if deps.Storage != nil {
+		var hostResolver services.HostResolver
+		if configErr == nil {
+			hostResolver = services.NewRegistryHostResolver(configDir, session.DefaultHostRegistryTTL)
+		} else {
+			log.Warn("Deep-link resolver falling back to unimplemented host resolver: config dir unavailable", "err", configErr)
+		}
+		deepLinkResolver := services.NewDeepLinkResolver(deps.Storage, hostResolver)
+		deepLinkResolver.RegisterRoutes(srv.mux)
+		log.Info("Registered deep-link resolver at /api/deep-link/resolve")
+	}
+
 	// Register the backlog debug seed endpoints ONLY for the e2e test server
 	// (STAPLER_SQUAD_INSTANCE=e2e-local) — lets the Playwright suite seed
 	// BacklogStuckState rows and queued backlog items directly, bypassing the
@@ -541,7 +948,7 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	if os.Getenv("STAPLER_SQUAD_INSTANCE") == "e2e-local" && deps.Storage != nil {
 		backlogSeedHandler := services.NewBacklogDebugSeedHandler(deps.Storage)
 		backlogSeedHandler.RegisterRoutes(srv.mux)
-		log.Info("Registered backlog debug seed handlers at /api/debug/backlog/seed-stuck, /api/debug/backlog/seed-queued, and /api/debug/backlog/seed-headless-triage-session (e2e-local only)")
+		log.Info("Registered backlog debug seed handlers at /api/debug/backlog/seed-stuck, /api/debug/backlog/seed-queued, /api/debug/backlog/seed-headless-triage-session, /api/debug/backlog/seed-work-item-session, and /api/debug/backlog/seed-work-session-with-worktree (e2e-local only)")
 
 		// Registered for project_plans/backlog-event-driven-updates's Playwright
 		// e2e layer — lets tests mutate a backlog item directly through the
@@ -595,6 +1002,14 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	analytics.StartAnalyticsSubscriber(serverCtx, deps.EventBus, analyticsProvider)
 	log.Info("Analytics EventBus subscriber started")
 
+	// Start EventBus GitHub forward-sync subscriber (closes the linked GitHub
+	// issue when a backlog item transitions to done — AC3). Shares
+	// BacklogService's plugin registry/key provider so behavior matches
+	// TriggerSync; both are nil-safe when the backlog feature isn't wired.
+	if deps.BacklogService != nil {
+		services.StartBacklogGitHubForwardSyncSubscriber(serverCtx, deps.EventBus, deps.BacklogService.Registry(), deps.BacklogService.SyncLoopForForwardSync(), deps.Storage)
+	}
+
 	// Register analytics HTTP handler (POST /api/analytics, GET /api/analytics/summary).
 	analyticsHandler := handlers.NewAnalyticsHandlerWithClient(analyticsProvider, deps.AnalyticsEntClient)
 	analyticsHandler.RegisterRoutes(srv.mux)
@@ -620,6 +1035,11 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	srv.mux.Handle("/api/local/serve/", http.StripPrefix("/api/local/serve", http.HandlerFunc(localFileSvc.ServeLocalFile)))
 	log.Info("Registered local file browser at /api/local/files/list and /api/local/serve/")
 
+	// pi-support (Epic 2.1, Story 2.1.2): reports whether the global pi approval
+	// extension is installed, so the settings UI can gate its disable-flag warning.
+	piExtensionStatusSvc := services.NewPiExtensionStatusService()
+	srv.mux.HandleFunc("/api/pi-extension-status", piExtensionStatusSvc.HandlePiExtensionStatus)
+
 	// Register backlog attachment upload endpoint — durable image attachments
 	// for backlog item descriptions, served back via /api/local/serve/.
 	if backlogAttachmentDir, err := cfg.BacklogAttachmentDirOrDefault(); err != nil {
@@ -629,6 +1049,34 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	} else {
 		srv.mux.HandleFunc("POST /api/v1/upload-backlog-attachment", backlogAttachmentHandler.HandleUpload)
 		log.Info("Registered backlog attachment upload handler at POST /api/v1/upload-backlog-attachment", "dir", backlogAttachmentDir)
+	}
+
+	// One-time best-effort sweep of the launch-prompt temp-file cache
+	// (session/instance_tmux.go's promptArg). Instance.Destroy() and
+	// promptFileCleanupDelay's timer both clean up individual files during
+	// normal operation; this sweep catches orphans left behind by a crash or
+	// an unclean shutdown.
+	if promptCacheDir, err := cfg.PromptCacheDirOrDefault(); err != nil {
+		log.Error("[Server] cannot resolve prompt cache dir", "err", err)
+	} else if entries, err := os.ReadDir(promptCacheDir); err != nil {
+		if !os.IsNotExist(err) {
+			log.Warn("[Server] cannot read prompt cache dir for startup sweep", "dir", promptCacheDir, "err", err)
+		}
+	} else {
+		removed := 0
+		for _, entry := range entries {
+			if entry.IsDir() {
+				continue
+			}
+			if err := os.Remove(filepath.Join(promptCacheDir, entry.Name())); err != nil {
+				log.Warn("[Server] failed to remove orphaned prompt cache file", "path", entry.Name(), "err", err)
+				continue
+			}
+			removed++
+		}
+		if removed > 0 {
+			log.Info("Swept orphaned prompt cache files at startup", "dir", promptCacheDir, "count", removed)
+		}
 	}
 
 	// Start hibernation sweeper (auto-hibernates idle sessions and prunes stale checkpoints).
@@ -641,6 +1089,57 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		go sweeper.Start(serverCtx)
 		log.Info("Hibernation sweeper started",
 			"idle_timeout_minutes", cfg.Hibernation.IdleTimeoutMinutes)
+	}
+
+	// Start orphaned-tmux sweeper (periodic counterpart to the one-time startup
+	// orphan sweep in BuildRuntimeDeps step 6d — see OrphanedTmuxSweeper doc comment).
+	// Guarded the same way as the startup call: skip entirely for an isolated
+	// instance (OrphanedTmuxSweeper.Start re-checks this itself; ReviewQueuePoller
+	// nil-check here just avoids starting a sweeper that could never sweep).
+	if deps.ReviewQueuePoller != nil {
+		orphanSweeper := session.NewOrphanedTmuxSweeper()
+		orphanSweeper.SetLiveProvider(deps.ReviewQueuePoller)
+		go orphanSweeper.Start(serverCtx)
+	}
+
+	// Start session retention sweeper (deletes archived sessions past the retention
+	// window once they pass safety checks — see SessionRetentionSweeper doc comment).
+	if cfg.SessionRetention.EnabledOrDefault() {
+		retentionSweeper := services.NewSessionRetentionSweeper(deps.Storage, cfg, deps.SessionService)
+		go retentionSweeper.Start(serverCtx)
+		log.Info("Session retention sweeper started",
+			"retention_days", cfg.SessionRetention.RetentionDaysOrDefault())
+	}
+
+	// Start stale session notifier (fires an operator-facing notification the first time an
+	// ACTIVE session crosses the configured stale threshold — see StaleSessionNotifier doc
+	// comment).
+	if deps.ReviewQueuePoller != nil {
+		staleNotifier := services.NewStaleSessionNotifier(deps.ReviewQueuePoller, deps.EventBus)
+		go staleNotifier.Start(serverCtx)
+		log.Info("Stale session notifier started",
+			"threshold_minutes", cfg.StaleSession.ThresholdMinutesOrDefault(),
+			"notify_enabled", cfg.StaleSession.NotifyEnabledOrDefault())
+	}
+
+	// Start stale creation sweeper (flips a Creating session whose persisted
+	// creation-progress timestamp has exceeded the configured threshold to
+	// Failed/Stale -- see StaleCreationSweeper doc comment, Epic 4.1).
+	if deps.ReviewQueuePoller != nil && deps.Storage != nil {
+		staleCreationSweeper := services.NewStaleCreationSweeper(deps.ReviewQueuePoller, deps.Storage, deps.EventBus)
+		go staleCreationSweeper.Start(serverCtx)
+		log.Info("Stale creation sweeper started",
+			"threshold_minutes", cfg.CreationStale.ThresholdMinutesOrDefault())
+	}
+
+	// Start memory pressure notifier (fires an operator-facing notification the first time
+	// this process's own cgroup memory usage crosses its MemoryHigh ceiling — see
+	// MemoryPressureNotifier doc comment). No-ops on non-Linux (telemetry.CgroupMemoryUsageRatio
+	// always reports unavailable there).
+	if deps.ReviewQueuePoller != nil {
+		memNotifier := services.NewMemoryPressureNotifier(deps.ReviewQueuePoller, deps.EventBus)
+		go memNotifier.Start(serverCtx)
+		log.Info("Memory pressure notifier started")
 	}
 }
 
@@ -788,7 +1287,7 @@ func (s *Server) Start(ctx context.Context) error {
 
 	// Build middleware chain:
 	// otelhttp -> logging -> CORS -> gzip -> [auth] -> mux
-	inner := http.Handler(s.mux)
+	inner := http.Handler(s)
 	if s.authMiddleware != nil {
 		inner = s.authMiddleware(inner)
 	}
@@ -848,6 +1347,20 @@ func (s *Server) Start(ctx context.Context) error {
 // regardless. Prevents a stuck hook from causing a SIGKILL on restart/stop.
 const shutdownHooksTimeout = 30 * time.Second
 
+// defaultBackgroundTasksJoinTimeout bounds how long Shutdown waits for the
+// fork-pressure logger, zombie watcher, and zombie reaper goroutines
+// (session/tmux) to exit after being signaled via connCtxCancel, before
+// proceeding regardless (backlog item 81e82fee-9528-4dc9-a513-1040b4dee2ec).
+// zombie_detector.go's ScanZombies shells out to `ps` under its own 10s
+// timeout, so this value is not generous headroom above that — a stuck `ps`
+// call can consume the whole budget. Kept at 10s to match stopJoinTimeout's
+// order of magnitude (session/pty_discovery.go) rather than guessing a larger
+// number; revisit if the join-timeout warning fires in practice.
+//
+// This is the production default, set on Server.backgroundTasksJoinTimeout by
+// newServerBase; tests override the field directly to avoid a real 10s wait.
+const defaultBackgroundTasksJoinTimeout = 10 * time.Second
+
 // Shutdown gracefully shuts down the HTTP server.
 func (s *Server) Shutdown() error {
 	// Cancel the server's BaseContext first so active streaming connections
@@ -875,6 +1388,13 @@ func (s *Server) Shutdown() error {
 	case <-hooksDone:
 	case <-time.After(shutdownHooksTimeout):
 		log.Warn("[shutdown] shutdown hooks did not complete within deadline, proceeding anyway", "timeout", shutdownHooksTimeout)
+	}
+
+	// Join the fork-pressure logger, zombie watcher, and zombie reaper
+	// goroutines (signaled above via connCtxCancel) so Shutdown doesn't return
+	// while they're still mid-tick (backlog item 81e82fee-9528-4dc9-a513-1040b4dee2ec).
+	if !syncutil.WaitWithTimeout(&s.backgroundTasksWG, s.backgroundTasksJoinTimeout) {
+		log.Warn("[shutdown] background tasks (fork-pressure logger/zombie watcher/zombie reaper) did not exit within timeout", "timeout", s.backgroundTasksJoinTimeout)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -971,7 +1491,7 @@ func (s *Server) registerServerInfoHandler() {
 // It binds eagerly (returns a bind error immediately if the port is in use),
 // then runs the server in a background goroutine until ctx is cancelled.
 func (s *Server) StartRemote(ctx context.Context, remoteAddr string, tlsCfg *tls.Config, authMW func(http.Handler) http.Handler) error {
-	inner := http.Handler(s.mux)
+	inner := http.Handler(s)
 	if authMW != nil {
 		inner = authMW(inner)
 	}
@@ -1016,6 +1536,36 @@ func (s *Server) StartRemote(ctx context.Context, remoteAddr string, tlsCfg *tls
 	}()
 
 	return nil
+}
+
+// notificationDecisionListerAdapter adapts *notifications.NotificationHistoryStore.List
+// to session.NotificationDecisionLister, which BuildDecisionsSnapshot
+// (session/session_summary_snapshot.go) needs. session cannot import
+// server/notifications directly (server/notifications -> server/events ->
+// pkg/events -> session is a real import cycle — see session.DecisionRecord's doc
+// comment), so this thin adapter lives here where both packages are already
+// imported.
+type notificationDecisionListerAdapter struct {
+	store *notifications.NotificationHistoryStore
+}
+
+// ListDecisionRecords implements session.NotificationDecisionLister.
+func (a *notificationDecisionListerAdapter) ListDecisionRecords(_ context.Context, sessionID string) ([]session.DecisionRecord, error) {
+	records, _, err := a.store.List(notifications.ListOptions{
+		SessionID: sessionID,
+		Limit:     notifications.MaxNotifications, // unpaginated — need every record for this session
+	})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]session.DecisionRecord, len(records))
+	for i, r := range records {
+		out[i] = session.DecisionRecord{
+			NotificationType: r.NotificationType,
+			ApprovalDecision: r.Metadata["approval_decision"],
+		}
+	}
+	return out, nil
 }
 
 // instanceDataLister is the narrow slice of *session.Storage that

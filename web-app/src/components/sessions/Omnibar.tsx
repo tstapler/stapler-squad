@@ -1,10 +1,19 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
+import { createPortal } from "react-dom";
 import { useRouter } from "next/navigation";
 import Fuse from "fuse.js";
-import { detect, InputType, INPUT_TYPE_INFO, DetectionResult } from "@/lib/omnibar";
-import { useModeReducer, OmnibarModeState } from "@/lib/omnibar/modes/useModeReducer";
+import {
+  detect,
+  InputType,
+  INPUT_TYPE_INFO,
+  DetectionResult,
+} from "@/lib/omnibar";
+import {
+  useModeReducer,
+  OmnibarModeState,
+} from "@/lib/omnibar/modes/useModeReducer";
 import { PROGRAMS } from "@/lib/constants/programs";
 import { getApiBaseUrl } from "@/lib/config";
 import { useTheme } from "@/lib/contexts/ThemeContext";
@@ -12,38 +21,76 @@ import type { ThemeName } from "@/lib/contexts/ThemeContext";
 import { usePathCompletions } from "@/lib/hooks/usePathCompletions";
 import { usePathHistory } from "@/lib/hooks/usePathHistory";
 import { useWorktreeSuggestions } from "@/lib/hooks/useWorktreeSuggestions";
-import { useSessionSearch, type SessionSearchResult } from "@/lib/hooks/useSessionSearch";
+import { useDestinationPathPreview } from "@/lib/hooks/useDestinationPathPreview";
+import {
+  useSessionSearch,
+  type SessionSearchResult,
+} from "@/lib/hooks/useSessionSearch";
 import { useAppSelector } from "@/lib/store";
 import { selectActiveSessionsSortedByUpdatedAt } from "@/lib/store/sessionsSlice";
 import { Session, SessionType } from "@/gen/session/v1/types_pb";
-import { PathCompletionDropdown, type CompletionEntry } from "@/components/ui/PathCompletionDropdown";
+import {
+  PathCompletionDropdown,
+  type CompletionEntry,
+} from "@/components/ui/PathCompletionDropdown";
 import { AtCommandDropdown } from "@/components/ui/AtCommandDropdown";
 import { useAtCommandSuggestions } from "@/lib/hooks/useAtCommandSuggestions";
 import type { WorkflowEntry } from "@/lib/omnibar/detectors/WorkflowDetector";
 import type { AliasMetadata } from "@/lib/omnibar/detectors/AliasDetector";
-import { OmnibarResultList, getResultListItemCount, getHighlightedItemId } from "./OmnibarResultList";
+import {
+  OmnibarResultList,
+  getResultListItemCount,
+  getHighlightedItemId,
+} from "./OmnibarResultList";
 import { OmnibarModeBadge } from "./OmnibarModeBadge";
-import { OmnibarCreationPanel, SESSION_TYPES } from "./OmnibarCreationPanel";
+import {
+  OmnibarCreationPanel,
+  SESSION_TYPES,
+  type RemoteOption,
+} from "./OmnibarCreationPanel";
 import { parseSlashCommand } from "@/lib/omnibar/parseSlashCommand";
 import { parseInputWithSeparator } from "@/lib/omnibar/parseInput";
 import { toSessionSlug } from "@/lib/omnibar/slugify";
 import {
-  overlay, modal, inputContainer, typeIndicator, input as inputClass,
-  detectionInfo, detectionBadge, unknown,
-  shortcuts, shortcut, shortcutKey, completionError as completionErrorClass,
-  pathIndicator, pathIndicatorValid, pathIndicatorInvalid, pathIndicatorLoading,
+  overlay,
+  modal,
+  inputContainer,
+  typeIndicator,
+  input as inputClass,
+  detectionInfo,
+  detectionBadge,
+  unknown,
+  shortcuts,
+  shortcut,
+  shortcutKey,
+  completionError as completionErrorClass,
+  pathIndicator,
+  pathIndicatorValid,
+  pathIndicatorInvalid,
+  pathIndicatorLoading,
   createButton,
+  error as errorClass,
 } from "./Omnibar.css";
 import { AliasPalette } from "@/components/ui/AliasPalette";
 import { useAliasSuggestions } from "@/lib/hooks/useAliasSuggestions";
 import { useAliases } from "@/lib/hooks/useAliases";
-import { addRecentShellCommand, getRecentShellCommands } from "@/lib/omnibar/recentShellCommands";
+import {
+  addRecentShellCommand,
+  getRecentShellCommands,
+} from "@/lib/omnibar/recentShellCommands";
+import type { LauncherPresetEntry } from "@/lib/hooks/useLauncherPresets";
+import type {
+  PresetMetadata,
+  PresetNotFoundMetadata,
+} from "@/lib/omnibar/detectors/PresetDetector";
 
 // Stable identity for callers that omit the `workflows` prop. `workflows` is a
 // dependency of the detection debounce effect below — a fresh `[]` literal as
 // the default parameter value would get a new identity every render, which
 // would restart the 150ms debounce on every render for such callers.
 const EMPTY_WORKFLOWS: WorkflowEntry[] = [];
+const EMPTY_PRESETS: LauncherPresetEntry[] = [];
+const EMPTY_REMOTES: RemoteOption[] = [];
 
 interface OmnibarProps {
   isOpen: boolean;
@@ -52,11 +99,24 @@ interface OmnibarProps {
   onNavigateToSession: (sessionId: string) => void;
   onNavigateToSessionInNewPane?: (sessionId: string) => void;
   onRunWorkflow?: (slug: string, arg: string) => Promise<void>;
+  /** Creates a backlog item from a free-text chat message (the "backlog: <message>" trigger). */
+  onCreateBacklogItemFromChat?: (text: string) => Promise<void>;
   initialMode?: "discovery" | "creation";
   initialInput?: string;
   initialTitle?: string;
   /** Available workflows for @slug autocomplete. */
   workflows?: WorkflowEntry[];
+  /** Launcher presets, fetched once by OmnibarContext and shared with the PresetDetector
+   * registration there — passed through so OmnibarPresetList renders the same data the
+   * detector resolves against, rather than each maintaining its own independent fetch. */
+  launcherPresets?: LauncherPresetEntry[];
+  launcherPresetsLoading?: boolean;
+  launcherPresetsLoadError?: string | null;
+  /** Configured remotes for the "Remote host" selector (ADR-001: remote-as-orthogonal-flag).
+   * TODO(Phase 6): OmnibarContext will source this from a `remotesSlice` populated by a
+   * ListRemotes RPC — until then it's an optional prop that defaults to empty (no selector
+   * rendered, today's local-only behavior unchanged). */
+  remotes?: RemoteOption[];
 }
 
 // Consolidated form state
@@ -67,7 +127,12 @@ export interface OmnibarFormState {
   category: string;
   autoYes: boolean;
   useTitleAsBranch: boolean;
-  sessionType: "directory" | "new_worktree" | "existing_worktree" | "one_off" | "new_project";
+  sessionType:
+    | "directory"
+    | "new_worktree"
+    | "existing_worktree"
+    | "one_off"
+    | "new_project";
   existingWorktree: string;
   workingDir: string;
   // New project mode fields
@@ -82,6 +147,17 @@ export interface OmnibarFormState {
   // except one_off) rather than a session type of its own — see OmnibarCreationPanel's
   // "Autonomous mode" checkbox.
   autonomousMode: boolean;
+  // Auto-approve (yolo mode): injects a per-agent CLI flag that skips permission/approval
+  // prompts entirely. Independent of autoYes — see OmnibarCreationPanel's checkbox comment.
+  autoApprove: boolean;
+  // extraArgs carries a selected launcher preset's argv[1:] verbatim (never whitespace-split)
+  // through to the extra_args RPC field. Parallel to program, which carries argv[0].
+  extraArgs: string[];
+  // Remote target: an orthogonal flag that composes with whichever sessionType is selected
+  // (any type) rather than a session type of its own — see ADR-001
+  // (remote-as-orthogonal-flag) and OmnibarCreationPanel's "Remote host" selector. Names an
+  // already-configured RemoteConfig by name; undefined means "run locally" (today's default).
+  remoteName?: string;
 }
 
 const INITIAL_FORM_STATE: OmnibarFormState = {
@@ -101,6 +177,10 @@ const INITIAL_FORM_STATE: OmnibarFormState = {
   createIfMissing: false,
   firstPrompt: "",
   autonomousMode: false,
+  autoApprove: false,
+  extraArgs: [],
+  // undefined = local (this machine) — see OmnibarFormState.remoteName's doc comment.
+  remoteName: undefined,
 };
 
 // Consolidated UI state
@@ -135,10 +215,18 @@ export interface OmnibarSessionData {
   createIfMissing?: boolean;
   // Autonomous mode: run without human permission prompts (LLM approves tool calls).
   autonomousMode?: boolean;
+  // Auto-approve (yolo mode): injects a per-agent CLI flag that skips permission/approval
+  // prompts entirely. Independent of autoYes.
+  autoApprove?: boolean;
   // Permission mode passed to Claude Code (e.g. "auto" for autonomous sessions).
   permissionMode?: string;
   aliasName?: string;
   extraCliFlags?: string;
+  extraArgs?: string[];
+  // Names an already-configured remote (RemoteConfig.Name) to run this session on over SSH,
+  // per ADR-001 (remote-as-orthogonal-flag). Undefined runs locally — see
+  // OmnibarFormState.remoteName's doc comment.
+  remoteName?: string;
 }
 
 // Validates a project name: no path separators, null bytes, or leading/trailing spaces/dots.
@@ -149,17 +237,40 @@ function isValidProjectName(name: string): boolean {
 
 const RESULT_LISTBOX_ID = "omnibar-result-listbox";
 
-function protoSessionTypeToFormString(st: SessionType): OmnibarFormState["sessionType"] {
+function protoSessionTypeToFormString(
+  st: SessionType,
+): OmnibarFormState["sessionType"] {
   switch (st) {
-    case SessionType.DIRECTORY: return "directory";
-    case SessionType.NEW_WORKTREE: return "new_worktree";
-    case SessionType.EXISTING_WORKTREE: return "existing_worktree";
-    case SessionType.ONE_OFF: return "one_off";
-    default: return "new_worktree";
+    case SessionType.DIRECTORY:
+      return "directory";
+    case SessionType.NEW_WORKTREE:
+      return "new_worktree";
+    case SessionType.EXISTING_WORKTREE:
+      return "existing_worktree";
+    case SessionType.ONE_OFF:
+      return "one_off";
+    default:
+      return "new_worktree";
   }
 }
 
-export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession, onNavigateToSessionInNewPane, onRunWorkflow, initialMode, initialInput, initialTitle, workflows = EMPTY_WORKFLOWS }: OmnibarProps) {
+export function Omnibar({
+  isOpen,
+  onClose,
+  onCreateSession,
+  onNavigateToSession,
+  onNavigateToSessionInNewPane,
+  onRunWorkflow,
+  onCreateBacklogItemFromChat,
+  initialMode,
+  initialInput,
+  initialTitle,
+  workflows = EMPTY_WORKFLOWS,
+  launcherPresets = EMPTY_PRESETS,
+  launcherPresetsLoading = false,
+  launcherPresetsLoadError = null,
+  remotes = EMPTY_REMOTES,
+}: OmnibarProps) {
   const router = useRouter();
   const { setTheme } = useTheme();
 
@@ -172,16 +283,19 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
   useEffect(() => {
     if (debounceFuseRef.current) clearTimeout(debounceFuseRef.current);
     debounceFuseRef.current = setTimeout(() => setDebouncedInput(input), 150);
-    return () => { if (debounceFuseRef.current) clearTimeout(debounceFuseRef.current); };
+    return () => {
+      if (debounceFuseRef.current) clearTimeout(debounceFuseRef.current);
+    };
   }, [input]);
   const [detection, setDetection] = useState<DetectionResult | null>(null);
 
   // Consolidated form state
-  const [formState, setFormState] = useState<OmnibarFormState>(INITIAL_FORM_STATE);
+  const [formState, setFormState] =
+    useState<OmnibarFormState>(INITIAL_FORM_STATE);
   const setFormField = useCallback(
     <K extends keyof OmnibarFormState>(key: K, value: OmnibarFormState[K]) =>
       setFormState((prev) => ({ ...prev, [key]: value })),
-    []
+    [],
   );
 
   // Consolidated UI state
@@ -195,50 +309,126 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
   const setUIField = useCallback(
     <K extends keyof OmnibarUIState>(key: K, value: OmnibarUIState[K]) =>
       setUIState((prev) => ({ ...prev, [key]: value })),
-    []
+    [],
   );
 
-  const [activeDropdown, setActiveDropdown] = useState<"alias" | "workflow" | "search" | null>(null);
+  const [activeDropdown, setActiveDropdown] = useState<
+    "alias" | "workflow" | "search" | null
+  >(null);
   const [aliasSuggestIndex, setAliasSuggestIndex] = useState(-1);
 
   // Submission state
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Synchronous double-submit guard: `isSubmitting` state only becomes visible to
+  // handleSubmit's closure after React commits the re-render, which leaves a window
+  // for a second rapid click (e.g. a fast double-click) to read the same stale
+  // `isSubmitting === false` closure value. A ref is updated synchronously in the
+  // same call stack as the first click, so a second click arriving before React
+  // re-renders is still rejected.
+  const isSubmittingRef = useRef(false);
 
   // Mode state machine
   const [modeState, dispatchMode] = useModeReducer();
 
   // Confirmation dialog state for Directory mode with non-existent path
   const [showPathConfirmation, setShowPathConfirmation] = useState(false);
-  const [pendingSessionData, setPendingSessionData] = useState<OmnibarSessionData | null>(null);
+  const [pendingSessionData, setPendingSessionData] =
+    useState<OmnibarSessionData | null>(null);
 
   // Convenience aliases for existing code
   // Destructure only fields needed for validation/submission logic in Omnibar.tsx
-  const { sessionName, program, category, autoYes, sessionType, branch, useTitleAsBranch, existingWorktree, workingDir, parentDir, projectName, newProjectSessionType, createIfMissing } = formState;
+  const {
+    sessionName,
+    program,
+    category,
+    autoYes,
+    autoApprove,
+    sessionType,
+    branch,
+    useTitleAsBranch,
+    existingWorktree,
+    workingDir,
+    parentDir,
+    projectName,
+    newProjectSessionType,
+    createIfMissing,
+  } = formState;
   const { showAdvanced } = uiState;
-  const { dropdownIndex, dropdownDismissed, resultHighlightIndex, atSuggestIndex } = uiState;
+  const {
+    dropdownIndex,
+    dropdownDismissed,
+    resultHighlightIndex,
+    atSuggestIndex,
+  } = uiState;
   // Used in detection auto-fill effects
-  const setSessionName = useCallback((v: string) => setFormField("sessionName", v), [setFormField]);
-  const setBranch = useCallback((v: string) => setFormField("branch", v), [setFormField]);
-  const setDropdownIndex = useCallback((updater: number | ((prev: number) => number)) => {
-    setUIState((prev) => ({
-      ...prev,
-      dropdownIndex: typeof updater === "function" ? updater(prev.dropdownIndex) : updater,
-    }));
-  }, []);
-  const setDropdownDismissed = useCallback((v: boolean) => setUIField("dropdownDismissed", v), [setUIField]);
-  const setResultHighlightIndex = useCallback((updater: number | ((prev: number) => number)) => {
-    setUIState((prev) => ({
-      ...prev,
-      resultHighlightIndex: typeof updater === "function" ? updater(prev.resultHighlightIndex) : updater,
-    }));
-  }, []);
+  const setSessionName = useCallback(
+    (v: string) => setFormField("sessionName", v),
+    [setFormField],
+  );
+  const setBranch = useCallback(
+    (v: string) => setFormField("branch", v),
+    [setFormField],
+  );
+
+  // Selected launcher preset (list click or typed preset:<id>), drives the resolution chip.
+  // Deliberately separate from `detection` state — a list click never touches the text input,
+  // so it can't be derived from detection.type the way alias-resolution-chip is.
+  const [selectedPreset, setSelectedPreset] =
+    useState<LauncherPresetEntry | null>(null);
+  const handlePresetSelect = useCallback(
+    (preset: LauncherPresetEntry) => {
+      // Unconditional overwrite (no "only if empty" guard) — a discrete list click/typed
+      // shorthand resolution is a one-shot action, not continuous re-detection on every
+      // keystroke, so the thrashing concern that motivates the alias auto-fill guard doesn't
+      // apply here (see plan.md Pattern Decisions).
+      const [presetProgram, ...extraArgs] = preset.argv;
+      setFormField("program", presetProgram);
+      setFormField("extraArgs", extraArgs);
+      if (preset.defaultPath) {
+        setFormField("workingDir", preset.defaultPath);
+      }
+      setSelectedPreset(preset);
+    },
+    [setFormField],
+  );
+  const setDropdownIndex = useCallback(
+    (updater: number | ((prev: number) => number)) => {
+      setUIState((prev) => ({
+        ...prev,
+        dropdownIndex:
+          typeof updater === "function" ? updater(prev.dropdownIndex) : updater,
+      }));
+    },
+    [],
+  );
+  const setDropdownDismissed = useCallback(
+    (v: boolean) => setUIField("dropdownDismissed", v),
+    [setUIField],
+  );
+  const setResultHighlightIndex = useCallback(
+    (updater: number | ((prev: number) => number)) => {
+      setUIState((prev) => ({
+        ...prev,
+        resultHighlightIndex:
+          typeof updater === "function"
+            ? updater(prev.resultHighlightIndex)
+            : updater,
+      }));
+    },
+    [],
+  );
 
   // Refs
   const inputRef = useRef<HTMLInputElement>(null);
   const debounceRef = useRef<NodeJS.Timeout | null>(null);
   const lastSuggestedNameRef = useRef<string>("");
   const prevDetectionTypeRef = useRef<string | null>(null);
+  // Tracks the input value as of the last time the detection effect actually
+  // ran its body, so a reset_to_discovery dispatch only fires when input truly
+  // transitioned away from empty — not merely because aliases/workflows finished
+  // an async refetch while input was already empty (see reset_to_discovery guard below).
+  const prevDetectionInputRef = useRef<string>("");
   // Stable ref so handleKeyDown can always call the latest handleSubmit without
   // a circular declaration-order dependency (handleKeyDown is declared before handleSubmit).
   const handleSubmitRef = useRef<() => void>(() => {});
@@ -249,9 +439,15 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
   const sessionNameRef = useRef(sessionName);
   const branchRef = useRef(branch);
   const programRef = useRef(program);
-  useEffect(() => { sessionNameRef.current = sessionName; }, [sessionName]);
-  useEffect(() => { branchRef.current = branch; }, [branch]);
-  useEffect(() => { programRef.current = program; }, [program]);
+  useEffect(() => {
+    sessionNameRef.current = sessionName;
+  }, [sessionName]);
+  useEffect(() => {
+    branchRef.current = branch;
+  }, [branch]);
+  useEffect(() => {
+    programRef.current = program;
+  }, [program]);
   const lastSuggestedProgramRef = useRef<string>("");
 
   // API base URL for pre-session image uploads — uses shared helper for SSR/dev consistency.
@@ -264,20 +460,23 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
 
   // `>shell <dir>` is still typing its directory argument when no `-- command`
   // has been typed yet — offer the same directory completions as a normal path input.
-  const shellMetadata = detection?.type === InputType.SpawnShell
-    ? (detection.metadata as { shellDir?: string; shellCommand?: string } | undefined)
-    : undefined;
+  const shellMetadata =
+    detection?.type === InputType.SpawnShell
+      ? (detection.metadata as
+          { shellDir?: string; shellCommand?: string } | undefined)
+      : undefined;
   const isShellDirInput = Boolean(shellMetadata && !shellMetadata.shellCommand);
 
   // Use the detected local path (strips branch suffix for PathWithBranch), or the
   // in-progress `>shell` directory argument.
   const completionPrefix = isPathInput
-    ? detection?.localPath ?? input
+    ? (detection?.localPath ?? input)
     : isShellDirInput
-    ? shellMetadata?.shellDir ?? ""
-    : "";
+      ? (shellMetadata?.shellDir ?? "")
+      : "";
 
-  const isPathCompletionActive = (isPathInput || isShellDirInput) && completionPrefix.length > 0;
+  const isPathCompletionActive =
+    (isPathInput || isShellDirInput) && completionPrefix.length > 0;
 
   const {
     entries: completionEntries,
@@ -290,7 +489,11 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
     directoriesOnly: true,
   });
 
-  const { getMatching: getHistoryMatching, getAll: getAllHistory, save: saveHistory } = usePathHistory();
+  const {
+    getMatching: getHistoryMatching,
+    getAll: getAllHistory,
+    save: saveHistory,
+  } = usePathHistory();
 
   // Worktree suggestions for the "Use Existing Worktree" mode.
   // Prefer the pre-selected repo path from creation_with_repo mode; fall back to the
@@ -299,10 +502,59 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
     modeState.type === "creation_with_repo" && modeState.path
       ? modeState.path
       : isPathInput
-      ? (detection?.localPath ?? "")
-      : "";
-  const { worktrees, isLoading: isWorktreesLoading, error: worktreesError } = useWorktreeSuggestions(repoPathForWorktrees, {
+        ? (detection?.localPath ?? "")
+        : "";
+  const {
+    worktrees,
+    isLoading: isWorktreesLoading,
+    error: worktreesError,
+  } = useWorktreeSuggestions(repoPathForWorktrees, {
     enabled: sessionType === "existing_worktree" && !!repoPathForWorktrees,
+  });
+
+  // Destination path preview: github_url mode previews the exact clone destination for a
+  // detected GitHub URL/PR/shorthand; new_worktree mode previews the deterministic prefix
+  // of where the worktree will be created (the real path also gets a random suffix at
+  // creation time — see PreviewWorktreePath's doc comment).
+  const isGitHubUrlDetection =
+    detection?.type === InputType.GitHubPR ||
+    detection?.type === InputType.GitHubBranch ||
+    detection?.type === InputType.GitHubRepo ||
+    detection?.type === InputType.GitHubShorthand;
+
+  const destinationPreviewParams = useMemo(() => {
+    if (isGitHubUrlDetection && detection?.parsedValue) {
+      return { mode: "github_url" as const, input: detection.parsedValue };
+    }
+    if (
+      sessionType === "new_worktree" &&
+      repoPathForWorktrees &&
+      sessionName.trim()
+    ) {
+      return {
+        mode: "new_worktree" as const,
+        input: "",
+        repoPath: repoPathForWorktrees,
+        sessionName: useTitleAsBranch ? sessionName : branch || sessionName,
+      };
+    }
+    return null;
+  }, [
+    isGitHubUrlDetection,
+    detection?.parsedValue,
+    sessionType,
+    repoPathForWorktrees,
+    sessionName,
+    useTitleAsBranch,
+    branch,
+  ]);
+
+  const {
+    path: destinationPreviewPath,
+    isExact: destinationPreviewIsExact,
+    isLoading: isDestinationPreviewLoading,
+  } = useDestinationPathPreview(destinationPreviewParams, {
+    enabled: destinationPreviewParams !== null,
   });
 
   // Convert live OS entries to CompletionEntry for type-safe downstream use.
@@ -313,7 +565,7 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
         path: e.path,
         isDirectory: e.isDirectory,
       })),
-    [completionEntries]
+    [completionEntries],
   );
 
   // History entries matching the current prefix.
@@ -327,13 +579,13 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
             isHistory: true,
           }))
         : [],
-    [isPathInput, completionPrefix, getHistoryMatching]
+    [isPathInput, completionPrefix, getHistoryMatching],
   );
 
   // Merged entries: history first, then live (deduped against history).
   const mergedEntries = useMemo<CompletionEntry[]>(() => {
     const liveDeduped = liveEntries.filter(
-      (e) => !historyMatches.some((h) => h.path === e.path)
+      (e) => !historyMatches.some((h) => h.path === e.path),
     );
     return [...historyMatches, ...liveDeduped];
   }, [historyMatches, liveEntries]);
@@ -347,8 +599,11 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
   const isDiscoveryMode = modeState.type === "discovery";
 
   // @command autocomplete — active while user is typing "@slug" (no space yet)
-  const { isAtCommand, suggestions: atSuggestions, complete: completeAtCommand } =
-    useAtCommandSuggestions(input, workflows);
+  const {
+    isAtCommand,
+    suggestions: atSuggestions,
+    complete: completeAtCommand,
+  } = useAtCommandSuggestions(input, workflows);
   const isAtDropdownVisible = isDiscoveryMode && isAtCommand;
 
   const { aliases, error: aliasError, refetch: refetchAliases } = useAliases();
@@ -361,15 +616,25 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
     }
     prevIsOpenRef.current = isOpen;
   }, [isOpen, refetchAliases]);
-  const { isAliasBrowse, isAliasCompletion, filteredAliases, complete: completeAlias } = useAliasSuggestions(input, aliases);
-  const isAliasPaletteVisible = isDiscoveryMode && (isAliasBrowse || isAliasCompletion);
+  const {
+    isAliasBrowse,
+    isAliasCompletion,
+    filteredAliases,
+    complete: completeAlias,
+  } = useAliasSuggestions(input, aliases);
+  const isAliasPaletteVisible =
+    isDiscoveryMode && (isAliasBrowse || isAliasCompletion);
 
   // Session search query uses the debounced input so Fuse only runs after typing pauses.
   const sessionSearchQuery = useMemo(() => {
     if (!debouncedInput.trim()) return "";
     if (detection?.type === InputType.SessionSearch) return debouncedInput;
     // Eagerly treat as session search if input doesn't look like a path or URL
-    if (!debouncedInput.startsWith("/") && !debouncedInput.startsWith("~") && !debouncedInput.startsWith("http")) {
+    if (
+      !debouncedInput.startsWith("/") &&
+      !debouncedInput.startsWith("~") &&
+      !debouncedInput.startsWith("http")
+    ) {
       return debouncedInput;
     }
     return "";
@@ -385,14 +650,18 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
         ignoreLocation: true,
         minMatchCharLength: 1,
       }),
-    [allRepoEntries]
+    [allRepoEntries],
   );
 
-  const activeSortedSessions = useAppSelector(selectActiveSessionsSortedByUpdatedAt);
+  const activeSortedSessions = useAppSelector(
+    selectActiveSessionsSortedByUpdatedAt,
+  );
 
   const displayedSessionResults = useMemo((): SessionSearchResult[] => {
     if (!debouncedInput.trim()) {
-      return activeSortedSessions.slice(0, 5).map((s) => ({ session: s, score: 0, matchedFields: [] }));
+      return activeSortedSessions
+        .slice(0, 5)
+        .map((s) => ({ session: s, score: 0, matchedFields: [] }));
     }
     return sessionResults;
   }, [debouncedInput, sessionResults, activeSortedSessions]);
@@ -401,12 +670,15 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
     if (!debouncedInput.trim()) {
       return allRepoEntries.slice(0, 5);
     }
-    return repoFuse.search(debouncedInput).map((r) => r.item).slice(0, 8);
+    return repoFuse
+      .search(debouncedInput)
+      .map((r) => r.item)
+      .slice(0, 8);
   }, [debouncedInput, allRepoEntries, repoFuse]);
 
   const totalResultCount = getResultListItemCount(
     displayedSessionResults.length,
-    displayedRepoEntries.length
+    displayedRepoEntries.length,
   );
 
   // Accept a completion entry: fill the input and continue for further completion.
@@ -419,7 +691,7 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
       setDropdownDismissed(false);
       inputRef.current?.focus();
     },
-    [isShellDirInput, setDropdownIndex, setDropdownDismissed]
+    [isShellDirInput, setDropdownIndex, setDropdownDismissed],
   );
 
   // Detect input type with debouncing
@@ -452,7 +724,10 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
           // Update mode based on detection type
           if (result.type === InputType.NewSession) {
             // "new/" prefix typed → creation_with_repo mode with query from parsedValue
-            dispatchMode({ kind: "new_prefix_typed", query: result.parsedValue });
+            dispatchMode({
+              kind: "new_prefix_typed",
+              query: result.parsedValue,
+            });
           } else {
             dispatchMode({ kind: "detect", detection: result });
             if (result.type === InputType.SessionSearch) {
@@ -468,7 +743,11 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
             // Derive-on-read: split on first `>` to populate name + firstPrompt
             const parsed = parseInputWithSeparator(input);
             const derivedName = parsed.name;
-            if (derivedName && (!sessionNameRef.current || sessionNameRef.current === lastSuggestedNameRef.current)) {
+            if (
+              derivedName &&
+              (!sessionNameRef.current ||
+                sessionNameRef.current === lastSuggestedNameRef.current)
+            ) {
               setSessionName(derivedName);
               lastSuggestedNameRef.current = derivedName;
             }
@@ -485,7 +764,10 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
             // (running both would reset lastSuggestedNameRef mid-effect and cause oscillation).
             // Skip for Command/SpawnShell — their suggestedName is a human-readable label
             // ("Switch to Matrix theme"), not a session-name candidate.
-            if (!sessionNameRef.current || sessionNameRef.current === lastSuggestedNameRef.current) {
+            if (
+              !sessionNameRef.current ||
+              sessionNameRef.current === lastSuggestedNameRef.current
+            ) {
               // Detectors like LocalPath/PathWithBranch/NewSession/GitHub* build suggestedName
               // from raw path segments, branch names, or free text — slug it here so every
               // detector gets a valid kebab-case name for free instead of each one remembering to.
@@ -506,15 +788,20 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
             const aliasMeta = result.metadata as AliasMetadata | undefined;
             const alias = aliasMeta?.alias;
             if (alias) {
-              if (alias.program && (!programRef.current || programRef.current === lastSuggestedProgramRef.current)) {
+              if (
+                alias.program &&
+                (!programRef.current ||
+                  programRef.current === lastSuggestedProgramRef.current)
+              ) {
                 setFormField("program", alias.program);
                 lastSuggestedProgramRef.current = alias.program;
               }
               // UNSPECIFIED means "Default (directory)" in the alias editor — always apply it.
               // Skipping UNSPECIFIED left the form at its initial "new_worktree" default.
-              const resolvedSessionType = alias.sessionType !== SessionType.UNSPECIFIED
-                ? protoSessionTypeToFormString(alias.sessionType)
-                : "directory";
+              const resolvedSessionType =
+                alias.sessionType !== SessionType.UNSPECIFIED
+                  ? protoSessionTypeToFormString(alias.sessionType)
+                  : "directory";
               setFormField("sessionType", resolvedSessionType);
               setFormField("autoYes", alias.autoYes);
             }
@@ -527,28 +814,56 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
             // If the alias defines a name_prefix, prepend it (e.g. prefix "ssq-" → "ssq-my-feature").
             const typedLabel = aliasMeta?.label;
             const namePrefix = alias?.namePrefix ?? "";
-            if (typedLabel && (!sessionNameRef.current || sessionNameRef.current === lastSuggestedNameRef.current)) {
+            if (
+              typedLabel &&
+              (!sessionNameRef.current ||
+                sessionNameRef.current === lastSuggestedNameRef.current)
+            ) {
               // Slug the typed portion only — speech-to-text and free typing won't
               // produce dashes on their own (e.g. "deck drainage" → "deck-drainage").
-              const suggested = namePrefix ? `${namePrefix}${toSessionSlug(typedLabel)}` : toSessionSlug(typedLabel);
+              const suggested = namePrefix
+                ? `${namePrefix}${toSessionSlug(typedLabel)}`
+                : toSessionSlug(typedLabel);
               setSessionName(suggested);
               lastSuggestedNameRef.current = suggested;
-            } else if (namePrefix && (!sessionNameRef.current || sessionNameRef.current === lastSuggestedNameRef.current)) {
+            } else if (
+              namePrefix &&
+              (!sessionNameRef.current ||
+                sessionNameRef.current === lastSuggestedNameRef.current)
+            ) {
               // No label yet but prefix defined: show just the prefix so the user knows what to complete.
               setSessionName(namePrefix);
               lastSuggestedNameRef.current = namePrefix;
             }
+          } else if (result.type === InputType.Preset) {
+            // Typed preset:<id> shorthand resolves through the same handler as a list click,
+            // so both entry points produce identical form-state effects (single code path).
+            const presetMeta = result.metadata as PresetMetadata | undefined;
+            if (presetMeta?.preset) {
+              handlePresetSelect(presetMeta.preset);
+            }
           }
         } else {
-          setDetection(null);
-          dispatchMode({ kind: "reset_to_discovery" });
-          setResultHighlightIndex(-1);
+          // This branch also runs when aliases/workflows finish an async refetch
+          // while input is (and already was) empty — that's an identity change in
+          // this effect's dep array, not a real input edit. Only reset to discovery
+          // when input actually transitioned from non-empty to empty, so it doesn't
+          // stomp a mode the user reached another way (e.g. Ctrl+Shift+K creation
+          // mode) before they've typed anything.
+          if (prevDetectionInputRef.current.trim()) {
+            setDetection(null);
+            dispatchMode({ kind: "reset_to_discovery" });
+            setResultHighlightIndex(-1);
+          }
         }
+        prevDetectionInputRef.current = input;
       } catch (err) {
         // Never let a thrown exception mid-update abandon UI state — leave the
         // last valid detection/canSubmit state in place and surface the failure.
         console.error("[Omnibar] input detection failed:", err);
-        setError(err instanceof Error ? err.message : "Failed to process input");
+        setError(
+          err instanceof Error ? err.message : "Failed to process input",
+        );
       }
     }, 150); // 150ms debounce
 
@@ -561,7 +876,28 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
     // alias/workflow lists resolve — otherwise a fast "@alias" typed before the
     // AliasDetector/WorkflowDetector registers permanently mis-detects (e.g. as
     // SessionSearch) with no keystroke left to trigger a re-run.
-  }, [input, dispatchMode, setFormField, setBranch, setDropdownDismissed, setResultHighlightIndex, setSessionName, aliases, workflows]);
+  }, [
+    input,
+    dispatchMode,
+    setFormField,
+    setBranch,
+    setDropdownDismissed,
+    setResultHighlightIndex,
+    setSessionName,
+    aliases,
+    workflows,
+    handlePresetSelect,
+  ]);
+
+  // Clear a stale submission error whenever the input value itself changes —
+  // keyed on `input` alone (not the detection-debounce effect's deps, which
+  // also include aliases/workflows) so an unrelated async refetch can't wipe
+  // a just-shown error. Covers every setInput() call site (typing, recent
+  // shell command chips, alias/at-command completion, clone session), not
+  // just the <input>'s own onChange.
+  useEffect(() => {
+    setError(null);
+  }, [input]);
 
   // Focus input when opened
   useEffect(() => {
@@ -576,8 +912,20 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
       setInput("");
       setDetection(null);
       setFormState(INITIAL_FORM_STATE);
-      setUIState({ showAdvanced: false, dropdownIndex: -1, dropdownDismissed: false, resultHighlightIndex: -1, atSuggestIndex: -1 });
+      setUIState({
+        showAdvanced: false,
+        dropdownIndex: -1,
+        dropdownDismissed: false,
+        resultHighlightIndex: -1,
+        atSuggestIndex: -1,
+      });
       setError(null);
+      // Defense-in-depth: handleSubmit's own finally blocks already reset this on
+      // success/failure, but this instance never unmounts across open/close cycles, so
+      // also clear it here in case onClose() didn't synchronously flip isOpen after a
+      // submission (the original bug this guards against — see Omnibar.submitReset.test.tsx).
+      setIsSubmitting(false);
+      isSubmittingRef.current = false;
       lastSuggestedNameRef.current = "";
       prevDetectionTypeRef.current = null;
       dispatchMode({ kind: "reset_to_discovery" });
@@ -628,7 +976,7 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
       onNavigateToSession(session.id);
       onClose();
     },
-    [onNavigateToSession, onClose]
+    [onNavigateToSession, onClose],
   );
 
   const handleSessionSelectInNewPane = useCallback(
@@ -636,7 +984,7 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
       onNavigateToSessionInNewPane?.(session.id);
       onClose();
     },
-    [onNavigateToSessionInNewPane, onClose]
+    [onNavigateToSessionInNewPane, onClose],
   );
 
   const handleCloneSession = useCallback(
@@ -650,7 +998,7 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
         inputRef.current?.focus();
       }
     },
-    [dispatchMode, setDropdownDismissed, setResultHighlightIndex]
+    [dispatchMode, setDropdownDismissed, setResultHighlightIndex],
   );
 
   const handleRepoSelect = useCallback(
@@ -661,7 +1009,7 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
       setDropdownDismissed(false);
       inputRef.current?.focus();
     },
-    [dispatchMode, setDropdownDismissed, setResultHighlightIndex]
+    [dispatchMode, setDropdownDismissed, setResultHighlightIndex],
   );
 
   const dispatchHighlightedResultAction = useCallback(
@@ -678,7 +1026,14 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
         }
       }
     },
-    [displayedSessionResults, displayedRepoEntries, handleSessionSelect, handleRepoSelect, dispatchMode, setResultHighlightIndex]
+    [
+      displayedSessionResults,
+      displayedRepoEntries,
+      handleSessionSelect,
+      handleRepoSelect,
+      dispatchMode,
+      setResultHighlightIndex,
+    ],
   );
 
   // Handle keyboard shortcuts
@@ -688,7 +1043,9 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
       if (activeDropdown === "alias" && filteredAliases.length > 0) {
         if (e.key === "ArrowDown") {
           e.preventDefault();
-          setAliasSuggestIndex((i) => Math.min(i + 1, filteredAliases.length - 1));
+          setAliasSuggestIndex((i) =>
+            Math.min(i + 1, filteredAliases.length - 1),
+          );
           return;
         }
         if (e.key === "ArrowUp") {
@@ -721,7 +1078,10 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
       if (isAtDropdownVisible) {
         if (e.key === "ArrowDown") {
           e.preventDefault();
-          setUIField("atSuggestIndex", Math.min(atSuggestIndex + 1, atSuggestions.length - 1));
+          setUIField(
+            "atSuggestIndex",
+            Math.min(atSuggestIndex + 1, atSuggestions.length - 1),
+          );
           return;
         }
         if (e.key === "ArrowUp") {
@@ -738,7 +1098,11 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
           }
           return;
         }
-        if (e.key === "Enter" && atSuggestIndex >= 0 && atSuggestions[atSuggestIndex]) {
+        if (
+          e.key === "Enter" &&
+          atSuggestIndex >= 0 &&
+          atSuggestions[atSuggestIndex]
+        ) {
           e.preventDefault();
           setInput(completeAtCommand(atSuggestions[atSuggestIndex]));
           setUIField("atSuggestIndex", -1);
@@ -752,7 +1116,10 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
       }
 
       // Discovery mode navigation (before dropdown check)
-      if (isDiscoveryMode && (resultHighlightIndex >= 0 || e.key === "ArrowDown")) {
+      if (
+        isDiscoveryMode &&
+        (resultHighlightIndex >= 0 || e.key === "ArrowDown")
+      ) {
         if (e.key === "ArrowDown") {
           e.preventDefault();
           setResultHighlightIndex((i) => Math.min(i + 1, totalResultCount - 1));
@@ -797,7 +1164,12 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
             // Extend input to longest common prefix of live entry names only.
             const lcp = liveEntries.reduce((acc, entry) => {
               let i = 0;
-              while (i < acc.length && i < entry.name.length && acc[i] === entry.name[i]) i++;
+              while (
+                i < acc.length &&
+                i < entry.name.length &&
+                acc[i] === entry.name[i]
+              )
+                i++;
               return acc.slice(0, i);
             }, liveEntries[0].name);
             if (lcp) {
@@ -828,7 +1200,7 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
       if (e.key === "Tab" && !isDiscoveryMode && !isDropdownVisible) {
         e.preventDefault();
         const types = SESSION_TYPES.map((t) => t.value);
-        const idx = types.indexOf(sessionType as typeof types[number]);
+        const idx = types.indexOf(sessionType as (typeof types)[number]);
         const next = types[(idx + 1) % types.length];
         setFormField("sessionType", next as OmnibarFormState["sessionType"]);
         return;
@@ -884,7 +1256,7 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
       filteredAliases,
       completeAlias,
       input,
-    ]
+    ],
   );
 
   // Global keyboard handler
@@ -922,7 +1294,8 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
     // Autonomous mode composes with whichever sessionType is selected (checked below)
     // rather than replacing it — its only extra requirement is a goal, since that's
     // the orchestrator's sole signal of what to do.
-    const autonomousNeedsGoal = formState.autonomousMode && !formState.firstPrompt?.trim();
+    const autonomousNeedsGoal =
+      formState.autonomousMode && !formState.firstPrompt?.trim();
 
     // New project mode: requires parentDir + projectName (valid), no path detection.
     if (sessionType === "new_project") {
@@ -930,17 +1303,37 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
       if (!parentDir.trim()) return false;
       if (!projectName.trim()) return false;
       if (!isValidProjectName(projectName)) return false;
-      if (newProjectSessionType === "new_worktree" && !useTitleAsBranch && !branch.trim()) return false;
+      if (
+        newProjectSessionType === "new_worktree" &&
+        !useTitleAsBranch &&
+        !branch.trim()
+      )
+        return false;
       return !autonomousNeedsGoal;
     }
 
     // Recognized commands (>theme ..., >go ...) and spawn_shell are always submittable
-    if (detection?.type === InputType.Command && detection.confidence === 1.0) return true;
-    if (detection?.type === InputType.SpawnShell && detection.confidence === 1.0) return true;
+    if (detection?.type === InputType.Command && detection.confidence === 1.0)
+      return true;
+    if (
+      detection?.type === InputType.SpawnShell &&
+      detection.confidence === 1.0
+    )
+      return true;
+    // Chat backlog item creation (backlog: <message>) needs no sessionName/path.
+    if (detection?.type === InputType.ChatBacklogItem) return true;
 
     if (!input.trim()) return false;
     if (!sessionName.trim()) return false;
-    if (!detection || detection.type === InputType.Unknown || detection.type === InputType.Command || detection.type === InputType.SessionSearch || detection.type === InputType.AliasNotFound || detection.type === InputType.AliasBrowse) return false;
+    if (
+      !detection ||
+      detection.type === InputType.Unknown ||
+      detection.type === InputType.Command ||
+      detection.type === InputType.SessionSearch ||
+      detection.type === InputType.AliasNotFound ||
+      detection.type === InputType.AliasBrowse
+    )
+      return false;
     if (detection.type === InputType.Alias) return true;
 
     // Validate session type specific requirements
@@ -964,16 +1357,44 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
     }
 
     return !autonomousNeedsGoal;
-  }, [input, sessionName, detection, sessionType, branch, useTitleAsBranch, existingWorktree, pathDoesNotExist, createIfMissing, parentDir, projectName, newProjectSessionType, formState.autonomousMode, formState.firstPrompt]);
+  }, [
+    input,
+    sessionName,
+    detection,
+    sessionType,
+    branch,
+    useTitleAsBranch,
+    existingWorktree,
+    pathDoesNotExist,
+    createIfMissing,
+    parentDir,
+    projectName,
+    newProjectSessionType,
+    formState.autonomousMode,
+    formState.firstPrompt,
+  ]);
 
   // Handle form submission
   const handleSubmit = useCallback(async () => {
-    if (!canSubmit || isSubmitting) return;
+    if (!canSubmit || isSubmitting || isSubmittingRef.current) return;
+    isSubmittingRef.current = true;
+
+    // Computed once and reused across every session-data branch below that carries a
+    // selected preset's extraArgs through to the RPC.
+    const extraArgsForSubmit =
+      formState.extraArgs.length > 0 ? formState.extraArgs : undefined;
 
     // Execute omnibar commands (>theme ..., >go ...) immediately without entering
     // session-creation flow. These are fire-and-forget; no loading state needed.
-    if (detection?.type === InputType.Command && detection.confidence === 1.0 && detection.metadata) {
-      const { commandType, commandArg } = detection.metadata as { commandType: string; commandArg: string };
+    if (
+      detection?.type === InputType.Command &&
+      detection.confidence === 1.0 &&
+      detection.metadata
+    ) {
+      const { commandType, commandArg } = detection.metadata as {
+        commandType: string;
+        commandArg: string;
+      };
       if (commandType === "theme") {
         setTheme(commandArg as ThemeName);
       } else if (commandType === "navigate") {
@@ -983,21 +1404,49 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
       return;
     }
 
+    // Chat backlog item creation (backlog: <message>) — no session-creation flow, just
+    // hands the free-text message off to the backlog RPC and closes the omnibar.
+    if (detection?.type === InputType.ChatBacklogItem) {
+      const message = detection.parsedValue;
+      setIsSubmitting(true);
+      setError(null);
+      try {
+        await onCreateBacklogItemFromChat?.(message);
+        onClose();
+      } catch (err) {
+        setError(
+          err instanceof Error ? err.message : "Failed to create backlog item",
+        );
+      } finally {
+        setIsSubmitting(false);
+        isSubmittingRef.current = false;
+      }
+      return;
+    }
+
     // Spawn shell command (>shell [dir] [-- command]) — creates a real terminal session
     // via the standard session-creation flow, rooted at `shellDir` (if given) and running
     // `shellCommand` as the session program (defaults to an interactive shell).
-    if (detection?.type === InputType.SpawnShell && detection.confidence === 1.0) {
+    if (
+      detection?.type === InputType.SpawnShell &&
+      detection.confidence === 1.0
+    ) {
       const { shellDir, shellCommand } = (detection.metadata ?? {}) as {
         shellDir?: string;
         shellCommand?: string;
       };
       const sessionData: OmnibarSessionData = {
-        title: shellCommand ? shellCommand : shellDir ? `Terminal: ${shellDir}` : "Terminal",
+        title: shellCommand
+          ? shellCommand
+          : shellDir
+            ? `Terminal: ${shellDir}`
+            : "Terminal",
         path: shellDir ?? "",
         program: shellCommand ?? "bash",
         sessionType: shellDir ? "directory" : "one_off",
         createIfMissing: Boolean(shellDir),
         autoYes: false,
+        autoApprove: false,
       };
       setIsSubmitting(true);
       setError(null);
@@ -1006,15 +1455,25 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
         if (shellCommand) addRecentShellCommand(shellCommand);
         onClose();
       } catch (err) {
-        setError(err instanceof Error ? err.message : "Failed to create session");
+        setError(
+          err instanceof Error ? err.message : "Failed to create session",
+        );
+      } finally {
         setIsSubmitting(false);
+        isSubmittingRef.current = false;
       }
       return;
     }
 
     // Workflow invocation (@slug [arg]) — fire-and-forget, no session-creation flow.
-    if (detection?.type === InputType.Workflow && detection.metadata?.workflowFound) {
-      const { slug, workflowArg } = detection.metadata as { slug: string; workflowArg: string };
+    if (
+      detection?.type === InputType.Workflow &&
+      detection.metadata?.workflowFound
+    ) {
+      const { slug, workflowArg } = detection.metadata as {
+        slug: string;
+        workflowArg: string;
+      };
       void onRunWorkflow?.(slug, workflowArg ?? "");
       onClose();
       return;
@@ -1024,10 +1483,16 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
     if (detection?.type === InputType.Alias && detection.metadata?.aliasName) {
       const aliasMeta = detection.metadata as unknown as AliasMetadata;
       const { aliasName, branch: aliasBranch, label, extraFlags } = aliasMeta;
-      const sessionTitle = sessionName.trim() || label?.trim() || String(aliasName);
+      const sessionTitle =
+        sessionName.trim() || label?.trim() || String(aliasName);
       // Apply useTitleAsBranch for new_worktree alias sessions, same as the regular path.
-      let aliasFinalBranch = branch.trim() || (aliasBranch !== undefined ? String(aliasBranch) : "");
-      if (sessionType === "new_worktree" && useTitleAsBranch && !aliasFinalBranch) {
+      let aliasFinalBranch =
+        branch.trim() || (aliasBranch !== undefined ? String(aliasBranch) : "");
+      if (
+        sessionType === "new_worktree" &&
+        useTitleAsBranch &&
+        !aliasFinalBranch
+      ) {
         aliasFinalBranch = sessionTitle;
       }
       const firstPromptText = formState.firstPrompt?.trim() || undefined;
@@ -1036,10 +1501,14 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
         path: "",
         program: program || "",
         autoYes,
+        autoApprove,
         aliasName: String(aliasName),
         branch: aliasFinalBranch || undefined,
-        extraCliFlags: extraFlags !== undefined ? String(extraFlags) : undefined,
-        sessionType: sessionType as "directory" | "new_worktree" | "existing_worktree" | "one_off",
+        extraCliFlags:
+          extraFlags !== undefined ? String(extraFlags) : undefined,
+        extraArgs: extraArgsForSubmit,
+        sessionType: sessionType as
+          "directory" | "new_worktree" | "existing_worktree" | "one_off",
         workingDir: workingDir.trim() || undefined,
         category: category.trim() || undefined,
         initialPrompt: firstPromptText,
@@ -1050,8 +1519,12 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
         await onCreateSession(sessionData);
         onClose();
       } catch (err) {
-        setError(err instanceof Error ? err.message : "Failed to create session");
+        setError(
+          err instanceof Error ? err.message : "Failed to create session",
+        );
+      } finally {
         setIsSubmitting(false);
+        isSubmittingRef.current = false;
       }
       return;
     }
@@ -1062,13 +1535,19 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
     try {
       // Determine final branch name
       let finalBranch = branch.trim();
-      if ((sessionType === "new_worktree" || (sessionType === "new_project" && newProjectSessionType === "new_worktree")) && useTitleAsBranch) {
+      if (
+        (sessionType === "new_worktree" ||
+          (sessionType === "new_project" &&
+            newProjectSessionType === "new_worktree")) &&
+        useTitleAsBranch
+      ) {
         finalBranch = sessionName.trim();
       }
 
       // Build prompt from attached image paths (pre-session uploads go to temp dir).
       const imagePaths = attachedImagePathsRef.current;
-      const finalPrompt = imagePaths.length > 0 ? imagePaths.join(" ") : undefined;
+      const finalPrompt =
+        imagePaths.length > 0 ? imagePaths.join(" ") : undefined;
       const firstPromptText = formState.firstPrompt?.trim() || undefined;
 
       let sessionData: OmnibarSessionData;
@@ -1079,14 +1558,19 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
         sessionData = {
           title: sessionName.trim(),
           path: resolvedPath,
-          branch: newProjectSessionType === "new_worktree" ? (finalBranch || undefined) : undefined,
+          branch:
+            newProjectSessionType === "new_worktree"
+              ? finalBranch || undefined
+              : undefined,
           program,
           category: category.trim() || undefined,
           prompt: finalPrompt,
           autoYes,
+          autoApprove,
           sessionType: newProjectSessionType,
           isNewProject: true,
           initialPrompt: firstPromptText,
+          extraArgs: extraArgsForSubmit,
         };
       } else {
         // Autonomous mode composes with sessionType (any type except one_off) rather
@@ -1096,20 +1580,28 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
         const isOneOff = sessionType === "one_off";
         sessionData = {
           title: sessionName.trim(),
-          path: isOneOff ? "" : (detection?.localPath || ""),
-          branch: isOneOff ? undefined : (finalBranch || undefined),
+          path: isOneOff ? "" : detection?.localPath || "",
+          branch: isOneOff ? undefined : finalBranch || undefined,
           program,
           category: category.trim() || undefined,
           prompt: finalPrompt,
           autoYes,
+          autoApprove,
           sessionType,
-          existingWorktree: isOneOff ? undefined : (existingWorktree.trim() || undefined),
-          workingDir: isOneOff ? undefined : (workingDir.trim() || undefined),
+          existingWorktree: isOneOff
+            ? undefined
+            : existingWorktree.trim() || undefined,
+          workingDir: isOneOff ? undefined : workingDir.trim() || undefined,
           autonomousMode: isAutonomous ? true : undefined,
           permissionMode: isAutonomous ? "auto" : undefined,
+          // Remote target composes with sessionType exactly like autonomousMode above —
+          // passed through only when set (ADR-001: remote-as-orthogonal-flag).
+          remoteName: formState.remoteName || undefined,
           // Only forward when relevant (non-existent path + opt-in checked).
-          createIfMissing: pathDoesNotExist && createIfMissing ? true : undefined,
+          createIfMissing:
+            pathDoesNotExist && createIfMissing ? true : undefined,
           initialPrompt: firstPromptText,
+          extraArgs: extraArgsForSubmit,
         };
 
         // Handle GitHub URLs - path will be resolved server-side
@@ -1132,11 +1624,14 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
         if (
           sessionType === "directory" &&
           err instanceof Error &&
-          (err.message.includes("not found") || err.message.includes("CodeNotFound") || err.message.includes("path does not exist"))
+          (err.message.includes("not found") ||
+            err.message.includes("CodeNotFound") ||
+            err.message.includes("path does not exist"))
         ) {
           setPendingSessionData(sessionData);
           setShowPathConfirmation(true);
           setIsSubmitting(false);
+          isSubmittingRef.current = false;
           return;
         }
         throw err;
@@ -1148,10 +1643,12 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
       }
       onClose();
     } catch (err) {
-      const message = err instanceof Error ? err.message : "Failed to create session";
+      const message =
+        err instanceof Error ? err.message : "Failed to create session";
       setError(message);
     } finally {
       setIsSubmitting(false);
+      isSubmittingRef.current = false;
     }
   }, [
     canSubmit,
@@ -1164,6 +1661,7 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
     program,
     category,
     autoYes,
+    autoApprove,
     existingWorktree,
     workingDir,
     parentDir,
@@ -1176,7 +1674,11 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
     onCreateSession,
     onClose,
     onRunWorkflow,
+    onCreateBacklogItemFromChat,
     formState.firstPrompt,
+    formState.autonomousMode,
+    formState.extraArgs,
+    formState.remoteName,
     router,
     setTheme,
   ]);
@@ -1190,7 +1692,10 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
 
   const isMac = (() => {
     try {
-      return typeof navigator !== 'undefined' && /Mac|iPhone|iPad|iPod/.test(navigator.platform);
+      return (
+        typeof navigator !== "undefined" &&
+        /Mac|iPhone|iPad|iPod/.test(navigator.platform)
+      );
     } catch {
       return false;
     }
@@ -1203,16 +1708,22 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
       role="dialog"
       aria-modal="true"
       aria-labelledby="omnibar-title"
+      data-testid="omnibar"
     >
       <div
         className={modal}
+        data-testid="omnibar-modal"
         onClick={(e) => e.stopPropagation()}
         onKeyDown={handleKeyDown}
       >
         {/* Main Input */}
         <div className={inputContainer}>
           <span className={typeIndicator} aria-hidden="true">
-            {sessionType === "one_off" ? "⚡" : formState.autonomousMode ? "🤖" : typeInfo.icon}
+            {sessionType === "one_off"
+              ? "⚡"
+              : formState.autonomousMode
+                ? "🤖"
+                : typeInfo.icon}
           </span>
           <input
             ref={inputRef}
@@ -1222,10 +1733,10 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
               sessionType === "one_off"
                 ? "Session title is the only thing needed…"
                 : formState.autonomousMode
-                ? "Session title (agent will run without human approval)…"
-                : isDiscoveryMode
-                ? "Jump to session, @alias, or search repos..."
-                : "Enter path, GitHub URL, or owner/repo..."
+                  ? "Session title (agent will run without human approval)…"
+                  : isDiscoveryMode
+                    ? "Jump to session, @alias, or search repos..."
+                    : "Enter path, GitHub URL, or owner/repo..."
             }
             value={input}
             onChange={(e) => {
@@ -1242,7 +1753,8 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
             aria-autocomplete="list"
             aria-expanded={
               isDiscoveryMode
-                ? displayedSessionResults.length > 0 || displayedRepoEntries.length > 0
+                ? displayedSessionResults.length > 0 ||
+                  displayedRepoEntries.length > 0
                 : isDropdownVisible
             }
             aria-controls={
@@ -1254,11 +1766,11 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
                     RESULT_LISTBOX_ID,
                     displayedSessionResults,
                     displayedRepoEntries,
-                    resultHighlightIndex
+                    resultHighlightIndex,
                   )
                 : isDropdownVisible && dropdownIndex >= 0
-                ? `path-completion-listbox-option-${dropdownIndex}`
-                : undefined
+                  ? `path-completion-listbox-option-${dropdownIndex}`
+                  : undefined
             }
           />
           {/* Path existence indicator. When the path is missing and the user
@@ -1272,20 +1784,28 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
                 isCompletionLoading
                   ? "Checking path"
                   : pathExists
-                  ? "Path exists"
-                  : createIfMissing
-                  ? "New repository will be created"
-                  : "Path does not exist"
+                    ? "Path exists"
+                    : createIfMissing
+                      ? "New repository will be created"
+                      : "Path does not exist"
               }
             >
               {isCompletionLoading ? (
-                <span className={pathIndicatorLoading} aria-hidden="true">⟳</span>
+                <span className={pathIndicatorLoading} aria-hidden="true">
+                  ⟳
+                </span>
               ) : pathExists ? (
-                <span className={pathIndicatorValid} aria-hidden="true">✓</span>
+                <span className={pathIndicatorValid} aria-hidden="true">
+                  ✓
+                </span>
               ) : createIfMissing ? (
-                <span className={pathIndicatorValid} aria-hidden="true">+</span>
+                <span className={pathIndicatorValid} aria-hidden="true">
+                  +
+                </span>
               ) : (
-                <span className={pathIndicatorInvalid} aria-hidden="true">✗</span>
+                <span className={pathIndicatorInvalid} aria-hidden="true">
+                  ✗
+                </span>
               )}
             </span>
           )}
@@ -1318,57 +1838,113 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
           />
         )}
 
-        {detection?.type === InputType.Alias && detection.metadata && (() => {
-          const m = detection.metadata as Record<string, unknown>;
-          return (
-            <div role="status" aria-live="polite" data-testid="alias-resolution-chip">
-              <span>Alias resolved: @{String(m.aliasName)}</span>
-              {m.branch ? <span> :{String(m.branch)}</span> : null}
-              {m.label ? <span> · {String(m.label)}</span> : null}
-              {m.extraFlags ? <span> · {String(m.extraFlags)} (appended)</span> : null}
-            </div>
-          );
-        })()}
-        {detection?.type === InputType.AliasNotFound && (() => {
-          const m = detection.metadata as Record<string, unknown> | undefined;
-          return (
-            <div role="alert" aria-live="assertive" data-testid="alias-not-found">
-              No alias &apos;@{String(m?.slug)}&apos;
-            </div>
-          );
-        })()}
-        {detection?.type === InputType.SpawnShell && (() => {
-          const { shellDir, shellCommand } = (detection.metadata ?? {}) as {
-            shellDir?: string;
-            shellCommand?: string;
-          };
-          const recentCommands = getRecentShellCommands();
-          return (
-            <>
-              <div role="status" aria-live="polite" data-testid="spawn-shell-chip">
-                <span>{shellCommand ? `Run "${shellCommand}"` : "Open terminal"}</span>
-                {shellDir ? <span> in {shellDir}</span> : null}
+        {detection?.type === InputType.Alias &&
+          detection.metadata &&
+          (() => {
+            const m = detection.metadata as Record<string, unknown>;
+            return (
+              <div
+                role="status"
+                aria-live="polite"
+                data-testid="alias-resolution-chip"
+              >
+                <span>Alias resolved: @{String(m.aliasName)}</span>
+                {m.branch ? <span> :{String(m.branch)}</span> : null}
+                {m.label ? <span> · {String(m.label)}</span> : null}
+                {m.extraFlags ? (
+                  <span> · {String(m.extraFlags)} (appended)</span>
+                ) : null}
               </div>
-              {!shellCommand && !shellDir && recentCommands.length > 0 && (
-                <div data-testid="spawn-shell-recent-commands">
-                  {recentCommands.map((cmd) => (
-                    <button
-                      key={cmd}
-                      type="button"
-                      data-testid="spawn-shell-recent-command"
-                      onClick={() => {
-                        setInput(`>shell -- ${cmd}`);
-                        inputRef.current?.focus();
-                      }}
-                    >
-                      {cmd}
-                    </button>
-                  ))}
+            );
+          })()}
+        {detection?.type === InputType.AliasNotFound &&
+          (() => {
+            const m = detection.metadata as Record<string, unknown> | undefined;
+            return (
+              <div
+                role="alert"
+                aria-live="assertive"
+                data-testid="alias-not-found"
+              >
+                No alias &apos;@{String(m?.slug)}&apos;
+              </div>
+            );
+          })()}
+        {selectedPreset && (
+          <div
+            role="status"
+            aria-live="polite"
+            data-testid="preset-resolution-chip"
+          >
+            Preset applied: {selectedPreset.label} ({program}
+            {formState.extraArgs.length > 0
+              ? ` ${formState.extraArgs.join(" ")}`
+              : ""}
+            )
+          </div>
+        )}
+        {detection?.type === InputType.PresetNotFound &&
+          (() => {
+            const m = detection.metadata as PresetNotFoundMetadata | undefined;
+            return (
+              <div
+                role="alert"
+                aria-live="assertive"
+                data-testid="preset-not-found"
+              >
+                No preset &apos;{m?.typedId}&apos;
+              </div>
+            );
+          })()}
+        {detection?.type === InputType.SpawnShell &&
+          (() => {
+            const { shellDir, shellCommand } = (detection.metadata ?? {}) as {
+              shellDir?: string;
+              shellCommand?: string;
+            };
+            const recentCommands = getRecentShellCommands();
+            return (
+              <>
+                <div
+                  role="status"
+                  aria-live="polite"
+                  data-testid="spawn-shell-chip"
+                >
+                  <span>
+                    {shellCommand ? `Run "${shellCommand}"` : "Open terminal"}
+                  </span>
+                  {shellDir ? <span> in {shellDir}</span> : null}
                 </div>
-              )}
-            </>
-          );
-        })()}
+                {error && (
+                  <div
+                    className={errorClass}
+                    role="alert"
+                    aria-live="assertive"
+                    data-testid="spawn-shell-error"
+                  >
+                    {error}
+                  </div>
+                )}
+                {!shellCommand && !shellDir && recentCommands.length > 0 && (
+                  <div data-testid="spawn-shell-recent-commands">
+                    {recentCommands.map((cmd) => (
+                      <button
+                        key={cmd}
+                        type="button"
+                        data-testid="spawn-shell-recent-command"
+                        onClick={() => {
+                          setInput(`>shell -- ${cmd}`);
+                          inputRef.current?.focus();
+                        }}
+                      >
+                        {cmd}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </>
+            );
+          })()}
         {isShellDirInput && isDropdownVisible && (
           <PathCompletionDropdown
             id="shell-dir-completion-listbox"
@@ -1388,7 +1964,11 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
             repoEntries={displayedRepoEntries}
             highlightedIndex={resultHighlightIndex}
             onSessionSelect={handleSessionSelect}
-            onSessionOpenInNewPane={onNavigateToSessionInNewPane ? handleSessionSelectInNewPane : undefined}
+            onSessionOpenInNewPane={
+              onNavigateToSessionInNewPane
+                ? handleSessionSelectInNewPane
+                : undefined
+            }
             onRepoSelect={handleRepoSelect}
             onCloneSession={handleCloneSession}
             onCreateNew={() => {
@@ -1444,33 +2024,47 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
             canSubmit={canSubmit}
             error={error}
             showAdvanced={showAdvanced}
-            onToggleAdvanced={() => setUIField("showAdvanced", !uiState.showAdvanced)}
+            onToggleAdvanced={() =>
+              setUIField("showAdvanced", !uiState.showAdvanced)
+            }
             path={
               modeState.type === "creation_with_repo"
                 ? modeState.path
                 : detection?.type === InputType.Alias
-                ? ((detection.metadata as AliasMetadata | undefined)?.alias?.path || undefined)
-                : undefined
+                  ? (detection.metadata as AliasMetadata | undefined)?.alias
+                      ?.path || undefined
+                  : undefined
             }
             uploadBaseUrl={uploadBaseUrl}
-            onAttachedImagesChange={(paths) => { attachedImagePathsRef.current = paths; }}
+            onAttachedImagesChange={(paths) => {
+              attachedImagePathsRef.current = paths;
+            }}
             pathDoesNotExist={pathDoesNotExist}
+            destinationPreviewPath={destinationPreviewPath}
+            destinationPreviewIsExact={destinationPreviewIsExact}
+            isDestinationPreviewLoading={isDestinationPreviewLoading}
             namePrefix={
               detection?.type === InputType.Alias
-                ? ((detection.metadata as AliasMetadata | undefined)?.alias?.namePrefix ?? "")
+                ? ((detection.metadata as AliasMetadata | undefined)?.alias
+                    ?.namePrefix ?? "")
                 : ""
             }
+            onPresetSelect={handlePresetSelect}
+            launcherPresets={launcherPresets}
+            launcherPresetsLoading={launcherPresetsLoading}
+            launcherPresetsLoadError={launcherPresetsLoadError}
+            remotes={remotes}
           />
         )}
 
         {/* R2: Confirmation dialog for Directory mode with non-existent path */}
-        {showPathConfirmation && pendingSessionData && (
+        {showPathConfirmation && pendingSessionData && createPortal(
           <div
             role="dialog"
             aria-modal="true"
             aria-labelledby="path-confirm-title"
             style={{
-              position: "absolute",
+              position: "fixed",
               inset: 0,
               display: "flex",
               alignItems: "center",
@@ -1492,14 +2086,36 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
                 margin: "16px",
               }}
             >
-              <div id="path-confirm-title" style={{ fontWeight: 600, fontSize: "1rem", marginBottom: "8px" }}>
+              <div
+                id="path-confirm-title"
+                style={{
+                  fontWeight: 600,
+                  fontSize: "1rem",
+                  marginBottom: "8px",
+                }}
+              >
                 Create directory?
               </div>
-              <div style={{ fontSize: "0.875rem", color: "var(--text-secondary)", marginBottom: "16px" }}>
-                The path <code style={{ fontFamily: "monospace", padding: "0 4px" }}>{pendingSessionData.path}</code> does not exist.
-                Create it and initialize a git repository?
+              <div
+                style={{
+                  fontSize: "0.875rem",
+                  color: "var(--text-secondary)",
+                  marginBottom: "16px",
+                }}
+              >
+                The path{" "}
+                <code style={{ fontFamily: "monospace", padding: "0 4px" }}>
+                  {pendingSessionData.path}
+                </code>{" "}
+                does not exist. Create it and initialize a git repository?
               </div>
-              <div style={{ display: "flex", gap: "8px", justifyContent: "flex-end" }}>
+              <div
+                style={{
+                  display: "flex",
+                  gap: "8px",
+                  justifyContent: "flex-end",
+                }}
+              >
                 <button
                   type="button"
                   style={{
@@ -1531,7 +2147,10 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
                   }}
                   onClick={async () => {
                     setShowPathConfirmation(false);
-                    const retryData = { ...pendingSessionData, createIfMissing: true };
+                    const retryData = {
+                      ...pendingSessionData,
+                      createIfMissing: true,
+                    };
                     setPendingSessionData(null);
                     setIsSubmitting(true);
                     setError(null);
@@ -1539,10 +2158,14 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
                       await onCreateSession(retryData);
                       onClose();
                     } catch (err) {
-                      const message = err instanceof Error ? err.message : "Failed to create session";
+                      const message =
+                        err instanceof Error
+                          ? err.message
+                          : "Failed to create session";
                       setError(message);
                     } finally {
                       setIsSubmitting(false);
+                      isSubmittingRef.current = false;
                     }
                   }}
                 >
@@ -1550,7 +2173,8 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
                 </button>
               </div>
             </div>
-          </div>
+          </div>,
+          document.body
         )}
 
         {/* Keyboard Shortcuts */}

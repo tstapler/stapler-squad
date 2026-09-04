@@ -14,6 +14,7 @@ import (
 	"github.com/creack/pty"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
 // NativeProcessManager implements ProcessManager using a raw PTY and process supervision.
@@ -295,7 +296,7 @@ func (n *NativeProcessManager) SendInputViaControlMode(_ context.Context, data [
 func (n *NativeProcessManager) SetWindowSize(cols, rows int) error {
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	size := &pty.Winsize{Rows: uint16(rows), Cols: uint16(cols)}
+	size := &pty.Winsize{Rows: tmux.ClampWinsizeDim(rows), Cols: tmux.ClampWinsizeDim(cols)}
 	n.lastSize = size
 	if n.ptm == nil {
 		return nil // Store size for application on next Start().
@@ -335,7 +336,8 @@ func (n *NativeProcessManager) GetPanePID() (int32, error) {
 	if n.cmd == nil || n.cmd.Process == nil {
 		return 0, fmt.Errorf("NativeProcessManager: process not started")
 	}
-	return int32(n.cmd.Process.Pid), nil //nolint:gosec // PID fits in int32 on all supported platforms
+	// #nosec G115 -- PID fits comfortably in int32 on all supported platforms (Linux caps pid_max well under 2^22; macOS/BSD under 2^20)
+	return int32(n.cmd.Process.Pid), nil
 }
 
 // GetCursorPosition returns (0, 0) for the native backend.

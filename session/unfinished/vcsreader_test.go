@@ -7,8 +7,13 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/go-git/go-git/v5"
+	"github.com/go-git/go-git/v5/plumbing"
+	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
+	gitutil "github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/unfinished"
 )
 
@@ -24,58 +29,60 @@ func initRepo(t *testing.T) string {
 		t.Fatalf("EvalSymlinks: %v", err)
 	}
 
-	run := func(args ...string) {
-		t.Helper()
-		cmd := safeexec.CommandContext(context.Background(), "git", args...)
-		cmd.Dir = dir
-		cmd.Env = append(os.Environ(),
-			"GIT_AUTHOR_NAME=Test", "GIT_AUTHOR_EMAIL=test@test.com",
-			"GIT_COMMITTER_NAME=Test", "GIT_COMMITTER_EMAIL=test@test.com",
-		)
-		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("git %v: %v\n%s", args, err, out)
-		}
+	// Uses go-git directly rather than shelling out — see
+	// the `prefer-go-git-over-subshells` skill.
+	repo, err := git.PlainInitWithOptions(dir, &git.PlainInitOptions{
+		InitOptions: git.InitOptions{DefaultBranch: plumbing.NewBranchReferenceName("main")},
+	})
+	if err != nil {
+		t.Fatalf("PlainInitWithOptions: %v", err)
 	}
-
-	run("init", "-b", "main")
-	run("config", "user.email", "test@test.com")
-	run("config", "user.name", "Test")
 
 	// Initial commit.
 	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("hello\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	run("add", ".")
-	run("commit", "-m", "initial commit")
+	wt, err := repo.Worktree()
+	if err != nil {
+		t.Fatalf("Worktree: %v", err)
+	}
+	if _, err := wt.Add("."); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	if _, err := wt.Commit("initial commit", &git.CommitOptions{
+		Author: &object.Signature{Name: "Test", Email: "test@test.com", When: time.Now()},
+	}); err != nil {
+		t.Fatalf("Commit: %v", err)
+	}
 
 	return dir
 }
 
 // addCommit adds a file and commits it, returning the short hash.
+//
+// Uses go-git directly rather than shelling out — see
+// the `prefer-go-git-over-subshells` skill.
 func addCommit(t *testing.T, repoPath, filename, message string) {
 	t.Helper()
 	if err := os.WriteFile(filepath.Join(repoPath, filename), []byte(message), 0644); err != nil {
 		t.Fatal(err)
 	}
-	run := func(args ...string) {
-		t.Helper()
-		cmd := safeexec.CommandContext(context.Background(), "git", args...)
-		cmd.Dir = repoPath
-		cmd.Env = append(os.Environ(),
-			"GIT_AUTHOR_NAME=Test", "GIT_AUTHOR_EMAIL=test@test.com",
-			"GIT_COMMITTER_NAME=Test", "GIT_COMMITTER_EMAIL=test@test.com",
-		)
-		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("git %v: %v\n%s", args, err, out)
-		}
+	repo, err := gitutil.OpenRepo(repoPath)
+	if err != nil {
+		t.Fatalf("PlainOpen: %v", err)
 	}
-	run("add", ".")
-	run("commit", "-m", message)
-}
-
-// TestVCSReaderContractGit verifies the CLI-git reader satisfies the interface contract.
-func TestVCSReaderContractGit(t *testing.T) {
-	testVCSReaderContract(t, &unfinished.GitVCSReader{})
+	wt, err := repo.Worktree()
+	if err != nil {
+		t.Fatalf("Worktree: %v", err)
+	}
+	if _, err := wt.Add("."); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	if _, err := wt.Commit(message, &git.CommitOptions{
+		Author: &object.Signature{Name: "Test", Email: "test@test.com", When: time.Now()},
+	}); err != nil {
+		t.Fatalf("Commit: %v", err)
+	}
 }
 
 // TestVCSReaderContractGoGit verifies the go-git reader satisfies the interface contract.
@@ -370,10 +377,18 @@ func TestGoGitVCSReader_HasUncommitted_StagedChange(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(repo, "staged.txt"), []byte("staged content\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	cmd := safeexec.CommandContext(context.Background(), "git", "add", "staged.txt")
-	cmd.Dir = repo
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("git add: %v\n%s", err, out)
+	// Uses go-git directly rather than shelling out — see
+	// the `prefer-go-git-over-subshells` skill.
+	repo2, err := gitutil.OpenRepo(repo)
+	if err != nil {
+		t.Fatalf("PlainOpen: %v", err)
+	}
+	wt, err := repo2.Worktree()
+	if err != nil {
+		t.Fatalf("Worktree: %v", err)
+	}
+	if _, err := wt.Add("staged.txt"); err != nil {
+		t.Fatalf("Add: %v", err)
 	}
 
 	dirty, err := r.HasUncommitted(repo)
@@ -392,10 +407,18 @@ func TestGoGitVCSReader_HasUncommitted_StagedDeletion(t *testing.T) {
 	r := &unfinished.GoGitVCSReader{}
 
 	// Stage a deletion of the initial README.md.
-	cmd := safeexec.CommandContext(context.Background(), "git", "rm", "README.md")
-	cmd.Dir = repo
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("git rm: %v\n%s", err, out)
+	// Uses go-git directly rather than shelling out — see
+	// the `prefer-go-git-over-subshells` skill.
+	repo2, err := gitutil.OpenRepo(repo)
+	if err != nil {
+		t.Fatalf("PlainOpen: %v", err)
+	}
+	wt, err := repo2.Worktree()
+	if err != nil {
+		t.Fatalf("Worktree: %v", err)
+	}
+	if _, err := wt.Remove("README.md"); err != nil {
+		t.Fatalf("Remove: %v", err)
 	}
 
 	dirty, err := r.HasUncommitted(repo)

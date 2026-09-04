@@ -23,6 +23,7 @@ func newGitHubService(t *testing.T) *GitHubService {
 // TestGetPRInfo_EmptySessionID verifies that an empty session_id returns
 // CodeInvalidArgument before any storage lookup is attempted.
 func TestGetPRInfo_EmptySessionID(t *testing.T) {
+	t.Parallel()
 	svc := newGitHubService(t)
 
 	_, err := svc.GetPRInfo(context.Background(), connect.NewRequest(&sessionv1.GetPRInfoRequest{
@@ -38,6 +39,7 @@ func TestGetPRInfo_EmptySessionID(t *testing.T) {
 // TestGetPRInfo_UnknownSessionID verifies that a non-existent session ID returns
 // CodeNotFound.
 func TestGetPRInfo_UnknownSessionID(t *testing.T) {
+	t.Parallel()
 	svc := newGitHubService(t)
 
 	_, err := svc.GetPRInfo(context.Background(), connect.NewRequest(&sessionv1.GetPRInfoRequest{
@@ -57,6 +59,7 @@ func TestGetPRInfo_UnknownSessionID(t *testing.T) {
 // TestGetPRComments_EmptySessionID verifies that an empty session_id returns
 // CodeInvalidArgument.
 func TestGetPRComments_EmptySessionID(t *testing.T) {
+	t.Parallel()
 	svc := newGitHubService(t)
 
 	_, err := svc.GetPRComments(context.Background(), connect.NewRequest(&sessionv1.GetPRCommentsRequest{
@@ -72,6 +75,7 @@ func TestGetPRComments_EmptySessionID(t *testing.T) {
 // TestGetPRComments_UnknownSessionID verifies that a non-existent session ID
 // returns CodeNotFound.
 func TestGetPRComments_UnknownSessionID(t *testing.T) {
+	t.Parallel()
 	svc := newGitHubService(t)
 
 	_, err := svc.GetPRComments(context.Background(), connect.NewRequest(&sessionv1.GetPRCommentsRequest{
@@ -91,6 +95,7 @@ func TestGetPRComments_UnknownSessionID(t *testing.T) {
 // TestPostPRComment_EmptySessionID verifies that an empty session_id returns
 // CodeInvalidArgument before any storage lookup.
 func TestPostPRComment_EmptySessionID(t *testing.T) {
+	t.Parallel()
 	svc := newGitHubService(t)
 
 	_, err := svc.PostPRComment(context.Background(), connect.NewRequest(&sessionv1.PostPRCommentRequest{
@@ -107,6 +112,7 @@ func TestPostPRComment_EmptySessionID(t *testing.T) {
 // TestPostPRComment_EmptyComment verifies that an empty body returns
 // CodeInvalidArgument even when a session ID is provided.
 func TestPostPRComment_EmptyComment(t *testing.T) {
+	t.Parallel()
 	svc := newGitHubService(t)
 
 	_, err := svc.PostPRComment(context.Background(), connect.NewRequest(&sessionv1.PostPRCommentRequest{
@@ -123,6 +129,7 @@ func TestPostPRComment_EmptyComment(t *testing.T) {
 // TestPostPRComment_UnknownSessionID verifies that a valid body but non-existent
 // session ID returns CodeNotFound.
 func TestPostPRComment_UnknownSessionID(t *testing.T) {
+	t.Parallel()
 	svc := newGitHubService(t)
 
 	_, err := svc.PostPRComment(context.Background(), connect.NewRequest(&sessionv1.PostPRCommentRequest{
@@ -143,6 +150,7 @@ func TestPostPRComment_UnknownSessionID(t *testing.T) {
 // TestClosePR_EmptySessionID verifies that an empty session_id returns
 // CodeInvalidArgument.
 func TestClosePR_EmptySessionID(t *testing.T) {
+	t.Parallel()
 	svc := newGitHubService(t)
 
 	_, err := svc.ClosePR(context.Background(), connect.NewRequest(&sessionv1.ClosePRRequest{
@@ -158,6 +166,7 @@ func TestClosePR_EmptySessionID(t *testing.T) {
 // TestClosePR_UnknownSessionID verifies that a non-existent session ID returns
 // CodeNotFound.
 func TestClosePR_UnknownSessionID(t *testing.T) {
+	t.Parallel()
 	svc := newGitHubService(t)
 
 	_, err := svc.ClosePR(context.Background(), connect.NewRequest(&sessionv1.ClosePRRequest{
@@ -177,6 +186,7 @@ func TestClosePR_UnknownSessionID(t *testing.T) {
 // TestMergePR_EmptySessionID verifies that an empty session_id returns
 // CodeInvalidArgument.
 func TestMergePR_EmptySessionID(t *testing.T) {
+	t.Parallel()
 	svc := newGitHubService(t)
 
 	_, err := svc.MergePR(context.Background(), connect.NewRequest(&sessionv1.MergePRRequest{
@@ -192,6 +202,7 @@ func TestMergePR_EmptySessionID(t *testing.T) {
 // TestMergePR_UnknownSessionID verifies that a non-existent session ID returns
 // CodeNotFound.
 func TestMergePR_UnknownSessionID(t *testing.T) {
+	t.Parallel()
 	svc := newGitHubService(t)
 
 	_, err := svc.MergePR(context.Background(), connect.NewRequest(&sessionv1.MergePRRequest{

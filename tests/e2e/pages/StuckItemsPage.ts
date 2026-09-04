@@ -80,8 +80,10 @@ export async function seedStuckItem(
     prNumber?: number;
     prUrl?: string;
     context?: string;
+    /** When true, writes a real on-disk plan file and sets it as the item's plan_artifacts_path, so ApprovePlan succeeds for real instead of hitting its FailedPrecondition. */
+    hasPlan?: boolean;
   }
-): Promise<void> {
+): Promise<string> {
   const resp = await request.post(`${BASE_URL}/api/debug/backlog/seed-stuck`, {
     headers: { "Content-Type": "application/json" },
     data: {
@@ -92,6 +94,7 @@ export async function seedStuckItem(
       prNumber: opts.prNumber ?? 0,
       prUrl: opts.prUrl ?? "",
       context: opts.context ?? "",
+      hasPlan: opts.hasPlan ?? false,
     },
   });
   if (!resp.ok()) {
@@ -100,6 +103,8 @@ export async function seedStuckItem(
         `— see the KNOWN GAP note on this function. ${await resp.text().catch(() => "")}`
     );
   }
+  const body = (await resp.json()) as { itemId: string };
+  return body.itemId;
 }
 
 export async function enableBacklogFeatureFlag(request: APIRequestContext): Promise<void> {

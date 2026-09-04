@@ -8,6 +8,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/tstapler/stapler-squad/executor/safeexec"
@@ -17,6 +18,58 @@ import (
 // staleResumePattern is the prefix Claude CLI emits when --resume is used with a
 // conversation ID that no longer exists in Claude's backend.
 const staleResumePattern = "No conversation found with session ID"
+
+// claudeExtension holds Claude Code conversation-resume session state.
+// Unlike piExtension (instance_pi_status.go), this is populated for a
+// session regardless of Program -- e.g. HistoryLinker and AgyAdapter (Import)
+// populate claudeSession for non-claude programs too, and initTmuxSession
+// (instance_tmux.go) reads claudeSession unconditionally before dispatching
+// on programKind. It therefore does NOT implement programExtension: nothing
+// here starts or stops a controller. The default StartController/
+// StopController path (ClaudeController) is separate, unrelated business
+// logic that happens to share the "claude" name -- see StartController's
+// doc comment in instance_controller.go.
+//
+// Embedded anonymously into Instance so every existing i.claudeSession /
+// i.claudeSessionMu access site (this package and its tests) keeps working
+// unchanged via Go's field promotion, mirroring ReviewState/RetryState's
+// existing precedent on Instance.
+type claudeExtension struct {
+	// claudeSessionMu protects claudeSession and conversationClearedAt.
+	// Separate from i.mu to avoid holding the instance write lock during
+	// persistence I/O -- see the lock-order comments on
+	// ClearConversationState/SetHistoryInfo/tryExtractConversationUUID/
+	// startLocked (i.mu nests INSIDE this lock, never the reverse).
+	claudeSessionMu sync.RWMutex
+	// claudeSession is Claude Code session information for persistence and
+	// re-attachment.
+	claudeSession *ClaudeSessionData
+	// conversationClearedAt records when ClearConversationState() last ran, so
+	// tryExtractConversationUUID's DetectByPath fallback won't resurrect a JSONL
+	// predating an explicit "start fresh" request. In-memory only -- does not
+	// survive a process restart (see ADR-001, Consequences).
+	conversationClearedAt time.Time
+}
+
+// ReviveOutcome records the outcome of the most recent start/cold-restore
+// decision (session-revive-uuid-loss AC3). See Instance.LastReviveOutcome.
+type ReviveOutcome string
+
+const (
+	ReviveOutcomeUnspecified ReviveOutcome = ""
+	// ReviveOutcomeResumeLive means a conversation UUID was already in memory;
+	// no disk-based recovery was needed.
+	ReviveOutcomeResumeLive ReviveOutcome = "resume_live"
+	// ReviveOutcomeResumeRecovered means no UUID was in memory, but
+	// tryExtractConversationUUID's disk-based fallback found one before launch.
+	ReviveOutcomeResumeRecovered ReviveOutcome = "resume_recovered"
+	// ReviveOutcomeFreshExpected means the session started fresh with no prior
+	// conversation history to lose (first-time setup or genuinely no history).
+	ReviveOutcomeFreshExpected ReviveOutcome = "fresh_expected"
+	// ReviveOutcomeFreshLostHistory means the session started fresh even though
+	// EverHadConversationHistory was true — recovery ran and found nothing.
+	ReviveOutcomeFreshLostHistory ReviveOutcome = "fresh_lost_history"
+)
 
 // isStaleResumeExit returns true when the PTY exit tail contains the Claude CLI error
 // that indicates a stale or expired --resume argument.  ANSI escape sequences are
@@ -274,7 +327,9 @@ func (i *Instance) HasClaudeSession() bool {
 
 // ClearConversationState removes the stored Claude conversation UUID and history
 // file path so that the next Resume starts a fresh conversation rather than
-// attempting --resume with a potentially stale or path-mismatched UUID.
+// attempting --resume with a potentially stale or path-mismatched UUID. Also
+// resets EverHadConversationHistory: an intentional "start over" here is not
+// the unexpected loss session-revive-uuid-loss AC3 signals on.
 func (i *Instance) ClearConversationState() {
 	i.claudeSessionMu.Lock()
 	defer i.claudeSessionMu.Unlock()
@@ -290,21 +345,28 @@ func (i *Instance) ClearConversationState() {
 		i.claudeSession.ConversationUUID = ""
 	}
 	i.HistoryFilePath = ""
+	i.EverHadConversationHistory = false
+	i.conversationClearedAt = time.Now()
 	snap := buildSnapshot(i)
 	i.mu.Unlock()
 	i.snapshot.Store(snap)
 }
 
-// tryExtractConversationUUID attempts to detect the Claude conversation UUID
-// by inspecting the open files of the tmux pane process. This uses the
-// HistoryFileDetector to find JSONL files in ~/.claude/projects/.
+// tryExtractConversationUUID attempts to detect the Claude conversation UUID.
+// It first tries inspecting the open files of the live tmux pane process (via
+// HistoryFileDetector.Detect); if that is unavailable (tmux dead, e.g. a cold
+// restore), it falls back to DetectByPath, which scans
+// ~/.claude/projects/<encoded-path>/ for the newest conversation JSONL without
+// requiring a live process. The DetectByPath fallback is the expected path on
+// cold restore — it is not a degraded case despite the fast path being tried
+// first.
 //
-// IMPORTANT: This method assumes stateMutex is already held by the caller.
-// It must NOT be called without the lock (e.g., from SwitchWorkspace which
-// holds stateMutex). It sets claudeSession fields directly.
-//
-// The tmux session must be alive for this to work, because it inspects
-// the foreground process's open file descriptors via proc_pidinfo.
+// Does not require or assume any caller-held lock: it takes claudeSessionMu
+// itself around every read/write of claudeSession, HistoryFilePath, and
+// conversationClearedAt. The initial early-return check below is the one
+// exception — it is an unlocked read, a pre-existing, out-of-scope exposure
+// on the real lock-free call sites (SwitchWorkspace, and the two cold-restore
+// call sites in instance.go) that this fix does not claim to have closed.
 func (i *Instance) tryExtractConversationUUID() {
 	// Skip if we already have a conversation UUID.
 	if i.claudeSession != nil && i.claudeSession.ConversationUUID != "" {
@@ -344,6 +406,16 @@ func (i *Instance) tryExtractConversationUUID() {
 			log.Warn("tryextractconversationuuid: path-based detect error", "session", i.Title, "err", err)
 		}
 		if info != nil {
+			i.claudeSessionMu.RLock()
+			clearedAt := i.conversationClearedAt
+			i.claudeSessionMu.RUnlock()
+			if !clearedAt.IsZero() && !info.ModTime.After(clearedAt) {
+				log.Debug("tryextractconversationuuid: found jsonl predates last explicit clear, skipping recovery",
+					"session", i.Title, "path", info.HistoryFilePath, "clearedAt", clearedAt)
+				info = nil
+			}
+		}
+		if info != nil {
 			log.Info("tryextractconversationuuid: found conversation via path fallback", "session", i.Title)
 		}
 	}
@@ -353,12 +425,23 @@ func (i *Instance) tryExtractConversationUUID() {
 		return
 	}
 
-	// Set the fields directly (caller holds stateMutex).
+	// See SetHistoryInfo's comment: nest i.mu inside claudeSessionMu, around the
+	// writes AND the buildSnapshot call, so this is ordered against legacy
+	// direct-lock setters and the actor's buildSnapshot read, and the cached
+	// snapshot reflects the recovered UUID immediately rather than staying
+	// stale until an unrelated mutation rebuilds it.
+	i.claudeSessionMu.Lock()
+	i.mu.Lock()
 	if i.claudeSession == nil {
 		i.claudeSession = &ClaudeSessionData{}
 	}
 	i.claudeSession.ConversationUUID = info.ConversationUUID
 	i.HistoryFilePath = info.HistoryFilePath
+	i.EverHadConversationHistory = true
+	snap := buildSnapshot(i)
+	i.mu.Unlock()
+	i.claudeSessionMu.Unlock()
+	i.snapshot.Store(snap)
 	log.ForSession(i.Title).Info("uuid assigned via tryextractconversationuuid", "uuid", info.ConversationUUID, "path", info.HistoryFilePath)
 }
 
@@ -455,17 +538,24 @@ func (i *Instance) SetClaudeSessionIDSavedCallback(fn func()) {
 // SetHistoryInfo updates the conversation UUID and history file path.
 // Thread-safe: acquires stateMutex write lock.
 // No-op if the UUID is already set to the same value.
+// Fires the same claudeSessionIDSavedCallback as SetClaudeConversationUUID
+// when the UUID actually changes, so a HistoryLinker-detected UUID is
+// persisted to durable storage immediately rather than waiting on the next
+// incidental full SaveInstances sweep (hibernation sweeper, health check) —
+// a tmux pane killed before that sweep runs would otherwise resume with no
+// conversation UUID to pass to --resume.
 func (i *Instance) SetHistoryInfo(conversationUUID, historyFilePath string) {
 	i.claudeSessionMu.Lock()
-	defer i.claudeSessionMu.Unlock()
 
 	currentUUID := ""
 	if i.claudeSession != nil {
 		currentUUID = i.claudeSession.ConversationUUID
 	}
 	if currentUUID == conversationUUID && i.HistoryFilePath == historyFilePath {
+		i.claudeSessionMu.Unlock()
 		return
 	}
+	uuidChanged := currentUUID != conversationUUID
 
 	// See ClearConversationState's comment: nest i.mu inside claudeSessionMu,
 	// around the writes AND the buildSnapshot call, so this is ordered against
@@ -477,8 +567,19 @@ func (i *Instance) SetHistoryInfo(conversationUUID, historyFilePath string) {
 	}
 	i.claudeSession.ConversationUUID = conversationUUID
 	i.HistoryFilePath = historyFilePath
+	if conversationUUID != "" {
+		i.EverHadConversationHistory = true
+	}
 	snap := buildSnapshot(i)
 	i.mu.Unlock()
 	i.snapshot.Store(snap)
+
+	cb := i.claudeSessionIDSavedCallback
+	i.claudeSessionMu.Unlock()
+
+	if uuidChanged && cb != nil {
+		cb()
+	}
+
 	log.ForSession(i.Title).Info("conversation uuid set", "uuid", conversationUUID, "history", historyFilePath)
 }

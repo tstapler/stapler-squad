@@ -11,6 +11,17 @@ export type ConnectionState = "connected" | "stale" | "disconnected";
 interface SessionsExtraState {
   loading: boolean;
   error: string | null;
+  /**
+   * ConnectRPC error code (from the `Code` enum in @connectrpc/connect) for the most recent
+   * `error`, when the failure came from a ConnectError — undefined for a plain Error/string
+   * failure. Lets a consumer (e.g. the board's drag-rejection reconciliation) distinguish a
+   * transport-level failure (Unavailable/DeadlineExceeded/Unknown/Internal) from a
+   * business-rule rejection (FailedPrecondition) without re-parsing the message string.
+   * Sibling to `error` rather than folded into its payload — `setError(string)` has ~30
+   * call sites across the codebase, so changing its signature would touch far more than this
+   * feature's blast radius.
+   */
+  errorCode?: number;
   /** Per-session terminal-detected status synced from Session.detectedStatus proto field. */
   detectedStatusMap: Record<string, { detectedStatus: DetectedStatus; detectedContext: string }>;
   /** WatchSessions stream connection state for UI staleness indicator. */
@@ -37,7 +48,23 @@ const sessionsSlice = createSlice({
   reducers: {
     setSessions(state, action: PayloadAction<Session[]>) {
       const filtered = action.payload.filter(s => !state.deletedIds[s.id]);
-      sessionsAdapter.setAll(state, filtered);
+      // Preserve existing entity references when a session's data is unchanged
+      // (same updatedAt) so React.memo on SessionRowWrapper can skip re-rendering
+      // rows untouched by this snapshot/poll — mirrors the guard in upsertSession.
+      const merged = filtered.map((incoming) => {
+        const existing = state.entities[incoming.id];
+        if (
+          existing &&
+          existing.updatedAt !== undefined &&
+          incoming.updatedAt !== undefined &&
+          existing.updatedAt.seconds === incoming.updatedAt.seconds &&
+          existing.updatedAt.nanos === incoming.updatedAt.nanos
+        ) {
+          return existing;
+        }
+        return incoming;
+      });
+      sessionsAdapter.setAll(state, merged);
     },
     upsertSession(state, action: PayloadAction<Session>) {
       // Don't resurrect a deleted session via an in-flight update event
@@ -84,6 +111,12 @@ const sessionsSlice = createSlice({
     },
     setError(state, action: PayloadAction<string | null>) {
       state.error = action.payload;
+      // A fresh error/clear always invalidates the previously-classified code — callers that
+      // need a code alongside the message dispatch setErrorCode immediately after setError.
+      state.errorCode = undefined;
+    },
+    setErrorCode(state, action: PayloadAction<number | undefined>) {
+      state.errorCode = action.payload;
     },
     setConnectionState(state, action: PayloadAction<ConnectionState>) {
       state.connectionState = action.payload;
@@ -100,6 +133,7 @@ export const {
   removeSession,
   setLoading,
   setError,
+  setErrorCode,
   setConnectionState,
   removeDetectedStatus,
 } = sessionsSlice.actions;
@@ -119,12 +153,19 @@ export const selectActiveSessionsSortedByUpdatedAt = createSelector(
   (sessions) =>
     sessions
       .filter((s) => s.status !== SessionStatus.UNSPECIFIED)
-      .sort((a, b) => Number(b.updatedAt?.seconds ?? 0) - Number(a.updatedAt?.seconds ?? 0))
+      .sort((a, b) => {
+        const byUpdated = Number(b.updatedAt?.seconds ?? 0) - Number(a.updatedAt?.seconds ?? 0);
+        if (byUpdated !== 0) return byUpdated;
+        const byCreated = Number(b.createdAt?.seconds ?? 0) - Number(a.createdAt?.seconds ?? 0);
+        if (byCreated !== 0) return byCreated;
+        return a.id.localeCompare(b.id);
+      })
 );
 export const selectSessionIds = adapterSelectors.selectIds;
 export const selectSessionsTotal = adapterSelectors.selectTotal;
 export const selectSessionsLoading = (state: RootState) => state.sessions.loading;
 export const selectSessionsError = (state: RootState) => state.sessions.error;
+export const selectSessionsErrorCode = (state: RootState) => state.sessions.errorCode;
 export const selectDetectedStatusMap = (state: RootState) => state.sessions.detectedStatusMap;
 export const selectConnectionState = (state: RootState) => state.sessions.connectionState;
 

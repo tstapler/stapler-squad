@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -22,9 +23,27 @@ func resetGhBaseURL(ts *httptest.Server) func() {
 	return func() { gh.GhBaseURL = "https://api.github.com/" }
 }
 
+// fakeGitHubEnterpriseHandler serves both REST (GET /user) and GraphQL
+// (POST /api/graphql) requests that UserPRCache.fetch fires when resolving
+// and refreshing an account: /user login-checks, /api/graphql fetches open
+// PRs. Without a GraphQL responder, a test that only mocks /user leaves the
+// GraphQL call to fall through to whatever graphQLURLForHost resolves to —
+// this is what regressed into the real, unmocked github.com dial that hung
+// CI (see graphQLURLForHost's EnterpriseBaseURLOverride fix in
+// github/hosts.go).
+func fakeGitHubEnterpriseHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	if strings.Contains(r.URL.Path, "graphql") {
+		_, _ = w.Write([]byte(`{"data":{"viewer":{"pullRequests":{"nodes":[]}}}}`))
+		return
+	}
+	_ = json.NewEncoder(w).Encode(map[string]string{"login": "octocat"})
+}
+
 // ─── SearchGitHubRepos ────────────────────────────────────────────────────────
 
 func TestSearchGitHubRepos_NilStorage(t *testing.T) {
+	t.Parallel()
 	svc := newBacklogServiceNilStorage()
 	_, err := svc.SearchGitHubRepos(context.Background(),
 		connect.NewRequest(&sessionv1.SearchGitHubReposRequest{}))
@@ -78,6 +97,7 @@ func TestSearchGitHubRepos_ReturnsRepos(t *testing.T) {
 // ─── ListGitHubIssues ─────────────────────────────────────────────────────────
 
 func TestListGitHubIssues_NilStorage(t *testing.T) {
+	t.Parallel()
 	svc := newBacklogServiceNilStorage()
 	_, err := svc.ListGitHubIssues(context.Background(),
 		connect.NewRequest(&sessionv1.ListGitHubIssuesRequest{Owner: "a", Repo: "b"}))
@@ -88,6 +108,7 @@ func TestListGitHubIssues_NilStorage(t *testing.T) {
 }
 
 func TestListGitHubIssues_EmptyOwner(t *testing.T) {
+	t.Parallel()
 	svc := newBacklogService(t)
 	_, err := svc.ListGitHubIssues(context.Background(),
 		connect.NewRequest(&sessionv1.ListGitHubIssuesRequest{Owner: "", Repo: "repo"}))
@@ -98,6 +119,7 @@ func TestListGitHubIssues_EmptyOwner(t *testing.T) {
 }
 
 func TestListGitHubIssues_EmptyRepo(t *testing.T) {
+	t.Parallel()
 	svc := newBacklogService(t)
 	_, err := svc.ListGitHubIssues(context.Background(),
 		connect.NewRequest(&sessionv1.ListGitHubIssuesRequest{Owner: "owner", Repo: ""}))
@@ -108,6 +130,7 @@ func TestListGitHubIssues_EmptyRepo(t *testing.T) {
 }
 
 func TestListGitHubIssues_InvalidOwnerChars(t *testing.T) {
+	t.Parallel()
 	svc := newBacklogService(t)
 	_, err := svc.ListGitHubIssues(context.Background(),
 		connect.NewRequest(&sessionv1.ListGitHubIssuesRequest{Owner: "a b", Repo: "repo"}))
@@ -195,6 +218,7 @@ func TestListGitHubIssues_PopulatesBodyAuthorAndTimestamps(t *testing.T) {
 // ─── ImportGitHubIssue ────────────────────────────────────────────────────────
 
 func TestImportGitHubIssue_NilStorage(t *testing.T) {
+	t.Parallel()
 	svc := newBacklogServiceNilStorage()
 	_, err := svc.ImportGitHubIssue(context.Background(),
 		connect.NewRequest(&sessionv1.ImportGitHubIssueRequest{IssueUrl: "https://github.com/acme/widgets/issues/1"}))
@@ -205,6 +229,7 @@ func TestImportGitHubIssue_NilStorage(t *testing.T) {
 }
 
 func TestImportGitHubIssue_EmptyURL(t *testing.T) {
+	t.Parallel()
 	svc := newBacklogService(t)
 	_, err := svc.ImportGitHubIssue(context.Background(),
 		connect.NewRequest(&sessionv1.ImportGitHubIssueRequest{IssueUrl: ""}))
@@ -215,6 +240,7 @@ func TestImportGitHubIssue_EmptyURL(t *testing.T) {
 }
 
 func TestImportGitHubIssue_NotAnIssueURL(t *testing.T) {
+	t.Parallel()
 	svc := newBacklogService(t)
 	_, err := svc.ImportGitHubIssue(context.Background(),
 		connect.NewRequest(&sessionv1.ImportGitHubIssueRequest{IssueUrl: "https://github.com/acme/widgets"}))
@@ -276,6 +302,52 @@ func TestImportGitHubIssue_CreatesItemFromIssue(t *testing.T) {
 	assert.False(t, resp.Msg.TriageTriggered, "no headlessPool wired in test service, so triage should never fire")
 }
 
+// TestImportGitHubIssue_DedupsExistingImport guards the dedup check
+// ImportGitHubIssue runs against GetBacklogItemByExternalURL before creating
+// a new item: importing the same issue URL twice must return the
+// already-created item (AlreadyExisted=true, same item ID) rather than
+// creating a second backlog item or re-triggering triage.
+func TestImportGitHubIssue_DedupsExistingImport(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"number":   11,
+			"title":    "Duplicate import guard missing",
+			"body":     "Importing the same issue twice creates two backlog items.",
+			"state":    "open",
+			"html_url": "https://github.com/acme/widgets/issues/11",
+		})
+	}))
+	defer ts.Close()
+	defer resetGhBaseURL(ts)()
+	t.Setenv("GITHUB_TOKEN", "fake-token")
+
+	svc := newBacklogService(t)
+	req := connect.NewRequest(&sessionv1.ImportGitHubIssueRequest{
+		IssueUrl:     "https://github.com/acme/widgets/issues/11",
+		RepoPath:     "/tmp/local-widgets",
+		SkipPlanning: true,
+	})
+
+	first, err := svc.ImportGitHubIssue(context.Background(), req)
+	require.NoError(t, err)
+	require.NotNil(t, first.Msg.Item)
+	assert.False(t, first.Msg.AlreadyExisted, "first import should create a new item")
+	firstID := first.Msg.Item.Id
+
+	second, err := svc.ImportGitHubIssue(context.Background(), req)
+	require.NoError(t, err)
+	require.NotNil(t, second.Msg.Item)
+	assert.True(t, second.Msg.AlreadyExisted, "second import of the same issue URL should be flagged as a dup")
+	assert.Equal(t, firstID, second.Msg.Item.Id, "second import should return the same item ID as the first")
+	assert.False(t, second.Msg.TriageTriggered, "dedup path must not re-trigger triage")
+
+	items, err := svc.storage.ListBacklogItems(context.Background(), session.BacklogItemFilter{})
+	require.NoError(t, err)
+	require.Len(t, items, 1, "only one backlog item should exist after importing the same issue URL twice")
+	assert.Equal(t, firstID, items[0].ID)
+}
+
 func TestImportGitHubIssue_ResolvesRepoPathWhenNotProvided(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -308,6 +380,7 @@ func TestImportGitHubIssue_ResolvesRepoPathWhenNotProvided(t *testing.T) {
 // ─── GetSessionBacklogIndex ───────────────────────────────────────────────────
 
 func TestGetSessionBacklogIndex_NilStorage(t *testing.T) {
+	t.Parallel()
 	svc := newBacklogServiceNilStorage()
 	_, err := svc.GetSessionBacklogIndex(context.Background(),
 		connect.NewRequest(&sessionv1.GetSessionBacklogIndexRequest{}))
@@ -318,6 +391,7 @@ func TestGetSessionBacklogIndex_NilStorage(t *testing.T) {
 }
 
 func TestGetSessionBacklogIndex_EmptyDB(t *testing.T) {
+	t.Parallel()
 	svc := newBacklogService(t)
 	resp, err := svc.GetSessionBacklogIndex(context.Background(),
 		connect.NewRequest(&sessionv1.GetSessionBacklogIndexRequest{}))
@@ -326,6 +400,7 @@ func TestGetSessionBacklogIndex_EmptyDB(t *testing.T) {
 }
 
 func TestGetSessionBacklogIndex_WithEntries(t *testing.T) {
+	t.Parallel()
 	storage := createTestStorage(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 

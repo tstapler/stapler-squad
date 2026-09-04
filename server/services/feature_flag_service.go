@@ -9,7 +9,13 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session"
 )
+
+// piSupportFlagName mirrors config.FeaturePiSupport so knownFeatureFlags below
+// doesn't duplicate the literal — see config/config.go for the flag's full
+// documentation and project_plans/pi-support/implementation/plan.md, Epic 2.1.
+const piSupportFlagName = config.FeaturePiSupport
 
 // sddDefaultPipelineFlagName is shared between knownFeatureFlags below and
 // CreateBacklogItem's default-resolution branch (backlog_service_lifecycle.go)
@@ -17,11 +23,111 @@ import (
 // read.
 const sddDefaultPipelineFlagName = "backlog:sdd-default-pipeline"
 
+// blockApprovalOnCIFailureFlagName is shared between knownFeatureFlags below and
+// ApprovalService.ResolveApproval's CI-red guard (approval_service.go) so the flag
+// name can't drift between where it's declared and where it's read.
+const blockApprovalOnCIFailureFlagName = "review:block-approval-on-ci-failure"
+
+// workspacePeersNudgeFlagName is shared between knownFeatureFlags below and
+// workspacePeersBlockFor below so the flag name can't drift between where it's declared and
+// where it's read.
+const workspacePeersNudgeFlagName = "session:workspace-peers-nudge"
+
+// handoffSummaryFlagName is the generic-registry name for the
+// restart-with-handoff-summary feature, so the frontend can discover
+// HandoffSummaryConfig.Enabled up front (via GetFeatureFlags) instead of only
+// finding out on the first TriggerHandoffSummary call's
+// Code.FailedPrecondition (see HandoffSummaryService.TriggerHandoffSummary's
+// identical EnabledOrDefault() check). Shared with HandoffSummaryFeatureController
+// below so the flag name can't drift between where it's declared and where it's
+// wired.
+const handoffSummaryFlagName = "handoff-summary"
+
+// HandoffSummaryFeatureController is a read-only FeatureController for
+// handoffSummaryFlagName: IsEnabled defers to config.HandoffSummaryConfig's
+// EnabledOrDefault, the same real source of truth
+// HandoffSummaryService.TriggerHandoffSummary already gates on. The generic
+// feature-flags map (config.json's top-level feature_flags key) is
+// deliberately NOT the source of truth here -- config.json's own
+// handoff_summary.enabled key is -- so this flag is exposed for GetFeatureFlags
+// visibility only. Enable/Disable both refuse: this flag's real setting has
+// no in-process runtime toggle for UpdateFeatureFlag to drive, and letting the
+// call silently "succeed" while IsEnabled stays keyed to a different config
+// field would make GetFeatureFlags lie about the effect of an
+// UpdateFeatureFlag call that just apparently succeeded. Exported (unlike
+// this file's other flag machinery) because server/dependencies.go, not this
+// package, is where every other SetFeatureController call is wired.
+type HandoffSummaryFeatureController struct{}
+
+func (HandoffSummaryFeatureController) Enable(context.Context) error {
+	return fmt.Errorf("%q is read-only via this API: set handoff_summary.enabled in config.json directly", handoffSummaryFlagName)
+}
+
+func (HandoffSummaryFeatureController) Disable() error {
+	return fmt.Errorf("%q is read-only via this API: set handoff_summary.enabled in config.json directly", handoffSummaryFlagName)
+}
+
+func (HandoffSummaryFeatureController) IsEnabled() bool {
+	return config.LoadConfig().HandoffSummary.EnabledOrDefault()
+}
+
+// terminalResyncCorrelationIDFlagName is shared between knownFeatureFlags below and
+// handleCurrentPaneRequest's resync_id echo (connectrpc_websocket.go) so the flag name
+// can't drift between where it's declared and where it's read.
+const terminalResyncCorrelationIDFlagName = "terminal:resync-correlation-id"
+
+// terminalResyncSkipStaleDimensionSlowpathFlagName is shared between knownFeatureFlags
+// below and handleCurrentPaneRequest's stale-dimension skip branch (connectrpc_websocket.go)
+// so the flag name can't drift between where it's declared and where it's read.
+const terminalResyncSkipStaleDimensionSlowpathFlagName = "terminal:resync-skip-stale-dimension-slowpath"
+
+// terminalResyncExecGateFastLaneFlagName is shared between knownFeatureFlags below and
+// currentResyncOptions' UseFastLane field (connectrpc_websocket.go) so the flag name can't
+// drift between where it's declared and where it's read. session/instance_tmux.go duplicates
+// this literal (as terminalResyncExecGateFastLaneFlagName there too) rather than importing it,
+// since session cannot import server/services without creating an import cycle — keep both
+// in sync if this flag is ever renamed.
+const terminalResyncExecGateFastLaneFlagName = "terminal:resync-exec-gate-fast-lane"
+
+// terminalResyncCompressionFlagName is shared between knownFeatureFlags below and
+// writeCurrentPaneResponse's envelope-compression branch (connectrpc_websocket.go) so the
+// flag name can't drift between where it's declared and where it's read.
+const terminalResyncCompressionFlagName = "terminal:resync-compression"
+
+// terminalResyncVisibilityScopeFlagName, terminalResyncStaggerFlagName, and
+// terminalResyncBatchingFlagName are pure client-side concerns (see
+// connectrpc_websocket_test.go's allTerminalResyncFlagNames doc comment) with no Go
+// production call site to share a constant with — they're named here purely for
+// consistency with the other four terminal:resync-* flags above, and so
+// knownFeatureFlags/allTerminalResyncFlagNames reference one declaration instead of a
+// raw string literal.
+const terminalResyncVisibilityScopeFlagName = "terminal:resync-visibility-scope"
+const terminalResyncStaggerFlagName = "terminal:resync-stagger"
+const terminalResyncBatchingFlagName = "terminal:resync-batching"
+
+// workspacePeersBlockFor is the single feature-flag gate for the workspace-peers nudge,
+// called by both SessionService.workspacePeersBlockFor (session_service.go) and
+// BacklogService.workspacePeersBlockFor (backlog_service_triage.go) so the two callers can't
+// drift on the gate itself, the same way session.WorkspacePeersBlockForPath already keeps
+// them from drifting on how the nudge is rendered.
+func workspacePeersBlockFor(ctx context.Context, storage *session.Storage, repoPath string) string {
+	if !config.LoadConfig().GetFeatureFlag(workspacePeersNudgeFlagName) {
+		return ""
+	}
+	return session.WorkspacePeersBlockForPath(ctx, storage, repoPath)
+}
+
 // knownFeatureFlags is the authoritative list of feature flags exposed via the RPC API.
 // Moved here from session_service.go (ADR-001: single-concern cluster gets its own file).
+// defaultValue is what GetFeatureFlags (below) reports, and what the flag's real call
+// site should resolve to via GetFeatureFlagWithDefault, when the flag has never been
+// explicitly persisted — Go's zero value (false) for any entry that omits the field, so
+// only a flag graduating to "on by default" (like terminalResyncExecGateFastLaneFlagName)
+// needs to set it.
 var knownFeatureFlags = []struct {
-	name        string
-	description string
+	name         string
+	description  string
+	defaultValue bool
 }{
 	{
 		name:        "backlog",
@@ -43,6 +149,65 @@ var knownFeatureFlags = []struct {
 		name:        sddDefaultPipelineFlagName,
 		description: "New backlog items with no explicitly chosen pipeline mode default to the 'sdd' pipeline mode (research, plan, validate, implement, and an adversarial verify pass before review) instead of the flat default pipeline. Never affects existing items or an item with any explicit pipeline_mode value, including an explicit empty one.",
 	},
+	{
+		name:        blockApprovalOnCIFailureFlagName,
+		description: "Block manual Approve when the session's branch has failing GitHub CI. Shows a visible inline explanation instead of a silent no-op; a reviewer can still bypass it per-approval via 'Approve anyway' (audited). Sessions with no associated PR are unaffected. Default: off.",
+	},
+	{
+		name:        workspacePeersNudgeFlagName,
+		description: "Auto-inject an 'Other Active Sessions In This Workspace' nudge into every new session's initial prompt. Off by default — use the list_workspace_peers MCP tool on demand instead. Default: off.",
+	},
+	{
+		name:        handoffSummaryFlagName,
+		description: "Restart-with-summary: generate an AI handoff summary and restart into a fresh session. Read-only here -- the real toggle is config.json's handoff_summary.enabled key. Default: on.",
+	},
+	{
+		name:        terminalResyncVisibilityScopeFlagName,
+		description: "Scope terminal resync-on-visibility-change to only the terminal instance actually in the foreground, instead of every mounted terminal. Applies to newly-focused terminals only — already-open tabs need a reload to pick up the change. Default: off.",
+	},
+	{
+		name:        terminalResyncCorrelationIDFlagName,
+		description: "Tag each terminal resync request/reply pair with a correlation ID so a stale reply from an earlier resync can't be misapplied to a later one. Not live-updated on already-open tabs. Default: off.",
+	},
+	{
+		name:        terminalResyncSkipStaleDimensionSlowpathFlagName,
+		description: "Skip the stale-dimension slow path for backgrounded terminals during resync, avoiding unnecessary pane-size recalculation for terminals not currently visible. Not live-updated on already-open tabs. Default: off.",
+	},
+	{
+		name:         terminalResyncExecGateFastLaneFlagName,
+		description:  "Route resync's tmux subprocess calls through a dedicated fast-lane slot pool (see TmuxExecGateConfig.ResyncFastLaneSlots) instead of contending with other tmux exec traffic for the shared gate. Default: on (2026-08-25) — without it, a resync-triggered resize's sequential subprocess calls can exceed the client's 4s stall watchdog under exec-gate contention, forcing an unnecessary disconnect+reconnect. Persist an explicit false to opt back out.",
+		defaultValue: true,
+	},
+	{
+		name:        terminalResyncStaggerFlagName,
+		description: "Stagger resync bursts across multiple terminals instead of firing them all simultaneously, reducing thundering-herd load on the tmux server. Default: off.",
+	},
+	{
+		name:        terminalResyncCompressionFlagName,
+		description: "Compress terminal resync payloads on the wire to reduce bandwidth for large scrollback resyncs. Default: off.",
+	},
+	{
+		name:        terminalResyncBatchingFlagName,
+		description: "Batch multiple terminals' resync requests into a single round trip instead of issuing one request per terminal. Default: off.",
+	},
+	{
+		name:        piSupportFlagName,
+		description: "pi coding agent support: program picker entry, resume across restarts, and approval-rule enforcement parity with Claude Code. Default: off. Disabling does not remove an already-installed global pi approval extension — see the settings UI warning.",
+	},
+}
+
+// featureFlagDefault looks up name's defaultValue in knownFeatureFlags — the single
+// source of truth both GetFeatureFlags (the registry listing) and a flag's own call
+// site (e.g. currentResyncOptions' UseFastLane) resolve against, so the two can never
+// drift on what "default" means for a given flag. Returns false for an unregistered
+// name, matching GetFeatureFlag's own "absent means false" convention.
+func featureFlagDefault(name string) bool {
+	for _, kf := range knownFeatureFlags {
+		if kf.name == name {
+			return kf.defaultValue
+		}
+	}
+	return false
 }
 
 // FeatureFlagService handles GetFeatureFlags and UpdateFeatureFlag RPCs.
@@ -53,6 +218,11 @@ type FeatureFlagService struct {
 	// Wired via SetFeatureController. May be nil for features that only need
 	// config-file persistence (no in-process component to toggle).
 	featureControllers map[string]FeatureController
+
+	// statusDetailProviders maps feature flag names to a function returning an
+	// optional human-readable status line (e.g. why the flag is currently off).
+	// Wired via SetStatusDetailProvider. Absent name -> "".
+	statusDetailProviders map[string]func() string
 
 	// updateMu serializes UpdateFeatureFlag's read-toggle-rollback sequence so two
 	// concurrent toggles of the same flag can't race: without this, a slow caller's
@@ -78,6 +248,16 @@ func (f *FeatureFlagService) SetFeatureController(name string, c FeatureControll
 	f.featureControllers[name] = c
 }
 
+// SetStatusDetailProvider wires an optional status-detail provider for the
+// named feature flag. GetFeatureFlags calls fn on every request and populates
+// FeatureFlag.StatusDetail with its result (empty string when fn returns "").
+func (f *FeatureFlagService) SetStatusDetailProvider(name string, fn func() string) {
+	if f.statusDetailProviders == nil {
+		f.statusDetailProviders = make(map[string]func() string)
+	}
+	f.statusDetailProviders[name] = fn
+}
+
 // +api: feature-flags:list
 // GetFeatureFlags returns all known feature flags and their current state.
 func (f *FeatureFlagService) GetFeatureFlags(
@@ -88,18 +268,20 @@ func (f *FeatureFlagService) GetFeatureFlags(
 
 	flags := make([]*sessionv1.FeatureFlag, 0, len(knownFeatureFlags))
 	for _, kf := range knownFeatureFlags {
-		enabled := false
-		if cfg.FeatureFlags != nil {
-			enabled = cfg.FeatureFlags[kf.name]
-		}
+		enabled := cfg.GetFeatureFlagWithDefault(kf.name, kf.defaultValue)
 		// If a controller is wired, its live state is the source of truth.
 		if ctrl, ok := f.featureControllers[kf.name]; ok {
 			enabled = ctrl.IsEnabled()
 		}
+		var statusDetail string
+		if provider, ok := f.statusDetailProviders[kf.name]; ok {
+			statusDetail = provider()
+		}
 		flags = append(flags, &sessionv1.FeatureFlag{
-			Name:        kf.name,
-			Enabled:     enabled,
-			Description: kf.description,
+			Name:         kf.name,
+			Enabled:      enabled,
+			Description:  kf.description,
+			StatusDetail: statusDetail,
 		})
 	}
 
@@ -182,11 +364,17 @@ func (f *FeatureFlagService) UpdateFeatureFlag(
 
 	log.Info("feature flag updated", "feature", name, "enabled", enabled)
 
+	var statusDetail string
+	if provider, ok := f.statusDetailProviders[name]; ok {
+		statusDetail = provider()
+	}
+
 	return connect.NewResponse(&sessionv1.UpdateFeatureFlagResponse{
 		Flag: &sessionv1.FeatureFlag{
-			Name:        name,
-			Enabled:     enabled,
-			Description: description,
+			Name:         name,
+			Enabled:      enabled,
+			Description:  description,
+			StatusDetail: statusDetail,
 		},
 	}), nil
 }

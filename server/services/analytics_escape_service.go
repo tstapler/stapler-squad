@@ -10,6 +10,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/ent/escapeevent"
+	"github.com/tstapler/stapler-squad/session/ent/predicate"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -35,27 +36,34 @@ func (s *SessionService) QueryEscapeAnalytics(
 		pageSize = 1000
 	}
 
-	// Build query
-	query := s.analyticsClient.EscapeEvent.Query().
-		Where(escapeevent.SessionID(req.Msg.SessionId)).
-		Order(ent.Asc(escapeevent.FieldSessionSeq)).
-		Limit(pageSize + 1) // fetch one extra to determine if there's a next page
-
+	// Filters shared between the page query and the total-count query below —
+	// the count must reflect all matching rows, not just the cursor'd page.
+	filters := []predicate.EscapeEvent{escapeevent.SessionID(req.Msg.SessionId)}
 	if req.Msg.Stage != "" {
-		query = query.Where(escapeevent.Stage(req.Msg.Stage))
+		filters = append(filters, escapeevent.Stage(req.Msg.Stage))
 	}
 	if req.Msg.SequenceType != "" {
-		query = query.Where(escapeevent.SequenceType(req.Msg.SequenceType))
+		filters = append(filters, escapeevent.SequenceType(req.Msg.SequenceType))
 	}
 	if req.Msg.MangledOnly {
-		query = query.Where(escapeevent.Mangled(true))
+		filters = append(filters, escapeevent.Mangled(true))
 	}
 	if req.Msg.StartTime != nil {
-		query = query.Where(escapeevent.WallTimeGTE(req.Msg.StartTime.AsTime()))
+		filters = append(filters, escapeevent.WallTimeGTE(req.Msg.StartTime.AsTime()))
 	}
 	if req.Msg.EndTime != nil {
-		query = query.Where(escapeevent.WallTimeLTE(req.Msg.EndTime.AsTime()))
+		filters = append(filters, escapeevent.WallTimeLTE(req.Msg.EndTime.AsTime()))
 	}
+
+	totalCount, err := s.analyticsClient.EscapeEvent.Query().Where(filters...).Count(ctx)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, err)
+	}
+
+	query := s.analyticsClient.EscapeEvent.Query().
+		Where(filters...).
+		Order(ent.Asc(escapeevent.FieldSessionSeq)).
+		Limit(pageSize + 1) // fetch one extra to determine if there's a next page
 
 	// Cursor-based pagination via session_seq
 	if req.Msg.PageToken != "" {
@@ -84,10 +92,12 @@ func (s *SessionService) QueryEscapeAnalytics(
 			SessionId:    e.SessionID,
 			Stage:        e.Stage,
 			SequenceType: e.SequenceType,
-			ByteLength:   int32(e.ByteLength),
-			Mangled:      e.Mangled,
-			SessionSeq:   e.SessionSeq,
-			WallTime:     timestamppb.New(e.WallTime),
+			// #nosec G115 -- ByteLength is the byte length of one captured
+			// terminal escape-sequence chunk, far below int32 range.
+			ByteLength: int32(e.ByteLength),
+			Mangled:    e.Mangled,
+			SessionSeq: e.SessionSeq,
+			WallTime:   timestamppb.New(e.WallTime),
 		}
 		if e.SequenceSubtype != "" {
 			pe.SequenceSubtype = e.SequenceSubtype
@@ -104,10 +114,11 @@ func (s *SessionService) QueryEscapeAnalytics(
 		protoEvents = append(protoEvents, pe)
 	}
 
+	// #nosec G115 -- totalCount is a local escape-analytics event count, far below int32 range.
 	return connect.NewResponse(&sessionv1.QueryEscapeAnalyticsResponse{
 		Events:        protoEvents,
 		NextPageToken: nextPageToken,
-		TotalCount:    int32(len(protoEvents)),
+		TotalCount:    int32(totalCount),
 	}), nil
 }
 
@@ -175,5 +186,103 @@ func (s *SessionService) GetEscapeAnalyticsSummary(
 		TotalSequences: totalSeq,
 		TotalMangled:   totalMangled,
 		MangleRate:     mangleRate,
+	}), nil
+}
+
+// escapeMangleRate computes totalMangled/total, guarded to 0 when total is 0.
+// Shared by the global rate and each per-session breakdown row below.
+func escapeMangleRate(total, mangled int64) float64 {
+	if total == 0 {
+		return 0
+	}
+	return float64(mangled) / float64(total)
+}
+
+// escapeAggregateRow is the destination shape for both GroupBy/Aggregate
+// queries below: one row per group key (sequence_type or session_id), with
+// a count and a summed mangled column.
+type escapeAggregateRow struct {
+	SequenceType string `json:"sequence_type"`
+	SessionID    string `json:"session_id"`
+	Count        int64  `json:"count"`
+	MangledCount int64  `json:"mangled_count"`
+}
+
+// GetEscapeAnalyticsGlobalSummary returns aggregate escape sequence statistics
+// across all sessions, plus a per-session breakdown to spot outliers.
+// +api: analytics:get-escape-global-summary
+func (s *SessionService) GetEscapeAnalyticsGlobalSummary(
+	ctx context.Context,
+	req *connect.Request[sessionv1.GetEscapeAnalyticsGlobalSummaryRequest],
+) (*connect.Response[sessionv1.GetEscapeAnalyticsGlobalSummaryResponse], error) {
+	if s.analyticsClient == nil {
+		return nil, connect.NewError(connect.CodeUnavailable, errors.New("escape analytics not available"))
+	}
+
+	var timeFilters []predicate.EscapeEvent
+	if req.Msg.StartTime != nil {
+		timeFilters = append(timeFilters, escapeevent.WallTimeGTE(req.Msg.StartTime.AsTime()))
+	}
+	if req.Msg.EndTime != nil {
+		timeFilters = append(timeFilters, escapeevent.WallTimeLTE(req.Msg.EndTime.AsTime()))
+	}
+
+	// Histogram: real GROUP BY sequence_type, run in SQL rather than pulling
+	// every matching row into Go and folding it there.
+	var histRows []escapeAggregateRow
+	err := s.analyticsClient.EscapeEvent.Query().
+		Where(timeFilters...).
+		GroupBy(escapeevent.FieldSequenceType).
+		Aggregate(
+			ent.As(ent.Count(), "count"),
+			ent.As(ent.Sum(escapeevent.FieldMangled), "mangled_count"),
+		).
+		Scan(ctx, &histRows)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, err)
+	}
+
+	histogram := make([]*sessionv1.EscapeSequenceCount, 0, len(histRows))
+	var totalSeq, totalMangled int64
+	for _, row := range histRows {
+		histogram = append(histogram, &sessionv1.EscapeSequenceCount{
+			SequenceType: row.SequenceType,
+			Count:        row.Count,
+			MangledCount: row.MangledCount,
+		})
+		totalSeq += row.Count
+		totalMangled += row.MangledCount
+	}
+
+	// Per-session breakdown: real GROUP BY session_id, same aggregate shape.
+	var sessionRows []escapeAggregateRow
+	err = s.analyticsClient.EscapeEvent.Query().
+		Where(timeFilters...).
+		GroupBy(escapeevent.FieldSessionID).
+		Aggregate(
+			ent.As(ent.Count(), "count"),
+			ent.As(ent.Sum(escapeevent.FieldMangled), "mangled_count"),
+		).
+		Scan(ctx, &sessionRows)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, err)
+	}
+
+	perSession := make([]*sessionv1.SessionEscapeSummary, 0, len(sessionRows))
+	for _, row := range sessionRows {
+		perSession = append(perSession, &sessionv1.SessionEscapeSummary{
+			SessionId:      row.SessionID,
+			TotalSequences: row.Count,
+			TotalMangled:   row.MangledCount,
+			MangleRate:     escapeMangleRate(row.Count, row.MangledCount),
+		})
+	}
+
+	return connect.NewResponse(&sessionv1.GetEscapeAnalyticsGlobalSummaryResponse{
+		Histogram:      histogram,
+		TotalSequences: totalSeq,
+		TotalMangled:   totalMangled,
+		MangleRate:     escapeMangleRate(totalSeq, totalMangled),
+		PerSession:     perSession,
 	}), nil
 }

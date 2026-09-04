@@ -9,8 +9,10 @@ import (
 	"strings"
 	"time"
 
+	"connectrpc.com/connect"
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
+	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	githubpkg "github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/services"
@@ -20,6 +22,11 @@ import (
 type githubHandlers struct {
 	cache *githubpkg.UserPRCache
 	store session.InstanceStore
+	// svc is used to route create_session_for_pr through the async
+	// CreateSession + Background Resolution Pipeline (async-session-creation
+	// Epic 2.3, Story 2.3.2) instead of constructing/starting an *Instance
+	// inline. May be nil in tests that don't exercise createSessionForPR.
+	svc *services.SessionService
 }
 
 // GitHubPRSummary is the MCP representation of one open pull request.
@@ -52,6 +59,10 @@ type ListGitHubPRsResult struct {
 type CreateSessionForPRResult struct {
 	MCPResult
 	Session *SessionDetail `json:"session,omitempty"`
+	// StillCreating is true when mcpAwaitTerminalTimeout elapsed before the
+	// Background Resolution Pipeline reached a terminal status — see
+	// CreateSessionResult.StillCreating's doc comment in tools_lifecycle.go.
+	StillCreating bool `json:"still_creating,omitempty"`
 }
 
 func registerGitHubTools(s *mcpserver.MCPServer, gh *githubHandlers) {
@@ -64,7 +75,7 @@ func registerGitHubTools(s *mcpserver.MCPServer, gh *githubHandlers) {
 
 	s.AddTool(
 		mcpgo.NewTool("create_session_for_pr",
-			mcpgo.WithDescription("Create a new Stapler Squad worktree session for a GitHub pull request. Checks out the PR's branch in a git worktree so work is isolated. If an existing session is already associated with the PR, returns that session's ID instead of creating a duplicate. Auto-detects the local repo path from existing sessions if not provided."),
+			mcpgo.WithDescription("Create a new Stapler Squad worktree session for a GitHub pull request. Checks out the PR's branch in a git worktree so work is isolated. If an existing session is already associated with the PR, returns that session's ID instead of creating a duplicate. Auto-detects the local repo path from existing sessions if not provided. Waits up to 150s for the session to finish starting up; if it's still resolving after that, returns a still_creating result (session_id present, safe to poll with get_session) rather than an error or an open-ended hang."),
 			mcpgo.WithString("owner",
 				mcpgo.Description("GitHub owner (user or org) of the repository"),
 				mcpgo.Required(),
@@ -136,6 +147,14 @@ func (gh *githubHandlers) listGitHubPRs(_ context.Context, _ mcpgo.CallToolReque
 // ---- create_session_for_pr ----
 
 func (gh *githubHandlers) createSessionForPR(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+	return gh.createSessionForPRWithAwaitTimeout(ctx, req, mcpAwaitTerminalTimeout)
+}
+
+// createSessionForPRWithAwaitTimeout is create_session_for_pr's real
+// implementation, parameterized on the AwaitCreationTerminal timeout — see
+// lifecycleHandlers.createSessionWithAwaitTimeout's doc comment in
+// tools_lifecycle.go for why this seam exists.
+func (gh *githubHandlers) createSessionForPRWithAwaitTimeout(ctx context.Context, req mcpgo.CallToolRequest, awaitTimeout time.Duration) (*mcpgo.CallToolResult, error) {
 	if !createSessionLimiter.allow("global") {
 		return errResult(ErrRateLimitExceeded, "create_session rate limit exceeded (max 3 per minute)", "Wait before creating another session."), nil
 	}
@@ -198,7 +217,10 @@ func (gh *githubHandlers) createSessionForPR(ctx context.Context, req mcpgo.Call
 		program = "claude"
 	}
 
-	// Check for title collision.
+	// Check for title collision. Fast, agent-friendly pre-check in addition to
+	// CreateSession's own synchronous title-uniqueness check below -- see
+	// create_session's identical pre-check in tools_lifecycle.go for the
+	// TOCTOU rationale (async-session-creation Epic 2.3, Story 2.3.2).
 	existing, err := gh.store.ListInstanceData()
 	if err != nil {
 		return errResult(ErrInternalError, fmt.Sprintf("load sessions: %v", err), ""), nil
@@ -210,23 +232,48 @@ func (gh *githubHandlers) createSessionForPR(ctx context.Context, req mcpgo.Call
 		}
 	}
 
-	inst, err := session.NewInstance(session.InstanceOptions{
+	if gh.svc == nil {
+		return errResult(ErrInternalError, "create_session_for_pr is unavailable: no SessionService wired", ""), nil
+	}
+
+	createResp, createErr := gh.svc.CreateSession(ctx, connect.NewRequest(&sessionv1.CreateSessionRequest{
 		Title:       title,
 		Path:        repoPath,
 		Branch:      branch,
 		Program:     program,
-		SessionType: session.SessionTypeNewWorktree,
-		Tags:        []string{"source:mcp", "pr:" + fmt.Sprintf("%s/%s#%d", owner, repo, prNumber)},
-	})
-	if err != nil {
-		return errResult(ErrInternalError, fmt.Sprintf("create session: %v", err), ""), nil
+		SessionType: sessionv1.SessionType_SESSION_TYPE_NEW_WORKTREE,
+		// Tags (Task 2.3.1c) are applied at construction time, synchronously, rather than via a
+		// post-hoc SetTags call after AwaitCreationTerminal succeeds -- a pipeline resolution
+		// that outlasts awaitTimeout (StillCreating path below) would otherwise silently never
+		// get these tags applied.
+		Tags: []string{"source:mcp", "pr:" + fmt.Sprintf("%s/%s#%d", owner, repo, prNumber)},
+	}))
+	if createErr != nil {
+		return mapCreateSessionRPCError(createErr, title), nil
+	}
+	sessionID := createResp.Msg.Session.Id
+
+	outcome, awaitErr := gh.svc.AwaitCreationTerminal(ctx, sessionID, awaitTimeout)
+	if errors.Is(awaitErr, services.ErrCreationAwaitTimeout) {
+		return okResult(CreateSessionForPRResult{
+			MCPResult: MCPResult{Success: true},
+			Session: &SessionDetail{SessionSummary: SessionSummary{
+				ID:     sessionID,
+				Title:  title,
+				Status: session.Creating.String(),
+			}},
+			StillCreating: true,
+		}), nil
+	}
+	if result := mapCreationOutcome(outcome, awaitErr); result != nil {
+		return result, nil
 	}
 
-	if err := inst.Start(true); err != nil {
-		return errResult(ErrInternalError, fmt.Sprintf("start session: %v", err), ""), nil
+	inst := gh.svc.FindLiveInstance(sessionID)
+	if inst == nil {
+		return errResult(ErrInternalError,
+			fmt.Sprintf("session %q reached Active but is no longer findable", sessionID), ""), nil
 	}
-
-	session.StartSessionDriver(inst, repoPath)
 
 	if injErr := injectMCPConfig(inst.GetEffectiveRootDir()); injErr != nil {
 		log.Warn("mcp MCP injection failed for PR session", "title", title, "err", injErr)
@@ -235,7 +282,7 @@ func (gh *githubHandlers) createSessionForPR(ctx context.Context, req mcpgo.Call
 		log.Warn("mcp hook injection failed for PR session", "title", title, "err", err)
 	}
 
-	if err := gh.store.AddInstance(inst); err != nil {
+	if err := gh.store.SaveInstances([]*session.Instance{inst}); err != nil {
 		return errResult(ErrInternalError, fmt.Sprintf("save session: %v", err), ""), nil
 	}
 
@@ -246,38 +293,97 @@ func (gh *githubHandlers) createSessionForPR(ctx context.Context, req mcpgo.Call
 	}), nil
 }
 
+// PRVerification is the result of cross-checking a self-reported PR number
+// against GitHub. It replaces a bare (bool, error) return so callers can see
+// *why* a mismatch occurred (a different head branch vs. no PR at all) and
+// make a policy decision — e.g. reportPRCreated's override path — instead of
+// VerifyPRMatchesBranch having to bake that policy in itself.
+//
+// The implicit invariant Matched ⇒ Exists is enforced at construction by
+// NewPRVerification — every PRVerification value, in production and in
+// tests, must be built through NewPRVerification, never a bare struct
+// literal, or the invariant has no enforcement point.
+type PRVerification struct {
+	Exists           bool
+	Matched          bool
+	ActualHeadBranch string
+	State            string
+	Author           string
+}
+
+// NewPRVerification is the sole constructor for PRVerification. It enforces
+// Matched ⇒ Exists: a caller passing matched=true with exists=false has
+// produced an illegal state (a PR can't match a branch if it doesn't exist).
+// Rather than panic — which would take down the whole handler for what's
+// almost certainly a code-level logic bug in this package rather than bad
+// external input — the violation is forced to matched=false and logged
+// loudly via log.ErrorLog().Printf so it's impossible to miss in logs/tests,
+// while production keeps running.
+//
+// Author is not part of this invariant and is carried through unvalidated;
+// it is consumed only by reportPRCreated's override-path author-match gate
+// (tools_backlog.go's decideOverridePolicy) — this constructor makes no
+// policy decision based on it.
+func NewPRVerification(exists, matched bool, actualHeadBranch, state, author string) PRVerification {
+	if matched && !exists {
+		log.ErrorLog().Printf("NewPRVerification: illegal state matched=true with exists=false (actualHeadBranch=%q, state=%q, author=%q) — forcing matched=false", actualHeadBranch, state, author)
+		matched = false
+	}
+	return PRVerification{
+		Exists:           exists,
+		Matched:          matched,
+		ActualHeadBranch: actualHeadBranch,
+		State:            state,
+		Author:           author,
+	}
+}
+
 // VerifyPRMatchesBranch confirms a PR number self-reported to
 // report_pr_created (tools_backlog.go, Epic 3.1 of "PR Metadata Capture
 // Fix" — project_plans/backlog-agent-communication) genuinely exists on
-// GitHub and its head branch matches the item's own branch, before that
-// self-report is trusted and persisted. A hallucinated, stale, or mistyped
-// PR reference would otherwise silently poison the item record — a class of
-// bad data the mechanical pushAndCreatePR path (session/backlog_lifecycle.go)
-// never has to guard against, since it only ever writes PR data it itself
-// just created.
+// GitHub, before that self-report is trusted and persisted. A hallucinated,
+// stale, or mistyped PR reference would otherwise silently poison the item
+// record — a class of bad data the mechanical pushAndCreatePR path
+// (session/backlog_lifecycle.go) never has to guard against, since it only
+// ever writes PR data it itself just created.
 //
-// Reuses githubpkg.GetPRForBranch — the same branch->PR lookup
-// list_github_prs's own plumbing is built on — instead of string-matching
-// gh CLI error text, so "no PR for this branch" is a typed, unambiguous
-// signal (githubpkg.ErrNoPR) distinct from a transient lookup failure.
+// Root-cause fix: this looks the PR up by its immutable number
+// (githubpkg.GetPRByNumber) rather than by branch name
+// (githubpkg.GetPRForBranch, the prior implementation). A branch-keyed
+// lookup silently matches the wrong PR whenever the branch was reused,
+// renamed, or (the confirmed real-world case) polluted by another session
+// sharing the same worktree, so the caller opened the PR from a different,
+// clean branch — the branch name the item is tracked under and the PR's
+// actual head branch legitimately diverge, and a branch-keyed lookup cannot
+// tell that apart from an unrelated PR.
+//
+// Because the lookup is now number-keyed, Matched == false with
+// Exists == true is a distinct, *possible-to-accept* outcome — it's a real,
+// existing PR for this repo whose head branch just doesn't match the item's
+// tracked branch, rather than a fabricated PR number. Whether to accept that
+// fallback case is a policy decision made by the caller (reportPRCreated's
+// decideOverridePolicy, tools_backlog.go), never by this function — it
+// stays a pure fact-reporter about what GitHub actually says.
 //
 // Returns:
-//   - (true, nil): expectedBranch has an existing PR and its number matches prNumber.
-//   - (false, nil): a definitive mismatch — no PR exists for expectedBranch at
-//     all, or its PR has a different number. Callers must NOT persist on this
-//     result; re-asking GitHub the same question will not change the answer.
-//   - (false, err): the lookup itself failed (rate limit, network, auth) —
-//     transient. Callers should surface a retryable error to the caller
-//     rather than treating this as a confirmed mismatch.
-func VerifyPRMatchesBranch(ctx context.Context, owner, repo string, prNumber int, expectedBranch string) (bool, error) {
-	info, err := githubpkg.GetPRForBranch(ctx, owner, repo, expectedBranch)
+//   - (NewPRVerification(false, false, "", "", ""), nil): no PR exists for
+//     prNumber in owner/repo at all (githubpkg.ErrNoPR). Callers must NOT
+//     persist on this result, with or without an override — re-asking
+//     GitHub the same question will not change the answer.
+//   - (NewPRVerification(true, ..., info.HeadRef, info.State, info.Author), nil):
+//     the PR exists; Matched reflects whether info.HeadRef == expectedBranch.
+//   - (PRVerification{}, err): the lookup itself failed (rate limit, network,
+//     auth) — transient. Callers should surface a retryable error rather
+//     than treating this as a confirmed mismatch or a confirmed non-existence.
+func VerifyPRMatchesBranch(ctx context.Context, owner, repo string, prNumber int, expectedBranch string) (PRVerification, error) {
+	info, err := githubpkg.GetPRByNumber(ctx, owner, repo, prNumber)
 	if err != nil {
 		if errors.Is(err, githubpkg.ErrNoPR) {
-			return false, nil
+			return NewPRVerification(false, false, "", "", ""), nil
 		}
-		return false, err
+		return PRVerification{}, err
 	}
-	return info.Number == prNumber, nil
+	return NewPRVerification(true, info.HeadRef == expectedBranch, info.HeadRef, info.State, info.Author), nil
 }
 
 // detectRepoPath looks for an existing session or worktree that belongs to owner/repo

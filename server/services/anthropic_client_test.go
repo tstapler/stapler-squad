@@ -20,6 +20,7 @@ import (
 
 // T-UNIT-GO-011
 func TestAnthropicAIClient_Complete_CancelsOnCtxDone(t *testing.T) {
+	t.Parallel()
 	blocker := make(chan struct{})
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		select {
@@ -28,7 +29,12 @@ func TestAnthropicAIClient_Complete_CancelsOnCtxDone(t *testing.T) {
 		}
 		select {
 		case <-r.Context().Done():
-		case <-time.After(10 * time.Second):
+		// Safety net only: the test's own 100ms ctx timeout drives r.Context().Done()
+		// well before this fires. Capped at 2s (not sub-second) so it stays a true
+		// safety margin under CI scheduler jitter, not a tight race against it, and
+		// so srv.Close() finishes well under net/http/httptest's 5s hang-detector
+		// window if this branch were ever hit.
+		case <-time.After(2 * time.Second):
 		}
 	}))
 	defer func() {
@@ -77,18 +83,21 @@ func (t *singleURLTransport) RoundTrip(req *http.Request) (*http.Response, error
 }
 
 func TestNewAnthropicAIClientFromKey_EmptyKey_ReturnsError(t *testing.T) {
+	t.Parallel()
 	_, err := NewAnthropicAIClientFromKey("")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "apiKey must not be empty")
 }
 
 func TestNewAnthropicAIClient_EmptyCredential_ReturnsError(t *testing.T) {
+	t.Parallel()
 	_, err := NewAnthropicAIClient(Credential{})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "credential is empty")
 }
 
 func TestAnthropicAIClient_Complete_APIKey_SetsXApiKeyHeader(t *testing.T) {
+	t.Parallel()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, "test-api-key", r.Header.Get("x-api-key"))
 		assert.Empty(t, r.Header.Get("Authorization"), "OAuth header should NOT be set for API key creds")
@@ -120,6 +129,7 @@ func TestAnthropicAIClient_Complete_APIKey_SetsXApiKeyHeader(t *testing.T) {
 }
 
 func TestAnthropicAIClient_Complete_OAuthToken_SetsBearerHeader(t *testing.T) {
+	t.Parallel()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, "Bearer oauth-token-abc", r.Header.Get("Authorization"))
 		assert.Empty(t, r.Header.Get("x-api-key"), "API key header should NOT be set for OAuth creds")
@@ -189,6 +199,7 @@ func TestEnvVarCredentialSource_Google_FallbackVar(t *testing.T) {
 }
 
 func TestEnvVarCredentialSource_Missing_ReturnsFalse(t *testing.T) {
+	t.Parallel()
 	if prev, existed := os.LookupEnv("ANTHROPIC_API_KEY"); existed {
 		t.Cleanup(func() { os.Setenv("ANTHROPIC_API_KEY", prev) })
 	} else {
@@ -202,6 +213,7 @@ func TestEnvVarCredentialSource_Missing_ReturnsFalse(t *testing.T) {
 }
 
 func TestEnvVarCredentialSource_UnknownProvider_ReturnsFalse(t *testing.T) {
+	t.Parallel()
 	src := &EnvVarCredentialSource{}
 	_, ok, err := src.Resolve(context.Background(), "unknown-provider")
 	require.NoError(t, err)
@@ -209,6 +221,7 @@ func TestEnvVarCredentialSource_UnknownProvider_ReturnsFalse(t *testing.T) {
 }
 
 func TestClaudeOAuthCredentialSource_ValidToken(t *testing.T) {
+	t.Parallel()
 	home := t.TempDir()
 	claudeDir := filepath.Join(home, ".claude")
 	require.NoError(t, os.MkdirAll(claudeDir, 0700))
@@ -236,6 +249,7 @@ func TestClaudeOAuthCredentialSource_ValidToken(t *testing.T) {
 }
 
 func TestClaudeOAuthCredentialSource_ExpiredToken_ReturnsFalse(t *testing.T) {
+	t.Parallel()
 	home := t.TempDir()
 	claudeDir := filepath.Join(home, ".claude")
 	require.NoError(t, os.MkdirAll(claudeDir, 0700))
@@ -257,6 +271,7 @@ func TestClaudeOAuthCredentialSource_ExpiredToken_ReturnsFalse(t *testing.T) {
 }
 
 func TestClaudeOAuthCredentialSource_MissingFile_ReturnsFalse(t *testing.T) {
+	t.Parallel()
 	src := &ClaudeOAuthCredentialSource{HomeDirOverride: t.TempDir()}
 	_, ok, err := src.Resolve(context.Background(), "anthropic")
 	require.NoError(t, err)
@@ -264,6 +279,7 @@ func TestClaudeOAuthCredentialSource_MissingFile_ReturnsFalse(t *testing.T) {
 }
 
 func TestClaudeOAuthCredentialSource_WrongProvider_ReturnsFalse(t *testing.T) {
+	t.Parallel()
 	src := &ClaudeOAuthCredentialSource{}
 	_, ok, err := src.Resolve(context.Background(), "google")
 	require.NoError(t, err)
@@ -271,6 +287,7 @@ func TestClaudeOAuthCredentialSource_WrongProvider_ReturnsFalse(t *testing.T) {
 }
 
 func TestAgyCredentialSource_ValidAgyOAuthToken(t *testing.T) {
+	t.Parallel()
 	home := t.TempDir()
 	geminiDir := filepath.Join(home, ".gemini")
 	require.NoError(t, os.MkdirAll(geminiDir, 0700))
@@ -296,6 +313,7 @@ func TestAgyCredentialSource_ValidAgyOAuthToken(t *testing.T) {
 }
 
 func TestAgyCredentialSource_ExpiredAgyToken_FallsBackToADC(t *testing.T) {
+	t.Parallel()
 	home := t.TempDir()
 
 	// Write expired AGY token
@@ -329,6 +347,7 @@ func TestAgyCredentialSource_ExpiredAgyToken_FallsBackToADC(t *testing.T) {
 }
 
 func TestAgyCredentialSource_NoFiles_ReturnsFalse(t *testing.T) {
+	t.Parallel()
 	src := &AgyCredentialSource{HomeDirOverride: t.TempDir()}
 	_, ok, err := src.Resolve(context.Background(), "google")
 	require.NoError(t, err)
@@ -336,6 +355,7 @@ func TestAgyCredentialSource_NoFiles_ReturnsFalse(t *testing.T) {
 }
 
 func TestAgyCredentialSource_WrongProvider_ReturnsFalse(t *testing.T) {
+	t.Parallel()
 	src := &AgyCredentialSource{}
 	_, ok, err := src.Resolve(context.Background(), "anthropic")
 	require.NoError(t, err)
@@ -373,6 +393,7 @@ func TestCredentialChain_EnvVarWinsOverOAuth(t *testing.T) {
 }
 
 func TestCredentialChain_FallsBackToOAuth_WhenEnvMissing(t *testing.T) {
+	t.Parallel()
 	if prev, existed := os.LookupEnv("ANTHROPIC_API_KEY"); existed {
 		t.Cleanup(func() { os.Setenv("ANTHROPIC_API_KEY", prev) })
 	} else {
@@ -402,6 +423,7 @@ func TestCredentialChain_FallsBackToOAuth_WhenEnvMissing(t *testing.T) {
 }
 
 func TestCredentialChain_NothingAvailable_ReturnsError(t *testing.T) {
+	t.Parallel()
 	if prev, existed := os.LookupEnv("ANTHROPIC_API_KEY"); existed {
 		t.Cleanup(func() { os.Setenv("ANTHROPIC_API_KEY", prev) })
 	} else {
@@ -423,6 +445,7 @@ func TestCredentialChain_NothingAvailable_ReturnsError(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestCredential_AnthropicAuthHeader_APIKey(t *testing.T) {
+	t.Parallel()
 	c := Credential{APIKey: "sk-ant-123"}
 	key, val, ok := c.AnthropicAuthHeader()
 	require.True(t, ok)
@@ -431,6 +454,7 @@ func TestCredential_AnthropicAuthHeader_APIKey(t *testing.T) {
 }
 
 func TestCredential_AnthropicAuthHeader_Bearer(t *testing.T) {
+	t.Parallel()
 	c := Credential{BearerToken: "tok-abc"}
 	key, val, ok := c.AnthropicAuthHeader()
 	require.True(t, ok)
@@ -439,6 +463,7 @@ func TestCredential_AnthropicAuthHeader_Bearer(t *testing.T) {
 }
 
 func TestCredential_IsValid(t *testing.T) {
+	t.Parallel()
 	assert.False(t, Credential{}.IsValid())
 	assert.True(t, Credential{APIKey: "k"}.IsValid())
 	assert.True(t, Credential{BearerToken: "t"}.IsValid())

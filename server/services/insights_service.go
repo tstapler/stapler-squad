@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sort"
 	"sync"
 	"time"
@@ -101,6 +102,11 @@ func (s *InsightsService) GetInsightsSummary(
 
 	sessions := make([]*sessionv1.SessionTokenSummary, 0, len(results))
 
+	var sessionSnapshot []tokens.SessionRecord
+	if s.associator != nil {
+		sessionSnapshot = s.associator.Snapshot()
+	}
+
 	for _, r := range results {
 		if r == nil {
 			continue
@@ -127,7 +133,7 @@ func (s *InsightsService) GetInsightsSummary(
 		// Determine session ID and orphan status.
 		sessionID, isOrphan := "", true
 		if s.associator != nil {
-			sessionID, isOrphan = s.associator.Associate(r)
+			sessionID, isOrphan = s.associator.AssociateWithSnapshot(r, sessionSnapshot)
 		}
 
 		// Apply orphan filter.
@@ -171,11 +177,12 @@ func (s *InsightsService) GetInsightsSummary(
 			CacheReadTokens:     r.CacheRead,
 			EstimatedCostUsd:    costUSD,
 			CacheHitRate:        cacheHitRate,
-			MessageCount:        int32(r.MessageCount), //nolint:gosec
-			IsOrphan:            isOrphan,
-			SkillActivations:    skillNames,
-			TopTools:            topTools,
-			UnpricedModels:      unpriced,
+			// #nosec G115 -- r.MessageCount is a per-session Claude message count, far below int32 range.
+			MessageCount:     int32(r.MessageCount),
+			IsOrphan:         isOrphan,
+			SkillActivations: skillNames,
+			TopTools:         topTools,
+			UnpricedModels:   unpriced,
 		}
 		if !firstTs.IsZero() {
 			summary.FirstMessageAt = timestamppb.New(firstTs)
@@ -361,6 +368,10 @@ func (s *InsightsService) ListSessionTokens(
 	// Build session summaries.
 	summaries := make([]*sessionv1.SessionTokenSummary, 0, len(results))
 	allUnpricedFamilies := make(map[string]bool) // union of unpriced families across all sessions in this call
+	var sessionSnapshot []tokens.SessionRecord
+	if s.associator != nil {
+		sessionSnapshot = s.associator.Snapshot()
+	}
 	for _, r := range results {
 		if r == nil {
 			continue
@@ -375,7 +386,7 @@ func (s *InsightsService) ListSessionTokens(
 
 		sessionID, isOrphan := "", true
 		if s.associator != nil {
-			sessionID, isOrphan = s.associator.Associate(r)
+			sessionID, isOrphan = s.associator.AssociateWithSnapshot(r, sessionSnapshot)
 		}
 
 		costUSD, unpriced := s.pricing.EstimateCost(r)
@@ -401,11 +412,12 @@ func (s *InsightsService) ListSessionTokens(
 			CacheReadTokens:     r.CacheRead,
 			EstimatedCostUsd:    costUSD,
 			CacheHitRate:        cacheHitRate,
-			MessageCount:        int32(r.MessageCount), //nolint:gosec
-			IsOrphan:            isOrphan,
-			SkillActivations:    skillNames,
-			TopTools:            topTools,
-			UnpricedModels:      unpriced,
+			// #nosec G115 -- r.MessageCount is a per-session Claude message count, far below int32 range.
+			MessageCount:     int32(r.MessageCount),
+			IsOrphan:         isOrphan,
+			SkillActivations: skillNames,
+			TopTools:         topTools,
+			UnpricedModels:   unpriced,
 		}
 		if !firstTs.IsZero() {
 			summary.FirstMessageAt = timestamppb.New(firstTs)
@@ -452,7 +464,8 @@ func (s *InsightsService) ListSessionTokens(
 	})
 
 	// Pagination.
-	totalCount := int32(len(summaries)) //nolint:gosec
+	// #nosec G115 -- len(summaries) is the in-memory session summary count, far below int32 range.
+	totalCount := int32(len(summaries))
 	pageSize := int(msg.PageSize)
 	if pageSize <= 0 {
 		pageSize = 50
@@ -485,14 +498,33 @@ func (s *InsightsService) ListSessionTokens(
 	}), nil
 }
 
+// insightsEventSender is the narrow interface watchInsights sends through.
+// Satisfied structurally (no explicit "implements") by
+// *connect.ServerStream[sessionv1.InsightsEvent] in production, and by a
+// mutex-guarded fake in tests (server/services/insights_service_test.go).
+// Mirrors backlogItemEventSender (backlog_service_events.go) — same problem
+// (*connect.ServerStream[T] has no exported constructor, so no real fake can
+// be built outside the connect package), same fix.
+type insightsEventSender interface {
+	Send(*sessionv1.InsightsEvent) error
+}
+
 // WatchInsights streams summary updates when new JSONL data is parsed.
 // Sends an initial "parse_complete" event (or "loading" if still parsing),
 // then pushes an "update" event each time the TokenStore processes a new file.
+// +api: WatchInsights
 func (s *InsightsService) WatchInsights(
 	ctx context.Context,
 	_ *connect.Request[sessionv1.WatchInsightsRequest],
 	stream *connect.ServerStream[sessionv1.InsightsEvent],
 ) error {
+	return s.watchInsights(ctx, stream)
+}
+
+// watchInsights is WatchInsights's core logic, extracted behind the
+// insightsEventSender interface (see its doc comment) so it is directly
+// unit-testable without a real RPC round-trip.
+func (s *InsightsService) watchInsights(ctx context.Context, sender insightsEventSender) error {
 	// 1. Send initial state.
 	allParsed := !s.store.IsLoading()
 	initialEvent := &sessionv1.InsightsEvent{
@@ -502,7 +534,7 @@ func (s *InsightsService) WatchInsights(
 	if !allParsed {
 		initialEvent.EventType = "loading"
 	}
-	if err := stream.Send(initialEvent); err != nil {
+	if err := sender.Send(initialEvent); err != nil {
 		return fmt.Errorf("send initial event: %w", err)
 	}
 
@@ -523,11 +555,43 @@ func (s *InsightsService) WatchInsights(
 				EventType: "update",
 				AllParsed: !s.store.IsLoading(),
 			}
-			if err := stream.Send(evt); err != nil {
+			if err := sender.Send(evt); err != nil {
 				return fmt.Errorf("send update event: %w", err)
 			}
 		}
 	}
+}
+
+// GetSessionTurnTimeline returns per-turn token stats for one session, fetched
+// on-demand when the session detail drawer opens.
+// +api: GetSessionTurnTimeline
+func (s *InsightsService) GetSessionTurnTimeline(
+	_ context.Context,
+	req *connect.Request[sessionv1.GetSessionTurnTimelineRequest],
+) (*connect.Response[sessionv1.GetSessionTurnTimelineResponse], error) {
+	r := s.store.GetByUUID(req.Msg.ConversationId)
+	if r == nil {
+		return connect.NewResponse(&sessionv1.GetSessionTurnTimelineResponse{}), nil
+	}
+	turns := make([]*sessionv1.TurnTokenStat, 0, len(r.TurnTimeline))
+	for _, turn := range r.TurnTimeline {
+		stat := &sessionv1.TurnTokenStat{
+			Model:               turn.Model,
+			InputTokens:         turn.Input,
+			OutputTokens:        turn.Output,
+			CacheCreationTokens: turn.CacheCreation,
+			CacheReadTokens:     turn.CacheRead,
+			// Cloned defensively: turn.ToolNames aliases the TokenStore's
+			// cached ParseResult backing array; the outbound proto message
+			// must not share that slice.
+			ToolNames: slices.Clone(turn.ToolNames),
+		}
+		if !turn.Timestamp.IsZero() {
+			stat.Timestamp = timestamppb.New(turn.Timestamp)
+		}
+		turns = append(turns, stat)
+	}
+	return connect.NewResponse(&sessionv1.GetSessionTurnTimelineResponse{Turns: turns}), nil
 }
 
 // ---------- helpers ----------
@@ -580,8 +644,9 @@ func sessionTopTools(r *tokens.ParseResult) []*sessionv1.TopToolEntry {
 	entries := make([]entry, 0, len(r.ToolUsage))
 	for _, stat := range r.ToolUsage {
 		entries = append(entries, entry{
-			name:      stat.ToolName,
-			callCount: int32(stat.CallCount), //nolint:gosec
+			name: stat.ToolName,
+			// #nosec G115 -- stat.CallCount is a per-session tool-call count, far below int32 range.
+			callCount: int32(stat.CallCount),
 			mcpServer: stat.MCPServer,
 		})
 	}
@@ -658,8 +723,9 @@ func buildTopToolEntries(toolCounts map[string]int64, limit int) []*sessionv1.To
 	result := make([]*sessionv1.TopEntry, 0, len(sorted))
 	for _, e := range sorted {
 		result = append(result, &sessionv1.TopEntry{
-			Name:       e.name,
-			TokenCount: e.count,
+			Name: e.name,
+			// #nosec G115 -- e.count is an aggregated skill-activation count, far below int32 range.
+			ActivationCount: int32(e.count),
 		})
 	}
 	return result

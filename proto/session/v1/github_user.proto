@@ -44,6 +44,17 @@ service GitHubUserService {
   // host's /user endpoint and stores it in the keychain on success. Use this
   // for hosts that don't support OAuth Device Flow (e.g. some GHES instances).
   rpc AddGitHubAccountWithToken(AddGitHubAccountWithTokenRequest) returns (AddGitHubAccountWithTokenResponse) {}
+
+  // ListGitHubCLIHosts discovers hosts the local `gh` CLI is already
+  // authenticated to (via its hosts.yml config), so the UI can offer them as
+  // one-click imports instead of requiring the user to paste a token.
+  rpc ListGitHubCLIHosts(ListGitHubCLIHostsRequest) returns (ListGitHubCLIHostsResponse) {}
+
+  // AddGitHubAccountFromCLI fetches the token gh CLI already holds for host
+  // (via `gh auth token --hostname <host>`), validates it, and stores it in
+  // the keychain on success — the same outcome as AddGitHubAccountWithToken
+  // but without the user needing to locate/paste the token by hand.
+  rpc AddGitHubAccountFromCLI(AddGitHubAccountFromCLIRequest) returns (AddGitHubAccountWithTokenResponse) {}
 }
 
 // GitHubAccount is a single connected GitHub account.
@@ -137,4 +148,22 @@ message AddGitHubAccountWithTokenRequest {
 
 message AddGitHubAccountWithTokenResponse {
   GitHubAuthState auth_state = 1; // updated state on success
+}
+
+// GitHubCLIHost is a host the local `gh` CLI is already authenticated to.
+message GitHubCLIHost {
+  string host          = 1; // normalized host, e.g. "github.com" or a GHES hostname
+  string username      = 2; // gh CLI's recorded username for this host, if known
+  bool   already_added = 3; // true when this host+username is already a connected account
+}
+
+message ListGitHubCLIHostsRequest {}
+
+message ListGitHubCLIHostsResponse {
+  repeated GitHubCLIHost hosts   = 1;
+  bool                   gh_available = 2; // false when the gh CLI config could not be read (not installed / never logged in)
+}
+
+message AddGitHubAccountFromCLIRequest {
+  string host = 1; // host to import, as returned by ListGitHubCLIHosts
 }

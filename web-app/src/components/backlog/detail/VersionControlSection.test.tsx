@@ -19,6 +19,9 @@ function makeGithub(overrides: Partial<GithubSummary> = {}): GithubSummary {
     checkConclusion: "success",
     approvedCount: 0,
     changesReqCount: 0,
+    mergeable: "unknown",
+    checks: [],
+    reviewFeedback: [],
     ...overrides,
   };
 }
@@ -55,6 +58,7 @@ function makeItem(overrides: Partial<BacklogItem> = {}): BacklogItem {
     notes: "",
     statusEvents: [],
     progressNotes: [],
+    activityNotes: [],
     totalEstimatedCostUsd: 0,
     ...overrides,
   };

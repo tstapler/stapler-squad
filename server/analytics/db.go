@@ -10,8 +10,10 @@ import (
 
 	"entgo.io/ent/dialect"
 	entsql "entgo.io/ent/dialect/sql"
-	_ "github.com/mattn/go-sqlite3" // SQLite driver
+	"github.com/tstapler/stapler-squad/internal/sqlitedsn"
+	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/ent"
+	_ "modernc.org/sqlite" // Pure Go SQLite driver
 )
 
 // OpenAnalyticsDB opens (or creates) the dedicated analytics.db SQLite database
@@ -21,14 +23,25 @@ import (
 // SQLite's single-writer semantics and avoid "database is locked" errors.
 // The caller is responsible for calling client.Close() on shutdown.
 func OpenAnalyticsDB(ctx context.Context, dataDir string) (*ent.Client, error) {
-	if err := os.MkdirAll(dataDir, 0755); err != nil {
+	if err := os.MkdirAll(dataDir, 0750); err != nil {
 		return nil, fmt.Errorf("analytics db: create data dir: %w", err)
 	}
 
 	dbPath := filepath.Join(dataDir, "analytics.db")
-	dsn := fmt.Sprintf("file:%s?_journal_mode=WAL&_synchronous=NORMAL&_foreign_keys=on&_wal_autocheckpoint=1000", dbPath)
+	// _timeout must be set explicitly: unlike the previous mattn/go-sqlite3 driver
+	// (which defaulted busy_timeout to 5000ms even when the DSN omitted it),
+	// modernc.org/sqlite only issues `PRAGMA busy_timeout` when the DSN sets
+	// _timeout/_busy_timeout, otherwise leaving SQLite's own default of 0 (immediate
+	// SQLITE_BUSY on lock contention) in effect.
+	dsn := sqlitedsn.New("file:"+dbPath).
+		WithWAL().
+		WithSynchronousNormal().
+		WithForeignKeys().
+		WithBusyTimeout(5000*time.Millisecond).
+		WithPragma("wal_autocheckpoint", "1000").
+		Build()
 
-	db, err := sql.Open("sqlite3", dsn)
+	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("analytics db: open sqlite: %w", err)
 	}
@@ -43,7 +56,14 @@ func OpenAnalyticsDB(ctx context.Context, dataDir string) (*ent.Client, error) {
 	client := ent.NewClient(ent.Driver(drv))
 
 	// Auto-migrate the AnalyticsEvent table (and any future schema additions).
-	if err := client.Schema.Create(ctx); err != nil {
+	// Serialized via session.EntSchemaCreateMu — see its doc comment for why:
+	// entgo.io/ent/dialect/sql/schema.(*Atlas) has package-level state that
+	// races when multiple goroutines run schema creation concurrently, even
+	// across independent *ent.Client instances.
+	session.EntSchemaCreateMu.Lock()
+	err = client.Schema.Create(ctx)
+	session.EntSchemaCreateMu.Unlock()
+	if err != nil {
 		client.Close()
 		return nil, fmt.Errorf("analytics db: schema migration: %w", err)
 	}

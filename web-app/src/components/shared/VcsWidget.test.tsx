@@ -1,7 +1,21 @@
 import React from "react";
-import { render, screen } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { VcsWidget } from "./VcsWidget";
-import type { VcsWidgetData } from "@/lib/vcs/types";
+import type { VcsWidgetData, GithubSummary } from "@/lib/vcs/types";
+
+// VcsWidgetComments (rendered only when data.github + sessionId are both
+// present) calls GetPRComments via createClient — mocked here so tests that
+// do exercise that combination don't hit a real transport. A single shared
+// mock (not a fresh jest.fn() per createClient() call) so tests can assert
+// on call history across rerenders — see the queue-navigation remount test
+// below.
+const mockGetPRComments = jest.fn().mockResolvedValue({ comments: [] });
+jest.mock("@connectrpc/connect", () => ({
+  createClient: jest.fn(() => ({ getPRComments: (...args: unknown[]) => mockGetPRComments(...args) })),
+}));
+jest.mock("@/lib/api/transport", () => ({
+  getConnectTransport: jest.fn(() => ({})),
+}));
 
 function makeData(overrides: Partial<VcsWidgetData> = {}): VcsWidgetData {
   return {
@@ -19,21 +33,32 @@ function makeData(overrides: Partial<VcsWidgetData> = {}): VcsWidgetData {
   } as VcsWidgetData;
 }
 
+// Shared factory for the repeated 13-field GithubSummary literal below —
+// mirrors the `makeCheck`/`githubSummary` convention already used in
+// MergeabilityPill.test.tsx and VersionControlSection.test.tsx.
+function makeGithub(overrides: Partial<GithubSummary> = {}): GithubSummary {
+  return {
+    owner: "acme",
+    repo: "widget",
+    prUrl: "https://github.com/acme/widget/pull/1",
+    prNumber: 1,
+    prState: "open",
+    isDraft: false,
+    checkConclusion: "success",
+    approvedCount: 0,
+    changesReqCount: 0,
+    mergeable: "unknown",
+    checks: [],
+    reviewFeedback: [],
+    ...overrides,
+  };
+}
+
 describe("VcsWidget", () => {
   it("VcsWidget_should_RenderSectionsInMergeabilityPillFirstOrder_When_FullModeWithPopulatedData", () => {
     const data = makeData({
       branch: "feat/order-test",
-      github: {
-        owner: "acme",
-        repo: "widget",
-        prUrl: "https://github.com/acme/widget/pull/99",
-        prNumber: 99,
-        prState: "open",
-        isDraft: false,
-        checkConclusion: "success",
-        approvedCount: 0,
-        changesReqCount: 0,
-      },
+      github: makeGithub({ prUrl: "https://github.com/acme/widget/pull/99", prNumber: 99 }),
       fileChanges: [
         {
           path: "src/order.go",
@@ -113,23 +138,25 @@ describe("VcsWidget", () => {
 
   it("compact mode omits VcsWidgetGithubRow but shows the aggregate stat line", () => {
     const data = makeData({
-      github: {
-        owner: "acme",
-        repo: "widget",
-        prUrl: "https://github.com/acme/widget/pull/1",
-        prNumber: 1,
-        prState: "open",
-        isDraft: false,
-        checkConclusion: "success",
-        approvedCount: 0,
-        changesReqCount: 0,
-      },
+      github: makeGithub(),
       aggregateStats: { filesChanged: 5, additions: 42, deletions: 8 },
     });
 
     render(<VcsWidget data={data} mode="compact" />);
 
     expect(screen.queryByText("PR #1")).not.toBeInTheDocument();
+    expect(screen.getByText("5 files changed")).toBeInTheDocument();
+    expect(screen.getByText("+42")).toBeInTheDocument();
+    expect(screen.getByText("-8")).toBeInTheDocument();
+  });
+
+  it("VcsWidget_should_RenderAggregateStatLine_When_FullModeWithAggregateStatsPresent", () => {
+    const data = makeData({
+      aggregateStats: { filesChanged: 5, additions: 42, deletions: 8 },
+    });
+
+    render(<VcsWidget data={data} mode="full" />);
+
     expect(screen.getByText("5 files changed")).toBeInTheDocument();
     expect(screen.getByText("+42")).toBeInTheDocument();
     expect(screen.getByText("-8")).toBeInTheDocument();
@@ -255,5 +282,159 @@ describe("VcsWidget", () => {
     );
 
     expect(screen.queryByRole("button", { name: "Browse files in this worktree" })).not.toBeInTheDocument();
+  });
+
+  it("VcsWidget_should_RenderBothStalenessLabels_When_LiveWithBothTimestampsPresent", () => {
+    const statusAsOf = new Date(Date.now() - 5_000);
+    const lastCheckedAt = new Date(Date.now() - 15_000);
+    render(
+      <VcsWidget
+        data={makeData({
+          kind: "live",
+          statusAsOf,
+          github: makeGithub({ lastCheckedAt }),
+        })}
+        mode="full"
+      />
+    );
+
+    expect(screen.getByText(/^Local:/)).toBeInTheDocument();
+    expect(screen.getByText(/^PR status confirmed/)).toBeInTheDocument();
+  });
+
+  it("VcsWidget_should_RenderOnlyLocalLabel_When_LiveWithGithubLastCheckedAtMissing", () => {
+    const statusAsOf = new Date(Date.now() - 5_000);
+    render(
+      <VcsWidget
+        data={makeData({ kind: "live", statusAsOf, github: null })}
+        mode="full"
+      />
+    );
+
+    expect(screen.getByText(/^Local:/)).toBeInTheDocument();
+    expect(screen.queryByText(/^PR status confirmed/)).not.toBeInTheDocument();
+  });
+
+  it("VcsWidget_should_RenderOnlyPrConfirmedLabel_When_LiveWithStatusAsOfMissing", () => {
+    const lastCheckedAt = new Date(Date.now() - 15_000);
+    render(
+      <VcsWidget
+        data={makeData({
+          kind: "live",
+          statusAsOf: undefined,
+          github: makeGithub({ lastCheckedAt }),
+        })}
+        mode="full"
+      />
+    );
+
+    expect(screen.queryByText(/^Local:/)).not.toBeInTheDocument();
+    expect(screen.getByText(/^PR status confirmed/)).toBeInTheDocument();
+  });
+
+  it("VcsWidget_should_RenderCommentsSection_When_FullModeWithGithubAndSessionIdBothPresent", () => {
+    render(
+      <VcsWidget
+        data={makeData({ github: makeGithub() })}
+        mode="full"
+        sessionId="session-1"
+      />
+    );
+
+    expect(screen.getByTestId("collapsible-header-pr-comments")).toBeInTheDocument();
+  });
+
+  it("VcsWidget_should_OmitCommentsSection_When_SessionIdMissingEvenWithGithubData", () => {
+    render(
+      <VcsWidget
+        data={makeData({ github: makeGithub() })}
+        mode="full"
+      />
+    );
+
+    expect(screen.queryByTestId("collapsible-header-pr-comments")).not.toBeInTheDocument();
+  });
+
+  it("VcsWidget_should_RenderAllDisclosureSectionsCollapsed_When_FullModeWithChecksReviewsAndCommentsPresent", () => {
+    render(
+      <VcsWidget
+        data={makeData({
+          github: makeGithub({
+            changesReqCount: 1,
+            checks: [
+              { name: "build", context: "ci/build", state: "completed", status: "completed", conclusion: "success" },
+            ],
+            reviewFeedback: [
+              { author: "reviewer1", state: "CHANGES_REQUESTED", body: "Please fix this" },
+            ],
+          }),
+        })}
+        mode="full"
+        sessionId="session-1"
+      />
+    );
+
+    // CollapsibleSection's own defaultExpanded={false} is a no-op once composed inside the
+    // real CollapsibleGroup (see Collapsible.tsx) — the group's own initial-state handling is
+    // what actually drives this. This component doesn't branch on viewport, so asserting the
+    // group starts fully collapsed here covers both desktop and narrow-viewport rendering
+    // (Open Question 5 resolution: uniform closed-by-default, no viewport-specific behavior).
+    const headers = screen.getAllByTestId(/^collapsible-header-/);
+    expect(headers.length).toBe(3);
+    headers.forEach((header) => expect(header).toHaveAttribute("aria-expanded", "false"));
+  });
+
+  it("VcsWidget_should_RefetchComments_When_SessionIdChangesWithoutUnmounting", async () => {
+    // Regression test: review-queue navigation (SessionDetail's onNext/onPrevious)
+    // changes the `sessionId` prop on an already-mounted VcsWidget while staying on
+    // the VCS tab, instead of remounting the whole subtree. Before this fix,
+    // VcsWidgetComments's fetch-guard never reset, so switching from session-1's PR
+    // to session-2's PR left session-1's cached comments on screen with no refetch.
+    mockGetPRComments.mockClear();
+    mockGetPRComments
+      .mockResolvedValueOnce({ comments: [{ id: 1n, author: "octocat", body: "PR one", isReview: false }] })
+      .mockResolvedValueOnce({ comments: [{ id: 2n, author: "hubot", body: "PR two", isReview: false }] });
+
+    const githubFor = (prNumber: number) => ({
+      owner: "acme",
+      repo: "widget",
+      prUrl: `https://github.com/acme/widget/pull/${prNumber}`,
+      prNumber,
+      prState: "open" as const,
+      isDraft: false,
+      checkConclusion: "success" as const,
+      approvedCount: 0,
+      changesReqCount: 0,
+      mergeable: "unknown" as const,
+      checks: [],
+      reviewFeedback: [],
+    });
+
+    const { rerender } = render(
+      <VcsWidget
+        data={makeData({ github: githubFor(1) })}
+        mode="full"
+        sessionId="session-1"
+      />
+    );
+
+    fireEvent.click(screen.getByTestId("collapsible-header-pr-comments"));
+    await waitFor(() => expect(screen.getByText("octocat")).toBeInTheDocument());
+    expect(mockGetPRComments).toHaveBeenCalledTimes(1);
+    expect(mockGetPRComments).toHaveBeenNthCalledWith(1, { id: "session-1" });
+
+    // Simulate queue navigation: same VcsWidget instance, new session's data.
+    rerender(
+      <VcsWidget
+        data={makeData({ github: githubFor(2) })}
+        mode="full"
+        sessionId="session-2"
+      />
+    );
+
+    await waitFor(() => expect(screen.getByText("hubot")).toBeInTheDocument());
+    expect(screen.queryByText("octocat")).not.toBeInTheDocument();
+    expect(mockGetPRComments).toHaveBeenCalledTimes(2);
+    expect(mockGetPRComments).toHaveBeenNthCalledWith(2, { id: "session-2" });
   });
 });

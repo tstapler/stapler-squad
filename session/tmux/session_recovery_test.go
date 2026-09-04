@@ -214,13 +214,13 @@ func testSessionRecoveryWithRealTmux(t *testing.T) {
 	t.Cleanup(func() {
 		killServerCtx, killServerCancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer killServerCancel()
-		_ = safeexec.CommandContext(killServerCtx, "tmux", "-L", socketName, "kill-server").Run()
+		_ = safeexec.CommandContext(killServerCtx, Binary(), "-L", socketName, "kill-server").Run()
 	})
 
 	// Clean up any existing session on the isolated server
 	killCtx, killCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer killCancel()
-	killCmd := safeexec.CommandContext(killCtx, "tmux", "-L", socketName, "kill-session", "-t", tmuxSessionName)
+	killCmd := safeexec.CommandContext(killCtx, Binary(), "-L", socketName, "kill-session", "-t", tmuxSessionName)
 	_ = killCmd.Run()
 
 	// Create session using our RestoreWithWorkDir logic on the isolated server.
@@ -241,18 +241,28 @@ func testSessionRecoveryWithRealTmux(t *testing.T) {
 	// Verify session exists
 	require.True(t, session.DoesSessionExist(), "Session should exist after restore")
 
-	// Capture session output to verify working directory
-	content, err := session.CapturePaneContent()
-	require.NoError(t, err)
-
 	// Handle path resolution for macOS /var vs /private/var
 	resolvedWorktreeDir, _ := filepath.EvalSymlinks(worktreeDir)
-
-	// Check if content contains the worktree directory name (more flexible matching)
 	worktreeDirName := filepath.Base(worktreeDir)
-	containsPath := strings.Contains(content, worktreeDir) ||
-		strings.Contains(content, resolvedWorktreeDir) ||
-		strings.Contains(content, worktreeDirName)
+
+	// DoesSessionExist only confirms the tmux session/pane was created, not
+	// that the shell inside it has run "pwd" yet — capturing immediately
+	// after can race the shell's first write to the pane buffer and observe
+	// it still empty. Poll CapturePaneContent until the expected path shows
+	// up (or the timeout elapses) instead of a single immediate capture.
+	var content string
+	pollErr := wait.WaitForConditionWithError(func() (bool, error) {
+		var captureErr error
+		content, captureErr = session.CapturePaneContent()
+		if captureErr != nil {
+			return false, captureErr
+		}
+		return strings.Contains(content, worktreeDir) ||
+			strings.Contains(content, resolvedWorktreeDir) ||
+			strings.Contains(content, worktreeDirName), nil
+	}, wait.WaitConfig{Timeout: 10 * time.Second, PollInterval: 100 * time.Millisecond, Description: "pane content shows worktree directory"})
+
+	containsPath := pollErr == nil
 	require.True(t, containsPath,
 		"Session should be running in worktree directory. Expected path containing: %s, %s, or %s. Got content: %s",
 		worktreeDir, resolvedWorktreeDir, worktreeDirName, content)
@@ -433,6 +443,7 @@ func TestRecoverFromServerFailure_EnsureRunningFails(t *testing.T) {
 
 // TestSessionRecoveryCommandSequence verifies the correct command sequence for session recovery
 func TestSessionRecoveryCommandSequence(t *testing.T) {
+	t.Parallel()
 	ptyFactory := NewMockPtyFactory(t)
 	worktreeDir := t.TempDir()
 

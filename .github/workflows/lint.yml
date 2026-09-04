@@ -12,7 +12,14 @@ on:
       - 'web-app/**.css'
       - 'web-app/**.ts'
       - 'web-app/**.tsx'
+      - 'web-app/src/**'
+      - 'web-app/package.json'
+      - 'web-app/pnpm-lock.yaml'
+      - 'web-app/jest.config.js'
       - 'tests/e2e/**'
+      - '**.sh'
+      - '!third_party/**'
+      - 'scripts/ssq-hook-handler'
       - '.github/workflows/lint.yml'
   workflow_dispatch:
   pull_request:
@@ -26,20 +33,36 @@ on:
       - 'web-app/**.css'
       - 'web-app/**.ts'
       - 'web-app/**.tsx'
+      - 'web-app/src/**'
+      - 'web-app/package.json'
+      - 'web-app/pnpm-lock.yaml'
+      - 'web-app/jest.config.js'
       - 'tests/e2e/**'
+      - '**.sh'
+      - '!third_party/**'
+      - 'scripts/ssq-hook-handler'
       - '.github/workflows/lint.yml'
 
+concurrency:
+  group: lint-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  golangci:
-    name: lint
+  # Generates protobuf/ent code once and stubs the web dist directory, then
+  # shares the result via artifact with shell-lint/go-lint/web-lint below —
+  # replaces the old single job's inline codegen (each of the 3 concerns used
+  # to wait on this serially; now they download it and run in parallel).
+  lint-prepare:
+    name: Prepare generated code
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
 
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.25.0'
+          go-version-file: 'go.mod'
           cache: true
 
       - name: Set up pnpm
@@ -54,67 +77,136 @@ jobs:
           cache: 'pnpm'
           cache-dependency-path: web-app/pnpm-lock.yaml
 
-      - name: Install buf
-        run: |
-          curl -sSL "https://github.com/bufbuild/buf/releases/download/v1.41.0/buf-Linux-x86_64" \
-            -o /usr/local/bin/buf && chmod +x /usr/local/bin/buf
-
+      # web-lint's Jest tests jest.mock() modules under web-app/src/gen/ — module
+      # resolution needs the file to exist even for a mocked import. That requires
+      # web-app/node_modules/.bin/protoc-gen-es, so web-app deps must be installed
+      # before buf generate proto runs (same ordering this job's predecessor
+      # required — see the original lint.yml's "Ordering bug history" comment).
       - name: Install web-app dependencies
         working-directory: web-app
         run: pnpm install --frozen-lockfile
 
-      - name: Generate protobuf code
-        run: buf generate proto
+      - uses: ./.github/actions/prepare-stub
+        with:
+          buf-template: buf.gen.yaml
 
-      - name: Generate ent ORM code
-        run: go run -mod=mod entgo.io/ent/cmd/ent generate --feature sql/upsert ./session/ent/schema
+      - name: Upload generated files
+        uses: actions/upload-artifact@v4
+        with:
+          name: lint-generated-files
+          path: |
+            gen/
+            session/ent/
+            server/web/dist/
+            web-app/src/gen/
 
+  # Standalone — no codegen dependency, so it isn't blocked on lint-prepare.
+  shell-lint:
+    name: ShellCheck
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
 
-      - name: Create web dist stub
-        run: |
-          mkdir -p server/web/dist
-          printf '<!DOCTYPE html><html><body></body></html>' > server/web/dist/index.html
+      # ubuntu-latest ships shellcheck preinstalled; no setup step needed.
+      # Runs 'make lint-shell' rather than duplicating its file-discovery
+      # logic here, so there's one source of truth for which scripts are
+      # checked and with what flags (also runnable locally: make lint-shell).
+      - name: ShellCheck
+        run: make lint-shell
 
+      # Guards the generated-files artifact-name literal (see
+      # tools/ci/check-generated-files-literal.sh's own header comment) —
+      # fails if any workflow outside _prepare.yml retypes the literal
+      # string instead of referencing needs.prepare.outputs.artifact-name.
+      - name: Guard against stray "generated-files" literal
+        run: tools/ci/check-generated-files-literal.sh
+
+  go-lint:
+    name: Go lint
+    runs-on: ubuntu-latest
+    needs: lint-prepare
+    timeout-minutes: 20
+    steps:
+      # fetch-depth: 0 (full history, all branches) is required so `origin/main` is
+      # resolvable locally for the complexity gate's --new-from-rev=origin/main below —
+      # see that step's comment for why.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: 'go.mod'
+          cache: true
+
+      # Generated code is gitignored, not committed (see #445) — produced once by
+      # lint-prepare and downloaded here so `go build`/golangci-lint compile cleanly.
+      - name: Download generated files
+        uses: actions/download-artifact@v4
+        with:
+          name: lint-generated-files
+
+      # Soft-timeout wrapper (16m, below this job's 20m hard timeout-minutes ceiling):
+      # golangci-lint-action is a `uses:` step, so it can't be wrapped with the shell
+      # `timeout` utility directly — instead this uses GHA's native step-level
+      # timeout-minutes (which only kills this one step's process, not the whole job;
+      # subsequent steps still run) paired with an always()-guarded follow-up step that
+      # emits the marker when — and only when — this step's own outcome is 'cancelled'
+      # (a genuine lint failure reports outcome 'failure' instead, so it's never
+      # mistaken for a budget breach). This is this job's longest-running step (a full
+      # whole-codebase lint pass, unscoped, vs. the new-code-only gate below).
       - name: golangci-lint
+        id: golangci-lint
+        timeout-minutes: 16
         uses: golangci/golangci-lint-action@v7
         with:
           version: v2.11.4
-          args: --timeout=3m --max-issues-per-linter=0 --max-same-issues=0
+          args: --timeout=5m --max-issues-per-linter=0 --max-same-issues=0
+          skip-cache: false
+          only-new-issues: false
+
+      # keep this marker prefix in sync with ciBudgetExceededMarker in server/services/github_webhook_pr_fix.go
+      - name: Report CI budget exceeded (golangci-lint)
+        if: always() && steps.golangci-lint.outcome == 'cancelled'
+        run: |
+          echo "::error::CI-BUDGET-EXCEEDED: 'go-lint' exceeded its 16m budget"
+          echo "CI-BUDGET-EXCEEDED: 'go-lint' exceeded its 16m budget" >> "$GITHUB_STEP_SUMMARY"
+          exit 1
+
+      # gocyclo/gocognit/funlen/revive(file-length-limit) flag files/functions getting too
+      # big or too complex — the shape that let session/backlog_lifecycle.go grow to 4930
+      # lines before anyone noticed (see the code-hotspot-analysis skill + the split PR that
+      # added this step). dupl flags copy-pasted blocks — the "Duplicated/Divergent Logic"
+      # failure mode (see quality:reflect-and-fix's Level 0 gate, added 2026-08-24 after a
+      # resize fix landed at one call site and silently missed two others). Thresholds live
+      # in .golangci.yml's settings block. Run as a separate step (not folded into the block
+      # above) because it needs new-issues-only filtering — the repo has pre-existing
+      # violations of all 5 of these in files this step doesn't touch, and failing on those
+      # would block unrelated PRs. `make lint`/`make ci` are deliberately unaffected (none of
+      # these 5 linters are in .golangci.yml's enable: list).
+      #
+      # Uses golangci-lint's native --new-from-rev (git-based) instead of the action's own
+      # only-new-issues: true. only-new-issues fetches the PR diff from the GitHub REST API
+      # (pulls.get with the diff media type), which hard-caps at 20000 changed lines — past
+      # that it 406s and the action silently falls back to reporting EVERY issue in the
+      # whole repo instead of just new ones (see golangci/golangci-lint-action#996). PR #381
+      # hit this: a large merge-driven diff (~161k lines, almost entirely from generated
+      # session/ent/*.go files this branch has untracked but main still has committed)
+      # blew past the cap and flooded the check with ~90 unrelated pre-existing violations.
+      # --new-from-rev computes the diff via local git instead (no API, no line cap) —
+      # requires fetch-depth: 0 above so origin/main is resolvable.
+      - name: golangci-lint (complexity/size/duplication gate — new code only)
+        uses: golangci/golangci-lint-action@v7
+        with:
+          version: v2.11.4
+          args: --timeout=5m --max-issues-per-linter=0 --max-same-issues=0 --enable=gocyclo,gocognit,funlen,revive,dupl --new-from-rev=origin/main
           skip-cache: false
           only-new-issues: false
 
       - name: Import cycle check
         run: go build ./...
-
-      - name: ESLint (no-100vh, mobile regression rules)
-        working-directory: web-app
-        run: |
-          # Only lint files changed in this PR to avoid surfacing pre-existing issues
-          # in unmodified files. Falls back to full scan on push-to-main (no PR context).
-          # --max-warnings 0 is not used for full scan: pre-existing warnings in untouched
-          # files should not block push/workflow_dispatch. Errors (no-100vh etc.) still fail.
-          if [ -n "${{ github.event.pull_request.base.sha }}" ]; then
-            CHANGED=$(git diff --name-only "${{ github.event.pull_request.base.sha }}"...HEAD \
-              -- 'web-app/**.ts' 'web-app/**.tsx' 2>/dev/null \
-              | grep -E '\.(ts|tsx)$' | sed 's|^web-app/||' || true)
-            if [ -z "$CHANGED" ]; then
-              echo "No TS/TSX files changed — skipping ESLint"
-              exit 0
-            fi
-            # Build --file args (one per changed file)
-            FILE_FLAGS=""
-            while IFS= read -r f; do
-              [ -n "$f" ] && FILE_FLAGS="$FILE_FLAGS --file $f"
-            done <<< "$CHANGED"
-            # shellcheck disable=SC2086
-            npx next lint $FILE_FLAGS
-          else
-            npx next lint
-          fi
-
-      - name: CSS lint (stylelint + undefined variable check)
-        working-directory: web-app
-        run: pnpm run lint:css
 
       - name: Check formatting (PR-changed files only)
         run: |
@@ -139,6 +231,118 @@ jobs:
             exit 1
           fi
           echo "All changed Go files are properly formatted"
+
+  web-lint:
+    name: Web lint
+    runs-on: ubuntu-latest
+    needs: lint-prepare
+    timeout-minutes: 20
+    steps:
+      # fetch-depth: 0 (full history) so ESLint's file-scoped diff below can
+      # resolve github.event.before -- a shallow (default depth-1) checkout
+      # doesn't have that parent commit's object, so `git cat-file -e` on it
+      # always failed, BASE_SHA stayed empty, and the script silently fell
+      # through to an unscoped `npx next lint` full-repo scan every push to
+      # main. `next lint` exits 1 on ANY warning (not just errors), and the
+      # repo carries ~1450 pre-existing ones, so that fallback always failed
+      # -- this is why "Lint" had been red on main since at least 2026-08-28.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+        with:
+          version: 10.27.0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'pnpm'
+          cache-dependency-path: web-app/pnpm-lock.yaml
+
+      # Generated code is gitignored, not committed (see #445) — produced once by
+      # lint-prepare and downloaded here so Jest/tsc/ESLint resolve gen/ imports.
+      - name: Download generated files
+        uses: actions/download-artifact@v4
+        with:
+          name: lint-generated-files
+
+      - name: Install web-app dependencies
+        working-directory: web-app
+        run: pnpm install --frozen-lockfile
+
+      - name: Jest
+        working-directory: web-app
+        run: npx jest --ci --maxWorkers=4
+
+      # jscpd (web-app/src duplication) — blocking (2026-08-24). Config lives in
+      # web-app/.jscpd.json: minLines/minTokens tuned to 20/200 (empirically verified —
+      # every finding at that size across the whole repo was real, actionable duplication,
+      # not boilerplate/token noise), plus a 0.1% --threshold. Unlike golangci-lint's
+      # --new-from-rev, jscpd has no native git-diff scoping, so this is a ratchet against
+      # an absolute threshold rather than new-code-only — the threshold sits just above the
+      # ~0.09% baseline that's irreducible (jest.mock(...) registration calls can't be
+      # extracted into a shared function; babel-jest hoists them per-file), not at zero.
+      # Long-term, true diff-aware cross-file duplicate detection belongs in kibitzer
+      # (github.com/tstapler/kibitzer) — see tstapler/kibitzer#28.
+      - name: jscpd (web-app duplication)
+        working-directory: web-app
+        run: pnpm run lint:duplicates
+
+      # Soft-timeout wrapper (16m, below this job's 20m hard timeout-minutes ceiling):
+      # this is this job's longest-running step. The whole original step body is wrapped
+      # unchanged in a function so `timeout` can bound it as a single command.
+      # keep this marker prefix in sync with ciBudgetExceededMarker in server/services/github_webhook_pr_fix.go
+      - name: ESLint (no-100vh, mobile regression rules)
+        working-directory: web-app
+        run: |
+          run_eslint() {
+            # Only lint files changed by this push/PR — avoids surfacing the repo's ~1450
+            # pre-existing warnings (found 2026-08-25: this file's OLD "falls back to full
+            # scan on push" comment claimed pre-existing warnings wouldn't block push, but
+            # `next lint` (unlike raw eslint) exits 1 on ANY warning, not just errors — so
+            # every direct push to main had been failing this check silently for at least
+            # 6 commits before anyone noticed, since push events never got the PR path's
+            # file-scoped treatment). Push events now diff against github.event.before (the
+            # commit before this push) using the same file-scoped `next lint --file` call
+            # the PR path already uses — PRs and pushes share one code path below.
+            BASE_SHA="${{ github.event.pull_request.base.sha }}"
+            if [ -z "$BASE_SHA" ]; then
+              CANDIDATE="${{ github.event.before }}"
+              # event.before is all-zeros on a new branch's first push (no prior commit to
+              # diff against) — fall back to a full scan in that case, same as before.
+              if [ -n "$CANDIDATE" ] && [ "$CANDIDATE" != "0000000000000000000000000000000000000000" ] \
+                && git cat-file -e "$CANDIDATE" 2>/dev/null; then
+                BASE_SHA="$CANDIDATE"
+              fi
+            fi
+            if [ -n "$BASE_SHA" ]; then
+              CHANGED=$(git diff --name-only "$BASE_SHA"...HEAD \
+                -- 'web-app/**.ts' 'web-app/**.tsx' 2>/dev/null \
+                | grep -E '\.(ts|tsx)$' | sed 's|^web-app/||' || true)
+              if [ -z "$CHANGED" ]; then
+                echo "No TS/TSX files changed — skipping ESLint"
+                exit 0
+              fi
+              # Build --file args (one per changed file)
+              FILE_FLAGS=""
+              while IFS= read -r f; do
+                [ -n "$f" ] && FILE_FLAGS="$FILE_FLAGS --file $f"
+              done <<< "$CHANGED"
+              # shellcheck disable=SC2086
+              npx next lint $FILE_FLAGS
+            else
+              npx next lint
+            fi
+          }
+          export -f run_eslint
+          timeout 16m bash -c run_eslint || { echo "::error::CI-BUDGET-EXCEEDED: 'web-lint' exceeded its 16m budget"; echo "CI-BUDGET-EXCEEDED: 'web-lint' exceeded its 16m budget" >> "$GITHUB_STEP_SUMMARY"; exit 1; }
+
+      - name: CSS lint (stylelint + undefined variable check)
+        working-directory: web-app
+        run: pnpm run lint:css
 
       - name: Validate feature catalog (typed feature registry)
         working-directory: web-app

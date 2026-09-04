@@ -6,8 +6,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
 	"time"
 
+	"github.com/tstapler/stapler-squad/internal/sqlitedsn"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/ent/approvalrule"
 	"github.com/tstapler/stapler-squad/session/ent/classificationanalytics"
@@ -23,8 +26,18 @@ import (
 
 	"entgo.io/ent/dialect"
 	entsql "entgo.io/ent/dialect/sql"
-	_ "github.com/mattn/go-sqlite3" // SQLite driver
+	_ "modernc.org/sqlite" // Pure Go SQLite driver
 )
+
+// EntSchemaCreateMu serializes calls to (*ent.Client).Schema.Create across the
+// whole process, including from other packages that migrate their own
+// *ent.Client against this same generated ent package (e.g.
+// server/analytics.OpenAnalyticsDB). entgo.io/ent/dialect/sql/schema.(*Atlas)
+// has internal package-level state that data-races when multiple goroutines
+// run schema migration concurrently (e.g. `go test -parallel` spinning up
+// many independent repositories/clients at once) — each instance's SQLite
+// connection is isolated, but Atlas itself is not safe for concurrent use.
+var EntSchemaCreateMu sync.Mutex
 
 // EntRepository implements the Repository interface using Ent ORM as the storage backend.
 // It provides type-safe database operations with automatic schema migrations.
@@ -39,6 +52,23 @@ type EntRepository struct {
 	// typically by Storage.SetItemChangePublisher's forwarding call in
 	// server/dependencies.go.
 	itemChangePublisher ItemChangePublisher
+
+	// callbackDispatcher is nil-safe — dispatchCallback nil-checks before calling
+	// it (dispatch is best-effort and never blocks or fails the underlying
+	// mutation). Wired via SetCallbackDispatcher, typically by
+	// Storage.SetCallbackDispatcher's forwarding call in server/dependencies.go.
+	// Used by TransitionBacklogItemStatus (on_session_complete, webhook-triggers
+	// Phase 5) and by BacklogLifecycleListener.reconcileStaleWorkSessions
+	// (on_session_stale), which is handed this *EntRepository directly.
+	callbackDispatcher CallbackDispatcher
+
+	// chainFirer is nil-safe — dispatchChainFire nil-checks before calling it
+	// (dispatch is best-effort and never blocks or fails the underlying
+	// mutation). Wired via SetChainFirer, typically by Storage.WireChainFirer's
+	// forwarding call in server/dependencies.go. Used by
+	// TransitionBacklogItemStatus to fire the pipeline-chain continuation
+	// (webhook-triggers Phase 6, AC5/AC9) once a "done" transition commits.
+	chainFirer *ChainFirer
 }
 
 // NewEntRepository creates a new Ent repository with the given options.
@@ -66,14 +96,64 @@ func NewEntRepository(opts ...RepositoryOption) (*EntRepository, error) {
 		expandedPath = filepath.Join(homeDir, expandedPath[2:])
 	}
 
-	// Create parent directory if it doesn't exist
-	if err := os.MkdirAll(filepath.Dir(expandedPath), 0755); err != nil {
-		return nil, fmt.Errorf("failed to create database directory: %w", err)
+	// Persist the resolved path back onto repo.dbPath (nothing above this
+	// point reads the field again — every remaining use in this function
+	// already switched to the local expandedPath) so later code, notably
+	// BackfillBacklogItemPublicIDs's flock lock-file derivation, sees the
+	// real absolute path rather than an unexpanded "~/..." one.
+	repo.dbPath = expandedPath
+
+	// Create parent directory if it doesn't exist, unless expandedPath is a
+	// "file:" URI DSN (e.g. a shared-cache in-memory database used by tests)
+	// rather than a real filesystem path.
+	if !strings.HasPrefix(expandedPath, "file:") {
+		if err := os.MkdirAll(filepath.Dir(expandedPath), 0750); err != nil {
+			return nil, fmt.Errorf("failed to create database directory: %w", err)
+		}
 	}
 
-	// Open database connection with WAL mode for better concurrency
-	dbPath := expandedPath + "?_journal_mode=WAL&_timeout=5000&_fk=1"
-	db, err := sql.Open("sqlite3", dbPath)
+	// Open database connection. WAL mode is appended for on-disk databases for
+	// better concurrency; it's skipped for URI-style DSNs (e.g. shared-cache
+	// in-memory databases), which don't support WAL and already carry their
+	// own query string that a second "?" would corrupt.
+	//
+	// _texttotime is required because ent's generated UPDATE...RETURNING
+	// statements produce result columns with an empty SQLite decltype (unlike
+	// plain SELECTs, which report DATETIME and auto-convert without this
+	// flag) — modernc.org/sqlite only upgrades those empty-decltype TEXT
+	// values to time.Time when this DSN param is set, otherwise Scan fails
+	// with "unsupported Scan...storing driver.Value type string into type
+	// *time.Time".
+	//
+	// _time_format=sqlite is required alongside it: without it, the driver
+	// writes time.Time values using Go's time.Time.String() (e.g. "2006-01-02
+	// 15:04:05.999999999 -0700 MST"), which its own read-side parser
+	// (parseTimeFormats in modernc.org/sqlite) never matches — the offset is
+	// space-separated with a zone abbreviation, not the colon-separated
+	// "-07:00" the parser expects. That mismatch makes every read fall back
+	// to the raw string, hitting the same Scan error above even when
+	// _texttotime successfully triggers a parse attempt. _time_format=sqlite
+	// makes the driver write with parseTimeFormats[0], the exact layout its
+	// own reader tries first.
+	//
+	// _timezone=UTC is required on top of both: without it, a parsed time.Time
+	// carries a distinct, driver-synthesized zero-offset *time.Location (empty
+	// name, its own internal zone/tx tables) rather than the time.UTC package
+	// singleton. The instant is correct either way, but assert.Equal(t,
+	// time.UTC, x.Location()) — used throughout this package's tests, e.g.
+	// TestBacklogItem_UpdatedAt_should_BeStoredInUTC_When_CreatedOrTransitioned
+	// — does a deep struct comparison and fails on that Location identity
+	// mismatch. Setting _timezone=UTC makes every read run through the
+	// driver's applyTimezone(t) -> t.In(time.UTC), which sets the Location to
+	// the exact singleton (time.LoadLocation("UTC") — what _timezone resolves
+	// through — special-cases "UTC" to return that singleton directly).
+	dbPath := sqlitedsn.New(expandedPath).
+		WithWAL().
+		WithBusyTimeout(5000 * time.Millisecond).
+		WithForeignKeysShort().
+		WithEntTimeCompat().
+		Build()
+	db, err := sql.Open("sqlite", dbPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open database: %w", err)
 	}
@@ -85,12 +165,25 @@ func NewEntRepository(opts ...RepositoryOption) (*EntRepository, error) {
 	db.SetMaxIdleConns(1)
 	db.SetConnMaxLifetime(time.Hour)
 
+	// Must be read BEFORE client.Schema.Create() below, which is what adds the
+	// enabled column this signal depends on being absent — see
+	// workflow_enabled_field_migration.go's doc comment for why this exact
+	// signal (not a value-based heuristic) is required.
+	workflowEnabledColumnAlreadyExisted := workflowEnabledColumnPreexisted(db)
+
 	// Create Ent client with the existing database connection
 	drv := entsql.OpenDB(dialect.SQLite, db)
 	client := ent.NewClient(ent.Driver(drv))
 
-	// Run automatic schema migration
-	if err := client.Schema.Create(context.Background()); err != nil {
+	// Run automatic schema migration. entSchemaCreateMu serializes this call
+	// process-wide: even though each caller opens its own isolated SQLite
+	// connection, entgo.io/ent/dialect/sql/schema.(*Atlas) has internal
+	// package-level state that races under `go test -parallel` when many
+	// NewEntRepository calls run schema creation concurrently.
+	EntSchemaCreateMu.Lock()
+	err = client.Schema.Create(context.Background())
+	EntSchemaCreateMu.Unlock()
+	if err != nil {
 		client.Close()
 		return nil, fmt.Errorf("failed to create schema: %w", err)
 	}
@@ -106,6 +199,55 @@ func NewEntRepository(opts ...RepositoryOption) (*EntRepository, error) {
 	}
 
 	repo.client = client
+
+	// Normalize any pre-existing BacklogItem.updated_at rows from Local to
+	// UTC (idempotent) — see backlog_item_updated_at_utc_migration.go for
+	// why this is required, not just cosmetic: mixed Local/UTC-formatted
+	// TEXT rows sort incorrectly and spuriously fail CAS preconditions
+	// built from a protobuf Timestamp (always UTC) until each row is
+	// touched once.
+	if err := runBacklogItemUpdatedAtUTCBackfill(context.Background(), repo); err != nil {
+		client.Close()
+		return nil, fmt.Errorf("failed to backfill backlog item updated_at to UTC: %w", err)
+	}
+
+	// Same fix, same reason, for Workflow.updated_at — see
+	// workflow_updated_at_utc_migration.go. UpdateWorkflowRequest.expected_updated_at
+	// (webhook-triggers verify follow-ups AC9) is the same protobuf-Timestamp-derived
+	// CAS precondition class as TransitionBacklogItemStatusRequest's.
+	if err := runWorkflowUpdatedAtUTCBackfill(context.Background(), repo); err != nil {
+		client.Close()
+		return nil, fmt.Errorf("failed to backfill workflow updated_at to UTC: %w", err)
+	}
+
+	// One-time-per-database correction for rows that predate the enabled field
+	// — see workflow_enabled_field_migration.go's doc comment for why this
+	// must be gated on workflowEnabledColumnAlreadyExisted rather than run
+	// unconditionally on every startup like its sibling backfills above.
+	if !workflowEnabledColumnAlreadyExisted {
+		runWorkflowEnabledFieldBackfill(context.Background(), repo)
+	}
+
+	// Populate github_pr_url for pre-existing sessions that have a known PR
+	// number/owner/repo but were created before CreateSession started
+	// building the URL itself (idempotent) — see
+	// github_pr_url_backfill.go.
+	if err := runGitHubPRURLBackfill(context.Background(), repo); err != nil {
+		client.Close()
+		return nil, fmt.Errorf("failed to backfill github pr url: %w", err)
+	}
+
+	// Assign a public_id to every pre-existing BacklogItem row that predates
+	// this feature (idempotent) — see BackfillBacklogItemPublicIDs in
+	// storage_backlog.go. Unlike the backfills above, this one is
+	// flock-guarded: it mints a fresh random BacklogItemID per row rather
+	// than deterministically recomputing the same value, so an unguarded
+	// race between two processes could assign two different ids to the same
+	// row.
+	if err := repo.BackfillBacklogItemPublicIDs(context.Background()); err != nil {
+		client.Close()
+		return nil, fmt.Errorf("failed to backfill backlog item public id: %w", err)
+	}
 
 	return repo, nil
 }
@@ -142,6 +284,7 @@ func (r *EntRepository) Create(ctx context.Context, data InstanceData) error {
 		SetCreatedAt(data.CreatedAt).
 		SetUpdatedAt(data.UpdatedAt).
 		SetAutoYes(data.AutoYes).
+		SetAutoApprove(data.AutoApprove).
 		SetAutonomousMode(data.AutonomousMode).
 		SetProgram(data.Program).
 		SetIsExpanded(data.IsExpanded)
@@ -168,11 +311,23 @@ func (r *EntRepository) Create(ctx context.Context, data InstanceData) error {
 	if data.Category != "" {
 		sessionCreate.SetCategory(data.Category)
 	}
+	if data.Note != "" {
+		sessionCreate.SetNote(data.Note)
+	}
 	if data.SessionType != "" {
 		sessionCreate.SetSessionType(string(data.SessionType))
 	}
 	if data.TmuxPrefix != "" {
 		sessionCreate.SetTmuxPrefix(data.TmuxPrefix)
+	}
+	// Backend is write-once per instance today (set at construction via
+	// session.ResolveSessionBackend, never reset to "" afterward) -- this guard
+	// intentionally only ever sets a non-empty value, mirroring TmuxPrefix above,
+	// not clearing an explicit unset like PauseReason/ExitReason do. If a future
+	// feature ever needs to unpin an instance's backend back to "", this needs an
+	// explicit ClearBackend() branch too, or the clear will silently no-op here.
+	if data.Backend != "" {
+		sessionCreate.SetBackend(string(data.Backend))
 	}
 	if !data.LastTerminalUpdate.IsZero() {
 		sessionCreate.SetLastTerminalUpdate(data.LastTerminalUpdate)
@@ -210,11 +365,20 @@ func (r *EntRepository) Create(ctx context.Context, data InstanceData) error {
 	if data.GitHubPRNumber > 0 {
 		sessionCreate.SetGithubPrNumber(data.GitHubPRNumber)
 	}
+	if data.GitHubPRStatusTerminal {
+		sessionCreate.SetGithubPrStatusTerminal(true)
+	}
 	if data.GitHubOwner != "" {
 		sessionCreate.SetGithubOwner(data.GitHubOwner)
 	}
 	if data.GitHubRepo != "" {
 		sessionCreate.SetGithubRepo(data.GitHubRepo)
+	}
+	if data.ArchivedAt != nil {
+		sessionCreate.SetArchivedAt(*data.ArchivedAt)
+	}
+	if !data.CreationProgressUpdatedAt.IsZero() {
+		sessionCreate.SetCreationProgressUpdatedAt(data.CreationProgressUpdatedAt)
 	}
 
 	// Link project if specified (look up by name)
@@ -351,6 +515,7 @@ func (r *EntRepository) Update(ctx context.Context, data InstanceData) error {
 		SetStatus(int(data.Status)).
 		SetUpdatedAt(data.UpdatedAt).
 		SetAutoYes(data.AutoYes).
+		SetAutoApprove(data.AutoApprove).
 		SetAutonomousMode(data.AutonomousMode).
 		SetProgram(data.Program).
 		SetIsExpanded(data.IsExpanded)
@@ -377,11 +542,20 @@ func (r *EntRepository) Update(ctx context.Context, data InstanceData) error {
 	if data.Category != "" {
 		sessionUpdate.SetCategory(data.Category)
 	}
+	// Note is set unconditionally, unlike sibling optional string fields: an empty note is a
+	// meaningful, intentionally-reachable state ("cleared"), not an "unset" sentinel, so the
+	// guarded-update convention would silently prevent a user from ever clearing it.
+	sessionUpdate.SetNote(data.Note)
 	if data.SessionType != "" {
 		sessionUpdate.SetSessionType(string(data.SessionType))
 	}
 	if data.TmuxPrefix != "" {
 		sessionUpdate.SetTmuxPrefix(data.TmuxPrefix)
+	}
+	// See the matching comment in Create above: Backend is write-once per
+	// instance today, so this guard is intentionally set-only, never clear.
+	if data.Backend != "" {
+		sessionUpdate.SetBackend(string(data.Backend))
 	}
 	if !data.LastTerminalUpdate.IsZero() {
 		sessionUpdate.SetLastTerminalUpdate(data.LastTerminalUpdate)
@@ -426,6 +600,11 @@ func (r *EntRepository) Update(ctx context.Context, data InstanceData) error {
 	} else {
 		sessionUpdate.ClearPauseReason()
 	}
+	if data.ExitReason != "" {
+		sessionUpdate.SetExitReason(data.ExitReason)
+	} else {
+		sessionUpdate.ClearExitReason()
+	}
 	sessionUpdate.SetOneShot(data.OneShot)
 	sessionUpdate.SetHidden(data.Hidden)
 	if data.WorkflowID != "" {
@@ -438,11 +617,17 @@ func (r *EntRepository) Update(ctx context.Context, data InstanceData) error {
 	} else {
 		sessionUpdate.ClearArchivedAt()
 	}
+	if !data.CreationProgressUpdatedAt.IsZero() {
+		sessionUpdate.SetCreationProgressUpdatedAt(data.CreationProgressUpdatedAt)
+	}
 	if data.GitHubPRURL != "" {
 		sessionUpdate.SetGithubPrURL(data.GitHubPRURL)
 	}
 	if data.GitHubPRNumber > 0 {
 		sessionUpdate.SetGithubPrNumber(data.GitHubPRNumber)
+	}
+	if data.GitHubPRStatusTerminal {
+		sessionUpdate.SetGithubPrStatusTerminal(true)
 	}
 	if data.GitHubOwner != "" {
 		sessionUpdate.SetGithubOwner(data.GitHubOwner)
@@ -676,6 +861,12 @@ func (r *EntRepository) Delete(ctx context.Context, title string) error {
 		return fmt.Errorf("failed to clear tags: %w", err)
 	}
 
+	// Delete shells (sibling tmux sessions) — Shell.session edge is Required(),
+	// so leaving any rows here trips a FOREIGN KEY constraint on session delete.
+	if _, err := tx.Shell.Delete().Where(entshell.HasSessionWith(session.ID(sess.ID))).Exec(ctx); err != nil {
+		return fmt.Errorf("failed to delete shells: %w", err)
+	}
+
 	// Finally delete the session
 	if err := tx.Session.DeleteOne(sess).Exec(ctx); err != nil {
 		return fmt.Errorf("failed to delete session: %w", err)
@@ -712,16 +903,10 @@ func (r *EntRepository) GetClaudeConversationUUIDBySessionUUID(ctx context.Conte
 // Get retrieves a single session by title
 func (r *EntRepository) Get(ctx context.Context, title string) (*InstanceData, error) {
 	// Find session with all relationships eagerly loaded
-	sess, err := r.client.Session.Query().
-		Where(session.Title(title)).
-		WithWorktree().
-		WithDiffStats().
-		WithTags().
-		WithProject().
-		WithClaudeSession(func(q *ent.ClaudeSessionQuery) {
-			q.WithMetadata()
-		}).
-		Only(ctx)
+	sess, err := applyLoadOptions(
+		r.client.Session.Query().Where(session.Title(title)),
+		LoadFull,
+	).Only(ctx)
 	if err != nil {
 		if ent.IsNotFound(err) {
 			return nil, fmt.Errorf("session not found: %s", title)
@@ -733,42 +918,48 @@ func (r *EntRepository) Get(ctx context.Context, title string) (*InstanceData, e
 	return r.sessionToInstanceData(sess), nil
 }
 
+// listLoadOptions mirrors the eager-loading historically done by List/ListByStatus/ListByTag
+// (worktree, tags, project, claude session+metadata — but NOT diff stats, unlike Get).
+var listLoadOptions = LoadOptions{
+	LoadWorktree:      true,
+	LoadTags:          true,
+	LoadClaudeSession: true,
+}
+
+// applyLoadOptions conditionally chains eager-load edges onto a session query based on
+// options. WithProject() stays unconditional since LoadOptions has no corresponding field
+// and every existing caller expects the project edge to be populated.
+func applyLoadOptions(q *ent.SessionQuery, options LoadOptions) *ent.SessionQuery {
+	if options.LoadWorktree {
+		q = q.WithWorktree()
+	}
+	if options.LoadDiffStats || options.LoadDiffContent {
+		q = q.WithDiffStats()
+	}
+	if options.LoadTags {
+		q = q.WithTags()
+	}
+	q = q.WithProject()
+	if options.LoadClaudeSession {
+		q = q.WithClaudeSession(func(cq *ent.ClaudeSessionQuery) {
+			cq.WithMetadata()
+		})
+	}
+	return q
+}
+
 // List retrieves all sessions from the database
 func (r *EntRepository) List(ctx context.Context) ([]InstanceData, error) {
-	// Query all sessions with relationships
-	sessions, err := r.client.Session.Query().
-		WithWorktree().
-		WithTags().
-		WithProject().
-		WithClaudeSession(func(q *ent.ClaudeSessionQuery) {
-			q.WithMetadata()
-		}).
-		All(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("failed to query sessions: %w", err)
-	}
-
-	// Convert to InstanceData
-	result := make([]InstanceData, len(sessions))
-	for i, s := range sessions {
-		result[i] = *r.sessionToInstanceData(s)
-	}
-
-	return result, nil
+	return r.ListWithOptions(ctx, listLoadOptions)
 }
 
 // ListByStatus retrieves sessions filtered by status
 func (r *EntRepository) ListByStatus(ctx context.Context, status Status) ([]InstanceData, error) {
 	// Query sessions by status with relationships
-	sessions, err := r.client.Session.Query().
-		Where(session.Status(int(status))).
-		WithWorktree().
-		WithTags().
-		WithProject().
-		WithClaudeSession(func(q *ent.ClaudeSessionQuery) {
-			q.WithMetadata()
-		}).
-		All(ctx)
+	sessions, err := applyLoadOptions(
+		r.client.Session.Query().Where(session.Status(int(status))),
+		listLoadOptions,
+	).All(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query sessions by status: %w", err)
 	}
@@ -785,15 +976,10 @@ func (r *EntRepository) ListByStatus(ctx context.Context, status Status) ([]Inst
 // ListByTag retrieves sessions that have a specific tag
 func (r *EntRepository) ListByTag(ctx context.Context, tagName string) ([]InstanceData, error) {
 	// Query sessions that have the specified tag
-	sessions, err := r.client.Session.Query().
-		Where(session.HasTagsWith(tag.Name(tagName))).
-		WithWorktree().
-		WithTags().
-		WithProject().
-		WithClaudeSession(func(q *ent.ClaudeSessionQuery) {
-			q.WithMetadata()
-		}).
-		All(ctx)
+	sessions, err := applyLoadOptions(
+		r.client.Session.Query().Where(session.HasTagsWith(tag.Name(tagName))),
+		listLoadOptions,
+	).All(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query sessions by tag: %w", err)
 	}
@@ -816,6 +1002,24 @@ func (r *EntRepository) UpdateGitHubPRNumber(ctx context.Context, title string, 
 		Save(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to update github_pr_number: %w", err)
+	}
+	if n == 0 {
+		return fmt.Errorf("session not found: %s", title)
+	}
+	return nil
+}
+
+// UpdateGitHubPRStatusTerminal persists whether a session's PR has reached a
+// terminal (merged/closed) state. Called by PRStatusPoller on every poll so the
+// flag survives a restart — see SessionRetentionSweeper.baseSafeToDelete, which
+// reads it back from storage rather than the in-memory Instance.
+func (r *EntRepository) UpdateGitHubPRStatusTerminal(ctx context.Context, title string, terminal bool) error {
+	n, err := r.client.Session.Update().
+		Where(session.Title(title)).
+		SetGithubPrStatusTerminal(terminal).
+		Save(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to update github_pr_status_terminal: %w", err)
 	}
 	if n == 0 {
 		return fmt.Errorf("session not found: %s", title)
@@ -990,6 +1194,45 @@ func (r *EntRepository) UpdateLastViewed(ctx context.Context, title string, t ti
 	return nil
 }
 
+// UpdateSessionMetadata efficiently updates only title/category/note/working_dir fields
+// for a session, issuing a single UPDATE WHERE title=? without a prior SELECT and without
+// the worktree/diffstats/tags/claude_session writes the full Update method performs —
+// mirrors UpdateLastViewed's shape. currentTitle must be the row's title from BEFORE any
+// rename already applied to the caller's in-memory Instance in this same request: Update
+// looks the row up by data.Title (the post-rename value), which misses the still-old-titled
+// DB row and falls into Update's Create fallback, orphaning it under the new title. Using
+// currentTitle as the WHERE key avoids that. Category/WorkingDir are only set when non-nil
+// AND non-empty, matching Update's existing guarded (`data.Category != ""`) semantics;
+// Note is set whenever non-nil (including ""), since an empty note is a meaningful cleared
+// state, not "unset" — same asymmetry as Update's unconditional SetNote(data.Note).
+func (r *EntRepository) UpdateSessionMetadata(ctx context.Context, currentTitle string, newTitle, category, note, workingDir *string) error {
+	update := r.client.Session.Update().
+		Where(session.Title(currentTitle)).
+		SetUpdatedAt(time.Now())
+
+	if newTitle != nil && *newTitle != "" {
+		update.SetTitle(*newTitle)
+	}
+	if category != nil && *category != "" {
+		update.SetCategory(*category)
+	}
+	if note != nil {
+		update.SetNote(*note)
+	}
+	if workingDir != nil && *workingDir != "" {
+		update.SetWorkingDir(*workingDir)
+	}
+
+	n, err := update.Save(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to update session metadata: %w", err)
+	}
+	if n == 0 {
+		return fmt.Errorf("session not found: %s", currentTitle)
+	}
+	return nil
+}
+
 // Close performs cleanup and releases resources
 func (r *EntRepository) Close() error {
 	if r.client != nil {
@@ -1031,14 +1274,17 @@ func (r *EntRepository) sessionToInstanceData(sess *ent.Session) *InstanceData {
 		CreatedAt:           sess.CreatedAt,
 		UpdatedAt:           sess.UpdatedAt,
 		AutoYes:             sess.AutoYes,
+		AutoApprove:         sess.AutoApprove,
 		AutonomousMode:      sess.AutonomousMode,
 		Prompt:              sess.Prompt,
 		InitialPrompt:       sess.InitialPrompt,
 		Program:             sess.Program,
 		ExistingWorktree:    sess.ExistingWorktree,
 		Category:            sess.Category,
+		Note:                sess.Note,
 		IsExpanded:          sess.IsExpanded,
 		TmuxPrefix:          sess.TmuxPrefix,
+		Backend:             ProcessManagerBackend(sess.Backend),
 		LastOutputSignature: sess.LastOutputSignature,
 		MCPServerURL:        sess.McpServerURL,
 		OneShot:             sess.OneShot,
@@ -1072,10 +1318,15 @@ func (r *EntRepository) sessionToInstanceData(sess *ent.Session) *InstanceData {
 	}
 	data.LastPromptSignature = sess.LastPromptSignature
 	data.PauseReason = sess.PauseReason
+	data.ExitReason = sess.ExitReason
 	data.WorkflowID = sess.WorkflowID
 	data.ArchivedAt = sess.ArchivedAt
+	if sess.CreationProgressUpdatedAt != nil {
+		data.CreationProgressUpdatedAt = *sess.CreationProgressUpdatedAt
+	}
 	data.GitHubPRURL = sess.GithubPrURL
 	data.GitHubPRNumber = sess.GithubPrNumber
+	data.GitHubPRStatusTerminal = sess.GithubPrStatusTerminal
 	data.GitHubOwner = sess.GithubOwner
 	data.GitHubRepo = sess.GithubRepo
 
@@ -1178,32 +1429,95 @@ func (r *EntRepository) UpdateSession(ctx context.Context, session *Session) err
 }
 
 // GetWithOptions retrieves a single session with selective child data loading.
-// EntRepository: Delegates to Get with full loading.
 func (r *EntRepository) GetWithOptions(ctx context.Context, title string, options LoadOptions) (*InstanceData, error) {
-	return r.Get(ctx, title)
+	sess, err := applyLoadOptions(
+		r.client.Session.Query().Where(session.Title(title)),
+		options,
+	).Only(ctx)
+	if err != nil {
+		if ent.IsNotFound(err) {
+			return nil, fmt.Errorf("session not found: %s", title)
+		}
+		return nil, fmt.Errorf("failed to query session: %w", err)
+	}
+	return r.sessionToInstanceData(sess), nil
+}
+
+// FindByIDWithOptions retrieves a single session by stable UUID or title (mirroring
+// InstanceData.MatchesID's dual-key lookup) via an indexed WHERE clause, with
+// selective child data loading. Returns ErrInstanceDataNotFound when no match exists,
+// including for id == "" — uuid has no uniqueness constraint, so an empty id would
+// otherwise match every session that has never had a UUID assigned.
+func (r *EntRepository) FindByIDWithOptions(ctx context.Context, id string, options LoadOptions) (*InstanceData, error) {
+	if id == "" {
+		return nil, ErrInstanceDataNotFound
+	}
+	sess, err := applyLoadOptions(
+		r.client.Session.Query().Where(session.Or(session.Title(id), session.UUID(id))),
+		options,
+	).First(ctx)
+	if err != nil {
+		if ent.IsNotFound(err) {
+			return nil, ErrInstanceDataNotFound
+		}
+		return nil, fmt.Errorf("failed to query session by id %s: %w", id, err)
+	}
+	return r.sessionToInstanceData(sess), nil
 }
 
 // ListWithOptions retrieves all sessions with selective child data loading.
-// EntRepository: Delegates to List with full loading.
 func (r *EntRepository) ListWithOptions(ctx context.Context, options LoadOptions) ([]InstanceData, error) {
-	return r.List(ctx)
+	//nolint:entfullscan the base "list all sessions" query genuinely needs every row; callers select fields via LoadOptions, not row filtering.
+	sessions, err := applyLoadOptions(r.client.Session.Query(), options).All(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query sessions: %w", err)
+	}
+
+	result := make([]InstanceData, len(sessions))
+	for i, s := range sessions {
+		result[i] = *r.sessionToInstanceData(s)
+	}
+	return result, nil
 }
 
 // ListByStatusWithOptions retrieves sessions filtered by status with selective loading.
-// EntRepository: Delegates to ListByStatus with full loading.
 func (r *EntRepository) ListByStatusWithOptions(ctx context.Context, status Status, options LoadOptions) ([]InstanceData, error) {
-	return r.ListByStatus(ctx, status)
+	sessions, err := applyLoadOptions(
+		r.client.Session.Query().Where(session.Status(int(status))),
+		options,
+	).All(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query sessions by status: %w", err)
+	}
+
+	result := make([]InstanceData, len(sessions))
+	for i, s := range sessions {
+		result[i] = *r.sessionToInstanceData(s)
+	}
+	return result, nil
 }
 
 // ListByTagWithOptions retrieves sessions with a specific tag with selective loading.
-// EntRepository: Delegates to ListByTag with full loading.
-func (r *EntRepository) ListByTagWithOptions(ctx context.Context, tag string, options LoadOptions) ([]InstanceData, error) {
-	return r.ListByTag(ctx, tag)
+func (r *EntRepository) ListByTagWithOptions(ctx context.Context, tagName string, options LoadOptions) ([]InstanceData, error) {
+	sessions, err := applyLoadOptions(
+		r.client.Session.Query().Where(session.HasTagsWith(tag.Name(tagName))),
+		options,
+	).All(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query sessions by tag: %w", err)
+	}
+
+	result := make([]InstanceData, len(sessions))
+	for i, s := range sessions {
+		result[i] = *r.sessionToInstanceData(s)
+	}
+	return result, nil
 }
 
 // --- Permissions & Analytics --------------------------------------------------
 
 func (r *EntRepository) AllRules(ctx context.Context) ([]ApprovalRuleData, error) {
+	//nolint:entfullscan approval rules are a small, admin-configured table; the whole set is needed to evaluate rule precedence.
 	rules, err := r.client.ApprovalRule.Query().
 		Order(ent.Asc(approvalrule.FieldPriority)).
 		All(ctx)
@@ -1239,6 +1553,8 @@ func (r *EntRepository) AllRules(ctx context.Context) ([]ApprovalRuleData, error
 			RequiredFlagPrefixes:  rule.RequiredFlagPrefixes,
 			PythonModes:           rule.PythonModes,
 			SafePythonImportsOnly: rule.SafePythonImportsOnly,
+			RequireCIPassing:      rule.RequireCiPassing,
+			MinSessionIdleMinutes: rule.MinSessionIdleMinutes,
 		}
 	}
 	return result, nil
@@ -1296,6 +1612,8 @@ func (r *EntRepository) UpsertRule(ctx context.Context, data ApprovalRuleData) e
 		SetRequiredFlagPrefixes(requiredFlagPrefixes).
 		SetPythonModes(pythonModes).
 		SetSafePythonImportsOnly(data.SafePythonImportsOnly).
+		SetRequireCiPassing(data.RequireCIPassing).
+		SetMinSessionIdleMinutes(data.MinSessionIdleMinutes).
 		OnConflictColumns(approvalrule.FieldRuleID).
 		UpdateNewValues().
 		Exec(ctx)
@@ -1327,6 +1645,7 @@ func (r *EntRepository) RecordAnalytics(ctx context.Context, data AnalyticsData)
 		SetCommandCategory(data.CommandCategory).
 		SetCommandSubcategory(data.CommandSubcategory).
 		SetPythonImports(data.PythonImports).
+		SetSource(data.Source).
 		SetCreatedAt(data.CreatedAt).
 		Exec(ctx)
 }
@@ -1339,6 +1658,7 @@ func (r *EntRepository) ListAnalytics(ctx context.Context, limit int) ([]Analyti
 		query = query.Limit(limit)
 	}
 
+	//nolint:entfullscan Order()+optional caller-supplied Limit(); no Where by design (returns most-recent-N analytics rows), acceptable for an analytics/debug endpoint.
 	entries, err := query.All(ctx)
 	if err != nil {
 		return nil, err
@@ -1367,6 +1687,7 @@ func convertAnalyticsEntry(e *ent.ClassificationAnalytics) AnalyticsData {
 		CommandCategory:    e.CommandCategory,
 		CommandSubcategory: e.CommandSubcategory,
 		PythonImports:      e.PythonImports,
+		Source:             e.Source,
 		CreatedAt:          e.CreatedAt,
 	}
 }
@@ -1522,6 +1843,7 @@ func (r *EntRepository) CreateProject(ctx context.Context, data ProjectData) (*P
 
 // ListProjects returns all projects.
 func (r *EntRepository) ListProjects(ctx context.Context) ([]ProjectData, error) {
+	//nolint:entfullscan small, bounded-by-nature table (one row per configured repo), intentionally returns all.
 	projects, err := r.client.Project.Query().All(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list projects: %w", err)

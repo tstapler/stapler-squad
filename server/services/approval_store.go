@@ -29,6 +29,20 @@ type PendingApproval struct {
 	CreatedAt       time.Time
 	ExpiresAt       time.Time
 
+	// EscalationReason and EscalationCategory capture why this request was escalated
+	// for manual review, set once at creation from classifier.EscalationReasonText /
+	// classifier.CategorizeEscalationRuleID. Empty for approvals created before this
+	// field existed (loaded from disk) — never re-derived after creation.
+	EscalationReason   string
+	EscalationCategory string
+
+	// RiskLevel is the classifier-assigned risk level ("low"/"medium"/"high"/"critical"),
+	// captured once at creation via riskLevelString(escalation.RiskLevel) — never re-derived
+	// after creation (matches EscalationReason/EscalationCategory). "" means "not recorded"
+	// (approvals created before this field existed, or when the classifier was unreachable) —
+	// never treated as a fallback to "low".
+	RiskLevel string
+
 	// Orphaned is true for approvals loaded from disk after a server restart.
 	// These have no live HTTP connection, so they cannot be resolved via the decision channel.
 	Orphaned bool
@@ -40,16 +54,19 @@ type PendingApproval struct {
 
 // PersistedApproval is the JSON-serializable representation of a PendingApproval for disk storage.
 type PersistedApproval struct {
-	ID              string                 `json:"id"`
-	SessionID       string                 `json:"session_id"`
-	ClaudeSessionID string                 `json:"claude_session_id"`
-	ToolName        string                 `json:"tool_name"`
-	ToolInput       map[string]interface{} `json:"tool_input"`
-	Cwd             string                 `json:"cwd"`
-	PermissionMode  string                 `json:"permission_mode"`
-	CreatedAt       time.Time              `json:"created_at"`
-	ExpiresAt       time.Time              `json:"expires_at"`
-	Orphaned        bool                   `json:"orphaned"`
+	ID                 string                 `json:"id"`
+	SessionID          string                 `json:"session_id"`
+	ClaudeSessionID    string                 `json:"claude_session_id"`
+	ToolName           string                 `json:"tool_name"`
+	ToolInput          map[string]interface{} `json:"tool_input"`
+	Cwd                string                 `json:"cwd"`
+	PermissionMode     string                 `json:"permission_mode"`
+	CreatedAt          time.Time              `json:"created_at"`
+	ExpiresAt          time.Time              `json:"expires_at"`
+	EscalationReason   string                 `json:"escalation_reason,omitempty"`
+	EscalationCategory string                 `json:"escalation_category,omitempty"`
+	RiskLevel          string                 `json:"risk_level,omitempty"`
+	Orphaned           bool                   `json:"orphaned"`
 }
 
 // orphanedCleanupThreshold is the maximum age for orphaned approvals before they are cleaned up.
@@ -142,11 +159,14 @@ func (s *ApprovalStore) GetApprovalMetadataBySession(sessionID string) []session
 	for _, id := range ids {
 		if a, ok := s.pending[id]; ok {
 			result = append(result, session.ApprovalMetadata{
-				ApprovalID: a.ID,
-				ToolName:   a.ToolName,
-				ToolInput:  a.ToolInput,
-				Cwd:        a.Cwd,
-				Orphaned:   a.Orphaned,
+				ApprovalID:         a.ID,
+				ToolName:           a.ToolName,
+				ToolInput:          a.ToolInput,
+				Cwd:                a.Cwd,
+				Orphaned:           a.Orphaned,
+				EscalationReason:   a.EscalationReason,
+				EscalationCategory: a.EscalationCategory,
+				RiskLevel:          a.RiskLevel,
 			})
 		}
 	}
@@ -296,16 +316,19 @@ func (s *ApprovalStore) persistToDiskLocked() {
 	persisted := make([]PersistedApproval, 0, len(s.pending))
 	for _, a := range s.pending {
 		persisted = append(persisted, PersistedApproval{
-			ID:              a.ID,
-			SessionID:       a.SessionID,
-			ClaudeSessionID: a.ClaudeSessionID,
-			ToolName:        a.ToolName,
-			ToolInput:       a.ToolInput,
-			Cwd:             a.Cwd,
-			PermissionMode:  a.PermissionMode,
-			CreatedAt:       a.CreatedAt,
-			ExpiresAt:       a.ExpiresAt,
-			Orphaned:        a.Orphaned,
+			ID:                 a.ID,
+			SessionID:          a.SessionID,
+			ClaudeSessionID:    a.ClaudeSessionID,
+			ToolName:           a.ToolName,
+			ToolInput:          a.ToolInput,
+			Cwd:                a.Cwd,
+			PermissionMode:     a.PermissionMode,
+			CreatedAt:          a.CreatedAt,
+			ExpiresAt:          a.ExpiresAt,
+			EscalationReason:   a.EscalationReason,
+			EscalationCategory: a.EscalationCategory,
+			RiskLevel:          a.RiskLevel,
+			Orphaned:           a.Orphaned,
 		})
 	}
 
@@ -317,7 +340,7 @@ func (s *ApprovalStore) persistToDiskLocked() {
 
 	// Ensure directory exists
 	dir := filepath.Dir(s.filePath)
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	if err := os.MkdirAll(dir, 0750); err != nil {
 		log.Error("[ApprovalPersistence] failed to create directory", "dir", dir, "err", err)
 		return
 	}
@@ -370,17 +393,20 @@ func (s *ApprovalStore) loadFromDisk() error {
 			continue
 		}
 		a := &PendingApproval{
-			ID:              p.ID,
-			SessionID:       p.SessionID,
-			ClaudeSessionID: p.ClaudeSessionID,
-			ToolName:        p.ToolName,
-			ToolInput:       p.ToolInput,
-			Cwd:             p.Cwd,
-			PermissionMode:  p.PermissionMode,
-			CreatedAt:       p.CreatedAt,
-			ExpiresAt:       p.ExpiresAt,
-			Orphaned:        true, // Always mark as orphaned on load
-			decisionCh:      nil,  // No live HTTP connection
+			ID:                 p.ID,
+			SessionID:          p.SessionID,
+			ClaudeSessionID:    p.ClaudeSessionID,
+			ToolName:           p.ToolName,
+			ToolInput:          p.ToolInput,
+			Cwd:                p.Cwd,
+			PermissionMode:     p.PermissionMode,
+			CreatedAt:          p.CreatedAt,
+			ExpiresAt:          p.ExpiresAt,
+			EscalationReason:   p.EscalationReason,
+			EscalationCategory: p.EscalationCategory,
+			RiskLevel:          p.RiskLevel,
+			Orphaned:           true, // Always mark as orphaned on load
+			decisionCh:         nil,  // No live HTTP connection
 		}
 		s.pending[a.ID] = a
 		s.bySession[a.SessionID] = append(s.bySession[a.SessionID], a.ID)

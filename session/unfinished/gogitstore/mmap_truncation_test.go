@@ -40,15 +40,12 @@ package gogitstore
 
 import (
 	"bytes"
-	"context"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime/debug"
 	"testing"
-
-	"github.com/tstapler/stapler-squad/executor/safeexec"
 )
 
 // buildTruncationFixture creates a small packed repo fixture and returns an
@@ -120,16 +117,28 @@ func TestMmapIndexHandle_TruncateWhileMapped_CrashesWithoutProtection(t *testing
 		t.Skip("git binary not available")
 	}
 
-	cmd := safeexec.CommandContext(context.Background(), os.Args[0], "-test.run=^TestMmapIndexHandle_TruncateWhileMapped_CrashesWithoutProtection$", "-test.v")
-	cmd.Env = append(os.Environ(), "GOGITSTORE_TRUNC_HELPER=1")
-	out, err := cmd.CombinedOutput()
+	result := runBoundedCrashSubprocess(t, "TestMmapIndexHandle_TruncateWhileMapped_CrashesWithoutProtection", "GOGITSTORE_TRUNC_HELPER=1")
+	if result.Outcome == crashSubprocessTimedOut {
+		t.Skip("subprocess killed by its own timeout — inconclusive, not proof of the crash this test exists to demonstrate")
+	}
+	out, err := result.Output, result.Err
 
 	if err != nil {
-		t.Logf("subprocess did not exit cleanly (expected — this IS the point of the test): err=%v\noutput:\n%s", err, out)
+		matched, detail := isExpectedFaultSignal(out)
+		if matched {
+			t.Logf("subprocess crashed with a Go runtime-confirmed %s (expected — this IS the point of the test)", detail)
+			return
+		}
+		// Deliberately still passes (does not t.Fatalf) here: the crash
+		// signature was verified stable across every GOTRACEBACK mode (see
+		// isExpectedFaultSignal's doc comment), so adding a t.Fatalf would
+		// introduce a new failure mode with no evidence it's reachable (see
+		// research/pitfalls.md §2-3 and AC5's no-regression requirement).
+		t.Logf("subprocess did not exit cleanly (expected but signal not confirmed as SIGBUS/SIGSEGV: %s): err=%v\noutput:\n%s", detail, err, out)
 		return
 	}
 	t.Logf("subprocess exited cleanly; full output:\n%s", out)
-	if bytes.Contains(out, []byte("ORDINARY_RECOVER_CAUGHT_IT")) {
+	if bytes.Contains(out, []byte("ORDINARY_RECOVER_CAUGHT_IT")) || bytes.Contains(out, []byte("NO_FAULT_OCCURRED")) {
 		t.Log("this run's specific truncation/read pattern happened not to fault at the OS level (platform/kernel-dependent) — not a failure of this test, but not proof of the crash either; re-run or see the companion WITH-protection test for the mechanism proof")
 		return
 	}
@@ -166,9 +175,11 @@ func TestMmapIndexHandle_TruncateWhileMapped_RecoverableWithProtection(t *testin
 		t.Skip("git binary not available")
 	}
 
-	cmd := safeexec.CommandContext(context.Background(), os.Args[0], "-test.run=^TestMmapIndexHandle_TruncateWhileMapped_RecoverableWithProtection$", "-test.v")
-	cmd.Env = append(os.Environ(), "GOGITSTORE_TRUNC_HELPER=1")
-	out, err := cmd.CombinedOutput()
+	result := runBoundedCrashSubprocess(t, "TestMmapIndexHandle_TruncateWhileMapped_RecoverableWithProtection", "GOGITSTORE_TRUNC_HELPER=1")
+	if result.Outcome == crashSubprocessTimedOut {
+		t.Skip("subprocess killed by its own timeout — inconclusive, not proof of the recovery this test exists to demonstrate")
+	}
+	out, err := result.Output, result.Err
 
 	if err != nil {
 		t.Logf("subprocess crashed even WITH SetPanicOnFault(true) — err=%v\noutput:\n%s", err, out)

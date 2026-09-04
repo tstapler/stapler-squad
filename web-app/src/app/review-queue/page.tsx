@@ -1,19 +1,25 @@
 "use client";
 // +feature: review-queue session-approval session-triage
 
-import { useState, useEffect, useRef, useCallback, Suspense } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo, Suspense } from "react";
 import { usePageView } from "@/lib/analytics/usePageView";
 import { useSearchParams, useRouter } from "next/navigation";
-import { Session, SessionSchema, ReviewItem } from "@/gen/session/v1/types_pb";
+import { Session, SessionSchema, SessionStatus, ReviewItem } from "@/gen/session/v1/types_pb";
 import { create } from "@bufbuild/protobuf";
 import { ReviewQueuePanel } from "@/components/sessions/ReviewQueuePanel";
 import { SessionDetail, SessionDetailTab } from "@/components/sessions/SessionDetail";
 import { useSessionServiceContext } from "@/lib/contexts/SessionServiceContext";
 import { useReviewQueueContext } from "@/lib/contexts/ReviewQueueContext";
+import { useWatchBacklogItems } from "@/lib/hooks/useWatchBacklogItems";
+import { getAvailableActions } from "@/lib/backlog/itemActions";
 import { useFocusTrap } from "@/lib/hooks/useFocusTrap";
 import { useKeyboard } from "@/lib/hooks/useKeyboard";
 import { KeyboardHints } from "@/components/ui/KeyboardHint";
 import * as styles from "./page.css";
+
+// Stable reference — useWatchBacklogItems only reruns its connection effects when the
+// joined filter key changes, but a fresh array literal every render is still bad hygiene.
+const PLAN_REVIEW_STATUS_FILTER = ["ready", "queued"];
 
 // Construct a minimal Session from ReviewItem data for immediate modal opening
 // before the session list has finished loading.
@@ -49,18 +55,22 @@ function ReviewQueueContent() {
 
   // Ref for focus trap inside the session-detail modal
   const modalContentRef = useRef<HTMLDivElement>(null);
+  // Element that opened the modal, so focus can return to it on close. handleSessionClick is
+  // the shared funnel for every click-based opener (queue list, working-sessions row), so we
+  // capture document.activeElement there. Deep-linking (the searchParams effect below) opens
+  // the modal with no click at all — this ref deliberately stays null in that case, since
+  // there's no prior focus context to restore to.
+  const sessionTriggerRef = useRef<HTMLElement | null>(null);
 
   // Use the global session service context — avoids a competing WebSocket stream
-  const { sessions, runOneShot } = useSessionServiceContext();
+  const { sessions } = useSessionServiceContext();
 
-  // S3-3: Adapter from RunOneShotResponse to the shape ReviewQueuePanel expects
-  const handleRunOneShot = useCallback(
-    async (sessionId: string, prompt: string) => {
-      const response = await runOneShot(sessionId, prompt, 0);
-      if (!response) return null;
-      return { prUrl: response.prUrl || undefined, error: response.error || undefined };
-    },
-    [runOneShot]
+  // Backlog items whose plan is awaiting the user's approval — surfaced here so "things
+  // needing you" aren't scattered across the board/stuck-items page too.
+  const { items: backlogItems } = useWatchBacklogItems({ statusFilter: PLAN_REVIEW_STATUS_FILTER });
+  const planReviewItems = useMemo(
+    () => backlogItems.filter((item) => getAvailableActions(item).actions.has("approve_plan")),
+    [backlogItems]
   );
 
   // Acknowledge function for dismissing sessions from the modal.
@@ -74,6 +84,23 @@ function ReviewQueueContent() {
   // Full ReviewItem data for fallback session construction before sessions load
   const [queueItems, setQueueItems] = useState<ReviewItem[]>([]);
 
+  // Sessions that are simply busy (creating/active) rather than waiting on the user — shown
+  // separately so "needs you" (the queue below) and "still working, leave it" don't blur
+  // together into one undifferentiated list.
+  const attentionSessionIds = useMemo(
+    () => new Set(reviewQueueItems.map((s) => s.id)),
+    [reviewQueueItems]
+  );
+  const workingSessions = useMemo(
+    () =>
+      sessions.filter(
+        (s) =>
+          (s.status === SessionStatus.ACTIVE || s.status === SessionStatus.CREATING) &&
+          !attentionSessionIds.has(s.id)
+      ),
+    [sessions, attentionSessionIds]
+  );
+
   // Refs to avoid stale closures inside setTimeout callbacks
   const reviewQueueItemsRef = useRef<Session[]>([]);
   const selectedSessionRef = useRef<Session | null>(null);
@@ -82,7 +109,7 @@ function ReviewQueueContent() {
   useEffect(() => { selectedSessionRef.current = selectedSession; }, [selectedSession]);
 
   // Trap focus inside the session-detail modal while it is open
-  useFocusTrap(modalContentRef, !!selectedSession);
+  useFocusTrap(modalContentRef, !!selectedSession, sessionTriggerRef);
 
   // Global keyboard shortcuts for this page
   useKeyboard({
@@ -111,6 +138,10 @@ function ReviewQueueContent() {
   }, [searchParams, sessions, queueItems]);
 
   const handleSessionClick = (sessionId: string) => {
+    // Captured synchronously (before any state change) so it reflects the actual
+    // clicked element even though this handler is reached via callback indirection
+    // from multiple distinct buttons (working-sessions list, ReviewQueuePanel rows).
+    sessionTriggerRef.current = document.activeElement as HTMLElement;
     // Try full session data first; fall back to queue item data so the modal
     // always opens immediately regardless of whether the session list has loaded.
     const fromSessions = sessions.find((s) => s.id === sessionId);
@@ -259,11 +290,56 @@ function ReviewQueueContent() {
   return (
     <div className={styles.page}>
       <div id="main-content" className={styles.main}>
+        {planReviewItems.length > 0 && (
+          <section className={styles.inlineSection} aria-label="Plan reviews" data-testid="plan-review-section">
+            <h3 className={styles.inlineSectionTitle}>
+              Plan Reviews
+              <span className={styles.inlineSectionCount}>{planReviewItems.length}</span>
+            </h3>
+            <div className={styles.inlineSectionList}>
+              {planReviewItems.map((item) => (
+                <button
+                  key={item.id}
+                  className={styles.inlineSectionRow}
+                  onClick={() => router.push(`/backlog?item=${item.id}`)}
+                  data-testid={`plan-review-item-${item.id}`}
+                >
+                  <span>{item.title}</span>
+                  <span className={styles.inlineSectionRowMeta}>Plan awaiting approval</span>
+                </button>
+              ))}
+            </div>
+          </section>
+        )}
+
+        {workingSessions.length > 0 && (
+          <section className={styles.inlineSection} aria-label="Currently working sessions" data-testid="working-sessions-section">
+            <h3 className={styles.inlineSectionTitle}>
+              Currently Working
+              <span className={styles.inlineSectionCount}>{workingSessions.length}</span>
+            </h3>
+            <div className={styles.inlineSectionList}>
+              {workingSessions.map((s) => (
+                <button
+                  key={s.id}
+                  className={styles.inlineSectionRow}
+                  onClick={() => handleSessionClick(s.id)}
+                  data-testid={`working-session-${s.id}`}
+                >
+                  <span>{s.title}</span>
+                  <span className={styles.inlineSectionRowMeta}>
+                    {s.status === SessionStatus.CREATING ? "Queued" : "In progress"} — nothing to do yet
+                  </span>
+                </button>
+              ))}
+            </div>
+          </section>
+        )}
+
         <ReviewQueuePanel
           onSessionClick={handleSessionClick}
           onItemsChange={handleItemsChange}
           onAcknowledged={handleAcknowledged}
-          onRunOneShot={handleRunOneShot}
           autoAdvance={autoAdvance}
           onAutoAdvanceChange={(val) => {
             setAutoAdvance(val);

@@ -7,6 +7,7 @@ import (
 	"github.com/google/uuid"
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/session"
 )
 
@@ -25,6 +26,14 @@ func TestBacklogHandlers_FeatureDisabled(t *testing.T) {
 
 	t.Run("get_backlog_item", func(t *testing.T) {
 		result, err := h.getBacklogItem(ctx, req)
+		require.NoError(t, err)
+		m := parseResult(t, result)
+		require.False(t, m["success"].(bool))
+		require.Equal(t, ErrFeatureDisabled, m["error"].(map[string]interface{})["code"])
+	})
+
+	t.Run("list_backlog_items", func(t *testing.T) {
+		result, err := h.listBacklogItems(ctx, req)
 		require.NoError(t, err)
 		m := parseResult(t, result)
 		require.False(t, m["success"].(bool))
@@ -140,7 +149,7 @@ func TestNewCore_GatesBacklogAndGoalToolRegistration(t *testing.T) {
 	}
 
 	t.Run("disabled at boot", func(t *testing.T) {
-		s := NewCore(store, nil, sbMgr, storage, nil, nil, func() bool { return false })
+		s := NewCore(store, nil, sbMgr, storage, nil, nil, func() bool { return false }, nil, nil, nil)
 		tools := s.ListTools()
 		for _, name := range backlogToolNames {
 			_, present := tools[name]
@@ -149,7 +158,7 @@ func TestNewCore_GatesBacklogAndGoalToolRegistration(t *testing.T) {
 	})
 
 	t.Run("enabled at boot", func(t *testing.T) {
-		s := NewCore(store, nil, sbMgr, storage, nil, nil, func() bool { return true })
+		s := NewCore(store, nil, sbMgr, storage, nil, nil, func() bool { return true }, nil, nil, nil)
 		tools := s.ListTools()
 		for _, name := range backlogToolNames {
 			_, present := tools[name]
@@ -158,9 +167,33 @@ func TestNewCore_GatesBacklogAndGoalToolRegistration(t *testing.T) {
 	})
 
 	t.Run("nil check defaults to enabled", func(t *testing.T) {
-		s := NewCore(store, nil, sbMgr, storage, nil, nil, nil)
+		s := NewCore(store, nil, sbMgr, storage, nil, nil, nil, nil, nil, nil)
 		tools := s.ListTools()
 		_, present := tools["get_backlog_item"]
 		require.True(t, present, "nil backlogEnabled must default to always-enabled for callers that don't wire the flag")
 	})
+}
+
+// TestNewCore_should_WireNilTolerantAttacher_When_BacklogSvcIsLiteralNil verifies that
+// passing a literal Go nil *services.BacklogService through NewCore leaves
+// backlogHandlers.backlogSvc nil (not a panic-prone half-wired state) — link_session_to_item
+// must degrade to UNAVAILABLE, matching the stdio fallback path's own behavior (main.go).
+func TestNewCore_should_WireNilTolerantAttacher_When_BacklogSvcIsLiteralNil(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	store := &stubStore{}
+	sbMgr := makeScrollbackMgr(t)
+
+	var backlogSvc *services.BacklogService // literal nil, matches main.go's stdio fallback call
+	s := NewCore(store, nil, sbMgr, storage, nil, nil, nil, nil, backlogSvc, nil)
+
+	tool := s.GetTool("link_session_to_item")
+	require.NotNil(t, tool, "link_session_to_item must still be registered even with a nil backlogSvc")
+
+	ctx := WithSessionUUID(context.Background(), uuid.New().String())
+	result, err := tool.Handler(ctx, makeToolReq(map[string]interface{}{"item_id": uuid.New().String()}))
+	require.NoError(t, err, "must return an UNAVAILABLE result, not panic on a nil-wrapped interface")
+
+	m := parseResult(t, result)
+	require.False(t, m["success"].(bool))
+	require.Equal(t, ErrUnavailable, m["error"].(map[string]interface{})["code"])
 }

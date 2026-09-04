@@ -10,9 +10,18 @@ on:
       - 'docs/registry/**'
 
 jobs:
+  # Generates protos + builds the web UI once and hands the result to
+  # registry-validation via the shared artifact, instead of this workflow
+  # running its own copy of that work. See
+  # project_plans/ci-speed/implementation/plan.md Epic 3.1 Story 3.1.5.
+  prepare:
+    uses: ./.github/workflows/_prepare.yml
+
   registry-validation:
     name: Registry Validation
     runs-on: ubuntu-latest
+    needs: prepare
+    timeout-minutes: 10  # backstop only (baseline avg ~3m / max 7.4m), not a budget anyone expects to hit
     permissions:
       contents: read
       pull-requests: write  # required to post the advisory PR comment
@@ -23,16 +32,27 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.25.0'
+          go-version-file: 'go.mod'
           cache: true
+
+      # Needed by the "Install frontend scanner dependencies" step below —
+      # previously provided as a side effect of the inline `prepare` composite
+      # action this job used to call directly; lost when Epic 3.1 migrated
+      # this job to consume _prepare.yml's artifact instead.
+      - name: Set up pnpm
+        uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+        with:
+          version: 10.27.0
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '20'
 
-      - name: Generate protos and build web UI
-        uses: ./.github/actions/prepare
+      - name: Download generated files
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.prepare.outputs.artifact-name }}
 
       - name: Install frontend scanner dependencies
         run: cd tools/scanner/frontend && pnpm install --silent

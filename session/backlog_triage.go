@@ -23,8 +23,21 @@ type TriageTask struct {
 
 // HeadlessTriageResult is the parsed output from a headless triage LLM call.
 type HeadlessTriageResult struct {
-	Title              string             `json:"title"`
-	Summary            string             `json:"summary"`
+	Title   string `json:"title"`
+	Summary string `json:"summary"`
+	// Priority is the LLM's assessed urgency/impact (1=P1 critical ... 5=P5
+	// trivial), applied to the item once triage completes — see
+	// applyTriageResultToUpdate (server/services/backlog_service_triage.go).
+	// Zero (omitted by the model) means "no assessment" and leaves the item's
+	// existing priority untouched, same convention as AcceptanceCriteria below.
+	Priority int `json:"priority,omitempty"`
+	// ItemCategory is the LLM's classification of what kind of work this is —
+	// one of session.BacklogCategory's values (bugfix/feature/chore/refactor).
+	// Named distinctly from TriageTask.Category (engineering area: backend/
+	// frontend/test/infra/docs) to avoid the two colliding in the same JSON
+	// object the model produces. Empty or invalid leaves the item's existing
+	// category untouched.
+	ItemCategory       string             `json:"item_category,omitempty"`
 	Suggestions        []TriageSuggestion `json:"suggestions"`
 	Tasks              []TriageTask       `json:"tasks,omitempty"`
 	AcceptanceCriteria []AcCriterion      `json:"acceptance_criteria,omitempty"`
@@ -153,6 +166,23 @@ after):
 `, feedback, artifactAbsPath, artifactAbsPath, researchDir)
 
 	return sb.String()
+}
+
+// BuildHeadlessChatRetriagePrompt wraps BuildHeadlessRetriagePrompt with an
+// instruction to ask at most one clarifying question per turn — used for
+// chat-originated refinement (CreateBacklogItemFromChat's existing_item_id
+// path), where a tightened one-question-at-a-time round trip is expected
+// instead of a batch dump of questions.
+func BuildHeadlessChatRetriagePrompt(item *BacklogItemData, artifactAbsPath string, prior HeadlessTriageResult, feedback string) string {
+	base := BuildHeadlessRetriagePrompt(item, artifactAbsPath, prior, feedback)
+	return base + `
+
+## Chat mode
+This is a live back-and-forth chat conversation, not a batch review. If you
+have any open questions, include AT MOST ONE in suggestions (rationale=
+"question") — never more than one question in a single response. Save any
+other questions for a later turn.
+`
 }
 
 // extractTopLevelJSONObjects returns every complete JSON object found in raw, in

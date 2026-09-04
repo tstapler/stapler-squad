@@ -78,8 +78,19 @@ func IsTmuxBackedSessionRole(role string) bool {
 const (
 	TagBacklogWork     = "backlog:work"
 	TagBacklogRevision = "backlog:revision"
+	TagBacklogReview   = "backlog:review"
 	TagAutonomous      = "autonomous"
 )
+
+// IsBacklogOriginatedSession reports whether inst was spawned by the backlog
+// automation pipeline (work, revision, or review role) rather than being a
+// plain user-created session. Used to extend workflow-only behaviors (like
+// SessionService.maybeAutoArchive) to backlog sessions, which have no
+// WorkflowID of their own but leak the same way if never archived — see
+// session_retention_sweeper.go's ArchivedAt-only scope.
+func (i *Instance) IsBacklogOriginatedSession() bool {
+	return i.HasTag(TagBacklogWork) || i.HasTag(TagBacklogReview)
+}
 
 // CategoryBacklog is the Session.Category value assigned to all sessions
 // spawned by BacklogService (work, revision, review-gate, re-review) so they
@@ -87,10 +98,13 @@ const (
 // into "Uncategorized".
 const CategoryBacklog = "Backlog"
 
-// TriggeredBy values for BacklogStatusEvent records.
+// TriggeredBy values for BacklogStatusEvent records. Agent-initiated
+// transitions (e.g. request_review, report_duplicate) use TriggeredByAgent.
 const (
-	TriggeredByUser   = "user"
-	TriggeredBySystem = "system"
+	TriggeredByUser       = "user"
+	TriggeredBySystem     = "system"
+	TriggeredByAgent      = "agent"
+	TriggeredByGitHubSync = "github_sync"
 )
 
 // DefaultBacklogPriority is the default priority assigned to new backlog items
@@ -197,11 +211,13 @@ var validTransitions = domain.ValidTransitions()
 
 // Sentinel errors for transition guards.
 var (
-	ErrACRequired            = domain.ErrACRequired
-	ErrPlanRequired          = domain.ErrPlanRequired
-	ErrPlanArtifactsRequired = domain.ErrPlanArtifactsRequired
-	ErrVerdictRequired       = domain.ErrVerdictRequired
-	ErrCodeNotOnMain         = domain.ErrCodeNotOnMain
+	ErrACRequired                   = domain.ErrACRequired
+	ErrPlanRequired                 = domain.ErrPlanRequired
+	ErrPlanArtifactsRequired        = domain.ErrPlanArtifactsRequired
+	ErrVerdictRequired              = domain.ErrVerdictRequired
+	ErrCodeNotOnMain                = domain.ErrCodeNotOnMain
+	ErrUnresolvedBlockers           = domain.ErrUnresolvedBlockers
+	ErrVerdictClearRequiredForReady = domain.ErrVerdictClearRequiredForReady
 )
 
 // BacklogItemTransitionInput carries the fields needed by TransitionGuard.

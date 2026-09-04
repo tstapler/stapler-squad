@@ -72,11 +72,28 @@ func (a *ClaudeAdapter) Import(ctx context.Context, inst *Instance) ([]Canonical
 	workspace := inst.GetWorkingDirectory()
 	claudeProjectsDir := filepath.Join(home, ".claude", "projects")
 	claudeLogPath := filepath.Join(claudeProjectsDir, ClaudeProjectDirName(workspace), uuidStr+".jsonl")
-	if _, err := os.Stat(claudeLogPath); err != nil {
-		return nil, fmt.Errorf("claude transcript file not found for UUID %s: %w", uuidStr, err)
+
+	return ReadCanonicalTurnsFromFile(claudeLogPath)
+}
+
+// ReadCanonicalTurnsFromFile parses a Claude JSONL transcript at the given
+// path into CanonicalTurns, independent of any live Instance. It is the
+// shared parsing core used both by ClaudeAdapter.Import (which resolves a
+// path from an Instance's working directory + conversation UUID first) and
+// by the import-external-session preview path (Story 1.1.4), which reads a
+// resolved history file's turns without ever constructing a half-built
+// Instance just to read history.
+//
+// Trailing partial lines (e.g. a JSONL file caught mid-write by a live
+// writer) are tolerated: a line that fails to unmarshal as a well-formed
+// turn is simply skipped rather than treated as an error, per the pitfalls
+// research's "tolerate trailing partial lines" requirement.
+func ReadCanonicalTurnsFromFile(path string) ([]CanonicalTurn, error) {
+	if _, err := os.Stat(path); err != nil {
+		return nil, fmt.Errorf("claude transcript file not found at %s: %w", path, err)
 	}
 
-	file, err := os.Open(claudeLogPath)
+	file, err := os.Open(path) // #nosec G304 -- every caller builds path from ClaudeProjectDirName (strips all non-alphanumeric chars, no traversal possible) plus a UUID already validated by directory enumeration (HistoryFileDetector) or internal instance state, never raw request input
 	if err != nil {
 		return nil, err
 	}
@@ -95,54 +112,11 @@ func (a *ClaudeAdapter) Import(ctx context.Context, inst *Instance) ([]Canonical
 		lineStr := strings.TrimSpace(string(lineBytes))
 		if lineStr != "" {
 			var raw rawClaudeTurn
-			if err := json.Unmarshal([]byte(lineStr), &raw); err == nil && raw.Message != nil {
-				var canonicalBlocks []CanonicalBlock
-
-				// Parse content which can be a string or a list of blocks
-				if contentStr, ok := raw.Message.Content.(string); ok {
-					if contentStr != "" {
-						canonicalBlocks = append(canonicalBlocks, NewTextBlock(contentStr))
-					}
-				} else if contentList, ok := raw.Message.Content.([]interface{}); ok {
-					for _, item := range contentList {
-						var block rawClaudeMessageBlock
-						itemBytes, _ := json.Marshal(item)
-						if err := json.Unmarshal(itemBytes, &block); err == nil {
-							switch block.Type {
-							case "text":
-								canonicalBlocks = append(canonicalBlocks, NewTextBlock(block.Text))
-							case "thinking":
-								canonicalBlocks = append(canonicalBlocks, NewThinkingBlock(block.Thinking))
-							case "tool_use":
-								canonicalBlocks = append(canonicalBlocks, NewToolUseBlock(block.ID, block.Name, block.Input))
-							case "tool_result":
-								canonicalBlocks = append(canonicalBlocks, NewToolResultBlock(block.ToolUseID, "", block.Content, block.IsError))
-							}
-						}
-					}
+			if unmarshalErr := json.Unmarshal([]byte(lineStr), &raw); unmarshalErr == nil && raw.Message != nil {
+				turn, buildErr := buildCanonicalTurnFromRawClaudeTurn(raw, turnIdx)
+				if buildErr != nil {
+					return nil, buildErr
 				}
-
-				role := RoleUser
-				if raw.Message.Role == "assistant" {
-					role = RoleAssistant
-				}
-
-				tTime, parseErr := time.Parse(time.RFC3339Nano, raw.Timestamp)
-				if parseErr != nil {
-					tTime = time.Now()
-				}
-
-				turn := CanonicalTurn{
-					Role:      role,
-					Blocks:    canonicalBlocks,
-					Timestamp: tTime,
-					TurnIndex: turnIdx,
-				}
-
-				if err := turn.Validate(); err != nil {
-					return nil, fmt.Errorf("invalid turn parsed at index %d: %w", turnIdx, err)
-				}
-
 				turns = append(turns, turn)
 				turnIdx++
 			}
@@ -154,6 +128,88 @@ func (a *ClaudeAdapter) Import(ctx context.Context, inst *Instance) ([]Canonical
 	}
 
 	return turns, nil
+}
+
+// buildCanonicalTurnFromRawClaudeTurn converts a single parsed JSONL line
+// (already known to carry a non-nil Message) into a CanonicalTurn, including
+// content-block parsing, role/timestamp normalization, and validation.
+func buildCanonicalTurnFromRawClaudeTurn(raw rawClaudeTurn, turnIdx int) (CanonicalTurn, error) {
+	canonicalBlocks := parseClaudeMessageContent(raw.Message.Content)
+
+	role := RoleUser
+	if raw.Message.Role == "assistant" {
+		role = RoleAssistant
+	}
+
+	tTime, parseErr := time.Parse(time.RFC3339Nano, raw.Timestamp)
+	if parseErr != nil {
+		tTime = time.Now()
+	}
+
+	turn := CanonicalTurn{
+		Role:      role,
+		Blocks:    canonicalBlocks,
+		Timestamp: tTime,
+		TurnIndex: turnIdx,
+	}
+
+	if err := turn.Validate(); err != nil {
+		return CanonicalTurn{}, fmt.Errorf("invalid turn parsed at index %d: %w", turnIdx, err)
+	}
+
+	return turn, nil
+}
+
+// parseClaudeMessageContent parses a raw Claude message's content field,
+// which may be either a plain string or a list of typed content blocks.
+func parseClaudeMessageContent(content interface{}) []CanonicalBlock {
+	if contentStr, ok := content.(string); ok {
+		if contentStr == "" {
+			return nil
+		}
+		return []CanonicalBlock{NewTextBlock(contentStr)}
+	}
+
+	contentList, ok := content.([]interface{})
+	if !ok {
+		return nil
+	}
+
+	var canonicalBlocks []CanonicalBlock
+	for _, item := range contentList {
+		if block, ok := parseClaudeContentBlockItem(item); ok {
+			canonicalBlocks = append(canonicalBlocks, block)
+		}
+	}
+	return canonicalBlocks
+}
+
+// parseClaudeContentBlockItem parses a single entry from a Claude message's
+// content list into a CanonicalBlock. It returns ok=false for entries that
+// fail to unmarshal or carry an unrecognized block type, which are silently
+// skipped by the caller.
+func parseClaudeContentBlockItem(item interface{}) (CanonicalBlock, bool) {
+	var block rawClaudeMessageBlock
+	itemBytes, err := json.Marshal(item)
+	if err != nil {
+		return CanonicalBlock{}, false
+	}
+	if err := json.Unmarshal(itemBytes, &block); err != nil {
+		return CanonicalBlock{}, false
+	}
+
+	switch block.Type {
+	case "text":
+		return NewTextBlock(block.Text), true
+	case "thinking":
+		return NewThinkingBlock(block.Thinking), true
+	case "tool_use":
+		return NewToolUseBlock(block.ID, block.Name, block.Input), true
+	case "tool_result":
+		return NewToolResultBlock(block.ToolUseID, "", block.Content, block.IsError), true
+	default:
+		return CanonicalBlock{}, false
+	}
 }
 
 func (a *ClaudeAdapter) Export(ctx context.Context, turns []CanonicalTurn, inst *Instance) error {
@@ -175,7 +231,7 @@ func (a *ClaudeAdapter) Export(ctx context.Context, turns []CanonicalTurn, inst 
 	}
 
 	claudeLogPath := filepath.Join(claudeProjectDir, uuidStr+".jsonl")
-	f, err := os.Create(claudeLogPath)
+	f, err := os.Create(claudeLogPath) // #nosec G304 -- claudeProjectDir is sanitized via ClaudeProjectDirName (non-alphanumeric -> '-'), uuidStr is internal instance state (GetClaudeConversationUUID), not external input
 	if err != nil {
 		return err
 	}

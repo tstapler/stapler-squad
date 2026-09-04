@@ -1,15 +1,62 @@
 package services
 
 import (
+	"context"
 	"regexp"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/pkg/classifier"
+	"go.uber.org/goleak"
 )
 
+// TestRecordFromResult_ThreadsSourceOntoEntry verifies pi-support Story 4.3.1b:
+// the source value passed to RecordFromResult ends up on the resulting
+// AnalyticsEntry, so per-agent approval patterns are distinguishable in the
+// audit/analytics record — regardless of the value ApprovalHandler defaulted it
+// to ("claude" or "pi") before calling in.
+func TestRecordFromResult_ThreadsSourceOntoEntry(t *testing.T) {
+	t.Parallel()
+	store := NewAnalyticsStore(nil)
+
+	store.RecordFromResult(
+		classifier.PermissionRequestPayload{ToolName: "Bash", ToolInput: map[string]interface{}{"command": "ls"}},
+		classifier.ClassificationResult{Decision: classifier.AutoAllow},
+		"sess-1", "", 0, "pi",
+	)
+
+	select {
+	case entry := <-store.ch:
+		assert.Equal(t, "pi", entry.Source)
+	default:
+		t.Fatal("expected RecordFromResult to enqueue an entry")
+	}
+}
+
+// TestRecordFromResult_DefaultsSourceEmpty_When_CallerPassesEmptyString mirrors
+// Claude's unmodified curl hook path (ApprovalHandler defaults empty to
+// "claude" at its own call site — RecordFromResult itself never re-defaults).
+func TestRecordFromResult_DefaultsSourceEmpty_When_CallerPassesEmptyString(t *testing.T) {
+	t.Parallel()
+	store := NewAnalyticsStore(nil)
+
+	store.RecordFromResult(
+		classifier.PermissionRequestPayload{ToolName: "Bash", ToolInput: map[string]interface{}{"command": "ls"}},
+		classifier.ClassificationResult{Decision: classifier.AutoAllow},
+		"sess-1", "", 0, "",
+	)
+
+	select {
+	case entry := <-store.ch:
+		assert.Equal(t, "", entry.Source)
+	default:
+		t.Fatal("expected RecordFromResult to enqueue an entry")
+	}
+}
+
 func TestClassify_DailyBucketAutoApproveRate(t *testing.T) {
+	t.Parallel()
 	b := DailyBucket{
 		Date:      "2026-04-13",
 		AutoAllow: 8,
@@ -43,6 +90,7 @@ func mustCompileRe(t *testing.T, pattern string) *regexp.Regexp {
 // ── TestReclassifyGaps ───────────────────────────────────────────────────────
 
 func TestReclassifyGaps_should_reclassifyEntry_When_ruleNowCoversCommand(t *testing.T) {
+	t.Parallel()
 	// TC-G-12: Classifier has rule matching "git push". Entry is escalate with no RuleID.
 	c := classifier.NewRuleBasedClassifier()
 	rules := []classifier.Rule{
@@ -76,6 +124,7 @@ func TestReclassifyGaps_should_reclassifyEntry_When_ruleNowCoversCommand(t *test
 }
 
 func TestReclassifyGaps_should_skipEntry_When_alreadyDecided(t *testing.T) {
+	t.Parallel()
 	// TC-G-13: Entry with Decision="auto_allow" is unchanged.
 	c := classifier.NewRuleBasedClassifier()
 
@@ -95,6 +144,7 @@ func TestReclassifyGaps_should_skipEntry_When_alreadyDecided(t *testing.T) {
 }
 
 func TestReclassifyGaps_should_skipEntry_When_hasRuleID(t *testing.T) {
+	t.Parallel()
 	// TC-G-14: Entry with Decision="escalate" and RuleID != "" is unchanged.
 	c := classifier.NewRuleBasedClassifier()
 	rules := []classifier.Rule{
@@ -128,6 +178,7 @@ func TestReclassifyGaps_should_skipEntry_When_hasRuleID(t *testing.T) {
 }
 
 func TestReclassifyGaps_should_notMutateOriginalSlice(t *testing.T) {
+	t.Parallel()
 	// TC-G-15: Original slice entries must remain unchanged after reclassification.
 	c := classifier.NewRuleBasedClassifier()
 	rules := []classifier.Rule{
@@ -166,6 +217,7 @@ func TestReclassifyGaps_should_notMutateOriginalSlice(t *testing.T) {
 }
 
 func TestReclassifyGaps_should_handleCommandUnder200Chars(t *testing.T) {
+	t.Parallel()
 	// TC-G-16 (R3.3): Short command (well under 200 chars); classifier rule uses
 	// CriteriaPrograms matching "git". Verifies truncation is irrelevant for typical commands.
 	c := classifier.NewRuleBasedClassifier()
@@ -205,6 +257,7 @@ func TestReclassifyGaps_should_handleCommandUnder200Chars(t *testing.T) {
 // ── TestComputeSummary ───────────────────────────────────────────────────────
 
 func TestComputeSummary_should_countCoverageGaps_When_escalateNoRuleID(t *testing.T) {
+	t.Parallel()
 	// TC-G-17: 3 entries: 2 escalate+no-ruleID, 1 auto_allow → CoverageGapCount=2
 	entries := []AnalyticsEntry{
 		{Decision: "escalate", RuleID: "", ToolName: "Bash"},
@@ -217,6 +270,7 @@ func TestComputeSummary_should_countCoverageGaps_When_escalateNoRuleID(t *testin
 }
 
 func TestComputeSummary_should_notCountGap_When_escalateWithRuleID(t *testing.T) {
+	t.Parallel()
 	// TC-G-18: 1 entry: escalate + RuleID="r1" → CoverageGapCount=0
 	entries := []AnalyticsEntry{
 		{Decision: "escalate", RuleID: "r1", ToolName: "Bash"},
@@ -227,6 +281,7 @@ func TestComputeSummary_should_notCountGap_When_escalateWithRuleID(t *testing.T)
 }
 
 func TestComputeSummary_should_computeCorrectRates(t *testing.T) {
+	t.Parallel()
 	// TC-G-19: 10 entries: 8 auto_allow, 1 auto_deny, 1 escalate.
 	entries := make([]AnalyticsEntry, 0, 10)
 	for i := 0; i < 8; i++ {
@@ -242,6 +297,7 @@ func TestComputeSummary_should_computeCorrectRates(t *testing.T) {
 }
 
 func TestComputeSummary_should_returnZeroSummary_When_empty(t *testing.T) {
+	t.Parallel()
 	// TC-G-20: Empty entry slice → all counts zero, rates zero.
 	s := ComputeSummary(nil)
 	assert.Equal(t, 0, s.TotalDecisions, "TC-G-20: TotalDecisions must be 0")
@@ -251,6 +307,7 @@ func TestComputeSummary_should_returnZeroSummary_When_empty(t *testing.T) {
 }
 
 func TestComputeSummary_should_showFewerGaps_After_ReclassifyGaps(t *testing.T) {
+	t.Parallel()
 	// TC-G-21: 3 escalate+no-ruleID entries; classifier covers 2 of them.
 	// After ReclassifyGaps, ComputeSummary should show CoverageGapCount=1.
 	c := classifier.NewRuleBasedClassifier()
@@ -277,4 +334,121 @@ func TestComputeSummary_should_showFewerGaps_After_ReclassifyGaps(t *testing.T) 
 	reclassified := ReclassifyGaps(entries, c)
 	s := ComputeSummary(reclassified)
 	assert.Equal(t, 1, s.CoverageGapCount, "TC-G-21: 2 of 3 gaps covered by rule; 1 should remain")
+}
+
+func TestComputeSummary_EscalationReasonCounts(t *testing.T) {
+	t.Parallel()
+	// AC4: escalate/secret-scan-auto_deny entries bucket into the 5 escalation
+	// categories; non-escalation, non-secret-scan-deny entries contribute to none.
+	entries := []AnalyticsEntry{
+		{Decision: "escalate", RuleID: ""},
+		{Decision: "escalate", RuleID: ""},
+		{Decision: "escalate", RuleID: "new-domain-check"},
+		{Decision: "auto_deny", RuleID: "secret-scan"},
+		{Decision: "escalate", RuleID: "shell-expansion-program"},
+		{Decision: "escalate", RuleID: "seed-escalate-git-branch-safe-delete"},
+		{Decision: "auto_allow", RuleID: "some-rule"},
+	}
+
+	s := ComputeSummary(entries)
+	assert.Equal(t, map[string]int{
+		"no-match":       2,
+		"domain-age":     1,
+		"secret-scan":    1,
+		"unclassifiable": 1,
+		"explicit-rule":  1,
+	}, s.EscalationReasonCounts, "AC4: EscalationReasonCounts must bucket every escalate decision plus the secret-scan auto_deny special case, excluding the unrelated auto_allow entry")
+}
+
+// TestComputeSummary_should_PopulateRiskLevelCounts_When_EntriesSpanAllFourRiskLevels covers
+// plan.md Task 3.1.1/3.1.4 (AC5): risk_level_counts must be scoped to escalated decisions
+// only (same scope as EscalationReasonCounts), not the full auto_allow/auto_deny/escalate
+// traffic mix — see pre-mortem.md Failure #5 / adversarial-review.md's resolved blocker.
+func TestComputeSummary_should_PopulateRiskLevelCounts_When_EntriesSpanAllFourRiskLevels(t *testing.T) {
+	t.Parallel()
+	entries := []AnalyticsEntry{
+		{Decision: "escalate", RiskLevel: "critical"},
+		{Decision: "escalate", RiskLevel: "high"},
+		{Decision: "escalate", RiskLevel: "high"},
+		{Decision: "escalate", RiskLevel: "medium"},
+		{Decision: "escalate", RiskLevel: "low"},
+		{Decision: "auto_deny", RuleID: "secret-scan", RiskLevel: "critical"},
+		// Not escalate and not the secret-scan auto_deny special case — must be excluded,
+		// proving the breakdown isn't counting the full traffic mix.
+		{Decision: "auto_allow", RiskLevel: "low"},
+		{Decision: "auto_deny", RiskLevel: "high"},
+	}
+
+	s := ComputeSummary(entries)
+	assert.Equal(t, map[string]int{
+		"critical": 2,
+		"high":     2,
+		"medium":   1,
+		"low":      1,
+	}, s.RiskLevelCounts, "AC5: RiskLevelCounts must be scoped to escalate + secret-scan auto_deny only, matching EscalationReasonCounts' denominator")
+}
+
+// TestComputeSummary_should_ReturnEmptyRiskLevelCounts_When_NoEntriesInWindow covers the
+// zero-escalation edge case: an empty map, not a nil-panic or a spurious non-empty result.
+func TestComputeSummary_should_ReturnEmptyRiskLevelCounts_When_NoEntriesInWindow(t *testing.T) {
+	t.Parallel()
+	s := ComputeSummary(nil)
+	assert.Empty(t, s.RiskLevelCounts)
+}
+
+// TestAnalyticsStore_Stop_JoinsFlushGoroutine confirms Stop() actually waits for the
+// flush goroutine to exit rather than just signaling it — goleak.VerifyNone must see
+// nothing new relative to the pre-Start baseline immediately after Stop() returns,
+// with no polling/sleep needed.
+func TestAnalyticsStore_Stop_JoinsFlushGoroutine(t *testing.T) {
+	// Not t.Parallel(): this test's goleak.IgnoreCurrent()/VerifyNone() baseline
+	// can be polluted by other parallel tests' own background goroutines (e.g.
+	// database/sql connection-pool cleaners from their own createTestStorage
+	// pools) starting mid-flight and getting misattributed as "leaked" by this
+	// test. See the identical rationale on
+	// TestShutdown_WaitsForDeleteSessionCleanup_LiveInstanceNil in
+	// session_service_test.go.
+	storage := createTestStorage(t)
+	store := NewAnalyticsStore(storage)
+
+	baseline := goleak.IgnoreCurrent()
+	store.Start(context.Background())
+	store.Stop()
+
+	goleak.VerifyNone(t, baseline)
+}
+
+// TestAnalyticsStore_Stop_Idempotent confirms Stop() can be called multiple times
+// (e.g. once via t.Cleanup and once explicitly) without panicking.
+func TestAnalyticsStore_Stop_Idempotent(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	store := NewAnalyticsStore(storage)
+	store.Start(context.Background())
+
+	require.NotPanics(t, store.Stop)
+	require.NotPanics(t, store.Stop, "a second Stop() call must be a no-op, not a double-close panic")
+}
+
+// TestAnalyticsStore_Stop_BeforeStart_NoPanic confirms Stop() is safe to call on a
+// store that was never Start()ed (cancel is nil).
+func TestAnalyticsStore_Stop_BeforeStart_NoPanic(t *testing.T) {
+	t.Parallel()
+	store := NewAnalyticsStore(nil)
+	require.NotPanics(t, store.Stop)
+}
+
+// TestAnalyticsStore_Record_AfterStop_NoPanic confirms Record() after Stop() stays a
+// silent no-op (matching the existing buffer-full drop behavior) instead of panicking
+// on a send to a goroutine that is no longer draining the channel.
+func TestAnalyticsStore_Record_AfterStop_NoPanic(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	store := NewAnalyticsStore(storage)
+	store.Start(context.Background())
+	store.Stop()
+
+	require.NotPanics(t, func() {
+		store.Record(AnalyticsEntry{SessionID: "sess-1", ToolName: "Bash"})
+	})
 }

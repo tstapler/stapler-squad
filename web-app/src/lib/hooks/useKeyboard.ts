@@ -37,9 +37,12 @@ export function useKeyboard(
     (event: KeyboardEvent) => {
       if (!enabled) return;
 
-      // Ignore if we're in an input element
+      // Ignore if we're in an input element -- tagName covers INPUT/TEXTAREA/SELECT, but a
+      // contenteditable div (e.g. a rich-text omnibar) has no matching tagName, so it needs
+      // its own check too. Matches the precedent in shortcutRegistry.ts's isInputElement and
+      // OmnibarContext.tsx's equivalent guard.
       const target = event.target as HTMLElement;
-      if (ignoreElements.includes(target.tagName)) {
+      if (ignoreElements.includes(target.tagName) || target.isContentEditable) {
         return;
       }
 

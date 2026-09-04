@@ -1,174 +1,118 @@
 package session
 
-// pr_status_poller_test.go covers the discovery-path ordering bug: a real
-// GetPRForBranchConditional error must not be misread as a 304 "still no
-// PR yet" and silently re-arm the no-PR backoff.
-
 import (
-	"context"
-	"net/http"
-	"net/http/httptest"
 	"testing"
 
 	"github.com/tstapler/stapler-squad/github"
 )
 
-// newTestPRStatusPoller returns a poller with just enough state to call
-// fetchAndUpdatePRStatus directly, without spinning up the pollLoop goroutine
-// (which would require a passing auth check via Start/checkAllSessions).
-func newTestPRStatusPoller() *PRStatusPoller {
-	p := NewPRStatusPoller(nil)
-	p.ctx = context.Background()
-	return p
-}
+// TestApplyPRUpdate_FiresOnUpdated_WhenCheckConclusionChangesWithoutPriorityChange is the
+// regression test for Task 3.2.1a's changed-only-publish fix: onUpdated must fire when
+// only GitHubCheckConclusion changes (no priority-boundary crossing), and must NOT fire
+// when neither priority nor conclusion changed.
+func TestApplyPRUpdate_FiresOnUpdated_WhenCheckConclusionChangesWithoutPriorityChange(t *testing.T) {
+	t.Parallel()
+	inst := &Instance{Title: "ci-conclusion-test"}
+	// Seed a "blocking" priority with a "pending" CI conclusion so a later "failure"
+	// conclusion crosses no priority boundary (both are priority "blocking").
+	inst.UpdatePRStatus(PRStatusUpdate{State: "open", Priority: "blocking", CheckConclusion: "pending"})
 
-// withGhBaseURL points github.GhBaseURL at ts for the duration of the test.
-// Not parallel-safe: mutates a shared package global.
-func withGhBaseURL(t *testing.T, ts *httptest.Server) {
-	t.Helper()
-	orig := github.GhBaseURL
-	github.GhBaseURL = ts.URL + "/"
-	t.Cleanup(func() { github.GhBaseURL = orig })
-}
+	poller := NewPRStatusPoller(nil)
+	fired := 0
+	poller.SetOnUpdated(func(*Instance) { fired++ })
 
-func newDiscoveryTestInstance(t *testing.T) *Instance {
-	t.Helper()
-	inst, err := NewInstance(InstanceOptions{
-		Title:       "discovery-test",
-		Path:        t.TempDir(),
-		Branch:      "feature-branch",
-		GitHubOwner: "acme",
-		GitHubRepo:  "widgets",
+	// Conclusion-only change: "pending" -> "failure", priority stays "blocking".
+	poller.applyPRUpdate(inst, &github.PRInfo{
+		State:                 "open",
+		CheckConclusion:       "failure",
+		ApprovedCount:         0,
+		ChangesRequestedCount: 1, // forces DerivePRPriority to "blocking" again, same as before
+		IsDraft:               false,
 	})
-	if err != nil {
-		t.Fatalf("NewInstance: %v", err)
+	if fired != 1 {
+		t.Fatalf("expected onUpdated to fire once for a conclusion-only change, fired=%d", fired)
 	}
-	return inst
-}
-
-func TestFetchAndUpdatePRStatus_DiscoveryError_NotMisreadAsNoPR(t *testing.T) {
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusUnauthorized)
-	}))
-	defer ts.Close()
-	withGhBaseURL(t, ts)
-	t.Setenv("GITHUB_TOKEN", "fake-token")
-
-	p := newTestPRStatusPoller()
-	inst := newDiscoveryTestInstance(t)
-
-	p.fetchAndUpdatePRStatus(inst)
-
-	p.mu.RLock()
-	_, backoffArmed := p.noPRPollAfter[inst.Title]
-	p.mu.RUnlock()
-	if backoffArmed {
-		t.Fatal("401 discovery error must not arm the no-PR backoff")
+	if inst.Snapshot().GitHub.GitHubCheckConclusion != "failure" {
+		t.Errorf("expected GitHubCheckConclusion to be updated to %q, got %q", "failure", inst.Snapshot().GitHub.GitHubCheckConclusion)
 	}
 
-	v := p.authState.Load()
-	if v == nil {
-		t.Fatal("expected handleFetchError to record an auth-state result for a 401")
-	}
-	if r := v.(pollerAuthResult); r.ok {
-		t.Fatal("expected auth state to be marked failed after a 401 discovery error")
+	// No change at all: same conclusion, same priority-relevant inputs -> no event.
+	poller.applyPRUpdate(inst, &github.PRInfo{
+		State:                 "open",
+		CheckConclusion:       "failure",
+		ApprovedCount:         0,
+		ChangesRequestedCount: 1,
+		IsDraft:               false,
+	})
+	if fired != 1 {
+		t.Fatalf("expected onUpdated NOT to fire when neither priority nor conclusion changed, fired=%d", fired)
 	}
 }
 
-func TestFetchAndUpdatePRStatus_DiscoveryRateLimited_NotMisreadAsNoPR(t *testing.T) {
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusTooManyRequests)
-	}))
-	defer ts.Close()
-	withGhBaseURL(t, ts)
-	t.Setenv("GITHUB_TOKEN", "fake-token")
+// TestApplyPRUpdate_should_ThreadChecksReviewsMergeable_When_PRInfoPopulated verifies
+// Story 1.2.2's plumbing: applyPRUpdate must carry PRInfo's itemized Checks/Reviews and
+// its Mergeable string through PRStatusUpdate onto the Instance unchanged.
+func TestApplyPRUpdate_should_ThreadChecksReviewsMergeable_When_PRInfoPopulated(t *testing.T) {
+	t.Parallel()
+	inst := &Instance{Title: "checks-reviews-mergeable-test"}
+	poller := NewPRStatusPoller(nil)
 
-	p := newTestPRStatusPoller()
-	inst := newDiscoveryTestInstance(t)
+	checks := []github.CheckItem{
+		{Name: "build", Context: "ci/build", State: "SUCCESS", Status: "completed", Conclusion: "success"},
+		{Name: "lint", Context: "ci/lint", State: "FAILURE", Status: "completed", Conclusion: "failure"},
+	}
+	reviews := []github.ReviewItem{
+		{Author: "alice", State: "APPROVED", Body: "lgtm"},
+		{Author: "bob", State: "CHANGES_REQUESTED", Body: "please fix x"},
+	}
 
-	p.fetchAndUpdatePRStatus(inst)
+	poller.applyPRUpdate(inst, &github.PRInfo{
+		State:                 "open",
+		CheckConclusion:       "failure",
+		Mergeable:             "conflicting",
+		ApprovedCount:         1,
+		ChangesRequestedCount: 1,
+		IsDraft:               false,
+		Checks:                checks,
+		Reviews:               reviews,
+	})
 
-	p.mu.RLock()
-	_, backoffArmed := p.noPRPollAfter[inst.Title]
-	p.mu.RUnlock()
-	if backoffArmed {
-		t.Fatal("429 discovery error must not arm the no-PR backoff")
+	snap := inst.Snapshot()
+	if snap.GitHub.GitHubMergeable != "conflicting" {
+		t.Errorf("expected GitHubMergeable %q, got %q", "conflicting", snap.GitHub.GitHubMergeable)
+	}
+	if len(snap.GitHub.GitHubChecks) != len(checks) {
+		t.Fatalf("expected %d checks, got %d", len(checks), len(snap.GitHub.GitHubChecks))
+	}
+	for i, c := range checks {
+		if snap.GitHub.GitHubChecks[i] != c {
+			t.Errorf("check[%d]: expected %+v, got %+v", i, c, snap.GitHub.GitHubChecks[i])
+		}
+	}
+	if len(snap.GitHub.GitHubReviewFeedback) != len(reviews) {
+		t.Fatalf("expected %d reviews, got %d", len(reviews), len(snap.GitHub.GitHubReviewFeedback))
+	}
+	for i, r := range reviews {
+		if snap.GitHub.GitHubReviewFeedback[i] != r {
+			t.Errorf("review[%d]: expected %+v, got %+v", i, r, snap.GitHub.GitHubReviewFeedback[i])
+		}
 	}
 }
 
-func TestFetchAndUpdatePRStatus_DiscoveryParseFailure_NotMisreadAsNoPR(t *testing.T) {
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("not json"))
-	}))
-	defer ts.Close()
-	withGhBaseURL(t, ts)
-	t.Setenv("GITHUB_TOKEN", "fake-token")
+// TestPRStatusPoller_ETagCache_ReturnsSharedNonNilInstance is the regression
+// test for ADR-022's original intent: WorktreePRPoller must reuse
+// PRStatusPoller's *github.ETagCache (via this getter) rather than each
+// poller constructing its own, which would double GitHub API call volume for
+// repos both pollers hit.
+func TestPRStatusPoller_ETagCache_ReturnsSharedNonNilInstance(t *testing.T) {
+	t.Parallel()
+	poller := NewPRStatusPoller(nil)
 
-	p := newTestPRStatusPoller()
-	inst := newDiscoveryTestInstance(t)
-
-	p.fetchAndUpdatePRStatus(inst)
-
-	p.mu.RLock()
-	_, backoffArmed := p.noPRPollAfter[inst.Title]
-	p.mu.RUnlock()
-	if backoffArmed {
-		t.Fatal("a body-parse failure must not arm the no-PR backoff")
+	cache := poller.ETagCache()
+	if cache == nil {
+		t.Fatal("ETagCache() = nil, want a non-nil *github.ETagCache")
 	}
-}
-
-// TestFetchAndUpdatePRStatus_DiscoveryTrue304_ArmsBackoff is the positive
-// control: a genuine 304 (changed=false, err=nil) must still re-arm the
-// no-PR backoff exactly as before the ordering fix.
-func TestFetchAndUpdatePRStatus_DiscoveryTrue304_ArmsBackoff(t *testing.T) {
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("ETag", `"same-etag"`)
-		w.WriteHeader(http.StatusNotModified)
-	}))
-	defer ts.Close()
-	withGhBaseURL(t, ts)
-	t.Setenv("GITHUB_TOKEN", "fake-token")
-
-	p := newTestPRStatusPoller()
-	inst := newDiscoveryTestInstance(t)
-
-	p.fetchAndUpdatePRStatus(inst)
-
-	p.mu.RLock()
-	_, backoffArmed := p.noPRPollAfter[inst.Title]
-	p.mu.RUnlock()
-	if !backoffArmed {
-		t.Fatal("a true 304 (unchanged, no error) must still re-arm the no-PR backoff")
-	}
-}
-
-// TestFetchAndUpdatePRStatus_DiscoveryErrNoPR_AppliesNoPR is the positive
-// control for the ErrNoPR case (changed=true, err=ErrNoPR): must still route
-// to applyNoPR, not the generic-error branch.
-func TestFetchAndUpdatePRStatus_DiscoveryErrNoPR_AppliesNoPR(t *testing.T) {
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("[]"))
-	}))
-	defer ts.Close()
-	withGhBaseURL(t, ts)
-	t.Setenv("GITHUB_TOKEN", "fake-token")
-
-	p := newTestPRStatusPoller()
-	inst := newDiscoveryTestInstance(t)
-
-	p.fetchAndUpdatePRStatus(inst)
-
-	p.mu.RLock()
-	_, backoffArmed := p.noPRPollAfter[inst.Title]
-	p.mu.RUnlock()
-	if !backoffArmed {
-		t.Fatal("ErrNoPR (empty PR list) must still arm the no-PR backoff via applyNoPR")
-	}
-	if snap := inst.Snapshot(); snap.GitHub.GitHubPRPriority != string(github.PRPriorityNoPR) {
-		t.Fatalf("expected priority %q after ErrNoPR, got %q", github.PRPriorityNoPR, snap.GitHub.GitHubPRPriority)
+	if poller.ETagCache() != cache {
+		t.Error("ETagCache() returned a different instance on a repeated call, want the same shared instance every time")
 	}
 }

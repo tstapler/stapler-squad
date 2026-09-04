@@ -26,6 +26,13 @@ export const STUCK_REASON_LABELS: Record<StuckReason, string> = {
   [StuckReason.PLAN_NOT_APPROVED]: "Waiting on plan approval",
   [StuckReason.PR_PENDING_NO_PR]: "PR reference lost",
   [StuckReason.REWORK_BLOCKED_STALE]: "Rework blocked — session stalled",
+  [StuckReason.PR_NEEDS_FIX]: "PR needs attention",
+  [StuckReason.RESPAWN_BLOCKED_ACTIVE]: "Auto-respawn skipped — session active",
+  [StuckReason.LIKELY_FLAKY]: "Possibly flaky — verify before assuming",
+  [StuckReason.BLOCKED_BY_DEPENDENCY]: "Waiting on blocker item",
+  [StuckReason.MULTIPLE_REASONS]: "Multiple reasons stuck",
+  [StuckReason.BOUNCE_CAP_EXHAUSTED]: "Bounce cap exhausted",
+  [StuckReason.STEER_FAILED]: "Steer attempt failed",
 };
 
 /** Decorative icon glyph for every StuckReason (never the sole signal — text label always accompanies it). */
@@ -43,6 +50,13 @@ export const STUCK_REASON_ICONS: Record<StuckReason, string> = {
   [StuckReason.PLAN_NOT_APPROVED]: "🟡",
   [StuckReason.PR_PENDING_NO_PR]: "⛔",
   [StuckReason.REWORK_BLOCKED_STALE]: "🟥",
+  [StuckReason.PR_NEEDS_FIX]: "🟡",
+  [StuckReason.RESPAWN_BLOCKED_ACTIVE]: "🟡",
+  [StuckReason.LIKELY_FLAKY]: "🟡",
+  [StuckReason.BLOCKED_BY_DEPENDENCY]: "🟠",
+  [StuckReason.MULTIPLE_REASONS]: "🔺",
+  [StuckReason.BOUNCE_CAP_EXHAUSTED]: "🛑",
+  [StuckReason.STEER_FAILED]: "⛔",
 };
 
 /** vanilla-extract class per StuckReason (design/ux.md Surface 7 chip legend). */
@@ -60,6 +74,13 @@ export const STUCK_REASON_CLASS: Record<StuckReason, string> = {
   [StuckReason.PLAN_NOT_APPROVED]: styles.chipPlanNotApproved,
   [StuckReason.PR_PENDING_NO_PR]: styles.chipPrPendingNoPR,
   [StuckReason.REWORK_BLOCKED_STALE]: styles.chipReworkBlockedStale,
+  [StuckReason.PR_NEEDS_FIX]: styles.chipPrNeedsFix,
+  [StuckReason.RESPAWN_BLOCKED_ACTIVE]: styles.chipRespawnBlockedActive,
+  [StuckReason.LIKELY_FLAKY]: styles.chipLikelyFlaky,
+  [StuckReason.BLOCKED_BY_DEPENDENCY]: styles.chipBlockedByDependency,
+  [StuckReason.MULTIPLE_REASONS]: styles.chipEscalated,
+  [StuckReason.BOUNCE_CAP_EXHAUSTED]: styles.chipEscalated,
+  [StuckReason.STEER_FAILED]: styles.chipSteerFailed,
 };
 
 /** Derived (not stored) reason label/class for a stale GitHub-status check (design/ux.md Surface 8). */
@@ -101,6 +122,19 @@ export function isPrStatusUnknown(
   const lastCheckedMs = timestampToMs(item.lastCheckedAt);
   if (lastCheckedMs === null) return true;
   return now - lastCheckedMs > PR_STATUS_STALE_THRESHOLD_MS;
+}
+
+/**
+ * Mirrors session.MaxRemediationAttempts (session/backlog_remediation.go) —
+ * the backoff schedule has 5 entries (30m/2h/8h/24h/72h), so a row with
+ * remediation_attempts >= 5 is "parked". Not sourced from the proto response
+ * itself since the cap is a backend policy constant, not per-item data.
+ */
+export const MAX_REMEDIATION_ATTEMPTS = 5;
+
+/** Whether automated retries are exhausted and only a manual Reset can unstick this item. */
+export function isRemediationParked(item: Pick<StuckBacklogItem, "remediationAttempts">): boolean {
+  return item.remediationAttempts >= MAX_REMEDIATION_ATTEMPTS;
 }
 
 /**
