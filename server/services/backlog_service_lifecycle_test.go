@@ -1191,6 +1191,10 @@ type alwaysAllowWorkflowEngine struct{}
 
 func (alwaysAllowWorkflowEngine) CanTransition(_, _ session.BacklogStatus) bool { return true }
 
+func (alwaysAllowWorkflowEngine) PendingGates(_ session.BacklogItemTransitionInput, _ session.BacklogStatus) ([]session.GateStatus, error) {
+	return nil, nil
+}
+
 func (alwaysAllowWorkflowEngine) ValidateGates(_ session.BacklogItemTransitionInput, _ session.BacklogStatus) error {
 	return nil
 }
