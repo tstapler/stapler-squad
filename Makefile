@@ -560,6 +560,18 @@ test: ensure-tools proto-gen $(BIN_TMUX) ## Run all tests (skips slow integratio
 test-verbose: ensure-tools proto-gen ## Run tests with verbose output
 	go test -short -v ./...
 
+test-affected: ensure-tools proto-gen ## Run tests only for packages transitively affected by changes vs BASE (default origin/main); usage: make test-affected [BASE=some-ref]
+	@pkgs="$$(python3 scripts/test-affected.py $(or $(BASE),origin/main))"; \
+	if [ -z "$$pkgs" ]; then \
+		echo "No Go packages affected by changes vs $(or $(BASE),origin/main)"; \
+	else \
+		echo "Affected packages:"; echo "$$pkgs"; \
+		go test -short -timeout=20m $$pkgs; \
+	fi
+
+test-affected-web: ## Run only the web-app Jest tests transitively affected by changes vs BASE (default origin/main); usage: make test-affected-web [BASE=some-ref]
+	cd web-app && BASE=$(or $(BASE),origin/main) pnpm run test:affected
+
 test-coverage: ensure-tools proto-gen $(BIN_TMUX) ## Run tests with coverage report (HTML)
 	# Same tmux-contention root cause as the test target above -- see its comment.
 	# Split into two invocations and merge the resulting coverage profiles since
@@ -688,6 +700,9 @@ benchmark: ensure-tools proto-gen ## Run all benchmarks
 	@echo "Running comprehensive benchmarks..."
 	go test -bench=. -benchmem -timeout=10m ./... > benchmark_results.txt 2>&1 &
 	@echo "Benchmarks running in background. Results will be saved to benchmark_results.txt"
+
+benchmark-soak: ensure-tools proto-gen ## Run the gogitstore sustained-load soak benchmark (~20-25s, not part of make test/test-integration/ci)
+	go test -bench=BenchmarkGogitstoreSoakUnderSustainedLoad -benchtime=1x -run '^$$' -v -timeout=2m ./session/unfinished/gogitstore/
 
 # Development tools installation
 install-tools: ensure-tools ## Install all development and analysis tools
