@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 	"time"
 
@@ -75,7 +76,10 @@ func TestUserPRCache_Stop_Idempotent(t *testing.T) {
 func TestUserPRCache_Stop_BoundedAgainstHangingEndpoint(t *testing.T) {
 	t.Setenv("GITHUB_TOKEN", "test-token")
 
+	requestReceived := make(chan struct{})
+	var closeOnce sync.Once
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		closeOnce.Do(func() { close(requestReceived) })
 		// Block until the client cancels (mirrors a hanging GitHub endpoint),
 		// with a generous fallback so the test can't hang forever if
 		// cancellation doesn't propagate as expected.
@@ -89,6 +93,12 @@ func TestUserPRCache_Stop_BoundedAgainstHangingEndpoint(t *testing.T) {
 
 	c := NewUserPRCache()
 	c.Start(context.Background())
+
+	select {
+	case <-requestReceived:
+	case <-time.After(10 * time.Second):
+		t.Fatal("loop()'s initial fetch never reached the fake endpoint — Stop() below would be testing nothing")
+	}
 
 	start := time.Now()
 	c.Stop()

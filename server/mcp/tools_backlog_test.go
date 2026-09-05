@@ -2405,7 +2405,8 @@ func TestImportGitHubIssue_should_PersistItem_When_IssueFetchSucceeds(t *testing
 		}`))
 	}))
 	defer srv.Close()
-	defer githubpkg.SetGhBaseURLForTest(srv.URL + "/")()
+	restoreGhBaseURL := githubpkg.SetGhBaseURLForTest(srv.URL + "/")
+	defer restoreGhBaseURL()
 
 	storage := newTestBacklogStorage(t)
 	handler := &backlogHandlers{storage: storage}
@@ -2447,7 +2448,8 @@ func TestImportGitHubIssue_should_Succeed_When_NoSessionUUID(t *testing.T) {
 		}`))
 	}))
 	defer srv.Close()
-	defer githubpkg.SetGhBaseURLForTest(srv.URL + "/")()
+	restoreGhBaseURL := githubpkg.SetGhBaseURLForTest(srv.URL + "/")
+	defer restoreGhBaseURL()
 
 	storage := newTestBacklogStorage(t)
 	handler := &backlogHandlers{storage: storage}
@@ -2479,7 +2481,8 @@ func TestImportGitHubIssue_should_TriggerTriage_When_BacklogSvcWiredAndRepoPathS
 		}`))
 	}))
 	defer srv.Close()
-	defer githubpkg.SetGhBaseURLForTest(srv.URL + "/")()
+	restoreGhBaseURL := githubpkg.SetGhBaseURLForTest(srv.URL + "/")
+	defer restoreGhBaseURL()
 
 	storage := newTestBacklogStorage(t)
 	backlogSvc := services.NewBacklogService(storage, nil, nil, nil, nil, nil)

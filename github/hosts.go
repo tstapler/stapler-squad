@@ -39,8 +39,11 @@ var enterpriseBaseURLOverride = map[string]string{}
 
 // SetEnterpriseBaseURLOverride registers a per-host API override for tests
 // (pass url == "" to clear it), mirroring GhBaseURL's test seam for
-// github.com.
+// github.com. host is normalized the same way RestBaseURLForHost/
+// graphQLURLForHost normalize their lookup key, so callers may pass a raw
+// host (with scheme, casing, or trailing slash) and still hit the override.
 func SetEnterpriseBaseURLOverride(host, url string) {
+	host = NormalizeHost(host)
 	hostConfigMu.Lock()
 	defer hostConfigMu.Unlock()
 	if url == "" {

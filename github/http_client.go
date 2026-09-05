@@ -77,8 +77,11 @@ func GhBaseURL() string {
 
 // SetGhBaseURLForTest overrides GhBaseURL for the duration of a test (e.g. to
 // point at an httptest.Server so requests never reach the real API) and
-// returns a restore func.
+// returns a restore func. A missing trailing slash is added — graphQLURLForHost
+// builds the GraphQL endpoint via straight concatenation (GhBaseURL()+"graphql"),
+// so an un-slashed override would otherwise produce a malformed URL.
 func SetGhBaseURLForTest(url string) (restore func()) {
+	url = strings.TrimSuffix(url, "/") + "/"
 	hostConfigMu.Lock()
 	prev := ghBaseURL
 	ghBaseURL = url
