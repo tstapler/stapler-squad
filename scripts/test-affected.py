@@ -6,18 +6,46 @@ its normal build OR its test build) a package that changed. Uses `go list
 -json -test ./...` as the single source of truth for the dependency graph --
 no separate go/packages dependency needed.
 
+This only sees changed *.go files. Non-.go sources that generate .go code
+many packages import -- .proto files above all, since the generated code
+they produce is gitignored and not committed (see CLAUDE.md) -- are
+invisible to a plain .go-file diff. FULL_RESCAN_TRIGGERS below forces the
+safe fallback (print __ALL__, meaning "run everything") whenever one of
+those changed, rather than silently under-selecting packages that actually
+need re-testing.
+
 Usage: test-affected.py [BASE_REF]   (default: origin/main)
-Prints one import path per line to stdout. Exits 0 with no output if nothing
-changed or nothing is affected.
+Prints one import path per line to stdout, or the single line __ALL__ if a
+FULL_RESCAN_TRIGGERS path changed (caller should treat that as "run the
+full suite, this script can't safely narrow it"). Exits 0 with no output if
+nothing changed or nothing is affected.
 """
+import fnmatch
 import json
 import re
 import subprocess
 import sys
 
+# Changing any of these means the .go-import-graph analysis above can't be
+# trusted to have seen every affected package -- fall back to a full run.
+# Globs are matched against repo-root-relative paths via fnmatch (supports
+# '*' crossing '/', same as this project's other pathspec-style globs).
+FULL_RESCAN_TRIGGERS = [
+    "proto/*",
+    "go.mod",
+    "go.sum",
+    "Makefile",
+    ".golangci.yml",
+    "scripts/test-affected.py",  # don't trust a change to this script's own logic
+]
+
 
 def sh(cmd):
     return subprocess.run(cmd, capture_output=True, text=True, check=True).stdout
+
+
+def matches_full_rescan_trigger(path):
+    return any(fnmatch.fnmatch(path, pattern) for pattern in FULL_RESCAN_TRIGGERS)
 
 
 def parse_json_stream(raw):
@@ -40,12 +68,19 @@ def main():
 
     # Union of: committed changes since the merge-base with BASE, uncommitted
     # tracked edits, and new untracked files -- so this reflects the working
-    # tree, not just what's already committed.
-    changed_files = set()
-    changed_files.update(sh(["git", "diff", "--name-only", f"{base}...HEAD", "--", "*.go"]).splitlines())
-    changed_files.update(sh(["git", "diff", "--name-only", "HEAD", "--", "*.go"]).splitlines())
-    changed_files.update(sh(["git", "ls-files", "--others", "--exclude-standard", "--", "*.go"]).splitlines())
-    changed_files.discard("")
+    # tree, not just what's already committed. Gathered across ALL files (not
+    # just *.go) so FULL_RESCAN_TRIGGERS can see non-.go changes too.
+    all_changed = set()
+    all_changed.update(sh(["git", "diff", "--name-only", f"{base}...HEAD"]).splitlines())
+    all_changed.update(sh(["git", "diff", "--name-only", "HEAD"]).splitlines())
+    all_changed.update(sh(["git", "ls-files", "--others", "--exclude-standard"]).splitlines())
+    all_changed.discard("")
+
+    if any(matches_full_rescan_trigger(f) for f in all_changed):
+        print("__ALL__")
+        return
+
+    changed_files = {f for f in all_changed if f.endswith(".go")}
     if not changed_files:
         return
 

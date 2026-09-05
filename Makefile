@@ -564,6 +564,9 @@ test-affected: ensure-tools proto-gen ## Run tests only for packages transitivel
 	@pkgs="$$(python3 scripts/test-affected.py $(or $(BASE),origin/main))"; \
 	if [ -z "$$pkgs" ]; then \
 		echo "No Go packages affected by changes vs $(or $(BASE),origin/main)"; \
+	elif [ "$$pkgs" = "__ALL__" ]; then \
+		echo "A change vs $(or $(BASE),origin/main) can't be safely narrowed (proto/go.mod/go.sum/Makefile/.golangci.yml/the affected-test script itself) -- running the full suite"; \
+		go test -short -timeout=20m ./...; \
 	else \
 		echo "Affected packages:"; echo "$$pkgs"; \
 		go test -short -timeout=20m $$pkgs; \
