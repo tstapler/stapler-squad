@@ -3465,6 +3465,22 @@ func cleanupPartialCreation(instance *session.Instance) error {
 		return instance.Destroy()
 	}
 
+	// BUG-099 root cause: the Started()==false branch below never called
+	// Destroy(), so it never called StopSessionDriver either — leaving a
+	// SessionDriver goroutine that the async creation pipeline was still
+	// racing to start (via StartSessionDriver, after this Started() read)
+	// completely un-stoppable, since nothing ever sets driverDestroyed or
+	// closes its stop channel. Confirmed via a goroutine dump during a
+	// reliably-reproducing flaky test: the driver goroutine polled forever
+	// after DeleteSession returned, and JoinSessionDriver's wait always timed
+	// out regardless of how long it was given. Call it unconditionally here,
+	// mirroring Destroy()'s own top-of-function call (session/instance.go) and
+	// for the identical reason its doc comment gives: marking driverDestroyed
+	// now guarantees a StartSessionDriver call that arrives after this point —
+	// even one already in flight — refuses to start a driver goroutine that
+	// nothing would ever be able to stop.
+	session.StopSessionDriver(instance)
+
 	// Task 3.1.1d: defense-in-depth liveness guard. instance.Started() is
 	// only flipped true at the very end of Instance.Start() (session/instance.go's
 	// startLocked, i.started.Store(true)) -- well after the worktree is set up

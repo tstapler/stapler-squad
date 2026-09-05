@@ -162,6 +162,25 @@ func GetConfigDir() (string, error) {
 	return GetConfigDirForDir("")
 }
 
+// pruneStaleTestDirsOnce bounds pruneStaleTestDirs (called below, in the
+// IsTestMode branch) to a single run per process. GetConfigDirForDir runs on
+// every LoadConfig() call, which itself runs on every
+// tmux.AcquireExecSlot/AcquireResyncExecSlot/AcquireInputExecSlot — i.e. once
+// per tmux subprocess spawn, so once per SessionDriver poll tick
+// (session/session_driver.go's runSessionDriverWithPrompt calls
+// Instance.PreviewContext every ~2s). Without this guard, a long-running test
+// binary re-scans (and potentially os.RemoveAll's) the entire shared
+// ~/.stapler-squad/test/ directory on every single one of those calls; once a
+// local machine has accumulated enough stale test-<pid> dirs from prior runs,
+// that scan can take longer than a poll tick, and since os.ReadDir/
+// os.RemoveAll have no cancellation point, a caller polling on a tight loop
+// (like SessionDriver) briefly can't make progress until the scan finishes.
+// Surfaced as a secondary finding while investigating BUG-099 — not that
+// bug's actual root cause (a goroutine dump showed it during one incidental
+// slow run), but a real, independent hot-path inefficiency worth fixing
+// regardless: see docs/bugs/fixed/BUG-099-*.md.
+var pruneStaleTestDirsOnce sync.Once //nolint:gochecknoglobals
+
 // GetConfigDirForDir returns the path to the application's configuration directory
 // using the provided directory for workspace-based isolation.
 func GetConfigDirForDir(dir string) (string, error) {
@@ -206,7 +225,7 @@ func GetConfigDirForDir(dir string) (string, error) {
 	if IsTestMode() {
 		// Each test/benchmark process gets its own isolated state
 		testBaseDir := filepath.Join(baseDir, "test")
-		pruneStaleTestDirs(testBaseDir)
+		pruneStaleTestDirsOnce.Do(func() { pruneStaleTestDirs(testBaseDir) })
 		pid := os.Getpid()
 		return filepath.Join(testBaseDir, fmt.Sprintf("test-%d", pid)), nil
 	}
