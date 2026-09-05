@@ -675,6 +675,28 @@ func (t *TmuxSession) runCMSender(doneCh <-chan struct{}, stdin io.WriteCloser, 
 	defer close(senderExitedCh)
 
 	process := func(req cmSendReq) {
+		// Bail out if shutdown was already signaled before doing anything else.
+		// The outer loop's select can pick this generation's normPriCh/highPriCh
+		// case over its own (already-closed) doneCh case when both are ready —
+		// select among ready cases is unspecified, not doneCh-priority — so
+		// process() can still be called after doneCh closes instead of drain().
+		// Without this check that late call would append to the *shared*
+		// t.pendingCmds field (never reset per-generation, only ever nilled by
+		// the reader goroutine's own exit cleanup), and if a subsequent
+		// StartControlMode has already begun by the time that append happens,
+		// the resultCh lands in the new generation's FIFO — silently matching
+		// this stale caller up with a future generation's %begin/%end response
+		// instead of failing it with ErrControlModeStopped.
+		select {
+		case <-doneCh:
+			select {
+			case req.resultCh <- cmdResult{err: ErrControlModeStopped}:
+			default:
+			}
+			return
+		default:
+		}
+
 		// Enqueue the response channel BEFORE writing so the reader goroutine
 		// never encounters a %begin with no matching pending channel.
 		// Guard against controlModeExited: if %exit was already processed, the drain
