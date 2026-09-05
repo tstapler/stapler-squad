@@ -2405,9 +2405,7 @@ func TestImportGitHubIssue_should_PersistItem_When_IssueFetchSucceeds(t *testing
 		}`))
 	}))
 	defer srv.Close()
-	prevBaseURL := githubpkg.GhBaseURL
-	githubpkg.GhBaseURL = srv.URL + "/"
-	defer func() { githubpkg.GhBaseURL = prevBaseURL }()
+	defer githubpkg.SetGhBaseURLForTest(srv.URL + "/")()
 
 	storage := newTestBacklogStorage(t)
 	handler := &backlogHandlers{storage: storage}
@@ -2449,9 +2447,7 @@ func TestImportGitHubIssue_should_Succeed_When_NoSessionUUID(t *testing.T) {
 		}`))
 	}))
 	defer srv.Close()
-	prevBaseURL := githubpkg.GhBaseURL
-	githubpkg.GhBaseURL = srv.URL + "/"
-	defer func() { githubpkg.GhBaseURL = prevBaseURL }()
+	defer githubpkg.SetGhBaseURLForTest(srv.URL + "/")()
 
 	storage := newTestBacklogStorage(t)
 	handler := &backlogHandlers{storage: storage}
@@ -2483,9 +2479,7 @@ func TestImportGitHubIssue_should_TriggerTriage_When_BacklogSvcWiredAndRepoPathS
 		}`))
 	}))
 	defer srv.Close()
-	prevBaseURL := githubpkg.GhBaseURL
-	githubpkg.GhBaseURL = srv.URL + "/"
-	defer func() { githubpkg.GhBaseURL = prevBaseURL }()
+	defer githubpkg.SetGhBaseURLForTest(srv.URL + "/")()
 
 	storage := newTestBacklogStorage(t)
 	backlogSvc := services.NewBacklogService(storage, nil, nil, nil, nil, nil)
@@ -3557,8 +3551,7 @@ func (f *fakeReviewTrigger) TriggerReviewForSession(sessionUUID string) {
 // GhBaseURL is exported specifically so each consuming package can point it
 // at an httptest.Server without needing a shared cross-package test helper.
 func resetGhBaseURL(ts *httptest.Server) func() {
-	githubpkg.GhBaseURL = ts.URL + "/"
-	return func() { githubpkg.GhBaseURL = "https://api.github.com/" }
+	return githubpkg.SetGhBaseURLForTest(ts.URL + "/")
 }
 
 // TestReportDuplicate_VerifyGitHubRefExists_DispatchesPRTypeToRealGetPR

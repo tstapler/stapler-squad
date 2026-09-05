@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -54,9 +55,40 @@ func (t *rateLimitTransport) RoundTrip(req *http.Request) (*http.Response, error
 	return resp, err
 }
 
-// GhBaseURL is the GitHub REST API base URL. Tests override this to point at
-// an httptest.Server so requests never reach the real API.
-var GhBaseURL = "https://api.github.com/"
+// hostConfigMu guards ghBaseURL (below) and EnterpriseBaseURLOverride
+// (hosts.go). Production code never mutates either after init, but dozens of
+// tests across packages override them via SetGhBaseURLForTest /
+// SetEnterpriseBaseURLOverride to point at an httptest.Server, and without a
+// lock those writes race the reads RestBaseURLForHost/graphQLURLForHost do on
+// every native GitHub call — the same class of bug keychainMu (keychain.go)
+// already guards against for the keyring.
+var hostConfigMu sync.RWMutex
+
+// ghBaseURL is the GitHub REST/GraphQL API base URL for github.com. Access it
+// only via GhBaseURL/SetGhBaseURLForTest — never read/write it directly.
+var ghBaseURL = "https://api.github.com/"
+
+// GhBaseURL returns the current GitHub REST/GraphQL API base URL for github.com.
+func GhBaseURL() string {
+	hostConfigMu.RLock()
+	defer hostConfigMu.RUnlock()
+	return ghBaseURL
+}
+
+// SetGhBaseURLForTest overrides GhBaseURL for the duration of a test (e.g. to
+// point at an httptest.Server so requests never reach the real API) and
+// returns a restore func.
+func SetGhBaseURLForTest(url string) (restore func()) {
+	hostConfigMu.Lock()
+	prev := ghBaseURL
+	ghBaseURL = url
+	hostConfigMu.Unlock()
+	return func() {
+		hostConfigMu.Lock()
+		ghBaseURL = prev
+		hostConfigMu.Unlock()
+	}
+}
 
 // ghTokenCache holds the most recently read keychain token and the time it was
 // fetched.  env-var tokens bypass the cache entirely (they are cheap to read).

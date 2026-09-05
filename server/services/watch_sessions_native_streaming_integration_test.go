@@ -211,8 +211,7 @@ func TestWatchSessions_should_DeliverMultipleEventsOverNativeHTTP2Stream_When_Ca
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(`{}`))
 	}))
-	prevGhBaseURL := gh.GhBaseURL
-	gh.GhBaseURL = ghStub.URL + "/"
+	restoreGhBaseURL := gh.SetGhBaseURLForTest(ghStub.URL + "/")
 
 	deps := newNarrowServerDeps(t)
 
@@ -257,7 +256,7 @@ func TestWatchSessions_should_DeliverMultipleEventsOverNativeHTTP2Stream_When_Ca
 	// and the srv.Shutdown defer so LIFO runs it after shutdown but before the
 	// goleak check.
 	defer func() {
-		gh.GhBaseURL = prevGhBaseURL
+		restoreGhBaseURL()
 		ghStub.Close()
 	}()
 	defer func() {
