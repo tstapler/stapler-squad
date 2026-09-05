@@ -146,11 +146,17 @@ func (t *TmuxSession) StartControlMode() error {
 	}
 	t.controlModeExited = false
 	t.controlModeRefCount = 1
+	// Snapshot the just-created channels under the lock so runCMSender can be
+	// handed its own local copies instead of re-reading these fields for the
+	// rest of its life (see runCMSender's doc comment for why that matters).
+	doneCh := t.controlModeDone
+	highPriCh := t.highPriSendCh
+	normPriCh := t.normPriSendCh
+	senderExitedCh := t.cmSenderExited
 	t.controlModeSubMu.Unlock()
 
 	// Start goroutines: priority sender, output reader, stderr monitor.
-	doneCh := t.controlModeDone
-	go t.runCMSender(doneCh, stdin)
+	go t.runCMSender(doneCh, stdin, highPriCh, normPriCh, senderExitedCh)
 	go t.readControlModeOutput()
 	go t.monitorControlModeErrors(stderr)
 
@@ -214,10 +220,15 @@ func (t *TmuxSession) startRemoteControlMode() error {
 	}
 	t.controlModeExited = false
 	t.controlModeRefCount = 1
+	// Snapshot under the lock — see StartControlMode's local branch for why
+	// runCMSender must never read these fields directly after launch.
+	doneCh := t.controlModeDone
+	highPriCh := t.highPriSendCh
+	normPriCh := t.normPriSendCh
+	senderExitedCh := t.cmSenderExited
 	t.controlModeSubMu.Unlock()
 
-	doneCh := t.controlModeDone
-	go t.runCMSender(doneCh, stdin)
+	go t.runCMSender(doneCh, stdin, highPriCh, normPriCh, senderExitedCh)
 	go t.readControlModeOutput()
 
 	log.Info("successfully started remote control mode", "session", t.sanitizedName)
@@ -645,11 +656,47 @@ func (t *TmuxSession) processControlModeLine(line string) {
 // priority over background operations.
 //
 // doneCh is closed by StopControlMode to trigger shutdown. The goroutine closes
-// cmSenderExited when it returns so that StopControlMode can safely close stdin.
-func (t *TmuxSession) runCMSender(doneCh <-chan struct{}, stdin io.WriteCloser) {
-	defer close(t.cmSenderExited)
+// senderExitedCh when it returns so that StopControlMode can safely close stdin.
+//
+// highPriCh, normPriCh, and senderExitedCh are handed in as the caller's local
+// snapshot of t.highPriSendCh/t.normPriSendCh/t.cmSenderExited taken at the moment
+// this goroutine was launched (see StartControlMode/startRemoteControlMode), and
+// must be used exclusively from here on instead of re-reading the t.-prefixed
+// fields. StopControlMode's wait for senderExitedCh has a 2s timeout and proceeds
+// with teardown (and a subsequent StartControlMode may run) even if this goroutine
+// hasn't actually exited yet — e.g. because it's blocked in a stdin write. If this
+// loop read t.highPriSendCh/t.normPriSendCh/t.cmSenderExited directly, a
+// same-instance restart reassigning those fields while this goroutine is still
+// alive would race with those reads (confirmed by `go test -race`: CI runs
+// 33931403956/33952649490). Using captured locals makes this goroutine's lifetime
+// irrelevant to that race — it only ever touches the channel values it started
+// with, never the fields a concurrent Start/Stop cycle is mutating.
+func (t *TmuxSession) runCMSender(doneCh <-chan struct{}, stdin io.WriteCloser, highPriCh, normPriCh chan cmSendReq, senderExitedCh chan struct{}) {
+	defer close(senderExitedCh)
 
 	process := func(req cmSendReq) {
+		// Bail out if shutdown was already signaled before doing anything else.
+		// The outer loop's select can pick this generation's normPriCh/highPriCh
+		// case over its own (already-closed) doneCh case when both are ready —
+		// select among ready cases is unspecified, not doneCh-priority — so
+		// process() can still be called after doneCh closes instead of drain().
+		// Without this check that late call would append to the *shared*
+		// t.pendingCmds field (never reset per-generation, only ever nilled by
+		// the reader goroutine's own exit cleanup), and if a subsequent
+		// StartControlMode has already begun by the time that append happens,
+		// the resultCh lands in the new generation's FIFO — silently matching
+		// this stale caller up with a future generation's %begin/%end response
+		// instead of failing it with ErrControlModeStopped.
+		select {
+		case <-doneCh:
+			select {
+			case req.resultCh <- cmdResult{err: ErrControlModeStopped}:
+			default:
+			}
+			return
+		default:
+		}
+
 		// Enqueue the response channel BEFORE writing so the reader goroutine
 		// never encounters a %begin with no matching pending channel.
 		// Guard against controlModeExited: if %exit was already processed, the drain
@@ -675,12 +722,12 @@ func (t *TmuxSession) runCMSender(doneCh <-chan struct{}, stdin io.WriteCloser) 
 	drain := func(err error) {
 		for {
 			select {
-			case req := <-t.highPriSendCh:
+			case req := <-highPriCh:
 				select {
 				case req.resultCh <- cmdResult{err: err}:
 				default:
 				}
-			case req := <-t.normPriSendCh:
+			case req := <-normPriCh:
 				select {
 				case req.resultCh <- cmdResult{err: err}:
 				default:
@@ -694,16 +741,16 @@ func (t *TmuxSession) runCMSender(doneCh <-chan struct{}, stdin io.WriteCloser) 
 	for {
 		// Always drain high-priority queue first before considering normal-priority.
 		select {
-		case req := <-t.highPriSendCh:
+		case req := <-highPriCh:
 			process(req)
 			continue
 		default:
 		}
 
 		select {
-		case req := <-t.highPriSendCh:
+		case req := <-highPriCh:
 			process(req)
-		case req := <-t.normPriSendCh:
+		case req := <-normPriCh:
 			process(req)
 		case <-doneCh:
 			drain(ErrControlModeStopped)

@@ -31,7 +31,7 @@ func newDispatchTestSession(t *testing.T) (*TmuxSession, io.WriteCloser) {
 	go func() {
 		io.Copy(io.Discard, pr)
 	}()
-	go sess.runCMSender(doneCh, pw)
+	go sess.runCMSender(doneCh, pw, sess.highPriSendCh, sess.normPriSendCh, sess.cmSenderExited)
 	t.Cleanup(func() {
 		close(doneCh)
 		pw.Close()
@@ -423,7 +423,7 @@ func TestCMFeatureFlag_OnUsesCMPath(t *testing.T) {
 		cmSenderExited:   make(chan struct{}),
 	}
 	defer func() { close(doneCh); pw.Close() }()
-	go sess.runCMSender(doneCh, pw)
+	go sess.runCMSender(doneCh, pw, sess.highPriSendCh, sess.normPriSendCh, sess.cmSenderExited)
 
 	// Capture what sendCMCommand writes.
 	written := make(chan string, 1)
@@ -577,5 +577,149 @@ func TestCMDispatch_ExitDrainsInFlightCmdResp(t *testing.T) {
 		}
 	case <-time.After(100 * time.Millisecond):
 		t.Fatal("in-flight channel was not drained after exit")
+	}
+}
+
+// TestCMDispatch_ConcurrentRestartDoesNotRaceSenderFields is a regression test
+// for the data race fixed above: runCMSender previously read
+// t.highPriSendCh/t.normPriSendCh directly (and closed t.cmSenderExited via a
+// deferred call whose argument is evaluated at goroutine-entry, so that one in
+// particular was accidentally less exposed) instead of using goroutine-local
+// captures, so a same-instance restart reassigning those fields under
+// controlModeSubMu -- exactly what StartControlMode/StopControlMode do -- could
+// race with the sender's unguarded reads. This is what CI's `-race` runs
+// caught (33931403956, 33952649490).
+//
+// There's no functional assertion beyond "the run finishes without `go test
+// -race` reporting WARNING: DATA RACE": one goroutine hammers
+// highPriSendCh/normPriSendCh/cmSenderExited with fresh channels under the
+// same lock StartControlMode/StopControlMode use, while another keeps the
+// sender's loop actively iterating (and, pre-fix, actively re-reading those
+// same fields) by sending commands against whatever the field currently
+// holds. Reverting runCMSender's parameters back to direct t.-field reads
+// reproduces a reliable `go test -race` failure under this test (confirmed
+// manually against the pre-fix code during review).
+func TestCMDispatch_ConcurrentRestartDoesNotRaceSenderFields(t *testing.T) {
+	t.Parallel()
+
+	sess := &TmuxSession{
+		sanitizedName:    "concurrent_restart_test_session",
+		controlModeStdin: fakeWriteCloser{},
+		highPriSendCh:    make(chan cmSendReq, 64),
+		normPriSendCh:    make(chan cmSendReq, 256),
+		cmSenderExited:   make(chan struct{}),
+	}
+	doneCh := make(chan struct{})
+	go sess.runCMSender(doneCh, fakeWriteCloser{}, sess.highPriSendCh, sess.normPriSendCh, sess.cmSenderExited)
+
+	stop := make(chan struct{})
+	var wg sync.WaitGroup
+
+	// Reassign the fields repeatedly, as a restarting StartControlMode/
+	// StopControlMode pair would on the same *TmuxSession*.
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			sess.controlModeSubMu.Lock()
+			sess.highPriSendCh = make(chan cmSendReq, 64)
+			sess.normPriSendCh = make(chan cmSendReq, 256)
+			sess.cmSenderExited = make(chan struct{})
+			sess.controlModeSubMu.Unlock()
+		}
+	}()
+
+	// Keep the sender's outer loop actively iterating -- and, pre-fix,
+	// actively re-reading the fields being reassigned above -- by sending
+	// commands against whatever channel the field currently holds.
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			sess.controlModeSubMu.RLock()
+			ch := sess.normPriSendCh
+			sess.controlModeSubMu.RUnlock()
+			select {
+			case ch <- cmSendReq{line: "display-message -p x", resultCh: make(chan cmdResult, 1)}:
+			default:
+			}
+		}
+	}()
+
+	time.Sleep(100 * time.Millisecond)
+	close(stop)
+	wg.Wait()
+	close(doneCh)
+}
+
+// TestCMDispatch_ProcessRejectsRequestsAfterDoneClosed is a regression test
+// for the second gap an adversarial review of the fix above found: runCMSender's
+// process() closure only checked the shared t.controlModeExited flag (set later,
+// asynchronously, by the reader goroutine's own exit cleanup) before appending
+// to the shared t.pendingCmds field -- not doneCh. Because Go's select has no
+// priority among simultaneously-ready cases, the outer loop can pick a
+// leftover normPriSendCh/highPriSendCh request over its own already-closed
+// doneCh case, calling process() instead of drain() after shutdown was
+// signaled. Since t.pendingCmds is never reset per-generation, a late append
+// in that window could land a stale caller's resultCh in a *subsequent*
+// generation's FIFO -- silently matching it up with a future generation's
+// %begin/%end response instead of failing it with ErrControlModeStopped.
+//
+// This drives that exact race (send requests, then close doneCh, repeatedly,
+// so across many trials the outer select's random tie-break exercises both
+// orderings) and asserts every request always resolves to ErrControlModeStopped
+// and t.pendingCmds is never polluted -- both would fail before process()
+// gained its own doneCh check.
+func TestCMDispatch_ProcessRejectsRequestsAfterDoneClosed(t *testing.T) {
+	t.Parallel()
+
+	const trials = 200
+	for i := 0; i < trials; i++ {
+		sess := &TmuxSession{
+			sanitizedName:    "post_done_test_session",
+			controlModeStdin: fakeWriteCloser{},
+			highPriSendCh:    make(chan cmSendReq, 64),
+			normPriSendCh:    make(chan cmSendReq, 256),
+			cmSenderExited:   make(chan struct{}),
+		}
+		doneCh := make(chan struct{})
+		// Close doneCh and enqueue the request BEFORE the sender goroutine
+		// even starts, so its very first select observes both cases ready
+		// simultaneously -- pinning the race on Go's unspecified (effectively
+		// random) tie-break among ready cases instead of on goroutine
+		// scheduling timing, which would make this test itself flaky.
+		close(doneCh)
+		resultCh := make(chan cmdResult, 1)
+		sess.normPriSendCh <- cmSendReq{line: "display-message -p test", resultCh: resultCh}
+
+		go sess.runCMSender(doneCh, fakeWriteCloser{}, sess.highPriSendCh, sess.normPriSendCh, sess.cmSenderExited)
+
+		select {
+		case r := <-resultCh:
+			if r.err != ErrControlModeStopped {
+				t.Fatalf("trial %d: expected ErrControlModeStopped, got err=%v body=%q", i, r.err, r.body)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatalf("trial %d: request was never resolved after doneCh closed", i)
+		}
+
+		<-sess.cmSenderExited // sender must exit promptly once doneCh is closed and its queues drained
+
+		sess.controlModeSubMu.RLock()
+		pending := len(sess.pendingCmds)
+		sess.controlModeSubMu.RUnlock()
+		if pending != 0 {
+			t.Fatalf("trial %d: pendingCmds polluted with %d stale entr(y/ies) after shutdown", i, pending)
+		}
 	}
 }
