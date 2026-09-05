@@ -334,6 +334,12 @@ jobs:
       - name: Run CI comment-gate unit tests
         run: cd tools/ci-gates && pnpm install --silent && pnpm test
 
+      # Subsumes registry-validation.yml's divergence check (removed): that
+      # workflow tolerated up to 2% ID-count drift before failing, but
+      # `git diff --exit-code` on the regenerated files below is an exact-match
+      # check -- strictly stronger, since anything within the 2% tolerance
+      # still diffs and fails here. Running both was pure duplicate cost (a
+      # second full _prepare.yml + scanner-build cycle for a weaker check).
       - name: Check new RPCs have tests
         run: |
           make registry-generate
@@ -350,6 +356,15 @@ jobs:
           done
           # Also validate the typed catalog
           cd web-app && pnpm install --frozen-lockfile --silent && pnpm run validate-catalog
+
+      # registry-validation.yml's other unique signal (advisory, not blocking):
+      # what fraction of registered features declare testIds at all. Ported
+      # here rather than dropped since it's a distinct metric from the E2E
+      # spec-coverage report below (declared-test-exists vs. E2E-spec-exists).
+      - name: Report registry test-ID coverage (advisory)
+        if: always()
+        run: |
+          python3 tools/scanner/report-coverage.py | tee -a "$GITHUB_STEP_SUMMARY"
 
       # Runs after "Check new RPCs have tests" deliberately: that step is what
       # actually generates docs/registry/backend-features.json (via `make
