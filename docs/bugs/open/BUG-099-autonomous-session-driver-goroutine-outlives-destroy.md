@@ -1,12 +1,33 @@
 # BUG-099: SessionDriver goroutine outlives `Instance.Destroy()` for a stub/non-ready program, reliably [SEVERITY: Medium]
 
-**Status**: 🐛 Open
+**Status**: 🐛 Open (mitigated for the two originally-affected tests, root cause still unfixed)
 **Discovered**: 2026-09-05, while investigating an intermittent `TempDir RemoveAll` "directory not empty"
 failure in `TestCreateSession_Autonomous_CreatesDirectoryInBaseDir` and
 `TestCreateSession_EmptyPath_Autonomous_PassesPathValidation` (`server/services/session_service_create_test.go`)
 surfaced by a full `make ready` run.
 **Impact**: Test-only as currently understood (see Fix Approach — production impact unconfirmed). Reliably
 reproducible, unlike BUG-098's "not reproducible in isolation" — see Reproduction Steps.
+
+**Update 2026-09-05**: The two originally-affected tests were rewritten to call the pure logic they
+actually exercise (`requiresExplicitPath`, `needsGeneratedOneOffPath`, `generateOneOffPath` — extracted
+from `CreateSession` in `server/services/session_service.go`) directly, instead of going through
+`CreateSession` -> tmux -> `SessionDriver` -> `destroyCreatedSession`/`JoinSessionDriver`. Neither test's
+actual assertion (a validation error code; a directory existing on disk) depends on session/driver
+lifecycle at all, so this removes their exposure to the underlying goroutine non-exit entirely — this is
+a **mitigation of these two tests' flakiness, not a fix for the root cause**. One new wiring-only test,
+`TestCreateSession_Autonomous_EmptyPath_GeneratesDirectoryInBaseDir`, was added to keep proving
+`CreateSession` calls the extracted functions correctly for the `AutonomousMode=true, Path=""`
+combination (the pure-function tests alone don't prove that) — it accepts the same known risk. Other
+tests in this file
+(`TestCreateSession_Autonomous_ExplicitPath_DoesNotGenerateScratchDir`,
+`TestCreateSession_OneOff_CreatesDirectoryInBaseDir`,
+`TestCreateSession_OneOff_TwoCallsCreateTwoDistinctDirectories`,
+`TestCreateSession_EmptyPath_OneOff_PassesPathValidation`,
+`TestCreateSession_Autonomous_EmptyPath_GeneratesDirectoryInBaseDir`) still call `destroyCreatedSession` and still
+reliably log the `JoinSessionDriver` timeout warning (confirmed still firing on every run as of this
+update) — they remain exposed to the same underlying bug and are candidates for the same
+extract-and-test-the-pure-logic treatment, or for the dedicated root-cause investigation in Fix Approach
+below.
 
 ## Problem Description
 
