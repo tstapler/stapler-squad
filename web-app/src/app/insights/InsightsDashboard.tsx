@@ -1,7 +1,7 @@
 // +feature: insights-dashboard
 "use client";
 
-import { useState, useMemo, Suspense } from "react";
+import { useState, useMemo, useCallback, Suspense } from "react";
 import dynamic from "next/dynamic";
 import { useSearchParams, useRouter } from "next/navigation";
 import { useInsightsSummary } from "@/lib/hooks/useInsightsService";
@@ -9,7 +9,9 @@ import { useProjectedCost } from "@/lib/hooks/useProjectedCost";
 import { useBudgetThreshold } from "@/lib/hooks/useBudgetThreshold";
 import { useBacklogSessionIndex } from "@/lib/hooks/useBacklogService";
 import { SummaryCards } from "./SummaryCards";
+import { FindingsPanel } from "./FindingsPanel";
 import { TopNTable } from "./TopNTables";
+import { ActivityBreakdownTable } from "./ActivityBreakdownTable";
 import { SessionsTable } from "./SessionsTable";
 import { SessionDetailDrawer } from "./SessionDetailDrawer";
 import { ProjectedCostCard } from "./ProjectedCostCard";
@@ -88,7 +90,7 @@ function InsightsDashboardInner() {
     [preset, fromParam, toParam]
   );
 
-  const { summary, loading, isLiveUpdating, error } = useInsightsSummary({
+  const { summary, loading, isLiveUpdating, error, refetch } = useInsightsSummary({
     includeOrphans: true,
     from: fromDate,
     to: toDate,
@@ -107,6 +109,11 @@ function InsightsDashboardInner() {
     projection.projectedMonthly > threshold;
 
   const [selectedSession, setSelectedSession] = useState<SessionTokenSummary | null>(null);
+  // Stable identity — SessionDetailDrawer's keydown-handling effect has this
+  // in its dependency array, so a fresh function every render would tear
+  // down and re-register the document listener on every parent re-render
+  // (including each WatchInsights live-update tick) while the drawer is open.
+  const closeSessionDetail = useCallback(() => setSelectedSession(null), []);
   const [modelOverTimeMode, setModelOverTimeMode] = useState<"cost" | "tokens">("cost");
 
   const timeRangeValue: TimeRangeValue = {
@@ -152,6 +159,15 @@ function InsightsDashboardInner() {
       )}
 
       {error && <div className={errorBox}>{friendlyError(error)}</div>}
+
+      <FindingsPanel
+        findings={summary?.findings}
+        sessions={summary?.sessions}
+        loading={loading && !summary}
+        error={error ? friendlyError(error) : null}
+        onSessionClick={(s) => setSelectedSession(s)}
+        onRetry={refetch}
+      />
 
       {loading && !summary && <InsightsDashboardSkeleton />}
 
@@ -220,7 +236,7 @@ function InsightsDashboardInner() {
             <ModelOverTimeChart daily={summary.daily} mode={modelOverTimeMode} />
           </section>
 
-          {(summary.topSkills.length > 0 || summary.topTools.length > 0) && (
+          {(summary.topSkills.length > 0 || summary.topTools.length > 0 || summary.activityBreakdown.length > 0) && (
             <section className={section}>
               <h2 className={sectionTitle}>Top Usage</h2>
               <div className={grid2}>
@@ -235,6 +251,9 @@ function InsightsDashboardInner() {
                     title="Top Tools"
                     entries={summary.topTools}
                   />
+                )}
+                {summary.activityBreakdown.length > 0 && (
+                  <ActivityBreakdownTable rows={summary.activityBreakdown} />
                 )}
               </div>
             </section>
@@ -253,7 +272,7 @@ function InsightsDashboardInner() {
 
       <SessionDetailDrawer
         session={selectedSession}
-        onClose={() => setSelectedSession(null)}
+        onClose={closeSessionDetail}
         backlogEntry={selectedSession?.sessionId ? backlogIndex.get(selectedSession.sessionId) : undefined}
       />
     </div>

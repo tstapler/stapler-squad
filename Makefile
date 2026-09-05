@@ -140,6 +140,10 @@ e2e-lighthouse: ## Run Lighthouse CI performance audit
 # Build targets
 build: stapler-squad ## Build the Go application
 
+# Also invoked directly by tests/e2e/helpers/test-server.ts (`make stapler-squad`)
+# to build the binary Playwright's global-setup spawns — relying on this
+# target's own dependency chain (server/web/dist) is what keeps e2e runs from
+# serving a stale frontend after only web-app/src changes.
 stapler-squad: ensure-tools proto-gen ent-gen server/web/dist $(GO_FILES) ## Build the Go binary
 	@echo "Building Go application..."
 ifeq ($(UNAME_S),Darwin)
