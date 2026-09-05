@@ -143,7 +143,7 @@ func detectModelSwitchCacheBust(r *ParseResult, pt *PricingTable) *Finding {
 		if prev.Model == "" || cur.Model == "" || prev.Model == cur.Model {
 			continue
 		}
-		if !(cur.CacheRead == 0 && cur.CacheCreation > 0) {
+		if cur.CacheRead != 0 || cur.CacheCreation <= 0 {
 			continue
 		}
 
