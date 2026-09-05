@@ -100,6 +100,16 @@ func BenchmarkGogitstoreSoakUnderSustainedLoad(b *testing.B) {
 		b.Skip("git binary not available")
 	}
 
+	// This does a fixed ~soakDuration of real work per call, not per b.N --
+	// it isn't a throughput microbenchmark the harness should recalibrate.
+	// Without this guard, running it without -benchtime=1x (e.g. a bare
+	// `go test -bench=BenchmarkGogitstoreSoakUnderSustainedLoad`) lets Go's
+	// benchmark harness call this function repeatedly to hit its default
+	// target duration, multiplying the real wall-clock cost unexpectedly.
+	if b.N > 1 {
+		b.Fatalf("run with -benchtime=1x (see make benchmark-soak); got b.N=%d", b.N)
+	}
+
 	const numRepos = 3
 	const worktreesPerRepo = 3
 	const soakDuration = 20 * time.Second
