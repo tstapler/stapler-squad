@@ -4,6 +4,7 @@
 import Link from "next/link";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { Badge } from "@/components/ui/Badge";
+import { EstimatedValue } from "@/components/ui/EstimatedValue";
 import { Severity } from "@/gen/session/v1/insights_pb";
 import type { WasteFinding, SessionTokenSummary } from "@/gen/session/v1/insights_pb";
 import { errorBox, sectionTitle, section } from "./InsightsDashboard.css";
@@ -130,6 +131,9 @@ function renderResolvedState(findings: WasteFinding[], sessions: SessionTokenSum
   );
 }
 
+const dollarImpactTooltip =
+  "Modeled from the detector's own heuristic (cache-hit rate, context ceiling, etc.), not a metered figure — see ADR-002 (findings are non-summable across sessions).";
+
 function FindingCard({ finding }: { finding: WasteFinding }) {
   const { intent, label } = severityBadge[finding.severity] ?? severityBadge[Severity.UNSPECIFIED];
 
@@ -149,7 +153,9 @@ function FindingCard({ finding }: { finding: WasteFinding }) {
       <div className={cardBody}>
         <div className={cardHeader}>
           <Badge intent={intent}>{label}</Badge>
-          <span className={cardImpact}>~${finding.dollarImpactUsd.toFixed(2)}</span>
+          <EstimatedValue title={dollarImpactTooltip} className={cardImpact}>
+            {`$${finding.dollarImpactUsd.toFixed(2)}`}
+          </EstimatedValue>
         </div>
         <span className={cardMessage}>{finding.message}</span>
       </div>

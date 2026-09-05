@@ -1,12 +1,12 @@
 // +feature: estimated-value
 "use client";
 
-import { useId } from "react";
+import { useId, type ReactNode } from "react";
 import { estimatedValueMarker, srOnly } from "./EstimatedValue.css";
 
 interface EstimatedValueProps {
   /** The value to render, e.g. "$5.00". Rendered with a leading "~". */
-  children: React.ReactNode;
+  children: ReactNode;
   /** Tooltip text explaining why this figure is modeled/heuristic, not measured. */
   title: string;
   className?: string;

@@ -39,9 +39,9 @@ export function ActivityBreakdownTable({ rows }: ActivityBreakdownTableProps) {
         <table className={table}>
           <thead>
             <tr>
-              <th className={th}>Activity</th>
-              <th className={thRight}>Sessions</th>
-              <th className={thRight}>Cost</th>
+              <th className={th} scope="col">Activity</th>
+              <th className={thRight} scope="col">Sessions</th>
+              <th className={thRight} scope="col">Cost</th>
             </tr>
           </thead>
           <tbody>
