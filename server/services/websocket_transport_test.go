@@ -136,6 +136,31 @@ func TestWebSocketTransport_should_NotDeadlock_When_HubDetachesFirst(t *testing.
 	require.NoError(t, transport.Close())
 }
 
+func TestWebSocketTransport_should_UnblockRead_When_HubTearsDown(t *testing.T) {
+	serverStream, _, cleanup := createTestWebSocketPair(t)
+	defer cleanup()
+
+	controller := &fakeSessionController{}
+	hub := streamhub.NewStreamHub("ws-transport-read-unblock", controller)
+	transport := NewWebSocketTransport(serverStream, "ws-transport-read-unblock")
+	id := hub.AttachSubscriber(transport, streamhub.SubscriberCapability{CanResize: true, CanWrite: true})
+	transport.BindSubscriber(hub, id)
+
+	readDone := make(chan error, 1)
+	go func() {
+		_, _, err := serverStream.conn.ReadMessage()
+		readDone <- err
+	}()
+
+	require.NoError(t, hub.ForceTeardown())
+	select {
+	case err := <-readDone:
+		require.Error(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("hub teardown left the WebSocket input read blocked on a dead output stream")
+	}
+}
+
 // TestWebSocketTransport_should_ReturnSendError_When_ConnectionIsClosed
 // exercises the error path Transport.Send is documented to surface —
 // StreamHub treats a non-nil Send error identically to a slow-subscriber

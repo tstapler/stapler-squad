@@ -3,6 +3,7 @@ package services
 import (
 	"sync"
 	"sync/atomic"
+	"time"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/session/streamhub"
@@ -105,21 +106,20 @@ func (t *WebSocketTransport) Send(data []byte) error {
 	return marshalProtoEnvelope(t.stream, 0, msg)
 }
 
-// Close implements streamhub.Transport. The first call triggers exactly one
-// DetachSubscriber call on the bound hub (Task 2.2.1b); every subsequent
-// call — including the reentrant one streamhub's subscriber.close makes back
-// into this method — is a no-op. Close never blocks on the WebSocket
-// connection itself; the connection's own read-loop teardown owns closing
-// the underlying network conn.
+// Close implements streamhub.Transport. The first call interrupts the
+// WebSocket read loop and detaches the subscriber exactly once; later calls,
+// including subscriber.close's reentrant call, are no-ops. The immediate read
+// deadline leaves writes available for the handler's final EndStream frame.
 func (t *WebSocketTransport) Close() error {
 	if !t.closed.CompareAndSwap(false, true) {
 		return nil
 	}
+	deadlineErr := t.stream.conn.SetReadDeadline(time.Now())
 	t.mu.Lock()
 	hub, id, bound := t.hub, t.subscriberID, t.bound
 	t.mu.Unlock()
 	if bound {
 		hub.DetachSubscriber(id)
 	}
-	return nil
+	return deadlineErr
 }
