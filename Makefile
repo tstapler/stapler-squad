@@ -701,6 +701,10 @@ benchmark: ensure-tools proto-gen ## Run all benchmarks
 	go test -bench=. -benchmem -timeout=10m ./... > benchmark_results.txt 2>&1 &
 	@echo "Benchmarks running in background. Results will be saved to benchmark_results.txt"
 
+# benchmark-soak is a convenience shortcut for running just this one benchmark;
+# `make benchmark`'s -bench=. already matches it too (it's out of
+# test/test-integration/ci, per BenchmarkGogitstoreSoakUnderSustainedLoad's own
+# doc comment, but not out of a full benchmark sweep).
 benchmark-soak: ensure-tools proto-gen ## Run the gogitstore sustained-load soak benchmark (~20-25s, not part of make test/test-integration/ci)
 	go test -bench=BenchmarkGogitstoreSoakUnderSustainedLoad -benchtime=1x -run '^$$' -v -timeout=2m ./session/unfinished/gogitstore/
 

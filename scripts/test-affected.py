@@ -50,8 +50,15 @@ def main():
         return
 
     changed_dirs = sorted({f.rsplit("/", 1)[0] if "/" in f else "." for f in changed_files if f})
-    dir_args = [f"./{d}" for d in changed_dirs]
-    changed_pkgs = set(sh(["go", "list"] + dir_args).split())
+    changed_pkgs = set()
+    for d in changed_dirs:
+        try:
+            changed_pkgs.update(sh(["go", "list", f"./{d}"]).split())
+        except subprocess.CalledProcessError:
+            # A changed file's directory can be gone entirely (e.g. a delete
+            # removed the last file in it) -- go list fails on a nonexistent
+            # dir; skip it rather than crashing the whole run over one path.
+            continue
     if not changed_pkgs:
         return
 
