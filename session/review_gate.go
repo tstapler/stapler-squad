@@ -402,35 +402,9 @@ func (r *ReviewGateRunner) runDiffPreChecks(ctx context.Context, item *BacklogIt
 				"The worktree path may have been reused or recreated for a different item — this needs investigation, not rework.",
 				wt.WorktreePath, mismatchReason)
 			log.ErrorLog().Printf("[BacklogLifecycle] spawnReviewGate worktree identity mismatch item=%s worktree=%s branch=%s: %s", item.ID, wt.WorktreePath, wt.BranchName, mismatchReason)
-			mismatchIS, createErr := recordTerminalReviewVerdict(r.storage, item.ID, is.AcSnapshot, "worktree-identity-"+uuid.New().String(), ReviewVerdictFail, summary)
-			if createErr != nil {
-				log.ErrorLog().Printf("[BacklogLifecycle] spawnReviewGate CreateItemSessionWithVerdict (worktree identity) item=%s: %v", item.ID, createErr)
-				return "", false, "", true
-			}
-			log.WarningLog().Printf("[BacklogLifecycle] spawnReviewGate worktree identity mismatch blocked review for item %s — FAIL verdict recorded (session %s)", item.ID, mismatchIS.ID)
-			if r.getNotifier != nil {
-				if n := r.getNotifier(); n != nil {
-					n.Notify(item.ID,
-						"Review blocked — worktree identity mismatch",
-						fmt.Sprintf("%s — the session's recorded worktree %s. See the item's review history for details.", item.Title, mismatchReason),
-						7, // sessionv1.NotificationType_NOTIFICATION_TYPE_ERROR
-						3, // sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_HIGH
-					)
-				}
-			}
-			// Feed into the same auto-reopen/cap-and-notify machinery every other terminal
-			// block in this function uses — a recycled/misattributed worktree left by
-			// worktree-management flakiness is exactly the kind of thing a rework session's
-			// respawn can resolve, and the rework cap still protects against a persistently
-			// broken case looping silently forever.
-			if reopener := r.getAutoReopener(); reopener != nil {
-				go func() {
-					if err := reopener.AutoReopenAfterFailedReview(ctx, item.ID); err != nil {
-						log.ErrorLog().Printf("[BacklogLifecycle] spawnReviewGate AutoReopenAfterFailedReview (worktree identity) item=%s: %v", item.ID, err)
-					}
-				}()
-			}
-			return "", false, "", true
+			return r.blockReviewWithTerminalVerdict(ctx, item, is, "worktree-identity", "worktree identity mismatch", summary,
+				"Review blocked — worktree identity mismatch",
+				fmt.Sprintf("%s — the session's recorded worktree %s. See the item's review history for details.", item.Title, mismatchReason))
 		}
 		// Precondition of review, not a best-effort side effect of the reactive PR-fix
 		// path (BUG-044): a branch left to drift unbounded from main eventually produces
@@ -442,34 +416,9 @@ func (r *ReviewGateRunner) runDiffPreChecks(ctx context.Context, item *BacklogIt
 		// actionable reason instead of silently producing a misleading diff.
 		if ok, blockedSummary := git.EnsureBranchSyncedWithMain(wt.WorktreePath, wt.BranchName, bounceMainBranch, git.DefaultBranchDriftThreshold); !ok {
 			log.WarningLog().Printf("[BacklogLifecycle] spawnReviewGate branch drift blocked review item=%s branch=%s: %s", item.ID, wt.BranchName, blockedSummary)
-			driftIS, createErr := recordTerminalReviewVerdict(r.storage, item.ID, is.AcSnapshot, "branch-drift-"+uuid.New().String(), ReviewVerdictFail, blockedSummary)
-			if createErr != nil {
-				log.ErrorLog().Printf("[BacklogLifecycle] spawnReviewGate CreateItemSessionWithVerdict (branch drift) item=%s: %v", item.ID, createErr)
-				return "", false, "", true
-			}
-			log.InfoLog().Printf("[BacklogLifecycle] spawnReviewGate branch drift blocked for item %s — FAIL verdict recorded (session %s)", item.ID, driftIS.ID)
-			if r.getNotifier != nil {
-				if n := r.getNotifier(); n != nil {
-					n.Notify(item.ID,
-						"Review blocked — branch drifted too far behind main",
-						fmt.Sprintf("%s — the branch could not be automatically synced with main. See the item's review history for the conflict details.", item.Title),
-						7, // sessionv1.NotificationType_NOTIFICATION_TYPE_ERROR
-						3, // sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_HIGH
-					)
-				}
-			}
-			// Feed into the same auto-reopen/cap-and-notify machinery every other terminal
-			// block in this function uses — a conflict left by drift is exactly the kind of
-			// thing a rework session can resolve, and the rework cap still protects against
-			// an unresolvable case looping silently forever.
-			if reopener := r.getAutoReopener(); reopener != nil {
-				go func() {
-					if err := reopener.AutoReopenAfterFailedReview(ctx, item.ID); err != nil {
-						log.ErrorLog().Printf("[BacklogLifecycle] spawnReviewGate AutoReopenAfterFailedReview (branch drift) item=%s: %v", item.ID, err)
-					}
-				}()
-			}
-			return "", false, "", true
+			return r.blockReviewWithTerminalVerdict(ctx, item, is, "branch-drift", "branch drift", blockedSummary,
+				"Review blocked — branch drifted too far behind main",
+				fmt.Sprintf("%s — the branch could not be automatically synced with main. See the item's review history for the conflict details.", item.Title))
 		}
 	}
 	if wtErr == nil && wt.WorktreePath != "" {
@@ -577,36 +526,49 @@ func (r *ReviewGateRunner) runDiffPreChecks(ctx context.Context, item *BacklogIt
 	if worktreeDiffErr != nil {
 		summary := fmt.Sprintf("Review blocked: could not compute a diff for this session (%v). "+
 			"The recorded base commit may be missing or corrupted — this needs investigation, not rework.", worktreeDiffErr)
-		diffFailIS, createErr := recordTerminalReviewVerdict(r.storage, item.ID, is.AcSnapshot, "diff-error-"+uuid.New().String(), ReviewVerdictFail, summary)
-		if createErr != nil {
-			log.ErrorLog().Printf("[BacklogLifecycle] spawnReviewGate CreateItemSessionWithVerdict (diff error) item=%s: %v", item.ID, createErr)
-			return "", false, "", true
-		}
-		log.ErrorLog().Printf("[BacklogLifecycle] spawnReviewGate diff computation failed for item %s — review blocked, FAIL verdict recorded (session %s)", item.ID, diffFailIS.ID)
-		if r.getNotifier != nil {
-			if n := r.getNotifier(); n != nil {
-				n.Notify(item.ID,
-					"Review blocked — diff computation failed",
-					fmt.Sprintf("%s — recorded base commit may be missing or corrupted. Needs investigation.", item.Title),
-					7, // sessionv1.NotificationType_NOTIFICATION_TYPE_ERROR
-					3, // sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_HIGH
-				)
-			}
-		}
-		// Feed into the same auto-reopen/cap-and-notify machinery used for real FAIL
-		// verdicts, so a persistently broken worktree still surfaces to a human via
-		// notifyReworkCapHit after maxAutoReworkIterations instead of looping silently.
-		if reopener := r.getAutoReopener(); reopener != nil {
-			go func() {
-				if err := reopener.AutoReopenAfterFailedReview(ctx, item.ID); err != nil {
-					log.ErrorLog().Printf("[BacklogLifecycle] spawnReviewGate AutoReopenAfterFailedReview (diff error) item=%s: %v", item.ID, err)
-				}
-			}()
-		}
-		return "", false, "", true
+		return r.blockReviewWithTerminalVerdict(ctx, item, is, "diff-error", "diff computation failed", summary,
+			"Review blocked — diff computation failed",
+			fmt.Sprintf("%s — recorded base commit may be missing or corrupted. Needs investigation.", item.Title))
 	}
 
 	return diff, truncated, uncommittedWarning, false
+}
+
+// blockReviewWithTerminalVerdict is the shared tail of every hard-block path in
+// runDiffPreChecks (worktree identity mismatch, branch drift, diff computation
+// failure): record a synthetic terminal FAIL verdict, log it, notify, and kick
+// off the same auto-reopen/cap-and-notify machinery a real FAIL verdict gets —
+// so a persistently broken worktree still surfaces to a human via
+// notifyReworkCapHit after maxAutoReworkIterations instead of looping silently.
+// Always returns runDiffPreChecks' "review blocked" result.
+func (r *ReviewGateRunner) blockReviewWithTerminalVerdict(
+	ctx context.Context,
+	item *BacklogItemData,
+	is ItemSessionSummary,
+	verdictKeyPrefix, reason, summary, notifyTitle, notifyBody string,
+) (string, bool, string, bool) {
+	blockedIS, createErr := recordTerminalReviewVerdict(r.storage, item.ID, is.AcSnapshot, verdictKeyPrefix+"-"+uuid.New().String(), ReviewVerdictFail, summary)
+	if createErr != nil {
+		log.ErrorLog().Printf("[BacklogLifecycle] spawnReviewGate CreateItemSessionWithVerdict (%s) item=%s: %v", reason, item.ID, createErr)
+		return "", false, "", true
+	}
+	log.WarningLog().Printf("[BacklogLifecycle] spawnReviewGate %s: blocked review for item %s — FAIL verdict recorded (session %s)", reason, item.ID, blockedIS.ID)
+	if r.getNotifier != nil {
+		if n := r.getNotifier(); n != nil {
+			n.Notify(item.ID, notifyTitle, notifyBody,
+				7, // sessionv1.NotificationType_NOTIFICATION_TYPE_ERROR
+				3, // sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_HIGH
+			)
+		}
+	}
+	if reopener := r.getAutoReopener(); reopener != nil {
+		go func() {
+			if err := reopener.AutoReopenAfterFailedReview(ctx, item.ID); err != nil {
+				log.ErrorLog().Printf("[BacklogLifecycle] spawnReviewGate AutoReopenAfterFailedReview (%s) item=%s: %v", reason, item.ID, err)
+			}
+		}()
+	}
+	return "", false, "", true
 }
 
 // WorktreeIdentityMismatch reports why worktreePath does not actually belong to

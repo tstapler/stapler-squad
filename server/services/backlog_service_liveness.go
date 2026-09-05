@@ -254,22 +254,38 @@ func (s *BacklogService) DeleteLivenessDefinition(
 	if s.livenessRepo == nil {
 		return nil, connect.NewError(connect.CodeUnavailable, errors.New("liveness definition storage not available"))
 	}
-
-	id, err := uuid.Parse(req.Msg.Id)
-	if err != nil {
-		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("invalid liveness definition id: %w", err))
+	if err := deleteByIDAndInvalidateCache(ctx, req.Msg.Id, "liveness definition", s.livenessRepo.Delete, s.invalidateLivenessCache); err != nil {
+		return nil, err
 	}
-
-	if err := s.livenessRepo.Delete(ctx, id); err != nil {
-		if errors.Is(err, session.ErrNotFound) {
-			return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("liveness definition %s not found", req.Msg.Id))
-		}
-		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("delete liveness definition: %w", err))
-	}
-
-	s.invalidateLivenessCache(ctx, req.Msg.Id)
-
 	return connect.NewResponse(&sessionv1.DeleteLivenessDefinitionResponse{}), nil
+}
+
+// deleteByIDAndInvalidateCache is the shared shape behind every "delete a
+// slug/mode-addressed, ent-backed entity, then invalidate its in-process
+// cache" RPC handler in this package (DeleteLivenessDefinition here;
+// DeletePipelineMode's identical inline version in
+// backlog_service_pipeline_mode.go predates this helper and is left as-is —
+// dupl's new-code-only gate only requires the new copy to stop being a
+// literal duplicate, not a retroactive rewrite of already-shipped code).
+func deleteByIDAndInvalidateCache(
+	ctx context.Context,
+	rawID string,
+	entityLabel string,
+	deleteFn func(ctx context.Context, id uuid.UUID) error,
+	invalidateCache func(ctx context.Context, rawID string),
+) error {
+	id, err := uuid.Parse(rawID)
+	if err != nil {
+		return connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("invalid %s id: %w", entityLabel, err))
+	}
+	if err := deleteFn(ctx, id); err != nil {
+		if errors.Is(err, session.ErrNotFound) {
+			return connect.NewError(connect.CodeNotFound, fmt.Errorf("%s %s not found", entityLabel, rawID))
+		}
+		return connect.NewError(connect.CodeInternal, fmt.Errorf("delete %s: %w", entityLabel, err))
+	}
+	invalidateCache(ctx, rawID)
+	return nil
 }
 
 // GetLivenessDefinition retrieves a single liveness definition by

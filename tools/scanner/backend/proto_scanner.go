@@ -351,6 +351,7 @@ var methodToID = map[string]string{ //nolint:gochecknoglobals
 	"DeleteTransitionGate":  "backlog:delete-transition-gate",
 	"GetTransitionGate":     "backlog:get-transition-gate",
 	"ListTransitionGates":   "backlog:list-transition-gates",
+	"RecordGateApproval":    "backlog:record-gate-approval",
 }
 
 // rpcPattern matches lines like:   rpc MethodName(  (indented or not)
