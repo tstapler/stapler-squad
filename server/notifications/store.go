@@ -589,24 +589,24 @@ func (s *NotificationHistoryStore) saveToDisk() error {
 	}
 
 	if _, err := f.Write(data); err != nil {
-		f.Close()
-		os.Remove(tmpPath)
+		_ = f.Close()
+		_ = os.Remove(tmpPath) // best-effort cleanup; we're already returning the real write error
 		return fmt.Errorf("write temp file: %w", err)
 	}
 
 	if err := f.Sync(); err != nil {
-		f.Close()
-		os.Remove(tmpPath)
+		_ = f.Close()
+		_ = os.Remove(tmpPath) // best-effort cleanup; we're already returning the real sync error
 		return fmt.Errorf("sync temp file: %w", err)
 	}
 
 	if err := f.Close(); err != nil {
-		os.Remove(tmpPath)
+		_ = os.Remove(tmpPath) // best-effort cleanup; we're already returning the real close error
 		return fmt.Errorf("close temp file: %w", err)
 	}
 
 	if err := os.Rename(tmpPath, s.filePath); err != nil {
-		os.Remove(tmpPath)
+		_ = os.Remove(tmpPath) // best-effort cleanup; we're already returning the real rename error
 		return fmt.Errorf("rename temp file: %w", err)
 	}
 

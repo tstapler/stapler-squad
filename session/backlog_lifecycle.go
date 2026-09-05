@@ -2028,7 +2028,7 @@ func (l *BacklogLifecycleListener) reconcileMultiReasonEscalationForItem(ctx con
 }
 
 // hasActiveSession reports whether any of the provided ItemSessions is an
-// open (not yet ended) work- or review-role session. Package-local
+// open (not yet ended) work-, review-, or Jules-role session. Package-local
 // equivalent of server/services' hasActiveWorkSession/hasActiveReviewSession
 // (not reusable directly — that package imports session, not the other way
 // around) used by recoverDriftedPRItem/reconcileDriftedPRItems to avoid
@@ -2040,5 +2040,5 @@ func hasActiveSession(sessions []ItemSessionSummary) bool {
 			return true
 		}
 	}
-	return false
+	return HasActiveJulesSession(sessions)
 }

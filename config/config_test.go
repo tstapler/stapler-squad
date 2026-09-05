@@ -16,6 +16,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/config/workspacepath"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/log"
 )
@@ -259,7 +260,7 @@ func TestPruneStaleTestDirs(t *testing.T) {
 	require.NoError(t, os.MkdirAll(aliveDir, 0755))
 	require.NoError(t, os.MkdirAll(junkDir, 0755))
 
-	pruneStaleTestDirs(testBaseDir)
+	workspacepath.PruneStaleTestDirs(testBaseDir)
 
 	assert.NoDirExists(t, deadDir, "dead process's test dir should be pruned")
 	assert.DirExists(t, aliveDir, "live process's test dir must survive")
@@ -884,6 +885,49 @@ func TestOneOffBaseDirOrDefault_CustomAbsolutePath(t *testing.T) {
 	result, err := cfg.OneOffBaseDirOrDefault()
 	require.NoError(t, err)
 	assert.Equal(t, "/tmp/my-custom-oneoffs", result)
+}
+
+// TestMaxConcurrentJulesSessionsOrDefault_should_ClampToHardCeilingOrDefault_When_ConfigOutOfRange
+// verifies Story 2.2.2's clamp table: an out-of-range value never reaches the
+// spend-guard check raw.
+func TestMaxConcurrentJulesSessionsOrDefault_should_ClampToHardCeilingOrDefault_When_ConfigOutOfRange(t *testing.T) {
+	tests := []struct {
+		name     string
+		cfg      *Config
+		expected int
+	}{
+		{"above hard ceiling clamps down", &Config{Jules: JulesConfig{MaxConcurrentJulesSessions: 500}}, 10},
+		{"zero falls back to default", &Config{Jules: JulesConfig{MaxConcurrentJulesSessions: 0}}, 2},
+		{"negative falls back to default", &Config{Jules: JulesConfig{MaxConcurrentJulesSessions: -1}}, 2},
+		{"in range passes through", &Config{Jules: JulesConfig{MaxConcurrentJulesSessions: 5}}, 5},
+		{"nil config falls back to default", nil, 2},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.expected, tt.cfg.MaxConcurrentJulesSessionsOrDefault())
+		})
+	}
+}
+
+// TestMaxJulesSessionsPerDayOrDefault_should_ClampToHardCeilingOrDefault_When_ConfigOutOfRange
+// mirrors the concurrency clamp table above for the daily-dispatch cap.
+func TestMaxJulesSessionsPerDayOrDefault_should_ClampToHardCeilingOrDefault_When_ConfigOutOfRange(t *testing.T) {
+	tests := []struct {
+		name     string
+		cfg      *Config
+		expected int
+	}{
+		{"above hard ceiling clamps down", &Config{Jules: JulesConfig{MaxJulesSessionsPerDay: 1000}}, 300},
+		{"zero falls back to default", &Config{Jules: JulesConfig{MaxJulesSessionsPerDay: 0}}, 15},
+		{"negative falls back to default", &Config{Jules: JulesConfig{MaxJulesSessionsPerDay: -1}}, 15},
+		{"in range passes through", &Config{Jules: JulesConfig{MaxJulesSessionsPerDay: 20}}, 20},
+		{"nil config falls back to default", nil, 15},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.expected, tt.cfg.MaxJulesSessionsPerDayOrDefault())
+		})
+	}
 }
 
 func TestOneOffBaseDir_JSONRoundTrip(t *testing.T) {

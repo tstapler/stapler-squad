@@ -592,6 +592,25 @@ export const reviewContextLabel = style({
   letterSpacing: "0.05em",
 });
 
+/**
+ * Small "Jules" provenance marker (Story 3.3.2, Task 3.3.2b) rendered
+ * beside the existing GitHubBadge in PullRequestSection when the item's
+ * most recent session role is jules_work -- a plain inline label, not a
+ * fork of GitHubBadge itself (ux.md §0/§5).
+ */
+export const julesProvenanceMarker = style({
+  display: "inline-flex",
+  alignItems: "center",
+  gap: "4px",
+  padding: `1px ${vars.space["2"]}`,
+  borderRadius: vars.radii.sm,
+  background: vars.color.accentBg,
+  color: vars.color.accentText,
+  fontSize: vars.fontSize.xs,
+  fontWeight: vars.fontWeight.medium,
+  whiteSpace: "nowrap",
+});
+
 export const reviewContextSessionId = style({
   fontSize: vars.fontSize.xs,
   fontFamily: vars.font.mono,

@@ -13,8 +13,13 @@ import (
 	"github.com/tstapler/stapler-squad/gen/proto/go/session/v1/sessionv1connect"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/tokens"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
+
+// findingsCap bounds how many WasteFindings GetInsightsSummary returns in one
+// response — the panel is a "find the driver fast" view, not an exhaustive log.
+const findingsCap = 20
 
 // Compile-time check: InsightsService must implement the generated handler.
 var _ sessionv1connect.InsightsServiceHandler = (*InsightsService)(nil)
@@ -65,6 +70,72 @@ func (s *InsightsService) warnNewUnpricedFamilies(families map[string]bool) {
 	}
 }
 
+// buildSessionSummary builds the per-session SessionTokenSummary shared by
+// GetInsightsSummary, ListSessionTokens, and watchInsights (Story 1.5.2) —
+// sessionID/orphan resolution, cost, cache-hit-rate, top tools (with Epic
+// 1.2's per-tool cost attribution), skill names, timestamps, activity type
+// (Epic 1.2's ClassifyActivity), and waste score (Epic 1.1's
+// ComputeWasteScore). Deliberately excludes WasteFinding computation — those
+// are a separate, non-summable response-level list (see
+// ADR-002-findings-non-summable-dollar-impact.md), not a SessionTokenSummary
+// field.
+func buildSessionSummary(
+	r *tokens.ParseResult,
+	pt *tokens.PricingTable,
+	associator *tokens.Associator,
+	snapshot []tokens.SessionRecord,
+) *sessionv1.SessionTokenSummary {
+	firstTs, lastTs := sessionTimestamps(r)
+
+	sessionID, isOrphan := "", true
+	if associator != nil {
+		sessionID, isOrphan = associator.AssociateWithSnapshot(r, snapshot)
+	}
+
+	costUSD, unpriced := pt.EstimateCost(r)
+	cacheHitRate := tokens.ComputeCacheHitRate(r.TotalInput, r.CacheRead)
+	activityType := tokens.ClassifyActivity(r)
+	topTools := sessionTopTools(r, pt)
+
+	skillNames := make([]string, 0, len(r.SkillActivations))
+	for _, sa := range r.SkillActivations {
+		skillNames = append(skillNames, sa.Name)
+	}
+
+	summary := &sessionv1.SessionTokenSummary{
+		SessionId:           sessionID,
+		ConversationId:      r.SessionUUID,
+		ProjectPath:         r.ProjectPath,
+		PrimaryModel:        r.PrimaryModel,
+		TotalInputTokens:    r.TotalInput,
+		TotalOutputTokens:   r.TotalOutput,
+		CacheCreationTokens: r.CacheCreation,
+		CacheReadTokens:     r.CacheRead,
+		EstimatedCostUsd:    costUSD,
+		CacheHitRate:        cacheHitRate,
+		// #nosec G115 -- r.MessageCount is a per-session Claude message count, far below int32 range.
+		MessageCount:     int32(r.MessageCount),
+		IsOrphan:         isOrphan,
+		SkillActivations: skillNames,
+		TopTools:         topTools,
+		UnpricedModels:   unpriced,
+		ActivityType:     activityType,
+	}
+	if !firstTs.IsZero() {
+		summary.FirstMessageAt = timestamppb.New(firstTs)
+	}
+	if !lastTs.IsZero() {
+		summary.LastMessageAt = timestamppb.New(lastTs)
+	}
+	if score := tokens.ComputeWasteScore(r, pt); score != nil {
+		summary.WasteScore = proto.Float64(float64(*score))
+	}
+	if roi, ok := tokens.ComputeCacheROI(r, pt); ok {
+		summary.CacheRoiUsd = roi
+	}
+	return summary
+}
+
 // GetInsightsSummary returns aggregated token and cost data for a time range.
 func (s *InsightsService) GetInsightsSummary(
 	_ context.Context,
@@ -91,16 +162,18 @@ func (s *InsightsService) GetInsightsSummary(
 		totalCacheHitNumer   int64 // for cache hit rate: cache_read
 		totalCacheHitDenom   int64 // for cache hit rate: input + cache_read
 
-		dailyMap = make(map[string]*sessionv1.DailyTokenBucket) // key = "2026-05-15"
-		modelMap = make(map[string]*sessionv1.ModelBreakdown)   // key = normalized family
-		skillMap = make(map[string]int32)                       // skill name → activation count
-		toolMap  = make(map[string]int64)                       // tool name → call count
+		dailyMap    = make(map[string]*sessionv1.DailyTokenBucket)                      // key = "2026-05-15"
+		modelMap    = make(map[string]*sessionv1.ModelBreakdown)                        // key = normalized family
+		skillMap    = make(map[string]int32)                                            // skill name → activation count
+		toolMap     = make(map[string]int64)                                            // tool name → call count
+		activityMap = make(map[sessionv1.ActivityType]*sessionv1.ActivityCostBreakdown) // key = ActivityType
 
 		allUnpricedFamilies = make(map[string]bool)            // union of unpriced families across all sessions
 		dailyUnpriced       = make(map[string]map[string]bool) // day → set of unpriced families rolled into that day
 	)
 
 	sessions := make([]*sessionv1.SessionTokenSummary, 0, len(results))
+	allFindings := make([]*sessionv1.WasteFinding, 0, len(results))
 
 	var sessionSnapshot []tokens.SessionRecord
 	if s.associator != nil {
@@ -141,54 +214,56 @@ func (s *InsightsService) GetInsightsSummary(
 			continue
 		}
 
-		// Apply session ID filter.
-		if msg.SessionIdFilter != nil && *msg.SessionIdFilter != "" {
-			if sessionID != *msg.SessionIdFilter {
+		// Apply session ID / conversation ID filters. Either filter, if set,
+		// can independently match and keep the session — this lets an orphan
+		// session (sessionID always "") be selected via conversation_id_filter,
+		// which session_id_filter alone can never match. If both are set and
+		// neither matches, skip; if neither is set, keep everything (unchanged
+		// from before this filter existed).
+		hasSessionIDFilter := msg.SessionIdFilter != nil && *msg.SessionIdFilter != ""
+		hasConversationIDFilter := msg.ConversationIdFilter != nil && *msg.ConversationIdFilter != ""
+		if hasSessionIDFilter || hasConversationIDFilter {
+			matchedSessionID := hasSessionIDFilter && sessionID == *msg.SessionIdFilter
+			matchedConversationID := hasConversationIDFilter && r.SessionUUID == *msg.ConversationIdFilter
+			if !matchedSessionID && !matchedConversationID {
 				continue
 			}
 		}
 
-		costUSD, unpriced := s.pricing.EstimateCost(r)
+		summary := buildSessionSummary(r, s.pricing, s.associator, sessionSnapshot)
+		costUSD, unpriced := summary.EstimatedCostUsd, summary.UnpricedModels
 		for _, f := range unpriced {
 			allUnpricedFamilies[f] = true
 		}
 		// Computed once per session and reused below for both the daily rollup
 		// and the model breakdown — avoids walking r.TurnTimeline twice.
 		modelFamilyCosts, unpricedFamilies := s.pricing.ModelFamilyCost(r)
-		cacheHitRate := computeCacheHitRate(r.TotalInput, r.CacheRead)
+		activityType := summary.ActivityType
 
-		// Build top tools list for this session.
-		topTools := sessionTopTools(r)
+		// Activity-cost breakdown (Epic 1.2, Story 1.2.4): total cost and
+		// session count sliced by ActivityType across all in-range sessions.
+		ab := activityMap[activityType]
+		if ab == nil {
+			ab = &sessionv1.ActivityCostBreakdown{ActivityType: activityType}
+			activityMap[activityType] = ab
+		}
+		ab.EstimatedCostUsd += costUSD
+		ab.SessionCount++
 
-		// Build skill activation names.
-		skillNames := make([]string, 0, len(r.SkillActivations))
-		for _, sa := range r.SkillActivations {
-			skillNames = append(skillNames, sa.Name)
-		}
-
-		summary := &sessionv1.SessionTokenSummary{
-			SessionId:           sessionID,
-			ConversationId:      r.SessionUUID,
-			ProjectPath:         r.ProjectPath,
-			PrimaryModel:        r.PrimaryModel,
-			TotalInputTokens:    r.TotalInput,
-			TotalOutputTokens:   r.TotalOutput,
-			CacheCreationTokens: r.CacheCreation,
-			CacheReadTokens:     r.CacheRead,
-			EstimatedCostUsd:    costUSD,
-			CacheHitRate:        cacheHitRate,
-			// #nosec G115 -- r.MessageCount is a per-session Claude message count, far below int32 range.
-			MessageCount:     int32(r.MessageCount),
-			IsOrphan:         isOrphan,
-			SkillActivations: skillNames,
-			TopTools:         topTools,
-			UnpricedModels:   unpriced,
-		}
-		if !firstTs.IsZero() {
-			summary.FirstMessageAt = timestamppb.New(firstTs)
-		}
-		if !lastTs.IsZero() {
-			summary.LastMessageAt = timestamppb.New(lastTs)
+		// Waste-pattern findings (Epic 1.1). ComputeFindings isolates each
+		// detector's panic internally, so one malformed session can never
+		// fail the whole request. Findings are a separate, non-summable
+		// response-level list (ADR-002) — not a SessionTokenSummary field, so
+		// buildSessionSummary doesn't compute them.
+		for _, f := range tokens.ComputeFindings(r, s.pricing) {
+			allFindings = append(allFindings, &sessionv1.WasteFinding{
+				FindingType:     f.Type,
+				Severity:        f.Severity,
+				DollarImpactUsd: float64(f.DollarImpact),
+				SessionId:       sessionID,
+				ConversationId:  r.SessionUUID,
+				Message:         f.Message,
+			})
 		}
 
 		sessions = append(sessions, summary)
@@ -324,6 +399,24 @@ func (s *InsightsService) GetInsightsSummary(
 	topSkills := buildTopEntries(skillMap, 20)
 	topTools := buildTopToolEntries(toolMap, 20)
 
+	// Build activity-cost breakdown, sorted by cost desc — same pattern as models.
+	activityBreakdown := make([]*sessionv1.ActivityCostBreakdown, 0, len(activityMap))
+	for _, ab := range activityMap {
+		activityBreakdown = append(activityBreakdown, ab)
+	}
+	sort.Slice(activityBreakdown, func(i, j int) bool {
+		return activityBreakdown[i].EstimatedCostUsd > activityBreakdown[j].EstimatedCostUsd
+	})
+
+	// Sort findings by dollar impact descending and cap at findingsCap — the
+	// panel is a "find the driver fast" ranked view, not an exhaustive log.
+	sort.Slice(allFindings, func(i, j int) bool {
+		return allFindings[i].DollarImpactUsd > allFindings[j].DollarImpactUsd
+	})
+	if len(allFindings) > findingsCap {
+		allFindings = allFindings[:findingsCap]
+	}
+
 	// Overall cache hit rate.
 	overallCacheHitRate := float64(0)
 	if totalCacheHitDenom > 0 {
@@ -344,6 +437,8 @@ func (s *InsightsService) GetInsightsSummary(
 		IsLoading:            s.store.IsLoading(),
 		PricingAsOf:          timestamppb.New(s.pricing.LoadedAt),
 		UnpricedModels:       sortedKeys(allUnpricedFamilies),
+		Findings:             allFindings,
+		ActivityBreakdown:    activityBreakdown,
 	}
 
 	return connect.NewResponse(resp), nil
@@ -384,46 +479,9 @@ func (s *InsightsService) ListSessionTokens(
 			continue
 		}
 
-		sessionID, isOrphan := "", true
-		if s.associator != nil {
-			sessionID, isOrphan = s.associator.AssociateWithSnapshot(r, sessionSnapshot)
-		}
-
-		costUSD, unpriced := s.pricing.EstimateCost(r)
-		for _, f := range unpriced {
+		summary := buildSessionSummary(r, s.pricing, s.associator, sessionSnapshot)
+		for _, f := range summary.UnpricedModels {
 			allUnpricedFamilies[f] = true
-		}
-		cacheHitRate := computeCacheHitRate(r.TotalInput, r.CacheRead)
-		topTools := sessionTopTools(r)
-
-		skillNames := make([]string, 0, len(r.SkillActivations))
-		for _, sa := range r.SkillActivations {
-			skillNames = append(skillNames, sa.Name)
-		}
-
-		summary := &sessionv1.SessionTokenSummary{
-			SessionId:           sessionID,
-			ConversationId:      r.SessionUUID,
-			ProjectPath:         r.ProjectPath,
-			PrimaryModel:        r.PrimaryModel,
-			TotalInputTokens:    r.TotalInput,
-			TotalOutputTokens:   r.TotalOutput,
-			CacheCreationTokens: r.CacheCreation,
-			CacheReadTokens:     r.CacheRead,
-			EstimatedCostUsd:    costUSD,
-			CacheHitRate:        cacheHitRate,
-			// #nosec G115 -- r.MessageCount is a per-session Claude message count, far below int32 range.
-			MessageCount:     int32(r.MessageCount),
-			IsOrphan:         isOrphan,
-			SkillActivations: skillNames,
-			TopTools:         topTools,
-			UnpricedModels:   unpriced,
-		}
-		if !firstTs.IsZero() {
-			summary.FirstMessageAt = timestamppb.New(firstTs)
-		}
-		if !lastTs.IsZero() {
-			summary.LastMessageAt = timestamppb.New(lastTs)
 		}
 		summaries = append(summaries, summary)
 	}
@@ -547,13 +605,30 @@ func (s *InsightsService) watchInsights(ctx context.Context, sender insightsEven
 		select {
 		case <-ctx.Done():
 			return nil
-		case _, ok := <-ch:
+		case result, ok := <-ch:
 			if !ok {
 				return nil
 			}
-			evt := &sessionv1.InsightsEvent{
-				EventType: "update",
-				AllParsed: !s.store.IsLoading(),
+			var evt *sessionv1.InsightsEvent
+			if result != nil {
+				var snapshot []tokens.SessionRecord
+				if s.associator != nil {
+					snapshot = s.associator.Snapshot()
+				}
+				evt = &sessionv1.InsightsEvent{
+					EventType: "update",
+					Session:   buildSessionSummary(result, s.pricing, s.associator, snapshot),
+					AllParsed: !s.store.IsLoading(),
+				}
+			} else {
+				// nil means the initial directory walk just completed — a real
+				// "parse_complete", not another indistinguishable "update", so
+				// the frontend's fetchSummary()-triggering branch (which only
+				// listens for "parse_complete") re-fires correctly.
+				evt = &sessionv1.InsightsEvent{
+					EventType: "parse_complete",
+					AllParsed: true,
+				}
 			}
 			if err := sender.Send(evt); err != nil {
 				return fmt.Errorf("send update event: %w", err)
@@ -612,15 +687,6 @@ func sessionTimestamps(r *tokens.ParseResult) (first, last time.Time) {
 	return first, last
 }
 
-// computeCacheHitRate returns cache_read / (input + cache_read), or 0.
-func computeCacheHitRate(input, cacheRead int64) float64 {
-	denom := input + cacheRead
-	if denom == 0 {
-		return 0
-	}
-	return float64(cacheRead) / float64(denom)
-}
-
 // dailyBucketKey returns the "2006-01-02" string for bucketing by day.
 // Prefers lastTs; falls back to fileModTime.
 func dailyBucketKey(lastTs time.Time, fileModTime time.Time) string {
@@ -634,8 +700,12 @@ func dailyBucketKey(lastTs time.Time, fileModTime time.Time) string {
 	return t.UTC().Format("2006-01-02")
 }
 
-// sessionTopTools builds a sorted slice of TopToolEntry for a single session.
-func sessionTopTools(r *tokens.ParseResult) []*sessionv1.TopToolEntry {
+// sessionTopTools builds a sorted slice of TopToolEntry for a single session,
+// including per-tool cost attribution (Epic 1.2's AttributeToolCosts,
+// ADR-001). Cost population never changes the call-count-desc sort order —
+// that contract predates this project and callers rely on "top tools" still
+// meaning "most-called."
+func sessionTopTools(r *tokens.ParseResult, pt *tokens.PricingTable) []*sessionv1.TopToolEntry {
 	type entry struct {
 		name      string
 		callCount int32
@@ -657,12 +727,21 @@ func sessionTopTools(r *tokens.ParseResult) []*sessionv1.TopToolEntry {
 	if len(entries) > maxTopTools {
 		entries = entries[:maxTopTools]
 	}
+
+	costs, doubleCounted, unpriced := tokens.AttributeToolCosts(r, pt)
+
 	result := make([]*sessionv1.TopToolEntry, 0, len(entries))
 	for _, e := range entries {
+		cost, hasCost := costs[e.name]
 		result = append(result, &sessionv1.TopToolEntry{
 			ToolName:  e.name,
 			CallCount: e.callCount,
 			McpServer: e.mcpServer,
+			CostUsd:   cost,
+			// A tool that never once had a priced turn stays distinguishable
+			// from a genuinely free one — see CostUnpriced's doc comment.
+			CostMayDoubleCount: doubleCounted[e.name],
+			CostUnpriced:       unpriced[e.name] && !hasCost,
 		})
 	}
 	return result

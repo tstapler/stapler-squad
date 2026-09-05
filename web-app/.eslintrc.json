@@ -1,6 +1,6 @@
 {
   "extends": ["next/core-web-vitals"],
-  "plugins": ["boundaries", "analytics", "@typescript-eslint"],
+  "plugins": ["boundaries", "analytics", "rpc-lifecycle", "@typescript-eslint"],
   "settings": {
     "boundaries/elements": [
       { "type": "app",        "pattern": "src/app/**" },
@@ -74,6 +74,7 @@
     "analytics/require-omnibar-dispatch": "error",
     "analytics/require-page-analytics":   "error",
     "analytics/require-rpc-analytics":    "error",
+    "rpc-lifecycle/require-abort-signal": "error",
     "boundaries/dependencies": [
       "error",
       {

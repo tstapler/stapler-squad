@@ -232,8 +232,15 @@ func (rs *ResponseStream) streamLoop(ctx context.Context) {
 				continue
 			}
 
-			// Set read deadline to avoid blocking forever
-			pty.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
+			// Set read deadline to avoid blocking forever. A failure here (e.g. the
+			// PTY was just closed out from under us) means the fd is already
+			// unusable, so the following Read will fail immediately with its own
+			// error rather than block -- fall through into the normal Read/error
+			// handling below instead of skipping the read, which would spin forever
+			// without ever detecting the closed PTY.
+			if err := pty.SetReadDeadline(time.Now().Add(100 * time.Millisecond)); err != nil {
+				log.Error("failed to set PTY read deadline in response stream", "session", rs.sessionName, "err", err)
+			}
 			n, err := pty.Read(readBuf)
 
 			if err != nil {
@@ -295,9 +302,11 @@ func (rs *ResponseStream) streamLoop(ctx context.Context) {
 					rs.escapeParser.Parse(data, sessionSeq)
 				}
 
-				// Write to circular buffer (copies data internally, no reference retained)
+				// Write to circular buffer (copies data internally, no reference retained).
+				// CircularBuffer.Write never returns a non-nil error; it exists only to
+				// satisfy io.Writer.
 				if rs.ptyAccess.buffer != nil {
-					rs.ptyAccess.buffer.Write(data)
+					_, _ = rs.ptyAccess.buffer.Write(data)
 				}
 
 				// Broadcast to subscribers — only allocates a copy when subscribers exist.

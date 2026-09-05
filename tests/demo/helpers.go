@@ -85,7 +85,7 @@ func (s *DemoServer) WaitForHealth(timeout time.Duration) error {
 	for time.Now().Before(deadline) {
 		resp, err := client.Get(healthURL)
 		if err == nil {
-			resp.Body.Close()
+			_ = resp.Body.Close()
 			if resp.StatusCode == http.StatusOK {
 				return nil
 			}

@@ -7,7 +7,26 @@
   "markerFound": false,
   "tested": true,
   "testIds": [
-    "TestGetInsightsSummary_WhenUnpricedModelFamily_ExpectPricingUnavailableFlagged"
+    "TestGetInsightsSummary_EmptyStore_ReturnsEmptyResponse",
+    "TestGetInsightsSummary_AggregatesTokensAndCost",
+    "TestGetInsightsSummary_TimeFilter_ExcludesOutOfRange",
+    "TestGetInsightsSummary_ModelFilter_OnlyMatchingFamily",
+    "TestGetInsightsSummary_OrphanFilter_ExcludesOrphansWhenNotRequested",
+    "TestGetInsightsSummary_WhenConversationIdFilterMatchesOrphanSession_ExpectExactlyThatSessionReturned",
+    "TestGetInsightsSummary_WhenSessionIdFilterSetAndNoConversationIdFilter_ExpectOnlyMatchingNonOrphanSessionReturned",
+    "TestGetInsightsSummary_DailyRollup_BucketsPerCalendarDay",
+    "TestGetInsightsSummary_ModelBreakdown_AggregatesPerFamily",
+    "TestGetInsightsSummary_CacheHitRate_ComputedCorrectly",
+    "TestGetInsightsSummary_WhenUnpricedModelFamily_ExpectPricingUnavailableFlagged",
+    "TestGetInsightsSummary_WhenSonnet5ModelUsed_ExpectNonZeroCost",
+    "TestGetInsightsSummary_WhenSyntheticTurnMixedWithRealTurns_ExpectSyntheticNeverSurfacedAsUnpriced",
+    "TestGetInsightsSummary_WhenCalledTwiceWithSameUnpricedFamily_ExpectLoggedOnce",
+    "TestGetInsightsSummary_When25SessionsEachProduceOneFinding_ExpectTop20SortedByDollarImpactDesc",
+    "TestGetInsightsSummary_WhenOneSessionHasDegenerateData_ExpectOtherSessionsFindingsStillReturned",
+    "TestGetInsightsSummary_WhenMostCalledToolUnpricedAndLessCalledToolPriced_ExpectOrderingUnchangedAndCostFieldsPopulated",
+    "TestGetInsightsSummary_WhenMultiToolTurn_ExpectCostMayDoubleCountSetOnBothTools",
+    "TestGetInsightsSummary_When3SessionsAcross2ActivityTypes_ExpectActivityBreakdownAggregatedCorrectly",
+    "TestGetInsightsSummary_WhenSessionClassified_ExpectActivityTypeSetOnSummary"
   ],
-  "lastModified": "2026-07-27T00:00:00Z"
+  "lastModified": "2026-09-04T00:00:00Z"
 }

@@ -357,11 +357,18 @@ jobs:
           path: coverage.tmux.out
           retention-days: 1
 
+  # test-rest's budget was raised 22m->30m (job timeout 25->35) on 2026-09-05
+  # (PR #697): the retry-on-any-failure fallback below re-runs the entire
+  # -race suite a second time in verbose mode, so a single flaky test hit
+  # (BUG-098/BUG-100's documented classes) roughly doubles wall-clock time
+  # against the same budget -- 5 consecutive CI-BUDGET-EXCEEDED failures on
+  # #697 traced to exactly this, not a code regression (every individual
+  # test passed; isolated reruns of the flaky tests passed 100%).
   test-rest:
     name: Test (server/session/config packages)
     runs-on: ubuntu-latest
     needs: prepare
-    timeout-minutes: 25
+    timeout-minutes: 35
     env:
       GIT_AUTHOR_NAME: stapler-squad-ci
       GIT_AUTHOR_EMAIL: ci@stapler-squad.invalid
@@ -404,12 +411,12 @@ jobs:
           # keep this marker prefix in sync with ciBudgetExceededMarker in server/services/github_webhook_pr_fix.go
           run_test_suite() {
             REST_TEST_PKGS="$(go list ./server/... ./session/... ./config/... | grep -vE '^github\.com/tstapler/stapler-squad/(session|session/mux|session/tmux)$')"
-            TMUX_BIN="$(pwd)/bin/tmux" go test -race -timeout=20m -coverprofile=coverage.rest.out \
+            TMUX_BIN="$(pwd)/bin/tmux" go test -race -timeout=28m -coverprofile=coverage.rest.out \
               -covermode=atomic $REST_TEST_PKGS \
-              || (TMUX_BIN="$(pwd)/bin/tmux" go test -race -timeout=20m -v $REST_TEST_PKGS; exit 1)
+              || (TMUX_BIN="$(pwd)/bin/tmux" go test -race -timeout=28m -v $REST_TEST_PKGS; exit 1)
           }
           export -f run_test_suite
-          timeout 22m bash -c run_test_suite || { echo "::error::CI-BUDGET-EXCEEDED: 'test-rest' exceeded its 22m budget"; echo "CI-BUDGET-EXCEEDED: 'test-rest' exceeded its 22m budget" >> "$GITHUB_STEP_SUMMARY"; exit 1; }
+          timeout 30m bash -c run_test_suite || { echo "::error::CI-BUDGET-EXCEEDED: 'test-rest' exceeded its 30m budget"; echo "CI-BUDGET-EXCEEDED: 'test-rest' exceeded its 30m budget" >> "$GITHUB_STEP_SUMMARY"; exit 1; }
 
       - name: Upload rest-group coverage
         uses: actions/upload-artifact@v4

@@ -140,6 +140,10 @@ e2e-lighthouse: ## Run Lighthouse CI performance audit
 # Build targets
 build: stapler-squad ## Build the Go application
 
+# Also invoked directly by tests/e2e/helpers/test-server.ts (`make stapler-squad`)
+# to build the binary Playwright's global-setup spawns — relying on this
+# target's own dependency chain (server/web/dist) is what keeps e2e runs from
+# serving a stale frontend after only web-app/src changes.
 stapler-squad: ensure-tools proto-gen ent-gen server/web/dist $(GO_FILES) ## Build the Go binary
 	@echo "Building Go application..."
 ifeq ($(UNAME_S),Darwin)
@@ -189,9 +193,8 @@ qr: ensure-tools proto-gen ## Print remote access QR codes for phone setup
 	@./stapler-squad print-qr-codes
 
 restart-web: build-all ## Rebuild and restart the web server
-	@echo "Stopping existing stapler-squad processes..."
-	@-pkill -f "(^|/)stapler-squad([[:space:]]|$$)" 2>/dev/null || true
-	@sleep 1
+	@echo "Stopping existing stapler-squad dev processes (leaves the installed service alone)..."
+	@./scripts/dev-restart-guard.sh 8543 8444 $(PROFILE_PORT)
 	@echo "Starting server..."
 	@./stapler-squad $(SERVER_FLAGS) $(PROFILE_FLAGS) &
 	@sleep 2
@@ -212,9 +215,8 @@ restart-web-profile: ## Rebuild and restart web server with profiling enabled
 	@echo "   Analyze with: go tool trace /tmp/stapler-squad-trace-*.out"
 
 web-dev: build-all ## Build web UI and server, then restart (detects file changes automatically)
-	@echo "Stopping existing stapler-squad processes..."
-	@-pkill -f "(^|/)stapler-squad([[:space:]]|$$)" 2>/dev/null || true
-	@sleep 1
+	@echo "Stopping existing stapler-squad dev processes (leaves the installed service alone)..."
+	@./scripts/dev-restart-guard.sh 8543 8444 $(PROFILE_PORT)
 	@echo "Starting server..."
 	@./stapler-squad $(PROFILE_FLAGS) &
 	@sleep 2
@@ -781,6 +783,13 @@ lint-shell: ## Run shellcheck over all first-party shell scripts
 	@shellcheck -x $(SHELL_SCRIPTS)
 	@echo "shellcheck: ok"
 
+test-shell: ## Run shell-script regression tests (*.test.sh) — currently: dev-restart-guard.sh
+	@echo "Running shell regression tests..."
+	@for t in $$(find scripts -name '*.test.sh'); do \
+		echo "-- $$t --"; \
+		sh "$$t" || exit 1; \
+	done
+
 actor-lint: ## Detect actor self-deadlock patterns using ast-grep (sg)
 	@which sg >/dev/null 2>&1 || (echo "sg (ast-grep) not installed; run: cargo install ast-grep" && exit 1)
 	sg scan --rule session/.sg-rules/actor-lint.yml session/
@@ -804,12 +813,12 @@ lint-css-tokens: ## Fail if any component .css.ts file uses hardcoded hex colors
 	  ! -name 'ThemePicker.css.ts' \
 	  ! -path '*/debug/escape-codes/page.css.ts' \
 	  | while read f; do \
-	    if grep '#[0-9a-fA-F]\{3,8\}' "$$f" 2>/dev/null | grep -qv '//.*#[0-9a-fA-F]\{3,8\}'; then echo "$$f"; fi; \
+	    if grep '#[0-9a-fA-F]\{3,8\}' "$$f" 2>/dev/null | grep -v '^[[:space:]]*\*' | grep -qv '//.*#[0-9a-fA-F]\{3,8\}'; then echo "$$f"; fi; \
 	  done); \
 	if [ -n "$$violations" ]; then \
 	  echo "❌ Hardcoded hex colors found in component .css.ts files (use vars.color.* instead):"; \
 	  for f in $$violations; do \
-	    grep -n '#[0-9a-fA-F]\{3,8\}' "$$f" | grep -v '//.*#[0-9a-fA-F]\{3,8\}' | head -3 | sed "s|^|  $$f line |"; \
+	    grep -n '#[0-9a-fA-F]\{3,8\}' "$$f" | grep -v '^[0-9]*:[[:space:]]*\*' | grep -v '//.*#[0-9a-fA-F]\{3,8\}' | head -3 | sed "s|^|  $$f line |"; \
 	  done; \
 	  exit 1; \
 	fi
@@ -908,7 +917,7 @@ dev-setup: install-tools ## Set up development environment
 	@echo "Development environment setup complete!"
 	@echo "Run 'make help' to see available commands"
 
-ci: build $(BIN_TMUX) test test-race vet lint lint-css-tokens test-integration fmt-check registry-generate actor-field-guard ptmx-field-guard otel-auto-isolation-guard ## Full CI pipeline: proto→web→build→tests→lint→fmt→registry
+ci: build $(BIN_TMUX) test test-race vet lint lint-css-tokens test-integration test-shell fmt-check registry-generate actor-field-guard ptmx-field-guard otel-auto-isolation-guard ## Full CI pipeline: proto→web→build→tests→lint→fmt→registry
 
 # ready: everything `make ci` runs, plus the CI-only checks that have no local
 # equivalent yet — .github/workflows/lint.yml's complexity gate (gocyclo/

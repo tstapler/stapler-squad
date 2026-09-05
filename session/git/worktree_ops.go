@@ -682,7 +682,10 @@ func CleanupWorktrees() error {
 
 	for _, entry := range entries {
 		if entry.IsDir() {
-			os.RemoveAll(filepath.Join(worktreesDir, entry.Name()))
+			dirPath := filepath.Join(worktreesDir, entry.Name())
+			if err := os.RemoveAll(dirPath); err != nil {
+				log.Warn("CleanupWorktrees: failed to remove worktree directory", "path", dirPath, "err", err)
+			}
 		}
 	}
 

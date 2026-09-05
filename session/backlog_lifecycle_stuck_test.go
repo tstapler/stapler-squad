@@ -2303,6 +2303,43 @@ func TestReconcileTerminalItemSessions_should_ArchiveAndKillReviewSession_When_I
 	assert.Contains(t, archiver.killedUUIDs, "leaked-live-review-session")
 }
 
+// TestReconcileTerminalItemSessions_should_SkipTmuxKill_When_ItemSessionRoleIsJulesWork
+// guards Story 2.1.1: a Jules session has no local tmux pane (IsTmuxBackedSessionRole
+// excludes SessionRoleJulesWork), so the sweep must not attempt to archive/kill it —
+// only log-and-skip — and the item must stay "done".
+func TestReconcileTerminalItemSessions_should_SkipTmuxKill_When_ItemSessionRoleIsJulesWork(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:  "done item with one ended jules_work session",
+		Status: string(BacklogStatusDone),
+	})
+	require.NoError(t, err)
+	is, err := storage.CreateItemSession(ctx, ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: "jules-sessions/ended-jules-session",
+		SessionRole: SessionRoleJulesWork,
+	})
+	require.NoError(t, err)
+	require.NoError(t, storage.UpdateItemSessionEnded(ctx, is.ID, time.Now()))
+
+	listener := NewBacklogLifecycleListener(storage)
+	archiver := &fakeSessionArchiver{}
+	listener.SetSessionArchiver(archiver)
+
+	listener.reconcileTerminalItemSessions(ctx)
+
+	assert.Empty(t, archiver.archivedUUIDs, "jules_work session must never be handed to the tmux archiver")
+	assert.Empty(t, archiver.killedUUIDs, "jules_work session has no tmux pane to kill")
+
+	reloaded, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, string(BacklogStatusDone), reloaded.Status, "item must stay done")
+}
+
 func TestReconcileTerminalItemSessions_should_ArchiveWorkSession_When_ItemAlreadyArchived(t *testing.T) {
 	t.Parallel()
 	storage, cleanup := createTestStorage(t)

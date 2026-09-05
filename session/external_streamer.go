@@ -222,7 +222,7 @@ func (s *ExternalStreamer) Stop() {
 
 	s.connMu.Lock()
 	if s.conn != nil {
-		s.conn.Close()
+		_ = s.conn.Close()
 		s.conn = nil
 	}
 	s.connected = false
@@ -311,29 +311,38 @@ func (s *ExternalStreamer) connect() error {
 		return fmt.Errorf("failed to connect to socket: %w", err)
 	}
 
-	// Set read deadline for initial metadata
-	conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	// Set read deadline for initial metadata. If this fails, the connection is
+	// unusable for the handshake below (an unbounded DecodeMessage could hang
+	// forever), so treat it as a connection failure.
+	if err := conn.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		_ = conn.Close()
+		return fmt.Errorf("failed to set initial read deadline: %w", err)
+	}
 
 	// Read initial metadata message
 	msg, err := mux.DecodeMessage(conn)
 	if err != nil {
-		conn.Close()
+		_ = conn.Close()
 		return fmt.Errorf("failed to read metadata: %w", err)
 	}
 
 	if msg.Type != mux.MessageTypeMetadata {
-		conn.Close()
+		_ = conn.Close()
 		return fmt.Errorf("expected metadata message, got type %d", msg.Type)
 	}
 
 	metadata, err := mux.ParseMetadataMessage(msg)
 	if err != nil {
-		conn.Close()
+		_ = conn.Close()
 		return fmt.Errorf("failed to parse metadata: %w", err)
 	}
 
-	// Clear deadline for ongoing reads
-	conn.SetReadDeadline(time.Time{})
+	// Clear deadline for ongoing reads. A failure here would leave the earlier
+	// 5s deadline in place, causing at most one spurious timeout on the next
+	// read loop iteration (which then retries) -- not worth failing connect().
+	if err := conn.SetReadDeadline(time.Time{}); err != nil {
+		log.Warn("failed to clear read deadline after connect", "path", s.socketPath, "err", err)
+	}
 
 	// Store connection and metadata
 	s.connMu.Lock()
@@ -383,8 +392,15 @@ func (s *ExternalStreamer) readLoop() {
 			continue
 		}
 
-		// Set read deadline to allow checking context
-		conn.SetReadDeadline(time.Now().Add(1 * time.Second))
+		// Set read deadline to allow checking context. A failure here (e.g. the
+		// connection was just closed out from under us) means the fd is already
+		// unusable, so DecodeMessage below will fail immediately with its own
+		// error rather than block -- fall through into the normal error handling
+		// instead of skipping the read, which would spin forever without ever
+		// detecting the closed connection.
+		if err := conn.SetReadDeadline(time.Now().Add(1 * time.Second)); err != nil {
+			log.Warn("failed to set read deadline in mux read loop", "path", s.socketPath, "err", err)
+		}
 
 		msg, err := mux.DecodeMessage(conn)
 		if err != nil {
@@ -420,10 +436,12 @@ func (s *ExternalStreamer) readLoop() {
 				log.Warn("error reading from mux (unhandled error type)", "type", fmt.Sprintf("%T", err), "err", err)
 			}
 
-			// Mark as disconnected
+			// Mark as disconnected. The connection is already broken (the read
+			// above failed with a non-timeout error), so a Close() error here is
+			// inconsequential -- reconnect() will establish a fresh connection.
 			s.connMu.Lock()
 			if s.conn != nil {
-				s.conn.Close()
+				_ = s.conn.Close()
 				s.conn = nil
 			}
 			s.connected = false
@@ -443,8 +461,13 @@ func (s *ExternalStreamer) readLoop() {
 			s.broadcast(msg.Data)
 
 		case mux.MessageTypePing:
-			// Respond with pong
-			mux.WriteMessage(conn, mux.NewPongMessage())
+			// Respond with pong. A failed write here means the connection is
+			// already broken; the next DecodeMessage call will surface that
+			// error and drive the normal reconnect path, so log-and-continue
+			// rather than duplicating that handling here.
+			if err := mux.WriteMessage(conn, mux.NewPongMessage()); err != nil {
+				log.Warn("failed to send pong", "path", s.socketPath, "err", err)
+			}
 
 		case mux.MessageTypeSnapshotReply:
 			// Send snapshot response to waiting GetSnapshot() caller
@@ -459,7 +482,7 @@ func (s *ExternalStreamer) readLoop() {
 			log.Info("mux server closing connection", "path", s.socketPath)
 			s.connMu.Lock()
 			if s.conn != nil {
-				s.conn.Close()
+				_ = s.conn.Close()
 				s.conn = nil
 			}
 			s.connected = false

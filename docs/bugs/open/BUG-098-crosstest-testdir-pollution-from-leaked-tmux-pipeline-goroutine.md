@@ -33,6 +33,20 @@ instance of this (`TestCreateSession_should_ComposeProfileCLIFlagsBeforePresetEx
 This is either a **new, uncovered** leak site (some async work not routed through `trackCleanup`), or
 the same covered pipeline occasionally still racing under enough load.
 
+## Also observed (2026-09-04)
+
+Same symptom, this time on the leaking test itself rather than a later victim:
+`TestCreateSession_EmptyPath_Autonomous_PassesPathValidation` (`server/services/session_creation_pipeline_test.go`)
+failed its own `t.TempDir()` cleanup —
+`unlinkat .../tmux-exec-gate/test_server_services_<pid>_31: directory not empty` — immediately after a
+logged `WARN JoinSessionDriver: driver goroutine did not exit within timeout; it may still be running
+session=autonomous-session timeout=10s`. Seen during `make quick-check`'s `test-coverage` target while
+verifying an unrelated `log`/`config` workspace-path fix, with another concurrent Claude Code session on
+the same machine independently running its own full `go test -race` suite at the time — consistent with
+this bug's existing "load-dependent" classification, not a new root cause. Not re-filed separately per
+this repo's `fix-flaky-tests-dont-defer` skill's guidance to avoid duplicate bug reports for the same
+underlying class.
+
 ## Reproduction Steps
 
 Not reliably reproducible in isolation (confirmed: re-running the Slack test alone, and the full

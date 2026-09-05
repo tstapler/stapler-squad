@@ -96,6 +96,11 @@ function SettingsPageInner() {
                 Remotes (SSH hosts) →
               </Link>
             </section>
+            <section className={styles.section}>
+              <Link href={routes.settingsJules} className={styles.helpLink} data-testid="settings-jules-link">
+                Jules (Google cloud agent) →
+              </Link>
+            </section>
             {/* Help subsection */}
             <section className={styles.section}>
               <div className={styles.helpSection}>

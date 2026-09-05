@@ -123,22 +123,22 @@ func (t *TmuxSession) StartControlMode() error {
 
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
-		stdout.Close()
+		_ = stdout.Close()
 		return fmt.Errorf("failed to create stdin pipe for control mode: %w", err)
 	}
 
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
-		stdout.Close()
-		stdin.Close()
+		_ = stdout.Close()
+		_ = stdin.Close()
 		return fmt.Errorf("failed to create stderr pipe for control mode: %w", err)
 	}
 
 	// Start the control mode process
 	if err := cmd.Start(); err != nil {
-		stdout.Close()
-		stdin.Close()
-		stderr.Close()
+		_ = stdout.Close()
+		_ = stdin.Close()
+		_ = stderr.Close()
 		return fmt.Errorf("failed to start control mode for session '%s': %w", t.sanitizedName, err)
 	}
 	TrackChildPID(cmd.Process.Pid, "tmux control-mode session="+t.sanitizedName)
@@ -160,11 +160,15 @@ func (t *TmuxSession) StartControlMode() error {
 	t.controlModeSubMu.Unlock()
 
 	// Start goroutines: priority sender, output reader, stderr monitor.
-	// highPriSendCh/normPriSendCh/cmSenderExited are captured here (like doneCh
-	// and stdin already were) rather than read from t.* inside runCMSender --
-	// see runCMSender's doc comment for why that distinction is load-bearing.
+	// highPriSendCh/normPriSendCh are captured here (not read from the struct
+	// fields inside runCMSender) so a later StartControlMode call reassigning
+	// those fields for a fresh session can never race with this goroutine's
+	// own reads of its own channels -- see runCMSender's doc comment.
 	doneCh := t.controlModeDone
-	go t.runCMSender(doneCh, stdin, t.highPriSendCh, t.normPriSendCh, t.cmSenderExited)
+	highPriSendCh := t.highPriSendCh
+	normPriSendCh := t.normPriSendCh
+	cmSenderExited := t.cmSenderExited
+	go t.runCMSender(doneCh, stdin, highPriSendCh, normPriSendCh, cmSenderExited)
 	go t.readControlModeOutput()
 	go t.monitorControlModeErrors(stderr)
 
@@ -231,7 +235,10 @@ func (t *TmuxSession) startRemoteControlMode() error {
 	t.controlModeSubMu.Unlock()
 
 	doneCh := t.controlModeDone
-	go t.runCMSender(doneCh, stdin, t.highPriSendCh, t.normPriSendCh, t.cmSenderExited)
+	highPriSendCh := t.highPriSendCh
+	normPriSendCh := t.normPriSendCh
+	cmSenderExited := t.cmSenderExited
+	go t.runCMSender(doneCh, stdin, highPriSendCh, normPriSendCh, cmSenderExited)
 	go t.readControlModeOutput()
 
 	log.Info("successfully started remote control mode", "session", t.sanitizedName)
@@ -299,10 +306,14 @@ func (t *TmuxSession) StopControlMode() error {
 	t.normPriSendCh = nil
 	t.controlModeSubMu.Unlock()
 
-	// Close stdin to signal tmux to exit.
+	// Close stdin to signal tmux to exit. A failure here is not fatal: the
+	// wait/kill logic below falls back to a hard kill after a 2s timeout if
+	// tmux never sees EOF and exits on its own.
 	t.cmdSendMu.Lock()
 	if t.controlModeStdin != nil {
-		t.controlModeStdin.Close()
+		if err := t.controlModeStdin.Close(); err != nil {
+			log.Warn("failed to close control mode stdin", "session", t.sanitizedName, "err", err)
+		}
 		t.controlModeStdin = nil
 	}
 	t.cmdSendMu.Unlock()
@@ -341,9 +352,10 @@ func (t *TmuxSession) StopControlMode() error {
 		<-done // Wait for kill to complete
 	}
 
-	// Close stdout
+	// Close stdout. The process has already exited or been killed above, so
+	// any close error here is inconsequential cleanup.
 	if t.controlModeStdout != nil {
-		t.controlModeStdout.Close()
+		_ = t.controlModeStdout.Close()
 		t.controlModeStdout = nil
 	}
 
