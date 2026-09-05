@@ -152,4 +152,65 @@ export class SessionDetailPage {
   getNoteRenderedBody(): Locator {
     return this.page.getByTestId("session-note-rendered");
   }
+
+  // ---------------------------------------------------------------------
+  // Insights session drill-down — route vs. modal (project_plans/insights-cost-intelligence,
+  // design/ux.md B3). Unlike the sections above (the main workspace pane's
+  // <SessionDetail>), these cover `SessionDetailContent` as rendered by
+  // `/insights/session-detail?sessionId=` (SessionDetailPageClient.tsx) and
+  // by the dashboard's quick-peek modal (SessionDetailDrawer.tsx) — both
+  // render the same component, so one set of locators/assertions serves
+  // both surfaces. Added here per this project's page-object reuse
+  // convention rather than forking a second "session detail" page object.
+  // ---------------------------------------------------------------------
+
+  /** Navigates directly to the deep-linkable route (cold navigation, no prior client-side history). */
+  async gotoInsightsSessionRoute(sessionId: string) {
+    // Skip the first-run onboarding tour modal — see InsightsPage.goto()'s
+    // identical addInitScript for why this is needed on every fresh
+    // navigation, not just the dashboard's.
+    await this.page.addInitScript(() => {
+      try {
+        window.localStorage.setItem("stapler-squad:onboarded", "true");
+      } catch {
+        /* ignore */
+      }
+    });
+    await this.page.goto(`${BASE_URL}/insights/session-detail?sessionId=${encodeURIComponent(sessionId)}`, {
+      waitUntil: "domcontentloaded",
+    });
+  }
+
+  /** The route/modal's `<h1>`-equivalent heading — receives focus on route mount (design/ux.md B3). */
+  getInsightsHeading(): Locator {
+    return this.page.getByRole("heading", { level: 1 });
+  }
+
+  /** Present in every route state (found, not-found, error) — the "no dead ends" guarantee. */
+  getInsightsBackToDashboardLink(): Locator {
+    return this.page.getByRole("link", { name: /Back to dashboard/i });
+  }
+
+  getInsightsSessionNotFound(): Locator {
+    return this.page.getByTestId("session-not-found");
+  }
+
+  /** SessionDetailDrawer's dialog container (role="dialog"). */
+  getInsightsModal(): Locator {
+    return this.page.getByRole("dialog", { name: /session details/i });
+  }
+
+  getInsightsModalCloseButton(): Locator {
+    return this.page.getByRole("button", { name: /close session details/i });
+  }
+
+  /** Navigates from the modal (quick-peek) to the deep-linkable route. */
+  getInsightsOpenFullPageLink(): Locator {
+    return this.page.getByRole("link", { name: /Open full page/i });
+  }
+
+  /** SessionDetailContent's "Tools Breakdown" table (shared verbatim by the modal and the route). */
+  getInsightsToolsBreakdownTable(): Locator {
+    return this.page.getByTestId("tools-breakdown-table");
+  }
 }

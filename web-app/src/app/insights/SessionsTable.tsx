@@ -42,9 +42,39 @@ function pathBasename(p: string): string {
   return p.split("/").pop() || p;
 }
 
+// sessionDurationSeconds returns lastMessageAt - firstMessageAt in seconds,
+// or 0 when either timestamp is missing (documented decision: unlike cost, a
+// missing duration isn't "bad," so it sorts at its natural numeric position
+// rather than being pushed to either end — see SortColumn's "duration" case).
+function sessionDurationSeconds(s: SessionTokenSummary): number {
+  if (!s.firstMessageAt || !s.lastMessageAt) return 0;
+  return Number(s.lastMessageAt.seconds) - Number(s.firstMessageAt.seconds);
+}
+
+function fmtDuration(seconds: number): string {
+  if (seconds <= 0) return "—";
+  const mins = Math.floor(seconds / 60);
+  const secs = Math.floor(seconds % 60);
+  if (mins === 0) return `${secs}s`;
+  return `${mins}m ${secs}s`;
+}
+
+function fmtSignedCost(usd: number): string {
+  const sign = usd < 0 ? "-" : "+";
+  return `${sign}$${Math.abs(usd).toFixed(2)}`;
+}
+
 const VIRTUOSO_THRESHOLD = 50;
 
-type SortColumn = "input" | "output" | "cache" | "cost";
+type SortColumn =
+  | "input"
+  | "output"
+  | "cache"
+  | "cost"
+  | "duration"
+  | "costPerMessage"
+  | "cacheRoi"
+  | "wasteScore";
 
 export function SessionsTable({ sessions, onSessionClick, backlogIndex }: Props) {
   const [showOrphans, setShowOrphans] = useState(true);
@@ -119,6 +149,38 @@ export function SessionsTable({ sessions, onSessionClick, backlogIndex }: Props)
         const cmp = a.estimatedCostUsd - b.estimatedCostUsd;
         return sortAsc ? cmp : -cmp;
       }
+      if (sortCol === "costPerMessage") {
+        // messageCount === 0 sorts last regardless of direction — mirrors
+        // the "cost" unpriced-last guard above, avoiding a raw N/0 division
+        // that would produce NaN/Infinity.
+        const aZero = a.messageCount === 0;
+        const bZero = b.messageCount === 0;
+        if (aZero !== bZero) return aZero ? 1 : -1;
+        if (aZero && bZero) return 0;
+        const cmp = a.estimatedCostUsd / a.messageCount - b.estimatedCostUsd / b.messageCount;
+        return sortAsc ? cmp : -cmp;
+      }
+      if (sortCol === "cacheRoi") {
+        // Unpriced sessions (ROI undefined) always sort last — same guard
+        // shape as "cost". Negative ROI values are real data and sort
+        // normally alongside positive ones.
+        const aUnpriced = a.unpricedModels.length > 0;
+        const bUnpriced = b.unpricedModels.length > 0;
+        if (aUnpriced !== bUnpriced) return aUnpriced ? 1 : -1;
+        const cmp = a.cacheRoiUsd - b.cacheRoiUsd;
+        return sortAsc ? cmp : -cmp;
+      }
+      if (sortCol === "wasteScore") {
+        // Sort-last bucket covers both "unpriced" and "not evaluated"
+        // (wasteScore undefined) — which of the two a given row is doesn't
+        // affect sort order, only its cell text (see renderCells).
+        const aMissing = a.unpricedModels.length > 0 || a.wasteScore === undefined;
+        const bMissing = b.unpricedModels.length > 0 || b.wasteScore === undefined;
+        if (aMissing !== bMissing) return aMissing ? 1 : -1;
+        if (aMissing && bMissing) return 0;
+        const cmp = (a.wasteScore as number) - (b.wasteScore as number);
+        return sortAsc ? cmp : -cmp;
+      }
       let cmp = 0;
       switch (sortCol) {
         case "input":
@@ -129,6 +191,12 @@ export function SessionsTable({ sessions, onSessionClick, backlogIndex }: Props)
           break;
         case "cache":
           cmp = a.cacheHitRate - b.cacheHitRate;
+          break;
+        case "duration":
+          // Missing timestamps default to 0 — a missing duration isn't
+          // "bad" like a missing price, so it sorts at its natural numeric
+          // position rather than being pushed to either end.
+          cmp = sessionDurationSeconds(a) - sessionDurationSeconds(b);
           break;
       }
       return sortAsc ? cmp : -cmp;
@@ -172,6 +240,7 @@ export function SessionsTable({ sessions, onSessionClick, backlogIndex }: Props)
   const sortableHeaderCell = (col: SortColumn, label: string) => (
     <th
       className={thRight}
+      scope="col"
       aria-sort={sortCol === col ? (sortAsc ? "ascending" : "descending") : "none"}
     >
       <span
@@ -194,13 +263,17 @@ export function SessionsTable({ sessions, onSessionClick, backlogIndex }: Props)
 
   const headerContent = () => (
     <tr>
-      <th className={th}>Session</th>
-      <th className={th}>Model</th>
-      <th className={th}>Path</th>
+      <th className={th} scope="col">Session</th>
+      <th className={th} scope="col">Model</th>
+      <th className={th} scope="col">Path</th>
       {sortableHeaderCell("input", "Input")}
       {sortableHeaderCell("output", "Output")}
       {sortableHeaderCell("cache", "Cache")}
       {sortableHeaderCell("cost", "Cost")}
+      {sortableHeaderCell("duration", "Duration")}
+      {sortableHeaderCell("costPerMessage", "Cost/Msg")}
+      {sortableHeaderCell("cacheRoi", "Cache ROI")}
+      {sortableHeaderCell("wasteScore", "Waste Score")}
     </tr>
   );
 
@@ -239,6 +312,24 @@ export function SessionsTable({ sessions, onSessionClick, backlogIndex }: Props)
         <td className={tdRight}>
           {fmtCost(s.estimatedCostUsd)}
           {s.unpricedModels.length > 0 && <span className={unpricedBadge}>unpriced</span>}
+        </td>
+        <td className={tdRight}>{fmtDuration(sessionDurationSeconds(s))}</td>
+        <td className={tdRight}>
+          {s.messageCount === 0 ? "Not evaluated" : fmtCost(s.estimatedCostUsd / s.messageCount)}
+        </td>
+        <td className={tdRight}>
+          {s.unpricedModels.length > 0 ? (
+            <span className={unpricedBadge}>unpriced</span>
+          ) : (
+            fmtSignedCost(s.cacheRoiUsd)
+          )}
+        </td>
+        <td className={tdRight}>
+          {s.unpricedModels.length > 0
+            ? "—"
+            : s.wasteScore === undefined
+              ? "Not evaluated"
+              : s.wasteScore}
         </td>
       </>
     );
