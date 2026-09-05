@@ -13,5 +13,5 @@
     "TestWatchInsights_WhenChannelReceivesNonNilParseResult_ExpectUpdateEventWithPopulatedSession",
     "TestWatchInsights_WhenChannelReceivesNil_ExpectParseCompleteEventNotBareUpdate"
   ],
-  "lastModified": "2026-09-04T00:00:00.000Z"
+  "lastModified": "2026-09-04T00:00:00Z"
 }

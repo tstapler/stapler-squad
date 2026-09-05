@@ -28,5 +28,5 @@
     "TestGetInsightsSummary_When3SessionsAcross2ActivityTypes_ExpectActivityBreakdownAggregatedCorrectly",
     "TestGetInsightsSummary_WhenSessionClassified_ExpectActivityTypeSetOnSummary"
   ],
-  "lastModified": "2026-09-04T00:00:00.000Z"
+  "lastModified": "2026-09-04T00:00:00Z"
 }
