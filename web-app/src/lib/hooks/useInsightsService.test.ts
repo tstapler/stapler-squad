@@ -28,7 +28,7 @@ jest.mock("@/lib/config", () => ({
   createAuthInterceptor: () => jest.fn(),
 }));
 
-import { useInsightsSummary } from "@/lib/hooks/useInsightsService";
+import { useInsightsSummary, useSessionDetail } from "@/lib/hooks/useInsightsService";
 
 /** Async-iterable test double with a manually-controlled event queue,
  * mirroring useWatchBacklogItems.test.ts's makeControllableStream. */
@@ -184,5 +184,36 @@ describe("useInsightsSummary", () => {
     });
 
     await waitFor(() => expect(mockGetInsightsSummary).toHaveBeenCalledTimes(2));
+  });
+});
+
+describe("useSessionDetail", () => {
+  beforeEach(() => {
+    mockGetInsightsSummary.mockReset();
+    mockWatchInsights.mockReset();
+    mockGetInsightsSummary.mockResolvedValue(makeInitialSummary());
+  });
+
+  afterEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it("useSessionDetail_should_skipRequestAndReturnNullSummary_when_sessionIdIsEmptyString", async () => {
+    const { result } = renderHook(() => useSessionDetail(""));
+
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    expect(mockGetInsightsSummary).not.toHaveBeenCalled();
+    expect(result.current.summary).toBeNull();
+    expect(result.current.error).toBeNull();
+  });
+
+  it("useSessionDetail_should_fetchAndReturnMatchingSession_when_sessionIdIsNonEmpty", async () => {
+    const { result } = renderHook(() => useSessionDetail("sess-abc"));
+
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    expect(mockGetInsightsSummary).toHaveBeenCalledTimes(1);
+    expect(result.current.summary?.conversationId).toBe("abc");
   });
 });

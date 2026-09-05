@@ -12,15 +12,9 @@ import (
 const minTurnsForCacheFloor = 5
 
 // cacheHitFloor is the minimum acceptable cache-hit rate before a session is
-// flagged as wasteful. Calibrated 2026-09-03 (validation.md's Threshold
-// Calibration step) against the operator's real local ~/.claude/projects
-// corpus (600 sessions sampled): the plan's original 0.40 fiat value fired on
-// 0/600 sessions (below the 2% "reads as broken" line) because this
-// operator's real cache-hit-rate distribution runs far hotter than a generic
-// 40% floor assumes — p1=0.784, p5=0.934, p10=0.964, median=1.000 among
-// eligible (>=5-turn, priced) sessions. Raised to 0.95 so the floor sits
-// between this corpus's p5 and p10, firing on roughly 5-10% of sessions
-// (within Failure #2's healthy 2-50% band) instead of 0%.
+// flagged as wasteful. Calibrated to fire on ~5-10% of sessions; see
+// project_plans/insights-cost-intelligence/implementation/validation.md for
+// the derivation.
 const cacheHitFloor = 0.95
 
 // cacheHitCriticalFloor is the hit rate below which a cache-hit-floor breach
@@ -36,13 +30,11 @@ const cacheHitCriticalFloor = 0.85
 // healthy 2-50% band, so left unchanged from the plan's original value.
 const sessionTokenCeiling = 2_000_000
 
-// oversizedContextFloor flags a session whose first turn's context is
-// unusually large — a typical Claude Code system prompt plus a modest
-// CLAUDE.md is a few thousand tokens, so a first turn well above that
-// suggests an oversized CLAUDE.md or start-of-session file reads. Calibrated
-// 2026-09-03: fired on 69/600 (11.5%) of the real corpus at this value —
-// within Failure #2's healthy 2-50% band, so left unchanged from the plan's
-// original value.
+// oversizedContextFloor flags a session whose first-turn context is unusually
+// large (oversized CLAUDE.md or start-of-session file reads). Calibrated to
+// fire on ~11.5% of sessions; see
+// project_plans/insights-cost-intelligence/implementation/validation.md for
+// the derivation.
 const oversizedContextFloor = 30_000
 
 // sessionTokenCeilingCriticalCostUSD is the dollar-cost line above which a

@@ -35,19 +35,10 @@ var (
 	readToolNames  = map[string]bool{"Read": true, "Grep": true, "Glob": true}
 )
 
-// ClassifyActivity classifies a session's activity type from data already
-// present in a ParseResult, per two priority tiers (plan.md's Story 1.2.3):
-//
-//  1. Skill-name substring signal: a case-insensitive substring match on any
-//     SkillActivation.Name against "debug" (-> ActivityDebugging) or
-//     "refactor" (-> ActivityRefactoring), checked in that order — the first
-//     match wins and outranks the tool-ratio fallback below.
-//  2. Tool-call-ratio fallback (only consulted when no skill matched):
-//     writeRatio = (Edit+Write+NotebookEdit calls) / total calls,
-//     readRatio  = (Read+Grep+Glob calls) / total calls.
-//     writeRatio >= 0.3 -> ActivityFeatureDev; else readRatio >= 0.6 ->
-//     ActivityExploratory; else ActivityOther (also ActivityOther when there
-//     is no tool usage at all).
+// ClassifyActivity classifies a session's activity type: a skill-name
+// substring match ("debug"/"refactor") takes priority, falling back to the
+// writeRatio/readRatio tool-call-ratio heuristic above when no skill matched.
+// See plan.md's Story 1.2.3 acceptance criteria for the full priority rules.
 func ClassifyActivity(r *ParseResult) ActivityType {
 	if r == nil {
 		return ActivityOther

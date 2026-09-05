@@ -2,7 +2,7 @@
   "id": "insights-session-detail-route",
   "type": "frontend",
   "component": "SessionDetailPageClient",
-  "path": "web-app/src/app/insights/session/[sessionId]/SessionDetailPageClient.tsx",
+  "path": "web-app/src/app/insights/session-detail/SessionDetailPageClient.tsx",
   "markerLine": 1,
   "tested": true,
   "testIds": [

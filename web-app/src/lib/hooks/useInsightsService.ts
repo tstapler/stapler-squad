@@ -200,6 +200,17 @@ export function useSessionDetail(sessionId: string): UseSessionDetailReturn {
 
   useEffect(() => {
     let cancelled = false;
+    if (!sessionId) {
+      // An empty sessionId (e.g. "?sessionId=" absent) is not "no filter" to
+      // this hook, unlike the server's GetInsightsSummary RPC, which treats an
+      // empty sessionIdFilter as unset and would return every session,
+      // making res.sessions[0] an arbitrary session's data. Short-circuit to
+      // a not-found state instead of issuing the request.
+      setSummary(null);
+      setLoading(false);
+      setError(null);
+      return;
+    }
     setLoading(true);
     setError(null);
     (async () => {

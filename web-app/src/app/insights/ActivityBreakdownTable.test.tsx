@@ -19,18 +19,21 @@ describe("ActivityBreakdownTable", () => {
     expect(screen.getByText(/no data/i)).toBeInTheDocument();
   });
 
-  it("ActivityBreakdownTable_should_renderRowsSortedByCostDesc_when_rowsProvidedInCostDescOrder", () => {
+  it("ActivityBreakdownTable_should_preserveGivenOrder_when_rowsRendered", () => {
+    // ActivityBreakdownTable does no sorting of its own (see ActivityBreakdownTable.tsx's
+    // plain rows.map) — this asserts render order matches input order, not any cost-based
+    // sort. Rows are deliberately given in a non-cost-sorted order to prove that.
     const rows = [
-      makeRow({ activityType: ActivityType.FEATURE_DEV, estimatedCostUsd: 7, sessionCount: 2 }),
       makeRow({ activityType: ActivityType.DEBUGGING, estimatedCostUsd: 2, sessionCount: 1 }),
+      makeRow({ activityType: ActivityType.FEATURE_DEV, estimatedCostUsd: 7, sessionCount: 2 }),
     ];
     render(<ActivityBreakdownTable rows={rows} />);
 
     const table = screen.getByTestId("activity-breakdown-table");
     const rowLabels = Array.from(table.querySelectorAll("tbody tr")).map((tr) => tr.textContent);
 
-    expect(rowLabels[0]).toMatch(/Feature Dev/);
-    expect(rowLabels[1]).toMatch(/Debugging/);
+    expect(rowLabels[0]).toMatch(/Debugging/);
+    expect(rowLabels[1]).toMatch(/Feature Dev/);
   });
 
   it("ActivityBreakdownTable_should_showHumanLabel_when_activityTypeIsFeatureDev", () => {

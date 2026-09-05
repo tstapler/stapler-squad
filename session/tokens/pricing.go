@@ -343,19 +343,13 @@ func (pt *PricingTable) EstimateTurnCost(turn TurnStats) (cost float64, priced b
 	return cost, true
 }
 
-// AttributeToolCosts implements the tool-type-level session-sum attribution
-// method from ADR-001-per-tool-cost-attribution.md: for each turn, its whole
-// cost is added once to each distinct tool name that appeared in it — never
-// once per call, and never split across the turn's tools. A turn with more
-// than one distinct tool name marks all of them doubleCounted, since the same
-// turn cost is now attributed in full to more than one tool bucket. A turn
-// whose model has no PricingTable entry contributes nothing to costs and
-// marks every distinct tool name in it unpriced instead — per the "abstain
-// rather than guess" rule, a tool that never once had a priced turn must stay
-// distinguishable from a tool that is genuinely free. unpriced[name] should
-// only be consulted by callers for names absent from costs: a name can be
-// both "priced on some turns" (present in costs) and "unpriced on others"
-// (present in unpriced) without that meaning it's unpriced overall.
+// AttributeToolCosts attributes each turn's whole cost once to every distinct
+// tool name that appeared in it (never split, never per-call), marking any
+// turn with more than one distinct tool doubleCounted since its cost is now
+// double-booked across tool buckets — so costs must never be summed across
+// tools. See
+// project_plans/insights-cost-intelligence/decisions/ADR-001-per-tool-cost-attribution.md
+// for the full attribution method and the unpriced/doubleCounted semantics.
 func AttributeToolCosts(r *ParseResult, pt *PricingTable) (costs map[string]float64, doubleCounted map[string]bool, unpriced map[string]bool) {
 	costs = make(map[string]float64)
 	doubleCounted = make(map[string]bool)
@@ -404,18 +398,14 @@ func ComputeCacheHitRate(input, cacheRead int64) float64 {
 }
 
 // ComputeCacheROI returns the signed USD amount saved (or lost) by using
-// prompt caching, versus a counterfactual where every cache-read token was
-// instead paid for as fresh input and no cache-write cost was ever incurred:
+// prompt caching versus paying for every cache-read token as fresh input:
 //
 //	roi = cacheRead*(inputPrice-cacheReadPrice)/1e6 - cacheCreation*cacheWritePrice/1e6
 //
-// A negative result means the session paid more in cache-write cost than it
-// recouped in cache-read savings (e.g. a cache entry written but never read
-// back before expiring) — this is a real, expected outcome, not an error.
-// Returns (0, false) when r's primary model family has no PricingTable
-// entry, per this codebase's "abstain rather than guess" rule (see
-// EstimateCost's doc comment) — an unpriced session's ROI is undefined, not
-// zero, and callers must never render it as `$0.00`.
+// A negative result (cache written but never read back) is a real outcome,
+// not an error. Returns (0, false) — never a fake $0.00 — when r's model has
+// no PricingTable entry; see EstimateCost's doc comment for the "abstain
+// rather than guess" rule.
 func ComputeCacheROI(r *ParseResult, pt *PricingTable) (roi float64, ok bool) {
 	if r == nil || pt == nil {
 		return 0, false
