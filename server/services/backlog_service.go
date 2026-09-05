@@ -134,8 +134,15 @@ type BacklogService struct {
 	// self-service "Ship PR" action on the item detail page. nil (the default)
 	// makes TriggerShipPR return CodeUnimplemented; wired via SetOneShotRunner.
 	oneShotRunner PRRunner
-	cfg           *config.Config
-	engine        session.WorkflowEngine
+	// julesDispatcher drives DispatchToJules (backlog_service_jules.go). nil
+	// (the default — Jules disabled, or its dependencies unresolvable at
+	// startup) makes DispatchToJules return CodeFailedPrecondition pointing at
+	// Settings → Jules, mirroring checkEgressConsent's own message for the
+	// same underlying condition; wired via SetJulesDispatcher
+	// (server/dependencies.go, Task 2.4.4a).
+	julesDispatcher JulesDispatcher
+	cfg             *config.Config
+	engine          session.WorkflowEngine
 	// worktreeMu serializes context-file writes to the same worktree path so that
 	// concurrent SpawnSessionFromItem / AttachSessionToItem calls cannot produce
 	// a partially-written .claude/backlog-context.md.

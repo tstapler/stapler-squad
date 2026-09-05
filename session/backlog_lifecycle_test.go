@@ -4617,3 +4617,48 @@ func TestCreateBacklogItem_Labels_RoundTripsThroughGetBacklogItem(t *testing.T) 
 	assert.Equal(t, []string{"bug", "p1"}, fetched.Labels)
 	assert.Equal(t, "https://github.com/tstapler/stapler-squad/issues/42", fetched.ExternalURL)
 }
+
+// TestHasActiveSession_should_ReturnTrue_When_OpenJulesSessionPresent guards Story
+// 2.1.3 (pre-mortem P1 #1): hasActiveSession must recognize an open jules_work
+// session the same way it recognizes an open work/review session, so
+// recoverDriftedPRItem/reconcileDriftedPRItems don't steal an item away from Jules.
+func TestHasActiveSession_should_ReturnTrue_When_OpenJulesSessionPresent(t *testing.T) {
+	t.Parallel()
+	open := []ItemSessionSummary{{Role: SessionRoleJulesWork, EndedAt: nil}}
+	assert.True(t, hasActiveSession(open), "an open jules_work session must count as active")
+
+	ended := time.Now()
+	closedRow := []ItemSessionSummary{{Role: SessionRoleJulesWork, EndedAt: &ended}}
+	assert.False(t, hasActiveSession(closedRow), "an ended jules_work session must not count as active")
+}
+
+// TestHasActiveSession_should_PreserveWorkAndReviewGating_When_JulesRoleAdded is a
+// regression table: folding jules_work into hasActiveSession must not change the
+// pre-existing truth value for work/review/triage across open and ended rows.
+func TestHasActiveSession_should_PreserveWorkAndReviewGating_When_JulesRoleAdded(t *testing.T) {
+	t.Parallel()
+	ended := time.Now()
+	cases := []struct {
+		name string
+		role string
+		want bool // want when EndedAt is nil (open)
+	}{
+		{"work", SessionRoleWork, true},
+		{"review", SessionRoleReview, true},
+		{"triage", SessionRoleTriage, false},
+		{"jules_work", SessionRoleJulesWork, true},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name+"/open", func(t *testing.T) {
+			t.Parallel()
+			got := hasActiveSession([]ItemSessionSummary{{Role: tc.role, EndedAt: nil}})
+			assert.Equal(t, tc.want, got, "hasActiveSession open-row truth value for role %q must be unchanged", tc.role)
+		})
+		t.Run(tc.name+"/ended", func(t *testing.T) {
+			t.Parallel()
+			got := hasActiveSession([]ItemSessionSummary{{Role: tc.role, EndedAt: &ended}})
+			assert.False(t, got, "an ended row can never be active, regardless of role %q", tc.role)
+		})
+	}
+}

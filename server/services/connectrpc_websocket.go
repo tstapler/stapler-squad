@@ -824,9 +824,9 @@ func (h *ConnectRPCWebSocketHandler) HandleWebSocket(w http.ResponseWriter, r *h
 
 	// Read headers from first message (text format: "key: value\r\nkey: value\r\n\r\n")
 	// 30s deadline: a client that never sends headers should not hold the connection open.
-	conn.SetReadDeadline(time.Now().Add(30 * time.Second)) //nolint:errcheck
+	_ = conn.SetReadDeadline(time.Now().Add(30 * time.Second))
 	_, headersBytes, err := conn.ReadMessage()
-	conn.SetReadDeadline(time.Time{}) //nolint:errcheck // clear deadline for subsequent reads
+	_ = conn.SetReadDeadline(time.Time{}) // clear deadline for subsequent reads
 	if err != nil {
 		log.Error("failed to read headers", "err", err)
 		return
@@ -836,9 +836,9 @@ func (h *ConnectRPCWebSocketHandler) HandleWebSocket(w http.ResponseWriter, r *h
 	log.Info("received headers", "headers", headers)
 
 	// Read enveloped request body
-	conn.SetReadDeadline(time.Now().Add(30 * time.Second)) //nolint:errcheck
+	_ = conn.SetReadDeadline(time.Now().Add(30 * time.Second))
 	_, bodyBytes, err := conn.ReadMessage()
-	conn.SetReadDeadline(time.Time{}) //nolint:errcheck
+	_ = conn.SetReadDeadline(time.Time{})
 	if err != nil {
 		log.Error("failed to read request body", "err", err)
 		return
@@ -1744,7 +1744,17 @@ func (h *ConnectRPCWebSocketHandler) streamViaHub(stream *connectWebSocketStream
 		if restoreErr := tmuxSession.RestoreWithWorkDir(workDir); restoreErr != nil {
 			return handleTmuxRestoreFailure(instance, restoreErr)
 		}
-		tmuxAlive = true
+		// RestoreWithWorkDir always returns nil even on PTY attach failure
+		// (see the identical comment on session/instance.go's own
+		// RestoreWithWorkDir call site) — a nil error alone does not prove the
+		// tmux session is genuinely ready to serve capture/resize traffic.
+		// Confirm a real PTY attached before treating it (and, below, the
+		// self-heal decision that depends on it) as alive.
+		if _, ptyErr := tmuxSession.GetPTY(); ptyErr != nil {
+			log.Warn("[streamViaHub] restored tmux session but PTY attach failed, not treating as alive", "session", sessionID, "err", ptyErr)
+		} else {
+			tmuxAlive = true
+		}
 	}
 
 	// The tmux-session check above doesn't cover a concurrent Instance.Start() (e.g.
@@ -1757,11 +1767,11 @@ func (h *ConnectRPCWebSocketHandler) streamViaHub(stream *connectWebSocketStream
 				// Instance.Start() never ran for this instance (or raced/failed in
 				// server/dependencies.go's boot-time restart loop) even though tmux
 				// itself is confirmed alive. Self-heal instead of leaving Started()
-				// wedged at false: see MarkStartedAssumingTmuxAlive's doc comment for why
+				// wedged at false: see MarkStartedIfTmuxAlive's doc comment for why
 				// "proceeding anyway" here previously meant an endless
 				// ErrSessionNotStarted retry loop on every capture/resize.
 				log.Warn("[streamViaHub] instance not started but tmux is alive, marking started", "session", sessionID, "waited", startupWaitTimeout)
-				instance.MarkStartedAssumingTmuxAlive()
+				instance.MarkStartedIfTmuxAlive()
 			} else {
 				log.Warn("[streamViaHub] instance still not started after waiting, proceeding anyway", "session", sessionID, "waited", startupWaitTimeout)
 			}

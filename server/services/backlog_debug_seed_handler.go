@@ -48,6 +48,7 @@ func (h *BacklogDebugSeedHandler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/debug/backlog/seed-headless-triage-session", h.handleSeedHeadlessTriageSession)
 	mux.HandleFunc("/api/debug/backlog/seed-work-item-session", h.handleSeedWorkItemSession)
 	mux.HandleFunc("/api/debug/backlog/seed-work-session-with-worktree", h.handleSeedWorkSessionWithWorktree)
+	mux.HandleFunc("/api/debug/backlog/seed-jules-work-session", h.handleSeedJulesWorkSession)
 }
 
 type seedQueuedItemRequest struct {
@@ -451,6 +452,13 @@ func (h *BacklogDebugSeedHandler) handleSeedWorkItemSession(w http.ResponseWrite
 type seedWorkSessionWithWorktreeRequest struct {
 	Title  string `json:"title"`
 	Status string `json:"status"` // defaults to "review" if empty
+	// RepoPath, when set, becomes the created item's RepoPath — so a test
+	// can seed an item whose repo matches a ConfirmEgressConsent/
+	// RevokeEgressConsent call's repo_path (jules-dispatch.spec.ts's §7.2/
+	// §7.13 scenarios need both a tracked branch, only this endpoint
+	// produces, and a known repo path to (un)acknowledge). Omitted defaults
+	// to "", unchanged from before this field existed.
+	RepoPath string `json:"repoPath"`
 }
 
 type seedWorkSessionWithWorktreeResponse struct {
@@ -533,8 +541,9 @@ func (h *BacklogDebugSeedHandler) handleSeedWorkSessionWithWorktree(w http.Respo
 
 	ctx := r.Context()
 	item, err := h.storage.CreateBacklogItem(ctx, session.BacklogItemData{
-		Title:  req.Title,
-		Status: status,
+		Title:    req.Title,
+		Status:   status,
+		RepoPath: req.RepoPath,
 	})
 	if err != nil {
 		log.Error("backlog debug seed: create item failed", "err", err)
@@ -581,6 +590,148 @@ func (h *BacklogDebugSeedHandler) handleSeedWorkSessionWithWorktree(w http.Respo
 		ItemID:       item.ID,
 		SessionID:    sessionUUID,
 		WorktreePath: worktreePath,
+	}); err != nil {
+		log.Error("backlog debug seed: encode response failed", "err", err)
+	}
+}
+
+type seedJulesWorkSessionRequest struct {
+	Title  string `json:"title"`
+	Status string `json:"status"` // defaults to "review" if empty
+	// ItemID, when set, attaches the seeded jules_work ItemSession to an
+	// already-existing backlog item instead of creating a new one via
+	// Title/Status (both ignored when ItemID is set) — lets a test simulate
+	// "a dispatch just completed for this exact item" after driving
+	// JulesDispatchDialog's real UI through a DispatchToJules call that was
+	// intercepted client-side to avoid a live billed Jules API round trip
+	// (jules-dispatch.spec.ts's §7.2 scenario: DispatchToJules's own guard
+	// chain calls the real Jules ListSources/CreateSession endpoints, which
+	// no e2e-local test credential can pass). Everything downstream of the
+	// seeded row — the storage write and the real WatchBacklogItems event it
+	// emits — runs unmocked, so the UI observes the new row through the same
+	// live-update path a genuine dispatch would use.
+	ItemID string `json:"itemId"`
+	// Ended, when true, closes the seeded jules_work ItemSession so
+	// SessionsSection.tsx's computeJulesPhase resolves it to "done"/"failed"
+	// (per EndReason) instead of "running" — the only two closed-row phases
+	// that computation can produce (see JulesStatusBadge.tsx's phase union
+	// vs. computeJulesPhase's binary open/closed branching: "queued" and
+	// "needs-review" are never reachable through this real data path today).
+	Ended     bool   `json:"ended"`
+	EndReason string `json:"endReason"` // e.g. "jules_completed" or "jules_failed"; defaults to "jules_completed" when Ended is true and this is empty
+	// PrNumber/PrUrl, when set, are written onto the created item (mirrors
+	// handleSeed's PR-field seeding above) so a test can also exercise
+	// PullRequestSection.tsx's "Opened by Jules" provenance marker, which
+	// requires status "pr_pending" + a PR URL + the item's newest linked
+	// session having role jules_work.
+	PrNumber int    `json:"prNumber"`
+	PrUrl    string `json:"prUrl"`
+}
+
+type seedJulesWorkSessionResponse struct {
+	ItemID    string `json:"itemId"`
+	SessionID string `json:"sessionId"`
+}
+
+// handleSeedJulesWorkSession creates a backlog item with a linked jules_work
+// ItemSession (Story 3.3.2) directly through the storage layer — no real
+// Jules API dispatch/poll involved — so the e2e suite can put
+// JulesStatusBadge/PullRequestSection's Jules-provenance marker in front of
+// the UI in a chosen phase without a live jules.google.com session. Mirrors
+// handleSeedWorkItemSession's shape.
+func (h *BacklogDebugSeedHandler) handleSeedJulesWorkSession(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if h.storage == nil {
+		http.Error(w, "storage not available", http.StatusServiceUnavailable)
+		return
+	}
+
+	var req seedJulesWorkSessionRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request body: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	ctx := r.Context()
+	var item *session.BacklogItemData
+	if req.ItemID != "" {
+		existing, err := h.storage.GetBacklogItem(ctx, req.ItemID)
+		if err != nil {
+			log.Error("backlog debug seed: get item failed", "err", err, "item_id", req.ItemID)
+			http.Error(w, "failed to find backlog item: "+err.Error(), http.StatusNotFound)
+			return
+		}
+		item = existing
+	} else {
+		if req.Title == "" {
+			http.Error(w, "title is required", http.StatusBadRequest)
+			return
+		}
+		status := req.Status
+		if status == "" {
+			status = string(session.BacklogStatusReview)
+		}
+		created, err := h.storage.CreateBacklogItem(ctx, session.BacklogItemData{
+			Title:  req.Title,
+			Status: status,
+		})
+		if err != nil {
+			log.Error("backlog debug seed: create item failed", "err", err)
+			http.Error(w, "failed to create backlog item: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		item = created
+	}
+
+	if req.PrNumber > 0 || req.PrUrl != "" {
+		prNumber := req.PrNumber
+		prURL := req.PrUrl
+		if _, err := h.storage.UpdateBacklogItem(ctx, item.ID, session.BacklogItemUpdate{
+			PrNumber: &prNumber,
+			PrURL:    &prURL,
+		}, nil); err != nil {
+			log.Error("backlog debug seed: set PR fields failed", "err", err)
+			http.Error(w, "failed to set PR fields: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}
+
+	// julesSessionUUIDPrefix ("jules-", jules_dispatch_service.go) + the
+	// "sessions/<id>" shape a real Jules session name takes, so the seeded
+	// row reproduces the exact "jules-sessions/{id}" storage form ADR-004
+	// documents — julesWebUrlFor (SessionsSection.tsx) strips this same
+	// prefix to build the jules.google.com escape-hatch link.
+	sessionUUID := julesSessionUUIDPrefix + "sessions/" + uuid.New().String()
+	itemSession, err := h.storage.CreateItemSession(ctx, session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: sessionUUID,
+		SessionRole: session.SessionRoleJulesWork,
+	})
+	if err != nil {
+		log.Error("backlog debug seed: create jules_work item session failed", "err", err)
+		http.Error(w, "failed to create item session: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	if req.Ended {
+		endReason := req.EndReason
+		if endReason == "" {
+			endReason = "jules_completed"
+		}
+		if err := h.storage.UpdateItemSessionEndedWithReason(ctx, itemSession.ID, time.Now(), endReason); err != nil {
+			log.Error("backlog debug seed: end jules_work item session failed", "err", err)
+			http.Error(w, "failed to mark item session ended: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(seedJulesWorkSessionResponse{
+		ItemID:    item.ID,
+		SessionID: sessionUUID,
 	}); err != nil {
 		log.Error("backlog debug seed: encode response failed", "err", err)
 	}

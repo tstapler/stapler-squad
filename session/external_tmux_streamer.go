@@ -209,7 +209,7 @@ func (s *ExternalTmuxStreamer) startControlMode() bool {
 	// controlModeStdin's doc comment for why this matters.
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
-		stdout.Close()
+		_ = stdout.Close()
 		log.Warn("control mode stdin pipe failed", "session", s.tmuxSessionName, "err", err)
 		return false
 	}
@@ -217,14 +217,18 @@ func (s *ExternalTmuxStreamer) startControlMode() bool {
 	// Capture stderr for diagnostics but don't block on it
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
-		stdout.Close()
-		stdin.Close()
+		_ = stdout.Close()
+		_ = stdin.Close()
 		log.Warn("control mode stderr pipe failed", "session", s.tmuxSessionName, "err", err)
 		return false
 	}
 
 	if err := cmd.Start(); err != nil {
-		stdin.Close()
+		// Close all three pipes on failure — stdout/stderr were leaked here
+		// previously (only stdin was closed).
+		_ = stdout.Close()
+		_ = stdin.Close()
+		_ = stderr.Close()
 		log.Warn("control mode failed to start", "session", s.tmuxSessionName, "err", err)
 		return false
 	}
@@ -256,14 +260,16 @@ func (s *ExternalTmuxStreamer) stopControlMode() {
 	s.controlModeActive = false
 
 	if s.controlModeStdin != nil {
-		s.controlModeStdin.Close()
+		if err := s.controlModeStdin.Close(); err != nil {
+			log.Warn("failed to close control mode stdin", "session", s.tmuxSessionName, "err", err)
+		}
 		s.controlModeStdin = nil
 	}
 
 	// Kill the process
 	if s.controlModeCmd.Process != nil {
 		tmux.UntrackChildPID(s.controlModeCmd.Process.Pid)
-		s.controlModeCmd.Process.Kill()
+		_ = s.controlModeCmd.Process.Kill()
 	}
 
 	// Wait with a timeout to avoid blocking forever
@@ -277,7 +283,7 @@ func (s *ExternalTmuxStreamer) stopControlMode() {
 	case <-time.After(2 * time.Second):
 		log.Warn("control mode process did not exit, force killing", "session", s.tmuxSessionName)
 		if s.controlModeCmd.Process != nil {
-			s.controlModeCmd.Process.Kill()
+			_ = s.controlModeCmd.Process.Kill()
 		}
 		<-done
 	}

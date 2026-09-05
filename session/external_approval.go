@@ -369,7 +369,9 @@ func (m *ExternalApprovalMonitor) IntegrateWithDiscovery(
 		source := guessSource(instance.ExternalMetadata.SourceTerminal)
 
 		// Start monitoring
-		m.MonitorSession(streamer, instance.Title, source)
+		if err := m.MonitorSession(streamer, instance.Title, source); err != nil {
+			log.Warn("failed to start approval monitoring", "title", instance.Title, "err", err)
+		}
 	})
 
 	discovery.OnSessionRemoved(func(instance *Instance) {
@@ -409,7 +411,9 @@ func (m *ExternalApprovalMonitor) IntegrateWithDiscoveryTmux(
 		source := guessSource(instance.ExternalMetadata.SourceTerminal)
 
 		// Start monitoring
-		m.MonitorSessionTmux(streamer, tmuxSessionName, instance.Title, source)
+		if err := m.MonitorSessionTmux(streamer, tmuxSessionName, instance.Title, source); err != nil {
+			log.Warn("failed to start tmux approval monitoring", "title", instance.Title, "err", err)
+		}
 	})
 
 	discovery.OnSessionRemoved(func(instance *Instance) {

@@ -616,6 +616,23 @@ message TriggerShipPRResponse {
   string pr_url = 1;
 }
 
+// DispatchToJulesRequest deliberately carries no egress_acknowledged field
+// (google-jules-integration pre-mortem P1 #3, mirrors
+// services.JulesDispatchRequest's doc comment): consent is a durable,
+// server-side fact only ConfirmEgressConsent can write, never a
+// caller-supplied boolean this RPC could trust.
+message DispatchToJulesRequest {
+  string item_id = 1;
+  // branch is required — MVP Jules dispatch only ever starts from a branch
+  // already pushed to GitHub, never an unpushed local one.
+  string branch = 2;
+  string prompt = 3;
+}
+
+message DispatchToJulesResponse {
+  ItemSession item_session = 1;
+}
+
 message TriggerSyncRequest {
   string source_id = 1;
 }
@@ -965,6 +982,13 @@ service BacklogService {
   // yet) with no PR of its own — the self-service "Ship PR" action on the item
   // detail page.
   rpc TriggerShipPR(TriggerShipPRRequest) returns (TriggerShipPRResponse) {}
+
+  // DispatchToJules dispatches a ready backlog item to Google Jules — the one
+  // guarded entry point the web UI (and later an MCP tool) uses. Requires the
+  // item's repo to already be acknowledged for cloud egress via a prior
+  // ConfirmEgressConsent call; there is no field on this request that can
+  // grant that consent itself (google-jules-integration pre-mortem P1 #3).
+  rpc DispatchToJules(DispatchToJulesRequest) returns (DispatchToJulesResponse) {}
 
   // TriggerSync initiates a sync run for an external item source.
   rpc TriggerSync(TriggerSyncRequest) returns (TriggerSyncResponse) {}

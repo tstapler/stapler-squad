@@ -1210,6 +1210,24 @@ func (s *Storage) UpdateItemSessionGitActivity(ctx context.Context, id string, s
 	return s.repo.UpdateItemSessionGitActivity(ctx, id, sha, msg, commitAt, commitCount)
 }
 
+// ListOpenJulesItemSessions returns every not-yet-ended jules_work ItemSession
+// across all backlog items. See EntRepository.ListOpenJulesItemSessions.
+func (s *Storage) ListOpenJulesItemSessions(ctx context.Context) ([]ItemSessionBacklogEntry, error) {
+	return s.repo.ListOpenJulesItemSessions(ctx)
+}
+
+// CountJulesItemSessionsSince counts confirmed, billed jules_work ItemSessions
+// created since since. See EntRepository.CountJulesItemSessionsSince.
+func (s *Storage) CountJulesItemSessionsSince(ctx context.Context, since time.Time) (int, error) {
+	return s.repo.CountJulesItemSessionsSince(ctx, since)
+}
+
+// TouchItemSessionProgress updates only last_progress_at on an ItemSession. See
+// EntRepository.TouchItemSessionProgress.
+func (s *Storage) TouchItemSessionProgress(ctx context.Context, id string, at time.Time) error {
+	return s.repo.TouchItemSessionProgress(ctx, id, at)
+}
+
 // UpdateItemSessionEnded records the end time for an ItemSession.
 func (s *Storage) UpdateItemSessionEnded(ctx context.Context, id string, endedAt time.Time) error {
 	return s.repo.UpdateItemSessionEnded(ctx, id, endedAt)

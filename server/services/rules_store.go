@@ -269,7 +269,7 @@ func (s *RulesStore) exportRulesLocked() {
 		return
 	}
 	if err := os.Rename(tmp, exportPath); err != nil {
-		os.Remove(tmp)
+		_ = os.Remove(tmp)
 	}
 }
 
