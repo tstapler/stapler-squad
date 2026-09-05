@@ -39,6 +39,26 @@ func newStageCRUDTestService(t *testing.T) (*BacklogService, session.StageCRUDRe
 	return svc, repo, engine, storage
 }
 
+// TestEnsureBuiltInWorkflowStages_should_MarkDoneAndArchivedAsTerminal
+// verifies the seeded built-in stages' is_terminal column matches
+// IsTerminalStatus (session/terminal_status.go), which treats both "done"
+// and "archived" as terminal — builtInTerminalStages (workflow_stage_seed.go)
+// previously marked only "archived", leaving the seeded "done" row's
+// is_terminal false and inconsistent with the rest of the codebase.
+func TestEnsureBuiltInWorkflowStages_should_MarkDoneAndArchivedAsTerminal(t *testing.T) {
+	t.Parallel()
+	svc, _, _, _ := newStageCRUDTestService(t)
+	ctx := t.Context()
+
+	doneResp, err := svc.GetStage(ctx, connect.NewRequest(&sessionv1.GetStageRequest{Slug: string(session.BacklogStatusDone)}))
+	require.NoError(t, err)
+	assert.True(t, doneResp.Msg.Item.IsTerminal, "seeded 'done' stage must be marked terminal")
+
+	archivedResp, err := svc.GetStage(ctx, connect.NewRequest(&sessionv1.GetStageRequest{Slug: string(session.BacklogStatusArchived)}))
+	require.NoError(t, err)
+	assert.True(t, archivedResp.Msg.Item.IsTerminal, "seeded 'archived' stage must be marked terminal")
+}
+
 // ─── TestCreateStage / TestGetStage / TestListStages ───────────────────────
 
 func TestCreateStage_should_PersistAndReturnStage_When_ValidInput(t *testing.T) {

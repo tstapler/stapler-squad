@@ -55,6 +55,7 @@ var builtInEntryStages = map[BacklogStatus]bool{
 // builtInTerminalStages marks the built-in stages that end an item's
 // lifecycle, mirroring Epic 2.1's IsTerminalStatus-equivalent check.
 var builtInTerminalStages = map[BacklogStatus]bool{
+	BacklogStatusDone:     true,
 	BacklogStatusArchived: true,
 }
 
