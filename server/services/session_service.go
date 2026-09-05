@@ -3465,21 +3465,23 @@ func cleanupPartialCreation(instance *session.Instance) error {
 		return instance.Destroy()
 	}
 
-	// BUG-099 root cause: the Started()==false branch below never called
-	// Destroy(), so it never called StopSessionDriver either — leaving a
-	// SessionDriver goroutine that the async creation pipeline was still
-	// racing to start (via StartSessionDriver, after this Started() read)
-	// completely un-stoppable, since nothing ever sets driverDestroyed or
-	// closes its stop channel. Confirmed via a goroutine dump during a
-	// reliably-reproducing flaky test: the driver goroutine polled forever
-	// after DeleteSession returned, and JoinSessionDriver's wait always timed
-	// out regardless of how long it was given. Call it unconditionally here,
-	// mirroring Destroy()'s own top-of-function call (session/instance.go) and
-	// for the identical reason its doc comment gives: marking driverDestroyed
-	// now guarantees a StartSessionDriver call that arrives after this point —
-	// even one already in flight — refuses to start a driver goroutine that
-	// nothing would ever be able to stop.
+	// BUG-099: this branch never called Destroy(), so it never called
+	// StopSessionDriver — leaving a SessionDriver goroutine the async
+	// creation pipeline was still racing to start completely unstoppable.
+	// Call it unconditionally, mirroring Destroy()'s own top-of-function
+	// call, so any StartSessionDriver arriving after this point refuses to
+	// start (driverDestroyed). See docs/bugs/fixed/BUG-099-*.md.
 	session.StopSessionDriver(instance)
+
+	// Re-check Started() immediately after StopSessionDriver: if a
+	// concurrent Instance.Start() completed while we were stopping the
+	// driver, the instance is now fully started and must go through
+	// Destroy()'s full teardown (VNC/CDP, diff-stats, EventStopped) instead
+	// of falling through to the defense-in-depth guard below, which is only
+	// safe for an instance that never finished starting.
+	if instance.Started() {
+		return instance.Destroy()
+	}
 
 	// Task 3.1.1d: defense-in-depth liveness guard. instance.Started() is
 	// only flipped true at the very end of Instance.Start() (session/instance.go's

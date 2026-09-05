@@ -71,9 +71,16 @@ def main():
     # tree, not just what's already committed. Gathered across ALL files (not
     # just *.go) so FULL_RESCAN_TRIGGERS can see non-.go changes too.
     all_changed = set()
-    all_changed.update(sh(["git", "diff", "--name-only", f"{base}...HEAD"]).splitlines())
-    all_changed.update(sh(["git", "diff", "--name-only", "HEAD"]).splitlines())
-    all_changed.update(sh(["git", "ls-files", "--others", "--exclude-standard"]).splitlines())
+    try:
+        all_changed.update(sh(["git", "diff", "--name-only", f"{base}...HEAD"]).splitlines())
+        all_changed.update(sh(["git", "diff", "--name-only", "HEAD"]).splitlines())
+        all_changed.update(sh(["git", "ls-files", "--others", "--exclude-standard"]).splitlines())
+    except subprocess.CalledProcessError:
+        # BASE_REF doesn't exist locally (e.g. origin/main not fetched) --
+        # can't safely narrow the package set, so fall back to running
+        # everything, same as FULL_RESCAN_TRIGGERS below.
+        print("__ALL__")
+        return
     all_changed.discard("")
 
     if any(matches_full_rescan_trigger(f) for f in all_changed):

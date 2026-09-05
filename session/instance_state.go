@@ -408,7 +408,9 @@ func (i *Instance) Started() bool {
 // does. Deliberately skips VNC/CDP bring-up, unlike startLocked: those are
 // for a session's initial launch, and here tmux and the agent process are
 // already confirmed running, so starting a second VNC/CDP server would be
-// redundant, not corrective.
+// redundant, not corrective. This is a known, accepted narrower limitation
+// than the endless-retry bug this self-heal fixes: a session whose VNC/CDP
+// setup was also skipped by that same failure will not get it retroactively.
 func (i *Instance) MarkStartedIfTmuxAlive() {
 	_ = i.sendSyncErr(func(s *instanceState) error {
 		markStartedIfTmuxAliveLocked(s)
