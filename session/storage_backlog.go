@@ -124,6 +124,16 @@ func (r *EntRepository) BackfillBacklogItemPublicIDs(ctx context.Context) error 
 	return r.backfillBacklogItemPublicIDsLocked(ctx)
 }
 
+// backlogItemPublicIDMigration adapts EntRepository.BackfillBacklogItemPublicIDs
+// to the Migration interface (session/ent_repository_migrations.go).
+type backlogItemPublicIDMigration struct{}
+
+func (backlogItemPublicIDMigration) Name() string { return "backlog item public id backfill" }
+
+func (backlogItemPublicIDMigration) Run(ctx context.Context, er *EntRepository) error {
+	return er.BackfillBacklogItemPublicIDs(ctx)
+}
+
 // backfillBacklogItemPublicIDsLocked does the actual query-and-save work for
 // BackfillBacklogItemPublicIDs. Split out so the exported method can wrap it
 // with (or, when no real lock path exists, skip) the flock guard without

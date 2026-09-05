@@ -62,6 +62,21 @@ it's fixed. Remains open; still out of scope for c0e88be9 (requires the
 `config.LoadConfig()`-vs-`t.Parallel()` audit this doc's own "Sharper root-cause candidate"
 section already flags as its own investigation).
 
+## Recurrence — 2026-09-04 (PR #700, `feat/backlog-custom-workflow-stages-m2`)
+
+Two separate CI jobs on the same commit (`a44139267`) both failed on
+`TestHandleCurrentPaneRequest_should_RunFullSlowPath_When_StaleDimensionsFalseOrFlagOff`
+(`connectrpc_websocket_test.go`) — same test both times, different failure mode each
+run: a dimension-mismatch warning on the first attempt (`MCP Integration Tests`, run
+[33935404242](https://github.com/tstapler/stapler-squad/actions/runs/33935404242)), a
+`-race` detector hit on the second (`Test (server/session/config packages)`, run
+[33935404358](https://github.com/tstapler/stapler-squad/actions/runs/33935404358)), both
+ending in `CI-BUDGET-EXCEEDED` for their job. Not in PR #700's diff (verified via `git
+diff --name-only origin/main...HEAD -- '*.go'` — no pane/tmux files touched). Same
+"different failure mode, same test, same package, unrelated to the diff in flight" shape
+as every prior recurrence here — re-ran the failed jobs rather than investigating further,
+consistent with this bug's own scope boundary.
+
 ## Related
 
 - Filed per `.claude/rules/fix-flaky-tests-dont-defer.md` — found during BUG-051 remediation validation but out of scope to fix in that change (different package, different root cause per-test, would expand that change's blast radius).

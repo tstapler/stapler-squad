@@ -4035,6 +4035,42 @@ func TestSelfHealSweep_should_resolveAnyReasonRow_When_ItemReachesTerminalStatus
 	}
 }
 
+// TestSelfHealSweep_should_ResolveAnyReasonRow_When_ItemReachesConfiguredCustomTerminalStage
+// is the Story 2.1.3 (Task 2.1.3d) regression test for selfHealStuck's
+// re-route to session.IsTerminalStatus: an operator-configured custom stage
+// marked IsTerminal (simulated here via SetTerminalStatusChecker, standing in
+// for Epic 2.3's not-yet-built ConfiguredWorkflowEngine) must trigger the
+// same blanket terminal rule as built-in done/archived.
+func TestSelfHealSweep_should_ResolveAnyReasonRow_When_ItemReachesConfiguredCustomTerminalStage(t *testing.T) {
+	const customTerminal = BacklogStatus("legal-review")
+	SetTerminalStatusChecker(func(s BacklogStatus) bool { return s == customTerminal })
+	t.Cleanup(func() { SetTerminalStatusChecker(nil) })
+
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:  "Terminal blanket-rule item: custom stage",
+		Status: string(BacklogStatusInProgress),
+	})
+	require.NoError(t, err)
+	applied, err := er.MarkStuck(ctx, item.ID, domain.StuckReasonStaleWork, BacklogStatusInProgress, "test-marked stuck")
+	require.NoError(t, err)
+	require.True(t, applied)
+
+	_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, customTerminal, nil, TriggeredBySystem)
+	require.NoError(t, err)
+
+	listener := NewBacklogLifecycleListener(storage)
+	listener.selfHealStuck(ctx, er)
+
+	open, err := er.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, open, "stuck row must resolve once the item reaches a configured custom terminal stage, via the blanket terminal rule")
+}
+
 // TestSelfHealSweep_should_resolveReworkCapRow_When_ItemReachesDone is the
 // direct, narrow regression test for the bug this PR closes: rework_cap was
 // the one StuckReason still sitting in the "event-shaped, continue" trap that
@@ -4266,8 +4302,8 @@ func TestReconcilers_should_delegateThresholdDecisionsToPureFns_When_Reviewed(t 
 	now := time.Now()
 	assert.True(t, stuckPRReady(now.Add(-prReadyThreshold-time.Minute), now))
 	assert.True(t, abandonedReview(now.Add(-abandonedReviewGrace-time.Minute), now))
-	assert.True(t, staleWork(now.Add(-maxWorkSessionStaleness-time.Minute), now))
-	assert.True(t, isBouncing(bounceThreshold, false))
+	assert.True(t, staleWork(now.Add(-maxWorkSessionStaleness-time.Minute), now, maxWorkSessionStaleness))
+	assert.True(t, isBouncing(bounceThreshold, bounceThreshold, false))
 }
 
 // --- auto_archive_done: sweep that auto-archives backlog items 3+ days
@@ -5018,4 +5054,305 @@ func TestReconcileMultiReasonEscalation_should_Escalate_When_CoupledPairPlusInde
 	assert.Contains(t, row.Context, "bouncing")
 	assert.Contains(t, row.Context, "push_failed")
 	assert.NotContains(t, row.Context, "abandoned_review", "the coupled abandoned_review row must be excluded from the escalation context")
+}
+
+// --- Epic 1.4 (backlog-custom-workflow-stages): LivenessEngine wired into
+// reconcileOrphanedTriageItems, reconcileStaleWorkSessions, and
+// reconcileBouncingItems. Test names taken verbatim from validation.md's
+// "Story 1.4.1"/"Story 1.4.3" rows. ---
+
+// newOrphanedTriageTestItemWithMode is newOrphanedTriageTestItem plus a
+// pipelineMode, needed for Epic 1.4's per-(stage,mode) override regression
+// tests below — a separate helper rather than adding a parameter to
+// newOrphanedTriageTestItem, which many pre-Epic-1.4 tests already call
+// positionally.
+func newOrphanedTriageTestItemWithMode(t *testing.T, storage *Storage, er *EntRepository, ageAgo time.Duration, pipelineMode string) *BacklogItemData {
+	t.Helper()
+	ctx := context.Background()
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:              "Orphaned triage test item (mode=" + pipelineMode + ")",
+		AcceptanceCriteria: `[]`,
+		Priority:           1,
+		Status:             string(BacklogStatusIdea),
+		PipelineMode:       pipelineMode,
+	})
+	require.NoError(t, err)
+
+	parsedItemID, err := uuid.Parse(item.ID)
+	require.NoError(t, err)
+	_, err = er.client.ItemSession.Create().
+		SetSessionUUID("headless-triage-" + uuid.New().String()).
+		SetSessionRole(string(SessionRoleTriage)).
+		SetBacklogItemID(parsedItemID).
+		SetCreatedAt(time.Now().Add(-ageAgo)).
+		Save(ctx)
+	require.NoError(t, err)
+
+	return item
+}
+
+// TestReconcileOrphanedTriageItems_should_NotMarkStuck_When_NoOverrideConfiguredAndSessionAgeUnder35Min
+// is Story 1.4.1's zero-regression happy path: with no LivenessEngine override
+// row configured (listener.livenessEngine left nil, matching every pre-Epic-1.4
+// call site), an sdd-mode item's open headless-triage session at 34m — still
+// under the flat 35m constant — is not marked stuck, exactly as before.
+func TestReconcileOrphanedTriageItems_should_NotMarkStuck_When_NoOverrideConfiguredAndSessionAgeUnder35Min(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo
+
+	item := newOrphanedTriageTestItemWithMode(t, storage, er, 34*time.Minute, "sdd")
+
+	listener := NewBacklogLifecycleListener(storage)
+	listener.reconcileOrphanedTriageItems(ctx, er)
+
+	open, err := er.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	_, ok := findOpenStuckStateFor(open, item.ID, domain.StuckReasonOrphanedTriage)
+	assert.False(t, ok, "34m-old session must not be flagged — unchanged from today's 35m constant")
+}
+
+// TestReconcileOrphanedTriageItems_should_NotMarkStuck_When_SddModeOverrideRaisesThresholdPast40Min
+// is the concrete Milestone 1 fix (the 12 parked items this epic exists for): with a
+// ("idea","sdd") CachingLivenessEngine override row of ExpectedDuration=45m,
+// StalenessMargin=10m (StalenessThreshold=55m) configured, an sdd-mode item's session at
+// 40m — past the OLD flat 35m constant, but under the NEW 55m derived threshold — is not
+// marked stuck.
+func TestReconcileOrphanedTriageItems_should_NotMarkStuck_When_SddModeOverrideRaisesThresholdPast40Min(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo
+
+	repo := NewEntLivenessRepository(storage.GetEntClient())
+	mode := "sdd"
+	_, err := repo.Create(ctx, LivenessCreateInput{
+		StageSlug:    string(BacklogStatusIdea),
+		PipelineMode: &mode,
+		Definition: LivenessDefinition{
+			Kind:             LivenessKindDurationBudget,
+			ExpectedDuration: 45 * time.Minute,
+			StalenessMargin:  10 * time.Minute,
+		},
+	})
+	require.NoError(t, err)
+	engine, err := NewCachingLivenessEngine(repo)
+	require.NoError(t, err)
+
+	item := newOrphanedTriageTestItemWithMode(t, storage, er, 40*time.Minute, "sdd")
+
+	listener := NewBacklogLifecycleListener(storage)
+	listener.livenessEngine = engine
+	listener.reconcileOrphanedTriageItems(ctx, er)
+
+	open, err := er.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	_, ok := findOpenStuckStateFor(open, item.ID, domain.StuckReasonOrphanedTriage)
+	assert.False(t, ok, "40m-old sdd-mode session must not be flagged under the 55m derived threshold — this is the concrete fix for the 12 parked items")
+}
+
+// newStaleWorkTestItemWithAge is newStaleWorkTestItem plus a configurable
+// backdated last_progress_at and pipelineMode, needed for Epic 1.4's
+// per-(stage,mode) override regression tests below.
+func newStaleWorkTestItemWithAge(t *testing.T, storage *Storage, er *EntRepository, progressAgo time.Duration, pipelineMode string) *BacklogItemData {
+	t.Helper()
+	ctx := context.Background()
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:              "Stale work test item (mode=" + pipelineMode + ")",
+		AcceptanceCriteria: `[]`,
+		Priority:           1,
+		Status:             string(BacklogStatusInProgress),
+		PipelineMode:       pipelineMode,
+	})
+	require.NoError(t, err)
+
+	workIS, err := storage.CreateItemSession(ctx, ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: "work-" + uuid.New().String(),
+		SessionRole: SessionRoleWork,
+	})
+	require.NoError(t, err)
+
+	parsedID, err := uuid.Parse(workIS.ID)
+	require.NoError(t, err)
+	stale := time.Now().Add(-progressAgo)
+	_, err = er.client.ItemSession.UpdateOneID(parsedID).SetLastProgressAt(stale).Save(ctx)
+	require.NoError(t, err)
+
+	return item
+}
+
+// TestReconcileStaleWorkSessions_should_NotMarkStuck_When_NoOverrideConfiguredAndProgressAgeUnder2Hours
+// is Story 1.4.3's zero-regression happy path for Shape B (stale_work): with no
+// LivenessEngine override configured, an in_progress item's active work session at
+// 1h59m — still under the flat 2h constant — is not marked stale, exactly as before.
+func TestReconcileStaleWorkSessions_should_NotMarkStuck_When_NoOverrideConfiguredAndProgressAgeUnder2Hours(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo
+
+	item := newStaleWorkTestItemWithAge(t, storage, er, 119*time.Minute, "sdd")
+
+	listener := NewBacklogLifecycleListener(storage)
+	listener.reconcileStaleWorkSessions(ctx, er)
+
+	open, err := er.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	_, ok := findOpenStuckStateFor(open, item.ID, domain.StuckReasonStaleWork)
+	assert.False(t, ok, "1h59m-old progress must not be flagged — unchanged from today's 2h constant")
+}
+
+// TestReconcileStaleWorkSessions_should_NotMarkStuckAndInterpolateResolvedDuration_When_SddModeOverrideRaisesThresholdPast2h1m
+// configures an ("in_progress","sdd") override of MaxNoProgressDuration=3h and confirms an
+// sdd-mode item's session at 2h1m — past the OLD flat 2h constant, under the NEW 3h override
+// — is not marked stale. Also proves the notify body interpolates the resolved 3h, not the
+// bare constant, once the item does cross it.
+func TestReconcileStaleWorkSessions_should_NotMarkStuckAndInterpolateResolvedDuration_When_SddModeOverrideRaisesThresholdPast2h1m(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo
+
+	repo := NewEntLivenessRepository(storage.GetEntClient())
+	mode := "sdd"
+	_, err := repo.Create(ctx, LivenessCreateInput{
+		StageSlug:    string(BacklogStatusInProgress),
+		PipelineMode: &mode,
+		Definition: LivenessDefinition{
+			Kind:                  LivenessKindHeartbeat,
+			MaxNoProgressDuration: 3 * time.Hour,
+		},
+	})
+	require.NoError(t, err)
+	engine, err := NewCachingLivenessEngine(repo)
+	require.NoError(t, err)
+
+	notStale := newStaleWorkTestItemWithAge(t, storage, er, 2*time.Hour+time.Minute, "sdd")
+
+	listener := NewBacklogLifecycleListener(storage)
+	listener.livenessEngine = engine
+	listener.reconcileStaleWorkSessions(ctx, er)
+
+	open, err := er.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	_, ok := findOpenStuckStateFor(open, notStale.ID, domain.StuckReasonStaleWork)
+	assert.False(t, ok, "2h1m-old sdd-mode progress must not be flagged under the 3h resolved threshold")
+
+	// Now push a second sdd-mode item past the resolved 3h threshold and confirm the
+	// notify body interpolates "3h0m0s", not the bare maxWorkSessionStaleness ("2h0m0s").
+	pastResolved := newStaleWorkTestItemWithAge(t, storage, er, 3*time.Hour+time.Minute, "sdd")
+	notifier := &fakeNotifier{}
+	listener.SetNotifier(notifier)
+	listener.reconcileStaleWorkSessions(ctx, er)
+
+	openAfter, err := er.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	_, ok = findOpenStuckStateFor(openAfter, pastResolved.ID, domain.StuckReasonStaleWork)
+	require.True(t, ok, "3h1m-old sdd-mode progress must be flagged past the resolved 3h threshold")
+	require.Len(t, notifier.calls, 1, "expected exactly one notify call for the newly-stale item")
+	notifyBody := notifier.calls[0].Message
+	assert.Contains(t, notifyBody, "3h0m0s", "notify body must interpolate the resolved 3h duration")
+	assert.NotContains(t, notifyBody, "2h0m0s", "notify body must not fall back to the bare maxWorkSessionStaleness constant")
+}
+
+// TestReconcileBouncingItems_should_MarkStuck_When_NoOverrideConfiguredAndThreeCyclesInDefaultLookback
+// is Story 1.4.3's zero-regression happy path for Shape C (bouncing): with no LivenessEngine
+// override configured, an item with bounceThreshold (3) in_progress<->review cycles within
+// bounceLookback (24h) and no PASS verdict is still marked bouncing, exactly as before.
+func TestReconcileBouncingItems_should_MarkStuck_When_NoOverrideConfiguredAndThreeCyclesInDefaultLookback(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:  "Bouncing item, no override",
+		Status: string(BacklogStatusInProgress),
+	})
+	require.NoError(t, err)
+	for i := 0; i < bounceThreshold; i++ {
+		_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusReview, nil, TriggeredBySystem)
+		require.NoError(t, err)
+		_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusInProgress, nil, TriggeredBySystem)
+		require.NoError(t, err)
+	}
+
+	listener := NewBacklogLifecycleListener(storage)
+	listener.reconcileBouncingItems(ctx, er)
+
+	open, err := er.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	_, ok := findOpenStuckStateFor(open, item.ID, domain.StuckReasonBouncing)
+	assert.True(t, ok, "3 cycles in 24h with no PASS must still be flagged — unchanged from today's bounceThreshold=3/bounceLookback=24h")
+}
+
+// TestReconcileBouncingItems_should_NotMarkStuckForSddModeItemButStillMarkDefaultModeSibling_When_PerItemOverrideRaisesCycleThreshold
+// configures a single ("review","sdd") override (CycleThreshold=5, CycleLookback=48h — the
+// corrected key, see this file's Epic 1.4 Story 1.4.3 plan-correction note in
+// project_plans/backlog-custom-workflow-stages/implementation/plan.md) and proves resolution
+// is per-item, not a package-level override: an sdd-mode item with 4 cycles in 30h (past the
+// OLD bounceThreshold=3 but under the NEW CycleThreshold=5) is NOT flagged, while a
+// default-mode item with the IDENTICAL 4-cycles-in-30h shape, in the SAME reconcile tick, IS
+// still flagged via CachingLivenessEngine's fallback to DefaultLivenessEngine's built-in
+// bounceThreshold=3 for the unconfigured ("review", PipelineModeDefault) pair.
+func TestReconcileBouncingItems_should_NotMarkStuckForSddModeItemButStillMarkDefaultModeSibling_When_PerItemOverrideRaisesCycleThreshold(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo
+
+	repo := NewEntLivenessRepository(storage.GetEntClient())
+	mode := "sdd"
+	_, err := repo.Create(ctx, LivenessCreateInput{
+		StageSlug:    string(BacklogStatusReview),
+		PipelineMode: &mode,
+		Definition: LivenessDefinition{
+			Kind:           LivenessKindCycleFrequency,
+			CycleThreshold: 5,
+			CycleLookback:  48 * time.Hour,
+		},
+	})
+	require.NoError(t, err)
+	engine, err := NewCachingLivenessEngine(repo)
+	require.NoError(t, err)
+
+	newFourCycleItem := func(pipelineMode string) *BacklogItemData {
+		item, itemErr := storage.CreateBacklogItem(ctx, BacklogItemData{
+			Title:        "Bouncing per-item override item (mode=" + pipelineMode + ")",
+			Status:       string(BacklogStatusInProgress),
+			PipelineMode: pipelineMode,
+		})
+		require.NoError(t, itemErr)
+		for i := 0; i < 4; i++ {
+			_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusReview, nil, TriggeredBySystem)
+			require.NoError(t, err)
+			_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusInProgress, nil, TriggeredBySystem)
+			require.NoError(t, err)
+		}
+		return item
+	}
+
+	sddItem := newFourCycleItem("sdd")
+	defaultItem := newFourCycleItem("")
+
+	listener := NewBacklogLifecycleListener(storage)
+	listener.livenessEngine = engine
+	listener.reconcileBouncingItems(ctx, er)
+
+	open, err := er.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	_, sddFlagged := findOpenStuckStateFor(open, sddItem.ID, domain.StuckReasonBouncing)
+	_, defaultFlagged := findOpenStuckStateFor(open, defaultItem.ID, domain.StuckReasonBouncing)
+	assert.False(t, sddFlagged, "sdd-mode item with 4 cycles must not be flagged under the per-item CycleThreshold=5 override")
+	assert.True(t, defaultFlagged, "default-mode sibling with the identical 4-cycles-in-30h shape must still be flagged via the unconfigured pair's DefaultLivenessEngine fallback (bounceThreshold=3) — proving per-item, not package-level, resolution")
 }

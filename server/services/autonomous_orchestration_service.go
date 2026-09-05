@@ -461,6 +461,10 @@ func (a *AutonomousOrchestrationService) onAutonomousDriverComplete(instanceName
 						case outcome.Done:
 							a.resolveAutonomousStuck(ctx, concreteStorage, item.ID)
 						case session.BacklogStatus(item.Status) != session.BacklogStatusReview:
+							// Also correctly covers a custom stage: "moved on from review" is
+							// true regardless of which built-in or custom status it moved to,
+							// so resolving the stuck row here needs no per-stage knowledge
+							// (Epic 2.1, Story 2.1.3e's open-stage-slug-type decision).
 							// BUG-048: the item already moved on from "review" by the time this
 							// stuck exit was processed — most likely session/backlog_lifecycle.go's
 							// bouncing gate already reopened it via a different, earlier

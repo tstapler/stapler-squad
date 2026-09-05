@@ -626,6 +626,16 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	var pipelineEngine session.PipelineEngine
 	var pipelineModeRepo session.PipelineModeRepository
 	if entClient := storage.GetEntClient(); entClient != nil {
+		// Seed the built-in 9-stage/edge workflow graph (backlog_stages +
+		// stage_transitions rows) so ConfiguredWorkflowEngine (Epic 2.3) has
+		// real rows to load from day one once it's wired in. Create-if-missing
+		// only — never touches rows once any backlog_stages row exists — and
+		// never aborts boot on failure, matching the "sdd" pipeline mode seed's
+		// posture immediately below (project_plans/backlog-custom-workflow-stages/
+		// implementation/plan.md Epic 2.2).
+		if seedErr := session.EnsureBuiltInWorkflowStages(context.Background(), entClient); seedErr != nil {
+			log.Warn("failed to seed built-in workflow stages, continuing without them", "err", seedErr)
+		}
 		pipelineModeRepo = session.NewEntPipelineModeRepository(entClient)
 		// Seed the "sdd" pipeline mode before the engine's first cache Load
 		// below, so that Load already sees the seeded row in one pass rather
@@ -645,6 +655,56 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		}
 	} else {
 		log.Warn("pipelineEngine unavailable: storage is not ent-backed; continuing with the default pipeline for all backlog items")
+	}
+
+	// LivenessEngine resolves a backlog stage's stuck-detection threshold
+	// (Epic 1.3 of backlog-custom-workflow-stages). Same non-fatal-fallback
+	// posture as pipelineEngine immediately above: construction never aborts
+	// boot, and a nil livenessEngine/livenessRepo (non-ent-backed storage, or
+	// construction failure) makes every consumer fall back to
+	// DefaultLivenessEngine's hardcoded constants — behavior identical to
+	// pre-Epic-1.3 today. livenessRepo is wired into BacklogService via a
+	// post-construction setter (SetLivenessRepository/SetLivenessEngine
+	// below, near backlogSvc's construction) rather than as a
+	// NewBacklogService constructor parameter, to avoid touching every
+	// existing NewBacklogService test call site for a dependency this epic
+	// introduces.
+	var livenessRepo session.LivenessRepository
+	var livenessEngine session.LivenessEngine
+	if entClient := storage.GetEntClient(); entClient != nil {
+		livenessRepo = session.NewEntLivenessRepository(entClient)
+		if cachingLivenessEngine, err := session.NewCachingLivenessEngine(livenessRepo); err != nil {
+			log.Warn("livenessEngine construction failed; continuing with DefaultLivenessEngine's built-in thresholds", "err", err)
+		} else {
+			livenessEngine = cachingLivenessEngine
+		}
+	} else {
+		log.Warn("livenessEngine unavailable: storage is not ent-backed; continuing with DefaultLivenessEngine's built-in thresholds")
+	}
+
+	// stageCRUDRepo/stageConfigEngine back the Stage/StageTransition/
+	// TransitionGate CRUD RPCs (Epic 2.7 of backlog-custom-workflow-stages).
+	// stageConfigEngine here is used only for its InvalidateCache method —
+	// those write handlers' downstream cache-invalidation target — not as
+	// the active session.WorkflowEngine (workflowEngine above still is);
+	// switching runtime transition/gate evaluation over to
+	// ConfiguredWorkflowEngine is a later epic's job. Same non-fatal-fallback
+	// posture as pipelineEngine/livenessEngine above.
+	var stageCRUDRepo session.StageCRUDRepository
+	var stageConfigEngine *session.ConfiguredWorkflowEngine
+	var gateSatisfactionRepo session.GateSatisfactionRepository
+	if entClient := storage.GetEntClient(); entClient != nil {
+		entStageRepo := session.NewEntStageConfigRepository(entClient)
+		stageCRUDRepo = entStageRepo
+		entGateSatisfactionRepo := session.NewEntGateSatisfactionRepository(entClient)
+		gateSatisfactionRepo = entGateSatisfactionRepo
+		if engine, err := session.NewConfiguredWorkflowEngine(entStageRepo, entGateSatisfactionRepo); err != nil {
+			log.Warn("stageConfigEngine construction failed; stage/transition/gate CRUD writes will not invalidate a cache", "err", err)
+		} else {
+			stageConfigEngine = engine
+		}
+	} else {
+		log.Warn("stageCRUDRepo unavailable: storage is not ent-backed; Stage/StageTransition/TransitionGate CRUD RPCs will return CodeUnavailable")
 	}
 
 	// Construct the headless LLM pool early so the lifecycle listener can receive it
@@ -704,7 +764,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	// Backlog lifecycle listener — always created, enabled state set from config below.
 	// The pool is passed at construction time to close the race window that existed when
 	// SetHeadlessPool was called hundreds of lines after instance wiring.
-	backlogLifecycleListener := session.NewBacklogLifecycleListenerWithPool(storage, headlessPool, pipelineEngine)
+	backlogLifecycleListener := session.NewBacklogLifecycleListenerWithPool(storage, headlessPool, pipelineEngine, livenessEngine)
 	backlogLifecycleListener.SetNotifier(&services.EventBusNotifier{Bus: eventBus})
 	// Wires the ItemChangePublisher adapter into the concrete *EntRepository
 	// (via Storage's forwarding setter, session/storage.go) so its 9 hooked
@@ -1206,6 +1266,19 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	}()
 
 	backlogSvc := services.NewBacklogService(storage, sessionService, cfg, workflowEngine, pipelineEngine, pipelineModeRepo)
+	backlogSvc.SetLivenessRepository(livenessRepo)
+	backlogSvc.SetLivenessEngine(livenessEngine)
+	backlogSvc.SetStageCRUDRepository(stageCRUDRepo)
+	backlogSvc.SetGateSatisfactionRepository(gateSatisfactionRepo)
+	// Guarded rather than an unconditional Set: stageConfigEngine is a
+	// *session.ConfiguredWorkflowEngine, and passing a nil one straight into
+	// SetStageConfigEngine's interface parameter would box it as a
+	// non-nil-interface-wrapping-nil-pointer — breaking every
+	// s.stageConfigEngine == nil guard downstream (same typed-nil pitfall
+	// pipelineEngine's doc comment above describes).
+	if stageConfigEngine != nil {
+		backlogSvc.SetStageConfigEngine(stageConfigEngine)
+	}
 	backlogSvc.SetEventBus(eventBus)
 	backlogSvc.SetSessionStopper(sessionService)
 	backlogSvc.SetSessionSteerer(sessionService)
@@ -1238,6 +1311,10 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	backlogLifecycleListener.SetAutoReopener(backlogSvc)
 	backlogLifecycleListener.SetPRFixSpawner(backlogSvc)
 	backlogLifecycleListener.SetReviewRespawner(backlogSvc)
+	// Wires reconcileCustomGateChecks' scan for overdue custom-check
+	// invocations (Epic 2.4, Task 2.4.4c) — same gateSatisfactionRepo instance
+	// already wired into backlogSvc above, guarded nil-safe by both consumers.
+	backlogLifecycleListener.SetGateSatisfactionRepository(gateSatisfactionRepo)
 	// Wire the orphaned_triage respawner so an idea-status item whose triage
 	// session orphaned (crashed, was killed, or a server restart happened
 	// mid-triage) gets triage automatically re-triggered instead of sitting

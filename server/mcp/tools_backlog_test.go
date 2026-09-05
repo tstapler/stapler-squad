@@ -5705,6 +5705,69 @@ func TestBuildMatchedWaitResult_MapsAllEventKinds(t *testing.T) {
 	}
 }
 
+// TestBuildMatchedWaitResult_should_SetIsTerminal_When_ItemIsAtConfiguredCustomTerminalStage
+// is the Story 2.1.3 (Task 2.1.3d) regression test for buildMatchedWaitResult's
+// switch to session.IsTerminalStatus: a custom stage marked IsTerminal via
+// session.SetTerminalStatusChecker must report IsTerminal true, matching
+// plan.md's AC example verbatim (a "legal-review" custom terminal stage).
+func TestBuildMatchedWaitResult_should_SetIsTerminal_When_ItemIsAtConfiguredCustomTerminalStage(t *testing.T) {
+	const customTerminal = session.BacklogStatus("legal-review")
+	session.SetTerminalStatusChecker(func(s session.BacklogStatus) bool { return s == customTerminal })
+	t.Cleanup(func() { session.SetTerminalStatusChecker(nil) })
+
+	res := buildMatchedWaitResult("item-under-test", &events.BacklogItemEventPayload{
+		Kind: events.BacklogChangeStatusTransition,
+		Item: &session.BacklogItemData{ID: "item-under-test", Status: string(customTerminal)},
+	})
+	require.True(t, res.IsTerminal, "a custom stage marked IsTerminal by the configured checker must be recognized")
+}
+
+// TestBuildMatchedWaitResult_should_NotSetIsTerminal_When_NoCheckerConfigured
+// confirms built-in non-terminal behavior is unchanged when no
+// SetTerminalStatusChecker is wired (today's only production/test state).
+func TestBuildMatchedWaitResult_should_NotSetIsTerminal_When_NoCheckerConfigured(t *testing.T) {
+	res := buildMatchedWaitResult("item-under-test", &events.BacklogItemEventPayload{
+		Kind: events.BacklogChangeStatusTransition,
+		Item: &session.BacklogItemData{ID: "item-under-test", Status: "legal-review"},
+	})
+	require.False(t, res.IsTerminal, "an unrecognized custom status must not be treated as terminal when no checker is configured")
+}
+
+// TestCurrentStateWaitResult_should_ReportIsTerminal_When_ItemIsAtConfiguredCustomTerminalStage
+// mirrors the above for currentStateWaitResult's "already satisfied" precheck
+// (the verdict_recorded branch, which is the one that reads the `terminal`
+// local re-routed to session.IsTerminalStatus).
+func TestCurrentStateWaitResult_should_ReportIsTerminal_When_ItemIsAtConfiguredCustomTerminalStage(t *testing.T) {
+	const customTerminal = session.BacklogStatus("legal-review")
+	session.SetTerminalStatusChecker(func(s session.BacklogStatus) bool { return s == customTerminal })
+	t.Cleanup(func() { session.SetTerminalStatusChecker(nil) })
+
+	item := &session.BacklogItemData{ID: "item-under-test", Status: string(customTerminal)}
+	verdict := &session.ReviewVerdictSummary{OverallOutcome: "pass", Summary: "looks good"}
+
+	res := currentStateWaitResult(item, verdict, eventTypeAny)
+	require.NotNil(t, res)
+	require.True(t, res.IsTerminal, "a custom stage marked IsTerminal by the configured checker must be recognized")
+}
+
+// TestCurrentStateWaitResult_should_ReportBuiltInDoneArchivedUnchanged confirms
+// the built-in Done/Archived behavior this re-route must preserve exactly.
+func TestCurrentStateWaitResult_should_ReportBuiltInDoneArchivedUnchanged(t *testing.T) {
+	for _, status := range []session.BacklogStatus{session.BacklogStatusDone, session.BacklogStatusArchived} {
+		item := &session.BacklogItemData{ID: "item-under-test", Status: string(status)}
+		verdict := &session.ReviewVerdictSummary{OverallOutcome: "pass", Summary: "looks good"}
+		res := currentStateWaitResult(item, verdict, eventTypeAny)
+		require.NotNil(t, res)
+		require.True(t, res.IsTerminal, "%s must remain terminal", status)
+	}
+
+	item := &session.BacklogItemData{ID: "item-under-test", Status: string(session.BacklogStatusInProgress)}
+	verdict := &session.ReviewVerdictSummary{OverallOutcome: "pass", Summary: "looks good"}
+	res := currentStateWaitResult(item, verdict, eventTypeAny)
+	require.NotNil(t, res)
+	require.False(t, res.IsTerminal, "in_progress must remain non-terminal")
+}
+
 // --- list_backlog_items ---
 
 // newTestListBacklogHandlers wires a *backlogHandlers with a real
@@ -5758,6 +5821,67 @@ func TestListBacklogItems_ReturnsInvalidArgument_When_StatusValueUnknown(t *test
 	out := parseResult(t, res)
 	require.False(t, out["success"].(bool))
 	require.Equal(t, ErrInvalidArgument, out["error"].(map[string]interface{})["code"])
+}
+
+// fakeStageLister is a minimal stageLister test double standing in for Epic
+// 2.3's not-yet-built ConfiguredWorkflowEngine (Story 2.1.4, Task 2.1.4c).
+type fakeStageLister struct{ slugs []string }
+
+func (f fakeStageLister) ListEnabledStageSlugs() []string { return f.slugs }
+
+// TestListBacklogItems_should_AcceptConfiguredCustomStage_When_StageEngineWired
+// is the Story 2.1.4 (Task 2.1.4c) regression test: once a stageLister is
+// wired, a status filter value must be validated against its live
+// enabled-stage list (including a custom stage slug), not the fixed built-in
+// 9-entry validBacklogStatuses list.
+func TestListBacklogItems_should_AcceptConfiguredCustomStage_When_StageEngineWired(t *testing.T) {
+	h := newTestListBacklogHandlers(t)
+	h.stageEngine = fakeStageLister{slugs: []string{"idea", "legal-review", "done"}}
+	createBacklogItemWithStatusAndPriority(t, h.storage, "Legal review item", "legal-review", 3)
+
+	res, err := h.listBacklogItems(context.Background(), makeToolReq(map[string]interface{}{
+		"status": []interface{}{"legal-review"},
+	}))
+	require.NoError(t, err)
+	out := parseResult(t, res)
+	require.True(t, out["success"].(bool), "a configured custom stage slug must be accepted as a status filter value: %v", out)
+}
+
+// TestListBacklogItems_should_RejectBuiltInStatus_When_StageEngineOmitsIt
+// confirms the engine's list is authoritative once wired — a built-in status
+// the engine doesn't enumerate is rejected, not silently allowed via the
+// fixed fallback list.
+func TestListBacklogItems_should_RejectBuiltInStatus_When_StageEngineOmitsIt(t *testing.T) {
+	h := newTestListBacklogHandlers(t)
+	h.stageEngine = fakeStageLister{slugs: []string{"idea", "legal-review", "done"}}
+
+	res, err := h.listBacklogItems(context.Background(), makeToolReq(map[string]interface{}{
+		"status": []interface{}{"in_progress"},
+	}))
+	require.NoError(t, err)
+	out := parseResult(t, res)
+	require.False(t, out["success"].(bool), "a status the wired engine doesn't enumerate must be rejected")
+	require.Equal(t, ErrInvalidArgument, out["error"].(map[string]interface{})["code"])
+}
+
+// TestListBacklogItems_should_AcceptAllNineBuiltInStatuses_When_NoStageEngineWired
+// is the "existing 9 built-in filter values are unaffected" half of Task
+// 2.1.4c: with no stageEngine wired (today's only production state), every
+// built-in status must still validate exactly as before this story.
+func TestListBacklogItems_should_AcceptAllNineBuiltInStatuses_When_NoStageEngineWired(t *testing.T) {
+	h := newTestListBacklogHandlers(t)
+	require.Nil(t, h.stageEngine)
+
+	for _, s := range validBacklogStatuses {
+		t.Run(string(s), func(t *testing.T) {
+			res, err := h.listBacklogItems(context.Background(), makeToolReq(map[string]interface{}{
+				"status": []interface{}{string(s)},
+			}))
+			require.NoError(t, err)
+			out := parseResult(t, res)
+			require.True(t, out["success"].(bool), "%s must remain a valid filter value: %v", s, out)
+		})
+	}
 }
 
 func TestListBacklogItems_ReturnsInvalidArgument_When_PriorityOutOfRange(t *testing.T) {
