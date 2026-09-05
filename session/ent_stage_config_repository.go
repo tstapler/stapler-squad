@@ -362,7 +362,11 @@ func (r *EntStageConfigRepository) UpdateTransition(ctx context.Context, id uuid
 
 // DeleteTransition removes a StageTransition row by id.
 func (r *EntStageConfigRepository) DeleteTransition(ctx context.Context, id uuid.UUID) error {
-	if err := r.client.StageTransition.DeleteOneID(id).Exec(ctx); err != nil {
+	return deleteTransitionRow(ctx, r.graphClients(), id)
+}
+
+func deleteTransitionRow(ctx context.Context, c entGraphClients, id uuid.UUID) error {
+	if err := c.transitions.DeleteOneID(id).Exec(ctx); err != nil {
 		if ent.IsNotFound(err) {
 			return fmt.Errorf("%w: transition %s", ErrNotFound, id)
 		}
@@ -527,6 +531,10 @@ func (t *entTransitionTx) CreateTransition(ctx context.Context, in TransitionCre
 
 func (t *entTransitionTx) UpdateTransition(ctx context.Context, id uuid.UUID, in TransitionUpdateInput) (*TransitionData, error) {
 	return updateTransitionRow(ctx, t.clients, id, in)
+}
+
+func (t *entTransitionTx) DeleteTransition(ctx context.Context, id uuid.UUID) error {
+	return deleteTransitionRow(ctx, t.clients, id)
 }
 
 // WithTx runs fn against a repository view scoped to a single ent

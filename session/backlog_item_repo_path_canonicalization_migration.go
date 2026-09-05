@@ -23,12 +23,19 @@ package session
 // workflow_enabled_field_migration.go's one-time-only column-existence gate:
 // unlike that field's non-self-limiting correction condition, an
 // already-canonical RepoPath (including a freshly created item's) is a
-// stable steady state that ResolveMainRepoRoot will keep resolving to itself
-// forever, so re-running this on every startup is a safe, cheap no-op once a
-// database is fully migrated.
+// stable steady state that ResolveMainRepoRoot will keep resolving to itself.
+//
+// Unlike this file's sibling backfills, "already canonical" isn't a free
+// in-memory check — ResolveMainRepoRoot shells out to git. An os.Stat guard
+// (below) skips that subprocess call entirely for the common case of a
+// repo_path that no longer exists on disk (routine here: worktrees get
+// pruned once their session archives), so this stays cheap in practice, but
+// it is not literally free the way e.g. the updated_at-UTC backfill's
+// time.Time.Location() comparison is.
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 
 	"github.com/tstapler/stapler-squad/log"
@@ -39,10 +46,10 @@ import (
 // path is a linked worktree (or otherwise resolves to a different main repo
 // root) in place. Idempotent: an empty, relative, no-longer-existing, or
 // already-canonical RepoPath is left untouched — a no-op call costs one query
-// plus one best-effort git subprocess call per row with a repo_path set.
-// Best-effort per row: a single row's resolve or save failure is logged and
-// does not abort the rest, mirroring this file's sibling backfills'
-// discipline.
+// plus, for each row with a repo_path that still exists on disk, one
+// best-effort git subprocess call. Best-effort per row: a single row's
+// resolve or save failure is logged and does not abort the rest, mirroring
+// this file's sibling backfills' discipline.
 func runBacklogItemRepoPathCanonicalizationBackfill(ctx context.Context, er *EntRepository) error {
 	//nolint:entfullscan idempotent startup backfill canonicalizing every BacklogItem's repo_path; safe to re-run on every startup (see file doc comment).
 	items, err := er.client.BacklogItem.Query().All(ctx)
@@ -55,6 +62,13 @@ func runBacklogItemRepoPathCanonicalizationBackfill(ctx context.Context, er *Ent
 	var migrated int
 	for _, item := range items {
 		if item.RepoPath == "" || !filepath.IsAbs(item.RepoPath) {
+			continue
+		}
+		// Cheap pre-filter before the git subprocess call below: a path that
+		// no longer exists can never resolve to anything (ResolveMainRepoRoot
+		// would just fail and fall through unchanged), so skip it with a
+		// plain stat() rather than paying for git rev-parse + its timeout.
+		if _, statErr := os.Stat(item.RepoPath); statErr != nil {
 			continue
 		}
 		resolved, resolveErr := ResolveMainRepoRoot(item.RepoPath)

@@ -116,3 +116,29 @@ func TestRunBacklogItemRepoPathCanonicalizationBackfill_should_SkipEmptyAndRelat
 	require.NoError(t, err)
 	assert.Equal(t, "stapler-squad", gotRelative.RepoPath, "a relative repo_path must be left untouched, not silently resolved via filepath.Abs")
 }
+
+// TestRunBacklogItemRepoPathCanonicalizationBackfill_should_SkipNonExistentPath_WithoutInvokingGit
+// verifies the os.Stat pre-filter: a repo_path that no longer exists on disk
+// (routine here — worktrees get pruned once their session archives) must be
+// skipped without ever invoking ResolveMainRepoRoot's git subprocess call,
+// not just left unchanged as a side effect of that call failing.
+func TestRunBacklogItemRepoPathCanonicalizationBackfill_should_SkipNonExistentPath_WithoutInvokingGit(t *testing.T) {
+	t.Parallel()
+	repo, cleanup := createTestEntRepository(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	missingPath := filepath.Join(t.TempDir(), "does-not-exist-anymore")
+	created, err := repo.client.BacklogItem.Create().
+		SetTitle("item whose worktree was already cleaned up").
+		SetStatus("idea").
+		SetRepoPath(missingPath).
+		Save(ctx)
+	require.NoError(t, err)
+
+	require.NoError(t, runBacklogItemRepoPathCanonicalizationBackfill(ctx, repo))
+
+	got, err := repo.client.BacklogItem.Get(ctx, created.ID)
+	require.NoError(t, err)
+	assert.Equal(t, missingPath, got.RepoPath, "a repo_path that no longer exists on disk must be left untouched")
+}

@@ -264,7 +264,13 @@ func (s *BacklogService) UpdateStageTransition(
 	}), nil
 }
 
-// DeleteStageTransition removes a transition edge.
+// DeleteStageTransition removes a transition edge. Mirrors
+// UpdateStageTransition's disable path: deleting an enabled transition is
+// exactly as capable of stranding live items on its from-stage as disabling
+// one is (an enabled-edge-turned-absent is indistinguishable from
+// enabled-edge-turned-disabled to ValidateDisableTransition's counting), so
+// it gets the identical live-item safety check, run inside the same
+// transaction as the delete (Task 2.7.2h2's pattern).
 // +api: backlog:delete-stage-transition
 func (s *BacklogService) DeleteStageTransition(
 	ctx context.Context,
@@ -279,8 +285,42 @@ func (s *BacklogService) DeleteStageTransition(
 		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("invalid transition id: %w", err))
 	}
 
-	if err := s.stageCRUDRepo.DeleteTransition(ctx, id); err != nil {
-		return nil, mapTransitionGraphError(fmt.Errorf("delete stage transition: %w", err))
+	existing, err := s.stageCRUDRepo.GetTransition(ctx, id)
+	if err != nil {
+		return nil, mapTransitionGraphError(fmt.Errorf("get stage transition: %w", err))
+	}
+
+	txErr := s.stageCRUDRepo.WithTx(ctx, func(tx session.TransitionTxRepository) error {
+		if existing.Enabled {
+			_, transitions, err := tx.ListGraphForValidation(ctx)
+			if err != nil {
+				return fmt.Errorf("load graph for validation: %w", err)
+			}
+			// candidateEdges reflects the graph as it would exist after this
+			// transition is deleted — omitted entirely rather than marked
+			// disabled, since ValidateDisableTransition only counts edges
+			// present in the slice with Enabled==true either way.
+			candidateEdges := make([]session.TransitionDefinition, 0, len(transitions))
+			for _, t := range transitions {
+				if t.FromSlug == existing.FromStageSlug && t.ToSlug == existing.ToStageSlug {
+					continue
+				}
+				candidateEdges = append(candidateEdges, t)
+			}
+			liveCount, err := tx.LiveItemCountForStage(ctx, existing.FromStageSlug)
+			if err != nil {
+				return fmt.Errorf("count live items for stage %q: %w", existing.FromStageSlug, err)
+			}
+			if err := session.ValidateDisableTransition(
+				candidateEdges, existing.FromStageSlug, map[string]int{existing.FromStageSlug: liveCount},
+			); err != nil {
+				return err
+			}
+		}
+		return tx.DeleteTransition(ctx, id)
+	})
+	if txErr != nil {
+		return nil, mapTransitionGraphError(fmt.Errorf("delete stage transition: %w", txErr))
 	}
 
 	s.invalidateStageConfigCache(ctx, req.Msg.Id)

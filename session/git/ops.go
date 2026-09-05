@@ -24,7 +24,13 @@ import (
 func FetchBranch(repoPath, branchName string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	cmd := safeexec.CommandContext(ctx, "git", "-C", repoPath, "fetch", "origin", branchName)
+	// "--" forces every remaining argument to be treated as positional, not an
+	// option — without it, a branchName starting with "-" (e.g.
+	// "--upload-pack=...") is parsed by git itself as a flag rather than a ref
+	// name, a documented git argument-injection vector (same class as
+	// CVE-2017-1000117) when branchName originates from caller input, as it
+	// does via BacklogItem.BaseBranch (session.ResolveExplicitBranchSHA).
+	cmd := safeexec.CommandContext(ctx, "git", "-C", repoPath, "fetch", "origin", "--", branchName)
 	if err := cmd.Run(); err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			return fmt.Errorf("failed to fetch branch: %s", string(exitErr.Stderr))
@@ -152,6 +158,9 @@ func ResolveWorktreeBaseCommit(repoPath string) (defaultBranch, baseSHA string, 
 // HEAD fallback here: an explicitly requested branch that doesn't exist
 // anywhere is always a hard error, never silently substituted.
 func ResolveExplicitBranchSHA(repoPath, branchName string) (string, error) {
+	if err := ValidateBranchName(branchName); err != nil {
+		return "", fmt.Errorf("resolve branch: %w", err)
+	}
 	if sha, err := ResolveOriginBranchSHA(repoPath, branchName); err == nil {
 		return sha, nil
 	} else if sha, localErr := ResolveLocalBranchSHA(repoPath, branchName); localErr == nil {
@@ -744,6 +753,14 @@ func diffHashFromFilePatches(filePatches []fdiff.FilePatch) string {
 func CheckoutBranch(repoPath, branchName string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
+	// No "--" guard here (unlike FetchBranch): `git checkout -- <name>` puts
+	// checkout into path-restore mode, not branch-switch mode — verified this
+	// breaks every legitimate call (treats branchName as a pathspec, "did not
+	// match any file(s)"), not just malicious input. ValidateBranchName below
+	// is the actual defense for this call site.
+	if err := ValidateBranchName(branchName); err != nil {
+		return fmt.Errorf("failed to checkout branch: %w", err)
+	}
 	cmd := safeexec.CommandContext(ctx, "git", "-C", repoPath, "checkout", branchName)
 	if err := cmd.Run(); err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {

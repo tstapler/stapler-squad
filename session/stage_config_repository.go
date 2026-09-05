@@ -148,6 +148,11 @@ type TransitionTxRepository interface {
 	LiveItemCountForStage(ctx context.Context, stageSlug string) (int, error)
 	CreateTransition(ctx context.Context, in TransitionCreateInput) (*TransitionData, error)
 	UpdateTransition(ctx context.Context, id uuid.UUID, in TransitionUpdateInput) (*TransitionData, error)
+	// DeleteTransition removes a transition row inside the transaction, so
+	// DeleteStageTransition's live-item safety check (mirroring
+	// UpdateStageTransition's disable path) and the delete itself commit or
+	// roll back together.
+	DeleteTransition(ctx context.Context, id uuid.UUID) error
 }
 
 // StageCRUDRepository is Epic 2.7's write-and-lookup surface for stages,

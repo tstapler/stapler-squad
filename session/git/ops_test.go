@@ -380,6 +380,52 @@ func TestResolveExplicitBranchSHA_ReturnsError_When_BranchDoesNotExistAnywhere(t
 	assert.Empty(t, sha)
 }
 
+// TestResolveExplicitBranchSHA_RejectsFlagLikeBranchName is the regression
+// test for a git argument-injection class (same family as CVE-2017-1000117):
+// BacklogItem.BaseBranch is a caller-controlled string that used to reach
+// `git fetch origin <branchName>` with no "--" separator, so a value like
+// "--upload-pack=..." would be parsed by git as an option rather than a ref
+// name. Verifies ResolveExplicitBranchSHA rejects such input before it ever
+// reaches a git subprocess, rather than passing it through.
+func TestResolveExplicitBranchSHA_RejectsFlagLikeBranchName(t *testing.T) {
+	t.Parallel()
+	origin := setupTestRepo(t)
+	work := cloneTestRepo(t, origin)
+
+	sha, err := ResolveExplicitBranchSHA(work, "--upload-pack=touch /tmp/pwned")
+	require.Error(t, err)
+	assert.Empty(t, sha)
+}
+
+// TestCheckoutBranch_RejectsFlagLikeBranchName is CheckoutBranch's sibling
+// regression test — see TestResolveExplicitBranchSHA_RejectsFlagLikeBranchName.
+// CheckoutBranch can't use FetchBranch's "--" guard (verified empirically:
+// `git checkout -- <name>` puts checkout into path-restore mode instead of
+// switching branches), so ValidateBranchName is its only defense.
+func TestCheckoutBranch_RejectsFlagLikeBranchName(t *testing.T) {
+	t.Parallel()
+	origin := setupTestRepo(t)
+
+	err := CheckoutBranch(origin, "--upload-pack=touch /tmp/pwned")
+	require.Error(t, err)
+}
+
+// TestCheckoutBranch_SwitchesToRealBranch is the companion positive case:
+// a normal branch name must still check out successfully after the
+// ValidateBranchName guard was added (the guard must not reject legitimate
+// names).
+func TestCheckoutBranch_SwitchesToRealBranch(t *testing.T) {
+	t.Parallel()
+	origin := setupTestRepo(t)
+	runGit(t, origin, "checkout", "-b", "feature-x")
+	runGit(t, origin, "checkout", "main")
+
+	err := CheckoutBranch(origin, "feature-x")
+	require.NoError(t, err)
+	branch := strings.TrimSpace(runGit(t, origin, "branch", "--show-current"))
+	assert.Equal(t, "feature-x", branch)
+}
+
 // TestIsUnbornRepo_should_ReturnTrue_When_RepoHasZeroCommits verifies the case
 // CreateBacklogWorktree relies on to know it's safe to fall back to ambient HEAD
 // (nothing to misattribute in a repo with no commits at all).

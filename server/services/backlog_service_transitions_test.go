@@ -203,6 +203,70 @@ func TestUpdateStageTransition_should_Succeed_When_DisablingEdgeForStageWithZero
 	assert.False(t, updateResp.Msg.Item.Enabled)
 }
 
+// TestDeleteStageTransition_should_ReturnFailedPreconditionAndPersistNothing_When_DeletingLastEnabledEdgeForStageWithLiveItems
+// is DeleteStageTransition's sibling to the Update test above: deleting the
+// last enabled outgoing edge is exactly as capable of stranding live items as
+// disabling it, and must get the identical live-item safety check.
+func TestDeleteStageTransition_should_ReturnFailedPreconditionAndPersistNothing_When_DeletingLastEnabledEdgeForStageWithLiveItems(t *testing.T) {
+	t.Parallel()
+	svc, _, _, storage := newTransitionCRUDTestService(t)
+	ctx := t.Context()
+
+	_, err := svc.CreateStage(ctx, connect.NewRequest(&sessionv1.CreateStageRequest{
+		Slug: "design-review-delete", Name: "Design Review Delete", IsEntry: true, Enabled: true,
+	}))
+	require.NoError(t, err)
+	edgeResp, err := svc.CreateStageTransition(ctx, connect.NewRequest(&sessionv1.CreateStageTransitionRequest{
+		FromStageSlug: "design-review-delete",
+		ToStageSlug:   string(session.BacklogStatusReady),
+		Enabled:       true,
+	}))
+	require.NoError(t, err)
+
+	_, err = storage.CreateBacklogItem(ctx, session.BacklogItemData{Title: "live item", Status: "design-review-delete"})
+	require.NoError(t, err)
+
+	_, err = svc.DeleteStageTransition(ctx, connect.NewRequest(&sessionv1.DeleteStageTransitionRequest{
+		Id: edgeResp.Msg.Item.Id,
+	}))
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(err))
+	assert.Contains(t, err.Error(), "design-review-delete")
+	assert.Contains(t, err.Error(), "1")
+
+	getResp, err := svc.GetStageTransition(ctx, connect.NewRequest(&sessionv1.GetStageTransitionRequest{Id: edgeResp.Msg.Item.Id}))
+	require.NoError(t, err, "no partial write: the edge must still exist")
+	assert.True(t, getResp.Msg.Item.Enabled)
+}
+
+// TestDeleteStageTransition_should_Succeed_When_DeletingEdgeForStageWithZeroLiveItems
+// proves the delete guard never fires when nothing is currently on the
+// stage, even for the last enabled edge.
+func TestDeleteStageTransition_should_Succeed_When_DeletingEdgeForStageWithZeroLiveItems(t *testing.T) {
+	t.Parallel()
+	svc, _, _, _ := newTransitionCRUDTestService(t)
+	ctx := t.Context()
+
+	_, err := svc.CreateStage(ctx, connect.NewRequest(&sessionv1.CreateStageRequest{
+		Slug: "design-review-delete-2", Name: "Design Review Delete 2", IsEntry: true, Enabled: true,
+	}))
+	require.NoError(t, err)
+	edgeResp, err := svc.CreateStageTransition(ctx, connect.NewRequest(&sessionv1.CreateStageTransitionRequest{
+		FromStageSlug: "design-review-delete-2",
+		ToStageSlug:   string(session.BacklogStatusReady),
+		Enabled:       true,
+	}))
+	require.NoError(t, err)
+
+	_, err = svc.DeleteStageTransition(ctx, connect.NewRequest(&sessionv1.DeleteStageTransitionRequest{
+		Id: edgeResp.Msg.Item.Id,
+	}))
+	require.NoError(t, err)
+
+	_, err = svc.GetStageTransition(ctx, connect.NewRequest(&sessionv1.GetStageTransitionRequest{Id: edgeResp.Msg.Item.Id}))
+	require.Error(t, err, "the transition must actually be gone")
+}
+
 // ─── TransitionGate config validation (Task 2.7.2g3) ────────────────────────
 
 // TestCreateTransitionGate_should_ReturnInvalidArgumentAndPersistNothing_When_ConfigNamesKeyOutsideAllowlist
