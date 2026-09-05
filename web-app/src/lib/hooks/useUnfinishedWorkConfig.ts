@@ -11,6 +11,7 @@ import {
 } from "@/gen/session/v1/unfinished_pb";
 import { create } from "@bufbuild/protobuf";
 import { getApiBaseUrl, createAuthInterceptor } from "@/lib/config";
+import { useAbortableRequest } from "@/lib/hooks/useAbortableRequest";
 
 export interface UseUnfinishedWorkConfigReturn {
   config: UnfinishedWorkConfig | null;
@@ -28,20 +29,24 @@ export function useUnfinishedWorkConfig(): UseUnfinishedWorkConfigReturn {
     interceptors: [createAuthInterceptor()],
   });
   const client = createClient(UnfinishedWorkService, transport);
+  const startFetch = useAbortableRequest();
 
   const fetchConfig = useCallback(async () => {
     setLoading(true);
+    const signal = startFetch();
     try {
       const req = create(GetUnfinishedWorkConfigRequestSchema, {});
-      const res = await client.getUnfinishedWorkConfig(req);
+      const res = await client.getUnfinishedWorkConfig(req, { signal });
+      if (signal.aborted) return;
       if (res.config) setConfig(res.config);
     } catch {
+      if (signal.aborted) return;
       // ignore
     } finally {
-      setLoading(false);
+      if (!signal.aborted) setLoading(false);
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [startFetch]);
 
   useEffect(() => {
     fetchConfig();
@@ -55,6 +60,10 @@ export function useUnfinishedWorkConfig(): UseUnfinishedWorkConfigReturn {
         const req = create(UpdateUnfinishedWorkConfigRequestSchema, {
           config: merged,
         });
+        // A one-shot mutation triggered by an explicit user action (a
+        // settings toggle), not tied to a mount/effect that could re-fire
+        // faster than this resolves.
+        // abort-signal-exempt
         const res = await client.updateUnfinishedWorkConfig(req);
         if (res.config) setConfig(res.config);
       } catch {

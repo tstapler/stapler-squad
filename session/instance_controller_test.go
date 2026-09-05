@@ -208,10 +208,22 @@ func TestStartController_PiStatusSourceNoDoubleStart(t *testing.T) {
 			}
 
 			// Give the (at most one) spawned subprocess a moment to record its
-			// PID before counting. 5s (not 2s) margin for shared-machine load
-			// in this repo's dev/CI environments (see
-			// docs/how-to's timing-budget precedent for the same reasoning).
-			deadline := time.Now().Add(5 * time.Second)
+			// PID before counting. Bumped from 5s to 15s (BUG-099): the 5s
+			// margin was already a bump from an original 2s for shared-machine
+			// load, but local timing under a cold test binary still showed
+			// individual iterations taking 4+ seconds end-to-end (fork/exec +
+			// shell startup + StopController's Kill()/Wait() join) before
+			// settling to ~0.13s once warm -- close enough to the old 5s
+			// ceiling that any additional load (CI runner contention, EDR/AV
+			// on-access scanning of a freshly-written executable, concurrent
+			// `go build`/`go test`) can push a still-real subprocess spawn
+			// past the deadline and produce a false "zero PIDs" failure that
+			// looks identical to the double-start bug this test guards
+			// against. See BUG-099 for the investigation that ruled out
+			// PR #697's commits (787a61165, a440ebce0, 292b086e2 -- none
+			// touch instance_controller.go/instance_pi_status.go/
+			// pi_status_source.go/this test file) as the cause.
+			deadline := time.Now().Add(15 * time.Second)
 			var pidLines []string
 			for time.Now().Before(deadline) {
 				data, readErr := os.ReadFile(pidLogFile)

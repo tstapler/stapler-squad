@@ -31,6 +31,9 @@ const HISTORY_ONLY_TYPES = new Set([
 async function resolveApproval(approvalId: string, decision: "allow" | "deny"): Promise<void> {
   try {
     const client = createClient(SessionService, getConnectTransport());
+    // One-shot mutation triggered by an explicit user action (Approve/Deny
+    // click on a toast), not tied to a mount/effect.
+    // abort-signal-exempt
     await client.resolveApproval({ approvalId, decision });
   } catch (error) {
     console.error(`[resolveApproval] Failed to resolve approval ${approvalId}:`, error);
@@ -45,6 +48,9 @@ async function focusWindow(bundleId?: string, appName?: string): Promise<void> {
 
   try {
     const client = createClient(SessionService, getConnectTransport());
+    // One-shot action triggered by an explicit user click ("focus window"
+    // on a toast), not tied to a mount/effect.
+    // abort-signal-exempt
     const response = await client.focusWindow({
       bundleId: bundleId,
       appName: appName,

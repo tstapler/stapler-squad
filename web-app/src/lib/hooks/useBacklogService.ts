@@ -7,6 +7,7 @@ import { timestampDate } from "@bufbuild/protobuf/wkt";
 import type { Timestamp } from "@bufbuild/protobuf/wkt";
 import { getApiBaseUrl, createAuthInterceptor } from "@/lib/config";
 import { getErrorMessage } from "@/lib/utils/connectError";
+import { useAbortableEffect } from "@/lib/hooks/useAbortableEffect";
 import {
   BacklogService,
   BacklogItem as BacklogItemProto,
@@ -1291,41 +1292,34 @@ export function useBacklogSessionIndex(): UseBacklogSessionIndexReturn {
   const [index, setIndex] = useState<Map<string, BacklogIndexEntry>>(new Map());
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
+  useAbortableEffect(async (signal) => {
     const transport = createConnectTransport({
       baseUrl: getApiBaseUrl(),
       interceptors: [createAuthInterceptor()],
     });
     const client = createClient(BacklogService, transport);
 
-    let cancelled = false;
-    client
-      .getSessionBacklogIndex({})
-      .then((resp) => {
-        if (cancelled) return;
-        const map = new Map<string, BacklogIndexEntry>();
-        for (const e of resp.entries ?? []) {
-          if (e.sessionUuid) {
-            map.set(e.sessionUuid, {
-              itemId: e.itemId,
-              itemTitle: e.itemTitle,
-              itemStatus: e.itemStatus,
-              sessionRole: e.sessionRole,
-            });
-          }
+    try {
+      const resp = await client.getSessionBacklogIndex({}, { signal });
+      if (signal.aborted) return;
+      const map = new Map<string, BacklogIndexEntry>();
+      for (const e of resp.entries ?? []) {
+        if (e.sessionUuid) {
+          map.set(e.sessionUuid, {
+            itemId: e.itemId,
+            itemTitle: e.itemTitle,
+            itemStatus: e.itemStatus,
+            sessionRole: e.sessionRole,
+          });
         }
-        setIndex(map);
-      })
-      .catch((err) => {
-        console.error("[useBacklogSessionIndex] failed:", err);
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
-
-    return () => {
-      cancelled = true;
-    };
+      }
+      setIndex(map);
+    } catch (err) {
+      if (signal.aborted) return;
+      console.error("[useBacklogSessionIndex] failed:", err);
+    } finally {
+      if (!signal.aborted) setLoading(false);
+    }
   }, []);
 
   return { index, loading };
