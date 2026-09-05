@@ -31,6 +31,16 @@ PROTO_OUT_DIRS := gen/proto/go web-app/src/gen
 ASDF_STAMP := .asdf-install.stamp
 ENT_STAMP := .ent-gen.stamp
 
+# gotestsum wraps `go test -json` for readable, machine-parsable test output
+# (pass/fail per test instead of a wall of raw go test stdout) -- default
+# runner for every test target below except the profiling/benchmark/harness
+# one-offs, which pipe raw go test output to files or need -bench/-trace/
+# -cpuprofile flags gotestsum doesn't add value for.
+GOTESTSUM_BIN := $(shell go env GOPATH)/bin/gotestsum
+$(GOTESTSUM_BIN):
+	@echo "Installing gotestsum..."
+	@go install gotest.tools/gotestsum@latest
+
 .PHONY: ensure-tools
 # ensure-tools runs asdf install only when .tool-versions changes
 ensure-tools: $(ASDF_STAMP) ## Automatically install missing system tools (go, buf, node) via asdf or Homebrew
@@ -541,7 +551,7 @@ proto-clean: ## Clean generated protocol buffer code
 	rm -rf web/src/gen
 
 # Testing targets
-test: ensure-tools proto-gen $(BIN_TMUX) ## Run all tests (skips slow integration tests; use test-integration for full suite)
+test: ensure-tools proto-gen $(BIN_TMUX) $(GOTESTSUM_BIN) ## Run all tests (skips slow integration tests; use test-integration for full suite)
 	# session, session/mux, and session/tmux fork real tmux subprocesses at high
 	# t.Parallel() fan-out. Running them under the suite's default per-package
 	# parallelism let those tmux-heavy tests compete for scheduler time against
@@ -556,33 +566,33 @@ test: ensure-tools proto-gen $(BIN_TMUX) ## Run all tests (skips slow integratio
 	# default is 10s -- see session/tmux/tmux.go's sessionCreateTimeoutDefault).
 	# testutil also forks real tmux subprocesses (TestRealTmuxSessionLifecycle) and
 	# hit the same contention under full-suite load -- included in the -p 1 group.
-	STAPLER_SQUAD_TMUX_CREATE_TIMEOUT_SECONDS=30 TMUX_BIN=$(CURDIR)/$(BIN_TMUX) go test -short -timeout=20m -p 1 ./session ./session/mux ./session/tmux ./testutil
-	STAPLER_SQUAD_TMUX_CREATE_TIMEOUT_SECONDS=30 TMUX_BIN=$(CURDIR)/$(BIN_TMUX) go test -short -timeout=20m $$(go list ./... | grep -vE '^github\.com/tstapler/stapler-squad/(session|session/mux|session/tmux|testutil)$$')
+	STAPLER_SQUAD_TMUX_CREATE_TIMEOUT_SECONDS=30 TMUX_BIN=$(CURDIR)/$(BIN_TMUX) $(GOTESTSUM_BIN) --format pkgname-and-test-fails -- -short -timeout=20m -p 1 ./session ./session/mux ./session/tmux ./testutil
+	STAPLER_SQUAD_TMUX_CREATE_TIMEOUT_SECONDS=30 TMUX_BIN=$(CURDIR)/$(BIN_TMUX) $(GOTESTSUM_BIN) --format pkgname-and-test-fails -- -short -timeout=20m $$(go list ./... | grep -vE '^github\.com/tstapler/stapler-squad/(session|session/mux|session/tmux|testutil)$$')
 
 test-verbose: ensure-tools proto-gen ## Run tests with verbose output
 	go test -short -v ./...
 
-test-affected: ensure-tools proto-gen ## Run tests only for packages transitively affected by changes vs BASE (default origin/main); usage: make test-affected [BASE=some-ref]
+test-affected: ensure-tools proto-gen $(GOTESTSUM_BIN) ## Run tests only for packages transitively affected by changes vs BASE (default origin/main); usage: make test-affected [BASE=some-ref]
 	@pkgs="$$(python3 scripts/test-affected.py $(or $(BASE),origin/main))"; \
 	if [ -z "$$pkgs" ]; then \
 		echo "No Go packages affected by changes vs $(or $(BASE),origin/main)"; \
 	elif [ "$$pkgs" = "__ALL__" ]; then \
 		echo "A change vs $(or $(BASE),origin/main) can't be safely narrowed (proto/go.mod/go.sum/Makefile/.golangci.yml/the affected-test script itself) -- running the full suite"; \
-		go test -short -timeout=20m ./...; \
+		$(GOTESTSUM_BIN) --format pkgname-and-test-fails -- -short -timeout=20m ./...; \
 	else \
 		echo "Affected packages:"; echo "$$pkgs"; \
-		go test -short -timeout=20m $$pkgs; \
+		$(GOTESTSUM_BIN) --format pkgname-and-test-fails -- -short -timeout=20m $$pkgs; \
 	fi
 
 test-affected-web: ## Run only the web-app Jest tests transitively affected by changes vs BASE (default origin/main); usage: make test-affected-web [BASE=some-ref]
 	cd web-app && BASE=$(or $(BASE),origin/main) pnpm run test:affected
 
-test-coverage: ensure-tools proto-gen $(BIN_TMUX) ## Run tests with coverage report (HTML)
+test-coverage: ensure-tools proto-gen $(BIN_TMUX) $(GOTESTSUM_BIN) ## Run tests with coverage report (HTML)
 	# Same tmux-contention root cause as the test target above -- see its comment.
 	# Split into two invocations and merge the resulting coverage profiles since
 	# go test only writes one -coverprofile per invocation.
-	STAPLER_SQUAD_TMUX_CREATE_TIMEOUT_SECONDS=30 TMUX_BIN=$(CURDIR)/$(BIN_TMUX) go test -short -timeout=20m -p 1 -cover -coverprofile=coverage.tmux.out ./session ./session/mux ./session/tmux ./testutil
-	STAPLER_SQUAD_TMUX_CREATE_TIMEOUT_SECONDS=30 TMUX_BIN=$(CURDIR)/$(BIN_TMUX) go test -short -timeout=20m -cover -coverprofile=coverage.rest.out $$(go list ./... | grep -vE '^github\.com/tstapler/stapler-squad/(session|session/mux|session/tmux|testutil)$$')
+	STAPLER_SQUAD_TMUX_CREATE_TIMEOUT_SECONDS=30 TMUX_BIN=$(CURDIR)/$(BIN_TMUX) $(GOTESTSUM_BIN) --format pkgname-and-test-fails -- -short -timeout=20m -p 1 -cover -coverprofile=coverage.tmux.out ./session ./session/mux ./session/tmux ./testutil
+	STAPLER_SQUAD_TMUX_CREATE_TIMEOUT_SECONDS=30 TMUX_BIN=$(CURDIR)/$(BIN_TMUX) $(GOTESTSUM_BIN) --format pkgname-and-test-fails -- -short -timeout=20m -cover -coverprofile=coverage.rest.out $$(go list ./... | grep -vE '^github\.com/tstapler/stapler-squad/(session|session/mux|session/tmux|testutil)$$')
 	head -n 1 coverage.tmux.out > coverage.out
 	tail -q -n +2 coverage.tmux.out coverage.rest.out >> coverage.out
 	rm -f coverage.tmux.out coverage.rest.out
@@ -635,12 +645,12 @@ coverage-refactor: ensure-tools proto-gen ## Show coverage for the 4 files targe
 	@echo ""
 	@go tool cover -func=coverage.out | grep "^total"
 
-test-race: ensure-tools proto-gen $(BIN_TMUX) ## Run tests with race detector enabled (skips slow integration tests)
+test-race: ensure-tools proto-gen $(BIN_TMUX) $(GOTESTSUM_BIN) ## Run tests with race detector enabled (skips slow integration tests)
 	# Same tmux-contention root cause as the test target above -- see its comment.
-	STAPLER_SQUAD_TMUX_CREATE_TIMEOUT_SECONDS=30 TMUX_BIN=$(CURDIR)/$(BIN_TMUX) go test -race -short -timeout=20m -p 1 ./session ./session/mux ./session/tmux ./testutil
-	STAPLER_SQUAD_TMUX_CREATE_TIMEOUT_SECONDS=30 TMUX_BIN=$(CURDIR)/$(BIN_TMUX) go test -race -short -timeout=20m $$(go list ./... | grep -vE '^github\.com/tstapler/stapler-squad/(session|session/mux|session/tmux|testutil)$$')
+	STAPLER_SQUAD_TMUX_CREATE_TIMEOUT_SECONDS=30 TMUX_BIN=$(CURDIR)/$(BIN_TMUX) $(GOTESTSUM_BIN) --format pkgname-and-test-fails -- -race -short -timeout=20m -p 1 ./session ./session/mux ./session/tmux ./testutil
+	STAPLER_SQUAD_TMUX_CREATE_TIMEOUT_SECONDS=30 TMUX_BIN=$(CURDIR)/$(BIN_TMUX) $(GOTESTSUM_BIN) --format pkgname-and-test-fails -- -race -short -timeout=20m $$(go list ./... | grep -vE '^github\.com/tstapler/stapler-squad/(session|session/mux|session/tmux|testutil)$$')
 
-test-integration: ensure-tools proto-gen ## Run integration tests (requires real tmux)
+test-integration: ensure-tools proto-gen $(GOTESTSUM_BIN) ## Run integration tests (requires real tmux)
 	# ./session and ./session/tmux are the only integration-tagged packages that
 	# fork real tmux servers (server/mcp and session/headless don't touch tmux).
 	# Running the full suite's default per-package parallelism let those two
@@ -652,8 +662,8 @@ test-integration: ensure-tools proto-gen ## Run integration tests (requires real
 	# session/tmux/server_registry_integration_test.go). -p 1 serializes just
 	# these two packages against each other; everything else still runs in
 	# parallel via the second invocation.
-	go test -race -tags integration -timeout 20m -p 1 ./session ./session/tmux
-	go test -race -tags integration -timeout 20m $$(go list ./... | grep -vE '^github\.com/tstapler/stapler-squad/(session|session/tmux)$$')
+	$(GOTESTSUM_BIN) --format pkgname-and-test-fails -- -race -tags integration -timeout 20m -p 1 ./session ./session/tmux
+	$(GOTESTSUM_BIN) --format pkgname-and-test-fails -- -race -tags integration -timeout 20m $$(go list ./... | grep -vE '^github\.com/tstapler/stapler-squad/(session|session/tmux)$$')
 
 test-triage-harness: proto-gen ## Run all backlog triage harness phases (no UI/browser needed)
 	go test -v -tags=harness -run TestTriageHarness ./server/services/
@@ -725,6 +735,7 @@ install-tools: ensure-tools ## Install all development and analysis tools
 	go install golang.org/x/perf/cmd/benchstat@latest
 	go install gvisor.dev/gvisor/tools/checklocks/cmd/checklocks@latest
 	go install github.com/mibk/dupl@latest
+	go install gotest.tools/gotestsum@latest
 	@echo "All tools installed successfully!"
 
 # Code quality and analysis

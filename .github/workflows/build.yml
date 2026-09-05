@@ -234,6 +234,16 @@ jobs:
           go-version-file: 'go.mod'
           cache: true
 
+      # gotestsum wraps `go test -json` for readable per-test pass/fail output
+      # instead of a wall of raw go test stdout -- default test runner for this
+      # project (see Makefile's GOTESTSUM_BIN). `go install` results are cached
+      # by setup-go's module/build cache above, so this is a no-op restore on
+      # a cache hit, not a fresh download every run.
+      - name: Install gotestsum
+        run: |
+          go install gotest.tools/gotestsum@latest
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
       - name: Download generated files
         uses: actions/download-artifact@v4
         with:
@@ -259,7 +269,7 @@ jobs:
             echo "$1"
             if [ "${{ github.event_name }}" = "pull_request" ]; then
               echo "Running the full suite instead (this job is the only Go test gate on a PR)."
-              TMUX_BIN="$(pwd)/bin/tmux" go test -race -short -timeout=22m \
+              TMUX_BIN="$(pwd)/bin/tmux" gotestsum --format github-actions -- -race -short -timeout=22m \
                 -coverprofile=coverage.affected.out -covermode=atomic ./...
             else
               echo "Nothing to narrow -- test-tmux/test-rest (main-only) already cover the full suite."
@@ -293,7 +303,7 @@ jobs:
 
           echo "Affected packages:"
           echo "$PKGS"
-          TMUX_BIN="$(pwd)/bin/tmux" go test -race -short -timeout=8m \
+          TMUX_BIN="$(pwd)/bin/tmux" gotestsum --format github-actions -- -race -short -timeout=8m \
             -coverprofile=coverage.affected.out -covermode=atomic $PKGS
 
       # Advisory only -- a global-threshold-style gate doesn't make sense
@@ -503,6 +513,11 @@ jobs:
           go-version-file: 'go.mod'
           cache: true
 
+      - name: Install gotestsum
+        run: |
+          go install gotest.tools/gotestsum@latest
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
       - name: Download generated files
         uses: actions/download-artifact@v4
         with:
@@ -535,9 +550,9 @@ jobs:
           # clean -race run of all three packages together sans -p 1.
           # keep this marker prefix in sync with ciBudgetExceededMarker in server/services/github_webhook_pr_fix.go
           run_test_suite() {
-            TMUX_BIN="$(pwd)/bin/tmux" go test -race -timeout=20m -coverprofile=coverage.tmux.out \
+            TMUX_BIN="$(pwd)/bin/tmux" gotestsum --format github-actions -- -race -timeout=20m -coverprofile=coverage.tmux.out \
               -covermode=atomic ./session ./session/mux ./session/tmux \
-              || (TMUX_BIN="$(pwd)/bin/tmux" go test -race -timeout=20m -v ./session ./session/mux ./session/tmux; exit 1)
+              || (TMUX_BIN="$(pwd)/bin/tmux" gotestsum --format standard-verbose -- -race -timeout=20m ./session ./session/mux ./session/tmux; exit 1)
           }
           export -f run_test_suite
           timeout 17m bash -c run_test_suite || { echo "::error::CI-BUDGET-EXCEEDED: 'test-tmux' exceeded its 17m budget"; echo "CI-BUDGET-EXCEEDED: 'test-tmux' exceeded its 17m budget" >> "$GITHUB_STEP_SUMMARY"; exit 1; }
@@ -579,6 +594,11 @@ jobs:
           go-version-file: 'go.mod'
           cache: true
 
+      - name: Install gotestsum
+        run: |
+          go install gotest.tools/gotestsum@latest
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
       - name: Download generated files
         uses: actions/download-artifact@v4
         with:
@@ -605,9 +625,9 @@ jobs:
           # keep this marker prefix in sync with ciBudgetExceededMarker in server/services/github_webhook_pr_fix.go
           run_test_suite() {
             REST_TEST_PKGS="$(go list ./server/... ./session/... ./config/... | grep -vE '^github\.com/tstapler/stapler-squad/(session|session/mux|session/tmux)$')"
-            TMUX_BIN="$(pwd)/bin/tmux" go test -race -timeout=28m -coverprofile=coverage.rest.out \
+            TMUX_BIN="$(pwd)/bin/tmux" gotestsum --format github-actions -- -race -timeout=28m -coverprofile=coverage.rest.out \
               -covermode=atomic $REST_TEST_PKGS \
-              || (TMUX_BIN="$(pwd)/bin/tmux" go test -race -timeout=28m -v $REST_TEST_PKGS; exit 1)
+              || (TMUX_BIN="$(pwd)/bin/tmux" gotestsum --format standard-verbose -- -race -timeout=28m $REST_TEST_PKGS; exit 1)
           }
           export -f run_test_suite
           timeout 30m bash -c run_test_suite || { echo "::error::CI-BUDGET-EXCEEDED: 'test-rest' exceeded its 30m budget"; echo "CI-BUDGET-EXCEEDED: 'test-rest' exceeded its 30m budget" >> "$GITHUB_STEP_SUMMARY"; exit 1; }

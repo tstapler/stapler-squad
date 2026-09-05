@@ -39,6 +39,12 @@ Single-binary deployment with embedded tmux: `docs/how-to/bundle-tmux.md`
 
 ### Testing
 
+`make test`/`test-race`/`test-coverage`/`test-integration`/`test-affected` run via
+[`gotestsum`](https://github.com/gotestyourself/gotestsum) (auto-installed on first
+use) instead of raw `go test`, for readable pass/fail-per-test output — see
+Makefile's `GOTESTSUM_BIN`. One-off single-package/single-test runs below still use
+plain `go test`.
+
 ```bash
 make build && make test     # Build (generates protos) then test
 make quick-check            # Build + test + lint (fast validation)
