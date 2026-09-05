@@ -322,9 +322,109 @@ func (pt *PricingTable) ModelFamilyCost(r *ParseResult) (costs map[string]float6
 	return result, unpriced
 }
 
+// EstimateTurnCost computes USD cost for a single turn's token counts under
+// its own model, mirroring EstimateCost's per-family arithmetic but at turn
+// granularity (a turn has exactly one model, so no per-family map is needed).
+// priced is false when turn.Model normalizes to a family absent from the
+// PricingTable — callers must treat that as "unknown," never as a $0.00 cost.
+func (pt *PricingTable) EstimateTurnCost(turn TurnStats) (cost float64, priced bool) {
+	if pt == nil {
+		return 0, false
+	}
+	family := NormalizeModelFamily(turn.Model)
+	pricing, ok := pt.Prices[family]
+	if !ok {
+		return 0, false
+	}
+	cost = float64(turn.Input)/1_000_000.0*pricing.InputPricePerMTok +
+		float64(turn.Output)/1_000_000.0*pricing.OutputPricePerMTok +
+		float64(turn.CacheCreation)/1_000_000.0*pricing.CacheWritePerMTok +
+		float64(turn.CacheRead)/1_000_000.0*pricing.CacheReadPerMTok
+	return cost, true
+}
+
+// AttributeToolCosts attributes each turn's whole cost once to every distinct
+// tool name that appeared in it (never split, never per-call), marking any
+// turn with more than one distinct tool doubleCounted since its cost is now
+// double-booked across tool buckets — so costs must never be summed across
+// tools. See
+// project_plans/insights-cost-intelligence/decisions/ADR-001-per-tool-cost-attribution.md
+// for the full attribution method and the unpriced/doubleCounted semantics.
+func AttributeToolCosts(r *ParseResult, pt *PricingTable) (costs map[string]float64, doubleCounted map[string]bool, unpriced map[string]bool) {
+	costs = make(map[string]float64)
+	doubleCounted = make(map[string]bool)
+	unpriced = make(map[string]bool)
+	if r == nil || pt == nil {
+		return costs, doubleCounted, unpriced
+	}
+
+	for _, turn := range r.TurnTimeline {
+		if len(turn.ToolNames) == 0 {
+			continue
+		}
+		distinct := make(map[string]bool, len(turn.ToolNames))
+		for _, name := range turn.ToolNames {
+			distinct[name] = true
+		}
+
+		cost, priced := pt.EstimateTurnCost(turn)
+		if !priced {
+			for name := range distinct {
+				unpriced[name] = true
+			}
+			continue
+		}
+
+		for name := range distinct {
+			costs[name] += cost
+		}
+		if len(distinct) > 1 {
+			for name := range distinct {
+				doubleCounted[name] = true
+			}
+		}
+	}
+
+	return costs, doubleCounted, unpriced
+}
+
+// ComputeCacheHitRate returns cache_read / (input + cache_read), or 0 when both are zero.
+func ComputeCacheHitRate(input, cacheRead int64) float64 {
+	denom := input + cacheRead
+	if denom == 0 {
+		return 0
+	}
+	return float64(cacheRead) / float64(denom)
+}
+
+// ComputeCacheROI returns the signed USD amount saved (or lost) by using
+// prompt caching versus paying for every cache-read token as fresh input:
+//
+//	roi = cacheRead*(inputPrice-cacheReadPrice)/1e6 - cacheCreation*cacheWritePrice/1e6
+//
+// A negative result (cache written but never read back) is a real outcome,
+// not an error. Returns (0, false) — never a fake $0.00 — when r's model has
+// no PricingTable entry; see EstimateCost's doc comment for the "abstain
+// rather than guess" rule.
+func ComputeCacheROI(r *ParseResult, pt *PricingTable) (roi float64, ok bool) {
+	if r == nil || pt == nil {
+		return 0, false
+	}
+	pricing, found := pt.LookupByModel(r.PrimaryModel)
+	if !found {
+		return 0, false
+	}
+	roi = float64(r.CacheRead)*(pricing.InputPricePerMTok-pricing.CacheReadPerMTok)/1_000_000.0 -
+		float64(r.CacheCreation)*pricing.CacheWritePerMTok/1_000_000.0
+	return roi, true
+}
+
 // LookupByModel returns the ModelPricing for a raw model ID (normalizes first).
 // Returns zero-value ModelPricing and false if not found.
 func (pt *PricingTable) LookupByModel(modelID string) (ModelPricing, bool) {
+	if pt == nil {
+		return ModelPricing{}, false
+	}
 	family := NormalizeModelFamily(modelID)
 	p, ok := pt.Prices[family]
 	return p, ok

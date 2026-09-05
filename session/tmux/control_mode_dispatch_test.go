@@ -31,7 +31,7 @@ func newDispatchTestSession(t *testing.T) (*TmuxSession, io.WriteCloser) {
 	go func() {
 		io.Copy(io.Discard, pr)
 	}()
-	go sess.runCMSender(doneCh, pw)
+	go sess.runCMSender(doneCh, pw, sess.highPriSendCh, sess.normPriSendCh, sess.cmSenderExited)
 	t.Cleanup(func() {
 		close(doneCh)
 		pw.Close()
@@ -423,7 +423,7 @@ func TestCMFeatureFlag_OnUsesCMPath(t *testing.T) {
 		cmSenderExited:   make(chan struct{}),
 	}
 	defer func() { close(doneCh); pw.Close() }()
-	go sess.runCMSender(doneCh, pw)
+	go sess.runCMSender(doneCh, pw, sess.highPriSendCh, sess.normPriSendCh, sess.cmSenderExited)
 
 	// Capture what sendCMCommand writes.
 	written := make(chan string, 1)

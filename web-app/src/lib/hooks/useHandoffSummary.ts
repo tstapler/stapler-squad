@@ -6,6 +6,7 @@ import { HandoffSummaryService } from "@/gen/session/v1/handoff_summary_pb";
 import type { HandoffSummaryProto } from "@/gen/session/v1/handoff_summary_pb";
 import { HandoffSummaryStatus } from "@/gen/session/v1/handoff_summary_pb";
 import { getConnectTransport } from "@/lib/api/transport";
+import { useAbortableRequest } from "@/lib/hooks/useAbortableRequest";
 
 const POLL_INTERVAL_MS = 2000;
 
@@ -80,6 +81,10 @@ export function useHandoffSummary(sessionId: string): UseHandoffSummaryResult {
   // skips issuing a new request rather than firing a second one whose
   // out-of-order response could leave stale data displayed.
   const pollInFlightRef = useRef(false);
+  // Shared between fetchSummary and trigger (safe: pollInFlightRef already
+  // keeps them from firing concurrently) so either one cancels the other's
+  // in-flight request, and both are cancelled on sessionId change/unmount.
+  const startRequest = useAbortableRequest();
 
   const stopPolling = useCallback(() => {
     if (intervalRef.current !== null) {
@@ -102,9 +107,11 @@ export function useHandoffSummary(sessionId: string): UseHandoffSummaryResult {
       return;
     }
     pollInFlightRef.current = true;
+    const signal = startRequest();
     try {
       const client = createClient(HandoffSummaryService, getConnectTransport());
-      const response = await client.getHandoffSummary({ sessionId });
+      const response = await client.getHandoffSummary({ sessionId }, { signal });
+      if (signal.aborted) return;
 
       // A newer sessionId may have become active while this request was in
       // flight — discard this response rather than overwriting the fresher
@@ -135,15 +142,15 @@ export function useHandoffSummary(sessionId: string): UseHandoffSummaryResult {
         stopPolling();
       }
     } catch (err) {
-      if (activeSessionIdRef.current !== sessionId) return;
+      if (signal.aborted || activeSessionIdRef.current !== sessionId) return;
       setError(err instanceof Error ? err : new Error("Failed to load handoff summary"));
     } finally {
-      if (activeSessionIdRef.current === sessionId) {
+      if (!signal.aborted && activeSessionIdRef.current === sessionId) {
         setLoading(false);
       }
       pollInFlightRef.current = false;
     }
-  }, [sessionId, startPolling, stopPolling]);
+  }, [sessionId, startPolling, stopPolling, startRequest]);
 
   useEffect(() => {
     fetchSummaryRef.current = fetchSummary;
@@ -164,9 +171,11 @@ export function useHandoffSummary(sessionId: string): UseHandoffSummaryResult {
   const trigger = useCallback(async () => {
     if (!sessionId) return;
     pollInFlightRef.current = true;
+    const signal = startRequest();
     try {
       const client = createClient(HandoffSummaryService, getConnectTransport());
-      const response = await client.triggerHandoffSummary({ sessionId });
+      const response = await client.triggerHandoffSummary({ sessionId }, { signal });
+      if (signal.aborted) return;
 
       // See fetchSummary's identical guard — the sessionId this call was
       // issued for may no longer be the active one by the time it resolves.
@@ -185,6 +194,7 @@ export function useHandoffSummary(sessionId: string): UseHandoffSummaryResult {
         stopPolling();
       }
     } catch (err) {
+      if (signal.aborted) return;
       const e = err instanceof Error ? err : new Error("Failed to trigger handoff summary");
       if (activeSessionIdRef.current === sessionId) {
         setError(e);
@@ -195,7 +205,7 @@ export function useHandoffSummary(sessionId: string): UseHandoffSummaryResult {
     } finally {
       pollInFlightRef.current = false;
     }
-  }, [sessionId, startPolling, stopPolling]);
+  }, [sessionId, startPolling, stopPolling, startRequest]);
 
   return { data, loading, error, neverResolved, trigger, refetch: fetchSummary };
 }

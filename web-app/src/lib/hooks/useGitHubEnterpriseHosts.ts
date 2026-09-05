@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 import { createClient } from "@connectrpc/connect";
 import { createConnectTransport } from "@connectrpc/connect-web";
 import {
@@ -9,6 +9,7 @@ import {
 } from "@/gen/session/v1/github_user_pb";
 import { create } from "@bufbuild/protobuf";
 import { getApiBaseUrl, createAuthInterceptor } from "@/lib/config";
+import { useAbortableEffect } from "@/lib/hooks/useAbortableEffect";
 
 export interface UseGitHubEnterpriseHostsResult {
   hosts: string[];
@@ -29,28 +30,24 @@ export function useGitHubEnterpriseHosts(): UseGitHubEnterpriseHostsResult {
   const [hosts, setHosts] = useState<string[]>([]);
   const [fetchTick, setFetchTick] = useState(0);
 
-  useEffect(() => {
-    let cancelled = false;
+  useAbortableEffect(async (signal) => {
     const transport = createConnectTransport({
       baseUrl: getApiBaseUrl(),
       interceptors: [createAuthInterceptor()],
     });
     const client = createClient(GitHubUserService, transport);
 
-    (async () => {
-      try {
-        const res = await client.listGitHubAccounts(
-          create(ListGitHubAccountsRequestSchema, {})
-        );
-        if (!cancelled) setHosts(res.enterpriseHosts);
-      } catch {
-        if (!cancelled) setHosts([]);
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-    };
+    try {
+      const res = await client.listGitHubAccounts(
+        create(ListGitHubAccountsRequestSchema, {}),
+        { signal }
+      );
+      if (signal.aborted) return;
+      setHosts(res.enterpriseHosts);
+    } catch {
+      if (signal.aborted) return;
+      setHosts([]);
+    }
   }, [fetchTick]);
 
   const refetch = useCallback(() => setFetchTick((t) => t + 1), []);

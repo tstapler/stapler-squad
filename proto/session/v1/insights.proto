@@ -24,6 +24,47 @@ service InsightsService {
       returns (GetSessionTurnTimelineResponse) {}
 }
 
+// Severity classifies how urgently a WasteFinding should be acted on.
+enum Severity {
+  SEVERITY_UNSPECIFIED = 0;
+  SEVERITY_INFO         = 1;
+  SEVERITY_WARN         = 2;
+  SEVERITY_CRITICAL     = 3;
+}
+
+// FindingType identifies which waste-pattern heuristic produced a WasteFinding.
+// Exactly 4 non-zero values ship in v1 — see plan.md's "Detector scope cut" note.
+enum FindingType {
+  FINDING_TYPE_UNSPECIFIED              = 0;
+  FINDING_TYPE_CACHE_HIT_FLOOR_BREACH   = 1;
+  FINDING_TYPE_SESSION_TOKEN_CEILING    = 2;
+  FINDING_TYPE_MODEL_SWITCH_CACHE_BUST  = 3;
+  FINDING_TYPE_OVERSIZED_START_CONTEXT  = 4;
+}
+
+// ActivityType classifies the kind of work a session performed. Defined now
+// (Epic 1.1) but not populated until Epic 1.2's ClassifyActivity lands.
+enum ActivityType {
+  ACTIVITY_TYPE_UNSPECIFIED  = 0;
+  ACTIVITY_TYPE_DEBUGGING    = 1;
+  ACTIVITY_TYPE_REFACTORING  = 2;
+  ACTIVITY_TYPE_FEATURE_DEV  = 3;
+  ACTIVITY_TYPE_EXPLORATORY  = 4;
+  ACTIVITY_TYPE_OTHER        = 5;
+}
+
+// WasteFinding is a single, session-specific waste-pattern verdict with a
+// modeled dollar impact. Dollar impacts across findings are not summable —
+// see ADR-002-findings-non-summable-dollar-impact.md.
+message WasteFinding {
+  FindingType finding_type      = 1;
+  Severity    severity          = 2;
+  double      dollar_impact_usd = 3;
+  string      session_id        = 4;
+  string      conversation_id   = 5;
+  string      message           = 6;
+}
+
 // SessionTokenSummary is the per-session aggregated token record.
 message SessionTokenSummary {
   string session_id             = 1;  // stapler-squad session ID (may be empty for orphans)
@@ -44,6 +85,14 @@ message SessionTokenSummary {
   repeated TopToolEntry top_tools   = 16;
   // unpriced_models lists ModelFamily values with usage but no pricing entry, for this session.
   repeated string unpriced_models = 17;
+  // cache_roi_usd is populated by Epic 1.2's cache-ROI computation. Reserved now to
+  // avoid a second proto-gen pass across epics.
+  double cache_roi_usd = 18;
+  // waste_score is this epic's ComputeWasteScore result (nil/unset when the session
+  // is too sparse to evaluate — see ADR-002 on why it's never confused with a dollar sum).
+  optional double waste_score = 19;
+  // activity_type is populated by Epic 1.3's ClassifyActivity. Reserved now.
+  ActivityType activity_type = 20;
 }
 
 // TopToolEntry records a tool name and its call count in a session.
@@ -51,6 +100,18 @@ message TopToolEntry {
   string tool_name  = 1;
   int32  call_count = 2;
   string mcp_server = 3; // non-empty for mcp__<server>__<tool>
+  // cost_usd is the tool-type-level session sum from AttributeToolCosts
+  // (ADR-001-per-tool-cost-attribution.md) — a multi-tool turn's cost is
+  // added once per distinct tool, not once per call.
+  double cost_usd = 4;
+  // cost_may_double_count is true iff this tool ever co-occurred with
+  // another tool in the same turn anywhere in the session, per ADR-001's
+  // deliberate cross-tool-type double-counting caveat.
+  bool cost_may_double_count = 5;
+  // cost_unpriced is true iff none of this tool's turns had priced-model
+  // coverage — distinct from cost_usd == 0, which could also mean genuinely
+  // free. Drives the frontend rendering "—" instead of a misleading "$0.00".
+  bool cost_unpriced = 6;
 }
 
 // DailyTokenBucket aggregates token usage for one calendar day.
@@ -82,6 +143,15 @@ message ModelBreakdown {
   bool   pricing_unavailable = 7;
 }
 
+// ActivityCostBreakdown aggregates estimated cost and session count for one
+// ActivityType across all in-range sessions (Epic 1.2's dashboard-level
+// activity-cost slice).
+message ActivityCostBreakdown {
+  ActivityType activity_type    = 1;
+  double       estimated_cost_usd = 2;
+  int32        session_count      = 3;
+}
+
 // TopEntry is a generic name/value pair for top-N tables.
 message TopEntry {
   reserved 4;
@@ -98,6 +168,11 @@ message GetInsightsSummaryRequest {
   optional string model_filter     = 3;
   optional string session_id_filter = 4;
   bool            include_orphans  = 5;
+  // conversation_id_filter matches ParseResult.SessionUUID directly, unlike
+  // session_id_filter which matches the associator-resolved stapler-squad
+  // session ID (empty for orphan sessions). Lets a caller deep-link an
+  // orphan session, which session_id_filter alone can never match.
+  optional string conversation_id_filter = 6;
 }
 
 // GetInsightsSummaryResponse returns the full dashboard dataset.
@@ -116,6 +191,12 @@ message GetInsightsSummaryResponse {
   google.protobuf.Timestamp pricing_as_of = 12;
   // unpriced_models is the aggregate union across all sessions in this response, for a dashboard-level banner.
   repeated string unpriced_models        = 13;
+  // findings is the top waste-pattern verdicts across all sessions in this response,
+  // sorted by dollar_impact_usd descending and capped at 20 (see Story 1.1.5).
+  repeated WasteFinding findings         = 14;
+  // activity_breakdown is total cost and session count sliced by ActivityType
+  // across all in-range sessions, sorted by estimated_cost_usd descending.
+  repeated ActivityCostBreakdown activity_breakdown = 15;
 }
 
 // ListSessionTokensRequest supports paginated session listing.

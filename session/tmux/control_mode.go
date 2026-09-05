@@ -149,8 +149,15 @@ func (t *TmuxSession) StartControlMode() error {
 	t.controlModeSubMu.Unlock()
 
 	// Start goroutines: priority sender, output reader, stderr monitor.
+	// highPriSendCh/normPriSendCh are captured here (not read from the struct
+	// fields inside runCMSender) so a later StartControlMode call reassigning
+	// those fields for a fresh session can never race with this goroutine's
+	// own reads of its own channels -- see runCMSender's doc comment.
 	doneCh := t.controlModeDone
-	go t.runCMSender(doneCh, stdin)
+	highPriSendCh := t.highPriSendCh
+	normPriSendCh := t.normPriSendCh
+	cmSenderExited := t.cmSenderExited
+	go t.runCMSender(doneCh, stdin, highPriSendCh, normPriSendCh, cmSenderExited)
 	go t.readControlModeOutput()
 	go t.monitorControlModeErrors(stderr)
 
@@ -217,7 +224,10 @@ func (t *TmuxSession) startRemoteControlMode() error {
 	t.controlModeSubMu.Unlock()
 
 	doneCh := t.controlModeDone
-	go t.runCMSender(doneCh, stdin)
+	highPriSendCh := t.highPriSendCh
+	normPriSendCh := t.normPriSendCh
+	cmSenderExited := t.cmSenderExited
+	go t.runCMSender(doneCh, stdin, highPriSendCh, normPriSendCh, cmSenderExited)
 	go t.readControlModeOutput()
 
 	log.Info("successfully started remote control mode", "session", t.sanitizedName)
@@ -646,8 +656,10 @@ func (t *TmuxSession) processControlModeLine(line string) {
 //
 // doneCh is closed by StopControlMode to trigger shutdown. The goroutine closes
 // cmSenderExited when it returns so that StopControlMode can safely close stdin.
-func (t *TmuxSession) runCMSender(doneCh <-chan struct{}, stdin io.WriteCloser) {
-	defer close(t.cmSenderExited)
+// cmSenderExited is passed in (not read from the struct field) for the same
+// reason as highPriSendCh/normPriSendCh above.
+func (t *TmuxSession) runCMSender(doneCh <-chan struct{}, stdin io.WriteCloser, highPriSendCh, normPriSendCh <-chan cmSendReq, cmSenderExited chan struct{}) {
+	defer close(cmSenderExited)
 
 	process := func(req cmSendReq) {
 		// Enqueue the response channel BEFORE writing so the reader goroutine
@@ -675,12 +687,12 @@ func (t *TmuxSession) runCMSender(doneCh <-chan struct{}, stdin io.WriteCloser) 
 	drain := func(err error) {
 		for {
 			select {
-			case req := <-t.highPriSendCh:
+			case req := <-highPriSendCh:
 				select {
 				case req.resultCh <- cmdResult{err: err}:
 				default:
 				}
-			case req := <-t.normPriSendCh:
+			case req := <-normPriSendCh:
 				select {
 				case req.resultCh <- cmdResult{err: err}:
 				default:
@@ -694,16 +706,16 @@ func (t *TmuxSession) runCMSender(doneCh <-chan struct{}, stdin io.WriteCloser) 
 	for {
 		// Always drain high-priority queue first before considering normal-priority.
 		select {
-		case req := <-t.highPriSendCh:
+		case req := <-highPriSendCh:
 			process(req)
 			continue
 		default:
 		}
 
 		select {
-		case req := <-t.highPriSendCh:
+		case req := <-highPriSendCh:
 			process(req)
-		case req := <-t.normPriSendCh:
+		case req := <-normPriSendCh:
 			process(req)
 		case <-doneCh:
 			drain(ErrControlModeStopped)
