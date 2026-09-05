@@ -169,6 +169,64 @@ export function useInsightsSummary(
   };
 }
 
+export interface UseSessionDetailReturn {
+  summary: SessionTokenSummary | null;
+  loading: boolean;
+  error: string | null;
+}
+
+/**
+ * Hook that fetches a single session's SessionTokenSummary by ID, for the
+ * deep-linkable /insights/session-detail?sessionId= route (Epic 1.4, Story
+ * 1.4.3).
+ * Sets both sessionIdFilter and conversationIdFilter to the same value so an
+ * orphan session (empty sessionId) is still reachable, and includeOrphans so
+ * it isn't filtered out. Deliberately omits from/to — the route must resolve
+ * regardless of the dashboard's global date range at the time the link was
+ * created (bookmarkability, per research/features.md §5).
+ */
+export function useSessionDetail(sessionId: string): UseSessionDetailReturn {
+  const [summary, setSummary] = useState<SessionTokenSummary | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const baseUrl = getApiBaseUrl();
+  const transport = useMemo(
+    () => createConnectTransport({ baseUrl, interceptors: [createAuthInterceptor()] }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [baseUrl]
+  );
+  const client = useMemo(() => createClient(InsightsService, transport), [transport]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+    (async () => {
+      try {
+        const req = create(GetInsightsSummaryRequestSchema, {
+          sessionIdFilter: sessionId,
+          conversationIdFilter: sessionId,
+          includeOrphans: true,
+        });
+        const res = await client.getInsightsSummary(req);
+        if (!cancelled) setSummary(res.sessions[0] ?? null);
+      } catch (err) {
+        if (!cancelled) {
+          setError(err instanceof Error ? err.message : "Failed to load session");
+        }
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [sessionId, client]);
+
+  return { summary, loading, error };
+}
+
 export interface UseSessionTurnTimelineReturn {
   turns: TurnTokenStat[];
   loading: boolean;
