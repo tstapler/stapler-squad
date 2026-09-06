@@ -658,19 +658,11 @@ func (t *TmuxSession) processControlModeLine(line string) {
 // doneCh is closed by StopControlMode to trigger shutdown. The goroutine closes
 // senderExitedCh when it returns so that StopControlMode can safely close stdin.
 //
-// highPriCh, normPriCh, and senderExitedCh are handed in as the caller's local
-// snapshot of t.highPriSendCh/t.normPriSendCh/t.cmSenderExited taken at the moment
-// this goroutine was launched (see StartControlMode/startRemoteControlMode), and
-// must be used exclusively from here on instead of re-reading the t.-prefixed
-// fields. StopControlMode's wait for senderExitedCh has a 2s timeout and proceeds
-// with teardown (and a subsequent StartControlMode may run) even if this goroutine
-// hasn't actually exited yet — e.g. because it's blocked in a stdin write. If this
-// loop read t.highPriSendCh/t.normPriSendCh/t.cmSenderExited directly, a
-// same-instance restart reassigning those fields while this goroutine is still
-// alive would race with those reads (confirmed by `go test -race`: CI runs
-// 33931403956/33952649490). Using captured locals makes this goroutine's lifetime
-// irrelevant to that race — it only ever touches the channel values it started
-// with, never the fields a concurrent Start/Stop cycle is mutating.
+// highPriCh, normPriCh, and senderExitedCh are the caller's snapshotted channel
+// values from launch time (see StartControlMode/startRemoteControlMode). This
+// goroutine must use those parameters exclusively and must not re-read the
+// corresponding t.* fields, because a concurrent Stop/Start cycle may replace
+// those fields before this goroutine has fully exited.
 func (t *TmuxSession) runCMSender(doneCh <-chan struct{}, stdin io.WriteCloser, highPriCh, normPriCh chan cmSendReq, senderExitedCh chan struct{}) {
 	defer close(senderExitedCh)
 
