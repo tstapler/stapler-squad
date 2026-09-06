@@ -1,5 +1,40 @@
 # Changelog
 
+## [1.52.0](https://github.com/tstapler/stapler-squad/compare/v1.51.0...v1.52.0) (2026-09-06)
+
+
+### Features
+
+* **backlog:** custom workflow stages, liveness engine, gate evaluation (Milestone 2) ([#700](https://github.com/tstapler/stapler-squad/issues/700)) ([8496f85](https://github.com/tstapler/stapler-squad/commit/8496f85733645e7f7bdace119d45b40f0b9b38de))
+* **insights:** per-tool cost attribution, findings panel, session detail route ([#703](https://github.com/tstapler/stapler-squad/issues/703)) ([54d2a6b](https://github.com/tstapler/stapler-squad/commit/54d2a6b857ae3624daf18754a783adfa4a15ab8d))
+* **jules:** integrate Google Jules as a dispatch-and-poll session backend ([#674](https://github.com/tstapler/stapler-squad/issues/674)) ([3d085b3](https://github.com/tstapler/stapler-squad/commit/3d085b364340128c0e95a8e589d7f612d1192a82))
+* **pi-support:** first-class support for the pi coding-agent CLI ([#685](https://github.com/tstapler/stapler-squad/issues/685)) ([487884b](https://github.com/tstapler/stapler-squad/commit/487884bd285ec6476f64c872b4cc7a3283b6bbd2))
+* **settings:** add Tymux Backend Rollout panel for BackendTymux canary testing ([#699](https://github.com/tstapler/stapler-squad/issues/699)) ([f421e9c](https://github.com/tstapler/stapler-squad/commit/f421e9c00ba0b8b8e95374838fa8d94ffe4690b3))
+* **telemetry:** add connection-concurrency metrics for HTTP/1.1 6-connection cap ([#714](https://github.com/tstapler/stapler-squad/issues/714)) ([ff1c57e](https://github.com/tstapler/stapler-squad/commit/ff1c57e643f52335acf9666a8387a1b7aafaa77a))
+* **telemetry:** relay browser OpenTelemetry spans through the Go server ([addbd78](https://github.com/tstapler/stapler-squad/commit/addbd782a7d100c4a5971f065a35d9066e40f617))
+
+
+### Bug Fixes
+
+* **ci:** pin gotestsum version, remove stale registry-validation.yml reference ([#706](https://github.com/tstapler/stapler-squad/issues/706)) ([61acc80](https://github.com/tstapler/stapler-squad/commit/61acc806992ee607efd3ae6fe988487c665a14ae))
+* **log:** mirror workspace-mode/preferred-workspace log-dir priority into log.GetConfigDir ([#694](https://github.com/tstapler/stapler-squad/issues/694)) ([611a02b](https://github.com/tstapler/stapler-squad/commit/611a02bec4556fbd4bf25e5a683d9a9aa79ca088))
+* **pi-support:** stderr/rendering fixes, launchCommandBuilder OCP refactor, sshremote flake fix ([#689](https://github.com/tstapler/stapler-squad/issues/689)) ([a440ebc](https://github.com/tstapler/stapler-squad/commit/a440ebce06889eee93a1662ba91b74f3ec6313b9))
+* **security:** resolve gosec G104 unhandled-error findings (167 sites) ([#691](https://github.com/tstapler/stapler-squad/issues/691)) ([efd8878](https://github.com/tstapler/stapler-squad/commit/efd88785ac480bf504a619ede5ce886c3931daad))
+* **session:** bootstrap new-project worktrees via SessionTypeNewProject, not NewWorktree ([a1ce693](https://github.com/tstapler/stapler-squad/commit/a1ce6930191386a0a823b046e42cb2518bc5e086))
+* **session:** check err before changed in PR-discovery pollers ([#692](https://github.com/tstapler/stapler-squad/issues/692)) ([3512669](https://github.com/tstapler/stapler-squad/commit/35126693ff9a07cd8719366218d8c98e5b1cfad0))
+* **session:** self-heal Instance.Started() in streamViaHub when tmux is alive ([#693](https://github.com/tstapler/stapler-squad/issues/693)) ([032edd0](https://github.com/tstapler/stapler-squad/commit/032edd0e8c751f2319a375048cebf441fcab7d1d))
+* **session:** stop endless retry on missing worktree, fix session Logs tab ([#688](https://github.com/tstapler/stapler-squad/issues/688)) ([292b086](https://github.com/tstapler/stapler-squad/commit/292b086e2c728a4ee4b5a86d716f1f193b758745))
+* stop dev restart from killing the live service, cancel in-flight RPCs to fix heap growth ([#697](https://github.com/tstapler/stapler-squad/issues/697)) ([19f26e0](https://github.com/tstapler/stapler-squad/commit/19f26e04befa58b33bb5aa8503af4b80356a22bd))
+* **streamhub:** force SIGWINCH on the hub's first post-restart resize ([a68d672](https://github.com/tstapler/stapler-squad/commit/a68d672c9bfda7cef56c750d2e4f6b705e74780e))
+* **streamhub:** unblock websocket reads on hub teardown ([#698](https://github.com/tstapler/stapler-squad/issues/698)) ([fa1b94d](https://github.com/tstapler/stapler-squad/commit/fa1b94dc559932247211a36d3fe71efceb5481dc))
+* **terminal:** reconnect backoff never escalates — attempt counter always resets to 0 ([#690](https://github.com/tstapler/stapler-squad/issues/690)) ([f603c02](https://github.com/tstapler/stapler-squad/commit/f603c02916e922f3fa0523299781fae58ec1f6fb))
+* **tests:** root-cause and fix two flakes in server/services surfaced by reflect-and-fix ([7440c94](https://github.com/tstapler/stapler-squad/commit/7440c941823a951f41076f634447cd45cb74db70))
+
+
+### Performance Improvements
+
+* cut GitProvider.GetStatus subprocess spawns 8→4, widen repo cache budget ([#695](https://github.com/tstapler/stapler-squad/issues/695)) ([8c74ede](https://github.com/tstapler/stapler-squad/commit/8c74ede9e3d747338093f8c6bbf95d0ee630edab))
+
 ## [1.51.0](https://github.com/tstapler/stapler-squad/compare/v1.50.0...v1.51.0) (2026-09-03)
 
 
