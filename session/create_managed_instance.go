@@ -101,16 +101,28 @@ func CreateManagedInstance(ctx context.Context, params CreateManagedInstancePara
 	// not set, fail fast -- callers (e.g. the CreateSession RPC handler) use
 	// this to show a "create it?" confirmation dialog instead of silently
 	// creating a directory the user didn't ask for.
-	if opts.SessionType == SessionTypeDirectory {
+	//
+	// For NewWorktree mode: always fail fast on a missing path, regardless of
+	// CreateIfMissing -- setupFirstTimeWorktree's SessionTypeNewWorktree case
+	// deliberately never bootstraps a missing repo (see its doc comment), so a
+	// missing path is unconditionally an error for this mode. Checking here
+	// (rather than letting it fail async, deep inside instance.Start()) turns a
+	// confusing background failure into an immediate, synchronous RPC error --
+	// the gap that let the web-app submit SessionTypeNewWorktree against a
+	// nonexistent path in the first place (BUG discovered 2026-09-05:
+	// "steam-controls" session; that flow now correctly routes through
+	// SessionTypeNewProject instead, which does support bootstrapping).
+	if opts.SessionType == SessionTypeDirectory || opts.SessionType == SessionTypeNewWorktree {
 		if _, statErr := os.Stat(opts.Path); os.IsNotExist(statErr) {
-			if !params.CreateIfMissing {
+			if opts.SessionType == SessionTypeNewWorktree || !params.CreateIfMissing {
 				if opts.ResumeId != "" {
 					return nil, fmt.Errorf("%w: %s", ErrResumePathNotExist, opts.Path)
 				}
 				return nil, fmt.Errorf("%w: %s", ErrPathNotExist, opts.Path)
 			}
-			// CreateIfMissing=true: fall through; setupFirstTimeWorktree (invoked
-			// during instance.Start()) handles creation.
+			// Directory + CreateIfMissing=true: fall through;
+			// setupFirstTimeWorktree (invoked during instance.Start()) handles
+			// creation.
 		}
 	}
 

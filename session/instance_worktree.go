@@ -59,6 +59,14 @@ func (i *Instance) setupFirstTimeWorktree() error {
 
 	switch i.SessionType {
 	case SessionTypeNewWorktree:
+		// This case's contract is deliberately strict and unconditional: i.Path
+		// must already be an existing repo. It never bootstraps one, with no
+		// CreateIfMissing exception -- see findGitRepoRoot's doc comment for why
+		// that was a deliberate hardening fix (9037ed5e0), not an oversight. A
+		// genuinely new project that also wants an isolated worktree goes
+		// through SessionTypeNewProject below (i.Branch set), which always
+		// bootstraps and then optionally worktrees off the fresh repo -- so
+		// this case's contract never needs a second, parallel bootstrap path.
 		log.Info("creating git worktree for instance", "session", i.Title, "path", i.Path)
 		gitWorktree, branchName, err := git.NewGitWorktreeWithBranch(i.Path, i.Title, i.Branch, git.WithCommandRunner(i.executionTarget().Runner()))
 		if err != nil {
@@ -147,6 +155,27 @@ func (i *Instance) setupFirstTimeWorktree() error {
 			if err := git.InitializeProjectDirectory(i.Path); err != nil {
 				return fmt.Errorf("new_project initialization failed: %w", err)
 			}
+		}
+		// web-app's "New Project, opened as New Worktree" (Omnibar) sends an
+		// explicit i.Branch alongside SessionTypeNewProject rather than
+		// SessionTypeNewWorktree -- i.Path is guaranteed to be a real repo from
+		// InitializeProjectDirectory above, so a worktree can be created on it
+		// the same way SessionTypeNewWorktree does for an already-existing repo.
+		// "Open as: Directory" leaves i.Branch empty and falls through to the
+		// no-worktree branch below, unchanged from before this bootstrap
+		// capability existed. Remote targets don't support this combination yet
+		// (CreateSession's remote mode-specific block has no worktree-creation
+		// case for SessionTypeNewProject) -- a real, pre-existing limitation,
+		// not one introduced here; i.Branch is simply ignored for remote.
+		if i.Branch != "" && !i.executionTarget().IsRemote() {
+			gitWorktree, branchName, err := git.NewGitWorktreeWithBranch(i.Path, i.Title, i.Branch, git.WithCommandRunner(i.executionTarget().Runner()))
+			if err != nil {
+				return fmt.Errorf("new_project worktree creation failed: %w", err)
+			}
+			i.gitManager.SetWorktree(gitWorktree)
+			i.Branch = branchName
+			log.Info("new project initialized with worktree", "path", i.Path, "branch", i.Branch)
+			return nil
 		}
 		i.gitManager.SetWorktree(nil)
 		i.Branch = ""

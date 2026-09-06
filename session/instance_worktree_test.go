@@ -1,6 +1,7 @@
 package session
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -83,6 +84,93 @@ func TestEnsureDirectorySessionPath_NoopWhenPathIsAnExistingFile(t *testing.T) {
 	info, statErr := os.Stat(target)
 	require.NoError(t, statErr)
 	require.False(t, info.IsDir(), "the existing file must be left untouched, not replaced with a directory")
+}
+
+// TestSetupFirstTimeWorktree_NewWorktree_AlwaysFailsOnMissingPath documents
+// SessionTypeNewWorktree's deliberately strict, unconditional contract: it
+// requires an existing repo and never bootstraps one, regardless of
+// CreateIfMissing (there is no bootstrap-supporting branch in this case at
+// all) — the exact bug 9037ed5e0 fixed for CreateBacklogWorktree. A genuinely
+// new project that also wants an isolated worktree must go through
+// SessionTypeNewProject with a branch set instead (see
+// TestSetupFirstTimeWorktree_NewProject_CreatesWorktree_When_BranchSet).
+func TestSetupFirstTimeWorktree_NewWorktree_AlwaysFailsOnMissingPath(t *testing.T) {
+	t.Parallel()
+
+	for _, createIfMissing := range []bool{false, true} {
+		t.Run(fmt.Sprintf("CreateIfMissing=%v", createIfMissing), func(t *testing.T) {
+			t.Parallel()
+			base := t.TempDir()
+			target := filepath.Join(base, "gone-repo")
+
+			inst, err := NewInstance(InstanceOptions{
+				Title:           "missing-repo",
+				Path:            target,
+				Program:         "claude",
+				SessionType:     SessionTypeNewWorktree,
+				CreateIfMissing: createIfMissing,
+			})
+			require.NoError(t, err)
+
+			err = inst.setupFirstTimeWorktree()
+			require.Error(t, err)
+			require.False(t, inst.gitManager.HasWorktree())
+		})
+	}
+}
+
+// TestSetupFirstTimeWorktree_NewProject_CreatesWorktree_When_BranchSet covers
+// the "steam-controls" regression (found 2026-09-05): the web-app's "New
+// Project, opened as New Worktree" flow targets a path that never exists yet
+// by construction, and now routes through SessionTypeNewProject (which always
+// bootstraps) with an explicit branch, rather than SessionTypeNewWorktree
+// (which never bootstraps — see the test above). Before this fix, that flow
+// incorrectly submitted SessionTypeNewWorktree against the nonexistent path
+// and always failed with "repository path does not exist".
+func TestSetupFirstTimeWorktree_NewProject_CreatesWorktree_When_BranchSet(t *testing.T) {
+	t.Parallel()
+	base := t.TempDir()
+	target := filepath.Join(base, "brand-new-project")
+
+	inst, err := NewInstance(InstanceOptions{
+		Title:       "steam-controls",
+		Path:        target,
+		Program:     "claude",
+		SessionType: SessionTypeNewProject,
+		Branch:      "steam-controls",
+	})
+	require.NoError(t, err)
+
+	require.NoError(t, inst.setupFirstTimeWorktree())
+
+	_, gitErr := os.Stat(filepath.Join(target, ".git"))
+	require.NoError(t, gitErr, "expected the missing project path to be git-initialized")
+	require.True(t, inst.gitManager.HasWorktree(), "expected a worktree to be created off the bootstrapped repo")
+	require.NotEqual(t, target, inst.gitManager.GetWorktreePath(), "worktree must live in a separate directory from the main repo, matching an existing repo's NewWorktree behavior")
+}
+
+// TestSetupFirstTimeWorktree_NewProject_NoWorktree_When_BranchEmpty documents
+// the unchanged "open as directory" behavior: SessionTypeNewProject with no
+// branch set still just bootstraps the repo with no worktree, exactly as
+// before this case gained worktree-creation support.
+func TestSetupFirstTimeWorktree_NewProject_NoWorktree_When_BranchEmpty(t *testing.T) {
+	t.Parallel()
+	base := t.TempDir()
+	target := filepath.Join(base, "brand-new-directory-project")
+
+	inst, err := NewInstance(InstanceOptions{
+		Title:       "new-directory-project",
+		Path:        target,
+		Program:     "claude",
+		SessionType: SessionTypeNewProject,
+	})
+	require.NoError(t, err)
+
+	require.NoError(t, inst.setupFirstTimeWorktree())
+
+	_, gitErr := os.Stat(filepath.Join(target, ".git"))
+	require.NoError(t, gitErr, "expected the missing project path to be git-initialized")
+	require.False(t, inst.gitManager.HasWorktree(), "expected no worktree when no branch was requested")
 }
 
 // TestGetEffectiveRootDir_ReturnsWorktreePath_EvenWhenMissingFromDisk documents
