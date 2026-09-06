@@ -8,8 +8,15 @@ import { useNotifications } from "@/lib/contexts/NotificationContext";
 import { useAuditLog } from "@/lib/hooks/useAuditLog";
 import { useApprovalResolution } from "@/lib/hooks/useApprovalResolution";
 import { groupNotifications } from "@/lib/utils/notificationGrouping";
-import { notificationTypeFilter } from "@/lib/utils/notificationMapping";
-import { NotificationItem, AutoHandledSection } from "@/components/ui/NotificationItem";
+import {
+  notificationTypeFilter,
+  isActionableNotification,
+  isReconciledNotification,
+  computeScopedMarkReadIds,
+  capBadgeCount,
+} from "@/lib/utils/notificationMapping";
+import { NotificationItem, AutoHandledSection, NeedsDecisionSection } from "@/components/ui/NotificationItem";
+import { CollapsibleSection } from "@/components/ui/Collapsible";
 import {
   header,
   title,
@@ -48,18 +55,27 @@ const TYPE_FILTER_LABELS: Record<TypeFilter, string> = {
   info: "Info",
 };
 
+/** Minute-rounding elapsed-time helper for the staleness indicator (Task 3.1.2h) — a
+ * one-line helper rather than a new dependency, matching Task 3.1.2h's guidance. */
+function minutesAgoLabel(sinceMs: number): string {
+  const minutes = Math.round((Date.now() - sinceMs) / 60000);
+  return minutes <= 0 ? "just now" : `${minutes}m`;
+}
+
 export function NotificationsPage() {
   const {
     notificationHistory,
     markAsRead,
-    markAllAsRead,
     removeFromHistory,
     acknowledgeNotification,
     clearHistory,
     getUnreadCount,
     historyLoading,
     historyHasMore,
+    historyError,
+    historyLastUpdatedAt,
     loadMoreHistory,
+    refreshHistory,
   } = useNotifications();
 
   const auditLog = useAuditLog();
@@ -82,8 +98,21 @@ export function NotificationsPage() {
   const [hideBacklogItems, setHideBacklogItems] = useState(false);
   const [autoHandledOpen, setAutoHandledOpen] = useState(false);
 
+  // Task 3.1.2c: resets exactly the three state variables hasActiveFilter (below)
+  // already tracks, so "Clear filter" can never drift out of sync with what the
+  // page itself considers "a filter is active."
+  const clearFilters = useCallback(() => {
+    setSearchQuery("");
+    setTypeFilter("all");
+    setHideBacklogItems(false);
+  }, []);
+
   const filteredNotifications = useMemo(() => {
-    let items = notificationHistory.filter((n) => n.notificationType !== "auto_approved");
+    // Task 3.1.3a: a rule-reconciled item is excluded from the main feed the
+    // same way a live auto_approved item is — both surface only in AutoHandledSection.
+    let items = notificationHistory.filter(
+      (n) => n.notificationType !== "auto_approved" && !isReconciledNotification(n)
+    );
     if (typeFilter !== "all") {
       const allowed = new Set(notificationTypeFilter(typeFilter, items.map((n) => n.notificationType)));
       items = items.filter((n) => allowed.has(n.notificationType));
@@ -108,6 +137,27 @@ export function NotificationsPage() {
     return items;
   }, [notificationHistory, typeFilter, hideBacklogItems, searchQuery]);
 
+  // Story 3.1.2: split the filtered set into the always-expanded "needs a
+  // decision" tier and everything else ("recent activity" — never
+  // "informational", which is Task 3.2.1a's Review Queue tier name).
+  const needsDecision = useMemo(
+    () => filteredNotifications.filter((n) => !n.isRead && isActionableNotification(n.notificationType)),
+    [filteredNotifications]
+  );
+  const recentActivity = useMemo(
+    () => filteredNotifications.filter((n) => n.isRead || !isActionableNotification(n.notificationType)),
+    [filteredNotifications]
+  );
+
+  // The true unfiltered actionable count — deliberately computed over
+  // notificationHistory, never filteredNotifications/needsDecision, so
+  // NeedsDecisionSection can tell "nothing needs a decision" apart from "a
+  // filter is hiding something that does" (Product Triad Review round-4 fix).
+  const totalActionableCount = useMemo(
+    () => notificationHistory.filter((n) => !n.isRead && isActionableNotification(n.notificationType)).length,
+    [notificationHistory]
+  );
+
   const hasActiveFilter = searchQuery.trim() !== "" || typeFilter !== "all" || hideBacklogItems;
 
   // The search box and "Hide backlog" toggle only filter over notificationHistory
@@ -118,11 +168,35 @@ export function NotificationsPage() {
   const hasIncompleteSearch = (searchQuery.trim() !== "" || hideBacklogItems) && historyHasMore;
 
   const autoHandledNotifications = useMemo(
-    () => notificationHistory.filter((n) => n.notificationType === "auto_approved"),
+    () =>
+      notificationHistory.filter(
+        (n) => n.notificationType === "auto_approved" || isReconciledNotification(n)
+      ),
     [notificationHistory]
   );
 
   const unreadCount = getUnreadCount();
+
+  // Task 3.1.2e: "Mark activity read" only ever touches Recent Activity +
+  // Auto-handled — never an item in NeedsDecisionSection. Shared with
+  // NotificationPanel's identical button (Task 3.1.5a) via computeScopedMarkReadIds
+  // so the scoping rule is defined once.
+  const scopedMarkReadIds = useMemo(
+    () => computeScopedMarkReadIds([...recentActivity, ...autoHandledNotifications]),
+    [recentActivity, autoHandledNotifications]
+  );
+
+  const handleMarkActivityRead = useCallback(() => {
+    markAsRead(scopedMarkReadIds);
+  }, [markAsRead, scopedMarkReadIds]);
+
+  const handleClearHistory = useCallback(() => {
+    // Task 3.1.5d: irreversible, so gate behind a confirm — the actual
+    // exclusion of unread actionable records lives server-side (Task 3.1.5c).
+    if (window.confirm("Clear read notifications? This can't be undone. Items still needing a decision won't be cleared.")) {
+      clearHistory();
+    }
+  }, [clearHistory]);
 
   const handleNotificationClick = (ids: string | string[], onView?: () => void, sessionId?: string) => {
     markAsRead(ids);
@@ -144,6 +218,49 @@ export function NotificationsPage() {
     [liveSessionIds]
   );
 
+  // Task 3.1.2h (AC38): background fetch-failure staleness indicator — only
+  // shown once a failure occurs, never implying the last-known list is fresher
+  // than it is.
+  const staleness = useMemo(
+    () =>
+      historyError && historyLastUpdatedAt !== null
+        ? { label: minutesAgoLabel(historyLastUpdatedAt), onRetry: () => void refreshHistory() }
+        : undefined,
+    [historyError, historyLastUpdatedAt, refreshHistory]
+  );
+
+  // "Recent activity" CollapsibleSection — identical between the two branches
+  // below (one totalActionableCount>0-but-empty-needsDecision, one the normal
+  // path); only the outer `recentActivity.length > 0` guard differs per call
+  // site, so it's applied by each caller rather than baked in here (mirrors
+  // ReviewQueuePanel.tsx's renderTierItems/groupTierItems local-function pattern).
+  const renderRecentActivitySection = () => (
+    <CollapsibleSection sectionKey="recent-activity" title={`Recent activity · ${recentActivity.length}`}>
+      <div className={list}>
+        {groupNotifications(recentActivity).map((group) => (
+          <NotificationItem
+            key={group.notification.id}
+            group={group}
+            resolvedApprovals={resolvedApprovals}
+            pendingApprovals={pendingApprovals}
+            blockedApprovals={blockedApprovals}
+            resolveApproval={resolveApproval}
+            removeFromHistory={removeFromHistory}
+            handleNotificationClick={handleNotificationClick}
+            getSessionHref={getSessionHref}
+          />
+        ))}
+        {historyHasMore && (
+          <div className={loadMore}>
+            <button className={loadMoreButton} onClick={loadMoreHistory} disabled={historyLoading}>
+              {historyLoading ? "Loading..." : "Load more"}
+            </button>
+          </div>
+        )}
+      </div>
+    </CollapsibleSection>
+  );
+
   return (
     <div className={pageRoot}>
       <div className={header} data-testid="notifications-header">
@@ -151,30 +268,30 @@ export function NotificationsPage() {
           Notifications
           {unreadCount > 0 && (
             <span className={unreadBadge} data-testid="notifications-unread-badge">
-              {unreadCount}
+              {capBadgeCount(unreadCount)}
             </span>
           )}
         </h2>
         <div className={headerActions}>
           {notificationHistory.length > 0 && (
             <>
-              {unreadCount > 0 && (
+              {scopedMarkReadIds.length > 0 && (
                 <button
                   className={markAllButton}
-                  onClick={markAllAsRead}
-                  aria-label="Mark all as read"
+                  onClick={handleMarkActivityRead}
+                  aria-label="Mark activity as read"
                   data-testid="notifications-mark-all-read"
                 >
-                  Mark all read
+                  Mark activity read
                 </button>
               )}
               <button
                 className={clearButton}
-                onClick={clearHistory}
-                aria-label="Clear all notifications"
+                onClick={handleClearHistory}
+                aria-label="Clear notification history"
                 data-testid="notifications-clear-all"
               >
-                Clear all
+                Clear history
               </button>
             </>
           )}
@@ -244,7 +361,27 @@ export function NotificationsPage() {
             <div className={emptyIcon}>⏳</div>
             <p className={emptyText}>Loading notifications...</p>
           </div>
+        ) : totalActionableCount > 0 && needsDecision.length === 0 ? (
+          // Product Triad Review round-5 blocker fix: this branch must be
+          // reachable even when recentActivity is ALSO empty — see Task 3.1.2c.
+          <>
+            <NeedsDecisionSection
+              notifications={[]}
+              totalActionableCount={totalActionableCount}
+              onClearFilter={clearFilters}
+              resolvedApprovals={resolvedApprovals}
+              pendingApprovals={pendingApprovals}
+              blockedApprovals={blockedApprovals}
+              resolveApproval={resolveApproval}
+              handleNotificationClick={handleNotificationClick}
+              getSessionHref={getSessionHref}
+              staleness={staleness}
+            />
+            {recentActivity.length > 0 && renderRecentActivitySection()}
+          </>
         ) : filteredNotifications.length === 0 ? (
+          // Reachable only when totalActionableCount === 0 — the branch above
+          // already caught every case where it's nonzero.
           <div className={empty}>
             <div className={emptyIcon}>{hasActiveFilter ? "🔍" : "🔔"}</div>
             <p className={emptyText}>
@@ -257,29 +394,21 @@ export function NotificationsPage() {
             </p>
           </div>
         ) : (
-          <div className={list}>
-            {groupNotifications(filteredNotifications).map((group) => (
-              <NotificationItem
-                key={group.notification.id}
-                group={group}
-                resolvedApprovals={resolvedApprovals}
-                pendingApprovals={pendingApprovals}
-                blockedApprovals={blockedApprovals}
-                resolveApproval={resolveApproval}
-                removeFromHistory={removeFromHistory}
-                handleNotificationClick={handleNotificationClick}
-                getSessionHref={getSessionHref}
-              />
-            ))}
-
-            {historyHasMore && (
-              <div className={loadMore}>
-                <button className={loadMoreButton} onClick={loadMoreHistory} disabled={historyLoading}>
-                  {historyLoading ? "Loading..." : "Load more"}
-                </button>
-              </div>
-            )}
-          </div>
+          <>
+            <NeedsDecisionSection
+              notifications={needsDecision}
+              totalActionableCount={totalActionableCount}
+              onClearFilter={clearFilters}
+              resolvedApprovals={resolvedApprovals}
+              pendingApprovals={pendingApprovals}
+              blockedApprovals={blockedApprovals}
+              resolveApproval={resolveApproval}
+              handleNotificationClick={handleNotificationClick}
+              getSessionHref={getSessionHref}
+              staleness={staleness}
+            />
+            {renderRecentActivitySection()}
+          </>
         )}
       </div>
 
