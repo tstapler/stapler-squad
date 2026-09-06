@@ -3640,6 +3640,20 @@ func (s *SessionService) DeleteSession(
 	// race is between removeFromAllPollers and storage.DeleteInstance, not this).
 	liveInst := s.FindLiveInstance(sessionTitle)
 
+	// If creation is still in flight, fence out the Background Resolution
+	// Pipeline before cleanup runs, mirroring CancelSessionCreation/
+	// RetrySessionCreation's ordering: this narrows, but doesn't replace, the
+	// Instance.GetPath() Snapshot()-based read fix — a write already in
+	// flight when cancel fires can still land.
+	if liveInst != nil {
+		if status, _ := liveInst.StatusAndFailureReason(); status == session.Creating {
+			liveInst.BumpCreationEpoch()
+			if cancelFunc := liveInst.CreationCancelFunc(); cancelFunc != nil {
+				cancelFunc()
+			}
+		}
+	}
+
 	// Remove from all pollers BEFORE deleting from storage. This is atomic from the
 	// poller's perspective and closes the race window where external discovery could
 	// re-add the session between storage deletion and the old LoadInstances() reload.

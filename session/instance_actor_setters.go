@@ -739,3 +739,27 @@ func (i *Instance) SetGitHubResolution(r GitHubResolution) {
 		return nil
 	})
 }
+
+// applyWorktreeDetectionLocked writes DetectAndPopulateWorktreeInfo's detected
+// IsWorktree/MainRepoPath/GitHubOwner/GitHubRepo fields under i.mu, mirroring
+// setGitHubResolutionLocked's write discipline for the same GitHub fields --
+// this is what closes the write/write race backlog item 10fc3913 flagged
+// between the two (DetectAndPopulateWorktreeInfo's doc comment in
+// instance_worktree.go covers why its i.Path *read* deliberately stays raw;
+// this only fixes the writes).
+func applyWorktreeDetectionLocked(s *instanceState, info *WorktreeInfo) {
+	s.inst.mu.Lock()
+	s.inst.IsWorktree = info.IsWorktree
+	if info.IsWorktree && info.MainRepoRoot != "" {
+		s.inst.MainRepoPath = info.MainRepoRoot
+	}
+	if s.inst.GitHubOwner == "" && info.GitHubOwner != "" {
+		s.inst.GitHubOwner = info.GitHubOwner
+	}
+	if s.inst.GitHubRepo == "" && info.GitHubRepo != "" {
+		s.inst.GitHubRepo = info.GitHubRepo
+	}
+	snap := buildSnapshot(s.inst)
+	s.inst.mu.Unlock()
+	s.inst.snapshot.Store(snap)
+}
