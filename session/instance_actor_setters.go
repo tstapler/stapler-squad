@@ -598,11 +598,17 @@ func (i *Instance) TryForceStatusIfEpoch(capturedEpoch uint64, status Status, fa
 		if s.inst.creationEpoch != capturedEpoch {
 			return nil
 		}
+		// Status is read and written under i.mu here (not just actor confinement,
+		// unlike creationEpoch) because RecoverFromStopped/RetryNow mutate Status
+		// directly under i.mu from outside the actor mailbox entirely -- confirmed
+		// via go test -race: the old unguarded read below raced against that
+		// write. i.mu is the only mechanism both call paths share.
+		s.inst.mu.Lock()
 		if s.inst.Status != Creating && s.inst.Status != status {
+			s.inst.mu.Unlock()
 			return nil
 		}
 		setFailureReasonLocked(s, failureReason)
-		s.inst.mu.Lock()
 		s.inst.loadStatus(status)
 		s.inst.touchUpdatedAt()
 		snap := buildSnapshot(s.inst)

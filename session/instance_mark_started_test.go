@@ -168,7 +168,6 @@ func TestMarkStartedIfTmuxAlive_should_SerializeWithConcurrentStart_When_BothCal
 	// a started instance must land on Active, never a status the self-heal
 	// method itself would have refused to produce, and never a torn
 	// combination where one write only partially applied.
-	if li.Started() {
-		assert.Equal(t, Active, li.GetLifecycleStatus(), "a started instance must land on Active, not a torn or refused Status")
-	}
+	require.True(t, li.Started(), "Start(true) must have completed to give this test something to serialize against")
+	assert.Equal(t, Active, li.GetLifecycleStatus(), "a started instance must land on Active, not a torn or refused Status")
 }
