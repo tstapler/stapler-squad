@@ -39,7 +39,7 @@ ENT_STAMP := .ent-gen.stamp
 GOTESTSUM_BIN := $(shell go env GOPATH)/bin/gotestsum
 $(GOTESTSUM_BIN):
 	@echo "Installing gotestsum..."
-	@go install gotest.tools/gotestsum@latest
+	@go install gotest.tools/gotestsum@v1.13.0
 
 .PHONY: ensure-tools
 # ensure-tools runs asdf install only when .tool-versions changes
@@ -735,7 +735,7 @@ install-tools: ensure-tools ## Install all development and analysis tools
 	go install golang.org/x/perf/cmd/benchstat@latest
 	go install gvisor.dev/gvisor/tools/checklocks/cmd/checklocks@latest
 	go install github.com/mibk/dupl@latest
-	go install gotest.tools/gotestsum@latest
+	go install gotest.tools/gotestsum@v1.13.0
 	@echo "All tools installed successfully!"
 
 # Code quality and analysis
