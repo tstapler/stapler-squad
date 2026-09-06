@@ -10,11 +10,10 @@ import {
 } from "react";
 import type { VirtuosoHandle } from "react-virtuoso";
 import { createClient } from "@connectrpc/connect";
-import { createConnectTransport } from "@connectrpc/connect-web";
+import { getConnectTransport } from "@/lib/api/transport";
 import { SessionService } from "@/gen/session/v1/session_pb";
 import type { LogEntry as ProtoLogEntry } from "@/gen/session/v1/session_pb";
 import { timestampFromDate } from "@bufbuild/protobuf/wkt";
-import { getApiBaseUrl } from "@/lib/config";
 import { useLiveTail } from "./useLiveTail";
 import { detectLevel } from "@/lib/logs/logParser";
 import type { LogLevel } from "@/lib/logs/logParser";
@@ -139,8 +138,7 @@ export function useLogViewer(
   const clientRef = useRef<ReturnType<typeof createClient<typeof SessionService>> | null>(null);
 
   useEffect(() => {
-    const transport = createConnectTransport({ baseUrl: getApiBaseUrl() });
-    clientRef.current = createClient(SessionService, transport);
+    clientRef.current = createClient(SessionService, getConnectTransport());
   }, []);
 
   // --- Live-tail cursor: tracks server-side total_count so polling can detect new entries ---

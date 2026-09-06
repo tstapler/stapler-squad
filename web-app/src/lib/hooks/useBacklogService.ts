@@ -2,10 +2,9 @@
 
 import { useCallback, useRef, useEffect, useState, useMemo } from "react";
 import { createClient } from "@connectrpc/connect";
-import { createConnectTransport } from "@connectrpc/connect-web";
+import { getConnectTransport } from "@/lib/api/transport";
 import { timestampDate } from "@bufbuild/protobuf/wkt";
 import type { Timestamp } from "@bufbuild/protobuf/wkt";
-import { getApiBaseUrl, createAuthInterceptor } from "@/lib/config";
 import { getErrorMessage } from "@/lib/utils/connectError";
 import { useAbortableEffect } from "@/lib/hooks/useAbortableEffect";
 import {
@@ -713,11 +712,7 @@ export function useBacklogService(): UseBacklogServiceReturn {
   const clearError = useCallback(() => setLastError(null), []);
 
   useEffect(() => {
-    const transport = createConnectTransport({
-      baseUrl: getApiBaseUrl(),
-      interceptors: [createAuthInterceptor()],
-    });
-    clientRef.current = createClient(BacklogService, transport);
+    clientRef.current = createClient(BacklogService, getConnectTransport());
   }, []);
 
   const listBacklogItems = useCallback(
@@ -1293,11 +1288,7 @@ export function useBacklogSessionIndex(): UseBacklogSessionIndexReturn {
   const [loading, setLoading] = useState(true);
 
   useAbortableEffect(async (signal) => {
-    const transport = createConnectTransport({
-      baseUrl: getApiBaseUrl(),
-      interceptors: [createAuthInterceptor()],
-    });
-    const client = createClient(BacklogService, transport);
+    const client = createClient(BacklogService, getConnectTransport());
 
     try {
       const resp = await client.getSessionBacklogIndex({}, { signal });

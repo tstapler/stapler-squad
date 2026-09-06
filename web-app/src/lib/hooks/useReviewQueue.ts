@@ -3,9 +3,8 @@
 import { useEffect, useCallback, useRef, useMemo } from "react";
 import type { AsyncResult } from "@/lib/types/asyncResult";
 import { createClient } from "@connectrpc/connect";
-import { createSessionWatchTransport } from "@/lib/transport/watch-ws-transport";
+import { getWatchTransport } from "@/lib/api/transport";
 import { SessionService } from "@/gen/session/v1/session_pb";
-import { getApiBaseUrl, createAuthInterceptor } from "@/lib/config";
 import {
   ReviewQueue,
   ReviewItem,
@@ -38,7 +37,6 @@ import {
 } from "@/lib/store/reviewQueueSlice";
 
 interface UseReviewQueueOptions {
-  baseUrl?: string;
   autoRefresh?: boolean;
   refreshInterval?: number; // in milliseconds
   priorityFilter?: Priority;
@@ -105,7 +103,6 @@ export function useReviewQueue(
   options: UseReviewQueueOptions = {}
 ): UseReviewQueueReturn {
   const {
-    baseUrl = getApiBaseUrl(),
     autoRefresh = false,
     refreshInterval = 5000,
     priorityFilter,
@@ -132,13 +129,8 @@ export function useReviewQueue(
 
   // Initialize ConnectRPC client — uses HTTP for unary, WebSocket for streaming Watch* RPCs
   useEffect(() => {
-    const transport = createSessionWatchTransport({
-      baseUrl,
-      interceptors: [createAuthInterceptor()],
-    });
-
-    clientRef.current = createClient(SessionService, transport);
-  }, [baseUrl]);
+    clientRef.current = createClient(SessionService, getWatchTransport());
+  }, []);
 
   // Fetch review queue with optional filters
   const fetchReviewQueue = useCallback(

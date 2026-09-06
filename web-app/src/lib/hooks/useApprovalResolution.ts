@@ -1,10 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Code, ConnectError, createClient } from "@connectrpc/connect";
-import { createConnectTransport } from "@connectrpc/connect-web";
+import { getConnectTransport } from "@/lib/api/transport";
 import { SessionService } from "@/gen/session/v1/session_pb";
 import { ResolveApprovalRequestSchema } from "@/gen/session/v1/session_pb";
 import { create } from "@bufbuild/protobuf";
-import { getApiBaseUrl } from "@/lib/config";
 import { NotificationHistoryItem } from "@/lib/types/notification";
 
 export type ApprovalDecisionState = "allow" | "deny" | "expired";
@@ -43,8 +42,7 @@ export function useApprovalResolution({
   const clientRef = useRef<ReturnType<typeof createClient<typeof SessionService>> | null>(null);
   const getClient = useCallback(() => {
     if (!clientRef.current) {
-      const transport = createConnectTransport({ baseUrl: getApiBaseUrl() });
-      clientRef.current = createClient(SessionService, transport);
+      clientRef.current = createClient(SessionService, getConnectTransport());
     }
     return clientRef.current;
   }, []);

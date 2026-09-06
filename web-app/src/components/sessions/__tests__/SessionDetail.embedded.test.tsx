@@ -87,7 +87,7 @@ jest.mock("@/lib/contexts/SessionVcsContext", () => ({
   SessionVcsProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
 }));
 jest.mock("@/lib/hooks/useVcsStatus", () => ({ prefetchVcsStatus: jest.fn() }));
-jest.mock("@/lib/config", () => ({ getApiBaseUrl: () => "http://localhost:8543" }));
+jest.mock("@/lib/config", () => ({ getApiBaseUrl: () => "http://localhost:8543", createAuthInterceptor: () => jest.fn() }));
 jest.mock("@/lib/constants/programs", () => ({
   getProgramDisplay: (p: string) => p,
   isKnownProgram: () => true,

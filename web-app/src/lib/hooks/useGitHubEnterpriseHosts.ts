@@ -2,13 +2,12 @@
 
 import { useCallback, useState } from "react";
 import { createClient } from "@connectrpc/connect";
-import { createConnectTransport } from "@connectrpc/connect-web";
+import { getConnectTransport } from "@/lib/api/transport";
 import {
   GitHubUserService,
   ListGitHubAccountsRequestSchema,
 } from "@/gen/session/v1/github_user_pb";
 import { create } from "@bufbuild/protobuf";
-import { getApiBaseUrl, createAuthInterceptor } from "@/lib/config";
 import { useAbortableEffect } from "@/lib/hooks/useAbortableEffect";
 
 export interface UseGitHubEnterpriseHostsResult {
@@ -31,11 +30,7 @@ export function useGitHubEnterpriseHosts(): UseGitHubEnterpriseHostsResult {
   const [fetchTick, setFetchTick] = useState(0);
 
   useAbortableEffect(async (signal) => {
-    const transport = createConnectTransport({
-      baseUrl: getApiBaseUrl(),
-      interceptors: [createAuthInterceptor()],
-    });
-    const client = createClient(GitHubUserService, transport);
+    const client = createClient(GitHubUserService, getConnectTransport());
 
     try {
       const res = await client.listGitHubAccounts(
