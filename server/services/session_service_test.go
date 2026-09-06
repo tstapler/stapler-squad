@@ -672,6 +672,48 @@ func TestCleanupPartialCreation_should_NotKillTmuxSession_When_ItLooksAliveDespi
 	assert.True(t, inst.TmuxSessionExists(), "tmux session must NOT be killed: it looks alive, so the guard must skip the destructive KillSession call")
 }
 
+// TestCleanupPartialCreation_should_StopSessionDriver_When_NotStarted is the
+// BUG-099 regression test. The other cleanupPartialCreation tests all use a
+// bare &session.Instance{} on which StopSessionDriver is a no-op (no driver
+// was ever started), so they can't distinguish "the call is present" from
+// "the call was deleted." This test starts a real driver against a live
+// tmux session first, so a removed StopSessionDriver call leaves an
+// observably still-running goroutine.
+func TestCleanupPartialCreation_should_StopSessionDriver_When_NotStarted(t *testing.T) {
+	t.Parallel()
+
+	inst := &session.Instance{Title: "cleanup-driver-test", Status: session.Stopped, Program: "bash"}
+	sess := tmux.NewTmuxSessionWithPrefix(inst.Title, inst.Program, "ssq-cleanup-driver-test-")
+	require.NoError(t, sess.Start(t.TempDir()))
+	t.Cleanup(func() { _ = sess.Close() })
+
+	// Reproduce Started()==false with a live tmux session attached, same as
+	// TestCleanupPartialCreation_should_NotKillTmuxSession_...'s setup.
+	_ = inst.GetTmuxSessionName()
+	inst.SetTmuxSession(sess)
+	inst.RecoverFromStopped()
+	require.False(t, inst.Started(), "test setup must reproduce Started()==false with a live tmux session still attached")
+	require.True(t, inst.TmuxSessionExists(), "test setup must have a genuinely alive tmux session")
+
+	session.StartSessionDriver(inst, t.TempDir())
+
+	err := cleanupPartialCreation(inst)
+	require.NoError(t, err)
+	assert.True(t, inst.TmuxSessionExists(), "tmux session must survive: this test isolates the driver, not the defense-in-depth kill guard")
+
+	// If StopSessionDriver's call were removed, the driver goroutine keeps
+	// polling the still-alive tmux session forever, so JoinSessionDriver
+	// would block for its full internal timeout (10s) before giving up.
+	// Bound the assertion well under that so a regression fails fast rather
+	// than passing by accident on a slow machine.
+	start := time.Now()
+	session.JoinSessionDriver(inst)
+	elapsed := time.Since(start)
+	assert.Less(t, elapsed, 3*time.Second,
+		"driver goroutine should already be stopped by cleanupPartialCreation's StopSessionDriver call; "+
+			"JoinSessionDriver blocking this long means it was not actually stopped (BUG-099 regression)")
+}
+
 // TestShutdown_WaitsForDeleteSessionCleanup_LiveInstanceNil verifies that
 // Shutdown blocks until DeleteSession's background cleanup goroutine (the
 // KillTmuxSessionByTitle fallback used when FindLiveInstance returns nil) has

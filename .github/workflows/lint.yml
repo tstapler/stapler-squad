@@ -319,8 +319,16 @@ jobs:
               fi
             fi
             if [ -n "$BASE_SHA" ]; then
+              # Pathspecs are resolved relative to cwd (this step's
+              # working-directory: web-app), but git diff --name-only always
+              # prints repo-root-relative paths -- so 'web-app/**.ts' here
+              # looked for web-app/web-app/**.ts and never matched anything,
+              # silently no-op'ing this entire step on every run (found
+              # 2026-09-04: verified by diffing two real historical commits
+              # with 44 actual TS/TSX changes between them -- the old
+              # pathspec matched 0, '**.ts'/'**.tsx' matched all 44).
               CHANGED=$(git diff --name-only "$BASE_SHA"...HEAD \
-                -- 'web-app/**.ts' 'web-app/**.tsx' 2>/dev/null \
+                -- '**.ts' '**.tsx' 2>/dev/null \
                 | grep -E '\.(ts|tsx)$' | sed 's|^web-app/||' || true)
               if [ -z "$CHANGED" ]; then
                 echo "No TS/TSX files changed — skipping ESLint"

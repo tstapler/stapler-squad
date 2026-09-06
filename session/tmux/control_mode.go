@@ -28,6 +28,17 @@ type cmSendReq struct {
 	resultCh chan cmdResult // buffered(1) channel for the response
 }
 
+// highPrioritySendCh and normalPrioritySendCh are distinct named types over
+// the same underlying chan cmSendReq, used for TmuxSession.highPriSendCh/
+// normPriSendCh and runCMSender's corresponding parameters. Without this
+// distinction, two adjacent same-typed chan cmSendReq parameters/arguments
+// can be silently transposed by a future edit and still compile -- inverting
+// send priority with no compiler error. A make(chan cmSendReq, N) literal
+// remains assignable to either (an unnamed type is assignable to any named
+// type sharing its underlying type), so no call site needs to change.
+type highPrioritySendCh chan cmSendReq
+type normalPrioritySendCh chan cmSendReq
+
 var (
 	// ErrControlModeNotRunning is returned when sendCMCommand is called but control mode is not active.
 	ErrControlModeNotRunning = errors.New("control mode not running")
@@ -438,11 +449,32 @@ func (t *TmuxSession) readControlModeOutput() {
 	// Unilateral exit (process killed/crashed without StopControlMode being
 	// called) leaves runCMSender blocked forever on doneCh, since only
 	// StopControlMode used to close it -- close it here too so the sender
-	// goroutine doesn't leak. Guarded/nilled the same way StopControlMode
-	// does, since both can race to close this channel.
-	if t.controlModeDone != nil {
-		close(t.controlModeDone)
+	// goroutine doesn't leak.
+	//
+	// Close the doneCh captured locally above (this goroutine's own
+	// generation), not necessarily whatever t.controlModeDone currently
+	// holds: a fresh StartControlMode() racing this unilateral exit (see
+	// ARCH-1 above) can already have reassigned the field to a NEW
+	// generation's channel by the time we get here. Closing the live field
+	// unconditionally would close the wrong (newer) generation's doneCh
+	// instead of unblocking this (older) generation's runCMSender.
+	//
+	//   - t.controlModeDone == doneCh: nothing has replaced or closed it
+	//     yet. Close-and-nil under the lock, same as StopControlMode's own
+	//     guard -- whichever of the two gets here first wins; the other
+	//     sees nil and skips, so this shared-field case can't double-close.
+	//   - t.controlModeDone == nil: StopControlMode already closed and
+	//     nilled it (same generation) -- already handled, skip.
+	//   - t.controlModeDone is some other non-nil channel: a newer
+	//     generation already replaced the field. Our doneCh is now
+	//     orphaned from it entirely -- this is the only goroutine that
+	//     ever holds this specific reference (monitorControlModeErrors
+	//     never closes doneCh), so it's safe to close directly.
+	if t.controlModeDone == doneCh {
+		close(doneCh)
 		t.controlModeDone = nil
+	} else if t.controlModeDone != nil {
+		close(doneCh)
 	}
 	// Reset so that the next StartControlMode() call sees a clean slate.
 	t.controlModeRefCount = 0
@@ -656,9 +688,19 @@ func (t *TmuxSession) processControlModeLine(line string) {
 //
 // doneCh is closed by StopControlMode to trigger shutdown. The goroutine closes
 // cmSenderExited when it returns so that StopControlMode can safely close stdin.
-// cmSenderExited is passed in (not read from the struct field) for the same
-// reason as highPriSendCh/normPriSendCh above.
-func (t *TmuxSession) runCMSender(doneCh <-chan struct{}, stdin io.WriteCloser, highPriSendCh, normPriSendCh <-chan cmSendReq, cmSenderExited chan struct{}) {
+//
+// highPriSendCh/normPriSendCh/cmSenderExited are passed as parameters (captured
+// once by the caller under controlModeSubMu at the same moment as doneCh/stdin)
+// rather than read from t.highPriSendCh/t.normPriSendCh/t.cmSenderExited here.
+// A unilateral %exit (see the "%exit" case above, ARCH-1) resets controlModeCmd
+// to let a fresh StartControlMode() proceed without waiting for this goroutine
+// to exit first -- so a new StartControlMode call can reassign those same t.*
+// fields to new channels while this goroutine is still running against the old
+// ones. Reading t.* directly here raced (confirmed via go test -race) between
+// this goroutine's reads and the new call's writes; using only the captured
+// locals gives each runCMSender goroutine its own stable, non-racing view for
+// its entire lifetime, however many StartControlMode/​%exit cycles follow it.
+func (t *TmuxSession) runCMSender(doneCh <-chan struct{}, stdin io.WriteCloser, highPriSendCh highPrioritySendCh, normPriSendCh normalPrioritySendCh, cmSenderExited chan struct{}) {
 	defer close(cmSenderExited)
 
 	process := func(req cmSendReq) {

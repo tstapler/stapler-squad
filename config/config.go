@@ -106,6 +106,18 @@ func GetConfigDir() (string, error) {
 	return GetConfigDirForDir("")
 }
 
+// pruneStaleTestDirsOnce bounds workspacepath.PruneStaleTestDirs to a single
+// run per process. Without it, every LoadConfig() call in test mode (i.e.
+// every tmux subprocess spawn, ~every 2s via SessionDriver polling) re-scans
+// and potentially os.RemoveAll's the entire shared ~/.stapler-squad/test/
+// dir — a scan with no cancellation point, so it can stall a tight polling
+// loop. See docs/bugs/fixed/BUG-099-*.md.
+//
+// Assumes one fixed testBaseDir per process (true for go test binaries
+// today); a second distinct testBaseDir seen later in the same process
+// won't get pruned.
+var pruneStaleTestDirsOnce sync.Once //nolint:gochecknoglobals
+
 // GetConfigDirForDir returns the path to the application's configuration directory
 // using the provided directory for workspace-based isolation.
 func GetConfigDirForDir(dir string) (string, error) {
@@ -150,7 +162,7 @@ func GetConfigDirForDir(dir string) (string, error) {
 	if IsTestMode() {
 		// Each test/benchmark process gets its own isolated state
 		testBaseDir := filepath.Join(baseDir, "test")
-		workspacepath.PruneStaleTestDirs(testBaseDir)
+		pruneStaleTestDirsOnce.Do(func() { workspacepath.PruneStaleTestDirs(testBaseDir) })
 		pid := os.Getpid()
 		return filepath.Join(testBaseDir, fmt.Sprintf("test-%d", pid)), nil
 	}

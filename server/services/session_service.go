@@ -2035,6 +2035,56 @@ func (s *SessionService) resolveRestartSource(req *sessionv1.CreateSessionReques
 		fmt.Errorf("restart source session %q not found", req.RestartFromSessionId))
 }
 
+// requiresExplicitPath reports whether msg.Path being empty is a validation
+// error for this request. Extracted from CreateSession's inline check so it
+// can be tested directly (pure function, no I/O) rather than only through a
+// full CreateSession -> tmux -> SessionDriver round trip -- see
+// TestRequiresExplicitPath.
+func requiresExplicitPath(msg *sessionv1.CreateSessionRequest) bool {
+	return msg.SessionType != sessionv1.SessionType_SESSION_TYPE_ONE_OFF &&
+		// AutonomousMode: the omnibar always submits an empty path for autonomous
+		// sessions; see CreateSession's directory-generation block.
+		!msg.AutonomousMode &&
+		msg.AliasName == "" &&
+		msg.SessionType != sessionv1.SessionType_SESSION_TYPE_NEW_PROJECT &&
+		// restart_from_session_id (Story 2.3.1) derives the path from the source
+		// session in CreateSession when Path is left empty -- see the
+		// restart-source resolution block ahead of "Resolve GitHub URLs to local
+		// paths". An empty Path is only a validation error here when there's no
+		// such source to derive one from.
+		msg.RestartFromSessionId == "" &&
+		msg.Path == ""
+}
+
+// needsGeneratedOneOffPath reports whether CreateSession must generate a
+// fresh scratch directory for this request: an explicit one-off session, or
+// an autonomous session created without an explicit path (the omnibar's
+// normal flow — the agent needs somewhere to run). Extracted so it's
+// directly testable (pure function, no I/O) rather than only through a full
+// CreateSession -> tmux -> SessionDriver round trip -- see
+// TestNeedsGeneratedOneOffPath.
+func needsGeneratedOneOffPath(msg *sessionv1.CreateSessionRequest, resolvedPath string) bool {
+	return msg.SessionType == sessionv1.SessionType_SESSION_TYPE_ONE_OFF ||
+		(msg.AutonomousMode && resolvedPath == "")
+}
+
+// generateOneOffPath creates and returns a fresh scratch directory under
+// cfg's configured (or default) one-off base directory. Extracted from
+// CreateSession so the directory-generation side effect can be tested
+// directly against a real filesystem without any tmux/storage/SessionDriver
+// machinery -- see TestGenerateOneOffPath.
+func generateOneOffPath(cfg *config.Config) (string, error) {
+	baseDir, err := cfg.OneOffBaseDirOrDefault()
+	if err != nil {
+		return "", fmt.Errorf("failed to resolve one_off_base_dir: %w", err)
+	}
+	generatedPath, err := namegen.GenerateAndCreate(baseDir, 10)
+	if err != nil {
+		return "", fmt.Errorf("failed to create one-off directory: %w", err)
+	}
+	return generatedPath, nil
+}
+
 // CreateSession initializes a new AI agent session with tmux and git worktree.
 // +api: session:create
 func (s *SessionService) CreateSession(
@@ -2048,19 +2098,7 @@ func (s *SessionService) CreateSession(
 	if req.Msg.Title == "" {
 		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("title is required"))
 	}
-	if req.Msg.SessionType != sessionv1.SessionType_SESSION_TYPE_ONE_OFF &&
-		// AutonomousMode: the omnibar always submits an empty path for autonomous
-		// sessions; see the directory-generation block below.
-		!req.Msg.AutonomousMode &&
-		req.Msg.AliasName == "" &&
-		req.Msg.SessionType != sessionv1.SessionType_SESSION_TYPE_NEW_PROJECT &&
-		// restart_from_session_id (Story 2.3.1) derives the path from the
-		// source session below when Path is left empty -- see the
-		// restart-source resolution block ahead of "Resolve GitHub URLs to
-		// local paths". An empty Path is only a validation error here when
-		// there's no such source to derive one from.
-		req.Msg.RestartFromSessionId == "" &&
-		req.Msg.Path == "" {
+	if requiresExplicitPath(req.Msg) {
 		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("path is required"))
 	}
 
@@ -2187,15 +2225,10 @@ func (s *SessionService) CreateSession(
 	// One-off session: generate a fresh directory and override resolvedPath.
 	// Autonomous sessions created without an explicit path (the omnibar's normal
 	// flow) get the same treatment — the agent needs somewhere to run.
-	if req.Msg.SessionType == sessionv1.SessionType_SESSION_TYPE_ONE_OFF ||
-		(req.Msg.AutonomousMode && resolvedPath == "") {
-		baseDir, err := cfg.OneOffBaseDirOrDefault()
+	if needsGeneratedOneOffPath(req.Msg, resolvedPath) {
+		generatedPath, err := generateOneOffPath(cfg)
 		if err != nil {
-			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to resolve one_off_base_dir: %w", err))
-		}
-		generatedPath, err := namegen.GenerateAndCreate(baseDir, 10)
-		if err != nil {
-			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to create one-off directory: %w", err))
+			return nil, connect.NewError(connect.CodeInternal, err)
 		}
 		resolvedPath = generatedPath
 	}
@@ -3482,6 +3515,24 @@ func (s *SessionService) ResumeCrashedSession(
 // untracked goroutine. Not fixed here — this helper inherits that property
 // from DeleteSession's existing chain rather than worsening it.
 func cleanupPartialCreation(instance *session.Instance) error {
+	if instance.Started() {
+		return instance.Destroy()
+	}
+
+	// BUG-099: this branch never called Destroy(), so it never called
+	// StopSessionDriver — leaving a SessionDriver goroutine the async
+	// creation pipeline was still racing to start completely unstoppable.
+	// Call it unconditionally, mirroring Destroy()'s own top-of-function
+	// call, so any StartSessionDriver arriving after this point refuses to
+	// start (driverDestroyed). See docs/bugs/fixed/BUG-099-*.md.
+	session.StopSessionDriver(instance)
+
+	// Re-check Started() immediately after StopSessionDriver: if a
+	// concurrent Instance.Start() completed while we were stopping the
+	// driver, the instance is now fully started and must go through
+	// Destroy()'s full teardown (VNC/CDP, diff-stats, EventStopped) instead
+	// of falling through to the defense-in-depth guard below, which is only
+	// safe for an instance that never finished starting.
 	if instance.Started() {
 		return instance.Destroy()
 	}
