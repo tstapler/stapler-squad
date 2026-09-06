@@ -6,7 +6,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/lifecycle"
 	"io"
 	"os"
 	"strings"
@@ -14,6 +16,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // cmdResult carries the response body and error for a control mode command.
@@ -374,6 +377,17 @@ func (t *TmuxSession) StopControlMode() error {
 	return nil
 }
 
+// classifyControlModeExit reports why this control-mode generation ended,
+// consolidating what used to be 3 independently-repeated t.intentionalStop.Load()
+// checks (scanner-EOF fallback, %exit handler, %session-closed handler) into
+// one call site, so a future 4th exit path can't add a check that forgets it.
+func (t *TmuxSession) classifyControlModeExit() lifecycle.Reason {
+	if t.intentionalStop.Load() {
+		return lifecycle.ReasonDeliberateClose
+	}
+	return lifecycle.ReasonTransportDrop
+}
+
 // readControlModeOutput reads and parses control mode notifications from tmux.
 // This runs in a goroutine and processes lines like:
 //
@@ -381,6 +395,16 @@ func (t *TmuxSession) StopControlMode() error {
 //	%session-changed $13 session-name
 //	%exit
 func (t *TmuxSession) readControlModeOutput() {
+	// One generation span per invocation, opened only when the v2 lifecycle
+	// path is enabled (Story 3.1.2's "the new mechanism, including its
+	// observability, is what's opt-in" framing). Deliberately no paired
+	// defer EndGeneration here -- span is ended exactly once by whichever of
+	// the 3 onExitOnce-guarded call sites below reaches it first.
+	var span trace.Span
+	if config.TmuxLifecycleV2Enabled() {
+		_, span = lifecycle.StartGeneration(context.Background(), "tmux_control_mode")
+	}
+
 	// Capture under RLock — StopControlMode nils/closes controlModeDone under
 	// controlModeSubMu.Lock(), so reading the field without a lock races against
 	// that write. The comment below predates the fix; the snapshot itself (using
@@ -401,8 +425,21 @@ func (t *TmuxSession) readControlModeOutput() {
 			b := scanner.Bytes()
 			if hasOutputPrefix(b) {
 				t.handleOutputBytes(b)
-			} else {
-				t.processControlModeLine(scanner.Text())
+			} else if exit := t.processControlModeLine(scanner.Text()); exit.detected {
+				// v2 path only (Story 3.1.2): processControlModeLine's %exit/
+				// %session-closed cases report a detected exit here rather than
+				// firing onExitOnce themselves, so this is the one place in
+				// scope with span (opened above) that ends the generation --
+				// the single call site Epic 3.1/3.2 require, regardless of
+				// which of the 3 exit routes (this, or the scanner-EOF
+				// fallback below) reaches onExitOnce.Do first.
+				t.onExitOnce.Do(func() {
+					reason := t.classifyControlModeExit()
+					lifecycle.EndGeneration(span, "tmux_control_mode", reason)
+					if reason.ShouldFireExitCallback() && t.onExit != nil {
+						t.onExit(exit.message)
+					}
+				})
 			}
 		}
 	}
@@ -485,12 +522,22 @@ func (t *TmuxSession) readControlModeOutput() {
 	// Scanner-EOF fallback: if the pipe closed without a %exit notification (e.g. the
 	// tmux server crashed or the process was killed), fire the onExit callback here.
 	// intentionalStop guards against false-positive fires during clean StopControlMode().
-	if !t.intentionalStop.Load() {
+	if config.TmuxLifecycleV2Enabled() {
 		t.onExitOnce.Do(func() {
-			if t.onExit != nil {
+			reason := t.classifyControlModeExit()
+			lifecycle.EndGeneration(span, "tmux_control_mode", reason)
+			if reason.ShouldFireExitCallback() && t.onExit != nil {
 				t.onExit("control-mode-pipe-closed")
 			}
 		})
+	} else {
+		if !t.intentionalStop.Load() {
+			t.onExitOnce.Do(func() {
+				if t.onExit != nil {
+					t.onExit("control-mode-pipe-closed")
+				}
+			})
+		}
 	}
 }
 
@@ -517,6 +564,20 @@ func (t *TmuxSession) monitorControlModeErrors(stderr io.ReadCloser) {
 	}
 }
 
+// controlModeExitSignal reports whether processControlModeLine observed a
+// unilateral exit notification (%exit or %session-closed) that its caller,
+// readControlModeOutput, must classify and fire onExitOnce for. Only
+// populated when config.TmuxLifecycleV2Enabled() is true: readControlModeOutput
+// is the one place that holds this generation's span (opened at its top), so
+// the v2 path reports the event back up to it rather than firing onExitOnce
+// here, keeping StartGeneration/EndGeneration in the same function scope.
+// The v1 (flag-off) path never populates this -- it fires onExitOnce itself,
+// verbatim as before.
+type controlModeExitSignal struct {
+	detected bool
+	message  string
+}
+
 // processControlModeLine parses and handles a single control mode notification line.
 // Control mode lines start with % and follow specific formats:
 //
@@ -528,21 +589,21 @@ func (t *TmuxSession) monitorControlModeErrors(stderr io.ReadCloser) {
 //
 // This method is called exclusively from the reader goroutine; inCmdResp, cmdBodyBuf,
 // and curCmdCh are reader-goroutine-only fields and require no locking.
-func (t *TmuxSession) processControlModeLine(line string) {
+func (t *TmuxSession) processControlModeLine(line string) controlModeExitSignal {
 	if line == "" {
-		return
+		return controlModeExitSignal{}
 	}
 
 	// Non-% lines between %begin and %end are body content for the current command.
 	if t.inCmdResp && !strings.HasPrefix(line, "%") {
 		t.cmdBodyBuf.WriteString(line)
 		t.cmdBodyBuf.WriteByte('\n')
-		return
+		return controlModeExitSignal{}
 	}
 
 	if !strings.HasPrefix(line, "%") {
 		log.Debug("unexpected non-control line from tmux", "line", line)
-		return
+		return controlModeExitSignal{}
 	}
 
 	notificationType, rest, _ := strings.Cut(line, " ")
@@ -650,6 +711,9 @@ func (t *TmuxSession) processControlModeLine(line string) {
 		t.controlModeSubMu.Unlock()
 
 		log.Info("control mode received %exit", "session", t.sanitizedName)
+		if config.TmuxLifecycleV2Enabled() {
+			return controlModeExitSignal{detected: true, message: "control-mode-%exit"}
+		}
 		if !t.intentionalStop.Load() {
 			t.onExitOnce.Do(func() {
 				if t.onExit != nil {
@@ -661,6 +725,9 @@ func (t *TmuxSession) processControlModeLine(line string) {
 	case "%session-closed":
 		if rest != "" {
 			log.Info("control mode session-closed", "session", t.sanitizedName, "detail", rest)
+		}
+		if config.TmuxLifecycleV2Enabled() {
+			return controlModeExitSignal{detected: true, message: "session-closed"}
 		}
 		if !t.intentionalStop.Load() {
 			t.onExitOnce.Do(func() {
@@ -679,6 +746,7 @@ func (t *TmuxSession) processControlModeLine(line string) {
 	default:
 		log.Debug("unknown control mode notification", "session", t.sanitizedName, "line", line)
 	}
+	return controlModeExitSignal{}
 }
 
 // runCMSender is the single goroutine that owns all stdin writes to the control mode

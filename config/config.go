@@ -1546,3 +1546,12 @@ func (c *Config) GetFeatureFlagOverride(name string) (value bool, ok bool) {
 func ImportSessionEnabled() bool {
 	return os.Getenv("STAPLER_SQUAD_ENABLE_SESSION_IMPORT") == "true"
 }
+
+// TmuxLifecycleV2Enabled reports whether control_mode.go's consolidated
+// classifyControlModeExit path is enabled. Defaults to false since
+// control_mode.go is the default, systemd-deployed backend every running
+// session uses — this migration ships as an opt-in for one release rather
+// than switching every session's classification path on the next restart.
+func TmuxLifecycleV2Enabled() bool {
+	return os.Getenv("STAPLER_SQUAD_TMUX_LIFECYCLE_V2") == "true"
+}
