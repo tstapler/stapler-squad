@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -237,4 +238,114 @@ func TestWorkspace_UsesWorktreePath_WhenPresentOnDisk(t *testing.T) {
 	ws := inst.Workspace()
 	require.Equal(t, resolvedWorktreePath, ws.EffectivePath)
 	require.Equal(t, repoPath, ws.RepoRoot)
+}
+
+// TestGetEffectiveRootDir_ConcurrentWithSetGitHubResolution_NoRace is a
+// deterministic regression test (synchronization-hook based, not
+// time.Sleep) for the data race backlog item 10fc3913 reported: the
+// background resolution pipeline's SetGitHubResolution write (routed
+// through the actor, under i.mu) raced DeleteSession's cleanup-path reads
+// of GetEffectiveRootDir/Workspace/GetWorkingDirectory, which read the raw
+// i.Path field with no synchronization at all.
+//
+// This exercises the same shape without the full CreateSession/DeleteSession
+// RPC machinery: a live actor goroutine (NewLiveInstance) races
+// SetGitHubResolution against tight reader loops on the caller's own
+// goroutine, gated by a start channel so both sides begin at the same
+// instant instead of relying on OS scheduling luck across a single call --
+// go test -race -count=100 against this test's own single run already
+// found the pre-fix code failed unreliably (see PR description for the
+// before/after `go test -race` evidence), so this loops each side many
+// times to make detection deterministic rather than probabilistic.
+func TestGetEffectiveRootDir_ConcurrentWithSetGitHubResolution_NoRace(t *testing.T) {
+	t.Parallel()
+	inst := &Instance{Title: "race-regression", Path: "/tmp/initial-path", Status: Creating}
+	li := NewLiveInstance(inst)
+	defer li.Stop()
+
+	const iterations = 500
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	go func() {
+		defer wg.Done()
+		<-start
+		for n := 0; n < iterations; n++ {
+			inst.SetGitHubResolution(GitHubResolution{
+				Path:   fmt.Sprintf("/tmp/resolved-%d", n),
+				Branch: "resolved-branch",
+				Owner:  "octocat",
+				Repo:   "Hello-World",
+			})
+		}
+	}()
+
+	go func() {
+		defer wg.Done()
+		<-start
+		for n := 0; n < iterations; n++ {
+			_ = inst.GetEffectiveRootDir()
+			_ = inst.Workspace()
+			_ = inst.GetWorkingDirectory()
+		}
+	}()
+
+	close(start)
+	wg.Wait()
+}
+
+// TestApplyWorktreeDetectionLocked_ConcurrentWithSetGitHubResolution_NoRace
+// is the deterministic regression test for the second race
+// DetectAndPopulateWorktreeInfo's doc comment describes: its writes to
+// IsWorktree/MainRepoPath/GitHubOwner/GitHubRepo used to touch those fields
+// directly with no lock, racing setGitHubResolutionLocked's writes to the
+// same fields. applyWorktreeDetectionLocked (instance_actor_setters.go) now
+// takes i.mu around both call sites' writes, closing it.
+//
+// This drives applyWorktreeDetectionLocked directly through sendSyncErr
+// rather than the full DetectAndPopulateWorktreeInfo (which this package's
+// other tests exercise) specifically to exclude that method's still-raw
+// i.Path *read* — a separate, already-documented, deliberately-unfixed race
+// (see DetectAndPopulateWorktreeInfo's doc comment) that would otherwise
+// fire here too and obscure whether the *write* race this test targets is
+// actually fixed.
+func TestApplyWorktreeDetectionLocked_ConcurrentWithSetGitHubResolution_NoRace(t *testing.T) {
+	t.Parallel()
+	inst := &Instance{Title: "worktree-detect-write-race", Status: Creating}
+	li := NewLiveInstance(inst)
+	defer li.Stop()
+
+	info := &WorktreeInfo{IsWorktree: true, MainRepoRoot: "/tmp/main-repo", GitHubOwner: "detected-owner", GitHubRepo: "detected-repo"}
+
+	const iterations = 200
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	go func() {
+		defer wg.Done()
+		<-start
+		for n := 0; n < iterations; n++ {
+			inst.SetGitHubResolution(GitHubResolution{
+				Branch: "resolved-branch",
+				Owner:  "octocat",
+				Repo:   "Hello-World",
+			})
+		}
+	}()
+
+	go func() {
+		defer wg.Done()
+		<-start
+		for n := 0; n < iterations; n++ {
+			_ = inst.sendSyncErr(func(s *instanceState) error {
+				applyWorktreeDetectionLocked(s, info)
+				return nil
+			})
+		}
+	}()
+
+	close(start)
+	wg.Wait()
 }
