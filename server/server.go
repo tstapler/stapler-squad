@@ -28,6 +28,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/memory"
 	"github.com/tstapler/stapler-squad/session/sshremote"
 	"github.com/tstapler/stapler-squad/session/tmux"
+	"github.com/tstapler/stapler-squad/telemetry"
 
 	"github.com/google/uuid"
 	"net"
@@ -1028,6 +1029,16 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	telemetryHandler := handlers.NewTelemetryHandler(analyticsProvider)
 	srv.mux.HandleFunc("POST /api/telemetry", telemetryHandler.HandleTelemetry)
 	log.Info("Registered telemetry handler at POST /api/telemetry")
+
+	// Relay browser OpenTelemetry spans/metrics to the same collector the Go
+	// server exports to (see docs/how-to/enable-opentelemetry.md). Only
+	// registered when telemetry is enabled, matching every other OTel surface.
+	if telemetry.IsGloballyEnabled() {
+		otelProxyHandler := handlers.NewOtelProxyHandler(telemetry.GlobalOTLPHTTPEndpoint())
+		srv.mux.HandleFunc("POST /api/otel/v1/traces", otelProxyHandler.HandleTraces)
+		srv.mux.HandleFunc("POST /api/otel/v1/metrics", otelProxyHandler.HandleMetrics)
+		log.Info("Registered OTel browser-trace proxy at /api/otel/v1/{traces,metrics}", "collector", telemetry.GlobalOTLPHTTPEndpoint())
+	}
 
 	// Register raw file download endpoint.
 	// Uses the FileService inside SessionService to validate paths against

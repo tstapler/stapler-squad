@@ -51,6 +51,61 @@ receiver.
 | `cache.hit`, `cache.refresh_duration_ms` | Cache performance |
 | `sync.sessions_added`, `sync.sessions_updated` | Index sync metrics |
 
+## Browser tracing (web-app)
+
+`web-app/next.config.ts` sets `output: "export"` — the Next.js app is a fully
+static bundle embedded into the Go binary (`server/web/dist`), so there is no
+Next.js/Node server to run [Next.js's own `instrumentation.ts`
+guide](https://nextjs.org/docs/app/guides/open-telemetry) in. Instead, the
+browser runs the OpenTelemetry **Web** SDK directly
+(`web-app/src/lib/telemetry/otel-init.ts`), instrumenting page loads and
+`fetch` calls (including the app's own ConnectRPC traffic), and exports spans
+to the Go server rather than straight to a collector — avoiding CORS and
+keeping the collector off the public network.
+
+Disabled by default, gated the same way as the server:
+
+```bash
+# Enable browser tracing. NEXT_PUBLIC_* vars are baked in at `next build`
+# time (static export, no server-side env reads), so this must be set before
+# `make web-build` / `pnpm run build`, not at runtime like the server's vars.
+NEXT_PUBLIC_OTEL_ENABLED=true make web-build
+
+# Override the export endpoint (default: same-origin "/api/otel/v1/traces",
+# proxied by the Go server — see below). Only needed for local dev, where
+# `next dev` runs on a different origin (:3001) than the Go server (:8543).
+NEXT_PUBLIC_OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=http://localhost:8543/api/otel/v1/traces NEXT_PUBLIC_OTEL_ENABLED=true make web-build
+```
+
+The Go server relays browser export requests to the same collector it
+exports to itself (`server/handlers/otel_proxy_handler.go`), registered at
+`POST /api/otel/v1/traces` and `POST /api/otel/v1/metrics` only when
+`OTEL_ENABLED=true` server-side too. Point it at an OTLP/**HTTP** endpoint —
+distinct from `OTEL_EXPORTER_OTLP_ENDPOINT` above, which is gRPC:
+
+```bash
+# Configure the HTTP collector endpoint the proxy relays to (default: http://localhost:4318)
+OTEL_EXPORTER_OTLP_HTTP_ENDPOINT=http://localhost:4318 OTEL_ENABLED=true ./stapler-squad
+```
+
+This requires the collector to also expose an HTTP receiver alongside the
+gRPC one already shown above — e.g. for the Datadog Agent:
+
+```yaml
+# /etc/datadog-agent/datadog.yaml
+otlp_config:
+  receiver:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+```
+
+Because the browser always talks to the Go server (same-origin), the
+collector itself never needs CORS configuration — only the Go↔collector hop
+is cross-network, and that's a plain server-to-server HTTP call.
+
 ## Compile-time auto-instrumentation (opt-in)
 
 A separate, opt-in build (`make build-otel-auto` → `stapler-squad-otel`) uses `otelc` compile-time weaving to add spans for surfaces the hand-written instrumentation above doesn't cover (e.g. ent's `database/sql` queries), without any source change. See `docs/how-to/enable-otel-auto-instrumentation.md` for the install/build/run recipe and the validated operational findings.
