@@ -97,10 +97,8 @@ func (s *HandoffSummaryService) TriggerHandoffSummary(
 
 	// BeginGeneration runs synchronously (dedup guard + interim GENERATING
 	// upsert) on the request-scoped ctx, so by the time it returns the row is
-	// guaranteed to exist and be at least GENERATING — no race with the
-	// FindRowBySessionID read below. Only the rest of the pipeline (the actual
-	// transcript read + LLM call) is dispatched async; see BeginGeneration's
-	// doc comment for the CI flake this replaced.
+	// guaranteed to exist and be at least GENERATING. Only the rest of the
+	// pipeline (the actual transcript read + LLM call) is dispatched async.
 	release, startedAt, started, err := s.generator.BeginGeneration(ctx, sessionID, sessionTitle)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to begin handoff summary generation: %w", err))
@@ -112,8 +110,33 @@ func (s *HandoffSummaryService) TriggerHandoffSummary(
 		// running after that. Mirrors
 		// SessionSummaryService.RegenerateSessionSummary's identical dispatch shape.
 		go s.generator.GenerateAndPersist(context.Background(), sessionID, sessionTitle, release, startedAt)
+
+		// Build the response directly from BeginGeneration's own known-good
+		// state rather than re-reading the row via FindRowBySessionID: a
+		// re-read here raced against the goroutine just dispatched above,
+		// which -- given a synthetic test fixture whose transcript lookup
+		// fails near-instantly -- can complete and transition the row to a
+		// terminal ERROR before this read runs, occasionally observing ERROR
+		// instead of GENERATING (the actual root cause of the flake
+		// BeginGeneration's own doc comment describes; BeginGeneration alone
+		// only closed the *other* half of that race, the not-found case).
+		// Skipping the re-read removes this race by construction: nothing
+		// dispatched after BeginGeneration returns can retroactively change
+		// what status this response reports.
+		return connect.NewResponse(&sessionv1.TriggerHandoffSummaryResponse{
+			Summary: &sessionv1.HandoffSummaryProto{
+				SessionId:           sessionID,
+				SessionTitle:        sessionTitle,
+				Status:              sessionv1.HandoffSummaryStatus_HANDOFF_SUMMARY_STATUS_GENERATING,
+				GenerationStartedAt: timestamppb.New(startedAt),
+			},
+		}), nil
 	}
 
+	// started == false: a generation was already in flight for this session
+	// (BeginGeneration's dedup guard rejected this call), so there is no
+	// "just began" state to report from -- read whatever the in-flight
+	// generation has already persisted.
 	current, err := s.generator.FindRowBySessionID(ctx, sessionID)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to query handoff summary: %w", err))
