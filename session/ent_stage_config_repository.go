@@ -337,6 +337,7 @@ func (r *EntStageConfigRepository) GetStageByID(ctx context.Context, id uuid.UUI
 
 // ListAllStages returns every stage, including disabled ones, ordered by slug.
 func (r *EntStageConfigRepository) ListAllStages(ctx context.Context) ([]*StageData, error) {
+	//nolint:entfullscan workflow stages are a small, admin-configured table; ListAllStages' contract is every stage including disabled ones.
 	rows, err := r.client.BacklogStage.Query().Order(ent.Asc(backlogstage.FieldSlug)).All(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("list stages: %w", err)
