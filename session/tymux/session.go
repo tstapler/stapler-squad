@@ -80,6 +80,14 @@ type tymuxGRPCSession struct {
 	cancelAttach context.CancelFunc
 	streamDone   chan struct{}
 
+	// teardownWait bounds teardownStandingStream's wait for the old reader
+	// goroutine to exit (Task 2.3.1a) — see maxTeardownWait's doc comment
+	// (stream.go) for the default and its rationale. A struct field (not a
+	// package const) so tests can shrink it for fast, deterministic
+	// exercises of the abandon-after-timeout path, mirroring
+	// reconnectBaseDelay/reconnectMaxDelay's convention below.
+	teardownWait time.Duration
+
 	// fanout is the local multi-subscriber broadcast (Story 2.3.2) that
 	// SubscribeToControlModeUpdates hands subscriber channels out from —
 	// one upstream standing stream, N independently-paced local
@@ -191,6 +199,7 @@ func NewTymuxGRPCSession(transport rpcTransport) TymuxManager {
 		reconnectMaxAttempts: defaultReconnectMaxAttempts,
 		reconnectBaseDelay:   defaultReconnectBaseDelay,
 		reconnectMaxDelay:    defaultReconnectMaxDelay,
+		teardownWait:         maxTeardownWait,
 	}
 }
 

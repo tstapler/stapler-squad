@@ -3,6 +3,7 @@ package lifecycle_test
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel"
@@ -94,6 +95,30 @@ func TestRegisterMetrics_Idempotent_SecondCallReturnsCachedResult(t *testing.T) 
 	require.NoError(t, err1)
 	require.NoError(t, err2)
 	require.Equal(t, err1, err2)
+}
+
+// TestStartGeneration_DerivedContext_PropagatesParentCancellation is a
+// merge gate for session/tymux Task 2.2.1a (Phase 2 plan.md, pre-mortem P1
+// #1): proves StartGeneration's derived context still observes its parent's
+// cancellation tree, rather than assuming it from -race passing. If this
+// ever regressed (e.g. StartLinkedBackgroundSpan's implementation switched
+// to a context that detaches from ctx.Done()), classifyStreamEnd's
+// ctx.Err() check would permanently read nil, silently reintroducing the
+// tear-down-before-reopen deadlock the lifecycle package was built to make
+// diagnosable.
+func TestStartGeneration_DerivedContext_PropagatesParentCancellation(t *testing.T) {
+	parentCtx, cancel := context.WithCancel(context.Background())
+	genCtx, span := lifecycle.StartGeneration(parentCtx, "test_start_generation_cancellation_propagation")
+	defer span.End()
+
+	cancel()
+
+	select {
+	case <-genCtx.Done():
+	case <-time.After(time.Second):
+		t.Fatal("genCtx.Done() never fired after the parent context was canceled")
+	}
+	require.Error(t, genCtx.Err())
 }
 
 func TestActiveGenerationsGauge_StartIncrements_EndDecrements_AbandonedStaysElevated(t *testing.T) {
