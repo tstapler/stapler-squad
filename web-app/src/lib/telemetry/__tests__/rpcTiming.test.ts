@@ -1,3 +1,4 @@
+import { trace } from "@opentelemetry/api";
 import { createRpcTimingInterceptor } from "../rpcTiming";
 import type { AnalyticsProvider } from "@/lib/analytics/types";
 
@@ -88,5 +89,56 @@ describe("createRpcTimingInterceptor", () => {
     // No analytics argument — must not throw
     const interceptor = createRpcTimingInterceptor();
     await expect(callInterceptor(interceptor, "DeleteSession", false)).resolves.not.toThrow();
+  });
+
+  describe("network queueing delay", () => {
+    const url = "http://localhost/api";
+
+    function withResourceEntries(entries: Array<Partial<PerformanceResourceTiming>>) {
+      (performanceMock as any).getEntriesByType = jest.fn((type: string) =>
+        type === "resource" ? entries : [],
+      );
+    }
+
+    it("should_recordQueueDelayMsInMeasureDetailAndSpanAttribute_When_MatchingResourceEntryExists", async () => {
+      withResourceEntries([{ name: url, fetchStart: 10, requestStart: 137 }]);
+      const setAttribute = jest.fn();
+      jest.spyOn(trace, "getActiveSpan").mockReturnValue({ setAttribute } as any);
+
+      const trackMock = jest.fn();
+      const interceptor = createRpcTimingInterceptor({ track: trackMock });
+      await callInterceptor(interceptor, "ListSessions", false);
+
+      const measureDetail = performanceMock.measure.mock.calls[0][1].detail;
+      expect(measureDetail.queueDelayMs).toBe(127);
+      expect(setAttribute).toHaveBeenCalledWith("network.queue_time_ms", 127);
+      expect(trackMock.mock.calls[0][0].labels).toMatchObject({ networkQueueDelayMs: "127" });
+    });
+
+    it("should_omitQueueDelayMs_When_NoMatchingResourceEntryExists", async () => {
+      withResourceEntries([{ name: "http://localhost/other", fetchStart: 10, requestStart: 20 }]);
+      const setAttribute = jest.fn();
+      jest.spyOn(trace, "getActiveSpan").mockReturnValue({ setAttribute } as any);
+
+      const trackMock = jest.fn();
+      const interceptor = createRpcTimingInterceptor({ track: trackMock });
+      await callInterceptor(interceptor, "ListSessions", false);
+
+      const measureDetail = performanceMock.measure.mock.calls[0][1].detail;
+      expect(measureDetail.queueDelayMs).toBeUndefined();
+      expect(setAttribute).not.toHaveBeenCalled();
+      expect(trackMock.mock.calls[0][0].labels).not.toHaveProperty("networkQueueDelayMs");
+    });
+
+    it("should_omitQueueDelayMs_When_ResourceTimingApiIsUnavailable", async () => {
+      // performanceMock (see beforeEach) has no getEntriesByType — matches
+      // this suite's non-browser test environment.
+      const trackMock = jest.fn();
+      const interceptor = createRpcTimingInterceptor({ track: trackMock });
+      await expect(callInterceptor(interceptor, "ListSessions", false)).resolves.not.toThrow();
+
+      const measureDetail = performanceMock.measure.mock.calls[0][1].detail;
+      expect(measureDetail.queueDelayMs).toBeUndefined();
+    });
   });
 });

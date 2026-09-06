@@ -897,7 +897,10 @@ func (h *ConnectRPCWebSocketHandler) HandleWebSocket(w http.ResponseWriter, r *h
 	// Call StreamTerminal, then send EndStream while the WebSocket is still open.
 	// HandleWebSocket is the single place responsible for sending EndStream, ensuring
 	// it is always sent regardless of which code path streamTerminal takes.
-	if err := h.streamTerminal(stream); err != nil {
+	streamDone := TrackOpenStream("StreamTerminal")
+	err = h.streamTerminal(stream)
+	streamDone()
+	if err != nil {
 		log.Error("StreamTerminal error", "err", err)
 		sendEndStreamError(stream, err)
 		return
