@@ -200,53 +200,26 @@ func NewEntRepository(opts ...RepositoryOption) (*EntRepository, error) {
 
 	repo.client = client
 
-	// Normalize any pre-existing BacklogItem.updated_at rows from Local to
-	// UTC (idempotent) — see backlog_item_updated_at_utc_migration.go for
-	// why this is required, not just cosmetic: mixed Local/UTC-formatted
-	// TEXT rows sort incorrectly and spuriously fail CAS preconditions
-	// built from a protobuf Timestamp (always UTC) until each row is
-	// touched once.
-	if err := runBacklogItemUpdatedAtUTCBackfill(context.Background(), repo); err != nil {
-		_ = client.Close() // best-effort cleanup; we're already returning the real startup error
-		return nil, fmt.Errorf("failed to backfill backlog item updated_at to UTC: %w", err)
-	}
-
-	// Same fix, same reason, for Workflow.updated_at — see
-	// workflow_updated_at_utc_migration.go. UpdateWorkflowRequest.expected_updated_at
-	// (webhook-triggers verify follow-ups AC9) is the same protobuf-Timestamp-derived
-	// CAS precondition class as TransitionBacklogItemStatusRequest's.
-	if err := runWorkflowUpdatedAtUTCBackfill(context.Background(), repo); err != nil {
-		_ = client.Close() // best-effort cleanup; we're already returning the real startup error
-		return nil, fmt.Errorf("failed to backfill workflow updated_at to UTC: %w", err)
-	}
-
 	// One-time-per-database correction for rows that predate the enabled field
 	// — see workflow_enabled_field_migration.go's doc comment for why this
 	// must be gated on workflowEnabledColumnAlreadyExisted rather than run
-	// unconditionally on every startup like its sibling backfills above.
+	// unconditionally like startupMigrations below. Doesn't implement
+	// Migration for the same reason (see ent_repository_migrations.go): the
+	// preexisted check has to be taken before Schema.Create() runs, above.
 	if !workflowEnabledColumnAlreadyExisted {
 		runWorkflowEnabledFieldBackfill(context.Background(), repo)
 	}
 
-	// Populate github_pr_url for pre-existing sessions that have a known PR
-	// number/owner/repo but were created before CreateSession started
-	// building the URL itself (idempotent) — see
-	// github_pr_url_backfill.go.
-	if err := runGitHubPRURLBackfill(context.Background(), repo); err != nil {
-		_ = client.Close() // best-effort cleanup; we're already returning the real startup error
-		return nil, fmt.Errorf("failed to backfill github pr url: %w", err)
-	}
-
-	// Assign a public_id to every pre-existing BacklogItem row that predates
-	// this feature (idempotent) — see BackfillBacklogItemPublicIDs in
-	// storage_backlog.go. Unlike the backfills above, this one is
-	// flock-guarded: it mints a fresh random BacklogItemID per row rather
-	// than deterministically recomputing the same value, so an unguarded
-	// race between two processes could assign two different ids to the same
-	// row.
-	if err := repo.BackfillBacklogItemPublicIDs(context.Background()); err != nil {
-		_ = client.Close() // best-effort cleanup; we're already returning the real startup error
-		return nil, fmt.Errorf("failed to backfill backlog item public id: %w", err)
+	// Every other startup data migration is uniform-shaped (idempotent,
+	// (ctx, *EntRepository) error) and lives in startupMigrations — see
+	// session/ent_repository_migrations.go for why the two migrations above
+	// this point (runStatusRemap, the enabled-field backfill) are the
+	// documented exceptions that don't.
+	for _, m := range startupMigrations {
+		if err := m.Run(context.Background(), repo); err != nil {
+			_ = client.Close() // best-effort cleanup; we're already returning the real startup error
+			return nil, fmt.Errorf("failed to run migration %q: %w", m.Name(), err)
+		}
 	}
 
 	return repo, nil

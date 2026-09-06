@@ -17,9 +17,7 @@ import (
 // Not parallel-safe: mutates a shared package global.
 func withGhBaseURL(t *testing.T, ts *httptest.Server) {
 	t.Helper()
-	orig := github.GhBaseURL
-	github.GhBaseURL = ts.URL + "/"
-	t.Cleanup(func() { github.GhBaseURL = orig })
+	t.Cleanup(github.SetGhBaseURLForTest(ts.URL + "/"))
 }
 
 // newTestPRStatusPoller returns a poller with just enough state to call

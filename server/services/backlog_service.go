@@ -311,6 +311,101 @@ type BacklogService struct {
 	// uses to construct pipelineEngine (Epic 1.5.1a). May be nil in tests
 	// that don't pass one; handlers nil-check and return CodeUnavailable.
 	pipelineModeRepo session.PipelineModeRepository
+
+	// livenessRepo backs the LivenessDefinition CRUD RPCs (Epic 1.3 of
+	// backlog-custom-workflow-stages): CreateLivenessDefinition/
+	// UpdateLivenessDefinition/DeleteLivenessDefinition/GetLivenessDefinition/
+	// ListLivenessDefinitions. Wired post-construction via
+	// SetLivenessRepository — not a NewBacklogService constructor parameter,
+	// unlike pipelineModeRepo above, to avoid touching every one of this
+	// struct's existing test call sites for a dependency Epic 1.3 introduces;
+	// Epic 1.4 may fold this into the constructor once its own
+	// livenessEngine-in-sweeps wiring needs to. May be nil; handlers nil-check
+	// and return CodeUnavailable.
+	livenessRepo session.LivenessRepository
+	// livenessEngine is the LivenessEngine (session.CachingLivenessEngine in
+	// production) whose in-process cache the CRUD RPC write handlers
+	// invalidate on Create/Update/Delete. Wired post-construction via
+	// SetLivenessEngine, same rationale as livenessRepo above. May be nil;
+	// cache invalidation is then a no-op (matching invalidatePipelineCache's
+	// duck-typed no-op-if-unwired shape for pipelineEngine).
+	livenessEngine session.LivenessEngine
+
+	// stageCRUDRepo backs the Stage/StageTransition/TransitionGate CRUD RPCs
+	// (Epic 2.7 of backlog-custom-workflow-stages):
+	// CreateStage/UpdateStage/DeleteStage/GetStage/ListStages and their
+	// transition/gate siblings. Wired post-construction via
+	// SetStageCRUDRepository, same rationale as livenessRepo above. May be
+	// nil; handlers nil-check and return CodeUnavailable.
+	stageCRUDRepo session.StageCRUDRepository
+	// stageConfigEngine is the ConfiguredWorkflowEngine whose stageConfigCache
+	// the stage/transition/gate CRUD write handlers invalidate on success.
+	// Wired post-construction via SetStageConfigEngine. May be nil; cache
+	// invalidation is then a no-op, mirroring livenessEngine above.
+	stageConfigEngine stageConfigCacheInvalidator
+	// gateSatisfactionRepo backs the RecordGateApproval RPC (Epic 2.4, Story
+	// 2.4.1). Wired post-construction via SetGateSatisfactionRepository, same
+	// rationale as stageCRUDRepo above. May be nil; the handler nil-checks and
+	// returns CodeUnavailable.
+	gateSatisfactionRepo session.GateSatisfactionRepository
+}
+
+// stageConfigCacheInvalidator is a narrow, consumer-defined interface (see
+// pipelineCacheInvalidator's identical rationale in
+// backlog_service_pipeline_mode.go) matched via duck typing against
+// s.stageConfigEngine. *session.ConfiguredWorkflowEngine satisfies it.
+type stageConfigCacheInvalidator interface {
+	InvalidateCache(ctx context.Context) error
+}
+
+// SetStageCRUDRepository wires the repository backing the Stage/
+// StageTransition/TransitionGate CRUD RPCs. nil (the default) makes those
+// RPCs return CodeUnavailable, mirroring pipelineModeRepo's nil-guard shape.
+func (s *BacklogService) SetStageCRUDRepository(repo session.StageCRUDRepository) {
+	s.stageCRUDRepo = repo
+}
+
+// SetStageConfigEngine wires the engine whose stageConfigCache the stage/
+// transition/gate CRUD write handlers invalidate on success. nil (the
+// default) makes cache invalidation a no-op.
+func (s *BacklogService) SetStageConfigEngine(engine stageConfigCacheInvalidator) {
+	s.stageConfigEngine = engine
+}
+
+// invalidateStageConfigCache re-fetches the enabled stage/transition graph
+// into s.stageConfigEngine's cache after a successful stage/transition/gate
+// write. id is used only for the Warn log line if invalidation fails.
+// No-op (silently) if stageConfigEngine is unwired. Deliberately returns
+// nothing — mirrors invalidatePipelineCache's rationale: a cache-invalidation
+// failure after a successful DB write must never fail the RPC.
+func (s *BacklogService) invalidateStageConfigCache(ctx context.Context, id string) {
+	if s.stageConfigEngine == nil {
+		return
+	}
+	if err := s.stageConfigEngine.InvalidateCache(ctx); err != nil {
+		log.WarningLog().Printf("[ConfiguredWorkflowEngine] cache invalidation failed after successful write id=%s: %v — cache may be stale until next successful invalidation", id, err)
+	}
+}
+
+// SetGateSatisfactionRepository wires the repository backing the
+// RecordGateApproval RPC. nil (the default) makes that RPC return
+// CodeUnavailable, mirroring stageCRUDRepo's nil-guard shape.
+func (s *BacklogService) SetGateSatisfactionRepository(repo session.GateSatisfactionRepository) {
+	s.gateSatisfactionRepo = repo
+}
+
+// SetLivenessRepository wires the repository backing the LivenessDefinition
+// CRUD RPCs. nil (the default) makes those RPCs return CodeUnavailable,
+// mirroring pipelineModeRepo's nil-guard shape.
+func (s *BacklogService) SetLivenessRepository(repo session.LivenessRepository) {
+	s.livenessRepo = repo
+}
+
+// SetLivenessEngine wires the LivenessEngine whose cache the LivenessDefinition
+// CRUD RPC write handlers invalidate on success. nil (the default) makes
+// cache invalidation a no-op.
+func (s *BacklogService) SetLivenessEngine(engine session.LivenessEngine) {
+	s.livenessEngine = engine
 }
 
 // PipelineEngine returns the PipelineEngine injected at construction (nil if none was
@@ -840,6 +935,9 @@ func backlogItemToProto(item *session.BacklogItemData, costFor func(tmuxUUID str
 	}
 	if item.ExternalURL != "" {
 		p.ExternalUrl = &item.ExternalURL
+	}
+	if item.BaseBranch != "" {
+		p.BaseBranch = &item.BaseBranch
 	}
 	if item.PlanApprovedAt != nil {
 		p.PlanApprovedAt = timestamppb.New(*item.PlanApprovedAt)

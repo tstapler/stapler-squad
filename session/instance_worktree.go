@@ -230,7 +230,13 @@ const BacklogBranchPrefix = "backlog/"
 // out from under another process mid-add, surfacing as git's generic "fatal: failed to
 // resolve HEAD as a valid ref". Setup runs via wt.SetupLocked() rather than wt.Setup() here
 // because this goroutine already holds the (non-reentrant) lock.
-func CreateBacklogWorktree(repoPath, branchSuffix string) (string, error) {
+// baseBranch, when non-empty, is an explicit opt-in override (BacklogItem.
+// BaseBranch): the branch is resolved by name (origin, falling back to
+// local) instead of the repo's default branch, and any resolution failure
+// (including "branch doesn't exist anywhere") is a hard error — never a
+// silent fallback to the default branch or ambient HEAD, since the caller
+// asked for this branch specifically.
+func CreateBacklogWorktree(repoPath, branchSuffix, baseBranch string) (string, error) {
 	if repoPath == "" {
 		// ResolveSessionPath("") silently resolves to the process's own cwd
 		// (the live server's own checkout) instead of erroring — a BacklogItem
@@ -238,28 +244,13 @@ func CreateBacklogWorktree(repoPath, branchSuffix string) (string, error) {
 		// see SpawnSessionFromItem's own guard), so reject before that happens.
 		return "", fmt.Errorf("CreateBacklogWorktree: repoPath must not be empty")
 	}
-	resolvedRepo, err := ResolveSessionPath(repoPath)
+	// ResolveMainRepoRoot anchors everything below (repair, lock, fetch, worktree
+	// add) to the real repo root, not to whatever worktree path repoPath happened
+	// to be stored as — see its doc comment for why that matters (WithRepoWorktreeLock's
+	// lock key and RemoveWorktree's cleanup both key off this path).
+	resolvedRepo, err := ResolveMainRepoRoot(repoPath)
 	if err != nil {
 		return "", fmt.Errorf("CreateBacklogWorktree: %w", err)
-	}
-
-	// BacklogItem.RepoPath is stored verbatim from whatever the reporting caller
-	// supplied — nothing upstream guarantees it's the main checkout rather than a
-	// worktree (e.g. an agent running inside one filed the item and passed its own
-	// CWD). git worktree add technically still works when run from another
-	// worktree's directory (they share the same .git), but every later operation on
-	// the new worktree — WithRepoWorktreeLock's lock key, RemoveWorktree's cleanup —
-	// would then be anchored to that other worktree's path instead of the real repo
-	// root. If that anchor is itself ephemeral (e.g. a triage worktree deleted once
-	// triage finishes), later git -C <deleted-dir> calls fail with a generic error
-	// that isn't recognized as expected cleanup, orphaning .git/worktrees metadata.
-	// Resolve to the actual main repo root before doing anything else so the entire
-	// operation — repair, lock, fetch, worktree add — is anchored consistently no
-	// matter what path got stored. Best-effort: if resolution fails (e.g. repoPath
-	// isn't a git repo at all yet), fall through with the original path unchanged —
-	// resolveSessionPath's caller handles that case (directory-mode fallback).
-	if mainRepo, mainErr := GetMainRepoPath(resolvedRepo); mainErr == nil && mainRepo != "" {
-		resolvedRepo = mainRepo
 	}
 
 	var worktreePath string
@@ -270,24 +261,33 @@ func CreateBacklogWorktree(repoPath, branchSuffix string) (string, error) {
 		branchName := BacklogBranchPrefix + branchSuffix
 		var wt *git.GitWorktree
 		var err error
-		defaultBranch, baseSHA, fetchErr := git.ResolveDefaultBranchSHA(resolvedRepo)
-		if fetchErr != nil {
-			log.Warn("failed to resolve default branch tip from origin, falling back to local", "repoPath", resolvedRepo, "error", fetchErr)
-			defaultBranch, baseSHA, err = git.ResolveDefaultLocalBranchSHA(resolvedRepo)
+		var defaultBranch, baseSHA string
+		var resolveErr error
+		if baseBranch != "" {
+			defaultBranch = baseBranch
+			baseSHA, resolveErr = git.ResolveExplicitBranchSHA(resolvedRepo, baseBranch)
+		} else {
+			defaultBranch, baseSHA, resolveErr = git.ResolveWorktreeBaseCommit(resolvedRepo)
 		}
 		switch {
-		case err == nil && baseSHA != "":
-			log.Debug("CreateBacklogWorktree: branching from default branch", "repoPath", resolvedRepo, "defaultBranch", defaultBranch, "baseSHA", baseSHA)
+		case resolveErr != nil && baseBranch != "":
+			return fmt.Errorf("resolve base_branch %q: %w", baseBranch, resolveErr)
+		case resolveErr != nil:
+			return fmt.Errorf("resolve default branch: %w", resolveErr)
+		case baseSHA != "":
+			if baseBranch != "" {
+				log.Debug("CreateBacklogWorktree: branching from explicit base_branch override", "repoPath", resolvedRepo, "baseBranch", baseBranch, "baseSHA", baseSHA)
+			} else {
+				log.Debug("CreateBacklogWorktree: branching from default branch", "repoPath", resolvedRepo, "defaultBranch", defaultBranch, "baseSHA", baseSHA)
+			}
 			wt, _, err = git.NewGitWorktreeFromCommitSHA(resolvedRepo, branchSuffix, branchName, baseSHA)
-		case git.IsUnbornRepo(resolvedRepo):
-			// No commits exist anywhere in resolvedRepo yet, so ambient HEAD carries
-			// no risk of branching from an unrelated branch's work — there is no other
-			// branch. Preserves the auto-create-initial-commit behavior findGitRepoRoot
-			// already provides for a brand-new, never-committed-to repo.
+		default:
+			// No commits exist anywhere in resolvedRepo yet (IsUnbornRepo), so ambient
+			// HEAD carries no risk of branching from an unrelated branch's work — there
+			// is no other branch. Preserves the auto-create-initial-commit behavior
+			// findGitRepoRoot already provides for a brand-new, never-committed-to repo.
 			log.Warn("no default branch found and repo has no commits yet, branching from empty ambient HEAD", "repoPath", resolvedRepo)
 			wt, _, err = git.NewGitWorktreeWithBranch(resolvedRepo, branchSuffix, branchName)
-		default:
-			return fmt.Errorf("resolve default branch (origin fetch failed: %w, local lookup failed: %v)", fetchErr, err)
 		}
 		if err != nil {
 			return err

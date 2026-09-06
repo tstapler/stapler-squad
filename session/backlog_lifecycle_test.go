@@ -13,6 +13,8 @@ import (
 	"testing"
 	"time"
 
+	gogit "github.com/go-git/go-git/v5"
+	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -4179,7 +4181,7 @@ func TestBacklogLifecycleListener_HeadlessPoolAlone_NoLongerTriggersReviewGateSp
 	// NewBacklogLifecycleListenerWithPool wires a headless pool but no session
 	// creator — the pool is still used elsewhere (PR description drafting), but
 	// must no longer be treated as "a review mechanism is configured".
-	listener := NewBacklogLifecycleListenerWithPool(storage, nil, nil)
+	listener := NewBacklogLifecycleListenerWithPool(storage, nil, nil, nil)
 
 	done := make(chan struct{})
 	go func() {
@@ -4201,6 +4203,75 @@ func TestBacklogLifecycleListener_HeadlessPoolAlone_NoLongerTriggersReviewGateSp
 	for _, s := range sessions {
 		assert.NotEqual(t, SessionRoleReview, s.Role, "no review ItemSession should be created when only a headless pool (no session creator) is configured")
 	}
+}
+
+// TestReviewGateSpawn_should_FireForReviewToPrPending_When_AutomatedReviewGateAttachedMatchingTodaysBehavior
+// is Task 2.4.3d's regression test: onSessionExited's generalized review-gate
+// spawn condition (transitionHasAutomatedReviewGate, session/backlog_lifecycle.go
+// — replacing the old hardcoded `toStatus == BacklogStatusReview` literal)
+// must still fire a review session for the built-in in_progress -> review
+// transition exactly as before, with no workflowEngine wired (matching
+// today's production wiring — server/dependencies.go does not yet call
+// SetWorkflowEngine): l.transitionHasAutomatedReviewGate short-circuits to
+// true on `to == BacklogStatusReview` unconditionally, so this is unaffected
+// by the ConfiguredWorkflowEngine generalization landing.
+func TestReviewGateSpawn_should_FireForReviewToPrPending_When_AutomatedReviewGateAttachedMatchingTodaysBehavior(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	createdItem, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:              "Built-in review gate still fires",
+		AcceptanceCriteria: `[]`,
+		Priority:           1,
+		Status:             string(BacklogStatusInProgress),
+		RepoPath:           newNonEmptyDiffGitRepo(t),
+	})
+	require.NoError(t, err)
+
+	sessionUUID := uuid.New().String()
+	_, err = storage.CreateItemSession(ctx, ItemSessionData{
+		ItemID:      createdItem.ID,
+		SessionUUID: sessionUUID,
+		SessionRole: SessionRoleWork,
+	})
+	require.NoError(t, err)
+
+	reviewInstance := &Instance{UUID: uuid.New().String()}
+	spawner := &mockReviewGateSpawner{instance: reviewInstance}
+	listener := NewBacklogLifecycleListenerWithSpawner(storage, spawner)
+	// Explicitly confirm the nil-workflowEngine default this test relies on —
+	// transitionHasAutomatedReviewGate's literal `to == BacklogStatusReview`
+	// branch must fire the review gate with zero ConfiguredWorkflowEngine
+	// wiring, matching production today.
+	require.Nil(t, listener.getWorkflowEngine())
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		listener.onSessionExited(sessionUUID)
+	}()
+	waitWithTimeout(t, done)
+
+	require.Eventually(t, func() bool {
+		return spawner.getCallCount() == 1
+	}, 2*time.Second, 20*time.Millisecond, "the built-in review->pr_pending gate must still spawn a review session")
+
+	fetchedItem, err := storage.GetBacklogItem(ctx, createdItem.ID)
+	require.NoError(t, err)
+	require.Equal(t, string(BacklogStatusReview), fetchedItem.Status)
+
+	sessions, err := storage.ListItemSessions(ctx, createdItem.ID)
+	require.NoError(t, err)
+	var reviewEntry *ItemSessionSummary
+	for i := range sessions {
+		if sessions[i].Role == SessionRoleReview {
+			reviewEntry = &sessions[i]
+		}
+	}
+	require.NotNil(t, reviewEntry, "a review ItemSession must be created")
+	assert.Equal(t, reviewInstance.UUID, reviewEntry.SessionUUID)
 }
 
 // --- Story 3.3.1: CaptureShipSnapshot ---
@@ -4661,4 +4732,72 @@ func TestHasActiveSession_should_PreserveWorkAndReviewGating_When_JulesRoleAdded
 			assert.False(t, got, "an ended row can never be active, regardless of role %q", tc.role)
 		})
 	}
+}
+
+// TestCreateBacklogItem_BaseBranch_RoundTripsThroughGetBacklogItem verifies
+// the explicit base_branch override (the opt-in escape hatch from the
+// default-branch-only behavior) persists end to end through Storage, and
+// that UpdateBacklogItem can change it afterward.
+func TestCreateBacklogItem_BaseBranch_RoundTripsThroughGetBacklogItem(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	created, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:      "item with an explicit base_branch override",
+		BaseBranch: "release-2.0",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "release-2.0", created.BaseBranch)
+
+	fetched, err := storage.GetBacklogItem(ctx, created.ID)
+	require.NoError(t, err)
+	assert.Equal(t, "release-2.0", fetched.BaseBranch)
+
+	newBranch := "release-2.1"
+	updated, err := storage.UpdateBacklogItem(ctx, created.ID, BacklogItemUpdate{BaseBranch: &newBranch}, nil)
+	require.NoError(t, err)
+	assert.Equal(t, "release-2.1", updated.BaseBranch)
+}
+
+// TestCreateBacklogItem_CanonicalizesRepoPathToMainRepo verifies
+// Storage.CreateBacklogItem redirects a linked-worktree RepoPath to its main
+// repo root at creation time. Every creation path (create_backlog_item,
+// import_github_issue, the web UI's RPCs) funnels through this one function,
+// so this is the single point that keeps two items targeting the same repo —
+// one filed against the main checkout, another by an agent that passed its
+// own in-progress worktree as repo_path — from ending up with two different
+// RepoPath strings and fragmenting the web UI's "group by repository" view.
+func TestCreateBacklogItem_CanonicalizesRepoPathToMainRepo(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	mainDir := t.TempDir()
+	repo, err := gogit.PlainInit(mainDir, false)
+	require.NoError(t, err)
+	wt, err := repo.Worktree()
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(mainDir, "f.txt"), []byte("x"), 0644))
+	_, err = wt.Add("f.txt")
+	require.NoError(t, err)
+	_, err = wt.Commit("init", &gogit.CommitOptions{Author: &object.Signature{Name: "t", Email: "t@example.com"}})
+	require.NoError(t, err)
+
+	worktreeDir := filepath.Join(t.TempDir(), "agent-worktree")
+	runGitOrFail(t, mainDir, "worktree", "add", "-b", "agent-branch", worktreeDir)
+
+	created, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:    "item filed from an agent's own worktree",
+		RepoPath: worktreeDir,
+	})
+	require.NoError(t, err)
+
+	wantMain, err := filepath.EvalSymlinks(mainDir)
+	require.NoError(t, err)
+	gotRepoPath, err := filepath.EvalSymlinks(created.RepoPath)
+	require.NoError(t, err)
+	assert.Equal(t, wantMain, gotRepoPath, "RepoPath must be canonicalized to the main repo, not stored as the filing agent's worktree")
 }

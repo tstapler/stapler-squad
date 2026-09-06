@@ -16,8 +16,7 @@ import (
 // func. Same-package variant of the pattern used in
 // server/services/backlog_github_rpc_test.go.
 func resetGhBaseURLForTest(ts *httptest.Server) func() {
-	GhBaseURL = ts.URL + "/"
-	return func() { GhBaseURL = "https://api.github.com/" }
+	return SetGhBaseURLForTest(ts.URL + "/")
 }
 
 func TestGetPRByNumber_should_ReturnPRInfo_When_PRExists(t *testing.T) {

@@ -275,7 +275,7 @@ func TestResolveSessionPath_should_ErrorNotFallBackToRepoPath_When_GitManagedWor
 	t.Setenv("STAPLER_SQUAD_TEST_DIR", testDir)
 	require.NoError(t, os.WriteFile(filepath.Join(testDir, "worktrees"), []byte("not a directory"), 0o644))
 
-	path, useWorktree, err := resolveSessionPath(repoPath, "test-slug")
+	path, useWorktree, err := resolveSessionPath(repoPath, "test-slug", "")
 
 	require.Error(t, err)
 	assert.False(t, useWorktree)
@@ -289,7 +289,7 @@ func TestResolveSessionPath_should_FallBackToDirectory_When_RepoIsNotGitManaged(
 	t.Parallel()
 	repoPath := t.TempDir()
 
-	path, useWorktree, err := resolveSessionPath(repoPath, "test-slug")
+	path, useWorktree, err := resolveSessionPath(repoPath, "test-slug", "")
 
 	require.NoError(t, err)
 	assert.False(t, useWorktree)
@@ -310,7 +310,7 @@ func TestResolveSessionPath_should_CreateWorktree_When_RepoHasNoInitialCommit(t 
 	repoPath := t.TempDir()
 	initGitRepoForTest(t, repoPath) // git-initialized, but zero commits
 
-	path, useWorktree, err := resolveSessionPath(repoPath, "test-slug")
+	path, useWorktree, err := resolveSessionPath(repoPath, "test-slug", "")
 
 	require.NoError(t, err)
 	assert.True(t, useWorktree)
@@ -3610,6 +3610,96 @@ func TestTriggerTriage_should_PersistFailureCapture_When_HeadlessCallItselfError
 	assert.Contains(t, string(content), "partial output before the call errored out")
 }
 
+// fakeTriageLivenessEngine is a minimal test double implementing
+// session.LivenessEngine for TriggerTriage's call-budget regression tests
+// below (Epic 1.4, Story 1.4.2) — always returns the same definition
+// regardless of stage/mode, sufficient for these narrow single-item tests.
+type fakeTriageLivenessEngine struct {
+	def session.LivenessDefinition
+}
+
+func (f *fakeTriageLivenessEngine) LivenessFor(_ session.BacklogStatus, _ session.PipelineMode) (session.LivenessDefinition, error) {
+	return f.def, nil
+}
+
+// TestTriggerTriage_should_UseFlatThirtyMinuteConstant_When_LivenessEngineIsNil
+// is Story 1.4.2's fallback path: with no LivenessEngine wired (the zero value of
+// BacklogService.livenessEngine, matching every pre-Epic-1.4 construction), the
+// headless call's context.WithTimeout must use the flat triageCallBudget constant
+// (30m), byte-for-byte unchanged from before.
+func TestTriggerTriage_should_UseFlatThirtyMinuteConstant_When_LivenessEngineIsNil(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	pool := &fakeHeadlessPool{response: validTriageJSON()}
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+	svc.SetHeadlessPool(pool)
+	// svc.livenessEngine intentionally left nil.
+
+	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+		Title:    "nil-liveness-engine triage item",
+		Status:   string(session.BacklogStatusIdea),
+		Priority: 3,
+		RepoPath: t.TempDir(),
+	})
+	require.NoError(t, err)
+
+	_, trigErr := svc.TriggerTriage(t.Context(), connect.NewRequest(&sessionv1.TriggerTriageRequest{
+		ItemId: item.ID,
+	}))
+	require.NoError(t, trigErr)
+
+	require.Eventually(t, func() bool {
+		return pool.callCount() == 1
+	}, 5*time.Second, 50*time.Millisecond, "expected exactly one headless triage call")
+
+	call := pool.firstCall()
+	require.True(t, call.hasDeadline, "the headless call's context must carry a deadline")
+	remaining := time.Until(call.ctxDeadline)
+	assert.Greater(t, remaining, 25*time.Minute, "remaining budget must be close to the flat 30m triageCallBudget constant, not a shorter resolved value")
+	assert.LessOrEqual(t, remaining, 30*time.Minute, "remaining budget must not exceed the flat 30m triageCallBudget constant")
+}
+
+// TestTriggerTriage_should_UseResolvedFortyFiveMinuteTimeout_When_SddModeOverrideConfigured
+// is Story 1.4.2's concrete fix: with a LivenessEngine resolving
+// ("idea","sdd") to ExpectedDuration=45m, an sdd-mode item's headless triage call gets a
+// 45m context timeout, not the flat 30m triageCallBudget constant.
+func TestTriggerTriage_should_UseResolvedFortyFiveMinuteTimeout_When_SddModeOverrideConfigured(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	pool := &fakeHeadlessPool{response: validTriageJSON()}
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+	svc.SetHeadlessPool(pool)
+	svc.livenessEngine = &fakeTriageLivenessEngine{def: session.LivenessDefinition{
+		Kind:             session.LivenessKindDurationBudget,
+		ExpectedDuration: 45 * time.Minute,
+		StalenessMargin:  10 * time.Minute,
+	}}
+
+	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+		Title:        "sdd-mode override triage item",
+		Status:       string(session.BacklogStatusIdea),
+		Priority:     3,
+		RepoPath:     t.TempDir(),
+		PipelineMode: "sdd",
+	})
+	require.NoError(t, err)
+
+	_, trigErr := svc.TriggerTriage(t.Context(), connect.NewRequest(&sessionv1.TriggerTriageRequest{
+		ItemId: item.ID,
+	}))
+	require.NoError(t, trigErr)
+
+	require.Eventually(t, func() bool {
+		return pool.callCount() == 1
+	}, 5*time.Second, 50*time.Millisecond, "expected exactly one headless triage call")
+
+	call := pool.firstCall()
+	require.True(t, call.hasDeadline, "the headless call's context must carry a deadline")
+	remaining := time.Until(call.ctxDeadline)
+	assert.Greater(t, remaining, 40*time.Minute, "remaining budget must be close to the resolved 45m ExpectedDuration, not the flat 30m constant")
+	assert.LessOrEqual(t, remaining, 45*time.Minute, "remaining budget must not exceed the resolved 45m ExpectedDuration")
+}
+
 func TestTriggerTriage_should_UseModeSpecificTriagePrompt_When_ItemHasNonDefaultPipelineModeAndFirstTriageBranch(t *testing.T) {
 	t.Parallel()
 	storage := createTestStorage(t)
@@ -5003,10 +5093,10 @@ func TestBacklogWorkBranchSlug_TwoItemsWithCollidingTitles_ShareOneWorktree(t *t
 	slugB := backlogWorkBranchSlug(repoDir, titleB)
 	require.Equal(t, slugA, slugB, "fixture requires titleA/titleB to collide on the same slug")
 
-	pathA, err := session.CreateBacklogWorktree(repoDir, slugA)
+	pathA, err := session.CreateBacklogWorktree(repoDir, slugA, "")
 	require.NoError(t, err)
 
-	pathB, err := session.CreateBacklogWorktree(repoDir, slugB)
+	pathB, err := session.CreateBacklogWorktree(repoDir, slugB, "")
 	require.NoError(t, err)
 
 	assert.Equal(t, pathA, pathB,

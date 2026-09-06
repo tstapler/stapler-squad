@@ -183,6 +183,15 @@ type BacklogLifecycleListener struct {
 	// construction and forwarded unchanged into runner — never mutated afterward.
 	pipelineEngine PipelineEngine
 
+	// livenessEngine resolves per-stage/per-pipeline-mode stuck-detection thresholds (Epic 1.4 of
+	// backlog-custom-workflow-stages), replacing the flat maxHeadlessTriageSessionStaleness/
+	// maxWorkSessionStaleness/bounceThreshold/bounceLookback constants at their reconcile* call
+	// sites. Optional — nil (the default for every constructor except
+	// NewBacklogLifecycleListenerWithPool, production's only caller) falls back to each call
+	// site's literal constant, unchanged from pre-Epic-1.4 behavior. Set once at construction,
+	// same pattern as pipelineEngine above — never mutated afterward.
+	livenessEngine LivenessEngine
+
 	// chainReconcilerMu guards chainReconciler for concurrent Set/get access.
 	chainReconcilerMu sync.RWMutex
 	// chainReconciler completes pipeline chain-fires interrupted by a crash
@@ -192,7 +201,61 @@ type BacklogLifecycleListener struct {
 	// via SetChainReconciler.
 	chainReconciler *TriggerChainReconciler
 
+	// gateSatisfactionRepoMu guards gateSatisfactionRepo for concurrent Set/get access.
+	gateSatisfactionRepoMu sync.RWMutex
+	// gateSatisfactionRepo backs reconcileCustomGateChecks' scan for in-flight
+	// custom-check invocations (Epic 2.4, Task 2.4.4c). nil (the default)
+	// makes that sweep a no-op — matches every other optional-dependency
+	// detector's nil-safe convention in this file. Wired via
+	// SetGateSatisfactionRepository.
+	gateSatisfactionRepo GateSatisfactionRepository
+
+	// workflowEngineMu guards workflowEngine for concurrent Set/get access.
+	workflowEngineMu sync.RWMutex
+	// workflowEngine is consulted by transitionHasAutomatedReviewGate (Epic
+	// 2.4, Story 2.4.3) to detect a custom transition's attached
+	// GateKindAutomatedReview gate, generalizing the review-gate spawn
+	// condition beyond the built-in review status literal. nil (the default —
+	// server/dependencies.go does not wire a ConfiguredWorkflowEngine in here
+	// yet) makes transitionHasAutomatedReviewGate degrade to that literal
+	// comparison only, unchanged from pre-Epic-2.4 behavior. Wired via
+	// SetWorkflowEngine.
+	workflowEngine WorkflowEngine
+
 	enabled atomic.Bool
+}
+
+// SetWorkflowEngine wires the WorkflowEngine transitionHasAutomatedReviewGate
+// consults for a custom transition's automated-review gate. nil (the
+// default) is safe — see the field's doc comment.
+func (l *BacklogLifecycleListener) SetWorkflowEngine(engine WorkflowEngine) {
+	l.workflowEngineMu.Lock()
+	defer l.workflowEngineMu.Unlock()
+	l.workflowEngine = engine
+}
+
+// getWorkflowEngine returns the currently-wired WorkflowEngine (nil if none).
+func (l *BacklogLifecycleListener) getWorkflowEngine() WorkflowEngine {
+	l.workflowEngineMu.RLock()
+	defer l.workflowEngineMu.RUnlock()
+	return l.workflowEngine
+}
+
+// SetGateSatisfactionRepository wires the repository reconcileCustomGateChecks
+// (session/backlog_lifecycle_gates.go) scans for in-flight custom-check
+// invocations. nil (the default) is safe — see the field's doc comment.
+func (l *BacklogLifecycleListener) SetGateSatisfactionRepository(repo GateSatisfactionRepository) {
+	l.gateSatisfactionRepoMu.Lock()
+	defer l.gateSatisfactionRepoMu.Unlock()
+	l.gateSatisfactionRepo = repo
+}
+
+// getGateSatisfactionRepo returns the currently-wired GateSatisfactionRepository
+// (nil if none).
+func (l *BacklogLifecycleListener) getGateSatisfactionRepo() GateSatisfactionRepository {
+	l.gateSatisfactionRepoMu.RLock()
+	defer l.gateSatisfactionRepoMu.RUnlock()
+	return l.gateSatisfactionRepo
 }
 
 // PipelineEngine returns the PipelineEngine injected at construction (nil if none was
@@ -593,12 +656,14 @@ func (l *BacklogLifecycleListener) Shutdown() {
 }
 
 // newListenerBase initialises fields common to all BacklogLifecycleListener constructors.
-// pipelineEngine may be nil — see the field's doc comment for the fallback behavior.
-func newListenerBase(storage *Storage, pipelineEngine PipelineEngine) *BacklogLifecycleListener {
+// pipelineEngine and livenessEngine may both be nil — see their field doc comments for the
+// fallback behavior.
+func newListenerBase(storage *Storage, pipelineEngine PipelineEngine, livenessEngine LivenessEngine) *BacklogLifecycleListener {
 	ctx, cancel := context.WithCancel(context.Background())
 	l := &BacklogLifecycleListener{
 		storage:                 storage,
 		pipelineEngine:          pipelineEngine,
+		livenessEngine:          livenessEngine,
 		reviewSem:               make(chan struct{}, maxConcurrentReviewGates),
 		shutdownCtx:             ctx,
 		shutdownCancel:          cancel,
@@ -617,13 +682,13 @@ func newListenerBase(storage *Storage, pipelineEngine PipelineEngine) *BacklogLi
 // The review gate is disabled (sessionCreator=nil, headlessPool=nil). No PipelineEngine
 // is wired (nil) — callers needing one should use NewBacklogLifecycleListenerWithPool.
 func NewBacklogLifecycleListener(storage *Storage) *BacklogLifecycleListener {
-	return newListenerBase(storage, nil)
+	return newListenerBase(storage, nil, nil)
 }
 
 // NewBacklogLifecycleListenerWithSpawner creates a listener that will spawn a
 // review gate session when a work session exits and SkipReviewGate is false.
 func NewBacklogLifecycleListenerWithSpawner(storage *Storage, spawner ReviewGateSpawner) *BacklogLifecycleListener {
-	l := newListenerBase(storage, nil)
+	l := newListenerBase(storage, nil, nil)
 	l.SetSessionCreator(spawner)
 	return l
 }
@@ -631,9 +696,11 @@ func NewBacklogLifecycleListenerWithSpawner(storage *Storage, spawner ReviewGate
 // NewBacklogLifecycleListenerWithPool creates a listener that uses a headless.Pool
 // for review gate calls instead of spawning a tmux session. pipelineEngine is the
 // shared PipelineEngine instance (Epic 1.5, Story 1.5.1) — pass nil to fall back to
-// the built-in default pipeline for every item.
-func NewBacklogLifecycleListenerWithPool(storage *Storage, pool *headless.Pool, pipelineEngine PipelineEngine) *BacklogLifecycleListener {
-	l := newListenerBase(storage, pipelineEngine)
+// the built-in default pipeline for every item. livenessEngine is the shared
+// LivenessEngine instance (Epic 1.4) — pass nil to fall back to each stuck-detection
+// sweep's literal constant for every item.
+func NewBacklogLifecycleListenerWithPool(storage *Storage, pool *headless.Pool, pipelineEngine PipelineEngine, livenessEngine LivenessEngine) *BacklogLifecycleListener {
+	l := newListenerBase(storage, pipelineEngine, livenessEngine)
 	l.headlessPool = pool
 	return l
 }
@@ -795,7 +862,7 @@ func (l *BacklogLifecycleListener) onSessionExited(sessionUUID string) {
 	go l.triggerDequeue(context.Background())
 
 	// Spawn review gate if the item moved to review and a review mechanism is configured.
-	if toStatus == BacklogStatusReview && !item.SkipReviewGate && l.getSessionCreator() != nil {
+	if l.transitionHasAutomatedReviewGate(BacklogStatusInProgress, toStatus) && !item.SkipReviewGate && l.getSessionCreator() != nil {
 		go func() {
 			// Acquire the bounded semaphore to prevent unbounded goroutine fan-out
 			// when many sessions exit simultaneously.
@@ -805,9 +872,57 @@ func (l *BacklogLifecycleListener) onSessionExited(sessionUUID string) {
 				return
 			}
 			defer func() { <-l.reviewSem }()
-			l.spawnReviewGate(item, is)
+			l.spawnReviewGate(builtInReviewGateContext, item, is)
 		}()
 	}
+}
+
+// builtInReviewGateContext is the GateContext (session/review_gate.go) passed
+// to every review-gate spawn for the built-in review->pr_pending transition:
+// no persisted TransitionGate backs it (GateID ""), and it always reviews a
+// code diff (RequiresDiff: true) — the same behavior review_gate.go's Run had
+// unconditionally before Story 2.4.3 generalized it to accept a GateContext.
+var builtInReviewGateContext = GateContext{
+	GateID:           "",
+	TargetTransition: BacklogStatusReview,
+	RequiresDiff:     true,
+}
+
+// transitionHasAutomatedReviewGate reports whether transitioning from `from`
+// to `to` should fire the review gate (Epic 2.4, Story 2.4.3's
+// generalization of this call site's old hardcoded `toStatus ==
+// BacklogStatusReview` literal). The built-in review status always qualifies
+// — unconditionally, not gated behind any persisted TransitionGate row, since
+// the built-in workflow-stage seed migration (Epic 2.2) does not itself seed
+// an automated_review gate for this edge, and requiring one here would
+// silently stop the review gate from firing for every install that hasn't
+// separately configured a custom graph. Additionally (not instead), if
+// l.workflowEngine is wired and reports a GateKindAutomatedReview gate
+// attached to this exact (from,to) edge, that also qualifies — the seam a
+// custom-transition automated-review gate (e.g. idea -> ready) needs to
+// eventually fire through this same call site. l.workflowEngine is nil in
+// today's production wiring (server/dependencies.go does not yet call
+// SetWorkflowEngine), so in practice this degrades to the literal
+// `to == BacklogStatusReview` check — zero behavior change until a future
+// change wires a ConfiguredWorkflowEngine in here.
+func (l *BacklogLifecycleListener) transitionHasAutomatedReviewGate(from, to BacklogStatus) bool {
+	if to == BacklogStatusReview {
+		return true
+	}
+	engine := l.getWorkflowEngine()
+	if engine == nil {
+		return false
+	}
+	gates, err := engine.PendingGates(BacklogItemTransitionInput{Status: from}, to)
+	if err != nil {
+		return false
+	}
+	for _, g := range gates {
+		if g.Kind == GateKindAutomatedReview {
+			return true
+		}
+	}
+	return false
 }
 
 // BackfillStuckStates seeds durable BacklogStuckState rows for items that are
@@ -983,7 +1098,7 @@ func (l *BacklogLifecycleListener) ReconcileStuck(ctx context.Context) {
 						return
 					}
 					defer func() { <-l.reviewSem }()
-					l.spawnReviewGate(itemCopy, isCopy)
+					l.spawnReviewGate(builtInReviewGateContext, itemCopy, isCopy)
 				}(&itemData, isCopy)
 			}
 		}
@@ -1100,6 +1215,15 @@ func (l *BacklogLifecycleListener) ReconcileStuck(ctx context.Context) {
 	// sent.
 	l.runStuckDetector("orphaned_triage_remediation", &okNames, &panickedNames, func() {
 		l.reconcileOrphanedTriageRemediation(ctx, er)
+	})
+
+	// Flag a custom-transition gate check (Epic 2.4, Task 2.4.4c) whose
+	// invocation has been open longer than its bound LivenessDefinition's
+	// StalenessThreshold — the same LivenessEngine-consulting sweep pattern as
+	// reconcileOrphanedTriageItems above, applied to InvokeCustomGateCheck's
+	// in-flight GateSatisfactionRecord rows instead of ItemSession rows.
+	l.runStuckDetector("gate_timeout", &okNames, &panickedNames, func() {
+		l.reconcileCustomGateChecks(ctx, er)
 	})
 
 	// Flag queued items DequeueNextQueuedItems' planning gate refuses to ever
@@ -1559,8 +1683,25 @@ func (l *BacklogLifecycleListener) reconcileBouncingItems(ctx context.Context, e
 		return
 	}
 
-	since := time.Now().Add(-bounceLookback)
 	for _, item := range items {
+		// Resolve this item's Shape-C liveness definition (CycleThreshold/CycleLookback)
+		// per item, inside the loop — a per-mode override means these can legitimately
+		// differ between items in the same tick (Epic 1.4, Story 1.4.3). Keyed to
+		// BacklogStatusReview, NOT BacklogStatusInProgress: DefaultLivenessEngine's table
+		// (Epic 1.2) already occupies BacklogStatusInProgress with the Shape-B stale-work
+		// definition, and a LivenessDefinition is a tagged union with exactly one Kind per
+		// stage — see this file's Epic 1.4 plan-correction note in
+		// project_plans/backlog-custom-workflow-stages/implementation/plan.md's Story 1.4.3.
+		cycleThreshold := bounceThreshold
+		cycleLookback := bounceLookback
+		if l.livenessEngine != nil {
+			if def, defErr := l.livenessEngine.LivenessFor(BacklogStatusReview, PipelineMode(item.PipelineMode)); defErr == nil && !def.IsNoTimeout() {
+				cycleThreshold = def.CycleThreshold
+				cycleLookback = def.CycleLookback
+			}
+		}
+		since := time.Now().Add(-cycleLookback)
+
 		// Before treating this item as failing, check whether its linked PR
 		// already merged — including a PR merged manually, outside the app's
 		// own ship flow (allow_auto_merge is disabled at the repo-settings
@@ -1655,11 +1796,11 @@ func (l *BacklogLifecycleListener) reconcileBouncingItems(ctx context.Context, e
 		}
 		hasPass := latestOutcome == string(ReviewOutcomePass)
 
-		if !isBouncing(count, hasPass) {
+		if !isBouncing(count, cycleThreshold, hasPass) {
 			continue
 		}
 
-		reasonDetail := fmt.Sprintf("bounced in_progress<->review %d times in the last %s with no PASS verdict", count, bounceLookback)
+		reasonDetail := fmt.Sprintf("bounced in_progress<->review %d times in the last %s with no PASS verdict", count, cycleLookback)
 		if latestOutcome != "" {
 			// sanitizeField at 500 matches the existing convention for
 			// rendering a ReviewVerdict.Summary into operator/agent-facing
@@ -1684,8 +1825,8 @@ func (l *BacklogLifecycleListener) reconcileBouncingItems(ctx context.Context, e
 		if !ok || row.NotifiedAt != nil {
 			continue
 		}
-		log.WarningLog().Printf("[BacklogLifecycle] item %s bouncing (%d cycles in %s, no PASS)", item.ID, count, bounceLookback)
-		notifyBody := fmt.Sprintf("%s — bounced between in_progress and review %d times in the last %s with no PASS verdict. It may be stuck in a non-converging rework loop.", item.Title, count, bounceLookback)
+		log.WarningLog().Printf("[BacklogLifecycle] item %s bouncing (%d cycles in %s, no PASS)", item.ID, count, cycleLookback)
+		notifyBody := fmt.Sprintf("%s — bounced between in_progress and review %d times in the last %s with no PASS verdict. It may be stuck in a non-converging rework loop.", item.Title, count, cycleLookback)
 		if latestOutcome != "" {
 			notifyBody = fmt.Sprintf("%s Most recent verdict: %s — %s", notifyBody, latestOutcome, sanitizeField(latestSummary, 500))
 		}
@@ -1778,7 +1919,7 @@ func (l *BacklogLifecycleListener) selfHealStuck(ctx context.Context, er *EntRep
 		return
 	}
 	for _, row := range open {
-		if row.ItemStatus == BacklogStatusDone || row.ItemStatus == BacklogStatusArchived {
+		if IsTerminalStatus(row.ItemStatus) {
 			// Blanket terminal rule — see doc comment above. An item that has
 			// truly finished has nothing left needing operator attention,
 			// regardless of which reason its stuck row is for.

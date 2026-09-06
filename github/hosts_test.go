@@ -57,8 +57,8 @@ func TestGraphQLURLForHost(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			if tt.override != "" {
-				EnterpriseBaseURLOverride[host] = tt.override
-				defer delete(EnterpriseBaseURLOverride, host)
+				SetEnterpriseBaseURLOverride(host, tt.override)
+				defer SetEnterpriseBaseURLOverride(host, "")
 			}
 
 			if got := graphQLURLForHost(host); got != tt.want {

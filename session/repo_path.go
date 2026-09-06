@@ -661,6 +661,30 @@ func GetMainRepoPath(path string) (string, error) {
 	return absPath, nil
 }
 
+// ResolveMainRepoRoot resolves repoPath to an absolute path and, if it is
+// itself a linked git worktree (e.g. an agent's own in-progress feature
+// worktree, or another backlog item's ephemeral triage worktree), redirects
+// to the main checkout it was created from. Nothing upstream guarantees a
+// stored BacklogItem.RepoPath is the main checkout rather than a worktree —
+// an agent filing an item routinely passes its own CWD — so callers that
+// create a new worktree/branch anchor everything (locking, `git worktree
+// add`, default-branch resolution) to the real repo root via this function
+// first, rather than to whatever ephemeral worktree path got stored.
+// Best-effort: if GetMainRepoPath fails (e.g. repoPath isn't a git repo yet),
+// the resolved-but-unredirected path is returned unchanged, not an error —
+// callers that need repoPath to already be a git repo will fail at their own
+// next step instead.
+func ResolveMainRepoRoot(repoPath string) (string, error) {
+	resolved, err := ResolveSessionPath(repoPath)
+	if err != nil {
+		return "", err
+	}
+	if mainRepo, mainErr := GetMainRepoPath(resolved); mainErr == nil && mainRepo != "" {
+		return mainRepo, nil
+	}
+	return resolved, nil
+}
+
 // WorkspaceKey returns a canonical identity for the repo/workspace a session belongs to,
 // used to group sibling worktrees/branches of the same repo as peers. Prefers the GitHub
 // owner/repo (stable across worktree paths); falls back to MainRepoPath, then Path.
