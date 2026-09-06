@@ -273,16 +273,75 @@ func (g *HandoffSummaryGenerator) failStage(ctx context.Context, sourceSessionID
 	}
 }
 
-// GenerateAndPersist runs the full handoff-summary pipeline: read the source
-// session's transcript, window/budget it, call the LLM to compact the middle
-// portion into a handoff summary, and persist via status-transitioning
-// upserts (PENDING -> GENERATING -> READY, or -> ERROR on failure). Always
-// invoked as a detached goroutine — never call this synchronously.
-func (g *HandoffSummaryGenerator) GenerateAndPersist(ctx context.Context, sourceSessionID, sourceSessionTitle string) {
+// BeginGeneration synchronously reserves the in-process dedup guard for
+// sourceSessionID and writes the interim GENERATING row, then returns.
+// Callers must run the rest of the pipeline (GenerateAndPersist) in a
+// goroutine only when started is true, passing the returned release func
+// through so it is invoked exactly once when that goroutine finishes.
+//
+// This exists so TriggerHandoffSummary (server/services) can call it
+// synchronously before dispatching the async goroutine: previously the
+// interim GENERATING upsert happened inside GenerateAndPersist itself, after
+// `go`, which left a genuine (if narrow) race where the entire pipeline could
+// reach a terminal ERROR row before the handler's post-dispatch read ran —
+// observed as a CI flake in
+// TestTriggerHandoffSummary_SynthesizesPendingResponse_When_NoRowExistsYet,
+// where an empty-$HOME test fixture makes the transcript lookup fail fast
+// enough to win that race under scheduler contention. Performing the
+// acquire-and-interim-write step synchronously makes "row exists and is at
+// least GENERATING by the time TriggerHandoffSummary's second read runs" true
+// by construction instead of by scheduling luck.
+//
+// If started is false, a generation is already in flight for this session
+// (release is nil and there is nothing for the caller to do — the in-flight
+// call owns the eventual release). If err is non-nil, the interim write
+// failed and the guard has already been released; the caller should treat
+// this like any other internal error and must not dispatch a goroutine.
+//
+// ctx is intentionally the caller's request-scoped context (not
+// context.Background()) for this one write: if the RPC is canceled before
+// the interim upsert lands, dropping the trigger entirely -- rather than
+// writing a row and dispatching a pipeline for a request whose caller is
+// already gone -- is the correct behavior. Only GenerateAndPersist's own
+// pipeline needs to keep running past the RPC's lifetime.
+func (g *HandoffSummaryGenerator) BeginGeneration(ctx context.Context, sourceSessionID, sourceSessionTitle string) (release func(), startedAt time.Time, started bool, err error) {
 	release, ok := g.tryAcquire(sourceSessionID)
 	if !ok {
-		return
+		return nil, time.Time{}, false, nil
 	}
+
+	now := time.Now()
+	if writeErr := g.entClient.HandoffSummary.Create().
+		SetID(uuid.New().String()).
+		SetSessionID(sourceSessionID).
+		SetSessionTitle(sourceSessionTitle).
+		SetStatus(string(HandoffSummaryStatusGenerating)).
+		SetGenerationStartedAt(now).
+		OnConflictColumns(handoffsummary.FieldSessionID).
+		Update(func(u *ent.HandoffSummaryUpsert) {
+			u.SetSessionTitle(sourceSessionTitle)
+			u.SetStatus(string(HandoffSummaryStatusGenerating))
+			u.SetGenerationStartedAt(now)
+		}).
+		Exec(ctx); writeErr != nil {
+		release()
+		return nil, time.Time{}, false, writeErr
+	}
+	log.ForSession(sourceSessionID).Info("[HandoffSummary] PENDING -> GENERATING")
+	return release, now, true, nil
+}
+
+// GenerateAndPersist runs the rest of the handoff-summary pipeline after
+// BeginGeneration has already reserved the dedup guard and written the
+// interim GENERATING row: read the source session's transcript,
+// window/budget it, call the LLM to compact the middle portion into a
+// handoff summary, and persist via status-transitioning upserts (GENERATING
+// -> READY, or -> ERROR on failure). Always invoked as a detached goroutine,
+// and only after a successful BeginGeneration(started=true) call — release
+// and now must be that call's returned release func and startedAt, so every
+// row this pipeline writes carries the same generation_started_at that
+// BeginGeneration already persisted.
+func (g *HandoffSummaryGenerator) GenerateAndPersist(ctx context.Context, sourceSessionID, sourceSessionTitle string, release func(), now time.Time) {
 	defer release()
 
 	// Panic safety, mirrors SessionSummaryGenerator.GenerateAndPersist: this
@@ -295,27 +354,6 @@ func (g *HandoffSummaryGenerator) GenerateAndPersist(ctx context.Context, source
 			log.WarningLog().Printf("[HandoffSummary] GenerateAndPersist panicked (recovered) for session=%s: %v", sourceSessionID, r)
 		}
 	}()
-
-	now := time.Now()
-
-	// Interim GENERATING upsert.
-	if err := g.entClient.HandoffSummary.Create().
-		SetID(uuid.New().String()).
-		SetSessionID(sourceSessionID).
-		SetSessionTitle(sourceSessionTitle).
-		SetStatus(string(HandoffSummaryStatusGenerating)).
-		SetGenerationStartedAt(now).
-		OnConflictColumns(handoffsummary.FieldSessionID).
-		Update(func(u *ent.HandoffSummaryUpsert) {
-			u.SetSessionTitle(sourceSessionTitle)
-			u.SetStatus(string(HandoffSummaryStatusGenerating))
-			u.SetGenerationStartedAt(now)
-		}).
-		Exec(ctx); err != nil {
-		log.ForSession(sourceSessionID).Error("[HandoffSummary] failed to write interim GENERATING row", "err", err)
-		return
-	}
-	log.ForSession(sourceSessionID).Info("[HandoffSummary] PENDING -> GENERATING")
 
 	history, err := NewClaudeSessionHistoryFromClaudeDir()
 	if err != nil {

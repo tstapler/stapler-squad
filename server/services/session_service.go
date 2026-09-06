@@ -2652,11 +2652,12 @@ func (s *SessionService) CreateSession(
 	// 1.2.0a). This does NOT start tmux/the process; that happens in the
 	// async goroutine below, exactly as before this extraction.
 	instance, err := session.CreateManagedInstance(ctx, session.CreateManagedInstanceParams{
-		Options:         instanceOpts,
-		Storage:         s.storage,
-		Registry:        s.registry,
-		CreateIfMissing: req.Msg.CreateIfMissing,
-		ResumeID:        req.Msg.ResumeId,
+		Options:                instanceOpts,
+		Storage:                s.storage,
+		Registry:               s.registry,
+		CreateIfMissing:        req.Msg.CreateIfMissing,
+		ResumeID:               req.Msg.ResumeId,
+		DeferredPathResolution: deferredGitHubURL,
 	})
 	if err != nil {
 		switch {

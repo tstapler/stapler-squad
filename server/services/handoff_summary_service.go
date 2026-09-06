@@ -63,10 +63,9 @@ func (s *HandoffSummaryService) GetHandoffSummary(
 // returns the resulting summary. Generation runs asynchronously — this method
 // dispatches it and returns immediately with the current (possibly
 // still-generating) row; the client is expected to poll GetHandoffSummary
-// until status leaves GENERATING. The dedup guard inside
-// HandoffSummaryGenerator.GenerateAndPersist (not this handler) is what
-// prevents a second overlapping pipeline when one is already in flight for
-// this session.
+// until status leaves GENERATING. HandoffSummaryGenerator.BeginGeneration's
+// dedup guard (not this handler) is what prevents a second overlapping
+// pipeline when one is already in flight for this session.
 // +api: handoff-summary:trigger
 func (s *HandoffSummaryService) TriggerHandoffSummary(
 	ctx context.Context,
@@ -96,30 +95,27 @@ func (s *HandoffSummaryService) TriggerHandoffSummary(
 		sessionTitle = row.SessionTitle
 	}
 
-	// Critical: detached goroutine with context.Background(), never the
-	// request-scoped ctx — ConnectRPC cancels ctx the moment this handler
-	// returns, but the pipeline (including its own LLM-call timeout) must keep
-	// running after that. Mirrors
-	// SessionSummaryService.RegenerateSessionSummary's identical dispatch shape.
-	go s.generator.GenerateAndPersist(context.Background(), sessionID, sessionTitle)
+	// BeginGeneration runs synchronously (dedup guard + interim GENERATING
+	// upsert) on the request-scoped ctx, so by the time it returns the row is
+	// guaranteed to exist and be at least GENERATING — no race with the
+	// FindRowBySessionID read below. Only the rest of the pipeline (the actual
+	// transcript read + LLM call) is dispatched async; see BeginGeneration's
+	// doc comment for the CI flake this replaced.
+	release, startedAt, started, err := s.generator.BeginGeneration(ctx, sessionID, sessionTitle)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to begin handoff summary generation: %w", err))
+	}
+	if started {
+		// Critical: detached goroutine with context.Background(), never the
+		// request-scoped ctx — ConnectRPC cancels ctx the moment this handler
+		// returns, but the pipeline (including its own LLM-call timeout) must keep
+		// running after that. Mirrors
+		// SessionSummaryService.RegenerateSessionSummary's identical dispatch shape.
+		go s.generator.GenerateAndPersist(context.Background(), sessionID, sessionTitle, release, startedAt)
+	}
 
-	// Look up the row again: GenerateAndPersist's interim upsert should have
-	// already written it as GENERATING by the time the goroutine above starts
-	// running. There is a narrow race where this read lands before that
-	// goroutine has been scheduled at all — in that case FindRowBySessionID
-	// returns not-found, so synthesize a PENDING response rather than erroring,
-	// since the row is about to exist.
 	current, err := s.generator.FindRowBySessionID(ctx, sessionID)
 	if err != nil {
-		if errors.Is(err, session.ErrNotFound) {
-			return connect.NewResponse(&sessionv1.TriggerHandoffSummaryResponse{
-				Summary: &sessionv1.HandoffSummaryProto{
-					SessionId:    sessionID,
-					SessionTitle: sessionTitle,
-					Status:       sessionv1.HandoffSummaryStatus_HANDOFF_SUMMARY_STATUS_PENDING,
-				},
-			}), nil
-		}
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to query handoff summary: %w", err))
 	}
 
