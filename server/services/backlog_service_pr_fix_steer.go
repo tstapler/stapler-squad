@@ -242,7 +242,19 @@ func truncateUTF8Bytes(s string, maxBytes int) string {
 // steer the already-running session with fixContext instead of skipping the
 // respawn outright, falling back to the existing notify-only behavior
 // whenever it can't safely do so. Never calls TransitionBacklogItemStatus.
-func (s *BacklogService) steerActiveSessionForPRFix(ctx context.Context, itemID, itemTitle string, currentStatus session.BacklogStatus, activeSessionUUID, fixContext string) {
+func (s *BacklogService) steerActiveSessionForPRFix(ctx context.Context, itemID, itemTitle string, currentStatus session.BacklogStatus, active *session.ItemSessionSummary, fixContext string) {
+	// Defense-in-depth, not an expected path (see Story 2.1.3's design note): a
+	// jules_work session has no tmux pane, so steering it would silently
+	// misbehave. By construction this can't happen today — JulesSessionPoller
+	// always ends the jules_work session before the item reaches pr_pending —
+	// but a future violation of that invariant must fail loudly here rather
+	// than attempt a tmux write that has nothing to write to.
+	if active.Role == session.SessionRoleJulesWork {
+		log.ErrorLog().Printf("[AutoReopenForPRFix] invariant violation: active session %s for item=%s is jules_work (should have ended before pr_pending) — refusing to steer", active.SessionUUID, itemID)
+		return
+	}
+	activeSessionUUID := active.SessionUUID
+
 	// steerInFlight guards this method's ENTIRE body, including the degrade
 	// branches, since the 60s reconcile tick and a webhook-dispatched
 	// goroutine (TriggerPRFixForEvent) can both call this for the same item

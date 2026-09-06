@@ -373,6 +373,7 @@ func (m *RepoPathManager) EnsureRepoCloned(ctx context.Context, ref *GitHubRef) 
 			fetchCtx, fetchCancel := context.WithTimeout(ctx, 60*time.Second)
 			defer fetchCancel()
 			cmd := safeexec.CommandContext(fetchCtx, "git", "-C", repoPath, "fetch", "--all", "--prune")
+			cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
 			if output, err := cmd.CombinedOutput(); err != nil {
 				// Only propagate when the caller's own ctx (not the local 60s
 				// fetchCtx timeout) is what killed the fetch — that means the
@@ -401,11 +402,21 @@ func (m *RepoPathManager) EnsureRepoCloned(ctx context.Context, ref *GitHubRef) 
 	// (see GetCloneURL) — never log it verbatim, and reset the remote's URL
 	// back to a credential-free form after cloning so the token isn't left
 	// sitting in the resulting .git/config indefinitely.
+	//
+	// GIT_TERMINAL_PROMPT=0 is required, not cosmetic: without it, a clone
+	// that can't auto-authenticate (e.g. a nonexistent or private repo, or
+	// an ambient credential.helper/http.extraheader left over from another
+	// checkout in the same environment interfering with an unrelated clone)
+	// blocks on a credential prompt with no TTY to answer it, silently
+	// consuming the full cloneCtx timeout below instead of failing fast with
+	// git's normal "repository not found" — observed in CI as a single
+	// nonexistent-repo clone attempt eating the entire 120s budget.
 	host := repoHost(ref)
 	log.Info("cloning repository", "host", host, "owner", ref.Owner, "repo", ref.Repo, "path", repoPath)
 	cloneCtx, cloneCancel := context.WithTimeout(ctx, 120*time.Second)
 	defer cloneCancel()
 	cmd := safeexec.CommandContext(cloneCtx, "git", "clone", cloneURL, repoPath)
+	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
 	if output, err := cmd.CombinedOutput(); err != nil {
 		// A killed/timed-out clone leaves a partially-initialized .git
 		// directory behind (see isCorruptedClone) — remove it so the next
@@ -648,6 +659,30 @@ func GetMainRepoPath(path string) (string, error) {
 		return filepath.Dir(absPath), nil
 	}
 	return absPath, nil
+}
+
+// ResolveMainRepoRoot resolves repoPath to an absolute path and, if it is
+// itself a linked git worktree (e.g. an agent's own in-progress feature
+// worktree, or another backlog item's ephemeral triage worktree), redirects
+// to the main checkout it was created from. Nothing upstream guarantees a
+// stored BacklogItem.RepoPath is the main checkout rather than a worktree —
+// an agent filing an item routinely passes its own CWD — so callers that
+// create a new worktree/branch anchor everything (locking, `git worktree
+// add`, default-branch resolution) to the real repo root via this function
+// first, rather than to whatever ephemeral worktree path got stored.
+// Best-effort: if GetMainRepoPath fails (e.g. repoPath isn't a git repo yet),
+// the resolved-but-unredirected path is returned unchanged, not an error —
+// callers that need repoPath to already be a git repo will fail at their own
+// next step instead.
+func ResolveMainRepoRoot(repoPath string) (string, error) {
+	resolved, err := ResolveSessionPath(repoPath)
+	if err != nil {
+		return "", err
+	}
+	if mainRepo, mainErr := GetMainRepoPath(resolved); mainErr == nil && mainRepo != "" {
+		return mainRepo, nil
+	}
+	return resolved, nil
 }
 
 // WorkspaceKey returns a canonical identity for the repo/workspace a session belongs to,

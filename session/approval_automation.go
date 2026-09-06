@@ -3,6 +3,7 @@ package session
 import (
 	"context"
 	"fmt"
+	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/detection"
 	"sync"
 	"time"
@@ -150,7 +151,9 @@ func (aa *ApprovalAutomation) Stop() error {
 		aa.cancel()
 	}
 	aa.wg.Wait() // join goroutines before closing their channel
-	aa.controller.Unsubscribe("approval-automation")
+	// Best-effort during shutdown: the subscription is torn down along with
+	// the controller regardless of whether this returns an error.
+	_ = aa.controller.Unsubscribe("approval-automation")
 	aa.running = false
 
 	return nil
@@ -227,7 +230,9 @@ func (aa *ApprovalAutomation) handleAutoApprove(request *detection.ApprovalReque
 		Timestamp: time.Now(),
 		UserInput: fmt.Sprintf("Auto-approved by policy: %s", decision.MatchedPolicy.Name),
 	}
-	aa.detector.UpdateRequestStatus(request.ID, detection.ApprovalApproved, response)
+	if err := aa.detector.UpdateRequestStatus(request.ID, detection.ApprovalApproved, response); err != nil {
+		log.Warn("approval automation: failed to update request status to approved", "requestID", request.ID, "err", err)
+	}
 
 	// Emit auto-approval event
 	aa.emitEvent(ApprovalEvent{
@@ -252,7 +257,9 @@ func (aa *ApprovalAutomation) handleAutoReject(request *detection.ApprovalReques
 		Timestamp: time.Now(),
 		UserInput: fmt.Sprintf("Auto-rejected by policy: %s", decision.MatchedPolicy.Name),
 	}
-	aa.detector.UpdateRequestStatus(request.ID, detection.ApprovalRejected, response)
+	if err := aa.detector.UpdateRequestStatus(request.ID, detection.ApprovalRejected, response); err != nil {
+		log.Warn("approval automation: failed to update request status to rejected", "requestID", request.ID, "err", err)
+	}
 
 	// Emit auto-rejection event
 	aa.emitEvent(ApprovalEvent{
@@ -327,7 +334,9 @@ func (aa *ApprovalAutomation) checkExpiredApprovals() {
 		if now.After(pending.ExpiresAt) {
 			// Mark as expired
 			pending.Status = PendingStatusExpired
-			aa.detector.UpdateRequestStatus(pending.Request.ID, detection.ApprovalExpired, nil)
+			if err := aa.detector.UpdateRequestStatus(pending.Request.ID, detection.ApprovalExpired, nil); err != nil {
+				log.Warn("approval automation: failed to update request status to expired", "requestID", pending.Request.ID, "err", err)
+			}
 
 			// Emit expired event
 			aa.emitEvent(ApprovalEvent{
@@ -365,7 +374,9 @@ func (aa *ApprovalAutomation) RespondToApproval(requestID string, approved bool,
 			if !approved {
 				status = detection.ApprovalRejected
 			}
-			aa.detector.UpdateRequestStatus(requestID, status, pending.UserResponse)
+			if err := aa.detector.UpdateRequestStatus(requestID, status, pending.UserResponse); err != nil {
+				log.Warn("approval automation: failed to update request status from user response", "requestID", requestID, "err", err)
+			}
 
 			// Emit event
 			eventType := EventUserApproved

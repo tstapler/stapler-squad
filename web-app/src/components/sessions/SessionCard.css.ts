@@ -164,6 +164,39 @@ export const hostBadge = style({
   border: `1px solid ${vars.color.borderColor}`,
 });
 
+// piHealthBadge shows the pi approval-extension's health state (loaded/failed/
+// unknown, pi-support Epic 4.2). Mirrors hostBadge's neutral pill shape; the
+// per-state color lives on piHealthBadgeLoaded/Failed/Unknown below -- color
+// is never the only signal (design/ux.md AC3), the icon and aria-label also
+// differ per state (piHealthBadgeInfo() keeps the visible label text "pi"
+// constant across all three states).
+export const piHealthBadge = style({
+  display: "inline-flex",
+  alignItems: "center",
+  gap: vars.space["1"],
+  padding: `${vars.space["1"]} 10px`,
+  borderRadius: vars.radii.full,
+  fontSize: vars.fontSize.sm,
+  fontWeight: 600,
+  border: `1px solid ${vars.color.borderColor}`,
+});
+
+export const piHealthBadgeLoaded = style({
+  background: vars.color.surfaceSubtle,
+  color: vars.color.textSecondary,
+});
+
+export const piHealthBadgeFailed = style({
+  background: vars.color.warningBg,
+  color: vars.color.warning,
+  borderColor: vars.color.warning,
+});
+
+export const piHealthBadgeUnknown = style({
+  background: vars.color.surfaceSubtle,
+  color: vars.color.textMuted,
+});
+
 export const muxIndicator = style({
   fontSize: "0.625rem",
   background: "rgba(255, 255, 255, 0.3)", // intentional: translucent white overlay on colored badge bg

@@ -271,6 +271,161 @@ func TestResolveDefaultLocalBranchSHA_FindsNonMainDefaultBranchOffline(t *testin
 	assert.Equal(t, wantSHA, sha)
 }
 
+// TestResolveWorktreeBaseCommit_UsesOriginDefaultBranch is the same
+// regression as TestResolveDefaultBranchSHA_FindsNonMainDefaultBranch, one
+// level up: the combined resolver (as used by CreateBacklogWorktree and
+// TriggerTriage's isolated triage worktree) must still branch from origin's
+// tip when work's own checked-out branch (e.g. a feature branch) is
+// something else entirely.
+func TestResolveWorktreeBaseCommit_UsesOriginDefaultBranch(t *testing.T) {
+	t.Parallel()
+	origin := setupTestRepo(t)
+	work := cloneTestRepo(t, origin)
+	runGit(t, work, "checkout", "-b", "some-other-feature-branch")
+
+	branch, sha, err := ResolveWorktreeBaseCommit(work)
+	require.NoError(t, err)
+	assert.Equal(t, "main", branch)
+	wantSHA := strings.TrimSpace(runGit(t, origin, "rev-parse", "main"))
+	assert.Equal(t, wantSHA, sha)
+}
+
+// TestResolveWorktreeBaseCommit_FallsBackToLocal_When_OriginFetchFails covers
+// the offline/no-remote fallback chain end to end.
+func TestResolveWorktreeBaseCommit_FallsBackToLocal_When_OriginFetchFails(t *testing.T) {
+	t.Parallel()
+	origin := setupTestRepo(t)
+	work := cloneTestRepo(t, origin)
+	runGit(t, work, "remote", "set-url", "origin", filepath.Join(t.TempDir(), "does-not-exist"))
+
+	branch, sha, err := ResolveWorktreeBaseCommit(work)
+	require.NoError(t, err)
+	assert.Equal(t, "main", branch)
+	wantSHA := strings.TrimSpace(runGit(t, work, "rev-parse", "main"))
+	assert.Equal(t, wantSHA, sha)
+}
+
+// TestResolveWorktreeBaseCommit_ReturnsEmptySHA_When_RepoIsUnborn verifies the
+// one case callers should still fall back to ambient HEAD for: a repo with no
+// commits anywhere has no other branch to accidentally fork from instead.
+func TestResolveWorktreeBaseCommit_ReturnsEmptySHA_When_RepoIsUnborn(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	runGit(t, dir, "init")
+
+	branch, sha, err := ResolveWorktreeBaseCommit(dir)
+	require.NoError(t, err)
+	assert.Empty(t, branch)
+	assert.Empty(t, sha)
+}
+
+// TestResolveWorktreeBaseCommit_ReturnsError_When_NoCandidateAndNotUnborn
+// verifies a repo with real history but no known-name default branch surfaces
+// a loud error instead of silently falling back to ambient HEAD.
+func TestResolveWorktreeBaseCommit_ReturnsError_When_NoCandidateAndNotUnborn(t *testing.T) {
+	t.Parallel()
+	origin := setupTestRepo(t)
+	runGit(t, origin, "branch", "-m", "main", "release")
+	work := cloneTestRepo(t, origin)
+	runGit(t, work, "remote", "set-url", "origin", filepath.Join(t.TempDir(), "does-not-exist"))
+
+	branch, sha, err := ResolveWorktreeBaseCommit(work)
+	require.Error(t, err)
+	assert.Empty(t, branch)
+	assert.Empty(t, sha)
+}
+
+// TestResolveExplicitBranchSHA_UsesOrigin verifies the explicit-override
+// resolver (BacklogItem.BaseBranch) fetches the named branch from origin
+// rather than assuming it's already fresh locally.
+func TestResolveExplicitBranchSHA_UsesOrigin(t *testing.T) {
+	t.Parallel()
+	origin := setupTestRepo(t)
+	runGit(t, origin, "checkout", "-b", "release-2.0")
+	runGit(t, origin, "commit", "--allow-empty", "-m", "release commit")
+	work := cloneTestRepo(t, origin)
+
+	sha, err := ResolveExplicitBranchSHA(work, "release-2.0")
+	require.NoError(t, err)
+	wantSHA := strings.TrimSpace(runGit(t, origin, "rev-parse", "release-2.0"))
+	assert.Equal(t, wantSHA, sha)
+}
+
+// TestResolveExplicitBranchSHA_FallsBackToLocal_When_OriginFetchFails covers
+// the offline/no-remote fallback.
+func TestResolveExplicitBranchSHA_FallsBackToLocal_When_OriginFetchFails(t *testing.T) {
+	t.Parallel()
+	origin := setupTestRepo(t)
+	work := cloneTestRepo(t, origin)
+	runGit(t, work, "checkout", "-b", "my-feature")
+	runGit(t, work, "remote", "set-url", "origin", filepath.Join(t.TempDir(), "does-not-exist"))
+
+	sha, err := ResolveExplicitBranchSHA(work, "my-feature")
+	require.NoError(t, err)
+	wantSHA := strings.TrimSpace(runGit(t, work, "rev-parse", "my-feature"))
+	assert.Equal(t, wantSHA, sha)
+}
+
+// TestResolveExplicitBranchSHA_ReturnsError_When_BranchDoesNotExistAnywhere
+// verifies an explicitly requested branch that doesn't exist anywhere is a
+// hard error, never silently substituted with the default branch or ambient
+// HEAD — the caller opted out of the default on purpose.
+func TestResolveExplicitBranchSHA_ReturnsError_When_BranchDoesNotExistAnywhere(t *testing.T) {
+	t.Parallel()
+	origin := setupTestRepo(t)
+	work := cloneTestRepo(t, origin)
+
+	sha, err := ResolveExplicitBranchSHA(work, "does-not-exist-anywhere")
+	require.Error(t, err)
+	assert.Empty(t, sha)
+}
+
+// TestResolveExplicitBranchSHA_RejectsFlagLikeBranchName is the regression
+// test for a git argument-injection class (same family as CVE-2017-1000117):
+// BacklogItem.BaseBranch is a caller-controlled string that used to reach
+// `git fetch origin <branchName>` with no "--" separator, so a value like
+// "--upload-pack=..." would be parsed by git as an option rather than a ref
+// name. Verifies ResolveExplicitBranchSHA rejects such input before it ever
+// reaches a git subprocess, rather than passing it through.
+func TestResolveExplicitBranchSHA_RejectsFlagLikeBranchName(t *testing.T) {
+	t.Parallel()
+	origin := setupTestRepo(t)
+	work := cloneTestRepo(t, origin)
+
+	sha, err := ResolveExplicitBranchSHA(work, "--upload-pack=touch /tmp/pwned")
+	require.Error(t, err)
+	assert.Empty(t, sha)
+}
+
+// TestCheckoutBranch_RejectsFlagLikeBranchName is CheckoutBranch's sibling
+// regression test — see TestResolveExplicitBranchSHA_RejectsFlagLikeBranchName.
+// CheckoutBranch can't use FetchBranch's "--" guard (verified empirically:
+// `git checkout -- <name>` puts checkout into path-restore mode instead of
+// switching branches), so ValidateBranchName is its only defense.
+func TestCheckoutBranch_RejectsFlagLikeBranchName(t *testing.T) {
+	t.Parallel()
+	origin := setupTestRepo(t)
+
+	err := CheckoutBranch(origin, "--upload-pack=touch /tmp/pwned")
+	require.Error(t, err)
+}
+
+// TestCheckoutBranch_SwitchesToRealBranch is the companion positive case:
+// a normal branch name must still check out successfully after the
+// ValidateBranchName guard was added (the guard must not reject legitimate
+// names).
+func TestCheckoutBranch_SwitchesToRealBranch(t *testing.T) {
+	t.Parallel()
+	origin := setupTestRepo(t)
+	runGit(t, origin, "checkout", "-b", "feature-x")
+	runGit(t, origin, "checkout", "main")
+
+	err := CheckoutBranch(origin, "feature-x")
+	require.NoError(t, err)
+	branch := strings.TrimSpace(runGit(t, origin, "branch", "--show-current"))
+	assert.Equal(t, "feature-x", branch)
+}
+
 // TestIsUnbornRepo_should_ReturnTrue_When_RepoHasZeroCommits verifies the case
 // CreateBacklogWorktree relies on to know it's safe to fall back to ambient HEAD
 // (nothing to misattribute in a repo with no commits at all).

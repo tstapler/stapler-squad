@@ -469,7 +469,7 @@ func (sl *SyncLoop) SyncOne(ctx context.Context, source *ent.ItemSource) error {
 			}
 		}
 
-		if source.BackwardSyncEnabled && extItem.State == "open" && (existing.Status == string(BacklogStatusArchived) || existing.Status == string(BacklogStatusDone)) {
+		if source.BackwardSyncEnabled && extItem.State == "open" && IsTerminalStatus(BacklogStatus(existing.Status)) {
 			// See the zero-time guard comment in the closed-issue block above —
 			// same rationale applies here.
 			if extItem.IssueUpdatedAt.IsZero() {
@@ -535,6 +535,13 @@ func determineBackwardSyncTarget(current BacklogStatus) (target BacklogStatus, o
 	case BacklogStatusIdea, BacklogStatusRefining, BacklogStatusReady, BacklogStatusQueued:
 		return BacklogStatusArchived, true
 	default:
+		// A custom stage (or in_progress/review/pr_pending/done/archived)
+		// falls here: no auto-archive target is known for it, so none is
+		// computed — correct fail-safe per the "BacklogStatus becomes the
+		// open stage-slug type" decision (Epic 2.1, Story 2.1.3e). Whether a
+		// custom pre-work stage should also backward-sync to archived is an
+		// explicit opt-in for a future epic, not something this default
+		// should guess at.
 		return "", false
 	}
 }

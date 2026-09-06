@@ -16,6 +16,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/config/workspacepath"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/log"
 )
@@ -259,7 +260,7 @@ func TestPruneStaleTestDirs(t *testing.T) {
 	require.NoError(t, os.MkdirAll(aliveDir, 0755))
 	require.NoError(t, os.MkdirAll(junkDir, 0755))
 
-	pruneStaleTestDirs(testBaseDir)
+	workspacepath.PruneStaleTestDirs(testBaseDir)
 
 	assert.NoDirExists(t, deadDir, "dead process's test dir should be pruned")
 	assert.DirExists(t, aliveDir, "live process's test dir must survive")
@@ -886,6 +887,49 @@ func TestOneOffBaseDirOrDefault_CustomAbsolutePath(t *testing.T) {
 	assert.Equal(t, "/tmp/my-custom-oneoffs", result)
 }
 
+// TestMaxConcurrentJulesSessionsOrDefault_should_ClampToHardCeilingOrDefault_When_ConfigOutOfRange
+// verifies Story 2.2.2's clamp table: an out-of-range value never reaches the
+// spend-guard check raw.
+func TestMaxConcurrentJulesSessionsOrDefault_should_ClampToHardCeilingOrDefault_When_ConfigOutOfRange(t *testing.T) {
+	tests := []struct {
+		name     string
+		cfg      *Config
+		expected int
+	}{
+		{"above hard ceiling clamps down", &Config{Jules: JulesConfig{MaxConcurrentJulesSessions: 500}}, 10},
+		{"zero falls back to default", &Config{Jules: JulesConfig{MaxConcurrentJulesSessions: 0}}, 2},
+		{"negative falls back to default", &Config{Jules: JulesConfig{MaxConcurrentJulesSessions: -1}}, 2},
+		{"in range passes through", &Config{Jules: JulesConfig{MaxConcurrentJulesSessions: 5}}, 5},
+		{"nil config falls back to default", nil, 2},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.expected, tt.cfg.MaxConcurrentJulesSessionsOrDefault())
+		})
+	}
+}
+
+// TestMaxJulesSessionsPerDayOrDefault_should_ClampToHardCeilingOrDefault_When_ConfigOutOfRange
+// mirrors the concurrency clamp table above for the daily-dispatch cap.
+func TestMaxJulesSessionsPerDayOrDefault_should_ClampToHardCeilingOrDefault_When_ConfigOutOfRange(t *testing.T) {
+	tests := []struct {
+		name     string
+		cfg      *Config
+		expected int
+	}{
+		{"above hard ceiling clamps down", &Config{Jules: JulesConfig{MaxJulesSessionsPerDay: 1000}}, 300},
+		{"zero falls back to default", &Config{Jules: JulesConfig{MaxJulesSessionsPerDay: 0}}, 15},
+		{"negative falls back to default", &Config{Jules: JulesConfig{MaxJulesSessionsPerDay: -1}}, 15},
+		{"in range passes through", &Config{Jules: JulesConfig{MaxJulesSessionsPerDay: 20}}, 20},
+		{"nil config falls back to default", nil, 15},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.expected, tt.cfg.MaxJulesSessionsPerDayOrDefault())
+		})
+	}
+}
+
 func TestOneOffBaseDir_JSONRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.json")
@@ -1195,6 +1239,39 @@ func TestGetFeatureFlag_unknownKeyDefaultsFalse(t *testing.T) {
 func TestGetFeatureFlag_knownKeyReturnsValue(t *testing.T) {
 	cfg := &Config{FeatureFlags: map[string]bool{"backlog": true}}
 	assert.True(t, cfg.GetFeatureFlag("backlog"))
+}
+
+// TestFeatureFlag_PiSupport_DefaultsFalseAndPersists covers pi-support's two
+// Story 2.1.1 acceptance criteria: it defaults to false on a config with no
+// explicit setting, and SetFeatureFlag round-trips it through the on-disk
+// config.json's feature_flags object.
+func TestFeatureFlag_PiSupport_DefaultsFalseAndPersists(t *testing.T) {
+	t.Run("defaults false on a config with no explicit setting", func(t *testing.T) {
+		cfg := &Config{FeatureFlags: nil}
+		assert.False(t, cfg.GetFeatureFlag(FeaturePiSupport))
+	})
+
+	t.Run("SetFeatureFlag persists and is re-readable, including on disk", func(t *testing.T) {
+		t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+
+		cfg := LoadConfig()
+		require.NoError(t, cfg.SetFeatureFlag(FeaturePiSupport, true))
+		assert.True(t, cfg.GetFeatureFlag(FeaturePiSupport))
+
+		configDir, err := GetConfigDir()
+		require.NoError(t, err)
+		data, err := os.ReadFile(filepath.Join(configDir, ConfigFileName))
+		require.NoError(t, err)
+
+		var onDisk struct {
+			FeatureFlags map[string]bool `json:"feature_flags"`
+		}
+		require.NoError(t, json.Unmarshal(data, &onDisk))
+		assert.True(t, onDisk.FeatureFlags[FeaturePiSupport], "feature_flags.%q must be persisted true on disk", FeaturePiSupport)
+
+		reloaded := LoadConfig()
+		assert.True(t, reloaded.GetFeatureFlag(FeaturePiSupport))
+	})
 }
 
 // ─── IsNamedInstance ────────────────────────────────────────────────────────

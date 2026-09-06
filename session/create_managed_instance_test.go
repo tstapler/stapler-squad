@@ -3,6 +3,7 @@ package session
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -86,6 +87,46 @@ func TestCreateManagedInstance_ReturnsErrPathNotExist_When_DirectoryMissingAndNo
 	require.Error(t, err)
 	assert.Nil(t, instance)
 	assert.True(t, errors.Is(err, ErrPathNotExist), "expected ErrPathNotExist, got %v", err)
+}
+
+// TestCreateManagedInstance_ReturnsErrPathNotExist_When_NewWorktreeMissing
+// covers the "steam-controls" regression (found 2026-09-05): the web-app's
+// "New Project, opened as New Worktree" flow used to submit
+// SessionTypeNewWorktree against a deliberately-nonexistent path. Before this
+// fix, that failed asynchronously deep inside instance.Start() with a
+// confusing "repository path does not exist" error instead of this
+// synchronous, actionable one. CreateIfMissing is irrelevant to NewWorktree's
+// contract (it never bootstraps, with no exception — see
+// setupFirstTimeWorktree's SessionTypeNewWorktree doc comment) so this must
+// fail identically regardless of its value; that flow now correctly routes
+// through SessionTypeNewProject instead, which does support bootstrapping.
+func TestCreateManagedInstance_ReturnsErrPathNotExist_When_NewWorktreeMissing(t *testing.T) {
+	t.Parallel()
+
+	for _, createIfMissing := range []bool{false, true} {
+		t.Run(fmt.Sprintf("CreateIfMissing=%v", createIfMissing), func(t *testing.T) {
+			t.Parallel()
+			storage, cleanup := createTestStorage(t)
+			defer cleanup()
+
+			dir := t.TempDir()
+			missingPath := dir + "/does-not-exist"
+
+			instance, err := CreateManagedInstance(context.Background(), CreateManagedInstanceParams{
+				Options: CreateInstanceOptions{
+					Title:       "cmi-new-worktree-missing-path",
+					Path:        missingPath,
+					Program:     "claude",
+					SessionType: SessionTypeNewWorktree,
+				},
+				Storage:         storage,
+				CreateIfMissing: createIfMissing,
+			})
+			require.Error(t, err)
+			assert.Nil(t, instance)
+			assert.True(t, errors.Is(err, ErrPathNotExist), "expected ErrPathNotExist, got %v", err)
+		})
+	}
 }
 
 // TestCreateManagedInstance_ReturnsErrResumePathNotExist_When_ResumingMissingPath

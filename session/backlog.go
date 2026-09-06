@@ -47,9 +47,10 @@ func IsValidBacklogCategory(s string) bool {
 
 // Session role constants.
 const (
-	SessionRoleWork   = "work"
-	SessionRoleTriage = "triage"
-	SessionRoleReview = "review"
+	SessionRoleWork      = "work"
+	SessionRoleTriage    = "triage"
+	SessionRoleReview    = "review"
+	SessionRoleJulesWork = "jules_work"
 )
 
 // IsTmuxBackedSessionRole reports whether role identifies a session that runs as a
@@ -62,16 +63,31 @@ const (
 // exit on their own when the call returns, so they were never tracked as a live
 // Instance in the first place and have nothing to kill — their own failure mode
 // (a crashed/hung goroutine leaving a stale DB row) is handled separately by
-// reconcileOrphanedTriageItems/reconcileOrphanedTriageRemediation.
+// reconcileOrphanedTriageItems/reconcileOrphanedTriageRemediation. Jules sessions are
+// not tmux-backed either: they run on Google's infrastructure, so like triage there is
+// no local pane to kill.
 //
 // This is the single source of truth for "which roles does the terminal-item sweep
-// clean up" — both reconcileTerminalItemSessions (session/backlog_lifecycle.go) and
-// archiveItemWorkSessions (server/services/backlog_service.go) call this rather than
+// clean up" — both reconcileTerminalItemSessions (session/backlog_lifecycle_archive.go)
+// and archiveItemWorkSessions (server/services/backlog_service.go) call this rather than
 // each re-deriving the role set, so the two can't silently drift apart again the way
 // they already did once (the archive-and-kill fix originally covered work sessions
 // only; review sessions kept leaking until this predicate unified both call sites).
 func IsTmuxBackedSessionRole(role string) bool {
 	return role == SessionRoleWork || role == SessionRoleReview
+}
+
+// HasActiveJulesSession reports whether sessions contains an open (not yet ended)
+// jules_work-role session — the Jules-specific counterpart used alongside
+// hasActiveSession's work/review gating (see its doc comment) so a local respawn
+// path can also see "this item already has a Jules session in flight".
+func HasActiveJulesSession(sessions []ItemSessionSummary) bool {
+	for _, s := range sessions {
+		if s.EndedAt == nil && s.Role == SessionRoleJulesWork {
+			return true
+		}
+	}
+	return false
 }
 
 // Session tag constants for backlog-spawned sessions.

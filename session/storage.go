@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"time"
 
 	"github.com/tstapler/stapler-squad/config"
@@ -194,6 +195,17 @@ type ClaudeSessionData struct {
 	LastAttached     time.Time         `json:"last_attached,omitempty"`    // When this session was last used
 	Settings         ClaudeSettings    `json:"settings,omitempty"`         // User preferences for Claude Code
 	Metadata         map[string]string `json:"metadata,omitempty"`         // Additional session metadata
+}
+
+// PiSessionData represents pi-coding-agent session information needed to
+// resume a prior conversation via `pi --session <id>` (see buildPiCommand).
+// Unlike ClaudeSessionData's ConversationUUID, SessionID's format is not
+// validated here — pi 0.84.4 reports it as a standard dashed UUID in the
+// JSONL "session" header event's "id" field (see plan.md's Phase 1 spike
+// RESULTS), but this struct only requires it be non-empty to be usable.
+type PiSessionData struct {
+	SessionID    string    `json:"session_id,omitempty"`
+	LastAttached time.Time `json:"last_attached,omitempty"`
 }
 
 // UnmarshalJSON keeps backward compatibility with persisted state written
@@ -834,6 +846,27 @@ func (s *Storage) AssignSessionsToProject(ctx context.Context, projectName strin
 
 // CreateBacklogItem inserts a new backlog item.
 func (s *Storage) CreateBacklogItem(ctx context.Context, data BacklogItemData) (*BacklogItemData, error) {
+	// Every creation path (create_backlog_item, import_github_issue, the web
+	// UI's RPC handlers) funnels through here, so this is the one place that
+	// guarantees every item's RepoPath is canonicalized regardless of which
+	// caller filed it. Without it, two items that both target the same repo —
+	// one filed with repo_path pointing at the main checkout, another filed by
+	// an agent that passed its own in-progress worktree — end up with two
+	// different RepoPath strings, fragmenting the web UI's "group by
+	// repository" view into one bucket per worktree instead of one per repo.
+	// Best-effort and non-fatal: falls through with RepoPath unchanged if
+	// resolution fails (e.g. it isn't a git repo yet) or is empty (repo-less
+	// item). Gated on filepath.IsAbs: ResolveMainRepoRoot's first step
+	// (ResolveSessionPath) calls filepath.Abs, which would silently turn a
+	// caller's mistaken relative/bare-slug RepoPath into a resolved-looking
+	// absolute path — masking TriggerTriage's own "repo_path must be
+	// absolute" validation instead of letting it reject the input as
+	// intended (see TestTriggerTriage_should_RejectRelativeRepoPath_Before_CreatingAnyItemSession).
+	if data.RepoPath != "" && filepath.IsAbs(data.RepoPath) {
+		if resolved, err := ResolveMainRepoRoot(data.RepoPath); err == nil {
+			data.RepoPath = resolved
+		}
+	}
 	return s.repo.CreateBacklogItem(ctx, data)
 }
 
@@ -1197,6 +1230,24 @@ func (s *Storage) SetItemSessionBaseCommit(ctx context.Context, id, sha string) 
 // SetItemSessionBaseCommit.
 func (s *Storage) UpdateItemSessionGitActivity(ctx context.Context, id string, sha, msg string, commitAt time.Time, commitCount int) error {
 	return s.repo.UpdateItemSessionGitActivity(ctx, id, sha, msg, commitAt, commitCount)
+}
+
+// ListOpenJulesItemSessions returns every not-yet-ended jules_work ItemSession
+// across all backlog items. See EntRepository.ListOpenJulesItemSessions.
+func (s *Storage) ListOpenJulesItemSessions(ctx context.Context) ([]ItemSessionBacklogEntry, error) {
+	return s.repo.ListOpenJulesItemSessions(ctx)
+}
+
+// CountJulesItemSessionsSince counts confirmed, billed jules_work ItemSessions
+// created since since. See EntRepository.CountJulesItemSessionsSince.
+func (s *Storage) CountJulesItemSessionsSince(ctx context.Context, since time.Time) (int, error) {
+	return s.repo.CountJulesItemSessionsSince(ctx, since)
+}
+
+// TouchItemSessionProgress updates only last_progress_at on an ItemSession. See
+// EntRepository.TouchItemSessionProgress.
+func (s *Storage) TouchItemSessionProgress(ctx context.Context, id string, at time.Time) error {
+	return s.repo.TouchItemSessionProgress(ctx, id, at)
 }
 
 // UpdateItemSessionEnded records the end time for an ItemSession.

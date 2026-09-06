@@ -120,13 +120,20 @@ Subtle patterns (double-checked locking, etc.): `docs/explanation/concurrency-pa
 ## Application Data
 
 State and logs live in `~/.stapler-squad/`:
-- `logs/staplersquad.log` — main log (JSON-lines, one `slog` record per line); check here for session creation issues. `logs/service.log` is a different file — raw systemd stdout/stderr (startup banners, panics before logging init) — see `docs/how-to/debug-with-logs.md` for the full file breakdown, log-level controls, and volume-reduction guidance. With `STAPLER_SQUAD_INSTANCE=<name>` set, an instance logs to `instances/<name>/logs/staplersquad.log` instead (unset or `shared` uses the path above, unchanged)
+- `logs/staplersquad.log` — main log (JSON-lines, one `slog` record per line); check here for session creation issues. `logs/service.log` is a different file — raw systemd stdout/stderr (startup banners, panics before logging init) — see `docs/how-to/debug-with-logs.md` for the full file breakdown, log-level controls, and volume-reduction guidance.
+  Logs always land next to config/session state — `log.GetConfigDir()` mirrors
+  `config.GetConfigDir()`'s full priority list, so `STAPLER_SQUAD_INSTANCE=<name>`
+  logs to `instances/<name>/logs/staplersquad.log`, an opted-in
+  `STAPLER_SQUAD_WORKSPACE_MODE=true` or a `SwitchDatabase`-set workspace
+  preference logs to `workspaces/<hash-or-name>/logs/staplersquad.log`, and
+  unset/`shared` uses the path above, unchanged. See
+  `docs/reference/state-isolation.md` for the full priority list.
 - `worktrees/` — git worktrees for isolated sessions
 - `config.json`, `sessions.json`
 
 **Key log patterns:** `Starting tmux session`, `timed out waiting for tmux session`, `DoesSessionExist()` polling
 
-State isolation (workspace-based by default): `docs/reference/state-isolation.md`
+State isolation (workspace mode is opt-in, not default): `docs/reference/state-isolation.md`
 External session monitoring (ssq-mux for IDE terminals): `docs/how-to/monitor-external-terminal-sessions.md`
 
 ## Architecture Overview
@@ -307,6 +314,7 @@ doesn't apply since it isn't always-loaded. See `instance-lock-free-reads.md`.
 | Profiling / lock-up debugging | `docs/how-to/profile-lockups.md` |
 | OpenTelemetry / Datadog setup | `docs/how-to/enable-opentelemetry.md` |
 | Compile-time auto-instrumentation (opt-in `stapler-squad-otel` build) | `docs/how-to/enable-otel-auto-instrumentation.md` |
+| Enabling pi coding-agent support (flag, extension install, health badge) | `docs/how-to/enable-pi-support.md` |
 | macOS code signing / TCC | `docs/how-to/macos-codesigning.md` |
 | PTY multiplexing (ssq-mux) | `docs/how-to/monitor-external-terminal-sessions.md` |
 | State file isolation / multi-instance | `docs/reference/state-isolation.md` |
@@ -330,9 +338,11 @@ doesn't apply since it isn't always-loaded. See `instance-lock-free-reads.md`.
 | Package manager: always pnpm in web-app/, never npm/yarn | `docs/how-to/use-pnpm-in-web-app.md` |
 | macOS restart can leave orphaned processes racing over tmux/session state | `docs/explanation/service-restart-orphan-process.md` |
 | Fix flaky tests when found, don't just re-defer as "known pre-existing" | `fix-flaky-tests-dont-defer` skill |
+| Prefer deterministic, fast tests over real sleeps/timeouts/t.Setenv fixtures | `deterministic-fast-tests` skill |
 | Read *Instance fields via Snapshot(), not the raw field (avoids actor-write races) | `.claude/rules/instance-lock-free-reads.md` (glob-scoped to `session/instance*.go`) |
 | Slack Phase 2 interactive-approvals public reachability (scoping a tunnel to one path) | `docs/how-to/expose-slack-interactive-endpoint.md` |
 | GitHub webhook (`/webhooks/github`, incl. PR-fix events) public reachability | `docs/how-to/expose-github-webhook-endpoint.md` |
 | Log debugging: file locations, global/per-package log levels, reducing log volume, pattern-clustering tool | `docs/how-to/debug-with-logs.md` |
 | `gh pr merge` needs `--repo owner/repo` | `docs/how-to/merge-prs-with-gh-cli.md` |
 | Playwright Chromium install hangs during extraction | `docs/how-to/fix-playwright-chromium-install-stall.md` |
+| Dispatch backlog work to Google Jules (prerequisites, badge states, escape hatch) | `docs/how-to/dispatch-work-to-google-jules.md` |

@@ -41,6 +41,10 @@ type AnalyticsEntry struct {
 	CommandSubcategory string `json:"command_subcommand,omitempty"`
 	// PythonImports lists top-level module names imported in inline Python (-c) invocations.
 	PythonImports []string `json:"python_imports,omitempty"`
+	// Source identifies which agent's hook produced this request ("claude" or "pi").
+	// Defaulted to "claude" by the caller (ApprovalHandler.HandlePermissionRequest) when
+	// the wire payload omits it — see pi-support Epic 4.3.
+	Source string `json:"source,omitempty"`
 }
 
 // ToolStat is a tool name with a count.
@@ -188,7 +192,10 @@ func (s *AnalyticsStore) Record(entry AnalyticsEntry) {
 }
 
 // RecordFromResult builds and records an AnalyticsEntry from classification output.
-func (s *AnalyticsStore) RecordFromResult(payload classifier.PermissionRequestPayload, result classifier.ClassificationResult, sessionID, approvalID string, durationMs int64) {
+// source identifies which agent's hook produced payload ("claude" or "pi") — callers are
+// expected to have already defaulted it to "claude" when the wire payload omitted the field
+// (see ApprovalHandler.HandlePermissionRequest), so this function never re-defaults it.
+func (s *AnalyticsStore) RecordFromResult(payload classifier.PermissionRequestPayload, result classifier.ClassificationResult, sessionID, approvalID string, durationMs int64, source string) {
 	cmd, _ := payload.ToolInput["command"].(string)
 	filePath, _ := payload.ToolInput["file_path"].(string)
 	preview := cmd
@@ -212,6 +219,7 @@ func (s *AnalyticsStore) RecordFromResult(payload classifier.PermissionRequestPa
 		Alternative:    result.Alternative,
 		DurationMs:     durationMs,
 		ApprovalID:     approvalID,
+		Source:         source,
 	}
 
 	// For Bash tool calls, extract which programs are being invoked.
@@ -571,6 +579,7 @@ func (s *AnalyticsStore) flush(ctx interface{ Done() <-chan struct{} }) {
 			CommandCategory:    e.CommandCategory,
 			CommandSubcategory: e.CommandSubcategory,
 			PythonImports:      e.PythonImports,
+			Source:             e.Source,
 			CreatedAt:          e.Timestamp,
 		}
 		_ = s.storage.RecordAnalytics(context.Background(), data)

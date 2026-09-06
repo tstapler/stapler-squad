@@ -59,6 +59,14 @@ func (i *Instance) setupFirstTimeWorktree() error {
 
 	switch i.SessionType {
 	case SessionTypeNewWorktree:
+		// This case's contract is deliberately strict and unconditional: i.Path
+		// must already be an existing repo. It never bootstraps one, with no
+		// CreateIfMissing exception -- see findGitRepoRoot's doc comment for why
+		// that was a deliberate hardening fix (9037ed5e0), not an oversight. A
+		// genuinely new project that also wants an isolated worktree goes
+		// through SessionTypeNewProject below (i.Branch set), which always
+		// bootstraps and then optionally worktrees off the fresh repo -- so
+		// this case's contract never needs a second, parallel bootstrap path.
 		log.Info("creating git worktree for instance", "session", i.Title, "path", i.Path)
 		gitWorktree, branchName, err := git.NewGitWorktreeWithBranch(i.Path, i.Title, i.Branch, git.WithCommandRunner(i.executionTarget().Runner()))
 		if err != nil {
@@ -148,6 +156,27 @@ func (i *Instance) setupFirstTimeWorktree() error {
 				return fmt.Errorf("new_project initialization failed: %w", err)
 			}
 		}
+		// web-app's "New Project, opened as New Worktree" (Omnibar) sends an
+		// explicit i.Branch alongside SessionTypeNewProject rather than
+		// SessionTypeNewWorktree -- i.Path is guaranteed to be a real repo from
+		// InitializeProjectDirectory above, so a worktree can be created on it
+		// the same way SessionTypeNewWorktree does for an already-existing repo.
+		// "Open as: Directory" leaves i.Branch empty and falls through to the
+		// no-worktree branch below, unchanged from before this bootstrap
+		// capability existed. Remote targets don't support this combination yet
+		// (CreateSession's remote mode-specific block has no worktree-creation
+		// case for SessionTypeNewProject) -- a real, pre-existing limitation,
+		// not one introduced here; i.Branch is simply ignored for remote.
+		if i.Branch != "" && !i.executionTarget().IsRemote() {
+			gitWorktree, branchName, err := git.NewGitWorktreeWithBranch(i.Path, i.Title, i.Branch, git.WithCommandRunner(i.executionTarget().Runner()))
+			if err != nil {
+				return fmt.Errorf("new_project worktree creation failed: %w", err)
+			}
+			i.gitManager.SetWorktree(gitWorktree)
+			i.Branch = branchName
+			log.Info("new project initialized with worktree", "path", i.Path, "branch", i.Branch)
+			return nil
+		}
 		i.gitManager.SetWorktree(nil)
 		i.Branch = ""
 		log.Info("new project initialized", "path", i.Path)
@@ -230,7 +259,13 @@ const BacklogBranchPrefix = "backlog/"
 // out from under another process mid-add, surfacing as git's generic "fatal: failed to
 // resolve HEAD as a valid ref". Setup runs via wt.SetupLocked() rather than wt.Setup() here
 // because this goroutine already holds the (non-reentrant) lock.
-func CreateBacklogWorktree(repoPath, branchSuffix string) (string, error) {
+// baseBranch, when non-empty, is an explicit opt-in override (BacklogItem.
+// BaseBranch): the branch is resolved by name (origin, falling back to
+// local) instead of the repo's default branch, and any resolution failure
+// (including "branch doesn't exist anywhere") is a hard error — never a
+// silent fallback to the default branch or ambient HEAD, since the caller
+// asked for this branch specifically.
+func CreateBacklogWorktree(repoPath, branchSuffix, baseBranch string) (string, error) {
 	if repoPath == "" {
 		// ResolveSessionPath("") silently resolves to the process's own cwd
 		// (the live server's own checkout) instead of erroring — a BacklogItem
@@ -238,28 +273,13 @@ func CreateBacklogWorktree(repoPath, branchSuffix string) (string, error) {
 		// see SpawnSessionFromItem's own guard), so reject before that happens.
 		return "", fmt.Errorf("CreateBacklogWorktree: repoPath must not be empty")
 	}
-	resolvedRepo, err := ResolveSessionPath(repoPath)
+	// ResolveMainRepoRoot anchors everything below (repair, lock, fetch, worktree
+	// add) to the real repo root, not to whatever worktree path repoPath happened
+	// to be stored as — see its doc comment for why that matters (WithRepoWorktreeLock's
+	// lock key and RemoveWorktree's cleanup both key off this path).
+	resolvedRepo, err := ResolveMainRepoRoot(repoPath)
 	if err != nil {
 		return "", fmt.Errorf("CreateBacklogWorktree: %w", err)
-	}
-
-	// BacklogItem.RepoPath is stored verbatim from whatever the reporting caller
-	// supplied — nothing upstream guarantees it's the main checkout rather than a
-	// worktree (e.g. an agent running inside one filed the item and passed its own
-	// CWD). git worktree add technically still works when run from another
-	// worktree's directory (they share the same .git), but every later operation on
-	// the new worktree — WithRepoWorktreeLock's lock key, RemoveWorktree's cleanup —
-	// would then be anchored to that other worktree's path instead of the real repo
-	// root. If that anchor is itself ephemeral (e.g. a triage worktree deleted once
-	// triage finishes), later git -C <deleted-dir> calls fail with a generic error
-	// that isn't recognized as expected cleanup, orphaning .git/worktrees metadata.
-	// Resolve to the actual main repo root before doing anything else so the entire
-	// operation — repair, lock, fetch, worktree add — is anchored consistently no
-	// matter what path got stored. Best-effort: if resolution fails (e.g. repoPath
-	// isn't a git repo at all yet), fall through with the original path unchanged —
-	// resolveSessionPath's caller handles that case (directory-mode fallback).
-	if mainRepo, mainErr := GetMainRepoPath(resolvedRepo); mainErr == nil && mainRepo != "" {
-		resolvedRepo = mainRepo
 	}
 
 	var worktreePath string
@@ -270,24 +290,33 @@ func CreateBacklogWorktree(repoPath, branchSuffix string) (string, error) {
 		branchName := BacklogBranchPrefix + branchSuffix
 		var wt *git.GitWorktree
 		var err error
-		defaultBranch, baseSHA, fetchErr := git.ResolveDefaultBranchSHA(resolvedRepo)
-		if fetchErr != nil {
-			log.Warn("failed to resolve default branch tip from origin, falling back to local", "repoPath", resolvedRepo, "error", fetchErr)
-			defaultBranch, baseSHA, err = git.ResolveDefaultLocalBranchSHA(resolvedRepo)
+		var defaultBranch, baseSHA string
+		var resolveErr error
+		if baseBranch != "" {
+			defaultBranch = baseBranch
+			baseSHA, resolveErr = git.ResolveExplicitBranchSHA(resolvedRepo, baseBranch)
+		} else {
+			defaultBranch, baseSHA, resolveErr = git.ResolveWorktreeBaseCommit(resolvedRepo)
 		}
 		switch {
-		case err == nil && baseSHA != "":
-			log.Debug("CreateBacklogWorktree: branching from default branch", "repoPath", resolvedRepo, "defaultBranch", defaultBranch, "baseSHA", baseSHA)
+		case resolveErr != nil && baseBranch != "":
+			return fmt.Errorf("resolve base_branch %q: %w", baseBranch, resolveErr)
+		case resolveErr != nil:
+			return fmt.Errorf("resolve default branch: %w", resolveErr)
+		case baseSHA != "":
+			if baseBranch != "" {
+				log.Debug("CreateBacklogWorktree: branching from explicit base_branch override", "repoPath", resolvedRepo, "baseBranch", baseBranch, "baseSHA", baseSHA)
+			} else {
+				log.Debug("CreateBacklogWorktree: branching from default branch", "repoPath", resolvedRepo, "defaultBranch", defaultBranch, "baseSHA", baseSHA)
+			}
 			wt, _, err = git.NewGitWorktreeFromCommitSHA(resolvedRepo, branchSuffix, branchName, baseSHA)
-		case git.IsUnbornRepo(resolvedRepo):
-			// No commits exist anywhere in resolvedRepo yet, so ambient HEAD carries
-			// no risk of branching from an unrelated branch's work — there is no other
-			// branch. Preserves the auto-create-initial-commit behavior findGitRepoRoot
-			// already provides for a brand-new, never-committed-to repo.
+		default:
+			// No commits exist anywhere in resolvedRepo yet (IsUnbornRepo), so ambient
+			// HEAD carries no risk of branching from an unrelated branch's work — there
+			// is no other branch. Preserves the auto-create-initial-commit behavior
+			// findGitRepoRoot already provides for a brand-new, never-committed-to repo.
 			log.Warn("no default branch found and repo has no commits yet, branching from empty ambient HEAD", "repoPath", resolvedRepo)
 			wt, _, err = git.NewGitWorktreeWithBranch(resolvedRepo, branchSuffix, branchName)
-		default:
-			return fmt.Errorf("resolve default branch (origin fetch failed: %w, local lookup failed: %v)", fetchErr, err)
 		}
 		if err != nil {
 			return err
@@ -585,8 +614,31 @@ func (i *Instance) GetWorkingDirectory() string {
 
 // DetectAndPopulateWorktreeInfo detects if the instance path is a worktree
 // and populates the IsWorktree, MainRepoPath, GitHubOwner, and GitHubRepo fields.
-// NOTE: This method writes to GitHub fields (i.GitHubOwner, i.GitHubRepo) directly.
-// A future pass could route writes through a setter method for encapsulation.
+//
+// CONFIRMED DATA RACE, not fixed here: this method reads i.Path and writes
+// IsWorktree, MainRepoPath, GitHubOwner, and GitHubRepo directly, with no
+// lock, from outside the actor -- reproduced with `go test -race` racing this
+// method against a concurrent i.mu.Lock()-guarded writer (e.g.
+// setGitHubResolutionLocked's pattern) touching the same fields, matching
+// .claude/rules/instance-lock-free-reads.md's documented race. Both current
+// call sites (NewInstance-style construction in instance.go, and
+// deserialization in instance_serialization.go) happen to run before the
+// instance is shared with any other goroutine, so this isn't reachable today
+// -- but nothing in this function's own field access defends against a future
+// call site (e.g. a re-detection/refresh path) introducing it for real.
+//
+// Not fixed to i.GetPath() here despite that being the rule's usual
+// prescription: at least one caller in this session-creation/retry/trigger
+// pipeline sets i.Path via a raw assignment without republishing the atomic
+// snapshot before this method runs, so GetPath() observes a stale cached
+// value instead of the fresh field -- confirmed by `go test ./server/services/...`
+// regressing (TestBackgroundResolutionPipeline_*, TestSessionService_RetrySession_*,
+// TestTriggerTriage_*) when i.Path here was switched to i.GetPath(). Properly
+// closing this class needs routing both the read and the writes through the
+// actor (mirroring setGitHubResolutionLocked in instance_actor_setters.go),
+// which also needs the actor goroutine confirmed live at both call sites --
+// not done here to avoid trading a live functional regression for a
+// currently-unreachable theoretical race.
 // This is useful for sessions created from existing worktrees where we want to
 // display the actual repository information in the UI.
 //
@@ -601,6 +653,8 @@ func (i *Instance) GetWorkingDirectory() string {
 func (i *Instance) DetectAndPopulateWorktreeInfo() error {
 	// Determine the path to use for detection
 	// For worktree sessions, use the worktree path; otherwise use i.Path
+	// (raw field, deliberately not GetPath() -- see this function's doc
+	// comment for why: GetPath() regressed real session-creation tests here).
 	detectPath := i.Path
 	if i.gitManager.HasWorktree() {
 		worktreePath := i.gitManager.GetWorktreePath()

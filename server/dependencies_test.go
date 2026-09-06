@@ -1,8 +1,15 @@
 package server
 
 import (
+	"bytes"
+	"errors"
+	"log/slog"
 	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"github.com/zalando/go-keyring"
 
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/session"
@@ -378,4 +385,33 @@ func TestPrNumFromTitle(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestServerDependencies_should_DegradeFeatureNotServer_When_KeychainUnreadableAtStartup
+// covers google-jules-integration Story 2.4.4's construction-failure
+// acceptance criterion: with Jules enabled but the keychain unreadable at
+// startup, BuildDependencies must still succeed (server starts normally),
+// leaving deps.JulesSessionPoller nil and logging "jules disabled" once at
+// Info — every other subsystem (SessionService, BacklogService) unaffected.
+func TestServerDependencies_should_DegradeFeatureNotServer_When_KeychainUnreadableAtStartup(t *testing.T) {
+	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	keyring.MockInitWithError(errors.New("simulated unreadable keychain"))
+
+	cfg := config.LoadConfig()
+	cfg.Jules.Enabled = true
+	require.NoError(t, config.SaveConfig(cfg))
+
+	var buf bytes.Buffer
+	handler := slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})
+	origDefault := slog.Default()
+	slog.SetDefault(slog.New(handler))
+	t.Cleanup(func() { slog.SetDefault(origDefault) })
+
+	deps, err := BuildDependencies()
+	require.NoError(t, err, "an unreadable keychain must degrade the Jules feature, not fail server startup")
+
+	assert.Nil(t, deps.JulesSessionPoller)
+	assert.Contains(t, buf.String(), "jules disabled")
+	assert.NotNil(t, deps.SessionService, "every other subsystem must be unaffected")
+	assert.NotNil(t, deps.BacklogService, "every other subsystem must be unaffected")
 }

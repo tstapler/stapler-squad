@@ -224,6 +224,11 @@ message BacklogItem {
   // affordances instead of the internal UUID `id`. Empty for rows that
   // predate the public_id backfill — callers must fall back to `id`.
   string public_id = 36;
+  // base_branch is an explicit opt-in override for the branch new worktrees
+  // (triage's isolated worktree, and the eventual work session) fork from.
+  // Unset means the default: origin's default branch tip, not repo_path's
+  // own ambient HEAD (see git.ResolveWorktreeBaseCommit).
+  optional string base_branch = 37;
 }
 
 // ItemSource represents an external plugin source that syncs items into the
@@ -269,6 +274,87 @@ message PipelineMode {
   string content_hash = 17;
 }
 
+// LivenessDefinition is the proto representation of session.LivenessDefinition
+// (Epic 1.1 of backlog-custom-workflow-stages) — a named,
+// (stage_slug, pipeline_mode)-addressed override for how long a given backlog
+// stage may go without progress before a reconcile* stuck-detection sweep
+// treats an item as stuck. Mirrors PipelineMode's CRUD shape. No UI consumes
+// this in Phase 1 — operator-callable only, via the 5 RPCs below.
+message LivenessDefinition {
+  string id = 1;
+  string stage_slug = 2;
+  // pipeline_mode is unset for a mode-less row (applies to all pipeline
+  // modes absent a more specific override) — see CachingLivenessEngine's
+  // (stage, mode) -> (stage, nil) fallback.
+  optional string pipeline_mode = 3;
+  // kind is one of "duration_budget", "heartbeat", "cycle_frequency" —
+  // mirrors session.LivenessKind's 3 string values exactly.
+  string kind = 4;
+  // Shape A ("duration_budget") fields, in milliseconds. Zero when kind is
+  // not "duration_budget".
+  int64 expected_duration_ms = 5;
+  int64 staleness_margin_ms = 6;
+  // Shape B ("heartbeat") field, in milliseconds. Zero when kind is not
+  // "heartbeat".
+  int64 max_no_progress_duration_ms = 7;
+  // Shape C ("cycle_frequency") fields. Zero when kind is not
+  // "cycle_frequency".
+  int32 cycle_threshold = 8;
+  int64 cycle_lookback_ms = 9;
+  bool enabled = 10;
+  google.protobuf.Timestamp created_at = 11;
+  google.protobuf.Timestamp updated_at = 12;
+}
+
+// BacklogStage is the proto representation of session.StageDefinition / the
+// persisted BacklogStage row (Epic 2.2's schema) — one node in the workflow
+// graph, built-in or operator-defined. Epic 2.7's 5-RPC CRUD surface below is
+// the settings UI's (Epic 2.8) only way to create/edit these.
+message BacklogStage {
+  string id = 1;
+  string slug = 2;
+  string name = 3;
+  string description = 4;
+  bool is_entry = 5;
+  bool is_terminal = 6;
+  bool enabled = 7;
+  google.protobuf.Timestamp created_at = 8;
+  google.protobuf.Timestamp updated_at = 9;
+}
+
+// StageTransition is the proto representation of one (from_stage, to_stage)
+// edge in the workflow graph (Epic 2.2's schema), with its attached gates
+// eager-loaded.
+message StageTransition {
+  string id = 1;
+  string from_stage_slug = 2;
+  string to_stage_slug = 3;
+  bool enabled = 4;
+  repeated TransitionGate gates = 5;
+  google.protobuf.Timestamp created_at = 6;
+  google.protobuf.Timestamp updated_at = 7;
+}
+
+// TransitionGate is the proto representation of one gate attached to a
+// StageTransition (Epic 2.2's schema). config carries kind-specific
+// key/value pairs — validated server-side by session.ParseGateConfig against
+// kind's allowlisted field set (and, for kind="custom", Story 2.4.4's
+// pre-registered skill allowlist) at save time (Task 2.7.2g), never
+// interpreted as an arbitrary command.
+message TransitionGate {
+  string id = 1;
+  string transition_id = 2;
+  // kind is one of session.GateKind's 4 values: "human_approval",
+  // "automated_review", "structural", "custom".
+  string kind = 3;
+  map<string, string> config = 4;
+  bool stateful = 5;
+  int32 order_index = 6;
+  bool enabled = 7;
+  google.protobuf.Timestamp created_at = 8;
+  google.protobuf.Timestamp updated_at = 9;
+}
+
 // SourceSyncEvent records the result of a single sync run for an ItemSource.
 message SourceSyncEvent {
   string id = 1;
@@ -299,6 +385,10 @@ message CreateBacklogItemRequest {
   // category is a coarse classification (bugfix/feature/chore/refactor).
   // Unset means uncategorized.
   optional string category = 13;
+  // base_branch is an explicit opt-in override for the branch new worktrees
+  // fork from — see BacklogItem.base_branch. Unset means the default
+  // (origin's default branch tip), not repo_path's own ambient HEAD.
+  optional string base_branch = 14;
 }
 
 message CreateBacklogItemResponse {
@@ -459,6 +549,10 @@ message UpdateBacklogItemRequest {
   // (requires the item to currently be in "review" status).
   optional string pr_url = 17;
   optional int32 pr_number = 18;
+  // base_branch is presence-gated like category: unset leaves the item's
+  // stored override untouched, a non-nil pointer (including one pointing at
+  // "") explicitly sets/clears it. See BacklogItem.base_branch.
+  optional string base_branch = 19;
 }
 
 message UpdateBacklogItemResponse {
@@ -616,6 +710,23 @@ message TriggerShipPRResponse {
   string pr_url = 1;
 }
 
+// DispatchToJulesRequest deliberately carries no egress_acknowledged field
+// (google-jules-integration pre-mortem P1 #3, mirrors
+// services.JulesDispatchRequest's doc comment): consent is a durable,
+// server-side fact only ConfirmEgressConsent can write, never a
+// caller-supplied boolean this RPC could trust.
+message DispatchToJulesRequest {
+  string item_id = 1;
+  // branch is required — MVP Jules dispatch only ever starts from a branch
+  // already pushed to GitHub, never an unpushed local one.
+  string branch = 2;
+  string prompt = 3;
+}
+
+message DispatchToJulesResponse {
+  ItemSession item_session = 1;
+}
+
 message TriggerSyncRequest {
   string source_id = 1;
 }
@@ -749,6 +860,245 @@ message ListPipelineModesRequest {}
 
 message ListPipelineModesResponse {
   repeated PipelineMode items = 1;
+}
+
+message CreateLivenessDefinitionRequest {
+  string stage_slug = 1;
+  // pipeline_mode unset means a mode-less row (applies to all pipeline modes).
+  optional string pipeline_mode = 2;
+  string kind = 3;
+  int64 expected_duration_ms = 4;
+  int64 staleness_margin_ms = 5;
+  int64 max_no_progress_duration_ms = 6;
+  int32 cycle_threshold = 7;
+  int64 cycle_lookback_ms = 8;
+  bool enabled = 9;
+}
+
+message CreateLivenessDefinitionResponse {
+  LivenessDefinition item = 1;
+}
+
+message UpdateLivenessDefinitionRequest {
+  string id = 1;
+  optional int64 expected_duration_ms = 2;
+  optional int64 staleness_margin_ms = 3;
+  optional int64 max_no_progress_duration_ms = 4;
+  optional int32 cycle_threshold = 5;
+  optional int64 cycle_lookback_ms = 6;
+  optional bool enabled = 7;
+}
+
+message UpdateLivenessDefinitionResponse {
+  LivenessDefinition item = 1;
+}
+
+message DeleteLivenessDefinitionRequest {
+  string id = 1;
+}
+
+message DeleteLivenessDefinitionResponse {}
+
+message GetLivenessDefinitionRequest {
+  string stage_slug = 1;
+  optional string pipeline_mode = 2;
+}
+
+message GetLivenessDefinitionResponse {
+  LivenessDefinition item = 1;
+}
+
+message ListLivenessDefinitionsRequest {}
+
+message ListLivenessDefinitionsResponse {
+  repeated LivenessDefinition items = 1;
+}
+
+// ============================================================================
+// Stage / Transition / Gate CRUD (Epic 2.7 of backlog-custom-workflow-stages)
+// ============================================================================
+
+message CreateStageRequest {
+  string slug = 1;
+  string name = 2;
+  string description = 3;
+  bool is_entry = 4;
+  bool is_terminal = 5;
+  bool enabled = 6;
+}
+
+message CreateStageResponse {
+  BacklogStage item = 1;
+}
+
+message UpdateStageRequest {
+  string id = 1;
+  optional string name = 2;
+  optional string description = 3;
+  optional bool is_entry = 4;
+  optional bool is_terminal = 5;
+  optional bool enabled = 6;
+}
+
+message UpdateStageResponse {
+  BacklogStage item = 1;
+}
+
+message DeleteStageRequest {
+  string id = 1;
+  // force bypasses the live-item-count guard (Story 2.7.1's "disable, don't
+  // delete" acceptance criterion) — the settings UI never sets this; it
+  // exists for a deliberate operator override.
+  bool force = 2;
+}
+
+message DeleteStageResponse {}
+
+message GetStageRequest {
+  string slug = 1;
+}
+
+message GetStageResponse {
+  BacklogStage item = 1;
+}
+
+message ListStagesRequest {}
+
+message ListStagesResponse {
+  repeated BacklogStage items = 1;
+}
+
+message CreateStageTransitionRequest {
+  string from_stage_slug = 1;
+  string to_stage_slug = 2;
+  bool enabled = 3;
+}
+
+message CreateStageTransitionResponse {
+  StageTransition item = 1;
+  // warnings carries Epic 2.6's ValidateGraph non-blocking warning strings
+  // (e.g. a gate-free cycle) computed against the graph as it stands after
+  // this create — never a rejection, just an operator-facing heads-up.
+  repeated string warnings = 2;
+}
+
+message UpdateStageTransitionRequest {
+  string id = 1;
+  optional bool enabled = 2;
+}
+
+message UpdateStageTransitionResponse {
+  StageTransition item = 1;
+  // warnings — see CreateStageTransitionResponse.warnings.
+  repeated string warnings = 2;
+}
+
+message DeleteStageTransitionRequest {
+  string id = 1;
+}
+
+message DeleteStageTransitionResponse {}
+
+message GetStageTransitionRequest {
+  string id = 1;
+}
+
+message GetStageTransitionResponse {
+  StageTransition item = 1;
+}
+
+message ListStageTransitionsRequest {
+  // from_stage_slug, when set, restricts results to edges outgoing from this
+  // stage. Empty means all transitions.
+  optional string from_stage_slug = 1;
+}
+
+message ListStageTransitionsResponse {
+  repeated StageTransition items = 1;
+}
+
+message CreateTransitionGateRequest {
+  string transition_id = 1;
+  string kind = 2;
+  map<string, string> config = 3;
+  bool stateful = 4;
+  int32 order_index = 5;
+  bool enabled = 6;
+}
+
+message CreateTransitionGateResponse {
+  TransitionGate item = 1;
+}
+
+// UpdateTransitionGateRequest always resubmits kind+config together (rather
+// than each independently optional): session.ParseGateConfig validates a
+// config payload against its kind atomically, so a partial (kind XOR config)
+// update could silently leave a stale/invalid pairing on the row between the
+// two writes.
+message UpdateTransitionGateRequest {
+  string id = 1;
+  string kind = 2;
+  map<string, string> config = 3;
+  optional bool stateful = 4;
+  optional int32 order_index = 5;
+  optional bool enabled = 6;
+}
+
+message UpdateTransitionGateResponse {
+  TransitionGate item = 1;
+}
+
+message DeleteTransitionGateRequest {
+  string id = 1;
+}
+
+message DeleteTransitionGateResponse {}
+
+message GetTransitionGateRequest {
+  string id = 1;
+}
+
+message GetTransitionGateResponse {
+  TransitionGate item = 1;
+}
+
+message ListTransitionGatesRequest {
+  // transition_id, when set, restricts results to gates on that transition.
+  // Empty means all gates.
+  optional string transition_id = 1;
+}
+
+message ListTransitionGatesResponse {
+  repeated TransitionGate items = 1;
+}
+
+// GateSatisfactionRecord is the proto representation of a persisted one-shot
+// gate outcome (Epic 2.4, session.GateSatisfactionData), keyed by
+// (item_id, gate_id).
+message GateSatisfactionRecord {
+  string id = 1;
+  string item_id = 2;
+  string gate_id = 3;
+  bool satisfied = 4;
+  string satisfied_by = 5;
+  google.protobuf.Timestamp satisfied_at = 6;
+  google.protobuf.Timestamp created_at = 7;
+}
+
+// RecordGateApprovalRequest records one explicit human-approval action for a
+// human_approval-kind gate (Story 2.4.1). One-shot: a second call for the
+// same (item_id, gate_id) pair is rejected (connect.CodeAlreadyExists) by the
+// schema's UNIQUE(item_id, gate_id) index, not silently overwritten.
+message RecordGateApprovalRequest {
+  string item_id = 1;
+  string gate_id = 2;
+  // satisfied_by identifies the approving actor (e.g. a username) — optional,
+  // purely for audit display.
+  string satisfied_by = 3;
+}
+
+message RecordGateApprovalResponse {
+  GateSatisfactionRecord record = 1;
 }
 
 // ============================================================================
@@ -966,6 +1316,13 @@ service BacklogService {
   // detail page.
   rpc TriggerShipPR(TriggerShipPRRequest) returns (TriggerShipPRResponse) {}
 
+  // DispatchToJules dispatches a ready backlog item to Google Jules — the one
+  // guarded entry point the web UI (and later an MCP tool) uses. Requires the
+  // item's repo to already be acknowledged for cloud egress via a prior
+  // ConfirmEgressConsent call; there is no field on this request that can
+  // grant that consent itself (google-jules-integration pre-mortem P1 #3).
+  rpc DispatchToJules(DispatchToJulesRequest) returns (DispatchToJulesResponse) {}
+
   // TriggerSync initiates a sync run for an external item source.
   rpc TriggerSync(TriggerSyncRequest) returns (TriggerSyncResponse) {}
 
@@ -1005,6 +1362,86 @@ service BacklogService {
 
   // ListPipelineModes returns all pipeline modes, including disabled ones.
   rpc ListPipelineModes(ListPipelineModesRequest) returns (ListPipelineModesResponse) {}
+
+  // CreateLivenessDefinition registers a new stage/pipeline-mode liveness
+  // override. Rejects a request whose (stage_slug, pipeline_mode) pair
+  // already has an enabled row with CodeAlreadyExists.
+  rpc CreateLivenessDefinition(CreateLivenessDefinitionRequest) returns (CreateLivenessDefinitionResponse) {}
+
+  // UpdateLivenessDefinition modifies an existing liveness definition's
+  // fields via partial update, invalidating the in-process liveness cache
+  // synchronously on success.
+  rpc UpdateLivenessDefinition(UpdateLivenessDefinitionRequest) returns (UpdateLivenessDefinitionResponse) {}
+
+  // DeleteLivenessDefinition removes a liveness definition override.
+  rpc DeleteLivenessDefinition(DeleteLivenessDefinitionRequest) returns (DeleteLivenessDefinitionResponse) {}
+
+  // GetLivenessDefinition retrieves a single liveness definition by
+  // (stage_slug, pipeline_mode) exact match.
+  rpc GetLivenessDefinition(GetLivenessDefinitionRequest) returns (GetLivenessDefinitionResponse) {}
+
+  // ListLivenessDefinitions returns all liveness definitions, including
+  // disabled ones.
+  rpc ListLivenessDefinitions(ListLivenessDefinitionsRequest) returns (ListLivenessDefinitionsResponse) {}
+
+  // CreateStage registers a new workflow stage.
+  rpc CreateStage(CreateStageRequest) returns (CreateStageResponse) {}
+
+  // UpdateStage modifies an existing stage's fields via partial update.
+  rpc UpdateStage(UpdateStageRequest) returns (UpdateStageResponse) {}
+
+  // DeleteStage removes a stage definition. Rejected with
+  // CodeFailedPrecondition (naming the live item count) when the stage has
+  // >=1 live item, unless force=true.
+  rpc DeleteStage(DeleteStageRequest) returns (DeleteStageResponse) {}
+
+  // GetStage retrieves a single stage by slug.
+  rpc GetStage(GetStageRequest) returns (GetStageResponse) {}
+
+  // ListStages returns all stages, including disabled ones.
+  rpc ListStages(ListStagesRequest) returns (ListStagesResponse) {}
+
+  // CreateStageTransition adds a new (from_stage, to_stage) edge, invoking
+  // Epic 2.6's graph validator before committing.
+  rpc CreateStageTransition(CreateStageTransitionRequest) returns (CreateStageTransitionResponse) {}
+
+  // UpdateStageTransition modifies an existing transition's enabled flag.
+  // Disabling an edge additionally invokes the live-item-aware disable
+  // check (Task 2.6.1e) before committing.
+  rpc UpdateStageTransition(UpdateStageTransitionRequest) returns (UpdateStageTransitionResponse) {}
+
+  // DeleteStageTransition removes a transition edge.
+  rpc DeleteStageTransition(DeleteStageTransitionRequest) returns (DeleteStageTransitionResponse) {}
+
+  // GetStageTransition retrieves a single transition by id.
+  rpc GetStageTransition(GetStageTransitionRequest) returns (GetStageTransitionResponse) {}
+
+  // ListStageTransitions returns transitions, optionally filtered by
+  // from_stage_slug.
+  rpc ListStageTransitions(ListStageTransitionsRequest) returns (ListStageTransitionsResponse) {}
+
+  // CreateTransitionGate attaches a new gate to a transition. config is
+  // validated against kind (and, for a custom-check gate, Story 2.4.4's
+  // pre-registered skill allowlist) before persisting.
+  rpc CreateTransitionGate(CreateTransitionGateRequest) returns (CreateTransitionGateResponse) {}
+
+  // UpdateTransitionGate modifies an existing gate's kind/config (revalidated
+  // together) and/or its stateful/order_index/enabled fields.
+  rpc UpdateTransitionGate(UpdateTransitionGateRequest) returns (UpdateTransitionGateResponse) {}
+
+  // DeleteTransitionGate removes a gate from its transition.
+  rpc DeleteTransitionGate(DeleteTransitionGateRequest) returns (DeleteTransitionGateResponse) {}
+
+  // GetTransitionGate retrieves a single gate by id.
+  rpc GetTransitionGate(GetTransitionGateRequest) returns (GetTransitionGateResponse) {}
+
+  // ListTransitionGates returns gates, optionally filtered by transition_id.
+  rpc ListTransitionGates(ListTransitionGatesRequest) returns (ListTransitionGatesResponse) {}
+
+  // RecordGateApproval records one explicit human-approval action for a
+  // human_approval-kind gate (Epic 2.4, Story 2.4.1) — one-shot, not
+  // re-askable once recorded.
+  rpc RecordGateApproval(RecordGateApprovalRequest) returns (RecordGateApprovalResponse) {}
 
   // ImportGitHubIssue creates a backlog item pre-populated from a GitHub issue.
   rpc ImportGitHubIssue(ImportGitHubIssueRequest) returns (ImportGitHubIssueResponse) {}

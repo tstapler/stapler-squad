@@ -403,30 +403,13 @@ fda_is_granted() {
     return 1
 }
 
-# Polls (up to 10s) until none of the given TCP ports have a LISTENer, so the
-# incoming process doesn't race the outgoing one's socket teardown. Ports that
-# are empty/unset (e.g. profiling disabled) are skipped. Proceeds with a
-# warning on timeout rather than blocking forever — a genuinely stuck old
-# process needs a human, not a longer sleep.
-wait_for_port_release() {
-    max_ticks=20  # 20 * 0.5s = 10s
-    tick=0
-    while [ "$tick" -lt "$max_ticks" ]; do
-        busy=0
-        for port in "$@"; do
-            [ -n "$port" ] || continue
-            if lsof -nP -iTCP:"$port" -sTCP:LISTEN >/dev/null 2>&1; then
-                busy=1
-                break
-            fi
-        done
-        [ "$busy" = "0" ] && return 0
-        sleep 0.5
-        tick=$((tick + 1))
-    done
-    log_warning "Old process still holding a port after $((max_ticks / 2))s — starting anyway."
-    return 1
-}
+# wait_for_port_release: polls (up to 10s) until none of the given TCP ports
+# have a LISTENer, so the incoming process doesn't race the outgoing one's
+# socket teardown. Shared with scripts/dev-restart-guard.sh (see that file's
+# and lib/wait_for_port_release.sh's doc comments for why this must not be a
+# second, drifted reimplementation).
+# shellcheck source=scripts/lib/wait_for_port_release.sh
+. "$(dirname "$0")/lib/wait_for_port_release.sh"
 
 # ── macOS launchd start/stop helpers ─────────────────────────────────────────
 # Shared by install_macos (fresh install/redeploy) and health_check_and_rollback

@@ -12,6 +12,7 @@ import (
 	"github.com/tstapler/stapler-squad/internal/syncutil"
 	"github.com/tstapler/stapler-squad/log"
 	pkganalytics "github.com/tstapler/stapler-squad/pkg/analytics"
+	"github.com/tstapler/stapler-squad/server/adapters"
 	"github.com/tstapler/stapler-squad/server/analytics"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/handlers"
@@ -232,6 +233,15 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	if deps.WorktreePRPoller != nil {
 		deps.WorktreePRPoller.Start(serverCtx)
 		log.Info("WorktreePRPoller started")
+	}
+
+	// Start JulesSessionPoller: nil unless config.Config.Jules.Enabled and the
+	// API key resolved at startup (server/dependencies.go's jules wiring
+	// block) — never started, and no "jules poll tick" line ever logged,
+	// when the feature is off.
+	if deps.JulesSessionPoller != nil {
+		deps.JulesSessionPoller.Start(serverCtx)
+		log.Info("JulesSessionPoller started")
 	}
 
 	// Register shutdown hook: capture pane working dirs and persist instance
@@ -723,6 +733,43 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	srv.mux.HandleFunc("/api/hooks/permission-request", approvalHandler.HandlePermissionRequest)
 	log.Info("Registered Claude Code hook approval handler at /api/hooks/permission-request")
 	srv.approvalHandler = approvalHandler
+
+	// pi approval-extension health tracking (pi-support Epic 4.2). The route
+	// itself is registered unconditionally (mirroring every other
+	// /api/hooks/* route above), but HandlePiExtensionLoaded gates on
+	// config.FeaturePiSupport as its first line and 404s when the flag is
+	// off — so with the flag off this never records into piHealthTracker's
+	// in-memory map, matching every other pi surface.
+	piHealthTracker := services.NewPiExtensionHealthTracker()
+	approvalHandler.SetPiExtensionHealthTracker(piHealthTracker)
+	srv.mux.HandleFunc("/api/hooks/pi-extension-loaded", approvalHandler.HandlePiExtensionLoaded)
+	log.Info("Registered pi approval-extension health-ping handler at /api/hooks/pi-extension-loaded")
+	// Feed the tracker into InstanceToProto (server/adapters/instance_adapter.go)
+	// via the same package-level-resolver pattern hookBaseURLFn uses above --
+	// adapters can't import services directly (services already imports
+	// adapters), so server.go is the one place that can wire the two together.
+	adapters.SetPiExtensionHealthResolver(func(sessionID, program string) sessionv1.PiExtensionHealth {
+		if !config.LoadConfig().GetFeatureFlag(config.FeaturePiSupport) || !session.IsPi(program) {
+			return sessionv1.PiExtensionHealth_PI_EXTENSION_HEALTH_UNSPECIFIED
+		}
+		switch piHealthTracker.HealthFor(sessionID) {
+		case services.PiExtensionHealthLoaded:
+			return sessionv1.PiExtensionHealth_PI_EXTENSION_HEALTH_LOADED
+		case services.PiExtensionHealthFailed:
+			return sessionv1.PiExtensionHealth_PI_EXTENSION_HEALTH_FAILED
+		default:
+			return sessionv1.PiExtensionHealth_PI_EXTENSION_HEALTH_UNKNOWN
+		}
+	})
+	// Evict a destroyed session's tracker entry (pi-support Epic 4.2 MAJOR 1
+	// fix) -- session cannot import server/services directly (services
+	// already imports session), so this is the mirror-image of the resolver
+	// wiring just above: session.Instance.Destroy() calls this closure via
+	// session.SetPiExtensionHealthForgetter, and server.go is the one place
+	// that can wire the two packages together.
+	session.SetPiExtensionHealthForgetter(func(sessionID string) {
+		piHealthTracker.Forget(sessionID)
+	})
 	// Wire the same ApprovalHandler as the PermissionRequestHandler every
 	// remote session's RemoteApprovalRelay drives its requests through
 	// (ssh-remote-workspaces Phase 5 correction, ADR-003's addendum) --
@@ -997,6 +1044,11 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	srv.mux.Handle("/api/local/serve/", http.StripPrefix("/api/local/serve", http.HandlerFunc(localFileSvc.ServeLocalFile)))
 	log.Info("Registered local file browser at /api/local/files/list and /api/local/serve/")
 
+	// pi-support (Epic 2.1, Story 2.1.2): reports whether the global pi approval
+	// extension is installed, so the settings UI can gate its disable-flag warning.
+	piExtensionStatusSvc := services.NewPiExtensionStatusService()
+	srv.mux.HandleFunc("/api/pi-extension-status", piExtensionStatusSvc.HandlePiExtensionStatus)
+
 	// Register backlog attachment upload endpoint — durable image attachments
 	// for backlog item descriptions, served back via /api/local/serve/.
 	if backlogAttachmentDir, err := cfg.BacklogAttachmentDirOrDefault(); err != nil {
@@ -1238,7 +1290,7 @@ func (s *Server) Start(ctx context.Context) error {
 	s.mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"status":"ok","service":"stapler-squad-web"}`)) //nolint:errcheck
+		_, _ = w.Write([]byte(`{"status":"ok","service":"stapler-squad-web"}`)) //nolint:errcheck
 	})
 	s.registerActuatorRoutes()
 

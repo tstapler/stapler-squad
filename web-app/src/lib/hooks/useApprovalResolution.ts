@@ -78,6 +78,9 @@ export function useApprovalResolution({
   const resolveApproval = useCallback(async (approvalId: string, decision: "allow" | "deny", notificationIds: string | string[], overrideCiBlock?: boolean) => {
     setPendingApprovals(prev => ({ ...prev, [approvalId]: true }));
     try {
+      // One-shot mutation triggered by an explicit user action (Approve/Deny
+      // click), not tied to a mount/effect.
+      // abort-signal-exempt
       await getClient().resolveApproval(create(ResolveApprovalRequestSchema, { approvalId, decision, overrideCiBlock }));
       setResolvedApprovals(prev => ({ ...prev, [approvalId]: decision }));
       setBlockedApprovals(prev => { const next = { ...prev }; delete next[approvalId]; return next; });

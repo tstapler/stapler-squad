@@ -12,6 +12,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/config"
 	githubpkg "github.com/tstapler/stapler-squad/github"
+	"github.com/tstapler/stapler-squad/jules"
 	"github.com/tstapler/stapler-squad/log"
 	warren "github.com/tstapler/stapler-squad/pkg/warren"
 	"github.com/tstapler/stapler-squad/server/analytics"
@@ -66,6 +67,11 @@ type ServerDependencies struct {
 	UnfinishedStateStore  *unfinished.StateStore
 	UnfinishedWorkService *services.UnfinishedWorkService
 	WorktreePRPoller      *session.WorktreePRPoller
+
+	// JulesSessionPoller polls open Jules sessions (google-jules-integration
+	// Epic 2.3/2.4). Nil unless config.Config.Jules.Enabled and the API key
+	// resolves at startup — see BuildRuntimeDeps' jules wiring block.
+	JulesSessionPoller *session.JulesSessionPoller
 
 	// GitHub user PR cache and service. Nil when no GitHub token is available.
 	UserPRCache       *githubpkg.UserPRCache
@@ -156,6 +162,7 @@ func (rt *RuntimeDeps) ToServerDeps() *ServerDependencies {
 		UnfinishedStateStore:     rt.UnfinishedStateStore,
 		UnfinishedWorkService:    rt.UnfinishedWorkService,
 		WorktreePRPoller:         rt.WorktreePRPoller,
+		JulesSessionPoller:       rt.JulesSessionPoller,
 		UserPRCache:              rt.UserPRCache,
 		GitHubUserService:        rt.GitHubUserService,
 		InsightsService:          rt.InsightsService,
@@ -397,6 +404,10 @@ func BuildServiceDeps(core *CoreDeps) (*ServiceDeps, error) {
 
 	w := warren.NewWire("ServiceDeps")
 	warren.Set(w, "ApprovalProvider", reviewQueuePoller.SetApprovalProvider, session.ApprovalMetadataProvider(core.ApprovalStore))
+	// Story 5.3.1: the same provider wired into StatusManager.GetStatus()'s
+	// pi-fallback branch, so a pi session actually blocked on a pending
+	// approval reports NeedsApproval instead of a stale Idle.
+	warren.Set(w, "StatusManagerApprovalProvider", statusManager.SetApprovalProvider, session.ApprovalMetadataProvider(core.ApprovalStore))
 	warren.Set(w, "StatusManager", core.SessionService.SetStatusManager, statusManager)
 	warren.Set(w, "ReviewQueuePoller", core.SessionService.SetReviewQueuePoller, reviewQueuePoller)
 	if err := w.Validate(); err != nil {
@@ -439,6 +450,10 @@ type RuntimeDeps struct {
 	UnfinishedStateStore  *unfinished.StateStore
 	UnfinishedWorkService *services.UnfinishedWorkService
 	WorktreePRPoller      *session.WorktreePRPoller
+
+	// JulesSessionPoller (see the identically-named field on ServerDependencies
+	// for its full doc comment).
+	JulesSessionPoller *session.JulesSessionPoller
 
 	// GitHub user PR cache and service.
 	UserPRCache       *githubpkg.UserPRCache
@@ -611,6 +626,16 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	var pipelineEngine session.PipelineEngine
 	var pipelineModeRepo session.PipelineModeRepository
 	if entClient := storage.GetEntClient(); entClient != nil {
+		// Seed the built-in 9-stage/edge workflow graph (backlog_stages +
+		// stage_transitions rows) so ConfiguredWorkflowEngine (Epic 2.3) has
+		// real rows to load from day one once it's wired in. Create-if-missing
+		// only — never touches rows once any backlog_stages row exists — and
+		// never aborts boot on failure, matching the "sdd" pipeline mode seed's
+		// posture immediately below (project_plans/backlog-custom-workflow-stages/
+		// implementation/plan.md Epic 2.2).
+		if seedErr := session.EnsureBuiltInWorkflowStages(context.Background(), entClient); seedErr != nil {
+			log.Warn("failed to seed built-in workflow stages, continuing without them", "err", seedErr)
+		}
 		pipelineModeRepo = session.NewEntPipelineModeRepository(entClient)
 		// Seed the "sdd" pipeline mode before the engine's first cache Load
 		// below, so that Load already sees the seeded row in one pass rather
@@ -630,6 +655,56 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		}
 	} else {
 		log.Warn("pipelineEngine unavailable: storage is not ent-backed; continuing with the default pipeline for all backlog items")
+	}
+
+	// LivenessEngine resolves a backlog stage's stuck-detection threshold
+	// (Epic 1.3 of backlog-custom-workflow-stages). Same non-fatal-fallback
+	// posture as pipelineEngine immediately above: construction never aborts
+	// boot, and a nil livenessEngine/livenessRepo (non-ent-backed storage, or
+	// construction failure) makes every consumer fall back to
+	// DefaultLivenessEngine's hardcoded constants — behavior identical to
+	// pre-Epic-1.3 today. livenessRepo is wired into BacklogService via a
+	// post-construction setter (SetLivenessRepository/SetLivenessEngine
+	// below, near backlogSvc's construction) rather than as a
+	// NewBacklogService constructor parameter, to avoid touching every
+	// existing NewBacklogService test call site for a dependency this epic
+	// introduces.
+	var livenessRepo session.LivenessRepository
+	var livenessEngine session.LivenessEngine
+	if entClient := storage.GetEntClient(); entClient != nil {
+		livenessRepo = session.NewEntLivenessRepository(entClient)
+		if cachingLivenessEngine, err := session.NewCachingLivenessEngine(livenessRepo); err != nil {
+			log.Warn("livenessEngine construction failed; continuing with DefaultLivenessEngine's built-in thresholds", "err", err)
+		} else {
+			livenessEngine = cachingLivenessEngine
+		}
+	} else {
+		log.Warn("livenessEngine unavailable: storage is not ent-backed; continuing with DefaultLivenessEngine's built-in thresholds")
+	}
+
+	// stageCRUDRepo/stageConfigEngine back the Stage/StageTransition/
+	// TransitionGate CRUD RPCs (Epic 2.7 of backlog-custom-workflow-stages).
+	// stageConfigEngine here is used only for its InvalidateCache method —
+	// those write handlers' downstream cache-invalidation target — not as
+	// the active session.WorkflowEngine (workflowEngine above still is);
+	// switching runtime transition/gate evaluation over to
+	// ConfiguredWorkflowEngine is a later epic's job. Same non-fatal-fallback
+	// posture as pipelineEngine/livenessEngine above.
+	var stageCRUDRepo session.StageCRUDRepository
+	var stageConfigEngine *session.ConfiguredWorkflowEngine
+	var gateSatisfactionRepo session.GateSatisfactionRepository
+	if entClient := storage.GetEntClient(); entClient != nil {
+		entStageRepo := session.NewEntStageConfigRepository(entClient)
+		stageCRUDRepo = entStageRepo
+		entGateSatisfactionRepo := session.NewEntGateSatisfactionRepository(entClient)
+		gateSatisfactionRepo = entGateSatisfactionRepo
+		if engine, err := session.NewConfiguredWorkflowEngine(entStageRepo, entGateSatisfactionRepo); err != nil {
+			log.Warn("stageConfigEngine construction failed; stage/transition/gate CRUD writes will not invalidate a cache", "err", err)
+		} else {
+			stageConfigEngine = engine
+		}
+	} else {
+		log.Warn("stageCRUDRepo unavailable: storage is not ent-backed; Stage/StageTransition/TransitionGate CRUD RPCs will return CodeUnavailable")
 	}
 
 	// Construct the headless LLM pool early so the lifecycle listener can receive it
@@ -689,7 +764,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	// Backlog lifecycle listener — always created, enabled state set from config below.
 	// The pool is passed at construction time to close the race window that existed when
 	// SetHeadlessPool was called hundreds of lines after instance wiring.
-	backlogLifecycleListener := session.NewBacklogLifecycleListenerWithPool(storage, headlessPool, pipelineEngine)
+	backlogLifecycleListener := session.NewBacklogLifecycleListenerWithPool(storage, headlessPool, pipelineEngine, livenessEngine)
 	backlogLifecycleListener.SetNotifier(&services.EventBusNotifier{Bus: eventBus})
 	// Wires the ItemChangePublisher adapter into the concrete *EntRepository
 	// (via Storage's forwarding setter, session/storage.go) so its 9 hooked
@@ -1191,6 +1266,19 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	}()
 
 	backlogSvc := services.NewBacklogService(storage, sessionService, cfg, workflowEngine, pipelineEngine, pipelineModeRepo)
+	backlogSvc.SetLivenessRepository(livenessRepo)
+	backlogSvc.SetLivenessEngine(livenessEngine)
+	backlogSvc.SetStageCRUDRepository(stageCRUDRepo)
+	backlogSvc.SetGateSatisfactionRepository(gateSatisfactionRepo)
+	// Guarded rather than an unconditional Set: stageConfigEngine is a
+	// *session.ConfiguredWorkflowEngine, and passing a nil one straight into
+	// SetStageConfigEngine's interface parameter would box it as a
+	// non-nil-interface-wrapping-nil-pointer — breaking every
+	// s.stageConfigEngine == nil guard downstream (same typed-nil pitfall
+	// pipelineEngine's doc comment above describes).
+	if stageConfigEngine != nil {
+		backlogSvc.SetStageConfigEngine(stageConfigEngine)
+	}
 	backlogSvc.SetEventBus(eventBus)
 	backlogSvc.SetSessionStopper(sessionService)
 	backlogSvc.SetSessionSteerer(sessionService)
@@ -1223,6 +1311,10 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	backlogLifecycleListener.SetAutoReopener(backlogSvc)
 	backlogLifecycleListener.SetPRFixSpawner(backlogSvc)
 	backlogLifecycleListener.SetReviewRespawner(backlogSvc)
+	// Wires reconcileCustomGateChecks' scan for overdue custom-check
+	// invocations (Epic 2.4, Task 2.4.4c) — same gateSatisfactionRepo instance
+	// already wired into backlogSvc above, guarded nil-safe by both consumers.
+	backlogLifecycleListener.SetGateSatisfactionRepository(gateSatisfactionRepo)
 	// Wire the orphaned_triage respawner so an idea-status item whose triage
 	// session orphaned (crashed, was killed, or a server restart happened
 	// mid-triage) gets triage automatically re-triggered instead of sitting
@@ -1488,6 +1580,67 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		log.Warn("WorkflowScheduler disabled: no workflow repository available")
 	}
 
+	// Jules dispatch-and-poll integration (google-jules-integration Epic 2.4.4).
+	// julesKeys (the OS-keychain token source) is always constructed — cheap,
+	// no network I/O — so GetJulesConfig/UpdateJulesConfig work even before
+	// the feature is enabled (a user sets the key first, then flips Enabled).
+	// The client/source-registry/dispatch-service/poller quartet is only
+	// built once Enabled is true AND the key actually resolves at startup;
+	// any other outcome (disabled, or an unreadable keychain) degrades the
+	// feature, not the server — logged once at Info, everything else
+	// unaffected.
+	// julesUsage (JulesUsageCounter, Task 4.1.1a) is constructed unconditionally
+	// — cheap, no I/O — so GetJulesConfig always has a live (all-zero until
+	// something happens) usage snapshot to report, matching julesKeys above.
+	julesUsage := services.NewJulesUsageCounter()
+	sessionService.SetJulesUsageCounter(julesUsage)
+
+	julesKeys := jules.NewKeyringTokenSource()
+	// Rewire SessionService's credChain (built during sessionService's own
+	// construction above, before julesKeys existed to share) onto this same
+	// instance -- otherwise CredentialChain's JulesCredentialSource holds a
+	// second, independent *jules.KeyringTokenSource over the same OS keychain
+	// entry, undermining the single-cache/circuit-breaker/singleflight-group
+	// invariant documented on jules.KeyringTokenSource. See
+	// server/services/credentials.go's SetJulesTokenSource.
+	sessionService.SetJulesKeyringTokenSource(julesKeys)
+	var julesSourceRegistry *jules.JulesSourceRegistry
+	var julesPoller *session.JulesSessionPoller
+	switch {
+	case !cfg.Jules.Enabled:
+		log.Info("jules disabled", "reason", "feature not enabled")
+	default:
+		if _, keyErr := julesKeys.APIKey(context.Background()); keyErr != nil {
+			log.Info("jules disabled", "reason", "api key not resolvable", "err", keyErr)
+		} else {
+			julesClient := jules.NewClient(julesKeys)
+			julesSourceRegistry = jules.NewJulesSourceRegistry(julesClient)
+			// config.LoadConfig() re-reads config.json from disk on every call
+			// (same pattern as quotaGate's QuotaConfig accessor above) — cfg here
+			// is the boot-time snapshot passed into BuildRuntimeDeps and is never
+			// refreshed, so passing it directly would freeze every Jules config
+			// field (egress consent, spend caps) at boot, meaning
+			// ConfirmEgressConsent/UpdateJulesConfig/RevokeEgressConsent's writes
+			// (jules_config_service.go) would never be observed without a
+			// restart.
+			julesDispatchSvc := services.NewJulesDispatchService(storage, backlogSvc, julesClient, julesSourceRegistry, config.LoadConfig)
+			julesDispatchSvc.SetUsageCounter(julesUsage)
+			backlogSvc.SetJulesDispatcher(julesDispatchSvc)
+			julesPoller = session.NewJulesSessionPoller(julesClient, storage, session.DefaultJulesSessionPollerConfig())
+			julesPoller.SetUsageCounter(julesUsage)
+		}
+	}
+	// Passed as separate nil literals (not the possibly-nil *jules.JulesSourceRegistry/
+	// *session.JulesSessionPoller pointers directly) when unconfigured, to avoid handing
+	// SetJulesConfigDependencies a non-nil interface wrapping a nil pointer — its own
+	// nil checks (julesConfigToProto, TestJulesConnection) compare the interface itself
+	// to nil, which a typed-nil pointer would defeat.
+	if julesSourceRegistry != nil {
+		sessionService.SetJulesConfigDependencies(julesKeys, julesSourceRegistry, julesPoller)
+	} else {
+		sessionService.SetJulesConfigDependencies(julesKeys, nil, nil)
+	}
+
 	// 30 min reaper: kill any tmux sessions still running for paused instances.
 	// Safety net for sessions paused before the kill-on-pause change, or where the
 	// initial kill attempt fell back to detach.
@@ -1517,6 +1670,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		UnfinishedStateStore:     unfinishedStateStore,
 		UnfinishedWorkService:    unfinishedWorkSvc,
 		WorktreePRPoller:         worktreePRPoller,
+		JulesSessionPoller:       julesPoller,
 		UserPRCache:              userPRCache,
 		GitHubUserService:        githubUserSvc,
 		InsightsService:          insightsSvc,

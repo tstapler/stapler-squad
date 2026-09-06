@@ -17,6 +17,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"connectrpc.com/connect"
 	"github.com/gorilla/websocket"
 	"github.com/puzpuzpuz/xsync/v4"
 	"github.com/tstapler/stapler-squad/config"
@@ -28,6 +29,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/protocol"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/resize"
 	"github.com/tstapler/stapler-squad/session/scrollback"
 	"github.com/tstapler/stapler-squad/session/streamhub"
 	"github.com/tstapler/stapler-squad/session/tmux"
@@ -822,9 +824,9 @@ func (h *ConnectRPCWebSocketHandler) HandleWebSocket(w http.ResponseWriter, r *h
 
 	// Read headers from first message (text format: "key: value\r\nkey: value\r\n\r\n")
 	// 30s deadline: a client that never sends headers should not hold the connection open.
-	conn.SetReadDeadline(time.Now().Add(30 * time.Second)) //nolint:errcheck
+	_ = conn.SetReadDeadline(time.Now().Add(30 * time.Second))
 	_, headersBytes, err := conn.ReadMessage()
-	conn.SetReadDeadline(time.Time{}) //nolint:errcheck // clear deadline for subsequent reads
+	_ = conn.SetReadDeadline(time.Time{}) // clear deadline for subsequent reads
 	if err != nil {
 		log.Error("failed to read headers", "err", err)
 		return
@@ -834,9 +836,9 @@ func (h *ConnectRPCWebSocketHandler) HandleWebSocket(w http.ResponseWriter, r *h
 	log.Info("received headers", "headers", headers)
 
 	// Read enveloped request body
-	conn.SetReadDeadline(time.Now().Add(30 * time.Second)) //nolint:errcheck
+	_ = conn.SetReadDeadline(time.Now().Add(30 * time.Second))
 	_, bodyBytes, err := conn.ReadMessage()
-	conn.SetReadDeadline(time.Time{}) //nolint:errcheck
+	_ = conn.SetReadDeadline(time.Time{})
 	if err != nil {
 		log.Error("failed to read request body", "err", err)
 		return
@@ -1006,6 +1008,33 @@ func (h *ConnectRPCWebSocketHandler) streamTerminal(stream *connectWebSocketStre
 	return h.streamViaTmuxCapturePane(stream, instance, "")
 }
 
+// handleTmuxRestoreFailure is the single place both restore-before-stream
+// call sites (streamViaControlMode and streamViaHub) route a
+// TmuxSession.RestoreWithWorkDir failure through, so the
+// ErrWorkDirMissing-specific handling below lives in exactly one spot
+// instead of being duplicated at each call site.
+//
+// When the failure is specifically a missing/deleted working directory
+// (e.g. a pruned git worktree — see tmux.ErrWorkDirMissing), the session is
+// moved to PermanentlyFailed rather than left "Active" with a terminal that
+// can never reconnect. PermanentlyFailed (unlike Stopped) already has full
+// UI wiring for a manual "Retry now" action (SessionActionsOverflow), and
+// restartForRetry's retry choke point re-creates a missing worktree before
+// restarting — so "Retry now" can actually recover from this, not just
+// repeat the same failure. The returned error still wraps
+// tmux.ErrWorkDirMissing via %w so sendEndStreamError can surface a
+// distinct, non-retriable error code to the browser instead of the generic
+// "internal" every other stream error gets — that stops the terminal from
+// burning its 5-attempt reconnect budget against a directory that isn't
+// coming back on its own.
+func handleTmuxRestoreFailure(instance *session.Instance, restoreErr error) error {
+	if errors.Is(restoreErr, tmux.ErrWorkDirMissing) {
+		instance.SetCreationProgress(fmt.Sprintf("Session failed: %s", restoreErr.Error()))
+		instance.ForceStatus(session.PermanentlyFailed)
+	}
+	return fmt.Errorf("tmux session missing and restore failed: %w", restoreErr)
+}
+
 // streamViaControlMode handles WebSocket streaming using tmux control mode (-C flag).
 // This is the proper way to get real-time terminal output from tmux sessions.
 // Control mode provides structured notifications (%output, %session-changed, etc.) via the tmux protocol.
@@ -1111,14 +1140,7 @@ func (h *ConnectRPCWebSocketHandler) streamViaControlMode(stream *connectWebSock
 		log.Info("[streamViaControlMode] session not in tmux, restoring before control mode", "session", sessionID)
 		workDir := instance.GetWorkingDirectory()
 		if restoreErr := tmuxSession.RestoreWithWorkDir(workDir); restoreErr != nil {
-			if errors.Is(restoreErr, tmux.ErrWorkDirMissing) {
-				// Its working directory is gone (e.g. a pruned worktree) — fail the
-				// session with a visible status instead of leaving it "Active" with a
-				// terminal that can never reconnect.
-				instance.SetCreationProgress(fmt.Sprintf("Session failed: %s", restoreErr.Error()))
-				instance.ForceStatus(session.Stopped)
-			}
-			return fmt.Errorf("tmux session missing and restore failed: %w", restoreErr)
+			return handleTmuxRestoreFailure(instance, restoreErr)
 		}
 	}
 
@@ -1296,14 +1318,9 @@ func (h *ConnectRPCWebSocketHandler) streamViaControlMode(stream *connectWebSock
 		// from two different wrap widths, duplicated table rows and stray glyphs.
 		h.invalidateSnapshot(sessionID)
 
-		// Nudge to (cols-1) so tmux always sends SIGWINCH regardless of current size
-		if targetCols > 1 {
-			if resizeErr := instance.ResizePTY(targetCols-1, targetRows); resizeErr != nil {
-				log.Warn("[streamViaControlMode] pre-nudge resize failed", "err", resizeErr)
-			}
-		}
-
-		if err := instance.ResizePTY(targetCols, targetRows); err != nil {
+		// resize.WithForcedRedraw nudges to (cols-1) first so tmux always sends
+		// SIGWINCH regardless of current size — see its doc comment.
+		if err := resize.WithForcedRedraw(instance.ResizePTY, targetCols, targetRows); err != nil {
 			log.Error("[streamViaControlMode] failed to resize", "err", err)
 		} else {
 			// Wait for the TUI to complete its full redraw before capturing. The
@@ -1720,15 +1737,23 @@ func (h *ConnectRPCWebSocketHandler) streamViaHub(stream *connectWebSocketStream
 	}
 
 	tmuxSession := instance.GetTmuxSession()
-	if tmuxSession != nil && !tmuxSession.DoesSessionExistNoCache() {
+	tmuxAlive := tmuxSession != nil && tmuxSession.DoesSessionExistNoCache()
+	if tmuxSession != nil && !tmuxAlive {
 		log.Info("[streamViaHub] session not in tmux, restoring before control mode", "session", sessionID)
 		workDir := instance.GetWorkingDirectory()
 		if restoreErr := tmuxSession.RestoreWithWorkDir(workDir); restoreErr != nil {
-			if errors.Is(restoreErr, tmux.ErrWorkDirMissing) {
-				instance.SetCreationProgress(fmt.Sprintf("Session failed: %s", restoreErr.Error()))
-				instance.ForceStatus(session.Stopped)
-			}
-			return fmt.Errorf("tmux session missing and restore failed: %w", restoreErr)
+			return handleTmuxRestoreFailure(instance, restoreErr)
+		}
+		// RestoreWithWorkDir always returns nil even on PTY attach failure
+		// (see the identical comment on session/instance.go's own
+		// RestoreWithWorkDir call site) — a nil error alone does not prove the
+		// tmux session is genuinely ready to serve capture/resize traffic.
+		// Confirm a real PTY attached before treating it (and, below, the
+		// self-heal decision that depends on it) as alive.
+		if _, ptyErr := tmuxSession.GetPTY(); ptyErr != nil {
+			log.Warn("[streamViaHub] restored tmux session but PTY attach failed, not treating as alive", "session", sessionID, "err", ptyErr)
+		} else {
+			tmuxAlive = true
 		}
 	}
 
@@ -1738,7 +1763,18 @@ func (h *ConnectRPCWebSocketHandler) streamViaHub(stream *connectWebSocketStream
 	if !instance.Started() {
 		log.Info("[streamViaHub] instance not started yet, waiting briefly before attaching", "session", sessionID)
 		if !waitForInstanceStartedEvent(h.sessionService.GetEventBus(), instance, startupWaitTimeout) {
-			log.Warn("[streamViaHub] instance still not started after waiting, proceeding anyway", "session", sessionID, "waited", startupWaitTimeout)
+			if tmuxAlive {
+				// Instance.Start() never ran for this instance (or raced/failed in
+				// server/dependencies.go's boot-time restart loop) even though tmux
+				// itself is confirmed alive. Self-heal instead of leaving Started()
+				// wedged at false: see MarkStartedIfTmuxAlive's doc comment for why
+				// "proceeding anyway" here previously meant an endless
+				// ErrSessionNotStarted retry loop on every capture/resize.
+				log.Warn("[streamViaHub] instance not started but tmux is alive, marking started", "session", sessionID, "waited", startupWaitTimeout)
+				instance.MarkStartedIfTmuxAlive()
+			} else {
+				log.Warn("[streamViaHub] instance still not started after waiting, proceeding anyway", "session", sessionID, "waited", startupWaitTimeout)
+			}
 		}
 	}
 
@@ -2066,13 +2102,7 @@ func (h *ConnectRPCWebSocketHandler) streamShellViaControlMode(stream *connectWe
 
 		log.Info("[streamShellViaControlMode] handshake dimensions, forcing redraw via nudge", "cols", targetCols, "rows", targetRows)
 
-		if targetCols > 1 {
-			if resizeErr := shellSess.SetWindowSize(targetCols-1, targetRows); resizeErr != nil {
-				log.Warn("[streamShellViaControlMode] pre-nudge resize failed", "err", resizeErr)
-			}
-		}
-
-		if err := shellSess.SetWindowSize(targetCols, targetRows); err != nil {
+		if err := resize.WithForcedRedraw(shellSess.SetWindowSize, targetCols, targetRows); err != nil {
 			log.Error("[streamShellViaControlMode] failed to resize", "err", err)
 		} else {
 			// Output-forwarding goroutine above is already subscribed, so quiescenceCh
@@ -3503,12 +3533,42 @@ func sendEndStreamSuccess(stream *connectWebSocketStream) {
 	}
 }
 
+// endStreamErrorCode picks the ConnectRPC error code string for an
+// EndStream error frame. FailedPrecondition for a missing working directory
+// (see handleTmuxRestoreFailure) is deliberately distinct from the default
+// Internal every other stream error gets: the frontend
+// (useTerminalStream.ts's isWorktreeMissingError) matches on this code to
+// stop retrying immediately instead of burning its whole reconnect budget
+// against a directory that won't reappear on its own. Extracted from
+// sendEndStreamError as a pure function so this selection is unit-testable
+// without a real WebSocket stream.
+func endStreamErrorCode(err error) string {
+	if errors.Is(err, tmux.ErrWorkDirMissing) {
+		return connect.CodeFailedPrecondition.String()
+	}
+	return connect.CodeInternal.String()
+}
+
+// endStreamErrorMessage returns the text to send to the browser for an
+// EndStream error frame. A missing-working-directory error's full text
+// (via tmux's ValidateWorkDir/RestoreWithWorkDir) embeds the session's local
+// filesystem path — useful server-side (the caller already logs the full
+// error before calling sendEndStreamError), but not something to hand a
+// browser tab.
+func endStreamErrorMessage(err error) string {
+	if errors.Is(err, tmux.ErrWorkDirMissing) {
+		return "session working directory no longer exists"
+	}
+	return err.Error()
+}
+
 // sendEndStreamError sends an error EndStream message
 func sendEndStreamError(stream *connectWebSocketStream, err error) {
 	// ConnectRPC protocol requires JSON-encoded EndStream payload (not protobuf)
-	// Error EndStream uses the ConnectRPC error JSON format
-	errMsg, _ := json.Marshal(err.Error())
-	dataBytes := fmt.Appendf(nil, `{"error":{"code":"internal","message":%s}}`, errMsg)
+	// Error EndStream uses the ConnectRPC error JSON format.
+	code := endStreamErrorCode(err)
+	errMsg, _ := json.Marshal(endStreamErrorMessage(err))
+	dataBytes := fmt.Appendf(nil, `{"error":{"code":%q,"message":%s}}`, code, errMsg)
 
 	envelope := protocol.CreateEnvelope(protocol.EndStreamFlag, dataBytes)
 	if err := stream.WriteMessage(websocket.BinaryMessage, envelope); err != nil {

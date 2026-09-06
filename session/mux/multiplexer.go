@@ -187,7 +187,7 @@ func (m *Multiplexer) Start() error {
 	m.socketPath = filepath.Join(os.TempDir(), fmt.Sprintf("ssq-mux-%d.sock", os.Getpid()))
 
 	// Remove any stale socket
-	os.Remove(m.socketPath)
+	_ = os.Remove(m.socketPath)
 
 	// Create Unix domain socket listener
 	listener, err := net.Listen("unix", m.socketPath)
@@ -198,8 +198,8 @@ func (m *Multiplexer) Start() error {
 
 	// Make socket readable by owner only (security)
 	if err := os.Chmod(m.socketPath, 0600); err != nil {
-		m.listener.Close()
-		os.Remove(m.socketPath)
+		_ = m.listener.Close()
+		_ = os.Remove(m.socketPath)
 		return fmt.Errorf("failed to set socket permissions: %w", err)
 	}
 
@@ -209,8 +209,8 @@ func (m *Multiplexer) Start() error {
 	// If attach-only mode, verify the tmux session exists
 	if m.attachOnly {
 		if m.tmuxSession == "" {
-			m.listener.Close()
-			os.Remove(m.socketPath)
+			_ = m.listener.Close()
+			_ = os.Remove(m.socketPath)
 			return fmt.Errorf("attach mode requires a tmux session name")
 		}
 		// Check if session exists
@@ -218,8 +218,8 @@ func (m *Multiplexer) Start() error {
 		defer checkCancel()
 		checkCmd := safeexec.CommandContext(checkCtx, tmux.Binary(), m.serverSocket.Args("has-session", "-t", m.tmuxSession)...)
 		if err := checkCmd.Run(); err != nil {
-			m.listener.Close()
-			os.Remove(m.socketPath)
+			_ = m.listener.Close()
+			_ = os.Remove(m.socketPath)
 			return fmt.Errorf("tmux session not found: %s", m.tmuxSession)
 		}
 	} else {
@@ -275,8 +275,8 @@ func (m *Multiplexer) Start() error {
 			if m.hooksPath != "" {
 				_ = CleanupHooksFile(m.hooksPath)
 			}
-			m.listener.Close()
-			os.Remove(m.socketPath)
+			_ = m.listener.Close()
+			_ = os.Remove(m.socketPath)
 			return fmt.Errorf("failed to start tmux session: %w", err)
 		}
 	}
@@ -299,8 +299,8 @@ func (m *Multiplexer) Start() error {
 			killCmd := safeexec.CommandContext(killCtx, tmux.Binary(), m.serverSocket.Args("kill-session", "-t", m.tmuxSession)...)
 			_ = killCmd.Run()
 		}
-		m.listener.Close()
-		os.Remove(m.socketPath)
+		_ = m.listener.Close()
+		_ = os.Remove(m.socketPath)
 		return fmt.Errorf("failed to attach to tmux session: %w", err)
 	}
 	m.ptmx = ptmx
@@ -364,18 +364,18 @@ func (m *Multiplexer) Wait() (int, error) {
 
 	// Close PTY (will cause forwardPTYOutput to exit)
 	if m.ptmx != nil {
-		m.ptmx.Close()
+		_ = m.ptmx.Close()
 	}
 
 	// Close listener (will cause acceptClients to exit)
 	if m.listener != nil {
-		m.listener.Close()
+		_ = m.listener.Close()
 	}
 
 	// Close all client connections
 	m.clientsMu.Lock()
 	for conn := range m.clients {
-		conn.Close()
+		_ = conn.Close()
 	}
 	m.clientsMu.Unlock()
 
@@ -383,7 +383,7 @@ func (m *Multiplexer) Wait() (int, error) {
 	m.wg.Wait()
 
 	// Clean up socket
-	os.Remove(m.socketPath)
+	_ = os.Remove(m.socketPath)
 
 	// Clean up hooks file
 	if m.hooksPath != "" {
@@ -492,7 +492,7 @@ func (m *Multiplexer) handleClient(conn net.Conn) {
 		m.clientsMu.Lock()
 		delete(m.clients, conn)
 		m.clientsMu.Unlock()
-		conn.Close()
+		_ = conn.Close()
 	}()
 
 	// Send metadata to client
@@ -592,8 +592,9 @@ func (m *Multiplexer) forwardPTYOutput() {
 		if n > 0 {
 			data := buf[:n]
 
-			// Write to stdout (IntelliJ terminal)
-			os.Stdout.Write(data)
+			// Write to stdout (IntelliJ terminal); a failure here means the
+			// terminal itself is gone, nothing left to report it to.
+			_, _ = os.Stdout.Write(data)
 
 			// Broadcast to all connected clients
 			msg := NewOutputMessage(data)

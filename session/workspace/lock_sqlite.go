@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"sync"
 	"time"
+
+	"github.com/tstapler/stapler-squad/log"
 )
 
 // SQLiteTransactionLock implements distributed locking using SQLite transactions.
@@ -80,7 +82,14 @@ func (l *SQLiteTransactionLock) Acquire(ctx context.Context, resource string, ti
 		)
 	`)
 	if err != nil {
-		tx.Rollback()
+		// BEGIN IMMEDIATE already holds a database-wide write lock at this
+		// point (see the package doc comment: SQLite locks are DB-wide, not
+		// per-resource). If Rollback fails here, that write lock never
+		// clears, silently blocking every future Acquire across all
+		// resources until this connection is torn down.
+		if rbErr := tx.Rollback(); rbErr != nil {
+			log.Warn("sqlite lock: rollback failed after create-lock-table error; database write lock may remain stuck", "resource", resource, "err", rbErr)
+		}
 		return nil, &LockError{
 			Op:       "acquire",
 			Resource: resource,
@@ -95,7 +104,11 @@ func (l *SQLiteTransactionLock) Acquire(ctx context.Context, resource string, ti
 		VALUES (?, ?, ?)
 	`, resource, time.Now().Format(time.RFC3339), ownerID)
 	if err != nil {
-		tx.Rollback()
+		// Same database-wide-write-lock risk as above: a failed Rollback
+		// here leaves the BEGIN IMMEDIATE transaction open indefinitely.
+		if rbErr := tx.Rollback(); rbErr != nil {
+			log.Warn("sqlite lock: rollback failed after insert-lock-record error; database write lock may remain stuck", "resource", resource, "err", rbErr)
+		}
 		return nil, &LockError{
 			Op:       "acquire",
 			Resource: resource,
@@ -142,7 +155,12 @@ func (l *SQLiteTransactionLock) Close() error {
 
 	for _, handle := range l.locks {
 		if !handle.released && handle.tx != nil {
-			handle.tx.Rollback()
+			// As above, a failed Rollback here leaves the database-wide
+			// write lock held, blocking every future Acquire until the
+			// connection is torn down — log it so a stuck lock is visible.
+			if err := handle.tx.Rollback(); err != nil {
+				log.Warn("sqlite lock: rollback failed during Close; database write lock may remain stuck", "resource", handle.resource, "err", err)
+			}
 		}
 	}
 

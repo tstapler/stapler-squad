@@ -1253,6 +1253,9 @@ func TestSyncOne_BackwardSync_GenuinelyNewerExternalCloseIsProcessed(t *testing.
 type alwaysDenyWorkflowEngine struct{}
 
 func (alwaysDenyWorkflowEngine) CanTransition(from, to BacklogStatus) bool { return false }
+func (alwaysDenyWorkflowEngine) PendingGates(item BacklogItemTransitionInput, to BacklogStatus) ([]GateStatus, error) {
+	return nil, nil
+}
 func (alwaysDenyWorkflowEngine) ValidateGates(item BacklogItemTransitionInput, to BacklogStatus) error {
 	return nil
 }

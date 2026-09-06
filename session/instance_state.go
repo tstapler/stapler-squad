@@ -11,6 +11,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/detection"
 )
 
@@ -367,6 +368,90 @@ func (i *Instance) Hibernated() bool {
 // Started returns true if the instance has been started.
 func (i *Instance) Started() bool {
 	return i.started.Load()
+}
+
+// MarkStartedIfTmuxAlive flips started to true outside the normal
+// Start()/Resume()/Restart() actor flow, for a caller that has already
+// confirmed the underlying tmux session is alive AND has a genuine PTY
+// attached (e.g. streamViaHub's DoesSessionExistNoCache + GetPTY check).
+// Instance.Start() never running for an instance — a panicking sibling in
+// the boot-time restart loop, a HotRestore error, or a slow multi-second
+// stagger — otherwise wedges started at false forever: every capture/resize
+// call on the hub streaming path checks Started() directly and returns
+// streamhub.ErrSessionNotStarted on every single frame, indefinitely, even
+// though the session the viewer is looking at is fully functional.
+//
+// Routes through the actor mailbox (sendSyncErr), so it fully serializes
+// with any Start()/Resume()/Restart() actor command already in flight on
+// this instance: runActor drains the mailbox on a single goroutine, so this
+// command can only run strictly before or strictly after a concurrent
+// Start() — never interleaved with it. If Start() is still mid-flight when
+// this is called, this call blocks until Start() finishes (success or
+// failure) and only then inspects Started()/Status, so it can never stomp on
+// a Start() that is still running or that already completed successfully.
+//
+// Only proceeds from Status Creating (the state a Start() that panicked or
+// errored mid-flight leaves the instance in) or Active (already active,
+// just missing the started flag); every other status — Paused, Stopped,
+// PermanentlyFailed, Hibernated, Crashed, Failed — is left completely
+// untouched. Those either mean the instance was deliberately taken out of
+// service (silently overriding that to "started" would hide a real
+// stop/pause/failure) or have transition side effects (process
+// resume/relaunch in transitionDefs' After hooks) that assume a deliberate
+// Resume()/RetryNow() call, not a passive "tmux happens to still be alive"
+// observation.
+//
+// Mirrors startLocked's Status transition, snapshot publish, and
+// EventStarted firing (so backlog lifecycle / notification listeners still
+// see this instance start — see backlog_lifecycle.go's onSessionStarted) to
+// keep the Started()+Status invariant consistent the same way startLocked
+// does. Deliberately skips VNC/CDP bring-up, unlike startLocked: those are
+// for a session's initial launch, and here tmux and the agent process are
+// already confirmed running, so starting a second VNC/CDP server would be
+// redundant, not corrective.
+func (i *Instance) MarkStartedIfTmuxAlive() {
+	_ = i.sendSyncErr(func(s *instanceState) error {
+		markStartedIfTmuxAliveLocked(s)
+		return nil
+	})
+}
+
+// markStartedIfTmuxAliveLocked is MarkStartedIfTmuxAlive's actor-safe body.
+// Called only from within a sendSyncErr closure.
+func markStartedIfTmuxAliveLocked(s *instanceState) {
+	i := s.inst
+	i.mu.Lock()
+	if i.started.Load() {
+		// A concurrent Start() (or an earlier self-heal call already
+		// serialized ahead of this one via the actor mailbox) already got
+		// here first — nothing to do.
+		i.mu.Unlock()
+		return
+	}
+	switch i.Status {
+	case Creating:
+		if err := i.transitionTo(context.Background(), Active); err != nil {
+			// Shouldn't happen: Creating -> Active is always a valid edge
+			// (state_machine.go's transitionDefs). Bail without flipping
+			// started if it somehow fails anyway — setting started=true with
+			// an inconsistent Status is exactly the invariant violation this
+			// method exists to avoid.
+			i.mu.Unlock()
+			log.Warn("MarkStartedIfTmuxAlive: Creating -> Active transition failed, not self-healing", "session", i.Title, "err", err)
+			return
+		}
+	case Active:
+		// Already Active; only the started flag is missing.
+	default:
+		// Paused/Stopped/PermanentlyFailed/Hibernated/Crashed/Failed: leave
+		// untouched, see doc comment above.
+		i.mu.Unlock()
+		return
+	}
+	i.started.Store(true)
+	i.snapshot.Store(buildSnapshot(i))
+	i.mu.Unlock()
+	i.fireLifecycleEvent(EventStarted, "streamhub-self-heal-tmux-alive")
 }
 
 // RecoverFromStopped resets a stale Stopped or PermanentlyFailed status to

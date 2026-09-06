@@ -112,6 +112,9 @@ export function useUnfinishedWork(): UseUnfinishedWorkReturn {
     setIsScanning(true);
     try {
       const req = create(ScanUnfinishedWorkRequestSchema, {});
+      // One-shot mutation triggered by an explicit user action ("scan now"),
+      // not tied to a mount/effect.
+      // abort-signal-exempt
       await client.scanUnfinishedWork(req);
     } catch {
       setIsScanning(false);
