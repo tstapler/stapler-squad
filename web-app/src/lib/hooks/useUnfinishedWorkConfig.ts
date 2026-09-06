@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useCallback, useState } from "react";
+import { useEffect, useCallback, useMemo, useState } from "react";
 import { createClient } from "@connectrpc/connect";
-import { createConnectTransport } from "@connectrpc/connect-web";
+import { getConnectTransport } from "@/lib/api/transport";
 import { UnfinishedWorkService } from "@/gen/session/v1/unfinished_pb";
 import { UnfinishedWorkConfig } from "@/gen/session/v1/types_pb";
 import {
@@ -10,7 +10,6 @@ import {
   UpdateUnfinishedWorkConfigRequestSchema,
 } from "@/gen/session/v1/unfinished_pb";
 import { create } from "@bufbuild/protobuf";
-import { getApiBaseUrl, createAuthInterceptor } from "@/lib/config";
 import { useAbortableRequest } from "@/lib/hooks/useAbortableRequest";
 
 export interface UseUnfinishedWorkConfigReturn {
@@ -23,12 +22,7 @@ export function useUnfinishedWorkConfig(): UseUnfinishedWorkConfigReturn {
   const [config, setConfig] = useState<UnfinishedWorkConfig | null>(null);
   const [loading, setLoading] = useState(true);
 
-  const baseUrl = getApiBaseUrl();
-  const transport = createConnectTransport({
-    baseUrl,
-    interceptors: [createAuthInterceptor()],
-  });
-  const client = createClient(UnfinishedWorkService, transport);
+  const client = useMemo(() => createClient(UnfinishedWorkService, getConnectTransport()), []);
   const startFetch = useAbortableRequest();
 
   const fetchConfig = useCallback(async () => {

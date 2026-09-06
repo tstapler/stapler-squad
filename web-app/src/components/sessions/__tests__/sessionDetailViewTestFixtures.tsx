@@ -66,7 +66,10 @@ export const mockModal = () => ({
   ModalFooter: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
 });
 
-export const mockLibConfig = () => ({ getApiBaseUrl: () => "http://localhost:8543" });
+export const mockLibConfig = () => ({
+  getApiBaseUrl: () => "http://localhost:8543",
+  createAuthInterceptor: () => jest.fn(),
+});
 
 export const mockConstantsPrograms = () => ({
   getProgramDisplay: (p: string) => p,
