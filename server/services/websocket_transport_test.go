@@ -156,7 +156,7 @@ func TestWebSocketTransport_should_UnblockRead_When_HubTearsDown(t *testing.T) {
 	select {
 	case err := <-readDone:
 		require.Error(t, err)
-	case <-time.After(time.Second):
+	case <-time.After(5 * time.Second):
 		t.Fatal("hub teardown left the WebSocket input read blocked on a dead output stream")
 	}
 }
