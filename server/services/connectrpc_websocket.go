@@ -565,42 +565,11 @@ func pumpControlModeOutputIntoHub(hub *streamhub.StreamHub, controller streamhub
 	}
 }
 
-// useStreamHub is the global stream-hub default resolver, re-read per
-// connection — safe because StreamOwnershipLock.Resolve (Epic 3.1) caches
-// the first resolution per tmux session, so a later re-read observing a
-// changed value can never move an already-resolved session.
-//
-// Resolution order: config.StreamHubGlobalOverride (Story 3.3.4's live,
-// browser-settable override — no restart required) takes precedence when
-// set; otherwise falls back to the STAPLER_SQUAD_USE_STREAM_HUB env var,
-// which defaults on (mirrors STAPLER_SQUAD_USE_CONTROL_MODE's "unset or
-// true" convention) now that the staged rollout's rehearsal gate and trial
-// period (Story 3.3.1-3.3.3) are both satisfied.
-//
-// Story 3.3.1/3.3.2 (pre-mortem P1 #4): requesting the global default to be
-// true — from either source — is still mechanically gated on
-// config.ResolveGlobalStreamHubDefault — refused, and safely defaulted to
-// false with a loud log line, unless config.RollbackRehearsalCompletedAt
-// has been recorded (Story 3.3.2's rehearsal) on that instance. This gate
-// does not apply to the per-session override path (see the
-// streamhub.SetSessionOverrideLookup wiring in init below), which
-// AcquireOwnershipLock's Resolve consults independently of this function's
-// return value.
+// useStreamHub resolves the global stream-hub default (config.
+// EffectiveStreamHubEnabled), re-read per connection — safe because
+// StreamOwnershipLock.Resolve caches the first resolution per tmux session.
 func useStreamHub() bool {
-	cfg := config.LoadConfig()
-	var requested bool
-	if cfg.StreamHubGlobalOverride != nil {
-		requested = *cfg.StreamHubGlobalOverride
-	} else {
-		v := os.Getenv("STAPLER_SQUAD_USE_STREAM_HUB")
-		requested = v == "" || v == "true"
-	}
-	effective, err := config.ResolveGlobalStreamHubDefault(cfg, requested)
-	if err != nil {
-		log.Error("streamhub: refusing to enable global default", "error", err)
-		return false
-	}
-	return effective
+	return config.EffectiveStreamHubEnabled(config.LoadConfig())
 }
 
 // init wires streamhub's per-session canary override (Story 3.3.1) to this
@@ -1621,10 +1590,10 @@ func (h *ConnectRPCWebSocketHandler) streamViaControlMode(stream *connectWebSock
 		// have access to) back to streamViaControlMode; response building, marshaling,
 		// and writing stay inside runInputReadLoop as part of the pure-moved loop body.
 		return instance.GetScrollbackHistory(startLine, endLine)
-	}, func(req *sessionv1.CurrentPaneRequest) (*sessionv1.TerminalOutput, error) {
+	}, func(ctx context.Context, req *sessionv1.CurrentPaneRequest) (*sessionv1.TerminalOutput, error) {
 		// Handle a mid-stream CurrentPaneRequest (e.g. a client-initiated resync) via the
 		// same shared helper the initial handshake and streamViaTmuxCapturePane use.
-		return handleCurrentPaneRequest(sessionID, instance, req, currentResyncOptions())
+		return handleCurrentPaneRequest(ctx, sessionID, instance, req, currentResyncOptions())
 	}, &resizeSettling)
 
 	// Wait for either goroutine to error or complete.
@@ -1961,8 +1930,8 @@ func (h *ConnectRPCWebSocketHandler) streamViaHub(stream *connectWebSocketStream
 		hub.RequestResize(connCtx, subscriberID, size)
 	}, func(startLine, endLine string) (string, error) {
 		return instance.GetScrollbackHistory(startLine, endLine)
-	}, func(req *sessionv1.CurrentPaneRequest) (*sessionv1.TerminalOutput, error) {
-		return handleCurrentPaneRequest(sessionID, instance, req, currentResyncOptions())
+	}, func(ctx context.Context, req *sessionv1.CurrentPaneRequest) (*sessionv1.TerminalOutput, error) {
+		return handleCurrentPaneRequest(ctx, sessionID, instance, req, currentResyncOptions())
 	}, &resizeSettling)
 
 	select {
@@ -2370,12 +2339,20 @@ func (h *ConnectRPCWebSocketHandler) streamShellViaControlMode(stream *connectWe
 				// so this branch is added directly here rather than as a callback.
 				if paneReq := incomingData.GetCurrentPaneRequest(); paneReq != nil {
 					resizeSettling.Store(true)
-					output, handleErr := handleCurrentPaneRequest(sessionID, cursorTarget, paneReq, currentResyncOptions())
+					paneCtx, paneSpan := telemetry.StartSpan(context.Background(), "terminal.mid_stream_current_pane_request")
+					paneSpan.SetAttributes(
+						attribute.String("session_id", sessionID),
+						attribute.String("shell_id", shellID),
+						attribute.String("resync_id", paneReq.GetResyncId()),
+					)
+					output, handleErr := handleCurrentPaneRequest(paneCtx, sessionID, cursorTarget, paneReq, currentResyncOptions())
 					if handleErr != nil {
+						paneSpan.RecordError(handleErr)
 						log.Error("[streamShellViaControlMode] failed to handle mid-stream current pane request", "session", sessionID, "shell", shellID, "err", handleErr)
 					} else {
 						writeCurrentPaneResponse(stream, sessionID, shellID, output)
 					}
+					paneSpan.End()
 					resizeSettling.Store(false)
 				}
 			}
@@ -2415,9 +2392,57 @@ type panePTY interface {
 	GetPaneDimensions() (cols, rows int, err error)
 	GetPaneDimensionsPriority(ctx context.Context) (cols, rows int, err error)
 	ResizePTY(cols, rows int) error
+	// ResizePTYContext mirrors ResizePTY but is bounded by ctx — see
+	// Instance.ResizePTYContext's doc comment for why handleCurrentPaneRequest
+	// must use this instead of the unbounded ResizePTY above: without it, a
+	// contended resize-window call added unbounded extra latency on top of the
+	// shared fast-lane budget every other call in that function respects.
+	ResizePTYContext(ctx context.Context, cols, rows int) error
 	RefreshTmuxClient() error
 	RefreshTmuxClientPriority(ctx context.Context) error
 	GetPaneCursorPosition() (x, y int, err error)
+}
+
+// fastLaneStep wraps a panePTY target so handleCurrentPaneRequest's body always reaches
+// dims/resize/refresh/capture through one path instead of hand-writing an
+// opts.UseFastLane if/else at each call site. That per-call-site pattern already needed
+// fixing once (28a70a7a8, "share one deadline across all fast-lane calls in a resync")
+// and still let the resize step slip through unbounded — see
+// Instance.ResizePTYContext's doc comment. Routing every step through this one type
+// means a future step added to handleCurrentPaneRequest gets ctx-boundedness for free;
+// there's no second if/else to remember to write correctly.
+type fastLaneStep struct {
+	target   panePTY
+	ctx      context.Context
+	fastLane bool
+}
+
+func (s fastLaneStep) dims() (cols, rows int, err error) {
+	if s.fastLane {
+		return s.target.GetPaneDimensionsPriority(s.ctx)
+	}
+	return s.target.GetPaneDimensions()
+}
+
+func (s fastLaneStep) resize(cols, rows int) error {
+	if s.fastLane {
+		return s.target.ResizePTYContext(s.ctx, cols, rows)
+	}
+	return s.target.ResizePTY(cols, rows)
+}
+
+func (s fastLaneStep) refresh() error {
+	if s.fastLane {
+		return s.target.RefreshTmuxClientPriority(s.ctx)
+	}
+	return s.target.RefreshTmuxClient()
+}
+
+func (s fastLaneStep) capture() (streamhub.RawPaneContent, error) {
+	if s.fastLane {
+		return s.target.CapturePaneContentRawPriority(s.ctx)
+	}
+	return s.target.CapturePaneContentRaw()
 }
 
 // shellPanePTY adapts a shell's sibling *tmux.TmuxSession to the panePTY interface so
@@ -2439,7 +2464,20 @@ func (p shellPanePTY) GetPaneDimensionsPriority(ctx context.Context) (int, int, 
 	return p.session.GetPaneDimensionsPriority(ctx)
 }
 func (p shellPanePTY) ResizePTY(cols, rows int) error { return p.session.SetWindowSize(cols, rows) }
-func (p shellPanePTY) RefreshTmuxClient() error       { return p.session.RefreshClient() }
+
+// ResizePTYContext mirrors Instance.ResizePTYContext's goroutine-race pattern —
+// *tmux.TmuxSession.SetWindowSize has no caller-overridable context either.
+func (p shellPanePTY) ResizePTYContext(ctx context.Context, cols, rows int) error {
+	done := make(chan error, 1)
+	go func() { done <- p.session.SetWindowSize(cols, rows) }()
+	select {
+	case err := <-done:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+func (p shellPanePTY) RefreshTmuxClient() error { return p.session.RefreshClient() }
 func (p shellPanePTY) RefreshTmuxClientPriority(ctx context.Context) error {
 	return p.session.RefreshClientPriority(ctx)
 }
@@ -2514,19 +2552,27 @@ func derefOr(p *int32, fallback int32) int32 {
 // Callers that have a cache/streamer fallback for a capture failure (as
 // streamViaTmuxCapturePane does) should apply it themselves on a non-nil error; this
 // helper has no such fallback since control-mode callers have no streamer to fall back to.
-func handleCurrentPaneRequest(sessionID string, target panePTY, req *sessionv1.CurrentPaneRequest, opts ResyncOptions) (*sessionv1.TerminalOutput, error) {
+func handleCurrentPaneRequest(ctx context.Context, sessionID string, target panePTY, req *sessionv1.CurrentPaneRequest, opts ResyncOptions) (*sessionv1.TerminalOutput, error) {
 	log.ForSession(sessionID).Debug("current pane request",
 		"targetCols", derefOr(req.TargetCols, 0), "targetRows", derefOr(req.TargetRows, 0))
 
 	// One shared deadline for every fast-lane call this single resync makes
-	// (up to 3 RefreshTmuxClientPriority calls, a dimension verify, the final
-	// capture) — not a fresh tmux.ResyncFastLaneTimeout allowance per call.
-	// 2026-08-25 incident: even after each individual call was bounded, 5
-	// sequential fresh 3s budgets could still add up to far more real
-	// wall-clock time than the client's own stall watchdog allows. Unused
-	// when !opts.UseFastLane (those call sites don't take a ctx).
-	ctx, cancel := context.WithTimeout(context.Background(), tmux.ResyncFastLaneTimeout)
+	// (a dimension check, the resize itself, up to 3 RefreshTmuxClientPriority
+	// calls, a dimension verify, the final capture) — not a fresh
+	// tmux.ResyncFastLaneTimeout allowance per call. 2026-08-25 incident: even
+	// after each individual call was bounded, 5 sequential fresh 3s budgets
+	// could still add up to far more real wall-clock time than the client's
+	// own stall watchdog allows. The resize step (ResizePTYContext) was
+	// initially missed from this group — its plain ResizePTY predecessor ran
+	// unbounded, on the DEFAULT exec-gate pool with its own independent 5s
+	// timeout, and could silently double a resync's worst-case latency under
+	// contention (confirmed via a live trace: a single
+	// terminal.mid_stream_current_pane_request span taking 6.46s while every
+	// individual fast-lane call is capped at 3s). Unused when !opts.UseFastLane
+	// (those call sites don't take a ctx).
+	ctx, cancel := context.WithTimeout(ctx, tmux.ResyncFastLaneTimeout)
 	defer cancel()
+	step := fastLaneStep{target: target, ctx: ctx, fastLane: opts.UseFastLane}
 
 	// Epic 4.1 (Task 4.1.1.1): when the client itself flags its target dimensions as
 	// stale (e.g. computed while backgrounded) and terminal:resync-skip-stale-dimension-slowpath
@@ -2547,13 +2593,7 @@ func handleCurrentPaneRequest(sessionID string, target panePTY, req *sessionv1.C
 		targetRows := int(*req.TargetRows)
 
 		// Check current dimensions to see if resize is actually needed.
-		var currentCols, currentRows int
-		var dimensionErr error
-		if opts.UseFastLane {
-			currentCols, currentRows, dimensionErr = target.GetPaneDimensionsPriority(ctx)
-		} else {
-			currentCols, currentRows, dimensionErr = target.GetPaneDimensions()
-		}
+		currentCols, currentRows, dimensionErr := step.dims()
 		if dimensionErr != nil {
 			log.Warn("[handleCurrentPaneRequest] failed to get current pane dimensions", "err", dimensionErr)
 		}
@@ -2564,7 +2604,7 @@ func handleCurrentPaneRequest(sessionID string, target panePTY, req *sessionv1.C
 				"from", fmt.Sprintf("%dx%d", currentCols, currentRows),
 				"to", fmt.Sprintf("%dx%d", targetCols, targetRows))
 
-			if resizeErr := target.ResizePTY(targetCols, targetRows); resizeErr != nil {
+			if resizeErr := step.resize(targetCols, targetRows); resizeErr != nil {
 				log.Error("[handleCurrentPaneRequest] failed to resize tmux before capture", "err", resizeErr)
 				// Continue anyway - better to send content with wrong dimensions than no content.
 			} else {
@@ -2573,12 +2613,7 @@ func handleCurrentPaneRequest(sessionID string, target panePTY, req *sessionv1.C
 				// Sending multiple refresh signals gives it multiple chances to correct itself.
 				// See: https://github.com/anthropics/claude-code/issues (pending bug report)
 				for i := 0; i < 3; i++ {
-					var refreshErr error
-					if opts.UseFastLane {
-						refreshErr = target.RefreshTmuxClientPriority(ctx)
-					} else {
-						refreshErr = target.RefreshTmuxClient()
-					}
+					refreshErr := step.refresh()
 					if refreshErr != nil {
 						log.Warn("[handleCurrentPaneRequest] failed to send refresh signal", "signal", i+1, "err", refreshErr)
 					}
@@ -2595,13 +2630,7 @@ func handleCurrentPaneRequest(sessionID string, target panePTY, req *sessionv1.C
 				time.Sleep(250 * time.Millisecond)
 
 				// PHASE 1: Verify resize succeeded before capture.
-				var verifiedCols, verifiedRows int
-				var verifyErr error
-				if opts.UseFastLane {
-					verifiedCols, verifiedRows, verifyErr = target.GetPaneDimensionsPriority(ctx)
-				} else {
-					verifiedCols, verifiedRows, verifyErr = target.GetPaneDimensions()
-				}
+				verifiedCols, verifiedRows, verifyErr := step.dims()
 				if verifyErr != nil {
 					log.Warn("[handleCurrentPaneRequest] failed to verify resize before capture", "err", verifyErr)
 				} else if verifiedCols != targetCols || verifiedRows != targetRows {
@@ -2623,13 +2652,7 @@ func handleCurrentPaneRequest(sessionID string, target panePTY, req *sessionv1.C
 	// client-triggered resync into scrambled/staircased output; requiring
 	// streamhub.RawPaneContent at prepareSnapshotContent's call below is
 	// what makes that mistake a compile error now.
-	var content streamhub.RawPaneContent
-	var captureErr error
-	if opts.UseFastLane {
-		content, captureErr = target.CapturePaneContentRawPriority(ctx)
-	} else {
-		content, captureErr = target.CapturePaneContentRaw()
-	}
+	content, captureErr := step.capture()
 	if captureErr != nil {
 		return nil, fmt.Errorf("failed to capture fresh pane content: %w", captureErr)
 	}
@@ -2716,7 +2739,7 @@ func runInputReadLoop(
 	onInput func(data []byte),
 	onResize func(cols, rows int),
 	onScrollbackRequest func(startLine, endLine string) (string, error),
-	onCurrentPaneRequest func(req *sessionv1.CurrentPaneRequest) (*sessionv1.TerminalOutput, error),
+	onCurrentPaneRequest func(ctx context.Context, req *sessionv1.CurrentPaneRequest) (*sessionv1.TerminalOutput, error),
 	resizeSettling *atomic.Bool,
 ) {
 	for {
@@ -2876,10 +2899,10 @@ func handleCurrentPaneRequestFrame(
 	stream *connectWebSocketStream,
 	sessionID string,
 	paneReq *sessionv1.CurrentPaneRequest,
-	onCurrentPaneRequest func(req *sessionv1.CurrentPaneRequest) (*sessionv1.TerminalOutput, error),
+	onCurrentPaneRequest func(ctx context.Context, req *sessionv1.CurrentPaneRequest) (*sessionv1.TerminalOutput, error),
 	resizeSettling *atomic.Bool,
 ) {
-	_, span := telemetry.StartSpan(context.Background(), "terminal.mid_stream_current_pane_request")
+	ctx, span := telemetry.StartSpan(context.Background(), "terminal.mid_stream_current_pane_request")
 	span.SetAttributes(
 		attribute.String("session_id", sessionID),
 		attribute.String("resync_id", paneReq.GetResyncId()),
@@ -2890,7 +2913,11 @@ func handleCurrentPaneRequestFrame(
 
 	resizeSettling.Store(true)
 	defer resizeSettling.Store(false)
-	output, err := onCurrentPaneRequest(paneReq)
+	// Threading ctx (not context.Background()) is what makes the exec-gate
+	// spans/metrics below nest under this request's own span in Tempo instead
+	// of appearing as unrelated root spans — see exec_gate_observability.go's
+	// doc comment for the incident this closes.
+	output, err := onCurrentPaneRequest(ctx, paneReq)
 	if err != nil {
 		span.RecordError(err)
 		log.Error("[streamViaControlMode] failed to handle mid-stream current pane request", "session", sessionID, "resync_id", paneReq.GetResyncId(), "err", err)
@@ -2985,13 +3012,22 @@ func writeCurrentPaneResponse(stream *connectWebSocketStream, sessionID string, 
 func handleBatchedCurrentPaneRequest(
 	sessionID string,
 	batchReq *sessionv1.BatchedCurrentPaneRequest,
-	onCurrentPaneRequest func(req *sessionv1.CurrentPaneRequest) (*sessionv1.TerminalOutput, error),
+	onCurrentPaneRequest func(ctx context.Context, req *sessionv1.CurrentPaneRequest) (*sessionv1.TerminalOutput, error),
 ) []*sessionv1.TerminalOutput {
 	requests := batchReq.GetRequests()
+	// One span for the whole coalesced batch (not one per request): the point of
+	// batching is that these requests were coalesced into a single wire message,
+	// so their exec-gate spans/metrics nest under one parent here — see
+	// handleCurrentPaneRequestFrame's identical treatment for the unbatched case.
+	ctx, span := telemetry.StartSpan(context.Background(), "terminal.batched_mid_stream_current_pane_request")
+	span.SetAttributes(attribute.String("session_id", sessionID), attribute.Int("request_count", len(requests)))
+	defer span.End()
+
 	outputs := make([]*sessionv1.TerminalOutput, 0, len(requests))
 	for _, paneReq := range requests {
-		output, err := onCurrentPaneRequest(paneReq)
+		output, err := onCurrentPaneRequest(ctx, paneReq)
 		if err != nil {
+			span.RecordError(err)
 			log.Error("[streamViaControlMode] failed to handle coalesced current pane request", "session", sessionID, "resyncId", paneReq.GetResyncId(), "err", err)
 			continue
 		}
@@ -3009,7 +3045,7 @@ func handleBatchedCurrentPaneRequestFrame(
 	stream *connectWebSocketStream,
 	sessionID string,
 	batchReq *sessionv1.BatchedCurrentPaneRequest,
-	onCurrentPaneRequest func(req *sessionv1.CurrentPaneRequest) (*sessionv1.TerminalOutput, error),
+	onCurrentPaneRequest func(ctx context.Context, req *sessionv1.CurrentPaneRequest) (*sessionv1.TerminalOutput, error),
 	resizeSettling *atomic.Bool,
 ) {
 	resizeSettling.Store(true)
@@ -3374,8 +3410,14 @@ func (h *ConnectRPCWebSocketHandler) streamViaTmuxCapturePane(stream *connectWeb
 				// streamShellViaControlMode's mid-stream CurrentPaneRequest dispatch).
 				if currentPaneReq := incomingData.GetCurrentPaneRequest(); currentPaneReq != nil {
 					paneCaptureSettling.Store(true)
-					output, handleErr := handleCurrentPaneRequest(sessionID, target, currentPaneReq, currentResyncOptions())
+					paneCtx, paneSpan := telemetry.StartSpan(context.Background(), "terminal.mid_stream_current_pane_request")
+					paneSpan.SetAttributes(
+						attribute.String("session_id", sessionID),
+						attribute.String("resync_id", currentPaneReq.GetResyncId()),
+					)
+					output, handleErr := handleCurrentPaneRequest(paneCtx, sessionID, target, currentPaneReq, currentResyncOptions())
 					if handleErr != nil {
+						paneSpan.RecordError(handleErr)
 						log.Error("[streamViaTmuxCapture] failed to capture fresh pane content", "err", handleErr)
 						// Fallback to streamer content, preserving pre-extraction behavior:
 						// handleCurrentPaneRequest itself has no streamer to fall back to.
@@ -3384,6 +3426,7 @@ func (h *ConnectRPCWebSocketHandler) streamViaTmuxCapturePane(stream *connectWeb
 							ResyncId: currentPaneReq.GetResyncId(),
 						}
 					}
+					paneSpan.End()
 
 					writeCurrentPaneResponse(stream, sessionID, "", output)
 					paneCaptureSettling.Store(false)

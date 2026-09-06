@@ -20,28 +20,63 @@ func newIsolatedTymuxRolloutService(t *testing.T) *TymuxRolloutService {
 	return NewTymuxRolloutService()
 }
 
-func TestGetTymuxRolloutStatus_ReportsRehearsalState(t *testing.T) {
+// TestGetTymuxRolloutStatus_GlobalEnvVarAlwaysFalse is a regression guard:
+// STAPLER_SQUAD_USE_TYMUX was removed in favor of the "tymux" feature flag
+// (see GlobalOverride), so GlobalEnvVarSet must stay false even if that env
+// var happens to be set in the environment.
+func TestGetTymuxRolloutStatus_GlobalEnvVarAlwaysFalse(t *testing.T) {
 	s := newIsolatedTymuxRolloutService(t)
+	t.Setenv("STAPLER_SQUAD_USE_TYMUX", "true")
 
 	resp, err := s.GetTymuxRolloutStatus(context.Background(), connect.NewRequest(&sessionv1.GetTymuxRolloutStatusRequest{}))
 	require.NoError(t, err)
 	assert.False(t, resp.Msg.GlobalEnvVarSet)
 	assert.Nil(t, resp.Msg.RollbackRehearsalCompletedAt)
 	assert.Empty(t, resp.Msg.SessionOverrides)
+}
 
-	// Reports the global env var when set.
-	t.Setenv("STAPLER_SQUAD_USE_TYMUX", "true")
-	resp, err = s.GetTymuxRolloutStatus(context.Background(), connect.NewRequest(&sessionv1.GetTymuxRolloutStatusRequest{}))
-	require.NoError(t, err)
-	assert.True(t, resp.Msg.GlobalEnvVarSet)
+func TestGetTymuxRolloutStatus_ReportsRehearsalTimestamp(t *testing.T) {
+	s := newIsolatedTymuxRolloutService(t)
 
-	// Reports the rehearsal timestamp once completed.
-	_, err = s.CompleteTymuxRollbackRehearsal(context.Background(), connect.NewRequest(&sessionv1.CompleteTymuxRollbackRehearsalRequest{}))
+	_, err := s.CompleteTymuxRollbackRehearsal(context.Background(), connect.NewRequest(&sessionv1.CompleteTymuxRollbackRehearsalRequest{}))
 	require.NoError(t, err)
-	resp, err = s.GetTymuxRolloutStatus(context.Background(), connect.NewRequest(&sessionv1.GetTymuxRolloutStatusRequest{}))
+	resp, err := s.GetTymuxRolloutStatus(context.Background(), connect.NewRequest(&sessionv1.GetTymuxRolloutStatusRequest{}))
 	require.NoError(t, err)
 	require.NotNil(t, resp.Msg.RollbackRehearsalCompletedAt)
 	assert.False(t, resp.Msg.RollbackRehearsalCompletedAt.AsTime().IsZero())
+}
+
+func TestSetTymuxGlobalOverride_SetsAndClears(t *testing.T) {
+	s := newIsolatedTymuxRolloutService(t)
+	forceFalse := false
+
+	resp, err := s.SetTymuxGlobalOverride(context.Background(), connect.NewRequest(&sessionv1.SetTymuxGlobalOverrideRequest{
+		ForceTymux: &forceFalse,
+	}))
+	require.NoError(t, err)
+	require.NotNil(t, resp.Msg.GlobalOverride)
+	assert.False(t, *resp.Msg.GlobalOverride)
+
+	// Unset ForceTymux clears the override (config.SetTymuxGlobalOverride's
+	// nil-means-clear convention).
+	resp, err = s.SetTymuxGlobalOverride(context.Background(), connect.NewRequest(&sessionv1.SetTymuxGlobalOverrideRequest{}))
+	require.NoError(t, err)
+	assert.Nil(t, resp.Msg.GlobalOverride)
+}
+
+func TestGetTymuxRolloutStatus_ReportsGlobalOverride(t *testing.T) {
+	s := newIsolatedTymuxRolloutService(t)
+	forceTrue := true
+
+	_, err := s.SetTymuxGlobalOverride(context.Background(), connect.NewRequest(&sessionv1.SetTymuxGlobalOverrideRequest{
+		ForceTymux: &forceTrue,
+	}))
+	require.NoError(t, err)
+
+	resp, err := s.GetTymuxRolloutStatus(context.Background(), connect.NewRequest(&sessionv1.GetTymuxRolloutStatusRequest{}))
+	require.NoError(t, err)
+	require.NotNil(t, resp.Msg.GlobalOverride)
+	assert.True(t, *resp.Msg.GlobalOverride)
 }
 
 func TestCompleteTymuxRollbackRehearsal_PersistsTimestamp(t *testing.T) {

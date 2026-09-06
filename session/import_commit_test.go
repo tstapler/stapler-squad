@@ -155,9 +155,6 @@ func TestCommitImportExternalSession_PersistsAndLinksAndSuspends_When_StartAndSu
 // instance's backend even though the process-wide default is registered as
 // tymux.
 func TestCommitImportExternalSession_HonorsSessionNameOverrideMap(t *testing.T) {
-	RegisterBackendProvider(BackendTymux)
-	t.Cleanup(func() { RegisterBackendProvider(BackendTmux) })
-
 	testDir := t.TempDir()
 	t.Setenv("STAPLER_SQUAD_TEST_DIR", testDir)
 
@@ -182,7 +179,7 @@ func TestCommitImportExternalSession_HonorsSessionNameOverrideMap(t *testing.T) 
 	title := importInstanceTitle(candidate)
 	sessionKey := tmux.NewSessionName(title, tmux.TmuxPrefix).String()
 	require.NoError(t, os.WriteFile(filepath.Join(testDir, "config.json"),
-		[]byte(`{"tymux_session_overrides": {"`+sessionKey+`": false}}`), 0o644))
+		[]byte(`{"feature_flags": {"tymux": true}, "tymux_session_overrides": {"`+sessionKey+`": false}}`), 0o644))
 
 	result, err := CommitImportExternalSession(context.Background(), CommitImportParams{
 		Detector:         detector,

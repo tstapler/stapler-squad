@@ -31,7 +31,7 @@ jest.mock("@/gen/session/v1/session_pb", () => ({
 
 jest.mock("@/lib/config", () => ({
   getApiBaseUrl: () => "http://localhost:8543",
-  createAuthInterceptor: () => jest.fn(),
+  createAuthInterceptor: jest.fn(() => jest.fn()),
 }));
 
 // ---------------------------------------------------------------------------

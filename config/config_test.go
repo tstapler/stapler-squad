@@ -3,7 +3,6 @@ package config
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -1482,86 +1481,68 @@ func TestLoadConfig_HandoffSummaryAbsentFromExistingConfig_DefaultsToEnabled(t *
 	assert.Equal(t, 12000, cfg.HandoffSummary.MaxMiddleExcerptTokens)
 }
 
-// TestResolveGlobalTymuxDefault_AlwaysAllowsFalse verifies the gate never
-// blocks the safe direction: requesting the global tymux default be false is
-// always permitted, regardless of whether the tymux rollback rehearsal has
-// been recorded. Mirrors
-// TestResolveGlobalStreamHubDefault_should_ReturnFalseWithNoError_When_RequestedIsFalse
-// (config/stream_hub_rollout_test.go).
-func TestResolveGlobalTymuxDefault_AlwaysAllowsFalse(t *testing.T) {
-	cfg := &Config{} // TymuxRollbackRehearsalCompletedAt unset
-
-	got, err := ResolveGlobalTymuxDefault(cfg, false)
-	if err != nil {
-		t.Fatalf("expected no error requesting false, got %v", err)
-	}
-	if got != false {
-		t.Fatalf("expected false, got %v", got)
+// TestEffectiveTymuxEnabled_should_DefaultOff_When_FlagUnset covers the
+// off-by-default posture: unlike stream-hub, no rollback rehearsal has
+// vouched for tymux as the global default yet.
+func TestEffectiveTymuxEnabled_should_DefaultOff_When_FlagUnset(t *testing.T) {
+	if got := EffectiveTymuxEnabled(&Config{}); got != false {
+		t.Fatalf("expected default-off, got %v", got)
 	}
 }
 
-// TestResolveGlobalTymuxDefault_RefusesTrueWithoutRehearsal is ADR-002's
-// mechanical gate: with TymuxRollbackRehearsalCompletedAt unset, requesting
-// the global tymux default resolve to true must fail with an explicit error,
-// not silently fall back to false without signaling why. Mirrors
-// TestResolveGlobalStreamHubDefault_should_FailFast_When_RehearsalNotCompleted.
-func TestResolveGlobalTymuxDefault_RefusesTrueWithoutRehearsal(t *testing.T) {
-	cfg := &Config{} // TymuxRollbackRehearsalCompletedAt unset
-
-	got, err := ResolveGlobalTymuxDefault(cfg, true)
-	if !errors.Is(err, ErrTymuxRollbackRehearsalNotCompleted) {
-		t.Fatalf("expected ErrTymuxRollbackRehearsalNotCompleted, got %v", err)
+// TestEffectiveTymuxEnabled_should_HonorExplicitFlagValue verifies
+// SetTymuxGlobalOverride (the settings panel's toggle) wins in both
+// directions, and clearing it (nil) reverts to the off-by-default value.
+func TestEffectiveTymuxEnabled_should_HonorExplicitFlagValue(t *testing.T) {
+	cfg := &Config{}
+	if err := cfg.SetTymuxGlobalOverride(boolPtr(true)); err != nil {
+		t.Fatalf("SetTymuxGlobalOverride(true): %v", err)
 	}
-	if got != false {
-		t.Fatalf("expected false to be returned alongside the error, got %v", got)
+	if got := EffectiveTymuxEnabled(cfg); got != true {
+		t.Fatalf("expected explicit true to win, got %v", got)
 	}
-}
 
-// TestResolveGlobalTymuxDefault_AllowsTrueAfterRehearsal is the happy path:
-// once TymuxRollbackRehearsalCompletedAt is set to a valid, non-zero
-// timestamp, the same resolution that previously failed now succeeds and
-// permits the global tymux default to be true.
-func TestResolveGlobalTymuxDefault_AllowsTrueAfterRehearsal(t *testing.T) {
-	completedAt := time.Now()
-	cfg := &Config{TymuxRollbackRehearsalCompletedAt: &completedAt}
-
-	got, err := ResolveGlobalTymuxDefault(cfg, true)
-	if err != nil {
-		t.Fatalf("expected no error once rehearsal is recorded, got %v", err)
+	if err := cfg.SetTymuxGlobalOverride(boolPtr(false)); err != nil {
+		t.Fatalf("SetTymuxGlobalOverride(false): %v", err)
 	}
-	if got != true {
-		t.Fatalf("expected true, got %v", got)
+	if got := EffectiveTymuxEnabled(cfg); got != false {
+		t.Fatalf("expected explicit false, got %v", got)
+	}
+
+	if err := cfg.SetTymuxGlobalOverride(nil); err != nil {
+		t.Fatalf("SetTymuxGlobalOverride(nil): %v", err)
+	}
+	if got := EffectiveTymuxEnabled(cfg); got != false {
+		t.Fatalf("expected clearing the override to revert to the off-by-default value, got %v", got)
 	}
 }
 
-// TestRecordTymuxRollbackRehearsalCompleted_PersistsTimestamp exercises
-// recording a completed tymux rehearsal end to end: it persists
-// TymuxRollbackRehearsalCompletedAt to disk, and a freshly reloaded config
-// subsequently permits ResolveGlobalTymuxDefault to return true where it
-// previously refused. Mirrors
-// TestRecordRollbackRehearsalCompleted_should_PersistTimestamp_And_UnblockResolution.
+// TestGetTymuxGlobalOverride_should_ReportUnset_Then_Set mirrors
+// GetStreamHubGlobalOverride's (value, ok) shape for the tymux flag.
+func TestGetTymuxGlobalOverride_should_ReportUnset_Then_Set(t *testing.T) {
+	cfg := &Config{}
+	if _, ok := cfg.GetTymuxGlobalOverride(); ok {
+		t.Fatal("expected no override on a fresh config")
+	}
+
+	if err := cfg.SetTymuxGlobalOverride(boolPtr(true)); err != nil {
+		t.Fatalf("SetTymuxGlobalOverride: %v", err)
+	}
+	if got, ok := cfg.GetTymuxGlobalOverride(); !ok || got != true {
+		t.Fatalf("expected (true, true), got (%v, %v)", got, ok)
+	}
+}
+
+// TestRecordTymuxRollbackRehearsalCompleted_PersistsTimestamp is now a
+// purely historical record — EffectiveTymuxEnabled no longer gates on it —
+// but RecordTymuxRollbackRehearsalCompleted still exists and still
+// persists, so cover that it does.
 func TestRecordTymuxRollbackRehearsalCompleted_PersistsTimestamp(t *testing.T) {
 	tempHome := t.TempDir()
-	origHome := os.Getenv("HOME")
-	origInstance := os.Getenv("STAPLER_SQUAD_INSTANCE")
-	os.Setenv("HOME", tempHome)
-	os.Setenv("STAPLER_SQUAD_INSTANCE", "shared")
-	defer func() {
-		os.Setenv("HOME", origHome)
-		if origInstance == "" {
-			os.Unsetenv("STAPLER_SQUAD_INSTANCE")
-		} else {
-			os.Setenv("STAPLER_SQUAD_INSTANCE", origInstance)
-		}
-	}()
+	t.Setenv("HOME", tempHome)
+	t.Setenv("STAPLER_SQUAD_INSTANCE", "shared")
 
 	cfg := &Config{}
-
-	// Before recording, the gate refuses.
-	if _, err := ResolveGlobalTymuxDefault(cfg, true); !errors.Is(err, ErrTymuxRollbackRehearsalNotCompleted) {
-		t.Fatalf("expected gate to refuse before rehearsal is recorded, got %v", err)
-	}
-
 	before := time.Now()
 	if err := cfg.RecordTymuxRollbackRehearsalCompleted(); err != nil {
 		t.Fatalf("RecordTymuxRollbackRehearsalCompleted returned error: %v", err)
@@ -1575,20 +1556,13 @@ func TestRecordTymuxRollbackRehearsalCompleted_PersistsTimestamp(t *testing.T) {
 		t.Fatalf("expected TymuxRollbackRehearsalCompletedAt to be within [%v, %v], got %v", before, after, *cfg.TymuxRollbackRehearsalCompletedAt)
 	}
 
-	if _, err := ResolveGlobalTymuxDefault(cfg, true); err != nil {
-		t.Fatalf("expected gate to succeed after rehearsal is recorded, got %v", err)
-	}
-
 	configPath := filepath.Join(tempHome, ".stapler-squad", ConfigFileName)
 	reloaded, err := LoadConfigFromPath(configPath)
 	if err != nil {
-		t.Fatalf("LoadConfigFromPath after RecordTymuxRollbackRehearsalCompleted: %v", err)
+		t.Fatalf("LoadConfigFromPath: %v", err)
 	}
 	if reloaded.TymuxRollbackRehearsalCompletedAt == nil {
 		t.Fatal("expected persisted config to carry TymuxRollbackRehearsalCompletedAt")
-	}
-	if _, err := ResolveGlobalTymuxDefault(reloaded, true); err != nil {
-		t.Fatalf("expected reloaded config's gate to succeed, got %v", err)
 	}
 }
 

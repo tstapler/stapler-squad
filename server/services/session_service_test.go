@@ -1911,13 +1911,16 @@ func TestUpdateSession_should_RejectStop_When_TransitionIsIllegal(t *testing.T) 
 // fake/mock SendKeys recorder, to get a genuinely "started" Instance whose
 // SendKeys call actually succeeds.
 func TestUpdateSession_SteerMessage_NonAutonomousSession_SendsViaSendKeys(t *testing.T) {
-	t.Parallel()
+	// No t.Parallel(): needs t.Setenv (STAPLER_SQUAD_TEST_DIR) for config
+	// isolation to force the native backend live, and Go forbids Setenv in
+	// any test that also calls Parallel.
 	if testing.Short() {
 		t.Skip("requires PTY allocation")
 	}
 
-	session.RegisterBackendProvider(session.BackendNative)
-	defer session.RegisterBackendProvider(session.BackendTmux)
+	testDir := t.TempDir()
+	t.Setenv("STAPLER_SQUAD_TEST_DIR", testDir)
+	require.NoError(t, os.WriteFile(filepath.Join(testDir, "config.json"), []byte(`{"process_manager_backend": "native"}`), 0o644))
 
 	fix := setupForkTestFixture(t)
 	t.Cleanup(fix.cleanup)
@@ -3097,18 +3100,15 @@ func TestCreateSession_HonorsSessionNameOverrideMap(t *testing.T) {
 
 // TestCreateSession_FallsBackToGlobalDefaultWhenNoOverrides verifies that with
 // no request override and no TymuxSessionOverrides entry for this session,
-// CreateSession applies the process-wide registered backend
-// (session.RegisterBackendProvider) rather than a hardcoded BackendTmux.
+// CreateSession applies the process-wide "tymux" feature flag default
+// (config.EffectiveTymuxEnabled) rather than a hardcoded BackendTmux.
 func TestCreateSession_FallsBackToGlobalDefaultWhenNoOverrides(t *testing.T) {
-	session.RegisterBackendProvider(session.BackendTymux)
-	t.Cleanup(func() { session.RegisterBackendProvider(session.BackendTmux) })
-
 	storage := createTestStorage(t)
 	svc := newCreateTestService(t, storage)
 
 	testDir := t.TempDir()
 	t.Setenv("STAPLER_SQUAD_TEST_DIR", testDir)
-	require.NoError(t, os.WriteFile(filepath.Join(testDir, "config.json"), []byte(`{}`), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(testDir, "config.json"), []byte(`{"feature_flags": {"tymux": true}}`), 0o644))
 
 	resp, err := svc.CreateSession(context.Background(), connect.NewRequest(&sessionv1.CreateSessionRequest{
 		Title:   "no-override-session",
@@ -3138,9 +3138,6 @@ func TestCreateSession_FallsBackToGlobalDefaultWhenNoOverrides(t *testing.T) {
 // CreateDirectorySession) forces the resulting instance's backend even
 // though the process-wide default is registered as tymux.
 func TestCreateDirectorySession_HonorsSessionNameOverrideMap(t *testing.T) {
-	session.RegisterBackendProvider(session.BackendTymux)
-	t.Cleanup(func() { session.RegisterBackendProvider(session.BackendTmux) })
-
 	storage := createTestStorage(t)
 	svc := newCreateTestService(t, storage)
 
@@ -3149,7 +3146,7 @@ func TestCreateDirectorySession_HonorsSessionNameOverrideMap(t *testing.T) {
 	const title = "directory-session-override-map-test"
 	sessionKey := tmux.NewSessionName(title, tmux.TmuxPrefix).String()
 	require.NoError(t, os.WriteFile(filepath.Join(testDir, "config.json"),
-		[]byte(`{"default_program": "claude", "tymux_session_overrides": {"`+sessionKey+`": false}}`), 0o644))
+		[]byte(`{"default_program": "claude", "feature_flags": {"tymux": true}, "tymux_session_overrides": {"`+sessionKey+`": false}}`), 0o644))
 
 	inst, err := svc.CreateDirectorySession(context.Background(), title, t.TempDir(), "", nil, true, false)
 	require.NoError(t, err)
@@ -3162,9 +3159,6 @@ func TestCreateDirectorySession_HonorsSessionNameOverrideMap(t *testing.T) {
 // TestCreateWorktreeSession_HonorsSessionNameOverrideMap is the
 // CreateWorktreeSession analogue of the CreateDirectorySession test above.
 func TestCreateWorktreeSession_HonorsSessionNameOverrideMap(t *testing.T) {
-	session.RegisterBackendProvider(session.BackendTymux)
-	t.Cleanup(func() { session.RegisterBackendProvider(session.BackendTmux) })
-
 	storage := createTestStorage(t)
 	svc := newCreateTestService(t, storage)
 
@@ -3173,7 +3167,7 @@ func TestCreateWorktreeSession_HonorsSessionNameOverrideMap(t *testing.T) {
 	const title = "worktree-session-override-map-test"
 	sessionKey := tmux.NewSessionName(title, tmux.TmuxPrefix).String()
 	require.NoError(t, os.WriteFile(filepath.Join(testDir, "config.json"),
-		[]byte(`{"default_program": "claude", "tymux_session_overrides": {"`+sessionKey+`": false}}`), 0o644))
+		[]byte(`{"default_program": "claude", "feature_flags": {"tymux": true}, "tymux_session_overrides": {"`+sessionKey+`": false}}`), 0o644))
 
 	worktreePath := t.TempDir()
 	initGitRepoWithCommit(t, worktreePath)

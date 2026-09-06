@@ -268,8 +268,6 @@ func TestNativeProcessManager_FanOut_DeliversPTYOutput(t *testing.T) {
 // T-UNIT-11: Factory routes "native" → *NativeProcessManager.
 func TestNewProcessManager_ReturnsNativeProcessManager_WhenFlagIsNative(t *testing.T) {
 	t.Parallel()
-	RegisterBackendProvider(BackendNative)
-	defer RegisterBackendProvider(BackendTmux) // restore default for other tests
 
 	pm, err := NewProcessManager(context.Background(), BackendNative, ProcessManagerOptions{
 		SessionName: "test-native",

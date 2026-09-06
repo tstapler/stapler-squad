@@ -531,102 +531,42 @@ func TestRecordControlModeStreamStart_should_LogOverlapWarning_When_TwoInvocatio
 
 // --- HubRegistry / PathHubOwned routing (Epic 2.2) ---
 
-// TestUseStreamHub_should_DefaultToTrue_When_EnvVarUnsetAndRehearsalRecorded
-// covers the post-rollout default: with STAPLER_SQUAD_USE_STREAM_HUB unset
-// (mirrors STAPLER_SQUAD_USE_CONTROL_MODE's "unset means on" convention) and
-// a recorded rollback rehearsal, streamTerminal routes to PathHubOwned.
-func TestUseStreamHub_should_DefaultToTrue_When_EnvVarUnsetAndRehearsalRecorded(t *testing.T) {
-	recordRollbackRehearsalCompletedForTest(t)
-
-	t.Setenv("STAPLER_SQUAD_USE_STREAM_HUB", "")
+// TestUseStreamHub_should_DefaultToTrue_When_FlagUnset covers the
+// post-rollout default: the "stream_hub" feature flag defaults on with no
+// explicit override needed.
+func TestUseStreamHub_should_DefaultToTrue_When_FlagUnset(t *testing.T) {
+	clearStreamHubOverrideForTest(t)
 	require.True(t, useStreamHub())
 }
 
-// TestUseStreamHub_should_ReturnFalse_When_EnvVarIsExactlyFalse verifies the
-// opt-out: any value other than "" or "true" (e.g. the literal "false", or a
-// typo like "1"/"True") stays on the legacy path rather than failing open.
-// Requires a recorded rollback rehearsal (Story 3.3.2) since useStreamHub()'s
-// gate refuses to enable the global default otherwise (Story 3.3.1's Task
-// 3.3.1d).
-func TestUseStreamHub_should_ReturnFalse_When_EnvVarIsExactlyFalse(t *testing.T) {
-	recordRollbackRehearsalCompletedForTest(t)
-
-	t.Setenv("STAPLER_SQUAD_USE_STREAM_HUB", "true")
-	require.True(t, useStreamHub())
-
-	t.Setenv("STAPLER_SQUAD_USE_STREAM_HUB", "false")
-	require.False(t, useStreamHub())
-
-	t.Setenv("STAPLER_SQUAD_USE_STREAM_HUB", "1")
-	require.False(t, useStreamHub())
-}
-
-// recordRollbackRehearsalCompletedForTest records a passing rollback
-// rehearsal (Story 3.3.2's Task 3.3.2c) so a test's useStreamHub() call can
-// resolve the global default to true, and restores
-// RollbackRehearsalCompletedAt to nil via t.Cleanup so this doesn't leak
-// into other tests in the same package binary run.
-func recordRollbackRehearsalCompletedForTest(t *testing.T) {
-	t.Helper()
-	require.NoError(t, config.LoadConfig().RecordRollbackRehearsalCompleted())
-	t.Cleanup(func() {
-		cfg := config.LoadConfig()
-		cfg.RollbackRehearsalCompletedAt = nil
-		_ = config.SaveConfig(cfg)
-	})
-}
-
-// TestUseStreamHub_should_ReturnFalse_When_RehearsalNotCompleted is Story
-// 3.3.1/3.3.2's integration-level regression test (pre-mortem P1 #4): even
-// with STAPLER_SQUAD_USE_STREAM_HUB="true" set, useStreamHub() must return
-// false — safely, not by panicking or crashing the connection — when no
-// rollback rehearsal has been recorded.
-func TestUseStreamHub_should_ReturnFalse_When_RehearsalNotCompleted(t *testing.T) {
+// TestUseStreamHub_should_FollowExplicitGlobalOverride verifies
+// SetStreamHubGlobalOverride (the settings panel's toggle) wins in both
+// directions, and clearing it (nil) reverts to the on-by-default value.
+func TestUseStreamHub_should_FollowExplicitGlobalOverride(t *testing.T) {
+	clearStreamHubOverrideForTest(t)
 	cfg := config.LoadConfig()
-	cfg.RollbackRehearsalCompletedAt = nil
-	require.NoError(t, config.SaveConfig(cfg))
 
-	t.Setenv("STAPLER_SQUAD_USE_STREAM_HUB", "true")
-	require.False(t, useStreamHub(), "expected the global default to stay false without a recorded rollback rehearsal")
-}
-
-// TestUseStreamHub_should_PreferGlobalOverride_Over_EnvVar (Story 3.3.4)
-// verifies the live, browser-settable config.StreamHubGlobalOverride takes
-// precedence over the STAPLER_SQUAD_USE_STREAM_HUB env var in both
-// directions, and that clearing it (nil) reverts resolution to the env var.
-func TestUseStreamHub_should_PreferGlobalOverride_Over_EnvVar(t *testing.T) {
-	recordRollbackRehearsalCompletedForTest(t)
-	t.Setenv("STAPLER_SQUAD_USE_STREAM_HUB", "true")
-
-	cfg := config.LoadConfig()
 	forceFalse := false
 	require.NoError(t, cfg.SetStreamHubGlobalOverride(&forceFalse))
-	require.False(t, useStreamHub(), "override=false must win over env var=true")
+	require.False(t, useStreamHub())
 
 	forceTrue := true
 	require.NoError(t, cfg.SetStreamHubGlobalOverride(&forceTrue))
 	require.True(t, useStreamHub())
 
-	t.Setenv("STAPLER_SQUAD_USE_STREAM_HUB", "false")
-	require.True(t, useStreamHub(), "override=true must win over env var=false")
-
 	require.NoError(t, cfg.SetStreamHubGlobalOverride(nil))
-	require.False(t, useStreamHub(), "clearing the override must revert resolution to the env var")
+	require.True(t, useStreamHub(), "clearing the override must revert to the on-by-default value")
 }
 
-// TestUseStreamHub_should_GateGlobalOverride_On_RollbackRehearsal (Story
-// 3.3.4) verifies forcing the override to true is refused, same as the env
-// var path, when no rollback rehearsal has been recorded.
-func TestUseStreamHub_should_GateGlobalOverride_On_RollbackRehearsal(t *testing.T) {
+// clearStreamHubOverrideForTest ensures no persisted "stream_hub" override
+// leaks between tests in this package binary run.
+func clearStreamHubOverrideForTest(t *testing.T) {
+	t.Helper()
 	cfg := config.LoadConfig()
-	cfg.RollbackRehearsalCompletedAt = nil
-	require.NoError(t, config.SaveConfig(cfg))
-
-	forceTrue := true
-	require.NoError(t, cfg.SetStreamHubGlobalOverride(&forceTrue))
-	t.Cleanup(func() { _ = cfg.SetStreamHubGlobalOverride(nil) })
-
-	require.False(t, useStreamHub(), "override=true must still be refused without a recorded rollback rehearsal")
+	require.NoError(t, cfg.SetStreamHubGlobalOverride(nil))
+	t.Cleanup(func() {
+		_ = config.LoadConfig().SetStreamHubGlobalOverride(nil)
+	})
 }
 
 // getOrCreateHubForTest wraps hubRegistry.GetOrCreate and registers
@@ -1043,14 +983,12 @@ func TestStreamViaHub_should_SelfHealAndStreamSuccessfully_When_StartedFalseButT
 	// session's StreamOwnershipLock via its own effectiveStreamHubFlag()
 	// read, before streamViaHub ever reaches HubRegistry.GetOrCreate's own
 	// AcquireAndResolveExpecting(true, PathHubOwned, ...) call. Without the
-	// global default resolving true here (same rollback-rehearsal +
-	// env var gate as TestStreamTerminal_should_RouteThroughHubWithNoLegacyResizeCall_...),
-	// StartControlMode resolves ownership to PathLegacyPerConnection first,
-	// and GetOrCreate's later PathHubOwned expectation then conflicts with
-	// it — sending this connection down the legacy fallback instead of the
-	// hub-owned path this test means to exercise.
-	recordRollbackRehearsalCompletedForTest(t)
-	t.Setenv("STAPLER_SQUAD_USE_STREAM_HUB", "true")
+	// global default resolving true here, StartControlMode resolves
+	// ownership to PathLegacyPerConnection first, and GetOrCreate's later
+	// PathHubOwned expectation then conflicts with it — sending this
+	// connection down the legacy fallback instead of the hub-owned path this
+	// test means to exercise.
+	clearStreamHubOverrideForTest(t)
 	require.True(t, useStreamHub(), "flag must resolve PathHubOwned for this test's premise to hold")
 
 	dir := t.TempDir()
@@ -1469,12 +1407,7 @@ func TestHubRegistry_should_RestartPump_When_ReconnectingAfterFullTeardown(t *te
 // SetWindowSize/ResizePTY/CapturePaneContent called by anything in this
 // epic's new code path (only AttachSubscriber's bookkeeping runs).
 func TestStreamTerminal_should_RouteThroughHubWithNoLegacyResizeCall_When_PathHubOwnedResolved(t *testing.T) {
-	// Story 3.3.1/3.3.2: useStreamHub() now refuses to resolve the global
-	// default to true unless a rollback rehearsal has been recorded
-	// (config.RollbackRehearsalCompletedAt) — record one here so this
-	// test's premise (the global default resolving true) still holds.
-	recordRollbackRehearsalCompletedForTest(t)
-	t.Setenv("STAPLER_SQUAD_USE_STREAM_HUB", "true")
+	clearStreamHubOverrideForTest(t)
 	require.True(t, useStreamHub(), "flag must resolve PathHubOwned for this test's premise to hold")
 
 	registry := &hubRegistry{hubs: xsync.NewMap[string, *streamhub.StreamHub]()}
@@ -1849,7 +1782,7 @@ func TestRunInputReadLoopExitsPromptlyOnConnectionClose(t *testing.T) {
 	onScrollbackRequest := func(startLine, endLine string) (string, error) {
 		return "", nil
 	}
-	onCurrentPaneRequest := func(req *sessionv1.CurrentPaneRequest) (*sessionv1.TerminalOutput, error) {
+	onCurrentPaneRequest := func(ctx context.Context, req *sessionv1.CurrentPaneRequest) (*sessionv1.TerminalOutput, error) {
 		return &sessionv1.TerminalOutput{}, nil
 	}
 
@@ -1995,6 +1928,15 @@ func (f *fakePanePTY) ResizePTY(cols, rows int) error {
 	return f.resizePTYErr
 }
 
+// ResizePTYContext mirrors ResizePTY for this fake, additionally recording ctx
+// seen (like GetPaneDimensionsPriority/CapturePaneContentRawPriority above) so
+// tests can assert the resize step shares handleCurrentPaneRequest's fast-lane
+// ctx rather than running unbounded.
+func (f *fakePanePTY) ResizePTYContext(ctx context.Context, cols, rows int) error {
+	f.fastLaneCtxsSeen = append(f.fastLaneCtxsSeen, ctx)
+	return f.ResizePTY(cols, rows)
+}
+
 func (f *fakePanePTY) RefreshTmuxClient() error {
 	f.refreshTmuxCalled++
 	return f.refreshTmuxErr
@@ -2027,7 +1969,7 @@ func TestStreamViaTmuxCapturePane_should_EchoResyncIdOnTerminalOutput_When_Reque
 	target := &fakePanePTY{captureContent: "hello", cols: 80, rows: 24}
 	req := &sessionv1.CurrentPaneRequest{ResyncId: "abc-123"}
 
-	output, err := handleCurrentPaneRequest("test-session", target, req, ResyncOptions{EchoResyncID: true})
+	output, err := handleCurrentPaneRequest(context.Background(), "test-session", target, req, ResyncOptions{EchoResyncID: true})
 	if err != nil {
 		t.Fatalf("handleCurrentPaneRequest returned error: %v", err)
 	}
@@ -2049,7 +1991,7 @@ func TestHandleCurrentPaneRequest_should_LeaveResyncIdEmpty_When_RequestOmitsIt(
 	target := &fakePanePTY{captureContent: "hello", cols: 80, rows: 24}
 	req := &sessionv1.CurrentPaneRequest{}
 
-	output, err := handleCurrentPaneRequest("test-session", target, req, ResyncOptions{EchoResyncID: true})
+	output, err := handleCurrentPaneRequest(context.Background(), "test-session", target, req, ResyncOptions{EchoResyncID: true})
 	if err != nil {
 		t.Fatalf("handleCurrentPaneRequest returned error: %v", err)
 	}
@@ -2069,7 +2011,7 @@ func TestHandleCurrentPaneRequest_should_NotEchoResyncId_When_CorrelationIdFlagI
 	target := &fakePanePTY{captureContent: "hello", cols: 80, rows: 24}
 	req := &sessionv1.CurrentPaneRequest{ResyncId: "abc-123"}
 
-	output, err := handleCurrentPaneRequest("test-session", target, req, ResyncOptions{})
+	output, err := handleCurrentPaneRequest(context.Background(), "test-session", target, req, ResyncOptions{})
 	if err != nil {
 		t.Fatalf("handleCurrentPaneRequest returned error: %v", err)
 	}
@@ -2092,7 +2034,7 @@ func TestHandleCurrentPaneRequest_should_LogDebugWhenResyncIdNotEchoed_When_Corr
 	req := &sessionv1.CurrentPaneRequest{ResyncId: "abc-123"}
 
 	restore := captureInfoLog()
-	output, err := handleCurrentPaneRequest("test-session", target, req, ResyncOptions{})
+	output, err := handleCurrentPaneRequest(context.Background(), "test-session", target, req, ResyncOptions{})
 	logOutput := restore()
 
 	require.NoError(t, err)
@@ -2122,7 +2064,7 @@ func TestHandleCurrentPaneRequest_should_SkipResizeAndSigwinchLoop_When_StaleDim
 		StaleDimensions: true,
 	}
 
-	output, err := handleCurrentPaneRequest("test-session", target, req, ResyncOptions{SkipStaleDimensionSlowPath: true})
+	output, err := handleCurrentPaneRequest(context.Background(), "test-session", target, req, ResyncOptions{SkipStaleDimensionSlowPath: true})
 	if err != nil {
 		t.Fatalf("handleCurrentPaneRequest returned error: %v", err)
 	}
@@ -2181,7 +2123,7 @@ func TestHandleCurrentPaneRequest_should_RunFullSlowPath_When_StaleDimensionsFal
 				StaleDimensions: tc.staleDimensions,
 			}
 
-			_, err := handleCurrentPaneRequest("test-session", target, req, tc.opts)
+			_, err := handleCurrentPaneRequest(context.Background(), "test-session", target, req, tc.opts)
 			if err != nil {
 				t.Fatalf("handleCurrentPaneRequest returned error: %v", err)
 			}
@@ -2216,7 +2158,7 @@ func TestStreamViaTmuxCapturePane_should_CaptureAtExistingPaneDimensions_When_St
 		StaleDimensions: true,
 	}
 
-	output, err := handleCurrentPaneRequest("test-session", target, req, ResyncOptions{SkipStaleDimensionSlowPath: true})
+	output, err := handleCurrentPaneRequest(context.Background(), "test-session", target, req, ResyncOptions{SkipStaleDimensionSlowPath: true})
 	if err != nil {
 		t.Fatalf("handleCurrentPaneRequest returned error: %v", err)
 	}
@@ -2246,7 +2188,7 @@ func TestRunInputReadLoop_should_InvokeOnCurrentPaneRequestOnce_When_CurrentPane
 	var mu sync.Mutex
 	var invocations int
 	var lastReq *sessionv1.CurrentPaneRequest
-	onCurrentPaneRequest := func(req *sessionv1.CurrentPaneRequest) (*sessionv1.TerminalOutput, error) {
+	onCurrentPaneRequest := func(ctx context.Context, req *sessionv1.CurrentPaneRequest) (*sessionv1.TerminalOutput, error) {
 		mu.Lock()
 		defer mu.Unlock()
 		invocations++
@@ -2721,8 +2663,8 @@ func TestHandleBatchedCurrentPaneRequest_should_DispatchNIndividuallyTaggedRespo
 		},
 	}
 
-	onCurrentPaneRequest := func(req *sessionv1.CurrentPaneRequest) (*sessionv1.TerminalOutput, error) {
-		return handleCurrentPaneRequest("test-session", target, req, ResyncOptions{EchoResyncID: true})
+	onCurrentPaneRequest := func(ctx context.Context, req *sessionv1.CurrentPaneRequest) (*sessionv1.TerminalOutput, error) {
+		return handleCurrentPaneRequest(ctx, "test-session", target, req, ResyncOptions{EchoResyncID: true})
 	}
 
 	outputs := handleBatchedCurrentPaneRequest("test-session", batch, onCurrentPaneRequest)
@@ -2759,12 +2701,12 @@ func TestHandleBatchedCurrentPaneRequest_should_PreserveCorrelationPerRequest_Wh
 
 	// bravo's underlying capture fails; alpha and charlie must still come back correctly
 	// correlated to their own resync_id, with bravo simply absent from the results.
-	onCurrentPaneRequest := func(req *sessionv1.CurrentPaneRequest) (*sessionv1.TerminalOutput, error) {
+	onCurrentPaneRequest := func(ctx context.Context, req *sessionv1.CurrentPaneRequest) (*sessionv1.TerminalOutput, error) {
 		if req.GetResyncId() == "bravo" {
 			return nil, fmt.Errorf("simulated capture failure")
 		}
 		target := &fakePanePTY{captureContent: req.GetResyncId() + "-content", cols: 80, rows: 24}
-		return handleCurrentPaneRequest("test-session", target, req, ResyncOptions{EchoResyncID: true})
+		return handleCurrentPaneRequest(ctx, "test-session", target, req, ResyncOptions{EchoResyncID: true})
 	}
 
 	outputs := handleBatchedCurrentPaneRequest("test-session", batch, onCurrentPaneRequest)
@@ -2852,8 +2794,8 @@ func TestFullResyncRoundTrip_should_MatchPreProjectBaseline_When_AllSevenFlagsOf
 		TargetRows: int32Ptr(40),
 	}
 
-	onCurrentPaneRequest := func(r *sessionv1.CurrentPaneRequest) (*sessionv1.TerminalOutput, error) {
-		return handleCurrentPaneRequest("test-session", target, r, currentResyncOptions())
+	onCurrentPaneRequest := func(ctx context.Context, r *sessionv1.CurrentPaneRequest) (*sessionv1.TerminalOutput, error) {
+		return handleCurrentPaneRequest(ctx, "test-session", target, r, currentResyncOptions())
 	}
 	var resizeSettling atomic.Bool
 	handleCurrentPaneRequestFrame(stream, "test-session", req, onCurrentPaneRequest, &resizeSettling)
@@ -2925,8 +2867,8 @@ func TestFullResyncRoundTrip_should_ExhibitAllSevenBehaviors_When_AllSevenFlagsO
 		StaleDimensions: true,
 	}
 
-	onCurrentPaneRequest := func(r *sessionv1.CurrentPaneRequest) (*sessionv1.TerminalOutput, error) {
-		return handleCurrentPaneRequest("test-session", target, r, currentResyncOptions())
+	onCurrentPaneRequest := func(ctx context.Context, r *sessionv1.CurrentPaneRequest) (*sessionv1.TerminalOutput, error) {
+		return handleCurrentPaneRequest(ctx, "test-session", target, r, currentResyncOptions())
 	}
 	var resizeSettling atomic.Bool
 	handleCurrentPaneRequestFrame(stream, "test-session", req, onCurrentPaneRequest, &resizeSettling)
@@ -2972,8 +2914,8 @@ func TestFullResyncRoundTrip_should_ExhibitAllSevenBehaviors_When_AllSevenFlagsO
 	// for the dedicated test. Exercised here too so "all seven simultaneously" actually
 	// covers it in this same all-flags-on context, not only in isolation.
 	batchTarget := &fakePanePTY{captureContent: "batch-content", cols: 80, rows: 24}
-	batchOnCurrentPaneRequest := func(r *sessionv1.CurrentPaneRequest) (*sessionv1.TerminalOutput, error) {
-		return handleCurrentPaneRequest("test-session", batchTarget, r, currentResyncOptions())
+	batchOnCurrentPaneRequest := func(ctx context.Context, r *sessionv1.CurrentPaneRequest) (*sessionv1.TerminalOutput, error) {
+		return handleCurrentPaneRequest(ctx, "test-session", batchTarget, r, currentResyncOptions())
 	}
 	batch := &sessionv1.BatchedCurrentPaneRequest{
 		Requests: []*sessionv1.CurrentPaneRequest{{ResyncId: "batch-1"}, {ResyncId: "batch-2"}},
@@ -3012,8 +2954,8 @@ func TestHandleCurrentPaneRequest_should_RoundTripCompressedTerminalOutput_When_
 	stream, clientConn, cleanup := createTestWebSocketPair(t)
 	defer cleanup()
 
-	onCurrentPaneRequest := func(r *sessionv1.CurrentPaneRequest) (*sessionv1.TerminalOutput, error) {
-		return handleCurrentPaneRequest("test-session", target, r, currentResyncOptions())
+	onCurrentPaneRequest := func(ctx context.Context, r *sessionv1.CurrentPaneRequest) (*sessionv1.TerminalOutput, error) {
+		return handleCurrentPaneRequest(ctx, "test-session", target, r, currentResyncOptions())
 	}
 	var resizeSettling atomic.Bool
 	handleCurrentPaneRequestFrame(stream, "test-session", req, onCurrentPaneRequest, &resizeSettling)
@@ -3062,7 +3004,7 @@ func TestHandleCurrentPaneRequest_should_LogSkippedSlowPathWithSessionIdAndElaps
 	}
 
 	restore := captureInfoLog()
-	_, err := handleCurrentPaneRequest("skip-log-session", target, req, ResyncOptions{SkipStaleDimensionSlowPath: true})
+	_, err := handleCurrentPaneRequest(context.Background(), "skip-log-session", target, req, ResyncOptions{SkipStaleDimensionSlowPath: true})
 	logOutput := restore()
 
 	require.NoError(t, err)
@@ -3093,7 +3035,7 @@ func TestHandleCurrentPaneRequest_should_OnlyRouteFastLane_When_OnlyExecGateFast
 		TargetRows: int32Ptr(40),
 	}
 
-	output, err := handleCurrentPaneRequest("test-session", target, req, currentResyncOptions())
+	output, err := handleCurrentPaneRequest(context.Background(), "test-session", target, req, currentResyncOptions())
 	if err != nil {
 		t.Fatalf("handleCurrentPaneRequest returned error: %v", err)
 	}
@@ -3121,13 +3063,17 @@ func TestHandleCurrentPaneRequest_should_OnlyRouteFastLane_When_OnlyExecGateFast
 // TestHandleCurrentPaneRequest_should_ShareOneDeadlineAcrossAllFastLaneCalls_When_ResizeNeeded
 // is the regression test for the second half of the 2026-08-25 incident (see
 // tmux.ResyncFastLaneTimeout's doc comment): fixing each fast-lane call's individual
-// timeout wasn't enough on its own — handleCurrentPaneRequest makes up to 5 fast-lane
-// calls in sequence for one resize/resync (a dimension check, up to 3 refresh-client
-// calls, a dimension verify, and a final capture), and each one independently minting a
-// fresh 3s budget could still let the *total* elapsed time silently blow well past the
-// client's stall watchdog. This asserts every fast-lane call the request actually
-// triggers received the exact same ctx (by deadline) — a single shared, decreasing
-// budget for the whole operation, not N independent ones.
+// timeout wasn't enough on its own — handleCurrentPaneRequest makes up to 6 fast-lane
+// calls in sequence for one resize/resync (a dimension check, the resize itself, up to 3
+// refresh-client calls, a dimension verify, and a final capture), and each one
+// independently minting a fresh 3s budget could still let the *total* elapsed time
+// silently blow well past the client's stall watchdog. The resize step
+// (ResizePTYContext) was itself missed from this group until a live trace caught a
+// single resync taking 6.46s — double the 3s budget every other call respected — because
+// ResizePTY ran unbounded on the separate default exec-gate pool. This asserts every
+// fast-lane call the request actually triggers received the exact same ctx (by
+// deadline) — a single shared, decreasing budget for the whole operation, not N
+// independent ones.
 func TestHandleCurrentPaneRequest_should_ShareOneDeadlineAcrossAllFastLaneCalls_When_ResizeNeeded(t *testing.T) {
 	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
 	setOnlyResyncFlag(t, terminalResyncExecGateFastLaneFlagName)
@@ -3138,14 +3084,14 @@ func TestHandleCurrentPaneRequest_should_ShareOneDeadlineAcrossAllFastLaneCalls_
 		TargetRows: int32Ptr(40),
 	}
 
-	_, err := handleCurrentPaneRequest("test-session", target, req, currentResyncOptions())
+	_, err := handleCurrentPaneRequest(context.Background(), "test-session", target, req, currentResyncOptions())
 	if err != nil {
 		t.Fatalf("handleCurrentPaneRequest returned error: %v", err)
 	}
 
-	// Dimension check (1) + refresh x3 + dimension verify (1) + final capture (1) = 6.
-	if len(target.fastLaneCtxsSeen) != 6 {
-		t.Fatalf("expected 6 fast-lane calls in the resize-through-verify path, got %d", len(target.fastLaneCtxsSeen))
+	// Dimension check (1) + resize (1) + refresh x3 + dimension verify (1) + final capture (1) = 7.
+	if len(target.fastLaneCtxsSeen) != 7 {
+		t.Fatalf("expected 7 fast-lane calls in the resize-through-verify path, got %d", len(target.fastLaneCtxsSeen))
 	}
 	wantDeadline, ok := target.fastLaneCtxsSeen[0].Deadline()
 	if !ok {
@@ -3177,7 +3123,7 @@ func TestHandleCurrentPaneRequest_should_OnlyEchoResyncId_When_OnlyCorrelationId
 		TargetRows: int32Ptr(40),
 	}
 
-	output, err := handleCurrentPaneRequest("test-session", target, req, currentResyncOptions())
+	output, err := handleCurrentPaneRequest(context.Background(), "test-session", target, req, currentResyncOptions())
 	if err != nil {
 		t.Fatalf("handleCurrentPaneRequest returned error: %v", err)
 	}
@@ -3214,7 +3160,7 @@ func TestHandleCurrentPaneRequest_should_OnlySkipSlowPath_When_OnlySkipStaleDime
 		StaleDimensions: true,
 	}
 
-	output, err := handleCurrentPaneRequest("test-session", target, req, currentResyncOptions())
+	output, err := handleCurrentPaneRequest(context.Background(), "test-session", target, req, currentResyncOptions())
 	if err != nil {
 		t.Fatalf("handleCurrentPaneRequest returned error: %v", err)
 	}

@@ -4,7 +4,6 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"github.com/google/uuid"
 	"github.com/tstapler/stapler-squad/config/workspacepath"
@@ -411,21 +410,13 @@ type Config struct {
 	// package config directly.
 	StreamHubSessionOverrides map[string]bool `json:"stream_hub_session_overrides,omitempty"`
 	// RollbackRehearsalCompletedAt records when Story 3.3.2's rollback
-	// rehearsal (flip STAPLER_SQUAD_USE_STREAM_HUB's per-session override on
-	// for a disposable session, use it briefly, remove the override, confirm
-	// a clean reconnect under the legacy path) was last completed
-	// successfully. nil means "never completed". ResolveGlobalStreamHubDefault
-	// refuses to let the *global* default resolve to true until this is set
-	// (pre-mortem P1 #4's mechanical gate) — the per-session override above
-	// is unaffected by this gate. Set via RecordRollbackRehearsalCompleted.
+	// rehearsal (flip the stream-hub path on for a disposable session, use
+	// it briefly, confirm a clean reconnect under the legacy path) was last
+	// completed. Purely a historical record now — the global default no
+	// longer gates on it (see EffectiveStreamHubEnabled; the "stream_hub"
+	// feature flag defaults to true directly). Set via
+	// RecordRollbackRehearsalCompleted.
 	RollbackRehearsalCompletedAt *time.Time `json:"rollback_rehearsal_completed_at,omitempty"`
-	// StreamHubGlobalOverride is a live, config.json-backed override of the
-	// global stream-hub default, settable from the browser via
-	// SetStreamHubGlobalOverride with no process restart required. nil means
-	// "no override — resolve from the STAPLER_SQUAD_USE_STREAM_HUB env var as
-	// before". A non-nil value is still subject to
-	// ResolveGlobalStreamHubDefault's rollback-rehearsal gate when true.
-	StreamHubGlobalOverride *bool `json:"stream_hub_global_override,omitempty"`
 	// TymuxRollbackRehearsalCompletedAt records when the tymux backend's own
 	// rollback rehearsal was last completed successfully. This is a distinct
 	// field from RollbackRehearsalCompletedAt above — the two rehearsals
@@ -448,36 +439,25 @@ type Config struct {
 	TymuxSessionOverrides map[string]bool `json:"tymux_session_overrides,omitempty"`
 }
 
-// ErrRollbackRehearsalNotCompleted is returned by ResolveGlobalStreamHubDefault
-// when the caller requests the global STAPLER_SQUAD_USE_STREAM_HUB default
-// resolve to true but RollbackRehearsalCompletedAt is unset — Story 3.3.2's
-// rollback rehearsal must be executed and recorded first (pre-mortem P1 #4).
-var ErrRollbackRehearsalNotCompleted = errors.New("config: cannot enable the global stream-hub default: rollback rehearsal (RollbackRehearsalCompletedAt) has not been completed — see Story 3.3.2")
+// StreamHubFeatureFlag is the config.FeatureFlags key backing
+// EffectiveStreamHubEnabled — the global stream-hub default. Defaults to on
+// (see GetFeatureFlagWithDefault); an explicit false opts back out.
+const StreamHubFeatureFlag = "stream_hub"
 
-// ErrTymuxRollbackRehearsalNotCompleted is returned by ResolveGlobalTymuxDefault
-// when the caller requests the global tymux backend default resolve to true
-// but TymuxRollbackRehearsalCompletedAt is unset — the tymux rollback
-// rehearsal must be executed and recorded first (ADR-002, Story 3.1.1).
-var ErrTymuxRollbackRehearsalNotCompleted = errors.New("config: cannot enable the global tymux default: rollback rehearsal (TymuxRollbackRehearsalCompletedAt) has not been completed — see Story 3.1.1")
+// TymuxFeatureFlag is the config.FeatureFlags key backing
+// EffectiveTymuxEnabled — the global tymux process-manager-backend default.
+// Defaults to off (unlike StreamHubFeatureFlag): no rollback rehearsal has
+// vouched for tymux as the global default yet, so an explicit opt-in is
+// still required, same as the STAPLER_SQUAD_USE_TYMUX env var it replaces.
+const TymuxFeatureFlag = "tymux"
 
-// ResolveGlobalTymuxDefault applies Story 3.1.1's mechanical
-// rollback-rehearsal gate to a raw requested value for the *global* tymux
-// process-manager-backend default (e.g. derived from cfg.ProcessManagerBackend
-// or the STAPLER_SQUAD_USE_TYMUX environment variable). Requesting false is
-// always permitted — the gate only blocks turning the risky path *on*.
-// Requesting true is refused with ErrTymuxRollbackRehearsalNotCompleted, not
-// a silent fallback to false, unless cfg.TymuxRollbackRehearsalCompletedAt is
-// a recorded, non-zero timestamp. This gate does not apply to any per-session
-// override path, which callers resolve independently and which remains
-// available even when this function returns an error.
-func ResolveGlobalTymuxDefault(cfg *Config, requested bool) (bool, error) {
-	if !requested {
-		return false, nil
-	}
-	if cfg == nil || cfg.TymuxRollbackRehearsalCompletedAt == nil || cfg.TymuxRollbackRehearsalCompletedAt.IsZero() {
-		return false, ErrTymuxRollbackRehearsalNotCompleted
-	}
-	return true, nil
+// EffectiveTymuxEnabled reports whether the global tymux process-manager
+// backend default is active. Read once at process startup
+// (main.go's resolveStartupBackend) — deliberately not live-settable, so
+// switching the default backend for every new session stays a conscious
+// operator action rather than a live UI toggle.
+func EffectiveTymuxEnabled(cfg *Config) bool {
+	return cfg.GetFeatureFlagWithDefault(TymuxFeatureFlag, false)
 }
 
 // RecordTymuxRollbackRehearsalCompleted persists the current time as
@@ -492,25 +472,11 @@ func (c *Config) RecordTymuxRollbackRehearsalCompleted() error {
 	return SaveConfig(c)
 }
 
-// ResolveGlobalStreamHubDefault applies Story 3.3.1/3.3.2's mechanical
-// rollback-rehearsal gate to a raw requested value for the *global*
-// STAPLER_SQUAD_USE_STREAM_HUB default (e.g. read from that environment
-// variable). Requesting false is always permitted — the gate only blocks
-// turning the risky path *on*. Requesting true is refused with
-// ErrRollbackRehearsalNotCompleted, not a silent fallback to false, unless
-// cfg.RollbackRehearsalCompletedAt is a recorded, non-zero timestamp. This
-// gate does not apply to the per-session override path
-// (StreamHubSessionOverrides / streamhub.SetSessionOverrideLookup), which
-// callers resolve independently and which remains available even when this
-// function returns an error.
-func ResolveGlobalStreamHubDefault(cfg *Config, requested bool) (bool, error) {
-	if !requested {
-		return false, nil
-	}
-	if cfg == nil || cfg.RollbackRehearsalCompletedAt == nil || cfg.RollbackRehearsalCompletedAt.IsZero() {
-		return false, ErrRollbackRehearsalNotCompleted
-	}
-	return true, nil
+// EffectiveStreamHubEnabled is the single source of truth for whether the
+// stream-hub path is active, so server/services.useStreamHub and
+// session.effectiveStreamHubFlag can't diverge by each re-deriving it.
+func EffectiveStreamHubEnabled(cfg *Config) bool {
+	return cfg.GetFeatureFlagWithDefault(StreamHubFeatureFlag, true)
 }
 
 // RecordRollbackRehearsalCompleted persists the current time as
@@ -559,15 +525,24 @@ func (c *Config) SetStreamHubSessionOverride(sessionName string, forceHub *bool)
 	return SaveConfig(c)
 }
 
-// SetStreamHubGlobalOverride sets or clears the live global stream-hub
-// override and persists the config to disk. forceHub follows this file's
-// tri-state *bool convention: nil clears the override (reverting to the
-// STAPLER_SQUAD_USE_STREAM_HUB env var default), non-nil forces that value
-// for every session connection resolved from now on — subject to
-// ResolveGlobalStreamHubDefault's rollback-rehearsal gate when true.
+// SetStreamHubGlobalOverride sets or clears the "stream_hub" feature flag
+// and persists the config to disk. forceHub follows this file's tri-state
+// *bool convention: nil clears the flag (reverting to
+// GetFeatureFlagWithDefault's on-by-default), non-nil sets it explicitly for
+// every session connection resolved from now on.
 func (c *Config) SetStreamHubGlobalOverride(forceHub *bool) error {
-	c.StreamHubGlobalOverride = forceHub
-	return SaveConfig(c)
+	if forceHub == nil {
+		return c.DeleteFeatureFlag(StreamHubFeatureFlag)
+	}
+	return c.SetFeatureFlag(StreamHubFeatureFlag, *forceHub)
+}
+
+// GetStreamHubGlobalOverride reports the explicitly-persisted "stream_hub"
+// feature flag value, if any — mirrors GetStreamHubSessionOverride's
+// (value, ok) shape. ok is false when the flag has never been explicitly
+// set (i.e. EffectiveStreamHubEnabled is resolving its default).
+func (c *Config) GetStreamHubGlobalOverride() (value bool, ok bool) {
+	return c.GetFeatureFlagOverride(StreamHubFeatureFlag)
 }
 
 // GetTymuxSessionOverride reports whether sessionName has a per-session
@@ -604,6 +579,25 @@ func (c *Config) SetTymuxSessionOverride(sessionName string, forceTymux *bool) e
 	}
 	c.TymuxSessionOverrides[sessionName] = *forceTymux
 	return SaveConfig(c)
+}
+
+// SetTymuxGlobalOverride sets or clears the "tymux" feature flag and
+// persists the config to disk. forceTymux follows this file's tri-state
+// *bool convention: nil clears the flag (reverting to
+// GetFeatureFlagWithDefault's off-by-default), non-nil sets it explicitly
+// for every session created from now on. Mirrors
+// SetStreamHubGlobalOverride exactly.
+func (c *Config) SetTymuxGlobalOverride(forceTymux *bool) error {
+	if forceTymux == nil {
+		return c.DeleteFeatureFlag(TymuxFeatureFlag)
+	}
+	return c.SetFeatureFlag(TymuxFeatureFlag, *forceTymux)
+}
+
+// GetTymuxGlobalOverride reports the explicitly-persisted "tymux" feature
+// flag value, if any. Mirrors GetStreamHubGlobalOverride's (value, ok) shape.
+func (c *Config) GetTymuxGlobalOverride() (value bool, ok bool) {
+	return c.GetFeatureFlagOverride(TymuxFeatureFlag)
 }
 
 // GetGitHubEnterpriseHosts returns the configured GHES hosts, or nil if c is nil.
@@ -1518,6 +1512,27 @@ func (c *Config) SetFeatureFlag(name string, value bool) error {
 	}
 	c.FeatureFlags[name] = value
 	return SaveConfig(c)
+}
+
+// DeleteFeatureFlag removes the named flag entirely — a reader using
+// GetFeatureFlagWithDefault falls back to its default again — and persists
+// the config to disk.
+func (c *Config) DeleteFeatureFlag(name string) error {
+	delete(c.FeatureFlags, name)
+	return SaveConfig(c)
+}
+
+// GetFeatureFlagOverride reports the explicitly-persisted value of the named
+// feature flag: (value, true) when a key exists in FeatureFlags, (false,
+// false) when it's never been set. Distinguishes "explicitly false" from
+// "falling through to a default" for status/UI surfaces — GetFeatureFlag and
+// GetFeatureFlagWithDefault collapse that distinction on purpose.
+func (c *Config) GetFeatureFlagOverride(name string) (value bool, ok bool) {
+	if c == nil || c.FeatureFlags == nil {
+		return false, false
+	}
+	value, ok = c.FeatureFlags[name]
+	return value, ok
 }
 
 // ImportSessionEnabled reports whether the import-external-session feature

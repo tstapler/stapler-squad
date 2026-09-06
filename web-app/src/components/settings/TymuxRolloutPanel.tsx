@@ -28,12 +28,11 @@ function toStaplerSquadSessionName(title: string): string {
 }
 
 /**
- * Controls for the stapler-squad-integration staged rollout of BackendTymux
- * (Epic 3 validation). Unlike StreamHubRolloutPanel, there is no live global
- * override here by design — TymuxRolloutService's proto deliberately keeps
- * STAPLER_SQUAD_USE_TYMUX env-var-gated and restart-only, so the global
- * default can't be flipped from a UI. What's exposed is what's safe to
- * change live: the rollback-rehearsal gate and per-session canary overrides.
+ * Controls for the tymux-bundled-integration rollout of BackendTymux.
+ * Everything here takes effect immediately, config.json-backed: the
+ * "tymux" feature flag (off by default) via a live global override, and
+ * per-session canary overrides — no process restart required. Mirrors
+ * StreamHubRolloutPanel's shape exactly.
  */
 export function TymuxRolloutPanel() {
   const { track } = useAnalytics();
@@ -43,7 +42,7 @@ export function TymuxRolloutPanel() {
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [globalEnvVarSet, setGlobalEnvVarSet] = useState(false);
+  const [globalOverride, setGlobalOverride] = useState<boolean | undefined>(undefined);
   const [rehearsalCompletedAt, setRehearsalCompletedAt] = useState<Date | null>(null);
   const [overrides, setOverrides] = useState<SessionOverride[]>([]);
   const [sessionNames, setSessionNames] = useState<string[]>([]);
@@ -51,14 +50,14 @@ export function TymuxRolloutPanel() {
   const [busy, setBusy] = useState(false);
 
   const applyStatus = useCallback((status: {
-    globalEnvVarSet: boolean;
     rollbackRehearsalCompletedAt?: Timestamp;
     sessionOverrides: SessionOverride[];
+    globalOverride?: boolean;
   }) => {
-    setGlobalEnvVarSet(status.globalEnvVarSet);
     const ts = status.rollbackRehearsalCompletedAt;
     setRehearsalCompletedAt(ts ? timestampDate(ts) : null);
     setOverrides(status.sessionOverrides);
+    setGlobalOverride(status.globalOverride);
   }, []);
 
   const load = useCallback(async () => {
@@ -118,6 +117,20 @@ export function TymuxRolloutPanel() {
     }
   }, [client, applyStatus, newOverrideName, track]);
 
+  const setGlobalOverrideValue = useCallback(async (forceTymux: boolean | undefined) => {
+    track({ name: "tymux_global_override_changed", category: "user_action", component: "TymuxRolloutPanel", labels: { forceTymux: forceTymux === undefined ? "clear" : String(forceTymux) } });
+    setBusy(true);
+    setError(null);
+    try {
+      const status = await client.setTymuxGlobalOverride({ forceTymux });
+      applyStatus(status);
+    } catch {
+      setError("Failed to update the global override");
+    } finally {
+      setBusy(false);
+    }
+  }, [client, applyStatus, track]);
+
   const removeOverride = useCallback(async (sessionName: string) => {
     track({ name: "tymux_override_removed", category: "user_action", component: "TymuxRolloutPanel" });
     setBusy(true);
@@ -140,20 +153,47 @@ export function TymuxRolloutPanel() {
     <section className={styles.panel} data-testid="tymux-rollout-panel">
       <h2 className={styles.heading}>Tymux Backend Rollout</h2>
       <p className={styles.description}>
-        Staged rollout for the tymux-backed <code>ProcessManager</code>. The environment
-        variable <code>STAPLER_SQUAD_USE_TYMUX</code> sets the baseline default and can
-        only be changed by restarting the process; the per-session override below takes
-        effect immediately for any session created from this point on — no restart
-        required.
+        Staged rollout for the tymux-backed <code>ProcessManager</code>. The
+        &quot;tymux&quot; feature flag defaults to off; the override below takes effect
+        immediately for any session created from this point on — no restart required.
       </p>
 
       {error && <p className={styles.errorMessage} role="alert">{error}</p>}
 
       <div className={styles.statusRow}>
-        <span className={styles.statusLabel}>Env var default (baseline)</span>
-        <span className={`${styles.badge} ${globalEnvVarSet ? styles.badgeEnabled : styles.badgeDisabled}`}>
-          {globalEnvVarSet ? "On" : "Off"}
+        <span className={styles.statusLabel}>Global override</span>
+        <span className={`${styles.badge} ${globalOverride === true ? styles.badgeEnabled : styles.badgeDisabled}`}>
+          {globalOverride === undefined ? "Not set (default: off)" : globalOverride ? "Forced on" : "Forced off"}
         </span>
+      </div>
+      <div className={styles.addRow}>
+        <button
+          className={styles.actionButton}
+          disabled={busy || globalOverride === true}
+          onClick={() => setGlobalOverrideValue(true)}
+          data-testid="tymux-global-override-on"
+          aria-label="Force tymux on for all sessions"
+        >
+          Force on for everything
+        </button>
+        <button
+          className={styles.actionButton}
+          disabled={busy || globalOverride === false}
+          onClick={() => setGlobalOverrideValue(false)}
+          data-testid="tymux-global-override-off"
+          aria-label="Force tymux off for all sessions"
+        >
+          Force off for everything
+        </button>
+        <button
+          className={styles.removeButton}
+          disabled={busy || globalOverride === undefined}
+          onClick={() => setGlobalOverrideValue(undefined)}
+          data-testid="tymux-global-override-clear"
+          aria-label="Clear global override, revert to the default"
+        >
+          Clear override
+        </button>
       </div>
 
       <div className={styles.statusRow}>

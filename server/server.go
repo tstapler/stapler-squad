@@ -450,6 +450,15 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		uwAPIPath := "/api" + uwPath
 		srv.RegisterConnectHandler(uwAPIPath, http.StripPrefix("/api", uwHandler))
 		log.Info("Registered UnfinishedWorkService handler", "path", uwAPIPath)
+
+		// Bridge WatchUnfinishedWork over WebSocket too (see StreamingWSBridge's
+		// doc comment) — otherwise it's one more long-lived HTTP/1.1 connection
+		// competing with WatchSessions/WatchReviewQueue/etc. for the browser's
+		// 6-connections-per-origin budget.
+		uwWsBridge := services.NewStreamingWSBridge(uwHandler)
+		watchUnfinishedWorkPath := "/api" + sessionv1connect.UnfinishedWorkServiceWatchUnfinishedWorkProcedure
+		srv.mux.Handle(watchUnfinishedWorkPath, uwWsBridge.Handler("/api"))
+		log.Info("Registered StreamingWSBridge", "watchUnfinishedWork", watchUnfinishedWorkPath)
 	}
 
 	// Register SessionSummaryService handler.
@@ -476,6 +485,13 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		insightsAPIPath := "/api" + insightsPath
 		srv.RegisterConnectHandler(insightsAPIPath, http.StripPrefix("/api", insightsHandler))
 		log.Info("Registered InsightsService handler", "path", insightsAPIPath)
+
+		// Bridge WatchInsights over WebSocket too — see StreamingWSBridge's doc
+		// comment (avoids the browser's 6-connections-per-origin HTTP/1.1 limit).
+		insightsWsBridge := services.NewStreamingWSBridge(insightsHandler)
+		watchInsightsPath := "/api" + sessionv1connect.InsightsServiceWatchInsightsProcedure
+		srv.mux.Handle(watchInsightsPath, insightsWsBridge.Handler("/api"))
+		log.Info("Registered StreamingWSBridge", "watchInsights", watchInsightsPath)
 	}
 
 	// Register GitHubUserService handler (GitHub Work Continuity feature).
@@ -573,6 +589,16 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		blAPIPath := "/api" + blPath
 		srv.RegisterConnectHandler(blAPIPath, http.StripPrefix("/api", blHandler))
 		log.InfoLog().Printf("Registered BacklogService handler at %s", blAPIPath)
+
+		// Bridge WatchBacklogItems over WebSocket too — see StreamingWSBridge's
+		// doc comment (avoids the browser's 6-connections-per-origin HTTP/1.1
+		// limit). Wraps blHandler directly so the feature-flag interceptor
+		// above still applies (StreamingWSBridge calls handler.ServeHTTP for
+		// both transports).
+		blWsBridge := services.NewStreamingWSBridge(blHandler)
+		watchBacklogItemsPath := "/api" + sessionv1connect.BacklogServiceWatchBacklogItemsProcedure
+		srv.mux.Handle(watchBacklogItemsPath, blWsBridge.Handler("/api"))
+		log.InfoLog().Printf("Registered StreamingWSBridge for watchBacklogItems at %s", watchBacklogItemsPath)
 	}
 
 	// Start UserPRCache and register GitHubUserService handler.

@@ -3,7 +3,7 @@
 
 import { useEffect, useRef, useCallback, useState, useMemo } from "react";
 import { createClient } from "@connectrpc/connect";
-import { createConnectTransport } from "@connectrpc/connect-web";
+import { getConnectTransport, getWatchTransport } from "@/lib/api/transport";
 import { InsightsService } from "@/gen/session/v1/insights_pb";
 import type {
   GetInsightsSummaryResponse,
@@ -17,7 +17,6 @@ import {
 } from "@/gen/session/v1/insights_pb";
 import { create } from "@bufbuild/protobuf";
 import { timestampFromDate } from "@bufbuild/protobuf/wkt";
-import { getApiBaseUrl, createAuthInterceptor } from "@/lib/config";
 
 export interface InsightsFilters {
   from?: Date;
@@ -47,13 +46,7 @@ export function useInsightsSummary(
   const abortWatchRef = useRef<AbortController | null>(null);
   const fetchCountRef = useRef(0);
 
-  const baseUrl = getApiBaseUrl();
-  const transport = useMemo(
-    () => createConnectTransport({ baseUrl, interceptors: [createAuthInterceptor()] }),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [baseUrl]
-  );
-  const client = useMemo(() => createClient(InsightsService, transport), [transport]);
+  const client = useMemo(() => createClient(InsightsService, getWatchTransport()), []);
 
   const fetchSummary = useCallback(async () => {
     const fetchId = ++fetchCountRef.current;
@@ -190,13 +183,7 @@ export function useSessionDetail(sessionId: string): UseSessionDetailReturn {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const baseUrl = getApiBaseUrl();
-  const transport = useMemo(
-    () => createConnectTransport({ baseUrl, interceptors: [createAuthInterceptor()] }),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [baseUrl]
-  );
-  const client = useMemo(() => createClient(InsightsService, transport), [transport]);
+  const client = useMemo(() => createClient(InsightsService, getConnectTransport()), []);
 
   useEffect(() => {
     let cancelled = false;
@@ -257,13 +244,7 @@ export function useSessionTurnTimeline(
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const baseUrl = getApiBaseUrl();
-  const transport = useMemo(
-    () => createConnectTransport({ baseUrl, interceptors: [createAuthInterceptor()] }),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [baseUrl]
-  );
-  const client = useMemo(() => createClient(InsightsService, transport), [transport]);
+  const client = useMemo(() => createClient(InsightsService, getConnectTransport()), []);
 
   useEffect(() => {
     if (!conversationId) {

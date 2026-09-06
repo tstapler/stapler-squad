@@ -68,7 +68,7 @@ export const mockModal = () => ({
 
 export const mockLibConfig = () => ({
   getApiBaseUrl: () => "http://localhost:8543",
-  createAuthInterceptor: () => jest.fn(),
+  createAuthInterceptor: jest.fn(() => jest.fn()),
 });
 
 export const mockConstantsPrograms = () => ({

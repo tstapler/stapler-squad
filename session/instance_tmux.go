@@ -817,6 +817,30 @@ func (i *Instance) ResizePTY(cols, rows int) error {
 	return nil
 }
 
+// ResizePTYContext mirrors ResizePTY but returns as soon as ctx is canceled or
+// its deadline expires, instead of blocking out ResizePTY's own unbounded
+// resize-window subprocess call (session/tmux/tmux.go's SetWindowSize
+// fallback path, gated by the DEFAULT exec-gate pool's own independent 5s
+// timeout — not the caller's ctx at all). Same goroutine-race pattern as
+// SetWindowSizeContext/CapturePaneContentRawPriority for the resync fast
+// lane. handleCurrentPaneRequest is the sole caller: without this, its resize
+// step could silently add several more seconds on top of the shared
+// tmux.ResyncFastLaneTimeout budget the rest of that function already
+// respects — reproducing the exact "sequential unbounded calls exceed the
+// client's stall watchdog" incident class session/tmux/exec_gate.go's
+// runFastLaneSubprocess doc comment describes fixing (2026-08-25), just via
+// the one call site that was missed.
+func (i *Instance) ResizePTYContext(ctx context.Context, cols, rows int) error {
+	done := make(chan error, 1)
+	go func() { done <- i.ResizePTY(cols, rows) }()
+	select {
+	case err := <-done:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
 // CapturePaneContent captures the current visible tmux pane content.
 // This is a simple wrapper around TmuxSession.CapturePaneContent() for compatibility
 // with the terminal WebSocket handlers.
@@ -1024,23 +1048,16 @@ func (i *Instance) StartControlMode() error {
 	})
 }
 
-// effectiveStreamHubFlag mirrors server/services' useStreamHub(): the same
-// STAPLER_SQUAD_USE_STREAM_HUB env var + config.ResolveGlobalStreamHubDefault
-// gate, duplicated here rather than imported (server/services must not be
-// imported by package session — the reverse of the one-way dependency this
-// project relies on) so this package's own ownership-lock choke point in
-// StartControlMode observes the identical effective flag value. Both call
-// sites route through config.ResolveGlobalStreamHubDefault, the single
-// source of truth for the gating decision itself, so they cannot diverge in
-// what "true" requires — only this thin env-var-read wrapper is repeated.
+// effectiveStreamHubFlag mirrors server/services' useStreamHub(): both call
+// config.EffectiveStreamHubEnabled, the single source of truth for the
+// STAPLER_SQUAD_USE_STREAM_HUB/StreamHubGlobalOverride/rehearsal-gate
+// resolution, duplicated as a thin wrapper here rather than imported
+// (server/services must not be imported by package session — the reverse of
+// the one-way dependency this project relies on) so this package's own
+// ownership-lock choke point in StartControlMode observes the identical
+// effective flag value.
 func effectiveStreamHubFlag() bool {
-	requested := os.Getenv("STAPLER_SQUAD_USE_STREAM_HUB") == "true"
-	effective, err := config.ResolveGlobalStreamHubDefault(config.LoadConfig(), requested)
-	if err != nil {
-		log.Error("streamhub: refusing to enable global default", "error", err)
-		return false
-	}
-	return effective
+	return config.EffectiveStreamHubEnabled(config.LoadConfig())
 }
 
 // StopControlMode stops the control mode stream.
