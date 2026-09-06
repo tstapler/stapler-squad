@@ -97,6 +97,9 @@ func (s *BacklogService) watchBacklogItems(
 		return connect.NewError(connect.CodeUnimplemented, fmt.Errorf("backlog event stream is not available"))
 	}
 
+	done := TrackOpenStream("WatchBacklogItems")
+	defer done()
+
 	// Subscribe before building the snapshot/replay batch so no events are
 	// lost between the two phases (snapshot races are resolved by
 	// client-side upsert semantics) — mirrors session_service.go's

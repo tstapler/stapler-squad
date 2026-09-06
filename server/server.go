@@ -118,6 +118,11 @@ func newServerBase(addr string) (*Server, context.Context) {
 			// connections (ConnectRPC terminal streams, SSE) see a done context
 			// and self-close instead of blocking the graceful shutdown timeout.
 			BaseContext: func(_ net.Listener) context.Context { return connCtx },
+			// ConnState feeds http.server.connections_open/
+			// http.server.connections_hijacked_total (http_connection_metrics.go)
+			// — see that file's doc comment for why this is the natural place
+			// to maintain the count.
+			ConnState: trackHTTPConnState,
 		},
 	}
 	srv.addr.Store(&addr)

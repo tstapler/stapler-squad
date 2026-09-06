@@ -3921,6 +3921,9 @@ func (s *SessionService) WatchSessions(
 	req *connect.Request[sessionv1.WatchSessionsRequest],
 	stream *connect.ServerStream[sessionv1.SessionEvent],
 ) error {
+	done := TrackOpenStream("WatchSessions")
+	defer done()
+
 	// Subscribe before building the snapshot so no events are lost between the
 	// two phases (snapshot races are resolved by client-side upsert semantics).
 	eventCh, subID := s.eventBus.Subscribe(ctx)
