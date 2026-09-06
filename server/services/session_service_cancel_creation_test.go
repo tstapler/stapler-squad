@@ -260,3 +260,94 @@ func TestCancelSessionCreation_should_ResolveAwaitCreationTerminalPromptly_When_
 		t.Fatal("AwaitCreationTerminal did not return promptly after a concurrent CancelSessionCreation removed the instance")
 	}
 }
+
+// TestDeleteSession_should_CancelInFlightPipeline_When_StatusIsCreating
+// verifies DeleteSession bumps the creation epoch and invokes the pipeline's
+// CancelFunc before cleanup, mirroring CancelSessionCreation/
+// RetrySessionCreation's identical ordering, so a concurrent
+// SetGitHubResolution write can't win against DeleteSession's cleanup path.
+// Both the epoch bump and the CancelFunc call happen synchronously inside the
+// RPC handler, before the async cleanup goroutine is even dispatched
+// (session_service.go's trackCleanup call), so observing them true
+// immediately after DeleteSession returns is already proof they ran first.
+func TestDeleteSession_should_CancelInFlightPipeline_When_StatusIsCreating(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	svc := newCreateTestService(t, storage)
+	t.Cleanup(func() { svc.Shutdown() })
+	inst := newCancelTestInstance(t, svc, storage, "delete-cancels-creating", false)
+
+	var mu sync.Mutex
+	cancelled := false
+	inst.SetCreationCancelFunc(func() {
+		mu.Lock()
+		cancelled = true
+		mu.Unlock()
+	})
+
+	resp, err := svc.DeleteSession(context.Background(), connect.NewRequest(&sessionv1.DeleteSessionRequest{
+		Id: "delete-cancels-creating",
+	}))
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	assert.True(t, resp.Msg.Success)
+
+	mu.Lock()
+	defer mu.Unlock()
+	assert.True(t, cancelled, "DeleteSession must cancel an in-flight Background Resolution Pipeline for a Creating session")
+	assert.Equal(t, uint64(1), inst.CreationEpoch(), "DeleteSession must bump the creation epoch so a late pipeline write can't win after cleanup starts")
+}
+
+// TestDeleteSession_should_SucceedWithoutPanic_When_CreatingWithNilCancelFunc
+// covers the post-restart case (mirroring
+// TestCancelSessionCreation_should_SucceedWithoutPanic_When_CancelFuncIsNil):
+// a Creating instance whose pipeline goroutine never existed in this process
+// has a nil CancelFunc, and DeleteSession must not nil-pointer-panic on it.
+func TestDeleteSession_should_SucceedWithoutPanic_When_CreatingWithNilCancelFunc(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	svc := newCreateTestService(t, storage)
+	t.Cleanup(func() { svc.Shutdown() })
+	inst := newCancelTestInstance(t, svc, storage, "delete-nil-cancelfunc", false)
+	require.Nil(t, inst.CreationCancelFunc(), "precondition: CancelFunc must be nil (never spawned in this process)")
+
+	require.NotPanics(t, func() {
+		resp, err := svc.DeleteSession(context.Background(), connect.NewRequest(&sessionv1.DeleteSessionRequest{
+			Id: "delete-nil-cancelfunc",
+		}))
+		require.NoError(t, err)
+		require.True(t, resp.Msg.Success)
+	})
+}
+
+// TestDeleteSession_should_NotTouchCancelFunc_When_StatusIsNotCreating is a
+// regression guard: DeleteSession's new fence-out step must stay scoped to
+// Creating sessions, the same guard CancelSessionCreation/RetrySessionCreation
+// apply, so deleting an already-Active session doesn't invoke a stale
+// CancelFunc left over from a finished pipeline.
+func TestDeleteSession_should_NotTouchCancelFunc_When_StatusIsNotCreating(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	svc := newCreateTestService(t, storage)
+	t.Cleanup(func() { svc.Shutdown() })
+	inst := newCancelTestInstance(t, svc, storage, "delete-active-session", false)
+	require.True(t, inst.TryForceStatusIfEpoch(inst.CreationEpoch(), session.Active, ""))
+
+	var mu sync.Mutex
+	cancelled := false
+	inst.SetCreationCancelFunc(func() {
+		mu.Lock()
+		cancelled = true
+		mu.Unlock()
+	})
+
+	resp, err := svc.DeleteSession(context.Background(), connect.NewRequest(&sessionv1.DeleteSessionRequest{
+		Id: "delete-active-session",
+	}))
+	require.NoError(t, err)
+	require.True(t, resp.Msg.Success)
+
+	mu.Lock()
+	defer mu.Unlock()
+	assert.False(t, cancelled, "DeleteSession must not invoke the pipeline CancelFunc for a session that already finished creating")
+}
