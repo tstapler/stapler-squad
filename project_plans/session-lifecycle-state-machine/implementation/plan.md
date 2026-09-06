@@ -2,7 +2,11 @@
 
 **Feature**: A shared, exhaustively-checked `session/lifecycle` building block that replaces
 ad hoc boolean-OR / repeated-flag classification of "should this goroutine stop or continue,
-and why" across `session/tymux`, `session/tmux`, and `session/external_streamer.go`.
+and why." **2 subsystems** (`session/tymux`, `session/tmux`) migrate onto the building
+block's `lifecycle.Reason` mechanism; `session/external_streamer.go` gets **1 adjacent fix**
+riding along — a swap of its timeout classifier for the building block's
+`lifecycle.IsBenignTimeout` helper only, with no `Reason` adoption. See Phase 4's scope note
+and the Domain Glossary/Dependency Visualization sections for the distinction.
 **Date**: 2026-09-06
 **Status**: Ready for implementation
 **ADRs**: ADR-001-bespoke-lifecycle-reason-over-fsm-library.md
@@ -35,7 +39,9 @@ evaluation: `research/build-vs-buy.md`):
    closed set of reasons, with a compile-time-checked (via the repo's existing `exhaustive`
    linter mechanism) safe-by-default zero value. *Weakness*: no free transition-graph tooling
    (guards, diagram export) if a future subsystem turns out to need real multi-state graphs —
-   accepted, since none of the three confirmed migration targets need that generality.
+   accepted, since none of the confirmed targets need that generality: the 2 subsystems
+   migrating to `Reason` (`session/tymux`, `session/tmux`) plus `session/external_streamer.go`'s
+   adjacent `IsBenignTimeout` swap (not a `Reason` migration — see Phase 4's scope note).
 
 **Chosen: Option 3.** Recorded as ADR-001, with option 1/2 as the rejected alternatives (see
 Pattern Decisions below).
@@ -63,7 +69,7 @@ Pattern Decisions below).
 | `session_lifecycle_active_generations` | A companion OTel `metric.Int64UpDownCounter` (gauge), labeled `subsystem`, incremented once by `StartGeneration` and decremented once by `EndGeneration`. | Exists specifically because incident #3's failure mode is a generation that never *returns* (abandoned, not killed) — `session_lifecycle_ends_total` and the per-generation span are both structurally silent for that case (nothing ever calls `EndGeneration`), so this gauge is the one signal that keeps moving: "active count not decreasing" is the trace-visible symptom of a recurrence. See Epic 1.3, Story 1.3.3. |
 | `STAPLER_SQUAD_TMUX_LIFECYCLE_V2` | Env-var-backed config flag (`config.TmuxLifecycleV2Enabled()`, mirroring the existing `STAPLER_SQUAD_USE_CONTROL_MODE` boolean-flag convention), default `false`. | Gates only `session/tmux/control_mode.go`'s migration (Phase 3, the default backend) — when `false`, the 3 call sites run the literal pre-migration `!t.intentionalStop.Load()` checks unchanged; when `true`, they run the consolidated `classifyControlModeExit()`-based path. `session/tymux` (Phase 2) is not gated — it's already opt-in via `config.TymuxSessionOverrides`. See Epic 3.1, Story 3.1.2 and Risk Control. |
 | `lifecycle.AwaitBounded(done <-chan struct{}, wait time.Duration) bool` | Generalizes `teardownStandingStream`'s bounded-wait-then-abandon idiom: waits for `done` to close, returns `true` if it does within `wait`, `false` (caller logs + abandons the goroutine) otherwise. | Replaces the inline `select { case <-done: ; case <-time.After(...): }` in `session/tymux/stream.go`. |
-| `lifecycle.IsBenignTimeout(err error) bool` | The canonical, typed "is this error an expected poll-timeout, not a real disconnect" classifier — `net.Error.Timeout()`, `os.ErrDeadlineExceeded`, `io.ErrUnexpectedEOF`, nothing else. | Replaces `session/external_streamer.go`'s `strings.Contains(err.Error(), "i/o timeout")` fallback. |
+| `lifecycle.IsBenignTimeout(err error) bool` | The canonical, typed "is this error an expected poll-timeout, not a real disconnect" classifier — `net.Error.Timeout()`, `os.ErrDeadlineExceeded`, `io.ErrUnexpectedEOF`, nothing else. | Replaces `session/external_streamer.go`'s `strings.Contains(err.Error(), "i/o timeout")` fallback (Phase 4). This is the only thing Phase 4 borrows from `session/lifecycle` — `external_streamer.go` does not adopt `Reason`, so it is not a third migrated subsystem: this project migrates **2 subsystems** to `Reason` (`session/tymux`, `session/tmux`) plus **1 adjacent fix** (`session/external_streamer.go`). See Phase 4's scope note. |
 | `classifyStreamEnd` | `(*tymuxGRPCSession)` method in `session/tymux/stream.go` mapping `s.closing`/`s.exited`/`ctx.Err()` onto exactly one `lifecycle.Reason`, replacing the 3-clause `||`. | Precedence: `closing` > `exited` > `ctx.Err()` > default `ReasonTransportDrop`. |
 | `classifyControlModeExit` | `(*TmuxSession)` method in `session/tmux/control_mode.go` mapping `t.intentionalStop` onto exactly one `lifecycle.Reason`, replacing the 3 independently-repeated `!t.intentionalStop.Load()` checks. | Only ever returns `ReasonDeliberateClose` or `ReasonTransportDrop` — this subsystem has no generation/supersede/clean-exit distinction to make. |
 | Generation | One incarnation of a subsystem's reader/reconnect goroutine — a fresh `readAttachLoop`/`readControlModeOutput` invocation. Distinct from "the whole session," which can outlive many generations (tymux) or exactly one (tmux, which never reconnects mid-generation). | Not a new type this project introduces — the term names an existing concept (tymux's `ctx`/`done` pair, tmux's `doneCh`) so plan/code/tests use one word for it. |
@@ -151,9 +157,11 @@ on-disk/wire state is touched.
 None. Every question `requirements.md` left open (`exhaustive` carve-out scope, `session/tmux`
 vs. `session/tymux` sequencing, exact migration list) is resolved by this plan: carve-out is
 scoped to `session/lifecycle` only (Pattern Decisions); sequencing is
-tymux-then-tmux-then-external_streamer (Risk Control above); the migration list is
-`session/tymux/stream.go`, `session/tmux/control_mode.go`, and
-`session/external_streamer.go`'s `readLoop`, with `session/actor.go` and
+tymux-then-tmux-then-external_streamer (Risk Control above); the migration list is **2
+subsystems migrated to `lifecycle.Reason`** — `session/tymux/stream.go`,
+`session/tmux/control_mode.go` — **plus 1 adjacent fix riding along**,
+`session/external_streamer.go`'s `readLoop` (swaps to `lifecycle.IsBenignTimeout` only, no
+`Reason` adoption — see Phase 4's scope note), with `session/actor.go` and
 `session/tmux/server_registry.go` explicitly out of scope (Pattern Decisions, Phase 5).
 
 ## Dependency Visualization
@@ -171,11 +179,12 @@ Phase 1: session/lifecycle (shared package, no consumer)
         +-------------------------------+-------------------------------+
         v                               v                               v
 Phase 2: session/tymux            Phase 3: session/tmux           Phase 4: external_streamer
-  Epic 2.1 classifyStreamEnd        Epic 3.1 classifyControlModeExit  Epic 4.1 IsBenignTimeout swap
-    (+ Story 2.2.2 gauge regr.)         (Story 3.1.2: gated behind      Epic 4.2 regression tests
-  Epic 2.2 observability                 STAPLER_SQUAD_TMUX_LIFECYCLE_V2, Epic 4.3 verification
-  Epic 2.3 AwaitBounded fold-in           default false)
-  Epic 2.4 regression tests         Epic 3.2 observability (same flag)
+  (migrates to Reason)              (migrates to Reason)             (adjacent fix — NOT a
+  Epic 2.1 classifyStreamEnd        Epic 3.1 classifyControlModeExit  Reason migration; borrows
+    (+ Story 2.2.2 gauge regr.)         (Story 3.1.2: gated behind      only IsBenignTimeout)
+  Epic 2.2 observability                 STAPLER_SQUAD_TMUX_LIFECYCLE_V2, Epic 4.1 IsBenignTimeout swap
+  Epic 2.3 AwaitBounded fold-in           default false)                Epic 4.2 regression tests
+  Epic 2.4 regression tests         Epic 3.2 observability (same flag)  Epic 4.3 verification
   Epic 2.5 verification             Epic 3.3 from-scratch tests
                                      Epic 3.4 verification (own PR, both flag values)
         |                               |                               |
@@ -185,6 +194,11 @@ Phase 2: session/tymux            Phase 3: session/tmux           Phase 4: exter
                       (session/actor.go, server_registry.go noted out-of-scope;
                        ADR-001 written; command-execution-SLA gap tracked)
 ```
+
+**Project totals**: **2 subsystems migrated to the `lifecycle.Reason` mechanism**
+(`session/tymux`, `session/tmux`) **+ 1 adjacent fix riding along**
+(`session/external_streamer.go`'s `IsBenignTimeout` swap) — not "3 subsystems migrated." See
+Phase 4's scope note for why it's counted separately.
 
 Phases 2, 3, and 4 have no dependency on each other (independent subsystems, independent
 files) and could run in parallel once Phase 1 ships — sequenced 2→3→4 above per Risk Control's
@@ -625,8 +639,28 @@ live `pprof` dump (the exact gap incident #2 exposed).
   (`genCtx` is passed to `readAttachLoop` in place of `ctx` so `classifyStreamEnd`'s
   `ctx.Err()` check still observes the same cancellation — `StartLinkedBackgroundSpan`
   derives its returned context from the same cancellation tree via `trace.WithNewRoot`, which
-  does not detach `ctx.Done()`; verify this with Task 2.5.1a's `-race` run before merging).
+  is assumed, not yet proven, not to detach `ctx.Done()`. **This task is not done until Task
+  2.2.1a-verify's direct propagation test exists and passes** — the `-race` run in Task
+  2.5.1a proves absence of data races, not correct cancellation propagation, and is not a
+  substitute (pre-mortem P1 #1).
 - Files: `session/tymux/stream.go`
+
+##### Task 2.2.1a-verify: Prove `StartGeneration`'s derived context propagates parent cancellation — merge gate on Task 2.2.1a (~4 min)
+- Direct unit test (not inference from `-race`): call
+  `genCtx, _ := lifecycle.StartGeneration(parentCtx, "test")` where `parentCtx` is a
+  cancelable `context.Context`; cancel the *parent* (`cancel()`); assert `<-genCtx.Done()`
+  fires and `genCtx.Err() != nil` within a bounded wait (e.g. `AwaitBounded`-style, or a plain
+  `select`/`time.After` in the test itself). This is the literal proof that
+  `telemetry.StartLinkedBackgroundSpan`'s derived context still observes the parent's
+  cancellation tree — pre-mortem P1 #1's exact finding: if this assumption is wrong,
+  `classifyStreamEnd`'s `ctx.Err()` check (Task 2.2.1a) permanently reads `nil` under the new
+  mechanism, silently reintroducing incident #2's deadlock behind the abstraction built to
+  prevent it.
+- **Acceptance criterion, stated as a merge gate**: Task 2.2.1a's wrapping closure must not be
+  merged until this test exists in the codebase and passes. A green `-race` run alone (Task
+  2.5.1a) does not satisfy this gate.
+- Files: `session/lifecycle/observability_test.go` (test `StartGeneration` directly, isolated
+  from any `session/tymux` fixture)
 
 ##### Task 2.2.1b: Add `lifecycle.RecordEnd` calls to `ReconnectLoop`'s two give-up branches (~4 min)
 - At `stream.go:599-606` (the `s.closing.Load()` branch and the exhaustion branch), add
@@ -1042,6 +1076,21 @@ assuming the tymux tests generalize.
 
 ## Phase 4: Migrate `session/external_streamer.go`'s `readLoop`
 
+*Scope note (resolves a requirements.md cross-reference otherwise left ambiguous):
+`readLoop`'s problem shape is "is this one error a benign poll-timeout," not "classify which
+of N mutually exclusive lifecycle-ending causes fired" — it never had a `closing`/`exited`/
+`ctx.Err()`-style multi-clause boolean to replace, only a fragile string-matching fallback
+inside a single error check. So Phase 4 borrows exactly one helper from the shared package,
+`lifecycle.IsBenignTimeout` (Epic 1.5) — it does **not** adopt the `lifecycle.Reason` enum, and
+there is no `StartGeneration`/`EndGeneration` span, no `session_lifecycle_ends_total` label,
+and no `session_lifecycle_active_generations` label for this subsystem. Requirements.md's
+Scope → In Scope item 3 ("each migration ... gets observability (span/metric) via the
+established pattern") describes the contract for a `Reason`-based migration; Phase 4 was never
+that shape of migration, so it is explicitly exempt from that observability requirement.
+Project-wide, this plan migrates **2 subsystems** to `Reason` (`session/tymux`,
+`session/tmux`, Phases 2-3) and lands **1 adjacent fix** here in Phase 4 — see the Dependency
+Visualization section above.*
+
 ### Epic 4.1: Replace the ad hoc/string-matching timeout classification
 
 **Goal**: Remove the fragile `strings.Contains(err.Error(), "i/o timeout")` fallback
@@ -1184,15 +1233,28 @@ reconnect, no deliberate-vs-transient distinction) doesn't get "fixed" into an u
 - Files: none in this repo's tracked plan artifacts beyond the issue reference recorded in
   `ADR-001`'s "Consequences" section (Epic 5.2).
 
-##### Task 5.3.2a: File a tracked follow-on to remove `STAPLER_SQUAD_TMUX_LIFECYCLE_V2` after bake time (~3 min)
-- A GitHub issue (or dated `decisions/` entry, same fallback as Task 5.3.1a) recording: the
-  flag's purpose (Epic 3.1, Story 3.1.2 — default-backend risk control for this migration),
-  the bake-time criterion for flipping its default to `true` and later deleting the `false`
-  branch entirely (e.g. "N weeks with no `tmux_control_mode`-related incident/regression
-  report" — the exact N is an operational call for whoever closes this issue, not predetermined
-  here), and a link back to this plan's Risk Control section so the reason the flag exists
-  isn't lost once it's routine. Not removing it is itself a form of the exact "ad hoc flag
-  litter" this project exists to close out, so this follow-on is not optional busywork.
+##### Task 5.3.2a: File a tracked follow-on to remove `STAPLER_SQUAD_TMUX_LIFECYCLE_V2` after a dashboarded, staged bake period (~3 min)
+- A GitHub issue (or dated `decisions/` entry, same fallback as Task 5.3.1a) recording the
+  flag's purpose (Epic 3.1, Story 3.1.2 — default-backend risk control for this migration) and
+  a concrete, monitored removal gate — not the vague "N weeks, no incident report" criterion
+  this task originally specified (pre-mortem P1 #2: undefined, unowned, untied to any
+  dashboard, so the flip would happen on schedule-optimism rather than evidence). The gate has
+  three parts, all required before the `false` branch is deleted:
+  - (a) **Dashboarded**: `session_lifecycle_ends_total{subsystem="tmux_control_mode"}` and
+    `session_lifecycle_active_generations{subsystem="tmux_control_mode"}` (Epic 3.2, Story
+    1.3.3) are on a dashboard panel before the flag's default flips to `true` — emitted-but-
+    unwatched metrics do not satisfy this.
+  - (b) **Staged, not global**: the flag is enabled on a staged subset of hosts/sessions first
+    — never one global flip of every currently-running session at once — and that subset's
+    dashboarded metrics are compared against the still-`false` remainder before wider rollout.
+  - (c) **Bake-then-delete**: the `false` branch (Task 3.1.2b's literal pre-migration code
+    path) is deleted only after that staged, dashboarded bake period shows no new-shape
+    `tmux_control_mode` incidents. The bake period's *length* remains an operational call for
+    whoever closes this issue (not predetermined here); what this task fixes is the *gate*
+    itself — dashboarded and staged, not a calendar date alone.
+  Link back to this plan's Risk Control section so the reason the flag exists isn't lost once
+  it's routine. Not removing it is itself a form of the exact "ad hoc flag litter" this project
+  exists to close out, so this follow-on is not optional busywork.
 - Files: none in this repo's tracked plan artifacts beyond the issue reference recorded in
   `ADR-001`'s "Consequences" section (Epic 5.2).
 
@@ -1200,11 +1262,15 @@ reconnect, no deliberate-vs-transient distinction) doesn't get "fixed" into an u
 
 ##### Task 5.4.1a: `make ci` (~10 min, background-runnable)
 - The full existing CI pipeline (build, test, lint) green with every phase's changes present,
-  confirming no cross-package regression beyond the three migrated files' own test suites.
+  confirming no cross-package regression beyond the touched files' own test suites: the 2
+  subsystems migrated to `lifecycle.Reason` (`session/tymux`, `session/tmux`) plus
+  `session/external_streamer.go`'s adjacent `IsBenignTimeout`-swap fix — 3 files touched, not
+  3 `Reason` migrations.
 - Files: none (verification only)
 
 ##### Task 5.4.1b: `make ready` (~10-15 min, background-runnable)
 - Includes the `dupl`/`jscpd` duplication gates (new-code-only for Go) — verify the new
-  `session/lifecycle` package and the 3 migration diffs introduce no flagged duplication.
+  `session/lifecycle` package and the 3 touched files' diffs (2 `Reason` migrations +
+  `session/external_streamer.go`'s 1 adjacent fix) introduce no flagged duplication.
 - Files: none (verification only)
 
