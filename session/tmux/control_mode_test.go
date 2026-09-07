@@ -559,3 +559,32 @@ func TestControlMode_ScanLoopDoneChRace_EndsGenerationWithoutFiringOnExit(t *tes
 		t.Errorf("session_lifecycle_active_generations delta = %d, want 0 (gauge must return to baseline, not stay elevated by the leaked generation)", afterActive-beforeActive)
 	}
 }
+
+// TestSendInputViaControlMode_ReturnsError_When_PipeAcceptsWritesButNeverAcks
+// guards against the input-silent-drop bug (fixed alongside this test): a
+// wedged control-mode pipe that accepts the enqueue and the stdin write
+// without ever erroring used to make SendInputViaControlMode return nil
+// immediately (its old "fire-and-forget" contract), so the caller's
+// subprocess fallback (sendInputToTmux, in connectrpc_websocket.go) never
+// ran -- keystrokes vanished with the UI still showing "Connected".
+//
+// highPriSendCh here is a live, buffered channel with nothing ever draining
+// it -- the enqueue succeeds (room in the buffer), but no %begin/%end ack
+// can ever arrive, faithfully modeling a real wedged tmux -C attach-session
+// pipe (confirmed live: one that accepts stdin writes but never completes
+// even a capture-pane/resize round trip) without needing a real tmux
+// process.
+func TestSendInputViaControlMode_ReturnsError_When_PipeAcceptsWritesButNeverAcks(t *testing.T) {
+	sess := &TmuxSession{
+		sanitizedName: "cm_wedged_input_test",
+		highPriSendCh: make(chan cmSendReq, 64),
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+
+	err := sess.SendInputViaControlMode(ctx, []byte("x"))
+	if err == nil {
+		t.Fatal("SendInputViaControlMode() error = nil, want a timeout error -- a wedged CM pipe must be reported as a failure so the caller's subprocess fallback runs, not silently swallowed")
+	}
+}
