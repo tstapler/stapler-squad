@@ -2,7 +2,6 @@ package git
 
 import (
 	"os"
-	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -47,7 +46,7 @@ const goldenConflictAFixturePath = "testdata/golden_conflict_a.txt"
 func TestNativeMerge_ConflictMarkers_MatchGoldenFixture(t *testing.T) {
 	t.Parallel()
 
-	golden, err := os.ReadFile(filepath.Join("testdata", "golden_conflict_a.txt"))
+	golden, err := os.ReadFile(goldenConflictAFixturePath)
 	require.NoError(t, err)
 
 	const (
@@ -96,7 +95,7 @@ const goldenConflictEmptyTheirsFixturePath = "testdata/golden_conflict_empty_the
 func TestNativeMerge_ConflictMarkers_EmptySide_MatchesGoldenFixture_NoExtraBlankLine(t *testing.T) {
 	t.Parallel()
 
-	golden, err := os.ReadFile(filepath.Join("testdata", "golden_conflict_empty_theirs.txt"))
+	golden, err := os.ReadFile(goldenConflictEmptyTheirsFixturePath)
 	require.NoError(t, err)
 
 	const (
