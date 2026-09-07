@@ -749,41 +749,48 @@ func diffHashFromFilePatches(filePatches []fdiff.FilePatch) string {
 	return fmt.Sprintf("%x", h.Sum(nil))
 }
 
-// CheckoutBranch checks out a branch in an existing repository.
+// CheckoutBranch checks out a branch in an existing repository. Uses go-git
+// (no subprocess — the `prefer-go-git-over-subshells` skill); ValidateBranchName
+// is still the defense against a flag-like branchName (unlike FetchBranch's "--"
+// guard, go-git's Checkout takes a typed plumbing.ReferenceName, not a raw CLI
+// argument, so there's no equivalent injection surface here to guard beyond that).
 func CheckoutBranch(repoPath, branchName string) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	// No "--" guard here (unlike FetchBranch): `git checkout -- <name>` puts
-	// checkout into path-restore mode, not branch-switch mode — verified this
-	// breaks every legitimate call (treats branchName as a pathspec, "did not
-	// match any file(s)"), not just malicious input. ValidateBranchName below
-	// is the actual defense for this call site.
 	if err := ValidateBranchName(branchName); err != nil {
 		return fmt.Errorf("failed to checkout branch: %w", err)
 	}
-	cmd := safeexec.CommandContext(ctx, "git", "-C", repoPath, "checkout", branchName)
-	if err := cmd.Run(); err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			return fmt.Errorf("failed to checkout branch: %s", string(exitErr.Stderr))
-		}
+	repo, err := OpenRepo(repoPath)
+	if err != nil {
+		return fmt.Errorf("failed to checkout branch: %w", err)
+	}
+	worktree, err := repo.Worktree()
+	if err != nil {
+		return fmt.Errorf("failed to checkout branch: %w", err)
+	}
+	if err := worktree.Checkout(&git.CheckoutOptions{Branch: plumbing.NewBranchReferenceName(branchName)}); err != nil {
 		return fmt.Errorf("failed to checkout branch: %w", err)
 	}
 	return nil
 }
 
-// RemoteURL returns the URL of the named remote (usually "origin") for a local repo.
+// RemoteURL returns the URL of the named remote (usually "origin") for a local
+// repo, matching `git remote get-url <remote>`'s single-URL output — uses
+// go-git (no subprocess — the `prefer-go-git-over-subshells` skill). Fetch
+// always uses the first configured URL (see config.RemoteConfig.URLs' doc
+// comment), so this returns urls[0] the same way the CLI does.
 func RemoteURL(repoPath, remote string) (string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	cmd := safeexec.CommandContext(ctx, "git", "-C", repoPath, "remote", "get-url", remote)
-	out, err := cmd.Output()
+	repo, err := OpenRepo(repoPath)
 	if err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			return "", fmt.Errorf("failed to get remote URL: %s", string(exitErr.Stderr))
-		}
 		return "", fmt.Errorf("failed to get remote URL: %w", err)
 	}
-	return strings.TrimSpace(string(out)), nil
+	r, err := repo.Remote(remote)
+	if err != nil {
+		return "", fmt.Errorf("failed to get remote URL: %w", err)
+	}
+	urls := r.Config().URLs
+	if len(urls) == 0 {
+		return "", fmt.Errorf("failed to get remote URL: remote %q has no configured URL", remote)
+	}
+	return urls[0], nil
 }
 
 // MergeMainResult describes the outcome of MergeMainIntoWorktree.

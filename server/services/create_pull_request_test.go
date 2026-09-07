@@ -363,27 +363,23 @@ func TestDraftPullRequest_should_UseFallbackBody_When_DraftPRDescriptionErrors(t
 // --------------------------------------------------------------------------
 
 // fakePRGitExecutor is a tmux.CommandRunner fake for CreatePullRequest's
-// commit -> push -> CreatePR pipeline. It intercepts every git/gh subprocess
-// GitWorktree would otherwise spawn, dispatching by name+args shape, so these
-// tests exercise the real CommitChanges/PushBranch/CreatePR code paths
-// without touching a real remote or a real `gh` binary — mirrors
-// capturingGHRunner's pattern in session/git/worktree_git_test.go, extended
-// to cover the git-side commands CreatePullRequest's handler also drives.
+// commit -> push -> CreatePR pipeline. It intercepts every gh subprocess and
+// PushBranch's `git push` — the calls that remain subprocess-based — so these
+// tests exercise the real PushBranch/CreatePR code paths without touching a
+// real remote or a real `gh` binary. Mirrors capturingGHRunner's pattern in
+// session/git/worktree_git_test.go.
 //
-// Since every git/gh call GitWorktree makes (runGitCommand, PushBranch,
-// checkGHCLI, findExistingPR, CreatePR) now routes through the single
-// tmux.CommandRunner seam (ADR-002), and StageAllExceptScaffolding's
-// UntrackScaffolding step uses go-git directly against the (fake,
-// nonexistent) worktree path and fails open on a missing repo, these tests
-// need no real git repo on disk at all — a fake "/fake/repo"-shaped path is
-// enough.
+// CommitChanges' status/stage/commit steps (IsDirty, StageAllExceptScaffolding,
+// HasStagedChanges, stageAndCommit) moved onto go-git directly (session/git's
+// go-git migration — the `prefer-go-git-over-subshells` skill) and no longer
+// route through this CommandRunner seam at all, so newFakePRWorktree backs
+// these tests with a real (disposable) temp git repo instead of a fake,
+// nonexistent path.
 type fakePRGitExecutor struct {
 	mu sync.Mutex
 
 	calls []string // every command run, as "name arg1 arg2 ...", for call-order/never-called assertions
 
-	dirty     bool   // git status --porcelain reports a dirty worktree (drives CommitChanges' real commit path)
-	commitErr error  // git commit fails with this error
 	pushErr   error  // git push fails with this error
 	createOut string // gh pr create's stdout (defaults to a canned PR URL if empty)
 	createErr error  // gh pr create fails with this error
@@ -415,23 +411,6 @@ func (e *fakePRGitExecutor) Run(_ context.Context, _ string, name string, args .
 
 	prog := filepath.Base(name)
 	switch {
-	case prog == "git" && len(args) > 0 && args[0] == "status":
-		if e.dirty {
-			return []byte("M file.txt\n"), nil
-		}
-		return nil, nil
-	case prog == "git" && len(args) > 0 && args[0] == "add":
-		return nil, nil
-	case prog == "git" && len(args) > 0 && args[0] == "diff":
-		if e.dirty {
-			return []byte("file.txt\n"), nil
-		}
-		return nil, nil
-	case prog == "git" && len(args) > 0 && args[0] == "commit":
-		if e.commitErr != nil {
-			return []byte("commit failed"), e.commitErr
-		}
-		return nil, nil
 	case prog == "git" && len(args) > 0 && args[0] == "push":
 		if e.pushErr != nil {
 			return []byte("push failed"), e.pushErr
@@ -480,10 +459,15 @@ func (e *fakePRGitExecutor) calledWith(sub string) bool {
 }
 
 // newFakePRWorktree builds a *git.GitWorktree backed by a fakePRGitExecutor and
-// a fake (never touched on disk) repo/worktree path — CommitChanges/PushBranch/
-// CreatePR never need a real repo since every command they'd run is intercepted.
-func newFakePRWorktree(sessionID, branchName string, mock *fakePRGitExecutor) *git.GitWorktree {
-	return git.NewGitWorktreeFromStorageWithExecutor("/fake/repo", "/fake/worktree", sessionID, branchName, "", git.WithCommandRunner(mock))
+// a real, disposable temp git repo (newDraftPRTestRepo) — CommitChanges' go-git
+// steps need a real repository to open; only PushBranch/CreatePR/checkGHCLI are
+// intercepted by mock (see fakePRGitExecutor's doc comment). The repo is
+// freshly committed and clean, so IsDirty() is false and CommitChanges skips
+// straight past the commit step for every test that doesn't dirty it itself.
+func newFakePRWorktree(t *testing.T, sessionID, branchName string, mock *fakePRGitExecutor) *git.GitWorktree {
+	t.Helper()
+	dir := newDraftPRTestRepo(t)
+	return git.NewGitWorktreeFromStorageWithExecutor(dir, dir, sessionID, branchName, "", git.WithCommandRunner(mock))
 }
 
 // fakePRInstanceStore is a minimal session.InstanceStore fake. Unlike the real
@@ -524,7 +508,7 @@ var _ session.InstanceStore = (*fakePRInstanceStore)(nil)
 func TestCreatePullRequest_should_CallCreatePRDirectly_NotHeadlessPool(t *testing.T) {
 	t.Parallel()
 	mock := &fakePRGitExecutor{}
-	wt := newFakePRWorktree("sess-direct", "feature/direct", mock)
+	wt := newFakePRWorktree(t, "sess-direct", "feature/direct", mock)
 	inst := &session.Instance{Title: "Direct PR session", UUID: uuid.New().String()}
 	inst.SetGitWorktree(wt)
 
@@ -545,7 +529,7 @@ func TestCreatePullRequest_should_CallCreatePRDirectly_NotHeadlessPool(t *testin
 func TestCreatePullRequest_should_PersistAndPublishEvent_When_CreateSucceeds(t *testing.T) {
 	t.Parallel()
 	mock := &fakePRGitExecutor{createOut: "https://github.com/tstapler/stapler-squad/pull/512\n"}
-	wt := newFakePRWorktree("sess-7f3a", "feature/rate-limit-toggle", mock)
+	wt := newFakePRWorktree(t, "sess-7f3a", "feature/rate-limit-toggle", mock)
 	inst := &session.Instance{Title: "Add rate limit toggle", UUID: uuid.New().String()}
 	inst.SetGitWorktree(wt)
 
@@ -595,7 +579,7 @@ func TestCreatePullRequest_should_PersistAndPublishEvent_When_CreateSucceeds(t *
 func TestCreatePullRequest_should_ReturnPersistedFalse_When_SaveInstancesFails(t *testing.T) {
 	t.Parallel()
 	mock := &fakePRGitExecutor{}
-	wt := newFakePRWorktree("sess-persist-fail", "feature/persist-fail", mock)
+	wt := newFakePRWorktree(t, "sess-persist-fail", "feature/persist-fail", mock)
 	inst := &session.Instance{Title: "Persist-fail session", UUID: uuid.New().String()}
 	inst.SetGitWorktree(wt)
 
@@ -615,7 +599,7 @@ func TestCreatePullRequest_should_ReturnPersistedFalse_When_SaveInstancesFails(t
 func TestCreatePullRequest_should_SurfaceSpecificError_When_GHNotAuthenticated(t *testing.T) {
 	t.Parallel()
 	mock := &fakePRGitExecutor{authErr: errors.New("not logged in")}
-	wt := newFakePRWorktree("sess-no-auth", "feature/no-auth", mock)
+	wt := newFakePRWorktree(t, "sess-no-auth", "feature/no-auth", mock)
 	inst := &session.Instance{Title: "No auth session", UUID: uuid.New().String()}
 	inst.SetGitWorktree(wt)
 
@@ -634,10 +618,27 @@ func TestCreatePullRequest_should_SurfaceSpecificError_When_GHNotAuthenticated(t
 		"the literal checkGHCLI error must surface verbatim, not wrapped in a generic message")
 }
 
+// TestCreatePullRequest_should_SurfaceError_When_CommitFails forces a real
+// go-git commit failure (rather than a mocked one — CommitChanges' commit
+// step no longer routes through fakePRGitExecutor, see its doc comment) by
+// dirtying the worktree and stripping git author identity out of the test
+// process's environment, so resolveCommitAuthorIdentity
+// (session/git/worktree_git.go) has nothing to resolve. Deliberately not
+// t.Parallel(): it mutates process-wide env vars (HOME, GIT_AUTHOR_*), and Go
+// only guarantees that's safe for a test with no Parallel ancestor — a
+// non-parallel test in this file always finishes before any parallel sibling
+// starts, so this can't race them.
 func TestCreatePullRequest_should_SurfaceError_When_CommitFails(t *testing.T) {
-	t.Parallel()
-	mock := &fakePRGitExecutor{dirty: true, commitErr: errors.New("disk full")}
-	wt := newFakePRWorktree("sess-commit-fail", "feature/commit-fail", mock)
+	dir := newDraftPRTestRepo(t)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "untracked.txt"), []byte("data"), 0o644))
+
+	t.Setenv("GIT_AUTHOR_NAME", "")
+	t.Setenv("GIT_AUTHOR_EMAIL", "")
+	t.Setenv("XDG_CONFIG_HOME", "")
+	t.Setenv("HOME", t.TempDir())
+
+	mock := &fakePRGitExecutor{}
+	wt := git.NewGitWorktreeFromStorageWithExecutor(dir, dir, "sess-commit-fail", "feature/commit-fail", "", git.WithCommandRunner(mock))
 	inst := &session.Instance{Title: "Commit-fail session", UUID: uuid.New().String()}
 	inst.SetGitWorktree(wt)
 
@@ -652,7 +653,7 @@ func TestCreatePullRequest_should_SurfaceError_When_CommitFails(t *testing.T) {
 
 	var connectErr *connect.Error
 	require.ErrorAs(t, err, &connectErr)
-	assert.Contains(t, connectErr.Message(), "disk full")
+	assert.Contains(t, connectErr.Message(), "author identity")
 
 	assert.False(t, mock.calledWith("push"), "PushBranch must never be reached after a commit failure")
 	assert.False(t, mock.calledWith("gh"), "CreatePR must never be reached after a commit failure")
@@ -661,7 +662,7 @@ func TestCreatePullRequest_should_SurfaceError_When_CommitFails(t *testing.T) {
 func TestCreatePullRequest_should_SurfaceError_When_PushFails(t *testing.T) {
 	t.Parallel()
 	mock := &fakePRGitExecutor{pushErr: errors.New("non-fast-forward")}
-	wt := newFakePRWorktree("sess-push-fail", "feature/push-fail", mock)
+	wt := newFakePRWorktree(t, "sess-push-fail", "feature/push-fail", mock)
 	inst := &session.Instance{Title: "Push-fail session", UUID: uuid.New().String()}
 	inst.SetGitWorktree(wt)
 
@@ -684,7 +685,7 @@ func TestCreatePullRequest_should_SurfaceError_When_PushFails(t *testing.T) {
 func TestCreatePullRequest_should_SetAlreadyExisted_When_SessionHasCachedPRUrl(t *testing.T) {
 	t.Parallel()
 	mock := &fakePRGitExecutor{}
-	wt := newFakePRWorktree("sess-cached-pr", "feature/cached-pr", mock)
+	wt := newFakePRWorktree(t, "sess-cached-pr", "feature/cached-pr", mock)
 	inst := &session.Instance{Title: "Cached PR session", UUID: uuid.New().String()}
 	inst.SetGitWorktree(wt)
 	inst.GitHubPRURL = "https://github.com/tstapler/stapler-squad/pull/999"
@@ -710,7 +711,7 @@ func TestCreatePullRequest_should_SetAlreadyExisted_When_SessionHasCachedPRUrl(t
 func TestCreatePullRequest_should_RejectConcurrentCall_When_AlreadyInFlight(t *testing.T) {
 	t.Parallel()
 	mock := &fakePRGitExecutor{}
-	wt := newFakePRWorktree("sess-in-flight", "feature/in-flight", mock)
+	wt := newFakePRWorktree(t, "sess-in-flight", "feature/in-flight", mock)
 	inst := &session.Instance{Title: "In-flight session", UUID: uuid.New().String()}
 	inst.SetGitWorktree(wt)
 
@@ -743,7 +744,7 @@ func TestCreatePullRequest_should_RejectConcurrentCall_When_RacingRealGoroutines
 		blockFirstCallStarted: make(chan struct{}),
 		blockFirstCallProceed: make(chan struct{}),
 	}
-	wt := newFakePRWorktree("sess-real-race", "feature/real-race", mock)
+	wt := newFakePRWorktree(t, "sess-real-race", "feature/real-race", mock)
 	inst := &session.Instance{Title: "Real race session", UUID: uuid.New().String()}
 	inst.SetGitWorktree(wt)
 
@@ -793,7 +794,7 @@ func TestCreatePullRequest_should_RejectConcurrentCall_When_RacingRealGoroutines
 func TestCreatePullRequest_should_ReturnInternalError_When_PRNumberIsZero(t *testing.T) {
 	t.Parallel()
 	mock := &fakePRGitExecutor{createOut: "https://github.com/tstapler/stapler-squad/pull/not-a-number\n"}
-	wt := newFakePRWorktree("sess-zero-number", "feature/zero-number", mock)
+	wt := newFakePRWorktree(t, "sess-zero-number", "feature/zero-number", mock)
 	inst := &session.Instance{Title: "Zero PR number session", UUID: uuid.New().String()}
 	inst.SetGitWorktree(wt)
 
@@ -810,7 +811,7 @@ func TestCreatePullRequest_should_ReturnInternalError_When_PRNumberIsZero(t *tes
 func TestCreatePullRequest_should_CallRecordPRCreatedOutOfBand_When_BacklogListenerPresent(t *testing.T) {
 	t.Parallel()
 	mock := &fakePRGitExecutor{}
-	wt := newFakePRWorktree("sess-backlog-linked", "feature/backlog-linked", mock)
+	wt := newFakePRWorktree(t, "sess-backlog-linked", "feature/backlog-linked", mock)
 	inst := &session.Instance{Title: "Backlog-linked session", UUID: uuid.New().String()}
 	inst.SetGitWorktree(wt)
 
