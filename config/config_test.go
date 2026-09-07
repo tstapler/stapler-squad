@@ -1656,3 +1656,173 @@ func TestSetTymuxSessionOverride_ForceTrueThenForceFalse(t *testing.T) {
 		t.Fatal("expected persisted config to no longer have the override")
 	}
 }
+
+// TestEffectiveNativeWorktreeEnabled_DefaultsFalse verifies ADR-002's "both
+// flags default off" decision (Phase 4, Epic 4.1): a fresh config with no
+// FeatureFlags set must resolve native-worktree to false.
+func TestEffectiveNativeWorktreeEnabled_DefaultsFalse(t *testing.T) {
+	if got := EffectiveNativeWorktreeEnabled(&Config{}); got != false {
+		t.Fatalf("expected default-off, got %v", got)
+	}
+}
+
+// TestEffectiveNativeMergeEnabled_DefaultsFalse is the merge equivalent of
+// TestEffectiveNativeWorktreeEnabled_DefaultsFalse — ADR-002 requires both
+// flags, not just worktree, to default off.
+func TestEffectiveNativeMergeEnabled_DefaultsFalse(t *testing.T) {
+	if got := EffectiveNativeMergeEnabled(&Config{}); got != false {
+		t.Fatalf("expected default-off, got %v", got)
+	}
+}
+
+// TestGetNativeWorktreeSessionOverride_should_ReturnFalseFalse_When_KeyAbsent
+// distinguishes "no override" from "overridden false" — a session with no
+// entry in NativeWorktreeSessionOverrides reports (false, false), not
+// (false, true).
+func TestGetNativeWorktreeSessionOverride_should_ReturnFalseFalse_When_KeyAbsent(t *testing.T) {
+	cfg := &Config{}
+	if got, ok := cfg.GetNativeWorktreeSessionOverride("sess-1"); ok || got {
+		t.Fatalf("expected (false, false) for an absent key, got (%v, %v)", got, ok)
+	}
+}
+
+// TestGetNativeWorktreeSessionOverride_TakesPrecedence verifies a session
+// override wins over an unset global default (ADR-002/plan.md Story 4.1.1).
+func TestGetNativeWorktreeSessionOverride_TakesPrecedence(t *testing.T) {
+	cfg := &Config{NativeWorktreeSessionOverrides: map[string]bool{"sess-1": true}}
+	got, ok := cfg.GetNativeWorktreeSessionOverride("sess-1")
+	if !ok || !got {
+		t.Fatalf("expected (true, true), got (%v, %v)", got, ok)
+	}
+}
+
+// TestGetNativeMergeWorktreeOverride_KeyedByPath verifies the merge override
+// is keyed by worktreePath, not sessionName, per ADR-002.
+func TestGetNativeMergeWorktreeOverride_KeyedByPath(t *testing.T) {
+	cfg := &Config{NativeMergeWorktreeOverrides: map[string]bool{"/tmp/wt1": true}}
+	got, ok := cfg.GetNativeMergeWorktreeOverride("/tmp/wt1")
+	if !ok || !got {
+		t.Fatalf("expected (true, true), got (%v, %v)", got, ok)
+	}
+}
+
+// TestSetNativeWorktreeSessionOverride_ForceTrueThenForceFalse mirrors
+// TestSetTymuxSessionOverride_ForceTrueThenForceFalse: both directions must
+// actually flip the stored value and persist, and nil must clear it.
+func TestSetNativeWorktreeSessionOverride_ForceTrueThenForceFalse(t *testing.T) {
+	tempHome := t.TempDir()
+	t.Setenv("HOME", tempHome)
+	t.Setenv("STAPLER_SQUAD_INSTANCE", "shared")
+	configPath := filepath.Join(tempHome, ".stapler-squad", ConfigFileName)
+
+	cfg := &Config{}
+	if err := cfg.SetNativeWorktreeSessionOverride("sess-1", boolPtr(true)); err != nil {
+		t.Fatalf("SetNativeWorktreeSessionOverride(true) returned error: %v", err)
+	}
+	if got, ok := cfg.GetNativeWorktreeSessionOverride("sess-1"); !ok || !got {
+		t.Fatalf("expected override to force native, got (%v, %v)", got, ok)
+	}
+	reloaded, err := LoadConfigFromPath(configPath)
+	if err != nil {
+		t.Fatalf("LoadConfigFromPath after forcing true: %v", err)
+	}
+	if got, ok := reloaded.GetNativeWorktreeSessionOverride("sess-1"); !ok || !got {
+		t.Fatalf("expected persisted override to force native, got (%v, %v)", got, ok)
+	}
+
+	if err := cfg.SetNativeWorktreeSessionOverride("sess-1", boolPtr(false)); err != nil {
+		t.Fatalf("SetNativeWorktreeSessionOverride(false) returned error: %v", err)
+	}
+	if got, ok := cfg.GetNativeWorktreeSessionOverride("sess-1"); !ok || got {
+		t.Fatalf("expected override to force legacy (false), got (%v, %v)", got, ok)
+	}
+
+	if err := cfg.SetNativeWorktreeSessionOverride("sess-1", nil); err != nil {
+		t.Fatalf("SetNativeWorktreeSessionOverride(nil) returned error: %v", err)
+	}
+	if _, ok := cfg.GetNativeWorktreeSessionOverride("sess-1"); ok {
+		t.Fatal("expected override to be cleared")
+	}
+}
+
+// TestSetNativeMergeWorktreeOverride_ForceTrueThenForceFalse is the merge
+// equivalent of TestSetNativeWorktreeSessionOverride_ForceTrueThenForceFalse,
+// keyed by worktreePath instead of sessionName.
+func TestSetNativeMergeWorktreeOverride_ForceTrueThenForceFalse(t *testing.T) {
+	tempHome := t.TempDir()
+	t.Setenv("HOME", tempHome)
+	t.Setenv("STAPLER_SQUAD_INSTANCE", "shared")
+	configPath := filepath.Join(tempHome, ".stapler-squad", ConfigFileName)
+
+	cfg := &Config{}
+	if err := cfg.SetNativeMergeWorktreeOverride("/tmp/wt1", boolPtr(true)); err != nil {
+		t.Fatalf("SetNativeMergeWorktreeOverride(true) returned error: %v", err)
+	}
+	if got, ok := cfg.GetNativeMergeWorktreeOverride("/tmp/wt1"); !ok || !got {
+		t.Fatalf("expected override to force native, got (%v, %v)", got, ok)
+	}
+	reloaded, err := LoadConfigFromPath(configPath)
+	if err != nil {
+		t.Fatalf("LoadConfigFromPath after forcing true: %v", err)
+	}
+	if got, ok := reloaded.GetNativeMergeWorktreeOverride("/tmp/wt1"); !ok || !got {
+		t.Fatalf("expected persisted override to force native, got (%v, %v)", got, ok)
+	}
+
+	if err := cfg.SetNativeMergeWorktreeOverride("/tmp/wt1", boolPtr(false)); err != nil {
+		t.Fatalf("SetNativeMergeWorktreeOverride(false) returned error: %v", err)
+	}
+	if got, ok := cfg.GetNativeMergeWorktreeOverride("/tmp/wt1"); !ok || got {
+		t.Fatalf("expected override to force legacy (false), got (%v, %v)", got, ok)
+	}
+
+	if err := cfg.SetNativeMergeWorktreeOverride("/tmp/wt1", nil); err != nil {
+		t.Fatalf("SetNativeMergeWorktreeOverride(nil) returned error: %v", err)
+	}
+	if _, ok := cfg.GetNativeMergeWorktreeOverride("/tmp/wt1"); ok {
+		t.Fatal("expected override to be cleared")
+	}
+}
+
+// TestGetNativeWorktreeGlobalOverride_should_ReportUnset_Then_Set mirrors
+// TestGetTymuxGlobalOverride_should_ReportUnset_Then_Set for the
+// native_git_worktree flag.
+func TestGetNativeWorktreeGlobalOverride_should_ReportUnset_Then_Set(t *testing.T) {
+	cfg := &Config{}
+	if _, ok := cfg.GetNativeWorktreeGlobalOverride(); ok {
+		t.Fatal("expected no override on a fresh config")
+	}
+	if err := cfg.SetNativeWorktreeGlobalOverride(boolPtr(true)); err != nil {
+		t.Fatalf("SetNativeWorktreeGlobalOverride: %v", err)
+	}
+	if got, ok := cfg.GetNativeWorktreeGlobalOverride(); !ok || got != true {
+		t.Fatalf("expected (true, true), got (%v, %v)", got, ok)
+	}
+	if err := cfg.SetNativeWorktreeGlobalOverride(nil); err != nil {
+		t.Fatalf("SetNativeWorktreeGlobalOverride(nil): %v", err)
+	}
+	if _, ok := cfg.GetNativeWorktreeGlobalOverride(); ok {
+		t.Fatal("expected clearing the override to remove it")
+	}
+}
+
+// TestGetNativeMergeGlobalOverride_should_ReportUnset_Then_Set is the merge
+// equivalent of TestGetNativeWorktreeGlobalOverride_should_ReportUnset_Then_Set.
+func TestGetNativeMergeGlobalOverride_should_ReportUnset_Then_Set(t *testing.T) {
+	cfg := &Config{}
+	if _, ok := cfg.GetNativeMergeGlobalOverride(); ok {
+		t.Fatal("expected no override on a fresh config")
+	}
+	if err := cfg.SetNativeMergeGlobalOverride(boolPtr(true)); err != nil {
+		t.Fatalf("SetNativeMergeGlobalOverride: %v", err)
+	}
+	if got, ok := cfg.GetNativeMergeGlobalOverride(); !ok || got != true {
+		t.Fatalf("expected (true, true), got (%v, %v)", got, ok)
+	}
+	if err := cfg.SetNativeMergeGlobalOverride(nil); err != nil {
+		t.Fatalf("SetNativeMergeGlobalOverride(nil): %v", err)
+	}
+	if _, ok := cfg.GetNativeMergeGlobalOverride(); ok {
+		t.Fatal("expected clearing the override to remove it")
+	}
+}
