@@ -9,6 +9,8 @@ import (
 	"strings"
 	"time"
 
+	"go.opentelemetry.io/otel/attribute"
+
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/log"
 
@@ -72,6 +74,7 @@ func branchRefExists(repo *git.Repository, branchRef plumbing.ReferenceName) (bo
 func (g *GitWorktree) branchExistsAfterAddFailure(branchRef plumbing.ReferenceName) bool {
 	for attempt := 0; attempt < worktreeAddRetryAttempts; attempt++ {
 		if attempt > 0 {
+			worktreeRetryTotal.Add(context.Background(), 1)
 			time.Sleep(worktreeAddRetryDelay)
 		}
 		repo, err := OpenRepo(g.repoPath)
@@ -97,7 +100,11 @@ func (g *GitWorktree) branchExistsAfterAddFailure(branchRef plumbing.ReferenceNa
 // administrative metadata that is not safe under concurrent access -- see
 // WithRepoWorktreeLock.
 func (g *GitWorktree) Setup() error {
-	return WithRepoWorktreeLock(g.repoPath, g.setupLocked)
+	ctx := withOperationAttrs(context.Background(), attribute.String("session_name", g.sessionName))
+	return withOperationSpan(ctx, "git.worktree.add", func() (string, string, error) {
+		err := WithRepoWorktreeLock(g.repoPath, g.setupLocked)
+		return implementationLabel(useNativeWorktree(g.sessionName)), spanOutcome(err), err
+	})
 }
 
 // SetupLocked runs the same setup logic as Setup but assumes the caller already holds
@@ -354,10 +361,23 @@ func (g *GitWorktree) findWorktreeForBranch(porcelainOutput, targetBranch string
 // 2.3.2a) — setupFromExistingBranch's caller below needs no change to pick up the native
 // implementation once the flag is on.
 func (g *GitWorktree) findLiveWorktreeForBranch() (string, bool) {
-	if useNativeWorktree(g.sessionName) {
-		return g.nativeFindLiveWorktreeForBranch()
-	}
-	return g.legacyFindLiveWorktreeForBranch()
+	var path string
+	var found bool
+	ctx := withOperationAttrs(context.Background(), attribute.String("session_name", g.sessionName))
+	_ = withOperationSpan(ctx, "git.worktree.list", func() (string, string, error) {
+		native := useNativeWorktree(g.sessionName)
+		if native {
+			path, found = g.nativeFindLiveWorktreeForBranch()
+		} else {
+			path, found = g.legacyFindLiveWorktreeForBranch()
+		}
+		outcome := "not_found"
+		if found {
+			outcome = "found"
+		}
+		return implementationLabel(native), outcome, nil
+	})
+	return path, found
 }
 
 // legacyFindLiveWorktreeForBranch is setupFromExistingBranch's Ground-Truth Re-Query
@@ -594,10 +614,17 @@ func (g *GitWorktree) Remove() error {
 // useNativeWorktree(g.sessionName) (Epic 2.2, Task 2.2.2a), mirroring setupNewWorktree's
 // and unlockWorktree's dispatch pattern.
 func (g *GitWorktree) removeLocked() error {
-	if useNativeWorktree(g.sessionName) {
-		return nativeRemoveWorktree(g.repoPath, g.worktreePath)
-	}
-	return g.legacyRemoveWorktree()
+	ctx := withOperationAttrs(context.Background(), attribute.String("session_name", g.sessionName))
+	return withOperationSpan(ctx, "git.worktree.remove", func() (string, string, error) {
+		native := useNativeWorktree(g.sessionName)
+		var err error
+		if native {
+			err = nativeRemoveWorktree(g.repoPath, g.worktreePath)
+		} else {
+			err = g.legacyRemoveWorktree()
+		}
+		return implementationLabel(native), spanOutcome(err), err
+	})
 }
 
 // legacyRemoveWorktree is the renamed body of the original subprocess-based removeLocked
@@ -773,7 +800,11 @@ func (g *GitWorktree) forceCleanupWorktree() error {
 // Prune removes all working tree administrative files and directories. Serialized
 // per-repoPath like Setup/Remove — it rewrites the same shared .git/worktrees/ metadata.
 func (g *GitWorktree) Prune() error {
-	return WithRepoWorktreeLock(g.repoPath, g.pruneLocked)
+	ctx := withOperationAttrs(context.Background(), attribute.String("session_name", g.sessionName))
+	return withOperationSpan(ctx, "git.worktree.prune", func() (string, string, error) {
+		err := WithRepoWorktreeLock(g.repoPath, g.pruneLocked)
+		return implementationLabel(useNativeWorktree(g.sessionName)), spanOutcome(err), err
+	})
 }
 
 // pruneLocked dispatches to nativeWorktreePrune/legacyWorktreePrune per

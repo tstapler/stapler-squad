@@ -507,6 +507,51 @@ func TestSetupNewWorktree_SelfHeals_When_BranchCreatedByDelayedRaceWinner(t *tes
 	defer func() { _ = wt.Cleanup() }()
 }
 
+// TestSetupNewWorktree_should_IncrementRetryCounter_When_GroundTruthRequeryRetries is Task
+// 4.4.2b's validation.md test: a branch-creation race that forces the Ground-Truth
+// Re-Query loop (branchExistsAfterAddFailure) to actually retry must increment
+// git_worktree_retry_total. Deliberately not t.Parallel(): git_worktree_retry_total has no
+// attribute dimension to filter a before/after delta by, and Go's testing package runs
+// every non-parallel test in this package to completion before any t.Parallel() test
+// resumes, so this avoids racing against this package's other (parallel) self-heal race
+// tests that also exercise this same retry loop.
+func TestSetupNewWorktree_should_IncrementRetryCounter_When_GroundTruthRequeryRetries(t *testing.T) {
+	repoDir := setupTestRepo(t)
+	branchName := "backlog/retry-counter-fixture"
+
+	spy := &gitSpyCommandRunner{}
+	spy.runFunc = func() ([]byte, error) {
+		call := spy.runCalls[len(spy.runCalls)-1]
+		if !isWorktreeAddDashBCall(call) {
+			return nil, nil
+		}
+		go func() {
+			// Past the loop's first two checks (attempt 0 has no pre-sleep; attempt 1
+			// sleeps once) but well within its total budget — forces at least two
+			// actual retries, mirroring
+			// TestSetupNewWorktree_SelfHeals_When_BranchCreatedByDelayedRaceWinner.
+			time.Sleep(2 * worktreeAddRetryDelay)
+			cmd := safeexec.CommandContext(context.Background(), "git", "-C", repoDir, "branch", branchName)
+			_ = cmd.Run()
+		}()
+		return nil, errors.New("signal: killed")
+	}
+
+	wt, _, err := NewGitWorktreeWithBranch(repoDir, "test-retry-counter-fixture", branchName, WithCommandRunner(spy))
+	require.NoError(t, err)
+
+	before := collectGitMetric(t, "git_worktree_retry_total")
+	baseline := sumGitCounter(t, before)
+
+	err = wt.setupNewWorktree()
+	require.NoError(t, err, "must self-heal once the delayed race winner's branch appears within the retry window")
+	defer func() { _ = wt.Cleanup() }()
+
+	after := collectGitMetric(t, "git_worktree_retry_total")
+	require.NotNil(t, after)
+	assert.Greater(t, sumGitCounter(t, after), baseline, "expected at least one Ground-Truth Re-Query retry to be recorded")
+}
+
 // TestSetupNewWorktree_HardFails_When_WorktreeAddErrorsAndBranchStillDoesNotExist is Story
 // 1.1.1's negative case: Ground-Truth Re-Query must not spuriously mask a genuine failure
 // (disk full, permissions) by self-healing when the branch never actually appears.

@@ -1,6 +1,7 @@
 package git
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -15,7 +16,32 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/format/index"
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/go-git/go-git/v5/utils/merkletrie"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
+
+	"github.com/tstapler/stapler-squad/telemetry"
 )
+
+// Merge outcome values for the git_merge_outcome_total counter below (Task 4.4.2b),
+// matching the four outcome branches nativeMergeMainIntoWorktree's call flow can produce.
+// Lower-cased to match requirements.md's Observability Requirements / plan.md's
+// git_merge_outcome_total{outcome="conflicted"} example literally.
+const (
+	mergeOutcomeUpToDate    = "uptodate"
+	mergeOutcomeFastForward = "fastforward"
+	mergeOutcomeCleanMerge  = "cleanmerge"
+	mergeOutcomeConflicted  = "conflicted"
+)
+
+// mergeOutcomeTotal is the conflict-rate counter named in plan.md's Observability Plan
+// (Task 4.4.2b) — proves requirements.md's Observability Requirements are measurable, not
+// just assumed. telemetry.GetMeter() is safe to call before telemetry.Initialize.
+var mergeOutcomeTotal = mustInt64CounterGit(telemetry.GetMeter(), "git_merge_outcome_total",
+	metric.WithDescription("Count of native merge pipeline outcomes: uptodate, fastforward, cleanmerge, conflicted"))
+
+func recordMergeOutcome(outcome string) {
+	mergeOutcomeTotal.Add(context.Background(), 1, metric.WithAttributes(attribute.String("outcome", outcome)))
+}
 
 // Merge-state file names real git's own `git merge --abort`/`git status` look for to
 // recognize a worktree mid-merge (Domain Glossary: writeMergeStateFiles/
@@ -254,6 +280,7 @@ func nativeMergeMainIntoWorktree(worktreePath, mainBranch string) (*MergeMainRes
 		return nil, fmt.Errorf("nativeMergeMainIntoWorktree: failed to check ancestry (up-to-date): %w", err)
 	}
 	if upToDate {
+		recordMergeOutcome(mergeOutcomeUpToDate)
 		return &MergeMainResult{UpToDate: true}, nil
 	}
 
@@ -273,6 +300,7 @@ func nativeMergeMainIntoWorktree(worktreePath, mainBranch string) (*MergeMainRes
 		if err := nativeFastForwardMerge(worktreePath, ours, theirs, refPath); err != nil {
 			return nil, fmt.Errorf("nativeMergeMainIntoWorktree: fast-forward: %w", err)
 		}
+		recordMergeOutcome(mergeOutcomeFastForward)
 		return &MergeMainResult{Merged: true}, nil
 	}
 
@@ -702,6 +730,7 @@ func materializeConflictAndAbort(worktreePath string, conflicts []conflictedPath
 		return nil, fmt.Errorf("materializeConflictAndAbort: failed to abort: %w", err)
 	}
 
+	recordMergeOutcome(mergeOutcomeConflicted)
 	return &MergeMainResult{Conflicted: true, ConflictedFiles: conflictedFiles}, nil
 }
 
@@ -824,6 +853,7 @@ func commitThreeWayMerge(worktreePath string, repo *git.Repository, oursHash, th
 	if err := writeRefWithLockSentinel(refPath, commitHash); err != nil {
 		return nil, fmt.Errorf("commitThreeWayMerge: failed to advance branch ref: %w", err)
 	}
+	recordMergeOutcome(mergeOutcomeCleanMerge)
 	return &MergeMainResult{Merged: true}, nil
 }
 

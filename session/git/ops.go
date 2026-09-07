@@ -15,6 +15,7 @@ import (
 	"github.com/go-git/go-git/v5/plumbing"
 	fdiff "github.com/go-git/go-git/v5/plumbing/format/diff"
 	"github.com/go-git/go-git/v5/plumbing/object"
+	"go.opentelemetry.io/otel/attribute"
 
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/log"
@@ -817,10 +818,40 @@ type MergeMainResult struct {
 // branchReconciler, which is assigned this exact function value) gets flag coverage with
 // no changes of its own.
 func MergeMainIntoWorktree(worktreePath, mainBranch string) (*MergeMainResult, error) {
-	if useNativeMerge(worktreePath) {
-		return nativeMergeMainIntoWorktree(worktreePath, mainBranch)
+	var result *MergeMainResult
+	ctx := withOperationAttrs(context.Background(), attribute.String("worktree_path", worktreePath))
+	err := withOperationSpan(ctx, "git.merge.main", func() (string, string, error) {
+		native := useNativeMerge(worktreePath)
+		var mergeErr error
+		if native {
+			result, mergeErr = nativeMergeMainIntoWorktree(worktreePath, mainBranch)
+		} else {
+			result, mergeErr = legacyMergeMainIntoWorktree(worktreePath, mainBranch)
+		}
+		return implementationLabel(native), mergeOutcomeLabel(result, mergeErr), mergeErr
+	})
+	return result, err
+}
+
+// mergeOutcomeLabel is MergeMainIntoWorktree's outer-span outcome value: a coarser
+// up_to_date/merged/conflicted breakdown than git_merge_outcome_total's native-only
+// four-way UpToDate/FastForward/CleanMerge/Conflicted split (native_merge.go), since
+// MergeMainResult itself (shared by both the native and legacy implementations) doesn't
+// distinguish a fast-forward from a three-way clean merge — both just set Merged: true.
+func mergeOutcomeLabel(result *MergeMainResult, err error) string {
+	if err != nil || result == nil {
+		return outcomeError
 	}
-	return legacyMergeMainIntoWorktree(worktreePath, mainBranch)
+	switch {
+	case result.Conflicted:
+		return "conflicted"
+	case result.UpToDate:
+		return "up_to_date"
+	case result.Merged:
+		return "merged"
+	default:
+		return outcomeSuccess
+	}
 }
 
 // legacyMergeMainIntoWorktree is MergeMainIntoWorktree's original subprocess-based

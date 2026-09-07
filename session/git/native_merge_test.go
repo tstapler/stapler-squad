@@ -267,3 +267,35 @@ func TestNativeMergeMainIntoWorktree_should_ReturnError_When_FetchFails(t *testi
 	assert.Nil(t, result)
 	assert.NoFileExists(t, filepath.Join(work, ".git", "MERGE_HEAD"))
 }
+
+// TestNativeMergeMainIntoWorktree_IncrementsConflictOutcomeCounter is Task 4.4.2b's
+// validation.md test: a Conflicted: true result must increment
+// git_merge_outcome_total{outcome="conflicted"} by exactly 1. Deliberately not
+// t.Parallel(): it takes a before/after delta on the counter, and Go's testing package
+// runs every non-parallel test in this file to completion before any t.Parallel() test in
+// it resumes, so this avoids racing against the package's other (parallel) merge tests
+// that also produce a "conflicted" outcome.
+func TestNativeMergeMainIntoWorktree_IncrementsConflictOutcomeCounter(t *testing.T) {
+	origin := setupTestRepo(t)
+	work := cloneTestRepo(t, origin)
+	runGit(t, work, "checkout", "-b", "feature")
+
+	require.NoError(t, os.WriteFile(filepath.Join(work, "README.md"), []byte("# Feature Edit\n"), 0o644))
+	runGit(t, work, "add", "README.md")
+	runGit(t, work, "commit", "-m", "feature edits README")
+
+	require.NoError(t, os.WriteFile(filepath.Join(origin, "README.md"), []byte("# Main Edit\n"), 0o644))
+	runGit(t, origin, "add", "README.md")
+	runGit(t, origin, "commit", "-m", "main edits README")
+
+	before := collectGitMetric(t, "git_merge_outcome_total")
+	baseline := sumGitCounterForAttr(t, before, "outcome", mergeOutcomeConflicted)
+
+	result, err := nativeMergeMainIntoWorktree(work, "main")
+	require.NoError(t, err)
+	require.True(t, result.Conflicted)
+
+	after := collectGitMetric(t, "git_merge_outcome_total")
+	require.NotNil(t, after)
+	assert.Equal(t, baseline+1, sumGitCounterForAttr(t, after, "outcome", mergeOutcomeConflicted))
+}
