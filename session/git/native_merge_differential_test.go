@@ -23,7 +23,7 @@ import (
 // Run covers the clean/fast-forward comparison (its only conflict-handling is detecting
 // a *disagreement* about whether a conflict occurred at all). Byte-level conflict-marker
 // comparison is exercised separately via compareConflictMarkerBytes: the real pipeline
-// (materializeConflictAndAbort, native_merge.go) always reverts a conflicted worktree
+// (materializeConflictOnAbort, native_merge.go) always reverts a conflicted worktree
 // back to clean immediately after rendering markers ("materialize, then abort" — see its
 // doc comment), so there is no persisted on-disk conflict state for Run's two-repo
 // subprocess comparison to inspect. assembleConflictedFileContent (also in

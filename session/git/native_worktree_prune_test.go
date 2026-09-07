@@ -58,3 +58,43 @@ func TestNativeWorktreePrune_should_ReturnError_When_ListingFails(t *testing.T) 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "nativeWorktreePrune")
 }
+
+// TestNativeWorktreePrune_ContinuesPastOneFailure_RemovesOtherPrunableEntries covers the
+// fix for nativeWorktreePrune aborting entirely on the first os.RemoveAll failure: two
+// independently-prunable entries, one whose admin dir can't be removed (permission
+// denied), must still both be attempted — the failure is reported, but the other entry
+// is still cleaned up in the same pass.
+func TestNativeWorktreePrune_ContinuesPastOneFailure_RemovesOtherPrunableEntries(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root bypasses directory permission checks, cannot exercise this failure mode")
+	}
+	t.Parallel()
+	repoPath := setupTestRepo(t)
+
+	blockedBranch := "feature-blocked"
+	blockedWorktreePath := filepath.Join(t.TempDir(), blockedBranch)
+	blockedWt := NewGitWorktreeFromStorageWithExecutor(repoPath, blockedWorktreePath, "native-prune-blocked", blockedBranch, "")
+	require.NoError(t, blockedWt.nativeSetupNewWorktree())
+	require.NoError(t, os.RemoveAll(blockedWorktreePath))
+
+	prunableBranch := "feature-prunable"
+	prunableWorktreePath := filepath.Join(t.TempDir(), prunableBranch)
+	prunableWt := NewGitWorktreeFromStorageWithExecutor(repoPath, prunableWorktreePath, "native-prune-prunable", prunableBranch, "")
+	require.NoError(t, prunableWt.nativeSetupNewWorktree())
+	require.NoError(t, os.RemoveAll(prunableWorktreePath))
+
+	blockedAdminDir := filepath.Join(repoPath, ".git", "worktrees", blockedBranch)
+	require.NoError(t, os.Chmod(blockedAdminDir, 0o555))
+	t.Cleanup(func() { _ = os.Chmod(blockedAdminDir, 0o755) })
+
+	err := nativeWorktreePrune(repoPath)
+	require.Error(t, err, "the blocked entry's removal failure must still be reported")
+	assert.Contains(t, err.Error(), "nativeWorktreePrune")
+
+	prunableAdminDir := filepath.Join(repoPath, ".git", "worktrees", prunableBranch)
+	_, statErr := os.Stat(prunableAdminDir)
+	assert.True(t, os.IsNotExist(statErr), "the other prunable entry must still be removed despite the first one's failure")
+
+	_, statErr = os.Stat(blockedAdminDir)
+	assert.NoError(t, statErr, "the blocked entry's admin dir must still exist (removal failed)")
+}

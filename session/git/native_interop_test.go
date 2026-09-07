@@ -67,8 +67,8 @@ func TestCrossImplementation_NativeCreates_LegacyRemovesListsPrunes(t *testing.T
 
 		orig := useNativeWorktree
 		useNativeWorktree = func(string) bool { return true }
+		t.Cleanup(func() { useNativeWorktree = orig })
 		require.NoError(t, wt.Setup())
-		useNativeWorktree = orig
 
 		return repoDir, worktreePath, wt
 	}

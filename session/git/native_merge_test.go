@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
@@ -217,7 +218,7 @@ func TestNativeMergeMainIntoWorktree_CleanThreeWayMerge(t *testing.T) {
 
 // TestNativeMergeMainIntoWorktree_Conflicted_LeavesWorktreeClean covers Task 3.4.1c: an
 // overlapping edit must be reported Conflicted with the correct file list, and — per
-// materializeConflictAndAbort's "always materialize, then abort" decision — leave the
+// materializeConflictOnAbort's "always materialize, then abort" decision — leave the
 // worktree exactly as clean as a real `git merge --abort` would, verified via a real `git
 // status --porcelain` subprocess, not just internal state.
 func TestNativeMergeMainIntoWorktree_Conflicted_LeavesWorktreeClean(t *testing.T) {
@@ -298,4 +299,167 @@ func TestNativeMergeMainIntoWorktree_IncrementsConflictOutcomeCounter(t *testing
 	after := collectGitMetric(t, "git_merge_outcome_total")
 	require.NotNil(t, after)
 	assert.Equal(t, baseline+1, sumGitCounterForAttr(t, after, "outcome", mergeOutcomeConflicted))
+}
+
+// TestNativeMerge_And_NativeSetup_SerializeThroughSameLock proves a native merge and a
+// native Setup() against the same repoPath serialize through the same repoWorktreeLock
+// registry entry — mirroring TestSetupRemove_MixedImplementations_SerializeThroughSameLock's
+// proof strategy (worktree_ops_test.go).
+//
+// Proof strategy: the test acquires the shared repoWorktreeLock's intra-process mutex
+// itself, before launching either call, then confirms both are still blocked (neither
+// returned) after a generous wait — not a timing heuristic, since mu is a genuine
+// sync.Mutex (see the mirrored test's doc comment for the full reasoning).
+func TestNativeMerge_And_NativeSetup_SerializeThroughSameLock(t *testing.T) {
+	origin := setupTestRepo(t)
+	work := cloneTestRepo(t, origin)
+	runGit(t, work, "checkout", "-b", "feature")
+
+	require.NoError(t, os.WriteFile(filepath.Join(origin, "main-fix.txt"), []byte("fix on main\n"), 0o644))
+	runGit(t, origin, "add", "main-fix.txt")
+	runGit(t, origin, "commit", "-m", "fix landed on main")
+
+	origWorktree := useNativeWorktree
+	useNativeWorktree = func(string) bool { return true }
+	t.Cleanup(func() { useNativeWorktree = origWorktree })
+
+	origMerge := useNativeMerge
+	useNativeMerge = func(string) bool { return true }
+	t.Cleanup(func() { useNativeMerge = origMerge })
+
+	wt, _, err := NewGitWorktreeWithBranch(work, "sess-merge-lock", "sess-merge-lock-branch")
+	require.NoError(t, err)
+
+	lockInstance, err := lockForRepo(work)
+	require.NoError(t, err)
+
+	lockInstance.mu.Lock()
+
+	errs := make([]error, 2)
+	done := make(chan int, 2)
+	go func() {
+		errs[0] = wt.Setup()
+		done <- 0
+	}()
+	go func() {
+		_, errs[1] = MergeMainIntoWorktree(work, "main")
+		done <- 1
+	}()
+
+	select {
+	case which := <-done:
+		t.Fatalf("call %d completed while the test held repoWorktreeLock.mu externally -- native merge/setup dispatch is bypassing WithRepoWorktreeLock", which)
+	case <-time.After(150 * time.Millisecond):
+		// Expected: both goroutines are blocked on mu.Lock() inside WithRepoWorktreeLock.
+	}
+
+	lockInstance.mu.Unlock()
+
+	<-done
+	<-done
+	require.NoError(t, errs[0], "native Setup() must not fail")
+	require.NoError(t, errs[1], "native merge must not fail")
+	defer func() { _ = wt.Cleanup() }()
+
+	lockAfter, err := lockForRepo(work)
+	require.NoError(t, err)
+	assert.Same(t, lockInstance, lockAfter, "both calls must resolve to the same repoWorktreeLock singleton for repoPath")
+}
+
+// --- MergeFile pipeline-wiring gap (Phase 6 review): resolveMergePaths must actually
+// call MergeFile for a real two-sided change, not just ReconcilePathChange's content-only
+// merge — otherwise a mode/binary/gitlink mismatch reaches nativeThreeWayMerge undetected
+// despite MergeFile's own short-circuits passing their isolated unit tests
+// (native_merge_diff3_test.go's TestThreeWayFileMerger_*Conflict tests). Each test below
+// drives the real nativeMergeMainIntoWorktree entry point end to end, proving the wiring
+// (bothSidesNonDeleteChanged + buildFileMergeInput + merger.MergeFile in resolveMergePaths)
+// is actually reachable, not just present in source.
+
+// TestNativeMergeMainIntoWorktree_BinaryConflict_ClassifiedAsConflict covers
+// ReasonBinaryConflict: a binary file (NUL byte within git's own sniff length) changed
+// differently on both sides must be reported Conflicted, never fed into line-based diff3.
+func TestNativeMergeMainIntoWorktree_BinaryConflict_ClassifiedAsConflict(t *testing.T) {
+	t.Parallel()
+	origin := setupTestRepo(t)
+	require.NoError(t, os.WriteFile(filepath.Join(origin, "asset.bin"), []byte{0x00, 0x01, 0x02, 0x03, 0x00}, 0o644))
+	runGit(t, origin, "add", "asset.bin")
+	runGit(t, origin, "commit", "-m", "add base binary asset")
+
+	work := cloneTestRepo(t, origin)
+	runGit(t, work, "checkout", "-b", "feature")
+
+	require.NoError(t, os.WriteFile(filepath.Join(work, "asset.bin"), []byte{0xAA, 0xBB, 0xCC, 0x00, 0xDD}, 0o644))
+	runGit(t, work, "add", "asset.bin")
+	runGit(t, work, "commit", "-m", "ours: change binary asset")
+
+	require.NoError(t, os.WriteFile(filepath.Join(origin, "asset.bin"), []byte{0x11, 0x22, 0x00, 0x33, 0x44}, 0o644))
+	runGit(t, origin, "add", "asset.bin")
+	runGit(t, origin, "commit", "-m", "theirs: change binary asset differently")
+
+	result, err := nativeMergeMainIntoWorktree(work, "main")
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.True(t, result.Conflicted, "a binary file changed differently on both sides must be classified as a conflict")
+	assert.Contains(t, result.ConflictedFiles, "asset.bin")
+
+	status := runGit(t, work, "status", "--porcelain")
+	assert.Empty(t, strings.TrimSpace(status), "a binary conflict must still leave the worktree clean after abort")
+}
+
+// TestNativeMergeMainIntoWorktree_ModeConflict_ClassifiedAsConflict covers
+// ReasonModeConflict: ours changes only the file's mode (content untouched) while theirs
+// changes only the content (mode untouched) — the two resulting modes differ, which must
+// be reported Conflicted rather than silently picking one side's mode.
+func TestNativeMergeMainIntoWorktree_ModeConflict_ClassifiedAsConflict(t *testing.T) {
+	t.Parallel()
+	origin := setupTestRepo(t)
+	require.NoError(t, os.WriteFile(filepath.Join(origin, "script.sh"), []byte("echo hi\n"), 0o644))
+	runGit(t, origin, "add", "script.sh")
+	runGit(t, origin, "commit", "-m", "add base script")
+
+	work := cloneTestRepo(t, origin)
+	runGit(t, work, "checkout", "-b", "feature")
+
+	require.NoError(t, os.Chmod(filepath.Join(work, "script.sh"), 0o755))
+	runGit(t, work, "add", "script.sh")
+	runGit(t, work, "commit", "-m", "ours: chmod +x, content unchanged")
+
+	require.NoError(t, os.WriteFile(filepath.Join(origin, "script.sh"), []byte("echo hi\necho there\n"), 0o644))
+	runGit(t, origin, "add", "script.sh")
+	runGit(t, origin, "commit", "-m", "theirs: edit content, mode unchanged")
+
+	result, err := nativeMergeMainIntoWorktree(work, "main")
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.True(t, result.Conflicted, "differing resolved file modes must be classified as a conflict")
+	assert.Contains(t, result.ConflictedFiles, "script.sh")
+}
+
+// TestNativeMergeMainIntoWorktree_GitlinkConflict_ClassifiedAsConflict covers
+// ReasonGitlinkConflict: a submodule entry (mode 160000, pointing at a commit SHA rather
+// than a blob) advanced to different commits on both sides. Neither side needs a real,
+// initialized submodule checkout — a gitlink is just a 160000-mode tree entry, and git
+// itself tolerates one with no .gitmodules registration as a plain empty directory — so
+// this builds it directly via `git update-index --cacheinfo` rather than a real
+// `git submodule add`.
+func TestNativeMergeMainIntoWorktree_GitlinkConflict_ClassifiedAsConflict(t *testing.T) {
+	t.Parallel()
+	origin := setupTestRepo(t)
+	runGit(t, origin, "update-index", "--add", "--cacheinfo", "160000,1111111111111111111111111111111111111111,vendor/lib")
+	runGit(t, origin, "commit", "-m", "add base gitlink")
+
+	work := cloneTestRepo(t, origin)
+	runGit(t, work, "checkout", "-b", "feature")
+
+	runGit(t, work, "update-index", "--add", "--cacheinfo", "160000,2222222222222222222222222222222222222222,vendor/lib")
+	runGit(t, work, "commit", "-m", "ours: point gitlink elsewhere")
+
+	runGit(t, origin, "update-index", "--add", "--cacheinfo", "160000,3333333333333333333333333333333333333333,vendor/lib")
+	runGit(t, origin, "commit", "-m", "theirs: point gitlink elsewhere")
+
+	result, err := nativeMergeMainIntoWorktree(work, "main")
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.True(t, result.Conflicted, "a gitlink advanced to different commits on both sides must be classified as a conflict")
+	assert.Contains(t, result.ConflictedFiles, "vendor/lib")
 }

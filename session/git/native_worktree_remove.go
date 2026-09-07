@@ -3,6 +3,8 @@ package git
 import (
 	"fmt"
 	"os"
+
+	"github.com/tstapler/stapler-squad/log"
 )
 
 // nativeRemoveWorktree is the pure-Go replacement for removeLocked's subprocess `git
@@ -27,7 +29,9 @@ func nativeRemoveWorktree(repoPath, worktreePath string) error {
 		if err := os.RemoveAll(worktreePath); err != nil {
 			return fmt.Errorf("nativeRemoveWorktree: failed to remove working tree %q: %w", worktreePath, err)
 		}
-	} else if !os.IsNotExist(statErr) {
+	} else if os.IsNotExist(statErr) {
+		log.Info("nativeRemoveWorktree: worktree directory does not exist", "path", worktreePath)
+	} else {
 		return fmt.Errorf("nativeRemoveWorktree: failed to stat working tree %q: %w", worktreePath, statErr)
 	}
 

@@ -824,7 +824,7 @@ func MergeMainIntoWorktree(worktreePath, mainBranch string) (*MergeMainResult, e
 		native := useNativeMerge(worktreePath)
 		var mergeErr error
 		if native {
-			result, mergeErr = nativeMergeMainIntoWorktree(worktreePath, mainBranch)
+			result, mergeErr = nativeMergeMainIntoWorktreeLocked(worktreePath, mainBranch)
 		} else {
 			result, mergeErr = legacyMergeMainIntoWorktree(worktreePath, mainBranch)
 		}

@@ -42,7 +42,7 @@ const goldenConflictAFixturePath = "testdata/golden_conflict_a.txt"
 // ThreeWayFileMerger.Merge (Epic 3.2's diff3 reconciliation) followed by
 // assembleConflictedFileContent/renderConflictHunk (Epic 3.3's marker rendering) — using
 // the same base/ours/theirs content and the same "HEAD"/"origin/main" labels
-// materializeConflictAndAbort passes in production (native_merge.go), rather than
+// materializeConflictOnAbort passes in production (native_merge.go), rather than
 // hand-constructing the hunks the pipeline would produce.
 func TestNativeMerge_ConflictMarkers_MatchGoldenFixture(t *testing.T) {
 	t.Parallel()
@@ -61,7 +61,7 @@ func TestNativeMerge_ConflictMarkers_MatchGoldenFixture(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEmpty(t, result.Conflicts(), "this scenario must produce a real conflict, matching the golden fixture's generation run")
 
-	// oursLabel/theirsLabel match materializeConflictAndAbort's exact production call
+	// oursLabel/theirsLabel match materializeConflictOnAbort's exact production call
 	// (native_merge.go): "HEAD" and "origin/"+mainBranch.
 	content, err := assembleConflictedFileContent(result.Hunks, "HEAD", "origin/main")
 	require.NoError(t, err)

@@ -98,3 +98,50 @@ func TestNativeListWorktrees_NoWorktreesDir_ReturnsEmptyNoError(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, entries)
 }
+
+// TestNativeListWorktrees_CrashPartialAdminDir_IsPrunableAlongsideHealthyEntries covers
+// the fix for a crash between this project's own "locked" and "gitdir" admin-file writes
+// (native_worktree_add.go's writeNativeWorktreeAdminFiles) — research/pitfalls.md (citing
+// GitoxideLabs/gitoxide#2959) documents this as real git's own well-defined, tolerable
+// partial state. A single such entry must not abort the whole repo's listing: healthy
+// entries must still list correctly, the broken one must be classified Prunable, and
+// nativeWorktreePrune must be able to clean it up afterward.
+func TestNativeListWorktrees_CrashPartialAdminDir_IsPrunableAlongsideHealthyEntries(t *testing.T) {
+	t.Parallel()
+	branchName := "feature-healthy"
+	repoPath, worktreePath := newNativeRemoveFixture(t, branchName)
+
+	brokenAdminDir := filepath.Join(repoPath, ".git", "worktrees", "crash-partial")
+	require.NoError(t, os.MkdirAll(brokenAdminDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(brokenAdminDir, "locked"), []byte("initializing"), 0o644))
+	// Deliberately no "gitdir" file — this is the crash-partial state under test.
+
+	entries, err := nativeListWorktrees(repoPath)
+	require.NoError(t, err, "one crash-partial admin dir must not abort the whole repo's listing")
+	require.Len(t, entries, 2)
+
+	var healthy, broken *NativeWorktreeEntry
+	for i := range entries {
+		switch entries[i].Name {
+		case branchName:
+			healthy = &entries[i]
+		case "crash-partial":
+			broken = &entries[i]
+		}
+	}
+	require.NotNil(t, healthy, "healthy entry must still be listed")
+	require.NotNil(t, broken, "crash-partial entry must still be listed, not dropped")
+
+	assert.False(t, healthy.Prunable)
+	assert.Equal(t, CanonicalizeWorktreePath(worktreePath), CanonicalizeWorktreePath(healthy.WorktreePath))
+
+	assert.True(t, broken.Prunable, "an admin dir with no gitdir file must be classified prunable")
+	assert.Empty(t, broken.WorktreePath)
+
+	require.NoError(t, nativeWorktreePrune(repoPath), "prune must be able to clean up the crash-partial entry")
+	_, statErr := os.Stat(brokenAdminDir)
+	assert.True(t, os.IsNotExist(statErr), "nativeWorktreePrune must remove the crash-partial admin dir")
+
+	_, statErr = os.Stat(filepath.Join(repoPath, ".git", "worktrees", branchName))
+	assert.NoError(t, statErr, "the healthy worktree's admin dir must survive prune")
+}

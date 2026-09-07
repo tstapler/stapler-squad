@@ -12,7 +12,6 @@ import {
 import { SessionService } from "@/gen/session/v1/session_pb";
 import { getConnectTransport } from "@/lib/api/transport";
 import { useAnalytics } from "@/lib/analytics";
-import { vars } from "@/styles/theme.css";
 // ponytail: reuses StreamHubRolloutPanel's stylesheet — the class names
 // (panel, heading, statusRow, ...) are generic, not stream-hub-specific, and
 // this panel's markup is deliberately shaped the same way.
@@ -172,8 +171,7 @@ function RolloutSection({ testidPrefix, copy, status, overrides, conflict, input
       <div className={styles.statusRow}>
         <span className={styles.statusLabel}>Global override</span>
         <span
-          className={`${styles.badge} ${badgeClassName(status.globalState)}`}
-          style={isUnknown ? { background: vars.color.warningBg, color: vars.color.warningText } : undefined}
+          className={`${styles.badge} ${isUnknown ? styles.badgeUnknown : badgeClassName(status.globalState)}`}
           data-testid={`${testidPrefix}-global-badge`}
         >
           {badgeText(status.globalState)}
@@ -219,16 +217,15 @@ function RolloutSection({ testidPrefix, copy, status, overrides, conflict, input
             return (
               <li
                 key={o.key}
-                className={styles.overrideRow}
+                className={[styles.overrideRow, conflicted && styles.overrideRowConflicted].filter(Boolean).join(" ")}
                 data-testid={`${testidPrefix}-override-row`}
-                style={conflicted ? { background: vars.color.warningBg } : undefined}
               >
                 <span className={styles.statusLabel}>{o.key}</span>
                 <span className={`${styles.badge} ${o.forced ? styles.badgeEnabled : styles.badgeDisabled}`}>
                   {o.forced ? "Forced on" : "Forced off"}
                 </span>
                 <button
-                  className={styles.removeButton}
+                  className={[styles.removeButton, conflicted && styles.removeButtonConflicted].filter(Boolean).join(" ")}
                   data-testid={`${testidPrefix}-remove-override`}
                   disabled={status.busy}
                   onClick={() => {
@@ -239,7 +236,6 @@ function RolloutSection({ testidPrefix, copy, status, overrides, conflict, input
                     actions.onRemoveOverride(o.key);
                   }}
                   aria-label={ariaLabels.remove(o.key)}
-                  style={conflicted ? { borderColor: vars.color.warning, borderWidth: "2px" } : undefined}
                 >
                   Remove
                 </button>
@@ -251,10 +247,9 @@ function RolloutSection({ testidPrefix, copy, status, overrides, conflict, input
 
       {conflict.message && (
         <p
-          className={styles.hint}
+          className={`${styles.hint} ${styles.hintWarning}`}
           role="status"
           data-testid={`${testidPrefix}-precedence-note`}
-          style={{ color: vars.color.warningText }}
         >
           {conflict.message}{" "}
           <button

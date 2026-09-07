@@ -102,8 +102,9 @@ func (g *GitWorktree) branchExistsAfterAddFailure(branchRef plumbing.ReferenceNa
 func (g *GitWorktree) Setup() error {
 	ctx := withOperationAttrs(context.Background(), attribute.String("session_name", g.sessionName))
 	return withOperationSpan(ctx, "git.worktree.add", func() (string, string, error) {
-		err := WithRepoWorktreeLock(g.repoPath, g.setupLocked)
-		return implementationLabel(useNativeWorktree(g.sessionName)), spanOutcome(err), err
+		native := useNativeWorktree(g.sessionName)
+		err := WithRepoWorktreeLock(g.repoPath, func() error { return g.setupLockedWithNative(native) })
+		return implementationLabel(native), spanOutcome(err), err
 	})
 }
 
@@ -122,6 +123,15 @@ func (g *GitWorktree) SetupLocked() error {
 }
 
 func (g *GitWorktree) setupLocked() error {
+	return g.setupLockedWithNative(useNativeWorktree(g.sessionName))
+}
+
+// setupLockedWithNative is setupLocked's body, taking the native-flag resolution as a
+// parameter instead of re-reading useNativeWorktree(g.sessionName) itself — Setup() reads
+// the flag once and passes it through here so its span's implementation label and its
+// actual dispatch decision can never disagree if the flag flips mid-operation (mirroring
+// removeLocked's and findLiveWorktreeForBranch's existing single-read pattern).
+func (g *GitWorktree) setupLockedWithNative(native bool) error {
 	// Ensure worktrees directory exists early (can be done in parallel with branch check)
 	worktreesDir, err := getWorktreeDirectory()
 	if err != nil {
@@ -166,7 +176,10 @@ func (g *GitWorktree) setupLocked() error {
 	if branchExists {
 		return g.setupFromExistingBranch()
 	}
-	return g.setupNewWorktree()
+	if native {
+		return g.nativeSetupNewWorktreeWithSelfHeal()
+	}
+	return g.legacySetupNewWorktree()
 }
 
 // setupFromExistingBranch creates a worktree from an existing branch, reusing one
@@ -802,16 +815,19 @@ func (g *GitWorktree) forceCleanupWorktree() error {
 func (g *GitWorktree) Prune() error {
 	ctx := withOperationAttrs(context.Background(), attribute.String("session_name", g.sessionName))
 	return withOperationSpan(ctx, "git.worktree.prune", func() (string, string, error) {
-		err := WithRepoWorktreeLock(g.repoPath, g.pruneLocked)
-		return implementationLabel(useNativeWorktree(g.sessionName)), spanOutcome(err), err
+		native := useNativeWorktree(g.sessionName)
+		err := WithRepoWorktreeLock(g.repoPath, func() error { return g.pruneLockedWithNative(native) })
+		return implementationLabel(native), spanOutcome(err), err
 	})
 }
 
-// pruneLocked dispatches to nativeWorktreePrune/legacyWorktreePrune per
-// useNativeWorktree(g.sessionName) (Epic 2.4, Task 2.4.2a), mirroring setupNewWorktree's
-// and removeLocked's dispatch pattern.
-func (g *GitWorktree) pruneLocked() error {
-	if useNativeWorktree(g.sessionName) {
+// pruneLockedWithNative dispatches to nativeWorktreePrune/legacyWorktreePrune per the
+// native flag passed in (Epic 2.4, Task 2.4.2a), mirroring setupLockedWithNative's and
+// removeLocked's single-read dispatch pattern — Prune() reads the flag once and passes it
+// through here so its span's implementation label and its actual dispatch decision can
+// never disagree if the flag flips mid-operation.
+func (g *GitWorktree) pruneLockedWithNative(native bool) error {
+	if native {
 		return nativeWorktreePrune(g.repoPath)
 	}
 	return g.legacyWorktreePrune()

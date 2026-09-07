@@ -233,6 +233,42 @@ func restoreWorkingTreeFile(worktreePath, path string, content []byte) error {
 	return os.WriteFile(fullPath, content, mode)
 }
 
+// nativeMergeMainIntoWorktreeLocked wraps nativeMergeMainIntoWorktree in
+// WithRepoWorktreeLock, keyed on the same repo path Setup()/removeLocked()/pruneLocked()
+// already serialize their own dispatch through (worktree_ops.go). Without this,
+// nativeMergeMainIntoWorktree ran with zero synchronization against a concurrent
+// nativeSetupNewWorktree/nativeRemoveWorktree/nativeWorktreePrune on the same repo, or a
+// second concurrent merge — a real gap against this project's own ADR-001/plan.md claim
+// that WithRepoWorktreeLock is the load-bearing safety net making a flag flip mid-burst
+// safe.
+func nativeMergeMainIntoWorktreeLocked(worktreePath, mainBranch string) (*MergeMainResult, error) {
+	repoPath, err := repoPathForWorktree(worktreePath)
+	if err != nil {
+		return nil, fmt.Errorf("nativeMergeMainIntoWorktreeLocked: %w", err)
+	}
+
+	var result *MergeMainResult
+	lockErr := WithRepoWorktreeLock(repoPath, func() error {
+		var mergeErr error
+		result, mergeErr = nativeMergeMainIntoWorktree(worktreePath, mainBranch)
+		return mergeErr
+	})
+	return result, lockErr
+}
+
+// repoPathForWorktree resolves the main repository's working-directory path from a
+// worktree (or main-checkout) path — the same repoPath value GitWorktree carries
+// internally and locks worktree lifecycle operations against — by taking the parent of
+// worktreeCommonGitDir's shared `.git` admin directory. Needed because
+// MergeMainIntoWorktree only ever receives worktreePath, never a separate repoPath.
+func repoPathForWorktree(worktreePath string) (string, error) {
+	commonGitDir, err := worktreeCommonGitDir(worktreePath)
+	if err != nil {
+		return "", fmt.Errorf("repoPathForWorktree: %w", err)
+	}
+	return filepath.Dir(commonGitDir), nil
+}
+
 // nativeMergeMainIntoWorktree is MergeMainIntoWorktree's pure-Go, go-git-based
 // implementation (Epic 3.4), dispatched to by the public MergeMainIntoWorktree when
 // useNativeMerge(worktreePath) is true (ADR-002). It fetches mainBranch from origin (the
@@ -535,9 +571,47 @@ func resolveMergePaths(byPath map[string]*PathChange) (*mergePathResolution, err
 			return nil, fmt.Errorf("resolveMergePaths: failed to determine mode for %q: %w", p, err)
 		}
 
-		result, err := merger.ReconcilePathChange(pc)
+		// A real two-sided change (both ours and theirs touched this path, neither as a
+		// delete) runs through MergeFile's mode/binary/gitlink short-circuits before any
+		// content-level diff3 merge — the wiring gap this project's own Phase 6 review
+		// caught: MergeFile existed and passed its own isolated unit tests, but this
+		// pipeline called ReconcilePathChange directly, which never invokes MergeFile at
+		// all, so a mode/binary/gitlink mismatch could reach a real merge undetected.
+		// Every other shape (single-sided change, or one side deleted) has no second side
+		// to conflict against, so it still goes straight to ReconcilePathChange, unchanged.
+		bothModified, err := bothSidesNonDeleteChanged(pc)
 		if err != nil {
-			return nil, fmt.Errorf("resolveMergePaths: failed to reconcile %q: %w", p, err)
+			return nil, fmt.Errorf("resolveMergePaths: failed to classify %q: %w", p, err)
+		}
+
+		var result *MergeResult
+		if bothModified {
+			in, buildErr := buildFileMergeInput(pc)
+			if buildErr != nil {
+				return nil, fmt.Errorf("resolveMergePaths: failed to read three-way content for %q: %w", p, buildErr)
+			}
+			outcome, mergeErr := merger.MergeFile(in)
+			if mergeErr != nil {
+				return nil, fmt.Errorf("resolveMergePaths: failed to reconcile %q: %w", p, mergeErr)
+			}
+			if outcome.Reason != ReasonNone {
+				base, ours, theirs, hashErr := conflictHashes(pc)
+				if hashErr != nil {
+					return nil, fmt.Errorf("resolveMergePaths: failed to resolve conflict blob hashes for %q: %w", p, hashErr)
+				}
+				res.conflicts = append(res.conflicts, conflictedPathMerge{
+					path: p, mode: mode,
+					baseHash: base, oursHash: ours, theirsHash: theirs,
+					hunks: nonTextConflictHunks(outcome.Reason, in),
+				})
+				continue
+			}
+			result = outcome.Result
+		} else {
+			result, err = merger.ReconcilePathChange(pc)
+			if err != nil {
+				return nil, fmt.Errorf("resolveMergePaths: failed to reconcile %q: %w", p, err)
+			}
 		}
 
 		if result.Conflicted {
@@ -646,6 +720,68 @@ func conflictHashes(pc *PathChange) (base, ours, theirs plumbing.Hash, err error
 	return pc.Ours.From.TreeEntry.Hash, pc.Ours.To.TreeEntry.Hash, pc.Theirs.To.TreeEntry.Hash, nil
 }
 
+// bothSidesNonDeleteChanged reports whether pc represents a real two-sided change: both
+// ours and theirs touched the path, and neither side's change is a delete. This is the
+// only shape MergeFile's mode/binary/gitlink short-circuits apply to — a single-sided
+// change (the other side nil) or a one-side-delete has no second side to conflict
+// against, so resolveMergePaths keeps routing those straight to ReconcilePathChange.
+func bothSidesNonDeleteChanged(pc *PathChange) (bool, error) {
+	if pc.Ours == nil || pc.Theirs == nil {
+		return false, nil
+	}
+	oursDeleted, err := changeIsDelete(pc.Ours)
+	if err != nil {
+		return false, fmt.Errorf("bothSidesNonDeleteChanged: failed to classify ours: %w", err)
+	}
+	theirsDeleted, err := changeIsDelete(pc.Theirs)
+	if err != nil {
+		return false, fmt.Errorf("bothSidesNonDeleteChanged: failed to classify theirs: %w", err)
+	}
+	return !oursDeleted && !theirsDeleted, nil
+}
+
+// buildFileMergeInput extracts pc's three-way content and file modes for MergeFile's
+// mode/binary/gitlink short-circuits (Story 3.2.3) — callers only reach this once
+// bothSidesNonDeleteChanged(pc) is true, mirroring ReconcilePathChange's own final-branch
+// precondition (both pc.Ours and pc.Theirs non-nil and non-delete).
+func buildFileMergeInput(pc *PathChange) (FileMergeInput, error) {
+	_, oursContent, err := changeContents(pc.Ours)
+	if err != nil {
+		return FileMergeInput{}, fmt.Errorf("buildFileMergeInput: failed to read ours content: %w", err)
+	}
+	baseContent, theirsContent, err := changeContents(pc.Theirs)
+	if err != nil {
+		return FileMergeInput{}, fmt.Errorf("buildFileMergeInput: failed to read base/theirs content: %w", err)
+	}
+	return FileMergeInput{
+		BaseMode:      pc.Theirs.From.TreeEntry.Mode,
+		OursMode:      pc.Ours.To.TreeEntry.Mode,
+		TheirsMode:    pc.Theirs.To.TreeEntry.Mode,
+		BaseContent:   []byte(baseContent),
+		OursContent:   []byte(oursContent),
+		TheirsContent: []byte(theirsContent),
+	}, nil
+}
+
+// nonTextConflictHunks builds the working-tree conflict representation for a MergeFile
+// mode/binary short-circuit: a single conflicting region spanning the whole file.
+// materializeConflictOnAbort always reverts its working-tree write before
+// nativeMergeMainIntoWorktree returns (see that function's doc comment), so rendering
+// textual markers over binary content is safe — they are never actually left on disk. A
+// gitlink conflict returns no hunks at all: a Submodule-mode path is a directory, not a
+// blob, so materializeConflictOnAbort and capturePreMergeSnapshot both skip working-tree
+// content entirely for it (checked via c.mode there).
+func nonTextConflictHunks(reason FileConflictReason, in FileMergeInput) []MergeHunk {
+	if reason == ReasonGitlinkConflict {
+		return nil
+	}
+	return []MergeHunk{{
+		Kind:   RegionConflict,
+		Ours:   splitLines(string(in.OursContent)),
+		Theirs: splitLines(string(in.TheirsContent)),
+	}}
+}
+
 // nativeThreeWayMerge runs the diff3 pipeline over every path base/ours/theirs disagree
 // on and either produces a real merge commit (no conflicts) or materializes conflict
 // markers and aborts (Tasks 3.4.1b/3.4.1c).
@@ -683,22 +819,22 @@ func nativeThreeWayMerge(worktreePath string, repo *git.Repository, ours, theirs
 	}
 
 	if len(resolution.conflicts) > 0 {
-		return materializeConflictAndAbort(worktreePath, resolution.conflicts, theirs.Hash, mainBranch)
+		return materializeConflictOnAbort(worktreePath, resolution.conflicts, theirs.Hash, mainBranch)
 	}
 	return commitThreeWayMerge(worktreePath, repo, ours.Hash, theirs.Hash, resolution.resolved, refPath, mainBranch)
 }
 
-// materializeConflictAndAbort writes every conflicted path's stage-1/2/3 index entries
+// materializeConflictOnAbort writes every conflicted path's stage-1/2/3 index entries
 // and conflict-marker working-tree content plus the merge-state files (Task 3.4.1c, per
 // Story 3.3.3's "always materialize, then abort" decision), then immediately calls
 // abortNativeMerge to restore the pre-merge state — the worktree ends up exactly as clean
 // as a real `git merge --abort` would leave it, verified in
 // TestNativeMergeMainIntoWorktree_Conflicted_LeavesWorktreeClean via a real `git status
 // --porcelain` subprocess.
-func materializeConflictAndAbort(worktreePath string, conflicts []conflictedPathMerge, theirsHash plumbing.Hash, mainBranch string) (*MergeMainResult, error) {
+func materializeConflictOnAbort(worktreePath string, conflicts []conflictedPathMerge, theirsHash plumbing.Hash, mainBranch string) (*MergeMainResult, error) {
 	snapshot, err := capturePreMergeSnapshot(worktreePath, conflicts)
 	if err != nil {
-		return nil, fmt.Errorf("materializeConflictAndAbort: failed to capture pre-merge snapshot: %w", err)
+		return nil, fmt.Errorf("materializeConflictOnAbort: failed to capture pre-merge snapshot: %w", err)
 	}
 
 	theirsLabel := "origin/" + mainBranch
@@ -709,25 +845,31 @@ func materializeConflictAndAbort(worktreePath string, conflicts []conflictedPath
 		conflictEntries = append(conflictEntries, NewConflictEntries(c.path, c.baseHash, c.oursHash, c.theirsHash, c.mode)...)
 	}
 	if err := writeConflictedIndex(worktreePath, conflictEntries); err != nil {
-		return nil, fmt.Errorf("materializeConflictAndAbort: failed to write conflicted index: %w", err)
+		return nil, fmt.Errorf("materializeConflictOnAbort: failed to write conflicted index: %w", err)
 	}
 
 	for _, c := range conflicts {
+		if c.mode == filemode.Submodule {
+			// A gitlink conflict (Story 3.2.3c): the path is a submodule directory, not
+			// a blob, so there is no working-tree file content to render markers into
+			// — nonTextConflictHunks already returns no hunks for this case.
+			continue
+		}
 		content, renderErr := assembleConflictedFileContent(c.hunks, "HEAD", theirsLabel)
 		if renderErr != nil {
-			return nil, fmt.Errorf("materializeConflictAndAbort: failed to render markers for %q: %w", c.path, renderErr)
+			return nil, fmt.Errorf("materializeConflictOnAbort: failed to render markers for %q: %w", c.path, renderErr)
 		}
 		if writeErr := writeWorkingTreeFile(worktreePath, c.path, c.mode, []byte(content)); writeErr != nil {
-			return nil, fmt.Errorf("materializeConflictAndAbort: failed to write markers for %q: %w", c.path, writeErr)
+			return nil, fmt.Errorf("materializeConflictOnAbort: failed to write markers for %q: %w", c.path, writeErr)
 		}
 	}
 
 	if err := writeMergeStateFiles(worktreePath, theirsHash.String(), mainBranch); err != nil {
-		return nil, fmt.Errorf("materializeConflictAndAbort: failed to write merge-state files: %w", err)
+		return nil, fmt.Errorf("materializeConflictOnAbort: failed to write merge-state files: %w", err)
 	}
 
 	if err := abortNativeMerge(worktreePath, snapshot); err != nil {
-		return nil, fmt.Errorf("materializeConflictAndAbort: failed to abort: %w", err)
+		return nil, fmt.Errorf("materializeConflictOnAbort: failed to abort: %w", err)
 	}
 
 	recordMergeOutcome(mergeOutcomeConflicted)
@@ -736,7 +878,7 @@ func materializeConflictAndAbort(worktreePath string, conflicts []conflictedPath
 
 // capturePreMergeSnapshot reads each conflicted path's current (pre-merge) stage-0 index
 // entry and working-tree content, for abortNativeMerge to restore after
-// materializeConflictAndAbort's transient write. A path with no pre-merge index entry
+// materializeConflictOnAbort's transient write. A path with no pre-merge index entry
 // (an add/add conflict neither side's ancestor had) is a known gap: abortNativeMerge's
 // own touched-path set is derived solely from snapshot.Entries (see its doc comment), so
 // such a path's conflict-stage entries would not be cleared from the index by this call —
@@ -760,6 +902,12 @@ func capturePreMergeSnapshot(worktreePath string, conflicts []conflictedPathMerg
 	for _, c := range conflicts {
 		if e, ok := byName[c.path]; ok {
 			snapshot.Entries = append(snapshot.Entries, e)
+		}
+		if c.mode == filemode.Submodule {
+			// A gitlink path is a submodule directory, not a regular file — os.ReadFile
+			// would fail on it, and there is no working-tree blob content to snapshot
+			// or later restore (see materializeConflictOnAbort's matching skip).
+			continue
 		}
 		content, readErr := os.ReadFile(filepath.Join(worktreePath, c.path))
 		if readErr != nil {

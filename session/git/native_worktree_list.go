@@ -53,11 +53,7 @@ func nativeListWorktrees(repoPath string) ([]NativeWorktreeEntry, error) {
 			continue
 		}
 		adminDir := filepath.Join(worktreesDir, dirEntry.Name())
-		entry, err := buildNativeWorktreeEntry(dirEntry.Name(), adminDir)
-		if err != nil {
-			return nil, err
-		}
-		entries = append(entries, entry)
+		entries = append(entries, buildNativeWorktreeEntry(dirEntry.Name(), adminDir))
 	}
 	return entries, nil
 }
@@ -65,10 +61,19 @@ func nativeListWorktrees(repoPath string) ([]NativeWorktreeEntry, error) {
 // buildNativeWorktreeEntry reads adminDir's GitdirFile, HEAD, and LockedMarker to build
 // one NativeWorktreeEntry (Task 2.3.1a), then classifies it per Task 2.3.1b's rule:
 // Prunable = (WorktreePath missing) && !Locked.
-func buildNativeWorktreeEntry(name, adminDir string) (NativeWorktreeEntry, error) {
+//
+// A missing/unreadable GitdirFile is not treated as an error: this project's own write
+// order (native_worktree_add.go's writeNativeWorktreeAdminFiles writes LockedMarker
+// before GitdirFile) means a crash between those two writes is real git's own
+// well-defined, tolerable partial state (research/pitfalls.md, citing
+// GitoxideLabs/gitoxide#2959) — every read path over `.git/worktrees/*` must tolerate it,
+// not abort. Such an entry is unparseable and classified Prunable so
+// nativeWorktreePrune can clean it up, the same outcome real git's own `worktree
+// list`/`worktree prune` give this exact partial state.
+func buildNativeWorktreeEntry(name, adminDir string) NativeWorktreeEntry {
 	worktreePath, err := readWorktreePathFromGitdirFile(adminDir)
 	if err != nil {
-		return NativeWorktreeEntry{}, err
+		return NativeWorktreeEntry{Name: name, Prunable: true}
 	}
 
 	locked := fileExistsOnDisk(filepath.Join(adminDir, "locked"))
@@ -80,7 +85,7 @@ func buildNativeWorktreeEntry(name, adminDir string) (NativeWorktreeEntry, error
 		BranchRef:    readWorktreeHEADRef(adminDir),
 		Locked:       locked,
 		Prunable:     prunable,
-	}, nil
+	}
 }
 
 // readWorktreePathFromGitdirFile reads adminDir's GitdirFile — an absolute path to the
