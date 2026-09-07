@@ -515,7 +515,19 @@ func (g *GitWorktree) Remove() error {
 	return WithRepoWorktreeLock(g.repoPath, g.removeLocked)
 }
 
+// removeLocked dispatches to nativeRemoveWorktree/legacyRemoveWorktree per
+// useNativeWorktree(g.sessionName) (Epic 2.2, Task 2.2.2a), mirroring setupNewWorktree's
+// and unlockWorktree's dispatch pattern.
 func (g *GitWorktree) removeLocked() error {
+	if useNativeWorktree(g.sessionName) {
+		return nativeRemoveWorktree(g.repoPath, g.worktreePath)
+	}
+	return g.legacyRemoveWorktree()
+}
+
+// legacyRemoveWorktree is the renamed body of the original subprocess-based removeLocked
+// (Task 2.2.2a) — identical logic, reachable when useNativeWorktree resolves false.
+func (g *GitWorktree) legacyRemoveWorktree() error {
 	log.Info("starting worktree removal", "path", g.worktreePath)
 
 	// First, prune any stale worktree references
@@ -699,6 +711,16 @@ func (g *GitWorktree) Prune() error {
 // exist nowhere else (never pushed, never merged), and this function has no way to know
 // whether that's true for any given one. See GitWorktree.Cleanup's doc comment — same fix,
 // same root cause (docs/tasks/backlog-feature-improvement.md).
+//
+// Task 2.2.2c disposition: a real, non-test caller exists (main.go's `reset` command),
+// contradicting architecture.md §1a's "none found" — recorded here per the Unresolved
+// Questions entry. It is deliberately left un-dispatched, though: its per-directory
+// removal below is already a direct os.RemoveAll (no subprocess to seam), and its one
+// subprocess call is `git worktree prune`, which is Epic 2.4's native-prune seam
+// (nativeWorktreePrune) — not yet implemented, since Epic 2.4 depends on Epic 2.3's
+// on-disk model, both of which build on this epic rather than the reverse. Giving this
+// function the same dispatch as GitWorktree.Prune (as the Unresolved Questions entry
+// specifies) is blocked on that later epic landing, not skippable within Epic 2.2's scope.
 func CleanupWorktrees() error {
 	worktreesDir, err := getWorktreeDirectory()
 	if err != nil {

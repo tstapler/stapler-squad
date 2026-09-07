@@ -789,3 +789,34 @@ func TestSetupFromExistingBranch_NativeFlagOn_UnlockUsesNativeImplementation(t *
 	_, statErr := os.Stat(filepath.Join(adminDir, "locked"))
 	assert.True(t, os.IsNotExist(statErr), "nativeUnlockWorktree must have removed the locked marker directly")
 }
+
+// TestRemove_NativeFlagOn_UsesNativeImplementation_ZeroSubprocessCalls covers Story
+// 2.2.2's acceptance criterion: with the flag on, Remove() dispatches to
+// nativeRemoveWorktree with zero subprocess calls recorded, instead of legacyRemoveWorktree's
+// `git worktree prune`/`git worktree remove` subprocess calls.
+func TestRemove_NativeFlagOn_UsesNativeImplementation_ZeroSubprocessCalls(t *testing.T) {
+	repoDir := setupTestRepo(t)
+	branchName := "feature-native-remove"
+	worktreePath := filepath.Join(t.TempDir(), branchName)
+
+	orig := useNativeWorktree
+	useNativeWorktree = func(string) bool { return true }
+	t.Cleanup(func() { useNativeWorktree = orig })
+
+	seedWt := NewGitWorktreeFromStorageWithExecutor(repoDir, worktreePath, "test-native-remove-seed", branchName, "")
+	require.NoError(t, seedWt.nativeSetupNewWorktree())
+
+	spy := &gitSpyCommandRunner{}
+	wt := NewGitWorktreeFromStorageWithExecutor(repoDir, worktreePath, "test-native-remove", branchName, "", WithCommandRunner(spy))
+
+	require.NoError(t, wt.Remove())
+
+	assert.Empty(t, spy.runCalls, "native path must issue zero git subprocess invocations for the worktree-remove step")
+
+	_, err := os.Stat(worktreePath)
+	assert.True(t, os.IsNotExist(err), "native remove must have deleted the working directory")
+
+	adminDir := filepath.Join(repoDir, ".git", "worktrees", branchName)
+	_, err = os.Stat(adminDir)
+	assert.True(t, os.IsNotExist(err), "native remove must have deleted the admin dir")
+}
