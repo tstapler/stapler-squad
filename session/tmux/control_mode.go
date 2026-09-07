@@ -1053,31 +1053,26 @@ func (t *TmuxSession) decodeControlModeOutput(encoded []byte) []byte {
 }
 
 // broadcastControlModeUpdate sends terminal output to all subscribed WebSocket clients.
-// Takes the full write lock (not RLock) because a slow subscriber is closed and removed
-// from t.controlModeSubscribers here rather than having its update dropped: dropping any
-// byte of this stream corrupts ANSI/cursor state for terminal consumers, since this is the
-// stream actually rendered in the browser (mirrors NativeProcessManager.fanOut's
-// close-and-remove pattern in session/native_process_manager.go).
-//
-// A channel that's instantaneously full is given a bounded grace period
-// (controlModeSlowSubscriberGrace) to drain before being closed — see that constant's doc
-// comment for why an instant close-on-first-full-send disconnects healthy-but-bursty
-// consumers, not just genuinely stuck ones.
-//
-// The grace-period wait itself runs on a background goroutine (drainSlowSubscriber), not
-// inline here. This function is called synchronously from readControlModeOutput's scanner
-// loop for every line tmux writes; blocking that loop for up to controlModeSlowSubscriberGrace
-// per stalled subscriber stops it from calling scanner.Scan() again, which stops it draining
-// tmux's stdout — and a tmux control-mode process blocked mid-write() (because nobody's
-// reading its stdout) can't simultaneously notice its stdin was closed. That's what was
-// forcing StopControlMode's 2-second wait-then-kill path on every single teardown of a busy
-// session, never the clean-exit path (confirmed empirically: a plain `tmux -C attach-session`
-// with no output backlog exits within ~1s of stdin EOF).
+// A subscriber whose channel is full is closed rather than silently dropped, since any
+// gap corrupts the ANSI stream; the grace-period drain and close both run off this call
+// (drainSlowSubscriber) so a stalled consumer never blocks the synchronous tmux read loop
+// this is called from.
 func (t *TmuxSession) broadcastControlModeUpdate(data []byte) {
 	t.controlModeSubMu.Lock()
 	defer t.controlModeSubMu.Unlock()
 
 	for subscriberID, ch := range t.controlModeSubscribers {
+		// Check this before ever attempting the fast-path send below: a goroutine
+		// spawned for an older frame may not have parked on ch yet, so trying a
+		// send here first could win a freed slot and deliver this frame ahead of
+		// that older one. An older frame still draining means the subscriber
+		// isn't keeping up, so close it instead of racing frame order.
+		if t.slowSendInFlight[subscriberID] {
+			log.Warn("control mode subscriber channel still full while a previous frame was draining, closing subscriber", "subscriber", subscriberID, "session", t.sanitizedName)
+			t.closeSubscriberLocked(subscriberID, ch)
+			continue
+		}
+
 		select {
 		case ch <- data:
 			// Successfully sent
@@ -1085,23 +1080,6 @@ func (t *TmuxSession) broadcastControlModeUpdate(data []byte) {
 		default:
 			// Channel momentarily full - fall through rather than concluding the
 			// subscriber is stuck on a single snapshot.
-		}
-
-		if t.slowSendInFlight[subscriberID] {
-			// A previous frame for this subscriber is already parked waiting on
-			// this same channel. Don't queue a second waiter behind it — Go's
-			// channel semantics guarantee the already-blocked sender is served
-			// first as space frees up, so a second concurrent waiter here would
-			// only be a source of ordering bugs (frame N+1 delivered before
-			// frame N if N's wait outlasts N+1's), never a way to catch up
-			// faster. A subscriber that can't clear one frame within the grace
-			// period before the next one arrives is definitively not keeping up.
-			// closeSubscriberLocked defers the actual close to that in-flight
-			// goroutine's own cleanup — closing here directly would race its
-			// blocked `ch <- data` send and panic.
-			log.Warn("control mode subscriber channel still full while a previous frame was draining, closing subscriber", "subscriber", subscriberID, "session", t.sanitizedName)
-			t.closeSubscriberLocked(subscriberID, ch)
-			continue
 		}
 
 		if t.slowSendInFlight == nil {
@@ -1112,13 +1090,9 @@ func (t *TmuxSession) broadcastControlModeUpdate(data []byte) {
 	}
 }
 
-// closeSubscriberLocked closes and removes subscriberID's channel, unless a
-// drainSlowSubscriber goroutine is currently blocked trying to send on it —
-// closing a channel out from under a goroutine blocked sending on it panics
-// ("send on closed channel"). In that case the close is deferred: recorded
-// in pendingCloseAfterDrain and performed by drainSlowSubscriber's own
-// cleanup once its send resolves, whichever way. Callers must hold
-// controlModeSubMu.
+// closeSubscriberLocked closes and removes subscriberID's channel, deferring the close
+// via pendingCloseAfterDrain if a drainSlowSubscriber goroutine is still blocked sending
+// on it (avoids a send-on-closed-channel panic). Callers must hold controlModeSubMu.
 func (t *TmuxSession) closeSubscriberLocked(subscriberID string, ch chan []byte) {
 	delete(t.controlModeSubscribers, subscriberID)
 	if t.slowSendInFlight[subscriberID] {
@@ -1140,12 +1114,9 @@ func (t *TmuxSession) closeAllSubscribersLocked() {
 	}
 }
 
-// drainSlowSubscriber waits out controlModeSlowSubscriberGrace to deliver data to a
-// momentarily-full subscriber channel, off the tmux control-mode read loop (see
-// broadcastControlModeUpdate's doc comment for why). Closes and removes the subscriber if
-// the grace period elapses with no room. Runs with no lock held while waiting on the
-// channel send itself — only the timeout-close branch and the in-flight bookkeeping take
-// controlModeSubMu.
+// drainSlowSubscriber waits up to controlModeSlowSubscriberGrace to deliver data to a
+// full subscriber channel, off the synchronous read loop (see broadcastControlModeUpdate).
+// Closes and removes the subscriber if the grace period elapses with no room.
 func (t *TmuxSession) drainSlowSubscriber(subscriberID string, ch chan []byte, data []byte) {
 	sent := false
 	select {
@@ -1154,41 +1125,31 @@ func (t *TmuxSession) drainSlowSubscriber(subscriberID string, ch chan []byte, d
 	case <-time.After(controlModeSlowSubscriberGrace):
 	}
 
-	// Single critical section for the whole post-wait decision, rather than
-	// one lock acquisition per branch — a close requested by a concurrent
-	// closeSubscriberLocked call (Unsubscribe, or another broadcast
-	// observing this same subscriber still full) while this goroutine was
-	// waiting must be resolved to exactly one close(ch) below, never two:
-	// checking/consuming pendingCloseAfterDrain in a separate later
-	// acquisition (as an earlier version of this function did) raced the
-	// grace-period-elapsed branch also closing ch itself, double-closing it.
+	// One critical section for the whole post-wait decision: a concurrent close
+	// request (recorded in pendingCloseAfterDrain while we waited) must resolve
+	// to exactly one close(ch) below, never two.
 	t.controlModeSubMu.Lock()
 	defer t.controlModeSubMu.Unlock()
 
 	delete(t.slowSendInFlight, subscriberID)
-	_, deferredClose := t.pendingCloseAfterDrain[subscriberID]
+	closeCh, deferredClose := t.pendingCloseAfterDrain[subscriberID]
 	delete(t.pendingCloseAfterDrain, subscriberID)
 
 	if cur, ok := t.controlModeSubscribers[subscriberID]; !sent && ok && cur == ch {
-		// Grace period elapsed with no room, and nobody else has already
-		// removed this subscriber while we waited (that "nobody else"
-		// condition is exactly why deferredClose can't also be true here —
-		// see closeSubscriberLocked, which always removes from
-		// controlModeSubscribers before ever setting pendingCloseAfterDrain).
+		// Grace period elapsed with no room, and no concurrent closeSubscriberLocked
+		// call has already removed this subscriber (which would have set
+		// deferredClose instead — see closeSubscriberLocked).
 		delete(t.controlModeSubscribers, subscriberID)
 		close(ch)
 		log.Warn("control mode subscriber channel full after grace period, closing subscriber", "subscriber", subscriberID, "session", t.sanitizedName)
 		return
 	}
 
-	// Either the send succeeded, or a concurrent closeSubscriberLocked call
-	// already removed this subscriber from controlModeSubscribers while we
-	// waited and deferred the actual close() to us — nothing else can still
-	// be trying to send on ch, since slowSendInFlight (cleared above) is
-	// what gated a second concurrent waiter from ever existing. Honor
-	// exactly one such deferred close, if any.
+	// Either the send succeeded, or a concurrent closeSubscriberLocked call already
+	// removed this subscriber and deferred the close to us. Honor exactly one such
+	// deferred close, if any.
 	if deferredClose {
-		close(ch)
+		close(closeCh)
 	}
 }
 

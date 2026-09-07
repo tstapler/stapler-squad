@@ -85,19 +85,9 @@ export function useTerminalFlowControl({
   const lastResyncTimeRef = useRef<number>(0);
   const lastResizeTimeRef = useRef<number>(0);
   const lastSentDimsRef = useRef<ResizeDimensions | null>(null);
-  // The last BOUNCE_HISTORY_SIZE sizes actually sent (oldest first, current
-  // lastSentDimsRef excluded — that's checked separately by the value-dedup
-  // above). Lets resize() detect a repeat of ANY recent size, not just the
-  // one two sends ago — a real oscillation observed live (session
-  // staplersquad_stelekit, mobile client) cycled through 3+ distinct values
-  // (10x6 -> 67x38 -> 67x22 -> 67x38...) rather than a clean two-value
-  // flip-flop, which the original 2-back-only check let straight through.
-  // Real tmux resize-window calls are expensive server-side (session/tmux
-  // control-mode round trip), so a genuinely oscillating viewport (observed
-  // cause: mobile browser chrome show/hide changing visualViewport.height
-  // every few seconds, well outside THROTTLE_MS's window) keeps re-triggering
-  // full server-side resizes on every single bounce without this — see the
-  // resize() bounce-detection block below.
+  // Last BOUNCE_HISTORY_SIZE sizes sent (oldest first; current lastSentDimsRef excluded,
+  // handled by value-dedup above). Lets resize() catch a repeat of any recent size, not
+  // just two sends back, since a real oscillating viewport can cycle through 3+ values.
   const sentHistoryRef = useRef<ResizeDimensions[]>([]);
   const BOUNCE_HISTORY_SIZE = 4;
   // Consecutive bounces held back-to-back with no genuinely-new size sent in
@@ -394,18 +384,10 @@ export function useTerminalFlowControl({
       }
     };
 
-    // Bounce detection: this call's dimensions match ANY of the last
-    // BOUNCE_HISTORY_SIZE sizes we sent, not just the one two sends ago — a
-    // direct A->B->A flip-flop is the simplest case, but a real viewport can
-    // wander through 3+ distinct values before repeating (observed live:
-    // 10x6 -> 67x38 -> 67x22 -> 67x38...). Distinct from THROTTLE_MS's
-    // rapid-fire case below because the trigger here (observed: mobile
-    // browser chrome show/hide moving visualViewport.height every few
-    // seconds) operates on a multi-second cadence THROTTLE_MS's 200ms window
-    // never catches. Hold it out past an escalating BOUNCE_HOLD_MS instead of
-    // sending immediately, coalescing a genuine oscillation into a single
-    // settled resize instead of one real server-side tmux resize-window call
-    // per bounce.
+    // Bounce detection: matches ANY of the last BOUNCE_HISTORY_SIZE sizes sent, not just
+    // the one two sends ago, since a real oscillating viewport can wander through 3+
+    // values on a slower cadence than THROTTLE_MS catches. Held out past an escalating
+    // BOUNCE_HOLD_MS instead of sent immediately, coalescing the oscillation into one settled resize.
     const isBounce = !force && sentHistoryRef.current.some((d) => dimensionsEqual(d, { cols, rows }));
     if (isBounce) {
       const BOUNCE_HOLD_BASE_MS = 3000;

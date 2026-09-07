@@ -330,6 +330,21 @@ describe('useTerminalFlowControl', () => {
       expect(sent).toBeDefined();
     });
 
+    // BOUNCE_HISTORY_SIZE is 4 — a repeat of a size old enough to have aged out of that
+    // window must be treated as genuinely new, not a bounce.
+    it('does not treat a repeat of a size older than BOUNCE_HISTORY_SIZE sends ago as a bounce', () => {
+      const { options, pushMessageFn } = createTestOptions();
+      const { result } = renderHook(() => useTerminalFlowControl(options));
+      const sizes: [number, number][] = [[10, 6], [20, 7], [30, 8], [40, 9], [50, 10], [60, 11]];
+      for (const [cols, rows] of sizes) {
+        act(() => { result.current.resize(cols, rows); });
+        act(() => { jest.advanceTimersByTime(201); });
+      }
+      const before = pushMessageFn.mock.calls.length;
+      act(() => { result.current.resize(10, 6); }); // aged out of the history window
+      expect(pushMessageFn.mock.calls.length).toBeGreaterThan(before);
+    });
+
     // Regression: a viewport still oscillating WHILE a bounce is already
     // being held should back off further on each consecutive re-trigger
     // instead of retrying at a flat 3s cadence forever — otherwise a
@@ -358,6 +373,65 @@ describe('useTerminalFlowControl', () => {
 
       act(() => { jest.advanceTimersByTime(3000); }); // total 6001ms since bounce 2 -- escalated hold elapses
       expect(pushMessageFn.mock.calls.length).toBeGreaterThan(beforeBounces);
+    });
+
+    // Regression: the escalating hold (3000 * 2^streak) must cap at BOUNCE_HOLD_MAX_MS
+    // (15000ms) rather than growing unbounded -- streak 3 would otherwise hold 24000ms.
+    it('caps the escalating hold at BOUNCE_HOLD_MAX_MS instead of growing unbounded', () => {
+      const { options, pushMessageFn } = createTestOptions();
+      const { result } = renderHook(() => useTerminalFlowControl(options));
+
+      act(() => { result.current.resize(100, 30); }); // A -- sends immediately
+      act(() => { jest.advanceTimersByTime(201); });
+      act(() => { result.current.resize(120, 40); }); // B -- sends immediately, history now [A]
+      act(() => { jest.advanceTimersByTime(201); });
+
+      act(() => { result.current.resize(100, 30); }); // bounce streak 1 -- holds 3000ms
+      act(() => { jest.advanceTimersByTime(500); });
+      act(() => { result.current.resize(100, 30); }); // bounce streak 2 -- holds 6000ms
+      act(() => { jest.advanceTimersByTime(500); });
+      act(() => { result.current.resize(100, 30); }); // bounce streak 3 -- holds 12000ms
+      act(() => { jest.advanceTimersByTime(500); });
+
+      const beforeFinalBounce = pushMessageFn.mock.calls.length;
+      act(() => { result.current.resize(100, 30); }); // bounce streak 4 -- would hold 24000ms uncapped
+
+      act(() => { jest.advanceTimersByTime(14999); });
+      expect(pushMessageFn.mock.calls.length).toBe(beforeFinalBounce); // still held just under the 15000ms cap
+
+      act(() => { jest.advanceTimersByTime(2); });
+      expect(pushMessageFn.mock.calls.length).toBeGreaterThan(beforeFinalBounce); // cap elapsed (would not have if uncapped at 24000ms)
+    });
+
+    // Regression: bounceStreakRef must reset to 0 once a held bounce actually resolves,
+    // so an unrelated bounce afterward restarts at the base 3000ms hold instead of
+    // continuing to escalate from the resolved bounce's streak.
+    it('resets the bounce hold to the base duration after a bounce resolves', () => {
+      const { options, pushMessageFn } = createTestOptions();
+      const { result } = renderHook(() => useTerminalFlowControl(options));
+
+      act(() => { result.current.resize(100, 30); }); // A -- sends immediately
+      act(() => { jest.advanceTimersByTime(201); });
+      act(() => { result.current.resize(120, 40); }); // B -- sends immediately, history [A]
+      act(() => { jest.advanceTimersByTime(201); });
+      act(() => { result.current.resize(140, 50); }); // C -- sends immediately, history [A, B]
+      act(() => { jest.advanceTimersByTime(201); });
+
+      act(() => { result.current.resize(100, 30); }); // bounce on A -- holds base 3000ms
+      // Advance past both the 3000ms hold and its trailing 100ms pane-request send, so
+      // no timer from this bounce is left pending to bias the counts below.
+      act(() => { jest.advanceTimersByTime(3101); });
+
+      const beforeSecondBounce = pushMessageFn.mock.calls.length;
+      act(() => { result.current.resize(120, 40); }); // unrelated bounce on B
+
+      act(() => { jest.advanceTimersByTime(2999); });
+      expect(pushMessageFn.mock.calls.length).toBe(beforeSecondBounce); // still held at the base hold
+
+      act(() => { jest.advanceTimersByTime(2); });
+      // Base 3000ms hold elapsed -- if the streak hadn't reset this would still be held
+      // (the escalated 6000ms hold from before the first bounce resolved).
+      expect(pushMessageFn.mock.calls.length).toBeGreaterThan(beforeSecondBounce);
     });
 
     // Task 4.3.2, AC4: force:true bypasses both value-dedup and the time
@@ -472,6 +546,19 @@ describe('useTerminalFlowControl', () => {
   });
 
   describe('requestFullResync', () => {
+    it('warns and does not send when disconnected', () => {
+      const { options, pushMessageFn, isConnectedRef } = createTestOptions();
+      isConnectedRef.current = false;
+      const { result } = renderHook(() => useTerminalFlowControl(options));
+
+      let returned: string | undefined;
+      act(() => { returned = result.current.requestFullResync(true); });
+
+      expect(returned).toBeUndefined();
+      expect(pushMessageFn).not.toHaveBeenCalled();
+      expect(console.warn).toHaveBeenCalledWith(expect.stringMatching(/not connected/i));
+    });
+
     it('should throttle to 2s unless urgent', () => {
       const { options, pushMessageFn } = createTestOptions();
       const { result } = renderHook(() => useTerminalFlowControl(options));
@@ -642,10 +729,9 @@ describe('useTerminalFlowControl', () => {
       expect(msg.data.case).toBe('flowControl');
     });
 
-    // Regression: every dispatch function shares one ensureConnected() gate now instead
-    // of independently reimplementing the connectivity check — this and the equivalent
-    // requestScrollback test below prove that consolidation actually reaches every call
-    // site, not just the one (sendInput) originally missing its warning.
+    // Regression: every dispatch function shares one ensureConnected() gate now instead of
+    // independently reimplementing the connectivity check — this test, requestScrollback's
+    // and requestFullResync's equivalents, and resize/sendInput's above cover every call site.
     it('warns and does not send when disconnected', () => {
       const { options, pushMessageFn, isConnectedRef } = createTestOptions();
       isConnectedRef.current = false;
