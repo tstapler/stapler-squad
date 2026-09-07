@@ -92,6 +92,14 @@ full-suite runs must not reproduce the `TempDir RemoveAll cleanup` failure for t
 
 ## Related
 
+- **2026-09-07 sighting (second, same day)**: the identical `TempDir RemoveAll cleanup: unlinkat ...
+  directory not empty` symptom recurred again on the *same* test,
+  `TestTriggerTriage_RunsInIsolatedWorktree_When_RepoPathIsARealGitRepo` (`server/services`), CI run
+  [34157839904](https://github.com/tstapler/stapler-squad/actions/runs/34157839904/attempts/1) (job
+  101853656914), on PR #733 (`fix-worktree-browse-button-e2e-timeout`) — an unrelated diff. Re-running
+  the same job with no code changes (attempt 2) passed cleanly. Confirms this recurrence is the same
+  shared teardown-ordering gap, not something PR #733's diff introduced; re-ran rather than investigating
+  further, consistent with this bug's own scope boundary and the precedent set by the entry below.
 - **2026-09-07 sighting**: the identical `TempDir RemoveAll cleanup: unlinkat ... directory not empty`
   symptom recurred on a third test, `TestTriggerTriage_RunsInIsolatedWorktree_When_RepoPathIsARealGitRepo`
   (`server/services`), CI run [34075111973](https://github.com/tstapler/stapler-squad/actions/runs/34075111973/job/101599943522),
