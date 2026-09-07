@@ -820,3 +820,46 @@ func TestRemove_NativeFlagOn_UsesNativeImplementation_ZeroSubprocessCalls(t *tes
 	_, err = os.Stat(adminDir)
 	assert.True(t, os.IsNotExist(err), "native remove must have deleted the admin dir")
 }
+
+// TestFindLiveWorktreeForBranch_NativeFlagOn_ZeroSubprocessCalls covers Epic 2.3's Story
+// 2.3.2 acceptance criterion: with the flag on, findLiveWorktreeForBranch finds a
+// matching branch's live worktree via nativeListWorktrees, with zero subprocess calls.
+// Deliberately not t.Parallel(), same reasoning as this file's other useNativeWorktree
+// package-var overrides above.
+func TestFindLiveWorktreeForBranch_NativeFlagOn_ZeroSubprocessCalls(t *testing.T) {
+	branchName := "feature-native-find-live"
+	repoPath, worktreePath := newNativeRemoveFixture(t, branchName)
+
+	orig := useNativeWorktree
+	useNativeWorktree = func(string) bool { return true }
+	t.Cleanup(func() { useNativeWorktree = orig })
+
+	spy := &gitSpyCommandRunner{}
+	wt := NewGitWorktreeFromStorageWithExecutor(repoPath, worktreePath, "test-native-find-live", branchName, "", WithCommandRunner(spy))
+
+	foundPath, found := wt.findLiveWorktreeForBranch()
+
+	require.True(t, found)
+	assert.Equal(t, CanonicalizeWorktreePath(worktreePath), CanonicalizeWorktreePath(foundPath))
+	assert.Empty(t, spy.runCalls, "native path must issue zero git subprocess invocations")
+}
+
+// TestFindLiveWorktreeForBranch_NativeFlagOn_NotFound_ZeroSubprocessCalls covers the
+// symmetric miss case: no worktree registered for the branch, still zero subprocess
+// calls, and the retry loop's sleeps don't apply forever (bounded by
+// worktreeAddRetryAttempts).
+func TestFindLiveWorktreeForBranch_NativeFlagOn_NotFound_ZeroSubprocessCalls(t *testing.T) {
+	repoDir := setupTestRepo(t)
+
+	orig := useNativeWorktree
+	useNativeWorktree = func(string) bool { return true }
+	t.Cleanup(func() { useNativeWorktree = orig })
+
+	spy := &gitSpyCommandRunner{}
+	wt := NewGitWorktreeFromStorageWithExecutor(repoDir, filepath.Join(t.TempDir(), "unused"), "test-native-find-live-miss", "does-not-exist", "", WithCommandRunner(spy))
+
+	_, found := wt.findLiveWorktreeForBranch()
+
+	assert.False(t, found)
+	assert.Empty(t, spy.runCalls, "native path must issue zero git subprocess invocations even on a miss")
+}

@@ -349,8 +349,19 @@ func (g *GitWorktree) findWorktreeForBranch(porcelainOutput, targetBranch string
 	return "", false
 }
 
-// findLiveWorktreeForBranch is setupFromExistingBranch's Ground-Truth Re-Query (ADR-001):
-// after a `worktree add` failure, poll `git worktree list --porcelain` up to
+// findLiveWorktreeForBranch dispatches to nativeFindLiveWorktreeForBranch/
+// legacyFindLiveWorktreeForBranch per useNativeWorktree(g.sessionName) (Epic 2.3, Task
+// 2.3.2a) — setupFromExistingBranch's caller below needs no change to pick up the native
+// implementation once the flag is on.
+func (g *GitWorktree) findLiveWorktreeForBranch() (string, bool) {
+	if useNativeWorktree(g.sessionName) {
+		return g.nativeFindLiveWorktreeForBranch()
+	}
+	return g.legacyFindLiveWorktreeForBranch()
+}
+
+// legacyFindLiveWorktreeForBranch is setupFromExistingBranch's Ground-Truth Re-Query
+// (ADR-001): after a `worktree add` failure, poll `git worktree list --porcelain` up to
 // worktreeAddRetryAttempts times (sleeping worktreeAddRetryDelay between attempts) looking
 // for g.branchName registered to some other worktree path — giving a concurrent race
 // winner's own still-in-flight worktree registration a chance to complete, symmetric with
@@ -366,7 +377,7 @@ func (g *GitWorktree) findWorktreeForBranch(porcelainOutput, targetBranch string
 // A transient error from the `worktree list` subprocess itself consumes an attempt and the
 // loop continues, rather than aborting immediately, for the same reason
 // branchExistsAfterAddFailure does.
-func (g *GitWorktree) findLiveWorktreeForBranch() (string, bool) {
+func (g *GitWorktree) legacyFindLiveWorktreeForBranch() (string, bool) {
 	for attempt := 0; attempt < worktreeAddRetryAttempts; attempt++ {
 		if attempt > 0 {
 			time.Sleep(worktreeAddRetryDelay)
@@ -389,6 +400,36 @@ func (g *GitWorktree) findLiveWorktreeForBranch() (string, bool) {
 			continue
 		}
 		return path, true
+	}
+	return "", false
+}
+
+// nativeFindLiveWorktreeForBranch is legacyFindLiveWorktreeForBranch's native counterpart
+// (Task 2.3.2a): identical retry-and-recheck semantics, sourced from nativeListWorktrees
+// instead of shelling out to `git worktree list --porcelain`, so it issues zero subprocess
+// calls.
+func (g *GitWorktree) nativeFindLiveWorktreeForBranch() (string, bool) {
+	branchRef := plumbing.NewBranchReferenceName(g.branchName).String()
+	for attempt := 0; attempt < worktreeAddRetryAttempts; attempt++ {
+		if attempt > 0 {
+			time.Sleep(worktreeAddRetryDelay)
+		}
+		entries, err := nativeListWorktrees(g.repoPath)
+		if err != nil {
+			log.Warn("nativeFindLiveWorktreeForBranch: transient error listing worktrees, retrying", "branch", g.branchName, "attempt", attempt, "err", err)
+			continue
+		}
+		for _, entry := range entries {
+			if entry.BranchRef != branchRef {
+				continue
+			}
+			path := CanonicalizeWorktreePath(entry.WorktreePath)
+			if _, statErr := os.Stat(path); statErr != nil {
+				log.Warn("nativeFindLiveWorktreeForBranch: found branch registered to a worktree path that doesn't exist on disk, treating as not found", "branch", g.branchName, "path", path, "err", statErr)
+				continue
+			}
+			return path, true
+		}
 	}
 	return "", false
 }

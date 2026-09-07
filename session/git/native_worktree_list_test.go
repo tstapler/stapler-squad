@@ -1,0 +1,100 @@
+package git
+
+import (
+	"os"
+	"path/filepath"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+// TestNativeListWorktrees_LiveWorktree covers Story 2.3.1's first acceptance criterion:
+// a live, on-disk worktree is listed with Locked=false, Prunable=false.
+func TestNativeListWorktrees_LiveWorktree(t *testing.T) {
+	t.Parallel()
+	branchName := "feature-x"
+	repoPath, worktreePath := newNativeRemoveFixture(t, branchName)
+
+	entries, err := nativeListWorktrees(repoPath)
+	require.NoError(t, err)
+
+	require.Len(t, entries, 1)
+	entry := entries[0]
+	assert.Equal(t, branchName, entry.Name)
+	assert.False(t, entry.Locked)
+	assert.False(t, entry.Prunable)
+	assert.Equal(t, CanonicalizeWorktreePath(worktreePath), CanonicalizeWorktreePath(entry.WorktreePath))
+}
+
+// TestNativeListWorktrees_DeletedWorkingDir_IsPrunable covers Story 2.3.1's second
+// acceptance criterion: a worktree whose target directory was deleted out from under git
+// is classified Prunable=true, per this project's directory-exists-only scope cut
+// (stack.md §2.2) — no mtime grace period.
+func TestNativeListWorktrees_DeletedWorkingDir_IsPrunable(t *testing.T) {
+	t.Parallel()
+	branchName := "feature-deleted"
+	repoPath, worktreePath := newNativeRemoveFixture(t, branchName)
+
+	require.NoError(t, os.RemoveAll(worktreePath))
+
+	entries, err := nativeListWorktrees(repoPath)
+	require.NoError(t, err)
+
+	require.Len(t, entries, 1)
+	assert.True(t, entries[0].Prunable)
+	assert.False(t, entries[0].Locked)
+}
+
+// TestNativeListWorktrees_LockedWorktree_NeverPrunable covers Story 2.3.1's third
+// acceptance criterion: a LockedMarker overrides prunability regardless of the target
+// directory's state.
+func TestNativeListWorktrees_LockedWorktree_NeverPrunable(t *testing.T) {
+	t.Parallel()
+	branchName := "feature-locked"
+	repoPath, worktreePath := newNativeRemoveFixture(t, branchName)
+
+	require.NoError(t, os.RemoveAll(worktreePath))
+
+	adminDir := filepath.Join(repoPath, ".git", "worktrees", branchName)
+	require.NoError(t, os.WriteFile(filepath.Join(adminDir, "locked"), []byte("locked for testing"), 0644))
+
+	entries, err := nativeListWorktrees(repoPath)
+	require.NoError(t, err)
+
+	require.Len(t, entries, 1)
+	assert.True(t, entries[0].Locked)
+	assert.False(t, entries[0].Prunable)
+}
+
+// TestNativeListWorktrees_should_ReturnError_When_WorktreesDirUnreadable covers
+// validation.md's error case: a permission-denied `.git/worktrees` must surface as an
+// error, not an empty/wrong list.
+func TestNativeListWorktrees_should_ReturnError_When_WorktreesDirUnreadable(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root bypasses directory permission checks, cannot exercise this failure mode")
+	}
+	t.Parallel()
+	branchName := "feature-unreadable"
+	repoPath, _ := newNativeRemoveFixture(t, branchName)
+	worktreesDir := filepath.Join(repoPath, ".git", "worktrees")
+
+	require.NoError(t, os.Chmod(worktreesDir, 0o000))
+	t.Cleanup(func() { _ = os.Chmod(worktreesDir, 0o755) })
+
+	_, err := nativeListWorktrees(repoPath)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "nativeListWorktrees")
+}
+
+// TestNativeListWorktrees_NoWorktreesDir_ReturnsEmptyNoError covers the "repo has never
+// had a linked worktree" case: a missing .git/worktrees/ directory is not itself an
+// error.
+func TestNativeListWorktrees_NoWorktreesDir_ReturnsEmptyNoError(t *testing.T) {
+	t.Parallel()
+	repoPath := setupTestRepo(t)
+
+	entries, err := nativeListWorktrees(repoPath)
+	require.NoError(t, err)
+	assert.Empty(t, entries)
+}
