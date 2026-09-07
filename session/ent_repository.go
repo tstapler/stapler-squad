@@ -188,16 +188,6 @@ func NewEntRepository(opts ...RepositoryOption) (*EntRepository, error) {
 		return nil, fmt.Errorf("failed to create schema: %w", err)
 	}
 
-	// Run status integer remap migration (idempotent).
-	// Old iota: Running=0, Ready=1, Loading=2, Paused=3, NeedsApproval=4, Creating=5, Stopped=6
-	// New iota: Creating=0, Active=1, Paused=2, Stopped=3, Hibernated=4
-	// Values 0–6 on disk (old) must be remapped to the new scheme.
-	// Only run if the database has any legacy-range status values (>4 indicates old Stopped=6).
-	if err := runStatusRemap(db); err != nil {
-		_ = client.Close() // best-effort cleanup; we're already returning the real startup error
-		return nil, fmt.Errorf("failed to remap status values: %w", err)
-	}
-
 	repo.client = client
 
 	// One-time-per-database correction for rows that predate the enabled field
@@ -212,9 +202,8 @@ func NewEntRepository(opts ...RepositoryOption) (*EntRepository, error) {
 
 	// Every other startup data migration is uniform-shaped (idempotent,
 	// (ctx, *EntRepository) error) and lives in startupMigrations — see
-	// session/ent_repository_migrations.go for why the two migrations above
-	// this point (runStatusRemap, the enabled-field backfill) are the
-	// documented exceptions that don't.
+	// session/ent_repository_migrations.go for why the enabled-field backfill
+	// above this point is the documented exception that doesn't.
 	for _, m := range startupMigrations {
 		if err := m.Run(context.Background(), repo); err != nil {
 			_ = client.Close() // best-effort cleanup; we're already returning the real startup error
