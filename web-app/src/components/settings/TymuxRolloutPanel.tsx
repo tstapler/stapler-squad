@@ -12,6 +12,7 @@ import { useAnalytics } from "@/lib/analytics";
 // (panel, heading, statusRow, ...) are generic, not stream-hub-specific, and
 // this panel's markup is deliberately shaped the same way.
 import * as styles from "./StreamHubRolloutPanel.css";
+import { RolloutStatusSection, RolloutOverrideList } from "./RolloutStatusSection";
 
 interface SessionOverride {
   sessionName: string;
@@ -158,89 +159,30 @@ export function TymuxRolloutPanel() {
         immediately for any session created from this point on — no restart required.
       </p>
 
-      {error && <p className={styles.errorMessage} role="alert">{error}</p>}
-
-      <div className={styles.statusRow}>
-        <span className={styles.statusLabel}>Global override</span>
-        <span className={`${styles.badge} ${globalOverride === true ? styles.badgeEnabled : styles.badgeDisabled}`}>
-          {globalOverride === undefined ? "Not set (default: off)" : globalOverride ? "Forced on" : "Forced off"}
-        </span>
-      </div>
-      <div className={styles.addRow}>
-        <button
-          className={styles.actionButton}
-          disabled={busy || globalOverride === true}
-          onClick={() => setGlobalOverrideValue(true)}
-          data-testid="tymux-global-override-on"
-          aria-label="Force tymux on for all sessions"
-        >
-          Force on for everything
-        </button>
-        <button
-          className={styles.actionButton}
-          disabled={busy || globalOverride === false}
-          onClick={() => setGlobalOverrideValue(false)}
-          data-testid="tymux-global-override-off"
-          aria-label="Force tymux off for all sessions"
-        >
-          Force off for everything
-        </button>
-        <button
-          className={styles.removeButton}
-          disabled={busy || globalOverride === undefined}
-          onClick={() => setGlobalOverrideValue(undefined)}
-          data-testid="tymux-global-override-clear"
-          aria-label="Clear global override, revert to the default"
-        >
-          Clear override
-        </button>
-      </div>
-
-      <div className={styles.statusRow}>
-        <span className={styles.statusLabel}>Rollback rehearsal</span>
-        {rehearsalCompletedAt ? (
-          <span className={`${styles.badge} ${styles.badgeEnabled}`}>
-            Completed {rehearsalCompletedAt.toLocaleString()}
-          </span>
-        ) : (
-          <button
-            className={styles.actionButton}
-            data-testid="tymux-complete-rehearsal"
-            disabled={busy}
-            onClick={completeRehearsal}
-          >
-            Mark rehearsal complete
-          </button>
-        )}
-      </div>
+      <RolloutStatusSection
+        testIdPrefix="tymux"
+        subjectLabel="tymux"
+        notSetLabel="Not set (default: off)"
+        error={error}
+        globalOverride={globalOverride}
+        onSetGlobalOverride={setGlobalOverrideValue}
+        busy={busy}
+        rehearsalCompletedAt={rehearsalCompletedAt}
+        onCompleteRehearsal={completeRehearsal}
+        overrides={overrides.map((o) => ({ sessionName: o.sessionName, forced: o.forceTymux }))}
+        onRemoveOverride={removeOverride}
+      />
       <p className={styles.hint}>
         Only mark this after manually verifying: flip a per-session override on, run a
         real session through it, confirm a clean disconnect/reconnect.
       </p>
 
-      <h3 className={styles.subheading}>Per-session canary overrides</h3>
-      {overrides.length === 0 ? (
-        <p className={styles.description}>No sessions are currently overridden.</p>
-      ) : (
-        <ul className={styles.overrideList}>
-          {overrides.map((o) => (
-            <li key={o.sessionName} className={styles.overrideRow} data-testid="tymux-override-row">
-              <span className={styles.statusLabel}>{o.sessionName}</span>
-              <span className={`${styles.badge} ${o.forceTymux ? styles.badgeEnabled : styles.badgeDisabled}`}>
-                {o.forceTymux ? "Forced on" : "Forced off"}
-              </span>
-              <button
-                className={styles.removeButton}
-                data-testid="tymux-remove-override"
-                disabled={busy}
-                onClick={() => removeOverride(o.sessionName)}
-              >
-                Remove
-              </button>
-            </li>
-          ))}
-        </ul>
-      )}
+      <RolloutOverrideList
+        testIdPrefix="tymux"
+        overrides={overrides.map((o) => ({ sessionName: o.sessionName, forced: o.forceTymux }))}
+        busy={busy}
+        onRemoveOverride={removeOverride}
+      />
 
       <div className={styles.addRow}>
         <input
