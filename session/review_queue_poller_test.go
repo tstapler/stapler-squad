@@ -919,6 +919,81 @@ func TestReviewQueuePoller_ReconcileSessions_StoppedInstancesOnDifferentSockets_
 	}
 }
 
+// TestReviewQueuePoller_ReconcileSessions_StoppedWithDeadPane_StaysStopped is the
+// regression test for the 2026-09-06 incident: remain-on-exit keeps a tmux pane
+// object alive as a "Pane is dead (signal N, ...)" placeholder after the wrapped
+// program exits, so liveSessions[name] alone cannot distinguish "pane exists with
+// a live process" from "pane exists, program already dead". Blindly reviving on
+// pane existence alone left sessions stuck showing Active with no live process
+// behind them -- frozen terminal, no response to input or resize.
+func TestReviewQueuePoller_ReconcileSessions_StoppedWithDeadPane_StaysStopped(t *testing.T) {
+	t.Parallel()
+	poller := newSimpleTestPoller()
+	querier := newFakeTmuxSocketQuerier()
+	poller.tmuxSocket = querier
+
+	mock := &mockTmuxManager{
+		tmuxSessionName:  "session-dead-pane",
+		isAliveReturn:    true,
+		hasSessionReturn: true,
+		paneExitDead:     true, // remain-on-exit placeholder: wrapped program already exited
+		paneExitCode:     1,
+		paneExitSignal:   "",
+	}
+	inst := &Instance{
+		Title:            "dead-pane-session",
+		Status:           Stopped,
+		IsManaged:        true,
+		TmuxServerSocket: "",
+	}
+	inst.processManager = NewTmuxBackend(mock)
+	inst.started.Store(true)
+	poller.SetInstances([]*Instance{inst})
+
+	querier.setLiveSessions("", "session-dead-pane")
+
+	poller.reconcileSessions()
+
+	if inst.Status != Stopped {
+		t.Errorf("got status %v, want Stopped (pane object exists but wrapped program has exited -- must not be reported Active)", inst.Status)
+	}
+}
+
+// TestReviewQueuePoller_ReconcileSessions_StoppedWithLivePane_RevivesToActive proves
+// the companion positive case still works: a genuinely live process (not just a
+// live pane object) does revive to Active, so the dead-pane check above isn't
+// blocking legitimate revival.
+func TestReviewQueuePoller_ReconcileSessions_StoppedWithLivePane_RevivesToActive(t *testing.T) {
+	t.Parallel()
+	poller := newSimpleTestPoller()
+	querier := newFakeTmuxSocketQuerier()
+	poller.tmuxSocket = querier
+
+	mock := &mockTmuxManager{
+		tmuxSessionName:  "session-live-pane",
+		isAliveReturn:    true,
+		hasSessionReturn: true,
+		paneExitDead:     false, // wrapped program still running
+	}
+	inst := &Instance{
+		Title:            "live-pane-session",
+		Status:           Stopped,
+		IsManaged:        true,
+		TmuxServerSocket: "",
+	}
+	inst.processManager = NewTmuxBackend(mock)
+	inst.started.Store(true)
+	poller.SetInstances([]*Instance{inst})
+
+	querier.setLiveSessions("", "session-live-pane")
+
+	poller.reconcileSessions()
+
+	if inst.Status != Active {
+		t.Errorf("got status %v, want Active (pane's wrapped program is genuinely still running)", inst.Status)
+	}
+}
+
 // TestReviewQueuePoller_ReconcileSessions_ServerDownOnOneSocket_DoesNotAffectOthers
 // verifies that a down tmux server on one socket only skips reconciliation for
 // instances on that socket, not for instances on other, healthy sockets.

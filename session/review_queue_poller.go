@@ -521,8 +521,22 @@ func (rqp *ReviewQueuePoller) reconcileSessions() {
 					inst.fireLifecycleEvent(EventExited, "reconcile-session-missing")
 				}
 			case Stopped:
-				// Stopped but tmux session is alive — revive to Active.
+				// Stopped but tmux session is alive — revive to Active only if
+				// the wrapped program is genuinely still running. liveSessions
+				// only proves the tmux pane object exists; remain-on-exit keeps
+				// that true even after the wrapped program has exited (a dead
+				// "Pane is dead (signal N, ...)" placeholder, see
+				// PaneProcessDead's doc comment) — blindly reviving on pane
+				// existence alone previously left such sessions stuck showing
+				// Active with no live process behind them (frozen terminal, no
+				// response to input, confirmed 2026-09-06 via a restart that
+				// raced a controller's PTY-EOF transition to Stopped against
+				// this poller's next tick).
 				if liveSessions[sessionName] {
+					if dead, _, _ := inst.paneExitInfoIgnoringStatus(); dead {
+						log.Info("reconcileSessions: stopped session's pane exists but wrapped program has exited, leaving Stopped", "session", inst.Title, "tmux", sessionName, "socket", serverSocket)
+						continue
+					}
 					log.Info("reconcileSessions: stopped session found alive, reviving to Active", "session", inst.Title, "tmux", sessionName, "socket", serverSocket)
 					ctx2s, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 					_ = inst.sendCtx(ctx2s, func(s *instanceState) {

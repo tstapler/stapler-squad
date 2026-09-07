@@ -690,6 +690,21 @@ func (i *Instance) PaneExitInfo() (dead bool, code int, signal string) {
 	if !i.TmuxAlive() {
 		return false, 0, ""
 	}
+	return i.paneExitInfoIgnoringStatus()
+}
+
+// paneExitInfoIgnoringStatus is PaneExitInfo's tmux-backend lookup without
+// the TmuxAlive() gate (which itself refuses to answer for Status ==
+// Stopped/Paused). ReviewQueuePoller.reconcileSessions' Stopped-but-alive
+// revival path needs exactly this: it runs BECAUSE Status is Stopped, to
+// decide whether "alive" here means a real live process or just a
+// remain-on-exit dead-pane placeholder tmux never tore down (see
+// PaneProcessDead's doc comment) -- PaneExitInfo's own gate would report
+// "not dead" unconditionally in that exact state, defeating the check.
+func (i *Instance) paneExitInfoIgnoringStatus() (dead bool, code int, signal string) {
+	if !i.started.Load() || !i.pm().HasSession() || !i.pm().IsAlive() {
+		return false, 0, ""
+	}
 	tb, ok := i.pm().(*TmuxBackend)
 	if !ok {
 		return false, 0, ""
