@@ -523,9 +523,10 @@ func DiffStatBetween(ctx context.Context, repoPath, baseSHA, headSHA string) (Ag
 // working tree — equivalent to `git diff baseSHA..headSHA`), using go-git's
 // typed diff API instead of a safeexec shell-out (the
 // `prefer-go-git-over-subshells` skill). Distinct from GitWorktree.Diff
-// (session/git/diff.go), which diffs the working tree against a single ref
-// (via `git add -N .` + `git diff <sha>`) and has no go-git equivalent —
-// see that function's doc comment for why the shell-out stays there.
+// (session/git/diff.go), which diffs the working tree (uncommitted changes and
+// untracked files) against a single base commit — GitWorktree.Diff now has a
+// go-git implementation too, built from lower-level tree/gitignore/line-diff
+// primitives rather than a single library call; see its doc comment.
 func DiffContentBetween(repoPath, baseSHA, headSHA string) (*DiffStats, error) {
 	if baseSHA == headSHA {
 		return &DiffStats{}, nil
