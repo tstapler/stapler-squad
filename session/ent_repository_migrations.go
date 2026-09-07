@@ -4,22 +4,34 @@ package session
 // startup migrations (session/ent_repository.go), run via a single loop instead
 // of one hand-copied if-err-block per migration.
 //
-// Two migration steps do NOT implement Migration and stay as explicit,
-// separately-called exceptions in NewEntRepository, in this exact order:
+// One migration step does NOT implement Migration and stays as an explicit,
+// separately-called exception in NewEntRepository, in this exact order:
 //  1. client.Schema.Create() — ent's own schema DDL, not a data migration, and
 //     must run before every migration below (several depend on columns it adds).
 //  2. workflowEnabledColumnPreexisted(db) + the gated call to
 //     runWorkflowEnabledFieldBackfill — the "preexisted" check must be captured
 //     from the raw *sql.DB BEFORE Schema.Create() runs (see
 //     workflow_enabled_field_migration.go's doc comment), so it cannot be
-//     expressed as a post-schema Run(ctx, er) step. runStatusRemap also needs
-//     the raw *sql.DB rather than the ent client EntRepository wraps, for the
-//     same reason it's excluded.
+//     expressed as a post-schema Run(ctx, er) step.
 //
-// Forcing either exception into this interface for uniformity's sake would
-// need widening Migration with a pre-schema hook or a raw-*sql.DB parameter
-// that every other migration would ignore — needless interface bloat for two
-// outliers out of seven total migrations.
+// Forcing this exception into the interface for uniformity's sake would need
+// widening Migration with a pre-schema hook that every other migration would
+// ignore — needless interface bloat for one outlier out of the total.
+//
+// A former third exception, runStatusRemap, was removed entirely (not just
+// excluded from this list): its one-time job — remapping an old 7-value
+// session.Status iota to the 5-value iota introduced by the hibernation
+// feature — completed long ago, but its "is this legacy data" check
+// (status > 4) never accounted for session.Status growing past 5 values
+// since (Restoring=5, Crashed=6, PermanentlyFailed=7, Failed=8+ are all
+// legitimate, currently-persisted states). Because it ran unconditionally on
+// every NewEntRepository call, any session sitting in one of those states at
+// restart time got its status value corrupted by a compounding +100
+// sentinel shift the migration's CASE expression never mapped back down —
+// repeated restarts drove the stored value arbitrarily high (observed
+// status=66707 in production), which then failed every subsequent
+// transition-to-Active check. See git history for the removed file if the
+// original migration logic is ever needed for reference.
 
 import "context"
 
