@@ -114,12 +114,14 @@ func (t *WebSocketTransport) Close() error {
 	if !t.closed.CompareAndSwap(false, true) {
 		return nil
 	}
-	deadlineErr := t.stream.conn.SetReadDeadline(time.Now())
+	// Best effort: Close historically returned nil, and a closed connection is
+	// already in the desired state if setting its read deadline fails.
+	_ = t.stream.conn.SetReadDeadline(time.Now())
 	t.mu.Lock()
 	hub, id, bound := t.hub, t.subscriberID, t.bound
 	t.mu.Unlock()
 	if bound {
 		hub.DetachSubscriber(id)
 	}
-	return deadlineErr
+	return nil
 }
