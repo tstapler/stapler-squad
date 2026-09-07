@@ -739,12 +739,26 @@ func (g *GitWorktree) forceCleanupWorktree() error {
 // Prune removes all working tree administrative files and directories. Serialized
 // per-repoPath like Setup/Remove — it rewrites the same shared .git/worktrees/ metadata.
 func (g *GitWorktree) Prune() error {
-	return WithRepoWorktreeLock(g.repoPath, func() error {
-		if _, err := g.runGitCommand(g.repoPath, "worktree", "prune"); err != nil {
-			return fmt.Errorf("failed to prune worktrees: %w", err)
-		}
-		return nil
-	})
+	return WithRepoWorktreeLock(g.repoPath, g.pruneLocked)
+}
+
+// pruneLocked dispatches to nativeWorktreePrune/legacyWorktreePrune per
+// useNativeWorktree(g.sessionName) (Epic 2.4, Task 2.4.2a), mirroring setupNewWorktree's
+// and removeLocked's dispatch pattern.
+func (g *GitWorktree) pruneLocked() error {
+	if useNativeWorktree(g.sessionName) {
+		return nativeWorktreePrune(g.repoPath)
+	}
+	return g.legacyWorktreePrune()
+}
+
+// legacyWorktreePrune is the renamed body of the original subprocess-based Prune (Task
+// 2.4.2a) — identical logic, reachable when useNativeWorktree resolves false.
+func (g *GitWorktree) legacyWorktreePrune() error {
+	if _, err := g.runGitCommand(g.repoPath, "worktree", "prune"); err != nil {
+		return fmt.Errorf("failed to prune worktrees: %w", err)
+	}
+	return nil
 }
 
 // CleanupWorktrees removes all worktree directories under the configured worktrees dir.
@@ -755,13 +769,10 @@ func (g *GitWorktree) Prune() error {
 //
 // Task 2.2.2c disposition: a real, non-test caller exists (main.go's `reset` command),
 // contradicting architecture.md §1a's "none found" — recorded here per the Unresolved
-// Questions entry. It is deliberately left un-dispatched, though: its per-directory
-// removal below is already a direct os.RemoveAll (no subprocess to seam), and its one
-// subprocess call is `git worktree prune`, which is Epic 2.4's native-prune seam
-// (nativeWorktreePrune) — not yet implemented, since Epic 2.4 depends on Epic 2.3's
-// on-disk model, both of which build on this epic rather than the reverse. Giving this
-// function the same dispatch as GitWorktree.Prune (as the Unresolved Questions entry
-// specifies) is blocked on that later epic landing, not skippable within Epic 2.2's scope.
+// Questions entry. Its per-directory removal below is already a direct os.RemoveAll (no
+// subprocess to seam); only its trailing `git worktree prune` step now dispatches
+// natively (Epic 2.4, closing the gap this comment used to describe) via
+// cleanupWorktreesPrune.
 func CleanupWorktrees() error {
 	worktreesDir, err := getWorktreeDirectory()
 	if err != nil {
@@ -782,11 +793,34 @@ func CleanupWorktrees() error {
 		}
 	}
 
+	return cleanupWorktreesPrune()
+}
+
+// cleanupWorktreesPrune dispatches CleanupWorktrees' trailing `git worktree prune` step to
+// nativeWorktreePrune/legacyCleanupWorktreesPrune per useNativeWorktree("") — there is no
+// session name in scope here (CleanupWorktrees operates across every session's worktrees
+// at once), so this resolves whatever useNativeWorktree treats as its global default the
+// same way a per-session override miss would.
+func cleanupWorktreesPrune() error {
+	if useNativeWorktree("") {
+		repoPath, err := os.Getwd()
+		if err != nil {
+			return fmt.Errorf("failed to resolve current directory for native worktree prune: %w", err)
+		}
+		return nativeWorktreePrune(repoPath)
+	}
+	return legacyCleanupWorktreesPrune()
+}
+
+// legacyCleanupWorktreesPrune is the extracted body of CleanupWorktrees' original
+// subprocess `git worktree prune` call — identical logic (runs against the process's
+// current working directory, matching safeexec.CommandContext's unset-Dir default),
+// reachable when useNativeWorktree resolves false.
+func legacyCleanupWorktreesPrune() error {
 	pruneCtx, pruneCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer pruneCancel()
 	if _, err := safeexec.CommandContext(pruneCtx, "git", "worktree", "prune").Output(); err != nil {
 		return fmt.Errorf("failed to prune worktrees: %w", err)
 	}
-
 	return nil
 }

@@ -863,3 +863,63 @@ func TestFindLiveWorktreeForBranch_NativeFlagOn_NotFound_ZeroSubprocessCalls(t *
 	assert.False(t, found)
 	assert.Empty(t, spy.runCalls, "native path must issue zero git subprocess invocations even on a miss")
 }
+
+// TestPrune_NativeFlagOn_UsesNativeImplementation covers Story 2.4.2's acceptance
+// criterion: with the flag on, Prune() dispatches to nativeWorktreePrune with zero
+// subprocess calls recorded, removing a prunable entry's admin dir.
+// Deliberately not t.Parallel(), same reasoning as this file's other useNativeWorktree
+// package-var overrides above.
+func TestPrune_NativeFlagOn_UsesNativeImplementation(t *testing.T) {
+	repoDir := setupTestRepo(t)
+	branchName := "feature-native-prune"
+	worktreePath := filepath.Join(t.TempDir(), branchName)
+
+	orig := useNativeWorktree
+	useNativeWorktree = func(string) bool { return true }
+	t.Cleanup(func() { useNativeWorktree = orig })
+
+	seedWt := NewGitWorktreeFromStorageWithExecutor(repoDir, worktreePath, "test-native-prune-seed", branchName, "")
+	require.NoError(t, seedWt.nativeSetupNewWorktree())
+	require.NoError(t, os.RemoveAll(worktreePath))
+
+	spy := &gitSpyCommandRunner{}
+	wt := NewGitWorktreeFromStorageWithExecutor(repoDir, worktreePath, "test-native-prune", branchName, "", WithCommandRunner(spy))
+
+	require.NoError(t, wt.Prune())
+
+	assert.Empty(t, spy.runCalls, "native path must issue zero git subprocess invocations for the worktree-prune step")
+
+	adminDir := filepath.Join(repoDir, ".git", "worktrees", branchName)
+	_, err := os.Stat(adminDir)
+	assert.True(t, os.IsNotExist(err), "native prune must have removed the prunable admin dir")
+}
+
+// TestCleanupWorktreesPrune_NativeFlagOn_UsesNativeImplementation covers the Epic 2.2 gap
+// this epic closes (CleanupWorktrees' doc comment): with the flag on, its trailing prune
+// step dispatches to nativeWorktreePrune against the process's current working directory
+// instead of shelling out to `git worktree prune`, mirroring safeexec.CommandContext's
+// unset-Dir default that the legacy subprocess call relies on.
+// Deliberately not t.Parallel(): t.Chdir forbids it, and this file's other
+// useNativeWorktree package-var overrides already avoid it for the same mutable-global
+// reason.
+func TestCleanupWorktreesPrune_NativeFlagOn_UsesNativeImplementation(t *testing.T) {
+	repoDir := setupTestRepo(t)
+	branchName := "feature-native-cleanup-prune"
+	worktreePath := filepath.Join(t.TempDir(), branchName)
+
+	seedWt := NewGitWorktreeFromStorageWithExecutor(repoDir, worktreePath, "test-native-cleanup-prune-seed", branchName, "")
+	require.NoError(t, seedWt.nativeSetupNewWorktree())
+	require.NoError(t, os.RemoveAll(worktreePath))
+
+	orig := useNativeWorktree
+	useNativeWorktree = func(string) bool { return true }
+	t.Cleanup(func() { useNativeWorktree = orig })
+
+	t.Chdir(repoDir)
+
+	require.NoError(t, cleanupWorktreesPrune())
+
+	adminDir := filepath.Join(repoDir, ".git", "worktrees", branchName)
+	_, err := os.Stat(adminDir)
+	assert.True(t, os.IsNotExist(err), "native cleanup prune must have removed the prunable admin dir")
+}
