@@ -84,12 +84,34 @@ func (s *BacklogService) GetBacklogItem(
 	}
 
 	p := backlogItemToProto(item, s.buildCostLookup())
-	// Populate worktree_branch/worktree_path for each linked work session.
+	enrichItemSessionsWorktreeData(ctx, s.storage, p)
+
+	return connect.NewResponse(&sessionv1.GetBacklogItemResponse{
+		Item: p,
+	}), nil
+}
+
+// enrichItemSessionsWorktreeData populates WorktreeBranch/WorktreePath on each
+// of p's ItemSessions from the ent Worktree join, keyed by session UUID.
+// BacklogItemData/ItemSessionSummary (the domain struct backlogItemToProto
+// converts from) carries no worktree fields of its own — every code path that
+// turns a BacklogItemData into a wire BacklogItem must call this or the
+// fields silently stay empty on the frontend. That gap is exactly what broke
+// BacklogFileBrowserModal's "Browse files in this worktree" trigger for any
+// item reached via WatchBacklogItems (both the fresh-connection snapshot and
+// the live event fan-out): only this GetBacklogItem RPC used to call the
+// enrichment loop now extracted here, so the very next snapshot/live event a
+// component's watch subscription received always overwrote the enriched
+// worktreePath with an empty one.
+func enrichItemSessionsWorktreeData(ctx context.Context, storage *session.Storage, p *sessionv1.BacklogItem) {
+	if storage == nil || p == nil {
+		return
+	}
 	for _, is := range p.ItemSessions {
 		if is.SessionUuid == "" {
 			continue
 		}
-		wt, wtErr := s.storage.GetWorktreeDataBySessionUUID(ctx, is.SessionUuid)
+		wt, wtErr := storage.GetWorktreeDataBySessionUUID(ctx, is.SessionUuid)
 		if wtErr == nil && wt.BranchName != "" {
 			is.WorktreeBranch = wt.BranchName
 		}
@@ -97,10 +119,6 @@ func (s *BacklogService) GetBacklogItem(
 			is.WorktreePath = wt.WorktreePath
 		}
 	}
-
-	return connect.NewResponse(&sessionv1.GetBacklogItemResponse{
-		Item: p,
-	}), nil
 }
 
 // --- ListBacklogItems ---
