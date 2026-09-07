@@ -15,6 +15,7 @@ import (
 	"github.com/go-git/go-git/v5/plumbing"
 	fdiff "github.com/go-git/go-git/v5/plumbing/format/diff"
 	"github.com/go-git/go-git/v5/plumbing/object"
+	"go.opentelemetry.io/otel/attribute"
 
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/log"
@@ -74,7 +75,7 @@ func ResolveDefaultBranchSHA(repoPath string) (branch, sha string, err error) {
 // repoPath's own checkout, this always fetches first, so the returned SHA reflects
 // origin's true current tip rather than whatever repoPath happened to have checked
 // out last — the gap that let a new backlog work session's worktree branch from a
-// days-stale local checkout instead of the real main tip (see setupNewWorktree's
+// days-stale local checkout instead of the real main tip (see legacySetupNewWorktree's
 // "branch from current HEAD" comment, and CreateBacklogWorktree's use of this func).
 func ResolveOriginBranchSHA(repoPath, mainBranch string) (string, error) {
 	if err := FetchBranch(repoPath, mainBranch); err != nil {
@@ -806,11 +807,57 @@ type MergeMainResult struct {
 
 // MergeMainIntoWorktree fetches mainBranch from origin and merges it into whatever
 // branch is currently checked out in worktreePath. It never leaves the worktree in a
-// conflicted state: on conflict it aborts the merge immediately (via `git merge
-// --abort`) and reports the conflicting paths, so the caller can hand that context to
-// whoever resolves it rather than leaving a half-merged working tree behind for the
-// next thing that touches it.
+// conflicted state: on conflict it aborts the merge immediately and reports the
+// conflicting paths, so the caller can hand that context to whoever resolves it rather
+// than leaving a half-merged working tree behind for the next thing that touches it.
+//
+// Dispatches to nativeMergeMainIntoWorktree (Epic 3.4) or legacyMergeMainIntoWorktree
+// (the original subprocess-based implementation below) based on useNativeMerge, keyed by
+// worktreePath per ADR-002 — every real call site (drift.go's EnsureBranchSyncedWithMain,
+// backlog_service_triage.go's syncPRBranchWithMain, session/backlog_lifecycle.go's
+// branchReconciler, which is assigned this exact function value) gets flag coverage with
+// no changes of its own.
 func MergeMainIntoWorktree(worktreePath, mainBranch string) (*MergeMainResult, error) {
+	var result *MergeMainResult
+	ctx := withOperationAttrs(context.Background(), attribute.String("worktree_path", worktreePath))
+	err := withOperationSpan(ctx, "git.merge.main", func() (string, string, error) {
+		native := useNativeMerge(worktreePath)
+		var mergeErr error
+		if native {
+			result, mergeErr = nativeMergeMainIntoWorktreeLocked(worktreePath, mainBranch)
+		} else {
+			result, mergeErr = legacyMergeMainIntoWorktree(worktreePath, mainBranch)
+		}
+		return implementationLabel(native), mergeOutcomeLabel(result, mergeErr), mergeErr
+	})
+	return result, err
+}
+
+// mergeOutcomeLabel is MergeMainIntoWorktree's outer-span outcome value: a coarser
+// up_to_date/merged/conflicted breakdown than git_merge_outcome_total's native-only
+// four-way UpToDate/FastForward/CleanMerge/Conflicted split (native_merge.go), since
+// MergeMainResult itself (shared by both the native and legacy implementations) doesn't
+// distinguish a fast-forward from a three-way clean merge — both just set Merged: true.
+func mergeOutcomeLabel(result *MergeMainResult, err error) string {
+	if err != nil || result == nil {
+		return outcomeError
+	}
+	switch {
+	case result.Conflicted:
+		return "conflicted"
+	case result.UpToDate:
+		return "up_to_date"
+	case result.Merged:
+		return "merged"
+	default:
+		return outcomeSuccess
+	}
+}
+
+// legacyMergeMainIntoWorktree is MergeMainIntoWorktree's original subprocess-based
+// implementation (`git fetch` + `git merge` + `git merge --abort` on conflict), unchanged
+// by Epic 3.4's dispatch seam.
+func legacyMergeMainIntoWorktree(worktreePath, mainBranch string) (*MergeMainResult, error) {
 	fetchCtx, fetchCancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer fetchCancel()
 	fetchCmd := safeexec.CommandContext(fetchCtx, "git", "-C", worktreePath, "fetch", "origin", mainBranch)
