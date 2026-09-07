@@ -615,30 +615,10 @@ func (i *Instance) GetWorkingDirectory() string {
 // DetectAndPopulateWorktreeInfo detects if the instance path is a worktree
 // and populates the IsWorktree, MainRepoPath, GitHubOwner, and GitHubRepo fields.
 //
-// CONFIRMED DATA RACE, not fixed here: this method reads i.Path and writes
-// IsWorktree, MainRepoPath, GitHubOwner, and GitHubRepo directly, with no
-// lock, from outside the actor -- reproduced with `go test -race` racing this
-// method against a concurrent i.mu.Lock()-guarded writer (e.g.
-// setGitHubResolutionLocked's pattern) touching the same fields, matching
-// .claude/rules/instance-lock-free-reads.md's documented race. Both current
-// call sites (NewInstance-style construction in instance.go, and
-// deserialization in instance_serialization.go) happen to run before the
-// instance is shared with any other goroutine, so this isn't reachable today
-// -- but nothing in this function's own field access defends against a future
-// call site (e.g. a re-detection/refresh path) introducing it for real.
+// Writes route through applyWorktreeDetectionLocked, closing the write/write
+// race against setGitHubResolutionLocked. The i.Path read below deliberately
+// stays raw, not i.GetPath() -- see the comment at that line for why.
 //
-// Not fixed to i.GetPath() here despite that being the rule's usual
-// prescription: at least one caller in this session-creation/retry/trigger
-// pipeline sets i.Path via a raw assignment without republishing the atomic
-// snapshot before this method runs, so GetPath() observes a stale cached
-// value instead of the fresh field -- confirmed by `go test ./server/services/...`
-// regressing (TestBackgroundResolutionPipeline_*, TestSessionService_RetrySession_*,
-// TestTriggerTriage_*) when i.Path here was switched to i.GetPath(). Properly
-// closing this class needs routing both the read and the writes through the
-// actor (mirroring setGitHubResolutionLocked in instance_actor_setters.go),
-// which also needs the actor goroutine confirmed live at both call sites --
-// not done here to avoid trading a live functional regression for a
-// currently-unreachable theoretical race.
 // This is useful for sessions created from existing worktrees where we want to
 // display the actual repository information in the UI.
 //
@@ -652,9 +632,12 @@ func (i *Instance) GetWorkingDirectory() string {
 // - The main repo has .git as a directory; the worktree has .git as a file pointing to the main repo
 func (i *Instance) DetectAndPopulateWorktreeInfo() error {
 	// Determine the path to use for detection
-	// For worktree sessions, use the worktree path; otherwise use i.Path
-	// (raw field, deliberately not GetPath() -- see this function's doc
-	// comment for why: GetPath() regressed real session-creation tests here).
+	// For worktree sessions, use the worktree path; otherwise use i.Path.
+	// Deliberately raw, not GetPath(): a session-creation/retry caller sets
+	// i.Path raw without republishing the snapshot before this runs, so
+	// GetPath() observed stale data and regressed
+	// TestBackgroundResolutionPipeline_*/TestSessionService_RetrySession_*/
+	// TestTriggerTriage_* when tried.
 	detectPath := i.Path
 	if i.gitManager.HasWorktree() {
 		worktreePath := i.gitManager.GetWorktreePath()
@@ -672,18 +655,8 @@ func (i *Instance) DetectAndPopulateWorktreeInfo() error {
 		return err
 	}
 
-	i.IsWorktree = info.IsWorktree
-	if info.IsWorktree && info.MainRepoRoot != "" {
-		i.MainRepoPath = info.MainRepoRoot
-	}
-
-	// Only populate GitHub info if not already set
-	if i.GitHubOwner == "" && info.GitHubOwner != "" {
-		i.GitHubOwner = info.GitHubOwner
-	}
-	if i.GitHubRepo == "" && info.GitHubRepo != "" {
-		i.GitHubRepo = info.GitHubRepo
-	}
-
-	return nil
+	return i.sendSyncErr(func(s *instanceState) error {
+		applyWorktreeDetectionLocked(s, info)
+		return nil
+	})
 }

@@ -173,7 +173,9 @@ func (i *Instance) GetLifecycleStatus() Status {
 func (i *Instance) FailureReason() string {
 	var reason string
 	_ = i.sendSyncErr(func(s *instanceState) error {
+		s.inst.mu.Lock()
 		reason = s.inst.failureReason
+		s.inst.mu.Unlock()
 		return nil
 	})
 	return reason
@@ -190,8 +192,10 @@ func (i *Instance) FailureReason() string {
 // to build its CreationOutcome snapshot atomically.
 func (i *Instance) StatusAndFailureReason() (status Status, failureReason string) {
 	_ = i.sendSyncErr(func(s *instanceState) error {
+		s.inst.mu.Lock()
 		status = s.inst.Status
 		failureReason = s.inst.failureReason
+		s.inst.mu.Unlock()
 		return nil
 	})
 	return status, failureReason
@@ -203,7 +207,9 @@ func (i *Instance) StatusAndFailureReason() (status Status, failureReason string
 func (i *Instance) CreationProgressUpdatedAt() time.Time {
 	var t time.Time
 	_ = i.sendSyncErr(func(s *instanceState) error {
+		s.inst.mu.Lock()
 		t = s.inst.creationProgressUpdatedAt
+		s.inst.mu.Unlock()
 		return nil
 	})
 	return t

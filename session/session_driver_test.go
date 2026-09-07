@@ -1429,3 +1429,27 @@ func TestStopSessionDriver_WaitsForHandleDriverFailureRetryGoroutine_NoGoroutine
 		t.Fatal("StopSessionDriver did not return after the retry goroutine finished")
 	}
 }
+
+// TestScanAndLinkPRURL_RepublishesSnapshot is a regression test for a
+// staleness bug a code review of backlog 10fc3913 caught: scanAndLinkPRURL
+// wrote GitHubPRURL/GitHubPRNumber under inst.mu but never republished the
+// snapshot, so GitHub() (and instance_adapter.go's API responses, which
+// already read via Snapshot()) could never observe the auto-linked PR.
+func TestScanAndLinkPRURL_RepublishesSnapshot(t *testing.T) {
+	inst := &Instance{Title: "scan-pr-url-test", GitHubOwner: "octocat", GitHubRepo: "Hello-World"}
+	finishInstanceConstruction(inst)
+
+	output := "remote: Create a pull request for 'foo' on GitHub by visiting:\nremote:      https://github.com/octocat/Hello-World/pull/42\n"
+	linked := scanAndLinkPRURL(inst, true, false, nil, output)
+
+	if !linked {
+		t.Fatal("expected scanAndLinkPRURL to report the PR as linked")
+	}
+	gh := inst.GitHub()
+	if gh.PRNumber != 42 {
+		t.Errorf("GitHub().PRNumber = %d, want 42 (snapshot was not republished after the raw write)", gh.PRNumber)
+	}
+	if gh.PRURL == "" {
+		t.Error("GitHub().PRURL is empty, want the linked PR URL (snapshot was not republished after the raw write)")
+	}
+}

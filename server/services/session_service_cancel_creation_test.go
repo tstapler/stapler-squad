@@ -260,3 +260,91 @@ func TestCancelSessionCreation_should_ResolveAwaitCreationTerminalPromptly_When_
 		t.Fatal("AwaitCreationTerminal did not return promptly after a concurrent CancelSessionCreation removed the instance")
 	}
 }
+
+// TestDeleteSession_should_CancelInFlightPipeline_When_StatusIsCreating
+// verifies DeleteSession bumps the creation epoch and invokes the pipeline's
+// CancelFunc before cleanup dispatch (both run synchronously inside the RPC
+// handler, before the async cleanup goroutine), mirroring CancelSessionCreation.
+func TestDeleteSession_should_CancelInFlightPipeline_When_StatusIsCreating(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	svc := newCreateTestService(t, storage)
+	t.Cleanup(func() { svc.Shutdown() })
+	inst := newCancelTestInstance(t, svc, storage, "delete-cancels-creating", false)
+
+	var mu sync.Mutex
+	cancelled := false
+	inst.SetCreationCancelFunc(func() {
+		mu.Lock()
+		cancelled = true
+		mu.Unlock()
+	})
+
+	resp, err := svc.DeleteSession(context.Background(), connect.NewRequest(&sessionv1.DeleteSessionRequest{
+		Id: "delete-cancels-creating",
+	}))
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	assert.True(t, resp.Msg.Success)
+
+	mu.Lock()
+	defer mu.Unlock()
+	assert.True(t, cancelled, "DeleteSession must cancel an in-flight Background Resolution Pipeline for a Creating session")
+	assert.Equal(t, uint64(1), inst.CreationEpoch(), "DeleteSession must bump the creation epoch so a late pipeline write can't win after cleanup starts")
+}
+
+// TestDeleteSession_should_SucceedWithoutPanic_When_CreatingWithNilCancelFunc
+// covers the post-restart case (mirroring
+// TestCancelSessionCreation_should_SucceedWithoutPanic_When_CancelFuncIsNil):
+// a Creating instance whose pipeline goroutine never existed in this process
+// has a nil CancelFunc, and DeleteSession must not nil-pointer-panic on it.
+func TestDeleteSession_should_SucceedWithoutPanic_When_CreatingWithNilCancelFunc(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	svc := newCreateTestService(t, storage)
+	t.Cleanup(func() { svc.Shutdown() })
+	inst := newCancelTestInstance(t, svc, storage, "delete-nil-cancelfunc", false)
+	require.Nil(t, inst.CreationCancelFunc(), "precondition: CancelFunc must be nil (never spawned in this process)")
+
+	require.NotPanics(t, func() {
+		resp, err := svc.DeleteSession(context.Background(), connect.NewRequest(&sessionv1.DeleteSessionRequest{
+			Id: "delete-nil-cancelfunc",
+		}))
+		require.NoError(t, err)
+		require.True(t, resp.Msg.Success)
+	})
+}
+
+// TestDeleteSession_should_NotTouchCancelFunc_When_StatusIsNotCreating is a
+// regression guard: DeleteSession's fence-out step must not invoke a stale
+// CancelFunc when deleting an already-Active session. It still bumps the
+// epoch unconditionally (matching CancelSessionCreation's bump-then-check
+// order) -- harmless once the pipeline has already reached a terminal status.
+func TestDeleteSession_should_NotTouchCancelFunc_When_StatusIsNotCreating(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	svc := newCreateTestService(t, storage)
+	t.Cleanup(func() { svc.Shutdown() })
+	inst := newCancelTestInstance(t, svc, storage, "delete-active-session", false)
+	require.True(t, inst.TryForceStatusIfEpoch(inst.CreationEpoch(), session.Active, ""))
+	epochBefore := inst.CreationEpoch()
+
+	var mu sync.Mutex
+	cancelled := false
+	inst.SetCreationCancelFunc(func() {
+		mu.Lock()
+		cancelled = true
+		mu.Unlock()
+	})
+
+	resp, err := svc.DeleteSession(context.Background(), connect.NewRequest(&sessionv1.DeleteSessionRequest{
+		Id: "delete-active-session",
+	}))
+	require.NoError(t, err)
+	require.True(t, resp.Msg.Success)
+
+	mu.Lock()
+	defer mu.Unlock()
+	assert.False(t, cancelled, "DeleteSession must not invoke the pipeline CancelFunc for a session that already finished creating")
+	assert.Equal(t, epochBefore+1, inst.CreationEpoch(), "epoch still bumps unconditionally, matching CancelSessionCreation's order")
+}

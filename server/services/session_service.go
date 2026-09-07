@@ -3640,6 +3640,20 @@ func (s *SessionService) DeleteSession(
 	// race is between removeFromAllPollers and storage.DeleteInstance, not this).
 	liveInst := s.FindLiveInstance(sessionTitle)
 
+	// Fence out an in-flight Background Resolution Pipeline before cleanup,
+	// bumping the epoch before re-reading status exactly like
+	// CancelSessionCreation (see its doc comment for why that order, not the
+	// reverse, is what resolves the race deterministically). Narrows, but
+	// doesn't replace, the Snapshot()-based read fix.
+	if liveInst != nil {
+		liveInst.BumpCreationEpoch()
+		if status, _ := liveInst.StatusAndFailureReason(); status == session.Creating {
+			if cancelFunc := liveInst.CreationCancelFunc(); cancelFunc != nil {
+				cancelFunc()
+			}
+		}
+	}
+
 	// Remove from all pollers BEFORE deleting from storage. This is atomic from the
 	// poller's perspective and closes the race window where external discovery could
 	// re-add the session between storage deletion and the old LoadInstances() reload.
