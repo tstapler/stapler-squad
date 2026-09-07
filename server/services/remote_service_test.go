@@ -249,6 +249,15 @@ func TestTestRemoteConnection_PoolHit_SkipsHostKeyCallback_When_NameReused(t *te
 	// this pool is torn down with the test.
 	t.Cleanup(func() { _ = staleClient.Close() })
 
+	// Confirm the precondition explicitly before relying on it: the pool
+	// entry must still be live going into TestRemoteConnection. If it were
+	// ever evicted early (e.g. the connection genuinely died), the
+	// assertion below fails fast with a clear cause instead of the
+	// TestRemoteConnection call below failing with a confusing
+	// Success:false that looks like the fix regressed.
+	_, ok := svc.sshClientPool().Peek(remoteName)
+	require.True(t, ok, "pool entry for %q was evicted before TestRemoteConnection ran", remoteName)
+
 	// addrB's host key was NEVER trusted -- a real dial would report
 	// HostKeyUnknown. If the pool hit for remoteName instead short-circuits
 	// straight to success, the bug reproduces.

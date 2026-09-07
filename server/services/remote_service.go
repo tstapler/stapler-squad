@@ -51,17 +51,12 @@ type RemoteService struct {
 	keyStore   *sshremote.KeyStore
 	loadConfig func() *config.Config
 
-	// testSSHClientPool, when non-nil, is shared by every tmux.SSHRunner
-	// TestRemoteConnection constructs, in place of the process-wide
-	// tmux.DefaultSSHClientPool(). tmux.SSHClientPool keys pooled
-	// *ssh.Client connections by remote NAME alone, not by dialed address
-	// (see SSHTarget's doc comment) -- so tests that reuse a remote name
-	// against a fresh in-process sshd each time would otherwise share ONE
-	// process-wide pool entry and intermittently reuse a stale *ssh.Client
-	// left over from a previous test/caller, skipping HostKeyCallback
-	// entirely for the new target. Set automatically by NewRemoteService
-	// under config.IsTestMode(), same test-hook rationale as
-	// SessionService.testSSHClientPool (session_service.go).
+	// testSSHClientPool, when non-nil, is the isolated pool
+	// TestRemoteConnection's SSHRunner shares instead of the process-wide
+	// tmux.DefaultSSHClientPool() -- see SSHTarget's doc comment for why an
+	// isolated pool matters across tests reusing a remote name (name-keyed,
+	// not address-keyed). Set by NewRemoteService under
+	// config.IsTestMode(), mirroring SessionService.testSSHClientPool.
 	testSSHClientPool *tmux.SSHClientPool
 }
 
@@ -79,7 +74,10 @@ func NewRemoteService(knownHosts *sshremote.KnownHostsStore, keyStore *sshremote
 
 // sshClientPool returns the SSHClientPool TestRemoteConnection's SSHRunner
 // must share -- s.testSSHClientPool under test (see its doc comment),
-// otherwise the process-wide production default.
+// otherwise the process-wide production default. Never construct a
+// tmux.SSHRunner directly against tmux.DefaultSSHClientPool() for a
+// connection test; use this instead so tests stay isolated from each other
+// and from production.
 func (s *RemoteService) sshClientPool() *tmux.SSHClientPool {
 	if s.testSSHClientPool != nil {
 		return s.testSSHClientPool
