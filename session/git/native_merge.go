@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/format/index"
 )
 
@@ -113,6 +114,77 @@ func abortNativeMerge(worktreePath string, snapshot *PreMergeIndexSnapshot) erro
 	}
 
 	return clearMergeStateFiles(worktreePath)
+}
+
+// writeRefWithLockSentinel advances an *existing* branch ref to newHash using real git's
+// own lockfile-presence protocol (create "<refPath>.lock" exclusively, write, rename onto
+// refPath, fsync the containing directory) instead of go-git's bare SetReference (Story
+// 2.5.3, Task 2.5.3b).
+//
+// Why this exists, and why only here: reading the pinned v5.19.2 source directly
+// (storage/filesystem/dotgit/dotgit_setref.go's setRefRwfs) shows go-git's SetReference
+// opens refPath in place (O_TRUNC, truncating immediately at open) and writes the new
+// content in a separate, later syscall — never renaming a fully-written temp file over
+// it. Its only concurrency guard is an advisory flock a real `git` process never
+// participates in at all (git's own ref-write protocol is presence-of-a-"<ref>.lock"-file,
+// not flock; confirmed via strace of `git update-ref`). TestNativeRefWrite_
+// UnprotectedRace_CanCorruptRef proves the resulting window is real: a concurrent reader
+// can observe refPath truncated to empty mid-write. Real git's own lock+rename protocol
+// never exposes that window — a reader always sees either the fully-old or fully-new
+// value — so replicating that exact protocol (not just adding our own flock) is what
+// closes the gap.
+//
+// Per Story 2.5.3's resolution of the architecture.md/pitfalls.md contradiction (see
+// plan.md Epic 2.5 and ADR-001's Update), this is required only for the merge ref-advance
+// (Task 3.4.1b) — an already-existing branch ref a fix-agent's own subprocess `git
+// merge`/`git rebase`, or CheckoutBranch, can plausibly touch during the same session's
+// lifetime. Task 2.1.2a's fresh branch-ref creation in Add is unaffected: the ref doesn't
+// exist until this project's own code creates it, so deferring the lock-sentinel there
+// stands.
+//
+// Fails (does not overwrite, does not retry) if "<refPath>.lock" already exists — matching
+// real git's own collision behavior, which reports a similar "unable to create ... File
+// exists" error rather than silently clobbering a concurrent writer's in-progress lock.
+// Callers that need retry-on-collision compose it themselves, the same way real git's own
+// callers do.
+func writeRefWithLockSentinel(refPath string, newHash plumbing.Hash) (err error) {
+	lockPath := refPath + ".lock"
+
+	f, err := os.OpenFile(lockPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o666)
+	if err != nil {
+		return fmt.Errorf("writeRefWithLockSentinel: failed to acquire lock %q: %w", lockPath, err)
+	}
+	defer func() {
+		if err != nil {
+			_ = f.Close()
+			_ = os.Remove(lockPath)
+		}
+	}()
+
+	if _, err = f.WriteString(newHash.String() + "\n"); err != nil {
+		return fmt.Errorf("writeRefWithLockSentinel: failed to write %q: %w", lockPath, err)
+	}
+	if err = f.Sync(); err != nil {
+		return fmt.Errorf("writeRefWithLockSentinel: failed to fsync %q: %w", lockPath, err)
+	}
+	if err = f.Close(); err != nil {
+		return fmt.Errorf("writeRefWithLockSentinel: failed to close %q: %w", lockPath, err)
+	}
+
+	if err = os.Rename(lockPath, refPath); err != nil {
+		return fmt.Errorf("writeRefWithLockSentinel: failed to rename %q onto %q: %w", lockPath, refPath, err)
+	}
+
+	dir, err := os.Open(filepath.Dir(refPath))
+	if err != nil {
+		return fmt.Errorf("writeRefWithLockSentinel: failed to open %q for directory fsync: %w", filepath.Dir(refPath), err)
+	}
+	defer func() { _ = dir.Close() }()
+	if err = dir.Sync(); err != nil {
+		return fmt.Errorf("writeRefWithLockSentinel: failed to fsync directory %q after renaming %q: %w", filepath.Dir(refPath), refPath, err)
+	}
+
+	return nil
 }
 
 // restoreWorkingTreeFile overwrites path (relative to worktreePath) with content,

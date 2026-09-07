@@ -923,3 +923,122 @@ func TestCleanupWorktreesPrune_NativeFlagOn_UsesNativeImplementation(t *testing.
 	_, err := os.Stat(adminDir)
 	assert.True(t, os.IsNotExist(err), "native cleanup prune must have removed the prunable admin dir")
 }
+
+// TestSetupRemove_MixedImplementations_SerializeThroughSameLock covers Story 2.5.1's
+// acceptance criterion: a native-flagged Setup() and a legacy-flagged Setup() against the
+// same repoPath, started concurrently, must serialize through the same repoWorktreeLock
+// registry entry (Task 2.5.1a confirmed Setup()/removeLocked()/pruneLocked() already wrap
+// WithRepoWorktreeLock around the flag-dispatch point, not one branch of it, so no
+// production change was needed there — this test is the regression proof for that
+// confirmation).
+//
+// Proof strategy: the test acquires the shared repoWorktreeLock's intra-process mutex
+// itself, *before* launching either Setup() call, then confirms both calls are still
+// blocked (neither has returned) after a generous wait. Since WithRepoWorktreeLock's mu
+// is a genuine sync.Mutex, this is not a timing heuristic — if either dispatch branch
+// resolved to a *different* lock (or skipped WithRepoWorktreeLock entirely), that call
+// would complete immediately instead of blocking, and the test would fail deterministically
+// rather than flakily. This avoids measuring the calls' own wall-clock windows (which
+// naturally "overlap" whenever one is blocked waiting on the other — not evidence of a
+// race, just proof a wait happened).
+func TestSetupRemove_MixedImplementations_SerializeThroughSameLock(t *testing.T) {
+	repoDir := setupTestRepo(t)
+
+	orig := useNativeWorktree
+	useNativeWorktree = func(sessionName string) bool { return sessionName == "sess-native" }
+	t.Cleanup(func() { useNativeWorktree = orig })
+
+	wtNative, _, err := NewGitWorktreeWithBranch(repoDir, "sess-native", "backlog/mixed-native")
+	require.NoError(t, err)
+	wtLegacy, _, err := NewGitWorktreeWithBranch(repoDir, "sess-legacy", "backlog/mixed-legacy")
+	require.NoError(t, err)
+
+	lockInstance, err := lockForRepo(repoDir)
+	require.NoError(t, err)
+
+	lockInstance.mu.Lock()
+
+	errs := make([]error, 2)
+	done := make(chan int, 2)
+	go func() {
+		errs[0] = wtNative.Setup()
+		done <- 0
+	}()
+	go func() {
+		errs[1] = wtLegacy.Setup()
+		done <- 1
+	}()
+
+	select {
+	case which := <-done:
+		t.Fatalf("Setup() call %d completed while the test held repoWorktreeLock.mu externally -- its dispatch branch is bypassing WithRepoWorktreeLock", which)
+	case <-time.After(150 * time.Millisecond):
+		// Expected: both goroutines are blocked on mu.Lock() inside WithRepoWorktreeLock.
+	}
+
+	lockInstance.mu.Unlock()
+
+	<-done
+	<-done
+	require.NoError(t, errs[0], "native Setup() must not fail")
+	require.NoError(t, errs[1], "legacy Setup() must not fail")
+	defer func() { _ = wtNative.Cleanup() }()
+	defer func() { _ = wtLegacy.Cleanup() }()
+
+	lockAfter, err := lockForRepo(repoDir)
+	require.NoError(t, err)
+	assert.Same(t, lockInstance, lockAfter, "both calls must resolve to the same repoWorktreeLock singleton for repoPath")
+
+	out := runRealGit(t, repoDir, "worktree", "list", "--porcelain")
+	assert.Contains(t, out, "backlog/mixed-native", "native worktree must be registered and clean")
+	assert.Contains(t, out, "backlog/mixed-legacy", "legacy worktree must be registered and clean")
+	assert.NotContains(t, out, "prunable", "neither worktree may be left prunable/corrupted")
+}
+
+// TestSetupNewWorktree_NativeFlag_SelfHeals_When_ConcurrentSpawnsRaceOnBranchCreate is the
+// native-flag counterpart of TestSetupNewWorktree_SelfHeals_When_ConcurrentSpawnsRaceOnBranchCreate
+// (Task 2.5.2b): the same two-unlocked-goroutines same-branch race, but with
+// useNativeWorktree forced on, proving nativeSetupNewWorktreeWithSelfHeal's Ground-Truth
+// Re-Query (Task 2.5.2a) closes the identical race for the native path. Deliberately not
+// t.Parallel() — it mutates the shared useNativeWorktree package var, mirroring this file's
+// other such tests' documented reasoning.
+func TestSetupNewWorktree_NativeFlag_SelfHeals_When_ConcurrentSpawnsRaceOnBranchCreate(t *testing.T) {
+	repoDir := setupTestRepo(t)
+	branchName := "backlog/native-concurrent-race-fixture"
+
+	orig := useNativeWorktree
+	useNativeWorktree = func(string) bool { return true }
+	t.Cleanup(func() { useNativeWorktree = orig })
+
+	wt1, _, err := NewGitWorktreeWithBranch(repoDir, "test-native-race-1", branchName)
+	require.NoError(t, err)
+	wt2, _, err := NewGitWorktreeWithBranch(repoDir, "test-native-race-2", branchName)
+	require.NoError(t, err)
+
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	errs := make([]error, 2)
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		<-start
+		errs[0] = wt1.setupNewWorktree()
+	}()
+	go func() {
+		defer wg.Done()
+		<-start
+		errs[1] = wt2.setupNewWorktree()
+	}()
+	close(start)
+	wg.Wait()
+
+	require.NoError(t, errs[0], "first concurrent native setup must not hard-fail on a lost branch-create race")
+	require.NoError(t, errs[1], "second concurrent native setup must not hard-fail on a lost branch-create race")
+	defer func() { _ = wt1.Cleanup() }()
+	defer func() { _ = wt2.Cleanup() }()
+
+	repo, err := OpenRepo(repoDir)
+	require.NoError(t, err)
+	_, err = repo.Reference(plumbing.NewBranchReferenceName(branchName), false)
+	require.NoError(t, err, "branch must exist once the race resolves")
+}

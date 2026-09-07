@@ -434,14 +434,48 @@ func (g *GitWorktree) nativeFindLiveWorktreeForBranch() (string, bool) {
 	return "", false
 }
 
-// setupNewWorktree dispatches to nativeSetupNewWorktree/legacySetupNewWorktree per
-// useNativeWorktree(g.sessionName) (Epic 2.1, Task 2.1.3b) — none of this file's 9 real
-// call sites need to change to pick up the native implementation once the flag is on.
+// setupNewWorktree dispatches to nativeSetupNewWorktreeWithSelfHeal/legacySetupNewWorktree
+// per useNativeWorktree(g.sessionName) (Epic 2.1, Task 2.1.3b; self-heal wrapping added by
+// Story 2.5.2) — none of this file's 9 real call sites need to change to pick up the
+// native implementation once the flag is on.
 func (g *GitWorktree) setupNewWorktree() error {
 	if useNativeWorktree(g.sessionName) {
-		return g.nativeSetupNewWorktree()
+		return g.nativeSetupNewWorktreeWithSelfHeal()
 	}
 	return g.legacySetupNewWorktree()
+}
+
+// nativeSetupNewWorktreeWithSelfHeal wraps nativeSetupNewWorktree with the native
+// counterpart of legacySetupNewWorktree's Ground-Truth Re-Query (ADR-001, Story 2.5.2):
+// two concurrent spawns computing the identical deterministic branch name race exactly
+// as they do on the legacy path (the underlying race is unchanged by the library swap,
+// per features.md §2), so the loser's nativeSetupNewWorktree (Worktree.Checkout with
+// Create: true) fails too.
+//
+// Task 2.5.2a's plan text names git.ErrBranchExists/plumbing.ErrReferenceNotFound as the
+// errors to catch, framed against subprocess-stderr matching (which doesn't apply here at
+// all). Reading the pinned v5.19.2 source directly (Worktree.createBranch,
+// go-git/go-git/v5@v5.19.2/worktree.go:204-230) shows the actual collision error is
+// neither of those: it's an unwrapped fmt.Errorf("a branch named %q already exists", ...),
+// so errors.Is against either sentinel can never match it. Rather than pattern-matching
+// error text instead (exactly what Ground-Truth Re-Query exists to avoid), this mirrors
+// legacySetupNewWorktree's own "any error re-checks ground truth" behavior verbatim: any
+// nativeSetupNewWorktree failure re-queries actual git state via
+// branchExistsAfterAddFailure, falling through to the original error only if the branch
+// genuinely never appears.
+func (g *GitWorktree) nativeSetupNewWorktreeWithSelfHeal() error {
+	err := g.nativeSetupNewWorktree()
+	if err == nil {
+		return nil
+	}
+
+	branchRef := plumbing.NewBranchReferenceName(g.branchName)
+	if g.branchExistsAfterAddFailure(branchRef) {
+		log.Info("native worktree add failed (lost a concurrent create race), reusing existing branch for worktree", "branch", g.branchName, "err", err)
+		return g.setupFromExistingBranch()
+	}
+
+	return err
 }
 
 // legacySetupNewWorktree is the renamed body of the original subprocess-based
