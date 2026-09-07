@@ -615,22 +615,10 @@ func (i *Instance) GetWorkingDirectory() string {
 // DetectAndPopulateWorktreeInfo detects if the instance path is a worktree
 // and populates the IsWorktree, MainRepoPath, GitHubOwner, and GitHubRepo fields.
 //
-// The writes are routed through applyWorktreeDetectionLocked (instance_actor_setters.go),
-// which takes i.mu.Lock() and republishes the snapshot exactly like
-// setGitHubResolutionLocked -- this closes the write/write race backlog item
-// 10fc3913 found between the two (reproduced with `go test -race` racing this
-// method's writes against a concurrent setGitHubResolutionLocked call).
+// Writes route through applyWorktreeDetectionLocked, closing the write/write
+// race against setGitHubResolutionLocked. The i.Path read below deliberately
+// stays raw, not i.GetPath() -- see the comment at that line for why.
 //
-// The i.Path *read* below deliberately stays the raw field, not i.GetPath():
-// at least one caller in the session-creation/retry/trigger pipeline sets
-// i.Path via a raw assignment without republishing the atomic snapshot before
-// this method runs, so GetPath() would observe a stale cached value instead
-// of the fresh field -- confirmed by `go test ./server/services/...`
-// regressing (TestBackgroundResolutionPipeline_*, TestSessionService_RetrySession_*,
-// TestTriggerTriage_*) when this was tried. Both current call sites
-// (NewInstance-style construction in instance.go, and deserialization in
-// instance_serialization.go) run before the instance is shared with any
-// other goroutine, so this read isn't itself a reachable race today.
 // This is useful for sessions created from existing worktrees where we want to
 // display the actual repository information in the UI.
 //
@@ -644,9 +632,12 @@ func (i *Instance) GetWorkingDirectory() string {
 // - The main repo has .git as a directory; the worktree has .git as a file pointing to the main repo
 func (i *Instance) DetectAndPopulateWorktreeInfo() error {
 	// Determine the path to use for detection
-	// For worktree sessions, use the worktree path; otherwise use i.Path
-	// (raw field, deliberately not GetPath() -- see this function's doc
-	// comment for why: GetPath() regressed real session-creation tests here).
+	// For worktree sessions, use the worktree path; otherwise use i.Path.
+	// Deliberately raw, not GetPath(): a session-creation/retry caller sets
+	// i.Path raw without republishing the snapshot before this runs, so
+	// GetPath() observed stale data and regressed
+	// TestBackgroundResolutionPipeline_*/TestSessionService_RetrySession_*/
+	// TestTriggerTriage_* when tried.
 	detectPath := i.Path
 	if i.gitManager.HasWorktree() {
 		worktreePath := i.gitManager.GetWorktreePath()

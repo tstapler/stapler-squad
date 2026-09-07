@@ -3640,14 +3640,14 @@ func (s *SessionService) DeleteSession(
 	// race is between removeFromAllPollers and storage.DeleteInstance, not this).
 	liveInst := s.FindLiveInstance(sessionTitle)
 
-	// If creation is still in flight, fence out the Background Resolution
-	// Pipeline before cleanup runs, mirroring CancelSessionCreation/
-	// RetrySessionCreation's ordering: this narrows, but doesn't replace, the
-	// Instance.GetPath() Snapshot()-based read fix — a write already in
-	// flight when cancel fires can still land.
+	// Fence out an in-flight Background Resolution Pipeline before cleanup,
+	// bumping the epoch before re-reading status exactly like
+	// CancelSessionCreation (see its doc comment for why that order, not the
+	// reverse, is what resolves the race deterministically). Narrows, but
+	// doesn't replace, the Snapshot()-based read fix.
 	if liveInst != nil {
+		liveInst.BumpCreationEpoch()
 		if status, _ := liveInst.StatusAndFailureReason(); status == session.Creating {
-			liveInst.BumpCreationEpoch()
 			if cancelFunc := liveInst.CreationCancelFunc(); cancelFunc != nil {
 				cancelFunc()
 			}

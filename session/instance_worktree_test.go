@@ -296,20 +296,10 @@ func TestGetEffectiveRootDir_ConcurrentWithSetGitHubResolution_NoRace(t *testing
 }
 
 // TestApplyWorktreeDetectionLocked_ConcurrentWithSetGitHubResolution_NoRace
-// is the deterministic regression test for the second race
-// DetectAndPopulateWorktreeInfo's doc comment describes: its writes to
-// IsWorktree/MainRepoPath/GitHubOwner/GitHubRepo used to touch those fields
-// directly with no lock, racing setGitHubResolutionLocked's writes to the
-// same fields. applyWorktreeDetectionLocked (instance_actor_setters.go) now
-// takes i.mu around both call sites' writes, closing it.
-//
-// This drives applyWorktreeDetectionLocked directly through sendSyncErr
-// rather than the full DetectAndPopulateWorktreeInfo (which this package's
-// other tests exercise) specifically to exclude that method's still-raw
-// i.Path *read* — a separate, already-documented, deliberately-unfixed race
-// (see DetectAndPopulateWorktreeInfo's doc comment) that would otherwise
-// fire here too and obscure whether the *write* race this test targets is
-// actually fixed.
+// regression-tests applyWorktreeDetectionLocked's write/write race fix
+// against setGitHubResolutionLocked. Drives the Locked helper directly via
+// sendSyncErr, not the full DetectAndPopulateWorktreeInfo, to exclude that
+// method's separate, still-unfixed i.Path read (see its doc comment).
 func TestApplyWorktreeDetectionLocked_ConcurrentWithSetGitHubResolution_NoRace(t *testing.T) {
 	t.Parallel()
 	inst := &Instance{Title: "worktree-detect-write-race", Status: Creating}
