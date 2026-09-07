@@ -71,6 +71,12 @@ func branchRefExists(repo *git.Repository, branchRef plumbing.ReferenceName) (bo
 // this retry is guarding against) consumes an attempt and the loop continues, rather than
 // aborting immediately — a single transient re-query failure is not evidence the branch
 // doesn't exist, and the loop is already bounded.
+//
+// TODO(validation.md P2): on retry exhaustion this returns a bare false, indistinguishable
+// from "the branch genuinely doesn't exist" — no typed/distinguishable error surfaces to
+// the caller. TestSetupNewWorktree_NativeFlag_should_ReturnDistinguishableError_When_RetriesExhausted
+// (validation.md) covers this gap; deferred (Phase 6 verify pass, lower severity,
+// pre-existing debt) rather than fixed here.
 func (g *GitWorktree) branchExistsAfterAddFailure(branchRef plumbing.ReferenceName) bool {
 	for attempt := 0; attempt < worktreeAddRetryAttempts; attempt++ {
 		if attempt > 0 {

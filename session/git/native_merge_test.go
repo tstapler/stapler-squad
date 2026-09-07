@@ -3,6 +3,7 @@ package git
 import (
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -11,6 +12,7 @@ import (
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/filemode"
 	"github.com/go-git/go-git/v5/plumbing/format/index"
+	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -407,9 +409,12 @@ func TestNativeMergeMainIntoWorktree_BinaryConflict_ClassifiedAsConflict(t *test
 }
 
 // TestNativeMergeMainIntoWorktree_ModeConflict_ClassifiedAsConflict covers
-// ReasonModeConflict: ours changes only the file's mode (content untouched) while theirs
-// changes only the content (mode untouched) — the two resulting modes differ, which must
-// be reported Conflicted rather than silently picking one side's mode.
+// ReasonModeConflict: this must fire only for a genuine TWO-sided mode disagreement —
+// both ours and theirs change script.sh's mode away from base, and disagree with each
+// other (Executable vs Symlink) — not merely because the two final modes differ (MUST FIX
+// 2, Phase 6 verify: the prior fixture here had ONLY ours change the mode, with theirs'
+// mode unchanged from base, which is the auto-resolvable one-sided case covered by
+// TestThreeWayFileMerger_OneSidedModeChange_AutoResolvesToChangedSide instead).
 func TestNativeMergeMainIntoWorktree_ModeConflict_ClassifiedAsConflict(t *testing.T) {
 	t.Parallel()
 	origin := setupTestRepo(t)
@@ -424,14 +429,18 @@ func TestNativeMergeMainIntoWorktree_ModeConflict_ClassifiedAsConflict(t *testin
 	runGit(t, work, "add", "script.sh")
 	runGit(t, work, "commit", "-m", "ours: chmod +x, content unchanged")
 
-	require.NoError(t, os.WriteFile(filepath.Join(origin, "script.sh"), []byte("echo hi\necho there\n"), 0o644))
+	// theirs: replace script.sh with a symlink — a mode change AWAY from base's Regular,
+	// and to a different mode than ours' Executable, making this a genuine two-sided
+	// disagreement rather than a one-sided change.
+	require.NoError(t, os.Remove(filepath.Join(origin, "script.sh")))
+	require.NoError(t, os.Symlink("other-target", filepath.Join(origin, "script.sh")))
 	runGit(t, origin, "add", "script.sh")
-	runGit(t, origin, "commit", "-m", "theirs: edit content, mode unchanged")
+	runGit(t, origin, "commit", "-m", "theirs: replace script.sh with a symlink")
 
 	result, err := nativeMergeMainIntoWorktree(work, "main")
 	require.NoError(t, err)
 	require.NotNil(t, result)
-	assert.True(t, result.Conflicted, "differing resolved file modes must be classified as a conflict")
+	assert.True(t, result.Conflicted, "a genuine two-sided mode disagreement must be classified as a conflict")
 	assert.Contains(t, result.ConflictedFiles, "script.sh")
 }
 
@@ -462,4 +471,242 @@ func TestNativeMergeMainIntoWorktree_GitlinkConflict_ClassifiedAsConflict(t *tes
 	require.NotNil(t, result)
 	assert.True(t, result.Conflicted, "a gitlink advanced to different commits on both sides must be classified as a conflict")
 	assert.Contains(t, result.ConflictedFiles, "vendor/lib")
+}
+
+// --- Phase 6 verify, MUST FIX 1: path-traversal/symlink-escape in native merge
+// materialization (writeWorkingTreeFile/removeWorkingTreeFile/restoreWorkingTreeFile/
+// capturePreMergeSnapshot). See validateTreeEntryRelPath's doc comment for why go-git's
+// own Tree.Decode places no restriction on a raw tree-entry name.
+
+func TestValidateTreeEntryRelPath_RejectsEscapingAndUnsafeNames(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name    string
+		relPath string
+	}{
+		{"ParentEscape", "../escape.txt"},
+		{"DeepParentEscape", "../../../../etc/passwd"},
+		{"NestedParentEscape", "dir/../../escape.txt"},
+		{"BareDotDot", ".."},
+		{"BareDot", "."},
+		{"AbsolutePath", "/etc/passwd"},
+		{"DotGitComponent", ".git/hooks/pre-commit"},
+		{"NestedDotGitComponent", "vendor/.git/config"},
+		{"Empty", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			require.Error(t, validateTreeEntryRelPath(tc.relPath), "relPath %q must be rejected", tc.relPath)
+		})
+	}
+}
+
+func TestValidateTreeEntryRelPath_AcceptsOrdinaryPaths(t *testing.T) {
+	t.Parallel()
+	cases := []string{"README.md", "src/main.go", "a/b/c.txt", "..hidden-but-not-traversal", "user..name.txt"}
+	for _, relPath := range cases {
+		t.Run(relPath, func(t *testing.T) {
+			t.Parallel()
+			assert.NoError(t, validateTreeEntryRelPath(relPath))
+		})
+	}
+}
+
+// TestWriteWorkingTreeFile_RejectsEscapingRelPath_DoesNotWriteOutsideWorktree is the
+// unit-level proof, below the full merge pipeline (exercised separately by
+// TestNativeMergeMainIntoWorktree_MaliciousTreeEntry_RejectedNotWrittenOutsideWorktree):
+// writeWorkingTreeFile — the function every real tree-entry write funnels through — must
+// never touch disk outside worktreePath for a crafted "../"-escaping relPath.
+func TestWriteWorkingTreeFile_RejectsEscapingRelPath_DoesNotWriteOutsideWorktree(t *testing.T) {
+	t.Parallel()
+	parent := t.TempDir()
+	worktreePath := filepath.Join(parent, "worktree")
+	require.NoError(t, os.MkdirAll(worktreePath, 0o750))
+
+	outsideTarget := filepath.Join(parent, "escaped.txt")
+	err := writeWorkingTreeFile(worktreePath, "../escaped.txt", filemode.Regular, []byte("pwned\n"))
+	require.Error(t, err)
+	_, statErr := os.Stat(outsideTarget)
+	assert.True(t, os.IsNotExist(statErr), "a rejected relPath must never reach disk outside worktreePath")
+}
+
+// TestNativeMergeMainIntoWorktree_MaliciousTreeEntry_RejectedNotWrittenOutsideWorktree
+// covers MUST FIX 1 (Phase 6 verify security finding) end-to-end: a malicious commit
+// merged onto mainBranch with a tree entry name that escapes the worktree
+// ("../"-relative) must never be materialized outside worktreePath. The malicious commit
+// is built directly against go-git's object store (mirroring native_merge_base_test.go's
+// mergeBaseFixture pattern), not through the real `git` CLI, which refuses to stage a
+// path containing ".." at all — this is the only way to reproduce the exploit's actual
+// on-disk shape (a compromised/malicious commit merged onto the tracked default branch,
+// per drift.go/backlog_service_triage.go/branchReconciler's automatic branch-sync call
+// sites).
+//
+// Note on what actually rejects this in the pinned go-git/go-git/v5@v5.19.2: while
+// Tree.Decode itself performs no validation, this exact pinned version's TreeWalker (used
+// by Tree.Diff, and so by both TreeDiffPair and the fast-forward path here) already calls
+// internal/pathutil.ValidTreePath on every enumerated entry name and rejects "..", so this
+// specific scenario actually errors out of the Diff() call in nativeFastForwardMerge,
+// before ever reaching secureWorktreeJoin — confirmed by temporarily reverting
+// secureWorktreeJoin's call in writeWorkingTreeFile and observing this test still passes
+// unchanged, error text unchanged. secureWorktreeJoin remains correct and necessary
+// defense-in-depth regardless: it is the containment boundary for the write itself, not
+// contingent on a specific upstream dependency's internal call graph continuing to
+// enumerate every path through a validated TreeWalker. The distinct, still-live gap
+// secureWorktreeJoin/clearBlockingSymlinksInPath closes — one ValidTreePath's pure
+// string-level check cannot address at all — is the symlink-escape vector proved by
+// TestNativeMergeMainIntoWorktree_MaliciousSymlinkEntry_DoesNotEscapeViaBlockingSymlink
+// below.
+func TestNativeMergeMainIntoWorktree_MaliciousTreeEntry_RejectedNotWrittenOutsideWorktree(t *testing.T) {
+	t.Parallel()
+	origin := setupTestRepo(t)
+	work := cloneTestRepo(t, origin)
+	runGit(t, work, "checkout", "-b", "feature")
+
+	repo, err := git.PlainOpen(origin)
+	require.NoError(t, err)
+
+	headRef, err := repo.Reference(plumbing.NewBranchReferenceName("main"), true)
+	require.NoError(t, err)
+	headCommit, err := repo.CommitObject(headRef.Hash())
+	require.NoError(t, err)
+	headTree, err := headCommit.Tree()
+	require.NoError(t, err)
+
+	maliciousBlobObj := repo.Storer.NewEncodedObject()
+	maliciousBlobObj.SetType(plumbing.BlobObject)
+	bw, err := maliciousBlobObj.Writer()
+	require.NoError(t, err)
+	_, err = bw.Write([]byte("pwned\n"))
+	require.NoError(t, err)
+	require.NoError(t, bw.Close())
+	maliciousBlobHash, err := repo.Storer.SetEncodedObject(maliciousBlobObj)
+	require.NoError(t, err)
+
+	entries := append([]object.TreeEntry(nil), headTree.Entries...)
+	entries = append(entries, object.TreeEntry{
+		Name: "../escaped-via-native-merge.txt",
+		Mode: filemode.Regular,
+		Hash: maliciousBlobHash,
+	})
+	sort.Slice(entries, func(i, j int) bool { return treeEntrySortKey(entries[i]) < treeEntrySortKey(entries[j]) })
+
+	maliciousTreeObj := repo.Storer.NewEncodedObject()
+	require.NoError(t, (&object.Tree{Entries: entries}).Encode(maliciousTreeObj))
+	maliciousTreeHash, err := repo.Storer.SetEncodedObject(maliciousTreeObj)
+	require.NoError(t, err)
+
+	sig := object.Signature{Name: "Attacker", Email: "attacker@example.com", When: time.Now()}
+	maliciousCommit := &object.Commit{
+		Author:       sig,
+		Committer:    sig,
+		Message:      "malicious: escape the worktree via a crafted tree entry\n",
+		TreeHash:     maliciousTreeHash,
+		ParentHashes: []plumbing.Hash{headRef.Hash()},
+	}
+	maliciousCommitObj := repo.Storer.NewEncodedObject()
+	require.NoError(t, maliciousCommit.Encode(maliciousCommitObj))
+	maliciousCommitHash, err := repo.Storer.SetEncodedObject(maliciousCommitObj)
+	require.NoError(t, err)
+
+	// Advance origin's "main" directly against the object store — origin here is test
+	// setup (standing in for a compromised/malicious PR merged upstream), not the
+	// worktree under test, so none of writeRefWithLockSentinel's concerns apply.
+	require.NoError(t, repo.Storer.SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), maliciousCommitHash)))
+
+	// work's "feature" branch has no commits of its own beyond the shared base, so this
+	// resolves as a fast-forward — materializeTreeChanges' write path, which is exactly
+	// what MUST FIX 1 targets.
+	_, err = nativeMergeMainIntoWorktree(work, "main")
+	require.Error(t, err, "a tree entry escaping the worktree must fail the merge, not silently write outside it")
+
+	outsideTarget := filepath.Join(filepath.Dir(work), "escaped-via-native-merge.txt")
+	_, statErr := os.Stat(outsideTarget)
+	assert.True(t, os.IsNotExist(statErr), "the malicious entry must never be written outside work, regardless of how the merge failed")
+}
+
+// TestNativeMergeMainIntoWorktree_MaliciousSymlinkEntry_DoesNotEscapeViaBlockingSymlink
+// covers the half of MUST FIX 1 that go-git's own internal/pathutil.ValidTreePath cannot
+// address at all, because it is a pure string check with no filesystem awareness: a
+// malicious tree can contain a clean-looking (no "..", no ".git") Symlink entry — "link",
+// pointing at a real directory outside the worktree — immediately followed by a second,
+// equally clean-looking entry literally named "link/evil.txt". Neither name fails
+// ValidTreePath or validateTreeEntryRelPath on its own; the escape only exists once "link"
+// is materialized as a symlink on disk and the second entry's write is resolved through
+// it by the OS. Without clearBlockingSymlinksInPath, os.MkdirAll/os.WriteFile follow that
+// symlink transparently and the payload lands outside the worktree; with it, the blocking
+// symlink is removed and replaced with a real directory first, so the payload lands inside
+// the worktree instead — confirmed by temporarily removing the clearBlockingSymlinksInPath
+// call from writeWorkingTreeFile and observing this test then fails (payload found outside
+// the worktree).
+func TestNativeMergeMainIntoWorktree_MaliciousSymlinkEntry_DoesNotEscapeViaBlockingSymlink(t *testing.T) {
+	t.Parallel()
+	origin := setupTestRepo(t)
+	work := cloneTestRepo(t, origin)
+	runGit(t, work, "checkout", "-b", "feature")
+
+	outsideDir := filepath.Join(t.TempDir(), "outside-target")
+	require.NoError(t, os.MkdirAll(outsideDir, 0o750))
+
+	repo, err := git.PlainOpen(origin)
+	require.NoError(t, err)
+
+	headRef, err := repo.Reference(plumbing.NewBranchReferenceName("main"), true)
+	require.NoError(t, err)
+	headCommit, err := repo.CommitObject(headRef.Hash())
+	require.NoError(t, err)
+	headTree, err := headCommit.Tree()
+	require.NoError(t, err)
+
+	storeBlob := func(content string) plumbing.Hash {
+		t.Helper()
+		obj := repo.Storer.NewEncodedObject()
+		obj.SetType(plumbing.BlobObject)
+		w, err := obj.Writer()
+		require.NoError(t, err)
+		_, err = w.Write([]byte(content))
+		require.NoError(t, err)
+		require.NoError(t, w.Close())
+		hash, err := repo.Storer.SetEncodedObject(obj)
+		require.NoError(t, err)
+		return hash
+	}
+
+	symlinkTargetHash := storeBlob(outsideDir) // symlink content is its target path, as bytes
+	payloadHash := storeBlob("pwned\n")
+
+	entries := append([]object.TreeEntry(nil), headTree.Entries...)
+	entries = append(entries,
+		object.TreeEntry{Name: "link", Mode: filemode.Symlink, Hash: symlinkTargetHash},
+		object.TreeEntry{Name: "link/evil.txt", Mode: filemode.Regular, Hash: payloadHash},
+	)
+	sort.Slice(entries, func(i, j int) bool { return treeEntrySortKey(entries[i]) < treeEntrySortKey(entries[j]) })
+
+	maliciousTreeObj := repo.Storer.NewEncodedObject()
+	require.NoError(t, (&object.Tree{Entries: entries}).Encode(maliciousTreeObj))
+	maliciousTreeHash, err := repo.Storer.SetEncodedObject(maliciousTreeObj)
+	require.NoError(t, err)
+
+	sig := object.Signature{Name: "Attacker", Email: "attacker@example.com", When: time.Now()}
+	maliciousCommit := &object.Commit{
+		Author:       sig,
+		Committer:    sig,
+		Message:      "malicious: plant a symlink then write through it\n",
+		TreeHash:     maliciousTreeHash,
+		ParentHashes: []plumbing.Hash{headRef.Hash()},
+	}
+	maliciousCommitObj := repo.Storer.NewEncodedObject()
+	require.NoError(t, maliciousCommit.Encode(maliciousCommitObj))
+	maliciousCommitHash, err := repo.Storer.SetEncodedObject(maliciousCommitObj)
+	require.NoError(t, err)
+
+	require.NoError(t, repo.Storer.SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), maliciousCommitHash)))
+
+	// work's "feature" branch has no commits of its own beyond the shared base, so this
+	// resolves as a fast-forward — materializeTreeChanges' write path.
+	_, mergeErr := nativeMergeMainIntoWorktree(work, "main")
+
+	escapedTarget := filepath.Join(outsideDir, "evil.txt")
+	_, statErr := os.Stat(escapedTarget)
+	assert.True(t, os.IsNotExist(statErr), "the payload must never be written outside the worktree via the planted symlink, regardless of the merge's overall outcome (err=%v)", mergeErr)
 }

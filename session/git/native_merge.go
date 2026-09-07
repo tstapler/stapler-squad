@@ -220,12 +220,100 @@ func writeRefWithLockSentinel(refPath string, newHash plumbing.Hash) (err error)
 	return nil
 }
 
+// validateTreeEntryRelPath rejects a git tree-entry name that a raw tree object is never
+// required to satisfy at the object-format level — verified against the pinned
+// go-git/go-git/v5@v5.19.2 source: Tree.Decode performs none of real git's own
+// verify_path() checks (no "..", no absolute path, no ".git" component). go-git's own
+// Worktree.Checkout gets this for free from its chrooted billy.Filesystem; this package's
+// merge-materialization code writes through raw os.* calls instead (see
+// writeWorkingTreeFile's doc comment) and so must enforce it itself. Mirrors verify_path's
+// checks closely enough to close the exploit class: absolute paths, "." / ".." segments
+// (via filepath.Clean), and any ".git" path component are rejected outright.
+func validateTreeEntryRelPath(relPath string) error {
+	if relPath == "" {
+		return errors.New("validateTreeEntryRelPath: empty tree entry path")
+	}
+	if filepath.IsAbs(relPath) {
+		return fmt.Errorf("validateTreeEntryRelPath: tree entry path %q is absolute", relPath)
+	}
+
+	cleaned := filepath.Clean(relPath)
+	if cleaned == "." || cleaned == ".." || strings.HasPrefix(cleaned, ".."+string(filepath.Separator)) {
+		return fmt.Errorf("validateTreeEntryRelPath: tree entry path %q escapes the worktree", relPath)
+	}
+	for _, seg := range strings.Split(filepath.ToSlash(cleaned), "/") {
+		if seg == ".git" {
+			return fmt.Errorf("validateTreeEntryRelPath: tree entry path %q targets a .git component", relPath)
+		}
+	}
+	return nil
+}
+
+// secureWorktreeJoin validates relPath via validateTreeEntryRelPath and joins it onto
+// worktreePath. Every working-tree read/write in this file that takes a path straight from
+// a git tree entry (rather than an already-trusted, program-controlled constant) must go
+// through this rather than a bare filepath.Join — the sole containment point for
+// writeWorkingTreeFile/removeWorkingTreeFile/restoreWorkingTreeFile/capturePreMergeSnapshot.
+func secureWorktreeJoin(worktreePath, relPath string) (string, error) {
+	if err := validateTreeEntryRelPath(relPath); err != nil {
+		return "", fmt.Errorf("secureWorktreeJoin: %w", err)
+	}
+	return filepath.Join(worktreePath, relPath), nil
+}
+
+// clearBlockingSymlinksInPath mirrors go-git's own Worktree.clearBlockingSymlinks
+// (worktree.go in the pinned v5.19.2): a symlink planted in a leading path component of
+// fullPath (e.g. "s" while writing "s/config", where "s" links outside worktreePath) would
+// otherwise be transparently followed by the caller's subsequent os.MkdirAll/os.WriteFile/
+// os.Symlink, defeating secureWorktreeJoin's path-string containment check even though the
+// string itself is clean. Removing it is always correct: a symlink can never legitimately
+// be an intermediate directory of a tracked path. Only walks between worktreePath and
+// fullPath's parent, never above worktreePath — secureWorktreeJoin already guarantees
+// fullPath is a lexical descendant of worktreePath before this is ever called.
+func clearBlockingSymlinksInPath(worktreePath, fullPath string) error {
+	rel, err := filepath.Rel(worktreePath, filepath.Dir(fullPath))
+	if err != nil {
+		return fmt.Errorf("clearBlockingSymlinksInPath: %w", err)
+	}
+	if rel == "." {
+		return nil
+	}
+
+	dir := worktreePath
+	for _, seg := range strings.Split(rel, string(filepath.Separator)) {
+		dir = filepath.Join(dir, seg)
+		info, err := os.Lstat(dir)
+		if err != nil {
+			if os.IsNotExist(err) {
+				// A missing leading component is created as a real directory by the
+				// caller's own os.MkdirAll — nothing to clear yet.
+				return nil
+			}
+			return fmt.Errorf("clearBlockingSymlinksInPath: failed to stat %q: %w", dir, err)
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			if err := os.Remove(dir); err != nil {
+				return fmt.Errorf("clearBlockingSymlinksInPath: failed to remove blocking symlink %q: %w", dir, err)
+			}
+			// Everything beneath the removed symlink went with it.
+			return nil
+		}
+	}
+	return nil
+}
+
 // restoreWorkingTreeFile overwrites path (relative to worktreePath) with content,
 // preserving the file's existing permission bits if it still exists (falling back to
 // 0o644 otherwise — e.g. if materializeConflictOnAbort's marker write itself failed
 // part-way through and the file is missing).
 func restoreWorkingTreeFile(worktreePath, path string, content []byte) error {
-	fullPath := filepath.Join(worktreePath, path)
+	fullPath, err := secureWorktreeJoin(worktreePath, path)
+	if err != nil {
+		return fmt.Errorf("restoreWorkingTreeFile: %w", err)
+	}
+	if err := clearBlockingSymlinksInPath(worktreePath, fullPath); err != nil {
+		return fmt.Errorf("restoreWorkingTreeFile: %w", err)
+	}
 	mode := os.FileMode(0o644)
 	if info, err := os.Stat(fullPath); err == nil {
 		mode = info.Mode()
@@ -478,14 +566,33 @@ func materializeTreeChanges(worktreePath string, changes object.Changes) error {
 // writeWorkingTreeFile writes content to relPath (relative to worktreePath) with the
 // permission bits mode implies, creating any missing parent directories. A Symlink mode
 // writes content as the link target rather than a regular file's bytes.
+//
+// relPath comes straight from a git tree-entry name (GroupChangesByPath's
+// object.Change.To.Name/From.Name), which a malicious commit fully controls — go-git's
+// Tree.Decode never validates it (see validateTreeEntryRelPath's doc comment). Unlike
+// go-git's own Worktree.Checkout, this function writes through raw os.* calls with no
+// chrooted filesystem underneath it, so secureWorktreeJoin/clearBlockingSymlinksInPath are
+// this function's only containment.
 func writeWorkingTreeFile(worktreePath, relPath string, mode filemode.FileMode, content []byte) error {
-	fullPath := filepath.Join(worktreePath, relPath)
+	fullPath, err := secureWorktreeJoin(worktreePath, relPath)
+	if err != nil {
+		return fmt.Errorf("writeWorkingTreeFile: %w", err)
+	}
+	if err := clearBlockingSymlinksInPath(worktreePath, fullPath); err != nil {
+		return fmt.Errorf("writeWorkingTreeFile: %w", err)
+	}
 	if err := os.MkdirAll(filepath.Dir(fullPath), 0o750); err != nil {
 		return fmt.Errorf("writeWorkingTreeFile: failed to create parent directory for %q: %w", relPath, err)
 	}
 
 	if mode == filemode.Symlink {
-		_ = os.Remove(fullPath) // os.Symlink refuses to overwrite an existing entry.
+		// os.Symlink refuses to overwrite an existing entry, so clear it first — but only
+		// swallow "doesn't exist"; any other Remove failure (e.g. permission denied) would
+		// otherwise surface as a misleading "file exists" error from Symlink below instead
+		// of its real cause.
+		if err := os.Remove(fullPath); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("writeWorkingTreeFile: failed to remove existing entry at %q before writing symlink: %w", relPath, err)
+		}
 		return os.Symlink(string(content), fullPath)
 	}
 
@@ -498,9 +605,19 @@ func writeWorkingTreeFile(worktreePath, relPath string, mode filemode.FileMode, 
 
 // removeWorkingTreeFile removes relPath (relative to worktreePath), treating an
 // already-absent file as success — the same "ignore not-exist" convention
-// clearMergeStateFiles uses.
+// clearMergeStateFiles uses. See writeWorkingTreeFile's doc comment for why relPath needs
+// secureWorktreeJoin/clearBlockingSymlinksInPath before ever touching disk: a leading
+// symlink planted by an earlier malicious entry in the same tree would otherwise let this
+// delete a file outside worktreePath entirely.
 func removeWorkingTreeFile(worktreePath, relPath string) error {
-	if err := os.Remove(filepath.Join(worktreePath, relPath)); err != nil && !os.IsNotExist(err) {
+	fullPath, err := secureWorktreeJoin(worktreePath, relPath)
+	if err != nil {
+		return fmt.Errorf("removeWorkingTreeFile: %w", err)
+	}
+	if err := clearBlockingSymlinksInPath(worktreePath, fullPath); err != nil {
+		return fmt.Errorf("removeWorkingTreeFile: %w", err)
+	}
+	if err := os.Remove(fullPath); err != nil && !os.IsNotExist(err) {
 		return err
 	}
 	return nil
@@ -607,6 +724,12 @@ func resolveMergePaths(byPath map[string]*PathChange) (*mergePathResolution, err
 				continue
 			}
 			result = outcome.Result
+			// A one-sided mode change (the other side's mode still matches base) auto-
+			// resolves to the changed side's mode (resolveFileMode) rather than always
+			// preferring ours the way pathChangeMode does for the plain both-changed-content
+			// case — pathChangeMode has no base to compare against, so it can't tell "only
+			// theirs changed the mode" from "both changed it identically."
+			mode = outcome.ResolvedMode
 		} else {
 			result, err = merger.ReconcilePathChange(pc)
 			if err != nil {
@@ -909,7 +1032,11 @@ func capturePreMergeSnapshot(worktreePath string, conflicts []conflictedPathMerg
 			// or later restore (see materializeConflictOnAbort's matching skip).
 			continue
 		}
-		content, readErr := os.ReadFile(filepath.Join(worktreePath, c.path))
+		fullPath, joinErr := secureWorktreeJoin(worktreePath, c.path)
+		if joinErr != nil {
+			return nil, fmt.Errorf("capturePreMergeSnapshot: %w", joinErr)
+		}
+		content, readErr := os.ReadFile(fullPath)
 		if readErr != nil {
 			return nil, fmt.Errorf("capturePreMergeSnapshot: failed to read %q: %w", c.path, readErr)
 		}

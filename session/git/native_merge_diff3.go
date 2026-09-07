@@ -398,10 +398,34 @@ type FileMergeInput struct {
 
 // FileMergeOutcome is MergeFile's result: either a short-circuited conflict
 // (Reason set, Result nil) or a fully classified content merge (Result set,
-// Reason == ReasonNone).
+// Reason == ReasonNone, ResolvedMode set to whichever mode survives — see
+// resolveFileMode).
 type FileMergeOutcome struct {
 	Reason FileConflictReason
 	Result *MergeResult
+	// ResolvedMode is the file mode the merged content should carry, meaningful only
+	// when Reason == ReasonNone: OursMode/TheirsMode when they agree, otherwise
+	// whichever one of them actually changed away from BaseMode (see resolveFileMode).
+	ResolvedMode filemode.FileMode
+}
+
+// resolveFileMode classifies a three-way mode comparison: identical ours/theirs modes
+// never conflict; a mode changed by only ONE side (the other still matching base) auto-
+// resolves to the changed side's mode, mirroring real git's own one-sided-change
+// auto-resolution and this project's established principle for one-sided content edits
+// (ReconcilePathChange's single-side-changed handling). Only a genuine two-sided
+// disagreement — both sides' modes differ from base, and from each other — conflicts.
+func resolveFileMode(base, ours, theirs filemode.FileMode) (resolved filemode.FileMode, conflict bool) {
+	if ours == theirs {
+		return ours, false
+	}
+	if base == ours {
+		return theirs, false // only theirs changed the mode
+	}
+	if base == theirs {
+		return ours, false // only ours changed the mode
+	}
+	return 0, true // both sides changed the mode, disagreeingly
 }
 
 // isBinary reports whether content looks binary, using the same null-byte
@@ -425,7 +449,8 @@ func (m ThreeWayFileMerger) MergeFile(in FileMergeInput) (*FileMergeOutcome, err
 		return &FileMergeOutcome{Reason: ReasonGitlinkConflict}, nil
 	}
 
-	if in.OursMode != in.TheirsMode {
+	resolvedMode, modeConflict := resolveFileMode(in.BaseMode, in.OursMode, in.TheirsMode)
+	if modeConflict {
 		return &FileMergeOutcome{Reason: ReasonModeConflict}, nil
 	}
 
@@ -441,7 +466,7 @@ func (m ThreeWayFileMerger) MergeFile(in FileMergeInput) (*FileMergeOutcome, err
 	if err != nil {
 		return nil, err
 	}
-	return &FileMergeOutcome{Result: result}, nil
+	return &FileMergeOutcome{Result: result, ResolvedMode: resolvedMode}, nil
 }
 
 // PathChange bundles what each side of TreeDiffPair's two object.Changes

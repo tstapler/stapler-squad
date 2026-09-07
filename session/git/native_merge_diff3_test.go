@@ -11,6 +11,7 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/filemode"
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/sergi/go-diff/diffmatchpatch"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -150,13 +151,40 @@ func TestThreeWayFileMerger_RenameModifyCollision_TreatedAsIndependentChanges_No
 
 // --- Story 3.2.3: mode-only / binary / gitlink conflict classification ---
 
-func TestThreeWayFileMerger_ModeOnlyConflict(t *testing.T) {
+// TestThreeWayFileMerger_OneSidedModeChange_AutoResolvesToChangedSide covers the fix for
+// MUST FIX 2 (Phase 6 verify): a mode change made by only ONE side (the other side's mode
+// still matches base) must auto-resolve to the changed side's mode, matching real git's
+// own one-sided-change handling and this project's established principle for one-sided
+// content edits (ReconcilePathChange) — it must NOT be treated as a mode conflict just
+// because ours and theirs' final modes differ from each other. This fixture used to be
+// (and, before the fix, incorrectly asserted as) ReasonModeConflict under the prior
+// "any OursMode != TheirsMode conflicts" rule, which never checked BaseMode at all.
+func TestThreeWayFileMerger_OneSidedModeChange_AutoResolvesToChangedSide(t *testing.T) {
 	t.Parallel()
 	var merger ThreeWayFileMerger
 
 	content := []byte("#!/bin/sh\necho hi\n")
 	outcome, err := merger.MergeFile(FileMergeInput{
 		BaseMode: filemode.Regular, OursMode: filemode.Executable, TheirsMode: filemode.Regular,
+		BaseContent: content, OursContent: content, TheirsContent: content,
+	})
+	require.NoError(t, err)
+	require.Equal(t, ReasonNone, outcome.Reason, "a one-sided mode change alone must not conflict")
+	require.NotNil(t, outcome.Result)
+	assert.False(t, outcome.Result.Conflicted)
+	assert.Equal(t, filemode.Executable, outcome.ResolvedMode, "must resolve to the side that actually changed the mode")
+}
+
+// TestThreeWayFileMerger_TwoSidedModeDisagreement_Conflicts covers MUST FIX 2's other
+// half: when BOTH sides change the mode away from base, and disagree with each other, that
+// is a genuine mode conflict — the one case ReasonModeConflict must still cover.
+func TestThreeWayFileMerger_TwoSidedModeDisagreement_Conflicts(t *testing.T) {
+	t.Parallel()
+	var merger ThreeWayFileMerger
+
+	content := []byte("#!/bin/sh\necho hi\n")
+	outcome, err := merger.MergeFile(FileMergeInput{
+		BaseMode: filemode.Regular, OursMode: filemode.Executable, TheirsMode: filemode.Symlink,
 		BaseContent: content, OursContent: content, TheirsContent: content,
 	})
 	require.NoError(t, err)

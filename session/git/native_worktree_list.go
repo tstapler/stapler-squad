@@ -53,7 +53,11 @@ func nativeListWorktrees(repoPath string) ([]NativeWorktreeEntry, error) {
 			continue
 		}
 		adminDir := filepath.Join(worktreesDir, dirEntry.Name())
-		entries = append(entries, buildNativeWorktreeEntry(dirEntry.Name(), adminDir))
+		entry, err := buildNativeWorktreeEntry(dirEntry.Name(), adminDir)
+		if err != nil {
+			return nil, fmt.Errorf("nativeListWorktrees: failed to classify %q: %w", adminDir, err)
+		}
+		entries = append(entries, entry)
 	}
 	return entries, nil
 }
@@ -70,14 +74,26 @@ func nativeListWorktrees(repoPath string) ([]NativeWorktreeEntry, error) {
 // not abort. Such an entry is unparseable and classified Prunable so
 // nativeWorktreePrune can clean it up, the same outcome real git's own `worktree
 // list`/`worktree prune` give this exact partial state.
-func buildNativeWorktreeEntry(name, adminDir string) NativeWorktreeEntry {
+//
+// A genuine stat error (e.g. EACCES) checking "locked" or WorktreePath, in contrast, IS
+// surfaced as an error here rather than folded into "doesn't exist" — fileExistsOnDisk/
+// dirExistsOnDisk distinguish the two so a permission-denied path is never misclassified
+// as prunable.
+func buildNativeWorktreeEntry(name, adminDir string) (NativeWorktreeEntry, error) {
 	worktreePath, err := readWorktreePathFromGitdirFile(adminDir)
 	if err != nil {
-		return NativeWorktreeEntry{Name: name, Prunable: true}
+		return NativeWorktreeEntry{Name: name, Prunable: true}, nil
 	}
 
-	locked := fileExistsOnDisk(filepath.Join(adminDir, "locked"))
-	prunable := !locked && !dirExistsOnDisk(worktreePath)
+	locked, err := fileExistsOnDisk(filepath.Join(adminDir, "locked"))
+	if err != nil {
+		return NativeWorktreeEntry{}, fmt.Errorf("buildNativeWorktreeEntry: failed to check locked marker: %w", err)
+	}
+	worktreeDirExists, err := dirExistsOnDisk(worktreePath)
+	if err != nil {
+		return NativeWorktreeEntry{}, fmt.Errorf("buildNativeWorktreeEntry: failed to check worktree directory: %w", err)
+	}
+	prunable := !locked && !worktreeDirExists
 
 	return NativeWorktreeEntry{
 		Name:         name,
@@ -85,7 +101,7 @@ func buildNativeWorktreeEntry(name, adminDir string) NativeWorktreeEntry {
 		BranchRef:    readWorktreeHEADRef(adminDir),
 		Locked:       locked,
 		Prunable:     prunable,
-	}
+	}, nil
 }
 
 // readWorktreePathFromGitdirFile reads adminDir's GitdirFile — an absolute path to the
@@ -118,15 +134,31 @@ func readWorktreeHEADRef(adminDir string) string {
 }
 
 // fileExistsOnDisk reports whether path exists and is a regular file (not a directory).
-func fileExistsOnDisk(path string) bool {
+// Distinguishes "doesn't exist" (errors.Is os.ErrNotExist — returns false, nil) from a
+// real stat failure like EACCES (returns false, the error) — treating every stat error as
+// "doesn't exist" would misclassify a permission-denied path as prunable.
+func fileExistsOnDisk(path string) (bool, error) {
 	info, err := os.Stat(path)
-	return err == nil && !info.IsDir()
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return false, nil
+		}
+		return false, err
+	}
+	return !info.IsDir(), nil
 }
 
 // dirExistsOnDisk reports whether path exists and is a directory — the directory-exists-
 // only prunability check this project deliberately scopes down to (stack.md §2.2's
-// explicit scope-cut: no mtime grace period).
-func dirExistsOnDisk(path string) bool {
+// explicit scope-cut: no mtime grace period). See fileExistsOnDisk's doc comment for why a
+// real stat error is returned rather than folded into "doesn't exist."
+func dirExistsOnDisk(path string) (bool, error) {
 	info, err := os.Stat(path)
-	return err == nil && info.IsDir()
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return false, nil
+		}
+		return false, err
+	}
+	return info.IsDir(), nil
 }
