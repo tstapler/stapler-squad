@@ -19,30 +19,22 @@ func (fakeTimeoutNetError) Error() string   { return "fake: i/o timeout" }
 func (fakeTimeoutNetError) Timeout() bool   { return true }
 func (fakeTimeoutNetError) Temporary() bool { return true }
 
-func TestIsBenignTimeout_NetErrorTimeout_ReturnsTrue(t *testing.T) {
-	err := fmt.Errorf("read: %w", fakeTimeoutNetError{})
-	if !lifecycle.IsBenignTimeout(err) {
-		t.Errorf("IsBenignTimeout(%v) = false, want true", err)
+func TestIsBenignTimeout(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"net.Error timeout", fmt.Errorf("read: %w", fakeTimeoutNetError{}), true},
+		{"os.ErrDeadlineExceeded", fmt.Errorf("read: %w", os.ErrDeadlineExceeded), true},
+		{"io.ErrUnexpectedEOF", fmt.Errorf("read: %w", io.ErrUnexpectedEOF), true},
+		{"genuine disconnect", errors.New("connection reset by peer"), false},
 	}
-}
-
-func TestIsBenignTimeout_DeadlineExceeded_ReturnsTrue(t *testing.T) {
-	err := fmt.Errorf("read: %w", os.ErrDeadlineExceeded)
-	if !lifecycle.IsBenignTimeout(err) {
-		t.Errorf("IsBenignTimeout(%v) = false, want true", err)
-	}
-}
-
-func TestIsBenignTimeout_UnexpectedEOF_ReturnsTrue(t *testing.T) {
-	err := fmt.Errorf("read: %w", io.ErrUnexpectedEOF)
-	if !lifecycle.IsBenignTimeout(err) {
-		t.Errorf("IsBenignTimeout(%v) = false, want true", err)
-	}
-}
-
-func TestIsBenignTimeout_GenuineDisconnectError_ReturnsFalse(t *testing.T) {
-	err := errors.New("connection reset by peer")
-	if lifecycle.IsBenignTimeout(err) {
-		t.Errorf("IsBenignTimeout(%v) = true, want false", err)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := lifecycle.IsBenignTimeout(tt.err); got != tt.want {
+				t.Errorf("IsBenignTimeout(%v) = %v, want %v", tt.err, got, tt.want)
+			}
+		})
 	}
 }

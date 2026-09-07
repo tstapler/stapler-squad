@@ -70,7 +70,7 @@ func EndGeneration(span trace.Span, subsystem string, reason Reason) {
 	span.SetAttributes(attribute.String("lifecycle.reason", reason.String()))
 	span.End()
 
-	ctx := context.Background()
+	ctx := trace.ContextWithSpan(context.Background(), span)
 	if endCounter != nil {
 		endCounter.Add(ctx, 1, metric.WithAttributes(
 			attribute.String("subsystem", subsystem),

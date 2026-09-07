@@ -40,9 +40,11 @@ func TestReason_String_AllNamedConstants(t *testing.T) {
 		{lifecycle.ReasonReconnectExhausted, "reconnect_exhausted"},
 	}
 	for _, tt := range tests {
-		if got := tt.reason.String(); got != tt.want {
-			t.Errorf("Reason(%d).String() = %q, want %q", int(tt.reason), got, tt.want)
-		}
+		t.Run(tt.reason.String(), func(t *testing.T) {
+			if got := tt.reason.String(); got != tt.want {
+				t.Errorf("Reason(%d).String() = %q, want %q", int(tt.reason), got, tt.want)
+			}
+		})
 	}
 }
 
@@ -60,11 +62,13 @@ func TestReason_KnownConstants_ShouldContinueAndShouldFireExitCallback_ReturnExp
 		{lifecycle.ReasonReconnectExhausted, false, true},
 	}
 	for _, tt := range tests {
-		if got := tt.reason.ShouldContinue(); got != tt.wantShouldContinue {
-			t.Errorf("%v.ShouldContinue() = %v, want %v", tt.reason, got, tt.wantShouldContinue)
-		}
-		if got := tt.reason.ShouldFireExitCallback(); got != tt.wantFireExit {
-			t.Errorf("%v.ShouldFireExitCallback() = %v, want %v", tt.reason, got, tt.wantFireExit)
-		}
+		t.Run(tt.reason.String(), func(t *testing.T) {
+			if got := tt.reason.ShouldContinue(); got != tt.wantShouldContinue {
+				t.Errorf("%v.ShouldContinue() = %v, want %v", tt.reason, got, tt.wantShouldContinue)
+			}
+			if got := tt.reason.ShouldFireExitCallback(); got != tt.wantFireExit {
+				t.Errorf("%v.ShouldFireExitCallback() = %v, want %v", tt.reason, got, tt.wantFireExit)
+			}
+		})
 	}
 }
