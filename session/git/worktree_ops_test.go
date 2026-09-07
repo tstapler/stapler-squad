@@ -693,3 +693,99 @@ func TestSetup_SerializesConcurrentWorktreeCreation_When_MultipleGoroutinesRaceO
 		defer func() { _ = wt.Cleanup() }()
 	}
 }
+
+// TestSetup_NativeFlagOn_UsesNativeImplementation_ZeroSubprocessCalls covers Story
+// 2.1.3's second acceptance criterion. Deliberately not t.Parallel(): it mutates the
+// shared useNativeWorktree package var, and a non-parallel test always runs to full
+// completion before the next sequential test starts, so it never overlaps with another
+// test's body (mirrors this file's existing testInfoLogMu-documented reasoning for
+// shared-var overrides, which only applies to two tests both marked parallel).
+func TestSetup_NativeFlagOn_UsesNativeImplementation_ZeroSubprocessCalls(t *testing.T) {
+	repoDir := setupTestRepo(t)
+	branchName := "feature-native-on"
+	worktreePath := filepath.Join(t.TempDir(), branchName)
+
+	orig := useNativeWorktree
+	useNativeWorktree = func(string) bool { return true }
+	t.Cleanup(func() { useNativeWorktree = orig })
+
+	spy := &gitSpyCommandRunner{}
+	wt := NewGitWorktreeFromStorageWithExecutor(repoDir, worktreePath, "test-native-flag-on", branchName, "", WithCommandRunner(spy))
+
+	require.NoError(t, wt.Setup())
+
+	assert.Empty(t, spy.runCalls, "native path must issue zero git subprocess invocations for the worktree-add step")
+
+	// Confirm the native implementation actually ran, not merely that no subprocess
+	// call happened to occur: the admin dir and worktree redirect file exist with
+	// nativeSetupNewWorktree's exact layout.
+	adminDir := filepath.Join(repoDir, ".git", "worktrees", branchName)
+	_, err := os.Stat(filepath.Join(adminDir, "gitdir"))
+	assert.NoError(t, err)
+	_, err = os.Stat(filepath.Join(worktreePath, ".git"))
+	assert.NoError(t, err)
+}
+
+// TestSetup_NativeFlagOff_UsesLegacyImplementation_Unchanged covers Story 2.1.3's first
+// acceptance criterion: with the flag off (default, no override), Setup() still runs the
+// legacy subprocess implementation exactly as before this epic's dispatch wrapper was
+// added.
+func TestSetup_NativeFlagOff_UsesLegacyImplementation_Unchanged(t *testing.T) {
+	repoDir := setupTestRepo(t)
+	branchName := "feature-native-off"
+	worktreePath := filepath.Join(t.TempDir(), branchName)
+
+	spy := &gitSpyCommandRunner{}
+	wt := NewGitWorktreeFromStorageWithExecutor(repoDir, worktreePath, "test-native-flag-off", branchName, "", WithCommandRunner(spy))
+
+	require.NoError(t, wt.Setup())
+
+	found := false
+	for _, call := range spy.runCalls {
+		if isWorktreeAddDashBCall(call) {
+			found = true
+		}
+	}
+	assert.True(t, found, "legacy path must still issue the subprocess `worktree add -b` call, unchanged from before this epic")
+}
+
+// TestSetupFromExistingBranch_NativeFlagOn_UnlockUsesNativeImplementation covers Story
+// 2.1.4's dispatch test: with the flag on, setupFromExistingBranch's unlock step routes
+// through nativeUnlockWorktree (a direct filesystem removal, no subprocess) rather than
+// legacyUnlockWorktree's `git worktree unlock` call, while the surrounding
+// remove/re-add subprocess calls are unaffected (Task 2.1.4b's explicitly scoped-down
+// unlock-only dispatch).
+func TestSetupFromExistingBranch_NativeFlagOn_UnlockUsesNativeImplementation(t *testing.T) {
+	repoDir := setupTestRepo(t)
+	branchName := "feature-native-unlock"
+	worktreePath := filepath.Join(t.TempDir(), branchName)
+
+	orig := useNativeWorktree
+	useNativeWorktree = func(string) bool { return true }
+	t.Cleanup(func() { useNativeWorktree = orig })
+
+	// Seed a real, native-created worktree, then simulate an interrupted subsequent
+	// operation leaving a stale LockedMarker behind — the exact state
+	// setupFromExistingBranch's cleanup path exists to recover from.
+	seedWt := NewGitWorktreeFromStorageWithExecutor(repoDir, worktreePath, "test-native-unlock-seed", branchName, "")
+	require.NoError(t, seedWt.nativeSetupNewWorktree())
+
+	indexPath, err := resolveWorktreeIndexPath(worktreePath)
+	require.NoError(t, err)
+	adminDir := filepath.Dir(indexPath)
+	require.NoError(t, os.WriteFile(filepath.Join(adminDir, "locked"), []byte("initializing"), 0644))
+
+	spy := &gitSpyCommandRunner{}
+	wt := NewGitWorktreeFromStorageWithExecutor(repoDir, worktreePath, "test-native-unlock", branchName, "", WithCommandRunner(spy))
+
+	require.NoError(t, wt.setupFromExistingBranch())
+
+	for _, call := range spy.runCalls {
+		if len(call.args) >= 2 && call.args[0] == "worktree" && call.args[1] == "unlock" {
+			t.Fatalf("unlock step must not shell out to git when the native flag is on, got call: %+v", call)
+		}
+	}
+
+	_, statErr := os.Stat(filepath.Join(adminDir, "locked"))
+	assert.True(t, os.IsNotExist(statErr), "nativeUnlockWorktree must have removed the locked marker directly")
+}

@@ -196,7 +196,7 @@ func (g *GitWorktree) setupFromExistingBranch() error {
 	// locked (initializing) by an interrupted `worktree add` — the exact state
 	// worktreeAlreadyRegisteredForBranch just rejected above — otherwise refuses
 	// `remove` regardless of -f, leaving the broken checkout stuck forever.
-	_, _ = g.runGitCommand(g.repoPath, "worktree", "unlock", g.worktreePath)       // Ignore error if not locked
+	_ = g.unlockWorktree()                                                         // Ignore error if not locked
 	_, _ = g.runGitCommand(g.repoPath, "worktree", "remove", "-f", g.worktreePath) // Ignore error if worktree doesn't exist
 
 	// Create a new worktree from the existing branch
@@ -225,6 +225,24 @@ func (g *GitWorktree) setupFromExistingBranch() error {
 	// Worktree created successfully — record the base commit for diff tracking.
 	g.initBaseCommitSHA()
 
+	return nil
+}
+
+// unlockWorktree dispatches to nativeUnlockWorktree/legacyUnlockWorktree per
+// useNativeWorktree(g.sessionName), mirroring setupNewWorktree's dispatch pattern
+// (Story 2.1.4, Task 2.1.4b).
+func (g *GitWorktree) unlockWorktree() error {
+	if useNativeWorktree(g.sessionName) {
+		return nativeUnlockWorktree(g.repoPath, g.worktreePath)
+	}
+	return g.legacyUnlockWorktree()
+}
+
+// legacyUnlockWorktree is the extracted body of setupFromExistingBranch's original `git
+// worktree unlock` subprocess call — identical logic (error ignored, since an unlocked
+// worktree returns one too), reachable when useNativeWorktree resolves false.
+func (g *GitWorktree) legacyUnlockWorktree() error {
+	_, _ = g.runGitCommand(g.repoPath, "worktree", "unlock", g.worktreePath) // Ignore error if not locked
 	return nil
 }
 
@@ -375,15 +393,27 @@ func (g *GitWorktree) findLiveWorktreeForBranch() (string, bool) {
 	return "", false
 }
 
-// setupNewWorktree creates a new worktree from HEAD.
+// setupNewWorktree dispatches to nativeSetupNewWorktree/legacySetupNewWorktree per
+// useNativeWorktree(g.sessionName) (Epic 2.1, Task 2.1.3b) — none of this file's 9 real
+// call sites need to change to pick up the native implementation once the flag is on.
+func (g *GitWorktree) setupNewWorktree() error {
+	if useNativeWorktree(g.sessionName) {
+		return g.nativeSetupNewWorktree()
+	}
+	return g.legacySetupNewWorktree()
+}
+
+// legacySetupNewWorktree is the renamed body of the original subprocess-based
+// setupNewWorktree (Task 2.1.3b) — identical logic, reachable when useNativeWorktree
+// resolves false. It creates a new worktree from HEAD.
 //
-// Like setupFromExistingBranch (see its doc comment), setupNewWorktree is only ever
+// Like setupFromExistingBranch (see its doc comment), legacySetupNewWorktree is only ever
 // reached, in production, through Setup()/SetupLocked(), both of which serialize via
 // WithRepoWorktreeLock — the two-unlocked-goroutines race
 // TestSetupNewWorktree_SelfHeals_When_ConcurrentSpawnsRaceOnBranchCreate constructs cannot
 // occur through any real caller. The self-heal fallback below is still real
 // defense-in-depth: see ADR-001-ground-truth-requery-over-stderr-matching.md.
-func (g *GitWorktree) setupNewWorktree() error {
+func (g *GitWorktree) legacySetupNewWorktree() error {
 	// Ensure worktrees directory exists
 	worktreesDir := filepath.Join(g.repoPath, "worktrees")
 	if err := os.MkdirAll(worktreesDir, 0750); err != nil {
