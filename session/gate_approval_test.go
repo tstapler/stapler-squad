@@ -25,6 +25,7 @@ func TestRecordGateApproval_should_PersistAndNotReAsk_When_ApprovalIsRecorded(t 
 		[]bool{true},
 	)
 
+	//nolint:entfullscan test assertion over a test-scoped in-memory DB; verifies exactly one gate exists.
 	gates, err := client.TransitionGate.Query().All(ctx)
 	require.NoError(t, err)
 	require.Len(t, gates, 1, "test fixture bug: expected exactly one gate")
@@ -76,6 +77,7 @@ func TestRecordGateApproval_should_ReturnConflict_When_ItemAndGatePairAlreadySat
 		[]GateKind{GateKindHumanApproval},
 		[]bool{true},
 	)
+	//nolint:entfullscan test assertion over a test-scoped in-memory DB; verifies exactly one gate exists.
 	gates, err := client.TransitionGate.Query().All(ctx)
 	require.NoError(t, err)
 	gateID := gates[0].ID

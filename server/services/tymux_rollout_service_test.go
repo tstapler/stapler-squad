@@ -30,6 +30,7 @@ func TestGetTymuxRolloutStatus_GlobalEnvVarAlwaysFalse(t *testing.T) {
 
 	resp, err := s.GetTymuxRolloutStatus(context.Background(), connect.NewRequest(&sessionv1.GetTymuxRolloutStatusRequest{}))
 	require.NoError(t, err)
+	//nolint:staticcheck // SA1019: intentionally reading the deprecated field — this test's whole point is asserting it's frozen false.
 	assert.False(t, resp.Msg.GlobalEnvVarSet)
 	assert.Nil(t, resp.Msg.RollbackRehearsalCompletedAt)
 	assert.Empty(t, resp.Msg.SessionOverrides)
