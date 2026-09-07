@@ -192,10 +192,10 @@ func (s *tymuxGRPCSession) readAttachLoop(ctx context.Context, paneID string, st
 				close(done)
 				return reason
 			}
-			newStream, first, ok := s.ReconnectLoop(paneID, "error")
+			newStream, first, ok := s.ReconnectLoop(ctx, paneID, "error")
 			if !ok {
 				close(done)
-				return reasonForReconnectFailure(s)
+				return s.reasonForReconnectFailure()
 			}
 			stream = newStream
 			if first != nil {
@@ -235,7 +235,7 @@ func (s *tymuxGRPCSession) classifyStreamEnd(ctx context.Context) lifecycle.Reas
 // reasonForReconnectFailure classifies ReconnectLoop's ok=false outcome
 // (Task 2.1.1c): "interrupted by a deliberate close" vs "genuinely
 // exhausted" — the caller previously only had a bare bool to go on.
-func reasonForReconnectFailure(s *tymuxGRPCSession) lifecycle.Reason {
+func (s *tymuxGRPCSession) reasonForReconnectFailure() lifecycle.Reason {
 	if s.closing.Load() {
 		return lifecycle.ReasonDeliberateClose
 	}
@@ -531,7 +531,13 @@ func (s *tymuxGRPCSession) reviveAfterRestart(ctx context.Context) error {
 // also delivers a distinguishable failure via the existing exit-callback
 // plumbing (deliverExit, Epic 2.4) — reusing "one mechanism, not two"
 // (pitfalls.md §5) rather than inventing a second notification path.
-func (s *tymuxGRPCSession) ReconnectLoop(paneID string, cause string) (attachStream, *v1.AttachEvent, bool) {
+//
+// genCtx is the generation context readAttachLoop runs under (from
+// lifecycle.StartGeneration in openStandingStream's goroutine) — passed
+// through to the two give-up branches' lifecycle.RecordEnd calls so the
+// span event lands on the generation's own span rather than on
+// context.Background(), which never carries one.
+func (s *tymuxGRPCSession) ReconnectLoop(genCtx context.Context, paneID string, cause string) (attachStream, *v1.AttachEvent, bool) {
 	recordReconnect(cause)
 	sessionID := s.GetSessionIdentifier()
 	log.Info("tymux: standing Attach stream reconnect starting", "session_id", sessionID, "pane_id", paneID, "cause", cause)
@@ -608,12 +614,12 @@ func (s *tymuxGRPCSession) ReconnectLoop(paneID string, cause string) (attachStr
 	s.mu.Unlock()
 
 	if s.closing.Load() {
-		lifecycle.RecordEnd(context.Background(), "tymux_reconnect", lifecycle.ReasonDeliberateClose)
+		lifecycle.RecordEnd(genCtx, "tymux_reconnect", lifecycle.ReasonDeliberateClose)
 		log.Info("tymux: standing Attach stream reconnect abandoned (deliberate close)", "session_id", sessionID, "pane_id", paneID, "cause", cause)
 		return nil, nil, false
 	}
 
-	lifecycle.RecordEnd(context.Background(), "tymux_reconnect", lifecycle.ReasonReconnectExhausted)
+	lifecycle.RecordEnd(genCtx, "tymux_reconnect", lifecycle.ReasonReconnectExhausted)
 	log.Warn("tymux: standing Attach stream reconnect exhausted, giving up", "session_id", sessionID, "pane_id", paneID, "cause", cause, "max_attempts", maxAttempts)
 	s.deliverExit(fmt.Sprintf("reconnect failed: tymuxd unreachable after %d attempts", maxAttempts))
 	return nil, nil, false

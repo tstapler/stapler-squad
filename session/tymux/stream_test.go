@@ -858,7 +858,7 @@ func TestReconnectLoop_ClosingDuringExhaustion_RecordsDeliberateCloseNotExhauste
 	beforeClose := sumForSubsystem(t, collectMetric(t, "session_lifecycle_ends_total"), "tymux_reconnect", "deliberate_close")
 	beforeExhausted := sumForSubsystem(t, collectMetric(t, "session_lifecycle_ends_total"), "tymux_reconnect", "reconnect_exhausted")
 
-	_, _, ok := concrete.ReconnectLoop("pane-1", "error")
+	_, _, ok := concrete.ReconnectLoop(context.Background(), "pane-1", "error")
 	assert.False(t, ok)
 
 	afterClose := sumForSubsystem(t, collectMetric(t, "session_lifecycle_ends_total"), "tymux_reconnect", "deliberate_close")
