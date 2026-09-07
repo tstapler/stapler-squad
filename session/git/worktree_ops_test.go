@@ -102,12 +102,12 @@ func TestSetup_SurfacesError_When_BranchRefIsMalformed(t *testing.T) {
 	assert.True(t, os.IsNotExist(statErr), "worktree must not have been created after a ref-check error")
 }
 
-// TestSetupNewWorktree_SurfacesError_When_BranchRefIsMalformed covers setupNewWorktree()'s
-// own re-check call site directly (not reachable through Setup() alone, since Setup()'s
-// upfront goroutine check would already have surfaced the same error and never called
-// setupNewWorktree() at all — this exercises the second call site's own use of
-// branchRefExists independently, e.g. as it would be reached via a stale/racy upstream
-// read). It also guards against data loss: setupNewWorktree()'s ref check is the only gate
+// TestSetupNewWorktree_SurfacesError_When_BranchRefIsMalformed covers
+// setupLockedWithNative's own re-check call site directly (not reachable through Setup()
+// alone, since Setup()'s upfront goroutine check would already have surfaced the same
+// error and never reached this second call site at all) — this exercises that second call
+// site's own use of branchRefExists independently, e.g. as it would be reached via a
+// stale/racy upstream read. It also guards against data loss: this ref check is the only gate
 // before cleanupExistingBranch() unconditionally calls RemoveReference on the ref store, so
 // a misclassified error here previously fell through into that call. The source shows the
 // early return on a non-nil branchRefExists error precedes the cleanupExistingBranch() call
@@ -132,8 +132,8 @@ func TestSetupNewWorktree_SurfacesError_When_BranchRefIsMalformed(t *testing.T) 
 	before, readErr := os.ReadFile(packedRefsPath)
 	require.NoError(t, readErr)
 
-	err = wt.setupNewWorktree()
-	require.Error(t, err, "setupNewWorktree() must surface a malformed ref as an error")
+	err = wt.setupLockedWithNative(useNativeWorktree(wt.sessionName))
+	require.Error(t, err, "setupLockedWithNative() must surface a malformed ref as an error")
 	assert.False(t, errors.Is(err, plumbing.ErrReferenceNotFound),
 		"a genuine ref-read failure must not be classified as ErrReferenceNotFound")
 	assert.Contains(t, err.Error(), "failed to check branch reference")
@@ -169,7 +169,7 @@ func (s *refFailStorer) Reference(name plumbing.ReferenceName) (*plumbing.Refere
 
 // TestBranchRefExists_LeavesRealRefIntact_When_UnderlyingReadFails proves the literal
 // requirement behind AC5 (worktree-branch-exists-race): when branchRefExists — the single
-// helper both Setup() and setupNewWorktree() call — encounters a non-ErrReferenceNotFound
+// helper both Setup() and setupLockedWithNative() call — encounters a non-ErrReferenceNotFound
 // error, the real branch ref on disk is left completely untouched. Unlike the
 // corrupted-packed-refs fixture, this uses a wrapped storer to fail only the read for the
 // target branch, leaving the rest of the real filesystem-backed ref store fully intact and
@@ -214,7 +214,7 @@ func TestBranchRefExists_LeavesRealRefIntact_When_UnderlyingReadFails(t *testing
 }
 
 // TestSetupNewWorktree_RespectsPreSetBaseCommitSHA is the regression test for the
-// stale-HEAD backlog-spawn bug: setupNewWorktree() used to unconditionally overwrite
+// stale-HEAD backlog-spawn bug: the new-worktree setup path used to unconditionally overwrite
 // baseCommitSHA with `rev-parse HEAD` of repoPath, silently discarding any base a caller
 // had already selected (e.g. NewGitWorktreeFromCommitSHA, or CreateBacklogWorktree
 // resolving origin/main's fetched tip). This asserts the worktree is branched from the
@@ -245,7 +245,7 @@ func TestSetupNewWorktree_RespectsPreSetBaseCommitSHA(t *testing.T) {
 	wt, _, err := NewGitWorktreeFromCommitSHA(repoDir, "test-pre-set-base", branchName, baseSHA)
 	require.NoError(t, err)
 
-	err = wt.setupNewWorktree()
+	err = wt.setupLockedWithNative(useNativeWorktree(wt.sessionName))
 	require.NoError(t, err)
 	defer func() { _ = wt.Cleanup() }()
 
@@ -317,10 +317,10 @@ func TestInitBaseCommitSHA_UsesWorktreePath_NotRepoPathAmbientCheckout(t *testin
 		"initBaseCommitSHA must find feature's real merge-base with main by running inside the worktree, unaffected by repoPath's ambient checkout")
 }
 
-// TestSetupNewWorktree_UsesExistingBranch_When_BranchRefExists covers setupNewWorktree()'s
-// own reuse path directly, independent of Setup()'s upfront goroutine (which would normally
-// short-circuit straight to setupFromExistingBranch and never reach setupNewWorktree() at
-// all when the branch already exists).
+// TestSetupNewWorktree_UsesExistingBranch_When_BranchRefExists covers
+// setupLockedWithNative's own reuse path directly, independent of Setup()'s upfront
+// goroutine (which would normally short-circuit straight to setupFromExistingBranch and
+// never reach that call site at all when the branch already exists).
 func TestSetupNewWorktree_UsesExistingBranch_When_BranchRefExists(t *testing.T) {
 	t.Parallel()
 	repoDir := setupTestRepo(t)
@@ -333,7 +333,7 @@ func TestSetupNewWorktree_UsesExistingBranch_When_BranchRefExists(t *testing.T) 
 	wt, _, err := NewGitWorktreeWithBranch(repoDir, "test-existing-direct", branchName)
 	require.NoError(t, err)
 
-	err = wt.setupNewWorktree()
+	err = wt.setupLockedWithNative(useNativeWorktree(wt.sessionName))
 	require.NoError(t, err)
 	defer func() { _ = wt.Cleanup() }()
 
@@ -356,11 +356,11 @@ func TestWorktreeAlreadyRegisteredForBranch_MatchesRawAgainstCanonicalPath(t *te
 	branchName := "already-registered-raw-vs-canonical"
 	wt, _, err := NewGitWorktreeWithBranch(repoDir, "test-raw-vs-canonical", branchName)
 	require.NoError(t, err)
-	require.NoError(t, wt.setupNewWorktree())
+	require.NoError(t, wt.setupLockedWithNative(useNativeWorktree(wt.sessionName)))
 	defer func() { _ = wt.Cleanup() }()
 
 	// Build a symlink alias to the real worktree directory and point g.worktreePath at
-	// the alias (the "raw" spelling) instead of the canonical path setupNewWorktree
+	// the alias (the "raw" spelling) instead of the canonical path setupLockedWithNative
 	// actually created on disk. git itself only ever knows about the real directory, so
 	// 'worktree list --porcelain' will report the canonical path — exercising exactly the
 	// raw-vs-canonicalized mismatch this fix must tolerate.
@@ -375,16 +375,16 @@ func TestWorktreeAlreadyRegisteredForBranch_MatchesRawAgainstCanonicalPath(t *te
 }
 
 // TestSetupNewWorktree_SelfHeals_When_ConcurrentSpawnsRaceOnBranchCreate is the regression
-// test for the self-heal fallback in setupNewWorktree's "worktree add -b" error handling.
+// test for the self-heal fallback in setupLockedWithNative's "worktree add -b" error handling.
 // Unlike TestSetupNewWorktree_UsesExistingBranch_When_BranchRefExists — which pre-creates the
-// branch before calling setupNewWorktree, so branchRefExists is already true at the
+// branch before calling setupLockedWithNative, so branchRefExists is already true at the
 // function's own upfront check and setupFromExistingBranch is reached via that early path —
 // this test starts with the branch absent for both callers and races two real
-// setupNewWorktree calls against the identical branch name, the same shape as two concurrent
+// setupLockedWithNative calls against the identical branch name, the same shape as two concurrent
 // backlog spawns for the same item computing the same deterministic branchWorkSlug. Both
 // callers' upfront branchRefExists checks can observe "false" before either has created the
 // branch; the loser's "git worktree add -b" fails with "a branch named '<branch>' already
-// exists", triggering setupNewWorktree's fallback into setupFromExistingBranch — which then
+// exists", triggering setupLockedWithNative's fallback into setupFromExistingBranch — which then
 // hits its own second race window: by the time it runs, the winner has often already checked
 // out the branch into its worktree, so setupFromExistingBranch's own "worktree add <path>
 // <branch>" (no -b) fails too, with git 2.50.1's "'<branch>' is already used by worktree at
@@ -411,12 +411,12 @@ func TestSetupNewWorktree_SelfHeals_When_ConcurrentSpawnsRaceOnBranchCreate(t *t
 	go func() {
 		defer wg.Done()
 		<-start
-		errs[0] = wt1.setupNewWorktree()
+		errs[0] = wt1.setupLockedWithNative(useNativeWorktree(wt1.sessionName))
 	}()
 	go func() {
 		defer wg.Done()
 		<-start
-		errs[1] = wt2.setupNewWorktree()
+		errs[1] = wt2.setupLockedWithNative(useNativeWorktree(wt2.sessionName))
 	}()
 	close(start)
 	wg.Wait()
@@ -431,7 +431,7 @@ func TestSetupNewWorktree_SelfHeals_When_ConcurrentSpawnsRaceOnBranchCreate(t *t
 	assert.True(t, strings.Contains(string(out), branchName), "branch must exist once the race resolves")
 }
 
-// isWorktreeAddDashBCall reports whether a recorded gitSpyRunCall is setupNewWorktree's
+// isWorktreeAddDashBCall reports whether a recorded gitSpyRunCall is legacySetupNewWorktree's
 // "git worktree add -b <branch> <path> <commit>" call, as opposed to the unconditional
 // "worktree remove -f" cleanup call or a "rev-parse HEAD" call that also route through the
 // same spy.
@@ -440,7 +440,7 @@ func isWorktreeAddDashBCall(call gitSpyRunCall) bool {
 }
 
 // TestSetupNewWorktree_SelfHeals_When_WorktreeAddFailsWithUnrecognizedError is the
-// deterministic regression test for Ground-Truth Re-Query (ADR-001) at setupNewWorktree's
+// deterministic regression test for Ground-Truth Re-Query (ADR-001) at legacySetupNewWorktree's
 // layer: an error string the old strings.Contains("already exists") check would NOT have
 // matched (git's real "signal: killed" message for a timeout-killed subprocess, confirmed
 // in research/features.md) must still self-heal when the branch was actually created by a
@@ -467,7 +467,7 @@ func TestSetupNewWorktree_SelfHeals_When_WorktreeAddFailsWithUnrecognizedError(t
 	wt, _, err := NewGitWorktreeWithBranch(repoDir, "test-unrecognized-error-layer1", branchName, WithCommandRunner(spy))
 	require.NoError(t, err)
 
-	err = wt.setupNewWorktree()
+	err = wt.setupLockedWithNative(useNativeWorktree(wt.sessionName))
 	require.NoError(t, err, "must self-heal on an error string neither old literal matched, since the branch now exists")
 	defer func() { _ = wt.Cleanup() }()
 }
@@ -502,7 +502,7 @@ func TestSetupNewWorktree_SelfHeals_When_BranchCreatedByDelayedRaceWinner(t *tes
 	wt, _, err := NewGitWorktreeWithBranch(repoDir, "test-delayed-race-winner-layer1", branchName, WithCommandRunner(spy))
 	require.NoError(t, err)
 
-	err = wt.setupNewWorktree()
+	err = wt.setupLockedWithNative(useNativeWorktree(wt.sessionName))
 	require.NoError(t, err, "must self-heal once the delayed race winner's branch appears within the retry window")
 	defer func() { _ = wt.Cleanup() }()
 }
@@ -543,7 +543,7 @@ func TestSetupNewWorktree_should_IncrementRetryCounter_When_GroundTruthRequeryRe
 	before := collectGitMetric(t, "git_worktree_retry_total")
 	baseline := sumGitCounter(t, before)
 
-	err = wt.setupNewWorktree()
+	err = wt.setupLockedWithNative(useNativeWorktree(wt.sessionName))
 	require.NoError(t, err, "must self-heal once the delayed race winner's branch appears within the retry window")
 	defer func() { _ = wt.Cleanup() }()
 
@@ -572,7 +572,7 @@ func TestSetupNewWorktree_HardFails_When_WorktreeAddErrorsAndBranchStillDoesNotE
 	wt, _, err := NewGitWorktreeWithBranch(repoDir, "test-never-created-layer1", branchName, WithCommandRunner(spy))
 	require.NoError(t, err)
 
-	err = wt.setupNewWorktree()
+	err = wt.setupLockedWithNative(useNativeWorktree(wt.sessionName))
 	require.Error(t, err, "must not self-heal when the branch genuinely never appears")
 	assert.Contains(t, err.Error(), "failed to create worktree from commit")
 }
@@ -698,7 +698,7 @@ func TestSetupFromExistingBranch_HardFails_When_WorktreeAddErrorsAndBranchNotFou
 // backlog-triage spawns, or duplicate server processes) hitting the same repo's shared
 // .git/worktrees/ administrative metadata at once, each for a distinct branch/worktree path.
 // Unlike TestSetupNewWorktree_SelfHeals_When_ConcurrentSpawnsRaceOnBranchCreate (which calls the
-// unlocked setupNewWorktree() directly to exercise same-branch self-heal logic), this test calls
+// unlocked setupLockedWithNative() directly to exercise same-branch self-heal logic), this test calls
 // the public, now-lock-wrapped Setup() to verify WithRepoWorktreeLock actually prevents the
 // metadata race rather than merely tolerating one branch-create collision.
 func TestSetup_SerializesConcurrentWorktreeCreation_When_MultipleGoroutinesRaceOnSameRepo(t *testing.T) {
@@ -1067,12 +1067,12 @@ func TestSetupNewWorktree_NativeFlag_SelfHeals_When_ConcurrentSpawnsRaceOnBranch
 	go func() {
 		defer wg.Done()
 		<-start
-		errs[0] = wt1.setupNewWorktree()
+		errs[0] = wt1.setupLockedWithNative(useNativeWorktree(wt1.sessionName))
 	}()
 	go func() {
 		defer wg.Done()
 		<-start
-		errs[1] = wt2.setupNewWorktree()
+		errs[1] = wt2.setupLockedWithNative(useNativeWorktree(wt2.sessionName))
 	}()
 	close(start)
 	wg.Wait()

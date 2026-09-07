@@ -75,7 +75,7 @@ func ResolveDefaultBranchSHA(repoPath string) (branch, sha string, err error) {
 // repoPath's own checkout, this always fetches first, so the returned SHA reflects
 // origin's true current tip rather than whatever repoPath happened to have checked
 // out last — the gap that let a new backlog work session's worktree branch from a
-// days-stale local checkout instead of the real main tip (see setupNewWorktree's
+// days-stale local checkout instead of the real main tip (see legacySetupNewWorktree's
 // "branch from current HEAD" comment, and CreateBacklogWorktree's use of this func).
 func ResolveOriginBranchSHA(repoPath, mainBranch string) (string, error) {
 	if err := FetchBranch(repoPath, mainBranch); err != nil {

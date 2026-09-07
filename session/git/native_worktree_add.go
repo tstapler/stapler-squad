@@ -54,9 +54,9 @@ func AllocateAdminDirName(repoPath, name string) (string, error) {
 	return "", fmt.Errorf("AllocateAdminDirName: exhausted %d suffix attempts for %q under %q", maxAllocateAdminDirNameRetries, name, worktreesDir)
 }
 
-// nativeSetupNewWorktree is the pure-Go, go-git-based replacement for setupNewWorktree's
+// nativeSetupNewWorktree is the pure-Go, go-git-based replacement for legacySetupNewWorktree's
 // subprocess `git worktree add -b <branch> <path> <commit>` (Epic 2.1, Stories 2.1.1 and
-// 2.1.2), dispatched from setupNewWorktree via useNativeWorktree (Task 2.1.3b). It writes
+// 2.1.2), dispatched from setupLockedWithNative via useNativeWorktree (Task 2.1.3b). It writes
 // real git's exact `.git/worktrees/<name>/` admin-file set in crash-safe order (ADR-001)
 // — LockedMarker first, GitdirFile before CommondirFile, then HEAD, then the worktree's
 // own WorktreeRedirectFile — then populates the working tree via go-git's existing
@@ -193,10 +193,7 @@ func checkoutNativeWorktree(worktreePath, branchName, baseCommitSHA string) erro
 // os.Remove is already an atomic unlink, so no AdminFileWriter temp+rename step applies
 // here — that primitive exists for content writes, not removals.
 func nativeUnlockWorktree(repoPath, worktreePath string) error {
-	adminDir, err := worktreeAdminDirFor(repoPath, worktreePath)
-	if err != nil {
-		return fmt.Errorf("nativeUnlockWorktree: failed to resolve admin dir for %q: %w", worktreePath, err)
-	}
+	adminDir := worktreeAdminDirFor(repoPath, worktreePath)
 
 	if err := os.Remove(filepath.Join(adminDir, "locked")); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("nativeUnlockWorktree: failed to remove locked marker in %q: %w", adminDir, err)
@@ -211,9 +208,12 @@ func nativeUnlockWorktree(repoPath, worktreePath string) error {
 // unreadable. The fallback matters here specifically: nativeUnlockWorktree's whole
 // purpose is clearing a marker left by an interrupted Add, which can leave worktreePath's
 // own `.git` file missing or malformed.
-func worktreeAdminDirFor(repoPath, worktreePath string) (string, error) {
+//
+// Returns a bare string, not (string, error): resolveWorktreeIndexPath's own error is
+// exactly what triggers the fallback, so both branches always succeed.
+func worktreeAdminDirFor(repoPath, worktreePath string) string {
 	if indexPath, err := resolveWorktreeIndexPath(worktreePath); err == nil {
-		return filepath.Dir(indexPath), nil
+		return filepath.Dir(indexPath)
 	}
-	return filepath.Join(repoPath, ".git", "worktrees", filepath.Base(worktreePath)), nil
+	return filepath.Join(repoPath, ".git", "worktrees", filepath.Base(worktreePath))
 }

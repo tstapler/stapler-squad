@@ -68,3 +68,51 @@ func TestNativeMerge_ConflictMarkers_MatchGoldenFixture(t *testing.T) {
 
 	require.Equal(t, string(golden), content, "native conflict-marker output must be byte-identical to real git's own output")
 }
+
+// goldenConflictEmptyTheirsFixturePath is testdata/golden_conflict_empty_theirs.txt, real
+// git's byte-for-byte output for a conflict where one side (theirs) collapses the file to
+// empty content — the "delete/modify"-shaped case from PR #730 Gate 2 Blocker 2:
+// renderConflictHunk used to unconditionally append "\n" after joining a hunk side, even
+// when that side had zero lines, producing an extra blank line between "=======" and
+// ">>>>>>> origin/main" that real git never emits.
+const goldenConflictEmptyTheirsFixturePath = "testdata/golden_conflict_empty_theirs.txt"
+
+// TestNativeMerge_ConflictMarkers_EmptySide_MatchesGoldenFixture_NoExtraBlankLine covers
+// Gate 2 Blocker 2's regression test: a hunk whose Theirs side has zero lines must render
+// with no blank line before the closing marker, byte-identical to real git.
+//
+// The fixture was generated the same way as goldenConflictAFixturePath (see that test's
+// doc comment for the general recipe), with this scenario's specific commands:
+//
+//	git init -b main && git config user.email/user.name
+//	printf 'line1\nsecond\n' > a.txt && git add a.txt && git commit -m base
+//	git checkout -b feature
+//	printf 'line1\nours change\n' > a.txt && git add a.txt && git commit -m ours
+//	git checkout main
+//	printf '' > a.txt && git add a.txt && git commit -m theirs-empties
+//	git update-ref refs/remotes/origin/main main
+//	git checkout feature
+//	git -c merge.conflictStyle=merge merge --no-edit origin/main   # conflicts; a.txt is the fixture
+func TestNativeMerge_ConflictMarkers_EmptySide_MatchesGoldenFixture_NoExtraBlankLine(t *testing.T) {
+	t.Parallel()
+
+	golden, err := os.ReadFile(filepath.Join("testdata", "golden_conflict_empty_theirs.txt"))
+	require.NoError(t, err)
+
+	const (
+		base   = "line1\nsecond\n"
+		ours   = "line1\nours change\n"
+		theirs = ""
+	)
+
+	var merger ThreeWayFileMerger
+	result, err := merger.Merge(base, ours, theirs)
+	require.NoError(t, err)
+	require.NotEmpty(t, result.Conflicts(), "this scenario must produce a real conflict, matching the golden fixture's generation run")
+	require.Empty(t, result.Conflicts()[0].Theirs, "test setup: theirs side must be the empty hunk this regression test targets")
+
+	content, err := assembleConflictedFileContent(result.Hunks, "HEAD", "origin/main")
+	require.NoError(t, err)
+
+	require.Equal(t, string(golden), content, "native conflict-marker output must be byte-identical to real git's own output, with no extra blank line for the empty side")
+}

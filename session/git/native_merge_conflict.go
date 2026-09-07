@@ -34,11 +34,18 @@ func renderConflictHunk(hunk MergeHunk, oursLabel, theirsLabel string) (string, 
 	b.WriteString("<<<<<<< ")
 	b.WriteString(oursLabel)
 	b.WriteString("\n")
-	b.WriteString(strings.Join(hunk.Ours, "\n"))
-	b.WriteString("\n")
+	// Real git omits the trailing newline after an empty side (a delete-vs-modify
+	// conflict) rather than emitting a blank line — join+"\n" unconditionally would
+	// add one that never appears in real git's output.
+	if len(hunk.Ours) > 0 {
+		b.WriteString(strings.Join(hunk.Ours, "\n"))
+		b.WriteString("\n")
+	}
 	b.WriteString("=======\n")
-	b.WriteString(strings.Join(hunk.Theirs, "\n"))
-	b.WriteString("\n")
+	if len(hunk.Theirs) > 0 {
+		b.WriteString(strings.Join(hunk.Theirs, "\n"))
+		b.WriteString("\n")
+	}
 	b.WriteString(">>>>>>> ")
 	b.WriteString(theirsLabel)
 	b.WriteString("\n")

@@ -19,8 +19,8 @@ import (
 )
 
 // worktreeAddRetryAttempts and worktreeAddRetryDelay bound Ground-Truth Re-Query (ADR-001):
-// after a `worktree add` failure, both self-heal layers (setupNewWorktree,
-// setupFromExistingBranch) re-verify actual git state instead of pattern-matching the
+// after a `worktree add` failure, both self-heal layers (setupLockedWithNative's new-worktree
+// branch, setupFromExistingBranch) re-verify actual git state instead of pattern-matching the
 // failure's error text, retrying briefly in case the race winner's own `worktree
 // add`/`worktree list` is still in flight.
 //
@@ -52,7 +52,7 @@ func branchRefExists(repo *git.Repository, branchRef plumbing.ReferenceName) (bo
 	}
 }
 
-// branchExistsAfterAddFailure is setupNewWorktree's Ground-Truth Re-Query (ADR-001): after
+// branchExistsAfterAddFailure is setupLockedWithNative's Ground-Truth Re-Query (ADR-001): after
 // a `worktree add -b` failure, poll branchRefExists up to worktreeAddRetryAttempts times
 // (sleeping worktreeAddRetryDelay between attempts) to give a concurrent race winner's own
 // still-in-flight `worktree add` a chance to finish, rather than deciding the outcome from
@@ -198,12 +198,12 @@ func (g *GitWorktree) setupLockedWithNative(native bool) error {
 // still in_progress/review item with a missing worktree once anything else (a
 // concurrent cleanup call, or simply a slow-running review) touched it mid-recreation.
 //
-// setupNewWorktree and setupFromExistingBranch are only ever reached, in production,
-// through Setup()/SetupLocked() (worktree_ops.go:53-70), both of which serialize via
-// WithRepoWorktreeLock before calling either. The specific two-unlocked-goroutines race
-// TestSetupNewWorktree_SelfHeals_When_ConcurrentSpawnsRaceOnBranchCreate constructs (by
-// calling setupNewWorktree directly, unlocked) cannot occur through any real caller —
-// confirmed by TestSetup_SerializesConcurrentWorktreeCreation_When_MultipleGoroutinesRaceOnSameRepo.
+// setupLockedWithNative's new-worktree branch and setupFromExistingBranch are only ever
+// reached, in production, through Setup()/SetupLocked() (worktree_ops.go:53-70), both of
+// which serialize via WithRepoWorktreeLock before calling either. The specific
+// two-unlocked-goroutines race TestSetupNewWorktree_SelfHeals_When_ConcurrentSpawnsRaceOnBranchCreate
+// constructs (by calling setupLockedWithNative directly, unlocked) cannot occur through any
+// real caller — confirmed by TestSetup_SerializesConcurrentWorktreeCreation_When_MultipleGoroutinesRaceOnSameRepo.
 // The self-heal fallback below is still real defense-in-depth, though: a branch can exist
 // for reasons other than a lost create race (a manual `git branch`, a prior partial run),
 // and the same Ground-Truth Re-Query handles that case identically. See
@@ -232,7 +232,7 @@ func (g *GitWorktree) setupFromExistingBranch() error {
 		// by version and locale — and, per this fix's root-cause finding, doesn't cover
 		// a timeout-killed subprocess's "signal: killed" either), unconditionally
 		// re-check actual git state for any failure here. This is the second self-heal
-		// layer for the same concurrent-spawn race setupNewWorktree's own Re-Query
+		// layer for the same concurrent-spawn race setupLockedWithNative's own Re-Query
 		// handles: by the time this call runs, a race winner may have already checked
 		// out the branch into its own worktree.
 		log.Info("worktree add failed, checking whether the branch is already checked out elsewhere", "branch", g.branchName, "err", err)
@@ -255,7 +255,7 @@ func (g *GitWorktree) setupFromExistingBranch() error {
 }
 
 // unlockWorktree dispatches to nativeUnlockWorktree/legacyUnlockWorktree per
-// useNativeWorktree(g.sessionName), mirroring setupNewWorktree's dispatch pattern
+// useNativeWorktree(g.sessionName), mirroring setupLockedWithNative's dispatch pattern
 // (Story 2.1.4, Task 2.1.4b).
 func (g *GitWorktree) unlockWorktree() error {
 	if useNativeWorktree(g.sessionName) {
@@ -404,7 +404,7 @@ func (g *GitWorktree) findLiveWorktreeForBranch() (string, bool) {
 // worktreeAddRetryAttempts times (sleeping worktreeAddRetryDelay between attempts) looking
 // for g.branchName registered to some other worktree path — giving a concurrent race
 // winner's own still-in-flight worktree registration a chance to complete, symmetric with
-// setupNewWorktree's branchExistsAfterAddFailure.
+// branchExistsAfterAddFailure.
 //
 // Before returning a match, verifies the path is actually present on disk (os.Stat),
 // mirroring worktreeAlreadyRegisteredForBranch's existing liveness check: a stale/prunable
@@ -471,17 +471,6 @@ func (g *GitWorktree) nativeFindLiveWorktreeForBranch() (string, bool) {
 		}
 	}
 	return "", false
-}
-
-// setupNewWorktree dispatches to nativeSetupNewWorktreeWithSelfHeal/legacySetupNewWorktree
-// per useNativeWorktree(g.sessionName) (Epic 2.1, Task 2.1.3b; self-heal wrapping added by
-// Story 2.5.2) — none of this file's 9 real call sites need to change to pick up the
-// native implementation once the flag is on.
-func (g *GitWorktree) setupNewWorktree() error {
-	if useNativeWorktree(g.sessionName) {
-		return g.nativeSetupNewWorktreeWithSelfHeal()
-	}
-	return g.legacySetupNewWorktree()
 }
 
 // nativeSetupNewWorktreeWithSelfHeal wraps nativeSetupNewWorktree with the native
@@ -630,7 +619,7 @@ func (g *GitWorktree) Remove() error {
 }
 
 // removeLocked dispatches to nativeRemoveWorktree/legacyRemoveWorktree per
-// useNativeWorktree(g.sessionName) (Epic 2.2, Task 2.2.2a), mirroring setupNewWorktree's
+// useNativeWorktree(g.sessionName) (Epic 2.2, Task 2.2.2a), mirroring setupLockedWithNative's
 // and unlockWorktree's dispatch pattern.
 func (g *GitWorktree) removeLocked() error {
 	ctx := withOperationAttrs(context.Background(), attribute.String("session_name", g.sessionName))

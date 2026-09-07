@@ -337,6 +337,10 @@ func restoreWorkingTreeFile(worktreePath, path string, content []byte) error {
 // second concurrent merge — a real gap against this project's own ADR-001/plan.md claim
 // that WithRepoWorktreeLock is the load-bearing safety net making a flag flip mid-burst
 // safe.
+//
+// KNOWN GAP (PR #730 Gate 2 review): a conflicted merge re-opens the repo (openWorktreeRepo)
+// several times across this call tree instead of threading one already-open
+// *git.Repository through — real but a larger refactor, tracked as a follow-up.
 func nativeMergeMainIntoWorktreeLocked(worktreePath, mainBranch string) (*MergeMainResult, error) {
 	repoPath, err := repoPathForWorktree(worktreePath)
 	if err != nil {
@@ -384,6 +388,21 @@ func nativeMergeMainIntoWorktree(worktreePath, mainBranch string) (*MergeMainRes
 	repo, err := openWorktreeRepo(worktreePath)
 	if err != nil {
 		return nil, fmt.Errorf("nativeMergeMainIntoWorktree: failed to open repo at %s: %w", worktreePath, err)
+	}
+
+	// Refuse a dirty worktree before touching anything else — matching legacy's `git
+	// merge`, which fails with "local changes would be overwritten by merge" rather than
+	// silently discarding uncommitted edits in any path the merge touches.
+	wt, err := repo.Worktree()
+	if err != nil {
+		return nil, fmt.Errorf("nativeMergeMainIntoWorktree: failed to get worktree at %s: %w", worktreePath, err)
+	}
+	status, err := wt.Status()
+	if err != nil {
+		return nil, fmt.Errorf("nativeMergeMainIntoWorktree: failed to check worktree status at %s: %w", worktreePath, err)
+	}
+	if !status.IsClean() {
+		return nil, fmt.Errorf("nativeMergeMainIntoWorktree: worktree at %s has uncommitted changes; refusing to merge %s (matches legacy git merge's \"local changes would be overwritten\" refusal)", worktreePath, mainBranch)
 	}
 
 	oursSHA, err := getHeadCommitSHA(worktreePath)

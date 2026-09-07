@@ -15,7 +15,13 @@ import (
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
+
+	"github.com/tstapler/stapler-squad/config"
 )
+
+// rolloutBoolPtr is this file's local copy of config's unexported test helper
+// (config/stream_hub_rollout_test.go's boolPtr) — can't be imported across packages.
+func rolloutBoolPtr(b bool) *bool { return &b }
 
 // testSpanRecorder/testMetricReader back the single real TracerProvider/MeterProvider
 // installed for this test binary. OTel's global tracer/meter only pick up a new
@@ -186,4 +192,56 @@ func TestWithOperationSpan_AppliesCallerAttrsFromContext(t *testing.T) {
 	sessionAttr, ok := findSpanAttr(ended[0].Attributes(), "session_name")
 	require.True(t, ok, "expected a session_name attribute carried over from withOperationAttrs")
 	assert.Equal(t, "sess-1", sessionAttr.Value.AsString())
+}
+
+// --- Gate 2 Critical 3: useNativeWorktree/useNativeMerge precedence, exercised via the
+// real functions against a real disk-backed config.Config (STAPLER_SQUAD_TEST_DIR
+// isolation, config/config_test.go's idiom), not by swapping the package var stub every
+// other test in this package uses. That stub swap exercises the "native flag on" dispatch
+// path but never the session-override/global-default/safe-off-default precedence logic
+// inside useNativeWorktree/useNativeMerge themselves.
+
+// TestUseNativeWorktree_should_PreferSessionOverride_OverGlobalDefault covers ADR-002's
+// precedence rule: a session override must win over the global default regardless of which
+// way each is set, and a session with no override must fall back to the global default.
+func TestUseNativeWorktree_should_PreferSessionOverride_OverGlobalDefault(t *testing.T) {
+	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+
+	cfg := config.LoadConfig()
+	require.NoError(t, cfg.SetNativeWorktreeGlobalOverride(rolloutBoolPtr(true)))
+	require.NoError(t, cfg.SetNativeWorktreeSessionOverride("sess-1", rolloutBoolPtr(false)))
+
+	assert.False(t, useNativeWorktree("sess-1"), "a session override (false) must win over a global default of true")
+	assert.True(t, useNativeWorktree("sess-other"), "a session with no override must fall back to the global default")
+}
+
+// TestUseNativeWorktree_should_UseSafeOffDefault_When_NothingConfigured covers ADR-002's
+// safe-off default: with no session override and no global override persisted at all,
+// native worktree must resolve to false.
+func TestUseNativeWorktree_should_UseSafeOffDefault_When_NothingConfigured(t *testing.T) {
+	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+
+	assert.False(t, useNativeWorktree("sess-unconfigured"), "native worktree must default off when nothing is configured")
+}
+
+// TestUseNativeMerge_should_PreferPathOverride_OverGlobalDefault is
+// TestUseNativeWorktree_should_PreferSessionOverride_OverGlobalDefault's merge equivalent:
+// per ADR-002, useNativeMerge is keyed by worktreePath, not sessionName.
+func TestUseNativeMerge_should_PreferPathOverride_OverGlobalDefault(t *testing.T) {
+	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+
+	cfg := config.LoadConfig()
+	require.NoError(t, cfg.SetNativeMergeGlobalOverride(rolloutBoolPtr(true)))
+	require.NoError(t, cfg.SetNativeMergeWorktreeOverride("/tmp/wt1", rolloutBoolPtr(false)))
+
+	assert.False(t, useNativeMerge("/tmp/wt1"), "a worktree-path override (false) must win over a global default of true")
+	assert.True(t, useNativeMerge("/tmp/wt-other"), "a worktree with no override must fall back to the global default")
+}
+
+// TestUseNativeMerge_should_UseSafeOffDefault_When_NothingConfigured is
+// TestUseNativeWorktree_should_UseSafeOffDefault_When_NothingConfigured's merge equivalent.
+func TestUseNativeMerge_should_UseSafeOffDefault_When_NothingConfigured(t *testing.T) {
+	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+
+	assert.False(t, useNativeMerge("/tmp/wt-unconfigured"), "native merge must default off when nothing is configured")
 }

@@ -27,6 +27,25 @@ func TestNativeListWorktrees_LiveWorktree(t *testing.T) {
 	assert.Equal(t, CanonicalizeWorktreePath(worktreePath), CanonicalizeWorktreePath(entry.WorktreePath))
 }
 
+// TestNativeFindExistingWorktreeForBranch_FindsLiveWorktree_ReportsNotFoundForOtherBranch
+// covers PR #730 Gate 2's noted gap: nativeFindExistingWorktreeForBranch (worktree.go),
+// findExistingWorktreeForBranch's native counterpart dispatched to when useNativeWorktree
+// is on (worktree.go's findOrCreateWorktree), had no direct test of its own — every
+// existing test of this dispatch point (worktree_creation_test.go) only exercised the
+// legacy path.
+func TestNativeFindExistingWorktreeForBranch_FindsLiveWorktree_ReportsNotFoundForOtherBranch(t *testing.T) {
+	t.Parallel()
+	branchName := "feature-native-find-existing"
+	repoPath, worktreePath := newNativeRemoveFixture(t, branchName)
+
+	path, found := nativeFindExistingWorktreeForBranch(repoPath, branchName)
+	require.True(t, found)
+	assert.Equal(t, CanonicalizeWorktreePath(worktreePath), CanonicalizeWorktreePath(path))
+
+	_, found = nativeFindExistingWorktreeForBranch(repoPath, "some-other-branch")
+	assert.False(t, found, "a branch with no registered worktree must report not-found, not a stale match")
+}
+
 // TestNativeListWorktrees_DeletedWorkingDir_IsPrunable covers Story 2.3.1's second
 // acceptance criterion: a worktree whose target directory was deleted out from under git
 // is classified Prunable=true, per this project's directory-exists-only scope cut

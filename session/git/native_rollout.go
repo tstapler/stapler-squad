@@ -15,7 +15,7 @@ import (
 // useNativeWorktree resolves whether GitWorktree operations for sessionName should
 // dispatch to Phase 2's native go-git implementation instead of the legacy subprocess
 // implementation (plan.md's Domain Glossary). Every native/legacy dispatch wrapper in
-// this package (setupNewWorktree, unlockWorktree, and their Epic 2.2-2.4 siblings) calls
+// this package (setupLockedWithNative, unlockWorktree, and their Epic 2.2-2.4 siblings) calls
 // this exact function. A session override takes precedence over the global default
 // (ADR-002); config is loaded fresh on every call, matching EffectiveStreamHubEnabled's
 // existing precedent and required by the flag-flip-mid-burst analysis in

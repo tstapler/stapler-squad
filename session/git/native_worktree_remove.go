@@ -15,10 +15,7 @@ import (
 // guarding against the previously-fixed "stop_session silently deletes the git branch"
 // bug class (Story 2.2.1's "As a" line).
 func nativeRemoveWorktree(repoPath, worktreePath string) error {
-	adminDir, err := worktreeAdminDirFor(repoPath, worktreePath)
-	if err != nil {
-		return fmt.Errorf("nativeRemoveWorktree: failed to resolve admin dir for %q: %w", worktreePath, err)
-	}
+	adminDir := worktreeAdminDirFor(repoPath, worktreePath)
 
 	// Explicit Stat before removal (Task 2.2.1b) rather than relying on os.RemoveAll's
 	// own no-op-on-missing-path behavior: mirrors removeLocked's existing

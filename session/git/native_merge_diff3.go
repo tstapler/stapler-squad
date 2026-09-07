@@ -461,6 +461,10 @@ func (m ThreeWayFileMerger) MergeFile(in FileMergeInput) (*FileMergeOutcome, err
 		(isBinary(in.BaseContent) || isBinary(in.OursContent) || isBinary(in.TheirsContent)) {
 		return &FileMergeOutcome{Reason: ReasonBinaryConflict}, nil
 	}
+	// KNOWN GAP (PR #730 Gate 2 review): sidesDiffer already excludes the identical-change
+	// case from ReasonBinaryConflict here, but the m.Merge fallback below still hard-fails
+	// a binary both-sides-identical-change case instead of auto-resolving it — traced but
+	// not reproduced; tracked as a follow-up given it's a rare edge case.
 
 	result, err := m.Merge(string(in.BaseContent), string(in.OursContent), string(in.TheirsContent))
 	if err != nil {

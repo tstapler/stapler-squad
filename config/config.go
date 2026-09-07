@@ -664,6 +664,11 @@ func (c *Config) GetNativeWorktreeSessionOverride(sessionName string) (forceNati
 // (falling back to the global default), a non-nil false explicitly pins the
 // session to the legacy implementation regardless of the global default,
 // and a non-nil true forces the native implementation.
+//
+// KNOWN GAP (PR #730 Gate 2 review): this load-mutate-save isn't fully locked
+// against a concurrent writer — a pre-existing pattern shared with
+// StreamHub/Tymux overrides; needs a shared fix across all three, not a
+// one-off here.
 func (c *Config) SetNativeWorktreeSessionOverride(sessionName string, forceNative *bool) error {
 	if forceNative == nil {
 		if c.NativeWorktreeSessionOverrides != nil {
@@ -717,6 +722,10 @@ func (c *Config) GetNativeMergeWorktreeOverride(worktreePath string) (forceNativ
 // for worktreePath (falling back to the global default), a non-nil false
 // explicitly pins that worktree to the legacy implementation regardless of
 // the global default, and a non-nil true forces the native implementation.
+//
+// KNOWN GAP (PR #730 Gate 2 review): this load-mutate-save isn't fully locked
+// against a concurrent writer — see SetNativeWorktreeSessionOverride's
+// identical note.
 func (c *Config) SetNativeMergeWorktreeOverride(worktreePath string, forceNative *bool) error {
 	if forceNative == nil {
 		if c.NativeMergeWorktreeOverrides != nil {

@@ -218,6 +218,61 @@ func TestNativeMergeMainIntoWorktree_CleanThreeWayMerge(t *testing.T) {
 	assert.Empty(t, strings.TrimSpace(status), "a real git status must see the merge as clean")
 }
 
+// TestNativeMergeMainIntoWorktree_RefusesOnDirtyWorktree_PreservesUncommittedChanges
+// covers PR #730 Gate 2 Blocker 1: legacy's subprocess `git merge` refuses outright with
+// "local changes would be overwritten" against a dirty worktree, but the native path had
+// no such check and would silently discard the uncommitted edit in any touched path
+// instead. A divergence exists here (main-fix.txt on main) so the merge would otherwise
+// have real work to do, proving the refusal fires before any merge computation, not just
+// because there was nothing to merge.
+func TestNativeMergeMainIntoWorktree_RefusesOnDirtyWorktree_PreservesUncommittedChanges(t *testing.T) {
+	t.Parallel()
+	origin := setupTestRepo(t)
+	work := cloneTestRepo(t, origin)
+	runGit(t, work, "checkout", "-b", "feature")
+
+	require.NoError(t, os.WriteFile(filepath.Join(origin, "main-fix.txt"), []byte("fix on main\n"), 0o644))
+	runGit(t, origin, "add", "main-fix.txt")
+	runGit(t, origin, "commit", "-m", "fix landed on main")
+
+	beforeSHA := strings.TrimSpace(runGit(t, work, "rev-parse", "HEAD"))
+	const dirtyContent = "uncommitted local edit\n"
+	require.NoError(t, os.WriteFile(filepath.Join(work, "README.md"), []byte(dirtyContent), 0o644))
+
+	result, err := nativeMergeMainIntoWorktree(work, "main")
+
+	require.Error(t, err, "a dirty worktree must refuse the merge, matching legacy git merge's own refusal")
+	assert.Nil(t, result)
+
+	afterSHA := strings.TrimSpace(runGit(t, work, "rev-parse", "HEAD"))
+	assert.Equal(t, beforeSHA, afterSHA, "a refused merge must not touch HEAD")
+
+	content, readErr := os.ReadFile(filepath.Join(work, "README.md"))
+	require.NoError(t, readErr)
+	assert.Equal(t, dirtyContent, string(content), "the uncommitted edit must survive the refused merge untouched")
+}
+
+// TestNativeMergeMainIntoWorktree_CleanWorktree_StillMerges is the regression guard for
+// Blocker 1's fix: the new dirty-worktree check must not false-positive on an ordinary
+// clean worktree — a real divergence must still merge successfully.
+func TestNativeMergeMainIntoWorktree_CleanWorktree_StillMerges(t *testing.T) {
+	t.Parallel()
+	origin := setupTestRepo(t)
+	work := cloneTestRepo(t, origin)
+	runGit(t, work, "checkout", "-b", "feature")
+
+	require.NoError(t, os.WriteFile(filepath.Join(origin, "main-fix.txt"), []byte("fix on main\n"), 0o644))
+	runGit(t, origin, "add", "main-fix.txt")
+	runGit(t, origin, "commit", "-m", "fix landed on main")
+
+	result, err := nativeMergeMainIntoWorktree(work, "main")
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.True(t, result.Merged)
+	assert.FileExists(t, filepath.Join(work, "main-fix.txt"))
+}
+
 // TestNativeMergeMainIntoWorktree_Conflicted_LeavesWorktreeClean covers Task 3.4.1c: an
 // overlapping edit must be reported Conflicted with the correct file list, and — per
 // materializeConflictOnAbort's "always materialize, then abort" decision — leave the
@@ -451,9 +506,19 @@ func TestNativeMergeMainIntoWorktree_ModeConflict_ClassifiedAsConflict(t *testin
 // itself tolerates one with no .gitmodules registration as a plain empty directory — so
 // this builds it directly via `git update-index --cacheinfo` rather than a real
 // `git submodule add`.
+//
+// A .gitmodules entry is registered anyway (unlike real git, which tolerates the missing
+// registration fine): go-git's Worktree.Status(), added by Gate 2 Blocker 1's
+// dirty-worktree guard, can't identify an unregistered gitlink path as a submodule and
+// reports its empty placeholder directory as locally " D" (deleted) — a false positive
+// real `git status` doesn't share (verified: real git reports this worktree clean with or
+// without .gitmodules; go-git only agrees once .gitmodules is present).
 func TestNativeMergeMainIntoWorktree_GitlinkConflict_ClassifiedAsConflict(t *testing.T) {
 	t.Parallel()
 	origin := setupTestRepo(t)
+	require.NoError(t, os.WriteFile(filepath.Join(origin, ".gitmodules"),
+		[]byte("[submodule \"vendor/lib\"]\n\tpath = vendor/lib\n\turl = https://example.com/fake.git\n"), 0o644))
+	runGit(t, origin, "add", ".gitmodules")
 	runGit(t, origin, "update-index", "--add", "--cacheinfo", "160000,1111111111111111111111111111111111111111,vendor/lib")
 	runGit(t, origin, "commit", "-m", "add base gitlink")
 
@@ -803,6 +868,18 @@ func TestNativeMergeMainIntoWorktree_ConflictReadThroughBlockingSymlink_IsSafely
 
 	leakedPath := filepath.Join(work, "link", "evil.txt")
 	content, readErr := os.ReadFile(leakedPath)
+	if strings.Contains(mergeErr.Error(), "uncommitted changes") {
+		// Gate 2 Blocker 1's dirty-worktree guard fires first here: the planted symlink
+		// is an untracked worktree entry, so the merge refuses before ever reaching
+		// capturePreMergeSnapshot's tree-writing logic at all — an even safer outcome
+		// than clearing the symlink mid-merge, since no worktree write of any kind
+		// happens. The symlink is therefore left exactly as the test planted it, still
+		// resolving to its original (pre-merge) target.
+		if readErr == nil {
+			assert.Equal(t, secretContent, string(content), "a merge refused before touching the worktree must leave the planted symlink completely untouched")
+		}
+		return
+	}
 	if readErr == nil {
 		assert.NotEqual(t, secretContent, string(content), "content from outside the worktree must never leak into the worktree via capturePreMergeSnapshot's read")
 	}

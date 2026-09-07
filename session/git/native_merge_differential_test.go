@@ -139,16 +139,67 @@ func (h *DifferentialMergeHarness) Run(scenario DifferentialScenario) Differenti
 		}
 	}
 	if oracleConflicted {
-		// Both sides agree a conflict occurred, but Run's two-repo subprocess comparison
-		// can't inspect native's transient marker content (see this type's doc comment) —
-		// use compareConflictMarkerBytes directly for that.
-		return DifferentialResult{
-			ConflictMarkerMatch: false,
-			Diff:                "Run does not compare conflicted scenarios byte-for-byte; use compareConflictMarkerBytes",
-		}
+		// Both sides agree a conflict occurred; native's own transient marker content
+		// isn't inspectable off native's worktree (see this type's doc comment — it's
+		// always reverted before nativeMergeMainIntoWorktree returns), so render it
+		// directly via the same production call materializeConflictOnAbort makes and
+		// byte-diff it against the oracle's still-on-disk conflicted file (Gate 2
+		// Critical 4's fix — this used to always report a hardcoded non-match here).
+		return compareConflictedMergeOutcome(t, oracle, scenario, nativeResult.ConflictedFiles)
 	}
 
 	return compareCleanMergeOutcome(t, oracle, native)
+}
+
+// compareConflictedMergeOutcome is Run's conflicted-scenario comparison (Gate 2 Critical
+// 4): for each path nativeMergeMainIntoWorktree reported conflicted, it reruns the exact
+// same content-level merge (ThreeWayFileMerger.Merge + assembleConflictedFileContent,
+// materializeConflictOnAbort's own production call — the golden-fixture tests'
+// established pattern for this, see native_merge_golden_test.go) to recover native's
+// marker bytes, then byte-diffs them via compareConflictMarkerBytes against the oracle's
+// real, still-on-disk conflicted file (runOracleMerge deliberately never runs `git merge
+// --abort`, so the real markers are still there to read).
+//
+// Only meaningful for a scenario whose conflicted path is a plain content conflict (the
+// two scenarios this is wired up for): a mode/binary/gitlink-classified conflict would need
+// nonTextConflictHunks' short-circuit instead, which this helper doesn't reconstruct.
+func compareConflictedMergeOutcome(t *testing.T, oracle scenarioRepoPair, scenario DifferentialScenario, conflictedFiles []string) DifferentialResult {
+	t.Helper()
+
+	result := DifferentialResult{ConflictMarkerMatch: true}
+	var diffs []string
+	for _, path := range conflictedFiles {
+		oracleContent, err := os.ReadFile(filepath.Join(oracle.workDir, path))
+		require.NoError(t, err, "oracle's conflicted file %q must still be on disk (runOracleMerge does not abort)", path)
+
+		base := scenario.Base[path]
+		ours, oursTouched := scenario.Ours[path]
+		if !oursTouched {
+			ours = base
+		}
+		theirs, theirsTouched := scenario.Theirs[path]
+		if !theirsTouched {
+			theirs = base
+		}
+
+		var merger ThreeWayFileMerger
+		mergeResult, mergeErr := merger.Merge(base, ours, theirs)
+		require.NoError(t, mergeErr, "native ThreeWayFileMerger.Merge failed for %q", path)
+		require.NotEmpty(t, mergeResult.Conflicts(), "path %q was reported conflicted but produced no RegionConflict hunks", path)
+
+		nativeContent, assembleErr := assembleConflictedFileContent(mergeResult.Hunks, "HEAD", "origin/main")
+		require.NoError(t, assembleErr, "assembleConflictedFileContent failed for %q", path)
+
+		cmp := compareConflictMarkerBytes(oracleContent, []byte(nativeContent))
+		if !cmp.ConflictMarkerMatch {
+			result.ConflictMarkerMatch = false
+			diffs = append(diffs, fmt.Sprintf("path %q:\n%s", path, cmp.Diff))
+		}
+	}
+	if !result.ConflictMarkerMatch {
+		result.Diff = strings.Join(diffs, "\n")
+	}
+	return result
 }
 
 // runOracleMerge runs `git merge --no-edit origin/main` against pair.workDir (already
@@ -255,4 +306,61 @@ func TestDifferentialMergeHarness_DetectsInjectedMarkerMismatch(t *testing.T) {
 	assert.False(t, result.ConflictMarkerMatch)
 	assert.Contains(t, result.Diff, correct)
 	assert.Contains(t, result.Diff, corrupted)
+}
+
+// TestDifferentialMergeHarness_CleanThreeWayMerge_RealDivergence_NotFastForward covers Gate
+// 2 Critical 4's gap: every prior harness-exercised scenario was a fast-forward (Ours made
+// no commit of its own). Here both sides commit — on different paths, so the merge stays
+// conflict-free — producing a real two-parent merge, not a fast-forward.
+func TestDifferentialMergeHarness_CleanThreeWayMerge_RealDivergence_NotFastForward(t *testing.T) {
+	t.Parallel()
+
+	h := NewDifferentialMergeHarness(t)
+	result := h.Run(DifferentialScenario{
+		Base:   map[string]string{"a.txt": "line1\n"},
+		Ours:   map[string]string{"feature.txt": "feature work\n"},
+		Theirs: map[string]string{"main-fix.txt": "fix on main\n"},
+	})
+
+	assert.True(t, result.TreeMatch, "diff: %s", result.Diff)
+	assert.True(t, result.IndexStageMatch, "diff: %s", result.Diff)
+	assert.True(t, result.ConflictMarkerMatch, "diff: %s", result.Diff)
+	assert.Empty(t, result.Diff)
+}
+
+// TestDifferentialMergeHarness_ConflictedScenario_MarkersByteMatchOracle covers Gate 2
+// Critical 4's core gap directly: a genuine content conflict (both sides change a.txt
+// differently) run through the harness with compareConflictMarkerBytes actually wired in,
+// not short-circuited to a hardcoded non-match.
+func TestDifferentialMergeHarness_ConflictedScenario_MarkersByteMatchOracle(t *testing.T) {
+	t.Parallel()
+
+	h := NewDifferentialMergeHarness(t)
+	result := h.Run(DifferentialScenario{
+		Base:   map[string]string{"a.txt": "line1\n"},
+		Ours:   map[string]string{"a.txt": "line1\nours\n"},
+		Theirs: map[string]string{"a.txt": "line1\ntheirs\n"},
+	})
+
+	assert.True(t, result.ConflictMarkerMatch, "diff: %s", result.Diff)
+}
+
+// TestDifferentialMergeHarness_DeleteModifyShapedConflict_MarkersByteMatchOracle is the
+// harness-level regression test for PR #730 Gate 2 Blocker 2 (native_merge_conflict.go's
+// renderConflictHunk): theirs collapses a.txt to empty content while ours keeps modifying
+// it — the "one side has zero lines" shape that used to render an extra blank line
+// real git never emits. Run's byte comparison (via compareConflictedMergeOutcome) catches
+// exactly this class of bug, which the harness previously couldn't detect at all for any
+// conflicted scenario (Critical 4's root-cause finding).
+func TestDifferentialMergeHarness_DeleteModifyShapedConflict_MarkersByteMatchOracle(t *testing.T) {
+	t.Parallel()
+
+	h := NewDifferentialMergeHarness(t)
+	result := h.Run(DifferentialScenario{
+		Base:   map[string]string{"a.txt": "line1\nsecond\n"},
+		Ours:   map[string]string{"a.txt": "line1\nours change\n"},
+		Theirs: map[string]string{"a.txt": ""},
+	})
+
+	assert.True(t, result.ConflictMarkerMatch, "diff: %s", result.Diff)
 }

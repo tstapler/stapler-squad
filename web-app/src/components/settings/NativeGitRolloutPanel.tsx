@@ -335,6 +335,10 @@ export function NativeGitRolloutPanel() {
     setMergeOverrides(status.mergeWorktreeOverrides);
   }, []);
 
+  // KNOWN GAP (PR #730 Gate 2 review): two overlapping load() calls (e.g. a rapid
+  // double-toggle triggering a reload) aren't sequenced, so an older in-flight response
+  // can resolve after a newer one and stomp its state — display-only, server state is
+  // unaffected; tracked as a follow-up.
   const load = useCallback(async () => {
     try {
       const status = await client.getNativeGitRolloutStatus({});
