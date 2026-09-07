@@ -92,6 +92,14 @@ full-suite runs must not reproduce the `TempDir RemoveAll cleanup` failure for t
 
 ## Related
 
+- **2026-09-07 sighting**: the identical `TempDir RemoveAll cleanup: unlinkat ... directory not empty`
+  symptom recurred on a third test, `TestTriggerTriage_RunsInIsolatedWorktree_When_RepoPathIsARealGitRepo`
+  (`server/services`), CI run [34075111973](https://github.com/tstapler/stapler-squad/actions/runs/34075111973/job/101599943522),
+  on PR #718 (`session/instance_worktree.go` race fixes) — passed 10/10 in isolation with `-race`
+  immediately after (one iteration logged a transient, already-tolerated `not a git repository` staging
+  error, unrelated to the cleanup failure). Confirms this is once again the shared teardown-ordering gap,
+  not something PR #718's diff introduced. Re-ran the failed CI job rather than investigating further,
+  consistent with this bug's own scope boundary.
 - **2026-09-02 sighting**: the identical `TempDir RemoveAll cleanup: unlinkat ... directory not empty`
   symptom recurred on a *different* test, `TestCreateSession_Autonomous_ExplicitPath_DoesNotGenerateScratchDir`
   (`server/services`), during a full `./session/... ./server/services/...` run — passed 3/3 in isolation
