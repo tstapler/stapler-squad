@@ -97,6 +97,14 @@ type GitWorktree struct {
 	// addendum.
 	runner tmux.CommandRunner
 
+	// dirtyChecker computes IsDirtyWithHint's uncached "is the worktree dirty"
+	// result. Defaults to worktreeIsDirty (go-git's Worktree.Status(), no
+	// subprocess — see worktree_git.go) via dirtyCheckerFunc() below; tests in
+	// this package override the field directly (same-package access) to
+	// simulate a racing cache writer or a persistent failure without needing a
+	// real git worktree on disk for every case.
+	dirtyChecker func(worktreePath string) (bool, error)
+
 	// ponytail: atomic.Value replaces sync.RWMutex+bool+time — lock-free reads on the fast cache-hit path
 	isDirtyCache atomic.Value // stores dirtyCacheState; zero value = cache invalid
 
@@ -383,6 +391,14 @@ func (g *GitWorktree) commandRunner() tmux.CommandRunner {
 		return tmux.LocalRunner{}
 	}
 	return g.runner
+}
+
+// dirtyCheckerFunc returns g.dirtyChecker, defaulting to worktreeIsDirty when unset.
+func (g *GitWorktree) dirtyCheckerFunc() func(string) (bool, error) {
+	if g.dirtyChecker == nil {
+		return worktreeIsDirty
+	}
+	return g.dirtyChecker
 }
 
 // GetBranchName returns the name of the branch associated with this worktree
