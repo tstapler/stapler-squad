@@ -13,11 +13,13 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/lifecycle"
+	"github.com/tstapler/stapler-squad/telemetry"
 )
 
 // cmdResult carries the response body and error for a control mode command.
@@ -575,6 +577,17 @@ func (t *TmuxSession) readControlModeOutput() {
 	}
 }
 
+// pendingCommandDepth reports how many commands are currently queued waiting
+// for a %begin/%end response from tmux's control-mode connection — callers
+// use this to skip a control-mode attempt that FIFO ordering already dooms
+// to time out (see fastLaneCMAttemptTimeout/controlModeQueueBackpressureThreshold
+// in tmux.go).
+func (t *TmuxSession) pendingCommandDepth() int {
+	t.controlModeSubMu.RLock()
+	defer t.controlModeSubMu.RUnlock()
+	return len(t.pendingCmds)
+}
+
 // monitorControlModeErrors monitors stderr for control mode errors.
 func (t *TmuxSession) monitorControlModeErrors(stderr io.ReadCloser) {
 	// Capture under RLock — see readControlModeOutput for why the raw field
@@ -868,7 +881,14 @@ func (t *TmuxSession) runCMSender(doneCh <-chan struct{}, stdin io.WriteCloser, 
 			return
 		}
 		t.pendingCmds = append(t.pendingCmds, req.resultCh)
+		depth := len(t.pendingCmds)
 		t.controlModeSubMu.Unlock()
+		// Sampled outside the lock: how backed up the %begin/%end response FIFO
+		// already was when this command joined it — see
+		// control_mode_observability.go's doc comment for why this and the
+		// command-duration metric are the two signals needed to tell "queue is
+		// backed up" apart from "this one command was individually slow."
+		recordControlModePendingDepth(depth)
 
 		if _, err := fmt.Fprintf(stdin, "%s\n", req.line); err != nil {
 			log.Debug("CM sender write error", "session", t.sanitizedName, "err", err)
@@ -927,8 +947,30 @@ func (t *TmuxSession) sendCMCommand(ctx context.Context, args ...string) (string
 
 // enqueueCMCommand is the shared implementation: builds the request, sends it to
 // the appropriate priority channel, then waits for the response or ctx cancellation.
+//
+// Wrapped in a "tmux.control_mode.command" span/tmux_control_mode_command_duration_ms
+// metric (control_mode_observability.go) covering the whole round trip — enqueue
+// wait plus the wait for tmux's %begin/%end response — since either half can
+// dominate: a full channel buffer stalls the enqueue select, while a busy reader
+// goroutine (backed up processing live %output scrollback ahead of our command's
+// response) stalls the second. command is args[0] only (e.g. "display-message"),
+// never the full args slice, to keep metric cardinality bounded and avoid leaking
+// pane content into a label.
 func (t *TmuxSession) enqueueCMCommand(ctx context.Context, ch chan cmSendReq, args ...string) (string, error) {
+	command := ""
+	if len(args) > 0 {
+		command = args[0]
+	}
+	_, span := telemetry.StartSpan(ctx, "tmux.control_mode.command")
+	span.SetAttributes(attribute.String("session", t.sanitizedName), attribute.String("command", command))
+	start := time.Now()
+	defer func() {
+		span.End()
+	}()
+
 	if ch == nil {
+		recordControlModeCommand(command, time.Since(start), false)
+		span.SetAttributes(attribute.Bool("control_mode_not_running", true))
 		return "", ErrControlModeNotRunning
 	}
 	resultCh := make(chan cmdResult, 1)
@@ -937,13 +979,22 @@ func (t *TmuxSession) enqueueCMCommand(ctx context.Context, ch chan cmSendReq, a
 	select {
 	case ch <- req:
 	case <-ctx.Done():
+		dur := time.Since(start)
+		span.SetAttributes(attribute.Int64("duration_ms", dur.Milliseconds()), attribute.Bool("timed_out", true), attribute.String("stage", "enqueue"))
+		recordControlModeCommand(command, dur, true)
 		return "", ctx.Err()
 	}
 
 	select {
 	case result := <-resultCh:
+		dur := time.Since(start)
+		span.SetAttributes(attribute.Int64("duration_ms", dur.Milliseconds()))
+		recordControlModeCommand(command, dur, false)
 		return result.body, result.err
 	case <-ctx.Done():
+		dur := time.Since(start)
+		span.SetAttributes(attribute.Int64("duration_ms", dur.Milliseconds()), attribute.Bool("timed_out", true), attribute.String("stage", "response"))
+		recordControlModeCommand(command, dur, true)
 		return "", ctx.Err()
 	}
 }

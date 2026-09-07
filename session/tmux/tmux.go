@@ -3116,6 +3116,25 @@ func (t *TmuxSession) GetPaneDimensions() (width, height int, err error) {
 	return paneWidth, paneHeight, nil
 }
 
+// fastLaneCMAttemptTimeout bounds GetPaneDimensionsPriority's own
+// control-mode attempt to a small slice of the shared resync budget
+// (handleCurrentPaneRequest's single ResyncFastLaneTimeout, 3s total),
+// rather than layering a full independent allowance on top of it — a
+// backed-up control-mode queue could otherwise consume nearly the entire
+// shared deadline on one doomed attempt, starving every fast-lane step that
+// follows. Called twice per resync (initial check + post-resize verify), so
+// the worst case here is 2x this value, well under the 3s total.
+const fastLaneCMAttemptTimeout = 300 * time.Millisecond
+
+// controlModeQueueBackpressureThreshold is the pending-command depth past
+// which a new control-mode command is treated as certain to time out rather
+// than worth even fastLaneCMAttemptTimeout's bounded wait -- tmux answers
+// %begin/%end responses strictly in FIFO order, so a command joining a queue
+// already this deep cannot possibly get an answer within either budget.
+// Normal depth observed in practice is single digits; 20 is a conservative
+// floor well below the 107-115 seen during the confirmed incident.
+const controlModeQueueBackpressureThreshold = 20
+
 // GetPaneDimensionsPriority mirrors GetPaneDimensions' control-mode-first
 // behavior, but routes its subprocess fallback through the resync exec-gate
 // fast lane (with a caller-supplied, shared ctx — see
@@ -3127,8 +3146,8 @@ func (t *TmuxSession) GetPaneDimensions() (width, height int, err error) {
 // fast-lane isolation and shared deadline as the refresh/capture calls
 // around it, not the unbounded default-pool path.
 func (t *TmuxSession) GetPaneDimensionsPriority(ctx context.Context) (width, height int, err error) {
-	if t.cmEnabledForBackground() {
-		cmCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	if t.cmEnabledForBackground() && t.pendingCommandDepth() < controlModeQueueBackpressureThreshold {
+		cmCtx, cancel := context.WithTimeout(ctx, fastLaneCMAttemptTimeout)
 		defer cancel()
 		body, cmErr := t.sendCMCommand(cmCtx,
 			"display-message", "-p", "-t", t.sanitizedName, "'#{pane_width} #{pane_height}'")
