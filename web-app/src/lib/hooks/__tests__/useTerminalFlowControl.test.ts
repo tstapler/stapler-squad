@@ -193,6 +193,75 @@ describe('useTerminalFlowControl', () => {
       expect(pushMessageFn.mock.calls.length).toBe(beforeSecondCall);
     });
 
+    // Bounce detection: a direct flip-flop back to the size sent two resizes
+    // ago (A -> B -> A) is held out past BOUNCE_HOLD_MS instead of applied
+    // immediately, coalescing an oscillating viewport (e.g. mobile browser
+    // chrome show/hide) into one settled resize instead of a real server-side
+    // tmux resize-window call per bounce.
+    it('holds a direct bounce-back (A -> B -> A) instead of sending immediately, then sends after the hold elapses', () => {
+      const { options, pushMessageFn } = createTestOptions();
+      const { result } = renderHook(() => useTerminalFlowControl(options));
+
+      act(() => {
+        result.current.resize(100, 30); // A
+      });
+      act(() => {
+        jest.advanceTimersByTime(201); // clear the 200ms throttle
+      });
+
+      act(() => {
+        result.current.resize(120, 40); // B
+      });
+      act(() => {
+        jest.advanceTimersByTime(201);
+      });
+
+      const beforeBounce = pushMessageFn.mock.calls.length;
+
+      act(() => {
+        result.current.resize(100, 30); // back to A -- a direct bounce
+      });
+
+      // Not sent immediately.
+      expect(pushMessageFn.mock.calls.length).toBe(beforeBounce);
+
+      act(() => {
+        jest.advanceTimersByTime(3001); // past BOUNCE_HOLD_MS
+      });
+
+      // Sent after the hold elapses.
+      expect(pushMessageFn.mock.calls.length).toBeGreaterThan(beforeBounce);
+      const sent = pushMessageFn.mock.calls.find((c) => c[0].data.case === 'resize' && c[0].data.value.cols === 100);
+      expect(sent).toBeDefined();
+    });
+
+    it('does not hold a resize that does not match the size from two sends ago', () => {
+      const { options, pushMessageFn } = createTestOptions();
+      const { result } = renderHook(() => useTerminalFlowControl(options));
+
+      act(() => {
+        result.current.resize(100, 30); // A
+      });
+      act(() => {
+        jest.advanceTimersByTime(201);
+      });
+
+      act(() => {
+        result.current.resize(120, 40); // B
+      });
+      act(() => {
+        jest.advanceTimersByTime(201);
+      });
+
+      const beforeThird = pushMessageFn.mock.calls.length;
+
+      act(() => {
+        result.current.resize(140, 50); // C -- not a bounce, a genuinely new size
+      });
+
+      expect(pushMessageFn.mock.calls.length).toBeGreaterThan(beforeThird);
+    });
+
     // Task 4.3.2, AC4: force:true bypasses both value-dedup and the time
     // throttle, mirroring the existing 'should allow urgent resync to bypass
     // throttle' test for requestFullResync.

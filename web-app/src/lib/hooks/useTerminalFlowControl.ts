@@ -85,6 +85,16 @@ export function useTerminalFlowControl({
   const lastResyncTimeRef = useRef<number>(0);
   const lastResizeTimeRef = useRef<number>(0);
   const lastSentDimsRef = useRef<ResizeDimensions | null>(null);
+  // The size sent immediately before lastSentDimsRef — lets resize() detect a
+  // direct bounce-back (A -> B -> A) and hold it out past BOUNCE_HOLD_MS
+  // instead of applying it immediately. Real tmux resize-window calls are
+  // expensive server-side (session/tmux control-mode round trip), and a
+  // viewport that's genuinely oscillating (observed: mobile browser chrome
+  // show/hide changing visualViewport.height every few seconds, well outside
+  // THROTTLE_MS's window) will keep re-triggering full server-side resizes on
+  // every single bounce without this — see the resize() bounce-detection
+  // block below.
+  const prevSentDimsRef = useRef<ResizeDimensions | null>(null);
   const pendingResizeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const paneRequestTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const dimensionSyncRef = useRef<{ cols?: number; rows?: number }>({});
@@ -317,6 +327,7 @@ export function useTerminalFlowControl({
         // Only record success (and refresh the throttle/dedup state) after the
         // send above completed without throwing.
         lastResizeTimeRef.current = Date.now();
+        prevSentDimsRef.current = lastSentDimsRef.current;
         lastSentDimsRef.current = { cols, rows };
 
         // After resizing, request fresh terminal content
@@ -357,6 +368,29 @@ export function useTerminalFlowControl({
         handleError(err);
       }
     };
+
+    // Bounce detection: this call's dimensions exactly match the size we sent
+    // two sends ago (A -> B -> A), not just the last one — a direct
+    // flip-flop, distinct from THROTTLE_MS's rapid-fire case below because the
+    // trigger here (observed: mobile browser chrome show/hide moving
+    // visualViewport.height every few seconds) operates on a multi-second
+    // cadence THROTTLE_MS's 200ms window never catches. Hold it out past
+    // BOUNCE_HOLD_MS instead of sending immediately, coalescing a genuine
+    // oscillation into a single settled resize instead of one real
+    // server-side tmux resize-window call per bounce.
+    if (
+      !force &&
+      prevSentDimsRef.current !== null &&
+      dimensionsEqual(prevSentDimsRef.current, { cols, rows })
+    ) {
+      const BOUNCE_HOLD_MS = 3000;
+      console.log(`[useTerminalFlowControl] Resize bounce detected (${cols}x${rows} == 2 sends ago), holding ${BOUNCE_HOLD_MS}ms`);
+      pendingResizeTimerRef.current = setTimeout(() => {
+        pendingResizeTimerRef.current = null;
+        doSend();
+      }, BOUNCE_HOLD_MS);
+      return;
+    }
 
     if (!force && timeSinceLastResize < THROTTLE_MS && lastResizeTimeRef.current !== 0) {
       // Defer instead of drop: schedule the trailing-edge send so the final
