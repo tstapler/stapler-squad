@@ -57,11 +57,13 @@ func (i *Instance) SetMCPServerURL(url string) {
 // ---- CreationProgress ------------------------------------------------------------
 
 func setCreationProgressLocked(s *instanceState, msg string) {
+	s.inst.mu.Lock()
 	s.inst.CreationProgress = msg
 	// Bumped in the same actor command as the progress-text write (not a second
 	// mailbox round-trip) so CreationProgressUpdatedAt always reflects the most
 	// recent SetCreationProgress call — see its doc comment in instance.go.
 	s.inst.creationProgressUpdatedAt = time.Now()
+	s.inst.mu.Unlock()
 	// CreationProgress is not included in InstanceSnapshot (it is published via
 	// the event bus directly from the live Instance pointer), so we do not call
 	// snapshot.Store here.  Serialisation through the actor is still required to
@@ -507,12 +509,22 @@ func (i *Instance) SetAutoApprove(v bool, persist func() error) error {
 // ---- CreationEpoch fencing (Epic 1.2, ADR-002) -----------------------------------
 //
 // creationEpoch is not part of InstanceSnapshot (like CreationProgress/failureReason
-// above), so its Locked helpers need no i.mu.Lock()/buildSnapshot — actor-goroutine
-// confinement alone serializes them against other actor commands.
+// above), so its Locked helpers need no buildSnapshot -- but they DO need
+// i.mu.Lock(), same as Status below: actor-goroutine confinement only
+// serializes callers that actually reach a live actor mailbox, and
+// DeleteSession/CancelSessionCreation can call BumpCreationEpoch on an
+// instance with no LiveInstance wrapping at all (e.g. no Registry wired),
+// in which case sendSyncErr runs the command directly on the caller's own
+// goroutine with no serialization whatsoever -- confirmed via `go test -race`
+// racing this against a concurrent TryForceStatusIfEpoch call under exactly
+// that condition (backlog 10fc3913, TestBackgroundResolutionPipeline_
+// should_TransitionToActive_When_ResolutionSucceeds).
 
 // bumpCreationEpochLocked increments creationEpoch by one and returns the new value.
 // Called only from cancel/retry code paths (Phase 3) and TryStartRetry below.
 func bumpCreationEpochLocked(s *instanceState) uint64 {
+	s.inst.mu.Lock()
+	defer s.inst.mu.Unlock()
 	s.inst.creationEpoch++
 	return s.inst.creationEpoch
 }
@@ -543,7 +555,9 @@ func (i *Instance) BumpCreationEpoch() uint64 {
 func (i *Instance) CreationEpoch() uint64 {
 	var epoch uint64
 	_ = i.sendSyncErr(func(s *instanceState) error {
+		s.inst.mu.Lock()
 		epoch = s.inst.creationEpoch
+		s.inst.mu.Unlock()
 		return nil
 	})
 	return epoch
@@ -595,15 +609,18 @@ func (i *Instance) CreationEpoch() uint64 {
 func (i *Instance) TryForceStatusIfEpoch(capturedEpoch uint64, status Status, failureReason string) bool {
 	var applied bool
 	_ = i.sendSyncErr(func(s *instanceState) error {
+		// creationEpoch and Status are both read/written under i.mu here (not
+		// just actor confinement): RecoverFromStopped/RetryNow mutate Status
+		// directly under i.mu from outside the actor mailbox, and a
+		// no-live-actor caller (e.g. DeleteSession with no Registry wired)
+		// reaches creationEpoch/Status via sendSyncErr's direct-call fallback,
+		// bypassing mailbox serialization entirely -- confirmed via go test
+		// -race for both.
+		s.inst.mu.Lock()
 		if s.inst.creationEpoch != capturedEpoch {
+			s.inst.mu.Unlock()
 			return nil
 		}
-		// Status is read and written under i.mu here (not just actor confinement,
-		// unlike creationEpoch) because RecoverFromStopped/RetryNow mutate Status
-		// directly under i.mu from outside the actor mailbox entirely -- confirmed
-		// via go test -race: the old unguarded read below raced against that
-		// write. i.mu is the only mechanism both call paths share.
-		s.inst.mu.Lock()
 		if s.inst.Status != Creating && s.inst.Status != status {
 			s.inst.mu.Unlock()
 			return nil
@@ -660,9 +677,9 @@ func (i *Instance) TryStartRetry() (newEpoch uint64, started bool) {
 // ---- Background Resolution cancelFunc (Epic 2.2, Story 2.2.1) -------------------
 //
 // creationCancelFunc is not part of InstanceSnapshot and is process-local by
-// nature (a context.CancelFunc cannot be persisted/reconstructed) -- like
-// creationEpoch, actor-goroutine confinement alone serializes access to it, so
-// no i.mu.Lock()/buildSnapshot is needed here.
+// nature (a context.CancelFunc cannot be persisted/reconstructed), but needs
+// i.mu.Lock() for the same no-live-actor reason creationEpoch does above --
+// no buildSnapshot needed since it's not in InstanceSnapshot.
 
 // SetCreationCancelFunc stores cancel, the CancelFunc for this instance's
 // Background Resolution Context, at pipeline-spawn time. Called once per
@@ -670,7 +687,9 @@ func (i *Instance) TryStartRetry() (newEpoch uint64, started bool) {
 // reachable by the Cancel RPC (Epic 3.2) via CreationCancelFunc below.
 func (i *Instance) SetCreationCancelFunc(cancel context.CancelFunc) {
 	_ = i.sendSyncErr(func(s *instanceState) error {
+		s.inst.mu.Lock()
 		s.inst.creationCancelFunc = cancel
+		s.inst.mu.Unlock()
 		return nil
 	})
 }
@@ -683,7 +702,9 @@ func (i *Instance) SetCreationCancelFunc(cancel context.CancelFunc) {
 func (i *Instance) CreationCancelFunc() context.CancelFunc {
 	var cancel context.CancelFunc
 	_ = i.sendSyncErr(func(s *instanceState) error {
+		s.inst.mu.Lock()
 		cancel = s.inst.creationCancelFunc
+		s.inst.mu.Unlock()
 		return nil
 	})
 	return cancel
